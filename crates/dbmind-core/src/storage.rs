@@ -10,7 +10,7 @@ use crate::ConnectionKind;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 const SETTINGS_SAFETY_PRODUCTION: &str = "safety.protectProduction";
 const SETTINGS_SAFETY_AI_WRITE: &str = "safety.aiWriteEnabled";
@@ -498,6 +498,278 @@ fn raw_history(row: &Row<'_>) -> rusqlite::Result<HistoryEntry> {
     })
 }
 
+// ---------------------------------------------------------------- AI 状态（设置 / 用量 / 审计）
+
+/// 「ai_models」的一行：一个可用的模型端点。
+#[derive(Debug, Clone, Default)]
+pub struct AiModelRow {
+    /// 界面上给这条模型起的标识（原来存在 json 里的 `id`）。
+    pub id: String,
+    pub name: String,
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+    pub max_tokens: u64,
+    pub embedding: bool,
+}
+
+/// 「ai_settings」单行 + 它带的一组模型。
+#[derive(Debug, Clone, Default)]
+pub struct AiSettingsRow {
+    pub enabled: bool,
+    pub privacy_mode: String,
+    pub audit_enabled: bool,
+    pub models: Vec<AiModelRow>,
+}
+
+/// 用量账本的一格：某个模型在某一天的数字。
+#[derive(Debug, Clone, Default)]
+pub struct AiUsageRow {
+    pub model_key: String,
+    pub day: String,
+    pub calls: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub total_tokens: u64,
+}
+
+impl Store {
+    /// 读 AI 设置。**返回 None 表示库里从来没有过**（不是"配过但为空"）——
+    /// 调用方靠这个区分「要不要从旧 json 导入」和「给什么默认值」。
+    pub fn ai_settings(&self) -> Result<Option<AiSettingsRow>> {
+        let conn = self.lock();
+        let head = conn
+            .query_row(
+                "SELECT enabled, privacy_mode, audit_enabled FROM ai_settings WHERE id = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)? != 0,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)? != 0,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((enabled, privacy_mode, audit_enabled)) = head else {
+            return Ok(None);
+        };
+        let models = {
+            let mut stmt = conn.prepare(
+                "SELECT id, name, base_url, api_key, model, max_tokens, embedding \
+                 FROM ai_models ORDER BY ordinal",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(AiModelRow {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    base_url: row.get(2)?,
+                    api_key: row.get(3)?,
+                    model: row.get(4)?,
+                    max_tokens: row.get::<_, i64>(5)?.max(0) as u64,
+                    embedding: row.get::<_, i64>(6)? != 0,
+                })
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        Ok(Some(AiSettingsRow {
+            enabled,
+            privacy_mode,
+            audit_enabled,
+            models,
+        }))
+    }
+
+    /// 整体替换 AI 设置（单行 + 模型表），一个事务里做完：
+    /// 半截保存比不保存更糟 —— 界面会看到"一半新一半旧"的配置。
+    pub fn save_ai_settings(&self, settings: &AiSettingsRow) -> Result<()> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        let now = now_iso();
+        tx.execute(
+            "INSERT INTO ai_settings (id, enabled, privacy_mode, audit_enabled, updated_at) \
+             VALUES (1, ?1, ?2, ?3, ?4) \
+             ON CONFLICT(id) DO UPDATE SET enabled = ?1, privacy_mode = ?2, \
+                audit_enabled = ?3, updated_at = ?4",
+            params![
+                settings.enabled as i64,
+                settings.privacy_mode,
+                settings.audit_enabled as i64,
+                now
+            ],
+        )?;
+        tx.execute("DELETE FROM ai_models", [])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO ai_models (ordinal, id, name, base_url, api_key, model, max_tokens, embedding) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for (index, model) in settings.models.iter().enumerate() {
+                stmt.execute(params![
+                    index as i64,
+                    model.id,
+                    model.name,
+                    model.base_url,
+                    model.api_key,
+                    model.model,
+                    model.max_tokens as i64,
+                    model.embedding as i64
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 记一次调用：次数必加；token 只在真的拿到了用量时加（没回 usage 就一分不补）。
+    pub fn bump_ai_usage(
+        &self,
+        model_key: &str,
+        day: &str,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+        total_tokens: u64,
+    ) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_usage_days (day, calls) VALUES (?1, 1) \
+             ON CONFLICT(day) DO UPDATE SET calls = calls + 1",
+            params![day],
+        )?;
+        conn.execute(
+            "INSERT INTO ai_usage_models \
+                (model_key, day, calls, prompt_tokens, completion_tokens, total_tokens) \
+             VALUES (?1, ?2, 1, ?3, ?4, ?5) \
+             ON CONFLICT(model_key, day) DO UPDATE SET \
+                calls = calls + 1, \
+                prompt_tokens = prompt_tokens + ?3, \
+                completion_tokens = completion_tokens + ?4, \
+                total_tokens = total_tokens + ?5",
+            params![
+                model_key,
+                day,
+                prompt_tokens as i64,
+                completion_tokens as i64,
+                total_tokens as i64
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 按天取用量（`from_day` 含当天，UTC 无关：日期串就是本地日期）。
+    pub fn ai_usage_days(&self, from_day: &str) -> Result<Vec<(String, u64)>> {
+        let conn = self.lock();
+        let mut stmt = conn
+            .prepare("SELECT day, calls FROM ai_usage_days WHERE day >= ?1 ORDER BY day")?;
+        let rows = stmt.query_map(params![from_day], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?.max(0) as u64))
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 同一时间窗内按模型汇总（总 token 降序、并列按次数降序）。
+    ///
+    /// 这些数字以前要在内存里把「模型 → 日期 → 计数」两层对象全遍历一遍才算得出来；
+    /// 进了库一条 GROUP BY 就够了，也就是把文件搬进库最实在的那点收益。
+    pub fn ai_usage_models(&self, from_day: &str) -> Result<Vec<AiUsageRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT model_key, SUM(calls), SUM(prompt_tokens), SUM(completion_tokens), \
+                    SUM(total_tokens) \
+             FROM ai_usage_models WHERE day >= ?1 GROUP BY model_key \
+             ORDER BY SUM(total_tokens) DESC, SUM(calls) DESC",
+        )?;
+        let rows = stmt.query_map(params![from_day], |row| {
+            Ok(AiUsageRow {
+                model_key: row.get(0)?,
+                day: String::new(),
+                calls: row.get::<_, i64>(1)?.max(0) as u64,
+                prompt_tokens: row.get::<_, i64>(2)?.max(0) as u64,
+                completion_tokens: row.get::<_, i64>(3)?.max(0) as u64,
+                total_tokens: row.get::<_, i64>(4)?.max(0) as u64,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 导入旧账本（一次性迁移用）：整天与整模型的数字直接落下来，不做累加。
+    pub fn import_ai_usage(&self, days: &[(String, u64)], models: &[AiUsageRow]) -> Result<()> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        {
+            let mut day_stmt = tx.prepare(
+                "INSERT INTO ai_usage_days (day, calls) VALUES (?1, ?2) \
+                 ON CONFLICT(day) DO UPDATE SET calls = ?2",
+            )?;
+            for (day, calls) in days {
+                day_stmt.execute(params![day, *calls as i64])?;
+            }
+        }
+        {
+            let mut model_stmt = tx.prepare(
+                "INSERT INTO ai_usage_models \
+                    (model_key, day, calls, prompt_tokens, completion_tokens, total_tokens) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+                 ON CONFLICT(model_key, day) DO UPDATE SET calls = ?3, prompt_tokens = ?4, \
+                    completion_tokens = ?5, total_tokens = ?6",
+            )?;
+            for row in models {
+                model_stmt.execute(params![
+                    row.model_key,
+                    row.day,
+                    row.calls as i64,
+                    row.prompt_tokens as i64,
+                    row.completion_tokens as i64,
+                    row.total_tokens as i64
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 追加一条 AI 审计记录。
+    pub fn insert_ai_audit(&self, kind: &str, prompt: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_audit (time, kind, prompt) VALUES (?1, ?2, ?3)",
+            params![now_iso(), kind, prompt],
+        )?;
+        Ok(())
+    }
+
+    /// 审计记录条数（导入迁移判断与诊断用）。
+    pub fn ai_audit_count(&self) -> Result<u64> {
+        let conn = self.lock();
+        let count = conn.query_row("SELECT COUNT(*) FROM ai_audit", [], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(count.max(0) as u64)
+    }
+}
+
+// ---------------------------------------------------------------- 全局句柄
+
+/// 进程内唯一的主库句柄。
+///
+/// 为什么要有它：AI 设置这类读写是"环境式"的 —— 对话管线深处要用它，
+/// 手上却只有一堆与存储无关的参数。把 Store 一路透传下去要改几十处签名，
+/// 而那些函数跟存储毫无关系。装一次全局句柄，签名一个都不用动。
+///
+/// 注意：**刻意不在 Store 构造里自动装**。测试会造大量内存库，自动装会互相串；
+/// 装不装由壳层决定（`serve()` 启动时装一次）。
+static GLOBAL_STORE: OnceLock<Arc<Store>> = OnceLock::new();
+
+/// 装全局主库句柄（幂等：重复调用以第一次为准）。
+pub fn install_global_store(store: Arc<Store>) {
+    let _ = GLOBAL_STORE.set(store);
+}
+
+/// 取全局主库句柄；没装（单测、或只用内核不开壳）返回 None。
+pub fn global_store() -> Option<Arc<Store>> {
+    GLOBAL_STORE.get().cloned()
+}
+
 // ---------------------------------------------------------------- 工具
 
 pub(crate) fn new_id(prefix: &str) -> String {
@@ -577,6 +849,55 @@ CREATE TABLE IF NOT EXISTS schema_cache (
     cached_at     TEXT NOT NULL,
     PRIMARY KEY (connection_id, object_name)
 );
+
+-- AI 设置：单行（id 恒为 1）+ 一组模型端点。
+-- 以前是 ~/.dbmind/ai-config.json（含 apiKey 明文）—— 搬进库只是换了存放位置，
+-- 明文这一点没变，备份/外发时同样要当机密看待。
+CREATE TABLE IF NOT EXISTS ai_settings (
+    id            INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled       INTEGER NOT NULL DEFAULT 0,
+    privacy_mode  TEXT NOT NULL DEFAULT 'allow',
+    audit_enabled INTEGER NOT NULL DEFAULT 0,
+    updated_at    TEXT NOT NULL
+);
+
+-- ordinal 既是顺序也是主键：模型列表的顺序就是界面上的顺序，整体替换时不会乱。
+CREATE TABLE IF NOT EXISTS ai_models (
+    ordinal    INTEGER PRIMARY KEY,
+    id         TEXT NOT NULL DEFAULT '',
+    name       TEXT NOT NULL DEFAULT '',
+    base_url   TEXT NOT NULL DEFAULT '',
+    api_key    TEXT NOT NULL DEFAULT '',
+    model      TEXT NOT NULL DEFAULT '',
+    max_tokens INTEGER NOT NULL DEFAULT 0,
+    embedding  INTEGER NOT NULL DEFAULT 0
+);
+
+-- 用量账本两级：每天的总次数 / 每个模型每天的次数与 token。
+-- 分开两张表是为了能直接用 SQL 汇总（「这个月谁烧的 token 最多」）。
+CREATE TABLE IF NOT EXISTS ai_usage_days (
+    day   TEXT PRIMARY KEY,
+    calls INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS ai_usage_models (
+    model_key         TEXT NOT NULL,
+    day               TEXT NOT NULL,
+    calls             INTEGER NOT NULL DEFAULT 0,
+    prompt_tokens     INTEGER NOT NULL DEFAULT 0,
+    completion_tokens INTEGER NOT NULL DEFAULT 0,
+    total_tokens      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (model_key, day)
+);
+
+-- 审计日志：以前是只增不减的 ai-audit.log（JSONL），现在有表就有上限可言了。
+CREATE TABLE IF NOT EXISTS ai_audit (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    time   TEXT NOT NULL,
+    kind   TEXT NOT NULL,
+    prompt TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_audit_time ON ai_audit(time);
 "#;
 
 #[cfg(test)]

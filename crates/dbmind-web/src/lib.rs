@@ -567,6 +567,14 @@ pub async fn serve(options: Options) -> Result<(), String> {
     }
     .map_err(|err| format!("无法打开元数据库: {err}"))?;
 
+    // 让"环境式"的读写（AI 设置这类不接 Store 参数的地方）能拿到主库；
+    // 再把老版本散在 ~/.dbmind 下的 json 状态一次性导进来。顺序有讲究：先装句柄，迁移才有地方写。
+    dbmind_core::install_global_store(engine.store().clone());
+    let imported = crate::api::ai::migrate::import_legacy();
+    if imported > 0 {
+        tracing::info!(actions = imported, "已把旧版 json 状态导入主库");
+    }
+
     let summary = engine.runtime_summary();
     tracing::info!(
         store = %summary.store_path,

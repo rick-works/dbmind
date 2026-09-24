@@ -33,6 +33,7 @@ pub mod doc;
 pub mod governance;
 pub mod kb;
 pub mod knowledge;
+pub mod migrate;
 pub mod prompts;
 pub mod quality;
 pub mod tools;

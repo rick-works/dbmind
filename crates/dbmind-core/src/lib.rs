@@ -45,7 +45,11 @@ pub use safety::SafetyPolicy;
 pub use sql::{first_keyword, StatementKind};
 // 语句判定按协议分派：壳层拿到的 statementKind 也是由这里判出来的
 pub use statement::{classify, is_read_only, split_statements, statement_count};
-pub use storage::Store;
+// `global_store` / `install_global_store`：AI 设置这类"环境式"读写要按需取主库句柄，
+// 句柄由壳层在启动时显式装一次（不在 Store 构造里自动装，否则单测的内存库会互相串）。
+pub use storage::{
+    global_store, install_global_store, AiModelRow, AiSettingsRow, AiUsageRow, Store,
+};
 pub use types::{
     AccessContext, CellValue, ColumnDetail, ColumnMeta, ConnectReport, ConnectionConfig, ConnectionRecord,
     HistoryEntry, HistoryStatus, NewHistoryEntry, QueryOptions, QueryRequest, QueryResult, SchemaCacheInfo,

@@ -2,8 +2,9 @@
 //!
 //! ## 配置存在哪、长什么样
 //!
-//! `<home>/ai-config.json`，与上游同构（`enabled` / `privacyMode` / `auditEnabled` / `models[]`），
-//! 这样两边的设置项语义一致：
+//! 存在主库 `~/.dbmind/dbmind.db` 的 `ai_settings`（单行设置）+ `ai_models`（模型端点，按序）
+//! 两张表里；老版本的 `ai-config.json` 由 `migrate` 模块一次性导进来后挪走。
+//! 对外的 JSON 形状**一字未变**（`enabled` / `privacyMode` / `auditEnabled` / `models[]`）：
 //!
 //! ```json
 //! { "enabled": true, "privacyMode": "allow", "auditEnabled": false,
@@ -27,7 +28,7 @@
 //!   `{model, messages, temperature, stream, max_tokens?}`；
 //! - 向量：`POST {baseUrl}/embeddings`，body `{model, input:[...]}`（**每批 10 条**）。
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -90,23 +91,77 @@ impl Default for AiSettings {
     }
 }
 
+/// AI 设置存在主库里（`~/.dbmind/dbmind.db` 的 ai_settings + ai_models 两张表）。
+///
+/// 这里仍然给界面回显一个路径：以前指向 ai-config.json，现在指向**库文件** ——
+/// 用户问「我的配置在哪」时，答案从「那个 json」变成「那个库」。
 pub fn config_path() -> PathBuf {
-    dbmind_core::paths::home_dir().join("ai-config.json")
+    dbmind_core::paths::default_store_path()
 }
 
+/// 主库行 → 设置对象。`load()` 与旧文件导入共用这一份映射：
+/// 字段只在这里写一遍，加字段时不会出现"保存带了新字段、读取忘了带"的半对不上。
+pub fn from_row(row: dbmind_core::AiSettingsRow) -> AiSettings {
+    AiSettings {
+        enabled: row.enabled,
+        privacy_mode: row.privacy_mode,
+        audit_enabled: row.audit_enabled,
+        models: row
+            .models
+            .into_iter()
+            .map(|model| ModelEntry {
+                id: model.id,
+                name: model.name,
+                base_url: model.base_url,
+                api_key: model.api_key,
+                model: model.model,
+                max_tokens: model.max_tokens,
+                embedding: model.embedding,
+            })
+            .collect(),
+    }
+}
+
+/// 设置对象 → 主库行（同一份映射的另一半）。
+pub fn to_row(settings: &AiSettings) -> dbmind_core::AiSettingsRow {
+    dbmind_core::AiSettingsRow {
+        enabled: settings.enabled,
+        privacy_mode: settings.privacy_mode.clone(),
+        audit_enabled: settings.audit_enabled,
+        models: settings
+            .models
+            .iter()
+            .map(|model| dbmind_core::AiModelRow {
+                id: model.id.clone(),
+                name: model.name.clone(),
+                base_url: model.base_url.clone(),
+                api_key: model.api_key.clone(),
+                model: model.model.clone(),
+                max_tokens: model.max_tokens,
+                embedding: model.embedding,
+            })
+            .collect(),
+    }
+}
+
+/// 读设置。没装全局库（单测、纯内核形态）或库里从没配过 → 默认值。
 pub fn load() -> AiSettings {
-    match std::fs::read_to_string(config_path()) {
-        Ok(text) => serde_json::from_str(&text).unwrap_or_default(),
-        Err(_) => AiSettings::default(),
+    let Some(store) = dbmind_core::global_store() else {
+        return AiSettings::default();
+    };
+    match store.ai_settings() {
+        Ok(Some(row)) => from_row(row),
+        _ => AiSettings::default(),
     }
 }
 
 pub fn save(settings: &AiSettings) -> XResult<()> {
-    let path = config_path();
-    dbmind_core::paths::ensure_parent(&path)?;
-    let text = serde_json::to_string_pretty(settings).map_err(|e| XError::internal(e.to_string()))?;
-    std::fs::write(&path, text)
-        .map_err(|e| XError::internal(format!("写入 {} 失败：{e}", path.display())))
+    let Some(store) = dbmind_core::global_store() else {
+        return Err(XError::internal("主库未就绪，AI 设置无法保存"));
+    };
+    store
+        .save_ai_settings(&to_row(settings))
+        .map_err(|e| XError::internal(format!("写入主库失败：{e}")))
 }
 
 /// `GET /api/ai/config` —— 界面看到的样子（**密钥只给 hasKey**）。
@@ -611,8 +666,9 @@ pub fn embedding_model(preferred: Option<&str>) -> Option<ModelEntry> {
 
 // ------------------------------------------------------------------ 用量
 
-fn usage_path() -> PathBuf {
-    dbmind_core::paths::home_dir().join("ai-usage.json")
+/// 账本里「今天」的键：本地日期串（与老文件里的键格式一致，导入时对得上）。
+fn usage_day() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
 /// 用量账本里「按模型」的键：优先 API 的 `model` 串（那才是真正发出去的名字），
@@ -629,162 +685,104 @@ fn usage_model_key(model: &ModelEntry) -> String {
     "未命名模型".to_string()
 }
 
-/// 给 `target[key]` 加一个增量（不存在按 0 起算）。
-fn bump(target: &mut Value, key: &str, delta: u64) {
-    if delta == 0 {
-        return;
-    }
-    let current = target.get(key).and_then(Value::as_u64).unwrap_or(0);
-    target[key] = json!(current + delta);
-}
-
 /// 记一次调用。失败不影响主流程 —— 用量统计不该把一次回答搞失败。
 ///
-/// <p>存两份，**刻意不合并**：
-/// * `days`：老结构，只有每天的调用次数 —— 历史文件、旧界面都认它，不动；
-/// * `models`：新结构，`模型 → 日期 → { calls, promptTokens, completionTokens, totalTokens }`。
-///
-/// 分开的好处是老账本**不用迁移**（缺 `models` 就当空），也不会因为多写字段把老字段写坏。
-/// token 只在上游回了 `usage` 时才累加 —— 没回就只累加次数，绝不按字数估算。
+/// 两级计数（当天 / 当天+模型）现在是两张表，各自一句 UPSERT；
+/// token 只在上游回了 usage 时才累加 —— 没回就只累加次数，绝不按字数估算。
 fn record_usage(model: &ModelEntry, usage: Option<TokenUsage>) {
-    let path = usage_path();
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let mut doc = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .unwrap_or_else(|| json!({ "days": {} }));
-    if !doc.get("days").is_some_and(Value::is_object) {
-        doc["days"] = json!({});
-    }
-    if !doc.get("models").is_some_and(Value::is_object) {
-        doc["models"] = json!({});
-    }
-
-    if let Some(days) = doc.get_mut("days").and_then(Value::as_object_mut) {
-        let entry = days
-            .entry(today.clone())
-            .or_insert_with(|| json!({ "calls": 0 }));
-        if !entry.is_object() {
-            *entry = json!({ "calls": 0 });
-        }
-        bump(entry, "calls", 1);
-    }
-
-    if let Some(models) = doc.get_mut("models").and_then(Value::as_object_mut) {
-        let bucket = models.entry(usage_model_key(model)).or_insert_with(|| json!({}));
-        if !bucket.is_object() {
-            *bucket = json!({});
-        }
-        let days_of_model = bucket.as_object_mut().expect("上面刚保证过是对象");
-        let day = days_of_model
-            .entry(today)
-            .or_insert_with(|| json!({ "calls": 0 }));
-        if !day.is_object() {
-            *day = json!({ "calls": 0 });
-        }
-        bump(day, "calls", 1);
-        if let Some(usage) = usage {
-            bump(day, "promptTokens", usage.prompt_tokens);
-            bump(day, "completionTokens", usage.completion_tokens);
-            bump(day, "totalTokens", usage.total_tokens);
-        }
-    }
-
-    if let Ok(text) = serde_json::to_string_pretty(&doc) {
-        let _ = std::fs::write(path, text);
-    }
+    let Some(store) = dbmind_core::global_store() else {
+        return;
+    };
+    let (prompt_tokens, completion_tokens, total_tokens) = match usage {
+        Some(usage) => (
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+        ),
+        None => (0, 0, 0),
+    };
+    let _ = store.bump_ai_usage(
+        &usage_model_key(model),
+        &usage_day(),
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+    );
 }
 
-/// `GET /api/ai/usage?days=30` —— 按天的调用次数。
+/// `GET /api/ai/usage?days=30` —— 按天的调用次数 + 同窗口的模型汇总。
+///
+/// 模型维度现在是 SQL 里的 GROUP BY（总 token 降序、并列按次数降序），
+/// 以前要在内存里把「模型 → 日期 → 计数」两层对象整个遍历一遍才算得出来。
 pub fn usage(days: u64) -> Value {
-    let doc = std::fs::read_to_string(usage_path())
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .unwrap_or_else(|| json!({ "days": {} }));
-    let empty = serde_json::Map::new();
-    let all = doc.get("days").and_then(Value::as_object).unwrap_or(&empty);
+    let limit = days.clamp(1, 365);
     let today = chrono::Local::now().date_naive();
-    let limit = days.clamp(1, 365) as i64;
+    let from = (today - chrono::Duration::days(limit as i64 - 1))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let Some(store) = dbmind_core::global_store() else {
+        return empty_usage(limit);
+    };
+    let recorded: std::collections::HashMap<String, u64> = store
+        .ai_usage_days(&from)
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+
+    // 逐天补齐：没有记录的日子也要给 0 —— 界面画的是一条连续的曲线，
+    // 缺天补 0 与「这天真的一次都没调」在图上本来就该长得一样。
     let mut series: Vec<Value> = Vec::new();
     let mut total = 0u64;
     for offset in (0..limit).rev() {
-        let date = today - chrono::Duration::days(offset);
-        let key = date.format("%Y-%m-%d").to_string();
-        let calls = all
-            .get(&key)
-            .and_then(|entry| entry.get("calls"))
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+        let key = (today - chrono::Duration::days(offset as i64))
+            .format("%Y-%m-%d")
+            .to_string();
+        let calls = recorded.get(&key).copied().unwrap_or(0);
         total += calls;
         series.push(json!({ "date": key, "calls": calls }));
     }
 
-    // 按模型汇总（同一时间窗）：逐天累加；token 缺失的日子只算次数，不补数字。
-    // 排序按总 token 降序、同 token 按次数 —— 用得多的排前面。
-    let empty_models = serde_json::Map::new();
-    let models_doc = doc
-        .get("models")
-        .and_then(Value::as_object)
-        .unwrap_or(&empty_models);
-    let from = today - chrono::Duration::days(limit - 1);
-    let mut models: Vec<Value> = Vec::new();
-    for (name, bucket) in models_doc {
-        let Some(by_day) = bucket.as_object() else { continue };
-        let (mut calls, mut prompt, mut completion, mut tokens) = (0u64, 0u64, 0u64, 0u64);
-        for (date, entry) in by_day {
-            let Ok(parsed) = chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d") else {
-                continue;
-            };
-            if parsed < from {
-                continue;
-            }
-            let number = |key: &str| entry.get(key).and_then(Value::as_u64).unwrap_or(0);
-            calls += number("calls");
-            prompt += number("promptTokens");
-            completion += number("completionTokens");
-            tokens += number("totalTokens");
-        }
-        if calls == 0 && tokens == 0 {
-            continue;
-        }
-        models.push(json!({
-            "model": name,
-            "calls": calls,
-            "promptTokens": prompt,
-            "completionTokens": completion,
-            "totalTokens": tokens,
-        }));
-    }
-    models.sort_by(|a, b| {
-        let key = |value: &Value| {
-            (
-                value["totalTokens"].as_u64().unwrap_or(0),
-                value["calls"].as_u64().unwrap_or(0),
-            )
-        };
-        key(b).cmp(&key(a))
-    });
+    let models: Vec<Value> = store
+        .ai_usage_models(&from)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|row| row.calls > 0 || row.total_tokens > 0)
+        .map(|row| {
+            json!({
+                "model": row.model_key,
+                "calls": row.calls,
+                "promptTokens": row.prompt_tokens,
+                "completionTokens": row.completion_tokens,
+                "totalTokens": row.total_tokens,
+            })
+        })
+        .collect();
 
     json!({ "days": series, "total": total, "window": limit, "models": models })
 }
 
+/// 没有主库时的形状：与有主库时**完全一致**，只是全是 0（界面不用分情况处理）。
+fn empty_usage(limit: u64) -> Value {
+    let today = chrono::Local::now().date_naive();
+    let mut series: Vec<Value> = Vec::new();
+    for offset in (0..limit).rev() {
+        let key = (today - chrono::Duration::days(offset as i64))
+            .format("%Y-%m-%d")
+            .to_string();
+        series.push(json!({ "date": key, "calls": 0 }));
+    }
+    json!({ "days": series, "total": 0, "window": limit, "models": [] })
+}
+
 /// 追加一条审计记录（`auditEnabled` 打开时）。
 pub fn audit(kind: &str, prompt: &str) {
-    let settings = load();
-    if !settings.audit_enabled {
+    let Some(store) = dbmind_core::global_store() else {
+        return;
+    };
+    if !load().audit_enabled {
         return;
     }
-    let path = dbmind_core::paths::home_dir().join("ai-audit.log");
-    let line = json!({
-        "time": chrono::Local::now().to_rfc3339(),
-        "kind": kind,
-        "prompt": prompt.chars().take(4000).collect::<String>(),
-    });
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
-        let _ = writeln!(file, "{line}");
-    }
+    let text: String = prompt.chars().take(4000).collect();
+    let _ = store.insert_ai_audit(kind, &text);
 }
