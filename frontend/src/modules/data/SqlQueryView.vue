@@ -43,21 +43,20 @@
         <span class="flex-spacer"></span>
         <div class="head-actions">
           <el-button v-if="running" size="small" type="danger" @click="stopSql">
-            <el-icon style="margin-right:4px"><VideoPause /></el-icon>停止
-          </el-button>
+            <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('sqlq.stop') }} </el-button>
           <el-button v-else size="small" type="primary" @click="() => runSql()"
-                     :title="hasEditorSelection ? `执行选中的 ${selChars} 个字符` : '执行全部 SQL'">
+                     :title="hasEditorSelection ? `执行选中的 ${selChars} 个字符` : $t('shortcut.query.runAll.label')">
             <el-icon style="margin-right:4px"><CaretRight /></el-icon>{{ hasEditorSelection ? '执行选中' : '执行' }}
           </el-button>
           <el-button v-if="!isNoSql" size="small" :icon="Brush" @click="formatSql"
-                     :title="hasEditorSelection ? '格式化选中的 SQL' : '格式化全部 SQL'">{{ hasEditorSelection ? '格式化选中' : '格式化' }}</el-button>
+                     :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')">{{ hasEditorSelection ? '格式化选中' : '格式化' }}</el-button>
           <!-- SQL 执行历史：本地保存最近执行的 SQL，一键回填复用 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
-            <el-button size="small" :icon="Clock" title="执行历史">历史</el-button>
+            <el-button size="small" :icon="Clock" :title="$t('sqlq.history')">历史</el-button>
             <template #dropdown>
               <div class="hist-head">
-                <span>执行历史</span>
-                <el-button size="small" text type="danger" @click.stop="clearHistory" :disabled="!historyList.length">清空</el-button>
+                <span>{{ $t('sqlq.history') }}</span>
+                <el-button size="small" text type="danger" @click.stop="clearHistory" :disabled="!historyList.length">{{ $t('common.clear') }}</el-button>
               </div>
               <div class="hist-list" v-if="historyList.length">
                 <div class="hist-item" v-for="(h, i) in historyList" :key="h.id" @click="applyHistory(h)">
@@ -68,11 +67,11 @@
                   </div>
                   <div class="hist-sql" :title="h.sql">{{ h.sql }}</div>
                   <div class="hist-ops" @click.stop>
-                    <el-button size="small" text type="danger" @click="removeHistory(i)">删除</el-button>
+                    <el-button size="small" text type="danger" @click="removeHistory(i)">{{ $t('common.delete') }}</el-button>
                   </div>
                 </div>
               </div>
-              <div class="hist-empty" v-else>暂无执行历史</div>
+              <div class="hist-empty" v-else>{{ $t('sqlq.historyEmpty') }}</div>
             </template>
           </el-dropdown>
           <!-- AI 模型：紧靠 AI 功能按钮（与 AI 面板「选择模型」同一套下拉，popper-class 复用全局样式） -->
@@ -84,10 +83,10 @@
               <el-icon class="model-btn-caret"><ArrowDown /></el-icon>
             </button>
             <template #dropdown>
-              <div class="ai-dd-head">选择模型</div>
+              <div class="ai-dd-head">{{ $t('ai.pickModel') }}</div>
               <el-dropdown-menu>
                 <el-dropdown-item command="auto" :class="{ active: selectedAiModelId === 'auto' }">
-                  <span class="skills-name">Auto（自动选择）</span>
+                  <span class="skills-name">{{ $t('ai.modelAuto') }}</span>
                   <el-icon v-if="selectedAiModelId === 'auto'" class="skills-check"><Select /></el-icon>
                 </el-dropdown-item>
                 <el-dropdown-item v-for="m in aiModels" :key="m.id" :command="m.id"
@@ -101,34 +100,34 @@
           <!-- AI 助手：解释 / 优化 / 诊断 / 改写 整合成一个入口，避免工具栏按钮堆积 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="ai-model-dropdown"
                        @command="onAiAction">
-            <button class="ai-act-btn" type="button" title="AI 助手">
+            <button class="ai-act-btn" type="button" :title="$t('nav.ai')">
               <el-icon class="ai-act-btn-ic"><MagicStick /></el-icon>
-              <span>AI 助手</span>
+              <span>{{ $t('nav.ai') }}</span>
               <el-icon class="ai-act-btn-caret"><ArrowDown /></el-icon>
             </button>
             <template #dropdown>
-              <div class="ai-dd-head">AI 助手</div>
+              <div class="ai-dd-head">{{ $t('nav.ai') }}</div>
               <el-dropdown-menu>
                 <el-dropdown-item command="explain">
                   <el-icon class="skills-ic"><MagicStick /></el-icon>
-                  <span class="skills-name">解释 SQL</span>
+                  <span class="skills-name">{{ $t('sqlq.aiExplain') }}</span>
                 </el-dropdown-item>
                 <el-dropdown-item command="optimize">
                   <el-icon class="skills-ic"><TrendCharts /></el-icon>
-                  <span class="skills-name">性能优化建议</span>
+                  <span class="skills-name">{{ $t('sqlq.aiOptimize') }}</span>
                 </el-dropdown-item>
                 <el-dropdown-item command="diagnose">
                   <el-icon class="skills-ic"><DataAnalysis /></el-icon>
-                  <span class="skills-name">结合执行计划诊断</span>
+                  <span class="skills-name">{{ $t('sqlq.aiDiagnose') }}</span>
                 </el-dropdown-item>
                 <el-dropdown-item command="rewrite">
                   <el-icon class="skills-ic"><EditPen /></el-icon>
-                  <span class="skills-name">按你的要求改写</span>
+                  <span class="skills-name">{{ $t('sqlq.aiRewrite') }}</span>
                 </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-button size="small" type="success" :icon="Document" @click="onSaveClick">保存</el-button>
+          <el-button size="small" type="success" :icon="Document" @click="onSaveClick">{{ $t('common.save') }}</el-button>
         </div>
       </div>
       <div class="editor-body" @contextmenu.prevent="onEditorContextMenu">
@@ -142,7 +141,7 @@
           class="vue-monaco-editor"
           @mount="onEditorMount"
         />
-        <div v-else class="editor-loading">编辑器加载中…</div>
+        <div v-else class="editor-loading">{{ $t('sce.loading') }}</div>
       </div>
       <!-- 底部状态栏：光标位置 / 选中信息 / 总行数 / 格式化方言 -->
       <div class="editor-status">
@@ -150,28 +149,28 @@
         <span v-if="hasEditorSelection" class="st-item st-hl">选中 {{ selChars }} 字符 / {{ selLines }} 行</span>
         <span class="st-item st-dim">共 {{ sqlLineCount }} 行</span>
         <span class="flex-spacer"></span>
-        <span v-if="!isNoSql" class="st-item st-dim" title="SQL 格式化使用的方言">{{ String(fmtDialect || 'sql').toUpperCase() }}</span>
+        <span v-if="!isNoSql" class="st-item st-dim" :title="$t('sqlq.dialectTitle')">{{ String(fmtDialect || 'sql').toUpperCase() }}</span>
       </div>
     </div>
 
     <!-- 分隔条：拖动调整高度；双击在「结果最大化 → 编辑器最大化 → 还原」之间循环 -->
     <div v-if="resultVisible" class="resizer" @mousedown="onResizerStart"
          @dblclick="onResizerDblClick"
-         title="拖动调整高度；双击：结果最大化 → 编辑器最大化 → 还原"></div>
+         :title="$t('sqlq.resizerTitle')"></div>
 
     <div class="result-area" v-if="resultVisible">
       <div class="result-head">
         <span class="result-title">{{ showResultTabs ? ('结果集 ' + resultItems.length) : '结果' }}</span>
         <span class="flex-spacer"></span>
-        <span v-if="loading" class="loading-text"><el-icon class="is-loading"><Loading /></el-icon> 执行中...</span>
+        <span v-if="loading" class="loading-text"><el-icon class="is-loading"><Loading /></el-icon> {{ $t('sqlq.running') }}</span>
         <el-dropdown trigger="click" :hide-on-click="false" popper-class="col-vis-dropdown">
           <el-button size="small" text :icon="Operation"
                      :title="`选择显示字段（${resultVisibleCols.length}/${(result.columns || []).length}）`" />
           <template #dropdown>
             <div class="col-vis" @mousedown.stop>
               <div class="col-vis-head">
-                <span>显示字段</span>
-                <el-button size="small" text type="primary" @click="showAllResultCols">全选</el-button>
+                <span>{{ $t('sqlq.visibleCols') }}</span>
+                <el-button size="small" text type="primary" @click="showAllResultCols">{{ $t('common.selectAll') }}</el-button>
               </div>
               <el-checkbox v-for="c in result.columns" :key="c" :model-value="!hiddenResultCols.has(c)"
                            @change="toggleResultColVisible(c)" class="col-vis-item">{{ c }}</el-checkbox>
@@ -179,19 +178,19 @@
           </template>
         </el-dropdown>
         <el-dropdown @command="onExport">
-          <el-button size="small" text :icon="Download" title="导出" />
+          <el-button size="small" text :icon="Download" :title="$t('qa.exportBtn')" />
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="current-csv">导出当前页 CSV</el-dropdown-item>
-              <el-dropdown-item command="current-excel">导出当前页 Excel</el-dropdown-item>
-              <el-dropdown-item divided command="all-csv">导出全部 CSV</el-dropdown-item>
-              <el-dropdown-item command="all-excel">导出全部 Excel</el-dropdown-item>
+              <el-dropdown-item command="current-csv">{{ $t('qa.exportCurCsv') }}</el-dropdown-item>
+              <el-dropdown-item command="current-excel">{{ $t('qa.exportCurExcel') }}</el-dropdown-item>
+              <el-dropdown-item divided command="all-csv">{{ $t('qa.exportAllCsv') }}</el-dropdown-item>
+              <el-dropdown-item command="all-excel">{{ $t('qa.exportAllExcel') }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <el-button size="small" text :icon="DataAnalysis" title="数据透视：分组汇总 / 计数 / 下钻（纯前端）"
+        <el-button size="small" text :icon="DataAnalysis" :title="$t('sqlq.pivotTitle')"
                    @click="openPivot" :disabled="!result?.rows?.length" />
-        <el-button size="small" text :icon="Close" @click="resultVisible = false" title="关闭结果" />
+        <el-button size="small" text :icon="Close" @click="resultVisible = false" :title="$t('sqlq.closeResult')" />
       </div>
       <div class="result-tabs" v-if="showResultTabs">
         <button v-for="(item, i) in resultItems" :key="'tab' + i" type="button"
@@ -206,10 +205,9 @@
         <div v-if="running" class="grid-loading-overlay">
           <div class="grid-loading-box">
             <el-icon class="is-loading" :size="26"><Loading /></el-icon>
-            <span class="grid-loading-text">查询中…</span>
+            <span class="grid-loading-text">{{ $t('sqlq.querying') }}</span>
             <el-button size="small" @click="stopSql">
-              <el-icon style="margin-right:4px"><VideoPause /></el-icon>取消
-            </el-button>
+              <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('tree.multiCancel') }} </el-button>
           </div>
         </div>
         <!-- 数据表格 -->
@@ -228,10 +226,10 @@
               <tr :class="{ 'selected': headerSelected, 'row-sel-top': headerSelected, 'row-sel-bottom': selEdges.headerBottom }">
                 <!-- 左上角（原全选复选框位置）= 标题行的行头：单击选中标题行，按住往下拖可连选数据行 -->
                 <th class="row-sel-th" :class="{ 'row-num-on': headerSelected }"
-                    title="标题行：单击选中标题行，按住往下拖可连选数据行（标题行在选中范围内时，复制会带上列名）"
+                    :title="$t('sqlq.headerRowTitle')"
                     @mousedown.prevent="onResultHeaderRowDown($event)"><span class="row-num-tx">#</span></th>
                 <th v-for="c in resultVisibleCols" :key="'h' + c.idx" :data-gkey="'0:' + c.idx"
-                    :title="c.name + '\n单击选中整列，左右拖连选多列，Alt+拖动调整列顺序；Shift+点击 = 扩展到这一格（可含标题行）'"
+                    :title="c.name + $t('sqlq.colTitleSuffix')"
                     :class="{ 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name) }"
                     @mousedown="onResultColDragStart(c.idx, $event)"
                     @click="onResultHeaderClickOrSelect(c.name, $event)"
@@ -240,7 +238,7 @@
                   <span v-if="resultTypeOf(c.idx)" class="th-type-ic" :title="resultTypeOf(c.idx)">
                     <el-icon><component :is="resultTypeIcon(c.idx)" /></el-icon>
                   </span>{{ c.name }}<span class="th-sort" :class="{ 'is-sorted': resultSortColumn === c.name }"
-                        :title="resultSortColumn === c.name ? (resultSortDir === 'ASC' ? '当前升序，点击切换降序' : '当前降序，点击取消排序') : '点击按此列排序'"
+                        :title="resultSortColumn === c.name ? (resultSortDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
                         @mousedown.stop @click.stop="onResultHeaderClick(c.name)">
                     <el-icon v-if="resultSortColumn !== c.name"><Sort /></el-icon>
                     <el-icon v-else-if="resultSortDir === 'ASC'"><SortUp /></el-icon>
@@ -290,24 +288,24 @@
               <span class="error-title">{{ isNoSql ? '命令执行失败' : 'SQL 执行失败' }}</span>
               <span class="error-time" v-if="result.executeTime">耗时 {{ result.executeTime }}ms</span>
             </div>
-            <el-button v-if="!isNoSql" size="small" type="primary" :icon="MagicStick" :loading="aiFixLoading" @click="askAiFix">AI 修复</el-button>
+            <el-button v-if="!isNoSql" size="small" type="primary" :icon="MagicStick" :loading="aiFixLoading" @click="askAiFix">{{ $t('sqlq.aiFix') }}</el-button>
           </div>
           <div class="error-message">{{ result.message || '未知错误' }}</div>
         </div>
-        <el-empty v-else :description="(result && result.affectedRows >= 0 && result.message) ? result.message : '暂无结果'" />
+        <el-empty v-else :description="(result && result.affectedRows >= 0 && result.message) ? result.message : $t('sqlq.noResult')" />
         <div v-if="result?.success && result?.rows?.length" class="result-footer">
           <span class="result-time">
             {{ running ? formatElapsed(elapsedTime) : (result.executeTime ? formatElapsed(result.executeTime) : '') }}
           </span>
           <!-- 选中区汇总（借参考项目 dbx 的底栏状态区）：框选单元格、选中整行或整列时给出
                格子数 / 求和 / 均值 / 最小 / 最大（只统计数值列），排查数据时不用自己算 -->
-          <span v-if="resultSelectionSummary" class="result-summary" :title="'选中区汇总（只统计数值类型列）'">
+          <span v-if="resultSelectionSummary" class="result-summary" :title="$t('sqlq.summaryTitle')">
             <span class="rs-item">选中 <b>{{ resultSelectionSummary.cells }}</b> 格</span>
             <template v-if="resultSelectionSummary.nums">
-              <span class="rs-item">求和 <b>{{ fmtNum(resultSelectionSummary.sum) }}</b></span>
-              <span class="rs-item">均值 <b>{{ fmtNum(resultSelectionSummary.avg) }}</b></span>
-              <span class="rs-item">最小 <b>{{ fmtNum(resultSelectionSummary.min) }}</b></span>
-              <span class="rs-item">最大 <b>{{ fmtNum(resultSelectionSummary.max) }}</b></span>
+              <span class="rs-item">{{ $t('sqlq.sum') }} <b>{{ fmtNum(resultSelectionSummary.sum) }}</b></span>
+              <span class="rs-item">{{ $t('sqlq.avg') }} <b>{{ fmtNum(resultSelectionSummary.avg) }}</b></span>
+              <span class="rs-item">{{ $t('sqlq.min') }} <b>{{ fmtNum(resultSelectionSummary.min) }}</b></span>
+              <span class="rs-item">{{ $t('sqlq.max') }} <b>{{ fmtNum(resultSelectionSummary.max) }}</b></span>
             </template>
           </span>
           <el-pagination
@@ -336,11 +334,11 @@
       <div class="ai-dialog-body">
         <div v-if="aiLoading" class="ai-loading">
           <el-icon class="is-loading" :size="28"><Loading /></el-icon>
-          <p>AI 分析中，请稍候...</p>
+          <p>{{ $t('sqlq.aiThinking') }}</p>
         </div>
         <template v-else-if="aiResult">
           <div v-if="aiErrorReason" class="ai-error-reason">
-            <span class="ai-reason-label">错误原因：</span>{{ aiErrorReason }}
+            <span class="ai-reason-label">{{ $t('sqlq.errorReason') }}</span>{{ aiErrorReason }}
           </div>
           <!-- 结论一律按 Markdown 渲染；含 SQL 时代码块右上角自带「插入编辑器 / 复制」图标按钮 -->
           <div class="ai-markdown" v-html="renderMarkdown(aiResultMd, { sqlActions: true })"
@@ -354,13 +352,13 @@
       <template #header>
         <div class="dlg-title">
           <span class="dlg-title-ic"><el-icon :size="16"><Document /></el-icon></span>
-          <span>保存脚本</span>
+          <span>{{ $t('shortcut.query.save.label') }}</span>
         </div>
       </template>
       <el-input v-model="saveName" clearable @keyup.enter="doSaveScript" />
       <template #footer>
-        <el-button @click="cancelSaveDialog">取消</el-button>
-        <el-button type="primary" @click="doSaveScript">保存</el-button>
+        <el-button @click="cancelSaveDialog">{{ $t('tree.multiCancel') }}</el-button>
+        <el-button type="primary" @click="doSaveScript">{{ $t('common.save') }}</el-button>
       </template>
     </el-dialog>
   </div>
@@ -419,8 +417,8 @@
 
   <TaskProgressDialog
     v-model:visible="exportTask.visible"
-    task-type="导出"
-    :target-name="props.scriptName || '查询结果'"
+    :task-type="$t('qa.exportBtn')"
+    :target-name="props.scriptName || $t('sqlq.queryResult')"
     :status="exportTask.status"
     :done="exportTask.done"
     :total="exportTask.total"
@@ -443,6 +441,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { t } from '../../utils/i18n'
 import VueMonacoEditor from '@guolao/vue-monaco-editor'
 import { ensureMonaco } from '../../utils/monaco'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
@@ -503,7 +502,7 @@ const toggleResultColVisible = (name) => {
   if (s.has(name)) {
     s.delete(name)
   } else {
-    if ((result.value?.columns?.length || 0) - s.size <= 1) { ElMessage.warning('至少保留一列'); return }
+    if ((result.value?.columns?.length || 0) - s.size <= 1) { ElMessage.warning(t('sqlq.keepOneCol')); return }
     s.add(name)
   }
   hiddenResultCols.value = s
@@ -542,7 +541,7 @@ const querySettings = getQuerySettings()
 const editorTheme = ref(getResolvedTheme() === 'dark' ? 'vs-dark' : 'vs-light')
 let offEditorTheme = null
 
-// 分页（默认每页行数取设置项"默认分页"）
+// 分页（默认每页行数取设置项t('settings.query.pageSize')）
 const pageSize = ref(querySettings.pageSize)
 const currentPage = ref(1)
 // 分页选项：保证当前默认值始终可选，其余保留大数据量浏览档位
@@ -1477,8 +1476,8 @@ const writeClipboard = (text, msg) => {
       const ok = document.execCommand('copy')
       document.body.removeChild(ta)
       if (ok) done()
-      else if (msg) ElMessage.error('复制失败')
-    } catch { if (msg) ElMessage.error('复制失败') }
+      else if (msg) ElMessage.error(t('sqlq.copyFailed'))
+    } catch { if (msg) ElMessage.error(t('sqlq.copyFailed')) }
   }
   if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done).catch(fallback)
   else fallback()
@@ -1712,15 +1711,15 @@ const copyLikeCtrlC = () => {
     return
   }
   const text = selectionAsTsv()
-  if (!text) { ElMessage.warning('没有可复制的内容'); return }
+  if (!text) { ElMessage.warning(t('sqlq.nothingToCopy')); return }
   writeClipboard(text, `已复制 ${text.split('\n').length} 行`)
 }
 // Ctrl+C 的场景化提示：让人明确这次到底复制了什么
 const copyHint = () => {
   if (selectedCols.value.size) return `已复制 ${selectedCols.value.size} 列（含列名）`
   if (resultSelectedSet.value.size) return `已复制 ${resultSelectedSet.value.size} 行${headerSelected.value ? '（含列名）' : ''}`
-  if (headerSelected.value) return '已复制列名'
-  return '已复制单元格'
+  if (headerSelected.value) return t('sqlq.copyColNames')
+  return t('sqlq.copyCell')
 }
 // 焦点是否在输入类控件（含 Monaco 编辑器）里：此时复制的是用户自己的文字，别抢
 const inEditableFocus = () => {
@@ -1748,7 +1747,7 @@ document.addEventListener('copy', onDocCopy)
 onBeforeUnmount(() => document.removeEventListener('copy', onDocCopy))
 const copyResCtx = (mode) => {
   const { rows, cols } = resCtxSelection()
-  if (!rows.length || !cols.length) { ElMessage.warning('没有可复制的内容'); return }
+  if (!rows.length || !cols.length) { ElMessage.warning(t('sqlq.nothingToCopy')); return }
   const table = guessTableName()
   const val = (r, c) => (r && r[c] != null) ? String(r[c]) : ''
   if (mode === 'csv') {
@@ -1810,14 +1809,14 @@ const copyColHeader = () => {
 
 const hideResultColumn = (name) => {
   if (!name) return
-  if (resultVisibleCols.value.length <= 1) { ElMessage.warning('至少保留一列'); return }
+  if (resultVisibleCols.value.length <= 1) { ElMessage.warning(t('sqlq.keepOneCol')); return }
   hiddenResultCols.value = new Set(hiddenResultCols.value).add(name)
 }
 // 「隐藏列」：有选中的列就隐藏全部选中列（单选/多选都支持）；没选任何列时隐藏右键那一列
 const hideResultColumnSmart = (name) => {
   const picked = resultVisibleCols.value.filter(c => selectedCols.value.has(c.name)).map(c => c.name)
   if (!picked.length) { hideResultColumn(name); return }
-  if (resultVisibleCols.value.length - picked.length < 1) { ElMessage.warning('至少保留一列'); return }
+  if (resultVisibleCols.value.length - picked.length < 1) { ElMessage.warning(t('sqlq.keepOneCol')); return }
   hiddenResultCols.value = new Set([...hiddenResultCols.value, ...picked])
   clearColSelect()
 }
@@ -1874,26 +1873,26 @@ const openResCtx = (x, y, rowIdx, col, from = 'cell') => {
   if (mode === 'range') {
     // —— 区域操作 ——
     // 「复制」= 与 Ctrl+C 完全一致（照选中范围原样复制，表头只在选中范围内才带）
-    items.push({ label: '复制', command: 'copy-sel', shortcut: 'Ctrl+C' })
-    items.push({ label: '复制为', sub: formatSub })
+    items.push({ label: t('mdk.copy'), command: 'copy-sel', shortcut: 'Ctrl+C' })
+    items.push({ label: t('sqlq.ctxCopyAs'), sub: formatSub })
   } else if (mode === 'columns') {
     // —— 列操作 ——
-    items.push({ label: '复制', command: 'copy-sel', shortcut: 'Ctrl+C' })
-    items.push({ label: '复制为', sub: formatSub })
+    items.push({ label: t('mdk.copy'), command: 'copy-sel', shortcut: 'Ctrl+C' })
+    items.push({ label: t('sqlq.ctxCopyAs'), sub: formatSub })
     // 只要列名（不含数据）：贴进 SELECT / WHERE 用；选了几列就复制几列的名字
-    items.push({ label: '复制表头', command: 'copy-col-header' })
+    items.push({ label: t('sqlq.ctxCopyHeader'), command: 'copy-col-header' })
     sep()
-    items.push({ label: '列宽自适应', command: 'col-fit' })
-    items.push({ label: '隐藏列', command: 'hide-col' })
-    if (hiddenResultCols.value.size) items.push({ label: '显示所有列', command: 'show-all-cols' })
+    items.push({ label: t('sqlq.ctxColFit'), command: 'col-fit' })
+    items.push({ label: t('sqlq.ctxHideCol'), command: 'hide-col' })
+    if (hiddenResultCols.value.size) items.push({ label: t('sqlq.ctxShowAllCols'), command: 'show-all-cols' })
   } else if (mode === 'rows') {
     // —— 行操作（结果表只读，没有编辑类操作） ——
-    items.push({ label: '查看详情', command: 'row-detail' })
-    items.push({ label: '复制', command: 'copy-sel', shortcut: 'Ctrl+C' })
-    items.push({ label: '复制为', sub: formatSub })
+    items.push({ label: t('sqlq.ctxRowDetail'), command: 'row-detail' })
+    items.push({ label: t('mdk.copy'), command: 'copy-sel', shortcut: 'Ctrl+C' })
+    items.push({ label: t('sqlq.ctxCopyAs'), sub: formatSub })
   } else {
     // —— 单元格操作（只放作用在这一格上的操作；行/列操作先选中行/列再右键） ——
-    if (col) items.push({ label: '复制', command: 'copy-cell', shortcut: 'Ctrl+C' })
+    if (col) items.push({ label: t('mdk.copy'), command: 'copy-cell', shortcut: 'Ctrl+C' })
   }
   // 全选/取消全选走 Ctrl+A 与表头复选框，不再占用右键菜单
   if (!items.length) return
@@ -1917,7 +1916,7 @@ const onResultCtxItem = (item) => {
   const val = (r, c) => (r && r[c] != null) ? String(r[c]) : ''
   switch (item.command) {
     case 'row-detail': if (rowIdx >= 0) openRowDetail(rowIdx); break
-    case 'copy-cell': if (row) writeClipboard(val(row, col), '已复制单元格'); break
+    case 'copy-cell': if (row) writeClipboard(val(row, col), t('sqlq.copyCell')); break
     case 'copy-sel': copyLikeCtrlC(); break
     case 'copy-col-header': copyColHeader(); break
     case 'copy-csv': copyResCtx('csv'); break
@@ -1968,7 +1967,7 @@ const showSchemaSelect = computed(() => schemaLevelOf(connType.value) === 'schem
 const connGroups = computed(() => {
   const map = new Map()
   for (const c of allConnections.value) {
-    const key = c.environment || '未分组'
+    const key = c.environment || t('aictx.ungrouped')
     if (!map.has(key)) map.set(key, [])
     map.get(key).push(c)
   }
@@ -2059,7 +2058,7 @@ const pivotColumns = ref([])
 const pivotRows = ref([])
 const openPivot = () => {
   const r = result.value
-  if (!r || !r.rows || !r.rows.length) { ElMessage.warning('当前没有可导出的结果行'); return }
+  if (!r || !r.rows || !r.rows.length) { ElMessage.warning(t('sqlq.noRowsToExport')); return }
   pivotColumns.value = (r.columns || []).slice()
   pivotRows.value = r.rows.map(row => ({ ...row })) // 快照，避免后续翻页/排序改动影响透视
   pivotVisible.value = true
@@ -2215,7 +2214,7 @@ const onEditorMount = (editor, monaco) => {
             insertText: kw,
             range,
             sortText: '0fff' + kw,
-            detail: '关键字'
+            detail: t('settings.format.keyword')
           })
         })
 
@@ -2236,7 +2235,7 @@ const onEditorMount = (editor, monaco) => {
             insertText: name,
             range,
             sortText: '1aaa' + name,
-            detail: '表'
+            detail: t('tree.cat.tables')
           })
         })
 
@@ -2248,16 +2247,16 @@ const onEditorMount = (editor, monaco) => {
             insertText: db,
             range,
             sortText: '1bbb' + db,
-            detail: '数据库'
+            detail: t('sqlq.snippetDatabase')
           })
         })
 
         // 4) 仅保留最常用的 SQL 片段，避免列表繁杂
         const snippets = [
-          { label: 'SELECT * FROM', insertText: 'SELECT * FROM ${1:table_name};', detail: '查询全部' },
+          { label: 'SELECT * FROM', insertText: 'SELECT * FROM ${1:table_name};', detail: t('sqlq.snippetSelectAll') },
           { label: 'INSERT INTO', insertText: 'INSERT INTO ${1:table_name} (${2:columns}) VALUES (${3:values});', detail: '插入数据' },
           { label: 'UPDATE', insertText: 'UPDATE ${1:table_name} SET ${2:column} = ${3:value} WHERE ${4:condition};', detail: '更新数据' },
-          { label: 'DELETE FROM', insertText: 'DELETE FROM ${1:table_name} WHERE ${2:condition};', detail: '删除数据' }
+          { label: 'DELETE FROM', insertText: 'DELETE FROM ${1:table_name} WHERE ${2:condition};', detail: t('sqlq.snippetDelete') }
         ]
         snippets.forEach(s => {
           suggestions.push({
@@ -2372,25 +2371,25 @@ const collapseSqlWs = (s) => String(s).replace(/[ \t]*\r?\n[ \t]*/g, ' ').replac
 const transformSelectedSql = (fn, msg) => {
   const ed = editorInstance
   const t = selTextOf(ed)
-  if (!t) { ElMessage.warning('请先选中要处理的 SQL'); return }
+  if (!t) { ElMessage.warning(t('sqlq.pickSqlFirst')); return }
   replaceSelText(ed, fn(t))
   if (msg) ElMessage.success(msg)
 }
 const formatSelectedSql = () => {
   const ed = editorInstance
   const t = selTextOf(ed)
-  if (!t.trim()) { ElMessage.warning('请先选中要格式化的 SQL'); return }
+  if (!t.trim()) { ElMessage.warning(t('sqlq.pickSqlToFormat')); return }
   try {
     replaceSelText(ed, smartFormatSql(t, getEditorSettings(), fmtDialect.value))
-    ElMessage.success('已格式化选中片段')
+    ElMessage.success(t('sqlq.formattedSelection'))
   } catch (e) {
-    ElMessage.error('格式化失败：' + (e?.message || e?.toString?.() || '未知错误'))
+    ElMessage.error('格式化失败：' + (e?.message || e?.toString?.() || t('common.unknownError')))
   }
 }
 // 复制为 IN (...) 列表：按行取值，自动去掉行尾逗号与包裹引号（贴列名/值列表都能用）
 const copySelectionAsInList = () => {
   const t = selTextOf(editorInstance)
-  if (!t.trim()) { ElMessage.warning('请先选中要转换的内容'); return }
+  if (!t.trim()) { ElMessage.warning(t('sqlq.pickContentToConvert')); return }
   const items = t.split(/\r?\n/)
     .map(v => v.trim().replace(/,\s*$/, '').trim())
     .filter(Boolean)
@@ -2476,30 +2475,30 @@ const onEditorContextMenu = (e) => {
   const items = []
   const sep = () => { if (items.length && !items[items.length - 1].sep) items.push({ sep: true }) }
   // —— 执行 ——
-  items.push({ label: '执行选中 SQL', command: 'run-sel', shortcut: key('query.run'), disabled: !hasSel })
-  items.push({ label: '执行全部 SQL', command: 'run-all', shortcut: key('query.runAll') })
+  items.push({ label: t('sqlq.ctxRunSel'), command: 'run-sel', shortcut: key('query.run'), disabled: !hasSel })
+  items.push({ label: t('shortcut.query.runAll.label'), command: 'run-all', shortcut: key('query.runAll') })
   // —— 处理选中片段 ——
   sep()
-  items.push({ label: '格式化选中 SQL', command: 'format-sel', shortcut: key('query.format'), disabled: !hasSel })
-  items.push({ label: '转为大写', command: 'upper', shortcut: key('query.upper'), disabled: !hasSel })
-  items.push({ label: '转为小写', command: 'lower', shortcut: key('query.lower'), disabled: !hasSel })
-  items.push({ label: '压缩成一行', command: 'one-line', shortcut: key('query.oneLine'), disabled: !hasSel })
-  items.push({ label: '注释 / 取消注释', command: 'comment', shortcut: key('query.comment') })
+  items.push({ label: t('sqlq.ctxFmtSel'), command: 'format-sel', shortcut: key('query.format'), disabled: !hasSel })
+  items.push({ label: t('shortcut.query.upper.label'), command: 'upper', shortcut: key('query.upper'), disabled: !hasSel })
+  items.push({ label: t('shortcut.query.lower.label'), command: 'lower', shortcut: key('query.lower'), disabled: !hasSel })
+  items.push({ label: t('shortcut.query.oneLine.label'), command: 'one-line', shortcut: key('query.oneLine'), disabled: !hasSel })
+  items.push({ label: t('shortcut.query.comment.label'), command: 'comment', shortcut: key('query.comment') })
   // —— 复制 / 选中 ——
   sep()
-  items.push({ label: '复制为', sub: [
-    { label: 'IN 列表', command: 'copy-in', shortcut: key('query.copyInList'), disabled: !hasSel },
-    { label: '单行文本', command: 'copy-one-line', shortcut: key('query.copyOneLine'), disabled: !hasSel }
+  items.push({ label: t('sqlq.ctxCopyAs'), sub: [
+    { label: t('sqlq.ctxInList'), command: 'copy-in', shortcut: key('query.copyInList'), disabled: !hasSel },
+    { label: t('sqlq.ctxOneLine'), command: 'copy-one-line', shortcut: key('query.copyOneLine'), disabled: !hasSel }
   ] })
-  items.push({ label: '选中当前语句', command: 'select-stmt', shortcut: key('query.selectStatement') })
+  items.push({ label: t('shortcut.query.selectStatement.label'), command: 'select-stmt', shortcut: key('query.selectStatement') })
   // —— 通用编辑（Monaco / 系统级键位，固定不可改，这里只做提示）——
   sep()
-  items.push({ label: '撤销', command: 'undo', shortcut: 'Ctrl+Z' })
-  items.push({ label: '重做', command: 'redo', shortcut: 'Ctrl+Y' })
-  items.push({ label: '剪切', command: 'cut', shortcut: 'Ctrl+X', disabled: !hasSel })
-  items.push({ label: '复制', command: 'copy', shortcut: 'Ctrl+C', disabled: !hasSel })
-  items.push({ label: '粘贴', command: 'paste', shortcut: 'Ctrl+V' })
-  items.push({ label: '全选', command: 'select-all', shortcut: 'Ctrl+A' })
+  items.push({ label: t('tdv.revert'), command: 'undo', shortcut: 'Ctrl+Z' })
+  items.push({ label: t('common.redo'), command: 'redo', shortcut: 'Ctrl+Y' })
+  items.push({ label: t('common.cut'), command: 'cut', shortcut: 'Ctrl+X', disabled: !hasSel })
+  items.push({ label: t('mdk.copy'), command: 'copy', shortcut: 'Ctrl+C', disabled: !hasSel })
+  items.push({ label: t('common.paste'), command: 'paste', shortcut: 'Ctrl+V' })
+  items.push({ label: t('common.selectAll'), command: 'select-all', shortcut: 'Ctrl+A' })
 
   edCtxSub.value = null
   edCtx.value = { visible: true, x: e.clientX, y: e.clientY, items }
@@ -2536,7 +2535,7 @@ const onEdCtxItem = (item) => {
     case 'copy-in': copySelectionAsInList(); break
     case 'copy-one-line': {
       const t = selTextOf(ed)
-      if (t) writeClipboard(collapseSqlWs(t).trim(), '已复制为单行')
+      if (t) writeClipboard(collapseSqlWs(t).trim(), t('sqlq.copyOneLineDone'))
       break
     }
     case 'select-stmt': selectCurrentStatement(); break
@@ -2579,7 +2578,7 @@ const runSqlAll = () => {
  */
 const requireSql = () => {
   if (sql.value.trim()) return true
-  ElMessage.warning('编辑器内容为空，请先输入 SQL')
+  ElMessage.warning(t('sqlq.editorEmptyInput'))
   return false
 }
 
@@ -2594,7 +2593,7 @@ const isDangerousSql = (s) => {
 const setResultCancelled = () => {
   resultItems.value = []
   activeResultIdx.value = 0
-  result.value = { columns: [], rows: [], success: false, message: '查询已取消', executeTime: elapsedTime.value }
+  result.value = { columns: [], rows: [], success: false, message: t('sqlq.canceled'), executeTime: elapsedTime.value }
 }
 
 // 展示单条结果（原有执行路径）
@@ -2607,10 +2606,10 @@ const showSingleResult = (res) => {
       ElMessage.success(res.message)
     }
   } else {
-    result.value = res || { columns: [], rows: [], success: false, message: '执行失败', executeTime: 0 }
-    if (result.value.message === '查询已取消') return
+    result.value = res || { columns: [], rows: [], success: false, message: t('ai.runFailed'), executeTime: 0 }
+    if (result.value.message === t('sqlq.canceled')) return
     // 执行失败不弹全局浮窗，完整错误交由下方结果面板展示（避免编辑器中部堆叠提示）
-    ElMessageBoxWithFix(result.value.message || '执行失败')
+    ElMessageBoxWithFix(result.value.message || t('ai.runFailed'))
   }
 }
 
@@ -2618,7 +2617,7 @@ const showSingleResult = (res) => {
 const showBatchResult = (b) => {
   const results = (b && Array.isArray(b.results)) ? b.results : []
   if (!results.length) {
-    showSingleResult(b || { columns: [], rows: [], success: false, message: '执行失败', executeTime: 0 })
+    showSingleResult(b || { columns: [], rows: [], success: false, message: t('ai.runFailed'), executeTime: 0 })
     return
   }
   resultItems.value = results.map((r, i) => ({ label: `结果 ${i + 1}`, res: r }))
@@ -2629,8 +2628,8 @@ const showBatchResult = (b) => {
     const only = results[0]
     if (only.success && only.rowCount === 0 && !only.columns.length && only.affectedRows >= 0) {
       ElMessage.success(only.message)
-    } else if (!only.success && only.message !== '查询已取消') {
-      ElMessageBoxWithFix(only.message || '执行失败')
+    } else if (!only.success && only.message !== t('sqlq.canceled')) {
+      ElMessageBoxWithFix(only.message || t('ai.runFailed'))
     }
   }
 }
@@ -2677,19 +2676,19 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
     try {
       await ElMessageBox.confirm(
         '这条连接标记为「生产环境」，即将执行写操作：\n' + firstSqlLine(execSql) + '\n\n确认继续吗？',
-        '生产库写操作确认',
-        { type: 'warning', confirmButtonText: '确认执行', cancelButtonText: '取消', closeOnClickModal: false, closeOnPressEscape: false }
+        t('sqlq.prodWriteTitle'),
+        { type: 'warning', confirmButtonText: t('sqlq.prodWriteConfirm'), cancelButtonText: t('tree.multiCancel'), closeOnClickModal: false, closeOnPressEscape: false }
       )
     } catch { return }
   }
-  // 查询设置"安全确认"：危险 SQL 二次确认（仅关系型数据库）。
+  // 查询设置t('settings.query.confirmDanger')：危险 SQL 二次确认（仅关系型数据库）。
   // 每次执行时实时读取，确保设置页保存后立即生效（querySettings 为 setup 时快照）
   if (!isNoSql.value && getQuerySettings().confirmDanger && isDangerousSql(execSql)) {
     try {
-      await ElMessageBox.confirm('当前 SQL 包含删除 / 清空 / 截断等危险操作，确认继续执行吗？', '危险操作确认', {
+      await ElMessageBox.confirm(t('sqlq.dangerBody'), t('sqlq.dangerTitle'), {
         type: 'warning',
-        confirmButtonText: '继续执行',
-        cancelButtonText: '取消',
+        confirmButtonText: t('sqlq.dangerConfirm'),
+        cancelButtonText: t('tree.multiCancel'),
         closeOnClickModal: false,
         closeOnPressEscape: false
       })
@@ -2740,7 +2739,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
     }
   } catch (e) {
     if (cancelRequested.value) { setResultCancelled(); return }
-    const msg = e?.message || e?.toString?.() || '未知错误'
+    const msg = e?.message || e?.toString?.() || t('common.unknownError')
     resultItems.value = []
     activeResultIdx.value = 0
     result.value = { columns: [], rows: [], success: false, message: msg, executeTime: 0 }
@@ -2772,9 +2771,9 @@ const formatSql = () => {
   if (sel.trim()) { formatSelectedSql(); return }
   try {
     sql.value = smartFormatSql(sql.value, getEditorSettings(), fmtDialect.value)
-    ElMessage.success('格式化完成')
+    ElMessage.success(t('sce.formatDone'))
   } catch (e) {
-    ElMessage.error('格式化失败：' + (e?.message || e?.toString?.() || '未知错误'))
+    ElMessage.error('格式化失败：' + (e?.message || e?.toString?.() || t('common.unknownError')))
   }
 }
 
@@ -2807,10 +2806,10 @@ const cancelSaveDialog = () => {
 // nameOverride 可能来自 @click 直接绑定（会是 MouseEvent 对象），仅字符串才当作脚本名，否则用输入框
 const doSaveScript = (nameOverride, silent = false) => {
   const name = (typeof nameOverride === 'string' && nameOverride ? nameOverride : saveName.value).trim()
-  if (!name) { if (!silent) ElMessage.warning('请输入脚本名称'); return false }
-  if (!sql.value.trim()) { if (!silent) ElMessage.warning('编辑器内容为空'); return false }
+  if (!name) { if (!silent) ElMessage.warning(t('sqlq.enterScriptName')); return false }
+  if (!sql.value.trim()) { if (!silent) ElMessage.warning(t('sqlq.editorEmpty')); return false }
   const db = selectedDatabase.value || props.database
-  if (!db) { if (!silent) ElMessage.warning('请先选择数据库，脚本将保存到对应数据库的 Scripts 目录'); return false }
+  if (!db) { if (!silent) ElMessage.warning(t('sqlq.pickDatabase')); return false }
   loadSavedScripts()
   // 同名脚本视为"覆盖更新"，避免重复条目（自动保存依赖此语义）
   const existing = savedScripts.value.find(x => x.name === name)
@@ -2866,9 +2865,9 @@ const lastError = ref('')
 const askAi = async (mode) => {
   // 先拦在弹窗之前：没内容还弹出一个转圈的对话框，比不弹更让人困惑
   if (!requireSql()) return
-  aiDialogTitle.value = mode === 'explain' ? 'AI 解释 SQL'
-    : mode === 'fix' ? 'AI 修复 SQL'
-    : mode === 'diagnose' ? 'AI 性能诊断' : 'AI 优化建议'
+  aiDialogTitle.value = mode === 'explain' ? t('sqlq.aiTitleExplain')
+    : mode === 'fix' ? t('sqlq.aiTitleFix')
+    : mode === 'diagnose' ? t('sqlq.aiTitleDiagnose') : t('sqlq.aiTitleOptimize')
   aiDialogVisible.value = true
   aiLoading.value = true
   aiResult.value = ''
@@ -2885,8 +2884,8 @@ const askAi = async (mode) => {
       else { aiResult.value = res.content }
       aiResultIsSql.value = mode === 'fix'
     }
-    else ElMessage.error(res?.message || '请求失败')
-  } catch (e) { ElMessage.error(e?.message || e?.toString?.() || '请求失败') }
+    else ElMessage.error(res?.message || t('ai.requestFailed'))
+  } catch (e) { ElMessage.error(e?.message || e?.toString?.() || t('ai.requestFailed')) }
   aiLoading.value = false
 }
 
@@ -2899,17 +2898,17 @@ const askAiRewrite = async () => {
   if (!target) return
   let instruction = ''
   try {
-    const r = await ElMessageBox.prompt('描述改写要求（选中的 SQL 将被改写）', 'AI 改写 SQL', {
-      confirmButtonText: '开始改写',
-      cancelButtonText: '取消',
-      inputValue: '保持语义不变的前提下优化可读性与性能',
-      inputPlaceholder: '如：改为分页查询 / 增加时间范围过滤 / 转为 INSERT 语句'
+    const r = await ElMessageBox.prompt(t('sqlq.rewriteAskBody'), t('sqlq.aiTitleRewrite'), {
+      confirmButtonText: t('sqlq.rewriteAskConfirm'),
+      cancelButtonText: t('tree.multiCancel'),
+      inputValue: t('sqlq.rewriteAskDefault'),
+      inputPlaceholder: t('sqlq.rewriteAskPlaceholder')
     })
     instruction = (r && r.value) || ''
   } catch (e) {
     return
   }
-  aiDialogTitle.value = 'AI 改写 SQL'
+  aiDialogTitle.value = t('sqlq.aiTitleRewrite')
   aiDialogVisible.value = true
   aiLoading.value = true
   aiResult.value = ''
@@ -2919,15 +2918,15 @@ const askAiRewrite = async () => {
     const res = await aiChat({
       system: '你是一名资深数据库工程师。请按用户要求改写 SQL，只输出改写后的完整 SQL 语句，'
         + '不要任何解释、不要 Markdown 代码块标记。',
-      prompt: '改写要求：' + instruction + '\n\n### 原始 SQL\n' + target,
+      prompt: t('sqlq.aiRewriteAsk') + instruction + '\n\n### 原始 SQL\n' + target,
       connectionId: selectedConnId.value || props.conn.id,
       database: props.database,
       modelId: selectedAiModelId.value
     })
     if (res && res.success) aiResult.value = res.content
-    else ElMessage.error(res?.message || '请求失败')
+    else ElMessage.error(res?.message || t('ai.requestFailed'))
   } catch (e) {
-    ElMessage.error(e?.message || e?.toString?.() || '请求失败')
+    ElMessage.error(e?.message || e?.toString?.() || t('ai.requestFailed'))
   }
   aiLoading.value = false
 }
@@ -2942,14 +2941,14 @@ const onExport = async (cmd) => {
   const [scope, format] = String(cmd || '').split('-')
   if (!['csv', 'excel'].includes(format)) return
   const connId = selectedConnId.value || props.conn.id
-  if (!connId) { ElMessage.warning('请先选择连接'); return }
+  if (!connId) { ElMessage.warning(t('mv.pickConn')); return }
   const database = selectedSchema.value
     ? `${selectedDatabase.value}.${selectedSchema.value}`
     : (selectedDatabase.value || props.database || undefined)
   if (scope === 'all') {
     // 导出全部走异步任务，后端流式分页导出，前端实时显示进度与日志
     const payload = { sql: sql.value, format, database }
-    await exportTask.start(connId, payload, props.scriptName || '查询结果', format)
+    await exportTask.start(connId, payload, props.scriptName || t('sqlq.queryResult'), format)
     return
   }
   // 当前页：走**同步单页接口**（后端只查这一页就回字节）。
@@ -2973,7 +2972,7 @@ const onExport = async (cmd) => {
 }
 
 const copySql = async (text) => {
-  try { await navigator.clipboard.writeText(text); ElMessage.success('已复制') } catch (e) { ElMessage.error('复制失败') }
+  try { await navigator.clipboard.writeText(text); ElMessage.success(t('common.copied')) } catch (e) { ElMessage.error(t('sqlq.copyFailed')) }
 }
 
 const replaceAndRun = (text) => {
@@ -3064,10 +3063,10 @@ const loadDatabases = async () => {
   } catch (e) {
     if (!cached) {
       databases.value = []
-      const msg = e?.message || e?.toString?.() || '未知错误'
+      const msg = e?.message || e?.toString?.() || t('common.unknownError')
       //「连接不存在或类型未知」对用户是句黑话，说白就是"这个连接已经不在连接列表里了"
       ElMessage.error(/连接不存在或类型未知/.test(String(msg))
-        ? '这个脚本用到的连接已不存在（可能被删除或重建过），请在上方重新选择连接后再执行'
+        ? t('sqlq.connMissing')
         : '加载数据库失败：' + msg)
     }
   } finally {
@@ -3145,7 +3144,7 @@ useShortcutScope(rootRef, {
   'query.copyInList': () => copySelectionAsInList(),
   'query.copyOneLine': () => {
     const t = selTextOf(editorInstance)
-    if (t) writeClipboard(collapseSqlWs(t).trim(), '已复制为单行')
+    if (t) writeClipboard(collapseSqlWs(t).trim(), t('sqlq.copyOneLineDone'))
   },
   'query.selectStatement': () => selectCurrentStatement(),
   // 结果表（只读）也能用的表格动作
@@ -3250,7 +3249,7 @@ const applyContext = async (rawConnId, rawDb) => {
   const stale = !!wanted && allConnections.value.length > 0
     && !allConnections.value.some(c => String(c.id) === wanted)
   const targetConnId = stale ? String(props.conn?.id || '') : wanted
-  if (stale) ElMessage.warning('这个脚本原本的连接已不存在，请确认上方的连接后再执行')
+  if (stale) ElMessage.warning(t('sqlq.staleConn'))
   const { db, schema } = splitDbSchema(rawDb, connTypeOfId(targetConnId))
 
   if (targetConnId && targetConnId !== String(selectedConnId.value)) {

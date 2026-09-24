@@ -3,24 +3,23 @@
     <div class="toolbar">
       <div class="left">
         <el-button size="small" :icon="advancedOpen ? ArrowUp : ArrowDown" plain
-                   @click="advancedOpen = !advancedOpen">
-          高级搜索{{ activeFilterCount ? `（${activeFilterCount}）` : '' }}
+                   @click="advancedOpen = !advancedOpen"> {{ $t('tdv.advancedSearch') }}{{ activeFilterCount ? `（${activeFilterCount}）` : '' }}
         </el-button>
-        <el-button v-if="advancedOpen" size="small" text @click="addFilter">+ 添加条件</el-button>
-        <el-button v-if="advancedOpen" size="small" text @click="resetFilters">重置</el-button>
+        <el-button v-if="advancedOpen" size="small" text @click="addFilter">{{ $t('tdv.addFilter') }}</el-button>
+        <el-button v-if="advancedOpen" size="small" text @click="resetFilters">{{ $t('common.reset') }}</el-button>
       </div>
       <div class="right">
-        <el-button v-if="hasChanges && !readOnly" size="small" type="primary" :icon="Check" @click="saveChanges">保存</el-button>
-        <el-button v-if="hasChanges && !readOnly" size="small" text @click="revertChanges">撤销</el-button>
-        <el-button v-if="!readOnly" size="small" text :icon="Plus" title="添加行" @click="addRow" />
-        <el-button v-if="!readOnly" size="small" text :icon="Minus" :title="selectedSet.size ? `删除选中行 (${selectedSet.size})` : '删除行'" :disabled="!selectedSet.size" @click="removeSelectedRows" />
+        <el-button v-if="hasChanges && !readOnly" size="small" type="primary" :icon="Check" @click="saveChanges">{{ $t('common.save') }}</el-button>
+        <el-button v-if="hasChanges && !readOnly" size="small" text @click="revertChanges">{{ $t('tdv.revert') }}</el-button>
+        <el-button v-if="!readOnly" size="small" text :icon="Plus" :title="$t('shortcut.data.addRow.label')" @click="addRow" />
+        <el-button v-if="!readOnly" size="small" text :icon="Minus" :title="selectedSet.size ? `删除选中行 (${selectedSet.size})` : $t('tdv.deleteRow')" :disabled="!selectedSet.size" @click="removeSelectedRows" />
         <el-dropdown trigger="click" :hide-on-click="false" popper-class="col-vis-dropdown">
           <el-button size="small" text :icon="Operation" :title="`选择显示字段（${visibleColumns.length}/${columns.length}）`" />
           <template #dropdown>
             <div class="col-vis" @mousedown.stop>
               <div class="col-vis-head">
-                <span>显示字段</span>
-                <el-button size="small" text type="primary" @click="showAllColumns">全选</el-button>
+                <span>{{ $t('sqlq.visibleCols') }}</span>
+                <el-button size="small" text type="primary" @click="showAllColumns">{{ $t('common.selectAll') }}</el-button>
               </div>
               <el-checkbox v-for="c in columns" :key="c" :model-value="!hiddenColumns.has(c)"
                            @change="toggleColumnVisible(c)" class="col-vis-item">{{ c }}</el-checkbox>
@@ -28,31 +27,31 @@
           </template>
         </el-dropdown>
         <el-dropdown @command="onExport" style="display:inline-block">
-          <el-button size="small" text :icon="Download" title="导出" />
+          <el-button size="small" text :icon="Download" :title="$t('qa.exportBtn')" />
           <template #dropdown>
             <el-dropdown-menu>
-              <el-dropdown-item command="current-csv">导出当前页 CSV</el-dropdown-item>
-              <el-dropdown-item command="current-excel">导出当前页 Excel</el-dropdown-item>
-              <el-dropdown-item divided command="all-csv">导出全部 CSV</el-dropdown-item>
-              <el-dropdown-item command="all-excel">导出全部 Excel</el-dropdown-item>
+              <el-dropdown-item command="current-csv">{{ $t('qa.exportCurCsv') }}</el-dropdown-item>
+              <el-dropdown-item command="current-excel">{{ $t('qa.exportCurExcel') }}</el-dropdown-item>
+              <el-dropdown-item divided command="all-csv">{{ $t('qa.exportAllCsv') }}</el-dropdown-item>
+              <el-dropdown-item command="all-excel">{{ $t('qa.exportAllExcel') }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <el-button size="small" text :icon="Refresh" title="刷新" @click="refreshData" />
+        <el-button size="small" text :icon="Refresh" :title="$t('vf.refresh')" @click="refreshData" />
       </div>
     </div>
 
     <transition name="slide">
       <div v-show="advancedOpen" class="advanced-panel">
         <div v-if="!filters.length" class="empty-tip">
-          暂无筛选条件，点击右上 <b>添加条件</b> 开始配置高级搜索
+          暂无筛选条件，点击右上 <b>{{ $t('cb.addCondition') }}</b> 开始配置高级搜索
         </div>
         <div v-else class="filter-rows">
           <div v-for="(f, idx) in filters" :key="idx" class="filter-row">
             <el-select v-if="idx > 0" v-model="f.join" size="small" style="width: 80px"
                        @change="onFilterChange">
-              <el-option label="且 AND" value="AND" />
-              <el-option label="或 OR" value="OR" />
+              <el-option :label="$t('tdv.and')" value="AND" />
+              <el-option :label="$t('tdv.or')" value="OR" />
             </el-select>
             <!-- 第一个条件没有「且/或」，用等宽占位保持各行列对齐 -->
             <span v-else class="join-placeholder" aria-hidden="true" />
@@ -79,12 +78,12 @@
               <el-input v-else v-model="f.value" size="small"
                         style="width: 160px" @keyup.enter="load(1)" />
             </template>
-            <el-button size="small" link type="danger" :icon="Delete" title="删除该条件" @click="removeFilter(idx)" />
+            <el-button size="small" link type="danger" :icon="Delete" :title="$t('tdv.removeFilter')" @click="removeFilter(idx)" />
           </div>
         </div>
         <div v-if="filters.length" class="advanced-foot">
-          <el-button type="primary" size="small" @click="load(1)">应用筛选</el-button>
-          <el-button size="small" @click="resetFilters">清空</el-button>
+          <el-button type="primary" size="small" @click="load(1)">{{ $t('tdv.applyFilters') }}</el-button>
+          <el-button size="small" @click="resetFilters">{{ $t('common.clear') }}</el-button>
         </div>
       </div>
     </transition>
@@ -96,8 +95,7 @@
           <el-icon class="is-loading" :size="26"><Loading /></el-icon>
           <span class="grid-loading-text">{{ running ? '查询中…' : '处理中…' }}</span>
           <el-button v-if="running" size="small" @click="cancelLoad">
-            <el-icon style="margin-right:4px"><VideoPause /></el-icon>取消
-          </el-button>
+            <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('tree.multiCancel') }} </el-button>
         </div>
       </div>
       <div class="table-scroll" ref="gridRef" @scroll="onTableScroll">
@@ -115,10 +113,10 @@
               <tr :class="{ 'selected': headerSelected, 'row-sel-top': headerSelected, 'row-sel-bottom': selEdges.headerBottom }">
                 <!-- 左上角（原全选复选框位置）= 标题行的行头：单击选中标题行，按住往下拖可连选数据行 -->
                 <th class="row-num-th leading-th" :class="{ 'row-num-on': headerSelected }"
-                    title="标题行：单击选中标题行，按住往下拖可连选数据行（标题行在选中范围内时，复制会带上列名）"
+                    :title="$t('sqlq.headerRowTitle')"
                     @mousedown.prevent="onHeaderRowDown($event)"><span class="row-num-tx">#</span></th>
                 <th v-for="(col, ci) in visibleColumns" :key="col" :data-gkey="'0:' + ci"
-                    :title="col + '\n单击选中整列，左右拖连选多列，Alt+拖动调整列顺序；Shift+点击 = 扩展到这一格（可含标题行）'"
+                    :title="col + $t('sqlq.colTitleSuffix')"
                     :class="{
                       'sortable': true,
                       'sort-asc': orderColumn === col && orderDir === 'ASC',
@@ -146,19 +144,19 @@
                     </span>
                     <!-- 第二行：主键列排头一个 🔑，其后是注释（没有注释时这一行就只有 🔑） -->
                     <span v-if="isPkCol(col) || colComment(col)" class="th-line2">
-                      <span v-if="isPkCol(col)" class="th-pk-ic" title="主键"><el-icon><Key /></el-icon></span>
+                      <span v-if="isPkCol(col)" class="th-pk-ic" :title="$t('tf.colPrimary')"><el-icon><Key /></el-icon></span>
                       <span v-if="colComment(col)" class="th-comment" :title="colComment(col)"
                             :style="{ paddingLeft: commentIndentOf(col) + 'px' }">{{ colComment(col) }}</span>
                     </span>
                   </span>
                   <span class="th-sort" :class="{ 'is-sorted': orderColumn === col }"
-                        :title="orderColumn === col ? (orderDir === 'ASC' ? '当前升序，点击切换降序' : '当前降序，点击取消排序') : '点击按此列排序'"
+                        :title="orderColumn === col ? (orderDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
                         @mousedown.stop @click.stop="toggleSort(col)">
                     <el-icon v-if="orderColumn !== col"><Sort /></el-icon>
                     <el-icon v-else-if="orderDir === 'ASC'"><SortUp /></el-icon>
                     <el-icon v-else><SortDown /></el-icon>
                   </span>
-                  <span class="col-resizer" title="拖动调整列宽（双击自动适应）"
+                  <span class="col-resizer" :title="$t('tdv.colResizeTip')"
                         @mousedown.stop.prevent="onColResizeStart(col, $event)"
                         @dblclick.stop="autoFitCol(col)" />
                 </th>
@@ -217,24 +215,24 @@
             </tbody>
           </table>
         </div>
-        <el-empty v-else description="暂无数据" />
+        <el-empty v-else :description="$t('tdv.noData')" />
       </div>
 
       <!-- 分页栏：与表格整合在同一个容器底部 -->
       <div class="pager">
         <span class="load-time">
           {{ loading ? formatElapsed(elapsedTime) + ' (查询中…)' : (elapsedTime > 0 ? formatElapsed(elapsedTime) : '') }}
-          <span v-if="hasChanges" class="change-tip">（有未保存的修改）</span>
+          <span v-if="hasChanges" class="change-tip">{{ $t('tdv.unsavedChanges') }}</span>
         </span>
         <!-- 选中区汇总（与 SQL 结果表底栏同一套做法）：框选单元格 / 选中整行 / 选中整列时给出
              格子数 / 求和 / 均值 / 最小 / 最大，只统计**数值类型**的列（字符串相加没有意义） -->
-        <span v-if="selectionSummary" class="sel-summary" title="选中区汇总（只统计数值类型列）">
+        <span v-if="selectionSummary" class="sel-summary" :title="$t('sqlq.summaryTitle')">
           <span class="ss-item">选中 <b>{{ selectionSummary.cells }}</b> 格</span>
           <template v-if="selectionSummary.nums">
-            <span class="ss-item">求和 <b>{{ fmtSummaryNum(selectionSummary.sum) }}</b></span>
-            <span class="ss-item">均值 <b>{{ fmtSummaryNum(selectionSummary.avg) }}</b></span>
-            <span class="ss-item">最小 <b>{{ fmtSummaryNum(selectionSummary.min) }}</b></span>
-            <span class="ss-item">最大 <b>{{ fmtSummaryNum(selectionSummary.max) }}</b></span>
+            <span class="ss-item">{{ $t('sqlq.sum') }} <b>{{ fmtSummaryNum(selectionSummary.sum) }}</b></span>
+            <span class="ss-item">{{ $t('sqlq.avg') }} <b>{{ fmtSummaryNum(selectionSummary.avg) }}</b></span>
+            <span class="ss-item">{{ $t('sqlq.min') }} <b>{{ fmtSummaryNum(selectionSummary.min) }}</b></span>
+            <span class="ss-item">{{ $t('sqlq.max') }} <b>{{ fmtSummaryNum(selectionSummary.max) }}</b></span>
           </template>
         </span>
         <el-pagination background size="small" layout="total, sizes, prev, pager, next, jumper"
@@ -293,6 +291,7 @@
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted, onBeforeUnmount, computed, nextTick } from 'vue'
+import { t } from '../../utils/i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, Delete, Sort, SortUp, SortDown, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { getTableData, listColumns, saveTableData, aiFilter } from '../../api'
@@ -316,7 +315,7 @@ const aiFilterSql = ref('')
 const aiFilterNotes = ref('')
 
 const doAiFilter = async () => {
-  if (!props.conn || !props.table) { ElMessage.warning('缺少连接或表信息'); return }
+  if (!props.conn || !props.table) { ElMessage.warning(t('tdv.missingConnOrTable')); return }
   aiFilterLoading.value = true
   aiFilterSql.value = ''
   aiFilterNotes.value = ''
@@ -331,16 +330,16 @@ const doAiFilter = async () => {
       aiFilterSql.value = res.sql || ''
       aiFilterNotes.value = res.notes || ''
     } else {
-      ElMessage.error(res?.message || '生成失败')
+      ElMessage.error(res?.message || t('mv.genFailed'))
     }
   } catch (e) {
-    ElMessage.error(e?.message || e?.toString?.() || '生成失败')
+    ElMessage.error(e?.message || e?.toString?.() || t('mv.genFailed'))
   }
   aiFilterLoading.value = false
 }
 
 const copyAiFilterSql = async () => {
-  try { await navigator.clipboard.writeText(aiFilterSql.value); ElMessage.success('已复制') } catch (e) { ElMessage.error('复制失败') }
+  try { await navigator.clipboard.writeText(aiFilterSql.value); ElMessage.success(t('common.copied')) } catch (e) { ElMessage.error(t('sqlq.copyFailed')) }
 }
 
 const openAiFilterInQuery = () => {
@@ -365,7 +364,7 @@ const toggleColumnVisible = (col) => {
   if (s.has(col)) {
     s.delete(col)
   } else {
-    if (columns.value.length - s.size <= 1) { ElMessage.warning('至少保留一列'); return }
+    if (columns.value.length - s.size <= 1) { ElMessage.warning(t('sqlq.keepOneCol')); return }
     s.add(col)
   }
   hiddenColumns.value = s
@@ -391,7 +390,7 @@ const metaOf = (col) => metaByName.value.get(col)
 const typeTitle = (col) => {
   const m = metaOf(col)
   if (!m) return ''
-  return (m.primaryKey ? '主键 · ' : '') + (m.type || '')
+  return (m.primaryKey ? t('tdv.primaryKey') : '') + (m.type || '')
 }
 const isPkCol = (col) => !!metaOf(col)?.primaryKey
 /** 字段注释（表头第二行用）；没有注释时返回空串，那一行就不渲染 */
@@ -1016,16 +1015,16 @@ const openCtxMenu = (x, y, row, col, from = 'cell') => {
   const colMeta = col ? columnMetas.value.find(m => m.name === col) : null
   const colType = colMeta ? classifyType(colMeta.type) : 'string'
   const filterOps = [
-    { label: '等于此值', command: 'filter-eq' },
-    { label: '不等于此值', command: 'filter-ne' }
+    { label: t('tdv.filterEq'), command: 'filter-eq' },
+    { label: t('tdv.filterNe'), command: 'filter-ne' }
   ]
-  if (colType === 'string') filterOps.push({ label: '包含此值', command: 'filter-contains' })
+  if (colType === 'string') filterOps.push({ label: t('tdv.filterContains'), command: 'filter-contains' })
   if (colType === 'number' || colType === 'date') {
-    filterOps.push({ label: '大于此值', command: 'filter-gt' })
-    filterOps.push({ label: '小于此值', command: 'filter-lt' })
+    filterOps.push({ label: t('tdv.filterGt'), command: 'filter-gt' })
+    filterOps.push({ label: t('tdv.filterLt'), command: 'filter-lt' })
   }
-  filterOps.push({ label: '为空', command: 'filter-is-null' })
-  filterOps.push({ label: '不为空', command: 'filter-is-not-null' })
+  filterOps.push({ label: t('cop.isnull'), command: 'filter-is-null' })
+  filterOps.push({ label: t('cop.isnotnull'), command: 'filter-is-not-null' })
 
   // 复制为 ▸：各上下文共用的格式项
   const formatSub = [
@@ -1055,48 +1054,48 @@ const openCtxMenu = (x, y, row, col, from = 'cell') => {
   if (mode === 'range') {
     // —— 区域操作 ——
     // 「复制」= 与 Ctrl+C 完全一致（照选中范围原样复制，表头只在选中范围内才带）
-    items.push({ label: '复制', command: 'copy-sel', shortcut: 'Ctrl+C' })
-    items.push({ label: '复制为', sub: formatSub })
+    items.push({ label: t('mdk.copy'), command: 'copy-sel', shortcut: 'Ctrl+C' })
+    items.push({ label: t('sqlq.ctxCopyAs'), sub: formatSub })
   } else if (mode === 'columns') {
     // —— 列操作 ——
     const n = selColCount
-    items.push({ label: '复制', command: 'copy-sel', shortcut: 'Ctrl+C' })
-    items.push({ label: '复制为', sub: formatSub })
+    items.push({ label: t('mdk.copy'), command: 'copy-sel', shortcut: 'Ctrl+C' })
+    items.push({ label: t('sqlq.ctxCopyAs'), sub: formatSub })
     // 只要列名（不含数据）：贴进 SELECT / WHERE 用；选了几列就复制几列的名字
-    items.push({ label: '复制表头', command: 'copy-col-header' })
+    items.push({ label: t('sqlq.ctxCopyHeader'), command: 'copy-col-header' })
     sep()
     if (n === 1) {
-      items.push({ label: '筛选此列', sub: filterOps })
-      items.push({ label: '在查询窗口打开', command: 'open-query' })
+      items.push({ label: t('tdv.filterCol'), sub: filterOps })
+      items.push({ label: t('tdv.openInQuery'), command: 'open-query' })
     }
-    items.push({ label: '列宽自适应', command: 'col-fit' })
-    items.push({ label: '隐藏列', command: 'hide-col' })
-    if (hiddenColumns.value.size) items.push({ label: '显示所有列', command: 'show-all-cols' })
-    if (hiddenRows.value.size) items.push({ label: '显示所有行', command: 'show-all-rows' })
+    items.push({ label: t('sqlq.ctxColFit'), command: 'col-fit' })
+    items.push({ label: t('sqlq.ctxHideCol'), command: 'hide-col' })
+    if (hiddenColumns.value.size) items.push({ label: t('sqlq.ctxShowAllCols'), command: 'show-all-cols' })
+    if (hiddenRows.value.size) items.push({ label: t('tdv.showAllRows'), command: 'show-all-rows' })
   } else if (mode === 'rows') {
     // —— 行操作 ——
     const n = selRowCount
-    if (row) items.push({ label: '查看详情', command: 'row-detail' })
-    items.push({ label: '复制', command: 'copy-sel', shortcut: 'Ctrl+C' })
-    items.push({ label: '复制为', sub: formatSub })
+    if (row) items.push({ label: t('sqlq.ctxRowDetail'), command: 'row-detail' })
+    items.push({ label: t('mdk.copy'), command: 'copy-sel', shortcut: 'Ctrl+C' })
+    items.push({ label: t('sqlq.ctxCopyAs'), sub: formatSub })
     if (canEdit) {
       sep()
-      if (row) items.push({ label: '插入行', sub: [
-        { label: '在上方插入', command: 'insert-above' },
-        { label: '在下方插入', command: 'insert-below' }
+      if (row) items.push({ label: t('tdv.insertRow'), sub: [
+        { label: t('tdv.insertAbove'), command: 'insert-above' },
+        { label: t('tdv.insertBelow'), command: 'insert-below' }
       ] })
       // 「设为 NULL」只属于单元格操作，放在单元格菜单里，不要在行菜单出现
       items.push({ label: `删除选中行 (${n})`, command: 'delete-selected' })
     }
     sep()
-    items.push({ label: '隐藏行', command: 'hide-rows' })
-    if (hiddenRows.value.size) items.push({ label: '显示所有行', command: 'show-all-rows' })
+    items.push({ label: t('tdv.hideRows'), command: 'hide-rows' })
+    if (hiddenRows.value.size) items.push({ label: t('tdv.showAllRows'), command: 'show-all-rows' })
   } else {
     // —— 单元格操作（只放作用在这一格上的操作；行/列操作先选中行/列再右键） ——
-    if (col) items.push({ label: '复制', command: 'copy-cell', shortcut: 'Ctrl+C' })
+    if (col) items.push({ label: t('mdk.copy'), command: 'copy-cell', shortcut: 'Ctrl+C' })
     if (row && col && canEdit) {
       sep()
-      items.push({ label: '设为 NULL', command: 'set-null' })
+      items.push({ label: t('tdv.setNull'), command: 'set-null' })
     }
   }
   if (!items.length) return
@@ -1166,8 +1165,8 @@ const writeClipboard = (text, msg) => {
       const ok = document.execCommand('copy')
       document.body.removeChild(ta)
       if (ok) done()
-      else if (msg) ElMessage.error('复制失败')
-    } catch { if (msg) ElMessage.error('复制失败') }
+      else if (msg) ElMessage.error(t('sqlq.copyFailed'))
+    } catch { if (msg) ElMessage.error(t('sqlq.copyFailed')) }
   }
   if (navigator.clipboard?.writeText) navigator.clipboard.writeText(text).then(done).catch(fallback)
   else fallback()
@@ -1216,7 +1215,7 @@ const sqlVal = (v) => {
 
 const copyCtx = (mode) => {
   const { rows, cols } = ctxSelection()
-  if (!rows.length || !cols.length) { ElMessage.warning('没有可复制的内容'); return }
+  if (!rows.length || !cols.length) { ElMessage.warning(t('sqlq.nothingToCopy')); return }
   const table = props.table || 'table'
   const colList = cols.join(', ')
   if (mode === 'csv') {
@@ -1292,15 +1291,15 @@ const copyLikeCtrlC = () => {
     return
   }
   const text = selectionAsTsv()
-  if (!text) { ElMessage.warning('没有可复制的内容'); return }
+  if (!text) { ElMessage.warning(t('sqlq.nothingToCopy')); return }
   writeClipboard(text, `已复制 ${text.split('\n').length} 行`)
 }
 // Ctrl+C 的场景化提示：让人明确这次到底复制了什么
 const copyHint = () => {
   if (selectedCols.value.size) return `已复制 ${selectedCols.value.size} 列（含列名）`
   if (selectedSet.value.size) return `已复制 ${selectedSet.value.size} 行${headerSelected.value ? '（含列名）' : ''}`
-  if (headerSelected.value) return '已复制列名'
-  return '已复制单元格'
+  if (headerSelected.value) return t('sqlq.copyColNames')
+  return t('sqlq.copyCell')
 }
 // 框选区域复制完成（Ctrl+C 由框选模块自己的 copy 事件处理，这里只负责提示）
 const onGridCopied = ({ rows, cols, header }) => {
@@ -1358,14 +1357,14 @@ const copyDelete = () => {
 }
 const hideColumn = (col) => {
   if (!col) return
-  if (visibleColumns.value.length <= 1) { ElMessage.warning('至少保留一列'); return }
+  if (visibleColumns.value.length <= 1) { ElMessage.warning(t('sqlq.keepOneCol')); return }
   hiddenColumns.value = new Set(hiddenColumns.value).add(col)
 }
 // 「隐藏列」：有选中的列就隐藏全部选中列（单选/多选都支持）；没选任何列时隐藏右键那一列
 const hideColumnSmart = (col) => {
   const picked = visibleColumns.value.filter(c => selectedCols.value.has(c))
   if (!picked.length) { hideColumn(col); return }
-  if (visibleColumns.value.length - picked.length < 1) { ElMessage.warning('至少保留一列'); return }
+  if (visibleColumns.value.length - picked.length < 1) { ElMessage.warning(t('sqlq.keepOneCol')); return }
   hiddenColumns.value = new Set([...hiddenColumns.value, ...picked])
   clearColSelect()
 }
@@ -1402,7 +1401,7 @@ const filterByValue = (col, op) => {
   if (!col) return
   const needsValue = op !== 'is_null' && op !== 'is_not_null'
   const v = needsValue ? ctxCellValue(col) : null
-  if (needsValue && (v === undefined || v === null)) { ElMessage.warning('该单元格为空，无法按值筛选'); return }
+  if (needsValue && (v === undefined || v === null)) { ElMessage.warning(t('tdv.cellEmpty')); return }
   const meta = columnMetas.value.find(m => m.name === col)
   filters.value.push({
     join: 'AND', col, op, value: needsValue ? String(v) : '', value2: '',
@@ -1652,7 +1651,7 @@ const fillDown = () => {
   if (props.readOnly) return
   const rect = gridSel.rect()
   const r1 = rect ? Math.max(1, rect.r1) : 0
-  if (!rect || rect.r2 <= r1) { ElMessage.warning('请先框选两行以上再填充'); return }
+  if (!rect || rect.r2 <= r1) { ElMessage.warning(t('tdv.fillNeedTwoRows')); return }
   let n = 0
   for (let c0 = rect.c1; c0 <= rect.c2; c0++) {
     const first = cellByGkey(r1, c0)
@@ -1663,15 +1662,15 @@ const fillDown = () => {
       if (hit && isWritableRow(hit.row) && applyCellValue(hit.row, hit.col, src == null ? '' : src)) n++
     }
   }
-  ElMessage.success(n ? `已向下填充 ${n} 个单元格` : '无需填充')
+  ElMessage.success(n ? `已向下填充 ${n} 个单元格` : t('tdv.noFillNeeded'))
 }
 // 「剪切」（Ctrl+X）：复制选区 + 清空
 const cutSelection = () => {
   if (props.readOnly) return
-  if (!gridSel.hasSelection()) { ElMessage.warning('请先框选要剪切的内容'); return }
+  if (!gridSel.hasSelection()) { ElMessage.warning(t('tdv.pickCutFirst')); return }
   const text = gridSel.copy()
   if (!text) return
-  writeClipboard(text, '已剪切选区')
+  writeClipboard(text, t('tdv.cutSelection'))
   clearSelectedCells()
 }
 // 「粘贴」（Ctrl+V）：把剪贴板里的表格块从活动单元格开始写入（TSV 即 Excel 复制格式）
@@ -1694,7 +1693,7 @@ const pasteBlock = (text) => {
       if (applyCellValue(row, col, block[ri][ci])) n++
     }
   }
-  ElMessage.success(n ? `已粘贴 ${block.length} 行 × ${block[0].length} 列` : '粘贴完成（与现有内容一致）')
+  ElMessage.success(n ? `已粘贴 ${block.length} 行 × ${block[0].length} 列` : t('tdv.pastedSame'))
   ensureActiveVisible()
 }
 // 粘贴事件：焦点在表格内且不在编辑态时接管（Ctrl+V 不拦截，让浏览器把数据交给 paste 事件）
@@ -1896,7 +1895,7 @@ const saveChanges = async () => {
   }
 
   if (inserts.length === 0 && updates.length === 0 && deletes.length === 0) {
-    ElMessage.info('没有需要保存的修改')
+    ElMessage.info(t('tdv.nothingToSave'))
     return
   }
 
@@ -1911,13 +1910,13 @@ const saveChanges = async () => {
       pkColumns: pkCols.length ? pkCols : undefined
     })
     if (res.success) {
-      ElMessage.success('保存成功')
+      ElMessage.success(t('tdv.saveOk'))
       await load(page.value)
     } else {
       ElMessage.error('保存失败：' + res.message)
     }
   } catch (e) {
-    ElMessage.error('保存失败：' + (e.message || '未知错误'))
+    ElMessage.error('保存失败：' + (e.message || t('common.unknownError')))
   } finally {
     loading.value = false
   }
@@ -1928,7 +1927,7 @@ const refreshData = async () => {
   activeCell.value = null
   editingCell.value = null
   await load(page.value)
-  ElMessage.success('刷新成功')
+  ElMessage.success(t('tdv.refreshOk'))
 }
 
 // ========== 列宽拖拽调整（列头与任意数据行竖线均可拖动） ==========
@@ -2338,36 +2337,36 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocClearPick))
 // ========== 原有高级搜索逻辑 ==========
 const OPS = {
   string: [
-    { value: 'contains',     label: '包含' },
-    { value: 'not_contains', label: '不包含' },
-    { value: 'eq',           label: '等于 (=)' },
-    { value: 'ne',           label: '不等于 (≠)' },
-    { value: 'starts_with',  label: '以…开始' },
-    { value: 'ends_with',    label: '以…结束' },
-    { value: 'is_null',      label: '为空' },
-    { value: 'is_not_null',  label: '不为空' }
+    { value: 'contains',     label: t('cop.like') },
+    { value: 'not_contains', label: t('cop.notlike') },
+    { value: 'eq',           label: t('tdv.opEq') },
+    { value: 'ne',           label: t('tdv.opNe') },
+    { value: 'starts_with',  label: t('tdv.opStartsWith') },
+    { value: 'ends_with',    label: t('tdv.opEndsWith') },
+    { value: 'is_null',      label: t('cop.isnull') },
+    { value: 'is_not_null',  label: t('cop.isnotnull') }
   ],
   number: [
-    { value: 'eq',   label: '等于 (=)' },
-    { value: 'ne',   label: '不等于 (≠)' },
-    { value: 'gt',   label: '大于 (>)' },
-    { value: 'lt',   label: '小于 (<)' },
-    { value: 'gte',  label: '大于等于 (≥)' },
-    { value: 'lte',  label: '小于等于 (≤)' },
-    { value: 'between', label: '区间' },
-    { value: 'is_null',     label: '为空' },
-    { value: 'is_not_null', label: '不为空' }
+    { value: 'eq',   label: t('tdv.opEq') },
+    { value: 'ne',   label: t('tdv.opNe') },
+    { value: 'gt',   label: t('tdv.opGt') },
+    { value: 'lt',   label: t('tdv.opLt') },
+    { value: 'gte',  label: t('tdv.opGte') },
+    { value: 'lte',  label: t('tdv.opLte') },
+    { value: 'between', label: t('tdv.opBetween') },
+    { value: 'is_null',     label: t('cop.isnull') },
+    { value: 'is_not_null', label: t('cop.isnotnull') }
   ],
   date: [
-    { value: 'eq',   label: '等于 (=)' },
-    { value: 'ne',   label: '不等于 (≠)' },
-    { value: 'gt',   label: '晚于 (>)' },
-    { value: 'lt',   label: '早于 (<)' },
-    { value: 'gte',  label: '不早于 (≥)' },
-    { value: 'lte',  label: '不晚于 (≤)' },
-    { value: 'between', label: '日期范围' },
-    { value: 'is_null',     label: '为空' },
-    { value: 'is_not_null', label: '不为空' }
+    { value: 'eq',   label: t('tdv.opEq') },
+    { value: 'ne',   label: t('tdv.opNe') },
+    { value: 'gt',   label: t('tdv.opAfter') },
+    { value: 'lt',   label: t('tdv.opBefore') },
+    { value: 'gte',  label: t('tdv.opNotBefore') },
+    { value: 'lte',  label: t('tdv.opNotAfter') },
+    { value: 'between', label: t('tdv.opDateRange') },
+    { value: 'is_null',     label: t('cop.isnull') },
+    { value: 'is_not_null', label: t('cop.isnotnull') }
   ]
 }
 const opsOf = (t) => OPS[t] || OPS.string
@@ -2462,7 +2461,7 @@ const load = async (p = 1, opts = null) => {
     if (signal.aborted) return
     if (!res.success) { ElMessage.error('加载失败：' + res.message); return }
     rows.value = stampRows(res.rows || [])
-    // 新数据用新的 _rid，旧的隐藏行标记已失效，清掉避免菜单里出现"显示所有行"却什么都没隐藏
+    // 新数据用新的 _rid，旧的隐藏行标记已失效，清掉避免菜单里出现t('tdv.showAllRows')却什么都没隐藏
     hiddenRows.value = new Set()
     deletedRids.value = new Set()
     columns.value = res.columns
@@ -2507,7 +2506,7 @@ const load = async (p = 1, opts = null) => {
 const cancelLoad = () => {
   if (!loadController) return
   loadController.abort()
-  ElMessage.info('已取消加载')
+  ElMessage.info(t('tdv.loadCancelled'))
 }
 
 // 深分页游标：只有「相邻页 + 按唯一列（主键）排序」才可用 keyset。
@@ -2691,7 +2690,7 @@ const buildExportSql = () => {
 const onExport = async (cmd) => {
   const [scope, format] = String(cmd || '').split('-')
   if (!['csv', 'excel'].includes(format)) return
-  if (!props.conn?.id || !props.table) { ElMessage.warning('请先选择表'); return }
+  if (!props.conn?.id || !props.table) { ElMessage.warning(t('qa.pickTableFirst')); return }
   if (scope === 'all') {
     // 导出全部走异步任务，后端流式分页导出，前端实时显示进度与日志
     const payload = { format, sql: buildExportSql(), database: props.database, table: props.table }
@@ -2713,7 +2712,7 @@ const onExport = async (cmd) => {
   try {
     const blob = await exportData(props.conn.id, payload)
     downloadBlob(blob, props.table, format)
-    ElMessage.success('已导出当前页')
+    ElMessage.success(t('mv.exportCurrentDone'))
   } catch (e) {
     ElMessage.error('导出失败：' + (e?.message || e))
   }

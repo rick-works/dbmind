@@ -17,7 +17,7 @@ const DRY = args.includes('--dry')
 const files = args.filter((a) => !a.startsWith('--'))
 
 // ---- 词典：中文 -> 键（短、纯中文、无占位符的才当锚点）
-const dictText = readFileSync('frontend/src/locales/zh-CN.js', 'utf8')
+const dictText = readFileSync('src/locales/zh-CN.js', 'utf8')
 const map = new Map()
 for (const m of dictText.matchAll(/^ {2}'([^']+)':\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"),?$/gm)) {
   const value = (m[2] ?? m[3] ?? '').replace(/\\'/g, "'")
@@ -60,8 +60,11 @@ for (const file of files) {
   // ---- 模板
   if (descriptor.template) {
     const tpl = descriptor.template
-    const openEnd = src.indexOf('>', tpl.loc.start.offset)
-    const base = openEnd + 1
+    // 模板内容的真实起点：直接查它在源里的位置。
+    // 别用 openEnd+1 —— descriptor.template.content 与标签结尾并不总差 1，
+    // 差几个字符就会让所有替换整体错位（上次就是这么把内容插进属性里的）。
+    const base = src.indexOf(tpl.content, tpl.loc.start.offset)
+    if (base < 0) { console.log('  ✗ 找不到模板内容起点'); continue }
     const ast = parseDOM(tpl.content)
     const walk = (node) => {
       // 文本节点：整段（除首尾空白）能反查到键 → {{ $t('key') }}
