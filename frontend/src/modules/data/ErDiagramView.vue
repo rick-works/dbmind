@@ -64,6 +64,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage } from 'element-plus'
 import { ZoomIn, ZoomOut, FullScreen, Refresh, Download, Search, Connection, Loading, WarningFilled, InfoFilled } from '@element-plus/icons-vue'
 import dagre from 'dagre'
@@ -362,21 +363,15 @@ const buildExportSvg = () => {
   return s
 }
 
-const download = (url, filename) => {
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.style.display = 'none'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
+const download = (blob, filename) => {
+  saveBlobAs(blob, filename)
   setTimeout(() => URL.revokeObjectURL(url), 4000)
 }
 
 const exportSvg = () => {
   if (!nodes.value.length) { ElMessage.warning(t('er.nothingToExport')); return }
   const blob = new Blob([buildExportSvg()], { type: 'image/svg+xml;charset=utf-8' })
-  download(URL.createObjectURL(blob), `er-${props.database || 'db'}-${Date.now()}.svg`)
+  download(blob, `er-${props.database || 'db'}-${Date.now()}.svg`)
 }
 const exportPng = () => {
   if (!nodes.value.length) { ElMessage.warning(t('er.nothingToExport')); return }
@@ -393,7 +388,7 @@ const exportPng = () => {
     ctx.drawImage(img, 0, 0)
     canvas.toBlob(blob => {
       if (!blob) { ElMessage.error(t('er.exportPngFailed')); return }
-      download(URL.createObjectURL(blob), `er-${props.database || 'db'}-${Date.now()}.png`)
+      download(blob, `er-${props.database || 'db'}-${Date.now()}.png`)
     }, 'image/png')
   }
   img.onerror = () => ElMessage.error(t('er.exportPngFailed'))

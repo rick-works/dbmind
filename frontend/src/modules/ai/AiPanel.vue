@@ -428,6 +428,7 @@
 
 <script setup>
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage } from 'element-plus'
 import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Star, Aim, DataAnalysis, Loading, ArrowDown, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone } from '@element-plus/icons-vue'
 import { aiChat, aiChatStream, aiAgent, aiDataDict, aiInsight, aiPatrol, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, kbList, kbSearch } from '../../api'
@@ -1433,17 +1434,7 @@ const doDataDict = async () => {
   dictLoading.value = false
 }
 
-/** 触发浏览器下载 */
-const downloadBlob = (blob, name) => {
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
+// 导出走统一的「用户选位置」（原来这里自己造 <a download>，只能落到下载目录）
 
 /** axios 以 blob 接收时，错误响应体也是 Blob，这里还原后端的 message */
 const blobErrMsg = async (e) => {
@@ -1469,7 +1460,8 @@ const exportDoc = async (markdown, format, nameHint) => {
     const title = nameHint || currentSkill.value.label
     const base = [title, ctxDatabase.value || ctxConnName.value].filter(Boolean).join('_')
     const blob = await aiExportDoc({ title, markdown, format, fileName: base })
-    downloadBlob(blob, base + '.' + format)
+    const saved = await saveBlobAs(blob, base + '.' + format)
+    if (saved.canceled) return
     ElMessage.success(t('ai.exportedFmt', { fmt: format.toUpperCase() }))
   } catch (e) {
     ElMessage.error(await blobErrMsg(e) || t('qa.exportFailed'))

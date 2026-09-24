@@ -111,6 +111,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
+import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage } from 'element-plus'
 import { t } from '../../utils/i18n'
 import { Search, DocumentCopy, Download } from '@element-plus/icons-vue'
@@ -371,15 +372,7 @@ const copyCsv = async () => {
 const exportCsv = () => {
   // 带 BOM：Excel 直接打开不乱码
   const blob = new Blob(['\uFEFF' + csvLines()], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `pivot-${Date.now()}.csv`
-  a.style.display = 'none'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  saveBlobAs(blob, `pivot-${Date.now()}.csv`)
 }
 </script>
 

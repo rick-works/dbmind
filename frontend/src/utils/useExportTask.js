@@ -46,6 +46,36 @@ function pickerTypes(format) {
 }
 
 /**
+ * 让用户选位置并保存（所有导出/下载最终都走这里）。
+ *
+ * filename 是**完整文件名**（含扩展名）—— 各处的导出自己已经拼好了名字，
+ * 这里只负责弹系统另存为 + 写盘；拿不到原生另存为（非 Chrome 内核 / 没有用户手势）
+ * 就退回普通浏览器下载，至少能落盘。
+ */
+export async function saveBlobAs(blob, filename, types) {
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const handle = await window.showSaveFilePicker({ suggestedName: filename, types })
+      const w = await handle.createWritable()
+      await w.write(blob)
+      await w.close()
+      return { ok: true, name: handle.name || filename }
+    } catch (err) {
+      // 用户主动取消：不算失败，也不再退回下载
+      if (err && err.name === 'AbortError') return { ok: false, canceled: true }
+      // SecurityError 等（没有用户手势）：退回普通下载，别让整个导出白跑
+    }
+  }
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  return { ok: true, name: filename, fallback: true }
+}
+
+/**
  * 让用户选「保存到哪」，然后把内容写进去。
  *
  * 优先用浏览器原生的另存为对话框（File System Access API，Chrome/Edge 支持，
@@ -65,21 +95,7 @@ export async function saveExportBlob(blob, name, format, handle = null) {
       return { ok: false, error: err }
     }
   }
-  if (typeof window.showSaveFilePicker === 'function') {
-    try {
-      const h = await window.showSaveFilePicker({ suggestedName: filename, types: pickerTypes(format) })
-      const w = await h.createWritable()
-      await w.write(blob)
-      await w.close()
-      return { ok: true, name: h.name || filename }
-    } catch (err) {
-      // 用户主动取消：不算失败，也不该再退回下载
-      if (err && err.name === 'AbortError') return { ok: false, canceled: true }
-      // SecurityError 等（没有用户手势）：退回普通下载，别让整个导出白跑
-    }
-  }
-  downloadBlob(blob, name, format)
-  return { ok: true, name: filename, fallback: true }
+  return saveBlobAs(blob, filename, pickerTypes(format))
 }
 
 /**

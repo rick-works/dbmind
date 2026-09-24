@@ -1,4 +1,5 @@
 import { t } from './i18n'
+import { saveBlobAs } from './useExportTask'
 /**
  * 连接配置的导入 / 导出（JSON 文件）—— 「新建数据源」弹窗底部按钮与左侧树右键菜单共用这一份。
  *
@@ -68,15 +69,8 @@ export function importPayloadOf(item, environment) {
   return payload
 }
 
-/** 触发浏览器下载一个 JSON 文件 */
+/** 导出 JSON 文件（走统一的"用户选位置"） */
 export function downloadJson(filename, data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  saveBlobAs(blob, filename)
 }

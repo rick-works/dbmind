@@ -109,6 +109,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
+import { saveBlobAs } from '../../utils/useExportTask'
 import { Search, Loading, Download, DocumentCopy } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getQuerySettings } from '../../utils/settings'
@@ -535,15 +536,8 @@ const exportCsv = () => {
   const text = selectionAs('csv')
   if (!text) return
   const blob = new Blob(['\ufeff' + text], { type: 'text/csv;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
   const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-  a.href = url
-  a.download = (props.collection === '*' ? (props.database || 'redis') : props.collection) + '-' + stamp + '.csv'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  saveBlobAs(blob, (props.collection === '*' ? (props.database || 'redis') : props.collection) + '-' + stamp + '.csv')
   ElMessage.success(t('nsql.exportedCsv'))
 }
 /** 行详情：把这一行按「列名：值」列出（双击行号 / 右键）。 */

@@ -92,6 +92,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import { saveBlobAs } from '../utils/useExportTask'
 import { Search, Coin, Document, Box, CirclePlus, Upload, Download } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDriverTypes, getDriverStatus, listConnections, saveConnection, deleteConnection, testConnectionById } from '../api'
@@ -202,14 +203,8 @@ const doExport = () => {
     connections: picked
   }
   const blob = new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json;charset=utf-8' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'dbmind-connections-' + new Date().toISOString().slice(0, 10) + '.json'
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
+  // 让用户选存到哪（系统另存为）
+  saveBlobAs(blob, 'dbmind-connections-' + new Date().toISOString().slice(0, 10) + '.json')
   exportVisible.value = false
   ElMessage.success(t('dsp.exported', { n: picked.length }))
 }

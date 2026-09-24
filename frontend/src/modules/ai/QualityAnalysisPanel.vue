@@ -236,6 +236,7 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
+import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage } from 'element-plus'
 import { Files, Download, Loading } from '@element-plus/icons-vue'
 import { aiQualityTypes, aiQualityConfigured, aiQualityScan, aiQualityReport, aiQualityViolations } from '../../api'
@@ -726,16 +727,10 @@ const exportViolationsFile = async (cmd) => {
   }
 }
 
-/** 通用文本下载 */
+/** 通用文本下载（走统一的"用户选位置"） */
 const downloadText = (text, filename) => {
   const blob = new Blob([text], { type: 'text/csv;charset=utf-8' })
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(blob)
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  document.body.removeChild(a)
-  URL.revokeObjectURL(a.href)
+  saveBlobAs(blob, filename)
 }
 
 onMounted(() => { loadTypes(); loadConfigured(true) })

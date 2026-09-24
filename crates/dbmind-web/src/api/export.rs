@@ -1005,6 +1005,10 @@ async fn export_dump(
                     let mut sink = make_xlsx_sink(&mut cursor, table);
                     let rows = pump_rows(state, id, req, table, dialect, &mut sink, task, &mut notices).await?;
                     written += rows;
+                    // 必须收尾：xlsx 的容器部件（[Content_Types].xml / workbook / 关系 / 样式）
+                    // 是在 finish() 里补写的。漏掉它，包内就只剩一个孤零零的 worksheet 流，
+                    // Excel 打开会说文件损坏 —— 普通导出那条路有调，整库转储这条一直漏着。
+                    sink.finish().map_err(XError::internal)?;
                 }
                 zip.write_all(&cursor.into_inner())
                     .map_err(|e| XError::internal(format!("写入导出包失败：{e}")))?;
