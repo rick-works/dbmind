@@ -26,7 +26,7 @@
       {
         "ext": ["db"],
         "name": "DBMind Database",
-        "description": "DBMind 数据文件",
+        "description": "DBMind database file",
         "role": "Editor",
         "mimeType": "application/x-dbmind-database"
       }
