@@ -1210,6 +1210,102 @@ fn escape_like(value: &str) -> String {
     value.replace('\'', "''").replace('%', "\\%").replace('_', "\\_")
 }
 
+/// 高级搜索里的一条条件 → SQL 片段。拼不出来（列名空、数值列填了非数字）就返回 None。
+///
+/// 安全上有两条硬规矩：
+/// * 列名一律走 `dialect.quote`（保留字、大小写都属于方言的事）；
+/// * 字符串值一律走 `dialect.literal`（转义单引号）；数值列则**只允许数字字符**
+///   并直接写裸数字 —— `int = '548'` 在 PostgreSQL 上会直接报错，
+///   顺带也堵住了"把任意串塞进数值比较"这条路。
+fn filter_condition(dialect: &Dialect, item: &Value) -> Option<String> {
+    let column_name = item.get("col").and_then(Value::as_str)?.trim();
+    if column_name.is_empty() {
+        return None;
+    }
+    let op = item.get("op").and_then(Value::as_str).unwrap_or("eq");
+    let kind = item.get("colType").and_then(Value::as_str).unwrap_or("string");
+    let column = dialect.quote(column_name);
+
+    // 空值判断不需要值
+    match op {
+        "is_null" => return Some(format!("{column} is null")),
+        "is_not_null" => return Some(format!("{column} is not null")),
+        _ => {}
+    }
+
+    let text = item.get("value").and_then(Value::as_str).unwrap_or_default();
+    match op {
+        "between" => {
+            let low = scalar_of(dialect, kind, text)?;
+            let high = scalar_of(dialect, kind, item.get("value2").and_then(Value::as_str).unwrap_or_default())?;
+            Some(format!("{column} between {low} and {high}"))
+        }
+        "contains" | "not_contains" | "starts_with" | "ends_with" => {
+            let pattern = match op {
+                "starts_with" => format!("{}%", escape_like(text)),
+                "ends_with" => format!("%{}", escape_like(text)),
+                _ => format!("%{}%", escape_like(text)),
+            };
+            let keyword = if op == "not_contains" { "not like" } else { "like" };
+            Some(format!("{column} {keyword} {}", dialect.literal(&pattern)))
+        }
+        _ => {
+            let value = scalar_of(dialect, kind, text)?;
+            let operator = match op {
+                "ne" => "<>",
+                "gt" => ">",
+                "lt" => "<",
+                "gte" => ">=",
+                "lte" => "<=",
+                _ => "=",
+            };
+            Some(format!("{column} {operator} {value}"))
+        }
+    }
+}
+
+/// 一个值 → SQL 标量：数值列直接写数字（且必须真是数字），其余转义加引号。
+fn scalar_of(dialect: &Dialect, kind: &str, raw: &str) -> Option<String> {
+    if kind == "number" {
+        let trimmed = raw.trim();
+        let looks_numeric = !trimmed.is_empty()
+            && trimmed
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, '-' | '+' | '.' | 'e' | 'E'))
+            && trimmed.parse::<f64>().is_ok();
+        return looks_numeric.then(|| trimmed.to_string());
+    }
+    Some(dialect.literal(raw))
+}
+
+/// 整组高级搜索条件 → 一个 SQL 条件（各组已按行里的 且/或 拼好）。
+///
+/// 逐条从左往右拼并**层层加括号**：与界面上一行一行读下来的意思一致。
+/// （SQL 里 AND 优先级高于 OR，不加括号时 `a AND b OR c` 会被读成 `(a AND b) OR c`，
+/// 而用户按界面那样理解可能是 `a AND (b OR c)` —— 这种"看起来一样、筛出来不一样"
+/// 的差异最难查，所以在源头就消掉。）
+fn filter_clause(dialect: &Dialect, filters: &[Value]) -> Option<String> {
+    let mut combined: Option<String> = None;
+    for item in filters {
+        let Some(condition) = filter_condition(dialect, item) else {
+            continue;
+        };
+        combined = Some(match combined {
+            None => format!("({condition})"),
+            Some(previous) => {
+                let is_or = item
+                    .get("join")
+                    .and_then(Value::as_str)
+                    .map(|join| join.eq_ignore_ascii_case("or"))
+                    .unwrap_or(false);
+                let join = if is_or { "or" } else { "and" };
+                format!("({previous} {join} ({condition}))")
+            }
+        });
+    }
+    combined
+}
+
 /// 分页浏览表数据（`/data`）。
 ///
 /// 界面语义（分页 / 关键字模糊 / 排序）在这里翻成 SQL —— 内核只认「一条语句」。
@@ -1237,10 +1333,20 @@ pub async fn data(
     let keyword = params.get("keyword").unwrap_or_default();
     let order_column = params.get("orderColumn").unwrap_or_default();
     let order_dir = params.get("orderDir").unwrap_or_default();
+    // 高级搜索的条件（界面「添加条件」那一排）：
+    // `[{"join":"AND","col":"id","op":"eq","value":"548","colType":"number"}]`
+    // 这个参数以前被整个丢掉 —— 界面点了「应用筛选」却还是整张表，就是这么来的。
+    let filters: Vec<Value> = params
+        .get("filters")
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
 
     let (_, dialect) = ctx_of(&state, &id).await?;
     let quoted = dialect.quote(&table);
-    let mut sql = format!("select * from {quoted}");
+    // 所有筛选条件（关键字模糊 + 高级搜索）都汇到这里，统一用 AND 串起来；
+    // 同一份 where 既给数据查询、也给总条数统计 —— 否则会出现"筛出 1 行、总数说 10000"。
+    let mut where_groups: Vec<String> = Vec::new();
 
     if !keyword.trim().is_empty() {
         let engine = state.engine.clone();
@@ -1271,8 +1377,19 @@ pub async fn data(
             .iter()
             .map(|c| format!("{} like {pattern}", dialect.quote(c)))
             .collect();
-        sql.push_str(&format!(" where ({})", conditions.join(" or ")));
+        where_groups.push(format!("({})", conditions.join(" or ")));
     }
+    // 高级搜索：条件本身由 filter_clause 负责翻译与括号；这里只把它并进 where
+    if let Some(clause) = filter_clause(&dialect, &filters) {
+        where_groups.push(clause);
+    }
+
+    let where_suffix = if where_groups.is_empty() {
+        String::new()
+    } else {
+        format!(" where {}", where_groups.join(" and "))
+    };
+    let mut sql = format!("select * from {quoted}{where_suffix}");
 
     if !order_column.trim().is_empty() {
         let dir = if order_dir.eq_ignore_ascii_case("desc") {
@@ -1297,7 +1414,8 @@ pub async fn data(
     let mut payload = shape::query_result_json(&result);
 
     // 真实总条数：分页控件要用它。统计失败就当「未知」（-1），不假装是当前页的行数。
-    let count_sql = dialect.count_sql(&table);
+    // 必须带上与数据查询**同一份 where** —— 否则筛出 1 行而总数显示 10000。
+    let count_sql = format!("{}{where_suffix}", dialect.count_sql(&table));
     let total = match run_sql_in(&state, &id, &database, count_sql, 1).await {
         Ok(count_result) => rows_of(&count_result)
             .first()

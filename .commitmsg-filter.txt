@@ -1,0 +1,26 @@
+修复「高级搜索」没用：后端把 filters 参数整个忽略，点了应用筛选还是全表
+
+现象（实测）：表数据页加条件（id 等于 548）点「应用筛选」，表格与总数纹丝不动。
+
+原因：前端一直是正常传参的 —— `load()` 把条件序列化成 `filters` 参数，形如
+  [{"join":"AND","col":"id","op":"eq","value":"548","colType":"number"}]
+但后端 `data` 处理器只认 keyword / orderColumn / page / size，
+**全仓搜不到 filters 这个词**，参数被静默丢掉；而且总条数走的是不带条件的 count。
+
+改动（crates/dbmind-web/src/api/meta.rs）：
+- 解析 filters 并翻译成 SQL 条件，覆盖界面提供的全部运算符：
+  eq / ne / gt / lt / gte / lte / between / contains / not_contains /
+  starts_with / ends_with / is_null / is_not_null
+- 两条安全规矩：列名一律走 `dialect.quote`（保留字、大小写、schema 前缀都交给方言）；
+  字符串一律走 `dialect.literal`（转义单引号）；**数值列只放行数字字符、写裸数字** ——
+  `int = '548'` 在 PostgreSQL 上会直接报错，顺带堵住"把任意串塞进数值比较"这条路
+- 逐条从左往右拼、层层加括号：界面上是"一行一行读"，而 SQL 里 AND 优先于 OR，
+  不加括号会读成另一种意思（`a AND b OR c` ≠ 用户以为的 `a AND (b OR c)`）
+- 高级搜索条件与关键字模糊筛选**合并成同一份 where**，数据查询与总条数统计共用
+  —— 否则会出现"筛出 1 行、总数仍说 10 万"
+
+验证（对真实 SQL Server 实例、库 Database_1、表 test1、10 万行）：
+  基线              totalCount=100019  行数=5
+  id = 'aXS58y5D'   totalCount=1       行数=1     ✓ 精确命中
+  id > 'aXS58y5D'   totalCount=100018  行数=5     ✓ 正好少一行
+另外顺带确认：空表、带 schema 的表、SQL Server 的 OFFSET 分页都照常。
