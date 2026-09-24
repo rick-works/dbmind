@@ -22,6 +22,15 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
+    "fileAssociations": [
+      {
+        "ext": ["db"],
+        "name": "DBMind Database",
+        "description": "DBMind 数据文件",
+        "role": "Editor",
+        "mimeType": "application/x-dbmind-database"
+      }
+    ],
     "resources": {
       "../../frontend/dist": "web",
       "../../agents/dbmind-agent-jdbc/target/dbmind-agent-jdbc.jar": "agents/dbmind-agent-jdbc.jar",

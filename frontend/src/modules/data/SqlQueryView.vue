@@ -297,7 +297,7 @@
           <span class="result-time">
             {{ running ? formatElapsed(elapsedTime) : (result.executeTime ? formatElapsed(result.executeTime) : '') }}
           </span>
-          <!-- 选中区汇总（借参考项目 dbx 的底栏状态区）：框选单元格、选中整行或整列时给出
+          <!-- 选中区汇总（底栏状态区）：框选单元格、选中整行或整列时给出
                格子数 / 求和 / 均值 / 最小 / 最大（只统计数值列），排查数据时不用自己算 -->
           <span v-if="resultSelectionSummary" class="result-summary" :title="$t('sqlq.summaryTitle')">
             <span class="rs-item">选中 <b>{{ resultSelectionSummary.cells }}</b> 格</span>
@@ -578,7 +578,7 @@ const loadedRows = computed(() => result.value?.rows?.length || 0)
 // 「共 N 条」去掉，免得把本页行数当成总数展示。
 const pageTotal = computed(() => displayTotal.value !== null ? displayTotal.value : loadedRows.value)
 
-// ========== 结果表：选中区汇总（底栏状态区，做法借自参考项目 dbx）==========
+// ========== 结果表：选中区汇总（底栏状态区）==========
 // 优先级：单元格区域 > 选中行 > 选中列（同一时刻只会存在一块选区，见 focusResult* 那几个函数）。
 // 计数按"格子数"给（和 Excel 一致），求和/均值只统计**数值类型**的列 —— 把字符串硬加起来没有意义。
 const NUMERIC_TYPE_RE = /^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money|serial)/i
@@ -710,7 +710,7 @@ const syncResultFontSpec = (wrap) => {
 }
 
 /** 一列「正好放得下」的宽度：表头按最大值、内容按 **P95**，取大者
- *  （做法借自参考项目 dbx：一行里的超长值不该把整列撑到上限、把别的列挤出屏幕） */
+ *  （一行里的超长值不该把整列撑到上限、把别的列挤出屏幕） */
 const RESULT_CONTENT_PERCENTILE = 0.95
 const naturalResultColWidth = (col, fontFamily, rows) => {
   const headerW = measureResultText(col, true, fontFamily) + RESULT_HEADER_EXTRA
@@ -2341,7 +2341,7 @@ const selTextOf = (ed) => {
 const replaceSelText = (ed, text) => {
   const s = ed.getSelection()
   if (!s || s.isEmpty()) return
-  ed.executeEdits('xplore-sql', [{ range: s, text, forceMoveMarkers: true }])
+  ed.executeEdits('dbmind-sql', [{ range: s, text, forceMoveMarkers: true }])
   ed.pushUndoStop()
   ed.focus()
 }
@@ -2663,7 +2663,7 @@ const selectResultTab = (i) => {
   clearColSelect()
 }
 
-// ===== 生产库保护（参考 dbx 的生产库二次确认）=====
+// ===== 生产库保护（生产库二次确认）=====
 // 与下面的「危险 SQL 确认」是**两条独立的闸**，别合并理解：
 // - 危险 SQL 确认看的是**语句**（DELETE/DROP/TRUNCATE），用户可以在设置里关掉（天天写生产的人会关）；
 // - 生产库确认看的是**连接**（环境标记为 PROD），只要在写就确认，**不跟随那个设置**

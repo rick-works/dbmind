@@ -3,7 +3,7 @@ import { saveBlobAs } from './useExportTask'
 /**
  * 连接配置的导入 / 导出（JSON 文件）—— 「新建数据源」弹窗底部按钮与左侧树右键菜单共用这一份。
  *
- * 三条口径（与参考项目 dbx 的 connectionConfigTransfer 一致）：
+ * 三条口径：
  * 1. 文件格式 `{ format:'dbmind-connections', version:1, exportedAt, note, connections:[…] }`，
  *    导入端**也认裸数组**（别的工具/手写的 JSON 都能进）。
  * 2. **口令一律不导出**：内核的连接详情从来不下发口令（`ConnectionConfig::password` 标了

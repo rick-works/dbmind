@@ -2,7 +2,7 @@
 //!
 //! ## 这一块的形状是谁定的
 //!
-//! Xplore 的导出有三条路径，全都得在：
+//! 导出有三条路径，全都得在：
 //!
 //! | 路径 | 语义 | 返回 |
 //! |---|---|---|
@@ -21,7 +21,7 @@
 //!    补 `order by (select null)` + `offset/fetch`（见 `paging_sql`）。
 //! 2. **`total` 拿不到就给 -1**（界面会显示成不确定进度），不要给 0：
 //!    0 会被读成「总量 0」，进度条直接满格。
-//! 3. **整库转储的 csv/json/excel 一律打包成 zip**（Xplore 也是这么做的）：
+//! 3. **整库转储的 csv/json/excel 一律打包成 zip**：
 //!    一个库几十张表，散落成几十个文件没法下载。
 //! 4. **没实现的对象类型要说出来**：存储过程/触发器/事件/函数的 DDL 生成还没做，
 //!    那就把它们写进任务的 `logs` 与结果 `notices`，而不是让用户以为「本来就导不出」。
@@ -52,7 +52,7 @@ use crate::AppState;
 /// 「导出全部」每页取多少行。
 ///
 /// 太小 ⇒ 大表要多跑几十趟（每趟都是一次网络往返 + 驱动解析）；太大 ⇒ 单次响应把
-/// 驱动的行缓存顶爆。5000 是这两者之间的常见折中（Xplore 用的也是这个量级）。
+/// 驱动的行缓存顶爆。5000 是这两者之间的常见折中。
 /// 默认每页行数。
 ///
 /// 为什么从 5000 提到 50000（实测，用 DBMIND_EXPORT_PROFILE=1 量的）：
@@ -93,13 +93,13 @@ impl Default for Format {
 }
 
 impl Format {
-    /// Xplore 前端可能传来的格式名（含它的历史别名）。
+    /// 前端可能传来的格式名（含历史别名）。
     pub fn parse(raw: &str) -> XResult<Self> {
         Ok(match raw.trim().to_ascii_lowercase().as_str() {
             "" | "csv" => Format::Csv,
             "json" => Format::Json,
             "excel" | "xlsx" => Format::Xlsx,
-            // Xplore 里 `sql` 就是 INSERT 语句，与 sql-insert 同义；
+            // `sql` 就是 INSERT 语句，与 sql-insert 同义；
             // 整库转储时它表示「DDL + 数据」，见 `export_dump`
             "sql" | "sql-insert" => Format::SqlInsert,
             "sql-update" => Format::SqlUpdate,
@@ -247,7 +247,7 @@ fn option_bool(body: &Value, key: &str, fallback: bool) -> bool {
     }
 }
 
-/// 数组形式的字符串列表；也认「逗号分隔的一个字符串」（Xplore 两种都出现过）。
+/// 数组形式的字符串列表；也认「逗号分隔的一个字符串」。
 fn field_list(body: &Value, key: &str) -> Vec<String> {
     match body.get(key) {
         Some(Value::Array(items)) => items
@@ -986,7 +986,7 @@ async fn export_dump(
 
     let mut written = 0u64;
     if req.format.packed() {
-        // csv / json / excel ⇒ 一个表一个文件，打包成 zip（Xplore 也是 .zip）
+        // csv / json / excel ⇒ 一个表一个文件，打包成 zip
         let file = File::create(path).map_err(|e| XError::internal(format!("无法创建导出包：{e}")))?;
         let mut zip = ZipWriter::new(file);
         let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
@@ -1245,7 +1245,7 @@ fn export_name(req: &ExportReq) -> String {
 
 /// `POST /api/{m}/export/{id}` —— 同步导出**当前一页**。
 ///
-/// page/size 必须显式给：Xplore 的同步导出就是这么约定的（少一个就直接报错），
+/// page/size 必须显式给（少一个就直接报错）：
 /// 因为「同步」意味着「结果立刻回给你」，没有分页边界就等于把整库塞进一次响应。
 pub async fn single(
     State(state): State<AppState>,
@@ -1393,7 +1393,7 @@ pub async fn dump_task(
 
 /// `GET /api/{m}/export/task/{taskId}` —— 进度。
 ///
-/// 「任务不存在」按 Xplore 的约定回 **HTTP 200 + `{success:false,status:"notfound"}`**：
+/// 「任务不存在」按约定回 **HTTP 200 + `{success:false,status:"notfound"}`**：
 /// 前端的轮询器就是按 `success` 分支的，回 404 会让它把「任务过期」当成「网络故障」。
 pub async fn status(
     State(state): State<AppState>,
@@ -1409,7 +1409,7 @@ pub async fn status(
     let mut view = task.snapshot();
     view["success"] = json!(true);
     if let Some(artifact) = task.artifact() {
-        // Xplore 只把路径写在 message 里；这里额外给两个字段，界面能直接显示「去哪儿拿文件」
+        // 路径也写在 message 里（兼容只认 message 的调用方）；这里额外给两个字段，界面能直接显示「去哪儿拿文件」
         view["fileName"] = json!(artifact.filename);
         view["filePath"] = json!(artifact.path.display().to_string());
     }

@@ -2239,7 +2239,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .bool-cell { display: inline-flex; align-items: center; gap: 5px; }
 .bool-text { font-size: 12px; color: var(--dc-text-dim); }
 /* 正在编辑的行给一个主色左标 + 浅底：一屏几十行时，"光标在哪一行"一眼可见
-   （参考实现是把当前编辑行整体框起来；这里用左标 + 浅底，不干扰斑马纹的读法）。
+   （用左标 + 浅底，不干扰斑马纹的读法）。
    位置必须在这几条斑马纹规则**之后**，同优先级下靠顺序取胜。 */
 .field-table tbody tr:focus-within td { background: var(--dc-primary-wash); }
 .field-table tbody tr:focus-within td:first-child { box-shadow: inset 3px 0 0 var(--dc-primary); }

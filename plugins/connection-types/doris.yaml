@@ -19,7 +19,7 @@ localFile: false
 defaultPort: 9030
 jdbc:
   driverClass: com.mysql.cj.jdbc.Driver
-  # Doris 走 MySQL 协议与 MySQL 驱动，参数与 mysql 同款（Xplore 也是复用 MySqlDialect）
+  # Doris 走 MySQL 协议与 MySQL 驱动，参数与 mysql 同款
   urlTemplate: "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true"
   # ⚠️ 刻意用 8.0.28，而不是跟 MySQL 一样的 9.1.0：
   #    8.0.31 起驱动改了坐标（com.mysql:mysql-connector-j）与字符集解析，对 Doris 的握手

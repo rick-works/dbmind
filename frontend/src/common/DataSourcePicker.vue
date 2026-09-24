@@ -13,7 +13,7 @@
       <el-input v-model="keyword" clearable
                 :prefix-icon="Search" class="ds-search" />
 
-      <!-- 最近使用（参考 dbx 的 recentConnections）：连接成功过的才进这个列表，最多 5 条；
+      <!-- 最近使用：连接成功过的才进这个列表，最多 5 条；
            点一条直接打开它的编辑表单。id 失效的（连接被删）自动跳过。 -->
       <div v-if="recents.length" class="ds-recent">
         <div class="ds-recent-title">{{ $t('dsp.recent') }}</div>
@@ -53,7 +53,7 @@
       <el-empty v-if="!filteredGroups.length" :description="$t('settings.driver.empty')" :image-size="90" />
     </div>
 
-    <!-- 导入 / 导出 / 批量管理连接（参考 dbx 的连接配置传输 + 列表多选操作） -->
+    <!-- 导入 / 导出 / 批量管理连接 -->
     <template #footer>
       <div class="ds-footer">
         <span class="ds-footer-tip">{{ $t('dsp.pwdTip') }}</span>
@@ -143,7 +143,7 @@ const pick = (code) => {
   emit('update:modelValue', false)
 }
 
-// ========== 导入 / 导出连接配置（参考 dbx 的连接配置传输） ==========
+// ========== 导入 / 导出连接配置 ==========
 // 三条口径，写清楚免得误解：
 // 1. 格式 `{ format:'dbmind-connections', version:1, exportedAt, connections:[…] }`，
 //    同时**也认裸数组**（别的工具/手写的 JSON 都能导进来）。
@@ -285,7 +285,7 @@ const openRecent = (c) => {
   emit('update:modelValue', false)
 }
 
-// ========== 批量管理：测试 / 导出 / 删除（参考 dbx 的连接列表多选操作） ==========
+// ========== 批量管理：测试 / 导出 / 删除 ==========
 const batchTesting = ref(false)
 const batchDeleting = ref(false)
 const batchLog = ref('')

@@ -20,7 +20,7 @@ defaultPort: 8123
 jdbc:
   driverClass: com.clickhouse.jdbc.ClickHouseDriver
   # compress=0：驱动默认开 LZ4，缺 lz4-java 时握手会失败（打开库时报 "Magic is not correct" 一类
-  # IOException）。Xplore 的 ClickHouseDialect 也强制补这一项。
+  # IOException）。这一项仍强制补上。
   urlTemplate: "jdbc:clickhouse://{host}:{port}/{database}?compress=0"
   # artifact **必须带 `all` 分类器**：默认包是瘦包（1 MB），缺 slf4j /
   # clickhouse-http-client 等传递依赖，装载时直接 NoClassDefFoundError:

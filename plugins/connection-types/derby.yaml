@@ -17,7 +17,7 @@ defaultPort: 1527
 jdbc:
   driverClass: org.apache.derby.iapi.jdbc.AutoloadedDriver
   # ;create=true：路径不存在时自动建库（否则首次连接一个不存在的目录会直接失败）。
-  # 与 Xplore 的 DerbyDialect 一致。
+  # 按 Derby 驱动的要求设置。
   urlTemplate: "jdbc:derby:{filePath};create=true"
   # 版本上限取决于宿主的 JVM：**Derby 10.17 要 JDK 21**，而 agent 跑在 JDK 17 上，
   # 用 10.17 会在装载驱动时抛 UnsupportedClassVersionError（实测）。

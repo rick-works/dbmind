@@ -44,7 +44,7 @@
  */
 const PREFIX = 'dbmind.schema-cache.v2.'
 
-/** 与参考实现（dbx）同量级的 TTL：15 分钟。 */
+/** 缓存 TTL：15 分钟。 */
 export const SCHEMA_CACHE_TTL_MS = 15 * 60 * 1000
 
 /**

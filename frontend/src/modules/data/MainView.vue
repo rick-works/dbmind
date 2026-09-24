@@ -111,7 +111,7 @@
           >
             <template #default="{ node, data }">
               <span class="tree-node" :class="{ 'multi-sel': isMultiSelected(data) }">
-                <!-- 展开箭头（对齐 dbx-main）：只有"能展开"的节点才显示，未展开=右向、
+                <!-- 展开箭头：只有"能展开"的节点才显示，未展开=右向、
                      展开=下向、懒加载中=转圈。点箭头**只**切换展开，不触发"打开对象"；
                      点行则由 onNodeClick 决定语义（打开连接 / 打开库 / 预览）。
                      自绘它的三个理由：箭头单独可点、加载态有地方显示、
@@ -140,7 +140,7 @@
                         :title="data.note ? (data.name + '：' + data.note) : data.name">{{ data.label || data.name || node.label }}</span>
                   <span class="env-corner" :class="'env-corner-' + (data.env || 'none')" :title="envTitle(data.env)">{{ envShort(data.env) }}</span>
                 </span>
-                <!-- 库图标：**未打开=变暗**（对齐 dbx-main 的 databaseOpenVisual）。
+                <!-- 库图标：**未打开=变暗**。
                      原先用"当前库=蓝、其它=黄"来区分 —— 那是拿**颜色**说**状态**，
                      而同一行的颜色还兼着"类型"的含义，用户没法一眼分清谁在说状态。
                      现在：颜色恒为琥珀（类型），明暗说状态，行尾绿点再说一次"它开着"。 -->
@@ -179,7 +179,7 @@
                 <el-icon v-else class="tree-icon" color="#f5b34d"><Coin /></el-icon>
                 <!-- 「加载中…」占位只出转圈图标、不出文字；但**说明性**占位（如"未取到库清单"）
                      必须把文字显示出来 —— 否则用户只看到一个没有任何解释的图标。 -->
-                <!-- 树内直接重命名（对齐 dbx-main）：分组节点进入改名态时，标签**就地**换成输入框 ——
+                <!-- 树内直接重命名：分组节点进入改名态时，标签**就地**换成输入框 ——
                      回车 / 失焦提交，Esc 取消。不再弹一个"请输入分组名称"的对话框。 -->
                 <el-input v-if="data.kind === 'env-folder' && renamingKey === data.env"
                           v-model="renameDraft" size="small" class="tree-rename-input"
@@ -1756,7 +1756,7 @@ const importConns = (env) => {
   }
   input.click()
 }
-// ====== 树内直接重命名分组（对齐 dbx-main：就地改，不弹窗）======
+// ====== 树内直接重命名分组（就地改，不弹窗）======
 // 有两处存储要一起改：
 // 1) 该分组下所有连接的 environment（连接是靠它归属分组的）
 // 2) localStorage 里的「纯分组」（还没有任何连接的分组，只在本地存个名字）
@@ -2243,7 +2243,7 @@ const selectConn = async (id) => {
     }
   }
   try {
-    // **不再单独"测试连接"**（对齐 dbx 的做法）：直接用**列库**这一次真实请求当验证。
+    // **不再单独"测试连接"**：直接用**列库**这一次真实请求当验证。
     //
     // 为什么：测试连接是一次独立往返，在有些服务器上要等 3~10 秒（本机实测 6.3 秒），
     // 紧接着还要第二次往返去列库 —— 两次等待叠在一起，就是"打开连接慢"的主因。
@@ -2461,7 +2461,7 @@ const buildDbDetailNodes = async (dbNode) => {
   // 按连接能力决定哪些接口要调：该类型没有的对象（SQLite 的过程、SQL Server 的事件）
   // 调了只会拿到 501/空，白等一轮
   const can = objectCategoriesOf(await loadFeatures(connId))
-  // **只建分类壳，不查任何对象**（对齐 dbx）：这几条查询原来在这里一次性并发发出，
+  // **只建分类壳，不查任何对象**：这几条查询原来在这里一次性并发发出，
   // 其中 listTables 在有些库上要十几秒（实测 `/tables?database=mysql` = 10.96 秒）——
   // 用户只是想展开库看看有哪些分类，却被最慢的那条挡住。现在某个分类展开时才按需加载
   // （见 lazyLoad 的 category 分支 + loadCategoryItems）。
@@ -2539,7 +2539,7 @@ const prefetchCategoryItems = (nodes) => {  nodes.forEach(node => {
 }
 
 /**
- * 只加载「被展开的那一个分类」的对象（对齐 dbx：展开库只出分类壳，展开分类才查）。
+ * 只加载「被展开的那一个分类」的对象（展开库只出分类壳，展开分类才查）。
  * 失败时返回 `[]` 且**不置** `catLoaded` —— 分类上的计数保持隐藏，
  * 不会把"还没查/查失败"显示成一个扎眼的「0」。
  */
@@ -2622,7 +2622,7 @@ const buildSchemaDetailNodes = async (schemaNode) => {
   const { connId, db } = schemaNode
   // 同 buildDbDetailNodes：按连接能力决定哪些分类要显示（但不在这里查对象，见下）
   const can = objectCategoriesOf(await loadFeatures(connId))
-  // **只建分类壳，不查任何对象**（对齐 dbx）：这几条查询以前在这里一次性并发发出，
+  // **只建分类壳，不查任何对象**：这几条查询以前在这里一次性并发发出，
   // 其中 listTables 在有些库上要十几秒（实测 `/tables?database=mysql` = 10.96 秒）——
   // 用户只是想展开看看有哪些分类，却被最慢的那条挡住。现在展开某个分类时才按需加载
   // （见 lazyLoad 的 category 分支与 loadCategoryItems）。
@@ -3185,7 +3185,7 @@ const collapseNode = (key) => {
 
 // ---- 展开 / 收起：由本文件**唯一**决定（el-tree 的 expand-on-click-node 已关闭）----
 //
-// 规则照 dbx-main：① 只有"装得下子节点"的类型才画箭头；② 点箭头只切展开，
+// 规则：① 只有"装得下子节点"的类型才画箭头；② 点箭头只切展开，
 // 点行才执行语义动作（打开连接 / 打开库 / 预览）。
 // 之前是 el-tree 的 expand-on-click-node 与本函数**各切一次**，两次互相抵消 ——
 // 实测表现是"只会展开、再点收不起来"，也就是那个"不灵敏"。
@@ -3202,7 +3202,7 @@ const isNodeLoading = (node, data) => {
 }
 /**
  * 库是不是"已打开"：当前库就是打开的（树上一次只展开一个库的表）。
- * 它同时决定两件事（对齐 dbx-main 的 databaseOpenVisual）：库图标满色还是变暗、
+ * 它同时决定两件事：库图标满色还是变暗、
  * 行尾要不要那个绿点。
  */
 const isDbOpened = (data) => {
@@ -3222,7 +3222,7 @@ const isDbOpened = (data) => {
     return !tabConn || !nodeConn || tabConn === nodeConn
   })
 }
-/** 点箭头：只切换展开，不执行"打开对象"（对应 dbx-main 的 onToggleClick）。 */
+/** 点箭头：只切换展开，不执行"打开对象"。 */
 const onArrowClick = (data, node) => {
   // 未打开的连接：点箭头 = 连接（连上后由 selectConn 展开）—— 不在这里展开，
   // 否则又会变成"先展开成一个空节点"。转圈由 isNodeLoading 画在箭头位置。
@@ -6025,7 +6025,7 @@ watch(() => route.query.id, (id) => {
 .ctx-index-empty { padding: 24px 4px; font-size: 13px; color: var(--dc-text-dim); text-align: center; }
 .tree-icon { font-size: 15px; }
 .node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; font-size: 14px; line-height: 1.4; font-weight: 400; color: var(--dc-text); }
-/* 文字轻重分层（对齐 dbx-main）：连接名比对象名重一档，当前库名再加粗。
+/* 文字轻重分层：连接名比对象名重一档，当前库名再加粗。
    这样"连接 → 库 → 对象"三层在长列表里能一眼分开，不必靠颜色去猜。 */
 .conn-label { font-weight: 500; color: var(--dc-text-strong); }
 .db-label-current { font-weight: 600; color: var(--dc-text-strong); }
@@ -6050,7 +6050,7 @@ watch(() => route.query.id, (id) => {
 /* 树展开/折叠：直接瞬间开合，不要 element 默认 300ms 的 max-height 过渡（旧写法覆盖的 .collapse-transition 类名对 el-tree 无效） */
 .dc-tree :deep(.el-collapse-transition-enter-active),
 .dc-tree :deep(.el-collapse-transition-leave-active) { transition: none !important; }
-/* 自绘展开箭头（对齐 dbx-main）：固定 15px 位，展开时旋 90°，加载中转圈。
+/* 自绘展开箭头：固定 15px 位，展开时旋 90°，加载中转圈。
    el-tree 自带的那个箭头必须藏掉 —— 它 pointer-events:none（用户点不动），
    留着就会出现"两个箭头"，而且用户点的恰好是点不动的那一个。 */
 .dc-tree :deep(.el-tree-node__expand-icon),
@@ -6064,10 +6064,10 @@ watch(() => route.query.id, (id) => {
 .tree-arrow-spin { animation: dc-tree-spin 1s linear infinite; }
 .tree-arrow-spacer { width: 15px; flex-shrink: 0; }
 @keyframes dc-tree-spin { to { transform: rotate(360deg); } }
-/* 图标变暗 = "还没打开"（对齐 dbx-main 的 text-muted-foreground/65）：
+/* 图标变暗 = "还没打开"：
    只有库会用，且颜色恒为琥珀 —— 让明暗专门说状态，不再和类型颜色混在一起。 */
 .tree-icon-dim { filter: grayscale(100%); opacity: .42; }
-/* 行尾状态点：连接=已连接、库=已打开（对齐 dbx-main 的 w-1.5 bg-green-500） */
+/* 行尾状态点：连接=已连接、库=已打开 */
 .tree-dot {
   width: 6px; height: 6px; border-radius: 50%; background: #3ddc97;
   flex-shrink: 0; margin-left: 6px;
