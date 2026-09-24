@@ -2698,9 +2698,25 @@ const onExport = async (cmd) => {
     await exportTask.start(props.conn.id, payload, props.table, format)
     return
   }
-  // current：携带当前筛选/排序 + 分页参数，仅导出该页（后端按 page 单次分页查询）
-  const payload = { format, sql: buildExportSql(), database: props.database, table: props.table, page: page.value, size: size.value }
-  await exportTask.start(props.conn.id, payload, props.table, format)
+  // current：走**同步单页接口**（后端只查这一页就回字节）。
+  //
+  // 不能走 exportTask.start —— 它默认提交到 /export/task（异步导出【全部】），
+  // payload 里的 page/size 会被后端忽略，于是「导出当前页」变成「导出全表」。
+  const payload = {
+    format,
+    sql: buildExportSql(),
+    database: props.database,
+    table: props.table,
+    page: Math.max(1, page.value),
+    size: Math.max(1, size.value)
+  }
+  try {
+    const blob = await exportData(props.conn.id, payload)
+    downloadBlob(blob, props.table, format)
+    ElMessage.success('已导出当前页')
+  } catch (e) {
+    ElMessage.error('导出失败：' + (e?.message || e))
+  }
 }
 
 onMounted(async () => {
