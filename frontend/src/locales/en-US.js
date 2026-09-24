@@ -2663,7 +2663,7 @@ export default {
   'cd.pastePlaceholder': 'One per line, as name=value, for example:\nuseSSL=false\nserverTimezone=Asia/Shanghai',
   'cd.importBtn': 'Import',
   'cd.test': 'Test connection',
-  'cd.windowsAuthHint': 'Windows authentication uses Kerberos credentials: run kinit first to get a ticket; you can put a domain account (user@REALM) in the user name and leave the password empty.',
+  'cd.windowsAuthHint': 'Windows authentication: on Windows it uses the account you are signed in as (native SSPI - no domain or ticket needed); on Linux/macOS it goes through Kerberos, so run kinit first, put a domain account (user@REALM) in the user name and leave the password empty.',
   'cd.catNosql': 'NoSQL databases',
   'cd.folderPrompt': 'Enter a group name',
   'cd.unnamedFolder': 'Unnamed group',

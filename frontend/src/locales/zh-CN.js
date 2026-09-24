@@ -2670,7 +2670,7 @@ export default {
   'cd.pastePlaceholder': '每行一个，格式 参数名=值，例如：\nuseSSL=false\nserverTimezone=Asia/Shanghai',
   'cd.importBtn': '导入',
   'cd.test': '测试连接',
-  'cd.windowsAuthHint': 'Windows 身份验证将使用 Kerberos 凭据：请先执行 kinit 获取票据；可在「用户名」填写域账号（user@REALM），密码留空。',
+  'cd.windowsAuthHint': 'Windows 身份验证：Windows 上直接用当前登录的 Windows 账号（原生 SSPI，无需域或票据）；Linux / macOS 走 Kerberos，请先执行 kinit 获取票据，可在「用户名」填写域账号（user@REALM），密码留空。',
   'cd.catNosql': '非关系型数据库',
   'cd.folderPrompt': '请输入分组名称',
   'cd.unnamedFolder': '未命名分组',

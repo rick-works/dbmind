@@ -577,6 +577,99 @@ pub fn driver_jar_name(artifact: &str) -> Result<String> {
     })
 }
 
+/// 本进程的架构在驱动眼里叫什么（驱动按这个后缀找原生库）。
+pub(crate) fn native_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "x86" => "x86",
+        "aarch64" => "aarch64",
+        other => other,
+    }
+}
+
+/// 原生集成认证库的**候选文件名**。
+///
+/// 驱动是按 `System.loadLibrary("mssql-jdbc_auth-<版本>.<架构>")` 找它的，所以文件名里的
+/// 版本号必须与驱动对得上。本机实测（SQL Server 15.00.2000）：
+///   · 驱动 12.8.1 + 目录里放 `mssql-jdbc_auth-**12.6.1**.x64.dll`
+///     → 报「没有为集成身份验证配置驱动程序」；
+///   · 同一个 dll **只改名**成 `mssql-jdbc_auth-12.8.1.x64.dll` → 立刻连上（`dbUser=RICK\Rick`）。
+/// 这里同时给出「版本串原样（`12.8.1.jre11`）」和「去掉 `.jreNN`」两种候选：实测驱动认后者，
+/// 但换驱动版本或换打包方式未必一致 —— 多准备一个文件名，比猜错一个强。
+pub fn auth_library_names(driver_version: &str, arch: &str) -> Vec<String> {
+    let mut versions = vec![driver_version.to_string()];
+    if let Some(base) = driver_version.split(".jre").next() {
+        if base != driver_version {
+            versions.push(base.to_string());
+        }
+    }
+    versions
+        .into_iter()
+        .map(|version| format!("mssql-jdbc_auth-{version}.{arch}.dll"))
+        .collect()
+}
+
+/// 备好 SQL Server 的原生集成认证库，返回**要加进 `-Djava.library.path` 的目录**。
+///
+/// 为什么非要有这一步（每一条都是实测结论，别照着"看起来更简单"的写法改回去）：
+///   1. 那份 dll **不在驱动 jar 里**：本仓用的 `mssql-jdbc-12.8.1.jre11.jar` 里 0 个 dll；
+///   2. 驱动**按文件名**找它（`System.loadLibrary`），名字差一个版本号就失败；
+///   3. `java.library.path` 只在 **JVM 启动那一刻**生效，而宿主是长驻 JVM ——
+///      所以必须在 spawn 之前就位（这也是它被 `ensure_process` 调用的原因）。
+///
+/// 做法：驱动目录里只要**有**一个同架构的 `mssql-jdbc_auth-*.dll`（用户自己放的、从别的
+/// JDBC 工具目录拷来的都行），就按当前驱动版本**复制改名**到 `<驱动目录>/auth/`。
+/// 版本号从目录里的 `mssql-jdbc-<版本>.jar` 文件名上读 —— 不依赖 manifest，换版本自动跟随。
+///
+/// 返回 `None` 表示"这机器上没有可用的认证库"（SQL 认证的连接完全不受影响）。
+pub fn ensure_native_auth_library(agent_key: &str) -> Option<PathBuf> {
+    let dir = driver_dir(agent_key);
+    let version = std::fs::read_dir(&dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .find_map(|name| {
+            let rest = name.strip_prefix("mssql-jdbc-")?.strip_suffix(".jar")?;
+            Some(rest.to_string())
+        })?;
+    let arch = native_arch();
+    let targets = auth_library_names(&version, arch);
+    let out_dir = dir.join("auth");
+    // 已经备好就直接用（幂等：每次启动宿主都会来这儿一趟）
+    if targets.iter().all(|name| out_dir.join(name).is_file()) {
+        return Some(out_dir);
+    }
+    // 从哪拷：驱动目录（含它自己的 auth/）里任何同架构的认证库
+    let source = [dir.clone(), out_dir.clone()]
+        .into_iter()
+        .filter_map(|candidate| std::fs::read_dir(candidate).ok())
+        .flatten()
+        .flatten()
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(|name| {
+                    name.starts_with("mssql-jdbc_auth-") && name.ends_with(&format!(".{arch}.dll"))
+                })
+                .unwrap_or(false)
+        })?;
+    std::fs::create_dir_all(&out_dir).ok()?;
+    for name in &targets {
+        let target = out_dir.join(name);
+        if target.is_file() {
+            continue;
+        }
+        std::fs::copy(&source, &target).ok()?;
+        tracing::warn!(
+            source = %source.display(),
+            target = %target.display(),
+            "原生集成认证库已就位（驱动按文件名里的版本号找它，所以这里按当前驱动版本改名）"
+        );
+    }
+    Some(out_dir)
+}
+
 /// 解析 `group:artifact:version[:classifier]`。
 ///
 /// 需要 classifier，是因为有些驱动**必须**用带分类器的包才能跑：ClickHouse 的
@@ -1052,6 +1145,38 @@ impl AgentHost {
         if agent_hosts.is_file() {
             command.arg(format!("-Djdk.net.hosts.file={}", agent_hosts.display()));
         }
+        // SQL Server 的「Windows 验证」在 Windows 上走原生 SSPI，需要那份原生认证库，
+        // 而 `java.library.path` **只在 JVM 启动这一刻**生效（宿主是长驻 JVM，启动后再补文件
+        // 也加载不到）—— 所以在这里、spawn 之前把目录备好。
+        // 备不好也不拦着启动：SQL 认证的连接完全用不到它（真用到时会在连接前给出明确提示）。
+        // 扫**驱动目录**而不是 `spec.agent_keys`：SQL Server 这类 JDBC 类型是由通用宿主承载的，
+        // 它的 agent_keys 是空的 —— 按 spec 去扫会一个都不问，认证库也就永远不会就位。
+        let mut driver_keys: Vec<String> = std::fs::read_dir(paths::home_dir().join("drivers"))
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|entry| entry.file_name().into_string().ok())
+            .collect();
+        driver_keys.sort();
+        let native_dirs: Vec<PathBuf> = driver_keys
+            .iter()
+            .filter_map(|key| ensure_native_auth_library(key))
+            .collect();
+        if !native_dirs.is_empty() {
+            let mut dirs = native_dirs;
+            // 显式给 java.library.path 会**替换**掉 JVM 的默认库路径，把系统目录一并带上更稳
+            #[cfg(windows)]
+            {
+                let system32 = PathBuf::from("C:\\Windows\\System32");
+                if system32.is_dir() {
+                    dirs.push(system32);
+                }
+            }
+            if let Ok(joined) = std::env::join_paths(&dirs) {
+                command.arg(format!("-Djava.library.path={}", joined.display()));
+            }
+        }
         command
             .arg("-jar")
             .arg(&jar)
@@ -1404,12 +1529,22 @@ pub fn render_jdbc_url(template: &str, config: &ConnectionConfig) -> Result<Stri
     // 用户选了「Windows 身份验证」却收到「用户 'sa' 登录失败」，就是这么来的
     // （YAML 模板里不可能写死它，因为同一类型还要支持 SQL 认证）。
     //
-    // 用 JavaKerberos 而不是 NTLM：前者走 Kerberos 票据，不需要 mssql-jdbc 那套
-    // 平台原生 DLL（`mssql-jdbc_auth-*.dll`），纯 Java 就能跑。
+    // **Windows 上走原生 SSPI（NativeAuthentication）**：它直接用当前登录的 Windows 身份，
+    // 不需要域、不需要 Kerberos 票据 —— 这才是用户在「Windows 验证」下期待的行为。
+    // 早先这里一律用 JavaKerberos（理由是"纯 Java，不需要平台原生 DLL"），但那条路要求先
+    // `kinit` 拿到票据；本机 SQL Server（没有域）必然失败，实测报「集成身份验证失败」。
+    // 代价：Windows 上必须在 `java.library.path` 上放一份
+    // `mssql-jdbc_auth-<驱动版本>.x64.dll`（它**不在**驱动 jar 里）—— 由
+    // [`ensure_native_auth_library`] 在 JVM 启动前备好，缺了会在连接前给出明确提示。
+    // 非 Windows 平台没有 SSPI，仍走 JavaKerberos（那才是它们的正路）。
     if is_windows_auth(config) && url.starts_with("jdbc:sqlserver:") {
         let separator = if url.contains(';') { ';' } else { '?' };
         url.push(separator);
-        url.push_str("integratedSecurity=true;authenticationScheme=JavaKerberos");
+        url.push_str(if cfg!(windows) {
+            "integratedSecurity=true;authenticationScheme=NativeAuthentication"
+        } else {
+            "integratedSecurity=true;authenticationScheme=JavaKerberos"
+        });
     }
     Ok(url)
 }
@@ -1511,7 +1646,15 @@ mod tests {
         assert!(is_windows_auth(&windows));
         let url = render_jdbc_url(sqlserver, &windows).unwrap();
         assert!(url.contains("integratedSecurity=true"), "{url}");
-        assert!(url.contains("authenticationScheme=JavaKerberos"), "{url}");
+        // Windows 用原生 SSPI（当前登录身份，不要票据）；其它平台没有 SSPI，才走 Kerberos
+        assert!(
+            url.contains(if cfg!(windows) {
+                "authenticationScheme=NativeAuthentication"
+            } else {
+                "authenticationScheme=JavaKerberos"
+            }),
+            "{url}"
+        );
 
         // 默认的 SQL 认证绝不能带上它，否则普通的 sa 登录会莫名其妙失败
         windows.extra = Some(serde_json::json!({ "authType": "sqlserver" }));
@@ -1527,6 +1670,24 @@ mod tests {
         let config = ConnectionConfig::new("h2", ConnectionKind::H2).with_file("./data/app");
         let url = render_jdbc_url(ConnectionKind::H2.jdbc_url_template().unwrap(), &config).unwrap();
         assert_eq!(url, "jdbc:h2:file:./data/app");
+    }
+
+    #[test]
+    fn 原生认证库的文件名要去掉_jre_后缀() {
+        // 实测：驱动 12.8.1 认的是 `mssql-jdbc_auth-12.8.1.x64.dll`
+        // （放 12.6.1 的会报「没有为集成身份验证配置驱动程序」，只改名就通）。
+        // 两种候选都给：换驱动版本或换打包方式时，不必再猜一遍。
+        let names = auth_library_names("12.8.1.jre11", "x64");
+        assert!(names.contains(&"mssql-jdbc_auth-12.8.1.x64.dll".to_string()), "{names:?}");
+        assert!(
+            names.contains(&"mssql-jdbc_auth-12.8.1.jre11.x64.dll".to_string()),
+            "{names:?}"
+        );
+        // 版本串本来就不带分类器时，只有一个候选
+        assert_eq!(
+            auth_library_names("12.8.1", "x64"),
+            vec!["mssql-jdbc_auth-12.8.1.x64.dll".to_string()]
+        );
     }
 
     #[test]

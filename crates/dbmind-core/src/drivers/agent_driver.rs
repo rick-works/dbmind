@@ -187,11 +187,30 @@ impl AgentDriver {
                     format!("{} 缺少 jdbc.urlTemplate 声明", self.kind.label()),
                 )
             })?;
+            let url = agent::render_jdbc_url(template, config)?;
+            // Windows 上的「Windows 验证」走原生 SSPI，需要一份**不在驱动 jar 里**的原生库
+            // （`mssql-jdbc_auth-<驱动版本>.x64.dll`）。缺了它驱动只会丢一句
+            // 「没有为集成身份验证配置驱动程序」—— 既没说要哪个文件、也没说放哪里，
+            // 用户只能猜。这里提前拦住，把文件名和目录直接给出来。
+            // （库路径只在 Java 宿主**启动时**读取，所以补了文件要重启。）
+            if cfg!(windows) && agent::is_windows_auth(config) && url.starts_with("jdbc:sqlserver:") {
+                let key = self.kind.agent_key().unwrap_or("sqlserver");
+                if agent::ensure_native_auth_library(key).is_none() {
+                    let arch = agent::native_arch();
+                    return Err(DbMindError::new(
+                        ErrorCode::ConnConnectFailed,
+                        "Windows 集成验证需要一份原生认证库，当前驱动目录里没有",
+                    )
+                    .with_detail(format!(
+                        "把 Microsoft JDBC Driver 发行包里 auth\\{arch}\\ 下的 \
+                         mssql-jdbc_auth-<驱动版本>.{arch}.dll 放到 {} 后重启 DBMind（库路径只在 \
+                         Java 宿主启动时读取）；只想先连上也可以改用「SQL Server 身份验证」。",
+                        agent::driver_dir(key).display()
+                    )));
+                }
+            }
             params.insert("driverClass".to_string(), json!(driver_class));
-            params.insert(
-                "url".to_string(),
-                json!(agent::render_jdbc_url(template, config)?),
-            );
+            params.insert("url".to_string(), json!(url));
             params.insert(
                 "driverJars".to_string(),
                 json!(jars.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()),

@@ -575,6 +575,11 @@ pub async fn serve(options: Options) -> Result<(), String> {
         tracing::info!(actions = imported, "已把旧版 json 状态导入主库");
     }
 
+    // *没有*在这里预置 SQL Server 的原生认证库：`java.library.path` 只在宿主 JVM 启动那一刻
+    // 生效，而"启动宿主"这件事本来就归 `AgentHost::ensure_process` 管 —— 它每次 spawn 之前都会
+    // 扫一遍驱动目录（见 `ensure_native_auth_library`）。在这里再做一遍是重复劳动，而且按 spec
+    // 的 agent_keys 扫根本扫不到 SQL Server（它由通用宿主承载），只会安静地什么都不做。
+
     // 提示词模板：以前要等第一次用 AI 才释放，现在开机就写好
     // （缺哪个补哪个，绝不覆盖用户自己改过的）
     match crate::api::ai::prompts::release_defaults() {
