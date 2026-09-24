@@ -104,11 +104,19 @@ pub async fn execute(
 
     // 第 2 页起才套分页壳：第一页照原样执行（否则 create / update 这类语句会被塞进
     // 子查询里直接报错），并且只对「取数类」语句套。
+    //
+    // 套壳与统计都要用「去掉末尾分号」的版本：把
+    //     SELECT * FROM t;
+    // 包进子查询会变成 (SELECT * FROM t;) —— 分号在子查询里是语法错误，
+    // 于是 count(*) 失败、总数退回 -1（界面就说"未统计总数"），翻页也会跟着报错。
+    // 而用户输入的 SQL 十有八九带分号（前端也允许），所以这一步不能省。
+    // 执行本身不受影响，因此只在这两处用去尾分号的版本。
     let base_sql = sql.clone();
-    let effective = if page > 1 && looks_like_query(&base_sql) {
+    let bare = base_sql.trim().trim_end_matches(';').trim().to_string();
+    let effective = if page > 1 && looks_like_query(&bare) {
         let record = require_record(&state, &id).await?;
         let dialect = crate::api::dialect::Dialect::new(record.kind());
-        crate::api::export::paging_sql(&base_sql, (page - 1) * size as u64, size as u64, dialect)
+        crate::api::export::paging_sql(&bare, (page - 1) * size as u64, size as u64, dialect)
     } else {
         base_sql.clone()
     };
@@ -134,7 +142,7 @@ pub async fn execute(
             // 只要翻过页就要统计：最后一页往往不足一页（truncated=false），
             // 那时若拿本页行数当总数，分页器会突然从 1026 页缩成 1 页。
             if result.truncated || page > 1 {
-                if let Some(total) = crate::api::export::count_rows(&state, &id, &database, &base_sql).await {
+                if let Some(total) = crate::api::export::count_rows(&state, &id, &database, &bare).await {
                     if let Some(object) = json.as_object_mut() {
                         object.insert("totalCount".to_string(), Value::from(total));
                         // hasMore 是"这一页之后还有没有"，不是"本页有没有装满"：
