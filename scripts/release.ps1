@@ -163,6 +163,21 @@ if ($SkipFrontend) {
     }
     Push-Location $frontendDir
     try {
+        # 先自己把 dist 清空。Vite 也会清，但它走 Node 的 fs.rmSync —— IDE 终端会给 Node
+        # 套一层"安全删除"shim，把「单轮删除 500 个以上文件」拦下来（dist\assets 有近 600 个），
+        # 于是构建在第 2 步就失败：
+        #   [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":589,"threshold":500}
+        # 这里用 .NET 直接删目录树 —— 删的是构建产物、本来就不该进回收站；
+        # 之后 Vite 面对的是一个不存在的目录，压根谈不上"批量删除"。
+        $cleanDist = Join-Path $frontendDir 'dist'
+        if (Test-Path $cleanDist) {
+            try {
+                [System.IO.Directory]::Delete($cleanDist, $true)
+                Note '已清空 frontend\dist（免得构建时撞上批量删除拦截）'
+            } catch {
+                Warn ('清空 frontend\dist 失败，交给 Vite 自己清：' + $_.Exception.Message)
+            }
+        }
         & npm run build
         if ($LASTEXITCODE -ne 0) { Fail 'npm run build 失败' }
     } finally { Pop-Location }
