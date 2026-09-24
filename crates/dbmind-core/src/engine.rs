@@ -76,7 +76,6 @@ impl DbMindEngine {
         match crate::bootstrap::ensure_first_run(engine.store()) {
             Ok(report) if !report.is_empty() => tracing::info!(
                 dirs = report.created_dirs.len(),
-                sample = report.seeded_sample,
                 "数据目录初始化完成"
             ),
             Ok(_) => {}
