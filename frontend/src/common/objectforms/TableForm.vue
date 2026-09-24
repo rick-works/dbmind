@@ -839,6 +839,29 @@ emit('sql', genSql())
 /* 行内控件统一压到 22px：否则它们会成为新的"行高天花板" */
 .field-table :deep(.el-input__inner) { height: 22px; }
 .field-table :deep(.el-input__wrapper) { min-height: 22px; }
+/* ↓↓↓ 让表格"像表格"的关键：单元格里的输入控件默认**隐形**（透明底 + 无描边），
+   整张表读起来是一列列文字；鼠标移到该行才浮出输入框的样子，聚焦时给主色描边。
+   少了这三条，新建表的每个格子都是常驻输入框 —— 而且底色还会被 index.css 的全局
+   `.el-input__wrapper { background-color: var(--dc-bg-input) !important }` 染成灰蓝，
+   于是"新建表的框颜色和编辑页不一样"。
+   **必须带 !important**：不带就压不过那条全局主题覆盖（编辑页第一版就是这样静默失效的）。 */
+.field-table :deep(.el-input__wrapper),
+.field-table :deep(.el-select__wrapper) {
+  background-color: transparent !important;
+  box-shadow: none !important;
+  transition: background .15s ease, box-shadow .15s ease;
+}
+.field-table tbody tr:hover :deep(.el-input__wrapper),
+.field-table tbody tr:hover :deep(.el-select__wrapper) {
+  /* 用 --dc-bg-hover 而不是 --dc-bg-input：后者在浅色主题下是纯白，一格一格亮得晃眼 */
+  background-color: var(--dc-bg-hover) !important;
+  box-shadow: 0 0 0 1px var(--dc-border) inset !important;
+}
+.field-table :deep(.el-input__wrapper.is-focus),
+.field-table :deep(.el-select__wrapper.is-focused) {
+  background-color: var(--dc-bg-hover) !important;
+  box-shadow: 0 0 0 1px var(--dc-primary) inset !important;
+}
 .field-table :deep(.el-select__wrapper) { min-height: 22px; }
 .field-table :deep(.el-button--small) { height: 22px; padding: 0 6px; }
 .field-table :deep(.el-checkbox) { margin-right: 0; height: 22px; }

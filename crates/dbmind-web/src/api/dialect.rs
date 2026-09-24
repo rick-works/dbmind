@@ -426,13 +426,25 @@ impl Dialect {
             // SQL Server：`sys.partitions.rows` 是**实时维护的真实行数**（不是统计估算），
             // 一次 join 就能拿到全 schema，不必每张表去 COUNT(*)。
             // 视图没有自己的行数 → null（留给前端留空，而不是显示 0）。
+            //
+            // 表注释必须自己 join：**mssql-jdbc 不填 `REMARKS`**（SQL Server 的表注释存在
+            // `sys.extended_properties` 里，不是数据库自带的元数据），所以走 JDBC 的
+            // getTables 永远拿不到注释 —— 而前端「编辑表结构」的表注释框正是从这个清单里读的
+            // （`comment: t?.comment || ''`）。缺这一列的后果实测是：注释改完保存**确实成功**
+            // （`/alter` 里那条 sp_updateextendedproperty 真执行了，库里值也变了），
+            // 但重新打开表时注释框又是空的 —— 用户看到的就是"修改表注释没用"。
+            // `minor_id = 0` 才是表级注释（列级注释的 minor_id 是列号）；`class = 1` 是对象级。
             "sqlserver" => Meta::Sql(format!(
                 "select o.name as name, \
                  case when o.type = 'V' then 'VIEW' else 'BASE TABLE' end as type, \
-                 case when o.type = 'V' then null else isnull(p.rows, 0) end as rows \
+                 case when o.type = 'V' then null else isnull(p.rows, 0) end as rows, \
+                 cast(ep.value as nvarchar(4000)) as comment \
                  from sys.objects o \
                  outer apply (select sum(rows) as rows from sys.partitions \
                               where object_id = o.object_id and index_id in (0,1)) p \
+                 left join sys.extended_properties ep \
+                        on ep.class = 1 and ep.major_id = o.object_id and ep.minor_id = 0 \
+                       and ep.name = 'MS_Description' \
                  where o.schema_id = schema_id({}) and o.type in ('U','V') order by o.name",
                 self.literal(schema)
             )),

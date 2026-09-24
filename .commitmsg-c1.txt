@@ -1,0 +1,19 @@
+﻿新建表输入框"隐形"样式补齐；SQL Server 表清单带出表注释
+
+1. 新建表字段表的输入框底色与编辑页不一致
+   根因：编辑页那套的关键不是"压缩行高"，而是让**单元格里的输入控件默认隐形**
+   （透明底 + 无描边，鼠标移到该行才浮出、聚焦才给主色描边），并且这三条**必须带
+   !important** —— index.css 里有一套全局 `.el-input__wrapper { background-color:
+   var(--dc-bg-input) !important }` 主题覆盖，不带就压不过它。
+   我上次只搬了 `min-height: 22px` 那一条，于是每个格子都是常驻输入框 + 被全局规则染成
+   灰蓝底色 —— 就是"新建表的框颜色和编辑页不一样"。现在三条规则照搬（连注释一起）。
+2. SQL Server 的表清单查询现在带出表注释
+   表注释存在 sys.extended_properties（不是数据库自带元数据），**mssql-jdbc 不填 REMARKS**，
+   所以走 JDBC getTables 永远拿不到；而编辑页的表注释框正是从这个清单读的
+   （`comment: t?.comment || ''`）→ 注释改完保存**确实成功**，但重新打开又空 = "修改表注释没用"。
+   改法：left join sys.extended_properties（class=1、minor_id=0、name='MS_Description'）。
+   真机验证（localhost 的 Database_1）：demo1=111111、test1=消息表、
+   wagas_orders_meituan=美团订单数据、ods_hana_adrp=SAP人员姓名地址主数据表（…），其余 null。
+
+验证：cargo build -p dbmind-web 通过；npm run build 通过；guard 通过；
+     新查询在本机 SQL Server 上实跑并逐行核对过。
