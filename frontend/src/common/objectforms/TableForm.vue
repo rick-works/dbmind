@@ -5,64 +5,88 @@
     <el-tabs v-model="activeTab" class="table-tabs">
       <!-- 基本信息 -->
       <el-tab-pane :label="$t('tf.basic')" name="basic">
-        <div class="tab-inner">
-          <div class="form-grid">
-            <el-form label-position="top" size="small" class="grid-item">
-              <el-form-item :label="$t('tf.tableName')" required>
-                <el-input v-model="form.name" :disabled="editMode" clearable />
-              </el-form-item>
-            </el-form>
-            <el-form v-if="has(features,'supportsComment')" label-position="top" size="small" class="grid-item">
-              <el-form-item :label="$t('tf.tableComment')">
-                <el-input v-model="form.comment" clearable />
-              </el-form-item>
-            </el-form>
-            <!-- Doris 专属：数据模型 / 分桶列 / 分桶数 / 副本数 -->
-            <el-form v-if="isDoris" label-position="top" size="small" class="grid-item">
-              <el-form-item :label="$t('tf.dorisModel')">
-                <el-select v-model="form.dorisModel" size="small" :title="$t('tf.dorisModelTip')" @change="dorisModelTouched = true">
-                  <el-option v-for="m in ['DUPLICATE KEY', 'UNIQUE KEY']" :key="m" :label="m" :value="m" />
-                </el-select>
-              </el-form-item>
-            </el-form>
-            <el-form v-if="isDoris" label-position="top" size="small" class="grid-item">
-              <el-form-item :label="$t('tf.distCol')">
-                <el-select v-model="form.dorisDistCol" multiple clearable filterable size="small" :placeholder="$t('tf.distColPh')">
-                  <el-option v-for="k in dorisKeyCols" :key="k" :label="k" :value="k" />
-                </el-select>
-              </el-form-item>
-            </el-form>
-            <el-form v-if="isDoris" label-position="top" size="small" class="grid-item">
-              <el-form-item :label="$t('tf.buckets')">
-                <el-input-number v-model="form.dorisBuckets" :min="1" :max="1024" controls-position="right" class="num-item" />
-              </el-form-item>
-            </el-form>
-            <el-form v-if="isDoris" label-position="top" size="small" class="grid-item">
-              <el-form-item :label="$t('tf.replicas')" :title="$t('tf.replicasTip')">
-                <el-input-number v-model="form.dorisReplication" :min="1" :max="32" controls-position="right" class="num-item" />
-              </el-form-item>
-            </el-form>
-            <el-form v-if="has(features,'supportsTableOptions') && (features.engines || []).length" label-position="top" size="small" class="grid-item">
-              <el-form-item :label="$t('tf.engine')">
-                <el-select v-model="form.engine" clearable filterable>
-                  <el-option v-for="e in features.engines" :key="e" :label="e" :value="e" />
-                </el-select>
-              </el-form-item>
-            </el-form>
-            <el-form v-if="has(features,'supportsTableOptions') && (features.charsets || []).length" label-position="top" size="small" class="grid-item">
-              <el-form-item :label="$t('tf.charset')">
-                <el-select v-model="form.charset" clearable filterable @change="onCharsetChange">
-                  <el-option v-for="c in features.charsets" :key="c" :label="c" :value="c" />
-                </el-select>
-              </el-form-item>
-            </el-form>
-            <el-form v-if="has(features,'supportsTableOptions') && collations.length" label-position="top" size="small" class="grid-item">
-              <el-form-item :label="$t('tf.collation')">
-                <el-select v-model="form.collation" clearable filterable>
-                  <el-option v-for="c in collations" :key="c" :label="c" :value="c" />
-                </el-select>
-              </el-form-item>
-            </el-form>
+        <div class="tab-inner basic-tab">
+          <!-- 与「字段定义」同一张表：左列「项目」180px、右列「值」。
+               编辑页的基本信息就是这么做的（.field-table.basic-table）——
+               之前这里用"每字段一个 el-form 的网格"，标签与控件各占一格，
+               行与行之间高度不齐，看着就是乱的。同一张表就没有这个问题：
+               行高、表头、网格线全部与字段表共用一套。 -->
+          <div class="field-table-wrap">
+            <table class="field-table basic-table">
+              <colgroup>
+                <col style="width:180px" />
+                <col />
+              </colgroup>
+              <thead>
+                <!-- 第一行 35px 空行：页签住在这儿（与字段表一致） -->
+                <tr class="thead-spacer">
+                  <th colspan="2"></th>
+                </tr>
+                <tr>
+                  <th>{{ $t('tdet.item') }}</th>
+                  <th>{{ $t('tdet.value') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="basic-label">{{ $t('tf.tableName') }}</td>
+                  <td><el-input v-model="form.name" :disabled="editMode" size="small" clearable /></td>
+                </tr>
+                <tr v-if="has(features,'supportsComment')">
+                  <td class="basic-label">{{ $t('tf.tableComment') }}</td>
+                  <td><el-input v-model="form.comment" size="small" clearable /></td>
+                </tr>
+                <!-- Doris 专属：数据模型 / 分桶列 / 分桶数 / 副本数 -->
+                <tr v-if="isDoris">
+                  <td class="basic-label">{{ $t('tf.dorisModel') }}</td>
+                  <td>
+                    <el-select v-model="form.dorisModel" size="small" :title="$t('tf.dorisModelTip')" @change="dorisModelTouched = true">
+                      <el-option v-for="m in ['DUPLICATE KEY', 'UNIQUE KEY']" :key="m" :label="m" :value="m" />
+                    </el-select>
+                  </td>
+                </tr>
+                <tr v-if="isDoris">
+                  <td class="basic-label">{{ $t('tf.distCol') }}</td>
+                  <td>
+                    <el-select v-model="form.dorisDistCol" multiple clearable filterable size="small" :placeholder="$t('tf.distColPh')">
+                      <el-option v-for="k in dorisKeyCols" :key="k" :label="k" :value="k" />
+                    </el-select>
+                  </td>
+                </tr>
+                <tr v-if="isDoris">
+                  <td class="basic-label">{{ $t('tf.buckets') }}</td>
+                  <td><el-input-number v-model="form.dorisBuckets" :min="1" :max="1024" controls-position="right" size="small" /></td>
+                </tr>
+                <tr v-if="isDoris">
+                  <td class="basic-label" :title="$t('tf.replicasTip')">{{ $t('tf.replicas') }}</td>
+                  <td><el-input-number v-model="form.dorisReplication" :min="1" :max="32" controls-position="right" size="small" /></td>
+                </tr>
+                <tr v-if="has(features,'supportsTableOptions') && (features.engines || []).length">
+                  <td class="basic-label">{{ $t('tf.engine') }}</td>
+                  <td>
+                    <el-select v-model="form.engine" size="small" clearable filterable>
+                      <el-option v-for="e in features.engines" :key="e" :label="e" :value="e" />
+                    </el-select>
+                  </td>
+                </tr>
+                <tr v-if="has(features,'supportsTableOptions') && (features.charsets || []).length">
+                  <td class="basic-label">{{ $t('tf.charset') }}</td>
+                  <td>
+                    <el-select v-model="form.charset" size="small" clearable filterable @change="onCharsetChange">
+                      <el-option v-for="c in features.charsets" :key="c" :label="c" :value="c" />
+                    </el-select>
+                  </td>
+                </tr>
+                <tr v-if="has(features,'supportsTableOptions') && collations.length">
+                  <td class="basic-label">{{ $t('tf.collation') }}</td>
+                  <td>
+                    <el-select v-model="form.collation" size="small" clearable filterable>
+                      <el-option v-for="c in collations" :key="c" :label="c" :value="c" />
+                    </el-select>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
         </div>
       </el-tab-pane>
@@ -585,6 +609,9 @@ emit('sql', genSql())
 </script>
 
 <style scoped>
+/* 注意：本文件有两段样式 —— 这一段是**早先的薄皮肤**，下面还有一段"与编辑表结构对齐"的
+   覆盖层（同名选择器、写在更后面，所以真正生效的是后者）。保留前者是为了在覆盖层被
+   误删时不至于完全没有样式；**要改外观请改覆盖层**，别在这儿改（改了看不到效果）。 */
 .obj-form { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .table-tabs { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .table-tabs :deep(.el-tabs__content) { flex: 1; overflow: hidden; padding: 0; }
@@ -596,8 +623,6 @@ emit('sql', genSql())
 .col-tab .field-table-wrap { flex: 1; overflow: auto; border: 1px solid var(--dc-border-soft); border-radius: 8px; }
 .idx-tab { padding-top: 6px; }
 .idx-tab .card-actions { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 8px; }
-.form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }
-.form-grid .grid-item { min-width: 0; }
 .field-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .field-table th { position: sticky; top: 0; z-index: 1; background: var(--dc-bg-code); color: var(--dc-text-mid); font-weight: 600; font-size: 13px; text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--dc-border-soft); white-space: nowrap; }
 .field-table td { padding: 4px 4px; border-bottom: 1px solid var(--dc-border-soft); vertical-align: middle; }
@@ -614,10 +639,8 @@ emit('sql', genSql())
 .field-table tbody tr.pk-row.sel-row { background: rgba(79, 140, 255, .2) !important; }
 .field-table tbody tr.ok-row.sel-row { background: rgba(103, 194, 58, .18) !important; box-shadow: inset 2px 0 0 var(--dc-success); }
 .empty-row { text-align: center; color: var(--dc-text-dim); padding: 18px 0 !important; font-size: 13px; cursor: default; }
-.grid-item :deep(.el-input-number) { width: 100%; }
-.form-grid { align-items: start; }
-.form-grid :deep(.el-form-item) { margin-bottom: 12px; }
-.form-grid :deep(.el-select) { width: 100%; }
+/* （原"每字段一个 el-form 的网格"那套规则已随标记一起去掉：
+     基本信息现在是 .field-table.basic-table 两列表，规则见上面的 basic-table 段。） */
 .dc-del { color: var(--dc-text-dim); }
 .dc-del:hover { color: var(--dc-danger); background: rgba(255,97,97,.1); }
 .type-select { width: 100%; }
@@ -773,32 +796,24 @@ emit('sql', genSql())
 .field-table tbody tr.sel-row td:first-child { box-shadow: inset 2px 0 0 var(--dc-primary); }
 .field-table tbody tr:hover { background: transparent; }   /* 旧的 tr 级底色让位给 td 级 */
 
-/* ===== 基本信息：一张卡 + 均匀网格 =====
-   这里每个字段各自是一个 <el-form class="grid-item">（与编辑页那张 basic-table 不是一个结构），
-   所以间距必须由**网格自己**提供：
-     · 行距靠 grid 的 row-gap，不能再让 el-form-item 自带 18px margin-bottom
-       （那是给"竖向堆叠"用的，混进网格里每行高度都不一样 → 看着就"乱"）；
-     · 每个控件都要撑满自己的格子：el-input 默认撑满，但 el-select / el-input-number
-       是**内容宽度**，不显式写 100% 就会缩成一小截（Doris 的分桶数/副本数最明显）。 */
-.form-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  align-items: start;
-  gap: 12px 16px;
-  padding: 14px;
-  background: var(--dc-bg-card);
-  border: 1px solid var(--dc-border-soft);
-  border-radius: 10px;
+/* ===== 基本信息：与字段表**同一张两列表**（编辑页就是这么做的） =====
+   左列是「项目」（读作行标题，180px），右列是「值」；表头浅底、行高、网格线
+   全部与字段表共用一套 —— 所以两个页签看起来是一张表切换了内容，而不是两种控件。 */
+.tab-inner.basic-tab { padding: 0; }
+/* 左列要盖掉字段表那条"首列居中"（那条是给 # 序号列用的，会连带把「项目」也居中），
+   padding 同理：字段表给首列设了 4px，这里必须 !important 才能压回 9px（与表头对齐）。 */
+.basic-table tbody td:first-child,
+.basic-table thead tr:last-child th:first-child { text-align: left; }
+.basic-table td.basic-label {
+  font-size: 12.5px;
+  color: var(--dc-text-mid);
+  padding-left: 9px !important;
+  white-space: nowrap;
 }
-.form-grid .grid-item { min-width: 0; }
-.form-grid :deep(.el-form-item) { margin-bottom: 0; }
-.form-grid :deep(.el-form-item__label) {
-  font-size: 12px; font-weight: 500; color: var(--dc-text-dim);
-  line-height: 18px; margin-bottom: 4px; padding: 0;
-}
-.form-grid :deep(.el-input),
-.form-grid :deep(.el-select),
-.form-grid :deep(.el-input-number) { width: 100%; }
+.basic-table tbody td:not(:first-child) { padding-left: 9px !important; padding-right: 9px !important; }
+/* 值列的控件撑满整格（el-select / el-input-number 默认是内容宽度） */
+.basic-table :deep(.el-select),
+.basic-table :deep(.el-input-number) { width: 100%; }
 /* 字段表末列（操作）：表头与内容都居中 */
 .field-table thead tr:last-child th:last-child { text-align: center; }
 </style>

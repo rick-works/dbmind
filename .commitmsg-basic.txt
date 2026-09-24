@@ -1,0 +1,25 @@
+新建表「基本信息」改成与编辑表结构同一张两列表（不再用网格卡片）
+
+反馈：基本信息样式还是乱的（标签有的在上有的是在左、控件宽度不齐、整体散）。
+
+根因：方向就错了。编辑页的基本信息**不是网格**，而是**和字段表同一张两列表**
+（`<table class="field-table basic-table">`：左列「项目」180px、右列「值」，
+同一张卡、同一套表头浅底 + 横竖网格线 + 29px 紧凑行）。上一版我按 `form-grid`
+那套网格去写，每个字段各自一个 `<el-form class="grid-item">`、标签与控件各占一格 ——
+行与行高度不齐、el-select/el-input-number 又是内容宽度 → 看着就是散的。
+
+改法：整块换成与编辑页相同的结构：
+  · `<div class="tab-inner basic-tab">` + `.field-table-wrap` + `field-table basic-table`
+    + colgroup(180px / auto) + thead「项目 / 值」，一个字段一行（Doris 四项与
+    引擎/字符集/排序规则都在行里，v-if 条件原样保留）；
+  · 带 35px 的 thead-spacer 空行 —— 页签就住在那一行（与字段表的几何一致）；
+  · 左列要盖掉字段表那条"首列居中"（那条是给 # 序号列用的），并把它给首列设的 4px
+    内边距用 !important 压回 9px（否则行标签比表头「项目」往左偏）；
+  · 值列的 el-select / el-input-number 撑满整格；el-input 本来就会撑满。
+  · 顺手删掉已无人使用的 `.form-grid` / `.grid-item` 规则，并在旧皮肤那段加一句说明：
+    真正生效的是下面那段覆盖层，改外观别改这里。
+
+另外：基本信息这段与上一版的"默认值"改动不冲突 —— 引擎/字符集/排序规则照旧由 watch 填默认。
+
+验证：npm run build 通过；guard 通过（词典 zh/en 2910 平衡）；
+     产物里能查到 basic-table 规则。
