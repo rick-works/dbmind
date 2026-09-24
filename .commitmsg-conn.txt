@@ -1,0 +1,26 @@
+修复「新建数据源 → 文件型」两处问题：浏览按钮不能浏览 + 提示牛头不对马嘴
+
+现象（SQLite 新建数据源）：
+  1. 点「浏览」只弹一句「请直接输入文件绝对路径，例如 /Users/name/data.db」—— 按钮形同虚设
+  2. 点「保存」弹「请输入用户名」—— 可 SQLite 根本没有账号密码
+
+原因：
+  1. pickFile 从来就只是一句提示，没实现选择
+  2. doSave 的账号密码校验漏了 isFileType：文件型也走「必须有用户名」那条分支；
+     同一处还缺「必须有文件路径」的校验 —— 于是能保存出一个没有文件路径的连接，
+     点连接才报错（报错点离出错点越远越难查）
+
+改动：
+- 新增数据库文件选择弹窗：复用后端 GET /api/backup/browse-files（它本来就是通用的目录浏览：
+  空路径给盘符列表、真实目录给 dirs/files/parent/home），逐级进入、点文件即选中；
+  起点依次是 输入框里已有的目录 → 用户主目录 → 盘符列表
+- doSave：文件型补上「必须有文件路径」；账号密码校验加上 !isFileType
+- 文件路径输入框补 placeholder；cd.filePathHint 改成同时给 Windows 与 macOS/Linux 的例子
+  （原来只写 /Users/name/data.db，Windows 用户照着填只会更迷惑）
+- 文案：复用 bkp.goUp / bkp.emptyDir / bkp.browseFailed，新增 cd.pickTitle / cd.needFilePath
+  （两种语言都加，守卫核对 zh 2909 / en 2909 仍然平衡）
+
+验证：
+- npm run build 通过、guard 通过
+- 后端接口实测：path=C:\Users\Rick\.dbmind 能列出 backups/drivers/… 与 dbmind.db；
+  空路径返回 C:\ 与 D:\ —— 选择器拿到的就是可直接交给 JDBC 的绝对路径

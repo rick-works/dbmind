@@ -73,7 +73,7 @@
           <template v-if="isFileType">
             <el-form-item :label="$t('cd.dbFile')" required>
               <div class="file-picker">
-                <el-input v-model="form.filePath" />
+                <el-input v-model="form.filePath" :placeholder="$t('cd.filePathHint')" />
                 <el-button :icon="FolderOpened" @click="pickFile">{{ $t('cd.browse') }}</el-button>
                 <el-button :icon="DocumentAdd" @click="form.filePath = ''">{{ $t('common.new') }}</el-button>
               </div>
@@ -269,14 +269,39 @@
 
     <!-- 数据源选择器（更换类型时使用） -->
     <DataSourcePicker v-model="pickerVisible" @selected="onTypePicked" />
+
+    <!-- 数据库文件选择：点「浏览」打开。由后端列目录（与「备份还原」用的是同一个接口），
+         逐级进入、点文件即选中 —— Web 壳拿不到系统文件对话框，这是唯一能拿到
+         **真实绝对路径**（也就能直接给 JDBC 用）的办法。 -->
+    <el-dialog v-model="pickerOpen" :title="$t('cd.pickTitle')" width="540px" append-to-body>
+      <div class="path-picker">
+        <div class="pp-head">
+          <span class="pp-up" :class="{ disabled: !pickerPath }" @click="pickerPath && browseInto(pickerParent)">
+            <el-icon><ArrowUp /></el-icon><span>{{ $t('bkp.goUp') }}</span>
+          </span>
+          <span class="pp-cur" :title="pickerPath">{{ pickerPath }}</span>
+        </div>
+        <div v-loading="pickerLoading" class="pp-list">
+          <div v-for="d in pickerDirs" :key="'d_' + d" class="pp-item" @click="browseInto(joinPath(d))">
+            <el-icon><Folder /></el-icon><span>{{ d }}</span>
+          </div>
+          <div v-for="f in pickerFiles" :key="'f_' + f" class="pp-item file" @click="chooseFile(f)">
+            <el-icon><Document /></el-icon><span>{{ f }}</span>
+          </div>
+          <div v-if="!pickerLoading && !pickerDirs.length && !pickerFiles.length" class="pp-empty">
+            {{ $t('bkp.emptyDir') }}
+          </div>
+        </div>
+      </div>
+    </el-dialog>
   </el-dialog>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { FolderOpened, DocumentAdd, Connection, WarningFilled, CircleCheckFilled, Plus, Delete, Refresh, Link } from '@element-plus/icons-vue'
-import { saveConnection, testConnection, getConnectionById, getDriverTypes, getDriverStatus } from '../../api'
+import { FolderOpened, DocumentAdd, Connection, WarningFilled, CircleCheckFilled, Plus, Delete, Refresh, Link, ArrowUp, Folder, Document } from '@element-plus/icons-vue'
+import { saveConnection, testConnection, getConnectionById, getDriverTypes, getDriverStatus, browseBackupDirs } from '../../api'
 import { connErrorHintText } from '../../utils/connErrors'
 import { t } from '../../utils/i18n'
 import { byType, labelOf } from '../../types'
@@ -533,8 +558,15 @@ const doSave = async () => {
   if (!form.value.environment) return ElMessage.warning(t('cd.needGroup'))
   if (!isFileType.value && !form.value.host && !form.value.jdbcUrl) return ElMessage.warning(t('cd.needHost'))
   if (!isFileType.value && !form.value.port && !form.value.jdbcUrl) return ElMessage.warning(t('cd.needPort'))
-  // Windows 集成认证使用系统 / Kerberos 身份，不强制账号密码
-  if (!hideCredentials.value && !isWindowsAuth.value) {
+  // 文件型没有主机/端口，但**必须有文件路径**：以前这里漏了，于是能保存出一个没有文件路径的连接，
+  // 点连接才报错 —— 报错点离出错点越远越难查。
+  if (isFileType.value && !String(form.value.filePath || '').trim()) {
+    return ElMessage.warning(t('cd.needFilePath'))
+  }
+  // Windows 集成认证使用系统 / Kerberos 身份，不强制账号密码；
+  // 文件型（SQLite / H2 / Derby …）根本没有账号密码 —— 这里以前漏了 isFileType，
+  // 于是 QLite 也会弹「请输入用户名」（用户看到的就是一句牛头不对马嘴的提示）。
+  if (!hideCredentials.value && !isWindowsAuth.value && !isFileType.value) {
     if (!form.value.username) return ElMessage.warning(t('cd.needUser'))
     // 编辑已有连接时口令留空 = 沿用已保存的那份（详情接口不再回传明文，见后端 sanitize）
     if (!form.value.password && !hasSavedPassword.value) return ElMessage.warning(t('cd.needPassword'))
@@ -551,9 +583,60 @@ const doSave = async () => {
   saving.value = false
 }
 
-// 文件选择：引导用户输入路径
-const pickFile = () => {
-  ElMessage.info(t('cd.filePathHint'))
+// ========== 数据库文件选择 ==========
+
+// 为什么不用系统文件对话框：这是 Web 壳 —— 浏览器拿不到真实路径，也看不到磁盘上的文件。
+// 由后端列目录，用户点一个文件，拿到的就是**能直接交给 JDBC 的绝对路径**。
+const pickerOpen = ref(false)
+const pickerLoading = ref(false)
+const pickerPath = ref('')
+const pickerParent = ref('')
+const pickerDirs = ref([])
+const pickerFiles = ref([])
+
+/** 把列表项拼成路径：空路径时那一项本身就是盘符（如 C:\）。 */
+const joinPath = (name) => {
+  const base = String(pickerPath.value || '')
+  if (!base) return name
+  const sep = base.includes('\\') ? '\\' : '/'
+  return base.endsWith(sep) ? base + name : base + sep + name
+}
+
+const browseInto = async (path) => {
+  pickerLoading.value = true
+  try {
+    const r = await browseBackupDirs(path || '')
+    pickerPath.value = r?.path || ''
+    pickerParent.value = r?.parent || ''
+    pickerDirs.value = r?.dirs || []
+    pickerFiles.value = r?.files || []
+    if (r && r.exists === false) ElMessage.warning(t('bkp.browseFailed', { detail: path }))
+  } catch (e) {
+    ElMessage.error(t('bkp.browseFailed', { detail: e.message || e }))
+  }
+  pickerLoading.value = false
+}
+
+const pickFile = async () => {
+  pickerOpen.value = true
+  // 起点：输入框里已经写着的目录 → 用户主目录 → 磁盘/根列表
+  const current = String(form.value.filePath || '').trim()
+  const dir = current.replace(/[\\/][^\\/]*$/, '')
+  if (dir && dir !== current) {
+    await browseInto(dir)
+    if (pickerDirs.value.length || pickerFiles.value.length) return
+  }
+  try {
+    const root = await browseBackupDirs('')
+    await browseInto(root?.home || '')
+  } catch {
+    await browseInto('')
+  }
+}
+
+const chooseFile = (name) => {
+  form.value.filePath = joinPath(name)
+  pickerOpen.value = false
 }
 
 // ========== 常用参数预设 / 批量粘贴 ==========
@@ -693,6 +776,17 @@ const importPastedParams = () => {
 .form-row .el-form-item { margin-right: 0; margin-bottom: 18px; }
 .form-row .el-form-item__label { padding-bottom: 6px; }
 .file-picker { display: flex; gap: 8px; width: 100%; }
+/* 数据库文件选择弹窗：与「备份还原」的目录浏览同风格，列表固定高度自己滚 */
+.path-picker { display: flex; flex-direction: column; gap: 8px; }
+.pp-head { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.pp-up { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; color: var(--dc-accent); }
+.pp-up.disabled { color: var(--el-text-color-disabled); cursor: default; }
+.pp-cur { color: var(--el-text-color-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-list { height: 320px; overflow: auto; border: 1px solid var(--el-border-color); border-radius: 6px; padding: 4px; }
+.pp-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+.pp-item:hover { background: var(--el-fill-color-light); }
+.pp-item.file { color: var(--el-text-color-regular); }
+.pp-empty { padding: 12px; text-align: center; color: var(--el-text-color-secondary); font-size: 13px; }
 .form-tip { margin-left: 10px; font-size: 13px; color: var(--el-text-color-secondary); }
 .auth-hint { margin-bottom: 18px; }
 .env-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
