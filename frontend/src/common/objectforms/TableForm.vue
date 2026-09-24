@@ -103,7 +103,15 @@
             <el-button size="small" :icon="Bottom" :disabled="!cols.length" :title="$t('tf.moveDownTip')" @click="move(1)">{{ $t('tf.moveDown') }}</el-button>
             <el-button size="small" type="primary" :icon="Plus" @click="addColumn">{{ $t('tf.addColumn') }}</el-button>
           </div>
-          <div class="field-table-wrap">
+          <!-- 空状态：与「索引」页签、与编辑页同一张虚线卡（.empty-card 一套样式）。
+               不再用"一行表头 + 一大片空白"撑场面。 -->
+          <div v-if="!cols.length" class="empty-card">
+            <el-icon :size="30" class="empty-card-icon"><Grid /></el-icon>
+            <div class="empty-card-title">{{ $t('tf.noFields') }}</div>
+            <div class="empty-card-text">{{ $t('tf.noFieldsHint') }}</div>
+            <el-button size="small" type="primary" :icon="Plus" @click="addColumn">{{ $t('tf.addColumn') }}</el-button>
+          </div>
+          <div v-else class="field-table-wrap">
             <table class="field-table">
               <!-- 列宽必须写在 colgroup 里，**不能只靠表头那行的 style**：
                    表头第一行是 35px 空行（一个 colspan 全列的 th），固定布局只认
@@ -172,9 +180,6 @@
                   <td v-if="showComment"><el-input v-model="c.comment" size="small" /></td>
                   <td class="c-center"><el-button text size="small" :icon="Delete" class="dc-del" @click="removeColumn(i)" /></td>
                 </tr>
-                <tr v-if="!cols.length">
-                  <td :colspan="headSpan" class="empty-row">{{ $t('tf.noColumns') }}</td>
-                </tr>
               </tbody>
             </table>
           </div>
@@ -187,7 +192,15 @@
           <div class="card-actions">
             <el-button size="small" type="primary" :icon="Plus" @click="addIndex">{{ $t('tf.addIndex') }}</el-button>
           </div>
-          <el-table :data="idxs" size="small" :empty-text="$t('tf.noIndexes')">
+          <!-- 空状态：与「字段定义」页签、与编辑页同一张虚线卡（.empty-card 一套样式）。
+               索引这里尤其明显 —— 一行表头 + 一大片空白最难看。 -->
+          <div v-if="!idxs.length" class="empty-card">
+            <el-icon :size="30" class="empty-card-icon"><DocumentCopy /></el-icon>
+            <div class="empty-card-title">{{ $t('tdet.noIndex') }}</div>
+            <div class="empty-card-text">{{ $t('tdet.noIndexHint') }}</div>
+            <el-button size="small" type="primary" :icon="Plus" @click="addIndex">{{ $t('tf.addIndex') }}</el-button>
+          </div>
+          <el-table v-else :data="idxs" size="small" :empty-text="$t('tf.noIndexes')">
             <el-table-column :label="$t('tf.idxName')" min-width="140">
               <template #default="{ row }"><el-input v-model="row.name" size="small" /></template>
             </el-table-column>
@@ -223,7 +236,7 @@
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Delete, Top, Bottom } from '@element-plus/icons-vue'
+import { Plus, Delete, Top, Bottom, Grid, DocumentCopy } from '@element-plus/icons-vue'
 import { has, qt, sq, buildType, ddlStyleOf, uid } from './objectFormUtils'
 import { t } from '../../utils/i18n'
 
@@ -664,7 +677,26 @@ emit('sql', genSql())
 .field-table tbody tr.sel-row:hover { background: rgba(79, 140, 255, .22) !important; }
 .field-table tbody tr.pk-row.sel-row { background: rgba(79, 140, 255, .2) !important; }
 .field-table tbody tr.ok-row.sel-row { background: rgba(103, 194, 58, .18) !important; box-shadow: inset 2px 0 0 var(--dc-success); }
-.empty-row { text-align: center; color: var(--dc-text-dim); padding: 18px 0 !important; font-size: 13px; cursor: default; }
+/* ===== 空状态卡：字段 / 索引**共用这一套** =====
+   编辑页那张虚线卡（.idx-empty）的同款；放在这里是为了让新建表的两个页签空状态
+   长得完全一样 —— 两处各写一套，早晚会不一致（之前就是：索引是空表格、字段是一行文字）。
+   改这里时请对照 TableDetailView.vue 的 .idx-empty 一起改。 */
+.empty-card {
+  flex: 1;
+  min-height: 0;
+  margin: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px dashed var(--dc-border);
+  border-radius: 8px;
+  background: var(--dc-bg-card);
+}
+.empty-card-icon { color: var(--dc-text-dim); opacity: .65; }
+.empty-card-title { font-size: 13.5px; font-weight: 600; color: var(--dc-text-mid); }
+.empty-card-text { font-size: 12.5px; color: var(--dc-text-dim); margin-bottom: 8px; }
 /* （原"每字段一个 el-form 的网格"那套规则已随标记一起去掉：
      基本信息现在是 .field-table.basic-table 两列表，规则见上面的 basic-table 段。） */
 .dc-del { color: var(--dc-text-dim); }

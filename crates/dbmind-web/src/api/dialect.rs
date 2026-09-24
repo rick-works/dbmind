@@ -390,9 +390,18 @@ impl Dialect {
                  where nspname not like 'pg\\_%' and nspname <> 'information_schema' order by nspname"
                     .to_string(),
             ),
+            // SQL Server：除了 guest / sys / INFORMATION_SCHEMA，还要滤掉**九个固定数据库角色的同名
+            // schema**（db_owner、db_accessadmin、db_backupoperator、db_datareader、db_datawriter、
+            // db_ddladmin、db_denydatareader、db_denydatawriter、db_securityadmin）。
+            // 每个固定角色在库里都对应一个空 schema，SQL Server 建库时自动带上 —— 它们不是给用户
+            // 建表用的，列在树里就是九行永远空的噪音（实测用户截图里正是这九个）。
+            // `dbo` 要留着：它是正常的默认 schema（用户建的表大多在它下面）。
             "sqlserver" => Meta::Sql(
                 "select name from sys.schemas \
-                 where name not in ('guest','sys','INFORMATION_SCHEMA') order by name"
+                 where name not in ('guest','sys','INFORMATION_SCHEMA', \
+                   'db_owner','db_accessadmin','db_backupoperator','db_datareader','db_datawriter', \
+                   'db_ddladmin','db_denydatareader','db_denydatawriter','db_securityadmin') \
+                 order by name"
                     .to_string(),
             ),
             // 其余类型的 schemaLevel 在前端就是 'none'，树不会请求它；返回空数组是事实。
