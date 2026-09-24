@@ -45,11 +45,11 @@
           <el-button v-if="running" size="small" type="danger" @click="stopSql">
             <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('sqlq.stop') }} </el-button>
           <el-button v-else size="small" type="primary" @click="() => runSql()"
-                     :title="hasEditorSelection ? `执行选中的 ${selChars} 个字符` : $t('shortcut.query.runAll.label')">
-            <el-icon style="margin-right:4px"><CaretRight /></el-icon>{{ hasEditorSelection ? '执行选中' : '执行' }}
+                     :title="hasEditorSelection ? $t('sqlq.runSelTitle', { n: selChars }) : $t('shortcut.query.runAll.label')">
+            <el-icon style="margin-right:4px"><CaretRight /></el-icon>{{ hasEditorSelection ? $t('sqlq.runSel') : $t('evf.everyRun') }}
           </el-button>
           <el-button v-if="!isNoSql" size="small" :icon="Brush" @click="formatSql"
-                     :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')">{{ hasEditorSelection ? '格式化选中' : '格式化' }}</el-button>
+                     :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')">{{ hasEditorSelection ? $t('sqlq.fmtSel') : $t('sce.format') }}</el-button>
           <!-- SQL 执行历史：本地保存最近执行的 SQL，一键回填复用 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
             <el-button size="small" :icon="Clock" :title="$t('sqlq.history')">历史</el-button>
@@ -61,7 +61,7 @@
               <div class="hist-list" v-if="historyList.length">
                 <div class="hist-item" v-for="(h, i) in historyList" :key="h.id" @click="applyHistory(h)">
                   <div class="hist-meta">
-                    <span class="hist-db">{{ h.db || '默认库' }}</span>
+                    <span class="hist-db">{{ h.db || $t('sqlq.defaultDb') }}</span>
                     <span class="hist-time">{{ formatHistTime(h.ts) }}</span>
                     <span class="hist-cost" v-if="h.cost">{{ h.cost }}ms</span>
                   </div>
@@ -160,12 +160,12 @@
 
     <div class="result-area" v-if="resultVisible">
       <div class="result-head">
-        <span class="result-title">{{ showResultTabs ? ('结果集 ' + resultItems.length) : '结果' }}</span>
+        <span class="result-title">{{ showResultTabs ? ('结果集 ' + resultItems.length) : $t('sqlq.result') }}</span>
         <span class="flex-spacer"></span>
         <span v-if="loading" class="loading-text"><el-icon class="is-loading"><Loading /></el-icon> {{ $t('sqlq.running') }}</span>
         <el-dropdown trigger="click" :hide-on-click="false" popper-class="col-vis-dropdown">
           <el-button size="small" text :icon="Operation"
-                     :title="`选择显示字段（${resultVisibleCols.length}/${(result.columns || []).length}）`" />
+                     :title="$t('sqlq.visibleColsTitle', { shown: resultVisibleCols.length, total: (result.columns || []).length })" />
           <template #dropdown>
             <div class="col-vis" @mousedown.stop>
               <div class="col-vis-head">
@@ -285,12 +285,12 @@
           <div class="error-head">
             <div class="error-head-left">
               <el-icon class="error-icon"><CircleCloseFilled /></el-icon>
-              <span class="error-title">{{ isNoSql ? '命令执行失败' : 'SQL 执行失败' }}</span>
+              <span class="error-title">{{ isNoSql ? $t('sqlq.cmdFailed') : $t('sqlq.sqlFailed') }}</span>
               <span class="error-time" v-if="result.executeTime">耗时 {{ result.executeTime }}ms</span>
             </div>
             <el-button v-if="!isNoSql" size="small" type="primary" :icon="MagicStick" :loading="aiFixLoading" @click="askAiFix">{{ $t('sqlq.aiFix') }}</el-button>
           </div>
-          <div class="error-message">{{ result.message || '未知错误' }}</div>
+          <div class="error-message">{{ result.message || $t('common.unknownError') }}</div>
         </div>
         <el-empty v-else :description="(result && result.affectedRows >= 0 && result.message) ? result.message : $t('sqlq.noResult')" />
         <div v-if="result?.success && result?.rows?.length" class="result-footer">
@@ -1754,7 +1754,7 @@ const copyResCtx = (mode) => {
     const esc = (s) => /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
     const lines = [cols.map(esc).join(',')]
     for (const r of rows) lines.push(cols.map(c => esc(val(r, c))).join(','))
-    writeClipboard(lines.join('\n'), `已复制 CSV（${rows.length} 行）`)
+    writeClipboard(lines.join('\n'), t('sqlq.copyCsv', { n: rows.length }))
     return
   }
   if (mode === 'json') {
@@ -1763,12 +1763,12 @@ const copyResCtx = (mode) => {
       for (const c of cols) o[c] = r[c] === undefined ? null : r[c]
       return o
     })
-    writeClipboard(JSON.stringify(obj.length === 1 ? obj[0] : obj, null, 2), `已复制 ${rows.length} 行 JSON`)
+    writeClipboard(JSON.stringify(obj.length === 1 ? obj[0] : obj, null, 2), t('sqlq.copyJson', { n: rows.length }))
     return
   }
   if (mode === 'insert') {
     const text = rows.map(r => `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(c => resSqlVal(r[c])).join(', ')});`).join('\n')
-    writeClipboard(text, `已复制 ${rows.length} 条 INSERT（表名：${table}）`)
+    writeClipboard(text, t('sqlq.copyInsert', { n: rows.length, table: table }))
     return
   }
   if (mode === 'update') {
@@ -1778,7 +1778,7 @@ const copyResCtx = (mode) => {
       const whereClause = cols.map(c => `${c} = ${resSqlVal(r[c])}`).join(' AND ')
       return `UPDATE ${table} SET ${setClause} WHERE ${whereClause};`
     }).join('\n')
-    writeClipboard(text, `已复制 ${rows.length} 条 UPDATE（表名：${table}，请核对 WHERE）`)
+    writeClipboard(text, t('sqlq.copyUpdate', { n: rows.length, table: table }))
   }
 }
 const copyResMarkdown = () => {
@@ -1788,7 +1788,7 @@ const copyResMarkdown = () => {
   const head = `| ${cols.map(esc).join(' | ')} |`
   const sep = `| ${cols.map(() => '---').join(' | ')} |`
   const body = rows.map(r => `| ${cols.map(c => esc(r[c] == null ? '' : r[c])).join(' | ')} |`)
-  writeClipboard([head, sep, ...body].join('\n'), `已复制 Markdown（${rows.length} 行）`)
+  writeClipboard([head, sep, ...body].join('\n'), t('sqlq.copyMarkdown', { n: rows.length }))
 }
 // 结果集没有主键信息，用选中列做 WHERE，复制后请自行核对
 const copyResDelete = () => {
@@ -1796,7 +1796,7 @@ const copyResDelete = () => {
   if (!rows.length || !cols.length) return
   const table = guessTableName()
   const sql = rows.map(r => `DELETE FROM ${table} WHERE ${cols.map(c => `${c} = ${resSqlVal(r[c])}`).join(' AND ')};`).join('\n')
-  writeClipboard(sql, `已复制 ${rows.length} 条 DELETE（表名：${table}，请核对 WHERE）`)
+  writeClipboard(sql, t('sqlq.copyDelete', { n: rows.length, table: table }))
 }
 // 复制表头（列名）：有选中的列就复制选中的，否则复制右键那一列。
 // 多列用制表符分隔 —— 与 Excel 一致，粘到 Excel 里是横向多个单元格（不是一整串文本）
@@ -1804,7 +1804,7 @@ const copyColHeader = () => {
   const picked = resultVisibleCols.value.filter(c => selectedCols.value.has(c.name)).map(c => c.name)
   const names = picked.length ? picked : (resCtx.value.col ? [resCtx.value.col] : [])
   if (!names.length) return
-  writeClipboard(names.join('\t'), names.length > 1 ? `已复制 ${names.length} 个列名` : `已复制列名 ${names[0]}`)
+  writeClipboard(names.join('\t'), names.length > 1 ? t('sqlq.copyColNamesN', { n: names.length }) : t('sqlq.copyColNameOne', { name: names[0] }))
 }
 
 const hideResultColumn = (name) => {
@@ -2620,7 +2620,7 @@ const showBatchResult = (b) => {
     showSingleResult(b || { columns: [], rows: [], success: false, message: t('ai.runFailed'), executeTime: 0 })
     return
   }
-  resultItems.value = results.map((r, i) => ({ label: `结果 ${i + 1}`, res: r }))
+  resultItems.value = results.map((r, i) => ({ label: t('sqlq.resultN', { n: i + 1 }), res: r }))
   activeResultIdx.value = 0
   result.value = results[0]
   // 编辑器文本含多段但实际仅拆出单段（例程块 / 注释等）：按单结果做收尾提示
@@ -2827,7 +2827,7 @@ const doSaveScript = (nameOverride, silent = false) => {
   emit('dirty-change', false)
   emit('save', name)
   if (closeSaveResolve) { closeSaveResolve(true); closeSaveResolve = null }
-  if (!silent) ElMessage.success(`脚本已保存到「${db}」的 Scripts`)
+  if (!silent) ElMessage.success(t('sqlq.scriptSaved', { db: db }))
   notifyScriptsChanged()
   return true
 }

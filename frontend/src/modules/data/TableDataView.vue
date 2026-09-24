@@ -12,9 +12,9 @@
         <el-button v-if="hasChanges && !readOnly" size="small" type="primary" :icon="Check" @click="saveChanges">{{ $t('common.save') }}</el-button>
         <el-button v-if="hasChanges && !readOnly" size="small" text @click="revertChanges">{{ $t('tdv.revert') }}</el-button>
         <el-button v-if="!readOnly" size="small" text :icon="Plus" :title="$t('shortcut.data.addRow.label')" @click="addRow" />
-        <el-button v-if="!readOnly" size="small" text :icon="Minus" :title="selectedSet.size ? `删除选中行 (${selectedSet.size})` : $t('tdv.deleteRow')" :disabled="!selectedSet.size" @click="removeSelectedRows" />
+        <el-button v-if="!readOnly" size="small" text :icon="Minus" :title="selectedSet.size ? $t('tdv.deleteRowsN', { n: selectedSet.size }) : $t('tdv.deleteRow')" :disabled="!selectedSet.size" @click="removeSelectedRows" />
         <el-dropdown trigger="click" :hide-on-click="false" popper-class="col-vis-dropdown">
-          <el-button size="small" text :icon="Operation" :title="`选择显示字段（${visibleColumns.length}/${columns.length}）`" />
+          <el-button size="small" text :icon="Operation" :title="$t('sqlq.visibleColsTitle', { shown: visibleColumns.length, total: columns.length })" />
           <template #dropdown>
             <div class="col-vis" @mousedown.stop>
               <div class="col-vis-head">
@@ -93,7 +93,7 @@
       <div v-if="loading" class="grid-loading-overlay">
         <div class="grid-loading-box">
           <el-icon class="is-loading" :size="26"><Loading /></el-icon>
-          <span class="grid-loading-text">{{ running ? '查询中…' : '处理中…' }}</span>
+          <span class="grid-loading-text">{{ running ? $t('sqlq.querying') : $t('busy.working') }}</span>
           <el-button v-if="running" size="small" @click="cancelLoad">
             <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('tree.multiCancel') }} </el-button>
         </div>
@@ -221,7 +221,7 @@
       <!-- 分页栏：与表格整合在同一个容器底部 -->
       <div class="pager">
         <span class="load-time">
-          {{ loading ? formatElapsed(elapsedTime) + ' (查询中…)' : (elapsedTime > 0 ? formatElapsed(elapsedTime) : '') }}
+          {{ loading ? formatElapsed(elapsedTime) + $t('tdv.queryingSuffix') : (elapsedTime > 0 ? formatElapsed(elapsedTime) : '') }}
           <span v-if="hasChanges" class="change-tip">{{ $t('tdv.unsavedChanges') }}</span>
         </span>
         <!-- 选中区汇总（与 SQL 结果表底栏同一套做法）：框选单元格 / 选中整行 / 选中整列时给出
@@ -1085,7 +1085,7 @@ const openCtxMenu = (x, y, row, col, from = 'cell') => {
         { label: t('tdv.insertBelow'), command: 'insert-below' }
       ] })
       // 「设为 NULL」只属于单元格操作，放在单元格菜单里，不要在行菜单出现
-      items.push({ label: `删除选中行 (${n})`, command: 'delete-selected' })
+      items.push({ label: t('tdv.deleteRowsN', { n: n }), command: 'delete-selected' })
     }
     sep()
     items.push({ label: t('tdv.hideRows'), command: 'hide-rows' })
@@ -1222,12 +1222,12 @@ const copyCtx = (mode) => {
     const esc = (s) => /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
     const lines = [cols.map(esc).join(',')]
     for (const r of rows) lines.push(cols.map(c => esc(r[c] == null ? '' : String(r[c]))).join(','))
-    writeClipboard(lines.join('\n'), `已复制 CSV（${rows.length} 行）`)
+    writeClipboard(lines.join('\n'), t('sqlq.copyCsv', { n: rows.length }))
     return
   }
   if (mode === 'insert') {
     const sql = rows.map(r => `INSERT INTO ${table} (${colList}) VALUES (${cols.map(c => sqlVal(r[c])).join(', ')});`).join('\n')
-    writeClipboard(sql, `已复制 ${rows.length} 条 INSERT`)
+    writeClipboard(sql, t('tdv.copyInsert', { n: rows.length }))
     return
   }
   if (mode === 'update') {
@@ -1248,7 +1248,7 @@ const copyCtx = (mode) => {
       for (const c of cols) o[c] = r[c] === undefined ? null : r[c]
       return o
     })
-    writeClipboard(JSON.stringify(obj.length === 1 ? obj[0] : obj, null, 2), `已复制 ${rows.length} 行 JSON`)
+    writeClipboard(JSON.stringify(obj.length === 1 ? obj[0] : obj, null, 2), t('sqlq.copyJson', { n: rows.length }))
   }
 }
 
@@ -1334,7 +1334,7 @@ const copyColHeader = () => {
   const picked = visibleColumns.value.filter(c => selectedCols.value.has(c))
   const names = picked.length ? picked : (ctxMenu.value.col ? [ctxMenu.value.col] : [])
   if (!names.length) return
-  writeClipboard(names.join('\t'), names.length > 1 ? `已复制 ${names.length} 个列名` : `已复制列名 ${names[0]}`)
+  writeClipboard(names.join('\t'), names.length > 1 ? t('sqlq.copyColNamesN', { n: names.length }) : t('sqlq.copyColNameOne', { name: names[0] }))
 }
 
 const copyMarkdown = () => {
@@ -1344,7 +1344,7 @@ const copyMarkdown = () => {
   const head = `| ${cols.map(esc).join(' | ')} |`
   const sep = `| ${cols.map(() => '---').join(' | ')} |`
   const body = rows.map(r => `| ${cols.map(c => esc(r[c] == null ? '' : r[c])).join(' | ')} |`)
-  writeClipboard([head, sep, ...body].join('\n'), `已复制 Markdown（${rows.length} 行）`)
+  writeClipboard([head, sep, ...body].join('\n'), t('sqlq.copyMarkdown', { n: rows.length }))
 }
 const copyDelete = () => {
   const { rows } = ctxSelection()
@@ -1641,7 +1641,7 @@ const clearSelectedCells = () => {
         if (hit && isWritableRow(hit.row) && hit.row[hit.col] != null) { setCellNull(hit.row, hit.col); n++ }
       }
     }
-    if (n) ElMessage.success(`已清空 ${n} 个单元格`)
+    if (n) ElMessage.success(t('tdv.clearedCells', { n: n }))
     return
   }
   if (activeCell.value && isWritableRow(activeCell.value.row)) setCellNull(activeCell.value.row, activeCell.value.col)
@@ -1662,7 +1662,7 @@ const fillDown = () => {
       if (hit && isWritableRow(hit.row) && applyCellValue(hit.row, hit.col, src == null ? '' : src)) n++
     }
   }
-  ElMessage.success(n ? `已向下填充 ${n} 个单元格` : t('tdv.noFillNeeded'))
+  ElMessage.success(n ? t('tdv.filledCells', { n: n }) : t('tdv.noFillNeeded'))
 }
 // 「剪切」（Ctrl+X）：复制选区 + 清空
 const cutSelection = () => {
@@ -1693,7 +1693,7 @@ const pasteBlock = (text) => {
       if (applyCellValue(row, col, block[ri][ci])) n++
     }
   }
-  ElMessage.success(n ? `已粘贴 ${block.length} 行 × ${block[0].length} 列` : t('tdv.pastedSame'))
+  ElMessage.success(n ? t('tdv.pasted', { rows: block.length, cols: block[0].length }) : t('tdv.pastedSame'))
   ensureActiveVisible()
 }
 // 粘贴事件：焦点在表格内且不在编辑态时接管（Ctrl+V 不拦截，让浏览器把数据交给 paste 事件）
