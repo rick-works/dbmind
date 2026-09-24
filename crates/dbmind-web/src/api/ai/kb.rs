@@ -3,7 +3,8 @@
 //! ## 存储形态（与上游同构，便于互相理解）
 //!
 //! ```text
-//! <home>/ai-knowledge-bases/
+//! 主库 `~/.dbmind/dbmind.db` 的 kb_list / kb_config / kb_docs / kb_vectors 四张表
+//! （老版本是一棵 `ai-knowledge-bases/` 目录树，启动时由 migrate 模块整棵导入后挪走）：
 //!   index.json                  库列表（每个库的 id/名称/文档数/分块数/字数）
 //!   config.json                 全局默认召回与分段配置
 //!   <kbId>/config.json          该库的配置（覆盖全局）

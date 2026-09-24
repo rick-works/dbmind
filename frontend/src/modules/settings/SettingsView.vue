@@ -731,7 +731,7 @@ const usageRange = computed(() => {
  * 两个坑都是实测踩到的：
  * 1. `usage.total` **本身就是总数**（不是 `{calls,…}` 对象），早前读 `total.calls`
  *    永远是 `undefined` ⇒ 界面显示 0，而账本里明明有 12 次调用；
- * 2. 账本（`~/.dbmind/ai-usage.json`）只记「每天调用了几次」，
+ * 2. 账本（主库 dbmind.db 的 ai_usage_days / ai_usage_models 两张表）只记「每天调用了几次」，
  *    「失败次数 / 平均耗时」根本没记 —— 那两张卡只能显示假的 0。
  *    要它们就得先在 `record_usage` 里带上 ok 与耗时（未做，故先换成能算出来的真指标）。
  */
@@ -1081,7 +1081,7 @@ const saveQuery = () => {
 }
 const resetQuery = () => { queryForm.value = { ...queryDefaults }; saveQuery() }
 
-// 驱动下载镜像源：后端持久化于 settings.json，保存后立即生效
+// 驱动下载镜像源：后端持久化于主库 dbmind.db 的 app_settings（driver.mirror），保存后立即生效
 const driverForm = ref({ mirror: 'maven' })
 const loadDriver = async () => {
   try {

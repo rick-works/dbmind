@@ -1382,7 +1382,7 @@ export default {
   'settings.ai.privacyLocal': 'Local / intranet models only',
   'settings.ai.privacyTip': 'With "Local only", external model endpoints are refused (no data leaves the intranet).',
   'settings.ai.audit': 'Call auditing',
-  'settings.ai.auditTip': 'Logs every call to ai-audit.log in the data directory (no raw prompts or API keys).',
+  'settings.ai.auditTip': 'Logs every call to the local dbmind.db (no raw prompts or API keys).',
   'settings.ai.modelFallbackName': 'Model {n}',
   'settings.ai.name': 'Name',
   'settings.ai.namePlaceholder': 'e.g. DeepSeek',

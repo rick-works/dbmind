@@ -64,31 +64,37 @@ dbmind.db-shm     共享内存索引
 
 ---
 
-## 2. AI 相关文件（均在 `~/.dbmind/` 下）
+## 2. AI 相关状态（全部在 `~/.dbmind/dbmind.db` 里）
 
-| 文件 | 内容 | 格式 | 代码 |
-|---|---|---|---|
-| `ai-config.json` | AI 设置：`enabled` / `privacyMode` / `auditEnabled` / `models[]`，**含 `apiKey` 明文** | JSON | `api/ai/config.rs:93-95`（路径）、`:44-90`（结构）、`:143-186`（保存） |
-| `ai-usage.json` | 用量账本：`days{日期→{calls}}` + `models{模型→日期→{calls,promptTokens,completionTokens,totalTokens}}` | JSON | `config.rs:614-616`，写 `:649-696`，读 `:699-769` |
-| `ai-audit.log` | 审计日志，**追加**写：时间 / 类型 / 提示词前 4000 字 | JSONL | `config.rs:772-790` |
-| `ai-knowledge.json` | 团队知识：`{glossary:[],examples:[]}` | JSON | `api/ai/knowledge.rs:30-48` |
-| `ai-quality-rules.json` | 数据质量规则（按 连接/库/表 键存 + savedAt） | JSON | `api/ai/quality.rs:143-163` |
-| `prompts/*.md` | 提示词模板：启动时从内置释放，用户可编辑 | Markdown | `api/ai/prompts.rs:77-100` |
+这些原来各是一个 json 文件（`ai-config.json` / `ai-usage.json` / `ai-knowledge.json` /
+`ai-quality-rules.json` / `ai-audit.log`），外加一棵知识库目录树（`ai-knowledge-bases/`）。
+现在整批收进主库：可事务、可查询、备份时不会漏。
 
-### 知识库目录 `~/.dbmind/ai-knowledge-bases/`
+**老文件由启动时的一次性迁移导入**（`api/ai/migrate.rs`）：只在「库里没有这份数据」且
+「老文件还在」时才导，导完把老文件挪到 `backups/legacy-json/` —— 不挪走的话，
+用户在新界面里删掉一条，重启又会被老文件"复活"。
 
-**每个文档一个文件**，不是单库单文件：
+| 表 | 存什么 | 代码 |
+|---|---|---|
+| `ai_settings` + `ai_models` | AI 设置：`enabled` / `privacy_mode` / `audit_enabled` + 模型端点（按 `ordinal` 保序），**含 `api_key` 明文** | `config.rs` |
+| `ai_usage_days` | 用量账本：每天的总调用次数 | `config.rs` |
+| `ai_usage_models` | 用量账本：模型 × 日期 的次数与 token（`prompt` / `completion` / `total`） | `config.rs` |
+| `ai_audit` | 审计日志：时间 / 类型 / 提示词前 4000 字（带时间索引） | `config.rs::audit` |
+| `ai_glossary` | 团队术语表（上限 200 条） | `api/ai/knowledge.rs` |
+| `ai_examples` | 采纳示例（上限 300 条，带 `hits` 召回计数） | `api/ai/knowledge.rs` |
+| `ai_quality_rules` | 数据质量规则：连接+库+表 一条，`rules` 为规则数组 JSON | `api/ai/quality.rs` |
+| `kb_list` | 知识库列表与统计（文档数 / 分块数 / 字数） | `api/ai/kb.rs` |
+| `kb_config` | 知识库配置；`kb_id` 为空串 = 全局默认 | `api/ai/kb.rs` |
+| `kb_docs` | 文档：原文 + 父块 + 子块 | `api/ai/kb.rs` |
+| `kb_vectors` | 文档的块向量，**BLOB 存小端 f32** | `api/ai/kb.rs` |
 
-```
-ai-knowledge-bases/
-  index.json                       所有知识库元数据 [KbInfo]      kb.rs:220-232
-  config.json                      全局默认库配置                  kb.rs:242
-  <kb_id>/config.json              单库配置                        kb.rs:250-256
-  <kb_id>/docs/<doc_id>.json       文档正文 + 分块                 kb.rs:258-287
-  <kb_id>/vectors/<doc_id>.json    向量（embedding）               kb.rs:289-302
-```
-
-`kb_id` 只允许 `[A-Za-z0-9_-]`（`safe_id`，`kb.rs:203-214`），避免路径穿越。
+> **为什么向量单独用 BLOB**：JSON 得把 `0.123456789` 逐位写成文本，同样的数字占好几倍
+> 空间、解析还慢。父块与分块则保持 JSON 文本 —— 它们是**整体读写**的，拆成"一块一行"
+> 只会把一次读写变成 N 次往返，换不来任何查询能力。
+>
+> **仍然留在文件里的**：`prompts/*.md`（提示词模板，要能直接用编辑器改）、
+> `drivers/*.jar`（二进制缓存）、`exports/` `backups/` `work/`（产物与流式临时文件）、
+> `logs/` 与 `agent-hosts`（进程 stderr；JVM 要的是一个**文件路径**）。
 
 ---
 
@@ -164,9 +170,9 @@ ai-knowledge-bases/
 
 ## 6. 运维注意点
 
-1. **明文凭据**：`dbmind.db` 的 `connections.password` 与 `ai-config.json` 的 `apiKey` **都是明文**（设计如此，未加密）。整个 `~/.dbmind` 目录不要随意外发；"导出连接"生成的包是**不含口令**的，那个可以直接分享。
+1. **明文凭据**：`dbmind.db` 里 `connections.password` 与 `ai_settings` / `ai_models` 的 `api_key` **都是明文**（设计如此，未加密）。整个 `~/.dbmind` 目录不要随意外发；"导出连接"生成的包是**不含口令**的，那个可以直接分享。
 2. **备份**：先停服，再整体拷贝 `~/.dbmind`；至少要连 `dbmind.db-wal` / `-shm` 一起拷。
-3. **清理磁盘**：占用大头通常是 `dbmind.db`、`exports/`、`backups/`、`work/`、`drivers/`、`logs/`。`ai-audit.log` 是**只增不减**的追加日志，长期使用需要留意。
+3. **清理磁盘**：占用大头通常是 `dbmind.db`、`exports/`、`backups/`、`work/`、`drivers/`、`logs/`。审计记录现在在 `ai_audit` 表里（以前是只增不减的 `ai-audit.log`），长期使用可以直接删旧行：`DELETE FROM ai_audit WHERE time < '2026-01-01'`。
 4. **迁移**：设 `DBMIND_HOME` 指向新目录即可，所有文件跟着走。
 5. **排查"某个设置有没生效"**：多半在 `dbmind.db` 的 `app_settings`，或前端的 `localStorage`（前缀 `dbmind_` / `dc_` / `dbmind.`）。
 
@@ -174,7 +180,8 @@ ai-knowledge-bases/
 
 ## 7. 新增存储点时的约定（给后续改动）
 
-- **后端**：一律落到 `paths::home_dir()` 之下，别写死绝对路径、别写到当前工作目录；拿不准就用现有文件名风格（`ai-*.json` 归 AI 域）。
-- **优先 JSON 单文件**（人工可读、出问题能直接看）；数据量会随用户操作线性增长、或需要查询/分页的，才考虑进 `dbmind.db` 立表。
+- **后端**：一律落到 `paths::home_dir()` 之下，别写死绝对路径、别写到当前工作目录。
+- **默认进主库 `dbmind.db` 立表**（同一份文件、一个事务、一个备份目标；能直接用 SQL 汇总与清理）。只有这几类才留成文件：**必须让用户直接拿走的产物**（`exports/`）、**必须能直接用编辑器改**的（`prompts/*.md`）、**二进制缓存**（`drivers/*.jar`）、**必须是文件路径**的（`agent-hosts`）、以及**流式大文件**（`work/`、`backups/`）。
+- 新增表统一写在 `storage.rs` 的 `SCHEMA` 常量里（全是 `CREATE TABLE IF NOT EXISTS`，没有版本号机制）；行的读写方法也写在 `Store` 上，别在壳层裸写 SQL。
 - **前端**：设置类一律 `localStorage` + `dbmind_` 前缀；会话级（随标签页失效）用 `sessionStorage`；**别引入 cookie**（桌面端不需要、还会带上隐私问题）。
 - **新加键/文件时，顺手在这一份 `STORAGE.md` 里补一行** —— 这份文档的价值全在"全"。

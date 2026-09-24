@@ -1388,7 +1388,7 @@ export default {
   'settings.ai.privacyLocal': '仅本地 / 内网模型',
   'settings.ai.privacyTip': '选「仅本地」时，外部模型地址会被拒绝调用（数据不出内网）',
   'settings.ai.audit': '调用审计',
-  'settings.ai.auditTip': '记录每次调用到数据目录 ai-audit.log（不含提示词原文与密钥）',
+  'settings.ai.auditTip': '记录每次调用到本地主库 dbmind.db（不含提示词原文与密钥）',
   'settings.ai.modelFallbackName': '模型 {n}',
   'settings.ai.name': '名称',
   'settings.ai.namePlaceholder': '如：DeepSeek',
