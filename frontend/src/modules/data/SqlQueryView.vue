@@ -424,7 +424,7 @@
 
   <TaskProgressDialog
     v-model:visible="exportTask.visible"
-    :task-type="$t('qa.exportBtn')"
+    task-kind="export"
     :target-name="props.scriptName || $t('sqlq.queryResult')"
     :status="exportTask.status"
     :done="exportTask.done"
