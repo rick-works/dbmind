@@ -70,6 +70,7 @@ export default {
   'mv.groupNoConns': '分组「{env}」下没有连接',
   'mv.nothingToExport': '没有可导出的连接',
   'mv.exportedConns': '已导出 {n} 条连接（不含口令）',
+  'mv.exportSavedAs': '导出完成，已保存为 {name}',
   'mv.exportSavedTo': '导出完成，已保存到 {path}',
   'mv.exportCurrentDone': '已导出当前页',
   'mv.exportFailed': '导出失败：{detail}',

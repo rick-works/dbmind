@@ -455,7 +455,7 @@ import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
 import DataPivotDialog from './DataPivotDialog.vue'
-import { useExportTask, downloadBlob } from '../../utils/useExportTask'
+import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
 import { exportData } from '../../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getEditorSettings, getQuerySettings } from '../../utils/settings'
@@ -2976,8 +2976,9 @@ const onExport = async (cmd) => {
   }
   try {
     const blob = await exportData(connId, payload)
-    downloadBlob(blob, props.scriptName || t('sqlq.queryResult'), format)
-    ElMessage.success(t('mv.exportCurrentDone'))
+    const saved = await saveExportBlob(blob, props.scriptName || t('sqlq.queryResult'), format)
+    if (saved.canceled) return
+    ElMessage.success(t('mv.exportSavedAs', { name: saved.name }))
   } catch (e) {
     ElMessage.error(t('mv.exportFailed', { detail: errMsg(e) }))
   }

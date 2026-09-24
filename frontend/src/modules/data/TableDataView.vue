@@ -297,7 +297,7 @@ import { ArrowUp, ArrowDown, Delete, Sort, SortUp, SortDown, Plus, Minus, Check,
 import { getTableData, listColumns, saveTableData, aiFilter, exportData } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
-import { useExportTask, downloadBlob } from '../../utils/useExportTask'
+import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
 import { getQuerySettings } from '../../utils/settings'
 import { useShortcutScope } from '../../utils/useShortcuts'
 import { useExcelSelection } from '../../utils/excelSelection'
@@ -2711,8 +2711,9 @@ const onExport = async (cmd) => {
   }
   try {
     const blob = await exportData(props.conn.id, payload)
-    downloadBlob(blob, props.table, format)
-    ElMessage.success(t('mv.exportCurrentDone'))
+    const saved = await saveExportBlob(blob, props.table, format)
+    if (saved.canceled) return
+    ElMessage.success(t('mv.exportSavedAs', { name: saved.name }))
   } catch (e) {
     ElMessage.error('导出失败：' + (e?.message || e))
   }

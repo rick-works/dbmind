@@ -1,8 +1,8 @@
-import { ref, reactive, h } from 'vue'
+import { ref, reactive } from 'vue'
 
 import { t, locale } from './i18n'
 import { ElMessage } from 'element-plus'
-import { exportStart, exportTask, exportCancel, exportDownload, openLocalDir, getPathSettings } from '../api'
+import { exportStart, exportTask, exportCancel, exportDownload } from '../api'
 import { errMsg } from './errMsg'
 
 const fmtTime = () => new Date().toLocaleTimeString(locale.value, { hour12: false })
@@ -22,6 +22,81 @@ export function downloadBlob(blob, name, format) {
   a.download = `${name}_${Date.now()}.${ext}`
   a.click()
   URL.revokeObjectURL(url)
+}
+
+/** 导出文件名：下载与另存为共用同一口径，免得两条路生成的名字不一样 */
+export function exportFileName(name, format) {
+  const ext = extMap[format] || format
+  return `${name}_${Date.now()}.${ext}`
+}
+
+/** 另存为对话框里按扩展名过滤 */
+function pickerTypes(format) {
+  const ext = extMap[format] || format
+  const mime = {
+    csv: 'text/csv',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    json: 'application/json',
+    sql: 'application/sql'
+  }[ext]
+  if (!mime) return undefined
+  const accept = {}
+  accept[mime] = ['.' + ext]
+  return [{ description: ext.toUpperCase(), accept }]
+}
+
+/**
+ * 让用户选「保存到哪」，然后把内容写进去。
+ *
+ * 优先用浏览器原生的另存为对话框（File System Access API，Chrome/Edge 支持，
+ * 127.0.0.1 属于安全上下文所以可用）—— **这才是"用户自己选目录"**。
+ * 拿不到（非 Chrome 内核、或没有用户手势）就退回普通浏览器下载，至少能落盘。
+ * handle 是导出前那次挑选留下的，异步任务跑完直接往它里面写。
+ */
+export async function saveExportBlob(blob, name, format, handle = null) {
+  const filename = exportFileName(name, format)
+  if (handle) {
+    try {
+      const w = await handle.createWritable()
+      await w.write(blob)
+      await w.close()
+      return { ok: true, name: handle.name || filename }
+    } catch (err) {
+      return { ok: false, error: err }
+    }
+  }
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      const h = await window.showSaveFilePicker({ suggestedName: filename, types: pickerTypes(format) })
+      const w = await h.createWritable()
+      await w.write(blob)
+      await w.close()
+      return { ok: true, name: h.name || filename }
+    } catch (err) {
+      // 用户主动取消：不算失败，也不该再退回下载
+      if (err && err.name === 'AbortError') return { ok: false, canceled: true }
+      // SecurityError 等（没有用户手势）：退回普通下载，别让整个导出白跑
+    }
+  }
+  downloadBlob(blob, name, format)
+  return { ok: true, name: filename, fallback: true }
+}
+
+/**
+ * 导出【开始前】先让用户挑保存位置。
+ *
+ * 为什么必须提前挑：异步导出要跑几十秒到几分钟，跑完时浏览器的"用户手势"早就过期，
+ * 那时再调另存为对话框会被安全策略拒绝（SecurityError）。在点按钮的这一刻挑，才拿得到。
+ * 返回：FileSystemFileHandle / { canceled: true }（用户取消）/ null（不支持，走退回路径）
+ */
+export async function pickExportTarget(name, format) {
+  if (typeof window.showSaveFilePicker !== 'function') return null
+  try {
+    return await window.showSaveFilePicker({ suggestedName: exportFileName(name, format), types: pickerTypes(format) })
+  } catch (err) {
+    if (err && err.name === 'AbortError') return { canceled: true }
+    return null
+  }
 }
 
 /**
@@ -72,56 +147,26 @@ export function applyTaskSnapshot(state, r) {
   return state.status.value !== 'running'
 }
 
-/** 取文件所在目录（拿不到就返回空串） */
-function dirOf(path) {
-  if (typeof path !== 'string' || !path) return ''
-  const i = Math.max(path.lastIndexOf('\\'), path.lastIndexOf('/'))
-  return i > 0 ? path.slice(0, i) : ''
-}
-
-/** 用户是否把导出目录改成了自定义位置 */
-async function isCustomExportDir() {
-  try {
-    const p = await getPathSettings()
-    return !!p?.exportDirConfigured
-  } catch {
-    return false
-  }
-}
-
 /**
  * 任务结束后的收尾（组合函数与 MainView 共用）。
  *
- * 行为约定：
- *  - 导出目录是**默认**的 → 浏览器下载（保持原有习惯）
- *  - 导出目录是**用户自定义**的 → 不再重复下载一遍（文件本来就已经落在那个文件夹里了，
- *    再下载一次只会让"下载"目录多出一份重复文件），改为提示落盘位置
- *  - 两种情况都给一个「打开文件夹」的入口，不用再去设置页翻
+ * 保存到哪由【用户自己选】：导出前（异步任务）或导出后（同步单页）弹系统另存为。
+ * 以前是固定写到后端那个目录、再弹一句"已保存到 <后端路径>"+"打开目录" ——
+ * 那个路径不是用户要的，用户要的是自己决定存哪儿。
  */
-export async function finishExport(state, connId, taskId, name, format) {
+export async function finishExport(state, connId, taskId, name, format, handle = null) {
   if (state.status.value === 'success') {
-    const dir = dirOf(state.filePath)
-    if (!(await isCustomExportDir())) {
-      try {
-        const blob = await exportDownload(connId, taskId)
-        downloadBlob(blob, name, format)
-      } catch (err) {
-        ElMessage.error(t('mv.downloadFailed', { detail: errMsg(err) }))
+    try {
+      const blob = await exportDownload(connId, taskId)
+      const res = await saveExportBlob(blob, name, format, handle)
+      if (res.canceled) return
+      if (!res.ok) {
+        ElMessage.error(t('mv.downloadFailed', { detail: errMsg(res.error) }))
         return
       }
-    }
-    if (dir) {
-      ElMessage({
-        type: 'success',
-        duration: 10000,
-        message: h('span', [
-          t('mv.exportSavedTo', { path: dir }),
-          h('a', {
-            style: 'margin-left:10px;cursor:pointer;text-decoration:underline',
-            onClick: () => openLocalDir(dir)
-          }, t('common.openDir'))
-        ])
-      })
+      ElMessage.success(t('mv.exportSavedAs', { name: res.name }))
+    } catch (err) {
+      ElMessage.error(t('mv.downloadFailed', { detail: errMsg(err) }))
     }
     return
   }
@@ -159,7 +204,7 @@ export function useExportTask() {
     if (timer) { clearInterval(timer); timer = null }
   }
 
-  const startPolling = (connId, name, format) => {
+  const startPolling = (connId, name, format, handle) => {
     if (timer) clearInterval(timer)
     timer = setInterval(async () => {
       if (!taskId.value) return
@@ -169,7 +214,7 @@ export function useExportTask() {
         if (finished) {
           clearInterval(timer)
           timer = null
-          await finishExport(state, connId, taskId.value, name, format)
+          await finishExport(state, connId, taskId.value, name, format, handle)
         }
       } catch (e) {
         console.error('导出进度轮询失败', e)
@@ -178,6 +223,10 @@ export function useExportTask() {
   }
 
   const start = async (connId, payload, name, format, submitFn) => {
+    // 先挑保存位置，再开始导出（异步导出跑完时已经没有用户手势，那时弹不出来）
+    const target = await pickExportTarget(name, format)
+    if (target && target.canceled) return
+    const handle = target && !target.canceled ? target : null
     reset(t('et.exporting', { name: (name || t('et.data')) }))
     visible.value = true
     try {
@@ -186,7 +235,7 @@ export function useExportTask() {
         throw new Error(res.message || t('mv.exportSubmitFailed'))
       }
       taskId.value = res.taskId
-      startPolling(connId, name, format)
+      startPolling(connId, name, format, handle)
     } catch (e) {
       status.value = 'error'
       message.value = errMsg(e)

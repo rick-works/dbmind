@@ -64,6 +64,7 @@ export default {
   'mv.groupNoConns': 'The group "{env}" has no connections',
   'mv.nothingToExport': 'There is no connection to export',
   'mv.exportedConns': 'Exported {n} connection(s) (without passwords)',
+  'mv.exportSavedAs': 'Export finished — saved as {name}',
   'mv.exportSavedTo': 'Export finished — saved to {path}',
   'mv.exportCurrentDone': 'Exported the current page',
   'mv.exportFailed': 'Export failed: {detail}',
