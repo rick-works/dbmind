@@ -53,7 +53,14 @@ use crate::AppState;
 ///
 /// 太小 ⇒ 大表要多跑几十趟（每趟都是一次网络往返 + 驱动解析）；太大 ⇒ 单次响应把
 /// 驱动的行缓存顶爆。5000 是这两者之间的常见折中（Xplore 用的也是这个量级）。
-const PAGE_ROWS: u64 = 5000;
+/// 默认每页行数。
+///
+/// 为什么从 5000 提到 50000（实测，用 DBMIND_EXPORT_PROFILE=1 量的）：
+/// 每次向宿主取一页都有约 340ms 的固定开销（管道往返 + 建 Statement + JDBC 执行），
+/// 这部分与行数无关。20 万行按 5000/页要 41 次取数 ≈ 14 秒纯开销；按 50000/页只要 5 次。
+/// 实测同一批 4 万行：1 次取数 2403ms，10 次取数 5537ms —— 页开大是这一轮最大的一刀。
+/// 再大收益就平了（4 万行一次取数已到 60us/行的下限），所以 50000 够。
+const PAGE_ROWS: u64 = 50000;
 
 /// 页内进度上报的行数粒度。
 ///
@@ -810,24 +817,36 @@ async fn export_query(
     // 首页用小页：整页取数要 1 秒以上（宿主→内核的逐行管线 ≈0.23ms/行），第一屏就等一整页
     // 会让"开始导出"看起来没反应；前三页各给 1/5 页先把进度推起来，之后回到整页满速跑。
     let full_page = page_size;
-    let mut page_size = if req.size.is_some() { full_page } else { (full_page / 5).max(1) };
+    let mut page_size = if req.size.is_some() { full_page } else { (full_page / 10).max(1) };
     let mut offset = start_offset;
     let mut written = 0u64;
     let mut page = 0u64;
     let mut next_report = REPORT_ROWS;
     let mut next_log = LOG_ROWS;
+    // 耗时剖析：设 DBMIND_EXPORT_PROFILE=1 时把「取数」与「写盘」的净耗时打到 stderr。
+    // 默认零开销（只读一次环境变量），平时不打印；要判断"慢在哪一段"时直接开它。
+    // 做它的原因：页大小实验只能说明"每页固定开销已接近 0"，但分不清剩下的是
+    // 宿主取数还是内核写盘 —— 这两者对应的优化方向完全不同。
+    let profile = std::env::var_os("DBMIND_EXPORT_PROFILE").is_some();
+    let mut fetch_ms = 0f64;
+    let mut write_ms = 0f64;
     loop {
         if let Some(task) = task {
             task.check_canceled().map_err(XError::internal)?;
         }
         let sql = paging_sql(&base, offset, page_size, dialect);
+        let t_fetch = std::time::Instant::now();
         let result = run_sql_in(state, id, &req.database, sql, page_size as usize).await?;
+        if profile {
+            fetch_ms += t_fetch.elapsed().as_secs_f64() * 1000.0;
+        }
         let got = result.rows.len() as u64;
         if page == 0 {
             let columns: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
             sink.begin(&columns)?;
         }
         // 逐行写盘，并且**页内也上报**：以前只在整页写完后更新一次，界面上只能 5000 一跳。
+        let t_write = std::time::Instant::now();
         for row in &result.rows {
             sink.row(row)?;
             written += 1;
@@ -844,6 +863,9 @@ async fn export_query(
                 }
             }
         }
+        if profile {
+            write_ms += t_write.elapsed().as_secs_f64() * 1000.0;
+        }
         page += 1;
         if let Some(task) = task {
             task.set_done(written);
@@ -853,13 +875,29 @@ async fn export_query(
         if got < page_size || !req.all {
             break;
         }
-        // 前三页小步快跑，之后换成整页
-        if page >= 3 {
+        // 前两页小步快跑，之后换成整页
+        if page >= 2 {
             page_size = full_page;
         }
-        offset += page_size;
+        // 偏移必须按【本页实际读到的行数】推进。
+        //
+        // 这里踩过一个大坑：渐进策略会把 page_size 从"小页"改成"整页"，如果仍然写
+        // offset += page_size，那么改大之后那一次就相当于凭空多跳了一整页 —— 前两页
+        // 各只读了 5000 行，第三页却从 offset=55000 开始，中间 45000 行被整段跳过，
+        // 而导出的行数看起来"正常"（只是少），用户根本无从察觉。
+        offset += got;
     }
+    let t_finish = std::time::Instant::now();
     sink.finish().map_err(XError::internal)?;
+    if profile {
+        let busy = fetch_ms + write_ms;
+        let finish_ms = t_finish.elapsed().as_secs_f64() * 1000.0;
+        let rate = if busy > 0.0 { written as f64 / (busy / 1000.0) } else { 0.0 };
+        let share = if busy + finish_ms > 0.0 { fetch_ms / (busy + finish_ms) * 100.0 } else { 0.0 };
+        eprintln!(
+            "[export-profile] 行={written} 页={page} 取数={fetch_ms:.0}ms 写盘={write_ms:.0}ms 收尾={finish_ms:.0}ms 取数占比={share:.0}% 净速={rate:.0} 行/秒"
+        );
+    }
 
     // 自检：统计与实际导出的行数对不上就如实写进日志（以前会静默少行，用户无从察觉）
     if let Some(task) = task {
@@ -1086,7 +1124,7 @@ where
     let page_size = req.size.unwrap_or(PAGE_ROWS).max(1);
     // 与 export_query 同策略：每张表前三页用小页，快速把进度推起来
     let full_page = page_size;
-    let mut page_size = if req.size.is_some() { full_page } else { (full_page / 5).max(1) };
+    let mut page_size = if req.size.is_some() { full_page } else { (full_page / 10).max(1) };
     let mut offset = 0u64;
     let mut written = 0u64;
     let mut pages = 0u64;
@@ -1135,10 +1173,16 @@ where
             break;
         }
         pages += 1;
-        if pages >= 3 {
+        if pages >= 2 {
             page_size = full_page;
         }
-        offset += page_size;
+        // 偏移必须按【本页实际读到的行数】推进。
+        //
+        // 这里踩过一个大坑：渐进策略会把 page_size 从"小页"改成"整页"，如果仍然写
+        // offset += page_size，那么改大之后那一次就相当于凭空多跳了一整页 —— 前两页
+        // 各只读了 5000 行，第三页却从 offset=55000 开始，中间 45000 行被整段跳过，
+        // 而导出的行数看起来"正常"（只是少），用户根本无从察觉。
+        offset += got;
     }
     Ok(written)
 }
