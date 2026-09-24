@@ -82,6 +82,9 @@ pub async fn execute(
         .and_then(Value::as_u64)
         .unwrap_or(2000)
         .clamp(1, 100_000) as usize;
+    // 页码（从 1 起）。以前只读 size、完全没用 page —— 于是「第 2 页」拿到的还是前 size 行，
+    // 界面看着有分页器，点下一页却一直是同一批数据。
+    let page = body.get("page").and_then(Value::as_u64).unwrap_or(1).max(1);
 
     let database = body
         .get("database")
@@ -99,11 +102,22 @@ pub async fn execute(
         return Ok(Json(shape::query_failure_json(&err.message, 0)));
     }
 
+    // 第 2 页起才套分页壳：第一页照原样执行（否则 create / update 这类语句会被塞进
+    // 子查询里直接报错），并且只对「取数类」语句套。
+    let base_sql = sql.clone();
+    let effective = if page > 1 && looks_like_query(&base_sql) {
+        let record = require_record(&state, &id).await?;
+        let dialect = crate::api::dialect::Dialect::new(record.kind());
+        crate::api::export::paging_sql(&base_sql, (page - 1) * size as u64, size as u64, dialect)
+    } else {
+        base_sql.clone()
+    };
+
     let engine = state.engine.clone();
     let request = QueryRequest {
         read_only: None,
         connection: target,
-        sql,
+        sql: effective,
         options: QueryOptions {
             max_rows: size,
             timeout_ms: 120_000,
@@ -112,9 +126,51 @@ pub async fn execute(
         session: Some("ui:上游".to_string()),
     };
     Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
-        Ok(result) => shape::query_result_json(&result),
+        Ok(result) => {
+            let mut json = shape::query_result_json(&result);
+            // 总数：只有「被截断」时才需要真去统计 —— 没截断说明返回的就是全部，行数本身就是总数。
+            // 统计失败或语句不适合统计（带 order by 等）就当未知，保持 -1：
+            // 界面会退化成「已返回 N 行」，绝不瞎报一个数。
+            // 只要翻过页就要统计：最后一页往往不足一页（truncated=false），
+            // 那时若拿本页行数当总数，分页器会突然从 1026 页缩成 1 页。
+            if result.truncated || page > 1 {
+                if let Some(total) = crate::api::export::count_rows(&state, &id, &database, &base_sql).await {
+                    if let Some(object) = json.as_object_mut() {
+                        object.insert("totalCount".to_string(), Value::from(total));
+                        // hasMore 是"这一页之后还有没有"，不是"本页有没有装满"：
+                        // 末页恰好装满时后者会误报"还有"。有总数就能算准。
+                        object.insert(
+                            "hasMore".to_string(),
+                            {
+                                // 先绑到变量：直接写 x as u64 < y 会被当成泛型参数（u64<…>）而编译失败
+                                let limit = page * size as u64;
+                                Value::from(total >= 0 && limit < total as u64)
+                            },
+                        );
+                    }
+                }
+            }
+            json
+        }
         Err(err) => shape::query_failure_json(&err.message, 0),
     }))
+}
+
+/// 看起来是不是「取数」语句 —— 只有这类才适合套分页壳。
+///
+/// 不解析 SQL，只看首个词：套壳是为了分页，DDL/DML 套进去只会报错，
+/// 而它们在「第几页」这个问题上没有意义。
+fn looks_like_query(sql: &str) -> bool {
+    let head = sql
+        .trim_start()
+        .split_whitespace()
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    matches!(
+        head.as_str(),
+        "select" | "with" | "show" | "describe" | "desc" | "explain"
+    )
 }
 
 /// `POST /api/{m}/query/{id}/batch` —— 多段执行，每段一个结果（结果1/结果2…）。

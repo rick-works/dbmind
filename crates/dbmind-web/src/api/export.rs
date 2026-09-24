@@ -688,7 +688,7 @@ fn base_sql(req: &ExportReq, dialect: Dialect) -> XResult<String> {
 }
 
 /// 分页后的查询（见文件头决定 1）。
-fn paging_sql(base: &str, offset: u64, size: u64, dialect: Dialect) -> String {
+pub(crate) fn paging_sql(base: &str, offset: u64, size: u64, dialect: Dialect) -> String {
     let page = dialect.limit_clause(offset, size);
     if dialect.needs_order_by_for_paging() {
         // SQL Server：OFFSET/FETCH 必须紧跟 ORDER BY，而子查询里又不许 ORDER BY
@@ -709,7 +709,7 @@ fn has_order_by(sql: &str) -> bool {
 /// 总量（拿不到就给 None ⇒ 调用方填 -1）。
 ///
 /// 带 `order by` 的语句不数：SQL Server 的子查询里不允许 ORDER BY，数了就是一次白跑的错误。
-async fn count_rows(state: &AppState, id: &str, database: &str, base: &str) -> Option<i64> {
+pub(crate) async fn count_rows(state: &AppState, id: &str, database: &str, base: &str) -> Option<i64> {
     if has_order_by(base) {
         return None;
     }
