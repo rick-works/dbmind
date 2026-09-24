@@ -29,7 +29,6 @@
 //!    知识库入库是「点一下等几秒」，做成分步的异步任务只会把界面搞复杂。
 
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 use axum::routing::post;
 use axum::Json;
@@ -192,14 +191,6 @@ struct VectorFile {
 
 // ------------------------------------------------------------------ 存储
 
-fn root() -> PathBuf {
-    dbmind_core::paths::home_dir().join("ai-knowledge-bases")
-}
-
-fn kb_dir(kb_id: &str) -> PathBuf {
-    root().join(kb_id)
-}
-
 fn safe_id(id: &str) -> XResult<String> {
     let trimmed = id.trim();
     // id 直接进文件路径：只放行「字母数字下划线短横」，路径穿越无从下手
@@ -217,88 +208,158 @@ fn now() -> String {
     chrono::Local::now().to_rfc3339()
 }
 
+// 存储层：全部落在主库 `~/.dbmind/dbmind.db` 的 kb_list / kb_config / kb_docs / kb_vectors 四张表里。
+// 老版本的 ai-knowledge-bases/ 目录（一库一目录、一文档一文件）由 migrate 模块整棵导入后挪走。
+//
+// 对外行为一字未变：`list()` 仍带统计、`refresh()` 仍重算统计、配置仍是
+// 「单库 → 全局默认 → 内置默认」三级回退，文档仍按 created_at 排序。
+
 fn load_index() -> Vec<KbInfo> {
-    std::fs::read_to_string(root().join("index.json"))
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
+    let Some(store) = dbmind_core::global_store() else {
+        return Vec::new();
+    };
+    store
+        .kb_infos()
         .unwrap_or_default()
+        .into_iter()
+        .map(|row| KbInfo {
+            id: row.id,
+            name: row.name,
+            description: row.description,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            doc_count: row.doc_count as usize,
+            chunk_count: row.chunk_count as usize,
+            char_count: row.char_count as usize,
+        })
+        .collect()
 }
 
 fn save_index(items: &[KbInfo]) -> XResult<()> {
-    dbmind_core::paths::ensure_dir(&root())?;
-    let text = serde_json::to_string_pretty(items).map_err(|e| XError::internal(e.to_string()))?;
-    std::fs::write(root().join("index.json"), text)
-        .map_err(|e| XError::internal(format!("写入知识库索引失败：{e}")))
+    let Some(store) = dbmind_core::global_store() else {
+        return Err(XError::internal("主库未就绪，知识库索引无法保存"));
+    };
+    let rows: Vec<dbmind_core::KbInfoRow> = items
+        .iter()
+        .map(|item| dbmind_core::KbInfoRow {
+            id: item.id.clone(),
+            name: item.name.clone(),
+            description: item.description.clone(),
+            created_at: item.created_at.clone(),
+            updated_at: item.updated_at.clone(),
+            doc_count: item.doc_count as u64,
+            chunk_count: item.chunk_count as u64,
+            char_count: item.char_count as u64,
+        })
+        .collect();
+    store
+        .kb_put_infos(&rows)
+        .map_err(|err| XError::internal(format!("写入主库失败：{err}")))
 }
 
+/// 配置三级回退：单库 → 全局默认（`kb_id` 为空串那条）→ 内置默认。
 fn load_config(kb_id: &str) -> KbConfig {
-    let file = kb_dir(kb_id).join("config.json");
-    if let Ok(text) = std::fs::read_to_string(&file) {
-        if let Ok(config) = serde_json::from_str(&text) {
-            return config;
-        }
-    }
-    // 全局默认（`config.json` 在根目录）→ 内置默认
-    if let Ok(text) = std::fs::read_to_string(root().join("config.json")) {
-        if let Ok(config) = serde_json::from_str(&text) {
-            return config;
+    let Some(store) = dbmind_core::global_store() else {
+        return KbConfig::default();
+    };
+    for key in [kb_id, ""] {
+        if let Ok(Some(text)) = store.kb_get_config(key) {
+            if let Ok(config) = serde_json::from_str::<KbConfig>(&text) {
+                return config;
+            }
         }
     }
     KbConfig::default()
 }
 
 fn save_config(kb_id: &str, config: &KbConfig) -> XResult<()> {
-    let dir = kb_dir(kb_id);
-    dbmind_core::paths::ensure_dir(&dir)?;
-    let text = serde_json::to_string_pretty(config).map_err(|e| XError::internal(e.to_string()))?;
-    std::fs::write(dir.join("config.json"), text)
-        .map_err(|e| XError::internal(format!("写入知识库配置失败：{e}")))
+    let Some(store) = dbmind_core::global_store() else {
+        return Err(XError::internal("主库未就绪，知识库配置无法保存"));
+    };
+    let text = serde_json::to_string(config).map_err(|e| XError::internal(e.to_string()))?;
+    store
+        .kb_put_config(kb_id, &text)
+        .map_err(|err| XError::internal(format!("写入主库失败：{err}")))
+}
+
+/// 主库行 → 文档。`docs_of` 与 `find_doc` 共用这一份映射，
+/// 加字段时不会出现"一处带了、另一处漏了"。
+fn doc_from_row(row: dbmind_core::KbDocRow) -> KbDoc {
+    KbDoc {
+        id: row.id,
+        title: row.title,
+        source: row.source,
+        created_at: row.created_at,
+        char_count: row.char_count as usize,
+        raw: row.raw,
+        parents: serde_json::from_str(&row.parents).unwrap_or_default(),
+        chunks: serde_json::from_str(&row.chunks).unwrap_or_default(),
+    }
+}
+
+/// 文档 → 主库行。
+fn doc_row(doc: &KbDoc) -> dbmind_core::KbDocRow {
+    dbmind_core::KbDocRow {
+        id: doc.id.clone(),
+        title: doc.title.clone(),
+        source: doc.source.clone(),
+        created_at: doc.created_at.clone(),
+        char_count: doc.char_count as u64,
+        raw: doc.raw.clone(),
+        parents: serde_json::to_string(&doc.parents).unwrap_or_else(|_| "[]".to_string()),
+        chunks: serde_json::to_string(&doc.chunks).unwrap_or_else(|_| "[]".to_string()),
+    }
 }
 
 fn docs_of(kb_id: &str) -> Vec<KbDoc> {
-    let dir = kb_dir(kb_id).join("docs");
-    let mut docs: Vec<KbDoc> = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        for entry in entries.flatten() {
-            if let Ok(text) = std::fs::read_to_string(entry.path()) {
-                if let Ok(doc) = serde_json::from_str::<KbDoc>(&text) {
-                    docs.push(doc);
-                }
-            }
-        }
-    }
-    docs.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-    docs
+    let Some(store) = dbmind_core::global_store() else {
+        return Vec::new();
+    };
+    store
+        .kb_docs(kb_id)
+        .unwrap_or_default()
+        .into_iter()
+        .map(doc_from_row)
+        .collect()
 }
 
 fn find_doc(kb_id: &str, doc_id: &str) -> XResult<KbDoc> {
-    let file = kb_dir(kb_id).join("docs").join(format!("{doc_id}.json"));
-    let text = std::fs::read_to_string(&file)
-        .map_err(|_| XError::bad_request(format!("文档 {doc_id} 不存在")))?;
-    serde_json::from_str(&text).map_err(|e| XError::internal(format!("文档内容损坏：{e}")))
+    let Some(store) = dbmind_core::global_store() else {
+        return Err(XError::bad_request(format!("文档 {doc_id} 不存在")));
+    };
+    match store.kb_doc(kb_id, doc_id) {
+        Ok(Some(row)) => Ok(doc_from_row(row)),
+        Ok(None) => Err(XError::bad_request(format!("文档 {doc_id} 不存在"))),
+        Err(err) => Err(XError::internal(format!("读取文档失败：{err}"))),
+    }
 }
 
 fn save_doc(kb_id: &str, doc: &KbDoc) -> XResult<()> {
-    let dir = kb_dir(kb_id).join("docs");
-    dbmind_core::paths::ensure_dir(&dir)?;
-    let text = serde_json::to_string(doc).map_err(|e| XError::internal(e.to_string()))?;
-    std::fs::write(dir.join(format!("{}.json", doc.id)), text)
-        .map_err(|e| XError::internal(format!("写入文档失败：{e}")))
+    let Some(store) = dbmind_core::global_store() else {
+        return Err(XError::internal("主库未就绪，文档无法保存"));
+    };
+    store
+        .kb_put_doc(kb_id, &doc_row(doc))
+        .map_err(|err| XError::internal(format!("写入文档失败：{err}")))
 }
 
 fn load_vectors(kb_id: &str, doc_id: &str) -> Option<VectorFile> {
-    let file = kb_dir(kb_id).join("vectors").join(format!("{doc_id}.json"));
-    std::fs::read_to_string(file)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
+    let store = dbmind_core::global_store()?;
+    let row = store.kb_vectors(kb_id, doc_id).ok()??;
+    Some(VectorFile {
+        model: row.model,
+        dim: row.dim,
+        vectors: row.vectors,
+    })
 }
 
 fn save_vectors(kb_id: &str, doc_id: &str, vectors: &VectorFile) -> XResult<()> {
-    let dir = kb_dir(kb_id).join("vectors");
-    dbmind_core::paths::ensure_dir(&dir)?;
-    let text = serde_json::to_string(vectors).map_err(|e| XError::internal(e.to_string()))?;
-    std::fs::write(dir.join(format!("{doc_id}.json")), text)
-        .map_err(|e| XError::internal(format!("写入向量失败：{e}")))
+    let Some(store) = dbmind_core::global_store() else {
+        return Err(XError::internal("主库未就绪，向量无法保存"));
+    };
+    store
+        .kb_put_vectors(kb_id, doc_id, &vectors.model, &vectors.vectors)
+        .map_err(|err| XError::internal(format!("写入向量失败：{err}")))
 }
 
 /// 重算某个库的统计（文档数 / 分块数 / 字数）并回写索引。
@@ -316,6 +377,83 @@ fn refresh(kb_id: &str) -> XResult<KbInfo> {
     let snapshot = info.clone();
     save_index(&items)?;
     Ok(snapshot)
+}
+
+/// 把老版本的 `ai-knowledge-bases/` 目录整棵读进库（一次性迁移用）。
+///
+/// 目录形态是「一库一目录、一文档一文件」，所以要遍历：
+/// `index.json` + `config.json`（全局那份）+ `<kb_id>/{config.json, docs/*.json, vectors/*.json}`。
+///
+/// 单份文件坏了只跳过它，不让整次迁移失败 —— 最坏是少了几篇文档，而不是一篇都进不来。
+pub(crate) fn import_directory(root: &std::path::Path) -> XResult<usize> {
+    let mut imported = 0usize;
+
+    if let Ok(text) = std::fs::read_to_string(root.join("index.json")) {
+        if let Ok(items) = serde_json::from_str::<Vec<KbInfo>>(&text) {
+            imported += items.len();
+            save_index(&items)?;
+        }
+    }
+    if let Ok(text) = std::fs::read_to_string(root.join("config.json")) {
+        if let Ok(config) = serde_json::from_str::<KbConfig>(&text) {
+            // 根目录那份是「全局默认」，库里用空串当键
+            save_config("", &config)?;
+            imported += 1;
+        }
+    }
+
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Ok(imported);
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(kb_id) = dir.file_name().and_then(|name| name.to_str()).map(str::to_string) else {
+            continue;
+        };
+        // 目录名不是合法 id（例如手工放进去的东西）就跳过，不当成知识库
+        if safe_id(&kb_id).is_err() {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(dir.join("config.json")) {
+            if let Ok(config) = serde_json::from_str::<KbConfig>(&text) {
+                save_config(&kb_id, &config)?;
+                imported += 1;
+            }
+        }
+        if let Ok(docs) = std::fs::read_dir(dir.join("docs")) {
+            for doc in docs.flatten() {
+                if let Ok(text) = std::fs::read_to_string(doc.path()) {
+                    if let Ok(parsed) = serde_json::from_str::<KbDoc>(&text) {
+                        save_doc(&kb_id, &parsed)?;
+                        imported += 1;
+                    }
+                }
+            }
+        }
+        if let Ok(files) = std::fs::read_dir(dir.join("vectors")) {
+            for file in files.flatten() {
+                let path = file.path();
+                let Some(doc_id) = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                if let Ok(vectors) = serde_json::from_str::<VectorFile>(&text) {
+                    save_vectors(&kb_id, &doc_id, &vectors)?;
+                    imported += 1;
+                }
+            }
+        }
+    }
+    Ok(imported)
 }
 
 // ------------------------------------------------------------------ 分块
@@ -916,16 +1054,8 @@ impl KbReq {
 /// `POST /api/ai/kb/list`。
 pub async fn list(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
     let items = load_index();
-    let config = req
-        .kb_id
-        .clone()
-        .map(|kb_id| load_config(&kb_id))
-        .unwrap_or_else(|| {
-            std::fs::read_to_string(root().join("config.json"))
-                .ok()
-                .and_then(|text| serde_json::from_str(&text).ok())
-                .unwrap_or_default()
-        });
+    // 单库配置 → 全局默认 → 内置默认（`load_config` 自己就带三级回退）
+    let config = load_config(req.kb_id.as_deref().unwrap_or(""));
     Ok(Json(json!({ "items": items, "config": config })))
 }
 
@@ -950,7 +1080,6 @@ pub async fn create(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
     let mut items = load_index();
     items.push(info.clone());
     save_index(&items)?;
-    dbmind_core::paths::ensure_dir(&kb_dir(&id).join("docs"))?;
     Ok(Json(json!({ "success": true, "kbId": id, "info": info })))
 }
 
@@ -984,9 +1113,9 @@ pub async fn delete(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
         return Err(XError::bad_request("知识库不存在"));
     }
     save_index(&items)?;
-    let dir = kb_dir(&kb_id);
-    if dir.is_dir() {
-        let _ = std::fs::remove_dir_all(&dir);
+    // 这个库的配置 / 文档 / 向量一起清掉（目录版是 remove_dir_all）
+    if let Some(store) = dbmind_core::global_store() {
+        let _ = store.kb_delete(&kb_id);
     }
     Ok(Json(json!({ "success": true })))
 }
@@ -1111,12 +1240,18 @@ pub async fn delete_doc(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
             .as_deref()
             .ok_or_else(|| XError::bad_request("缺少 docId 参数"))?,
     )?;
-    let file = kb_dir(&kb_id).join("docs").join(format!("{doc_id}.json"));
-    if !file.is_file() {
-        return Err(XError::bad_request("文档不存在"));
+    let Some(store) = dbmind_core::global_store() else {
+        return Err(XError::internal("主库未就绪，无法删除文档"));
+    };
+    match store.kb_doc(&kb_id, &doc_id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(XError::bad_request("文档不存在")),
+        Err(err) => return Err(XError::internal(format!("读取文档失败：{err}"))),
     }
-    let _ = std::fs::remove_file(&file);
-    let _ = std::fs::remove_file(kb_dir(&kb_id).join("vectors").join(format!("{doc_id}.json")));
+    // 文档与它的向量一起删（目录版是两个 remove_file）
+    store
+        .kb_delete_doc(&kb_id, &doc_id)
+        .map_err(|err| XError::internal(format!("删除文档失败：{err}")))?;
     let info = refresh(&kb_id)?;
     Ok(Json(json!({ "success": true, "info": info })))
 }

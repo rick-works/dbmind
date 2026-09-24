@@ -1,0 +1,32 @@
+存储收口（三）：知识库（索引/配置/文档/分块/向量）从目录搬进 dbmind.db
+
+老形态是一棵目录树：ai-knowledge-bases/ 下一库一目录、一文档一文件
+（index.json + config.json + <kb_id>/{config.json, docs/*.json, vectors/*.json}）。
+这次整棵收进库。
+
+内核（dbmind-core）：
+- SCHEMA 新增 4 张表：kb_list（知识库与统计）/ kb_config（kb_id 空串 = 全局默认）/
+  kb_docs（原文 + 父块 + 子块，按 kb_id+created_at 建索引）/ kb_vectors
+- 向量用 BLOB 存小端 f32（一份文档的全部块向量拼成一段）：JSON 得写成
+  "0.123456789" 这种文本，同样的数字占好几倍空间、解析还慢。这是唯一一处值得上 BLOB 的地方
+- Store 新增：kb_infos / kb_put_infos / kb_get_config / kb_put_config / kb_docs /
+  kb_doc / kb_put_doc / kb_delete_doc（连带向量）/ kb_delete（连带配置、文档、向量）/
+  kb_vectors / kb_put_vectors
+
+Web（dbmind-web）：
+- kb.rs 存储层九个函数（load_index / save_index / load_config / save_config /
+  docs_of / find_doc / save_doc / load_vectors / save_vectors）全部改走主库；
+  另有五处内联文件操作（list 读全局配置、create 建目录、delete 删目录、
+  delete_doc 删两个文件）改成库操作。对外行为一字未变：统计口径、配置三级回退
+  （单库 → 全局默认 → 内置默认）、文档按 created_at 排序，全部保持原样
+- 新增 kb::import_directory：老目录树一次性导入（交给 kb 模块自己做 —— 它才认识那些结构体），
+  单份文件坏了只跳过它，不让整次迁移失败
+- migrate.rs 增加知识库目录导入 + 目录版归档（整棵挪走）
+
+迁移对照（迁移前留底，逐项一致）：
+  列表：kb_20260918230408 名称=销售制度手册 docs=1 chunks=3 chars=220
+  分块：预览 3 块，首块文本逐字一致（"#### 3.2 大客户认定标准…"）
+  写路径：新建一个库 → 列表 2 个 → 删掉 → 回到 1 个
+  目录：ai-knowledge-bases/ 整棵移入 backups/legacy-json/
+
+至此 ~/.dbmind 顶层只剩 agent-hosts 与 dbmind.db(+wal/shm)。

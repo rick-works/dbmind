@@ -914,6 +914,281 @@ impl Store {
     }
 }
 
+/// 「kb_list」的一行（知识库的元数据与统计）。
+#[derive(Debug, Clone, Default)]
+pub struct KbInfoRow {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub doc_count: u64,
+    pub chunk_count: u64,
+    pub char_count: u64,
+}
+
+/// 「kb_docs」的一行。`parents` / `chunks` 是 JSON 文本（整体读写）。
+#[derive(Debug, Clone, Default)]
+pub struct KbDocRow {
+    pub id: String,
+    pub title: String,
+    pub source: String,
+    pub created_at: String,
+    pub char_count: u64,
+    pub raw: String,
+    pub parents: String,
+    pub chunks: String,
+}
+
+/// 「kb_vectors」的一行：一份文档的全部块向量。
+#[derive(Debug, Clone, Default)]
+pub struct KbVectorRow {
+    pub model: String,
+    pub dim: usize,
+    pub vectors: Vec<Vec<f32>>,
+}
+
+/// 把 `Vec<Vec<f32>>` 打包成小端二进制（前端/接口看不到它，只是存储形态）。
+fn pack_vectors(vectors: &[Vec<f32>]) -> Vec<u8> {
+    let total: usize = vectors.iter().map(|row| row.len()).sum();
+    let mut bytes = Vec::with_capacity(total * 4);
+    for row in vectors {
+        for value in row {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+/// 按维度把二进制还原成 `Vec<Vec<f32>>`；dim 为 0 或长度不整时返回空。
+fn unpack_vectors(bytes: &[u8], dim: usize) -> Vec<Vec<f32>> {
+    if dim == 0 || bytes.len() % (dim * 4) != 0 {
+        return Vec::new();
+    }
+    let mut out: Vec<Vec<f32>> = Vec::with_capacity(bytes.len() / (dim * 4));
+    for chunk in bytes.chunks(dim * 4) {
+        let mut row = Vec::with_capacity(dim);
+        for i in 0..dim {
+            let start = i * 4;
+            let mut buf = [0u8; 4];
+            buf.copy_from_slice(&chunk[start..start + 4]);
+            row.push(f32::from_le_bytes(buf));
+        }
+        out.push(row);
+    }
+    out
+}
+
+impl Store {
+    /// 全部知识库（按创建时间排序，与目录版的顺序一致）。
+    pub fn kb_infos(&self) -> Result<Vec<KbInfoRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, created_at, updated_at, doc_count, chunk_count, \
+                    char_count FROM kb_list ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(KbInfoRow {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                created_at: row.get(3)?,
+                updated_at: row.get(4)?,
+                doc_count: row.get::<_, i64>(5)?.max(0) as u64,
+                chunk_count: row.get::<_, i64>(6)?.max(0) as u64,
+                char_count: row.get::<_, i64>(7)?.max(0) as u64,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 整体替换知识库列表（上层是"读出来 → 改 → 写回去"，一个事务保证不会半截）。
+    pub fn kb_put_infos(&self, rows: &[KbInfoRow]) -> Result<()> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM kb_list", [])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO kb_list \
+                    (id, name, description, created_at, updated_at, doc_count, chunk_count, char_count) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            )?;
+            for row in rows {
+                stmt.execute(params![
+                    row.id,
+                    row.name,
+                    row.description,
+                    row.created_at,
+                    row.updated_at,
+                    row.doc_count as i64,
+                    row.chunk_count as i64,
+                    row.char_count as i64
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 知识库配置（JSON 文本）；`kb_id` 空串 = 全局默认。
+    pub fn kb_get_config(&self, kb_id: &str) -> Result<Option<String>> {
+        let conn = self.lock();
+        let payload = conn
+            .query_row(
+                "SELECT payload FROM kb_config WHERE kb_id = ?1",
+                params![kb_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(payload)
+    }
+
+    pub fn kb_put_config(&self, kb_id: &str, payload: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO kb_config (kb_id, payload, updated_at) VALUES (?1, ?2, ?3) \
+             ON CONFLICT(kb_id) DO UPDATE SET payload = ?2, updated_at = ?3",
+            params![kb_id, payload, now_iso()],
+        )?;
+        Ok(())
+    }
+
+    /// 某个库的全部文档（按创建时间排序）。
+    pub fn kb_docs(&self, kb_id: &str) -> Result<Vec<KbDocRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT doc_id, title, source, created_at, char_count, raw, parents, chunks \
+             FROM kb_docs WHERE kb_id = ?1 ORDER BY created_at",
+        )?;
+        let rows = stmt.query_map(params![kb_id], |row| {
+            Ok(KbDocRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                source: row.get(2)?,
+                created_at: row.get(3)?,
+                char_count: row.get::<_, i64>(4)?.max(0) as u64,
+                raw: row.get(5)?,
+                parents: row.get(6)?,
+                chunks: row.get(7)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 单篇文档；不存在返回 None（调用方据此给出"文档不存在"）。
+    pub fn kb_doc(&self, kb_id: &str, doc_id: &str) -> Result<Option<KbDocRow>> {
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT doc_id, title, source, created_at, char_count, raw, parents, chunks \
+                 FROM kb_docs WHERE kb_id = ?1 AND doc_id = ?2",
+                params![kb_id, doc_id],
+                |row| {
+                    Ok(KbDocRow {
+                        id: row.get(0)?,
+                        title: row.get(1)?,
+                        source: row.get(2)?,
+                        created_at: row.get(3)?,
+                        char_count: row.get::<_, i64>(4)?.max(0) as u64,
+                        raw: row.get(5)?,
+                        parents: row.get(6)?,
+                        chunks: row.get(7)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(row)
+    }
+
+    /// 写入/覆盖一篇文档。
+    pub fn kb_put_doc(&self, kb_id: &str, row: &KbDocRow) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO kb_docs \
+                (kb_id, doc_id, title, source, created_at, char_count, raw, parents, chunks) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+             ON CONFLICT(kb_id, doc_id) DO UPDATE SET title = ?3, source = ?4, \
+                created_at = ?5, char_count = ?6, raw = ?7, parents = ?8, chunks = ?9",
+            params![
+                kb_id,
+                row.id,
+                row.title,
+                row.source,
+                row.created_at,
+                row.char_count as i64,
+                row.raw,
+                row.parents,
+                row.chunks
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 删一篇文档（连带它的向量）。
+    pub fn kb_delete_doc(&self, kb_id: &str, doc_id: &str) -> Result<()> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM kb_docs WHERE kb_id = ?1 AND doc_id = ?2",
+            params![kb_id, doc_id],
+        )?;
+        tx.execute(
+            "DELETE FROM kb_vectors WHERE kb_id = ?1 AND doc_id = ?2",
+            params![kb_id, doc_id],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 删一个库：它的配置、文档、向量一起清掉（对应目录版的 remove_dir_all）。
+    pub fn kb_delete(&self, kb_id: &str) -> Result<()> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        for table in ["kb_config", "kb_docs", "kb_vectors"] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE kb_id = ?1"),
+                params![kb_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 某篇文档的向量；没有记录返回 None（界面据此显示"需要向量化"）。
+    pub fn kb_vectors(&self, kb_id: &str, doc_id: &str) -> Result<Option<KbVectorRow>> {
+        let conn = self.lock();
+        let row = conn
+            .query_row(
+                "SELECT model, dim, payload FROM kb_vectors WHERE kb_id = ?1 AND doc_id = ?2",
+                params![kb_id, doc_id],
+                |row| {
+                    let dim = row.get::<_, i64>(1)?.max(0) as usize;
+                    let payload = row.get::<_, Vec<u8>>(2)?;
+                    Ok((row.get::<_, String>(0)?, dim, payload))
+                },
+            )
+            .optional()?;
+        Ok(row.map(|(model, dim, payload)| KbVectorRow {
+            model,
+            dim,
+            vectors: unpack_vectors(&payload, dim),
+        }))
+    }
+
+    /// 写入/覆盖某篇文档的向量。维度取第一块的长度（各块维度本来就该一致）。
+    pub fn kb_put_vectors(&self, kb_id: &str, doc_id: &str, model: &str, vectors: &[Vec<f32>]) -> Result<()> {
+        let dim = vectors.first().map(|row| row.len()).unwrap_or(0);
+        let payload = pack_vectors(vectors);
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO kb_vectors (kb_id, doc_id, model, dim, payload) VALUES (?1, ?2, ?3, ?4, ?5) \
+             ON CONFLICT(kb_id, doc_id) DO UPDATE SET model = ?3, dim = ?4, payload = ?5",
+            params![kb_id, doc_id, model, dim as i64, payload],
+        )?;
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------- 全局句柄
 
 /// 进程内唯一的主库句柄。
@@ -1097,6 +1372,55 @@ CREATE TABLE IF NOT EXISTS ai_quality_rules (
     rules         TEXT NOT NULL DEFAULT '[]',
     saved_at      TEXT NOT NULL,
     PRIMARY KEY (connection_id, database_name, table_name)
+);
+
+-- 知识库主表（原来是一个 index.json 数组）。
+-- 统计字段（doc_count / chunk_count / char_count）由 refresh 重算后写回。
+CREATE TABLE IF NOT EXISTS kb_list (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL DEFAULT '',
+    description TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    doc_count   INTEGER NOT NULL DEFAULT 0,
+    chunk_count INTEGER NOT NULL DEFAULT 0,
+    char_count  INTEGER NOT NULL DEFAULT 0
+);
+
+-- 知识库配置：kb_id 为空串表示「全局默认」（原来是根目录下的 config.json）。
+-- 配置字段多而扁平，且总是整体读写，所以按一份 JSON 存。
+CREATE TABLE IF NOT EXISTS kb_config (
+    kb_id      TEXT PRIMARY KEY,
+    payload    TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- 文档：原文 + 父块 + 子块。分块是"整体读写"的大块数据（分块列表只整存整取），
+-- 拆成"一块一行"只会让读写变成 N 次往返，换不来任何查询能力。
+CREATE TABLE IF NOT EXISTS kb_docs (
+    kb_id      TEXT NOT NULL,
+    doc_id     TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    source     TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    char_count INTEGER NOT NULL DEFAULT 0,
+    raw        TEXT NOT NULL DEFAULT '',
+    parents    TEXT NOT NULL DEFAULT '[]',
+    chunks     TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (kb_id, doc_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kb_docs_kb ON kb_docs(kb_id, created_at);
+
+-- 向量：一份文档的所有块向量拼成一段小端 f32 二进制。
+-- 这是唯一一处值得用 BLOB 的地方：JSON 文本要写成 "0.123456789"，
+-- 同样的数字是二进制的好几倍大，解析还慢。
+CREATE TABLE IF NOT EXISTS kb_vectors (
+    kb_id   TEXT NOT NULL,
+    doc_id  TEXT NOT NULL,
+    model   TEXT NOT NULL DEFAULT '',
+    dim     INTEGER NOT NULL DEFAULT 0,
+    payload BLOB NOT NULL,
+    PRIMARY KEY (kb_id, doc_id)
 );
 "#;
 

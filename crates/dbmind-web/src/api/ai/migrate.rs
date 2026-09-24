@@ -32,7 +32,43 @@ pub fn import_legacy() -> usize {
     moved += import_audit(&store, &home);
     moved += import_knowledge(&store, &home);
     moved += import_quality(&store, &home);
+    moved += import_knowledge_bases(&store, &home);
     moved
+}
+
+/// `ai-knowledge-bases/` 目录整棵 → `kb_list` / `kb_config` / `kb_docs` / `kb_vectors`。
+///
+/// 这一处与别处不同：老形态是**一棵目录树**（一库一目录、一文档一文件），
+/// 所以交给 kb 模块自己的 import_directory 去遍历（它才认识那些结构体）。
+fn import_knowledge_bases(store: &Store, home: &Path) -> usize {
+    let root = home.join("ai-knowledge-bases");
+    if !root.is_dir() {
+        return 0;
+    }
+    if !store.kb_infos().unwrap_or_default().is_empty() {
+        return 0;
+    }
+    match super::kb::import_directory(&root) {
+        Ok(count) if count > 0 => {
+            if archive_dir(&root) {
+                tracing::info!(items = count, "知识库目录已从 ai-knowledge-bases/ 迁入主库");
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// 目录版的归档：整棵挪走（`archive` 只管单个文件）。
+fn archive_dir(path: &Path) -> bool {
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    let dir = dbmind_core::paths::home_dir().join("backups").join("legacy-json");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    std::fs::rename(path, dir.join(name)).is_ok()
 }
 
 /// `ai-knowledge.json` → `ai_glossary` + `ai_examples`。
