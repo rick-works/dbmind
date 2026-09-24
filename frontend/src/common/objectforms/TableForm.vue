@@ -102,6 +102,27 @@
           </div>
           <div class="field-table-wrap">
             <table class="field-table">
+              <!-- 列宽必须写在 colgroup 里，**不能只靠表头那行的 style**：
+                   表头第一行是 35px 空行（一个 colspan 全列的 th），固定布局只认
+                   "第一行"的列宽 —— 跨列的格子会把总宽平均分给各列，于是 32px 的序号
+                   被摊成 80px、其余列宽也全被忽略（实测就是这么回事）。
+                   有 colgroup 时它优先，空行的 colspan 就不再影响列宽。
+                   「说明」那列**故意不给宽度**：表格宽度是 100%，富余宽度只落到它头上，
+                   其余列宽恒定（长文本列就该拿富余）。 -->
+              <colgroup>
+                <col style="width:32px" />
+                <col style="width:120px" />
+                <col style="width:110px" />
+                <col style="width:64px" />
+                <col style="width:64px" />
+                <col style="width:56px" />
+                <col style="width:56px" />
+                <col v-if="showOrderKey" style="width:70px" />
+                <col style="width:150px" />
+                <col v-if="showAutoIncrement" style="width:56px" />
+                <col v-if="showComment" />
+                <col style="width:40px" />
+              </colgroup>
               <thead>
                 <!-- 第一行是 35px 空行：页签与工具条就"住"在这一行（与「编辑表结构」同一套做法）。
                      表头标题行的 sticky top: 35px 正是按这一行算出来的。 -->
@@ -146,7 +167,7 @@
                   <td><el-input v-model="c.defaultValue" size="small" /></td>
                   <td v-if="showAutoIncrement" class="c-center"><el-checkbox v-model="c.autoIncrement" @change="onAutoIncChange(c)" /></td>
                   <td v-if="showComment"><el-input v-model="c.comment" size="small" /></td>
-                  <td><el-button text size="small" :icon="Delete" class="dc-del" @click="removeColumn(i)" /></td>
+                  <td class="c-center"><el-button text size="small" :icon="Delete" class="dc-del" @click="removeColumn(i)" /></td>
                 </tr>
                 <tr v-if="!cols.length">
                   <td :colspan="headSpan" class="empty-row">{{ $t('tf.noColumns') }}</td>
@@ -814,6 +835,7 @@ emit('sql', genSql())
 /* 值列的控件撑满整格（el-select / el-input-number 默认是内容宽度） */
 .basic-table :deep(.el-select),
 .basic-table :deep(.el-input-number) { width: 100%; }
-/* 字段表末列（操作）：表头与内容都居中 */
-.field-table thead tr:last-child th:last-child { text-align: center; }
+/* 基本信息的值：数字输入框里 Element 默认**居中**（.el-input-number 那条），
+   而这一列的其余控件都是左对齐 —— 10 / 1 飘在框中间就显得没对齐，统一左对齐。 */
+.basic-table :deep(.el-input-number .el-input__inner) { text-align: left; }
 </style>
