@@ -48,7 +48,8 @@ pub use statement::{classify, is_read_only, split_statements, statement_count};
 // `global_store` / `install_global_store`：AI 设置这类"环境式"读写要按需取主库句柄，
 // 句柄由壳层在启动时显式装一次（不在 Store 构造里自动装，否则单测的内存库会互相串）。
 pub use storage::{
-    global_store, install_global_store, AiModelRow, AiSettingsRow, AiUsageRow, Store,
+    global_store, install_global_store, AiExampleRow, AiGlossaryRow, AiModelRow, AiQualityRuleRow,
+    AiSettingsRow, AiUsageRow, Store,
 };
 pub use types::{
     AccessContext, CellValue, ColumnDetail, ColumnMeta, ConnectReport, ConnectionConfig, ConnectionRecord,

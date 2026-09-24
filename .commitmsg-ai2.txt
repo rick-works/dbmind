@@ -1,0 +1,27 @@
+存储收口（二）：团队知识 / 数据质量规则 从 json 文件搬进 dbmind.db
+
+接着（一）继续。这两样原来各是一个 json 文件，现在落成表：
+
+内核（dbmind-core）：
+- SCHEMA 新增 3 张表：ai_glossary（术语，带 connection_id 索引）/
+  ai_examples（采纳示例，hits + created_at，按召回次数排序）/
+  ai_quality_rules（连接+库+表 一条，rules 存规则数组 JSON）
+- Store 新增：ai_glossary / ai_examples / replace_ai_knowledge（两表一个事务）/
+  ai_quality_rules / replace_ai_quality_rules
+
+Web（dbmind-web）：
+- knowledge.rs：只换 load/save 两个函数，对外形状一字未变
+  （{ glossary:[…], examples:[…] }），上层的增删改与 context_for / bump_hits 一行未动
+- quality.rs：只换 load_store/save_store；rules_delete 的 map.remove、configured 的遍历、
+  扫描/报告全部照旧生效 —— 因为写回是整体替换，删除自然也跟着走
+- migrate.rs 增加两样导入，并**复用模块自己的 save**（字段映射只有一份，
+  导入与日常保存不会出现两套逻辑）
+
+迁移对照（迁移前造了一条测试术语，人工核对后已删除）：
+  知识：术语 1 条，id / term / mapping / connectionId 逐字段一致（示例 0 条）
+  质量：test|sales 17 条、|orders 5 条 —— 与迁移前逐键一致
+  导入后立刻验证写路径：删掉那条测试术语 → 库里变成 0 条 ✓
+
+结果：~/.dbmind 顶层现在只剩 agent-hosts 与 dbmind.db(+wal/shm)，
+ai-config.json / ai-usage.json / ai-knowledge.json / ai-quality-rules.json
+四个文件已全部移入 backups/legacy-json/。

@@ -32,7 +32,6 @@
 //! SQL Server 与 SQLite 没有内置正则，这两类库上会给出 `unsupported` 状态并说明原因 ——
 //! 而不是悄悄放行（那会让「全部通过」变成假象）。
 
-use std::path::PathBuf;
 
 use axum::Json;
 use dbmind_core::ColumnDetail;
@@ -140,27 +139,64 @@ impl QualityReq {
     }
 }
 
-fn store_path() -> PathBuf {
-    dbmind_core::paths::home_dir().join("ai-quality-rules.json")
-}
-
 fn store_key(conn: &str, database: &str, table: &str) -> String {
     format!("{conn}|{database}|{table}")
 }
 
+/// 读全部质量规则，形状保持原来的 json：
+/// `{ "连接|库|表": { connectionId, database, table, rules, savedAt } }`。
+///
+/// 上层（`rules_delete` 的 `map.remove`、`configured` 的遍历、扫描/报告）一行都不用改。
 fn load_store() -> Value {
-    std::fs::read_to_string(store_path())
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({}))
+    let Some(store) = dbmind_core::global_store() else {
+        return json!({});
+    };
+    let mut doc = serde_json::Map::new();
+    for row in store.ai_quality_rules().unwrap_or_default() {
+        // 规则体坏了只让这一条空着，不连累其它表的规则
+        let rules = serde_json::from_str::<Value>(&row.rules).unwrap_or_else(|_| json!([]));
+        doc.insert(
+            store_key(&row.connection_id, &row.database_name, &row.table_name),
+            json!({
+                "connectionId": row.connection_id,
+                "database": row.database_name,
+                "table": row.table_name,
+                "rules": rules,
+                "savedAt": row.saved_at,
+            }),
+        );
+    }
+    Value::Object(doc)
 }
 
-fn save_store(doc: &Value) -> XResult<()> {
-    let path = store_path();
-    dbmind_core::paths::ensure_parent(&path)?;
-    let text = serde_json::to_string_pretty(doc).map_err(|e| XError::internal(e.to_string()))?;
-    std::fs::write(&path, text).map_err(|e| XError::internal(format!("写入质量规则失败：{e}")))
+/// 整体写回（**删除也走这里** —— 上层删掉一个键之后照样调它）。
+pub(crate) fn save_store(doc: &Value) -> XResult<()> {
+    let Some(store) = dbmind_core::global_store() else {
+        return Err(XError::internal("主库未就绪，质量规则无法保存"));
+    };
+    let mut rows: Vec<dbmind_core::AiQualityRuleRow> = Vec::new();
+    if let Some(map) = doc.as_object() {
+        for entry in map.values() {
+            let text = |key: &str| {
+                entry
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let rules = entry.get("rules").cloned().unwrap_or_else(|| json!([]));
+            rows.push(dbmind_core::AiQualityRuleRow {
+                connection_id: text("connectionId"),
+                database_name: text("database"),
+                table_name: text("table"),
+                rules: serde_json::to_string(&rules).unwrap_or_else(|_| "[]".to_string()),
+                saved_at: text("savedAt"),
+            });
+        }
+    }
+    store
+        .replace_ai_quality_rules(&rows)
+        .map_err(|e| XError::internal(format!("写入主库失败：{e}")))
 }
 
 /// 读某张表的规则（不存在返回空数组）。

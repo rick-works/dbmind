@@ -748,6 +748,172 @@ impl Store {
     }
 }
 
+/// 「ai_glossary」的一行。
+#[derive(Debug, Clone, Default)]
+pub struct AiGlossaryRow {
+    pub id: String,
+    pub term: String,
+    pub definition: String,
+    pub mapping: String,
+    pub connection_id: String,
+}
+
+/// 「ai_examples」的一行。`hits` 是召回次数（越常用的问法越该优先命中）。
+#[derive(Debug, Clone, Default)]
+pub struct AiExampleRow {
+    pub id: String,
+    pub question: String,
+    pub sql: String,
+    pub connection_id: String,
+    pub database_name: String,
+    pub hits: u64,
+    pub ts: String,
+}
+
+/// 「ai_quality_rules」的一行：某张表的整套规则。
+#[derive(Debug, Clone, Default)]
+pub struct AiQualityRuleRow {
+    pub connection_id: String,
+    pub database_name: String,
+    pub table_name: String,
+    /// 规则数组的 JSON（规则体由各检查器自己定义）。
+    pub rules: String,
+    pub saved_at: String,
+}
+
+impl Store {
+    /// 术语表（按 term 排序，界面与提示词的顺序都稳定）。
+    pub fn ai_glossary(&self) -> Result<Vec<AiGlossaryRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, term, definition, mapping, connection_id FROM ai_glossary ORDER BY term",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AiGlossaryRow {
+                id: row.get(0)?,
+                term: row.get(1)?,
+                definition: row.get(2)?,
+                mapping: row.get(3)?,
+                connection_id: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 采纳示例（召回次数降序，并列按时间新的在前）。
+    pub fn ai_examples(&self) -> Result<Vec<AiExampleRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, question, sql, connection_id, database_name, hits, created_at \
+             FROM ai_examples ORDER BY hits DESC, created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AiExampleRow {
+                id: row.get(0)?,
+                question: row.get(1)?,
+                sql: row.get(2)?,
+                connection_id: row.get(3)?,
+                database_name: row.get(4)?,
+                hits: row.get::<_, i64>(5)?.max(0) as u64,
+                ts: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 整体替换团队知识。业务层是「读出来 → 改数组 → 写回去」的用法，
+    /// 所以这里就按整体替换来做：一个事务，两张表一起换，不会出现"术语换了、示例没换"。
+    pub fn replace_ai_knowledge(
+        &self,
+        glossary: &[AiGlossaryRow],
+        examples: &[AiExampleRow],
+    ) -> Result<()> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM ai_glossary", [])?;
+        tx.execute("DELETE FROM ai_examples", [])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO ai_glossary (id, term, definition, mapping, connection_id) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for row in glossary {
+                stmt.execute(params![
+                    row.id,
+                    row.term,
+                    row.definition,
+                    row.mapping,
+                    row.connection_id
+                ])?;
+            }
+        }
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO ai_examples \
+                    (id, question, sql, connection_id, database_name, hits, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            )?;
+            for row in examples {
+                stmt.execute(params![
+                    row.id,
+                    row.question,
+                    row.sql,
+                    row.connection_id,
+                    row.database_name,
+                    row.hits as i64,
+                    row.ts
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// 全部质量规则（按连接/库/表排序）。
+    pub fn ai_quality_rules(&self) -> Result<Vec<AiQualityRuleRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT connection_id, database_name, table_name, rules, saved_at \
+             FROM ai_quality_rules ORDER BY connection_id, database_name, table_name",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AiQualityRuleRow {
+                connection_id: row.get(0)?,
+                database_name: row.get(1)?,
+                table_name: row.get(2)?,
+                rules: row.get(3)?,
+                saved_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 整体替换质量规则（同样是"读出来 → 改 → 写回去"的用法，删除也走这里）。
+    pub fn replace_ai_quality_rules(&self, rows: &[AiQualityRuleRow]) -> Result<()> {
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM ai_quality_rules", [])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO ai_quality_rules \
+                    (connection_id, database_name, table_name, rules, saved_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )?;
+            for row in rows {
+                stmt.execute(params![
+                    row.connection_id,
+                    row.database_name,
+                    row.table_name,
+                    row.rules,
+                    row.saved_at
+                ])?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
 // ---------------------------------------------------------------- 全局句柄
 
 /// 进程内唯一的主库句柄。
@@ -898,6 +1064,40 @@ CREATE TABLE IF NOT EXISTS ai_audit (
     prompt TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_audit_time ON ai_audit(time);
+
+-- 团队知识：术语表 + 采纳示例（以前是一个 ai-knowledge.json 里的两个数组）。
+-- 上限由业务层把关（200 / 300）：这不是数据库表越大越好，是一份"给提示词用的速查表"，
+-- 堆太多只会挤占上下文。落成表的好处是能按 connectionId 过滤、按 hits 排序。
+CREATE TABLE IF NOT EXISTS ai_glossary (
+    id            TEXT PRIMARY KEY,
+    term          TEXT NOT NULL DEFAULT '',
+    definition    TEXT NOT NULL DEFAULT '',
+    mapping       TEXT NOT NULL DEFAULT '',
+    connection_id TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ai_glossary_conn ON ai_glossary(connection_id);
+
+CREATE TABLE IF NOT EXISTS ai_examples (
+    id            TEXT PRIMARY KEY,
+    question      TEXT NOT NULL DEFAULT '',
+    sql           TEXT NOT NULL DEFAULT '',
+    connection_id TEXT NOT NULL DEFAULT '',
+    database_name TEXT NOT NULL DEFAULT '',
+    hits          INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_examples_conn ON ai_examples(connection_id);
+
+-- 数据质量规则：按 连接/库/表 一条，rules 是规则数组的 JSON
+-- （规则体是插件化的：不同检查器参数各异，硬拆成列只会一直加列）。
+CREATE TABLE IF NOT EXISTS ai_quality_rules (
+    connection_id TEXT NOT NULL,
+    database_name TEXT NOT NULL DEFAULT '',
+    table_name    TEXT NOT NULL DEFAULT '',
+    rules         TEXT NOT NULL DEFAULT '[]',
+    saved_at      TEXT NOT NULL,
+    PRIMARY KEY (connection_id, database_name, table_name)
+);
 "#;
 
 #[cfg(test)]

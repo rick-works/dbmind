@@ -7,12 +7,11 @@
 //! - **采纳示例**：用户点过「采纳」的问答对（问法 + 最终 SQL）。下次遇到相近问法，
 //!   直接把这几条塞进上下文，比让模型从零猜字段名可靠得多。
 //!
-//! 存 `<home>/ai-knowledge.json`，容量上限 200 条术语 / 300 条示例（与上游一致）：
-//! 这不是数据库，是一份**给提示词用的速查表**，堆太多只会挤占上下文。
+//! 存主库 `~/.dbmind/dbmind.db` 的 ai_glossary + ai_examples 两张表，
+//! 容量上限 200 条术语 / 300 条示例（与上游一致）：
+//! 这不是数据库表越大越好，是一份**给提示词用的速查表**，堆太多只会挤占上下文。
 //!
 //! 示例带 `hits` 计数：被召回次数多的排前面 —— 越常用的问法越该优先命中。
-
-use std::path::PathBuf;
 
 use axum::routing::{get, post};
 use axum::Json;
@@ -27,24 +26,88 @@ use crate::api::tasks;
 const MAX_GLOSSARY: usize = 200;
 const MAX_EXAMPLES: usize = 300;
 
-fn store_path() -> PathBuf {
-    dbmind_core::paths::home_dir().join("ai-knowledge.json")
+/// 读团队知识。没装全局库（单测、纯内核形态）→ 空。
+///
+/// 返回值刻意保持原来那份 json 的形状：`{ "glossary": [...], "examples": [...] }`。
+/// 上层的增删改逻辑与键名一字未变 —— 这也是这次迁移能做到"只换两个函数"的原因。
+pub(crate) fn load() -> Value {
+    let Some(store) = dbmind_core::global_store() else {
+        return json!({ "glossary": [], "examples": [] });
+    };
+    let glossary: Vec<Value> = store
+        .ai_glossary()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.id,
+                "term": row.term,
+                "definition": row.definition,
+                "mapping": row.mapping,
+                "connectionId": row.connection_id,
+            })
+        })
+        .collect();
+    let examples: Vec<Value> = store
+        .ai_examples()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|row| {
+            json!({
+                "id": row.id,
+                "question": row.question,
+                "sql": row.sql,
+                "connectionId": row.connection_id,
+                "database": row.database_name,
+                "hits": row.hits,
+                "ts": row.ts,
+            })
+        })
+        .collect();
+    json!({ "glossary": glossary, "examples": examples })
 }
 
-fn load() -> Value {
-    std::fs::read_to_string(store_path())
-        .ok()
-        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
-        .filter(Value::is_object)
-        .unwrap_or_else(|| json!({ "glossary": [], "examples": [] }))
+/// 写回团队知识（整体替换，两张表一个事务）。
+///
+/// 为什么整体替换：上层就是"读出来 → 改数组 → 写回去"的用法；而这张速查表
+/// 有硬上限（200 / 300 条），整体换的代价可以忽略，换来的是**不会出现半截状态**。
+pub(crate) fn save(doc: &Value) -> XResult<()> {
+    let Some(store) = dbmind_core::global_store() else {
+        return Err(XError::internal("主库未就绪，团队知识无法保存"));
+    };
+    let glossary: Vec<dbmind_core::AiGlossaryRow> = array_of(doc, "glossary")
+        .iter()
+        .map(|item| dbmind_core::AiGlossaryRow {
+            id: text_of(item, "id"),
+            term: text_of(item, "term"),
+            definition: text_of(item, "definition"),
+            mapping: text_of(item, "mapping"),
+            connection_id: text_of(item, "connectionId"),
+        })
+        .collect();
+    let examples: Vec<dbmind_core::AiExampleRow> = array_of(doc, "examples")
+        .iter()
+        .map(|item| dbmind_core::AiExampleRow {
+            id: text_of(item, "id"),
+            question: text_of(item, "question"),
+            sql: text_of(item, "sql"),
+            connection_id: text_of(item, "connectionId"),
+            database_name: text_of(item, "database"),
+            hits: item.get("hits").and_then(Value::as_u64).unwrap_or(0),
+            ts: text_of(item, "ts"),
+        })
+        .collect();
+    store
+        .replace_ai_knowledge(&glossary, &examples)
+        .map_err(|e| XError::internal(format!("写入主库失败：{e}")))
 }
 
-fn save(doc: &Value) -> XResult<()> {
-    let path = store_path();
-    dbmind_core::paths::ensure_parent(&path)?;
-    let text = serde_json::to_string_pretty(doc).map_err(|e| XError::internal(e.to_string()))?;
-    std::fs::write(&path, text)
-        .map_err(|e| XError::internal(format!("写入 {} 失败：{e}", path.display())))
+/// 取一个字符串字段：缺失或类型不对都当空串（与老文件里 `unwrap_or_default()` 行为一致）。
+fn text_of(item: &Value, key: &str) -> String {
+    item.get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
 }
 
 fn array_of<'a>(doc: &'a Value, key: &str) -> Vec<Value> {

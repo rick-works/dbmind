@@ -30,7 +30,64 @@ pub fn import_legacy() -> usize {
     moved += import_settings(&store, &home);
     moved += import_usage(&store, &home);
     moved += import_audit(&store, &home);
+    moved += import_knowledge(&store, &home);
+    moved += import_quality(&store, &home);
     moved
+}
+
+/// `ai-knowledge.json` → `ai_glossary` + `ai_examples`。
+fn import_knowledge(store: &Store, home: &Path) -> usize {
+    let path = home.join("ai-knowledge.json");
+    if !path.is_file() {
+        return 0;
+    }
+    let already = !store.ai_glossary().unwrap_or_default().is_empty()
+        || !store.ai_examples().unwrap_or_default().is_empty();
+    if already {
+        return 0;
+    }
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    let Ok(doc) = serde_json::from_str::<Value>(&text) else {
+        return 0;
+    };
+    // 复用模块自己的写入路径：字段映射只有一份，导入与日常保存不会走两套逻辑
+    if super::knowledge::save(&doc).is_err() {
+        return 0;
+    }
+    if archive(&path) {
+        tracing::info!("团队知识已从 ai-knowledge.json 迁入主库");
+    }
+    1
+}
+
+/// `ai-quality-rules.json` → `ai_quality_rules`。
+fn import_quality(store: &Store, home: &Path) -> usize {
+    let path = home.join("ai-quality-rules.json");
+    if !path.is_file() {
+        return 0;
+    }
+    if !store.ai_quality_rules().unwrap_or_default().is_empty() {
+        return 0;
+    }
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return 0;
+    };
+    let Ok(doc) = serde_json::from_str::<Value>(&text) else {
+        return 0;
+    };
+    let tables = doc.as_object().map(|map| map.len()).unwrap_or(0);
+    if tables == 0 {
+        return 0;
+    }
+    if super::quality::save_store(&doc).is_err() {
+        return 0;
+    }
+    if archive(&path) {
+        tracing::info!(tables = tables, "质量规则已从 ai-quality-rules.json 迁入主库");
+    }
+    1
 }
 
 /// `ai-config.json` → `ai_settings` + `ai_models`。

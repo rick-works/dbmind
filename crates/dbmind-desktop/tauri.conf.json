@@ -32,7 +32,7 @@
       }
     ],
     "resources": {
-      "../../frontend/dist": "web",
+      "../../dist/jre": "jre", "../../frontend/dist": "web",
       "../../agents/dbmind-agent-jdbc/target/dbmind-agent-jdbc.jar": "agents/dbmind-agent-jdbc.jar",
       "../../agents/dbmind-agent-mongodb/target/dbmind-agent-mongodb.jar": "agents/dbmind-agent-mongodb.jar",
       "../../agents/dbmind-agent-redis/target/dbmind-agent-redis.jar": "agents/dbmind-agent-redis.jar",
