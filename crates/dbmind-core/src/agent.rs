@@ -1172,28 +1172,148 @@ fn de_rows<'de, D>(deserializer: D) -> std::result::Result<Vec<Vec<crate::types:
 where
     D: serde::Deserializer<'de>,
 {
-    let rows = Vec::<Vec<Value>>::deserialize(deserializer)?;
-    Ok(rows
-        .into_iter()
-        .map(|row| row.into_iter().map(cell_from_value).collect())
-        .collect())
+    deserializer.deserialize_seq(RowsVisitor)
 }
 
-/// 单个单元格：带标签对象走原路径（blob 要带长度与预览字节，裸值表达不了），
-/// 裸值按 JSON 自己的类型判定。
-fn cell_from_value(value: Value) -> crate::types::CellValue {
-    use crate::types::CellValue;
-    match value {
-        Value::Object(_) => serde_json::from_value(value).unwrap_or(CellValue::Null),
-        Value::Null => CellValue::Null,
-        // 布尔归 0/1：与宿主侧的约定一致（跨语言表示布尔最省事）
-        Value::Bool(flag) => CellValue::Integer(if flag { 1 } else { 0 }),
-        Value::Number(number) => match number.as_i64() {
-            Some(int) => CellValue::Integer(int),
-            None => CellValue::Real(number.as_f64().unwrap_or(0.0)),
-        },
-        Value::String(text) => CellValue::Text(text),
-        Value::Array(_) => CellValue::Null,
+/// 行的 Visitor：让解析器**直接把标量喂进来**，不再每个格子先造一个 serde_json::Value。
+///
+/// 为什么要自己写：Vec<Vec<Value>> 那条路每格都要构造一个 Value（20 万行 × 12 列
+/// = 240 万次分配），随后再遍历一遍转成 CellValue。JSON 里本来只有那几种标量，
+/// 交给 visit_null / visit_i64 / visit_f64 / visit_str 就够 —— 少一层分配、少一趟遍历。
+///
+/// 两种格式都吃（见下面的 Cell）：裸值（紧凑格式）与带标签对象（旧格式 / blob）。
+/// 按形状自适应而不是看 compactRows 标记：内核与宿主可以各自独立升级或回退。
+struct RowsVisitor;
+
+impl<'de> serde::de::Visitor<'de> for RowsVisitor {
+    type Value = Vec<Vec<crate::types::CellValue>>;
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("行数组（数组的数组）")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        let mut rows = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+        while let Some(RowCells(row)) = seq.next_element::<RowCells>()? {
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+}
+
+/// 一行（若干 Cell）
+struct RowCells(Vec<crate::types::CellValue>);
+
+impl<'de> serde::Deserialize<'de> for RowCells {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct RowVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for RowVisitor {
+            type Value = RowCells;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("一行（单元格数组）")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut cells = Vec::with_capacity(seq.size_hint().unwrap_or(0));
+                while let Some(Cell(cell)) = seq.next_element::<Cell>()? {
+                    cells.push(cell);
+                }
+                Ok(RowCells(cells))
+            }
+        }
+
+        deserializer.deserialize_seq(RowVisitor)
+    }
+}
+
+/// 一个单元格：裸值（紧凑格式）与带标签对象（旧格式 / blob）都吃。
+struct Cell(crate::types::CellValue);
+
+impl<'de> serde::Deserialize<'de> for Cell {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct CellVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for CellVisitor {
+            type Value = Cell;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("单元格（裸值或带标签对象）")
+            }
+
+            fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+                Ok(Cell(crate::types::CellValue::Null))
+            }
+
+            fn visit_none<E>(self) -> std::result::Result<Self::Value, E> {
+                Ok(Cell(crate::types::CellValue::Null))
+            }
+
+            fn visit_some<D>(self, deserializer: D) -> std::result::Result<Self::Value, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                deserializer.deserialize_any(CellVisitor)
+            }
+
+            fn visit_bool<E>(self, flag: bool) -> std::result::Result<Self::Value, E> {
+                // 布尔归 0/1：与宿主侧的约定一致（跨语言表示布尔最省事）
+                Ok(Cell(crate::types::CellValue::Integer(if flag { 1 } else { 0 })))
+            }
+
+            fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E> {
+                Ok(Cell(crate::types::CellValue::Integer(value)))
+            }
+
+            fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E> {
+                Ok(Cell(crate::types::CellValue::Integer(
+                    value.min(i64::MAX as u64) as i64,
+                )))
+            }
+
+            fn visit_f64<E>(self, value: f64) -> std::result::Result<Self::Value, E> {
+                Ok(Cell(crate::types::CellValue::Real(value)))
+            }
+
+            fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Cell(crate::types::CellValue::Text(value.to_owned())))
+            }
+
+            fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E> {
+                Ok(Cell(crate::types::CellValue::Text(value)))
+            }
+
+            fn visit_map<A>(self, map: A) -> std::result::Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                // 带标签对象：旧格式的每一格，以及紧凑格式里唯一的例外 blob
+                //（它要带长度与预览字节，裸值表达不了）。这条不在热路径上。
+                let object = serde_json::Map::<String, Value>::deserialize(
+                    serde::de::value::MapAccessDeserializer::new(map),
+                )?;
+                Ok(Cell(serde_json::from_value(Value::Object(object))
+                    .unwrap_or(crate::types::CellValue::Null)))
+            }
+        }
+
+        deserializer.deserialize_any(CellVisitor)
     }
 }
 
