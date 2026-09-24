@@ -1400,7 +1400,32 @@ pub fn render_jdbc_url(template: &str, config: &ConnectionConfig) -> Result<Stri
             format!("JDBC URL 模板中存在无法识别的占位符：{url}"),
         ));
     }
+    // Windows 集成认证（SQL Server）：必须在 URL 上显式打开，否则驱动会退回 SQL 认证 ——
+    // 用户选了「Windows 身份验证」却收到「用户 'sa' 登录失败」，就是这么来的
+    // （YAML 模板里不可能写死它，因为同一类型还要支持 SQL 认证）。
+    //
+    // 用 JavaKerberos 而不是 NTLM：前者走 Kerberos 票据，不需要 mssql-jdbc 那套
+    // 平台原生 DLL（`mssql-jdbc_auth-*.dll`），纯 Java 就能跑。
+    if is_windows_auth(config) && url.starts_with("jdbc:sqlserver:") {
+        let separator = if url.contains(';') { ';' } else { '?' };
+        url.push(separator);
+        url.push_str("integratedSecurity=true;authenticationScheme=JavaKerberos");
+    }
     Ok(url)
+}
+
+/// 这条连接是否选了「Windows 集成认证」。
+///
+/// 认的是 `extra.authType == "windows"`（界面的「认证方式」下拉，见 conn.rs / shape.rs）；
+/// 其余情况（含没存过这个键的老连接）一律按 SQL 认证处理，行为与以前完全一致。
+pub fn is_windows_auth(config: &ConnectionConfig) -> bool {
+    config
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.get("authType"))
+        .and_then(|value| value.as_str())
+        .map(|value| value.eq_ignore_ascii_case("windows"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -1473,6 +1498,32 @@ mod tests {
 
     #[test]
     fn 文件型类型用文件路径建_url() {
+        // Windows 集成认证：URL 上必须显式打开 integratedSecurity，
+        // 否则不论界面上选了什么，驱动都会走 SQL 认证（报「用户 'sa' 登录失败」）。
+        let mut windows = ConnectionConfig::new("localhost", ConnectionKind::Sqlserver);
+        windows.host = Some("127.0.0.1".to_string());
+        windows.port = Some(1433);
+        windows.database = Some("master".to_string());
+        windows.username = Some("sa".to_string());
+        windows.password = Some("secret".to_string());
+        windows.extra = Some(serde_json::json!({ "authType": "windows" }));
+        let sqlserver = ConnectionKind::Sqlserver.jdbc_url_template().unwrap();
+        assert!(is_windows_auth(&windows));
+        let url = render_jdbc_url(sqlserver, &windows).unwrap();
+        assert!(url.contains("integratedSecurity=true"), "{url}");
+        assert!(url.contains("authenticationScheme=JavaKerberos"), "{url}");
+
+        // 默认的 SQL 认证绝不能带上它，否则普通的 sa 登录会莫名其妙失败
+        windows.extra = Some(serde_json::json!({ "authType": "sqlserver" }));
+        assert!(!is_windows_auth(&windows));
+        let plain = render_jdbc_url(sqlserver, &windows).unwrap();
+        assert!(!plain.contains("integratedSecurity"), "{plain}");
+
+        // 没存过 authType 的老连接：行为与以前完全一致（也不带）
+        windows.extra = None;
+        let legacy = render_jdbc_url(sqlserver, &windows).unwrap();
+        assert!(!legacy.contains("integratedSecurity"), "{legacy}");
+
         let config = ConnectionConfig::new("h2", ConnectionKind::H2).with_file("./data/app");
         let url = render_jdbc_url(ConnectionKind::H2.jdbc_url_template().unwrap(), &config).unwrap();
         assert_eq!(url, "jdbc:h2:file:./data/app");

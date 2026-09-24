@@ -129,6 +129,14 @@ pub fn config_from_body(body: &Value) -> XResult<ConnectionConfig> {
     if !note.is_empty() {
         extra.insert("note".to_string(), Value::String(note));
     }
+    // 认证方式（SQL Server 的「SQL Server 身份验证 / Windows 身份验证」）也必须存下来。
+    // 以前这里漏了：界面上选了 Windows 验证，保存后再打开又变回 SQL 验证，
+    // 而宿主那边照样拿用户名口令去登 —— 用户看到的报错就是
+    // 「用户 'sa' 登录失败」（明明选的是 Windows 验证）。同样放 extra 里。
+    let auth_type = text(body, "authType");
+    if !auth_type.is_empty() {
+        extra.insert("authType".to_string(), Value::String(auth_type));
+    }
 
     Ok(ConnectionConfig {
         name,

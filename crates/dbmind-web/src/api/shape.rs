@@ -26,6 +26,8 @@ use serde_json::{json, Map, Value};
 ///上游把这些放在连接记录本身，这里等价落位，语义一致。
 pub const EXTRA_ENVIRONMENT: &str = "environment";
 pub const EXTRA_ENV: &str = "env";
+/// 认证方式（SQL Server：`sqlserver` | `windows`）。存在 `extra` 里，见 conn.rs 的说明。
+pub const EXTRA_AUTH_TYPE: &str = "authType";
 
 /// 未分组时的默认目录名。
 ///
@@ -417,7 +419,7 @@ pub fn connection_json(record: &ConnectionRecord) -> Value {
         "port": config.port,
         "database": config.database.clone().unwrap_or_default(),
         "username": config.username.clone().unwrap_or_default(),
-        "authType": "",
+        "authType": extra_str(record, EXTRA_AUTH_TYPE).unwrap_or_default(),
         "filePath": config.file_path.clone().unwrap_or_default(),
         "charset": "UTF-8",
         "remark": "",

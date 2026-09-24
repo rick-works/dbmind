@@ -200,8 +200,17 @@ impl AgentDriver {
             // 宿主侧正是按 "username"/"password" 读的 —— 早先这里漏了这两行，
             // 于是所有需要认证的 JDBC 类型都登不上去。宿主层测试没发现，
             // 是因为它只覆盖 H2 文件库（那玩意儿不需要认证）。
-            params.insert("username".to_string(), json!(config.username));
-            params.insert("password".to_string(), json!(config.password));
+            //
+            // Windows 集成认证：只给主体名（可以是 user@REALM），**不给口令** ——
+            // 凭据由 Kerberos 票据提供；带上口令反而会把驱动拉回 SQL 认证。
+            // 没选这种认证方式时一字不改，还是原来的 username + password。
+            if agent::is_windows_auth(config) {
+                params.insert("username".to_string(), json!(config.username));
+                params.insert("password".to_string(), json!(""));
+            } else {
+                params.insert("username".to_string(), json!(config.username));
+                params.insert("password".to_string(), json!(config.password));
+            }
             // 连接级驱动参数（`extra.params`）透传给驱动，形如
             // `{"trustServerCertificate": "true"}` —— 自签证书的 SQL Server 就得靠它。
             if let Some(extra) = config
