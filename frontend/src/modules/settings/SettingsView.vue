@@ -539,32 +539,9 @@
               </el-input>
               <div v-else class="path-readonly" :title="pathInfo.driverDir">{{ pathInfo.driverDir }}</div>
             </el-form-item>
-            <el-form-item :label="$t('settings.paths.exportDir')">
-              <div style="display:flex;align-items:center;gap:8px;width:100%">
-                <el-input v-model="exportDirInput" style="flex:1;min-width:0" readonly
-                          :placeholder="$t('settings.paths.exportDirDefault')" @click="browseExportDir('')" />
-                <el-button size="small" style="flex-shrink:0" @click="browseExportDir('')">{{ $t('bkp.browse') }}</el-button>
-                <el-button size="small" style="flex-shrink:0" @click="openExportDir">{{ $t('common.openDir') }}</el-button>
-                <el-button v-if="exportDirInput" size="small" text style="flex-shrink:0" @click="resetExportDir">{{ $t('settings.editor.reset') }}</el-button>
-              </div>
-            </el-form-item>
           </el-form>
 
-          <!-- 选导出目录：复用备份还原那套目录浏览接口（/api/backup/browse-files），不另造一套 -->
-          <el-dialog v-model="dirPick.visible" :title="$t('settings.paths.pickExportDir')" width="520px" append-to-body>
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-              <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                    :title="dirPick.path">{{ dirPick.path || $t('settings.paths.thisPc') }}</span>
-              <el-button size="small" type="primary" @click="chooseExportDir(dirPick.path)">{{ $t('settings.paths.useThisDir') }}</el-button>
-            </div>
-            <div style="max-height:320px;overflow:auto">
-              <div v-if="dirPick.path" class="dir-item" style="cursor:pointer;padding:6px 8px" @click="browseExportDir(dirPick.parent || '')">↑ {{ $t('settings.paths.parentDir') }}</div>
-              <div v-for="d in dirPick.dirs" :key="d" class="dir-item" style="cursor:pointer;padding:6px 8px" @click="browseExportDir(joinPath(dirPick.path, d))">📁 {{ d }}</div>
-              <div v-if="!dirPick.dirs.length" style="padding:12px;color:var(--dc-text-dim)">{{ $t('settings.paths.dirEmpty') }}</div>
-            </div>
-          </el-dialog>
 
-          <div class="panel-desc" style="margin-top:-6px">{{ $t('settings.paths.exportNote') }}</div>
 
           <div v-if="PATH_SETTINGS_EDITABLE" class="actions">
             <el-button type="primary" :loading="savingPath" @click="savePaths">
@@ -655,10 +632,6 @@
             <div class="about-row">
               <span class="about-k">{{ $t('settings.paths.driverDir') }}</span>
               <code class="about-v">{{ pathInfo.driverDir }}</code>
-            </div>
-            <div class="about-row">
-              <span class="about-k">{{ $t('settings.paths.exportDir') }}</span>
-              <code class="about-v">{{ pathInfo.exportDir }}</code>
             </div>
           </div>
 
@@ -951,72 +924,12 @@ const loadPaths = async () => {
     pathInfo.value = info
     pathForm.value = { dataDir: info.dataDir, driverDir: info.driverDir }
     // 空 = 用默认目录；有值 = 用户指定过
-    exportDirInput.value = info.exportDirConfigured ? info.exportDir : ''
   } catch (e) { ElMessage.error(t('settings.paths.msgLoadFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) })) }
 }
 
 const resetDataDir = () => { pathForm.value.dataDir = pathInfo.value.defaultDataDir }
 const resetDriverDir = () => { pathForm.value.driverDir = pathInfo.value.defaultDriverDir }
 
-// ===== 导出目录可选 =====
-
-/**
- * 导出目录（用户可选）。
- *
- * 以前这里是**只读**的，而且后端报的还是 `{dataDir}/work` —— 与导出实际落地的
- * `<home>/exports` 不一致，于是「打开目录」打开的是一个空文件夹。现在：
- * 后端报真实目录 ✓ 选完立刻保存（不等上面那个总保存按钮 ✓ 它受 PATH_SETTINGS_EDITABLE 管）。
- */
-const exportDirInput = ref('')
-const dirPick = ref({ visible: false, path: '', parent: '', dirs: [] })
-
-const joinPath = (base, name) => (base ? base.replace(/[\\/]+$/, '') + '\\' + name : name)
-
-/** 打开目录浏览：不传 path 就让后端给一个起点（用户主目录） */
-const browseExportDir = async (path) => {
-  try {
-    const r = await browseBackupDirs(path || '')
-    const d = r?.dir || r || {}
-    dirPick.value = {
-      visible: true,
-      path: d.path || path || '',
-      parent: d.parent || '',
-      dirs: Array.isArray(d.dirs) ? d.dirs : []
-    }
-  } catch (e) {
-    ElMessage.error(t('settings.paths.msgLoadFailed', { detail: (e?.message || e?.toString?.() || '') }))
-  }
-}
-
-const applyExportDir = async (dir) => {
-  try {
-    const r = await savePathSettings({ exportDir: dir })
-    const applied = r?.exportDir || dir || ''
-    pathInfo.value = { ...pathInfo.value, exportDir: applied }
-    exportDirInput.value = dir ? applied : ''
-    ElMessage.success(dir ? t('settings.paths.exportDirSaved', { dir: applied }) : t('settings.paths.exportDirReset'))
-  } catch (e) {
-    ElMessage.error(t('settings.paths.msgLoadFailed', { detail: (e?.message || e?.toString?.() || '') }))
-  }
-}
-
-const chooseExportDir = async (dir) => {
-  if (!dir) return
-  dirPick.value.visible = false
-  await applyExportDir(dir)
-}
-
-const resetExportDir = () => applyExportDir('')
-
-/** 打开导出产物目录（导出 / 转储的结果都在这里，后端不做自动清理） */
-const openExportDir = async () => {
-  try {
-    const r = await openLocalDir(pathInfo.value.exportDir)
-    if (r && r.success === false) ElMessage.warning(r.message || t('common.openDirFailed'))
-  } catch (e) {
-    ElMessage.error(t('common.openDirFailedDetail', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) }))
-  }
-}
 
 /**
  * 保存路径设置。

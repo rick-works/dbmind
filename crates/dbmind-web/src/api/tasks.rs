@@ -409,45 +409,24 @@ impl Drop for FinishGuard {
     }
 }
 
-/// 产物目录：`<home>/exports`。
-/// 导出目录设置文件（一行一个路径）。
+/// 产物目录：系统临时目录下的 `dbmind-exports`。
 ///
-/// 为什么不放进内核的设置表：`export_dir()` 是个**拿不到 AppState** 的纯函数
-/// （下载、产物路径、清理都在调它），而设置表要走 engine 句柄。导出目录本质就是
-/// "这台机器上的一个路径"，用一行文件表达最直接，不必为它把 engine 穿得到处都是。
-pub fn export_dir_file() -> PathBuf {
-    dbmind_core::paths::home_dir().join("export-dir.txt")
-}
-
-/// 用户在设置页指定的导出目录（没设过给 None）。
-pub fn configured_export_dir() -> Option<PathBuf> {
-    let text = std::fs::read_to_string(export_dir_file()).ok()?;
-    let line = text.lines().next()?.trim().to_string();
-    if line.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(line))
-    }
-}
-
-/// 设置导出目录（空串 = 恢复默认）。返回生效后的目录。
-pub fn set_export_dir(dir: &str) -> Result<PathBuf, String> {
-    let dir = dir.trim();
-    if dir.is_empty() {
-        let _ = std::fs::remove_file(export_dir_file());
-        return Ok(export_dir());
-    }
-    let path = PathBuf::from(dir);
-    dbmind_core::paths::ensure_dir(&path)
-        .map_err(|e| format!("无法创建导出目录 {}：{e}", path.display()))?;
-    std::fs::write(export_dir_file(), path.display().to_string())
-        .map_err(|e| format!("无法保存导出目录设置：{e}"))?;
-    Ok(path)
-}
-
-/// 产物目录：用户在设置页指定的优先，否则 `<home>/exports`。
+/// 这里只是**中转**：异步导出把文件写在此处，前端取回（GET /export/download/{taskId}）
+/// 之后由用户自己选保存位置，**取回即删**。
+///
+/// 以前它是 `<home>/exports`（设置页还能改），但导出既然已经交给用户选位置，
+/// 服务端再留一份用户可见的副本只会堆积（实测攒过好几个 20MB+ 的文件），
+/// 还会再弹一句"已保存到 …"。现在改成临时目录，用户机器上看不到任何残留。
+///
+/// 进程启动后的第一次调用会把整个目录清掉：上一次运行留下的残片
+/// （任务被取消、服务中途退出）不该带到下一次。
 pub fn export_dir() -> PathBuf {
-    configured_export_dir().unwrap_or_else(|| dbmind_core::paths::home_dir().join("exports"))
+    let dir = std::env::temp_dir().join("dbmind-exports");
+    static SWEEP: std::sync::Once = std::sync::Once::new();
+    SWEEP.call_once(|| {
+        let _ = std::fs::remove_dir_all(&dir);
+    });
+    dir
 }
 
 /// 产物文件路径（`<home>/exports/<taskId>.<ext>`）。

@@ -1445,7 +1445,12 @@ pub async fn download(
         return (StatusCode::NOT_FOUND, "任务尚未完成，没有可下载的文件").into_response();
     };
     match std::fs::read(&artifact.path) {
-        Ok(bytes) => file_response(bytes, &artifact.media_type, &artifact.filename),
+        Ok(bytes) => {
+            // 取回即删：服务端这份只是中转，用户那份由他自己选位置另存。
+            // 不删的话临时目录会随每次导出增长（而且没人会来看）。
+            let _ = std::fs::remove_file(&artifact.path);
+            file_response(bytes, &artifact.media_type, &artifact.filename)
+        }
         Err(err) => {
             tracing::error!(path = %artifact.path.display(), error = %err, "导出产物读不到");
             (

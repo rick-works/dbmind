@@ -143,11 +143,6 @@ fn paths_json(store_path: &str) -> Value {
         "defaultDataDir": data_dir,
         "driverDir": format!("{data_dir}/drivers"),
         "defaultDriverDir": format!("{data_dir}/drivers"),
-        // 必须报**真实**的导出目录：以前这里写的是 `{dataDir}/work`，而导出其实落在
-        // `<home>/exports` —— 于是设置页的「打开目录」打开的是一个空文件夹。
-        "exportDir": crate::api::tasks::export_dir().display().to_string(),
-        // 是否被用户改过（空值时前端显示占位符"默认"，而不是把默认路径当作用户设置）
-        "exportDirConfigured": crate::api::tasks::configured_export_dir().is_some(),
     })
 }
 
@@ -159,16 +154,8 @@ pub async fn paths_get(State(state): State<AppState>) -> XResult<Json<Value>> {
 
 /// 迁移数据目录需要「先关库、搬文件、再开库」，内核没有这套编排，如实拒绝。
 pub async fn paths_put(Json(body): Json<Value>) -> XResult<Json<Value>> {
-    // 导出目录是**可以直接改**的（其余路径不行：dataDir 要搬迁、driverDir 要重装驱动）。
-    // 以前这个接口对任何请求都回 NOT_IMPLEMENTED，设置页里那一行只能是只读的。
-    if let Some(dir) = body.get("exportDir").and_then(Value::as_str) {
-        let applied = crate::api::tasks::set_export_dir(dir)
-            .map_err(|e| XError::new(axum::http::StatusCode::BAD_REQUEST, e))?;
-        return Ok(Json(json!({
-            "success": true,
-            "exportDir": applied.display().to_string(),
-        })));
-    }
+    // 导出目录已不是可配置项：导出由用户自己选保存位置，服务端只用临时目录中转，
+    // 取回即删。其余路径（dataDir 要搬迁、driverDir 要重装驱动）内核没有这套编排，如实拒绝。
     let requested = body
         .get("dataDir")
         .and_then(Value::as_str)
