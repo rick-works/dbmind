@@ -1,0 +1,31 @@
+首次运行初始化：目录骨架 + 提示词模板 + 一份示例数据（不再是空文件夹）
+
+问题（用户实测反馈）：全新装完打开一看，~/.dbmind 里只有 4 个文件
+（agent-hosts / dbmind.db / -wal / -shm），没有 drivers / exports / logs / prompts /
+work / backups 这些目录，界面里一条连接也没有 —— 像装坏了。
+原因是这些目录、提示词模板、示例数据以前全是「用到才建」。
+
+新增 dbmind-core/src/bootstrap.rs，在 DbMindEngine::from_store 里跑一次（幂等）：
+- 建齐目录骨架：drivers / exports / logs / prompts / samples / work/tmp /
+  work/restore / backups
+- 只在真正全新时放示例数据：用内核自带的 rusqlite 建 samples/demo.db
+  （customers + orders 两张表、几行数据、一个索引），并插入一条指向它的连接
+  「示例数据库（SQLite）」—— 不需要驱动、不需要联网，离线装完就能点开看
+- 写下初始化标记 app_settings.initializedAt
+- 内存库（测试、临时会话）直接跳过；初始化失败只记警告，不拦启动
+
+一条硬规矩：**绝不碰老用户的数据** —— 判断「是否全新」必须同时满足
+「没有初始化标记」且「连接表为空」。老版本升级上来的库有用户自己的连接，
+只会补一个标记，绝不会被塞进一条陌生连接。
+
+另外：提示词模板以前要等第一次用 AI 才释放，现在 serve() 启动时就写好
+（缺哪个补哪个，不覆盖用户改过的）。
+
+验证：
+- 单测 2/2：全新目录会建骨架 + 示例；已有连接的库绝不被塞示例
+- 端到端（DBMIND_HOME 指向临时目录、端口 20377，不碰真实数据目录）：
+    首次启动 → 日志「数据目录初始化完成 dirs=8 sample=true」+「提示词模板已就绪」
+              目录骨架建齐；连接 1 条「示例数据库（SQLite）」指向 samples/demo.db
+              （16384 B，文件头 "SQLite format 3"）；prompts 20 个模板
+    再启动   → 初始化日志 0 行、连接仍 1 条（幂等成立）
+- STORAGE.md 补上「首次运行会做什么」小节与 samples/demo.db 一行

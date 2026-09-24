@@ -24,6 +24,23 @@
 
 **想搬家**：设 `DBMIND_HOME` 指向新目录，重启即可，所有文件跟着走。
 
+### 首次运行会做什么（`bootstrap`）
+
+全新安装（或数据目录被清空后）第一次启动，内核会先把它准备好 ——
+不再是"一个只有四个文件的空文件夹、界面里一条连接都没有"：
+
+| 动作 | 说明 | 代码 |
+|---|---|---|
+| 建齐目录骨架 | `drivers/` `exports/` `logs/` `prompts/` `samples/` `work/tmp` `work/restore` `backups/` | `dbmind-core/src/bootstrap.rs` |
+| 释放提示词模板 | `prompts/*.md` 共 20 个内置模板，缺哪个补哪个（**不覆盖**用户改过的） | `api/ai/prompts.rs` |
+| 放一份示例数据 | `samples/demo.db`（SQLite，两张表 + 几行）+ 一条指向它的连接「示例数据库（SQLite）」 | `bootstrap.rs` |
+| 记下初始化标记 | `app_settings.initializedAt` | `bootstrap.rs` |
+
+> **绝不碰老用户的数据**：只有当「没有初始化标记」**且**「连接表是空的」两个条件**同时**满足时，
+> 才会放示例数据。老版本升级上来的库里有用户自己的连接 —— 那种情况只补一个标记，
+> 绝不会往他的连接列表里塞一条陌生连接。示例库用内核自带的 rusqlite 建，
+> 不需要驱动、不需要联网，离线装完也能立刻点开看。
+
 ---
 
 ## 1. 主元数据库：`~/.dbmind/dbmind.db`（SQLite）
@@ -105,6 +122,7 @@ dbmind.db-shm     共享内存索引
 | `drivers/<agentKey>/*.jar` | 驱动 jar 缓存 | 二进制；搜索路径含 `DBMIND_DRIVER_DIRS` | `dbmind-core/src/agent.rs:420-541`、`:425-431` |
 | `logs/agent-<id>.err.log` | Java 代理的 JVM stderr | 文本，**覆盖写**（只留最后一次） | `agent.rs:167-181` |
 | `exports/` | 导出产物 | CSV / JSON / XLSX / SQL / ZIP | `api/tasks.rs:402-404`、`api/export.rs:781,894,927,1086` |
+| `samples/demo.db` | 首次运行时生成的示例 SQLite 库（可随时删） | `dbmind-core/src/bootstrap.rs` |
 | `work/tmp/sync_<stamp>.<ext>` | 同步导入的临时文件 | **读完即删** | `export.rs:1090-1095` |
 | `work/restore/<stamp>_<name>` | 上传的备份暂存 | 还原期间保留（会多次读取） | `api/backup.rs:1391-1398` |
 | `backups/` | 备份产物 + 写探针 `.dbmind-write-test-*` | 探针用于验证目录可写 | `backup.rs:369-371,395,975,1187` |

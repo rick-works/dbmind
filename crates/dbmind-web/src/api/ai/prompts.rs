@@ -79,7 +79,7 @@ fn user_dir() -> PathBuf {
 }
 
 /// 首次使用把内置模板写到用户目录（已存在的**不覆盖** —— 那可能是用户改过的）。
-fn release_defaults() -> XResult<PathBuf> {
+pub(crate) fn release_defaults() -> XResult<PathBuf> {
     let dir = user_dir();
     dbmind_core::paths::ensure_dir(&dir)?;
     for (id, text) in BUILTIN {

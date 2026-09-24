@@ -71,6 +71,19 @@ impl DbMindEngine {
         // 会话相关设置：开机就按设置生效（驱动持有共享原子量，实时读到）
         engine.apply_session_limits()?;
         engine.refresh_agent_hosts();
+        // 首次运行初始化：目录骨架 + （只在真正全新时）示例库与示例连接。
+        // 失败只记警告 —— 初始化没做好不该拦住用户开库。
+        match crate::bootstrap::ensure_first_run(engine.store()) {
+            Ok(report) if !report.is_empty() => tracing::info!(
+                dirs = report.created_dirs.len(),
+                sample = report.seeded_sample,
+                "数据目录初始化完成"
+            ),
+            Ok(_) => {}
+            Err(err) => {
+                tracing::warn!(target: "dbmind::bootstrap", error = %err, "数据目录初始化失败")
+            }
+        }
         Ok(engine)
     }
 

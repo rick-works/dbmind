@@ -575,6 +575,13 @@ pub async fn serve(options: Options) -> Result<(), String> {
         tracing::info!(actions = imported, "已把旧版 json 状态导入主库");
     }
 
+    // 提示词模板：以前要等第一次用 AI 才释放，现在开机就写好
+    // （缺哪个补哪个，绝不覆盖用户自己改过的）
+    match crate::api::ai::prompts::release_defaults() {
+        Ok(dir) => tracing::info!(dir = %dir.display(), "提示词模板已就绪"),
+        Err(err) => tracing::warn!(error = ?err, "释放提示词模板失败"),
+    }
+
     let summary = engine.runtime_summary();
     tracing::info!(
         store = %summary.store_path,
