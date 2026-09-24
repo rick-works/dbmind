@@ -1003,6 +1003,7 @@ export default {
   'tf.orderKeyTip': '排序键(ORDER BY)：决定 MergeTree 数据排列与默认主键',
   'tf.colDefault': '默认值',
   'tf.colAutoInc': '自增',
+  'tf.colOps': '操作',
   'tf.noColumns': '暂无字段，点击右上角「添加字段」',
   'tf.tabIndexes': '索引 ({n})',
   'tf.addIndex': '添加索引',

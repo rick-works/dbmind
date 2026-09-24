@@ -997,6 +997,7 @@ export default {
   'tf.orderKeyTip': 'Sort key (ORDER BY): decides the MergeTree data order and the default primary key',
   'tf.colDefault': 'Default',
   'tf.colAutoInc': 'Auto increment',
+  'tf.colOps': 'Actions',
   'tf.noColumns': 'No column yet — click "Add column" at the top right',
   'tf.tabIndexes': 'Indexes ({n})',
   'tf.addIndex': 'Add index',

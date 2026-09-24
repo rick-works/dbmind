@@ -85,7 +85,13 @@
                   <th :colspan="headSpan"></th>
                 </tr>
                 <tr>
-                  <th style="width:40px" :title="$t('tf.colOrder')">#</th>
+                  <!-- 列宽的规矩（别随手改，宽屏上的观感全靠它）：
+                       · 表格宽 100% + 固定布局时，**多出来的宽度会按比例摊给每一列** ——
+                         所以序号这种小列（40px）会被摊宽，看着比字段名还扎眼；
+                       · 解法是让**长文本那一列不写宽度**：富余宽度只落到它头上，
+                         其余列宽恒定。这里由「备注/说明」承担（没这一列时落到末列）。
+                       · 序号收到 32px：它只放一位数。 -->
+                  <th style="width:32px" :title="$t('tf.colOrder')">#</th>
                   <th style="width:120px">{{ $t('tf.colName') }}</th>
                   <th style="width:110px">{{ $t('tf.colType') }}</th>
                   <th style="width:64px">{{ $t('tf.colLength') }}</th>
@@ -95,8 +101,8 @@
                   <th v-if="showOrderKey" class="c-center" style="width:70px" :title="$t('tf.orderKeyTip')">{{ $t('tf.orderKey') }}</th>
                   <th style="width:150px">{{ $t('tf.colDefault') }}</th>
                   <th v-if="showAutoIncrement" class="c-center" style="width:56px">{{ $t('tf.colAutoInc') }}</th>
-                  <th v-if="showComment" style="width:100px">{{ $t('udv.fComment') }}</th>
-                  <th style="width:40px"></th>
+                  <th v-if="showComment">{{ $t('udv.fComment') }}</th>
+                  <th class="c-center" style="width:40px">{{ $t('tf.colOps') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -204,6 +210,30 @@ const cols = form.columns
 const idxs = form.indexes
 
 const isDoris = computed(() => has(props.features, 'doris'))
+
+/// 该有默认值的字段，一律给上默认值（**所有类型**共用这一处判断）：
+///   存储引擎：优先 InnoDB（MySQL 系），其次 MergeTree（ClickHouse），否则用后端的第一个；
+///   字符集  ：优先 utf8mb4，其次 utf8，否则第一个；排序规则取该字符集的 _general_ci（有才设）。
+/// 只在字段还是空的时候填 —— 用户改过的一律不碰（features 可能在重新取回时再次触发本 watch）。
+/// 为什么不把这些默认值写进 `form` 的初值：可取的值来自后端（features.engines / charsets），
+/// 而 features 是异步来的 —— 写死初值就等于赌"后端一定有 InnoDB"，赌错了会生成非法 DDL。
+const pickDefault = (list, preferred) => {
+  if (!Array.isArray(list) || !list.length) return ''
+  for (const want of preferred) {
+    const hit = list.find(x => String(x).toLowerCase() === want.toLowerCase())
+    if (hit) return hit
+  }
+  return list[0]
+}
+watch(() => props.features, (f) => {
+  if (!f) return
+  if (!form.engine) form.engine = pickDefault(f.engines, ['InnoDB', 'MergeTree'])
+  if (!form.charset) form.charset = pickDefault(f.charsets, ['utf8mb4', 'utf8', 'UTF8'])
+  if (!form.collation && form.charset) {
+    const list = (f.collations || {})[form.charset] || []
+    form.collation = list.find(c => String(c).toLowerCase() === `${form.charset}_general_ci`.toLowerCase()) || ''
+  }
+}, { immediate: true, deep: false })
 
 /** Doris 模型 Key 列：优先主键列，否则首个有名字段 */
 const dorisKeyCols = computed(() => {
@@ -743,17 +773,32 @@ emit('sql', genSql())
 .field-table tbody tr.sel-row td:first-child { box-shadow: inset 2px 0 0 var(--dc-primary); }
 .field-table tbody tr:hover { background: transparent; }   /* 旧的 tr 级底色让位给 td 级 */
 
-/* 基本信息：整块收成一张卡（原来表单直接铺在面板上，下面又是整片空白） */
+/* ===== 基本信息：一张卡 + 均匀网格 =====
+   这里每个字段各自是一个 <el-form class="grid-item">（与编辑页那张 basic-table 不是一个结构），
+   所以间距必须由**网格自己**提供：
+     · 行距靠 grid 的 row-gap，不能再让 el-form-item 自带 18px margin-bottom
+       （那是给"竖向堆叠"用的，混进网格里每行高度都不一样 → 看着就"乱"）；
+     · 每个控件都要撑满自己的格子：el-input 默认撑满，但 el-select / el-input-number
+       是**内容宽度**，不显式写 100% 就会缩成一小截（Doris 的分桶数/副本数最明显）。 */
 .form-grid {
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
   align-items: start;
-  padding: 14px 14px 2px;
+  gap: 12px 16px;
+  padding: 14px;
   background: var(--dc-bg-card);
   border: 1px solid var(--dc-border-soft);
   border-radius: 10px;
 }
+.form-grid .grid-item { min-width: 0; }
+.form-grid :deep(.el-form-item) { margin-bottom: 0; }
 .form-grid :deep(.el-form-item__label) {
   font-size: 12px; font-weight: 500; color: var(--dc-text-dim);
   line-height: 18px; margin-bottom: 4px; padding: 0;
 }
+.form-grid :deep(.el-input),
+.form-grid :deep(.el-select),
+.form-grid :deep(.el-input-number) { width: 100%; }
+/* 字段表末列（操作）：表头与内容都居中 */
+.field-table thead tr:last-child th:last-child { text-align: center; }
 </style>
