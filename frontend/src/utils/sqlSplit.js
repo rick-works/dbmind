@@ -90,5 +90,14 @@ export function splitSqlStatementRanges(sql) {
 
 /** 只要每段文本（执行链路沿用这个） */
 export function splitSqlStatements(sql) {
-  return splitSqlStatementRanges(sql).map(r => r.text)
+  // 一定要滤掉空白段：`SELECT …;` 这种**末尾带分号**的写法会多切出一段空的，
+  // 于是「一条语句」被算成「多段」。
+
+  // 这一步不是洁癖 —— 调用方按段数决定走哪条链路：
+  //   段数 > 1 ⇒ 批量接口（不传分页参数，后端也不统计总数）
+  //   段数 = 1 ⇒ 单条接口（带 page/size，能翻页、能显示「共 N 条」）
+  // 少滤这一个空段，用户就会看到：条数没了、翻页也没了。
+  return splitSqlStatementRanges(sql)
+    .map(r => r.text)
+    .filter(text => text.trim().length > 0)
 }
