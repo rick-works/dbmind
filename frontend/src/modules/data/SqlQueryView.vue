@@ -147,7 +147,7 @@
       <div class="editor-status">
         <span class="st-item">行 {{ cursorLine }}，列 {{ cursorColumn }}</span>
         <span v-if="hasEditorSelection" class="st-item st-hl">选中 {{ selChars }} 字符 / {{ selLines }} 行</span>
-        <span class="st-item st-dim">共 {{ sqlLineCount }} 行</span>
+        <span class="st-item st-dim">{{ $t('sqlq.editorLineCount', { n: sqlLineCount }) }}</span>
         <span class="flex-spacer"></span>
         <span v-if="!isNoSql" class="st-item st-dim" :title="$t('sqlq.dialectTitle')">{{ String(fmtDialect || 'sql').toUpperCase() }}</span>
       </div>
@@ -308,12 +308,19 @@
               <span class="rs-item">{{ $t('sqlq.max') }} <b>{{ fmtNum(resultSelectionSummary.max) }}</b></span>
             </template>
           </span>
+          <!-- 总数未知（后端没统计，totalCount 为 -1）时不显示分页器自带的「共 N 条」：
+               那个数字取的是本页行数，等于把「这一页取回多少行」说成「总共多少行」，
+               用户会看到「共 200 条」这种和实际差几个数量级的数。未知时只留翻页控件，
+               并在前面给一句诚实的话。 -->
+          <span v-if="displayTotal === null && loadedRows > 0" class="st-item st-dim rows-hint">
+            {{ $t('sqlq.rowsReturnedHint', { n: loadedRows }) }}
+          </span>
           <el-pagination
             v-model:current-page="currentPage"
             :page-size="pageSize"
             :total="pageTotal"
             :page-sizes="queryPageSizes"
-            layout="total, sizes, prev, pager, next, jumper"
+            :layout="displayTotal === null ? 'sizes, prev, pager, next, jumper' : 'total, sizes, prev, pager, next, jumper'"
             size="small"
             background
             @current-change="onPageChange"
@@ -563,8 +570,13 @@ const displayTotal = computed(() => {
   const t = result.value.totalCount
   return typeof t === 'number' && t >= 0 ? t : null
 })
-// 分页 total：真实总条数优先，未知时退回当前已加载行数
-const pageTotal = computed(() => displayTotal.value !== null ? displayTotal.value : (result.value?.rows?.length || 0))
+// 本页已加载行数
+const loadedRows = computed(() => result.value?.rows?.length || 0)
+// 分页 total：真实总条数优先。
+//
+// 未知时退回「本页行数」只是为了给分页器一个能算页码的数；模板那边会把自带的
+// 「共 N 条」去掉，免得把本页行数当成总数展示。
+const pageTotal = computed(() => displayTotal.value !== null ? displayTotal.value : loadedRows.value)
 
 // ========== 结果表：选中区汇总（底栏状态区，做法借自参考项目 dbx）==========
 // 优先级：单元格区域 > 选中行 > 选中列（同一时刻只会存在一块选区，见 focusResult* 那几个函数）。

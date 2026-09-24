@@ -187,7 +187,7 @@ impl<W: Write + Seek> Workbook<W> {
             ));
             workbook_rels.push_str(&format!(
                 "<Relationship Id=\"rId{id}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"{}\"/>",
-                sheet_path(id)
+                sheet_rel_target(id)
             ));
         }
         let workbook = format!(
@@ -228,6 +228,16 @@ fn io_message<E: std::fmt::Display>(error: E) -> String {
 
 fn sheet_path(index: usize) -> String {
     format!("xl/worksheets/sheet{index}.xml")
+}
+
+/// 工作表在 xl/_rels/workbook.xml.rels 里的 Target。
+///
+/// 必须是【相对 workbook.xml 所在目录（xl/）】的路径，不能带 xl/ 前缀：
+/// 写成 "xl/worksheets/sheet1.xml" 会被解析到 "xl/xl/worksheets/sheet1.xml" ——
+/// 那个部件不存在，Excel 于是报「发现…中的部分内容有问题，是否恢复」。
+/// 按部件名直接读文件的阅读器（PowerShell、多数解包工具）不理会关系，所以一直没暴露。
+fn sheet_rel_target(index: usize) -> String {
+    format!("worksheets/sheet{index}.xml")
 }
 
 /// 单元格 XML。

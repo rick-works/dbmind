@@ -1107,6 +1107,8 @@ export default {
   'pcf.exMulti': '示例：SELECT * FROM table_name;  （多条语句用 ; 分隔）',
   'et.exporting': '正在导出 {name}',
   'et.data': '数据',
+  'sqlq.editorLineCount': 'SQL 文本 {n} 行',
+  'sqlq.rowsReturnedHint': '已返回 {n} 行（未统计总数，可能还有更多）',
   'tpd.canceling': '正在取消…',
   'tpd.rowsPerSec': '{n} 行/秒',
   'tpd.eta': '预计剩余 {t}',

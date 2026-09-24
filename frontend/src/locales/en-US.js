@@ -1101,6 +1101,8 @@ export default {
   'pcf.exMulti': 'e.g. SELECT * FROM table_name;  (separate multiple statements with ;)',
   'et.exporting': 'Exporting {name}',
   'et.data': 'data',
+  'sqlq.editorLineCount': 'SQL: {n} lines',
+  'sqlq.rowsReturnedHint': '{n} rows returned (total not counted; there may be more)',
   'tpd.canceling': 'Cancelling…',
   'tpd.rowsPerSec': '{n} rows/s',
   'tpd.eta': '{t} left',

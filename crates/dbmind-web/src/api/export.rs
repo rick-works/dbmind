@@ -817,7 +817,14 @@ async fn export_query(
     // 首页用小页：整页取数要 1 秒以上（宿主→内核的逐行管线 ≈0.23ms/行），第一屏就等一整页
     // 会让"开始导出"看起来没反应；前三页各给 1/5 页先把进度推起来，之后回到整页满速跑。
     let full_page = page_size;
-    let mut page_size = if req.size.is_some() { full_page } else { (full_page / 10).max(1) };
+    // 渐进小页只用于异步全量导出（为了让第一屏尽快有进度）。
+    // 同步「导出当页」必须严格按请求的 size 取 —— 否则用户要 200 行、实际只给 20 行，
+    // 文件看着正常但内容少一截，无从察觉。
+    let mut page_size = if req.size.is_some() || !req.all {
+        full_page
+    } else {
+        (full_page / 10).max(1)
+    };
     let mut offset = start_offset;
     let mut written = 0u64;
     let mut page = 0u64;
