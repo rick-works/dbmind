@@ -474,7 +474,11 @@ async fn browse(raw: Option<String>, file_mode: bool) -> XResult<Json<Value>> {
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
+            // 只跳过字面上的 "." 与 ".." —— 它们本来也不会被 read_dir 返回。
+            // 这里**不能**按"点开头"过滤：那会连真实存在的目录一起吞掉，
+            // 例如 `.dbmind`（本项目的数据目录，用户选库文件时正需要它）、
+            // `.ssh`、`.config`、`.vscode` …（实测就是它们全都列不出来）。
+            if name == "." || name == ".." {
                 continue;
             }
             match entry.file_type() {
