@@ -55,11 +55,14 @@
                 </tr>
                 <tr v-if="isDoris">
                   <td class="basic-label">{{ $t('tf.buckets') }}</td>
-                  <td><el-input-number v-model="form.dorisBuckets" :min="1" :max="1024" controls-position="right" size="small" /></td>
+                  <!-- 用普通文本框（type=number 只为收数字，箭头由样式藏掉）：
+                       数字框那两个上下箭头在这一列里显得很扎眼，而且与同列其它控件
+                       不是一套外观；编辑器里其它数值字段也都是文本框。 -->
+                  <td><el-input v-model="form.dorisBuckets" type="number" size="small" /></td>
                 </tr>
                 <tr v-if="isDoris">
                   <td class="basic-label" :title="$t('tf.replicasTip')">{{ $t('tf.replicas') }}</td>
-                  <td><el-input-number v-model="form.dorisReplication" :min="1" :max="32" controls-position="right" size="small" /></td>
+                  <td><el-input v-model="form.dorisReplication" type="number" size="small" /></td>
                 </tr>
                 <tr v-if="has(features,'supportsTableOptions') && (features.engines || []).length">
                   <td class="basic-label">{{ $t('tf.engine') }}</td>
@@ -592,7 +595,9 @@ const genSql = () => {
     opts.push(`${form.dorisModel || 'DUPLICATE KEY'} (${keys.map(c => qt(f, c)).join(', ')})`)
     if (form.comment) opts.push(`COMMENT '${sq(form.comment)}'`)
     opts.push(`DISTRIBUTED BY HASH(${finalDistCols.map(c => qt(f, c)).join(', ')}) BUCKETS ${form.dorisBuckets || 10}`)
-    const repl = Number(form.dorisReplication)
+    // 换成文本框之后可以被清空（数字框不会）：清空就当默认的 1 副本，
+    // 不写这条 PROPERTIES —— 否则 Number('') = 0 会把这个属性整条吞掉。
+    const repl = Number(form.dorisReplication) || 1
     if (repl > 0) opts.push(`PROPERTIES ("replication_num" = "${repl}")`)
     parts[0] += ' ' + opts.join(' ')
   }
@@ -832,10 +837,13 @@ emit('sql', genSql())
   white-space: nowrap;
 }
 .basic-table tbody td:not(:first-child) { padding-left: 9px !important; padding-right: 9px !important; }
-/* 值列的控件撑满整格（el-select / el-input-number 默认是内容宽度） */
-.basic-table :deep(.el-select),
-.basic-table :deep(.el-input-number) { width: 100%; }
-/* 基本信息的值：数字输入框里 Element 默认**居中**（.el-input-number 那条），
-   而这一列的其余控件都是左对齐 —— 10 / 1 飘在框中间就显得没对齐，统一左对齐。 */
-.basic-table :deep(.el-input-number .el-input__inner) { text-align: left; }
+/* 值列的控件撑满整格（el-select 默认是内容宽度，不写就会缩成一小截） */
+.basic-table :deep(.el-select) { width: 100%; }
+/* 数值字段用普通文本框（见标记里的说明）：type=number 只为收数字，
+   那两个上下箭头（Chromium 的 spinner）一律藏掉，看着才和其它输入框一致。 */
+.basic-table :deep(input[type='number'])::-webkit-outer-spin-button,
+.basic-table :deep(input[type='number'])::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
 </style>

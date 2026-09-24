@@ -48,21 +48,24 @@
                     <!-- 表概况：只放**所有数据库都成立**的四项 ——
                          行数走真实 COUNT(*)（各驱动同一套接口，拿不到时显示 — 而不是 0）；
                          列数 / 索引数 / 主键取自已加载的结构，无需额外请求。 -->
+                    <!-- 这四行原来是**纯文字**，与上下那些「禁用输入框」的行不是一套外观
+                         （行高一高一低、文字起始位置也不同）。统一套上禁用输入框：
+                         仍是只读，但整张表的行高与对齐完全一致。 -->
                     <tr>
                       <td class="basic-label">{{ $t('tdet.rowCount') }}</td>
-                      <td class="basic-value">{{ rowCountText }}</td>
+                      <td><el-input :model-value="rowCountText" size="small" disabled /></td>
                     </tr>
                     <tr>
                       <td class="basic-label">{{ $t('tdet.colCount') }}</td>
-                      <td class="basic-value">{{ displayCols.length }}</td>
+                      <td><el-input :model-value="displayCols.length" size="small" disabled /></td>
                     </tr>
                     <tr>
                       <td class="basic-label">{{ $t('tdet.indexCount') }}</td>
-                      <td class="basic-value">{{ displayIdxRows.length }}</td>
+                      <td><el-input :model-value="displayIdxRows.length" size="small" disabled /></td>
                     </tr>
                     <tr>
                       <td class="basic-label">{{ $t('tdet.primaryKey') }}</td>
-                      <td class="basic-value">{{ pkText }}</td>
+                      <td><el-input :model-value="pkText" size="small" disabled /></td>
                     </tr>
                     <!-- ClickHouse 建表属性：引擎 / 排序键 / 分区键建表后不可修改，
                          只读展示当前值（数据来自 system.tables，见后端 table_options） -->
@@ -2432,15 +2435,9 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   padding-left: 9px !important;
   white-space: nowrap;
 }
-/* 表概况里的只读值（行数 / 列数 / 索引数 / 主键）：普通文本，不是输入框 */
-.basic-table td.basic-value {
-  font-size: 12.5px;
-  color: var(--dc-text);
-  padding-left: 9px !important;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* （原「表概况只读值」那条纯文字样式已随标记一起去掉：
+     行数 / 列数 / 索引数 / 主键 现在也是禁用输入框，与其它行同一套外观，
+     内边距由上面的 .basic-table tbody td:not(:first-child) 统一提供。） */
 /* 「值」列：左右内边距也统一到 9px。
    原来单元格是 4px、表头是 9px —— 输入框的框左缘因此比表头「值」往左偏 5px（实测 556 vs 561），
    加上输入框自身的 6px 内边距，框里的文字更往右，看着就"没对齐"。 */
