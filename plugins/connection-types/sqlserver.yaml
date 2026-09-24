@@ -1,0 +1,44 @@
+schemaVersion: 1
+order: 600
+dbType: sqlserver
+rustVariant: Sqlserver
+label: SQL Server
+dialect: SqlServer
+runtimeMode: agent
+mcpMode: bridge
+agentKey: sqlserver
+driverStoreVisible: true
+driverStoreOrder: 6
+singleConnectionPool: true
+metadataConnectionScoped: true
+skipTcpProbe: false
+localFile: false
+defaultPort: 1433
+jdbc:
+  driverClass: com.microsoft.sqlserver.jdbc.SQLServerDriver
+  # encrypt=false + trustServerCertificate=true：兼容纯 JDBC 自签环境（Xplore 的 SqlServerDialect 同款默认）。
+  # 少了这两个参数，mssql-jdbc 12.x 的默认是 encrypt=true / trustServerCertificate=false，
+  # 连自签证书的库会直接报 PKIX path building failed —— 界面上却看不出来是参数问题。
+  urlTemplate: "jdbc:sqlserver://{host}:{port};databaseName={database};encrypt=false;trustServerCertificate=true;loginTimeout=10"
+  artifact: com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

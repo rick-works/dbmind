@@ -1,0 +1,24 @@
+[package]
+name = "dbmind-desktop"
+description = "DBMind 桌面壳（Tauri：内嵌 HTTP 内核 + 系统 WebView）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dbmind-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# 桌面壳不直接依赖内核，而是依赖 **HTTP 壳**并用它的 `spawn_embedded`：
+# 前端整份代码都按 HTTP 契约写（见 api/index.js 的空 baseURL），
+# 让桌面走同一份契约，Web 版与桌面版才不会各漂各的。
+dbmind-web = { path = "../dbmind-web" }
+tauri = { version = "2", features = [] }
+# 退出清场时枚举进程（拿可执行文件路径与命令行做严格匹配）。
+# 刻意不用 tasklist / wmic / PowerShell：打包后的便携版里没有脚本，
+# 而这些外部工具在新系统上有的已弃用、有的行为不一致。
+sysinfo = "0.32"

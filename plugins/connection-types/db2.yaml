@@ -1,0 +1,42 @@
+schemaVersion: 1
+order: 900
+dbType: db2
+rustVariant: Db2
+label: IBM Db2
+dialect: Db2
+runtimeMode: agent
+mcpMode: bridge
+agentKey: db2
+driverStoreVisible: true
+driverStoreOrder: 9
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 4
+skipTcpProbe: false
+localFile: false
+defaultPort: 50000
+jdbc:
+  driverClass: com.ibm.db2.jcc.DB2Driver
+  urlTemplate: "jdbc:db2://{host}:{port}/{database}"
+  artifact: com.ibm.db2:jcc:12.1.2.0
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: false
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: false
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

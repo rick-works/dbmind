@@ -1,0 +1,42 @@
+schemaVersion: 1
+order: 1500
+dbType: mongodb
+rustVariant: Mongodb
+label: MongoDB
+dialect: MongoShell
+runtimeMode: agent
+mcpMode: bridge
+agentKey: mongodb
+# MongoDB 不是 SQL 系：语句是 JSON 命令或 shell 风格调用（db.x.find({})），
+# 因此安全闸门必须换一套判定规则（否则所有 Mongo 命令都会落到「无法归类」）。
+protocol: mongodb
+driverStoreVisible: true
+driverStoreOrder: 15
+singleConnectionPool: false
+metadataConnectionScoped: false
+# 并发上限：驱动自身还有连接池；这个值管的是**内核并发**（同时几个请求各占一条会话）。
+maxConnections: 4
+skipTcpProbe: false
+localFile: false
+defaultPort: 27017
+traits:
+  singleDatabase: false
+  schemaAware: false
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: false
+  schemaSearch: true
+  diagram: false
+  tableDataEdit: true
+  tableStructureEdit: false
+  tableImport: true
+  dataTransfer: false
+  sqlFileExecution: false
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: false
+  userAdmin: true
+  driverManagement: true

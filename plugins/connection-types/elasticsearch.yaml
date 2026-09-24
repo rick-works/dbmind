@@ -1,0 +1,41 @@
+schemaVersion: 1
+order: 1700
+dbType: elasticsearch
+rustVariant: Elasticsearch
+label: Elasticsearch
+dialect: Elasticsearch
+runtimeMode: agent
+mcpMode: bridge
+agentKey: elasticsearch
+# Elasticsearch 的「语句」是一条 REST 请求（GET /logs/_search）；判定靠方法 + 路径末段动作
+protocol: elasticsearch
+driverStoreVisible: true
+driverStoreOrder: 17
+singleConnectionPool: false
+metadataConnectionScoped: false
+# 并发上限：REST 客户端内部本就并发；这个值管的是**内核并发**（同时几个请求各占一条会话）。
+maxConnections: 4
+skipTcpProbe: false
+localFile: false
+defaultPort: 9200
+traits:
+  singleDatabase: false
+  schemaAware: false
+supportLevel: browse
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: false
+  schemaSearch: true
+  diagram: false
+  tableDataEdit: false
+  tableStructureEdit: false
+  tableImport: false
+  dataTransfer: false
+  sqlFileExecution: false
+  databaseCreate: false
+  fieldLineage: false
+  sqlExplain: false
+  userAdmin: false
+  driverManagement: true

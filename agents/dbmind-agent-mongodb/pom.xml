@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.dbmind</groupId>
+  <artifactId>dbmind-agent-mongodb</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <name>DBMind MongoDB Agent</name>
+  <description>
+    MongoDB 专属协议宿主。与 JDBC 宿主共用同一套 NDJSON 协议，区别只有两点：
+    1) 握手时声明 generic=false 且 agentKeys=["mongodb"]（专属，不冒充通用宿主）；
+    2) 驱动库随宿主一起打包（Mongo 不是 JDBC，没有「用户自己放驱动 jar」这回事）。
+    「怎么连」由宿主按 mongodb:// 语义拼接，内核只传规范化的连接字段。
+  </description>
+
+  <properties>
+    <!-- 17 是运行时的最低要求；内核按 AgentHostSpec::min_java 校验当前 JVM，改这里要同步那个常量 -->
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <!-- Mongo 官方同步驱动（宿主自带，不走驱动商店） -->
+    <dependency>
+      <groupId>org.mongodb</groupId>
+      <artifactId>mongodb-driver-sync</artifactId>
+      <version>5.2.1</version>
+    </dependency>
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.11.0</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- 产物名与内核 AgentHostSpec::mongodb().jar_name 一致 -->
+    <finalName>dbmind-agent-mongodb</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.dbmind.agent.mongo.Main</mainClass>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

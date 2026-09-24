@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.dbmind</groupId>
+  <artifactId>dbmind-agent-jdbc</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <name>DBMind JDBC Agent</name>
+  <description>
+    通用 JDBC 驱动宿主：只做「加载驱动类 + 按内核给的 URL 连接 + 执行 + 映射结果」四件事。
+    所有「怎么连某个数据库」的知识都在 plugins/connection-types/*.yaml 里，
+    因此新增数据库类型不需要重新构建本进程。
+  </description>
+
+  <properties>
+    <!--
+      必须编译到 17：源码用了 `instanceof` 模式匹配（Java 16+，见 DriverLoader / ResultMapper）
+      与 `switch` 表达式（Java 14+，见 Main）。往下降会直接编译不过。
+      所以「宿主要求的 Java 版本」这件事不能靠降目标来消掉，只能由运行时的就绪判断来把关：
+      内核按 `AgentHostSpec::min_java` 校验当前 JVM 版本（见 dbmind-core/src/agent.rs）。
+      改了这里的版本，记得同步那个常量。
+    -->
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <!-- 唯一的第三方依赖：JSON。协议是窄的，不值得为它引入更多东西 -->
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.11.0</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- 产物名与内核里的 AGENT_JAR_NAME 常量一致 -->
+    <finalName>dbmind-agent-jdbc</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.dbmind.agent.Main</mainClass>
+                </transformer>
+              </transformers>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

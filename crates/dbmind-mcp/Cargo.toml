@@ -1,0 +1,14 @@
+[package]
+name = "dbmind-mcp"
+description = "DBMind MCP 壳（stdio JSON-RPC，默认只读）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dbmind-mcp"
+path = "src/main.rs"
+
+[dependencies]
+dbmind-core = { workspace = true }
+serde_json = { workspace = true }

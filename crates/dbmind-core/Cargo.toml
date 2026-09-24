@@ -1,0 +1,20 @@
+[package]
+name = "dbmind-core"
+description = "DBMind 内核：连接类型注册表（编译期生成）、存储、安全策略、驱动与查询引擎"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+build = "build.rs"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+tracing = { workspace = true }
+rusqlite = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = "0.9"

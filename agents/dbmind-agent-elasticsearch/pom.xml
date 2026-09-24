@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.dbmind</groupId>
+  <artifactId>dbmind-agent-elasticsearch</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <name>DBMind Elasticsearch Agent</name>
+  <description>
+    Elasticsearch 专属宿主：把用户写的 REST 请求原样转给集群。
+
+    刻意**不引入** elasticsearch-java 客户端：工作台要做的是「发请求、看响应」，
+    而客户端库会把版本耦进来（客户端 8.x 连不上 7.x 的某些接口），
+    还得跟着 ES 的版本升级。用 JDK 自带的 HttpClient 反而更稳、更通用。
+  </description>
+
+  <properties>
+    <!-- 17 是运行时的最低要求；内核按 AgentHostSpec::min_java 校验当前 JVM，改这里要同步那个常量 -->
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.11.0</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- 产物名与内核 AgentHostSpec::elasticsearch().jar_name 一致 -->
+    <finalName>dbmind-agent-elasticsearch</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.6.0</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                  <mainClass>com.dbmind.agent.es.Main</mainClass>
+                </transformer>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+              </transformers>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>

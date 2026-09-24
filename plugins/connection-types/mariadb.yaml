@@ -1,0 +1,44 @@
+schemaVersion: 1
+order: 500
+dbType: mariadb
+rustVariant: Mariadb
+label: MariaDB
+dialect: MySQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: mysql
+driverStoreVisible: true
+driverStoreOrder: 5
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 4
+skipTcpProbe: false
+localFile: false
+defaultPort: 3306
+jdbc:
+  driverClass: org.mariadb.jdbc.Driver
+  # 与 Xplore 的 MySqlDialect（mariadb 分支）对齐：MariaDB 驱动不吃 useSSL/serverTimezone 那套，
+  # 它自己的参数是 useUnicode / characterEncoding / rewriteBatchedStatements / useCursorFetch。
+  urlTemplate: "jdbc:mariadb://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true"
+  artifact: org.mariadb.jdbc:mariadb-java-client:3.5.1
+traits:
+  singleDatabase: false
+  schemaAware: false
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

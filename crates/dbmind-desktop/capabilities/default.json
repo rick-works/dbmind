@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "桌面版窗口控制：自绘标题栏所需的最小权限集合。set-title 用于把启动自检/故障原因写到窗口标题（桌面壳里读不到 WebView 控制台，标题是外部唯一可读的位置）",
+  "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*/*",
+      "http://localhost:*/*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-is-maximized",
+    "core:window:allow-close",
+    "core:window:allow-start-dragging",
+    "core:window:allow-set-title"
+  ]
+}

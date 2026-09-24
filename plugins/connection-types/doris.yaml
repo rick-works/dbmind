@@ -1,0 +1,49 @@
+schemaVersion: 1
+order: 1200
+dbType: doris
+rustVariant: Doris
+label: Apache Doris
+dialect: MySQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: doris
+driverStoreVisible: true
+driverStoreOrder: 12
+singleConnectionPool: false
+metadataConnectionScoped: false
+# 并发上限：MPP 分析库，查询天然并发；连接开销低 ⇒ 给 8。
+# 这是判断，不是实测（本机没有集群可压）。
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+defaultPort: 9030
+jdbc:
+  driverClass: com.mysql.cj.jdbc.Driver
+  # Doris 走 MySQL 协议与 MySQL 驱动，参数与 mysql 同款（Xplore 也是复用 MySqlDialect）
+  urlTemplate: "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true"
+  # ⚠️ 刻意用 8.0.28，而不是跟 MySQL 一样的 9.1.0：
+  #    8.0.31 起驱动改了坐标（com.mysql:mysql-connector-j）与字符集解析，对 Doris 的握手
+  #    会误判服务端字符集编号，连接直接失败并报 `Unknown character set: 'eucjpms'`（实测）。
+  #    Doris 官方长期推荐的也是 8.0.28 这一代；注意它用的是老坐标 mysql:mysql-connector-java。
+  artifact: mysql:mysql-connector-java:8.0.28
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: false
+  tableDataEdit: false
+  tableStructureEdit: false
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: false
+  driverManagement: true

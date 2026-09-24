@@ -1,0 +1,32 @@
+[package]
+name = "dbmind-web"
+description = "DBMind HTTP 壳（axum，可同时托管前端产物）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "dbmind-web"
+path = "src/main.rs"
+
+[dependencies]
+dbmind-core = { workspace = true }
+serde_json = { workspace = true }
+# 任务 id 与产物文件名里的时间戳（本地时区，用户看文件名就知道什么时候导的）
+chrono = { workspace = true }
+# multipart：导入数据要走 `multipart/form-data` 上传文件（前端用 FormData 发）
+axum = { version = "0.8", features = ["multipart"] }
+# zip：Excel(.xlsx) 与整库多文件导出本质都是 zip 容器，自己拼容器不如用标准实现
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# SSE：AI 流式回答是「阻塞的读上游+ 异步地推给浏览器」，用 channel 接一下最省事
+tokio-stream = { version = "0.1", features = ["sync"] }
+# 正则：数据治理的「格式/邮箱/手机号/身份证」等规则要在**本地**判定敏感字段名，
+# 以及在没有正则能力的方言上做兜底校验（SQL 侧能做的优先交给 SQL）
+regex = "1"
+# 下载驱动用（与 CLI 同一个客户端）：内核刻意不引网络依赖，下载由壳层做。
+ureq = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+serde = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }

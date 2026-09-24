@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.dbmind</groupId>
+  <artifactId>dbmind-es-test-server</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <name>DBMind Elasticsearch test server</name>
+  <description>
+    ES 的**契约级**测试替身：用 JDK 自带的 HttpServer 实现我们真正用到的那些 REST 端点。
+
+    边界必须说清楚：它验证的是「宿主怎么发请求、怎么解析响应」，
+    **不验证 ES 自身的语义**（查询 DSL、分词、分片都不存在）。
+    真正跑通 ES 语义要靠 deploy/ 下的 compose recipe。
+  </description>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <build>
+    <finalName>dbmind-es-test-server</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.1</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>com.dbmind.deploy.EsTestServer</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

@@ -1,0 +1,1197 @@
+/* ==========================================================================
+  上游主题系统
+   - :root 为深色主题（默认，兼容历史无 data-theme 访问）
+   - html[data-theme="light"] 覆盖变量切换浅色主题
+   - html[data-theme="dark"] 显式标注，变量仍取 :root 深色值
+   组件内一律引用 var(--dc-*) / var(--el-*)，禁止硬编码配色。
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- 品牌 / 状态色（深色基准，浅色覆盖） ---- */
+  --dc-primary: #4f8cff;
+  --dc-primary-deep: #2563eb;
+  --dc-primary-light: #63a0ff;
+  --dc-primary-soft: rgba(79, 140, 255, 0.15);
+  --dc-primary-glow: rgba(79, 140, 255, .35);
+  --dc-accent: #3ddc97;
+  --dc-success: #3ddc97;
+  --dc-danger: #ff6161;
+  --dc-warning: #f5b34d;
+  --dc-purple: #a78bfa;
+  --dc-on-primary: #ffffff;    /* 主色底/渐变上的文字与图标 */
+
+  /* ---- 背景层级 ---- */
+  --dc-bg: #1b1d24;            /* 应用底色 */
+  --dc-bg-deep: #14151b;       /* 最底/沉浸 */
+  --dc-bg-sidebar: #1f222b;    /* 侧栏 */
+  --dc-bg-card: #242833;       /* 卡片 */
+  --dc-bg-raised: #22262f;     /* 弹窗/浮层容器 */
+  --dc-bg-soft: #1a1d24;       /* 卡片内嵌块 */
+  --dc-bg-code: #12151b;       /* 代码/预览最深层 */
+  --dc-bg-input: #1c1f27;      /* 输入框底 */
+  --dc-bg-pop: #2b3040;        /* 下拉/popper/message 底 */
+  --dc-bg-hover: #2c3140;      /* hover */
+  --dc-bg-table-head: #1e222c; /* 表头 */
+  --dc-scrollbar: #3d4250;
+  --dc-scrollbar-hover: #4a5062;
+  --dc-mask: rgba(16, 18, 24, .72); /* 遮罩 */
+
+  /* ---- 边框 ---- */
+  --dc-border: #333745;
+  --dc-border-soft: #2a2e3a;
+  --dc-border-strong: #3a3f4f;
+  --dc-border-hover: #414857;
+
+  /* ---- 文本 ---- */
+  --dc-text: #d9dce3;
+  --dc-text-strong: #eef1f6;
+  --dc-text-mid: #aab4c6;
+  --dc-text-dim: #8b91a3;
+  --dc-text-weak: #5a6070;
+  --dc-muted: #8b91a3;
+  --dc-mono-font: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Courier New', monospace;
+  /* Element 的滚动条颜色：主题里它被指到了主色 —— 结果区那条**蓝色**拖动条就是这么来的
+     （SQL 预览那条是原生滚动条、走下面的 ::-webkit-scrollbar 灰 ✓，两者于是不是一套）。
+     这里统一到同一组灰：内容区里的滚动条不该抢视觉，也不该有两个颜色。 */
+  --el-scrollbar-bg-color: var(--dc-scrollbar);
+  --el-scrollbar-hover-bg-color: var(--dc-scrollbar-hover);
+  /* SQL 语法预览高亮（浅色主题下自动切换为更深的可读色） */
+  --dc-sql-kw: #c792ea;
+  --dc-sql-kw-wash: rgba(199, 146, 234, .15);
+  --dc-sql-hl: #ffd47a;
+  --dc-sql-hl-wash: rgba(255, 212, 121, .16);
+  --dc-link: #7fd6ff;          /* 链接/代码强调蓝 */
+  --dc-code-text: #d7dae0;
+
+  /* ---- 半透明 wash（随主题明暗自动适配底色的中性色） ---- */
+  --dc-primary-wash: rgba(79, 140, 255, .12);
+  --dc-hover-wash: rgba(255, 255, 255, .07);
+  --dc-selection: rgba(79, 140, 255, .35);
+  --dc-danger-wash: rgba(255, 97, 97, .15);
+  --dc-warning-wash: rgba(245, 179, 77, .16);
+  --dc-success-wash: rgba(61, 220, 151, .12);
+
+  /* ---- 圆角 / 阴影 ---- */
+  --dc-radius: 10px;
+  --dc-radius-sm: 6px;
+  --dc-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  --dc-shadow-sm: 0 2px 10px rgba(0, 0, 0, .3);
+
+  /* ---- Element Plus 变量（引用上面的 dc 变量，随主题自动联动） ---- */
+  --el-color-primary: var(--dc-primary);
+  --el-color-success: var(--dc-success);
+  --el-color-warning: var(--dc-warning);
+  --el-color-danger: var(--dc-danger);
+  --el-bg-color: var(--dc-bg-card);
+  --el-bg-color-overlay: var(--dc-bg-pop);
+  --el-fill-color-blank: var(--dc-bg-card);
+  --el-border-color: var(--dc-border-strong);
+  --el-border-color-light: var(--dc-border);
+  --el-border-color-lighter: var(--dc-border);
+  --el-text-color-primary: var(--dc-text);
+  --el-text-color-regular: var(--dc-text-mid);
+  --el-text-color-secondary: var(--dc-text-dim);
+  --el-text-color-placeholder: var(--dc-text-weak);
+  --el-border-radius-base: 6px;
+  /* 弹窗/过渡略加速，整体更跟手（默认 0.3s 偏慢） */
+  --el-transition-duration: .2s;
+  --el-transition-duration-fast: .15s;
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+
+  /* ---- 背景层级 ---- */
+  --dc-bg: #eef1f6;
+  --dc-bg-deep: #e4e9f2;
+  --dc-bg-sidebar: #e2e7f0;
+  --dc-bg-card: #ffffff;
+  --dc-bg-raised: #ffffff;
+  --dc-bg-soft: #f4f6fb;
+  --dc-bg-code: #f7f9fd;
+  --dc-bg-input: #ffffff;
+  --dc-bg-pop: #ffffff;
+  --dc-bg-hover: #e8edf6;
+  --dc-bg-table-head: #f1f4f9;
+  --dc-scrollbar: #c4cdda;
+  --dc-scrollbar-hover: #adb8c9;
+  --dc-mask: rgba(30, 41, 59, .34);
+
+  /* ---- 边框 ---- */
+  --dc-border: #dde3ec;
+  --dc-border-soft: #e7ecf3;
+  --dc-border-strong: #c6d0dd;
+  --dc-border-hover: #9fb0c5;
+
+  /* ---- 文本 ---- */
+  --dc-text: #2a3547;
+  --dc-text-strong: #12203a;
+  --dc-text-mid: #4b586e;
+  --dc-text-dim: #67748a;
+  --dc-text-weak: #98a3b5;
+  --dc-muted: #6c7890;
+  --dc-sql-kw: #7c3aed;
+  --dc-sql-kw-wash: rgba(124, 58, 237, .12);
+  --dc-sql-hl: #b45309;
+  --dc-sql-hl-wash: rgba(180, 83, 9, .12);
+  --dc-link: #0a74d4;
+  --dc-code-text: #33445e;
+
+  /* 浅色下主色用更稳重的深蓝，按钮/标签不再刺眼 */
+  --dc-primary: #2563eb;
+  --dc-primary-deep: #1d4ed8;
+  --dc-primary-light: #3b82f6;
+  --dc-primary-soft: rgba(37, 99, 235, 0.1);
+  --dc-primary-glow: rgba(37, 99, 235, .35);
+  --dc-primary-wash: rgba(37, 99, 235, .10);
+  --dc-hover-wash: rgba(15, 23, 42, .06);
+  --dc-selection: rgba(37, 99, 235, .22);
+  --dc-danger-wash: rgba(220, 38, 38, .12);
+  --dc-warning-wash: rgba(217, 119, 6, .12);
+
+  --dc-success: #16a34a;
+  --dc-success-wash: rgba(22, 163, 74, .10);
+  --dc-warning: #d97706;
+  --dc-danger: #dc2626;
+  --dc-on-primary: #ffffff;    /* 浅色主色较深，白字对比更清晰 */
+
+  --dc-shadow: 0 8px 28px rgba(30, 41, 80, .16);
+  --dc-shadow-sm: 0 2px 10px rgba(30, 41, 80, .10);
+}
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  /* 变量取 :root 深色值，无需重复定义 */
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body, #app { height: 100%; width: 100%; overflow: hidden; }
+
+/* AI 面板的下拉（Skills / 上下文 / 模型 / 知识库）都是 teleport 到 body 的浮层，
+   组件里的 scoped 样式**够不着**它们，所以这几条只能放全局。
+   上下文那一列带层级缩进、库名一长整块就很宽 —— 夹住宽度与高度：
+   否则贴着窗口右边时会一路铺到屏幕外（实测），项多时还能长到顶天。 */
+.ai-model-dropdown { max-width: min(360px, calc(100vw - 24px)); }
+.ai-model-dropdown .ai-model-menu { max-height: min(60vh, 420px); overflow-y: auto; }
+/* 库名/表名过长时省略，而不是把整块菜单撑宽（撑宽了就会撞到窗口右边） */
+.ai-model-dropdown .el-dropdown-menu__item { min-width: 0; }
+.ai-model-dropdown .ctx-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--dc-bg);
+  color: var(--dc-text);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color .25s ease, color .25s ease;
+}
+
+::selection { background: var(--dc-selection); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--dc-scrollbar); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--dc-scrollbar-hover); }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* Element 的 el-scrollbar（表格结果区 / 下拉 / 弹窗内部那种"浮起来的圆角滚动条"）
+   是 <div> 模拟的，**不是原生滚动条** —— 上面 ::-webkit-scrollbar 那一套对它无效，
+   于是它保持 Element 默认的深灰细条，和项目里其它滚动条明显不是一套
+   （SQL 结果区 vs 修改表结构里的 SQL 预览区，一眼就能看出来）。
+   这里把它并到同一组变量：颜色、粗细（8px）、圆角与原生那条完全一致。 */
+.el-scrollbar__bar.is-vertical { width: 8px; }
+.el-scrollbar__bar.is-horizontal { height: 8px; }
+.el-scrollbar__thumb {
+  background: var(--dc-scrollbar);
+  border-radius: 4px;
+  opacity: 1;
+}
+.el-scrollbar__thumb:hover { background: var(--dc-scrollbar-hover); }
+/* Element 默认把整条 bar 藏到 hover 才显形；项目里其它滚动条是常显的，保持一致 */
+.el-scrollbar__bar { opacity: 1; }
+
+/* ==================== Element Plus 主题精调 ==================== */
+/* 所有弹窗统一「垂直 + 水平居中」：
+   el-dialog 默认是 margin-top:15vh 的顶部对齐（各调用处还叠了 4vh~10vh 的 top），
+   这里统一改成 flex 容器 + margin:auto。用 margin:auto 而不是 align-items:center，
+   弹窗高于视口时 auto 外边距会退化为 0，顶部不会被裁掉、仍可滚动查看。 */
+.el-overlay-dialog {
+  display: flex;
+  overflow: auto;
+}
+.el-overlay-dialog > .el-dialog {
+  margin: auto !important;
+  /* 关掉 flex 默认收缩，保证各弹窗的固定宽度与改造前完全一致 */
+  flex-shrink: 0;
+}
+.el-dialog {
+  --el-dialog-bg-color: var(--dc-bg-raised);
+  border: 1px solid var(--dc-border);
+  border-radius: 12px;
+  box-shadow: var(--dc-shadow);
+}
+.el-dialog__title { color: var(--dc-text-strong); font-weight: 600; }
+.el-input__wrapper, .el-select__wrapper, .el-textarea__inner {
+  background-color: var(--dc-bg-input) !important;
+  box-shadow: 0 0 0 1px var(--dc-border-soft) inset !important;
+  transition: box-shadow .2s;
+}
+.el-input__wrapper:hover, .el-select__wrapper:hover, .el-textarea__inner:hover { box-shadow: 0 0 0 1px var(--dc-border-strong) inset !important; }
+.el-input__wrapper.is-focus, .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px var(--dc-primary) inset !important; }
+.el-input__inner, .el-textarea__inner { color: var(--dc-text) !important; }
+/* select 已选值使用正常文字色，避免看起来像 placeholder（未带 is-transparent 即已选中） */
+.el-select__selected-item.el-select__placeholder:not(.is-transparent) {
+  color: var(--dc-text) !important;
+}
+/* input-number 加减按钮融入主题 */
+.el-input-number .el-input-number__decrease, .el-input-number .el-input-number__increase {
+  background: var(--dc-bg-input) !important;
+  border-color: var(--dc-border-soft) !important;
+  color: var(--dc-text-dim) !important;
+}
+.el-input-number .el-input-number__decrease:hover, .el-input-number .el-input-number__increase:hover {
+  color: var(--dc-text) !important;
+}
+/* 隐藏浏览器原生数字输入框的上下箭头（ElementPlus 内部 input 为 type=number，且我们禁用了组件按钮） */
+.el-input-number input[type="number"]::-webkit-outer-spin-button,
+.el-input-number input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.el-input-number input[type="number"] {
+  -moz-appearance: textfield;
+}
+/* disabled input 背景不要太突兀 */
+.el-input.is-disabled .el-input__wrapper {
+  background-color: var(--dc-bg-soft) !important;
+  box-shadow: 0 0 0 1px var(--dc-border-soft) inset !important;
+}
+.el-input.is-disabled .el-input__inner {
+  color: var(--dc-text-dim) !important;
+  -webkit-text-fill-color: var(--dc-text-dim) !important;
+}
+/* 去掉浏览器原生 number input 的上下箭头 */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+/* placeholder 提示文字统一变暗，与输入内容明显区分 */
+.el-input__inner::placeholder, .el-textarea__inner::placeholder, .el-select__placeholder {
+  color: var(--el-text-color-placeholder) !important;
+}
+.el-select-dropdown { background-color: var(--dc-bg-pop); border-color: var(--dc-border); border-radius: 8px; box-shadow: var(--dc-shadow); }
+.el-select-dropdown__item { color: var(--dc-text); border-radius: 6px; margin: 0 4px; }
+.el-select-dropdown__item.is-hovering { background-color: var(--dc-bg-hover); }
+.el-select-dropdown__item.is-selected { color: var(--dc-primary); }
+.el-popper.is-light { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; }
+.el-popper.is-light .el-popper__arrow::before { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; }
+.el-message-box { background: var(--dc-bg-raised) !important; border: 1px solid var(--dc-border) !important; border-radius: 12px !important; }
+.el-message-box__header { padding-bottom: 8px; }
+.el-message-box__title { color: var(--dc-text-strong) !important; font-size: 15px; font-weight: 600; }
+.el-message-box__message { color: var(--dc-text) !important; }
+.el-message-box__message p { white-space: pre-line; word-break: break-word; line-height: 1.7; max-height: 55vh; overflow-y: auto; }
+.el-message-box__headerbtn .el-message-box__close { color: var(--dc-text-dim); }
+.el-message-box__headerbtn .el-message-box__close:hover { color: var(--dc-text); }
+.el-message { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; border-radius: 8px !important; box-shadow: var(--dc-shadow-sm) !important; }
+.el-message .el-message__content { color: var(--dc-text) !important; }
+.el-table { --el-table-bg-color: transparent; --el-table-tr-bg-color: transparent; --el-table-header-bg-color: var(--dc-bg-table-head); --el-table-header-text-color: var(--dc-text-dim); --el-table-border-color: var(--dc-border-soft); --el-table-row-hover-bg-color: var(--dc-bg-hover); --el-table-text-color: var(--dc-text); }
+.el-table th.el-table__cell { font-weight: 600; }
+.el-tabs__item { color: var(--dc-text-dim); }
+.el-tabs__item.is-active { color: var(--dc-primary); }
+.el-tabs__nav-wrap::after { background-color: var(--dc-border); }
+.el-tabs__active-bar { background-color: var(--dc-primary); height: 2px; }
+.el-tag { border-radius: 4px; }
+.el-button { transition: all .15s ease; }
+.el-button:not(.is-text):not(.is-link):hover { transform: translateY(-1px); box-shadow: 0 2px 8px var(--dc-shadow-sm); }
+/* 实心主色按钮：渐变底 + 白字；必须排除 .is-plain —— 否则 plain 按钮拿到实心渐变底，
+   而下方 plain 兜底规则给的是 --dc-primary 文字色，出现「蓝底蓝字看不见」的问题 */
+.el-button--primary:not(.is-text):not(.is-link):not(.is-plain) { background: linear-gradient(135deg, var(--dc-primary), var(--dc-primary-deep)); border: none; color: var(--dc-on-primary); }
+.el-button--primary:not(.is-text):not(.is-link):not(.is-plain):hover { background: linear-gradient(135deg, var(--dc-primary-light), var(--dc-primary)); box-shadow: 0 4px 14px var(--dc-primary-glow); }
+/* 中性主题下 text / primary-plain 按钮可读性兜底 */
+.el-button.is-text { color: var(--dc-text); }
+.el-button.is-text:not(.is-disabled):hover { background: var(--dc-hover-wash); color: var(--dc-link); }
+.el-button--primary.is-plain,
+.el-button--primary.is-plain:not(.is-disabled):hover,
+.el-button--primary.is-plain:not(.is-disabled):focus { color: var(--dc-primary); background: var(--dc-primary-wash); border-color: var(--dc-primary); }
+html[data-theme="dark"] .el-button--primary.is-plain:not(.is-disabled):hover { background: var(--dc-primary-wash); color: var(--dc-text-strong); }
+/* 深色主题下默认按钮 hover 避免 Element 默认浅灰背景 */
+html[data-theme="dark"] .el-button:not(.el-button--primary):not(.el-button--success):not(.el-button--warning):not(.el-button--danger):not(.is-text):not(.is-link):not(.is-plain):hover {
+  color: var(--dc-text);
+  background: var(--dc-bg-hover);
+  border-color: var(--dc-border);
+}
+/* 成功 / 警告 / 危险按钮在浅色下随 --el-color-* 变量已变化，hover 也统一提亮 */
+.el-button--success:hover,
+.el-button--warning:hover,
+.el-button--danger:hover { filter: brightness(1.08); }
+.el-button--success.is-plain,
+.el-button--warning.is-plain,
+.el-button--danger.is-plain { filter: none; }
+.el-pagination { --el-pagination-bg-color: transparent; --el-pagination-button-color: var(--dc-text); }
+.el-pagination.is-background .btn-prev, .el-pagination.is-background .btn-next, .el-pagination.is-background .el-pager li { background-color: var(--dc-bg-card); color: var(--dc-text); border-radius: 6px; }
+.el-pagination.is-background .el-pager li.is-active { background-color: var(--dc-primary); box-shadow: 0 2px 8px var(--dc-primary-glow); }
+.el-form-item__label { color: var(--dc-text-dim); }
+.el-switch.is-checked .el-switch__core { background-color: var(--dc-primary); border-color: var(--dc-primary); }
+.el-dropdown-menu { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; border-radius: 8px !important; box-shadow: var(--dc-shadow) !important; }
+.el-dropdown-menu__item { color: var(--dc-text) !important; border-radius: 6px; margin: 2px 4px; }
+.el-dropdown-menu__item:not(.is-disabled):hover { background: var(--dc-bg-hover) !important; }
+.el-empty__description p { color: var(--dc-text-dim); }
+.el-overlay { background-color: var(--dc-mask); backdrop-filter: blur(2px); }
+.el-card { background: var(--dc-bg-card); border-color: var(--dc-border); border-radius: var(--dc-radius); }
+.el-radio-button__inner { background: var(--dc-bg-soft); border-color: var(--dc-border); color: var(--dc-text); }
+.el-radio-button__original-radio:checked + .el-radio-button__inner { background: var(--dc-primary); border-color: var(--dc-primary); box-shadow: -1px 0 0 0 var(--dc-primary); }
+.el-checkbox__input.is-checked .el-checkbox__inner { background-color: var(--dc-primary); border-color: var(--dc-primary); }
+
+/* ==================== Select / Dropdown / Popper 暗色统一 ==================== */
+html[data-theme="dark"] .el-select__wrapper,
+html[data-theme="dark"] .el-select__wrapper.is-focused,
+html[data-theme="dark"] .el-select__wrapper:hover {
+  background-color: var(--dc-bg-input) !important;
+  box-shadow: 0 0 0 1px var(--dc-border-soft) inset !important;
+}
+html[data-theme="dark"] .el-select__wrapper.is-focused { box-shadow: 0 0 0 1px var(--dc-primary) inset !important; }
+html[data-theme="dark"] .el-select__selected-item { color: var(--dc-text) !important; }
+html[data-theme="dark"] .el-select__input { color: var(--dc-text) !important; }
+html[data-theme="dark"] .el-select__caret { color: var(--dc-text-dim) !important; }
+html[data-theme="dark"] .el-select__wrapper .el-tag,
+html[data-theme="dark"] .el-select__wrapper .el-tag.el-tag--info {
+  background-color: var(--dc-bg-hover) !important;
+  border-color: var(--dc-border-strong) !important;
+  color: var(--dc-text-mid) !important;
+}
+html[data-theme="dark"] .el-select__wrapper .el-tag .el-tag__close {
+  color: var(--dc-text-dim) !important;
+}
+html[data-theme="dark"] .el-select__wrapper .el-tag .el-tag__close:hover {
+  background-color: var(--dc-danger-wash) !important;
+  color: var(--dc-danger) !important;
+}
+html[data-theme="dark"] .el-select-dropdown,
+html[data-theme="dark"] .el-dropdown__popper,
+html[data-theme="dark"] .el-popper.is-light,
+html[data-theme="dark"] .el-autocomplete__popper {
+  background: var(--dc-bg-pop) !important;
+  border-color: var(--dc-border) !important;
+  box-shadow: var(--dc-shadow) !important;
+}
+html[data-theme="dark"] .el-select-dropdown__item,
+html[data-theme="dark"] .el-dropdown-menu__item,
+html[data-theme="dark"] .el-autocomplete-suggestion__list li {
+  color: var(--dc-text) !important;
+  border-radius: 6px;
+  margin: 0 4px;
+}
+html[data-theme="dark"] .el-select-dropdown__item.is-hovering,
+html[data-theme="dark"] .el-select-dropdown__item:hover,
+html[data-theme="dark"] .el-dropdown-menu__item:not(.is-disabled):hover,
+html[data-theme="dark"] .el-autocomplete-suggestion__list li.highlighted,
+html[data-theme="dark"] .el-autocomplete-suggestion__list li:hover {
+  background-color: var(--dc-bg-hover) !important;
+}
+html[data-theme="dark"] .el-select-dropdown__item.is-selected { color: var(--dc-primary) !important; }
+html[data-theme="dark"] .el-select-dropdown__item.is-selected::after { color: var(--dc-primary) !important; }
+html[data-theme="dark"] .el-select-dropdown__empty { color: var(--dc-text-dim) !important; }
+html[data-theme="dark"] .el-dropdown-menu__item.is-disabled { color: var(--dc-text-weak) !important; }
+html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; }
+
+/* ==================== 结果表格：类 Excel 框选 ==================== */
+.data-table { user-select: none; -webkit-user-select: none; }
+.data-table .cell-input, .data-table input, .data-table .editing-input { user-select: text; -webkit-user-select: text; }
+/* 类 Excel 框选：区域内淡色填充，仅选区外沿画主色边线（sel-t/b/l/r 由框选模块按边缘标记，厚度 0 则该边不画） */
+.data-table td.grid-cell-selected,
+.data-table th.grid-cell-selected {
+  --sel-t: 0px; --sel-b: 0px; --sel-l: 0px; --sel-r: 0px;
+  background-image:
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)) !important;
+  background-position: top, bottom, left, right !important;
+  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100% !important;
+  background-repeat: no-repeat !important;
+  background-color: var(--dc-primary-soft) !important;
+  outline: none;
+}
+.data-table td.grid-cell-selected.sel-t, .data-table th.grid-cell-selected.sel-t { --sel-t: 2px; }
+.data-table td.grid-cell-selected.sel-b, .data-table th.grid-cell-selected.sel-b { --sel-b: 2px; }
+/* 框选（单元格区域）**不画左右两条竖线**：整列框选时每个格子的左沿线段会连成一根贯穿的蓝条，
+   看着像一根游离的线（这个已经反馈过两次）；选中范围由淡色填充 + 上/下收边表达就够了。 */
+.data-table td.grid-cell-selected.sel-l, .data-table th.grid-cell-selected.sel-l { --sel-l: 0px; }
+.data-table td.grid-cell-selected.sel-r, .data-table th.grid-cell-selected.sel-r { --sel-r: 0px; }
+.el-loading-mask { background-color: var(--dc-mask); backdrop-filter: blur(3px); }
+.el-loading-spinner .circular { width: 34px; height: 34px; animation: dc-rotate .9s linear infinite; filter: drop-shadow(0 0 6px var(--dc-primary-glow)); }
+.el-loading-spinner .path { stroke: var(--dc-primary) !important; stroke-width: 3; stroke-linecap: round; }
+.el-loading-text { display: none !important; }
+.el-upload-dragger { background: var(--dc-bg-soft); border-color: var(--dc-border-soft); }
+.el-upload-dragger:hover { border-color: var(--dc-primary); }
+
+/* ==================== 通用工具类 ==================== */
+.dc-btn-icon { background: transparent; border: none; color: var(--dc-text-dim); cursor: pointer; padding: 6px; border-radius: 6px; font-size: 16px; transition: all .15s; }
+.dc-btn-icon:hover { color: var(--dc-text); background: var(--dc-bg-hover); }
+.dc-btn-icon.danger:hover { color: var(--dc-danger); background: rgba(255, 97, 97, .12); }
+
+.dc-card {
+  background: var(--dc-bg-card);
+  border: 1px solid var(--dc-border);
+  border-radius: var(--dc-radius);
+  box-shadow: var(--dc-shadow-sm);
+}
+
+/* Monaco 编辑器容器修正 */
+.monaco-editor-container { width: 100%; height: 100%; }
+.vue-monaco-editor { border-radius: 8px; overflow: hidden; }
+
+/* Monaco「pointer hover」气泡直接不显示：
+   查找/替换工具条按钮（关闭 x、上一个/下一个等）的悬浮提示是 HoverStyle.Pointer，
+   其内容层带 pointer-events:auto 且几何上叠在按钮/上方工具栏区域——
+   表现为：悬停按钮约 1 秒后气泡弹出（如「Close (Escape)」），
+   要么把按钮盖住点不到，要么钻进上方工具栏后面显示不全。
+   这类气泡只承载纯文本提示（编辑器正文的文档 hover 不带 with-pointer，不受影响），
+   图标本身含义自明，直接隐藏最干净。 */
+.workbench-hover-container:has(.monaco-hover.with-pointer),
+.context-view:has(.monaco-hover.with-pointer) { pointer-events: none !important; }
+.monaco-hover.with-pointer { display: none !important; }
+
+/* Monaco 编辑器滚动条统一样式：细滑块 + 圆角，颜色跟随主题 */
+.monaco-editor .scrollbar.vertical,
+.monaco-editor .scrollbar.horizontal { background: transparent !important; }
+.monaco-editor .scrollbar.vertical .slider,
+.monaco-editor .scrollbar.horizontal .slider {
+  background: var(--dc-scrollbar) !important;
+  border-radius: 4px !important;
+  box-shadow: none !important;
+}
+.monaco-editor .scrollbar.vertical .slider:hover,
+.monaco-editor .scrollbar.horizontal .slider:hover,
+.monaco-editor .scrollbar.vertical .slider.active,
+.monaco-editor .scrollbar.horizontal .slider.active {
+  background: var(--dc-scrollbar-hover) !important;
+}
+
+/* ==========================================================================
+   AI 下拉（模型 / 技能 / 数据源）
+   el-dropdown / el-select 的弹层会 teleport 到 body，组件内的 scoped 样式命不中，
+   所以这些**弹层样式必须放全局**，再用 popper-class 限定作用范围。
+   （历史问题：这套规则原先写在 AiPanel 的 scoped 块里，小标题、选中态、层级缩进
+     其实一直没生效，只在 AiPanel 自己的全局块里生效了一半。）
+   ========================================================================== */
+.ai-model-dropdown.el-popper {
+  border-radius: 10px;
+  border: 1px solid var(--dc-border);
+  background: var(--dc-bg-card);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .16);
+  padding: 5px;
+}
+.ai-model-dropdown .el-dropdown-menu { background: transparent; padding: 0; }
+.ai-model-dropdown .el-dropdown-menu__item {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--dc-text);
+  border-radius: 7px; height: 30px; line-height: 30px;
+  padding: 0 10px; margin-bottom: 1px;
+}
+.ai-model-dropdown .el-dropdown-menu__item:not(.is-disabled):hover,
+.ai-model-dropdown .el-dropdown-menu__item:not(.is-disabled):focus {
+  background: var(--dc-primary-wash); color: var(--dc-primary);
+}
+/* 选中项：主色洗底 + 主色文字 + 左侧 2px 主色指示条（勾由模板渲染） */
+.ai-model-dropdown .el-dropdown-menu__item.active {
+  position: relative;
+  background: var(--dc-primary-wash);
+  color: var(--dc-primary);
+  font-weight: 600;
+}
+.ai-model-dropdown .el-dropdown-menu__item.active::before {
+  content: '';
+  position: absolute; left: 3px; top: 8px; bottom: 8px;
+  width: 2px; border-radius: 2px;
+  background: var(--dc-primary);
+}
+.ai-model-dropdown .el-dropdown-menu__item.active:not(.is-disabled):hover {
+  background: var(--dc-primary-wash);
+}
+.ai-model-dropdown .el-popper__arrow::before {
+  border: 1px solid var(--dc-border);
+  background: var(--dc-bg-card);
+}
+/* 小标题：选择模型 / 选择技能 / 选择数据源 */
+.ai-model-dropdown .ai-dd-head {
+  padding: 5px 10px 4px;
+  font-size: 12px; font-weight: 600; letter-spacing: .3px;
+  color: var(--dc-text-weak);
+}
+/* 条目内的图标 / 名称 / 勾 */
+.ai-model-dropdown .skills-ic { flex-shrink: 0; color: var(--dc-text-dim); font-size: 14px; }
+.ai-model-dropdown .el-dropdown-menu__item.active .skills-ic { color: var(--dc-primary); }
+.ai-model-dropdown .skills-name {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-model-dropdown .skills-check { flex-shrink: 0; color: var(--dc-primary); }
+/* 数据源下拉：层级缩进 + 层级图标 + 展开箭头 + 引导竖线 */
+.ai-model-dropdown .ctx-menu { width: 280px; }
+.ai-model-dropdown .el-dropdown-menu__item.ctx-item { position: relative; }
+.ai-model-dropdown .ctx-caret { color: var(--dc-text-dim); transition: transform .18s ease; }
+.ai-model-dropdown .ctx-caret.expanded { transform: rotate(90deg); }
+.ai-model-dropdown .ctx-caret-spacer { width: 10px; flex-shrink: 0; }
+.ai-model-dropdown .ctx-level-ic { flex-shrink: 0; color: var(--dc-text-dim); opacity: .85; }
+.ai-model-dropdown .el-dropdown-menu__item.lv-0 .ctx-level-ic { color: var(--dc-primary); opacity: 1; }
+.ai-model-dropdown .el-dropdown-menu__item.lv-2 .ctx-level-ic { opacity: .7; }
+.ai-model-dropdown .el-dropdown-menu__item.lv-1::after,
+.ai-model-dropdown .el-dropdown-menu__item.lv-2::after {
+  content: '';
+  position: absolute; top: 0; bottom: 0;
+  width: 1px; background: var(--dc-border);
+}
+.ai-model-dropdown .el-dropdown-menu__item.lv-1::after { left: 17px; }
+.ai-model-dropdown .el-dropdown-menu__item.lv-2::after { left: 33px; }
+.ai-model-dropdown .ctx-label {
+  flex: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-model-dropdown .el-dropdown-menu__item.lv-2 .ctx-label { font-size: 13px; color: var(--dc-text-weak); }
+.ai-model-dropdown .ctx-empty { color: var(--dc-text-dim); justify-content: center; }
+/* el-select 形态的下拉弹层（AI 面板「跨库转换」的目标连接） */
+.ai-select-popper.el-popper {
+  border-radius: 10px;
+  border: 1px solid var(--dc-border);
+  background: var(--dc-bg-card);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .16);
+  padding: 6px;
+}
+.ai-select-popper .el-select-dropdown__list { padding: 0; }
+.ai-select-popper .el-select-dropdown__item {
+  font-size: 13px; color: var(--dc-text);
+  border-radius: 7px; height: 30px; line-height: 30px;
+  padding: 0 10px; margin-bottom: 1px;
+}
+.ai-select-popper .el-select-dropdown__item.is-hovering { background: var(--dc-primary-wash); }
+.ai-select-popper .el-select-dropdown__item.is-selected { color: var(--dc-primary); font-weight: 600; }
+.ai-select-popper .el-popper__arrow::before {
+  border: 1px solid var(--dc-border);
+  background: var(--dc-bg-card);
+}
+
+/* AI 助手 markdown 样式 */
+.ai-markdown { line-height: 1.8; font-size: 14px; word-break: break-word; }
+.ai-markdown > :first-child { margin-top: 0; }
+.ai-markdown > :last-child { margin-bottom: 0; }
+.ai-markdown pre {
+  background: var(--dc-bg-soft); border: 1px solid var(--dc-border-soft);
+  border-radius: 8px; padding: 11px 14px; overflow-x: auto; margin: 10px 0;
+  line-height: 1.65;
+}
+/* SQL 代码块：每段右上角自带「插入编辑器 / 复制」图标按钮，多段 SQL 可各自使用 */
+.ai-markdown .md-code { position: relative; }
+.ai-markdown .md-code-acts {
+  position: absolute; top: 6px; right: 6px;
+  display: flex; gap: 4px;
+  opacity: .5; transition: opacity .15s ease;
+}
+.ai-markdown .md-code:hover .md-code-acts { opacity: 1; }
+.ai-markdown .md-code-act {
+  appearance: none; cursor: pointer; user-select: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border-radius: 5px;
+  border: 1px solid var(--dc-border); background: var(--dc-bg-card);
+  color: var(--dc-text-dim);
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.ai-markdown .md-code-act svg { display: block; }
+.ai-markdown .md-code-act:hover {
+  color: var(--dc-primary); border-color: var(--dc-primary); background: var(--dc-primary-wash);
+}
+.ai-markdown code { font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-size: 13px; color: var(--dc-link); }
+.ai-markdown pre code { color: var(--dc-code-text); }
+/* 行内代码：淡底 + 圆角，和代码块用同一套「内嵌块」语言，但不抢眼 */
+.ai-markdown :not(pre) > code {
+  background: var(--dc-bg-code);
+  border: 1px solid var(--dc-border-soft);
+  border-radius: 5px; padding: 1px 5px;
+}
+.ai-markdown p { margin: 8px 0; }
+.ai-markdown ul, .ai-markdown ol { padding-left: 20px; margin: 8px 0; }
+.ai-markdown li { margin: 4px 0; }
+.ai-markdown ul > li { list-style: disc; }
+.ai-markdown ol > li { list-style: decimal; }
+.ai-markdown h1, .ai-markdown h2, .ai-markdown h3,
+.ai-markdown h4, .ai-markdown h5, .ai-markdown h6 {
+  margin: 12px 0 6px; color: var(--dc-text-strong); font-weight: 700; line-height: 1.4;
+}
+.ai-markdown h1, .ai-markdown h2 { font-size: 15px; }
+.ai-markdown h3 { font-size: 14px; }
+.ai-markdown h4, .ai-markdown h5, .ai-markdown h6 { font-size: 14px; }
+/* 加粗只做字重强调，不再染成绿色（绿色在浅色底上偏跳，影响整体协调） */
+.ai-markdown strong { color: var(--dc-text-strong); font-weight: 700; }
+.ai-markdown em { font-style: italic; }
+.ai-markdown a { color: var(--dc-link); text-decoration: underline; text-underline-offset: 2px; }
+.ai-markdown a:hover { color: var(--dc-primary); }
+.ai-markdown blockquote {
+  margin: 10px 0; padding: 8px 12px;
+  border-left: 3px solid var(--dc-primary);
+  background: var(--dc-primary-wash); border-radius: 0 8px 8px 0;
+  color: var(--dc-text-mid);
+}
+.ai-markdown blockquote > :first-child { margin-top: 0; }
+.ai-markdown blockquote > :last-child { margin-bottom: 0; }
+.ai-markdown hr { margin: 14px 0; border: none; border-top: 1px solid var(--dc-border-soft); }
+/* 表格：去掉「格子框」，只留表头淡底与行分隔线，视觉更干净（原有满格线灰块感重） */
+.ai-markdown table { border-collapse: collapse; margin: 10px 0; width: 100%; font-size: 13px; }
+.ai-markdown th, .ai-markdown td {
+  border: none; border-bottom: 1px solid var(--dc-border-soft);
+  padding: 7px 10px; font-size: 13px; overflow-wrap: anywhere;
+  text-align: left; vertical-align: top;
+}
+.ai-markdown tr:last-child td { border-bottom: none; }
+.ai-markdown th {
+  background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600;
+  border-bottom: 1px solid var(--dc-border);
+}
+
+/* 动画 */
+@keyframes dc-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.dc-fade-in { animation: dc-fade-in .25s ease; }
+@keyframes dc-rotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* 表格数据单元格溢出处理 */
+.data-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Message 提示统一风格：
+   正确/普通提示（success/info/warning）→ 屏幕顶部小条；
+   错误提示（error）→ 屏幕中央宽幅弹出，内容完整、可滚动查看详情 */
+/* 宽度**跟内容走**：原来固定 min-width: 260px，而「Oracle 驱动已就绪」这种短句实际只要 ~114px，
+   于是右边空出一大截（实测 260 里空了 146）。改成 fit-content、去掉下限 ——
+   短提示就一小块，长内容仍受 max-width 限制并自动换行。
+   注意：错误提示那条约在下方（.el-message--error），它自带 min-width: 380px !important
+   并且写在后面，所以屏幕中央那块宽幅弹窗不受这里影响。 */
+.el-message {
+  width: fit-content !important;
+  min-width: auto !important;
+  max-width: min(720px, calc(100vw - 32px)) !important;
+}
+.el-message__content { word-break: break-word; line-height: 1.6; white-space: pre-line; }
+.el-message--success,
+.el-message--info,
+.el-message--warning { top: 16px !important; }
+.el-message--error {
+  top: 42% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  min-width: 380px !important;
+  max-width: min(680px, 88vw) !important;
+  padding: 16px 18px !important;
+  border-color: #d03050 !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5) !important;
+  z-index: 3000 !important;
+}
+.el-message--error .el-message__content {
+  color: #ffd0d0;
+  font-size: 14px;
+  line-height: 1.7;
+  max-height: 55vh;
+  overflow-y: auto;
+}
+/* 关闭 X 统一固定在弹窗右上角（不再作为 flex 子项跟随内容垂直居中）。
+   项目里的提示基本都是 ElMessage.success/error 这种默认调用（不带关闭按钮），
+   那 36px 的右侧预留就是纯空位 —— 没有关闭按钮时不留。 */
+.el-message { padding-right: 36px !important; }
+.el-message:not(:has(.el-message__closeBtn)) { padding-right: 15px !important; }
+.el-message .el-message__closeBtn {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  margin: 0 !important;
+  transform: none !important;
+  line-height: 1;
+}
+/* 错误提示为屏幕中央的多行宽幅弹窗，X 略微内收 */
+.el-message--error .el-message__closeBtn { top: 8px; right: 10px; }
+
+/* 浅色主题下的错误提示细节修正 */
+html[data-theme="light"] .el-message--error {
+  border-color: #e05a6e !important;
+  box-shadow: 0 12px 40px rgba(90, 24, 40, .18) !important;
+}
+html[data-theme="light"] .el-message--error .el-message__content { color: #b42333; }
+
+/* ==================== 进度条（全局统一观感） ====================
+   项目中多处使用 el-progress（任务进度 / 同步 / 数据对比 / 数据生成 / 备份还原 / 质量分析）。
+   这里统一**轨道色、圆角、宽度过渡与文字**，避免各处深浅不一、空轨道淡到看不见。
+   填充色只给默认值（主色），不写渐变——各组件的状态色（成功绿 / 异常红）
+   以及自定义渐变仍可用 background 简写覆盖，不会被这里压掉。 */
+.el-progress-bar__outer {
+  background-color: rgba(125, 138, 160, .34);
+  border-radius: 999px;
+}
+html[data-theme="light"] .el-progress-bar__outer {
+  background-color: rgba(108, 122, 148, .30);
+}
+.el-progress-bar__inner {
+  background-color: var(--dc-primary);
+  background-image: linear-gradient(90deg, var(--dc-primary), var(--dc-purple));
+  border-radius: 999px;
+  transition: width .35s ease;
+}
+/* 成功 / 异常时不叠加渐变，让状态色保持纯色（绿 / 红） */
+.el-progress.is-success .el-progress-bar__inner,
+.el-progress.is-exception .el-progress-bar__inner {
+  background-image: none;
+}
+/* 条内百分比（text-inside）：
+   同时满足两个诉求 —— 垂直居中 + 水平靠右（贴在进度条右端内侧）。
+   EP 默认用 vertical-align + 行高对齐，条高小于行盒时会偏上，故改用 flex：
+     align-items: center     → 上下居中（不受行高影响）
+     justify-content: flex-end → 贴在条内右侧（不居中）
+   overflow: visible 保证条很短 / 0% 时文字不被裁切。 */
+.el-progress--text-inside .el-progress-bar__inner {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  overflow: visible;
+}
+.el-progress--text-inside .el-progress-bar__innerText {
+  margin: 0 6px;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1;
+  letter-spacing: .2px;
+  /* 文字为白色，叠加淡阴影：条很窄或 0% 时也能看清 */
+  text-shadow: 0 0 2px rgba(0, 0, 0, .45);
+}
+/* 条外百分比 */
+.el-progress__text {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+/* ==================== 治理相关弹窗：统一固定高度 ====================
+   「数据治理」（主弹窗，class=gov-dialog）与
+   「数据质量报告」「错误数据明细」（子弹窗，class=qa-sub-dialog）
+   高度保持一致，均为视口 76vh；配合 top=6vh，底部还留 18vh，不会顶出屏幕。
+   表格区域独占剩余高度、分页固定贴底，故翻页 / 行数变化都不会改变弹窗高度。
+
+   注意两点，否则样式会静默失效：
+   1) 这些弹窗使用 append-to-body（teleport 到 body），
+      组件内 <style scoped> + :deep() 匹配不到（祖先链上没有父组件 scopeId），
+      必须写在全局样式里；
+   2) Element Plus 的 Dialog 会把 class 透传到 .el-dialog，
+      但也可能落在 .el-overlay 上，故两种落点都覆盖。 */
+.el-dialog.gov-dialog,
+.gov-dialog .el-dialog,
+.el-dialog.qa-sub-dialog,
+.qa-sub-dialog .el-dialog {
+  height: 76vh;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+/* 内容区吃掉 header / footer 之外的剩余高度 */
+.el-dialog.gov-dialog .el-dialog__body,
+.gov-dialog .el-dialog .el-dialog__body,
+.el-dialog.qa-sub-dialog .el-dialog__body,
+.qa-sub-dialog .el-dialog .el-dialog__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* 主弹窗内容区撑满剩余高度（自身滚动，不再用 max-height 限制） */
+.el-dialog.gov-dialog .el-dialog__body > .gv-body,
+.gov-dialog .el-dialog .el-dialog__body > .gv-body {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+}
+/* 子弹窗：表格 / 加载占位撑满剩余空间（行数少，如最后一页，也不会缩矮） */
+.el-dialog.qa-sub-dialog .el-dialog__body > .el-table,
+.qa-sub-dialog .el-dialog .el-dialog__body > .el-table,
+.el-dialog.qa-sub-dialog .el-dialog__body > .qa-loading-box,
+.qa-sub-dialog .el-dialog .el-dialog__body > .qa-loading-box {
+  flex: 1;
+  min-height: 0;
+}
+/* 分页固定贴底，永不被表格挤出可视区 */
+.el-dialog.qa-sub-dialog .el-dialog__body > .el-pagination,
+.qa-sub-dialog .el-dialog .el-dialog__body > .el-pagination {
+  flex-shrink: 0;
+}
+/* 高度已固定（76vh + top 6vh），内容不会溢出视口：
+   禁掉遮罩层滚动，避免出现「内容区滚动条 + 窗口滚动条」两条滚动条并存 */
+.el-overlay:has(.gov-dialog) .el-overlay-dialog,
+.el-overlay:has(.qa-sub-dialog) .el-overlay-dialog {
+  overflow: hidden;
+}
+
+/* ==================== 命令面板内的下拉浮层 ====================
+   命令面板遮罩 .cp-mask 的 z-index 为 3000，而 Element Plus 下拉面板默认
+   在 2000 左右，会被遮罩压在下面（列表"藏到背后"看不见）。
+   这里提高浮层层级，保证下拉列表始终显示在命令面板之上。 */
+.cp-select-popper {
+  z-index: 3200 !important;
+}
+
+/* ==================== 加载遮罩（v-loading）====================
+   默认遮罩是接近纯白的半透明层，深色主题下会非常突兀且"看起来像没加载"。
+   这里跟随主题给一个协调的底色，并统一转圈与文字颜色。 */
+.el-loading-mask {
+  background-color: rgba(16, 18, 24, .60);
+  backdrop-filter: blur(1px);
+}
+html[data-theme="light"] .el-loading-mask {
+  background-color: rgba(255, 255, 255, .72);
+}
+.el-loading-spinner .el-loading-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--dc-primary);
+}
+.el-loading-spinner .path {
+  stroke: var(--dc-primary);
+}
+
+/* ============ 主页（空态）排版精修 v3 ============
+   v3：① 字号整体上调一档（v2 收过头了）；② 内容列 1120px；③ KPI 与两栏同宽；
+   ④ 小标题＝主色短竖条 + 正文级字重；⑤ 新增「查询统计」小格。
+   放全局样式：组件文件常被同时编辑，单一来源不会互相覆盖。
+   选择器加重一档：scoped 样式带 [data-v-*]，同权重时胜负由顺序决定。 */
+.empty-hint.empty-hint { max-width: 1120px; padding: 14px 20px 16px; gap: 12px; }
+.empty-hint.empty-hint .empty-kpis { max-width: none; margin: 0; gap: 10px; }
+.empty-hint.empty-hint .ek { padding: 10px 14px; }
+.empty-hint.empty-hint .ek-k { font-size: 12.5px; letter-spacing: .02em; }
+.empty-hint.empty-hint .ek-v { font-size: 21px; font-weight: 650; letter-spacing: .2px; line-height: 1.15; }
+.empty-hint.empty-hint .empty-grid { gap: 12px; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+.empty-hint.empty-hint .empty-block { padding: 12px 14px; }
+.empty-hint.empty-hint .empty-dss-head { font-size: 13px; font-weight: 600; color: var(--dc-text); letter-spacing: .03em; gap: 7px; margin-bottom: 9px; }
+.empty-hint.empty-hint .empty-dss-head::before { content: ''; width: 3px; height: 13px; border-radius: 2px; background: var(--dc-primary); flex-shrink: 0; }
+.empty-hint.empty-hint .empty-dss-head::after { background: var(--dc-border); opacity: .7; }
+.empty-hint.empty-hint .empty-dss-count { font-size: 11.5px; font-weight: 500; color: var(--dc-text-dim); min-width: 22px; padding: 0 6px; }
+.empty-hint.empty-hint .empty-dss-list { max-height: 150px; }
+.empty-hint.empty-hint .empty-ds { height: 36px; }
+.empty-hint.empty-hint .ds-name { font-size: 13.5px; }
+.empty-hint.empty-hint .ds-sub,
+.empty-hint.empty-hint .ds-type { font-size: 12px; }
+.empty-hint.empty-hint .ds-env { font-size: 11px; padding: 0 6px; }
+.empty-hint.empty-hint .empty-hi { padding: 4px 8px; }
+.empty-hint.empty-hint .hi-sql { font-size: 12.5px; max-width: 68%; }
+.empty-hint.empty-hint .hi-meta { font-size: 11.5px; }
+.empty-hint.empty-hint .mcp-code code { font-size: 12px; line-height: 1.55; }
+.empty-hint.empty-hint .empty-tips { font-size: 13px; opacity: .75; margin-top: 2px; }
+.empty-hint.empty-hint .empty-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+.empty-hint.empty-hint .es { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; background: var(--dc-bg-soft); border: 1px solid var(--dc-border); }
+.empty-hint.empty-hint .es-k { font-size: 11.5px; color: var(--dc-text-dim); }
+.empty-hint.empty-hint .es-v { font-size: 18px; font-weight: 650; color: var(--dc-text); line-height: 1.15; }
+.empty-hint.empty-hint .es-v.ok { color: #10b981; }
+.empty-hint.empty-hint .es-v.bad { color: #f43f5e; }
+.empty-hint.empty-hint .ek-v,
+.empty-hint.empty-hint .es-v,
+.empty-hint.empty-hint .empty-dss-count,
+.empty-hint.empty-hint .hi-meta,
+.cat-count,
+.row-tag { font-variant-numeric: tabular-nums; }
+/* ============ 主页「快速开始」列表 v4 ============
+   原样式：.ds-sub 带 margin-left:auto —— 类型/地址被顶到最右，一行里中间一大段空档，
+   扫读时眼睛要跨过去。现在：名字成列（固定下限宽度，各行对齐）→ 类型做一枚小徽标
+   → 主机名紧跟其后；箭头只在悬停时划入，静态时行更干净。 */
+.empty-hint.empty-hint .empty-ds { height: 38px; padding: 0 10px; gap: 10px; border-radius: 9px; }
+.empty-hint.empty-hint .ds-main { align-items: center; gap: 10px; }
+.empty-hint.empty-hint .ds-name { flex: 0 0 auto; min-width: 112px; max-width: 42%; font-size: 13.5px; font-weight: 600; }
+.empty-hint.empty-hint .ds-sub { margin-left: 0; display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.empty-hint.empty-hint .ds-type {
+  flex-shrink: 0; font-size: 11px; font-weight: 550; line-height: 18px; height: 18px;
+  padding: 0 8px; border-radius: 999px;
+  color: var(--dc-primary); background: var(--dc-primary-wash);
+  border: 1px solid var(--dc-primary-light);
+}
+.empty-hint.empty-hint .ds-host { font-size: 11.5px; color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty-hint.empty-hint .ds-go { opacity: 0; transform: translateX(-4px); transition: opacity .15s ease, transform .15s ease, color .15s ease; }
+.empty-hint.empty-hint .empty-ds:hover .ds-go { opacity: 1; transform: none; }
+/* ============ 主页「快速开始」列表 v5：收敛视觉语言 ============
+   问题：一行里同时出现「彩色品牌 logo + 蓝色实心胶囊 + 斑马纹底色」三套语言，
+   底色深浅也各不相同 —— 单看每个元素都行，放一起就不协调。
+   改法：① 胶囊改**中性**（与树上 .cat-count / .ds-env 同一套：浅底 + 细边 + 灰字），
+        颜色焦点只留给左侧 logo；② 去掉斑马纹，改为"悬停才亮"的干净列表；
+        ③ 行高回到 36px，密度与树上一致。 */
+.empty-hint.empty-hint .empty-ds { height: 36px; }
+.empty-hint.empty-hint .empty-ds:nth-child(odd) { background: transparent; }
+.empty-hint.empty-hint .empty-ds:hover { background: var(--dc-bg-hover); }
+.empty-hint.empty-hint .ds-type {
+  color: var(--dc-text-dim); background: var(--dc-bg-soft);
+  border: 1px solid var(--dc-border); font-weight: 500; letter-spacing: 0;
+}
+.empty-hint.empty-hint .ds-host { color: var(--dc-text-dim); opacity: .9; }
+/* ============ 主页 v6：统一卡片底色 + 去掉「卡中卡」 ============
+   ① 查询统计那 4 个小格原来自带浅底+描边 —— 等于在卡片里再画一张卡（本项目自己的原则
+      是"卡里再套卡很难看"）。改成：无底无边，用一条细分隔线分列，数字仍然独立成块。
+   ② KPI 卡与内容卡统一取 --dc-bg-card / --dc-border：同一屏里两种底色是"不协调"的根源。 */
+.empty-hint.empty-hint .empty-stats { gap: 0; }
+.empty-hint.empty-hint .es {
+  background: transparent; border: none; border-radius: 0;
+  padding: 2px 10px; border-left: 1px solid var(--dc-border);
+}
+.empty-hint.empty-hint .es:first-child { border-left: none; padding-left: 0; }
+.empty-hint.empty-hint .ek,
+.empty-hint.empty-hint .empty-block { background: var(--dc-bg-card); border-color: var(--dc-border); }
+/* ============ 主页「快速开始」v7：长名字不再顶开后面的胶囊 ============
+   病根：.ds-name 是 flex:0 0 auto（不许收缩）—— 名字一长就把胶囊顶到贴着，
+   主机名被挤没，整行看着就散了。改成：名字可收缩 + 省略号（悬停有 title 看全名），
+   胶囊 flex:0 0 auto 永不收缩、永远是完整的；主机名最后收缩，必要时自己也省略。 */
+.empty-hint.empty-hint .ds-name {
+  flex: 0 1 auto; min-width: 96px; max-width: 40%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.empty-hint.empty-hint .ds-sub { flex: 1 1 auto; min-width: 0; }
+.empty-hint.empty-hint .ds-type { flex: 0 0 auto; }
+.empty-hint.empty-hint .ds-host { flex: 0 1 auto; min-width: 0; }
+/* v8：.ds-sub 不许撑开 —— 一撑开就会在「名字」和「胶囊」之间留出一段空档（实测 130px），
+   那正是前面要修掉的"甩到最右"换个样子回来。空档应留在行尾（.ds-main 右侧），不在中间。 */
+.empty-hint.empty-hint .ds-sub { flex: 0 1 auto; }
+/* ============ 主页「最近查询」v9：正文与元信息各放大一档 ============
+   12.5 / 11.5px 在这个卡片里偏小：SQL 是这一块的主角，元信息也要能一眼读完。
+   间距同步放开（行内 gap 与圆点），否则字号变大了反而显得拥挤。 */
+.empty-hint.empty-hint .empty-hi { padding: 5px 8px; gap: 9px; }
+.empty-hint.empty-hint .hi-dot { width: 8px; height: 8px; }
+.empty-hint.empty-hint .hi-sql { font-size: 13.5px; max-width: 66%; }
+.empty-hint.empty-hint .hi-meta { font-size: 12.5px; }
+/* ============ 主页 v10：两处"奇怪"的根因 ============
+   ① 快速开始：名字宽度随内容变 → 每行的胶囊起点都不一样（看着错位）。
+      改成**名字固定成列**（150px，长名省略），胶囊与主机随之成列对齐。
+   ② 最近查询：元信息原来紧贴 SQL 尾巴（flex 流式），于是"库名·时间"在每行不同的
+      位置，眼睛找不到列。改成三列栅格：圆点 | SQL（占满剩余、超出省略）| 元信息右对齐，
+      并用 tabular-nums 让时间对齐。 */
+.empty-hint.empty-hint .ds-name { flex: 0 0 150px; max-width: none; min-width: 0; }
+.empty-hint.empty-hint .empty-hi {
+  display: grid; grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center; column-gap: 9px; padding: 5px 8px;
+}
+.empty-hint.empty-hint .hi-sql { max-width: none; font-size: 13.5px; }
+.empty-hint.empty-hint .hi-meta { min-width: 132px; text-align: right; font-size: 12.5px; }
+/* ============ 主页「快速开始」v11：元信息靠右 ============
+   名字固定 150px 成列之后，右侧还留着一大片空白 —— 把「类型胶囊 + 主机名」推到行尾，
+   与「最近查询」的元信息一样靠右，两张卡片的阅读节奏统一（左：名字 / 右：元信息）。
+   注意：胶囊本身仍是 flex:0 0 auto（不收缩），必要时由主机名先省略。 */
+.empty-hint.empty-hint .ds-sub { margin-left: auto; }
+.empty-hint.empty-hint .ds-host { text-align: right; }
+/* ============ 主页 MCP 卡 v12：代码块撑满 + 字号放大 ============
+   这张卡被两栏网格拉高了，而代码块只有内容那么高 —— 下面留出一大片空白。
+   改法：含 .mcp-code 的卡片改成纵向 flex，代码块 flex:1 撑满剩余高度，
+   底色铺满整块；字号 12 → 13px、行高 1.65，缩进 JSON 读起来更清楚。 */
+.empty-hint.empty-hint .empty-block:has(.mcp-code) { display: flex; flex-direction: column; }
+.empty-hint.empty-hint .mcp-code { flex: 1; padding: 10px 12px; overflow: auto; }
+.empty-hint.empty-hint .mcp-code code { font-size: 13px; line-height: 1.65; }
+.empty-hint.empty-hint .mcp-inline { font-size: 12px; }
+/* ============ 侧栏工具条（新建连接 / 新建目录 / 展开 / 收缩 / 刷新）============
+   原来这些动作散落在右键菜单和欢迎页 —— 放到对象浏览器标题下一行，手边就有。
+   尺寸与左侧树的密度对齐（26px 方钮、圆角 7px），悬停才上色，静态时不抢注意力。 */
+.tree-tools { display: flex; align-items: center; gap: 4px; padding: 0 8px 8px; flex-shrink: 0; }
+.tree-tool {
+  width: 26px; height: 26px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--dc-border); border-radius: 7px; background: var(--dc-bg-input);
+  color: var(--dc-text-dim); cursor: pointer; transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.tree-tool .el-icon { font-size: 14px; }
+.tree-tool:hover { color: var(--dc-primary); border-color: var(--dc-primary-light); background: var(--dc-primary-wash); }
+.tree-tool:active { transform: translateY(1px); }
+/* ============ 侧栏标题行 v2（对齐参考样式）============
+   参考图的要点：动作图标排在**标题同一行的右侧**、搜索框紧随其下。
+   这里把工具条并进标题行：.tree-title 两端对齐，右侧是「图标钮 + 新建脚本」。
+   同时把行高与悬停调"整"：行 28px、悬停整行底色（不再有斑马纹）。 */
+.tree-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tree-title-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.tree-tools { padding: 0; gap: 4px; }
+.tree-tool { width: 24px; height: 24px; border-radius: 6px; }
+.tree-tool .el-icon { font-size: 13.5px; }
+.dc-tree :deep(.el-tree-node__content) { height: 28px; }
+/* 标题行右侧留白：动作组原来贴到边缘 2px（实测），与左侧 14px 的留白不对称 */
+.tree-title { padding-right: 10px; }
+.tree-title-actions { margin-right: 2px; }
+/* 同上，但选择器加重一档：.tree-title 在组件里是 scoped（带 [data-v-*]，权重 0,2,0），
+   全局规则同权重时由顺序决定胜负 —— 加重一档才能稳定压过去（实测：原来写了却没生效）。 */
+.tree-title.tree-title { padding-right: 10px; }
+.tree-title-actions.tree-title-actions { margin-right: 2px; }
+/* ============ 侧栏收口 v3 ============
+   两个"丑"的来源：① 顶部 5 个图标太小太散（24px、13.5px 图标，看着像几个小点）；
+   ② 底部一整片空白，整栏像没做完。改法：图标放大到 28px/16px 并给工具栏一条底线，
+   让它成为一条**真正的工具条**；底部补一条状态条（连接数 · 已连接数），把这一栏收口。 */
+.tree-tools { padding: 10px 10px 9px; border-bottom: 1px solid var(--dc-border); }
+.tree-tool { width: 28px; height: 28px; border-radius: 8px; }
+.tree-tool .el-icon { font-size: 16px; }
+.tree-foot {
+  flex-shrink: 0; display: flex; align-items: center; gap: 6px;
+  padding: 9px 12px; border-top: 1px solid var(--dc-border);
+  font-size: 11.5px; color: var(--dc-text-dim); font-variant-numeric: tabular-nums;
+}
+.tree-foot-sep { opacity: .5; }
+/* ============ 侧栏工具条 v4（重做：三个等宽按钮）============
+   只剩三个动作时，纯图标会显得又小又散 —— 改成「图标 + 文字」的等宽按钮：
+   一行铺满侧栏宽度，既是功能入口也是一条分隔带（自带底线）。 */
+.tree-tools { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid var(--dc-border); }
+.tree-tool {
+  flex: 1 1 0; min-width: 0; height: 30px; width: auto; padding: 0 8px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+  font-size: 12px; font-family: inherit; white-space: nowrap;
+}
+.tree-tool .el-icon { font-size: 15px; }
+.tree-tool span { overflow: hidden; text-overflow: ellipsis; }
+/* ============ 侧栏 v5：按钮与搜索框同一行 ============ */
+.tree-tools { display: flex; align-items: center; gap: 6px; padding: 10px; border-bottom: 1px solid var(--dc-border); }
+.tree-tool { flex: 0 0 auto; width: 30px; height: 30px; padding: 0; gap: 0; }
+.tree-tool .el-icon { font-size: 16px; }
+.tree-tool span { display: none; }
+/* 搜索框吃掉剩余宽度：覆盖组件里那条 margin/width（scoped 权重 0,2,0，故加重一档） */
+.tree-search.tree-search.tree-search { flex: 1 1 auto; width: auto; min-width: 0; margin: 0; }
+/* ============ 侧栏 v6：工具行与下面的内容对齐 ============
+   原来这一行左右各留 10px，而树/搜索那条线在 8px —— 两处对不齐，看着就"少一截"。
+   统一到 8px，并把按钮行与搜索框的右缘也收到同一条线上。 */
+.tree-tools { padding: 8px; gap: 6px; }
+.tree-tools .tree-tool { flex: 0 0 auto; }
+/* 横向内边距去掉：外面 .tree-area 已有 6px，再叠一层 8px 就让工具行比树行多缩进 8px（实测 14 vs 6）。
+   只留纵向内边距，工具行与树行落在同一条竖线上。 */
+.tree-tools.tree-tools { padding: 8px 0; }
+/* ============ 树节点「选中态」：只留一层底色（用户要求：简单、不花哨）============
+   原来选中行会画一条绿色/蓝色左竖条（border-left 或 ::before），行内再加高亮底色 ——
+   两个信号说同一件事，反而吵。现在统一成：一层浅底 + 圆角，别的都不画。
+   三种常见画法一次性挡掉（border / 伪元素 / inset 阴影），避免"改了没生效"。
+   选择器加重一档（.dc-tree.dc-tree）以压过组件里的 :deep(...) scoped 规则。 */
+.dc-tree.dc-tree .el-tree-node.is-current > .el-tree-node__content {
+  background: var(--dc-bg-hover);
+  border-left: none !important;
+  box-shadow: none !important;
+  border-radius: 6px;
+}
+.dc-tree.dc-tree .el-tree-node.is-current > .el-tree-node__content::before { content: none !important; }
+.dc-tree.dc-tree .el-tree-node.is-current > .el-tree-node__content::after { content: none !important; }
+/* 选中行里的文字保持正常字重：靠底色表达选中，不再叠加加粗/变色（少即是多） */
+.dc-tree.dc-tree .el-tree-node.is-current > .el-tree-node__content .node-label { font-weight: 400; }
+/* 选中态配色修正：上一版用了 --dc-bg-hover（rgb(232,237,246)）—— 在浅色行上几乎看不出，
+   等于"选中了却看不见"。改成主色 14% 淡底：一眼能认出选中，但仍然只是一层颜色，
+   不加边条、不加描边（自上而下保持一致）。悬停用更浅的 7%，两者层次分明。 */
+.dc-tree.dc-tree .el-tree-node.is-current > .el-tree-node__content {
+  background: rgba(37, 99, 235, .14);
+}
+.dc-tree.dc-tree .el-tree-node.is-current > .el-tree-node__content .node-label { color: var(--dc-text-strong); font-weight: 500; }
+.dc-tree.dc-tree .el-tree-node__content:hover { background: rgba(37, 99, 235, .07); }
+/* ============ 树上不再用加粗 ============
+   原来三处加粗（连接名 500 / 当前库 600 / 选中行 500）都在替"状态"发声，和底色、图标明暗
+   重复。按"一个状态一处信号"的原则统一回 400：选中看底色、打开看图标明暗。
+   这几种都是组件里的 scoped 规则，用 .dc-tree.dc-tree 加重一档稳定压过去。 */
+.dc-tree.dc-tree .conn-label,
+.dc-tree.dc-tree .db-label-current,
+.dc-tree.dc-tree .el-tree-node.is-current > .el-tree-node__content .node-label { font-weight: 400; }
+/* 侧栏顶部留白收小：工具行的上内边距 8 → 4px（搜索框上方那段空白太占地方） */
+.tree-tools.tree-tools { padding: 4px 0 8px; }
+.tree-area.tree-area { padding-top: 4px; }
+/* ============ 侧栏工具条 v7：搜索框与按钮同高 26px ============
+   v5 把按钮和搜索框放到了同一行，但尺寸没对齐：按钮 30px、el-input 默认 32px，
+   差这 2px 在一行里就是"两个高度"。统一到 26px —— 比树行 28px 略紧、比 v1 的小方钮舒展，
+   整行读起来是一条完整带子。
+   两个细节：
+   · 按钮用 border-box：1px 描边也算进 26px，否则实际是 28px 又对不齐；
+   · 搜索框改 --el-component-size / --el-input-height，让 el-input 连内层输入一起缩 ——
+     只压外壳高度的话，内部 input 仍按 32px 撑，光标与文字会偏。 */
+.tree-tools .tree-tool {
+  width: 26px; height: 26px; box-sizing: border-box;
+  border-radius: 6px; padding: 0;
+}
+.tree-tools .tree-tool .el-icon { font-size: 14px; }
+.tree-search.tree-search.tree-search {
+  --el-component-size: 26px;
+  --el-input-height: 26px;
+}
+.tree-search.tree-search.tree-search .el-input__wrapper {
+  min-height: 26px; height: 26px; padding: 0 8px; border-radius: 6px;
+}
+/* ============ 顶栏分组（简单，只用一条细分隔线）============
+   分组：新建脚本 ｜ 数据·治理 ｜ 监控·知识库 ｜ AI 助手 ……… 设置（贴右）。
+   不加底色、不加边框，只用 1px 竖线划分 —— 与"整体简单、不花哨"一致。 */
+.top-sep { display: inline-block; width: 1px; height: 14px; background: var(--dc-border); margin: 0 8px; vertical-align: middle; }
+.top-nav-right { margin-left: auto; }
+/* ============ 顶栏 v2：左侧文字项 + 右侧纯图标 ============
+   左侧（新建脚本 / 数据对比 / 数据同步 / 数据治理 / 服务监控）保留"图标 + 文字"；
+   右侧知识库 / AI 助手 / 设置只留图标，靠 tooltip 说明。图标钮是 30px 方形、悬停才有底色。 */
+/* 右侧图标组：五枚（知识库 / AI / 主题 / 语言 / 设置）—— gap 从 2px 放到 4px，
+   30px 的方钮之间留出呼吸感，同时不松开到看不出是一组 */
+.top-nav-right { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.top-icon-btn.top-icon-btn {
+  width: 30px; height: 30px; padding: 0; justify-content: center;
+  border-radius: 8px;
+}
+.top-icon-btn.top-icon-btn .el-icon { margin: 0; font-size: 16px; }
+
+/* 语言钮：图标组里唯一用文字的一枚（「中 / EN」比任何语言图标都直白），
+   尺寸与 30px 图标钮完全对齐，字重压到中等以免比图标显重 */
+.top-lang-btn.top-lang-btn { width: 30px; height: 30px; font-size: 12.5px; font-weight: 600; color: var(--dc-text); }
+.top-lang-btn.top-lang-btn:hover { color: var(--dc-text-strong); }
+/* 顶栏导航要占满宽度，右侧那组才能真正贴到最右（原来 .top-nav 只有内容宽，margin-left:auto 无从发力） */
+.top-nav.top-nav { flex: 1 1 auto; min-width: 0; }
+/* ============ 主页字号再提一档 ============
+   三档层次：数字（最大、字重 650）> 名字/标题（600）> 元信息（400、最浅）。
+   每一档都比上一版大 0.5~3px，并同步放开行高与行距 —— 只放大字号不放开间距会更挤。 */
+.empty-hint.empty-hint .ek-v { font-size: 24px; }
+.empty-hint.empty-hint .ek-k { font-size: 13px; }
+.empty-hint.empty-hint .empty-dss-head { font-size: 13.5px; margin-bottom: 10px; }
+.empty-hint.empty-hint .empty-ds { height: 38px; }
+.empty-hint.empty-hint .ds-name { font-size: 14px; }
+.empty-hint.empty-hint .ds-type { font-size: 11.5px; height: 19px; line-height: 19px; }
+.empty-hint.empty-hint .empty-act { font-size: 13.5px; padding: 8px; }
+.empty-hint.empty-hint .empty-hi { padding: 6px 8px; }
+.empty-hint.empty-hint .hi-sql { font-size: 14px; }
+.empty-hint.empty-hint .hi-meta { font-size: 12.5px; }
+.empty-hint.empty-hint .es-v { font-size: 20px; }
+.empty-hint.empty-hint .es-k { font-size: 12px; }
+.empty-hint.empty-hint .mcp-code code { font-size: 13px; }
+.empty-hint.empty-hint .empty-hs-none { font-size: 12.5px; }
+.empty-hint.empty-hint .empty-tips { font-size: 13.5px; }
+/* 数字不再加粗：层级改由"字号 + 颜色深浅"表达（KPI 24px / 统计 20px，都是常规字重）。
+   徽标里的计数（小标题右侧那颗）也一并回到常规字重，避免只有它一处变粗。 */
+.empty-hint.empty-hint .ek-v { font-weight: 400; }
+.empty-hint.empty-hint .es-v { font-weight: 400; }
+.empty-hint.empty-hint .empty-dss-count { font-weight: 400; }
+/* 标题也不加粗：整块主页统一常规字重（400）。
+   标题靠"字号 13.5px + 正文色 + 主色竖条"区分，连接名靠字号与颜色区分 —— 不再用字重。 */
+.empty-hint.empty-hint .empty-dss-head { font-weight: 400; }
+.empty-hint.empty-hint .ds-name { font-weight: 400; }
+.empty-hint.empty-hint .empty-head h3 { font-weight: 400; }
+.empty-hint.empty-hint .mcp-inline { font-weight: 400; }
+/* ============ 主页字重兜底：整块统一常规 400 ============
+   前面的逐条覆盖治不到组件与 Element Plus 自带的 500（类型徽标、text 按钮、内建 span），
+   结果就是"大部分不加粗、个别还粗"的割裂感。这里做最后一道兜底，把主页范围内的字重压平；
+   区分改由字号与颜色承担。想恢复某处强调，删掉这一块或单独加回即可。 */
+.empty-hint.empty-hint,
+.empty-hint.empty-hint * { font-weight: 400 !important; }
+/* ============ 快速开始：正好显示 4 行、第 5 行才出滚动条 ============
+   原来写死 max-height: 150px，而行高后来提到了 38px —— 4 行要 4×38 + 3×2 = 158px，
+   差 8px 就溢出，于是"只有 4 条也冒出滚动条"。现在按行高**算出**边界，行数变了也不会再错位：
+   恰好 4 行 —— 不出滚动条；第 5 条起 —— 自然出现（滚动条样式也调细，不抢视线）。 */
+.empty-hint.empty-hint .empty-dss-list {
+  max-height: calc(4 * 38px + 3 * 2px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dc-border-strong) transparent;
+}
+.empty-hint.empty-hint .empty-dss-list::-webkit-scrollbar { width: 6px; }
+.empty-hint.empty-hint .empty-dss-list::-webkit-scrollbar-thumb { background: var(--dc-border-strong); border-radius: 3px; }
+.empty-hint.empty-hint .empty-dss-list::-webkit-scrollbar-track { background: transparent; }
+/* ============ 侧栏折叠钮：从"孤零零的浮动图标"变成"看得出是个控件" ============
+   原来：28px、灰字、贴在底部居中，四周没有任何承载 —— 在一片空侧栏里像掉了的图标。
+   现在：30px 圆角 8、输入底色 + 一层极浅阴影（有厚度）、图标色提一档；
+   位置挪到右下角 8px（角落比"居中悬空"更像有意为之）。隐藏侧栏时那枚浮动钮不受影响。 */
+.sidebar-toggle.sidebar-toggle {
+  width: 30px; height: 30px; border-radius: 8px;
+  bottom: 8px;
+  background: var(--dc-bg-input);
+  color: var(--dc-text);
+  box-shadow: 0 1px 2px var(--dc-shadow-sm);
+}
+.sidebar-toggle.sidebar-toggle:hover {
+  color: var(--dc-primary); border-color: var(--dc-primary-light);
+  background: var(--dc-primary-wash); box-shadow: 0 2px 6px var(--dc-shadow-sm);
+}
+.sidebar-toggle.toggle-floating.toggle-floating { left: 6px; width: 28px; height: 28px; }

@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.dbmind</groupId>
+  <artifactId>dbmind-redis-test-server</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <name>DBMind Redis test server</name>
+  <description>
+    Redis 的**契约级**测试替身：用 JDK 自带的 ServerSocket 实现 RESP2 里我们真正用到的那部分命令。
+
+    为什么需要它（与 Mongo / ES 两个替身同样的理由）：Windows CI 上装不了 redis-server，
+    而「断言写了却没人跑」正是这一层最容易出的问题 —— 有了替身，任何机器（含 CI）
+    都能把 Redis 那段冒烟跑起来，不需要预装任何东西。
+
+    边界必须说清楚：它验证的是「宿主怎么发请求、怎么解析响应」（客户端是真 Jedis），
+    **不验证 Redis 自身的语义**（过期、持久化、集群、事务、发布订阅都不存在）。
+    真正跑通那些语义要靠一台真的 redis-server（用 DBMIND_SMOKE_REDIS_PORT 指向它即可）。
+  </description>
+
+  <properties>
+    <maven.compiler.release>17</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <build>
+    <finalName>dbmind-redis-test-server</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+        <version>3.4.1</version>
+        <configuration>
+          <archive>
+            <manifest>
+              <mainClass>com.dbmind.deploy.RedisTestServer</mainClass>
+            </manifest>
+          </archive>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

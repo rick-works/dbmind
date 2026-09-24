@@ -1,0 +1,41 @@
+schemaVersion: 1
+order: 1300
+dbType: h2
+rustVariant: H2
+label: H2
+dialect: H2
+runtimeMode: agent
+mcpMode: bridge
+agentKey: h2
+driverStoreVisible: true
+driverStoreOrder: 13
+singleConnectionPool: true
+metadataConnectionScoped: false
+skipTcpProbe: true
+localFile: true
+defaultPort: 9092
+jdbc:
+  driverClass: org.h2.Driver
+  urlTemplate: "jdbc:h2:file:{filePath}"
+  artifact: com.h2database:h2:2.3.232
+traits:
+  singleDatabase: true
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: false
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: false
+  driverManagement: true
