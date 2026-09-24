@@ -4,6 +4,10 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.stream.JsonWriter;
+import java.io.IOException;
+import java.io.StringWriter;
+import java.util.Map;
 
 /**
  * 线上协议：一行一个 JSON 消息。
@@ -20,6 +24,39 @@ public final class Protocol {
     public static final Gson GSON = new GsonBuilder().serializeNulls().create();
 
     private Protocol() {
+    }
+
+    /**
+     * 手写信封：{@code result} 的字段照常序列化，{@code rows} 段用 {@code jsonValue}
+     * 把调用方已经渲染好的文本**原样透传**（不再经过 Gson 的树）。
+     */
+    public static String ok(String id, JsonElement result, String rowsText) {
+        try {
+            StringWriter buffer = new StringWriter(1 << 16);
+            JsonWriter writer = new JsonWriter(buffer);
+            writer.beginObject();
+            writer.name("id").value(id);
+            writer.name("ok").value(true);
+            writer.name("result").beginObject();
+            for (Map.Entry<String, JsonElement> entry : ((JsonObject) result).entrySet()) {
+                if ("rows".equals(entry.getKey())) {
+                    continue;
+                }
+                writer.name(entry.getKey());
+                GSON.toJson(entry.getValue(), writer);
+            }
+            if (rowsText != null) {
+                writer.name("rows");
+                writer.jsonValue(rowsText);
+            }
+            writer.endObject();
+            writer.endObject();
+            writer.flush();
+            return buffer.toString();
+        } catch (IOException | RuntimeException e) {
+            // 手写信封失败就退回普通路径：绝不能因为优化把响应丢了
+            return ok(id, result);
+        }
     }
 
     public static String ok(String id, JsonElement result) {

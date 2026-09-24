@@ -350,7 +350,18 @@ public final class Main {
                 boolean hasResultSet = statement.execute(sql);
                 if (hasResultSet) {
                     try (ResultSet resultSet = statement.getResultSet()) {
-                        return resultSet == null ? emptyResult(0) : ResultMapper.read(resultSet, maxRows, compact);
+                        if (resultSet == null) {
+                            return emptyResult(0);
+                        }
+                        if (compact) {
+                            // 紧凑模式：行文本在这里直接透传，不再经过 Gson 的树。
+                            // 自己写完响应后回 null，dispatch 看到 null 就不会再写一遍。
+                            StringBuilder rowsJson = new StringBuilder(1 << 16);
+                            JsonObject head = ResultMapper.readCompactInto(resultSet, maxRows, rowsJson);
+                            write(Protocol.ok(requestId, head, rowsJson.toString()));
+                            return null;
+                        }
+                        return ResultMapper.read(resultSet, maxRows);
                     }
                 }
                 int affected = statement.getUpdateCount();

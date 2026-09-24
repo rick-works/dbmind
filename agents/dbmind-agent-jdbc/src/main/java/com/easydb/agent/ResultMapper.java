@@ -3,6 +3,9 @@ package com.dbmind.agent;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.stream.JsonWriter;
+import java.io.IOException;
+import java.io.StringWriter;
 import java.math.BigDecimal;
 import java.sql.Clob;
 import java.sql.ResultSet;
@@ -92,6 +95,174 @@ public final class ResultMapper {
      * <p>与 {@link #cell} 的值语义一一对应 —— 布尔仍归 0/1、BigDecimal 整数化、时间戳按
      * 本地时间文本，避免两种格式出现细微差异。
      */
+    /**
+     * 紧凑模式专用：**不建树**，把行的 JSON 文本直接追加进 {@code rowsOut}，
+     * 返回值里不含 {@code rows} —— 由 {@code Protocol.ok(id, result, rowsText)} 原样透传。
+     *
+     * <p>为什么要这样：旧写法每格 new 一个 JsonObject / JsonPrimitive，
+     * 20 万行 × 12 列 = 240 万个对象，随后 Gson 还要把整棵树再走一遍拼成字符串。
+     * 这里每格只剩一次 StringBuilder.append，字符串转义借一个复用的 JsonWriter。
+     */
+    public static JsonObject readCompactInto(ResultSet resultSet, int maxRows, StringBuilder rowsOut)
+            throws SQLException {
+        ResultSetMetaData meta = resultSet.getMetaData();
+        int columnCount = meta.getColumnCount();
+
+        JsonArray columns = new JsonArray();
+        for (int i = 1; i <= columnCount; i++) {
+            JsonObject column = new JsonObject();
+            column.addProperty("name", meta.getColumnLabel(i));
+            column.addProperty("typeName", meta.getColumnTypeName(i));
+            columns.add(column);
+        }
+
+        rowsOut.append('[');
+        boolean firstRow = true;
+        int rowsWritten = 0;
+        boolean truncated = false;
+        while (resultSet.next()) {
+            if (rowsWritten >= maxRows) {
+                truncated = true;
+                break;
+            }
+            if (!firstRow) {
+                rowsOut.append(',');
+            }
+            firstRow = false;
+            rowsOut.append('[');
+            for (int i = 1; i <= columnCount; i++) {
+                if (i > 1) {
+                    rowsOut.append(',');
+                }
+                appendBare(rowsOut, resultSet, i);
+            }
+            rowsOut.append(']');
+            rowsWritten++;
+        }
+        rowsOut.append(']');
+
+        JsonObject result = new JsonObject();
+        result.add("columns", columns);
+        result.addProperty("rowCount", rowsWritten);
+        result.addProperty("truncated", truncated);
+        result.addProperty("compactRows", true);
+        result.add("affectedRows", null);
+        result.add("notices", new JsonArray());
+        return result;
+    }
+
+    /** 把一个单元格按紧凑格式追加进缓冲：数字/null 直接写，字符串借 JsonWriter 转义 */
+    private static void appendBare(StringBuilder buf, ResultSet resultSet, int index) throws SQLException {
+        Object value;
+        try {
+            value = resultSet.getObject(index);
+        } catch (SQLException err) {
+            // 个别驱动对某些类型取不动：如实回 null，别让整页作废
+            buf.append("null");
+            return;
+        }
+        if (value == null || resultSet.wasNull()) {
+            buf.append("null");
+            return;
+        }
+        if (value instanceof Boolean flag) {
+            buf.append(flag ? '1' : '0');
+            return;
+        }
+        if (value instanceof Byte || value instanceof Short || value instanceof Integer || value instanceof Long) {
+            buf.append(((Number) value).longValue());
+            return;
+        }
+        if (value instanceof BigDecimal decimal) {
+            if (decimal.scale() <= 0) {
+                buf.append(decimal.longValueExact());
+            } else {
+                buf.append(decimal.toPlainString());
+            }
+            return;
+        }
+        if (value instanceof Number number) {
+            buf.append(number.doubleValue());
+            return;
+        }
+        if (value instanceof byte[] bytes) {
+            appendBlob(buf, bytes.length, bytes);
+            return;
+        }
+        if (value instanceof java.sql.Blob blob) {
+            long length = blob.length();
+            int take = (int) Math.min(length, BLOB_PREVIEW_LIMIT);
+            appendBlob(buf, (int) length, blob.getBytes(1, take));
+            return;
+        }
+        if (value instanceof Clob clob) {
+            long length = clob.length();
+            int take = (int) Math.min(length, CLOB_PREVIEW_LIMIT);
+            appendEscaped(buf, clob.getSubString(1, take));
+            return;
+        }
+        if (value instanceof Timestamp timestamp) {
+            appendEscaped(buf, timestamp.toLocalDateTime().toString());
+            return;
+        }
+        appendEscaped(buf, String.valueOf(value));
+    }
+
+    /**
+     * 字符串一律走 JsonWriter 转义：自己写转义表迟早会漏掉控制字符。
+     *
+     * <p>IOException 在这里吃掉并兜底：{@code StringWriter} 写在内存里、不会真的失败，
+     * 但 {@code Writer} 接口声明了它，不接就得让整条调用链都带上 throws（不值得）。
+     * 兜底只做最基本的引号/反斜杠转义，保证出去的东西仍是合法 JSON。
+     */
+    private static void appendEscaped(StringBuilder buf, String text) {
+        buf.append('"');
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            switch (c) {
+                case '"':
+                    buf.append("\\\"");
+                    break;
+                case '\\':
+                    buf.append("\\\\");
+                    break;
+                case '\n':
+                    buf.append("\\n");
+                    break;
+                case '\r':
+                    buf.append("\\r");
+                    break;
+                case '\t':
+                    buf.append("\\t");
+                    break;
+                case '\b':
+                    buf.append("\\b");
+                    break;
+                case '\f':
+                    buf.append("\\f");
+                    break;
+                default:
+                    if (c < 0x20) {
+                        buf.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        buf.append(c);
+                    }
+            }
+        }
+        buf.append('"');
+    }
+
+    /** blob 仍用带标签的对象（要带长度与预览字节，裸值表达不了）。 */
+    private static void appendBlob(StringBuilder buf, int length, byte[] preview) {
+        buf.append("{\"t\":\"blob\",\"v\":{\"len\":").append(length);
+        if (preview != null && preview.length > 0) {
+            buf.append(",\"previewBase64\":\"")
+                .append(Base64.getEncoder().encodeToString(preview))
+                .append('"');
+        }
+        buf.append("}}");
+    }
+
     private static JsonElement bareCell(ResultSet resultSet, int index) throws SQLException {
         Object value = resultSet.getObject(index);
         if (value == null || resultSet.wasNull()) {
