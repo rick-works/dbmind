@@ -862,6 +862,7 @@
     :total="-1"
     :message="dangerMessage"
     :logs="dangerLogs"
+    :show-logs="true"
     :cancellable="dangerCancellable"
     :canceling="false"
     @cancel="dangerCancel"

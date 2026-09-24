@@ -1,0 +1,30 @@
+进度框默认不再显示日志 + 守卫新增「调用了没声明」规则（并修掉它抓出的 4 个真 bug）
+
+一、进度框（用户要求：那块日志是噪声，不要了）
+- TaskProgressDialog 新增 showLogs 属性，默认 false —— 导出/导入/转储/跑脚本这些任务的
+  日志就是「已导出 5000 行」「已导出 10000 行」的重复流水，真正有用的是上面的
+  进度 / 行速 / 预计剩余，留着只是噪声
+- 危险操作那种弹窗（一条条已执行的语句）由调用方显式开 :show-logs="true" 保留
+- 没日志时弹窗宽度 720 -> 560，免得一个进度条撑在大框里显得空
+
+二、守卫新增第 7 条规则：脚本里「被当函数调用、却没有任何声明/导入」
+这一族是「构建全绿、一点那个按钮就崩」的主力。它抓到并修好了 4 个真 bug：
+
+  TableDataView.vue:2713  exportData()    ← 没导入 → 点「导出当前页」必崩
+  TableDataView.vue:2714  downloadBlob()  ← 没导入（下一个就会崩）
+  CompareDialog.vue:370   nextTick()      ← vue 导入里没有它 → 点详情页签崩
+  ProcForm.vue:320        parseType()     ← objectFormUtils 导出的，导入清单里漏了
+
+三、把这条规则的误报压到 0（一开始报 60 条，全是假的）
+根因：抹平字符串那把尺子不认识【正则字面量】—— /'/ 、/["']/ 、/\b(?:…)/ 里的引号与斜杠
+被当成字符串/注释起点，一路错位，把 const copyCell 这类声明都吃掉了。同样的问题也让
+stripComments 漏剥注释（注释里举的 RETURN ( / IN ( / COUNT(* 被当成真调用）。
+改法（都在 scripts/guard.mjs）：
+- 抽出共享的 regexAllowedAt / skipRegexLiteral（判断"这个 / 是正则还是除号"用通用启发式：
+  前面的有效字符是 ( , = : [ ! & { ; 这类或 return/typeof 等关键字 ⇒ 正则）
+- stripComments 与 blankStrings 都用它；声明收集改用「未抹平字符串」的文本
+- 补齐关键字与运行环境全局白名单（of / in / new / getComputedStyle / ResizeObserver …）
+- 模板那条规则显式忽略 HTML 注释（注释里写着 t() 是说明文字，不是调用）
+结果：该规则命中 60 → 0，守卫全绿（另 1 条待人工确认，已核实为假报）
+
+验证：前端构建通过、guard 全绿（含首屏渲染 1661 字）、4 个真 bug 均已修复。

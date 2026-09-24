@@ -61,6 +61,50 @@ function walk(dir, out = []) {
  * 必须做字符串状态跟踪：代码里有 `'http://x'` 这种含 `//` 的字符串，
  * 粗暴去注释会把后半行一起吃掉，于是漏报。
  */
+/**
+ * 某个位置能不能开始一个正则字面量。
+ *
+ * JS 里没有可靠的静态判法，标准做法是看它前面那个"有效字符"：
+ * 前面是 ( , = : [ ! & | ? { } ; + - * % ~ ^ < > 或 return/typeof/case 这类关键字 ⇒ 正则字面量；
+ * 前面是标识符、数字、) ] 、引号 ⇒ 除号。
+ *
+ * 这件事必须做对：正则里常常带引号（/['"]/）或 /*（/\/\*…/），
+ * 不认它就会把引号当字符串起点、把 /* 当注释起点，一路错位吃掉代码或漏剥注释。
+ */
+function regexAllowedAt(src, idx) {
+  const isIdChar = (ch) => /[\w$]/.test(ch)
+  const AFTER_CHAR = '(,=:[!&|?{};+-*%~^<>'
+  const AFTER_WORD = /^(return|typeof|case|in|of|new|delete|void|do|else|yield|await|instanceof)$/
+  for (let k = idx - 1; k >= 0; k--) {
+    const ch = src[k]
+    if (ch === ' ' || ch === '\t' || ch === '\r' || ch === '\n') continue
+    if (AFTER_CHAR.includes(ch)) return true
+    if (isIdChar(ch) || ch === ')' || ch === ']') {
+      let e = k
+      while (e >= 0 && isIdChar(src[e])) e--
+      return AFTER_WORD.test(src.slice(e + 1, k + 1))
+    }
+    return false
+  }
+  return true
+}
+
+/** 从正则字面量的开头（那个 / 的下标）跳到它的结尾之后；找不到结尾就返回 src.length */
+function skipRegexLiteral(src, i) {
+  const n = src.length
+  let j = i + 1
+  let inClass = false
+  while (j < n) {
+    const ch = src[j]
+    if (ch === '\\') { j += 2; continue }
+    if (ch === '\n') break
+    if (ch === '[') inClass = true
+    else if (ch === ']') inClass = false
+    else if (ch === '/' && !inClass) return j + 1
+    j++
+  }
+  return n
+}
 function stripComments(src) {
   const n = src.length
   const keep = new Uint8Array(n).fill(1)
@@ -92,6 +136,11 @@ function stripComments(src) {
       i = e
       continue
     }
+    if (c === '/' && c2 !== '/' && c2 !== '*' && regexAllowedAt(src, i)) {
+      // 正则字面量整段跳过：里面的引号、/* 、// 都不是字符串或注释的开头
+      i = skipRegexLiteral(src, i)
+      continue
+    }
     if (c === '"' || c === "'" || c === '`') {
       let j = i + 1
       while (j < n) {
@@ -109,21 +158,52 @@ function stripComments(src) {
   return out
 }
 
-/** 在 stripComments 基础上，再把字符串**内容**也抹平（只用来数大括号深度） */
+/**
+ * 在 stripComments 基础上，再把字符串与**正则字面量**的内容也抹平（数括号深度、找调用都靠它）。
+ *
+ * 为什么必须认识正则字面量：像 /['"]/ 或 /\b(?:PROCEDURE|FUNCTION)\b/ 这种写法里带着引号，
+ * 只按引号配对就会把引号当字符串起点，一路吃到大段代码 —— 实测把 const copyCell 这类
+ * 声明都吃没了，于是合法调用被报成「调用了没声明的函数」（一次 60 条假问题）。
+ *
+ * 判断某个 / 是正则还是除号，用的是通用启发式：看它前面那个"有效字符"——
+ * 前面是 ( , = : [ ! & | ? { } ; + - * % ~ ^ < > 或 return/typeof/case 这类关键字 ⇒ 正则；
+ * 前面是标识符、数字、) ] 、引号 ⇒ 除号。JS 里没有更靠谱的静态判法，这个够用。
+ */
 function blankStrings(src) {
   const n = src.length
   const keep = new Uint8Array(n).fill(1)
+  const regexAllowed = (idx) => regexAllowedAt(src, idx)
+  const blankTo = (from, to) => {
+    for (let k = from; k < to && k < n; k++) if (src[k] !== '\n' && src[k] !== '\r') keep[k] = 0
+  }
   let i = 0
   while (i < n) {
     const c = src[i]
-    if (c === '"' || c === "'" || c === '`') {
+    const isQuote = c === '"' || c === "'" || c.charCodeAt(0) === 96
+    if (isQuote) {
       let j = i + 1
       while (j < n) {
         if (src[j] === '\\') { j += 2; continue }
         if (src[j] === c) break
         j++
       }
-      for (let k = i + 1; k < j && k < n; k++) if (src[k] !== '\n' && src[k] !== '\r') keep[k] = 0
+      blankTo(i + 1, j)
+      i = Math.min(n, j + 1)
+      continue
+    }
+    if (c === '/' && src[i + 1] !== '/' && src[i + 1] !== '*' && regexAllowed(i)) {
+      let j = i + 1
+      let inClass = false
+      while (j < n) {
+        const ch = src[j]
+        if (ch === '\\') { j += 2; continue }
+        if (ch === '\n') break
+        if (ch === '[') inClass = true
+        else if (ch === ']') inClass = false
+        else if (ch === '/' && !inClass) break
+        j++
+      }
+      blankTo(i + 1, j)
       i = Math.min(n, j + 1)
       continue
     }
@@ -252,7 +332,7 @@ function checkT(files) {
 
     // —— ① 模板里不该出现裸 t(（只对 .vue 有意义）
     if (isVue(f)) {
-      splitLines(withoutScript(text, f)).forEach((l, i) => {
+      splitLines(withoutScript(text, f).replace(/<!--[\s\S]*?-->/g, ' ')).forEach((l, i) => {
         if (CALL_T.test(l)) warn(f, i + 1, '模板里用了裸 t()（模板作用域里没有它，应写 $t()）')
       })
     }
@@ -570,12 +650,91 @@ function checkDoubleColon(files) {
   }
   return hits
 }
+
+// ---------------------------------------------------------------- 7. 调用了却没声明
+
+/**
+ * 为什么必须有这一条：这个项目只有 vite，没有 eslint。而「叫了一个不存在的函数」
+ * 编译期完全看不出来 —— 只有用户点到那个按钮才炸：
+ *
+ *     const blob = await exportData(conn.id, payload)   // ✗ 本文件没导入 exportData
+ *     → 导出失败：exportData is not defined
+ *
+ * 表预览的「导出当前页」就是这么坏了很久（同一个文件里 downloadBlob 也漏了导入）。
+ *
+ * 判定只针对**调用形式**（identifier 后面跟左括号），不做完整 no-undef：
+ * 调用几乎总是本地/导入来的，误报极少；而普通标识符做宽松判定会假报一片（之前试过，29 条里大半是假的）。
+ */
+function checkCalls(files) {
+  // 调用它们不需要声明：语言关键字 + 运行环境全局 + 模板里才有效的 $t 系列
+  const ALLOW = new Set([
+    'async', 'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'function',
+    'Array', 'Object', 'String', 'Number', 'Boolean', 'Math', 'JSON', 'Date', 'RegExp', 'Error',
+    'Map', 'Set', 'WeakMap', 'WeakSet', 'Promise', 'Symbol', 'BigInt', 'Proxy', 'Reflect', 'Intl',
+    'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent', 'decodeURIComponent',
+    'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame',
+    'cancelAnimationFrame', 'queueMicrotask', 'structuredClone', 'console', 'fetch', 'URL',
+    'Blob', 'File', 'FileReader', 'FormData', 'Headers', 'Request', 'Response', 'AbortController',
+    'alert', 'confirm', 'prompt', 'crypto', 'atob', 'btoa', 'window', 'document', 'navigator',
+    'localStorage', 'sessionStorage', 'performance', 'history', 'location', 'globalThis',
+    'defineProps', 'defineEmits', 'defineExpose', 'defineModel', 'defineOptions', 'defineSlots',
+    'withDefaults', 'require', 'super', 'this', 'arguments', 'import',
+    'of', 'in', 'instanceof', 'new', 'delete', 'void', 'yield', 'await', 'return', 'case',
+    'do', 'else', 'try', 'throw', 'default', 'extends', 'static', 'typeof',
+    'getComputedStyle', 'matchMedia', 'getSelection', 'ResizeObserver', 'MutationObserver',
+    'IntersectionObserver', 'CustomEvent', 'Event', 'KeyboardEvent', 'MouseEvent', 'PointerEvent',
+    'DOMParser', 'TextEncoder', 'TextDecoder', 'requestIdleCallback', 'cancelIdleCallback',
+    'Element', 'HTMLElement', 'Node', 'NodeList', 'Image', 'Audio', 'Path2D',
+    '$t', '$tc', '$te', '$d', '$n',
+  ])
+  let scanned = 0
+  for (const f of files) {
+    if (!isVue(f)) continue
+    const script = stripComments(onlyScript(read(f), f)).replace(/<\/?script\b[^>]*>/g, "")
+    if (!script.trim()) continue
+    scanned++
+    const body = blankStrings(script)
+    // 声明从【没有抹平字符串】的版本里收。
+    //
+    // 为什么：抹平字符串那把尺子会把正则字面量里的引号当成字符串起点
+    // （比如 /'/ 或 /["']/），一路吃到大段代码 —— 实测 TableDataView 里的
+    // const copyCell、copyLikeCtrlC 等声明全被吃掉，于是合法调用被报成
+    // 「调用了没声明的函数」，一次报出 60 条假问题。检测"调用"时仍然用
+    // 抹平后的文本（免得把字符串里的字当调用），只是收集声明不受它影响。
+    const decl = script
+    const declared = new Set()
+    const add = (re) => {
+      for (const m of decl.matchAll(re)) {
+        for (let i = 1; i < m.length; i++) {
+          for (const n of String(m[i] || "").matchAll(/[A-Za-z_$][\w$]*/g)) declared.add(n[0])
+        }
+      }
+    }
+    add(/(?:^|[\s;{(,])(?:const|let|var|function|class)\s+([A-Za-z_$][\w$]*)/g)
+    add(/\bimport\s+([\s\S]*?)\s+from\b/g)
+    add(/\{([^{}]*)\}\s*=/g)
+    add(/(?:\(([^()]*)\)|([A-Za-z_$][\w$]*))\s*=>/g)
+    add(/\bfunction\s*[\w$]*\s*\(([^()]*)\)/g)
+    add(/\bcatch\s*\(\s*([A-Za-z_$][\w$]*)/g)
+    add(/\bfor\s*\(\s*(?:const|let|var)\s+([\s\S]*?)\s+of\b/g)
+
+    const seen = new Set()
+    for (const m of body.matchAll(/(?<![.\w$])([A-Za-z_$][\w$]*)\s*\(/g)) {
+      const id = m[1]
+      if (ALLOW.has(id) || declared.has(id) || seen.has(id)) continue
+      seen.add(id)
+      warn(f, lineAt(body, m.index), "调用了没声明的函数 " + id + "()（多半是漏了 import）—— 点到这里才会炸")
+    }
+  }
+  return scanned
+}
 // ---------------------------------------------------------------- 主流程
 
 const files = walk(SRC)
 const dict = checkDict(files)
 const tChecked = checkT(files)
 const undef = checkProps(files)
+const calls = checkCalls(files)
 const tpd = checkProgressDialog(files)
 const dcol = checkDoubleColon(files)
 const bundle = checkBundle()

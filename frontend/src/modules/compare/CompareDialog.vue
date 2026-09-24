@@ -316,7 +316,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch, computed, onBeforeUnmount } from 'vue'
+import { ref, onMounted, watch, computed, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Switch, Right, TopRight, BottomRight, RefreshRight, ScaleToOriginal, CircleCheck, SetUp, VideoPause, Document, QuestionFilled } from '@element-plus/icons-vue'
 import { listConnections, listDatabases, listSchemas, listTables, listColumns, getFeatures, compareData, compareTaskStatus, compareCancel } from '../../api'

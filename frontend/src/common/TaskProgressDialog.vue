@@ -1,5 +1,5 @@
 <template>
-  <el-dialog :model-value="visible" width="720px" top="8vh"
+  <el-dialog :model-value="visible" :width="showLogs ? '720px' : '560px'" top="8vh"
              :close-on-click-modal="false" :close-on-press-escape="false"
              :before-close="onBeforeClose" append-to-body class="task-progress-dialog"
              @update:model-value="$emit('update:visible', $event)">
@@ -28,7 +28,11 @@
       </div>
     </div>
 
-    <div class="tp-log-card">
+    <!-- 日志区默认不显示。
+         导出这类任务的日志就是「已导出 5000 行」「已导出 10000 行」的重复流水，
+         真正有用的是上面的进度 / 行速 / 剩余时间；留着只是噪声（用户明确要求去掉）。
+         危险操作那种「一条条已执行的语句」才有看的价值，由调用方显式开 show-logs。 -->
+    <div v-if="showLogs" class="tp-log-card">
       <div ref="logRef" class="tp-log-body">
         <div v-if="!logs.length" class="tp-log-empty">{{ emptyHint }}</div>
         <div v-for="(line, i) in logs" :key="i" class="tp-log-line">
@@ -76,6 +80,8 @@ const props = defineProps({
   phase: { type: String, default: '' },
   message: { type: String, default: '' },
   logs: { type: Array, default: () => [] },
+  // 是否展示日志列表（默认关，见模板里的说明）。日志本身仍在传：将来想看随时打开。
+  showLogs: { type: Boolean, default: false },
   canceling: { type: Boolean, default: false },
   /** 该任务能否取消：false = 不给取消按钮（后端已经在执行、停不下来） */
   cancellable: { type: Boolean, default: true }
@@ -203,7 +209,8 @@ const emptyHint = computed(() => {
   return props.message || t('tpd.ended')
 })
 
-watch(() => props.logs.length, () => {
+// 只在日志区真的显示时才需要跟着滚到底
+watch(() => (props.showLogs ? props.logs.length : 0), () => {
   nextTick(() => {
     const el = logRef.value
     if (el) el.scrollTop = el.scrollHeight

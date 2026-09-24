@@ -84,7 +84,7 @@
 import { ref, reactive, computed, watch, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Operation, Cpu, Setting, EditPen, Plus, Delete, InfoFilled } from '@element-plus/icons-vue'
-import { has, qt, sq, buildType, ddlStyleOf, oracleType, extractRoutineBody, ensureRoutineBodyEnd, parseRoutineDdl, applySpans } from './objectFormUtils'
+import {has, qt, sq, buildType, ddlStyleOf, oracleType, extractRoutineBody, ensureRoutineBodyEnd, parseRoutineDdl, applySpans, parseType} from './objectFormUtils'
 import { t } from '../../utils/i18n'
 import SqlCodeEditor from './SqlCodeEditor.vue'
 
