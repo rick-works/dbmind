@@ -1,6 +1,8 @@
 <template>
   <div class="obj-form">
-    <el-tabs v-model="activeTab" type="border-card" class="table-tabs">
+    <!-- 不用 border-card：那会带一层灰底标题带 + Element 自带下划线，
+         与「编辑表结构」的"纯文字页签 + 独立卡片"不是一回事（见下方样式）。 -->
+    <el-tabs v-model="activeTab" class="table-tabs">
       <!-- 基本信息 -->
       <el-tab-pane :label="$t('tf.basic')" name="basic">
         <div class="tab-inner">
@@ -77,6 +79,11 @@
           <div class="field-table-wrap">
             <table class="field-table">
               <thead>
+                <!-- 第一行是 35px 空行：页签与工具条就"住"在这一行（与「编辑表结构」同一套做法）。
+                     表头标题行的 sticky top: 35px 正是按这一行算出来的。 -->
+                <tr class="thead-spacer">
+                  <th :colspan="headSpan"></th>
+                </tr>
                 <tr>
                   <th style="width:40px" :title="$t('tf.colOrder')">#</th>
                   <th style="width:120px">{{ $t('tf.colName') }}</th>
@@ -588,4 +595,165 @@ emit('sql', genSql())
 /* 索引表表头/内容左对齐 */
 .table-tabs :deep(.el-table th.el-table__cell > .cell),
 .table-tabs :deep(.el-table td.el-table__cell > .cell) { text-align: left; }
+
+/* ======================================================================
+   ↓↓↓ 与「编辑表结构」(modules/data/TableDetailView.vue) 对齐的覆盖层 ↓↓↓
+
+   新建表与编辑表结构在用户眼里是同一个界面，必须长得一样。上面那套是本组件
+   早先的薄样式，这一段逐条照抄编辑页的对应规则（连"为什么必须这么写"的约束
+   一起搬过来）。**改这里时请对照 TableDetailView.vue 的样式块同步改。**
+   ====================================================================== */
+
+/* 页签条 + 工具条 + 表格 = **同一张卡**：整块只画一层边框/圆角/卡片底，
+   页签条相当于这张卡的"标题行"，表格与工具栏不再各自套边框。 */
+.table-tabs {
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  background: var(--dc-bg-card);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
+  overflow: hidden;
+  /* 工具条要绝对定位到"页签这一行"，定位祖先必须抬到卡片上
+     （Element 的 .el-tabs__content 自带 position: relative，会在它那层吃掉锚点） */
+  position: relative;
+}
+.table-tabs :deep(.el-tabs__content) {
+  flex: 1; padding: 0; position: static; overflow: visible;
+  /* Element 会给内容区铺一层淡灰蓝底，露在表格四周像"表下压着个背景块" */
+  background: transparent !important;
+}
+.table-tabs :deep(.el-tabs__header) {
+  /* 页签要"住进表格的第一行"：把 Element 的表头压成 0 高（不占位），
+     页签改为绝对定位，覆盖在表格首行（35px 空行）之上 */
+  height: 0; margin: 0; padding: 0; border-bottom: none;
+  background: transparent; position: static;
+}
+.table-tabs :deep(.el-tabs__nav-wrap) { height: 0; position: static; }
+.table-tabs :deep(.el-tabs__nav) {
+  position: absolute; top: 0; left: 12px; height: 35px;
+  display: flex; align-items: center;
+  background: transparent; border: none; padding: 0; z-index: 5;
+}
+.table-tabs :deep(.el-tabs__nav-wrap::after) { display: none; }  /* 去掉自带的下划双层线 */
+.table-tabs :deep(.el-tabs__active-bar) { display: none; }       /* 激活项用主色文字，不要指示条 */
+.table-tabs :deep(.el-tabs__item) {
+  /* height / border-radius 必须 !important：MainView 的全局 .dc-tabs 规则同样命中
+     这排页签（把 height 压成 34px、圆角压成 0 → 激活项滑块变方角） */
+  height: 30px !important; line-height: 30px;
+  padding: 0 14px !important; font-size: 13px;
+  color: var(--dc-text-mid);
+  border-radius: 6px !important;
+  background: transparent !important;
+  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.table-tabs :deep(.el-tabs__item:hover) { color: var(--dc-text-strong); }
+.table-tabs :deep(.el-tabs__item.is-active) {
+  color: var(--dc-primary) !important; font-weight: 600;
+  background: var(--dc-bg-card) !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .10);
+}
+
+/* 表格那两个页签**不留内边距**：表格直接贴到卡片内缘，左右两侧的"框线"就是
+   卡片自身那条边框，下方由最后一行的下边框收口。 */
+.tab-inner.col-tab,
+.tab-inner.idx-tab { padding: 0; }
+.tab-inner { overflow: hidden; }
+/* 表格容器贴内容长（12 行的表原来会在下面拖出一大片带边框的空白）。
+   横向**允许滚动**（编辑页那边是 hidden，因为它列宽总和恰好小于容器）：
+   新建表的列更多（含排序键/自增/说明等），窗口窄时总宽会超出去 ——
+   裁掉的就等于"看不见的列"，那比多一条滚动条严重得多。 */
+.col-tab .field-table-wrap {
+  flex: 0 1 auto; max-height: 100%;
+  overflow-x: auto; overflow-y: auto;
+  border: none; border-radius: 0; background: transparent; min-height: 0;
+}
+
+/* 工具条**上浮到页签这一行**（左边页签、右边按钮），不再单独占一行 */
+.col-tab .card-actions,
+.idx-tab .card-actions {
+  position: absolute; top: 0; right: 13px; height: 35px;
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  /* 左侧留给页签（实测页签框约 275px + 12px 缩进） */
+  max-width: calc(100% - 286px);
+  padding: 0; margin: 0; border-radius: 0; background: transparent;
+  z-index: 4; flex-shrink: 0;
+}
+.col-tab .card-actions .move-tip {
+  margin-right: auto; font-size: 12.5px; color: var(--dc-text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* 索引页用的是 el-table（没有那行 35px 空行），自己补出这段距离，
+   否则表头会被绝对定位的工具条直接压住 */
+.idx-tab { padding-top: 35px; }
+
+/* ---- 字段表格本体 ---- */
+.field-table {
+  /* **不能用 collapse**：collapsed 边框 + sticky 表头在 Chromium 上会留残影
+     （表头下面几行的勾选框会"透过"表头显示）。separate + border-spacing: 0
+     观感一致，但粘性表头的重绘正常。 */
+  border-collapse: separate;
+  border-spacing: 0;
+  table-layout: fixed;
+}
+.field-table th {
+  position: sticky; top: 0;
+  /* 必须高于行内控件：Element 给 .el-checkbox__inner 设了 z-index: 1，
+     同级时后出现的 tbody 会盖住表头（滚动时勾选框透到表头上） */
+  z-index: 3;
+  background: var(--dc-bg-soft); color: var(--dc-text-strong);
+  font-weight: 600; font-size: 12px; letter-spacing: .02em; text-align: left;
+  padding: 6px 9px; border-bottom: 1px solid var(--dc-border); white-space: nowrap;
+}
+/* 行高收到约 27px；行分隔线用 --dc-border 而不是最浅的 soft（soft 在部分屏幕
+   上几乎看不见，用户反馈过"框线都没了"） */
+.field-table td {
+  padding: 2px 9px; background: var(--dc-bg-card);
+  border-bottom: 1px solid var(--dc-border); vertical-align: middle;
+}
+/* 表头是**两行**（35px 空行 + 标题行），滚动时两行都要固定 */
+.field-table tr.thead-spacer th {
+  height: 35px; padding: 0; border-bottom: none; background: var(--dc-bg-card);
+}
+.field-table thead tr:last-child th { top: 35px; }
+/* 列竖线逐格画（separate 模式各画各的，不会叠加变粗）；最后一列不画 */
+.field-table thead tr:last-child th,
+.field-table tbody td { border-right: 1px solid var(--dc-border); }
+.field-table thead tr:last-child th:last-child,
+.field-table tbody td:last-child { border-right: none; }
+/* 序号列居中，并收紧内边距（列宽只有 40px，不收紧数字会被挤换行） */
+.field-table thead tr:last-child th:first-child,
+.field-table tbody td:first-child { text-align: center; }
+.field-table tbody td:first-child { padding-left: 4px; padding-right: 4px; }
+
+/* 行内控件统一压到 22px：否则它们会成为新的"行高天花板" */
+.field-table :deep(.el-input__inner) { height: 22px; }
+.field-table :deep(.el-input__wrapper) { min-height: 22px; }
+.field-table :deep(.el-select__wrapper) { min-height: 22px; }
+.field-table :deep(.el-button--small) { height: 22px; padding: 0 6px; }
+.field-table :deep(.el-checkbox) { margin-right: 0; height: 22px; }
+.field-table :deep(.el-checkbox),
+.field-table :deep(.el-checkbox__inner),
+.field-table :deep(.el-switch) { z-index: auto; }
+
+/* 行底色统一画在 td 上（悬停 / 主键 / 排序键），靠顺序决定胜出；不做斑马纹 */
+.field-table tbody tr:hover td { background: var(--dc-bg-hover); }
+.field-table tbody tr.pk-row td { background: rgba(79, 140, 255, .05); }
+.field-table tbody tr.ok-row td { background: rgba(103, 194, 58, .05); }
+.field-table tbody tr.sel-row td { background: rgba(79, 140, 255, .16) !important; }
+.field-table tbody tr.sel-row td:first-child { box-shadow: inset 2px 0 0 var(--dc-primary); }
+.field-table tbody tr:hover { background: transparent; }   /* 旧的 tr 级底色让位给 td 级 */
+
+/* 基本信息：整块收成一张卡（原来表单直接铺在面板上，下面又是整片空白） */
+.form-grid {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  align-items: start;
+  padding: 14px 14px 2px;
+  background: var(--dc-bg-card);
+  border: 1px solid var(--dc-border-soft);
+  border-radius: 10px;
+}
+.form-grid :deep(.el-form-item__label) {
+  font-size: 12px; font-weight: 500; color: var(--dc-text-dim);
+  line-height: 18px; margin-bottom: 4px; padding: 0;
+}
 </style>

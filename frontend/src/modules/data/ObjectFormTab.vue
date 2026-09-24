@@ -1,7 +1,7 @@
 <template>
   <div v-loading="loading" class="form-tab">
     <template v-if="!loading">
-      <!-- 顶部标题栏 -->
+      <!-- 顶部标题栏：**独立成一张小卡**（与「编辑表结构」同一套外观） -->
       <div class="form-tab-header">
         <div class="header-title">
           <el-icon :size="16" class="header-icon"><component :is="catIcon" /></el-icon>
@@ -14,9 +14,9 @@
         </div>
       </div>
 
-      <!-- 主体：左表单 + 右预览 -->
+      <!-- 主体：**上编辑 + 下预览**（与「编辑表结构」一致；以前预览是右侧 380px 固定栏） -->
       <div class="form-tab-body">
-        <!-- 左侧表单 -->
+        <!-- 编辑区 -->
         <div class="form-area">
           <el-alert v-if="cat === 'events' && !has(features, 'supportsEvents')" type="warning" :closable="false" show-icon class="mb12">
             <template #title>{{ $t('oft.eventUnsupported') }}</template>
@@ -192,19 +192,31 @@ onMounted(async () => {
 </script>
 
 <style scoped>
+/* ===== 与「编辑表结构」(TableDetailView.vue) 同一套外观 =====
+   三张小卡自上而下并列：标题行 / 编辑卡 / SQL 预览卡，外观完全一致。
+   改这里时请对照 TableDetailView.vue 的骨架样式一起改 —— 用户在两个页面之间
+   来回切，任何一处不一致都会被一眼看出来。 */
 .form-tab {
   height: 100%;
   display: flex;
   flex-direction: column;
   background: var(--dc-bg-deep);
+  /* 四周留 5px：卡片贴着面板边缘时，8px 圆角会被边线"压平"，看起来像没做圆角 */
+  padding: 5px;
+  box-sizing: border-box;
+  min-height: 0;
 }
+/* 顶部标题行：独立成一张小卡（四角 8px 圆角 + 完整边框 + 同款轻阴影），
+   不再充当"下面那张卡的标题行"，所以下边框也用常规色，不用较浅的 soft。 */
 .form-tab-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--dc-border-soft);
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
   background: var(--dc-bg-soft);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
   flex-shrink: 0;
 }
 .header-title {
@@ -214,43 +226,64 @@ onMounted(async () => {
   font-size: 14px;
   font-weight: 600;
   color: var(--dc-text);
+  min-width: 0;
 }
-.header-icon { color: var(--dc-primary); }
-.header-actions { display: flex; gap: 6px; }
+.header-title .header-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.header-icon { color: var(--dc-primary); flex-shrink: 0; }
+.header-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
+/* 编辑区在上、SQL 预览在下（原来预览是右侧 380px 固定栏）：
+   纵向堆叠后两者都按 flex 分配高度，因此都必须是可收缩的（min-height: 0） */
 .form-tab-body {
   flex: 1;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
   min-height: 0;
 }
 
-/* 左侧表单 */
+/* 编辑区：左右**不留内边距**（下方预览卡是通栏的，编辑区若两侧缩进就会比它窄一圈，
+   看着像两块宽度不同的面板）；上面留 5px = 与标题卡之间的缝隙。 */
 .form-area {
   flex: 1;
-  overflow-y: auto;
-  padding: 14px;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+  /* 视图 / 过程 / 触发器 / 事件这些表单没有自己的卡片，靠这里留出常规内边距 */
+  padding: 5px 12px 12px;
+}
+/* 表格（新建表）的页签本身就是一张**通栏卡**（见 TableForm 的样式）：
+   去掉左右内边距，它才与下方那张 SQL 预览卡同宽 —— 否则两张卡宽度差一圈，
+   看起来像两块不同的面板。
+   用 :has() 只为表格这条路径改：其它对象类型保持上面的常规内边距。 */
+.form-area:has(.table-tabs) {
+  padding: 5px 0 0;
 }
 
-/* 右侧 SQL */
+/* 右侧 SQL → 底部 SQL：同样是一张卡（边框/圆角/轻阴影与上面两张一致）。
+   这里给固定高度（编辑页那条可拖动的分隔条暂未移植）。 */
 .sql-area {
-  width: 380px;
-  border-left: 1px solid var(--dc-border-soft);
-  background: var(--dc-bg-code);
+  flex-shrink: 0;
+  height: 220px;
+  margin-top: 6px;
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  background: var(--dc-bg-card);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
+  overflow: hidden;
 }
 .sql-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 10px 12px;
+  padding: 8px 12px;
   font-size: 13px;
   color: var(--dc-text-dim);
+  background: var(--dc-bg-soft);
   border-bottom: 1px solid var(--dc-border-soft);
   flex-shrink: 0;
 }
@@ -262,6 +295,7 @@ onMounted(async () => {
   overflow: auto;
   padding: 10px 12px;
   min-height: 0;
+  background: var(--dc-bg-code);
 }
 .sql-body pre { margin: 0; }
 .sql-body code {
@@ -273,7 +307,7 @@ onMounted(async () => {
   word-break: break-all;
 }
 .sql-foot {
-  padding: 10px 12px;
+  padding: 8px 12px;
   border-top: 1px solid var(--dc-border-soft);
   display: flex;
   justify-content: flex-end;
@@ -294,5 +328,4 @@ onMounted(async () => {
 <style>
 /* 让表单卡片在 Tab 里更协调 */
 .form-tab .obj-form { gap: 10px; }
-.form-tab .form-card { background: var(--dc-bg-soft); }
 </style>

@@ -1,0 +1,29 @@
+新建表改成与「编辑表结构」同一套布局与样式（不改任何逻辑）
+
+背景：新建表与编辑表结构在用户眼里是同一个界面，但它们是两个独立组件 ——
+  新建表      = ObjectFormTab（外壳） + common/objectforms/TableForm.vue（内芯）
+  编辑表结构  = modules/data/TableDetailView.vue
+两边**类名本来就一样**（.table-tabs / .tab-inner.col-tab / .field-table-wrap /
+.field-table / .card-actions），但样式各写各的：编辑页那套是精修过的（卡片制页签、
+页签"住进表格第一行"、吸附双层表头、29px 紧凑行、横竖网格线），新建表那套只有薄薄
+40 行，还带着 el-tabs 的 border-card。于是"同名不同皮"。
+
+改动（只碰样式与一处属性/一行空行，逻辑零改动）：
+
+1. TableForm.vue
+   - el-tabs 去掉 type="border-card"（那层灰底标题带 + Element 自带下划线就是它来的）
+   - 字段表 thead 补一行 35px 空行（thead-spacer）：页签与工具条"住"在这一行，
+     表头标题行的 sticky top: 35px 也按它算
+   - 追加一层"与编辑页对齐"的覆盖样式（逐条照抄 TableDetailView 的规则，含注释里
+     那些"为什么必须这么写"的约束：collapsed 边框 + sticky 表头的残影、勾选框
+     z-index 盖住表头、MainView 全局 .dc-tabs 规则要 !important 才压得住……）
+   - 横向改为允许滚动：新建表列更多（含排序键/自增/说明），窗口窄时裁掉等于
+     "看不见的列"，比多一条滚动条严重得多
+
+2. ObjectFormTab.vue（外壳）
+   - 页面四周留 5px，标题行独立成一张小卡（边框+圆角+轻阴影）
+   - 主体由"左表单 + 右 380px 预览"改成"上编辑 + 下预览"，SQL 预览也是一张卡
+   - 编辑区左右不留内边距，与下方预览卡同宽；用 :has(.table-tabs) 只为表格这条路
+     径去掉内边距 —— 视图/过程/触发器/事件那几种表单没有自己的卡片，仍保留常规内边距
+
+验证：npm run build 通过、guard 通过（词典 zh/en 平衡、产物无断链）。
