@@ -18,7 +18,7 @@ use serde_json::{json, Value};
 use crate::api::dialect;
 use crate::api::error::{XError, XResult};
 use crate::api::driver::{expected_jars, jar_names};
-use crate::api::{blocking, Params};
+use crate::api::blocking;
 use crate::AppState;
 
 /// 驱动下载镜像（`api::driver` 下载时要读它换仓库根，故为 pub）。
@@ -393,8 +393,3 @@ pub async fn legacy_tls_put(
     Ok(Json(json!({ "allowLegacyTls": allow, "relaxed": false })))
 }
 
-/// 保留 `Params` 的可见性（`open_dir` 用不上查询串，但模块内其余 handler 会）。
-#[allow(dead_code)]
-fn _keep_params() {
-    let _ = Params::parse(None);
-}

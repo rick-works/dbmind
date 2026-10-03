@@ -16,7 +16,6 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
-use serde_json::{json, Value};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
@@ -284,8 +283,3 @@ fn escape_xml(text: &str) -> String {
     out
 }
 
-/// 未使用的 JSON 辅助（保留以便将来加 `format: json`）。
-#[allow(dead_code)]
-fn as_json(value: &Value) -> String {
-    json!(value).to_string()
-}

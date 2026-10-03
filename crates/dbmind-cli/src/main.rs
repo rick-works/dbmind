@@ -5,7 +5,7 @@
 
 use clap::{Parser, Subcommand};
 use dbmind_core::{
-    AccessContext, ConnectionConfig, ConnectionKind, DbMindEngine, DbMindError, ErrorCode, QueryRequest,
+    AccessContext, ConnectionConfig, DbMindEngine, DbMindError, ErrorCode, QueryRequest,
 };
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -758,7 +758,3 @@ fn print_json<T: serde::Serialize>(value: &T) -> dbmind_core::Result<()> {
 }
 
 // 未使用但保留：壳层若需要展示类型清单里的默认端口，可用它做提示
-#[allow(dead_code)]
-fn default_port_hint(kind: ConnectionKind) -> Option<u16> {
-    kind.default_port()
-}

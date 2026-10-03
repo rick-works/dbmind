@@ -266,14 +266,6 @@ fn scope_of(database: &Option<String>, schema: &Option<String>) -> String {
     format!("{database}.{schema}")
 }
 
-fn qualified(table: &str, schema: &Option<String>) -> String {
-    let schema = schema.clone().unwrap_or_default();
-    if schema.trim().is_empty() || table.contains('.') {
-        table.to_string()
-    } else {
-        format!("{schema}.{table}")
-    }
-}
 
 // ------------------------------------------------------------------ 元数据
 
@@ -1635,7 +1627,6 @@ async fn sync_table_inner(
 
 
 
-    let mut page_no = 0u64;
     // 行数上限的消费计数（按真正进入写入处理的行数累计）+ 是否已命中上限
     let mut consumed: u64 = 0;
     let mut limit_hit = false;
@@ -1679,7 +1670,6 @@ async fn sync_table_inner(
 
                 }
 
-                page_no += 1;
 
                 if let Some(task) = task {
 

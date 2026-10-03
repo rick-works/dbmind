@@ -40,7 +40,6 @@ use crate::AppState;
 /// 这是「内存换准确」的兜底：对比要在内存里建 key → 行 的索引，千万行的表
 /// 一对比就是 OOM —— 200 万（原 20 万的 10 倍）配合分页读取，常规业务表
 /// 等于没有限制；真要对比更大规模得走导出+外部工具。到了上限明确标出「结果不完整」。
-const MAX_ROWS_PER_SIDE: usize = 2_000_000;
 
 #[derive(Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -312,11 +311,6 @@ fn compare_structure(source: &[ColumnFacts], target: &[ColumnFacts]) -> Value {
 
 // ------------------------------------------------------------------ 数据对比
 
-struct Side {
-    columns: Vec<String>,
-    rows: Vec<Vec<CellValue>>,
-    truncated: bool,
-}
 
 /// 单侧数据流：协程按 keyset 分页拉取（每页 5 万），页经 channel 交给对比循环。
 /// **内存只驻留当前页** —— 行数无上限、不会 OOM（流式边拉边比）。
@@ -379,8 +373,6 @@ impl SideStream {
 struct SidePage {
     columns: Vec<String>,
     rows: Vec<Vec<CellValue>>,
-    /// 本页**最后一行**的排序键（下一页 keyset 用）
-    last_sort_key: Vec<shape::SortPart>,
 }
 
 /// 表行数（count(*)）：给流式对比提供**真实分母** —— 进度条按具体百分比增长
@@ -517,7 +509,6 @@ fn spawn_side_stream(
                         .send(Ok(SidePage {
                             columns: columns_out.clone().unwrap_or_default(),
                             rows: result.rows,
-                            last_sort_key: last.clone().unwrap_or_default(),
                         }))
                         .await;
                     // 不足一页 = 读完
@@ -543,14 +534,6 @@ fn sort_positions(key_cols: &[String], columns: &[String]) -> Vec<usize> {
         .collect()
 }
 
-/// 主键值 → 一个可比较的键。
-///
-/// 归一规则集中在 `shape`：**数值跨变体**（MySQL `INT` → `Integer`、Oracle `NUMBER(p,s)` → `Real`）
-/// 与**日期时间跨表示**（`2024-01-01` / `2024-01-01T00:00` / `...T00:00:00`）都必须得到同一个键 ——
-/// 否则跨类型对比会把整表判成「仅源 / 仅目标」，而且不报错。
-fn key_of(row: &[CellValue], indexes: &[usize]) -> String {
-    shape::row_key(row, indexes)
-}
 
 fn row_object(columns: &[String], row: &[CellValue], only: Option<&BTreeSet<usize>>) -> Value {
     let mut object = Map::new();

@@ -2732,11 +2732,6 @@ fn privilege_table_rows(value: Option<&Value>) -> XResult<Vec<(String, String, V
     Ok(out)
 }
 
-/// 保留：`text_of` 与 `first_text` 是元数据解析的公共工具，供后续 handler 复用。
-#[allow(dead_code)]
-fn _keep_helpers(row: &Map<String, Value>) -> String {
-    text_of(row, "name")
-}
 
 #[cfg(test)]
 mod tests {

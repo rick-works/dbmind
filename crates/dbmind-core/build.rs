@@ -283,10 +283,8 @@ fn main() {
         fs::write(&manifest_path, format!("{rendered}\n")).expect("写 manifest 失败");
     }
 
-    println!(
-        "cargo:warning=dbmind-core: 已由 {} 个连接类型 YAML 生成代码与 manifest",
-        types.len()
-    );
+    // 生成情况不再打 cargo:warning（每次构建刷屏），需要排查时看 OUT_DIR 产物
+    println!("cargo:rerun-if-changed=connectors");
 }
 
 fn load_types(dir: &Path) -> Result<Vec<TypeYaml>, String> {

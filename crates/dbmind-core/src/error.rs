@@ -140,26 +140,12 @@ impl std::fmt::Display for ErrorCode {
     }
 }
 
-/// SQL 出错位置（行列均从 1 开始）。存在时应当回填，便于编辑器定位。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SqlPosition {
-    pub line: usize,
-    pub column: usize,
-}
-
-impl SqlPosition {
-    pub fn new(line: usize, column: usize) -> Self {
-        Self { line, column }
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 #[error("[{code}] {message}")]
 pub struct DbMindError {
     pub code: ErrorCode,
     pub message: String,
     pub detail: Option<String>,
-    pub position: Option<SqlPosition>,
 }
 
 impl DbMindError {
@@ -168,7 +154,6 @@ impl DbMindError {
             code,
             message: message.into(),
             detail: None,
-            position: None,
         }
     }
 
@@ -177,10 +162,6 @@ impl DbMindError {
         self
     }
 
-    pub fn with_position(mut self, line: usize, column: usize) -> Self {
-        self.position = Some(SqlPosition::new(line, column));
-        self
-    }
 
     pub fn code_str(&self) -> &'static str {
         self.code.as_str()
@@ -196,7 +177,6 @@ impl DbMindError {
             category: self.code.category().to_string(),
             message: self.message.clone(),
             detail: self.detail.clone(),
-            position: self.position,
         }
     }
 }
@@ -208,7 +188,6 @@ pub struct ErrorPayload {
     pub category: String,
     pub message: String,
     pub detail: Option<String>,
-    pub position: Option<SqlPosition>,
 }
 
 impl std::fmt::Display for ErrorPayload {

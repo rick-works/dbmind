@@ -20,7 +20,7 @@ use dbmind_core::{AccessContext, DbMindEngine, QueryOptions, QueryRequest};
 use serde_json::{json, Value};
 
 use crate::api::error::{XError, XResult};
-use crate::api::{blocking, require_record, shape, Params};
+use crate::api::{blocking, require_record, shape};
 use crate::AppState;
 
 /// 编辑器执行的超时（毫秒）：读设置 `query.timeoutSecs`（1..=600，缺省 120）。
@@ -571,8 +571,3 @@ pub async fn run_file_cancel(
     Ok(Json(json!({ "success": true, "message": "已取消" })))
 }
 
-/// 保留：`Params` 在文件内暂未用到，但同模块 handler 会用到。
-#[allow(dead_code)]
-fn _keep(raw: Option<&str>) -> Params {
-    Params::parse(raw)
-}

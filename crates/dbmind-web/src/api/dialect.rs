@@ -2149,10 +2149,6 @@ impl Dialect {
                  cid as ordinal \
                  from pragma_table_info({quoted})"
             )),
-            "clickhouse" => Meta::Sql(format!(
-                "select name as column_name, type as type_text \
-                 from system.columns where database = currentDatabase() and table = {quoted}"
-            )),
             // H2：information_schema.columns 有长度/精度，自己拼回 `varchar(50)`。
             // 长度大于 100 万的不当"长度"用（CLOB 一类会报 2^31-1，拼进类型文本没意义）
             "h2" => Meta::Sql(format!(
@@ -2305,7 +2301,7 @@ impl TypeFamily {
         // 剥掉 ClickHouse 的 `Nullable(T)` 壳：可空性在 ColumnDetail.nullable 里已有，
         // 类型解析只看内层（`Nullable(String)` 直接 parse 会落 Unknown → 目标列成 CLOB）
         let raw = match raw.trim().to_ascii_lowercase().strip_prefix("nullable(") {
-            Some(inner) if raw.trim().ends_with(')') => {
+            Some(_inner) if raw.trim().ends_with(')') => {
                 raw.trim().split_once('(').map(|(_, rest)| rest).unwrap_or(raw)
                     .trim_end_matches(')')
                     .trim()
@@ -2392,7 +2388,6 @@ impl TypeFamily {
             "uint64" => Self::Decimal { precision: 20, scale: 0 },
             // ClickHouse 的整型/浮点族（Int32 / Float64 …）：之前没认，落到 Unknown，
             // 目标 Derby/H2 这类按 Unknown→CLOB 渲染的方言，整列全成 CLOB（真机踩过）
-            "int8" => Self::Int { bytes: 1 },
             "int16" => Self::Int { bytes: 2 },
             "int32" => Self::Int { bytes: 4 },
             "int64" => Self::Int { bytes: 8 },

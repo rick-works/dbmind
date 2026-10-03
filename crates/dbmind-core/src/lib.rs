@@ -43,10 +43,10 @@ pub use agent::{
 pub use cancel::{CancelRegistry, CancelToken};
 pub use drivers::{builtin_kinds, unimplemented_driver, Driver, DriverRegistry, QueryCall};
 pub use engine::{DriverEntry, DriverReport, DbMindEngine, RuntimeSummary};
-pub use error::{query_error, DbMindError, ErrorCode, ErrorPayload, Result, SqlPosition};
+pub use error::{query_error, DbMindError, ErrorCode, ErrorPayload, Result};
 pub use kind::{Capabilities, McpMode, RuntimeMode, RuntimeProtocol, TypeDescriptor, TypeTraits};
 pub use safety::SafetyPolicy;
-pub use sql::{first_keyword, StatementKind};
+pub use sql::StatementKind;
 // 语句判定按协议分派：壳层拿到的 statementKind 也是由这里判出来的
 pub use statement::{classify, is_read_only, split_statements, statement_count};
 // `global_store` / `install_global_store`：AI 设置这类"环境式"读写要按需取主库句柄，
