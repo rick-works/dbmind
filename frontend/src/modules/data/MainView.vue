@@ -1331,14 +1331,9 @@ const compareResumeId = ref('')
  * 否则赋值 true 没有变化，子组件的打开 watch 不触发，上一次的查看/隐藏态
  * 清不掉，表现就是「点了没反应」（间歇性，真机踩过）。
  */
-/** 顶栏「数据对比」防重：有进行中的对比任务直接回到它的进度窗，不重复开新向导 */
-const openCompareIfRunning = () => {
-  const running = bgTasks.find(t => t.kind === 'compare' && (bgStatusMap.value[t.id] || t.status || 'running') === 'running')
-  if (running) { resumeBgTask(running); return true }
-  return false
-}
+/** 顶栏「数据对比」：开新对比（防重 = 已开着时先关重开，保证是全新向导） */
 const openCompare = () => {
-  if (openCompareIfRunning()) return
+  // 用户口径：点「数据对比」就是开新对比 —— 即使有任务在跑也不切回（要回看进度走任务中心）
   if (compareDialogOpen.value) {
     compareDialogOpen.value = false
     nextTick(() => { compareDialogOpen.value = true })
@@ -1346,10 +1341,8 @@ const openCompare = () => {
   }
   compareDialogOpen.value = true
 }
-/** 顶栏「数据传输」防重：有进行中的传输任务直接回到它的进度页，不重复开新任务 */
 const openSync = () => {
-  const running = bgTasks.find(t => t.kind === 'sync' && (bgStatusMap.value[t.id] || t.status || 'running') === 'running')
-  if (running) { resumeBgTask(running); return }
+  // 同上：点「数据传输」开新传输，不切回进行中的任务（回看进度走任务中心/时钟图标）
   if (syncDialogOpen.value) {
     syncDialogOpen.value = false
     nextTick(() => { syncDialogOpen.value = true })
