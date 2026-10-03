@@ -862,6 +862,8 @@ const removeKb = async () => {
 // ---------- 配置 ----------
 
 const configPayload = () => ({
+  // 后端按 kbId 定位知识库存配置（漏传会报「缺少 kbId 参数」）
+  kbId: activeId.value,
   enabled: cfg.value.enabled, topK: cfg.value.topK, minScore: cfg.value.minScore,
   chunkSize: cfg.value.chunkSize, chunkOverlap: cfg.value.chunkOverlap, separator: cfg.value.separator,
   minChunkChars: cfg.value.minChunkChars, indexMode: cfg.value.indexMode,
