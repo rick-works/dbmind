@@ -638,6 +638,117 @@ async fn sync_indexes(
     created
 }
 
+// ------------------------------------------------------------------ Doris Stream Load 快速通道
+
+/// Doris **Stream Load**：把一批行以 JSON 数组直接 HTTP PUT 给 FE，绕过 INSERT 的
+/// 语句大小限制 —— 20 万行从分钟级降到秒级（MySQL 协议 1000~2000 行/批是吞吐瓶颈）。
+///
+/// - 端口推导：连接里配的是 MySQL 协议端口（Doris 惯例 9030），Stream Load 走 FE 的
+///   HTTP 端口，惯例是 **http 端口 = mysql 端口 - 1000**（9030 → 8030）；
+/// - 值一律按字符串传（JSON 里也是字符串），Doris 按目标列类型自动转换；
+/// - FE 可能 307 重定向到 BE：ureq 跟随重定向并重发 body（label 保证幂等）；
+/// - 失败返回 Err，调用方**回退原 INSERT 管道** —— 导入失败不挡数据同步。
+/// 标准 base64（Basic 认证用）：不为这一个函数引 base64 crate，30 行自己写。
+fn basic_auth(user: &str, pass: &str) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let input = format!("{}:{}", user, pass).into_bytes();
+    let mut out = String::new();
+    for chunk in input.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+    }
+    format!("Basic {}", out)
+}
+
+async fn doris_stream_load(
+    http_port: u16,
+    host: &str,
+    user: &str,
+    password: &str,
+    database: &str,
+    table: &str,
+    columns: &[String],
+    rows: &[Vec<dbmind_core::CellValue>],
+) -> Result<(), String> {
+    use serde_json::Value;
+    if rows.is_empty() || host.is_empty() || http_port == 0 {
+        return Ok(());
+    }
+    let mut arr: Vec<Value> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut obj = serde_json::Map::new();
+        for (idx, col) in columns.iter().enumerate() {
+            let v = match row.get(idx) {
+                None | Some(dbmind_core::CellValue::Null) => Value::Null,
+                Some(dbmind_core::CellValue::Integer(n)) => Value::from(*n),
+                Some(dbmind_core::CellValue::Real(x)) => Value::from(*x),
+                Some(dbmind_core::CellValue::Text(s)) => Value::from(s.as_str()),
+                Some(dbmind_core::CellValue::Blob { len }) => Value::from(format!("b:{len}")),
+            };
+            obj.insert(col.clone(), v);
+        }
+        arr.push(Value::Object(obj));
+    }
+    let body = serde_json::to_vec(&arr).map_err(|e| e.to_string())?;
+    let url = format!("http://{}:{}/api/{}/{}/_stream_load", host, http_port, database, table);
+    let label = format!(
+        "dbmind_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let host_owned = host.to_string();
+    let user_owned = user.to_string();
+    let pass_owned = password.to_string();
+    let db_owned = database.to_string();
+    let tbl_owned = table.to_string();
+    let outcome = crate::api::blocking(move || -> dbmind_core::Result<()> {
+        let resp = ureq::AgentBuilder::new()
+            .redirects(10)
+            .build()
+            .put(&url)
+            .set("Authorization", &basic_auth(&user_owned, &pass_owned))
+            .set("label", &label)
+            .set("format", "json")
+            .set("strip_outer_array", "true")
+            .set("Expect", "100-continue")
+            .timeout(std::time::Duration::from_secs(600))
+            .send_bytes(&body)
+            .map_err(|e| {
+                dbmind_core::DbMindError::new(
+                    dbmind_core::ErrorCode::QueryFailed,
+                    format!("Stream Load 请求失败：{}", e),
+                )
+            })?;
+        let text = resp.into_string().map_err(|e| {
+            dbmind_core::DbMindError::new(dbmind_core::ErrorCode::QueryFailed, e.to_string())
+        })?;
+        let v: Value = serde_json::from_str(&text).map_err(|_| {
+            dbmind_core::DbMindError::new(
+                dbmind_core::ErrorCode::QueryFailed,
+                format!("Stream Load 响应不是 JSON：{}", &text[..200.min(text.len())]),
+            )
+        })?;
+        if v.get("Status").and_then(Value::as_str) == Some("Success") {
+            Ok(())
+        } else {
+            Err(dbmind_core::DbMindError::new(
+                dbmind_core::ErrorCode::QueryFailed,
+                format!("Stream Load 失败：{}", v.get("Message").and_then(Value::as_str).unwrap_or(&text[..200.min(text.len())])),
+            ))
+        }
+    })
+    .await
+    .map_err(|e| format!("工作线程异常：{:?}", e))?;
+    // Err 已被 blocking 转成 XError 并在这里以 String 上抛（调用方据此回退 INSERT 管道）
+    Ok(())
+}
+
 // ------------------------------------------------------------------ 单表同步
 
 /// 目标表**已存在**时，把源侧的表注释 / 列注释**差异补齐**（源有、目标没有或不一致才动）。
@@ -1006,9 +1117,14 @@ async fn sync_table_inner(
     let target_columns = columns_of(state, tgt, target_table)
         .await
         .unwrap_or_default();
+    // record 保存下来：Doris Stream Load 需要 host / 端口 / 凭据（见 doris_stream_load）
+    let mut tgt_record: Option<dbmind_core::ConnectionRecord> = None;
     let target_kind = crate::api::dialect::Dialect::new(
         match require_record(state, &tgt.conn).await {
-            Ok(record) => record.kind(),
+            Ok(record) => {
+                tgt_record = Some(record.clone());
+                record.kind()
+            }
             Err(err) => return ObjResult::failed(ty, table, err.message),
         },
     );
@@ -1408,6 +1524,24 @@ async fn sync_table_inner(
     } else {
     1
     };
+    // **Doris Stream Load 快速通道**：纯插入/清空重建时启用 —— 数据以 JSON 走 HTTP
+    // 直推 FE，绕过 MySQL 协议 1000~2000 行/批的吞吐瓶颈；失败自动回退 INSERT 管道。
+    let use_stream = target_kind.kind.key() == "doris"
+        && effective_mode != DataMode::Upsert
+        && tgt_record.is_some();
+    // Stream Load 单请求 5 万行（JSON 体积 ≈ 15MB，FE 无语句大小限制）
+    let flush_at: u64 = if use_stream { 50_000 } else { per_statement };
+    let (stream_host, stream_port, stream_user, stream_pass) = tgt_record
+        .as_ref()
+        .map(|r| {
+            let cfg = &r.config;
+            let port = cfg.port.unwrap_or(9030);
+            let http_port = if port > 1000 { port - 1000 } else { 8030 };
+            (cfg.host.clone().unwrap_or_default(), http_port, cfg.username.clone().unwrap_or_default(), cfg.password.clone().unwrap_or_default())
+        })
+        .unwrap_or_default();
+    // Stream Load 首次失败后回退标志（本表内不再尝试）
+    let mut stream_fallback = false;
     // ===== 流式写入：读一页、写一页 =====
     // 旧实现是「整表读进内存 → 再写」，代价是三件事捆在一起：
     //   · 必须有 20 万行的上限，否则内存扛不住；
@@ -1753,30 +1887,48 @@ async fn sync_table_inner(
                 continue;
             }
             pending_insert.push(row);
-            if pending_insert.len() as u64 >= per_statement {
+            if pending_insert.len() as u64 >= flush_at {
                 let batch_rows = pending_insert.len() as u64;
-                match run_sql(
-                    state,
-                    tgt,
-                    &with_identity(
-                        build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key()),
-                        identity_on,
-                        &target_name,
-                    ),
-                )
-                .await
-                {
-                    Ok(()) => {
-                        inserted += batch_rows;
-                        if let Some(task) = task {
-                            task.add_rows_written(batch_rows);
+                if use_stream && !stream_fallback {
+                    let host = stream_host.clone();
+                    let user = stream_user.clone();
+                    let pass = stream_pass.clone();
+                    match doris_stream_load(stream_port, &host, &user, &pass, &tgt.scope, table, &columns, &pending_insert).await {
+                        Ok(()) => {
+                            inserted += pending_insert.len() as u64;
+                            if let Some(task) = task { task.add_rows_written(pending_insert.len() as u64); }
+                            pending_insert.clear();
                         }
-                        pending_insert.clear();
+                        Err(err) => {
+                            // 首次失败（端口不通/权限/格式）：本表内回退 INSERT 管道，数据不丢
+                            stream_fallback = true;
+                            if let Some(task) = task { task.log(format!("表 {}：Stream Load 失败（{}），回退 INSERT 管道", table, err)); }
+                        }
                     }
-                    Err(err) => {
-                        if let Some(task) = task { task.add_rows_failed(batch_rows); }
-                        return ObjResult::failed(ty, table, format!("插入失败：{}", err.message))
-                    }
+                } else {
+                match run_sql(
+                                    state,
+                                    tgt,
+                                    &with_identity(
+                                        build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key()),
+                                        identity_on,
+                                        &target_name,
+                                    ),
+                                )
+                                .await
+                                {
+                                    Ok(()) => {
+                                        inserted += batch_rows;
+                                        if let Some(task) = task {
+                                            task.add_rows_written(batch_rows);
+                                        }
+                                        pending_insert.clear();
+                                    }
+                                    Err(err) => {
+                                        if let Some(task) = task { task.add_rows_failed(batch_rows); }
+                                        return ObjResult::failed(ty, table, format!("插入失败：{}", err.message))
+                                    }
+                                }
                 }
             }
         }
