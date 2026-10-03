@@ -1344,14 +1344,18 @@ const openCompare = () => {
     nextTick(() => { compareDialogOpen.value = true })
     return
   }
-
-/** 顶栏「数据传输」：同样防重 —— 有进行中的传输任务直接回到它的进度页，不重复开新任务 */
+  compareDialogOpen.value = true
+}
+/** 顶栏「数据传输」防重：有进行中的传输任务直接回到它的进度页，不重复开新任务 */
 const openSync = () => {
   const running = bgTasks.find(t => t.kind === 'sync' && (bgStatusMap.value[t.id] || t.status || 'running') === 'running')
   if (running) { resumeBgTask(running); return }
+  if (syncDialogOpen.value) {
+    syncDialogOpen.value = false
+    nextTick(() => { syncDialogOpen.value = true })
+    return
+  }
   syncDialogOpen.value = true
-}
-  compareDialogOpen.value = true
 }
 const onCompareDialogVisible = (v) => {
   compareDialogOpen.value = v
