@@ -1262,6 +1262,13 @@ async fn write_insert_rows(
             }
         }
     }
+    // 写入计数在这里统一报（串行管道与并发写池共用本函数 —— 之前并发写池的重构
+    // 把调用方的 add_rows_written 弄丢了，界面上「传输数」全程为 0，真机踩过）
+    if ok_rows > 0 {
+        if let Some(task) = task {
+            task.add_rows_written(ok_rows);
+        }
+    }
     Ok(ok_rows)
 }
 

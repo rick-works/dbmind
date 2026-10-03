@@ -483,8 +483,11 @@ setInterval(() => { if (taskRunning.value) runningTick.value++ }, 100)
 const extrapolate = (base, rate) => {
   runningTick.value
   if (!taskRunning.value || !fetchAt.value) return base
-  // 外插打 9 折：宁可显示略慢于真实，也不猜超前导致数字回滚
-  return base + rate * 0.9 * Math.max(0, (Date.now() - fetchAt.value) / 1000)
+  // 外插打 9 折，且**时间窗钳制在 1.8s（≈两个轮询周期）**：页面节流/轮询卡顿时
+  // dt 会失控变大，不钳制的话「速率 × 时间」能冲到远超真实值（真机：已读取 20.5 万
+  // 显示成 22 万），Math.max 防倒退保护还会让它卡在虚高处不回落
+  const dt = Math.min(Math.max(0, (Date.now() - fetchAt.value) / 1000), 1.8)
+  return base + rate * 0.9 * dt
 }
 const targetRead = computed(() => Math.floor(extrapolate(rowsRead.value, rates.value.read)))
 const targetWritten = computed(() => Math.floor(extrapolate(rowsWritten.value, rates.value.written)))
@@ -910,6 +913,11 @@ const pollTask = async () => {
     rowsRead.value = st.rowsRead || 0
     rowsWritten.value = st.rowsWritten || 0
     rowsFailed.value = st.rowsFailed || 0
+    // **外插猜超了就回贴真实值**：显示值高于真实值超过「一个轮询周期的合理量」时，
+    // 说明外插跑飞了（页面节流/轮询卡顿）—— Math.max 防倒退保护是轮询间隔内的规则，
+    // 跨轮询必须信任后端真实值，否则虚高会一直挂着不回落（真机：20.5 万显示成 22 万）
+    if (readShown.value > rowsRead.value + rates.value.read * 2) readShown.value = rowsRead.value
+    if (writtenShown.value > rowsWritten.value + rates.value.written * 2) writtenShown.value = rowsWritten.value
     // 采样行速率（供数字外插，见 rates/onRowsFetched）
     onRowsFetched(st.rowsRead || 0, st.rowsWritten || 0, taskRunning.value)
     // 接口把阶段文案放在 `current`（= 任务的 phase）；`phase` 兜底，免得字段名一变界面就空白
