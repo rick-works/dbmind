@@ -369,38 +369,42 @@ fn split_db_schema(database: &str, dialect: &Dialect) -> (String, Option<String>
 
 // ------------------------------------------------------------------ 特性与结构清单
 
+/// 各类型的**候选类型清单**（结构编辑器 / 新建表的类型下拉）。
+/// 统一口径：**不带死参数** —— 长度 / 精度由编辑器的「长度 / 精度」列给
+///（回显已有列时按真实类型拆进两列；新增行对 char 系预填 255）。
+/// 特例保留参数：`(max)` 这类编辑器表达不了的形态（SQL Server 的 NVARCHAR(max)）。
 fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
     match kind.key() {
         "mysql" | "mariadb" | "doris" => vec![
-            "int", "bigint", "smallint", "tinyint", "decimal(10,2)", "float", "double",
-            "varchar(255)", "char(32)", "text", "longtext", "date", "datetime", "timestamp",
+            "int", "bigint", "smallint", "tinyint", "decimal", "float", "double",
+            "varchar", "char", "text", "longtext", "date", "datetime", "timestamp",
             "time", "json", "blob",
         ],
         "postgresql" | "kingbase" => vec![
-            "integer", "bigint", "smallint", "numeric(10,2)", "real", "double precision",
-            "character varying(255)", "text", "boolean", "date", "timestamp", "timestamptz",
+            "integer", "bigint", "smallint", "numeric", "real", "double precision",
+            "character varying", "text", "boolean", "date", "timestamp", "timestamptz",
             "time", "jsonb", "uuid", "bytea",
         ],
         "sqlserver" => vec![
-            "int", "bigint", "smallint", "tinyint", "decimal(18,2)", "float", "real",
-            "nvarchar(255)", "varchar(255)", "nvarchar(max)", "bit", "date", "datetime2",
+            "int", "bigint", "smallint", "tinyint", "decimal", "float", "real",
+            "nvarchar", "varchar", "nvarchar(max)", "bit", "date", "datetime2",
             "datetimeoffset", "uniqueidentifier", "varbinary(max)",
         ],
         "oracle" | "dm" => vec![
-            "NUMBER(10)", "NUMBER(19)", "NUMBER(10,2)", "FLOAT", "BINARY_FLOAT", "VARCHAR2(255)",
-            "NVARCHAR2(255)", "CHAR(1)", "CLOB", "BLOB", "DATE", "TIMESTAMP", "RAW(16)",
+            "NUMBER", "FLOAT", "BINARY_FLOAT", "VARCHAR2",
+            "NVARCHAR2", "CHAR", "CLOB", "BLOB", "DATE", "TIMESTAMP", "RAW",
         ],
         "clickhouse" => vec![
-            // Decimal / FixedString 不带参数：参数由编辑器的「长度 / 精度」列给
-            //（重建时 Decimal 缺省 38,6、FixedString 缺省 16，见前端 clickhouseType）
+            // Decimal / FixedString / DateTime64 的参数由「长度 / 精度」列给
+            //（重建时 Decimal 缺省 38,6、FixedString 缺省 16、DateTime64 缺省 3，见前端 clickhouseType）
             "UInt8", "UInt16", "UInt32", "UInt64", "Int8", "Int16", "Int32", "Int64",
             "Float32", "Float64", "Decimal", "String", "FixedString",
             "Date", "DateTime", "DateTime64", "UUID", "Array(String)",
         ],
-        "sqlite" => vec!["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC", "VARCHAR(255)", "DATETIME"],
-        "h2" => vec!["INT", "BIGINT", "DECIMAL(18,2)", "DOUBLE", "VARCHAR(255)", "CLOB", "BLOB", "DATE", "TIMESTAMP", "BOOLEAN"],
-        "db2" => vec!["INTEGER", "BIGINT", "DECIMAL(18,2)", "DOUBLE", "VARCHAR(255)", "CLOB", "BLOB", "DATE", "TIMESTAMP"],
-        "derby" => vec!["INTEGER", "BIGINT", "DECIMAL(18,2)", "DOUBLE", "VARCHAR(255)", "CLOB", "BLOB", "DATE", "TIMESTAMP"],
+        "sqlite" => vec!["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC", "VARCHAR", "DATETIME"],
+        "h2" => vec!["INT", "BIGINT", "DECIMAL", "DOUBLE", "VARCHAR", "CLOB", "BLOB", "DATE", "TIMESTAMP", "BOOLEAN"],
+        "db2" => vec!["INTEGER", "BIGINT", "DECIMAL", "DOUBLE", "VARCHAR", "CLOB", "BLOB", "DATE", "TIMESTAMP"],
+        "derby" => vec!["INTEGER", "BIGINT", "DECIMAL", "DOUBLE", "VARCHAR", "CLOB", "BLOB", "DATE", "TIMESTAMP"],
         _ => vec![],
     }
 }

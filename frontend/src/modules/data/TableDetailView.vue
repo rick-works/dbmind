@@ -515,7 +515,10 @@ const mssqlPk = ref('')
 const LEN_REQUIRED = {
   mysql: ['VARCHAR', 'CHAR', 'VARBINARY', 'BINARY', 'DECIMAL', 'NUMERIC'],
   mssql: ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR', 'VARBINARY', 'BINARY', 'DECIMAL', 'NUMERIC'],
-  oracle: ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'DECIMAL', 'NUMERIC'],
+  oracle: ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'DECIMAL', 'NUMERIC', 'RAW'],
+  // DB2 / Derby 的 VARCHAR / CHAR / DECIMAL 必须带长度（无参语法错）
+  db2: ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC', 'GRAPHIC', 'VARGRAPHIC'],
+  derby: ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC'],
   // CH：Decimal 必须给 (精度, 标度)，FixedString 必须给定长；DateTime64 有缺省 3 可不填
   clickhouse: ['DECIMAL', 'FIXEDSTRING']
 }
