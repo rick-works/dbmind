@@ -5,7 +5,7 @@
       <div class="header-title">
         <el-icon :size="16" class="header-icon"><Grid /></el-icon>
         <span class="header-text">{{ $t('tdet.editStructure') }} · {{ table }}</span>
-        <el-tag size="small" effect="plain" type="info">{{ database }}</el-tag>
+        <el-tag size="small" effect="plain" type="info">{{ conn?.name }} / {{ database }}</el-tag>
       </div>
       <!-- 操作按钮统一挪到下方 SQL 预览栏（与「保存修改」同一行）：
            它们本就是围绕 SQL 预览的动作，摆在标题栏右侧离预览最远。这里只留 DDL 模式的提示。 -->

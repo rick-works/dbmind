@@ -5269,13 +5269,22 @@ const objCatLabel = (cat, connType, kind) => {
 const tabLabel = (tab) => {
   const ct = tab.connType || conn.value?.type
   const isFn = tab.object?.kind === 'function' || tab.formKind === 'function' || ct === 'CLICKHOUSE'
+  let base = tab.type === 'sql' ? (tab.scriptName || tab.label) : tab.label
   if (tab.type === 'form' && tab.cat === 'procs' && isFn) {
     // 标题里的「存储过程」在函数场景下要换成「函数」：两边都取字典 —— 写死中文的话，
     // 切到英文后这个正则匹配不到任何东西，标题会一直留着 procedure 不改
     const proc = t('mv.catProc')
-    return tab.label.replace(new RegExp(proc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), t('mv.catFunc'))
+    base = base.replace(new RegExp(proc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), t('mv.catFunc'))
   }
-  return tab.type === 'sql' ? (tab.scriptName || tab.label) : tab.label
+  // **路径放全**（用户口径）：带数据源上下文的页签，标题前缀「连接 · 库」——
+  // 多连接 / 多库各开同名的页签，一眼能分清是哪条路径下的。脚本页签是用户自己
+  // 命名的、AI / 知识库是全局页签，都不带数据源语境，保持原样。
+  if (!isGlobalTab(tab) && tab.type !== 'sql') {
+    const connName = allConnections.value.find(x => String(x.id) === String(tab.connId || ''))?.name
+    const parts = [connName, tab.database].filter(Boolean)
+    if (parts.length) base = parts.join(' · ') + ' · ' + base
+  }
+  return base
 }
 
 const onObjFormSaved = (db, cat) => {

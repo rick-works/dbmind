@@ -5,7 +5,7 @@
       <div class="header-title">
         <el-icon :size="16" class="header-icon"><User /></el-icon>
         <span class="header-text">{{ editMode ? $t('upv.editUser') : $t('upv.newUser') }}</span>
-        <el-tag v-if="database" size="small" effect="plain" type="info">{{ database }}</el-tag>
+        <el-tag size="small" effect="plain" type="info">{{ conn?.name }}</el-tag>
       </div>
       <div class="header-actions">
         <el-button size="small" text :icon="CopyDocument" @click="copySql">{{ $t('upv.copySql') }}</el-button>

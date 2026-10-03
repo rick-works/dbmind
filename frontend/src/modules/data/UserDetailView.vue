@@ -5,7 +5,7 @@
       <div class="header-title">
         <el-icon :size="16" class="header-icon"><User /></el-icon>
         <span class="header-text">{{ info.name || props.name }}</span>
-        <el-tag size="small" effect="plain" type="info">{{ connTypeLabel }}</el-tag>
+        <el-tag size="small" effect="plain" type="info">{{ conn?.name }}</el-tag>
       </div>
       <div class="header-actions">
         <!-- 用户详情**只读**：编辑入口已按需求下掉（编辑链路保留，随时可恢复） -->
@@ -86,14 +86,6 @@ const emit = defineEmits(['edit'])
 const info = ref({})
 const loading = ref(false)
 const error = ref('')
-
-const connTypeLabel = computed(() => {
-  // 局部变量改名：本 computed 里要用 t() 翻译，同名会遮蔽
-  const ty = props.conn?.type
-  if (ty === 'MYSQL' || ty === 'MARIADB' || ty === 'DORIS') return t('udv.mysqlUser')
-  if (ty === 'SQLSERVER') return t('udv.sqlserverUser')
-  return t('udv.dbUser')
-})
 
 // 用函数而不是模块级常量：常量只在加载时求值一次，切换语言后字段名不会跟着变
 const fieldLabelMap = () => ({
