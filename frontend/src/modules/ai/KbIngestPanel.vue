@@ -352,7 +352,8 @@ const startCreate = async () => {
       const c = (cur && cur.config) || {}
       const r = plan.value?.recommend || {}
       await kbSaveConfig({
-        ...c, ...r,
+        // 后端按 kbId 存配置（漏传会在创建导入时报「缺少 kbId 参数」，真机踩过）
+        kbId, ...c, ...r,
         buildVector: plan.value ? !!plan.value.buildVector : c.buildVector,
         indexMode: plan.value?.indexMode || c.indexMode
       })
