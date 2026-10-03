@@ -958,6 +958,44 @@ mod stream_load_tests {
         assert_eq!(doris_number(Some(&json!("456"))), 456);
         assert_eq!(doris_number(Some(&json!(null))), 0);
     }
+
+    #[test]
+    fn 日期时间值规范化() {
+        // 驱动在秒为 00 时省略 :00（真机：MySQL → SQL Server 整表 241）
+        assert_eq!(
+            normalize_datetime_text("2026-07-09T07:00", "datetime2"),
+            Some("2026-07-09 07:00:00".to_string())
+        );
+        // T 分隔符统一为空格
+        assert_eq!(
+            normalize_datetime_text("2026-07-09T07:00:10", "datetime2"),
+            Some("2026-07-09 07:00:10".to_string())
+        );
+        // DateTime64(9) 的 9 位小数截断到 6 位
+        assert_eq!(
+            normalize_datetime_text("2024-06-15T12:30:45.123456789", "datetime2"),
+            Some("2024-06-15 12:30:45.123456".to_string())
+        );
+        // 纯 DATE 目标只留日期段
+        assert_eq!(
+            normalize_datetime_text("2024-06-15", "date"),
+            Some("2024-06-15".to_string())
+        );
+        assert_eq!(
+            normalize_datetime_text("2024-06-15T12:30:45", "date"),
+            Some("2024-06-15".to_string())
+        );
+        // 非 datetime2 目标列（如 nvarchar）不处理
+        assert_eq!(normalize_datetime_text("2026-07-09T07:00", "nvarchar"), None);
+        // 不是日期形态的文本不处理
+        assert_eq!(normalize_datetime_text("随便的文本", "datetime2"), None);
+        assert_eq!(normalize_datetime_text("", "datetime2"), None);
+        // TIME 目标补齐秒
+        assert_eq!(
+            normalize_datetime_text("2026-07-09T07:00", "time"),
+            Some("07:00:00".to_string())
+        );
+    }
 }
 
 // ------------------------------------------------------------------ 单表同步
@@ -1125,18 +1163,105 @@ fn multi_row(dialect: Dialect) -> bool {
     )
 }
 
-/// 单格 → SQL 字面量：目标列是**真布尔**时走布尔字面量。
+/// 单格 → SQL 字面量：目标列是**真布尔**时走布尔字面量；日期时间列先做**文本规范化**。
 ///
-/// 为什么需要：内核把布尔表示为 0/1 整数，而 PG / Oracle 的 boolean 列不接受整数 `0`
+/// 布尔：内核把布尔表示为 0/1 整数，而 PG / Oracle 的 boolean 列不接受整数 `0`
 /// （报"列是 boolean，表达式是 integer"）—— 跨类型建表时我们自己就会给目标建出 boolean 列，
 /// 所以这条必须跟上。
+///
+/// 日期时间规范化（真机：MySQL → SQL Server 全表 241）：JDBC 驱动回传的 MySQL
+/// datetime 是 ISO 文本，且**秒为 00 时省略 `:00`**（`2026-07-09T07:00`）—— SQL Server
+/// 的 datetime2 拒绝这个形态（「从字符串转换日期和/或时间时，转换失败」241），分钟粒度的
+/// 表（网闸通行记录这类）整表全炸。这里按目标列类型把值统一成方言最稳的形态：
+/// `T` → 空格、缺秒补 `:00`、小数超 6 位截断（datetime2 上限 7 位，9 位的 DateTime64 也炸）。
 fn literal_for(cell: &CellValue, dialect: Dialect, target_type: Option<&str>) -> String {
     if let (CellValue::Integer(value), Some(type_name)) = (cell, target_type) {
         if Dialect::is_boolean_type(type_name) {
             return dialect.bool_literal(*value != 0).to_string();
         }
     }
+    if let (CellValue::Text(text), Some(type_name)) = (cell, target_type) {
+        if let Some(normalized) = normalize_datetime_text(text, type_name) {
+            return dialect.literal(&normalized);
+        }
+    }
     sql_literal(cell, dialect)
+}
+
+/// 日期时间目标列的值规范化。返回 `Some(规范文本)` 表示按文本字面量写入（已转义），
+/// `None` 表示不是日期时间列（或值形态不需要处理），走原路。
+fn normalize_datetime_text(text: &str, target_type: &str) -> Option<String> {
+    let base = target_type
+        .split('(')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let family = match base.as_str() {
+        "date" => "date",
+        "time" => "time",
+        "datetime" | "datetime2" | "smalldatetime" | "timestamp" | "timestamptz"
+        | "datetimeoffset" | "datetime64" => "datetime",
+        _ => return None,
+    };
+    let t = text.trim();
+    // 只处理「长得像日期时间」的文本；其它内容原样走 sql_literal（转义照旧）
+    let looks_like = t.len() >= 8
+        && t.as_bytes()[4] == b'-'
+        && t.as_bytes()[7] == b'-'
+        && t.chars().nth(4).is_some()
+        && t.chars().take(4).all(|c| c.is_ascii_digit());
+    if !looks_like {
+        return None;
+    }
+    // 统一 T 分隔符 → 空格（各数据库对空格形态的接受度最高）
+    let mut s = t.replacen('T', " ", 1).replacen('t', " ", 1);
+    if family == "date" {
+        // 目标是纯 DATE：只留日期段
+        let day = s.split([' ', 'T']).next().unwrap_or(&s).to_string();
+        return Some(day);
+    }
+    if family == "time" {
+        // 目标是 TIME：只留时间段（T 后或空格后），补齐 hh:mm:ss
+        let time_part = s.split_once(' ').map(|x| x.1).unwrap_or(&s).to_string();
+        return Some(pad_time(&time_part));
+    }
+    // datetime：日期段 + 时间段；时间段补齐 hh:mm:ss[.fff…]
+    let (date_part, time_part) = match s.split_once(' ') {
+        Some((d, tm)) => (d.to_string(), tm.to_string()),
+        None => (s.clone(), String::new()),
+    };
+    if time_part.is_empty() {
+        s = format!("{date_part} 00:00:00");
+    } else {
+        s = format!("{date_part} {}", pad_time(&time_part));
+    }
+    // 小数超 6 位截断（datetime2 上限 7 位，9 位的 DateTime64(9) 直接 241）
+    if let Some(dot) = s.find('.') {
+        let digits = s[dot + 1..].chars().filter(|c| c.is_ascii_digit()).count();
+        if digits > 6 {
+            s = format!("{}{}", &s[..dot], &s[dot..dot + 7]);
+        }
+    }
+    Some(s)
+}
+
+/// 时间段补齐到至少 `hh:mm:ss`（驱动在秒为 00 时会省略 `:00`）。
+fn pad_time(time_part: &str) -> String {
+    let (core, frac) = match time_part.split_once('.') {
+        Some((c, f)) => (c, Some(f)),
+        None => (time_part, None),
+    };
+    let mut parts: Vec<String> = core.split(':').map(str::to_string).collect();
+    while parts.len() < 3 {
+        parts.push("00".to_string());
+    }
+    let mut out = parts.join(":");
+    if let Some(f) = frac {
+        out.push('.');
+        out.push_str(f);
+    }
+    out
 }
 
 /// 给 INSERT 语句包上**同批的** `SET IDENTITY_INSERT ON/OFF`。
@@ -1235,8 +1360,13 @@ fn build_insert_batch(
     out
 }
 
-/// 把一批行按「行数+字节拆分」写成 INSERT 语句并逐条发送（**部分成功语义**）：
-/// 已成功的语句计入 add_rows_written；失败从第一条报错处停，未写入的行计入 add_rows_failed。
+/// 把一批行按「行数+字节拆分」写成 INSERT 语句并逐条发送（**部分成功语义**）。
+///
+/// **脏数据降级**（对齐 DataX）：某条语句失败时**降级为该语句块逐行重试** ——
+/// 坏行（日期转换失败、超长、类型不匹配…）单独计失败并记样例错误，好行照常落库，
+/// 不让一行烂数据拖死整批（真机：SQL Server 日期转换 241，一个坏值炸掉 11,574 行）。
+/// 逐行重试里若**过半仍失败**，判定为系统性问题（连接断/权限/表没了），立即中止并上抛
+/// —— 不值得把几千行逐行磨完。
 /// 返回成功写入的行数。串行管道与并发写池共用这一份实现，杜绝两处逻辑漂移。
 async fn write_insert_rows(
     state: &AppState,
@@ -1248,18 +1378,52 @@ async fn write_insert_rows(
     rows: &[Vec<CellValue>],
     identity_on: bool,
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
+    table: &str,
 ) -> Result<u64, String> {
     let stmts = build_insert_batch(target_name, columns, target_types, rows, target_kind, target_kind.kind.key());
     let mut ok_rows = 0u64;
+    let mut failed_rows = 0u64;
+    let mut sample_err: Option<String> = None;
+    let mut start_row = 0usize;
     for (n_rows, stmt) in &stmts {
         match run_sql(state, tgt, &with_identity(stmt.clone(), identity_on, target_name)).await {
             Ok(()) => ok_rows += *n_rows as u64,
-            Err(err) => {
-                if let Some(task) = task {
-                    task.add_rows_failed(rows.len() as u64 - ok_rows);
+            Err(_batch_err) => {
+                // 降级：这一语句块的行逐行重试
+                let chunk = &rows[start_row..start_row + *n_rows as usize];
+                let mut chunk_failed = 0u64;
+                for row in chunk {
+                    let single = build_insert(target_name, columns, target_types, std::slice::from_ref(row), target_kind);
+                    match run_sql(state, tgt, &with_identity(single, identity_on, target_name)).await {
+                        Ok(()) => ok_rows += 1,
+                        Err(row_err) => {
+                            chunk_failed += 1;
+                            if sample_err.is_none() {
+                                sample_err = Some(row_err.message.chars().take(200).collect());
+                            }
+                        }
+                    }
                 }
-                return Err(err.message);
+                failed_rows += chunk_failed;
+                // 过半失败 ⇒ 系统性问题（连接断/权限/表没了），逐行磨完没有意义
+                if chunk_failed * 2 > *n_rows as u64 {
+                    if let Some(task) = task {
+                        task.add_rows_failed(rows.len() as u64 - ok_rows);
+                    }
+                    return Err(sample_err.unwrap_or_else(|| _batch_err.message));
+                }
             }
+        }
+        start_row += *n_rows as usize;
+    }
+    if failed_rows > 0 {
+        if let Some(task) = task {
+            task.add_rows_failed(failed_rows);
+            let head = sample_err.unwrap_or_default();
+            task.log(format!(
+                "表 {table}：{} 行写入失败（脏数据，已单独计失败），样例错误：{head}",
+                failed_rows
+            ));
         }
     }
     // 写入计数在这里统一报（串行管道与并发写池共用本函数 —— 之前并发写池的重构
@@ -2101,11 +2265,11 @@ async fn sync_table_inner(
                                 if let Some(t) = &task_w {
                                     t.log(format!("表 {table_w}：Stream Load 失败（{err}），回退 INSERT 管道"));
                                 }
-                                outcome = write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref()).await;
+                                outcome = write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref(), &table_w).await;
                             }
                         }
                     } else {
-                        outcome = write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref()).await;
+                        outcome = write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref(), &table_w).await;
                     }
                     match outcome {
                         Ok(ok_rows) => {
@@ -2413,7 +2577,7 @@ async fn sync_table_inner(
                     }
                 } else {
                 // build_insert_batch 按行数+字节上限拆成多条语句：逐条发送（部分成功语义）
-                match write_insert_rows(state, tgt, &target_name, &columns, &target_types, target_kind, &pending_insert, identity_on, task).await {
+                match write_insert_rows(state, tgt, &target_name, &columns, &target_types, target_kind, &pending_insert, identity_on, task, table).await {
                     Ok(ok_rows) => {
                         inserted += ok_rows;
                         pending_insert.clear();
@@ -2472,7 +2636,7 @@ async fn sync_table_inner(
     }
     // 因取消而中途退出时，手里可能还压着最后一批没落盘的插入（与主循环同款：拆语句逐条发）
     if !pending_insert.is_empty() {
-        match write_insert_rows(state, tgt, &target_name, &columns, &target_types, target_kind, &pending_insert, identity_on, task).await {
+        match write_insert_rows(state, tgt, &target_name, &columns, &target_types, target_kind, &pending_insert, identity_on, task, table).await {
             Ok(ok_rows) => {
                 inserted += ok_rows;
             }
