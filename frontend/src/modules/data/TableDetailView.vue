@@ -1731,7 +1731,7 @@ const load = async () => {
         let attrRows = []
         for (const sql of [`desc ${plain} all`, `desc ${qt(plain)} all`, `show full columns from ${plain}`]) {
           try {
-            const res = await executeSql(props.conn.id, sql, props.database)
+            const res = await executeSql(props.conn.id, sql, props.database, null, null, null, null, true)
             const rows = (res && res.rows) || []
             if (rows.length) { attrRows = rows; break }
           } catch (err) {

@@ -24,7 +24,7 @@
         </el-tooltip>
 
         <span class="top-nav-item" @click="openCompare"><el-icon><Switch /></el-icon>{{ $t('nav.compare') }}</span>
-        <span class="top-nav-item" @click="syncDialogOpen = true"><el-icon><Promotion /></el-icon>{{ $t('nav.sync') }}</span>
+        <span class="top-nav-item" @click="openSync"><el-icon><Promotion /></el-icon>{{ $t('nav.sync') }}</span>
         <span class="top-nav-item" @click="governanceOpen = true"><el-icon><DataAnalysis /></el-icon>{{ $t('nav.governance') }}</span>
         <span class="top-nav-item" @click="openMonitor"><el-icon><Monitor /></el-icon>{{ $t('nav.monitor') }}</span>
 <!-- 任务中心：数据传输 / 数据对比的**执行历史记录**（查看、删除、清空），紧挨在服务监控前面。
@@ -375,7 +375,7 @@
       <button class="empty-act" @click="openCompare">
         <el-icon><Operation /></el-icon><span>{{ $t('empty.compare') }}</span>
       </button>
-      <button class="empty-act" @click="syncDialogOpen = true">
+      <button class="empty-act" @click="openSync">
         <el-icon><Switch /></el-icon><span>{{ $t('empty.sync') }}</span>
       </button>
       <button class="empty-act" @click="openGovernance('quality')">
@@ -1331,12 +1331,26 @@ const compareResumeId = ref('')
  * 否则赋值 true 没有变化，子组件的打开 watch 不触发，上一次的查看/隐藏态
  * 清不掉，表现就是「点了没反应」（间歇性，真机踩过）。
  */
+/** 顶栏「数据对比」防重：有进行中的对比任务直接回到它的进度窗，不重复开新向导 */
+const openCompareIfRunning = () => {
+  const running = bgTasks.find(t => t.kind === 'compare' && (bgStatusMap.value[t.id] || t.status || 'running') === 'running')
+  if (running) { resumeBgTask(running); return true }
+  return false
+}
 const openCompare = () => {
+  if (openCompareIfRunning()) return
   if (compareDialogOpen.value) {
     compareDialogOpen.value = false
     nextTick(() => { compareDialogOpen.value = true })
     return
   }
+
+/** 顶栏「数据传输」：同样防重 —— 有进行中的传输任务直接回到它的进度页，不重复开新任务 */
+const openSync = () => {
+  const running = bgTasks.find(t => t.kind === 'sync' && (bgStatusMap.value[t.id] || t.status || 'running') === 'running')
+  if (running) { resumeBgTask(running); return }
+  syncDialogOpen.value = true
+}
   compareDialogOpen.value = true
 }
 const onCompareDialogVisible = (v) => {
@@ -5979,7 +5993,7 @@ const catalogCtxDrop = () => {
     { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
   ).then(async () => {
     try {
-      const res = await executeSql(String(d.connId), `DROP CATALOG ${quoteIdent(d.catalog)}`, '')
+      const res = await executeSql(String(d.connId), `DROP CATALOG ${quoteIdent(d.catalog)}`, '', null, null, null, null, true)
       if (!res.success) throw new Error(res.message || t('common.unknownError'))
       ElMessage.success(t('mv.catalogDropped', { name: d.catalog }))
       // 从树上摘掉该 catalog 节点（它下面的库/表节点随子树一起消失）
