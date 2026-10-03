@@ -581,6 +581,28 @@ const clickhouseType = (t, len) => {
   return l ? `${head}(${l})` : head
 }
 
+/** CH 类型剥 `Nullable(...)` 包装（可多层）。包装由「可空」勾选列表达，不该塞进类型格。
+ *  括号必须自平衡才剥（防 `Nullable(a)b(c)` 这类被误剥）；LowCardinality/Array/Map 等
+ *  有类型语义的包装**不剥** —— 剥了重建会丢语义（如 LowCardinality），维持整串 opaque。 */
+const stripChNullable = (raw) => {
+  let cur = String(raw || '').trim()
+  let changed = false
+  for (;;) {
+    const m = cur.match(/^Nullable\s*\((.*)\)\s*$/i)
+    if (!m) break
+    let depth = 0
+    let ok = true
+    for (const ch of m[1]) {
+      if (ch === '(') depth++
+      else if (ch === ')') { depth--; if (depth < 0) { ok = false; break } }
+    }
+    if (!ok || depth !== 0) break
+    cur = m[1].trim()
+    changed = true
+  }
+  return { text: cur, changed }
+}
+
 const splitTypeText = (raw) => {
   const s = (raw || '').trim()
   const m = s.match(/^([A-Za-z_]+)\s*\(([^)]*)\)(.*)$/)
@@ -701,8 +723,19 @@ const renameSupported = computed(() =>
   ['mysql', 'doris', 'pg', 'oracle', 'mssql', 'derby', 'clickhouse', 'sqlite', 'generic'].includes(ddlStyle.value))
 
 const buildColRows = () => {
+  const isCh = ddlStyle.value === 'clickhouse'
   colRows.value = (columns.value || []).map((c, i) => {
-    const sp = splitTypeText(c.type)
+    // CH：先剥 Nullable(...) 包装再拆参数 —— 不剥的话 `Nullable(Decimal(10, 2))` 整串
+    // 变成 opaque 类型格，长度/精度永远空白（真机）。包装由「可空」勾选列表达，
+    // _orig.type 也存**剥完的内核类型**：与 buildType/typeParam 的重建结果同口径，
+    // 未修改的行不会因包装差异被误判「已修改」而生成假 ALTER。
+    let innerType = null
+    let rawType = c.type
+    if (isCh) {
+      const u = stripChNullable(rawType)
+      if (u.changed) innerType = u.text
+    }
+    const sp = splitTypeText(innerType ?? rawType)
     const lp = String(sp.length || '')
     const comma = lp.indexOf(',')
     const lenVal = comma < 0 ? lp : lp.slice(0, comma)
@@ -720,7 +753,7 @@ const buildColRows = () => {
       sortKey: !!c.sortKey,
       comment: c.comment || '', extra: c.extra || '',
       _orig: {
-        name: c.name, type: normType(c.type), nullable: !!c.nullable,
+        name: c.name, type: normType(innerType ?? c.type), nullable: !!c.nullable,
         defaultIsNull: dvNull, defaultValue: dvNull ? null : String(dv),
         comment: c.comment || '',
         primaryKey: !!c.primaryKey, autoIncrement: !!c.autoIncrement,
