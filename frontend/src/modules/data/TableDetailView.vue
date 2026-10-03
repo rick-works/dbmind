@@ -4,8 +4,8 @@
     <div class="form-tab-header">
       <div class="header-title">
         <el-icon :size="16" class="header-icon"><Grid /></el-icon>
-        <span class="header-text">{{ $t('tdet.editStructure') }} · {{ table }}</span>
-        <el-tag size="small" effect="plain" type="info">{{ conn?.name }} / {{ database }}</el-tag>
+        <span class="header-text">{{ $t('tdet.editStructure') }}</span>
+        <el-tag size="small" effect="plain" type="info">{{ conn?.name }} / {{ database }} / {{ table }}</el-tag>
       </div>
       <!-- 操作按钮统一挪到下方 SQL 预览栏（与「保存修改」同一行）：
            它们本就是围绕 SQL 预览的动作，摆在标题栏右侧离预览最远。这里只留 DDL 模式的提示。 -->
@@ -515,7 +515,9 @@ const mssqlPk = ref('')
 const LEN_REQUIRED = {
   mysql: ['VARCHAR', 'CHAR', 'VARBINARY', 'BINARY', 'DECIMAL', 'NUMERIC'],
   mssql: ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR', 'VARBINARY', 'BINARY', 'DECIMAL', 'NUMERIC'],
-  oracle: ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'DECIMAL', 'NUMERIC']
+  oracle: ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'DECIMAL', 'NUMERIC'],
+  // CH：Decimal 必须给 (精度, 标度)，FixedString 必须给定长；DateTime64 有缺省 3 可不填
+  clickhouse: ['DECIMAL', 'FIXEDSTRING']
 }
 const needsLength = (typeBase) => {
   const list = LEN_REQUIRED[ddlStyle.value]

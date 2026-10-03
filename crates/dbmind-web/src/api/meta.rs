@@ -391,8 +391,11 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
             "NVARCHAR2(255)", "CHAR(1)", "CLOB", "BLOB", "DATE", "TIMESTAMP", "RAW(16)",
         ],
         "clickhouse" => vec![
-            "UInt8", "UInt16", "UInt32", "UInt64", "Int32", "Int64", "Float64", "Decimal(18,2)",
-            "String", "FixedString(16)", "Date", "DateTime", "UUID", "Array(String)",
+            // Decimal / FixedString 不带参数：参数由编辑器的「长度 / 精度」列给
+            //（重建时 Decimal 缺省 38,6、FixedString 缺省 16，见前端 clickhouseType）
+            "UInt8", "UInt16", "UInt32", "UInt64", "Int8", "Int16", "Int32", "Int64",
+            "Float32", "Float64", "Decimal", "String", "FixedString",
+            "Date", "DateTime", "DateTime64", "UUID", "Array(String)",
         ],
         "sqlite" => vec!["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC", "VARCHAR(255)", "DATETIME"],
         "h2" => vec!["INT", "BIGINT", "DECIMAL(18,2)", "DOUBLE", "VARCHAR(255)", "CLOB", "BLOB", "DATE", "TIMESTAMP", "BOOLEAN"],
