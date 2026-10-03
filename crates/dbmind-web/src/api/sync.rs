@@ -58,9 +58,9 @@ const PAGE: u64 = 50_000;
 ///（旧版 4MB、新版 64MB）；再往上单语句解析/回滚成本开始吃掉收益，先停在这。
 const MAX_TUPLES_PER_STATEMENT: u64 = 5000;
 /// Stream Load 单请求的**字节**上限：行数上限（5 万）管不住行宽，宽行表一批能拼出
-/// 85MB+ 的 JSON —— 实测这批要 48 秒才被 BE 摄取完，期间界面一个数字都不动，
-/// 用户以为卡死（真机：ppl_loan_case 一批等了几分钟）。压到 16MB/批（实测 ~6 秒），
-/// 进度每几秒就跳一格，宽行表也顺带把内存峰值压下来。
+/// 85MB+ 的请求体。实测这台单 BE（HDD）每次 Stream Load 有 **~10 秒固定开销**
+///（事务/publish 延迟），但 48MB 大批的 publish 代价陡增（实测反而比 16MB 慢近一倍）
+/// —— 16MB/批 ≈ 14s/批，是实测甜点：进度每十几秒跳一格，吞吐最优。
 const STREAM_LOAD_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// 进度状态最短刷新间隔：写一页更新一次就够，**不必每行**都更新
 /// （20 万行就是 20 万次加锁 + 20 万次前端快照变化，纯属白烧 CPU）。
@@ -714,21 +714,57 @@ fn resolve_stream_redirect(fe_url: &str, location: &str) -> String {
     format!("{scheme}{host}:{port}{path}")
 }
 
-async fn doris_stream_load(
-    http_port: u16,
-    be_port: u16,
-    host: &str,
-    user: &str,
-    password: &str,
-    database: &str,
-    table: &str,
+/// Stream Load CSV 的**列分隔符 / 行分隔符**：用 `\x01` / `\x02` 控制字符（header 里写
+/// 十六进制转义，Doris 会解析），业务文本里几乎不可能出现 —— 文本值无需任何转义即可
+/// 直写，比 JSON 少了键名与引号包裹，BE 解析也快一个量级（实测 1.1MB/s → 数 MB/s）。
+const CSV_COL_SEP: &str = "\\x01";
+const CSV_ROW_SEP: &str = "\\x02";
+const CSV_COL_SEP_BYTE: u8 = 0x01;
+const CSV_ROW_SEP_BYTE: u8 = 0x02;
+
+/// 数据里出现了与分隔符相同的字符吗？（极罕见：控制字符混进文本）—— 有则整批退回
+/// JSON 编码（JSON 对任意字符都安全），保证正确性优先于速度。
+fn rows_need_json_fallback(rows: &[Vec<dbmind_core::CellValue>]) -> bool {
+    rows.iter().any(|row| {
+        row.iter().any(|cell| match cell {
+            dbmind_core::CellValue::Text(s) => {
+                s.bytes().any(|b| b == CSV_COL_SEP_BYTE || b == CSV_ROW_SEP_BYTE)
+            }
+            _ => false,
+        })
+    })
+}
+
+/// 一批行编码成 Stream Load 的 **CSV 体**：`\x01` 列分隔、`\x02` 行分隔；
+/// NULL → `\N`（Doris 的空值标记）；BLOB 只带长度（与 JSON 路径同口径，`b:len`）。
+fn encode_stream_csv(rows: &[Vec<dbmind_core::CellValue>]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(rows.len() * 64);
+    for row in rows {
+        for (idx, cell) in row.iter().enumerate() {
+            if idx > 0 {
+                out.push(CSV_COL_SEP_BYTE);
+            }
+            match cell {
+                dbmind_core::CellValue::Null => out.extend_from_slice(b"\\N"),
+                dbmind_core::CellValue::Integer(n) => out.extend_from_slice(n.to_string().as_bytes()),
+                dbmind_core::CellValue::Real(x) => out.extend_from_slice(x.to_string().as_bytes()),
+                dbmind_core::CellValue::Text(s) => out.extend_from_slice(s.as_bytes()),
+                dbmind_core::CellValue::Blob { len } => {
+                    out.extend_from_slice(format!("b:{len}").as_bytes())
+                }
+            }
+        }
+        out.push(CSV_ROW_SEP_BYTE);
+    }
+    out
+}
+
+/// 一批行编码成 Stream Load 的 **JSON 体**（CSV 的回退路径，见 rows_need_json_fallback）。
+fn encode_stream_json(
     columns: &[String],
     rows: &[Vec<dbmind_core::CellValue>],
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
     use serde_json::Value;
-    if rows.is_empty() || host.is_empty() || http_port == 0 {
-        return Ok(());
-    }
     let mut arr: Vec<Value> = Vec::with_capacity(rows.len());
     for row in rows {
         let mut obj = serde_json::Map::new();
@@ -744,7 +780,43 @@ async fn doris_stream_load(
         }
         arr.push(Value::Object(obj));
     }
-    let body = serde_json::to_vec(&arr).map_err(|e| e.to_string())?;
+    serde_json::to_vec(&arr).map_err(|e| e.to_string())
+}
+
+/// Doris 返回的数字字段可能是 JSON number 也可能是字符串（版本差异），两种都认。
+fn doris_number(v: Option<&serde_json::Value>) -> u64 {
+    match v {
+        Some(serde_json::Value::Number(n)) => n.as_u64().unwrap_or(0),
+        Some(serde_json::Value::String(s)) => s.trim().parse().unwrap_or(0),
+        _ => 0,
+    }
+}
+
+/// Doris Stream Load 推送一批行。返回**实际载入的行数**（`NumberLoadedRows`）——
+/// 类型不匹配等被 BE 过滤的行不计入，由调用方按脏数据记账（对齐 DataX 的 errorLimit 思路）。
+async fn doris_stream_load(
+    http_port: u16,
+    be_port: u16,
+    host: &str,
+    user: &str,
+    password: &str,
+    database: &str,
+    table: &str,
+    columns: &[String],
+    rows: &[Vec<dbmind_core::CellValue>],
+) -> Result<u64, String> {
+    use serde_json::Value;
+    if rows.is_empty() || host.is_empty() || http_port == 0 {
+        return Ok(0);
+    }
+    // CSV 优先；文本里混入分隔符控制字符时整批退回 JSON（正确性优先）
+    let use_json = rows_need_json_fallback(rows);
+    let body = if use_json {
+        encode_stream_json(columns, rows)?
+    } else {
+        encode_stream_csv(rows)
+    };
+    tracing::info!(rows = rows.len(), bytes = body.len(), csv = !use_json, "Stream Load 编码完成");
     let fe_url = format!("http://{}:{}/api/{}/{}/_stream_load", host, http_port, database, table);
     let label = format!(
         "dbmind_{}",
@@ -758,7 +830,7 @@ async fn doris_stream_load(
     let host_owned = host.to_string();
     let db_owned = database.to_string();
     let tbl_owned = table.to_string();
-    let _ = crate::api::blocking(move || -> dbmind_core::Result<()> {
+    crate::api::blocking(move || -> dbmind_core::Result<u64> {
         // **入口候选**：优先直连 BE（SHOW BACKENDS 的真实 http 端口）—— FE 会 307 重定向，
         // 而重定向链路有两个坑：body 要对着 FE 白发一遍（FE 不读 body 就 307）；且
         // `Expect: 100-continue` 下 BE 先回 100 Interim，ureq 把它当终站响应返回、body
@@ -780,14 +852,20 @@ async fn doris_stream_load(
             for _hop in 0..5 {
                 let hop_t0 = std::time::Instant::now();
                 tracing::info!(url = %url, bytes = body.len(), "Stream Load 发起请求");
-                let resp = match agent
+                let req = agent
                     .put(&url)
                     .set("Authorization", &basic_auth(&user_owned, &pass_owned))
-                    .set("label", &label)
-                    .set("format", "json")
-                    .set("strip_outer_array", "true")
-                    .send_bytes(&body)
-                {
+                    .set("label", &label);
+                // CSV：控制字符做分隔符（无键名、无引号包裹，BE 解析快一个量级）；
+                // JSON 兜底（数据里混入了分隔符控制字符时）
+                let req = if use_json {
+                    req.set("format", "json").set("strip_outer_array", "true")
+                } else {
+                    req.set("format", "csv")
+                        .set("column_separator", CSV_COL_SEP)
+                        .set("line_delimiter", CSV_ROW_SEP)
+                };
+                let resp = match req.send_bytes(&body) {
                     Ok(resp) => resp,
                     // ureq 对 >=400 默认返回 Err(Status)，把响应体捞出来才有诊断价值
                     Err(ureq::Error::Status(_, resp)) => resp,
@@ -813,7 +891,12 @@ async fn doris_stream_load(
                 let head: String = text.chars().take(500).collect();
                 let v: Option<Value> = serde_json::from_str(&text).ok();
                 match v {
-                    Some(v) if v.get("Status").and_then(Value::as_str) == Some("Success") => return Ok(()),
+                    Some(v) if v.get("Status").and_then(Value::as_str) == Some("Success") => {
+                        // 脏数据记账：类型不匹配等被 BE 过滤的行不算成功载入 ——
+                        // 返回实际载入行数，调用方把差额计入失败（对齐 DataX 的 errorLimit 思路）
+                        let loaded = doris_number(v.get("NumberLoadedRows"));
+                        return Ok(loaded);
+                    }
                     Some(v) => {
                         let msg_head: String = v.get("Message").and_then(Value::as_str).unwrap_or(&head).chars().take(500).collect();
                         return Err(dbmind_core::DbMindError::new(
@@ -837,9 +920,42 @@ async fn doris_stream_load(
         ))
     })
     .await
-    .map_err(|e| format!("工作线程异常：{:?}", e))?;
-    // Err 已被 blocking 转成 XError 并在这里以 String 上抛（调用方据此回退 INSERT 管道）
-    Ok(())
+    .map_err(|e| format!("工作线程异常：{:?}", e))
+}
+
+#[cfg(test)]
+mod stream_load_tests {
+    use super::*;
+
+    #[test]
+    fn csv_编码_空值与各类型() {
+        let rows = vec![
+            vec![CellValue::Integer(1), CellValue::Text("张三,说\"你好\"".into()), CellValue::Null],
+            vec![CellValue::Real(1.5), CellValue::Text("多行\n文本".into()), CellValue::Blob { len: 7 }],
+        ];
+        let out = encode_stream_csv(&rows);
+        let s = String::from_utf8(out).unwrap();
+        // 列分隔 0x01、行分隔 0x02；NULL → \N；文本原样（含逗号/引号/换行都无需转义）
+        assert_eq!(
+            s,
+            "1\u{1}张三,说\"你好\"\u{1}\\N\u{2}1.5\u{1}多行\n文本\u{1}b:7\u{2}"
+        );
+    }
+
+    #[test]
+    fn 含分隔符字符的行要退回json() {
+        assert!(!rows_need_json_fallback(&[vec![CellValue::Text("普通文本".into())]]));
+        assert!(rows_need_json_fallback(&[vec![CellValue::Text("坏\u{1}文本".into())]]));
+        assert!(rows_need_json_fallback(&[vec![CellValue::Text("坏\u{2}文本".into())]]));
+    }
+
+    #[test]
+    fn doris数字字段两种形态都认() {
+        use serde_json::json;
+        assert_eq!(doris_number(Some(&json!(123))), 123);
+        assert_eq!(doris_number(Some(&json!("456"))), 456);
+        assert_eq!(doris_number(Some(&json!(null))), 0);
+    }
 }
 
 // ------------------------------------------------------------------ 单表同步
@@ -1781,24 +1897,47 @@ async fn sync_table_inner(
                 .collect::<Vec<_>>()
                 .join(", ");
             // 直拷也带上用户的行过滤条件（同实例 insert…select 同样只搬过滤后的行）
-            let where_sql = if opts.where_clause.is_empty() {
-                src.scoped(table)
+            // ⚠ 源表引用**必须带源库名限定**：这条 SQL 在目标连接上执行（目标影子已切到
+            // 目标库），不能复用 src.scoped 的裸名口径（那是「在源连接上执行」的规则）——
+            // 裸名会被解析到目标库，`from 目标表` 读到刚建好的空表，直拷插进去 0 行
+            //（真机：同实例双库同步 500 行 → 0 行，还报「直拷完成」）
+            let src_qualified = if src.scope.trim().is_empty() || table.contains('.') {
+                table.to_string()
             } else {
-                format!("{} where {}", src.scoped(table), opts.where_clause)
+                format!("{}.{table}", src.scope.trim())
+            };
+            let where_sql = if opts.where_clause.is_empty() {
+                src_qualified
+            } else {
+                format!("{} where {}", src_qualified, opts.where_clause)
             };
             let insert_sql = format!(
                 "insert into {target_name} ({col_list_tgt}) select {col_list_src} from {where_sql}"
             );
+            tracing::info!(sql = %insert_sql, "同实例直拷 SQL");
             // 直拷同样要过 identity：同批 SET 开/关（会话级开关必须与写入同一批）
             let insert_sql = with_identity(
                 insert_sql,
                 target_kind.kind.key() == "sqlserver",
                 &target_name,
             );
+            // 防御：先结束目标会话上可能残留的旧事务 —— 池化会话是粘性的，此前某次
+            // 同步若没走到 commit，autocommit=0 的旧事务会一直开着，REPEATABLE READ
+            // 的快照停在很久以前（直拷/回查全部看到旧世界，真机抓到过 src_visible=0）
+            let _ = run_target(state, &tgt_target, "commit").await;
+            // 诊断：直拷前在**目标会话**上确认源表可见性与行数
+            if let Ok(result) = run_target(state, &tgt_target, &format!("select count(*) as n from {where_sql}")).await {
+                tracing::info!(src_visible = ?result.rows.first().and_then(|r| r.first()), "直拷前源表回查");
+            } else {
+                tracing::warn!("直拷前源表回查失败（目标会话看不到源表）");
+            }
             let copy_result = run_target(state, &tgt_target, &insert_sql).await;
             let mut copied = match &copy_result {
                 // INSERT … SELECT 的影响行数就是传输行数（比再发一条 count 快且准）
-                Ok(result) => result.affected_rows.unwrap_or(0) as u64,
+                Ok(result) => {
+                    tracing::info!(affected = ?result.affected_rows, rows = result.rows.len(), "直拷结果");
+                    result.affected_rows.unwrap_or(0) as u64
+                }
                 Err(err) => return ObjResult::failed(ty, table, format!("同实例直拷失败：{}", err.message)),
             };
             // MySQL 驱动对 INSERT…SELECT 可能回 0（数据实际已写入，真机：目标 3 行、
@@ -1806,6 +1945,7 @@ async fn sync_table_inner(
             // 计数单元格可能是 Integer 也可能是 Text（驱动的 BIGINT 回传差异），两种都认。
             if copied == 0 {
                 if let Ok(result) = run_target(state, &tgt_target, &format!("select count(*) as n from {target_name}")).await {
+                    tracing::info!(count = ?result.rows.first().and_then(|r| r.first()), "直拷兜底回查");
                     if let Some(cell) = result.rows.first().and_then(|row| row.first()) {
                         match cell {
                             dbmind_core::CellValue::Integer(n) => copied = *n as u64,
@@ -2094,9 +2234,20 @@ async fn sync_table_inner(
                         task.set_phase(format!("表 {table}：Stream Load {} 行", batch_rows));
                     }
                     match doris_stream_load(stream_port, be_http_port, &host, &user, &pass, &tgt.scope, table, &columns, &pending_insert).await {
-                        Ok(()) => {
-                            inserted += pending_insert.len() as u64;
-                            if let Some(task) = task { task.add_rows_written(pending_insert.len() as u64); }
+                        Ok(loaded) => {
+                            // **按 BE 实际载入行数记账**：类型不匹配等被过滤的行计入失败
+                            //（对齐 DataX 的 errorLimit 思路 —— 脏数据可见，不静默吞掉）
+                            if loaded > 0 {
+                                inserted += loaded;
+                                if let Some(task) = task { task.add_rows_written(loaded); }
+                            }
+                            let filtered = batch_rows.saturating_sub(loaded);
+                            if filtered > 0 {
+                                if let Some(task) = task {
+                                    task.add_rows_failed(filtered);
+                                    task.log(format!("表 {table}：Stream Load 本批 {filtered} 行被目标过滤（类型不匹配等），已计入失败数"));
+                                }
+                            }
                             pending_insert.clear();
                             pending_bytes = 0;
                         }
