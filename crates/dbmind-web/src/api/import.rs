@@ -247,7 +247,7 @@ pub async fn cancel(
 async fn run_sql(state: &AppState, conn: &str, database: &str, sql: &str) -> Result<(), XError> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let request = QueryRequest {
         read_only: None,
         connection: target,
@@ -258,6 +258,9 @@ async fn run_sql(state: &AppState, conn: &str, database: &str, sql: &str) -> Res
         },
         execution_id: None,
         session: Some("internal:browse".to_string()),
+        // 导入是界面功能驱动的批量写入（不是编辑器里的 SQL）：不进查询历史 ——
+        // 一次导入几十批，进历史等于把「最近查询」刷掉
+        internal: true,
     };
     blocking(move || engine.execute(request, AccessContext::Web)).await?;
     Ok(())

@@ -166,8 +166,10 @@ window.addEventListener('unhandledrejection', (e) => {
 // 导致组件渲染时 Object.create(appContext.provides) 崩溃。
 // 必须将 options 合并进第一个参数（消息对象）。
 // 通知设置（设置页 → dbmind_notify）：success 控制成功提示是否显示；
-// autoClose 控制错误提示是否自动关闭（自动关闭时长 8s；关闭则错误常驻中央直至手动关闭）
-const notifySettings = getNotifySettings()
+// autoClose 控制错误提示是否自动关闭（自动关闭时长 8s；关闭则错误常驻中央直至手动关闭）。
+// **每次弹出时实时读**：这里曾是启动时的一次性快照，设置页改完要重启才生效 ——
+// 而通知恰是最常想立刻关掉的东西。localStorage 读取的开销远小于一次弹层本身。
+const notifyNow = () => getNotifySettings()
 
 // 转义 HTML，避免错误详情中特殊字符破坏样式（换行以 <br/> 呈现）
 const escHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -199,16 +201,16 @@ ElMessage.error = (msg, options) => {
   const message = needHtml
     ? { dangerouslyUseHTMLString: true, message: escHtml(raw).replace(/\r?\n/g, '<br/>') }
     : raw
-  mergeMsgOpts(origError, message, options, { duration: notifySettings.autoClose ? 8000 : 0, showClose: true, grouping: true })
+  mergeMsgOpts(origError, message, options, { duration: notifyNow().autoClose ? 8000 : 0, showClose: true, grouping: true })
 }
 const origSuccess = ElMessage.success
 ElMessage.success = (msg, options) => {
-  if (!notifySettings.success) return
+  if (!notifyNow().success) return
   mergeMsgOpts(origSuccess, msg, options, { duration: 2500, grouping: true })
 }
 const origInfo = ElMessage.info
 ElMessage.info = (msg, options) => {
-  if (!notifySettings.success) return
+  if (!notifyNow().success) return
   mergeMsgOpts(origInfo, msg, options, { duration: 2500, grouping: true })
 }
 // 应用持久化的主题模式（浅色 / 深色 / 跟随系统），并监听系统外观变化
@@ -216,4 +218,14 @@ initTheme()
 // 应用持久化的界面语言：落 <html lang> 与窗口标题。
 // 顺序在 mount 之前 —— 免得首帧先用中文标题闪一下再被改掉。
 initI18n()
+// 「AI 服务未配置」这类请求错误：界面上已有正式引导（弹窗/消息里的「前往设置」链接），
+// 但个别自动预取请求的底层 promise 残堆仍会以 uncaught 打进控制台刷屏 ——
+// 这里把它降级成 debug；只匹配这一类已知错误，其它未捕获异常照常原样打印。
+window.addEventListener('unhandledrejection', (e) => {
+  const msg = String(e.reason?.message || e.reason || '')
+  if (/status code 400|请先在「设置」|Enable and configure the AI service/.test(msg)) {
+    e.preventDefault()
+    console.debug('[dbmind] 该请求错误已在界面引导处理:', msg)
+  }
+})
 app.mount('#app')

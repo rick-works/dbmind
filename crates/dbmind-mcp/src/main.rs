@@ -114,6 +114,60 @@ fn main() {
 }
 
 impl Server {
+    /// 读一条设置（**每次现读**：壳是长驻进程，设置页改完下一次调用就要生效，
+    /// 不能在启动时快照一次了事）。
+    fn setting(&self, key: &str) -> Option<String> {
+        self.engine
+            .settings()
+            .ok()?
+            .into_iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    }
+
+    /// 布尔设置（缺省 fallback；'true'/'1' 视为开）。
+    fn flag(&self, key: &str, fallback: bool) -> bool {
+        match self.setting(key).as_deref() {
+            Some("true") | Some("1") => true,
+            Some("false") | Some("0") => false,
+            _ => fallback,
+        }
+    }
+
+    /// 正整数设置（非法/缺省 → fallback）。
+    fn num(&self, key: &str, fallback: u64) -> u64 {
+        self.setting(key)
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(fallback)
+    }
+
+    /// 工具属于哪个类别（设置里按类别开关）。
+    fn category_of(name: &str) -> &'static str {
+        match name {
+            "dbmind_list_connections" | "dbmind_list_types" | "dbmind_list_tables"
+            | "dbmind_search_tables" | "dbmind_describe_table" => Store::KEY_MCP_TOOLS_STRUCTURE,
+            "dbmind_execute_query" | "dbmind_cancel_query" => Store::KEY_MCP_TOOLS_QUERY,
+            _ => Store::KEY_MCP_TOOLS_HISTORY,
+        }
+    }
+
+    /// 该工具当前是否开放（tools/list 过滤 + dispatch 兜底拦截共用）。
+    fn tool_enabled(&self, name: &str) -> bool {
+        self.flag(Self::category_of(name), true)
+    }
+
+    /// connection 参数：客户端没传时回落到「默认连接」设置（空 = 照旧报缺参）。
+    fn connection_arg(&self, args: &Value) -> dbmind_core::Result<String> {
+        match args.get("connection").and_then(|v| v.as_str()) {
+            Some(s) if !s.trim().is_empty() => Ok(s.to_string()),
+            _ => match self.setting(Store::KEY_MCP_DEFAULT_CONNECTION).as_deref() {
+                Some(s) if !s.trim().is_empty() => Ok(s.to_string()),
+                _ => required_str(args, "connection"),
+            },
+        }
+    }
+
     fn serve(&self) {
         let stdin = std::io::stdin();
         let (sender, receiver) = std::sync::mpsc::channel::<Job>();
@@ -312,31 +366,60 @@ impl Server {
     }
 
     fn dispatch(&self, key: &str, name: &str, args: &Value) -> dbmind_core::Result<Value> {
+        // 类别开关兜底拦截：tools/list 过滤了清单，但客户端可能缓存了旧清单硬调 —— 这里再拦一道
+        if !self.tool_enabled(name) {
+            return Err(DbMindError::new(
+                ErrorCode::QueryInvalid,
+                "该工具类别已在 DBMind 设置 → MCP 中关闭",
+            ));
+        }
         match name {
             "dbmind_list_connections" => Ok(serde_json::to_value(self.engine.list_connections()?)?),
             "dbmind_list_types" => Ok(serde_json::to_value(self.engine.types())?),
             "dbmind_list_tables" => {
-                let connection = required_str(args, "connection")?;
+                let connection = self.connection_arg(args)?;
                 // 结构**一律现读**：AI 拿到 5 分钟前的结构会写出不存在的表名，
                 // 而 AI 调元数据的频率本来就很低 —— 慢一点换准，值。
                 Ok(serde_json::to_value(self.engine.list_tables_fresh(&connection)?)?)
             }
+            "dbmind_search_tables" => {
+                let connection = self.connection_arg(args)?;
+                let keyword = required_str(args, "keyword")?.to_lowercase();
+                let all = self.engine.list_tables_fresh(&connection)?;
+                // 模型经常只知道「大概有张 order 表」：模糊过滤省它翻全量清单，
+                // 结果截到 50 条 —— 全量它也记不住。
+                let matched: Vec<_> = all
+                    .iter()
+                    .filter(|t| {
+                        serde_json::to_string(t)
+                            .map(|s| s.to_lowercase().contains(&keyword))
+                            .unwrap_or(false)
+                    })
+                    .take(50)
+                    .collect();
+                Ok(json!({ "matched": matched.len(), "tables": matched }))
+            }
             "dbmind_describe_table" => {
-                let connection = required_str(args, "connection")?;
+                let connection = self.connection_arg(args)?;
                 let table = required_str(args, "table")?;
                 let columns = self.engine.list_columns_fresh(&connection, &table)?;
                 Ok(json!({ "table": table, "columns": columns }))
             }
             "dbmind_execute_query" => {
-                let connection = required_str(args, "connection")?;
+                let connection = self.connection_arg(args)?;
                 let sql = required_str(args, "sql")?;
                 let mut options = QueryOptions::default();
-                if let Some(max_rows) = args.get("max_rows").and_then(|v| v.as_u64()) {
-                    options.max_rows = max_rows as usize;
-                }
-                if let Some(timeout_ms) = args.get("timeout_ms").and_then(|v| v.as_u64()) {
-                    options.timeout_ms = timeout_ms;
-                }
+                // 行数与超时的默认值/上限都来自设置页（MCP 页签）：客户端没传用设置的默认；
+                // 传了也会被设置的「最大行数」夹住 —— 界面设 100 行，模型要 10 万行也拿不到。
+                let cap = self.num(Store::KEY_MCP_MAX_ROWS, 2000).min(dbmind_core::QueryOptions::HARD_MAX_ROWS as u64);
+                options.max_rows = match args.get("max_rows").and_then(|v| v.as_u64()) {
+                    Some(n) => n.min(cap) as usize,
+                    None => cap as usize,
+                };
+                options.timeout_ms = match args.get("timeout_ms").and_then(|v| v.as_u64()) {
+                    Some(ms) => ms,
+                    None => self.num(Store::KEY_MCP_TIMEOUT_SECS, 30) * 1000,
+                };
                 // executionId 在**投递时**就已登记（这样排队中也才能被取消，见 `enqueue`）；
                 // 万一没有（理论上到不了这里），现生成一个，别让这次调用白失败。
                 let execution_id = self
@@ -376,10 +459,33 @@ impl Server {
                     "rows": render_rows(&result),
                 }))
             }
+            "dbmind_cancel_query" => {
+                let execution_id = required_str(args, "execution_id")?;
+                let hit = self.engine.cancel(&execution_id);
+                Ok(json!({ "executionId": execution_id, "cancelled": hit }))
+            }
             "dbmind_list_history" => {
                 let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
                 let connection = args.get("connection").and_then(|v| v.as_str());
                 Ok(serde_json::to_value(self.engine.history(limit, connection)?)?)
+            }
+            "dbmind_server_info" => {
+                // 让模型自检环境：写通道开没开、生产保护在不在、哪些类别开放 ——
+                // 免得它拿着写语句反复撞墙（或以为能写其实不能）。
+                Ok(json!({
+                    "version": dbmind_core::VERSION,
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "aiWriteEnabled": self.setting(Store::KEY_AI_WRITE_ENABLED).as_deref() == Some("true"),
+                    "productionProtection": self.setting(Store::KEY_PROTECT_PRODUCTION).as_deref() == Some("true"),
+                    "blockDangerous": self.setting(Store::KEY_BLOCK_DANGEROUS).as_deref() == Some("true"),
+                    "maxWriteRows": self.setting(Store::KEY_MAX_WRITE_ROWS).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0),
+                    "defaultConnection": self.setting(Store::KEY_MCP_DEFAULT_CONNECTION).unwrap_or_default(),
+                    "toolCategories": {
+                        "structure": self.flag(Store::KEY_MCP_TOOLS_STRUCTURE, true),
+                        "query": self.flag(Store::KEY_MCP_TOOLS_QUERY, true),
+                        "history": self.flag(Store::KEY_MCP_TOOLS_HISTORY, true),
+                    }
+                }))
             }
             other => Err(DbMindError::new(
                 ErrorCode::Internal,
@@ -389,7 +495,8 @@ impl Server {
     }
 
     fn tools(&self) -> Vec<Value> {
-        vec![
+        // 按设置页的类别开关过滤：关掉的类别连清单里都不出现 —— 模型不会去调一个看不见的工具
+        let all: Vec<Value> = vec![
             json!({
                 "name": "dbmind_list_connections",
                 "description": "列出 DBMind 中已配置的数据连接（不含口令）。",
@@ -405,8 +512,20 @@ impl Server {
                 "description": "列出指定连接下的表与视图。",
                 "inputSchema": {
                     "type": "object",
-                    "properties": { "connection": { "type": "string", "description": "连接名称或 id" } },
-                    "required": ["connection"],
+                    "properties": { "connection": { "type": "string", "description": "连接名称或 id，省略时用设置里的默认连接" } },
+                    "additionalProperties": false
+                }
+            }),
+            json!({
+                "name": "dbmind_search_tables",
+                "description": "按关键字模糊搜索表/视图（名称匹配，最多返回 50 条）—— 比翻全量清单省事。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "connection": { "type": "string", "description": "省略时用默认连接" },
+                        "keyword": { "type": "string", "description": "表名关键字，不区分大小写" }
+                    },
+                    "required": ["keyword"],
                     "additionalProperties": false
                 }
             }),
@@ -416,25 +535,37 @@ impl Server {
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "connection": { "type": "string" },
+                        "connection": { "type": "string", "description": "省略时用默认连接" },
                         "table": { "type": "string" }
                     },
-                    "required": ["connection", "table"],
+                    "required": ["table"],
                     "additionalProperties": false
                 }
             }),
             json!({
                 "name": "dbmind_execute_query",
-                "description": "执行一条 SQL。默认只允许只读语句（SELECT/SHOW/EXPLAIN 等）；写语句需用户在 DBMind 中开启允许 AI 写入。",
+                "description": "执行一条 SQL。默认只允许只读语句（SELECT/SHOW/EXPLAIN 等）；写语句需用户在 DBMind 中开启允许 AI 写入。行数与超时的上限由设置页约束。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "connection": { "type": "string" },
+                        "connection": { "type": "string", "description": "省略时用默认连接" },
                         "sql": { "type": "string" },
-                        "max_rows": { "type": "integer", "minimum": 1, "maximum": dbmind_core::QueryOptions::HARD_MAX_ROWS, "description": "单页最大行数，默认 2000；内核硬上限 100000，传更大也只会按上限截断" },
-                        "timeout_ms": { "type": "integer", "minimum": 1000, "description": "超时毫秒，默认 30000" }
+                        "max_rows": { "type": "integer", "minimum": 1, "maximum": dbmind_core::QueryOptions::HARD_MAX_ROWS, "description": "单页最大行数；会被设置页的「单次最大行数」进一步限制" },
+                        "timeout_ms": { "type": "integer", "minimum": 1000, "description": "超时毫秒，默认取设置页的值" }
                     },
-                    "required": ["connection", "sql"],
+                    "required": ["sql"],
+                    "additionalProperties": false
+                }
+            }),
+            json!({
+                "name": "dbmind_cancel_query",
+                "description": "取消一条正在执行的查询（用 execute_query 返回的 executionId）。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "execution_id": { "type": "string" }
+                    },
+                    "required": ["execution_id"],
                     "additionalProperties": false
                 }
             }),
@@ -450,7 +581,20 @@ impl Server {
                     "additionalProperties": false
                 }
             }),
-        ]
+            json!({
+                "name": "dbmind_server_info",
+                "description": "查看 DBMind MCP 服务自身：版本、AI 写入是否开启、生产保护等安全开关状态、开放的工具类别。写语句被拒时先查这里。",
+                "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
+            }),
+        ];
+        all.into_iter()
+            .filter(|tool| {
+                tool.get("name")
+                    .and_then(|v| v.as_str())
+                    .map(|n| self.tool_enabled(n))
+                    .unwrap_or(true)
+            })
+            .collect()
     }
 }
 

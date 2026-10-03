@@ -20,8 +20,9 @@
 //!    命令行参数在多数系统上对所有本机进程可见（`ps`、任务管理器），
 //!    把口令写进去等于把它贴在了公告板上。
 //! 2. **等待有超时**，超时按「跳过」处理：没人理的弹窗不该把任务永久挂住。
-//! 3. **内置引擎的边界要写清楚**：只导出表（结构 + 数据）与视图，
-//!    存储过程/函数/触发器/事件不在其中 —— 这一点会出现在任务的日志与结果说明里，
+//! 3. **内置引擎的边界要写清楚**：表（结构 + 数据）、视图、函数 / 存储过程 / 触发器 / 事件
+//!    （定义来自 `object_source`，方言拿不到的会**逐类**写进日志）——
+//!    每一类导出了多少、缺了什么，都要出现在任务的日志与结果说明里，
 //!    绝不能让用户以为「备份完整」。
 
 use std::fs::File;
@@ -33,11 +34,12 @@ use axum::extract::{Multipart, Path, RawQuery, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use dbmind_core::{CellValue, ConnectionKind, TableKind};
+use dbmind_core::{ConnectionKind, TableKind};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
-use crate::api::dialect::Dialect;
+use crate::api::dialect::{Dialect, Meta};
+use crate::api::meta::pick_ddl;
 use crate::api::error::{XError, XResult};
 use crate::api::export::{ddl_of, sql_literal};
 use crate::api::meta::run_sql_in;
@@ -352,6 +354,10 @@ fn task_view(task: &Task, restore: bool) -> Value {
         "install".to_string(),
         task.install_prompt().unwrap_or(Value::Null),
     );
+    // **过程日志**必须下发：没有它，界面上的日志框只剩「开始任务 / 备份完成 / 汇总」三两行，
+    // 每张表导了多少行、视图与例程有没有在内，全都无从对账（实机撞到过）。
+    view.insert("logs".to_string(), json!(task.logs()));
+    view.insert("logsSeq".to_string(), json!(task.logs_seq()));
     if restore {
         view.insert("mode".to_string(), json!("restore"));
     }
@@ -537,8 +543,10 @@ pub async fn cli_guide(
         "username": record.config.username.clone().unwrap_or_default(),
         "sqliteFile": record.config.file_path.clone().unwrap_or_default(),
         "database": record.config.database.clone().unwrap_or_default(),
-        // 本项目不做 SSH 隧道（内核的连接模型里没有这一层），如实给 false
-        "isSsh": false,
+        // 走 SSH 隧道时要如实告诉界面：命令行工具（mysqldump / pg_dump …）连的是记录里的
+        // **真实**数据库地址，不会经过内核的隧道层 —— 派它去跑只会得到一句「连不上」。
+        // 界面文案正是据此建议改用「内置引擎」（那条路会经过隧道）。
+        "isSsh": dbmind_core::tunnel::tunnel_key(&record.config).is_some(),
     });
     let Some(spec) = cli_spec(kind) else {
         let mut view = base;
@@ -893,10 +901,9 @@ pub async fn start(
             )
             .await
             .map_err(|err| err.message)?;
-            let detail = format!(
-                "内置引擎备份完成：{} 张表 / {} 行（连接 {label}）",
-                summary.tables, summary.rows
-            );
+            // 汇总里把每一类对象都摆出来（表/数据行/视图/例程/文件大小）——
+            // 「就 6 张表吗？视图存储过程函数呢？」这类疑问靠它对账
+            let detail = summary.detail(&label);
             for notice in &summary.notices {
                 task.log(notice.clone());
             }
@@ -1148,7 +1155,54 @@ fn resolve_cli(over: Option<String>, stored: Option<String>) -> Option<String> {
 struct BuiltinSummary {
     tables: u64,
     rows: u64,
+    views: u64,
+    functions: u64,
+    procedures: u64,
+    triggers: u64,
+    events: u64,
+    bytes: u64,
     notices: Vec<String>,
+}
+
+impl BuiltinSummary {
+    /// 界面上那行**能对账**的总结：每类对象各多少、数据多少行、文件多大。
+    ///
+    /// 以前只有「N 张表 / M 行」，用户的第一反应是「就 6 张表吗？视图/存储过程/函数呢？」
+    /// —— 没说的部分只能靠猜。这里把每一类都摆出来；例程只在真的导出了时才列
+    /// （0 个不是信息，是噪音），没导数据、缺了什么由 notices 单独说。
+    fn detail(&self, label: &str) -> String {
+        let data = if self.rows > 0 {
+            format!("数据 {} 行", self.rows)
+        } else {
+            "未导出数据".to_string()
+        };
+        let mut parts = vec![format!("表 {} 张 / {}", self.tables, data)];
+        parts.push(format!("视图 {} 个", self.views));
+        if self.functions + self.procedures > 0 {
+            parts.push(format!("函数 {} · 存储过程 {}", self.functions, self.procedures));
+        }
+        if self.triggers + self.events > 0 {
+            parts.push(format!("触发器 {} · 事件 {}", self.triggers, self.events));
+        }
+        parts.push(human_size(self.bytes));
+        format!("内置引擎备份完成：{}（连接 {label}）", parts.join(" · "))
+    }
+}
+
+/// 字节数 → 人话（备份文件多大，用户得知道）。
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
 }
 
 /// 内置引擎备份：结构（+ 可选 DROP）+ 数据 + 视图。
@@ -1168,25 +1222,52 @@ async fn builtin_backup(
     let mut notices = Vec::new();
     let batch = options.batch_size.unwrap_or(200).clamp(1, 5000) as usize;
 
-    // 表清单：请求里指定了就用指定的，没指定就按连接/库内全部表
-    let tables: Vec<String> = if !body.tables.is_empty() {
-        body.tables.clone()
-    } else {
-        let target = crate::api::scope::resolve(state, conn, database).await?;
-        crate::api::driver::ensure_for_connection(state, &target).await?;
-        let engine = state.engine.clone();
-        let found = blocking(move || engine.list_tables_fresh(&target)).await?;
-        found
-            .into_iter()
-            .filter(|table| table.kind == TableKind::Table)
-            .map(|table| table.name)
-            .collect()
-    };
+    // 库里的表与视图清单：请求里点名了就用点名的，没点名按「全部」理解
+    // （「包含视图」勾着却一个视图都没选 ⇒ 语义就是全部视图，与表一致）。
+    // 视图清单以前根本不取 —— 「包含视图」勾了也只会得到一个不声不响的空结果。
+    let target = crate::api::scope::resolve(state, conn, database).await?;
+    crate::api::driver::ensure_for_connection(state, &target).await?;
+    let engine = state.engine();
+    let found = blocking(move || engine.list_tables_fresh(&target)).await?;
+    let all_tables: Vec<String> = found
+        .iter()
+        .filter(|table| table.kind == TableKind::Table)
+        .map(|table| table.name.clone())
+        .collect();
+    let all_views: Vec<String> = found
+        .iter()
+        .filter(|table| table.kind == TableKind::View)
+        .map(|table| table.name.clone())
+        .collect();
+    let tables: Vec<String> = if body.tables.is_empty() { all_tables } else { body.tables.clone() };
+    let views: Vec<String> = if body.views.is_empty() { all_views } else { body.views.clone() };
+
     if tables.is_empty() {
         return Err(XError::bad_request("这个库里没有表可备份"));
     }
+
+    // 开工前先把**这次到底备份什么**说清楚。用户问的从来不是「备份好了没」，
+    // 而是「都备份了什么」—— 视图、存储过程、函数、触发器在内不在内，一眼可查。
+    // 没点名的按「全部」理解；没勾选的就写「不包含」。
+    let count_text = |names: &[String], wanted: bool| -> String {
+        if !names.is_empty() {
+            format!("{} 个", names.len())
+        } else if wanted {
+            "全部".to_string()
+        } else {
+            "不包含".to_string()
+        }
+    };
     task.set_total((tables.len() + 1) as i64);
-    task.step(format!("共 {} 张表", tables.len()));
+    task.step(format!(
+        "开始备份：表 {} 张 · 视图 {} · 函数 {} · 存储过程 {} · 触发器 {} · 事件 {}",
+        tables.len(),
+        count_text(&views, options.include_views),
+        count_text(&body.functions, options.include_procedures),
+        count_text(&body.procedures, options.include_procedures),
+        count_text(&body.triggers, options.include_triggers),
+        count_text(&body.events, options.include_events),
+    ));
 
     let file = File::create(path).map_err(|e| XError::internal(format!("无法创建备份文件：{e}")))?;
     let mut out = BufWriter::new(file);
@@ -1198,60 +1279,6 @@ async fn builtin_backup(
         tasks::stamp()
     )
     .map_err(|e| XError::internal(format!("写入备份文件失败：{e}")))?;
-
-    // 视图
-    if options.include_views {
-        for view in &body.views {
-            match dialect.ddl(view).sql() {
-                Some(sql) => {
-                    let result = run_sql_in(state, conn, database, sql, 5).await?;
-                    let mut definition = None;
-                    for row in result.rows {
-                        for value in row {
-                            if let CellValue::Text(text) = value {
-                                if text.to_ascii_lowercase().contains("create") {
-                                    definition = Some(text);
-                                }
-                            }
-                        }
-                    }
-                    match definition {
-                        Some(definition) => {
-                            writeln!(out, "{};", definition.trim().trim_end_matches(';'))
-                                .map_err(|e| XError::internal(e.to_string()))?;
-                        }
-                        None => notices.push(format!("视图 {view} 的定义没取到，未导出")),
-                    }
-                }
-                None => notices.push(format!(
-                    "视图 {view} 未导出：{} 拿不到完整视图定义",
-                    record.kind().key().to_ascii_uppercase()
-                )),
-            }
-        }
-    }
-    // 用户勾了、但内置引擎导不出来的对象：把**具体数量**说出来，
-    // 而不是笼统一句「未包含某些对象」——用户想知道的是「少了几个」
-    let mut missing: Vec<String> = Vec::new();
-    for (count, label, wanted) in [
-        (body.functions.len(), "函数", options.include_procedures),
-        (body.procedures.len(), "存储过程", options.include_procedures),
-        (body.triggers.len(), "触发器", options.include_triggers),
-        (body.events.len(), "事件", options.include_events),
-    ] {
-        if count > 0 {
-            missing.push(format!("{count} 个{label}"));
-        } else if wanted {
-            // 勾了「包含过程/触发器/事件」但一个都没选 ⇒ 按「全部」理解，同样导不出来
-            missing.push(format!("全部{label}"));
-        }
-    }
-    if !missing.is_empty() {
-        notices.push(format!(
-            "{} 的定义未包含在本次备份里（内置引擎只导出表与视图；命令行引擎可拿到完整备份）",
-            missing.join("、")
-        ));
-    }
 
     let mut rows_total = 0u64;
     for (index, table) in tables.iter().enumerate() {
@@ -1272,10 +1299,11 @@ async fn builtin_backup(
         writeln!(out, "{};\n", ddl.trim().trim_end_matches(';'))
             .map_err(|e| XError::internal(e.to_string()))?;
 
+        let mut rows_table = 0u64;
         if options.include_data {
             let columns = {
                 let target = crate::api::scope::resolve(state, conn, database).await?;
-                let engine = state.engine.clone();
+                let engine = state.engine();
                 let name = table.clone();
                 blocking(move || engine.list_columns_fresh(&target, &name)).await?
             };
@@ -1314,7 +1342,7 @@ async fn builtin_backup(
                         )
                         .map_err(|e| XError::internal(e.to_string()))?;
                     }
-                    rows_total += got as u64;
+                    rows_table += got as u64;
                     if got < batch {
                         break;
                     }
@@ -1322,17 +1350,213 @@ async fn builtin_backup(
                 }
             }
         }
+        rows_total += rows_table;
         task.set_done(index as u64 + 1);
-        task.log(format!("表 {table} 已导出"));
+        // 逐表**带行数**：用户看到「6 张表 / 2 行」的第一反应是"就 2 行？对吗？"——
+        // 总数没法规证，逐表写出来就能自己对账（哪张表 0 行、哪张表几行，一目了然）。
+        task.log(format!("表 {table} 已导出（{rows_table} 行）"));
     }
+
+    // 视图 / 函数 / 存储过程 / 触发器 / 事件：放在**表之后** —— 它们的定义大多引用表，
+    // 先写视图后写表的话，还原时 CREATE VIEW 会因为没有表而失败。
+    // 定义来自 `dialect.object_source`（与「查看定义」同一条查询），因此内置引擎
+    // 也能备份例程与触发器；方言拿不到的（`Absent` / `Unwritten`）如实记进日志。
+    let views_done = export_objects(
+        state, &task, conn, database, &dialect, "view", "视图", &views,
+        options.include_views, options.include_drop, &mut out, &mut notices,
+    )
+    .await?;
+    let functions = export_objects(
+        state, &task, conn, database, &dialect, "function", "函数", &body.functions,
+        options.include_procedures, options.include_drop, &mut out, &mut notices,
+    )
+    .await?;
+    let procedures = export_objects(
+        state, &task, conn, database, &dialect, "procedure", "存储过程", &body.procedures,
+        options.include_procedures, options.include_drop, &mut out, &mut notices,
+    )
+    .await?;
+    let triggers = export_objects(
+        state, &task, conn, database, &dialect, "trigger", "触发器", &body.triggers,
+        options.include_triggers, options.include_drop, &mut out, &mut notices,
+    )
+    .await?;
+    let events = export_objects(
+        state, &task, conn, database, &dialect, "event", "事件", &body.events,
+        options.include_events, options.include_drop, &mut out, &mut notices,
+    )
+    .await?;
+
     out.flush().map_err(|e| XError::internal(e.to_string()))?;
     task.set_done((tables.len() + 1) as u64);
+    let bytes = std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
     let _ = file_name;
     Ok(BuiltinSummary {
         tables: tables.len() as u64,
         rows: rows_total,
+        views: views_done,
+        functions,
+        procedures,
+        triggers,
+        events,
+        bytes,
         notices,
     })
+}
+
+/// 把一组对象（视图 / 函数 / 存储过程 / 触发器 / 事件）的定义写进备份文件，返回成功导出的个数。
+///
+/// 定义来自 `dialect.object_source`（与「查看定义」**同一条查询**），选列规则同 `pick_ddl`
+/// （`show create procedure` 的列名各家不同，按位置取必然踩坑）。方言拿不到的
+/// （`Absent` = 本类型没有这个概念 / `Unwritten` = 还没实现）**一次性**记进日志并跳过整组，
+/// 不逐个刷屏，也不静默消失。
+#[allow(clippy::too_many_arguments)]
+async fn export_objects(
+    state: &AppState,
+    task: &std::sync::Arc<Task>,
+    conn: &str,
+    database: &str,
+    dialect: &Dialect,
+    kind: &str,
+    label: &str,
+    names: &[String],
+    wanted: bool,
+    include_drop: bool,
+    out: &mut BufWriter<File>,
+    notices: &mut Vec<String>,
+) -> XResult<u64> {
+    // 一个都没点名：可能是没勾选（用户的选择，照实说"不包含"），
+    // 也可能是勾了「全部」—— 那就去把这一类对象的名字列出来。
+    let names: Vec<String> = if !names.is_empty() {
+        names.to_vec()
+    } else if !wanted {
+        notices.push(format!("{label}：未勾选「包含{label}」，本次未导出"));
+        return Ok(0);
+    } else {
+        let all = list_object_names(state, conn, database, dialect, kind).await;
+        if all.is_empty() {
+            notices.push(format!(
+                "{label}：勾选了「包含{label}」，但{} 上列不出{label}清单（或本来就没有），0 个导出",
+                dialect.kind.key().to_ascii_uppercase()
+            ));
+            return Ok(0);
+        }
+        task.log(format!("{label}：按「全部」处理，共 {} 个", all.len()));
+        all
+    };
+
+    let mut exported = 0u64;
+    let mut unsupported: Option<&'static str> = None;
+    for name in &names {
+        task.check_canceled().map_err(XError::internal)?;
+        // 与表同款：勾了「含 DROP」先删旧对象 —— CREATE VIEW / 例程不带 OR REPLACE，
+        // 不删旧的就**没法重复还原**（实测：第二次还原撞 `view v1 already exists`）。
+        // DROP 语法各家差异大（PG 删函数要带签名），只对能安全表达的生成：
+        //   视图 / 触发器 / 事件 → `drop … if exists`（SQL Server 2016+ 同语法）；
+        //   函数 / 存储过程 → 仅 MySQL 系（PG 用 `CREATE OR REPLACE`，天然幂等，不需要）。
+        if include_drop {
+            let quoted = dialect.quote(name);
+            let drop_sql = match (kind, dialect.kind.key()) {
+                ("view", _) => Some(format!("drop view if exists {quoted}")),
+                ("trigger", _) => Some(format!("drop trigger if exists {quoted}")),
+                ("event", _) => Some(format!("drop event if exists {quoted}")),
+                ("function", "mysql" | "mariadb" | "doris") => {
+                    Some(format!("drop function if exists {quoted}"))
+                }
+                ("procedure", "mysql" | "mariadb" | "doris") => {
+                    Some(format!("drop procedure if exists {quoted}"))
+                }
+                _ => None,
+            };
+            if let Some(sql) = drop_sql {
+                writeln!(out, "{sql};").map_err(|e| XError::internal(e.to_string()))?;
+            }
+        }
+        match dialect.object_source(kind, name) {
+            Meta::Sql(sql) => {
+                let result = run_sql_in(state, conn, database, sql, 10).await?;
+                let definition = pick_ddl(&result);
+                if definition.trim().is_empty() {
+                    notices.push(format!("{label} {name} 的定义没取到，未导出"));
+                    continue;
+                }
+                writeln!(out, "{};", definition.trim().trim_end_matches(';'))
+                    .map_err(|e| XError::internal(e.to_string()))?;
+                exported += 1;
+                task.log(format!("{label} {name} 已导出"));
+            }
+            Meta::Absent => unsupported = Some("本类型没有这个概念"),
+            Meta::Unwritten => unsupported = Some("本类型还没有实现定义导出"),
+        }
+    }
+    if let Some(reason) = unsupported {
+        notices.push(format!(
+            "{label} {} 个未导出：{}（{}；命令行引擎可拿到）",
+            names.len(),
+            reason,
+            dialect.kind.key().to_ascii_uppercase()
+        ));
+    }
+    Ok(exported)
+}
+
+/// 「按全部处理」时把这一类对象的名字列出来（清单与树上那些分类同源）。
+///
+/// 例程走 `routines()`（`routineType` 区分函数与存储过程），触发器/事件各有自己的清单；
+/// 方言没写的（`Absent` / `Unwritten`）或查询失败都返回空 —— 调用方会在日志里说明。
+async fn list_object_names(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+    dialect: &Dialect,
+    kind: &str,
+) -> Vec<String> {
+    let meta = match kind {
+        "function" | "procedure" => dialect.procedures(),
+        "trigger" => dialect.triggers(),
+        "event" => dialect.events(),
+        _ => return Vec::new(),
+    };
+    let Meta::Sql(sql) = meta else {
+        return Vec::new();
+    };
+    let Ok(result) = run_sql_in(state, conn, database, sql, 2000).await else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for row in &result.rows {
+        let mut name = String::new();
+        let mut routine_type = String::new();
+        for (index, column) in result.columns.iter().enumerate() {
+            let text = row
+                .get(index)
+                .map(|cell| match crate::api::shape::cell_to_value(cell) {
+                    Value::String(text) => text,
+                    Value::Null => String::new(),
+                    other => other.to_string(),
+                })
+                .unwrap_or_default();
+            if column.name.eq_ignore_ascii_case("name") {
+                name = text;
+            } else if column.name.eq_ignore_ascii_case("routinetype") {
+                routine_type = text;
+            }
+        }
+        if name.trim().is_empty() {
+            continue;
+        }
+        // 例程清单里函数与存储过程混在一起，按 `routineType` 分流
+        let kind_of = routine_type.to_ascii_uppercase();
+        let matches = match kind {
+            "function" => kind_of.contains("FUNCTION"),
+            "procedure" => kind_of.contains("PROCEDURE"),
+            _ => true,
+        };
+        if matches {
+            names.push(name);
+        }
+    }
+    names
 }
 
 // ------------------------------------------------------------------ 还原
@@ -1355,6 +1579,7 @@ pub async fn restore_start_local(
         body.engine.clone().unwrap_or_else(|| "auto".to_string()),
         body.cli.clone(),
     )
+    .await
 }
 
 /// `POST /api/backup/restore/start` —— multipart 上传备份文件后还原。
@@ -1408,10 +1633,14 @@ pub async fn restore_start(
         "auto".to_string(),
         None,
     )
+    .await
 }
 
 /// 起一个还原任务（上传与本机路径两条入口共用）。
-fn spawn_restore(
+///
+/// 是 `async` 只为**入口处那一次只读校验**（要取连接记录）：两条入口共用同一个函数，
+/// 校验写在这里才不会将来新增入口时漏掉。
+async fn spawn_restore(
     state: &AppState,
     connection_id: String,
     database: Option<String>,
@@ -1421,6 +1650,22 @@ fn spawn_restore(
 ) -> XResult<Json<Value>> {
     if connection_id.trim().is_empty() {
         return Err(XError::bad_request("缺少 connectionId 参数"));
+    }
+    // 只读连接不允许还原 —— 这一条必须**在这里显式查**：
+    // 命令行引擎是起 `mysql` / `psql` / `sqlite3` 子进程直接写库的，
+    // 它**根本不经过内核的 `execute`**，也就没有闸门可拦。
+    // 内置引擎那条路虽然是逐条过闸门的，但还原脚本会被拦在第 N 条上，
+    // 报出来的是「第 N/总数 条失败」，不如在这里一次说清。
+    // 备份（dump）不需要拦：它是读。
+    let record = require_record(state, &connection_id).await?;
+    if state.engine().policy().is_read_only(&record) {
+        return Err(XError::from(dbmind_core::DbMindError::new(
+            dbmind_core::ErrorCode::SafetyReadOnly,
+            format!(
+                "连接「{}」被标记为只读，不允许还原（还原会写入数据并改结构）",
+                record.name()
+            ),
+        )));
     }
     if !path.is_file() {
         return Err(XError::bad_request(format!(
@@ -1504,7 +1749,10 @@ fn spawn_restore(
             let mut executed = 0u64;
             for (index, sql) in usable.iter().enumerate() {
                 task.check_canceled()?;
-                crate::api::meta::run_sql_in(&state, &connection_id, &database, sql.clone(), 1)
+                // 还原是**写库**：必须走「跟随连接策略」的执行入口 ——
+        // 结构浏览那条只读会话会让 MySQL 驱动直接拒绝
+        // （连接没开只读开关、还原却报 Connection is read-only，实机撞到过）
+        crate::api::meta::run_write_sql_in(&state, &connection_id, &database, sql.clone(), 1)
                     .await
                     .map_err(|err| {
                         format!(

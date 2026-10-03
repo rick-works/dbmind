@@ -230,6 +230,167 @@ pub fn first_keyword(sql: &str) -> Option<String> {
     None
 }
 
+/// **顶层**（括号深度 0）按词边界找小写关键字，跳过字符串/标识符字面量。
+/// 返回字节偏移。`[` 按引号处理（SQL Server 标识符）。
+fn top_level_keyword_pos(sql: &str, word: &str) -> Option<usize> {
+    let b = sql.as_bytes();
+    let l = sql.to_ascii_lowercase();
+    let w = word.to_ascii_lowercase();
+    let mut depth = 0i32;
+    let mut i = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'\'' | b'"' | b'`' | b'[' => {
+                let close = if b[i] == b'[' { b']' } else { b[i] };
+                i += 1;
+                while i < b.len() && b[i] != close {
+                    if b[i] == b'\\' {
+                        i += 1; // 反斜杠转义：宁可多跳一格
+                    }
+                    i += 1;
+                }
+            }
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {
+                let word_start = i == 0 || !is_word_char(b[i - 1] as char);
+                if depth == 0 && word_start && l[i..].starts_with(&w) {
+                    let end = i + w.len();
+                    if end >= b.len() || !is_word_char(b[end] as char) {
+                        return Some(i);
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// 危险语句识别（设置页「危险语句拦截」的判定源）。
+///
+/// 判三类：**不带 WHERE 的全表 UPDATE/DELETE**、`TRUNCATE`、`DROP`。
+/// 这是尽力而为的启发式（不是语法分析器）：认不出的形态一律返回 `None`
+/// —— 方向是宁可放过交给其它闸门，不把正常语句错拦。
+pub fn danger_reason(sql: &str) -> Option<&'static str> {
+    let cleaned = strip_comments(sql);
+    match first_keyword(&cleaned)?.as_str() {
+        "TRUNCATE" => Some("这个操作会一次性清空整张表的数据"),
+        "DROP" => Some("这个操作会删除整张表（连同里面的数据）"),
+        "UPDATE" | "DELETE" => {
+            if top_level_keyword_pos(&cleaned, "where").is_none() {
+                Some("没有指定筛选范围，会作用于表中所有数据")
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// [`write_target`] 的结果：目标表（含别名，计数查询原样引用）+ 顶层 WHERE 条件。
+pub struct WriteTarget {
+    pub table: String,
+    pub where_clause: Option<String>,
+}
+
+/// 从 `UPDATE` / `DELETE` 抽出「目标表 + WHERE 条件」，供影响行数预估生成
+/// `SELECT COUNT(*) FROM {table} [WHERE …]`。
+///
+/// 只认单表形态：带顶层 `JOIN` / `FROM` / `USING` 的多表写法（MySQL/SQL Server
+/// 的多表 DELETE、SQL Server 的 UPDATE…FROM）返回 `None` —— 预估本来就是
+/// 尽力而为，解析不了就跳过检查，绝不硬编一个错误的 COUNT。
+pub fn write_target(sql: &str) -> Option<WriteTarget> {
+    let cleaned = strip_comments(sql);
+    let cleaned = cleaned.trim().trim_end_matches(';').trim();
+    let kw = first_keyword(cleaned)?;
+    let body = cleaned
+        .get(kw.len()..)
+        .map(str::trim_start)
+        .unwrap_or_default();
+    match kw.as_str() {
+        "UPDATE" => {
+            let set_at = top_level_keyword_pos(body, "set")?;
+            let table = body.get(..set_at)?.trim();
+            if table.is_empty() || has_table_join_keyword(table) {
+                return None;
+            }
+            let where_clause = top_level_keyword_pos(&body[set_at..], "where")
+                .and_then(|w| body.get(set_at + w + "where".len()..))
+                .map(str::trim)
+                .filter(|w| !w.is_empty());
+            Some(WriteTarget { table: table.to_string(), where_clause: where_clause.map(str::to_string) })
+        }
+        "DELETE" => {
+            // 只认 `DELETE FROM 表`：表名后面还有第二个顶层 FROM/USING ⇒ 多表形态，放弃
+            if !body[..].to_ascii_lowercase().starts_with("from") {
+                return None;
+            }
+            let rest = body.get("from".len()..).map(str::trim_start)?;
+            let where_at = top_level_keyword_pos(rest, "where");
+            let table = match where_at {
+                Some(w) => rest.get(..w)?.trim(),
+                None => rest.trim(),
+            };
+            if table.is_empty() || has_table_join_keyword(table) {
+                return None;
+            }
+            let where_clause = where_at
+                .and_then(|w| rest.get(w + "where".len()..))
+                .map(str::trim)
+                .filter(|w| !w.is_empty());
+            Some(WriteTarget { table: table.to_string(), where_clause: where_clause.map(str::to_string) })
+        }
+        _ => None,
+    }
+}
+
+/// 表引用片段里是否出现了多表写法的关键字（有就是解析不了的复合形态）。
+fn has_table_join_keyword(table: &str) -> bool {
+    for kw in ["join", "from", "using", ","] {
+        if top_level_keyword_pos(table, kw).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
+/// `SELECT` 里出现这些函数调用 ⇒ **不是只读**：它们会改服务端状态或终止别人的会话。
+///
+/// 为什么要单列：`SELECT` 整体按只读放行，而 PG/Kingbase **没有 `KILL` 语句** ——
+/// 界面上的「终止会话」就是 `select pg_terminate_backend(pid)`。不拦的话，
+/// 只读连接上照样能把别人的会话杀掉；而 MySQL / SQL Server 用的是 `KILL N`
+/// （首关键字 `KILL` ⇒ Unknown ⇒ 只读连接上被拦住），两边行为必须一致。
+const SIDE_EFFECT_CALLS: &[&str] = &["PG_TERMINATE_BACKEND", "PG_CANCEL_BACKEND"];
+
+/// 不带等号时**确实只读取**的 pragma（`PRAGMA x;` 是查它当前的值）。
+const READ_ONLY_PRAGMAS: &[&str] = &[
+    "TABLE_INFO",
+    "TABLE_XINFO",
+    "TABLE_LIST",
+    "DATABASE_LIST",
+    "INDEX_LIST",
+    "INDEX_XINFO",
+    "INDEX_INFO",
+    "FOREIGN_KEY_LIST",
+    "FOREIGN_KEY_CHECK",
+    "INTEGRITY_CHECK",
+    "QUICK_CHECK",
+    "FREELIST_COUNT",
+    "PAGE_COUNT",
+    "PAGE_SIZE",
+    "ENCODING",
+    "SCHEMA_VERSION",
+    "USER_VERSION",
+    "DATA_VERSION",
+    "COMPILE_OPTIONS",
+    "COLLATION_LIST",
+    "FUNCTION_LIST",
+    "PRAGMA_LIST",
+    "MODULE_LIST",
+    "CACHE_SIZE",
+];
+
 /// 判断单条语句的类型。
 pub fn classify(sql: &str) -> StatementKind {
     let upper = strip_comments(sql).to_ascii_uppercase();
@@ -239,7 +400,13 @@ pub fn classify(sql: &str) -> StatementKind {
     };
 
     match kw.as_str() {
-        "SELECT" | "VALUES" | "TABLE" | "SHOW" | "DESC" | "DESCRIBE" => StatementKind::Read,
+        "SELECT" | "VALUES" | "TABLE" | "SHOW" | "DESC" | "DESCRIBE" => {
+            if SIDE_EFFECT_CALLS.iter().any(|call| upper.contains(call)) {
+                StatementKind::Write
+            } else {
+                StatementKind::Read
+            }
+        }
         "EXPLAIN" => {
             // EXPLAIN ANALYZE 会真的执行语句 → 按非只读处理
             if upper.contains("ANALYZE") {
@@ -249,11 +416,17 @@ pub fn classify(sql: &str) -> StatementKind {
             }
         }
         "PRAGMA" => {
-            // PRAGMA x = y 是写；PRAGMA x 是读
+            // `PRAGMA x = y` 是写。不带等号时**只有明确只读的那几个**才是读 ——
+            // 反过来的写法（「不含等号即读」）会把 `PRAGMA wal_checkpoint(TRUNCATE)`、
+            // `PRAGMA optimize`、`PRAGMA shrink_memory` 这些**真的会动库文件**的判成读，
+            // 只读连接上执行它们就是「开了只读还能改库」。
+            // 认不出来的归 `Unknown`：只读连接拦下，可写连接照常放行（不误伤）。
             if upper.contains('=') {
                 StatementKind::Write
-            } else {
+            } else if READ_ONLY_PRAGMAS.iter().any(|name| upper.contains(name)) {
                 StatementKind::Read
+            } else {
+                StatementKind::Unknown
             }
         }
         "WITH" => {
@@ -546,6 +719,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn 危险语句识别() {
+        assert!(danger_reason("delete from t").is_some());
+        assert!(danger_reason("UPDATE t SET a = 1").is_some());
+        assert!(danger_reason("truncate table t").is_some());
+        assert!(danger_reason("drop table t").is_some());
+        // 有 WHERE 的不算危险
+        assert!(danger_reason("delete from t where id = 1").is_none());
+        assert!(danger_reason("update t set a = 1 where id = 1").is_none());
+        // WHERE 藏在字符串/子查询里不算顶层 WHERE
+        assert!(danger_reason("update t set a = 'x where y'").is_some());
+        assert!(danger_reason("delete from t where id in (select id from u where x = 1)").is_none());
+        // 别的语句不归它管
+        assert!(danger_reason("select * from t").is_none());
+        assert!(danger_reason("insert into t values (1)").is_none());
+    }
+
+    #[test]
+    fn 写目标解析() {
+        let t = write_target("DELETE FROM `sales` WHERE id = 1").unwrap();
+        assert_eq!(t.table, "`sales`");
+        assert_eq!(t.where_clause.as_deref(), Some("id = 1"));
+
+        let t = write_target("update t set a = 1, b = 2 where x > 10;").unwrap();
+        assert_eq!(t.table, "t");
+        assert_eq!(t.where_clause.as_deref(), Some("x > 10"));
+
+        // 无 WHERE ⇒ 全表计数
+        let t = write_target("delete from t").unwrap();
+        assert!(t.where_clause.is_none());
+
+        // 别名要带进计数查询（WHERE 里可能引用别名）
+        let t = write_target("update t as a set x = 1 where a.y = 2").unwrap();
+        assert_eq!(t.table, "t as a");
+
+        // 复合形态解析不了 ⇒ None（预估跳过，不硬编错误的 COUNT）
+        assert!(write_target("delete t1 from t1 join t2 on t1.id = t2.id").is_none());
+        // SET 里带子查询无碍：影响行数就是 `COUNT(*) FROM t`
+        assert!(write_target("update t set a = (select max(x) from u)").is_some());
+        assert!(write_target("insert into t values (1)").is_none());
+    }
+
+    #[test]
     fn 按分号拆分并保留引号内的分号() {
         assert_eq!(
             split_statements("select 1; select 2"),
@@ -572,6 +787,36 @@ mod tests {
             split_statements("select 'it''s; fine'"),
             vec!["select 'it''s; fine'"]
         );
+    }
+
+    /// SELECT 里调用会改服务端状态的函数 ⇒ **不是只读**。
+    ///
+    /// 钉的是实机语义：PG/Kingbase 没有 `KILL` 语句，界面上的「终止会话」就是
+    /// `select pg_terminate_backend(pid)`。判成只读的话，只读连接上照样能把会话杀掉；
+    /// 而 MySQL / SQL Server 的 `KILL N` 在只读连接上是被拦住的 —— 两边必须一致。
+    #[test]
+    fn select_里的终止会话函数不是只读() {
+        assert!(!is_read_only("select pg_terminate_backend(12345)"));
+        assert!(!is_read_only("SELECT pg_cancel_backend(pid) FROM pg_stat_activity"));
+        // 普通查询不受影响
+        assert!(is_read_only("select pid, state from pg_stat_activity"));
+        assert!(is_read_only("select count(*) from t"));
+    }
+
+    /// 不带等号的 PRAGMA：只有明确只读的那几个算读，会动库文件的归「不确定」。
+    ///
+    /// 「不确定」的处理是安全的：只读连接拦下，可写连接照常放行（不误伤）。
+    #[test]
+    fn 会动库文件的_pragma_不算只读() {
+        assert!(is_read_only("PRAGMA table_info(t)"));
+        assert!(is_read_only("PRAGMA foreign_key_check"));
+        assert!(is_read_only("PRAGMA integrity_check"));
+        assert!(!is_read_only("PRAGMA wal_checkpoint(TRUNCATE)"));
+        assert!(!is_read_only("PRAGMA optimize"));
+        assert!(!is_read_only("PRAGMA shrink_memory"));
+        assert!(!is_read_only("PRAGMA incremental_vacuum"));
+        // 带等号本来就是写
+        assert!(!is_read_only("PRAGMA journal_mode = WAL"));
     }
 
     #[test]

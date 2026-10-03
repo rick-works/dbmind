@@ -30,12 +30,15 @@ mod safety;
 mod sql;
 mod statement;
 mod storage;
+// SSH 隧道：连接是否要经跳板机，是「连数据库」这件事的一部分，
+// 所以放在内核 —— 四个壳共用同一套行为（见模块文档）。
+pub mod tunnel;
 mod types;
 
 pub use agent::{
-    availability_all, driver_artifact_url, driver_artifact_url_with_base, driver_dir, driver_dirs,
-    driver_jar_name, driver_upload_target, has_host_for, install_driver_jar, installed_driver_jars,
-    AgentAvailability, AgentHost, AgentHostSpec, AGENTS_DIR_ENV, MAVEN_CENTRAL,
+    availability_all, bundled_native_auth_dir, driver_artifact_url, driver_artifact_url_with_base,
+    driver_dir, driver_dirs, driver_jar_name, driver_upload_target, has_host_for,
+    install_driver_jar, installed_driver_jars, driver_mirror_base, native_arch, AgentAvailability, AgentHost, AgentHostSpec, AGENTS_DIR_ENV, MAVEN_CENTRAL,
 };
 pub use cancel::{CancelRegistry, CancelToken};
 pub use drivers::{builtin_kinds, unimplemented_driver, Driver, DriverRegistry, QueryCall};
@@ -56,7 +59,7 @@ pub use storage::{
 pub use types::{
     AccessContext, CellValue, ColumnDetail, ColumnMeta, ConnectReport, ConnectionConfig, ConnectionRecord,
     HistoryEntry, HistoryStatus, NewHistoryEntry, QueryOptions, QueryRequest, QueryResult, SchemaCacheInfo,
-    TableInfo, TableKind,
+    TableInfo, TableKind, EXTRA_SHADOW_FOR,
 };
 
 // `ConnectionKind` 及全部类型元数据由 build.rs 从 YAML 生成，直接展开到 crate 根。

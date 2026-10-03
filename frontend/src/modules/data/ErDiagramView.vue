@@ -3,6 +3,14 @@
     <div class="er-toolbar">
       <span class="er-title"><el-icon><Connection /></el-icon>{{ $t('er.title', { db: database }) }}</span>
       <el-input v-model="keyword" size="small" clearable :placeholder="$t('er.searchPlaceholder')" :prefix-icon="Search" style="width:180px" />
+      <!--「按命名约定推导」这句注解跟着**搜索框**排，不再单独占一整行：
+          它是常驻说明，占一行会把画布白白压矮 30px，而信息量只有一句。
+          文案可能偏长（各家库的提示语不同），所以 ellipsis 截断 + title 兜底 ——
+          窄窗口下它先让步，右边的缩放/导出按钮不会被挤走。 -->
+      <span v-if="note" class="er-note-inline" :title="note">
+        <el-icon><InfoFilled /></el-icon>
+        <span class="er-note-text">{{ note }}</span>
+      </span>
       <span class="er-spacer" />
       <el-button-group>
         <el-button size="small" :icon="ZoomOut" @click="zoomBy(0.9)" :title="$t('er.zoomOut')" />
@@ -13,7 +21,6 @@
       <el-button size="small" :icon="Download" @click="exportSvg">SVG</el-button>
       <el-button size="small" :icon="Download" @click="exportPng">PNG</el-button>
     </div>
-    <div v-if="note" class="er-note"><el-icon><InfoFilled /></el-icon>{{ note }}</div>
     <div ref="canvasWrapRef" class="er-canvas" @wheel.prevent="onWheel" @mousedown="onBgDown">
       <svg ref="svgRef" class="er-svg">
         <defs>
@@ -427,7 +434,10 @@ onBeforeUnmount(() => { unsubscribeTheme && unsubscribeTheme() })
 .er-toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--dc-border); background: var(--dc-bg-soft); }
 .er-title { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; color: var(--dc-text); }
 .er-spacer { flex: 1; }
-.er-note { display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 13px; color: var(--dc-warning); background: var(--dc-warning-wash); border-bottom: 1px solid var(--el-border-color-lighter); }
+/* 搜索框后面那句注解（原来是一整行横幅）：小字、warning 色（说明"这是推断、不是外键"），
+   不占整行也不抢注意力；太窄时自己截断，把空间让给右边的按钮。 */
+.er-note-inline { display: inline-flex; align-items: center; gap: 4px; min-width: 0; font-size: 12px; color: var(--dc-warning); }
+.er-note-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .er-canvas {
   --er-grid: rgba(255,255,255,.07);
   position: relative;

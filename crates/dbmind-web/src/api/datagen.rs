@@ -36,13 +36,15 @@ use crate::api::export::sql_literal;
 use crate::api::{blocking, require_record, Params};
 use crate::AppState;
 
-/// 单次生成的行数上限。
-///
-/// 前端输入框允许填很大的数，但造数是要真的写库的：给个上限，
-/// 让「不小心填了 100000000」变成一句明确的报错，而不是把库和内存一起拖死。
-const MAX_ROWS: u64 = 500_000;
-/// 一批写多少行（一条 INSERT 里放多少个值元组）。
+/// 一批写多少行（一条 INSERT 里放多少个值元组）—— 默认值，不是上限；
+/// 用户要多少给多少，只有**每条语句**的方言硬限制必须守（见 `MAX_TUPLES_PER_INSERT`）。
 const DEFAULT_BATCH: u64 = 500;
+/// 每条 INSERT 语句允许的**值元组**数上限 —— 这是数据库引擎的硬限制，拼多了直接报错：
+/// SQL Server 一条多行 INSERT 最多 1000 行（错误 10738：行值表达式的数目超出了允许的最大值）。
+/// 其它方言没有这个数，给 u64::MAX（实际仍受 batch 约束）。
+fn max_tuples_per_insert(dialect: Dialect) -> u64 {
+    if dialect.kind.key() == "sqlserver" { 1000 } else { u64::MAX }
+}
 
 // ------------------------------------------------------------------ 请求
 
@@ -675,7 +677,7 @@ async fn table_columns(
     }
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let table_name = table.to_string();
     let columns = blocking(move || engine.list_columns_fresh(&target, &table_name)).await?;
     if columns.is_empty() {
@@ -689,7 +691,7 @@ async fn table_columns(
 
 async fn run_sql(state: &AppState, conn: &str, database: &str, sql: &str) -> Result<(), XError> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let request = QueryRequest {
         read_only: None,
         connection: target,
@@ -700,6 +702,8 @@ async fn run_sql(state: &AppState, conn: &str, database: &str, sql: &str) -> Res
         },
         execution_id: None,
         session: Some("internal:browse".to_string()),
+        // 生成测试数据是界面功能驱动的写入（不是用户在编辑器里敲的 SQL）：不进查询历史
+        internal: true,
     };
     blocking(move || engine.execute(request, AccessContext::Web)).await?;
     Ok(())
@@ -802,10 +806,11 @@ pub async fn start(
         other => return Err(XError::bad_request(format!("不支持的 mode：{other}"))),
     }
     let record = require_record(&state, &conn).await?;
-    let rows = body.rows.unwrap_or(100).clamp(1, MAX_ROWS);
+    // 行数**不设上限**（用户明确要求）：造多少行是业务决定，进度/取消机制本身就能兜住大任务；
+    let rows = body.rows.unwrap_or(100).max(1);
     let types = table_columns(&state, &conn, &body.database, &body.table).await?;
     let (planned, notices) = plan(&body.columns, &types)?;
-    let batch = body.batch_size.unwrap_or(DEFAULT_BATCH).clamp(1, 5000);
+    let batch = body.batch_size.unwrap_or(DEFAULT_BATCH).max(1);
     let seed = body.seed.unwrap_or_else(|| {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -854,7 +859,9 @@ pub async fn start(
             }
 
             let multi = supports_multi_row(dialect);
-            let step = if multi { batch } else { 1 };
+            // 每条语句的行数 = 用户批大小，但**必须再被方言硬限制夹住**：
+            // SQL Server 一条 INSERT 超过 1000 行值直接报 10738（真机踩过：批 5000 全炸）。
+            let step = if multi { batch.min(max_tuples_per_insert(dialect)) } else { 1 };
             let started = std::time::Instant::now();
             let mut written = 0u64;
             while written < rows {

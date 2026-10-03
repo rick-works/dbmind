@@ -91,6 +91,32 @@
                 <!-- SQL 代码块的操作按钮由 markdown 渲染器生成（每段一个），这里做点击委托 -->
                 <div v-else class="ai-markdown" v-html="renderMd(m.content, !m.streaming)"
                      @click="onMdSqlAction($event, m.content)"></div>
+                <!-- 技能结果消息（数据字典 / 数据洞察）保留导出入口：与对话一致的形态，但能落文件 -->
+                <div v-if="m.exportMd" class="msg-export">
+                  <el-dropdown trigger="click" placement="bottom-end" popper-class="ai-model-dropdown"
+                               @command="(f) => exportDoc(m.exportMd, f, m.exportTitle || '')">
+                    <button class="msg-export-btn" type="button" :disabled="!!exporting" :title="$t('ai.exportAsFile')">
+                      <el-icon><Download /></el-icon>{{ $t('qa.exportBtn') }}<el-icon class="res-export-caret"><ArrowDown /></el-icon>
+                    </button>
+                    <template #dropdown>
+                      <div class="ai-dd-head">{{ $t('ai.exportAs') }}</div>
+                      <el-dropdown-menu>
+                        <el-dropdown-item command="md">
+                          <el-icon class="skills-ic"><Notebook /></el-icon><span class="skills-name">{{ $t('ai.fmtMd') }}</span>
+                        </el-dropdown-item>
+                        <el-dropdown-item command="docx">
+                          <el-icon class="skills-ic"><DocumentCopy /></el-icon><span class="skills-name">{{ $t('ai.fmtDocx') }}</span>
+                        </el-dropdown-item>
+                        <el-dropdown-item command="xlsx">
+                          <el-icon class="skills-ic"><Grid /></el-icon><span class="skills-name">{{ $t('ai.fmtXlsx') }}</span>
+                        </el-dropdown-item>
+                        <el-dropdown-item command="pdf">
+                          <el-icon class="skills-ic"><Notebook /></el-icon><span class="skills-name">{{ $t('ai.fmtPdf') }}</span>
+                        </el-dropdown-item>
+                      </el-dropdown-menu>
+                    </template>
+                  </el-dropdown>
+                </div>
                 <!-- 流式输出中：明确提示「还在生成」，避免用户误以为已经答完；可随时停下 -->
                 <div v-if="m.role !== 'user' && m.streaming && m.content" class="streaming-hint">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
@@ -150,82 +176,10 @@
             </div>
           </template>
 
-          <!-- 高级技能（表健康巡检 / 表数据洞察）：统一渲染 Markdown 结论，并可导出文件 -->
-          <template v-else-if="isAdvancedSkill">
-            <div v-if="advResult" class="res-card">
-              <el-dropdown class="res-export-float" trigger="click" placement="bottom-end"
-                           popper-class="ai-model-dropdown"
-                           @command="(f) => exportDoc(advResult, f)">
-                <button class="res-export" type="button" :disabled="!!exporting" :title="$t('ai.exportAsFile')">
-                  <el-icon><Download /></el-icon>{{ $t('qa.exportBtn') }}<el-icon class="res-export-caret"><ArrowDown /></el-icon>
-                </button>
-                <template #dropdown>
-                  <div class="ai-dd-head">{{ $t('ai.exportAs') }}</div>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="md">
-                      <el-icon class="skills-ic"><Notebook /></el-icon><span class="skills-name">{{ $t('ai.fmtMd') }}</span>
-                    </el-dropdown-item>
-                    <el-dropdown-item command="docx">
-                      <el-icon class="skills-ic"><DocumentCopy /></el-icon><span class="skills-name">{{ $t('ai.fmtDocx') }}</span>
-                    </el-dropdown-item>
-                    <el-dropdown-item command="xlsx">
-                      <el-icon class="skills-ic"><Grid /></el-icon><span class="skills-name">{{ $t('ai.fmtXlsx') }}</span>
-                    </el-dropdown-item>
-                    <el-dropdown-item command="pdf">
-                      <el-icon class="skills-ic"><Notebook /></el-icon><span class="skills-name">{{ $t('ai.fmtPdf') }}</span>
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-              <div class="ai-markdown" v-html="renderMd(advResult, true)"
-                   @click="onMdSqlAction($event, advResult)"></div>
-            </div>
-            <div v-else-if="advLoading" class="res-loading">
-              <el-icon class="is-loading"><Loading /></el-icon>
-              <span>{{ tab === 'patrol' ? $t('ai.patrolling') : $t('ai.analyzing') }}</span>
-            </div>
-          </template>
-
-          <!-- 知识入库：体检 → 优化 → 建档 → 报告的多阶段流水线，实现见 KbIngestPanel.vue -->
           <template v-else-if="isKbIngest">
             <KbIngestPanel @open-knowledge="emit('open-knowledge')" />
           </template>
 
-          <!-- 数据字典：Markdown 渲染 + 导出 Markdown / Word / Excel / PDF -->
-          <template v-else-if="tab === 'dictionary'">
-            <div v-if="dictResult" class="res-card">
-              <!-- 导出按钮浮在卡片右上角，与文档标题同一行（标题由 Markdown 正文自带，这里不再重复） -->
-              <el-dropdown class="res-export-float" trigger="click" placement="bottom-end"
-                           popper-class="ai-model-dropdown"
-                           @command="(f) => exportDoc(dictResult, f, $t('ai.tabDictionary'))">
-                <button class="res-export" type="button" :disabled="!!exporting" :title="$t('ai.exportAsFile')">
-                  <el-icon><Download /></el-icon>{{ $t('qa.exportBtn') }}<el-icon class="res-export-caret"><ArrowDown /></el-icon>
-                </button>
-                <template #dropdown>
-                  <div class="ai-dd-head">{{ $t('ai.exportAs') }}</div>
-                  <el-dropdown-menu>
-                    <el-dropdown-item command="md">
-                      <el-icon class="skills-ic"><Notebook /></el-icon><span class="skills-name">{{ $t('ai.fmtMd') }}</span>
-                    </el-dropdown-item>
-                    <el-dropdown-item command="docx">
-                      <el-icon class="skills-ic"><DocumentCopy /></el-icon><span class="skills-name">{{ $t('ai.fmtDocx') }}</span>
-                    </el-dropdown-item>
-                    <el-dropdown-item command="xlsx">
-                      <el-icon class="skills-ic"><Grid /></el-icon><span class="skills-name">{{ $t('ai.fmtXlsx') }}</span>
-                    </el-dropdown-item>
-                    <el-dropdown-item command="pdf">
-                      <el-icon class="skills-ic"><Notebook /></el-icon><span class="skills-name">{{ $t('ai.fmtPdf') }}</span>
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-              <div class="ai-markdown" v-html="renderMd(dictResult, true)"
-                   @click="onMdSqlAction($event, dictResult)"></div>
-            </div>
-            <div v-else-if="dictLoading" class="res-loading">
-              <el-icon class="is-loading"><Loading /></el-icon><span>{{ $t('ai.generatingDict') }}</span>
-            </div>
-          </template>
 
         </div>
 
@@ -429,9 +383,9 @@
 <script setup>
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Star, Aim, DataAnalysis, Loading, ArrowDown, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone } from '@element-plus/icons-vue'
-import { aiChat, aiChatStream, aiAgent, aiDataDict, aiInsight, aiPatrol, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, kbList, kbSearch } from '../../api'
+import { aiChat, aiChatStream, aiDataDict, aiInsight, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, kbList, kbSearch } from '../../api'
 import KbIngestPanel from './KbIngestPanel.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { t, te } from '../../utils/i18n'
@@ -474,9 +428,7 @@ const tab = ref('chat')
 // ⚠️ 必须是 computed：写死成普通数组只会在模块加载时求值一次，之后切语言不会跟着变
 const tabs = computed(() => [
   { key: 'chat', label: t('ai.tabChat'), icon: ChatDotRound, desc: t('ai.tabChatDesc') },
-  { key: 'agent', label: t('ai.tabAgent'), icon: Cpu, desc: t('ai.tabAgentDesc') },
   { key: 'dictionary', label: t('ai.tabDictionary'), icon: Notebook, desc: t('ai.tabDictionaryDesc') },
-  { key: 'patrol', label: t('ai.tabPatrol'), icon: Star, desc: t('ai.tabPatrolDesc') },
   { key: 'insight', label: t('ai.tabInsight'), icon: Grid, desc: t('ai.tabInsightDesc') },
   { key: 'kbIngest', label: t('ai.tabKbIngest'), icon: Collection, desc: t('ai.tabKbIngestDesc') }
 ])
@@ -502,17 +454,25 @@ const onSkillVisible = (visible) => {
 /** 选择 Skill：切换能力（下拉自动收起） */
 const pickSkill = (key) => { tab.value = key }
 
+/** 技能运行的错误统一走这里：AI 服务未配置这类「去设置里弄一下」的引导性错误
+ *  弹确认框（带「前往设置」直达），其余照常 toast —— 用户不用再自己找设置入口。 */
+const aiError = (message) => {
+  const text = message == null ? '' : String(message)
+  if (/请先在「设置」|Enable and configure the AI service/.test(text)) {
+    ElMessageBox.confirm(text, t('sqlq.aiNotConfiguredTitle'), {
+      confirmButtonText: t('sqlq.gotoAiSettings'),
+      cancelButtonText: t('common.cancel'),
+      type: 'warning',
+    }).then(() => window.dispatchEvent(new CustomEvent('dc-open-settings', { detail: { tab: 'ai' } }))).catch(() => {})
+    return
+  }
+  ElMessage.error(text || t('ai.runFailed'))
+}
+
 /** 对话类 Skill（走消息流，而不是一次性结果卡片） */
-const isChatSkill = computed(() => tab.value === 'chat' || tab.value === 'agent')
-
-/** 高级技能（结果统一渲染成 Markdown 分析报告，并支持导出文件） */
-const isAdvancedSkill = computed(() => ['insight', 'patrol'].includes(tab.value))
-
-/** 知识入库：不走对话流，是一条「上传 → 分析 → 确认」的独立流程 */
+const isChatSkill = computed(() =>
+  ['chat', 'dictionary', 'insight'].includes(tab.value))
 const isKbIngest = computed(() => tab.value === 'kbIngest')
-
-// 切换技能时清掉上一技能的结论，避免串台
-watch(tab, () => { advResult.value = '' })
 
 /** 统一输入框：所有 Skill 共用，行为由当前 Skill 决定 */
 const aiInput = ref('')
@@ -520,9 +480,7 @@ const aiInput = ref('')
 /** 各 Skill 的输入框提示语 */
 const PLACEHOLDERS = computed(() => ({
   chat: t('ai.phChat'),
-  agent: t('ai.phAgent'),
   dictionary: t('ai.phDictionary'),
-  patrol: t('ai.phPatrol'),
   insight: t('ai.phInsight')
 }))
 const composePlaceholder = computed(() => PLACEHOLDERS.value[tab.value] || t('ai.inputPlaceholder'))
@@ -533,10 +491,6 @@ const contextLabel = computed(() => {
   const name = conn?.name || conn?.type || props.conn?.name || props.conn?.type || ''
   return [name, ctxDatabase.value, ctxSchema.value, ctxTable.value].filter(Boolean).join(' · ')
 })
-
-// 高级技能（诊断 / 优化 / 索引 / 洞察 / 巡检）共用一个 Markdown 结果
-const advResult = ref('')
-const advLoading = ref(false)
 
 /** 输入框实例（点击示例后聚焦用） */
 const inputRef = ref(null)
@@ -709,7 +663,11 @@ const renderMd = (text, sqlActions = false) => {
   const key = (sqlActions ? '1' : '0') + '\u0000' + src
   const hit = mdCache.get(key)
   if (hit !== undefined) return hit
-  const html = renderMarkdown(src, { sqlActions })
+  let html = renderMarkdown(src, { sqlActions })
+  // 引导性错误（AI 服务未配置这类「去设置里弄一下」的消息）→ 消息尾部追加直达链接，
+  // 点击由气泡上的委托（onMdSqlAction）转成打开设置。只匹配已知的固定文案，不碰其它内容。
+  const goto = /请先在「设置」|启用并配置 AI 服务|Enable and configure the AI service/.test(src) ? 'ai' : ''
+  if (goto) html += `<a class="md-goto" data-goto="${goto}" href="javascript:;">${t('ai.gotoSettings')} →</a>`
   if (mdCache.size > 300) mdCache.clear()
   mdCache.set(key, html)
   return html
@@ -719,9 +677,7 @@ const renderMd = (text, sqlActions = false) => {
 
 /** 各能力页签的一句话说明（作为命令副标题） */
 const TAB_DESC = computed(() => ({
-  agent: t('ai.hintAgent'),
   insight: t('ai.hintInsight'),
-  patrol: t('ai.hintPatrol'),
   dictionary: t('ai.hintDictionary'),
   kbIngest: t('ai.hintKbIngest')
 }))
@@ -745,9 +701,9 @@ const PANEL_CMDS = computed(() => [
 
 /** 全部命令 = 技能切换（由 tabs 自动派生）+ 面板直达，按分组顺序排列 */
 const slashCommands = computed(() => [
-  ...tabs.filter(t => t.key !== 'chat').map(t => ({
-    key: 'tab:' + t.key, label: t.label, desc: TAB_DESC.value[t.key] || '', icon: t.icon,
-    group: t('ai.cmdGroupSkills'), action: 'tab', target: t.key
+  ...tabs.value.filter(sk => sk.key !== 'chat').map(sk => ({
+    key: 'tab:' + sk.key, label: sk.label, desc: TAB_DESC.value[sk.key] || '', icon: sk.icon,
+    group: t('ai.cmdGroupSkills'), action: 'tab', target: sk.key
   })),
   ...PANEL_CMDS.value.map(c => ({ ...c, key: 'panel:' + c.key, group: t('ai.cmdGroupPanel'), action: 'panel', target: c.key }))
 ])
@@ -976,6 +932,7 @@ const warmCtx = () => {
   if (!ctxConnId.value) return
   clearTimeout(warmTimer)
   warmTimer = setTimeout(() => {
+    if (!aiReady.value) return // 未配置 AI：预热请求也不发，别给控制台留 400 痕迹
     aiWarmup({ connectionId: ctxConnId.value, database: ctxEffectiveDatabase.value }).catch(() => { /* 预热失败不影响使用 */ })
   }, 300)
 }
@@ -1143,13 +1100,15 @@ const onCtxCommand = async (value) => {
   closeCtxDrop()
 }
 
-// 数据字典（输入统一取自 aiInput）
-const dictLoading = ref(false)
-const dictResult = ref('')
+/** AI 服务是否已配置（loadAiModels 从 /api/ai/config 拿 enabled）：
+ *  未配置时不发任何自动请求（预热等）—— 400 的响应无论怎么降噪，
+ *  浏览器 Network 面板与控制台总有痕迹；不发才是干净的。 */
+const aiReady = ref(false)
 
 const loadAiModels = async () => {
   try {
     const cfg = await getAiConfig()
+  aiReady.value = cfg.enabled === true
     if (cfg && Array.isArray(cfg.models)) {
       aiModels.value = cfg.models
       // 默认使用 Auto 自动选择模式（后端自动挑选最优可用模型，失败自动切换）
@@ -1190,52 +1149,70 @@ onBeforeUnmount(() => {
   stopStream() // 卸载时中断进行中的流式请求，别让它在后台继续读
 })
 
-/** 巡检结果 → Markdown（用表格承载，导出的 Excel 才是规整的明细表） */
-const renderPatrol = (res) => {
-  const issues = res.issues || []
-  const head = t('ai.patrolHead', { scanned: res.scanned || 0, total: res.totalTables || 0 }) +
-    t('ai.patrolFound', { high: res.high || 0, medium: res.medium || 0, low: res.low || 0 })
-  if (!issues.length) return t('ai.patrolNoIssue', { head })
-  // 级别名：字典里有就用译文，没有就原样（后端以后新增的级别不会显示成键名）
-const LEVELS = { high: 'ai.lv.high', medium: 'ai.lv.medium', low: 'ai.lv.low', info: 'ai.lv.info' }
-const levelLabel = (key) => (key && te(LEVELS[key])) ? t(LEVELS[key]) : (key || '')
-  const esc = (s) => String(s == null ? '' : s).replace(/\|/g, '\\|').replace(/\n/g, ' ')
-  const rows = issues.map(i => '| ' + [
-    esc(i.table), esc(i.column && i.column !== '-' ? i.column : ''),
-    esc(levelLabel(i.level)), esc(i.message)
-  ].join(' | ') + ' |')
-  return t('ai.patrolTitle', { head })
-    + t('ai.patrolTableHead') + rows.join('\n')
-}
-
-/** 高级技能统一执行：表健康巡检 / 表数据洞察（结果都是 Markdown，可直接导出文件） */
-const runAdvancedSkill = async () => {
-  const text = aiInput.value.trim()
-  if (tab.value === 'insight' && !text) { ElMessage.warning(t('ai.needTableName')); return }
+/** 高级技能统一执行：表数据洞察（结果都是 Markdown，可直接导出文件）。
+ *  健康巡检已挪到「数据治理」——它是纯规则扫描，不依赖 AI 模型。 */
+/** 数据洞察：结果直接进聊天流，消息上保留导出入口（表名必填） */
+const runInsightInChat = async (table) => {
+  if (!table) { ElMessage.warning(t('ai.needTableName')); return }
   if (!ctxConnId.value) { ElMessage.warning(t('ai.needConn')); return }
-  advLoading.value = true
-  advResult.value = ''
+  if (!ctxEffectiveDatabase.value) { ElMessage.warning(t('ai.needDatabase')); return }
+  messages.value.push({ role: 'user', content: table })
+  aiInput.value = ''
+  chatLoading.value = true; startWait(); scrollBottom()
   try {
-    if (tab.value === 'insight') {
-      const res = await aiInsight({
-        connectionId: ctxConnId.value, database: ctxEffectiveDatabase.value,
-        table: text, question: '', modelId: selectedModelId.value
-      })
-      if (!res?.success) throw new Error(res?.message || t('ai.analyzeFailed'))
-      advResult.value = (res.content || '') +
-        (res.stats ? t('ai.statsSection', { stats: res.stats }) : '')
-    } else if (tab.value === 'patrol') {
-      // 不传 maxTables：后端按「整库」扫描（上限 500 张）
-      const res = await aiPatrol({
-        connectionId: ctxConnId.value, database: ctxEffectiveDatabase.value
-      })
-      if (!res?.success) throw new Error(res?.message || t('ai.patrolFailed'))
-      advResult.value = renderPatrol(res)
+    const res = await aiInsight({
+      connectionId: ctxConnId.value, database: ctxEffectiveDatabase.value,
+      table, question: '', modelId: selectedModelId.value
+    })
+    if (res && res.success) {
+      const md = (res.content || '') + (res.stats ? t('ai.statsSection', { stats: res.stats }) : '')
+      messages.value.push({ role: 'assistant', content: md, exportMd: md, exportTitle: t('ai.tabInsight'), usage: res.usage || null })
+    } else {
+      messages.value.push({ role: 'assistant', content: '❌ ' + (res?.message || t('ai.analyzeFailed')) })
     }
   } catch (e) {
-    ElMessage.error(e?.message || e?.toString?.() || t('ai.runFailed'))
+    messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || e?.toString?.() || t('ai.analyzeFailed')) })
   }
-  advLoading.value = false
+  chatLoading.value = false; stopWait(); scrollBottom()
+}
+
+/** 数据字典：同上，进聊天流（表名可留空 = 整库） */
+/** 数据字典的聊天流预览：只展示前 5 张表的小节，其余以一句提示带过（全量在导出文件里） */
+const trimDictPreview = (md, maxTables = 5) => {
+  const src = md == null ? '' : String(md)
+  const parts = src.split(/\n(?=#{2,3}\s*表\s)/)
+  const sections = parts.slice(1)
+  if (sections.length <= maxTables) return src
+  const rest = sections.length - maxTables
+  const kept = parts[0] + '\n' + sections.slice(0, maxTables).join('\n')
+  return kept + '\n\n> 📄 其余 ' + rest + ' 张表未在此展示 —— 点上方「导出」可下载完整数据字典。'
+}
+const runDictInChat = async (text) => {
+  if (!ctxConnId.value) { ElMessage.warning(t('ai.needConn')); return }
+  // 与巡检/洞察同一条规则：没选库会回落到连接默认库（SQL Server 是 master），
+  // 生成的字典会全是系统表 —— 明确让用户先选库
+  if (!ctxEffectiveDatabase.value) { ElMessage.warning(t('ai.needDatabase')); return }
+  messages.value.push({ role: 'user', content: text || t('ai.tabDictionary') })
+  aiInput.value = ''
+  chatLoading.value = true; startWait(); scrollBottom()
+  try {
+    const tables = text.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean)
+    const res = await aiDataDict({
+      connectionId: ctxConnId.value,
+      database: ctxEffectiveDatabase.value,
+      tables,
+      modelId: selectedModelId.value
+    })
+    if (res && res.success) {
+      const md = res.content || ''
+      messages.value.push({ role: 'assistant', content: trimDictPreview(md), exportMd: md, exportTitle: t('ai.tabDictionary'), usage: res.usage || null })
+    } else {
+      messages.value.push({ role: 'assistant', content: '❌ ' + (res?.message || t('ai.genFailed')) })
+    }
+  } catch (e) {
+    messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || e?.toString?.() || t('ai.genFailed')) })
+  }
+  chatLoading.value = false; stopWait(); scrollBottom()
 }
 
 /**
@@ -1262,9 +1239,16 @@ const withTableScope = (text) => {
 
 const sendChat = async () => {
   const text = aiInput.value.trim()
-  if (!text || chatLoading.value) return
-  // 「智能分析」页签走 Agent（带只读工具），其余走普通对话（优先流式）
-  const useAgent = tab.value === 'agent'
+  if (chatLoading.value) return
+  // 数据字典 / 数据洞察：结果直接进聊天流（与对话同一形态），消息上保留导出入口。
+  // 数据字典允许空输入（= 整库），所以分派必须放在空文本检查**之前**；
+  // 数据洞察的表名必填校验在 runInsightInChat 内部（为空时提示，不发请求）。
+  if (tab.value === 'dictionary') return runDictInChat(text)
+  if (tab.value === 'insight') {
+    if (!text) { ElMessage.warning(t('ai.needTableName')); return }
+    return runInsightInChat(text)
+  }
+  if (!text) return
   // 多轮上下文：本次提问之前的对话轮次。
   // 只带最近 8 条（约 4 轮）——历史越长，请求体越大、模型首字越慢，收益却很低
   const history = messages.value
@@ -1291,39 +1275,29 @@ const sendChat = async () => {
     kbIds: kbIdsForQuery()
   }
   try {
-    if (useAgent) {
-      const res = await aiAgent(payload)
-      if (res && res.success) {
-        const m = reactive({ role: 'assistant', content: res.content, steps: res.steps || [], sources: [], usage: res.usage || null })
-        messages.value.push(m)
-        srcPromise.then(s => { m.sources = s })
-      } else {
-        messages.value.push({ role: 'assistant', content: '❌ ' + (res?.message || t('ai.requestFailed')) })
-      }
-    } else {
-      // 流式优先：逐段追加；不可用时回退普通请求。
-      // 两个关键点（否则会「后端早返回完，界面还在慢慢磨」）：
-      // 1) msg 必须是 reactive 代理：push 进数组的原始对象再直接改属性不会触发重渲染，
-      //    之前全靠 waitingSec 秒表每秒顺带触发一次，结束时 streaming=false 甚至永远不生效；
-      // 2) 分片极细（实测约 1~3 字一片，一条回答上百片），按 60ms 合批刷新，
-      //    避免每片都全量重解析 Markdown + 重建 innerHTML 把主线程打满。
-      const msg = reactive({ role: 'assistant', content: '', streaming: true })
-      messages.value.push(msg)
-      chatLoading.value = false
-      let acc = ''
-      let flushTimer = null
-      const flush = () => {
-        flushTimer = null
-        if (msg.content === acc) return
-        msg.content = acc
-        scrollBottom()
-      }
-      const finalFlush = () => {
-        if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null }
-        flush()
-      }
-      try {
-        streamCtrl = new AbortController()
+    // 流式优先：逐段追加；不可用时回退普通请求。
+    // 两个关键点（否则会「后端早返回完，界面还在慢慢磨」）：
+    // 1) msg 必须是 reactive 代理：push 进数组的原始对象再直接改属性不会触发重渲染，
+    //    之前全靠 waitingSec 秒表每秒顺带触发一次，结束时 streaming=false 甚至永远不生效；
+    // 2) 分片极细（实测约 1~3 字一片，一条回答上百片），按 60ms 合批刷新，
+    //    避免每片都全量重解析 Markdown + 重建 innerHTML 把主线程打满。
+    const msg = reactive({ role: 'assistant', content: '', streaming: true })
+    messages.value.push(msg)
+    chatLoading.value = false
+    let acc = ''
+    let flushTimer = null
+    const flush = () => {
+      flushTimer = null
+      if (msg.content === acc) return
+      msg.content = acc
+      scrollBottom()
+    }
+    const finalFlush = () => {
+      if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null }
+      flush()
+    }
+    try {
+      streamCtrl = new AbortController()
         await aiChatStream(payload, (d) => {
           acc += d
           if (flushTimer !== null) return
@@ -1345,17 +1319,21 @@ const sendChat = async () => {
         } else {
           messages.value.pop()
           chatLoading.value = true
-          const res = await aiChat(payload)
-          if (res && res.success) {
-            const m = reactive({ role: 'assistant', content: res.content, sources: [], usage: res.usage || null })
-            messages.value.push(m)
-            srcPromise.then(s => { m.sources = s })
-          } else {
-            messages.value.push({ role: 'assistant', content: '❌ ' + (res?.message || t('ai.requestFailed')) })
+          // 回退请求也要兜住：这里在 catch 块内，再抛出去就是 uncaught（控制台刷屏的真凶之一）
+          try {
+            const res = await aiChat(payload)
+            if (res && res.success) {
+              const m = reactive({ role: 'assistant', content: res.content, sources: [], usage: res.usage || null })
+              messages.value.push(m)
+              srcPromise.then(s => { m.sources = s })
+            } else {
+              messages.value.push({ role: 'assistant', content: '❌ ' + (res?.message || t('ai.requestFailed')) })
+            }
+          } catch (e2) {
+            messages.value.push({ role: 'assistant', content: '❌ ' + (e2?.message || t('ai.requestFailed')) })
           }
         }
       }
-    }
   } catch (e) {
     messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || e?.toString?.() || t('ai.requestFailed')) })
   }
@@ -1394,6 +1372,14 @@ const onProbeInsert = (text) => {
  * 所以这里用同一份原文重新抽取 SQL。
  */
 const onMdSqlAction = (e, md) => {
+  // 「前往设置」直达链接（引导性错误消息尾部）：广播给 MainView 打开设置并定位页签
+  const go = e.target instanceof Element ? e.target.closest('[data-goto]') : null
+  if (go) {
+    e.preventDefault()
+    e.stopPropagation()
+    window.dispatchEvent(new CustomEvent('dc-open-settings', { detail: { tab: go.dataset.goto } }))
+    return
+  }
   const btn = e.target instanceof Element ? e.target.closest('[data-sql-act]') : null
   if (!btn) return
   e.preventDefault()
@@ -1413,26 +1399,6 @@ const onMdSqlAction = (e, md) => {
   else emit('insert-sql', text, true) // 第二个参数 true：插入编辑器后直接执行
 }
 
-const doDataDict = async () => {
-  if (!ctxConnId.value) { ElMessage.warning(t('ai.needConn')); return }
-  dictLoading.value = true
-  dictResult.value = ''
-  try {
-    // 中英文逗号都当分隔符：中文输入法下很容易打出「，」，对用户来说和「,」是一回事（这是输入解析，不是界面文案）
-  const tables = aiInput.value.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean)
-    const res = await aiDataDict({
-      connectionId: ctxConnId.value,
-      database: ctxEffectiveDatabase.value,
-      tables,
-      modelId: selectedModelId.value
-    })
-    if (res && res.success) dictResult.value = res.content || ''
-    else ElMessage.error(res?.message || t('ai.genFailed'))
-  } catch (e) {
-    ElMessage.error(e?.message || e?.toString?.() || t('ai.genFailed'))
-  }
-  dictLoading.value = false
-}
 
 // 导出走统一的「用户选位置」（原来这里自己造 <a download>，只能落到下载目录）
 
@@ -1472,26 +1438,24 @@ const exportDoc = async (markdown, format, nameHint) => {
 // ===== 统一执行入口与状态（按当前 Skill 分派） =====
 
 /** 任一 Skill 正在执行 → 主按钮 loading */
-const busy = computed(() =>
-  chatLoading.value || advLoading.value || dictLoading.value)
+const busy = computed(() => chatLoading.value)
 
-/** 是否已有结果（对话消息 / 字典 / 高级技能任一） */
-const hasResult = computed(() =>
-  messages.value.length > 0 || !!dictResult.value || !!advResult.value)
+/** 是否已有结果（有对话消息即有） */
+const hasResult = computed(() => messages.value.length > 0)
 /** 空态默认面板：无结果且不在执行中时展示。
  *  知识入库自带完整的引导界面，再叠一层欢迎页只会把它的入口挤到下面去。 */
 const showWelcome = computed(() => !hasResult.value && !busy.value && !isKbIngest.value)
 
 /** 主按钮文案随 Skill 变化 */
 const RUN_LABEL = computed(() => ({
-  chat: t('ai.runChat'), agent: t('ai.runAgent'), dictionary: t('ai.runDictionary'), patrol: t('ai.runPatrol'), insight: t('ai.runInsight')
+  chat: t('ai.runChat'), dictionary: t('ai.runDictionary'), insight: t('ai.runInsight')
 }))
 const runLabel = computed(() => RUN_LABEL.value[tab.value] || t('ai.runChat'))
 
-/** 是否可执行：数据字典 / 巡检允许留空（整库） */
+/** 是否可执行：数据字典允许留空（整库） */
 const canRun = computed(() => {
   if (busy.value) return false
-  if (tab.value === 'dictionary' || tab.value === 'patrol') return !!ctxConnId.value
+  if (tab.value === 'dictionary') return !!ctxConnId.value
   return !!aiInput.value.trim()
 })
 
@@ -1500,10 +1464,8 @@ const runSkill = async () => {
   if (!canRun.value) return
   switch (tab.value) {
     case 'chat':
-    case 'agent': await sendChat(); break
     case 'insight':
-    case 'patrol': await runAdvancedSkill(); break
-    case 'dictionary': await doDataDict(); break
+    case 'dictionary': await sendChat(); break
   }
 }
 
@@ -1511,6 +1473,24 @@ onMounted(() => { scrollBottom(); loadConnList(); warmCtx(); loadKbMeta() })
 </script>
 
 <style scoped>
+/* 技能结果消息（数据字典 / 数据洞察）的导出按钮：气泡内右对齐的小按钮 */
+.msg-export { display: flex; justify-content: flex-end; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--dc-border); }
+.msg-export-btn {
+  display: inline-flex; align-items: center; gap: 4px; cursor: pointer;
+  font: inherit; font-size: 12px; color: var(--dc-text-dim);
+  background: transparent; border: 1px solid var(--dc-border); border-radius: 6px; padding: 3px 10px;
+  transition: color .15s ease, border-color .15s ease;
+}
+.msg-export-btn:hover { color: var(--dc-primary); border-color: var(--dc-primary); }
+.msg-export-btn:disabled { opacity: .5; cursor: default; }
+
+/* 引导性错误消息尾部的「前往设置」直达链接（data-goto，点击走气泡上的委托） */
+.ai-markdown :deep(.md-goto) {
+  display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 6px;
+  font-size: 12px; color: var(--dc-primary); background: transparent;
+  text-decoration: none; transition: background .15s ease;
+}
+.ai-markdown :deep(.md-goto:hover) { background: var(--dc-bg-soft); }
 .ai-panel { height: 100%; display: flex; flex-direction: column; position: relative; overflow: visible; background: var(--dc-bg-sidebar, var(--dc-bg-soft)); }
 /* 中央工作区形态：占满主区，由 .ai-main 横向拆成「导航 | 内容」。
    注意：外层（MainView）给 .ai-panel 加了 flex-shrink:0 与 border-left（那是给右侧栏用的），

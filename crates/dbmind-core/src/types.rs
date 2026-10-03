@@ -222,6 +222,32 @@ pub struct ConnectionRecord {
     pub updated_at: String,
 }
 
+/// 「影子连接」标记（存在连接记录的 `extra` 里）：值是**主连接 id**。
+///
+/// 影子连接是跨库浏览按需生成的记录 —— 同配置、只把库名换掉，让任何类型都能跨库
+/// （见 web 层的 `scope`）。用户看不到它（`/api/connections` 会滤掉），
+/// 但它是一条**真实的独立连接**，于是它也有自己的 `read_only` 字段。
+///
+/// 用 `extra` 而不是新加列：`connections` 表只有 `CREATE TABLE IF NOT EXISTS`、
+/// **没有迁移机制**，加列在老库上不会生效（同 `maxConnections` 的理由）。
+pub const EXTRA_SHADOW_FOR: &str = "shadowFor";
+
+/// 连接的**目录/分组**（存在 `extra` 里）：树按它分组，自由文本（含预置的 `PROD` 等）。
+///
+/// 字段名是 `group`（中文界面叫「分组」）—— 曾经叫 `environment`，与「环境标识」
+/// `env`（[`EXTRA_ENV_BADGE`]）太容易混淆。旧数据里的 `environment` 键在读取侧**仍然认**
+/// （见 `ConnectionRecord::group`），保存时写入新键，老库无需迁移。
+pub const EXTRA_GROUP: &str = "group";
+/// 旧版分组键：只读不写，保存连接时自然消失。
+pub const EXTRA_GROUP_LEGACY: &str = "environment";
+
+/// 连接的**环境标识角标**（存在 `extra` 里）：`DEV` / `TEST` / `PROD` / `STAGING` / `UAT`。
+///
+/// ⚠️ 与 [`EXTRA_GROUP`] 是**两个不同的字段**：分组决定连接挂在树的哪个目录下，
+/// 角标是那枚彩色小徽章（红=生产）。生产保护闸门**两个都认** ——
+/// 以前只查目录，用户把角标设成生产、目录还在「本地分组」，保护就完全没生效（真机踩过）。
+pub const EXTRA_ENV_BADGE: &str = "env";
+
 impl ConnectionRecord {
     pub fn name(&self) -> &str {
         &self.config.name
@@ -229,6 +255,49 @@ impl ConnectionRecord {
 
     pub fn kind(&self) -> ConnectionKind {
         self.config.kind
+    }
+
+    /// 这条记录是影子的话，返回它所属的**主连接 id**。
+    pub fn shadow_of(&self) -> Option<&str> {
+        self.config
+            .extra
+            .as_ref()?
+            .get(EXTRA_SHADOW_FOR)?
+            .as_str()
+    }
+
+    /// 是不是影子记录（用户看不到的那些按需生成的记录）。
+    pub fn is_shadow(&self) -> bool {
+        self.shadow_of().is_some()
+    }
+
+    /// 连接的**分组**（树上的目录）：新键 `group`，旧数据回落到 `environment`。
+    pub fn group(&self) -> Option<String> {
+        let extra = self.config.extra.as_ref()?;
+        extra
+            .get(EXTRA_GROUP)
+            .or_else(|| extra.get(EXTRA_GROUP_LEGACY))
+            .and_then(|v| v.as_str())
+            .map(String::from)
+    }
+
+    /// 这条数据源有没有被标注为**生产环境**。
+    ///
+    /// 三处标注**任一**为生产即算：环境标识角标（`extra.env`，树上的红徽章）、
+    /// 分组（`extra.group`，预置的 `PROD` 目录）、旧版分组键（`environment`）。
+    /// 大小写不敏感，也认手输的「生产」字样。生产保护闸门的作用域就靠它划定；
+    /// 影子连接继承主连接的 `extra`，跨库浏览到的生产库同样受保护。
+    pub fn is_prod_environment(&self) -> bool {
+        let is_prod = |s: &str| s.eq_ignore_ascii_case("PROD") || s == "生产";
+        [EXTRA_ENV_BADGE, EXTRA_GROUP, EXTRA_GROUP_LEGACY].iter().any(|key| {
+            self.config
+                .extra
+                .as_ref()
+                .and_then(|v| v.get(*key))
+                .and_then(|v| v.as_str())
+                .map(|s| is_prod(s))
+                .unwrap_or(false)
+        })
     }
 }
 
@@ -383,6 +452,22 @@ pub struct QueryRequest {
     /// 缺省 `None` = 行为与以前完全一致，用户自己的查询不受影响。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub read_only: Option<bool>,
+    /// **程序自己发的调用**（结构浏览、元数据探测、表格预览分页、界面功能驱动的 DDL/DML、
+    /// 智能体的中间查询）标记它 ⇒ 内核**不写查询历史**。
+    ///
+    /// 历史是「**用户执行过什么**」的账本（首页的「最近查询 / 查询统计」就是受害者）：元数据
+    /// 与浏览语句混进来会把真实操作淹掉 —— 实机上表现为「最近查询里全是 `show databases`
+    /// 和取表选项的 `select table_name …`，看不到我敲过的 SQL」。
+    ///
+    /// 为什么单开一个字段、而不是复用会话键前缀（`INTERNAL_SESSION_PREFIX`）：
+    /// **亲和键会参与会话键的计算**，给这类语句打上 `internal:` 前缀会让它们落到另一条物理会话上
+    /// （实测一次 `/tables` 因此建了两条连接、各 ~300ms，见 `meta::run_sql_in` 的注释）。
+    /// 「记不记历史」与「走哪条连接」是两件事，不该互相绑。
+    ///
+    /// 判据由调用方**显式声明**，不去猜 SQL 文本长什么样：猜错的两个方向都很糟 ——
+    /// 漏标 = 真实操作被淹没；误标 = 用户敲过的语句查不到。
+    #[serde(default)]
+    pub internal: bool,
 }
 
 impl QueryRequest {
@@ -394,7 +479,14 @@ impl QueryRequest {
             execution_id: None,
             session: None,
             read_only: None,
+            internal: false,
         }
+    }
+
+    /// 标记这是**程序自己发的调用** ⇒ 不进查询历史（见 `internal` 字段的说明）。
+    pub fn with_internal(mut self, internal: bool) -> Self {
+        self.internal = internal;
+        self
     }
 
     /// 绑定会话亲和（界面每个页面一个键 ⇒ 每个标签页一条数据库会话）。

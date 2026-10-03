@@ -147,7 +147,6 @@ pub async fn schema_context(
     focus: &[String],
 ) -> XResult<SchemaContext> {
     const MAX_TABLE_NAMES: usize = 120;
-    const MAX_DETAIL_TABLES: usize = 6;
 
     let record = require_record(state, conn).await?;
     let kind = record.kind();
@@ -155,7 +154,7 @@ pub async fn schema_context(
 
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let tables_target = target.clone();
     let tables = blocking(move || engine.list_tables_fresh(&tables_target)).await?;
     let names: Vec<String> = tables
@@ -164,17 +163,17 @@ pub async fn schema_context(
         .map(|table| table.name.clone())
         .collect();
 
-    // 相关表：调用方点名的优先，其余按表名与提问的字符重合度粗略排一下
-    let mut detail: Vec<String> = focus
+    // 相关表：调用方点名的优先，**点名多少给多少**（数据字典按 tables 请求 ——
+    // 以前只带 6 张的列结构，模型对其余表只能写「未提供字段」，真机踩过）。
+    // 点名多少张就带多少张的列结构；没点名（整库字典/问答）= 全部表。
+    // 上限 MAX_TABLE_NAMES 之外不进 detail（上下文规模由 MAX_TABLE_NAMES 间接控制）。
+    let detail: Vec<String> = focus
         .iter()
         .filter(|name| names.iter().any(|known| known.eq_ignore_ascii_case(name)))
         .cloned()
         .collect();
-    if detail.is_empty() {
-        detail = names.iter().take(MAX_DETAIL_TABLES).cloned().collect();
-    } else {
-        detail.truncate(MAX_DETAIL_TABLES);
-    }
+    let detail = if detail.is_empty() { names.clone() } else { detail };
+    // 点名表不设上限：数据字典要的就是全部列结构；上下文规模由调用方（前端）控制
 
     let mut text = String::new();
     text.push_str(&format!(
@@ -203,7 +202,7 @@ pub async fn schema_context(
 
     let mut columns_total = 0;
     for table in &detail {
-        let engine = state.engine.clone();
+        let engine = state.engine();
         // 注意别用 `let target = target.clone()`：那会**影子覆盖**外层变量，
         // 循环体后面（取样例数据那段）就再也拿不到原始 target 了
         let columns_target = target.clone();

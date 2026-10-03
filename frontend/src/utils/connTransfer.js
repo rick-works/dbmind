@@ -60,12 +60,12 @@ export function parseConnectionBundle(rawText) {
 }
 
 /** 导入用的一条 payload：清掉 id 与口令（空口令 = 没设置，不会覆盖已存的） */
-export function importPayloadOf(item, environment) {
+export function importPayloadOf(item, group) {
   const payload = sanitizeConnection(item)
   payload.id = ''
   payload.password = ''
   payload.sshPassword = ''
-  if (environment) payload.environment = environment
+  if (group) payload.group = group
   return payload
 }
 

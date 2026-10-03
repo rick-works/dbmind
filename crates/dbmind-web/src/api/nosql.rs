@@ -49,7 +49,7 @@ pub async fn databases(
 
         // 没配编号（或填的不是数字）⇒ 树里列出**全部**库（db0…dbN-1）：
         // 没配就是「连的这个实例」，只列有键的那几个会让空库无处可点。
-        let engine = state.engine.clone();
+        let engine = state.engine();
         // 闭包是 `move` 的：连接 id 克隆一份进去，后面还要拿它去问 CONFIG（同 `documents` 的写法）
         let connection = id.clone();
         let keyspace: Vec<String> = blocking(move || engine.list_tables_fresh(&connection))
@@ -89,7 +89,7 @@ pub async fn databases(
 /// 拿不到就返回 `None` —— 托管 Redis（ElastiCache 这类）常把 CONFIG 禁掉，
 /// 那种情况下不能退化成「假设 16 个」：会凭空列出服务端根本不存在的库。
 async fn redis_db_count(state: &AppState, id: &str) -> Option<usize> {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let request = QueryRequest {
         read_only: None,
         connection: id.to_string(),
@@ -102,6 +102,8 @@ async fn redis_db_count(state: &AppState, id: &str) -> Option<usize> {
         // 不要会话亲和：Redis 是单连接池类型，泳道亲和本来就会被忽略，写在这里只会
         // 让人以为"这条查询独占一条会话"。保持 `None` 与结构浏览落在同一条泳道上。
         session: None,
+        // 探测语句（问服务端配了几个库）—— 不进查询历史，见 `QueryRequest::internal`
+        internal: true,
     };
     let result = blocking(move || engine.execute(request, AccessContext::Web))
         .await
@@ -141,7 +143,7 @@ pub async fn collections(
         .unwrap_or_default()
         .to_string();
     let record = require_record(&state, &id).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
 
     if record.kind() == ConnectionKind::Redis {
         // 键就是「集合」；内核的列元数据正好是「键 + 类型」（SCAN 上限 500）
@@ -199,7 +201,7 @@ pub async fn documents(
             .filter(|p| *p > 0)
             .unwrap_or(1);
         let pattern = params.get("keyword").unwrap_or_default().to_string();
-        let engine = state.engine.clone();
+        let engine = state.engine();
         let connection = id.clone();
         let db = database.to_string();
         let keys = blocking(move || engine.list_columns_fresh(&connection, &db)).await?;
@@ -264,7 +266,7 @@ pub async fn documents(
         _ => format!("select * from {collection} limit {size}"),
     };
 
-    let engine = state.engine.clone();
+    let engine = state.engine();
     // 与结构浏览共用同一条会话。三种协议的宿主行为不同，必须分开看
     // （`ConnectionKind::metadata_connection_scoped` / `single_connection_pool` 是判据）：
     //
@@ -280,16 +282,20 @@ pub async fn documents(
         dbmind_core::RuntimeProtocol::Redis => None,
         _ => Some(true),
     };
+    // 全局默认上限再夹一层（与 SQL 编辑器同一把尺子，见 `query::max_rows_cap`）
+    let max_rows = size.min(crate::api::query::max_rows_cap(&state).await);
     let request = QueryRequest {
         read_only,
         connection: id,
         sql: command,
         options: QueryOptions {
-            max_rows: size,
+            max_rows,
             timeout_ms: 60_000,
         },
         execution_id: None,
         session: None,
+        // 集合内容的浏览语句（展开集合时自动发的）—— 不进查询历史
+        internal: true,
     };
     Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
         Ok(result) => shape::query_result_json(&result),
@@ -342,7 +348,7 @@ fn quote_key(key: &str) -> String {
 
 /// 跑一条命令并把**数组回复**取成「一行一个值」（`MGET` 用）。失败返回 `None`（该列留空）。
 async fn redis_array_reply(state: &AppState, id: &str, sql: String) -> Option<Vec<Option<String>>> {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let request = QueryRequest {
         read_only: None,
         connection: id.to_string(),
@@ -353,6 +359,8 @@ async fn redis_array_reply(state: &AppState, id: &str, sql: String) -> Option<Ve
         },
         execution_id: None,
         session: Some(SESSION_BROWSE.to_string()),
+        // 浏览辅助语句（MGET 之类的取数）—— 不进查询历史
+        internal: true,
     };
     let result = blocking(move || engine.execute(request, AccessContext::Web))
         .await
@@ -372,7 +380,7 @@ async fn redis_array_reply(state: &AppState, id: &str, sql: String) -> Option<Ve
 
 /// 把一条读命令的结果压成一行文本：哈希 ⇒ `f1=v1, f2=v2`，列表 ⇒ `a, b, c`。
 async fn redis_reply_summary(state: &AppState, id: &str, sql: String) -> Option<String> {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let request = QueryRequest {
         read_only: None,
         connection: id.to_string(),
@@ -383,6 +391,8 @@ async fn redis_reply_summary(state: &AppState, id: &str, sql: String) -> Option<
         },
         execution_id: None,
         session: Some(SESSION_BROWSE.to_string()),
+        // 浏览辅助语句（哈希/列表压成一行摘要）—— 不进查询历史
+        internal: true,
     };
     let result = blocking(move || engine.execute(request, AccessContext::Web))
         .await
@@ -479,7 +489,7 @@ async fn redis_read_command(
     key: &str,
     size: usize,
 ) -> XResult<String> {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let db = database.to_string();
     let connection = id.to_string();
     let columns = blocking(move || engine.list_columns_fresh(&connection, &db))
@@ -576,7 +586,7 @@ pub async fn execute(
             return Ok(Json(shape::query_failure_json(&message, 0)));
         }
     }
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let execution_id = dbmind_core::DbMindEngine::next_execution_id();
     let request = QueryRequest {
         read_only: None,
@@ -591,6 +601,8 @@ pub async fn execute(
         // 刻意留在独立泳道上（Redis 上是唯一的泳道，因为它是单连接池），
         // 不与只读的结构浏览会话合并 —— 扫的是「隔离写与读」，不是省那一条连接。
         session: Some(SESSION_BROWSE.to_string()),
+        // 但**要进查询历史**：这是用户在 NoSQL 控制台里自己敲的命令（与 SQL 编辑器同性质）
+        internal: false,
     };
     Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
         Ok(result) => shape::query_result_json(&result),
@@ -623,7 +635,7 @@ async fn redis_select_db(state: &AppState, id: &str, database: &str) -> Result<(
         "" => "0".to_string(),
         given => given.to_string(),
     };
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let request = QueryRequest {
         read_only: None,
         connection: id.to_string(),
@@ -634,6 +646,8 @@ async fn redis_select_db(state: &AppState, id: &str, database: &str) -> Result<(
         },
         execution_id: None,
         session: Some(SESSION_BROWSE.to_string()),
+        // 内部管线（切库用的 `SELECT n`）—— 不进查询历史
+        internal: true,
     };
     blocking(move || engine.execute(request, AccessContext::Web))
         .await
@@ -646,7 +660,7 @@ pub async fn cancel(
     State(state): State<AppState>,
     Path(execution_id): Path<String>,
 ) -> XResult<Json<Value>> {
-    let cancelled = state.engine.cancel(&execution_id);
+    let cancelled = state.engine().cancel(&execution_id);
     Ok(Json(json!({
         "success": true,
         "cancelled": cancelled,

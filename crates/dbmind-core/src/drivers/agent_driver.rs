@@ -59,6 +59,19 @@ pub struct AgentDriver {
 }
 
 impl AgentDriver {
+    /// 断开本类型当前所有**空闲**会话（权限/密码在数据库侧变更后调用，
+    /// 旧会话还带着旧的全局权限快照；见 `session_pool::SessionPool::close_all_idle`）。
+    pub fn disconnect_all(&self) -> usize {
+        self.pool.close_all_idle()
+    }
+
+    /// 只断**指定连接**的空闲会话：泳道 key 的第二段是连接名（`kind|name|host|...`），
+    /// 按它过滤就不会误伤同类型其它连接（它们共用一个驱动池）。
+    pub fn disconnect_connection(&self, name: &str) -> usize {
+        self.pool
+            .close_idle_where(|lane| lane.split('|').nth(1) == Some(name))
+    }
+
     pub fn new(kind: ConnectionKind, host: Arc<AgentHost>, budget: Arc<SessionBudget>) -> Self {
         // 配额回收空闲会话时要**真的把连接关掉**，而「怎么关」只有驱动知道（它拿着宿主）。
         // 所以做成回调交给预算：预算负责挑「最久未用的空闲会话」，驱动负责关。
@@ -115,9 +128,17 @@ impl AgentDriver {
     }
 
     /// 会话键：连接配置决定会话，只读标记也参与（只读会话在宿主侧也是只读的）。
+    ///
+    /// 开了 SSH 隧道时**隧道配置也进键**：宿主会话里存的是「127.0.0.1:<本地端口>」这条
+    /// 已经建好的连接，改了跳板机（换了地址、用户、私钥）却不换会话键的话，
+    /// 界面会继续用旧隧道那条会话 —— 用户看到的是"改了 SSH 配置没生效"。
+    /// 指纹是纯计算（不连跳板机、不含口令），没开隧道时它是空的，键与以前逐字节一致。
     pub(crate) fn session_key(&self, config: &ConnectionConfig, read_only: bool) -> String {
+        let tunnel = crate::tunnel::tunnel_key(config)
+            .map(|key| format!("|{key}"))
+            .unwrap_or_default();
         format!(
-            "{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}{}",
             self.kind.key(),
             config.name,
             config.host.as_deref().unwrap_or("-"),
@@ -127,7 +148,8 @@ impl AgentDriver {
                 .unwrap_or_else(|| "-".into()),
             config.database.as_deref().unwrap_or("-"),
             config.resolved_file().unwrap_or("-"),
-            read_only
+            read_only,
+            tunnel
         )
     }
 
@@ -163,6 +185,29 @@ impl AgentDriver {
         read_only: bool,
     ) -> Result<Map<String, serde_json::Value>> {
         let agent_key = self.agent_key()?;
+        // SSH 隧道：把「宿主该连的地址」换成本地转发端口（跳板机由内核打通）。
+        // 宿主因此完全不需要知道 SSH 的存在，Java 与原生协议一视同仁。
+        // 取不到隧道（没开）就用原配置；建不通会**在这里**带着原因失败，
+        // 而不是让宿主去连一个没人转发的端口。
+        let tunneled = crate::tunnel::local_port_for(config)?;
+        let rewritten;
+        let target = match tunneled {
+            Some(port) => {
+                // 日志里给一句「这条连接是经隧道走的」：出问题时第一件要知道的
+                // 就是「到底走没走隧道」（描述文本里不含任何凭据）。
+                if let Some(desc) = crate::tunnel::describe(config) {
+                    tracing::debug!(
+                        target: "dbmind::agent",
+                        tunnel = %desc,
+                        local_port = port,
+                        "本次连接经 SSH 隧道"
+                    );
+                }
+                rewritten = crate::tunnel::with_local_endpoint(config, port);
+                &rewritten
+            }
+            None => config,
+        };
         let mut params = Map::new();
         params.insert("sessionId".to_string(), json!(session_key));
         params.insert("agentKey".to_string(), json!(agent_key));
@@ -187,7 +232,8 @@ impl AgentDriver {
                     format!("{} 缺少 jdbc.urlTemplate 声明", self.kind.label()),
                 )
             })?;
-            let url = agent::render_jdbc_url(template, config)?;
+            // 用 `target` 而不是 `config` 渲染：开了隧道时它指向 127.0.0.1:<本地端口>
+            let url = agent::render_jdbc_url(template, target)?;
             // Windows 上的「Windows 验证」走原生 SSPI，需要一份**不在驱动 jar 里**的原生库
             // （`mssql-jdbc_auth-<驱动版本>.x64.dll`）。缺了它驱动只会丢一句
             // 「没有为集成身份验证配置驱动程序」—— 既没说要哪个文件、也没说放哪里，
@@ -244,11 +290,12 @@ impl AgentDriver {
             }
         } else {
             // 原生协议：宿主自带驱动库，这里只给连接字段
-            params.insert("host".to_string(), json!(config.host));
-            params.insert("port".to_string(), json!(config.resolved_port().unwrap_or(0)));
-            params.insert("database".to_string(), json!(config.database));
-            params.insert("username".to_string(), json!(config.username));
-            params.insert("password".to_string(), json!(config.password));
+            // （同样用 `target`：开了隧道时它指向本地转发端口）
+            params.insert("host".to_string(), json!(target.host));
+            params.insert("port".to_string(), json!(target.resolved_port().unwrap_or(0)));
+            params.insert("database".to_string(), json!(target.database));
+            params.insert("username".to_string(), json!(target.username));
+            params.insert("password".to_string(), json!(target.password));
         }
         Ok(params)
     }
@@ -427,6 +474,15 @@ impl AgentDriver {
 impl Driver for AgentDriver {
     fn kind(&self) -> ConnectionKind {
         self.kind
+    }
+
+    fn disconnect_all(&self) -> usize {
+        // 与固有方法同体：dyn 分发（Registry 按类型调用）走这里
+        AgentDriver::disconnect_all(self)
+    }
+
+    fn disconnect_connection(&self, name: &str) -> usize {
+        AgentDriver::disconnect_connection(self, name)
     }
 
     fn test(&self, config: &ConnectionConfig, read_only: bool) -> Result<ConnectReport> {

@@ -60,7 +60,7 @@ pub async fn run_sql_in(
     let target = crate::api::scope::resolve(state, conn, database).await?;
     // 元数据也是「连上去查」：驱动没装就先下（离线时只失败一次，原因会被缓存）
     crate::api::driver::ensure_for_connection(state, &target).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let request = QueryRequest {
         connection: target,
         sql,
@@ -86,6 +86,48 @@ pub async fn run_sql_in(
         // 连接策略算 —— 标记不一致的话，会话键的第 7 段不同，照样是两条连接。
         // 这里的语句全是只读 SELECT，走只读会话既省一条连接，语义也更正确。
         read_only: Some(true),
+        // **不进查询历史**：这条路上跑的全是元数据 / 结构浏览 / 表格预览，
+        // 以及界面功能（表结构编辑、清空表、建用户、终止会话…）驱动的语句 ——
+        // 都不是「用户在 SQL 编辑器里敲的 SQL」。标记在**这个共用入口**上，
+        // 比让几十个调用方各自记得打标记可靠（首页「最近查询」曾被它们淹掉）。
+        internal: true,
+    };
+    blocking(move || engine.execute(request, AccessContext::Web)).await
+}
+
+/// 同 [`run_sql_in`]，但**跟随连接的读写策略**（`read_only: None`）——
+/// 给界面功能里那些**会写库**的语句用：还原、表结构编辑、清空/删除表、终止会话、建用户。
+///
+/// 为什么必须分开：`run_sql_in` 服务于结构浏览，走的是**只读会话**（省一条连接、语义也对）；
+/// 但 JDBC 的只读是**连到驱动上**的 —— MySQL 会直接拒绝
+/// `Connection is read-only. Queries leading to data modification are not allowed`。
+/// 还原曾因此全军覆没：连接明明**没开**只读开关，还原的第一句 `drop table if exists`
+/// 却被驱动拦下 —— 因为语句被塞进了结构浏览那条只读会话里。
+///
+/// 同样 `internal: true`（这些是界面功能驱动的语句，不是用户在编辑器里敲的 SQL）。
+pub async fn run_write_sql_in(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+    sql: String,
+    max_rows: usize,
+) -> XResult<QueryResult> {
+    let target = crate::api::scope::resolve(state, conn, database).await?;
+    crate::api::driver::ensure_for_connection(state, &target).await?;
+    let engine = state.engine();
+    let request = QueryRequest {
+        connection: target,
+        sql,
+        options: QueryOptions {
+            max_rows,
+            timeout_ms: 120_000,
+        },
+        execution_id: None,
+        session: None,
+        // 跟随连接策略：连接没标只读 ⇒ 可写会话（还原/改结构才落得下去）；
+        // 连接标了只读 ⇒ 语句在闸门就被拦下，根本走不到驱动。
+        read_only: None,
+        internal: true,
     };
     blocking(move || engine.execute(request, AccessContext::Web)).await
 }
@@ -129,7 +171,7 @@ async fn run_meta_sql(
 ) -> XResult<QueryResult> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     // 与结构浏览共用**同一条只读会话**。
     //
     // 这个函数查的全是只读元数据（库清单 / schema 清单 / 索引·过程·触发器分类 / 库级统计），
@@ -137,6 +179,7 @@ async fn run_meta_sql(
     // 两边对齐才只有一条物理连接 —— 否则同一库同一件事各占一条（各 ~300ms，见
     // `run_sql_in` 的同类注释与实测）。所以这里既去掉 `internal:browse` 亲和键
     // （它会参与会话键计算，正是分裂的原因），也把只读标记对齐。
+    // 另：元数据**不进查询历史**（`internal`），理由见 `run_sql_in`。
     let first = QueryRequest {
         read_only: Some(true),
         connection: target.clone(),
@@ -147,6 +190,7 @@ async fn run_meta_sql(
         },
         execution_id: None,
         session: None,
+        internal: true,
     };
     let engine_first = engine.clone();
     match run_kernel(move || engine_first.execute(first, AccessContext::Web)).await {
@@ -164,6 +208,7 @@ async fn run_meta_sql(
                 },
                 execution_id: None,
                 session: None,
+                internal: true,
             };
             blocking(move || engine.execute(retry, AccessContext::Web))
                 .await
@@ -506,6 +551,11 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
         "supportsImport": true,
         "supportsTableData": true,
         "supportsDdl": ddl_ok,
+        // 「能不能**执行** DDL」与「能不能**取回**建表语句」是两件事：
+        // DROP / TRUNCATE / 改名 这类操作所有 SQL 类都能跑（Derby、DB2 取不到 SHOW CREATE，
+        // 但 DROP TABLE 完全可用），NoSQL 类则完全没有这个概念。界面按它门控**写操作**，
+        // 不能拿 supportsDdl（= 取定义）当依据 —— 那会把 Derby / DB2 的删除表整个藏掉。
+        "supportsDDLExec": kind.is_jdbc() || kind.key() == "sqlite",
         "supported": kind.implemented(),
         // 结构编辑器要的键（ddlStyle / quoteStyle / supportsColumnModify / ...）——
         // 展开在顶层，界面按扁平键读取
@@ -553,17 +603,28 @@ pub async fn test(State(state): State<AppState>, Json(mut body): Json<Value>) ->
         .unwrap_or_default()
         .to_string();
 
-    let mut config = conn_api::config_from_body(&body)?;
     // 已保存的连接：口令拿不到明文，留空时用服务端存着的那份补齐；
-    // 只读标记同理 —— 它是**连接记录**上的属性（`ConnectionRecord.read_only`），不在配置里
+    // 只读标记同理 —— 它是**连接记录**上的属性（`ConnectionRecord.read_only`），不在配置里。
+    //
+    // **必须先取记录、再构造配置**：SSH 口令与私钥口令短语同样不回显，客户端交回来的
+    // 是空串，「空 = 沿用已存的那份」要靠 `existing` 里的 `extra.ssh` 才能判定。
+    // 顺序反了的话，编辑一条已配 SSH 的连接、不动口令直接点「测试连接」，
+    // 会得到一句「SSH 口令是空的」——而用户明明没改过它。
+    let existing = if id.is_empty() {
+        None
+    } else {
+        require_record(&state, &id).await.ok()
+    };
+    let mut config = conn_api::config_from_body(
+        &body,
+        existing.as_ref().and_then(|record| record.config.extra.as_ref()),
+    )?;
     let mut read_only = false;
-    if !id.is_empty() {
-        if let Ok(record) = require_record(&state, &id).await {
-            if config.password.is_none() {
-                config.password = record.config.password.clone();
-            }
-            read_only = record.read_only;
+    if let Some(record) = &existing {
+        if config.password.is_none() {
+            config.password = record.config.password.clone();
         }
+        read_only = record.read_only;
     }
     // 驱动没装就先把驱动下下来：连接弹窗上写着「首次连接将自动从 Maven 中心下载驱动」，
     // 这句话必须是真的 —— 否则用户点「测试连接」只会看到「驱动未就绪」，像是坏了。
@@ -571,7 +632,7 @@ pub async fn test(State(state): State<AppState>, Json(mut body): Json<Value>) ->
         return Ok(Json(json!({ "success": false, "message": err.message })));
     }
 
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let tested = blocking(move || engine.test_config(&config, read_only)).await;
 
     Ok(Json(match tested {
@@ -640,6 +701,9 @@ pub async fn databases(
                     .iter()
                     .map(first_column_text)
                     .filter(|name| !name.trim().is_empty())
+                    // Doris 2.1 的库列表会把**内置目录名（internal）**混进来 —— 它不是库
+                    //（访问报 Unknown database），树里会多出一个空壳「internal」节点，剔除
+                    .filter(|name| !(dialect.catalog_level() && name.eq_ignore_ascii_case(catalog.trim())))
                     .collect();
                 if !names.is_empty() {
                     return Ok(Json(json!(names)));
@@ -656,6 +720,8 @@ pub async fn databases(
                     .iter()
                     .map(first_column_text)
                     .filter(|name| !name.trim().is_empty())
+                    // 同上：catalog 方言下剔除与目录同名的泄漏条目（默认目录就是 internal）
+                    .filter(|name| !(dialect.catalog_level() && name.eq_ignore_ascii_case("internal")))
                     .collect();
                 if !names.is_empty() {
                     return Ok(Json(json!(names)));
@@ -752,7 +818,17 @@ pub async fn tables(
                         })
                     })
                     .collect();
-                return Ok(Json(Value::Array(tables)));
+                let mut payload = Value::Array(tables);
+                // 表选项回显（引擎 / 排序规则 / **表注释**）：上面那条 `tables_in_catalog`
+                // 只回名字与类型，注释得单独查。不补的后果与 schema 层级那条一样 ——
+                // 注释改完保存**确实成功**，重开表却还是空的 ⇒ 看着就是"修改不生效"。
+                if let Meta::Sql(sql) = dialect.table_options_in_catalog(catalog, db) {
+                    // 库名同样传空：SQL 已经用 `<catalog>.information_schema` 全限定（同上）
+                    if let Ok(result) = run_meta_sql(&state, &id, "", sql, META_MAX_ROWS).await {
+                        shape::merge_table_options(&mut payload, &rows_of(&result));
+                    }
+                }
+                return Ok(Json(payload));
             }
         }
     }
@@ -784,12 +860,24 @@ pub async fn tables(
                 })
             })
             .collect();
-        return Ok(Json(Value::Array(tables)));
+        let mut payload = Value::Array(tables);
+        // 表选项回显（**表注释**）：`tables_in_schema` 那条 SQL 不带注释，而这一层正是
+        // 最需要补的 —— SQL Server 的表注释存在 `sys.extended_properties` 里
+        // （mssql-jdbc **不填 REMARKS**，走 JDBC 的 getTables 永远拿不到），
+        // PG / Kingbase 的表注释在 `obj_description()` 里，同样不在列清单里。
+        // 不补的实测后果：注释改完保存**确实成功**（库里值变了），重开表却还是空的
+        // ⇒ 用户看到"修改表注释没用"。方言 SQL 取不到就保持原样，不影响列表本身。
+        if let Meta::Sql(sql) = dialect.table_options(schema) {
+            if let Ok(result) = run_meta_sql(&state, &id, &database, sql, META_MAX_ROWS).await {
+                shape::merge_table_options(&mut payload, &rows_of(&result));
+            }
+        }
+        return Ok(Json(payload));
     }
 
     // 表数据/元数据都按目标库查：切库靠影子连接（见 `scope`），这里只负责把库名传下去
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let mut tables = blocking(move || engine.list_tables_fresh(&target)).await?;
     // 行数：先给**估算值**（一次查询拿全库，不扫表），精确值由前端按需回填（`/table-count`）。
     // 内核的 `TableInfo.row_estimate` 各驱动都没填，所以这里按方言补一次；
@@ -819,61 +907,13 @@ pub async fn tables(
     // 改别的项保存时会顺手把引擎改掉；表注释则永远是空的）。
     // 取不到就保持原样（null，界面回退到默认），不影响列表本身。
     let mut payload = shape::tables_json(&tables);
-    if let Meta::Sql(sql) = dialect.table_options(&database) {
+    // schema 层级的类型在没有 schema 时（库名里没有点）也会落到这条路上，那时方言 SQL
+    // 要的是**模式名**（PG 的 `n.nspname`），给库名只会查不到 —— 取不到就当没有，
+    // 不会比原来更差。
+    let options_scope = schema.as_deref().unwrap_or(database.as_str());
+    if let Meta::Sql(sql) = dialect.table_options(options_scope) {
         if let Ok(result) = run_sql_in(&state, &id, &database, sql, META_MAX_ROWS).await {
-            // 方言的 SQL 用 `as <JSON 键>` 把键名定下来，这里**按查到什么补什么**：
-            // MySQL 补 engine/charset/comment，ClickHouse 补 engine/sortingKey/partitionKey/comment，
-            // PG/Oracle/SQL Server 只补 comment —— 各家能拿到的项本来就不同，不硬凑、也不写死键名。
-            // 白名单是必要的：方言 SQL 里可能还有别的列，不能让它们漏进接口。
-            const OPTION_KEYS: [&str; 6] = [
-                "engine",
-                "charset",
-                "collation",
-                "comment",
-                "sortingKey",
-                "partitionKey",
-            ];
-            let mut options: std::collections::HashMap<String, Map<String, Value>> =
-                std::collections::HashMap::new();
-            for row in rows_of(&result) {
-                let name = text_ci(&row, "table_name");
-                if name.is_empty() {
-                    continue;
-                }
-                let mut item = Map::new();
-                for (key, value) in row.iter() {
-                    let Some(canonical) = OPTION_KEYS
-                        .iter()
-                        .find(|known| known.eq_ignore_ascii_case(key))
-                    else {
-                        continue;
-                    };
-                    // 空串按「没有」处理：界面据此留空，而不是显示一个空值
-                    let text = value.as_str().unwrap_or("").trim().to_string();
-                    if !text.is_empty() {
-                        item.insert((*canonical).to_string(), json!(text));
-                    }
-                }
-                options.insert(name.to_ascii_lowercase(), item);
-            }
-            if let Some(list) = payload.as_array_mut() {
-                for item in list.iter_mut() {
-                    let Some(object) = item.as_object_mut() else {
-                        continue;
-                    };
-                    let name = object
-                        .get("name")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_lowercase();
-                    let Some(extra) = options.get(&name) else {
-                        continue;
-                    };
-                    for (key, value) in extra {
-                        object.insert(key.clone(), value.clone());
-                    }
-                }
-            }
+            shape::merge_table_options(&mut payload, &rows_of(&result));
         }
     }
     Ok(Json(payload))
@@ -962,7 +1002,7 @@ pub async fn columns(
         .ok_or_else(|| XError::bad_request("缺少 table 参数"))?;
     let database = params.get("database").unwrap_or_default();
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     // 表名要进闭包（移动），而下面补类型时还要再用一次，所以先复制一份
     let queried = table.clone();
     let mut columns = blocking(move || engine.list_columns_fresh(&target, &queried)).await?;
@@ -1167,7 +1207,7 @@ pub async fn search_objects(
 
     let database = params.get("database").unwrap_or_default();
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let connection = target.clone();
     let tables = blocking(move || engine.list_tables_fresh(&connection)).await?;
     let hit_tables: Vec<String> = tables
@@ -1181,7 +1221,7 @@ pub async fn search_objects(
         if columns.len() >= MAX_COLUMNS {
             break;
         }
-        let engine = state.engine.clone();
+        let engine = state.engine();
         let name = table.name.clone();
         let connection = target.clone();
         let cols = match blocking(move || engine.list_columns(&connection, &name)).await {
@@ -1206,8 +1246,11 @@ pub async fn search_objects(
 // ------------------------------------------------------------------ 表数据
 
 /// 「这张表在哪」——表名可能带 schema 前缀，逐段加引号。
+/// LIKE 模式里的通配符转义：用户文本里的 `%`/`_` 要按字面匹配，得先逃掉。
+/// **不转义单引号** —— 产出必然再过一遍 `dialect.literal`，那里会转；在这里先转
+/// 会被二次翻倍（`O'Brien` → `O''''Brien`），含引号的搜索永远匹配不到。
 fn escape_like(value: &str) -> String {
-    value.replace('\'', "''").replace('%', "\\%").replace('_', "\\_")
+    value.replace('%', "\\%").replace('_', "\\_")
 }
 
 /// 高级搜索里的一条条件 → SQL 片段。拼不出来（列名空、数值列填了非数字）就返回 None。
@@ -1349,7 +1392,7 @@ pub async fn data(
     let mut where_groups: Vec<String> = Vec::new();
 
     if !keyword.trim().is_empty() {
-        let engine = state.engine.clone();
+        let engine = state.engine();
         let name = table.clone();
         let connection = id.clone();
         let columns = blocking(move || engine.list_columns_fresh(&connection, &name)).await?;
@@ -1404,7 +1447,7 @@ pub async fn data(
     }
     sql.push_str(&format!(
         " {}",
-        dialect.limit_clause((page - 1) * size, size)
+        dialect.limit_clause(page.saturating_sub(1).saturating_mul(size), size)
     ));
 
     let result = match run_sql_in(&state, &id, &database, sql, size as usize).await {
@@ -1581,7 +1624,7 @@ pub async fn data_save(
     }
 
     let total = statements.len();
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let (affected, executed, error) = blocking(move || {
         let mut affected: i64 = 0;
         let mut executed = 0usize;
@@ -1596,6 +1639,9 @@ pub async fn data_save(
                 },
                 execution_id: None,
                 session: Some("internal:browse".to_string()),
+                // 表格「就地编辑」提交的增删改 —— 界面功能驱动的写入，不进查询历史
+                // （与编辑器里手写 INSERT/UPDATE 是两回事）
+                internal: true,
             };
             match engine.execute(request, AccessContext::Web) {
                 Ok(result) => {
@@ -1729,7 +1775,7 @@ async fn synthesize_ddl(
     dialect: Dialect,
 ) -> XResult<String> {
     let target = crate::api::scope::resolve(state, id, database).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let name = table.to_string();
     let mut columns = blocking(move || engine.list_columns_fresh(&target, &name)).await?;
     if columns.is_empty() {
@@ -1782,7 +1828,11 @@ pub(crate) fn looks_like_ddl(text: &str) -> bool {
 /// 2. 只有一列就用它（Oracle 的 `dbms_metadata.get_ddl` 出来的是长表达式当列名）；
 /// 3. 都不匹配时取**值最长的那一列** —— DDL 一定比表名、字符集之类的长，这条兜底
 ///    比"取第几列"稳得多。
-fn pick_ddl(result: &QueryResult) -> String {
+/// 从「`show create …` / `pg_get_*def`」这类结果里挑出**定义原文**那一列。
+///
+/// 备份的例程/触发器导出也用它（`backup::export_objects`）—— 定义怎么选列，
+/// 两处必须同一条规则，否则「查看定义」正常、备份文件里却是表名。
+pub(crate) fn pick_ddl(result: &QueryResult) -> String {
     let Some(row) = result.rows.first() else {
         return String::new();
     };
@@ -2117,7 +2167,8 @@ pub async fn alter(
     let mut executed = 0usize;
     let mut last = Value::Null;
     for (index, statement) in statements.iter().enumerate() {
-        match run_sql_in(&state, &id, &database, statement.clone(), 1).await {
+        // 表结构编辑是**写库**：走跟随连接策略的入口（只读会话会被驱动拒绝，见 run_write_sql_in）
+        match run_write_sql_in(&state, &id, &database, statement.clone(), 1).await {
             Ok(result) => {
                 executed += 1;
                 last = shape::query_result_json(&result);
@@ -2201,7 +2252,8 @@ pub async fn table_action(
     // （Microsoft 驱动用会话级的 `SET ROWCOUNT` 实现 `setMaxRows`），于是「清空表」
     // 只删掉 maxRows+1 行、接口照样回 success —— 静默少删。已在宿主侧修正：
     // 只有判定会返回结果集的语句才设上限（见 agents/dbmind-agent-jdbc 的 mayReturnRows）。
-    Ok(Json(match run_sql_in(&state, &id, database, sql, 1).await {
+    // 清空 / 截断 / 删除 / 重命名表都是写库：走跟随连接策略的入口
+    Ok(Json(match run_write_sql_in(&state, &id, database, sql, 1).await {
         Ok(result) => shape::query_result_json(&result),
         Err(err) => shape::query_failure_json(&err.message, 0),
     }))
@@ -2322,7 +2374,7 @@ pub async fn rename_object(
         .get("database")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    match run_sql_in(&state, &id, database, sql.clone(), 1).await {
+    match run_write_sql_in(&state, &id, database, sql.clone(), 1).await {
         Ok(_) => Ok(Json(json!({ "success": true, "message": format!("已重命名为「{new_name}」"), "sql": sql }))),
         Err(err) => Ok(Json(json!({ "success": false, "message": err.message, "sql": sql }))),
     }
@@ -2546,7 +2598,8 @@ pub async fn user_action(
         .collect();
     let mut done = 0usize;
     for statement in &statements {
-        if let Err(err) = run_sql_in(&state, &id, &database, statement.clone(), 1).await {
+        // 建/删用户、授权都是写库：走跟随连接策略的入口
+        if let Err(err) = run_write_sql_in(&state, &id, &database, statement.clone(), 1).await {
             // 同样要说清「第几条失败、前面几条已生效」——已建好的用户不会被自动回滚
             return Ok(Json(json!({
                 "success": false,
@@ -2577,6 +2630,11 @@ fn grant_line(
     account_user: &str,
     account_host: &str,
 ) -> Option<String> {
+    // ClickHouse：`show grants for` 的每行**本身就是**一条 GRANT 语句，
+    // 原样带回即可 —— 没有 scope/privilege 列，也不需要重组（单列结果）。
+    if dialect.kind.key() == "clickhouse" {
+        return row.values().find_map(Value::as_str).map(str::to_string);
+    }
     let scope = row.get("scope").and_then(Value::as_str).unwrap_or("");
     let privilege = row.get("privilege").and_then(Value::as_str).unwrap_or("");
     let db_name = row.get("db_name").and_then(Value::as_str).unwrap_or("");

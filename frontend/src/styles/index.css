@@ -299,6 +299,16 @@ input[type="number"] {
 .el-message-box__message p { white-space: pre-line; word-break: break-word; line-height: 1.7; max-height: 55vh; overflow-y: auto; }
 .el-message-box__headerbtn .el-message-box__close { color: var(--dc-text-dim); }
 .el-message-box__headerbtn .el-message-box__close:hover { color: var(--dc-text); }
+/* 确认按钮（如「前往设置」）：primary 在深浅两套主题下都会带一圈浅色 border/outline，
+   截图里是条白线 —— 填充色本身就够区分层级，边框与焦点环一并去掉 */
+.el-message-box__btns .el-button--primary,
+.el-message-box__btns .el-button--primary:hover,
+.el-message-box__btns .el-button--primary:focus,
+.el-message-box__btns .el-button--primary:focus-visible {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
 .el-message { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; border-radius: 8px !important; box-shadow: var(--dc-shadow-sm) !important; }
 .el-message .el-message__content { color: var(--dc-text) !important; }
 .el-table { --el-table-bg-color: transparent; --el-table-tr-bg-color: transparent; --el-table-header-bg-color: var(--dc-bg-table-head); --el-table-header-text-color: var(--dc-text-dim); --el-table-border-color: var(--dc-border-soft); --el-table-row-hover-bg-color: var(--dc-bg-hover); --el-table-text-color: var(--dc-text); }
@@ -1195,3 +1205,37 @@ html[data-theme="light"] .el-loading-mask {
   background: var(--dc-primary-wash); box-shadow: 0 2px 6px var(--dc-shadow-sm);
 }
 .sidebar-toggle.toggle-floating.toggle-floating { left: 6px; width: 28px; height: 28px; }
+
+/* ==========================================================================
+   深色模式下的 el-alert 柔和化：默认的浅色变体（warning/danger/info）在深色
+   主题下是大面积高饱和亮底，非常刺眼（真机反馈：传输摘要的「删除重建」警告）。
+   改为低饱和暗底 + 主题色文字，与卡片融为一体；浅色主题不受影响。
+   ========================================================================== */
+html[data-theme="dark"] .el-alert {
+  --el-alert-bg-color: var(--dc-bg-soft);
+}
+html[data-theme="dark"] .el-alert.is-light {
+  background: var(--dc-bg-soft);
+  border: 1px solid var(--dc-border);
+}
+html[data-theme="dark"] .el-alert--warning.is-light {
+  background: rgba(245, 179, 77, 0.10);
+  border-color: rgba(245, 179, 77, 0.28);
+}
+html[data-theme="dark"] .el-alert--warning.is-light .el-alert__title,
+html[data-theme="dark"] .el-alert--warning.is-light .el-alert__description {
+  color: var(--dc-warning);
+}
+html[data-theme="dark"] .el-alert--error.is-light {
+  background: rgba(255, 97, 97, 0.10);
+  border-color: rgba(255, 97, 97, 0.28);
+}
+html[data-theme="dark"] .el-alert--error.is-light .el-alert__title,
+html[data-theme="dark"] .el-alert--error.is-light .el-alert__description {
+  color: var(--dc-danger);
+}
+html[data-theme="dark"] .el-alert--info.is-light,
+html[data-theme="dark"] .el-alert--success.is-light {
+  background: var(--dc-bg-soft);
+  border-color: var(--dc-border);
+}

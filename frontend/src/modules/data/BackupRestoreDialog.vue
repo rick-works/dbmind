@@ -473,6 +473,8 @@ const message = ref('')
 const error = ref('')
 const logs = ref([])
 const logBoxRef = ref(null)
+// 已消费到哪一条服务端日志（logsSeq 是**累计**行数，含被 200 行上限挤掉的旧行）
+const seenLogSeq = ref(0)
 
 // 追加一条实时日志（与上一条相同则跳过），并自动滚动到底部
 const pushLog = (text) => {
@@ -748,6 +750,7 @@ const onStart = async () => {
   message.value = t('bkp.taskStarted')
   error.value = ''
   logs.value = []
+  seenLogSeq.value = 0
   pushLog(t('bkp.taskStarted'))
 
   try {
@@ -790,6 +793,16 @@ const poll = () => {
       status.value = res.status || 'running'
       progress.value = typeof res.progress === 'number' ? res.progress : 0
       message.value = res.message || ''
+      // 服务端的**过程日志**（开始备份… / 表 x 已导出（N 行） / 视图… / 汇总）：
+      // 以前 task_view 根本不下发它，日志框只剩「开始任务 / 备份完成 / 汇总」三两行，
+      // 每张表导了多少行、视图与例程有没有在内，全都无从对账。
+      // 用 logsSeq（累计行数）只追加新增的行 —— logs 数组有 200 行上限会挤掉旧行，按数组长度对会错位。
+      const seq = typeof res.logsSeq === 'number' ? res.logsSeq : 0
+      const serverLogs = Array.isArray(res.logs) ? res.logs : []
+      if (seq > seenLogSeq.value && serverLogs.length) {
+        serverLogs.slice(-(seq - seenLogSeq.value)).forEach((line) => pushLog(line))
+        seenLogSeq.value = seq
+      }
       pushLog(res.message)
       if (res.error) { error.value = res.error; pushLog(t('bkp.errorPrefix', { detail: res.error })) }
 

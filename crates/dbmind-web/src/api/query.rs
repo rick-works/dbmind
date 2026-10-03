@@ -23,6 +23,40 @@ use crate::api::error::{XError, XResult};
 use crate::api::{blocking, require_record, shape, Params};
 use crate::AppState;
 
+/// 编辑器执行的超时（毫秒）：读设置 `query.timeoutSecs`（1..=600，缺省 120）。
+///
+/// 为什么从写死 120 秒改成可配：跑大报表/复杂分析的人嫌它不够，误发笛卡尔积的人
+/// 又要干等满两分钟 —— 两类用户要的不是同一个数字，那就该放到设置里去。
+/// 键名用内核导出的 [`dbmind_core::Store`] 常量，杜绝两边各写一份字符串漂移。
+async fn editor_timeout_ms(state: &AppState) -> u64 {
+    let engine = state.engine();
+    let raw = blocking(move || engine.get_setting(dbmind_core::Store::KEY_QUERY_TIMEOUT))
+        .await
+        .ok()
+        .flatten();
+    let secs = raw
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|secs| secs.clamp(1, 600))
+        .unwrap_or(120);
+    secs * 1000
+}
+
+/// 全局默认返回行数上限（100..=100000，缺省 2000）。
+///
+/// 以前各执行入口各写死一个数字（编辑器 2000、批量 2000、NoSQL 浏览另有自己的），
+/// 用户在设置里找不到「一次最多拿回多少行」。统一成一个键后：界面请求的 `size`
+/// 还会被它再夹一层 —— 分页大小是「想要多少」，这里是「最多给多少」。
+pub(crate) async fn max_rows_cap(state: &AppState) -> usize {
+    let engine = state.engine();
+    let raw = blocking(move || engine.get_setting(dbmind_core::Store::KEY_QUERY_MAX_ROWS))
+        .await
+        .ok()
+        .flatten();
+    raw.and_then(|value| value.trim().parse::<usize>().ok())
+        .map(|n| n.clamp(100, 100_000))
+        .unwrap_or(2000)
+}
+
 #[derive(Default)]
 struct Task {
     status: String,
@@ -102,36 +136,42 @@ pub async fn execute(
         return Ok(Json(shape::query_failure_json(&err.message, 0)));
     }
 
-    // 第 2 页起才套分页壳：第一页照原样执行（否则 create / update 这类语句会被塞进
-    // 子查询里直接报错），并且只对「取数类」语句套。
-    //
-    // 套壳与统计都要用「去掉末尾分号」的版本：把
-    //     SELECT * FROM t;
-    // 包进子查询会变成 (SELECT * FROM t;) —— 分号在子查询里是语法错误，
-    // 于是 count(*) 失败、总数退回 -1（界面就说"未统计总数"），翻页也会跟着报错。
-    // 而用户输入的 SQL 十有八九带分号（前端也允许），所以这一步不能省。
-    // 执行本身不受影响，因此只在这两处用去尾分号的版本。
+    // 第 2 页起才追加分页子句（见 `paging_sql`：直接追加，不过派生表），且只对
+    // 「取数类」语句套。统计也要用「去掉末尾分号」的版本：带分号的原句进任何
+    // 子查询/CTE 都是语法错误 —— 用户输入的 SQL 十有八九带分号（前端也允许），
+    // 所以这一步不能省。执行本身不受影响，因此只在改写处用去尾分号的版本。
     let base_sql = sql.clone();
     let bare = base_sql.trim().trim_end_matches(';').trim().to_string();
     let effective = if page > 1 && looks_like_query(&bare) {
         let record = require_record(&state, &id).await?;
         let dialect = crate::api::dialect::Dialect::new(record.kind());
-        crate::api::export::paging_sql(&bare, (page - 1) * size as u64, size as u64, dialect)
+        // page/size 来自请求体没有上限，saturating 防乘法溢出（与 export.rs 同一纪律）
+        crate::api::export::paging_sql(
+            &bare,
+            page.saturating_sub(1).saturating_mul(size as u64),
+            size as u64,
+            dialect,
+        )
     } else {
         base_sql.clone()
     };
 
-    let engine = state.engine.clone();
+    let engine = state.engine();
+    let timeout_ms = editor_timeout_ms(&state).await;
+    // 全局默认上限再夹一层：分页大小是「想要多少」，设置里的 maxRows 是「最多给多少」
+    let max_rows = size.min(max_rows_cap(&state).await);
     let request = QueryRequest {
         read_only: None,
         connection: target,
         sql: effective,
         options: QueryOptions {
-            max_rows: size,
-            timeout_ms: 120_000,
+            max_rows,
+            timeout_ms,
         },
         execution_id,
         session: Some("ui:上游".to_string()),
+        // 用户在 SQL 编辑器里执行 —— **要进历史**（首页「最近查询」就是给它的）
+        internal: false,
     };
     Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
         Ok(result) => {
@@ -142,7 +182,10 @@ pub async fn execute(
             // 只要翻过页就要统计：最后一页往往不足一页（truncated=false），
             // 那时若拿本页行数当总数，分页器会突然从 1026 页缩成 1 页。
             if result.truncated || page > 1 {
-                if let Some(total) = crate::api::export::count_rows(&state, &id, &database, &bare).await {
+                if let Some(total) =
+                    crate::api::export::count_rows(&state, &id, &database, &bare, result.columns.len())
+                        .await
+                {
                     if let Some(object) = json.as_object_mut() {
                         object.insert("totalCount".to_string(), Value::from(total));
                         // hasMore 是"这一页之后还有没有"，不是"本页有没有装满"：
@@ -169,8 +212,8 @@ pub async fn execute(
 /// 不解析 SQL，只看首个词：套壳是为了分页，DDL/DML 套进去只会报错，
 /// 而它们在「第几页」这个问题上没有意义。
 fn looks_like_query(sql: &str) -> bool {
+    // split_whitespace 本身跳过前导空白，不必先 trim_start
     let head = sql
-        .trim_start()
         .split_whitespace()
         .next()
         .unwrap_or_default()
@@ -234,13 +277,17 @@ pub async fn execute_batch(
     let mut success = true;
     let mut failed_at: Option<usize> = None;
     let started = std::time::Instant::now();
+    // 多段执行共用同一个超时/上限：循环里拿不到 async 上下文，先在这里算好
+    let timeout_ms = editor_timeout_ms(&state).await;
+    let max_rows = max_rows_cap(&state).await;
 
     for (index, statement) in statements.iter().enumerate() {
-        let engine = state.engine.clone();
+        let engine = state.engine();
         let target = target.clone();
         // 只有一个 executionId：交给第一段，这样「取消」至少能中断当前那条
         let exec = if index == 0 { execution_id.clone() } else { None };
         let statement = statement.clone();
+        let bare = statement.trim().trim_end_matches(';').trim().to_string();
         let outcome = blocking(move || {
             engine.execute(
                 QueryRequest {
@@ -248,18 +295,49 @@ pub async fn execute_batch(
                     connection: target,
                     sql: statement,
                     options: QueryOptions {
-                        max_rows: 2000,
-                        timeout_ms: 120_000,
+                        max_rows,
+                        timeout_ms,
                     },
                     execution_id: exec,
                     session: Some("ui:上游".to_string()),
+                    // 编辑器里的多段执行：要进历史
+                    internal: false,
                 },
                 AccessContext::Web,
             )
         })
         .await;
         match outcome {
-            Ok(result) => results.push(shape::query_result_json(&result)),
+            Ok(result) => {
+                let mut json = shape::query_result_json(&result);
+                // 与单段执行**同一套**总数语义：被截断时真去 count，每段结果都有
+                // 准确的总数/总页数可用；统计失败保持 -1，绝不瞎报。
+                if result.truncated && looks_like_query(&bare) {
+                    if let Some(total) = crate::api::export::count_rows(
+                        &state,
+                        &id,
+                        database,
+                        &bare,
+                        result.columns.len(),
+                    )
+                    .await
+                    {
+                        if let Some(o) = json.as_object_mut() {
+                            o.insert("totalCount".to_string(), Value::from(total));
+                            o.insert(
+                                "hasMore".to_string(),
+                                Value::from(total > (max_rows as i64)),
+                            );
+                        }
+                    }
+                }
+                // 段落原文一并返回：翻到某段的第 N 页时，前端**只重跑这一段**
+                // （整批重跑会把写入类语句再执行一遍，绝不能干）
+                if let Some(o) = json.as_object_mut() {
+                    o.insert("sql".to_string(), Value::from(bare.as_str()));
+                }
+                results.push(json);
+            }
             Err(err) => {
                 success = false;
                 failed_at = Some(index);
@@ -286,7 +364,7 @@ pub async fn cancel(
     State(state): State<AppState>,
     Path(execution_id): Path<String>,
 ) -> XResult<Json<Value>> {
-    let cancelled = state.engine.cancel(&execution_id);
+    let cancelled = state.engine().cancel(&execution_id);
     Ok(Json(json!({
         "success": true,
         "cancelled": cancelled,
@@ -348,7 +426,7 @@ pub async fn run_file_start(
         );
     }
 
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let background_id = task_id.clone();
     std::thread::Builder::new()
         .name("上游-run-sql-file".to_string())
@@ -412,6 +490,8 @@ fn run_statements(
                 },
                 execution_id: Some(execution_id),
                 session: Some("ui:上游".to_string()),
+                // 「执行 SQL 文件」也是用户从编辑器发起的（与多段执行同一口径）：要进历史
+                internal: false,
             },
             AccessContext::Web,
         );
@@ -486,7 +566,7 @@ pub async fn run_file_cancel(
     };
     // 在途语句要硬中断，否则「取消」要等它自己跑完
     if let Some(execution_id) = current {
-        state.engine.cancel(&execution_id);
+        state.engine().cancel(&execution_id);
     }
     Ok(Json(json!({ "success": true, "message": "已取消" })))
 }

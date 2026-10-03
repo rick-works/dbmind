@@ -60,7 +60,9 @@ impl DbMindEngine {
         let store = Arc::new(store);
         let policy = SafetyPolicy::new()
             .with_production_protection(store.get_bool_setting(Store::KEY_PROTECT_PRODUCTION, false)?)
-            .with_ai_write(store.get_bool_setting(Store::KEY_AI_WRITE_ENABLED, false)?);
+            .with_ai_write(store.get_bool_setting(Store::KEY_AI_WRITE_ENABLED, false)?)
+            .with_block_dangerous(store.get_bool_setting(Store::KEY_BLOCK_DANGEROUS, false)?)
+            .with_max_write_rows(store.get_usize_setting(Store::KEY_MAX_WRITE_ROWS, 0)? as u64);
         let engine = Self {
             store,
             drivers: DriverRegistry::with_builtin(),
@@ -70,6 +72,17 @@ impl DbMindEngine {
         };
         // 会话相关设置：开机就按设置生效（驱动持有共享原子量，实时读到）
         engine.apply_session_limits()?;
+        // 旧版 TLS 开关同步给宿主 spawn 层（spawn 读静态原子量；设置变更时也会同步）
+        let legacy_tls = engine
+            .store
+            .get_setting(Store::KEY_ALLOW_LEGACY_TLS)?
+            .as_deref()
+            == Some("true");
+        crate::agent::set_legacy_tls_enabled(legacy_tls);
+        // 隧道空闲回收时长 + 历史保留策略：开机先对齐一遍（旧库可能积了几万行历史）
+        engine.apply_tunnel_idle_timeout();
+        engine.prune_history();
+        engine.reconcile_shadow_read_only();
         engine.refresh_agent_hosts();
         // 首次运行初始化：目录骨架 + （只在真正全新时）示例库与示例连接。
         // 失败只记警告 —— 初始化没做好不该拦住用户开库。
@@ -203,9 +216,73 @@ impl DbMindEngine {
 
     pub fn add_connection(&self, config: ConnectionConfig) -> Result<ConnectionRecord> {
         let record = self.store.insert_connection(&config)?;
+        // 影子连接出生就继承主连接的只读标记（见 `inherit_read_only_from_base`）
+        let record = self.inherit_read_only_from_base(&record)?.unwrap_or(record);
         // 新连接的主机要进宿主 hosts —— 否则它第一次反解仍要等约 4.6 秒
         self.refresh_agent_hosts();
         Ok(record)
+    }
+
+    /// 影子连接（跨库浏览按需生成的记录）出生时**继承主连接的只读标记**。
+    ///
+    /// 不继承的后果实测过：主连接上 `UPDATE` 被闸门拦下，可同一个库节点上（走影子）执行
+    /// **同样的语句却能写进去** —— 用户看到的就是「数据源开了只读，还是能执行 insert」。
+    ///
+    /// 收口在这里（而不是让每个生成点自己记得带上标记）的理由：影子是**内核之外**按需造出来的，
+    /// 造它的地方将来还会增加，而「只读」是安全属性 —— 漏一处的代价是闸门被绕过。
+    /// 开机时把「主连接只读、影子却没跟上」的记录补齐。
+    ///
+    /// 为什么要有这一趟：影子的只读标记是**跟着主连接走**的（见 [`Self::set_read_only`]），
+    /// 而这个不变量是后来才补上的 —— 之前创建的影子会一直停在 `read_only = false`，
+    /// 于是老库里「开了只读的数据源」在跨库时依旧能写。只靠「下次切换开关时顺带修正」
+    /// 等于要求用户先关掉再打开一次，而他要的只是「现在就该拦住」。
+    ///
+    /// 失败只留一行日志：这一步是**修数据**，修不成不该拦住开库（闸门本身仍然有效）。
+    fn reconcile_shadow_read_only(&self) {
+        let records = match self.store.list_connections() {
+            Ok(records) => records,
+            Err(err) => {
+                tracing::warn!(target: "dbmind::engine", error = %err.message, "读取连接清单失败，跳过影子只读校准");
+                return;
+            }
+        };
+        let mut fixed = 0usize;
+        for shadow in records.iter().filter(|item| item.is_shadow() && !item.read_only) {
+            let base_is_read_only = shadow
+                .shadow_of()
+                .and_then(|base_id| self.store.require_connection(base_id).ok())
+                .map(|base| base.read_only)
+                .unwrap_or(false);
+            if !base_is_read_only {
+                continue;
+            }
+            if let Err(err) = self.store.set_read_only(&shadow.id, true) {
+                tracing::warn!(target: "dbmind::engine", connection = %shadow.name(), error = %err.message, "影子只读校准失败");
+                continue;
+            }
+            let id = shadow.id.clone();
+            self.update_policy(|policy| policy.mark_read_only(id));
+            fixed += 1;
+        }
+        if fixed > 0 {
+            tracing::info!(target: "dbmind::engine", fixed, "已把影子连接的只读标记与主连接对齐");
+        }
+    }
+
+    fn inherit_read_only_from_base(&self, record: &ConnectionRecord) -> Result<Option<ConnectionRecord>> {
+        let Some(base_id) = record.shadow_of() else {
+            return Ok(None);
+        };
+        let Ok(base) = self.store.require_connection(base_id) else {
+            return Ok(None);
+        };
+        if !base.read_only {
+            return Ok(None);
+        }
+        let updated = self.store.set_read_only(&record.id, true)?;
+        let id = updated.id.clone();
+        self.update_policy(|policy| policy.mark_read_only(id));
+        Ok(Some(updated))
     }
 
     /// 更新连接配置。
@@ -239,15 +316,70 @@ impl DbMindEngine {
         Ok(removed)
     }
 
+    /// 断开某连接的缓存会话（**不动连接记录本身**）。
+    ///
+    /// 用途：数据库侧改了权限/密码后，内核连接池里的旧会话还带着旧的全局权限快照
+    ///（MySQL 的全局权限变更只对新建连接生效），用户不必重启应用 ——
+    /// 界面「关闭连接」时调用，重开树节点即为全新会话。
+    /// 会话按类型池化，同类型的其它连接只是丢了缓存会话，下次用时重建（几百毫秒）。
+    pub fn disconnect_sessions(&self, id_or_name: &str) -> Result<usize> {
+        let record = self.store.find_connection(id_or_name)?;
+        let Some(record) = record else { return Ok(0) };
+        // 「关闭连接」要**真正断**：只断这一个连接的会话（不再按类型 disconnect_all
+        // 误伤同类其它连接），并且**影子连接跟着断** —— 跨库浏览按需生成的那些影子
+        // 各自有独立泳道/会话，留着它们，树上的库节点下次展开还是旧会话。
+        let kind = record.kind();
+        let mut n = self.drivers.disconnect_connection(kind, record.config.name.as_str());
+        for shadow in self.store.list_connections()? {
+            if shadow.shadow_of() == Some(record.id.as_str()) {
+                n += self.drivers.disconnect_connection(kind, shadow.config.name.as_str());
+            }
+        }
+        Ok(n)
+    }
+
+    /// 只断**某个数据库**的会话（界面上「关闭数据库」用）。
+    ///
+    /// 该库的语句跑在它的**影子连接**上（跨库浏览按需生成，database 指向这个库），
+    /// 所以按「shadow_of = 该连接 且 database = 该库」找到影子，断它的会话。
+    /// 主连接的共享元数据会话不受影响 —— 连接本身还开着。
+    pub fn disconnect_database(&self, id_or_name: &str, database: &str) -> Result<usize> {
+        let record = self.store.find_connection(id_or_name)?;
+        let Some(record) = record else { return Ok(0) };
+        let kind = record.kind();
+        let mut n = 0usize;
+        for shadow in self.store.list_connections()? {
+            if shadow.shadow_of() == Some(record.id.as_str())
+                && shadow.config.database.as_deref() == Some(database)
+            {
+                n += self.drivers.disconnect_connection(kind, shadow.config.name.as_str());
+            }
+        }
+        Ok(n)
+    }
+
     /// 切换只读标记：同时更新存储与内存策略，避免「库里改了、策略没改」的漂移。
+    ///
+    /// **影子连接跟着一起改**（跨库浏览按需生成的那些记录）：用户看到的开关只在主连接上，
+    /// 而语句是在影子身上执行的。不跟着改的话，「连接设为只读」在点开任意一个库之后就被绕过
+    /// —— 实测：主连接上 `UPDATE` 被拦，从库节点执行同样的语句却能写进去。
+    /// 关掉开关时同样要清，否则只读一旦打开就再也关不掉（库里那条影子还留着 true）。
     pub fn set_read_only(&self, id_or_name: &str, read_only: bool) -> Result<ConnectionRecord> {
         let record = self.store.set_read_only(id_or_name, read_only)?;
-        let id = record.id.clone();
-        self.update_policy(|p| {
-            if read_only {
-                p.mark_read_only(id);
-            } else {
-                p.unmark_read_only(&id);
+        let mut ids = vec![record.id.clone()];
+        for shadow in self.store.list_connections()? {
+            if shadow.shadow_of() == Some(record.id.as_str()) {
+                self.store.set_read_only(&shadow.id, read_only)?;
+                ids.push(shadow.id);
+            }
+        }
+        self.update_policy(|policy| {
+            for id in &ids {
+                if read_only {
+                    policy.mark_read_only(id.clone());
+                } else {
+                    policy.unmark_read_only(id);
+                }
             }
         });
         Ok(record)
@@ -307,11 +439,27 @@ impl DbMindEngine {
         Ok(report)
     }
 
-    /// 结构缓存的存活时间。
+    /// 结构缓存的存活时间（**默认值**，实际以设置 `schema.ttlSecs` 为准）。
     ///
     /// 5 分钟是折中：结构变动很少，但「同事刚加的表」也不该等到重启才看见。
-    /// 需要立刻看到时用 `--refresh`（CLI）/ `?refresh=true`（Web）/ MCP 默认走新鲜读。
-    const SCHEMA_TTL_SECS: i64 = 300;
+    /// 需要立刻看到时用 `--refresh`（CLI）/ `?refresh=true`（Web）/ MCP 默认走新鲜读，
+    /// 或者把设置里的 TTL 调小、点「立即刷新」。
+    const DEFAULT_SCHEMA_TTL_SECS: i64 = 300;
+
+    /// 结构缓存有效期：读设置 `schema.ttlSecs`（30..=86400 秒）。
+    ///
+    /// 为什么从写死改成可配：改了表结构想立刻在树上看到，只有两条路 —— 记得每次
+    /// 带 `?refresh=true`，或干等 5 分钟。前者靠记性，后者靠耐心；把「等多久」交给
+    /// 用户，配合设置页的「刷新结构缓存」按钮，两条路都通。
+    fn schema_ttl_secs(&self) -> i64 {
+        self.store
+            .get_setting(Store::KEY_SCHEMA_TTL)
+            .ok()
+            .flatten()
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .map(|secs| secs.clamp(30, 86_400))
+            .unwrap_or(Self::DEFAULT_SCHEMA_TTL_SECS)
+    }
 
     /// 对象清单（走缓存）。
     pub fn list_tables(&self, id_or_name: &str) -> Result<Vec<TableInfo>> {
@@ -327,7 +475,7 @@ impl DbMindEngine {
         let record = self.store.require_connection(id_or_name)?;
         let key = Store::SCHEMA_OBJECTS_KEY;
         if !refresh {
-            if let Some(payload) = self.store.fresh_schema(&record.id, key, Self::SCHEMA_TTL_SECS)? {
+            if let Some(payload) = self.store.fresh_schema(&record.id, key, self.schema_ttl_secs())? {
                 match serde_json::from_str(&payload) {
                     Ok(tables) => return Ok(tables),
                     Err(e) => {
@@ -366,7 +514,7 @@ impl DbMindEngine {
         let record = self.store.require_connection(id_or_name)?;
         let key = Store::schema_columns_key(table);
         if !refresh {
-            if let Some(payload) = self.store.fresh_schema(&record.id, &key, Self::SCHEMA_TTL_SECS)? {
+            if let Some(payload) = self.store.fresh_schema(&record.id, &key, self.schema_ttl_secs())? {
                 if let Ok(columns) = serde_json::from_str(&payload) {
                     return Ok(columns);
                 }
@@ -396,6 +544,18 @@ impl DbMindEngine {
     pub fn clear_schema_cache(&self, id_or_name: &str) -> Result<usize> {
         let record = self.store.require_connection(id_or_name)?;
         self.store.invalidate_schema(&record.id, None)
+    }
+
+    /// 作废**所有**连接的结构缓存（设置页「刷新结构缓存」的入口）。
+    ///
+    /// 按连接逐个清在 web 层也能拼出来，但那要求 web 层知道「有哪些连接」、
+    /// 还得记得把影子连接算进去 —— 收口在内核，语义与 [`Self::clear_schema_cache`] 一致。
+    pub fn clear_all_schema_cache(&self) -> Result<usize> {
+        let mut cleared = 0usize;
+        for record in self.store.list_connections()? {
+            cleared += self.store.invalidate_schema(&record.id, None)?;
+        }
+        Ok(cleared)
     }
 
     /// 执行成功后按需作废结构缓存。
@@ -430,14 +590,18 @@ impl DbMindEngine {
         let started = Instant::now();
       let options = request.options.clamp();
 
-  // 程序自己发的调用（内部会话，前缀内部标记）**不进历史**：历史是"用户执行过什么"的账本，
-  // 结构浏览 / 表格预览分页 / 数据生成探测混进来会把真实操作淹掉（首页「最近查询」就是受害者）。
-  // 判据是**显式标记**（调用方自己打的会话前缀），不是去猜 SQL 文本长什么样。
-  let record_history = !request
-      .session
-      .as_deref()
-      .map(|s| s.starts_with(INTERNAL_SESSION_PREFIX))
-      .unwrap_or(false);
+  // 程序自己发的调用（结构浏览 / 表格预览分页 / 元数据探测 / 界面功能驱动的语句）
+  // **不进历史**：历史是"用户执行过什么"的账本，它们混进来会把真实操作淹掉
+  // （首页「最近查询」就是受害者）。
+  // 判据是**显式标记**，不是去猜 SQL 文本长什么样。两种标记都认：
+  //   - `request.internal`：与连接选择无关的干净开关（多数调用方用这个）；
+  //   - 会话键的 `internal:` 前缀：早期写法，会让这类语句落到单独一条物理会话上，仍在用。
+  let record_history = !request.internal
+      && !request
+          .session
+          .as_deref()
+          .map(|s| s.starts_with(INTERNAL_SESSION_PREFIX))
+          .unwrap_or(false);
 
         // 会话亲和键的长度上限（见函数的文档里的说明，常量定义在文件顶部）
         const MAX_SESSION_KEY: usize = 64;
@@ -447,7 +611,7 @@ impl DbMindEngine {
 pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
 
         // 1) 连接
-        let connection = match self.store.require_connection(&request.connection) {
+        let mut connection = match self.store.require_connection(&request.connection) {
             Ok(connection) => connection,
             Err(err) => {
                 let entry = NewHistoryEntry {
@@ -489,9 +653,42 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
             }
         }
 
-        // 2) 闸门：读写在执行前定死，壳层无法绕过
+        // 影子连接的**安全属性跟随主连接**（闸门前同步，主连接是唯一真相源）：
+        // 影子是跨库浏览时按需生成的快照，主连接后来改了安全属性，影子还揣着
+        // 创建那一刻的旧值 ——
+        // - 环境标注：主连接补标「生产」，编辑器切到影子库照样 INSERT 成功（真机踩过）；
+        // - 只读标记：出生时继承的快照同样会过期。
+        // 只动 env 角标 / 分组两组键与 read_only，`shadowFor` 等影子标记原样保留。
+        if let Some(parent_id) = connection.shadow_of() {
+            if let Ok(parent) = self.store.require_connection(parent_id) {
+                let mut extra = match connection.config.extra.as_ref() {
+                    Some(serde_json::Value::Object(map)) => map.clone(),
+                    _ => serde_json::Map::new(),
+                };
+                for key in [
+                    crate::types::EXTRA_ENV_BADGE,
+                    crate::types::EXTRA_GROUP,
+                    crate::types::EXTRA_GROUP_LEGACY,
+                ] {
+                    match parent.config.extra.as_ref().and_then(|e| e.get(key)) {
+                        Some(v) => {
+                            extra.insert(key.to_string(), v.clone());
+                        }
+                        None => {
+                            extra.remove(key);
+                        }
+                    }
+                }
+                connection.config.extra = Some(serde_json::Value::Object(extra));
+                connection.read_only = parent.read_only;
+            }
+        }
+
+        // 2) 闸门：读写在执行前定死，壳层无法绕过。
+        // 内部链路（数据传输/对比/导入导出的批量执行）放行多语句批 —— identity 的
+        // SET+INSERT+SET、删库的 ALTER+DROP 都必须同批才能生效（会话级开关/占用清理）
         let policy = self.policy();
-        if let Err(err) = policy.check(&connection, &request.sql, ctx) {
+        if let Err(err) = policy.check(&connection, &request.sql, ctx, request.internal) {
             self.record(record_history, 
                 &connection,
                 &request.sql,
@@ -501,6 +698,57 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                 Some(err.code_str().to_string()),
             );
             return Err(err);
+        }
+
+        // 2.5) 写操作影响行数预估：`maxWriteRows` 开着时，UPDATE/DELETE 在真正执行前
+        //      先 `COUNT(*)` 一把，预估超过上限直接拒绝 —— 等执行完再发现「影响 20 万行」
+        //      就晚了。预估走内部调用（不进历史；读语句不触发本检查，不会递归）。
+        //      预估失败（解析不了复合形态 / COUNT 执行报错）⇒ 跳过检查放行原语句：
+        //      预估是尽力而为的保险丝，不能反过来卡死正常操作。
+        if policy.max_write_rows > 0 {
+            if let Some(target) = crate::statement::write_target(
+                connection.kind().protocol(),
+                &request.sql,
+            ) {
+                let count_sql = match &target.where_clause {
+                    Some(w) => format!("select count(*) from {} where {}", target.table, w),
+                    None => format!("select count(*) from {}", target.table),
+                };
+                let mut probe = QueryRequest::new(connection.id.as_str(), count_sql);
+                probe.internal = true;
+                if let Ok(result) = self.execute(probe, ctx) {
+                    if let Some(affected) = result
+                        .rows
+                        .first()
+                        .and_then(|row| row.first())
+                        .and_then(|cell| match cell {
+                            CellValue::Integer(v) => Some(*v as u64),
+                            CellValue::Real(v) => Some(*v as u64),
+                            CellValue::Text(t) => t.trim().parse::<u64>().ok(),
+                            _ => None,
+                        })
+                    {
+                        if affected > policy.max_write_rows {
+                            let err = DbMindError::new(
+                                ErrorCode::SafetyRowLimit,
+                                format!(
+                                    "这次操作预计影响 {} 行数据，超过了「单次改动行数上限」（{}）。请缩小范围后再试，或到设置 → 安全与会话中调整上限",
+                                    affected, policy.max_write_rows
+                                ),
+                            );
+                            self.record(record_history,
+                                &connection,
+                                &request.sql,
+                                HistoryStatus::Error,
+                                0,
+                                started.elapsed().as_millis() as u64,
+                                Some(err.code_str().to_string()),
+                            );
+                            return Err(err);
+                        }
+                    }
+                }
+            }
         }
 
         // 3) 驱动
@@ -640,7 +888,97 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         if let Err(e) = self.store.record_history(entry) {
             // 留痕失败不能影响主流程
             tracing::warn!(target: "dbmind::engine", error = %e, "写入历史失败");
+            return;
         }
+        // 顺手清一次：一条 INSERT 换一条 DELETE，比「积了十万行再大扫除」平稳得多
+        self.prune_history();
+    }
+
+    /// 按设置清理查询历史（`history.maxEntries` / `history.retentionDays`）。
+    /// 清理失败只记日志：这是修数据，不该让主流程为它失败。
+    pub fn prune_history(&self) -> usize {
+        let max = self
+            .store
+            .get_usize_setting(Store::KEY_HISTORY_MAX_ENTRIES, 1000)
+            .unwrap_or(1000)
+            .min(100_000);
+        let days = self
+            .store
+            .get_usize_setting(Store::KEY_HISTORY_RETENTION_DAYS, 30)
+            .unwrap_or(30)
+            .min(3650) as u32;
+        match self.store.prune_history(max, days) {
+            Ok(0) => 0,
+            Ok(n) => {
+                tracing::debug!(target: "dbmind::engine", removed = n, max_entries = max, retention_days = days, "已按保留策略清理查询历史");
+                n
+            }
+            Err(e) => {
+                tracing::warn!(target: "dbmind::engine", error = %e, "清理查询历史失败");
+                0
+            }
+        }
+    }
+
+    /// 元数据库一致性快照（数据目录迁移用），见 [`crate::storage::Store::backup_into`]。
+    pub fn backup_store_into(&self, path: &Path) -> Result<()> {
+        self.store.backup_into(path)
+    }
+
+    /// 设置页「缓存」页签的体量清单：`(键, 行数)`。**白名单**——键名与表名的映射
+    /// 收死在这里，web 层只透传，永远不要从请求里拼 SQL 表名。
+    /// 不含术语表 / 采纳示例 / 质量规则：那是用户逐条维护的知识数据，不该出现在
+    /// 「勾选清理」的清单里。
+    pub fn cache_report(&self) -> Result<Vec<(&'static str, u64)>> {
+        const TABLES: &[(&str, &str)] = &[
+            ("schemaCache", "schema_cache"),
+            ("queryHistory", "query_history"),
+            ("aiAudit", "ai_audit"),
+            ("aiUsageDays", "ai_usage_days"),
+            ("aiUsageModels", "ai_usage_models"),
+            ("kbDocs", "kb_docs"),
+            ("kbVectors", "kb_vectors"),
+        ];
+        TABLES
+            .iter()
+            .map(|(key, table)| self.store.table_row_count(table).map(|rows| (*key, rows)))
+            .collect()
+    }
+
+    /// 清理「缓存」页签勾选的项，返回每项删掉的行数（文件类在 web 层另行处理）。
+    pub fn purge_caches(&self, keys: &[String]) -> Result<Vec<(String, u64)>> {
+        let mut out = Vec::new();
+        for key in keys {
+            let cleared = match key.as_str() {
+                "schemaCache" => self.clear_all_schema_cache()? as u64,
+                "queryHistory" => self.store.clear_history()? as u64,
+                "aiAudit" => self.store.purge_table("ai_audit")? as u64,
+                "aiUsageDays" => self.store.purge_table("ai_usage_days")? as u64,
+                "aiUsageModels" => self.store.purge_table("ai_usage_models")? as u64,
+                "kbDocs" => self.store.purge_table("kb_docs")? as u64,
+                "kbVectors" => self.store.purge_table("kb_vectors")? as u64,
+                // 文件类（backups / exports / logs）不归内核管，web 层跳过并原样回显
+                other => {
+                    out.push((other.to_string(), 0));
+                    continue;
+                }
+            };
+            out.push((key.clone(), cleared));
+        }
+        Ok(out)
+    }
+
+    /// 把「SSH 隧道空闲回收时长」设置同步给隧道层（sweeper 读静态原子量）。
+    ///
+    /// 30 分钟曾经写死在 `tunnel.rs` —— 云库/RDS 的连接配额金贵，内网库又想放久点，
+    /// 没有统一答案，那就交给设置（`tunnel.idleTimeoutSecs`，0 = 不按空闲回收）。
+    fn apply_tunnel_idle_timeout(&self) {
+        let secs = self
+            .store
+            .get_usize_setting(Store::KEY_TUNNEL_IDLE_TIMEOUT, 1800)
+            .unwrap_or(1800)
+            .min(86_400) as u64;
+        crate::tunnel::set_idle_timeout_secs(secs);
     }
 
     // ------------------------------------------------------------ 历史与设置
@@ -676,6 +1014,19 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         match key {
             Store::KEY_PROTECT_PRODUCTION => self.update_policy(|p| p.protect_production = flag),
             Store::KEY_AI_WRITE_ENABLED => self.update_policy(|p| p.ai_write_enabled = flag),
+            Store::KEY_BLOCK_DANGEROUS => self.update_policy(|p| p.block_dangerous = flag),
+            Store::KEY_MAX_WRITE_ROWS => {
+                let max = value.parse::<u64>().unwrap_or(0);
+                self.update_policy(|p| p.max_write_rows = max);
+            }
+            // 下一次拉起宿主 JVM 时生效（宿主是长驻进程，已在跑的不受影响）
+            Store::KEY_ALLOW_LEGACY_TLS => crate::agent::set_legacy_tls_enabled(flag),
+            // 隧道空闲回收：sweeper 每轮读静态原子量，改完下一轮就生效
+            Store::KEY_TUNNEL_IDLE_TIMEOUT => self.apply_tunnel_idle_timeout(),
+            // 保留策略改了立刻清一遍：用户把 100000 改成 100，不该等到下次执行才看到
+            Store::KEY_HISTORY_MAX_ENTRIES | Store::KEY_HISTORY_RETENTION_DAYS => {
+                self.prune_history();
+            }
             _ => {}
         }
         Ok(())
@@ -1324,6 +1675,131 @@ mod tests {
             .unwrap();
     }
 
+    /// 影子连接（跨库浏览按需生成的记录）的只读标记必须**始终跟主连接一致**。
+    ///
+    /// 这条钉的是实机撞到的一幕：数据源上开了「只读」，从库节点执行 `insert` 照样写得进去 ——
+    /// 因为语句是在影子身上跑的，而影子是独立记录、只读标记默认 false。
+    #[test]
+    fn 影子连接的只读跟着主连接() {
+        let (_dir, engine, base) = fixture("shadow-readonly");
+        engine
+            .execute(
+                QueryRequest::new(base.as_str(), "create table t(a integer)"),
+                AccessContext::Desktop,
+            )
+            .unwrap();
+        // 跨库浏览造出的那条记录：同配置、只换库名 + 打上 `shadowFor` 标记
+        // （web 层的 `scope::ensure_shadow` 就是这么做的）
+        let shadow_config = || {
+            let mut config = engine.require_connection(&base).unwrap().config.clone();
+            config.name = "local ▸ other".to_string();
+            config.database = Some("other".to_string());
+            let mut extra = match config.extra.take() {
+                Some(serde_json::Value::Object(map)) => map,
+                _ => serde_json::Map::new(),
+            };
+            extra.insert(
+                EXTRA_SHADOW_FOR.to_string(),
+                serde_json::json!(base.clone()),
+            );
+            config.extra = Some(serde_json::Value::Object(extra));
+            config
+        };
+        let write = |conn: &str| {
+            engine.execute(
+                QueryRequest::new(conn, "insert into t values (1)"),
+                AccessContext::Desktop,
+            )
+        };
+
+        // ① 主连接先开只读，**之后**出生的影子要继承（否则点开一个新库就等于绕过闸门）
+        engine.set_read_only(&base, true).unwrap();
+        let shadow = engine.add_connection(shadow_config()).unwrap();
+        assert!(shadow.is_shadow(), "记录上打了 shadowFor 就该被认成影子");
+        assert!(shadow.read_only, "影子出生就该继承主连接的只读标记");
+        assert_eq!(
+            write(&shadow.id).unwrap_err().code,
+            ErrorCode::SafetyReadOnly,
+            "影子上的写必须被拦下"
+        );
+
+        // ② 已经存在的影子，开关打开时要跟着改 —— 这正是用户撞到的顺序：先点开库，再开只读
+        engine.set_read_only(&base, false).unwrap();
+        assert!(
+            !engine.require_connection(&shadow.id).unwrap().read_only,
+            "关掉开关时已有影子也要跟着清"
+        );
+        engine.set_read_only(&base, true).unwrap();
+        assert!(
+            engine.require_connection(&shadow.id).unwrap().read_only,
+            "开关打开时已有影子必须跟着改"
+        );
+        assert_eq!(write(&shadow.id).unwrap_err().code, ErrorCode::SafetyReadOnly);
+
+        // ③ 关掉之后要能真的写进去（只读一旦打开就关不掉是另一种坏）
+        engine.set_read_only(&base, false).unwrap();
+        assert!(write(&shadow.id).is_ok(), "解除只读后影子应当可以写");
+
+        // 非影子的连接不受影响：开只读不该波及别人
+        let other = engine
+            .add_connection(
+                ConnectionConfig::new("plain", ConnectionKind::Sqlite)
+                    .with_file(_dir.path("plain.db").to_string_lossy().to_string()),
+            )
+            .unwrap();
+        engine.set_read_only(&base, true).unwrap();
+        assert!(
+            !engine.require_connection(&other.id).unwrap().read_only,
+            "只读标记只能落在主连接与它自己的影子上"
+        );
+    }
+
+    /// 老库里「主连接只读、影子没跟上」的记录，**开机时要被自动对齐**。
+    ///
+    /// 只靠「下次切换开关时顺带修正」等于要求用户先关掉再打开一次，而他要的只是
+    /// 「现在就该拦住」—— 这个不变量是后来才补上的，已经存在的数据得有人管。
+    #[test]
+    fn 开机把影子的只读标记与主连接对齐() {
+        let dir = TempDir::new("shadow-reconcile");
+        let store_path = dir.path("dbmind.db");
+        let shadow_id = {
+            // 直接用存储层造数据：模拟旧版本留下的影子 —— 它的 read_only 停在 false
+            let store = Store::open(&store_path).expect("打开存储失败");
+            let base = store
+                .insert_connection(
+                    &ConnectionConfig::new("local", ConnectionKind::Sqlite)
+                        .with_file(dir.path("data.db").to_string_lossy().to_string()),
+                )
+                .expect("插入主连接失败");
+            store.set_read_only(&base.id, true).expect("标记只读失败");
+            let mut extra = serde_json::Map::new();
+            extra.insert(EXTRA_SHADOW_FOR.to_string(), serde_json::json!(base.id));
+            let mut config = base.config.clone();
+            config.name = "local ▸ other".to_string();
+            config.extra = Some(serde_json::Value::Object(extra));
+            let shadow = store.insert_connection(&config).expect("插入影子失败");
+            assert!(!shadow.read_only, "旧数据就长这样：主连接只读、影子可写");
+            shadow.id
+        };
+
+        let engine = DbMindEngine::open(&store_path).expect("打开引擎失败");
+        assert!(
+            engine.require_connection(&shadow_id).unwrap().read_only,
+            "开机应当把影子的只读标记对齐到主连接"
+        );
+        assert_eq!(
+            engine
+                .execute(
+                    QueryRequest::new(shadow_id.as_str(), "insert into t values (1)"),
+                    AccessContext::Desktop,
+                )
+                .unwrap_err()
+                .code,
+            ErrorCode::SafetyReadOnly,
+            "对齐之后闸门必须真的拦得住"
+        );
+    }
+
     #[test]
     fn ai_通道默认只读且可通过设置放开() {
         let (_dir, engine, conn) = fixture("ai");
@@ -1353,8 +1829,16 @@ mod tests {
     }
 
     #[test]
-    fn 生产保护拦截一切写() {
+    fn 生产保护拦截生产环境的一切写() {
         let (_dir, engine, conn) = fixture("prod");
+        // 生产保护**只对标注为「生产」环境的数据源生效**：给这条连接打上 PROD 标
+        let record = engine
+            .find_connection(&conn)
+            .unwrap()
+            .expect("fixture 连接应存在");
+        let mut config = record.config.clone();
+        config.extra = Some(serde_json::json!({ "group": "PROD" }));
+        engine.update_connection(&conn, config).unwrap();
         engine.set_setting(Store::KEY_PROTECT_PRODUCTION, "true").unwrap();
         let err = engine
             .execute(
@@ -1363,6 +1847,113 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyProduction);
+        // 未标注环境的连接不受生产保护影响（写操作正常执行）
+        let (_dir2, engine2, conn2) = fixture("dev");
+        engine2
+            .set_setting(Store::KEY_PROTECT_PRODUCTION, "true")
+            .unwrap();
+        engine2
+            .execute(
+                QueryRequest::new(conn2.as_str(), "create table t(a integer)"),
+                AccessContext::Desktop,
+            )
+            .unwrap();
+    }
+
+    /// 影子连接的**安全属性跟随主连接**：跨库浏览生成的影子揣着创建那一刻的旧标注，
+    /// 主连接后来补标「生产」—— 影子同样要被拦（跨库浏览不是绕过保护的口子，真机踩过）。
+    #[test]
+    fn 影子连接的安全属性跟随主连接() {
+        let (_dir, engine, conn) = fixture("main");
+        // 主连接补标生产
+        let mut main_cfg = engine
+            .find_connection(&conn)
+            .unwrap()
+            .expect("主连接存在")
+            .config;
+        main_cfg.extra = Some(serde_json::json!({ "env": "PROD", "group": "PROD" }));
+        engine.update_connection(&conn, main_cfg).unwrap();
+
+        // 更早生成的影子：揣着旧角标 DEV
+        let mut shadow_cfg = engine
+            .find_connection(&conn)
+            .unwrap()
+            .unwrap()
+            .config
+            .clone();
+        shadow_cfg.name = format!("{conn} ▸ db2");
+        shadow_cfg.extra = Some(serde_json::json!({
+            "shadowFor": conn,
+            "shadowDatabase": "db2",
+            "env": "DEV"
+        }));
+        let shadow = engine.add_connection(shadow_cfg).unwrap();
+
+        engine
+            .set_setting(Store::KEY_PROTECT_PRODUCTION, "true")
+            .unwrap();
+        let err = engine
+            .execute(
+                QueryRequest::new(shadow.id.as_str(), "create table t(a integer)"),
+                AccessContext::Desktop,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::SafetyProduction);
+    }
+
+    /// 危险语句拦截：无 WHERE 的 UPDATE/DELETE、TRUNCATE、DROP 被闸门拒绝。
+    #[test]
+    fn 危险语句拦截() {
+        let (_dir, engine, conn) = fixture("danger");
+        engine
+            .set_setting(Store::KEY_BLOCK_DANGEROUS, "true")
+            .unwrap();
+        for sql in ["delete from t", "update t set a = 1", "drop table t"] {
+            let err = engine
+                .execute(QueryRequest::new(conn.as_str(), sql), AccessContext::Desktop)
+                .unwrap_err();
+            assert_eq!(err.code, ErrorCode::SafetyDangerous, "sql: {sql}");
+        }
+        // 带 WHERE 的正常写不受影响（会走到驱动层，SQLite 文件驱动可用）
+        engine
+            .execute(QueryRequest::new(conn.as_str(), "create table t(a integer)"), AccessContext::Desktop)
+            .unwrap();
+        // 关掉开关后同一条语句放行
+        engine.set_setting(Store::KEY_BLOCK_DANGEROUS, "false").unwrap();
+        engine
+            .execute(QueryRequest::new(conn.as_str(), "drop table t"), AccessContext::Desktop)
+            .unwrap();
+    }
+
+    /// 写操作影响行数上限：预估超过上限拒绝；预估解析不了的语句不受影响。
+    #[test]
+    fn 写操作影响行数上限() {
+        let (_dir, engine, conn) = fixture("rowcap");
+        engine.execute(
+            QueryRequest::new(conn.as_str(), "create table t(a integer)"),
+            AccessContext::Desktop,
+        ).unwrap();
+        for i in 0..5 {
+            engine.execute(
+                QueryRequest::new(conn.as_str(), format!("insert into t values ({i})")),
+                AccessContext::Desktop,
+            ).unwrap();
+        }
+        engine.set_setting(Store::KEY_MAX_WRITE_ROWS, "3").unwrap();
+        // 表里 5 行 > 上限 3 ⇒ 拦
+        let err = engine
+            .execute(QueryRequest::new(conn.as_str(), "delete from t"), AccessContext::Desktop)
+            .unwrap_err();
+        assert_eq!(err.code, ErrorCode::SafetyRowLimit);
+        // WHERE 圈住的行数 ≤ 上限 ⇒ 放行
+        engine
+            .execute(QueryRequest::new(conn.as_str(), "delete from t where a >= 3"), AccessContext::Desktop)
+            .unwrap();
+        // 上限调大后同一条全表删除放行
+        engine.set_setting(Store::KEY_MAX_WRITE_ROWS, "100").unwrap();
+        engine
+            .execute(QueryRequest::new(conn.as_str(), "delete from t where a > 0"), AccessContext::Desktop)
+            .unwrap();
     }
 
     /// 专属宿主**不可用**时：报「未就绪 + 怎么补」，而不是「未接入」。
@@ -2522,6 +3113,54 @@ mod tests {
         // 按连接过滤
         assert_eq!(engine.history(10, Some(conn.as_str())).unwrap().len(), 2);
         assert_eq!(engine.clear_history().unwrap(), 2);
+    }
+
+    /// `internal=true` 的调用**不进历史**；失败的内部调用同样不进。
+    ///
+    /// 这条钉的是首页「最近查询 / 查询统计」：实机上它被元数据查询淹了 ——
+    /// `show databases`、取表选项的 `select table_name …` 全在里面，反而看不到用户敲的 SQL。
+    /// 判据必须是**调用方显式声明**：这些内部语句与用户 SQL 在文本上无从区分。
+    #[test]
+    fn 内部调用不进历史() {
+        let (_dir, engine, conn) = fixture("history-internal");
+        // 元数据 / 结构浏览类：用户看不出来是它干的，不进历史
+        engine
+            .execute(
+                QueryRequest::new(conn.as_str(), "select name from sqlite_master").with_internal(true),
+                AccessContext::Web,
+            )
+            .unwrap();
+        // 内部调用失败同样不留痕（失败也不该冒到「最近查询」里）
+        engine
+            .execute(
+                QueryRequest::new(conn.as_str(), "select * from 不存在的表").with_internal(true),
+                AccessContext::Web,
+            )
+            .unwrap_err();
+        assert!(
+            engine.history(10, None).unwrap().is_empty(),
+            "internal 的调用不该留痕"
+        );
+
+        // 用户自己执行的照旧留痕（编辑器那条路走的就是默认值）
+        engine
+            .execute(
+                QueryRequest::new(conn.as_str(), "select 1"),
+                AccessContext::Web,
+            )
+            .unwrap();
+        let history = engine.history(10, None).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].sql, "select 1");
+
+        // 会话键前缀那条老口径仍然有效（datagen / sync / import 用的是它）
+        engine
+            .execute(
+                QueryRequest::new(conn.as_str(), "select 2").with_session("internal:browse"),
+                AccessContext::Web,
+            )
+            .unwrap();
+        assert_eq!(engine.history(10, None).unwrap().len(), 1, "会话键前缀也应拦住");
     }
 
     #[test]

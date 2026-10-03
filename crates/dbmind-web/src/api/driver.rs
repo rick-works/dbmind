@@ -110,10 +110,10 @@ fn remember_failure(kind: ConnectionKind, message: &str) {
 }
 
 fn clear_failure(kind: ConnectionKind) {
-    failures()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(kind.key());
+    let mut map = failures().lock().unwrap_or_else(|e| e.into_inner());
+    map.remove(kind.key());
+    // 顺带清掉「原生认证库下载失败」的那份（见 `ensure_native_auth_dll`）
+    map.remove(&format!("{}-auth-dll", kind.key()));
 }
 
 /// 真正下载：`group:artifact:version[:classifier]` → Maven Central → 驱动目录。
@@ -134,15 +134,19 @@ async fn download(state: &AppState, kind: ConnectionKind) -> XResult<()> {
         return Ok(());
     }
     // 「驱动下载镜像」设置：换掉仓库根。
-    // 设置页写着「保存后立即生效」，而原先只落盘、每次仍从 Maven Central 拉 ——
-    // 内网/镜像环境下那句话就是空头承诺（jar 拉不回来，用户只会看到驱动下载失败）。
-    let engine = state.engine.clone();
+    // 关键字（maven/aliyun/…）在 `driver_mirror_base` 落地成真正的仓库根 ——
+    // 以前这层映射不存在，选中「腾讯云」会拿关键字当 URL 前缀拼出坏地址。
+    let engine = state.engine();
     let mirror = blocking(move || engine.get_setting(crate::api::sys::KEY_DRIVER_MIRROR))
         .await
         .ok()
-        .flatten()
-        .filter(|value| !value.trim().is_empty());
-    let source = if mirror.is_some() { "镜像" } else { "Maven 中心" };
+        .flatten();
+    let base = dbmind_core::driver_mirror_base(mirror.as_deref());
+    let source = if base == dbmind_core::MAVEN_CENTRAL {
+        "Maven 中心"
+    } else {
+        "镜像"
+    };
     let outcome = blocking(move || {
         let present = jar_names(&agent_key);
         for artifact in &artifacts {
@@ -151,7 +155,7 @@ async fn download(state: &AppState, kind: ConnectionKind) -> XResult<()> {
                 prune_other_versions(&agent_key, artifact, &name);
                 continue;
             }
-            let url = dbmind_core::driver_artifact_url_with_base(artifact, mirror.as_deref())?;
+            let url = dbmind_core::driver_artifact_url_with_base(artifact, Some(&base))?;
             let response = ureq::get(&url).call().map_err(|err| {
                 DbMindError::new(
                     ErrorCode::DriverNotReady,
@@ -186,7 +190,7 @@ async fn download(state: &AppState, kind: ConnectionKind) -> XResult<()> {
         // **下载成功就回收宿主**：宿主 JVM 的 classpath 在启动时固定，新下的 jar 不会
         // 自动进去。不回收的话，后补的依赖（如 ClickHouse 的 slf4j-api）永远不生效 ——
         // 界面显示「驱动已就绪」，一连接却 NoClassDefFoundError。
-        let engine = state.engine.clone();
+        let engine = state.engine();
         blocking(move || {
             engine.recycle_agent_hosts();
             Ok(())
@@ -219,7 +223,214 @@ pub async fn ensure_installed(state: &AppState, kind: ConnectionKind) -> XResult
 /// 按连接 id 确保驱动可用（元数据/查询路径的统一入口）。
 pub async fn ensure_for_connection(state: &AppState, id: &str) -> XResult<()> {
     let record = require_record(state, id).await?;
-    ensure_installed(state, record.kind()).await
+    ensure_installed(state, record.kind()).await?;
+    ensure_native_auth_dll(state, record.kind()).await
+}
+
+/// SQL Server「Windows 集成验证」的原生认证库**自动补齐**。
+///
+/// 那份 `mssql-jdbc_auth-*.dll` **不在驱动 jar 里，Maven 上也没有** —— 只在微软
+/// GitHub 的发布包 `mssql-jdbc-<版本>.zip`（MIT 许可）里。驱动下载只走 Maven，
+/// 于是全新安装后一走 Windows 验证就报「驱动目录里没有认证库」（真机踩过）。
+///
+/// 这里从 GitHub Release 拉下对应版本的 zip，抽出当前架构的 dll 放进驱动目录的
+/// `auth/` —— 内核 spawn 宿主前的 `ensure_native_auth_library` 会认领它并按驱动
+/// 版本改名（版本号对不上也能用，实测同一 dll 改名即连上）。
+///
+/// 三个口子：
+/// - 只在**没有任何**同架构认证库时才动网络（每次连接都会走到这，必须便宜）；
+/// - 失败进 failures 缓存（`sqlserver-auth-dll`），不反复卡网络；重新安装驱动时清掉；
+/// - 下载成功后**回收宿主**：`java.library.path` 只在 JVM 启动那一刻生效，
+///   不回收的话后补的 dll 永远加载不到。
+async fn ensure_native_auth_dll(state: &AppState, kind: ConnectionKind) -> XResult<()> {
+    if kind.key() != "sqlserver" {
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = state;
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        let arch = dbmind_core::native_arch().to_string();
+        let suffix = format!(".{arch}.dll");
+        let dir = dbmind_core::driver_dir(kind.agent_key().unwrap_or_default());
+        let auth_dir = dir.join("auth");
+        // 安装包自带（native-auth/）也算「已就位」：内核 spawn 宿主前会从那里认领
+        let have_dll = [
+            dir.clone(),
+            auth_dir.clone(),
+            dbmind_core::bundled_native_auth_dir().unwrap_or_default(),
+        ]
+        .into_iter()
+        .filter_map(|d| std::fs::read_dir(d).ok())
+            .flatten()
+            .flatten()
+            .any(|e| {
+                e.file_name()
+                    .to_str()
+                    .map(|n| n.starts_with("mssql-jdbc_auth-") && n.ends_with(&suffix))
+                    .unwrap_or(false)
+            });
+        if have_dll {
+            return Ok(());
+        }
+        let fail_key = format!("{}-auth-dll", kind.key());
+        if let Some(message) = failures()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&fail_key)
+            .cloned()
+        {
+            return Err(XError::new(StatusCode::SERVICE_UNAVAILABLE, message));
+        }
+        // 版本从 jar 文件名上读（与内核 `ensure_native_auth_library` 同源，换版本自动跟随）
+        let version = std::fs::read_dir(&dir)
+            .ok()
+            .and_then(|rd| {
+                rd.flatten()
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .find_map(|n| {
+                        n.strip_prefix("mssql-jdbc-")?
+                            .strip_suffix(".jar")
+                            .map(String::from)
+                    })
+            })
+            .ok_or_else(|| {
+                XError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "SQL Server 驱动 jar 还没就位，无法确定原生认证库的版本",
+                )
+            })?;
+        let tag = version.split(".jre").next().unwrap_or(&version).to_string();
+        // 微软把所有架构/版本的认证库打成一个 `mssql-jdbc_auth.zip` 挂在 release 上
+        // （发布清单里另有各平台 jar，唯独没有「分版本的原生库 zip」—— 实测 404 过）
+        let url = format!(
+            "https://github.com/microsoft/mssql-jdbc/releases/download/v{tag}/mssql-jdbc_auth.zip"
+        );
+        let download_url = url.clone();
+        let bytes = blocking(move || -> dbmind_core::Result<Vec<u8>> {
+            let response = ureq::get(&download_url).call().map_err(|err| {
+                DbMindError::new(
+                    ErrorCode::DriverNotReady,
+                    format!("从 GitHub 下载 SQL Server 原生认证库失败：{err}"),
+                )
+                .with_detail(url.clone())
+            })?;
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes)?;
+            Ok(bytes)
+        })
+        .await;
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let message = err.message.clone();
+                failures()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(fail_key, message.clone());
+                return Err(XError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!(
+                        "{message}。也可以手动从该地址下载 zip，把 auth 目录里对应架构的 \
+                         mssql-jdbc_auth-*.dll 放进 {} 后重启应用",
+                        auth_dir.display()
+                    ),
+                ));
+            }
+        };
+        let arch_for_zip = arch.clone();
+        let tag_for_zip = tag.clone();
+        let dll_bytes = blocking(move || -> dbmind_core::Result<Vec<u8>> {
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
+                .map_err(|e| DbMindError::new(ErrorCode::DriverNotReady, format!("认证库 zip 解包失败：{e}")))?;
+            let exact = format!("mssql-jdbc_auth-{tag_for_zip}.{arch_for_zip}.dll");
+            let suffix = format!(".{arch_for_zip}.dll");
+            // 优先精确匹配「版本+架构」，退化到「任意该架构的认证库」——
+            // 内核按文件名里的版本号 loadLibrary，拿到后还会按驱动版本改名，所以差版本也能用
+            let mut fallback: Option<String> = None;
+            for i in 0..archive.len() {
+                let mut entry = archive
+                    .by_index(i)
+                    .map_err(|e| DbMindError::new(ErrorCode::DriverNotReady, format!("认证库 zip 读取失败：{e}")))?;
+                let name = entry.name().to_string();
+                let file_name = name.rsplit('/').next().unwrap_or(&name).to_string();
+                if !file_name.starts_with("mssql-jdbc_auth-") || !file_name.ends_with(&suffix) {
+                    continue;
+                }
+                if file_name == exact {
+                    let mut bytes = Vec::new();
+                    std::io::Read::read_to_end(&mut entry, &mut bytes)?;
+                    return Ok(bytes);
+                }
+                // 先记下退化候选（继续找精确版）
+                if fallback.is_none() {
+                    fallback = Some(file_name);
+                }
+            }
+            // 没有精确版就用退化候选：按名字再扫一遍取内容
+            if let Some(name) = fallback {
+                for i in 0..archive.len() {
+                    let mut entry = archive.by_index(i).map_err(|e| {
+                        DbMindError::new(ErrorCode::DriverNotReady, format!("认证库 zip 读取失败：{e}"))
+                    })?;
+                    if entry.name().rsplit('/').next() == Some(name.as_str()) {
+                        let mut bytes = Vec::new();
+                        std::io::Read::read_to_end(&mut entry, &mut bytes)?;
+                        return Ok(bytes);
+                    }
+                }
+            }
+            Err(DbMindError::new(
+                ErrorCode::DriverNotReady,
+                format!("认证库 zip 里没有 {arch_for_zip} 架构的 mssql-jdbc_auth-*.dll"),
+            ))
+        })
+        .await;
+        let dll_bytes = match dll_bytes {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                let message = err.message.clone();
+                failures()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(fail_key, message.clone());
+                return Err(XError::new(StatusCode::SERVICE_UNAVAILABLE, message));
+            }
+        };
+        std::fs::create_dir_all(&auth_dir)
+            .map_err(|e| XError::new(StatusCode::SERVICE_UNAVAILABLE, format!("创建认证库目录失败：{e}")))?;
+        // 文件名用「去掉 .jreNN 的版本」—— 内核探测的目标名之一，放进去即被认领
+        let target = auth_dir.join(format!("mssql-jdbc_auth-{tag}.{arch}.dll"));
+        // 目标可能刚被内核 spawn 宿主时拷贝过去并被 JVM 加载锁定（并发竞态）：
+        // 内容已经在位就视为成功，别为一个「写不进去」把整条连接拦下
+        let already_there = target.is_file()
+            && std::fs::metadata(&target).map(|m| m.len() == dll_bytes.len() as u64).unwrap_or(false);
+        if !already_there {
+            std::fs::write(&target, &dll_bytes).map_err(|e| {
+                XError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    format!("写入认证库失败：{e}（文件若已存在且被宿主占用，重启应用即可生效）"),
+                )
+            })?;
+        }
+        tracing::info!(
+            target = %target.display(),
+            bytes = dll_bytes.len(),
+            "SQL Server 原生集成认证库已自动下载就位"
+        );
+        // 认证库是 spawn 时刻进 `java.library.path` 的 —— 补上了就得让宿主按新目录重启一次
+        let engine = state.engine();
+        blocking(move || {
+            engine.recycle_agent_hosts();
+            Ok(())
+        })
+        .await
+        .ok();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -350,7 +561,7 @@ pub async fn upload(
         ));
     }
 
-    let engine = state.engine.clone();
+    let engine = state.engine();
     blocking(move || {
         engine.recycle_agent_hosts();
         Ok(())

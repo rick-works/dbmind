@@ -17,10 +17,18 @@ use std::collections::HashSet;
 pub struct SafetyPolicy {
     /// 被标记为只读的连接 id（存储层的 `read_only` 字段是单一真源，这里做内存叠加）。
     read_only_connections: HashSet<String>,
-    /// 全局写保护：生产/演练环境打开后，任何写语句一律拒绝。
+    /// 生产保护：开启后，**只有标注为「生产」环境（`PROD`）的数据源**拒绝写/结构变更；
+    /// 开发 / 测试 / 自定义分组 / 未分组的数据源一律放行（作用域见
+    /// `ConnectionRecord::is_prod_environment`）。
     pub protect_production: bool,
     /// AI/MCP 通道是否允许写（默认 false；必须显式开启）。
     pub ai_write_enabled: bool,
+    /// 危险语句拦截：无 WHERE 的 UPDATE/DELETE、TRUNCATE、DROP 一律拒绝
+    /// （默认 false；判不了的形态交给其它闸门，不会错拦）。
+    pub block_dangerous: bool,
+    /// 写操作影响行数上限：UPDATE/DELETE 预估影响超过该值时拒绝（0 = 不限制）。
+    /// 预估是执行前的 `COUNT(*)`，预估本身失败 ⇒ 跳过检查放行原语句。
+    pub max_write_rows: u64,
 }
 
 impl SafetyPolicy {
@@ -35,6 +43,16 @@ impl SafetyPolicy {
 
     pub fn with_ai_write(mut self, enabled: bool) -> Self {
         self.ai_write_enabled = enabled;
+        self
+    }
+
+    pub fn with_block_dangerous(mut self, enabled: bool) -> Self {
+        self.block_dangerous = enabled;
+        self
+    }
+
+    pub fn with_max_write_rows(mut self, max: u64) -> Self {
+        self.max_write_rows = max;
         self
     }
 
@@ -54,13 +72,18 @@ impl SafetyPolicy {
     ///
     /// 语句判定**按连接的协议分派**（SQL 走词法判定、MongoDB 走命令判定）：
     /// 闸门本身与协议无关，但它必须懂该协议的语句语义，否则非 SQL 库上会失效。
-    pub fn check(&self, connection: &ConnectionRecord, sql: &str, ctx: AccessContext) -> Result<()> {
+    ///
+    /// `internal`：是否**内核内部链路**（数据传输/对比/导入导出的批量执行，非用户手输）。
+    /// 这类链路有多语句批的硬需求（identity 的 SET+INSERT+SET 同批、删库的
+    /// ALTER+DROP 同批），**放行多语句**；其余写闸门（只读连接/生产保护/危险拦截）
+    /// 全部照常生效。用户手输（桌面/CLI/MCP/AI）的多语句仍按原规则拦截。
+    pub fn check(&self, connection: &ConnectionRecord, sql: &str, ctx: AccessContext, internal: bool) -> Result<()> {
         let protocol = connection.kind().protocol();
         let statements = split_statements(protocol, sql);
         if statements.is_empty() {
             return Err(DbMindError::new(ErrorCode::QueryInvalid, "语句为空"));
         }
-        if statements.len() > 1 {
+        if statements.len() > 1 && !internal {
             return Err(DbMindError::new(
                 ErrorCode::QueryInvalid,
                 format!(
@@ -73,6 +96,21 @@ impl SafetyPolicy {
         let kind = classify(protocol, &statements[0]);
         if kind.is_read_only() {
             return Ok(());
+        }
+
+        // 危险语句拦截：放在所有写闸门最前面 —— 无 WHERE 的全表 UPDATE/DELETE
+        // 连开发库都值得拦（手滑一次就是整表没了）。
+        if self.block_dangerous {
+            if let Some(reason) =
+                crate::statement::danger_reason(protocol, &statements[0])
+            {
+                return Err(DbMindError::new(
+                    ErrorCode::SafetyDangerous,
+                    format!(
+                        "危险操作已被拦截：{reason}。如确需执行，请到设置 → 安全与会话中关闭「危险操作拦截」",
+                    ),
+                ));
+            }
         }
 
         // 以下都是「写/结构变更/无法归类」——逐层过闸
@@ -97,10 +135,16 @@ impl SafetyPolicy {
             ));
         }
 
-        if self.protect_production {
+        // 生产保护**只对标注为「生产」环境的数据源生效**：开发 / 测试 / 自定义分组 /
+        // 未分组的一律放行（作用域由 `ConnectionRecord::is_prod_environment` 划定，
+        // 影子连接继承主连接的环境标注，跨库浏览同样受保护）。
+        if self.protect_production && connection.is_prod_environment() {
             return Err(DbMindError::new(
                 ErrorCode::SafetyProduction,
-                "生产保护已开启：本次操作会修改数据或结构，已被拒绝（关闭生产保护后重试）",
+                format!(
+                    "生产保护已开启：数据源「{}」标注为生产环境，本次修改数据或结构的操作已被拒绝",
+                    connection.name()
+                ),
             ));
         }
 
@@ -129,23 +173,30 @@ mod tests {
         }
     }
 
+    /// 带**分组**的连接（`extra.group`），生产保护的作用域测试用。
+    fn conn_with_env(env: &str) -> ConnectionRecord {
+        let mut c = conn(false);
+        c.config.extra = Some(serde_json::json!({ "group": env }));
+        c
+    }
+
     #[test]
     fn 只读语句永远放行() {
         let policy = SafetyPolicy::new();
-        policy.check(&conn(true), "select 1", AccessContext::Mcp).unwrap();
+        policy.check(&conn(true), "select 1", AccessContext::Mcp, false).unwrap();
     }
 
     #[test]
     fn ai_通道默认拦截写() {
         let policy = SafetyPolicy::new();
         let err = policy
-            .check(&conn(false), "delete from t", AccessContext::Mcp)
+            .check(&conn(false), "delete from t", AccessContext::Mcp, false)
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyAiReadOnly);
 
         let permissive = SafetyPolicy::new().with_ai_write(true);
         permissive
-            .check(&conn(false), "delete from t", AccessContext::Mcp)
+            .check(&conn(false), "delete from t", AccessContext::Mcp, false)
             .unwrap();
     }
 
@@ -153,7 +204,7 @@ mod tests {
     fn 只读连接拦截写() {
         let policy = SafetyPolicy::new();
         let err = policy
-            .check(&conn(true), "update t set a=1", AccessContext::Cli)
+            .check(&conn(true), "update t set a=1", AccessContext::Cli, false)
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyReadOnly);
     }
@@ -164,16 +215,62 @@ mod tests {
             .with_ai_write(true)
             .with_production_protection(true);
         let err = policy
-            .check(&conn(false), "insert into t values (1)", AccessContext::Desktop)
+            .check(
+                &conn_with_env("PROD"),
+                "insert into t values (1)",
+                AccessContext::Desktop, false,
+            )
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyProduction);
+    }
+
+    /// 生产保护的**作用域**：环境标识角标（`env`）或目录（`environment`）标注为生产才拦。
+    /// （真机踩过两回：① 全局一刀切把无标注的只读浏览都拦了；② 只查目录字段，
+    /// 用户把角标设成生产、目录还在「本地分组」，保护完全没生效。）
+    #[test]
+    fn 生产保护只对标注为生产的数据源生效() {
+        let policy = SafetyPolicy::new().with_production_protection(true);
+        for env in ["DEV", "TEST", "STAGING", "本地分组", ""] {
+            let mut c = conn(false);
+            if !env.is_empty() {
+                c.config.extra = Some(serde_json::json!({ "group": env }));
+            }
+            policy
+                .check(&c, "insert into t values (1)", AccessContext::Desktop, false)
+                .unwrap_or_else(|e| panic!("环境 [{env}] 不应被生产保护拦截: {e}"));
+        }
+        // 角标（env 字段）标成生产 ⇒ 拦；角标是别的 ⇒ 放行
+        let mut badge_prod = conn(false);
+        badge_prod.config.extra = Some(serde_json::json!({ "env": "PROD", "group": "本地分组" }));
+        policy
+            .check(&badge_prod, "insert into t values (1)", AccessContext::Desktop, false)
+            .unwrap_err();
+        let mut badge_dev = conn(false);
+        badge_dev.config.extra = Some(serde_json::json!({ "env": "DEV", "group": "本地分组" }));
+        policy
+            .check(&badge_dev, "insert into t values (1)", AccessContext::Desktop, false)
+            .unwrap_or_else(|e| panic!("角标 DEV 不应被拦截: {e}"));
+        // 大小写不敏感（前端存的是大写键，但别把 "prod" 这类手输值放空子）
+        policy
+            .check(
+                &conn_with_env("prod"),
+                "insert into t values (1)",
+                AccessContext::Desktop, false,
+            )
+            .unwrap_err();
+        // 旧版分组键 `environment` 依然被认（老库里的存量连接不迁移也能受保护）
+        let mut legacy = conn(false);
+        legacy.config.extra = Some(serde_json::json!({ "environment": "PROD" }));
+        policy
+            .check(&legacy, "insert into t values (1)", AccessContext::Desktop, false)
+            .unwrap_err();
     }
 
     #[test]
     fn 多条语句一律拒绝() {
         let policy = SafetyPolicy::new();
         let err = policy
-            .check(&conn(false), "select 1; drop table t", AccessContext::Desktop)
+            .check(&conn(true), "select 1; drop table t", AccessContext::Desktop, false)
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::QueryInvalid);
     }
@@ -198,14 +295,14 @@ mod tests {
             .check(
                 &mongo_conn(true),
                 "db.users.find({ age: 30 })",
-                AccessContext::Desktop,
+                AccessContext::Desktop, false,
             )
             .unwrap();
         policy
             .check(
                 &mongo_conn(true),
                 r#"{ "count": "users" }"#,
-                AccessContext::Desktop,
+                AccessContext::Desktop, false,
             )
             .unwrap();
 
@@ -214,7 +311,7 @@ mod tests {
             .check(
                 &mongo_conn(true),
                 "db.users.deleteMany({})",
-                AccessContext::Desktop,
+                AccessContext::Desktop, false,
             )
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyReadOnly);
@@ -226,7 +323,7 @@ mod tests {
 
         // 结构变更：同样拦截
         let err = policy
-            .check(&mongo_conn(true), "db.users.drop()", AccessContext::Cli)
+            .check(&mongo_conn(true), "db.users.drop()", AccessContext::Cli, false)
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyReadOnly);
 
@@ -235,30 +332,40 @@ mod tests {
             .check(
                 &mongo_conn(false),
                 r#"{ "insert": "users", "documents": [] }"#,
-                AccessContext::Mcp,
+                AccessContext::Mcp, false,
             )
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyAiReadOnly);
 
-        // 生产保护
+        // 生产保护（只对标注为生产的连接生效）
         let strict = SafetyPolicy::new()
             .with_ai_write(true)
             .with_production_protection(true);
+        let mut mongo_prod = mongo_conn(false);
+        mongo_prod.config.extra = Some(serde_json::json!({ "group": "PROD" }));
         let err = strict
             .check(
-                &mongo_conn(false),
+                &mongo_prod,
                 "db.users.updateOne({}, { $set: { a: 1 } })",
-                AccessContext::Desktop,
+                AccessContext::Desktop, false,
             )
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyProduction);
+        // 未标注环境的同一条写命令不受生产保护影响
+        strict
+            .check(
+                &mongo_conn(false),
+                "db.users.updateOne({}, { $set: { a: 1 } })",
+                AccessContext::Desktop, false,
+            )
+            .unwrap();
 
         // 判不出来的命令按非只读处理（保守）——否则新命令就是缺口
         let err = policy
             .check(
                 &mongo_conn(true),
                 "db.users.someBrandNewAdminCommand({})",
-                AccessContext::Desktop,
+                AccessContext::Desktop, false,
             )
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyReadOnly);
@@ -268,7 +375,7 @@ mod tests {
             .check(
                 &mongo_conn(true),
                 r#"db.orders.aggregate([{ "$match": {} }, { "$out": "summary" }])"#,
-                AccessContext::Desktop,
+                AccessContext::Desktop, false,
             )
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyReadOnly);
@@ -280,7 +387,7 @@ mod tests {
         policy.mark_read_only("c1");
         assert!(policy.is_read_only(&conn(false)));
         let err = policy
-            .check(&conn(false), "drop table t", AccessContext::Cli)
+            .check(&conn(true), "drop table t", AccessContext::Cli, false)
             .unwrap_err();
         assert_eq!(err.code, ErrorCode::SafetyReadOnly);
     }

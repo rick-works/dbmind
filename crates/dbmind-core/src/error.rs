@@ -41,6 +41,10 @@ pub enum ErrorCode {
     SafetyAiReadOnly,
     /// 生产保护生效
     SafetyProduction,
+    /// 危险语句被拦截（无 WHERE 的 UPDATE/DELETE、TRUNCATE、DROP 等）
+    SafetyDangerous,
+    /// 写操作预估影响行数超过上限
+    SafetyRowLimit,
 
     // ---- 存储 DBMIND-STORAGE-xxxx
     /// 本地元数据库读写失败
@@ -73,6 +77,8 @@ impl ErrorCode {
             ErrorCode::SafetyReadOnly => "DBMIND-SAFETY-0001",
             ErrorCode::SafetyAiReadOnly => "DBMIND-SAFETY-0002",
             ErrorCode::SafetyProduction => "DBMIND-SAFETY-0003",
+            ErrorCode::SafetyDangerous => "DBMIND-SAFETY-0004",
+            ErrorCode::SafetyRowLimit => "DBMIND-SAFETY-0005",
             ErrorCode::StorageFailed => "DBMIND-STORAGE-0001",
             ErrorCode::StorageUnavailable => "DBMIND-STORAGE-0002",
             ErrorCode::DriverNotImplemented => "DBMIND-DRV-0001",
@@ -93,7 +99,11 @@ impl ErrorCode {
             | ErrorCode::QueryTimeout
             | ErrorCode::QueryCanceled
             | ErrorCode::QueryWriteBlocked => "query",
-            ErrorCode::SafetyReadOnly | ErrorCode::SafetyAiReadOnly | ErrorCode::SafetyProduction => "safety",
+            ErrorCode::SafetyReadOnly
+            | ErrorCode::SafetyAiReadOnly
+            | ErrorCode::SafetyProduction
+            | ErrorCode::SafetyDangerous
+            | ErrorCode::SafetyRowLimit => "safety",
             ErrorCode::StorageFailed | ErrorCode::StorageUnavailable => "storage",
             ErrorCode::DriverNotImplemented | ErrorCode::DriverNotReady => "driver",
             ErrorCode::Internal => "internal",

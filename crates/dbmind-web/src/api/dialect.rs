@@ -267,9 +267,20 @@ impl Dialect {
         matches!(self.key(), "oracle" | "dm" | "db2" | "h2" | "derby")
     }
 
-    /// 字符串字面量（转义单引号）。
+    /// 字符串字面量（按方言转义）。
+    ///
+    /// MySQL 系（`key()=="mysql"`，含 MariaDB/Doris）与 ClickHouse 默认把 `\` 当转义符：
+    /// 值里的反斜杠必须**先**翻倍再转义单引号，否则 `a\` 这样以 `\` 收尾的文本会把
+    /// 收尾引号转义掉 —— 导出/同步生成的 INSERT/UPDATE 被截断甚至注入
+    /// （`\'` 提前闭合字符串）。其余方言（PG/SQLServer/Oracle/SQLite/H2…）里 `\`
+    /// 就是普通字符，动了反而改值，不动。
     pub fn literal(&self, value: &str) -> String {
-        format!("'{}'", value.replace('\'', "''"))
+        let body = if matches!(self.key(), "mysql" | "clickhouse") {
+            value.replace('\\', "\\\\")
+        } else {
+            value.to_string()
+        };
+        format!("'{}'", body.replace('\'', "''"))
     }
 
     pub fn is_schema_aware(&self) -> bool {
@@ -378,6 +389,23 @@ impl Dialect {
             "select table_name as `name`, \
              case when table_type like '%VIEW%' then 'VIEW' else 'TABLE' end as `type` \
              from {catalog}.information_schema.tables where table_schema = {} order by table_name",
+            self.literal(database)
+        ))
+    }
+
+    /// `catalog.库` 形式的表选项（catalog 层级专用，列名规则同 `table_options`）。
+    ///
+    /// 为什么要单独一条：`table_options` 查的是**当前 catalog** 的 `information_schema`，
+    /// 而外部 catalog 的表在里面一点痕迹都没有（与 `tables_in_catalog` 同一个理由）。
+    /// 少了它，catalog 层级那条路径上的表注释就永远取不到。
+    pub fn table_options_in_catalog(&self, catalog: &str, database: &str) -> Meta {
+        if !self.catalog_level() || !is_plain_identifier(catalog) {
+            return Meta::Absent;
+        }
+        Meta::Sql(format!(
+            "select table_name as table_name, engine as engine, \
+             table_collation as charset, coalesce(table_comment, '') as comment \
+             from {catalog}.information_schema.tables where table_schema = {}",
             self.literal(database)
         ))
     }
@@ -538,6 +566,34 @@ impl Dialect {
                  where r.rolname = {n} \
                  group by r.rolname, r.rolsuper, r.rolcanlogin, r.rolcreatedb"
             )),
+            // ClickHouse：system.users 一行就是全部属性；授权清单是 `show grants for`
+            //（见 user_grants 的 clickhouse 分支）。认证串（auth_string）不进详情 ——
+            // 与 MySQL 的 authentication_string 同一个理由：展示出来只会被复制、截图。
+            // 只挑**版本稳定**的列：default_roles_* / grantees_* 在新版本改过名
+            // （实测 26.8 报 Unknown identifier: grantees_all），别把它们摊进详情。
+            "clickhouse" => Meta::Sql(format!(
+                "select name, storage, \
+                 arrayStringConcat(auth_type, ', ') as auth_type, \
+                 arrayStringConcat(host_ip, ', ') as host_ip, \
+                 arrayStringConcat(host_names, ', ') as host_names \
+                 from system.users where name = {n}"
+            )),
+            // Oracle / DM：dba_users 一行含状态与表空间；授权拼成 grants_text 文本
+            //（系统权限 + 角色，与 PG 的 grants_text 同一交付形态）。
+            // 用 dba_* 而不是 all_users：后者没有状态/表空间字段，详情页会没内容可看。
+            // `upper()` 兜住大小写 —— Oracle 里用户名按大写存。
+            "oracle" | "dm" => Meta::Sql(format!(
+                "select username as name, account_status, \
+                 to_char(created, 'YYYY-MM-DD HH24:MI:SS') as created, \
+                 nvl(default_tablespace, '') as default_tablespace, \
+                 nvl(temporary_tablespace, '') as temporary_tablespace, \
+                 nvl(profile, '') as profile, \
+                 nvl((select listagg('grant ' || privilege || ' to ' || grantee || ';', chr(10)) \
+                   within group (order by privilege) from dba_sys_privs s where s.grantee = u.username), '') || \
+                 nvl((select chr(10) || listagg('grant ' || granted_role || ' to ' || grantee || ';', chr(10)) \
+                   within group (order by granted_role) from dba_role_privs r where r.grantee = u.username), '') as grants_text \
+                 from dba_users u where username = upper({n})"
+            )),
             _ => Meta::Unwritten,
         }
     }
@@ -584,6 +640,11 @@ impl Dialect {
                    from information_schema.table_privileges \
                   where grantee = {grantee} and is_grantable = 'YES'"
             )),
+            // ClickHouse：`show grants for` 每行就是一条可执行的 GRANT 语句，
+            // 由 grant_line 的 clickhouse 分支**原样**带回 —— 不做任何解析重组。
+            "clickhouse" => {
+                Meta::Sql(format!("show grants for {}", self.quote(user)))
+            }
             _ => Meta::Unwritten,
         }
     }
@@ -745,6 +806,35 @@ impl Dialect {
                     parts.join(";\n")
                 }
                 "drop" => format!("drop role {u}"),
+                _ => return Meta::Unwritten,
+            }),
+            // ClickHouse：用户没有 (user, host) 二元组，host 参数没有意义（忽略）。
+            // 细粒度授权同样不在这里做 —— 调用方对非白名单入参会明确拒绝。
+            "clickhouse" => Meta::Sql(match action {
+                "create" => {
+                    let mut sql = format!("create user {u}");
+                    if !password.is_empty() {
+                        sql.push_str(&format!(" identified by {pwd}"));
+                    }
+                    for role in &role_parts {
+                        sql.push_str(&format!(";\ngrant {role} to {u}"));
+                    }
+                    sql
+                }
+                "alter" => {
+                    let mut parts: Vec<String> = Vec::new();
+                    if !password.is_empty() {
+                        parts.push(format!("alter user {u} identified by {pwd}"));
+                    }
+                    for role in &role_parts {
+                        parts.push(format!("grant {role} to {u}"));
+                    }
+                    if parts.is_empty() {
+                        return Meta::Unwritten;
+                    }
+                    parts.join(";\n")
+                }
+                "drop" => format!("drop user {u}"),
                 _ => return Meta::Unwritten,
             }),
             _ => Meta::Unwritten,
@@ -1051,7 +1141,16 @@ impl Dialect {
     /// `charset` 这一列给的是**排序规则的完整名**（如 `utf8mb4_general_ci`）：
     /// 与 `shape::tables_json` 里该字段的历史含义一致，前端据此拆出字符集与排序规则。
     pub fn table_options(&self, database: &str) -> Meta {
-        let db = self.literal(database);
+        // Doris 的 database 参数是 `catalog.库` 全限定名（树/页签的叫法），而
+        // information_schema.tables 的 table_schema 是**裸库名** —— 原样传全限定名
+        // 一行都匹配不上，表注释静默丢失（真机踩过：同步建表注释全空）。
+        // MySQL 系同名同义（树里就是裸名），不受影响。
+        let db_value = if self.key() == "doris" {
+            database.rsplit('.').next().unwrap_or(database)
+        } else {
+            database
+        };
+        let db = self.literal(db_value);
         match self.key() {
             "mysql" | "mariadb" | "doris" => Meta::Sql(format!(
                 "select table_name as table_name, engine as engine, \
@@ -1183,7 +1282,10 @@ impl Dialect {
         match self.key() {
             // SQLite 没有存储过程这个概念 —— 空数组是事实。
             "sqlite" => Meta::Absent,
-            "mysql" | "mariadb" | "doris" => Meta::Sql(
+            // Doris 也没有存储过程（它只有 catalog 级的 UDF，不在库的 routines 里）。
+            // 之前跟着 MySQL 一起来了，于是树上画出「存储过程 / 函数」两个分类、点进去恒为空。
+            "doris" => Meta::Absent,
+            "mysql" | "mariadb" => Meta::Sql(
                 "select routine_name as `name`, routine_type as routineType \
                  from information_schema.routines where routine_schema = database() \
                  order by routine_name"
@@ -1240,7 +1342,9 @@ impl Dialect {
                 "select name, tbl_name as \"table\" from sqlite_master where type = 'trigger' order by name"
                     .to_string(),
             ),
-            "mysql" | "mariadb" | "doris" => Meta::Sql(
+            // Doris 没有触发器（information_schema.triggers 表本身都不存在）
+            "doris" => Meta::Absent,
+            "mysql" | "mariadb" => Meta::Sql(
                 "select trigger_name as `name`, event_object_table as `table`, action_timing as timing, \
                  event_manipulation as event from information_schema.triggers \
                  where trigger_schema = database() order by trigger_name"
@@ -1279,7 +1383,9 @@ impl Dialect {
 
     pub fn events(&self) -> Meta {
         match self.key() {
-            "mysql" | "mariadb" | "doris" => Meta::Sql(
+            // Doris 没有事件调度器
+            "doris" => Meta::Absent,
+            "mysql" | "mariadb" => Meta::Sql(
                 "select event_name as `name`, status, interval_value, interval_field \
                  from information_schema.events where event_schema = database() order by event_name"
                     .to_string(),
@@ -1325,18 +1431,18 @@ impl Dialect {
             ("mysql" | "mariadb" | "doris", "view") => {
                 Meta::Sql(format!("show create view {}", self.quote(name)))
             }
-            ("mysql" | "mariadb" | "doris", "procedure") => {
+            ("mysql" | "mariadb", "procedure") => {
                 Meta::Sql(format!("show create procedure {}", self.quote(name)))
             }
-            ("mysql" | "mariadb" | "doris", "function") => {
+            ("mysql" | "mariadb", "function") => {
                 Meta::Sql(format!("show create function {}", self.quote(name)))
             }
-            ("mysql" | "mariadb" | "doris", "trigger") => {
+            ("mysql" | "mariadb", "trigger") => {
                 Meta::Sql(format!("show create trigger {}", self.quote(name)))
             }
             // 事件调度器：MySQL 有 `show create event`，之前整块漏了 —— 树上有「事件」分类，
             // 点进去却是 501，纯粹是分支没写
-            ("mysql" | "mariadb" | "doris", "event") => {
+            ("mysql" | "mariadb", "event") => {
                 Meta::Sql(format!("show create event {}", self.quote(name)))
             }
             ("postgresql" | "kingbase", "view") => Meta::Sql(format!(
@@ -1492,7 +1598,8 @@ impl Dialect {
     pub fn limit_clause(&self, offset: u64, size: u64) -> String {
         match self.key() {
             "sqlserver" => format!("offset {offset} rows fetch next {size} rows only"),
-            "oracle" | "dm" => format!("offset {offset} rows fetch next {size} rows only"),
+            // Derby 没有 LIMIT 语法（真机：Encountered "limit"），用 SQL 标准的 OFFSET/FETCH
+            "oracle" | "dm" | "derby" => format!("offset {offset} rows fetch next {size} rows only"),
             _ => format!("limit {size} offset {offset}"),
         }
     }
@@ -1587,11 +1694,40 @@ impl Dialect {
                 .unwrap_or_else(|| "text".to_string());
             let family = TypeFamily::parse(&raw_type);
             // 只有跨类型才翻译；同类型原样照抄
-            let type_name = if cross {
+            let mut type_name = if cross {
                 family.render(self.kind)
             } else {
                 raw_type
             };
+            // H2 目标：内核回显的完整类型文本会带 `integer(32,0)` / `double(10,0)` 这种
+            // **精度括号**，H2 2.x 对整数/浮点不接受（真机：重建目标表直接语法错）——
+            // 整数与浮点类剥掉括号；`character varying(50)` 的括号是合法长度，保留。
+            if self.kind.key() == "h2" {
+                let lower = type_name.to_ascii_lowercase();
+                for base in ["integer", "bigint", "smallint", "tinyint", "double", "real", "float"] {
+                    if lower.starts_with(base) && type_name.contains('(') {
+                        type_name = base.to_string();
+                        break;
+                    }
+                }
+            }
+            // ClickHouse 的列**默认就是 NOT NULL**——「不写 not null」对它无效，
+            // 可空列必须显式 `Nullable(T)`，否则源全是可空列、建出来全不可空（真机踩过）。
+            // 例外：主键/排序键不允许 Nullable（保持原样，源主键本来就不是可空列）；
+            // Array/Map/Tuple 这类复合类型也不能包 Nullable。
+            if self.kind.key() == "clickhouse"
+                && column.nullable
+                && !column.primary_key
+            {
+                let t = type_name.trim();
+                let wrapper_ok = !t.starts_with("Array(")
+                    && !t.starts_with("Map(")
+                    && !t.starts_with("Tuple(")
+                    && !t.starts_with("Nullable(");
+                if wrapper_ok {
+                    type_name = format!("Nullable({t})");
+                }
+            }
             let mut line = format!("  {} {}", self.quote(&column.name), type_name);
             if !column.nullable {
                 line.push_str(" not null");
@@ -1649,8 +1785,15 @@ impl Dialect {
                 ("UNIQUE KEY", primaries.iter().filter(|name| !name.is_empty()).cloned().collect())
             };
             let buckets = format!("DISTRIBUTED BY HASH({}) BUCKETS 1", keys[0]);
+            // Doris 的表注释是 **COMMENT "…" 子句**（KEY 与 DISTRIBUTED 之间）——
+            // 不能塞进 PROPERTIES：真机 2.1.5 直接报 Unknown properties: [comment=…]
+            //（错误文案还是逗号包裹的，很迷惑）。列级内联 COMMENT 不受影响，两者并存。
+            let doris_comment = match table_comment.map(str::trim).filter(|text| !text.is_empty()) {
+                Some(comment) => format!("\nCOMMENT {}", self.literal(comment)),
+                None => String::new(),
+            };
             return format!(
-                "create table {table} (\n{}\n)\n{clause}({})\n{buckets}\nPROPERTIES(\"replication_num\" = \"1\");",
+                "create table {table} (\n{}\n)\n{clause}({}){doris_comment}\n{buckets}\nPROPERTIES(\"replication_num\" = \"1\");",
                 key_lines.join(",\n"),
                 keys.join(", ")
             );
@@ -1664,8 +1807,15 @@ impl Dialect {
             } else {
                 format!("({})", primaries.join(", "))
             };
+            // ClickHouse 的表注释：`COMMENT '…'` 子句（跟在 ORDER BY 后）——
+            // 之前这个分支漏了它，同步建出来的 CH 表表注释永远是空的（真机踩过）。
+            // 列级内联 COMMENT 在上面已写（CH 收这种写法），两者并存。
+            let ch_comment = match table_comment.map(str::trim).filter(|text| !text.is_empty()) {
+                Some(comment) => format!(" COMMENT {}", self.literal(comment)),
+                None => String::new(),
+            };
             return format!(
-                "create table {table} (\n{}\n)\nENGINE = MergeTree()\nORDER BY {order};",
+                "create table {table} (\n{}\n)\nENGINE = MergeTree()\nORDER BY {order}{ch_comment};",
                 body.join(",\n")
             );
         }
@@ -1676,13 +1826,24 @@ impl Dialect {
         // 表注释：MySQL 系写在表选项里（`) comment='…';`）—— 与字段注释同为内联写法。
         // 其它方言要另发 `comment on table …`，本轮不写（见方法头注），宁可留空。
         let tail = match self.kind.key() {
-            "mysql" | "mariadb" => match table_comment.map(str::trim).filter(|text| !text.is_empty()) {
-                Some(comment) => format!(" comment={}", self.literal(comment)),
-                None => String::new(),
-            },
+            // MySQL 系：显式给 utf8mb4 —— 不写的话新表继承**库默认字符集**，实测继承出
+            // latin1 后中文数据直接插不进去（Incorrect string value 1366），而源表明明是 utf8
+            "mysql" | "mariadb" => {
+                let comment = match table_comment.map(str::trim).filter(|text| !text.is_empty()) {
+                    Some(comment) => format!(" comment={}", self.literal(comment)),
+                    None => String::new(),
+                };
+                " default charset=utf8mb4".to_string() + &comment
+            }
+            // Doris 的表级注释跟在 PROPERTIES 里（见上方 doris 分支自行拼接），这里不动
             _ => String::new(),
         };
-        format!("create table {table} (\n{}\n){tail};", out.join(",\n"))
+        let mut ddl = format!("create table {table} (\n{}\n){tail};", out.join(",\n"));
+        // Derby 的 JDBC **不允许语句带分号**（其它的都宽容）—— 目标是 Derby 时剥掉
+        if self.kind.key() == "derby" {
+            ddl = ddl.trim_end_matches(';').to_string();
+        }
+        ddl
     }
 
     /// 把**源库**的类型名翻译成本方言（目标）的类型名 —— 跨类型同步建表的入口。
@@ -1870,6 +2031,15 @@ impl Dialect {
     pub fn column_types(&self, table: &str) -> Meta {
         let quoted = self.literal(table);
         match self.key() {
+            // ClickHouse 没有 information_schema.columns，列类型/注释在 system.columns：
+            // type 列是 CH 原生写法（Int32 / Nullable(String) …），parse 侧已能剥 Nullable 壳
+            "clickhouse" => Meta::Sql(format!(
+                "select name as column_name, type as type_text, \
+                 coalesce(comment, '') as comment, \
+                 0 as is_auto, \
+                 position as ordinal \
+                 from system.columns where database = currentDatabase() and table = {quoted}"
+            )),
             // MySQL 系直接有完整类型文本（含 enum、unsigned 等），不用自己拼
             "mysql" | "mariadb" | "doris" => Meta::Sql(format!(
                 "select column_name as column_name, column_type as type_text, \
@@ -2132,6 +2302,17 @@ enum TypeFamily {
 impl TypeFamily {
     /// 把一个（任何方言的）类型名解析成类型族。认不出就 `Unknown`。
     fn parse(raw: &str) -> Self {
+        // 剥掉 ClickHouse 的 `Nullable(T)` 壳：可空性在 ColumnDetail.nullable 里已有，
+        // 类型解析只看内层（`Nullable(String)` 直接 parse 会落 Unknown → 目标列成 CLOB）
+        let raw = match raw.trim().to_ascii_lowercase().strip_prefix("nullable(") {
+            Some(inner) if raw.trim().ends_with(')') => {
+                raw.trim().split_once('(').map(|(_, rest)| rest).unwrap_or(raw)
+                    .trim_end_matches(')')
+                    .trim()
+                    .to_string()
+            }
+            _ => raw.to_string(),
+        };
         let lower = raw.trim().to_ascii_lowercase();
         let (head, args) = match lower.split_once('(') {
             Some((head, rest)) => (
@@ -2209,6 +2390,14 @@ impl TypeFamily {
             "uint16" => Self::Int { bytes: 4 },
             "uint32" => Self::Int { bytes: 8 },
             "uint64" => Self::Decimal { precision: 20, scale: 0 },
+            // ClickHouse 的整型/浮点族（Int32 / Float64 …）：之前没认，落到 Unknown，
+            // 目标 Derby/H2 这类按 Unknown→CLOB 渲染的方言，整列全成 CLOB（真机踩过）
+            "int8" => Self::Int { bytes: 1 },
+            "int16" => Self::Int { bytes: 2 },
+            "int32" => Self::Int { bytes: 4 },
+            "int64" => Self::Int { bytes: 8 },
+            "float32" => Self::Real,
+            "float64" => Self::Real,
             _ => Self::Unknown,
         }
     }
@@ -2318,6 +2507,14 @@ impl TypeFamily {
                         }
                     }
                     "clickhouse" => "String".to_string(),
+                    // Derby 没有 text 类型：大文本用 CLOB，短的用 varchar
+                    "derby" => {
+                        if wide {
+                            "clob".to_string()
+                        } else {
+                            format!("varchar({})", len.unwrap_or(255))
+                        }
+                    }
                     "sqlite" => "text".to_string(),
                     _ => {
                         if wide {

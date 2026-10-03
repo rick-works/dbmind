@@ -26,14 +26,13 @@
       <el-tab-pane :label="$t('cd.tabBasic')" name="basic">
         <el-form :model="form" label-width="90px" label-position="left">
           <el-form-item :label="$t('cd.name')" required>
-            <el-input v-model="form.name" :placeholder="$t('cd.namePlaceholder')" />
+            <el-input v-model="form.name" />
           </el-form-item>
 
           <!-- 备注：存在连接的 extra.note 里（后端 config_from_body 写入、connection_json 回传）。
                用途是「这条连接是干嘛的」—— 库名看不出来，人能一句话说清。 -->
           <el-form-item :label="$t('cd.note')">
-            <el-input v-model="form.note" type="textarea" :rows="2" maxlength="200" show-word-limit
-                      :placeholder="$t('cd.notePlaceholder')" />
+            <el-input v-model="form.note" type="textarea" :rows="2" maxlength="200" show-word-limit />
           </el-form-item>
 
           <div class="form-row">
@@ -52,7 +51,7 @@
             </el-form-item>
             <el-form-item :label="$t('cd.group')" required style="flex:1">
               <div style="display: flex; gap: 8px; width: 100%">
-                <el-select v-model="form.environment" style="flex:1" allow-create filterable
+                <el-select v-model="form.group" style="flex:1" allow-create filterable
                            :empty-values="[null, undefined]" default-first-option
                            @change="onEnvChange">
                   <el-option-group v-if="customFolders.length" :label="$t('cd.group')">
@@ -303,6 +302,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { FolderOpened, DocumentAdd, Connection, WarningFilled, CircleCheckFilled, Plus, Delete, Refresh, Link, ArrowUp, Folder, Document } from '@element-plus/icons-vue'
 import { saveConnection, testConnection, getConnectionById, getDriverTypes, getDriverStatus, browseBackupDirs } from '../../api'
 import { connErrorHintText } from '../../utils/connErrors'
+import { addPureFolder } from '../../utils/folders'
 import { t } from '../../utils/i18n'
 import { byType, labelOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
@@ -312,7 +312,7 @@ const props = defineProps({
   modelValue: Boolean,
   conn: Object,
   customFolders: { type: Array, default: () => [] },
-  initialEnvironment: { type: String, default: '' },
+  initialGroup: { type: String, default: '' },
   initialType: { type: String, default: '' }
 })
 const emit = defineEmits(['update:modelValue', 'saved', 'folder-added'])
@@ -375,10 +375,10 @@ const typeDefaults = (type) => {
   const common = {
     name: '', host: '', port: undefined, database: '',
     username: '', password: '', filePath: '',
-    environment: props.customFolders[0] || '', env: 'DEV', jdbcUrl: '', params: [],
+    group: props.customFolders[0] || '', env: 'DEV', jdbcUrl: '', params: [],
     connectTimeout: 10, socketTimeout: 600, writeTimeout: 300, charset: 'UTF-8',
     esProtocol: 'http',
-    sshEnabled: false, sshHost: '', sshPort: undefined, sshUser: '',
+    sshEnabled: false, sshHost: '', sshPort: 22, sshUser: '',
     sshAuthType: 'password', sshPassword: '', sshKeyPath: '', sshKeyPassphrase: ''
   }
   const def = byType(type)
@@ -430,12 +430,12 @@ const initForm = async () => {
   } else {
     form.value = defaults()
     // 父组件指定的初始分组（右键新建连接时传入）
-    if (props.initialEnvironment) form.value.environment = props.initialEnvironment
+    if (props.initialGroup) form.value.group = props.initialGroup
   }
   // 兼容旧数据：缺失字段时归一化
   if (!form.value.jdbcUrl) form.value.jdbcUrl = ''
   if (!Array.isArray(form.value.params)) form.value.params = []
-  if (!form.value.environment) form.value.environment = props.customFolders[0] || ''
+  if (!form.value.group) form.value.group = props.customFolders[0] || ''
   if (!form.value.env) form.value.env = 'DEV'
   if (!form.value.charset) form.value.charset = 'UTF-8'
   if (!form.value.connectTimeout) form.value.connectTimeout = 10
@@ -450,7 +450,6 @@ const initForm = async () => {
   // SSH 字段归一化
   if (form.value.sshEnabled == null) form.value.sshEnabled = false
   if (!form.value.sshHost) form.value.sshHost = ''
-  if (!form.value.sshPort) form.value.sshPort = undefined
   if (!form.value.sshUser) form.value.sshUser = ''
   if (!form.value.sshAuthType) form.value.sshAuthType = 'password'
   if (!form.value.sshPassword) form.value.sshPassword = ''
@@ -461,15 +460,18 @@ const initForm = async () => {
     const n = Number(form.value.port)
     if (!isNaN(n)) form.value.port = n
   }
+  // SSH 端口默认 22：**协议默认值，不是"可选填"**。
+  // 空着的话用户不知道该填什么（面板上只有一个空输入框），而后端本来也会回落 22 ——
+  // 与其让默认值藏在后端，不如直接写进表单让它**看得见**（新建与编辑老连接一视同仁：
+  // 编辑时后端对未配置的端口返回 null，这里也补成 22）。
+  const sshPort = Number(form.value.sshPort)
+  form.value.sshPort = Number.isFinite(sshPort) && sshPort > 0 && sshPort <= 65535 ? sshPort : 22
 }
 
-// 分组变更：如果输入了新的分组名，自动保存到 localStorage
+// 分组变更：如果输入了新的分组名，自动存为后端纯分组
 const onEnvChange = (v) => {
   if (!v) return
-  try {
-    const raw = JSON.parse(localStorage.getItem('dbmind_folders') || '[]')
-    if (!raw.includes(v)) { raw.push(v); localStorage.setItem('dbmind_folders', JSON.stringify(raw)) }
-  } catch { /* ignore */ }
+  addPureFolder(v)
 }
 
 // 快捷新建分组
@@ -484,12 +486,8 @@ const createFolder = async () => {
     })
     if (!value) return
     try {
-      const raw = JSON.parse(localStorage.getItem('dbmind_folders') || '[]')
-      if (!raw.includes(value)) {
-        raw.push(value)
-        localStorage.setItem('dbmind_folders', JSON.stringify(raw))
-      }
-      form.value.environment = value
+      await addPureFolder(value)
+      form.value.group = value
       emit('folder-added', value)
       ElMessage.success(t('cd.folderCreated', { name: value }))
     } catch { /* ignore */ }
@@ -511,7 +509,7 @@ const onTypePicked = (code) => {
     ...typeDefaults(code),
     name: prevName,
     env: prevEnv,
-    environment: prevEnvironment
+    group: prevGroup
   }
   activeTab.value = 'basic'
 }
@@ -555,7 +553,7 @@ const removeParam = (i) => form.value.params.splice(i, 1)
 const doSave = async () => {
   if (!form.value.name) return ElMessage.warning(t('cd.needName'))
   if (!form.value.env) return ElMessage.warning(t('cd.needEnv'))
-  if (!form.value.environment) return ElMessage.warning(t('cd.needGroup'))
+  if (!form.value.group) return ElMessage.warning(t('cd.needGroup'))
   if (!isFileType.value && !form.value.host && !form.value.jdbcUrl) return ElMessage.warning(t('cd.needHost'))
   if (!isFileType.value && !form.value.port && !form.value.jdbcUrl) return ElMessage.warning(t('cd.needPort'))
   // 文件型没有主机/端口，但**必须有文件路径**：以前这里漏了，于是能保存出一个没有文件路径的连接，

@@ -19,7 +19,7 @@ use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use dbmind_core::{AccessContext, ConnectionConfig, DbMindEngine, DbMindError, ErrorCode, QueryRequest};
 use serde::Deserialize;
@@ -31,9 +31,63 @@ use tower_http::cors::CorsLayer;
 
 pub mod api;
 
+// ------------------------------------------------------------------ 日志热切换
+//
+// 「日志级别」是设置页里的一项，但 tracing 的过滤器长在**壳层** —— 内核只负责存储设置值。
+// 过滤器包在 reload 层里，改设置不用重启进程：排查问题时切 debug、切回 info，当场生效。
+
+type LogReload = tracing_subscriber::reload::Handle<
+    tracing_subscriber::EnvFilter,
+    tracing_subscriber::Registry,
+>;
+static LOG_RELOAD: std::sync::OnceLock<LogReload> = std::sync::OnceLock::new();
+
+/// 初始化日志（main 调用）：`RUST_LOG` 优先（沿用老行为），否则 info、写 stderr。
+pub fn init_tracing() {
+    use tracing_subscriber::prelude::*;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    let (filter, handle) = tracing_subscriber::reload::Layer::new(filter);
+    let _ = LOG_RELOAD.set(handle);
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .init();
+}
+
+/// `log.level` 的合法值（宽松：`warning` 也认）。
+pub fn is_valid_log_level(level: &str) -> bool {
+    matches!(
+        level.trim().to_ascii_lowercase().as_str(),
+        "trace" | "debug" | "info" | "warn" | "warning" | "error"
+    )
+}
+
+/// 热切换日志级别。设置里的值此后**盖过** `RUST_LOG`（它只在进程起来那一刻作参考）；
+/// 全局生效（不按模块细分）—— 设置页要的就是一个简单直给的下拉框。
+pub fn set_log_level(level: &str) {
+    let normalized = match level.trim().to_ascii_lowercase().as_str() {
+        "trace" => "trace",
+        "debug" => "debug",
+        "info" => "info",
+        "warn" | "warning" => "warn",
+        _ => "error",
+    };
+    if let Some(handle) = LOG_RELOAD.get() {
+        let ok = handle
+            .modify(|filter| *filter = tracing_subscriber::EnvFilter::new(normalized))
+            .is_ok();
+        tracing::info!(level = normalized, applied = ok, "日志级别已切换");
+    }
+}
+
 #[derive(Clone)]
 pub struct AppState {
-    engine: Arc<DbMindEngine>,
+    /// 当前引擎。包在 `RwLock` 里只为一件事：**数据目录迁移热切换** ——
+    /// 换上打开自新主库的引擎，旧引擎随之退役（Drop 收掉它的宿主 JVM；
+    /// 仍在路上的旧请求持有自己的 `Arc` 克隆，跑完自然释放）。
+    /// `Arc<RwLock<…>>` 是为了让 `AppState` 保持 `Clone`（axum 的 State 要求）。
+    engine_cell: Arc<std::sync::RwLock<Arc<DbMindEngine>>>,
     /// 异步任务表（导出 / 导入 / 整库转储 / 对比 / 同步 / 造数 共用一份）。
     ///
     /// 放在壳层而不是内层：内核只负责「执行一条语句」，没有「任务」这个概念；
@@ -44,9 +98,30 @@ pub struct AppState {
 impl AppState {
     pub fn new(engine: DbMindEngine) -> Self {
         Self {
-            engine: Arc::new(engine),
+            engine_cell: Arc::new(std::sync::RwLock::new(Arc::new(engine))),
             tasks: Arc::new(crate::api::tasks::TaskRegistry::new()),
         }
+    }
+
+    /// 当前引擎的 `Arc` 克隆：每个请求拿住自己那份，切换后旧请求不受影响。
+    pub fn engine(&self) -> Arc<DbMindEngine> {
+        self.engine_cell
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// 热切换引擎（数据目录迁移的落点）。
+    ///
+    /// 旧引擎在这里被 drop —— `DbMindEngine::drop` 会收掉它的全部宿主 JVM；
+    /// 新引擎的宿主在下次连库时按**新**驱动目录按需拉起。
+    pub fn swap_engine(&self, new_engine: DbMindEngine) {
+        dbmind_core::install_global_store(new_engine.store().clone());
+        *self
+            .engine_cell
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Arc::new(new_engine);
+        tracing::info!("已热切换到新数据目录的引擎");
     }
 }
 
@@ -100,11 +175,11 @@ async fn health() -> Json<Value> {
 }
 
 async fn runtime_summary(State(state): State<AppState>) -> ApiResult {
-    Ok(Json(serde_json::to_value(state.engine.runtime_summary())?))
+    Ok(Json(serde_json::to_value(state.engine().runtime_summary())?))
 }
 
 async fn list_types(State(state): State<AppState>) -> ApiResult {
-    Ok(Json(serde_json::to_value(state.engine.types())?))
+    Ok(Json(serde_json::to_value(state.engine().types())?))
 }
 
 /// 驱动与 agent 宿主就绪状态。
@@ -112,7 +187,7 @@ async fn list_types(State(state): State<AppState>) -> ApiResult {
 /// 单独一个端点（而不塞进 /types）：前端据此把「未接入」和「缺驱动」分开显示，
 /// 并在缺驱动时给出坐标与安装命令。
 async fn list_drivers(State(state): State<AppState>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let report = blocking(move || Ok(engine.driver_report())).await?;
     Ok(Json(serde_json::to_value(report)?))
 }
@@ -146,7 +221,7 @@ fn jdbc_artifact_of(engine: &DbMindEngine, agent_key: &str) -> Result<String, Ap
 /// 内核刻意不引网络依赖（见 CLI 里那段说明），所以下载在这里做；但**地址的拼法只在核心里**
 /// （`driver_artifact_url`）—— CLI / 桌面 / Web 三处共用一份，免得哪天有一处先漂。
 async fn fetch_driver(State(state): State<AppState>, Path(agent_key): Path<String>) -> ApiResult {
-    let artifact = jdbc_artifact_of(&state.engine, &agent_key)?;
+    let artifact = jdbc_artifact_of(&state.engine(), &agent_key)?;
     let key = agent_key;
     let result = blocking(move || {
         let url = dbmind_core::driver_artifact_url(&artifact)?;
@@ -183,7 +258,7 @@ async fn upload_driver(
     Query(params): Query<UploadQuery>,
     body: Bytes,
 ) -> ApiResult {
-    jdbc_artifact_of(&state.engine, &agent_key)?;
+    jdbc_artifact_of(&state.engine(), &agent_key)?;
     let filename = params.filename;
     let bytes = body.to_vec();
     let result = blocking(move || {
@@ -199,14 +274,14 @@ async fn upload_driver(
 }
 
 async fn list_connections(State(state): State<AppState>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     Ok(Json(serde_json::to_value(
         blocking(move || engine.list_connections()).await?,
     )?))
 }
 
 async fn create_connection(State(state): State<AppState>, Json(config): Json<ConnectionConfig>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let record = blocking(move || engine.add_connection(config)).await?;
     Ok(Json(serde_json::to_value(record)?))
 }
@@ -216,19 +291,19 @@ async fn update_connection(
     Path(id): Path<String>,
     Json(config): Json<ConnectionConfig>,
 ) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let record = blocking(move || engine.update_connection(&id, config)).await?;
     Ok(Json(serde_json::to_value(record)?))
 }
 
 async fn delete_connection(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let removed = blocking(move || engine.remove_connection(&id)).await?;
     Ok(Json(json!({ "removed": removed })))
 }
 
 async fn test_connection(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let report = blocking(move || engine.test_connection(&id)).await?;
     Ok(Json(serde_json::to_value(report)?))
 }
@@ -244,13 +319,45 @@ async fn set_read_only(
     Path(id): Path<String>,
     Json(body): Json<ReadOnlyBody>,
 ) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let record = blocking(move || engine.set_read_only(&id, body.read_only)).await?;
     Ok(Json(serde_json::to_value(record)?))
 }
 
+/// `POST /api/connections/{id}/disconnect-sessions` —— 断开该连接的缓存会话。
+///
+/// 用途：数据库侧改了权限/密码后，内核连接池里的旧会话还带着旧的全局权限快照
+///（MySQL 的全局权限变更只对新建连接生效），界面「关闭连接」时调一下，
+/// 用户重开树节点即为全新会话，**不必重启应用**。
+/// 只断空闲会话（正忙的跳过），连接记录本身不受影响。
+async fn disconnect_sessions(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult {
+    let engine = state.engine();
+    let closed = blocking(move || engine.disconnect_sessions(&id)).await?;
+    Ok(Json(json!({ "success": true, "closed": closed })))
+}
+
+/// `POST /api/connections/{id}/disconnect-database` —— 只断**某个库**的会话。
+///
+/// 界面「关闭数据库」用：该库的语句跑在它的影子连接上，按 database 找到影子断掉；
+/// 主连接的共享会话不动（连接还开着）。正忙的会话跳过（不打断在跑的语句）。
+#[derive(serde::Deserialize)]
+struct DisconnectDbBody {
+    database: String,
+}
+
+async fn disconnect_database(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<DisconnectDbBody>,
+) -> ApiResult {
+    let engine = state.engine();
+    let db = body.database;
+    let closed = blocking(move || engine.disconnect_database(&id, &db)).await?;
+    Ok(Json(json!({ "success": true, "closed": closed })))
+}
+
 async fn execute(State(state): State<AppState>, Json(request): Json<QueryRequest>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     // 先把 executionId 定下来：调用方拿得到它，取消才有依据
     let execution_id = request
         .execution_id
@@ -262,12 +369,12 @@ async fn execute(State(state): State<AppState>, Json(request): Json<QueryRequest
 }
 
 async fn cancel_execution(State(state): State<AppState>, Path(execution_id): Path<String>) -> Json<Value> {
-    let cancelled = state.engine.cancel(&execution_id);
+    let cancelled = state.engine().cancel(&execution_id);
     Json(json!({ "executionId": execution_id, "cancelled": cancelled }))
 }
 
 async fn active_executions(State(state): State<AppState>) -> Json<Value> {
-    Json(json!({ "active": state.engine.active_executions() }))
+    Json(json!({ "active": state.engine().active_executions() }))
 }
 
 #[derive(Deserialize)]
@@ -289,7 +396,7 @@ async fn list_tables(
     Path(id): Path<String>,
     Query(params): Query<RefreshQuery>,
 ) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let tables = blocking(move || {
         if params.refresh {
             engine.list_tables_fresh(&id)
@@ -306,7 +413,7 @@ async fn list_columns(
     Path(id): Path<String>,
     Query(params): Query<TableQuery>,
 ) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let columns = blocking(move || {
         if params.refresh {
             engine.list_columns_fresh(&id, &params.table)
@@ -320,14 +427,14 @@ async fn list_columns(
 
 /// 结构缓存概览：界面据此显示「缓存于 N 秒前」，避免用户以为结构一定是实时的。
 async fn schema_cache_info(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let info = blocking(move || engine.schema_cache_info(&id)).await?;
     Ok(Json(serde_json::to_value(info)?))
 }
 
 /// 手工作废缓存（界面上的「清缓存」）。
 async fn clear_schema_cache(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let cleared = blocking(move || engine.clear_schema_cache(&id)).await?;
     Ok(Json(json!({ "cleared": cleared })))
 }
@@ -344,19 +451,19 @@ fn default_history_limit() -> usize {
 }
 
 async fn list_history(State(state): State<AppState>, Query(params): Query<HistoryQuery>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let history = blocking(move || engine.history(params.limit, params.connection.as_deref())).await?;
     Ok(Json(serde_json::to_value(history)?))
 }
 
 async fn clear_history(State(state): State<AppState>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let cleared = blocking(move || engine.clear_history()).await?;
     Ok(Json(json!({ "cleared": cleared })))
 }
 
 async fn list_settings(State(state): State<AppState>) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let settings = blocking(move || engine.settings()).await?;
     let map: serde_json::Map<String, Value> =
         settings.into_iter().map(|(k, v)| (k, Value::String(v))).collect();
@@ -373,13 +480,142 @@ async fn put_setting(
     Path(key): Path<String>,
     Json(body): Json<SettingBody>,
 ) -> ApiResult {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let value = body.value;
+    // 日志级别**先校验再落库**：值不合法当场拒绝，不让一个拼错的级别进了库
+    // 之后每次启动都被静默忽略（用户还以为生效了）
+    if key == dbmind_core::Store::KEY_LOG_LEVEL && !is_valid_log_level(&value) {
+        return Err(ApiError(DbMindError::new(
+            ErrorCode::QueryInvalid,
+            "日志级别只支持 trace / debug / info / warn / error",
+        )));
+    }
     // 闭包会拿走所有权，故先复制一份给任务，原值留给响应
     let task_key = key.clone();
     let task_value = value.clone();
     blocking(move || engine.set_setting(&task_key, &task_value)).await?;
+    // 日志级别落库后立刻热切换（生效点在壳层，见 `set_log_level`）
+    if key == dbmind_core::Store::KEY_LOG_LEVEL {
+        set_log_level(&value);
+    }
     Ok(Json(json!({ "key": key, "value": value })))
+}
+
+/// 一键作废**所有**连接的结构缓存（设置页「查询」页签的「刷新结构缓存」）。
+#[derive(serde::Serialize)]
+struct ClearedSchema {
+    cleared: usize,
+}
+
+async fn clear_all_schema_cache(State(state): State<AppState>) -> ApiResult {
+    let engine = state.engine();
+    let cleared = blocking(move || engine.clear_all_schema_cache()).await?;
+    Ok(Json(serde_json::to_value(ClearedSchema { cleared })?))
+}
+
+// ------------------------------------------------------------------ 缓存页签
+
+/// 文件类缓存项的体量：(文件数, 字节数)。只扫两层：备份可能按日期分子目录。
+fn dir_stats(dir: &std::path::Path) -> (u64, u64) {
+    let mut files = 0u64;
+    let mut bytes = 0u64;
+    let mut count_file = |p: &std::path::Path| {
+        if p.is_file() {
+            files += 1;
+            bytes += p.metadata().map(|m| m.len()).unwrap_or(0);
+        }
+    };
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_dir() {
+                if let Ok(sub) = std::fs::read_dir(&p) {
+                    for e in sub.flatten() {
+                        count_file(&e.path());
+                    }
+                }
+            } else {
+                count_file(&p);
+            }
+        }
+    }
+    (files, bytes)
+}
+
+/// 清目录内的文件与子目录（不动目录本身；被占用的文件跳过 —— 日志可能正被写）。
+fn clear_dir_files(dir: &std::path::Path) -> usize {
+    let mut cleared = 0;
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            let removed = if p.is_dir() {
+                std::fs::remove_dir_all(&p).is_ok()
+            } else {
+                std::fs::remove_file(&p).is_ok()
+            };
+            if removed {
+                cleared += 1;
+            }
+        }
+    }
+    cleared
+}
+
+/// 缓存/数据文件体量清单（设置页「缓存」页签）：表类给行数，文件类给个数与字节。
+async fn cache_list(State(state): State<AppState>) -> ApiResult {
+    let engine = state.engine();
+    let table_items = blocking(move || engine.cache_report()).await?;
+    let home = dbmind_core::paths::home_dir();
+    let mut items: Vec<Value> = table_items
+        .into_iter()
+        .map(|(key, rows)| json!({ "key": key, "rows": rows, "files": 0, "bytes": 0 }))
+        .collect();
+    for (key, dir) in [
+        ("backups", home.join("backups")),
+        ("exports", dbmind_core::paths::work_dir()),
+        ("logs", home.join("logs")),
+    ] {
+        let (files, bytes) = dir_stats(&dir);
+        items.push(json!({ "key": key, "rows": 0, "files": files, "bytes": bytes }));
+    }
+    Ok(Json(json!({ "items": items })))
+}
+
+#[derive(Deserialize)]
+struct CacheClearBody {
+    keys: Vec<String>,
+}
+
+/// 清理勾选的缓存项。表类删行数，文件类删文件（被占用的跳过并如实回报）。
+async fn cache_clear(State(state): State<AppState>, Json(body): Json<CacheClearBody>) -> ApiResult {
+    const FILE_KEYS: &[&str] = &["backups", "exports", "logs"];
+    let file_keys: Vec<String> = body
+        .keys
+        .iter()
+        .filter(|k| FILE_KEYS.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    let table_keys: Vec<String> = body
+        .keys
+        .iter()
+        .filter(|k| !FILE_KEYS.contains(&k.as_str()))
+        .cloned()
+        .collect();
+    let engine = state.engine();
+    let mut results: Vec<Value> = blocking(move || engine.purge_caches(&table_keys))
+        .await?
+        .into_iter()
+        .map(|(key, rows)| json!({ "key": key, "rows": rows }))
+        .collect();
+    for key in file_keys {
+        let dir = match key.as_str() {
+            "backups" => dbmind_core::paths::home_dir().join("backups"),
+            "exports" => dbmind_core::paths::work_dir(),
+            _ => dbmind_core::paths::home_dir().join("logs"),
+        };
+        results.push(json!({ "key": key, "files": clear_dir_files(&dir) }));
+    }
+    Ok(Json(json!({ "results": results })))
 }
 
 // ------------------------------------------------------------------ 装配
@@ -405,6 +641,8 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
         )
         .route("/connections/{id}/test", post(test_connection))
         .route("/connections/{id}/read-only", post(set_read_only))
+        .route("/connections/{id}/disconnect-sessions", post(disconnect_sessions))
+    .route("/connections/{id}/disconnect-database", post(disconnect_database))
         .route("/connections/{id}/tables", get(list_tables))
         .route("/connections/{id}/columns", get(list_columns))
         .route(
@@ -415,6 +653,8 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
         .route("/query/{execution_id}/cancel", post(cancel_execution))
         .route("/executions", get(active_executions))
         .route("/history", get(list_history).delete(clear_history))
+        .route("/schema-cache", delete(clear_all_schema_cache))
+        .route("/cache", get(cache_list).post(cache_clear))
         .route("/settings", get(list_settings))
         .route("/settings/{key}", put(put_setting));
 
@@ -480,13 +720,15 @@ async fn spa_fallback(dist: Option<PathBuf>, uri: axum::http::Uri) -> Response {
         let file = dir.join(relative);
         if let Ok(bytes) = tokio::fs::read(&file).await {
             // 缓存策略：`assets/` 下的产物带内容哈希（内容变名字就变），可以长缓存；
-            // 其余（如 index.html）必须每次回源校验 —— 否则改版后浏览器还在拿旧页面，
-            // 用户会反复看到"改动没生效"（本项目实际发生过）。
+            // 其余（如 index.html）**必须 no-store** —— no-cache 只要求「用前校验」，
+            // 而本响应没有 ETag/Last-Modified，浏览器就不再发请求、直接吃内存/磁盘副本，
+            // 于是改版后用户 F5 也一直拿到旧 index.html、加载旧脚本（真机反复踩过）。
+            // no-store 从源头禁掉副本，每次刷新必然拿到最新构建的引用。
             let immutable = relative.starts_with("assets/");
             let cache_control = if immutable {
                 "public, max-age=31536000, immutable"
             } else {
-                "no-cache"
+                "no-store, must-revalidate"
             };
             return (
                 [
@@ -497,14 +739,25 @@ async fn spa_fallback(dist: Option<PathBuf>, uri: axum::http::Uri) -> Response {
             )
                 .into_response();
         }
+        // 产物里**不存在**的带哈希资源必须 404，不能回落 index.html：
+        // 旧版页面引用的旧 chunk 被删后，回落会让浏览器把 HTML 当 JS 执行，
+        // 各种莫名的运行时错误 + 新旧版本混着跑（真机踩过：`hasError is not a function` 白屏）。
+        // 让它 404，浏览器才会彻底走重新加载的路。
+        if relative.starts_with("assets/") {
+            return (
+                StatusCode::NOT_FOUND,
+                "asset 不存在（前端已改版，请刷新页面）",
+            )
+                .into_response();
+        }
     }
 
     match tokio::fs::read(dir.join("index.html")).await {
         Ok(bytes) => (
             [
                 (axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8"),
-                // index.html 不缓存：让浏览器每次都校验，拿到最新构建的引用
-                (axum::http::header::CACHE_CONTROL, "no-cache"),
+                // index.html 一律 no-store：不落任何副本，每次刷新都拿最新构建的引用
+                (axum::http::header::CACHE_CONTROL, "no-store, must-revalidate"),
             ],
             bytes,
         )
@@ -573,6 +826,11 @@ pub async fn serve(options: Options) -> Result<(), String> {
     let imported = crate::api::ai::migrate::import_legacy();
     if imported > 0 {
         tracing::info!(actions = imported, "已把旧版 json 状态导入主库");
+    }
+
+    // 设置里的日志级别盖过默认：以前唯一改法是设 RUST_LOG 重启，调试时太重了
+    if let Ok(Some(level)) = engine.get_setting("log.level") {
+        set_log_level(&level);
     }
 
     // *没有*在这里预置 SQL Server 的原生认证库：`java.library.path` 只在宿主 JVM 启动那一刻

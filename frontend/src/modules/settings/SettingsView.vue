@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    width="980px"
+    width="1200px"
     :close-on-click-modal="true"
     align-center
     class="settings-dialog"
@@ -58,6 +58,120 @@
           <div class="theme-hint">
             <el-icon :size="13"><InfoFilled /></el-icon>{{ $t('settings.language.partialHint') }}
           </div>
+
+          <!-- 日志级别：标题与「界面语言」同款，卡片另起一行铺满宽度。
+               运行时热切换（web 壳的 tracing reload 层）：排查问题时切 debug、
+               切回 info，当场生效不用重启。只影响壳的日志，不按模块细分 -->
+          <div class="panel-title log-title">{{ $t('settings.language.logLevel') }}</div>
+          <div class="log-level-options">
+            <div
+              v-for="lv in logLevels"
+              :key="lv.value"
+              class="theme-opt log-opt"
+              :class="{ active: logLevel === lv.value }"
+              @click="pickLogLevel(lv.value)"
+            >
+              <div class="theme-opt-info">
+                <div class="theme-opt-name">{{ lv.label }}</div>
+                <div class="theme-opt-desc">{{ lv.desc }}</div>
+              </div>
+              <el-icon v-if="logLevel === lv.value" class="theme-opt-check"><CircleCheck /></el-icon>
+            </div>
+          </div>
+          <div class="form-tip log-tip">{{ $t('settings.language.logLevelTip') }}</div>
+        </div>
+
+        <!-- 0.5 安全与会话（后端 app_settings：改安全开关与会话上限都会即时生效） -->
+        <div v-show="activeTab === 'safety'" class="settings-panel">
+          <div class="panel-title">{{ $t('settings.safety.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.safety.desc') }}</div>
+
+          <el-form label-width="130px" label-position="left" class="ai-form">
+            <el-form-item :label="$t('settings.safety.protectProduction')">
+              <!-- 生产保护 = 全局禁止一切写操作，比「只读连接」（连接级，树上挂徽标）更狠一档 -->
+              <el-switch v-model="safetyForm.protectProduction" />
+              <div class="form-tip">{{ $t('settings.safety.protectProductionTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.safety.aiWrite')">
+              <el-switch v-model="safetyForm.aiWriteEnabled" />
+              <div class="form-tip">{{ $t('settings.safety.aiWriteTip') }}</div>
+            </el-form-item>
+            <!-- 安全确认（DELETE/DROP/TRUNCATE 前二次确认）：从「查询」页签迁来 —— 它是安全属性。
+                 状态仍在 queryForm（localStorage dbmind_query），改动即时持久化 -->
+            <el-form-item :label="$t('settings.query.confirmDanger')">
+              <el-checkbox v-model="queryForm.confirmDanger">
+                {{ $t('settings.query.confirmDangerLabel') }}
+              </el-checkbox>
+            </el-form-item>
+            <el-form-item :label="$t('settings.safety.maxSessions')">
+              <!-- 数字输入不进词典：任何语言下都是同一个数字 -->
+              <el-input-number v-model="safetyForm.maxSessions" :min="0" :max="128" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.safety.maxSessionsTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.safety.idleRecycle')">
+              <el-input-number v-model="safetyForm.idleMinutes" :min="0" :max="1440" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.safety.idleRecycleTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.safety.tunnelIdle')">
+              <el-input-number v-model="safetyForm.tunnelIdleMinutes" :min="0" :max="1440" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.safety.tunnelIdleTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.safety.blockDangerous')">
+              <el-switch v-model="safetyForm.blockDangerous" />
+              <div class="form-tip">{{ $t('settings.safety.blockDangerousTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.safety.maxWriteRows')">
+              <el-input-number v-model="safetyForm.maxWriteRows" :min="0" :max="10000000" :step="100" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.safety.maxWriteRowsTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.safety.legacyTls')">
+              <el-switch v-model="safetyForm.allowLegacyTls" />
+              <div class="form-tip">{{ $t('settings.safety.legacyTlsTip') }}</div>
+            </el-form-item>
+          </el-form>
+
+          <div class="actions">
+            <el-button type="primary" :icon="Check" @click="saveSafety">{{ $t('settings.safety.save') }}</el-button>
+          </div>
+        </div>
+
+        <!-- 1. MCP 服务 -->
+        <div v-show="activeTab === 'mcp'" class="settings-panel">
+          <div class="panel-title">{{ $t('settings.mcp.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.mcp.desc') }}</div>
+
+          <el-form label-width="150px" label-position="left" class="ai-form">
+            <el-form-item :label="$t('settings.mcp.defaultConnection')">
+              <el-select v-model="mcpForm.defaultConnection" clearable style="width:240px">
+                <el-option v-for="c in connOptions" :key="c.id" :value="c.name" :label="c.name" />
+              </el-select>
+              <div class="form-tip">{{ $t('settings.mcp.defaultConnectionTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.mcp.maxRows')">
+              <el-input-number v-model="mcpForm.maxRows" :min="1" :max="100000" :step="500" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.mcp.maxRowsTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.mcp.timeoutSecs')">
+              <el-input-number v-model="mcpForm.timeoutSecs" :min="1" :max="600" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.mcp.timeoutSecsTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.mcp.toolsStructure')">
+              <el-switch v-model="mcpForm.toolsStructure" />
+              <div class="form-tip">{{ $t('settings.mcp.toolsStructureTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.mcp.toolsQuery')">
+              <el-switch v-model="mcpForm.toolsQuery" />
+              <div class="form-tip">{{ $t('settings.mcp.toolsQueryTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.mcp.toolsHistory')">
+              <el-switch v-model="mcpForm.toolsHistory" />
+              <div class="form-tip">{{ $t('settings.mcp.toolsHistoryTip') }}</div>
+            </el-form-item>
+          </el-form>
+
+          <div class="actions">
+            <el-button type="primary" :icon="Check" @click="saveMcp">{{ $t('settings.mcp.save') }}</el-button>
+          </div>
         </div>
 
         <!-- 1. AI 服务 -->
@@ -77,9 +191,8 @@
             </el-form-item>
             <el-form-item :label="$t('settings.ai.audit')">
               <el-switch v-model="form.auditEnabled" />
-              <!-- 这一行是"开关 + 说明"并排（el-form-item__content 是 flex），
-                   文案紧贴着开关；加 tip-inline 把它往右挪开一点 -->
-              <div class="form-tip tip-inline">{{ $t('settings.ai.auditTip') }}</div>
+              <!-- 说明统一换行到第二行（与隐私模式等各行对齐）；tip-inline 的旧偏移已废弃 -->
+              <div class="form-tip">{{ $t('settings.ai.auditTip') }}</div>
             </el-form-item>
           </el-form>
 
@@ -112,6 +225,13 @@
                     <div class="form-tip">
                       {{ $t('settings.ai.embeddingTip') }}
                     </div>
+                  </el-form-item>
+                  <!-- 后端一直消费 maxTokens（进请求体），但表单里没有输入框 —— 用户改不了。
+                       留空/0 = 不限制，跟随服务端默认 -->
+                  <el-form-item :label="$t('settings.ai.maxTokens')">
+                    <el-input-number v-model="m.maxTokens" :min="0" :max="200000" :step="1024"
+                      controls-position="right" style="width:180px" />
+                    <div class="form-tip">{{ $t('settings.ai.maxTokensTip') }}</div>
                   </el-form-item>
                 </el-form>
                 <div class="presets">
@@ -230,6 +350,11 @@
               <el-input-number v-model="editorForm.fontSize" :min="10" :max="20" :step="1" controls-position="right" style="width:120px" />
               <span class="unit">px</span>
             </el-form-item>
+            <el-form-item :label="$t('settings.editor.gridFontSize')">
+              <el-input-number v-model="editorForm.gridFontSize" :min="10" :max="20" :step="1" controls-position="right" style="width:120px" />
+              <span class="unit">px</span>
+              <div class="form-tip">{{ $t('settings.editor.gridFontSizeTip') }}</div>
+            </el-form-item>
             <el-form-item :label="$t('settings.editor.tabSize')">
               <el-select v-model="editorForm.tabSize" style="width:120px">
                 <el-option :value="2" :label="$t('settings.editor.spaces', { n: 2 })" />
@@ -238,6 +363,24 @@
             </el-form-item>
             <el-form-item :label="$t('settings.editor.lineNumbers')">
               <el-checkbox v-model="editorForm.lineNumbers" />
+            </el-form-item>
+            <!-- 自动换行 / 脚本自动保存：之前只有默认值、没有任何开关 —— 用户改不了
+                 （autoSave 的逻辑却一直活着，等于一个谁也关不掉/开不上的暗开关）。
+                 小地图开关已随功能下线移除 -->
+            <el-form-item :label="$t('settings.editor.wordWrap')">
+              <el-checkbox v-model="editorForm.wordWrap" />
+            </el-form-item>
+            <el-form-item :label="$t('settings.editor.autoCloseBrackets')">
+              <el-checkbox v-model="editorForm.autoCloseBrackets" />
+              <div class="form-tip">{{ $t('settings.editor.autoCloseBracketsTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.editor.quickSuggest')">
+              <el-checkbox v-model="editorForm.quickSuggest" />
+              <div class="form-tip">{{ $t('settings.editor.quickSuggestTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.editor.autoSave')">
+              <el-checkbox v-model="editorForm.autoSave" />
+              <div class="form-tip">{{ $t('settings.editor.autoSaveTip') }}</div>
             </el-form-item>
 
           </el-form>
@@ -309,7 +452,7 @@
                     </div>
                     <div class="fmt-glob-it">
                       <span class="fmt-glob-lb" :title="$t('settings.format.denseTip')">{{ $t('settings.format.dense') }}</span>
-                      <el-switch v-model="editorForm.sqlDenseOperators" />
+                      <span class="fmt-glob-swslot"><el-switch v-model="editorForm.sqlDenseOperators" /></span>
                     </div>
                   </div>
                 </div>
@@ -323,7 +466,7 @@
                     </div>
                     <div class="fmt-glob-it">
                       <span class="fmt-glob-lb">{{ $t('settings.format.useTabs') }}</span>
-                      <el-switch v-model="editorForm.sqlUseTabs" />
+                      <span class="fmt-glob-swslot"><el-switch v-model="editorForm.sqlUseTabs" /></span>
                     </div>
                     <div class="fmt-glob-it">
                       <span class="fmt-glob-lb" :title="$t('settings.format.exprWidthTip')">{{ $t('settings.format.exprWidth') }}</span>
@@ -344,7 +487,7 @@
                     </div>
                     <div class="fmt-glob-it">
                       <span class="fmt-glob-lb" :title="$t('settings.format.semicolonTip')">{{ $t('settings.format.semicolon') }}</span>
-                      <el-switch v-model="editorForm.sqlNewlineBeforeSemicolon" />
+                      <span class="fmt-glob-swslot"><el-switch v-model="editorForm.sqlNewlineBeforeSemicolon" /></span>
                     </div>
                   </div>
                 </div>
@@ -427,10 +570,37 @@
               </el-select>
               <div class="form-tip">{{ $t('settings.query.pageSizeTip') }}</div>
             </el-form-item>
-            <el-form-item :label="$t('settings.query.confirmDanger')">
-              <el-checkbox v-model="queryForm.confirmDanger">
-                {{ $t('settings.query.confirmDangerLabel') }}
-              </el-checkbox>
+            <!-- 「安全确认」已迁到「安全与会话」页签：它是安全属性，不该混在查询参数里 -->
+            <!-- 下面几项存**后端**（app_settings）：超时/上限由执行入口读，缓存 TTL 由内核读 -->
+            <el-form-item :label="$t('settings.query.timeoutSecs')">
+              <el-input-number v-model="queryForm.timeoutSecs" :min="1" :max="600" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.query.timeoutSecsTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.query.maxRows')">
+              <el-input-number v-model="queryForm.maxRows" :min="100" :max="100000" :step="500" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.query.maxRowsTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.query.cacheTtl')">
+              <el-input-number v-model="queryForm.cacheTtlSecs" :min="30" :max="86400" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.query.cacheTtlTip') }}</div>
+            </el-form-item>
+            <!-- 历史此前只增不减：按条数与天数两个维度自动清理（0 = 该维度不清理） -->
+            <el-form-item :label="$t('settings.query.historyMax')">
+              <el-input-number v-model="queryForm.historyMax" :min="0" :max="100000" :step="100" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.query.historyMaxTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.query.historyDays')">
+              <el-input-number v-model="queryForm.historyDays" :min="0" :max="3650" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.query.historyDaysTip') }}</div>
+            </el-form-item>
+            <!-- NULL 显示样式：本地项（localStorage dbmind_query），watch 即时落盘并热生效 -->
+            <el-form-item :label="$t('settings.query.nullStyle')">
+              <el-select v-model="queryForm.nullStyle" style="width:160px">
+                <el-option value="null" :label="$t('settings.query.nullAsNull')" />
+                <el-option value="paren" :label="$t('settings.query.nullAsParen')" />
+                <el-option value="blank" :label="$t('settings.query.nullAsBlank')" />
+              </el-select>
+              <div class="form-tip">{{ $t('settings.query.nullStyleTip') }}</div>
             </el-form-item>
           </el-form>
 
@@ -439,6 +609,9 @@
               <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.query.save') }}
             </el-button>
             <el-button text @click="resetQuery">{{ $t('settings.editor.reset') }}</el-button>
+            <!-- 维护动作：历史与结构缓存都在无限增长/有有效期，总要有个手动出口 -->
+            <el-button text :icon="Delete" @click="onClearHistory">{{ $t('settings.query.clearHistory') }}</el-button>
+            <el-button text :icon="Refresh" @click="onRefreshCache">{{ $t('settings.query.refreshCache') }}</el-button>
           </div>
         </div>
 
@@ -449,14 +622,27 @@
 
           <el-form label-width="110px" label-position="left" class="ai-form">
             <el-form-item :label="$t('settings.driver.mirror')">
-            <el-select v-model="driverForm.mirror" style="width:200px">
+            <el-select v-model="driverForm.mirror" style="width:240px">
               <!-- 镜像商名是**专有名词**：Maven Central 哪个语言都这么写；
                    阿里云 / 华为云 / 腾讯云 在英文界面下用它们自己的英文名 -->
               <el-option value="maven" label="Maven Central" />
               <el-option value="aliyun" :label="$t('settings.driver.mirrorAliyun')" />
               <el-option value="huawei" :label="$t('settings.driver.mirrorHuawei')" />
               <el-option value="tencent" :label="$t('settings.driver.mirrorTencent')" />
+              <el-option value="custom" :label="$t('settings.driver.mirrorCustom')" />
             </el-select>
+            </el-form-item>
+            <el-form-item v-if="driverForm.mirror === 'custom'" :label="$t('settings.driver.customUrl')">
+              <el-input v-model="driverForm.customUrl" :placeholder="$t('settings.driver.customUrlPh')"
+                        style="width:420px" clearable />
+              <div class="form-tip">{{ $t('settings.driver.customUrlTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.driver.actualSource')">
+              <div class="mirror-link">
+                <a v-if="mirrorBase" :href="mirrorBase" target="_blank" rel="noopener">{{ mirrorBase }}</a>
+                <span v-else>{{ $t('settings.driver.actualSourceNone') }}</span>
+              </div>
+              <div class="form-tip">{{ $t('settings.driver.actualSourceTip') }}</div>
             </el-form-item>
             </el-form>
 
@@ -481,24 +667,28 @@
             <div class="drv-main">
               <div class="drv-name">
                 <span class="drv-label">{{ t.label }}</span>
-                <el-tag v-if="t.builtin" size="small" type="info">{{ $t('settings.driver.tagBuiltin') }}</el-tag>
+                <!-- 非关系型（NoSQL）的驱动打在宿主 jar 里，随应用分发 —— 与 SQLite 同样视为内置，
+                     不给下载/上传按钮（给了也是无效操作） -->
+                <el-tag v-if="t.builtin || t.category === 'NOSQL'" size="small" type="info">{{ $t('settings.driver.tagBuiltin') }}</el-tag>
                 <el-tag v-else-if="t.ready" size="small" type="success">{{ $t('settings.driver.tagReady') }}</el-tag>
                 <el-tag v-else size="small" type="danger">{{ $t('settings.driver.tagMissing') }}</el-tag>
               </div>
               <!-- t.tip 来自后端（getDriverTypes），前端无从翻译 —— 那是"后端文案"那一档，
                    要翻得后端按 Accept-Language 返回，见 i18n.js 头注释里的说明 -->
-              <div class="drv-sub" :title="t.tip">{{ t.tip }}</div>
+              <div class="drv-sub" :title="t.tip">{{ t.category === 'NOSQL' ? $t('settings.driver.tipNoSql') : t.tip }}</div>
             </div>
             <div class="drv-acts">
-              <el-button v-if="!t.builtin" size="small" :loading="driverBusy === t.code"
-                         @click="downloadDriver(t)">
-                <el-icon style="margin-right:4px"><Download /></el-icon>{{ $t('settings.driver.download') }}
-              </el-button>
-              <el-button v-if="!t.builtin" size="small" :loading="driverBusy === t.code + ':up'"
-                         @click="pickDriverFile(t)">
-                <el-icon style="margin-right:4px"><Upload /></el-icon>{{ $t('settings.driver.upload') }}
-              </el-button>
-              <el-button v-if="t.dir" size="small" text @click="openDriverDir(t)">{{ $t('common.openDir') }}</el-button>
+              <template v-if="!t.builtin && t.category !== 'NOSQL'">
+                <el-button size="small" :loading="driverBusy === t.code"
+                           @click="downloadDriver(t)">
+                  <el-icon style="margin-right:4px"><Download /></el-icon>{{ $t('settings.driver.download') }}
+                </el-button>
+                <el-button size="small" :loading="driverBusy === t.code + ':up'"
+                           @click="pickDriverFile(t)">
+                  <el-icon style="margin-right:4px"><Upload /></el-icon>{{ $t('settings.driver.upload') }}
+                </el-button>
+              </template>
+              <el-button v-if="t.dir && t.category !== 'NOSQL'" size="small" text @click="openDriverDir(t)">{{ $t('common.openDir') }}</el-button>
             </div>
             </div>
             </div>
@@ -521,31 +711,40 @@
           </div>
 
           <el-form label-width="110px" label-position="left" class="ai-form">
-            <!-- 两个目录都只读展示：能看到文件在哪、又没有误操作面。
-                 后端能力（含迁移清单与安全策略）都保留着，要放开时把 PATH_SETTINGS_EDITABLE 改成 true 即可 -->
             <el-form-item :label="$t('settings.paths.dataDir')">
-              <el-input v-if="PATH_SETTINGS_EDITABLE" v-model="pathForm.dataDir">
+              <el-input v-model="pathForm.dataDir" :placeholder="pathInfo.defaultDataDir">
                 <template #append>
                   <el-button @click="resetDataDir">{{ $t('settings.editor.reset') }}</el-button>
                 </template>
               </el-input>
-              <div v-else class="path-readonly" :title="pathInfo.dataDir">{{ pathInfo.dataDir }}</div>
-            </el-form-item>
-            <el-form-item :label="$t('settings.paths.driverDir')">
-              <el-input v-if="PATH_SETTINGS_EDITABLE" v-model="pathForm.driverDir">
-                <template #append>
-                  <el-button @click="resetDriverDir">{{ $t('settings.editor.reset') }}</el-button>
-                </template>
-              </el-input>
-              <div v-else class="path-readonly" :title="pathInfo.driverDir">{{ pathInfo.driverDir }}</div>
+              <div class="form-tip">{{ $t('settings.paths.dataDirTip') }}</div>
             </el-form-item>
           </el-form>
 
-
-
-          <div v-if="PATH_SETTINGS_EDITABLE" class="actions">
+          <div class="actions">
             <el-button type="primary" :loading="savingPath" @click="savePaths">
               <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.paths.save') }}
+            </el-button>
+          </div>
+        </div>
+
+        <!-- 5.5 缓存 -->
+        <div v-show="activeTab === 'cache'" class="settings-panel">
+          <div class="panel-title">{{ $t('settings.cache.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.cache.desc') }}</div>
+
+          <div class="cache-list" v-loading="cacheLoading">
+            <label v-for="item in cacheItems" :key="item.key" class="cache-item">
+              <el-checkbox v-model="item.checked" />
+              <span class="cache-name">{{ $t('settings.cache.items.' + item.key) }}</span>
+              <span class="cache-size">{{ cacheSizeText(item) }}</span>
+            </label>
+            <div v-if="!cacheItems.length && !cacheLoading" class="cache-empty">{{ $t('settings.cache.empty') }}</div>
+          </div>
+
+          <div class="actions">
+            <el-button type="danger" plain :loading="cacheClearing" :disabled="!checkedCacheKeys.length" @click="clearCheckedCache">
+              <el-icon style="margin-right:4px"><Delete /></el-icon>{{ $t('settings.cache.clear') }}{{ checkedCacheKeys.length ? ` (${checkedCacheKeys.length})` : '' }}
             </el-button>
           </div>
         </div>
@@ -633,6 +832,10 @@
               <span class="about-k">{{ $t('settings.paths.driverDir') }}</span>
               <code class="about-v">{{ pathInfo.driverDir }}</code>
             </div>
+            <div class="about-row">
+              <span class="about-k">{{ $t('settings.paths.logDir') }}</span>
+              <code class="about-v">{{ pathInfo.logDir || (pathInfo.dataDir + '/logs') }}</code>
+            </div>
           </div>
 
           <div class="about-dbs">
@@ -655,13 +858,15 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   MagicStick, Connection, Brush,
   FolderOpened, EditPen, DataLine, Download, Bell, Operation, Monitor, Plus, Delete,
-  CircleCheck, Timer, Moon, Pointer, Refresh, Search, Upload, Flag, InfoFilled
+  CircleCheck, Timer, Moon, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key
 } from '@element-plus/icons-vue'
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern } from '../../utils/sqlFormat'
-import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, installDriver, uploadDriver, openLocalDir, getAiUsage } from '../../api'
-import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor } from '../../utils/settings'
+import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections } from '../../api'
+import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings } from '../../utils/settings'
+// 「刷新结构缓存」要连**前端那份** localStorage 缓存一起清（内核缓存清了它还在也会显示旧清单）
+import { clearSchemaCache as clearLocalSchemaCache } from '../../utils/schemaCache'
 import DbLogo from '../../common/DbLogo.vue'
 import {
   loadShortcuts, saveShortcuts, SHORTCUT_DEFS, SHORTCUT_GROUPS,
@@ -673,7 +878,7 @@ import {
   getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange
 } from '../../utils/theme'
 
-const props = defineProps({ modelValue: Boolean })
+const props = defineProps({ modelValue: Boolean, initialTab: { type: String, default: '' } })
 const emit = defineEmits(['update:modelValue'])
 
 const visible = computed({
@@ -685,15 +890,20 @@ const activeTab = ref('ai')
 
 // 页签只存 i18nKey，不存中文原文 —— 文案统一由字典给（见 utils/i18n.js）。
 // 存一份中文再「顺便翻译」等于同一句话有两个真相，改文案时必然漏掉一处。
+// 排序逻辑：**使用频率从高到低** —— 外观与日常操作（通用/主题/编辑器/格式化/查询）
+// 在前，AI 与安全居中，系统级（驱动/存储/缓存）靠后，通知/快捷键/关于收尾
 const tabs = [
   { key: 'general', i18nKey: 'settings.tab.general', icon: Flag },
-  { key: 'ai', i18nKey: 'settings.tab.ai', icon: MagicStick },
   { key: 'theme', i18nKey: 'settings.tab.theme', icon: Moon },
   { key: 'editor', i18nKey: 'settings.tab.editor', icon: EditPen },
   { key: 'format', i18nKey: 'settings.tab.format', icon: Brush },
   { key: 'query', i18nKey: 'settings.tab.query', icon: DataLine },
+  { key: 'ai', i18nKey: 'settings.tab.ai', icon: MagicStick },
+  { key: 'safety', i18nKey: 'settings.tab.safety', icon: Lock },
+  { key: 'mcp', i18nKey: 'settings.tab.mcp', icon: Connection },
   { key: 'driver', i18nKey: 'settings.tab.driver', icon: Download },
   { key: 'paths', i18nKey: 'settings.tab.paths', icon: FolderOpened },
+  { key: 'cache', i18nKey: 'settings.tab.cache', icon: Delete },
   { key: 'notify', i18nKey: 'settings.tab.notify', icon: Bell },
   { key: 'shortcut', i18nKey: 'settings.tab.shortcut', icon: Pointer },
   { key: 'about', i18nKey: 'settings.tab.about', icon: Monitor }
@@ -794,7 +1004,7 @@ const presets = computed(() => [
 const genId = () => Math.random().toString(36).slice(2, 10)
 
 const addModel = () => {
-  const newModel = { id: genId(), name: '', baseUrl: '', apiKey: '', model: '', embedding: false }
+  const newModel = { id: genId(), name: '', baseUrl: '', apiKey: '', model: '', maxTokens: 0, embedding: false }
   form.value.models.push(newModel)
   activeModelId.value = newModel.id
 }
@@ -902,19 +1112,9 @@ const load = async () => {
 }
 
 // ---------- 存储路径 ----------
-/**
- * 是否开放「数据目录 / 驱动目录」的修改入口。
- *
- * 换数据目录会牵动连接库、AI 配置、提示词、备份/还原等多处数据；换驱动目录则要搬驱动 jar，
- * 且 SQL Server 集成认证的原生库路径（内核在启动宿主时注入的 {@code -Djava.library.path}）要重启才更新。
- * 后端已经把保护做齐了（只复制不删除源、目标已有文件不覆盖、全部成功才切换、失败保持原目录），
- * 但当前版本先不开放这两个入口更稳妥：设置页只**只读展示**路径，用户知道文件在哪、又没有误操作面。
- *
- * 以后要放开，把这里改成 true 即可（后端接口、迁移清单与安全策略都已就绪）。
- */
-const PATH_SETTINGS_EDITABLE = false
+/** 数据目录迁移已接入（后端：快照 + 复制 + 指针文件，热切换立即生效）；驱动跟着数据目录走，不单独设置 */
 const pathInfo = ref({ os: '', osLabel: '', homeDir: '', defaultDataDir: '', defaultDriverDir: '', dataDir: '', driverDir: '', exportDir: '' })
-const pathForm = ref({ dataDir: '', driverDir: '' })
+const pathForm = ref({ dataDir: '' })
 const savingPath = ref(false)
 const osTagText = computed(() => ({ windows: 'Windows', mac: 'macOS', linux: 'Linux', other: t('settings.paths.osOther') }[pathInfo.value.os] || t('settings.paths.osUnknown')))
 
@@ -922,60 +1122,36 @@ const loadPaths = async () => {
   try {
     const info = await getPathSettings()
     pathInfo.value = info
-    pathForm.value = { dataDir: info.dataDir, driverDir: info.driverDir }
+    pathForm.value = { dataDir: info.dataDir }
     // 空 = 用默认目录；有值 = 用户指定过
   } catch (e) { ElMessage.error(t('settings.paths.msgLoadFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) })) }
 }
 
 const resetDataDir = () => { pathForm.value.dataDir = pathInfo.value.defaultDataDir }
-const resetDriverDir = () => { pathForm.value.driverDir = pathInfo.value.defaultDriverDir }
-
 
 /**
- * 保存路径设置。
+ * 迁移数据目录。
  *
- * 后端保证：数据目录迁移「全部成功才切换」，任何一项失败都会保持原目录不变。
- * 所以这里必须把情况分开说清楚 —— 失败时不能只弹"已保存"，否则用户会以为搬好了。
+ * 后端语义（sys.rs 的 prepare_and_open）：元数据库做一致性快照、驱动整目录复制到目标、
+ * 写下「指针文件」，然后**热切换引擎** —— 立即生效，不用重启（旧引擎的宿主 JVM 由内核回收）。
+ * 切换完成后整页刷新一次：连接树等 SPA 状态要重新从新引擎拉取。
  */
 const savePaths = async () => {
+  const target = (pathForm.value.dataDir || '').trim()
+  if (!target || target === pathInfo.value.dataDir) return
+  try {
+    await ElMessageBox.confirm(
+      t('settings.paths.migrateConfirm', { dir: target }),
+      t('settings.paths.save'),
+      { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel'), closeOnClickModal: false }
+    )
+  } catch { return }
   savingPath.value = true
   try {
-    // 数据目录入口已隐藏：提交时始终带当前实际值，避免空值被后端当成「恢复默认」而触发迁移
-    const info = await savePathSettings({
-      dataDir: pathInfo.value.dataDir || pathForm.value.dataDir,
-      driverDir: pathForm.value.driverDir
-    })
-    pathInfo.value = info
-    pathForm.value = { dataDir: info.dataDir, driverDir: info.driverDir }
-    const m = info.migration || {}
-
-    if (m.failed && m.failed.length) {
-      savingPath.value = false
-      // 明确说清「哪个目录没切换」——后端保证失败的那个目录保持原值，用户不至于以为已经生效
-      const lines = []
-      if (m.dataDirSwitched === false) lines.push(t('settings.paths.notSwitched', { name: t('settings.paths.dataDir'), dir: info.dataDir }))
-      if (m.driverDirSwitched === false) lines.push(t('settings.paths.notSwitched', { name: t('settings.paths.driverDir'), dir: info.driverDir }))
-      await ElMessageBox.alert(
-        (lines.length ? lines.join('\n') + '\n\n' : '')
-        + t('settings.paths.migFailedHead') + '\n- ' + m.failed.join('\n- ')
-        + t('settings.paths.migFailedTail'),
-        t('settings.paths.saveIncomplete'),
-        { confirmButtonText: t('common.gotIt'), customStyle: { whiteSpace: 'pre-line' } }
-      ).catch(() => {})
-      return
-    }
-
-    const bits = []
-    // 分隔符取自字典：中文的「、」「；」放到英文里会很扎眼，反之亦然
-    if (m.moved && m.moved.length) bits.push(t('settings.paths.migCopied', { n: m.moved.length }))
-    if (m.kept && m.kept.length) bits.push(t('settings.paths.migKept', { n: m.kept.length }))
-    if (m.notMigrated && m.notMigrated.length) {
-      bits.push(t('settings.paths.migStayed', { names: m.notMigrated.join(t('common.listSep')) }))
-    }
-    const detail = bits.join(t('common.detailSep'))
-    ElMessage.success(detail
-      ? t('settings.paths.msgSavedWith', { detail })
-      : t('settings.paths.msgSaved'))
+    const info = await savePathSettings({ dataDir: target })
+    ElMessage.success(t('settings.paths.migrated', { dir: info.dataDir }))
+    // 引擎已热切换，但页面上的连接树 / 标签页等状态还来自旧引擎 —— 整页刷新拉新
+    setTimeout(() => { window.location.reload() }, 1200)
   } catch (e) { ElMessage.error(e?.message || e?.toString?.() || t('common.unknownError')) }
   savingPath.value = false
 }
@@ -1003,8 +1179,13 @@ const loadEditor = () => {
     editorForm.value = { ...editorDefaults, ...raw, sqlKeywordRules: rules }
   } catch { editorForm.value = { ...editorDefaults, sqlKeywordRules: [] } }
 }
-const saveEditor = () => {
+// **改完即生效**：用户最常踩的坑就是切了开关没点保存，回去看编辑器"没反应"。
+// 深度监听静默落盘 + 热更新（落盘与刷新只在这一处做），「保存」按钮仅作显式确认。
+watch(editorForm, () => {
   localStorage.setItem('dbmind_editor', JSON.stringify(editorForm.value))
+  reloadEditorSettings()
+}, { deep: true })
+const saveEditor = () => {
   ElMessage.success(t('settings.editor.msgSaved'))
 }
 const resetEditor = () => { editorForm.value = { ...editorDefaults, sqlKeywordRules: [] }; saveEditor() }
@@ -1069,30 +1250,217 @@ const previewSql = computed(() => {
 })
 
 const queryForm = ref({ ...queryDefaults })
-const loadQuery = () => {
+const loadQuery = async () => {
   try {
     const raw = JSON.parse(localStorage.getItem('dbmind_query') || '{}')
     queryForm.value = { ...queryDefaults, ...raw }
   } catch { queryForm.value = { ...queryDefaults } }
+  // 超时/上限/历史保留与缓存 TTL 存**后端**：以服务端为准盖掉占位默认值（拿不到就维持默认）
+  try {
+    const s = await getSettings()
+    const num = (key, fallback) => {
+      const n = Number(s?.[key])
+      return Number.isFinite(n) && n >= 0 ? n : fallback
+    }
+    queryForm.value.timeoutSecs = num('query.timeoutSecs', queryForm.value.timeoutSecs)
+    queryForm.value.cacheTtlSecs = num('schema.ttlSecs', queryForm.value.cacheTtlSecs)
+    queryForm.value.maxRows = num('query.maxRows', queryForm.value.maxRows)
+    queryForm.value.historyMax = num('history.maxEntries', queryForm.value.historyMax)
+    queryForm.value.historyDays = num('history.retentionDays', queryForm.value.historyDays)
+    logLevel.value = (s?.['log.level'] || 'info').trim()
+  } catch { /* 后端拿不到就维持本地默认（离线/降级也不该挡住设置页） */ }
 }
-const saveQuery = () => {
-  localStorage.setItem('dbmind_query', JSON.stringify(queryForm.value))
+// 「安全确认」迁到安全页签后，勾选也必须**即时持久化**（不能要求用户去查询页签点保存）
+watch(queryForm, () => {
+localStorage.setItem('dbmind_query', JSON.stringify({ pageSize: queryForm.value.pageSize, confirmDanger: queryForm.value.confirmDanger, nullStyle: queryForm.value.nullStyle }))
+reloadQuerySettings()
+}, { deep: true })
+const saveQuery = async () => {
+  // 本地两项由上面的 watch 即时落盘，这里只负责后端几项（改完即时生效）
+  // 后端几项：改完即时生效（执行入口每次读、保留策略改完立即清一遍）
+  try {
+    await putSetting('query.timeoutSecs', Math.round(queryForm.value.timeoutSecs))
+    await putSetting('schema.ttlSecs', Math.round(queryForm.value.cacheTtlSecs))
+    await putSetting('query.maxRows', Math.round(queryForm.value.maxRows))
+    await putSetting('history.maxEntries', Math.round(queryForm.value.historyMax))
+    await putSetting('history.retentionDays', Math.round(queryForm.value.historyDays))
+  } catch (e) {
+    ElMessage.error(t('settings.query.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) }))
+    return
+  }
   ElMessage.success(t('settings.query.msgSaved'))
 }
-const resetQuery = () => { queryForm.value = { ...queryDefaults }; saveQuery() }
+const resetQuery = async () => {
+  queryForm.value = { ...queryDefaults }
+  await saveQuery()
+}
 
-// 驱动下载镜像源：后端持久化于主库 dbmind.db 的 app_settings（driver.mirror），保存后立即生效
-const driverForm = ref({ mirror: 'maven' })
+/** 清空查询历史（后端整表清空 —— 没有"只删一条"的接口，确认框里把话说死） */
+const onClearHistory = async () => {
+  try {
+    await ElMessageBox.confirm(t('settings.query.clearHistoryConfirm'), t('settings.query.clearHistory'), {
+      type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel'), closeOnClickModal: false
+    })
+  } catch { return }
+  try {
+    await clearHistory()
+    ElMessage.success(t('settings.query.historyCleared'))
+  } catch (e) { ElMessage.error(t('settings.query.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) })) }
+}
+
+/** 刷新结构缓存：前端那份 localStorage 缓存与内核缓存要**一起**清，少一半都会看到旧清单 */
+const onRefreshCache = async () => {
+  try {
+    await clearSchemaCache()
+    clearLocalSchemaCache()
+    ElMessage.success(t('settings.query.cacheRefreshed'))
+  } catch (e) { ElMessage.error(t('settings.query.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) })) }
+}
+
+// ===== 安全与会话（全部存后端 app_settings；安全开关与会话上限改动即时生效） =====
+const safetyForm = ref({ protectProduction: false, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: false, blockDangerous: false, maxWriteRows: 0 })
+
+// ---------- MCP 服务 ----------
+// 配置存后端 app_settings：MCP 壳**每次工具调用都现读**，保存后下一次调用即生效，不用重启客户端
+const mcpForm = ref({ defaultConnection: '', maxRows: 2000, timeoutSecs: 30, toolsStructure: true, toolsQuery: true, toolsHistory: true })
+const connOptions = ref([])
+const loadMcp = async () => {
+  try {
+    const [s, conns] = await Promise.all([getSettings(), listConnections().catch(() => [])])
+    connOptions.value = Array.isArray(conns) ? conns : []
+    const str = (key, fallback) => (typeof s?.[key] === 'string' && s[key] !== '' ? s[key] : fallback)
+    mcpForm.value.defaultConnection = str('mcp.defaultConnection', '')
+    mcpForm.value.maxRows = Number(s?.['mcp.maxRows']) > 0 ? Number(s['mcp.maxRows']) : 2000
+    mcpForm.value.timeoutSecs = Number(s?.['mcp.timeoutSecs']) > 0 ? Number(s['mcp.timeoutSecs']) : 30
+    const flag = (key, fallback) => (s?.[key] === 'true' || s?.[key] === '1' ? true : (s?.[key] === 'false' || s?.[key] === '0' ? false : fallback))
+    mcpForm.value.toolsStructure = flag('mcp.toolsStructure', true)
+    mcpForm.value.toolsQuery = flag('mcp.toolsQuery', true)
+    mcpForm.value.toolsHistory = flag('mcp.toolsHistory', true)
+  } catch (e) {
+    ElMessage.error(t('settings.query.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) }))
+  }
+}
+const saveMcp = async () => {
+  try {
+    await putSetting('mcp.defaultConnection', mcpForm.value.defaultConnection || '')
+    await putSetting('mcp.maxRows', Math.round(mcpForm.value.maxRows))
+    await putSetting('mcp.timeoutSecs', Math.round(mcpForm.value.timeoutSecs))
+    await putSetting('mcp.toolsStructure', mcpForm.value.toolsStructure)
+    await putSetting('mcp.toolsQuery', mcpForm.value.toolsQuery)
+    await putSetting('mcp.toolsHistory', mcpForm.value.toolsHistory)
+  } catch (e) {
+    ElMessage.error(t('settings.query.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) }))
+    return
+  }
+  ElMessage.success(t('settings.mcp.msgSaved'))
+}
+const loadSafety = async () => {
+  try {
+    const [s, tls] = await Promise.all([getSettings(), getLegacyTls().catch(() => null)])
+    const flag = (key, fallback) => (s?.[key] === 'true' || s?.[key] === '1') ? true : (s?.[key] === 'false' || s?.[key] === '0' ? false : fallback)
+    safetyForm.value.protectProduction = flag('safety.protectProduction', false)
+    safetyForm.value.aiWriteEnabled = flag('safety.aiWriteEnabled', false)
+    safetyForm.value.blockDangerous = flag('safety.blockDangerousStatements', false)
+    safetyForm.value.maxWriteRows = num('safety.maxWriteRows', 0)
+    const num = (key, fallback) => {
+      const n = Number(s?.[key])
+      return Number.isFinite(n) && n >= 0 ? n : fallback
+    }
+    safetyForm.value.maxSessions = num('session.maxPerHost', 32)
+    // 内核按**秒**读；界面用分钟更好读（0 = 不按空闲回收）
+    safetyForm.value.idleMinutes = Math.round(num('session.idleTimeoutSecs', 0) / 60)
+    // SSH 隧道空闲回收同理（默认 30 分钟）
+    safetyForm.value.tunnelIdleMinutes = Math.round(num('tunnel.idleTimeoutSecs', 1800) / 60)
+    safetyForm.value.allowLegacyTls = !!(tls && tls.allowLegacyTls)
+  } catch { /* 同上：降级到默认值 */ }
+}
+const saveSafety = async () => {
+  try {
+    await putSetting('safety.protectProduction', safetyForm.value.protectProduction)
+    await putSetting('safety.aiWriteEnabled', safetyForm.value.aiWriteEnabled)
+    await putSetting('safety.blockDangerousStatements', safetyForm.value.blockDangerous)
+    await putSetting('safety.maxWriteRows', Math.round(safetyForm.value.maxWriteRows))
+    await putSetting('session.maxPerHost', safetyForm.value.maxSessions)
+    await putSetting('session.idleTimeoutSecs', Math.round(safetyForm.value.idleMinutes) * 60)
+    await putSetting('tunnel.idleTimeoutSecs', Math.round(safetyForm.value.tunnelIdleMinutes) * 60)
+    // 幂等接口，直接存，不为它维护「上次值」的状态
+    await saveLegacyTls(safetyForm.value.allowLegacyTls)
+    ElMessage.success(t('settings.safety.msgSaved'))
+  } catch (e) { ElMessage.error(t('settings.safety.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) })) }
+}
+
+// 日志级别：选完即存即生效（web 壳热切换 tracing 过滤器），不用单独的保存按钮
+const logLevel = ref('info')
+const saveLogLevel = async (level) => {
+  try {
+    await putSetting('log.level', level)
+    ElMessage.success(t('settings.language.logLevelSaved', { level }))
+  } catch (e) { ElMessage.error(t('settings.safety.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) })) }
+}
+const pickLogLevel = (level) => {
+  if (logLevel.value === level) return
+  logLevel.value = level
+  saveLogLevel(level)
+}
+// 卡片选项（与界面语言同款视觉）：label 是 tracing 的级别名（专有名词不翻译）
+const logLevels = [
+  { value: 'error', label: 'error', desc: t('settings.language.logDescError') },
+  { value: 'warn', label: 'warn', desc: t('settings.language.logDescWarn') },
+  { value: 'info', label: 'info', desc: t('settings.language.logDescInfo') },
+  { value: 'debug', label: 'debug', desc: t('settings.language.logDescDebug') },
+  { value: 'trace', label: 'trace', desc: t('settings.language.logDescTrace') }
+]
+
+// 驱动下载镜像源：后端持久化于主库 dbmind.db 的 app_settings（driver.mirror），保存后立即生效。
+// 值可以是关键字（maven/aliyun/huawei/tencent）或自定义内网仓库根（http(s):// 开头的 URL）——
+// 关键字 → URL 的映射前后端各有一份（后端是 agent.rs 的 driver_mirror_base），改动要两边同步。
+const MIRROR_BASES = {
+  maven: '',
+  aliyun: 'https://maven.aliyun.com/repository/public/',
+  huawei: 'https://repo.huaweicloud.com/repository/maven/',
+  tencent: 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
+}
+const driverForm = ref({ mirror: 'maven', customUrl: '' })
+// 实际生效的仓库根：关键字查表；自定义用填写的 URL（空 = Maven Central）
+const mirrorBase = computed(() => {
+  if (driverForm.value.mirror === 'custom') {
+    return (driverForm.value.customUrl || '').trim()
+  }
+  return MIRROR_BASES[driverForm.value.mirror] || ''
+})
 const loadDriver = async () => {
   try {
     const d = await getDriverMirror()
-    driverForm.value.mirror = (d && d.mirror) || 'maven'
+    const raw = (d && d.mirror) || 'maven'
+    if (MIRROR_BASES[raw] !== undefined) {
+      driverForm.value.mirror = raw
+      driverForm.value.customUrl = ''
+    } else if (raw) {
+      // 旧数据里存的自定义 URL：回填到自定义输入框
+      driverForm.value.mirror = 'custom'
+      driverForm.value.customUrl = raw
+    } else {
+      driverForm.value.mirror = 'maven'
+    }
   } catch (e) { ElMessage.error(t('settings.driver.msgLoadFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) })) }
 }
 const saveDriver = async () => {
+  // 自定义模式存填写的 URL（必须是 http(s) 开头的仓库根）；关键字模式存关键字
+  const value = driverForm.value.mirror === 'custom'
+    ? (driverForm.value.customUrl || '').trim()
+    : driverForm.value.mirror
   try {
-    const d = await saveDriverMirror(driverForm.value.mirror)
-    driverForm.value.mirror = (d && d.mirror) || 'maven'
+    const d = await saveDriverMirror(value)
+    const raw = (d && d.mirror) || 'maven'
+    if (MIRROR_BASES[raw] !== undefined) {
+      driverForm.value.mirror = raw
+      driverForm.value.customUrl = ''
+    } else if (raw) {
+      driverForm.value.mirror = 'custom'
+      driverForm.value.customUrl = raw
+    } else {
+      driverForm.value.mirror = 'maven'
+    }
     ElMessage.success(t('settings.driver.msgSaved'))
   } catch (e) { ElMessage.error(t('settings.driver.msgSaveFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) })) }
 }
@@ -1214,6 +1582,50 @@ const saveNotify = () => {
   localStorage.setItem('dbmind_notify', JSON.stringify(notifyForm.value))
   ElMessage.success(t('settings.notify.msgSaved'))
 }
+// 同编辑器：改完即存（main.js 的弹层包装每次弹出实时读），不依赖保存按钮
+watch(notifyForm, () => {
+  localStorage.setItem('dbmind_notify', JSON.stringify(notifyForm.value))
+}, { deep: true })
+
+// ===== 缓存（后端列体量，勾选清理） =====
+// 知识库文档/向量也在清单里 —— 它们是「占空间的运行产物」，但清掉要重灌，
+// 所以确认框的措辞按「清理」而不是「刷新」。
+const cacheItems = ref([])
+const cacheLoading = ref(false)
+const cacheClearing = ref(false)
+const checkedCacheKeys = computed(() => cacheItems.value.filter(i => i.checked).map(i => i.key))
+const loadCache = async () => {
+  cacheLoading.value = true
+  try {
+    const d = await getCacheItems()
+    cacheItems.value = (d.items || []).map(i => ({ ...i, checked: false }))
+  } catch { /* 清单拿不到就给空态，不弹错误打断设置页 */ }
+  cacheLoading.value = false
+}
+const cacheSizeText = (item) => {
+  const parts = []
+  if (item.rows > 0) parts.push(t('settings.cache.rows', { n: item.rows }))
+  if (item.files > 0) parts.push(t('settings.cache.files', { n: item.files }))
+  if (item.bytes >= 1024 * 1024) parts.push(t('settings.cache.mb', { n: (item.bytes / 1024 / 1024).toFixed(1) }))
+  else if (item.bytes >= 1024) parts.push(t('settings.cache.kb', { n: Math.round(item.bytes / 1024) }))
+  return parts.join(' · ') || t('settings.cache.itemEmpty')
+}
+const clearCheckedCache = async () => {
+  const keys = checkedCacheKeys.value
+  if (!keys.length) return
+  try {
+    await ElMessageBox.confirm(t('settings.cache.confirm', { n: keys.length }), t('settings.cache.clear'), {
+      type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel'), closeOnClickModal: false
+    })
+  } catch { return }
+  cacheClearing.value = true
+  try {
+    await clearCaches(keys)
+    ElMessage.success(t('settings.cache.cleared'))
+    await loadCache()
+  } catch (e) { ElMessage.error(t('settings.cache.msgFailed', { detail: (e?.message || t('common.unknownError')) })) }
+  cacheClearing.value = false
+}
 
 // ---------- 快捷键自定义 ----------
 const shortcutGroups = SHORTCUT_GROUPS
@@ -1280,10 +1692,15 @@ onBeforeUnmount(stopRecording)
 // 弹窗打开时加载数据
 watch(visible, (v) => {
   if (v) {
+    // 调用方可以点名页签（首页 MCP 卡「前往设置」直达 MCP 页签）
+    if (props.initialTab) activeTab.value = props.initialTab
     load()
     loadPaths()
     loadEditor()
     loadQuery()
+    loadSafety()
+    loadMcp()
+    loadCache()
     loadDriver()
     loadDriverList()
     loadNotify()
@@ -1304,7 +1721,9 @@ watch(visible, (v) => {
   box-shadow: 0 2px 8px var(--dc-primary-glow);
 }
 
-.settings-body { display: flex; height: 560px; }
+/* 高度 = 视口的 80%（640px 起步、900px 封顶）：矮屏不出屏，大屏多露内容 ——
+   以前定死 560px，内容多时（比如 MCP 页签）右侧滚动条一长条，看着憋屈 */
+.settings-body { display: flex; height: clamp(640px, 80vh, 900px); }
 .settings-tabs {
   width: 150px; flex-shrink: 0; border-right: 1px solid var(--dc-border);
   padding: 14px 8px; overflow-y: auto;
@@ -1334,7 +1753,7 @@ watch(visible, (v) => {
 .panel-desc { font-size: 13px; color: var(--dc-text-dim); margin-bottom: 18px; line-height: 1.7; }
 .panel-desc code { background: var(--dc-bg-soft); padding: 1px 6px; border-radius: 4px; color: var(--dc-link); }
 
-.ai-form { max-width: 560px; }
+.ai-form { max-width: 800px; }
 /* 数据目录只读展示：虚线淡底，样式上就表明「这里点不动」，避免用户反复尝试 */
 .path-readonly {
   width: 100%; height: 32px; line-height: 30px;
@@ -1344,7 +1763,24 @@ watch(visible, (v) => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   cursor: default; user-select: text;
 }
-.form-tip { font-size: 12px; color: var(--dc-text-weak); margin-top: 4px; }
+/* 表单提示**统一换行到第二行**：tip 与开关/输入框挤在同一行时会忽左忽右，
+   全部占满一行才齐整（el-form-item 的内容区默认不换行，这里放开） */
+.ai-form :deep(.el-form-item__content) { flex-wrap: wrap; }
+.form-tip { width: 100%; font-size: 12px; color: var(--dc-text-weak); margin-top: 4px; line-height: 1.6; }
+/* 缓存清单：一行一项，名称靠左、体量靠右 */
+.cache-list { max-width: 560px; border: 1px solid var(--dc-border); border-radius: 8px; padding: 4px 0; }
+.cache-item { display: flex; align-items: center; gap: 10px; padding: 9px 14px; cursor: pointer; }
+.cache-item + .cache-item { border-top: 1px solid var(--dc-border); }
+.cache-item:hover { background: var(--dc-hover, rgba(0,0,0,.03)); }
+.cache-name { flex: 1; font-size: 13px; }
+.cache-size { font-size: 12px; color: var(--dc-text-dim); font-variant-numeric: tabular-nums; }
+.cache-empty { padding: 18px 14px; text-align: center; font-size: 12px; color: var(--dc-text-dim); }
+/* 日志级别：标题与「界面语言设置」同级，卡片整行铺开自动换行 */
+.log-title { margin-top: 22px; }
+.log-level-options { display: flex; gap: 10px; flex-wrap: wrap; width: 100%; max-width: 560px; }
+.log-opt { flex: 1 1 96px; min-width: 96px; padding: 9px 12px; }
+.log-opt .theme-opt-name { font-family: var(--dc-mono, monospace); font-size: 13px; }
+.log-tip { max-width: 560px; margin-top: 10px; }
 .unit { font-size: 13px; color: var(--dc-text-mid); margin-left: 8px; }
 .presets { margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--dc-border); }
 .preset-label { font-size: 12px; color: var(--dc-text-dim); margin-bottom: 8px; }
@@ -1354,6 +1790,10 @@ watch(visible, (v) => {
 /* ===== 驱动下载：数据源 × 驱动状态列表 ===== */
 .drv-search { width: 180px; }
 .drv-sum { margin-left: auto; font-size: 12px; color: var(--dc-text-dim); }
+/* 实际下载源：展示真正的仓库根，链接样式弱化（可点开验证通不通） */
+.mirror-link { font-size: 13px; word-break: break-all; }
+.mirror-link a { color: var(--dc-primary, #409eff); text-decoration: none; }
+.mirror-link a:hover { text-decoration: underline; }
 .drv-group { margin-top: 16px; }
 .drv-group-title {
   display: flex; align-items: center; gap: 6px;
@@ -1451,23 +1891,32 @@ watch(visible, (v) => {
 }
 .fmt-card-title .el-icon { color: var(--dc-primary); }
 .fmt-card-sub { font-size: 13px; font-weight: 400; color: var(--dc-text-dim); margin-left: 2px; }
-.fmt-glob-cols { display: flex; align-items: flex-start; gap: 12px 48px; margin-top: 2px; }
-.fmt-glob-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 24px; }
+.fmt-glob-cols { display: flex; align-items: stretch; gap: 12px 40px; margin-top: 2px; }
+.fmt-glob-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+/* 两列各自等高（flex 行的默认拉伸），**第二个小节贴底**：左列第一节 4 行、右列 3 行，
+   内容排下去第二节的起始位置必然错开 —— 把末节推到底部后，两列末节行数相同（都是 2 行），
+   「运算符」与「语句间隔」的标题就齐平了 */
+.fmt-glob-col .fmt-glob-sec { min-width: 0; }
+.fmt-glob-col .fmt-glob-sec + .fmt-glob-sec { margin-top: auto; }
 .fmt-glob-sec { min-width: 0; }
 .fmt-glob-sec-title {
   display: flex; align-items: center; gap: 6px;
-  font-size: 14px; font-weight: 500; letter-spacing: .3px; color: var(--dc-text-dim);
-  margin: 2px 0 12px;
+  font-size: 13px; font-weight: 600; letter-spacing: .3px; color: var(--dc-text-dim);
+  margin: 0 0 10px;
 }
 .fmt-glob-sec-title::before { content: ''; width: 3px; height: 13px; background: var(--dc-primary); border-radius: 2px; }
-.fmt-glob-it { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+/* 每行 = 左标签 + 右侧 160px 固定槽（下拉/数字/开关都占同一个槽）：
+   之前用 space-between，开关被撑到列最右缘、和下拉框（150px）数字框（140px）三种右缘互不对齐，
+   开关行中间一大段空白，看着松散。统一槽位后左缘右缘都在一条线上。 */
+.fmt-glob-it { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; min-height: 32px; }
 .fmt-glob-it:last-child { margin-bottom: 0; }
 .fmt-glob-lb {
-  font-size: 14px; color: var(--dc-text-mid); flex: 0 1 auto; overflow: hidden;
+  font-size: 14px; color: var(--dc-text-mid); flex: 1 1 auto; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
-.fmt-glob-sel { width: 150px; flex: 0 0 auto; font-size: 14px; }
-.fmt-glob-num { width: 140px; flex: 0 0 auto; font-size: 14px; }
+.fmt-glob-sel { width: 160px; flex: 0 0 auto; font-size: 14px; }
+.fmt-glob-num { width: 160px; flex: 0 0 auto; font-size: 14px; }
+.fmt-glob-swslot { width: 160px; flex: 0 0 auto; display: flex; align-items: center; }
 /* 归一化 Element 控件内部字号，与行标签保持一致 */
 .fmt-glob-sel :deep(.el-select__wrapper),
 .fmt-glob-sel :deep(.el-select__selected-item),

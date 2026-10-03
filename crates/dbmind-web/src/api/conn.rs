@@ -5,8 +5,11 @@
 //! 契约完全对齐（第三方脚本可能用它）。
 //!
 //! 这里有一条**刻意的拒绝策略**：连接弹窗里有几项内核没有对应能力
-//! （SSH 隧道、与主机对不上的自定义 JDBC URL）。丢掉字段后假装保存成功是最坏的选择 ——
+//! （与主机对不上的自定义 JDBC URL）。丢掉字段后假装保存成功是最坏的选择 ——
 //! 用户会以为配好了，然后往「网络 / 权限」方向查很久。所以宁可当场报错说清原因。
+//!
+//! SSH 隧道**不在**这条策略里：它已经在内核实现（见 `dbmind_core::tunnel`），
+//! 配置整体存进 `extra.ssh`，连库时由内核改写成 `127.0.0.1:<本地转发端口>`。
 
 use axum::extract::{Path, RawQuery, State};
 use axum::Json;
@@ -58,8 +61,25 @@ fn database_value(kind: ConnectionKind, body: &Value) -> Option<String> {
     opt(value)
 }
 
+/// 已存连接的那份 `extra`（新建、或记录已不存在时给 `None`）。
+///
+/// 存在的理由只有一条：**SSH 口令与私钥口令短语不回显**（和主口令同一条规矩），
+/// 界面保存时交回来的必然是空串。要把它理解成「不修改」而不是「清空」，
+/// 就必须在构造配置之前先拿到已存的那份（见 `tunnel::ssh_extra_from_body`）。
+async fn existing_extra(state: &AppState, id: &str) -> Option<Value> {
+    if id.trim().is_empty() {
+        return None;
+    }
+    require_record(state, id)
+        .await
+        .ok()
+        .and_then(|record| record.config.extra)
+}
+
 ///上游`ConnectionInfo`（请求体）→ 内核 `ConnectionConfig`。
-pub fn config_from_body(body: &Value) -> XResult<ConnectionConfig> {
+///
+/// `existing` 是这条连接**已存的那份 `extra`**（新建时给 `None`）。
+pub fn config_from_body(body: &Value, existing: Option<&Value>) -> XResult<ConnectionConfig> {
     let type_code = text(body, "type");
     if type_code.is_empty() {
         return Err(XError::bad_request("缺少连接类型 type"));
@@ -70,17 +90,6 @@ pub fn config_from_body(body: &Value) -> XResult<ConnectionConfig> {
         return Err(XError::bad_request("连接名称不能为空"));
     }
 
-    // ---- 内核没有的字段：明确拒绝，不静默丢弃 ----
-    if body
-        .get("sshEnabled")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return Err(XError::bad_request(
-            "SSH 隧道尚未接入（内核没有隧道层）。请使用「主机 + 端口 + 账号」直连，\
-             或先自行建立隧道再把地址填成本地端口 —— 这里明确报错，而不是丢掉字段后假装保存成功",
-        ));
-    }
     let host = text(body, "host");
     let jdbc_url = text(body, "jdbcUrl");
     // 连接弹窗会**自动**从 host/port 生成一条 JDBC URL 放进表单，那种 URL 只是展示用，
@@ -115,9 +124,13 @@ pub fn config_from_body(body: &Value) -> XResult<ConnectionConfig> {
     if !params.is_empty() {
         extra.insert("params".to_string(), Value::Object(params));
     }
-    let environment = text(body, "environment");
-    if !environment.is_empty() {
-        extra.insert("environment".to_string(), Value::String(environment));
+    // 分组：新字段名 `group`（兼容旧客户端/旧数据的 `environment`），落库写新键
+    let group = text(body, "group");
+    let group_legacy = text(body, "environment");
+    if !group.is_empty() {
+        extra.insert("group".to_string(), Value::String(group));
+    } else if !group_legacy.is_empty() {
+        extra.insert("group".to_string(), Value::String(group_legacy));
     }
     let env = text(body, "env");
     if !env.is_empty() {
@@ -136,6 +149,12 @@ pub fn config_from_body(body: &Value) -> XResult<ConnectionConfig> {
     let auth_type = text(body, "authType");
     if !auth_type.is_empty() {
         extra.insert("authType".to_string(), Value::String(auth_type));
+    }
+    // SSH 隧道：整体存进 `extra.ssh`（内核的隧道层按它建本地端口转发）。
+    // 口令 / 私钥口令短语这一层处理「空 = 沿用已存的那份」，理由见
+    // `dbmind_core::tunnel::ssh_extra_from_body`。
+    if let Some(ssh) = dbmind_core::tunnel::ssh_extra_from_body(body, existing) {
+        extra.insert(dbmind_core::tunnel::EXTRA_SSH.to_string(), ssh);
     }
 
     Ok(ConnectionConfig {
@@ -158,7 +177,7 @@ pub fn config_from_body(body: &Value) -> XResult<ConnectionConfig> {
 }
 
 pub async fn list(State(state): State<AppState>) -> XResult<Json<Value>> {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let records = blocking(move || engine.list_connections()).await?;
     // 影子连接（跨库浏览时按需生成的、指向某个库的连接）**不给用户看**：
     // 它们是实现细节，出现在树里只会让人以为「多了几条连接」。
@@ -178,9 +197,11 @@ pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> XResu
 
 /// 新建 / 保存（带 id 即编辑）。
 pub async fn create(State(state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
-    let config = config_from_body(&body)?;
     let id = text(&body, "id");
-    let engine = state.engine.clone();
+    // 编辑（带 id）时先取出已存的那份 extra：SSH 口令不回显，「留空 = 沿用」要靠它
+    let existing = existing_extra(&state, &id).await;
+    let config = config_from_body(&body, existing.as_ref())?;
+    let engine = state.engine();
     let record = blocking(move || {
         if id.is_empty() {
             return engine.add_connection(config);
@@ -203,8 +224,9 @@ pub async fn update(
     Path(id): Path<String>,
     Json(body): Json<Value>,
 ) -> XResult<Json<Value>> {
-    let config = config_from_body(&body)?;
-    let engine = state.engine.clone();
+    let existing = existing_extra(&state, &id).await;
+    let config = config_from_body(&body, existing.as_ref())?;
+    let engine = state.engine();
     let record = blocking(move || engine.update_connection(&id, config)).await?;
     apply_read_only(&state, &record, &body).await;
     Ok(Json(shape::connection_json(&record)))
@@ -230,7 +252,7 @@ async fn apply_read_only(
     if flag == record.read_only {
         return;
     }
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let id = record.id.clone();
     if let Err(err) = blocking(move || engine.set_read_only(&id, flag)).await {
         tracing::warn!(error = %err.message, "保存只读标记失败");
@@ -238,7 +260,7 @@ async fn apply_read_only(
 }
 
 pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> XResult<Json<Value>> {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let target = id.clone();
     let removed = blocking(move || engine.remove_connection(&target)).await?;
     // 级联删掉这条连接的影子，否则它们会变成树上看不见、却一直占着会话的垃圾
@@ -250,6 +272,10 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> XR
 ///
 /// 与「前端读出来再 Post 一遍」相比，这里**服务端直接复制**，因此**口令也一起带过去**
 /// （口令只写不读，前端从来拿不到它）。上游的界面语义就是「复制成一个能直接用的连接」。
+///
+/// **只读标记也一起带过去**：它是连接记录上的属性，不在 `ConnectionConfig` 里，
+/// 不显式带的话复制出来的那条永远是「可写」—— 而「复制一条生产库（只读）连接」
+/// 恰恰是最不该悄悄得到一个可写副本的场景。
 pub async fn copy(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -263,7 +289,15 @@ pub async fn copy(
         .unwrap_or_else(|| format!("{} 副本", src.config.name));
     let mut config = src.config.clone();
     config.name = name;
-    let engine = state.engine.clone();
-    let record = blocking(move || engine.add_connection(config)).await?;
+    let read_only = src.read_only;
+    let engine = state.engine();
+    let mut record = blocking(move || engine.add_connection(config)).await?;
+    if read_only && !record.read_only {
+        let engine = state.engine();
+        let id = record.id.clone();
+        if let Ok(updated) = blocking(move || engine.set_read_only(&id, true)).await {
+            record = updated;
+        }
+    }
     Ok(Json(shape::connection_json(&record)))
 }

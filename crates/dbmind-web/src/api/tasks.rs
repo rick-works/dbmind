@@ -13,8 +13,10 @@
 //!    对齐上游的 `task.view()`。少一个字段，界面上就多一块空白。
 //! 2. **`total = -1` 表示「总量未知」**，不要拿 0 表示未知 ——
 //!    0 会被读成「总量是 0」，进度条直接跳到 100%，看起来像秒完成。
-//! 3. **任务不持久化**：进程重启即消失（上游同样如此）。TTL 30 分钟后回收内存条目，
-//!    **磁盘上的产物文件保留** —— 用户还能从导出目录里把文件拿走。
+//! 3. **任务执行态不持久化，但终态快照落盘**：进程重启后 running 的任务即消失
+//!    （上游同样如此，TTL 30 分钟后回收内存条目）；**进入终态的任务**把快照
+//!    （含 result）写到 `<home>/tasks/<id>.json`，重启后 `get` 从磁盘恢复 ——
+//!    前端任务中心的执行记录始终可查看，不再因服务重启变成「已中断」。
 //! 4. **取消是协作式的**：`cancel()` 只落一个标志，由工作循环在分页/分批之间检查。
 //!    强杀线程的代价（连接状态、半截文件）比多跑一批大得多。
 
@@ -23,7 +25,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde_json::{json, Value};
 
@@ -53,6 +55,47 @@ impl TaskStatus {
     }
 }
 
+/// 任务终态快照目录：`<home>/tasks/`。
+///
+/// 跟用户数据走（`home_dir`），**不是**临时目录 —— 这些快照要跨重启存活：
+/// 任务收尾时 `persist_task` 落盘，重启后 [`TaskRegistry::get`] 从磁盘恢复，
+/// 前端任务中心的执行记录在服务重启后依然可以查看结果。
+fn task_store_dir() -> PathBuf {
+    let dir = dbmind_core::paths::home_dir().join("tasks");
+    let _ = dbmind_core::paths::ensure_dir(&dir);
+    dir
+}
+
+/// 任务 id 是否能安全地用作快照文件名（id 来自 URL，必须挡住路径穿越）。
+fn safe_task_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// 终态任务快照落盘：`<home>/tasks/<id>.json`（`snapshot()` 全量 + `result`）。
+///
+/// **为什么要落**：任务都在内存里，服务一重启执行记录就只剩「已中断」，
+/// 用户点查看什么都看不到（真机反馈）。终态时落一份盘（含 result ——
+/// 查看时从它恢复结果界面），重启后从磁盘原样恢复。失败静默：
+/// 落盘只是兜底，不能让任务收尾被 IO 问题卡住。
+fn persist_task(task: &Task) {
+    let mut snap = task.snapshot();
+    // snapshot() 不带 kind（排障字段），落盘时补上，恢复后 kind 仍完整
+    snap["kind"] = Value::String(task.kind.clone());
+    if let Some(result) = task.result() {
+        // result 里可能带大样本（对比的差异数据）—— 磁盘不用像 localStorage
+        // 那样抠搜，原样落（快照文件按任务一生命周期一份，不会堆积增长）
+        snap["result"] = result;
+    }
+    let path = task_store_dir().join(format!("{}.json", task.id));
+    if let Ok(body) = serde_json::to_vec(&snap) {
+        let _ = std::fs::write(path, body);
+    }
+}
+
 /// 任务产物：一个落在磁盘上的文件（导出结果、备份文件）。
 ///
 /// 为什么落磁盘而不是留在内存里：导出的产物动辄几百 MB，
@@ -74,6 +117,12 @@ pub struct Task {
     status: Mutex<TaskStatus>,
     canceled: AtomicBool,
     done: Mutex<u64>,
+    // 行级实时计数（Navicat 式「读取 / 传输 / 错误」三个数）：done 是**对象数**，
+    // 界面上那条「数字在一万一万跳」的痛就是拿对象数/终态 summary 凑的行数 ——
+    // 现在按行累加，前端 0.8 秒轮询一次，数字就是平滑递增的
+    rows_read: Mutex<u64>,
+    rows_written: Mutex<u64>,
+    rows_failed: Mutex<u64>,
     /// -1 = 未知（见文件头约定 2）
     total: Mutex<i64>,
     phase: Mutex<String>,
@@ -100,6 +149,12 @@ pub struct Task {
     install_prompt: Mutex<Option<Value>>,
     install_decision: Mutex<Option<String>>,
     created: Instant,
+    /// 进入终态那一刻的运行时长（毫秒）：elapsedMs 的冻结值 —— 终态后不再走时钟
+    finished_elapsed: Mutex<Option<u64>>,
+    /// 任务的**墙钟**起止（毫秒时间戳）：前端任务中心的开始/结束时间直接用它们，
+    /// 不再由前端拿登记时刻 + 运行时长去推（推算链路任何一环偏差都会显示错，真机踩过）
+    started_wall: u64,
+    finished_wall: Mutex<Option<u64>>,
 }
 
 impl Task {
@@ -110,6 +165,9 @@ impl Task {
             status: Mutex::new(TaskStatus::Running),
             canceled: AtomicBool::new(false),
             done: Mutex::new(0),
+            rows_read: Mutex::new(0),
+            rows_written: Mutex::new(0),
+            rows_failed: Mutex::new(0),
             total: Mutex::new(-1),
             phase: Mutex::new(String::new()),
             message: Mutex::new(String::new()),
@@ -121,7 +179,67 @@ impl Task {
             install_prompt: Mutex::new(None),
             install_decision: Mutex::new(None),
             created: Instant::now(),
+            finished_elapsed: Mutex::new(None),
+            started_wall: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64).unwrap_or(0),
+            finished_wall: Mutex::new(None),
         }
+    }
+
+    /// 从**磁盘快照**重建任务（服务重启后 [`TaskRegistry::get`] 的兜底）。
+    ///
+    /// 还原的是查看所需的终态字段（状态/计数/消息/日志/result/耗时/墙钟）。
+    /// 这是「只读空壳」：没有工作体，不能再跑也不能真取消 ——
+    /// `cancel()` 之类对它调了也是无效果（状态已是终态）。
+    ///
+    /// 只恢复**终态**快照：重启瞬间还标着 running 的任务是被打断的，
+    /// 恢复成 running 只会让前端无限轮询下去。
+    fn restore_from_snapshot(id: &str, snap: &Value) -> Option<Self> {
+        let status_str = snap.get("status").and_then(Value::as_str)?;
+        let status = match status_str {
+            "success" => TaskStatus::Success,
+            "error" => TaskStatus::Error,
+            "canceled" => TaskStatus::Canceled,
+            _ => return None,
+        };
+        let num = |key: &str| snap.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let text = |key: &str| {
+            snap.get(key).and_then(Value::as_str).unwrap_or("").to_string()
+        };
+        let logs: Vec<String> = snap
+            .get("logs")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
+            .unwrap_or_default();
+        let logs_seq = snap
+            .get("logsSeq")
+            .and_then(Value::as_u64)
+            .unwrap_or(logs.len() as u64);
+        Some(Self {
+            id: id.to_string(),
+            kind: text("kind"),
+            status: Mutex::new(status),
+            canceled: AtomicBool::new(status_str == "canceled"),
+            done: Mutex::new(num("done")),
+            rows_read: Mutex::new(num("rowsRead")),
+            rows_written: Mutex::new(num("rowsWritten")),
+            rows_failed: Mutex::new(num("rowsFailed")),
+            total: Mutex::new(snap.get("total").and_then(Value::as_i64).unwrap_or(-1)),
+            phase: Mutex::new(text("phase")),
+            message: Mutex::new(text("message")),
+            logs: Mutex::new(logs),
+            logs_seq: AtomicU64::new(logs_seq),
+            result: Mutex::new(snap.get("result").cloned()),
+            artifact: Mutex::new(None),
+            context: Mutex::new(None),
+            install_prompt: Mutex::new(None),
+            install_decision: Mutex::new(None),
+            created: Instant::now(),
+            // 耗时冻结在快照值（终态任务不再走时钟）；墙钟起止照快照还原
+            finished_elapsed: Mutex::new(Some(num("elapsedMs"))),
+            started_wall: num("startedAtWall"),
+            finished_wall: Mutex::new(Some(num("finishedAtWall"))),
+        })
     }
 
     /// 挂起等待用户决策（提示内容会随任务状态回给界面）。
@@ -180,6 +298,20 @@ impl Task {
     }
 
     pub fn set_status(&self, status: TaskStatus) {
+        // 进入终态时**冻结运行时长**：elapsedMs 的口径是"任务跑了多久"，
+        // 若一直用 created.elapsed()，任务结束后数字还会跟着时钟涨
+        //（前端统计卡/任务中心就出现"都成功了耗时还在加"——真机踩过）
+        if matches!(status, TaskStatus::Success | TaskStatus::Error | TaskStatus::Canceled) {
+            let mut fin = lock(&self.finished_elapsed);
+            if fin.is_none() {
+                *fin = Some(self.created.elapsed().as_millis() as u64);
+            }
+            let mut wall = lock(&self.finished_wall);
+            if wall.is_none() {
+                *wall = Some(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_millis() as u64).unwrap_or(0));
+            }
+        }
         *lock(&self.status) = status;
     }
 
@@ -202,6 +334,11 @@ impl Task {
     pub fn set_done(&self, done: u64) {
         *lock(&self.done) = done;
     }
+    /// 行级实时计数（读取/写入/失败行数），同步等按行推进的任务用。
+    pub fn add_rows_read(&self, n: u64) { *lock(&self.rows_read) += n; }
+    pub fn add_rows_written(&self, n: u64) { *lock(&self.rows_written) += n; }
+    pub fn add_rows_failed(&self, n: u64) { *lock(&self.rows_failed) += n; }
+    pub fn rows_read(&self) -> u64 { *lock(&self.rows_read) }
 
     pub fn add_done(&self, delta: u64) {
         let mut done = lock(&self.done);
@@ -240,6 +377,20 @@ impl Task {
         }
     }
 
+    /// 日志快照（按写入顺序，最多 [`MAX_LOGS`] 行）。
+    ///
+    /// 界面上的滚动日志框就是它 —— **不下发的话过程就全被吞了**：
+    /// 备份曾因此只在界面上看到「开始任务 / 备份完成 / 汇总」三两行，
+    /// 「每张表导了多少行、视图/例程有没有在内」全都无从对账。
+    pub fn logs(&self) -> Vec<String> {
+        lock(&self.logs).clone()
+    }
+
+    /// 日志的**累计行数**（含被 [`MAX_LOGS`] 挤掉的）。前端据此只追加新行，不重复渲染。
+    pub fn logs_seq(&self) -> u64 {
+        self.logs_seq.load(Ordering::Relaxed)
+    }
+
     pub fn set_message(&self, message: impl Into<String>) {
         *lock(&self.message) = message.into();
     }
@@ -271,12 +422,23 @@ impl Task {
             "status": self.status().as_str(),
             "done": *lock(&self.done),
             "total": *lock(&self.total),
+            // 行级实时计数：运行中就有（不等终态 summary），前端统计卡据此跳动
+            "rowsRead": *lock(&self.rows_read),
+            "rowsWritten": *lock(&self.rows_written),
+            "rowsFailed": *lock(&self.rows_failed),
             "phase": lock(&self.phase).clone(),
             "message": lock(&self.message).clone(),
             "canceled": self.is_canceled(),
             "logs": lock(&self.logs).clone(),
             // 单调序号：前端据此判断"有没有新行"，不受 MAX_LOGS 裁剪影响
             "logsSeq": self.logs_seq.load(Ordering::Relaxed),
+            // 任务**已运行时长**（毫秒）：终态后取冻结值（不再跟时钟走）；
+            // 前端从任务中心/悬浮恢复进度窗时，耗时卡用它续算（开始墙钟 = now - elapsedMs）
+            "elapsedMs": lock(&self.finished_elapsed)
+                .unwrap_or_else(|| self.created.elapsed().as_millis() as u64),
+            // **墙钟起止**：任务中心执行记录的开始/结束时间直接用（权威值，不由前端推算）
+            "startedAtWall": self.started_wall,
+            "finishedAtWall": *lock(&self.finished_wall),
         })
     }
 }
@@ -325,7 +487,22 @@ impl TaskRegistry {
     }
 
     pub fn get(&self, id: &str) -> Option<Arc<Task>> {
-        lock(&self.tasks).get(id).cloned()
+        if let Some(task) = lock(&self.tasks).get(id).cloned() {
+            return Some(task);
+        }
+        // 内存没有（服务重启丢了 / TTL 到期被 GC）→ **磁盘快照兜底**：
+        // 终态任务收尾时落过盘（见 `persist_task`），从这里重建一个「只读空壳」
+        // 挂回注册表 —— status 接口照常返回，前端执行记录查看无缝恢复结果界面。
+        // id 来自 URL，先过文件名安全检查（防路径穿越）
+        if !safe_task_id(id) {
+            return None;
+        }
+        let path = task_store_dir().join(format!("{id}.json"));
+        let body = std::fs::read(path).ok()?;
+        let snap: Value = serde_json::from_slice(&body).ok()?;
+        let task = Arc::new(Task::restore_from_snapshot(id, &snap)?);
+        lock(&self.tasks).insert(id.to_string(), task.clone());
+        Some(task)
     }
 
     /// 回收过期条目（新建任务时顺手做，不必起后台线程）。
@@ -395,6 +572,8 @@ impl FinishGuard {
                 task.log(message);
             }
         }
+        // **终态快照落盘**：重启后任务中心执行记录仍可查看（见 persist_task 说明）
+        persist_task(&task);
         // 标记「已处理」，让 Drop 不再改状态
         self.1 = true;
     }
@@ -405,6 +584,8 @@ impl Drop for FinishGuard {
         if !self.1 && self.0.status() == TaskStatus::Running {
             self.0.set_status(TaskStatus::Error);
             self.0.set_message("任务异常终止（工作线程崩溃）");
+            // 异常终止也是终态，同样落盘（前端能看到「崩溃终止」而不是查无此任务）
+            persist_task(&self.0);
         }
     }
 }

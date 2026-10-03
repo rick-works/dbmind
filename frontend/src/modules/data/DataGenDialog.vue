@@ -24,7 +24,7 @@
           <el-form label-width="72px" label-position="left" size="small" class="datagen-form">
             <div class="form-row">
               <el-form-item :label="$t('dgen.genRows')">
-                <el-input-number v-model="rows" :min="1" :max="1000000" :step="100" :controls="false" class="fillable" />
+                <el-input-number v-model="rows" :min="1" :step="100" :controls="false" class="fillable" />
               </el-form-item>
               <el-form-item :label="$t('dgen.writeMode')">
                 <el-radio-group v-model="writeMode">

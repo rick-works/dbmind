@@ -204,7 +204,7 @@
                     <!-- v-memo：内容没变就跳过该格的 vnode 创建与 diff。
                          光标移动 / 选中变化时，上千个未变单元格的文本子树不再重建（Vue 仍会 patch 外层 td 的选中类，那一步很轻）。
                          memo key 用原始值 row[col]：值变了 key 必变 → 一定重渲染，绝不会显示旧值。 -->
-                    <span v-memo="[row[col]]">{{ formatCell(row[col]) }}</span>
+                    <span v-memo="[row[col], querySettingsLive.nullStyle]">{{ formatCell(row[col]) }}</span>
                   </template>
                 </td>
               </tr>
@@ -292,6 +292,7 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { t } from '../../utils/i18n'
+import { querySettingsLive } from '../../utils/settings'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, Delete, Sort, SortUp, SortDown, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { getTableData, listColumns, saveTableData, aiFilter, exportData } from '../../api'
@@ -302,6 +303,7 @@ import { getQuerySettings } from '../../utils/settings'
 import { useShortcutScope } from '../../utils/useShortcuts'
 import { useExcelSelection } from '../../utils/excelSelection'
 import { cellAlignClass } from '../../utils/cellAlign'
+import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import { quoteStyleOf } from '../../types'
 
 const props = defineProps({ conn: Object, database: String, table: String, readOnly: Boolean })
@@ -551,6 +553,9 @@ const isRowSelected = (row) => selectedSet.value.has(row._rid)
 // 优先级：单元格区域 > 选中整行 > 选中整列（同一时刻只有一块选区，见各 focus*/clear* 函数）。
 // 计数按"格子数"给（与 Excel 一致），求和/均值/最小/最大只统计**数值类型**的列。
 const NUMERIC_SUMMARY_RE = /^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money|serial)/i
+// 类型拿不到时的兜底判定：值本身是**严格数字面量**才算（别把字符串硬加起来）。
+// 有的源 /columns 返回空（Doris 的 JDBC getColumns 踩过），汇总不能跟着哑掉。
+const NUMERIC_LITERAL_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
 /** 汇总数字显示：整数不带小数点，小数最多两位（均值常常是除出来的） */
 const fmtSummaryNum = (n) => (n == null || !Number.isFinite(n)) ? '' : (Number.isInteger(n) ? String(n) : Number(n.toFixed(2)).toLocaleString())
 
@@ -569,7 +574,12 @@ const selectionSummary = computed(() => {
     acc.cells++
     const v = row[col]
     if (v == null) return
-    if (!NUMERIC_SUMMARY_RE.test(String(colTypeMap.value[col] || '').toLowerCase())) return
+    // 数值判定：类型已知按类型；类型缺失（/columns 返回空的源）看值本身 ——
+    // 严格数字面量才参与求和，普通文本列不会被误加
+    const type = String(colTypeMap.value[col] || '').toLowerCase()
+    if (type) {
+      if (!NUMERIC_SUMMARY_RE.test(type)) return
+    } else if (!NUMERIC_LITERAL_RE.test(String(v).trim())) return
     const n = Number(v)
     if (!Number.isFinite(n)) return
     acc.nums++
@@ -976,9 +986,10 @@ const openRowDetail = (row) => {
   const cols = visibleColumns.value
   const lines = cols.map(c => {
     const v = row[c]
-    return c + '：' + (v == null ? 'NULL' : String(v))
+    // 与网格同口径：ISO 时间串的 `T` 换成空格
+    return c + '：' + (v == null ? 'NULL' : String(formatDbValue(v)))
   })
-  rowDetail.value = { visible: true, title: '第 ' + (rowIndex(row) + 1) + ' 行详情', text: lines.join('\n') }
+  rowDetail.value = { visible: true, title: t('sqlq.rowDetailTitle', { n: rowIndex(row) + 1 }), text: lines.join('\n') }
 }
 const onCellContextMenu = (e, row, col) => {
   e.preventDefault()
@@ -2639,7 +2650,8 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousemove', onColSelectMove)
 })
 
-const formatCell = (v) => v === null || v === undefined ? 'NULL' : String(v)
+// 展示格式化：ISO 时间戳的 T 换成空格（编辑仍用原始值，见 editingCell 的取值）
+const formatCell = (v) => v === null || v === undefined ? nullDisplay() : formatDbValue(v)
 
 // ========== 导出（当前页 / 全部）：按当前筛选+排序构造查询，落地为后端导出 ==========
 const quoteIdent = (s) => {

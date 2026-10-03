@@ -23,6 +23,8 @@
  * <p>所以这里取折中：editor.api + 手工挑选 SQL 编辑真正用到的 contrib，
  * 既恢复补全，又不把无关语言服务拖进产物。
  */
+import { allBuiltinFunctions } from './sqlCompletions'
+
 let loading = null
 
 export function ensureMonaco() {
@@ -87,6 +89,33 @@ export function ensureMonaco() {
     self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
     // 本地加载（绿色版离线运行，不走 CDN）
     loaderMod.default.config({ monaco: monacoMod })
+
+    // 内置函数填进 SQL 分词器的 builtinFunctions 表 → 命中 `@builtinFunctions` 规则、
+    // 得到 `predefined` token（数据库自带的主题规则给它独立于关键字的颜色）。
+    // 为什么不走关键字合并：那样函数名与 SELECT 同色，用户要求区分开。
+    // 分词器按语言全局生效，故取各方言函数的并集；monarch 的 ignoreCase 让大小写都对上。
+    const sqlEntry = monacoMod.languages.getLanguages().find((l) => l.id === 'sql')
+    if (sqlEntry) {
+      const mod = await sqlEntry.loader()
+      mod.language.builtinFunctions = [
+        ...new Set([...(mod.language.builtinFunctions || []), ...allBuiltinFunctions().map((f) => f.toLowerCase())])
+      ]
+      monacoMod.languages.setMonarchTokensProvider('sql', mod.language)
+    }
+
+    // 自定义主题：基于内置主题，给 `predefined`（内置函数）与关键字**区分开**的颜色。
+    // colors 必须给（空对象也行）—— 缺了它 monaco 解析 'editor.foreground' 直接抛错，
+    // 主题切换失败会连带编辑器都挂不上。
+    monacoMod.editor.defineTheme('dbmind-light', {
+      base: 'vs', inherit: true,
+      rules: [{ token: 'predefined', foreground: '795E26' }],
+      colors: {}
+    })
+    monacoMod.editor.defineTheme('dbmind-dark', {
+      base: 'vs-dark', inherit: true,
+      rules: [{ token: 'predefined', foreground: 'DCDCAA' }],
+      colors: {}
+    })
     return monacoMod
   })()
   return loading

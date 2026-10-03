@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="main-view">
     <!-- 顶栏：桌面壳里系统标题栏已隐藏，这一条同时充当「标题栏 + 窗口按钮」。
          拖动只走自己的三段式（见 onTopbarMouseDown / Move / Up）：按下记起点，
@@ -23,18 +23,43 @@
           <span class="top-nav-item top-icon-btn" @click="sidebarHidden = false"><el-icon><Expand /></el-icon></span>
         </el-tooltip>
 
-        <span class="top-nav-item" @click="compareDialogOpen = true"><el-icon><Switch /></el-icon>{{ $t('nav.compare') }}</span>
+        <span class="top-nav-item" @click="openCompare"><el-icon><Switch /></el-icon>{{ $t('nav.compare') }}</span>
         <span class="top-nav-item" @click="syncDialogOpen = true"><el-icon><Promotion /></el-icon>{{ $t('nav.sync') }}</span>
         <span class="top-nav-item" @click="governanceOpen = true"><el-icon><DataAnalysis /></el-icon>{{ $t('nav.governance') }}</span>
         <span class="top-nav-item" @click="openMonitor"><el-icon><Monitor /></el-icon>{{ $t('nav.monitor') }}</span>
+<!-- 任务中心：数据传输 / 数据对比的**执行历史记录**（查看、删除、清空），紧挨在服务监控前面。
+     与右侧时钟图标（正在执行）分开 —— 这里看的是全部记录。
+     （菜单项上不放运行数角标：它没有定位上下文，absolute 角标会飘到顶栏最右上角，
+     看起来像凭空多出一个「1」—— 运行数在右侧时钟图标上有就行） -->
+<span class="top-nav-item" @click="bgCenterMode = 'history'; bgCenterOpen = true; refreshBgStatus()"><el-icon><Clock /></el-icon>{{ $t('sync.bgCenter') }}</span>
         <!-- 「新建脚本」是**动作**（新开一个页签），不是导航目的地，所以排在四个目的地之后：
              左起读下来是「去哪 / 干什么」，最后一个才是"新建"。 -->
         <span class="top-nav-item top-nav-action" @click="newQueryTab"><el-icon><Plus /></el-icon>{{ $t('nav.newScript') }}</span>
         <span class="top-nav-right">
-          <el-tooltip :content="$t('nav.knowledge')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': knowledgeOpen }" @click="openKnowledge"><el-icon><Collection /></el-icon></span></el-tooltip>
+          <el-tooltip :content="$t('nav.knowledge')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': knowledgeOpen }" @click="openKnowledge"><el-icon><Reading /></el-icon></span></el-tooltip>
           <el-tooltip :content="$t('nav.ai')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': aiOpen }" @click="toggleAi"><el-icon><MagicStick /></el-icon></span></el-tooltip>
+          <!-- 右侧时钟图标：**正在执行**的任务 —— 鼠标悬浮直接下拉展示（纯 CSS hover，
+               不用 popover/弹窗 —— 定位受顶栏布局影响会飘）。点任务项回到进度窗。 -->
+          <span class="bg-hover" @mouseenter="refreshBgStatus()">
+            <span class="top-nav-item top-icon-btn bg-task-btn">
+              <el-icon><Clock /></el-icon>
+              <span v-if="bgRunningCount" class="bg-count">{{ bgRunningCount }}</span>
+            </span>
+            <div class="bg-running-panel">
+              <div class="bg-running-head">{{ $t('sync.bgRunningTitle') }}</div>
+              <div v-if="!bgRunningList.length" class="bg-task-empty">{{ $t('sync.bgRunningEmpty') }}</div>
+              <div v-for="t in bgRunningList" :key="t.id" class="bg-task-item" @click="resumeBgTask(t)">
+                <span class="bg-dot" :class="bgStatusOf(t.id)"></span>
+                <span class="bg-kind" :class="t.kind === 'compare' ? 'is-cmp' : ''">{{ t.kind === 'compare' ? $t('nav.compare') : $t('nav.sync') }}</span>
+                <span class="bg-title">{{ t.title }}</span>
+                <span class="bg-state">{{ bgStateText(t.id) }}</span>
+                <el-button size="small" text type="danger" @click.stop="stopBgTask(t)">{{ $t('common.stop') }}</el-button>
+              </div>
+            </div>
+          </span>
           <el-tooltip :content="themeTip" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': themeMode !== 'system' }" @click="cycleTheme"><el-icon><component :is="themeIcon" /></el-icon></span></el-tooltip>
           <el-tooltip :content="langTip" placement="bottom"><span class="top-nav-item top-icon-btn top-lang-btn" @click="toggleLocale">{{ localeShort }}</span></el-tooltip>
+
           <el-tooltip :content="$t('nav.settings')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="settingsOpen = true"><el-icon><Setting /></el-icon></span></el-tooltip>
         </span>
       </nav>
@@ -138,6 +163,8 @@
                   <!-- hover 显示备注：库里看不出"这条连接是干嘛的"，备注能一句话说清 -->
                   <span class="node-label conn-label"
                         :title="data.note ? (data.name + '：' + data.note) : data.name">{{ data.label || data.name || node.label }}</span>
+                  <!-- 只读徽标：这个状态决定写操作会不会被拦，得随时看得见（藏在编辑弹窗里没人记得住） -->
+                  <span v-if="data.readOnly" class="ro-badge" :title="$t('cd.readOnlyTip')">{{ $t('cd.readOnlyShort') }}</span>
                   <span class="env-corner" :class="'env-corner-' + (data.env || 'none')" :title="envTitle(data.env)">{{ envShort(data.env) }}</span>
                 </span>
                 <!-- 库图标：**未打开=变暗**。
@@ -226,23 +253,12 @@
         </div>
         <!-- 无 tab 时直接展示引导页 -->
         <div v-else-if="tabs.length === 0" class="empty-hint">
-          <!-- 空态 = 首页仪表盘：KPI → 快速开始 / 常用操作 → 最近查询 → MCP 集成。
-               每块都是真实数据或真实入口，不拿装饰图形填空。 -->
-          <div class="empty-kpis">
-            <div class="ek">
-              <span class="ek-k"><el-icon><Connection /></el-icon>{{ $t('empty.kpiConnections') }}</span>
-              <span class="ek-v">{{ allConnections.length }}</span>
-            </div>
-            <div class="ek">
-              <span class="ek-k"><el-icon><CircleCheck /></el-icon>{{ $t('empty.kpiConnected') }}</span>
-              <span class="ek-v">{{ openConnCount }}</span>
-            </div>
-            <div class="ek">
-              <span class="ek-k"><el-icon><Grid /></el-icon>{{ $t('empty.kpiTypes') }}</span>
-              <span class="ek-v">{{ connTypeCount }}</span>
-            </div>
-          </div>
-
+          <!-- 空态 = 首页仪表盘：快速开始 / 常用操作 → 最近查询 / MCP → 趋势 / 失败查询。
+               只留有操作价值的块 —— KPI 数字、查询统计这类「看看而已」的都砍了；
+               外层 .empty-stack 用 margin:auto 垂直居中：内容不满一屏时上下留白均分，
+               超出一屏时 margin 自动归零 + 容器本身可滚，顶部不会被裁（比
+               justify-content:center 安全）。 -->
+          <div class="empty-stack">
           <div class="empty-grid">
             <!-- 左：快速开始（点一行即打开该连接） -->
             <div class="empty-block">
@@ -269,7 +285,9 @@
             <div class="empty-block">
               <div class="empty-dss-head"><span>{{ $t('empty.commonActions') }}</span></div>
               <div class="empty-acts">
-                <!-- 「新建分组」收进左侧树的右键菜单（那里才是建目录的地方），这里只留入口类操作 -->
+                <button class="empty-act" @click="treeCtxNewFolder('')">
+                  <el-icon><FolderAdd /></el-icon><span>{{ $t('tree.menu.newFolder') }}</span>
+                </button>
                 <button class="empty-act" @click="openNewConn('')">
                   <el-icon><Plus /></el-icon><span>{{ $t('tree.newConnection') }}</span>
                 </button>
@@ -278,9 +296,6 @@
                 </button>
                 <button class="empty-act" @click="toggleAi">
                   <el-icon><MagicStick /></el-icon><span>{{ $t('empty.aiAssistant') }}</span>
-                </button>
-                <button class="empty-act" @click="refreshTree">
-                  <el-icon><Refresh /></el-icon><span>{{ $t('empty.refreshObjects') }}</span>
                 </button>
               </div>
             </div>
@@ -294,6 +309,12 @@
               <div class="empty-dss-head">
                 <span>{{ $t('empty.recentQueries') }}</span>
                 <span class="empty-dss-count">{{ recentHistory.length }}</span>
+                <!-- 清空历史：后端一直有 DELETE /api/dbmind/history，界面却没有入口。
+                     只在**有记录**时出现 —— 空卡片上摆一个点了也没用的按钮是噪音。 -->
+                <el-tooltip v-if="recentHistory.length" :content="$t('empty.clearHistory')" placement="top">
+                  <el-button class="empty-head-btn" text size="small" :icon="Delete"
+                             @click="onClearHistory" />
+                </el-tooltip>
               </div>
               <div v-if="recentHistory.length" class="empty-hist-list">
                 <button v-for="h in recentHistory" :key="h.id" class="empty-hi"
@@ -316,6 +337,7 @@
               <div class="empty-dss-head">
                 <span>{{ $t('empty.mcpTitle') }}</span>
                 <span class="mcp-inline">{{ $t('empty.mcpHint') }}</span>
+                <button class="mcp-go" @click="openSettings('mcp')">{{ $t('empty.mcpGoSettings') }} →</button>
               </div>
               <div class="mcp-code">
                 <code>{{ mcpSnippet }}</code>
@@ -323,45 +345,48 @@
               </div>
             </div>
           </div>
-<!-- 第三行：[查询统计 | 数据工具] —— 空态下半部分原来是空白，这里补两块**真数据 / 真入口**：
-     左边是最近查询的真实统计，右边是首页还没露过面的功能（对比 / 同步）。 -->
-<div class="empty-grid">
-  <div class="empty-block">
+<!-- 第三行：[近 7 天趋势 | 失败查询] —— 欢迎页底部的留白补真内容：
+     左边是近一周的执行量柱状图（成功/失败两段堆叠），右边把最近失败的查询列出来，
+     点一条就填进新脚本，改一改重跑 —— 比「记在脑子里再去历史里翻」省事。 -->
+<div class="empty-grid empty-extra">
+  <div class="empty-block trend-block">
     <div class="empty-dss-head">
-      <span>{{ $t('empty.queryStats') }}</span>
-      <span class="empty-dss-count">{{ recentHistory.length }}</span>
+      <span>{{ $t('empty.trendTitle') }}</span>
+      <span class="trend-legend">
+        <i class="lg ok"></i>{{ $t('empty.legendOk') }}
+        <i class="lg bad"></i>{{ $t('empty.legendFail') }}
+      </span>
     </div>
-    <div class="empty-stats">
-      <div class="es"><span class="es-k">{{ $t('empty.statTotal') }}</span><span class="es-v">{{ queryStats.total }}</span></div>
-      <div class="es"><span class="es-k">{{ $t('empty.statOk') }}</span><span class="es-v ok">{{ queryStats.ok }}</span></div>
-      <div class="es"><span class="es-k">{{ $t('empty.statBad') }}</span><span class="es-v bad">{{ queryStats.bad }}</span></div>
-      <div class="es"><span class="es-k">{{ $t('empty.statRate') }}</span><span class="es-v">{{ queryStats.rate }}</span></div>
-    </div>
-    <div class="empty-hs-none" style="padding: 6px 2px 0;">
-      <template v-if="queryStats.last">{{ $t('empty.lastAt', { time: queryStats.last }) }}</template>
-      <template v-else>{{ $t('empty.noQueryStats') }}</template>
+    <div class="empty-trend">
+      <div v-for="d in trendDays" :key="d.key" class="trend-col"
+           :title="$t('empty.trendDayTip', { day: d.label, n: d.count })">
+        <div class="trend-bars">
+          <div v-if="d.fails > 0" class="trend-bar bad" :style="{ height: barHeight(d.fails) }"></div>
+          <div v-if="d.count - d.fails > 0" class="trend-bar ok" :style="{ height: barHeight(d.count - d.fails) }"></div>
+        </div>
+        <span class="trend-n">{{ d.count || '' }}</span>
+        <span class="trend-label">{{ d.label }}</span>
+      </div>
     </div>
   </div>
   <div class="empty-block">
     <div class="empty-dss-head"><span>{{ $t('empty.dataTools') }}</span></div>
     <div class="empty-acts">
-      <button class="empty-act" @click="compareDialogOpen = true">
+      <button class="empty-act" @click="openCompare">
         <el-icon><Operation /></el-icon><span>{{ $t('empty.compare') }}</span>
       </button>
       <button class="empty-act" @click="syncDialogOpen = true">
         <el-icon><Switch /></el-icon><span>{{ $t('empty.sync') }}</span>
       </button>
-      <button class="empty-act" @click="newQueryTab()">
-        <el-icon><Document /></el-icon><span>{{ $t('empty.newSqlQuery') }}</span>
+      <button class="empty-act" @click="openGovernance('quality')">
+        <el-icon><Collection /></el-icon><span>{{ $t('qa.rulesTitle') }}</span>
       </button>
-      <button class="empty-act" @click="toggleAi">
-        <el-icon><MagicStick /></el-icon><span>{{ $t('empty.aiNl2sql') }}</span>
+      <button class="empty-act" @click="openGovernance('analysis')">
+        <el-icon><DataAnalysis /></el-icon><span>{{ $t('qa.title') }}</span>
       </button>
     </div>
   </div>
 </div>
-          <div class="empty-tips">
-            <span>{{ $t('empty.tip') }}</span>
           </div>
         </div>
         <el-tabs v-else v-model="activeTab" type="border-card" closable class="dc-tabs"
@@ -432,18 +457,71 @@
 
     <!-- 数据对比 / 同步 -->
     <CompareDialog :model-value="compareDialogOpen" :conn="conn" :database="currentDb"
-                   :tables="allTables" @update:model-value="compareDialogOpen = $event" />
+    :tables="allTables" :resume-id="compareResumeId" @update:model-value="onCompareDialogVisible" />
     <SyncDialog :model-value="syncDialogOpen" :conn="conn" :database="currentDb"
-                @update:model-value="syncDialogOpen = $event" />
+                :resume-task-id="bgResumeId" @update:model-value="onSyncDialogVisible" />
+
+    <!-- 任务中心两个视图共用一个弹窗：history = 全部执行记录（**表格 + 分页**，字段：
+         类型/任务/状态/开始/结束/耗时/操作）；running = 正在执行（右侧时钟悬浮的轻列表）。
+         状态在打开时实时刷新，终态写回记录（持久化），刷新页面后历史仍显示完成/失败。 -->
+    <el-dialog v-model="bgCenterOpen" :title="bgCenterMode === 'running' ? $t('sync.bgRunningTitle') : $t('sync.bgCenter')" width="1000px" append-to-body>
+    <template v-if="bgCenterMode === 'history'">
+    <div v-if="bgTasks.length" class="bg-toolbar">
+      <el-button size="small" type="danger" plain :icon="ElDelete" @click="confirmClearBg">{{ $t('sync.bgClear') }}</el-button>
+    </div>
+    <el-table :data="bgPageRows" size="small" border class="data-table" @row-click="resumeBgTask" :row-class-name="() => 'bg-row-click'">
+    <el-table-column :label="$t('ts.kind')" width="80" align="center" header-align="center">
+      <template #default="{ row }"><span class="bg-kind" :class="row.kind === 'compare' ? 'is-cmp' : ''">{{ row.kind === 'compare' ? $t('nav.compare') : $t('nav.sync') }}</span></template>
+    </el-table-column>
+    <el-table-column prop="title" :label="$t('ts.task')" min-width="170" show-overflow-tooltip align="center" header-align="center" />
+    <el-table-column :label="$t('ts.status')" width="90" show-overflow-tooltip align="center" header-align="center">
+      <template #default="{ row }"><span class="bg-dot bg-dot-inline" :class="bgStatusOf(row.id)"></span>{{ bgStateShort(row.id) }}</template>
+    </el-table-column>
+    <el-table-column :label="$t('ts.start')" align="center" header-align="center" width="150">
+      <template #default="{ row }">{{ bgTimeText(row, 'start') }}</template>
+    </el-table-column>
+    <el-table-column :label="$t('ts.end')" align="center" header-align="center" width="150">
+      <template #default="{ row }">{{ row.finishedAt ? bgTimeText(row) : '—' }}</template>
+    </el-table-column>
+    <el-table-column :label="$t('ts.duration')" align="center" header-align="center" width="80">
+      <template #default="{ row }">{{ bgDurationText(row) }}</template>
+    </el-table-column>
+    <el-table-column :label="$t('ts.actions')" align="center" header-align="center" width="130">
+      <template #default="{ row }">
+        <el-button text size="small" type="primary" @click.stop="resumeBgTask(row)">{{ $t('ts.view') }}</el-button>
+        <!-- 运行中：停止（卡住任务的出口）；已结束：删除 -->
+        <el-button v-if="bgStatusOf(row.id) === 'running'" text size="small" type="danger" @click.stop="stopBgTask(row)">{{ $t('common.stop') }}</el-button>
+        <el-button v-else text size="small" type="danger" @click.stop="removeBgTask(row.id)">{{ $t('common.delete') }}</el-button>
+      </template>
+    </el-table-column>
+    </el-table>
+    <el-pagination v-model:current-page="bgPage" :page-size="bgPageSize" :total="bgTasks.length"
+                   layout="total, prev, pager, next" size="small" class="bg-pager" />
+    </template>
+    <div v-else class="bg-task-list">
+    <div v-if="!bgRunningList.length" class="bg-task-empty">{{ $t('sync.bgRunningEmpty') }}</div>
+    <div v-for="t in bgRunningList" :key="t.id" class="bg-task-item" @click="resumeBgTask(t)">
+    <span class="bg-dot" :class="bgStatusOf(t.id)"></span>
+    <span class="bg-kind" :class="t.kind === 'compare' ? 'is-cmp' : ''">{{ t.kind === 'compare' ? $t('nav.compare') : $t('nav.sync') }}</span>
+    <span class="bg-title">{{ t.title }}</span>
+    <span class="bg-state">{{ bgStateText(t.id) }}</span>
+    <el-button size="small" text type="danger" @click.stop="stopBgTask(t)">{{ $t('common.stop') }}</el-button>
+    </div>
+    </div>
+    
+    </el-dialog>
 
     <!-- 表右键菜单 -->
     <ul v-if="ctxMenu.show" class="ctx-menu" :style="{ left: ctxMenu.x + 'px', top: ctxMenu.y + 'px' }"
         @click.stop @contextmenu.prevent>
       <!-- ===== 表 ===== -->
       <template v-if="ctxMenu.data?.objectKind === 'table'">
+        <!-- 能力位门控：`supportsDDLExec`= 该类型能执行 DDL（SQL 类恒 true、NoSQL false），
+             `supportsDdl` = 能**取回**建表语句（Derby/DB2 取不到，但 DROP TABLE 照样能跑）——
+             两者别混用：拿 supportsDdl 门控删除操作会把 Derby / DB2 的删除表整个藏掉。 -->
         <li @click="ctxOpenData"><el-icon><Grid /></el-icon><span>{{ $t('common.viewData') }}</span></li>
-        <li @click="ctxOpenDetail"><el-icon><Document /></el-icon><span>{{ $t('menu.editStructure') }}</span></li>
-        <li @click="ctxRenameTable"><el-icon><Edit /></el-icon><span>{{ $t('common.rename') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" @click="ctxOpenDetail"><el-icon><Document /></el-icon><span>{{ $t('menu.editStructure') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" @click="ctxRenameTable"><el-icon><Edit /></el-icon><span>{{ $t('common.rename') }}</span></li>
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDdl')" @click="ctxShowDdl"><el-icon><DocumentCopy /></el-icon><span>{{ $t('menu.viewDdl') }}</span></li>
         <li @click="ctxShowIndexes"><el-icon><Coin /></el-icon><span>{{ $t('menu.viewIndexes') }}</span></li>
         <li class="divider" />
@@ -458,7 +536,7 @@
             <li @click.stop="ctxGenSql('delete')">{{ $t('menu.sqlDelete') }}</li>
           </ul>
         </li>
-        <li class="has-sub" @mouseenter="ctxSub('export')" @mouseleave="ctxSub(null)">
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsExport')" class="has-sub" @mouseenter="ctxSub('export')" @mouseleave="ctxSub(null)">
           <el-icon><Download /></el-icon><span>{{ $t('menu.exportData') }}</span><el-icon class="arrow"><ArrowRight /></el-icon>
           <ul v-show="ctxMenu.subKey === 'export'" class="ctx-submenu">
             <li @click.stop="ctxExport('csv')">{{ $t('menu.exportCsv') }}</li>
@@ -466,8 +544,8 @@
             <li @click.stop="ctxExport('json')">{{ $t('menu.exportJson') }}</li>
           </ul>
         </li>
-        <li @click="ctxOpenImport"><el-icon><Upload /></el-icon><span>{{ $t('menu.importData') }}</span></li>
-        <li @click="ctxOpenDataGen"><el-icon><MagicStick /></el-icon><span>{{ $t('menu.dataGen') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsImport')" @click="ctxOpenImport"><el-icon><Upload /></el-icon><span>{{ $t('menu.importData') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsTableData')" @click="ctxOpenDataGen"><el-icon><MagicStick /></el-icon><span>{{ $t('menu.dataGen') }}</span></li>
         <!-- 「发送到 AI」放**一级菜单**：放在 AI 助手子菜单里的话，右键后要悬停才展开，
              第一眼会以为"表上根本没有这个入口"（用户实测反馈）。子菜单里只留
              「数据洞察 / 把表结构存入知识库」这两个更重的动作。 -->
@@ -482,9 +560,9 @@
           </ul>
         </li>
         <li class="divider" />
-        <li class="danger" @click="ctxClearTable"><el-icon><Delete /></el-icon><span>{{ $t('menu.clearTable') }}</span></li>
-        <li class="danger" @click="ctxTruncateTable"><el-icon><Delete /></el-icon><span>{{ $t('menu.truncateTable') }}</span></li>
-        <li class="danger" @click="ctxDropTable"><el-icon><Delete /></el-icon><span>{{ $t('menu.dropTable') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="ctxClearTable"><el-icon><Delete /></el-icon><span>{{ $t('menu.clearTable') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="ctxTruncateTable"><el-icon><Delete /></el-icon><span>{{ $t('menu.truncateTable') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="ctxDropTable"><el-icon><Delete /></el-icon><span>{{ $t('menu.dropTable') }}</span></li>
         <li class="divider" />
         <li @click="ctxRefreshRows"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
       </template>
@@ -497,19 +575,17 @@
         <li class="divider" />
         <li @click="ctxAiExplainView" class="ai-item"><el-icon><MagicStick /></el-icon><span>{{ $t('menu.explainView') }}</span></li>
         <li class="divider" />
-        <li class="danger" @click="objDrop"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="objDrop"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
         <li @click="objRefresh"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
       </template>
       <!-- ===== 用户 ===== -->
       <template v-else-if="ctxMenu.data?.objectKind === 'user'">
-        <!-- 「能列出用户」≠「能看详情 / 能改」：Oracle/DM/ClickHouse 只有用户列表，
-             详情与管理尚未实现 —— 不摆会必然报「未实现」的菜单项 -->
+        <!-- 用户管理**只读**：只留「查看」（详情 + 权限展示）。编辑/新建/删除入口
+             全部下掉 —— 用户要求先只做查看（编辑链路保留在代码里，随时可恢复） -->
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsUserDetail')" @click="openUserDetail"><el-icon><View /></el-icon><span>{{ $t('common.view') }}</span></li>
-        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsUserDetail') && featureOf(ctxMenu.data?.connId, 'supportsUserManage')" @click="openUserEdit"><el-icon><EditPen /></el-icon><span>{{ $t('common.edit') }}</span></li>
         <li class="divider" />
         <li @click="ctxCopyName"><el-icon><CopyDocument /></el-icon><span>{{ $t('common.copy') }}</span></li>
         <li class="divider" />
-        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsUserManage')" class="danger" @click="userDrop"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
         <li @click="objRefresh"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
       </template>
       <!-- ===== NoSQL collection / key / index ===== -->
@@ -529,7 +605,7 @@
         <li @click="ctxCopyObjName"><el-icon><CopyDocument /></el-icon><span>{{ $t('common.copy') }}</span></li>
         <li v-if="objectDdlAllowed(ctxMenu.data?.connId, ctxMenu.data?.objectKind)" @click="ctxRenameObject"><el-icon><Edit /></el-icon><span>{{ $t('common.rename') }}</span></li>
         <li class="divider" />
-        <li class="danger" @click="objDrop"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="objDrop"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
         <li @click="objRefresh"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
       </template>
       <!-- ===== 索引 ===== -->
@@ -603,7 +679,7 @@
                       @open-conn="onRecentConn" />
 
     <!-- 新建/编辑连接 -->
-    <ConnectionDialog v-model="connDialogVisible" :conn="editingConn" :custom-folders="customFolders" :initial-environment="connDialogInitialEnv" :initial-type="connDialogInitialType" @saved="onConnSaved" @folder-added="refreshFolders" />
+    <ConnectionDialog v-model="connDialogVisible" :conn="editingConn" :custom-folders="customFolders" :initial-group="connDialogInitialEnv" :initial-type="connDialogInitialType" @saved="onConnSaved" @folder-added="refreshFolders" />
 
     <!-- 数据库 DDL 弹窗 -->
     <el-dialog v-model="dbDdlVisible" width="720px" append-to-body class="main-dialog">
@@ -748,11 +824,14 @@
             <el-icon><Connection /></el-icon>{{ $t('tree.menu.erDiagram') }}
           </li>
           <li class="divider" />
+          <!-- 删除数据库：NoSQL 节点也走这套菜单，之前它写在这个 template **之外**，
+               Redis 的库节点上同样会冒出这一项（点了必然失败）。移进来一起门控，
+               再叠一层 supportsDDLExec：不能执行 DDL 的源不摆。 -->
+          <li v-if="featureOf(treeCtxMenu.data?.connId, 'supportsDDLExec')" class="ctx-item danger" @click="dbCtxDrop()">
+            <el-icon><Delete /></el-icon>{{ $t('tree.menu.dropDb') }}
+          </li>
+          <li class="divider" />
         </template>
-        <li class="ctx-item danger" @click="dbCtxDrop()">
-          <el-icon><Delete /></el-icon>{{ $t('tree.menu.dropDb') }}
-        </li>
-        <li class="divider" />
         <li class="ctx-item" @click="dbCtxRefresh()">
           <el-icon><Refresh /></el-icon>{{ $t('common.refresh') }}
         </li>
@@ -769,6 +848,14 @@
         <li class="ctx-item" @click="catalogCtxRefresh()">
           <el-icon><Refresh /></el-icon>{{ $t('common.refresh') }}
         </li>
+        <!-- 内置 catalog（internal）装着用户真正的库与表，Doris 不允许删 —— 门控掉；
+             外部 catalog（如 jdbc 映射的 mysql_216）删的只是「映射」，外部数据不受影响 -->
+        <template v-if="String(treeCtxMenu.data?.catalog || '').toLowerCase() !== 'internal'">
+          <li class="divider" />
+          <li class="ctx-item danger" @click="catalogCtxDrop()">
+            <el-icon><Delete /></el-icon>{{ $t('tree.menu.dropCatalog') }}
+          </li>
+        </template>
       </template>
       <!-- 分类目录（Tables/Views/Procedures/...） -->
       <template v-else-if="treeCtxMenu.kind === 'category'">
@@ -779,9 +866,7 @@
         <li v-else-if="treeCtxMenu.cat === 'scripts'" class="ctx-item" @click="catCreate('scripts')">
           <el-icon><Plus /></el-icon>{{ $t('tree.menu.create') }}
         </li>
-        <li v-else-if="treeCtxMenu.cat === 'users'" class="ctx-item" @click="catCreateUser">
-          <el-icon><Plus /></el-icon>{{ $t('tree.menu.create') }}
-        </li>
+        <!-- 用户「新建」入口已随「用户管理只读」一并下掉 -->
         <li class="divider" />
         <li class="ctx-item" @click="catRefresh(treeCtxMenu.db)">
           <el-icon><Refresh /></el-icon>{{ $t('common.refresh') }}
@@ -841,7 +926,7 @@
     :database="backupRestore.database"
   />
 
-  <SettingsView v-model="settingsOpen" />
+  <SettingsView v-model="settingsOpen" :initial-tab="settingsTab" />
 
   <!-- 数据治理（敏感数据 / 质量 / 关系 / 容量 / 变更影响 / 索引建议） -->
   <AiGovernanceDialog v-model="governanceOpen" :conn="conn" :database="currentDb"
@@ -887,7 +972,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent } from 'vue'
+
 import { applyTaskSnapshot, finishExport } from '../../utils/useExportTask'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
@@ -898,16 +984,19 @@ import { desktopShell } from '../../utils/desktopShell'
 import { readSchemaCache, writeSchemaCache, removeSchemaCache, invalidateSchemaCache } from '../../utils/schemaCache'
 import { parseMySqlGrants, parseSqlServerPerms } from '../../utils/grants'
 import { getEditorSettings } from '../../utils/settings'
-import { Sunny, Moon } from '@element-plus/icons-vue'
+import { Sunny, Moon, Clock, Reading, Delete as ElDelete } from '@element-plus/icons-vue'
 import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 import { locale, setLocale } from '../../utils/i18n'
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
 import { buildCatChildren, buildObjectCategories, isFunctionRoutine } from './treeNodes'
 import { t } from '../../utils/i18n'
+import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
 import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor } from '@element-plus/icons-vue'
-import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, noSqlDatabases, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory } from '../../api'
+import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
+import { compareTaskStatus, compareCancel, syncCancel } from '../../api'
 import { recordRecentConnection } from '../../utils/recentConnections'
+import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
 import { buildConnectionBundle, parseConnectionBundle, importPayloadOf, downloadJson } from '../../utils/connTransfer'
 import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType } from '../../types'
 import AiPanel from '../ai/AiPanel.vue'
@@ -1040,6 +1129,23 @@ const winToggleMax = () => winApi && winApi.toggleMaximize()
  */
 const winClose = async () => {
   if (!winApi || !winApi.available) return
+  // 后台任务检查（先于未保存脚本）：有同步任务在后台跑，直接关窗它们**不会中断**
+  //（任务在后端进程里），但用户多半以为关窗=停止 —— 说清楚再走。
+  await refreshBgStatus()
+  const runningBg = bgTasks.filter(t => (bgStatusMap.value[t.id] || 'running') === 'running')
+  if (runningBg.length) {
+    const names = runningBg.map(bt => t('common.quoted', { name: bt.title })).join(t('common.listSep'))
+    try {
+      await ElMessageBox.confirm(t('sync.bgCloseAsk', { n: runningBg.length, names }), t('sync.bgCenter'), {
+        type: 'warning',
+        confirmButtonText: t('sync.bgCloseOk'),
+        cancelButtonText: t('common.cancel'),
+        closeOnClickModal: false
+      })
+    } catch {
+      return // 取消关闭 → 窗口留着，任务继续
+    }
+  }
   const dirtyTabs = tabs.value.filter(t => t.type === 'sql' && t.dirty)
   if (dirtyTabs.length) {
     const names = dirtyTabs.map(tb => t('common.quoted', { name: tabLabel(tb) })).join(t('common.listSep'))
@@ -1126,6 +1232,8 @@ onMounted(() => {
   if (winApi && !isMacShell) offWinMax = winApi.onMaximizeChange((v) => { winMaximized.value = v })
   // 欢迎页的「最近查询」：首次进来就取一次（失败无所谓，那块会显示一句说明）
   loadHistory()
+  // 纯分组从后端设置加载（并顺带完成 localStorage 旧数据的一次性迁移）
+  loadPureFolders()
 })
 onBeforeUnmount(() => { if (offWinMax) offWinMax() })
 
@@ -1168,7 +1276,190 @@ const treeWidth = ref(360)
 const sidebarHidden = ref(false)
 const compareDialogOpen = ref(false)
 const syncDialogOpen = ref(false)
+// ===== 后台任务中心 =====
+// 数据传输「后台运行」的任务在这里登记（见 backgroundTasks.js），点开顶栏图标看列表，
+// 点某一项重新弹出进度窗（SyncDialog 的 resumeTaskId 负责跳回进度页接着轮询）。
+const bgResumeId = ref('')
+const bgCenterOpen = ref(false)
+/** 任务中心视图：history = 全部执行记录（顶栏菜单项）；running = 正在执行（弹窗复用） */
+const bgCenterMode = ref('history')
+const bgTasksVisible = computed(() =>
+  bgCenterMode.value === 'running' ? bgRunningList.value : bgTasks
+)
+// **执行记录分页**：任务多时表格一次全渲染又长又卡，按 10 条一页翻
+const bgPage = ref(1)
+const bgPageSize = 10
+// 删除/清空记录后当前页可能超出范围 → 空表格假死，钳回有效页
+watch(() => bgTasks.length, (n) => {
+  const max = Math.max(1, Math.ceil(n / bgPageSize))
+  if (bgPage.value > max) bgPage.value = max
+})
+const bgPageRows = computed(() => {
+  const start = (bgPage.value - 1) * bgPageSize
+  return bgTasks.slice(start, start + bgPageSize)
+})
+/** 耗时：**已结束用快照里的后端运行时长**（addedAt 是登记时刻，晚于任务真正开始，
+ *  用它会虚高）；运行中 = 后端时长 + 距上次刷新的本地推进，**1 秒心跳**刷新显示
+ *  （bgTick 只触发重渲染，不发请求）；已中断但没记下结束时间的旧记录显示 — */
+const bgTick = ref(0)
+setInterval(() => { bgTick.value++ }, 1000)
+const bgDurationText = (t) => {
+  bgTick.value
+  if (bgStatusOf(t.id) !== 'running' && !t.finishedAt) return '—'
+  // 已结束：**后端墙钟差**（权威）；运行中：后端时长 + 距上次取数的本地推进
+  const s = bgStatusOf(t.id) === 'running'
+    ? Math.floor(((t.elapsedMs || 0) + (Date.now() - (t.fetchedAt || Date.now()))) / 1000)
+    : (t.finishedAt && t.startedAt)
+      ? Math.max(0, Math.floor((t.finishedAt - t.startedAt) / 1000))
+      : t.snapshot?.elapsedMs > 0
+        ? Math.floor(t.snapshot.elapsedMs / 1000)
+        : Math.max(0, Math.floor((t.finishedAt - t.addedAt) / 1000))
+  if (s < 0) return '0s'
+  if (s < 60) return s + 's'
+  const m = Math.floor(s / 60)
+  if (m < 60) return m + 'm ' + (s % 60) + 's'
+  return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'
+}
+/** 正在执行的任务（右侧时钟图标的悬浮下拉用，与弹窗模式无关） */
+const bgRunningList = computed(() =>
+  bgTasks.filter(t => (bgStatusMap.value[t.id] || t.status || 'running') === 'running')
+)
+/** 数据对比的后台任务恢复标记（对比点「后台运行」后从任务中心点开走这里） */
+const compareResumeId = ref('')
+/**
+ * 顶栏「数据对比」入口：对话框已开着（残留打开态）时**先关再下帧重开** ——
+ * 否则赋值 true 没有变化，子组件的打开 watch 不触发，上一次的查看/隐藏态
+ * 清不掉，表现就是「点了没反应」（间歇性，真机踩过）。
+ */
+const openCompare = () => {
+  if (compareDialogOpen.value) {
+    compareDialogOpen.value = false
+    nextTick(() => { compareDialogOpen.value = true })
+    return
+  }
+  compareDialogOpen.value = true
+}
+const onCompareDialogVisible = (v) => {
+  compareDialogOpen.value = v
+  if (!v) compareResumeId.value = ''
+}
+/** 对话框关闭时清掉恢复标记 —— 下次从任务中心点开才是「新的一次恢复」 */
+const onSyncDialogVisible = (v) => {
+  syncDialogOpen.value = v
+  if (!v) bgResumeId.value = ''
+}
+const bgStatusMap = ref({})
+const refreshBgStatus = async () => {
+// 刷一次每个后台任务的实时状态（徽标、列表、关闭检查共用）
+// **按任务类型**查对应的状态接口：数据传输 → syncTaskStatus，数据对比 → compareTaskStatus
+// 终态**写回记录**（持久化）—— 执行记录在页面刷新后仍显示完成/失败，而不是误标运行中
+for (const t of bgTasks) {
+try {
+const st = t.kind === 'compare'
+? await compareTaskStatus(t.id)
+: await syncTaskStatus(t.id)
+// **后端说任务不存在（notfound）≠ 本地记录作废**：服务重启后内存任务丢了，
+// 但本地留底过的终态（成功/失败/取消）必须保留 —— 不能把「成功」覆盖成「已中断」（真机踩过）。
+// 优先用记录状态，记录被旧版本污染过就用快照里的终态救回
+if (st.status === 'notfound') {
+const local = (t.status && t.status !== 'running') ? t.status
+: (t.snapshot?.status && t.snapshot.status !== 'running' ? t.snapshot.status : null)
+if (local) { bgStatusMap.value[t.id] = local; t.status = local; continue }
+}
+bgStatusMap.value[t.id] = st.status || 'running'
+setBgTaskStatus(t.id, st.status || 'running', st)
+// 运行时长 + 取数时刻留在记录上：耗时列对运行中的任务按
+// 「后端时长 + 距本次取数的本地推进」显示（1 秒心跳让它连续走）
+t.elapsedMs = st.elapsedMs || 0
+t.fetchedAt = Date.now()
+// **后端的墙钟起止是开始/结束时间的权威值**：任务真实提交/结束的时刻由后端记录，
+// 前端登记时刻可能晚于真实开始（恢复/补登记场景），推算链路任何偏差都会显示错
+if (st.startedAtWall > 0) t.startedAt = st.startedAtWall
+if (st.finishedAtWall > 0) t.finishedAt = st.finishedAtWall
+} catch {
+// 查询失败（典型：应用重启后任务已不在内存，接口 404）→ **视为已过期**，
+// 不再兜成 running —— 否则时钟图标的角标永远挂着「1」（真机踩过）。
+// 本地已有终态留底的（含快照救回）同样沿用，别降级成中断
+const local = (t.status && t.status !== 'running') ? t.status
+: (t.snapshot?.status && t.snapshot.status !== 'running' ? t.snapshot.status : null)
+if (local) { bgStatusMap.value[t.id] = local; t.status = local; continue }
+bgStatusMap.value[t.id] = 'notfound'
+setBgTaskStatus(t.id, 'notfound')
+}
+}
+}
+/** 停止一个运行中的后台任务（任务中心/悬浮下拉都有入口）——
+    任务卡住时用户需要出口，停掉后状态落到 canceled，角标随之消失 */
+const stopBgTask = async (t) => {
+  try {
+    if (t.kind === 'compare') await compareCancel(t.id)
+    else await syncCancel(t.id)
+    ElMessage.success(t('cmp.stopRequested'))
+  } catch (e) {
+    ElMessage.error(e?.message || t('common.unknownError'))
+  }
+  await refreshBgStatus()
+}
+// 记录时间：**年月日 时分秒**（用户指定格式）。
+// mode='start' 显示开始（优先后端墙钟），否则显示结束（无结束时刻回退开始，不再是同刻假象）
+const bgTimeText = (t, mode) => {
+  const raw = mode === 'start' ? (t.startedAt || t.addedAt) : (t.finishedAt || t.startedAt || t.addedAt)
+  const d = new Date(raw)
+  const p = (n) => String(n).padStart(2, '0')
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds())
+}
+/** 清空全部执行记录：确认后一次删光 */
+const confirmClearBg = () => {
+  ElMessageBox.confirm(
+    t('sync.bgClearConfirm'),
+    t('sync.bgCenter'),
+    { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
+  ).then(() => { clearBgTasks(); bgPage.value = 1; ElMessage.success(t('sync.bgCleared')) }).catch(() => {})
+}
+/** 删除单条后当前页可能越界（最后一页只剩这一条）—— 收回来 */
+watch(() => bgTasks.length, (n) => {
+  const maxPage = Math.max(1, Math.ceil(n / bgPageSize))
+  if (bgPage.value > maxPage) bgPage.value = maxPage
+})
+// 挂载后拉一次 + 每 5 秒刷新（任务少，几个请求的事），徽标才「活」
+onMounted(() => { refreshBgStatus() })
+setInterval(refreshBgStatus, 5000)
+const bgRunningCount = computed(() =>
+  bgTasks.filter(t => (bgStatusMap.value[t.id] || 'running') === 'running').length
+)
+const bgStateText = (id) => {
+// **notfound = 任务已不存在**（服务重启后内存任务丢了/超过保留期）——
+// 必须显示「已中断」而不是落进 else 的「运行中」（真机踩过：重启后任务中心全是假"运行中"）
+const s = bgStatusMap.value[id] || 'running'
+return s === 'success' ? t('sync.statOk') : s === 'canceled' ? t('sync.statSkipped')
+: s === 'error' ? t('sync.statFailed') : s === 'notfound' ? t('sync.bgInterrupted') : t('sync.running')
+}
+/** 表格里的**短**状态文案：中断原因放悬浮（列窄，长文案会挤爆布局） */
+const bgStateShort = (id) => {
+  const s = bgStatusMap.value[id] || 'running'
+  return s === 'notfound' ? t('sync.bgInterruptedShort') : bgStateText(id)
+}
+const bgStatusOf = (id) => (bgStatusMap.value[id] || 'running')
+const resumeBgTask = (t) => {
+  bgCenterOpen.value = false
+  // 按**任务类型**路由回对应对话框的进度窗：数据传输 → SyncDialog；
+  // 数据对比 → CompareDialog（各自带恢复标记，进度窗直接接着轮询）
+  if (t.kind === 'compare') {
+    compareResumeId.value = t.id
+    compareDialogOpen.value = true
+    return
+  }
+  bgResumeId.value = t.id
+  syncDialogOpen.value = true
+}
 const settingsOpen = ref(false)
+/** 要直达的设置页签（'' = 上次停留的页签）。首页 MCP 卡「前往设置」用 */
+const settingsTab = ref('')
+const openSettings = (tab = '') => { settingsTab.value = tab; settingsOpen.value = true }
+// AI 助手等子组件通过全局事件请求打开设置（如「AI 服务未配置」提示里的直达链接）
+const onOpenSettingsEvent = (e) => openSettings(e.detail?.tab || '')
+window.addEventListener('dc-open-settings', onOpenSettingsEvent)
+onBeforeUnmount(() => window.removeEventListener('dc-open-settings', onOpenSettingsEvent))
 
 // ===== 顶栏右侧：主题 / 语言 快速切换（原来只有知识库 / AI / 设置三枚）=====
 /** 主题模式：system / light / dark，点一次按这个顺序循环 */
@@ -1194,7 +1485,7 @@ const governanceTab = ref('sensitive')
 /** 打开治理弹窗时是否直接开跑（敏感数据 / 数据容量这类「点开即出结果」的扫描） */
 const governanceAutoRun = ref(false)
 /** 治理弹窗的四个页签键：AI 助手面板命令直达用 */
-const GOVERNANCE_TABS = ['sensitive', 'capacity', 'quality', 'analysis']
+const GOVERNANCE_TABS = ['sensitive', 'capacity', 'quality', 'analysis', 'patrol']
 /** 「点开即出结果」的页签：从 AI 助手跳过去时自动执行 */
 const GOVERNANCE_AUTORUN_TABS = ['sensitive', 'capacity']
 const paletteOpen = ref(false)
@@ -1458,21 +1749,18 @@ const openBackupRestore = (mode, connId, db) => {
 window.addEventListener('click', closeTreeCtxMenu)
 window.addEventListener('scroll', closeTreeCtxMenu, true)
 
-// 自定义目录 = 所有 connection.environment 中非预置、非空的值 ∪ localStorage 纯目录
+// 自定义目录 = 所有 connection.group 中非预置、非空的值 ∪ 后端「纯目录」
+// （还没有任何连接的分组，唯一真相源在后端 app_settings 的 ui.folders，见 utils/folders.js）
 const folderRefresh = ref(0)
 const customFolders = computed(() => {
   // eslint-disable-next-line no-unused-expressions
   folderRefresh.value
   const set = new Set()
   for (const c of allConnections.value) {
-    const env = c.environment || ''
+    const env = c.group || ''
     if (env && !PREDEF_ENVS.includes(env)) set.add(env)
   }
-  // 纯目录（localStorage 持久化，用于尚未放入任何 conn 的目录）
-  try {
-    const raw = JSON.parse(localStorage.getItem('dbmind_folders') || '[]')
-    for (const f of raw) if (f && !PREDEF_ENVS.includes(f)) set.add(f)
-  } catch { /* ignore */ }
+  for (const f of pureFolders.value) if (f && !PREDEF_ENVS.includes(f)) set.add(f)
   return Array.from(set)
 })
 
@@ -1492,22 +1780,6 @@ const loadAllConnections = async () => {
     treeLoading.value = false
   }
 }
-
-// ====== 欢迎页的 KPI 与 MCP 片段 ======
-/** KPI「已连接」：真的打开了几个连接（图标变亮的那种） */
-const openConnCount = computed(() => allConnections.value.filter(c => isConnOpen(c.id)).length)
-/** KPI「数据库类型」：用到几种类型 */
-const connTypeCount = computed(() => new Set(allConnections.value.map(c => c.type)).size)
-
-/** 首页「查询统计」：用最近历史直接算，不新开接口（空态页每个数字都要是真的） */
-const queryStats = computed(() => {
-  const list = Array.isArray(recentHistory.value) ? recentHistory.value : []
-  const ok = list.filter(h => h.status === 'ok').length
-  const latest = list[0]
-  const rate = list.length ? Math.round((ok / list.length) * 100) + '%' : '-'
-  const last = latest ? [latest.connectionName || '', clockText(latest.createdAt)].filter(Boolean).join(' · ') : ''
-  return { total: list.length, ok, bad: list.length - ok, rate, last }
-})
 
 /**
  * MCP 配置片段。`dbmind-mcp` 是仓库里**真实存在**的 stdio MCP 服务（`crates/dbmind-mcp`），
@@ -1591,12 +1863,79 @@ const warmUpBeforeFirstClick = async () => {
 /** 欢迎页的「最近查询」：首次进来就取一次（失败无所谓，那块会显示一句说明） */
 const loadHistory = async () => {
   try {
-    const rows = await listHistory(8)
-    // 6 条：实测一屏刚好放得下（再多就会顶出滚动条 —— 首页宁可少两条也别出现滚动条）
-    recentHistory.value = (Array.isArray(rows) ? rows : []).slice(0, 6)
+    // 底部「近 7 天趋势 / 失败查询」需要更多样本（最近 8 条撑不起一周的图），多取一份
+    const [rows, many] = await Promise.all([listHistory(8), listHistory(200)])
+    // 4 条：加了第四行卡片后竖向空间更紧 —— 首页宁可少两条也别出现滚动条
+    recentHistory.value = (Array.isArray(rows) ? rows : []).slice(0, 4)
+    trendHistory.value = Array.isArray(many) ? many : []
   } catch {
     // 拿不到历史不影响欢迎页的其它内容（新库本来就没有历史）
     recentHistory.value = []
+    trendHistory.value = []
+  }
+}
+
+/** 近 7 天趋势 / 失败查询的数据源（比「最近查询」的 6 条多） */
+const trendHistory = ref([])
+
+/** 近 7 天每天的执行量：按自然日分桶，没有记录的天也占位（柱高 0），图才是连续的一周 */
+const trendDays = computed(() => {
+  const list = Array.isArray(trendHistory.value) ? trendHistory.value : []
+  const now = new Date()
+  const days = []
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
+    days.push({ key: d.toDateString(), label: (d.getMonth() + 1) + '/' + d.getDate(), count: 0, fails: 0 })
+  }
+  const byDay = new Map(days.map((d, i) => [d.key, i]))
+  for (const h of list) {
+    const t = h.createdAt ? new Date(h.createdAt) : null
+    if (!t || isNaN(t.getTime())) continue
+    const i = byDay.get(t.toDateString())
+    if (i === undefined) continue
+    days[i].count++
+    if (h.status !== 'ok') days[i].fails++
+  }
+  return days
+})
+
+const trendMax = computed(() => Math.max(1, ...trendDays.value.map(d => d.count)))
+/** 柱高：按当日量归一到 0-56px；0 条也给 2px 的基线，表示「这天没查」而不是「缺数据」 */
+/** 柱高：按当日量归一到 0-72px。0 不画（v-if 拦在模板层）—— 灰槽本身就表示「没查」，
+ *  之前给 0 也画 2px 基线，结果没查询的天也冒出蓝红各一小条，自相矛盾（真机踩过）。 */
+const barHeight = (n) => Math.max(4, Math.round((n / trendMax.value) * 72)) + 'px'
+
+/**
+ * 清空查询历史。
+ *
+ * 为什么是**整体清空**而不是按条删：后端只有一个清空接口，且历史表里没有「来源」字段 ——
+ * 早期（没有 `internal` 标记时）写进去的那些元数据查询，事后无法可靠地识别出来。
+ * 既然如此就把话说在前面：确认框里明确写"全部 N 条、不能只删一条"。
+ */
+const onClearHistory = async () => {
+  const total = recentHistory.value.length
+  if (!total) return
+  try {
+    await ElMessageBox.confirm(
+      t('empty.clearHistoryBody', { n: total }),
+      t('empty.clearHistoryTitle'),
+      {
+        type: 'warning',
+        confirmButtonText: t('common.delete'),
+        cancelButtonText: t('common.cancel'),
+        closeOnClickModal: false,
+        closeOnPressEscape: false
+      }
+    )
+  } catch {
+    return // 用户取消
+  }
+  try {
+    await clearHistory()
+    recentHistory.value = []
+    ElMessage.success(t('empty.clearHistoryDone'))
+  } catch (e) {
+    ElMessage.error(t('empty.clearHistoryFailed', { detail: errMsg(e, t('common.unknownError')) }))
   }
 }
 /**
@@ -1694,7 +2033,7 @@ const exportConns = async (env) => {
   closeTreeCtxMenu()
   try {
     const all = await listConnections()
-    const picked = env ? all.filter(c => (c.env || c.environment) === env) : all
+    const picked = env ? all.filter(c => (c.env || c.group) === env) : all
     if (!picked.length) {
       ElMessage.warning(env ? t('mv.groupNoConns', { env }) : t('mv.nothingToExport'))
       return
@@ -1758,15 +2097,17 @@ const importConns = (env) => {
 }
 // ====== 树内直接重命名分组（就地改，不弹窗）======
 // 有两处存储要一起改：
-// 1) 该分组下所有连接的 environment（连接是靠它归属分组的）
-// 2) localStorage 里的「纯分组」（还没有任何连接的分组，只在本地存个名字）
+// 1) 该分组下所有连接的 group（连接是靠它归属分组的）
+// 2) 后端「纯分组」（还没有任何连接的分组，存 app_settings 的 ui.folders）
 // 少改任何一处，都会出现「名字改了、连接没跟过去」或「旧名字又冒出来」。
 const renamingKey = ref('')
 const renameDraft = ref('')
 const startRenameGroup = async (env) => {
   closeTreeCtxMenu()
   renamingKey.value = env
-  renameDraft.value = env
+  // 多级目录：env 是全路径（`公司资源/研发`），输入框只放**尾段** ——
+  // 用户改的是这一级的名字，父级路径保持不动
+  renameDraft.value = env.includes('/') ? env.slice(env.lastIndexOf('/') + 1) : env
   await nextTick()
   // el-input 在树节点的 v-for 里，组件 ref 不好定位；直接拿 DOM 兜底，聚焦并全选原名
   const input = document.querySelector('.tree-rename-input input')
@@ -1786,24 +2127,35 @@ const commitRenameGroup = async () => {
   // 先退出改名态：@blur 会再触发一次，靠这个提前 return 掉，避免提交两遍
   renamingKey.value = ''
   if (!to || to === from) return
+  if (to.includes('/')) return ElMessage.warning(t('mv.groupNameTooLong', { n: 20 }))
   if (to.length > 20) return ElMessage.warning(t('mv.groupNameTooLong', { n: 20 }))
-  if (to !== from && (customFolders.value.includes(to) || PREDEF_ENVS.includes(to))) {
-    return ElMessage.warning(t('mv.groupNameExists', { name: to }))
+  // 多级目录：renameDraft 是**尾段**新名，拼回父路径得到完整新路径
+  const idx = from.lastIndexOf('/')
+  const parent = idx > 0 ? from.slice(0, idx) : ''
+  const newPath = parent ? parent + '/' + to : to
+  if (newPath !== from && (customFolders.value.includes(newPath) || PREDEF_ENVS.includes(newPath))) {
+    return ElMessage.warning(t('mv.groupNameExists', { name: newPath }))
   }
   try {
-    const targets = allConnections.value.filter(c => (c.environment || '') === from)
+    // **级联改名**：不仅这个目录本身，它的**所有子目录**（group 以 `from/` 开头）都要跟上，
+    // 否则改父名后子目录的路径前缀就断了，树会散架
+    const targets = allConnections.value.filter(c => {
+      const g = c.group || ''
+      return g === from || g.startsWith(from + '/')
+    })
     for (const c of targets) {
-      await saveConnection({ ...c, environment: to })
+      const g = c.group || ''
+      await saveConnection({ ...c, group: newPath + g.slice(from.length) })
     }
-    const folders = JSON.parse(localStorage.getItem('dbmind_folders') || '[]')
-    const idx = folders.indexOf(from)
-    if (idx >= 0) folders[idx] = to
-    else folders.push(to)
-    localStorage.setItem('dbmind_folders', JSON.stringify(folders))
+    for (let i = 0; i < pureFolders.value.length; i++) {
+      const f = pureFolders.value[i] || ''
+      if (f === from || f.startsWith(from + '/')) pureFolders.value[i] = newPath + f.slice(from.length)
+    }
+    await savePureFolders()
     folderRefresh.value++
     await loadAllConnections()
     await buildTree()
-    ElMessage.success(t('mv.renamedGroups', { name: to })
+    ElMessage.success(t('mv.renamedGroups', { name: newPath })
     + (targets.length ? t('mv.renamedGroupsConns', { n: targets.length }) : ''))
   } catch (e) {
     ElMessage.error(t('mv.renameFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) }))
@@ -1818,10 +2170,12 @@ const onFolderCreated = async (name) => {
   if (name) ElMessage.success(t('mv.groupCreated', { name }))
 }
 
-// 新建分组：**不再弹窗问名字**，直接建一个默认名并立刻进入改名态（光标落在名字上，直接输入即可）
+// 新建分组：**不再弹窗问名字**，直接建一个默认名并立刻进入改名态（光标落在名字上，直接输入即可）。
+// **多级目录**：env 现在可能是路径（`公司资源/研发`）—— 在它下面新建 = 建子目录，
+// 新路径 = `父路径/默认名`，树上嵌套渲染（无限级）。
 const treeCtxNewFolder = async (env) => {
   closeTreeCtxMenu()
-  const base = env ? env + t('mv.newGroupSuffix') : t('mv.newGroup')
+  const base = env ? env + '/' + t('mv.newGroup') : t('mv.newGroup')
   let name = base
   let n = 2
   while (customFolders.value.includes(name) || PREDEF_ENVS.includes(name)) {
@@ -1829,9 +2183,7 @@ const treeCtxNewFolder = async (env) => {
     n++
   }
   try {
-    const folders = JSON.parse(localStorage.getItem('dbmind_folders') || '[]')
-    folders.push(name)
-    localStorage.setItem('dbmind_folders', JSON.stringify(folders))
+    await addPureFolder(name)
     folderRefresh.value++
     await buildTree()
     await startRenameGroup(name)
@@ -1843,8 +2195,9 @@ const treeCtxNewFolder = async (env) => {
 const treeCtxRenameFolder = (env) => {
   closeTreeCtxMenu()
   if (!env) return
-  folderEnv.value = env
-  folderRenameVisible.value = true
+  // 改走**树内联改名**（多级路径级联在 commitRenameGroup 里统一处理）；
+  // 旧的弹窗改名不认识路径（改了父名子目录会散），不能再用
+  startRenameGroup(env)
 }
 // 重命名分组（连接环境改写 / 目录落盘在 FolderDialogs.vue，成功后刷新连接列表与树）
 const onFolderRenamed = async ({ old, new: renamed }) => {
@@ -1858,7 +2211,11 @@ const treeCtxDeleteFolder = async (env) => {
   closeTreeCtxMenu()
   if (!env) return
   const name = envLabel(env)
-  const targets = allConnections.value.filter(c => (c.environment || '') === env)
+  // 多级目录：删目录连**子目录**一起删（连接移到未分组，不删连接本身）
+  const targets = allConnections.value.filter(c => {
+    const g = c.group || ''
+    return g === env || g.startsWith(env + '/')
+  })
   try {
     await ElMessageBox.confirm(
       t('mv.deleteGroupBody', { name, n: targets.length }),
@@ -1867,12 +2224,11 @@ const treeCtxDeleteFolder = async (env) => {
   } catch { return }
   try {
     for (const c of targets) {
-      await saveConnection({ ...c, environment: '' })
+      await saveConnection({ ...c, group: '' })
     }
-    // 同步 localStorage 纯目录
-    const folders = JSON.parse(localStorage.getItem('dbmind_folders') || '[]')
-    const idx = folders.indexOf(env)
-    if (idx >= 0) { folders.splice(idx, 1); localStorage.setItem('dbmind_folders', JSON.stringify(folders)) }
+    // 同步后端纯目录（子目录一并移除）
+    pureFolders.value = pureFolders.value.filter(f => !(f === env || f.startsWith(env + '/')))
+    await savePureFolders()
     folderRefresh.value++
     await loadAllConnections()
     await buildTree()
@@ -1944,6 +2300,10 @@ const treeCtxOpenConn = async (connId) => {
 // 页签不跟着关 —— 关掉的只是连接，用户开着的表 / SQL 不该凭空消失（页签只认自己的 ×）
 const closeConnection = (connId) => {
   const sid = String(connId)
+  // 顺带断掉内核连接池里这个类型的缓存会话：数据库侧改过权限/密码后，
+  // 旧会话还带着旧的全局权限快照（MySQL 的全局权限变更只对新建连接生效），
+  // 断开重连即可拿到新权限 —— 不必重启应用。失败无害（静默，下次会话照样能用）
+  disconnectSessions(connId).catch(() => {})
   const wasCurrent = currentConnId.value === sid
   // 删除 dbsByConn 是必须的：否则 isConnOpen 仍为 true，图标不会变暗
   delete dbsByConn.value[sid]
@@ -1966,9 +2326,64 @@ const closeConnection = (connId) => {
     sessionStorage.removeItem('dbmind.currentConnId')
   }
 }
-const treeCtxCloseConn = (connId) => {
+const treeCtxCloseConn = async (connId) => {
   closeTreeCtxMenu()
-  closeConnection(connId)
+  const sid = String(connId)
+  // 「关不掉」的真相：isConnOpen 认页签 —— 只要有脚本占着这个连接，
+  // 树上的图标就永远亮着，看起来就是"关了没反应"。
+  // 所以关闭连接前先把占用的页签摆上台面：未保存的走「保存 / 不保存 / 取消」三态
+  //（口径、按钮文案与关窗时完全一致），用户选完再关页签 + 关连接。
+  const owned = tabs.value.filter(t => !isGlobalTab(t) && String(t.connId || '') === sid)
+  if (!owned.length) return closeConnection(sid)
+  const dirty = owned.filter(t => t.type === 'sql' && t.dirty)
+  if (!dirty.length) {
+    // 都已保存：只需确认"有 N 个脚本页签会一并关闭"
+    const names = owned.map(tb => t('common.quoted', { name: tabLabel(tb) })).join(t('common.listSep'))
+    try {
+      await ElMessageBox.confirm(t('mv.closeConnTabs', { n: owned.length, names }), t('mv.closeConnTitle'), {
+        type: 'info',
+        confirmButtonText: t('mv.closeConnOk'),
+        cancelButtonText: t('common.cancel'),
+        closeOnClickModal: false
+      })
+    } catch { return }
+    closeTabsOfConn(sid)
+    closeConnection(sid)
+    return
+  }
+  const names = dirty.map(tb => t('common.quoted', { name: tabLabel(tb) })).join(t('common.listSep'))
+  const head = dirty.length === 1
+    ? t('mv.oneDirty', { names })
+    : t('mv.manyDirty', { n: dirty.length, names })
+  let action
+  try {
+    await ElMessageBox.confirm(t('mv.closeAsk', { head }), t('mv.unsavedTitle'), {
+      type: 'warning',
+      confirmButtonText: t('mv.saveAndClose'),
+      cancelButtonText: t('mv.dontSave'),
+      distinguishCancelAndClose: true,
+      showClose: true,
+      closeOnClickModal: false
+    })
+    action = 'save'
+  } catch (e) {
+    // cancel = 点「不保存」→ 弃用改动继续关；close = 点 X / ESC → 取消，连接保持打开
+    action = e === 'cancel' ? 'discard' : 'cancel'
+  }
+  if (action === 'cancel') return
+  if (action === 'save') {
+    // 与 winClose 同款：逐个走页签保存，任何一个没保存成就中断（并把它切到前台）
+    for (const tb of dirty) {
+      let ok = true
+      try { ok = sqlViewRefs[tb.id] ? await sqlViewRefs[tb.id].saveForClose() : true } catch { ok = false }
+      if (ok === false) {
+        activeTab.value = tb.id
+        return
+      }
+    }
+  }
+  closeTabsOfConn(sid)
+  closeConnection(sid)
 }
 // ====== 发送到 AI（连接 / 库 / 表 三类节点）======
 /**
@@ -2311,7 +2726,7 @@ const onConnSaved = async (savedConn) => {
     // 新建：展开新连接所在分组并自动选中，确保用户无需手动刷新/展开即可看到
     const created = savedConn || allConnections.value[allConnections.value.length - 1]
     if (created) {
-      const envKey = 'env:' + (created.environment || '')
+      const envKey = 'env:' + (created.group || '')
       if (!defaultExpanded.value.includes(envKey)) {
         expandNode(envKey)
       }
@@ -2640,7 +3055,7 @@ const buildSchemaDetailNodes = async (schemaNode) => {
 // 顶栏「数据」下拉菜单命令分发
 const onTopCmd = (cmd) => {
   switch (cmd) {
-    case 'compare': compareDialogOpen.value = true; break
+    case 'compare': openCompare(); break
     case 'sync': syncDialogOpen.value = true; break
   }
 }
@@ -2655,22 +3070,54 @@ const buildTree = async () => {
   if (store && store.nodesMap) {
     for (const key of Object.keys(store.nodesMap)) {
       const n = store.nodesMap[key]
-      if (n && n.expanded) expandedKeys.push(key)
+      if (!n || !n.expanded) continue
+      // **已关闭的连接不恢复展开** —— 否则新建/重命名分组等任何树重建都会把它
+      // 重新展开并加载库列表，图标跟着变亮：连接被「自动打开」（用户踩过）。
+      // 关闭态的口径与 isConnOpen 一致：库缓存没了、也没有页签占用它。
+      if (key.startsWith('conn:')) {
+        const cid = key.slice(5)
+        const open = cid in dbsByConn.value || tabs.value.some(tb => String(tb.connId || '') === cid)
+        if (!open) continue
+      }
+      expandedKeys.push(key)
     }
   }
   try {
     // 按环境分组（即使没有任何连接，也要渲染 localStorage 中的自定义目录）
     const groups = new Map()
     for (const c of allConnections.value) {
-      const env = c.environment || ''
+      const env = c.group || ''
       if (!groups.has(env)) groups.set(env, [])
       groups.get(env).push(c)
     }
-    // 角标环境：优先独立 env 字段；兼容旧数据（environment 为预置环境时沿用）
-    const envTagOf = (c) => c.env || (ENV_ORDER_BASE.includes(c.environment || '') ? c.environment : '')
-    // 顺序：自定义目录（按创建顺序）→ 预置 DEV/TEST/PROD
-    const envOrder = [...customFolders.value, ...ENV_ORDER_BASE]
+    // 角标环境：优先独立 env 字段；兼容旧数据（environment 为预置环境时沿用）。
+    // 什么都没有的连接角标**默认「开发」**—— 用户要求角标永远落在 开发/测试/生产 之一，
+    // 不出现「未分组」角标（未分组的**分组节点**保留，但角标按开发显示）
+    const envTagOf = (c) => c.env || (ENV_ORDER_BASE.includes(c.group || '') ? c.group : '') || 'DEV'
+    // 顺序：自定义目录（按创建顺序）→ 预置 DEV/TEST/PROD → 未分组（''，放最后）。
+    // 未分组组保留（用户定稿）：组名就叫「未分组」，连接角标照常显示 开发/测试/生产。
+    const envOrder = [...customFolders.value, ...ENV_ORDER_BASE, '']
     const envNodes = []
+    // **多级目录**：group/纯目录存的是**路径**（`公司资源/子组`，`/` 分隔）——
+    // 树上按段拆开嵌套渲染，目录可以无限级。folderIndex 缓存「路径 → 节点」；
+    // 遇到深层路径先递归建父（父可能还没轮到遍历），再把父挂到顶层或祖先的 children。
+    const folderIndex = new Map()
+    const segLabel = (path) => {
+      const t2 = envLabel(path)
+      if (t2 !== path) return t2 // 预置环境（DEV 等）用译名
+      const segs = path.split('/').filter(Boolean)
+      return segs[segs.length - 1] || path
+    }
+    const ensureFolderNode = (path) => {
+      if (folderIndex.has(path)) return folderIndex.get(path)
+      const node = { id: 'env:' + path, label: segLabel(path), kind: 'env-folder', env: path, children: [] }
+      folderIndex.set(path, node)
+      const idx = path.lastIndexOf('/')
+      const parentPath = idx > 0 ? path.slice(0, idx) : ''
+      if (parentPath) ensureFolderNode(parentPath).children.push(node)
+      else envNodes.push(node)
+      return node
+    }
     for (const env of envOrder) {
       const conns = groups.get(env) || []
       // 跳过没有 conn 的空分组
@@ -2680,13 +3127,22 @@ const buildTree = async () => {
         id: 'conn:' + c.id, label: c.name, name: c.name, kind: 'conn',
         connId: String(c.id), env: envTagOf(c), connType: c.type,
         // 记录真实所属目录（environment），右键"新建连接"时继承所在目录而非角标环境
-        environment: c.environment || '',
+        environment: c.group || '',
         // 记录连接配置的数据库名称，展开时据此自动选中（而非默认第一个）
         database: c.database || '',
         // 备注（extra.note）：树上 hover 显示
-        note: c.note || ''
+        note: c.note || '',
+        // 只读标记：树上直接摆出来。这个状态藏在编辑弹窗的「高级选项」里，
+        // 而它决定的是「写操作会不会被拦」—— 用户需要随时看得见，不能靠记
+        readOnly: !!c.readOnly
       }))
-      envNodes.push({ id: 'env:' + env, label: envLabel(env), kind: 'env-folder', env, children: connNodes })
+      // 带路径的目录 → 嵌套进父节点；顶层目录/预置环境/未分组直接挂根。
+      // 全部走 ensureFolderNode 统一索引 —— 否则「父目录先被子目录递归创建、
+      // 轮到自己时又新建一份」会出现重复的顶层节点（真机踩过）。
+      const node = env === ''
+        ? { id: 'env:', label: envLabel(''), kind: 'env-folder', env: '', children: [] }
+        : ensureFolderNode(env)
+      node.children = [...node.children, ...connNodes]
     }
     treeData.value = envNodes
     // treeData 每次赋值为新数组会触发 el-tree 重建；保留 defaultExpanded
@@ -2731,7 +3187,8 @@ const allowDropNode = (draggingNode, dropNode, type) => {
   if (dropNode?.data?.kind !== 'env-folder') return false
   return type === 'inner'
 }
-// 放下后：把连接的 environment 改成目标目录名并落库，再重建树（el-tree 已先行移动了 DOM 节点）
+// 放下后：把连接的分组改成目标目录（**全路径**，支持任意层级子目录）并落库，再重建树
+//（el-tree 已先行移动了 DOM 节点）
 const onTreeNodeDrop = async (draggingNode, dropNode, dropType) => {
   if (dropType !== 'inner') { await buildTree(); return }
   const dragData = draggingNode?.data
@@ -2739,11 +3196,14 @@ const onTreeNodeDrop = async (draggingNode, dropNode, dropType) => {
   if (dragData?.kind !== 'conn' || targetData?.kind !== 'env-folder') { await buildTree(); return }
   const connId = String(dragData.connId)
   const source = allConnections.value.find(c => String(c.id) === connId)
-  // 目标目录名：env-folder 的 env 即 environment 字段值（预置为 DEV/TEST/PROD，自定义即目录名）
+  // 目标目录：env-folder 的 env 是完整路径（预置为 DEV/TEST/PROD，自定义目录可以是
+  // `公司资源/研发组` 这种多级路径 —— 树上嵌套到哪层就能拖进哪层）
   const targetEnv = targetData.env || ''
-  if (!source || (source.environment || '') === targetEnv) { await buildTree(); return }
+  if (!source || (source.group || '') === targetEnv) { await buildTree(); return }
   try {
-    await saveConnection({ ...source, environment: targetEnv })
+    // ⚠ 分组真相源是 **group** 字段（树的归属按它算）。曾经只写 environment ——
+    // 树纹丝不动，拖了像没拖一样（用户真机踩过）。environment 同步写一份兜底旧逻辑。
+    await saveConnection({ ...source, group: targetEnv, environment: targetEnv })
     ElMessage.success(t('mv.movedTo', { name: source.name, env: envLabel(targetEnv) }))
   } catch (e) {
     ElMessage.error(t('mv.moveFailed', { detail: errMsg(e, t('common.unknownError')) }))
@@ -2890,8 +3350,38 @@ const calibrateCategoryItems = async (connId, db, data, cat) => {
   }
 }
 
+// 正在懒加载的节点 id（每层展开都要有 loading 反馈 —— 用户要求）。
+// 不依赖 el-tree 的 node.loading：部分入口（expandNode 的手动 loadData、预取缓存）下
+// 它可能一闪而过或不可靠，这里用「进函数记账、resolve 撤账」的口径，与 connLoadingSet 同款。
+//
+// 时序保证（用户反馈迭代出的最终形态）：**点击立即转圈、转圈期间不展开、撤圈与展开同时**。
+// 不再需要「最小显示时长」—— 那是为了弥补展开被表清单请求挡住、转圈出现太晚的缺陷；
+// 展开先行修掉根因后，快层（预取命中）瞬间完成直接展开就是正确的体验，人为延迟反而拖沓。
+const nodeLoadingIds = ref([])
 // 懒加载：展开节点时才加载子节点（连接 → 数据库列表；数据库 → 表/视图/对象）
 const lazyLoad = async (node, resolve) => {
+  const data = node?.data
+  const key = data?.id
+  if (key) nodeLoadingIds.value.push(key)
+  let delivered = false
+  // 包装 resolve：撤圈与展开**同一时刻**发生（el-tree 收到 resolve 才展开节点）
+  const done = (children) => {
+    if (delivered) return
+    delivered = true
+    if (key) {
+      const index = nodeLoadingIds.value.indexOf(key)
+      if (index >= 0) nodeLoadingIds.value.splice(index, 1)
+    }
+    resolve(children)
+  }
+  try {
+    await lazyLoadRaw(node, done)
+  } catch (e) {
+    // lazyLoadRaw 内部已兜底，这里只是保险：绝不让节点停在永久转圈
+    done([])
+  }
+}
+const lazyLoadRaw = async (node, resolve) => {
   const data = node.data
   try {
     if (data.kind === 'env-folder') {
@@ -2925,12 +3415,16 @@ const lazyLoad = async (node, resolve) => {
       // 未必是默认的 `internal`，裸库名会静默查到**错误的 catalog** 上去。
       if (cats.length === 1) {
         const only = cats[0]
+        // 只有默认 internal（用户没建自定义 catalog）→ **平铺裸库名**，与"没建过 catalog"
+        // 的形态完全一致（ods，而不是 internal.ods）。请求仍带 catalog=only（后端列库
+        // 必须指定），但树节点与所有下游的 database 标识都用裸名 —— 裸名经 scope::resolve
+        // 会落到 internal 的同名库，两种形态在执行链路上等价。
         try {
           const list = await listDatabases(connId, only)
-          resolve(finishLazyChildren(data, dbChildNodes(connId, data.connType, list, only)))
+          resolve(finishLazyChildren(data, dbChildNodes(connId, data.connType, list)))
         } catch (e) {
           showConnFail(errMsg(e, t('mv.loadDbsFailed')))
-          resolve(finishLazyChildren(data, dbChildNodes(connId, data.connType, [], only)))
+          resolve(finishLazyChildren(data, dbChildNodes(connId, data.connType, [])))
         }
         return
       }
@@ -3060,26 +3554,31 @@ const lazyLoad = async (node, resolve) => {
 // 刷新按钮：重新拉取当前连接的 dbs，再重建树（懒加载缓存随之清除）
 // 展开/收起状态由 buildTree 内部自动保持
 const refreshTree = async () => {
-  if (!conn.value) return
   treeLoading.value = true
-  // 用户点「刷新对象」的语义就是「我要看现在真实的东西」（同事刚建的表/库要能出来）：
-  // 先把该连接的**前端结构缓存全部丢掉**。
-  //
-  // 不丢会怎样：这个函数下面确实会真查（兼容层一律 fresh），但拿到的结果不写回缓存，
-  // 旧缓存又原封不动 ⇒ 下次展开还是先渲染那批旧的「刷新」等于只在本次生效。
-  const cid = String(conn.value.id)
-  invalidateSchemaCache(cid)
-  try {
-    dbs.value = await (isNoSql.value ? noSqlDatabases(conn.value.id) : listDatabases(conn.value.id))
-    // 同上：空列表不进缓存（拉库失败时 dbs.value 就是 []）
-    if (currentConnId.value && dbs.value.length) {
-      dbsByConn.value[currentConnId.value] = dbs.value
-      // 顺带写回持久缓存：本次拿到的就是最新的，不写的话下次展开又先渲染旧的
-      writeSchemaCache('dbs:' + currentConnId.value, dbs.value)
+  // 纯分组也在「刷新」的语义里：后端删了分组，点一下刷新树上就要消失
+  await loadPureFolders()
+  // 没有任何连接时也要继续：空态下刷新同样该重画树（以前直接 return，
+  // 空态下按钮点了没反应，用户以为坏了）
+  if (conn.value) {
+    // 用户点「刷新对象」的语义就是「我要看现在真实的东西」（同事刚建的表/库要能出来）：
+    // 先把该连接的**前端结构缓存全部丢掉**。
+    //
+    // 不丢会怎样：这个函数下面确实会真查（兼容层一律 fresh），但拿到的结果不写回缓存，
+    // 旧缓存又原封不动 ⇒ 下次展开还是先渲染那批旧的「刷新」等于只在本次生效。
+    const cid = String(conn.value.id)
+    invalidateSchemaCache(cid)
+    try {
+      dbs.value = await (isNoSql.value ? noSqlDatabases(conn.value.id) : listDatabases(conn.value.id))
+      // 同上：空列表不进缓存（拉库失败时 dbs.value 就是 []）
+      if (currentConnId.value && dbs.value.length) {
+        dbsByConn.value[currentConnId.value] = dbs.value
+        // 顺带写回持久缓存：本次拿到的就是最新的，不写的话下次展开又先渲染旧的
+        writeSchemaCache('dbs:' + currentConnId.value, dbs.value)
+      }
+    } catch (e) {
+      dbs.value = []
+      ElMessage.error(t('mv.refreshDbsFailed', { detail: errMsg(e, t('common.unknownError')) }))
     }
-  } catch (e) {
-    dbs.value = []
-    ElMessage.error(t('mv.refreshDbsFailed', { detail: errMsg(e, t('common.unknownError')) }))
   }
   await refreshAllTables()
   await buildTree()
@@ -3198,6 +3697,8 @@ const canExpandNode = (data) => !!data && !data.leaf && EXPANDABLE_KINDS.has(dat
 /** 是不是正在加载：el-tree 懒加载会把 node.loading 置位；连接另有自己的标记。 */
 const isNodeLoading = (node, data) => {
   if (node && node.loading) return true
+  // 每层展开的显式记账（见 nodeLoadingIds）：覆盖手动展开/预取等 node.loading 不可靠的路径
+  if (data?.id && nodeLoadingIds.value.includes(data.id)) return true
   return data.kind === 'conn' && connLoadingSet.value.has(String(data.connId))
 }
 /**
@@ -3282,8 +3783,18 @@ const onNodeClick = async (data, node, _component, event) => {
     if (connChanged) ensureDbConn(data)
     const dbChanged = data.db !== currentDb.value
     if (dbChanged) setCurrentDb(data.db)
-    // 连接或库任一变了都要重拉表列表
-    if (connChanged || dbChanged) await refreshAllTables()
+    // **展开先行**：点击瞬间就转圈（转圈时机是用户明确要求的）——
+    // 原来 `await refreshAllTables()` 挡在展开前面，慢请求会把转圈拖到几百毫秒甚至
+    // 数秒之后才出现，看着就像"点了没反应，过一会儿才转"。
+    // 表清单的语义动作放后台，不挡展开、不挡转圈。
+    if (canExpandNode(data)) {
+      if (node?.expanded) collapseNode(data.id)
+      else expandNode(data.id)
+      if (connChanged || dbChanged) {
+        refreshAllTables().catch((e) => console.warn('[点击] 表列表后台加载失败', e))
+      }
+      return
+    }
   }
   // 表 / 视图 / 集合 / 索引 / 过程 / 触发器 / 事件：单击不触发预览
 
@@ -3481,7 +3992,7 @@ const onRunPlan = (actions) => {
         }
         else if (panel === 'governance') { governanceAutoRun.value = false; governanceOpen.value = true }
         else if (panel === 'settings') settingsOpen.value = true
-        else if (panel === 'compare') compareDialogOpen.value = true
+        else if (panel === 'compare') openCompare()
         else if (panel === 'sync') syncDialogOpen.value = true
         else if (panel === 'newConn') openNewConn('')
         else if (panel === 'editConn' && conn.value) openConnDialog(conn.value)
@@ -3884,6 +4395,12 @@ const toggleAi = () => {
  * AI 助手输入框里的「斜杠命令」要求打开某个面板时由此接管。
  * 面板归属留在 MainView，AI 助手只发意图，避免两个组件互相耦合。
  */
+/** 首页「数据工具」直达治理页签：质量规则 / 质量分析（与 AI 面板命令同一套定位逻辑） */
+const openGovernance = (tab) => {
+  governanceTab.value = tab
+  governanceAutoRun.value = GOVERNANCE_AUTORUN_TABS.includes(tab)
+  governanceOpen.value = true
+}
 const onAiPanelCommand = (key) => {
   // 治理的四个页签可以直接被点名打开（敏感数据 / 数据容量 / 质量规则 / 质量分析）；
   // 敏感数据 / 数据容量属于「点开即出结果」的扫描，跳过去就直接开跑
@@ -3894,7 +4411,7 @@ const onAiPanelCommand = (key) => {
   }
   else if (key === 'governance') { governanceAutoRun.value = false; governanceOpen.value = true }
   else if (key === 'settings') settingsOpen.value = true
-  else if (key === 'compare') compareDialogOpen.value = true
+  else if (key === 'compare') openCompare()
   else if (key === 'sync') syncDialogOpen.value = true
   // 连接管理：新建走数据源选择器，编辑直接打开当前连接的表单
   else if (key === 'newConn') openNewConn('')
@@ -5194,7 +5711,13 @@ const dbCtxToggleOpen = () => {
   const isOpen = String(d.connId || currentConnId.value) === String(currentConnId.value) && d.db === currentDb.value
   if (isOpen) {
     // 关闭数据库：清空当前库，关闭该库相关的 tab，收起节点
-    if (currentConnId.value && currentDbByConn.value[currentConnId.value] === d.db) {
+            // **真正断开会话**：该库的语句跑在它的影子连接上，调后端按库断掉 ——
+            // 只清前端状态的话，内核池里那条会话还挂数据库上（用户要求真正关闭）
+            const closeSid = String(d.connId || currentConnId.value || '')
+            if (closeSid && d.db) {
+              disconnectDatabase(closeSid, d.db).catch(() => {})
+            }
+            if (currentConnId.value && currentDbByConn.value[currentConnId.value] === d.db) {
       currentDb.value = ''
       delete currentDbByConn.value[currentConnId.value]
     }
@@ -5365,14 +5888,34 @@ const doDbDrop = async (d) => {
     return
   }
   try {
-    const sql = `DROP DATABASE ${quoteIdent(d.db)}`
-    const res = await alterTable(conn.value.id, d.db, sql)
-    if (res.success) {
-      ElMessage.success(t('mv.dbDeleted', { name: d.db }))
-      refreshTree()
+    // catalog 层级（Doris）的库名是 `internal.bg_tgt` **全限定** —— 必须分段引号：
+    // 整体引住会被当成一个叫 "internal.bg_tgt" 的名字找（真机踩过：报 doesn't exist）。
+    // 删库也不需要「切到该库」（切进去反而可能阻止删除），database 参数留空
+    const qualified = d.db.includes('.')
+    const dropSql = qualified
+      ? `DROP DATABASE ${d.db.split('.').map(p => quoteIdent(p)).join('.')}`
+      : `DROP DATABASE ${quoteIdent(d.db)}`
+    const bare = qualified ? d.db.split('.').pop() : d.db
+    // **先清占用连接**：SQL Server / PG 在库被占用时会拒绝删除（3702 / "being accessed"）——
+    // 我们自己的浏览/同步会话就占着，必须先踢掉：
+    // - SQL Server：踢成单用户（ROLLBACK IMMEDIATE 回滚未提交事务）→ 同批 DROP
+    //   （SINGLE_USER 只放行一个会话，SET 和 DROP 必须同一批才进得去）
+    // - PG / KingBase：terminate 该库上除自身外的所有后端 → 再 DROP
+    // 均为内核内部链路（internal），多语句批已放行
+    if (type === 'SQLSERVER') {
+      await alterTable(conn.value.id, '',
+        `ALTER DATABASE ${quoteIdent(bare)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; ${dropSql}`)
+    } else if (type === 'POSTGRESQL' || type === 'KINGBASE') {
+      await alterTable(conn.value.id, '',
+        `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${bare.replace(/'/g, "''")}' AND pid <> pg_backend_pid()`)
+      await alterTable(conn.value.id, '', dropSql)
     } else {
-      ElMessage.error(t('mv.deleteFailed', { detail: (res.message || t('common.unknownError')) }))
+      // MySQL 系 / ClickHouse / Doris / DB2：删库不受连接占用限制，直接删
+      await alterTable(conn.value.id, '', dropSql)
     }
+    const res = { success: true }
+    ElMessage.success(t('mv.dbDeleted', { name: d.db }))
+    refreshTree()
   } catch (e) {
     ElMessage.error(t('mv.deleteFailed', { detail: (e?.message || e) }))
   }
@@ -5421,6 +5964,30 @@ const catalogCtxNewQuery = () => {
   if (!d) return
   closeTreeCtxMenu()
   treeCtxNewQueryConn(d.connId)
+}
+
+/** catalog 上「删除」：`DROP CATALOG`。只删 Doris 里的**映射**，
+ *  外部数据库（如 mysql_216 背后的 MySQL）里的数据原封不动，之后可重建。
+ *  内置 internal 装着用户真正的库，Doris 不允许删 —— 菜单层已门控不显示。 */
+const catalogCtxDrop = () => {
+  const d = treeCtxMenu.value.data
+  if (!d) return
+  closeTreeCtxMenu()
+  ElMessageBox.confirm(
+    t('mv.dropCatalogBody', { name: d.catalog }),
+    t('mv.dropCatalogTitle'),
+    { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
+  ).then(async () => {
+    try {
+      const res = await executeSql(String(d.connId), `DROP CATALOG ${quoteIdent(d.catalog)}`, '')
+      if (!res.success) throw new Error(res.message || t('common.unknownError'))
+      ElMessage.success(t('mv.catalogDropped', { name: d.catalog }))
+      // 从树上摘掉该 catalog 节点（它下面的库/表节点随子树一起消失）
+      treeRef.value?.remove(d.id)
+    } catch (e) {
+      ElMessage.error(t('mv.dropCatalogFailed', { detail: errMsg(e) }))
+    }
+  }).catch(() => {})
 }
 
 onMounted(async () => {
@@ -5687,6 +6254,15 @@ watch(() => route.query.id, (id) => {
 /* logo 容器：承载角标 */
 .logo-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
 
+/* 「只读」徽标：跟在连接名后面（环境角标之前）。
+   warning 色系 —— 它是一句**提醒**（这条连接写不进去），不是分类标签。 */
+.ro-badge {
+  flex: none; display: inline-flex; align-items: center;
+  font-size: 10px; line-height: 1; padding: 2px 4px; border-radius: 4px;
+  color: var(--dc-warning); background: var(--dc-warning-wash);
+  border: 1px solid var(--dc-warning);
+}
+
 /* 环境角标：与文字水平居中 */
 .env-corner {
   display: inline-flex;
@@ -5848,9 +6424,9 @@ watch(() => route.query.id, (id) => {
   /* stretch：子块铺满宽度（原来 center 会让它们缩成内容宽，两侧就是大片空白） */
   align-items: stretch;
   justify-content: flex-start;
-  gap: 12px;
+  gap: 10px;
   text-align: center;
-  padding: 14px 18px 16px;
+  padding: 10px 14px 12px;
   /* 不再设 1000px：列宽本来就窄，再框一层只会让左右空出来；
      超宽屏由 1680px 兜底，别铺成看不出结构的一条 */
   max-width: 1680px;
@@ -5890,25 +6466,22 @@ watch(() => route.query.id, (id) => {
 .empty-card:hover .el-icon { color: var(--dc-primary); }
 .empty-card span { font-size: 14px; font-weight: 600; }
 .empty-card small { font-size: 12px; color: var(--dc-text-dim); opacity: .8; }
-/* ---- 首页仪表盘：KPI 行 / 内容块 / 操作项 / MCP 片段 ----
-   间距刻意压得紧：整块要在一屏内放得下（原先松一点就多出 23px，直接顶出滚动条）。 */
-.empty-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; width: 100%; }
-.ek {
-  display: flex; flex-direction: column; gap: 3px; text-align: left;
-  padding: 9px 14px; border-radius: 10px;
-  background: var(--dc-bg-card); border: 1px solid var(--dc-border);
+/* ---- 首页仪表盘：内容块 / 操作项 / MCP 片段 ----
+   .empty-stack 承担行间距并**垂直居中**：内容不满一屏时上下留白均分，
+   超出一屏时 margin:auto 归零 + 容器 overflow 可滚，顶部不会被裁。 */
+.empty-stack {
+  display: flex; flex-direction: column; gap: 10px;
+  width: 100%; margin: auto 0; text-align: left;
 }
-.ek-k { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--dc-text-dim); }
-.ek-v { font-size: 20px; font-weight: 700; color: var(--dc-text); line-height: 1.1; font-variant-numeric: tabular-nums; }
 /* 每个内容块是一张卡：里面的行必须**扁平**（卡里再套卡很难看） */
 .empty-block {
-  width: 100%; text-align: left; padding: 11px 14px;
+  width: 100%; text-align: left; padding: 9px 12px;
   background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: 10px;
 }
 .empty-acts { display: flex; flex-direction: column; }
 .empty-act {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
-  padding: 7px 8px; border: none; border-radius: 8px; cursor: pointer;
+  padding: 5px 8px; border: none; border-radius: 8px; cursor: pointer;
   background: transparent; font: inherit; color: var(--dc-text);
   transition: background .15s ease;
 }
@@ -5924,7 +6497,7 @@ watch(() => route.query.id, (id) => {
 }
 .mcp-code code {
   display: block; font-family: 'SF Mono', ui-monospace, Consolas, monospace;
-  font-size: 12px; line-height: 1.55; white-space: pre; color: var(--dc-text);
+  font-size: 12px; line-height: 1.4; white-space: pre; color: var(--dc-text);
 }
 /* 多行文本时按钮放右上角（竖居中的话会压住中间那几行 JSON） */
 .mcp-copy { position: absolute; right: 4px; top: 4px; }
@@ -5941,6 +6514,9 @@ watch(() => route.query.id, (id) => {
   order: 3; min-width: 22px; text-align: center; padding: 0 6px; border-radius: 999px;
   background: var(--dc-bg-soft); border: 1px solid var(--dc-border);
 }
+/* 「清空历史」：排在计数徽标之后（标题与细线由 flex 撑开，这里只定顺序与尺寸）。
+   用 text 型按钮 —— 它是卡片标题行上的一个次要动作，不该跟列表抢注意力。 */
+.empty-head-btn { order: 4; padding: 0 4px; height: 20px; color: var(--dc-text-dim); }
 /* 单列列表：正好显示 4 行（4×36 + 3×2 的间距 = 150px），第 5 个起在块内滚动。
    块本身不随连接数变高 —— 连接再多首页也不会被撑长。 */
 .empty-dss-list {
@@ -5974,18 +6550,20 @@ watch(() => route.query.id, (id) => {
    `minmax(0, 1fr)` 不能写成 `1fr`：grid item 的**自动最小尺寸**由内容决定，
    实测右侧那条长 SQL 会把右列顶到 1218px、左列被压成 195px（两栏直接塌掉）。 */
 .empty-grid {
-  display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 12px;
+  display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(0, 1fr); gap: 10px;
   /* stretch（默认）：左右两张卡等高，右边不会在底部空出一截 */
   width: 100%; align-items: stretch; text-align: left;
 }
 @media (max-width: 1100px) { .empty-grid { grid-template-columns: minmax(0, 1fr); } }
+/* 第四行常显：与其它行一起压缩竖向空间（行距/内边距/图高），整体塞进一屏 ——
+   首页的原则是不出滚动条，也不是大屏专属（矮屏藏掉它下方照样空一大块） */
 /* 半栏宽度下，数据源一行一个更清楚（两列会把名字挤断） */
 .empty-dss .empty-dss-list { grid-template-columns: 1fr; }
 .empty-hist { width: 100%; }
-.empty-hist-list { display: flex; flex-direction: column; gap: 6px; }
+.empty-hist-list { display: flex; flex-direction: column; gap: 4px; }
 .empty-hi {
   display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
-  padding: 4px 8px; border-radius: 8px; cursor: pointer;
+  padding: 3px 8px; border-radius: 8px; cursor: pointer;
   background: transparent; border: none;
   transition: background .15s ease; font: inherit; color: var(--dc-text);
 }
@@ -6002,13 +6580,44 @@ watch(() => route.query.id, (id) => {
 
 .hi-meta { flex-shrink: 0; font-size: 11px; color: var(--dc-text-dim); }
 .empty-hs-none { font-size: 12px; color: var(--dc-text-dim); opacity: .85; padding: 10px 2px; }
-.empty-tips {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 13px; color: var(--dc-text-dim);
-  opacity: .8; margin-top: 2px;
-}
-.empty-tips .el-icon { font-size: 14px; }
 .tree-node { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 2px 0; }
+/* 近 7 天趋势：7 根柱等分一行，成功/失败两段堆叠（失败在下段，红一眼可见）。
+   趋势卡与右侧「数据工具」等高（grid stretch），图区 flex:1 吃掉剩余高度、
+   内容贴底 —— 柱子和日期沉到卡片下缘，不再悬在半空留一截尾巴 */
+.trend-block { display: flex; flex-direction: column; }
+/* 「前往 MCP 服务设置」直达链接：主题色小按钮，hover 提亮 */
+.mcp-go {
+  border: none; background: transparent; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+  font: inherit; font-size: 12px; color: var(--dc-primary); white-space: nowrap;
+  transition: background .15s ease;
+}
+.mcp-go:hover { background: var(--dc-bg-soft); }
+/* 图例放标题行右端：拉线（::after）order 1、图例 order 2 —— 线在标题与图例之间 */
+.trend-block .empty-dss-head::after { order: 1; }
+.trend-legend {
+  order: 2; display: inline-flex; align-items: center; gap: 4px;
+  font-size: 11px; color: var(--dc-text-dim); letter-spacing: 0;
+}
+.trend-legend .lg { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+.trend-legend .lg.ok { background: var(--dc-primary); opacity: .75; }
+.trend-legend .lg.bad { background: var(--el-color-danger, #e25c5c); }
+.trend-block .empty-trend { flex: 1; justify-content: flex-end; padding-bottom: 2px; }
+.empty-trend {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  gap: 8px; padding: 6px 2px 0;
+}
+.trend-col { flex: 1 1 0; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; }
+.trend-bars {
+  display: flex; flex-direction: column; justify-content: flex-end;
+  align-items: stretch; width: 26px; height: 72px;
+  border-radius: 5px; overflow: hidden; background: var(--dc-bg, transparent);
+}
+.trend-bar { width: 100%; }
+.trend-bar.ok { background: var(--dc-primary); opacity: .75; border-radius: 0; }
+.trend-bar.bad { background: var(--el-color-danger, #e25c5c); }
+.trend-n { font-size: 12px; font-weight: 600; color: var(--dc-text-mid); line-height: 1; min-height: 12px; }
+.trend-label { font-size: 11px; color: var(--dc-text-dim); line-height: 1; }
+
 /* 树内重命名：输入框就地替换分组名，宽度跟着名字走、不撑满整行 */
 .tree-rename-input { width: 132px; flex-shrink: 0; }
 .tree-rename-input :deep(.el-input__wrapper) { padding: 0 6px; }
@@ -6238,4 +6847,46 @@ watch(() => route.query.id, (id) => {
 .dc-conn-error-box .el-message-box__btns {
   padding: 0 24px 20px !important;
 }
+
+/* ==================== 后台任务中心（顶栏时钟图标） ==================== */
+.bg-task-btn .el-badge__content { z-index: 1; }
+.bg-task-btn { position: relative; }
+.bg-count { position: absolute; top: -3px; right: -4px; min-width: 14px; height: 14px; line-height: 14px; border-radius: 7px; background: var(--dc-primary); color: #fff; font-size: 10px; text-align: center; padding: 0 3px; box-sizing: border-box; }
+.bg-toolbar { display: flex; justify-content: flex-start; margin-bottom: 10px; }
+.bg-task-list { max-height: 300px; overflow-y: auto; }
+.bg-task-head { font-size: 13px; font-weight: 600; color: var(--dc-text); padding-bottom: 8px; border-bottom: 1px solid var(--dc-border-soft); margin-bottom: 6px; }
+.bg-task-empty { font-size: 12px; color: var(--dc-text-dim); padding: 14px 0; text-align: center; }
+/* 执行记录表格：状态点在单元格里内联；行可点（查看） */
+.bg-dot-inline { display: inline-block; margin-right: 6px; vertical-align: middle; }
+:deep(.bg-row-click) { cursor: pointer; }
+.bg-pager { margin-top: 10px; justify-content: flex-end; }
+/* 时钟图标的悬浮下拉：正在执行的任务（纯 CSS hover，挂在图标正下方，不弹窗不飘位） */
+.bg-hover { position: relative; display: inline-flex; }
+.bg-running-panel {
+  display: none;
+  position: absolute; top: calc(100% + 8px); right: 0;
+  width: 380px; z-index: 3000;
+  background: var(--dc-bg, #fff);
+  border: 1px solid var(--dc-border); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.14);
+  padding: 12px 14px;
+  cursor: default;
+}
+/* 桥接图标与面板之间的 8px 空隙：鼠标移过去穿过空隙时 hover 不断，
+   面板才点得到（否则一移走就消失，任务项根本点不中） */
+.bg-running-panel::before {
+  content: ''; position: absolute; top: -9px; left: 0; right: 0; height: 9px;
+}
+.bg-hover:hover .bg-running-panel { display: block; }
+.bg-running-head { font-size: 13px; font-weight: 600; color: var(--dc-text); margin-bottom: 8px; }
+.bg-task-item { display: flex; align-items: center; gap: 8px; padding: 8px 6px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.bg-task-item:hover { background: var(--dc-bg-hover); }
+.bg-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--dc-primary); }
+.bg-dot.success { background: var(--dc-success); }
+.bg-dot.error { background: var(--dc-danger); }
+.bg-dot.canceled { background: var(--dc-warning); }
+.bg-kind { font-size: 11px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; background: rgba(59, 130, 246, 0.14); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.4); }
+.bg-kind.is-cmp { color: #f59e0b; border-color: rgba(245, 158, 11, 0.45); }
+.bg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dc-text); }
+.bg-state { font-size: 12px; color: var(--dc-text-dim); flex-shrink: 0; }
 </style>

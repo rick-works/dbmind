@@ -40,6 +40,13 @@
     <!-- 产物名与内核里的 AGENT_JAR_NAME 常量一致 -->
     <finalName>dbmind-agent-jdbc</finalName>
     <plugins>
+      <!-- compiler 插件 3.1（Maven 内置默认）不认识 maven.compiler.release 属性，
+           会退回 source 1.5 直接编译失败 —— 显式钉到认识 release 的版本 -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-shade-plugin</artifactId>

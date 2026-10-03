@@ -5,16 +5,11 @@ use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        // 写 stderr：它不缓冲，日志立刻落到文件里。
-        // 默认写 stdout 在重定向到文件时是块缓冲的 —— 排查「服务刚起来还算好，过一会儿就不行」
-        // 这类问题时，最需要看的那几行恰好还卡在缓冲区里，等于没日志。
-        .with_writer(std::io::stderr)
-        .init();
+    // 写 stderr：它不缓冲，日志立刻落到文件里。
+    // 默认写 stdout 在重定向到文件时是块缓冲的 —— 排查「服务刚起来还算好，过一会儿就不行」
+    // 这类问题时，最需要看的那几行恰好还卡在缓冲区里，等于没日志。
+    // 过滤器包了 reload 层：设置页的「日志级别」可以运行时热切换（见 lib.rs）。
+    dbmind_web::init_tracing();
 
     let mut options = Options {
         // 默认托管仓库内的前端产物（构建后为 frontend/dist）；可用 --dist 覆盖

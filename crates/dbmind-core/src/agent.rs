@@ -21,9 +21,9 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -399,8 +399,36 @@ pub fn prepare_agent_hosts(hosts: &[String]) -> Option<PathBuf> {
 /// 就绪报告会被界面反复调用（`availability_all` 一次问 4 个宿主），
 /// 而每次问都要跑一次 `java -version`（一次 JVM 启动 ~100ms）。版本不会变，缓存住即可。
 fn java_major_cache() -> &'static Mutex<HashMap<PathBuf, u32>> {
-    static CACHE: std::sync::OnceLock<Mutex<HashMap<PathBuf, u32>>> = std::sync::OnceLock::new();
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, u32>>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 「允许旧版 TLS」（设置 `jdbc.allowLegacyTls`）的进程内镜像。
+///
+/// 设置在引擎的存储里，宿主 spawn 在这里发生 —— 用静态原子量而不是把 Store 递进来：
+/// agent 层离存储很远，spawn 时读一个布尔就够了（同 [`java_major_cache`] 的静态模式）。
+/// 引擎在开机与设置变更时调 [`set_legacy_tls_enabled`] 同步。
+static LEGACY_TLS: AtomicBool = AtomicBool::new(false);
+
+/// 同步「允许旧版 TLS」开关（下一次拉起宿主 JVM 时生效）。
+pub fn set_legacy_tls_enabled(enabled: bool) {
+    LEGACY_TLS.store(enabled, Ordering::Relaxed);
+    tracing::debug!(target: "dbmind::agent", enabled, "旧版 TLS 兼容开关已同步给宿主 spawn 层");
+}
+
+/// 写出旧版 TLS 的 java.security 覆盖文件，返回路径；写不成返回 `None`（宿主照常启动）。
+///
+/// `-Djava.security.properties=<file>`（**带 `=`**）是覆盖模式：文件里出现的属性会盖掉
+/// 主 `java.security` 的同名项，其余保持不变（依赖 `security.overridePropertiesFile=true`，
+/// JDK 默认为真）。清单 = JDK 默认禁用列表**去掉 TLSv1/TLSv1.1** —— 只讲 TLS 1.0 的老库
+/// （SQL Server 2008/2012 等）在 JDK 8u291+/11.0.11+ 上握手必败，其余弱算法照旧禁用。
+fn write_legacy_tls_override() -> Option<PathBuf> {
+    let path = crate::paths::legacy_tls_properties_path();
+    let body = "# 由 DBMind 生成：设置「允许旧版 TLS」开启时，把 TLSv1/TLSv1.1 从默认禁用清单放行。\n\
+                # 其余弱算法照旧禁用。删除本文件或关闭设置并重启应用即可恢复默认。\n\
+                jdk.tls.disabledAlgorithms=SSLv3, RC4, DES, MD5withRSA, 3DES_EDE_CBC, DH keySize < 1024, EC keySize < 224\n";
+    std::fs::write(&path, body).ok()?;
+    Some(path)
 }
 
 /// 某个 java 可执行文件的主版本号（带缓存）。
@@ -544,6 +572,37 @@ pub fn driver_artifact_url(artifact: &str) -> Result<String> {
 /// Maven Central 的仓库根（默认下载源）。
 pub const MAVEN_CENTRAL: &str = "https://repo.maven.apache.org/maven2";
 
+/// 镜像关键字 → 仓库根。`driver.mirror` 里存的前端下拉框值在这里落地成真正的根。
+///
+/// 为什么必须有这层映射（实测）：以前这层映射**不存在** —— 前端存关键字
+/// （`aliyun` / `tencent`…），下载时直接拿关键字当仓库根拼 URL，得到
+/// `GET aliyun/org/postgresql/...`，镜像选择完全是摆设。
+/// `maven` 与空值都回落 Maven Central；其它非关键字值（自定义内网仓库根，
+/// `http(s)://` 开头）原样透传 —— 设置页的「自定义（内网）」就是这么接进来的。
+pub fn driver_mirror_base(mirror: Option<&str>) -> String {
+    match mirror.map(str::trim).filter(|m| !m.is_empty()) {
+        None => MAVEN_CENTRAL.to_string(),
+        Some("maven") => MAVEN_CENTRAL.to_string(),
+        Some("aliyun") => "https://maven.aliyun.com/repository/public/".to_string(),
+        Some("huawei") => "https://repo.huaweicloud.com/repository/maven/".to_string(),
+        Some("tencent") => {
+            "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/".to_string()
+        }
+        Some(custom) => custom.to_string(),
+    }
+}
+
+/// 随应用打包的**原生认证库目录**（安装目录下的 `native-auth/`）。
+///
+/// 安装器把 SQL Server 的 Windows 集成认证库（`mssql-jdbc_auth-*.dll`，微软 MIT 许可）
+/// 直接放进安装包 —— 离线机器不用再去 GitHub 拉。桌面壳 `current_exe()` 旁有这个目录
+/// 就返回它；开发模式（`target/debug`）没有，返回 None，走在线下载兜底。
+pub fn bundled_native_auth_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?.join("native-auth");
+    dir.is_dir().then_some(dir)
+}
+
 /// 同上，但可指定**镜像根**（设置里的「驱动下载镜像」，如公司内网 Nexus / 阿里云镜像）。
 ///
 /// 只替换仓库根、保留内核拼好的那段路径：镜像站都是按 Maven 仓库布局放的，
@@ -578,7 +637,9 @@ pub fn driver_jar_name(artifact: &str) -> Result<String> {
 }
 
 /// 本进程的架构在驱动眼里叫什么（驱动按这个后缀找原生库）。
-pub(crate) fn native_arch() -> &'static str {
+///
+/// `pub`：web 层下载 SQL Server 原生认证库时也要按这个后缀挑 zip 里的条目。
+pub fn native_arch() -> &'static str {
     match std::env::consts::ARCH {
         "x86_64" => "x64",
         "x86" => "x86",
@@ -639,8 +700,11 @@ pub fn ensure_native_auth_library(agent_key: &str) -> Option<PathBuf> {
     if targets.iter().all(|name| out_dir.join(name).is_file()) {
         return Some(out_dir);
     }
-    // 从哪拷：驱动目录（含它自己的 auth/）里任何同架构的认证库
-    let source = [dir.clone(), out_dir.clone()]
+    // 从哪拷：驱动目录（含它自己的 auth/）与**安装目录自带的** native-auth/ 里，
+    // 任何同架构的认证库 —— 安装包内置的优先级无所谓，反正都是微软同一份文件
+    let mut candidates = vec![dir.clone(), out_dir.clone()];
+    candidates.extend(bundled_native_auth_dir());
+    let source = candidates
         .into_iter()
         .filter_map(|candidate| std::fs::read_dir(candidate).ok())
         .flatten()
@@ -1177,6 +1241,15 @@ impl AgentHost {
                 command.arg(format!("-Djava.library.path={}", joined.display()));
             }
         }
+        // 旧版 TLS 兼容（设置 → 安全与会话 →「允许旧版 TLS」）：只讲 TLS 1.0 的老库
+        // 在新 JDK 上握手必败，开关打开时用覆盖文件放行（见 `write_legacy_tls_override`）。
+        // JVM 安全属性**只在启动这一刻**生效，宿主是长驻进程 —— 改设置后要重启应用。
+        if LEGACY_TLS.load(Ordering::Relaxed) {
+            if let Some(path) = write_legacy_tls_override() {
+                command.arg(format!("-Djava.security.properties={}", path.display()));
+                tracing::info!(target: "dbmind::agent", path = %path.display(), "宿主 JVM 已放行旧版 TLS");
+            }
+        }
         command
             .arg("-jar")
             .arg(&jar)
@@ -1546,6 +1619,14 @@ pub fn render_jdbc_url(template: &str, config: &ConnectionConfig) -> Result<Stri
             "integratedSecurity=true;authenticationScheme=JavaKerberos"
         });
     }
+    // SQL Server：允许一批里跑多条语句。数据传输的 identity 列写入需要
+    // `SET IDENTITY_INSERT … ON; INSERT …; SET … OFF` 拼在同一批里（开关是会话级的，
+    // 拆开发等于没开）；驱动默认拒绝多语句，会报「一次只允许执行一条语句」。
+    if url.starts_with("jdbc:sqlserver:") && !url.contains("allowMultiQueries") {
+        let separator = if url.contains(';') { ';' } else { '?' };
+        url.push(separator);
+        url.push_str("allowMultiQueries=true");
+    }
     Ok(url)
 }
 
@@ -1580,6 +1661,29 @@ mod tests {
             central,
             "https://repo.maven.apache.org/maven2/org/postgresql/postgresql/42.7.3/postgresql-42.7.3.jar"
         );
+        // 关键字 → 仓库根的映射：四个内置镜像 + 自定义透传 + 空值回落
+        assert_eq!(driver_mirror_base(Some("maven")), MAVEN_CENTRAL);
+        assert_eq!(driver_mirror_base(None), MAVEN_CENTRAL);
+        assert_eq!(driver_mirror_base(Some("")), MAVEN_CENTRAL);
+        assert_eq!(
+            driver_mirror_base(Some("aliyun")),
+            "https://maven.aliyun.com/repository/public/"
+        );
+        assert_eq!(
+            driver_mirror_base(Some("tencent")),
+            "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/"
+        );
+        assert_eq!(
+            driver_mirror_base(Some("https://nexus.corp.com/repository/maven-public/")),
+            "https://nexus.corp.com/repository/maven-public/"
+        );
+        // 关键字落地后必须能拼出合法 URL（回归：以前关键字被直接当 URL 前缀）
+        let mirrored = driver_artifact_url_with_base(
+            artifact,
+            Some(&driver_mirror_base(Some("aliyun"))),
+        )
+        .unwrap();
+        assert!(mirrored.starts_with("https://maven.aliyun.com/"), "{mirrored}");
         // 镜像：尾斜杠要被吃掉（否则拼出 `//org/...`）
         let mirrored = driver_artifact_url_with_base(
             artifact,

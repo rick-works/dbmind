@@ -45,6 +45,8 @@ pub mod xlsx;
 
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post};
+use axum::Json;
+use serde_json::json;
 use axum::Router;
 use dbmind_core::ConnectionRecord;
 
@@ -65,7 +67,7 @@ where
 
 /// 取连接记录；不存在时给出 404 语义的错误（而不是一个空对象让界面继续往下走）。
 pub async fn require_record(state: &AppState, id: &str) -> XResult<ConnectionRecord> {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let id = id.to_string();
     blocking(move || engine.require_connection(&id)).await
 }
@@ -219,6 +221,9 @@ fn nosql_module(module: &str) -> Router<AppState> {
     let p = |suffix: &str| format!("/api/{module}{suffix}");
     Router::new()
         .route(&p("/test"), post(nosql::test))
+    // NoSQL 类型没有 catalog 层级：返回空清单（前端展开连接时统一会请求一次，
+    // 404 会被当成异常打进控制台 —— 空数组才是「没有这一层」的正确表达）
+    .route(&p("/{id}/catalogs"), get(|| async { Json(json!([])) }))
         .route(&p("/{id}/databases"), get(nosql::databases))
         .route(&p("/{id}/collections"), get(nosql::collections))
         .route(&p("/{id}/documents"), get(nosql::documents))

@@ -60,6 +60,24 @@ pub trait Driver: Send + Sync {
     fn list_tables(&self, call: MetaCall<'_>) -> Result<Vec<TableInfo>>;
 
     fn list_columns(&self, call: MetaCall<'_>, table: &str) -> Result<Vec<ColumnDetail>>;
+
+    /// 主动断开**空闲**会话（返回断开条数）。默认 0 = 该驱动无会话池。
+    ///
+    /// 用途：数据库侧授权/密码变更后，内核连接池里的旧会话还带着旧的**全局权限快照**
+    ///（MySQL 的全局权限变更只对新建连接生效），断开重连即可拿到新权限，
+    /// 用户不必重启整个应用。正忙的会话不能打断 —— 由各驱动自己保证。
+    fn disconnect_all(&self) -> usize {
+        0
+    }
+
+    /// 只断**某个连接**（按连接名匹配泳道）的空闲会话。默认 0 = 无会话池。
+    ///
+    /// 「关闭连接」的精确版本：同类型的其它连接共用一个驱动池，
+    /// 断整个类型会让它们也丢掉缓存会话（下次用时重建，几百毫秒）——
+    /// 功能上无害但没必要，界面上其它连接的图标明明还亮着。
+    fn disconnect_connection(&self, _name: &str) -> usize {
+        0
+    }
 }
 
 pub struct DriverRegistry {
@@ -107,6 +125,30 @@ impl DriverRegistry {
     /// 全局会话配额：引擎在启动与设置变更时写它，驱动**实时**读到（共享原子量）。
     pub fn session_budget(&self) -> Arc<SessionBudget> {
         self.session_budget.clone()
+    }
+
+    /// 断开指定类型的全部**空闲**会话，返回断开条数。
+    ///
+    /// 会话按「类型驱动」缓存（同一类型的多条连接共用一个驱动池，lane 区分具体连接），
+    /// 所以这里是**按类型**断：同类型的其它连接只是丢了缓存的会话，下次用时重建
+    ///（几百毫秒），无副作用。典型用途见 [`Driver::disconnect_all`]。
+    pub fn disconnect_all(&self, kind: ConnectionKind) -> usize {
+        self.drivers
+            .iter()
+            .filter(|driver| driver.kind() == kind)
+            .map(|driver| driver.disconnect_all())
+            .sum()
+    }
+
+    /// 只断**指定连接**（按名字）的空闲会话，返回断开条数。
+    ///
+    /// 「关闭连接」走这里 —— 同类型的其它连接不受影响（见 [`Driver::disconnect_connection`]）。
+    pub fn disconnect_connection(&self, kind: ConnectionKind, name: &str) -> usize {
+        self.drivers
+            .iter()
+            .filter(|driver| driver.kind() == kind)
+            .map(|driver| driver.disconnect_connection(name))
+            .sum()
     }
 
     /// 全部 agent 宿主（供壳层显示状态、或显式关闭）。

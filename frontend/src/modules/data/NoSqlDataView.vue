@@ -115,6 +115,7 @@ import { ElMessage } from 'element-plus'
 import { getQuerySettings } from '../../utils/settings'
 import { noSqlDocuments, cancelNoSql } from '../../api'
 import { t } from '../../utils/i18n'
+import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import GridContextMenu from './GridContextMenu.vue'
 
 const props = defineProps({ conn: Object, database: String, collection: String, kind: String })
@@ -546,7 +547,7 @@ const openRowDetail = (rowIdx) => {
   const all = result.value?.rows || []
   const row = all[rowIdx]
   if (!row) return
-  const text = columns.value.map(c => t('sqlq.cellPair', { col: c, val: (row[c] == null ? 'NULL' : String(row[c])) })).join('\n')
+  const text = columns.value.map(c => t('sqlq.cellPair', { col: c, val: (row[c] == null ? nullDisplay() : String(formatDbValue(row[c]))) })).join('\n')
   rowDetail.value = { visible: true, title: t('sqlq.rowDetailTitle', { n: rowIdx + 1 }), text }
 }
 /** 表格键盘：Ctrl+C 复制选区、Ctrl+A 全选（与 SQL 结果表格一致）。 */

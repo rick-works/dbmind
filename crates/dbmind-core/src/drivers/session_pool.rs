@@ -449,12 +449,23 @@ impl SessionBudget {
 }
 
 /// 会话池。`limit` 由**调用方**给出（它是数据：类型声明 → 连接覆盖 → 全局配额）。
-#[derive(Debug)]
+impl std::fmt::Debug for SessionPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // closer 不可 Debug（闭包），手动实现只写有信息量的字段
+        f.debug_struct("SessionPool")
+            .field("live", &self.budget.live())
+            .finish()
+    }
+}
+
 pub struct SessionPool {
     /// 用 `Arc` 是为了让预算能弱引用它（回收空闲会话时要反过来找到池）。
     state: Arc<Mutex<PoolState>>,
     available: Condvar,
     budget: Arc<SessionBudget>,
+    /// 关一条会话的方式（与注册给预算的是**同一个** `Arc`）。
+    /// 「主动断开全部空闲会话」（用户关闭连接）时要直接用它，绕一遍预算不必要。
+    closer: SessionCloser,
 }
 
 impl SessionPool {
@@ -462,16 +473,64 @@ impl SessionPool {
         let state = Arc::new(Mutex::new(PoolState::default()));
         // 注册的是**同一个分配**（`Arc<T>` → `Arc<dyn Trait>` 的 unsizing 不改分配），
         // 所以这个 Weak 与下面存进 `self.state` 的那份同生共死。
-        budget.register(Arc::downgrade(&(state.clone() as Arc<dyn SessionSource>)), closer);
+        budget.register(Arc::downgrade(&(state.clone() as Arc<dyn SessionSource>)), closer.clone());
         Self {
             state,
             available: Condvar::new(),
             budget,
+            closer,
         }
     }
 
     fn lock(&self) -> MutexGuard<'_, PoolState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 主动断开**全部空闲会话**（用户在界面上关闭连接时调用）。
+    ///
+    /// 与空闲回收的差别：不看闲置时长，能关的全关；**正忙的跳过** —— 绝不打断
+    /// 在跑的语句，它们用完放回池里，之后再次调用会处理到。
+    /// 返回断开的条数。典型用途：数据库侧授权/密码变更后，旧会话还带着旧的
+    /// 全局权限快照，断开重连即可拿到新权限（MySQL 的全局权限变更只对新建连接生效）。
+    pub fn close_all_idle(&self) -> usize {
+        self.close_idle_where(|_| true)
+    }
+
+    /// 断开**泳道匹配**的空闲会话（`pred(lane)` 为 true 的那些），返回断开条数。
+    ///
+    /// 「关闭某个连接」用：泳道 key 的第二段是**连接名**（见 `session_key` 的拼法
+    /// `kind|name|host|...`），按它过滤就能只断这一个连接的会话 —— 不再误伤
+    /// 同类型的其它连接（它们只是恰好共用一个驱动池）。
+    /// 与 [`Self::close_all_idle`] 一样的口径：正忙的跳过，绝不打断在跑的语句。
+    pub fn close_idle_where(&self, pred: impl Fn(&str) -> bool + Send + Sync) -> usize {
+        let mut closed = 0usize;
+        // 与回收同序：先摘（短暂持池锁）再关（closer 里做进程/网络调用），不在持锁时关
+        loop {
+            let victim = {
+                let mut state = self.lock();
+                let mut found = None;
+                'outer: for (lane, slots) in state.lanes.iter_mut() {
+                    if !pred(lane) {
+                        continue;
+                    }
+                    for (index, slot) in slots.iter_mut().enumerate() {
+                        if let Some(current) = slot {
+                            if !current.busy {
+                                found = Some(session_id(lane, index));
+                                *slot = None;
+                                break 'outer;
+                            }
+                        }
+                    }
+                }
+                found
+            };
+            let Some(session_id) = victim else { break };
+            (self.closer)(&session_id);
+            self.budget.release_one();
+            closed += 1;
+        }
+        closed
     }
 
     /// 取一个槽位；`wait` 之内拿不到就报错（而不是无限期挂着）。

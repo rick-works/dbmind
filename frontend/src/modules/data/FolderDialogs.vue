@@ -39,12 +39,13 @@
 </template>
 
 <script setup>
-// 新建 / 重命名分组弹窗（从 MainView 拆出）：分组 = 连接的环境分组（environment）
+// 新建 / 重命名分组弹窗（从 MainView 拆出）：分组 = 连接的环境分组（group）
 // + localStorage 持久化的纯分组。提交成功后事件通知父级刷新树与连接列表。
 import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { FolderAdd, EditPen } from '@element-plus/icons-vue'
 import { saveConnection } from '../../api'
+import { pureFolders, addPureFolder, renamePureFolder } from '../../utils/folders'
 import { PREDEF_ENVS } from '../../utils/envs'
 import { t } from '../../utils/i18n'
 
@@ -85,12 +86,6 @@ watch(() => props.renameOpen, (open) => {
   renaming.value = false
 })
 
-const readFolders = () => {
-  try {
-    return JSON.parse(localStorage.getItem('dbmind_folders') || '[]')
-  } catch { return [] }
-}
-
 const validateName = (name) => {
   if (!name) { ElMessage.warning(t('fd.needName')); return false }
   if (name.length > 20) { ElMessage.warning(t('mv.groupNameTooLong', { n: 20 })); return false }
@@ -103,9 +98,7 @@ const doCreate = async () => {
   if (!validateName(name)) return
   creating.value = true
   try {
-    const folders = readFolders()
-    if (!folders.includes(name)) folders.push(name)
-    localStorage.setItem('dbmind_folders', JSON.stringify(folders))
+    await addPureFolder(name)
     newOpen.value = false
     emit('folder-created', name)
   } catch (e) {
@@ -123,14 +116,12 @@ const doRename = async () => {
   renaming.value = true
   try {
     // 把该分组下所有连接的环境改写到新分组
-    const targets = props.connections.filter(c => (c.environment || '') === env)
+    const targets = props.connections.filter(c => (c.group || '') === env)
     for (const c of targets) {
-      await saveConnection({ ...c, environment: val })
+      await saveConnection({ ...c, group: val })
     }
-    // 同步 localStorage 纯分组
-    const folders = readFolders()
-    const idx = folders.indexOf(env)
-    if (idx >= 0) { folders[idx] = val; localStorage.setItem('dbmind_folders', JSON.stringify(folders)) }
+    // 同步后端纯分组
+    if (pureFolders.value.includes(env)) await renamePureFolder(env, val)
     renameOpen.value = false
     emit('folder-renamed', { old: env, new: val })
   } catch (e) {

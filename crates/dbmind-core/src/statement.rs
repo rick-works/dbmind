@@ -13,6 +13,7 @@
 use crate::kind::RuntimeProtocol;
 
 pub use crate::sql::StatementKind;
+pub use crate::sql::WriteTarget;
 
 /// 按协议拆分语句（安全策略据此拒绝「一次多条」）。
 pub fn split_statements(protocol: RuntimeProtocol, text: &str) -> Vec<String> {
@@ -36,6 +37,26 @@ pub fn classify(protocol: RuntimeProtocol, text: &str) -> StatementKind {
         RuntimeProtocol::Mongodb => crate::mongo::classify(text),
         RuntimeProtocol::Redis => crate::redis::classify(text),
         RuntimeProtocol::Elasticsearch => crate::es::classify(text),
+    }
+}
+
+/// 危险语句识别（设置页「危险语句拦截」的判定源）。
+///
+/// 只有 SQL 有「无 WHERE 全表改 / TRUNCATE / DROP」这套形态；Mongo/Redis/ES
+/// 的危险命令各成一族，不在这一层判（它们受只读与生产保护两道闸管着）。
+pub fn danger_reason(protocol: RuntimeProtocol, text: &str) -> Option<&'static str> {
+    match protocol {
+        RuntimeProtocol::Sql => crate::sql::danger_reason(text),
+        _ => None,
+    }
+}
+
+/// 从 UPDATE/DELETE 抽「目标表 + WHERE」（影响行数预估用，见 [`crate::sql::write_target`]）。
+/// 同 `danger_reason`：只有 SQL 形态可解析，其它协议返回 `None`。
+pub fn write_target(protocol: RuntimeProtocol, text: &str) -> Option<WriteTarget> {
+    match protocol {
+        RuntimeProtocol::Sql => crate::sql::write_target(text),
+        _ => None,
     }
 }
 
@@ -174,8 +195,8 @@ mod tests {
     /// 同一段文本在不同协议下含义不同 —— 这正是「协议」必须显式声明的原因。
     #[test]
     fn 同一文本在不同协议下不会被互相认错() {
-        // Redis 里 SELECT 是切库（结构级），不是查询
-        assert_eq!(classify(RuntimeProtocol::Redis, "SELECT 1"), StatementKind::Ddl);
+        // Redis 里 SELECT 是切库：连接状态切换而非数据修改，归为读
+        assert_eq!(classify(RuntimeProtocol::Redis, "SELECT 1"), StatementKind::Read);
         // Mongo 里 select 不是命令 ⇒ 判不出来（保守）
         assert_eq!(
             classify(RuntimeProtocol::Mongodb, "select 1"),

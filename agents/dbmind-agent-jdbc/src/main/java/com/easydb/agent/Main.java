@@ -11,6 +11,7 @@ import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
+import java.sql.PreparedStatement;
 import java.sql.Driver;
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -324,8 +325,10 @@ public final class Main {
         Session session = session(request);
         String sql = required(request, "sql");
         int maxRows = request.has("maxRows") ? request.get("maxRows").getAsInt() : 2000;
-        int timeoutMs = request.has("timeoutMs") ? request.get("timeoutMs").getAsInt() : 30_000;
-        // 内核要裸值紧凑行时才用（默认关闭：老内核不认这个格式）
+        int timeoutMs = request.has("timeoutMs") ? request.get("timeoutMs").getAsInt() : 30_000;
+
+        // 内核要裸值紧凑行时才用（默认关闭：老内核不认这个格式）
+
         boolean compact = request.has("compact") && request.get("compact").getAsBoolean();
         session.touch();
 
@@ -693,6 +696,15 @@ public final class Main {
     }
 
     private static JsonArray readColumns(Session session, String table) {
+        // MySQL 系（mysql / mariadb / doris）先走 information_schema 快路径：
+        // Doris 实测 JDBC getColumns 稳定返回空（而 information_schema 直查列类型齐全）——
+        // 列类型一断，前端的表头类型 / 高级筛选 / 选中区汇总会跟着全部哑掉。
+        if (isMysqlFamily(session)) {
+            JsonArray fast = columnsViaInformationSchema(session, table);
+            if (fast != null && !fast.isEmpty()) {
+                return fast;
+            }
+        }
         JsonArray columns = new JsonArray();
         try {
             DatabaseMetaData meta = session.connection().getMetaData();
@@ -720,6 +732,54 @@ public final class Main {
             throw metadataFailure(session, e, "读取列信息失败");
         }
         return columns;
+    }
+
+    /**
+     * MySQL 系的列信息快路径：直接查 information_schema.COLUMNS。
+     *
+     * <p>与 {@link #tablesViaInformationSchema} 同一套约定：返回 {@code null} = 快路径
+     * 用不了（回退到通用 JDBC 元数据 API），**不是**「这张表没有列」；空数组 =
+     * 查询成功但没命中（比如会话没默认库、表不存在）—— 此时同样交回调用方处理。
+     */
+    private static JsonArray columnsViaInformationSchema(Session session, String table) {
+        long startedAt = System.currentTimeMillis();
+        try {
+            JsonArray columns = new JsonArray();
+            try (PreparedStatement ps = session.connection().prepareStatement(
+                    "select COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY"
+                            + " from information_schema.COLUMNS"
+                            + " where TABLE_SCHEMA = database() and TABLE_NAME = ?"
+                            + " order by ORDINAL_POSITION")) {
+                ps.setString(1, table);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        JsonObject column = new JsonObject();
+                        String name = rs.getString("COLUMN_NAME");
+                        column.addProperty("name", name);
+                        column.addProperty("typeName", rs.getString("DATA_TYPE"));
+                        String nullable = rs.getString("IS_NULLABLE");
+                        column.addProperty("nullable", nullable == null || !nullable.equalsIgnoreCase("NO"));
+                        // COLUMN_KEY = 'PRI' 即主键（MySQL 系的惯例位）
+                        column.addProperty("primaryKey", "PRI".equalsIgnoreCase(rs.getString("COLUMN_KEY")));
+                        String defaultValue = rs.getString("COLUMN_DEFAULT");
+                        if (defaultValue == null) {
+                            column.add("defaultValue", null);
+                        } else {
+                            column.addProperty("defaultValue", defaultValue);
+                        }
+                        columns.add(column);
+                    }
+                }
+            }
+            trace("columns 快路径命中 列数=" + columns.size()
+                    + " 耗时=" + (System.currentTimeMillis() - startedAt) + "ms");
+            return columns;
+        } catch (SQLException | RuntimeException e) {
+            // 权限不足 / 老版本没有 information_schema 等都可能走到这里：
+            // 不报错，回退到通用路径，行为与以前完全一致。
+            trace("columns 快路径失败，已回退：" + e);
+            return null;
+        }
     }
 
     private static JsonObject cancel(JsonObject request) {

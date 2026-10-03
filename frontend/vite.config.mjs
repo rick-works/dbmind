@@ -54,6 +54,13 @@ export default defineConfig({
     chunkSizeWarningLimit: 4500,
     rollupOptions: {
       output: {
+        // 产物名统一加 v3- 前缀：真机发生过「浏览器缓存了被写坏的旧 body（构建窗口期
+        // 拿到半截/回落 HTML），URL 不变就永远命中缓存 → hasError is not a function 白屏」。
+        // 换前缀 = 所有 URL 全新，任何旧缓存（包括 immutable）都失效，普通刷新即可恢复。
+        // 服务端已配套：assets/ 下不存在的文件一律 404，不再回落 index.html。
+        chunkFileNames: 'assets/v3-[name]-[hash].js',
+        entryFileNames: 'assets/v3-[name]-[hash].js',
+        assetFileNames: 'assets/v3-[name]-[hash][extname]',
         // Vite 8 起默认打包器换为 Rolldown：manualChunks 只接受函数形式，
         // 原先的「对象映射」写法会直接报 Invalid type: Expected Function but received Object。
         // 注意 @element-plus/icons-vue 的模块 id 同样含 "element-plus" 子串，故一个判断即可覆盖。

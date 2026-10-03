@@ -39,6 +39,9 @@ const READ_COMMANDS: &[&str] = &[
     "SCAN",
     "DBSIZE",
     "SORT_RO",
+    // 切库是连接状态切换，不动任何数据 —— 数据浏览每次进库都要发它，
+    // 缺了它整个「查看数据」在生产保护开启时会被整页拦下（真机踩过）
+    "SELECT",
     // 注意：这里只放「一定只读」的命令名；`CONFIG`/`SORT`/`ACL` 这类
     // 由子命令决定性质的走上面的 match，不在此表
     // hash
@@ -399,9 +402,12 @@ mod tests {
 
     #[test]
     fn 结构级命令被认出来() {
-        for command in ["FLUSHALL", "FLUSHDB", "SELECT 1", "BGSAVE", "REPLICAOF host 6379"] {
+        // 注意 SELECT 不在此列：切库只改连接状态、不动数据，归为读
+        // （数据浏览每次进库都要发它，归成写会被生产保护整页拦下）
+        for command in ["FLUSHALL", "FLUSHDB", "BGSAVE", "REPLICAOF host 6379"] {
             assert_eq!(classify(command), StatementKind::Ddl, "{command}");
         }
+        assert_eq!(classify("SELECT 1"), StatementKind::Read);
     }
 
     #[test]

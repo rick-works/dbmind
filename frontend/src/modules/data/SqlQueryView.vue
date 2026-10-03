@@ -21,13 +21,22 @@
             </el-option-group>
           </el-select>
 
-          <!-- 数据库选择器 -->
-          <el-select v-model="selectedDatabase" size="small" class="db-select"
-                     :loading="loadingDbs" @change="onDbChange">
+          <!-- Catalog 选择器（仅 catalog 方言，如 Doris）：与库拆成两个下拉，和左侧树同一结构 -->
+          <el-select v-if="dbCatalogs.length" v-model="selectedCatalog" size="small"
+                     class="db-catalog-select" @change="onCatalogChange">
+            <template #prefix>
+              <el-icon class="sel-icon"><Files /></el-icon>
+            </template>
+            <el-option v-for="c in dbCatalogs" :key="c" :label="c" :value="c" />
+          </el-select>
+
+          <!-- 数据库选择器（catalog 方言下显示的是当前 catalog 内的裸库名） -->
+          <el-select v-model="selectedDbShort" size="small" class="db-select"
+                     :loading="loadingDbs" @change="onDbShortChange">
             <template #prefix>
               <el-icon class="sel-icon"><Coin /></el-icon>
             </template>
-            <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
+            <el-option v-for="db in dbOptions" :key="db" :label="db" :value="db" />
           </el-select>
 
           <!-- Schema 选择器（仅 SQL Server / PostgreSQL） -->
@@ -210,8 +219,9 @@
               <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('tree.multiCancel') }} </el-button>
           </div>
         </div>
-        <!-- 数据表格 -->
+        <!-- 数据表格（模板里 ref 自动解包：editorSettings 已是设置对象，.value 反而是 undefined —— 真机崩过） -->
         <div v-if="result?.success && result?.rows?.length" class="data-table-wrap" ref="resultTableWrapRef" tabindex="0"
+        :style="{ '--grid-fs': (editorSettings.gridFontSize || 13) + 'px' }"
              @scroll.passive="onResultTableScroll"
              @mousemove="onResultTableMove" @mousedown="onResultTableDown" @mouseleave="onResultTableLeave"
              @contextmenu.prevent="onResultGridContextMenu">
@@ -268,11 +278,13 @@
                 </td>
                 <td v-for="c in resultVisibleCols" :key="'d' + (vtStart + idx) + '_' + c.idx"
                     :class="[cellAlignClass(row[c.name], resultTypeOf(c.idx)), { 'null-cell': row[c.name] == null, 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name), 'active-cell': resultActiveCell && resultActiveCell.rowIdx === (vtStart + idx) && resultActiveCell.col === c.name && noResultBulkSelection }]"
-                    :title="row[c.name] == null ? 'NULL' : String(row[c.name])" :data-gkey="(vtStart + idx + 1) + ':' + c.idx"
+                    :title="row[c.name] == null ? nullDisplay() : String(row[c.name])" :data-gkey="(vtStart + idx + 1) + ':' + c.idx"
                     @click="onResultCellClick(vtStart + idx, c.name)"
                     @contextmenu.prevent.stop="onResultContextMenu($event, vtStart + idx, c.name)">
-                  <!-- v-memo：内容没变就跳过该格的 vnode 创建与 diff；memo key 用原始值，值变必重渲染 -->
-                  <span v-memo="[row[c.name]]">{{ row[c.name] == null ? 'NULL' : String(row[c.name]) }}</span>
+                  <!-- v-memo：内容没变就跳过该格的 vnode 创建与 diff；memo key 用原始值，值变必重渲染
+                       （NULL 样式也在 key 里：设置页改样式能直接重渲染，不必重跑查询）。
+                       展示走 formatDbValue（ISO 时间戳的 T 换空格），原始值不动（复制/编辑仍拿原文） -->
+                  <span v-memo="[row[c.name], querySettingsLive.nullStyle]">{{ row[c.name] == null ? nullDisplay() : formatDbValue(row[c.name]) }}</span>
                 </td>
               </tr>
               <tr v-if="vtGapBottom > 0" class="vt-gap">
@@ -292,7 +304,7 @@
           </div>
           <div class="error-message">{{ result.message || $t('common.unknownError') }}</div>
         </div>
-        <el-empty v-else :description="(result && result.affectedRows >= 0 && result.message) ? result.message : $t('sqlq.noResult')" />
+        <el-empty v-else :description="(result && result.affectedRows >= 0) ? $t('sqlq.affectedOk', { n: result.affectedRows }) : $t('sqlq.noResult')" />
         <div v-if="result?.success && result?.rows?.length" class="result-footer">
           <span class="result-time">
             {{ running ? formatElapsed(elapsedTime) : (result.executeTime ? formatElapsed(result.executeTime) : '') }}
@@ -309,12 +321,9 @@
             </template>
           </span>
           <!-- 总数未知（后端没统计，totalCount 为 -1）时不显示分页器自带的「共 N 条」：
-               那个数字取的是本页行数，等于把「这一页取回多少行」说成「总共多少行」，
-               用户会看到「共 200 条」这种和实际差几个数量级的数。未知时只留翻页控件，
-               并在前面给一句诚实的话。 -->
-          <span v-if="displayTotal === null && loadedRows > 0" class="st-item st-dim rows-hint">
-            {{ $t('sqlq.rowsReturnedHint', { n: loadedRows }) }}
-          </span>
+               那个数字取的是本页行数，等于把「这一页取回多少行」说成「总共多少行」。
+               未知时只留翻页控件，**不挂任何提示**——「可能还有更多」这种话说了一遍
+               又说不清何时为真，用户明确不要它；SQL 有问题就报错，没事就安静翻页。 -->
           <el-pagination
             v-model:current-page="currentPage"
             :page-size="pageSize"
@@ -351,6 +360,8 @@
           <div class="ai-markdown" v-html="renderMarkdown(aiResultMd, { sqlActions: true })"
                @click="onAiMdAction($event)"></div>
         </template>
+                <div v-if="aiUsage" class="ai-usage">本次回答消耗：{{ Number(aiUsage.totalTokens || 0).toLocaleString() }} tokens<template v-if="aiUsage.promptTokens != null">（{{ Number(aiUsage.promptTokens).toLocaleString() }}）</template></div>
+
       </div>
     </el-dialog>
 
@@ -433,7 +444,7 @@
     :message="exportTask.message"
     :logs="exportTask.logs"
     :canceling="exportTask.canceling"
-    @cancel="exportTask.cancel(selectedConnId.value || props.conn.id)"
+    @cancel="exportTask.cancel(selectedConnId || props.conn.id)"
     @close="exportTask.close"
   />
 
@@ -458,23 +469,26 @@ import DataPivotDialog from './DataPivotDialog.vue'
 import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
 import { exportData } from '../../api'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { getEditorSettings, getQuerySettings } from '../../utils/settings'
-import { getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
+import { editorSettingsLive, getEditorSettings, getQuerySettings, querySettingsLive } from '../../utils/settings'
+import { getResolvedTheme, monacoTheme, onResolvedThemeChange } from '../../utils/theme'
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
+import { builtinFunctions, functionInsertText, smartCase } from '../../utils/sqlCompletions'
+import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import { useShortcutScope } from '../../utils/useShortcuts'
 import { loadShortcuts } from '../../utils/shortcuts'
+import { errMsg } from '../../utils/errMsg'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
 import { useExcelSelection } from '../../utils/excelSelection'
 import { cellAlignClass } from '../../utils/cellAlign'
 import {
   CaretRight, Download, MagicStick, TrendCharts, Loading,
-  Close, CircleCloseFilled, Coin, Brush, Clock,
+  Close, CircleCloseFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
   Sort, SortUp, SortDown
 } from '@element-plus/icons-vue'
-import { executeSql, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, noSqlDatabases, listSchemas, listTables, listConnections, getAiConfig } from '../../api'
+import { executeSql, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listConnections, listColumns, getAiConfig } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, byType } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
 
@@ -541,11 +555,13 @@ const execId = ref('')
 const cancelRequested = ref(false)
 let cancelController = null
 
-// 编辑器 / 查询设置（提前读取，避免在 setup 中访问时出现 TDZ）
-const editorSettings = getEditorSettings()
+// 编辑器 / 查询设置（提前读取，避免在 setup 中访问时出现 TDZ）。
+// editorSettings 用**共享响应式快照**：设置页保存后即时生效（wrapper 会 updateOptions），
+// 以前是 setup 一次性快照 —— 改字号/换行对已打开的标签毫无作用，得重开。
+const editorSettings = editorSettingsLive
 const querySettings = getQuerySettings()
 // 编辑器配色跟随应用主题
-const editorTheme = ref(getResolvedTheme() === 'dark' ? 'vs-dark' : 'vs-light')
+const editorTheme = ref(monacoTheme())
 let offEditorTheme = null
 
 // 分页（默认每页行数取设置项t('settings.query.pageSize')）
@@ -582,6 +598,8 @@ const pageTotal = computed(() => displayTotal.value !== null ? displayTotal.valu
 // 优先级：单元格区域 > 选中行 > 选中列（同一时刻只会存在一块选区，见 focusResult* 那几个函数）。
 // 计数按"格子数"给（和 Excel 一致），求和/均值只统计**数值类型**的列 —— 把字符串硬加起来没有意义。
 const NUMERIC_TYPE_RE = /^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money|serial)/i
+// 类型缺失时的兜底：值是**严格数字面量**才算（有的源列类型拿不到，汇总不能跟着哑掉）
+const NUMERIC_LITERAL_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
 const isNumericResultCol = (idx) => NUMERIC_TYPE_RE.test(String(resultTypeOf(idx) || '').toLowerCase())
 /** 数字显示：整数不带小数点，小数最多两位（汇总值常常是除出来的） */
 const fmtNum = (n) => (n == null || !Number.isFinite(n)) ? '' : (Number.isInteger(n) ? String(n) : Number(n.toFixed(2)).toLocaleString())
@@ -600,7 +618,12 @@ const resultSelectionSummary = computed(() => {
     if (!row) return
     acc.cells++
     const v = row[name]
-    if (v == null || !isNumericResultCol(c)) return
+    if (v == null) return
+    // 类型已知按类型；类型缺失看值本身（严格数字面量），普通文本列不会被误加
+    const typed = String(resultTypeOf(c) || '')
+    if (typed) {
+      if (!NUMERIC_TYPE_RE.test(typed.toLowerCase())) return
+    } else if (!NUMERIC_LITERAL_RE.test(String(v).trim())) return
     const n = Number(v)
     if (!Number.isFinite(n)) return
     acc.nums++
@@ -634,8 +657,41 @@ const resultSelectionSummary = computed(() => {
     max: acc.max
   }
 })
-const onPageChange = (p) => { runSql(p, pageSize.value, false) }
-const onPageSizeChange = (s) => { runSql(1, s, false) }
+// 翻到批量结果某一段的第 N 页：**只重跑这一段**（executeSql 带页码走后端分页+统计），
+// 其余段的结果原样保留。整批重跑会把写入类语句再执行一遍，绝对不行。
+const loadSegment = async (item, p, size) => {
+  if (!item || !item.segmentSql) return
+  running.value = true
+  loading.value = true
+  cancelRequested.value = false
+  cancelController = new AbortController()
+  try {
+    const connId = selectedConnId.value || props.conn.id
+    const db = selectedSchema.value
+      ? `${selectedDatabase.value}.${selectedSchema.value}`
+      : selectedDatabase.value || undefined
+    const res = await executeSql(connId, item.segmentSql, db, execId.value, cancelController.signal, p, size)
+    item.res = res
+    item.page = p
+    result.value = res
+  } catch (e) {
+    if (!cancelRequested.value) ElMessage.error(e?.message || t('common.unknownError'))
+  } finally {
+    cancelController = null
+    running.value = false
+    loading.value = false
+  }
+}
+const onPageChange = (p) => {
+  const item = resultItems.value[activeResultIdx.value]
+  if (item && item.segmentSql) { loadSegment(item, p, pageSize.value); return }
+  runSql(p, pageSize.value, false)
+}
+const onPageSizeChange = (s) => {
+  const item = resultItems.value[activeResultIdx.value]
+  if (item && item.segmentSql) { loadSegment(item, 1, s); return }
+  runSql(1, s, false)
+}
 
 // ========== 结果表格列宽拖拽（任意竖线均可拖动） ==========
 const resultTableWrapRef = ref(null)
@@ -1508,9 +1564,10 @@ const openRowDetail = (rowIdx) => {
   if (!row) return
   const lines = cols.map(c => {
     const v = row[c]
-    return c + '：' + (v == null ? 'NULL' : String(v))
+    // 与网格同口径：ISO 时间串的 `T` 换成空格（详情里全是原始值会看着割裂）
+    return c + '：' + (v == null ? nullDisplay() : String(formatDbValue(v)))
   })
-  rowDetail.value = { visible: true, title: '第 ' + (rowIdx + 1) + ' 行详情', text: lines.join('\n') }
+  rowDetail.value = { visible: true, title: t('sqlq.rowDetailTitle', { n: rowIdx + 1 }), text: lines.join('\n') }
 }
 
 // 右键目标的行/列集合：右键落在框选区域内用选区，否则用当前单元格/行
@@ -1963,6 +2020,49 @@ const allConnections = ref([])
 const selectedConnId = ref('')
 const databases = ref([])
 const selectedDatabase = ref('')
+// catalog 方言（Doris）：catalog 与库拆成两个下拉。databases 存储仍是全限定名
+// `catalog.库`（历史/预设/useDatabase 全都不用动），下面三个只是下拉的显示状态。
+// dbCatalogs 为空 = 普通方言，库下拉直接用 databases（行为与从前完全一致）。
+const dbCatalogs = ref([])
+const selectedCatalog = ref('')
+const selectedDbShort = ref('')
+const lastDbByCatalog = ref({}) // catalog → 上次选过的库：切回来回到原位，而不是字母序第一
+const dbOptions = computed(() => {
+  if (!dbCatalogs.value.length) return databases.value
+  const p = selectedCatalog.value + '.'
+  return databases.value.filter(d => d.startsWith(p)).map(d => d.slice(p.length))
+})
+/** 把全限定名 selectedDatabase 同步到（可选的）双下拉显示状态 */
+const syncCatalogUi = () => {
+  if (!dbCatalogs.value.length) { selectedDbShort.value = selectedDatabase.value; return }
+  const q = String(selectedDatabase.value || '')
+  const i = q.indexOf('.')
+  const cat = i > 0 ? q.slice(0, i) : ''
+  if (cat && dbCatalogs.value.includes(cat)) {
+    selectedCatalog.value = cat
+  } else if (!selectedCatalog.value || !dbCatalogs.value.includes(selectedCatalog.value)) {
+    selectedCatalog.value = dbCatalogs.value[0] || ''
+  }
+  const p = selectedCatalog.value + '.'
+  selectedDbShort.value = q.startsWith(p) ? q.slice(p.length) : (dbOptions.value[0] || '')
+  if (q.startsWith(p) && q.slice(p.length)) lastDbByCatalog.value[selectedCatalog.value] = q
+}
+/** 库下拉（裸名）变更 → 还原成全限定名走原有 onDbChange */
+const onDbShortChange = (short) => {
+  onDbChange(dbCatalogs.value.length ? selectedCatalog.value + '.' + (short || '') : (short || ''))
+}
+/** catalog 下拉变更：优先回到该 catalog 上次用过的库，没有才选第一个 */
+const onCatalogChange = () => {
+  const p = selectedCatalog.value + '.'
+  if (!String(selectedDatabase.value || '').startsWith(p)) {
+    const remembered = lastDbByCatalog.value[selectedCatalog.value] || ''
+    if (remembered && databases.value.includes(remembered)) {
+      onDbShortChange(remembered.slice(p.length))
+    } else {
+      onDbShortChange(dbOptions.value[0] || '')
+    }
+  }
+}
 const loadingDbs = ref(false)
 const schemas = ref([])
 const selectedSchema = ref('')
@@ -1975,15 +2075,24 @@ const isNoSql = computed(() => isNoSqlType(connType.value))
 // SQL 格式化方言：跟随当前连接类型自动识别（未知类型回退标准 SQL）
 const fmtDialect = computed(() => connDialectOf(connType.value))
 const showSchemaSelect = computed(() => schemaLevelOf(connType.value) === 'schema')
-// 连接下拉：按目录（environment）分组（一级：目录名；二级：连接名）
+// 连接下拉：按目录（environment）分组（一级：目录名；二级：连接名）。
+// **未分组的连接归入「开发」**—— 用户要求：下拉里不该出现「未分组」这种分组，
+// 每个连接都应该落在 开发/测试/生产 之一（默认开发，后续可拖拽改）。
 const connGroups = computed(() => {
-  const map = new Map()
-  for (const c of allConnections.value) {
-    const key = c.environment || t('aictx.ungrouped')
-    if (!map.has(key)) map.set(key, [])
-    map.get(key).push(c)
-  }
-  return [...map.entries()].map(([folder, items]) => ({ folder, items }))
+const map = new Map()
+for (const c of allConnections.value) {
+const key = c.environment || 'DEV'
+if (!map.has(key)) map.set(key, [])
+map.get(key).push(c)
+}
+// 组顺序按预置环境：开发 → 测试 → 生产 → 自定义目录
+const order = ['DEV', 'TEST', 'PROD']
+return [...map.entries()]
+.sort((a, b) => {
+const ia = order.indexOf(a[0]), ib = order.indexOf(b[0])
+return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+})
+.map(([folder, items]) => ({ folder, items }))
 })
 
 const mounted = ref(false)
@@ -2004,6 +2113,8 @@ const aiFixLoading = ref(false)
 const aiResult = ref('')
 const aiResultIsSql = ref(false)
 const aiErrorReason = ref('')
+const aiUsage = ref(null)
+
 const aiModels = ref([])
 const selectedAiModelId = ref('')
 
@@ -2144,20 +2255,30 @@ const notifyScriptsChanged = () => {
 
 const editorOptions = computed(() => ({
   automaticLayout: true,
-  fontSize: editorSettings.fontSize,
+  // 括号自动补齐（设置可关）：SQL 语言定义里没有 autoClosingPairs（默认 languageDefined
+  // 不生效），所以开着时强制 always —— 输入 ( [ ' 自动带上另一半，覆盖输入不会重复
+  autoClosingBrackets: editorSettings.value.autoCloseBrackets ? 'always' : 'never',
+  fontSize: editorSettings.value.fontSize,
   mouseWheelZoom: true,
 
-  minimap: { enabled: editorSettings.minimap },
+  // 小地图已下线（用户反馈没啥用）：**必须显式关** —— Monaco 的 minimap 默认就是
+  // enabled=true，当初误以为默认关、把显式配置删了，小地图反而全回来了（真机踩过）。
+  minimap: { enabled: false },
   scrollBeyondLastLine: false,
-  wordWrap: editorSettings.wordWrap ? 'on' : 'off',
-  tabSize: editorSettings.tabSize,
-  lineNumbers: editorSettings.lineNumbers ? 'on' : 'off',
+  wordWrap: editorSettings.value.wordWrap ? 'on' : 'off',
+  tabSize: editorSettings.value.tabSize,
+  lineNumbers: editorSettings.value.lineNumbers ? 'on' : 'off',
   lineNumbersMinChars: 2,
   lineDecorationsWidth: 0,
   // 当前编辑行不做任何高亮：失焦时 'line'/'all' 会把当前行画成一个边框（用户不要这个框）
   renderLineHighlight: 'none',
-  suggest: { preview: true, showKeywords: true, showSnippets: true },
-  quickSuggestions: { other: true, comments: false, strings: false },
+  // snippetsPreventQuickSuggestions 默认 true：片段类建议（我们的函数补全是片段）
+  // 会被排除在**自动弹出**之外 —— 表现就是「输入函数名没有任何提示」。关掉它。
+  // 智能补全（设置可关）：关掉时连建议 widget 一起收（showSuggestions: false）
+  suggest: editorSettings.value.quickSuggest
+    ? { preview: true, showSnippets: false, snippetsPreventQuickSuggestions: false }
+    : { showSuggestions: false },
+  quickSuggestions: editorSettings.value.quickSuggest ? { other: true, comments: false, strings: false } : false,
   acceptSuggestionOnEnter: 'on',
   snippetSuggestions: 'bottom',
   fixedOverflowWidgets: true,
@@ -2166,7 +2287,6 @@ const editorOptions = computed(() => ({
   bracketPairColorization: { enabled: true },
   guides: { bracketPairs: true, indentation: true },
   matchBrackets: 'always',
-  autoClosingBrackets: 'always',
   autoClosingQuotes: 'always',
   formatOnPaste: true,
   formatOnType: true,
@@ -2200,6 +2320,26 @@ const SQL_KEYWORDS = [
 // 注册到全局 monaco.languages 上的 provider：返回值必须 dispose。
 // 否则反复开关 SQL 页签会不断叠加（补全里出现重复项、每次输入被重复回调），长会话越来越卡
 const monacoProviders = []
+
+// ===== 列名懒加载缓存：补全「表.列」与「引用到的表的列」用 =====
+// 键 = 小写表名。不在建库时预取全部列（几百张表就是几百次请求），谁被点号/被
+// FROM 引用到了才取谁，取一次终身缓存
+const columnsCache = {}
+const columnsLoading = new Set()
+const loadColumns = (table) => {
+  const key = String(table || '').toLowerCase()
+  if (!key || columnsCache[key] || columnsLoading.has(key)) return
+  columnsLoading.add(key)
+  listColumns(selectedConnId.value || props.conn?.id, selectedDatabase.value || props.database, table)
+    .then((cols) => {
+      columnsCache[key] = (Array.isArray(cols) ? cols : [])
+        .map((c) => (typeof c === 'string' ? c : c.name || c.columnName))
+        .filter(Boolean)
+    })
+    .catch(() => {})
+    .finally(() => columnsLoading.delete(key))
+}
+
 const onEditorMount = (editor, monaco) => {
   editorInstance = editor
   // 注册自定义补全提供者
@@ -2218,15 +2358,67 @@ const onEditorMount = (editor, monaco) => {
 
         const suggestions = []
 
-        // 1) SQL 关键字（常用子集）
+        // 0) 点号级联：`表.` → 该表的列；`库.` → 该库的表。
+        //    列名没缓存就现场拉（fire-and-forget），下次触发时就能看到
+        const lineText = model.getValueInRange({
+          startLineNumber: position.lineNumber, startColumn: 1,
+          endLineNumber: position.lineNumber, endColumn: position.column
+        })
+        const dotMatch = lineText.match(/([A-Za-z_][\w$]*)\.\w*$/)
+        if (dotMatch) {
+          const prefix = dotMatch[1].toLowerCase()
+          const dbNames = databases.value.map((d) => String(d).toLowerCase())
+          if (dbNames.includes(prefix)) {
+            tableNames.value.forEach((name) => suggestions.push({
+              label: name,
+              kind: monaco.languages.CompletionItemKind.Class,
+              insertText: name,
+              range,
+              sortText: '1aaa' + name,
+              detail: t('tree.cat.tables')
+            }))
+            return { suggestions }
+          }
+          const tableHit = tableNames.value.find((tn) => String(tn).toLowerCase() === prefix)
+            || Object.keys(columnsCache).find((k) => k === prefix)
+          if (tableHit) {
+            loadColumns(tableHit)
+            const cols = columnsCache[prefix] || []
+            cols.forEach((c) => suggestions.push({
+              label: c,
+              kind: monaco.languages.CompletionItemKind.Field,
+              insertText: c,
+              range,
+              sortText: '0ccc' + c,
+              detail: t('sqlq.completionColumn')
+            }))
+            return { suggestions }
+          }
+        }
+
+        // 1) SQL 关键字（常用子集）：插入大小写跟随用户已敲的词
         SQL_KEYWORDS.forEach(kw => {
           suggestions.push({
             label: kw,
             kind: monaco.languages.CompletionItemKind.Keyword,
-            insertText: kw,
+            insertText: smartCase(kw, word.word),
             range,
             sortText: '0fff' + kw,
             detail: t('settings.format.keyword')
+          })
+        })
+
+        // 1.5) 内置函数（按连接方言）：代码片段插入 `FN(参数占位)`，
+        //      光标落在第一个参数上，Tab 逐个跳；右括号已在片段里，无需手敲
+        builtinFunctions(fmtDialect.value).forEach(fn => {
+          suggestions.push({
+            label: fn,
+            kind: monaco.languages.CompletionItemKind.Function,
+            insertText: functionInsertText(fn, word.word),
+            insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+            range,
+            sortText: '0eee' + fn,
+            detail: t('sqlq.completionFunction')
           })
         })
 
@@ -2235,10 +2427,29 @@ const onEditorMount = (editor, monaco) => {
         tableNames.value.forEach(t => nameSet.add(t))
         const allText = model.getValue()
         const tableMatches = allText.match(/(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+[`"']?([\w.]+)[`"']?/gi) || []
+        const refTables = []
         tableMatches.forEach(m => {
           const name = m.replace(/(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+/i, '').replace(/[`"']/g, '').trim()
           const base = name.split('.').pop()
-          if (base) nameSet.add(base)
+          if (base) { nameSet.add(base); refTables.push(base) }
+        })
+        // 引用到的表顺带懒加载列（不阻塞本次补全）
+        refTables.forEach(loadColumns)
+        // 已缓存的列并入主列表：写 SELECT 的字段清单时不用再打「表.」
+        const seenCols = new Set()
+        refTables.forEach((t) => {
+          ;(columnsCache[String(t).toLowerCase()] || []).forEach((c) => {
+            if (seenCols.has(c)) return
+            seenCols.add(c)
+            suggestions.push({
+              label: c,
+              kind: monaco.languages.CompletionItemKind.Field,
+              insertText: c,
+              range,
+              sortText: '0ddd' + c,
+              detail: t('sqlq.completionColumn')
+            })
+          })
         })
         nameSet.forEach(name => {
           suggestions.push({
@@ -2615,7 +2826,8 @@ const showSingleResult = (res) => {
   if (res && res.success) {
     result.value = res
     if (res.rowCount === 0 && !res.columns.length && res.affectedRows >= 0) {
-      ElMessage.success(res.message)
+      // 后端的 message 是英文（"Query OK, N rows affected"）—— 提示按界面语言走词典
+      ElMessage.success(t('sqlq.affectedOk', { n: res.affectedRows }))
     }
   } else {
     result.value = res || { columns: [], rows: [], success: false, message: t('ai.runFailed'), executeTime: 0 }
@@ -2625,21 +2837,29 @@ const showSingleResult = (res) => {
   }
 }
 
-// 展示批量（多段）结果：每段语句一个 tab，tab 之间切换仅切换数据源展示
+// 展示批量（多段）结果：每段语句一个 tab，tab 之间切换仅切换数据源展示。
+// 每段带 `sql`（段落原文）与真实 totalCount（后端统计）—— 支持按段翻页
 const showBatchResult = (b) => {
   const results = (b && Array.isArray(b.results)) ? b.results : []
   if (!results.length) {
     showSingleResult(b || { columns: [], rows: [], success: false, message: t('ai.runFailed'), executeTime: 0 })
     return
   }
-  resultItems.value = results.map((r, i) => ({ label: t('sqlq.resultN', { n: i + 1 }), res: r }))
+  resultItems.value = results.map((r, i) => ({
+    label: t('sqlq.resultN', { n: i + 1 }),
+    res: r,
+    // 段落原文：翻到第 N 页时只重跑这一段（整批重跑会把写入语句再执行一遍）
+    segmentSql: r.sql || '',
+    page: 1
+  }))
   activeResultIdx.value = 0
   result.value = results[0]
   // 编辑器文本含多段但实际仅拆出单段（例程块 / 注释等）：按单结果做收尾提示
   if (results.length === 1) {
     const only = results[0]
     if (only.success && only.rowCount === 0 && !only.columns.length && only.affectedRows >= 0) {
-      ElMessage.success(only.message)
+      // 与单条路径同口径：后端的英文回执按界面语言走词典
+      ElMessage.success(t('sqlq.affectedOk', { n: only.affectedRows }))
     } else if (!only.success && only.message !== t('sqlq.canceled')) {
       ElMessageBoxWithFix(only.message || t('ai.runFailed'))
     }
@@ -2653,8 +2873,8 @@ const selectResultTab = (i) => {
   if (i === activeResultIdx.value && result.value === item.res) return
   activeResultIdx.value = i
   result.value = item.res
-  // 不同结果集独立分页：切换 tab 回到第一页，避免页码越界
-  currentPage.value = 1
+  // 不同结果集独立分页：切换 tab 恢复到该段自己的页码
+  currentPage.value = item.page || 1
   clearResultRowSelection()
   resultActiveCell.value = null
   resultSortColumn.value = ''
@@ -2846,15 +3066,23 @@ const doSaveScript = (nameOverride, silent = false) => {
 // getSql 供父级在保存会话快照时读取实时内容（兜底：即使 sql-change 还没触发也能取到最新）
 defineExpose({ saveForClose, getSql: () => sql.value })
 
-// 自动保存：仅对"已命名脚本"生效（编辑树中脚本或已保存过的脚本），停止输入 1.5s 后静默保存
+// 自动保存：停止输入 1.5s 后静默保存。已命名脚本按原名覆盖更新；
+// 未命名的新脚本在**第一次**自动保存时按「脚本 + 时间」自动建档（后续沿用同一个名字，
+// 覆盖更新同一条 —— 否则开关打开也没东西可存，等于摆设）。
 let autoSaveTimer = null
+let autoDraftName = ''
 const scheduleAutoSave = (val, dirty) => {
   if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null }
-  if (!dirty || !props.scriptName || !val.trim()) return
-  if (!editorSettings.autoSave) return
+  if (!dirty || !val.trim()) return
+  if (!editorSettings.value.autoSave) return
   autoSaveTimer = setTimeout(() => {
     autoSaveTimer = null
-    if (sql.value && sql.value !== lastSavedSql.value) doSaveScript(props.scriptName, true)
+    if (!sql.value || sql.value === lastSavedSql.value) return
+    if (!props.scriptName && !autoDraftName) {
+      autoDraftName = '脚本 ' + new Date().toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    }
+    const name = props.scriptName || autoDraftName
+    if (name) doSaveScript(name, true)
   }, 1500)
 }
 
@@ -2874,15 +3102,33 @@ const ElMessageBoxWithFix = (errMsg) => {
 
 const lastError = ref('')
 
+// AI 预检（所有 AI 入口共用）：没配置就直接一句提示返回，调用方不要再弹任何框
+const ensureAiConfigured = async () => {
+  try {
+    const cfg = await getAiConfig()
+    if (cfg && cfg.enabled && (cfg.models || []).length) return true
+    ElMessageBox.confirm(t('sqlq.aiNotConfigured'), t('sqlq.aiNotConfiguredTitle'), {
+      confirmButtonText: t('sqlq.gotoAiSettings'),
+      cancelButtonText: t('common.cancel'),
+      type: 'warning',
+    }).then(() => window.dispatchEvent(new CustomEvent('dc-open-settings', { detail: { tab: 'ai' } }))).catch(() => {})
+    return false
+  } catch { return true /* 配置读不到就照旧走原流程，由后端给出准确原因 */ }
+}
+
 const askAi = async (mode) => {
   // 先拦在弹窗之前：没内容还弹出一个转圈的对话框，比不弹更让人困惑
   if (!requireSql()) return
+  // AI 没配置时**连对话框都不弹**：空框 + 一条错误气泡，比单纯一句提示更让人困惑
+  if (!(await ensureAiConfigured())) return
   aiDialogTitle.value = mode === 'explain' ? t('sqlq.aiTitleExplain')
     : mode === 'fix' ? t('sqlq.aiTitleFix')
     : mode === 'diagnose' ? t('sqlq.aiTitleDiagnose') : t('sqlq.aiTitleOptimize')
   aiDialogVisible.value = true
   aiLoading.value = true
   aiResult.value = ''
+  aiUsage.value = null
+
   aiResultIsSql.value = false
   aiErrorReason.value = ''
   try {
@@ -2893,8 +3139,10 @@ const askAi = async (mode) => {
       : await aiOptimize(payload)
     if (res && res.success) {
       if (mode === 'fix') { aiErrorReason.value = res.errorReason || ''; aiResult.value = res.sql || res.content || '' }
-      else { aiResult.value = res.content }
+else { aiResult.value = res.content }
       aiResultIsSql.value = mode === 'fix'
+          aiUsage.value = res.usage || null
+
     }
     else ElMessage.error(res?.message || t('ai.requestFailed'))
   } catch (e) { ElMessage.error(e?.message || e?.toString?.() || t('ai.requestFailed')) }
@@ -2906,6 +3154,8 @@ const askAiRewrite = async () => {
   // 文案与其它入口统一：原来写「请先选中要改写的 SQL」会让人以为必须先划选，
   // 其实无选中时就是对全文改写，真正缺的是内容本身
   if (!requireSql()) return
+  // 同 askAi：AI 没配置时改写输入框也不该弹出来
+  if (!(await ensureAiConfigured())) return
   const target = getExecutableSql()
   if (!target) return
   let instruction = ''
@@ -2935,7 +3185,7 @@ const askAiRewrite = async () => {
       database: props.database,
       modelId: selectedAiModelId.value
     })
-    if (res && res.success) aiResult.value = res.content
+if (res && res.success) { aiResult.value = res.content; aiUsage.value = res.usage || null }
     else ElMessage.error(res?.message || t('ai.requestFailed'))
   } catch (e) {
     ElMessage.error(e?.message || e?.toString?.() || t('ai.requestFailed'))
@@ -3023,6 +3273,9 @@ const loadAllConnections = async () => {
 const onConnChange = async (connId) => {
   selectedDatabase.value = ''
   databases.value = []
+  dbCatalogs.value = []
+  selectedCatalog.value = ''
+  selectedDbShort.value = ''
   selectedSchema.value = ''
   schemas.value = []
   tableNames.value = []
@@ -3034,6 +3287,9 @@ const onConnChange = async (connId) => {
 // 切换数据库（仅改编辑器自身上下文）
 const onDbChange = (val) => {
   selectedDatabase.value = val || ''
+  // 双下拉显示状态同步回全限定名（切 catalog 自动带第一个库就靠它回写裸名下拉；
+  // 程序改 v-model 不会触发 el-select 的 @change，不会递归）
+  syncCatalogUi()
   selectedSchema.value = ''
   schemas.value = []
   if (val && showSchemaSelect.value) {
@@ -3054,24 +3310,55 @@ const readDbListCache = (cid) => {
   try {
     const it = JSON.parse(sessionStorage.getItem('xplore.dblist.' + cid) || 'null')
     if (!it || !Array.isArray(it.list)) return null
-    return { list: it.list, fresh: Date.now() - (it.ts || 0) < DB_LIST_TTL }
+    return {
+      list: it.list,
+      cats: Array.isArray(it.cats) ? it.cats : [],
+      fresh: Date.now() - (it.ts || 0) < DB_LIST_TTL,
+    }
   } catch { return null }
 }
-const writeDbListCache = (cid, list) => {
-  try { sessionStorage.setItem('xplore.dblist.' + cid, JSON.stringify({ ts: Date.now(), list })) } catch { /* 忽略配额/隐私模式 */ }
+const writeDbListCache = (cid, list, cats) => {
+  try { sessionStorage.setItem('xplore.dblist.' + cid, JSON.stringify({ ts: Date.now(), list, cats: cats || [] })) } catch { /* 忽略配额/隐私模式 */ }
+}
+
+/** 库清单：catalog 方言（Doris）按「catalog.库」全限定列出，与左侧树完全一致 ——
+ *  只列默认 catalog 的裸名，右键生成的 internal.ods 在下拉里既显示不出也选不中
+ *  （真机踩过：下拉全是 __internal_schema / ods 这种裸名）。其余类型原样返回裸名。 */
+const loadDbList = async (cid) => {
+  dbCatalogs.value = []
+  try {
+    const cats = await listCatalogs(cid)
+    const names = Array.isArray(cats) ? cats : []
+    // **用户建了自定义 catalog 才**出「catalog + 库」双下拉（全限定名，与树一致）。
+    // 只有默认 internal 时不折腾 —— 单下拉裸库名，与"没建过 catalog"完全一样
+    // （为一张 internal 名单多一个下拉，纯噪音）。两种形态并存于同一套页签逻辑。
+    if (names.length > 1) {
+      const all = []
+      for (const c of names) {
+        const dbs = await listDatabases(cid, c).catch(() => [])
+        for (const d of (Array.isArray(dbs) ? dbs : [])) all.push(c + '.' + d)
+      }
+      if (all.length) { dbCatalogs.value = names; return all }
+    }
+  } catch { /* catalog 接口失败则回退默认清单 */ }
+  return await listDatabases(cid)
 }
 
 const loadDatabases = async () => {
   const cid = selectedConnId.value || props.conn?.id
   if (!cid) { databases.value = []; selectedDatabase.value = ''; return }
   const cached = readDbListCache(cid)
-  if (cached) databases.value = cached.list     // 有缓存先渲染
+  if (cached) {
+    databases.value = cached.list               // 有缓存先渲染
+    dbCatalogs.value = cached.cats              // catalog 拆分状态也要立刻就位
+    syncCatalogUi()
+  }
   loadingDbs.value = !cached                    // 只有真要等网络时才转圈
   try {
     if (!cached || !cached.fresh) {
-      const list = isNoSql.value ? await noSqlDatabases(cid) : await listDatabases(cid)
+      const list = isNoSql.value ? await noSqlDatabases(cid) : await loadDbList(cid)
       databases.value = list || []
-      writeDbListCache(cid, databases.value)
+      writeDbListCache(cid, databases.value, dbCatalogs.value)
     }
   } catch (e) {
     if (!cached) {
@@ -3086,10 +3373,16 @@ const loadDatabases = async () => {
     loadingDbs.value = false
   }
   if (!databases.value.length) return
+  syncCatalogUi()
   if (!selectedDatabase.value || !databases.value.includes(selectedDatabase.value)) {
-    selectedDatabase.value = props.database && databases.value.includes(props.database)
-      ? props.database
-      : (databases.value[0] || '')
+    // 页签带来的库可能**不在默认库名清单里**：Doris 是 catalog 方言，表节点带的库是
+    // 全限定名 `internal.ods`，而清单来自默认 catalog 的 SHOW DATABASES（ods 这些裸名）。
+    // 这种情况要**保留并补进清单** —— 后端按全限定名解析完全有效；兜底改选第一项
+    // 会静默切到错误的库（真机踩过：选中了按字母序第一的 __internal_schema）。
+    // 只有页签根本没带库时才选第一项。
+    const want = selectedDatabase.value || props.database || ''
+    if (want && !databases.value.includes(want)) databases.value.push(want)
+    selectedDatabase.value = want || (databases.value[0] || '')
   }
   // schema 与表名互不依赖：并行加载。原来在这里串行 await loadSchemas()，
   // 导致“数据库下拉”要等 schema（新库首次连接 ~1s）才结束转圈。
@@ -3307,7 +3600,7 @@ onMounted(() => {
   document.addEventListener('mousedown', onDocResCtxClose)
   // 编辑器配色跟随应用主题
   offEditorTheme = onResolvedThemeChange((r) => {
-    editorTheme.value = r === 'dark' ? 'vs-dark' : 'vs-light'
+    editorTheme.value = monacoTheme()
   })
 })
 
@@ -3343,6 +3636,8 @@ onBeforeUnmount(() => {
   if (queryTimer) { clearInterval(queryTimer); queryTimer = null }
   if (running.value) stopSql() // 卸载时中止进行中的查询并清理计时器
   if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null }
+  // sql-change 的防抖定时器也得摘：否则页签关掉后 600ms 内还会向父级 emit
+  if (sqlChangeTimer) { clearTimeout(sqlChangeTimer); sqlChangeTimer = null }
   window.removeEventListener('dc-insert-sql', onInsert)
   window.removeEventListener('dc-run-sql', onRunSql)
   window.removeEventListener('keydown', onResultKeyDown)
@@ -3390,6 +3685,7 @@ onBeforeUnmount(() => {
 /* 选择器组 */
 .selector-group { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .conn-select { width: 180px; }
+.db-catalog-select { width: 130px; }
 .db-select { width: 160px; }
 .schema-select { width: 140px; }
 
@@ -3484,7 +3780,10 @@ onBeforeUnmount(() => {
 .result-chart-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .data-table .fill-col { padding: 0; border: none; background: transparent !important; min-width: 1px; }
 .data-table-wrap.col-resizing, .data-table-wrap.col-resizing * { cursor: col-resize !important; user-select: none; }
-.result-footer { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; }
+/* 底栏布局与数据表一致：耗时 + 选中统计**同在左侧**，分页器 margin-left:auto 靠右
+   （以前 space-between 把统计挤到正中间，两边看起来不是一个产品） */
+.result-footer { display: flex; align-items: center; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; }
+.result-footer > .el-pagination { margin-left: auto; }
 .result-time { font-size: 13px; color: var(--dc-text-dim); font-weight: 500; }
 /* 选中区汇总：夹在耗时与分页之间，弱化显示、数字加粗，避免抢分页的注意力 */
 .result-summary { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dc-text-dim); flex-wrap: wrap; }
@@ -3495,7 +3794,8 @@ onBeforeUnmount(() => {
    —— 字段多时自然超出容器，由 .data-table-wrap 横向滚动
    注意：这里不能写 width: max-content —— 固定布局下浏览器按「内容」计算 max-content，
    多出的空间会摊回各列，列宽就永远拖不窄（详见 resultTableWidth 的注释） */
-.data-table { position: relative; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+/* 字号来自设置（编辑器页签的「结果表格字号」），变量挂在 .data-table-wrap 上 */
+.data-table { position: relative; table-layout: fixed; border-collapse: collapse; font-size: var(--grid-fs, 13px); }
 /* 吸顶表头：`top: -1px` 盖住滚动时表头上方那道 1px 的缝 ——
    border-collapse: collapse 下上边框属于 table，不跟着吸顶走，那 1px 会露出下层底色。 */
 .data-table thead { position: sticky; top: -1px; z-index: 2; }

@@ -32,14 +32,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
+
 import { t } from '../../utils/i18n'
 import { ElMessage } from 'element-plus'
 import { Brush } from '@element-plus/icons-vue'
 import VueMonacoEditor from '@guolao/vue-monaco-editor'
 import { ensureMonaco } from '../../utils/monaco'
-import { getEditorSettings } from '../../utils/settings'
-import { getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
+import { editorSettingsLive, getEditorSettings } from '../../utils/settings'
+import { getResolvedTheme, monacoTheme, onResolvedThemeChange } from '../../utils/theme'
 import { formatSql, connDialectOf } from '../../utils/sqlFormat'
 
 const props = defineProps({
@@ -69,8 +70,10 @@ const editorInstance = ref(null)
 const formatting = ref(false)
 const providerDisposables = []
 
-const editorSettings = getEditorSettings()
-const editorTheme = ref(getResolvedTheme() === 'dark' ? 'vs-dark' : 'vs-light')
+// 编辑器外观用**共享响应式快照**（见 utils/settings.js）：设置页改字号/换行等即刻生效，
+// wrapper 会 watch options 并调 updateOptions —— 以前是 setup 快照，改完要重开表单
+const editorSettings = editorSettingsLive
+const editorTheme = ref(monacoTheme())
 let offEditorTheme = null
 
 // 常用 SQL 关键字（补全列表保持精简，避免大列表拖慢 Monaco）
@@ -82,21 +85,27 @@ const SQL_KEYWORDS = [
   'ELSE', 'END', 'COUNT', 'SUM', 'AVG', 'MIN', 'MAX', 'ASC', 'DESC'
 ]
 
-const editorOptions = {
+const editorOptions = computed(() => ({
   automaticLayout: true,
-  fontSize: editorSettings.fontSize,
+  // 括号自动补齐：与 SQL 控制台一致（SQL 语言定义没有 autoClosingPairs，需强制 always）
+  autoClosingBrackets: editorSettings.value.autoCloseBrackets ? 'always' : 'never',
+  fontSize: editorSettings.value.fontSize,
   mouseWheelZoom: true,
-  minimap: { enabled: editorSettings.minimap },
+  // 小地图已下线（用户反馈没啥用）：Monaco 的 minimap 默认就是开启的，必须显式关
+  minimap: { enabled: false },
   scrollBeyondLastLine: false,
-  wordWrap: editorSettings.wordWrap ? 'on' : 'off',
-  tabSize: editorSettings.tabSize,
-  lineNumbers: editorSettings.lineNumbers ? 'on' : 'off',
+  wordWrap: editorSettings.value.wordWrap ? 'on' : 'off',
+  tabSize: editorSettings.value.tabSize,
+  lineNumbers: editorSettings.value.lineNumbers ? 'on' : 'off',
   lineNumbersMinChars: 2,
   lineDecorationsWidth: 0,
   // 当前编辑行不做任何高亮：失焦时 'line'/'all' 会把当前行画成一个边框（用户不要这个框）
   renderLineHighlight: 'none',
-  suggest: { preview: true, showKeywords: true, showSnippets: true },
-  quickSuggestions: { other: true, comments: false, strings: false },
+  // 智能补全（设置可关）：关掉时连建议 widget 一起收
+  suggest: editorSettings.value.quickSuggest
+    ? { preview: true, showSnippets: false, snippetsPreventQuickSuggestions: false }
+    : { showSuggestions: false },
+  quickSuggestions: editorSettings.value.quickSuggest ? { other: true, comments: false, strings: false } : false,
   acceptSuggestionOnEnter: 'on',
   snippetSuggestions: 'bottom',
   fixedOverflowWidgets: true,
@@ -125,7 +134,7 @@ const editorOptions = {
     horizontalScrollbarSize: 8,
     arrowSize: 0
   }
-}
+}))
 
 const onEditorMount = (editor, monaco) => {
   editorInstance.value = editor
@@ -202,7 +211,7 @@ const doFormat = () => {
 
 onMounted(() => {
   offEditorTheme = onResolvedThemeChange((r) => {
-    editorTheme.value = r === 'dark' ? 'vs-dark' : 'vs-light'
+    editorTheme.value = monacoTheme()
   })
 })
 

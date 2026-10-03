@@ -44,9 +44,19 @@ use crate::AppState;
 /// 不留个上限内存会被撑爆。现在改成**按页流式**（读一页写一页），
 /// 内存占用只与这一页有关、与表大小无关，上限就没有存在理由了：
 /// 大表同步到 20 万行处被静默截断，比慢一点糟糕得多。
-const PAGE: u64 = 5_000;
-/// 一条语句最多拼多少个值元组（再大就可能顶到驱动的语句长度或包体上限）。
-const MAX_TUPLES_PER_STATEMENT: u64 = 500;
+/// 1 万的来历是最初「整表进内存」时代的保守值。现在按页流式后，
+/// 页大小只影响内存峰值与往返次数：主键 keyset 分页每页只扫本页，
+/// 调大不会引入深分页退化。5 万 ≈ 每页往返次数降到原来的 1/5，
+/// 千万级大表的同步吞吐明显提升；内存峰值（单页行数据）在典型行宽下几十 MB，可控。
+/// 写侧另有 MAX_TUPLES_PER_STATEMENT = 2000 独立控制单语句大小，两者互不影响。
+const PAGE: u64 = 50_000;
+/// 一条语句最多拼多少个值元组。
+///
+/// 500 → 2000 → 5000 的演进依据：每条语句有 ~174ms 的固定链路开销
+///（权限/审计/agent RPC，见 run_sql），批越小这条税交得越勤。
+/// 5000 行 ≈ 500KB 一条，仍在 MySQL `max_allowed_packet` 默认值内
+///（旧版 4MB、新版 64MB）；再往上单语句解析/回滚成本开始吃掉收益，先停在这。
+const MAX_TUPLES_PER_STATEMENT: u64 = 5000;
 /// 进度状态最短刷新间隔：写一页更新一次就够，**不必每行**都更新
 /// （20 万行就是 20 万次加锁 + 20 万次前端快照变化，纯属白烧 CPU）。
 const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(300);
@@ -85,8 +95,23 @@ pub struct SyncRequest {
     data_mode: Option<String>,
     #[serde(default)]
     object_policy: Option<String>,
+    /// 遇错停止：默认 false = 跳过出错对象继续（每对象独立记账）；true = 第一个错就停
     #[serde(default)]
-    batch_size: Option<u64>,
+    stop_on_error: Option<bool>,
+    /// 建表时把源表的索引一起建到目标（默认开）
+    #[serde(default)]
+    include_indexes: Option<bool>,
+    /// 目标库不存在时自动创建（默认开）
+    #[serde(default)]
+    auto_create_db: Option<bool>,
+    /// 行数上限：>0 时每张表只搬前 N 行（抽样/试跑用）；0 或缺省 = 不限
+    #[serde(default)]
+    row_limit: Option<u64>,
+    /// 行过滤条件：直接拼进源侧 SELECT 的 WHERE（用户自己保证语义，`;` 会被剥掉防多语句）
+    #[serde(default)]
+    where_clause: Option<String>,
+    // batch_size 已删除：写入批次由后端按目标方言自动决定（见 sync_table 的 per_statement），
+    // 每种库的甜点值差一个数量级，界面让用户猜没有意义。旧客户端传了也被 serde 忽略。
     #[serde(default)]
     tables: Vec<String>,
     #[serde(default)]
@@ -132,7 +157,11 @@ struct Opts {
     data_mode: DataMode,
     sync_structure: bool,
     sync_data: bool,
-    batch: u64,
+    stop_on_error: bool,
+    include_indexes: bool,
+    auto_create_db: bool,
+    row_limit: u64,
+    where_clause: String,
 }
 
 impl SyncRequest {
@@ -164,7 +193,20 @@ impl SyncRequest {
             data_mode,
             sync_structure: flag(&self.sync_structure, true),
             sync_data: flag(&self.sync_data, true),
-            batch: self.batch_size.unwrap_or(500).clamp(1, 5000),
+            stop_on_error: self.stop_on_error.unwrap_or(false),
+            include_indexes: self.include_indexes.unwrap_or(true),
+            auto_create_db: self.auto_create_db.unwrap_or(true),
+            row_limit: self.row_limit.unwrap_or(0),
+            // WHERE 由用户手写：剥掉分号防多语句（注解 -- 与 /* */ 由执行器按方言处理，
+            // 这里只做最小防护）；空白条件视为未设置
+            where_clause: self
+                .where_clause
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .trim_end_matches(';')
+                .trim()
+                .to_string(),
         }
     }
 }
@@ -175,6 +217,41 @@ struct Side {
     conn: String,
     scope: String,
     schema: Option<String>,
+    /// catalog 方言（Doris）：表名必须带 `catalog.库` 全限定（连接级库不可用）
+    catalog: bool,
+}
+
+impl Side {
+    /// 表名带上这一侧的**库上下文**：优先显式 schema（SQL Server 的 dbo 等），
+    /// 否则用 scope（Doris 的 `internal.xms` 这类全限定库）。
+    ///
+    /// 为什么必须：Doris 的连接级库名不可用（URL 带 `internal.xms`、带裸 `xms` 都握手失败，
+    /// 见 scope::resolve 的 catalog 分支），语句里的表名必须自己全限定
+    /// （`internal.xms.sales`，Doris 认三段式）。MySQL/SQL Server 等类型的
+    /// `db.table` / `db.schema.table` 全限定天然合法，行为不变。
+    fn scoped(&self, table: &str) -> String {
+        // 前缀规则（真机踩坑总结）：
+        // - Doris（catalog 方言）：必须带 `catalog.库` 全限定 —— 它的连接级库不可用；
+        // - **schema 方言（SQL Server/PG）绝不带库名**：影子连接已切到目标库，
+        //   `库.表` 两段名在 SQL Server 里被解析成 `schema.表` 而报「对象不存在」；
+        //   用户显式选了模式（dbo 等）才带模式前缀；
+        // - 其余（MySQL 系）：影子已切库，裸名即可。
+        let prefix = if self.catalog {
+            self.scope.trim().to_string()
+        } else {
+            self.schema
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_default()
+        };
+        if prefix.is_empty() || table.contains('.') {
+            table.to_string()
+        } else {
+            format!("{prefix}.{table}")
+        }
+    }
 }
 
 fn scope_of(database: &Option<String>, schema: &Option<String>) -> String {
@@ -210,7 +287,7 @@ async fn columns_of(
     let target = crate::api::scope::resolve(state, &side.conn, &side.scope).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
     let names = {
-        let qualified = qualified(table, &side.schema);
+        let qualified = side.scoped(table);
         if qualified == table {
             vec![table.to_string()]
         } else {
@@ -218,7 +295,7 @@ async fn columns_of(
         }
     };
     for name in names {
-        let engine = state.engine.clone();
+        let engine = state.engine();
         let target = target.clone();
         let found = blocking(move || engine.list_columns_fresh(&target, &name)).await;
         if let Ok(mut columns) = found {
@@ -245,10 +322,92 @@ async fn columns_of(
 
 async fn run_sql(state: &AppState, side: &Side, sql: &str) -> XResult<()> {
     let target = crate::api::scope::resolve(state, &side.conn, &side.scope).await?;
-    let engine = state.engine.clone();
+    run_target(state, &target, sql).await.map(|_| ())
+}
+
+/// 「目标库不存在时自动创建」（默认开）：查目标连接的库清单，缺则按方言 CREATE。
+/// 返回一句话结果（给任务日志用）；失败**不阻断** —— 后面建表时数据库真缺会明确报错，
+/// 比这里瞎猜原因强。库名从 tgt.scope 拆：schema 方言（`库.模式`）取库段；
+/// Doris 的全限定（internal.ods）在 scope::resolve 已限定 internal，取末段。
+async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<String> {
+    if !opts.auto_create_db {
+        return None;
+    }
+    let target_kind = require_record(state, &tgt.conn)
+        .await
+        .ok()
+        .map(|r| Dialect::new(r.kind()))?;
+    // 库名从 tgt.scope 拆，方向按方言：
+    // - Doris（catalog 方言）的全限定是 `catalog.库` ⇒ 取**末段**（internal.cm_tgt → cm_tgt；
+    //   取首段会拿到 `internal` —— 它永远「存在」，自动建库就永远不触发，真机踩过）；
+    // - schema 方言（SQL Server 的 `库.模式`）⇒ 取**首段**。
+    let db_name = if target_kind.catalog_level() {
+        tgt.scope.rsplit('.').next().unwrap_or("").trim().to_string()
+    } else {
+        tgt.scope.split('.').next().unwrap_or("").trim().to_string()
+    };
+    if db_name.is_empty() {
+        return None;
+    }
+    let exists = match target_kind.databases() {
+        crate::api::dialect::Meta::Sql(sql) => {
+            run_sql_in(state, &tgt.conn, "", sql, 5000)
+                .await
+                .map(|r| {
+                    crate::api::meta::rows_of(&r)
+                        .iter()
+                        .any(|row| {
+                            row.values()
+                                .filter_map(Value::as_str)
+                                .any(|v| v.eq_ignore_ascii_case(&db_name))
+                        })
+                })
+                .unwrap_or(true) // 查不到清单就当存在，别误建
+        }
+        _ => true,
+    };
+    if exists {
+        return None;
+    }
+    let create_db = match target_kind.kind.key() {
+        // MySQL 系建库**必须显式 utf8mb4**：服务器默认库字符集常是 latin1，之后中文
+        // INSERT 直接报 Incorrect string value 1366（真机踩过）—— 库里先别埋雷。
+        // Doris 的字符集由表级控制，无此问题。
+        "mysql" | "mariadb" => {
+            format!(
+                "create database if not exists {} default charset utf8mb4",
+                target_kind.quote(&db_name)
+            )
+        }
+        "doris" => {
+            format!("create database if not exists {}", target_kind.quote(&db_name))
+        }
+        "sqlserver" => {
+            // db_id 的参数是**字符串字面量**（N'..'）—— 用方括号会被当成列引用
+            //（真机：「列名 'sync_audit' 无效」），只有 CREATE DATABASE 用方括号
+            format!("if db_id(N'{}') is null create database [{}]", db_name, db_name)
+        }
+        _ => format!("create database {}", target_kind.quote(&db_name)),
+    };
+    // ⚠ 两个坑都在这条建库语句上：
+    // 1. 必须走**主连接**（scope 空）—— 影子连接的 URL 就指向这个还不存在的库，
+    //    走它发 CREATE DATABASE 是「用连不上的连接去修连不上的原因」（真机踩过）；
+    // 2. 必须走**可写执行**（run_target，read_only: None）—— 元数据链路的 run_sql_in
+    //    是强制只读会话，ClickHouse 会直接拒绝建库（READONLY，真机踩过；Doris 宽容才没暴露）。
+    match run_target(state, &tgt.conn, &create_db).await {
+        Ok(_) => Some(format!("目标库 {db_name} 不存在，已自动创建")),
+        Err(err) => Some(format!("目标库 {db_name} 自动创建失败：{}", err.message)),
+    }
+}
+
+/// 直接对**已解析**的目标执行。`sync_table` 在开头解析一次，循环里的每条语句
+/// 复用结果 —— 原来每条 `run_sql` 都重新 `require_record`，单表几百条语句
+/// 就是几百次白查（每条语句固定链路开销里它占一份）。
+async fn run_target(state: &AppState, target: &str, sql: &str) -> XResult<dbmind_core::QueryResult> {
+    let engine = state.engine();
     let request = dbmind_core::QueryRequest {
         read_only: None,
-        connection: target,
+        connection: target.to_string(),
         sql: sql.to_string(),
         options: dbmind_core::QueryOptions {
             max_rows: 1,
@@ -256,15 +415,22 @@ async fn run_sql(state: &AppState, side: &Side, sql: &str) -> XResult<()> {
         },
         execution_id: None,
         session: Some("internal:browse".to_string()),
+        // 数据同步是界面功能驱动的批量读写：不进查询历史（一次同步会下发几百条语句）
+        internal: true,
     };
-    blocking(move || engine.execute(request, dbmind_core::AccessContext::Web)).await?;
-    Ok(())
+    let result = blocking(move || engine.execute(request, dbmind_core::AccessContext::Web)).await?;
+    Ok(result)
 }
 
 /// 拉**一页**数据（`offset` 起，最多 `PAGE` 行）。
 ///
 /// 调用方自己循环翻页 —— 同步是"读一页写一页"（见 `sync_table`），
 /// upsert 前读目标主键也是逐页累积（见那里的循环）。这样内存占用只与一页有关。
+/// `cursor`：主键游标分页（keyset）。`Some((键列名, 上一页最后一行的键值))` 时生成
+/// `where (k1 > v1) or (k1 = v1 and k2 > v2) … order by 键 limit n` —— **每页只扫本页**，
+/// 千万级深分页不再 O(N²) 退化（OFFSET 越深扫得越多，是同步 1100 万行只有 1500 行/秒的主因）。
+/// 行值构造符 `(a,b) > (x,y)` 只有 MySQL/PG 认，SQL Server/Doris 不支持 ⇒ 展开成等价的逐列链。
+/// `None`（无主键的表）退回原 OFFSET 分页 —— 正确性不变，只是慢。
 async fn fetch_page(
     state: &AppState,
     conn: &str,
@@ -272,12 +438,55 @@ async fn fetch_page(
     select_base: &str,
     dialect: Dialect,
     offset: u64,
+    cursor: Option<(&[String], &[CellValue])>,
+    extra_where: &str,
 ) -> XResult<Vec<Vec<CellValue>>> {
-    let page = dialect.limit_clause(offset, PAGE);
-    let sql = if dialect.needs_order_by_for_paging() {
-        format!("{select_base} order by (select null) {page}")
-    } else {
-        format!("select * from ({select_base}) dbmind_page {page}")
+    // 用户的行过滤条件：拼进 SELECT 的 WHERE。与 keyset 游标共存时用 and 组合
+    //（keyset 分支自己要写 where，两者条件相与语义才对）。
+    let filtered = |base: &str, cond: &str| {
+        if extra_where.is_empty() {
+            base.to_string()
+        } else {
+            format!("{base} where ({extra_where}){}", if cond.is_empty() { String::new() } else { format!(" and ({cond})") })
+        }
+    };
+    let sql = match cursor {
+        Some((keys, last)) if !keys.is_empty() && last.len() == keys.len() => {
+            let order = keys
+                .iter()
+                .map(|key| dialect.quote(key))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut conditions: Vec<String> = Vec::new();
+            for depth in 0..keys.len() {
+                let mut parts: Vec<String> = Vec::new();
+                for (position, key) in keys.iter().enumerate() {
+                    let quoted = dialect.quote(key);
+                    let value = literal_for(&last[position], dialect, None);
+                    if position < depth {
+                        parts.push(format!("{quoted} = {value}"));
+                    } else {
+                        parts.push(format!("{quoted} > {value}"));
+                        break;
+                    }
+                }
+                conditions.push(format!("({})", parts.join(" and ")));
+            }
+            let keyset = conditions.join(" or ");
+            format!(
+                "{} order by {order} {}",
+                filtered(select_base, &keyset),
+                dialect.limit_clause(0, PAGE)
+            )
+        }
+        _ => {
+            let page = dialect.limit_clause(offset, PAGE);
+            if dialect.needs_order_by_for_paging() {
+                format!("{} order by (select null) {page}", filtered(select_base, ""))
+            } else {
+                format!("select * from ({}) dbmind_page {page}", filtered(select_base, ""))
+            }
+        }
     };
     let result = run_sql_in(state, conn, scope, sql, PAGE as usize).await?;
     Ok(result.rows)
@@ -290,10 +499,251 @@ fn select_base(side: &Side, table: &str, columns: &[String], dialect: Dialect) -
         .map(|name| dialect.quote(name))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("select {list} from {}", qualified(table, &side.schema))
+    format!("select {list} from {}", side.scoped(table))
+}
+
+/// 建表后把**源表的非主键索引**搬到目标（「建表包含索引」选项）。
+///
+/// 索引清单走方言的 `indexes()` 元数据查询（与树上「索引」节点同一份 SQL）。
+/// 宽容策略：查不到清单 / 解析不了列 / 目标方言拒绝某条 CREATE —— 都**静默跳过**
+/// 并计数，不让索引同步反过来挡住数据同步（数据才是主体）。
+async fn sync_indexes(
+    state: &AppState,
+    src: &Side,
+    source_kind: Dialect,
+    tgt_target: &str,
+    target_kind: Dialect,
+    target_name: &str,
+    table: &str,
+    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
+) -> usize {
+    // 源索引清单，统一成 (名称, 唯一, 列清单)。两条路：
+    // - MySQL 系（含 Doris）：`SHOW INDEX FROM 表` —— **必须走这条**，Doris 的
+    //   information_schema.statistics 不反映 CREATE INDEX 建的二级索引（真机实测返回空），
+    //   SHOW INDEX 才看得到；同名索引多行（一列一行），按 Seq_in_index 聚合成列序；
+    // - 其它方言：走 dialect.indexes() 的整库元数据查询（原逻辑）。
+    let mut indexes: Vec<(String, bool, Vec<String>)> = Vec::new();
+    let mysql_family = matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris");
+    if mysql_family {
+        let show_sql = format!("show index from {}", src.scoped(table));
+        if let Ok(result) = run_sql_in(state, &src.conn, &src.scope, show_sql, 5000).await {
+            // 大小写不敏感取列（有的驱动把列名折成大写）
+            let cell = |row: &serde_json::Map<String, Value>, key: &str| -> Option<String> {
+                row.get(key)
+                    .or_else(|| {
+                        row.iter()
+                            .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                            .map(|(_, v)| v)
+                    })
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            };
+            // 聚合：Key_name → (non_unique, [(seq, column)])
+            let mut agg: Vec<(String, i64, Vec<(i64, String)>)> = Vec::new();
+            for row in crate::api::meta::rows_of(&result) {
+                let name = match cell(&row, "Key_name") {
+                    Some(n) if !n.is_empty() => n,
+                    _ => continue,
+                };
+                let col = match cell(&row, "Column_name") {
+                    Some(c) if !c.is_empty() => c,
+                    _ => continue,
+                };
+                let seq = cell(&row, "Seq_in_index")
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(1);
+                let non_unique = cell(&row, "Non_unique")
+                    .and_then(|s| s.parse::<i64>().ok())
+                    .unwrap_or(1);
+                match agg.iter_mut().find(|(n, _, _)| *n == name) {
+                    Some((_, _, cols)) => cols.push((seq, col)),
+                    None => agg.push((name, non_unique, vec![(seq, col)])),
+                }
+            }
+            for (name, non_unique, mut cols) in agg {
+                cols.sort_by_key(|(seq, _)| *seq);
+                indexes.push((name, non_unique == 0, cols.into_iter().map(|(_, c)| c).collect()));
+            }
+        }
+    } else if let crate::api::dialect::Meta::Sql(sql) = source_kind.indexes() {
+        if let Ok(result) = run_sql_in(state, &src.conn, &src.scope, sql, 5000).await {
+            for row in crate::api::meta::rows_of(&result) {
+                // 只看这张表的索引（表名大小写不敏感 —— 有的驱动会折大写）
+                let row_table = row.get("table").and_then(Value::as_str).unwrap_or("");
+                if !row_table.eq_ignore_ascii_case(table) {
+                    continue;
+                }
+                let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+                let unique = row.get("non_unique").and_then(Value::as_i64) == Some(0)
+                    || row.get("unique").and_then(Value::as_bool) == Some(true)
+                    || row.get("isUnique").and_then(Value::as_i64) == Some(1);
+                // 列清单：PG 系从 indexdef 里抠括号；解析不出就跳过，不编造
+                let columns: Vec<String> = match row.get("columns").and_then(Value::as_str) {
+                    Some(s) if !s.trim().is_empty() => s
+                        .split(',')
+                        .map(|c| c.trim().to_string())
+                        .filter(|c| !c.is_empty())
+                        .collect(),
+                    _ => {
+                        let def = row.get("sql").and_then(Value::as_str).unwrap_or("");
+                        let def = if def.is_empty() {
+                            row.get("indexdef").and_then(Value::as_str).unwrap_or("")
+                        } else {
+                            def
+                        };
+                        match def.split_once('(') {
+                            Some((_, rest)) => rest
+                                .split(')')
+                                .next()
+                                .unwrap_or("")
+                                .split(',')
+                                .map(|c| c.trim().trim_matches(['"', '`', '[', ']']).to_string())
+                                .filter(|c| !c.is_empty())
+                                .collect(),
+                            None => continue,
+                        }
+                    }
+                };
+                if columns.is_empty() {
+                    continue;
+                }
+                indexes.push((name.to_string(), unique, columns));
+            }
+        }
+    }
+    let mut created = 0usize;
+    for (name, unique, columns) in indexes {
+        // 主键在建表语句里通常已经带上了（PRIMARY / PRIMARY_KEY）
+        if name.to_ascii_uppercase().starts_with("PRIMARY") {
+            continue;
+        }
+        if columns.is_empty() {
+            continue;
+        }
+        let col_list = columns
+            .iter()
+            .map(|c| target_kind.quote(c))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let unique_kw = if unique { "unique " } else { "" };
+        // 索引名带表名前缀防跨表重名；失败（已存在 / 方言不支持该类型）静默跳过
+        let idx_sql = format!(
+            "create {unique_kw}index {} on {target_name} ({col_list})",
+            target_kind.quote(&format!("{table}_{name}"))
+        );
+        if run_target(state, tgt_target, &idx_sql).await.is_ok() {
+            created += 1;
+        }
+    }
+    if created > 0 {
+        if let Some(task) = task {
+            task.log(format!("表 {table}：已创建 {created} 个索引"));
+        }
+    }
+    created
 }
 
 // ------------------------------------------------------------------ 单表同步
+
+/// 目标表**已存在**时，把源侧的表注释 / 列注释**差异补齐**（源有、目标没有或不一致才动）。
+///
+/// 「源表有注释的，目标就也要有」—— 之前注释只在建表那一刻写进去，目标表若已存在
+///（Merge 策略），源后来补的注释永远过不去。逐条 ALTER 的方言差异：
+/// - 表注释：Doris/CH `MODIFY COMMENT`；MySQL `COMMENT=`；PG/Oracle/DM `COMMENT ON TABLE`；
+/// - 列注释：Doris/MySQL `MODIFY COLUMN <原定义> COMMENT`（这两个改注释必须整列重写，
+///   类型用**目标现有**的完整类型文本，避免把精度/长度改丢）；PG/Oracle/DM/CH `COMMENT ON COLUMN`；
+/// - SQL Server 的注释挂在扩展属性上（新增/更新是两条系统过程），先不做，缺了不挡数据。
+async fn update_comments(
+    state: &AppState,
+    src: &Side,
+    source_kind: Dialect,
+    tgt: &Side,
+    target_kind: Dialect,
+    tgt_target: &str,
+    target_name: &str,
+    table: &str,
+    source_columns: &[dbmind_core::ColumnDetail],
+    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
+) {
+    let key = target_kind.kind.key();
+    // ---- 表注释 ----
+    let src_table = crate::api::meta::table_comment_of(state, &src.conn, &src.scope, table)
+        .await
+        .unwrap_or_default();
+    if !src_table.trim().is_empty() {
+        let tgt_table = crate::api::meta::table_comment_of(state, &tgt.conn, &tgt.scope, table)
+            .await
+            .unwrap_or_default();
+        if tgt_table.trim() != src_table.trim() {
+            let lit = target_kind.literal(&src_table);
+            let sql = match key {
+                "doris" => format!("alter table {target_name} modify comment {lit}"),
+                "clickhouse" => format!("alter table {target_name} modify comment {lit}"),
+                "mysql" | "mariadb" => format!("alter table {target_name} comment={lit}"),
+                "postgresql" | "kingbase" | "oracle" | "dm" => {
+                    format!("comment on table {target_name} is {lit}")
+                }
+                _ => String::new(),
+            };
+            if !sql.is_empty() && run_target(state, tgt_target, &sql).await.is_ok() {
+                if let Some(task) = task {
+                    task.log(format!("表 {table}：表注释已同步"));
+                }
+            }
+        }
+    }
+    // ---- 列注释 ----
+    let src_cols = crate::api::meta::table_comments_map(state, &src.conn, &src.scope, table).await;
+    if src_cols.is_empty() {
+        return;
+    }
+    let tgt_cols = crate::api::meta::table_comments_map(state, &tgt.conn, &tgt.scope, table).await;
+    let mut updated = 0usize;
+    for (column, comment) in &src_cols {
+        if comment.trim().is_empty() {
+            continue;
+        }
+        let same = tgt_cols
+            .get(column)
+            .map(|existing| existing.trim() == comment.trim())
+            .unwrap_or(false);
+        if same {
+            continue;
+        }
+        let qcol = target_kind.quote(column);
+        let lit = target_kind.literal(comment);
+        // Doris / MySQL 的 MODIFY 需要整列定义：用**源列**的类型翻译到目标方言
+        //（目标表多半由同步所建，类型即源的类型映射）；找不到源列就跳过该列
+        let full_def = source_columns
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(column))
+            .map(|c| {
+                let raw = c.type_name.clone().unwrap_or_else(|| "text".to_string());
+                let mapped = target_kind.map_type(Some(source_kind.kind), &raw);
+                let null = if c.nullable { " NULL" } else { " NOT NULL" };
+                format!("{} {mapped}{null}", target_kind.quote(&c.name))
+            });
+        let sql = match key {
+            "clickhouse" => format!("alter table {target_name} modify column {qcol} comment {lit}"),
+            "postgresql" | "kingbase" | "oracle" | "dm" => {
+                format!("comment on column {target_name}.{qcol} is {lit}")
+            }
+            "doris" | "mysql" | "mariadb" => match &full_def {
+                Some(def) => format!("alter table {target_name} modify column {def} comment {lit}"),
+                None => continue,
+            },
+            _ => continue, // SQL Server 等：注释走扩展属性，先不做
+        };
+        if run_target(state, tgt_target, &sql).await.is_ok() {
+            updated += 1;
+        }
+    }
+    if updated > 0 {
+        if let Some(task) = task {
+            task.log(format!("表 {table}：已同步 {updated} 个列注释"));
+        }
+    }
+}
 
 struct ObjResult {
     ty: String,
@@ -372,6 +822,44 @@ fn literal_for(cell: &CellValue, dialect: Dialect, target_type: Option<&str>) ->
     sql_literal(cell, dialect)
 }
 
+/// 给 INSERT 语句包上**同批的** `SET IDENTITY_INSERT ON/OFF`。
+///
+/// 为什么拼进同一批而不是单独执行：`IDENTITY_INSERT` 是**会话级**的，连接池里
+/// 每条语句可能落在不同会话 —— 单独执行"开"，写入落到另一个会话照样报
+/// 「当 IDENTITY_INSERT 为 OFF 时不能插入显式值」（真机踩过）。拼在同一批里
+/// 开、写、关必然同一个会话，稳定生效。多语句分号批对 JDBC 是单次提交。
+fn with_identity(sql: String, identity_on: bool, target_name: &str) -> String {
+    if identity_on {
+        format!(
+            "set identity_insert {target_name} on; {sql}; set identity_insert {target_name} off"
+        )
+    } else {
+        sql
+    }
+}
+
+/// 生成一批 INSERT。SQL Server 的多行 VALUES **单条语句限 1000 行**（解析器硬限制），
+/// 但一批里可以放多条 INSERT（连接开了 allowMultiQueries、安全闸门放行 INSERT 批）——
+/// 超过 1000 行时拆成多条拼分号，批大小不受限，固定链路开销也不会因为拆语句而翻倍。
+fn build_insert_batch(
+    table: &str,
+    columns: &[String],
+    types: &[Option<String>],
+    rows: &[Vec<CellValue>],
+    dialect: Dialect,
+    kind_key: &str,
+) -> String {
+    const SQLSERVER_VALUES_LIMIT: usize = 1000;
+    if kind_key == "sqlserver" && rows.len() > SQLSERVER_VALUES_LIMIT {
+        return rows
+            .chunks(SQLSERVER_VALUES_LIMIT)
+            .map(|chunk| build_insert(table, columns, types, chunk, dialect))
+            .collect::<Vec<_>>()
+            .join(";\n");
+    }
+    build_insert(table, columns, types, rows, dialect)
+}
+
 fn build_insert(
     table: &str,
     columns: &[String],
@@ -447,7 +935,13 @@ fn key_of(row: &[CellValue], indexes: &[usize]) -> String {
     crate::api::shape::row_key(row, indexes)
 }
 
-/// 同步一张表。
+/// 同步一张表（外层：MySQL 系目标的事务包裹）。
+///
+/// autocommit 模式下**每条 INSERT 都刷一次盘**（实测 2000 行/条要 1.2 秒，大头是 fsync）——
+/// 把整张表的写入包进一个事务，只在结尾 commit 一次，写入吞吐能翻数倍。
+/// 语义保持：成功/失败/取消都 **commit**（「已写入的部分保留，不回滚」是既有约定，
+/// 失败时保留的正是事务里已执行成功的那些行）。
+/// 仅 MySQL / MariaDB 启用（Doris 的事务没有实际意义；其它方言各有自己的提交语义）。
 #[allow(clippy::too_many_arguments)]
 async fn sync_table(
     state: &AppState,
@@ -458,7 +952,55 @@ async fn sync_table(
     target_table: &str,
     opts: &Opts,
 ) -> ObjResult {
+    let use_txn = match require_record(state, &tgt.conn).await {
+        Ok(record) => {
+            opts.sync_data && matches!(Dialect::new(record.kind()).kind.key(), "mysql" | "mariadb")
+        }
+        Err(err) => return ObjResult::failed("table", table, err.message),
+    };
+    if !use_txn {
+        return sync_table_inner(state, task, src, tgt, table, target_table, opts).await;
+    }
+    let Ok(tgt_target) = crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await else {
+        return ObjResult::failed("table", table, "解析目标连接失败");
+    };
+    if let Some(task) = task {
+        task.log(format!("表 {table}：开启事务（整表一次提交）"));
+    }
+    if let Err(err) = run_target(state, &tgt_target, "set autocommit = 0").await {
+        // 开不了事务就退回 autocommit 逐条写入 —— 慢，但功能不缺
+        if let Some(task) = task {
+            task.log(format!("表 {table}：开启事务失败，退回逐条提交（{}）", err.message));
+        }
+        return sync_table_inner(state, task, src, tgt, table, target_table, opts).await;
+    }
+    let result = sync_table_inner(state, task, src, tgt, table, target_table, opts).await;
+    // 无论成功/失败/取消都 commit：与「已写入的部分保留」的既有语义一致
+    let _ = run_target(state, &tgt_target, "commit").await;
+    let _ = run_target(state, &tgt_target, "set autocommit = 1").await;
+    if let Some(task) = task {
+        task.log(format!("表 {table}：提交事务"));
+    }
+    result
+}
+
+/// 同步一张表（内层：实际传输逻辑）。
+#[allow(clippy::too_many_arguments)]
+async fn sync_table_inner(
+    state: &AppState,
+    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
+    src: &Side,
+    tgt: &Side,
+    table: &str,
+    target_table: &str,
+    opts: &Opts,
+) -> ObjResult {
     let ty = "table";
+    // Navicat 式阶段日志：每张表的「读结构 → 建表 → 拉数据 → 完成」都进任务日志，
+    // 界面上能看出 339 张表各自进行到哪一步（此前只有完成时一条，中途日志是空的）
+    if let Some(task) = task {
+        task.log(format!("表 {table}：读取结构"));
+    }
     let source_columns = match columns_of(state, src, table).await {
         Ok(columns) => columns,
         Err(err) => return ObjResult::failed(ty, table, format!("读取源表结构失败：{}", err.message)),
@@ -489,6 +1031,11 @@ async fn sync_table(
         Some(source_kind.kind)
     };
     let target_name = target_kind.quote(target_table);
+    // 目标连接只解析一次，循环里的每条语句复用（见 run_target 的注释）
+    let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
+        Ok(target) => target,
+        Err(err) => return ObjResult::failed(ty, table, format!("解析目标连接失败：{}", err.message)),
+    };
     let mut created = false;
 
     // 注释（表 + 字段）从**源表**取一次，供下面的「自动建表 / 删除重建」写进建表语句。
@@ -503,6 +1050,9 @@ async fn sync_table(
         if !opts.sync_structure {
             return ObjResult::skipped(ty, table, "目标表不存在，且未勾选「目标表不存在时自动建表」");
         }
+        if let Some(task) = task {
+            task.log(format!("表 {table}：创建表"));
+        }
         // 带上源表的表注释与字段注释（见上面取注释那一段）
         let ddl = target_kind.create_table_with_comments(
             &target_name,
@@ -511,7 +1061,7 @@ async fn sync_table(
             &src_column_comments,
             src_table_comment.as_deref(),
         );
-        if let Err(err) = run_sql(state, tgt, &ddl).await {
+        if let Err(err) = run_target(state, &tgt_target, &ddl).await {
             return ObjResult::failed(ty, table, format!("建表失败：{}", err.message));
         }
         created = true;
@@ -523,8 +1073,14 @@ async fn sync_table(
                 "选择了「删除重建」，但没有勾选自动建表：那样会删掉目标表且建不回来",
             );
         }
-        if let Err(err) = run_sql(state, tgt, &format!("drop table {target_name}")).await {
+        if let Some(task) = task {
+            task.log(format!("表 {table}：删除表"));
+        }
+        if let Err(err) = run_target(state, &tgt_target, &format!("drop table {target_name}")).await {
             return ObjResult::failed(ty, table, format!("删除目标表失败：{}", err.message));
+        }
+        if let Some(task) = task {
+            task.log(format!("表 {table}：创建表"));
         }
         // 带上源表的表注释与字段注释（见上面取注释那一段）
         let ddl = target_kind.create_table_with_comments(
@@ -534,15 +1090,41 @@ async fn sync_table(
             &src_column_comments,
             src_table_comment.as_deref(),
         );
-        if let Err(err) = run_sql(state, tgt, &ddl).await {
+        if let Err(err) = run_target(state, &tgt_target, &ddl).await {
             return ObjResult::failed(ty, table, format!("重建目标表失败：{}", err.message));
         }
         created = true;
+    }
+    // 建表（含删除重建）成功后：把源表的非主键索引搬过来（「建表包含索引」选项）
+    if created && opts.include_indexes {
+        sync_indexes(
+            state,
+            src,
+            source_kind,
+            &tgt_target,
+            target_kind,
+            &target_name,
+            table,
+            task,
+        )
+        .await;
+    }
+    // 目标表**已存在**（走不到建表，注释也就没机会带上）：把源侧的**表注释 + 列注释**
+    // 差异补过去 —— 源有注释而目标没有/不一致的，逐条 ALTER 补齐。
+    if !created && opts.sync_structure {
+        update_comments(
+            state, src, source_kind, tgt, target_kind, &tgt_target, &target_name, table,
+            &source_columns, task,
+        )
+        .await;
     }
 
     if !opts.sync_data {
         let message = if created { "已按源结构建表（未同步数据）" } else { "已跳过（未勾选同步数据）" };
         return ObjResult::ok(ty, table, message, 0, 0);
+    }
+    if let Some(task) = task {
+        task.log(format!("表 {table}：拉取数据"));
     }
 
     let target_columns = if created {
@@ -652,7 +1234,7 @@ async fn sync_table(
             // 清空语句按**目标方言**选：ClickHouse 不吃裸 `delete from`（实测 position 26 语法错），
             // SQLite / Derby 又没有 `truncate` —— 见 `Dialect::clear_table_sql`
             let clear = target_kind.clear_table_sql(&target_name);
-            if let Err(err) = run_sql(state, tgt, &clear).await {
+            if let Err(err) = run_target(state, &tgt_target, &clear).await {
                 return ObjResult::failed(ty, table, format!("清空目标表失败：{}", err.message));
             }
         }
@@ -712,9 +1294,19 @@ async fn sync_table(
             .join(", ");
         let base = format!("select {key_list} from {target_name}");
         let mut key_offset = 0u64;
+        // 目标键读取同样走 keyset（目标键列即主键，唯一有序）——千万级目标表不再深分页
+        let mut last_target_key: Option<Vec<CellValue>> = None;
         loop {
+            let cursor = match last_target_key.as_ref() {
+                Some(values) if !key_columns.is_empty() => {
+                    Some((key_columns.as_slice(), values.as_slice()))
+                }
+                _ => None,
+            };
             let page =
-                match fetch_page(state, &tgt.conn, &tgt.scope, &base, target_kind, key_offset).await {
+                match fetch_page(state, &tgt.conn, &tgt.scope, &base, target_kind, key_offset, cursor, "")
+                    .await
+                {
                     Ok(rows) => rows,
                     Err(err) => {
                         return ObjResult::failed(
@@ -734,26 +1326,75 @@ async fn sync_table(
             if got < PAGE as usize {
                 break;
             }
+            // 目标键查询只选了键列 ⇒ 整行就是键值序列（顺序与 key_columns 一致）
+            if !key_columns.is_empty() {
+                last_target_key = page.last().cloned();
+            }
             key_offset += PAGE;
         }
     }
 
-    // SQL Server 的 identity 列**不接受显式插入**，而同步写过去的正是显式的键值。
-    // 我们自己刚建的表（`identity(1,1)`）尤其需要它 —— 否则第一行就报
-    // "不能为 identity 列插入显式值"。开关是会话级的，写完就关。
-    let identity_on = created
-        && target_kind.kind.key() == "sqlserver"
-        && source_columns.iter().any(|column| column.auto_increment);
-    if identity_on {
-        if let Err(err) = run_sql(state, tgt, &format!("set identity_insert {target_name} on")).await {
-            return ObjResult::failed(ty, table, format!("开启 identity_insert 失败：{}", err.message));
+    // SQL Server 的 identity 列**不接受显式插入**，而同步写过去的正是显式的键值
+    //（删除重建建的表带 identity(1,1)、目标已存在的 identity 表同样）。
+    //
+    // **不做任何预判**（真机教训：用源列的 auto_increment 判断，ClickHouse 源压根没有
+    // 这个概念，判断永远 false，products 直接全灭）—— 只要目标是 SQL Server 就开：
+    // - 目标表有 identity 列 → 开关生效，显式键值能插；
+    // - 没有 → 数据库报「没有标识属性」，**降级为说明继续写**（本来就不需要这个开关）；
+    // - 权限等错误同样降级 —— 数据真写不进去自会报行级错误，不该让保险开关判死刑。
+    // 其它数据库（MySQL 的 AUTO_INCREMENT、PG 的 serial 等）显式插入自增列本来就合法，
+    // 无需此开关，所以不处理 —— 全部数据库都不会因 identity 报错。
+    // identity 开关现在**拼进每条 INSERT 的同一批**（见 with_identity），
+    // 不再单独执行 SET —— 会话级开关与写入不同会话时等于没开（真机踩过）。
+    //
+    // 目标表**是否真有 identity 列**用一条元数据查询确认（sys.identity_columns）：
+    // - 有 → 拼 SET 开/关，显式键值能插；
+    // - 没有 → **纯 INSERT**（本来就不需要开关）—— 没有这次预查的话，SET 本身会失败
+    //   并把整批拖死（SQL Server 批里任一语句失败即中止，真机踩过两张表全灭）；
+    // - 预查失败（权限等）按"没有"处理 —— 走纯 INSERT，有 identity 的表会报行级错误，
+    //   不静默丢数据。
+    let identity_on = target_kind.kind.key() == "sqlserver" && {
+        let probe = format!(
+            "select count(*) as n from sys.identity_columns where object_id = object_id('{}')",
+            target_name.replace('\'', "''")
+        );
+        match run_target(state, &tgt_target, &probe).await {
+            Ok(result) => result
+                .rows
+                .first()
+                .and_then(|row| row.first())
+                .map(|v| matches!(v, dbmind_core::CellValue::Integer(n) if *n > 0))
+                .unwrap_or(false),
+            Err(_) => false,
         }
-    }
+    };
 
+    // 单条 INSERT 的行数按**目标方言**决定（这是传输吞吐的最大杠杆）。
+    // 界面不再让用户填批次 —— 每种库的甜点值差着一个数量级（CH 落 part、Oracle 有
+    // 单语句表达式上限、MySQL 看 max_allowed_packet），让用户猜毫无意义，由这里统一拍板：
+    // - ClickHouse：每次 INSERT 落一个 part，小批次是 CH 写入的头号杀手 —— 固定 5 万行/条；
+    // - MySQL / MariaDB / PG 系：max_allowed_packet 默认 4MB，1 万行（约 1MB）封顶；
+    // - Doris：FE 的 max_allowed_packet 默认**只有 1MB**（真机实测 1.48MB 直接被拒），
+    //   按典型行宽 ~300B 压到 2000 行/条（≈600KB）；
+    // - Oracle / DM / DB2：上限是**单语句表达式总数**（列数 × 行数 ≤ 65535）——
+    //   固定 500 行在宽表（130 列 × 500 = 65000）直接爆，窄表又太保守 ——
+    //   按「500 与 65535/列数 取小」动态定，下限 10 防极端宽表算出 0；
+    // - SQL Server：多行 VALUES 单条语句的**行值表达式上限是 1000**（T-SQL 解析器硬限制，
+    //   超了直接报「行值表达式的数目超过了允许的最大行数 1000」—— 真机踩过）——
+    //   但**一批里可以放多条 INSERT**（连接已开 allowMultiQueries、安全闸门已放行
+    //   INSERT 批，见 build_insert_batch），所以批目标仍取 1 万行，由它拆成 10 条/批；
+    // - 其它：维持通用上限。
     let per_statement = if multi_row(target_kind) {
-        opts.batch.min(MAX_TUPLES_PER_STATEMENT)
+    match target_kind.kind.key() {
+    "clickhouse" => 50_000,
+    "doris" => 2_000,
+    "sqlserver" => 10_000,
+    "mysql" | "mariadb" | "postgresql" | "kingbase" => 10_000,
+    "oracle" | "dm" | "db2" => 500.min((65_535 / (columns.len() as u64).max(1)).max(10)),
+    _ => MAX_TUPLES_PER_STATEMENT,
+    }
     } else {
-        1
+    1
     };
     // ===== 流式写入：读一页、写一页 =====
     // 旧实现是「整表读进内存 → 再写」，代价是三件事捆在一起：
@@ -762,26 +1403,326 @@ async fn sync_table(
     //   · 取消请求也要等整表读完才可能被检查到。
     // 改成页循环之后这三件事一起消失。跨页不再拼接批次（那只会让"已写行数"与真正
     // 落盘的行数差出一页，没有别的好处）。
-    let mut pending_insert: Vec<Vec<CellValue>> = Vec::new();
-    let mut offset = 0u64;
-    loop {
-        // 取消是协作式的：**每页**检查一次（原来每张表只有开头一次机会）
-        if let Some(task) = task {
-            if task.is_canceled() {
-                note.push_str("（已取消：已写入的部分保留，不回滚）");
-                break;
+    //
+    // ===== 同实例快速通道（MySQL → MySQL）=====
+    // 源与目标落在**同一个 MySQL 实例**（server_uuid 相同）且是纯插入/清空后导入时，
+    // 直接 `insert into 目标(列) select 列 from 源` —— 数据不经过应用层，
+    // 20 万行从分钟级降到秒级。不同实例 / upsert 模式 / 非 MySQL 系走原管道。
+    if opts.sync_data
+        && effective_mode != DataMode::Upsert
+        && matches!(source_kind.kind.key(), "mysql" | "mariadb")
+        && matches!(target_kind.kind.key(), "mysql" | "mariadb")
+    {
+        async fn read_uuid(state: &AppState, conn: &str, scope: &str) -> String {
+            let Ok(result) = run_sql_in(state, conn, scope, "select @@server_uuid as u".to_string(), 1).await
+            else {
+                return String::new()
+            };
+            result
+                .rows
+                .first()
+                .and_then(|row| row.first())
+                .and_then(|cell| match cell {
+                    CellValue::Text(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        }
+        let src_uuid = read_uuid(state, &src.conn, &src.scope).await;
+        let tgt_uuid = read_uuid(state, &tgt.conn, &tgt.scope).await;
+        if !src_uuid.is_empty() && src_uuid == tgt_uuid {
+            if let Some(task) = task {
+                task.log(format!("表 {table}：同实例，直拷（insert … select）"));
             }
+            let col_list_src = columns
+                .iter()
+                .map(|name| source_kind.quote(name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let col_list_tgt = columns
+                .iter()
+                .map(|name| target_kind.quote(name))
+                .collect::<Vec<_>>()
+                .join(", ");
+            // 直拷也带上用户的行过滤条件（同实例 insert…select 同样只搬过滤后的行）
+            let where_sql = if opts.where_clause.is_empty() {
+                src.scoped(table)
+            } else {
+                format!("{} where {}", src.scoped(table), opts.where_clause)
+            };
+            let insert_sql = format!(
+                "insert into {target_name} ({col_list_tgt}) select {col_list_src} from {where_sql}"
+            );
+            // 直拷同样要过 identity：同批 SET 开/关（会话级开关必须与写入同一批）
+            let insert_sql = with_identity(
+                insert_sql,
+                target_kind.kind.key() == "sqlserver",
+                &target_name,
+            );
+            let copy_result = run_target(state, &tgt_target, &insert_sql).await;
+            let mut copied = match &copy_result {
+                // INSERT … SELECT 的影响行数就是传输行数（比再发一条 count 快且准）
+                Ok(result) => result.affected_rows.unwrap_or(0) as u64,
+                Err(err) => return ObjResult::failed(ty, table, format!("同实例直拷失败：{}", err.message)),
+            };
+            // MySQL 驱动对 INSERT…SELECT 可能回 0（数据实际已写入，真机：目标 3 行、
+            // affected=0）—— 影响行数不可信时回查目标表行数兜底。
+            // 计数单元格可能是 Integer 也可能是 Text（驱动的 BIGINT 回传差异），两种都认。
+            if copied == 0 {
+                if let Ok(result) = run_target(state, &tgt_target, &format!("select count(*) as n from {target_name}")).await {
+                    if let Some(cell) = result.rows.first().and_then(|row| row.first()) {
+                        match cell {
+                            dbmind_core::CellValue::Integer(n) => copied = *n as u64,
+                            dbmind_core::CellValue::Text(t) => {
+                                if let Ok(n) = t.trim().parse::<u64>() {
+                                    copied = n;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if let Some(task) = task {
+                task.add_rows_written(copied);
+            }
+            // 日志只报「执行到哪一步」—— 行数在进度卡上（rowsWritten 平滑递增），不进日志刷屏
+            let message = format!(
+                "直拷完成{}{}",
+                if created { "（已建表）" } else { "" },
+                note
+            );
+            return ObjResult::ok(ty, table, message, copied, 0);
         }
-        let page = match fetch_page(state, &src.conn, &src.scope, &base_select, source_kind, offset).await
-        {
-            Ok(rows) => rows,
-            Err(err) => return ObjResult::failed(ty, table, format!("读取源数据失败：{}", err.message)),
-        };
-        let got = page.len();
-        if got == 0 {
-            break;
+    }
+    let mut pending_insert: Vec<Vec<CellValue>> = Vec::new();
+
+    // 主键游标（keyset）分页：有主键时替代 OFFSET —— 深分页每页只扫本页，
+
+    // 千万级行不再 O(N²) 退化。无主键退回 OFFSET（cursor 传 None）。
+
+    let paging_keys: Vec<String> = key_indexes.iter().map(|i| columns[*i].clone()).collect();
+
+
+
+    // ===== 读取/写入流水线 =====
+
+    // 原来是「读一页 → 写一页」串行：总耗时 = 读取 + 写入。
+
+    // 预取协程提前拉页（最多在途 4 页），主循环边收边写 —— 总耗时 ≈ max(读取, 写入)。
+    // 在途 2 → 4：写入侧偶有慢批（大行宽/远端库），缓冲更深时读协程不会空转等待，
+    // 读写流水线咬合更紧；内存代价 ≈ 多缓存 2 页行数据（可控）。
+
+    // 取消：主循环退出（drop rx）后，预取协程的 send 失败而退出（最多多拉几页在途，无害）。
+
+    enum PageMsg {
+
+    Page(Vec<Vec<CellValue>>),
+
+    Failed(String),
+
+    }
+
+    let (page_tx, mut page_rx) = tokio::sync::mpsc::channel::<PageMsg>(4);
+
+    let prefetch_state = state.clone();
+
+    let prefetch_src = src.clone();
+
+    let prefetch_base = base_select.clone();
+
+    let prefetch_keys = paging_keys.clone();
+
+    let prefetch_key_positions = key_indexes.clone();
+
+    let prefetch_kind = source_kind;
+
+    let prefetch_where = opts.where_clause.clone();
+
+    let prefetch_task = tokio::spawn(async move {
+
+        let mut offset = 0u64;
+
+        let mut last_key: Option<Vec<CellValue>> = None;
+
+        loop {
+
+            let cursor = match last_key.as_ref() {
+
+                Some(values) if !prefetch_keys.is_empty() => {
+
+                    Some((prefetch_keys.as_slice(), values.as_slice()))
+
+                }
+
+                _ => None,
+
+            };
+
+            match fetch_page(
+
+                &prefetch_state,
+
+                &prefetch_src.conn,
+
+                &prefetch_src.scope,
+
+                &prefetch_base,
+
+                prefetch_kind,
+
+                offset,
+
+                cursor,
+
+                &prefetch_where,
+
+            )
+
+            .await
+
+            {
+
+                Ok(rows) => {
+
+                    let got = rows.len();
+
+                    if !prefetch_keys.is_empty() {
+
+                        last_key = rows.last().map(|row| {
+
+                            prefetch_key_positions
+
+                                .iter()
+
+                                .filter_map(|i| row.get(*i).cloned())
+
+                                .collect::<Vec<CellValue>>()
+
+                        });
+
+                    }
+
+                    if page_tx.send(PageMsg::Page(rows)).await.is_err() {
+
+                        break;
+
+                    }
+
+                    if got < PAGE as usize {
+
+                        break;
+
+                    }
+
+                    offset += PAGE;
+
+                }
+
+                Err(err) => {
+
+                    let _ = page_tx.send(PageMsg::Failed(err.message)).await;
+
+                    break;
+
+                }
+
+            }
+
         }
+
+    });
+
+
+
+    let mut page_no = 0u64;
+    // 行数上限的消费计数（按真正进入写入处理的行数累计）+ 是否已命中上限
+    let mut consumed: u64 = 0;
+    let mut limit_hit = false;
+    let mut canceled = false;
+
+    let mut read_error: Option<String> = None;
+
+    'outer: while let Some(msg) = page_rx.recv().await {
+
+        match msg {
+
+            PageMsg::Failed(err) => {
+
+                read_error = Some(err);
+
+                break 'outer;
+
+            }
+
+            PageMsg::Page(page) => {
+
+                // 取消是协作式的：**每页**检查一次（原来每张表只有开头一次机会）
+
+                if let Some(task) = task {
+
+                    if task.is_canceled() {
+
+                        canceled = true;
+
+                        break 'outer;
+
+                    }
+
+                }
+
+                let got = page.len();
+
+                if got == 0 {
+
+                    break;
+
+                }
+
+                page_no += 1;
+
+                if let Some(task) = task {
+
+                    // 每页一条日志太刷屏（大表几百条），读取量在进度卡上平滑递增就够
+
+                    task.add_rows_read(got as u64);
+
+                }
+
+                // 行数上限：本页按**剩余配额**截断 —— 预取协程可能整页拉回来，
+                // 多出来的行直接丢弃；截断即命中上限，处理完这页就收（不再拉下一页）。
+                // 消费计数（consumed）在下面的行循环里累加。
+                let mut page = page;
+
+                if opts.row_limit > 0 {
+
+                    let remaining = opts.row_limit.saturating_sub(consumed);
+
+                    if remaining == 0 {
+
+                        break 'outer;
+
+                    }
+
+                    if got as u64 > remaining {
+
+                        page.truncate(remaining as usize);
+
+                        note.push_str(&format!(
+
+                            "（已达行数上限 {}，仅同步了前 {} 行）",
+
+                            opts.row_limit, opts.row_limit
+
+                        ));
+
+                        limit_hit = true;
+
+                    }
+
+                }
         for row in page {
+            consumed += 1;
             let is_existing = effective_mode != DataMode::Insert
                 && !key_indexes.is_empty()
                 && existing.contains(&key_of(&row, &key_indexes));
@@ -789,9 +1730,13 @@ async fn sync_table(
                 // 更新逐行做：跨方言的批量 UPDATE 没有统一写法，硬拼会踩到方言差异
                 let sql =
                     build_update(&target_name, &columns, &target_types, &row, &key_indexes, target_kind);
-                match run_sql(state, tgt, &sql).await {
-                    Ok(()) => updated += 1,
+                match run_target(state, &tgt_target, &sql).await {
+                    Ok(_) => {
+                        updated += 1;
+                        if let Some(task) = task { task.add_rows_written(1); }
+                    }
                     Err(err) => {
+                        if let Some(task) = task { task.add_rows_failed(1); }
                         return ObjResult::failed(ty, table, format!("更新失败：{}", err.message))
                     }
                 }
@@ -799,82 +1744,113 @@ async fn sync_table(
             }
             pending_insert.push(row);
             if pending_insert.len() as u64 >= per_statement {
+                let batch_rows = pending_insert.len() as u64;
                 match run_sql(
                     state,
                     tgt,
-                    &build_insert(&target_name, &columns, &target_types, &pending_insert, target_kind),
+                    &with_identity(
+                        build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key()),
+                        identity_on,
+                        &target_name,
+                    ),
                 )
                 .await
                 {
                     Ok(()) => {
-                        inserted += pending_insert.len() as u64;
+                        inserted += batch_rows;
+                        if let Some(task) = task {
+                            task.add_rows_written(batch_rows);
+                        }
                         pending_insert.clear();
                     }
                     Err(err) => {
+                        if let Some(task) = task { task.add_rows_failed(batch_rows); }
                         return ObjResult::failed(ty, table, format!("插入失败：{}", err.message))
                     }
                 }
             }
         }
-        // 一页写完就把残余批次落盘
-        if !pending_insert.is_empty() {
-            match run_sql(
-                state,
-                tgt,
-                &build_insert(&target_name, &columns, &target_types, &pending_insert, target_kind),
-            )
-            .await
-            {
-                Ok(()) => {
-                    inserted += pending_insert.len() as u64;
-                    pending_insert.clear();
-                }
-                Err(err) => return ObjResult::failed(ty, table, format!("插入失败：{}", err.message)),
-            }
-        }
+        // **跨页攒批**：残余批次不在这里落盘，攒满 per_statement 才发一条 ——
+        // 页尾 flush 会把 ClickHouse 的 5 万行大批次打碎成 1 万行/次（每次落一个 part），
+        // 那是 CH 目标慢的主因。攒批期间「已写行数」略滞后于真实落盘，无实际影响。
         // 进度**按时间节流**：写一页更新一次足矣。旧实现每行都写一次 phase，
         // 20 万行就是 20 万次加锁 + 20 万次前端快照变化 —— 那是纯白烧的 CPU。
         if let Some(task) = task {
             if last_report.elapsed() >= PROGRESS_INTERVAL {
-                task.set_phase(format!("表 {table}：已写 {} 行", inserted + updated));
+                // 只报「执行到哪一步」，不报数字 —— 数字在进度卡上平滑递增
+                task.set_phase(format!("表 {table}：传输数据"));
                 last_report = std::time::Instant::now();
             }
         }
-        if got < PAGE as usize {
-            break;
+                if got < PAGE as usize {
+                    break;
+                }
+                // 上限已命中（本页被截断）：处理完这页就收，不再继续拉
+                if limit_hit {
+                    break 'outer;
+                }
+            }
         }
-        offset += PAGE;
+    }
+    // 流水线收尾：丢掉 rx 让预取协程退出，并等它结束
+    drop(page_rx);
+    let _ = prefetch_task.await;
+    if canceled {
+        note.push_str("（已取消：已写入的部分保留，不回滚）");
+    }
+    if let Some(err) = read_error {
+        return ObjResult::failed(ty, table, format!("读取源数据失败：{}", err));
     }
     // 因取消而中途退出时，手里可能还压着最后一批没落盘的插入
     if !pending_insert.is_empty() {
         match run_sql(
             state,
             tgt,
-            &build_insert(&target_name, &columns, &target_types, &pending_insert, target_kind),
+            &with_identity(
+                build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key()),
+                identity_on,
+                &target_name,
+            ),
         )
         .await
         {
-            Ok(()) => inserted += pending_insert.len() as u64,
-            Err(err) => return ObjResult::failed(ty, table, format!("插入失败：{}", err.message)),
+            Ok(()) => {
+                inserted += pending_insert.len() as u64;
+                if let Some(task) = task { task.add_rows_written(pending_insert.len() as u64); }
+            }
+            Err(err) => {
+                if let Some(task) = task { task.add_rows_failed(pending_insert.len() as u64); }
+                return ObjResult::failed(ty, table, format!("插入失败：{}", err.message));
+            }
         }
     }
-    if identity_on {
-        // 关掉它。这里失败也不影响已写入的数据（开关是会话级的，留着最多让后续显式插入继续可用）
-        let _ = run_sql(state, tgt, &format!("set identity_insert {target_name} off")).await;
+    // identity 的 OFF 已随每批写入自带（见 with_identity），无需单独关闭
+
+    // **PG / KingBase 的序列回拨**：显式插入自增列的值后，目标库的序列还停在起点 ——
+    // 之后业务插入新行时序列从 1 开始生成主键，**必然撞上刚同步进来的数据**（迁移工具的经典坑）。
+    // 同步完成后把每个自增列的序列拨到 max(col)+1；失败降级为说明（不影响已写入的数据）。
+    if matches!(target_kind.kind.key(), "postgresql" | "kingbase") {
+        for column in source_columns.iter().filter(|c| c.auto_increment) {
+            let quoted = target_kind.quote(&column.name);
+            // setval 的前两个参数是字符串字面量：单引号包，内部单引号翻倍转义
+            let lit = |s: &str| format!("'{}'", s.replace('\'', "''"));
+            let sql = format!(
+                "select setval(pg_get_serial_sequence({tbl}, {col_lit}), coalesce(max({quoted}), 0) + 1, false) from {target_name}",
+                tbl = lit(&target_name),
+                col_lit = lit(&column.name),
+            );
+            if let Err(err) = run_target(state, &tgt_target, &sql).await {
+                note.push_str(&format!("（序列回拨失败 {col}：{msg}）",
+                    col = column.name, msg = err.message));
+            }
+        }
     }
 
-    // 结果里带上吞吐：快了多少是能量出来的，不用凭感觉
-    let elapsed = started.elapsed();
-    let written = inserted + updated;
-    let rate = if written > 0 && elapsed.as_millis() >= 50 {
-        format!("，{:.0} 行/秒", written as f64 / elapsed.as_secs_f64())
-    } else {
-        String::new()
-    };
+    // 日志只报步骤；行数走 rowsWritten/rowsRead 计数（进度卡平滑递增），不进文本
+    let _ = started;
     let message = format!(
-        "新增 {inserted} 行，更新 {updated} 行{}{}{}",
+        "传输完成{}{}",
         if created { "（已建表）" } else { "" },
-        rate,
         note
     );
     ObjResult::ok(ty, table, message, inserted, updated)
@@ -927,16 +1903,20 @@ async fn sync_view(
         },
     );
     let target_name = target_kind.quote(name);
+    let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
+        Ok(target) => target,
+        Err(err) => return ObjResult::failed("view", name, format!("解析目标连接失败：{}", err.message)),
+    };
     if columns_of(state, tgt, name).await.map(|c| !c.is_empty()).unwrap_or(false)
         && opts.policy != Policy::Drop
     {
         return ObjResult::skipped("view", name, "目标已存在同名视图（保留结构策略下不动它）");
     }
     if opts.policy == Policy::Drop {
-        let _ = run_sql(state, tgt, &format!("drop view if exists {target_name}")).await;
+        let _ = run_target(state, &tgt_target, &format!("drop view if exists {target_name}")).await;
     }
-    match run_sql(state, tgt, &definition).await {
-        Ok(()) => ObjResult::ok("view", name, "已按源定义建视图", 0, 0),
+    match run_target(state, &tgt_target, &definition).await {
+        Ok(_) => ObjResult::ok("view", name, "已按源定义建视图", 0, 0),
         Err(err) => ObjResult::failed("view", name, format!("建视图失败：{}", err.message)),
     }
 }
@@ -999,11 +1979,15 @@ async fn sync_object_source(
         Ok(record) => Dialect::new(record.kind()),
         Err(err) => return ObjResult::failed(kind, name, err.message),
     };
+    let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
+        Ok(target) => target,
+        Err(err) => return ObjResult::failed(kind, name, format!("解析目标连接失败：{}", err.message)),
+    };
     if opts.policy == Policy::Drop {
         match target_kind.drop_object_sql(kind, name) {
             Some(drop_sql) => {
                 // 目标没有这个对象时 `if exists` 不会报错，所以不看结果
-                let _ = run_sql(state, tgt, &drop_sql).await;
+                let _ = run_target(state, &tgt_target, &drop_sql).await;
             }
             None => {
                 return ObjResult::skipped(
@@ -1018,8 +2002,8 @@ async fn sync_object_source(
             }
         }
     }
-    match run_sql(state, tgt, &definition).await {
-        Ok(()) => ObjResult::ok(kind, name, "已按源定义创建", 0, 0),
+    match run_target(state, &tgt_target, &definition).await {
+        Ok(_) => ObjResult::ok(kind, name, "已按源定义创建", 0, 0),
         Err(err) => ObjResult::failed(kind, name, format!("创建失败：{}", err.message)),
     }
 }
@@ -1049,20 +2033,33 @@ pub async fn table(
         conn: body.source_connection_id.clone(),
         scope: scope_of(&body.source_database, &body.source_schema),
         schema: body.source_schema.clone(),
+        catalog: false,
     };
     let tgt = Side {
         conn: body.target_connection(),
         scope: scope_of(&body.target_database, &body.target_schema),
         schema: body.target_schema.clone(),
+        catalog: false,
     };
     require_record(&state, &src.conn).await?;
     require_record(&state, &tgt.conn).await?;
+    // catalog 方言（Doris）的表名要带 `catalog.库` 全限定（见 Side::scoped）
+    let src = Side {
+        catalog: Dialect::new(require_record(&state, &src.conn).await?.kind()).catalog_level(),
+        ..src
+    };
+    let tgt = Side {
+        catalog: Dialect::new(require_record(&state, &tgt.conn).await?.kind()).catalog_level(),
+        ..tgt
+    };
     let mode = body
         .data_mode
         .clone()
         .or_else(|| body.mode.clone())
         .unwrap_or_else(|| "upsert".to_string());
 
+    // 单表路径同样自动建库（无任务日志渠道，静默执行；失败由建表时的明确报错兜底）
+    let _ = ensure_target_db(&state, &tgt, &opts).await;
     let outcome = sync_table(&state, None, &src, &tgt, &source_table, &target_table, &opts).await;
     let success = outcome.status == "ok";
     Ok(Json(json!({
@@ -1109,10 +2106,11 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             conn: body.source_connection_id.clone(),
             scope: scope_of(&body.source_database, &body.source_schema),
             schema: body.source_schema.clone(),
+            catalog: false,
         };
         let target = crate::api::scope::resolve(&state, &src.conn, &src.scope).await?;
         crate::api::driver::ensure_for_connection(&state, &target).await?;
-        let engine = state.engine.clone();
+        let engine = state.engine();
         let tables = blocking(move || engine.list_tables_fresh(&target)).await?;
         for table in tables
             .into_iter()
@@ -1130,11 +2128,43 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         conn: body.source_connection_id.clone(),
         scope: scope_of(&body.source_database, &body.source_schema),
         schema: body.source_schema.clone(),
+        catalog: false,
     };
     let tgt = Side {
         conn: target_conn,
         scope: scope_of(&body.target_database, &body.target_schema),
         schema: body.target_schema.clone(),
+        catalog: false,
+    };
+    /// 对象级并发的**自适应并行度**（不写死）：
+    ///
+    /// 两个因素决定最优张数：
+    /// 1. **目标库类型** —— 会话结构与写入语义差别很大：
+    ///    - 嵌入式/文件引擎（SQLite/Derby/H2）：会话池只有一条连接，并行只会互相排队；
+    ///    - Doris：每次导入落一个 part，并发太高小 part 合并压力大，适度即可；
+    ///    - Oracle/DM/DB2：会话开销大、锁行为保守，2 路稳；
+    ///    - MySQL/PG/SQL Server/ClickHouse 等网络型库：4 路能吃满带宽（再高压垮库反而慢）。
+    /// 2. **对象数** —— 只有 2 张表时开 4 路毫无意义，并行度不超过对象数。
+    fn adaptive_concurrency(target_kind_key: &str, objects: usize) -> usize {
+        if objects <= 1 {
+            return 1;
+        }
+        let by_kind = match target_kind_key {
+            "sqlite" | "derby" | "h2" => 1,
+            "doris" => 3,
+            "oracle" | "dm" | "db2" => 2,
+            _ => 4,
+        };
+        by_kind.min(objects).max(1)
+    }
+    // catalog 方言（Doris）的表名要带 `catalog.库` 全限定（见 Side::scoped）
+    let src = Side {
+        catalog: Dialect::new(require_record(&state, &src.conn).await?.kind()).catalog_level(),
+        ..src
+    };
+    let tgt = Side {
+        catalog: Dialect::new(require_record(&state, &tgt.conn).await?.kind()).catalog_level(),
+        ..tgt
     };
     let total = objects.len();
 
@@ -1146,51 +2176,104 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         let opts = opts.clone();
         async move {
             task.set_total(total as i64);
-            let mut results: Vec<Value> = Vec::new();
-            let mut ok = 0u64;
-            let mut skipped = 0u64;
-            let mut errors = 0u64;
-            let mut inserted = 0u64;
-            let mut updated = 0u64;
-            for (index, (kind, name)) in objects.iter().enumerate() {
-                if task.is_canceled() {
-                    // 取消：剩下的对象标成 canceled（而不是假装没这回事）
-                    for (kind, name) in objects.iter().skip(index) {
-                        results.push(json!({
-                            "type": kind, "name": name, "status": "canceled",
-                            "message": "已取消", "inserted": 0, "updated": 0,
-                        }));
-                    }
-                    break;
-                }
-                // 这里只说**对象名**：前缀「正在同步：」与「（已完成/总数）」由界面统一给。
-                // 之前这里自己又写了一遍「同步 X（1/5）」，界面上就变成
-                // 「正在同步：同步 X（1/5）（0/5）」—— 前缀和计数都重复了。
-                task.set_phase(name.to_string());
-                let outcome = match kind.as_str() {
-                    "table" => {
-                        sync_table(&state, Some(&task), &src, &tgt, name, name, &opts).await
-                    }
-                    "view" => sync_view(&state, &src, &tgt, name, &opts).await,
-                    // 例程 / 触发器 / 事件：与视图同一条路（见 sync_object_source）
-                    "procedure" | "function" | "trigger" | "event" => {
-                        sync_object_source(&state, &src, &tgt, kind, name, &opts).await
-                    }
-                    other => ObjResult::skipped(other, name, "该对象类型不支持同步（结构、数据都没动）"),
-                };
-                match outcome.status {
-                    "ok" => ok += 1,
-                    "skipped" => skipped += 1,
-                    _ => errors += 1,
-                }
-                inserted += outcome.inserted;
-                updated += outcome.updated;
-                if !outcome.message.is_empty() {
-                    task.log(format!("{}：{}", name, outcome.message));
-                }
-                results.push(outcome.to_json());
-                task.set_done(index as u64 + 1);
+            // 目标库不存在时自动创建（默认开，见 ensure_target_db）
+            if let Some(msg) = ensure_target_db(&state, &tgt, &opts).await {
+                task.log(msg);
             }
+            // ===== 对象级**并行**同步 =====
+            // 单对象内部已经是「读一页写一页」的预取流水线，多对象再并行同时搬 ——
+            // 并行度**自适应**（见 adaptive_concurrency）：按目标库类型与对象数动态定，
+            // 不写死。计数与日志都走 Task 的锁内计数器，并发安全；结果按**提交顺序**
+            // 回填槽位，界面上的结果表顺序稳定。
+            let target_kind_key = require_record(&state, &tgt.conn)
+                .await
+                .map(|record| record.kind().key().to_string())
+                .unwrap_or_default();
+            let sync_concurrency = adaptive_concurrency(&target_kind_key, total);
+            let slots: Vec<std::sync::Arc<std::sync::Mutex<Option<Value>>>> = objects
+                .iter()
+                .map(|_| std::sync::Arc::new(std::sync::Mutex::new(None)))
+                .collect();
+            let counters = std::sync::Arc::new(std::sync::Mutex::new((
+                0u64, 0u64, 0u64, 0u64, 0u64,
+            )));
+            let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(sync_concurrency));
+            let mut handles = Vec::new();
+            for (index, (kind, name)) in objects.iter().enumerate() {
+                let state = state.clone();
+                let src = src.clone();
+                let tgt = tgt.clone();
+                let opts = opts.clone();
+                let task = task.clone();
+                let kind = kind.clone();
+                let name = name.clone();
+                let slot = slots[index].clone();
+                let counters = counters.clone();
+                let sem = sem.clone();
+                handles.push(tokio::spawn(async move {
+                    // 遇错停止 / 取消：还没开跑的对象不再执行（已开跑的照常跑完当前页）
+                    let blocked = task.is_canceled()
+                        || (opts.stop_on_error && {
+                            let (_, _, errors, _, _) = *counters.lock().unwrap();
+                            errors > 0
+                        });
+                    let permit = sem.acquire_owned().await.ok();
+                    if blocked {
+                        if task.is_canceled() {
+                            *slot.lock().unwrap() = Some(json!({
+                                "type": kind, "name": name, "status": "canceled",
+                                "message": "已取消", "inserted": 0, "updated": 0,
+                            }));
+                        } else {
+                            *slot.lock().unwrap() = Some(json!({
+                                "type": kind, "name": name, "status": "skipped",
+                                "message": "遇错停止：未执行", "inserted": 0, "updated": 0,
+                            }));
+                            task.log(format!("{}：遇错停止，未执行", name));
+                        }
+                        task.add_done(1);
+                        drop(permit);
+                        return;
+                    }
+                    task.set_phase(name.to_string());
+                    let outcome = match kind.as_str() {
+                        "table" => {
+                            sync_table(&state, Some(&task), &src, &tgt, &name, &name, &opts).await
+                        }
+                        "view" => sync_view(&state, &src, &tgt, &name, &opts).await,
+                        // 例程 / 触发器 / 事件：与视图同一条路（见 sync_object_source）
+                        "procedure" | "function" | "trigger" | "event" => {
+                            sync_object_source(&state, &src, &tgt, &kind, &name, &opts).await
+                        }
+                        other => ObjResult::skipped(other, &name, "该对象类型不支持同步（结构、数据都没动）"),
+                    };
+                    {
+                        let mut c = counters.lock().unwrap();
+                        match outcome.status.as_ref() {
+                            "ok" => c.0 += 1,
+                            "skipped" => c.1 += 1,
+                            _ => c.2 += 1,
+                        }
+                        c.3 += outcome.inserted;
+                        c.4 += outcome.updated;
+                    }
+                    if !outcome.message.is_empty() {
+                        task.log(format!("{}：{}", name, outcome.message));
+                    }
+                    *slot.lock().unwrap() = Some(outcome.to_json());
+                    task.add_done(1);
+                    drop(permit);
+                }));
+            }
+            for handle in handles {
+                let _ = handle.await;
+            }
+            let (ok, skipped, errors, inserted, updated) = *counters.lock().unwrap();
+            let results: Vec<Value> = slots
+                .iter()
+                .filter_map(|slot| slot.lock().unwrap().take())
+                .collect();
+            let _ = task.is_canceled();
             let summary = json!({
                 "total": total,
                 "ok": ok,
@@ -1202,8 +2285,9 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             });
             // 取消也是有结果的结果：文案上要和「完成」分开，
             // 否则界面会拿一句"同步完成"去报一个被取消的任务。
+            // 行数不进文案 —— 进度卡（读取/传输/失败）平滑递增就是账本
             let message = format!(
-                "同步{}：成功 {ok} / 跳过 {skipped} / 失败 {errors}，新增 {inserted} 行，更新 {updated} 行",
+                "同步{}：成功 {ok} / 跳过 {skipped} / 失败 {errors}",
                 if task.is_canceled() { "已停止" } else { "完成" }
             );
             task.set_message(message.clone());

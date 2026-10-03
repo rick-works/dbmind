@@ -33,6 +33,10 @@ let resolved = 'dark'
 const listeners = new Set()
 
 export const getResolvedTheme = () => resolved
+
+// Monaco 编辑器用的主题名：内置函数（predefined token）有独立于关键字的配色
+export const monacoTheme = () => (getResolvedTheme() === 'dark' ? 'dbmind-dark' : 'dbmind-light')
+
 export const onResolvedThemeChange = (fn) => {
   listeners.add(fn)
   return () => listeners.delete(fn)

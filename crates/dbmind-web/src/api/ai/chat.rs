@@ -24,7 +24,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::{json, Value};
 
-use crate::api::ai::config::{self, Msg};
+use crate::api::ai::config::{self, Msg, TokenUsage};
 use crate::api::ai::prompts;
 use crate::api::ai::{run_blocking, system_with_context, AiRequest};
 use crate::api::error::{XError, XResult};
@@ -61,6 +61,31 @@ async fn ask(
 }
 
 /// 调用一个**内置在代码里**的提示词（上游里 nl2sql / 数据字典 / 翻译等也是硬编码的）。
+/// 同 [`ask`]，但带用量（界面要在结果下展示 token 消耗）。
+async fn ask_with_usage(
+    state: &AppState,
+    req: &AiRequest,
+    system_id: &str,
+    user_id: &str,
+    vars: &[(&str, &str)],
+    with_context: bool,
+) -> XResult<(String, Option<TokenUsage>)> {
+    let system_base = prompts::render(system_id, &[])?;
+    let system = if with_context {
+        system_with_context(state, req, &system_base).await
+    } else {
+        system_base
+    };
+    let user = prompts::render(user_id, vars)?;
+    let model = config::resolve(req.model_id.as_deref())?;
+    config::audit(user_id, &user);
+    let messages = vec![Msg {
+        role: "user".to_string(),
+        content: user,
+    }];
+    run_blocking(move || config::chat_with_usage(&model, &system, &messages)).await
+}
+
 async fn ask_inline(
     state: &AppState,
     req: &AiRequest,
@@ -80,6 +105,28 @@ async fn ask_inline(
         content: user,
     }];
     run_blocking(move || config::chat(&model, &system, &messages)).await
+}
+
+/// 同 [`ask_inline`]，但带用量（数据字典等生成类接口要在界面上展示 token 消耗）。
+async fn ask_inline_with_usage(
+    state: &AppState,
+    req: &AiRequest,
+    system: &str,
+    user: String,
+    with_context: bool,
+) -> XResult<(String, Option<TokenUsage>)> {
+    let system = if with_context {
+        system_with_context(state, req, system).await
+    } else {
+        system.to_string()
+    };
+    let model = config::resolve(req.model_id.as_deref())?;
+    config::audit("inline", &user);
+    let messages = vec![Msg {
+        role: "user".to_string(),
+        content: user,
+    }];
+    run_blocking(move || config::chat_with_usage(&model, &system, &messages)).await
 }
 
 fn need_sql(req: &AiRequest) -> XResult<String> {
@@ -316,7 +363,7 @@ pub async fn explain(
 ) -> XResult<Json<Value>> {
     let sql = need_sql(&req)?;
     let context = context_text(&state, &req).await;
-    let content = ask(
+    let (content, usage) = ask_with_usage(
         &state,
         &req,
         "sql.explain.system",
@@ -325,7 +372,7 @@ pub async fn explain(
         true,
     )
     .await?;
-    Ok(Json(json!({ "success": true, "content": content })))
+    Ok(Json(json!({ "success": true, "content": content, "usage": usage })))
 }
 
 /// `POST /api/ai/optimize` —— 优化建议。
@@ -335,7 +382,7 @@ pub async fn optimize(
 ) -> XResult<Json<Value>> {
     let sql = need_sql(&req)?;
     let context = context_text(&state, &req).await;
-    let content = ask(
+    let (content, usage) = ask_with_usage(
         &state,
         &req,
         "sql.optimize.system",
@@ -344,7 +391,7 @@ pub async fn optimize(
         true,
     )
     .await?;
-    Ok(Json(json!({ "success": true, "content": content })))
+    Ok(Json(json!({ "success": true, "content": content, "usage": usage })))
 }
 
 /// `POST /api/ai/fix` —— 按约定的两行格式解析出「原因 + 修复 SQL」。
@@ -352,7 +399,7 @@ pub async fn fix(State(state): State<AppState>, Json(req): Json<AiRequest>) -> X
     let sql = need_sql(&req)?;
     let error = req.error.clone().unwrap_or_default();
     let context = context_text(&state, &req).await;
-    let raw = ask(
+    let (raw, usage) = ask_with_usage(
         &state,
         &req,
         "sql.fix.system",
@@ -371,6 +418,7 @@ pub async fn fix(State(state): State<AppState>, Json(req): Json<AiRequest>) -> X
         "errorReason": reason,
         "sql": fixed,
         "content": raw,
+        "usage": usage,
     })))
 }
 
@@ -504,7 +552,7 @@ pub async fn diagnose(
          ### SQL\n```sql\n{sql}\n```\n\n\
          ### 执行计划（可能为空）\n{plan}"
     );
-    let content = ask_inline(
+    let (content, usage) = ask_inline_with_usage(
         &state,
         &req,
         "你是一名资深数据库性能诊断专家。",
@@ -512,7 +560,7 @@ pub async fn diagnose(
         true,
     )
     .await?;
-    Ok(Json(json!({ "success": true, "content": content })))
+    Ok(Json(json!({ "success": true, "content": content, "usage": usage })))
 }
 
 /// `POST /api/ai/translate` —— 跨方言翻译。
@@ -559,7 +607,7 @@ pub async fn datadict(
         "根据下面的表结构，输出一份中文数据字典：每张表一个小节，列出字段、类型、\
          以及**基于名称推断的业务含义**（推断不出来的写「未标注」，不要编）。\n\n{context}"
     );
-    let content = ask_inline(
+    let (content, usage) = ask_inline_with_usage(
         &state,
         &req,
         "你是一名数据治理工程师，擅长把库表结构写成业务方能看懂的字典。",
@@ -570,7 +618,9 @@ pub async fn datadict(
     Ok(Json(json!({
         "success": true,
         "content": content,
+        "usage": usage,
         "tableCount": table_count,
+        "usage": usage,
     })))
 }
 

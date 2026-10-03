@@ -163,10 +163,38 @@
         </template>
 
         <div v-if="capacity.note" class="gv-notes"><div>· {{ capacity.note }}</div></div>
-      </template>
+        </template>
 
-      <div v-else class="gv-empty">{{ activeConn ? $t('gv.pickFirst') : $t('pt.pickSourceFirst') }}</div>
-    </div>
+        <!-- 健康巡检：统计卡 + 规整明细表（级别徽章 / 表 / 行数 / 问题清单）——
+           从 AI 助手的高级技能挪来：它是纯规则扫描，不依赖 AI 模型，归入数据治理更顺 -->
+        <template v-else-if="tab === 'patrol' && patrol">
+        <div class="gv-stats">
+          <div class="gv-stat"><span class="n">{{ patrol.summary?.tables ?? 0 }}</span><span class="l">{{ $t('gv.statTables') }}</span></div>
+          <div class="gv-stat"><span class="n danger">{{ patrol.summary?.high ?? 0 }}</span><span class="l">{{ $t('gv.patrolHigh') }}</span></div>
+          <div class="gv-stat"><span class="n warn">{{ patrol.summary?.medium ?? 0 }}</span><span class="l">{{ $t('gv.patrolMedium') }}</span></div>
+          <div class="gv-stat"><span class="n">{{ patrol.summary?.scanned ?? 0 }}</span><span class="l">{{ $t('gv.patrolScanned') }}</span></div>
+        </div>
+
+        <div v-if="!patrol.items?.length" class="gv-empty">{{ $t('gv.patrolClean') }}</div>
+        <div v-else class="gv-patrol-list">
+          <div v-for="it in patrol.items" :key="it.table" class="gv-patrol-item">
+            <div class="gp-head">
+              <span class="gp-lv" :class="it.level">{{ levelText(it.level) }}</span>
+              <span class="gp-table" :title="it.table">{{ it.table }}</span>
+              <span class="gp-rows">{{ $t('gv.rows', { n: formatNum(it.rows) }) }}</span>
+            </div>
+            <div class="gp-issues">
+              <span v-for="msg in it.issues || []" :key="msg" class="gp-issue">{{ msg }}</span>
+            </div>
+          </div>
+        </div>
+        </template>
+        <template v-else-if="tab === 'patrol' && !patrol">
+        <div class="gv-empty">{{ $t('gv.patrolEmpty') }}</div>
+        </template>
+
+        <div v-else class="gv-empty">{{ activeConn ? $t('gv.pickFirst') : $t('pt.pickSourceFirst') }}</div>
+        </div>
 
     <!-- 底部操作栏：随页签变化；关闭用右上角 × 即可 -->
     <template #footer>
@@ -226,7 +254,7 @@ import { ref, computed, nextTick, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DataAnalysis, Warning, CircleCheck } from '@element-plus/icons-vue'
 import {
-  aiScanSensitive, aiCapacity
+  aiScanSensitive, aiCapacity, aiPatrol
 } from '../../api'
 import { useAiContext, truncateError } from './useAiContext'
 import { t, te, locale } from '../../utils/i18n'
@@ -257,7 +285,8 @@ const tabs = computed(() => [
   { key: 'sensitive', label: t('ai.cmdSensitive') },
   { key: 'capacity', label: t('ai.cmdCapacity') },
   { key: 'quality', label: t('qa.rulesTitle') },
-  { key: 'analysis', label: t('qa.title') }
+  { key: 'analysis', label: t('qa.title') },
+  { key: 'patrol', label: t('ai.tabPatrol') }
 ])
 
 const tab = ref('sensitive')
@@ -288,6 +317,8 @@ const analysisRef = ref(null)
 const ruleState = ref({})
 const analysisState = ref({})
 const capacity = ref(null)
+/** 健康巡检结果（规则式扫描，不依赖 AI 模型） */
+const patrol = ref(null)
 
 // 级别名按代码查字典（high/medium/low/info 来自后端），没收录的原样显示
 const LEVEL_KEYS = { high: 'ai.lv.high', medium: 'ai.lv.medium', low: 'ai.lv.low', info: 'ai.lv.info' }
@@ -296,7 +327,8 @@ const levelText = (lv) => (lv && te(LEVEL_KEYS[lv])) ? t(LEVEL_KEYS[lv]) : (lv |
 /** 底部主按钮文案：按页签语义定制，比统一的「开始分析」更贴切 */
 const runLabel = computed(() => ({
   sensitive: t('gv.runScan'),
-  capacity: t('gv.runCapacity')
+  capacity: t('gv.runCapacity'),
+  patrol: t('gv.runPatrol')
 }[tab.value] || t('gv.startAnalysis')))
 
 const formatNum = (n) => {
@@ -351,13 +383,30 @@ const run = async () => {
     if (tab.value === 'sensitive') {
       // 上限给足，确保整库所有表都被扫描（后端另有 500 的硬上限保护）
       const r = await aiScanSensitive({ ...base, maxTables: 500 })
-      sensitive.value = r && r.success ? r : null
+      // 摊平后端的分层响应给模板用（模板按扁平字段读）：
+      //   - 高危/中危计数在 `summary` 里 ⇒ 直接读 `r.high` 的话两张卡**恒为 0**
+      //     （接口 200、findings 也齐全，只有数字是假的）；
+      //   - 末段那行后端给的是一句**提示**（`note`，字符串），不是逐条建议数组 ⇒
+      //     不给它摊成数组的话，`v-if="recommendations.length"` 那段永远不显示。
+      sensitive.value = r && r.success
+        ? {
+            ...r,
+            high: r.summary?.high ?? r.high ?? 0,
+            medium: r.summary?.medium ?? r.medium ?? 0,
+            recommendations: (r.recommendations?.length ? r.recommendations : (r.note ? [r.note] : []))
+          }
+        : null
       if (!r?.success) ElMessage.error(r?.message || t('ai.analyzeFailed'))
     } else if (tab.value === 'capacity') {
       // 上限给足，确保整库所有表都被统计（后端另有 500 的硬上限保护）
       const r = await aiCapacity({ ...base, maxTables: 500 })
       capacity.value = r && r.success ? r : null
       if (!r?.success) ElMessage.error(r?.message || t('ai.analyzeFailed'))
+    } else if (tab.value === 'patrol') {
+      // 规则式巡检（不依赖 AI 模型）：整库扫描，上限 500 由后端保护
+      const r = await aiPatrol(base)
+      patrol.value = r && r.success ? r : null
+      if (!r?.success) ElMessage.error(r?.message || t('ai.patrolFailed'))
     }
   } catch (e) {
     ElMessage.error(e?.message || e?.toString?.() || t('ai.analyzeFailed'))
@@ -540,4 +589,28 @@ const run = async () => {
   font-size: 13px; font-weight: 600; color: var(--dc-text-mid);
   background: var(--dc-bg-soft); border-radius: 8px; padding: 8px 12px; margin-bottom: 8px;
 }
+
+/* ---- 健康巡检：统计卡 + 明细列表（级别徽章 / 表 / 行数 / 问题清单） ---- */
+.gv-stat .n.danger { color: var(--el-color-danger, #e25c5c); }
+.gv-stat .n.warn { color: var(--el-color-warning, #e6a23c); }
+.gv-patrol-list { display: flex; flex-direction: column; gap: 8px; }
+.gv-patrol-item {
+  border: 1px solid var(--dc-border); border-radius: 10px; padding: 9px 12px;
+  background: var(--dc-bg-card);
+}
+.gp-head { display: flex; align-items: center; gap: 8px; }
+.gp-lv {
+  flex-shrink: 0; font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+}
+.gp-lv.high { color: var(--el-color-danger, #e25c5c); background: color-mix(in srgb, var(--el-color-danger, #e25c5c) 14%, transparent); }
+.gp-lv.medium { color: var(--el-color-warning, #e6a23c); background: color-mix(in srgb, var(--el-color-warning, #e6a23c) 14%, transparent); }
+.gp-lv.low { color: var(--dc-primary); background: color-mix(in srgb, var(--dc-primary) 12%, transparent); }
+.gp-table { font-weight: 600; color: var(--dc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gp-rows { margin-left: auto; flex-shrink: 0; font-size: 12px; color: var(--dc-text-dim); }
+.gp-issues { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+.gp-issue {
+  font-size: 12.5px; color: var(--dc-text-mid); line-height: 1.5;
+  padding-left: 14px; position: relative;
+}
+.gp-issue::before { content: ''; position: absolute; left: 4px; top: 8px; width: 5px; height: 5px; border-radius: 50%; background: var(--dc-text-dim); opacity: .6; }
 </style>

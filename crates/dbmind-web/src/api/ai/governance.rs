@@ -5,7 +5,7 @@
 //! | `sensitive` | 按**字段名 + 注释**匹配敏感模式（身份证/银行卡/手机号/邮箱/住址/薪资/密码…） |
 //! | `capacity` | 方言各自的系统表取行数与占用空间 |
 //! | `relations` | 按**命名约定**推导表间关联（`xxx_id` → 表 `xxx`） |
-//! | `er-graph` | 把 relations 转成节点 + 边 |
+//! | `er-graph` | 表（含完整列清单）+ 关系，形状由前端 ER 图直接消费（`tables` / `relations`） |
 //! | `impact` | relations 的反向闭包（改这张表会波及谁）+ 视图依赖 |
 //! | `quality/rules` | 按列的类型/可空/命名生成质量规则建议（可选让模型补充） |
 //! | `quality/check` | 单表试跑（复用 quality 的规则引擎） |
@@ -630,7 +630,15 @@ pub async fn relations(
     })))
 }
 
-/// `POST /api/ai/governance/er-graph` —— ER 图（节点 + 边）。
+/// `POST /api/ai/governance/er-graph` —— ER 图（表 + 关系）。
+///
+/// 形状**必须**是前端 `ErDiagramView` 直接消费的那一份：`tables`（每张表带完整列清单）
+/// + `relations`（`fromTable` / `toTable` 这一套键名，与 [`relations`] 端点保持一致）。
+///
+/// 曾经这里返回的是 `nodes` / `edges`，且 `nodes[].columns` 只是个**数字**（列数）——
+/// 前端 `tables` 取不到就渲染空画布，`columns` 不是数组也让列行没法画。
+/// 结果是「ER 图点了没反应」：顶部提示条正常、画布一片空白，看起来像后端没返回数据，
+/// 而实际上接口 200、数据齐全。改形状前先确认前端怎么读（`ErDiagramView` 的 `load`/`layout`）。
 pub async fn er_graph(
     axum::extract::State(state): axum::extract::State<AppState>,
     Json(req): Json<GovReq>,
@@ -638,24 +646,29 @@ pub async fn er_graph(
     let (conn, database, names, _) = scan_tables(&state, &req).await?;
     let columns = columns_batch(&state, &conn, &database, &names).await?;
     let list = infer_relations(&names, &columns);
-    let nodes: Vec<Value> = columns
+    let tables: Vec<Value> = columns
         .iter()
         .map(|(table, cols)| {
             json!({
-                "id": table,
-                "label": table,
-                "columns": cols.len(),
-                "primaryKeys": cols.iter().filter(|col| col.primary_key).map(|col| col.name.clone()).collect::<Vec<_>>(),
+                "name": table,
+                "columns": cols
+                    .iter()
+                    .map(|col| json!({
+                        "name": col.name,
+                        "type": col.type_name.clone().unwrap_or_default(),
+                        "pk": col.primary_key,
+                        "nullable": col.nullable,
+                    }))
+                    .collect::<Vec<_>>(),
             })
         })
         .collect();
-    let edges: Vec<Value> = list
+    let relations: Vec<Value> = list
         .iter()
         .map(|rel| json!({
-            "from": rel.from_table,
-            "to": rel.to_table,
-            "label": rel.from_column,
+            "fromTable": rel.from_table,
             "fromColumn": rel.from_column,
+            "toTable": rel.to_table,
             "toColumn": rel.to_column,
             "confidence": rel.confidence,
             "kind": "inferred",
@@ -663,8 +676,8 @@ pub async fn er_graph(
         .collect();
     Ok(Json(json!({
         "success": true,
-        "nodes": nodes,
-        "edges": edges,
+        "tables": tables,
+        "relations": relations,
         "note": "边由命名约定推导，非数据库外键",
     })))
 }

@@ -13,6 +13,10 @@ thiserror = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }
 rusqlite = { workspace = true }
+# SSH 隧道（跳板机）。选 libssh2 而不是 russh：本 crate 是**同步**的（没有 tokio），
+# 而 libssh2 的 C 源码由 libssh2-sys 用 cc 直接编进产物 —— 不需要系统 OpenSSL、
+# 不需要 cmake / nasm / perl，Windows 上用它的 CNG 后端即可，打包也不会多出动态库。
+ssh2 = "0.9"
 
 [build-dependencies]
 serde = { workspace = true }

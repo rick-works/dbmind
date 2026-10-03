@@ -24,9 +24,13 @@ http.interceptors.response.use(
     if (error && (error.code === 'ERR_CANCELED' || error.name === 'CanceledError' || error.name === 'AbortError')) {
       return Promise.reject(error)
     }
-    console.error('axios response error:', error)
+    // 「AI 服务未配置」这类引导性错误：界面会弹确认框/链接引导去设置，
+    // 拦截器里再打一行 error 级堆栈纯属控制台噪音 —— 降为 debug。
+    // （error.message 此时还是 axios 原始文本，业务文案在 response.data.message 里）
+    // **先**把业务文案改写到 error.message —— 调用方（弹窗/聊天流）拿到的必须是可读原因，
+    // 且「前往设置」的引导规则靠它命中。之前降噪分支提前 return 跳过了这段改写，
+    // 结果 AI 未配置的错误反而显示英文原文、链接也不出现（真机踩过）。
     if (error.response) {
-      console.error('axios error response:', error.response.status, error.response.data)
       const data = error.response.data
       if (data && typeof data === 'object') {
         if (data.message) {
@@ -41,6 +45,16 @@ http.interceptors.response.use(
       } else {
         error.message = t('api.requestFailed', { status: error.response.status })
       }
+    }
+    // 「AI 服务未配置」这类引导性错误：界面会弹确认框/链接引导去设置，
+    // 拦截器里再打一行 error 级堆栈纯属控制台噪音 —— 降为 debug。
+    if (/请先在「设置」|Enable and configure the AI service/.test(String(error.message || ''))) {
+      console.debug('[dbmind] AI 服务未配置（界面已引导）:', error.message)
+      return Promise.reject(error)
+    }
+    console.error('axios response error:', error)
+    if (error.response) {
+      console.error('axios error response:', error.response.status, error.response.data)
     } else if (error.request) {
       // 后端不可达：通知授权层弹出授权/激活弹窗（若当前未授权），避免误报“网络失败”
       error.message = t('api.networkFailed')
@@ -145,6 +159,16 @@ export const testConnectionById = async (id) => {
   const m = moduleOfType(conn.type)
   return http.post(`/api/${m}/test`, conn).then(r => r.data)
 }
+// 断开某连接的缓存会话（不动连接记录）。数据库侧改了权限/密码后调用 ——
+// MySQL 的全局权限变更只对新建连接生效，断开重连才能拿到新权限，免去重启应用
+export const disconnectSessions = async (id) => {
+  return http.post(`/api/dbmind/connections/${id}/disconnect-sessions`).then(r => r.data)
+}
+// 只断**某个库**的会话（界面「关闭数据库」用）：该库的语句跑在它的影子连接上，
+// 后端按 database 找到影子断掉；主连接的共享会话不动，连接本身还开着
+export const disconnectDatabase = async (id, database) => {
+  return http.post(`/api/dbmind/connections/${id}/disconnect-database`, { database }).then(r => r.data)
+}
 // 按 id 获取单个连接的详情：**不含任何口令**，只有 hasPassword / hasSshPassword 标记
 export const getConnectionById = (id) => http.get(`/api/connections/${id}`).then(r => r.data)
 // 复制连接（口令由服务端一并复制，前端拿不到明文）
@@ -172,6 +196,18 @@ export const saveDriverMirror = (mirror) => http.put('/api/settings/driver-mirro
 export const getLegacyTls = () => http.get('/api/settings/legacy-tls').then(r => r.data)
 export const saveLegacyTls = (allowLegacyTls) => http.put('/api/settings/legacy-tls', { allowLegacyTls }).then(r => r.data)
 
+// 通用设置（后端 app_settings 表）。**接口后端早就有**（GET /api/dbmind/settings、
+// PUT /{key}，安全开关与改会话上限还会即时生效），只是前端从没接过 ——
+// 生产保护、AI 写开关、会话上限这些能力因此一直停在「有后端、没界面」的状态。
+export const getSettings = () => http.get('/api/dbmind/settings').then(r => r.data)
+export const putSetting = (key, value) =>
+  http.put(`/api/dbmind/settings/${encodeURIComponent(key)}`, { value: String(value) }).then(r => r.data)
+// 一键作废**所有**连接的结构缓存（设置 → 查询 →「刷新结构缓存」）
+export const clearSchemaCache = () => http.delete('/api/dbmind/schema-cache').then(r => r.data)
+// 缓存页签：体量清单 + 勾选清理（清单与清理**同一个端点**，POST 即清理）
+export const getCacheItems = () => http.get('/api/dbmind/cache').then(r => r.data)
+export const clearCaches = (keys) => http.post('/api/dbmind/cache', { keys }).then(r => r.data)
+
 // 数据库元数据（关系型）——按连接类型路由到数据源模块 /api/{module}
 export const getFeatures = async (id) => { const b = await baseOf(id); return http.get(`${b}/${id}/features`).then(r => r.data) }
 // catalog 清单：只有 catalog 层级的类型（目前 Doris）会返回非空，其余类型返回 `[]`
@@ -196,6 +232,9 @@ export const monitorOverview = async (id, database) => { const b = await baseOf(
 // 查询历史（**内核原生接口**，上游那层没有）：最近执行过的 SQL。
 // 欢迎页的「最近查询」用它 —— 一行一条，点一下把那句 SQL 开成新脚本。
 export const listHistory = (limit = 8) => http.get('/api/dbmind/history', { params: { limit } }).then(r => r.data)
+// 清空查询历史（`DELETE /api/dbmind/history`）：清的是**全部**记录，没有按条删除的接口 ——
+// 历史表里也没有"来源"字段，老记录无法事后区分是不是程序发的，所以只能整体清。
+export const clearHistory = () => http.delete('/api/dbmind/history').then(r => r.data)
 // 终止会话（监控面板运维动作：KILL 指定线程/会话）
 export const monitorKill = async (id, database, sessionId) => { const b = await baseOf(id); return http.post(`${b}/${id}/monitor/kill`, null, { params: { database, sessionId } }).then(r => r.data) }
 // 保存表数据修改（增删改）
@@ -277,13 +316,6 @@ export const exportTask = async (id, taskId) => { const b = await baseOf(id); re
 export const exportCancel = async (id, taskId) => { const b = await baseOf(id); return http.post(`${b}/export/cancel/${taskId}`).then(r => r.data) }
 export const exportDownload = async (id, taskId) => { const b = await baseOf(id); return http.get(`${b}/export/download/${taskId}`, { responseType: 'blob' }).then(r => r.data) }
 
-// 数据库整体转储（sql → 完整转储；csv/json/excel → 每表一个文件打包 zip）
-// config 可覆盖本次请求配置（如 { timeout: 0 } 让大库整库转储不受默认 5 分钟超时限制）
-export const exportDb = async (id, payload, config = {}) => {
-  const b = await baseOf(id)
-  return http.post(`${b}/export/db/${id}`, payload, { responseType: 'blob', ...config }).then(r => r.data)
-}
-
 // 数据库整体转储（异步任务模式）：提交返回 taskId，轮询进度，成功后下载。
 // 复用 /export/task、/export/download、/export/cancel 这三个通用端点（dump 任务也存入同一 task 存储）。
 export const exportDbStart = async (id, payload) => { const b = await baseOf(id); return http.post(`${b}/export/dump-task/${id}`, payload).then(r => r.data) }
@@ -292,8 +324,6 @@ export const exportDbStart = async (id, payload) => { const b = await baseOf(id)
 export const importStart = async (id, formData, config) => { const b = await baseOf(id); return http.post(`${b}/import/${id}`, formData, config).then(r => r.data) }
 export const importTask = async (id, taskId) => { const b = await baseOf(id); return http.get(`${b}/import/task/${taskId}`).then(r => r.data) }
 export const importCancel = async (id, taskId) => { const b = await baseOf(id); return http.post(`${b}/import/cancel/${taskId}`).then(r => r.data) }
-// 兼容旧同步导入（保留给不需要进度的地方）
-export const importData = importStart
 
 // ==================== 数据对比 / 数据同步（统一端点 /api/compare、/api/sync，独立模块） ====================
 // 引擎按 payload 中的 source/target 连接类型自行路由，taskId 为服务端全局唯一，轮询/取消无需登记
@@ -325,9 +355,6 @@ export const installBackupCliTool = async (connectionId, mode) => http.post('/ap
   timeout: 0
 }).then(r => r.data)
 
-export const startRestore = async (formData) => http.post('/api/backup/restore/start', formData, {
-  headers: { 'Content-Type': 'multipart/form-data' }
-}).then(r => r.data)
 export const restoreTaskStatus = async (taskId) => http.get(`/api/backup/restore/task/${taskId}`).then(r => r.data)
 export const cancelRestore = async (taskId) => http.post(`/api/backup/restore/cancel/${taskId}`).then(r => r.data)
 export const restoreInstallConfirm = async (taskId) => http.post(`/api/backup/restore/task/${taskId}/install-confirm`).then(r => r.data)
@@ -383,7 +410,17 @@ export const aiChatStream = async (payload, onDelta, opts = {}) => {
     if (external) external.removeEventListener('abort', onExternalAbort)
     throw new Error(userAborted ? t('api.generationStopped') : t('api.idleTimeout', { s: Math.round(idleMs / 1000) }))
   }
-  if (!res.ok) { clearTimeout(idleTimer); throw new Error('HTTP ' + res.status) }
+  if (!res.ok) {
+    clearTimeout(idleTimer)
+    // 后端的业务错误（如「AI 服务未配置」）带在 JSON body 里：取出来抛中文文案，
+    // 让上层提示可读、且能被「前往设置」的引导规则识别 —— 之前只抛 'HTTP 400'。
+    let detail = 'HTTP ' + res.status
+    try {
+      const body = await res.json()
+      if (body && body.message) detail = body.message
+    } catch { /* body 不是 JSON 就保留状态码 */ }
+    throw new Error(detail)
+  }
   if (!res.body) { clearTimeout(idleTimer); throw new Error(t('api.noStream')) }
   const reader = res.body.getReader()
   const decoder = new TextDecoder('utf-8')
@@ -437,17 +474,8 @@ export const aiDataDict = (payload) => http.post('/api/ai/datadict', payload).th
 // AI 结果导出为文件：payload = { title, markdown, format: md|docx|xlsx|pdf, fileName }，返回文件流（Blob）
 // 出错时后端返回 400 + JSON，axios 以 blob 接收，调用方需还原错误信息
 export const aiExportDoc = (payload) => http.post('/api/ai/export/doc', payload, { responseType: 'blob' }).then(r => r.data)
-// AI 建表向导 / DDL 影响预估（只生成，不执行）
-export const aiGenerateDdl = (payload) => http.post('/api/ai/ddl', payload).then(r => r.data)
-export const aiEstimateDdl = (payload) => http.post('/api/ai/ddl/estimate', payload).then(r => r.data)
 // 自然语言筛选：返回 { where, sql, notes }
 export const aiFilter = (payload) => http.post('/api/ai/filter', payload).then(r => r.data)
-// 团队知识库（业务术语 + 采纳示例）
-export const getAiKnowledge = () => http.get('/api/ai/knowledge').then(r => r.data)
-export const saveAiGlossary = (payload) => http.post('/api/ai/knowledge/glossary', payload).then(r => r.data)
-export const deleteAiGlossary = (id) => http.post('/api/ai/knowledge/glossary/delete', { id }).then(r => r.data)
-export const addAiExample = (payload) => http.post('/api/ai/knowledge/example', payload).then(r => r.data)
-export const deleteAiExample = (id) => http.post('/api/ai/knowledge/example/delete', { id }).then(r => r.data)
 // AI 用量统计
 export const getAiUsage = (days = 30) => http.get('/api/ai/usage', { params: { days } }).then(r => r.data)
 // 表健康巡检（纯规则扫描，不消耗 AI 调用）
@@ -460,23 +488,16 @@ export const aiQualityCheck = (payload) => http.post('/api/ai/governance/quality
 export const aiQualityTypes = () => http.get('/api/ai/quality/types').then(r => r.data)
 export const aiQualitySaved = (payload) => http.post('/api/ai/quality/rules/saved', payload).then(r => r.data)
 export const aiQualitySave = (payload) => http.post('/api/ai/quality/rules/save', payload).then(r => r.data)
-export const aiQualityDelete = (payload) => http.post('/api/ai/quality/rules/delete', payload).then(r => r.data)
 export const aiQualityConfigured = (payload) => http.post('/api/ai/quality/configured', payload).then(r => r.data)
 export const aiQualityScan = (payload) => http.post('/api/ai/quality/scan', payload).then(r => r.data)
 export const aiQualityReport = (payload) => http.post('/api/ai/quality/report', payload).then(r => r.data)
 // 导出违规行明细（哪些数据行违反了规则）
 export const aiQualityViolations = (payload) => http.post('/api/ai/quality/violations', payload).then(r => r.data)
-export const aiRelations = (payload) => http.post('/api/ai/governance/relations', payload).then(r => r.data)
 export const getErGraph = (payload) => http.post('/api/ai/governance/er-graph', payload).then(r => r.data)
 export const aiCapacity = (payload) => http.post('/api/ai/governance/capacity', payload).then(r => r.data)
-export const aiImpact = (payload) => http.post('/api/ai/governance/impact', payload).then(r => r.data)
-// 性能顾问
-export const aiIndexAdvisor = (payload) => http.post('/api/ai/index-advisor', payload).then(r => r.data)
-export const aiRewrite = (payload) => http.post('/api/ai/rewrite', payload).then(r => r.data)
 // 命令面板：自然语言 → 操作计划
 export const aiPlan = (payload) => http.post('/api/ai/plan', payload).then(r => r.data)
-// P1 能力：跨方言转换 / 数据洞察 / 慢查询诊断 / Agent 智能分析
-export const aiTranslate = (payload) => http.post('/api/ai/translate', payload).then(r => r.data)
+// P1 能力：数据洞察 / 慢查询诊断 / Agent 智能分析
 export const aiInsight = (payload) => http.post('/api/ai/insight', payload).then(r => r.data)
 export const aiDiagnose = (payload) => http.post('/api/ai/diagnose', payload).then(r => r.data)
 export const aiAgent = (payload) => http.post('/api/ai/agent', payload).then(r => r.data)

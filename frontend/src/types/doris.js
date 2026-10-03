@@ -24,6 +24,12 @@ export default {
     return `CREATE DATABASE \`${n}\``
   },
   showDbDdlSql(db) {
-    return `SHOW CREATE DATABASE \`${String(db ?? '').replace(/`/g, '``')}\``
+    // catalog 方言：树/页签里的库是 `catalog.库` 全限定名（如 internal.ods）。
+    // 执行时后端已 `USE internal.ods` 进入该库，SHOW CREATE DATABASE 只要**裸库名** ——
+    // 整串丢进去会报 Unknown database 'internal.ods'（真机踩过）。
+    const s = String(db ?? '')
+    const i = s.indexOf('.')
+    const name = i > 0 ? s.slice(i + 1) : s
+    return `SHOW CREATE DATABASE \`${name.replace(/`/g, '``')}\``
   }
 }

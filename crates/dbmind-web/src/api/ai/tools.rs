@@ -54,7 +54,7 @@ pub(crate) async fn tables_of(
 ) -> XResult<Vec<TableInfo>> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let tables = blocking(move || engine.list_tables_fresh(&target)).await?;
     Ok(tables
         .into_iter()
@@ -69,7 +69,7 @@ pub(crate) async fn columns_of(
     table: &str,
 ) -> XResult<Vec<ColumnDetail>> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let name = table.to_string();
     blocking(move || engine.list_columns_fresh(&target, &name)).await
 }
@@ -454,6 +454,12 @@ pub async fn insight(
         .clone()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| XError::bad_request("请指定要分析的表名（table）"))?;
+    // 洞察的核心结论来自模型。以前未配置时降级成规则画像 —— 用户看到的是
+    // 「没报错但只有统计表格」的半成品，还以为是分析完了；与其它 AI 技能一致，
+    // 未配置就直接引导去设置。
+    if crate::api::ai::config::resolve(req.model_id.as_deref()).is_err() {
+        return Err(XError::bad_request("请先在「设置」中启用并配置 AI 服务"));
+    }
     let dialect = Dialect::new(require_record(&state, &conn).await?.kind());
     let columns = columns_of(&state, &conn, &database, &table).await?;
     if columns.is_empty() {
@@ -502,9 +508,10 @@ pub async fn insight(
         }
     }
 
-    // 有模型就让模型解读画像；没有就退化为规则总结（不报错）
+    // 入口已确保模型已配置：画像交给模型解读，不再有规则降级路径
     let question = req.ask_text();
-    let mut content = String::from("（未配置 AI 模型：以下是规则化画像）\n");
+    let mut content = String::new();
+    let mut last_usage: Option<crate::api::ai::config::TokenUsage> = None;
     if let Ok(model) = crate::api::ai::config::resolve(req.model_id.as_deref()) {
         let system = "你是一名数据分析师。请根据给出的表数据画像，用中文分点给出：数据分布特征、\
                       质量问题（空值/重复/异常极值）、以及值得进一步排查的点。不要编造画像里没有的信息。";
@@ -517,11 +524,14 @@ pub async fn insight(
             content: user,
         }];
         match crate::api::ai::run_blocking(move || {
-            crate::api::ai::config::chat(&model, system, &messages)
+            crate::api::ai::config::chat_with_usage(&model, system, &messages)
         })
         .await
         {
-            Ok(text) => content = text,
+            Ok((text, usage)) => {
+                content = text;
+                last_usage = usage;
+            }
             Err(err) => {
                 content.push_str(&format!("模型解读失败：{}", err.message));
             }
@@ -533,5 +543,6 @@ pub async fn insight(
         "stats": stats,
         "rows": total,
         "columns": columns.len(),
+        "usage": last_usage,
     })))
 }

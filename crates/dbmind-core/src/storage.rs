@@ -10,16 +10,50 @@ use crate::ConnectionKind;
 use rusqlite::{params, Connection, OptionalExtension, Row};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
 
 const SETTINGS_SAFETY_PRODUCTION: &str = "safety.protectProduction";
 const SETTINGS_SAFETY_AI_WRITE: &str = "safety.aiWriteEnabled";
-const SETTINGS_UI_THEME: &str = "ui.theme";
-const SETTINGS_PAGE_SIZE: &str = "query.defaultPageSize";
+/// 危险语句拦截：无 WHERE 的 UPDATE/DELETE、TRUNCATE、DROP 一律拒绝。
+const SETTINGS_SAFETY_BLOCK_DANGEROUS: &str = "safety.blockDangerousStatements";
+/// 写操作影响行数上限：UPDATE/DELETE 预估影响行数超过该值时拒绝（0 = 不限制）。
+const SETTINGS_SAFETY_MAX_WRITE_ROWS: &str = "safety.maxWriteRows";
+// 注意：**没有** `ui.theme` 与 `query.defaultPageSize` —— 这两个键曾经在这里种过种子，
+// 但全仓没有任何读取点（主题在前端 localStorage `dbmind_theme`、页大小在 `dbmind_query`），
+// 纯属「看起来后端也管了一份」的误导，已删。要加后端设置键时，先想好谁消费它。
 /// 全局会话配额：每个宿主进程最多持有多少条物理会话（0 = 不限制）。
 const SETTINGS_SESSION_MAX_PER_HOST: &str = "session.maxPerHost";
 /// 空闲会话回收时长（秒；0 = 不按空闲回收，只保留「配额满时回收」）。
 const SETTINGS_SESSION_IDLE_TIMEOUT: &str = "session.idleTimeoutSecs";
+/// 结构缓存的有效期（秒；设置页可改，配合「立即刷新」按钮两条路都能走）。
+const SETTINGS_SCHEMA_TTL: &str = "schema.ttlSecs";
+/// SQL 编辑器执行的超时（秒；以前在 web 层写死 120 秒，跑大报表与误发大查询都不好受）。
+const SETTINGS_QUERY_TIMEOUT: &str = "query.timeoutSecs";
+/// 允许旧版 TLS（TLSv1/1.1）：web 层 `sys.rs` 也有一份同名常量（那里拿不到私有模块），
+/// 键名字符串必须保持一致 —— 引擎开机与设置变更时靠它同步给宿主 spawn 层。
+pub const SETTINGS_ALLOW_LEGACY_TLS: &str = "jdbc.allowLegacyTls";
+/// 查询历史保留条数（0 = 不按条数清理）。表此前只增不减，几年下来就是几十万行。
+const SETTINGS_HISTORY_MAX_ENTRIES: &str = "history.maxEntries";
+/// 查询历史保留天数（0 = 永不按时间清理）。
+const SETTINGS_HISTORY_RETENTION_DAYS: &str = "history.retentionDays";
+/// SSH 隧道空闲回收（秒；0 = 不按空闲回收）。
+const SETTINGS_TUNNEL_IDLE_TIMEOUT: &str = "tunnel.idleTimeoutSecs";
+/// 全局默认返回行数上限（编辑器/数据浏览的兜底上限；前端还要再被分页大小夹一层）。
+const SETTINGS_QUERY_MAX_ROWS: &str = "query.maxRows";
+/// 日志级别（trace/debug/info/warn/error；web 壳在运行时热切换 tracing 过滤器）。
+pub const SETTINGS_LOG_LEVEL: &str = "log.level";
+/// MCP 壳的默认连接：客户端不传 connection 参数时兜底用它（空 = 不兜底，报缺参）。
+pub const SETTINGS_MCP_DEFAULT_CONNECTION: &str = "mcp.defaultConnection";
+/// MCP 单次查询最大行数（1..=HARD_MAX_ROWS；壳把客户端传的 max_rows 夹到这个值）。
+pub const SETTINGS_MCP_MAX_ROWS: &str = "mcp.maxRows";
+/// MCP 查询默认超时（秒；客户端没传 timeout_ms 时用它）。
+pub const SETTINGS_MCP_TIMEOUT_SECS: &str = "mcp.timeoutSecs";
+/// MCP 工具类别开关：结构浏览（连接/类型/表清单/表结构/搜表）。
+pub const SETTINGS_MCP_TOOLS_STRUCTURE: &str = "mcp.toolsStructure";
+/// MCP 工具类别开关：SQL 执行（执行/取消）。
+pub const SETTINGS_MCP_TOOLS_QUERY: &str = "mcp.toolsQuery";
+/// MCP 工具类别开关：历史与诊断（查询历史/服务信息）。
+pub const SETTINGS_MCP_TOOLS_HISTORY: &str = "mcp.toolsHistory";
 
 const SELECT_CONNECTION: &str = "SELECT id, name, kind, host, port, database_name, username, password, \
      file_path, color, extra, read_only, created_at, updated_at FROM connections";
@@ -333,6 +367,96 @@ impl Store {
         Ok(conn.execute("DELETE FROM query_history", [])?)
     }
 
+    /// 表行数（白名单；表不存在按 0 —— 老库可能还没建这张表）。
+    pub fn table_row_count(&self, table: &str) -> Result<u64> {
+        const ALLOWED: &[&str] = &[
+            "schema_cache", "query_history", "ai_audit", "ai_usage_days",
+            "ai_usage_models", "kb_docs", "kb_vectors",
+        ];
+        if !ALLOWED.contains(&table) {
+            return Err(DbMindError::new(
+                ErrorCode::StorageFailed,
+                format!("未允许的统计表: {table}"),
+            ));
+        }
+        let conn = self.lock();
+        let exists: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                params![table],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if exists == 0 {
+            return Ok(0);
+        }
+        // 表名来自上面的白名单字面量，不是用户输入 —— 拼接是安全的
+        Ok(conn
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?)
+    }
+
+    /// 清空白名单表，返回删除的行数。
+    pub fn purge_table(&self, table: &str) -> Result<usize> {
+        const ALLOWED: &[&str] = &["ai_audit", "ai_usage_days", "ai_usage_models", "kb_docs", "kb_vectors"];
+        if !ALLOWED.contains(&table) {
+            return Err(DbMindError::new(
+                ErrorCode::StorageFailed,
+                format!("未允许的清理表: {table}"),
+            ));
+        }
+        let conn = self.lock();
+        // 同上：表名是白名单字面量
+        Ok(conn.execute(&format!("DELETE FROM {table}"), [])?)
+    }
+
+    /// 按设置清理历史：`max_entries` 之外的旧行 + `retention_days` 天之前的旧行
+    /// （0 = 该维度不启用）。返回删除的行数。
+    ///
+    /// 为什么要有上限：`query_history` 此前**只增不减** —— 每次编辑器执行都插一行，
+    /// 一年下来几十万行，拖慢的正是它自己的索引。按条数保「最近 N 条」、按天数保
+    /// 「最近 N 天」，两个维度都留了 0 = 不启用的口子（有人就想永久留着）。
+    pub fn prune_history(&self, max_entries: usize, retention_days: u32) -> Result<usize> {
+        let conn = self.lock();
+        let mut removed = 0i64;
+        if retention_days > 0 {
+            // created_at 全部出自 `now_iso()`（同一格式、同一时区偏移），字符串比较即时间比较
+            let cutoff = (chrono::Local::now() - chrono::Duration::days(retention_days as i64))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+            removed += conn.execute(
+                "DELETE FROM query_history WHERE created_at < ?1",
+                params![cutoff],
+            )? as i64;
+        }
+        if max_entries > 0 {
+            removed += conn.execute(
+                "DELETE FROM query_history WHERE id NOT IN \
+                 (SELECT id FROM query_history ORDER BY created_at DESC, rowid DESC LIMIT ?1)",
+                params![max_entries as i64],
+            )? as i64;
+        }
+        Ok(removed as usize)
+    }
+
+    /// 把元数据库做一份**一致性快照**到 `path`（`VACUUM INTO`，迁移数据目录用）。
+    ///
+    /// 为什么不用直接复制文件：库正开着（WAL 模式），裸拷 `dbmind.db` 可能拿到
+    /// 一个没有 wal 的中间态。`VACUUM INTO` 在读事务里产出一个干净的独立文件。
+    /// 目标已存在则失败 —— 调用方（迁移）负责先清场。
+    pub fn backup_into(&self, path: &Path) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "VACUUM INTO ?1",
+            params![path.to_string_lossy()],
+        )
+        .map_err(|e| {
+            DbMindError::new(
+                ErrorCode::StorageFailed,
+                format!("快照元数据库到 {} 失败: {e}", path.display()),
+            )
+        })?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------ 设置
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
@@ -386,18 +510,42 @@ impl Store {
     /// 安全策略相关设置的键名（供壳层读写，避免各处硬编码字符串）。
     pub const KEY_PROTECT_PRODUCTION: &'static str = SETTINGS_SAFETY_PRODUCTION;
     pub const KEY_AI_WRITE_ENABLED: &'static str = SETTINGS_SAFETY_AI_WRITE;
-    pub const KEY_THEME: &'static str = SETTINGS_UI_THEME;
-    pub const KEY_PAGE_SIZE: &'static str = SETTINGS_PAGE_SIZE;
+    pub const KEY_BLOCK_DANGEROUS: &'static str = SETTINGS_SAFETY_BLOCK_DANGEROUS;
+    pub const KEY_MAX_WRITE_ROWS: &'static str = SETTINGS_SAFETY_MAX_WRITE_ROWS;
     pub const KEY_SESSION_MAX_PER_HOST: &'static str = SETTINGS_SESSION_MAX_PER_HOST;
     pub const KEY_SESSION_IDLE_TIMEOUT: &'static str = SETTINGS_SESSION_IDLE_TIMEOUT;
+    pub const KEY_SCHEMA_TTL: &'static str = SETTINGS_SCHEMA_TTL;
+    pub const KEY_QUERY_TIMEOUT: &'static str = SETTINGS_QUERY_TIMEOUT;
+    pub const KEY_ALLOW_LEGACY_TLS: &'static str = SETTINGS_ALLOW_LEGACY_TLS;
+    pub const KEY_HISTORY_MAX_ENTRIES: &'static str = SETTINGS_HISTORY_MAX_ENTRIES;
+    pub const KEY_HISTORY_RETENTION_DAYS: &'static str = SETTINGS_HISTORY_RETENTION_DAYS;
+    pub const KEY_TUNNEL_IDLE_TIMEOUT: &'static str = SETTINGS_TUNNEL_IDLE_TIMEOUT;
+    pub const KEY_QUERY_MAX_ROWS: &'static str = SETTINGS_QUERY_MAX_ROWS;
+    pub const KEY_LOG_LEVEL: &'static str = SETTINGS_LOG_LEVEL;
+    pub const KEY_MCP_DEFAULT_CONNECTION: &'static str = SETTINGS_MCP_DEFAULT_CONNECTION;
+    pub const KEY_MCP_MAX_ROWS: &'static str = SETTINGS_MCP_MAX_ROWS;
+    pub const KEY_MCP_TIMEOUT_SECS: &'static str = SETTINGS_MCP_TIMEOUT_SECS;
+    pub const KEY_MCP_TOOLS_STRUCTURE: &'static str = SETTINGS_MCP_TOOLS_STRUCTURE;
+    pub const KEY_MCP_TOOLS_QUERY: &'static str = SETTINGS_MCP_TOOLS_QUERY;
+    pub const KEY_MCP_TOOLS_HISTORY: &'static str = SETTINGS_MCP_TOOLS_HISTORY;
 
     fn seed_settings(&self) -> Result<()> {
         let conn = self.lock();
         for (key, value) in [
             (SETTINGS_SAFETY_PRODUCTION, "false"),
             (SETTINGS_SAFETY_AI_WRITE, "false"),
-            (SETTINGS_UI_THEME, "system"),
-            (SETTINGS_PAGE_SIZE, "2000"),
+            (SETTINGS_SCHEMA_TTL, "300"),
+            (SETTINGS_QUERY_TIMEOUT, "120"),
+            (SETTINGS_HISTORY_MAX_ENTRIES, "1000"),
+            (SETTINGS_HISTORY_RETENTION_DAYS, "30"),
+            (SETTINGS_TUNNEL_IDLE_TIMEOUT, "1800"),
+            (SETTINGS_QUERY_MAX_ROWS, "2000"),
+            (SETTINGS_LOG_LEVEL, "info"),
+            (SETTINGS_MCP_MAX_ROWS, "2000"),
+            (SETTINGS_MCP_TIMEOUT_SECS, "30"),
+            (SETTINGS_MCP_TOOLS_STRUCTURE, "true"),
+            (SETTINGS_MCP_TOOLS_QUERY, "true"),
+            (SETTINGS_MCP_TOOLS_HISTORY, "true"),
         ] {
             conn.execute(
                 "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",
@@ -1198,17 +1346,21 @@ impl Store {
 /// 而那些函数跟存储毫无关系。装一次全局句柄，签名一个都不用动。
 ///
 /// 注意：**刻意不在 Store 构造里自动装**。测试会造大量内存库，自动装会互相串；
-/// 装不装由壳层决定（`serve()` 启动时装一次）。
-static GLOBAL_STORE: OnceLock<Arc<Store>> = OnceLock::new();
+/// 装不装由壳层决定（`serve()` 启动时装一次；数据目录迁移热切换时**换新**）。
+static GLOBAL_STORE: OnceLock<RwLock<Arc<Store>>> = OnceLock::new();
 
-/// 装全局主库句柄（幂等：重复调用以第一次为准）。
+/// 装全局主库句柄（重复调用=**换新**：迁移热切换后，AI 设置这类「环境式」读写
+/// 要跟着指向新库，不能还盯着的旧库）。
 pub fn install_global_store(store: Arc<Store>) {
-    let _ = GLOBAL_STORE.set(store);
+    let cell = GLOBAL_STORE.get_or_init(|| RwLock::new(store.clone()));
+    *cell.write().unwrap_or_else(|e| e.into_inner()) = store;
 }
 
 /// 取全局主库句柄；没装（单测、或只用内核不开壳）返回 None。
 pub fn global_store() -> Option<Arc<Store>> {
-    GLOBAL_STORE.get().cloned()
+    GLOBAL_STORE
+        .get()
+        .map(|cell| cell.read().unwrap_or_else(|e| e.into_inner()).clone())
 }
 
 // ---------------------------------------------------------------- 工具

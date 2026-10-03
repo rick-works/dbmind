@@ -8,12 +8,11 @@
         <el-tag size="small" effect="plain" type="info">{{ connTypeLabel }}</el-tag>
       </div>
       <div class="header-actions">
-        <el-button size="small" text :icon="CopyDocument" @click="copyGrants">{{ $t('oft.copySql') }}</el-button>
-        <el-button size="small" type="primary" plain :icon="EditPen" @click="onEditClick">{{ $t('udv.editUser') }}</el-button>
+        <!-- 用户详情**只读**：编辑入口已按需求下掉（编辑链路保留，随时可恢复） -->
       </div>
     </div>
 
-    <!-- 主体：左详情 + 右预览 -->
+    <!-- 主体：上详情 + 下 SQL 预览（与「编辑表结构」同一布局） -->
     <div class="form-tab-body">
       <!-- 左侧详情 -->
       <div class="form-area">
@@ -40,17 +39,29 @@
         </template>
       </div>
 
-      <!-- 右侧 SQL 预览 -->
-      <div class="sql-area">
-        <div class="sql-head">
+      <!-- 分隔条：上下两块卡片之间那道缝，向上拖 = 预览变高，双击最大/最小 -->
+      <div v-show="!sqlCollapsed" class="sql-resizer"
+           :title="$t('tdet.resizerTitle')"
+           @mousedown.prevent="onSqlResizeStart" @dblclick="onSqlResizeDblClick"></div>
+
+      <!-- SQL 预览：在详情**下方**（原来是右侧 380px 固定栏），点标题行展开/收起 -->
+      <div ref="sqlAreaRef" class="sql-area" :class="{ collapsed: sqlCollapsed }"
+           :style="sqlCollapsed ? null : { height: sqlHeight + 'px' }">
+        <div class="sql-head" @click="sqlCollapsed = !sqlCollapsed"
+             :title="sqlCollapsed ? $t('tdet.expandSql') : $t('tdet.collapseSql')">
+          <el-icon class="sql-fold" :class="{ folded: sqlCollapsed }"><CaretRight /></el-icon>
           <el-icon><DocumentCopy /></el-icon>
           <span>{{ $t('oft.preview') }}</span>
+          <span class="sql-fold-tx">{{ sqlCollapsed ? $t('tdet.expand') : $t('tdet.collapse') }}</span>
         </div>
-        <div class="sql-body">
+        <div v-show="!sqlCollapsed" class="sql-body">
           <pre><code>{{ fullSql || $t('udv.noSql') }}</code></pre>
         </div>
         <div class="sql-foot">
-          <el-button size="small" type="primary" :icon="EditPen" @click="onEditClick">{{ $t('udv.editUser') }}</el-button>
+          <span class="sql-tip">{{ $t('udv.grantTip') }}</span>
+          <div class="sql-foot-actions">
+            <el-button size="small" text :icon="CopyDocument" @click="copyGrants">{{ $t('oft.copySql') }}</el-button>
+          </div>
         </div>
       </div>
     </div>
@@ -58,9 +69,9 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Loading, CircleClose, User, CopyDocument, EditPen, InfoFilled, DocumentCopy } from '@element-plus/icons-vue'
+import { Loading, CircleClose, User, CopyDocument, EditPen, InfoFilled, DocumentCopy, CaretRight } from '@element-plus/icons-vue'
 import { getUserInfo } from '../../api'
 import { t } from '../../utils/i18n'
 
@@ -92,6 +103,19 @@ const fieldLabelMap = () => ({
   disabled: t('udv.fDisabled'), is_disabled: t('udv.fDisabled'), login_name: t('udv.fLoginName'),
   // PostgreSQL 的 rol* 三项
   is_superuser: t('udv.fSuperuser'), can_login: t('udv.fCanLogin'), can_create_db: t('udv.fCanCreateDb'),
+  // ClickHouse 的 system.users 列（驱动可能回大写或小写键名，两套都备）
+  storage: t('udv.fStorage'), STORAGE: t('udv.fStorage'),
+  auth_type: t('udv.fAuthType'), AUTH_TYPE: t('udv.fAuthType'),
+  host_ip: t('udv.fHostIp'), HOST_IP: t('udv.fHostIp'),
+  host_names: t('udv.fHostNames'), HOST_NAMES: t('udv.fHostNames'),
+  default_roles_all: t('udv.fDefaultRoles'), DEFAULT_ROLES_ALL: t('udv.fDefaultRoles'),
+  grantees_all: t('udv.fGrantees'), GRANTEES_ALL: t('udv.fGrantees'),
+  // Oracle / DM 的 dba_users 列（Oracle 驱动回全大写键）
+  account_status: t('udv.fAccountStatus'), ACCOUNT_STATUS: t('udv.fAccountStatus'),
+  created: t('udv.fCreateDate'), CREATED: t('udv.fCreateDate'),
+  default_tablespace: t('udv.fTablespace'), DEFAULT_TABLESPACE: t('udv.fTablespace'),
+  temporary_tablespace: t('udv.fTempTablespace'), TEMPORARY_TABLESPACE: t('udv.fTempTablespace'),
+  profile: t('udv.fProfile'), PROFILE: t('udv.fProfile'),
   authentication_type_desc: t('udv.fAuthType'), create_date: t('udv.fCreateDate'),
   modify_date: t('udv.fModifyDate'), comment: t('udv.fComment'), plugin: t('udv.fPlugin'),
   password_expired: t('udv.fPwdExpired'), max_questions: t('udv.fMaxQuestions'),
@@ -232,6 +256,47 @@ const onEditClick = () => {
 }
 
 watch(() => [props.conn?.id, props.database, props.name], load, { immediate: true })
+
+// ===== 底部 SQL 预览的折叠 / 拖拽（与「编辑表结构」同一套手感）=====
+const SQL_H_DEFAULT = 260
+const SQL_H_MIN = 96   // 标题行 + 底部按钮行，再低就只剩两条杠
+const FORM_MIN = 120   // 上方详情卡的最小保留高度 —— 拖到最顶也不能把详情完全盖住
+const sqlAreaRef = ref(null)
+const sqlCollapsed = ref(false)
+const sqlHeight = ref(SQL_H_DEFAULT)
+/** 高度上限量**所在容器的实际可用高度**，并给上方详情卡留出最小空间 */
+const sqlMaxH = () => {
+  const parent = sqlAreaRef.value?.parentElement
+  const available = (parent ? parent.clientHeight : Math.round(window.innerHeight * 0.7)) - FORM_MIN
+  return Math.max(SQL_H_MIN, available)
+}
+let sqlDrag = null
+const onSqlResizeStart = (e) => {
+  sqlDrag = { startY: e.clientY, startH: sqlHeight.value }
+  document.body.style.cursor = 'row-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onSqlResizeMove)
+  window.addEventListener('mouseup', onSqlResizeEnd)
+}
+const onSqlResizeMove = (e) => {
+  if (!sqlDrag) return
+  // 向上拖 = 变高：起始高度 + 鼠标上移的距离
+  const next = sqlDrag.startH + (sqlDrag.startY - e.clientY)
+  sqlHeight.value = Math.min(sqlMaxH(), Math.max(SQL_H_MIN, Math.round(next)))
+}
+const onSqlResizeEnd = () => {
+  sqlDrag = null
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  window.removeEventListener('mousemove', onSqlResizeMove)
+  window.removeEventListener('mouseup', onSqlResizeEnd)
+}
+/** 双击：最大 ↔ 最小 */
+const onSqlResizeDblClick = () => {
+  const max = sqlMaxH()
+  sqlHeight.value = sqlHeight.value >= max - 8 ? SQL_H_MIN : max
+}
+onBeforeUnmount(onSqlResizeEnd)
 </script>
 
 <style scoped>
@@ -265,16 +330,19 @@ watch(() => [props.conn?.id, props.database, props.name], load, { immediate: tru
 .form-tab-body {
   flex: 1;
   display: flex;
+  flex-direction: column;
   overflow: hidden;
   min-height: 0;
 }
 
-/* 左侧详情 */
+/* 详情在上：自身**不滚动** —— 滚动交给内部的「基本信息」卡片，
+   滚动条才会出现在卡片右缘内侧，而不是整块编辑区的最右边（用户反馈） */
 .form-area {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
   padding: 14px;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -291,15 +359,36 @@ watch(() => [props.conn?.id, props.database, props.name], load, { immediate: tru
 }
 .empty-state.error { color: var(--dc-danger); }
 
-/* 右侧 SQL */
+/* ===== SQL 预览：在详情下方（原来右侧 380px 固定栏）=====
+   宽度通栏、上边框替代左边框；高度由拖动/双击控制（内联 style），
+   收起时高度交给内容（标题行 + 底部按钮行）。 */
 .sql-area {
-  width: 380px;
-  border-left: 1px solid var(--dc-border-soft);
-  background: var(--dc-bg-code);
+  /* 不设 width:100% —— flex 纵向布局里子项默认拉伸（stretch），
+     自动等于「父宽 − 左右 margin」；写了 100% 反而会在 margin 之外再撑满整行，
+     于是右侧溢出边距（实测贴边）。 */
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  background: var(--dc-bg-card);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
+  min-height: 0;
+  margin: 0 14px 12px;
 }
+.sql-area.collapsed { height: auto !important; }
+/* 分隔条：本身就是上下两块卡片之间那道缝（6px + 透明底），悬停变主色 */
+.sql-resizer { height: 6px; flex: 0 0 6px; cursor: row-resize; position: relative; z-index: 2; background: transparent; }
+.sql-resizer::before {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px; height: 4px; border-radius: 3px;
+  background: var(--dc-text-dim); opacity: .45;
+  transition: background .15s ease, opacity .15s ease;
+}
+.sql-resizer:hover::before { background: var(--dc-primary); opacity: 1; }
+.sql-foot-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .sql-head {
   display: flex;
   align-items: center;
@@ -307,9 +396,19 @@ watch(() => [props.conn?.id, props.database, props.name], load, { immediate: tru
   padding: 10px 12px;
   font-size: 13px;
   color: var(--dc-text-dim);
+  background: var(--dc-bg-soft);
   border-bottom: 1px solid var(--dc-border-soft);
   flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
 }
+.sql-head:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
+/* 折叠箭头：展开时朝下、收起时朝右 */
+.sql-fold { transition: transform .18s ease; transform: rotate(90deg); }
+.sql-fold.folded { transform: rotate(0deg); }
+.sql-fold-tx { font-size: 12px; color: var(--dc-text-weak); }
+/* 收起时把底部提示一并收掉，只留按钮 */
+.sql-area.collapsed .sql-tip { display: none; }
 .sql-body {
   flex: 1;
   overflow: auto;
@@ -330,9 +429,12 @@ watch(() => [props.conn?.id, props.database, props.name], load, { immediate: tru
   border-top: 1px solid var(--dc-border-soft);
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: 8px;
   flex-shrink: 0;
 }
+/* 底栏左侧提示：占满剩余宽度，把按钮推到右边 */
+.sql-tip { flex: 1; font-size: 12px; color: var(--dc-text-dim); }
 
 /* ===== 卡片（与 UserForm 统一风格） ===== */
 .form-card {
@@ -340,6 +442,11 @@ watch(() => [props.conn?.id, props.database, props.name], load, { immediate: tru
   border: 1px solid var(--dc-border-soft);
   border-radius: 10px;
   padding: 12px 14px;
+  /* 占满编辑区并**在卡片内滚动**：滚动条贴着卡片右缘内侧，
+     而不是飘在整块编辑区的最右边 */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 .card-title {
   display: flex;

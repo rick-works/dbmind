@@ -215,7 +215,7 @@ async fn run_ai_sql(
 ) -> XResult<dbmind_core::QueryResult> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let request = QueryRequest {
         read_only: None,
         connection: target,
@@ -225,8 +225,12 @@ async fn run_ai_sql(
             timeout_ms: 60_000,
         },
         execution_id: None,
-        // 会话名带 ai: 前缀：历史记录里能一眼看出「这条是智能体跑的」
+        // 会话名带 ai: 前缀：日志与宿主会话里能一眼看出「这条是智能体跑的」
         session: Some("ai:agent".to_string()),
+        // **不进查询历史**：这些是智能体自己发的探测语句，不是用户敲的 SQL。
+        // 首页「最近查询」的语义是「**我**执行过什么」—— 智能体一轮对话要跑十几条，
+        // 混进去就把用户自己的操作淹掉了（对话本身留在 AI 面板里，查得到）。
+        internal: true,
     };
     blocking(move || engine.execute(request, AccessContext::Ai)).await
 }

@@ -24,45 +24,45 @@ use dbmind_core::ConnectionRecord;
 use serde_json::{json, Map, Value};
 
 use crate::api::dialect::Dialect;
-use crate::api::error::XResult;
+use crate::api::error::{XError, XResult};
 use crate::api::{blocking, require_record};
 use crate::AppState;
 
 /// 影子标记（存在连接记录的 `extra` 里）。
-pub const EXTRA_SHADOW_FOR: &str = "shadowFor";
+///
+/// 键名与判定都来自内核（`dbmind_core::types`）：**只读闸门也要按它认影子**
+/// （影子必须继承主连接的 `read_only`，见 `engine::inherit_read_only_from_base`），
+/// 两处各写一份字符串迟早会漂。
+pub use dbmind_core::EXTRA_SHADOW_FOR;
 pub const EXTRA_SHADOW_DATABASE: &str = "shadowDatabase";
 
 /// 这条记录是不是影子（用户不该看到它）。
 pub fn is_shadow(record: &ConnectionRecord) -> bool {
-    record
-        .config
-        .extra
-        .as_ref()
-        .and_then(|extra| extra.get(EXTRA_SHADOW_FOR))
-        .is_some()
+    record.is_shadow()
 }
 
 fn shadow_name(base_name: &str, database: &str) -> String {
     format!("{base_name} ▸ {database}")
 }
 
-async fn find_shadow(state: &AppState, name: &str, base_id: &str) -> XResult<Option<String>> {
-    let engine = state.engine.clone();
+async fn find_shadow(state: &AppState, name: &str, base_id: &str, database: &str) -> XResult<Option<String>> {
+    let engine = state.engine();
     let name = name.to_string();
     let found = blocking(move || engine.find_connection(&name)).await?;
     Ok(found
-        .filter(|record| is_shadow(record) && shadow_base(record).as_deref() == Some(base_id))
+        .filter(|record| {
+            is_shadow(record)
+                && shadow_base(record).as_deref() == Some(base_id)
+                // 库名也要对上：老版本曾把 `internal.xms` 这种带 catalog 前缀的全限定名
+                // 存进影子的 database（URL 拼点号连不上，见 resolve 的 catalog 分支）——
+                // 配置对不上就当作没有，走下面的重建，坏影子自然被新的顶掉。
+                && record.config.database.as_deref() == Some(database)
+        })
         .map(|record| record.id))
 }
 
 fn shadow_base(record: &ConnectionRecord) -> Option<String> {
-    record
-        .config
-        .extra
-        .as_ref()
-        .and_then(|extra| extra.get(EXTRA_SHADOW_FOR))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    record.shadow_of().map(str::to_string)
 }
 
 /// 把「连接 + 库名」解析成可执行用的连接 id。
@@ -85,6 +85,28 @@ pub async fn resolve(state: &AppState, base_id: &str, database: &str) -> XResult
         raw
     };
     let stored = base.config.database.clone();
+
+    // Doris 的树/页签里「库」是 `catalog.库` 全限定名（internal.ods / mysql_216.test）。
+    // 影子连接把整个名字塞进 JDBC URL 会失败（MySQL 协议当单个库名，带点号握手挂），
+    // 所以这里先拆前缀：
+    // - 默认 catalog（internal）：影子 database 用**裸库名** —— 连接的默认 catalog 恰好就是
+    //   internal，`jdbc:mysql://host/ods` 语义与「internal.ods」完全一致（真机验证）；
+    // - 外部 catalog：URL 与裸名都表达不了（裸名会被解析成 internal 下的库而报
+    //   Unknown database —— 真机踩过：xms 在 mysql_216 下，URL database=xms 直接报错），
+    //   明确报不支持，比静默连到错的库强得多。
+    if dialect.catalog_level() {
+        let (catalog, db) = match wanted.split_once('.') {
+            Some((c, d)) if !c.is_empty() && !d.is_empty() => (c, d),
+            _ => ("internal", wanted.as_str()),
+        };
+        if !catalog.eq_ignore_ascii_case("internal") {
+            return Err(XError::bad_request(format!(
+                "暂不支持外部 catalog（{catalog}）的同步：JDBC 连接无法指定外部 catalog，请在 internal 的库之间同步"
+            )));
+        }
+        // label 用全限定名（internal.ods，与树上叫法一致）；database 只存裸名
+        return ensure_shadow(state, &base, db, &wanted).await;
+    }
 
     if wanted.is_empty() {
         // 「不指定库」有两种情形要分开：
@@ -122,7 +144,7 @@ async fn ensure_shadow(
     label: &str,
 ) -> XResult<String> {
     let name = shadow_name(&base.config.name, label);
-    if let Some(existing) = find_shadow(state, &name, &base.id).await? {
+    if let Some(existing) = find_shadow(state, &name, &base.id, database).await? {
         return Ok(existing);
     }
 
@@ -138,13 +160,36 @@ async fn ensure_shadow(
     extra.insert(EXTRA_SHADOW_DATABASE.to_string(), json!(database));
     config.extra = Some(Value::Object(extra));
 
-    let engine = state.engine.clone();
+    let engine = state.engine();
     match blocking(move || engine.add_connection(config)).await {
         Ok(record) => Ok(record.id),
         Err(err) => {
             // 并发下可能刚好被别人建好了 —— 那不是错误，取用即可
-            if let Some(existing) = find_shadow(state, &name, &base.id).await? {
+            if let Some(existing) = find_shadow(state, &name, &base.id, database).await? {
                 return Ok(existing);
+            }
+            // 同名旧影子但 database 配置对不上（比如 Doris 老版本把 `internal.ods`
+            // 整个存进了 database，URL 连不上）：把它删掉重建，坏影子自然被顶掉
+            let stale = name.clone();
+            let engine = state.engine();
+            if let Ok(Some(old)) = blocking(move || engine.find_connection(&stale)).await {
+                let old_id = old.id.clone();
+                let engine = state.engine();
+                let _ = blocking(move || engine.remove_connection(&old_id)).await;
+                let engine = state.engine();
+                let mut config = base.config.clone();
+                config.name = name;
+                config.database = Some(database.to_string());
+                let mut extra = match config.extra.take() {
+                    Some(Value::Object(map)) => map,
+                    _ => Map::new(),
+                };
+                extra.insert(EXTRA_SHADOW_FOR.to_string(), json!(base.id));
+                extra.insert(EXTRA_SHADOW_DATABASE.to_string(), json!(database));
+                config.extra = Some(Value::Object(extra));
+                return blocking(move || engine.add_connection(config))
+                    .await
+                    .map(|record| record.id);
             }
             Err(err)
         }
@@ -153,14 +198,14 @@ async fn ensure_shadow(
 
 /// 删除某条连接的全部影子（删主连接时级联调用，否则影子会变成树上看不见的垃圾）。
 pub async fn delete_shadows(state: &AppState, base_id: &str) -> XResult<usize> {
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let records = blocking(move || engine.list_connections()).await?;
     let mut removed = 0;
     for record in records {
         if shadow_base(&record).as_deref() != Some(base_id) {
             continue;
         }
-        let engine = state.engine.clone();
+        let engine = state.engine();
         let id = record.id.clone();
         if blocking(move || engine.remove_connection(&id)).await.unwrap_or(false) {
             removed += 1;

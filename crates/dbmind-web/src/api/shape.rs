@@ -24,7 +24,7 @@ use serde_json::{json, Map, Value};
 /// 内核的 `extra` 是**透传给驱动**的开放字段（`extra.params` → JDBC Properties），
 /// 所以往里放界面偏好是安全的：驱动只读 `params`，其余键无人过问。
 ///上游把这些放在连接记录本身，这里等价落位，语义一致。
-pub const EXTRA_ENVIRONMENT: &str = "environment";
+/// 分组键在内核 `types` 里（`EXTRA_GROUP` = "group"，兼容旧键 `environment`），这里不再重复定义。
 pub const EXTRA_ENV: &str = "env";
 /// 认证方式（SQL Server：`sqlserver` | `windows`）。存在 `extra` 里，见 conn.rs 的说明。
 pub const EXTRA_AUTH_TYPE: &str = "authType";
@@ -32,7 +32,7 @@ pub const EXTRA_AUTH_TYPE: &str = "authType";
 /// 未分组时的默认目录名。
 ///
 /// **不能给空串**：上游的树只渲染 `envOrder = [自定义目录..., DEV, TEST, PROD]` 里存在的分组，
-/// 而自定义目录来自「所有连接的 environment 中非空、非预置的值」。
+/// 而自定义目录来自「所有连接的分组（group）中非空、非预置的值」。
 /// 给空串 ⇒ 该分组不在 envOrder 里 ⇒ **连接在树上根本不显示**（接口却全是 200）。
 pub const DEFAULT_ENVIRONMENT: &str = "数据源";
 
@@ -118,6 +118,54 @@ pub fn number_key(cell: &CellValue) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// **可排序的归一键**（流式对比的双指针用）。
+///
+/// `row_key` 生成的字符串只保证「相等判断」正确 —— 字典序 ≠ 数值序（`"9"` > `"10"`），
+/// 流式对比的两侧行各自按**数据库的排序**流出来，内存里必须用同一种序做双指针比较。
+/// 复合键 = 分段逐列比较（Vec 的 Ord 语义），排序规则与常规数据库一致：
+/// NULL 最小 → 数值 → 日期时间 → 文本（数值与日期内部按值比）。
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SortPart {
+    Null,
+    Num(OrdF64),
+    Time(String),
+    Text(String),
+}
+
+/// f64 的全序包装（total_cmp 给出确定序，NaN 也不 panic）。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OrdF64(pub f64);
+impl Eq for OrdF64 {}
+impl PartialOrd for OrdF64 {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for OrdF64 {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.total_cmp(&other.0)
+    }
+}
+
+/// 行的组合**排序键**（与 `row_key` 的归一规则一致，但用于顺序比较）。
+pub fn row_sort_key(row: &[CellValue], indexes: &[usize]) -> Vec<SortPart> {
+    indexes
+        .iter()
+        .map(|index| match row.get(*index) {
+            None | Some(CellValue::Null) => SortPart::Null,
+            Some(CellValue::Text(text)) => match normalize_datetime(text) {
+                Some(normalized) => SortPart::Time(normalized),
+                None => SortPart::Text(text.clone()),
+            },
+            Some(CellValue::Blob { len }) => SortPart::Text(format!("b:{len}")),
+            Some(other) => match number_key(other) {
+                Some(number) => SortPart::Num(OrdF64(number.parse::<f64>().unwrap_or(f64::NAN))),
+                None => SortPart::Null,
+            },
+        })
+        .collect()
 }
 
 /// 日期/时间文本 → 规范形式 `yyyy-MM-ddTHH:mm:ss[.ffffff]`（没有时间部分的补 `00:00:00`）。
@@ -282,7 +330,26 @@ mod value_tests {
 
 /// 内核 `QueryResult` →上游`QueryResult`（见 `上游-core` 的 entity 类）。
 pub fn query_result_json(result: &QueryResult) -> Value {
-    let columns: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
+    // 列名去重：数据库允许结果集输出**重名列**（`SELECT *, now(), now()` 这种没起
+    // 别名的重复表达式是合法 SQL），而行的形状是「列名 → 值」的对象（见模块头第 1 条），
+    // 同名键后写盖先写 —— 14 列的结果只剩 13 份数据，末尾的列全部错位。
+    // 第 2 次出现起追加 `_2`/`_3`（撞上已有列名就继续往后找空位），行与表头按同一个
+    // 新名字走，数据一个不丢。多数客户端（DBeaver/DataGrip）对重名列也是这么做的。
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let columns: Vec<String> = result
+        .columns
+        .iter()
+        .map(|c| {
+            let base = if c.name.is_empty() { "_1" } else { c.name.as_str() };
+            let mut name = base.to_string();
+            let mut n = 1usize;
+            while !used.insert(name.clone()) {
+                n += 1;
+                name = format!("{base}_{n}");
+            }
+            name
+        })
+        .collect();
     let column_types: Vec<String> = result
         .columns
         .iter()
@@ -408,8 +475,35 @@ pub fn connection_json(record: &ConnectionRecord) -> Value {
                 .collect()
         })
         .unwrap_or_default();
-    let environment = extra_str(record, EXTRA_ENVIRONMENT).unwrap_or_else(|| DEFAULT_ENVIRONMENT.to_string());
+    // 分组：新键 `group`，旧数据回落到 `environment`（对上游只暴露 `group` 一个名字）
+    let group = record
+        .group()
+        .unwrap_or_else(|| DEFAULT_ENVIRONMENT.to_string());
     let env = extra_str(record, EXTRA_ENV).unwrap_or_default();
+    // SSH 隧道：地址 / 端口 / 用户 / 认证方式 / 私钥路径都回显（编辑页要能改），
+    // 但**口令与私钥口令短语一个都不外发** —— 与主口令同一条规矩（只写不读）。
+    // 界面据此把输入框留空并用 `hasSshPassword` 提示「已保存，留空则不修改」。
+    let ssh = config
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.get(dbmind_core::tunnel::EXTRA_SSH));
+    let ssh_str = |key: &str| -> String {
+        ssh.and_then(|value| value.get(key))
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let ssh_secret_saved = ["password", "keyPassphrase"]
+        .iter()
+        .any(|key| !ssh_str(key).is_empty());
+    let ssh_auth_type = {
+        let value = ssh_str("authType");
+        if value.is_empty() {
+            "password".to_string()
+        } else {
+            value
+        }
+    };
 
     json!({
         "id": record.id,
@@ -423,7 +517,7 @@ pub fn connection_json(record: &ConnectionRecord) -> Value {
         "filePath": config.file_path.clone().unwrap_or_default(),
         "charset": "UTF-8",
         "remark": "",
-        "environment": environment,
+        "group": group,
         "env": env,
         "jdbcUrl": "",
         "params": params,
@@ -431,16 +525,26 @@ pub fn connection_json(record: &ConnectionRecord) -> Value {
         "socketTimeout": 600,
         "writeTimeout": 300,
         "esProtocol": "http",
-        "sshEnabled": false,
-        "sshHost": "",
-        "sshPort": Value::Null,
-        "sshUser": "",
-        "sshAuthType": "password",
+        "sshEnabled": ssh
+            .and_then(|value| value.get("enabled"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "sshHost": ssh_str("host"),
+        "sshPort": ssh
+            .and_then(|value| value.get("port"))
+            .and_then(Value::as_u64)
+            .map(Value::from)
+            .unwrap_or(Value::Null),
+        "sshUser": ssh_str("user"),
+        "sshAuthType": ssh_auth_type,
+        // 两个机密字段恒为空串：口令只写不读
         "sshPassword": "",
-        "sshKeyPath": "",
+        "sshKeyPath": ssh_str("keyPath"),
         "sshKeyPassphrase": "",
         "hasPassword": config.username.as_deref().map(|u| !u.is_empty()).unwrap_or(false),
-        "hasSshPassword": false,
+        // 已存过 SSH 口令/口令短语？界面据此把输入框提示成「已保存，留空则不修改」。
+        // 之所以不看 `sshEnabled`：关掉隧道也照样保留配置，下次打开不必重填。
+        "hasSshPassword": ssh_secret_saved,
         // 备注：存在 `extra.note` 里（与 environment/env 同一处），没写就是空串
         "note": config
             .extra
@@ -462,4 +566,113 @@ pub fn tables_json(tables: &[TableInfo]) -> Value {
 
 pub fn columns_json(columns: &[ColumnDetail]) -> Value {
     Value::Array(columns.iter().map(column_json).collect())
+}
+
+/// 把方言查出来的**表选项**并入 `/tables` 的每个表对象。
+///
+/// 为什么抽成纯函数：`meta::tables` 产出表清单有**三条**路径（catalog 层级 / schema 层级 /
+/// 内核 `DatabaseMetaData`），每条形都要补一次。三处各写一遍早晚会漂，而漏掉一处的后果
+/// 已经实测过了：那条路上的「表注释」永远空，用户改完保存明明成功（库里值确实变了），
+/// 重开却又是空的 —— 看起来就是"修改表注释没用"。
+///
+/// 入参 `rows` 是方言 SQL 的结果集：`table_name` 用于配对，其余列名由 SQL 里的
+/// `as <JSON 键>` 定死（`engine` / `charset` / `collation` / `comment` /
+/// `sortingKey` / `partitionKey`）。**按查到什么补什么**，空串按「没有」处理 ——
+/// 各家能拿到的项本来就不同（MySQL 有引擎/排序规则、ClickHouse 还有排序键/分区键、
+/// PG/Oracle/SQL Server 只有注释），不硬凑、也不让方言 SQL 里的杂列漏进接口。
+pub fn merge_table_options(payload: &mut Value, rows: &[serde_json::Map<String, Value>]) {
+    const OPTION_KEYS: [&str; 6] = [
+        "engine",
+        "charset",
+        "collation",
+        "comment",
+        "sortingKey",
+        "partitionKey",
+    ];
+    let mut options: std::collections::HashMap<String, serde_json::Map<String, Value>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let name = row
+            .get("table_name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        let mut item = serde_json::Map::new();
+        for (key, value) in row.iter() {
+            let Some(canonical) = OPTION_KEYS.iter().find(|known| known.eq_ignore_ascii_case(key)) else {
+                continue;
+            };
+            let text = value.as_str().unwrap_or("").trim().to_string();
+            if !text.is_empty() {
+                item.insert((*canonical).to_string(), json!(text));
+            }
+        }
+        options.insert(name, item);
+    }
+    let Some(list) = payload.as_array_mut() else {
+        return;
+    };
+    for item in list.iter_mut() {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let name = object
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_lowercase();
+        let Some(extra) = options.get(&name) else {
+            continue;
+        };
+        for (key, value) in extra {
+            object.insert(key.clone(), value.clone());
+        }
+    }
+}
+
+#[cfg(test)]
+mod table_option_tests {
+    use super::*;
+
+    fn row(pairs: &[(&str, &str)]) -> serde_json::Map<String, Value> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), json!(*value)))
+            .collect()
+    }
+
+    /// 表名配对要**大小写不敏感**、方言 SQL 里的杂列不能漏进接口、空串按「没有」处理。
+    ///
+    /// 这三条正是"改了注释重开还是空"的反面：配对不上 ⇒ 一行都补不进去。
+    #[test]
+    fn 表选项按表名并入() {
+        let mut payload = json!([{ "name": "Orders", "comment": null }, { "name": "users" }]);
+        let rows = vec![
+            row(&[("table_name", "orders"), ("comment", "订单表"), ("table_type", "BASE TABLE")]),
+            row(&[("table_name", "USERS"), ("comment", ""), ("engine", "InnoDB")]),
+        ];
+        merge_table_options(&mut payload, &rows);
+        let list = payload.as_array().unwrap();
+        assert_eq!(list[0]["comment"], json!("订单表"));
+        assert!(list[0].get("table_type").is_none(), "方言 SQL 的杂列漏进了接口");
+        // 空串不写：界面据此留空，而不是被一个空字符串顶掉默认值
+        assert!(list[1].get("comment").is_none());
+        assert_eq!(list[1]["engine"], json!("InnoDB"));
+    }
+
+    /// 不是数组 / 行里没有 `table_name` 时都要**原样放过**，不能让清单本身挂掉。
+    #[test]
+    fn 表选项并入的兜底() {
+        let mut payload = json!({ "name": "orders" });
+        merge_table_options(&mut payload, &[row(&[("table_name", "orders"), ("comment", "x")])]);
+        assert_eq!(payload, json!({ "name": "orders" }));
+
+        let mut payload = json!([{ "name": "orders" }]);
+        merge_table_options(&mut payload, &[row(&[("table_name", " "), ("comment", "x")])]);
+        assert_eq!(payload, json!([{ "name": "orders" }]));
+    }
 }

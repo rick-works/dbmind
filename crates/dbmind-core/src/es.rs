@@ -51,6 +51,10 @@ const READ_ACTIONS: &[&str] = &[
     "_aliases",
     "_ilm",
     "_component_template",
+    // 模板搜索是**查询**：`POST /_search_template` 与 `POST /_msearch_template`
+    // 走的是搜索接口，写通道上放行、只读连接上也该能跑
+    "_search_template",
+    "_msearch_template",
 ];
 
 /// 路径末段是这些动作时，`PUT` / `DELETE` 属于结构变更。
@@ -82,8 +86,6 @@ const DOC_ACTIONS: &[&str] = &[
     "_delete_by_query",
     "_update_by_query",
     "_reindex",
-    "_msearch_template",
-    "_search_template",
 ];
 
 pub struct Request {
@@ -144,17 +146,26 @@ pub fn classify(text: &str) -> StatementKind {
     let is_structure_action = STRUCTURE_ACTIONS.contains(&action.as_str());
     let is_doc_action = DOC_ACTIONS.contains(&action.as_str());
 
+    // `POST /_tasks/{id}/_cancel` 是**取消别人的任务**，不是查询。
+    // 不特判的话它会被 `_tasks`（只读动作）判成 Read —— 只读连接上就能把任务停掉。
+    let cancels_task = request.path.to_ascii_lowercase().contains("_cancel");
+
     match request.method.as_str() {
         "GET" | "HEAD" => StatementKind::Read,
         // POST 既能查也能写：唯一可靠的判据是动作段
         "POST" => {
-            if is_read_action {
-                StatementKind::Read
-            } else if is_structure_action {
-                // 结构级动作（_close / _flush / _refresh …）算结构变更，不是数据写入
-                StatementKind::Ddl
+            if cancels_task {
+                StatementKind::Unknown
             } else if is_doc_action {
                 StatementKind::Write
+            } else if is_structure_action {
+                // **先判「会改东西」再判只读**：`_mapping` / `_settings` / `_alias` /
+                // `_aliases` / `_ilm` / `_component_template` 这些动作段同时出现在两份名单里 ——
+                // `GET` 是看、`POST` 是改（`POST /_aliases` 正是 ES 改别名的**标准写法**）。
+                // 先判只读的话，只读连接上就能真的把别名 / 生命周期改掉。
+                StatementKind::Ddl
+            } else if is_read_action {
+                StatementKind::Read
             } else if depth == 1 {
                 // `POST /idx`（极少见）归读
                 StatementKind::Read
@@ -334,6 +345,42 @@ mod tests {
             StatementKind::Write
         );
         assert!(is_read_only(r#"GET /logs/_search?size=1"#));
+    }
+
+    /// `POST` 到「GET 是看、POST 是改」的那些动作段 ⇒ **不是只读**。
+    ///
+    /// 钉的是一组实打实的漏判：`POST /_aliases` 是 ES **改别名的标准写法**，
+    /// 而 `_aliases` / `_mapping` / `_settings` / `_ilm` / `_component_template`
+    /// 同时出现在「只读动作」名单里 —— 先判只读的话，只读连接上就能真的改掉别名
+    /// 与生命周期策略。
+    #[test]
+    fn post_到双名动作段不算只读() {
+        for text in [
+            r#"POST /_aliases { "actions": [ { "add": { "index": "logs", "alias": "logs_now" } } ] }"#,
+            "POST /logs/_alias/old",
+            "POST /_ilm/start",
+            "POST /_component_template/tpl",
+            "POST /logs/_mapping",
+            "POST /logs/_settings",
+        ] {
+            assert!(!is_read_only(text), "不该判成只读：{text}");
+        }
+        // 同样的动作段，`GET` 才是看
+        assert!(is_read_only("GET /_alias/logs"));
+        assert!(is_read_only("GET /logs/_mapping"));
+        // 搜索类 POST 照常只读
+        assert!(is_read_only(r#"POST /logs/_search { "query": { "match_all": {} } }"#));
+        assert!(is_read_only("POST /_search_template"));
+        assert!(is_read_only("POST /_msearch_template"));
+    }
+
+    /// `POST /_tasks/{id}/_cancel` 是取消别人的任务，不是查询。
+    #[test]
+    fn 取消任务不算只读() {
+        assert!(!is_read_only("POST /_tasks/oTUltX4IQMOUUVeiohTt8A:123/_cancel"));
+        // 「看任务」才是只读
+        assert!(is_read_only("GET /_tasks"));
+        assert!(is_read_only("GET /_tasks?detailed=true"));
     }
 
     #[test]

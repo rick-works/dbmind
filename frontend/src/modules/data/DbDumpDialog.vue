@@ -163,8 +163,15 @@ const visible = computed({
 })
 
 const loading = ref(false)
-const format = ref('sql')
-const opts = ref({ includeDrop: true, includeData: true })
+// 记住上一次的导出选择（localStorage dbmind_dump）：转储是个高频重复动作，
+// 每次都重置回默认等于逼用户天天重选一遍格式和对象类型
+const DUMP_KEY = 'dbmind_dump'
+const loadDumpPrefs = () => {
+  try { return JSON.parse(localStorage.getItem(DUMP_KEY) || '{}') } catch { return {} }
+}
+const lastPrefs = loadDumpPrefs()
+const format = ref(lastPrefs.format || 'sql')
+const opts = ref({ includeDrop: lastPrefs.includeDrop ?? true, includeData: lastPrefs.includeData ?? true })
 const objTypes = ref(['table'])
 const activeTab = ref('table')
 const tables = ref([])
@@ -280,6 +287,10 @@ const doDump = async () => {
   const db = props.database
   if (!db || totalSelected.value === 0) return
   const fmt = format.value
+  // 落盘本次选择，下次打开沿用
+  try {
+    localStorage.setItem(DUMP_KEY, JSON.stringify({ format: fmt, includeDrop: opts.value.includeDrop, includeData: opts.value.includeData }))
+  } catch { /* 存不进就只当本次没记 */ }
   const payload = {
     database: db,
     format: fmt,

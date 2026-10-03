@@ -37,9 +37,10 @@ use crate::AppState;
 
 /// 单侧最多取多少行参与对比。
 ///
-/// 这是「内存换准确」的边界：对比要在内存里建 key → 行 的索引，
-/// 不设上限的话，两张千万行的表一对比就是一次 OOM。到了上限就明确标出「结果不完整」。
-const MAX_ROWS_PER_SIDE: usize = 200_000;
+/// 这是「内存换准确」的兜底：对比要在内存里建 key → 行 的索引，千万行的表
+/// 一对比就是 OOM —— 200 万（原 20 万的 10 倍）配合分页读取，常规业务表
+/// 等于没有限制；真要对比更大规模得走导出+外部工具。到了上限明确标出「结果不完整」。
+const MAX_ROWS_PER_SIDE: usize = 2_000_000;
 
 #[derive(Deserialize, Default, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -198,13 +199,13 @@ async fn columns_facts(
     // （有的当字面表名找不到、有的会自己拆）。所以两条路都试，哪条通算哪条。
     let qualified_name = qualified(table, schema);
     let mut columns = {
-        let engine = state.engine.clone();
+        let engine = state.engine();
         let name = qualified_name.clone();
         let target = target.clone();
         blocking(move || engine.list_columns_fresh(&target, &name)).await?
     };
     if columns.is_empty() && qualified_name != table {
-        let engine = state.engine.clone();
+        let engine = state.engine();
         let name = table.to_string();
         let target = target.clone();
         columns = blocking(move || engine.list_columns_fresh(&target, &name)).await?;
@@ -317,38 +318,229 @@ struct Side {
     truncated: bool,
 }
 
-async fn fetch_side(
+/// 单侧数据流：协程按 keyset 分页拉取（每页 5 万），页经 channel 交给对比循环。
+/// **内存只驻留当前页** —— 行数无上限、不会 OOM（流式边拉边比）。
+struct SideStream {
+    rx: tokio::sync::mpsc::Receiver<Result<SidePage, String>>,
+    columns: Vec<String>,
+    page_rows: Vec<Vec<CellValue>>,
+    page_idx: usize,
+    exhausted: bool,
+    pub error: Option<String>,
+    pub rows_seen: u64,
+}
+
+impl SideStream {
+    fn new(rx: tokio::sync::mpsc::Receiver<Result<SidePage, String>>) -> Self {
+        Self {
+            rx,
+            columns: Vec::new(),
+            page_rows: Vec::new(),
+            page_idx: 0,
+            exhausted: false,
+            error: None,
+            rows_seen: 0,
+        }
+    }
+
+    /// 取下一行（页尽自动翻页；行 **swap** 出来零拷贝 —— 大页不产生整页克隆）。
+    /// 返回 None = 流结束（正常读完或出错，error 字段区分）。
+    async fn next_row(&mut self) -> Option<Vec<CellValue>> {
+        loop {
+            if self.page_idx < self.page_rows.len() {
+                let row = std::mem::take(&mut self.page_rows[self.page_idx]);
+                self.page_idx += 1;
+                self.rows_seen += 1;
+                return Some(row);
+            }
+            if self.exhausted {
+                return None;
+            }
+            match self.rx.recv().await {
+                Some(Ok(page)) => {
+                    if self.columns.is_empty() {
+                        self.columns = page.columns;
+                    }
+                    self.page_rows = page.rows;
+                    self.page_idx = 0;
+                }
+                Some(Err(err)) => {
+                    self.error = Some(err);
+                    self.exhausted = true;
+                }
+                None => {
+                    self.exhausted = true;
+                }
+            }
+        }
+    }
+}
+
+struct SidePage {
+    columns: Vec<String>,
+    rows: Vec<Vec<CellValue>>,
+    /// 本页**最后一行**的排序键（下一页 keyset 用）
+    last_sort_key: Vec<shape::SortPart>,
+}
+
+/// 表行数（count(*)）：给流式对比提供**真实分母** —— 进度条按具体百分比增长
+/// （用户口径：与数据传输一致，而不是一直流动动画）。带过滤条件时 count 同样带上，
+/// 分母与参与对比的行集一致。count 失败返回 0 = 分母未知 → 前端流动条兜底。
+async fn count_rows(
     state: &AppState,
     conn: &str,
     scope: &str,
     table: &str,
-    schema: &Option<String>,
-    condition: &Option<String>,
-    columns: &[String],
-    dialect: Dialect,
-) -> XResult<Side> {
-    if columns.is_empty() {
-        return Err(XError::bad_request("没有可对比的列"));
+    schema: Option<&str>,
+    condition: Option<&str>,
+) -> u64 {
+    let where_part = condition
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(|c| format!(" where {c}"))
+        .unwrap_or_default();
+    let schema_owned = schema.map(|s| s.to_string());
+    let sql = format!("select count(*) from {}{where_part}", qualified(table, &schema_owned));
+    match run_sql_in(state, conn, scope, sql, 1).await {
+        Ok(result) => match result.rows.first().and_then(|r| r.first()) {
+            Some(CellValue::Integer(v)) => (*v).max(0) as u64,
+            Some(CellValue::Real(v)) => (*v).max(0.0) as u64,
+            Some(CellValue::Text(txt)) => txt.trim().parse::<u64>().unwrap_or(0),
+            _ => 0,
+        },
+        Err(_) => 0,
     }
-    let list = columns
-        .iter()
-        .map(|name| dialect.quote(name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut sql = format!("select {list} from {}", qualified(table, schema));
-    if let Some(condition) = condition {
-        let condition = condition.trim();
-        if !condition.is_empty() {
-            // 条件原样进语句：这是用户明确输入的比较范围（与造数的 sql 规则同理）
+}
+
+
+/// keyset 分页的字面量：按排序键类型生成（数值不带引号、文本转义引号），
+/// 让数据库按与内存 `SortKey` 一致的序比较（数值序/文本序）。
+fn keyset_literal(part: &shape::SortPart) -> String {
+    match part {
+        shape::SortPart::Null => "null".to_string(),
+        shape::SortPart::Num(v) => format!("{}", v.0),
+        shape::SortPart::Time(t) => format!("'{}'", keyset_time_literal(t)),
+        shape::SortPart::Text(t) => format!("'{}'", t.replace('\'', "''")),
+    }
+}
+
+/// 规范时间 `yyyy-MM-ddTHH:mm:ss[.ffffff]` → **各方言都接受**的 SQL 字面量。
+///
+/// 内存归一键用 `T` 分隔，但这个形式不能直接回灌 SQL：
+/// ClickHouse 的 `Date` 列对带时间（甚至带 `T`）的字符串转换直接报
+/// `Cannot convert string ... to type Date`（真机踩过）；`T` 分隔在
+/// MySQL/ClickHouse 的 `DateTime` 上也不认。规则：
+/// - 整点零分零秒 → 去掉时间部分，只留 `'yyyy-MM-dd'`（Date/DateTime/MySQL 全兼容）
+/// - 其余 → `T` 换成空格（`'yyyy-MM-dd HH:mm:ss'`，各库通用）
+fn keyset_time_literal(t: &str) -> String {
+    if t.len() == 19 && t.ends_with("T00:00:00") {
+        t[..10].to_string()
+    } else if let Some(stripped) = t.strip_suffix(".000000") {
+        stripped.replacen('T', " ", 1)
+    } else {
+        t.replacen('T', " ", 1)
+    }
+}
+
+/// 单侧数据拉取协程：keyset 分页（`WHERE … AND (key) > (last) ORDER BY key`），
+/// 跨页全局有序（不只是页内）；内存里只有当前页。
+fn spawn_side_stream(
+    state: AppState,
+    conn: String,
+    scope: String,
+    table: String,
+    schema: Option<String>,
+    condition: Option<String>,
+    columns: Vec<String>,
+    dialect: Dialect,
+    key_cols: Vec<String>,
+    task: std::sync::Arc<crate::api::tasks::Task>,
+    tx: tokio::sync::mpsc::Sender<Result<SidePage, String>>,
+) {
+    tokio::spawn(async move {
+        let list = columns
+            .iter()
+            .map(|name| dialect.quote(name))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut sql = format!("select {list} from {}", qualified(&table, &schema));
+        if let Some(condition) = condition.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
             sql.push_str(&format!(" where {condition}"));
         }
-    }
-    let result = run_sql_in(state, conn, scope, sql, MAX_ROWS_PER_SIDE).await?;
-    Ok(Side {
-        columns: result.columns.iter().map(|column| column.name.clone()).collect(),
-        rows: result.rows.clone(),
-        truncated: result.truncated,
-    })
+        let order_cols = if key_cols.is_empty() {
+            columns
+                .iter()
+                .map(|name| dialect.quote(name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        } else {
+            key_cols
+                .iter()
+                .map(|name| dialect.quote(name))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        // **sql 只拼到 where 为止（不含 order by）** —— keyset 分页条件必须插在
+        // order by 之前：曾经把 order by 提前并进 sql，第二页变成
+        // `... order by ... where ((keys) > (...))` → MySQL 语法错（真机踩过）。
+        let page_size = 50_000usize;
+        let mut last_key: Option<Vec<shape::SortPart>> = None;
+        let mut columns_out: Option<Vec<String>> = None;
+        loop {
+            if task.check_canceled().is_err() {
+                break;
+            }
+            // keyset 条件：上一页最后一行的键之后（首页不带，取从头开始的前 N 行）
+            let page_sql = match &last_key {
+                None => format!("{sql} order by {order_cols} limit {page_size}"),
+                Some(key) => {
+                    let lits: Vec<String> = key.iter().map(keyset_literal).collect();
+                    let keyset = format!(
+                        "({order_cols}) > ({lits})",
+                        order_cols = order_cols,
+                        lits = lits.join(", ")
+                    );
+                    let glue = if sql.to_lowercase().contains(" where ") { " and" } else { " where" };
+                    format!("{sql}{glue} ({keyset}) order by {order_cols} limit {page_size}")
+                }
+            };
+            match run_sql_in(&state, &conn, &scope, page_sql, page_size).await {
+                Ok(result) => {
+                    if columns_out.is_none() {
+                        columns_out = Some(result.columns.iter().map(|c| c.name.clone()).collect());
+                    }
+                    let got = result.rows.len();
+                    let last = result.rows.last().map(|row| {
+                        shape::row_sort_key(row, &sort_positions(&key_cols, &columns))
+                    });
+                    let _ = tx
+                        .send(Ok(SidePage {
+                            columns: columns_out.clone().unwrap_or_default(),
+                            rows: result.rows,
+                            last_sort_key: last.clone().unwrap_or_default(),
+                        }))
+                        .await;
+                    // 不足一页 = 读完
+                    if got < page_size {
+                        break;
+                    }
+                    last_key = last;
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(err.message)).await;
+                    break;
+                }
+            }
+        }
+    });
+}
+
+/// 比对键在**输出列清单**里的下标（流式页的行按这个序取键值）
+fn sort_positions(key_cols: &[String], columns: &[String]) -> Vec<usize> {
+    key_cols
+        .iter()
+        .filter_map(|key| columns.iter().position(|c| c.eq_ignore_ascii_case(key)))
+        .collect()
 }
 
 /// 主键值 → 一个可比较的键。
@@ -383,145 +575,227 @@ fn cell_equal(left: Option<&CellValue>, right: Option<&CellValue>) -> bool {
     shape::cells_equal(left, right)
 }
 
+/// 流式对比：两侧数据**边拉边比**（双指针消费各自的分页流），
+/// 内存只驻留两侧的当前页 —— 行数无上限、不会 OOM（全量数据对比的完整实现）。
+///
+/// 前提：两侧的流各自按**比对键的数据库排序**流出（keyset 分页跨页全局有序），
+/// 内存里用同规则的 `SortKey`（数值序/文本序）做双指针比较 —— 键序一致才能正确配对。
+/// 后续写闸门语义不变；进度：每消费一行 done+1（total 在两侧行数已知后设为总数）。
 #[allow(clippy::too_many_arguments)]
-fn compare_data(
-    source: &Side,
-    target: &Side,
+async fn compare_streamed(
+    state: &AppState,
+    source_conn: String,
+    source_scope: String,
+    source_table: String,
+    source_schema: Option<String>,
+    source_condition: Option<String>,
+    source_dialect: Dialect,
+    target_conn: String,
+    target_scope: String,
+    target_table: String,
+    target_schema: Option<String>,
+    target_condition: Option<String>,
+    target_dialect: Dialect,
+    columns: &[String],
     keys: &[String],
     excluded: &[String],
     limit: usize,
-    source_truncated: bool,
-    target_truncated: bool,
-) -> XResult<Value> {
-    let find = |columns: &[String], name: &String| {
-        columns
-            .iter()
-            .position(|column| column.eq_ignore_ascii_case(name))
+    task: &std::sync::Arc<crate::api::tasks::Task>,
+    est_total: u64,
+) -> XResult<(Value, u64, u64)> {
+    if columns.is_empty() {
+        return Err(XError::bad_request("没有可对比的列"));
+    }
+    // 比对键必须落在对比列清单里（页里才取得到键值）
+    for key in keys {
+        if !columns.iter().any(|c| c.eq_ignore_ascii_case(key)) {
+            return Err(XError::bad_request(format!("比对键 {key} 不在参与对比的列里")));
+        }
+    }
+
+    let (src_tx, src_rx) = tokio::sync::mpsc::channel::<Result<SidePage, String>>(2);
+    spawn_side_stream(
+        state.clone(), source_conn, source_scope, source_table, source_schema,
+        source_condition, columns.to_vec(), source_dialect, keys.to_vec(),
+        task.clone(), src_tx,
+    );
+    let (tgt_tx, tgt_rx) = tokio::sync::mpsc::channel::<Result<SidePage, String>>(2);
+    spawn_side_stream(
+        state.clone(), target_conn, target_scope, target_table, target_schema,
+        target_condition, columns.to_vec(), target_dialect, keys.to_vec(),
+        task.clone(), tgt_tx,
+    );
+    let mut source = SideStream::new(src_rx);
+    let mut target = SideStream::new(tgt_rx);
+
+    // 双指针消费（先各取一行把流"点燃"，同时拿到首页列序）
+    let mut s_row = source.next_row().await;
+    let mut t_row = target.next_row().await;
+    if let Some(err) = source.error.clone() {
+        return Err(XError::bad_request(format!("读取源数据失败：{err}")));
+    }
+    if let Some(err) = target.error.clone() {
+        return Err(XError::bad_request(format!("读取目标数据失败：{err}")));
+    }
+    if s_row.is_none() && t_row.is_none() {
+        return Err(XError::bad_request("两边的表都没有数据"));
+    }
+
+    // 列序初始化（首页列即全列序）
+    let src_cols = source.columns.clone();
+    let tgt_cols = target.columns.clone();
+    let find = |cols: &[String], name: &str| {
+        cols.iter().position(|c| c.eq_ignore_ascii_case(name))
     };
-    let mut key_indexes = Vec::new();
+    let mut src_key_idx = Vec::new();
     for key in keys {
-        let source_index = find(&source.columns, key)
+        let idx = find(&src_cols, key)
             .ok_or_else(|| XError::bad_request(format!("源表结果里没有关键列 {key}")))?;
-        if find(&target.columns, key).is_none() {
-            return Err(XError::bad_request(format!("目标表结果里没有关键列 {key}")));
-        }
-        key_indexes.push(source_index);
+        src_key_idx.push(idx);
     }
-
-    // 参与比值的列：两边都有、不是关键列、不是二进制
-    let mut compare_indexes: Vec<usize> = Vec::new();
-    let mut excluded_columns: Vec<String> = excluded.to_vec();
-    let mut excluded_set: BTreeSet<String> = excluded.iter().map(|name| name.to_ascii_lowercase()).collect();
-    for (index, name) in source.columns.iter().enumerate() {
-        if key_indexes.contains(&index) {
-            continue;
-        }
-        if !target.columns.iter().any(|column| column.eq_ignore_ascii_case(name)) {
-            if !excluded_set.contains(&name.to_ascii_lowercase()) {
-                excluded_set.insert(name.to_ascii_lowercase());
-                excluded_columns.push(name.clone());
-            }
-            continue;
-        }
-        compare_indexes.push(index);
-    }
-
-    let target_columns = &target.columns;
-    let mut print_indexes: HashMap<String, usize> = HashMap::new();
-    for (index, name) in target_columns.iter().enumerate() {
-        print_indexes.insert(name.to_ascii_lowercase(), index);
-    }
-
-    let mut target_map: HashMap<String, &Vec<CellValue>> = HashMap::new();
-    let mut target_key_indexes = Vec::new();
+    let mut tgt_key_idx = Vec::new();
     for key in keys {
-        target_key_indexes.push(print_indexes[&key.to_ascii_lowercase()]);
+        let idx = find(&tgt_cols, key)
+            .ok_or_else(|| XError::bad_request(format!("目标表结果里没有关键列 {key}")))?;
+        tgt_key_idx.push(idx);
     }
-    for row in &target.rows {
-        target_map.insert(key_of(row, &target_key_indexes), row);
+    // 参与比值的列：两边都有、不是关键列
+    let mut compare_pairs: Vec<(usize, usize, String)> = Vec::new();
+    let mut excluded_columns: Vec<String> = excluded.to_vec();
+    let mut excluded_set: BTreeSet<String> = excluded.iter().map(|n| n.to_ascii_lowercase()).collect();
+    for (index, name) in src_cols.iter().enumerate() {
+        if src_key_idx.contains(&index) {
+            continue;
+        }
+        match find(&tgt_cols, name) {
+            Some(tgt_index) => compare_pairs.push((index, tgt_index, name.clone())),
+            None => {
+                if !excluded_set.contains(&name.to_ascii_lowercase()) {
+                    excluded_set.insert(name.to_ascii_lowercase());
+                    excluded_columns.push(name.clone());
+                }
+            }
+        }
     }
 
     let mut only_in_source = 0u64;
+    let mut only_in_target = 0u64;
     let mut different = 0u64;
     let mut same = 0u64;
     let mut different_columns: BTreeSet<String> = BTreeSet::new();
     let mut only_source_samples: Vec<Value> = Vec::new();
+    let mut only_target_samples: Vec<Value> = Vec::new();
     let mut diff_samples: Vec<Value> = Vec::new();
-    let mut source_keys: BTreeSet<String> = BTreeSet::new();
 
-    for row in &source.rows {
-        let key = key_of(row, &key_indexes);
-        source_keys.insert(key.clone());
-        match target_map.get(&key) {
-            None => {
+    let mut last_pct: u64 = 0;
+    loop {
+        task.check_canceled()?;
+        // **行级进度上报**：每消费一行（源+目标）就把进度分子 +2（done），
+        // 分母是开始时 count 的两侧行数之和（total）—— 进度条按真实百分比增长，
+        // 与数据传输一致（用户口径：不要一直流动动画）
+        task.add_done(2);
+        // **按百分比台阶记进度日志**（每跨过 10% 一条）：两侧行数不同时，
+        // 「已比对 5 万行」这种绝对数会与单侧行数对不上（真机反馈），百分比才有意义
+        let seen = source.rows_seen + target.rows_seen;
+        if est_total > 0 {
+            let pct = (seen * 100 / est_total) as u64;
+            if pct >= last_pct + 10 {
+                task.log(format!("进度 {}%（两侧累计 {} 行）", pct, seen));
+                last_pct = pct;
+            }
+        }
+        match (s_row.as_ref(), t_row.as_ref()) {
+            (Some(s), Some(t)) => {
+                let sk = shape::row_sort_key(s, &src_key_idx);
+                let tk = shape::row_sort_key(t, &tgt_key_idx);
+                match sk.cmp(&tk) {
+                    std::cmp::Ordering::Less => {
+                        // 源有、目标没有（键序在目标流里已经过去了）
+                        only_in_source += 1;
+                        if only_source_samples.len() < limit {
+                            only_source_samples.push(row_object(&src_cols, s, None));
+                        }
+                        s_row = source.next_row().await;
+                    }
+                    std::cmp::Ordering::Greater => {
+                        only_in_target += 1;
+                        if only_target_samples.len() < limit {
+                            only_target_samples.push(row_object(&tgt_cols, t, None));
+                        }
+                        t_row = target.next_row().await;
+                    }
+                    std::cmp::Ordering::Equal => {
+                        let mut changed: BTreeSet<usize> = BTreeSet::new();
+                        for (s_index, t_index, name) in &compare_pairs {
+                            if !cell_equal(s.get(*s_index), t.get(*t_index)) {
+                                changed.insert(*s_index);
+                                different_columns.insert(name.clone());
+                            }
+                        }
+                        if changed.is_empty() {
+                            same += 1;
+                        } else {
+                            different += 1;
+                            if diff_samples.len() < limit {
+                                // 差异样本：关键列 + 每个不同列的「源 / 目标」两个值，
+                                // 一行就能看出「原来是 3、现在是 4」
+                                let mut object = Map::new();
+                                for idx in &src_key_idx {
+                                    object.insert(
+                                        src_cols[*idx].clone(),
+                                        s.get(*idx).map(shape::cell_to_value).unwrap_or(Value::Null),
+                                    );
+                                }
+                                for (s_index, t_index, name) in &compare_pairs {
+                                    if !changed.contains(s_index) {
+                                        continue;
+                                    }
+                                    object.insert(
+                                        format!("{name}（源）"),
+                                        s.get(*s_index).map(shape::cell_to_value).unwrap_or(Value::Null),
+                                    );
+                                    object.insert(
+                                        format!("{name}（目标）"),
+                                        t.get(*t_index).map(shape::cell_to_value).unwrap_or(Value::Null),
+                                    );
+                                }
+                                diff_samples.push(Value::Object(object));
+                            }
+                        }
+                        s_row = source.next_row().await;
+                        t_row = target.next_row().await;
+                    }
+                }
+            }
+            (Some(s), None) => {
                 only_in_source += 1;
                 if only_source_samples.len() < limit {
-                    only_source_samples.push(row_object(&source.columns, row, None));
+                    only_source_samples.push(row_object(&src_cols, s, None));
                 }
+                s_row = source.next_row().await;
             }
-            Some(other) => {
-                let mut changed: BTreeSet<usize> = BTreeSet::new();
-                for index in &compare_indexes {
-                    let name = &source.columns[*index];
-                    let other_index = print_indexes[&name.to_ascii_lowercase()];
-                    if !cell_equal(row.get(*index), other.get(other_index)) {
-                        changed.insert(*index);
-                        different_columns.insert(name.clone());
-                    }
+            (None, Some(t)) => {
+                only_in_target += 1;
+                if only_target_samples.len() < limit {
+                    only_target_samples.push(row_object(&tgt_cols, t, None));
                 }
-                if changed.is_empty() {
-                    same += 1;
-                } else {
-                    different += 1;
-                    if diff_samples.len() < limit {
-                        // 差异样本：关键列 + 每个不同列的「源 / 目标」两个值。
-                        // 这样一行就能看出「原来是 3、现在是 4」，比只给一个值有用得多。
-                        let mut object = Map::new();
-                        for index in key_indexes.iter() {
-                            object.insert(
-                                source.columns[*index].clone(),
-                                row.get(*index).map(shape::cell_to_value).unwrap_or(Value::Null),
-                            );
-                        }
-                        for index in &changed {
-                            let name = &source.columns[*index];
-                            let other_index = print_indexes[&name.to_ascii_lowercase()];
-                            object.insert(
-                                format!("{name}（源）"),
-                                row.get(*index).map(shape::cell_to_value).unwrap_or(Value::Null),
-                            );
-                            object.insert(
-                                format!("{name}（目标）"),
-                                other
-                                    .get(other_index)
-                                    .map(shape::cell_to_value)
-                                    .unwrap_or(Value::Null),
-                            );
-                        }
-                        diff_samples.push(Value::Object(object));
-                    }
-                }
+                t_row = target.next_row().await;
             }
+            (None, None) => break,
         }
     }
 
-    let mut only_in_target = 0u64;
-    let mut only_target_samples: Vec<Value> = Vec::new();
-    for row in &target.rows {
-        let key = key_of(row, &target_key_indexes);
-        if source_keys.contains(&key) {
-            continue;
-        }
-        only_in_target += 1;
-        if only_target_samples.len() < limit {
-            only_target_samples.push(row_object(&target.columns, row, None));
-        }
+    if let Some(err) = source.error.clone() {
+        return Err(XError::bad_request(format!("读取源数据失败：{err}")));
+    }
+    if let Some(err) = target.error.clone() {
+        return Err(XError::bad_request(format!("读取目标数据失败：{err}")));
     }
 
-    Ok(json!({
+    let data = json!({
         "keyColumns": keys,
-        "sourceRows": source.rows.len(),
-        "targetRows": target.rows.len(),
+        "sourceRows": source.rows_seen,
+        "targetRows": target.rows_seen,
         "onlyInSource": only_in_source,
         "onlyInTarget": only_in_target,
         "different": different,
@@ -531,12 +805,12 @@ fn compare_data(
         "onlyInSourceSamples": only_source_samples,
         "onlyInTargetSamples": only_target_samples,
         "diffSamples": diff_samples,
-        "onlyInSourceTruncated": only_in_source > limit as u64 || source_truncated,
-        "onlyInTargetTruncated": only_in_target > limit as u64 || target_truncated,
+        "onlyInSourceTruncated": only_in_source > limit as u64,
+        "onlyInTargetTruncated": only_in_target > limit as u64,
         "diffTruncated": different > limit as u64,
-    }))
+    });
+    Ok((data, source.rows_seen, target.rows_seen))
 }
-
 // ------------------------------------------------------------------ 处理器
 
 /// `POST /api/compare` —— 提交对比任务。
@@ -609,6 +883,11 @@ pub async fn start(
                 json!(body.compare_mode.clone().unwrap_or_else(|| "both".to_string())),
             );
 
+            task.log(format!(
+                "对比开始：{} . {} → {} . {}",
+                body.source_database.as_deref().unwrap_or("-"), body.source_table,
+                body.target_database.as_deref().unwrap_or("-"), body.target_table
+            ));
             if body.wants_structure() {
                 // 结构对比是"一次性算完"的，没有逐表进度可分；但**分母必须给**、结束要补分子，
                 // 否则进度条会一直停在 0/1 —— 用户看到的是"卡住了"，而其实早就算完了
@@ -646,53 +925,60 @@ pub async fn start(
                     }
                     columns.push(column.name.clone());
                 }
-                task.step(format!("读取源表 {}（最多 {} 行）", body.source_table, MAX_ROWS_PER_SIDE));
-                let source_side = fetch_side(
+                task.step(format!("读取源表 {}", body.source_table));
+                // **先 count 两侧行数做分母**：进度条按真实百分比增长（与数据传输一致）。
+                // count 失败/为 0 → 分母未知，保持流动动画兜底。
+                let src_count = count_rows(
+                    &state, &source_conn, &source_scope, &body.source_table,
+                    body.source_schema.as_deref(), body.source_condition.as_deref(),
+                ).await;
+                let tgt_count = count_rows(
+                    &state, &target_conn, &target_scope, &target_table,
+                    body.target_schema.as_deref(), body.target_condition.as_deref(),
+                ).await;
+                let mut est_total = src_count + tgt_count;
+                task.set_total(if est_total > 0 { est_total as i64 } else { -1 });
+                task.log(format!(
+                    "行数统计：源 {} 行 / 目标 {} 行",
+                    src_count, tgt_count
+                ));
+                // 读取与对比**流式融合**：两侧各自分页拉取（协程），主循环双指针边收边比 ——
+                // 内存只驻留当前页，行数无上限（进度 done 逐行累计，total 总量未知时条为流动动画）
+                // 读取与对比**流式融合**：两侧各自分页拉取（协程），主循环双指针边收边比 ——
+                // 内存只驻留当前页，行数无上限（done 逐行累加，进度条按 count 分母走百分比）
+                let (data, source_rows, target_rows) = compare_streamed(
                     &state,
-                    &source_conn,
-                    &source_scope,
-                    &body.source_table,
-                    &body.source_schema,
-                    &body.source_condition,
-                    &columns,
+                    source_conn.clone(),
+                    source_scope.clone(),
+                    body.source_table.clone(),
+                    body.source_schema.clone(),
+                    body.source_condition.clone(),
                     source_dialect,
-                )
-                .await
-                .map_err(|e| e.message)?;
-                task.check_canceled()?;
-                task.step(format!("读取目标表（源 {} 行）", source_side.rows.len()));
-                let target_side = fetch_side(
-                    &state,
-                    &target_conn,
-                    &target_scope,
-                    &target_table,
-                    &body.target_schema,
-                    &body.target_condition,
-                    &columns,
+                    target_conn.clone(),
+                    target_scope.clone(),
+                    target_table.clone(),
+                    body.target_schema.clone(),
+                    body.target_condition.clone(),
                     target_dialect,
-                )
-                .await
-                .map_err(|e| e.message)?;
-                task.check_canceled()?;
-                task.set_total(source_side.rows.len() as i64);
-                task.set_done(source_side.rows.len() as u64);
-                task.step("对比数据");
-                let data = compare_data(
-                    &source_side,
-                    &target_side,
+                    &columns,
                     &keys,
                     &excluded,
                     body.sample_limit(),
-                    source_side.truncated,
-                    target_side.truncated,
+                    &task,
+                    est_total as u64,
                 )
+                .await
                 .map_err(|e| e.message)?;
+                // 校正分母/分子为**实际读取行数**（count 估算与真实可能有并发差）
+                est_total = source_rows + target_rows;
+                task.set_total(est_total as i64);
+                task.set_done((source_rows + target_rows) as u64);
                 task.set_phase(format!(
                     "数据对比完成：{} 行不同 / {} 行相同 / 仅源 {} / 仅目标 {}",
                     data["different"], data["same"], data["onlyInSource"], data["onlyInTarget"]
                 ));
                 result.insert("data".to_string(), data);
-            }
+                }
 
             task.set_message("对比完成".to_string());
             Ok(Some(Value::Object(result)))

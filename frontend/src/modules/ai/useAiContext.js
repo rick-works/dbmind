@@ -64,13 +64,13 @@ export function useAiContext(props) {
 
   /**
    * 连接按「目录」分组，供数据源下拉多级显示。
-   * 目录取连接配置的 environment（与左侧对象树的分组口径一致），
+   * 目录取连接配置的 group（与左侧对象树的分组口径一致），
    * 未设置目录的连接归入「未分组」。
    */
   const connGroups = computed(() => {
     const map = new Map()
     for (const c of conns.value) {
-      const key = (c.environment || c.env || '').trim() || t('aictx.ungrouped')
+      const key = (c.group || c.env || '').trim() || t('aictx.ungrouped')
       if (!map.has(key)) map.set(key, [])
       map.get(key).push(c)
     }

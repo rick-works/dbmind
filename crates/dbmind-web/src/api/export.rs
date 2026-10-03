@@ -688,6 +688,14 @@ fn base_sql(req: &ExportReq, dialect: Dialect) -> XResult<String> {
 }
 
 /// 分页后的查询（见文件头决定 1）。
+///
+/// 默认**直接把分页子句追加到语句尾部**，而不是包一层
+/// `select * from (…) dbmind_page`：派生表要求输出列名互不相同，而数据库允许
+/// 重复输出列（`SELECT *, now(), now()` 这种没起别名的写法是合法 SQL）——
+/// 一包就报 `Duplicate column name`，用户原句明明能跑（真机踩过：编辑器翻页报 1060）。
+/// 追加在顶层是合法的（含 ORDER BY 的语句），也不改变任何输出列。
+/// 只有语句自己已带顶层分页子句（`LIMIT` / `FETCH`）时才退回包子查询 ——
+/// 直接追加会出现两个 LIMIT 的语法错误。
 pub(crate) fn paging_sql(base: &str, offset: u64, size: u64, dialect: Dialect) -> String {
     let page = dialect.limit_clause(offset, size);
     if dialect.needs_order_by_for_paging() {
@@ -697,23 +705,216 @@ pub(crate) fn paging_sql(base: &str, offset: u64, size: u64, dialect: Dialect) -
         } else {
             format!("{base} order by (select null) {page}")
         }
-    } else {
+    } else if has_top_level_paging_clause(base) {
         format!("select * from ({base}) dbmind_page {page}")
+    } else {
+        format!("{base} {page}")
     }
 }
 
-fn has_order_by(sql: &str) -> bool {
-    sql.to_ascii_lowercase().contains("order by")
+/// 语句的**顶层**（括号深度 0、字符串/标识符字面量之外）是否出现给定短语，
+/// 词边界判定（`limits` 不算 `limit`）。与 [`strip_top_level_order_by`] 同一标准。
+fn has_top_level_phrase(sql: &str, phrases: &[&str]) -> bool {
+    let b = sql.as_bytes();
+    let lb = sql.to_ascii_lowercase().into_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' { i += 2; continue; }
+            if c == q { quote = None; }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' | b'"' | b'`' => { quote = Some(c); i += 1; }
+            b'(' => { depth += 1; i += 1; }
+            b')' => { depth -= 1; i += 1; }
+            _ => {
+                let word_start = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+                if depth == 0 && word_start {
+                    let after = |n: usize| {
+                        let j = i + n;
+                        j >= b.len() || !(b[j].is_ascii_alphanumeric() || b[j] == b'_')
+                    };
+                    for phrase in phrases {
+                        let p = phrase.as_bytes();
+                        if lb[i..].starts_with(p) && after(p.len()) {
+                            return true;
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    false
 }
 
-/// 总量（拿不到就给 None ⇒ 调用方填 -1）。
+/// 语句的**顶层**有没有自己的分页子句（`limit` / `fetch`）。
+fn has_top_level_paging_clause(sql: &str) -> bool {
+    has_top_level_phrase(sql, &["limit", "fetch"])
+}
+
+/// 顶层有没有 ORDER BY。只认**顶层**：子查询里的 ORDER BY 或字符串字面量里的
+/// "order by" 都不算 —— SQL Server 分页靠这个决定要不要补 `order by (select null)`，
+/// 误判会在语法层面炸掉。
+fn has_order_by(sql: &str) -> bool {
+    has_top_level_phrase(sql, &["order by"])
+}
+
+/// 剥掉**顶层**的 ORDER BY 子句（含其尾随的 LIMIT/OFFSET），供 count 包子查询用。
 ///
-/// 带 `order by` 的语句不数：SQL Server 的子查询里不允许 ORDER BY，数了就是一次白跑的错误。
-pub(crate) async fn count_rows(state: &AppState, id: &str, database: &str, base: &str) -> Option<i64> {
-    if has_order_by(base) {
+/// 为什么不再直接拒绝带 ORDER BY 的语句：用户最常写的就是 `SELECT … ORDER BY …`，
+/// 一拒绝他们永远拿不到真实总数。MySQL/PG/Oracle 的派生表都允许 ORDER BY
+/// （SQL Server 不允许 —— 所以先剥掉再数，而不是数一个注定报错的语句）。
+///
+/// 用括号深度扫描找**第一个顶层** `order by`（避开子查询与字符串字面量里的），
+/// 从那里截断到结尾 —— 尾随的 LIMIT/OFFSET 属于分页语义，count 要的是全量。
+/// 顶层带 UNION 的语句剥不了（ORDER BY 作用于整个 union），返回 None ——
+/// 调用方（`count_rows`）会跳过派生表/CTE 改走二分探测，照样能数出精确值。
+fn strip_top_level_order_by(base: &str) -> Option<String> {
+    let b = base.as_bytes();
+    let lb = base.to_ascii_lowercase().into_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut cut: Option<usize> = None;
+    let mut has_top_union = false;
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' { i += 2; continue; }
+            if c == q { quote = None; }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' | b'"' | b'`' => { quote = Some(c); i += 1; }
+            b'(' => { depth += 1; i += 1; }
+            b')' => { depth -= 1; i += 1; }
+            _ => {
+                let word_start = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+                if depth == 0 && word_start {
+                    let after = |n: usize| {
+                        let j = i + n;
+                        j >= b.len() || !(b[j].is_ascii_alphanumeric() || b[j] == b'_')
+                    };
+                    if lb[i..].starts_with(b"order by") && after(8) {
+                        if cut.is_none() { cut = Some(i); }
+                    } else if lb[i..].starts_with(b"union") && after(5) {
+                        has_top_union = true;
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    if has_top_union {
         return None;
     }
-    let sql = format!("select count(*) as cnt from ({base}) dbmind_count");
+    match cut {
+        Some(pos) => Some(base[..pos].trim_end().to_string()),
+        None => Some(base.trim_end().to_string()),
+    }
+}
+
+/// 总量（拿不到就给 None ⇒ 调用方填 -1）。三层兜底，走到哪层算到哪：
+///
+/// ① 标准路 —— 剥掉顶层 ORDER BY 后包派生表计数。重复输出列（`SELECT *, now(), now()`
+/// 这种没起别名的写法）会让它报 `Duplicate column name`：派生表要求列名互不相同，
+/// 而数据库允许输出重名列 —— 这不是 SQL 有错，是**计数壳**不适配。
+///
+/// ② CTE 显式列名表兜底 —— `WITH dbmind_count(c0, c1, …) AS (原句) SELECT COUNT(*) …`，
+/// 按位置给输出列改名，重名列就不碍事了（MySQL 8+ / PG / SQLite / H2 / SQL Server 都认）。
+/// 顶层 UNION 剥不了 ORDER BY（①不适用），直接用 CTE 包整个 union 计数，语义正确。
+///
+/// ③ 二分探测兜底 —— 上面两条路都走不通时（**MySQL 5.7 没有 CTE** + 重名列就是这种），
+/// 用「第 offset 行存不存在」二分出精确总数：`原句 + 分页子句(offset, 1)`，分页子句
+/// 直接追加、不过派生表，重名列不碍事。代价是约 2×log₂(N) 次执行，只在这个罕见角落才走。
+///
+/// `ncols`：结果集列数（调用方刚执行过的结果里就有）。传 0 表示未知 —— 先拿原句探一次
+/// （`max_rows=1`，代价极小）再走 ②。
+pub(crate) async fn count_rows(
+    state: &AppState,
+    id: &str,
+    database: &str,
+    base: &str,
+    ncols: usize,
+) -> Option<i64> {
+    let stripped = strip_top_level_order_by(base);
+    if let Some(b) = &stripped {
+        let sql = format!("select count(*) as cnt from ({b}) dbmind_count");
+        if let Some(v) = try_count(state, id, database, sql).await {
+            return Some(v);
+        }
+    }
+    let mut n = ncols;
+    if n == 0 {
+        n = run_sql_in(state, id, database, base.to_string(), 1)
+            .await
+            .ok()?
+            .columns
+            .len();
+    }
+    if n > 0 {
+        let cols: Vec<String> = (0..n).map(|i| format!("c{i}")).collect();
+        let sql = format!(
+            "with dbmind_count({}) as ({}) select count(*) as cnt from dbmind_count",
+            cols.join(", "),
+            stripped.as_deref().unwrap_or(base)
+        );
+        if let Some(v) = try_count(state, id, database, sql).await {
+            return Some(v);
+        }
+    }
+    count_by_probe(state, id, database, stripped.as_deref().unwrap_or(base)).await
+}
+
+/// 二分计数：探测「第 offset 行存不存在」，找出行的总数。
+///
+/// 探测用 [`paging_sql`]（offset, 1）—— 分页子句追加在语句尾部，不经过派生表，
+/// 对重名列免疫。语义：probe(offset)=true ⇔ 总行数 > offset。指数阶段找上界
+/// （最多到 2⁴⁰ 行，再大不奉陪），二分阶段收口到精确值。
+async fn count_by_probe(
+    state: &AppState,
+    id: &str,
+    database: &str,
+    base: &str,
+) -> Option<i64> {
+    let dialect = {
+        let record = crate::api::require_record(state, id).await.ok()?;
+        crate::api::dialect::Dialect::new(record.kind())
+    };
+    let probe = |offset: u64| async move {
+        let sql = paging_sql(base, offset, 1, dialect);
+        let result = run_sql_in(state, id, database, sql, 1).await.ok()?;
+        Some(result.row_count > 0)
+    };
+    // 指数上界：count ∈ [low, high]（low 已证实有行，high 尚未证实）
+    let mut low: u64 = 0;
+    let mut high: u64 = 1;
+    while probe(high).await? {
+        low = high + 1;
+        high = high.saturating_mul(2);
+        if high > 1 << 40 {
+            return None;
+        }
+    }
+    while low < high {
+        let mid = low + (high - low) / 2;
+        match probe(mid).await? {
+            true => low = mid + 1,
+            false => high = mid,
+        }
+    }
+    Some(low as i64)
+}
+
+/// 跑一条计数语句并取第一行第一列的整数；任何失败都算「统计不出」。
+async fn try_count(state: &AppState, id: &str, database: &str, sql: String) -> Option<i64> {
     let result = run_sql_in(state, id, database, sql, 1).await.ok()?;
     rows_of(&result)
         .first()
@@ -794,7 +995,10 @@ async fn export_query(
         task.check_canceled().map_err(XError::internal)?;
     }
     let total = if req.all {
-        count_rows(state, id, &req.database, &base).await.unwrap_or(-1)
+        // 列数未知（还没取数）：传 0，count_rows 内部会先用 max_rows=1 探一次
+        count_rows(state, id, &req.database, &base, 0)
+            .await
+            .unwrap_or(-1)
     } else {
         -1
     };
@@ -926,7 +1130,7 @@ async fn export_query(
 async fn list_tables(state: &AppState, id: &str, database: &str) -> XResult<Vec<String>> {
     let target = crate::api::scope::resolve(state, id, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
-    let engine = state.engine.clone();
+    let engine = state.engine();
     let tables = blocking(move || engine.list_tables_fresh(&target)).await?;
     Ok(tables
         .into_iter()
@@ -1459,5 +1663,39 @@ pub async fn download(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod strip_order_by_tests {
+    use super::strip_top_level_order_by;
+
+    #[test]
+    fn 剥掉顶层order_by() {
+        // 常规：剥掉 ORDER BY
+        assert_eq!(
+            strip_top_level_order_by("SELECT a FROM t ORDER BY a").as_deref(),
+            Some("SELECT a FROM t")
+        );
+        // 没有 ORDER BY：原样返回
+        assert_eq!(
+            strip_top_level_order_by("SELECT a FROM t").as_deref(),
+            Some("SELECT a FROM t")
+        );
+        // 子查询里的 ORDER BY 属于内层，不动
+        assert_eq!(
+            strip_top_level_order_by("SELECT a FROM (SELECT b FROM t ORDER BY b) x ORDER BY a").as_deref(),
+            Some("SELECT a FROM (SELECT b FROM t ORDER BY b) x")
+        );
+        // 字符串字面量里的 order by 不是子句
+        assert_eq!(
+            strip_top_level_order_by("SELECT a FROM t WHERE b = 'order by x'").as_deref(),
+            Some("SELECT a FROM t WHERE b = 'order by x'")
+        );
+        // 顶层 UNION：不统计（截断会算错），交给调用方保持未知
+        assert_eq!(
+            strip_top_level_order_by("SELECT a FROM t UNION SELECT b FROM u ORDER BY a"),
+            None
+        );
     }
 }

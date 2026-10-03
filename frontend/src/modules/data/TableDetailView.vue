@@ -63,7 +63,9 @@
                       <td class="basic-label">{{ $t('tdet.indexCount') }}</td>
                       <td><el-input :model-value="displayIdxRows.length" size="small" disabled /></td>
                     </tr>
-                    <tr>
+                    <!-- 主键行：数据库没有主键概念时不显示（如 Doris，主键就是建表时的 Key 列，
+                         这里恒为「—」，摆一行占位只会让人困惑） -->
+                    <tr v-if="pkText && pkText !== '—'">
                       <td class="basic-label">{{ $t('tdet.primaryKey') }}</td>
                       <td><el-input :model-value="pkText" size="small" disabled /></td>
                     </tr>
@@ -100,9 +102,9 @@
                     </tr>
                     <tr v-if="showCommentField">
                       <td class="basic-label">{{ $t('tdet.tableComment') }}</td>
-                      <!-- ClickHouse 的表注释**可改**（ALTER TABLE … MODIFY COMMENT），
-                           所以不再跟着 isCH 一起禁用；Doris 的表注释改不了，保持禁用。 -->
-                      <td><el-input v-model="tableForm.comment" size="small" clearable :disabled="isDoris" :placeholder="$t('tdet.commentPlaceholder')" /></td>
+                      <!-- ClickHouse（MODIFY COMMENT）与 Doris（MODIFY COMMENT）的表注释都可改；
+                           引擎/字符集那些才是 Doris 真正动不了的。 -->
+                      <td><el-input v-model="tableForm.comment" size="small" clearable :placeholder="$t('tdet.commentPlaceholder')" /></td>
                     </tr>
                     <tr v-if="showEngineField">
                       <td class="basic-label">{{ $t('tdet.engine') }}</td>
@@ -168,18 +170,21 @@
                        于是所有列只能**均分** —— 序号列、删除列因此都被撑成 83px。
                        colgroup 是让"表头里写的宽度"真正生效的写法。 -->
                   <colgroup>
-                    <col style="width:32px" />
-                    <col style="width:134px" />
-                    <col style="width:96px" />
-                    <col style="width:52px" />
-                    <col style="width:52px" />
-                    <col style="width:58px" />
-                    <col style="width:46px" />
-                    <col v-if="showOrderKey" style="width:56px" />
-                    <col style="width:132px" />
-                    <col v-if="showAutoIncrement" style="width:46px" />
-                    <col v-if="showComment" style="width:170px" />
-                    <col style="width:56px" />
+                    <!-- 列宽全部用**百分比**（按当前显示的列归一化到 100%，见 colWidths）：
+                         写死像素时，容器比列宽之和大右侧就留白（真机反复出现）；百分比与容器
+                         宽度无关，合计恒为 100% ⇒ 表格必然严丝合缝铺满。 -->
+                    <col :style="{ width: colWidths.idx }" />
+                    <col :style="{ width: colWidths.name }" />
+                    <col :style="{ width: colWidths.type }" />
+                    <col :style="{ width: colWidths.len }" />
+                    <col :style="{ width: colWidths.prec }" />
+                    <col :style="{ width: colWidths.nullable }" />
+                    <col v-if="showPkCol" :style="{ width: colWidths.pk }" />
+                    <col v-if="showOrderKey" :style="{ width: colWidths.sort }" />
+                    <col :style="{ width: colWidths.def }" />
+                    <col v-if="showAutoIncrement" :style="{ width: colWidths.auto }" />
+                    <col v-if="showComment" :style="{ width: colWidths.comment }" />
+                    <col :style="{ width: colWidths.ops }" />
                   </colgroup>
                   <thead>
                     <!-- 表格自己的"空行"：一行属于表格的空白（与表头同底色、随表头吸顶），
@@ -187,16 +192,16 @@
                     <tr class="thead-spacer"><th :colspan="headSpan"></th></tr>
                     <tr>
                       <th style="width:40px">#</th>
-                      <th style="width:134px">{{ $t('tdet.colName') }}</th>
+                      <th>{{ $t('tdet.colName') }}</th>
                       <th style="width:120px">{{ $t('tdet.colType') }}</th>
                       <th style="width:64px">{{ $t('tdet.colLength') }}</th>
                       <th style="width:64px">{{ $t('tdet.colPrecision') }}</th>
                       <th class="c-center" style="width:76px">{{ $t('tdet.nullable') }}</th>
-                      <th class="c-center" style="width:56px">{{ $t('tdet.primaryKey') }}</th>
+                      <th v-if="showPkCol" class="c-center" style="width:56px">{{ $t('tdet.primaryKey') }}</th>
                       <th v-if="showOrderKey" class="c-center" style="width:70px" :title="$t('tdet.sortKeyTip')">{{ $t('tdet.sortKeyCol') }}</th>
                       <th style="width:132px">{{ $t('tdet.defaultValue') }}</th>
                       <th v-if="showAutoIncrement" class="c-center" style="width:56px">{{ $t('tdet.autoIncCol') }}</th>
-                      <th v-if="showComment" style="width:100px">{{ $t('tdet.comment') }}</th>
+                      <th v-if="showComment">{{ $t('tdet.comment') }}</th>
                       <th class="c-center" style="width:56px">{{ $t('tdet.actions') }}</th>
                     </tr>
                   </thead>
@@ -233,7 +238,7 @@
                                        :title="c.primaryKey ? $t('tdet.pkNotNull') : ''" />
                         </span>
                       </td>
-                      <td class="c-center">
+                      <td v-if="showPkCol" class="c-center">
                         <el-checkbox v-if="canEditPkOf(c)" v-model="c.primaryKey" @change="onPkChange(c)" :title="$t('tdet.setPk')" />
                         <el-icon v-else-if="c.primaryKey" color="#f5b34d" :size="15"><StarFilled /></el-icon>
                         <span v-else class="pk-none">—</span>
@@ -355,13 +360,14 @@
           <el-icon class="sql-fold" :class="{ folded: sqlCollapsed }"><CaretRight /></el-icon>
           <el-icon><DocumentCopy /></el-icon>
           <span>{{ $t('tdet.sqlPreview') }}</span>
+          <!-- 展开/收起跟在标题后（同一处切换），状态标签才推到最右 -->
+          <span class="sql-fold-tx">{{ sqlCollapsed ? $t('tdet.expand') : $t('tdet.collapse') }}</span>
           <!-- 状态标签只在**有内容可说**时出现：无改动时正文已经写着
                「-- 暂无改动 / -- 调整字段/索引/表选项后…」，再挂一个「暂无修改」是重复。 -->
           <el-tag v-if="showStateTag" size="small" effect="plain" :type="previewTag.type"
                   class="sql-state">
             {{ previewTag.text }}
           </el-tag>
-          <span class="sql-fold-tx">{{ sqlCollapsed ? $t('tdet.expand') : $t('tdet.collapse') }}</span>
         </div>
         <div v-show="!sqlCollapsed" class="sql-body">
           <pre><code>{{ previewBody }}</code></pre>
@@ -430,7 +436,9 @@ const collationMap = computed(() => features.value.collations || {})
 const collations = computed(() => collationMap.value[tableForm.value.charset] || [])
 
 // 基本信息各字段是否展示 / 可编辑
-const showCommentField = computed(() => has('supportsComment') && !isDoris.value)
+// Doris 的表注释**可以改**（实测 2.x：`ALTER TABLE … MODIFY COMMENT '…'` 成功），
+// 之前跟着「表选项只读」一起禁掉了 —— 表注释行不再显示，用户改不了。
+const showCommentField = computed(() => has('supportsComment'))
 /* 表选项三行（存储引擎 / 编码 / 排序规则）：只看**后端是否声明支持表选项**，
    不再要求"能力清单非空" —— 后端目前没给 MySQL 的 engines/charsets/collations 清单，
    而按清单非空来决定显隐，后果是**整行消失、用户改都改不了**。
@@ -623,7 +631,9 @@ const isLoadedRow = (r) => r._state === 'loaded'
 // 勾选框灰掉看着像纯文本、输入框全禁用，同一张表在 MySQL 上却是可编辑的，
 // 「不同数据库样式不一样」就是这么来的。
 const canEditLoaded = computed(() =>
-  has('supportsColumnModify') && ['mysql', 'pg', 'oracle', 'mssql', 'clickhouse', 'doris'].includes(ddlStyle.value))
+  // derby 也在内：后端 edit_capabilities 已声明 Derby 支持改列（实测过 10.16），
+  // 名单里漏了它的话，后端说"支持"而这里把整张字段表灰成只读 —— 两处口径不一致。
+  has('supportsColumnModify') && ['mysql', 'pg', 'oracle', 'mssql', 'clickhouse', 'doris', 'derby'].includes(ddlStyle.value))
 // 新增行可内联主键的方言
 const canSetPkOnAdd = computed(() => ['mysql', 'oracle', 'mssql'].includes(ddlStyle.value))
 // 修改主键/自增权限（与旧实现保持一致）
@@ -668,6 +678,10 @@ const lenDisabled = (r) => r.opaque || inputDisabled(r)
  * 真正会生成不出来的只有下面这些没有改名语法的方言。
  */
 const nameDisabled = (r) => {
+  // 支持改名的方言：字段名**始终可编辑**（不再落到 inputDisabled —— 那会把
+  // supportsColumnModify=false 的 SQLite / Derby 也一并灰掉，而它们只是不能改
+  // 类型/默认值/注释，改名是支持的）
+  if (isLoadedRow(r) && renameSupported.value) return false
   if (isLoadedRow(r) && !renameSupported.value) return true
   return inputDisabled(r)
 }
@@ -681,7 +695,10 @@ const nameDisabled = (r) => {
  *   只是名字不在这份名单里，于是「字段名」输入框永远是灰的、用户点不动（实测如此）。
  */
 const renameSupported = computed(() =>
-  ['mysql', 'pg', 'oracle', 'mssql', 'derby', 'clickhouse'].includes(ddlStyle.value))
+  // doris：`ALTER TABLE … RENAME COLUMN 旧 新`（实测 2.x 可用，**连分桶/Key 列都能改**，
+  // 语法是空格连接、没有 TO —— 生成器按这个写）；
+  // sqlite（3.25+ RENAME COLUMN）/ generic（DB2 / DuckDB 的 ANSI 形式）：只放开改名一种。
+  ['mysql', 'doris', 'pg', 'oracle', 'mssql', 'derby', 'clickhouse', 'sqlite', 'generic'].includes(ddlStyle.value))
 
 const buildColRows = () => {
   colRows.value = (columns.value || []).map((c, i) => {
@@ -717,6 +734,20 @@ const colChanged = (r) => {
   if (!isLoadedRow(r) || !r._orig) return false
   const o = r._orig
   if (String(r.name || '').trim() !== String(o.name || '').trim()) return true
+  if (normType(buildType(r.typeBase, typeParam(r))) !== o.type) return true
+  if (!!r.nullable !== o.nullable) return true
+  const curDv = r.defaultIsNull ? null : String(r.defaultValue ?? '')
+  if (curDv !== o.defaultValue) return true
+  if ((r.comment || '').trim() !== o.comment.trim()) return true
+  if (!!r.primaryKey !== !!o.primaryKey) return true
+  if (!!r.autoIncrement !== !!o.autoIncrement) return true
+  return false
+}
+/** 除「字段名」外，其它属性（类型/可空/默认值/注释/主键/自增）有没有变。
+ *  Doris 改名专用：只改名时**不能**再发 MODIFY（Doris 会对 Nothing is changed 报错）。 */
+const colAttrsChanged = (r) => {
+  if (!isLoadedRow(r) || !r._orig) return false
+  const o = r._orig
   if (normType(buildType(r.typeBase, typeParam(r))) !== o.type) return true
   if (!!r.nullable !== o.nullable) return true
   const curDv = r.defaultIsNull ? null : String(r.defaultValue ?? '')
@@ -775,8 +806,37 @@ const applyComment = () => {
   commentDlg.visible = false
 }
 
+/**
+ * 字段表格的列宽（百分比，合计恒为 100%）。
+ *
+ * 为什么用百分比而不是像素：像素总和是固定的（实测 860~880px），容器比它宽时右侧必然
+ * 留一条空白（真机反复出现、换过好几种写法都按浏览器各自的分配规则跑）；百分比与容器宽度
+ * 无关、合计 100% ⇒ 无论窗口多宽多窄，表格都精确铺满。权重只表达相对比例，最终统一归一化，
+ * 所以「某方言少了主键/自增列」也不会破坏铺满。
+ */
+// 权重（相对比例，最终归一化为百分比）：字段名收窄、注释放大（用户实测反馈：
+// 字段名一屏都放得下还占大片宽度，注释反而挤在 100px 里看不全）
+const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, def: 12, auto: 5, comment: 30, ops: 5 }
+const colWidths = computed(() => {
+  const keys = ['idx', 'name', 'type', 'len', 'prec', 'nullable']
+  if (showPkCol.value) keys.push('pk')
+  if (showOrderKey.value) keys.push('sort')
+  keys.push('def')
+  if (showAutoIncrement.value) keys.push('auto')
+  if (showComment.value) keys.push('comment')
+  keys.push('ops')
+  const total = keys.reduce((sum, k) => sum + COL_WEIGHTS[k], 0)
+  const out = {}
+  for (const k of keys) out[k] = ((COL_WEIGHTS[k] / total) * 100).toFixed(3) + '%'
+  return out
+})
 const showOrderKey = computed(() => isCH.value)
-const showAutoIncrement = computed(() => has('supportsAutoIncrement'))
+// 主键列：Doris 没有「每列主键」概念（主键=建表时的 Key 列，界面上恒为「—」）、
+// ClickHouse 同理 —— 整列不显示，比一列无意义的「—」干净
+const showPkCol = computed(() => !isDoris.value && !isCH.value)
+// 自增列：Doris 的自增只能在建表时指定、编辑器对它无任何可操作项（一列禁用的勾选框），
+// 不显示
+const showAutoIncrement = computed(() => has('supportsAutoIncrement') && !isDoris.value && !isCH.value)
 const showComment = computed(() => has('supportsComment'))
 const headSpan = computed(() => 9
   + (showOrderKey.value ? 1 : 0)
@@ -837,8 +897,23 @@ const posPart = (f) => {
 
 // 生成 新增/修改 字段 SQL；不可用返回 null（生成预览前已有 validate 拦截）
 const buildColumnSql = (f, isEdit) => {
-  if (ddlStyle.value === 'sqlite' && isEdit) return null
+  // SQLite：不能改已有列的类型/默认值/注释（被 supportsColumnModify=false 禁掉），
+  // 但 **3.25+ 支持 RENAME COLUMN** —— 字段名放开，只生成改名这一条。
+  if (ddlStyle.value === 'sqlite' && isEdit) {
+    if (f.name.trim() !== String(f.oldName || '').trim()) {
+      return `ALTER TABLE ${qt(props.table)} RENAME COLUMN ${qt(f.oldName)} TO ${qt(f.name.trim())}`
+    }
+    return null
+  }
   if (isEdit && (ddlStyle.value === 'oracle' || ddlStyle.value === 'mssql') && f.name !== f.oldName) return null
+  // generic（DB2 / DuckDB 等暂未逐条实测的 SQL 方言）：只放开「改名」这一种标准操作
+  // （RENAME COLUMN 旧 TO 新 是 ANSI 形式）；其它属性按 supportsColumnModify=false 保持只读。
+  if (ddlStyle.value === 'generic' && isEdit) {
+    if (f.name.trim() !== String(f.oldName || '').trim()) {
+      return `ALTER TABLE ${qt(props.table)} RENAME COLUMN ${qt(f.oldName)} TO ${qt(f.name.trim())}`
+    }
+    return null
+  }
   const t = qt(props.table)
   const dv = String(f.defaultValue ?? '').trim()
   const defNull = (v) => (/^null$/i.test(v) ? ' NULL' : ` '${sq(v)}'`)
@@ -850,14 +925,25 @@ const buildColumnSql = (f, isEdit) => {
   if (ddlStyle.value === 'doris') {
     const typeText = `${qt(f.name.trim())} ${buildType(f.type, typeParam(f))}`
     if (isEdit) {
-      let def = typeText
-      const agg = String(f.aggType || '').trim()
-      if (f.aggKey) def += ' KEY'
-      else if (agg && !/^none$/i.test(agg)) def += ' ' + agg
-      def += f.nullable ? ' NULL' : ' NOT NULL'
-      if (dv !== '') def += /^null$/i.test(dv) ? ' DEFAULT NULL' : ` DEFAULT '${sq(dv)}'`
-      if (f.comment) def += ` COMMENT '${sq(f.comment)}'`
-      return `ALTER TABLE ${t} MODIFY COLUMN ${def}`
+      // 改列名：`ALTER TABLE … RENAME COLUMN 旧 新`（实测 2.x 可用，连分桶/Key 列都能改；
+      // 语法是空格连接、**没有 TO**）。改名与改属性是两条语句 —— 改名用新名，
+      // 随后的 MODIFY（若有属性变化）也用新名，顺序不能反。
+      // 只改名、属性没动时**只发 RENAME**：多余的 MODIFY 会被 Doris 以
+      // Nothing is changed 拒掉（caller 经 `f._attrsChanged` 告知属性是否另有变化）。
+      const renamed = f.name.trim() !== String(f.oldName || '').trim()
+      const stmts = []
+      if (renamed) stmts.push(`ALTER TABLE ${t} RENAME COLUMN ${qt(f.oldName)} ${qt(f.name.trim())}`)
+      if (!renamed || f._attrsChanged) {
+        let def = typeText
+        const agg = String(f.aggType || '').trim()
+        if (f.aggKey) def += ' KEY'
+        else if (agg && !/^none$/i.test(agg)) def += ' ' + agg
+        def += f.nullable ? ' NULL' : ' NOT NULL'
+        if (dv !== '') def += /^null$/i.test(dv) ? ' DEFAULT NULL' : ` DEFAULT '${sq(dv)}'`
+        if (f.comment) def += ` COMMENT '${sq(f.comment)}'`
+        stmts.push(`ALTER TABLE ${t} MODIFY COLUMN ${def}`)
+      }
+      return stmts.join(';\n')
     }
     let add = `ALTER TABLE ${t} ADD COLUMN ${typeText}`
     if (dv !== '') add += /^null$/i.test(dv) ? ' DEFAULT NULL' : ` DEFAULT '${sq(dv)}'`
@@ -1101,7 +1187,18 @@ const colParts = () => {
   if (ddlStyle.value === 'mysql' || ddlStyle.value === 'doris') {
     for (const r of removed) parts.push(`ALTER TABLE ${t} DROP COLUMN ${qt(r._orig ? r._orig.name : r.name)}`)
     // ① 修改：先不带 AUTO_INCREMENT（避免 DROP PRIMARY KEY 被自增列阻断，最后统一恢复）
+    // Doris 分桶列（DISTRIBUTED BY）：数据库**一律拒绝** `MODIFY COLUMN` ——
+    // 改类型、改注释、什么都改不了（实测 `Can not modify distribution column[id]`）。
+    // 不让它拖垮整批变更：该列的 ALTER 不生成，脚本里留一行注释说明原因，
+    // 保存成功后再弹一条警告（见 save() 里的 dorisDistSkipped）。
+    const distCol = ddlStyle.value === 'doris' ? dorisDistColName() : ''
     for (const r of modified) {
+      if (distCol && String(r.name || '').trim().toLowerCase() === distCol) {
+        // 注意：本函数里 `t` 已被上面的 `const t = qt(props.table)`（引号表名）遮住，
+        // 这里必须用 i18n 别名 tr（见文件头）—— 直接写 t(...) 等于调字符串，必炸（真机踩过）
+        parts.push(`-- ${tr('tdet.dorisDistSkip', { col: String(r.name || '').trim() })}`)
+        continue
+      }
       const f = rowToForm(r, true); f.autoIncrement = false
       // Doris：把 `DESC … ALL` 取回的**聚合类型 / key 标记带进 form**。
       // `rowToForm()` 是「行对象 → 普通表单对象」的转换，只搬固定字段 ——
@@ -1109,6 +1206,8 @@ const colParts = () => {
       // `MODIFY COLUMN` 就永远缺 `KEY`，Doris 报 Can not change aggregation type（实测）。
       f.aggKey = r.aggKey
       f.aggType = r.aggType
+      // Doris：只改名时不能发多余的 MODIFY（见 buildColumnSql 的 doris 分支）
+      f._attrsChanged = colAttrsChanged(r)
       const sql = buildColumnSql(f, true)
       if (sql) parts.push(sql)
     }
@@ -1166,15 +1265,24 @@ const colParts = () => {
 const optsBase = { engine: '', charset: '', collation: '', autoIncrement: '', comment: '' }
 const optsChanged = computed(() => {
   const f = tableForm.value
+  // Doris：引擎/字符集/自增等建表后不可改（界面只读），**只有表注释**能改
+  // （实测 `ALTER TABLE … MODIFY COMMENT` 可用）—— 只比注释，别把只读项算成改动
+  // （之前恒为 false 又会漏掉注释这个真能改的）。
+  if (isDoris.value) return (f.comment || '') !== (optsBase.comment || '')
   return f.engine !== optsBase.engine || f.charset !== optsBase.charset ||
     f.collation !== optsBase.collation || String(f.autoIncrement).trim() !== String(optsBase.autoIncrement).trim() ||
     (f.comment || '') !== (optsBase.comment || '')
 })
 const optParts = () => {
-  // Doris 的表选项建表后完全不可改 → 直接短路；ClickHouse 只放开注释（见下面的分支）
-  if (!optsChanged.value || isDoris.value) return []
+  // Doris 的表选项（引擎/字符集/自增…）建表后完全不可改 → 短路；
+  // **表注释除外**：实测 `ALTER TABLE t MODIFY COMMENT '…'` 可用（与 ClickHouse 同语法）
+  if (!optsChanged.value) return []
   const f = tableForm.value
   const t = qt(props.table)
+  if (isDoris.value) {
+    if ((f.comment || '') === (optsBase.comment || '')) return []
+    return [`ALTER TABLE ${t} MODIFY COMMENT '${sq(f.comment || '')}'`]
+  }
   // ClickHouse：表选项里**只有表注释**能改（引擎 / 排序键 / 分区键建表时定死，界面只读展示）。
   // 语法是 `ALTER TABLE t MODIFY COMMENT '…'`（21.3+）—— 更老的服务端会直接报语法错，
   // 界面把数据库的原话显示出来，不替它猜。
@@ -1290,14 +1398,14 @@ const canCopy = computed(() => !!(ddlMode.value ? ddlText.value : previewSql.val
 const canSave = computed(() => !ddlMode.value && !!previewSql.value && issues.value.length === 0)
 const previewTag = computed(() => {
   if (ddlMode.value && ddlText.value) return { text: t('tdet.stViewingDdl'), type: 'info' }
-  if (!pendingCount.value) return { text: t('tdet.stNoChanges'), type: 'info' }
   if (issues.value.length) return { text: t('tdet.stNeedsFix'), type: 'warning' }
   return { text: t('tdet.stExecutable'), type: 'success' }
 })
-/** 是否显示这个状态标签：**「暂无修改」不显示**（正文已说明无改动，重复一遍是噪音），
-    没有拿到 DDL 时同理；只有真正有话要说（待修正 / 可执行 / 当前 DDL）才挂出来。 */
+/** 是否显示这个状态标签：**以「实际生成了 SQL」为准**（previewSql），而不是待保存计数 ——
+    两者可能不一致（如 Doris 表选项被计入待保存、但一条 ALTER 都生成不了），
+    拿计数当依据会凭空挂个「可执行」（真机踩过）。正文「暂无改动」/ 空时不挂标签。 */
 const showStateTag = computed(() =>
-  ddlMode.value ? !!ddlText.value : pendingCount.value > 0
+  ddlMode.value ? !!ddlText.value : !!previewSql.value
 )
 
 // ==================== 索引操作 ====================
@@ -1526,9 +1634,10 @@ const rebuildIndex = async (row) => {
 // engine 对 ClickHouse 也由后端给出真实值（MergeTree 等），用于只读回显。
 const tableForm = ref({ engine: '', charset: '', collation: '', autoIncrement: '', comment: '', sortingKey: '', partitionKey: '', dorisModel: '', dorisDistCol: '', dorisBuckets: '', dorisReplication: '' })
 
-/** 解析 Doris 建表 DDL 中的只读属性：数据模型 / 分桶列 / 分桶数 / 副本数（均建于表创建时，不可改） */
+/** 解析 Doris 建表 DDL 中的只读属性：数据模型 / 分桶列 / 分桶数 / 副本数（均建于表创建时，不可改）。
+ *  顺带把**表注释**也解析出来 —— Doris 的表清单接口不回 comment，表注释行要靠这里回显。 */
 const parseDorisDdl = (ddl) => {
-  const out = { dorisModel: '', dorisDistCol: '', dorisBuckets: '', dorisReplication: '' }
+  const out = { dorisModel: '', dorisDistCol: '', dorisBuckets: '', dorisReplication: '', comment: '' }
   const s = String(ddl || '')
   if (!s) return out
   const m = s.match(/\b(DUPLICATE|UNIQUE|AGGREGATE)\s+KEY/i)
@@ -1542,8 +1651,30 @@ const parseDorisDdl = (ddl) => {
   const ra = s.match(/["']?replication_allocation["']?\s*=\s*["']?[^"']*?(\d+)/i)
   if (rn) out.dorisReplication = rn[1]
   else if (ra) out.dorisReplication = ra[1]
+  // 表级注释取**最后一个** COMMENT：列注释都挂在列定义里（在前），表级注释
+  // 在右括号之后、PROPERTIES 之前。Doris 的 DDL 用**单引号**（列注释同），双引号是
+  // PROPERTIES 里的键值 —— 两种都要认。
+  let cm = null
+  const re = /COMMENT\s+(?:"([^"]*)"|'([^']*)')/gi
+  let mm
+  while ((mm = re.exec(s))) cm = mm[1] !== undefined ? mm[1] : mm[2]
+  if (cm !== null) out.comment = cm
   return out
 }
+/** 当前表的 Doris 分桶列名（RANDOM 分桶 / 非 Doris 表返回 ''，比对用小写） */
+const dorisDistColName = () => {
+  const c = String(tableForm.value.dorisDistCol || '').trim()
+  return (!c || /^random$/i.test(c)) ? '' : c.toLowerCase()
+}
+/** 本次变更里被跳过的 Doris 分桶列（ALTER 生成不了，保存成功后要提示用户） */
+const dorisDistSkipped = computed(() => {
+  if (ddlStyle.value !== 'doris') return []
+  const dist = dorisDistColName()
+  if (!dist) return []
+  return colRows.value
+    .filter(r => isLoadedRow(r) && colChanged(r) && String(r.name || '').trim().toLowerCase() === dist)
+    .map(r => String(r.name || '').trim())
+})
 const onCharsetChange = () => {
   if (collations.value.length && !collations.value.includes(tableForm.value.collation)) {
     tableForm.value.collation = collations.value[0]
@@ -1712,6 +1843,10 @@ const save = async () => {
   if (probs.length) return ElMessage.warning(probs[0])
   const script = scriptParts.value.join(';\n') + ';'
   if (!script.trim()) return ElMessage.info(t('tdet.noChangesToSave'))
+  // 脚本剥掉注释行后一条语句都不剩 = 唯一的改动是 Doris 分桶列（生成不了 ALTER）：
+  // 没必要再发一遍必然失败/无意义的请求，直接把原因说清楚
+  const executable = script.split('\n').filter(l => l.trim() && !l.trim().startsWith('--')).join('\n')
+  if (!executable.trim()) return ElMessage.warning(t('tdet.dorisDistSkip', { col: dorisDistSkipped.value.join(', ') || '—' }))
   // 生产库保护：DDL 前二次确认（读一下脚本首行，让用户知道要动什么）
   const firstLine = script.split('\n').map(s => s.trim()).filter(Boolean)[0] || ''
   if (!(await confirmProdWrite(firstLine))) return
@@ -1720,6 +1855,10 @@ const save = async () => {
     const res = await alterTable(props.conn.id, props.database, script)
     if (!res.success) throw new Error(res.message || t('tdet.execFailed'))
     ElMessage.success(t('tdet.savedOk'))
+    // Doris 分桶列的修改生成不了 ALTER（数据库一律拒绝），保存成功后单独说清楚
+    if (dorisDistSkipped.value.length) {
+      ElMessage.warning(t('tdet.dorisDistSkip', { col: dorisDistSkipped.value.join(', ') }))
+    }
     await load()
   } catch (e) {
     ElMessage.error(t('tdet.saveFailed', { detail: (e?.message || e) }))

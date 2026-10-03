@@ -36,7 +36,8 @@
       "../../agents/dbmind-agent-jdbc/target/dbmind-agent-jdbc.jar": "agents/dbmind-agent-jdbc.jar",
       "../../agents/dbmind-agent-mongodb/target/dbmind-agent-mongodb.jar": "agents/dbmind-agent-mongodb.jar",
       "../../agents/dbmind-agent-redis/target/dbmind-agent-redis.jar": "agents/dbmind-agent-redis.jar",
-      "../../agents/dbmind-agent-elasticsearch/target/dbmind-agent-elasticsearch.jar": "agents/dbmind-agent-elasticsearch.jar"
+      "../../agents/dbmind-agent-elasticsearch/target/dbmind-agent-elasticsearch.jar": "agents/dbmind-agent-elasticsearch.jar",
+      "../../resources/native-auth/": "native-auth/"
     }
   }
 }
