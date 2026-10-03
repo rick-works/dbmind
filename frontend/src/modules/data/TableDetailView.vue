@@ -1790,7 +1790,13 @@ const load = async () => {
     if (isDoris.value) {
       try {
         const ddlRes = await getTableDdl(props.conn.id, props.database, props.table)
-        Object.assign(tableForm.value, parseDorisDdl(ddlRes?.ddl || ''))
+        const parsed = parseDorisDdl(ddlRes?.ddl || '')
+        // 表清单的 comment 是数据库现状的权威值 —— DDL 解析（取「最后一个 COMMENT」）
+        // 偶尔会因 DDL 形状差异取到别的注释，不能让它覆盖现状（否则打开就误报「注释有改动」）
+        parsed.comment = t?.comment || parsed.comment
+        Object.assign(tableForm.value, parsed)
+        // DDL 回填后重照基线快照：保证刚打开时基线与显示值一致（不产生假差异）
+        optsBase.comment = tableForm.value.comment
       } catch { /* DDL 取不到时留空 */ }
     }
     onCharsetChange()

@@ -2974,7 +2974,7 @@ export default {
   'sync.bgClear': 'Clear all',
   'sync.bgEmpty': 'No background tasks',
   'sync.bgView': 'View',
-  'sync.bgCloseAsk': '{n} background sync task(s) still running ({names}). Closing the window will NOT stop them; reopen the app and check the task center. Close anyway?',
+  'sync.bgCloseAsk': '{n} background task(s) running ({names}). Closing the window also stops the background service and these tasks will be interrupted. Consider waiting for completion or stopping them in the Task Center. Close anyway?',
   'sync.bgCloseOk': 'Close anyway',
   'sync.whereLabel': 'Row filter',
   'sync.autoCreate': 'Create the table when it is missing in the target',

@@ -1087,6 +1087,23 @@ async fn sync_table_inner(
         }
         created = true;
     }
+        // 建表后才能补的注释（SQL Server 的扩展属性等）：create_table_with_comments
+        // 写不进去的方言在这里逐条执行 —— 之前 SQL Server 目标的注释全空（真机反馈）。
+        // 失败静默：注释是有价值的补充，不该让它挡住数据同步。
+        let post_comments = target_kind.post_create_comments(
+            target_name.trim_matches(|c| c == '"' || c == '`' || c == ']'),
+            &src_column_comments,
+            src_table_comment.as_deref(),
+            "dbo",
+        );
+        for sql in &post_comments {
+            let _ = run_target(state, &tgt_target, sql).await;
+        }
+        if !post_comments.is_empty() {
+            if let Some(task) = task {
+                task.log(format!("表 {}：已补充注释（{} 条）", table, post_comments.len()));
+            }
+        }
     // 建表（含删除重建）成功后：把源表的非主键索引搬过来（「建表包含索引」选项）
     if created && opts.include_indexes {
         sync_indexes(

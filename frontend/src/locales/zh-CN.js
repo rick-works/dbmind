@@ -2980,7 +2980,7 @@ export default {
   'sync.bgClear': '清空记录',
   'sync.bgEmpty': '没有后台任务',
   'sync.bgView': '查看',
-  'sync.bgCloseAsk': '有 {n} 个后台同步任务正在运行（{names}）。关闭窗口不会中断它们，重新打开应用后可从任务中心查看进度。仍要关闭吗？',
+  'sync.bgCloseAsk': '有 {n} 个后台任务正在运行（{names}）。关闭窗口会一并结束后台服务，这些任务将被中断。建议等任务完成后再关闭，或先在任务中心停止它们。仍要关闭吗？',
   'sync.bgCloseOk': '仍要关闭',
   'sync.whereLabel': '行过滤',
   'sync.autoCreate': '目标表不存在时自动建表',

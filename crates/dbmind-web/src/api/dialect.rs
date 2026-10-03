@@ -1237,7 +1237,11 @@ impl Dialect {
                     .to_string(),
             ),
             "sqlserver" => Meta::Sql(
-                "select i.name as name, o.name as \"table\", i.is_unique as isUnique \
+                "select i.name as name, o.name as \"table\", i.is_unique as isUnique, \
+                 stuff((select ',' + c.name from sys.index_columns ic \
+                  join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id \
+                  where ic.object_id = i.object_id and ic.index_id = i.index_id and ic.key_ordinal > 0 \
+                  order by ic.key_ordinal for xml path('')), 1, 1, '') as \"columns\" \
                  from sys.indexes i join sys.objects o on o.object_id = i.object_id \
                  where o.type = 'U' and i.name is not null order by o.name, i.name"
                     .to_string(),
@@ -1849,6 +1853,46 @@ impl Dialect {
     /// 把**源库**的类型名翻译成本方言（目标）的类型名 —— 跨类型同步建表的入口。
     ///
     /// `source` 为空或与自身相同 ⇒ 原样返回（调用方不必自己判断要不要翻译）。
+    /// 建表**之后**才能补的注释语句（`create_table_with_comments` 写不进去的那些方言）。
+    ///
+    /// 返回空的方言 = 注释已随建表内联写好（MySQL 系 / Doris / ClickHouse），无需追加。
+    /// 返回语句的方言（当前覆盖 SQL Server）逐条执行即可 ——
+    /// 之前 SQL Server 的注释完全没写（表注释/字段注释全空，真机反馈）。
+    pub fn post_create_comments(
+        &self,
+        table: &str,
+        column_comments: &std::collections::HashMap<String, String>,
+        table_comment: Option<&str>,
+        schema: &str,
+    ) -> Vec<String> {
+        if self.key() != "sqlserver" {
+            // PG / Oracle / DM / DB2 的 comment on 与 mssql 的扩展属性，建表场景先覆盖
+            // SQL Server（真机缺口最大）；其余方言沿用既有路径，后续按需补。
+            return Vec::new();
+        }
+        let sq_schema = format!("N{}", self.literal(schema));
+        let sq_table = format!("N{}", self.literal(table));
+        let mut out = Vec::new();
+        let render = |level2: &str, text: &str| -> String {
+            let value = format!("N{}", self.literal(text));
+            if level2.is_empty() {
+                format!("exec sp_addextendedproperty @name=N'MS_Description', @value={}, @level0type=N'SCHEMA', @level0name={}, @level1type=N'TABLE', @level1name={}", value, sq_schema, sq_table)
+            } else {
+                let col = format!("N{}", self.literal(level2));
+                format!("exec sp_addextendedproperty @name=N'MS_Description', @value={}, @level0type=N'SCHEMA', @level0name={}, @level1type=N'TABLE', @level1name={}, @level2type=N'COLUMN', @level2name={}", value, sq_schema, sq_table, col)
+            }
+        };
+        if let Some(tc) = table_comment.map(str::trim).filter(|c| !c.is_empty()) {
+            out.push(render("", tc));
+        }
+        for (name, comment) in column_comments {
+            if comment.trim().is_empty() { continue; }
+            out.push(render(name, comment));
+        }
+        let _ = table;
+        out
+    }
+
     pub fn map_type(&self, source: Option<ConnectionKind>, source_type: &str) -> String {
         match source {
             Some(kind) if kind != self.kind => TypeFamily::parse(source_type).render(self.kind),
