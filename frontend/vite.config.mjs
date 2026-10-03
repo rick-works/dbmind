@@ -45,6 +45,10 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // 注：CSS 压缩器保持默认 lightningcss。它会报「'deep' is not recognized as a valid
+    // pseudo-class」黄色警告 —— lightningcss 不认识 Vue 的 `:deep()` 私有伪类（该伪类
+    // 在这之前已被 Vue 编译器展开，警告只是压缩阶段的误报），构建成功、产物样式正确。
+    // 试过 cssMinify:'esbuild' 会直接构建失败（Rolldown 版 Vite 不支持），故保留默认。
     // 默认虽为 true，但这里显式写出来：dist 是「先清空再产出」，
     // 否则每轮构建都会在 assets 里再叠一份带新 hash 的副本，手工拷到后端 static 后越滚越大。
     emptyOutDir: true,
