@@ -1701,6 +1701,7 @@ const load = async () => {
     ])
     columns.value = cols || []
     indexes.value = (idxRes || []).filter(i => i.table === props.table)
+    tablesRef.value = tables || []
     buildColRows()
     buildIdxRows()
     // Doris：列的**聚合类型**与"是否 key 列"只有 `DESC … ALL` 才给（JDBC 的列元数据里没有），

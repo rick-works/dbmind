@@ -605,28 +605,31 @@ async fn sync_indexes(
     }
     let mut created = 0usize;
     for (name, unique, columns) in indexes {
-        // 主键在建表语句里通常已经带上了（PRIMARY / PRIMARY_KEY）
-        if name.to_ascii_uppercase().starts_with("PRIMARY") {
-            continue;
+            let idx_name = target_kind.quote(name.as_str());
+            let col_list = columns
+                .iter()
+                .map(|c| target_kind.quote(c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let unique_kw = if unique { "unique " } else { "" };
+            // **索引名保持源名**（用户口径：源叫什么目标就叫什么；重名/不支持时静默跳过）
+            let idx_sql = match target_kind.kind.key() {
+                // Doris：二级索引用 BITMAP 写法（普通 create index 不带 USING 会失败）
+                "doris" => format!("create index {} on {} ({}) using bitmap", idx_name, target_name, col_list),
+                // ClickHouse：二级索引必须带 TYPE 与 GRANULARITY，从 MySQL 索引推导不出类型 ——
+                // 硬建只会失败，明确跳过并留日志（数据同步不受影响）
+                "clickhouse" => {
+                    if let Some(task) = task {
+                        task.log(format!("表 {}：跳过索引 {}（ClickHouse 二级索引需要指定 TYPE，无法从源索引推导）", table, name));
+                    }
+                    continue;
+                }
+                _ => format!("create {}index {} on {} ({})", unique_kw, idx_name, target_name, col_list),
+            };
+            if run_target(state, tgt_target, &idx_sql).await.is_ok() {
+                created += 1;
+            }
         }
-        if columns.is_empty() {
-            continue;
-        }
-        let col_list = columns
-            .iter()
-            .map(|c| target_kind.quote(c))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let unique_kw = if unique { "unique " } else { "" };
-        // 索引名带表名前缀防跨表重名；失败（已存在 / 方言不支持该类型）静默跳过
-        let idx_sql = format!(
-            "create {unique_kw}index {} on {target_name} ({col_list})",
-            target_kind.quote(&format!("{table}_{name}"))
-        );
-        if run_target(state, tgt_target, &idx_sql).await.is_ok() {
-            created += 1;
-        }
-    }
     if created > 0 {
         if let Some(task) = task {
             task.log(format!("表 {table}：已创建 {created} 个索引"));
