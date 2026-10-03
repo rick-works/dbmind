@@ -395,7 +395,7 @@ const objTypes = reactive([
 const objState = reactive({})
 for (const t of objTypes) objState[t.key] = { list: [], selected: [] }
 
-const opts = ref({ objectPolicy: 'merge', dataMode: 'upsert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, rowLimit: 0, whereClause: '' })
+const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, rowLimit: 0, whereClause: '' })
 
 // 任务状态
 let pollTimer = null
