@@ -1371,7 +1371,7 @@ export default {
   'empty.recentQueries': '最近查询',
   'empty.dataTools': '数据工具',
   'empty.compare': '结构 / 数据对比',
-  'empty.sync': '数据传输',
+  'empty.sync': '结构 / 数据传输',
   'empty.trendTitle': '近 7 天查询趋势',
   'empty.legendOk': '成功',
   'empty.legendFail': '失败',

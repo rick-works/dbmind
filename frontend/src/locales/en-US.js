@@ -1365,7 +1365,7 @@ export default {
   'empty.recentQueries': 'Recent queries',
   'empty.dataTools': 'Data tools',
   'empty.compare': 'Structure / data compare',
-  'empty.sync': 'Data transfer',
+  'empty.sync': 'Structure / data transfer',
   'empty.trendTitle': 'Last 7 days',
   'empty.legendOk': 'ok',
   'empty.legendFail': 'failed',

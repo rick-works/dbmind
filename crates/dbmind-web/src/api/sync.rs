@@ -57,6 +57,11 @@ const PAGE: u64 = 50_000;
 /// 5000 行 ≈ 500KB 一条，仍在 MySQL `max_allowed_packet` 默认值内
 ///（旧版 4MB、新版 64MB）；再往上单语句解析/回滚成本开始吃掉收益，先停在这。
 const MAX_TUPLES_PER_STATEMENT: u64 = 5000;
+/// Stream Load 单请求的**字节**上限：行数上限（5 万）管不住行宽，宽行表一批能拼出
+/// 85MB+ 的 JSON —— 实测这批要 48 秒才被 BE 摄取完，期间界面一个数字都不动，
+/// 用户以为卡死（真机：ppl_loan_case 一批等了几分钟）。压到 16MB/批（实测 ~6 秒），
+/// 进度每几秒就跳一格，宽行表也顺带把内存峰值压下来。
+const STREAM_LOAD_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// 进度状态最短刷新间隔：写一页更新一次就够，**不必每行**都更新
 /// （20 万行就是 20 万次加锁 + 20 万次前端快照变化，纯属白烧 CPU）。
 const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(300);
@@ -664,8 +669,54 @@ fn basic_auth(user: &str, pass: &str) -> String {
     format!("Basic {}", out)
 }
 
+/// 解析 Stream Load 的 307 Location（FE → BE），返回下一步要请求的 URL。
+///
+/// 真机在 Location 上踩了两个坑：
+/// 1. **BE 向 FE 注册的主机是 127.0.0.1**（单机部署 BE 没配外网 IP）—— Location 是
+///    `http://...@127.0.0.1:8040/...`，从客户端看 127.0.0.1 是「我自己」，连接必然
+///    被拒（os error 10061）。环回主机要改写成 **FE 的主机**（端口仍用 Location 给的
+///    BE http 端口，如 8040）；
+/// 2. 某些版本的 FE 会把**凭据嵌进 Location**（`root:***@host`）—— 剥掉，认证统一由
+///    我们自己的 Authorization 头携带（每跳重发时都带上）。
+fn resolve_stream_redirect(fe_url: &str, location: &str) -> String {
+    let loc = location.trim();
+    let (scheme, rest) = if let Some(r) = loc.strip_prefix("http://") {
+        ("http://", r)
+    } else if let Some(r) = loc.strip_prefix("https://") {
+        ("https://", r)
+    } else {
+        // 相对路径：拼到 FE 的 scheme://authority 后
+        return match fe_url.find("://").and_then(|p| fe_url[p + 3..].find('/').map(|q| p + 3 + q)) {
+            Some(slash) => format!("{}{}", &fe_url[..slash], loc),
+            None => format!("{fe_url}{loc}"),
+        };
+    };
+    // authority = [userinfo@]host[:port]，path 从第一个 '/' 开始
+    let (raw_authority, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    // 剥 userinfo（取最后一个 '@' 之后的部分；没有 '@' 时原样）
+    let authority = raw_authority.rsplit('@').next().unwrap_or(raw_authority);
+    let (host, port) = match authority.split_once(':') {
+        Some((h, p)) => (h, p),
+        None => (authority, if scheme == "https://" { "443" } else { "80" }),
+    };
+    let host = match host {
+        "127.0.0.1" | "localhost" | "::1" | "[::1]" => {
+            // 环回主机 → 换成 FE 的主机（FE URL 是我们自己拼的，绝无 userinfo）
+            let r = &fe_url[fe_url.find("://").map(|p| p + 3).unwrap_or(0)..];
+            let fe_authority = match r.find('/') { Some(i) => &r[..i], None => r };
+            fe_authority.split(':').next().unwrap_or(fe_authority)
+        }
+        other => other,
+    };
+    format!("{scheme}{host}:{port}{path}")
+}
+
 async fn doris_stream_load(
     http_port: u16,
+    be_port: u16,
     host: &str,
     user: &str,
     password: &str,
@@ -694,7 +745,7 @@ async fn doris_stream_load(
         arr.push(Value::Object(obj));
     }
     let body = serde_json::to_vec(&arr).map_err(|e| e.to_string())?;
-    let url = format!("http://{}:{}/api/{}/{}/_stream_load", host, http_port, database, table);
+    let fe_url = format!("http://{}:{}/api/{}/{}/_stream_load", host, http_port, database, table);
     let label = format!(
         "dbmind_{}",
         std::time::SystemTime::now()
@@ -702,46 +753,88 @@ async fn doris_stream_load(
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
-    let host_owned = host.to_string();
     let user_owned = user.to_string();
     let pass_owned = password.to_string();
+    let host_owned = host.to_string();
     let db_owned = database.to_string();
     let tbl_owned = table.to_string();
-    let outcome = crate::api::blocking(move || -> dbmind_core::Result<()> {
-        let resp = ureq::AgentBuilder::new()
-            .redirects(10)
-            .build()
-            .put(&url)
-            .set("Authorization", &basic_auth(&user_owned, &pass_owned))
-            .set("label", &label)
-            .set("format", "json")
-            .set("strip_outer_array", "true")
-            .set("Expect", "100-continue")
+    let _ = crate::api::blocking(move || -> dbmind_core::Result<()> {
+        // **入口候选**：优先直连 BE（SHOW BACKENDS 的真实 http 端口）—— FE 会 307 重定向，
+        // 而重定向链路有两个坑：body 要对着 FE 白发一遍（FE 不读 body 就 307）；且
+        // `Expect: 100-continue` 下 BE 先回 100 Interim，ureq 把它当终站响应返回、body
+        // 根本没发出去 —— BE 等 body、我们等响应，**互相死锁**到 600s 超时（真机「卡住
+        // 很久」的根因）。所以这里**绝不带 Expect 头**，且直连 BE 一跳到终站。
+        // 直连失败（端口探测不到/连不上）才退回 FE + 手动重定向；再失败交给调用方回退 INSERT。
+        let agent = ureq::AgentBuilder::new()
+            .redirects(0)
             .timeout(std::time::Duration::from_secs(600))
-            .send_bytes(&body)
-            .map_err(|e| {
-                dbmind_core::DbMindError::new(
-                    dbmind_core::ErrorCode::QueryFailed,
-                    format!("Stream Load 请求失败：{}", e),
-                )
-            })?;
-        let text = resp.into_string().map_err(|e| {
-            dbmind_core::DbMindError::new(dbmind_core::ErrorCode::QueryFailed, e.to_string())
-        })?;
-        let v: Value = serde_json::from_str(&text).map_err(|_| {
-            dbmind_core::DbMindError::new(
-                dbmind_core::ErrorCode::QueryFailed,
-                format!("Stream Load 响应不是 JSON：{}", &text[..200.min(text.len())]),
-            )
-        })?;
-        if v.get("Status").and_then(Value::as_str) == Some("Success") {
-            Ok(())
-        } else {
-            Err(dbmind_core::DbMindError::new(
-                dbmind_core::ErrorCode::QueryFailed,
-                format!("Stream Load 失败：{}", v.get("Message").and_then(Value::as_str).unwrap_or(&text[..200.min(text.len())])),
-            ))
+            .build();
+        let mut starts: Vec<String> = Vec::new();
+        if be_port > 0 {
+            starts.push(format!("http://{}:{}/api/{}/{}/_stream_load", host_owned, be_port, db_owned, tbl_owned));
         }
+        starts.push(fe_url.clone());
+        for start in starts {
+            let mut url = start;
+            let mut settled = false;
+            for _hop in 0..5 {
+                let hop_t0 = std::time::Instant::now();
+                tracing::info!(url = %url, bytes = body.len(), "Stream Load 发起请求");
+                let resp = match agent
+                    .put(&url)
+                    .set("Authorization", &basic_auth(&user_owned, &pass_owned))
+                    .set("label", &label)
+                    .set("format", "json")
+                    .set("strip_outer_array", "true")
+                    .send_bytes(&body)
+                {
+                    Ok(resp) => resp,
+                    // ureq 对 >=400 默认返回 Err(Status)，把响应体捞出来才有诊断价值
+                    Err(ureq::Error::Status(_, resp)) => resp,
+                    // 传输层失败（连不上/连接被断）：换下一个候选入口
+                    Err(e) => {
+                        tracing::warn!(url = %url, ms = hop_t0.elapsed().as_millis() as u64, error = %e, "Stream Load 传输失败");
+                        break;
+                    }
+                };
+                // 307/308：FE → BE 的重定向（兜底链路），换 URL 重发同一请求
+                if resp.status() == 307 || resp.status() == 308 {
+                    tracing::info!(status = resp.status(), ms = hop_t0.elapsed().as_millis() as u64, "Stream Load 重定向");
+                    if let Some(loc) = resp.header("Location") {
+                        url = resolve_stream_redirect(&url, loc);
+                        continue;
+                    }
+                }
+                tracing::info!(status = resp.status(), ms = hop_t0.elapsed().as_millis() as u64, "Stream Load 终站响应");
+                settled = true;
+                let ctype = resp.header("content-type").unwrap_or("").to_string();
+                let text = resp.into_string().unwrap_or_default();
+                // 用 chars 截前缀：直接按字节切片会把多字节中文切在中间（panic）
+                let head: String = text.chars().take(500).collect();
+                let v: Option<Value> = serde_json::from_str(&text).ok();
+                match v {
+                    Some(v) if v.get("Status").and_then(Value::as_str) == Some("Success") => return Ok(()),
+                    Some(v) => {
+                        let msg_head: String = v.get("Message").and_then(Value::as_str).unwrap_or(&head).chars().take(500).collect();
+                        return Err(dbmind_core::DbMindError::new(
+                            dbmind_core::ErrorCode::QueryFailed,
+                            format!("Stream Load 失败：{msg_head}"),
+                        ))
+                    }
+                    None => {
+                        return Err(dbmind_core::DbMindError::new(
+                            dbmind_core::ErrorCode::QueryFailed,
+                            format!("Stream Load 响应不是 JSON（content-type={ctype}）：{head}"),
+                        ))
+                    }
+                }
+            }
+            let _ = settled;
+        }
+        Err(dbmind_core::DbMindError::new(
+            dbmind_core::ErrorCode::QueryFailed,
+            "Stream Load 所有入口均不可达（BE 直连与 FE 重定向都失败）".to_string(),
+        ))
     })
     .await
     .map_err(|e| format!("工作线程异常：{:?}", e))?;
@@ -944,9 +1037,54 @@ fn with_identity(sql: String, identity_on: bool, target_name: &str) -> String {
     }
 }
 
-/// 生成一批 INSERT。SQL Server 的多行 VALUES **单条语句限 1000 行**（解析器硬限制），
-/// 但一批里可以放多条 INSERT（连接开了 allowMultiQueries、安全闸门放行 INSERT 批）——
-/// 超过 1000 行时拆成多条拼分号，批大小不受限，固定链路开销也不会因为拆语句而翻倍。
+/// 每条 INSERT 语句的**字节**上限：语句就是 MySQL 协议里的一个 packet，
+/// 超过目标的 `max_allowed_packet` 直接被拒（真机：Doris FE 默认只有 1MB，
+/// 宽行 2000 行能拼出 7.3MB → 「Packet for query is too large (7,334,180 > 1,048,576)」）。
+/// 行数上限管不住行宽（JSON/长文本列一行几 KB），必须字节 + 行数**双重约束**。
+fn insert_stmt_cap(kind_key: &str) -> usize {
+    match kind_key {
+        // Doris FE 的 max_allowed_packet 默认 1MB → 512KB 留足语句头/转义余量
+        "doris" => 512 * 1024,
+        // MySQL/MariaDB 旧版默认 4MB（8.0 起动态 64MB）→ 3MB
+        "mysql" | "mariadb" => 3 * 1024 * 1024,
+        // 其余方言没有 1MB 级 packet 限制，这里只防单语句内存尖峰
+        _ => 16 * 1024 * 1024,
+    }
+}
+
+/// 单行 tuple 在 SQL 里的体积**上界**粗估：Text 按字符数 ×2（转义/引号翻倍余量），
+/// 数值/时间列按 40 估；逐字符精算不值得，估大了只是多拆一条语句。
+fn estimate_row_bytes(row: &[CellValue]) -> usize {
+    row.iter()
+        .map(|c| match c {
+            CellValue::Text(s) => s.len() * 2 + 8,
+            CellValue::Blob { len } => *len * 2 + 8,
+            _ => 40,
+        })
+        .sum::<usize>()
+        + 8
+}
+
+/// 单行在 Stream Load **JSON 体**里的体积粗估：字符串基本原样进 JSON（无需 ×2 转义），
+/// 加上键名与逗号/引号开销按每列 24 字节估。
+fn json_row_bytes(row: &[CellValue]) -> usize {
+    row.iter()
+        .map(|c| match c {
+            CellValue::Text(s) => s.len() + 24,
+            CellValue::Blob { len } => *len + 24,
+            _ => 24,
+        })
+        .sum::<usize>()
+        + 8
+}
+
+/// 生成一批 INSERT **语句列表**（(行数, SQL)，调用方逐条发送）。
+///
+/// 拆分是**双重约束**，谁先到谁触发：
+/// - 行数：SQL Server 多行 VALUES 单条语句限 1000 行（解析器硬限制，真机踩过）；
+/// - 字节：单条语句估出来的体积不许超过目标方言的 packet 上限（见 insert_stmt_cap）——
+///   行数上限对宽行（JSON 列等）无能为力，2000 行也能拼出 7MB。
+/// 拆出来的每条语句各自独立发送，单条失败不影响之前已落盘的语句（部分成功语义）。
 fn build_insert_batch(
     table: &str,
     columns: &[String],
@@ -954,16 +1092,29 @@ fn build_insert_batch(
     rows: &[Vec<CellValue>],
     dialect: Dialect,
     kind_key: &str,
-) -> String {
+) -> Vec<(usize, String)> {
     const SQLSERVER_VALUES_LIMIT: usize = 1000;
-    if kind_key == "sqlserver" && rows.len() > SQLSERVER_VALUES_LIMIT {
-        return rows
-            .chunks(SQLSERVER_VALUES_LIMIT)
-            .map(|chunk| build_insert(table, columns, types, chunk, dialect))
-            .collect::<Vec<_>>()
-            .join(";\n");
+    let row_limit = if kind_key == "sqlserver" { SQLSERVER_VALUES_LIMIT } else { usize::MAX };
+    let byte_cap = insert_stmt_cap(kind_key);
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut start = 0usize;
+    let mut acc_bytes = 0usize;
+    let mut acc_rows = 0usize;
+    for (i, row) in rows.iter().enumerate() {
+        let row_bytes = estimate_row_bytes(row);
+        if acc_rows >= row_limit || (acc_rows > 0 && acc_bytes + row_bytes > byte_cap) {
+            out.push((i - start, build_insert(table, columns, types, &rows[start..i], dialect)));
+            start = i;
+            acc_bytes = 0;
+            acc_rows = 0;
+        }
+        acc_bytes += row_bytes;
+        acc_rows += 1;
     }
-    build_insert(table, columns, types, rows, dialect)
+    if start < rows.len() {
+        out.push((rows.len() - start, build_insert(table, columns, types, &rows[start..], dialect)));
+    }
+    out
 }
 
 fn build_insert(
@@ -1540,8 +1691,47 @@ async fn sync_table_inner(
             (cfg.host.clone().unwrap_or_default(), http_port, cfg.username.clone().unwrap_or_default(), cfg.password.clone().unwrap_or_default())
         })
         .unwrap_or_default();
+    // **BE 的真实 http 端口**（SHOW BACKENDS 的 HttpPort，真机 8040）：拿到后 Stream Load
+    // 直连 BE，不走 FE 的 307 重定向 —— 重定向链路 body 要发两遍（FE 不读 body 就 307），
+    // 还踩过 ureq 的 100-continue 死锁（见 doris_stream_load）。查询失败不挡：退回老推导
+    // 端口 + 重定向兜底，再不行还有 INSERT 管道。
+    let be_http_port: u16 = if use_stream {
+        match run_target(state, &tgt_target, "show backends").await {
+            Ok(result) => {
+                let idx_of = |name: &str| {
+                    result.columns.iter().position(|c| c.name.eq_ignore_ascii_case(name))
+                };
+                match (idx_of("HttpPort"), idx_of("Alive")) {
+                    (Some(http_idx), Some(alive_idx)) => result
+                        .rows
+                        .iter()
+                        .filter(|row| {
+                            matches!(row.get(alive_idx),
+                                Some(dbmind_core::CellValue::Text(s)) if s.trim().eq_ignore_ascii_case("true"))
+                        })
+                        .find_map(|row| match row.get(http_idx) {
+                            Some(dbmind_core::CellValue::Text(s)) => s.trim().parse().ok(),
+                            Some(dbmind_core::CellValue::Integer(n)) if *n > 0 => Some(*n as u16),
+                            _ => None,
+                        })
+                        .unwrap_or(0),
+                    _ => 0,
+                }
+            }
+            Err(_) => 0,
+        }
+    } else {
+        0
+    };
+    if use_stream && be_http_port > 0 {
+        if let Some(task) = task {
+            task.log(format!("表 {table}：Stream Load 直连 BE http 端口 {be_http_port}"));
+        }
+    }
     // Stream Load 首次失败后回退标志（本表内不再尝试）
     let mut stream_fallback = false;
+    // 攒批的字节量：Stream Load 的**第二重**上限（行数管不住行宽，见 STREAM_LOAD_MAX_BYTES）
+    let mut pending_bytes: usize = 0;
     // ===== 流式写入：读一页、写一页 =====
     // 旧实现是「整表读进内存 → 再写」，代价是三件事捆在一起：
     //   · 必须有 20 万行的上限，否则内存扛不住；
@@ -1886,49 +2076,76 @@ async fn sync_table_inner(
                 }
                 continue;
             }
+            pending_bytes += json_row_bytes(&row);
             pending_insert.push(row);
-            if pending_insert.len() as u64 >= flush_at {
+            // 触发条件**双重**：行数到 flush_at，或（Stream Load 时）攒批字节到
+            // STREAM_LOAD_MAX_BYTES —— 宽行表一批 5 万行能拼出 85MB+ 的 JSON，
+            // BE 摄取要几十秒甚至几分钟，期间界面一个数字都不动（真机「卡住」的观感）
+            if pending_insert.len() as u64 >= flush_at
+                || (use_stream && pending_bytes >= STREAM_LOAD_MAX_BYTES)
+            {
                 let batch_rows = pending_insert.len() as u64;
                 if use_stream && !stream_fallback {
                     let host = stream_host.clone();
                     let user = stream_user.clone();
                     let pass = stream_pass.clone();
-                    match doris_stream_load(stream_port, &host, &user, &pass, &tgt.scope, table, &columns, &pending_insert).await {
+                    if let Some(task) = task {
+                        // 每批都报一次批大小：宽行表小批多，让用户看到在动而不是卡死
+                        task.set_phase(format!("表 {table}：Stream Load {} 行", batch_rows));
+                    }
+                    match doris_stream_load(stream_port, be_http_port, &host, &user, &pass, &tgt.scope, table, &columns, &pending_insert).await {
                         Ok(()) => {
                             inserted += pending_insert.len() as u64;
                             if let Some(task) = task { task.add_rows_written(pending_insert.len() as u64); }
                             pending_insert.clear();
+                            pending_bytes = 0;
                         }
                         Err(err) => {
                             // 首次失败（端口不通/权限/格式）：本表内回退 INSERT 管道，数据不丢
                             stream_fallback = true;
+                            pending_bytes = 0;
                             if let Some(task) = task { task.log(format!("表 {}：Stream Load 失败（{}），回退 INSERT 管道", table, err)); }
                         }
                     }
                 } else {
-                match run_sql(
+                // build_insert_batch 按行数+字节上限拆成多条语句：逐条发送，
+                // 已成功的语句计入已写入（部分成功语义），失败从第一条报错处停
+                let stmts = build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key());
+                let mut ok_rows = 0u64;
+                let mut insert_err: Option<String> = None;
+                for (n_rows, stmt) in &stmts {
+                    match run_sql(
                                     state,
                                     tgt,
                                     &with_identity(
-                                        build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key()),
+                                        stmt.clone(),
                                         identity_on,
                                         &target_name,
                                     ),
                                 )
                                 .await
                                 {
-                                    Ok(()) => {
-                                        inserted += batch_rows;
-                                        if let Some(task) = task {
-                                            task.add_rows_written(batch_rows);
-                                        }
-                                        pending_insert.clear();
-                                    }
+                                    Ok(()) => ok_rows += *n_rows as u64,
                                     Err(err) => {
-                                        if let Some(task) = task { task.add_rows_failed(batch_rows); }
-                                        return ObjResult::failed(ty, table, format!("插入失败：{}", err.message))
+                                        insert_err = Some(err.message);
+                                        break;
                                     }
                                 }
+                }
+                match insert_err {
+                    None => {
+                        inserted += ok_rows;
+                        if let Some(task) = task {
+                            task.add_rows_written(ok_rows);
+                        }
+                        pending_insert.clear();
+                        pending_bytes = 0;
+                    }
+                    Some(msg) => {
+                        if let Some(task) = task { task.add_rows_failed(batch_rows - ok_rows); }
+                        return ObjResult::failed(ty, table, format!("插入失败：{msg}"))
+                    }
+                }
                 }
             }
         }
@@ -1963,26 +2180,38 @@ async fn sync_table_inner(
     if let Some(err) = read_error {
         return ObjResult::failed(ty, table, format!("读取源数据失败：{}", err));
     }
-    // 因取消而中途退出时，手里可能还压着最后一批没落盘的插入
+    // 因取消而中途退出时，手里可能还压着最后一批没落盘的插入（与主循环同款：拆语句逐条发）
     if !pending_insert.is_empty() {
-        match run_sql(
-            state,
-            tgt,
-            &with_identity(
-                build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key()),
-                identity_on,
-                &target_name,
-            ),
-        )
-        .await
-        {
-            Ok(()) => {
-                inserted += pending_insert.len() as u64;
-                if let Some(task) = task { task.add_rows_written(pending_insert.len() as u64); }
+        let stmts = build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key());
+        let mut ok_rows = 0u64;
+        let mut insert_err: Option<String> = None;
+        for (n_rows, stmt) in &stmts {
+            match run_sql(
+                state,
+                tgt,
+                &with_identity(
+                    stmt.clone(),
+                    identity_on,
+                    &target_name,
+                ),
+            )
+            .await
+            {
+                Ok(()) => ok_rows += *n_rows as u64,
+                Err(err) => {
+                    insert_err = Some(err.message);
+                    break;
+                }
             }
-            Err(err) => {
-                if let Some(task) = task { task.add_rows_failed(pending_insert.len() as u64); }
-                return ObjResult::failed(ty, table, format!("插入失败：{}", err.message));
+        }
+        match insert_err {
+            None => {
+                inserted += ok_rows;
+                if let Some(task) = task { task.add_rows_written(ok_rows); }
+            }
+            Some(msg) => {
+                if let Some(task) = task { task.add_rows_failed(pending_insert.len() as u64 - ok_rows); }
+                return ObjResult::failed(ty, table, format!("插入失败：{msg}"));
             }
         }
     }

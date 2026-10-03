@@ -953,21 +953,24 @@ watch(() => props.modelValue, v => {
   // 之后点顶栏「数据对比」会被 `modelValue && !wizardHidden` 挡住，永远打不开
   //（间歇性「点了没反应」的真凶，真机踩过）
   if (!v) { wizardHidden.value = false; return }
-  // 重新打开时若还处于「查看」残留态（进度窗开着/隐藏标记在），一并清掉 ——
-  // 用户点「数据对比」要的是**新对比**，不是上一次那个查看
-  if (wizardHidden.value) {
-    wizardHidden.value = false
-    showProgressDlg.value = false
-    stopPolling()
-  }
-  // **上次任务还在跑**（后台运行过）：恢复轮询让它自然落定 —— 不恢复的话
-  // loading 永远 true，「开始对比」被禁、「停止对比」错位显示在向导 footer，
-  // 任务跑完也没人知道（审查发现的死路，真机路径）
-  if (loading.value && taskId.value) {
-    taskMessage.value = t('cmp.preparing')
-    stopPolling()
-    pollTimer = setInterval(pollTask, 1500)
-  }
+  stopPolling()
+  disarmStopGuard()
+  // **打开即全新**：清掉上一次任务的全部运行痕迹（进度/统计/日志/结果）——
+  // 用户口径：点「数据对比」开的就是**新对比**，不带上次跑完的缓存数字。
+  // 任务中心「查看」走 resumeId 恢复链路，在本重置之后（nextTick）重新拉起进度/结果窗
+  taskId.value = ''
+  loading.value = false
+  result.value = null
+  compareLogs.value = []
+  taskStatus.value = ''
+  taskDone.value = 0
+  taskTotal.value = 0
+  taskCurrent.value = ''
+  taskMessage.value = ''
+  resumedViewOnly.value = false
+  detailTab.value = 'struct'
+  wizardHidden.value = false
+  showProgressDlg.value = false
   step.value = 1
   loadConnections()
 })

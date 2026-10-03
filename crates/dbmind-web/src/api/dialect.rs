@@ -1686,10 +1686,12 @@ impl Dialect {
         table_comment: Option<&str>,
     ) -> String {
         let cross = matches!(source, Some(kind) if kind != self.kind);
+        // Doris 的 KEY 列集合：主键列；没有主键时是**第一列**（兜底 DUPLICATE KEY，见下方分支）
+        let has_pk = columns.iter().any(|c| c.primary_key);
         // (是否主键列, 行文本)：Doris 要求键列排最前，所以要记得住哪几行是键
         let mut lines: Vec<(bool, String)> = Vec::new();
         let mut primaries: Vec<String> = Vec::new();
-        for column in columns {
+        for (col_index, column) in columns.iter().enumerate() {
             // 类型名单独取出来：默认值怎么渲染要按**类型**判（文本列一律加引号，见 default_literal）
             let raw_type = column
                 .type_name
@@ -1703,6 +1705,15 @@ impl Dialect {
             } else {
                 raw_type
             };
+            // **Doris 键列不能是无界文本**：STRING/TEXT 做 UNIQUE/DUPLICATE KEY 建表直接报
+            // 「String Type should not be used in key column」（真机：ClickHouse 的 String
+            // 主键/排序键同步到 Doris 必炸）。键列统一落成有长度的 VARCHAR(65533)
+            //（实测 Doris 接受它做键列；无键列长度上限之忧，只是普通列保持 STRING 不动）。
+            let is_doris_key = self.kind.key() == "doris"
+                && (column.primary_key || (!has_pk && col_index == 0));
+            if is_doris_key && is_unbounded_text_type(&type_name) {
+                type_name = "varchar(65533)".to_string();
+            }
             // H2 目标：内核回显的完整类型文本会带 `integer(32,0)` / `double(10,0)` 这种
             // **精度括号**，H2 2.x 对整数/浮点不接受（真机：重建目标表直接语法错）——
             // 整数与浮点类剥掉括号；`character varying(50)` 的括号是合法长度，保留。
@@ -2675,6 +2686,30 @@ fn looks_like_call(upper: &str) -> bool {
     upper.contains('(') || upper.contains("NEXTVAL")
 }
 
+/// 无界文本/二进制类型吗？——这些类型**不能做 Doris 的键列**（STRING/TEXT 无长度，
+/// Doris 的 KEY 要求有界），且 `varchar`/`char` 不带长度括号时也无法直接做键列。
+fn is_unbounded_text_type(type_name: &str) -> bool {
+    let t = type_name.trim().to_ascii_lowercase();
+    let base = t.split('(').next().unwrap_or("").trim();
+    matches!(
+        base,
+        "string"
+            | "text"
+            | "longtext"
+            | "mediumtext"
+            | "tinytext"
+            | "clob"
+            | "nclob"
+            | "blob"
+            | "tinyblob"
+            | "mediumblob"
+            | "longblob"
+            | "image"
+            | "bytea"
+    ) || ((base == "varchar" || base == "char" || base == "character varying" || base == "nvarchar")
+        && !t.contains('('))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2858,6 +2893,26 @@ mod tests {
         );
         assert!(no_pk.contains("DUPLICATE KEY(A)"), "实际：{no_pk}");
         assert!(no_pk.contains("B STRING"), "实际：{no_pk}");
+
+        // **键列不能是无界文本**：STRING/TEXT 做 UNIQUE/DUPLICATE KEY 直接被 Doris 拒
+        //（「String Type should not be used in key column」，真机：ClickHouse String 键同步必炸）
+        // —— 键列要落成有长度的 VARCHAR(65533)，普通列不受影响
+        let str_pk = doris.create_table_from_columns(
+            "`s`",
+            &[ColumnDetail { primary_key: true, ..col("MAILID", "string", None) }, col("V", "int", None)],
+            Some(ConnectionKind::Clickhouse),
+        );
+        assert!(str_pk.contains("MAILID varchar(65533)"), "实际：{str_pk}");
+        assert!(!str_pk.contains("MAILID STRING"), "实际：{str_pk}");
+        assert!(str_pk.contains("V int"), "非键列照常翻译：{str_pk}");
+
+        // 无主键且第一列是无界文本（兜底 DUPLICATE KEY）：同样要落成 VARCHAR
+        let first_str = doris.create_table_from_columns(
+            "`f`",
+            &[col("NOTE", "text", None), col("N", "int", None)],
+            Some(ConnectionKind::Mysql),
+        );
+        assert!(first_str.contains("NOTE varchar(65533)"), "实际：{first_str}");
     }
 
     /// **逐方言体检**：同一份"典型列"分别建到每个目标方言，逐条断言该方言的硬性约束。

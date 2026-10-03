@@ -1007,22 +1007,44 @@ onBeforeUnmount(() => {
   // 兜底定时器一起清掉：组件都没了，它再去改状态只会报"操作已卸载的组件"
   if (stopGuard) { clearTimeout(stopGuard); stopGuard = null }
 })
-watch(() => props.modelValue, v => {
-  if (!v) return
-  // **上次任务还在跑**（后台运行过）：直接回 step5 进度页接着轮询 ——
-  // 落在 step1 的话所有控件都被 taskRunning 禁用，且没有任何入口跳回进度页，
-  // 整个向导成死路（审查发现的真机路径）
-  if (taskRunning.value && taskId.value) {
-    // 「停止」的 15 秒兜底守卫一并解除（否则到期误把运行中任务收摊）
-    if (stopGuard) { clearTimeout(stopGuard); stopGuard = null }
-    stopping.value = false
-    step.value = 5
-    stopPolling()
-    pollTimer = setInterval(pollTask, 800)
-    return
-  }
+/**
+ * **打开即全新**：清掉上一次任务的全部运行痕迹（进度/统计卡/日志/结果/轮询）——
+ * 用户口径：点「数据传输」开的就是**新传输**，不带上次跑完的缓存数字；
+ * 任务中心「查看」走 resumeTaskId 恢复链路，在本重置之后（nextTick）重新拉起进度页。
+ */
+const resetRunState = () => {
+  stopPolling()
+  if (stopGuard) { clearTimeout(stopGuard); stopGuard = null }
+  if (liveRaf) { cancelAnimationFrame(liveRaf); liveRaf = 0 }
+  stopping.value = false
   step.value = 1
   runStartedAt.value = 0
+  taskId.value = ''
+  taskRunning.value = false
+  taskStatus.value = ''
+  taskDone.value = 0
+  taskTotal.value = 0
+  rowsRead.value = 0
+  rowsWritten.value = 0
+  rowsFailed.value = 0
+  taskCurrent.value = ''
+  taskMessage.value = ''
+  taskResult.value = null
+  syncLogs.value = []
+  resumedView.value = false
+  showProgressDlg.value = false
+  readShown.value = 0
+  writtenShown.value = 0
+  failedShown.value = 0
+  rates.value = { read: 0, written: 0 }
+  prevRows.value = { read: 0, written: 0 }
+  fetchAt.value = 0
+}
+watch(() => props.modelValue, v => {
+  if (!v) return
+  // 每次打开都重置成全新向导（上一次任务的数字/日志/结果一概不留）；
+  // 之前「任务还在跑就切回进度页」的分支已删 —— 回看进度走任务中心/时钟图标
+  resetRunState()
   loadConnections()
 })
 onMounted(() => { if (props.modelValue) loadConnections() })
