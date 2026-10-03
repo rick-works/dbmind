@@ -30,6 +30,8 @@ use axum::Json;
 use dbmind_core::{CellValue, ColumnDetail, TableKind};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
@@ -1233,6 +1235,36 @@ fn build_insert_batch(
     out
 }
 
+/// 把一批行按「行数+字节拆分」写成 INSERT 语句并逐条发送（**部分成功语义**）：
+/// 已成功的语句计入 add_rows_written；失败从第一条报错处停，未写入的行计入 add_rows_failed。
+/// 返回成功写入的行数。串行管道与并发写池共用这一份实现，杜绝两处逻辑漂移。
+async fn write_insert_rows(
+    state: &AppState,
+    tgt: &Side,
+    target_name: &str,
+    columns: &[String],
+    target_types: &[Option<String>],
+    target_kind: Dialect,
+    rows: &[Vec<CellValue>],
+    identity_on: bool,
+    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
+) -> Result<u64, String> {
+    let stmts = build_insert_batch(target_name, columns, target_types, rows, target_kind, target_kind.kind.key());
+    let mut ok_rows = 0u64;
+    for (n_rows, stmt) in &stmts {
+        match run_sql(state, tgt, &with_identity(stmt.clone(), identity_on, target_name)).await {
+            Ok(()) => ok_rows += *n_rows as u64,
+            Err(err) => {
+                if let Some(task) = task {
+                    task.add_rows_failed(rows.len() as u64 - ok_rows);
+                }
+                return Err(err.message);
+            }
+        }
+    }
+    Ok(ok_rows)
+}
+
 fn build_insert(
     table: &str,
     columns: &[String],
@@ -1991,6 +2023,101 @@ async fn sync_table_inner(
 
     // 取消：主循环退出（drop rx）后，预取协程的 send 失败而退出（最多多拉几页在途，无害）。
 
+    // ===== 表内写并发（参考 DataX 的多 channel 思路）=====
+    // 读侧保持**单流**（keyset 分页 + 预取协程已够快：实测 4 万宽行几秒读完），瓶颈在写侧
+    // —— 攒满一批丢给 W 个并行 writer：
+    // - JDBC 行协议目标：并行 INSERT（会话池给每路独立连接，绕开单连接的 fsync 串行）；
+    // - Doris：并行在途 Stream Load（下一个请求的上传与上一个的 BE publish 重叠，
+    //   把 ~10s 的固定 publish 开销藏进流水线）。
+    // 仅**纯插入/清空重建**启用 —— upsert 要「先读目标已有键 → 逐行比对更新」，并行会
+    // 乱序重复更新，维持串行。写批内存上界 = (W+1) × 16MB（字节上限对所有目标生效）。
+    let parallel_writes = effective_mode != DataMode::Upsert;
+    let write_workers = if use_stream { 2usize } else { 3usize };
+    let mut write_tx: Option<tokio::sync::mpsc::Sender<Vec<Vec<CellValue>>>> = None;
+    let mut writer_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    let shared_inserted = Arc::new(AtomicU64::new(0));
+    let write_err: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
+    let stream_fallback_flag = Arc::new(AtomicBool::new(false));
+    if parallel_writes {
+        let (tx, rx) = tokio::sync::mpsc::channel::<Vec<Vec<CellValue>>>(write_workers + 1);
+        let rx = Arc::new(tokio::sync::Mutex::new(rx));
+        for _ in 0..write_workers {
+            let rx = rx.clone();
+            let state_w = state.clone();
+            let tgt_w = tgt.clone();
+            let columns_w = columns.clone();
+            let types_w = target_types.clone();
+            let kind_w = target_kind;
+            let name_w = target_name.clone();
+            let task_w = task.cloned();
+            let table_w = table.to_string();
+            let identity_w = identity_on;
+            let use_stream_w = use_stream;
+            let sh_port = stream_port;
+            let be_port = be_http_port;
+            let shost = stream_host.clone();
+            let suser = stream_user.clone();
+            let spass = stream_pass.clone();
+            let scope_w = tgt.scope.clone();
+            let err_slot = write_err.clone();
+            let inserted_ctr = shared_inserted.clone();
+            let fallback = stream_fallback_flag.clone();
+            writer_handles.push(tokio::spawn(async move {
+                loop {
+                    // 锁只包 recv：不同 writer 排队领批，锁内不干活
+                    let batch = { rx.lock().await.recv().await };
+                    let Some(batch) = batch else { break }; // 通道关闭：全部写完，收工
+                    if err_slot.lock().await.is_some() {
+                        break; // 已有同伴失败：本表作废，剩余批次不再尝试
+                    }
+                    let batch_rows = batch.len() as u64;
+                    let mut outcome: Result<u64, String> = Ok(0);
+                    if use_stream_w && !fallback.load(Ordering::SeqCst) {
+                        match doris_stream_load(sh_port, be_port, &shost, &suser, &spass, &scope_w, &table_w, &columns_w, &batch).await {
+                            Ok(loaded) => {
+                                if loaded > 0 {
+                                    inserted_ctr.fetch_add(loaded, Ordering::SeqCst);
+                                    if let Some(t) = &task_w { t.add_rows_written(loaded); }
+                                }
+                                let filtered = batch_rows.saturating_sub(loaded);
+                                if filtered > 0 {
+                                    if let Some(t) = &task_w {
+                                        t.add_rows_failed(filtered);
+                                        t.log(format!("表 {table_w}：Stream Load 本批 {filtered} 行被目标过滤（类型不匹配等），已计入失败数"));
+                                    }
+                                }
+                                continue; // 本批完成
+                            }
+                            Err(err) => {
+                                // 首次失败（端口不通/权限/格式）：本表内回退 INSERT 管道，数据不丢
+                                fallback.store(true, Ordering::SeqCst);
+                                if let Some(t) = &task_w {
+                                    t.log(format!("表 {table_w}：Stream Load 失败（{err}），回退 INSERT 管道"));
+                                }
+                                outcome = write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref()).await;
+                            }
+                        }
+                    } else {
+                        outcome = write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref()).await;
+                    }
+                    match outcome {
+                        Ok(ok_rows) => {
+                            inserted_ctr.fetch_add(ok_rows, Ordering::SeqCst);
+                        }
+                        Err(msg) => {
+                            let mut slot = err_slot.lock().await;
+                            if slot.is_none() {
+                                *slot = Some(format!("表 {table_w}：{msg}"));
+                            }
+                            break;
+                        }
+                    }
+                }
+            }));
+        }
+        write_tx = Some(tx);
+    }
+
     enum PageMsg {
 
     Page(Vec<Vec<CellValue>>),
@@ -2132,6 +2259,14 @@ async fn sync_table_inner(
 
             PageMsg::Page(page) => {
 
+                // 写池有失败：源表再读也是白读，立即收摊
+
+                if write_tx.is_some() && write_err.lock().await.is_some() {
+
+                    break 'outer;
+
+                }
+
                 // 取消是协作式的：**每页**检查一次（原来每张表只有开头一次机会）
 
                 if let Some(task) = task {
@@ -2218,14 +2353,25 @@ async fn sync_table_inner(
             }
             pending_bytes += json_row_bytes(&row);
             pending_insert.push(row);
-            // 触发条件**双重**：行数到 flush_at，或（Stream Load 时）攒批字节到
-            // STREAM_LOAD_MAX_BYTES —— 宽行表一批 5 万行能拼出 85MB+ 的 JSON，
-            // BE 摄取要几十秒甚至几分钟，期间界面一个数字都不动（真机「卡住」的观感）
+            // 触发条件**双重**：行数到 flush_at，或攒批字节到 STREAM_LOAD_MAX_BYTES
+            //（对所有目标生效 —— 并发模式下 (W+1) 批在途，字节上限就是内存上界）
             if pending_insert.len() as u64 >= flush_at
-                || (use_stream && pending_bytes >= STREAM_LOAD_MAX_BYTES)
+                || pending_bytes >= STREAM_LOAD_MAX_BYTES
             {
                 let batch_rows = pending_insert.len() as u64;
-                if use_stream && !stream_fallback {
+                // **并发写池**：整批移交给 writer，读循环继续攒下一批（读写完全解耦）
+                if let Some(tx) = &write_tx {
+                    if tx.send(pending_insert).await.is_err() {
+                        let msg = write_err
+                            .lock()
+                            .await
+                            .clone()
+                            .unwrap_or_else(|| "写池异常退出".to_string());
+                        return ObjResult::failed(ty, table, msg);
+                    }
+                    pending_insert = Vec::new();
+                    pending_bytes = 0;
+                } else if use_stream && !stream_fallback {
                     let host = stream_host.clone();
                     let user = stream_user.clone();
                     let pass = stream_pass.clone();
@@ -2259,43 +2405,14 @@ async fn sync_table_inner(
                         }
                     }
                 } else {
-                // build_insert_batch 按行数+字节上限拆成多条语句：逐条发送，
-                // 已成功的语句计入已写入（部分成功语义），失败从第一条报错处停
-                let stmts = build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key());
-                let mut ok_rows = 0u64;
-                let mut insert_err: Option<String> = None;
-                for (n_rows, stmt) in &stmts {
-                    match run_sql(
-                                    state,
-                                    tgt,
-                                    &with_identity(
-                                        stmt.clone(),
-                                        identity_on,
-                                        &target_name,
-                                    ),
-                                )
-                                .await
-                                {
-                                    Ok(()) => ok_rows += *n_rows as u64,
-                                    Err(err) => {
-                                        insert_err = Some(err.message);
-                                        break;
-                                    }
-                                }
-                }
-                match insert_err {
-                    None => {
+                // build_insert_batch 按行数+字节上限拆成多条语句：逐条发送（部分成功语义）
+                match write_insert_rows(state, tgt, &target_name, &columns, &target_types, target_kind, &pending_insert, identity_on, task).await {
+                    Ok(ok_rows) => {
                         inserted += ok_rows;
-                        if let Some(task) = task {
-                            task.add_rows_written(ok_rows);
-                        }
                         pending_insert.clear();
                         pending_bytes = 0;
                     }
-                    Some(msg) => {
-                        if let Some(task) = task { task.add_rows_failed(batch_rows - ok_rows); }
-                        return ObjResult::failed(ty, table, format!("插入失败：{msg}"))
-                    }
+                    Err(msg) => return ObjResult::failed(ty, table, format!("插入失败：{msg}")),
                 }
                 }
             }
@@ -2331,37 +2448,28 @@ async fn sync_table_inner(
     if let Some(err) = read_error {
         return ObjResult::failed(ty, table, format!("读取源数据失败：{}", err));
     }
+    // **并发写池收尾**：残余批次入队 → 关通道 → 等 writer 全部落账 → 合流行数
+    if let Some(tx) = write_tx.take() {
+        if !pending_insert.is_empty() {
+            let _ = tx.send(pending_insert).await;
+            pending_insert = Vec::new();
+        }
+        drop(tx); // 关闭通道：writer 消费完剩余批次后自然退出
+        for handle in writer_handles.drain(..) {
+            let _ = handle.await;
+        }
+        inserted += shared_inserted.load(Ordering::SeqCst);
+        if let Some(msg) = write_err.lock().await.take() {
+            return ObjResult::failed(ty, table, msg);
+        }
+    }
     // 因取消而中途退出时，手里可能还压着最后一批没落盘的插入（与主循环同款：拆语句逐条发）
     if !pending_insert.is_empty() {
-        let stmts = build_insert_batch(&target_name, &columns, &target_types, &pending_insert, target_kind, target_kind.kind.key());
-        let mut ok_rows = 0u64;
-        let mut insert_err: Option<String> = None;
-        for (n_rows, stmt) in &stmts {
-            match run_sql(
-                state,
-                tgt,
-                &with_identity(
-                    stmt.clone(),
-                    identity_on,
-                    &target_name,
-                ),
-            )
-            .await
-            {
-                Ok(()) => ok_rows += *n_rows as u64,
-                Err(err) => {
-                    insert_err = Some(err.message);
-                    break;
-                }
-            }
-        }
-        match insert_err {
-            None => {
+        match write_insert_rows(state, tgt, &target_name, &columns, &target_types, target_kind, &pending_insert, identity_on, task).await {
+            Ok(ok_rows) => {
                 inserted += ok_rows;
-                if let Some(task) = task { task.add_rows_written(ok_rows); }
             }
-            Some(msg) => {
-                if let Some(task) = task { task.add_rows_failed(pending_insert.len() as u64 - ok_rows); }
+            Err(msg) => {
                 return ObjResult::failed(ty, table, format!("插入失败：{msg}"));
             }
         }
