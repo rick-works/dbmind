@@ -6099,7 +6099,7 @@ watch(() => route.query.id, (id) => {
 /* macOS 的系统红绿灯按钮占着左上角，给品牌区让位 */
 .topbar.is-mac { padding-left: 84px; }
 .win-acts { margin-left: auto; align-self: stretch; display: flex; align-items: stretch; }
-/* 窗口按钮：比系统标题栏那套稍大一点（56px 宽、图标 14px），点起来不费劲 */
+/* 窗口按钮：图标 16px 与左侧图标组一致（真机反馈 14px 偏小不协调） */
 .win-act {
   width: 56px; height: 100%; flex-shrink: 0;
   display: inline-flex; align-items: center; justify-content: center;
@@ -6107,7 +6107,7 @@ watch(() => route.query.id, (id) => {
   color: var(--dc-text-dim);
   transition: background .15s ease, color .15s ease;
 }
-.win-act svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.25; }
+.win-act svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; }
 .win-act:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
 .win-act.is-close:hover { background: #e81123; color: #fff; }
 /* 顶栏品牌 logo：显示 22px，源图 64px（2 倍屏不糊，体积几 KB）。

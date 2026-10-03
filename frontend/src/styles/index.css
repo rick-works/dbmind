@@ -1128,7 +1128,7 @@ html[data-theme="light"] .el-loading-mask {
    右侧知识库 / AI 助手 / 设置只留图标，靠 tooltip 说明。图标钮是 30px 方形、悬停才有底色。 */
 /* 右侧图标组：五枚（知识库 / AI / 主题 / 语言 / 设置）—— gap 从 2px 放到 4px，
    30px 的方钮之间留出呼吸感，同时不松开到看不出是一组 */
-.top-nav-right { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
+.top-nav-right { display: inline-flex; align-items: center; gap: 12px; margin-left: auto; }
 .top-icon-btn.top-icon-btn {
   width: 30px; height: 30px; padding: 0; justify-content: center;
   border-radius: 8px;
