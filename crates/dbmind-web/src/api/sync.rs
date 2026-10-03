@@ -850,7 +850,6 @@ async fn doris_stream_load(
         starts.push(fe_url.clone());
         for start in starts {
             let mut url = start;
-            let mut settled = false;
             for _hop in 0..5 {
                 let hop_t0 = std::time::Instant::now();
                 tracing::info!(url = %url, bytes = body.len(), "Stream Load 发起请求");
@@ -886,7 +885,6 @@ async fn doris_stream_load(
                     }
                 }
                 tracing::info!(status = resp.status(), ms = hop_t0.elapsed().as_millis() as u64, "Stream Load 终站响应");
-                settled = true;
                 let ctype = resp.header("content-type").unwrap_or("").to_string();
                 let text = resp.into_string().unwrap_or_default();
                 // 用 chars 截前缀：直接按字节切片会把多字节中文切在中间（panic）
@@ -914,7 +912,6 @@ async fn doris_stream_load(
                     }
                 }
             }
-            let _ = settled;
         }
         Err(dbmind_core::DbMindError::new(
             dbmind_core::ErrorCode::QueryFailed,
@@ -1588,15 +1585,12 @@ async fn sync_table_inner(
         .await
         .unwrap_or_default();
     // record 保存下来：Doris Stream Load 需要 host / 端口 / 凭据（见 doris_stream_load）
-    let mut tgt_record: Option<dbmind_core::ConnectionRecord> = None;
+    let tgt_record = match require_record(state, &tgt.conn).await {
+        Ok(record) => Some(record),
+        Err(err) => return ObjResult::failed(ty, table, err.message),
+    };
     let target_kind = crate::api::dialect::Dialect::new(
-        match require_record(state, &tgt.conn).await {
-            Ok(record) => {
-                tgt_record = Some(record.clone());
-                record.kind()
-            }
-            Err(err) => return ObjResult::failed(ty, table, err.message),
-        },
+        tgt_record.as_ref().expect("上一行已保证 Some").kind(),
     );
     // 源的方言在建表时就要用（跨类型要把列类型翻译到目标），所以提前到这里取
     let source_kind = Dialect::new(
@@ -2242,8 +2236,9 @@ async fn sync_table_inner(
                         break; // 已有同伴失败：本表作废，剩余批次不再尝试
                     }
                     let batch_rows = batch.len() as u64;
-                    let mut outcome: Result<u64, String> = Ok(0);
-                    if use_stream_w && !fallback.load(Ordering::SeqCst) {
+                    // Stream Load 成功 → 直接记账后进下一批（continue）；
+                    // 失败 → 本批回退 INSERT 管道，与纯 INSERT 路径合流到同一个 outcome
+                    let outcome = if use_stream_w && !fallback.load(Ordering::SeqCst) {
                         match doris_stream_load(sh_port, be_port, &shost, &suser, &spass, &scope_w, &table_w, &columns_w, &batch).await {
                             Ok(loaded) => {
                                 if loaded > 0 {
@@ -2265,12 +2260,12 @@ async fn sync_table_inner(
                                 if let Some(t) = &task_w {
                                     t.log(format!("表 {table_w}：Stream Load 失败（{err}），回退 INSERT 管道"));
                                 }
-                                outcome = write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref(), &table_w).await;
+                                write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref(), &table_w).await
                             }
                         }
                     } else {
-                        outcome = write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref(), &table_w).await;
-                    }
+                        write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref(), &table_w).await
+                    };
                     match outcome {
                         Ok(ok_rows) => {
                             inserted_ctr.fetch_add(ok_rows, Ordering::SeqCst);
