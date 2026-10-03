@@ -1263,6 +1263,9 @@ const colParts = () => {
 
 // 表选项变更
 const optsBase = { engine: '', charset: '', collation: '', autoIncrement: '', comment: '' }
+// 数据库现状的**权威基线**（listTables 的表清单）—— 快照可能被并发载入/DDL 回填踩脏，
+// 判定「用户有没有改」最终以这里的值为准（真机踩过：打开即误报注释有改动）
+const tablesRef = ref([])
 const optsChanged = computed(() => {
   const f = tableForm.value
   // Doris：引擎/字符集/自增等建表后不可改（界面只读），**只有表注释**能改
