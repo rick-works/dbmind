@@ -1271,7 +1271,12 @@ const optsChanged = computed(() => {
   // Doris：引擎/字符集/自增等建表后不可改（界面只读），**只有表注释**能改
   // （实测 `ALTER TABLE … MODIFY COMMENT` 可用）—— 只比注释，别把只读项算成改动
   // （之前恒为 false 又会漏掉注释这个真能改的）。
-  if (isDoris.value) return (f.comment || '') !== (optsBase.comment || '')
+  // 基线用**权威值**（表清单里这张表的注释 = 数据库现状）—— 快照可能被并发载入踩脏，
+  // 用它会「打开即误报注释有改动」（真机踩过多次）。
+  if (isDoris.value) {
+    const base = tablesRef.value.find(x => x.name === props.table)?.comment ?? (optsBase.comment || '')
+    return (f.comment || '') !== (base || '')
+  }
   return f.engine !== optsBase.engine || f.charset !== optsBase.charset ||
     f.collation !== optsBase.collation || String(f.autoIncrement).trim() !== String(optsBase.autoIncrement).trim() ||
     (f.comment || '') !== (optsBase.comment || '')
@@ -1283,7 +1288,9 @@ const optParts = () => {
   const f = tableForm.value
   const t = qt(props.table)
   if (isDoris.value) {
-    if ((f.comment || '') === (optsBase.comment || '')) return []
+    // 同 optsChanged：与**权威基线**（表清单现状）比较，不用可能被踩脏的快照
+    const base = tablesRef.value.find(x => x.name === props.table)?.comment ?? (optsBase.comment || '')
+    if ((f.comment || '') === (base || '')) return []
     return [`ALTER TABLE ${t} MODIFY COMMENT '${sq(f.comment || '')}'`]
   }
   // ClickHouse：表选项里**只有表注释**能改（引擎 / 排序键 / 分区键建表时定死，界面只读展示）。
