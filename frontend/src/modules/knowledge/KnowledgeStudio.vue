@@ -777,7 +777,7 @@ const finishWizard = async () => {
     if (!kbId) throw new Error(t('kbx.noKbId'))
 
     // 先把参数落盘，再导入 —— 否则导入用的是旧参数，切出来的块和预览对不上
-    await saveCfgSilently()
+    await saveCfgSilently(kbId)
     let done = 0
     const failed = []
     for (const p of pending.value) {
@@ -861,9 +861,10 @@ const removeKb = async () => {
 
 // ---------- 配置 ----------
 
-const configPayload = () => ({
+const configPayload = (kbId) => ({
   // 后端按 kbId 定位知识库存配置（漏传会报「缺少 kbId 参数」）
-  kbId: activeId.value,
+  // 参数优先：**创建向导**里新库还没成为 activeId，必须显式传新库的 id（真机踩过）
+  kbId: kbId || activeId.value,
   enabled: cfg.value.enabled, topK: cfg.value.topK, minScore: cfg.value.minScore,
   chunkSize: cfg.value.chunkSize, chunkOverlap: cfg.value.chunkOverlap, separator: cfg.value.separator,
   minChunkChars: cfg.value.minChunkChars, indexMode: cfg.value.indexMode,
@@ -877,8 +878,8 @@ const configPayload = () => ({
   cleanWhitespace: cfg.value.cleanWhitespace, stripLinks: cfg.value.stripLinks
 })
 
-const saveCfgSilently = async () => {
-  const res = await kbSaveConfig(configPayload())
+const saveCfgSilently = async (kbId) => {
+  const res = await kbSaveConfig(configPayload(kbId))
   if (res?.config) applyConfig(res.config)
   dirty.value = false
 }
