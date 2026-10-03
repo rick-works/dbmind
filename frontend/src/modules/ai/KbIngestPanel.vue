@@ -342,7 +342,7 @@ const startCreate = async () => {
     if (targetMode.value === 'new' && !kbId) {
       const created = await kbCreate({ name, description: (form.value.description || '').trim() })
       if (!created?.success) throw new Error(created?.message || t('kbx.createFailed'))
-      kbId = created.item?.id
+      kbId = created.item?.id || created.kbId || created.info?.id
       if (!kbId) throw new Error(t('kbx.noKbId'))
       kbCreated.value = { kbId, name, description: (form.value.description || '').trim() }
 

@@ -773,7 +773,7 @@ const finishWizard = async () => {
   try {
     const res = await kbCreate({ name: draft.value.name, description: draft.value.description })
     if (!res?.success) throw new Error(res?.message || t('kbx.createFailed'))
-    const kbId = res.item?.id
+    const kbId = res.item?.id || res.kbId || res.info?.id
     if (!kbId) throw new Error(t('kbx.noKbId'))
 
     // 先把参数落盘，再导入 —— 否则导入用的是旧参数，切出来的块和预览对不上
