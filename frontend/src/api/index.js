@@ -270,11 +270,11 @@ export const noSqlDeleteCollection = async (id, database, collection) => { const
 // SQL 执行（database 可选：目标库名，为空则不切库沿用连接默认库）
 // executionId 可选：本次执行的唯一标识，用于执行中取消；signal 为 AbortController 信号
 // page/size 可选：分页参数（从 1 开始），不传则保持原有截断行为
-export const executeSql = async (id, sql, database, executionId, signal, page, size) => {
+export const executeSql = async (id, sql, database, executionId, signal, page, size, internal) => {
   const b = await baseOf(id)
   const module = b.replace('/api/', '')
   rememberExecId(executionId, module)
-  return http.post(`${b}/query/${id}`, { sql, database, executionId, page, size }, { signal }).then(r => {
+  return http.post(`${b}/query/${id}`, { sql, database, executionId, page, size, internal: !!internal }, { signal }).then(r => {
     if (!r || !r.data) throw new Error(t('api.emptyResponse'))
     return r.data
   })

@@ -789,7 +789,7 @@ export default {
   'kbs.generalTip': 'The chunks used for retrieval are the same ones fed to the model. Simple and direct — right for most material.',
   'kbs.generalDesc': 'Retrieval and recall use the same chunk',
   'kbs.separatorLabel': 'Chunk separator',
-  'kbs.separatorPlaceholder': 'Empty = split on blank lines, e.g. \\n####',
+  'kbs.separatorPlaceholder': 'Custom separator, leave empty for default rules',
   'kbs.maxLenLabel': 'Maximum chunk length',
   'kbs.overlapLabel': 'Chunk overlap',
   'kbs.minCharsLabel': 'Minimum chunk size',

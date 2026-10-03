@@ -221,7 +221,7 @@
 
       <!-- 空态 -->
       <div v-else class="kbs-blank">
-        <el-icon class="kbs-blank-icon"><Collection /></el-icon>
+        <el-icon class="kbs-blank-icon"><Reading /></el-icon>
         <div class="kbs-blank-title">{{ $t('ks.blankTitle') }}</div>
         <div class="kbs-blank-desc">
           {{ $t('ks.blankDescA') }}<b>{{ $t('ks.blankDescB') }}</b>{{ $t('ks.blankDescC') }}<br />
@@ -390,7 +390,7 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { t, locale } from '../../utils/i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, EditPen, Delete, UploadFilled, Document, MagicStick, Setting, Refresh, Collection, QuestionFilled, Loading } from '@element-plus/icons-vue'
+import { Plus, Search, EditPen, Delete, UploadFilled, Document, MagicStick, Setting, Refresh, Collection, QuestionFilled, Loading , Reading } from '@element-plus/icons-vue'
 import KbSettingsForm from './KbSettingsForm.vue'
 
 const props = defineProps({

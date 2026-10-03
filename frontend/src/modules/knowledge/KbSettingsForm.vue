@@ -387,6 +387,9 @@ const props = defineProps({
 const emit = defineEmits(['dirty', 'previewed'])
 
 const cfg = props.config
+// **分隔正则给默认值**：留空的语义（按空行）太隐晦，用户不该被要求会写正则（真机反馈）。
+// 父组件传进来的 config 里 separator 为空时，直接用推荐值填上（可改可清）。
+if (cfg && !cfg.separator) cfg.separator = '\\n####'
 const previewText = ref(props.previewText || '')
 const previewData = ref(null)
 /** 预览哪一份资料（库里有几份时可以切换，不然永远只能看到第一份） */

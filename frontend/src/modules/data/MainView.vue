@@ -5784,7 +5784,7 @@ const dbCtxShowDdl = async () => {
     return
   }
   try {
-    const res = await executeSql(conn.value.id, sql, d.db)
+    const res = await executeSql(conn.value.id, sql, d.db, null, null, null, null, true)
     if (res.success && res.rows && res.rows.length) {
       // 结果可能多列（MySQL SHOW CREATE DATABASE 第一列为库名），取含 CREATE 的列
       const row = res.rows[0]

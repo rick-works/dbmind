@@ -170,8 +170,9 @@ pub async fn execute(
         },
         execution_id,
         session: Some("ui:上游".to_string()),
-        // 用户在 SQL 编辑器里执行 —— **要进历史**（首页「最近查询」就是给它的）
-        internal: false,
+        // **来源决定进不进历史**：SQL 编辑器（默认）进历史 —— 首页「最近查询」就是给它的；
+        // 界面功能驱动的执行（建库/删目录/表属性探测等）带 internal=true，不混进用户的账本
+        internal: body.get("internal").and_then(Value::as_bool).unwrap_or(false),
     };
     Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
         Ok(result) => {

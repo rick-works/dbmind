@@ -497,7 +497,7 @@ const mssqlPkName = async () => {
   try {
     const res = await executeSql(props.conn.id,
       `SELECT kc.name AS name FROM sys.key_constraints kc JOIN sys.tables t ON kc.parent_object_id = t.object_id WHERE t.name = N'${sq(table)}' AND kc.type = 'PK'`,
-      props.database)
+      props.database, null, null, null, null, true)
     const row = res && res.rows && res.rows[0]
     return row && row.name ? String(row.name) : ''
   } catch (e) { return '' }

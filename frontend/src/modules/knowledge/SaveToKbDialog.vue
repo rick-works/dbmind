@@ -110,7 +110,8 @@ const submit = async () => {
         description: form.value.description.trim()
       })
       if (!created?.success) throw new Error(created?.message || t('s2k.createFailed'))
-      kbId = created.item?.id
+      // 兼容多种响应形状：后端实际返回 { info: { id }, kbId }，曾只读 item?.id 误报「未返回 id」（真机踩过）
+    kbId = created.item?.id || created.kbId || created.info?.id
       if (!kbId) throw new Error(t('kbx.noKbId'))
     }
 

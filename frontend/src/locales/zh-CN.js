@@ -795,7 +795,7 @@ export default {
   'kbs.generalTip': '检索用的块和喂给模型的块是同一个。简单直接，适合大多数资料',
   'kbs.generalDesc': '检索与召回用的是同一个块',
   'kbs.separatorLabel': '分段标识符',
-  'kbs.separatorPlaceholder': '留空 = 按空行，如 \\n####',
+  'kbs.separatorPlaceholder': '自定义分段分隔符，留空用默认规则',
   'kbs.maxLenLabel': '分段最大长度',
   'kbs.overlapLabel': '分段重叠',
   'kbs.minCharsLabel': '最小分块字数',

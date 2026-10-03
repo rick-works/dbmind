@@ -91,7 +91,7 @@ const submit = async () => {
   loading.value = true
   try {
     // 后端执行失败时仍返回 HTTP 200 + success:false，必须显式检查
-    const res = await executeSql(props.connId, sql)
+    const res = await executeSql(props.connId, sql, null, null, null, null, true)
     if (res && res.success === false) {
       ElMessage.error(t('ndb.failed', { detail: (res.message || t('common.unknownError')) }))
       return
