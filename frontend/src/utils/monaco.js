@@ -24,15 +24,19 @@
  * 既恢复补全，又不把无关语言服务拖进产物。
  */
 import { allBuiltinFunctions } from './sqlCompletions'
+// loader 用**静态**导入：@guolao/vue-monaco-editor（SqlQueryView/SqlCodeEditor 已静态
+// 依赖）本身就静态导入了它，动态导入拆不出独立 chunk，只会触发打包器的
+// INEFFECTIVE_DYNAMIC_IMPORT 警告（Vite 8/Rolldown 实测）。
+// 不影响首屏瘦身 —— 本模块只被懒加载的编辑器视图引用，loader 随它们所在 chunk 走。
+import loader from '@monaco-editor/loader'
 
 let loading = null
 
 export function ensureMonaco() {
   if (loading) return loading
   loading = (async () => {
-    const [monacoMod, loaderMod, workerMod] = await Promise.all([
+    const [monacoMod, workerMod] = await Promise.all([
       import('monaco-editor/esm/vs/editor/editor.api'),
-      import('@monaco-editor/loader'),
       import('monaco-editor/esm/vs/editor/editor.worker?worker')
     ])
 
@@ -88,7 +92,7 @@ export function ensureMonaco() {
     const EditorWorker = workerMod.default
     self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
     // 本地加载（绿色版离线运行，不走 CDN）
-    loaderMod.default.config({ monaco: monacoMod })
+    loader.config({ monaco: monacoMod })
 
     // 内置函数填进 SQL 分词器的 builtinFunctions 表 → 命中 `@builtinFunctions` 规则、
     // 得到 `predefined` token（数据库自带的主题规则给它独立于关键字的颜色）。
