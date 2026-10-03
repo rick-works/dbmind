@@ -2649,7 +2649,18 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         c.4 += outcome.updated;
                     }
                     if !outcome.message.is_empty() {
-                        task.log(format!("{}：{}", name, outcome.message));
+                        // 日志带对象类型前缀（表/视图/存储过程…），与各步骤日志「表 xxx：…」一致；
+                        // 存储过程/函数/触发器/事件沿用中文叫法
+                        let kind_label = match outcome.ty.as_str() {
+                            "table" => "表",
+                            "view" => "视图",
+                            "procedure" => "存储过程",
+                            "function" => "函数",
+                            "trigger" => "触发器",
+                            "event" => "事件",
+                            other => other,
+                        };
+                        task.log(format!("{kind_label} {name}：{}", outcome.message));
                     }
                     *slot.lock().unwrap() = Some(outcome.to_json());
                     task.add_done(1);
