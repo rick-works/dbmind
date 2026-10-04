@@ -240,7 +240,9 @@
                     @mousedown.prevent="onResultHeaderRowDown($event)"><span class="row-num-tx">#</span></th>
                 <th v-for="c in resultVisibleCols" :key="'h' + c.idx" :data-gkey="'0:' + c.idx"
                     :title="c.name + $t('sqlq.colTitleSuffix')"
-                    :class="{ 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name) }"
+                    :class="{ 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name),
+                              'sort-asc': resultSortColumn === c.name && resultSortDir === 'ASC',
+                              'sort-desc': resultSortColumn === c.name && resultSortDir === 'DESC' }"
                     @mousedown="onResultColDragStart(c.idx, $event)"
                     @click="onResultHeaderClickOrSelect(c.name, $event)"
                     @contextmenu.prevent.stop="onResultHeaderContextMenu($event, c.name)"
@@ -879,6 +881,8 @@ watch(() => (result.value?.rows || []).length, () => {
   resultActiveCell.value = null
   resultSortColumn.value = ''
   resultSortDir.value = 'ASC'
+  // 快照原始行序：取消排序（第三次点击）时还原
+  unsortedRows.value = (result.value?.rows || []).slice()
   nextTick(() => onResultTableScroll())
 })
 // 结果区显示时初始化可视区间
@@ -1651,9 +1655,11 @@ const sortResultBy = (col, dir) => {
   resultActiveCell.value = null
   resultLastAnchor.value = -1
 }
-// 结果表表头点击排序：升序 ⇄ 降序（右键菜单里的排序项已移除，改走表头）
+// 结果表表头点击排序：升序 → 降序 → **取消（恢复原始行序）**，与表预览同一套三击循环
 const resultSortColumn = ref('')
 const resultSortDir = ref('ASC')
+// 载入时的原始行序快照：取消排序时还原
+const unsortedRows = ref([])
 // ========== 选中整列（Excel 式）：单击表头选中整列，Ctrl/Cmd 加减选，Shift 连选一段 ==========
 const selectedCols = ref(new Set())
 const lastColAnchor = ref('')
@@ -1752,7 +1758,18 @@ const onResultHeaderClick = (name) => {
   if (Date.now() - resultLastResizeAt < 300) return // 拖列宽后的 click 不触发排序
   if (Date.now() - resultLastDragAt < 300) return   // 拖拽换列后的 click 不触发排序
   if (resultSortColumn.value === name) {
-    resultSortDir.value = resultSortDir.value === 'ASC' ? 'DESC' : 'ASC'
+    if (resultSortDir.value === 'ASC') {
+      resultSortDir.value = 'DESC'
+    } else {
+      // 第三击 = 取消排序：恢复该结果集的原始行序（与表预览同一套三击循环）
+      resultSortColumn.value = ''
+      resultSortDir.value = 'ASC'
+      result.value = { ...result.value, rows: unsortedRows.value.slice() }
+      resultSelectedSet.value = new Set()
+      resultActiveCell.value = null
+      resultLastAnchor.value = -1
+      return
+    }
   } else {
     resultSortColumn.value = name
     resultSortDir.value = 'ASC'
@@ -2895,6 +2912,7 @@ const selectResultTab = (i) => {
   resultActiveCell.value = null
   resultSortColumn.value = ''
   resultSortDir.value = 'ASC'
+  unsortedRows.value = (result.value?.rows || []).slice()
   hiddenResultCols.value = new Set()
   clearColSelect()
 }
@@ -3820,8 +3838,9 @@ onBeforeUnmount(() => {
 .data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 0 26px 0 10px; height: 36px; line-height: 36px; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .data-table td { padding: 0 10px; height: 32px; line-height: 32px; border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 表头字段类型图标：裸图标（无底色/无固定盒子，与表预览/NoSQL 统一）；
-   vertical-align: middle 让图标与字段名垂直居中在同一条线上 */
-.data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; vertical-align: middle; margin-right: 5px; color: var(--dc-text-dim); cursor: default; }
+   vertical-align: middle 让图标与字段名垂直居中在同一条线上。
+   颜色由全局 th-t-* 按类型族给，这里不写 color（scoped 优先级会压掉全局配色） */
+.data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; vertical-align: middle; margin-right: 5px; cursor: default; }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 表头排序按钮：固定在列头右缘垂直居中（右侧 26px 已预留，与表预览/NoSQL 同款） */
 .data-table th .th-sort {
@@ -3833,6 +3852,8 @@ onBeforeUnmount(() => {
 .data-table th:hover .th-sort { opacity: .9; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
 .data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
+/* 已排序列：文字主色 + 底部 2px 主色条（与表预览/NoSQL 同款） */
+.data-table th.sort-asc, .data-table th.sort-desc { color: var(--dc-primary); box-shadow: inset 0 -2px 0 var(--dc-primary); }
 .data-table tbody tr.vt-gap td { padding: 0; height: auto; line-height: 0; border: none; background: transparent !important; font-size: 0; }
 /* 斑马纹：一律用 background-color —— background 简写会把行/列选中的外沿渐变线（background-image）清掉 */
 .data-table tbody tr:nth-child(even) td { background-color: var(--dc-bg-soft); }

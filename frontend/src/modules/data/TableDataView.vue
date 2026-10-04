@@ -2940,10 +2940,11 @@ useShortcutScope(rootRef, {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
 /* 类型图标：裸图标（无底色/无固定盒子）—— 盒子会让 12px 图标在 18px 里居中、
-   左右各空 3px，而第二行注释顶着盒子左缘，视觉上图标与注释就不对齐了 */
+   左右各空 3px，而第二行注释顶着盒子左缘，视觉上图标与注释就不对齐了。
+   颜色由全局 index.css 的 th-t-* 按类型族给（这里不能再写 color，scoped 优先级会压掉它） */
 .data-table th .th-type-ic {
   display: inline-flex; align-items: center; flex: 0 0 auto;
-  margin-right: 5px; cursor: default; color: var(--dc-text-dim);
+  margin-right: 5px; cursor: default;
 }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 主键 🔑：字段名后面的小号裸图标（琥珀色） */

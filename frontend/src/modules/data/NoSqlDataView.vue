@@ -1629,10 +1629,11 @@ onBeforeUnmount(() => {
 }
 .data-table th .th-line1 { display: flex; align-items: center; min-width: 0; }
 .data-table th .th-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-/* 类型图标：裸图标（无底色/无固定盒子），与第二行注释左缘对齐 */
+/* 类型图标：裸图标（无底色/无固定盒子），与第二行注释左缘对齐。
+   颜色由全局 th-t-* 给，这里不写 color（scoped 优先级会压掉全局配色） */
 .data-table th .th-type-ic {
   display: inline-flex; align-items: center; flex: 0 0 auto;
-  margin-right: 5px; cursor: default; color: var(--dc-text-dim);
+  margin-right: 5px; cursor: default;
 }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 列宽拖拽把手 */
