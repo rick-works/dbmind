@@ -210,15 +210,7 @@
         </button>
       </div>
       <div class="result-grid">
-        <!-- 加载遮罩：查询/翻页时可取消（与数据表一致） -->
-        <div v-if="running" class="grid-loading-overlay">
-          <div class="grid-loading-box">
-            <el-icon class="is-loading" :size="26"><Loading /></el-icon>
-            <span class="grid-loading-text">{{ $t('sqlq.querying') }}</span>
-            <el-button size="small" @click="stopSql">
-              <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('tree.multiCancel') }} </el-button>
-          </div>
-        </div>
+        <!-- 查询中不再盖遮罩：工具栏有「停止」、底栏有实时耗时，盖住上一轮结果/报错反而碍事 -->
         <!-- 数据表格（模板里 ref 自动解包：editorSettings 已是设置对象，.value 反而是 undefined —— 真机崩过） -->
         <div v-if="result?.success && result?.rows?.length" class="data-table-wrap" ref="resultTableWrapRef" tabindex="0"
         :style="{ '--grid-fs': (editorSettings.gridFontSize || 13) + 'px' }"
@@ -308,7 +300,7 @@
             <div class="error-head-left">
               <el-icon class="error-icon"><CircleCloseFilled /></el-icon>
               <span class="error-title">{{ isNoSql ? $t('sqlq.cmdFailed') : $t('sqlq.sqlFailed') }}</span>
-              <span class="error-time" v-if="result.executeTime">耗时 {{ result.executeTime }}ms</span>
+              <span class="error-time" v-if="Math.max(elapsedTime || 0, result.executeTime || 0)">耗时 {{ Math.max(elapsedTime || 0, result.executeTime || 0) }}ms</span>
             </div>
             <el-button v-if="!isNoSql" size="small" type="primary" :icon="MagicStick" :loading="aiFixLoading" @click="askAiFix">{{ $t('sqlq.aiFix') }}</el-button>
           </div>
@@ -317,7 +309,9 @@
         <el-empty v-else :description="(result && result.affectedRows >= 0) ? $t('sqlq.affectedOk', { n: result.affectedRows }) : $t('sqlq.noResult')" />
         <div v-if="result?.success && result?.rows?.length" class="result-footer">
           <span class="result-time">
-            {{ running ? formatElapsed(elapsedTime) : (result.executeTime ? formatElapsed(result.executeTime) : '') }}
+            <!-- 耗时取「前端实测」与「服务端」的较大值：服务端 executeTime 只计执行段，
+                 不含网络往返/连接获取，真实耗时要远大于它（真机反馈 244ms 之谜） -->
+            {{ running ? formatElapsed(elapsedTime) : formatElapsed(Math.max(elapsedTime || 0, result.executeTime || 0)) }}
           </span>
           <!-- 选中区汇总（底栏状态区）：框选单元格、选中整行或整列时给出
                格子数 / 求和 / 均值 / 最小 / 最大（只统计数值列），排查数据时不用自己算 -->
