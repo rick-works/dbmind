@@ -63,6 +63,7 @@
                运行时热切换（web 壳的 tracing reload 层）：排查问题时切 debug、
                切回 info，当场生效不用重启。只影响壳的日志，不按模块细分 -->
           <div class="panel-title log-title">{{ $t('settings.language.logLevel') }}</div>
+          <div class="theme-hint"><el-icon :size="13"><InfoFilled /></el-icon>{{ $t('settings.language.logLevelTip') }}</div>
           <div class="log-level-options">
             <div
               v-for="lv in logLevels"
@@ -78,7 +79,6 @@
               <el-icon v-if="logLevel === lv.value" class="theme-opt-check"><CircleCheck /></el-icon>
             </div>
           </div>
-          <div class="form-tip log-tip">{{ $t('settings.language.logLevelTip') }}</div>
 
           <!-- 顶栏菜单：选择顶栏显示哪些功能入口、调整顺序（持久化到 dbmind.db） -->
           <div class="panel-title topmenu-title">{{ $t('settings.topMenu.title') }}</div>
