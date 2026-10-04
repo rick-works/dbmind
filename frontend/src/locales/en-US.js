@@ -2566,6 +2566,8 @@ export default {
   'pivot.detailHead': '"{title}" details (first {n})',
   'grd.title': 'Row details',
   'nsql.query': 'Query',
+  'nsql.keyword': 'Keyword',
+  'nsql.keywordPlaceholder': 'Enter keyword to filter keys / values',
   'nsql.loading': 'Loading...',
   'nsql.stop': 'Stop',
   'nsql.partialTitle': 'Only the first {n} rows are shown; the collection holds more data.',

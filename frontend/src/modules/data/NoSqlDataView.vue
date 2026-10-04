@@ -1,22 +1,50 @@
 <template>
   <div class="nosql-view">
+    <!-- 工具栏：与表预览（TableDataView）同一套布局 —— 左「高级搜索」，右「导出 / 刷新」 -->
     <div class="toolbar">
-      <el-input v-model="keyword" clearable size="small" style="width: 260px"
-                @keyup.enter="load(1)" @clear="load(1)">
-        <template #prefix><el-icon><Search /></el-icon></template>
-      </el-input>
-      <el-button size="small" :icon="Search" @click="load(1)">{{ $t('nsql.query') }}</el-button>
-      <span class="spacer" />
-      <span v-if="loading" class="loading-text">
-        <el-icon class="is-loading"><Loading /></el-icon> {{ $t('nsql.loading') }}
-        <el-button size="small" text type="danger" @click="stop">{{ $t('nsql.stop') }}</el-button>
-      </span>
-      <span class="info">{{ result.message || '' }}</span>
+      <div class="left">
+        <el-button size="small" :icon="advancedOpen ? ArrowUp : ArrowDown" plain
+                   @click="advancedOpen = !advancedOpen">{{ $t('tdv.advancedSearch') }}</el-button>
+      </div>
+      <div class="right">
+        <el-dropdown trigger="click" @command="onExportCmd">
+          <el-button size="small" text :icon="Download" :title="$t('qa.exportBtn')" />
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item command="csv">{{ $t('qa.exportCurCsv') }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+        <el-button size="small" text :icon="Refresh" :title="$t('vf.refresh')" @click="load(page)" />
+      </div>
     </div>
+
+    <!-- 高级搜索面板：NoSQL 只有关键词一个过滤维度，外观与表预览的筛选面板一致 -->
+    <transition name="slide">
+      <div v-show="advancedOpen" class="advanced-panel">
+        <div class="filter-row">
+          <span class="filter-label">{{ $t('nsql.keyword') }}</span>
+          <el-input v-model="keyword" clearable size="small" style="width: 260px"
+                    :placeholder="$t('nsql.keywordPlaceholder')"
+                    @keyup.enter="load(1)" @clear="load(1)" />
+          <el-button type="primary" size="small" @click="load(1)">{{ $t('nsql.query') }}</el-button>
+          <el-button size="small" @click="resetKeyword">{{ $t('common.clear') }}</el-button>
+        </div>
+      </div>
+    </transition>
+
     <el-alert v-if="result.hasMore" type="warning" :closable="false" show-icon class="has-more-alert">
       <template #title>{{ $t('nsql.partialTitle', { n: result.rows.length }) }}</template>
     </el-alert>
-    <div class="table-wrap" ref="gridRef" v-loading="loading">
+    <div class="grid-area" ref="gridRef">
+      <!-- 加载遮罩（含取消）：与表预览同一套 -->
+      <div v-if="loading" class="grid-loading-overlay">
+        <div class="grid-loading-box">
+          <el-icon class="is-loading" :size="26"><Loading /></el-icon>
+          <span class="grid-loading-text">{{ $t('nsql.loading') }}</span>
+          <el-button size="small" @click="stop">{{ $t('nsql.stop') }}</el-button>
+        </div>
+      </div>
       <div v-if="result?.rows?.length" class="data-table-wrap" ref="tableWrapRef" tabindex="0"
            @scroll="onTableScroll" @keydown="onGridKeydown"
            @mousemove="onTableMove" @mousedown="onTableDown" @mouseleave="onTableLeave"
@@ -35,12 +63,38 @@
           </colgroup>
           <thead>
             <tr>
-              <th class="row-sel-th" @contextmenu.prevent.stop="onGridContextMenu($event)" />
+              <th class="row-sel-th leading-th" @contextmenu.prevent.stop="onGridContextMenu($event)">
+                <span class="row-num-tx">#</span>
+              </th>
               <th v-for="(col, ci) in columns" :key="'h' + ci"
                   :title="col + $t('nsql.colTitleSuffix')"
-                  :class="{ 'col-selected': selectedCols.has(col) }"
-                  @click="onHeaderClick(col)"
-                  @contextmenu.prevent.stop="onHeaderContextMenu($event, col)">{{ col }}</th>
+                  class="sortable"
+                  :class="{ 'sort-asc': orderColumn === col && orderDir === 'ASC',
+                            'sort-desc': orderColumn === col && orderDir === 'DESC',
+                            'col-selected': selectedCols.has(col) }"
+                  @click="onHeaderClick(col, $event)"
+                  @contextmenu.prevent.stop="onHeaderContextMenu($event, col)">
+                <!-- 表头结构 copied 自 TableDataView：第一行「类型图标 + 字段名」；
+                     NoSQL 没有主键/注释元数据，第二行省略 -->
+                <span class="th-text">
+                  <span class="th-line1">
+                    <span class="th-type-ic" :title="colTypeTitle(col)"><el-icon><component :is="typeIcon(col)" /></el-icon></span>
+                    <span class="th-label">{{ col }}</span>
+                  </span>
+                </span>
+                <!-- 排序（当前页内排序：NoSQL 文档接口不支持 ORDER BY） -->
+                <span class="th-sort" :class="{ 'is-sorted': orderColumn === col }"
+                      :title="orderColumn === col ? (orderDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
+                      @mousedown.stop @click.stop="toggleSort(col)">
+                  <el-icon v-if="orderColumn !== col"><Sort /></el-icon>
+                  <el-icon v-else-if="orderDir === 'ASC'"><SortUp /></el-icon>
+                  <el-icon v-else><SortDown /></el-icon>
+                </span>
+                <!-- 列宽把手：与表预览同一套（拖动调整、双击自适应） -->
+                <span class="col-resizer" :title="$t('tdv.colResizeTip')"
+                      @mousedown.stop.prevent="startColResize(ci, $event)"
+                      @dblclick.stop="autoFitCol(ci)" />
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -50,12 +104,10 @@
             </tr>
             <tr v-for="(row, i) in visibleRows" :key="vpStart + i"
                 :class="{ 'row-alt': (vpStart + i) % 2 === 1, selected: selectedRows.has(vpStart + i) }">
-              <!-- key 用绝对行号（vpStart+i）：行在窗口内滑动时保持同一 key，DOM 可复用，只有进出窗口的行才增删。
-                   写成 `vtStart` 是**错的** —— 那个名字属于别的表格组件，本组件里没有，模板里会算成 NaN，
-                   于是每行拿到同一个 key：Vue 复用错 DOM，表现为「表格多出一行 / 点一次查询数据一直往上加」。 -->
-              <td class="row-sel-td" :title="$t('nsql.rowNumTitle', { n: vpStart + i + 1 })"
+              <!-- key 用绝对行号（vpStart+i）：行在窗口内滑动时保持同一 key，DOM 可复用，只有进出窗口的行才增删。 -->
+              <td class="row-sel-td leading-td" :class="{ 'row-num-on': selectedRows.has(vpStart + i) }"
+                  :title="$t('nsql.rowNumTitle', { n: vpStart + i + 1 })"
                   @mousedown.prevent="onRowNumDown(vpStart + i, $event)"
-                  @mouseenter="onRowNumEnter(vpStart + i)"
                   @dblclick.stop="openRowDetail(vpStart + i)"
                   @contextmenu.prevent.stop="onRowContextMenu($event, vpStart + i)">
                 <span class="row-num-tx">{{ vpStart + i + 1 }}</span>
@@ -77,21 +129,18 @@
           </tbody>
         </table>
       </div>
-      <el-empty v-else :description="isRedisAllKeys ? $t('nsql.emptyKeys') : $t('nsql.emptyData')" :image-size="80" />
-    </div>
-    <div v-if="result?.rows?.length" class="pager">
-      <!-- 选区信息 + 快捷出口：与 SQL 结果表格底栏同一套语义（选中什么就复制/导出什么） -->
-      <span class="sel-info">{{ selectionText }}</span>
-      <span class="spacer" />
-      <el-button size="small" :icon="DocumentCopy" @click="copySelection('tsv')">{{ $t('nsql.copySelection') }}</el-button>
-      <el-button size="small" :icon="Download" @click="exportCsv()">{{ $t('nsql.exportCsv') }}</el-button>
-      <span class="result-time">
-        {{ loading ? formatElapsed(elapsedTime) : (result.executeTime ? formatElapsed(result.executeTime) : '') }}
-      </span>
-      <el-pagination background layout="total, sizes, prev, pager, next, jumper" :total="total"
-                     :page-size="size" :current-page="page" :page-sizes="pageSizes"
-                     size="small"
-                     @current-change="load" @size-change="s => { size = s; load(1) }" />
+      <el-empty v-else-if="!loading" :description="isRedisAllKeys ? $t('nsql.emptyKeys') : $t('nsql.emptyData')" :image-size="80" />
+      <!-- 底栏：耗时（左）+ 选区信息 + 分页（右），与表预览同一套 -->
+      <div v-if="result?.rows?.length" class="pager">
+        <span class="load-time">
+          {{ loading ? formatElapsed(elapsedTime) : (result.executeTime ? formatElapsed(result.executeTime) : '') }}
+        </span>
+        <span class="sel-info">{{ selectionText }}</span>
+        <el-pagination background size="small" layout="total, sizes, prev, pager, next, jumper" :total="total"
+                       :page-size="size" :current-page="page" :page-sizes="pageSizes"
+                       style="margin-left: auto"
+                       @current-change="load" @size-change="s => { size = s; load(1) }" />
+      </div>
     </div>
     <!-- 右键菜单：与 SQL 结果表格**共用同一个组件**，外观与交互天然一致 -->
     <GridContextMenu :visible="ctx.visible" :x="ctx.x" :y="ctx.y" :items="ctx.items"
@@ -110,7 +159,8 @@
 <script setup>
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
-import { Search, Loading, Download, DocumentCopy } from '@element-plus/icons-vue'
+import { ArrowUp, ArrowDown, Refresh, Download, Sort, SortUp, SortDown, Loading,
+         Histogram, Calendar, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getQuerySettings } from '../../utils/settings'
 import { noSqlDocuments, cancelNoSql } from '../../api'
@@ -133,6 +183,73 @@ const total = ref(0)
 const gridRef = ref(null)
 const elapsedTime = ref(0)
 let queryTimer = null
+
+// ===== 工具栏 / 排序（对齐表预览 TableDataView）=====
+const advancedOpen = ref(false)
+const resetKeyword = () => { keyword.value = ''; load(1) }
+const onExportCmd = (cmd) => { if (cmd === 'csv') exportCsv() }
+
+// 排序：NoSQL 文档接口不支持 ORDER BY，这里做**当前页内**排序（翻页/重查后还原）。
+const orderColumn = ref('')
+const orderDir = ref('')
+// 载入时的原始行序快照：取消排序（第三击）时还原
+const rawRows = ref([])
+const toggleSort = (col) => {
+  if (orderColumn.value !== col) {
+    orderColumn.value = col
+    orderDir.value = 'ASC'
+  } else if (orderDir.value === 'ASC') {
+    orderDir.value = 'DESC'
+  } else {
+    orderColumn.value = ''
+    orderDir.value = ''
+  }
+  applySort()
+}
+const applySort = () => {
+  const rows = result.value?.rows || []
+  if (!rows.length) return
+  if (!orderColumn.value) { result.value.rows = rawRows.value.slice(); return }
+  const col = orderColumn.value
+  const dir = orderDir.value === 'DESC' ? -1 : 1
+  const plain = (v) => (v === null || v === undefined) ? '' : (typeof v === 'object' ? JSON.stringify(v) : v)
+  rows.sort((a, b) => {
+    const va = a[col], vb = b[col]
+    if (va == null && vb == null) return 0
+    if (va == null) return -dir
+    if (vb == null) return dir
+    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir
+    return String(plain(va)).localeCompare(String(plain(vb)), undefined, { numeric: true }) * dir
+  })
+}
+
+// ===== 表头类型图标：NoSQL 无列元数据，按列名 + 首个非空值推断（与表预览同一套图标语言）=====
+const typeIcon = (col) => {
+  if (/^key$/i.test(col)) return Key
+  const rows = result.value?.rows || []
+  for (const r of rows) {
+    const v = r[col]
+    if (v === null || v === undefined || v === '') continue
+    if (typeof v === 'number') return Histogram
+    if (typeof v === 'object') return Tickets
+    if (/^\d{4}-\d{2}-\d{2}/.test(String(v))) return Calendar
+    return Document
+  }
+  return Grid
+}
+const colTypeTitle = (col) => {
+  if (/^key$/i.test(col)) return 'key'
+  const rows = result.value?.rows || []
+  for (const r of rows) {
+    const v = r[col]
+    if (v === null || v === undefined || v === '') continue
+    if (typeof v === 'number') return 'number'
+    if (typeof v === 'object') return 'json'
+    if (/^\d{4}-\d{2}-\d{2}/.test(String(v))) return 'date'
+    return 'string'
+  }
+  return ''
+}
 
 const formatElapsed = (ms) => {
   if (ms < 1000) return `${ms}ms`
@@ -242,6 +359,10 @@ const load = async (p) => {
       return
     }
     result.value = res
+    // 新数据到达：重置排序状态并快照原始行序（排序是当前页内的，见 applySort）
+    orderColumn.value = ''
+    orderDir.value = ''
+    rawRows.value = (res.rows || []).slice()
     // 查询返回后回到顶部并重置可视窗口（窗口化渲染依赖滚动位置）
     vpStart.value = 0
     vpEnd.value = Math.min(virtualEnabled.value ? 1000 : (res.rows?.length || 0), res.rows?.length || 0)
@@ -299,11 +420,12 @@ const MAX_COL_WIDTH = 480
 const naturalColWidth = (ci, limit) => {
   const wrap = gridRef.value?.querySelector('.data-table-wrap')
   const ths = wrap?.querySelectorAll('thead th') || []
-  const sampleRows = wrap?.querySelectorAll('tbody tr') || []
+  const sampleRows = wrap?.querySelectorAll('tbody tr:not(.vp-pad-row)') || []
   const sample = Math.min(sampleRows.length, limit)
-  let max = ths[ci] ? ths[ci].scrollWidth : 0
+  // th/td 的第 0 个是行号列，数据列从 1 开始 —— 原来用 ci 直接索引会错位到行号列
+  let max = ths[ci + 1] ? ths[ci + 1].scrollWidth : 0
   for (let r = 0; r < sample; r++) {
-    const td = sampleRows[r]?.querySelectorAll('td')[ci]
+    const td = sampleRows[r]?.querySelectorAll('td')[ci + 1]
     if (td) max = Math.max(max, td.scrollWidth)
   }
   const natural = max > 0 ? max + 26 : defaultColWidth(columns.value[ci])
@@ -692,11 +814,16 @@ const onTableDown = (e) => {
   const ci = edgeColIdx(e)
   if (ci < 0) return
   e.preventDefault()
+  startColResize(ci, e)
+}
+
+/** 列宽把手 / 列缘拖拽共用的启动逻辑（ci 为数据列下标；colgroup 第 0 个 col 是行号列）。 */
+const startColResize = (ci, e) => {
   const wrap = gridRef.value?.querySelector('.data-table-wrap')
   if (!Object.keys(colWidths.value).length) measureColumns()
   const table = wrap?.querySelector('table')
   const colEls = table?.querySelectorAll('colgroup col')
-  const colEl = colEls?.[ci] || null
+  const colEl = colEls?.[ci + 1] || null
   if (colEl) colEl.style.willChange = 'width'
   drag = {
     ci,
@@ -747,16 +874,55 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.nosql-view { height: 100%; display: flex; flex-direction: column; padding: 8px; }
+.nosql-view { height: 100%; display: flex; flex-direction: column; padding: 8px; gap: 8px; }
+/* ===== 工具栏 / 高级搜索面板（对齐表预览 TableDataView）===== */
+.toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.toolbar .left, .toolbar .right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.toolbar .right :deep(.el-button + .el-button) { margin-left: 0; }
+.advanced-panel {
+  background: var(--dc-bg-card);
+  border: 1px solid var(--dc-border);
+  border-radius: var(--dc-radius);
+  padding: 10px 12px;
+}
+.filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.filter-label { font-size: 12px; color: var(--dc-text-dim); }
+.slide-enter-active, .slide-leave-active { transition: max-height .18s ease, opacity .18s ease; overflow: hidden; }
+.slide-enter-from, .slide-leave-to { max-height: 0; opacity: 0; }
+.slide-enter-to, .slide-leave-from { max-height: 500px; opacity: 1; }
+
+/* ===== 表格容器 / 加载遮罩（对齐表预览）===== */
+.grid-area { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: var(--dc-radius); overflow: hidden; }
+.grid-loading-overlay {
+  position: absolute; inset: 0; z-index: 20;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--dc-bg-card) 78%, transparent);
+}
+.grid-loading-box {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 18px; border-radius: 10px;
+  background: var(--dc-bg-card); border: 1px solid var(--dc-border);
+  box-shadow: var(--dc-shadow-sm, 0 2px 12px rgba(0, 0, 0, 0.08));
+  color: var(--dc-primary);
+}
+.grid-loading-text { font-size: 14px; color: var(--dc-text-mid); }
+.has-more-alert { margin: 0; }
+
 /* ===== 选区样式（对齐 SQL 结果表格）：行号列 / 选中列 / 当前格 ===== */
 .row-sel-col { width: 40px; }
 .row-sel-th, .row-sel-td {
-  width: 40px; text-align: center; user-select: none;
+  width: 40px; min-width: 40px; max-width: 40px;
+  text-align: center; user-select: none; padding: 0;
   color: var(--dc-text-dim); font-size: 12px;
+  border-right: 1px solid var(--dc-border);
 }
 .row-sel-td { cursor: pointer; }
-.row-sel-td:hover, .row-sel-th:hover { background: var(--dc-bg-soft); }
-.data-table tr.selected .row-sel-td { color: var(--dc-primary); font-weight: 600; }
+.row-sel-td:hover { background: var(--dc-primary-wash); color: var(--dc-text); }
+/* 行号选中态：与表预览 leading-td.row-num-on 同款 */
+.data-table tr.selected .row-sel-td {
+  background: var(--dc-primary-soft, color-mix(in srgb, var(--dc-primary) 14%, transparent));
+  color: var(--dc-primary); font-weight: 600;
+}
 .data-table td.col-selected { background: color-mix(in srgb, var(--dc-primary) 8%, transparent); }
 .data-table th.col-selected { color: var(--dc-primary); }
 .data-table td.active-cell { outline: 2px solid var(--dc-primary); outline-offset: -2px; }
@@ -765,23 +931,53 @@ onBeforeUnmount(() => {
   margin: 0; max-height: 50vh; overflow: auto; white-space: pre-wrap; word-break: break-all;
   font-family: var(--dc-mono-font); font-size: 12.5px; line-height: 1.6;
 }
-.toolbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
-.spacer { flex: 1; }
-.loading-text { display: flex; align-items: center; gap: 6px; color: var(--dc-primary); font-size: 13px; }
-.info { font-size: 13px; color: var(--dc-text-dim); }
-.has-more-alert { margin-bottom: 6px; }
-.table-wrap { flex: 1; min-height: 0; background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: var(--dc-radius); overflow: hidden; display: flex; flex-direction: column; }
 .pager { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; }
-.result-time { font-size: 13px; color: var(--dc-text-dim); font-weight: 500; }
+.load-time { font-size: 13px; color: var(--dc-text-dim); font-weight: 500; }
 .json-cell { font-family: var(--dc-mono-font, monospace); font-size: 13px; color: #5aa0d8; }
 
-/* 原生表格样式 —— 与 SqlQueryView 保持一致 */
+/* 原生表格样式 —— 与表预览（TableDataView）保持一致 */
 .data-table-wrap { flex: 1; min-height: 0; overflow: auto; contain: layout paint; }
 .data-table-wrap.col-resizing, .data-table-wrap.col-resizing * { cursor: col-resize !important; user-select: none; }
 .data-table { position: relative; width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
-.data-table thead { position: sticky; top: 0; z-index: 2; }
-.data-table th { background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 8px 10px; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.data-table td { padding: 6px 10px; border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 吸顶表头：top: -1px 盖住滚动时折叠上边框留下的 1px 缝（与表预览同款） */
+.data-table thead { position: sticky; top: -1px; z-index: 2; }
+.data-table th {
+  position: relative;
+  background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
+  padding: 4px 10px; height: auto; line-height: 1.25; vertical-align: middle;
+  border: 1px solid var(--dc-border); white-space: nowrap;
+  overflow: hidden;
+}
+.data-table th.sortable { cursor: pointer; user-select: none; }
+.data-table th.sortable:hover { color: var(--dc-text); }
+.data-table th.sort-asc, .data-table th.sort-desc { color: var(--dc-primary); }
+/* 表头排序按钮：平时淡显，鼠标移到表头才清晰；已排序列主色常亮 */
+.data-table th .th-sort {
+  display: inline-flex; align-items: center; vertical-align: -1px;
+  margin-left: 5px; font-size: 13px; color: var(--dc-text-dim);
+  opacity: .35; cursor: pointer; transition: opacity .12s, color .12s;
+}
+.data-table th:hover .th-sort { opacity: .9; }
+.data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
+.data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
+/* 表头文字块：第一行「类型图标 + 字段名」（与表预览同款结构） */
+.data-table th .th-text {
+  display: inline-flex; flex-direction: column; justify-content: center;
+  vertical-align: middle; overflow: hidden; min-width: 0; max-width: 100%;
+}
+.data-table th .th-line1 { display: flex; align-items: center; min-width: 0; }
+.data-table th .th-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.data-table th .th-type-ic {
+  display: inline-flex; align-items: center; vertical-align: middle;
+  margin-right: 4px; font-size: 13px; cursor: default; color: var(--dc-text-dim);
+}
+.data-table th .th-type-ic .el-icon { font-size: 13px; }
+/* 列宽拖拽把手：与表预览同款（10px 宽、覆盖表头右缘外侧） */
+.col-resizer {
+  position: absolute; top: 0; right: -5px; bottom: 0; width: 10px;
+  cursor: col-resize; z-index: 6; user-select: none;
+}
+.data-table td { padding: 0 10px; height: 32px; line-height: 32px; border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .data-table tbody tr.row-alt td { background: var(--dc-bg-soft); }
 .data-table tbody tr:hover td { background: var(--dc-primary-wash); }
 /* 窗口化占位行：透明、无边框，且不被 hover 着色 */

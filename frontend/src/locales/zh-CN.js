@@ -2573,6 +2573,8 @@ export default {
   'pivot.detailHead': '「{title}」明细（前 {n} 条）',
   'grd.title': '行详情',
   'nsql.query': '查询',
+  'nsql.keyword': '关键词',
+  'nsql.keywordPlaceholder': '输入关键词过滤（key / value）',
   'nsql.loading': '加载中...',
   'nsql.stop': '停止',
   'nsql.partialTitle': '结果集仅展示前 {n} 条，集合中还有更多数据。',
