@@ -26,7 +26,7 @@ regex = "1"
 # 下载驱动用（与 CLI 同一个客户端）：内核刻意不引网络依赖，下载由壳层做。
 ureq = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
-tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tower-http = { version = "0.6", features = ["cors", "fs", "trace", "compression-br", "compression-gzip", "compression-deflate"] }
 serde = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

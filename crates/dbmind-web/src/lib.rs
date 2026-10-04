@@ -681,7 +681,38 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
         })
         // 开发期前端由 vite 提供（不同端口），故放开 CORS
         .layer(CorsLayer::permissive())
+        // 响应压缩：结果集动辄几 MB 的 JSON（2000 行 × 几十列很平常），gzip/br 后
+        // 传输量缩到 1/5 ~ 1/10，对所有数据源的查询回显、元数据浏览都生效。
+        // 只压 JSON 与静态资源 —— AI 流式响应（text/event-stream）不压，
+        // 避免编码器缓冲拖慢逐 token 推送。浏览器 axios/fetch 自动解压，前端零改动。
+        .layer(
+            tower_http::compression::CompressionLayer::new()
+                .br(true)
+                .gzip(true)
+                .deflate(true)
+                .compress_when(JsonOrStatic),
+        )
         .with_state(state)
+}
+
+/// 只压缩 JSON API 响应与静态资源；其余（尤其 SSE 流）原样透传。
+#[derive(Clone, Copy, Default)]
+struct JsonOrStatic;
+
+impl tower_http::compression::Predicate for JsonOrStatic {
+    fn should_compress<B>(&self, response: &axum::http::Response<B>) -> bool {
+        response
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|ct| {
+                ct.starts_with("application/json")
+                    || ct.starts_with("text/javascript")
+                    || ct.starts_with("text/css")
+                    || ct.starts_with("image/svg")
+            })
+            .unwrap_or(false)
+    }
 }
 
 /// 未命中任何路由时的处理。
