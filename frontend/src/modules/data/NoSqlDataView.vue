@@ -154,7 +154,7 @@
       <!-- 底栏：耗时（左）+ 选中区汇总 + 分页（右），与表预览同一套 -->
       <div v-if="displayRows.length" class="pager">
         <span class="load-time">
-          {{ loading ? formatElapsed(elapsedTime) : (result.executeTime ? formatElapsed(result.executeTime) : '') }}
+          {{ loading ? formatElapsed(elapsedTime) + $t('tdv.queryingSuffix') : formatElapsed(result.executeTime || elapsedTime || 0) }}
         </span>
         <span v-if="selectionSummary" class="sel-summary" :title="$t('sqlq.summaryTitle')">
           <span class="ss-item">选中 <b>{{ selectionSummary.cells }}</b> 格</span>
