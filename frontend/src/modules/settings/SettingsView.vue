@@ -81,7 +81,7 @@
           <div class="form-tip log-tip">{{ $t('settings.language.logLevelTip') }}</div>
 
           <!-- 顶栏菜单：选择顶栏显示哪些功能入口、调整顺序（持久化到 dbmind.db） -->
-          <div class="panel-title">{{ $t('settings.topMenu.title') }}</div>
+          <div class="panel-title topmenu-title">{{ $t('settings.topMenu.title') }}</div>
           <div class="panel-desc">{{ $t('settings.topMenu.desc') }}</div>
           <div class="topmenu-editor">
             <div class="topmenu-row" v-for="(mi, i) in topMenuAll" :key="mi.id">
@@ -1784,6 +1784,8 @@ watch(visible, (v) => {
    全部占满一行才齐整（el-form-item 的内容区默认不换行，这里放开） */
 .ai-form :deep(.el-form-item__content) { flex-wrap: wrap; }
 .form-tip { width: 100%; font-size: 12px; color: var(--dc-text-weak); margin-top: 4px; line-height: 1.6; }
+/* 顶栏菜单配置（通用页签）：与上一个区块（日志级别）隔开一档 */
+.topmenu-title { margin-top: 26px; }
 /* 顶栏菜单配置（通用页签） */
 .topmenu-editor {
   border: 1px solid var(--dc-border, #dcdfe6); border-radius: 8px;
