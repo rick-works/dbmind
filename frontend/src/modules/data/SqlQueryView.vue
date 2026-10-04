@@ -801,52 +801,9 @@ const loadSegment = async (item, p, size) => {
     loading.value = false
   }
 }
-// ========== 下一页预取：顺序翻页是主路径，提前一页在后台拉好，点「下一页」瞬时渲染 ==========
-// 单槽位（只保留最近一次预取）；新查询作废；internal=true 不进查询历史。
-const prefetch = { key: '', promise: null }
-const prefetchKey = (connId, db, sqlText, page) =>
-  `${countCacheKey(connId, db, sqlText)}|p${page}|s${pageSize.value}`
-const prefetchNext = (sqlText, page) => {
-  if (!sqlText) return
-  // 当前页没装满 ⇒ 已是末页；总数已知且已翻完 ⇒ 没有下一页
-  if (loadedRows.value < pageSize.value) return
-  if (typeof displayTotal.value === 'number' && page * pageSize.value >= displayTotal.value) return
-  const connId = selectedConnId.value || props.conn.id
-  const db = selectedSchema.value
-    ? `${selectedDatabase.value}.${selectedSchema.value}`
-    : selectedDatabase.value || undefined
-  const key = prefetchKey(connId, db, sqlText, page + 1)
-  if (prefetch.key === key && prefetch.promise) return
-  prefetch.key = key
-  prefetch.promise = executeSql(connId, sqlText, db, null, null, page + 1, pageSize.value, true)
-  prefetch.promise.catch(() => {})
-}
-const onPageChange = async (p) => {
+const onPageChange = (p) => {
   const item = resultItems.value[activeResultIdx.value]
   if (item && item.segmentSql) { loadSegment(item, p, pageSize.value); return }
-  // 命中预取：直接用后台已拉好的结果（internal 拉的不进历史，这里补记一条用户翻页）
-  const connId = selectedConnId.value || props.conn.id
-  const db = selectedSchema.value
-    ? `${selectedDatabase.value}.${selectedSchema.value}`
-    : selectedDatabase.value || undefined
-  const key = prefetchKey(connId, db, lastExecSql, p)
-  if (prefetch.promise && prefetch.key === key) {
-    const promised = prefetch.promise
-    prefetch.promise = null
-    try {
-      const res = await promised
-      if (res && res.success && !running.value) {
-        elapsedTime.value = 0
-        currentPage.value = p
-        showSingleResult(res)
-        fetchCountFor(result.value, lastExecSql)
-        recordHistory(lastExecSql, db, res.executeTime || 0)
-        loadResColumnComments(lastExecSql, connId, db)
-        prefetchNext(lastExecSql, p)
-        return
-      }
-    } catch { /* 预取失败落回正常执行 */ }
-  }
   runSql(p, pageSize.value, false)
 }
 const onPageSizeChange = (s) => {
@@ -3161,7 +3118,6 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   elapsedTime.value = 0
   cancelRequested.value = false
   invalidateCount()
-  prefetch.promise = null
   execId.value = 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
   cancelController = new AbortController()
   if (queryTimer) clearInterval(queryTimer)
@@ -3196,8 +3152,6 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         fetchCountFor(result.value, execSql)
         recordHistory(execSql, db, res.executeTime || 0)
         loadResColumnComments(execSql, connId, db)
-        // 预取下一页：顺序翻页主路径的等待基本消掉
-        prefetchNext(execSql, page)
       }
     }
   } catch (e) {
