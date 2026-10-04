@@ -1799,6 +1799,7 @@ export default {
   'sqlq.running': '执行中...',
   'sqlq.querying': '查询中…',
   'sqlq.counting': '总数统计中…',
+  'sqlq.editorPlaceholder': '在此输入 SQL 语句；Ctrl+Enter 执行，Shift+Alt+F 格式化，右键查看更多操作',
   'sqlq.totalN': '共 {n} 条',
   'sqlq.recountTip': '点我重新统计',
   'sqlq.visibleColsTitle': '选择显示字段（{shown}/{total}）',

@@ -87,6 +87,8 @@ const SQL_KEYWORDS = [
 
 const editorOptions = computed(() => ({
   automaticLayout: true,
+  // 空编辑器的引导提示（contrib/placeholderText）
+  placeholder: t('sqlq.editorPlaceholder'),
   // 括号自动补齐：与 SQL 控制台一致（SQL 语言定义没有 autoClosingPairs，需强制 always）
   autoClosingBrackets: editorSettings.value.autoCloseBrackets ? 'always' : 'never',
   fontSize: editorSettings.value.fontSize,

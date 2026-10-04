@@ -83,6 +83,8 @@ export function ensureMonaco() {
       import('monaco-editor/esm/vs/editor/contrib/cursorUndo/browser/cursorUndo.js'),
       // 词级操作（Ctrl+Backspace 删词等）
       import('monaco-editor/esm/vs/editor/contrib/wordOperations/browser/wordOperations.js'),
+      // 空编辑器的占位引导文案（placeholder 选项）
+      import('monaco-editor/esm/vs/editor/contrib/placeholderText/browser/placeholderText.contribution.js'),
       // 驼峰/下划线分词操作
       import('monaco-editor/esm/vs/editor/contrib/wordPartOperations/browser/wordPartOperations.js'),
       // 剪贴板

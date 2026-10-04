@@ -2431,6 +2431,8 @@ const notifyScriptsChanged = () => {
 
 const editorOptions = computed(() => ({
   automaticLayout: true,
+  // 空编辑器的引导提示（contrib/placeholderText）：一眼知道这里写什么、怎么执行
+  placeholder: t('sqlq.editorPlaceholder'),
   // 括号自动补齐（设置可关）：SQL 语言定义里没有 autoClosingPairs（默认 languageDefined
   // 不生效），所以开着时强制 always —— 输入 ( [ ' 自动带上另一半，覆盖输入不会重复
   autoClosingBrackets: editorSettings.value.autoCloseBrackets ? 'always' : 'never',
@@ -4138,12 +4140,12 @@ onBeforeUnmount(() => {
 /* SQL 执行历史下拉 */
 .hist-dropdown .el-dropdown-menu { padding: 0; }
 .hist-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-bottom: 1px solid var(--dc-border); font-size: 14px; font-weight: 600; }
-.hist-list { max-height: 360px; overflow: auto; min-width: 360px; }
+.hist-list { max-height: 62vh; overflow: auto; min-width: 480px; max-width: 720px; }
 .hist-item { padding: 8px 12px; border-bottom: 1px solid var(--dc-border); cursor: pointer; }
 .hist-item:hover { background: var(--dc-hover); }
 .hist-meta { display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--dc-text-dim); margin-bottom: 4px; }
 .hist-db { color: var(--dc-primary); font-weight: 600; }
-.hist-sql { font-family: monospace; font-size: 13px; color: var(--dc-text); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; word-break: break-all; }
+.hist-sql { font-family: monospace; font-size: 13px; color: var(--dc-text); display: -webkit-box; -webkit-line-clamp: 8; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; word-break: break-all; }
 .hist-ops { margin-top: 4px; text-align: right; }
 .hist-empty { padding: 20px; text-align: center; color: var(--dc-text-dim); font-size: 14px; }
 </style>

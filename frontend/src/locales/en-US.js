@@ -1794,6 +1794,7 @@ export default {
   'sqlq.running': 'Running...',
   'sqlq.querying': 'Querying…',
   'sqlq.counting': 'Counting total rows…',
+  'sqlq.editorPlaceholder': 'Type SQL here; Ctrl+Enter to run, Shift+Alt+F to format, right-click for more actions',
   'sqlq.totalN': 'Total {n}',
   'sqlq.recountTip': 'Click to recount',
   'sqlq.visibleColsTitle': 'Choose visible columns ({shown}/{total})',
