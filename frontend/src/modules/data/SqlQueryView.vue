@@ -636,6 +636,10 @@ const pageTotal = computed(() => {
 // 这里再拿原句单独发计数请求，回来后回填分页器。后端带 10s 总预算，算不出保持 -1。
 // seq 守卫：期间又跑了新查询/翻页的话，过期的计数结果直接丢弃。
 // countPending：计数在途时底栏给一条「总数统计中…」状态；回填/放弃/被新查询作废时熄灭。
+//
+// **res 必须传响应式代理**（result.value / resultItems[i].res 暴露出来的那个），
+// 不能传 HTTP 返回的原始对象：ref 深层代理后页面读的是 proxy，直接改原始对象
+// 不触发任何更新 —— 表现就是「总数早就算完了，分页器却一直不动」。
 let countSeq = 0
 const countPending = ref(false)
 const invalidateCount = () => { countSeq++; countPending.value = false }
@@ -740,7 +744,7 @@ const loadSegment = async (item, p, size) => {
     item.page = p
     result.value = res
     // 总数未知时异步补齐（后端已不同步 COUNT，见 fetchCountFor）
-    fetchCountFor(res, item.segmentSql)
+    fetchCountFor(result.value, item.segmentSql)
   } catch (e) {
     if (!cancelRequested.value) ElMessage.error(e?.message || t('common.unknownError'))
   } finally {
@@ -2973,7 +2977,7 @@ const showBatchResult = (b) => {
   activeResultIdx.value = 0
   result.value = results[0]
   // 首个 tab 若总数未知，异步补齐（后端批量路径也不再同步 COUNT）
-  fetchCountFor(results[0], results[0].sql || '')
+  fetchCountFor(result.value, results[0].sql || '')
   // 编辑器文本含多段但实际仅拆出单段（例程块 / 注释等）：按单结果做收尾提示
   if (results.length === 1) {
     const only = results[0]
@@ -2994,7 +2998,7 @@ const selectResultTab = (i) => {
   activeResultIdx.value = i
   result.value = item.res
   // 切到的 tab 若总数未知，异步补齐（只数当前展示的段，不并发数全部）
-  fetchCountFor(item.res, item.segmentSql || item.res?.sql || '')
+  fetchCountFor(result.value, item.segmentSql || item.res?.sql || '')
   // 不同结果集独立分页：切换 tab 恢复到该段自己的页码
   currentPage.value = item.page || 1
   clearResultRowSelection()
@@ -3091,7 +3095,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         if (cancelRequested.value) { setResultCancelled(); return }
         showSingleResult(res)
         // 总数未知时异步补齐（后端已不同步 COUNT，见 fetchCountFor）
-        fetchCountFor(res, execSql)
+        fetchCountFor(result.value, execSql)
         recordHistory(execSql, db, res.executeTime || 0)
         loadResColumnComments(execSql, connId, db)
       }
