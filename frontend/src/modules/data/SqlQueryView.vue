@@ -501,6 +501,7 @@ import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
 import { useExcelSelection } from '../../utils/excelSelection'
 import { cellAlignClass } from '../../utils/cellAlign'
+import { readSchemaCache } from '../../utils/schemaCache'
 import {
   CaretRight, Download, MagicStick, TrendCharts, Loading,
   Close, CircleCloseFilled, Coin, Brush, Clock, Files,
@@ -2534,7 +2535,10 @@ const onEditorMount = (editor, monaco) => {
           endColumn: word.endColumn
         }
 
+        // suggestions 提到 try 外：提供器中途抛错（哪怕一个候选计算出错）也不能
+        // 让整轮补全报废 —— 真机症状就是「表名提示只剩文档里碰巧出现的那一个词」
         const suggestions = []
+        try {
 
         // 0) 点号级联：`表.` → 该表的列；`库.` → 该库的表。
         //    列名没缓存就现场拉（fire-and-forget），下次触发时就能看到
@@ -2603,6 +2607,17 @@ const onEditorMount = (editor, monaco) => {
         // 2) 表名：优先当前库真实表，其次从编辑器已引用的表提取
         const nameSet = new Set()
         tableNames.value.forEach(t => nameSet.add(t))
+        // 对象树的结构缓存兜底：tableNames 还没就绪（刚切库/页签恢复中）时也能给全表名，
+        // 否则补全列表里只剩文档里碰巧出现过的词（真机症状）
+        if (!nameSet.size) {
+          const cid = selectedConnId.value || props.conn?.id
+          const hit = readSchemaCache('tables:' + cid + ':' + (selectedDatabase.value || props.database || ''))
+          const cached = hit && Array.isArray(hit.value) ? hit.value : []
+          cached.forEach((tb) => {
+            const n = tb && typeof tb === 'object' ? (tb.name || tb.table || '') : String(tb || '')
+            if (n) nameSet.add(n)
+          })
+        }
         const allText = model.getValue()
         const tableMatches = allText.match(/(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+[`"']?([\w.]+)[`"']?/gi) || []
         const refTables = []
@@ -2671,6 +2686,12 @@ const onEditorMount = (editor, monaco) => {
           })
         })
 
+        return { suggestions }
+        } catch (err) {
+          // 提供器抛错时 Monaco 会整轮丢弃补全、只剩文档词建议 —— 落日志并保住
+          // 已生成的候选，绝不让「表名提示不行」变成无声的
+          console.warn('[sqlq] SQL 补全提供器异常：', err)
+        }
         return { suggestions }
       }
     }))
