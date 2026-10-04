@@ -3813,9 +3813,9 @@ onBeforeUnmount(() => {
    字段名省略号在图标前收住（窄列不重叠） */
 .data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 0 26px 0 10px; height: 36px; line-height: 36px; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .data-table td { padding: 0 10px; height: 32px; line-height: 32px; border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* 表头字段类型图标：18px 圆角徽章（配色按类型族，见全局 index.css 的 th-t-*）；
-   vertical-align: middle 让徽章与字段名垂直居中在同一条线上（-4px 会错开） */
-.data-table th .th-type-ic { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: 0 0 auto; vertical-align: middle; margin-right: 6px; border-radius: 5px; color: var(--dc-text-dim); cursor: default; }
+/* 表头字段类型图标：裸图标（无底色/无固定盒子，与表预览/NoSQL 统一）；
+   vertical-align: middle 让图标与字段名垂直居中在同一条线上 */
+.data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; vertical-align: middle; margin-right: 5px; color: var(--dc-text-dim); cursor: default; }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 表头排序按钮：固定在列头右缘垂直居中（右侧 26px 已预留，与表预览/NoSQL 同款） */
 .data-table th .th-sort {

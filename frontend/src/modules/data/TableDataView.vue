@@ -2937,11 +2937,11 @@ useShortcutScope(rootRef, {
   font-size: 11px; font-weight: 400; color: var(--dc-text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
-/* 类型徽章：18px 圆角底座（配色按类型族，见全局 index.css 的 th-t-*） */
+/* 类型图标：裸图标（无底色/无固定盒子）—— 盒子会让 12px 图标在 18px 里居中、
+   左右各空 3px，而第二行注释顶着盒子左缘，视觉上图标与注释就不对齐了 */
 .data-table th .th-type-ic {
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 18px; height: 18px; flex: 0 0 auto;
-  margin-right: 5px; border-radius: 5px; cursor: default; color: var(--dc-text-dim);
+  display: inline-flex; align-items: center; flex: 0 0 auto;
+  margin-right: 5px; cursor: default; color: var(--dc-text-dim);
 }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 主键 🔑：字段名后面的小号裸图标（琥珀色） */
