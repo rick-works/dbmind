@@ -1985,6 +1985,8 @@ const openResCtx = (x, y, rowIdx, col, from = 'cell') => {
     items.push({ label: t('sqlq.ctxCopyHeader'), command: 'copy-col-header' })
     sep()
     items.push({ label: t('sqlq.ctxColFit'), command: 'col-fit' })
+    items.push({ label: t('sqlq.ctxColFitAll'), command: 'col-fit-all' })
+    items.push({ label: t('sqlq.ctxResetColW'), command: 'reset-colw' })
     items.push({ label: t('sqlq.ctxHideCol'), command: 'hide-col' })
     if (hiddenResultCols.value.size) items.push({ label: t('sqlq.ctxShowAllCols'), command: 'show-all-cols' })
   } else if (mode === 'rows') {
@@ -2034,6 +2036,17 @@ const onResultCtxItem = (item) => {
       if (ci >= 0) autoFitResultCol(ci)
       break
     }
+    case 'col-fit-all': {
+      const cols = result.value?.columns || []
+      const vis = new Set(resultVisibleCols.value.map(c => c.name))
+      cols.forEach((name, i) => { if (vis.has(name)) autoFitResultCol(i) })
+      break
+    }
+    case 'reset-colw':
+      resultColWidths.value = {}
+      resultManualCols.value = new Set()
+      nextTick(() => measureResultColumns())
+      break
     case 'hide-col': hideResultColumnSmart(col); break
   }
   closeResCtx()

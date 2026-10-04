@@ -1908,6 +1908,8 @@ export default {
   'sqlq.ctxCopyAs': '复制为',
   'sqlq.ctxCopyHeader': '复制表头',
   'sqlq.ctxColFit': '列宽自适应',
+  'sqlq.ctxColFitAll': '全部列宽自适应',
+  'sqlq.ctxResetColW': '重置列宽',
   'sqlq.ctxHideCol': '隐藏列',
   'sqlq.ctxShowAllCols': '显示所有列',
   'sqlq.ctxRowDetail': '查看详情',

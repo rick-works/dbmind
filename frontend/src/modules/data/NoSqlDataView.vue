@@ -155,6 +155,8 @@
       <div v-if="displayRows.length" class="pager">
         <span class="load-time">
           {{ loading ? formatElapsed(elapsedTime) + $t('tdv.queryingSuffix') : formatElapsed(result.executeTime || elapsedTime || 0) }}
+          <span v-if="orderColumn" class="sort-chip" title="点击取消排序"
+                @click="orderColumn = ''; orderDir = ''; applySort()">已按 {{ orderColumn }} {{ orderDir === 'ASC' ? '↑' : '↓' }} 排序（当前页）· 取消</span>
         </span>
         <span v-if="selectionSummary" class="sel-summary" :title="$t('sqlq.summaryTitle')">
           <span class="ss-item">选中 <b>{{ selectionSummary.cells }}</b> 格</span>
@@ -1159,6 +1161,8 @@ const openCtxMenu = (x, y, row, col, from = 'cell') => {
     items.push({ label: t('sqlq.ctxCopyHeader'), command: 'copy-col-header' })
     sep()
     items.push({ label: t('sqlq.ctxColFit'), command: 'col-fit' })
+    items.push({ label: t('sqlq.ctxColFitAll'), command: 'col-fit-all' })
+    items.push({ label: t('sqlq.ctxResetColW'), command: 'reset-colw' })
     items.push({ label: t('sqlq.ctxHideCol'), command: 'hide-col' })
     if (hiddenColumns.value.size) items.push({ label: t('sqlq.ctxShowAllCols'), command: 'show-all-cols' })
   } else if (mode === 'rows') {
@@ -1203,6 +1207,13 @@ const onCtxItem = (item) => {
     case 'col-fit':
       if (selectedCols.value.size > 1) autoFitSelectedCols()
       else autoFitCol(col)
+      break
+    case 'col-fit-all':
+      for (const c of visibleColumns.value) autoFitCol(c)
+      break
+    case 'reset-colw':
+      colWidths.value = {}
+      nextTick(() => measureColumns())
       break
     case 'hide-col': hideColumnSmart(col); break
     case 'hide-rows': hideRowsSmart(row); break
@@ -1721,6 +1732,9 @@ onBeforeUnmount(() => {
 .data-table td.active-cell { outline: 2px solid var(--dc-primary); outline-offset: -2px; }
 .pager { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; }
 .load-time { font-size: 13px; color: var(--dc-text-dim); font-weight: 500; }
+/* 当前页排序状态胶囊：可发现性 + 一键取消 */
+.sort-chip { margin-left: 8px; font-size: 12px; color: var(--dc-primary); cursor: pointer; }
+.sort-chip:hover { text-decoration: underline; }
 .json-cell { font-family: var(--dc-mono-font, monospace); font-size: 13px; color: #5aa0d8; }
 
 /* 「选择显示字段」下拉（popper 挂到 body，slot 内容仍带本组件 scoped 属性） */

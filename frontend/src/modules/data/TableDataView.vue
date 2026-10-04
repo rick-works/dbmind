@@ -218,6 +218,9 @@
         <span class="load-time">
           {{ loading ? formatElapsed(elapsedTime) + $t('tdv.queryingSuffix') : (elapsedTime > 0 ? formatElapsed(elapsedTime) : '') }}
           <span v-if="hasChanges" class="change-tip">{{ $t('tdv.unsavedChanges') }}</span>
+          <!-- 当前页排序状态：可发现性 + 一键取消（客户端排序不进 SQL，翻页/重查即还原） -->
+          <span v-if="orderColumn" class="sort-chip" title="点击取消排序"
+                @click="orderColumn = ''; orderDir = ''; applySort()">已按 {{ orderColumn }} {{ orderDir === 'ASC' ? '↑' : '↓' }} 排序（当前页）· 取消</span>
         </span>
         <!-- 选中区汇总（与 SQL 结果表底栏同一套做法）：框选单元格 / 选中整行 / 选中整列时给出
              格子数 / 求和 / 均值 / 最小 / 最大，只统计**数值类型**的列（字符串相加没有意义） -->
@@ -1078,6 +1081,8 @@ const openCtxMenu = (x, y, row, col, from = 'cell') => {
       items.push({ label: t('tdv.openInQuery'), command: 'open-query' })
     }
     items.push({ label: t('sqlq.ctxColFit'), command: 'col-fit' })
+    items.push({ label: t('sqlq.ctxColFitAll'), command: 'col-fit-all' })
+    items.push({ label: t('sqlq.ctxResetColW'), command: 'reset-colw' })
     items.push({ label: t('sqlq.ctxHideCol'), command: 'hide-col' })
     if (hiddenColumns.value.size) items.push({ label: t('sqlq.ctxShowAllCols'), command: 'show-all-cols' })
     if (hiddenRows.value.size) items.push({ label: t('tdv.showAllRows'), command: 'show-all-rows' })
@@ -1147,6 +1152,16 @@ const onCtxItem = (item) => {
     case 'col-fit':
       if (selectedCols.value.size > 1) autoFitSelectedCols()
       else autoFitCol(col)
+      break
+    case 'col-fit-all':
+      for (const c of visibleColumns.value) autoFitCol(c)
+      break
+    case 'reset-colw':
+      colWidths.value = {}
+      manualCols.value = new Set()
+      saveColWidths()
+      lastMeasuredKey = ''
+      nextTick(() => measureColWidths())
       break
     case 'hide-col': hideColumnSmart(col); break
     case 'hide-rows': hideRowsSmart(row); break
@@ -2870,6 +2885,9 @@ useShortcutScope(rootRef, {
 .pager { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; }
 .load-time { font-size: 13px; color: var(--dc-text-dim); font-weight: 500; }
 .change-tip { color: var(--el-color-warning); margin-left: 8px; }
+/* 当前页排序状态胶囊：可发现性 + 一键取消 */
+.sort-chip { margin-left: 8px; font-size: 12px; color: var(--dc-primary); cursor: pointer; }
+.sort-chip:hover { text-decoration: underline; }
 /* NULL：灰 + 斜体，明显区别于真实数据。
    对齐不在这里定死 —— 跟着字段类型走（见 utils/cellAlign.js 的 alignByType），
    所以下面的 .al-r / .al-c 必须写在本条之后，靠后者压住它。

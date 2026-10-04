@@ -1903,6 +1903,8 @@ export default {
   'sqlq.ctxCopyAs': 'Copy as',
   'sqlq.ctxCopyHeader': 'Copy header',
   'sqlq.ctxColFit': 'Auto-fit column width',
+  'sqlq.ctxColFitAll': 'Auto-fit all columns',
+  'sqlq.ctxResetColW': 'Reset column widths',
   'sqlq.ctxHideCol': 'Hide column',
   'sqlq.ctxShowAllCols': 'Show all columns',
   'sqlq.ctxRowDetail': 'View details',
