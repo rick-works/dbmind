@@ -1670,9 +1670,9 @@ onBeforeUnmount(() => {
 .data-table thead tr.selected th:last-child { --sel-r: 2px; }
 .data-table tbody tr td.col-selected { background-color: var(--dc-primary-soft); }
 .data-table th.col-selected { --sel-t: 2px; background-color: var(--dc-primary-soft); }
-/* 选中整列不画左右两条竖线（淡色填充 + 上/下收边表达） */
-.data-table th.col-selected.col-sel-l, .data-table td.col-selected.col-sel-l { --sel-l: 0px; }
-.data-table th.col-selected.col-sel-r, .data-table td.col-selected.col-sel-r { --sel-r: 0px; }
+/* 选中整列：四边都收口成完整矩形（与框选同一套框线语言） */
+.data-table th.col-selected.col-sel-l, .data-table td.col-selected.col-sel-l { --sel-l: 2px; }
+.data-table th.col-selected.col-sel-r, .data-table td.col-selected.col-sel-r { --sel-r: 2px; }
 .data-table tr.col-sel-bottom td.col-selected { --sel-b: 2px; }
 .data-table tbody tr:hover td { background-color: var(--dc-primary-wash); }
 /* 底栏选中区汇总：弱化显示、数字加粗 */

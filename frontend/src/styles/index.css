@@ -431,10 +431,10 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
 }
 .data-table td.grid-cell-selected.sel-t, .data-table th.grid-cell-selected.sel-t { --sel-t: 2px; }
 .data-table td.grid-cell-selected.sel-b, .data-table th.grid-cell-selected.sel-b { --sel-b: 2px; }
-/* 框选（单元格区域）**不画左右两条竖线**：整列框选时每个格子的左沿线段会连成一根贯穿的蓝条，
-   看着像一根游离的线（这个已经反馈过两次）；选中范围由淡色填充 + 上/下收边表达就够了。 */
-.data-table td.grid-cell-selected.sel-l, .data-table th.grid-cell-selected.sel-l { --sel-l: 0px; }
-.data-table td.grid-cell-selected.sel-r, .data-table th.grid-cell-selected.sel-r { --sel-r: 0px; }
+/* 框选外沿四边都画线（用户要求：左右也要有跟上下一样的框线，选区是完整矩形）。
+   早期曾把左右压成 0（单列框选时竖线看着像"游离的蓝条"，反馈过两次）——按最新口径恢复。 */
+.data-table td.grid-cell-selected.sel-l, .data-table th.grid-cell-selected.sel-l { --sel-l: 2px; }
+.data-table td.grid-cell-selected.sel-r, .data-table th.grid-cell-selected.sel-r { --sel-r: 2px; }
 .el-loading-mask { background-color: var(--dc-mask); backdrop-filter: blur(3px); }
 .el-loading-spinner .circular { width: 34px; height: 34px; animation: dc-rotate .9s linear infinite; filter: drop-shadow(0 0 6px var(--dc-primary-glow)); }
 .el-loading-spinner .path { stroke: var(--dc-primary) !important; stroke-width: 3; stroke-linecap: round; }

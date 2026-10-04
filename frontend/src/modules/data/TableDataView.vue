@@ -2982,10 +2982,9 @@ useShortcutScope(rootRef, {
 /* 列选中：表头与该列单元格同底色，表头就是这块的顶边，到「最后一行」收底边 */
 .data-table tbody tr td.col-selected { background-color: var(--dc-primary-soft); }
 .data-table th.col-selected { --sel-t: 2px; background-color: var(--dc-primary-soft); }
-/* 选中整列：**不画左右两条竖线** —— 那两条 2px 主色线沿列贯穿，看着像一根游离的蓝条；
-   选中信息由淡色底 + 上/下收边表达就够了。行选中那套的左右收边不动（整行框需要它们）。 */
-.data-table th.col-selected.col-sel-l, .data-table td.col-selected.col-sel-l { --sel-l: 0px; }
-.data-table th.col-selected.col-sel-r, .data-table td.col-selected.col-sel-r { --sel-r: 0px; }
+/* 选中整列：四边都收口成完整矩形（与框选同一套框线语言，用户最新口径） */
+.data-table th.col-selected.col-sel-l, .data-table td.col-selected.col-sel-l { --sel-l: 2px; }
+.data-table th.col-selected.col-sel-r, .data-table td.col-selected.col-sel-r { --sel-r: 2px; }
 .data-table tr.col-sel-bottom td.col-selected { --sel-b: 2px; }
 .data-table tbody tr:hover td { background-color: var(--dc-primary-wash); }
 /* 底栏选中区汇总：弱化显示、数字加粗，不抢分页的注意力（与 SQL 结果表底栏同款） */
