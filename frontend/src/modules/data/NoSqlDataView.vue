@@ -1602,11 +1602,9 @@ onBeforeUnmount(() => {
 .data-table thead { position: sticky; top: -1px; z-index: 2; }
 .data-table th {
   position: relative;
-  /* 表头 = 一整条色带：去掉竖向分隔线，只在底部收一条边 */
   background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
-  padding: 6px 10px; height: auto; line-height: 1.3; vertical-align: middle;
-  border: none; border-bottom: 1px solid var(--dc-border);
-  white-space: nowrap;
+  padding: 5px 10px; height: auto; line-height: 1.3; vertical-align: middle;
+  border: 1px solid var(--dc-border); white-space: nowrap;
   overflow: hidden;
 }
 .data-table th.sortable { cursor: pointer; user-select: none; }

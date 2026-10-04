@@ -133,15 +133,15 @@
                        文字块的可用宽度按「列宽 − 表头非文字部分（内边距 + 排序 + 徽章）」算，与列宽测量同一笔账：
                        超宽就在这个宽度里省略成 …，而不是反过来把列撑宽。 -->
                   <span class="th-text" :style="{ maxWidth: labelMaxWidth(col) + 'px' }">
-                    <!-- 布局：左侧类型徽章**垂直居中跨两行**，右侧「字段名 / 注释」竖排 ——
-                         两行同列对齐，徽章不再浮在第一行中间（旧布局是徽章+字段名一行、注释另起一行缩进对齐，看着歪） -->
-                    <span class="th-type-ic" :class="typeClass(col)" :title="typeTitle(col)"><el-icon><component :is="typeIcon(col)" /></el-icon></span>
-                    <span class="th-lines">
-                      <span class="th-line1"><span class="th-label">{{ col }}</span></span>
-                      <span v-if="isPkCol(col) || colComment(col)" class="th-line2">
-                        <span v-if="isPkCol(col)" class="th-pk-ic" :title="$t('tf.colPrimary')"><el-icon><Key /></el-icon></span>
-                        <span v-if="colComment(col)" class="th-comment" :title="colComment(col)">{{ colComment(col) }}</span>
-                      </span>
+                    <!-- 布局（用户口径）：第一行「类型徽章 + 字段名（主键列再加 🔑）」，
+                         第二行注释**顶格**开始（不缩进）；没有注释时第二行不渲染 -->
+                    <span class="th-line1">
+                      <span class="th-type-ic" :class="typeClass(col)" :title="typeTitle(col)"><el-icon><component :is="typeIcon(col)" /></el-icon></span>
+                      <span class="th-label">{{ col }}</span>
+                      <span v-if="isPkCol(col)" class="th-pk-ic" :title="$t('tf.colPrimary')"><el-icon><Key /></el-icon></span>
+                    </span>
+                    <span v-if="colComment(col)" class="th-line2">
+                      <span class="th-comment" :title="colComment(col)">{{ colComment(col) }}</span>
                     </span>
                   </span>
                   <span class="th-sort" :class="{ 'is-sorted': orderColumn === col }"
@@ -2003,9 +2003,10 @@ const MAX_COL_WIDTH = 520
 // 于是 —— 普通列 59、主键列 76。历史上这里统一给 60：主键列正好差一个 🔑 的宽度、标题被省略号吃掉；
 // 一口气给到 80 又反过来太肥（普通列白多 21px）。所以改成**按列算**，只有主键列多那 17px。
 const HEADER_BASE_EXTRA = 22
-// 类型徽章 18px + 与文字栈的间距 7px（新布局：徽章在文字块内、与竖排文字并排）
-const HEADER_TYPE_ICON = 25
-const HEADER_PK_ICON = 17
+// 类型徽章 18px + 其后间距 5px（第一行：徽章 + 字段名）
+const HEADER_TYPE_ICON = 23
+// 主键 🔑 12px 图标 + 前间距 4px（第一行字段名之后）
+const HEADER_PK_ICON = 16
 const HEADER_SORT_ICON = 18
 const HEADER_CUSHION = 2
 // 数据格：左右内边距 20px + 边框 2px + 一点余量
@@ -2028,8 +2029,9 @@ const headerExtraOf = (col) =>
  */
 const labelMaxWidth = (col) => {
   const w = colWidths.value[col] || defaultColWidth(col)
-  // 块外 = 内边距+边框 + 排序图标；块内的类型徽章 + gap 也要从文字栈里扣掉
+  // 块外 = 内边距+边框 + 排序图标；块内第一行的类型徽章、主键列的 🔑 也要给字段名让位
   const outside = HEADER_BASE_EXTRA + HEADER_SORT_ICON + HEADER_TYPE_ICON
+    + (isPkCol(col) ? HEADER_PK_ICON : 0)
   return Math.max(40, Math.round(w - outside))
 }
 
@@ -2885,12 +2887,10 @@ useShortcutScope(rootRef, {
 .data-table thead { position: sticky; top: -1px; z-index: 2; }
 .data-table th {
   position: relative;
-  /* 表头 = 一整条色带：去掉竖向分隔线（body 仍保留），只在底部收一条边 —— 现代网格风格 */
   background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
   /* 表头可能是两行（字段名 + 注释），高度交给内容 —— 原来写死 34px 会把第二行切掉 */
-  padding: 6px 10px; height: auto; line-height: 1.3; vertical-align: middle;
-  border: none; border-bottom: 1px solid var(--dc-border);
-  white-space: nowrap;
+  padding: 5px 10px; height: auto; line-height: 1.3; vertical-align: middle;
+  border: 1px solid var(--dc-border); white-space: nowrap;
   overflow: hidden;
 }
 .data-table th.sortable { cursor: pointer; user-select: none; }
@@ -2907,34 +2907,32 @@ useShortcutScope(rootRef, {
 .data-table th:hover .th-sort { opacity: .9; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
 .data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
-/* 表头文字块：左侧类型徽章 + 右侧「字段名 / 注释」竖排，徽章相对两行整体垂直居中。
+/* 表头文字块：竖排两行 —— 第一行「类型徽章 + 字段名（+🔑）」，第二行注释顶格。
    宽度由模板按列宽算好（见 labelMaxWidth），超宽就在这个宽度里省略成 …。
    min-width: 0 不能省 —— 否则 flex 子项不肯被压缩，省略号就不会出现。 */
 .data-table th .th-text {
-  display: inline-flex; flex-direction: row; align-items: center; gap: 7px;
+  display: inline-flex; flex-direction: column; justify-content: center;
   vertical-align: middle; overflow: hidden; min-width: 0; max-width: 100%;
 }
-/* 字段名 / 注释的竖排栈 */
-.data-table th .th-lines { display: flex; flex-direction: column; justify-content: center; min-width: 0; flex: 1 1 auto; }
-/* 第一行：字段名 */
+/* 第一行：类型徽章 + 字段名 */
 .data-table th .th-line1 { display: flex; align-items: center; min-width: 0; }
 /* 字段名同样是 flex 子项，min-width: 0 才能被压缩出省略号 */
 .data-table th .th-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-/* 第二行：主键 🔑 + 注释，与字段名**同列左对齐**（旧布局靠 paddingLeft 缩进对齐，已不需要） */
+/* 第二行：注释**顶格**开始（不缩进），没有注释时整行不渲染 */
 .data-table th .th-line2 { display: flex; align-items: center; min-width: 0; margin-top: 1px; }
 .data-table th .th-comment {
   font-size: 11px; font-weight: 400; color: var(--dc-text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
-/* 类型徽章：18px 圆角底座（配色按类型族，见全局 index.css 的 th-t-*）；与文字栈的间距由 .th-text 的 gap 给 */
+/* 类型徽章：18px 圆角底座（配色按类型族，见全局 index.css 的 th-t-*） */
 .data-table th .th-type-ic {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; flex: 0 0 auto;
-  border-radius: 5px; cursor: default; color: var(--dc-text-dim);
+  margin-right: 5px; border-radius: 5px; cursor: default; color: var(--dc-text-dim);
 }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
-/* 第二行的主键 🔑：小号裸图标（琥珀色），不再套徽章 —— 徽章只属于第一行的类型图标 */
-.data-table th .th-pk-ic { display: inline-flex; align-items: center; flex: 0 0 auto; color: var(--dc-warning, #e6a23c); }
+/* 主键 🔑：字段名后面的小号裸图标（琥珀色） */
+.data-table th .th-pk-ic { display: inline-flex; align-items: center; flex: 0 0 auto; margin-left: 4px; color: var(--dc-warning, #e6a23c); }
 .data-table th .th-pk-ic .el-icon { font-size: 12px; }
 .data-table td {
   padding: 0 10px; height: 32px; line-height: 32px;
