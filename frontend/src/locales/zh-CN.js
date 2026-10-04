@@ -1799,6 +1799,8 @@ export default {
   'sqlq.running': '执行中...',
   'sqlq.querying': '查询中…',
   'sqlq.counting': '总数统计中…',
+  'sqlq.totalN': '共 {n} 条',
+  'sqlq.recountTip': '点我重新统计',
   'sqlq.visibleColsTitle': '选择显示字段（{shown}/{total}）',
   'sqlq.visibleCols': '显示字段',
   'sqlq.exportCurrentCsv': '导出当前页 CSV',

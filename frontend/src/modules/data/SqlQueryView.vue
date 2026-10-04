@@ -331,19 +331,25 @@
               <span class="rs-item">{{ $t('sqlq.max') }} <b>{{ fmtNum(resultSelectionSummary.max) }}</b></span>
             </template>
           </span>
-          <!-- 总数未知（后端没统计，totalCount 为 -1）时不显示分页器自带的「共 N 条」：
+          <!-- 总数未知（后端没统计，totalCount 为 -1）时不显示总数：
                那个数字取的是本页行数，等于把「这一页取回多少行」说成「总共多少行」。
                异步计数在跑时给一条「总数统计中…」的状态（COUNT 移出了主链路，
-               数据先回显、总数后到，这里补上过渡期的口径）；算不出（超时）就安静消失。 -->
+               数据先回显、总数后到，这里补上过渡期的口径）；算不出（超时）就安静消失。
+               总数是自己渲染的（不用分页器自带的 total 段）：可点击重新统计、
+               悬停有「点我重新统计」提示 —— 表数据被别人改过时手动刷一下。 -->
           <span v-if="countPending && displayTotal === null" class="count-pending">
             <el-icon class="is-loading"><Loading /></el-icon> {{ $t('sqlq.counting') }}
+          </span>
+          <span v-else-if="displayTotal !== null" class="total-refresh"
+                :title="$t('sqlq.recountTip')" @click="recountTotal">
+            {{ $t('sqlq.totalN', { n: Number(displayTotal).toLocaleString() }) }}
           </span>
           <el-pagination
             v-model:current-page="currentPage"
             :page-size="pageSize"
             :total="pageTotal"
             :page-sizes="queryPageSizes"
-            :layout="displayTotal === null ? 'sizes, prev, pager, next, jumper' : 'total, sizes, prev, pager, next, jumper'"
+            layout="sizes, prev, pager, next, jumper"
             size="small"
             background
             @current-change="onPageChange"
@@ -643,6 +649,9 @@ const pageTotal = computed(() => {
 let countSeq = 0
 const countPending = ref(false)
 const invalidateCount = () => { countSeq++; countPending.value = false }
+// 当前展示结果对应的计数 SQL（fetchCountFor 每次都会刷新）：
+// 「点击总数重新统计」靠它知道要重数哪条语句
+const lastCountSql = ref('')
 
 // 计数缓存：同一份 SQL 翻页时不重算（大表 COUNT 要秒级，每翻一页重跑一遍纯浪费）。
 // 键 = 连接|库|归一化 SQL（压空白、去尾分号）；10 分钟过期（期间数据可能变了）。
@@ -654,6 +663,9 @@ const countCacheKey = (connId, db, sqlText) =>
 
 const fetchCountFor = (res, sqlText) => {
   if (!res || !res.success) return
+  // 先记 SQL 再走后面的早退分支：切到「总数已知」的 tab 时也要更新，
+  // 否则「重新统计」会拿上一条语句去数当前结果
+  if (sqlText) lastCountSql.value = sqlText
   if (typeof res.totalCount === 'number' && res.totalCount >= 0) { countPending.value = false; return }
   if (!sqlText || !(res.rows && res.rows.length)) return
   const connId = selectedConnId.value || props.conn.id
@@ -682,6 +694,20 @@ const fetchCountFor = (res, sqlText) => {
       }
     })
     .catch(() => { if (seq === countSeq) countPending.value = false })
+}
+
+/** 点击「共 N 条」重新统计：绕过缓存强制重数一次（表数据被别人改过时手动刷）。 */
+const recountTotal = () => {
+  const res = result.value
+  const sqlText = lastCountSql.value
+  if (!res || !res.success || !sqlText) return
+  const connId = selectedConnId.value || props.conn.id
+  const db = selectedSchema.value
+    ? `${selectedDatabase.value}.${selectedSchema.value}`
+    : selectedDatabase.value || undefined
+  countCache.delete(countCacheKey(connId, db, sqlText))
+  res.totalCount = -1
+  fetchCountFor(res, sqlText)
 }
 
 // ========== 结果表：选中区汇总（底栏状态区）==========
@@ -3950,6 +3976,14 @@ onBeforeUnmount(() => {
   font-size: 12px; color: var(--dc-text-dim);
 }
 .count-pending + .el-pagination { margin-left: 0; }
+/* 可点击的总数：悬停变主色 + 提示「点我重新统计」，点击强制重数一次 */
+.total-refresh {
+  display: inline-flex; align-items: center;
+  font-size: 13px; color: var(--dc-text-dim); cursor: pointer;
+  user-select: none; border-radius: 4px; padding: 0 4px;
+  transition: color .12s, background .12s;
+}
+.total-refresh:hover { color: var(--dc-primary); background: var(--dc-bg-hover); }
 /* 选中区汇总：夹在耗时与分页之间，弱化显示、数字加粗，避免抢分页的注意力 */
 .result-summary { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dc-text-dim); flex-wrap: wrap; }
 .result-summary .rs-item { white-space: nowrap; }
