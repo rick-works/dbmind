@@ -501,7 +501,7 @@ import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
 import { useExcelSelection } from '../../utils/excelSelection'
 import { cellAlignClass } from '../../utils/cellAlign'
-import { readSchemaCache } from '../../utils/schemaCache'
+import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
   CaretRight, Download, MagicStick, TrendCharts, Loading,
   Close, CircleCloseFilled, Coin, Brush, Clock, Files,
@@ -509,7 +509,7 @@ import {
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
   Sort, SortUp, SortDown
 } from '@element-plus/icons-vue'
-import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listConnections, listColumns, getColumnComments, getAiConfig } from '../../api'
+import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, byType } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
 
@@ -2511,6 +2511,33 @@ const monacoProviders = []
 // FROM 引用到了才取谁，取一次终身缓存
 const columnsCache = {}
 const columnsLoading = new Set()
+
+// ===== 库名. 前缀补全：该库的表/视图/存储过程/函数/触发器 =====
+// 键 = `${connId}:${db}`。首触发现场拉（表/视图 + 例程 + 触发器三路并发，不阻塞本轮），
+// 结果留在会话缓存里，下一个字符继续输入时就能看到；表/视图清单顺带喂给对象树缓存。
+const dbObjectsCache = {}
+const loadDbObjects = (cid, db) => {
+  const key = `${cid}:${db}`
+  if (dbObjectsCache[key]) return dbObjectsCache[key]
+  const entry = { tables: [], views: [], procs: [], fns: [], triggers: [] }
+  dbObjectsCache[key] = entry
+  const nameOf = (x) => (x && typeof x === 'object' ? (x.name || x.routineName || x.triggerName || x.table || '') : String(x || ''))
+  listTables(cid, db).then((list) => {
+    const arr = Array.isArray(list) ? list : []
+    entry.tables = arr.filter((t) => (t.type || 'TABLE') === 'TABLE').map(nameOf).filter(Boolean)
+    entry.views = arr.filter((t) => (t.type || '') === 'VIEW').map(nameOf).filter(Boolean)
+    writeSchemaCache('tables:' + cid + ':' + db, arr) // 与对象树同一份缓存，展开树时直接复用
+  }).catch(() => {})
+  listProcedures(cid, db).then((list) => {
+    const arr = Array.isArray(list) ? list : []
+    entry.procs = arr.filter((r) => (r.routineType || 'PROCEDURE') === 'PROCEDURE').map(nameOf).filter(Boolean)
+    entry.fns = arr.filter((r) => (r.routineType || '') === 'FUNCTION').map(nameOf).filter(Boolean)
+  }).catch(() => {})
+  listTriggers(cid, db).then((list) => {
+    entry.triggers = (Array.isArray(list) ? list : []).map(nameOf).filter(Boolean)
+  }).catch(() => {})
+  return entry
+}
 const loadColumns = (table) => {
   const key = String(table || '').toLowerCase()
   if (!key || columnsCache[key] || columnsLoading.has(key)) return
@@ -2557,14 +2584,27 @@ const onEditorMount = (editor, monaco) => {
           const prefix = dotMatch[1].toLowerCase()
           const dbNames = databases.value.map((d) => String(d).toLowerCase())
           if (dbNames.includes(prefix)) {
-            tableNames.value.forEach((name) => suggestions.push({
-              label: name,
-              kind: monaco.languages.CompletionItemKind.Class,
-              insertText: name,
-              range,
-              sortText: '1aaa' + name,
-              detail: t('tree.cat.tables')
-            }))
+            // `库名.` → **该库**的对象：表/视图/存储过程/函数/触发器。
+            // 以前这里错误地弹了当前库的表名 —— 语义是按写下的库限定，不是当前下拉
+            const dbOriginal = databases.value.find((d) => String(d).toLowerCase() === prefix) || prefix
+            const cid = selectedConnId.value || props.conn?.id
+            const objs = loadDbObjects(cid, dbOriginal)
+            const push = (name, kind, detail) => {
+              if (!name) return
+              suggestions.push({
+                label: name,
+                kind: monaco.languages.CompletionItemKind[kind],
+                insertText: name,
+                range,
+                sortText: '1' + name,
+                detail
+              })
+            }
+            objs.tables.forEach((n) => push(n, 'Class', t('tree.cat.tables')))
+            objs.views.forEach((n) => push(n, 'Interface', t('tree.cat.views')))
+            objs.procs.forEach((n) => push(n, 'Function', t('tree.cat.procs')))
+            objs.fns.forEach((n) => push(n, 'Function', t('tree.cat.functions')))
+            objs.triggers.forEach((n) => push(n, 'Event', t('tree.cat.triggers')))
             return { suggestions }
           }
           const tableHit = tableNames.value.find((tn) => String(tn).toLowerCase() === prefix)
