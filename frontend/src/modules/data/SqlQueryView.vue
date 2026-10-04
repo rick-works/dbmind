@@ -3976,14 +3976,16 @@ onBeforeUnmount(() => {
   font-size: 12px; color: var(--dc-text-dim);
 }
 .count-pending + .el-pagination { margin-left: 0; }
-/* 可点击的总数：悬停变主色 + 提示「点我重新统计」，点击强制重数一次 */
+/* 可点击的总数：悬停变主色 + 提示「点我重新统计」，点击强制重数一次。
+   margin-left:auto 把自己推到右侧、紧贴分页器（分页器遇它就让出 auto 边距） */
 .total-refresh {
-  display: inline-flex; align-items: center;
+  margin-left: auto; display: inline-flex; align-items: center;
   font-size: 13px; color: var(--dc-text-dim); cursor: pointer;
   user-select: none; border-radius: 4px; padding: 0 4px;
   transition: color .12s, background .12s;
 }
 .total-refresh:hover { color: var(--dc-primary); background: var(--dc-bg-hover); }
+.total-refresh + .el-pagination { margin-left: 0; }
 /* 选中区汇总：夹在耗时与分页之间，弱化显示、数字加粗，避免抢分页的注意力 */
 .result-summary { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dc-text-dim); flex-wrap: wrap; }
 .result-summary .rs-item { white-space: nowrap; }
