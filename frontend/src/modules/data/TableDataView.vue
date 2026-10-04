@@ -1946,7 +1946,10 @@ const colWidths = ref({})
 // 列宽是"我给这张表调好的"，切走页签、重启后理应还在 —— 以前只存在内存里，切走就丢，
 // 每次回来都得重调一遍。只存**手动调过**的列：
 // 自动测量的列不存，免得把"测量结果"固化成用户设定，以后改了字体/密度反而跟着变旧。
-const colWidthStoreKey = () => 'xplore.colw:' + [props.conn?.id || '', props.database || '', props.table || ''].join('|')
+// 存储键带版本号：表头布局改版会改变「表头完整显示」所需的宽度预算，
+// 旧版本下保存的窄列宽会让新表头截断（真机：表头全是 ord…/sale…，右侧却留白）。
+// 升 v2 让旧存档一次性作废，自动测量（保证表头完整）重新接管；此后用户拖过的宽度照常记住。
+const colWidthStoreKey = () => 'xplore.colw:v2:' + [props.conn?.id || '', props.database || '', props.table || ''].join('|')
 
 const loadSavedColWidths = () => {
   if (!props.table) return
