@@ -76,7 +76,7 @@ import App from './App.vue'
 import router from './router'
 import './styles/index.css'
 import { getNotifySettings, hydrateUIFromBackend, reloadEditorSettings, reloadQuerySettings } from './utils/settings'
-import { initTheme } from './utils/theme'
+import { initTheme, applyTheme, getThemeSettings } from './utils/theme'
 import { t, initI18n, refreshLocaleFromStorage } from './utils/i18n'
 import { resetShortcutCache } from './utils/shortcuts'
 
@@ -215,20 +215,25 @@ ElMessage.info = (msg, options) => {
   mergeMsgOpts(origInfo, msg, options, { duration: 2500, grouping: true })
 }
 // 应用持久化的主题模式（浅色 / 深色 / 跟随系统），并监听系统外观变化
-// —— 全部 UI 设置（编辑器/格式化/查询/通知/主题/语言/快捷键）的真身在 dbmind.db，
-// 启动先从后端水合到本地缓存，再应用主题/语言、刷新共享快照，最后挂载：
-// 组件 setup 里读到的就是后端的值；后端不可达时沿用本地缓存，绝不阻塞启动。
-; (async () => {
-  await hydrateUIFromBackend()
-  reloadEditorSettings()
-  reloadQuerySettings()
-  resetShortcutCache()
-  // 应用持久化的主题模式，并监听系统外观变化
-  initTheme()
-  // 应用持久化的界面语言：落 <html lang> 与窗口标题（locale ref 早于水合初始化，需重读）
-  refreshLocaleFromStorage()
-  app.mount('#app')
-})()
+// —— 全部 UI 设置（编辑器/格式化/查询/通知/主题/语言/快捷键）的真身在 dbmind.db。
+// **挂载必须同步在前，水合放在挂载之后**：真机踩过 —— await 水合后再挂载，路由
+// 异步组件会挂到尚未就绪的 DOM 时序上，成片报「insertBefore/minimap of null」
+// 把工作区打挂。水合完成后等「路由就绪 + 下一帧」再刷新共享快照（多数消费方
+// 响应式，设置即刻跟上）；后端不可达时沿用本地缓存，绝不阻塞启动。
+initTheme()
+initI18n()
+app.mount('#app')
+hydrateUIFromBackend()
+  .then(() => router.isReady())
+  .then(() => nextTick())
+  .then(() => {
+    reloadEditorSettings()
+    reloadQuerySettings()
+    resetShortcutCache()
+    refreshLocaleFromStorage()
+    applyTheme(getThemeSettings().mode)
+  })
+  .catch(() => {})
 // 「AI 服务未配置」这类请求错误：界面上已有正式引导（弹窗/消息里的「前往设置」链接），
 // 但个别自动预取请求的底层 promise 残堆仍会以 uncaught 打进控制台刷屏 ——
 // 这里把它降级成 debug；只匹配这一类已知错误，其它未捕获异常照常原样打印。
@@ -239,4 +244,3 @@ window.addEventListener('unhandledrejection', (e) => {
     console.debug('[dbmind] 该请求错误已在界面引导处理:', msg)
   }
 })
-app.mount('#app')

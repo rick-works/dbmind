@@ -90,16 +90,12 @@ export const migrateEditor = (raw) => {
   }
   // 旧全局「SQL 方言」已下线：格式化方言改由连接类型自动识别，清理旧缓存中的残留值
   if ('sqlLanguage' in raw) { delete raw.sqlLanguage; changed = true }
-  // 旧默认值一次性迁移（字号 12 → 14、关键字大小写 upper → preserve）：
-  // **必须只跑一次** —— 以前没有门槛，每次读设置都重跑，用户把关键字改成「大写」
-  // 或字号改成 12，保存的瞬间就被这条迁回旧默认（设置「保存后又变回去」的真凶）。
-  // 门槛标志落盘后，用户改成的任何值（包括恰好等于旧默认的值）都不再被碰。
-  if (!raw._defaultsMigrated) {
-    if (raw.fontSize === 12) { raw.fontSize = 14; changed = true }
-    if (raw.sqlKeywordCase === 'upper') { raw.sqlKeywordCase = 'preserve'; changed = true }
-    raw._defaultsMigrated = true
-    changed = true
-  }
+  // 默认字号 12 → 14：只把「恰好停在旧默认值」的用户带过来；
+  // 自己调过字号（10 / 16 / 18…）的一律保留 —— 改默认不该覆盖用户的选择。
+  if (raw.fontSize === 12) { raw.fontSize = 14; changed = true }
+  // 关键字大小写旧默认 upper → preserve：同理只带走没动过这一项的
+  // （缓存里停在 'upper' 的就是旧默认）；特意选过大写/小写的（lower / 显式别的值）不碰。
+  if (raw.sqlKeywordCase === 'upper') { raw.sqlKeywordCase = 'preserve'; changed = true }
   if (changed) { try { localStorage.setItem('dbmind_editor', JSON.stringify(raw)) } catch { /* 忽略写失败 */ } }
   return raw
 }
@@ -115,64 +111,22 @@ export const getEditorSettings = () => {
 // （vue-monaco-editor 的 wrapper 会 watch options 并调 `editor.updateOptions`）。
 // 之前各组件在 setup 时各自快照一次，改完设置对已打开的编辑器毫无作用。
 export const editorSettingsLive = ref(getEditorSettings())
-export const reloadEditorSettings = () => { editorSettingsLive.value = getEditorSettings() }
+export const reloadEditorSettings = () => { refreshLive(editorSettingsLive, getEditorSettings()) }
+
+// 共享快照**原地刷新**：保持对象身份，只逐键改值。
+// 真机踩过 —— 整体替换 `.value` 会让 v-memo 网格在启动水合后的重补丁里拿到
+// 空容器，报「insertBefore/minimap of null」把工作区打挂；原地改走细粒度依赖，
+// 只有真正读到变更键的组件会重渲染。
+const refreshLive = (live, next) => {
+  const cur = live.value
+  if (!cur || typeof cur !== 'object') { live.value = next; return }
+  Object.keys(next).forEach((k) => { cur[k] = next[k] })
+}
 
 export const getQuerySettings = () => ({ ...queryDefaults, ...readJSON('dbmind_query') })
 export const getNotifySettings = () => ({ ...notifyDefaults, ...readJSON('dbmind_notify') })
 
-// ---------- UI 设置持久化（真身在 dbmind.db 的 app_settings 表） ----------
-//
-// localStorage 从「真身」降级为**同步缓存**：改动先落本地（同步、界面即时生效），
-// 防抖 600ms 推后端；启动时 hydrateUIFromBackend() 从后端水合覆盖本地 ——
-// 换浏览器 / 清站点数据 / 换机器都不丢设置。
-// 后端还没有对应键时（首次升级），把本地现有值推上去，老配置不丢。
-//
-// 动态 import 引 api：本模块被 i18n / theme / shortcuts 静态引用，
-// 静态引 api 会形成 i18n → settings → api → i18n 循环。
-const UI_BACKEND_KEYS = {
-  'ui.editor': 'dbmind_editor',
-  'ui.query': 'dbmind_query',
-  'ui.notify': 'dbmind_notify',
-  'ui.theme': 'dbmind_theme',
-  'ui.locale': 'dbmind_locale',
-  'ui.shortcuts': 'dbmind_shortcuts'
-}
-const pushTimers = {}
-/** 落一层 UI 设置：`raw` 是**原样**写进 localStorage 的字符串（调用方自己序列化）。 */
-export const persistUI = (lsKey, raw) => {
-  try { localStorage.setItem(lsKey, raw) } catch { /* 隐私模式等写失败忽略 */ }
-  const bk = Object.keys(UI_BACKEND_KEYS).find((k) => UI_BACKEND_KEYS[k] === lsKey)
-  if (!bk) return
-  clearTimeout(pushTimers[bk])
-  pushTimers[bk] = setTimeout(() => {
-    import('../api')
-      .then(({ putSetting }) => putSetting(bk, raw).catch(() => {}))
-      .catch(() => {})
-  }, 600)
-}
-/** 启动时调用：后端有值 → 覆盖本地缓存；后端没有 → 把本地值推上去（首次升级迁移）。 */
-export const hydrateUIFromBackend = async () => {
-  let s = null
-  try {
-    const api = await import('../api')
-    s = await api.getSettings()
-  } catch { return } // 后端不可达：沿用本地缓存，改动时再同步
-  for (const [bk, lsKey] of Object.entries(UI_BACKEND_KEYS)) {
-    const raw = s?.[bk]
-    if (typeof raw === 'string' && raw) {
-      try { if (localStorage.getItem(lsKey) !== raw) localStorage.setItem(lsKey, raw) } catch { /* 忽略 */ }
-    } else {
-      const cur = localStorage.getItem(lsKey)
-      if (cur) {
-        import('../api')
-          .then(({ putSetting }) => putSetting(bk, cur).catch(() => {}))
-          .catch(() => {})
-      }
-    }
-  }
-}
-
 // 查询设置的**共享响应式快照**：NULL 显示样式在网格渲染里读这份 ref，
 // 设置页改完（配合网格 v-memo 的依赖项）无需重跑查询即可生效。
 export const querySettingsLive = ref(getQuerySettings())
-export const reloadQuerySettings = () => { querySettingsLive.value = getQuerySettings() }
+export const reloadQuerySettings = () => { refreshLive(querySettingsLive, getQuerySettings()) }

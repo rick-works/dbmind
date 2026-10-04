@@ -864,7 +864,7 @@ import {
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern } from '../../utils/sqlFormat'
 import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections } from '../../api'
-import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
+import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings } from '../../utils/settings'
 // 「刷新结构缓存」要连**前端那份** localStorage 缓存一起清（内核缓存清了它还在也会显示旧清单）
 import { clearSchemaCache as clearLocalSchemaCache } from '../../utils/schemaCache'
 import DbLogo from '../../common/DbLogo.vue'
@@ -1182,7 +1182,7 @@ const loadEditor = () => {
 // **改完即生效**：用户最常踩的坑就是切了开关没点保存，回去看编辑器"没反应"。
 // 深度监听静默落盘 + 热更新（落盘与刷新只在这一处做），「保存」按钮仅作显式确认。
 watch(editorForm, () => {
-  persistUI('dbmind_editor', JSON.stringify(editorForm.value))
+  localStorage.setItem('dbmind_editor', JSON.stringify(editorForm.value))
   reloadEditorSettings()
 }, { deep: true })
 const saveEditor = () => {
@@ -1272,7 +1272,7 @@ const loadQuery = async () => {
 }
 // 「安全确认」迁到安全页签后，勾选也必须**即时持久化**（不能要求用户去查询页签点保存）
 watch(queryForm, () => {
-persistUI('dbmind_query', JSON.stringify({ pageSize: queryForm.value.pageSize, confirmDanger: queryForm.value.confirmDanger, nullStyle: queryForm.value.nullStyle }))
+localStorage.setItem('dbmind_query', JSON.stringify({ pageSize: queryForm.value.pageSize, confirmDanger: queryForm.value.confirmDanger, nullStyle: queryForm.value.nullStyle }))
 reloadQuerySettings()
 }, { deep: true })
 const saveQuery = async () => {
@@ -1579,12 +1579,12 @@ const loadNotify = () => {
   } catch { notifyForm.value = { ...notifyDefaults } }
 }
 const saveNotify = () => {
-  persistUI('dbmind_notify', JSON.stringify(notifyForm.value))
+  localStorage.setItem('dbmind_notify', JSON.stringify(notifyForm.value))
   ElMessage.success(t('settings.notify.msgSaved'))
 }
 // 同编辑器：改完即存（main.js 的弹层包装每次弹出实时读），不依赖保存按钮
 watch(notifyForm, () => {
-  persistUI('dbmind_notify', JSON.stringify(notifyForm.value))
+  localStorage.setItem('dbmind_notify', JSON.stringify(notifyForm.value))
 }, { deep: true })
 
 // ===== 缓存（后端列体量，勾选清理） =====

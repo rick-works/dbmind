@@ -1,8 +1,6 @@
 // ===== 可自定义快捷键 =====
-// 存储：真身 dbmind.db（键 ui.shortcuts），localStorage['dbmind_shortcuts'] 是同步缓存
-// 结构 { [actionId]: 'Ctrl+Enter' | '' }
+// 存储：localStorage['dbmind_shortcuts']，结构 { [actionId]: 'Ctrl+Enter' | '' }
 // '' 表示未绑定。所有键以 '+'-joined token 保存，如 'Shift+Alt+F'、'F5'。
-import { persistUI } from './settings'
 
 export const SHORTCUTS_STORAGE = 'dbmind_shortcuts'
 export const SHORTCUTS_EVT = '上游-shortcuts-changed'
@@ -70,8 +68,9 @@ export function loadShortcuts() {
 
 export function saveShortcuts(map) {
   const full = build(map)
-  // 真身进 dbmind.db（persistUI：本地缓存 + 防抖推后端），换浏览器/清缓存不丢
-  persistUI(SHORTCUTS_STORAGE, JSON.stringify(full))
+  try {
+    localStorage.setItem(SHORTCUTS_STORAGE, JSON.stringify(full))
+  } catch { /* ignore */ }
   cache = full
   window.dispatchEvent(new Event(SHORTCUTS_EVT))
   return full

@@ -13,7 +13,6 @@
 // 3. **改了就全局刷新**：`t()` 读的是响应式 `locale`，模板里用 `$t('x')` 会正常
 //    建立依赖，切换语言即时生效，不需要刷新页面。
 import { ref } from 'vue'
-import { persistUI } from './settings'
 import zhCN from '../locales/zh-CN'
 import enUS from '../locales/en-US'
 
@@ -85,12 +84,12 @@ export const te = (key) => {
     Object.prototype.hasOwnProperty.call(DICTS[FALLBACK] || {}, k)
 }
 
-/** 切换语言：持久化（后端真身 + 本地缓存）、同步 <html lang>、更新标题，其余交给响应式。 */
+/** 切换语言：写 localStorage、同步 <html lang>、更新标题，其余交给响应式。 */
 export const setLocale = (code) => {
   const next = normalize(code) || FALLBACK
   if (next === locale.value) return
   locale.value = next
-  persistUI(STORAGE_KEY, next)
+  try { localStorage.setItem(STORAGE_KEY, next) } catch { /* 隐私模式：忽略 */ }
   applyDocumentLang()
   applyDocumentTitle()
 }
@@ -107,13 +106,6 @@ const applyDocumentTitle = () => {
 export const initI18n = () => {
   applyDocumentLang()
   applyDocumentTitle()
-}
-
-/** 启动水合后重读语言：locale ref 在模块导入时就初始化了，那时后端的值还没到。 */
-export const refreshLocaleFromStorage = () => {
-  const stored = readStored()
-  if (stored && stored !== locale.value) setLocale(stored)
-  else initI18n()
 }
 
 /** `<script setup>` 里用：`const { t } = useI18n()`。 */

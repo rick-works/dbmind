@@ -1,7 +1,6 @@
-// 主题设置：真身存 dbmind.db（persistUI），localStorage 只是同步缓存
+// 主题设置：localStorage 持久化
 // mode: system=跟随系统 | light=浅色 | dark=深色（默认跟随系统）
 // 运行时以 <html data-theme="light|dark"> 驱动全局 CSS 变量，另做 window resize/matchMedia 监听。
-import { persistUI } from './settings'
 
 export const themeKey = 'dbmind_theme'
 export const themeDefaults = { mode: 'system' }
@@ -16,8 +15,7 @@ const readJSON = (key) => {
 export const getThemeSettings = () => ({ ...themeDefaults, ...readJSON(themeKey) })
 export const saveThemeSettings = (patch) => {
   const next = { ...getThemeSettings(), ...patch }
-  // 真身进 dbmind.db（persistUI：本地缓存 + 防抖推后端），换浏览器/清缓存不丢
-  persistUI(themeKey, JSON.stringify(next))
+  try { localStorage.setItem(themeKey, JSON.stringify(next)) } catch { /* 忽略写失败 */ }
   return next
 }
 
