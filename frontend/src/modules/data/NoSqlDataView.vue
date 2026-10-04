@@ -1592,6 +1592,9 @@ onBeforeUnmount(() => {
 
 /* ===== 原生表格 —— 与表预览（TableDataView）保持一致 ===== */
 .data-table-wrap { flex: 1; min-height: 0; overflow: auto; contain: layout paint; }
+/* 容器带 tabindex=0（键盘导航要接焦点），点击单元格后 JS 会 focus 它 ——
+   必须压掉浏览器默认的黑色 focus 轮廓，否则整块滚动区外围出现两道黑线 */
+.data-table-wrap:focus { outline: none; }
 .data-table-wrap.col-resizing, .data-table-wrap.col-resizing * { cursor: col-resize !important; user-select: none; }
 .data-table { position: relative; width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
 /* 吸顶表头：top: -1px 盖住滚动时折叠上边框留下的 1px 缝 */
