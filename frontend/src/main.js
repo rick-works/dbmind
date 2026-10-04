@@ -75,9 +75,10 @@ import {
 import App from './App.vue'
 import router from './router'
 import './styles/index.css'
-import { getNotifySettings } from './utils/settings'
+import { getNotifySettings, hydrateUIFromBackend, reloadEditorSettings, reloadQuerySettings } from './utils/settings'
 import { initTheme } from './utils/theme'
-import { t, initI18n } from './utils/i18n'
+import { t, initI18n, refreshLocaleFromStorage } from './utils/i18n'
+import { resetShortcutCache } from './utils/shortcuts'
 
 // 清理历史遗留的浏览器存储键。
 //
@@ -214,10 +215,20 @@ ElMessage.info = (msg, options) => {
   mergeMsgOpts(origInfo, msg, options, { duration: 2500, grouping: true })
 }
 // 应用持久化的主题模式（浅色 / 深色 / 跟随系统），并监听系统外观变化
-initTheme()
-// 应用持久化的界面语言：落 <html lang> 与窗口标题。
-// 顺序在 mount 之前 —— 免得首帧先用中文标题闪一下再被改掉。
-initI18n()
+// —— 全部 UI 设置（编辑器/格式化/查询/通知/主题/语言/快捷键）的真身在 dbmind.db，
+// 启动先从后端水合到本地缓存，再应用主题/语言、刷新共享快照，最后挂载：
+// 组件 setup 里读到的就是后端的值；后端不可达时沿用本地缓存，绝不阻塞启动。
+; (async () => {
+  await hydrateUIFromBackend()
+  reloadEditorSettings()
+  reloadQuerySettings()
+  resetShortcutCache()
+  // 应用持久化的主题模式，并监听系统外观变化
+  initTheme()
+  // 应用持久化的界面语言：落 <html lang> 与窗口标题（locale ref 早于水合初始化，需重读）
+  refreshLocaleFromStorage()
+  app.mount('#app')
+})()
 // 「AI 服务未配置」这类请求错误：界面上已有正式引导（弹窗/消息里的「前往设置」链接），
 // 但个别自动预取请求的底层 promise 残堆仍会以 uncaught 打进控制台刷屏 ——
 // 这里把它降级成 debug；只匹配这一类已知错误，其它未捕获异常照常原样打印。

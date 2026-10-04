@@ -120,6 +120,58 @@ export const reloadEditorSettings = () => { editorSettingsLive.value = getEditor
 export const getQuerySettings = () => ({ ...queryDefaults, ...readJSON('dbmind_query') })
 export const getNotifySettings = () => ({ ...notifyDefaults, ...readJSON('dbmind_notify') })
 
+// ---------- UI 设置持久化（真身在 dbmind.db 的 app_settings 表） ----------
+//
+// localStorage 从「真身」降级为**同步缓存**：改动先落本地（同步、界面即时生效），
+// 防抖 600ms 推后端；启动时 hydrateUIFromBackend() 从后端水合覆盖本地 ——
+// 换浏览器 / 清站点数据 / 换机器都不丢设置。
+// 后端还没有对应键时（首次升级），把本地现有值推上去，老配置不丢。
+//
+// 动态 import 引 api：本模块被 i18n / theme / shortcuts 静态引用，
+// 静态引 api 会形成 i18n → settings → api → i18n 循环。
+const UI_BACKEND_KEYS = {
+  'ui.editor': 'dbmind_editor',
+  'ui.query': 'dbmind_query',
+  'ui.notify': 'dbmind_notify',
+  'ui.theme': 'dbmind_theme',
+  'ui.locale': 'dbmind_locale',
+  'ui.shortcuts': 'dbmind_shortcuts'
+}
+const pushTimers = {}
+/** 落一层 UI 设置：`raw` 是**原样**写进 localStorage 的字符串（调用方自己序列化）。 */
+export const persistUI = (lsKey, raw) => {
+  try { localStorage.setItem(lsKey, raw) } catch { /* 隐私模式等写失败忽略 */ }
+  const bk = Object.keys(UI_BACKEND_KEYS).find((k) => UI_BACKEND_KEYS[k] === lsKey)
+  if (!bk) return
+  clearTimeout(pushTimers[bk])
+  pushTimers[bk] = setTimeout(() => {
+    import('../api')
+      .then(({ putSetting }) => putSetting(bk, raw).catch(() => {}))
+      .catch(() => {})
+  }, 600)
+}
+/** 启动时调用：后端有值 → 覆盖本地缓存；后端没有 → 把本地值推上去（首次升级迁移）。 */
+export const hydrateUIFromBackend = async () => {
+  let s = null
+  try {
+    const api = await import('../api')
+    s = await api.getSettings()
+  } catch { return } // 后端不可达：沿用本地缓存，改动时再同步
+  for (const [bk, lsKey] of Object.entries(UI_BACKEND_KEYS)) {
+    const raw = s?.[bk]
+    if (typeof raw === 'string' && raw) {
+      try { if (localStorage.getItem(lsKey) !== raw) localStorage.setItem(lsKey, raw) } catch { /* 忽略 */ }
+    } else {
+      const cur = localStorage.getItem(lsKey)
+      if (cur) {
+        import('../api')
+          .then(({ putSetting }) => putSetting(bk, cur).catch(() => {}))
+          .catch(() => {})
+      }
+    }
+  }
+}
+
 // 查询设置的**共享响应式快照**：NULL 显示样式在网格渲染里读这份 ref，
 // 设置页改完（配合网格 v-memo 的依赖项）无需重跑查询即可生效。
 export const querySettingsLive = ref(getQuerySettings())
