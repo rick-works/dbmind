@@ -79,6 +79,22 @@
             </div>
           </div>
           <div class="form-tip log-tip">{{ $t('settings.language.logLevelTip') }}</div>
+
+          <!-- 顶栏菜单：选择顶栏显示哪些功能入口、调整顺序（持久化到 dbmind.db） -->
+          <div class="panel-title">{{ $t('settings.topMenu.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.topMenu.desc') }}</div>
+          <div class="topmenu-editor">
+            <div class="topmenu-row" v-for="(mi, i) in topMenuAll" :key="mi.id">
+              <el-checkbox :model-value="!topMenuCfg.hidden.includes(mi.id)" @change="toggleTopMenu(mi.id)" />
+              <span class="topmenu-label">
+                <el-icon class="topmenu-ic"><component :is="mi.icon" /></el-icon>{{ mi.label() }}
+              </span>
+              <span class="topmenu-ops">
+                <el-button size="small" text :disabled="i === 0" @click="moveTopMenu(i, -1)"><el-icon><ArrowUp /></el-icon></el-button>
+                <el-button size="small" text :disabled="i === topMenuAll.length - 1" @click="moveTopMenu(i, 1)"><el-icon><ArrowDown /></el-icon></el-button>
+              </span>
+            </div>
+          </div>
         </div>
 
         <!-- 0.5 安全与会话（后端 app_settings：改安全开关与会话上限都会即时生效） -->
@@ -857,8 +873,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   MagicStick, Connection, Brush,
   FolderOpened, EditPen, DataLine, Download, Bell, Operation, Monitor, Plus, Delete,
-  CircleCheck, Timer, Moon, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key
+  CircleCheck, Timer, Moon, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
+  ArrowUp, ArrowDown
 } from '@element-plus/icons-vue'
+import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/topMenu'
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern } from '../../utils/sqlFormat'
@@ -1766,6 +1784,23 @@ watch(visible, (v) => {
    全部占满一行才齐整（el-form-item 的内容区默认不换行，这里放开） */
 .ai-form :deep(.el-form-item__content) { flex-wrap: wrap; }
 .form-tip { width: 100%; font-size: 12px; color: var(--dc-text-weak); margin-top: 4px; line-height: 1.6; }
+/* 顶栏菜单配置（通用页签） */
+.topmenu-editor {
+  border: 1px solid var(--dc-border, #dcdfe6); border-radius: 8px;
+  padding: 6px; max-width: 460px; background: var(--dc-bg-soft, transparent);
+}
+.topmenu-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 6px; border-radius: 6px;
+}
+.topmenu-row:hover { background: var(--dc-bg-hover, rgba(125, 125, 125, .08)); }
+.topmenu-label {
+  flex: 1; font-size: 13px; color: var(--dc-text); display: inline-flex; align-items: center;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topmenu-ic { margin-right: 4px; color: var(--dc-text-dim); }
+.topmenu-ops { display: inline-flex; }
+.topmenu-ops .el-button + .el-button { margin-left: 2px; }
 /* 缓存清单：一行一项，名称靠左、体量靠右 */
 .cache-list { max-width: 560px; border: 1px solid var(--dc-border); border-radius: 8px; padding: 4px 0; }
 .cache-item { display: flex; align-items: center; gap: 10px; padding: 9px 14px; cursor: pointer; }
