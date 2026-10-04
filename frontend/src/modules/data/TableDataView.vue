@@ -1963,7 +1963,11 @@ const loadSavedColWidths = () => {
     for (const [col, w] of Object.entries(saved)) {
       const n = Number(w)
       if (!Number.isFinite(n) || n <= 0) continue
-      next[col] = Math.max(MIN_COL_WIDTH, Math.min(800, Math.round(n)))
+      // 自愈下限：旧存档可能是在旧表头预算下保存的窄宽度，直接用会让表头截断
+      // （真机：表头全是 ord…/sale…，右侧却留白）—— 至少抬到「表头完整显示」所需宽度
+      //（canvas 按粗体实测 + 非文字预算）。表头完整优先于"记住更窄的手动宽度"。
+      const headerMin = Math.ceil(measureTextWidth(col, true) + headerExtraOf(col))
+      next[col] = Math.max(MIN_COL_WIDTH, Math.min(800, Math.round(Math.max(n, headerMin))))
       // 存过的算"用户手动列"：自动测量不再覆盖它（与拖拽后的行为一致）
       manual.add(col)
     }
