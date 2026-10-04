@@ -245,7 +245,7 @@
                     @click="onResultHeaderClickOrSelect(c.name, $event)"
                     @contextmenu.prevent.stop="onResultHeaderContextMenu($event, c.name)"
                     @dblclick="onResultHeaderDblClick($event, c.idx)">
-                  <span v-if="resultTypeOf(c.idx)" class="th-type-ic" :class="resultTypeClass(c.idx)" :title="resultTypeOf(c.idx)">
+                  <span class="th-type-ic" :class="resultTypeClass(c.idx)" :title="resultTypeOf(c.idx) || resultKindOf(c.idx)">
                     <el-icon><component :is="resultTypeIcon(c.idx)" /></el-icon>
                   </span>{{ c.name }}<span class="th-sort" :class="{ 'is-sorted': resultSortColumn === c.name }"
                         :title="resultSortColumn === c.name ? (resultSortDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
@@ -530,27 +530,33 @@ const toggleResultColVisible = (name) => {
 }
 const showAllResultCols = () => { hiddenResultCols.value = new Set() }
 
-// 结果表头字段类型图标（类型来自后端 columnTypes，取不到则不显示）
+// 结果表头字段类型（类型来自后端 columnTypes；**查询端点经常不带** ——
+// 此时按首个非空值推断，保证 SQL 编辑器结果与表预览/NoSQL 的表头图标一致）
 const resultTypeOf = (ci) => (result.value?.columnTypes || [])[ci] || ''
+const resultKindOf = (ci) => {
+  const t = resultTypeOf(ci).toLowerCase()
+  if (/bool/.test(t)) return 'bool'
+  if (/json/.test(t)) return 'json'
+  if (/(blob|binary|bytea|image|raw|byte)/.test(t)) return 'blob'
+  if (/^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money|serial)/.test(t)) return 'num'
+  if (/^(date|time|datetime|timestamp|year)/.test(t)) return 'date'
+  if (t) return 'text'
+  const col = (result.value?.columns || [])[ci]
+  for (const r of (result.value?.rows || [])) {
+    const v = r ? r[col] : null
+    if (v === null || v === undefined || v === '') continue
+    if (typeof v === 'number') return 'num'
+    if (typeof v === 'object') return 'json'
+    if (/^\d{4}-\d{2}-\d{2}/.test(String(v))) return 'date'
+    return 'text'
+  }
+  return 'text'
+}
 // 类型族 → 徽章配色类（与 resultTypeIcon 同一套判定；全局 CSS 按类着色）
-const resultTypeClass = (ci) => {
-  const t = resultTypeOf(ci).toLowerCase()
-  if (/bool/.test(t)) return 'th-t-bool'
-  if (/json/.test(t)) return 'th-t-json'
-  if (/(blob|binary|bytea|image|raw|byte)/.test(t)) return 'th-t-blob'
-  if (/^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money|serial)/.test(t)) return 'th-t-num'
-  if (/^(date|time|datetime|timestamp|year)/.test(t)) return 'th-t-date'
-  return 'th-t-text'
-}
-const resultTypeIcon = (ci) => {
-  const t = resultTypeOf(ci).toLowerCase()
-  if (/bool/.test(t)) return SwitchIcon
-  if (/json/.test(t)) return Tickets
-  if (/(blob|binary|bytea|image|raw|byte)/.test(t)) return Document
-  if (/^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money)/.test(t)) return Histogram
-  if (/^(date|time|datetime|timestamp|year)/.test(t)) return Calendar
-  return Document
-}
+const KIND_CLASS = { bool: 'th-t-bool', json: 'th-t-json', blob: 'th-t-blob', num: 'th-t-num', date: 'th-t-date', text: 'th-t-text' }
+const KIND_ICON = { bool: SwitchIcon, json: Tickets, blob: Document, num: Histogram, date: Calendar, text: Document }
+const resultTypeClass = (ci) => KIND_CLASS[resultKindOf(ci)] || 'th-t-text'
+const resultTypeIcon = (ci) => KIND_ICON[resultKindOf(ci)] || Grid
 // 多段 SQL 结果：一次执行返回多条结果集时，以「结果1/结果2…」tab 逐条展示
 const resultItems = ref([]) // [{ label, res }]
 const activeResultIdx = ref(0)
