@@ -499,7 +499,7 @@ import {
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
   Sort, SortUp, SortDown
 } from '@element-plus/icons-vue'
-import { executeSql, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listConnections, listColumns, getColumnComments, getAiConfig } from '../../api'
+import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listConnections, listColumns, getColumnComments, getAiConfig } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, byType } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
 
@@ -619,7 +619,36 @@ const loadedRows = computed(() => result.value?.rows?.length || 0)
 //
 // 未知时退回「本页行数」只是为了给分页器一个能算页码的数；模板那边会把自带的
 // 「共 N 条」去掉，免得把本页行数当成总数展示。
-const pageTotal = computed(() => displayTotal.value !== null ? displayTotal.value : loadedRows.value)
+const pageTotal = computed(() => {
+  if (displayTotal.value !== null) return displayTotal.value
+  // 总数未知：给分页器一个「刚好能翻下一页」的虚拟值 —— 当前页装满就多给 1 行的余量，
+  // 没装满说明已是末页。真实总数由异步计数回填后覆盖（见 fetchCountFor）。
+  const base = (currentPage.value - 1) * pageSize.value + loadedRows.value
+  return loadedRows.value >= pageSize.value ? base + 1 : base
+})
+
+// ========== 总数异步补齐 ==========
+// 主执行接口已把 COUNT 移出主链路（大 JOIN 的计数三层兜底串行能拖百秒级，
+// 真机：数据 1s 就绪却等计数等了 163s+）：数据先回（totalCount=-1 表示未知），
+// 这里再拿原句单独发计数请求，回来后回填分页器。后端带 10s 总预算，算不出保持 -1。
+// seq 守卫：期间又跑了新查询/翻页的话，过期的计数结果直接丢弃。
+let countSeq = 0
+const fetchCountFor = (res, sqlText) => {
+  if (!res || !res.success) return
+  if (typeof res.totalCount === 'number' && res.totalCount >= 0) return
+  if (!sqlText || !(res.rows && res.rows.length)) return
+  const seq = ++countSeq
+  const connId = selectedConnId.value || props.conn.id
+  const db = selectedSchema.value
+    ? `${selectedDatabase.value}.${selectedSchema.value}`
+    : selectedDatabase.value || undefined
+  executeSqlCount(connId, sqlText, db, (res.columns || []).length)
+    .then((r) => {
+      if (seq !== countSeq) return
+      res.totalCount = r && typeof r.totalCount === 'number' ? r.totalCount : -1
+    })
+    .catch(() => {})
+}
 
 // ========== 结果表：选中区汇总（底栏状态区）==========
 // 优先级：单元格区域 > 选中行 > 选中列（同一时刻只会存在一块选区，见 focusResult* 那几个函数）。
@@ -701,6 +730,8 @@ const loadSegment = async (item, p, size) => {
     item.res = res
     item.page = p
     result.value = res
+    // 总数未知时异步补齐（后端已不同步 COUNT，见 fetchCountFor）
+    fetchCountFor(res, item.segmentSql)
   } catch (e) {
     if (!cancelRequested.value) ElMessage.error(e?.message || t('common.unknownError'))
   } finally {
@@ -2932,6 +2963,8 @@ const showBatchResult = (b) => {
   }))
   activeResultIdx.value = 0
   result.value = results[0]
+  // 首个 tab 若总数未知，异步补齐（后端批量路径也不再同步 COUNT）
+  fetchCountFor(results[0], results[0].sql || '')
   // 编辑器文本含多段但实际仅拆出单段（例程块 / 注释等）：按单结果做收尾提示
   if (results.length === 1) {
     const only = results[0]
@@ -2951,6 +2984,8 @@ const selectResultTab = (i) => {
   if (i === activeResultIdx.value && result.value === item.res) return
   activeResultIdx.value = i
   result.value = item.res
+  // 切到的 tab 若总数未知，异步补齐（只数当前展示的段，不并发数全部）
+  fetchCountFor(item.res, item.segmentSql || item.res?.sql || '')
   // 不同结果集独立分页：切换 tab 恢复到该段自己的页码
   currentPage.value = item.page || 1
   clearResultRowSelection()
@@ -3045,6 +3080,8 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         const res = await executeSql(connId, execSql, db, execId.value, cancelController.signal, page, size)
         if (cancelRequested.value) { setResultCancelled(); return }
         showSingleResult(res)
+        // 总数未知时异步补齐（后端已不同步 COUNT，见 fetchCountFor）
+        fetchCountFor(res, execSql)
         recordHistory(execSql, db, res.executeTime || 0)
         loadResColumnComments(execSql, connId, db)
       }

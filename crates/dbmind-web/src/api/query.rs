@@ -177,35 +177,64 @@ pub async fn execute(
     Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
         Ok(result) => {
             let mut json = shape::query_result_json(&result);
-            // 总数：只有「被截断」时才需要真去统计 —— 没截断说明返回的就是全部，行数本身就是总数。
-            // 统计失败或语句不适合统计（带 order by 等）就当未知，保持 -1：
-            // 界面会退化成「已返回 N 行」，绝不瞎报一个数。
-            // 只要翻过页就要统计：最后一页往往不足一页（truncated=false），
-            // 那时若拿本页行数当总数，分页器会突然从 1026 页缩成 1 页。
-            if result.truncated || page > 1 {
-                if let Some(total) =
-                    crate::api::export::count_rows(&state, &id, &database, &bare, result.columns.len())
-                        .await
-                {
-                    if let Some(object) = json.as_object_mut() {
-                        object.insert("totalCount".to_string(), Value::from(total));
-                        // hasMore 是"这一页之后还有没有"，不是"本页有没有装满"：
-                        // 末页恰好装满时后者会误报"还有"。有总数就能算准。
-                        object.insert(
-                            "hasMore".to_string(),
-                            {
-                                // 先绑到变量：直接写 x as u64 < y 会被当成泛型参数（u64<…>）而编译失败
-                                let limit = page * size as u64;
-                                Value::from(total >= 0 && limit < total as u64)
-                            },
-                        );
-                    }
+            // 总数统计**已移出主链路**：以前这里被截断/翻页时会同步跑 `count_rows`
+            //（三层兜底串行，每层最多 120s）—— 大 JOIN 的 COUNT 能把整个查询响应
+            // 卡到百秒级（真机：数据 1s 就绪，却等 COUNT 等了 163s+），其他工具
+            // 只发 LIMIT 当然快。现在数据先回，前端拿到 totalCount=-1 后再异步调
+            // `/query/{id}/count` 补总数（那边有 10s 总预算，算不出就放弃）。
+            //
+            // 这里只剩一处口径修正：第 2 页起 shape 会把「本页行数」当 totalCount
+            //（!truncated 时 rowCount 即 totalCount），末页不足一页时是错的 —— 置 -1
+            // 表示未知，等异步计数回填。
+            if page > 1 {
+                if let Some(object) = json.as_object_mut() {
+                    object.insert("totalCount".to_string(), Value::from(-1));
                 }
             }
             json
         }
         Err(err) => shape::query_failure_json(&err.message, 0),
     }))
+}
+
+/// `POST /api/{m}/query/{id}/count` —— 只算总数，不取数。
+///
+/// 给前端的**异步计数**用：主执行接口不再同步 COUNT（见 `execute` 里的注释），
+/// 数据回显后前端拿原句来这里补总数。带 **10s 总预算**：`count_rows` 三层兜底
+/// 是串行的（派生表 COUNT → CTE COUNT → 二分探测），放任不管的话一条大 JOIN
+/// 能把三层都拖满 —— 反正 10 秒算不出的总数，用户多半也不愿意等。
+pub async fn count(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> XResult<Json<Value>> {
+    let sql = body
+        .get("sql")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let database = body
+        .get("database")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    // 列数由前端从刚拿到的结果里带来，省掉 count_rows 内部「探一次列数」的往返；
+    // 没带就传 0（内部会自己探，代价是原句 max_rows=1 跑一遍，很小）。
+    let ncols = body.get("ncols").and_then(Value::as_u64).unwrap_or(0) as usize;
+    if sql.trim().is_empty() {
+        return Ok(Json(json!({ "success": false, "totalCount": -1 })));
+    }
+    // 与主执行同一纪律：统计也要「去掉末尾分号」的原句（带分号进派生表是语法错误）
+    let bare = sql.trim().trim_end_matches(';').trim().to_string();
+    let total = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        crate::api::export::count_rows(&state, &id, &database, &bare, ncols),
+    )
+    .await
+    .ok() // 超时 → None
+    .flatten() // 内部失败 → None
+    .unwrap_or(-1);
+    Ok(Json(json!({ "success": true, "totalCount": total })))
 }
 
 /// 看起来是不是「取数」语句 —— 只有这类才适合套分页壳。
@@ -311,27 +340,9 @@ pub async fn execute_batch(
         match outcome {
             Ok(result) => {
                 let mut json = shape::query_result_json(&result);
-                // 与单段执行**同一套**总数语义：被截断时真去 count，每段结果都有
-                // 准确的总数/总页数可用；统计失败保持 -1，绝不瞎报。
-                if result.truncated && looks_like_query(&bare) {
-                    if let Some(total) = crate::api::export::count_rows(
-                        &state,
-                        &id,
-                        database,
-                        &bare,
-                        result.columns.len(),
-                    )
-                    .await
-                    {
-                        if let Some(o) = json.as_object_mut() {
-                            o.insert("totalCount".to_string(), Value::from(total));
-                            o.insert(
-                                "hasMore".to_string(),
-                                Value::from(total > (max_rows as i64)),
-                            );
-                        }
-                    }
-                }
+                // 与单段执行同一口径：**不再同步 COUNT**（见 `execute` 里的注释 ——
+                // 大 JOIN 的计数能拖百秒级，批量逐段同步数会把每段都卡一遍）。
+                // 截断时 shape 给 -1，前端对当前展示的 tab 异步调 `/count` 补总数。
                 // 段落原文一并返回：翻到某段的第 N 页时，前端**只重跑这一段**
                 // （整批重跑会把写入类语句再执行一遍，绝不能干）
                 if let Some(o) = json.as_object_mut() {

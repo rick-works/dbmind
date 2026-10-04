@@ -192,6 +192,7 @@ fn relational_module(module: &str) -> Router<AppState> {
         .route(&p("/{id}/rename-object"), post(meta::rename_object))
         .route(&p("/query/{id}"), post(query::execute))
         .route(&p("/query/{id}/batch"), post(query::execute_batch))
+        .route(&p("/query/{id}/count"), post(query::count))
         .route(&p("/query/cancel/{executionId}"), post(query::cancel))
         .route(&p("/query/run-file-task/{id}"), post(query::run_file_start))
         .route(&p("/query/run-file-task/status/{taskId}"), get(query::run_file_status))

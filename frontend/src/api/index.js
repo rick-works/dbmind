@@ -282,6 +282,13 @@ export const executeSql = async (id, sql, database, executionId, signal, page, s
     return r.data
   })
 }
+// 只算总数，不取数（异步补分页器用）：主执行接口已把 COUNT 移出主链路 ——
+// 大 JOIN 的计数能拖百秒级，不该卡住数据回显。后端带 10s 总预算，算不出返回 -1。
+// ncols 传结果集列数，省掉后端探测列数的一次往返。
+export const executeSqlCount = async (id, sql, database, ncols, signal) => {
+  const b = await baseOf(id)
+  return http.post(`${b}/query/${id}/count`, { sql, database, ncols }, { signal }).then(r => r.data)
+}
 // 多段 SQL 批量执行：同一连接内按分号顺序执行每段，每段独立返回一个 QueryResult
 // （编辑器一次执行多条查询时，结果以「结果1/结果2…」tab 逐条展示）
 export const executeSqlBatch = async (id, sql, database, executionId, signal) => {
