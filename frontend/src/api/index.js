@@ -223,6 +223,9 @@ export const listTables = async (id, database) => { const b = await baseOf(id); 
 // 批量真实行数（SELECT COUNT(*)）：TABLE_ROWS 是估算值（Doris/ClickHouse 等常为 0），展开库后异步回填树节点行数
 export const getTableCounts = async (id, database, tables) => { const b = await baseOf(id); return http.get(`${b}/${id}/table-count`, { params: { database, tables } }).then(r => r.data) }
 export const listColumns = async (id, database, table) => { const b = await baseOf(id); return http.get(`${b}/${id}/columns`, { params: { database, table } }).then(r => r.data) }
+// 结果集的列注释（列名小写 → 注释）：SQL 编辑器单表查询在表头第二行显示字段注释；
+// 各方言的取法由后端 dialect.table_comments 出（MySQL/PG/MSSQL/Oracle/DM/CK…）
+export const getColumnComments = async (id, database, table) => { const b = await baseOf(id); return http.get(`${b}/${id}/column-comments`, { params: { database, table } }).then(r => r.data) }
 // 库内对象搜索（服务端批量）：一次请求返回表名命中 + 列名命中，替代「逐张表请求 columns」
 export const searchObjects = async (id, database, keyword) => { const b = await baseOf(id); return http.get(`${b}/${id}/search-objects`, { params: { database, keyword } }).then(r => r.data) }
 export const getTableData = async (id, params, signal) => { const b = await baseOf(id); return http.get(`${b}/${id}/data`, { params, signal }).then(r => r.data) }

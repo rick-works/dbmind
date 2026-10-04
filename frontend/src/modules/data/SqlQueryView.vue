@@ -247,9 +247,17 @@
                     @click="onResultHeaderClickOrSelect(c.name, $event)"
                     @contextmenu.prevent.stop="onResultHeaderContextMenu($event, c.name)"
                     @dblclick="onResultHeaderDblClick($event, c.idx)">
-                  <span class="th-type-ic" :class="resultTypeClass(c.idx)" :title="resultTypeOf(c.idx) || resultKindOf(c.idx)">
-                    <el-icon><component :is="resultTypeIcon(c.idx)" /></el-icon>
-                  </span>{{ c.name }}<span class="th-sort" :class="{ 'is-sorted': resultSortColumn === c.name }"
+                  <span class="th-text">
+                    <span class="th-line1">
+                      <span class="th-type-ic" :class="resultTypeClass(c.idx)" :title="resultTypeOf(c.idx) || resultKindOf(c.idx)">
+                        <el-icon><component :is="resultTypeIcon(c.idx)" /></el-icon>
+                      </span>
+                      <span class="th-label">{{ c.name }}</span>
+                    </span>
+                    <!-- 第二行：字段注释（单表 SELECT 时后端按方言取，JOIN/聚合不猜） -->
+                    <span v-if="resComment(c.name)" class="th-comment" :title="resComment(c.name)">{{ resComment(c.name) }}</span>
+                  </span>
+                  <span class="th-sort" :class="{ 'is-sorted': resultSortColumn === c.name }"
                         :title="resultSortColumn === c.name ? (resultSortDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
                         @mousedown.stop @click.stop="onResultHeaderClick(c.name)">
                     <el-icon v-if="resultSortColumn !== c.name"><Sort /></el-icon>
@@ -490,7 +498,7 @@ import {
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
   Sort, SortUp, SortDown
 } from '@element-plus/icons-vue'
-import { executeSql, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listConnections, listColumns, getAiConfig } from '../../api'
+import { executeSql, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listConnections, listColumns, getColumnComments, getAiConfig } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, byType } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
 
@@ -1660,6 +1668,29 @@ const resultSortColumn = ref('')
 const resultSortDir = ref('ASC')
 // 载入时的原始行序快照：取消排序时还原
 const unsortedRows = ref([])
+// ===== 结果表头的**字段注释**：单表 SELECT 时后端按方言取（MySQL/Doris 走
+// information_schema、PG/Kingbase 走 pg_description、SQL Server 走 extended_properties、
+// Oracle/DM 走 all_col_comments、ClickHouse 走 system.columns……），表头第二行显示。
+// 只对「无 JOIN / 聚合 / 去重的单表查询」生效 —— 猜错表名的注释张冠李戴比没有更糟。
+const resultColComments = ref({})
+const resComment = (name) => (result.value?.columnComments || {})[String(name).toLowerCase()] || ''
+const loadResColumnComments = (execSql, connId, db) => {
+  resultColComments.value = {}
+  const text = String(execSql || '').replace(/\s+/g, ' ')
+  const fromM = /\bfrom\s+([`"[\]\w.]+)\s*(?:;|$)/i.exec(text)
+  const multi = /\bjoin\b|\bunion\b|\bgroup\s+by\b|\bdistinct\b/i.test(text)
+  if (!fromM || multi) return
+  const raw = fromM[1].replace(/[`"[\]]/g, '')
+  const tableName = raw.split('.').pop()
+  const snapshot = result.value
+  getColumnComments(connId, db || '', tableName)
+    .then((map) => {
+      if (result.value !== snapshot || !map) return
+      resultColComments.value = map
+      result.value = { ...result.value, columnComments: map }
+    })
+    .catch(() => {})
+}
 // ========== 选中整列（Excel 式）：单击表头选中整列，Ctrl/Cmd 加减选，Shift 连选一段 ==========
 const selectedCols = ref(new Set())
 const lastColAnchor = ref('')
@@ -3014,6 +3045,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         if (cancelRequested.value) { setResultCancelled(); return }
         showSingleResult(res)
         recordHistory(execSql, db, res.executeTime || 0)
+        loadResColumnComments(execSql, connId, db)
       }
     }
   } catch (e) {
@@ -3847,8 +3879,19 @@ onBeforeUnmount(() => {
    border-collapse: collapse 下上边框属于 table，不跟着吸顶走，那 1px 会露出下层底色。 */
 .data-table thead { position: sticky; top: -1px; z-index: 2; }
 /* 表头：保留竖向分隔线（用户口径）；右侧多留 26px 给绝对定位的排序图标，
-   字段名省略号在图标前收住（窄列不重叠） */
-.data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 0 26px 0 10px; height: 36px; line-height: 36px; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+   字段名省略号在图标前收住（窄列不重叠）。有注释时表头两行，高度交给内容 */
+.data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 5px 26px 5px 10px; height: auto; line-height: 1.3; vertical-align: middle; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; }
+/* 表头文字块：竖排两行 —— 第一行「类型图标 + 字段名」，第二行注释顶格 */
+.data-table th .th-text {
+  display: inline-flex; flex-direction: column; justify-content: center;
+  vertical-align: middle; overflow: hidden; min-width: 0; max-width: 100%;
+}
+.data-table th .th-line1 { display: flex; align-items: center; min-width: 0; }
+.data-table th .th-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.data-table th .th-comment {
+  font-size: 11px; font-weight: 400; color: var(--dc-text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
+}
 .data-table td { padding: 0 10px; height: 32px; line-height: 32px; border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 表头字段类型图标：裸图标（无底色/无固定盒子，与表预览/NoSQL 统一）；
    vertical-align: middle 让图标与字段名垂直居中在同一条线上。

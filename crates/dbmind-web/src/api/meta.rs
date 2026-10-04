@@ -1002,8 +1002,7 @@ pub async fn columns(
     State(state): State<AppState>,
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
-) -> XResult<Json<Value>> {
-    let params = Params::parse(raw.as_deref());
+) -> XResult<Json<Value>> {    let params = Params::parse(raw.as_deref());
     let table = params
         .get("table")
         .ok_or_else(|| XError::bad_request("缺少 table 参数"))?;
@@ -1045,6 +1044,25 @@ pub async fn columns(
         }
     }
     Ok(Json(payload))
+}
+
+/// 结果集的**列注释**（`列名(小写) → 注释`）：SQL 编辑器对单表查询在表头第二行显示
+/// 字段注释 —— 各方言的注释 SQL 由 `dialect.table_comments` 出（MySQL/Doris 走
+/// information_schema、PG/Kingbase 走 pg_description、SQL Server 走 extended_properties、
+/// Oracle/DM 走 all_col_comments、ClickHouse 走 system.columns……），这里只做转发；
+/// 方言不支持列注释时返回空表（前端不渲染注释行）。
+pub async fn column_comments(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    RawQuery(raw): RawQuery,
+) -> XResult<Json<Value>> {
+    let params = Params::parse(raw.as_deref());
+    let table = params
+        .get("table")
+        .ok_or_else(|| XError::bad_request("缺少 table 参数"))?;
+    let database = params.get("database").unwrap_or_default();
+    let map = table_comments_map(&state, &id, &database, &table).await;
+    Ok(Json(json!(map)))
 }
 
 /// 一张表的**列注释**：`列名(小写) → 注释`（取不到就是空表，不编造）。

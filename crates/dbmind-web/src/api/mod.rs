@@ -172,6 +172,7 @@ fn relational_module(module: &str) -> Router<AppState> {
         .route(&p("/{id}/table-count"), get(meta::table_count))
         .route(&p("/{id}/stats"), get(meta::stats))
         .route(&p("/{id}/columns"), get(meta::columns))
+        .route(&p("/{id}/column-comments"), get(meta::column_comments))
         .route(&p("/{id}/search-objects"), get(meta::search_objects))
         .route(&p("/{id}/data"), get(meta::data))
         .route(&p("/{id}/data-save"), post(meta::data_save))
