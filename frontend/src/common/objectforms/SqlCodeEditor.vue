@@ -89,6 +89,10 @@ const editorOptions = computed(() => ({
   automaticLayout: true,
   // 空编辑器的引导提示（contrib/placeholderText）
   placeholder: t('sqlq.editorPlaceholder'),
+  // 补全列表收归 provider 独家供给 + 显式固定触发行为（与 SQL 控制台一致）
+  wordBasedSuggestions: 'off',
+  suggestOnTriggerCharacters: true,
+  suggestSelection: 'first',
   // 括号自动补齐：与 SQL 控制台一致（SQL 语言定义没有 autoClosingPairs，需强制 always）
   autoClosingBrackets: editorSettings.value.autoCloseBrackets ? 'always' : 'never',
   fontSize: editorSettings.value.fontSize,

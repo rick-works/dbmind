@@ -2434,6 +2434,12 @@ const editorOptions = computed(() => ({
   automaticLayout: true,
   // 空编辑器的引导提示（contrib/placeholderText）：一眼知道这里写什么、怎么执行
   placeholder: t('sqlq.editorPlaceholder'),
+  // 补全列表**收归 provider 独家供给**：词建议（文档里出现过的词）混进来会让列表
+  // 忽多忽少、看着「时而提示时而不提示」；provider 本身稳定返回关键字/函数/表名
+  wordBasedSuggestions: 'off',
+  // 显式固定触发行为：输入即弹、点号/触发符也弹，不随内置默认值漂移
+  suggestOnTriggerCharacters: true,
+  suggestSelection: 'first',
   // 括号自动补齐（设置可关）：SQL 语言定义里没有 autoClosingPairs（默认 languageDefined
   // 不生效），所以开着时强制 always —— 输入 ( [ ' 自动带上另一半，覆盖输入不会重复
   autoClosingBrackets: editorSettings.value.autoCloseBrackets ? 'always' : 'never',
