@@ -1906,6 +1906,7 @@ export default {
   'sqlq.ctxHideCol': 'Hide column',
   'sqlq.ctxShowAllCols': 'Show all columns',
   'sqlq.ctxRowDetail': 'View details',
+  'sqlq.cellDetail': 'View cell details',
   'sqlq.ctxRunSel': 'Run selected SQL',
   'sqlq.ctxRunAll': 'Run all SQL',
   'sqlq.ctxFmtSel': 'Format selected SQL',

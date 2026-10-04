@@ -1911,6 +1911,7 @@ export default {
   'sqlq.ctxHideCol': '隐藏列',
   'sqlq.ctxShowAllCols': '显示所有列',
   'sqlq.ctxRowDetail': '查看详情',
+  'sqlq.cellDetail': '查看单元格详情',
   'sqlq.ctxRunSel': '执行选中 SQL',
   'sqlq.ctxRunAll': '执行全部 SQL',
   'sqlq.ctxFmtSel': '格式化选中 SQL',
