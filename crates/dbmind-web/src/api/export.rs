@@ -821,22 +821,108 @@ fn strip_top_level_order_by(base: &str) -> Option<String> {
     }
 }
 
-/// 总量（拿不到就给 None ⇒ 调用方填 -1）。三层兜底，走到哪层算到哪：
+/// 提取取数语句里「顶层 `from` 起的尾部」（from joins / where … 直到语句结尾）。
+///
+/// 给 [`count_rows`] 的②层用：派生表在「重名列」上必死（`select *` 关联两张有同名列表
+/// 就报 `Duplicate column name`），而这类查询绝大多数是
+/// `select 列表 from joins [where …] [limit …]` 的形状 —— 把 from 起的片段整体借过来
+/// 直接 `select count(*) from <片段>`，没有派生表，重名列不碍事；
+/// 对无 GROUP BY / DISTINCT 的取数语句，数出来的就是**关联后的总行数**，与包壳等价。
+///
+/// 扫描与 [`strip_top_level_order_by`] 同一套纪律：引号感知（字符串字面量里的 from
+/// 不算）、括号感知（子查询里的 from 深度 > 0 不算）、字边界（`information` 里的
+/// `from` 片段不算）。遇到下面这些顶层结构返回 None —— `count(*)` 的语义会变，不硬数：
+/// - `group by` / `having`：count 到的是分组数，不是行数；
+/// - `distinct`（紧跟 select）：去重后的行数 ≠ 关联后的行数。
+fn extract_countable_from(base: &str) -> Option<String> {
+    let b = base.as_bytes();
+    let lb = base.to_ascii_lowercase().into_bytes();
+    let mut depth = 0i32;
+    let mut quote: Option<u8> = None;
+    let mut from_pos: Option<usize> = None;
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' | b'"' | b'`' => {
+                quote = Some(c);
+                i += 1;
+            }
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+            }
+            _ => {
+                let word_start =
+                    i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+                let after = |n: usize| {
+                    let j = i + n;
+                    j >= b.len() || !(b[j].is_ascii_alphanumeric() || b[j] == b'_')
+                };
+                if depth == 0 && word_start {
+                    if lb[i..].starts_with(b"distinct") && after(8) {
+                        return None;
+                    }
+                    if lb[i..].starts_with(b"group") && after(5) {
+                        return None;
+                    }
+                    if lb[i..].starts_with(b"having") && after(6) {
+                        return None;
+                    }
+                    if lb[i..].starts_with(b"from") && after(4) && from_pos.is_none() {
+                        from_pos = Some(i);
+                    }
+                }
+                i += 1;
+            }
+        }
+    }
+    let pos = from_pos?;
+    // 跳过 `from` 关键字本身（4 字节），只返回其后的片段 —— 调用方拼的是
+    // `select count(*) from {片段}`，这里多带一个 from 就是 `from from` 语法错误
+    //（真机踩过：JOIN 计数因此全部 -1）。
+    Some(base[pos + 4..].trim().to_string())
+}
+
+/// 总量（拿不到就给 None ⇒ 调用方填 -1）。四层兜底，走到哪层算到哪；
+/// 每层算的都是**同一个东西**（结果集的总行数），差别只在「怎么包」——
+/// 越靠前的层越通用，越靠后的层越是为了绕开特定的语法限制：
 ///
 /// ① 标准路 —— 剥掉顶层 ORDER BY 后包派生表计数。重复输出列（`SELECT *, now(), now()`
-/// 这种没起别名的写法）会让它报 `Duplicate column name`：派生表要求列名互不相同，
-/// 而数据库允许输出重名列 —— 这不是 SQL 有错，是**计数壳**不适配。
+/// 这种没起别名的写法、`select *` 关联两张有同名列的表）会让它报
+/// `Duplicate column name`：派生表要求列名互不相同，而数据库允许输出重名列 ——
+/// 这不是 SQL 有错，是**计数壳**不适配。
 ///
-/// ② CTE 显式列名表兜底 —— `WITH dbmind_count(c0, c1, …) AS (原句) SELECT COUNT(*) …`，
+/// ② 裸 FROM 直数 —— [`extract_countable_from`] 把顶层 `from …` 尾部整体借过来，
+/// `select count(*) from <from 尾部>`。**不过派生表**，重名列不碍事；对无
+/// GROUP BY / DISTINCT 的取数语句与①语义完全等价（都是数行数），且只扫一遍，
+/// 效率与直接 count 一致 —— `select *` 关联查询的总数基本都走这层。
+///
+/// ③ CTE 显式列名表兜底 —— `WITH dbmind_count(c0, c1, …) AS (原句) SELECT COUNT(*) …`，
 /// 按位置给输出列改名，重名列就不碍事了（MySQL 8+ / PG / SQLite / H2 / SQL Server 都认）。
-/// 顶层 UNION 剥不了 ORDER BY（①不适用），直接用 CTE 包整个 union 计数，语义正确。
+/// 顶层 UNION 剥不了 ORDER BY（①②不适用），直接用 CTE 包整个 union 计数，语义正确。
 ///
-/// ③ 二分探测兜底 —— 上面两条路都走不通时（**MySQL 5.7 没有 CTE** + 重名列就是这种），
+/// ④ 二分探测兜底 —— 上面三条路都走不通时（**MySQL 5.7 没有 CTE** + 重名列就是这种），
 /// 用「第 offset 行存不存在」二分出精确总数：`原句 + 分页子句(offset, 1)`，分页子句
 /// 直接追加、不过派生表，重名列不碍事。代价是约 2×log₂(N) 次执行，只在这个罕见角落才走。
 ///
 /// `ncols`：结果集列数（调用方刚执行过的结果里就有）。传 0 表示未知 —— 先拿原句探一次
-/// （`max_rows=1`，代价极小）再走 ②。
+/// （`max_rows=1`，代价极小）再走 ③。
 pub(crate) async fn count_rows(
     state: &AppState,
     id: &str,
@@ -849,6 +935,14 @@ pub(crate) async fn count_rows(
         let sql = format!("select count(*) as cnt from ({b}) dbmind_count");
         if let Some(v) = try_count(state, id, database, sql).await {
             return Some(v);
+        }
+        // ② 裸 FROM 直数：派生表被重名列挡死时的主出口（真机：location 视图与
+        // 合同表都有 RNUM，①必报 Duplicate column name —— ②一次扫描直接数完）
+        if let Some(from_part) = extract_countable_from(b) {
+            let sql = format!("select count(*) from {from_part}");
+            if let Some(v) = try_count(state, id, database, sql).await {
+                return Some(v);
+            }
         }
     }
     let mut n = ncols;
