@@ -63,7 +63,7 @@
                运行时热切换（web 壳的 tracing reload 层）：排查问题时切 debug、
                切回 info，当场生效不用重启。只影响壳的日志，不按模块细分 -->
           <div class="panel-title log-title">{{ $t('settings.language.logLevel') }}</div>
-          <div class="theme-hint"><el-icon :size="13"><InfoFilled /></el-icon>{{ $t('settings.language.logLevelTip') }}</div>
+          <div class="panel-desc">{{ $t('settings.language.logLevelTip') }}</div>
           <div class="log-level-options">
             <div
               v-for="lv in logLevels"
