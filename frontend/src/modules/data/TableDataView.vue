@@ -2037,9 +2037,10 @@ const headerExtraOf = (col) =>
 const labelMaxWidth = (col) => {
   // 走渲染口径（含表头最小宽度下限）：列宽被任何来源压到表头宽以下时，文字空间跟着渲染宽走
   const w = renderColWidth(col)
-  // 块外 = 内边距+边框 + 排序图标；块内第一行的类型徽章、主键列的 🔑 也要给字段名让位
-  const outside = HEADER_BASE_EXTRA + HEADER_SORT_ICON + HEADER_TYPE_ICON
-    + (isPkCol(col) ? HEADER_PK_ICON : 0)
+  // 块外 = 内边距+边框 + 排序图标。**类型徽章/主键 🔑 都在文字块内部**（见模板 .th-text），
+  // 这里绝不能再减它们 —— 减了就是减两次，字段名会被凭空挤成省略号
+  //（真机：order_no 列宽 119、maxW 只给了 56、字段名只剩 39px 截成 "ord…"，就是这个坑）。
+  const outside = HEADER_BASE_EXTRA + HEADER_SORT_ICON
   return Math.max(40, Math.round(w - outside))
 }
 
