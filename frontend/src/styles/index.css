@@ -443,14 +443,34 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
 /* ==================== 表头类型图标（表预览 / SQL 查询 / NoSQL 三视图共用）====================
    按类型族着色的裸图标（无底色徽章，用户口径：去掉背景就留图标）——
    表头一眼能扫出「这列是数字还是文本」；
-   各视图模板给 .th-type-ic 追加 th-t-* 类（th-t-key = Redis 键列 / 无类型兜底不着色）。 */
-.data-table th .th-t-text { color: #5b6b7d; }
-.data-table th .th-t-num  { color: #2f6fdd; }
-.data-table th .th-t-date { color: #7c5cd6; }
-.data-table th .th-t-json { color: #c77414; }
-.data-table th .th-t-bool { color: #2f9e57; }
-.data-table th .th-t-blob { color: #8a97a8; }
-.data-table th .th-t-key  { color: #d99a2b; }
+   各视图模板给 .th-type-ic 追加 th-t-* 类（th-t-key = Redis 键列 / 无类型兜底不着色）。
+   颜色走主题变量：默认深色主题下用亮色（暗底上中暗色全都糊成一片，真机反馈
+   「图标颜色都一样了」根因即此），浅色主题覆盖为深色。 */
+:root {
+  --th-t-text: #9aa7b8;
+  --th-t-num:  #6ea8ff;
+  --th-t-date: #a78bfa;
+  --th-t-json: #f0a24b;
+  --th-t-bool: #4ade80;
+  --th-t-blob: #94a3b8;
+  --th-t-key:  #f0b355;
+}
+html[data-theme="light"] {
+  --th-t-text: #5b6b7d;
+  --th-t-num:  #2f6fdd;
+  --th-t-date: #7c5cd6;
+  --th-t-json: #c77414;
+  --th-t-bool: #2f9e57;
+  --th-t-blob: #8a97a8;
+  --th-t-key:  #d99a2b;
+}
+.data-table th .th-t-text { color: var(--th-t-text); }
+.data-table th .th-t-num  { color: var(--th-t-num); }
+.data-table th .th-t-date { color: var(--th-t-date); }
+.data-table th .th-t-json { color: var(--th-t-json); }
+.data-table th .th-t-bool { color: var(--th-t-bool); }
+.data-table th .th-t-blob { color: var(--th-t-blob); }
+.data-table th .th-t-key  { color: var(--th-t-key); }
 .el-upload-dragger { background: var(--dc-bg-soft); border-color: var(--dc-border-soft); }
 .el-upload-dragger:hover { border-color: var(--dc-primary); }
 
