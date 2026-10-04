@@ -1793,3 +1793,81 @@ mod strip_order_by_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod extract_from_tests {
+    use super::extract_countable_from;
+
+    #[test]
+    fn 常规取数语句() {
+        // 单表
+        assert_eq!(
+            extract_countable_from("SELECT * FROM t").as_deref(),
+            Some("t")
+        );
+        // 关联（真机主案例：location 视图 left join 合同表）—— 片段整体借出
+        assert_eq!(
+            extract_countable_from(
+                "SELECT * from xingwei_kechuan.location a left join xingwei_kechuan_contracth b on a.id = b.id"
+            )
+            .as_deref(),
+            Some("xingwei_kechuan.location a left join xingwei_kechuan_contracth b on a.id = b.id")
+        );
+        // WHERE / 尾部 LIMIT 一并保留（与派生表计数同一语义）
+        assert_eq!(
+            extract_countable_from("SELECT a FROM t WHERE b > 1 LIMIT 10").as_deref(),
+            Some("t WHERE b > 1 LIMIT 10")
+        );
+        // 逗号关联
+        assert_eq!(
+            extract_countable_from("select a.x from t a, u b where a.id = b.id").as_deref(),
+            Some("t a, u b where a.id = b.id")
+        );
+    }
+
+    #[test]
+    fn 子查询与字面量里的_from不算() {
+        // 子查询里的 FROM 深度 > 0，只认主查询的
+        assert_eq!(
+            extract_countable_from("SELECT (SELECT max(x) FROM u) c FROM t").as_deref(),
+            Some("t")
+        );
+        // CTE：主查询的 FROM（with 体在括号里）
+        assert_eq!(
+            extract_countable_from("WITH c AS (SELECT x FROM u) SELECT * FROM c").as_deref(),
+            Some("c")
+        );
+        // 字符串字面量里的 from 不是子句
+        assert_eq!(
+            extract_countable_from("SELECT a FROM t WHERE b = 'from u'").as_deref(),
+            Some("t WHERE b = 'from u'")
+        );
+        // 反引号引用的标识符里的 from 不算（MySQL 表名可以很怪）
+        assert_eq!(
+            extract_countable_from("SELECT a FROM `my from table`").as_deref(),
+            Some("`my from table`")
+        );
+    }
+
+    #[test]
+    fn 会变语义的结构直接放弃() {
+        // GROUP BY：count(*) 数的是分组数不是行数
+        assert_eq!(extract_countable_from("SELECT a, count(*) FROM t GROUP BY a"), None);
+        // HAVING 同理（必然伴随分组）
+        assert_eq!(extract_countable_from("SELECT a FROM t GROUP BY a HAVING count(*) > 1"), None);
+        // DISTINCT：去重后行数 ≠ 关联后的行数
+        assert_eq!(extract_countable_from("SELECT DISTINCT a FROM t"), None);
+        // count(distinct x) 里的 distinct 在括号里，深度 > 0，不该误杀
+        assert_eq!(
+            extract_countable_from("SELECT count(DISTINCT a) FROM t").as_deref(),
+            Some("t")
+        );
+        // 没有 FROM 的语句（select 1）
+        assert_eq!(extract_countable_from("SELECT 1"), None);
+        // 字面量里出现的 group 不是子句
+        assert_eq!(
+            extract_countable_from("SELECT a FROM t WHERE b = 'group by x'").as_deref(),
+            Some("t WHERE b = 'group by x'")
+        );
+    }
+}
