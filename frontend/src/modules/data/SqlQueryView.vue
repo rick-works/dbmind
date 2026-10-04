@@ -2920,6 +2920,10 @@ const onEdCtxItem = (item) => {
   const ed = editorInstance
   closeEdCtx()
   if (!ed) return
+  // **先还焦点再执行**：粘贴/剪切等剪贴板操作要求编辑器持有焦点
+  //（navigator.clipboard.readText 在无焦点时直接失败，此前是先 trigger 后 focus，
+  // 于是「粘贴」从自定义菜单触发时永远静默无效）
+  ed.focus()
   const trigger = (id) => ed.trigger('ed-ctx', id, null)
   switch (item.command) {
     case 'run-sel': runSql(); break
@@ -2944,7 +2948,21 @@ const onEdCtxItem = (item) => {
     case 'redo': trigger('redo'); break
     case 'cut': trigger('editor.action.clipboardCutAction'); break
     case 'copy': trigger('editor.action.clipboardCopyAction'); break
-    case 'paste': trigger('editor.action.clipboardPasteAction'); break
+    case 'paste': {
+      // 自实现粘贴：Monaco 内置粘贴动作依赖浏览器原生右键链路，自定义菜单下
+      // navigator.clipboard.readText 需要「焦点 + 权限」，上面已补焦点；首次会弹
+      // 一次剪贴板权限询问（允许后记住），拒绝或失败则回落到内置动作
+      navigator.clipboard?.readText?.()
+        .then((text) => {
+          if (text) {
+            ed.executeEdits('ed-ctx', [{ range: ed.getSelection(), text, forceMoveMarkers: true }])
+          } else {
+            trigger('editor.action.clipboardPasteAction')
+          }
+        })
+        .catch(() => trigger('editor.action.clipboardPasteAction'))
+      break
+    }
     case 'select-all': trigger('editor.action.selectAll'); break
     default: break
   }
