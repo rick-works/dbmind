@@ -107,7 +107,7 @@
             <colgroup>
               <col class="row-num-col" />
               <col v-for="col in visibleColumns" :key="col"
-                   :style="{ width: (colWidths[col] || defaultColWidth(col)) + 'px' }" />
+                   :style="{ width: renderColWidth(col) + 'px' }" />
             </colgroup>
             <thead>
               <tr :class="{ 'selected': headerSelected, 'row-sel-top': headerSelected, 'row-sel-bottom': selEdges.headerBottom }">
@@ -2042,6 +2042,12 @@ const labelMaxWidth = (col) => {
   return Math.max(40, Math.round(w - outside))
 }
 
+// ===== 渲染口径的列宽硬下限：**任何来源**（存档 / 测量 / 手动拖拽）都不得低于
+// 「表头完整显示」所需宽度 —— 表头完整优先（拖动过程中直接写 DOM 不受影响，
+// 松手后低于下限的会被抬回）。这是最后一道闸：上面无论哪条路径出漏子，表头都不会再截断。
+const headerMinOf = (col) => Math.max(MIN_COL_WIDTH, Math.ceil(measureTextWidth(col, true) + headerExtraOf(col)))
+const renderColWidth = (col) => Math.max(colWidths.value[col] || defaultColWidth(col), headerMinOf(col))
+
 // 名称兜底估算：CJK 按 13px、其它按 7px 估算（真正宽度由内容测量决定）
 // 兜底也按「表头要放得下」给宽，否则测量完成前后会先闪一下被截断的表头
 const defaultColWidth = (name) => {
@@ -2086,7 +2092,7 @@ const naturalColWidth = (col, fontFamily, sample) => {
 // 表现就是「列宽拖不窄」。
 const tableWidth = computed(() => {
   let w = ROW_NUM_COL_WIDTH
-  for (const col of visibleColumns.value) w += colWidths.value[col] || defaultColWidth(col)
+  for (const col of visibleColumns.value) w += renderColWidth(col)
   return Math.round(w)
 })
 
