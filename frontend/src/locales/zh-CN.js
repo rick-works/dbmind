@@ -1798,6 +1798,7 @@ export default {
   'sqlq.result': '结果',
   'sqlq.running': '执行中...',
   'sqlq.querying': '查询中…',
+  'sqlq.counting': '总数统计中…',
   'sqlq.visibleColsTitle': '选择显示字段（{shown}/{total}）',
   'sqlq.visibleCols': '显示字段',
   'sqlq.exportCurrentCsv': '导出当前页 CSV',

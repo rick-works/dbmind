@@ -1793,6 +1793,7 @@ export default {
   'sqlq.result': 'Result',
   'sqlq.running': 'Running...',
   'sqlq.querying': 'Querying…',
+  'sqlq.counting': 'Counting total rows…',
   'sqlq.visibleColsTitle': 'Choose visible columns ({shown}/{total})',
   'sqlq.visibleCols': 'Visible columns',
   'sqlq.exportCurrentCsv': 'Export current page as CSV',

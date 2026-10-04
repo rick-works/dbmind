@@ -333,8 +333,11 @@
           </span>
           <!-- 总数未知（后端没统计，totalCount 为 -1）时不显示分页器自带的「共 N 条」：
                那个数字取的是本页行数，等于把「这一页取回多少行」说成「总共多少行」。
-               未知时只留翻页控件，**不挂任何提示**——「可能还有更多」这种话说了一遍
-               又说不清何时为真，用户明确不要它；SQL 有问题就报错，没事就安静翻页。 -->
+               异步计数在跑时给一条「总数统计中…」的状态（COUNT 移出了主链路，
+               数据先回显、总数后到，这里补上过渡期的口径）；算不出（超时）就安静消失。 -->
+          <span v-if="countPending && displayTotal === null" class="count-pending">
+            <el-icon class="is-loading"><Loading /></el-icon> {{ $t('sqlq.counting') }}
+          </span>
           <el-pagination
             v-model:current-page="currentPage"
             :page-size="pageSize"
@@ -632,12 +635,16 @@ const pageTotal = computed(() => {
 // 真机：数据 1s 就绪却等计数等了 163s+）：数据先回（totalCount=-1 表示未知），
 // 这里再拿原句单独发计数请求，回来后回填分页器。后端带 10s 总预算，算不出保持 -1。
 // seq 守卫：期间又跑了新查询/翻页的话，过期的计数结果直接丢弃。
+// countPending：计数在途时底栏给一条「总数统计中…」状态；回填/放弃/被新查询作废时熄灭。
 let countSeq = 0
+const countPending = ref(false)
+const invalidateCount = () => { countSeq++; countPending.value = false }
 const fetchCountFor = (res, sqlText) => {
   if (!res || !res.success) return
-  if (typeof res.totalCount === 'number' && res.totalCount >= 0) return
+  if (typeof res.totalCount === 'number' && res.totalCount >= 0) { countPending.value = false; return }
   if (!sqlText || !(res.rows && res.rows.length)) return
   const seq = ++countSeq
+  countPending.value = true
   const connId = selectedConnId.value || props.conn.id
   const db = selectedSchema.value
     ? `${selectedDatabase.value}.${selectedSchema.value}`
@@ -646,8 +653,9 @@ const fetchCountFor = (res, sqlText) => {
     .then((r) => {
       if (seq !== countSeq) return
       res.totalCount = r && typeof r.totalCount === 'number' ? r.totalCount : -1
+      countPending.value = false
     })
-    .catch(() => {})
+    .catch(() => { if (seq === countSeq) countPending.value = false })
 }
 
 // ========== 结果表：选中区汇总（底栏状态区）==========
@@ -720,6 +728,7 @@ const loadSegment = async (item, p, size) => {
   running.value = true
   loading.value = true
   cancelRequested.value = false
+  invalidateCount()
   cancelController = new AbortController()
   try {
     const connId = selectedConnId.value || props.conn.id
@@ -3050,6 +3059,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   const queryStart = Date.now()
   elapsedTime.value = 0
   cancelRequested.value = false
+  invalidateCount()
   execId.value = 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
   cancelController = new AbortController()
   if (queryTimer) clearInterval(queryTimer)
@@ -3902,6 +3912,12 @@ onBeforeUnmount(() => {
 .result-footer { display: flex; align-items: center; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; }
 .result-footer > .el-pagination { margin-left: auto; }
 .result-time { font-size: 13px; color: var(--dc-text-dim); font-weight: 500; }
+/* 总数统计中：紧贴分页器左侧，弱化显示（计数是后台补的，别抢注意力） */
+.count-pending {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; color: var(--dc-text-dim);
+}
+.count-pending + .el-pagination { margin-left: 0; }
 /* 选中区汇总：夹在耗时与分页之间，弱化显示、数字加粗，避免抢分页的注意力 */
 .result-summary { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dc-text-dim); flex-wrap: wrap; }
 .result-summary .rs-item { white-space: nowrap; }
