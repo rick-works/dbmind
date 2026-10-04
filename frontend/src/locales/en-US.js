@@ -1484,7 +1484,7 @@ export default {
   'settings.editor.desc': 'Editor behaviour and appearance; new windows pick it up after saving',
   'settings.editor.fontSize': 'Font size',
   'settings.editor.gridFontSize': 'Result grid font size',
-  'settings.editor.gridFontSizeTip': 'Font size of cells in the query result grid, independent of the SQL editor font size above. Grid cells are dense, so the default is one step smaller',
+  'settings.editor.gridFontSizeTip': 'Font size of cells in the query result grid, independent of the SQL editor font size above',
   'settings.editor.tabSize': 'Tab width',
   'settings.editor.spaces': '{n} spaces',
   'settings.editor.lineNumbers': 'Show line numbers',

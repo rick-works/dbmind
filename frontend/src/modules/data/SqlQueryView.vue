@@ -220,7 +220,7 @@
         </div>
         <!-- 数据表格（模板里 ref 自动解包：editorSettings 已是设置对象，.value 反而是 undefined —— 真机崩过） -->
         <div v-if="result?.success && result?.rows?.length" class="data-table-wrap" ref="resultTableWrapRef" tabindex="0"
-        :style="{ '--grid-fs': (editorSettings.gridFontSize || 13) + 'px' }"
+        :style="{ '--grid-fs': (editorSettings.gridFontSize || 14) + 'px' }"
              @scroll.passive="onResultTableScroll"
              @mousemove="onResultTableMove" @mousedown="onResultTableDown" @mouseleave="onResultTableLeave"
              @contextmenu.prevent="onResultGridContextMenu">
