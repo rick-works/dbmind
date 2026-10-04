@@ -2885,20 +2885,23 @@ useShortcutScope(rootRef, {
 .data-table thead { position: sticky; top: -1px; z-index: 2; }
 .data-table th {
   position: relative;
+  /* 表头 = 一整条色带：去掉竖向分隔线（body 仍保留），只在底部收一条边 —— 现代网格风格 */
   background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
   /* 表头可能是两行（字段名 + 注释），高度交给内容 —— 原来写死 34px 会把第二行切掉 */
-  padding: 5px 10px; height: auto; line-height: 1.3; vertical-align: middle;
-  border: 1px solid var(--dc-border); white-space: nowrap;
+  padding: 6px 10px; height: auto; line-height: 1.3; vertical-align: middle;
+  border: none; border-bottom: 1px solid var(--dc-border);
+  white-space: nowrap;
   overflow: hidden;
 }
 .data-table th.sortable { cursor: pointer; user-select: none; }
 .data-table th.sortable:hover { color: var(--dc-text); }
 /* 已排序列：文字主色 + 底部 2px 主色条，排序状态更醒目 */
 .data-table th.sort-asc, .data-table th.sort-desc { color: var(--dc-primary); box-shadow: inset 0 -2px 0 var(--dc-primary); }
-/* 表头排序按钮：平时淡显，鼠标移到表头才清晰；已排序列主色常亮 */
+/* 表头排序按钮：固定在列头右缘垂直居中（不随字段名长短晃动）；平时淡显，已排序列主色常亮 */
 .data-table th .th-sort {
-  display: inline-flex; align-items: center; vertical-align: -1px;
-  margin-left: 5px; font-size: 13px; color: var(--dc-text-dim);
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center;
+  font-size: 13px; color: var(--dc-text-dim); z-index: 3;
   opacity: .35; cursor: pointer; transition: opacity .12s, color .12s;
 }
 .data-table th:hover .th-sort { opacity: .9; }

@@ -3809,15 +3809,17 @@ onBeforeUnmount(() => {
 /* 吸顶表头：`top: -1px` 盖住滚动时表头上方那道 1px 的缝 ——
    border-collapse: collapse 下上边框属于 table，不跟着吸顶走，那 1px 会露出下层底色。 */
 .data-table thead { position: sticky; top: -1px; z-index: 2; }
-.data-table th { background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 0 10px; height: 34px; line-height: 34px; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 表头 = 一整条色带：去竖向分隔线，只在底部收边（与表预览/NoSQL 同款） */
+.data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 0 10px; height: 36px; line-height: 36px; border: none; border-bottom: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .data-table td { padding: 0 10px; height: 32px; line-height: 32px; border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 表头字段类型图标：18px 圆角徽章（配色按类型族，见全局 index.css 的 th-t-*） */
 .data-table th .th-type-ic { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: 0 0 auto; vertical-align: -4px; margin-right: 6px; border-radius: 5px; color: var(--dc-text-dim); cursor: default; }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
-/* 表头排序按钮：平时淡显，鼠标移到表头才清晰；已排序列主色常亮 */
+/* 表头排序按钮：固定在列头右缘垂直居中（与表预览/NoSQL 同款） */
 .data-table th .th-sort {
-  display: inline-flex; align-items: center; vertical-align: -1px;
-  margin-left: 5px; font-size: 13px; color: var(--dc-text-dim);
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center;
+  font-size: 13px; color: var(--dc-text-dim); z-index: 3;
   opacity: .35; cursor: pointer; transition: opacity .12s, color .12s;
 }
 .data-table th:hover .th-sort { opacity: .9; }
