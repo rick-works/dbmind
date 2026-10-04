@@ -3815,11 +3815,11 @@ onBeforeUnmount(() => {
 /* 表头字段类型图标：18px 圆角徽章（配色按类型族，见全局 index.css 的 th-t-*） */
 .data-table th .th-type-ic { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; flex: 0 0 auto; vertical-align: -4px; margin-right: 6px; border-radius: 5px; color: var(--dc-text-dim); cursor: default; }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
-/* 表头排序按钮：固定在列头右缘垂直居中（与表预览/NoSQL 同款） */
+/* 表头排序按钮：行内跟随字段名（本视图没有表预览那套文字宽度预留机制，
+   绝对定位会让窄列的字段名顶到图标底下），省略号会自动让出图标位置 */
 .data-table th .th-sort {
-  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
-  display: inline-flex; align-items: center;
-  font-size: 13px; color: var(--dc-text-dim); z-index: 3;
+  display: inline-flex; align-items: center; vertical-align: -1px;
+  margin-left: 5px; font-size: 13px; color: var(--dc-text-dim);
   opacity: .35; cursor: pointer; transition: opacity .12s, color .12s;
 }
 .data-table th:hover .th-sort { opacity: .9; }
@@ -3858,10 +3858,9 @@ onBeforeUnmount(() => {
 /* 列选中：表头与该列单元格同底色，表头就是这块的顶边，到「最后一行」收底边 */
 .data-table tbody tr td.col-selected { background-color: var(--dc-primary-soft); }
 .data-table th.col-selected { --sel-t: 2px; background-color: var(--dc-primary-soft); }
-/* 选中整列：**不画左右两条竖线** —— 那两条 2px 主色线沿列贯穿，看着像一根游离的蓝条；
-   选中信息由淡色底 + 上/下收边表达就够了。行选中那套的左右收边不动（整行框需要它们）。 */
-.data-table th.col-selected.col-sel-l, .data-table td.col-selected.col-sel-l { --sel-l: 0px; }
-.data-table th.col-selected.col-sel-r, .data-table td.col-selected.col-sel-r { --sel-r: 0px; }
+/* 选中整列：四边都收口成完整矩形（与表预览/NoSQL 同一套框线语言，用户口径） */
+.data-table th.col-selected.col-sel-l, .data-table td.col-selected.col-sel-l { --sel-l: 2px; }
+.data-table th.col-selected.col-sel-r, .data-table td.col-selected.col-sel-r { --sel-r: 2px; }
 .data-table tr.col-sel-bottom td.col-selected { --sel-b: 2px; }
 .data-table tbody tr:hover td { background-color: var(--dc-primary-wash); }
 /* NULL：灰 + 斜体，明显区别于真实数据。

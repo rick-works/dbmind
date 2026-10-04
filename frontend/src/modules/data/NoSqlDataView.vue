@@ -1603,7 +1603,8 @@ onBeforeUnmount(() => {
 .data-table th {
   position: relative;
   background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
-  padding: 5px 10px; height: auto; line-height: 1.3; vertical-align: middle;
+  /* 右侧多留 26px 给绝对定位的排序图标，字段名省略号在图标前收住（窄列不重叠） */
+  padding: 5px 26px 5px 10px; height: auto; line-height: 1.3; vertical-align: middle;
   border: 1px solid var(--dc-border); white-space: nowrap;
   overflow: hidden;
 }
