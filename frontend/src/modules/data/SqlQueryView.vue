@@ -1702,7 +1702,9 @@ const sortResultBy = (col, dir) => {
     const c = bothNum ? na - nb : String(va).localeCompare(String(vb), 'zh')
     return dir === 'DESC' ? -c : c
   })
-  result.value = { ...result.value, rows: sorted }
+  // 原地改 rows，不换对象：结果对象被异步计数引用着（fetchCountFor 回填 totalCount），
+  // 整个替换会让在途的计数写进旧对象 —— 总数就再也不显示了
+  result.value.rows = sorted
   // 行序变化后，按索引维护的选中/活动单元格已失效，清空避免错位
   resultSelectedSet.value = new Set()
   resultActiveCell.value = null
@@ -1732,7 +1734,10 @@ const loadResColumnComments = (execSql, connId, db) => {
     .then((map) => {
       if (result.value !== snapshot || !map) return
       resultColComments.value = map
-      result.value = { ...result.value, columnComments: map }
+      // 原地写 columnComments，不换对象：注释请求与异步计数并发，整对象替换会让
+      // 晚一步回来的计数写进旧对象 —— 大表计数慢（~1s）被注释（快）抢先替换，
+      // 总数永远显示不出来（小表计数快、碰巧先到才显得"正常"）
+      result.value.columnComments = map
     })
     .catch(() => {})
 }
@@ -1840,7 +1845,8 @@ const onResultHeaderClick = (name) => {
       // 第三击 = 取消排序：恢复该结果集的原始行序（与表预览同一套三击循环）
       resultSortColumn.value = ''
       resultSortDir.value = 'ASC'
-      result.value = { ...result.value, rows: unsortedRows.value.slice() }
+      // 原地改 rows（同排序：保住对象身份，别把在途计数的回填落在旧对象上）
+      result.value.rows = unsortedRows.value.slice()
       resultSelectedSet.value = new Set()
       resultActiveCell.value = null
       resultLastAnchor.value = -1
