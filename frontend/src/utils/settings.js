@@ -90,12 +90,16 @@ export const migrateEditor = (raw) => {
   }
   // 旧全局「SQL 方言」已下线：格式化方言改由连接类型自动识别，清理旧缓存中的残留值
   if ('sqlLanguage' in raw) { delete raw.sqlLanguage; changed = true }
-  // 默认字号 12 → 14：只把「恰好停在旧默认值」的用户带过来；
-  // 自己调过字号（10 / 16 / 18…）的一律保留 —— 改默认不该覆盖用户的选择。
-  if (raw.fontSize === 12) { raw.fontSize = 14; changed = true }
-  // 关键字大小写旧默认 upper → preserve：同理只带走没动过这一项的
-  // （缓存里停在 'upper' 的就是旧默认）；特意选过大写/小写的（lower / 显式别的值）不碰。
-  if (raw.sqlKeywordCase === 'upper') { raw.sqlKeywordCase = 'preserve'; changed = true }
+  // 旧默认值一次性迁移（字号 12 → 14、关键字大小写 upper → preserve）：
+  // **必须只跑一次** —— 以前没有门槛，每次读设置都重跑，用户把关键字改成「大写」
+  // 或字号改成 12，保存的瞬间就被这条迁回旧默认（设置「保存后又变回去」的真凶）。
+  // 门槛标志落盘后，用户改成的任何值（包括恰好等于旧默认的值）都不再被碰。
+  if (!raw._defaultsMigrated) {
+    if (raw.fontSize === 12) { raw.fontSize = 14; changed = true }
+    if (raw.sqlKeywordCase === 'upper') { raw.sqlKeywordCase = 'preserve'; changed = true }
+    raw._defaultsMigrated = true
+    changed = true
+  }
   if (changed) { try { localStorage.setItem('dbmind_editor', JSON.stringify(raw)) } catch { /* 忽略写失败 */ } }
   return raw
 }
