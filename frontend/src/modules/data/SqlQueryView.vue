@@ -643,21 +643,43 @@ const pageTotal = computed(() => {
 let countSeq = 0
 const countPending = ref(false)
 const invalidateCount = () => { countSeq++; countPending.value = false }
+
+// 计数缓存：同一份 SQL 翻页时不重算（大表 COUNT 要秒级，每翻一页重跑一遍纯浪费）。
+// 键 = 连接|库|归一化 SQL（压空白、去尾分号）；10 分钟过期（期间数据可能变了）。
+// 只缓存**成功**的计数（>=0）：失败/-1 不缓存，下次还重试。
+const countCache = new Map()
+const COUNT_TTL = 10 * 60 * 1000
+const countCacheKey = (connId, db, sqlText) =>
+  `${connId}|${db || ''}|${String(sqlText).replace(/\s+/g, ' ').trim().replace(/;+\s*$/, '')}`
+
 const fetchCountFor = (res, sqlText) => {
   if (!res || !res.success) return
   if (typeof res.totalCount === 'number' && res.totalCount >= 0) { countPending.value = false; return }
   if (!sqlText || !(res.rows && res.rows.length)) return
-  const seq = ++countSeq
-  countPending.value = true
   const connId = selectedConnId.value || props.conn.id
   const db = selectedSchema.value
     ? `${selectedDatabase.value}.${selectedSchema.value}`
     : selectedDatabase.value || undefined
+  const key = countCacheKey(connId, db, sqlText)
+  const hit = countCache.get(key)
+  if (hit && Date.now() - hit.t < COUNT_TTL) {
+    // 命中缓存：立即回填，不发请求、不亮「统计中」
+    res.totalCount = hit.n
+    return
+  }
+  const seq = ++countSeq
+  countPending.value = true
   executeSqlCount(connId, sqlText, db, (res.columns || []).length)
     .then((r) => {
       if (seq !== countSeq) return
-      res.totalCount = r && typeof r.totalCount === 'number' ? r.totalCount : -1
+      const n = r && typeof r.totalCount === 'number' ? r.totalCount : -1
+      res.totalCount = n
       countPending.value = false
+      if (n >= 0) {
+        countCache.set(key, { t: Date.now(), n })
+        // 简单容量上限：超了按插入序丢最老的（Map 迭代序 = 插入序）
+        if (countCache.size > 100) countCache.delete(countCache.keys().next().value)
+      }
     })
     .catch(() => { if (seq === countSeq) countPending.value = false })
 }
