@@ -440,16 +440,17 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
 .el-loading-spinner .path { stroke: var(--dc-primary) !important; stroke-width: 3; stroke-linecap: round; }
 .el-loading-text { display: none !important; }
 
-/* ==================== 表头类型图标徽章（表预览 / SQL 查询 / NoSQL 三视图共用）====================
-   图标放进 18px 圆角小徽章、按类型族着色 —— 表头一眼能扫出「这列是数字还是文本」；
+/* ==================== 表头类型图标（表预览 / SQL 查询 / NoSQL 三视图共用）====================
+   按类型族着色的裸图标（无底色徽章，用户口径：去掉背景就留图标）——
+   表头一眼能扫出「这列是数字还是文本」；
    各视图模板给 .th-type-ic 追加 th-t-* 类（th-t-key = Redis 键列 / 无类型兜底不着色）。 */
-.data-table th .th-t-text { background: color-mix(in srgb, #64748b 15%, transparent); color: #5b6b7d; }
-.data-table th .th-t-num  { background: color-mix(in srgb, #3b82f6 15%, transparent); color: #2f6fdd; }
-.data-table th .th-t-date { background: color-mix(in srgb, #8b5cf6 15%, transparent); color: #7c5cd6; }
-.data-table th .th-t-json { background: color-mix(in srgb, #d97706 17%, transparent); color: #c77414; }
-.data-table th .th-t-bool { background: color-mix(in srgb, #16a34a 15%, transparent); color: #2f9e57; }
-.data-table th .th-t-blob { background: color-mix(in srgb, #94a3b8 17%, transparent); color: #8a97a8; }
-.data-table th .th-t-key  { background: color-mix(in srgb, #e6a23c 17%, transparent); color: #d99a2b; }
+.data-table th .th-t-text { color: #5b6b7d; }
+.data-table th .th-t-num  { color: #2f6fdd; }
+.data-table th .th-t-date { color: #7c5cd6; }
+.data-table th .th-t-json { color: #c77414; }
+.data-table th .th-t-bool { color: #2f9e57; }
+.data-table th .th-t-blob { color: #8a97a8; }
+.data-table th .th-t-key  { color: #d99a2b; }
 .el-upload-dragger { background: var(--dc-bg-soft); border-color: var(--dc-border-soft); }
 .el-upload-dragger:hover { border-color: var(--dc-primary); }
 
