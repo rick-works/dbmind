@@ -2035,7 +2035,8 @@ const headerExtraOf = (col) =>
  * 块外只剩下：左右内边距 + 边框（HEADER_BASE_EXTRA）与排序图标（HEADER_SORT_ICON）。
  */
 const labelMaxWidth = (col) => {
-  const w = colWidths.value[col] || defaultColWidth(col)
+  // 走渲染口径（含表头最小宽度下限）：列宽被任何来源压到表头宽以下时，文字空间跟着渲染宽走
+  const w = renderColWidth(col)
   // 块外 = 内边距+边框 + 排序图标；块内第一行的类型徽章、主键列的 🔑 也要给字段名让位
   const outside = HEADER_BASE_EXTRA + HEADER_SORT_ICON + HEADER_TYPE_ICON
     + (isPkCol(col) ? HEADER_PK_ICON : 0)
