@@ -15,6 +15,7 @@ export default {
   'nav.expandSidebar': '展开对象浏览器',
   'nav.newScript': '新建脚本',
   'nav.compare': '数据对比',
+  'nav.topMenuEdit': '设置顶栏菜单显示与顺序',
   'nav.sync': '数据传输',
   'nav.governance': '数据治理',
   'nav.monitor': '服务监控',

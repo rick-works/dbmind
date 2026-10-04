@@ -153,7 +153,8 @@ const UI_BACKEND_KEYS = {
   'ui.notify': 'dbmind_notify',
   'ui.theme': 'dbmind_theme',
   'ui.locale': 'dbmind_locale',
-  'ui.shortcuts': 'dbmind_shortcuts'
+  'ui.shortcuts': 'dbmind_shortcuts',
+  'ui.topmenu': 'dbmind_topmenu'
 }
 const pushTimers = {}
 /** 落一层 UI 设置：`raw` 是**原样**写进 localStorage 的字符串（调用方自己序列化）。 */
@@ -188,6 +189,9 @@ export const hydrateUIFromBackend = async () => {
       }
     }
   }
+  // 通知各消费方「后端的值已经落进本地缓存」——它们在模块初始化时读的可能是
+  // 水合前的旧缓存（如顶栏菜单配置在 MainView setup 里加载），此刻应重读一次
+  try { window.dispatchEvent(new Event('dbmind-ui-hydrated')) } catch { /* 非浏览器环境忽略 */ }
 }
 
 // 查询设置的**共享响应式快照**：NULL 显示样式在网格渲染里读这份 ref，

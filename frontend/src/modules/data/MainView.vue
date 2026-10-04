@@ -23,18 +23,31 @@
           <span class="top-nav-item top-icon-btn" @click="sidebarHidden = false"><el-icon><Expand /></el-icon></span>
         </el-tooltip>
 
-        <span class="top-nav-item" @click="openCompare"><el-icon><Switch /></el-icon>{{ $t('nav.compare') }}</span>
-        <span class="top-nav-item" @click="openSync"><el-icon><Promotion /></el-icon>{{ $t('nav.sync') }}</span>
-        <span class="top-nav-item" @click="governanceOpen = true"><el-icon><DataAnalysis /></el-icon>{{ $t('nav.governance') }}</span>
-        <span class="top-nav-item" @click="openMonitor"><el-icon><Monitor /></el-icon>{{ $t('nav.monitor') }}</span>
-<!-- 任务中心：数据传输 / 数据对比的**执行历史记录**（查看、删除、清空），紧挨在服务监控前面。
-     与右侧时钟图标（正在执行）分开 —— 这里看的是全部记录。
-     （菜单项上不放运行数角标：它没有定位上下文，absolute 角标会飘到顶栏最右上角，
-     看起来像凭空多出一个「1」—— 运行数在右侧时钟图标上有就行） -->
-<span class="top-nav-item" @click="bgCenterMode = 'history'; bgCenterOpen = true; refreshBgStatus()"><el-icon><Clock /></el-icon>{{ $t('sync.bgCenter') }}</span>
-        <!-- 「新建脚本」是**动作**（新开一个页签），不是导航目的地，所以排在四个目的地之后：
-             左起读下来是「去哪 / 干什么」，最后一个才是"新建"。 -->
-        <span class="top-nav-item top-nav-action" @click="newQueryTab"><el-icon><Plus /></el-icon>{{ $t('nav.newScript') }}</span>
+        <!-- 顶栏菜单项**可配置**：显示哪些、顺序如何，都能在尾部 ⚙ 里设置并持久化（dbmind.db）。
+             默认与历史版本一致：对比 / 传输 / 治理 / 监控 / 任务中心 / 新脚本 -->
+        <span v-for="mi in topMenuVisible" :key="mi.id" class="top-nav-item"
+              :class="{ 'top-nav-action': mi.id === 'newScript' }"
+              @click="topMenuRun(mi.id)">
+          <el-icon><component :is="mi.icon" /></el-icon>{{ mi.label() }}
+        </span>
+        <!-- 菜单配置入口：勾选显示、上下调整顺序 -->
+        <el-popover trigger="click" width="264" placement="bottom-start" popper-class="topmenu-pop">
+          <template #reference>
+            <el-tooltip :content="$t('nav.topMenuEdit')" placement="bottom">
+              <span class="top-nav-item top-icon-btn top-menu-edit" @click.stop><el-icon><Operation /></el-icon></span>
+            </el-tooltip>
+          </template>
+          <div class="topmenu-editor">
+            <div class="topmenu-row" v-for="(mi, i) in topMenuAll" :key="mi.id">
+              <el-checkbox :model-value="!topMenuCfg.hidden.includes(mi.id)" @change="toggleTopMenu(mi.id)" />
+              <span class="topmenu-label">{{ mi.label() }}</span>
+              <span class="topmenu-ops">
+                <el-button size="small" text :disabled="i === 0" @click="moveTopMenu(i, -1)"><el-icon><ArrowUp /></el-icon></el-button>
+                <el-button size="small" text :disabled="i === topMenuAll.length - 1" @click="moveTopMenu(i, 1)"><el-icon><ArrowDown /></el-icon></el-button>
+              </span>
+            </div>
+          </div>
+        </el-popover>
         <span class="top-nav-right">
           <el-tooltip :content="$t('nav.knowledge')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': knowledgeOpen }" @click="openKnowledge"><el-icon><Reading /></el-icon></span></el-tooltip>
           <el-tooltip :content="$t('nav.ai')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': aiOpen }" @click="toggleAi"><el-icon><MagicStick /></el-icon></span></el-tooltip>
@@ -983,7 +996,7 @@ import { PREDEF_ENVS, ENV_ORDER_BASE, envLabel, envColor, envShort, envTitle } f
 import { desktopShell } from '../../utils/desktopShell'
 import { readSchemaCache, writeSchemaCache, removeSchemaCache, invalidateSchemaCache } from '../../utils/schemaCache'
 import { parseMySqlGrants, parseSqlServerPerms } from '../../utils/grants'
-import { getEditorSettings } from '../../utils/settings'
+import { getEditorSettings, persistUI } from '../../utils/settings'
 import { Sunny, Moon, Clock, Reading, Delete as ElDelete } from '@element-plus/icons-vue'
 import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 import { locale, setLocale } from '../../utils/i18n'
@@ -991,7 +1004,7 @@ import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlForma
 import { buildCatChildren, buildObjectCategories, isFunctionRoutine } from './treeNodes'
 import { t } from '../../utils/i18n'
 import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
-import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor } from '@element-plus/icons-vue'
+import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor } from '@element-plus/icons-vue'
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { compareTaskStatus, compareCancel, syncCancel } from '../../api'
@@ -1274,6 +1287,68 @@ const collapseTreeAll = () => {
 }
 const treeWidth = ref(360)
 const sidebarHidden = ref(false)
+
+// ===== 顶栏菜单：显示哪些 + 顺序，用户可配置并持久化（dbmind.db 的 ui.topmenu） =====
+// 默认与历史版本一致；新菜单项加入 TOP_MENU_ITEMS 后，老配置里没有的会**追加到末尾**。
+const TOP_MENU_ITEMS = [
+  { id: 'compare', icon: Switch, label: () => t('nav.compare') },
+  { id: 'sync', icon: Promotion, label: () => t('nav.sync') },
+  { id: 'governance', icon: DataAnalysis, label: () => t('nav.governance') },
+  { id: 'monitor', icon: Monitor, label: () => t('nav.monitor') },
+  { id: 'bgCenter', icon: Clock, label: () => t('sync.bgCenter') },
+  { id: 'newScript', icon: Plus, label: () => t('nav.newScript') }
+]
+const topMenuRun = (id) => {
+  if (id === 'compare') openCompare()
+  else if (id === 'sync') openSync()
+  else if (id === 'governance') governanceOpen.value = true
+  else if (id === 'monitor') openMonitor()
+  else if (id === 'bgCenter') { bgCenterMode.value = 'history'; bgCenterOpen.value = true; refreshBgStatus() }
+  else if (id === 'newScript') newQueryTab()
+}
+const TOPMENU_LS = 'dbmind_topmenu'
+const readTopMenuCfg = () => {
+  const allIds = TOP_MENU_ITEMS.map((m) => m.id)
+  try {
+    const raw = JSON.parse(localStorage.getItem(TOPMENU_LS) || '{}')
+    // order 只保留合法 id，老配置里没有的新项**追加**到末尾；hidden 也按合法 id 过滤
+    const order = (Array.isArray(raw.order) ? raw.order : []).filter((id) => allIds.includes(id))
+    allIds.forEach((id) => { if (!order.includes(id)) order.push(id) })
+    return { order, hidden: (Array.isArray(raw.hidden) ? raw.hidden : []).filter((id) => allIds.includes(id)) }
+  } catch { return { order: allIds, hidden: [] } }
+}
+const topMenuCfg = ref(readTopMenuCfg())
+const persistTopMenu = () => {
+  persistUI(TOPMENU_LS, JSON.stringify(topMenuCfg.value))
+}
+const persistTopMenuDebounced = (() => {
+  let tm = null
+  return () => { clearTimeout(tm); tm = setTimeout(persistTopMenu, 400) }
+})()
+/** 全部菜单项，按 order 排列（设置弹层里用，含被隐藏的） */
+const topMenuAll = computed(() => {
+  const byId = Object.fromEntries(TOP_MENU_ITEMS.map((m) => [m.id, m]))
+  return topMenuCfg.value.order.map((id) => byId[id]).filter(Boolean)
+})
+/** 顶栏实际渲染的项：按 order 且未被隐藏 */
+const topMenuVisible = computed(() => topMenuAll.value.filter((m) => !topMenuCfg.value.hidden.includes(m.id)))
+const toggleTopMenu = (id) => {
+  const hidden = new Set(topMenuCfg.value.hidden)
+  hidden.has(id) ? hidden.delete(id) : hidden.add(id)
+  topMenuCfg.value = { ...topMenuCfg.value, hidden: [...hidden] }
+  persistTopMenuDebounced()
+}
+const moveTopMenu = (index, delta) => {
+  const order = [...topMenuCfg.value.order]
+  const j = index + delta
+  if (j < 0 || j >= order.length) return
+  ;[order[index], order[j]] = [order[j], order[index]]
+  topMenuCfg.value = { ...topMenuCfg.value, order }
+  persistTopMenuDebounced()
+}
+// 后端水合完成后重读一次：模块初始化时读到的可能是水合前的旧缓存
+window.addEventListener('dbmind-ui-hydrated', () => { topMenuCfg.value = readTopMenuCfg() })
+
 const compareDialogOpen = ref(false)
 const syncDialogOpen = ref(false)
 // ===== 后台任务中心 =====
@@ -6817,12 +6892,28 @@ watch(() => route.query.id, (id) => {
   background: var(--dc-primary-wash);
   border-radius: 0 6px 6px 0;
 }
+/* 顶栏菜单编辑入口：默认弱显，悬停亮起（别抢正常菜单项的注意力） */
+.top-menu-edit { color: var(--dc-text-dim); opacity: .55; }
+.top-menu-edit:hover { opacity: 1; }
 </style>
 
 <style>
 /* 顶栏「数据」下拉菜单（teleport 到 body，需全局样式） */
 .dc-top-menu { min-width: 160px; }
 .dc-top-menu .el-dropdown-menu__item { min-height: 36px; }
+/* 顶栏菜单配置弹层（popper teleport 到 body，需全局样式） */
+.topmenu-pop { min-width: 240px !important; }
+.topmenu-pop .topmenu-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 3px 2px; border-radius: 6px;
+}
+.topmenu-pop .topmenu-row:hover { background: var(--dc-bg-hover, rgba(125, 125, 125, .08)); }
+.topmenu-pop .topmenu-label {
+  flex: 1; font-size: 13px; color: var(--dc-text, inherit);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.topmenu-pop .topmenu-ops { display: inline-flex; }
+.topmenu-pop .topmenu-ops .el-button + .el-button { margin-left: 2px; }
 .dc-conn-error-box {
   width: 720px !important;
   max-width: 92vw !important;

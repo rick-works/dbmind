@@ -11,6 +11,7 @@ export default {
   'nav.expandSidebar': 'Show object browser',
   'nav.newScript': 'New script',
   'nav.compare': 'Compare data',
+  'nav.topMenuEdit': 'Configure top menu items and order',
   'nav.sync': 'Data transfer',
   'nav.governance': 'Governance',
   'nav.monitor': 'Monitoring',
