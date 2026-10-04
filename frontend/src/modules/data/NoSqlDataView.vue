@@ -1620,9 +1620,9 @@ onBeforeUnmount(() => {
 .data-table th:hover .th-sort { opacity: .9; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
 .data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
-/* 表头文字块：第一行「类型图标 + 字段名」 */
+/* 表头文字块：类型徽章 + 字段名横排（与表预览同款徽章语言） */
 .data-table th .th-text {
-  display: inline-flex; flex-direction: column; justify-content: center;
+  display: inline-flex; flex-direction: row; align-items: center; gap: 7px;
   vertical-align: middle; overflow: hidden; min-width: 0; max-width: 100%;
 }
 .data-table th .th-line1 { display: flex; align-items: center; min-width: 0; }

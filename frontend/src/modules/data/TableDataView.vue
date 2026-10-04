@@ -129,24 +129,19 @@
                     @click="onHeaderClick(col, $event)"
                     @dblclick="onHeaderDblClick(col, $event)"
                     @contextmenu.prevent.stop="onHeaderContextMenu($event, col)">
-                  <!-- 表头两行：第一行「类型图标 + 字段名」，第二行「🔑 + 字段注释」。
-                       主键标记挪到第二行：第一行只剩类型图标与字段名，列名多出 17px；
-                       而且 🔑 与注释本来就同属"补充说明"，放一行更好读。
-                       🔑 是 13px 图标 + 4px 间距 = 17px，与类型图标等宽，所以注释的左对齐关系不变（见 commentIndentOf）。
-                       文字块的可用宽度按「列宽 − 表头非文字部分（内边距 + 排序）」算，与列宽测量用的是同一笔账，
-                       所以"放不下"的判定和列宽完全一致：超宽就在这个宽度里省略成 …，而不是反过来把列撑宽。 -->
+                  <!-- 表头两行：右侧竖排「字段名 /（🔑 +）字段注释」，左侧类型徽章垂直居中跨两行。
+                       文字块的可用宽度按「列宽 − 表头非文字部分（内边距 + 排序 + 徽章）」算，与列宽测量同一笔账：
+                       超宽就在这个宽度里省略成 …，而不是反过来把列撑宽。 -->
                   <span class="th-text" :style="{ maxWidth: labelMaxWidth(col) + 'px' }">
-                    <!-- 图标放在文字块里（而不是留在块外面），是为了让它与**字段名**垂直居中；
-                         留在外面时它会相对"两行的整体"居中，看着像浮在两行中间。 -->
-                    <span class="th-line1">
-                      <span class="th-type-ic" :class="typeClass(col)" :title="typeTitle(col)"><el-icon><component :is="typeIcon(col)" /></el-icon></span>
-                      <span class="th-label">{{ col }}</span>
-                    </span>
-                    <!-- 第二行：主键列排头一个 🔑，其后是注释（没有注释时这一行就只有 🔑） -->
-                    <span v-if="isPkCol(col) || colComment(col)" class="th-line2">
-                      <span v-if="isPkCol(col)" class="th-pk-ic" :title="$t('tf.colPrimary')"><el-icon><Key /></el-icon></span>
-                      <span v-if="colComment(col)" class="th-comment" :title="colComment(col)"
-                            :style="{ paddingLeft: commentIndentOf(col) + 'px' }">{{ colComment(col) }}</span>
+                    <!-- 布局：左侧类型徽章**垂直居中跨两行**，右侧「字段名 / 注释」竖排 ——
+                         两行同列对齐，徽章不再浮在第一行中间（旧布局是徽章+字段名一行、注释另起一行缩进对齐，看着歪） -->
+                    <span class="th-type-ic" :class="typeClass(col)" :title="typeTitle(col)"><el-icon><component :is="typeIcon(col)" /></el-icon></span>
+                    <span class="th-lines">
+                      <span class="th-line1"><span class="th-label">{{ col }}</span></span>
+                      <span v-if="isPkCol(col) || colComment(col)" class="th-line2">
+                        <span v-if="isPkCol(col)" class="th-pk-ic" :title="$t('tf.colPrimary')"><el-icon><Key /></el-icon></span>
+                        <span v-if="colComment(col)" class="th-comment" :title="colComment(col)">{{ colComment(col) }}</span>
+                      </span>
                     </span>
                   </span>
                   <span class="th-sort" :class="{ 'is-sorted': orderColumn === col }"
@@ -397,13 +392,6 @@ const typeTitle = (col) => {
 const isPkCol = (col) => !!metaOf(col)?.primaryKey
 /** 字段注释（表头第二行用）；没有注释时返回空串，那一行就不渲染 */
 const colComment = (col) => String(metaOf(col)?.comment || '').trim()
-/**
- * 第二行注释的左缩进 —— 目的是让注释与第一行的**字段名**左对齐。
- * 第一行是「类型图标(17px) + 字段名」，所以注释本来要补上 17px。
- * 但主键列的 🔑 已经挪到第二行排头（也是 17px，见模板 .th-line2），正好占住那个位置，
- * 所以主键列**不用**再补缩进（补了反而多缩一格）。
- */
-const commentIndentOf = (col) => (isPkCol(col) ? 0 : HEADER_TYPE_ICON)
 const typeIcon = (col) => {
   const t = String(metaOf(col)?.type || '').toLowerCase()
   if (/bool/.test(t)) return SwitchIcon
@@ -2015,7 +2003,8 @@ const MAX_COL_WIDTH = 520
 // 于是 —— 普通列 59、主键列 76。历史上这里统一给 60：主键列正好差一个 🔑 的宽度、标题被省略号吃掉；
 // 一口气给到 80 又反过来太肥（普通列白多 21px）。所以改成**按列算**，只有主键列多那 17px。
 const HEADER_BASE_EXTRA = 22
-const HEADER_TYPE_ICON = 17
+// 类型徽章 18px + 与文字栈的间距 7px（新布局：徽章在文字块内、与竖排文字并排）
+const HEADER_TYPE_ICON = 25
 const HEADER_PK_ICON = 17
 const HEADER_SORT_ICON = 18
 const HEADER_CUSHION = 2
@@ -2039,7 +2028,8 @@ const headerExtraOf = (col) =>
  */
 const labelMaxWidth = (col) => {
   const w = colWidths.value[col] || defaultColWidth(col)
-  const outside = HEADER_BASE_EXTRA + HEADER_SORT_ICON
+  // 块外 = 内边距+边框 + 排序图标；块内的类型徽章 + gap 也要从文字栈里扣掉
+  const outside = HEADER_BASE_EXTRA + HEADER_SORT_ICON + HEADER_TYPE_ICON
   return Math.max(40, Math.round(w - outside))
 }
 
@@ -2914,37 +2904,35 @@ useShortcutScope(rootRef, {
 .data-table th:hover .th-sort { opacity: .9; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
 .data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
-/* 表头文字块：第一行（图标 + 字段名）、第二行（字段注释）。
+/* 表头文字块：左侧类型徽章 + 右侧「字段名 / 注释」竖排，徽章相对两行整体垂直居中。
    宽度由模板按列宽算好（见 labelMaxWidth），超宽就在这个宽度里省略成 …。
    min-width: 0 不能省 —— 否则 flex 子项不肯被压缩，省略号就不会出现。 */
 .data-table th .th-text {
-  display: inline-flex; flex-direction: column; justify-content: center;
+  display: inline-flex; flex-direction: row; align-items: center; gap: 7px;
   vertical-align: middle; overflow: hidden; min-width: 0; max-width: 100%;
 }
-/* 第一行：图标与字段名在这一行里垂直居中（图标不再"浮在两行中间"） */
+/* 字段名 / 注释的竖排栈 */
+.data-table th .th-lines { display: flex; flex-direction: column; justify-content: center; min-width: 0; flex: 1 1 auto; }
+/* 第一行：字段名 */
 .data-table th .th-line1 { display: flex; align-items: center; min-width: 0; }
 /* 字段名同样是 flex 子项，min-width: 0 才能被压缩出省略号 */
 .data-table th .th-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-/* 第二行：主键 🔑 + 注释（🔑 在前，两者同一行）。做成 flex 行，注释才能在剩余宽度里省略；
-   左缩进量由模板给（见 commentIndentOf），与第一行的字段名左对齐。 */
+/* 第二行：主键 🔑 + 注释，与字段名**同列左对齐**（旧布局靠 paddingLeft 缩进对齐，已不需要） */
 .data-table th .th-line2 { display: flex; align-items: center; min-width: 0; margin-top: 1px; }
 .data-table th .th-comment {
   font-size: 11px; font-weight: 400; color: var(--dc-text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
-/* 表头字段类型图标 / 主键标记：18px 圆角小徽章（配色按类型族，见全局 index.css 的 th-t-*） */
-.data-table th .th-type-ic,
-.data-table th .th-pk-ic {
+/* 类型徽章：18px 圆角底座（配色按类型族，见全局 index.css 的 th-t-*）；与文字栈的间距由 .th-text 的 gap 给 */
+.data-table th .th-type-ic {
   display: inline-flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; flex: 0 0 auto;
-  margin-right: 6px; border-radius: 5px; cursor: default;
+  border-radius: 5px; cursor: default; color: var(--dc-text-dim);
 }
-.data-table th .th-type-ic { color: var(--dc-text-dim); }
-.data-table th .th-pk-ic { color: var(--dc-warning, #e6a23c); background: color-mix(in srgb, #e6a23c 17%, transparent); }
-.data-table th .th-type-ic .el-icon,
+.data-table th .th-type-ic .el-icon { font-size: 12px; }
+/* 第二行的主键 🔑：小号裸图标（琥珀色），不再套徽章 —— 徽章只属于第一行的类型图标 */
+.data-table th .th-pk-ic { display: inline-flex; align-items: center; flex: 0 0 auto; color: var(--dc-warning, #e6a23c); }
 .data-table th .th-pk-ic .el-icon { font-size: 12px; }
-/* 第二行注释与第一行字段名的间距再收一点，两行看起来是一组 */
-.data-table th .th-line2 { margin-top: 1px; }
 .data-table td {
   padding: 0 10px; height: 32px; line-height: 32px;
   border: 1px solid var(--dc-border); color: var(--dc-text);
