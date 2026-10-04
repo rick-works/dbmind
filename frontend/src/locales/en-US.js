@@ -2594,6 +2594,8 @@ export default {
   'nsql.menuCopyCol': 'Copy whole column',
   'nsql.menuSelectCol': 'Select this column',
   'nsql.menuRowDetail': 'View the whole row',
+  'nsql.menuSortAsc': 'Sort ascending by this column',
+  'nsql.menuSortDesc': 'Sort descending by this column',
   'nsql.menuCopyRow': 'Copy whole row',
   'nsql.menuSelectRow': 'Select this row',
   'rnt.title': 'Rename table',

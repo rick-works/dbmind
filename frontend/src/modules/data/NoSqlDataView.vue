@@ -7,6 +7,20 @@
                    @click="advancedOpen = !advancedOpen">{{ $t('tdv.advancedSearch') }}</el-button>
       </div>
       <div class="right">
+        <!-- 列显隐（≡）：与表预览同款。NoSQL 只读，无新增/删除行按钮 -->
+        <el-dropdown trigger="click" :hide-on-click="false" popper-class="col-vis-dropdown">
+          <el-button size="small" text :icon="Operation" :title="$t('sqlq.visibleColsTitle', { shown: visibleColumns.length, total: columns.length })" />
+          <template #dropdown>
+            <div class="col-vis" @mousedown.stop>
+              <div class="col-vis-head">
+                <span>{{ $t('sqlq.visibleCols') }}</span>
+                <el-button size="small" text type="primary" @click="showAllColumns">{{ $t('common.selectAll') }}</el-button>
+              </div>
+              <el-checkbox v-for="c in columns" :key="c" :model-value="!hiddenColumns.has(c)"
+                           @change="toggleColumnVisible(c)" class="col-vis-item">{{ c }}</el-checkbox>
+            </div>
+          </template>
+        </el-dropdown>
         <el-dropdown trigger="click" @command="onExportCmd">
           <el-button size="small" text :icon="Download" :title="$t('qa.exportBtn')" />
           <template #dropdown>
@@ -58,15 +72,15 @@
           <colgroup>
             <!-- 行号列（Excel 行头）：单击选中整行、按住拖动连选，双击看整行详情 —— 与 SQL 结果表格同一套 -->
             <col class="row-sel-col" style="width: 40px" />
-            <col v-for="(col, ci) in columns" :key="'c' + ci"
-                 :style="{ width: (colWidths[ci] || defaultColWidth(col)) + 'px' }" />
+            <col v-for="col in visibleColumns" :key="'c' + col"
+                 :style="{ width: (colWidths[col] || defaultColWidth(col)) + 'px' }" />
           </colgroup>
           <thead>
             <tr>
               <th class="row-sel-th leading-th" @contextmenu.prevent.stop="onGridContextMenu($event)">
                 <span class="row-num-tx">#</span>
               </th>
-              <th v-for="(col, ci) in columns" :key="'h' + ci"
+              <th v-for="(col, ci) in visibleColumns" :key="'h' + col"
                   :title="col + $t('nsql.colTitleSuffix')"
                   class="sortable"
                   :class="{ 'sort-asc': orderColumn === col && orderDir === 'ASC',
@@ -93,14 +107,14 @@
                 <!-- 列宽把手：与表预览同一套（拖动调整、双击自适应） -->
                 <span class="col-resizer" :title="$t('tdv.colResizeTip')"
                       @mousedown.stop.prevent="startColResize(ci, $event)"
-                      @dblclick.stop="autoFitCol(ci)" />
+                      @dblclick.stop="autoFitCol(col)" />
               </th>
             </tr>
           </thead>
           <tbody>
             <!-- 窗口化渲染：上方占位行，撑起未渲染区域的高度（固定行高） -->
             <tr v-if="padTop > 0" class="vp-pad-row" aria-hidden="true">
-              <td :colspan="columns.length + 1" :style="{ height: padTop + 'px' }" />
+              <td :colspan="visibleColumns.length + 1" :style="{ height: padTop + 'px' }" />
             </tr>
             <tr v-for="(row, i) in visibleRows" :key="vpStart + i"
                 :class="{ 'row-alt': (vpStart + i) % 2 === 1, selected: selectedRows.has(vpStart + i) }">
@@ -112,7 +126,7 @@
                   @contextmenu.prevent.stop="onRowContextMenu($event, vpStart + i)">
                 <span class="row-num-tx">{{ vpStart + i + 1 }}</span>
               </td>
-              <td v-for="(col, ci) in columns" :key="'d' + ci"
+              <td v-for="(col, ci) in visibleColumns" :key="'d' + col"
                   :class="{ 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col), 'active-cell': isActiveCell(vpStart + i, col) }"
                   :title="cellText(row, col)"
                   @mousedown="onCellDown(vpStart + i, col, $event)"
@@ -124,7 +138,7 @@
             </tr>
             <!-- 窗口化渲染：下方占位行 -->
             <tr v-if="padBottom > 0" class="vp-pad-row" aria-hidden="true">
-              <td :colspan="columns.length + 1" :style="{ height: padBottom + 'px' }" />
+              <td :colspan="visibleColumns.length + 1" :style="{ height: padBottom + 'px' }" />
             </tr>
           </tbody>
         </table>
@@ -160,7 +174,7 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ArrowUp, ArrowDown, Refresh, Download, Sort, SortUp, SortDown, Loading,
-         Histogram, Calendar, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
+         Histogram, Calendar, Document, Tickets, Grid, Key, Operation } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getQuerySettings } from '../../utils/settings'
 import { noSqlDocuments, cancelNoSql } from '../../api'
@@ -263,6 +277,18 @@ const pageSizes = computed(() => {
 })
 
 const columns = computed(() => result.value.columns || [])
+
+// ===== 列显隐（工具栏 ≡，与表预览同款）：只影响展示，复制/导出仍按选区口径取数据 =====
+const hiddenColumns = ref(new Set())
+const visibleColumns = computed(() => columns.value.filter(c => !hiddenColumns.value.has(c)))
+const toggleColumnVisible = (c) => {
+  const next = new Set(hiddenColumns.value)
+  next.has(c) ? next.delete(c) : next.add(c)
+  // 至少保留一列可见
+  if (columns.value.length - next.size < 1) return
+  hiddenColumns.value = next
+}
+const showAllColumns = () => { hiddenColumns.value = new Set() }
 
 // 单元格文本：原模板对同一格要算 2~3 次（class / title / 内容），嵌套文档还要每次都 JSON.stringify。
 // 这里统一成一个函数，并用 WeakMap 缓存序列化结果（row 对象被换掉后缓存自动回收，且不写入响应式对象、不触发额外依赖）。
@@ -400,9 +426,14 @@ const stop = () => {
   loading.value = false
 }
 
-watch(() => [props.conn?.id, props.database, props.collection], () => { page.value = 1; load(1) }, { immediate: true })
+watch(() => [props.conn?.id, props.database, props.collection], () => {
+  page.value = 1
+  hiddenColumns.value = new Set()
+  load(1)
+}, { immediate: true })
 
 // ========== 列宽拖拽 ==========
+// colWidths 按**列名**存（隐藏列后位置索引会漂移，名字是稳定键）
 const colWidths = ref({})
 const colResizing = ref(false)
 let drag = null
@@ -417,27 +448,28 @@ const defaultColWidth = (name) => Math.min(480, String(name || '').length * 15 +
 // 拖窄了还会被撑回去，手感与 SQL 结果表格不一致（用户要求"跟 sql 查询结果保持一致"）。
 const MIN_COL_WIDTH = 60
 const MAX_COL_WIDTH = 480
-const naturalColWidth = (ci, limit) => {
+const naturalColWidth = (col, limit) => {
+  // DOM 索引按**可见列**序算：th/td 的第 0 个是行号列，数据列从 1 开始
+  const vi = visibleColumns.value.indexOf(col)
+  if (vi < 0) return defaultColWidth(col)
   const wrap = gridRef.value?.querySelector('.data-table-wrap')
   const ths = wrap?.querySelectorAll('thead th') || []
   const sampleRows = wrap?.querySelectorAll('tbody tr:not(.vp-pad-row)') || []
   const sample = Math.min(sampleRows.length, limit)
-  // th/td 的第 0 个是行号列，数据列从 1 开始 —— 原来用 ci 直接索引会错位到行号列
-  let max = ths[ci + 1] ? ths[ci + 1].scrollWidth : 0
+  let max = ths[vi + 1] ? ths[vi + 1].scrollWidth : 0
   for (let r = 0; r < sample; r++) {
-    const td = sampleRows[r]?.querySelectorAll('td')[ci + 1]
+    const td = sampleRows[r]?.querySelectorAll('td')[vi + 1]
     if (td) max = Math.max(max, td.scrollWidth)
   }
-  const natural = max > 0 ? max + 26 : defaultColWidth(columns.value[ci])
+  const natural = max > 0 ? max + 26 : defaultColWidth(col)
   return Math.max(MIN_COL_WIDTH, Math.min(MAX_COL_WIDTH, Math.round(natural)))
 }
 
 const measureColumns = () => {
   const wrap = gridRef.value?.querySelector('.data-table-wrap')
-  const count = columns.value.length
-  if (!wrap || !count) return
+  if (!wrap || !visibleColumns.value.length) return
   const next = {}
-  for (let i = 0; i < count; i++) next[i] = naturalColWidth(i, 10)
+  for (const c of visibleColumns.value) next[c] = naturalColWidth(c, 10)
   colWidths.value = next
 }
 
@@ -446,20 +478,20 @@ const measureColumns = () => {
 // 浏览器按内容算 max-content 再把余量摊回各列 —— 列会被撑回去，拖不窄。
 const tableWidth = computed(() => {
   let w = 0
-  columns.value.forEach((col, ci) => { w += colWidths.value[ci] || defaultColWidth(col) })
+  visibleColumns.value.forEach((col) => { w += colWidths.value[col] || defaultColWidth(col) })
   return Math.round(w)
 })
 
 /** 单列自适应：量这一列（表头 + 前 30 行）的文本宽。双击列缘与右键「列宽自适应」共用。 */
-const autoFitCol = (ci) => {
-  if (ci < 0 || ci >= columns.value.length) return
-  colWidths.value = { ...colWidths.value, [ci]: naturalColWidth(ci, 30) }
+const autoFitCol = (col) => {
+  if (!visibleColumns.value.includes(col)) return
+  colWidths.value = { ...colWidths.value, [col]: naturalColWidth(col, 30) }
 }
 const onTableDblClick = (e) => {
-  const ci = edgeColIdx(e)
-  if (ci < 0) return
+  const vi = edgeColIdx(e)
+  if (vi < 0) return
   e.preventDefault()
-  autoFitCol(ci)
+  autoFitCol(visibleColumns.value[vi])
 }
 
 // ========== 选区（行 / 列 / 单元格）：与 SQL 结果表格同一套语义 ==========
@@ -711,6 +743,9 @@ const onGridContextMenu = (e) => openCtx(e, -1, '', [
   { label: t('nsql.menuExportCsv'), key: 'export-csv' }
 ])
 const onHeaderContextMenu = (e, col) => openCtx(e, -1, col, [
+  { label: t('nsql.menuSortAsc'), key: 'sort-asc' },
+  { label: t('nsql.menuSortDesc'), key: 'sort-desc' },
+  { divided: true },
   { label: t('sqlq.ctxColFit'), key: 'col-fit' },
   { divided: true },
   { label: t('nsql.menuCopyHeader'), key: 'copy-header' },
@@ -723,17 +758,23 @@ const onRowContextMenu = (e, rowIdx) => openCtx(e, rowIdx, '', [
   { label: t('nsql.menuCopyRow'), key: 'copy-row' },
   { label: t('nsql.menuSelectRow'), key: 'select-row' },
   { divided: true },
-  COPY_AS
+  copyAsMenu()
 ])
 const onCellContextMenu = (e, rowIdx, col) => openCtx(e, rowIdx, col, [
   { label: t('common.copy'), key: 'copy-cell', shortcut: 'Ctrl+C' },
     copyAsMenu(),
+  { divided: true },
+  { label: t('nsql.menuRowDetail'), key: 'row-detail' },
+  // 与表预览同款：按此列排序（当前页内排序）
+  { label: t('nsql.menuSortAsc'), key: 'sort-asc' },
+  { label: t('nsql.menuSortDesc'), key: 'sort-desc' },
   { divided: true },
   { label: t('nsql.menuCopyRow'), key: 'copy-row' },
   { label: t('nsql.menuCopyHeader'), key: 'copy-header' },
   { label: t('nsql.menuSelectRow'), key: 'select-row' },
   { label: t('nsql.menuSelectCol'), key: 'select-col' },
   { divided: true },
+  { label: t('sqlq.ctxColFit'), key: 'col-fit' },
   { label: t('nsql.menuExportCsv'), key: 'export-csv' }
 ])
 const onCtxSelect = (key) => {
@@ -747,7 +788,9 @@ const onCtxSelect = (key) => {
   if (key === 'copy-header') return copyText(col, t('sqlq.copyColNames'))
   if (key === 'copy-col') return copyText([col].concat(rows.map(r => cellValue(r, col))).join('\n'), t('nsql.copiedCol'))
   if (key === 'export-csv') return exportCsv()
-  if (key === 'col-fit') return autoFitCol(columns.value.indexOf(col))
+  if (key === 'col-fit') return autoFitCol(col)
+  if (key === 'sort-asc') { orderColumn.value = col; orderDir.value = 'ASC'; return applySort() }
+  if (key === 'sort-desc') { orderColumn.value = col; orderDir.value = 'DESC'; return applySort() }
   if (key === 'row-detail') return openRowDetail(row)
   if (key === 'select-row') {
     selectedRows.value = new Set([row])
@@ -776,12 +819,13 @@ const edgeColIdx = (e) => {
   if (!cell || !cell.closest('table')) return -1
   const rect = cell.getBoundingClientRect()
   const x = e.clientX
-  const cols = columns.value
-  let ci = -1
-  if (x >= rect.right - 10 && x <= rect.right + 8) ci = cell.cellIndex
-  else if (cell.cellIndex > 0 && x >= rect.left - 8 && x <= rect.left + 10) ci = cell.cellIndex - 1
-  if (ci < 0 || ci >= cols.length) return -1
-  return ci
+  // cellIndex 含行号列（第 0 个），减 1 得**可见数据列**下标（visibleColumns 的序）；
+  // 贴左缘属于前一列的右缘（再减 1）
+  let vi = -1
+  if (x >= rect.right - 10 && x <= rect.right + 8) vi = cell.cellIndex - 1
+  else if (cell.cellIndex > 1 && x >= rect.left - 8 && x <= rect.left + 10) vi = cell.cellIndex - 2
+  if (vi < 0 || vi >= visibleColumns.value.length) return -1
+  return vi
 }
 
 const onTableMove = (e) => {
@@ -817,8 +861,10 @@ const onTableDown = (e) => {
   startColResize(ci, e)
 }
 
-/** 列宽把手 / 列缘拖拽共用的启动逻辑（ci 为数据列下标；colgroup 第 0 个 col 是行号列）。 */
+/** 列宽把手 / 列缘拖拽共用的启动逻辑（ci 为**可见**数据列下标；colgroup 第 0 个 col 是行号列）。 */
 const startColResize = (ci, e) => {
+  const col = visibleColumns.value[ci]
+  if (!col) return
   const wrap = gridRef.value?.querySelector('.data-table-wrap')
   if (!Object.keys(colWidths.value).length) measureColumns()
   const table = wrap?.querySelector('table')
@@ -826,9 +872,9 @@ const startColResize = (ci, e) => {
   const colEl = colEls?.[ci + 1] || null
   if (colEl) colEl.style.willChange = 'width'
   drag = {
-    ci,
-    startW: colWidths.value[ci] || defaultColWidth(columns.value[ci]),
-    currentW: colWidths.value[ci] || defaultColWidth(columns.value[ci]),
+    col,
+    startW: colWidths.value[col] || defaultColWidth(col),
+    currentW: colWidths.value[col] || defaultColWidth(col),
     colEl
   }
   colResizing.value = true
@@ -850,7 +896,7 @@ const onDragMove = (e) => {
 const onDragEnd = () => {
   if (drag) {
     const finalW = Math.round(Math.max(0, drag.currentW))
-    colWidths.value = { ...colWidths.value, [drag.ci]: finalW }
+    colWidths.value = { ...colWidths.value, [drag.col]: finalW }
     if (drag.colEl) drag.colEl.style.willChange = ''
   }
   if (rafId) { cancelAnimationFrame(rafId); rafId = null }
@@ -985,4 +1031,20 @@ onBeforeUnmount(() => {
 .data-table tbody tr.vp-pad-row:hover td { background: transparent !important; }
 .data-table .fill-col { padding: 0; border: none; background: transparent !important; min-width: 1px; }
 .null-cell { color: var(--dc-text-dim); font-style: italic; }
+
+/* 「选择显示字段」下拉（popper 挂到 body，slot 内容仍带本组件 scoped 属性） */
+.col-vis-dropdown .col-vis { max-height: 340px; overflow: auto; padding: 4px; min-width: 190px; }
+.col-vis-dropdown .col-vis-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 8px 8px; font-size: 13px; font-weight: 600; color: var(--dc-text-mid, #606266);
+  border-bottom: 1px solid var(--dc-border, #ebeef5); margin-bottom: 4px;
+}
+.col-vis-dropdown .col-vis-item {
+  display: flex; width: 100%; margin: 0; padding: 4px 8px; box-sizing: border-box;
+  border-radius: 4px; height: auto;
+}
+.col-vis-dropdown .col-vis-item:hover { background: var(--dc-bg-hover, #f5f7fa); }
+.col-vis-dropdown .col-vis-item .el-checkbox__label {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px;
+}
 </style>

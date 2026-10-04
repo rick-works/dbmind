@@ -2601,6 +2601,8 @@ export default {
   'nsql.menuCopyCol': '复制整列',
   'nsql.menuSelectCol': '选中该列',
   'nsql.menuRowDetail': '查看整行详情',
+  'nsql.menuSortAsc': '按此列升序',
+  'nsql.menuSortDesc': '按此列降序',
   'nsql.menuCopyRow': '复制整行',
   'nsql.menuSelectRow': '选中该行',
   'rnt.title': '重命名表',
