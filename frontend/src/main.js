@@ -76,7 +76,7 @@ import App from './App.vue'
 import router from './router'
 import './styles/index.css'
 import { getNotifySettings, hydrateUIFromBackend, reloadEditorSettings, reloadQuerySettings } from './utils/settings'
-import { initTheme, applyTheme, getThemeSettings } from './utils/theme'
+import { initTheme } from './utils/theme'
 import { t, initI18n, refreshLocaleFromStorage } from './utils/i18n'
 import { resetShortcutCache } from './utils/shortcuts'
 
