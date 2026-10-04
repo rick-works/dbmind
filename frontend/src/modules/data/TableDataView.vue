@@ -139,7 +139,7 @@
                     <!-- 图标放在文字块里（而不是留在块外面），是为了让它与**字段名**垂直居中；
                          留在外面时它会相对"两行的整体"居中，看着像浮在两行中间。 -->
                     <span class="th-line1">
-                      <span class="th-type-ic" :title="typeTitle(col)"><el-icon><component :is="typeIcon(col)" /></el-icon></span>
+                      <span class="th-type-ic" :class="typeClass(col)" :title="typeTitle(col)"><el-icon><component :is="typeIcon(col)" /></el-icon></span>
                       <span class="th-label">{{ col }}</span>
                     </span>
                     <!-- 第二行：主键列排头一个 🔑，其后是注释（没有注释时这一行就只有 🔑） -->
@@ -413,6 +413,16 @@ const typeIcon = (col) => {
   if (/^(date|time|datetime|timestamp|year)/.test(t)) return Calendar
   if (/^(char|varchar|text|string|clob|enum|set|uuid|nchar|nvarchar)/.test(t)) return Document
   return Grid
+}
+// 类型族 → 徽章配色类（与 typeIcon 同一套判定；全局 CSS 按类着色）
+const typeClass = (col) => {
+  const t = String(metaOf(col)?.type || '').toLowerCase()
+  if (/bool/.test(t)) return 'th-t-bool'
+  if (/json/.test(t)) return 'th-t-json'
+  if (/(blob|binary|bytea|image|raw)/.test(t)) return 'th-t-blob'
+  if (/^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money)/.test(t)) return 'th-t-num'
+  if (/^(date|time|datetime|timestamp|year)/.test(t)) return 'th-t-date'
+  return 'th-t-text'
 }
 const loading = ref(false)
 const running = ref(false) // 数据加载（翻页 / 查询）进行中，可取消
@@ -2887,13 +2897,14 @@ useShortcutScope(rootRef, {
   position: relative;
   background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
   /* 表头可能是两行（字段名 + 注释），高度交给内容 —— 原来写死 34px 会把第二行切掉 */
-  padding: 4px 10px; height: auto; line-height: 1.25; vertical-align: middle;
+  padding: 5px 10px; height: auto; line-height: 1.3; vertical-align: middle;
   border: 1px solid var(--dc-border); white-space: nowrap;
   overflow: hidden;
 }
 .data-table th.sortable { cursor: pointer; user-select: none; }
 .data-table th.sortable:hover { color: var(--dc-text); }
-.data-table th.sort-asc, .data-table th.sort-desc { color: var(--dc-primary); }
+/* 已排序列：文字主色 + 底部 2px 主色条，排序状态更醒目 */
+.data-table th.sort-asc, .data-table th.sort-desc { color: var(--dc-primary); box-shadow: inset 0 -2px 0 var(--dc-primary); }
 /* 表头排序按钮：平时淡显，鼠标移到表头才清晰；已排序列主色常亮 */
 .data-table th .th-sort {
   display: inline-flex; align-items: center; vertical-align: -1px;
@@ -2921,16 +2932,19 @@ useShortcutScope(rootRef, {
   font-size: 11px; font-weight: 400; color: var(--dc-text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
-/* 表头字段类型图标 / 主键标记 */
+/* 表头字段类型图标 / 主键标记：18px 圆角小徽章（配色按类型族，见全局 index.css 的 th-t-*） */
 .data-table th .th-type-ic,
 .data-table th .th-pk-ic {
-  display: inline-flex; align-items: center; vertical-align: middle;
-  margin-right: 4px; font-size: 13px; cursor: default;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex: 0 0 auto;
+  margin-right: 6px; border-radius: 5px; cursor: default;
 }
 .data-table th .th-type-ic { color: var(--dc-text-dim); }
-.data-table th .th-pk-ic { color: var(--dc-warning, #e6a23c); }
+.data-table th .th-pk-ic { color: var(--dc-warning, #e6a23c); background: color-mix(in srgb, #e6a23c 17%, transparent); }
 .data-table th .th-type-ic .el-icon,
-.data-table th .th-pk-ic .el-icon { font-size: 13px; }
+.data-table th .th-pk-ic .el-icon { font-size: 12px; }
+/* 第二行注释与第一行字段名的间距再收一点，两行看起来是一组 */
+.data-table th .th-line2 { margin-top: 1px; }
 .data-table td {
   padding: 0 10px; height: 32px; line-height: 32px;
   border: 1px solid var(--dc-border); color: var(--dc-text);

@@ -92,7 +92,7 @@
                   @contextmenu.prevent.stop="onHeaderContextMenu($event, col)">
                 <span class="th-text">
                   <span class="th-line1">
-                    <span class="th-type-ic" :title="colTypeTitle(col)"><el-icon><component :is="typeIcon(col)" /></el-icon></span>
+                    <span class="th-type-ic" :class="'th-t-' + colTypeKind(col)" :title="colTypeTitle(col)"><el-icon><component :is="typeIcon(col)" /></el-icon></span>
                     <span class="th-label">{{ col }}</span>
                   </span>
                 </span>
@@ -389,18 +389,19 @@ const typeIcon = (col) => {
   }
   return Grid
 }
-const colTypeTitle = (col) => {
+const colTypeKind = (col) => {
   if (/^key$/i.test(col)) return 'key'
   for (const r of rows.value) {
     const v = r[col]
     if (v === null || v === undefined || v === '') continue
-    if (typeof v === 'number') return 'number'
+    if (typeof v === 'number') return 'num'
     if (typeof v === 'object') return 'json'
     if (/^\d{4}-\d{2}-\d{2}/.test(String(v))) return 'date'
-    return 'string'
+    return 'text'
   }
-  return ''
+  return 'text'
 }
+const colTypeTitle = (col) => ({ key: 'key', num: 'number', json: 'json', date: 'date', text: 'string' }[colTypeKind(col)] || '')
 
 // ===== 查询 =====
 const effectiveKeyword = computed(() => {
@@ -1602,13 +1603,14 @@ onBeforeUnmount(() => {
 .data-table th {
   position: relative;
   background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
-  padding: 4px 10px; height: auto; line-height: 1.25; vertical-align: middle;
+  padding: 5px 10px; height: auto; line-height: 1.3; vertical-align: middle;
   border: 1px solid var(--dc-border); white-space: nowrap;
   overflow: hidden;
 }
 .data-table th.sortable { cursor: pointer; user-select: none; }
 .data-table th.sortable:hover { color: var(--dc-text); }
-.data-table th.sort-asc, .data-table th.sort-desc { color: var(--dc-primary); }
+/* 已排序列：文字主色 + 底部 2px 主色条 */
+.data-table th.sort-asc, .data-table th.sort-desc { color: var(--dc-primary); box-shadow: inset 0 -2px 0 var(--dc-primary); }
 /* 表头排序按钮：平时淡显，鼠标移到表头才清晰；已排序列主色常亮 */
 .data-table th .th-sort {
   display: inline-flex; align-items: center; vertical-align: -1px;
@@ -1625,11 +1627,13 @@ onBeforeUnmount(() => {
 }
 .data-table th .th-line1 { display: flex; align-items: center; min-width: 0; }
 .data-table th .th-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* 类型图标徽章：18px 圆角底座（配色按类型族，见全局 index.css 的 th-t-*） */
 .data-table th .th-type-ic {
-  display: inline-flex; align-items: center; vertical-align: middle;
-  margin-right: 4px; font-size: 13px; cursor: default; color: var(--dc-text-dim);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex: 0 0 auto;
+  margin-right: 6px; border-radius: 5px; cursor: default; color: var(--dc-text-dim);
 }
-.data-table th .th-type-ic .el-icon { font-size: 13px; }
+.data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 列宽拖拽把手 */
 .col-resizer {
   position: absolute; top: 0; right: -5px; bottom: 0; width: 10px;
