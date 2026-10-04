@@ -5282,7 +5282,11 @@ const tabLabel = (tab) => {
   if (!isGlobalTab(tab) && tab.type !== 'sql') {
     const connName = allConnections.value.find(x => String(x.id) === String(tab.connId || ''))?.name
     const parts = [connName, tab.database].filter(Boolean)
-    if (parts.length) base = parts.join(' · ') + ' · ' + base
+    // 页签文本与库名相同时不再重复拼一份（Redis 的 db 页签 label 就是库名，
+    // 原来会显示成「本地Redis · db0 · db0」）
+    if (!parts.length) { /* 无前缀，保持原样 */ }
+    else if (base === tab.database) base = parts.join(' · ')
+    else base = parts.join(' · ') + ' · ' + base
   }
   return base
 }
