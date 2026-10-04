@@ -1488,7 +1488,7 @@ export default {
   // ---------- 设置 · 编辑器 ----------
   'settings.editor.title': '编辑器设置',
   'settings.editor.desc': '编辑器行为与外观，保存后新窗口生效',
-  'settings.editor.fontSize': '字号',
+  'settings.editor.fontSize': '编辑器字号',
   'settings.editor.gridFontSize': '结果表格字号',
   'settings.editor.gridFontSizeTip': '查询结果表格里数据格子的字号，与上方 SQL 编辑器的字号互相独立',
   'settings.editor.tabSize': 'Tab 宽度',

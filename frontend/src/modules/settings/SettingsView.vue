@@ -353,7 +353,6 @@
             <el-form-item :label="$t('settings.editor.gridFontSize')">
               <el-input-number v-model="editorForm.gridFontSize" :min="10" :max="20" :step="1" controls-position="right" style="width:120px" />
               <span class="unit">px</span>
-              <div class="form-tip">{{ $t('settings.editor.gridFontSizeTip') }}</div>
             </el-form-item>
             <el-form-item :label="$t('settings.editor.tabSize')">
               <el-select v-model="editorForm.tabSize" style="width:120px">

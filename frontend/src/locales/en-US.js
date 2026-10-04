@@ -1482,7 +1482,7 @@ export default {
   // ---------- Settings · Editor ----------
   'settings.editor.title': 'Editor',
   'settings.editor.desc': 'Editor behaviour and appearance; new windows pick it up after saving',
-  'settings.editor.fontSize': 'Font size',
+  'settings.editor.fontSize': 'Editor font size',
   'settings.editor.gridFontSize': 'Result grid font size',
   'settings.editor.gridFontSizeTip': 'Font size of cells in the query result grid, independent of the SQL editor font size above',
   'settings.editor.tabSize': 'Tab width',
