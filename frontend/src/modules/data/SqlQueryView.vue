@@ -171,7 +171,6 @@
       <div class="result-head">
         <span class="result-title">{{ showResultTabs ? ('结果集 ' + resultItems.length) : $t('sqlq.result') }}</span>
         <span class="flex-spacer"></span>
-        <span v-if="loading" class="loading-text"><el-icon class="is-loading"><Loading /></el-icon> {{ $t('sqlq.running') }}</span>
         <el-dropdown trigger="click" :hide-on-click="false" popper-class="col-vis-dropdown">
           <el-button size="small" text :icon="Operation"
                      :title="$t('sqlq.visibleColsTitle', { shown: resultVisibleCols.length, total: (result.columns || []).length })" />
@@ -210,7 +209,15 @@
         </button>
       </div>
       <div class="result-grid">
-        <!-- 查询中不再盖遮罩：工具栏有「停止」、底栏有实时耗时，盖住上一轮结果/报错反而碍事 -->
+        <!-- 加载遮罩：查询/翻页时可取消（与数据表一致） -->
+        <div v-if="running" class="grid-loading-overlay">
+          <div class="grid-loading-box">
+            <el-icon class="is-loading" :size="26"><Loading /></el-icon>
+            <span class="grid-loading-text">{{ $t('sqlq.querying') }}</span>
+            <el-button size="small" @click="stopSql">
+              <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('tree.multiCancel') }} </el-button>
+          </div>
+        </div>
         <!-- 数据表格（模板里 ref 自动解包：editorSettings 已是设置对象，.value 反而是 undefined —— 真机崩过） -->
         <div v-if="result?.success && result?.rows?.length" class="data-table-wrap" ref="resultTableWrapRef" tabindex="0"
         :style="{ '--grid-fs': (editorSettings.gridFontSize || 13) + 'px' }"
