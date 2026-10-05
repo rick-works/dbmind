@@ -8,7 +8,7 @@
   <artifactId>dbmind-mongo-test-server</artifactId>
   <version>0.1.0</version>
   <packaging>jar</packaging>
-  <name>DBMind MongoDB test server</name>
+  <name>DBmind MongoDB test server</name>
   <description>
     可复现的 Mongo 服务（mongo-java-server：用 Java 实现的 Mongo 线协议服务端）。
     只用于本地验证与 CI —— 不需要装 MongoDB，也不会污染真实数据。

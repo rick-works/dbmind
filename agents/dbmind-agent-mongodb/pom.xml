@@ -8,7 +8,7 @@
   <artifactId>dbmind-agent-mongodb</artifactId>
   <version>0.1.0</version>
   <packaging>jar</packaging>
-  <name>DBMind MongoDB Agent</name>
+  <name>DBmind MongoDB Agent</name>
   <description>
     MongoDB 专属协议宿主。与 JDBC 宿主共用同一套 NDJSON 协议，区别只有两点：
     1) 握手时声明 generic=false 且 agentKeys=["mongodb"]（专属，不冒充通用宿主）；

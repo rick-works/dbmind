@@ -8,7 +8,7 @@
   <artifactId>dbmind-es-test-server</artifactId>
   <version>0.1.0</version>
   <packaging>jar</packaging>
-  <name>DBMind Elasticsearch test server</name>
+  <name>DBmind Elasticsearch test server</name>
   <description>
     ES 的**契约级**测试替身：用 JDK 自带的 HttpServer 实现我们真正用到的那些 REST 端点。
 

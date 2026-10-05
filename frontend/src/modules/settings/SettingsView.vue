@@ -831,7 +831,7 @@
         <!-- 9. 关于 -->
         <div v-show="activeTab === 'about'" class="settings-panel">
           <div class="about-hero">
-            <span class="about-logo"><img :src="logoMdUrl" alt="DBMind" /></span>
+            <span class="about-logo"><img :src="logoMdUrl" alt="DBmind" /></span>
             <div class="about-meta">
               <div class="about-name">{{ $t('settings.about.name') }}</div>
               <div class="about-ver">{{ $t('settings.about.version', { version: APP_VERSION }) }}</div>

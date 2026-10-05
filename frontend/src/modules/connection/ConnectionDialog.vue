@@ -658,7 +658,7 @@ const paramPresetsOf = () => ({
   ],
   postgresql: [
     { name: 'sslmode', value: 'disable', tip: t('cd.tipSslmode') },
-    { name: 'ApplicationName', value: 'DBMind', tip: t('cd.tipAppName') },
+    { name: 'ApplicationName', value: 'DBmind', tip: t('cd.tipAppName') },
     { name: 'stringtype', value: 'unspecified', tip: t('cd.tipStringtype') }
   ],
   kingbase: [{ name: 'sslmode', value: 'disable', tip: t('cd.tipSslmode') }],

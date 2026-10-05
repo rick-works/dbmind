@@ -13,7 +13,7 @@
             @dblclick="onTopbarDblClick">
       <!-- 品牌 logo：顶栏最左角，只放图形不带文字（顶栏本是导航区，加标题会把它挤窄）。
            它落在顶栏自带的三段式拖动区内：桌面端按住它拖窗口 = 系统标题栏的行为。 -->
-      <img class="topbar-logo" :src="logoSmUrl" alt="DBMind" draggable="false" />
+      <img class="topbar-logo" :src="logoSmUrl" alt="DBmind" draggable="false" />
       <nav class="top-nav">
         <!-- 左侧：数据 → 治理/运维 → 动作（文字 + 图标）；右侧：知识库 / AI / 设置（只留图标 + 悬停提示） -->
         <!-- 只在侧栏折叠时出现的「展开」入口：展开态由侧栏工具条里那枚钮负责收起，

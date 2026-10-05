@@ -1,4 +1,4 @@
-//! DBMind 命令行壳。
+//! DBmind 命令行壳。
 //!
 //! 这一层**故意很薄**：解析参数 → 调 `DbMindEngine` → 渲染结果。
 //! 任何业务判断（安全、超时、取消、历史）都在内核里，CLI 无权绕过。
@@ -14,7 +14,7 @@ use std::process::ExitCode;
 #[command(
     name = "dbmind",
     version = dbmind_core::VERSION,
-    about = "DBMind —— 数据库工作台命令行",
+    about = "DBmind —— 数据库工作台命令行",
     long_about = "所有命令都走同一内核，因此与桌面/Web/MCP 的行为完全一致。"
 )]
 struct Cli {

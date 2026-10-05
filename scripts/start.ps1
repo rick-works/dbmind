@@ -1,4 +1,4 @@
-﻿# 启动 DBMind（后端 + 前端，单进程），并打开浏览器。
+﻿# 启动 DBmind（后端 + 前端，单进程），并打开浏览器。
 #
 #   powershell -ExecutionPolicy Bypass -File scripts\start.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts\start.ps1 -Port 20362 -NoBrowser -Log

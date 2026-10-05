@@ -4,8 +4,8 @@
 // so a missing key shows Chinese rather than a raw key name on screen.
 export default {
   // ---------- App shell ----------
-  'app.title': 'DBMind · Multi-Database Management',
-  'app.name': 'DBMind',
+  'app.title': 'DBmind · Multi-Database Management',
+  'app.name': 'DBmind',
 
   // Top navigation
   'nav.expandSidebar': 'Show object browser',
@@ -63,7 +63,7 @@ export default {
   'mv.saveAndClose': 'Save and close',
   'mv.dontSave': "Don't save",
   'mv.loadConnsFailed': 'Failed to load the connection list: {detail}',
-  'mv.mcpCommandLine': '      "command": "<DBMind install dir>/dbmind-mcp.exe"',
+  'mv.mcpCommandLine': '      "command": "<DBmind install dir>/dbmind-mcp.exe"',
   'mv.mcpCopied': 'MCP configuration copied',
   'mv.copyManually': 'Copy failed — select the text and copy it manually',
   'mv.historyConnGone': 'The connection this history entry belonged to no longer exists — the SQL was opened in the current connection; check it before running',
@@ -345,7 +345,7 @@ export default {
   'settings.tab.safety': 'Safety & sessions',
   'settings.tab.mcp': 'MCP service',
   'settings.mcp.title': 'MCP service',
-  'settings.mcp.desc': 'AI clients (Claude / Cursor etc.) connect to DBMind over MCP. Changes take effect on the next tool call after saving — no restart needed',
+  'settings.mcp.desc': 'AI clients (Claude / Cursor etc.) connect to DBmind over MCP. Changes take effect on the next tool call after saving — no restart needed',
   'settings.mcp.defaultConnection': 'Default connection',
   'settings.mcp.defaultConnectionTip': 'Used when the AI does not specify a connection; leave empty to require one every time',
   'settings.mcp.maxRows': 'Max rows per call',
@@ -567,7 +567,7 @@ export default {
   'aictx.dbListEmpty': 'No database list was returned (no permission, or the instance holds no database)',
   'aictx.tableListFailed': 'Could not load the table list',
   'bk.restore': 'Restore',
-  'ds.windowUnavailable': 'DBMind · window controls unavailable ({detail})',
+  'ds.windowUnavailable': 'DBmind · window controls unavailable ({detail})',
   'busy.elapsed': '{t} elapsed',
   'busy.working': 'Working…',
   'mdk.runTip': 'Dry run (read-only, first 100 rows)',
@@ -1705,7 +1705,7 @@ export default {
   'settings.notify.msgSaved': 'Notification settings saved',
 
   // ---------- Settings · About ----------
-  'settings.about.name': 'DBMind',
+  'settings.about.name': 'DBmind',
   'settings.about.version': 'Version {version}',
   'settings.about.supportedDbs': 'Supported databases',
 

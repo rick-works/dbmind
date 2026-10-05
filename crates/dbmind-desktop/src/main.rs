@@ -1,4 +1,4 @@
-//! DBMind 桌面壳（Tauri）。
+//! DBmind 桌面壳（Tauri）。
 //!
 //! ## 为什么是「壳 + 本地 HTTP」，而不是 IPC 命令
 //!
@@ -227,7 +227,7 @@ const PORT_SCAN: u16 = 20;
 /// 等内嵌内核就绪的上限
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// 一次极简的 HTTP 探测：确认该端口上跑的是 **DBMind**，而不只是"有东西在监听"。
+/// 一次极简的 HTTP 探测：确认该端口上跑的是 **DBmind**，而不只是"有东西在监听"。
 ///
 /// 手写报文是为了不给壳添一个 HTTP 客户端依赖 —— 这里只需要一个 GET，
 /// 而壳层依赖越多，编译越慢、供应链越长。
@@ -301,7 +301,7 @@ fn main() {
         }
         wait_ready(port);
     } else {
-        eprintln!("检测到 {port} 端口已有 DBMind 实例，复用它");
+        eprintln!("检测到 {port} 端口已有 DBmind 实例，复用它");
     }
 
     let origin = format!("http://127.0.0.1:{port}");
@@ -309,7 +309,7 @@ fn main() {
         .setup(move |app| {
             // 窗口在这里建、而不是写在 tauri.conf.json 里：端口是**运行时**定的。
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(origin.parse()?))
-                .title("DBMind")
+                .title("DBmind")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(1024.0, 640.0)
                 .center()

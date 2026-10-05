@@ -1,4 +1,4 @@
-//! DBMind HTTP 壳（axum）。
+//! DBmind HTTP 壳（axum）。
 //!
 //! ## 两套契约，各占各的前缀
 //!
@@ -881,7 +881,7 @@ pub async fn serve(options: Options) -> Result<(), String> {
         store = %summary.store_path,
         connections = summary.connection_count,
         drivers = format!("{}/{}", summary.implemented_types, summary.declared_types),
-        "DBMind 内核就绪"
+        "DBmind 内核就绪"
     );
 
     let router = build_router(AppState::new(engine), options.dist.clone());

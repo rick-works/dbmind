@@ -1,5 +1,5 @@
 ﻿<#
-  DBMind end-to-end smoke test (CLI full path).
+  DBmind end-to-end smoke test (CLI full path).
 
   NOTE: this file is intentionally ASCII-only. Windows PowerShell 5.1 reads
   script files using the ANSI code page unless a BOM is present, so non-ASCII

@@ -1,4 +1,4 @@
-//! # dbmind-core —— DBMind 内核
+//! # dbmind-core —— DBmind 内核
 //!
 //! 内核**只有逻辑，没有任何传输与界面**：不认识 HTTP、不认识 stdout 协议、不认识窗口。
 //! 四个壳（桌面 / Web / CLI / MCP）都只依赖本 crate 的 `DbMindEngine`。

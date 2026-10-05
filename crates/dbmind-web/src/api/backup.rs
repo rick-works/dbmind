@@ -1273,7 +1273,7 @@ async fn builtin_backup(
     let mut out = BufWriter::new(file);
     writeln!(
         out,
-        "-- DBMind 数据库备份\n-- 连接 {} ｜ 库 {} ｜ 时间 {}\n",
+        "-- DBmind 数据库备份\n-- 连接 {} ｜ 库 {} ｜ 时间 {}\n",
         record.config.name,
         if database.is_empty() { "(连接默认)" } else { database },
         tasks::stamp()

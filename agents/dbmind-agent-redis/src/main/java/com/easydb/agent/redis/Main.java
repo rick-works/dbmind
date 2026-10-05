@@ -33,7 +33,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * DBMind Redis 专属宿主。
+ * DBmind Redis 专属宿主。
  *
  * <p>三个刻意的设计：
  * <ul>

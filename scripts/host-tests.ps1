@@ -1,5 +1,5 @@
 ﻿<#
-  DBMind host layer: the kernel unit tests that talk to REAL agent hosts (JVM).
+  DBmind host layer: the kernel unit tests that talk to REAL agent hosts (JVM).
 
   Why a separate layer:
     By default `cargo test` does NOT load agent hosts at all (see

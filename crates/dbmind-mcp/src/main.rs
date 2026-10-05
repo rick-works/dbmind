@@ -1,4 +1,4 @@
-//! DBMind MCP 壳（stdio，JSON-RPC 2.0）。
+//! DBmind MCP 壳（stdio，JSON-RPC 2.0）。
 //!
 //! 与其它壳一样只调用内核；区别在于**来源标记为 `Mcp`**，于是内核的安全策略
 //! 默认只放行只读语句 —— 这一点不依赖客户端的自觉，也不受 `--allow-write` 之外的
@@ -317,7 +317,7 @@ impl Server {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "dbmind", "version": dbmind_core::VERSION },
-                "instructions": "DBMind 数据库工作台。默认只读；需要写入时请让用户在 DBMind 中开启「允许 AI 写入」。"
+                "instructions": "DBmind 数据库工作台。默认只读；需要写入时请让用户在 DBmind 中开启「允许 AI 写入」。"
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": self.tools() })),
@@ -370,7 +370,7 @@ impl Server {
         if !self.tool_enabled(name) {
             return Err(DbMindError::new(
                 ErrorCode::QueryInvalid,
-                "该工具类别已在 DBMind 设置 → MCP 中关闭",
+                "该工具类别已在 DBmind 设置 → MCP 中关闭",
             ));
         }
         match name {
@@ -499,7 +499,7 @@ impl Server {
         let all: Vec<Value> = vec![
             json!({
                 "name": "dbmind_list_connections",
-                "description": "列出 DBMind 中已配置的数据连接（不含口令）。",
+                "description": "列出 DBmind 中已配置的数据连接（不含口令）。",
                 "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
             }),
             json!({
@@ -544,7 +544,7 @@ impl Server {
             }),
             json!({
                 "name": "dbmind_execute_query",
-                "description": "执行一条 SQL。默认只允许只读语句（SELECT/SHOW/EXPLAIN 等）；写语句需用户在 DBMind 中开启允许 AI 写入。行数与超时的上限由设置页约束。",
+                "description": "执行一条 SQL。默认只允许只读语句（SELECT/SHOW/EXPLAIN 等）；写语句需用户在 DBmind 中开启允许 AI 写入。行数与超时的上限由设置页约束。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -583,7 +583,7 @@ impl Server {
             }),
             json!({
                 "name": "dbmind_server_info",
-                "description": "查看 DBMind MCP 服务自身：版本、AI 写入是否开启、生产保护等安全开关状态、开放的工具类别。写语句被拒时先查这里。",
+                "description": "查看 DBmind MCP 服务自身：版本、AI 写入是否开启、生产保护等安全开关状态、开放的工具类别。写语句被拒时先查这里。",
                 "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
             }),
         ];

@@ -8,8 +8,8 @@
 // 其余模块（数据树 / 查询编辑器 / AI / 知识库…）仍直接写着中文，属预期状态。
 export default {
   // ---------- 应用外壳 ----------
-  'app.title': 'DBMind · 多数据库统一管理',
-  'app.name': 'DBMind',
+  'app.title': 'DBmind · 多数据库统一管理',
+  'app.name': 'DBmind',
 
   // 顶部导航
   'nav.expandSidebar': '展开对象浏览器',
@@ -68,7 +68,7 @@ export default {
   'mv.saveAndClose': '保存并关闭',
   'mv.dontSave': '不保存',
   'mv.loadConnsFailed': '获取连接列表失败：{detail}',
-  'mv.mcpCommandLine': '      "command": "<DBMind 安装目录>/dbmind-mcp.exe"',
+  'mv.mcpCommandLine': '      "command": "<DBmind 安装目录>/dbmind-mcp.exe"',
   'mv.mcpCopied': 'MCP 配置已复制',
   'mv.copyManually': '复制失败，请手动选中复制',
   'mv.historyConnGone': '这条历史所属的连接已不存在，已在当前连接中打开该 SQL，请确认后再执行',
@@ -350,7 +350,7 @@ export default {
   'settings.tab.safety': '安全与会话',
   'settings.tab.mcp': 'MCP 服务',
   'settings.mcp.title': 'MCP 服务',
-  'settings.mcp.desc': 'AI 客户端（Claude / Cursor 等）通过 MCP 连接 DBMind。以下配置保存后，下一次工具调用即生效，无需重启',
+  'settings.mcp.desc': 'AI 客户端（Claude / Cursor 等）通过 MCP 连接 DBmind。以下配置保存后，下一次工具调用即生效，无需重启',
   'settings.mcp.defaultConnection': '默认连接',
   'settings.mcp.defaultConnectionTip': 'AI 没有指定连接时用它兜底；留空则要求 AI 每次必须指定',
   'settings.mcp.maxRows': '单次最大行数',
@@ -573,7 +573,7 @@ export default {
   'aictx.dbListEmpty': '未获取到数据库列表（可能无访问权限或实例下无可用库）',
   'aictx.tableListFailed': '表清单加载失败',
   'bk.restore': '还原',
-  'ds.windowUnavailable': 'DBMind · 窗口控制不可用（{detail}）',
+  'ds.windowUnavailable': 'DBmind · 窗口控制不可用（{detail}）',
   'busy.elapsed': '已用时 {t}',
   'busy.working': '处理中…',
   'mdk.runTip': '试跑（只读，取前 100 行）',
@@ -1711,7 +1711,7 @@ export default {
   'settings.notify.msgSaved': '通知设置已保存',
 
   // ---------- 设置 · 关于 ----------
-  'settings.about.name': 'DBMind',
+  'settings.about.name': 'DBmind',
   'settings.about.version': '版本 {version}',
   'settings.about.supportedDbs': '支持的数据库',
 

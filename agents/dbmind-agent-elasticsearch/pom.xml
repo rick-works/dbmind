@@ -8,7 +8,7 @@
   <artifactId>dbmind-agent-elasticsearch</artifactId>
   <version>0.1.0</version>
   <packaging>jar</packaging>
-  <name>DBMind Elasticsearch Agent</name>
+  <name>DBmind Elasticsearch Agent</name>
   <description>
     Elasticsearch 专属宿主：把用户写的 REST 请求原样转给集群。
 

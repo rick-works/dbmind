@@ -255,7 +255,7 @@ impl AgentDriver {
                     )
                     .with_detail(format!(
                         "把 Microsoft JDBC Driver 发行包里 auth\\{arch}\\ 下的 \
-                         mssql-jdbc_auth-<驱动版本>.{arch}.dll 放到 {} 后重启 DBMind（库路径只在 \
+                         mssql-jdbc_auth-<驱动版本>.{arch}.dll 放到 {} 后重启 DBmind（库路径只在 \
                          Java 宿主启动时读取）；只想先连上也可以改用「SQL Server 身份验证」。",
                         agent::driver_dir(key).display()
                     )));

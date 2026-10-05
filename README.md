@@ -1,8 +1,8 @@
-# DBMind
+# DBmind
 
 **多数据库统一管理客户端 —— 前端（Vue 3）+ Rust 内核 + 兼容契约 HTTP 层。**
 
-前端在既有前端工程的基础上**持续改造而来**（界面、样式、菜单、交互都已按 DBMind 的需求改过）；
+前端在既有前端工程的基础上**持续改造而来**（界面、样式、菜单、交互都已按 DBmind 的需求改过）；
 后端是 Rust 内核（`dbmind-core`）+ 一层实现 `/api/…` 契约的 HTTP 壳（`crates/dbmind-web/src/api/`）。
 
 > **关于这层兼容层**：内核只提供少数元数据能力，而界面要的是完整的一套 REST 契约。
@@ -15,14 +15,14 @@
 
 ```powershell
 # 1) 构建后端（首次约 1 分钟）
-cd DBMind
+cd DBmind
 cargo build -p dbmind-web
 
 # 2) 启动：单进程同时提供 API 与前端产物，默认 http://127.0.0.1:20361
 .\target\debug\dbmind-web.exe --port 20361 --dist frontend\dist
 ```
 
-浏览器打开 <http://127.0.0.1:20361/> 就是 DBMind 的界面。
+浏览器打开 <http://127.0.0.1:20361/> 就是 DBmind 的界面。
 
 ### 桌面版（Tauri）
 
@@ -33,7 +33,7 @@ cargo build -p dbmind-desktop --release
 .\target\release\dbmind-desktop.exe
 ```
 
-它做三件事：**①** 探一次 `20361` —— 那儿已经有 DBMind（比如你先前用 `start.ps1` 起过）
+它做三件事：**①** 探一次 `20361` —— 那儿已经有 DBmind（比如你先前用 `start.ps1` 起过）
 就**直接复用**，不再起第二份引擎（两个进程同写一份 SQLite 元数据库迟早出事）；
 **②** 没有就自己起内嵌 HTTP 内核（`dbmind_web::spawn_embedded`），端口被别的东西占了
 就往后找一个空闲的；**③** 把窗口指向 `http://127.0.0.1:<port>`。
@@ -280,7 +280,7 @@ powershell -ExecutionPolicy Bypass -File scripts\real-ssh-check.ps1
 ## 7. 目录结构
 
 ```
-DBMind/
+DBmind/
 ├── crates/
 │   ├── dbmind-core/      内核（独立 crate，不依赖 web 层）
 │   ├── dbmind-web/       HTTP 壳：内核原生契约 + /api/… 兼容层（src/api/）

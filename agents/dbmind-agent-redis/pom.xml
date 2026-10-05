@@ -8,7 +8,7 @@
   <artifactId>dbmind-agent-redis</artifactId>
   <version>0.1.0</version>
   <packaging>jar</packaging>
-  <name>DBMind Redis Agent</name>
+  <name>DBmind Redis Agent</name>
   <description>
     Redis 专属协议宿主。与 JDBC 宿主共用同一套 NDJSON 协议，差别在：
     1) 握手声明 generic=false + agentKeys=["redis"]；

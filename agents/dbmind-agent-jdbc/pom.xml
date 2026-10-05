@@ -8,7 +8,7 @@
   <artifactId>dbmind-agent-jdbc</artifactId>
   <version>0.1.0</version>
   <packaging>jar</packaging>
-  <name>DBMind JDBC Agent</name>
+  <name>DBmind JDBC Agent</name>
   <description>
     通用 JDBC 驱动宿主：只做「加载驱动类 + 按内核给的 URL 连接 + 执行 + 映射结果」四件事。
     所有「怎么连某个数据库」的知识都在 plugins/connection-types/*.yaml 里，

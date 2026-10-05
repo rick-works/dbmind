@@ -1,5 +1,5 @@
 ﻿<#
-  DBMind real-Redis check: runs the one #[ignore]d test that talks to a REAL Redis
+  DBmind real-Redis check: runs the one #[ignore]d test that talks to a REAL Redis
   (crates/dbmind-core/tests/real_redis.rs) -- not the stub the host layer uses.
 
   Why it is separate from scripts/host-tests.ps1:

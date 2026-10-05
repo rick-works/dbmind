@@ -382,7 +382,7 @@ impl<W: Write + Send> RowSink for SqlInsertSink<W> {
         let list: Vec<String> = self.columns.iter().map(|name| self.dialect.quote(name)).collect();
         writeln!(
             self.out,
-            "-- 由 DBMind 导出于 {}\n-- 目标表 {}\n",
+            "-- 由 DBmind 导出于 {}\n-- 目标表 {}\n",
             tasks::stamp(),
             self.table
         )
@@ -427,7 +427,7 @@ impl<W: Write + Send> RowSink for SqlUpdateSink<W> {
     fn begin(&mut self, columns: &[String]) -> Result<(), String> {
         self.columns = columns.to_vec();
         self.pk_index = resolve_pk(columns, &self.pk)?;
-        writeln!(self.out, "-- 由 DBMind 导出于 {}", tasks::stamp()).map_err(io_error)
+        writeln!(self.out, "-- 由 DBmind 导出于 {}", tasks::stamp()).map_err(io_error)
     }
 
     fn row(&mut self, cells: &[CellValue]) -> Result<(), String> {
@@ -467,7 +467,7 @@ struct SqlDeleteSink<W: Write> {
 impl<W: Write + Send> RowSink for SqlDeleteSink<W> {
     fn begin(&mut self, columns: &[String]) -> Result<(), String> {
         self.pk_index = resolve_pk(columns, &self.pk)?;
-        writeln!(self.out, "-- 由 DBMind 导出于 {}", tasks::stamp()).map_err(io_error)
+        writeln!(self.out, "-- 由 DBmind 导出于 {}", tasks::stamp()).map_err(io_error)
     }
 
     fn row(&mut self, cells: &[CellValue]) -> Result<(), String> {
@@ -1326,7 +1326,7 @@ async fn export_dump(
         let mut out = BufWriter::new(file);
         writeln!(
             out,
-            "-- DBMind 整库转储\n-- 连接 {} ｜ 库 {} ｜ 时间 {}\n",
+            "-- DBmind 整库转储\n-- 连接 {} ｜ 库 {} ｜ 时间 {}\n",
             record.config.name,
             if req.database.is_empty() { "(连接默认)" } else { &req.database },
             tasks::stamp()

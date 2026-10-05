@@ -1,4 +1,4 @@
-﻿# Assemble a portable DBMind bundle.
+﻿# Assemble a portable DBmind bundle.
 #
 # Layout (the kernel resolves hosts from <exe dir>/agents, or from DBMIND_AGENTS_DIR):
 #
@@ -35,7 +35,7 @@ if (-not $version) { $version = '0.0.0' }
 $targetProfile = if ($Profile -eq 'release') { 'release' } else { 'debug' }
 $outDir = if ($Out) { $Out } else { Join-Path $root ('dist\dbmind-' + $version) }
 
-Write-Host ('=== DBMind package (' + $Profile + ') -> ' + $outDir)
+Write-Host ('=== DBmind package (' + $Profile + ') -> ' + $outDir)
 
 # ---------------------------------------------------------------- binaries
 if (-not $SkipCargo) {

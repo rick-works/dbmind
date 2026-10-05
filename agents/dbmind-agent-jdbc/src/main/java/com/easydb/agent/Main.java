@@ -29,7 +29,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * DBMind 通用 JDBC 驱动宿主。
+ * DBmind 通用 JDBC 驱动宿主。
  *
  * <p>职责只有四件：**加载驱动类、按内核给的 URL 连接、执行语句、把结果映射成协议形状**。
  * 「怎么连某个数据库」全部来自内核传来的 YAML 元数据（driverClass / urlTemplate），

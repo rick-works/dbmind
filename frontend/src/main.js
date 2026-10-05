@@ -196,7 +196,7 @@ const origError = ElMessage.error
 ElMessage.error = (msg, options) => {
   const raw = toErrText(msg)
   // Error 对象额外打印完整堆栈到控制台，便于定位根因（界面仍给出行信息）
-  if (msg instanceof Error && msg.stack) console.error('[DBMind 错误详情]', msg.stack)
+  if (msg instanceof Error && msg.stack) console.error('[DBmind 错误详情]', msg.stack)
   // 含换行或内容较长时按 HTML 渲染，完整展示多行细节
   const needHtml = /[\r\n]/.test(raw) || raw.length > 100
   const message = needHtml

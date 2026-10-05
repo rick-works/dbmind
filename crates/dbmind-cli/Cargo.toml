@@ -1,6 +1,6 @@
 [package]
 name = "dbmind-cli"
-description = "DBMind 命令行壳（薄壳：只做参数解析与输出渲染）"
+description = "DBmind 命令行壳（薄壳：只做参数解析与输出渲染）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,16 +1,16 @@
 ﻿<#
-把 .db 文件关联到 DBMind（图标 + 双击用 DBMind 打开）。
+把 .db 文件关联到 DBmind（图标 + 双击用 DBmind 打开）。
 
 为什么需要这个脚本：
   Windows 上「.db 显示什么图标」由注册表里的文件关联决定。
   机器上若装过别的数据库工具，它会把 .db 注册成自己的类型（ProgId 形如 "Database File"），
   于是资源管理器里连我们自己的数据文件 dbmind.db 也用它的图标。
-  这个脚本把 .db 指到 DBMind 自己的类型与图标上。
+  这个脚本把 .db 指到 DBmind 自己的类型与图标上。
 
 特点：
   · 只写 HKCU（当前用户），不需要管理员，也不影响别的用户
   · 可逆：改之前会把原来的关联备份下来，-Restore 一键还原
-  · 图标从本仓库复制到 %LOCALAPPDATA%\DBMind\icons\，仓库挪走也不影响
+  · 图标从本仓库复制到 %LOCALAPPDATA%\DBmind\icons\，仓库挪走也不影响
 
 用法：
   powershell -ExecutionPolicy Bypass -File scripts\associate-db-files.ps1
@@ -25,10 +25,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$PROGID = 'DBMind.Database'
+$PROGID = 'DBmind.Database'
 $ROOT = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $ICON_SRC = Join-Path $ROOT 'crates\dbmind-desktop\icons\icon.ico'
-$STORE = Join-Path $env:LOCALAPPDATA 'DBMind'
+$STORE = Join-Path $env:LOCALAPPDATA 'DBmind'
 $ICON_DST = Join-Path $STORE 'icons\dbmind-db.ico'
 $BACKUP = Join-Path $STORE 'db-assoc-backup.txt'
 
@@ -57,7 +57,7 @@ if ($Restore) {
     Write-Host '  ✓ 之前没有备份，已移除我们写的那项（.db 回到系统默认）' -ForegroundColor Green
   }
   Remove-Item -Path ('HKCU:\Software\Classes\' + $PROGID) -Recurse -Force -ErrorAction SilentlyContinue
-  Write-Host '  ✓ 已删除 DBMind 的类型项' -ForegroundColor Green
+  Write-Host '  ✓ 已删除 DBmind 的类型项' -ForegroundColor Green
   Refresh-Shell
   Write-Host '完成。资源管理器里按 F5 看一眼即可。' -ForegroundColor Cyan
   return
@@ -90,8 +90,8 @@ if (-not (Test-Path $BACKUP)) {
 # ---------------------------------------------------------------- 写关联
 $base = 'HKCU:\Software\Classes\' + $PROGID
 New-Item -Path $base -Force | Out-Null
-Set-ItemProperty -Path $base -Name '(default)' -Value 'DBMind 数据库'
-Set-ItemProperty -Path $base -Name 'FriendlyTypeName' -Value 'DBMind 数据库'
+Set-ItemProperty -Path $base -Name '(default)' -Value 'DBmind 数据库'
+Set-ItemProperty -Path $base -Name 'FriendlyTypeName' -Value 'DBmind 数据库'
 New-Item -Path ($base + '\DefaultIcon') -Force | Out-Null
 Set-ItemProperty -Path ($base + '\DefaultIcon') -Name '(default)' -Value ('"' + $ICON_DST + '"')
 
@@ -100,7 +100,7 @@ if ($AppPath -and (Test-Path $AppPath)) {
   Set-ItemProperty -Path ($base + '\shell\open\command') -Name '(default)' -Value ('"' + $AppPath + '" "%1"')
   Write-Host ('双击 .db 将用：' + $AppPath) -ForegroundColor Green
 } else {
-  Write-Host '没找到已构建的 DBMind 桌面程序 —— 只登记图标，不接管双击（双击仍走系统默认）' -ForegroundColor Yellow
+  Write-Host '没找到已构建的 DBmind 桌面程序 —— 只登记图标，不接管双击（双击仍走系统默认）' -ForegroundColor Yellow
 }
 
 New-Item -Path 'HKCU:\Software\Classes\.db' -Force | Out-Null
@@ -109,6 +109,6 @@ Set-ItemProperty -Path 'HKCU:\Software\Classes\.db' -Name 'Content Type' -Value 
 
 Refresh-Shell
 Write-Host '' 
-Write-Host '.db 已关联到 DBMind ✓' -ForegroundColor Cyan
+Write-Host '.db 已关联到 DBmind ✓' -ForegroundColor Cyan
 Write-Host '  恢复到原样：  powershell -ExecutionPolicy Bypass -File scripts\associate-db-files.ps1 -Restore' -ForegroundColor DarkGray
 Write-Host '  资源管理器里按 F5；若图标还没变，注销/重启一次即可（系统图标缓存）' -ForegroundColor DarkGray

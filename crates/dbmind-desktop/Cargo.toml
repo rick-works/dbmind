@@ -1,6 +1,6 @@
 [package]
 name = "dbmind-desktop"
-description = "DBMind 桌面壳（Tauri：内嵌 HTTP 内核 + 系统 WebView）"
+description = "DBmind 桌面壳（Tauri：内嵌 HTTP 内核 + 系统 WebView）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

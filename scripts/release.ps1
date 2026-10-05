@@ -104,7 +104,7 @@ $portableDir = Join-Path $root ('dist\dbmind-' + $version)
 $installerDir = Join-Path $root 'dist\installer'
 
 Write-Host ''
-Write-Host ('DBMind 打包 ' + $version) -ForegroundColor White
+Write-Host ('DBmind 打包 ' + $version) -ForegroundColor White
 Write-Host ('项目根 ' + $root) -ForegroundColor DarkGray
 
 # ================================================================== 1/8 环境检查

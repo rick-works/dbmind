@@ -8,7 +8,7 @@
   <artifactId>dbmind-redis-test-server</artifactId>
   <version>0.1.0</version>
   <packaging>jar</packaging>
-  <name>DBMind Redis test server</name>
+  <name>DBmind Redis test server</name>
   <description>
     Redis 的**契约级**测试替身：用 JDK 自带的 ServerSocket 实现 RESP2 里我们真正用到的那部分命令。
 

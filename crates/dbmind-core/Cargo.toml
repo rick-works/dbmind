@@ -1,6 +1,6 @@
 [package]
 name = "dbmind-core"
-description = "DBMind 内核：连接类型注册表（编译期生成）、存储、安全策略、驱动与查询引擎"
+description = "DBmind 内核：连接类型注册表（编译期生成）、存储、安全策略、驱动与查询引擎"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

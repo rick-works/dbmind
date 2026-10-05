@@ -29,7 +29,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * DBMind Elasticsearch 专属宿主。
+ * DBmind Elasticsearch 专属宿主。
  *
  * <p>它做的事很窄：**把用户写的 REST 请求转给集群，再把响应整理成表格**。
  *

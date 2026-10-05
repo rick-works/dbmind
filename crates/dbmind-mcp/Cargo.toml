@@ -1,6 +1,6 @@
 [package]
 name = "dbmind-mcp"
-description = "DBMind MCP 壳（stdio JSON-RPC，默认只读）"
+description = "DBmind MCP 壳（stdio JSON-RPC，默认只读）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

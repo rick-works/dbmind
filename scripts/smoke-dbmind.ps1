@@ -124,7 +124,7 @@ $sqliteFile = Join-Path $workHome 'smoke.db'
 $env:DBMIND_HOME = $workHome
 $proc = Start-Process -FilePath $exe -ArgumentList '--port', "$Port", '--dist', (Join-Path $root 'frontend\dist') -PassThru -WindowStyle Hidden
 
-Write-Host "DBMind 冒烟：端口 $Port，数据目录 $workHome" -ForegroundColor Cyan
+Write-Host "DBmind 冒烟：端口 $Port，数据目录 $workHome" -ForegroundColor Cyan
 $ready = $false
 for ($i = 0; $i -lt 40; $i++) {
     Start-Sleep -Milliseconds 250

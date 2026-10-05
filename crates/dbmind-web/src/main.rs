@@ -1,4 +1,4 @@
-//! DBMind HTTP 壳的启动入口。**薄**：只解析参数、初始化日志、交给库启动。
+//! DBmind HTTP 壳的启动入口。**薄**：只解析参数、初始化日志、交给库启动。
 
 use dbmind_web::Options;
 use std::path::PathBuf;

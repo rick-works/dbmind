@@ -29,7 +29,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * DBMind MongoDB 专属宿主。
+ * DBmind MongoDB 专属宿主。
  *
  * <p>与 JDBC 宿主**共用同一套 NDJSON 协议**（见 docs/architecture.md），差别只在两处：
  * <ul>

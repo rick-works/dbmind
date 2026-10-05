@@ -42,7 +42,7 @@ impl XError {
     pub fn not_implemented(feature: &str) -> Self {
         Self::new(
             StatusCode::NOT_IMPLEMENTED,
-            format!("「{feature}」在 DBMind 内核里还没有对应实现"),
+            format!("「{feature}」在 DBmind 内核里还没有对应实现"),
         )
     }
 }

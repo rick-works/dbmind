@@ -1,5 +1,5 @@
 <#
-  DBMind real-SSH check: runs the one #[ignore]d test that talks to a REAL SSH
+  DBmind real-SSH check: runs the one #[ignore]d test that talks to a REAL SSH
   jump host (crates/dbmind-core/tests/real_ssh.rs).
 
   Why it is separate from scripts/host-tests.ps1:

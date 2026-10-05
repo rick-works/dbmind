@@ -1,6 +1,6 @@
 [package]
 name = "dbmind-web"
-description = "DBMind HTTP 壳（axum，可同时托管前端产物）"
+description = "DBmind HTTP 壳（axum，可同时托管前端产物）"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
