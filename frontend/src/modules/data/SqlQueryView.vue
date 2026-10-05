@@ -302,6 +302,7 @@
                     :class="[cellAlignClass(row[c.name], resultTypeOf(c.idx)), { 'null-cell': row[c.name] == null, 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name), 'active-cell': resultActiveCell && resultActiveCell.rowIdx === (vtStart + idx) && resultActiveCell.col === c.name && noResultBulkSelection }]"
                     :title="row[c.name] == null ? nullDisplay() : String(row[c.name])" :data-gkey="(vtStart + idx + 1) + ':' + c.idx"
                     @click="onResultCellClick(vtStart + idx, c.name)"
+                    @dblclick.stop="onCellQuickEdit(vtStart + idx, c.name, row)"
                     @contextmenu.prevent.stop="onResultContextMenu($event, vtStart + idx, c.name)">
                   <!-- v-memo：内容没变就跳过该格的 vnode 创建与 diff；memo key 用原始值，值变必重渲染
                        （NULL 样式也在 key 里：设置页改样式能直接重渲染，不必重跑查询）。
@@ -484,6 +485,19 @@
   <!-- SQL 快捷验证：AI 给的 SQL 先看执行计划 / 试跑一次（不消耗 AI 调用） -->
   <SqlProbeDialog v-model="probeVisible" :sql="probeSql" :conn-id="selectedConnId || props.conn?.id"
                   :database="props.database" :mode="probeMode" @insert="onProbeInsert" />
+  <!-- 模板变量填参：SQL 里的 :name 占位符在执行前收值（值按名称记忆） -->
+  <el-dialog v-model="varDialog.visible" :title="$t('sqlq.varDialogTitle')" width="430" append-to-body
+             :close-on-click-modal="false" @keyup.enter="onVarConfirm">
+    <div class="var-row" v-for="v in varDialog.vars" :key="v">
+      <span class="var-name">:{{ v }}</span>
+      <el-input v-model="varDialog.values[v]" :placeholder="$t('sqlq.varValuePh')" clearable />
+    </div>
+    <div class="var-hint">{{ $t('sqlq.varHint') }}</div>
+    <template #footer>
+      <el-button @click="onVarCancel">{{ $t('common.cancel') }}</el-button>
+      <el-button type="primary" @click="onVarConfirm">{{ $t('sqlq.varRun') }}</el-button>
+    </template>
+  </el-dialog>
   <!-- 查询结果数据透视：复用当前结果网格做分组汇总 / 计数 / 下钻，纯前端不消耗后端 -->
   <DataPivotDialog v-model="pivotVisible" :columns="pivotColumns" :rows="pivotRows" />
   <!-- 行详情：双击 / 右键行号查看整行字段明细 -->
@@ -1692,6 +1706,76 @@ const onResultRowContextMenu = (e, rowIdx) => { e.preventDefault(); openResCtx(e
 const onResultContextMenu = (e, rowIdx, col) => { e.preventDefault(); openResCtx(e.clientX, e.clientY, rowIdx, col, 'cell') }
 
 // ========== 行详情：双击 / 右键行号查看整行字段明细（复用单元格详情弹窗） ==========
+// ===== 单元格快捷编辑：双击数据格 → 改值 → 生成 UPDATE 回填编辑器（**不执行**）=====
+// 表名取当前执行 SQL 的 FROM；JOIN 结果不启用（列归属不明，生成的语句会张冠李戴）。
+// WHERE：行里有名为 id 的列按主键定位；否则用「其余全部列」拼 AND 条件（NULL → IS NULL），
+// 行内全列条件总是精确命中本行，安全但可能较长 —— 可用后手改。
+const quickEditTableOf = () => {
+  const text = lastExecSql.value || sql.value || ''
+  if (!text || /\bjoin\b/i.test(text)) return null
+  const m = text.match(/\bfrom\s+[`"']?([\w.]+)[`"']?/i)
+  return m ? m[1] : null
+}
+const sqlLiteralOf = (v) => {
+  if (v === null || v === undefined) return 'NULL'
+  if (typeof v === 'number') return String(v)
+  const s = String(v)
+  if (/^-?\d+(\.\d+)?$/.test(s)) return s
+  return `'${s.replace(/'/g, "''")}'`
+}
+const appendToEditor = (text) => {
+  const ed = editorInstance
+  const model = ed && ed.getModel()
+  if (!ed || !model) return
+  const cur = sql.value || ''
+  const sep = cur.trim() ? (cur.endsWith('\n') ? '\n' : '\n\n') : ''
+  sql.value = cur + sep + text
+  nextTick(() => {
+    const ln = model.getLineCount()
+    ed.revealLine(ln)
+    ed.setPosition({ lineNumber: ln, column: (model.getLineContent(ln) || '').length + 1 })
+    ed.focus()
+  })
+}
+const onCellQuickEdit = async (rowIdx, colName, row) => {
+  const table = quickEditTableOf()
+  if (!table) { ElMessage.warning(t('sqlq.cellEditJoinSkip')); return }
+  const oldRaw = row[colName]
+  const oldShown = oldRaw == null ? nullDisplay() : String(formatDbValue(oldRaw))
+  let newVal = ''
+  try {
+    const r = await ElMessageBox.prompt(
+      `${table}.${colName} = ${oldRaw === null || oldRaw === undefined ? 'NULL' : oldShown}`,
+      t('sqlq.cellEditTitle'),
+      {
+        inputValue: oldRaw == null ? '' : String(formatDbValue(oldRaw)),
+        inputPlaceholder: t('sqlq.cellEditPh'),
+        confirmButtonText: t('sqlq.cellEditGen'),
+        cancelButtonText: t('common.cancel'),
+        closeOnClickModal: false
+      }
+    )
+    newVal = String(r.value ?? '').trim()
+  } catch { return }
+  if (newVal === oldShown) { ElMessage.info(t('sqlq.cellEditNoChange')); return }
+  const setLit = /^null$/i.test(newVal) ? 'NULL' : sqlLiteralOf(newVal)
+  const keys = Object.keys(row)
+  const whereParts = []
+  const pk = keys.find((k) => k.toLowerCase() === 'id')
+  if (pk) {
+    whereParts.push(`${pk} = ${sqlLiteralOf(row[pk])}`)
+  } else {
+    keys.forEach((k) => {
+      if (k === colName) return
+      const v = row[k]
+      if (v === null || v === undefined) whereParts.push(`${k} IS NULL`)
+      else whereParts.push(`${k} = ${sqlLiteralOf(v)}`)
+    })
+  }
+  if (!whereParts.length) { ElMessage.warning(t('sqlq.cellEditNoWhere')); return }
+  appendToEditor(`UPDATE ${table}\nSET ${colName} = ${setLit}\nWHERE ${whereParts.join('\n  AND ')};`)
+}
+
 const rowDetail = ref({ visible: false, title: '', text: '' })
 const openRowDetail = (rowIdx) => {
   const rows = result.value?.rows || []
@@ -3429,11 +3513,80 @@ const previewWriteRows = async (execSql, connId, db) => {
   } catch { return false }
 }
 
+// ===== 模板变量：SQL 里带 :name 占位符时，执行前弹窗填参 =====
+// 提取/替换都走 mapOutsideQuotes（字符串字面量里的 "12:30" 不会被当成变量）。
+// 值按名称记忆（localStorage），数字直写、null 置 NULL、其余按字符串字面量转义。
+let varValuesOnce = null
+let pendingRunParams = null
+const varDialog = ref({ visible: false, vars: [], values: {} })
+const VARVALS_LS = 'dbmind_varvalues'
+const readVarVals = () => { try { return JSON.parse(localStorage.getItem(VARVALS_LS) || '{}') } catch { return {} } }
+const extractSqlVars = (text) => {
+  const found = []
+  const seen = new Set()
+  mapOutsideQuotes(text, (seg) => {
+    const re = /(?<![:@\w]):([a-z_][\w$]*)/gi
+    let m
+    while ((m = re.exec(seg))) {
+      if (!seen.has(m[1].toLowerCase())) { seen.add(m[1].toLowerCase()); found.push(m[1]) }
+    }
+    return seg
+  })
+  return found
+}
+const substituteVars = (text, values) => mapOutsideQuotes(text, (seg) =>
+  seg.replace(/(?<![:@\w]):([a-z_][\w$]*)/gi, (whole, name) => {
+    const v = values[name]
+    if (v === undefined || String(v).trim() === '') return whole
+    const s = String(v).trim()
+    if (/^null$/i.test(s)) return 'NULL'
+    if (/^-?\d+(\.\d+)?$/.test(s)) return s
+    return `'${s.replace(/'/g, "''")}'`
+  })
+)
+const openVarDialog = (vars) => {
+  const remembered = readVarVals()
+  const values = {}
+  vars.forEach((v) => { values[v] = remembered[v] || '' })
+  varDialog.value = { visible: true, vars, values }
+}
+const onVarConfirm = () => {
+  const d = varDialog.value
+  const missing = d.vars.filter((v) => !(d.values[v] || '').trim())
+  if (missing.length) { ElMessage.warning(t('sqlq.varMissing', { n: missing.length })); return }
+  try {
+    const m = readVarVals()
+    d.vars.forEach((v) => { m[v] = d.values[v] })
+    localStorage.setItem(VARVALS_LS, JSON.stringify(m))
+  } catch { /* 存储不可用就算了 */ }
+  varValuesOnce = { ...d.values }
+  d.visible = false
+  const p = pendingRunParams || {}
+  pendingRunParams = null
+  runSql(p.page || 1, p.size || pageSize.value, p.batchable !== false)
+}
+const onVarCancel = () => {
+  varDialog.value.visible = false
+  pendingRunParams = null
+}
+
 const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   if (running.value) return
   if (!requireSql()) return
-  const execSql = getExecutableSql(page !== 1)
+  let execSql = getExecutableSql(page !== 1)
   if (!execSql) return
+  // 模板变量：一次性值已在手（确认弹窗后重入）就替换；否则先弹窗收参
+  if (varValuesOnce) {
+    execSql = substituteVars(execSql, varValuesOnce)
+    varValuesOnce = null
+  } else {
+    const vars = extractSqlVars(execSql)
+    if (vars.length) {
+      pendingRunParams = { page, size, batchable }
+      openVarDialog(vars)
+      return
+    }
+  }
   lastExecSql = execSql
   // 生产库保护：PROD 连接上写操作再确认一次（读操作不打扰）
   if (!isNoSql.value && isProdConnection() && isWriteSql(execSql)) {
@@ -4589,4 +4742,8 @@ onBeforeUnmount(() => {
 }
 .stmt-chip:hover .stmt-run { display: inline-flex; }
 .stmt-run:hover { opacity: .8; }
+/* 模板变量填参弹窗 */
+.var-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.var-name { font-family: monospace; font-size: 13px; color: var(--dc-primary); width: 110px; text-align: right; flex-shrink: 0; }
+.var-hint { font-size: 12px; color: var(--dc-text-dim); line-height: 1.6; }
 </style>
