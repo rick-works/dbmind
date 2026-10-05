@@ -1181,6 +1181,19 @@ const winClose = async () => {
       }
     }
   }
+  // 事务未提交的页签：关窗 = 自动回滚（组件卸载钩子会兜底发 rollback）—— 列出来说清楚再走
+  const txTabs = tabs.value.filter(t => t.type === 'sql' && sqlViewRefs[t.id]?.txOpenDirty?.())
+  if (txTabs.length) {
+    const names = txTabs.map(tb => t('common.quoted', { name: tabLabel(tb) })).join(t('common.listSep'))
+    try {
+      await ElMessageBox.confirm(t('mv.txCloseAsk', { names }), t('sqlq.txCloseTitle'), {
+        type: 'warning',
+        confirmButtonText: t('sqlq.txCloseRollback'),
+        cancelButtonText: t('common.cancel'),
+        closeOnClickModal: false
+      })
+    } catch { return }
+  }
   winApi.close()
 }
 /** 双击顶栏空白处 = 最大化 / 还原（无边框窗口系统不再代劳；落在导航/按钮上时不动窗口） */
@@ -4139,6 +4152,12 @@ const closeTab = async (id) => {
       try { ok = await (sqlViewRefs[id] ? sqlViewRefs[id].saveForClose() : true) } catch { ok = false }
       if (ok === false) return
     }
+  }
+  // 事务未提交：关页签 = 回滚 —— 先问一声（回滚并关闭 / 留下来自己提交）
+  if (tab && tab.type === 'sql' && sqlViewRefs[id]) {
+    let txOk = true
+    try { txOk = await sqlViewRefs[id].txForClose() } catch { txOk = false }
+    if (!txOk) return
   }
   doClose(id)
 }

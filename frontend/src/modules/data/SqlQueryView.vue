@@ -4028,8 +4028,26 @@ const doSaveScript = (nameOverride, silent = false) => {
   notifyScriptsChanged()
   return true
 }
+// ===== 关闭页签/窗口前的事务守卫 =====
+// txOpenDirty：同步探针（父级列「哪些页签有未提交事务」用）
+const txOpenDirty = () => txMode.value && txDirty.value
+// txForClose：异步守卫 —— 事务未提交时弹窗（回滚并关闭 / 留下来处理），返回 true=可以关。
+// 默认动作是**回滚**而不是提交：销毁性动作必须显式点，提交请回编辑器自己来（看得见影响）。
+const txForClose = async () => {
+  if (!txOpenDirty()) return true
+  try {
+    await ElMessageBox.confirm(t('sqlq.txCloseWarn'), t('sqlq.txCloseTitle'), {
+      type: 'warning',
+      confirmButtonText: t('sqlq.txCloseRollback'),
+      cancelButtonText: t('common.cancel'),
+      closeOnClickModal: false
+    })
+  } catch { return false }
+  await txEnd('rollback')
+  return true
+}
 // getSql 供父级在保存会话快照时读取实时内容（兜底：即使 sql-change 还没触发也能取到最新）
-defineExpose({ saveForClose, getSql: () => sql.value })
+defineExpose({ saveForClose, getSql: () => sql.value, txOpenDirty, txForClose })
 
 // 自动保存：停止输入 1.5s 后静默保存。已命名脚本按原名覆盖更新；
 // 未命名的新脚本在**第一次**自动保存时按「脚本 + 时间」自动建档（后续沿用同一个名字，
