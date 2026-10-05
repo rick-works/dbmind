@@ -1834,6 +1834,7 @@ export default {
   'sqlq.txRolledBack': 'Rolled back',
   'sqlq.txFail': 'Transaction operation failed',
   'sqlq.txReset': 'Connection switched, transaction state reset',
+  'sqlq.pickConnFirst': 'Pick a data source first',
   'sqlq.editsN': '{n} cell edit(s) pending',
   'sqlq.commitEdits': 'Apply changes',
   'sqlq.discardEdits': 'Discard',

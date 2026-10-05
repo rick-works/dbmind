@@ -3819,6 +3819,8 @@ const onVarCancel = () => {
 }
 
 const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
+  // 未选数据源：温和提示后直接返回 —— 别让 props.conn 的空指针异常跑进错误面板
+  if (!(selectedConnId.value || props.conn?.id)) { ElMessage.info(t('sqlq.pickConnFirst')); return }
   if (running.value) return
   if (!requireSql()) return
   // 有未提交的单元格修改：翻页/重跑会使行号失效 —— 确认放弃才继续
@@ -3890,7 +3892,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   // 现在比例 1 也可能是用户**亲手**拉到底（编辑器铺满）的结果，那种情况下别去动他。
   if (editorRatio.value === 1 && !ratioTouched) { editorRatio.value = 0.6; ratioCycle = 0 }
   try {
-    const connId = selectedConnId.value || props.conn.id
+    const connId = selectedConnId.value || props.conn?.id
     if (isNoSql.value) {
       const res = await executeNoSql(connId, selectedDatabase.value || undefined, execSql)
       if (cancelRequested.value) { setResultCancelled(); return }

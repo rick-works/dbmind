@@ -1839,6 +1839,7 @@ export default {
   'sqlq.txRolledBack': '已回滚（ROLLBACK）',
   'sqlq.txFail': '事务操作失败',
   'sqlq.txReset': '连接已切换，事务状态已复位',
+  'sqlq.pickConnFirst': '请先在上方选择数据源',
   'sqlq.editsN': '有 {n} 处单元格修改待提交',
   'sqlq.commitEdits': '提交修改',
   'sqlq.discardEdits': '放弃',
