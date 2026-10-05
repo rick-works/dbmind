@@ -341,7 +341,8 @@
      不用 grid + height:100% —— 正文长内容会撑爆行高把左右面板拉长错位 */
   body.doc-only .docs-layout {
     display: flex; align-items: stretch;
-    gap: 34px; padding: 10px 0;
+    gap: 34px;
+    margin: 0; padding: 10px 0;
     height: calc(100vh - 60px); box-sizing: border-box;
   }
   /* 文档模式下顶栏与内容区同宽（1120 容器），logo 左缘与左目录面板对齐 */
