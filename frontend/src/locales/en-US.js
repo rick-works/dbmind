@@ -19,6 +19,7 @@ export default {
   'nav.knowledge': 'Knowledge base',
   'nav.ai': 'AI assistant',
   'nav.settings': 'Settings',
+  'nav.prodTabTip': 'Production connection (PROD) — be careful',
 
   // Custom window buttons (desktop only)
   'win.minimize': 'Minimize',

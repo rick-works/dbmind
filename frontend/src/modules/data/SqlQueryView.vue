@@ -2686,24 +2686,29 @@ const loadColumns = (table) => {
 
 // ON 子句关联列提示：把与「JOIN 另一侧表」**同名的列**排到最前（大概率是外键），
 // detail 会标「同名列」。另一侧尚未缓存列时现场拉，下一轮补全即可置顶。
+// 同时返回另一侧的前缀（otherPrefix），供「一键补全整段 a.x = b.x」用。
 const decorateOnColumns = (cols, lineText, typedPrefix, aliasMap) => {
   const plain = (c) => ({ name: c, same: false })
-  if (!/\bon\b[^\n]*$/i.test(lineText)) return cols.map(plain)
+  if (!/\bon\b[^\n]*$/i.test(lineText)) return { list: cols.map(plain), otherPrefix: null }
   const m = /\bon\s+([\w$]+)\s*\./i.exec(lineText)
-  if (!m) return cols.map(plain)
+  if (!m) return { list: cols.map(plain), otherPrefix: null }
   const typed = String(typedPrefix || '').toLowerCase()
   const p = m[1].toLowerCase()
-  if (p === typed) return cols.map(plain) // 另一侧还没写到，无从判断同名
+  if (p === typed) return { list: cols.map(plain), otherPrefix: null } // 另一侧还没写到
   const other = aliasMap[p]
     || (tableNames.value.find((x) => String(x).toLowerCase() === p) || p)
-  if (!other) return cols.map(plain)
+  if (!other) return { list: cols.map(plain), otherPrefix: null, onStartCol: 0 }
   loadColumns(other)
   const oc = columnsCache[String(other).toLowerCase()]
-  if (!oc || !oc.length) return cols.map(plain)
-  const os = new Set(oc.map((c) => String(c).toLowerCase()))
-  return cols
-    .map((c) => ({ name: c, same: os.has(String(c).toLowerCase()) }))
-    .sort((x, y) => (x.same === y.same ? 0 : x.same ? -1 : 1))
+  let list = cols.map(plain)
+  if (oc && oc.length) {
+    const os = new Set(oc.map((c) => String(c).toLowerCase()))
+    list = cols
+      .map((c) => ({ name: c, same: os.has(String(c).toLowerCase()) }))
+      .sort((x, y) => (x.same === y.same ? 0 : x.same ? -1 : 1))
+  }
+  // ON 关键字之后在本行内的列号（1-based）：「一键整段」用它把已输入的条件整个替换
+  return { list, otherPrefix: m[1], onStartCol: m.index + m[0].length + 1 }
 }
 
 const onEditorMount = (editor, monaco) => {
@@ -2776,7 +2781,8 @@ const onEditorMount = (editor, monaco) => {
             || Object.keys(columnsCache).find((k) => k === prefix)
           if (tableHit) {
             loadColumns(tableHit)
-            decorateOnColumns(columnsCache[prefix] || [], lineText, prefix, aliasMap).forEach((c) => suggestions.push({
+            const colDeco = decorateOnColumns(columnsCache[prefix] || [], lineText, prefix, aliasMap)
+            colDeco.list.forEach((c) => suggestions.push({
               label: c.name,
               kind: monaco.languages.CompletionItemKind.Field,
               insertText: c.name,
@@ -2784,13 +2790,29 @@ const onEditorMount = (editor, monaco) => {
               sortText: (c.same ? '0bbb' : '0ccc') + c.name,
               detail: (c.same ? t('sqlq.joinSameCol') + ' · ' : '') + t('sqlq.completionColumn')
             }))
+            // 一键补全整段关联条件：把 `ON` 之后已输入的部分整个替换为 `a.x = b.x`
+            const fs1 = colDeco.list.find((c) => c.same)
+            if (fs1 && colDeco.otherPrefix && colDeco.onStartCol) {
+              suggestions.push({
+                label: `ON ${colDeco.otherPrefix}.${fs1.name} = ${prefix}.${fs1.name}`,
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText: `${colDeco.otherPrefix}.${fs1.name} = ${prefix}.${fs1.name}`,
+                range: {
+                  startLineNumber: position.lineNumber, startColumn: colDeco.onStartCol,
+                  endLineNumber: position.lineNumber, endColumn: position.column
+                },
+                sortText: '0aaa' + fs1.name,
+                detail: t('sqlq.joinFullSnippet')
+              })
+            }
             return { suggestions }
           }
           // 别名命中：`a.` → 别名对应的表 → 补该表的列（detail 标出来源表）
           const aliasTable = aliasMap[prefix]
           if (aliasTable) {
             loadColumns(aliasTable)
-            decorateOnColumns(columnsCache[String(aliasTable).toLowerCase()] || [], lineText, prefix, aliasMap).forEach((c) => suggestions.push({
+            const colDeco = decorateOnColumns(columnsCache[String(aliasTable).toLowerCase()] || [], lineText, prefix, aliasMap)
+            colDeco.list.forEach((c) => suggestions.push({
               label: c.name,
               kind: monaco.languages.CompletionItemKind.Field,
               insertText: c.name,
@@ -2798,6 +2820,20 @@ const onEditorMount = (editor, monaco) => {
               sortText: (c.same ? '0bbb' : '0ccc') + c.name,
               detail: aliasTable + ' · ' + (c.same ? t('sqlq.joinSameCol') + ' · ' : '') + t('sqlq.completionColumn')
             }))
+            const fs2 = colDeco.list.find((c) => c.same)
+            if (fs2 && colDeco.otherPrefix && colDeco.onStartCol) {
+              suggestions.push({
+                label: `ON ${colDeco.otherPrefix}.${fs2.name} = ${prefix}.${fs2.name}`,
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText: `${colDeco.otherPrefix}.${fs2.name} = ${prefix}.${fs2.name}`,
+                range: {
+                  startLineNumber: position.lineNumber, startColumn: colDeco.onStartCol,
+                  endLineNumber: position.lineNumber, endColumn: position.column
+                },
+                sortText: '0aaa' + fs2.name,
+                detail: t('sqlq.joinFullSnippet')
+              })
+            }
             return { suggestions }
           }
         }

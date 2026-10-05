@@ -23,6 +23,7 @@ export default {
   'nav.knowledge': '知识库',
   'nav.ai': 'AI 助手',
   'nav.settings': '设置',
+  'nav.prodTabTip': '生产环境连接（PROD）—— 谨慎操作',
 
   // 自绘窗口按钮（仅桌面端）
   'win.minimize': '最小化',

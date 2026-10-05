@@ -405,6 +405,8 @@
                     @drop="onTabDrop($event, tab)"
                     @dragend="onTabDragEnd"
                     @contextmenu.prevent="showTabCtxMenu($event, tab)">
+                <!-- 连接环境外显：PROD 连接的页签带红色 P 标（防误连） -->
+                <span v-if="isProdTab(tab)" class="tab-prod-dot" :title="$t('nav.prodTabTip')">P</span>
                 {{ tab.dirty ? '* ' : '' }}{{ tabLabel(tab) }}
               </span>
             </template>
@@ -1042,6 +1044,8 @@ const conn = ref(null)
 const allConnections = ref([])
 // 按 tab 归属的连接 ID 解析连接对象；找不到时回退到当前选中连接。
 // 用于跨数据源打开表结构/数据 tab：右键所属连接可能不是当前 conn，直接拿 conn 会导致串台或 null 报错
+/** 页签对应连接是否生产环境（PROD）——页签上挂红 P 标防误连 */
+const isProdTab = (tab) => String((connFor(tab.connId) || {}).env || '').toUpperCase() === 'PROD'
 const connFor = (connId) => {
   if (connId == null) return conn.value
   const sid = String(connId)
@@ -6421,6 +6425,13 @@ watch(() => route.query.id, (id) => {
 .dc-tabs :deep(.el-tabs__item) { cursor: default; }
 .dc-tabs :deep(.el-tabs__item:active) { cursor: default; }
 .tab-label { display: inline-flex; align-items: center; position: relative; }
+/* PROD 连接的页签红 P 标：防误连 */
+.tab-prod-dot {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 14px; height: 14px; margin-right: 4px;
+  border-radius: 4px; background: #e34d4d; color: #fff;
+  font-size: 10px; font-weight: 700; line-height: 1;
+}
 /* 被拎起来的页签：整个页签淡下去（不只是标签文字）、底色抽掉、加一圈虚线 —— 读起来就是
    "它被拎离原位了"。用 :has() 是因为 el-tabs__item 由 Element Plus 渲染，我们没法直接给它加类。 */
 .dc-tabs :deep(.el-tabs__item:has(.tab-dragging)) {
