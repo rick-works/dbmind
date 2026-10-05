@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DBMind — 多数据库统一管理与开发平台</title>
+<meta name="description" content="DBMind：一个客户端管理所有数据库。智能 SQL 编辑器、AI 加持、事务级数据编辑、千万级结果集秒开，本地运行，数据不出内网。" />
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-soft: #111827;
+    --card: #141c2b;
+    --border: rgba(148, 163, 184, .14);
+    --text: #e5eaf3;
+    --dim: #94a3b8;
+    --primary: #4f8cff;
+    --primary-2: #7c5cff;
+    --accent: #2dd4bf;
+    --warn: #f59e0b;
+    --danger: #f87171;
+    --radius: 14px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+  a { color: inherit; text-decoration: none; }
+  ::selection { background: rgba(79, 140, 255, .35); }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* ===== 导航 ===== */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    backdrop-filter: blur(14px);
+    background: rgba(11, 15, 23, .72);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 28px; height: 60px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
+  .logo-mark {
+    width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    display: grid; place-items: center; font-size: 15px; font-weight: 800; color: #fff;
+  }
+  .nav-links { display: flex; gap: 22px; margin-left: auto; font-size: 14px; color: var(--dim); }
+  .nav-links a:hover { color: var(--text); }
+  .nav-cta {
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    color: #fff !important; padding: 7px 18px; border-radius: 8px; font-weight: 600;
+  }
+
+  /* ===== Hero ===== */
+  header {
+    position: relative; padding: 150px 0 90px; text-align: center; overflow: hidden;
+  }
+  header::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(600px 300px at 20% 0%, rgba(79, 140, 255, .16), transparent 70%),
+      radial-gradient(600px 300px at 80% 10%, rgba(124, 92, 255, .14), transparent 70%),
+      radial-gradient(500px 260px at 50% 100%, rgba(45, 212, 191, .08), transparent 70%);
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 16px; font-size: 13px; color: var(--dim);
+    background: rgba(255, 255, 255, .03);
+  }
+  .badge b { color: var(--accent); font-weight: 600; }
+  h1 {
+    margin: 26px 0 18px; font-size: clamp(34px, 6vw, 58px);
+    line-height: 1.25; font-weight: 800; letter-spacing: 1px;
+  }
+  h1 .grad {
+    background: linear-gradient(100deg, var(--primary) 10%, var(--primary-2) 55%, var(--accent) 95%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub { color: var(--dim); font-size: 18px; max-width: 640px; margin: 0 auto 36px; }
+  .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 30px; border-radius: 10px; font-size: 15px; font-weight: 600;
+    transition: transform .15s, box-shadow .15s;
+  }
+  .btn:hover { transform: translateY(-2px); }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    color: #fff; box-shadow: 0 8px 26px rgba(79, 140, 255, .35);
+  }
+  .btn-ghost { border: 1px solid var(--border); color: var(--text); background: rgba(255,255,255,.03); }
+  .btn-ghost:hover { border-color: var(--primary); }
+
+  /* ===== 数据源跑马灯 ===== */
+  .sources { padding: 8px 0 70px; text-align: center; }
+  .sources-label { font-size: 13px; color: var(--dim); letter-spacing: 2px; margin-bottom: 22px; }
+  .source-chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 860px; margin: 0 auto; }
+  .chip {
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 18px; font-size: 14px; color: var(--dim);
+    background: var(--card);
+  }
+  .chip:nth-child(odd) { color: var(--text); }
+
+  /* ===== 区块通用 ===== */
+  section { padding: 80px 0; }
+  .sec-title { text-align: center; font-size: clamp(26px, 4vw, 36px); font-weight: 800; margin-bottom: 12px; }
+  .sec-sub { text-align: center; color: var(--dim); margin-bottom: 52px; font-size: 16px; }
+
+  /* ===== 特性网格 ===== */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+  .feature {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 28px 26px; transition: transform .2s, border-color .2s;
+  }
+  .feature:hover { transform: translateY(-4px); border-color: rgba(79, 140, 255, .45); }
+  .feature .icon {
+    width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center;
+    margin-bottom: 16px; font-size: 21px;
+    background: linear-gradient(135deg, rgba(79,140,255,.18), rgba(124,92,255,.18));
+  }
+  .feature h3 { font-size: 17px; margin-bottom: 8px; }
+  .feature p { color: var(--dim); font-size: 14.5px; }
+
+  /* ===== 编辑器演示 ===== */
+  .demo {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
+  }
+  .demo-bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: #0d1420; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .demo-title { margin-left: 10px; font-size: 13px; color: var(--dim); }
+  .demo-body { display: grid; grid-template-columns: 1fr 1fr; }
+  .demo-pane { padding: 20px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 13.5px; }
+  .demo-pane + .demo-pane { border-left: 1px solid var(--border); }
+  .pane-label { font-size: 12px; color: var(--dim); margin-bottom: 10px; letter-spacing: 1px; }
+  .kw { color: #7c9bff; } .str { color: #7ee2a8; } .cm { color: #5b6b84; font-style: italic; } .num { color: #f0b26b; }
+  .demo-result { color: var(--text); }
+  .demo-result table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .demo-result th, .demo-result td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+  .demo-result th { color: var(--dim); font-weight: 500; background: rgba(255,255,255,.02); }
+  .demo-foot { padding: 10px 20px; border-top: 1px solid var(--border); font-size: 13px; color: var(--dim); display: flex; gap: 18px; flex-wrap: wrap; }
+  .demo-foot b { color: var(--accent); font-weight: 600; }
+
+  /* ===== 工作流 ===== */
+  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; counter-reset: step; }
+  .step {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 26px; position: relative;
+  }
+  .step::before {
+    counter-increment: step; content: counter(step, decimal-leading-zero);
+    font-size: 34px; font-weight: 800;
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    display: block; margin-bottom: 12px;
+  }
+  .step h3 { font-size: 16px; margin-bottom: 8px; }
+  .step p { color: var(--dim); font-size: 14px; }
+
+  /* ===== 安全条 ===== */
+  .safe {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px;
+  }
+  .safe-item {
+    display: flex; gap: 14px; align-items: flex-start;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px;
+  }
+  .safe-item .si { font-size: 22px; flex-shrink: 0; margin-top: 2px; }
+  .safe-item h4 { font-size: 15px; margin-bottom: 4px; }
+  .safe-item p { color: var(--dim); font-size: 13.5px; }
+
+  /* ===== 数字 ===== */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px; text-align: center; }
+  .stat { padding: 30px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+  .stat .n {
+    font-size: 40px; font-weight: 800;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .stat .t { color: var(--dim); font-size: 14px; margin-top: 6px; }
+
+  /* ===== CTA ===== */
+  .final {
+    text-align: center; padding: 90px 0;
+    background:
+      radial-gradient(500px 260px at 50% 0%, rgba(79, 140, 255, .14), transparent 70%),
+      var(--bg-soft);
+    border-top: 1px solid var(--border);
+  }
+  .final h2 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 14px; }
+  .final p { color: var(--dim); margin-bottom: 34px; }
+
+  footer { border-top: 1px solid var(--border); padding: 34px 0; color: var(--dim); font-size: 13.5px; }
+  .foot-inner { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+  /* ===== 滚动显现 ===== */
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s, transform .6s; }
+  .reveal.on { opacity: 1; transform: none; }
+
+  @media (max-width: 760px) {
+    .nav-links a:not(.nav-cta) { display: none; }
+    .demo-body { grid-template-columns: 1fr; }
+    .demo-pane + .demo-pane { border-left: none; border-top: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="logo" href="#"><span class="logo-mark">D</span>DBMind</a>
+    <div class="nav-links">
+      <a href="#features">功能</a>
+      <a href="#workflow">工作流</a>
+      <a href="#security">安全</a>
+      <a href="#download" class="nav-cta">立即下载</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <span class="badge"><b>●</b> 本地运行 · 数据不出内网 · 单客户端管理全部数据库</span>
+    <h1>一个客户端，<br/>管好你的<span class="grad">每一个数据库</span></h1>
+    <p class="sub">
+      DBMind 把 MySQL、PostgreSQL、Oracle、ClickHouse、Redis…… 收进同一块屏幕：
+      智能编辑器、AI 加持、事务级数据编辑、千万级结果集秒开 —— 一切都在你自己的电脑上发生。
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#download">免费下载</a>
+      <a class="btn btn-ghost" href="#features">看看能做什么 ↓</a>
+    </div>
+  </div>
+</header>
+
+<div class="sources reveal">
+  <div class="sources-label">— 开箱即用的数据源 —</div>
+  <div class="source-chips">
+    <span class="chip">MySQL</span><span class="chip">PostgreSQL</span><span class="chip">Oracle</span>
+    <span class="chip">SQL Server</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
+    <span class="chip">MariaDB</span><span class="chip">达梦 DM</span><span class="chip">人大金仓</span>
+    <span class="chip">SQLite</span><span class="chip">H2</span><span class="chip">Derby</span>
+    <span class="chip">DuckDB</span><span class="chip">Redis</span><span class="chip">MongoDB</span>
+    <span class="chip">Elasticsearch</span><span class="chip">更多接入中…</span>
+  </div>
+</div>
+
+<section id="features">
+  <div class="wrap">
+    <h2 class="sec-title reveal">为「每天写 SQL 的人」打造</h2>
+    <p class="sec-sub reveal">不是又一个查询窗口，而是一整套顺手的数据库工作台</p>
+    <div class="grid">
+      <div class="feature reveal">
+        <div class="icon">⌨️</div>
+        <h3>智能 SQL 编辑器</h3>
+        <p>基于 Monaco（VS Code 同款内核）：补全、格式化、多语句分块执行、逐段计时条、执行历史、SQL 片段库、模板变量 —— 大脚本也能条理清楚地跑。</p>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">🤖</div>
+        <h3>AI 全程加持</h3>
+        <p>选段解释 / 优化 / 修错 / 诊断 / 自由对话，AI 给出的 SQL 先「看执行计划、试跑一次」再落地，吃进去的数据不出你的网络。</p>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">🛡️</div>
+        <h3>事务模式</h3>
+        <p>一键开启：所有写语句不再自动提交。改完自查、不满意回滚、确认后提交 —— 配合其他会话的可见性规则，改数据不再心惊胆战。</p>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">✏️</div>
+        <h3>结果集直接编辑</h3>
+        <p>双击单元格改值、攒缓冲、一次提交。WHERE 条件自动生成（优先主键，否则全列定位）；翻页重跑后过期缓冲自动作废，绝不改错行。</p>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">⚡</div>
+        <h3>千万级结果集秒开</h3>
+        <p>虚拟滚动 + 服务端分页 + 响应压缩（实测 4.2MB → 233KB）。总数异步统计不阻塞数据回显，大 JOIN 也能 1 秒见数。</p>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">📊</div>
+        <h3>数据透视与传输</h3>
+        <p>框选即汇总（计数/求和/均值/最值）、分组下钻透视；导出 CSV / Excel / JSON / INSERT，长任务后台跑、完成系统通知。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top: 0;">
+  <div class="wrap">
+    <div class="demo reveal">
+      <div class="demo-bar">
+        <span class="dot" style="background:#f87171"></span>
+        <span class="dot" style="background:#f59e0b"></span>
+        <span class="dot" style="background:#34d399"></span>
+        <span class="demo-title">脚本 1 — mysql · 公司生产库 🔒PROD</span>
+      </div>
+      <div class="demo-body">
+        <div class="demo-pane">
+          <div class="pane-label">编辑器</div>
+<pre><span class="cm">-- 模板变量：执行时填参，值按名称记忆</span>
+<span class="kw">SELECT</span> o.id, o.amount, c.name
+<span class="kw">FROM</span> orders o
+<span class="kw">LEFT JOIN</span> customer c <span class="kw">ON</span> o.cid = c.id
+<span class="kw">WHERE</span> o.dt = <span class="str">:dt</span> <span class="kw">AND</span> o.org = <span class="str">:org</span>;</pre>
+          <div class="pane-label" style="margin-top:16px">AI · 一句话解释</div>
+          <div style="color:var(--dim); font-size:13px;">这条 JOIN 按 dt 过滤后走索引 → 关联列双方都有索引，预计扫描 1.2 万行 ✓</div>
+        </div>
+        <div class="demo-pane demo-result">
+          <div class="pane-label">结果</div>
+          <table>
+            <tr><th>id</th><th>amount</th><th>name</th></tr>
+            <tr><td>1001</td><td>288.00</td><td>杭州·张三</td></tr>
+            <tr><td>1002</td><td>1,024.50</td><td>上海·李四</td></tr>
+            <tr><td>1003</td><td>66.00</td><td>深圳·王五</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="demo-foot">
+        <span>耗时 <b>505 ms</b></span>
+        <span>共 <b>3,175,128</b> 条（异步统计，不阻塞回显）</span>
+        <span>双击单元格即可修改 → 事务提交</span>
+        <span>🔒 生产库：写操作二次确认</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="workflow" style="background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+  <div class="wrap">
+    <h2 class="sec-title reveal">改数据的安全闭环</h2>
+    <p class="sec-sub reveal">四个动作，把「手抖删库」挡在门外</p>
+    <div class="flow">
+      <div class="step reveal"><h3>开启事务</h3><p>写语句不再自动提交，编辑器独占这条会话，改了随时反悔。</p></div>
+      <div class="step reveal"><h3>改 &amp; 自查</h3><p>双击单元格直接改，或跑 UPDATE；同一会话立即能看到结果。</p></div>
+      <div class="step reveal"><h3>回滚 或 提交</h3><p>不满意一键回滚，什么都没发生；确认后提交，其他会话才可见。</p></div>
+      <div class="step reveal"><h3>全程留痕</h3><p>每个事务动作进审计历史；关闭页签前还会提醒未提交的事务。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="security">
+  <div class="wrap">
+    <h2 class="sec-title reveal">生产库保护，默认就位</h2>
+    <p class="sec-sub reveal">连接标记为生产环境的那一刻，防线自动升起</p>
+    <div class="safe">
+      <div class="safe-item reveal"><span class="si">🏷️</span><div><h4>PROD 标记外显</h4><p>页签、下拉、树全程可见，连错库这件事从源头消失。</p></div></div>
+      <div class="safe-item reveal"><span class="si">✋</span><div><h4>写操作二次确认</h4><p>PROD 连接上的 INSERT / UPDATE / DROP 先预览影响，确认才执行。</p></div></div>
+      <div class="safe-item reveal"><span class="si">⏱️</span><div><h4>超时与行数预算</h4><p>单语句超时、返回行数上限，误点 SELECT * 也不会拖死客户端。</p></div></div>
+      <div class="safe-item reveal"><span class="si">📜</span><div><h4>执行审计</h4><p>执行历史带耗时与状态，事务动作全留痕，事后可追溯。</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top: 0;">
+  <div class="wrap">
+    <div class="stats reveal">
+      <div class="stat"><div class="n">17+</div><div class="t">数据源驱动开箱即用</div></div>
+      <div class="stat"><div class="n">18×</div><div class="t">结果集传输压缩比</div></div>
+      <div class="stat"><div class="n">0</div><div class="t">数据上云（全程本地）</div></div>
+      <div class="stat"><div class="n">&lt;1s</div><div class="t">千万级表首屏响应</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="download" class="final">
+  <div class="wrap">
+    <h2>今天就把它装进你的工具栏</h2>
+    <p>免费使用 · Windows / macOS / Linux · 无需注册</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="#">下载 Windows 版</a>
+      <a class="btn btn-ghost" href="#">获取 macOS / Linux</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>© 2026 DBMind · 多数据库统一管理与开发平台</span>
+    <span>本地运行 · 数据不出内网</span>
+  </div>
+</footer>
+
+<script>
+  // 滚动显现
+  const io = new IntersectionObserver((es) => {
+    es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('on'); io.unobserve(e.target) } })
+  }, { threshold: .12 })
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el))
+</script>
+</body>
+</html>
