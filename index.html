@@ -343,6 +343,8 @@
     gap: 34px; padding-top: 14px;
     height: calc(100vh - 60px); box-sizing: border-box;
   }
+  /* 文档模式下顶栏与内容区同宽（1120 容器），logo 左缘与左目录面板对齐 */
+  body.doc-only .top-inner { max-width: 1120px; }
   body.doc-only .dtoc { position: static; top: auto; flex: 0 0 224px; height: auto; max-height: none; }
   body.doc-only .pagenav { position: static; top: auto; flex: 0 0 192px; height: auto; max-height: none; }
   body.doc-only .doc-main { flex: 1 1 0; min-width: 0; height: auto; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.22) transparent; }
