@@ -862,6 +862,64 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         crate::new_execution_id()
     }
 
+    /// 会话级事务控制（事务模式）：`begin` 关掉该会话的 autocommit，
+    /// `commit` / `rollback` 提交或回滚并交回 autocommit。
+    ///
+    /// 会话键由 web 层传「与 SQL 编辑器相同的亲和键」⇒ 事务精确落在编辑器
+    /// 那条物理连接上（全 agent 数据源通用，见 [`crate::drivers::Driver::tx_control`]）。
+    /// 动作**无条件留痕**：BEGIN/COMMIT/ROLLBACK 是审计里最该看到的东西。
+    pub fn tx_control(
+        &self,
+        connection_id: &str,
+        session: &str,
+        action: crate::drivers::TxAction,
+    ) -> Result<serde_json::Value> {
+        let started = Instant::now();
+        // 策略闸门：只读连接不允许开手动事务（开 autocommit=false 就是为了写）
+        let connection = self.store.require_connection(connection_id)?;
+        let read_only = self.policy().is_read_only(&connection);
+        if read_only {
+            let err = DbMindError::new(
+                ErrorCode::SafetyReadOnly,
+                "这条连接是只读的，不能开启事务模式",
+            );
+            self.record(
+                true,
+                &connection,
+                action.as_sql(),
+                HistoryStatus::Error,
+                0,
+                started.elapsed().as_millis() as u64,
+                Some(err.code_str().to_string()),
+            );
+            return Err(err);
+        }
+        let driver = self.drivers.resolve(connection.kind())?;
+        let outcome = driver.tx_control(&connection.config, read_only, session, action);
+        let duration_ms = started.elapsed().as_millis() as u64;
+        match &outcome {
+            Ok(_) => self.record(
+                true,
+                &connection,
+                action.as_sql(),
+                HistoryStatus::Ok,
+                0,
+                duration_ms,
+                None,
+            ),
+            Err(err) => self.record(
+                true,
+                &connection,
+                action.as_sql(),
+                HistoryStatus::Error,
+                0,
+                duration_ms,
+                Some(err.code_str().to_string()),
+            ),
+        }
+        outcome
+    }
+
     fn record(
         &self,
         record_history: bool,

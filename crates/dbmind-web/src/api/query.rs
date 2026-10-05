@@ -16,7 +16,7 @@ use std::sync::{Mutex, OnceLock};
 
 use axum::extract::{Path, State};
 use axum::Json;
-use dbmind_core::{AccessContext, DbMindEngine, QueryOptions, QueryRequest};
+use dbmind_core::{AccessContext, DbMindEngine, QueryOptions, QueryRequest, TxAction};
 use serde_json::{json, Value};
 
 use crate::api::error::{XError, XResult};
@@ -194,6 +194,52 @@ pub async fn execute(
             json
         }
         Err(err) => shape::query_failure_json(&err.message, 0),
+    }))
+}
+
+/// `POST /api/{m}/query/{id}/tx` —— 会话级事务控制（事务模式）。
+///
+/// body: `{ action: "begin" | "commit" | "rollback" }`。会话键与 SQL 编辑器完全一致
+/// （`ui:上游`）⇒ begin 之后的编辑器语句全部落在同一条 autocommit=false 的物理连接上，
+/// 直到 commit/rollback。全 agent 数据源通用（宿主走 JDBC 标准接口，无方言语法）。
+pub async fn tx(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> XResult<Json<Value>> {
+    let action = match body.get("action").and_then(Value::as_str) {
+        Some("begin") => TxAction::Begin,
+        Some("commit") => TxAction::Commit,
+        Some("rollback") => TxAction::Rollback,
+        _ => return Err(XError::bad_request("action 必须是 begin / commit / rollback")),
+    };
+    // **必须与 execute 解析出同一个目标**（同样的 database → 同一条连接记录）：
+    // 泳道键由「连接记录 + 只读性 + 亲和键」组成，目标不同 = 泳道不同 = 事务落在
+    // 另一条物理连接上（真机实测：begin 在 23232，查询在 23233，autocommit 白设）。
+    let database = body
+        .get("database")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let target = match crate::api::scope::resolve(&state, &id, &database).await {
+        Ok(target) => target,
+        Err(err) => return Ok(Json(json!({ "success": false, "message": err.message }))),
+    };
+    if let Err(err) = crate::api::driver::ensure_for_connection(&state, &target).await {
+        return Ok(Json(json!({ "success": false, "message": err.message })));
+    }
+    // 与 execute 的 `session: Some("ui:上游")` 保持同一把钥匙：事务绑定编辑器会话
+    let engine = state.engine();
+    let outcome = engine.tx_control(&target, "ui:上游", action);
+    Ok(Json(match outcome {
+        Ok(mut value) => {
+            if let Some(object) = value.as_object_mut() {
+                object.insert("success".to_string(), Value::from(true));
+                object.insert("action".to_string(), Value::from(action.as_sql()));
+            }
+            value
+        }
+        Err(err) => json!({ "success": false, "message": err.message }),
     }))
 }
 

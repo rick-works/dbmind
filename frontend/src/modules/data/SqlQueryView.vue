@@ -59,6 +59,17 @@
           </el-button>
           <el-button v-if="!isNoSql" size="small" :icon="Brush" @click="formatSql"
                      :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')">{{ hasEditorSelection ? $t('sqlq.fmtSel') : $t('sce.format') }}</el-button>
+          <!-- 事务模式：begin 关掉编辑器会话的 autocommit，之后的写语句都挂在事务里；
+               提交/回滚收尾。全 agent 数据源通用（宿主走 JDBC 标准接口，无方言语法） -->
+          <template v-if="!isNoSql">
+            <el-button size="small" :type="txMode ? 'warning' : 'default'" :loading="txBusy"
+                       @click="toggleTxMode" :title="$t('sqlq.txToggleTip')">{{ $t('sqlq.txMode') }}</el-button>
+            <el-button v-if="txMode" size="small" type="success" :loading="txBusy"
+                       @click="txCommit" :title="$t('sqlq.txCommitTip')">{{ $t('sqlq.txCommit') }}</el-button>
+            <el-button v-if="txMode" size="small" type="danger" plain :loading="txBusy"
+                       @click="txRollback">{{ $t('sqlq.txRollback') }}</el-button>
+            <span v-if="txMode" class="tx-dot" :class="{ dirty: txDirty }" :title="txDirty ? $t('sqlq.txDirty') : $t('sqlq.txClean')"></span>
+          </template>
           <!-- SQL 执行历史：本地保存最近执行的 SQL，一键回填复用 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
             <el-button size="small" :icon="Clock" :title="$t('sqlq.history')">历史</el-button>
@@ -328,6 +339,14 @@
           <div class="error-message">{{ result.message || $t('common.unknownError') }}</div>
         </div>
         <el-empty v-else :description="(result && result.affectedRows >= 0) ? $t('sqlq.affectedOk', { n: result.affectedRows }) : $t('sqlq.noResult')" />
+        <!-- 单元格编辑缓冲：双击改过的值先攒在这里，确认后一次提交
+             （事务模式开着就落在事务里；快照守卫保证翻页/重跑后的过期缓冲不会误提交） -->
+        <div v-if="pendingEdits.length" class="edit-bar">
+          <el-icon :size="14" color="var(--el-color-warning)"><EditPen /></el-icon>
+          <span class="edit-bar-text">{{ $t('sqlq.editsN', { n: pendingEdits.length }) }}</span>
+          <el-button size="small" type="primary" :loading="editsBusy" @click="commitEdits">{{ $t('sqlq.commitEdits') }}</el-button>
+          <el-button size="small" :disabled="editsBusy" @click="discardEdits">{{ $t('sqlq.discardEdits') }}</el-button>
+        </div>
         <div v-if="result?.success && result?.rows?.length" class="result-footer">
           <span class="result-time" :title="$t('sqlq.msE2eTip')">
             <!-- 耗时取「前端实测」与「服务端」的较大值：服务端 executeTime 只计执行段，
@@ -536,7 +555,7 @@ import {
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
   Sort, SortUp, SortDown
 } from '@element-plus/icons-vue'
-import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig } from '../../api'
+import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, byType } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
 
@@ -806,6 +825,17 @@ const resultSelectionSummary = computed(() => {
 // 其余段的结果原样保留。整批重跑会把写入类语句再执行一遍，绝对不行。
 const loadSegment = async (item, p, size) => {
   if (!item || !item.segmentSql) return
+  // 有未提交的单元格修改：分段翻页同样使行号失效 —— 确认放弃才继续
+  if (pendingEdits.value.length) {
+    try {
+      await ElMessageBox.confirm(t('sqlq.editsLoseWarn', { n: pendingEdits.value.length }), t('sqlq.editsLoseTitle'), {
+        confirmButtonText: t('sqlq.discardEdits'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning'
+      })
+    } catch { return }
+    discardEdits()
+  }
   running.value = true
   loading.value = true
   cancelRequested.value = false
@@ -1747,20 +1777,6 @@ const sqlLiteralOf = (v) => {
   if (/^-?\d+(\.\d+)?$/.test(s)) return s
   return `'${s.replace(/'/g, "''")}'`
 }
-const appendToEditor = (text) => {
-  const ed = editorInstance
-  const model = ed && ed.getModel()
-  if (!ed || !model) return
-  const cur = sql.value || ''
-  const sep = cur.trim() ? (cur.endsWith('\n') ? '\n' : '\n\n') : ''
-  sql.value = cur + sep + text
-  nextTick(() => {
-    const ln = model.getLineCount()
-    ed.revealLine(ln)
-    ed.setPosition({ lineNumber: ln, column: (model.getLineContent(ln) || '').length + 1 })
-    ed.focus()
-  })
-}
 const onCellQuickEdit = async (rowIdx, colName, row) => {
   const tables = quickEditTablesOf()
   if (!tables.length) { ElMessage.warning(t('sqlq.cellEditNoTable')); return }
@@ -1803,8 +1819,130 @@ const onCellQuickEdit = async (rowIdx, colName, row) => {
     })
   }
   if (!whereParts.length) { ElMessage.warning(t('sqlq.cellEditNoWhere')); return }
-  appendToEditor(`UPDATE ${table}\nSET ${colName} = ${setLit}\nWHERE ${whereParts.join('\n  AND ')};`)
+  // 记入**编辑缓冲**：不立即执行，底栏出现「提交修改 / 放弃」。提交时批量执行
+  // （事务模式开着就落在事务里，由用户手动 COMMIT）。
+  const parsed = /^null$/i.test(newVal) ? null : (/^-?\d+(\.\d+)?$/.test(newVal) ? Number(newVal) : newVal)
+  pendingEdits.value.push({
+    rowIdx, colName, table,
+    setSql: `${colName} = ${setLit}`,
+    whereSql: whereParts.join('\n  AND '),
+    newParsed: parsed,
+    snapshot: result.value,
+    rowsRef: result.value?.rows
+  })
 }
+
+// ===== 编辑缓冲与提交（结果集直接编辑）=====
+// 快照守卫：编辑期间翻页/新查询/重排过（rows 数组被换掉）⇒ 行号不可信，提交直接拒绝。
+const pendingEdits = ref([])
+const editsBusy = ref(false)
+const discardEdits = () => { pendingEdits.value = [] }
+const commitEdits = async () => {
+  if (editsBusy.value || !pendingEdits.value.length) return
+  const first = pendingEdits.value[0]
+  if (!first || result.value !== first.snapshot || result.value?.rows !== first.rowsRef) {
+    ElMessage.warning(t('sqlq.editsStale'))
+    pendingEdits.value = []
+    return
+  }
+  const connId = selectedConnId.value || props.conn.id
+  const db = selectedSchema.value
+    ? `${selectedDatabase.value}.${selectedSchema.value}`
+    : selectedDatabase.value || undefined
+  const sqlText = pendingEdits.value
+    .map(e => `UPDATE ${e.table}\nSET ${e.setSql}\nWHERE ${e.whereSql};`)
+    .join('\n')
+  editsBusy.value = true
+  try {
+    execId.value = 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
+    const b = await executeSqlBatch(connId, sqlText, db, execId.value, null)
+    const results = (b && Array.isArray(b.results)) ? b.results : []
+    const failed = results.find(r => !r.success)
+    if (failed) { ElMessageBoxWithFix(failed.message || t('ai.runFailed')); return }
+    // 成功：新值写回行数据（界面立即更新），清空缓冲
+    for (const e of pendingEdits.value) {
+      const row = result.value?.rows?.[e.rowIdx]
+      if (row) row[e.colName] = e.newParsed
+    }
+    pendingEdits.value = []
+    ElMessage.success(t('sqlq.editsCommitted', { n: results.reduce((m, r) => m + (r.affectedRows || 0), 0) })
+      + (txMode.value ? ' ' + t('sqlq.rememberCommit') : ''))
+  } catch (e) {
+    ElMessageBoxWithFix(e?.message || t('ai.runFailed'))
+  } finally {
+    editsBusy.value = false
+  }
+}
+
+// ===== 事务模式 =====
+// begin → 后端关掉编辑器会话（亲和泳道）的 autocommit，之后的写语句都挂在事务里；
+// 提交/回滚 → 收尾并交回 autocommit。全 agent 数据源通用（宿主走 JDBC 标准接口）。
+const txMode = ref(false)
+const txDirty = ref(false)
+const txBusy = ref(false)
+// 事务动作要带「与执行查询相同的库」：后端据此解析同一目标（影子连接等），泳道才对得上
+const txDatabaseOf = () => selectedSchema.value
+  ? `${selectedDatabase.value}.${selectedSchema.value}`
+  : selectedDatabase.value || ''
+const txEnd = async (action) => {
+  if (txBusy.value || !txMode.value) return
+  const connId = selectedConnId.value || props.conn.id
+  txBusy.value = true
+  try {
+    const r = await txControl(connId, action, txDatabaseOf())
+    if (r && r.success) {
+      txMode.value = false
+      txDirty.value = false
+      ElMessage.success(action === 'commit' ? t('sqlq.txCommitted') : t('sqlq.txRolledBack'))
+    } else {
+      ElMessageBoxWithFix((r && r.message) || t('sqlq.txFail'))
+    }
+  } catch (e) {
+    ElMessageBoxWithFix(e?.message || t('sqlq.txFail'))
+  } finally {
+    txBusy.value = false
+  }
+}
+const txCommit = () => txEnd('commit')
+const txRollback = () => txEnd('rollback')
+const toggleTxMode = async () => {
+  if (txBusy.value) return
+  const connId = selectedConnId.value || props.conn.id
+  txBusy.value = true
+  try {
+    if (txMode.value) {
+      // 关闭事务模式：挂着未提交事务先回滚，不留一个悬着的事务占着连接
+      if (txDirty.value) {
+        try { await txControl(connId, 'rollback', txDatabaseOf()) } catch { /* 连接可能已断 */ }
+      }
+      txMode.value = false
+      txDirty.value = false
+      ElMessage.success(t('sqlq.txOff'))
+    } else {
+      const r = await txControl(connId, 'begin', txDatabaseOf())
+      if (r && r.success) {
+        txMode.value = true
+        ElMessage.success(t('sqlq.txOn'))
+      } else {
+        ElMessageBoxWithFix((r && r.message) || t('sqlq.txFail'))
+      }
+    }
+  } catch (e) {
+    ElMessageBoxWithFix(e?.message || t('sqlq.txFail'))
+  } finally {
+    txBusy.value = false
+  }
+}
+// 切换连接：事务绑定在旧连接的会话上 —— 回滚收尾并把状态复位
+watch(selectedConnId, (nv, ov) => {
+  if (txMode.value && ov) {
+    txControl(ov, 'rollback', txDatabaseOf()).catch(() => {})
+    txMode.value = false
+    txDirty.value = false
+    ElMessage.info(t('sqlq.txReset'))
+  }
+  discardEdits()
+})
 
 const rowDetail = ref({ visible: false, title: '', text: '' })
 const openRowDetail = (rowIdx) => {
@@ -3467,6 +3605,8 @@ const selectResultTab = (i) => {
   if (i === activeResultIdx.value && result.value === item.res) return
   activeResultIdx.value = i
   result.value = item.res
+  // 换结果集 ⇒ 行号基准变了，编辑缓冲作废（快照守卫也会拦过期提交）
+  discardEdits()
   // 切到的 tab 若总数未知，异步补齐（只数当前展示的段，不并发数全部）
   fetchCountFor(result.value, item.segmentSql || item.res?.sql || '')
   // 不同结果集独立分页：切换 tab 恢复到该段自己的页码
@@ -3605,6 +3745,17 @@ const onVarCancel = () => {
 const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   if (running.value) return
   if (!requireSql()) return
+  // 有未提交的单元格修改：翻页/重跑会使行号失效 —— 确认放弃才继续
+  if (pendingEdits.value.length) {
+    try {
+      await ElMessageBox.confirm(t('sqlq.editsLoseWarn', { n: pendingEdits.value.length }), t('sqlq.editsLoseTitle'), {
+        confirmButtonText: t('sqlq.discardEdits'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning'
+      })
+    } catch { return }
+    discardEdits()
+  }
   let execSql = getExecutableSql(page !== 1)
   if (!execSql) return
   // 模板变量：一次性值已在手（确认弹窗后重入）就替换；否则先弹窗收参
@@ -3684,6 +3835,8 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         const b = await executeSqlBatch(connId, execSql, db, execId.value, cancelController.signal)
         if (cancelRequested.value) { setResultCancelled(); return }
         showBatchResult(b)
+        // 事务模式：批量里有写语句成功 ⇒ 有未提交变更
+        if (txMode.value && (b && Array.isArray(b.results)) && b.results.some((r) => r && r.success && (r.affectedRows || 0) > 0)) txDirty.value = true
         // 批量失败：定位并标红出错的那条语句（序号与前端切分一致）
         const failIdx = (b && Array.isArray(b.results)) ? b.results.findIndex((r) => r && r.success === false) : -1
         if (failIdx >= 0) markErrorStatement(b.results[failIdx], failIdx)
@@ -3693,6 +3846,8 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         const res = await executeSql(connId, execSql, db, execId.value, cancelController.signal, page, size)
         if (cancelRequested.value) { setResultCancelled(); return }
         showSingleResult(res)
+        // 事务模式：写语句成功 ⇒ 有未提交变更（提示条点亮，提醒 COMMIT/ROLLBACK）
+        if (txMode.value && res && res.success && (res.affectedRows || 0) > 0) txDirty.value = true
         // 总数未知时异步补齐（后端已不同步 COUNT，见 fetchCountFor）
         fetchCountFor(result.value, execSql)
         // 失败 → 编辑器里把出错语句标红定位（execSql = 选中的那条或整段单条）
@@ -4367,6 +4522,8 @@ onBeforeUnmount(() => {
   monacoProviders.splice(0).forEach((d) => { try { d?.dispose?.() } catch { /* ignore */ } })
   if (queryTimer) { clearInterval(queryTimer); queryTimer = null }
   if (running.value) stopSql() // 卸载时中止进行中的查询并清理计时器
+  // 事务模式还开着：回滚收尾（fire-and-forget），别留一个悬着的事务占着会话
+  if (txMode.value) txControl(selectedConnId.value || props.conn.id, 'rollback', txDatabaseOf()).catch(() => {})
   if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null }
   // sql-change 的防抖定时器也得摘：否则页签关掉后 600ms 内还会向父级 emit
   if (sqlChangeTimer) { clearTimeout(sqlChangeTimer); sqlChangeTimer = null }
@@ -4778,4 +4935,10 @@ onBeforeUnmount(() => {
 .var-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .var-name { font-family: monospace; font-size: 13px; color: var(--dc-primary); width: 110px; text-align: right; flex-shrink: 0; }
 .var-hint { font-size: 12px; color: var(--dc-text-dim); line-height: 1.6; }
+/* 事务模式：未提交状态点（绿=干净、橙=有未提交写） */
+.tx-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-success); flex-shrink: 0; }
+.tx-dot.dirty { background: var(--el-color-warning); box-shadow: 0 0 6px var(--el-color-warning); }
+/* 单元格编辑缓冲条：贴在底栏上方，弱底色提醒还有改动没落地 */
+.edit-bar { display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-top: 1px solid var(--dc-border); background: var(--el-color-warning-light-9); flex-shrink: 0; }
+.edit-bar-text { font-size: 12px; color: var(--dc-text); }
 </style>

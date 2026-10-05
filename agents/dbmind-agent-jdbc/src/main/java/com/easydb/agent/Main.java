@@ -120,6 +120,9 @@ public final class Main {
                 case "tables" -> tables(request);
                 case "columns" -> columns(request);
                 case "cancel" -> cancel(request);
+                case "setautocommit" -> setAutoCommit(request);
+                case "commit" -> txEnd(request, true);
+                case "rollback" -> txEnd(request, false);
                 case "disconnect" -> disconnect(request);
                 case "shutdown" -> {
                     // 顺序很重要：**先关闭会话（落盘）再回执**。
@@ -398,6 +401,70 @@ public final class Main {
     private static void dropSession(Session session) {
         SESSIONS.remove(session.id());
         session.close();
+    }
+
+    // ------------------------------------------------------------ 事务控制（事务模式）
+    //
+    // 三个 RPC 走的都是 JDBC 标准接口（Connection.setAutoCommit / commit / rollback），
+    // 对所有 agent 类型的数据源通用 —— 不碰任何方言语法（SET autocommit 那种只有 MySQL 系认）。
+    // 会话仍按 sessionId 定位：内核的亲和泳道（limit=1）保证「同一个编辑器会话」永远
+    // 落在同一条物理连接上，事务状态于是跨请求保留。连接断开重连后由内核重新对齐
+    // autocommit（见 agent_driver::with_lane 的事务对齐钩子）。
+
+    /** 关/开 autocommit：事务模式的 begin（autoCommit=false）与收尾恢复（true）共用。 */
+    private static JsonElement setAutoCommit(JsonObject request) {
+        Session session = session(request);
+        boolean autoCommit = request.has("autoCommit") && request.get("autoCommit").getAsBoolean();
+        session.touch();
+        try {
+            session.connection().setAutoCommit(autoCommit);
+            JsonObject result = new JsonObject();
+            result.addProperty("autoCommit", session.connection().getAutoCommit());
+            // 探针：JDBC 层状态之外，再到**同一条连接**上问一次服务端的 @@autocommit。
+            // 两者不一致 = 驱动只更新了本地状态（useLocalSessionState 类行为），事务模式就靠不住
+            try (java.sql.Statement st = session.connection().createStatement();
+                 java.sql.ResultSet rs = st.executeQuery("select @@autocommit, connection_id()")) {
+                if (rs.next()) {
+                    result.addProperty("serverAutocommit", rs.getInt(1));
+                    result.addProperty("probeConnId", rs.getString(2));
+                }
+            } catch (SQLException ignored) {
+                // 探针失败不影响主流程（个别库没有这个变量）
+            }
+            return result;
+        } catch (SQLException e) {
+            if (isConnectionLost(e)) {
+                dropSession(session);
+            }
+            throw new Protocol.AgentException("DBMIND-QUERY-0002",
+                    "setAutoCommit(" + autoCommit + ") 失败：" + e.getMessage(), describe(e));
+        }
+    }
+
+    /** commit / rollback：挂在未提交事务上的连接由内核负责收尾。 */
+    private static JsonElement txEnd(JsonObject request, boolean doCommit) {
+        Session session = session(request);
+        session.touch();
+        try {
+            if (doCommit) {
+                session.connection().commit();
+            } else {
+                session.connection().rollback();
+            }
+            // 事务收尾后把连接交回 autocommit，回到普通执行模式的默认状态
+            try {
+                session.connection().setAutoCommit(true);
+            } catch (SQLException ignored) {
+                // 个别驱动在收尾后短暂拒绝状态切换；内核后续 begin 会再设一次
+            }
+            return ping();
+        } catch (SQLException e) {
+            if (isConnectionLost(e)) {
+                dropSession(session);
+            }
+            throw new Protocol.AgentException("DBMIND-QUERY-0002",
+                    (doCommit ? "commit" : "rollback") + " 失败：" + e.getMessage(), describe(e));
+        }
     }
 
     /**

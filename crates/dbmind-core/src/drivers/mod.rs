@@ -78,6 +78,54 @@ pub trait Driver: Send + Sync {
     fn disconnect_connection(&self, _name: &str) -> usize {
         0
     }
+
+    /// 会话级事务控制（事务模式）：begin 关掉该会话的 autocommit，
+    /// commit / rollback 提交或回滚。
+    ///
+    /// 默认不支持（`DBMIND-DRV-0001`）—— 目前只有走 agent 宿主的驱动实现了它
+    /// （`setautocommit` / `commit` / `rollback` RPC，全部走 JDBC 标准接口，
+    /// ⇒ **所有 agent 类型的数据源通用**，不碰任何方言语法）。
+    fn tx_control(
+        &self,
+        _config: &ConnectionConfig,
+        _read_only: bool,
+        _session: &str,
+        _action: TxAction,
+    ) -> Result<serde_json::Value> {
+        Err(DbMindError::new(
+            ErrorCode::DriverNotImplemented,
+            "当前数据库类型不支持会话级事务",
+        ))
+    }
+}
+
+/// 事务控制动作（见 [`Driver::tx_control`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxAction {
+    /// 开启手动事务（autocommit=false）
+    Begin,
+    Commit,
+    Rollback,
+}
+
+impl TxAction {
+    /// 宿主侧 RPC 方法名（见 agent-jdbc 的 dispatch 方法表）。
+    pub fn method(self) -> &'static str {
+        match self {
+            TxAction::Begin => "setautocommit",
+            TxAction::Commit => "commit",
+            TxAction::Rollback => "rollback",
+        }
+    }
+
+    /// 历史留痕用的语句文本。
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            TxAction::Begin => "BEGIN",
+            TxAction::Commit => "COMMIT",
+            TxAction::Rollback => "ROLLBACK",
+        }
+    }
 }
 
 pub struct DriverRegistry {

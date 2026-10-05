@@ -289,6 +289,12 @@ export const executeSqlCount = async (id, sql, database, ncols, signal) => {
   const b = await baseOf(id)
   return http.post(`${b}/query/${id}/count`, { sql, database, ncols }, { signal }).then(r => r.data)
 }
+// 会话级事务控制（事务模式）：begin 关掉编辑器会话的 autocommit，commit/rollback 收尾。
+// database 必须与执行查询时传的一致 —— 后端据此解析同一个目标（影子连接等），泳道才对得上。
+export const txControl = async (id, action, database = '') => {
+  const b = await baseOf(id)
+  return http.post(`${b}/query/${id}/tx`, { action, database }, { timeout: 20000 }).then(r => r.data)
+}
 // 多段 SQL 批量执行：同一连接内按分号顺序执行每段，每段独立返回一个 QueryResult
 // （编辑器一次执行多条查询时，结果以「结果1/结果2…」tab 逐条展示）
 export const executeSqlBatch = async (id, sql, database, executionId, signal) => {

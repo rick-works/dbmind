@@ -16,7 +16,7 @@
 //! - **查询**不是幂等的 ⇒ 进程/响应异常一律不重试，交由上层决定。
 
 use super::session_pool::{SessionBudget, SessionPool};
-use super::{Driver, MetaCall, QueryCall};
+use super::{Driver, MetaCall, QueryCall, TxAction};
 use crate::agent::{self, AgentHost, AgentQueryResult};
 use crate::error::{DbMindError, ErrorCode, Result};
 use crate::statement::classify;
@@ -56,6 +56,11 @@ pub struct AgentDriver {
     pool: SessionPool,
     /// 全局会话配额（跨连接、跨类型、跨宿主；由引擎在设置变更时更新）
     budget: Arc<SessionBudget>,
+    /// 挂着**未提交事务**的泳道（事务模式：begin 加入，commit/rollback 移除）。
+    ///
+    /// 用途：连接断开重连后，新连接默认 autocommit=true —— 必须马上重新对齐，
+    /// 否则后续语句逐条自动提交，用户以为还在事务里（见 `with_lane` 的对齐钩子）。
+    tx_lanes: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 impl AgentDriver {
@@ -95,6 +100,7 @@ impl AgentDriver {
             host,
             pool: SessionPool::new(budget.clone(), closer),
             budget,
+            tx_lanes: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
     }
 
@@ -417,6 +423,17 @@ impl AgentDriver {
         let slot = self.pool.acquire_cancellable(lane, limit, wait, call.cancel)?;
         let session_id = slot.session_id().to_string();
         self.ensure_session(config, call.read_only, &session_id, false)?;
+        // 事务模式对齐：这条泳道若挂着未提交事务，而会话可能刚被重建（连接断开/配额回收），
+        // 新连接是 autocommit=true —— 必须马上关掉，否则后续语句逐条自动提交，
+        // 用户以为还在事务里。失败不致命（下一次调用还会再对齐）。
+        if self.tx_lanes.lock().expect("tx_lanes").contains(lane) {
+            let mut params = Map::new();
+            params.insert("sessionId".to_string(), json!(session_id));
+            params.insert("autoCommit".to_string(), json!(false));
+            if let Err(err) = self.host.call(None, "setautocommit", params, Some(Duration::from_secs(10))) {
+                tracing::warn!(target: "dbmind::agent", lane = %lane, error = %err, "重连后恢复事务模式失败");
+            }
+        }
         match op(&session_id) {
             Err(err) if call.retry_on_stale && err.code == ErrorCode::ConnConnectFailed => {
                 tracing::warn!(target: "dbmind::agent", "会话已失效，重连后重试一次幂等调用");
@@ -483,6 +500,53 @@ impl Driver for AgentDriver {
 
     fn disconnect_connection(&self, name: &str) -> usize {
         AgentDriver::disconnect_connection(self, name)
+    }
+
+    /// 会话级事务控制（事务模式，全 agent 数据源通用）。
+    ///
+    /// 走与查询同一条**亲和泳道**（limit=1）⇒ 事务精确落在编辑器那条物理连接上；
+    /// begin 后内核把泳道记进 `tx_lanes`，连接断开重建时 `with_lane` 会自动
+    /// 重新对齐 autocommit（commit/rollback 后移除，连接交回 autocommit）。
+    fn tx_control(
+        &self,
+        config: &ConnectionConfig,
+        read_only: bool,
+        session: &str,
+        action: TxAction,
+    ) -> Result<serde_json::Value> {
+        let lane = self.lane_key(config, read_only, Some(session));
+        let wait = Duration::from_secs(15);
+        self.with_lane(
+            config,
+            &lane,
+            1,
+            wait,
+            LaneCall {
+                read_only,
+                retry_on_stale: false,
+                cancel: None,
+            },
+            |key| {
+                let mut params = Map::new();
+                params.insert("sessionId".to_string(), json!(key));
+                if action == TxAction::Begin {
+                    params.insert("autoCommit".to_string(), json!(false));
+                }
+                let value = self.host.call(None, action.method(), params, Some(wait))?;
+                {
+                    let mut lanes = self.tx_lanes.lock().expect("tx_lanes");
+                    match action {
+                        TxAction::Begin => {
+                            lanes.insert(lane.clone());
+                        }
+                        TxAction::Commit | TxAction::Rollback => {
+                            lanes.remove(&lane);
+                        }
+                    }
+                }
+                Ok(value)
+            },
+        )
     }
 
     fn test(&self, config: &ConnectionConfig, read_only: bool) -> Result<ConnectReport> {

@@ -41,7 +41,9 @@ pub use agent::{
     install_driver_jar, installed_driver_jars, driver_mirror_base, native_arch, AgentAvailability, AgentHost, AgentHostSpec, AGENTS_DIR_ENV, MAVEN_CENTRAL,
 };
 pub use cancel::{CancelRegistry, CancelToken};
-pub use drivers::{builtin_kinds, unimplemented_driver, Driver, DriverRegistry, QueryCall};
+pub use drivers::{
+    builtin_kinds, unimplemented_driver, Driver, DriverRegistry, QueryCall, TxAction,
+};
 pub use engine::{DriverEntry, DriverReport, DbMindEngine, RuntimeSummary};
 pub use error::{query_error, DbMindError, ErrorCode, ErrorPayload, Result};
 pub use kind::{Capabilities, McpMode, RuntimeMode, RuntimeProtocol, TypeDescriptor, TypeTraits};
