@@ -342,7 +342,7 @@
   body.doc-only .docs-layout {
     display: flex; align-items: stretch;
     gap: 34px;
-    margin: 0; padding: 10px 0;
+    margin: 0 !important; padding: 10px 0 !important;
     height: calc(100vh - 60px); box-sizing: border-box;
   }
   /* 文档模式下顶栏与内容区同宽（1120 容器），logo 左缘与左目录面板对齐 */
@@ -824,7 +824,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
   const enterDocMode = () => {
     document.body.classList.add('doc-only')
     setActive(5)
-    window.scrollTo({ top: 0 })
+    // instant：平滑滚动在内容高度骤减时会停留在中途，面板顶部被顶栏盖住
+    window.scrollTo({ top: 0, behavior: 'instant' })
     // 清掉 URL 里的 hash：刷新一律回首页，不留文档视图状态
     history.replaceState(null, '', location.pathname + location.search)
     // 直入（带 #docs 打开）时滚动渐入动画可能未触发 —— 强制显示文档区内容
