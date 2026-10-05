@@ -337,6 +337,15 @@
   .doc-main .fcard:hover { border-color: rgba(79, 140, 255, .45); transform: translateY(-2px); }
   .doc-main .fcard b { display: block; margin-bottom: 5px; font-size: 13.5px; color: var(--text); }
   .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
+  /* 文档模式：三栏等高（= 视口），中间正文独立滚动 —— 面板底边与左菜单对齐 */
+  body.doc-only .docs-layout {
+    height: calc(100vh - 60px - 46px);
+    margin-top: 0; align-items: stretch;
+  }
+  body.doc-only .dtoc, body.doc-only .pagenav {
+    position: static; top: auto; height: 100%; max-height: none;
+  }
+  body.doc-only .doc-main { height: 100%; overflow-y: auto; scrollbar-width: thin; }
   .doc-link {
     display: inline-block; margin-top: 12px; font-size: 13px;
     color: var(--primary); font-weight: 600;
