@@ -220,10 +220,9 @@
   /* ===== 功能文档（页内三栏：左目录 / 中正文 / 右本页导航） ===== */
   /* 默认不出现在滚动流里 —— 只有点导航「文档」进入文档模式才显示 */
   #docs { display: none; text-align: left; }
-  body.doc-only #docs { display: block; }
+  body.doc-only #docs { display: block; padding-top: 0; padding-bottom: 0; }
   /* 文档模式：点导航「文档」后只显示文档区，其余区块隐藏；导航「首页」/logo 退出 */
   body.doc-only > *:not(nav):not(#docs) { display: none !important; }
-  body.doc-only #docs { padding-top: 46px; }
   /* 赞助：普通区块嵌在安全区之后（不做独占视图） */
   #sponsor { padding-top: 76px; padding-bottom: 76px; }
   .sponsor-wrap { display: flex; justify-content: center; }
@@ -337,9 +336,9 @@
   .doc-main .fcard:hover { border-color: rgba(79, 140, 255, .45); transform: translateY(-2px); }
   .doc-main .fcard b { display: block; margin-bottom: 5px; font-size: 13.5px; color: var(--text); }
   .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
-  /* 文档模式：三栏等高（= 视口），中间正文独立滚动 —— 面板底边与左菜单对齐 */
+  /* 文档模式：三栏等高（= 视口减顶栏），面板紧贴顶栏，中间正文独立滚动 */
   body.doc-only .docs-layout {
-    height: calc(100vh - 60px - 46px);
+    height: calc(100vh - 60px);
     margin-top: 0; align-items: stretch;
   }
   body.doc-only .dtoc, body.doc-only .pagenav {
