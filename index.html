@@ -223,9 +223,8 @@
   /* 文档模式：点导航「文档」后只显示文档区，其余区块隐藏；导航「首页」/logo 退出 */
   body.doc-only > *:not(nav):not(#docs) { display: none !important; }
   body.doc-only #docs { padding-top: 46px; }
-  /* 赞助模式：同理只显示赞助区 */
-  body.sponsor-only > *:not(nav):not(#sponsor) { display: none !important; }
-  #sponsor { padding-top: 90px; padding-bottom: 90px; }
+  /* 赞助：普通区块嵌在安全区之后（不做独占视图） */
+  #sponsor { padding-top: 76px; padding-bottom: 76px; }
   .sponsor-wrap { display: flex; justify-content: center; }
   .sponsor-card {
     max-width: 620px; width: 100%; text-align: center;
@@ -397,6 +396,17 @@
   </div>
 </div>
 
+<section style="padding-top: 0;">
+  <div class="wrap">
+    <div class="stats reveal">
+      <div class="stat"><div class="n">17+</div><div class="t">数据源驱动开箱即用</div></div>
+      <div class="stat"><div class="n">18×</div><div class="t">结果集传输压缩比</div></div>
+      <div class="stat"><div class="n">0</div><div class="t">数据上云（全程本地）</div></div>
+      <div class="stat"><div class="n">&lt;1s</div><div class="t">千万级表首屏响应</div></div>
+    </div>
+  </div>
+</section>
+
 <section id="features">
   <div class="wrap">
     <h2 class="sec-title reveal">为「每天写 SQL 的人」打造</h2>
@@ -508,16 +518,30 @@
   </div>
 </section>
 
-<section style="padding-top: 0;">
-  <div class="wrap">
-    <div class="stats reveal">
-      <div class="stat"><div class="n">17+</div><div class="t">数据源驱动开箱即用</div></div>
-      <div class="stat"><div class="n">18×</div><div class="t">结果集传输压缩比</div></div>
-      <div class="stat"><div class="n">0</div><div class="t">数据上云（全程本地）</div></div>
-      <div class="stat"><div class="n">&lt;1s</div><div class="t">千万级表首屏响应</div></div>
+<section id="sponsor">
+  <div class="wrap sponsor-wrap">
+    <div class="sponsor-card reveal">
+      <div class="sponsor-emoji">☕</div>
+      <h2>请作者喝杯咖啡</h2>
+      <p class="sponsor-lead">
+        DBmind 永久免费、无广告、不联网收集任何数据。
+        如果它帮你省下了时间、少加了班，欢迎请作者喝杯咖啡 —— 每一份支持都是继续打磨功能的动力。
+      </p>
+      <div class="qr-row">
+        <div class="qr-card">
+          <img src="sponsor-wechat.png" alt="微信赞赏码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
+          <span class="qr-label">微信</span>
+        </div>
+        <div class="qr-card">
+          <img src="sponsor-alipay.png" alt="支付宝收款码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
+          <span class="qr-label">支付宝</span>
+        </div>
+      </div>
+      <p class="sponsor-note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
     </div>
   </div>
 </section>
+
 
 <section id="docs">
   <div class="wrap">
@@ -720,29 +744,6 @@ WHERE dt = :dt AND org = :org;</code></pre>
   </div>
 </section>
 
-<section id="sponsor">
-  <div class="wrap sponsor-wrap">
-    <div class="sponsor-card">
-      <div class="sponsor-emoji">☕</div>
-      <h2>请作者喝杯咖啡</h2>
-      <p class="sponsor-lead">
-        DBmind 永久免费、无广告、不联网收集任何数据。
-        如果它帮你省下了时间、少加了班，欢迎请作者喝杯咖啡 —— 每一份支持都是继续打磨功能的动力。
-      </p>
-      <div class="qr-row">
-        <div class="qr-card">
-          <img src="sponsor-wechat.png" alt="微信赞赏码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
-          <span class="qr-label">微信</span>
-        </div>
-        <div class="qr-card">
-          <img src="sponsor-alipay.png" alt="支付宝收款码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
-          <span class="qr-label">支付宝</span>
-        </div>
-      </div>
-      <p class="sponsor-note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
-    </div>
-  </div>
-</section>
 
 <section id="download" class="final">
   <div class="wrap">
@@ -799,7 +800,6 @@ WHERE dt = :dt AND org = :org;</code></pre>
   // 文档模式：只显示文档区（导航「文档」/功能卡「查看文档」进入，「首页」/logo 退出）
   const enterDocMode = () => {
     document.body.classList.add('doc-only')
-    document.body.classList.remove('sponsor-only')
     setActive(5)
     window.scrollTo({ top: 0 })
     // 清掉 URL 里的 hash：刷新一律回首页，不留文档视图状态
@@ -809,39 +809,22 @@ WHERE dt = :dt AND org = :org;</code></pre>
   }
   const exitDocMode = () => {
     document.body.classList.remove('doc-only')
-    document.body.classList.remove('sponsor-only')
     setActive(0)
   }
-  // 赞助模式：只显示赞助区（说明 + 收款码），交互方式与文档模式一致
-  const enterSponsorMode = () => {
-    document.body.classList.add('sponsor-only')
-    document.body.classList.remove('doc-only')
-    setActive(4)
-    window.scrollTo({ top: 0 })
-    history.replaceState(null, '', location.pathname + location.search)
-    document.querySelectorAll('#sponsor .reveal').forEach(el => el.classList.add('on'))
-  }
+  // 赞助不再使用独占视图：作为普通区块嵌在安全区之后（导航锚点直接滚动过去）
   document.querySelectorAll('a[href="#docs"]').forEach(a => {
     a.addEventListener('click', (ev) => { ev.preventDefault(); enterDocMode() })
   })
-  document.querySelectorAll('a[href="#sponsor"]').forEach(a => {
-    a.addEventListener('click', (ev) => { ev.preventDefault(); enterSponsorMode() })
-  })
   navItems[0].addEventListener('click', exitDocMode)
   document.querySelector('.logo').addEventListener('click', exitDocMode)
-  // 文档/赞助模式下点「功能 / 工作流 / 安全」：先退出独占视图，让默认锚点跳转滚到对应区块
-  ;[1, 2, 3].forEach(i => navItems[i].addEventListener('click', () => {
+  // 文档模式下点「功能 / 工作流 / 安全 / 赞助」：先退出独占视图，让默认锚点跳转滚到对应区块
+  ;[1, 2, 3, 4].forEach(i => navItems[i].addEventListener('click', () => {
     document.body.classList.remove('doc-only')
-    document.body.classList.remove('sponsor-only')
   }))
-  // 刷新一律回首页：不按 hash 直开文档/赞助视图（进入视图时会清掉 URL hash）
-  // 回到顶部时点亮「首页」（文档/赞助模式下保持当前项点亮）
+  // 刷新一律回首页：不按 hash 直开文档视图（进入视图时会清掉 URL hash）
+  // 回到顶部时点亮「首页」（文档模式下保持「文档」点亮）
   window.addEventListener('scroll', () => {
-    if (window.scrollY < 300) {
-      const i = document.body.classList.contains('doc-only') ? 5
-        : document.body.classList.contains('sponsor-only') ? 4 : 0
-      setActive(i)
-    }
+    if (window.scrollY < 300) setActive(document.body.classList.contains('doc-only') ? 5 : 0)
   }, { passive: true })
 </script>
 </body>
