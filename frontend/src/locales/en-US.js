@@ -1833,8 +1833,6 @@ export default {
   'sqlq.txCommitted': 'Committed',
   'sqlq.txRolledBack': 'Rolled back',
   'sqlq.txFail': 'Transaction operation failed',
-  'sqlq.txDirty': 'Uncommitted changes pending',
-  'sqlq.txClean': 'Transaction open, no changes yet',
   'sqlq.txReset': 'Connection switched, transaction state reset',
   'sqlq.editsN': '{n} cell edit(s) pending',
   'sqlq.commitEdits': 'Apply changes',

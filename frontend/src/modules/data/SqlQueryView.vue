@@ -60,15 +60,15 @@
           <el-button v-if="!isNoSql" size="small" :icon="Brush" @click="formatSql"
                      :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')">{{ hasEditorSelection ? $t('sqlq.fmtSel') : $t('sce.format') }}</el-button>
           <!-- 事务模式：begin 关掉编辑器会话的 autocommit，之后的写语句都挂在事务里；
-               提交/回滚收尾。全 agent 数据源通用（宿主走 JDBC 标准接口，无方言语法） -->
-          <template v-if="!isNoSql">
+               提交/回滚收尾。只有 agent(JDBC 宿主)链路的类型支持（SQLite 走内核原生驱动，
+               没有会话级事务能力 —— 按钮直接不显示，免得点了报「不支持」） -->
+          <template v-if="supportsTx">
             <el-button size="small" :type="txMode ? 'warning' : 'default'" :loading="txBusy"
                        @click="toggleTxMode" :title="$t('sqlq.txToggleTip')">{{ $t('sqlq.txMode') }}</el-button>
             <el-button v-if="txMode" size="small" type="success" :loading="txBusy"
                        @click="txCommit" :title="$t('sqlq.txCommitTip')">{{ $t('sqlq.txCommit') }}</el-button>
             <el-button v-if="txMode" size="small" type="danger" plain :loading="txBusy"
                        @click="txRollback">{{ $t('sqlq.txRollback') }}</el-button>
-            <span v-if="txMode" class="tx-dot" :class="{ dirty: txDirty }" :title="txDirty ? $t('sqlq.txDirty') : $t('sqlq.txClean')"></span>
           </template>
           <!-- SQL 片段库：命名保存常用 SQL，点击插入；「+」把选区/全文存为片段 -->
           <el-dropdown v-if="!isNoSql" trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
@@ -1903,6 +1903,12 @@ const commitEdits = async () => {
 const txMode = ref(false)
 const txDirty = ref(false)
 const txBusy = ref(false)
+// 会话事务只有 agent(JDBC 宿主)链路支持；SQLite 走内核原生驱动（tx 端点会明确返回不支持）
+// —— 这类类型直接不显示事务按钮。computed 惰性求值，引用后面声明的 connType 没问题。
+const supportsTx = computed(() => {
+  const kind = String(connType.value || '').toLowerCase()
+  return !isNoSql.value && kind !== 'sqlite'
+})
 // 事务动作要带「与执行查询相同的库」：后端据此解析同一目标（影子连接等），泳道才对得上
 const txDatabaseOf = () => selectedSchema.value
   ? `${selectedDatabase.value}.${selectedSchema.value}`
@@ -5005,9 +5011,6 @@ onBeforeUnmount(() => {
 .var-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .var-name { font-family: monospace; font-size: 13px; color: var(--dc-primary); width: 110px; text-align: right; flex-shrink: 0; }
 .var-hint { font-size: 12px; color: var(--dc-text-dim); line-height: 1.6; }
-/* 事务模式：未提交状态点（绿=干净、橙=有未提交写） */
-.tx-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--el-color-success); flex-shrink: 0; }
-.tx-dot.dirty { background: var(--el-color-warning); box-shadow: 0 0 6px var(--el-color-warning); }
 /* 单元格编辑缓冲条：贴在底栏上方，弱底色提醒还有改动没落地 */
 .edit-bar { display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-top: 1px solid var(--dc-border); background: var(--el-color-warning-light-9); flex-shrink: 0; }
 .edit-bar-text { font-size: 12px; color: var(--dc-text); }

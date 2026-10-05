@@ -1838,8 +1838,6 @@ export default {
   'sqlq.txCommitted': '已提交（COMMIT）',
   'sqlq.txRolledBack': '已回滚（ROLLBACK）',
   'sqlq.txFail': '事务操作失败',
-  'sqlq.txDirty': '有未提交的修改',
-  'sqlq.txClean': '事务进行中，尚无修改',
   'sqlq.txReset': '连接已切换，事务状态已复位',
   'sqlq.editsN': '有 {n} 处单元格修改待提交',
   'sqlq.commitEdits': '提交修改',
