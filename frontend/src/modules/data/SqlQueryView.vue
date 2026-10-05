@@ -70,9 +70,6 @@
                        @click="txRollback">{{ $t('sqlq.txRollback') }}</el-button>
             <span v-if="txMode" class="tx-dot" :class="{ dirty: txDirty }" :title="txDirty ? $t('sqlq.txDirty') : $t('sqlq.txClean')"></span>
           </template>
-          <!-- CSV 导入向导：把 CSV/TSV 文件分批 INSERT 进目标表（全 SQL 数据源） -->
-          <el-button v-if="!isNoSql" size="small" :icon="Upload" @click="csvVisible = true"
-                     :title="$t('csv.title')">{{ $t('csv.import') }}</el-button>
           <!-- SQL 片段库：命名保存常用 SQL，点击插入；「+」把选区/全文存为片段 -->
           <el-dropdown v-if="!isNoSql" trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
             <el-button size="small" :icon="Collection" :title="$t('sqlq.snippets')">{{ $t('sqlq.snippets') }}</el-button>
@@ -545,9 +542,6 @@
   </el-dialog>
   <!-- 查询结果数据透视：复用当前结果网格做分组汇总 / 计数 / 下钻，纯前端不消耗后端 -->
   <DataPivotDialog v-model="pivotVisible" :columns="pivotColumns" :rows="pivotRows" />
-  <!-- CSV 导入向导：文件解析 / 列映射 / 分批 INSERT（全 SQL 数据源） -->
-  <CsvImportDialog v-model="csvVisible" :conn-id="selectedConnId || props.conn?.id"
-                   :database="txDatabaseOf()" :kind="connectionKind" @imported="onCsvImported" />
   <!-- 行详情：双击 / 右键行号查看整行字段明细 -->
   <CellDetailDialog v-model="rowDetail.visible" :title="rowDetail.title" :text="rowDetail.text" />
 </template>
@@ -558,7 +552,6 @@ import { t } from '../../utils/i18n'
 import VueMonacoEditor from '@guolao/vue-monaco-editor'
 import { ensureMonaco } from '../../utils/monaco'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
-import CsvImportDialog from '../../common/CsvImportDialog.vue'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
 import DataPivotDialog from './DataPivotDialog.vue'
@@ -583,7 +576,7 @@ import {
   Close, CircleCloseFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
-  Sort, SortUp, SortDown, Upload, Collection
+  Sort, SortUp, SortDown, Collection
 } from '@element-plus/icons-vue'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, byType } from '../../types'
@@ -1965,14 +1958,6 @@ const toggleTxMode = async () => {
 }
 // 切换连接：事务绑定在旧连接的会话上 —— 回滚收尾并把状态复位
 //（watch 注册在 selectedConnId 声明之后 —— 注册时会立刻读 .value，放前面就是 TDZ 崩溃）
-// ===== CSV 导入向导 =====
-const csvVisible = ref(false)
-const connectionKind = computed(() => String(selectedConn.value?.type || props.conn?.type || '').toLowerCase())
-const onCsvImported = ({ table, rows }) => {
-  // 导入成功：提示用一条查询验证（不自动执行，避免大结果意外刷屏）
-  lastExecSql = `SELECT * FROM ${table}`
-  ElMessage.info(t('csv.verifyTip', { n: rows, table }))
-}
 
 // ===== SQL 片段库：命名保存常用 SQL，双击插入（localStorage，跨会话保留） =====
 const SNIP_LS = 'dbmind_snippets'
