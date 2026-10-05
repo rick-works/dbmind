@@ -4689,6 +4689,9 @@ onBeforeUnmount(() => {
 .schema-select :deep(.el-input__prefix) { display: flex; align-items: center; margin-left: 6px; }
 
 .head-actions { display: flex; align-items: center; gap: 6px; }
+/* 间距只认 flex gap：Element Plus 会给相邻 el-button 追加 margin-left:12px，
+   事务组三个按钮直接相邻时与「下拉触发器」们间距不一致 —— 统一清零 */
+.head-actions .el-button { margin-left: 0 !important; }
 /* 下拉触发按钮（模型 / AI 助手）：与同行 el-button（24px 高）同规格，图标用主色；
    弹层样式复用全局 .ai-model-dropdown（与 AI 面板的三个下拉完全一致） */
 .model-btn,
