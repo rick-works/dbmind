@@ -45,8 +45,10 @@
   .nav-inner { display: flex; align-items: center; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
   .logo-mark { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: block; }
-  .nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14px; color: var(--dim); height: 60px; }
-  .nav-links a:hover { color: var(--text); }
+  .nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14px; height: 60px; }
+  .nav-links a { color: #b9c3d6; font-weight: 500; transition: color .15s; }
+  .nav-links a:hover { color: #fff; }
+  .nav-links a.active { color: var(--primary); font-weight: 700; }
   .nav-cta {
     background: linear-gradient(135deg, var(--primary), var(--primary-2));
     color: #fff !important; padding: 7px 18px; border-radius: 8px; font-weight: 600;
@@ -514,6 +516,22 @@
     es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('on'); io.unobserve(e.target) } })
   }, { threshold: .12 })
   document.querySelectorAll('.reveal').forEach(el => io.observe(el))
+
+  // 导航高亮：滚动到哪个区块，对应导航项点亮（顶部时点亮「首页」）
+  const navMap = { features: 0, workflow: 1, security: 2, docs: 3 }
+  const navItems = [...document.querySelectorAll('.nav-links a:not(.nav-cta)')]
+  const setActive = (i) => navItems.forEach((a, j) => a.classList.toggle('active', j === i))
+  setActive(0)
+  const secIo = new IntersectionObserver((es) => {
+    es.forEach(e => {
+      if (!e.isIntersecting) return
+      const i = navMap[e.target.id]
+      if (i !== undefined) setActive(i + 1)
+    })
+  }, { rootMargin: '-45% 0px -50% 0px' })
+  Object.keys(navMap).forEach(id => { const el = document.getElementById(id); if (el) secIo.observe(el) })
+  // 回到顶部时点亮「首页」
+  window.addEventListener('scroll', () => { if (window.scrollY < 300) setActive(0) }, { passive: true })
 </script>
 </body>
 </html>
