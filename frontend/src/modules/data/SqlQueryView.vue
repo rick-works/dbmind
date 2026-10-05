@@ -216,19 +216,9 @@
                 @click="selectResultTab(i)" :title="item.res.message || item.res.failedSql || ''">
           <span class="result-tab-dot" :class="item.res && !item.res.success ? 'err' : 'ok'"></span>
           {{ item.label }}
+          <!-- 耗时并入 tab：哪个结果慢一眼可见，不再单开一块条形图 -->
+          <span class="result-tab-ms" v-if="item.res && item.res.executeTime">{{ item.res.executeTime }}ms</span>
         </button>
-      </div>
-      <!-- 多语句耗时条形图：批量执行后每条语句的耗时对比，点击行切到对应结果 -->
-      <div class="stmt-timings" v-if="showResultTabs && stmtTimings.length > 1">
-        <div class="timing-row" v-for="tm in stmtTimings" :key="tm.i"
-             :class="{ active: tm.i - 1 === activeResultIdx }" @click="selectResultTab(tm.i - 1)"
-             :title="$t('sqlq.timingRowTitle', { n: tm.i })">
-          <span class="timing-label">语句 {{ tm.i }}</span>
-          <div class="timing-track">
-            <div class="timing-bar" :class="{ err: !tm.ok }" :style="{ width: tm.pct + '%' }"></div>
-          </div>
-          <span class="timing-ms">{{ tm.ms }}ms</span>
-        </div>
       </div>
       <div class="result-grid">
         <!-- 加载遮罩：查询/翻页时可取消（与数据表一致） -->
@@ -641,19 +631,6 @@ const formatElapsed = (ms) => {
 }
 // 后端已分页，直接展示返回的 rows 即可
 const paginatedRows = computed(() => result.value?.rows || [])
-// 多语句耗时条形图：批量结果每段的 executeTime 对比（max 归一化，最慢的占满轨道）
-const stmtTimings = computed(() => {
-  const items = resultItems.value
-  if (!items.length) return []
-  const rows = items.map((it, i) => ({
-    i: i + 1,
-    ms: Math.round(it.res?.executeTime || 0),
-    ok: !(it.res && it.res.success === false)
-  }))
-  const max = Math.max(...rows.map((r) => r.ms), 1)
-  rows.forEach((r) => { r.pct = Math.max(4, Math.round((r.ms / max) * 100)) })
-  return rows
-})
 // 真实总条数（后端统计；未知时返回 null）
 const displayTotal = computed(() => {
   const t = result.value.totalCount
@@ -4290,6 +4267,8 @@ onBeforeUnmount(() => {
 .result-tab-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
 .result-tab-dot.ok { background: var(--dc-success); }
 .result-tab-dot.err { background: var(--dc-danger); }
+.result-tab-ms { font-size: 11px; color: var(--dc-text-dim); font-weight: 400; }
+.result-tab.active .result-tab-ms { color: var(--dc-primary); opacity: .8; }
 .flex-spacer { flex: 1; }
 .loading-text { display: flex; align-items: center; gap: 6px; color: var(--dc-primary); font-size: 13px; }
 .result-grid { flex: 1; min-height: 0; position: relative; overflow: hidden; display: flex; flex-direction: column; }
@@ -4573,24 +4552,4 @@ onBeforeUnmount(() => {
 }
 .stmt-chip:hover .stmt-run { display: inline-flex; }
 .stmt-run:hover { opacity: .8; }
-/* 多语句耗时条形图 */
-.stmt-timings {
-  padding: 6px 12px; border-bottom: 1px solid var(--dc-border);
-  background: var(--dc-bg-soft); flex-shrink: 0;
-  max-height: 132px; overflow: auto;
-}
-.timing-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 2px 4px; border-radius: 4px; cursor: pointer;
-}
-.timing-row:hover, .timing-row.active { background: var(--dc-bg-hover); }
-.timing-label { font-size: 12px; color: var(--dc-text-dim); width: 52px; white-space: nowrap; }
-.timing-track {
-  flex: 1; height: 8px; border-radius: 4px;
-  background: var(--dc-bg-card); border: 1px solid var(--dc-border);
-  overflow: hidden;
-}
-.timing-bar { height: 100%; background: var(--dc-primary); border-radius: 4px; }
-.timing-bar.err { background: #e34d4d; }
-.timing-ms { font-size: 12px; color: var(--dc-text-dim); width: 64px; text-align: right; white-space: nowrap; }
 </style>
