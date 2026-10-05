@@ -802,6 +802,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
     document.body.classList.remove('sponsor-only')
     setActive(5)
     window.scrollTo({ top: 0 })
+    // 清掉 URL 里的 hash：刷新一律回首页，不留文档视图状态
+    history.replaceState(null, '', location.pathname + location.search)
     // 直入（带 #docs 打开）时滚动渐入动画可能未触发 —— 强制显示文档区内容
     document.querySelectorAll('#docs .reveal').forEach(el => el.classList.add('on'))
   }
@@ -816,6 +818,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
     document.body.classList.remove('doc-only')
     setActive(4)
     window.scrollTo({ top: 0 })
+    history.replaceState(null, '', location.pathname + location.search)
     document.querySelectorAll('#sponsor .reveal').forEach(el => el.classList.add('on'))
   }
   document.querySelectorAll('a[href="#docs"]').forEach(a => {
@@ -831,9 +834,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
     document.body.classList.remove('doc-only')
     document.body.classList.remove('sponsor-only')
   }))
-  // 带 #docs / #sponsor 直开（分享/收藏的链接）也自动进入对应视图
-  if (location.hash === '#docs') enterDocMode()
-  if (location.hash === '#sponsor') enterSponsorMode()
+  // 刷新一律回首页：不按 hash 直开文档/赞助视图（进入视图时会清掉 URL hash）
   // 回到顶部时点亮「首页」（文档/赞助模式下保持当前项点亮）
   window.addEventListener('scroll', () => {
     if (window.scrollY < 300) {
