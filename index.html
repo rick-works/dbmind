@@ -220,7 +220,12 @@
   /* ===== 功能文档（页内三栏：左目录 / 中正文 / 右本页导航） ===== */
   /* 默认不出现在滚动流里 —— 只有点导航「文档」进入文档模式才显示 */
   #docs { display: none; text-align: left; }
-  body.doc-only #docs { display: block; padding-top: 0; padding-bottom: 0; }
+  body.doc-only #docs {
+    display: block;
+    /* 固定定位：锚定顶栏下方铺满视口，不受页面滚动位置影响（此前滚动未归零时面板会顶到 logo 上面） */
+    position: fixed; top: 60px; left: 0; right: 0; bottom: 0;
+    padding: 10px 0; overflow: hidden;
+  }
   /* 文档模式：点导航「文档」后只显示文档区，其余区块隐藏；导航「首页」/logo 退出 */
   body.doc-only > *:not(nav):not(#docs) { display: none !important; }
   /* 赞助：普通区块嵌在安全区之后（不做独占视图） */
@@ -337,13 +342,12 @@
   .doc-main .fcard b { display: block; margin-bottom: 5px; font-size: 13.5px; color: var(--text); }
   .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
   /* 文档模式：flex 等高三栏（stretch 保证顶底严格对齐），中间正文内部滚动。
-     上下各留 10px 边距（从顶栏底边线往下算）。
-     不用 grid + height:100% —— 正文长内容会撑爆行高把左右面板拉长错位 */
+     容器已固定定位：高度即 #docs 内容区（视口减顶栏再减上下 10px 边距） */
   body.doc-only .docs-layout {
     display: flex; align-items: stretch;
     gap: 34px;
-    margin: 0 !important; padding: 10px 0 !important;
-    height: calc(100vh - 60px); box-sizing: border-box;
+    margin: 0 !important; padding: 0 !important;
+    height: 100%; box-sizing: border-box;
   }
   /* 文档模式下顶栏与内容区同宽（1120 容器），logo 左缘与左目录面板对齐 */
   body.doc-only .top-inner { max-width: 1120px; }
