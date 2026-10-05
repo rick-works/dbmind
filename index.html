@@ -99,10 +99,6 @@
   /* ===== 数据源跑马灯 ===== */
   .sources { padding: 8px 0 70px; text-align: center; }
   .sources-label { font-size: 13px; color: var(--dim); letter-spacing: 2px; margin-bottom: 22px; }
-  .source-groups { display: flex; flex-direction: column; gap: 16px; max-width: 860px; margin: 0 auto; }
-  .sgroup { display: flex; align-items: baseline; justify-content: center; gap: 18px; flex-wrap: wrap; }
-  .sgroup-t { font-size: 12.5px; color: var(--dim); width: 92px; text-align: right; flex-shrink: 0; letter-spacing: 1px; }
-  .sgroup .source-chips { justify-content: flex-start; }
   .source-chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 860px; margin: 0 auto; }
   .chip {
     border: 1px solid var(--border); border-radius: 999px;
@@ -267,38 +263,14 @@
 
 <div class="sources reveal">
   <div class="sources-label">— 开箱即用的数据源 —</div>
-  <div class="source-groups">
-    <div class="sgroup">
-      <div class="sgroup-t">关系型</div>
-      <div class="source-chips">
-        <span class="chip">MySQL</span><span class="chip">PostgreSQL</span><span class="chip">Oracle</span>
-        <span class="chip">SQL Server</span><span class="chip">MariaDB</span><span class="chip">DB2</span><span class="chip">Derby</span>
-      </div>
-    </div>
-    <div class="sgroup">
-      <div class="sgroup-t">国产数据库</div>
-      <div class="source-chips">
-        <span class="chip">达梦 DM</span><span class="chip">人大金仓</span><span class="chip">Apache Doris</span>
-      </div>
-    </div>
-    <div class="sgroup">
-      <div class="sgroup-t">分析与分布式</div>
-      <div class="source-chips">
-        <span class="chip">ClickHouse</span><span class="chip">Doris</span>
-      </div>
-    </div>
-    <div class="sgroup">
-      <div class="sgroup-t">NoSQL 与搜索</div>
-      <div class="source-chips">
-        <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
-      </div>
-    </div>
-    <div class="sgroup">
-      <div class="sgroup-t">嵌入式</div>
-      <div class="source-chips">
-        <span class="chip">SQLite</span><span class="chip">H2</span><span class="chip">DuckDB</span>
-      </div>
-    </div>
+  <div class="source-chips">
+    <span class="chip">MySQL</span><span class="chip">PostgreSQL</span><span class="chip">Oracle</span>
+    <span class="chip">SQL Server</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
+    <span class="chip">MariaDB</span><span class="chip">达梦 DM</span><span class="chip">人大金仓</span>
+    <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
+    <span class="chip">DB2</span><span class="chip">Derby</span><span class="chip">Doris</span>
+    <span class="chip">SQLite</span><span class="chip">H2</span><span class="chip">DuckDB</span>
+    <span class="chip">更多接入中…</span>
   </div>
 </div>
 
