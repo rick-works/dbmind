@@ -505,7 +505,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
 import { t } from '../../utils/i18n'
 import VueMonacoEditor from '@guolao/vue-monaco-editor'
 import { ensureMonaco } from '../../utils/monaco'
@@ -515,7 +515,7 @@ import CellDetailDialog from '../../common/CellDetailDialog.vue'
 import DataPivotDialog from './DataPivotDialog.vue'
 import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
 import { exportData } from '../../api'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ElMessage, ElMessageBox, ElSelect, ElOption } from 'element-plus'
 import { editorSettingsLive, getEditorSettings, getQuerySettings, querySettingsLive } from '../../utils/settings'
 import { getResolvedTheme, monacoTheme, onResolvedThemeChange } from '../../utils/theme'
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
@@ -1706,16 +1706,40 @@ const onResultRowContextMenu = (e, rowIdx) => { e.preventDefault(); openResCtx(e
 const onResultContextMenu = (e, rowIdx, col) => { e.preventDefault(); openResCtx(e.clientX, e.clientY, rowIdx, col, 'cell') }
 
 // ========== 行详情：双击 / 右键行号查看整行字段明细（复用单元格详情弹窗） ==========
-// ===== 单元格快捷编辑：双击数据格 → 改值 → 生成 UPDATE 回填编辑器（**不执行**）=====
-// 表名取当前执行 SQL 的 FROM；JOIN 结果不启用（列归属不明，生成的语句会张冠李戴）。
-// WHERE：行里有名为 id 的列按主键定位；否则用「其余全部列」拼 AND 条件（NULL → IS NULL），
-// 行内全列条件总是精确命中本行，安全但可能较长 —— 可用后手改。
-const quickEditTableOf = () => {
-  const text = lastExecSql.value || sql.value || ''
-  if (!text || /\bjoin\b/i.test(text)) return null
-  const m = text.match(/\bfrom\s+[`"']?([\w.]+)[`"']?/i)
-  return m ? m[1] : null
+// ===== 单元格快捷编辑：双击数据格（或右键「编辑此单元格」）→ 改值 → 生成 UPDATE 回填编辑器 =====
+// **不执行**，回填后由用户确认再跑（配合写操作影响行预览双保险）。
+// 更新哪张表：单表查询直接用 FROM 的表；JOIN 结果列出 FROM/JOIN 的全部表让用户挑
+// （列归属只有用户知道，工具不猜）。WHERE：行里有名为 id 的列按主键定位；
+// 否则用「其余全部列」拼 AND 条件（NULL → IS NULL），总是精确命中本行，安全但可能较长。
+const quickEditTablesOf = () => {
+  const text = lastExecSql || sql.value || ''
+  if (!text) return []
+  const tables = []
+  const re = /\b(?:from|join)\s+[`"']?([a-z_][\w$]*(?:\.[a-z_][\w$]*)?)/gi
+  let m
+  while ((m = re.exec(text))) {
+    if (!tables.includes(m[1])) tables.push(m[1])
+  }
+  return tables
 }
+const pickUpdateTable = (tables) => new Promise((resolve) => {
+  let sel = tables[0]
+  ElMessageBox({
+    title: t('sqlq.cellEditPickTitle'),
+    message: h('div', null, [
+      h('p', { style: 'margin:0 0 10px;font-size:12px;color:var(--dc-text-dim);line-height:1.6' }, t('sqlq.cellEditPickTip')),
+      h(ElSelect, {
+        modelValue: sel,
+        'onUpdate:modelValue': (v) => { sel = v },
+        style: 'width:100%', filterable: true
+      }, () => tables.map((tb) => h(ElOption, { key: tb, value: tb, label: tb })))
+    ]),
+    confirmButtonText: t('common.confirm'),
+    cancelButtonText: t('common.cancel'),
+    showCancelButton: true,
+    closeOnClickModal: false
+  }).then(() => resolve(sel)).catch(() => resolve(null))
+})
 const sqlLiteralOf = (v) => {
   if (v === null || v === undefined) return 'NULL'
   if (typeof v === 'number') return String(v)
@@ -1738,8 +1762,14 @@ const appendToEditor = (text) => {
   })
 }
 const onCellQuickEdit = async (rowIdx, colName, row) => {
-  const table = quickEditTableOf()
-  if (!table) { ElMessage.warning(t('sqlq.cellEditJoinSkip')); return }
+  const tables = quickEditTablesOf()
+  if (!tables.length) { ElMessage.warning(t('sqlq.cellEditNoTable')); return }
+  let table = tables[0]
+  if (tables.length > 1) {
+    const picked = await pickUpdateTable(tables)
+    if (!picked) return
+    table = picked
+  }
   const oldRaw = row[colName]
   const oldShown = oldRaw == null ? nullDisplay() : String(formatDbValue(oldRaw))
   let newVal = ''
@@ -2226,6 +2256,7 @@ const openResCtx = (x, y, rowIdx, col, from = 'cell') => {
   } else {
     // —— 单元格操作（只放作用在这一格上的操作；行/列操作先选中行/列再右键） ——
     if (col) items.push({ label: t('mdk.copy'), command: 'copy-cell', shortcut: 'Ctrl+C' })
+    if (col && rowIdx >= 0 && row) items.push({ label: t('sqlq.ctxCellEdit'), command: 'cell-edit' })
   }
   // 全选/取消全选走 Ctrl+A 与表头复选框，不再占用右键菜单
   if (!items.length) return
@@ -2250,6 +2281,7 @@ const onResultCtxItem = (item) => {
   switch (item.command) {
     case 'row-detail': if (rowIdx >= 0) openRowDetail(rowIdx); break
     case 'copy-cell': if (row) writeClipboard(val(row, col), t('sqlq.copyCell')); break
+    case 'cell-edit': if (row) onCellQuickEdit(rowIdx, col, row); break
     case 'copy-sel': copyLikeCtrlC(); break
     case 'copy-col-header': copyColHeader(); break
     case 'copy-csv': copyResCtx('csv'); break
