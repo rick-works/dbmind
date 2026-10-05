@@ -576,7 +576,7 @@ import {
   Close, CircleCloseFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
-  Sort, SortUp, SortDown, Collection
+  Sort, SortUp, SortDown, Collection, RefreshLeft
 } from '@element-plus/icons-vue'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, byType } from '../../types'
