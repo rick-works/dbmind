@@ -222,28 +222,90 @@
   #docs .sec-title, #docs .sec-sub { text-align: center; }
   /* 文档模式：点导航「文档」后只显示文档区，其余区块隐藏；导航「首页」/logo 退出 */
   body.doc-only > *:not(nav):not(#docs) { display: none !important; }
-  #docs { padding-top: 90px; }
+  body.doc-only #docs { padding-top: 46px; }
+  /* 赞助模式：同理只显示赞助区 */
+  body.sponsor-only > *:not(nav):not(#sponsor) { display: none !important; }
+  #sponsor { padding-top: 90px; padding-bottom: 90px; }
+  .sponsor-wrap { display: flex; justify-content: center; }
+  .sponsor-card {
+    max-width: 620px; width: 100%; text-align: center;
+    background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+    padding: 44px 40px;
+  }
+  .sponsor-emoji { font-size: 42px; margin-bottom: 10px; }
+  .sponsor-card h2 { font-size: 24px; font-weight: 800; margin-bottom: 14px; }
+  .sponsor-lead { color: var(--dim); font-size: 14.5px; line-height: 1.9; margin-bottom: 30px; }
+  .qr-row { display: flex; gap: 26px; justify-content: center; margin-bottom: 24px; }
+  .qr-card {
+    width: 190px; padding: 16px; border-radius: 14px;
+    background: #fff; display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+  .qr-card img { width: 100%; border-radius: 8px; display: block; }
+  .qr-card.noimg { min-height: 190px; justify-content: center; }
+  .qr-card.noimg::before {
+    content: "收款码图片待放入";
+    color: #94a3b8; font-size: 12px; text-align: center; line-height: 1.8;
+  }
+  .qr-row .qr-card:first-child.noimg::after {
+    content: "website/sponsor-wechat.png";
+    color: #94a3b8; font-size: 11px;
+  }
+  .qr-row .qr-card:last-child.noimg::after {
+    content: "website/sponsor-alipay.png";
+    color: #94a3b8; font-size: 11px;
+  }
+  .qr-label { color: #1e293b; font-weight: 700; font-size: 14px; }
+  .sponsor-note { color: var(--dim); font-size: 13px; }
+  /* 滚动条配色：全局细圆角主题化（目录面板、正文区一致） */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, .28); border-radius: 999px; border: 2px solid var(--bg);
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(79, 140, 255, .55); }
+  html { scrollbar-color: rgba(148, 163, 184, .35) transparent; scrollbar-width: thin; }
   .docs-layout {
-    display: grid; grid-template-columns: 200px minmax(0, 1fr) 175px; gap: 34px;
-    margin-top: 36px; align-items: start;
+    display: grid; grid-template-columns: 224px minmax(0, 1fr) 192px; gap: 34px;
+    margin-top: 30px; align-items: start;
   }
-  .dtoc, .pagenav { position: sticky; top: 84px; font-size: 13px; max-height: calc(100vh - 110px); overflow-y: auto; }
-  .dtoc .group { margin-bottom: 20px; }
-  .dtoc .gt, .pagenav .pt { font-size: 11.5px; color: var(--dim); letter-spacing: 1px; margin-bottom: 5px; padding-left: 10px; }
-  .dtoc a, .pagenav a { display: block; padding: 4px 10px; border-radius: 7px; color: var(--dim); }
-  .pagenav a { border-left: 2px solid var(--border); border-radius: 0; padding: 3px 0 3px 12px; }
+  /* 左右目录：轻面板化，sticky 跟随 */
+  .dtoc, .pagenav {
+    position: sticky; top: 84px; font-size: 13px;
+    max-height: calc(100vh - 116px); overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 12px;
+  }
+  .dtoc { scrollbar-width: thin; }
+  .dtoc .group { margin-bottom: 18px; }
+  .dtoc .group:last-child { margin-bottom: 0; }
+  .dtoc .gt, .pagenav .pt {
+    font-size: 11px; color: var(--dim); letter-spacing: 1.5px;
+    margin-bottom: 7px; padding-left: 10px; font-weight: 600;
+  }
+  .dtoc a { display: block; padding: 5px 10px; border-radius: 7px; color: var(--dim); transition: color .12s, background .12s; }
+  .pagenav a {
+    display: block; padding: 3px 0 3px 12px; color: var(--dim);
+    border-left: 2px solid var(--border); transition: color .12s, border-color .12s;
+  }
   .dtoc a:hover, .pagenav a:hover { color: var(--text); background: rgba(148, 163, 184, .08); }
-  .dtoc a.active, .pagenav a.active { color: var(--primary); background: rgba(79, 140, 255, .1); font-weight: 600; }
-  .pagenav a.active { background: none; border-left-color: var(--primary); }
-  .doc-main { min-width: 0; }
+  .pagenav a:hover { background: none; }
+  .dtoc a.active { color: var(--primary); background: rgba(79, 140, 255, .12); font-weight: 600; }
+  .pagenav a.active { color: var(--primary); background: none; border-left-color: var(--primary); font-weight: 600; }
+  /* 正文：限行宽 + 分节装饰 */
+  .doc-main { min-width: 0; max-width: 780px; }
   .doc-main h2 {
-    font-size: 19px; font-weight: 700; margin: 40px 0 12px; padding-top: 16px;
-    border-top: 1px solid var(--border);
+    position: relative; font-size: 20px; font-weight: 800;
+    margin: 42px 0 14px; padding: 2px 0 2px 16px; letter-spacing: .3px;
   }
-  .doc-main h2:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
-  .doc-main p { color: #c3cbdb; margin-bottom: 12px; font-size: 14px; }
-  .doc-main ul { margin: 8px 0 16px; padding-left: 20px; color: #c3cbdb; font-size: 14px; }
-  .doc-main li { margin-bottom: 7px; }
+  .doc-main h2::before {
+    content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 4px;
+    border-radius: 2px; background: linear-gradient(180deg, var(--primary), var(--primary-2));
+  }
+  .doc-main h2:first-of-type { margin-top: 0; }
+  .doc-main p { color: #c3cbdb; margin-bottom: 13px; font-size: 14.5px; }
+  .doc-main ul { margin: 8px 0 18px; padding-left: 20px; color: #c3cbdb; font-size: 14.5px; }
+  .doc-main li { margin-bottom: 8px; }
+  .doc-main li::marker { color: var(--primary); }
   .doc-main li b { color: var(--text); font-weight: 600; }
   .doc-main code {
     background: rgba(79, 140, 255, .12); border: 1px solid var(--border); border-radius: 5px;
@@ -252,19 +314,20 @@
   }
   .doc-main pre {
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 13px 17px; overflow-x: auto; margin: 12px 0 16px; font-size: 13px; line-height: 1.7;
+    padding: 15px 19px; overflow-x: auto; margin: 14px 0 18px; font-size: 13px; line-height: 1.75;
   }
   .doc-main pre code { background: none; border: none; padding: 0; color: #a8c7ff; }
   .doc-main .tip {
     background: rgba(45, 212, 191, .07); border: 1px solid rgba(45, 212, 191, .25);
-    border-radius: var(--radius); padding: 11px 15px; margin: 12px 0 18px; font-size: 13.5px; color: #b7e8e0;
+    border-radius: var(--radius); padding: 12px 17px; margin: 14px 0 20px; font-size: 13.5px; color: #b7e8e0;
   }
   .doc-main .tip b { color: var(--accent); }
   .doc-main .dlink { color: var(--primary); }
   .doc-main .dlink:hover { color: var(--accent); }
-  .doc-main .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin: 14px 0; }
-  .doc-main .fcard { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
-  .doc-main .fcard b { display: block; margin-bottom: 4px; font-size: 13.5px; color: var(--text); }
+  .doc-main .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .doc-main .fcard { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 17px; transition: border-color .15s, transform .15s; }
+  .doc-main .fcard:hover { border-color: rgba(79, 140, 255, .45); transform: translateY(-2px); }
+  .doc-main .fcard b { display: block; margin-bottom: 5px; font-size: 13.5px; color: var(--text); }
   .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
   .doc-link {
     display: inline-block; margin-top: 12px; font-size: 13px;
@@ -273,7 +336,7 @@
   .doc-link:hover { color: var(--accent); }
 
   @media (max-width: 1100px) {
-    .docs-layout { grid-template-columns: 180px minmax(0, 1fr); }
+    .docs-layout { grid-template-columns: 200px minmax(0, 1fr); }
     .pagenav { display: none; }
   }
   @media (max-width: 760px) {
@@ -296,6 +359,7 @@
       <a href="#features">功能</a>
       <a href="#workflow">工作流</a>
       <a href="#security">安全</a>
+      <a href="#sponsor">赞助</a>
       <a href="#docs">文档</a>
       <a href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener" class="nav-cta">立即下载</a>
     </div>
@@ -653,6 +717,30 @@ WHERE dt = :dt AND org = :org;</code></pre>
   </div>
 </section>
 
+<section id="sponsor">
+  <div class="wrap sponsor-wrap">
+    <div class="sponsor-card">
+      <div class="sponsor-emoji">☕</div>
+      <h2>请作者喝杯咖啡</h2>
+      <p class="sponsor-lead">
+        DBmind 永久免费、无广告、不联网收集任何数据。
+        如果它帮你省下了时间、少加了班，欢迎请作者喝杯咖啡 —— 每一份支持都是继续打磨功能的动力。
+      </p>
+      <div class="qr-row">
+        <div class="qr-card">
+          <img src="sponsor-wechat.png" alt="微信赞赏码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
+          <span class="qr-label">微信</span>
+        </div>
+        <div class="qr-card">
+          <img src="sponsor-alipay.png" alt="支付宝收款码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
+          <span class="qr-label">支付宝</span>
+        </div>
+      </div>
+      <p class="sponsor-note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
+    </div>
+  </div>
+</section>
+
 <section id="download" class="final">
   <div class="wrap">
     <h2>准备试试 DBmind？</h2>
@@ -679,8 +767,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
   document.querySelectorAll('.reveal').forEach(el => io.observe(el))
 
   // 导航高亮：滚动到哪个区块，对应导航项点亮（顶部时点亮「首页」）
-  // 值 = 导航项下标（首页0 功能1 工作流2 安全3 文档4）
-  const navMap = { features: 1, workflow: 2, security: 3, docs: 4 }
+  // 值 = 导航项下标（首页0 功能1 工作流2 安全3 赞助4 文档5）
+  const navMap = { features: 1, workflow: 2, security: 3, docs: 5 }
   const navItems = [...document.querySelectorAll('.nav-links a:not(.nav-cta)')]
   const setActive = (i) => navItems.forEach((a, j) => a.classList.toggle('active', j === i))
   setActive(0)
@@ -705,24 +793,46 @@ WHERE dt = :dt AND org = :org;</code></pre>
   }, { rootMargin: '-70px 0px -72% 0px' })
   document.querySelectorAll('.doc-main h2[id]').forEach(h => docIo.observe(h))
 
-  // 文档模式：只显示文档区（导航「文档」/功能卡「查看文档」进入，「首页」/返回按钮退出）
+  // 文档模式：只显示文档区（导航「文档」/功能卡「查看文档」进入，「首页」/logo 退出）
   const enterDocMode = () => {
     document.body.classList.add('doc-only')
-    setActive(4)
+    document.body.classList.remove('sponsor-only')
+    setActive(5)
     window.scrollTo({ top: 0 })
+    // 直入（带 #docs 打开）时滚动渐入动画可能未触发 —— 强制显示文档区内容
+    document.querySelectorAll('#docs .reveal').forEach(el => el.classList.add('on'))
   }
   const exitDocMode = () => {
     document.body.classList.remove('doc-only')
+    document.body.classList.remove('sponsor-only')
     setActive(0)
+  }
+  // 赞助模式：只显示赞助区（说明 + 收款码），交互方式与文档模式一致
+  const enterSponsorMode = () => {
+    document.body.classList.add('sponsor-only')
+    document.body.classList.remove('doc-only')
+    setActive(4)
+    window.scrollTo({ top: 0 })
+    document.querySelectorAll('#sponsor .reveal').forEach(el => el.classList.add('on'))
   }
   document.querySelectorAll('a[href="#docs"]').forEach(a => {
     a.addEventListener('click', (ev) => { ev.preventDefault(); enterDocMode() })
   })
+  document.querySelectorAll('a[href="#sponsor"]').forEach(a => {
+    a.addEventListener('click', (ev) => { ev.preventDefault(); enterSponsorMode() })
+  })
   navItems[0].addEventListener('click', exitDocMode)
   document.querySelector('.logo').addEventListener('click', exitDocMode)
-  // 回到顶部时点亮「首页」（文档模式下保持「文档」点亮）
+  // 带 #docs / #sponsor 直开（分享/收藏的链接）也自动进入对应视图
+  if (location.hash === '#docs') enterDocMode()
+  if (location.hash === '#sponsor') enterSponsorMode()
+  // 回到顶部时点亮「首页」（文档/赞助模式下保持当前项点亮）
   window.addEventListener('scroll', () => {
-    if (window.scrollY < 300) setActive(document.body.classList.contains('doc-only') ? 4 : 0)
+    if (window.scrollY < 300) {
+      const i = document.body.classList.contains('doc-only') ? 5
+        : document.body.classList.contains('sponsor-only') ? 4 : 0
+      setActive(i)
+    }
   }, { passive: true })
 </script>
 </body>
