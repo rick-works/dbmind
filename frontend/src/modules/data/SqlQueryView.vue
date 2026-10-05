@@ -140,6 +140,13 @@
         </div>
       </div>
       <div class="editor-body" @contextmenu.prevent="onEditorContextMenu">
+        <!-- 语句面包屑：多段脚本时列出每条语句，点击选中并定位（执行选中/右键「执行选中 SQL」配合） -->
+        <div class="stmt-bar" v-if="stmtBreadcrumbs.length">
+          <span class="stmt-bar-label">{{ $t('sqlq.stmtCount', { n: stmtBreadcrumbs.length }) }}</span>
+          <button v-for="s in stmtBreadcrumbs.slice(0, 40)" :key="s.i" type="button" class="stmt-chip"
+                  :title="s.firstLine" @click="gotoStatement(s)">语句 {{ s.i }}</button>
+          <span class="stmt-chip" v-if="stmtBreadcrumbs.length > 40">…</span>
+        </div>
         <VueMonacoEditor
           v-if="monacoReady"
           ref="editorRef"
@@ -528,6 +535,7 @@ watch(sql, (val) => {
     isDirty.value = dirty
     emit('dirty-change', dirty)
   }
+  clearStmtError() // 内容改了：上一轮的报错标红已过期
   if (sqlChangeTimer) clearTimeout(sqlChangeTimer)
   sqlChangeTimer = setTimeout(() => { sqlChangeTimer = null; emit('sql-change', sql.value) }, 600)
   scheduleAutoSave(val, dirty)
@@ -2283,6 +2291,79 @@ ensureMonaco().then(() => { monacoReady.value = true })
   .catch((e) => ElMessage.error('编辑器加载失败：' + (e && e.message ? e.message : e)))
 let editorInstance = null
 
+// ===== 语句面包屑 + 报错语句标红（多段脚本的定位能力）=====
+// 每条语句的原文区间（splitSqlStatementRanges 给字符偏移，转 Monaco 位置用）
+const stmtBreadcrumbs = computed(() => {
+  const text = sql.value || ''
+  const ranges = splitSqlStatementRanges(text)
+  if (ranges.length <= 1) return []
+  return ranges.map((r, i) => ({
+    i: i + 1, start: r.start, end: r.end,
+    firstLine: (r.text.split('\n')[0] || '').slice(0, 120)
+  }))
+})
+const gotoStatement = (s) => {
+  const ed = editorInstance
+  const model = ed && ed.getModel()
+  if (!ed || !model) return
+  const start = model.getPositionAt(s.start)
+  const end = model.getPositionAt(s.end)
+  const range = {
+    startLineNumber: start.lineNumber, startColumn: start.column,
+    endLineNumber: end.lineNumber, endColumn: end.column
+  }
+  ed.setSelection(range)
+  ed.revealRangeInCenter(range)
+  ed.focus()
+}
+// 报错语句标红：decorations 用裸对象 range（Monaco 内部 DOM 不带组件 scoped 属性，样式放全局块）
+let stmtErrorDecorations = []
+const clearStmtError = () => {
+  const ed = editorInstance
+  if (ed && stmtErrorDecorations.length) {
+    try { ed.deltaDecorations(stmtErrorDecorations, []) } catch { /* 编辑器可能已销毁 */ }
+  }
+  stmtErrorDecorations = []
+}
+/** 执行失败后把出错的那条语句标红并定位：stmtIndex（批量路径已知序号）优先，其次按 failedSql 匹配 */
+const markErrorStatement = (res, stmtIndex) => {
+  clearStmtError()
+  const ed = editorInstance
+  const model = ed && ed.getModel()
+  if (!ed || !model) return
+  const ranges = splitSqlStatementRanges(sql.value || '')
+  if (!ranges.length) return
+  let target = -1
+  if (Number.isInteger(stmtIndex) && stmtIndex >= 0 && stmtIndex < ranges.length) target = stmtIndex
+  if (target < 0) {
+    const failedSql = String(res?.failedSql || '').trim()
+    if (failedSql) {
+      const norm = (s) => String(s).replace(/\s+/g, ' ').toLowerCase()
+      target = ranges.findIndex((r) => norm(r.text) === norm(failedSql))
+    }
+  }
+  if (target < 0 && ranges.length === 1) target = 0
+  if (target < 0) return
+  const r = ranges[target]
+  const start = model.getPositionAt(r.start)
+  const end = model.getPositionAt(r.end)
+  const range = {
+    startLineNumber: start.lineNumber, startColumn: start.column,
+    endLineNumber: end.lineNumber, endColumn: end.column
+  }
+  try {
+    stmtErrorDecorations = ed.deltaDecorations([], [{
+      range,
+      options: {
+        inlineClassName: 'stmt-error-text',
+        overviewRuler: { color: '#e34d4d', position: 4 },
+        stickiness: 1
+      }
+    }])
+  } catch { /* 编辑器销毁竞态忽略 */ }
+  ed.revealRangeInCenter(range)
+}
+
 const aiDialogVisible = ref(false)
 const aiDialogTitle = ref('')
 const aiLoading = ref(false)
@@ -2579,6 +2660,17 @@ const onEditorMount = (editor, monaco) => {
           startLineNumber: position.lineNumber, startColumn: 1,
           endLineNumber: position.lineNumber, endColumn: position.column
         })
+        // 别名映射：FROM t a / JOIN u AS b → 别名 → 表名。`别名.` 补该表的列
+        //（排除保留字 —— `from x` 后跟换行 where 会被误当别名）
+        const allText = model.getValue()
+        const aliasMap = {}
+        const ALIAS_RESERVED = new Set(['where', 'group', 'order', 'on', 'set', 'left', 'right', 'inner', 'outer', 'join', 'limit', 'union', 'select', 'as', 'into', 'update', 'values', 'having', 'cross', 'using', 'when', 'then'])
+        const aliasRe = /(?:from|join|into|update)\s+[`"']?([\w.]+)[`"']?\s+(?:as\s+)?([a-z_][\w$]*)/gi
+        let am
+        while ((am = aliasRe.exec(allText))) {
+          if (ALIAS_RESERVED.has(am[2].toLowerCase())) continue
+          aliasMap[am[2].toLowerCase()] = am[1].split('.').pop()
+        }
         const dotMatch = lineText.match(/([A-Za-z_][\w$]*)\.\w*$/)
         if (dotMatch) {
           const prefix = dotMatch[1].toLowerCase()
@@ -2619,6 +2711,20 @@ const onEditorMount = (editor, monaco) => {
               range,
               sortText: '0ccc' + c,
               detail: t('sqlq.completionColumn')
+            }))
+            return { suggestions }
+          }
+          // 别名命中：`a.` → 别名对应的表 → 补该表的列（detail 标出来源表）
+          const aliasTable = aliasMap[prefix]
+          if (aliasTable) {
+            loadColumns(aliasTable)
+            ;(columnsCache[String(aliasTable).toLowerCase()] || []).forEach((c) => suggestions.push({
+              label: c,
+              kind: monaco.languages.CompletionItemKind.Field,
+              insertText: c,
+              range,
+              sortText: '0ccc' + c,
+              detail: aliasTable + ' · ' + t('sqlq.completionColumn')
             }))
             return { suggestions }
           }
@@ -2664,7 +2770,6 @@ const onEditorMount = (editor, monaco) => {
             if (n) nameSet.add(n)
           })
         }
-        const allText = model.getValue()
         const tableMatches = allText.match(/(?:FROM|JOIN|INTO|UPDATE|TABLE)\s+[`"']?([\w.]+)[`"']?/gi) || []
         const refTables = []
         tableMatches.forEach(m => {
@@ -3165,6 +3270,57 @@ const isWriteSql = (text) => String(text || '')
   .some(line => WRITE_SQL_RE.test(line))
 const firstSqlLine = (text) => String(text || '').split('\n').map(s => s.trim()).filter(Boolean)[0] || ''
 
+// ===== 写操作影响行预览：UPDATE/DELETE 执行前先算「将影响多少行」=====
+// DELETE → 直接包一层 COUNT；UPDATE → 截取 WHERE 段包 COUNT（字符串里再出现 where 的
+// 概率很低，估算口径，弹窗里标明「预估」）。无 WHERE 条件时特别提示全表影响。
+const writeCountSql = (stmt) => {
+  const s = stmt.replace(/;\s*$/, '')
+  let m = s.match(/^delete\s+from\s+(`[^`]+`|"[^"]+"|\[[^\]]+\]|[\w.]+)\s*(where[\s\S]*)?$/i)
+  if (m) return `select count(*) as cnt from ${m[1]} ${m[2] || ''}`.trim()
+  m = s.match(/^update\s+(`[^`]+`|"[^"]+"|\[[^\]]+\]|[\w.]+)\s+set\s+[\s\S]*$/i)
+  if (m) {
+    const wm = s.match(/\swhere\s([\s\S]*)$/i)
+    return wm
+      ? `select count(*) as cnt from ${m[1]} where ${wm[1]}`
+      : `select count(*) as cnt from ${m[1]}`
+  }
+  return null
+}
+const escHtmlLocal = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+/** 返回 true=继续执行；false=用户取消。非 UPDATE/DELETE（如 INSERT）不预览直接过。 */
+const previewWriteRows = async (execSql, connId, db) => {
+  const stmts = splitSqlStatements(execSql)
+  const rows = []
+  for (const stmt of stmts) {
+    const countSql = writeCountSql(stmt)
+    if (!countSql) continue
+    let count = null
+    try {
+      const r = await executeSql(connId, countSql, db, null, null, 1, 10, true)
+      const v = r && r.rows && r.rows[0] ? Object.values(r.rows[0])[0] : null
+      if (typeof v === 'number') count = v
+      else if (v != null && !isNaN(Number(v))) count = Number(v)
+    } catch { /* 预估失败按未知处理 */ }
+    rows.push({ stmt: stmt.replace(/\s+/g, ' ').trim().slice(0, 90), count })
+  }
+  if (!rows.length) return true
+  const html = rows.map((r, i) => {
+    const n = r.count == null
+      ? '<b>无法预估</b>'
+      : (r.count === 0 ? '<b>0</b> 行' : `<b>${r.count.toLocaleString()}</b> 行`)
+    const noWhere = /delete\s+from\s+[^\s]+\s*;?\s*$/i.test(r.stmt) || /update\s+[^\s]+\s+set\b(?![\s\S]*\bwhere\b)/i.test(r.stmt)
+    return `${i + 1}. <code>${escHtmlLocal(r.stmt)}</code><br>&nbsp;&nbsp;&nbsp;预估影响：${n}${noWhere ? ' —— <b style="color:#e34d4d">⚠ 无 WHERE 条件，将影响全表！</b>' : ''}`
+  }).join('<br><br>')
+  try {
+    await ElMessageBox.confirm(
+      `<div style="text-align:left">以下写语句执行前的<b>预估影响行数</b>（基于当前数据）：${''}<br><br>${html}</div>`,
+      t('sqlq.writePreviewTitle'),
+      { type: 'warning', dangerouslyUseHTMLString: true, confirmButtonText: t('sqlq.writePreviewRun'), cancelButtonText: t('common.cancel'), closeOnClickModal: false, closeOnPressEscape: false }
+    )
+    return true
+  } catch { return false }
+}
+
 const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   if (running.value) return
   if (!requireSql()) return
@@ -3205,6 +3361,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   elapsedTime.value = 0
   cancelRequested.value = false
   invalidateCount()
+  clearStmtError() // 新一轮执行：上一轮的报错标红清掉
   execId.value = 'q_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
   cancelController = new AbortController()
   if (queryTimer) clearInterval(queryTimer)
@@ -3222,6 +3379,11 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
       const db = selectedSchema.value
         ? `${selectedDatabase.value}.${selectedSchema.value}`
         : selectedDatabase.value || undefined
+      // 写操作影响行预览：UPDATE/DELETE 执行前先确认将影响多少行（取消则不执行）
+      if (isWriteSql(execSql)) {
+        const go = await previewWriteRows(execSql, connId, db)
+        if (!go) return
+      }
       // 多段 SQL：批量执行（同连接顺序执行），每段结果以 tab 展示；
       // 分页翻页或单条语句仍走 executeSql，保留原分页能力
       const statements = batchable ? splitSqlStatements(execSql) : []
@@ -3229,6 +3391,9 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         const b = await executeSqlBatch(connId, execSql, db, execId.value, cancelController.signal)
         if (cancelRequested.value) { setResultCancelled(); return }
         showBatchResult(b)
+        // 批量失败：定位并标红出错的那条语句（序号与前端切分一致）
+        const failIdx = (b && Array.isArray(b.results)) ? b.results.findIndex((r) => r && r.success === false) : -1
+        if (failIdx >= 0) markErrorStatement(b.results[failIdx], failIdx)
         const histCost = (b && Array.isArray(b.results)) ? b.results.reduce((m, r) => Math.max(m, (r.executeTime) || 0), 0) : 0
         recordHistory(execSql, db, histCost)
       } else {
@@ -3237,6 +3402,8 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         showSingleResult(res)
         // 总数未知时异步补齐（后端已不同步 COUNT，见 fetchCountFor）
         fetchCountFor(result.value, execSql)
+        // 失败 → 编辑器里把出错语句标红定位
+        if (!res.success) markErrorStatement(res)
         recordHistory(execSql, db, res.executeTime || 0)
         loadResColumnComments(execSql, connId, db)
       }
@@ -4275,4 +4442,29 @@ onBeforeUnmount(() => {
 .col-vis-dropdown .col-vis-item .el-checkbox__label {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px;
 }
+</style>
+
+<!-- 报错语句标红 + 语句面包屑：decorations/chips 落在 Monaco 内部 DOM 与全局层，须用非 scoped 样式 -->
+<style>
+.stmt-error-text {
+  background: rgba(227, 77, 77, 0.14);
+  text-decoration: underline wavy #e34d4d;
+  text-underline-offset: 3px;
+}
+.stmt-bar {
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  padding: 3px 8px; flex-shrink: 0;
+  border-bottom: 1px solid var(--dc-border);
+  background: var(--dc-bg-soft);
+  overflow-x: auto;
+}
+.stmt-bar-label { font-size: 12px; color: var(--dc-text-dim); margin-right: 2px; white-space: nowrap; }
+.stmt-chip {
+  font-size: 12px; line-height: 1; padding: 4px 8px;
+  border: 1px solid var(--dc-border); border-radius: 10px;
+  background: var(--dc-bg-card); color: var(--dc-text-mid);
+  cursor: pointer; white-space: nowrap;
+  transition: color .12s, border-color .12s;
+}
+.stmt-chip:hover { color: var(--dc-primary); border-color: var(--dc-primary); }
 </style>
