@@ -41,15 +41,14 @@
     background: rgba(11, 15, 23, .72);
     border-bottom: 1px solid var(--border);
   }
-  .nav-inner { display: flex; align-items: center; height: 60px; position: relative; }
+  .nav-inner { display: flex; align-items: center; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
   .logo-mark {
     width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
     background: linear-gradient(135deg, var(--primary), var(--primary-2));
     display: grid; place-items: center; font-size: 15px; font-weight: 800; color: #fff;
   }
-  /* 导航链接整体居中：绝对定位挂中轴线，不随 logo 宽度偏移 */
-  .nav-links { display: flex; gap: 22px; font-size: 14px; color: var(--dim); position: absolute; left: 50%; transform: translateX(-50%); }
+  .nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14px; color: var(--dim); height: 60px; }
   .nav-links a:hover { color: var(--text); }
   .nav-cta {
     background: linear-gradient(135deg, var(--primary), var(--primary-2));
@@ -230,7 +229,6 @@
 
   @media (max-width: 760px) {
     .nav-links a:not(.nav-cta) { display: none; }
-    .nav-links { position: static; transform: none; margin-left: auto; }
     .demo-body { grid-template-columns: 1fr; }
     .demo-pane + .demo-pane { border-left: none; border-top: 1px solid var(--border); }
     .doc-grid { grid-template-columns: 1fr; }
