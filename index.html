@@ -294,8 +294,12 @@
   .pagenav a:hover { background: none; }
   .dtoc a.active { color: var(--primary); background: rgba(79, 140, 255, .12); font-weight: 600; }
   .pagenav a.active { color: var(--primary); background: none; border-left-color: var(--primary); font-weight: 600; }
-  /* 正文：限行宽 + 分节装饰 */
-  .doc-main { min-width: 0; max-width: 780px; }
+  /* 正文：面板化（与左右目录同边框风格）+ 限行宽 */
+  .doc-main {
+    min-width: 0; background: var(--panel);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 24px 30px 30px;
+  }
   .doc-main h2 {
     position: relative; font-size: 20px; font-weight: 800;
     margin: 42px 0 14px; padding: 2px 0 2px 16px; letter-spacing: .3px;
@@ -304,6 +308,7 @@
     content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 4px;
     border-radius: 2px; background: linear-gradient(180deg, var(--primary), var(--primary-2));
   }
+  .doc-main h2:first-of-type { margin-top: 0; }
   .doc-main h2:first-of-type { margin-top: 0; }
   .doc-main p { color: #c3cbdb; margin-bottom: 13px; font-size: 14.5px; }
   .doc-main ul { margin: 8px 0 18px; padding-left: 20px; color: #c3cbdb; font-size: 14.5px; }
