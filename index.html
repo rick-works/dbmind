@@ -345,7 +345,12 @@
   }
   body.doc-only .dtoc { position: static; top: auto; flex: 0 0 224px; height: auto; max-height: none; }
   body.doc-only .pagenav { position: static; top: auto; flex: 0 0 192px; height: auto; max-height: none; }
-  body.doc-only .doc-main { flex: 1 1 0; min-width: 0; height: auto; overflow-y: auto; scrollbar-width: thin; }
+  body.doc-only .doc-main { flex: 1 1 0; min-width: 0; height: auto; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.22) transparent; }
+  /* 正文面板滚动条：细而淡，不抢视觉 */
+  .doc-main::-webkit-scrollbar { width: 6px; }
+  .doc-main::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, .18); border: none; border-radius: 999px; }
+  .doc-main::-webkit-scrollbar-thumb:hover { background: rgba(79, 140, 255, .45); }
+  .doc-main::-webkit-scrollbar-track { background: transparent; }
   .doc-link {
     display: inline-block; margin-top: 12px; font-size: 13px;
     color: var(--primary); font-weight: 600;
