@@ -4,6 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>DBmind — 给数据库装上「大脑」的 AI 数据库工作台</title>
+<link rel="icon" type="image/png" href="favicon.png">
 <meta name="description" content="DBmind：给数据库装上「大脑」—— AI 原生的多数据库管理平台。一个客户端管理所有数据库，AI 解释/优化/修错每一条 SQL，事务级数据编辑、千万级结果集秒开，本地运行，数据不出内网。" />
 <style>
   :root {
@@ -43,11 +44,7 @@
   }
   .nav-inner { display: flex; align-items: center; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
-  .logo-mark {
-    width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
-    background: linear-gradient(135deg, var(--primary), var(--primary-2));
-    display: grid; place-items: center; font-size: 15px; font-weight: 800; color: #fff;
-  }
+  .logo-mark { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: block; }
   .nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14px; color: var(--dim); height: 60px; }
   .nav-links a:hover { color: var(--text); }
   .nav-cta {
@@ -235,12 +232,13 @@
 
 <nav>
   <div class="wrap nav-inner">
-    <a class="logo" href="#"><span class="logo-mark">D</span>DBmind</a>
+    <a class="logo" href="#"><img class="logo-mark" src="logo.png" alt="DBmind" />DBmind</a>
     <div class="nav-links">
+      <a href="#">首页</a>
+      <a href="docs.html">文档</a>
       <a href="#features">功能</a>
       <a href="#workflow">工作流</a>
       <a href="#security">安全</a>
-      <a href="#docs">文档</a>
       <a href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener" class="nav-cta">立即下载</a>
     </div>
   </div>
@@ -294,37 +292,37 @@
         <div class="icon">⌨️</div>
         <h3>智能 SQL 编辑器</h3>
         <p>基于 Monaco（VS Code 同款内核）：补全、格式化、多语句分块执行、逐段计时条、执行历史、SQL 片段库、模板变量 —— 大脚本也能条理清楚地跑。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="docs.html">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🤖</div>
         <h3>AI 全程加持</h3>
         <p>选段解释 / 优化 / 修错 / 诊断 / 自由对话，AI 给出的 SQL 先「看执行计划、试跑一次」再落地，吃进去的数据不出你的网络。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="docs.html">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🛡️</div>
         <h3>事务模式</h3>
         <p>一键开启：所有写语句不再自动提交。改完自查、不满意回滚、确认后提交 —— 配合其他会话的可见性规则，改数据不再心惊胆战。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="docs.html">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">✏️</div>
         <h3>结果集直接编辑</h3>
         <p>双击单元格改值、攒缓冲、一次提交。WHERE 条件自动生成（优先主键，否则全列定位）；翻页重跑后过期缓冲自动作废，绝不改错行。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="docs.html">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">⚡</div>
         <h3>千万级结果集秒开</h3>
         <p>虚拟滚动 + 服务端分页 + 响应压缩（实测 4.2MB → 233KB）。总数异步统计不阻塞数据回显，大 JOIN 也能 1 秒见数。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="docs.html">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">📊</div>
         <h3>数据透视与传输</h3>
         <p>框选即汇总（计数/求和/均值/最值）、分组下钻透视；导出 CSV / Excel / JSON / INSERT，长任务后台跑、完成系统通知。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="docs.html">查看文档 →</a>
       </div>
     </div>
   </div>
