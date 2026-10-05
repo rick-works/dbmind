@@ -342,7 +342,8 @@
   .doc-main .fcard b { display: block; margin-bottom: 5px; font-size: 13.5px; color: var(--text); }
   .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
   /* 文档模式：flex 等高三栏（stretch 保证顶底严格对齐），中间正文内部滚动。
-     容器已固定定位：高度即 #docs 内容区（视口减顶栏再减上下 10px 边距） */
+     容器已固定定位：.wrap 与 .docs-layout 都限高 100%，底部 10px 边距才不会被长内容撑破 */
+  body.doc-only #docs .wrap { height: 100%; }
   body.doc-only .docs-layout {
     display: flex; align-items: stretch;
     gap: 34px;
