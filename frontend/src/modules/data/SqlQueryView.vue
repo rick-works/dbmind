@@ -140,11 +140,14 @@
         </div>
       </div>
       <div class="editor-body" @contextmenu.prevent="onEditorContextMenu">
-        <!-- 语句面包屑：多段脚本时列出每条语句，点击选中并定位（执行选中/右键「执行选中 SQL」配合） -->
+        <!-- 语句面包屑：多段脚本时列出每条语句，点击选中并定位；悬停 ▶ 只执行那一条 -->
         <div class="stmt-bar" v-if="stmtBreadcrumbs.length">
           <span class="stmt-bar-label">{{ $t('sqlq.stmtCount', { n: stmtBreadcrumbs.length }) }}</span>
           <button v-for="s in stmtBreadcrumbs.slice(0, 40)" :key="s.i" type="button" class="stmt-chip"
-                  :title="s.firstLine" @click="gotoStatement(s)">语句 {{ s.i }}</button>
+                  :title="s.firstLine" @click="gotoStatement(s)">
+            语句 {{ s.i }}
+            <span class="stmt-run" :title="$t('sqlq.runThisStmt')" @click.stop="runStatement(s)"><el-icon :size="10"><CaretRight /></el-icon></span>
+          </button>
           <span class="stmt-chip" v-if="stmtBreadcrumbs.length > 40">…</span>
         </div>
         <VueMonacoEditor
@@ -214,6 +217,18 @@
           <span class="result-tab-dot" :class="item.res && !item.res.success ? 'err' : 'ok'"></span>
           {{ item.label }}
         </button>
+      </div>
+      <!-- 多语句耗时条形图：批量执行后每条语句的耗时对比，点击行切到对应结果 -->
+      <div class="stmt-timings" v-if="showResultTabs && stmtTimings.length > 1">
+        <div class="timing-row" v-for="tm in stmtTimings" :key="tm.i"
+             :class="{ active: tm.i - 1 === activeResultIdx }" @click="selectResultTab(tm.i - 1)"
+             :title="$t('sqlq.timingRowTitle', { n: tm.i })">
+          <span class="timing-label">语句 {{ tm.i }}</span>
+          <div class="timing-track">
+            <div class="timing-bar" :class="{ err: !tm.ok }" :style="{ width: tm.pct + '%' }"></div>
+          </div>
+          <span class="timing-ms">{{ tm.ms }}ms</span>
+        </div>
       </div>
       <div class="result-grid">
         <!-- 加载遮罩：查询/翻页时可取消（与数据表一致） -->
@@ -626,6 +641,19 @@ const formatElapsed = (ms) => {
 }
 // 后端已分页，直接展示返回的 rows 即可
 const paginatedRows = computed(() => result.value?.rows || [])
+// 多语句耗时条形图：批量结果每段的 executeTime 对比（max 归一化，最慢的占满轨道）
+const stmtTimings = computed(() => {
+  const items = resultItems.value
+  if (!items.length) return []
+  const rows = items.map((it, i) => ({
+    i: i + 1,
+    ms: Math.round(it.res?.executeTime || 0),
+    ok: !(it.res && it.res.success === false)
+  }))
+  const max = Math.max(...rows.map((r) => r.ms), 1)
+  rows.forEach((r) => { r.pct = Math.max(4, Math.round((r.ms / max) * 100)) })
+  return rows
+})
 // 真实总条数（后端统计；未知时返回 null）
 const displayTotal = computed(() => {
   const t = result.value.totalCount
@@ -2316,6 +2344,11 @@ const gotoStatement = (s) => {
   ed.revealRangeInCenter(range)
   ed.focus()
 }
+/** 面包屑 ▶：选中该语句并只执行它（选中即 getExecutableSql 的取材口径） */
+const runStatement = (s) => {
+  gotoStatement(s)
+  runSql()
+}
 // 报错语句标红：decorations 用裸对象 range（Monaco 内部 DOM 不带组件 scoped 属性，样式放全局块）
 let stmtErrorDecorations = []
 const clearStmtError = () => {
@@ -2673,6 +2706,28 @@ const loadColumns = (table) => {
     .finally(() => columnsLoading.delete(key))
 }
 
+// ON 子句关联列提示：把与「JOIN 另一侧表」**同名的列**排到最前（大概率是外键），
+// detail 会标「同名列」。另一侧尚未缓存列时现场拉，下一轮补全即可置顶。
+const decorateOnColumns = (cols, lineText, typedPrefix, aliasMap) => {
+  const plain = (c) => ({ name: c, same: false })
+  if (!/\bon\b[^\n]*$/i.test(lineText)) return cols.map(plain)
+  const m = /\bon\s+([\w$]+)\s*\./i.exec(lineText)
+  if (!m) return cols.map(plain)
+  const typed = String(typedPrefix || '').toLowerCase()
+  const p = m[1].toLowerCase()
+  if (p === typed) return cols.map(plain) // 另一侧还没写到，无从判断同名
+  const other = aliasMap[p]
+    || (tableNames.value.find((x) => String(x).toLowerCase() === p) || p)
+  if (!other) return cols.map(plain)
+  loadColumns(other)
+  const oc = columnsCache[String(other).toLowerCase()]
+  if (!oc || !oc.length) return cols.map(plain)
+  const os = new Set(oc.map((c) => String(c).toLowerCase()))
+  return cols
+    .map((c) => ({ name: c, same: os.has(String(c).toLowerCase()) }))
+    .sort((x, y) => (x.same === y.same ? 0 : x.same ? -1 : 1))
+}
+
 const onEditorMount = (editor, monaco) => {
   editorInstance = editor
   // 注册自定义补全提供者
@@ -2743,14 +2798,13 @@ const onEditorMount = (editor, monaco) => {
             || Object.keys(columnsCache).find((k) => k === prefix)
           if (tableHit) {
             loadColumns(tableHit)
-            const cols = columnsCache[prefix] || []
-            cols.forEach((c) => suggestions.push({
-              label: c,
+            decorateOnColumns(columnsCache[prefix] || [], lineText, prefix, aliasMap).forEach((c) => suggestions.push({
+              label: c.name,
               kind: monaco.languages.CompletionItemKind.Field,
-              insertText: c,
+              insertText: c.name,
               range,
-              sortText: '0ccc' + c,
-              detail: t('sqlq.completionColumn')
+              sortText: (c.same ? '0bbb' : '0ccc') + c.name,
+              detail: (c.same ? t('sqlq.joinSameCol') + ' · ' : '') + t('sqlq.completionColumn')
             }))
             return { suggestions }
           }
@@ -2758,13 +2812,13 @@ const onEditorMount = (editor, monaco) => {
           const aliasTable = aliasMap[prefix]
           if (aliasTable) {
             loadColumns(aliasTable)
-            ;(columnsCache[String(aliasTable).toLowerCase()] || []).forEach((c) => suggestions.push({
-              label: c,
+            decorateOnColumns(columnsCache[String(aliasTable).toLowerCase()] || [], lineText, prefix, aliasMap).forEach((c) => suggestions.push({
+              label: c.name,
               kind: monaco.languages.CompletionItemKind.Field,
-              insertText: c,
+              insertText: c.name,
               range,
-              sortText: '0ccc' + c,
-              detail: aliasTable + ' · ' + t('sqlq.completionColumn')
+              sortText: (c.same ? '0bbb' : '0ccc') + c.name,
+              detail: aliasTable + ' · ' + (c.same ? t('sqlq.joinSameCol') + ' · ' : '') + t('sqlq.completionColumn')
             }))
             return { suggestions }
           }
@@ -4511,4 +4565,32 @@ onBeforeUnmount(() => {
   transition: color .12s, border-color .12s;
 }
 .stmt-chip:hover { color: var(--dc-primary); border-color: var(--dc-primary); }
+/* 面包屑 ▶：悬停该 chip 时才出现，点击只执行那一条 */
+.stmt-run {
+  display: none; align-items: center; justify-content: center;
+  margin-left: 2px; width: 14px; height: 14px; border-radius: 50%;
+  background: var(--dc-primary); color: #fff; vertical-align: -2px;
+}
+.stmt-chip:hover .stmt-run { display: inline-flex; }
+.stmt-run:hover { opacity: .8; }
+/* 多语句耗时条形图 */
+.stmt-timings {
+  padding: 6px 12px; border-bottom: 1px solid var(--dc-border);
+  background: var(--dc-bg-soft); flex-shrink: 0;
+  max-height: 132px; overflow: auto;
+}
+.timing-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 2px 4px; border-radius: 4px; cursor: pointer;
+}
+.timing-row:hover, .timing-row.active { background: var(--dc-bg-hover); }
+.timing-label { font-size: 12px; color: var(--dc-text-dim); width: 52px; white-space: nowrap; }
+.timing-track {
+  flex: 1; height: 8px; border-radius: 4px;
+  background: var(--dc-bg-card); border: 1px solid var(--dc-border);
+  overflow: hidden;
+}
+.timing-bar { height: 100%; background: var(--dc-primary); border-radius: 4px; }
+.timing-bar.err { background: #e34d4d; }
+.timing-ms { font-size: 12px; color: var(--dc-text-dim); width: 64px; text-align: right; white-space: nowrap; }
 </style>
