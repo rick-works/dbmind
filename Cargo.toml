@@ -12,7 +12,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-repository = "https://github.com/dbmind/dbmind"
+repository = "https://gitee.com/Rick_Credit/dbmind"
 
 [workspace.dependencies]
 dbmind-core = { path = "crates/dbmind-core" }
