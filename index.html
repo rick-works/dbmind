@@ -237,7 +237,7 @@
     <a class="logo" href="#"><img class="logo-mark" src="logo.png" alt="DBmind" />DBmind</a>
     <div class="nav-links">
       <a href="#">首页</a>
-      <a href="docs.html">文档</a>
+      <a href="#docs">文档</a>
       <a href="#features">功能</a>
       <a href="#workflow">工作流</a>
       <a href="#security">安全</a>
@@ -294,37 +294,37 @@
         <div class="icon">⌨️</div>
         <h3>智能 SQL 编辑器</h3>
         <p>基于 Monaco（VS Code 同款内核）：补全、格式化、多语句分块执行、逐段计时条、执行历史、SQL 片段库、模板变量 —— 大脚本也能条理清楚地跑。</p>
-        <a class="doc-link" href="docs.html">查看文档 →</a>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🤖</div>
         <h3>AI 全程加持</h3>
         <p>选段解释 / 优化 / 修错 / 诊断 / 自由对话，AI 给出的 SQL 先「看执行计划、试跑一次」再落地，吃进去的数据不出你的网络。</p>
-        <a class="doc-link" href="docs.html">查看文档 →</a>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🛡️</div>
         <h3>事务模式</h3>
         <p>一键开启：所有写语句不再自动提交。改完自查、不满意回滚、确认后提交 —— 配合其他会话的可见性规则，改数据不再心惊胆战。</p>
-        <a class="doc-link" href="docs.html">查看文档 →</a>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">✏️</div>
         <h3>结果集直接编辑</h3>
         <p>双击单元格改值、攒缓冲、一次提交。WHERE 条件自动生成（优先主键，否则全列定位）；翻页重跑后过期缓冲自动作废，绝不改错行。</p>
-        <a class="doc-link" href="docs.html">查看文档 →</a>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">⚡</div>
         <h3>千万级结果集秒开</h3>
         <p>虚拟滚动 + 服务端分页 + 响应压缩（实测 4.2MB → 233KB）。总数异步统计不阻塞数据回显，大 JOIN 也能 1 秒见数。</p>
-        <a class="doc-link" href="docs.html">查看文档 →</a>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">📊</div>
         <h3>数据透视与传输</h3>
         <p>框选即汇总（计数/求和/均值/最值）、分组下钻透视；导出 CSV / Excel / JSON / INSERT，长任务后台跑、完成系统通知。</p>
-        <a class="doc-link" href="docs.html">查看文档 →</a>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
     </div>
   </div>
@@ -518,7 +518,8 @@
   document.querySelectorAll('.reveal').forEach(el => io.observe(el))
 
   // 导航高亮：滚动到哪个区块，对应导航项点亮（顶部时点亮「首页」）
-  const navMap = { features: 0, workflow: 1, security: 2, docs: 3 }
+  // 值 = 导航项下标（首页0 文档1 功能2 工作流3 安全4）
+  const navMap = { features: 2, workflow: 3, security: 4, docs: 1 }
   const navItems = [...document.querySelectorAll('.nav-links a:not(.nav-cta)')]
   const setActive = (i) => navItems.forEach((a, j) => a.classList.toggle('active', j === i))
   setActive(0)
@@ -526,7 +527,7 @@
     es.forEach(e => {
       if (!e.isIntersecting) return
       const i = navMap[e.target.id]
-      if (i !== undefined) setActive(i + 1)
+      if (i !== undefined) setActive(i)
     })
   }, { rootMargin: '-45% 0px -50% 0px' })
   Object.keys(navMap).forEach(id => { const el = document.getElementById(id); if (el) secIo.observe(el) })
