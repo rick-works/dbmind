@@ -217,7 +217,8 @@
           <span class="result-tab-dot" :class="item.res && !item.res.success ? 'err' : 'ok'"></span>
           {{ item.label }}
           <!-- 耗时并入 tab：哪个结果慢一眼可见，不再单开一块条形图 -->
-          <span class="result-tab-ms" v-if="item.res && item.res.executeTime">{{ item.res.executeTime }}ms</span>
+          <span class="result-tab-ms" v-if="item.res && item.res.executeTime"
+                :title="$t('sqlq.msServerTip')">{{ item.res.executeTime }}ms</span>
         </button>
       </div>
       <div class="result-grid">
@@ -327,7 +328,7 @@
         </div>
         <el-empty v-else :description="(result && result.affectedRows >= 0) ? $t('sqlq.affectedOk', { n: result.affectedRows }) : $t('sqlq.noResult')" />
         <div v-if="result?.success && result?.rows?.length" class="result-footer">
-          <span class="result-time">
+          <span class="result-time" :title="$t('sqlq.msE2eTip')">
             <!-- 耗时取「前端实测」与「服务端」的较大值：服务端 executeTime 只计执行段，
                  不含网络往返/连接获取，真实耗时要远大于它（真机反馈 244ms 之谜） -->
             {{ running ? formatElapsed(elapsedTime) : formatElapsed(Math.max(elapsedTime || 0, result.executeTime || 0)) }}

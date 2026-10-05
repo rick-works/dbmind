@@ -1803,6 +1803,8 @@ export default {
   'sqlq.runThisStmt': 'Run only this statement',
   'sqlq.joinSameCol': 'Same-name column · likely join key',
   'sqlq.timingRowTitle': 'View result of statement {n}',
+  'sqlq.msServerTip': 'Server-side execution time (excludes network); bottom-left is end-to-end total',
+  'sqlq.msE2eTip': 'End-to-end total (network + transfer included); per-tab values are server-side execution time',
   'sqlq.totalN': 'Total {n}',
   'sqlq.recountTip': 'Click to recount',
   'sqlq.visibleColsTitle': 'Choose visible columns ({shown}/{total})',

@@ -1808,6 +1808,8 @@ export default {
   'sqlq.runThisStmt': '只执行这条语句',
   'sqlq.joinSameCol': '同名列 · 可能是关联列',
   'sqlq.timingRowTitle': '查看语句 {n} 的结果',
+  'sqlq.msServerTip': '服务端执行耗时（不含网络传输）；左下角为端到端总耗时，两者本不相等',
+  'sqlq.msE2eTip': '端到端总耗时（含网络传输与结果落地）；各结果 tab 上为服务端执行耗时',
   'sqlq.totalN': '共 {n} 条',
   'sqlq.recountTip': '点我重新统计',
   'sqlq.visibleColsTitle': '选择显示字段（{shown}/{total}）',
