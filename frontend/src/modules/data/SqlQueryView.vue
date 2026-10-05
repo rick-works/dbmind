@@ -70,6 +70,32 @@
                        @click="txRollback">{{ $t('sqlq.txRollback') }}</el-button>
             <span v-if="txMode" class="tx-dot" :class="{ dirty: txDirty }" :title="txDirty ? $t('sqlq.txDirty') : $t('sqlq.txClean')"></span>
           </template>
+          <!-- CSV 导入向导：把 CSV/TSV 文件分批 INSERT 进目标表（全 SQL 数据源） -->
+          <el-button v-if="!isNoSql" size="small" :icon="Upload" @click="csvVisible = true"
+                     :title="$t('csv.title')">{{ $t('csv.import') }}</el-button>
+          <!-- SQL 片段库：命名保存常用 SQL，点击插入；「+」把选区/全文存为片段 -->
+          <el-dropdown v-if="!isNoSql" trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
+            <el-button size="small" :icon="Collection" :title="$t('sqlq.snippets')">{{ $t('sqlq.snippets') }}</el-button>
+            <template #dropdown>
+              <div class="hist-head">
+                <span>{{ $t('sqlq.snippets') }}</span>
+                <el-button size="small" text type="primary" @click.stop="saveSnippet">{{ $t('sqlq.snipSave') }}</el-button>
+              </div>
+              <div class="hist-list" v-if="snippets.length">
+                <div class="hist-item" v-for="(s, i) in snippets" :key="s.id" @click="applySnippet(s)">
+                  <div class="hist-meta">
+                    <span class="hist-db">{{ s.name }}</span>
+                    <span class="hist-time">{{ new Date(s.ts).toLocaleString() }}</span>
+                  </div>
+                  <div class="hist-sql" :title="s.sql">{{ s.sql }}</div>
+                  <div class="hist-ops" @click.stop>
+                    <el-button size="small" text type="danger" @click="removeSnippet(i)">{{ $t('common.delete') }}</el-button>
+                  </div>
+                </div>
+              </div>
+              <div class="hist-empty" v-else>{{ $t('sqlq.snipEmptyList') }}</div>
+            </template>
+          </el-dropdown>
           <!-- SQL 执行历史：本地保存最近执行的 SQL，一键回填复用 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
             <el-button size="small" :icon="Clock" :title="$t('sqlq.history')">历史</el-button>
@@ -519,6 +545,9 @@
   </el-dialog>
   <!-- 查询结果数据透视：复用当前结果网格做分组汇总 / 计数 / 下钻，纯前端不消耗后端 -->
   <DataPivotDialog v-model="pivotVisible" :columns="pivotColumns" :rows="pivotRows" />
+  <!-- CSV 导入向导：文件解析 / 列映射 / 分批 INSERT（全 SQL 数据源） -->
+  <CsvImportDialog v-model="csvVisible" :conn-id="selectedConnId || props.conn?.id"
+                   :database="txDatabaseOf()" :kind="connectionKind" @imported="onCsvImported" />
   <!-- 行详情：双击 / 右键行号查看整行字段明细 -->
   <CellDetailDialog v-model="rowDetail.visible" :title="rowDetail.title" :text="rowDetail.text" />
 </template>
@@ -529,6 +558,7 @@ import { t } from '../../utils/i18n'
 import VueMonacoEditor from '@guolao/vue-monaco-editor'
 import { ensureMonaco } from '../../utils/monaco'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
+import CsvImportDialog from '../../common/CsvImportDialog.vue'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
 import DataPivotDialog from './DataPivotDialog.vue'
@@ -553,7 +583,7 @@ import {
   Close, CircleCloseFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
-  Sort, SortUp, SortDown
+  Sort, SortUp, SortDown, Upload, Collection
 } from '@element-plus/icons-vue'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, byType } from '../../types'
@@ -1943,6 +1973,59 @@ watch(selectedConnId, (nv, ov) => {
   }
   discardEdits()
 })
+
+// ===== CSV 导入向导 =====
+const csvVisible = ref(false)
+const connectionKind = computed(() => String(selectedConn.value?.type || props.conn?.type || '').toLowerCase())
+const onCsvImported = ({ table, rows }) => {
+  // 导入成功：提示用一条查询验证（不自动执行，避免大结果意外刷屏）
+  lastExecSql = `SELECT * FROM ${table}`
+  ElMessage.info(t('csv.verifyTip', { n: rows, table }))
+}
+
+// ===== SQL 片段库：命名保存常用 SQL，双击插入（localStorage，跨会话保留） =====
+const SNIP_LS = 'dbmind_snippets'
+const snippets = ref([])
+const loadSnippets = () => {
+  try { snippets.value = JSON.parse(localStorage.getItem(SNIP_LS) || '[]') } catch { snippets.value = [] }
+}
+loadSnippets()
+const saveSnippet = async () => {
+  const text = (selTextOf(editorInstance) || sql.value || '').trim()
+  if (!text) { ElMessage.warning(t('sqlq.snipEmpty')); return }
+  try {
+    const firstLine = text.split('\n').find(l => l.trim()) || ''
+    const r = await ElMessageBox.prompt(firstLine.slice(0, 60), t('sqlq.snipSaveTitle'), {
+      inputValue: firstLine.trim().slice(0, 30),
+      inputPlaceholder: t('sqlq.snipNamePh'),
+      confirmButtonText: t('common.save'),
+      cancelButtonText: t('common.cancel'),
+      closeOnClickModal: false
+    })
+    const name = String(r.value || '').trim()
+    if (!name) return
+    snippets.value.unshift({ id: 's_' + Date.now(), name, sql: text, ts: Date.now() })
+    if (snippets.value.length > 100) snippets.value.pop()
+    localStorage.setItem(SNIP_LS, JSON.stringify(snippets.value))
+    ElMessage.success(t('sqlq.snipSaved'))
+  } catch { /* 取消 */ }
+}
+const removeSnippet = (i) => {
+  snippets.value.splice(i, 1)
+  localStorage.setItem(SNIP_LS, JSON.stringify(snippets.value))
+}
+/** 插入片段：编辑器有选区就替换，否则插到光标处 */
+const applySnippet = (sn) => {
+  const ed = editorInstance
+  if (!ed) return
+  const sel = ed.getSelection()
+  const range = (sel && !sel.isEmpty()) ? sel : ed.getModel().getFullModelRange().setStartPosition(
+    ed.getPosition().lineNumber, ed.getPosition().column
+  ).setEndPosition(ed.getPosition().lineNumber, ed.getPosition().column)
+  ed.executeEdits('dbmind-sql', [{ range, text: sn.sql, forceMoveMarkers: true }])
+  ed.pushUndoStop()
+  ed.focus()
+}
 
 const rowDetail = ref({ visible: false, title: '', text: '' })
 const openRowDetail = (rowIdx) => {
