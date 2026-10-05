@@ -220,6 +220,9 @@
   /* ===== 功能文档（页内三栏：左目录 / 中正文 / 右本页导航） ===== */
   #docs { text-align: left; }
   #docs .sec-title, #docs .sec-sub { text-align: center; }
+  /* 文档模式：点导航「文档」后只显示文档区，其余区块隐藏；导航「首页」/logo 退出 */
+  body.doc-only > *:not(nav):not(#docs) { display: none !important; }
+  #docs { padding-top: 90px; }
   .docs-layout {
     display: grid; grid-template-columns: 200px minmax(0, 1fr) 175px; gap: 34px;
     margin-top: 36px; align-items: start;
@@ -451,8 +454,6 @@
 
 <section id="docs">
   <div class="wrap">
-    <h2 class="sec-title reveal">功能文档</h2>
-    <p class="sec-sub reveal">每个功能展开讲清楚 —— 用法、细节与设计取舍</p>
     <div class="docs-layout reveal">
       <nav class="dtoc">
         <div class="group">
@@ -703,8 +704,26 @@ WHERE dt = :dt AND org = :org;</code></pre>
     })
   }, { rootMargin: '-70px 0px -72% 0px' })
   document.querySelectorAll('.doc-main h2[id]').forEach(h => docIo.observe(h))
-  // 回到顶部时点亮「首页」
-  window.addEventListener('scroll', () => { if (window.scrollY < 300) setActive(0) }, { passive: true })
+
+  // 文档模式：只显示文档区（导航「文档」/功能卡「查看文档」进入，「首页」/返回按钮退出）
+  const enterDocMode = () => {
+    document.body.classList.add('doc-only')
+    setActive(4)
+    window.scrollTo({ top: 0 })
+  }
+  const exitDocMode = () => {
+    document.body.classList.remove('doc-only')
+    setActive(0)
+  }
+  document.querySelectorAll('a[href="#docs"]').forEach(a => {
+    a.addEventListener('click', (ev) => { ev.preventDefault(); enterDocMode() })
+  })
+  navItems[0].addEventListener('click', exitDocMode)
+  document.querySelector('.logo').addEventListener('click', exitDocMode)
+  // 回到顶部时点亮「首页」（文档模式下保持「文档」点亮）
+  window.addEventListener('scroll', () => {
+    if (window.scrollY < 300) setActive(document.body.classList.contains('doc-only') ? 4 : 0)
+  }, { passive: true })
 </script>
 </body>
 </html>
