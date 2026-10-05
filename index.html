@@ -41,14 +41,15 @@
     background: rgba(11, 15, 23, .72);
     border-bottom: 1px solid var(--border);
   }
-  .nav-inner { display: flex; align-items: center; gap: 28px; height: 60px; }
+  .nav-inner { display: flex; align-items: center; height: 60px; position: relative; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
   .logo-mark {
     width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0;
     background: linear-gradient(135deg, var(--primary), var(--primary-2));
     display: grid; place-items: center; font-size: 15px; font-weight: 800; color: #fff;
   }
-  .nav-links { display: flex; gap: 22px; margin-left: auto; font-size: 14px; color: var(--dim); }
+  /* 导航链接整体居中：绝对定位挂中轴线，不随 logo 宽度偏移 */
+  .nav-links { display: flex; gap: 22px; font-size: 14px; color: var(--dim); position: absolute; left: 50%; transform: translateX(-50%); }
   .nav-links a:hover { color: var(--text); }
   .nav-cta {
     background: linear-gradient(135deg, var(--primary), var(--primary-2));
@@ -99,6 +100,10 @@
   /* ===== 数据源跑马灯 ===== */
   .sources { padding: 8px 0 70px; text-align: center; }
   .sources-label { font-size: 13px; color: var(--dim); letter-spacing: 2px; margin-bottom: 22px; }
+  .source-groups { display: flex; flex-direction: column; gap: 16px; max-width: 860px; margin: 0 auto; }
+  .sgroup { display: flex; align-items: baseline; justify-content: center; gap: 18px; flex-wrap: wrap; }
+  .sgroup-t { font-size: 12.5px; color: var(--dim); width: 92px; text-align: right; flex-shrink: 0; letter-spacing: 1px; }
+  .sgroup .source-chips { justify-content: flex-start; }
   .source-chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 860px; margin: 0 auto; }
   .chip {
     border: 1px solid var(--border); border-radius: 999px;
@@ -203,10 +208,32 @@
   .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s, transform .6s; }
   .reveal.on { opacity: 1; transform: none; }
 
+  /* ===== 功能文档 ===== */
+  .doc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .doc {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 22px 24px;
+  }
+  .doc h3 { margin: 0 0 10px; font-size: 16px; }
+  .doc > p { color: var(--dim); font-size: 13.5px; margin-bottom: 10px; }
+  .doc ul { margin: 0; padding-left: 18px; color: var(--dim); font-size: 13.5px; line-height: 1.95; }
+  .doc li b { color: var(--text); font-weight: 600; }
+  .doc code {
+    background: rgba(79, 140, 255, .12); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 6px; font-size: 12.5px; color: var(--accent);
+  }
+  .doc-link {
+    display: inline-block; margin-top: 12px; font-size: 13px;
+    color: var(--primary); font-weight: 600;
+  }
+  .doc-link:hover { color: var(--accent); }
+
   @media (max-width: 760px) {
     .nav-links a:not(.nav-cta) { display: none; }
+    .nav-links { position: static; transform: none; margin-left: auto; }
     .demo-body { grid-template-columns: 1fr; }
     .demo-pane + .demo-pane { border-left: none; border-top: 1px solid var(--border); }
+    .doc-grid { grid-template-columns: 1fr; }
   }
 </style>
 </head>
@@ -219,23 +246,22 @@
       <a href="#features">功能</a>
       <a href="#workflow">工作流</a>
       <a href="#security">安全</a>
-      <a href="#download" class="nav-cta">立即下载</a>
+      <a href="#docs">文档</a>
+      <a href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener" class="nav-cta">立即下载</a>
     </div>
   </div>
 </nav>
 
 <header>
   <div class="wrap">
-    <span class="badge"><b>●</b> 本地运行 · 数据不出内网 · 单客户端管理全部数据库</span>
     <h1>给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的每一个数据库</h1>
     <p class="sub">
       <b>DBmind = Database + Mind</b>：给数据库装上「大脑」——
       MySQL、PostgreSQL、Oracle、ClickHouse、Redis…… 收进同一块屏幕，
-      AI 帮你解释、优化、修好每一条 SQL；事务级数据编辑、千万级结果集秒开，
-      一切都在你自己的电脑上发生。
+      AI 帮你解释、优化、修好每一条 SQL；事务级数据编辑、千万级结果集秒开。
     </p>
     <div class="cta-row">
-      <a class="btn btn-primary" href="#download">免费下载</a>
+      <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener">免费下载</a>
       <a class="btn btn-ghost" href="#features">看看能做什么 ↓</a>
     </div>
   </div>
@@ -243,50 +269,92 @@
 
 <div class="sources reveal">
   <div class="sources-label">— 开箱即用的数据源 —</div>
-  <div class="source-chips">
-    <span class="chip">MySQL</span><span class="chip">PostgreSQL</span><span class="chip">Oracle</span>
-    <span class="chip">SQL Server</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
-    <span class="chip">MariaDB</span><span class="chip">达梦 DM</span><span class="chip">人大金仓</span>
-    <span class="chip">SQLite</span><span class="chip">H2</span><span class="chip">Derby</span>
-    <span class="chip">DuckDB</span><span class="chip">Redis</span><span class="chip">MongoDB</span>
-    <span class="chip">Elasticsearch</span><span class="chip">更多接入中…</span>
+  <div class="source-groups">
+    <div class="sgroup">
+      <div class="sgroup-t">关系型</div>
+      <div class="source-chips">
+        <span class="chip">MySQL</span><span class="chip">PostgreSQL</span><span class="chip">Oracle</span>
+        <span class="chip">SQL Server</span><span class="chip">MariaDB</span><span class="chip">DB2</span><span class="chip">Derby</span>
+      </div>
+    </div>
+    <div class="sgroup">
+      <div class="sgroup-t">国产数据库</div>
+      <div class="source-chips">
+        <span class="chip">达梦 DM</span><span class="chip">人大金仓</span><span class="chip">Apache Doris</span>
+      </div>
+    </div>
+    <div class="sgroup">
+      <div class="sgroup-t">分析与分布式</div>
+      <div class="source-chips">
+        <span class="chip">ClickHouse</span><span class="chip">Doris</span>
+      </div>
+    </div>
+    <div class="sgroup">
+      <div class="sgroup-t">NoSQL 与搜索</div>
+      <div class="source-chips">
+        <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
+      </div>
+    </div>
+    <div class="sgroup">
+      <div class="sgroup-t">嵌入式</div>
+      <div class="source-chips">
+        <span class="chip">SQLite</span><span class="chip">H2</span><span class="chip">DuckDB</span>
+      </div>
+    </div>
   </div>
 </div>
+
+<section style="padding-top: 0;">
+  <div class="wrap">
+    <div class="stats reveal">
+      <div class="stat"><div class="n">17+</div><div class="t">数据源驱动开箱即用</div></div>
+      <div class="stat"><div class="n">18×</div><div class="t">结果集传输压缩比</div></div>
+      <div class="stat"><div class="n">0</div><div class="t">数据上云（全程本地）</div></div>
+      <div class="stat"><div class="n">&lt;1s</div><div class="t">千万级表首屏响应</div></div>
+    </div>
+  </div>
+</section>
 
 <section id="features">
   <div class="wrap">
     <h2 class="sec-title reveal">为「每天写 SQL 的人」打造</h2>
-    <p class="sec-sub reveal">不是又一个查询窗口，而是一整套顺手的数据库工作台</p>
+    <p class="sec-sub reveal">围绕真实任务组织，而不是堆功能清单 —— 每一项都有详细文档</p>
     <div class="grid">
       <div class="feature reveal">
         <div class="icon">⌨️</div>
         <h3>智能 SQL 编辑器</h3>
         <p>基于 Monaco（VS Code 同款内核）：补全、格式化、多语句分块执行、逐段计时条、执行历史、SQL 片段库、模板变量 —— 大脚本也能条理清楚地跑。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🤖</div>
         <h3>AI 全程加持</h3>
         <p>选段解释 / 优化 / 修错 / 诊断 / 自由对话，AI 给出的 SQL 先「看执行计划、试跑一次」再落地，吃进去的数据不出你的网络。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🛡️</div>
         <h3>事务模式</h3>
         <p>一键开启：所有写语句不再自动提交。改完自查、不满意回滚、确认后提交 —— 配合其他会话的可见性规则，改数据不再心惊胆战。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">✏️</div>
         <h3>结果集直接编辑</h3>
         <p>双击单元格改值、攒缓冲、一次提交。WHERE 条件自动生成（优先主键，否则全列定位）；翻页重跑后过期缓冲自动作废，绝不改错行。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">⚡</div>
         <h3>千万级结果集秒开</h3>
         <p>虚拟滚动 + 服务端分页 + 响应压缩（实测 4.2MB → 233KB）。总数异步统计不阻塞数据回显，大 JOIN 也能 1 秒见数。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">📊</div>
         <h3>数据透视与传输</h3>
         <p>框选即汇总（计数/求和/均值/最值）、分组下钻透视；导出 CSV / Excel / JSON / INSERT，长任务后台跑、完成系统通知。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
     </div>
   </div>
@@ -358,24 +426,109 @@
   </div>
 </section>
 
-<section style="padding-top: 0;">
+<section id="docs">
   <div class="wrap">
-    <div class="stats reveal">
-      <div class="stat"><div class="n">17+</div><div class="t">数据源驱动开箱即用</div></div>
-      <div class="stat"><div class="n">18×</div><div class="t">结果集传输压缩比</div></div>
-      <div class="stat"><div class="n">0</div><div class="t">数据上云（全程本地）</div></div>
-      <div class="stat"><div class="n">&lt;1s</div><div class="t">千万级表首屏响应</div></div>
+    <h2 class="sec-title reveal">功能文档</h2>
+    <p class="sec-sub reveal">每个功能展开讲清楚 —— 用法、细节与设计取舍</p>
+    <div class="doc-grid">
+      <div class="doc reveal">
+        <h3>⌨️ 智能 SQL 编辑器</h3>
+        <p>VS Code 同款 Monaco 内核，大脚本不卡顿。</p>
+        <ul>
+          <li><b>上下文补全</b>：按光标位置提示表 / 列 / 关键字，读库结构实时刷新</li>
+          <li><b>分块执行</b>：光标所在语句或选中片段单独跑，每段独立计时条</li>
+          <li><b>格式化</b>：整篇或仅选中段，大文件也能秒级整理</li>
+          <li><b>执行历史</b>：本地保存最近执行的 SQL，一键回填复用</li>
+        </ul>
+      </div>
+      <div class="doc reveal">
+        <h3>🤖 AI 助手</h3>
+        <p>全程加持，但每个动作都可先验证再落地。</p>
+        <ul>
+          <li><b>解释</b>：选中 SQL 逐段讲清在做什么、影响哪些表</li>
+          <li><b>优化</b>：给出改写建议 + 索引建议，可先看执行计划对比</li>
+          <li><b>修错</b>：报错后一键让 AI 修复并回填编辑器</li>
+          <li><b>诊断 / 问答</b>：性能诊断与自由对话，AI 结合库结构给出可执行答案</li>
+        </ul>
+      </div>
+      <div class="doc reveal">
+        <h3>🛡️ 事务模式</h3>
+        <p>改数据的安全闭环：先改、自查、再决定去留。</p>
+        <ul>
+          <li><b>一键开启</b>：会话级 autocommit 关闭，所有写语句挂起不提交</li>
+          <li><b>自查可见</b>：事务内的修改自己随时可查，其他会话看不到</li>
+          <li><b>提交 / 回滚</b>：满意提交落地、不满意一键回滚，全程留痕审计</li>
+          <li><b>关页签提醒</b>：有未提交事务时弹窗确认，防止误关丢改动</li>
+        </ul>
+      </div>
+      <div class="doc reveal">
+        <h3>✏️ 结果集直接编辑</h3>
+        <p>像表格软件一样改数据，底层生成精确的 UPDATE。</p>
+        <ul>
+          <li><b>双击改值</b>：弹窗确认新旧值，记入缓冲不立即执行</li>
+          <li><b>批量提交</b>：缓冲条汇总所有修改一次提交，事务开着就落在事务里</li>
+          <li><b>快照守卫</b>：翻页 / 重跑后过期缓冲自动作废，绝不改错行</li>
+          <li><b>JOIN 支持</b>：关联查询让你选目标表，工具不瞎猜列归属</li>
+        </ul>
+      </div>
+      <div class="doc reveal">
+        <h3>🧩 模板变量与片段库</h3>
+        <p>让重复查询变成填空题。</p>
+        <ul>
+          <li><b>模板变量</b>：SQL 里写 <code>:name</code> 占位符，执行前弹窗填参，字符串里的时间不误判，值按名称记忆</li>
+          <li><b>SQL 片段库</b>：选中 SQL 存为命名片段，跨会话保留，点击插入光标处</li>
+        </ul>
+      </div>
+      <div class="doc reveal">
+        <h3>⚡ 千万级结果集</h3>
+        <p>大表查询的体面方案：快、稳、不假死。</p>
+        <ul>
+          <li><b>虚拟滚动</b>：DOM 只渲染可视区，百万行丝滑滚动</li>
+          <li><b>服务端分页</b>：按需取数，首屏 &lt;1s</li>
+          <li><b>响应压缩</b>：实测 4.2MB → 233KB（18×），弱网也流畅</li>
+          <li><b>异步计数</b>：总数后台统计不阻塞数据回显，可随时取消</li>
+        </ul>
+      </div>
+      <div class="doc reveal">
+        <h3>📊 数据透视与导出</h3>
+        <p>查询结果直接出分析，不用再搬去 Excel。</p>
+        <ul>
+          <li><b>即选即透视</b>：框选区域出计数 / 求和 / 均值 / 最值，支持分组下钻</li>
+          <li><b>多格式导出</b>：CSV / Excel / JSON / INSERT 语句</li>
+          <li><b>后台长任务</b>：大导出后台执行，完成系统通知</li>
+        </ul>
+      </div>
+      <div class="doc reveal">
+        <h3>🔒 安全护栏</h3>
+        <p>面向生产环境的默认防护。</p>
+        <ul>
+          <li><b>PROD 标记</b>：生产连接显式标识，颜色提醒一眼可辨</li>
+          <li><b>写操作确认</b>：UPDATE / DELETE 执行前二次确认</li>
+          <li><b>超时与行数预算</b>：单查询可配置最大耗时与返回行数</li>
+          <li><b>执行审计</b>：每条语句留痕可追溯</li>
+        </ul>
+      </div>
+      <div class="doc reveal">
+        <h3>🧰 数据工具箱</h3>
+        <p>开发与运维的日常重活，都给你备好了。</p>
+        <ul>
+          <li><b>结构 / 数据对比</b>：两库表结构、行数据差异一键比对</li>
+          <li><b>结构 / 数据传输</b>：跨库搬表，字段映射可视</li>
+          <li><b>备份还原</b>：库级快照备份与还原</li>
+          <li><b>质量规则 / 分析</b>：数据质量校验与报告</li>
+        </ul>
+      </div>
     </div>
   </div>
 </section>
 
 <section id="download" class="final">
   <div class="wrap">
-    <h2>今天就把它装进你的工具栏</h2>
-    <p>免费使用 · Windows / macOS / Linux · 无需注册</p>
+    <h2>准备试试 DBmind？</h2>
+    <p>免费使用 · Windows / macOS / Linux · 无需注册，下载即用</p>
     <div class="cta-row">
-      <a class="btn btn-primary" href="#">下载 Windows 版</a>
-      <a class="btn btn-ghost" href="#">获取 macOS / Linux</a>
+      <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener">前往 GitHub 下载</a>
+      <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">查看源码仓库</a>
     </div>
   </div>
 </section>
