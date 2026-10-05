@@ -336,9 +336,11 @@
   .doc-main .fcard:hover { border-color: rgba(79, 140, 255, .45); transform: translateY(-2px); }
   .doc-main .fcard b { display: block; margin-bottom: 5px; font-size: 13.5px; color: var(--text); }
   .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
-  /* 文档模式：三栏等高（= 视口减顶栏），面板紧贴顶栏，中间正文独立滚动 */
+  /* 文档模式：三栏等高，整体下移留出顶部呼吸空间（三栏顶边一致，不贴顶） */
   body.doc-only .docs-layout {
+    padding-top: 14px;
     height: calc(100vh - 60px);
+    box-sizing: border-box;
     margin-top: 0; align-items: stretch;
   }
   body.doc-only .dtoc, body.doc-only .pagenav {
