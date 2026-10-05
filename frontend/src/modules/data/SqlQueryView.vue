@@ -63,11 +63,11 @@
                提交/回滚收尾。只有 agent(JDBC 宿主)链路的类型支持（SQLite 走内核原生驱动，
                没有会话级事务能力 —— 按钮直接不显示，免得点了报「不支持」） -->
           <template v-if="supportsTx">
-            <el-button size="small" :type="txMode ? 'warning' : 'default'" :loading="txBusy"
+            <el-button size="small" :type="txMode ? 'warning' : 'default'" :icon="SwitchIcon" :loading="txBusy"
                        @click="toggleTxMode" :title="$t('sqlq.txToggleTip')">{{ $t('sqlq.txMode') }}</el-button>
-            <el-button v-if="txMode" size="small" type="success" :loading="txBusy"
+            <el-button v-if="txMode" size="small" type="success" :icon="Select" :loading="txBusy"
                        @click="txCommit" :title="$t('sqlq.txCommitTip')">{{ $t('sqlq.txCommit') }}</el-button>
-            <el-button v-if="txMode" size="small" type="danger" plain :loading="txBusy"
+            <el-button v-if="txMode" size="small" type="danger" plain :icon="RefreshLeft" :loading="txBusy"
                        @click="txRollback">{{ $t('sqlq.txRollback') }}</el-button>
           </template>
           <!-- SQL 片段库：命名保存常用 SQL，点击插入；「+」把选区/全文存为片段 -->
