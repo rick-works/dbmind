@@ -290,6 +290,10 @@
     margin-bottom: 7px; padding-left: 10px; font-weight: 600;
   }
   .dtoc a { display: block; padding: 5px 10px; border-radius: 7px; color: var(--dim); transition: color .12s, background .12s; }
+  /* 社区说明：社区暂未建立的联系方式小字 */
+  .dtoc-note { padding: 4px 10px; font-size: 12px; color: var(--dim); line-height: 1.9; }
+  .dtoc-note a { display: inline; padding: 0; color: var(--primary); }
+  .dtoc-note a:hover { color: var(--accent); background: none; }
   .pagenav a {
     display: block; padding: 3px 0 3px 12px; color: var(--dim);
     border-left: 2px solid var(--border); transition: color .12s, border-color .12s;
@@ -611,6 +615,16 @@
         <div class="group">
           <div class="gt">常见问题</div>
           <a href="#d-faq">FAQ</a>
+        </div>
+        <div class="group">
+          <div class="gt">社区</div>
+          <div class="dtoc-note">
+            社区暂未建立。有问题请到
+            <a href="https://github.com/rick-works/dbmind/issues" target="_blank" rel="noopener">GitHub Issues</a>
+            提问，或发邮件至
+            <a href="mailto:13604181707@163.com">13604181707@163.com</a>，
+            也欢迎加入我们一起建设 DBmind。
+          </div>
         </div>
       </nav>
 
