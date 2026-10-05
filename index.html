@@ -216,17 +216,70 @@
     background: rgba(79, 140, 255, .12); border: 1px solid var(--border);
     border-radius: 5px; padding: 1px 6px; font-size: 12.5px; color: var(--accent);
   }
+
+  /* ===== 功能文档（页内三栏：左目录 / 中正文 / 右本页导航） ===== */
+  #docs { text-align: left; }
+  #docs .sec-title, #docs .sec-sub { text-align: center; }
+  .docs-layout {
+    display: grid; grid-template-columns: 200px minmax(0, 1fr) 175px; gap: 34px;
+    margin-top: 36px; align-items: start;
+  }
+  .dtoc, .pagenav { position: sticky; top: 84px; font-size: 13px; max-height: calc(100vh - 110px); overflow-y: auto; }
+  .dtoc .group { margin-bottom: 20px; }
+  .dtoc .gt, .pagenav .pt { font-size: 11.5px; color: var(--dim); letter-spacing: 1px; margin-bottom: 5px; padding-left: 10px; }
+  .dtoc a, .pagenav a { display: block; padding: 4px 10px; border-radius: 7px; color: var(--dim); }
+  .pagenav a { border-left: 2px solid var(--border); border-radius: 0; padding: 3px 0 3px 12px; }
+  .dtoc a:hover, .pagenav a:hover { color: var(--text); background: rgba(148, 163, 184, .08); }
+  .dtoc a.active, .pagenav a.active { color: var(--primary); background: rgba(79, 140, 255, .1); font-weight: 600; }
+  .pagenav a.active { background: none; border-left-color: var(--primary); }
+  .doc-main { min-width: 0; }
+  .doc-main h2 {
+    font-size: 19px; font-weight: 700; margin: 40px 0 12px; padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+  .doc-main h2:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+  .doc-main p { color: #c3cbdb; margin-bottom: 12px; font-size: 14px; }
+  .doc-main ul { margin: 8px 0 16px; padding-left: 20px; color: #c3cbdb; font-size: 14px; }
+  .doc-main li { margin-bottom: 7px; }
+  .doc-main li b { color: var(--text); font-weight: 600; }
+  .doc-main code {
+    background: rgba(79, 140, 255, .12); border: 1px solid var(--border); border-radius: 5px;
+    padding: 1px 7px; font-size: 12.5px; color: var(--accent);
+    font-family: "SF Mono", ui-monospace, Consolas, monospace;
+  }
+  .doc-main pre {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 13px 17px; overflow-x: auto; margin: 12px 0 16px; font-size: 13px; line-height: 1.7;
+  }
+  .doc-main pre code { background: none; border: none; padding: 0; color: #a8c7ff; }
+  .doc-main .tip {
+    background: rgba(45, 212, 191, .07); border: 1px solid rgba(45, 212, 191, .25);
+    border-radius: var(--radius); padding: 11px 15px; margin: 12px 0 18px; font-size: 13.5px; color: #b7e8e0;
+  }
+  .doc-main .tip b { color: var(--accent); }
+  .doc-main .dlink { color: var(--primary); }
+  .doc-main .dlink:hover { color: var(--accent); }
+  .doc-main .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; margin: 14px 0; }
+  .doc-main .fcard { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+  .doc-main .fcard b { display: block; margin-bottom: 4px; font-size: 13.5px; color: var(--text); }
+  .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
   .doc-link {
     display: inline-block; margin-top: 12px; font-size: 13px;
     color: var(--primary); font-weight: 600;
   }
   .doc-link:hover { color: var(--accent); }
 
+  @media (max-width: 1100px) {
+    .docs-layout { grid-template-columns: 180px minmax(0, 1fr); }
+    .pagenav { display: none; }
+  }
   @media (max-width: 760px) {
     .nav-links a:not(.nav-cta) { display: none; }
     .demo-body { grid-template-columns: 1fr; }
     .demo-pane + .demo-pane { border-left: none; border-top: 1px solid var(--border); }
     .doc-grid { grid-template-columns: 1fr; }
+    .docs-layout { grid-template-columns: 1fr; }
+    .dtoc { position: static; max-height: none; }
   }
 </style>
 </head>
@@ -237,10 +290,10 @@
     <a class="logo" href="#"><img class="logo-mark" src="logo.png" alt="DBmind" />DBmind</a>
     <div class="nav-links">
       <a href="#">首页</a>
-      <a href="#docs">文档</a>
       <a href="#features">功能</a>
       <a href="#workflow">工作流</a>
       <a href="#security">安全</a>
+      <a href="#docs">文档</a>
       <a href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener" class="nav-cta">立即下载</a>
     </div>
   </div>
@@ -400,94 +453,201 @@
   <div class="wrap">
     <h2 class="sec-title reveal">功能文档</h2>
     <p class="sec-sub reveal">每个功能展开讲清楚 —— 用法、细节与设计取舍</p>
-    <div class="doc-grid">
-      <div class="doc reveal">
-        <h3>⌨️ 智能 SQL 编辑器</h3>
-        <p>VS Code 同款 Monaco 内核，大脚本不卡顿。</p>
+    <div class="docs-layout reveal">
+      <nav class="dtoc">
+        <div class="group">
+          <div class="gt">介绍</div>
+          <a href="#d-what">什么是 DBmind？</a>
+          <a href="#d-overview">核心特性一览</a>
+        </div>
+        <div class="group">
+          <div class="gt">快速开始</div>
+          <a href="#d-install">下载与安装</a>
+          <a href="#d-conn">创建第一个连接</a>
+          <a href="#d-sql">执行第一条 SQL</a>
+        </div>
+        <div class="group">
+          <div class="gt">核心工作流</div>
+          <a href="#d-editor">SQL 编辑器</a>
+          <a href="#d-ai">AI 助手</a>
+          <a href="#d-grid">结果表格与数据编辑</a>
+          <a href="#d-tx">事务模式</a>
+          <a href="#d-browser">对象浏览器</a>
+        </div>
+        <div class="group">
+          <div class="gt">效率工具</div>
+          <a href="#d-vars">模板变量</a>
+          <a href="#d-snippets">SQL 片段库</a>
+          <a href="#d-pivot">数据透视</a>
+          <a href="#d-export">导出与传输</a>
+        </div>
+        <div class="group">
+          <div class="gt">安全与运维</div>
+          <a href="#d-security">安全护栏</a>
+          <a href="#d-drivers">驱动管理</a>
+          <a href="#d-audit">执行审计</a>
+        </div>
+        <div class="group">
+          <div class="gt">常见问题</div>
+          <a href="#d-faq">FAQ</a>
+        </div>
+      </nav>
+
+      <main class="doc-main">
+        <h2 id="d-what">什么是 DBmind？</h2>
+        <p><b>DBmind = Database + Mind</b>：给数据库装上「大脑」的统一管理工作台。它把连接管理、SQL 编辑、数据表格、AI 助手、事务与安全护栏放进同一个客户端，开箱即用。</p>
+        <p>DBmind 不绑定某一种数据库：MySQL、PostgreSQL、Oracle、SQL Server、ClickHouse、Redis、MongoDB、达梦、人大金仓等 17+ 种数据源共用一套操作习惯 —— 学一次，到处用。</p>
+        <div class="tip"><b>提示</b>：一切数据都留在你自己的网络里，AI 调用只发送你显式选中的内容。</div>
+
+        <h2 id="d-overview">核心特性一览</h2>
+        <div class="feature-grid">
+          <div class="fcard"><b>⌨️ 智能 SQL 编辑器</b><span>VS Code 同款内核：上下文补全、格式化、分块执行、执行历史。</span></div>
+          <div class="fcard"><b>🤖 AI 助手</b><span>解释 / 优化 / 修错 / 诊断 / 问答，给出的 SQL 可先看执行计划再落地。</span></div>
+          <div class="fcard"><b>🛡️ 事务模式</b><span>写语句不再自动提交：先改、自查、回滚或提交，安全闭环。</span></div>
+          <div class="fcard"><b>✏️ 结果集直接编辑</b><span>双击改值、缓冲提交，快照守卫绝不改错行。</span></div>
+          <div class="fcard"><b>⚡ 千万级结果集</b><span>虚拟滚动 + 服务端分页 + 18× 压缩，首屏 &lt;1s。</span></div>
+          <div class="fcard"><b>📊 透视与导出</b><span>框选即汇总、分组下钻；CSV / Excel / JSON / INSERT 导出。</span></div>
+        </div>
+
+        <h2 id="d-install">下载与安装</h2>
+        <p>前往 <a class="dlink" href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener">GitHub Releases</a> 下载对应平台的安装包（Windows / macOS / Linux），双击安装，开箱即用。</p>
         <ul>
-          <li><b>上下文补全</b>：按光标位置提示表 / 列 / 关键字，读库结构实时刷新</li>
-          <li><b>分块执行</b>：光标所在语句或选中片段单独跑，每段独立计时条</li>
-          <li><b>格式化</b>：整篇或仅选中段，大文件也能秒级整理</li>
-          <li><b>执行历史</b>：本地保存最近执行的 SQL，一键回填复用</li>
+          <li>无需注册账号，无需配置云端服务</li>
+          <li>首次连接某类型数据库时会<b>自动下载对应驱动</b></li>
         </ul>
-      </div>
-      <div class="doc reveal">
-        <h3>🤖 AI 助手</h3>
-        <p>全程加持，但每个动作都可先验证再落地。</p>
+
+        <h2 id="d-conn">创建第一个连接</h2>
         <ul>
-          <li><b>解释</b>：选中 SQL 逐段讲清在做什么、影响哪些表</li>
-          <li><b>优化</b>：给出改写建议 + 索引建议，可先看执行计划对比</li>
-          <li><b>修错</b>：报错后一键让 AI 修复并回填编辑器</li>
-          <li><b>诊断 / 问答</b>：性能诊断与自由对话，AI 结合库结构给出可执行答案</li>
+          <li>左侧树点「<b>新建连接</b>」，选择数据库类型，填入主机 / 端口 / 账号密码</li>
+          <li>内网环境可在 设置 → 驱动镜像 换成内网仓库地址</li>
+          <li>连接可分组管理；生产库建议开启 <b>PROD 标记</b>，界面有醒目颜色提醒</li>
         </ul>
-      </div>
-      <div class="doc reveal">
-        <h3>🛡️ 事务模式</h3>
-        <p>改数据的安全闭环：先改、自查、再决定去留。</p>
+
+        <h2 id="d-sql">执行第一条 SQL</h2>
+        <pre><code>-- 光标在这条语句内时，Ctrl+Enter 只执行这一条
+SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
         <ul>
-          <li><b>一键开启</b>：会话级 autocommit 关闭，所有写语句挂起不提交</li>
-          <li><b>自查可见</b>：事务内的修改自己随时可查，其他会话看不到</li>
-          <li><b>提交 / 回滚</b>：满意提交落地、不满意一键回滚，全程留痕审计</li>
-          <li><b>关页签提醒</b>：有未提交事务时弹窗确认，防止误关丢改动</li>
+          <li>语句里有 <code>:name</code> 占位符时，执行前弹窗填参（见<a class="dlink" href="#d-vars">模板变量</a>）</li>
+          <li>多语句脚本自动分块执行，每段独立计时</li>
         </ul>
-      </div>
-      <div class="doc reveal">
-        <h3>✏️ 结果集直接编辑</h3>
-        <p>像表格软件一样改数据，底层生成精确的 UPDATE。</p>
+
+        <h2 id="d-editor">SQL 编辑器</h2>
         <ul>
-          <li><b>双击改值</b>：弹窗确认新旧值，记入缓冲不立即执行</li>
-          <li><b>批量提交</b>：缓冲条汇总所有修改一次提交，事务开着就落在事务里</li>
+          <li><b>上下文补全</b>：按光标位置提示表 / 列 / 关键字，库结构变更实时刷新</li>
+          <li><b>分块执行</b>：光标语句或选中片段单独跑；「执行全部」跑整篇脚本</li>
+          <li><b>格式化</b>：整篇或仅选中段，一键整理混乱 SQL</li>
+          <li><b>执行历史</b>：本地保存最近执行的 SQL，下拉一键回填</li>
+        </ul>
+
+        <h2 id="d-ai">AI 助手</h2>
+        <ul>
+          <li><b>解释</b>：选中 SQL，让 AI 逐段讲清在做什么、影响哪些表</li>
+          <li><b>优化</b>：给出改写建议与索引建议，可先看执行计划对比</li>
+          <li><b>修错</b>：语句报错后一键让 AI 修复，结果直接回填编辑器</li>
+          <li><b>诊断 / 问答</b>：性能定位与自由对话，AI 结合库结构给出可执行答案</li>
+        </ul>
+        <div class="tip"><b>安全边界</b>：AI 给出的 SQL 会先「看执行计划、试跑一次」再由你决定是否执行。</div>
+
+        <h2 id="d-grid">结果表格与数据编辑</h2>
+        <ul>
+          <li><b>虚拟滚动</b>：百万行丝滑滚动不卡顿；单元格完整内容悬浮查看</li>
+          <li><b>双击改值</b>：改动先记入缓冲，底栏汇总后一次批量提交</li>
           <li><b>快照守卫</b>：翻页 / 重跑后过期缓冲自动作废，绝不改错行</li>
-          <li><b>JOIN 支持</b>：关联查询让你选目标表，工具不瞎猜列归属</li>
+          <li><b>JOIN 支持</b>：关联查询请你选择目标表，工具不瞎猜列归属</li>
         </ul>
-      </div>
-      <div class="doc reveal">
-        <h3>🧩 模板变量与片段库</h3>
-        <p>让重复查询变成填空题。</p>
+
+        <h2 id="d-tx">事务模式</h2>
         <ul>
-          <li><b>模板变量</b>：SQL 里写 <code>:name</code> 占位符，执行前弹窗填参，字符串里的时间不误判，值按名称记忆</li>
-          <li><b>SQL 片段库</b>：选中 SQL 存为命名片段，跨会话保留，点击插入光标处</li>
+          <li>工具栏点「<b>事务</b>」开启：本会话所有写语句不再自动提交</li>
+          <li>事务内修改自己随时可查，其他会话看不到 —— 先改、先自查</li>
+          <li>满意「<b>提交</b>」落地；不满意「<b>回滚</b>」全部消失，全程留痕</li>
+          <li>有未提交事务时关页签 / 关窗口弹窗确认，防止误关丢改动</li>
         </ul>
-      </div>
-      <div class="doc reveal">
-        <h3>⚡ 千万级结果集</h3>
-        <p>大表查询的体面方案：快、稳、不假死。</p>
+
+        <h2 id="d-browser">对象浏览器</h2>
         <ul>
-          <li><b>虚拟滚动</b>：DOM 只渲染可视区，百万行丝滑滚动</li>
-          <li><b>服务端分页</b>：按需取数，首屏 &lt;1s</li>
-          <li><b>响应压缩</b>：实测 4.2MB → 233KB（18×），弱网也流畅</li>
-          <li><b>异步计数</b>：总数后台统计不阻塞数据回显，可随时取消</li>
+          <li>左侧树按「连接 → 数据库 → Schema → 表 / 视图」展开</li>
+          <li>表结构、索引、DDL 一键查看；双击表名插入编辑器</li>
         </ul>
-      </div>
-      <div class="doc reveal">
-        <h3>📊 数据透视与导出</h3>
-        <p>查询结果直接出分析，不用再搬去 Excel。</p>
+
+        <h2 id="d-vars">模板变量</h2>
+        <p>把重复查询变成填空题：SQL 里写 <code>:name</code> 占位符，执行前弹窗填参。</p>
+        <pre><code>SELECT * FROM orders
+WHERE dt = :dt AND org = :org;</code></pre>
         <ul>
-          <li><b>即选即透视</b>：框选区域出计数 / 求和 / 均值 / 最值，支持分组下钻</li>
-          <li><b>多格式导出</b>：CSV / Excel / JSON / INSERT 语句</li>
-          <li><b>后台长任务</b>：大导出后台执行，完成系统通知</li>
+          <li>字符串字面量里的冒号不误判（<code>'12:30'</code> 安全）</li>
+          <li>数字直写、<code>null</code> 置 NULL、其余按字符串转义</li>
+          <li>参数值按名称记忆（本地保存），下次自动带上</li>
         </ul>
-      </div>
-      <div class="doc reveal">
-        <h3>🔒 安全护栏</h3>
-        <p>面向生产环境的默认防护。</p>
+
+        <h2 id="d-snippets">SQL 片段库</h2>
         <ul>
-          <li><b>PROD 标记</b>：生产连接显式标识，颜色提醒一眼可辨</li>
+          <li>选中 SQL → 工具栏「片段 → 存为片段」，命名保存（未选中存全文）</li>
+          <li>跨会话保留在本地；点击插入：有选区替换选区，否则插到光标处</li>
+        </ul>
+
+        <h2 id="d-pivot">数据透视</h2>
+        <ul>
+          <li>结果表格里框选区域 → 一键汇总：计数 / 求和 / 均值 / 最值</li>
+          <li>按列分组透视、下钻查看明细；纯前端计算不耗数据库资源</li>
+        </ul>
+
+        <h2 id="d-export">导出与传输</h2>
+        <ul>
+          <li><b>导出格式</b>：CSV / Excel / JSON / INSERT 语句</li>
+          <li><b>长任务后台跑</b>：大数据量导出不占界面，完成系统通知</li>
+          <li><b>结构 / 数据传输与对比</b>：跨库搬表、差异比对</li>
+        </ul>
+
+        <h2 id="d-security">安全护栏</h2>
+        <ul>
+          <li><b>PROD 标记</b>：生产连接显式标识，误操作前多看一眼</li>
           <li><b>写操作确认</b>：UPDATE / DELETE 执行前二次确认</li>
-          <li><b>超时与行数预算</b>：单查询可配置最大耗时与返回行数</li>
-          <li><b>执行审计</b>：每条语句留痕可追溯</li>
+          <li><b>超时与行数预算</b>：可配置单查询最大执行时间与返回行数</li>
         </ul>
-      </div>
-      <div class="doc reveal">
-        <h3>🧰 数据工具箱</h3>
-        <p>开发与运维的日常重活，都给你备好了。</p>
+
+        <h2 id="d-drivers">驱动管理</h2>
         <ul>
-          <li><b>结构 / 数据对比</b>：两库表结构、行数据差异一键比对</li>
-          <li><b>结构 / 数据传输</b>：跨库搬表，字段映射可视</li>
-          <li><b>备份还原</b>：库级快照备份与还原</li>
-          <li><b>质量规则 / 分析</b>：数据质量校验与报告</li>
+          <li>首次连接自动从 Maven 下载对应 JDBC 驱动并缓存</li>
+          <li>内网环境切换镜像地址，或手动放入驱动 jar</li>
         </ul>
-      </div>
+
+        <h2 id="d-audit">执行审计</h2>
+        <ul>
+          <li>每条执行过的语句自动留痕：语句、目标库、耗时、成功与否</li>
+          <li>事务的开启 / 提交 / 回滚同样留痕，可追溯</li>
+        </ul>
+
+        <h2 id="d-faq">常见问题</h2>
+        <ul>
+          <li><b>「驱动宿主未就绪」？</b>宿主需要 Java 17+，启动脚本会自动探测并固定；也可设 <code>DBMIND_JAVA</code> 指向 Java 17+</li>
+          <li><b>内网无法下载驱动？</b>切换驱动镜像到内网仓库，或手动放入数据目录的 <code>drivers/</code></li>
+          <li><b>事务按钮不显示？</b>SQLite 等嵌入式引擎没有会话级事务，按钮自动隐藏</li>
+          <li><b>编辑提交报「缓冲已失效」？</b>翻页 / 重跑后行号基准变了，重新双击编辑即可 —— 这是防改错行的保护</li>
+        </ul>
+      </main>
+
+      <aside class="pagenav">
+        <div class="pt">本页目录</div>
+        <a href="#d-what">什么是 DBmind？</a>
+        <a href="#d-overview">核心特性一览</a>
+        <a href="#d-install">下载与安装</a>
+        <a href="#d-conn">创建第一个连接</a>
+        <a href="#d-sql">执行第一条 SQL</a>
+        <a href="#d-editor">SQL 编辑器</a>
+        <a href="#d-ai">AI 助手</a>
+        <a href="#d-grid">结果表格与数据编辑</a>
+        <a href="#d-tx">事务模式</a>
+        <a href="#d-browser">对象浏览器</a>
+        <a href="#d-vars">模板变量</a>
+        <a href="#d-snippets">SQL 片段库</a>
+        <a href="#d-pivot">数据透视</a>
+        <a href="#d-export">导出与传输</a>
+        <a href="#d-security">安全护栏</a>
+        <a href="#d-drivers">驱动管理</a>
+        <a href="#d-audit">执行审计</a>
+        <a href="#d-faq">常见问题</a>
+      </aside>
     </div>
   </div>
 </section>
@@ -518,8 +678,8 @@
   document.querySelectorAll('.reveal').forEach(el => io.observe(el))
 
   // 导航高亮：滚动到哪个区块，对应导航项点亮（顶部时点亮「首页」）
-  // 值 = 导航项下标（首页0 文档1 功能2 工作流3 安全4）
-  const navMap = { features: 2, workflow: 3, security: 4, docs: 1 }
+  // 值 = 导航项下标（首页0 功能1 工作流2 安全3 文档4）
+  const navMap = { features: 1, workflow: 2, security: 3, docs: 4 }
   const navItems = [...document.querySelectorAll('.nav-links a:not(.nav-cta)')]
   const setActive = (i) => navItems.forEach((a, j) => a.classList.toggle('active', j === i))
   setActive(0)
@@ -531,6 +691,18 @@
     })
   }, { rootMargin: '-45% 0px -50% 0px' })
   Object.keys(navMap).forEach(id => { const el = document.getElementById(id); if (el) secIo.observe(el) })
+
+  // 文档区内小节高亮：滚动到哪节，左目录与右「本页目录」同步点亮
+  const docLinks = [...document.querySelectorAll('.dtoc a, .pagenav a')]
+  const hlById = (id) => docLinks.filter(a => a.getAttribute('href') === '#' + id)
+  const docIo = new IntersectionObserver((es) => {
+    es.forEach(e => {
+      if (!e.isIntersecting) return
+      docLinks.forEach(a => a.classList.remove('active'))
+      hlById(e.target.id).forEach(a => a.classList.add('active'))
+    })
+  }, { rootMargin: '-70px 0px -72% 0px' })
+  document.querySelectorAll('.doc-main h2[id]').forEach(h => docIo.observe(h))
   // 回到顶部时点亮「首页」
   window.addEventListener('scroll', () => { if (window.scrollY < 300) setActive(0) }, { passive: true })
 </script>
