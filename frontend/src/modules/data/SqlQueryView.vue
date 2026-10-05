@@ -1964,16 +1964,7 @@ const toggleTxMode = async () => {
   }
 }
 // 切换连接：事务绑定在旧连接的会话上 —— 回滚收尾并把状态复位
-watch(selectedConnId, (nv, ov) => {
-  if (txMode.value && ov) {
-    txControl(ov, 'rollback', txDatabaseOf()).catch(() => {})
-    txMode.value = false
-    txDirty.value = false
-    ElMessage.info(t('sqlq.txReset'))
-  }
-  discardEdits()
-})
-
+//（watch 注册在 selectedConnId 声明之后 —— 注册时会立刻读 .value，放前面就是 TDZ 崩溃）
 // ===== CSV 导入向导 =====
 const csvVisible = ref(false)
 const connectionKind = computed(() => String(selectedConn.value?.type || props.conn?.type || '').toLowerCase())
@@ -2546,6 +2537,17 @@ const onEdCtxKeyDown = (e) => {
 // 连接 / 数据库 / Schema 选择
 const allConnections = ref([])
 const selectedConnId = ref('')
+// 切换连接：事务绑定在旧连接的会话上 —— 回滚收尾并把状态复位（编辑缓冲也随连接作废）。
+// 注意 watch 注册时立刻读 source 的 .value —— 必须放在声明之后，否则 setup 直接 TDZ 崩溃
+watch(selectedConnId, (nv, ov) => {
+  if (txMode.value && ov) {
+    txControl(ov, 'rollback', txDatabaseOf()).catch(() => {})
+    txMode.value = false
+    txDirty.value = false
+    ElMessage.info(t('sqlq.txReset'))
+  }
+  discardEdits()
+})
 const databases = ref([])
 const selectedDatabase = ref('')
 // catalog 方言（Doris）：catalog 与库拆成两个下拉。databases 存储仍是全限定名
