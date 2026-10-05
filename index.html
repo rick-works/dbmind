@@ -264,6 +264,9 @@
   }
   ::-webkit-scrollbar-thumb:hover { background: rgba(79, 140, 255, .55); }
   html { scrollbar-color: rgba(148, 163, 184, .35) transparent; scrollbar-width: thin; }
+  /* 目录面板滚动条更纤细 */
+  .dtoc::-webkit-scrollbar, .pagenav::-webkit-scrollbar, .doc-main::-webkit-scrollbar { width: 5px; }
+  .dtoc { scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, .3) transparent; }
   .docs-layout {
     display: grid; grid-template-columns: 224px minmax(0, 1fr) 192px; gap: 34px;
     margin-top: 30px; align-items: start;
@@ -823,6 +826,11 @@ WHERE dt = :dt AND org = :org;</code></pre>
   })
   navItems[0].addEventListener('click', exitDocMode)
   document.querySelector('.logo').addEventListener('click', exitDocMode)
+  // 文档/赞助模式下点「功能 / 工作流 / 安全」：先退出独占视图，让默认锚点跳转滚到对应区块
+  ;[1, 2, 3].forEach(i => navItems[i].addEventListener('click', () => {
+    document.body.classList.remove('doc-only')
+    document.body.classList.remove('sponsor-only')
+  }))
   // 带 #docs / #sponsor 直开（分享/收藏的链接）也自动进入对应视图
   if (location.hash === '#docs') enterDocMode()
   if (location.hash === '#sponsor') enterSponsorMode()
