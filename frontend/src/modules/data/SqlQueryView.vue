@@ -2325,7 +2325,8 @@ const clearStmtError = () => {
   }
   stmtErrorDecorations = []
 }
-/** 执行失败后把出错的那条语句标红并定位：stmtIndex（批量路径已知序号）优先，其次按 failedSql 匹配 */
+/** 执行失败后定位出错语句：不整条爆红 —— 只在语句首行标红点（悬停看完整报错），
+ *  且尽量把「报错里提到的标识符」（如 Unknown column 'j' 的 j）单独划红线 */
 const markErrorStatement = (res, stmtIndex) => {
   clearStmtError()
   const ed = editorInstance
@@ -2345,23 +2346,50 @@ const markErrorStatement = (res, stmtIndex) => {
   if (target < 0 && ranges.length === 1) target = 0
   if (target < 0) return
   const r = ranges[target]
-  const start = model.getPositionAt(r.start)
-  const end = model.getPositionAt(r.end)
-  const range = {
-    startLineNumber: start.lineNumber, startColumn: start.column,
-    endLineNumber: end.lineNumber, endColumn: end.column
+  const startPos = model.getPositionAt(r.start)
+  const endPos = model.getPositionAt(r.end)
+  const fullRange = {
+    startLineNumber: startPos.lineNumber, startColumn: startPos.column,
+    endLineNumber: endPos.lineNumber, endColumn: endPos.column
+  }
+  const msg = String(res?.message || '')
+  const decos = []
+  // ① 语句首行 glyph 红点：入口指示，悬停显示完整报错（不遮正文）
+  decos.push({
+    range: { startLineNumber: startPos.lineNumber, startColumn: 1, endLineNumber: startPos.lineNumber, endColumn: 1 },
+    options: {
+      isWholeLine: true,
+      glyphMarginClassName: 'stmt-err-glyph',
+      glyphMarginHoverMessage: { value: '**SQL 执行失败**\n\n' + msg.replace(/\n/g, '\n\n') },
+      stickiness: 1
+    }
+  })
+  // ② 精确到出错标识符：报错信息里第一个引号包住的词（如 'j'）在语句内按整词匹配
+  const tm = /'([^'\n]{1,64})'/.exec(msg)
+  if (tm && /[a-z_]/i.test(tm[1])) {
+    const word = tm[1].replace(/^[`"'\[\]]+|[`"'\[\]]+$/g, '')
+    if (word.length >= 1) {
+      const stmtRaw = (sql.value || '').slice(r.start, r.end)
+      const re = new RegExp('(?<![\\w$`"\'])' + word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?![\\w$`"\'])', 'i')
+      const m = re.exec(stmtRaw)
+      if (m) {
+        const tp = model.getPositionAt(r.start + m.index)
+        const tp2 = model.getPositionAt(r.start + m.index + m[0].length)
+        decos.push({
+          range: { startLineNumber: tp.lineNumber, startColumn: tp.column, endLineNumber: tp2.lineNumber, endColumn: tp2.column },
+          options: {
+            inlineClassName: 'stmt-err-token',
+            hoverMessage: { value: '**SQL 报错**\n\n' + msg.replace(/\n/g, '\n\n') },
+            stickiness: 1
+          }
+        })
+      }
+    }
   }
   try {
-    stmtErrorDecorations = ed.deltaDecorations([], [{
-      range,
-      options: {
-        inlineClassName: 'stmt-error-text',
-        overviewRuler: { color: '#e34d4d', position: 4 },
-        stickiness: 1
-      }
-    }])
+    stmtErrorDecorations = ed.deltaDecorations([], decos)
   } catch { /* 编辑器销毁竞态忽略 */ }
-  ed.revealRangeInCenter(range)
+  ed.revealRangeInCenter(fullRange)
 }
 
 const aiDialogVisible = ref(false)
@@ -2513,6 +2541,8 @@ const notifyScriptsChanged = () => {
 
 const editorOptions = computed(() => ({
   automaticLayout: true,
+  // 左侧 glyphMargin：报错语句的红点指示画在这里
+  glyphMargin: true,
   // 空编辑器的引导提示（contrib/placeholderText）：一眼知道这里写什么、怎么执行
   placeholder: t('sqlq.editorPlaceholder'),
   // 补全列表**收归 provider 独家供给**：词建议（文档里出现过的词）混进来会让列表
@@ -4446,8 +4476,12 @@ onBeforeUnmount(() => {
 
 <!-- 报错语句标红 + 语句面包屑：decorations/chips 落在 Monaco 内部 DOM 与全局层，须用非 scoped 样式 -->
 <style>
-.stmt-error-text {
-  background: rgba(227, 77, 77, 0.14);
+/* 报错语句：首行 glyph 红点（悬停显示完整报错）+ 出错标识符红波浪线 */
+.stmt-err-glyph {
+  background: radial-gradient(circle, #e34d4d 0 45%, transparent 50%);
+  cursor: pointer;
+}
+.stmt-err-token {
   text-decoration: underline wavy #e34d4d;
   text-underline-offset: 3px;
 }
