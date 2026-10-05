@@ -2326,8 +2326,9 @@ const clearStmtError = () => {
   stmtErrorDecorations = []
 }
 /** 执行失败后定位出错语句：不整条爆红 —— 只在语句首行标红点（悬停看完整报错），
- *  且尽量把「报错里提到的标识符」（如 Unknown column 'j' 的 j）单独划红线 */
-const markErrorStatement = (res, stmtIndex) => {
+ *  且尽量把「报错里提到的标识符」（如 Unknown column 'j' 的 j）单独划红线。
+ *  preferSql：本轮实际执行的 SQL（执行选中场景 = 选中的那条语句），用于匹配目标 */
+const markErrorStatement = (res, stmtIndex, preferSql) => {
   clearStmtError()
   const ed = editorInstance
   const model = ed && ed.getModel()
@@ -2341,6 +2342,15 @@ const markErrorStatement = (res, stmtIndex) => {
     if (failedSql) {
       const norm = (s) => String(s).replace(/\s+/g, ' ').toLowerCase()
       target = ranges.findIndex((r) => norm(r.text) === norm(failedSql))
+    }
+  }
+  if (target < 0 && preferSql) {
+    // 执行选中场景：执行的 SQL 就是那条语句 —— 规范化后精确匹配；
+    // 选了半条语句时按「包含」兜底
+    const np = preferSql.replace(/\s+/g, ' ').toLowerCase()
+    if (np) {
+      target = ranges.findIndex((r) => r.text.replace(/\s+/g, ' ').toLowerCase() === np)
+      if (target < 0) target = ranges.findIndex((r) => np.includes(r.text.replace(/\s+/g, ' ').toLowerCase()))
     }
   }
   if (target < 0 && ranges.length === 1) target = 0
@@ -3432,8 +3442,8 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         showSingleResult(res)
         // 总数未知时异步补齐（后端已不同步 COUNT，见 fetchCountFor）
         fetchCountFor(result.value, execSql)
-        // 失败 → 编辑器里把出错语句标红定位
-        if (!res.success) markErrorStatement(res)
+        // 失败 → 编辑器里把出错语句标红定位（execSql = 选中的那条或整段单条）
+        if (!res.success) markErrorStatement(res, undefined, execSql)
         recordHistory(execSql, db, res.executeTime || 0)
         loadResColumnComments(execSql, connId, db)
       }
