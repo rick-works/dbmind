@@ -218,8 +218,9 @@
   }
 
   /* ===== 功能文档（页内三栏：左目录 / 中正文 / 右本页导航） ===== */
-  #docs { text-align: left; }
-  #docs .sec-title, #docs .sec-sub { text-align: center; }
+  /* 默认不出现在滚动流里 —— 只有点导航「文档」进入文档模式才显示 */
+  #docs { display: none; text-align: left; }
+  body.doc-only #docs { display: block; }
   /* 文档模式：点导航「文档」后只显示文档区，其余区块隐藏；导航「首页」/logo 退出 */
   body.doc-only > *:not(nav):not(#docs) { display: none !important; }
   body.doc-only #docs { padding-top: 46px; }
