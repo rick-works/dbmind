@@ -1,0 +1,42 @@
+schemaVersion: 1
+order: 700
+dbType: oracle
+rustVariant: Oracle
+label: Oracle
+dialect: Oracle
+runtimeMode: agent
+mcpMode: bridge
+agentKey: oracle
+driverStoreVisible: true
+driverStoreOrder: 7
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 4
+skipTcpProbe: false
+localFile: false
+defaultPort: 1521
+jdbc:
+  driverClass: oracle.jdbc.OracleDriver
+  urlTemplate: "jdbc:oracle:thin:@{host}:{port}/{database}"
+  artifact: com.oracle.database.jdbc:ojdbc11:23.6.0.24.10
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: false
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: false
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

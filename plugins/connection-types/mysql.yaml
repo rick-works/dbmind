@@ -1,0 +1,46 @@
+schemaVersion: 1
+order: 400
+dbType: mysql
+rustVariant: Mysql
+label: MySQL
+dialect: MySQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: mysql
+driverStoreVisible: true
+driverStoreOrder: 4
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 4
+skipTcpProbe: false
+localFile: false
+defaultPort: 3306
+jdbc:
+  driverClass: com.mysql.cj.jdbc.Driver
+  # useSSL=false + allowPublicKeyRetrieval=true 让 MySQL 8 的
+  # caching_sha2_password 在自签/无证书环境下也能认证；serverTimezone 避免
+  # 「The server time zone value ... is unrecognized」这个经典报错；
+  # useCursorFetch 让大结果集走服务端游标（否则同步大表会退化成逐行往返或整表缓冲）。
+  urlTemplate: "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true"
+  artifact: com.mysql:mysql-connector-j:9.1.0
+traits:
+  singleDatabase: false
+  schemaAware: false
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

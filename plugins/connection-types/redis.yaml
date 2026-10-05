@@ -1,0 +1,40 @@
+schemaVersion: 1
+order: 1600
+dbType: redis
+rustVariant: Redis
+label: Redis
+dialect: Redis
+runtimeMode: agent
+mcpMode: bridge
+agentKey: redis
+# Redis 的「语句」是一条命令（GET k / HSET h f v），没有语句分隔符；
+# 安全判定走内核的 redis 模块（含 CONFIG GET=读 / CONFIG SET=写、SORT+STORE=写 这类子命令规则）
+protocol: redis
+driverStoreVisible: true
+driverStoreOrder: 16
+singleConnectionPool: true
+metadataConnectionScoped: false
+skipTcpProbe: false
+localFile: false
+defaultPort: 6379
+traits:
+  singleDatabase: true
+  schemaAware: false
+supportLevel: browse
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: false
+  schemaSearch: false
+  diagram: false
+  tableDataEdit: true
+  tableStructureEdit: false
+  tableImport: false
+  dataTransfer: false
+  sqlFileExecution: false
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: false
+  userAdmin: false
+  driverManagement: true

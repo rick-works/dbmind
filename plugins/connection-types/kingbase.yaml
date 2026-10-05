@@ -1,0 +1,42 @@
+schemaVersion: 1
+order: 1100
+dbType: kingbase
+rustVariant: Kingbase
+label: 人大金仓 KingbaseES
+dialect: PostgreSQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: kingbase
+driverStoreVisible: true
+driverStoreOrder: 11
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 4
+skipTcpProbe: false
+localFile: false
+defaultPort: 54321
+jdbc:
+  driverClass: com.kingbase8.Driver
+  urlTemplate: "jdbc:kingbase8://{host}:{port}/{database}"
+  artifact: cn.com.kingbase:kingbase8:9.0.0
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

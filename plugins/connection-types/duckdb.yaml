@@ -1,0 +1,44 @@
+schemaVersion: 1
+order: 200
+dbType: duckdb
+rustVariant: Duckdb
+label: DuckDB
+dialect: DuckDB
+# 归入 agent 而**不是** file：DuckDB 的官方 JDBC 驱动能在通用宿主里内嵌运行，
+# 为它单独造一个 sidecar 进程没有收益。RuntimeMode::File 保留给「必须有专属进程」
+# 的引擎（例如需要自定义扩展加载策略的场景），当前没有类型声明它。
+runtimeMode: agent
+mcpMode: bridge
+agentKey: duckdb
+driverStoreVisible: true
+driverStoreOrder: 2
+singleConnectionPool: true
+metadataConnectionScoped: false
+skipTcpProbe: true
+localFile: true
+jdbc:
+  driverClass: org.duckdb.DuckDBDriver
+  # DuckDB 的嵌入式 URL：直接打开本地文件（父目录由内核补齐）
+  urlTemplate: "jdbc:duckdb:{filePath}"
+  artifact: org.duckdb:duckdb_jdbc:1.1.3
+traits:
+  singleDatabase: true
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: false
+  tableStructureEdit: false
+  tableImport: true
+  dataTransfer: false
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: false
+  driverManagement: false

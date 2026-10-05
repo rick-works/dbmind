@@ -1,0 +1,50 @@
+schemaVersion: 1
+order: 1400
+dbType: derby
+rustVariant: Derby
+label: Apache Derby
+dialect: Derby
+runtimeMode: agent
+mcpMode: bridge
+agentKey: derby
+driverStoreVisible: true
+driverStoreOrder: 14
+singleConnectionPool: true
+metadataConnectionScoped: false
+skipTcpProbe: true
+localFile: true
+defaultPort: 1527
+jdbc:
+  driverClass: org.apache.derby.iapi.jdbc.AutoloadedDriver
+  # ;create=true：路径不存在时自动建库（否则首次连接一个不存在的目录会直接失败）。
+  # 按 Derby 驱动的要求设置。
+  urlTemplate: "jdbc:derby:{filePath};create=true"
+  # 版本上限取决于宿主的 JVM：**Derby 10.17 要 JDK 21**，而 agent 跑在 JDK 17 上，
+  # 用 10.17 会在装载驱动时抛 UnsupportedClassVersionError（实测）。
+  # 10.16.1.1 对应 Java 17，与宿主一致。
+  artifact: org.apache.derby:derby:10.16.1.1
+  # Derby 10.15 起拆成多模块：`derby` 只是引擎，`derbyshared`（共享基础类）是运行期必需，
+  # 缺它会在装载驱动内部类时抛 NoClassDefFoundError —— 与 ClickHouse 缺 slf4j 同一类问题。
+  artifacts:
+    - org.apache.derby:derbyshared:10.16.1.1
+traits:
+  singleDatabase: true
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: false
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: false
+  driverManagement: true

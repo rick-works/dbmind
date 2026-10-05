@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>DBmind — 给数据库装上「大脑」的 AI 数据库工作台</title>
+<link rel="icon" type="image/png" href="favicon.png">
+<meta name="description" content="DBmind：给数据库装上「大脑」—— AI 原生的多数据库管理平台。一个客户端管理所有数据库，AI 解释/优化/修错每一条 SQL，事务级数据编辑、千万级结果集秒开，本地运行，数据不出内网。" />
+<style>
+  :root {
+    --bg: #0b0f17;
+    --bg-soft: #111827;
+    --card: #141c2b;
+    --border: rgba(148, 163, 184, .14);
+    --text: #e5eaf3;
+    --dim: #94a3b8;
+    --primary: #4f8cff;
+    --primary-2: #7c5cff;
+    --accent: #2dd4bf;
+    --warn: #f59e0b;
+    --danger: #f87171;
+    --radius: 14px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+    line-height: 1.7;
+    overflow-x: hidden;
+  }
+  a { color: inherit; text-decoration: none; }
+  ::selection { background: rgba(79, 140, 255, .35); }
+
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* ===== 导航 ===== */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    backdrop-filter: blur(14px);
+    background: rgba(11, 15, 23, .72);
+    border-bottom: 1px solid var(--border);
+  }
+  .nav-inner { display: flex; align-items: center; height: 60px; }
+  .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
+  .logo-mark { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: block; }
+  .nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14px; height: 60px; }
+  .nav-links a { color: #b9c3d6; font-weight: 500; transition: color .15s; }
+  .nav-links a:hover { color: #fff; }
+  .nav-links a.active { color: var(--primary); font-weight: 700; }
+  .nav-cta {
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    color: #fff !important; padding: 7px 18px; border-radius: 8px; font-weight: 600;
+  }
+
+  /* ===== Hero ===== */
+  header {
+    position: relative; padding: 150px 0 90px; text-align: center; overflow: hidden;
+  }
+  header::before {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    background:
+      radial-gradient(600px 300px at 20% 0%, rgba(79, 140, 255, .16), transparent 70%),
+      radial-gradient(600px 300px at 80% 10%, rgba(124, 92, 255, .14), transparent 70%),
+      radial-gradient(500px 260px at 50% 100%, rgba(45, 212, 191, .08), transparent 70%);
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 16px; font-size: 13px; color: var(--dim);
+    background: rgba(255, 255, 255, .03);
+  }
+  .badge b { color: var(--accent); font-weight: 600; }
+  h1 {
+    margin: 26px 0 18px; font-size: clamp(34px, 6vw, 58px);
+    line-height: 1.25; font-weight: 800; letter-spacing: 1px;
+  }
+  h1 .grad {
+    background: linear-gradient(100deg, var(--primary) 10%, var(--primary-2) 55%, var(--accent) 95%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .sub { color: var(--dim); font-size: 18px; max-width: 640px; margin: 0 auto 36px; }
+  .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 30px; border-radius: 10px; font-size: 15px; font-weight: 600;
+    transition: transform .15s, box-shadow .15s;
+  }
+  .btn:hover { transform: translateY(-2px); }
+  .btn-primary {
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    color: #fff; box-shadow: 0 8px 26px rgba(79, 140, 255, .35);
+  }
+  .btn-ghost { border: 1px solid var(--border); color: var(--text); background: rgba(255,255,255,.03); }
+  .btn-ghost:hover { border-color: var(--primary); }
+
+  /* ===== 数据源跑马灯 ===== */
+  .sources { padding: 8px 0 70px; text-align: center; }
+  .sources-label { font-size: 13px; color: var(--dim); letter-spacing: 2px; margin-bottom: 22px; }
+  .source-chips { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; max-width: 860px; margin: 0 auto; }
+  .chip {
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 6px 18px; font-size: 14px; color: var(--dim);
+    background: var(--card);
+  }
+  .chip:nth-child(odd) { color: var(--text); }
+
+  /* ===== 区块通用 ===== */
+  section { padding: 80px 0; }
+  .sec-title { text-align: center; font-size: clamp(26px, 4vw, 36px); font-weight: 800; margin-bottom: 12px; }
+  .sec-sub { text-align: center; color: var(--dim); margin-bottom: 52px; font-size: 16px; }
+
+  /* ===== 特性网格 ===== */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+  .feature {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 28px 26px; transition: transform .2s, border-color .2s;
+  }
+  .feature:hover { transform: translateY(-4px); border-color: rgba(79, 140, 255, .45); }
+  .feature .icon {
+    width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center;
+    margin-bottom: 16px; font-size: 21px;
+    background: linear-gradient(135deg, rgba(79,140,255,.18), rgba(124,92,255,.18));
+  }
+  .feature h3 { font-size: 17px; margin-bottom: 8px; }
+  .feature p { color: var(--dim); font-size: 14.5px; }
+
+  /* ===== 编辑器演示 ===== */
+  .demo {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
+  }
+  .demo-bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: #0d1420; }
+  .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .demo-title { margin-left: 10px; font-size: 13px; color: var(--dim); }
+  .demo-body { display: grid; grid-template-columns: 1fr 1fr; }
+  .demo-pane { padding: 20px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 13.5px; }
+  .demo-pane + .demo-pane { border-left: 1px solid var(--border); }
+  .pane-label { font-size: 12px; color: var(--dim); margin-bottom: 10px; letter-spacing: 1px; }
+  .kw { color: #7c9bff; } .str { color: #7ee2a8; } .cm { color: #5b6b84; font-style: italic; } .num { color: #f0b26b; }
+  .demo-result { color: var(--text); }
+  .demo-result table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  .demo-result th, .demo-result td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+  .demo-result th { color: var(--dim); font-weight: 500; background: rgba(255,255,255,.02); }
+  .demo-foot { padding: 10px 20px; border-top: 1px solid var(--border); font-size: 13px; color: var(--dim); display: flex; gap: 18px; flex-wrap: wrap; }
+  .demo-foot b { color: var(--accent); font-weight: 600; }
+
+  /* ===== 工作流 ===== */
+  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; counter-reset: step; }
+  .step {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 26px; position: relative;
+  }
+  .step::before {
+    counter-increment: step; content: counter(step, decimal-leading-zero);
+    font-size: 34px; font-weight: 800;
+    background: linear-gradient(135deg, var(--primary), var(--primary-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    display: block; margin-bottom: 12px;
+  }
+  .step h3 { font-size: 16px; margin-bottom: 8px; }
+  .step p { color: var(--dim); font-size: 14px; }
+
+  /* ===== 安全条 ===== */
+  .safe {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px;
+  }
+  .safe-item {
+    display: flex; gap: 14px; align-items: flex-start;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px;
+  }
+  .safe-item .si { font-size: 22px; flex-shrink: 0; margin-top: 2px; }
+  .safe-item h4 { font-size: 15px; margin-bottom: 4px; }
+  .safe-item p { color: var(--dim); font-size: 13.5px; }
+
+  /* ===== 数字 ===== */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px; text-align: center; }
+  .stat { padding: 30px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+  .stat .n {
+    font-size: 40px; font-weight: 800;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .stat .t { color: var(--dim); font-size: 14px; margin-top: 6px; }
+
+  /* ===== CTA ===== */
+  .final {
+    text-align: center; padding: 90px 0;
+    background:
+      radial-gradient(500px 260px at 50% 0%, rgba(79, 140, 255, .14), transparent 70%),
+      var(--bg-soft);
+    border-top: 1px solid var(--border);
+  }
+  .final h2 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 14px; }
+  .final p { color: var(--dim); margin-bottom: 34px; }
+
+  footer { border-top: 1px solid var(--border); padding: 34px 0; color: var(--dim); font-size: 13.5px; }
+  .foot-inner { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+
+  /* ===== 滚动显现 ===== */
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s, transform .6s; }
+  .reveal.on { opacity: 1; transform: none; }
+
+  /* ===== 功能文档 ===== */
+  .doc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 18px; }
+  .doc {
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 22px 24px;
+  }
+  .doc h3 { margin: 0 0 10px; font-size: 16px; }
+  .doc > p { color: var(--dim); font-size: 13.5px; margin-bottom: 10px; }
+  .doc ul { margin: 0; padding-left: 18px; color: var(--dim); font-size: 13.5px; line-height: 1.95; }
+  .doc li b { color: var(--text); font-weight: 600; }
+  .doc code {
+    background: rgba(79, 140, 255, .12); border: 1px solid var(--border);
+    border-radius: 5px; padding: 1px 6px; font-size: 12.5px; color: var(--accent);
+  }
+
+  /* ===== 功能文档（页内三栏：左目录 / 中正文 / 右本页导航） ===== */
+  /* 默认不出现在滚动流里 —— 只有点导航「文档」进入文档模式才显示 */
+  #docs { display: none; text-align: left; }
+  body.doc-only #docs {
+    display: block;
+    /* 固定定位：锚定顶栏下方铺满视口，不受页面滚动位置影响（此前滚动未归零时面板会顶到 logo 上面） */
+    position: fixed; top: 60px; left: 0; right: 0; bottom: 0;
+    padding: 10px 0; overflow: hidden;
+  }
+  /* 文档模式：点导航「文档」后只显示文档区，其余区块隐藏；导航「首页」/logo 退出 */
+  body.doc-only > *:not(nav):not(#docs) { display: none !important; }
+  /* 赞助：普通区块嵌在安全区之后（不做独占视图） */
+  #sponsor { padding-top: 76px; padding-bottom: 76px; }
+  .sponsor-wrap { display: flex; justify-content: center; }
+  .sponsor-card {
+    max-width: 620px; width: 100%; text-align: center;
+    background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+    padding: 44px 40px;
+  }
+  .sponsor-emoji { font-size: 42px; margin-bottom: 10px; }
+  .sponsor-card h2 { font-size: 24px; font-weight: 800; margin-bottom: 14px; }
+  .sponsor-lead { color: var(--dim); font-size: 14.5px; line-height: 1.9; margin-bottom: 30px; }
+  .qr-row { display: flex; gap: 26px; justify-content: center; margin-bottom: 24px; }
+  .qr-card {
+    width: 190px; padding: 16px; border-radius: 14px;
+    background: #fff; display: flex; flex-direction: column; align-items: center; gap: 10px;
+  }
+  .qr-card img { width: 100%; border-radius: 8px; display: block; }
+  .qr-card.noimg { min-height: 190px; justify-content: center; }
+  .qr-card.noimg::before {
+    content: "收款码图片待放入";
+    color: #94a3b8; font-size: 12px; text-align: center; line-height: 1.8;
+  }
+  .qr-row .qr-card:first-child.noimg::after {
+    content: "website/sponsor-wechat.png";
+    color: #94a3b8; font-size: 11px;
+  }
+  .qr-row .qr-card:last-child.noimg::after {
+    content: "website/sponsor-alipay.png";
+    color: #94a3b8; font-size: 11px;
+  }
+  .qr-label { color: #1e293b; font-weight: 700; font-size: 14px; }
+  .sponsor-note { color: var(--dim); font-size: 13px; }
+  /* 滚动条配色：全局细圆角主题化（目录面板、正文区一致） */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, .28); border-radius: 999px; border: 2px solid var(--bg);
+  }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(79, 140, 255, .55); }
+  html { scrollbar-color: rgba(148, 163, 184, .35) transparent; scrollbar-width: thin; }
+  /* 目录面板滚动条更纤细 */
+  .dtoc::-webkit-scrollbar, .pagenav::-webkit-scrollbar, .doc-main::-webkit-scrollbar { width: 5px; }
+  .dtoc { scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, .3) transparent; }
+  .docs-layout {
+    display: grid; grid-template-columns: 224px minmax(0, 1fr) 192px; gap: 34px;
+    margin-top: 30px; align-items: start;
+  }
+  /* 左右目录：轻面板化，sticky 跟随 */
+  .dtoc, .pagenav {
+    position: sticky; top: 84px; font-size: 14px;
+    max-height: calc(100vh - 116px); overflow-y: auto;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px 12px;
+  }
+  .dtoc { scrollbar-width: thin; }
+  .dtoc .group { margin-bottom: 22px; }
+  .dtoc .group:last-child { margin-bottom: 0; }
+  .dtoc .gt, .pagenav .pt {
+    font-size: 13.5px; color: var(--text); letter-spacing: 1px;
+    margin: 4px 0 8px; padding-left: 10px; font-weight: 700;
+  }
+  .dtoc a { display: block; padding: 6px 10px; border-radius: 7px; color: var(--dim); transition: color .12s, background .12s; }
+  /* 社区说明：社区暂未建立的联系方式小字 */
+  .dtoc-note { padding: 4px 10px; font-size: 13.5px; color: var(--dim); line-height: 1.9; }
+  .dtoc-note a { display: inline; padding: 0; color: var(--primary); }
+  .dtoc-note a:hover { color: var(--accent); background: none; }
+  .pagenav a {
+    display: block; padding: 4px 0 4px 12px; color: var(--dim);
+    border-left: 2px solid var(--border); transition: color .12s, border-color .12s;
+  }
+  .dtoc a:hover, .pagenav a:hover { color: var(--text); background: rgba(148, 163, 184, .08); }
+  .pagenav a:hover { background: none; }
+  .dtoc a.active { color: var(--primary); background: rgba(79, 140, 255, .12); font-weight: 600; }
+  .pagenav a.active { color: var(--primary); background: none; border-left-color: var(--primary); font-weight: 600; }
+  /* 正文：面板化（与左右目录同边框风格）+ 限行宽 */
+  .doc-main {
+    min-width: 0; background: var(--panel);
+    border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 24px 30px 30px;
+  }
+  .doc-main h2 {
+    position: relative; font-size: 21px; font-weight: 800;
+    margin: 42px 0 16px; padding: 2px 0 2px 16px; letter-spacing: .3px;
+  }
+  .doc-main h2::before {
+    content: ""; position: absolute; left: 0; top: 5px; bottom: 5px; width: 4px;
+    border-radius: 2px; background: linear-gradient(180deg, var(--primary), var(--primary-2));
+  }
+  .doc-main h2:first-of-type { margin-top: 0; }
+  .doc-main h2:first-of-type { margin-top: 0; }
+  .doc-main p { color: #c3cbdb; margin-bottom: 14px; font-size: 14px; line-height: 1.85; }
+  .doc-main ul { margin: 8px 0 18px; padding-left: 20px; color: #c3cbdb; font-size: 14px; line-height: 1.85; }
+  .doc-main li { margin-bottom: 9px; }
+  .doc-main li::marker { color: var(--primary); }
+  .doc-main li b { color: var(--text); font-weight: 600; }
+  .doc-main code {
+    background: rgba(79, 140, 255, .12); border: 1px solid var(--border); border-radius: 5px;
+    padding: 1px 7px; font-size: 13px; color: var(--accent);
+    font-family: "SF Mono", ui-monospace, Consolas, monospace;
+  }
+  .doc-main pre {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px 20px; overflow-x: auto; margin: 14px 0 18px; font-size: 13.5px; line-height: 1.8;
+  }
+  .doc-main pre code { background: none; border: none; padding: 0; color: #a8c7ff; }
+  .doc-main .tip {
+    background: rgba(45, 212, 191, .07); border: 1px solid rgba(45, 212, 191, .25);
+    border-radius: var(--radius); padding: 13px 18px; margin: 14px 0 20px; font-size: 14px; color: #b7e8e0;
+  }
+  .doc-main .tip b { color: var(--accent); }
+  .doc-main .dlink { color: var(--primary); }
+  .doc-main .dlink:hover { color: var(--accent); }
+  .doc-main .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+  .doc-main .fcard { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 17px; transition: border-color .15s, transform .15s; }
+  .doc-main .fcard:hover { border-color: rgba(79, 140, 255, .45); transform: translateY(-2px); }
+  .doc-main .fcard b { display: block; margin-bottom: 5px; font-size: 13.5px; color: var(--text); }
+  .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
+  /* 文档模式：flex 等高三栏（stretch 保证顶底严格对齐），中间正文内部滚动。
+     容器已固定定位：.wrap 与 .docs-layout 都限高 100%，底部 10px 边距才不会被长内容撑破 */
+  body.doc-only #docs .wrap { height: 100%; }
+  body.doc-only .docs-layout {
+    display: flex; align-items: stretch;
+    gap: 34px;
+    margin: 0 !important; padding: 0 !important;
+    height: 100%; box-sizing: border-box;
+  }
+  /* 文档模式下顶栏与内容区同宽（1120 容器），logo 左缘与左目录面板对齐 */
+  body.doc-only .top-inner { max-width: 1120px; }
+  body.doc-only .dtoc { position: static; top: auto; flex: 0 0 224px; height: auto; max-height: none; min-height: 0; }
+  body.doc-only .pagenav { position: static; top: auto; flex: 0 0 192px; height: auto; max-height: none; min-height: 0; }
+  body.doc-only .doc-main { flex: 1 1 0; min-width: 0; height: auto; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.22) transparent; }
+  /* 正文面板滚动条：细而淡，不抢视觉 */
+  .doc-main::-webkit-scrollbar { width: 6px; }
+  .doc-main::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, .18); border: none; border-radius: 999px; }
+  .doc-main::-webkit-scrollbar-thumb:hover { background: rgba(79, 140, 255, .45); }
+  .doc-main::-webkit-scrollbar-track { background: transparent; }
+  .doc-link {
+    display: inline-block; margin-top: 12px; font-size: 13px;
+    color: var(--primary); font-weight: 600;
+  }
+  .doc-link:hover { color: var(--accent); }
+
+  @media (max-width: 1100px) {
+    .docs-layout { grid-template-columns: 200px minmax(0, 1fr); }
+    .pagenav { display: none; }
+  }
+  @media (max-width: 760px) {
+    .nav-links a:not(.nav-cta) { display: none; }
+    .demo-body { grid-template-columns: 1fr; }
+    .demo-pane + .demo-pane { border-left: none; border-top: 1px solid var(--border); }
+    .doc-grid { grid-template-columns: 1fr; }
+    .docs-layout { grid-template-columns: 1fr; }
+    .dtoc { position: static; max-height: none; }
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <a class="logo" href="#"><img class="logo-mark" src="logo.png" alt="DBmind" />DBmind</a>
+    <div class="nav-links">
+      <a href="#">首页</a>
+      <a href="#features">功能</a>
+      <a href="#workflow">工作流</a>
+      <a href="#security">安全</a>
+      <a href="#sponsor">赞助</a>
+      <a href="#docs">文档</a>
+      <a href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener" class="nav-cta">立即下载</a>
+    </div>
+  </div>
+</nav>
+
+<header>
+  <div class="wrap">
+    <h1>给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的每一个数据库</h1>
+    <p class="sub">
+      <b>DBmind = Database + Mind</b>：给数据库装上「大脑」——
+      MySQL、PostgreSQL、Oracle、ClickHouse、Redis…… 收进同一块屏幕，
+      AI 帮你解释、优化、修好每一条 SQL；事务级数据编辑、千万级结果集秒开。
+    </p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener">免费下载</a>
+      <a class="btn btn-ghost" href="#features">看看能做什么 ↓</a>
+    </div>
+  </div>
+</header>
+
+<div class="sources reveal">
+  <div class="sources-label">— 开箱即用的数据源 —</div>
+  <div class="source-chips">
+    <span class="chip">MySQL</span><span class="chip">PostgreSQL</span><span class="chip">Oracle</span>
+    <span class="chip">SQL Server</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
+    <span class="chip">MariaDB</span><span class="chip">达梦 DM</span><span class="chip">人大金仓</span>
+    <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
+    <span class="chip">DB2</span><span class="chip">Derby</span><span class="chip">Doris</span>
+    <span class="chip">SQLite</span><span class="chip">H2</span><span class="chip">DuckDB</span>
+    <span class="chip">更多接入中…</span>
+  </div>
+</div>
+
+<section style="padding-top: 0;">
+  <div class="wrap">
+    <div class="stats reveal">
+      <div class="stat"><div class="n">17+</div><div class="t">数据源驱动开箱即用</div></div>
+      <div class="stat"><div class="n">18×</div><div class="t">结果集传输压缩比</div></div>
+      <div class="stat"><div class="n">0</div><div class="t">数据上云（全程本地）</div></div>
+      <div class="stat"><div class="n">&lt;1s</div><div class="t">千万级表首屏响应</div></div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2 class="sec-title reveal">为「每天写 SQL 的人」打造</h2>
+    <p class="sec-sub reveal">围绕真实任务组织，而不是堆功能清单 —— 每一项都有详细文档</p>
+    <div class="grid">
+      <div class="feature reveal">
+        <div class="icon">⌨️</div>
+        <h3>智能 SQL 编辑器</h3>
+        <p>基于 Monaco（VS Code 同款内核）：补全、格式化、多语句分块执行、逐段计时条、执行历史、SQL 片段库、模板变量 —— 大脚本也能条理清楚地跑。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">🤖</div>
+        <h3>AI 全程加持</h3>
+        <p>选段解释 / 优化 / 修错 / 诊断 / 自由对话，AI 给出的 SQL 先「看执行计划、试跑一次」再落地，吃进去的数据不出你的网络。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">🛡️</div>
+        <h3>事务模式</h3>
+        <p>一键开启：所有写语句不再自动提交。改完自查、不满意回滚、确认后提交 —— 配合其他会话的可见性规则，改数据不再心惊胆战。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">✏️</div>
+        <h3>结果集直接编辑</h3>
+        <p>双击单元格改值、攒缓冲、一次提交。WHERE 条件自动生成（优先主键，否则全列定位）；翻页重跑后过期缓冲自动作废，绝不改错行。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">⚡</div>
+        <h3>千万级结果集秒开</h3>
+        <p>虚拟滚动 + 服务端分页 + 响应压缩（实测 4.2MB → 233KB）。总数异步统计不阻塞数据回显，大 JOIN 也能 1 秒见数。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">📊</div>
+        <h3>数据透视与传输</h3>
+        <p>框选即汇总（计数/求和/均值/最值）、分组下钻透视；导出 CSV / Excel / JSON / INSERT，长任务后台跑、完成系统通知。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section style="padding-top: 0;">
+  <div class="wrap">
+    <div class="demo reveal">
+      <div class="demo-bar">
+        <span class="dot" style="background:#f87171"></span>
+        <span class="dot" style="background:#f59e0b"></span>
+        <span class="dot" style="background:#34d399"></span>
+        <span class="demo-title">脚本 1 — mysql · 公司生产库 🔒PROD</span>
+      </div>
+      <div class="demo-body">
+        <div class="demo-pane">
+          <div class="pane-label">编辑器</div>
+<pre><span class="cm">-- 模板变量：执行时填参，值按名称记忆</span>
+<span class="kw">SELECT</span> o.id, o.amount, c.name
+<span class="kw">FROM</span> orders o
+<span class="kw">LEFT JOIN</span> customer c <span class="kw">ON</span> o.cid = c.id
+<span class="kw">WHERE</span> o.dt = <span class="str">:dt</span> <span class="kw">AND</span> o.org = <span class="str">:org</span>;</pre>
+          <div class="pane-label" style="margin-top:16px">AI · 一句话解释</div>
+          <div style="color:var(--dim); font-size:13px;">这条 JOIN 按 dt 过滤后走索引 → 关联列双方都有索引，预计扫描 1.2 万行 ✓</div>
+        </div>
+        <div class="demo-pane demo-result">
+          <div class="pane-label">结果</div>
+          <table>
+            <tr><th>id</th><th>amount</th><th>name</th></tr>
+            <tr><td>1001</td><td>288.00</td><td>杭州·张三</td></tr>
+            <tr><td>1002</td><td>1,024.50</td><td>上海·李四</td></tr>
+            <tr><td>1003</td><td>66.00</td><td>深圳·王五</td></tr>
+          </table>
+        </div>
+      </div>
+      <div class="demo-foot">
+        <span>耗时 <b>505 ms</b></span>
+        <span>共 <b>3,175,128</b> 条（异步统计，不阻塞回显）</span>
+        <span>双击单元格即可修改 → 事务提交</span>
+        <span>🔒 生产库：写操作二次确认</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="workflow" style="background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+  <div class="wrap">
+    <h2 class="sec-title reveal">改数据的安全闭环</h2>
+    <p class="sec-sub reveal">四个动作，把「手抖删库」挡在门外</p>
+    <div class="flow">
+      <div class="step reveal"><h3>开启事务</h3><p>写语句不再自动提交，编辑器独占这条会话，改了随时反悔。</p></div>
+      <div class="step reveal"><h3>改 &amp; 自查</h3><p>双击单元格直接改，或跑 UPDATE；同一会话立即能看到结果。</p></div>
+      <div class="step reveal"><h3>回滚 或 提交</h3><p>不满意一键回滚，什么都没发生；确认后提交，其他会话才可见。</p></div>
+      <div class="step reveal"><h3>全程留痕</h3><p>每个事务动作进审计历史；关闭页签前还会提醒未提交的事务。</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="security">
+  <div class="wrap">
+    <h2 class="sec-title reveal">生产库保护，默认就位</h2>
+    <p class="sec-sub reveal">连接标记为生产环境的那一刻，防线自动升起</p>
+    <div class="safe">
+      <div class="safe-item reveal"><span class="si">🏷️</span><div><h4>PROD 标记外显</h4><p>页签、下拉、树全程可见，连错库这件事从源头消失。</p></div></div>
+      <div class="safe-item reveal"><span class="si">✋</span><div><h4>写操作二次确认</h4><p>PROD 连接上的 INSERT / UPDATE / DROP 先预览影响，确认才执行。</p></div></div>
+      <div class="safe-item reveal"><span class="si">⏱️</span><div><h4>超时与行数预算</h4><p>单语句超时、返回行数上限，误点 SELECT * 也不会拖死客户端。</p></div></div>
+      <div class="safe-item reveal"><span class="si">📜</span><div><h4>执行审计</h4><p>执行历史带耗时与状态，事务动作全留痕，事后可追溯。</p></div></div>
+    </div>
+  </div>
+</section>
+
+<section id="sponsor">
+  <div class="wrap sponsor-wrap">
+    <div class="sponsor-card reveal">
+      <div class="sponsor-emoji">☕</div>
+      <h2>请作者喝杯咖啡</h2>
+      <p class="sponsor-lead">
+        DBmind 免费使用，不联网收集任何数据。
+        如果它帮你省下了时间、少加了班，欢迎请作者喝杯咖啡 —— 每一份支持都是继续打磨功能的动力。
+      </p>
+      <div class="qr-row">
+        <div class="qr-card">
+          <img src="sponsor-wechat.png" alt="微信赞赏码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
+          <span class="qr-label">微信</span>
+        </div>
+        <div class="qr-card">
+          <img src="sponsor-alipay.png" alt="支付宝收款码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
+          <span class="qr-label">支付宝</span>
+        </div>
+      </div>
+      <p class="sponsor-note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
+    </div>
+  </div>
+</section>
+
+
+<section id="docs">
+  <div class="wrap">
+    <div class="docs-layout reveal">
+      <nav class="dtoc">
+        <div class="group">
+          <div class="gt">介绍</div>
+          <a href="#d-what">什么是 DBmind？</a>
+          <a href="#d-overview">核心特性一览</a>
+        </div>
+        <div class="group">
+          <div class="gt">快速开始</div>
+          <a href="#d-install">下载与安装</a>
+          <a href="#d-conn">创建第一个连接</a>
+          <a href="#d-sql">执行第一条 SQL</a>
+        </div>
+        <div class="group">
+          <div class="gt">核心工作流</div>
+          <a href="#d-editor">SQL 编辑器</a>
+          <a href="#d-ai">AI 助手</a>
+          <a href="#d-grid">结果表格与数据编辑</a>
+          <a href="#d-tx">事务模式</a>
+          <a href="#d-browser">对象浏览器</a>
+        </div>
+        <div class="group">
+          <div class="gt">效率工具</div>
+          <a href="#d-vars">模板变量</a>
+          <a href="#d-snippets">SQL 片段库</a>
+          <a href="#d-pivot">数据透视</a>
+          <a href="#d-export">导出与传输</a>
+        </div>
+        <div class="group">
+          <div class="gt">安全与运维</div>
+          <a href="#d-security">安全护栏</a>
+          <a href="#d-drivers">驱动管理</a>
+          <a href="#d-audit">执行审计</a>
+        </div>
+        <div class="group">
+          <div class="gt">常见问题</div>
+          <a href="#d-faq">FAQ</a>
+        </div>
+        <div class="group">
+          <div class="gt">社区</div>
+          <a href="#d-community">社区说明</a>
+          <a href="https://github.com/rick-works/dbmind/issues" target="_blank" rel="noopener">GitHub Issues</a>
+          <a href="mailto:13604181707@163.com">邮件反馈</a>
+        </div>
+      </nav>
+
+      <main class="doc-main">
+        <h2 id="d-what">什么是 DBmind？</h2>
+        <p><b>DBmind = Database + Mind</b>：给数据库装上「大脑」的统一管理工作台。它把连接管理、SQL 编辑、数据表格、AI 助手、事务与安全护栏放进同一个客户端，开箱即用。</p>
+        <p>DBmind 不绑定某一种数据库：MySQL、PostgreSQL、Oracle、SQL Server、ClickHouse、Redis、MongoDB、达梦、人大金仓等 17+ 种数据源共用一套操作习惯 —— 学一次，到处用。</p>
+        <div class="tip"><b>提示</b>：一切数据都留在你自己的网络里，AI 调用只发送你显式选中的内容。</div>
+
+        <h2 id="d-overview">核心特性一览</h2>
+        <div class="feature-grid">
+          <div class="fcard"><b>⌨️ 智能 SQL 编辑器</b><span>VS Code 同款内核：上下文补全、格式化、分块执行、执行历史。</span></div>
+          <div class="fcard"><b>🤖 AI 助手</b><span>解释 / 优化 / 修错 / 诊断 / 问答，给出的 SQL 可先看执行计划再落地。</span></div>
+          <div class="fcard"><b>🛡️ 事务模式</b><span>写语句不再自动提交：先改、自查、回滚或提交，安全闭环。</span></div>
+          <div class="fcard"><b>✏️ 结果集直接编辑</b><span>双击改值、缓冲提交，快照守卫绝不改错行。</span></div>
+          <div class="fcard"><b>⚡ 千万级结果集</b><span>虚拟滚动 + 服务端分页 + 18× 压缩，首屏 &lt;1s。</span></div>
+          <div class="fcard"><b>📊 透视与导出</b><span>框选即汇总、分组下钻；CSV / Excel / JSON / INSERT 导出。</span></div>
+        </div>
+
+        <h2 id="d-install">下载与安装</h2>
+        <p>前往 <a class="dlink" href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener">GitHub Releases</a> 下载对应平台的安装包（Windows / macOS / Linux），双击安装，开箱即用。</p>
+        <ul>
+          <li>无需注册账号，无需配置云端服务</li>
+          <li>首次连接某类型数据库时会<b>自动下载对应驱动</b></li>
+        </ul>
+
+        <h2 id="d-conn">创建第一个连接</h2>
+        <ul>
+          <li>左侧树点「<b>新建连接</b>」，选择数据库类型，填入主机 / 端口 / 账号密码</li>
+          <li>内网环境可在 设置 → 驱动镜像 换成内网仓库地址</li>
+          <li>连接可分组管理；生产库建议开启 <b>PROD 标记</b>，界面有醒目颜色提醒</li>
+        </ul>
+
+        <h2 id="d-sql">执行第一条 SQL</h2>
+        <pre><code>-- 光标在这条语句内时，Ctrl+Enter 只执行这一条
+SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
+        <ul>
+          <li>语句里有 <code>:name</code> 占位符时，执行前弹窗填参（见<a class="dlink" href="#d-vars">模板变量</a>）</li>
+          <li>多语句脚本自动分块执行，每段独立计时</li>
+        </ul>
+
+        <h2 id="d-editor">SQL 编辑器</h2>
+        <ul>
+          <li><b>上下文补全</b>：按光标位置提示表 / 列 / 关键字，库结构变更实时刷新</li>
+          <li><b>分块执行</b>：光标语句或选中片段单独跑；「执行全部」跑整篇脚本</li>
+          <li><b>格式化</b>：整篇或仅选中段，一键整理混乱 SQL</li>
+          <li><b>执行历史</b>：本地保存最近执行的 SQL，下拉一键回填</li>
+        </ul>
+
+        <h2 id="d-ai">AI 助手</h2>
+        <ul>
+          <li><b>解释</b>：选中 SQL，让 AI 逐段讲清在做什么、影响哪些表</li>
+          <li><b>优化</b>：给出改写建议与索引建议，可先看执行计划对比</li>
+          <li><b>修错</b>：语句报错后一键让 AI 修复，结果直接回填编辑器</li>
+          <li><b>诊断 / 问答</b>：性能定位与自由对话，AI 结合库结构给出可执行答案</li>
+        </ul>
+        <div class="tip"><b>安全边界</b>：AI 给出的 SQL 会先「看执行计划、试跑一次」再由你决定是否执行。</div>
+
+        <h2 id="d-grid">结果表格与数据编辑</h2>
+        <ul>
+          <li><b>虚拟滚动</b>：百万行丝滑滚动不卡顿；单元格完整内容悬浮查看</li>
+          <li><b>双击改值</b>：改动先记入缓冲，底栏汇总后一次批量提交</li>
+          <li><b>快照守卫</b>：翻页 / 重跑后过期缓冲自动作废，绝不改错行</li>
+          <li><b>JOIN 支持</b>：关联查询请你选择目标表，工具不瞎猜列归属</li>
+        </ul>
+
+        <h2 id="d-tx">事务模式</h2>
+        <ul>
+          <li>工具栏点「<b>事务</b>」开启：本会话所有写语句不再自动提交</li>
+          <li>事务内修改自己随时可查，其他会话看不到 —— 先改、先自查</li>
+          <li>满意「<b>提交</b>」落地；不满意「<b>回滚</b>」全部消失，全程留痕</li>
+          <li>有未提交事务时关页签 / 关窗口弹窗确认，防止误关丢改动</li>
+        </ul>
+
+        <h2 id="d-browser">对象浏览器</h2>
+        <ul>
+          <li>左侧树按「连接 → 数据库 → Schema → 表 / 视图」展开</li>
+          <li>表结构、索引、DDL 一键查看；双击表名插入编辑器</li>
+        </ul>
+
+        <h2 id="d-vars">模板变量</h2>
+        <p>把重复查询变成填空题：SQL 里写 <code>:name</code> 占位符，执行前弹窗填参。</p>
+        <pre><code>SELECT * FROM orders
+WHERE dt = :dt AND org = :org;</code></pre>
+        <ul>
+          <li>字符串字面量里的冒号不误判（<code>'12:30'</code> 安全）</li>
+          <li>数字直写、<code>null</code> 置 NULL、其余按字符串转义</li>
+          <li>参数值按名称记忆（本地保存），下次自动带上</li>
+        </ul>
+
+        <h2 id="d-snippets">SQL 片段库</h2>
+        <ul>
+          <li>选中 SQL → 工具栏「片段 → 存为片段」，命名保存（未选中存全文）</li>
+          <li>跨会话保留在本地；点击插入：有选区替换选区，否则插到光标处</li>
+        </ul>
+
+        <h2 id="d-pivot">数据透视</h2>
+        <ul>
+          <li>结果表格里框选区域 → 一键汇总：计数 / 求和 / 均值 / 最值</li>
+          <li>按列分组透视、下钻查看明细；纯前端计算不耗数据库资源</li>
+        </ul>
+
+        <h2 id="d-export">导出与传输</h2>
+        <ul>
+          <li><b>导出格式</b>：CSV / Excel / JSON / INSERT 语句</li>
+          <li><b>长任务后台跑</b>：大数据量导出不占界面，完成系统通知</li>
+          <li><b>结构 / 数据传输与对比</b>：跨库搬表、差异比对</li>
+        </ul>
+
+        <h2 id="d-security">安全护栏</h2>
+        <ul>
+          <li><b>PROD 标记</b>：生产连接显式标识，误操作前多看一眼</li>
+          <li><b>写操作确认</b>：UPDATE / DELETE 执行前二次确认</li>
+          <li><b>超时与行数预算</b>：可配置单查询最大执行时间与返回行数</li>
+        </ul>
+
+        <h2 id="d-drivers">驱动管理</h2>
+        <ul>
+          <li>首次连接自动从 Maven 下载对应 JDBC 驱动并缓存</li>
+          <li>内网环境切换镜像地址，或手动放入驱动 jar</li>
+        </ul>
+
+        <h2 id="d-audit">执行审计</h2>
+        <ul>
+          <li>每条执行过的语句自动留痕：语句、目标库、耗时、成功与否</li>
+          <li>事务的开启 / 提交 / 回滚同样留痕，可追溯</li>
+        </ul>
+
+        <h2 id="d-faq">常见问题</h2>
+        <ul>
+          <li><b>「驱动宿主未就绪」？</b>宿主需要 Java 17+，启动脚本会自动探测并固定；也可设 <code>DBMIND_JAVA</code> 指向 Java 17+</li>
+          <li><b>内网无法下载驱动？</b>切换驱动镜像到内网仓库，或手动放入数据目录的 <code>drivers/</code></li>
+          <li><b>事务按钮不显示？</b>SQLite 等嵌入式引擎没有会话级事务，按钮自动隐藏</li>
+          <li><b>编辑提交报「缓冲已失效」？</b>翻页 / 重跑后行号基准变了，重新双击编辑即可 —— 这是防改错行的保护</li>
+        </ul>
+
+        <h2 id="d-community">社区</h2>
+        <p>社区暂未建立。使用中遇到问题、有功能建议，欢迎通过以下方式联系我们：</p>
+        <ul>
+          <li><b>GitHub Issues</b>：<a class="dlink" href="https://github.com/rick-works/dbmind/issues" target="_blank" rel="noopener">github.com/rick-works/dbmind/issues</a> —— 提问、报 Bug、提建议</li>
+          <li><b>邮件</b>：<a class="dlink" href="mailto:13604181707@163.com">13604181707@163.com</a></li>
+        </ul>
+        <p>也欢迎加入我们一起建设 DBmind —— 文档、翻译、驱动适配、功能开发，每一份贡献都算数。</p>
+      </main>
+
+      <aside class="pagenav">
+        <div class="pt">本页目录</div>
+        <a href="#d-what">什么是 DBmind？</a>
+        <a href="#d-overview">核心特性一览</a>
+        <a href="#d-install">下载与安装</a>
+        <a href="#d-conn">创建第一个连接</a>
+        <a href="#d-sql">执行第一条 SQL</a>
+        <a href="#d-editor">SQL 编辑器</a>
+        <a href="#d-ai">AI 助手</a>
+        <a href="#d-grid">结果表格与数据编辑</a>
+        <a href="#d-tx">事务模式</a>
+        <a href="#d-browser">对象浏览器</a>
+        <a href="#d-vars">模板变量</a>
+        <a href="#d-snippets">SQL 片段库</a>
+        <a href="#d-pivot">数据透视</a>
+        <a href="#d-export">导出与传输</a>
+        <a href="#d-security">安全护栏</a>
+        <a href="#d-drivers">驱动管理</a>
+        <a href="#d-audit">执行审计</a>
+        <a href="#d-faq">常见问题</a>
+        <a href="#d-community">社区</a>
+      </aside>
+    </div>
+  </div>
+</section>
+
+
+<section id="download" class="final">
+  <div class="wrap">
+    <h2>准备试试 DBmind？</h2>
+    <p>免费使用 · Windows / macOS / Linux · 无需注册，下载即用</p>
+    <div class="cta-row">
+      <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener">前往 GitHub 下载</a>
+      <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">查看源码仓库</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap foot-inner">
+    <span>© 2026 DBmind · 给数据库装上「大脑」的客户端</span>
+  </div>
+</footer>
+
+<script>
+  // 滚动显现
+  const io = new IntersectionObserver((es) => {
+    es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('on'); io.unobserve(e.target) } })
+  }, { threshold: .12 })
+  document.querySelectorAll('.reveal').forEach(el => io.observe(el))
+
+  // 导航高亮：滚动到哪个区块，对应导航项点亮（顶部时点亮「首页」）
+  // 值 = 导航项下标（首页0 功能1 工作流2 安全3 赞助4 文档5）
+  const navMap = { features: 1, workflow: 2, security: 3, docs: 5 }
+  const navItems = [...document.querySelectorAll('.nav-links a:not(.nav-cta)')]
+  const setActive = (i) => navItems.forEach((a, j) => a.classList.toggle('active', j === i))
+  setActive(0)
+  const secIo = new IntersectionObserver((es) => {
+    es.forEach(e => {
+      if (!e.isIntersecting) return
+      const i = navMap[e.target.id]
+      if (i !== undefined) setActive(i)
+    })
+  }, { rootMargin: '-45% 0px -50% 0px' })
+  Object.keys(navMap).forEach(id => { const el = document.getElementById(id); if (el) secIo.observe(el) })
+
+  // 文档区内小节高亮：滚动到哪节，左目录与右「本页目录」同步点亮
+  const docLinks = [...document.querySelectorAll('.dtoc a, .pagenav a')]
+  const hlById = (id) => docLinks.filter(a => a.getAttribute('href') === '#' + id)
+  const docIo = new IntersectionObserver((es) => {
+    es.forEach(e => {
+      if (!e.isIntersecting) return
+      docLinks.forEach(a => a.classList.remove('active'))
+      hlById(e.target.id).forEach(a => a.classList.add('active'))
+    })
+  }, { rootMargin: '-70px 0px -72% 0px' })
+  document.querySelectorAll('.doc-main h2[id]').forEach(h => docIo.observe(h))
+
+  // 文档模式：只显示文档区（导航「文档」/功能卡「查看文档」进入，「首页」/logo 退出）
+  const enterDocMode = () => {
+    document.body.classList.add('doc-only')
+    setActive(5)
+    // instant：平滑滚动在内容高度骤减时会停留在中途，面板顶部被顶栏盖住
+    window.scrollTo({ top: 0, behavior: 'instant' })
+    // 清掉 URL 里的 hash：刷新一律回首页，不留文档视图状态
+    history.replaceState(null, '', location.pathname + location.search)
+    // 直入（带 #docs 打开）时滚动渐入动画可能未触发 —— 强制显示文档区内容
+    document.querySelectorAll('#docs .reveal').forEach(el => el.classList.add('on'))
+  }
+  const exitDocMode = () => {
+    document.body.classList.remove('doc-only')
+    setActive(0)
+  }
+  // 赞助不再使用独占视图：作为普通区块嵌在安全区之后（导航锚点直接滚动过去）
+  document.querySelectorAll('a[href="#docs"]').forEach(a => {
+    a.addEventListener('click', (ev) => { ev.preventDefault(); enterDocMode() })
+  })
+  navItems[0].addEventListener('click', exitDocMode)
+  document.querySelector('.logo').addEventListener('click', exitDocMode)
+  // 文档模式下点「功能 / 工作流 / 安全 / 赞助」：先退出独占视图，让默认锚点跳转滚到对应区块
+  ;[1, 2, 3, 4].forEach(i => navItems[i].addEventListener('click', () => {
+    document.body.classList.remove('doc-only')
+  }))
+  // 刷新一律回首页：不按 hash 直开文档视图（进入视图时会清掉 URL hash）
+  // 回到顶部时点亮「首页」（文档模式下保持「文档」点亮）
+  window.addEventListener('scroll', () => {
+    if (window.scrollY < 300) setActive(document.body.classList.contains('doc-only') ? 5 : 0)
+  }, { passive: true })
+</script>
+</body>
+</html>

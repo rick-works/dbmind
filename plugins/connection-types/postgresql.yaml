@@ -1,0 +1,42 @@
+schemaVersion: 1
+order: 300
+dbType: postgresql
+rustVariant: Postgresql
+label: PostgreSQL
+dialect: PostgreSQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: postgresql
+driverStoreVisible: true
+driverStoreOrder: 3
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 4
+skipTcpProbe: false
+localFile: false
+defaultPort: 5432
+jdbc:
+  driverClass: org.postgresql.Driver
+  urlTemplate: "jdbc:postgresql://{host}:{port}/{database}"
+  artifact: org.postgresql:postgresql:42.7.4
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

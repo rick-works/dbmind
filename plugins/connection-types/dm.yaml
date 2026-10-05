@@ -1,0 +1,42 @@
+schemaVersion: 1
+order: 1000
+dbType: dm
+rustVariant: Dm
+label: 达梦 DM
+dialect: Oracle
+runtimeMode: agent
+mcpMode: bridge
+agentKey: dm
+driverStoreVisible: true
+driverStoreOrder: 10
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 4
+skipTcpProbe: false
+localFile: false
+defaultPort: 5236
+jdbc:
+  driverClass: dm.jdbc.driver.DmDriver
+  urlTemplate: "jdbc:dm://{host}:{port}/{database}"
+  artifact: com.dameng:DmJdbcDriver18:8.1.3.140
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: false
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: false
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

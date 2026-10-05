@@ -1,0 +1,56 @@
+schemaVersion: 1
+order: 800
+dbType: clickhouse
+rustVariant: Clickhouse
+label: ClickHouse
+dialect: ClickHouse
+runtimeMode: agent
+mcpMode: bridge
+agentKey: clickhouse
+driverStoreVisible: true
+driverStoreOrder: 8
+singleConnectionPool: false
+metadataConnectionScoped: false
+# 并发上限：连接走 HTTP（无状态、廉价），分析查询也天然并发 ⇒ 给 8。
+# 这是判断，不是实测（本机没有集群可压）。
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+defaultPort: 8123
+jdbc:
+  driverClass: com.clickhouse.jdbc.ClickHouseDriver
+  # compress=0：驱动默认开 LZ4，缺 lz4-java 时握手会失败（打开库时报 "Magic is not correct" 一类
+  # IOException）。这一项仍强制补上。
+  urlTemplate: "jdbc:clickhouse://{host}:{port}/{database}?compress=0"
+  # artifact **必须带 `all` 分类器**：默认包是瘦包（1 MB），缺 slf4j /
+  # clickhouse-http-client 等传递依赖，装载时直接 NoClassDefFoundError:
+  # org/slf4j/LoggerFactory（实测），而「驱动已就绪」只看 jar 在不在 ——
+  # 结果是界面绿灯、连接才炸。`all` 包 8.4 MB，自带全部依赖。
+  # 注意与上面 compress=0 是两码事：那条治握手失败，这条治「类根本装载不起来」。
+  artifact: com.clickhouse:clickhouse-jdbc:0.7.2:all
+  # 额外依赖：`all` 包**不含 slf4j**（它把 slf4j 当 provided），而 ClickHouseDriver
+  # 的静态块第一句就是 LoggerFactory.getLogger —— 少了它就装载失败（实测
+  # ClassNotFoundException: org/slf4j/LoggerFactory）。同目录的 jar 会一起进宿主 classpath。
+  artifacts:
+    - org.slf4j:slf4j-api:1.7.36
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: false
+  tableDataEdit: false
+  tableStructureEdit: false
+  tableImport: false
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: false
+  driverManagement: true

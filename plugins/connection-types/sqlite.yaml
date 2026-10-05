@@ -1,0 +1,35 @@
+schemaVersion: 1
+order: 100
+dbType: sqlite
+rustVariant: Sqlite
+label: SQLite
+dialect: SQLite
+runtimeMode: native
+mcpMode: bridge
+driverStoreVisible: true
+driverStoreOrder: 1
+singleConnectionPool: true
+metadataConnectionScoped: false
+skipTcpProbe: true
+localFile: true
+traits:
+  singleDatabase: true
+  schemaAware: false
+supportLevel: full
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: false
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: false
+  driverManagement: false

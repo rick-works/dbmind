@@ -1,0 +1,18 @@
+[package]
+name = "dbmind-cli"
+description = "DBmind 命令行壳（薄壳：只做参数解析与输出渲染）"
+version.workspace = true
+edition.workspace = true
+license-file.workspace = true
+
+[[bin]]
+name = "dbmind"
+path = "src/main.rs"
+
+[dependencies]
+dbmind-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+# 驱动商店：从 Maven Central 拉 JDBC 驱动 jar（仅 CLI 需要网络能力，内核保持无网络依赖）
+ureq = "2"
