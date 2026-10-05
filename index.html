@@ -337,10 +337,11 @@
   .doc-main .fcard b { display: block; margin-bottom: 5px; font-size: 13.5px; color: var(--text); }
   .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
   /* 文档模式：flex 等高三栏（stretch 保证顶底严格对齐），中间正文内部滚动。
+     上下各留 10px 边距（从顶栏底边线往下算）。
      不用 grid + height:100% —— 正文长内容会撑爆行高把左右面板拉长错位 */
   body.doc-only .docs-layout {
     display: flex; align-items: stretch;
-    gap: 34px; padding-top: 14px;
+    gap: 34px; padding: 10px 0;
     height: calc(100vh - 60px); box-sizing: border-box;
   }
   /* 文档模式下顶栏与内容区同宽（1120 容器），logo 左缘与左目录面板对齐 */
