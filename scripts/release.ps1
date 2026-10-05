@@ -151,36 +151,58 @@ $frontendDir = Join-Path $root 'frontend'
 if ($SkipFrontend) {
     Note '已跳过（-SkipFrontend）'
 } else {
-    if (-not (Test-Path (Join-Path $frontendDir 'node_modules'))) {
-        Note '前端依赖未安装，先装（首次约 1~2 分钟）'
+    # **源码指纹跳过**：把 src/、public/、index.html、package.json、vite 配置的
+    # 「路径+大小+mtime」拼起来做 SHA256，存进 dist\.buildhash。下次指纹一致就直接复用
+    # 产物 —— 打包最频繁的场景是「Rust 改了、前端没动」，这一步直接省掉。
+    # 误判方向是安全的：git checkout 刷新 mtime → 多构建一次，不会产出过期的包。
+    $srcPaths = @('src', 'public', 'index.html', 'package.json', 'package-lock.json', 'vite.config.mjs')
+    $parts = foreach ($p in $srcPaths) {
+        $full = Join-Path $frontendDir $p
+        if (Test-Path $full) {
+            Get-ChildItem $full -Recurse -File | Sort-Object FullName | ForEach-Object { "{0}|{1}|{2}" -f $_.FullName, $_.Length, $_.LastWriteTimeUtc.Ticks }
+        }
+    }
+    $md5 = [System.Security.Cryptography.MD5]::Create()
+    $hashBytes = $md5.ComputeHash([System.Text.Encoding]::UTF8.GetBytes(($parts -join "`n")))
+    $fingerprint = [BitConverter]::ToString($hashBytes) -replace '-', ''
+    $distDir = Join-Path $frontendDir 'dist'
+    $stampFile = Join-Path $distDir '.buildhash'
+    $distValid = (Test-Path (Join-Path $distDir 'index.html')) -and (Test-Path $stampFile) -and ((Get-Content $stampFile -Raw -ErrorAction SilentlyContinue).Trim() -eq $fingerprint)
+    if ($distValid) {
+        Good ('前端源码未变化，复用 dist（' + (Human (DirSize $distDir)) + '）—— 改前端或 npm 依赖后才会重新构建')
+    } else {
+        if (-not (Test-Path (Join-Path $frontendDir 'node_modules'))) {
+            Note '前端依赖未安装，先装（首次约 1~2 分钟）'
+            Push-Location $frontendDir
+            try {
+                if (Test-Path (Join-Path $frontendDir 'package-lock.json')) { & npm ci } else { & npm install }
+                if ($LASTEXITCODE -ne 0) { Fail 'npm 安装依赖失败' }
+            } finally { Pop-Location }
+        } else {
+            Good 'node_modules 已就绪'
+        }
         Push-Location $frontendDir
         try {
-            if (Test-Path (Join-Path $frontendDir 'package-lock.json')) { & npm ci } else { & npm install }
-            if ($LASTEXITCODE -ne 0) { Fail 'npm 安装依赖失败' }
-        } finally { Pop-Location }
-    } else {
-        Good 'node_modules 已就绪'
-    }
-    Push-Location $frontendDir
-    try {
-        # 先自己把 dist 清空。Vite 也会清，但它走 Node 的 fs.rmSync —— IDE 终端会给 Node
-        # 套一层"安全删除"shim，把「单轮删除 500 个以上文件」拦下来（dist\assets 有近 600 个），
-        # 于是构建在第 2 步就失败：
-        #   [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":589,"threshold":500}
-        # 这里用 .NET 直接删目录树 —— 删的是构建产物、本来就不该进回收站；
-        # 之后 Vite 面对的是一个不存在的目录，压根谈不上"批量删除"。
-        $cleanDist = Join-Path $frontendDir 'dist'
-        if (Test-Path $cleanDist) {
-            try {
-                [System.IO.Directory]::Delete($cleanDist, $true)
-                Note '已清空 frontend\dist（免得构建时撞上批量删除拦截）'
-            } catch {
-                Warn ('清空 frontend\dist 失败，交给 Vite 自己清：' + $_.Exception.Message)
+            # 先自己把 dist 清空。Vite 也会清，但它走 Node 的 fs.rmSync —— IDE 终端会给 Node
+            # 套一层"安全删除"shim，把「单轮删除 500 个以上文件」拦下来（dist\assets 有近 600 个），
+            # 于是构建在第 2 步就失败：
+            #   [safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":589,"threshold":500}
+            # 这里用 .NET 直接删目录树 —— 删的是构建产物、本来就不该进回收站；
+            # 之后 Vite 面对的是一个不存在的目录，压根谈不上"批量删除"。
+            $cleanDist = Join-Path $frontendDir 'dist'
+            if (Test-Path $cleanDist) {
+                try {
+                    [System.IO.Directory]::Delete($cleanDist, $true)
+                    Note '已清空 frontend\dist（免得构建时撞上批量删除拦截）'
+                } catch {
+                    Warn ('清空 frontend\dist 失败，交给 Vite 自己清：' + $_.Exception.Message)
+                }
             }
-        }
-        & npm run build
-        if ($LASTEXITCODE -ne 0) { Fail 'npm run build 失败' }
-    } finally { Pop-Location }
+            & npm run build
+            if ($LASTEXITCODE -ne 0) { Fail 'npm run build 失败' }
+            Set-Content -Path $stampFile -Value $fingerprint -Encoding ASCII
+        } finally { Pop-Location }
+    }
 }
 $frontendDist = Join-Path $frontendDir 'dist'
 if (-not (Test-Path (Join-Path $frontendDist 'index.html'))) { Fail 'frontend\dist\index.html 不存在（前端没构建成功）' }
@@ -259,18 +281,29 @@ if ($WithJre) {
     }
     if (-not $jlink) { Fail '没找到 JDK 17+ 的 jlink（用 -Jdk 指定一个；或去掉 -WithJre 打成依赖本机 Java 的小包）' }
     Good ('jlink ' + $jlinkVer + '  ' + $jlink)
-    if (Test-Path $jreDir) { Remove-Item $jreDir -Recurse -Force }
-    Note 'jlink 生成中（约 20~40 秒）'
-    # java.se 覆盖 JDBC 需要的全部 SE 模块（java.sql / java.naming / java.desktop / 加密相关…）；
-    # jdk.crypto.ec 给 TLS 用，jdk.zipfs 给某些驱动读写 jar/zip 用。
-    # 选 java.se 而不是逐个列模块：漏一个模块的表现是"某个驱动莫名其妙起不来"，很难查。
-    # --compress 的取值在 JDK 21 变了：老版本是 --compress=2，21+ 只认 --compress=zip-6。
-    # 传错会直接报错退出（用 JDK 25 时就是这种情况）。
-    $compress = if ($jlinkVer.Major -ge 21) { '--compress=zip-6' } else { '--compress=2' }
-    & $jlink --add-modules 'java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs' --strip-debug --no-header-files --no-man-pages $compress --output $jreDir
-    if ($LASTEXITCODE -ne 0) { Fail 'jlink 生成失败' }
+    # **缓存复用**：jlink 的输出是确定性的 —— 同一个 jlink.exe + 同一组模块，产物一模一样。
+    # 每次打包都重新生成纯浪费 20~40 秒。把「jlink 路径+版本+模块集」写进 dist\jre\.jlink-cache，
+    # 下次 key 一致就直接复用（换 JDK / 升版本 / 改模块集都会导致 key 变化，自动重新生成）。
+    $modules = 'java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs'
+    $cacheKey = "$jlink|$jlinkVer|$modules"
+    $cacheFile = Join-Path $jreDir '.jlink-cache'
     $javaExe = Join-Path $jreDir 'bin\java.exe'
-    if (-not (Test-Path $javaExe)) { Fail '生成的 JRE 里没有 bin\java.exe' }
+    if ((Test-Path $javaExe) -and (Test-Path $cacheFile) -and ((Get-Content $cacheFile -Raw -ErrorAction SilentlyContinue).Trim() -eq $cacheKey)) {
+        Good ('JRE 缓存命中，复用已有 dist\jre（' + (Human (DirSize $jreDir)) + '）—— 换 JDK 或改模块集才会重新生成')
+    } else {
+        if (Test-Path $jreDir) { Remove-Item $jreDir -Recurse -Force }
+        Note 'jlink 生成中（约 20~40 秒，同 JDK 下一次会直接复用缓存）'
+        # java.se 覆盖 JDBC 需要的全部 SE 模块（java.sql / java.naming / java.desktop / 加密相关…）；
+        # jdk.crypto.ec 给 TLS 用，jdk.zipfs 给某些驱动读写 jar/zip 用。
+        # 选 java.se 而不是逐个列模块：漏一个模块的表现是"某个驱动莫名其妙起不来"，很难查。
+        # --compress 的取值在 JDK 21 变了：老版本是 --compress=2，21+ 只认 --compress=zip-6。
+        # 传错会直接报错退出（用 JDK 25 时就是这种情况）。
+        $compress = if ($jlinkVer.Major -ge 21) { '--compress=zip-6' } else { '--compress=2' }
+        & $jlink --add-modules $modules --strip-debug --no-header-files --no-man-pages $compress --output $jreDir
+        if ($LASTEXITCODE -ne 0) { Fail 'jlink 生成失败' }
+        if (-not (Test-Path $javaExe)) { Fail '生成的 JRE 里没有 bin\java.exe' }
+        Set-Content -Path $cacheFile -Value $cacheKey -Encoding ASCII
+    }
     Good ('JRE ' + (Human (DirSize $jreDir)) + '  ->  ' + $jreDir)
     EndStep
 } else {
@@ -337,8 +370,19 @@ if ($SkipPortable -or $SkipZip) {
 } else {
     $zip = $portableDir + '-portable.zip'
     if (Test-Path $zip) { Remove-Item $zip -Force }
-    Compress-Archive -Path (Join-Path $portableDir '*') -DestinationPath $zip -CompressionLevel Optimal
-    Good ($zip)
+    # 用系统自带的 tar.exe（Win10 1803+ 都有，bsdtar 内核）压 zip：多线程 deflate，
+    # 比 PowerShell 的 Compress-Archive（单线程 .NET ZipArchive）快 3~5 倍。
+    # 包里有几万个小文件（jre/），这个差距就是分钟级 vs 秒级。
+    # -C 切到父目录再压目录名：zip 里的条目以 dbmind-<版本>/ 开头，解压直接出一个文件夹。
+    $tar = Join-Path $env:SystemRoot 'System32\tar.exe'
+    if (Test-Path $tar) {
+        & $tar -a -c -f $zip -C (Split-Path -Parent $portableDir) (Split-Path -Leaf $portableDir)
+        if ($LASTEXITCODE -ne 0) { Fail 'tar 压缩失败' }
+        Good ($zip + '  (tar.exe 快速压缩)')
+    } else {
+        Compress-Archive -Path (Join-Path $portableDir '*') -DestinationPath $zip -CompressionLevel Optimal
+        Good ($zip + '  (Compress-Archive)')
+    }
     Good (Human (Get-Item $zip).Length)
 }
 EndStep
