@@ -794,7 +794,7 @@
             </el-button>
           </div>
 
-          <div class="log-list" v-loading="logLoading">
+          <div class="log-list" v-loading="logLoading" :style="{ height: logListH + 'px' }">
             <div v-for="(item, i) in logItems" :key="i" class="log-item">
               <span class="log-time">{{ fmtLogTime(item.createdAt) }}</span>
               <span class="log-tag" :class="'k-' + item.kind">{{ $t('settings.logs.kind.' + item.kind) }}</span>
@@ -810,7 +810,7 @@
             layout="prev, pager, next"
             size="small"
             background
-            :page-size="20"
+            :page-size="logRows"
             :total="logTotal"
             :current-page="logPage"
             @current-change="(p) => { logPage = p; loadLogs() }"
@@ -1724,7 +1724,20 @@ const logItems = ref([])
 const logLoading = ref(false)
 const logPage = ref(1)
 const logHasMore = ref(false)
-const LOG_PAGE_SIZE = 20
+// 列表高度与每页行数：**实测**布局（列表顶到视口底的距离减去分页条），
+// 每页行数随高度自适应 —— 内容恰好填满，弹窗与列表都不出现滚动条
+const logListH = ref(340)
+const measureLogList = () => {
+  nextTick(() => {
+    const el = document.querySelector('.log-panel .log-list')
+    if (!el) return
+    const top = el.getBoundingClientRect().top
+    if (top <= 0) return // 面板未显示（v-show 隐藏）时跳过
+    logListH.value = Math.max(200, window.innerHeight - top - 64) // 64 ≈ 分页条 + 弹窗底边距
+  })
+}
+// 行高（padding+行距+边框）约 35px；行数随实测高度算，翻页条始终贴底
+const logRows = computed(() => Math.max(5, Math.floor((logListH.value - 12) / 35)))
 // 合并视图算不出准确总数：用「当前页位置 + 是否还有下一页」估算给 el-pagination
 const logTotal = computed(() =>
   logHasMore.value ? logPage.value * LOG_PAGE_SIZE + 1 : (logPage.value - 1) * LOG_PAGE_SIZE + logItems.value.length
@@ -1747,16 +1760,17 @@ const saveAuditLevel = async (v) => {
 const loadLogs = async () => {
   logLoading.value = true
   try {
-    // 多取一条判断「还有下一页」；翻页用 offset
+    // 多取一条判断「还有下一页」；翻页用 offset，每页行数随列表实测高度自适应
+    const rows = logRows.value
     const r = await getLogs({
-      limit: LOG_PAGE_SIZE + 1,
-      offset: (logPage.value - 1) * LOG_PAGE_SIZE,
+      limit: rows + 1,
+      offset: (logPage.value - 1) * rows,
       kind: logKind.value || undefined,
       q: logQuery.value || undefined
     })
     const items = r.items || []
-    logHasMore.value = items.length > LOG_PAGE_SIZE
-    logItems.value = items.slice(0, LOG_PAGE_SIZE)
+    logHasMore.value = items.length > rows
+    logItems.value = items.slice(0, rows)
   } catch { ElMessage.error(t('settings.logs.msgFailed')) }
   logLoading.value = false
 }
@@ -1779,7 +1793,15 @@ const fmtLogTime = (raw) => {
   const m = /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(String(raw || ''))
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : String(raw || '')
 }
-watch(activeTab, (tab) => { if (tab === 'logs') { loadAuditLevel(); loadLogs() } })
+watch(activeTab, (tab) => { if (tab === 'logs') { loadAuditLevel(); measureLogList(); loadLogs() } })
+// 窗口尺寸变化：重测列表高度并按新行数重新拉取
+window.addEventListener('resize', () => {
+  if (activeTab.value === 'logs' && visible.value) {
+    const before = logRows.value
+    measureLogList()
+    if (logRows.value !== before) { logPage.value = 1; loadLogs() }
+  }
+})
 
 // ---------- 快捷键自定义 ----------
 const shortcutGroups = SHORTCUT_GROUPS
@@ -1861,7 +1883,7 @@ watch(visible, (v) => {
     loadKnowledge()
     shortcutMap.value = loadShortcuts()
     // 日志页签：弹窗重开也刷新（activeTab 没变时 watch 不会触发，清空后新执行的日志就看不到）
-    if (activeTab.value === 'logs') { loadAuditLevel(); loadLogs() }
+    if (activeTab.value === 'logs') { loadAuditLevel(); measureLogList(); loadLogs() }
   } else {
     stopRecording()
   }
@@ -1963,12 +1985,12 @@ watch(visible, (v) => {
   display: flex; flex-direction: column;
 }
 .log-panel .log-title:first-child { margin-top: 0; }
-.log-panel .log-list { flex: 0 0 auto; height: 382px; overflow: hidden; }
+.log-panel .log-list { flex: 0 0 auto; overflow: hidden; }
 .log-list {
   border: 1px solid var(--dc-border);
   border-radius: 8px; background: var(--dc-bg-soft);
 }
-.log-list + .el-pagination { margin-top: 10px; justify-content: flex-end; }
+.log-panel .el-pagination { margin: 10px 0 0; justify-content: flex-end; }
 .log-item {
   display: flex; align-items: center; gap: 10px;
   padding: 7px 12px; border-bottom: 1px solid var(--dc-border); font-size: 12.5px;
