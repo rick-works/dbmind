@@ -198,6 +198,46 @@
   footer { border-top: 1px solid var(--border); padding: 34px 0; color: var(--dim); font-size: 13.5px; }
   .foot-inner { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 
+  /* ===== 版本时间线 ===== */
+  #releases { padding: 88px 0; }
+  .rel-timeline { max-width: 860px; margin: 34px auto 0; }
+  .rel-item { display: flex; gap: 18px; }
+  .rel-rail { position: relative; width: 11px; flex-shrink: 0; display: flex; justify-content: center; }
+  /* 竖线贯穿各版本，最后一条收住 */
+  .rel-rail::before {
+    content: ""; position: absolute; top: 14px; bottom: -6px; width: 1px; background: var(--border);
+  }
+  .rel-item:last-child .rel-rail::before { bottom: auto; height: 0; }
+  .rel-dot {
+    position: relative; margin-top: 6px; width: 11px; height: 11px; border-radius: 50%;
+    background: var(--primary); box-shadow: 0 0 0 4px var(--bg);
+  }
+  .rel-dot.first { background: var(--dim); }
+  .rel-body {
+    flex: 1 1 0; min-width: 0;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 20px 24px; margin-bottom: 18px;
+  }
+  .rel-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+  .rel-ver { font-size: 19px; font-weight: 800; font-family: "SF Mono", ui-monospace, Consolas, monospace; }
+  .rel-tag {
+    font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 999px;
+    background: rgba(148, 163, 184, .16); color: var(--dim);
+  }
+  .rel-tag.tag-patch { background: rgba(34, 197, 94, .15); color: #4ade80; }
+  .rel-tag.tag-minor { background: rgba(59, 130, 246, .16); color: #60a5fa; }
+  .rel-tag.tag-major { background: rgba(245, 158, 11, .17); color: #fbbf24; }
+  .rel-tag.tag-latest { background: rgba(79, 140, 255, .16); color: var(--primary); }
+  .rel-date { margin-left: auto; font-size: 12.5px; color: var(--dim); }
+  .rel-notes { margin: 0 0 14px; padding-left: 18px; color: var(--dim); font-size: 13.5px; line-height: 1.9; }
+  .rel-notes li b { color: var(--text); font-weight: 600; }
+  .rel-links { display: flex; gap: 10px; flex-wrap: wrap; }
+  .rel-links .btn { padding: 8px 16px; font-size: 13px; }
+  body.version-only > *:not(nav):not(#releases) { display: none !important; }
+  body.version-only #releases { padding: 96px 0 60px; }
+  body.version-only .rel-timeline { margin-top: 0; }
+  body.version-only #releases .reveal { opacity: 1; transform: none; }
+
   /* ===== 滚动显现 ===== */
   .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s, transform .6s; }
   .reveal.on { opacity: 1; transform: none; }
@@ -395,6 +435,7 @@
       <a href="#workflow">工作流</a>
       <a href="#security">安全</a>
       <a href="#sponsor">赞助</a>
+      <a href="#releases">版本</a>
       <a href="#docs">文档</a>
       <a href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener" class="nav-cta">立即下载</a>
     </div>
@@ -571,6 +612,58 @@
         </div>
       </div>
       <p class="sponsor-note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
+    </div>
+  </div>
+</section>
+
+<section id="releases">
+  <div class="wrap">
+    <h2 class="sec-title reveal">版本</h2>
+    <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
+
+    <div class="rel-timeline">
+      <!-- v1.0.1（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.0.1</span>
+            <span class="rel-tag tag-patch">修订</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-06</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>审计日志增强</b>：按类别筛选（查询 / 数据 / 表操作 / 事务 / 其他执行 / AI / 失败）、一键复制 SQL、真实总条数与页数</li>
+            <li><b>日志不再自动清理</b>：只在点「清空日志」时一次清空全部记录（执行历史 + AI 调用）</li>
+            <li><b>设置界面细节修复</b>：弹窗高度自适应视口、日志列表内滚动、分页条常驻可见、窄屏自适应宽度</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.1" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.1" target="_blank" rel="noopener">下载 v1.0.1</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.0.0 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot first"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.0.0</span>
+            <span class="rel-tag tag-first">正式版</span>
+            <span class="rel-date">2026-09-28</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>AI 加持</b>：SQL 解释 / 优化建议 / 报错自动修复 / 性能诊断 / 智能问答，结合库结构给出可执行建议</li>
+            <li><b>多数据源统一管理</b>：MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / 达梦 / 人大金仓 等 17+ 种</li>
+            <li><b>事务模式与结果集直接编辑</b>：改数据可自查、可回滚、确认后提交</li>
+            <li><b>智能 SQL 编辑器与千万级结果集</b>：补全 / 格式化 / 分块执行 / 片段库 / 模板变量，异步统计、虚拟滚动</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.0" target="_blank" rel="noopener">发布说明</a>
+          </div>
+        </div>
+      </article>
     </div>
   </div>
 </section>
@@ -818,8 +911,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
   document.querySelectorAll('.reveal').forEach(el => io.observe(el))
 
   // 导航高亮：滚动到哪个区块，对应导航项点亮（顶部时点亮「首页」）
-  // 值 = 导航项下标（首页0 功能1 工作流2 安全3 赞助4 文档5）
-  const navMap = { features: 1, workflow: 2, security: 3, docs: 5 }
+  // 值 = 导航项下标（首页0 功能1 工作流2 安全3 赞助4 版本5 文档6）
+  const navMap = { features: 1, workflow: 2, security: 3, docs: 6 }
   const navItems = [...document.querySelectorAll('.nav-links a:not(.nav-cta)')]
   const setActive = (i) => navItems.forEach((a, j) => a.classList.toggle('active', j === i))
   setActive(0)
@@ -846,8 +939,9 @@ WHERE dt = :dt AND org = :org;</code></pre>
 
   // 文档模式：只显示文档区（导航「文档」/功能卡「查看文档」进入，「首页」/logo 退出）
   const enterDocMode = () => {
+    leaveVersionMode(true)
     document.body.classList.add('doc-only')
-    setActive(5)
+    setActive(6)
     // instant：平滑滚动在内容高度骤减时会停留在中途，面板顶部被顶栏盖住
     window.scrollTo({ top: 0, behavior: 'instant' })
     // 清掉 URL 里的 hash：刷新一律回首页，不留文档视图状态
@@ -859,20 +953,42 @@ WHERE dt = :dt AND org = :org;</code></pre>
     document.body.classList.remove('doc-only')
     setActive(0)
   }
+  // 版本模式：只显示版本区（导航「版本」进入，「首页」/logo 退出）
+  const enterVersionMode = () => {
+    document.body.classList.remove('doc-only')
+    document.body.classList.add('version-only')
+    setActive(5)
+    window.scrollTo({ top: 0, behavior: 'instant' })
+    history.replaceState(null, '', location.pathname + location.search)
+    document.querySelectorAll('#releases .reveal').forEach(el => el.classList.add('on'))
+  }
+  const leaveVersionMode = (silent) => {
+    if (!document.body.classList.contains('version-only')) return
+    document.body.classList.remove('version-only')
+    if (!silent) setActive(0)
+  }
   // 赞助不再使用独占视图：作为普通区块嵌在安全区之后（导航锚点直接滚动过去）
   document.querySelectorAll('a[href="#docs"]').forEach(a => {
     a.addEventListener('click', (ev) => { ev.preventDefault(); enterDocMode() })
   })
-  navItems[0].addEventListener('click', exitDocMode)
-  document.querySelector('.logo').addEventListener('click', exitDocMode)
-  // 文档模式下点「功能 / 工作流 / 安全 / 赞助」：先退出独占视图，让默认锚点跳转滚到对应区块
+  document.querySelectorAll('a[href="#releases"]').forEach(a => {
+    a.addEventListener('click', (ev) => { ev.preventDefault(); enterVersionMode() })
+  })
+  navItems[0].addEventListener('click', () => { exitDocMode(); leaveVersionMode() })
+  document.querySelector('.logo').addEventListener('click', () => { exitDocMode(); leaveVersionMode() })
+  // 独占视图下点「功能 / 工作流 / 安全 / 赞助」：先退出独占视图，让默认锚点跳转滚到对应区块
   ;[1, 2, 3, 4].forEach(i => navItems[i].addEventListener('click', () => {
     document.body.classList.remove('doc-only')
+    leaveVersionMode(true)
   }))
-  // 刷新一律回首页：不按 hash 直开文档视图（进入视图时会清掉 URL hash）
-  // 回到顶部时点亮「首页」（文档模式下保持「文档」点亮）
+  // 刷新一律回首页：不按 hash 直开文档/版本视图（进入视图时会清掉 URL hash）
+  // 回到顶部时点亮「首页」（独占视图下保持各自点亮）
   window.addEventListener('scroll', () => {
-    if (window.scrollY < 300) setActive(document.body.classList.contains('doc-only') ? 5 : 0)
+    if (window.scrollY < 300) {
+      if (document.body.classList.contains('doc-only')) setActive(6)
+      else if (document.body.classList.contains('version-only')) setActive(5)
+      else setActive(0)
+    }
   }, { passive: true })
 </script>
 </body>
