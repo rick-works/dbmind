@@ -241,6 +241,10 @@ export const listHistory = (limit = 8) => http.get('/api/dbmind/history', { para
 // 清空查询历史（`DELETE /api/dbmind/history`）：清的是**全部**记录，没有按条删除的接口 ——
 // 历史表里也没有"来源"字段，老记录无法事后区分是不是程序发的，所以只能整体清。
 export const clearHistory = () => http.delete('/api/dbmind/history').then(r => r.data)
+// 统一日志（执行 + AI 审计合并视图，设置 → 日志用）：level 为当前审计级别，items 为日志条目
+export const getLogs = (params = {}) => http.get('/api/dbmind/logs', { params }).then(r => r.data)
+// 清空全部日志（执行历史 + AI 审计一起清）
+export const clearLogs = () => http.delete('/api/dbmind/logs').then(r => r.data)
 // 终止会话（监控面板运维动作：KILL 指定线程/会话）
 export const monitorKill = async (id, database, sessionId) => { const b = await baseOf(id); return http.post(`${b}/${id}/monitor/kill`, null, { params: { database, sessionId } }).then(r => r.data) }
 // 保存表数据修改（增删改）

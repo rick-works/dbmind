@@ -462,6 +462,34 @@ async fn clear_history(State(state): State<AppState>) -> ApiResult {
     Ok(Json(json!({ "cleared": cleared })))
 }
 
+#[derive(Debug, Deserialize)]
+struct LogsQuery {
+    #[serde(default = "default_history_limit")]
+    limit: usize,
+    kind: Option<String>,
+    q: Option<String>,
+}
+
+/// 统一日志（执行 + AI 审计合并），供设置 → 日志界面。
+async fn list_logs(State(state): State<AppState>, Query(params): Query<LogsQuery>) -> ApiResult {
+    let engine = state.engine();
+    let level = {
+        let engine = engine.clone();
+        blocking(move || Ok(engine.log_level())).await?
+    };
+    let logs = blocking(move || {
+        engine.logs(params.limit, params.kind.as_deref(), params.q.as_deref())
+    })
+    .await?;
+    Ok(Json(json!({ "level": level, "items": logs })))
+}
+
+async fn clear_logs(State(state): State<AppState>) -> ApiResult {
+    let engine = state.engine();
+    let cleared = blocking(move || engine.clear_logs()).await?;
+    Ok(Json(json!({ "cleared": cleared })))
+}
+
 async fn list_settings(State(state): State<AppState>) -> ApiResult {
     let engine = state.engine();
     let settings = blocking(move || engine.settings()).await?;
@@ -653,6 +681,7 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
         .route("/query/{execution_id}/cancel", post(cancel_execution))
         .route("/executions", get(active_executions))
         .route("/history", get(list_history).delete(clear_history))
+        .route("/logs", get(list_logs).delete(clear_logs))
         .route("/schema-cache", delete(clear_all_schema_cache))
         .route("/cache", get(cache_list).post(cache_clear))
         .route("/settings", get(list_settings))

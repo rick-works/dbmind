@@ -764,6 +764,52 @@
           </div>
         </div>
 
+        <!-- 日志：全类型审计（查询 / 增删改 / DDL / 事务 / AI 调用），可筛可清 -->
+        <div v-show="activeTab === 'logs'" class="settings-panel">
+          <div class="panel-title">{{ $t('settings.logs.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.logs.desc') }}</div>
+
+          <div class="log-level-row">
+            <span class="log-level-label">{{ $t('settings.logs.levelLabel') }}</span>
+            <el-radio-group v-model="auditLevel" size="small" @change="saveAuditLevel">
+              <el-radio-button value="all">{{ $t('settings.logs.level.all') }}</el-radio-button>
+              <el-radio-button value="write">{{ $t('settings.logs.level.write') }}</el-radio-button>
+              <el-radio-button value="error">{{ $t('settings.logs.level.error') }}</el-radio-button>
+              <el-radio-button value="off">{{ $t('settings.logs.level.off') }}</el-radio-button>
+            </el-radio-group>
+          </div>
+
+          <div class="log-filter-row">
+            <el-select v-model="logKind" size="small" style="width: 140px" @change="loadLogs">
+              <el-option value="" :label="$t('settings.logs.kind.all')" />
+              <el-option value="query" :label="$t('settings.logs.kind.query')" />
+              <el-option value="write" :label="$t('settings.logs.kind.write')" />
+              <el-option value="ddl" :label="$t('settings.logs.kind.ddl')" />
+              <el-option value="tx" :label="$t('settings.logs.kind.tx')" />
+              <el-option value="ai" :label="$t('settings.logs.kind.ai')" />
+            </el-select>
+            <el-input v-model="logQuery" size="small" style="width: 220px" clearable
+                      :placeholder="$t('settings.logs.searchPh')" @keyup.enter="loadLogs" @clear="loadLogs" />
+            <el-button size="small" :icon="Search" @click="loadLogs">{{ $t('settings.logs.refresh') }}</el-button>
+            <span class="log-count">{{ $t('settings.logs.count', { n: logItems.length }) }}</span>
+            <el-button size="small" type="danger" plain style="margin-left: auto" @click="clearAllLogs">
+              <el-icon style="margin-right:4px"><Delete /></el-icon>{{ $t('settings.logs.clear') }}
+            </el-button>
+          </div>
+
+          <div class="log-list" v-loading="logLoading">
+            <div v-for="(item, i) in logItems" :key="i" class="log-item">
+              <span class="log-time">{{ item.createdAt }}</span>
+              <span class="log-tag" :class="'k-' + item.kind">{{ $t('settings.logs.kind.' + item.kind) }}</span>
+              <span class="log-sql" :title="item.sql">{{ item.sql }}</span>
+              <span class="log-conn" :title="item.connection">{{ item.connection }}</span>
+              <span class="log-dur" v-if="item.durationMs">{{ item.durationMs }} ms</span>
+              <span class="log-status" :class="item.status">{{ item.status }}</span>
+            </div>
+            <div v-if="!logItems.length && !logLoading" class="cache-empty">{{ $t('settings.logs.empty') }}</div>
+          </div>
+        </div>
+
         <!-- 6. 通知 -->
         <div v-show="activeTab === 'notify'" class="settings-panel">
           <div class="panel-title">{{ $t('settings.notify.title') }}</div>
@@ -892,13 +938,13 @@ import {
   MagicStick, Connection, Brush,
   FolderOpened, EditPen, DataLine, Download, Bell, Operation, Monitor, Plus, Delete,
   CircleCheck, Timer, Moon, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
-  ArrowUp, ArrowDown
+  ArrowUp, ArrowDown, Document
 } from '@element-plus/icons-vue'
 import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/topMenu'
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern } from '../../utils/sqlFormat'
-import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections } from '../../api'
+import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs } from '../../api'
 import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
 // 「刷新结构缓存」要连**前端那份** localStorage 缓存一起清（内核缓存清了它还在也会显示旧清单）
 import { clearSchemaCache as clearLocalSchemaCache } from '../../utils/schemaCache'
@@ -939,6 +985,7 @@ const tabs = [
   { key: 'driver', i18nKey: 'settings.tab.driver', icon: Download },
   { key: 'paths', i18nKey: 'settings.tab.paths', icon: FolderOpened },
   { key: 'cache', i18nKey: 'settings.tab.cache', icon: Delete },
+  { key: 'logs', i18nKey: 'settings.tab.logs', icon: Document },
   { key: 'notify', i18nKey: 'settings.tab.notify', icon: Bell },
   { key: 'shortcut', i18nKey: 'settings.tab.shortcut', icon: Pointer },
   { key: 'about', i18nKey: 'settings.tab.about', icon: Monitor }
@@ -1662,6 +1709,48 @@ const clearCheckedCache = async () => {
   cacheClearing.value = false
 }
 
+// ---------- 日志：全类型审计（查询 / 增删改 / DDL / 事务 / AI 调用） ----------
+const auditLevel = ref('all')
+const logKind = ref('')
+const logQuery = ref('')
+const logItems = ref([])
+const logLoading = ref(false)
+
+const loadAuditLevel = async () => {
+  try {
+    const settings = await getSettings()
+    auditLevel.value = settings['audit.level'] || 'all'
+  } catch { auditLevel.value = 'all' }
+}
+const saveAuditLevel = async (v) => {
+  try {
+    await putSetting('audit.level', v)
+    ElMessage.success(t('settings.logs.levelSaved'))
+    loadLogs()
+  } catch { ElMessage.error(t('settings.logs.msgFailed')) }
+}
+const loadLogs = async () => {
+  logLoading.value = true
+  try {
+    const r = await getLogs({ limit: 500, kind: logKind.value || undefined, q: logQuery.value || undefined })
+    logItems.value = r.items || []
+  } catch { ElMessage.error(t('settings.logs.msgFailed')) }
+  logLoading.value = false
+}
+const clearAllLogs = async () => {
+  try {
+    await ElMessageBox.confirm(t('settings.logs.confirm'), t('settings.logs.clear'), {
+      type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel'), closeOnClickModal: false
+    })
+  } catch { return }
+  try {
+    await clearLogs()
+    ElMessage.success(t('settings.logs.cleared'))
+    loadLogs()
+  } catch { ElMessage.error(t('settings.logs.msgFailed')) }
+}
+watch(activeTab, (tab) => { if (tab === 'logs') { loadAuditLevel(); loadLogs() } })
+
 // ---------- 快捷键自定义 ----------
 const shortcutGroups = SHORTCUT_GROUPS
 const shortcutMap = ref(loadShortcuts())
@@ -1829,6 +1918,42 @@ watch(visible, (v) => {
 .cache-name { flex: 1; font-size: 13px; }
 .cache-size { font-size: 12px; color: var(--dc-text-dim); font-variant-numeric: tabular-nums; }
 .cache-empty { padding: 18px 14px; text-align: center; font-size: 12px; color: var(--dc-text-dim); }
+/* 日志：级别选择行 + 筛选行 + 日志列表 */
+.log-level-row { display: flex; align-items: center; gap: 12px; margin: 14px 0 6px; }
+.log-level-label { font-size: 13px; color: var(--dc-text-mid); flex-shrink: 0; }
+.log-filter-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+.log-count { font-size: 12px; color: var(--dc-text-dim); }
+.log-list {
+  max-height: 420px; overflow-y: auto; border: 1px solid var(--dc-border);
+  border-radius: 8px; background: var(--dc-bg-soft);
+}
+.log-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 12px; border-bottom: 1px solid var(--dc-border); font-size: 12.5px;
+}
+.log-item:last-child { border-bottom: none; }
+.log-item:hover { background: var(--dc-bg-hover, rgba(148,163,184,.08)); }
+.log-time { color: var(--dc-text-dim); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.log-tag {
+  flex-shrink: 0; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  border: 1px solid var(--dc-border); color: var(--dc-text-mid);
+}
+.log-tag.k-query { color: #4f8cff; border-color: rgba(79,140,255,.4); }
+.log-tag.k-write { color: #f59e0b; border-color: rgba(245,158,11,.45); }
+.log-tag.k-ddl { color: #a78bfa; border-color: rgba(167,139,250,.45); }
+.log-tag.k-tx { color: #2dd4bf; border-color: rgba(45,212,191,.45); }
+.log-tag.k-ai { color: #f472b6; border-color: rgba(244,114,182,.45); }
+.log-tag.k-exec { color: var(--dc-text-dim); }
+.log-sql {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: "SF Mono", ui-monospace, Consolas, monospace; color: var(--dc-text);
+}
+.log-conn { flex-shrink: 0; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dc-text-mid); }
+.log-dur { flex-shrink: 0; color: var(--dc-text-dim); font-variant-numeric: tabular-nums; }
+.log-status { flex-shrink: 0; font-size: 11px; font-weight: 600; }
+.log-status.ok { color: var(--el-color-success); }
+.log-status.canceled { color: var(--el-color-warning); }
+.log-status.error { color: var(--el-color-danger); }
 /* 日志级别：标题与「界面语言设置」同级，卡片整行铺开自动换行 */
 .log-title { margin-top: 22px; }
 .log-level-options { display: flex; gap: 10px; flex-wrap: wrap; width: 100%; max-width: 560px; }

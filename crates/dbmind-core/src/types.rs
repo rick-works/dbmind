@@ -633,6 +633,26 @@ pub struct NewHistoryEntry {
     pub row_count: usize,
     pub duration_ms: u64,
     pub error_code: Option<String>,
+    /// 操作分类：query / write / ddl / tx / exec（由 SQL 首词推导，见 engine::classify_kind）
+    pub kind: &'static str,
+    /// 调用来源（desktop / web / cli / mcp / ai / system）
+    pub source: &'static str,
+}
+
+/// 统一日志条目：合并 query_history 与 ai_audit 两个来源，供日志管理界面展示。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogEntry {
+    /// 分类：query / write / ddl / tx / exec / ai
+    pub kind: String,
+    /// 语句或 AI 提示词（截断后）
+    pub sql: String,
+    pub connection: String,
+    pub status: String,
+    pub row_count: u64,
+    pub duration_ms: u64,
+    pub error_code: Option<String>,
+    pub created_at: String,
 }
 
 // ------------------------------------------------------------------ 调用来源

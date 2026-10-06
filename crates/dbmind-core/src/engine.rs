@@ -622,6 +622,8 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                     row_count: 0,
                     duration_ms: started.elapsed().as_millis() as u64,
                     error_code: Some(err.code_str().to_string()),
+                    kind: Self::classify_kind(&request.sql),
+                    source: ctx.as_str(),
                 };
                 if record_history { self.record_entry(&entry); }
                 return Err(err);
@@ -648,6 +650,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                     0,
                     started.elapsed().as_millis() as u64,
                     Some(err.code_str().to_string()),
+                    ctx.as_str(),
                 );
                 return Err(err);
             }
@@ -696,7 +699,8 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                 0,
                 started.elapsed().as_millis() as u64,
                 Some(err.code_str().to_string()),
-            );
+                    ctx.as_str(),
+                );
             return Err(err);
         }
 
@@ -743,7 +747,8 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                                 0,
                                 started.elapsed().as_millis() as u64,
                                 Some(err.code_str().to_string()),
-                            );
+                    ctx.as_str(),
+                );
                             return Err(err);
                         }
                     }
@@ -762,6 +767,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                     0,
                     started.elapsed().as_millis() as u64,
                     Some(err.code_str().to_string()),
+                    ctx.as_str(),
                 );
                 return Err(err);
             }
@@ -818,13 +824,14 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                         options.max_rows
                     ));
                 }
-                self.record(record_history, 
+                self.record(record_history,
                     &connection,
                     &request.sql,
                     HistoryStatus::Ok,
                     result.row_count,
                     duration_ms,
                     None,
+                    ctx.as_str(),
                 );
                 // 结构相关的执行成功后才作废缓存：失败不该让缓存失效（白查一遍）
                 self.invalidate_schema_after(&connection, result.statement_kind);
@@ -842,6 +849,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                     0,
                     duration_ms,
                     Some(err.code_str().to_string()),
+                    ctx.as_str(),
                 );
                 Err(err)
             }
@@ -891,6 +899,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                 0,
                 started.elapsed().as_millis() as u64,
                 Some(err.code_str().to_string()),
+                "ui",
             );
             return Err(err);
         }
@@ -906,6 +915,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                 0,
                 duration_ms,
                 None,
+                "ui",
             ),
             Err(err) => self.record(
                 true,
@@ -915,6 +925,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                 0,
                 duration_ms,
                 Some(err.code_str().to_string()),
+                "ui",
             ),
         }
         outcome
@@ -929,6 +940,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         row_count: usize,
         duration_ms: u64,
         error_code: Option<String>,
+        source: &'static str,
     ) {
         let entry = NewHistoryEntry {
             connection_id: Some(connection.id.clone()),
@@ -938,11 +950,29 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
             row_count,
             duration_ms,
             error_code,
+            kind: Self::classify_kind(sql),
+            source,
         };
         if record_history { self.record_entry(&entry); }
     }
 
     fn record_entry(&self, entry: &NewHistoryEntry) {
+        // 日志级别（用户在设置里调）：all 全记 / write 只记写·DDL·事务与错误 / error 只记失败 / off 不记
+        let level = self
+            .store
+            .get_setting(Store::KEY_AUDIT_LEVEL)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "all".into());
+        let allowed = match level.as_str() {
+            "off" => false,
+            "error" => matches!(entry.status, HistoryStatus::Error),
+            "write" => matches!(entry.status, HistoryStatus::Error) || entry.kind != "query",
+            _ => true,
+        };
+        if !allowed {
+            return;
+        }
         if let Err(e) = self.store.record_history(entry) {
             // 留痕失败不能影响主流程
             tracing::warn!(target: "dbmind::engine", error = %e, "写入历史失败");
@@ -950,6 +980,23 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         }
         // 顺手清一次：一条 INSERT 换一条 DELETE，比「积了十万行再大扫除」平稳得多
         self.prune_history();
+    }
+
+    /// 按语句首词推导操作分类：query / write / ddl / tx / exec。
+    fn classify_kind(sql: &str) -> &'static str {
+        let head = sql
+            .trim_start()
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .next()
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        match head.as_str() {
+            "SELECT" | "WITH" | "SHOW" | "EXPLAIN" | "DESCRIBE" | "DESC" => "query",
+            "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "REPLACE" | "UPSERT" => "write",
+            "CREATE" | "ALTER" | "DROP" | "TRUNCATE" | "RENAME" | "COMMENT" => "ddl",
+            "BEGIN" | "COMMIT" | "ROLLBACK" | "SAVEPOINT" | "RELEASE" => "tx",
+            _ => "exec",
+        }
     }
 
     /// 按设置清理查询历史（`history.maxEntries` / `history.retentionDays`）。
@@ -1051,6 +1098,25 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
 
     pub fn clear_history(&self) -> Result<usize> {
         self.store.clear_history()
+    }
+
+    /// 统一日志（执行 + AI 审计合并视图），供设置 → 日志界面使用。
+    pub fn logs(&self, limit: usize, kind: Option<&str>, q: Option<&str>) -> Result<Vec<LogEntry>> {
+        self.store.list_logs(limit, kind, q)
+    }
+
+    /// 清空全部日志（执行历史 + AI 审计）。
+    pub fn clear_logs(&self) -> Result<usize> {
+        self.store.clear_logs()
+    }
+
+    /// 当前审计日志级别（all / write / error / off）。
+    pub fn log_level(&self) -> String {
+        self.store
+            .get_setting(Store::KEY_AUDIT_LEVEL)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "all".into())
     }
 
     pub fn settings(&self) -> Result<Vec<(String, String)>> {

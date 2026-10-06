@@ -42,6 +42,8 @@ const SETTINGS_TUNNEL_IDLE_TIMEOUT: &str = "tunnel.idleTimeoutSecs";
 const SETTINGS_QUERY_MAX_ROWS: &str = "query.maxRows";
 /// 日志级别（trace/debug/info/warn/error；web 壳在运行时热切换 tracing 过滤器）。
 pub const SETTINGS_LOG_LEVEL: &str = "log.level";
+/// 审计日志级别（all / write / error / off）—— 设置 → 日志里用户自选的记录范围。
+pub const SETTINGS_AUDIT_LEVEL: &str = "audit.level";
 /// MCP 壳的默认连接：客户端不传 connection 参数时兜底用它（空 = 不兜底，报缺参）。
 pub const SETTINGS_MCP_DEFAULT_CONNECTION: &str = "mcp.defaultConnection";
 /// MCP 单次查询最大行数（1..=HARD_MAX_ROWS；壳把客户端传的 max_rows 夹到这个值）。
@@ -95,6 +97,7 @@ impl Store {
         // WAL 让读取不被写事务阻塞（多壳并发访问同一库时很关键）
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
         conn.execute_batch(SCHEMA)?;
+        Self::migrate_columns(&conn)?;
         let store = Self {
             conn: Mutex::new(conn),
             path,
@@ -317,7 +320,7 @@ impl Store {
         let conn = self.lock();
         conn.execute(
             "INSERT INTO query_history (id, connection_id, connection_name, sql, status, row_count, \
-             duration_ms, error_code, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             duration_ms, error_code, created_at, kind, source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 id,
                 entry.connection_id,
@@ -328,6 +331,8 @@ impl Store {
                 entry.duration_ms as i64,
                 entry.error_code,
                 now_iso(),
+                entry.kind,
+                entry.source,
             ],
         )?;
         Ok(id)
@@ -365,6 +370,120 @@ impl Store {
     pub fn clear_history(&self) -> Result<usize> {
         let conn = self.lock();
         Ok(conn.execute("DELETE FROM query_history", [])?)
+    }
+
+    /// 轻量列迁移：老库补 kind / source 两列，并按 SQL 首词回填 kind。
+    /// 声明式建表管不了已存在的表 —— 这是仓库里第一个「改列」式迁移，保持极简：
+    /// PRAGMA table_info 探测缺列才 ALTER，重复打开库零开销。
+    fn migrate_columns(conn: &Connection) -> Result<()> {
+        let has_col = |name: &str| -> Result<bool> {
+            let mut stmt = conn.prepare("PRAGMA table_info(query_history)")?;
+            let mut hit = false;
+            let mut rows = stmt.query([])?;
+            while let Some(row) = rows.next()? {
+                if row.get::<_, String>(1)? == name {
+                    hit = true;
+                    break;
+                }
+            }
+            Ok(hit)
+        };
+        if !has_col("kind")? {
+            conn.execute_batch(
+                "ALTER TABLE query_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'query';
+                 UPDATE query_history SET kind = CASE
+                   WHEN upper(ltrim(sql)) LIKE 'SELECT %' OR upper(ltrim(sql)) LIKE 'WITH %'
+                     OR upper(ltrim(sql)) LIKE 'SHOW %' OR upper(ltrim(sql)) LIKE 'EXPLAIN %' THEN 'query'
+                   WHEN upper(ltrim(sql)) LIKE 'INSERT %' OR upper(ltrim(sql)) LIKE 'UPDATE %'
+                     OR upper(ltrim(sql)) LIKE 'DELETE %' OR upper(ltrim(sql)) LIKE 'MERGE %'
+                     OR upper(ltrim(sql)) LIKE 'REPLACE %' THEN 'write'
+                   WHEN upper(ltrim(sql)) LIKE 'CREATE %' OR upper(ltrim(sql)) LIKE 'ALTER %'
+                     OR upper(ltrim(sql)) LIKE 'DROP %' OR upper(ltrim(sql)) LIKE 'TRUNCATE %' THEN 'ddl'
+                   WHEN upper(ltrim(sql)) LIKE 'BEGIN %' OR upper(ltrim(sql)) LIKE 'COMMIT %'
+                     OR upper(ltrim(sql)) LIKE 'ROLLBACK %' THEN 'tx'
+                   ELSE 'exec' END;",
+            )?;
+        }
+        if !has_col("source")? {
+            conn.execute_batch("ALTER TABLE query_history ADD COLUMN source TEXT NOT NULL DEFAULT 'ui';")?;
+        }
+        Ok(())
+    }
+
+    /// 统一日志：合并 query_history 与 ai_audit 两个来源，按时间倒序。
+    /// kind 筛选（空 = 全部）、q 关键字（LIKE 语句/提示词与连接名）。
+    pub fn list_logs(
+        &self,
+        limit: usize,
+        kind: Option<&str>,
+        q: Option<&str>,
+    ) -> Result<Vec<LogEntry>> {
+        let conn = self.lock();
+        let limit = limit.clamp(1, 2000) as i64;
+        let mut out: Vec<LogEntry> = Vec::new();
+
+        let want_exec = matches!(kind, None | Some("exec"))
+            || matches!(kind, Some("query" | "write" | "ddl" | "tx"));
+        if want_exec {
+            let like = format!("%{}%", q.unwrap_or("").replace('%', ""));
+            let mut stmt = conn.prepare(
+                "SELECT sql, COALESCE(connection_name, connection_id, ''), status, row_count, \
+                 duration_ms, error_code, created_at, kind FROM query_history \
+                 WHERE (?1 = '' OR kind = ?1) AND (?2 = '' OR sql LIKE ?2 OR connection_name LIKE ?2) \
+                 ORDER BY created_at DESC, rowid DESC LIMIT ?3",
+            )?;
+            let kind_arg = kind.unwrap_or("");
+            let mut rows = stmt.query(params![kind_arg, like, limit])?;
+            while let Some(row) = rows.next()? {
+                out.push(LogEntry {
+                    kind: row.get(7)?,
+                    sql: row.get(0)?,
+                    connection: row.get(1)?,
+                    status: row.get(2)?,
+                    row_count: row.get::<_, i64>(3)?.max(0) as u64,
+                    duration_ms: row.get::<_, i64>(4)?.max(0) as u64,
+                    error_code: row.get(5)?,
+                    created_at: row.get(6)?,
+                });
+            }
+        }
+
+        // AI 调用（ai_audit：time/kind/prompt）—— 按级别与筛选参与合并
+        let want_ai = matches!(kind, None | Some("ai"));
+        if want_ai {
+            let like = format!("%{}%", q.unwrap_or("").replace('%', ""));
+            let mut stmt = conn.prepare(
+                "SELECT prompt, kind, time FROM ai_audit \
+                 WHERE (?1 = '' OR ?1 = 'ai') AND prompt LIKE ?2 \
+                 ORDER BY time DESC LIMIT ?3",
+            )?;
+            let kind_arg = kind.unwrap_or("");
+            let mut rows = stmt.query(params![kind_arg, like, limit])?;
+            while let Some(row) = rows.next()? {
+                out.push(LogEntry {
+                    kind: "ai".into(),
+                    sql: row.get(0)?,
+                    connection: "AI".into(),
+                    status: "ok".into(),
+                    row_count: 0,
+                    duration_ms: 0,
+                    error_code: None,
+                    created_at: row.get(2)?,
+                });
+            }
+        }
+
+        out.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        out.truncate(limit as usize);
+        Ok(out)
+    }
+
+    /// 清空全部日志（执行历史 + AI 审计），返回删除总行数。
+    pub fn clear_logs(&self) -> Result<usize> {
+        let conn = self.lock();
+        let n1 = conn.execute("DELETE FROM query_history", [])?;
+        let n2 = conn.execute("DELETE FROM ai_audit", [])?;
+        Ok(n1 + n2)
     }
 
     /// 表行数（白名单；表不存在按 0 —— 老库可能还没建这张表）。
@@ -522,6 +641,7 @@ impl Store {
     pub const KEY_TUNNEL_IDLE_TIMEOUT: &'static str = SETTINGS_TUNNEL_IDLE_TIMEOUT;
     pub const KEY_QUERY_MAX_ROWS: &'static str = SETTINGS_QUERY_MAX_ROWS;
     pub const KEY_LOG_LEVEL: &'static str = SETTINGS_LOG_LEVEL;
+    pub const KEY_AUDIT_LEVEL: &'static str = SETTINGS_AUDIT_LEVEL;
     pub const KEY_MCP_DEFAULT_CONNECTION: &'static str = SETTINGS_MCP_DEFAULT_CONNECTION;
     pub const KEY_MCP_MAX_ROWS: &'static str = SETTINGS_MCP_MAX_ROWS;
     pub const KEY_MCP_TIMEOUT_SECS: &'static str = SETTINGS_MCP_TIMEOUT_SECS;
@@ -541,6 +661,7 @@ impl Store {
             (SETTINGS_TUNNEL_IDLE_TIMEOUT, "1800"),
             (SETTINGS_QUERY_MAX_ROWS, "2000"),
             (SETTINGS_LOG_LEVEL, "info"),
+            (SETTINGS_AUDIT_LEVEL, "all"),
             (SETTINGS_MCP_MAX_ROWS, "2000"),
             (SETTINGS_MCP_TIMEOUT_SECS, "30"),
             (SETTINGS_MCP_TOOLS_STRUCTURE, "true"),
