@@ -939,7 +939,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   MagicStick, Connection, Brush,
@@ -1729,11 +1729,13 @@ const logHasMore = ref(false)
 const logListH = ref(340)
 const measureLogList = () => {
   nextTick(() => {
-    const el = document.querySelector('.log-panel .log-list')
-    if (!el) return
-    const top = el.getBoundingClientRect().top
-    if (top <= 0) return // 面板未显示（v-show 隐藏）时跳过
-    logListH.value = Math.max(200, window.innerHeight - top - 64) // 64 ≈ 分页条 + 弹窗底边距
+    try {
+      const el = document.querySelector('.log-panel .log-list')
+      if (!el) return
+      const top = el.getBoundingClientRect().top
+      if (top <= 0) return // 面板未显示（v-show 隐藏）时跳过
+      logListH.value = Math.max(200, window.innerHeight - top - 64) // 64 ≈ 分页条 + 弹窗底边距
+    } catch { /* 测量失败不影响日志加载 */ }
   })
 }
 // 行高（padding+行距+边框）约 35px；行数随实测高度算，翻页条始终贴底
