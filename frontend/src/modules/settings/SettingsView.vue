@@ -1029,6 +1029,7 @@ const verParts = computed(() => {
   const p = String(APP_VERSION || '0.0.0').split('.')
   return [p[0] || '0', p[1] || '0', p[2] || '0']
 })
+
 // 版本说明：按版本倒序（第一个为最新，标「最新」）。版本号从 1.0.0 起 —— 1.0.0 是首个
 // 正式版，之后修 bug 只加修订号（1.0.1）、新增功能加小版本（1.1.0）、不兼容变更才加大版本（2.0.0）。
 // 文案在 locales 里按 `settings.about.relN.version` / `relN.noteM` / `relN.level` 组织。

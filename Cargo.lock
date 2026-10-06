@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-cli"
-version = "1.0.1"
+version = "0.9.0"
 dependencies = [
  "clap",
  "dbmind-core",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-core"
-version = "1.0.1"
+version = "0.9.0"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -757,7 +757,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-desktop"
-version = "1.0.1"
+version = "0.9.0"
 dependencies = [
  "dbmind-web",
  "sysinfo",
@@ -767,7 +767,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-mcp"
-version = "1.0.1"
+version = "0.9.0"
 dependencies = [
  "dbmind-core",
  "serde_json",
@@ -775,7 +775,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-web"
-version = "1.0.1"
+version = "0.9.0"
 dependencies = [
  "axum",
  "chrono",

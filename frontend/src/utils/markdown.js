@@ -182,11 +182,17 @@ export const renderMarkdown = (md, opts = {}) => {
     if (RE_UL.test(line)) {
       flushPara()
       const buf = []
-      while (i < lines.length && RE_UL.test(lines[i])) {
-        buf.push(lines[i].replace(RE_UL, ''))
-        i++
+      while (i < lines.length) {
+        if (RE_UL.test(lines[i])) {
+          buf.push([lines[i].replace(RE_UL, '')])
+          i++
+        } else if (lines[i].trim() && /^\s+\S/.test(lines[i]) && buf.length) {
+          // 列表项的续行（缩进但不是新的列表项）：并入上一项，避免一句被拆成两段
+          buf[buf.length - 1].push(lines[i].trim())
+          i++
+        } else break
       }
-      out.push('<ul>' + buf.map((t) => `<li>${renderInline(t)}</li>`).join('') + '</ul>')
+      out.push('<ul>' + buf.map((parts) => `<li>${renderInline(parts.join(' '))}</li>`).join('') + '</ul>')
       continue
     }
 
@@ -194,11 +200,16 @@ export const renderMarkdown = (md, opts = {}) => {
     if (RE_OL.test(line)) {
       flushPara()
       const buf = []
-      while (i < lines.length && RE_OL.test(lines[i])) {
-        buf.push(lines[i].replace(RE_OL, ''))
-        i++
+      while (i < lines.length) {
+        if (RE_OL.test(lines[i])) {
+          buf.push([lines[i].replace(RE_OL, '')])
+          i++
+        } else if (lines[i].trim() && /^\s+\S/.test(lines[i]) && buf.length) {
+          buf[buf.length - 1].push(lines[i].trim())
+          i++
+        } else break
       }
-      out.push('<ol>' + buf.map((t) => `<li>${renderInline(t)}</li>`).join('') + '</ol>')
+      out.push('<ol>' + buf.map((parts) => `<li>${renderInline(parts.join(' '))}</li>`).join('') + '</ol>')
       continue
     }
 

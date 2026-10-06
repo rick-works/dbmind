@@ -1,0 +1,29 @@
+v1.0.2 在线更新打通 + 下载任务角标 + 审计日志与设置界面
+
+在线更新（crates/dbmind-web/src/api/update.rs，新增 sysproxy.rs）
+- 新增跨平台系统代理探测：环境变量优先，其次 Windows 注册表 Internet Settings、
+  macOS scutil、Linux gsettings；探测通才复用，避免配了代理但实际不通时请求全被拖死
+- 新增下载目录选择（/api/update/pick-dir、/api/update/dirs）：Windows 用 FolderBrowserDialog，
+  macOS 用 osascript，Linux 用 zenity / kdialog
+- 下载进度补齐 received / total / speed / installer，纯阻塞 IO 放后台线程池，
+  校验通过后自动拉起安装器
+- 带令牌请求被拒（401/403）时自动丢弃令牌匿名重试一次，不再直接失败
+
+前端顶栏（frontend/src/modules/data/MainView.vue）
+- 「检查更新」图标新增下载任务角标：有任务在跑时显示任务数，关掉进度窗切到后台仍可见，
+  点图标可随时把进度窗调回来
+- 修正 dlStatus 初始值为 idle（原为 running，导致应用一打开就显示「有任务在跑」）
+
+审计日志与设置界面（SettingsView.vue、locales）
+- 日志按类别筛选、一键复制 SQL、真实总条数与页数（服务端 SQL 级过滤）
+- 日志不再自动清理，只在点「清空日志」时一次清空执行历史 + AI 调用
+- 设置弹窗高度自适应视口、日志列表内部滚动、分页条常驻可见
+
+Markdown 渲染（frontend/src/utils/markdown.js）
+- 列表项的缩进续行并入上一项，一句话不再被拆成两段
+- Release 更新说明里的表格与列表正常渲染
+
+发版
+- 版本号 1.0.1 → 1.0.2（Cargo.toml / frontend/package.json / tauri.conf.json 三处同步）
+- 新增 release-notes/v1.0.2.md 与 TEMPLATE.md，补全 v1.0.0 / v1.0.1 说明
+- 「设置 → 关于」新增 v1.0.2 版本说明（中英双语），官网 gh-pages 版本页同步

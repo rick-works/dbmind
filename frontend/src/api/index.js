@@ -202,7 +202,11 @@ export const saveLegacyTls = (allowLegacyTls) => http.put('/api/settings/legacy-
 export const getSettings = () => http.get('/api/dbmind/settings').then(r => r.data)
 // 在线更新：检查 Gitee 最新发行版 / 下载安装包并拉起安装器（桌面端覆盖安装）
 export const checkUpdate = () => http.get('/api/update/check', { timeout: 20000 }).then(r => r.data)
-export const applyUpdate = () => http.post('/api/update/apply', {}, { timeout: 600000 }).then(r => r.data)
+export const applyUpdate = (dir) => http.post('/api/update/apply', { dir: dir || null }, { timeout: 600000 }).then(r => r.data)
+// 下载进度（后台任务写、前端轮询）：{ status, received, total, speed, error, ... }
+export const pickUpdateDir = (title) => http.get('/api/update/pick-dir', { params: { title }, timeout: 600000 }).then(r => r.data)
+export const updateDirs = () => http.get('/api/update/dirs', { timeout: 10000 }).then(r => r.data)
+export const updateProgress = () => http.get('/api/update/progress', { timeout: 10000 }).then(r => r.data)
 export const putSetting = (key, value) =>
   http.put(`/api/dbmind/settings/${encodeURIComponent(key)}`, { value: String(value) }).then(r => r.data)
 // 一键作废**所有**连接的结构缓存（设置 → 查询 →「刷新结构缓存」）

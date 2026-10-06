@@ -55,9 +55,11 @@
           <el-tooltip :content="themeTip" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': themeMode !== 'system' }" @click="cycleTheme"><el-icon><component :is="themeIcon" /></el-icon></span></el-tooltip>
           <el-tooltip :content="langTip" placement="bottom"><span class="top-nav-item top-icon-btn top-lang-btn" @click="toggleLocale">{{ localeShort }}</span></el-tooltip>
 
-          <!-- 检查更新：对 Gitee 最新发行版比对版本；有新版可在线下载安装 -->
-          <el-tooltip :content="$t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn"
-                     :class="{ 'top-updating': updateChecking }" @click="checkUpdate"><el-icon><Upload /></el-icon></span></el-tooltip>
+          <!-- 检查更新：比对 GitHub 最新 Release，有新版可在线下载安装。
+               图标用 Refresh（循环箭头 = 检查/更新），不用 Upload（上传）——后者语义不对 -->
+          <el-tooltip :content="dlStatus === 'running' ? t('update.dlShowProgress') : $t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn upd-task-btn"
+                     data-act="check-update"
+                     :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon><Refresh /></el-icon><span v-if="dlStatus === 'running'" class="bg-count">{{ dlBadgeCount }}</span></span></el-tooltip>
 
           <el-tooltip :content="$t('nav.settings')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="settingsOpen = true"><el-icon><Setting /></el-icon></span></el-tooltip>
         </span>
@@ -929,6 +931,68 @@
 
   <SettingsView v-model="settingsOpen" :initial-tab="settingsTab" />
 
+  <!-- 检查更新：Release 说明按 Markdown 渲染（下载表格 / 代码块不再是原始文本） -->
+  <!-- 检查更新：Release 说明按 Markdown 渲染（下载表格 / 代码块不再是原始文本）。
+       高度**自适应内容、但不超过 76vh**：内容少就矮着，内容多在 body 内部滚动，
+       不会把弹窗撑成整屏。高度/滚动用内联样式（el-dialog 是 teleport 渲染的，
+       scoped 里的 :deep 规则不一定命中，内联最稳） -->
+  <el-dialog
+    v-model="updateVisible"
+    class="upd-dialog"
+    width="560px"
+    align-center
+    :title="`${t('update.title')} · v${updateInfo && updateInfo.latest}`"
+    :close-on-click-modal="false"
+    :style="{ maxHeight: '76vh', display: 'flex', flexDirection: 'column' }"
+    :body-style="{ flex: '1 1 auto', minHeight: '0', overflowY: 'auto', padding: '4px 20px 10px' }"
+    @close="closeUpdateDialog(false)"
+  >
+    <div v-if="updateInfo" class="upd-body">
+      <p class="upd-lead">{{ t('update.found', { v: updateInfo.latest, cur: updateInfo.current }) }}</p>
+      <!-- eslint-disable-next-line vue/no-v-html -- 说明来自自家 Release，渲染器已转义 -->
+      <div class="upd-notes markdown-body" v-html="updateInfo.notesHtml"></div>
+      <a v-if="updateInfo.truncated" class="upd-more" :href="updateInfo.releaseUrl"
+         target="_blank" rel="noopener">{{ t('update.moreNotes') }}</a>
+    </div>
+    <template #footer>
+      <div class="upd-footer">
+        <!-- 「不再提示此版本」只在自动弹出时出现；手动点图标检查时不显示。
+             右上角 × / ESC 只是关闭（不记 skip，下次有新版照常提示） -->
+        <el-button v-if="updateInfo && updateInfo.isAuto" size="small" @click="closeUpdateDialog(true)">{{ t('update.neverAgain') }}</el-button>
+        <el-button size="small" @click="gotoDownload">{{ t('update.goto') }}</el-button>
+        <el-button size="small" type="primary" @click="doApplyUpdate">{{ t('update.apply') }}</el-button>
+      </div>
+    </template>
+  </el-dialog>
+
+  <!-- 下载进度：后台任务在跑，这里只展示（关掉窗口不会中断下载） -->
+  <el-dialog
+    v-model="dlVisible"
+    class="upd-dl"
+    width="420px"
+    :title="t('update.downloading')"
+    :show-close="dlStatus === 'running'"
+    :close-on-click-modal="false"
+  >
+    <div class="upd-dl-body">
+      <el-progress
+        :percentage="dlTotal > 0 ? Math.min(100, Math.round((dlReceived / dlTotal) * 100)) : 0"
+        :status="dlStatus === 'failed' ? 'exception' : dlStatus === 'done' ? 'success' : undefined"
+        :stroke-width="10"
+      />
+      <div class="upd-dl-meta">
+        <span v-if="dlStatus === 'running'">{{ t('update.dlProgress', { done: fmtBytes(dlReceived), total: fmtBytes(dlTotal), speed: fmtBytes(dlSpeed) }) }}</span>
+        <span v-else-if="dlStatus === 'done'">{{ t('update.dlDone') }}</span>
+        <span v-else class="upd-dl-err">{{ dlError }}</span>
+      </div>
+      <div v-if="dlStatus === 'done'" class="upd-dl-tip">{{ t('update.applyDone') }}</div>
+    </div>
+    <template #footer>
+      <el-button v-if="dlStatus !== 'running'" size="small" type="primary" @click="closeDownloadDialog">{{ t('common.confirm') }}</el-button>
+      <el-button v-else size="small" @click="closeDownloadDialog">{{ t('update.dlBackground') }}</el-button>
+    </template>
+  </el-dialog>
+
   <!-- 数据治理（敏感数据 / 质量 / 关系 / 容量 / 变更影响 / 索引建议） -->
   <AiGovernanceDialog v-model="governanceOpen" :conn="conn" :database="currentDb"
                       :initial-tab="governanceTab" :auto-run="governanceAutoRun" />
@@ -1037,86 +1101,221 @@ const ConnectionDialog = defineAsyncComponent(() => import('../connection/Connec
 const DataSourcePicker = defineAsyncComponent(() => import('../../common/DataSourcePicker.vue'))
 const ObjectFormDialog = defineAsyncComponent(() => import('../../common/objectforms/ObjectFormDialog.vue'))
 const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView.vue'))
-import { checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi } from '../../api'
+import { checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi, openLocalDir as openLocalDirApi, updateDirs as updateDirsApi, pickUpdateDir as pickUpdateDirApi } from '../../api'
 
-// ===== 检查更新：Gitee 最新发行版 vs 当前版本；有新版可在线下载安装 =====
+// ===== 检查更新：与 GitHub 最新 Release 比对；有新版可在线下载安装 =====
+// 说明正文按 Markdown 渲染（Release body 里带下载表格），不再显示原始文本
 const updateChecking = ref(false)
+const updateInfo = ref(null)   // { latest, current, notesHtml, releaseUrl }
+const updateVisible = ref(false)
+// 下载保存位置：点「在线更新」后弹窗让用户选，选完才开始下载。
+// 目录里不做自动清理 —— 文件留在用户自己找得到的地方，留不留他说了算。
+const DL_DIR_LS = 'dbmind_update_dir'
+const dlDir = ref(localStorage.getItem(DL_DIR_LS) || '')
+const openDownloadDir = async () => {
+  try {
+    await openLocalDirApi(dlDir.value || null)
+  } catch {
+    ElMessage.warning(t('update.dlDirOpenFail'))
+  }
+}
+// 下载进度（后台任务在跑，前端只轮询展示）
+const fmtBytes = (n) => {
+  const v = Number(n) || 0
+  if (v < 1024) return `${v} B`
+  if (v < 1024 * 1024) return `${(v / 1024).toFixed(0)} KB`
+  return `${(v / 1024 / 1024).toFixed(1)} MB`
+}
+const dlVisible = ref(false)
+// idle | running | done | failed。初始必须是 idle —— 写成 running 会导致应用一打开
+// 顶栏刷新图标就挂着「有任务在跑」的角标（其实根本没有任务）
+const dlStatus = ref('idle')
+const dlReceived = ref(0)
+const dlTotal = ref(0)
+const dlSpeed = ref(0)
+const dlError = ref('')
+// 顶栏刷新图标角标：进行中的更新下载任务数（目前全局只有一个下载任务，故为 1）
+const dlBadgeCount = computed(() => (dlStatus.value === 'running' ? 1 : 0))
+
+// 弹窗只放「更新摘要」：Release 全文动辄几千字，整篇塞进弹窗会把弹窗撑满屏、
+// 还要滚动才看得到按钮。这里截取开头一小段 + 给「查看完整更新说明」链接。
+const UPDATE_NOTES_LIMIT = 320
+const showUpdateDialog = (r, isAuto) => {
+  const raw = String(r.notes || '')
+  let cut = raw.slice(0, UPDATE_NOTES_LIMIT)
+  // 切在段落边界（空行），避免半句话 / 半截表格
+  const br = cut.lastIndexOf('\n\n')
+  if (br > 120) cut = cut.slice(0, br)
+  const notes = cut.trim()
+  updateInfo.value = {
+    latest: r.latest,
+    current: r.current,
+    notesHtml: renderMarkdown(notes),
+    truncated: raw.length > notes.length,
+    // 只有「自动弹出」才给「不再提示此版本」；手动点图标检查的用户本来就是主动想看
+    isAuto: !!isAuto,
+    releaseUrl: r.releaseUrl || `https://github.com/rick-works/dbmind/releases/tag/v${r.latest}`
+  }
+
+  updateVisible.value = true
+}
+
+// 关闭弹窗：neverAgain = true 时记住「不再提示此版本」
+const closeUpdateDialog = (neverAgain) => {
+  if (neverAgain && updateInfo.value) {
+    try { localStorage.setItem(UPDATE_SKIP_LS, updateInfo.value.latest) } catch { }
+  }
+  updateVisible.value = false
+}
+
+// 点「在线更新」：先让用户选保存位置，选完才开始下载
+const doApplyUpdate = async () => {
+  updateVisible.value = false
+  let picked
+  try {
+    picked = await pickUpdateDirApi(t('update.dlPickTitle'))
+  } catch (e) {
+    ElMessage.error((e && e.message) || t('update.dlDirOpenFail'))
+    return
+  }
+  if (!picked || !picked.success) {
+    ElMessage.error((picked && picked.message) || t('update.dlDirOpenFail'))
+    return
+  }
+  if (!picked.dir) return   // 用户在系统对话框里点了取消，不作处理
+  const dir = String(picked.dir).trim()
+  try { localStorage.setItem(DL_DIR_LS, dir) } catch { /* 隐私模式，忽略 */ }
+  await startDownload(dir)
+}
+
+// 真正开始下载（目录已定）
+const startDownload = async (dir) => {
+  dlVisible.value = true
+  dlStatus.value = 'running'
+  dlReceived.value = 0
+  dlTotal.value = 0
+  dlSpeed.value = 0
+  dlError.value = ''
+  startProgressPolling()
+  try {
+    const res = await applyUpdateApi(dir)
+    if (!res || res.success === false) {
+      dlStatus.value = 'failed'
+      dlError.value = (res && res.message) || t('update.applyFail')
+    }
+  } catch (e) {
+    dlStatus.value = 'failed'
+    dlError.value = (e && e.message) || t('update.applyFail')
+  }
+}
+
+// 轮询下载进度：弹窗打开时500ms（进度条要顺），关掉后3s —— 只为让顶栏图标
+// 保持「有任务在跑」的状态，随时能再调出来
+let dlTimer = null
+const startProgressPolling = (fast = true) => {
+  stopProgressPolling()
+  const tick = async () => {
+    try {
+      const p = await updateProgressApi()
+      dlReceived.value = p.received || 0
+      dlTotal.value = p.total || 0
+      dlSpeed.value = p.speed || 0
+      if (p.status === 'done' || p.status === 'failed') {
+        dlStatus.value = p.status
+        if (p.status === 'failed') dlError.value = p.error || t('update.applyFail')
+        stopProgressPolling()
+      } else {
+        dlStatus.value = p.status || 'running'
+      }
+    } catch {
+      // 单次轮询失败不打断（网络抖动），下一拍继续
+    }
+  }
+  dlTimer = setInterval(tick, fast ? 500 : 3000)
+}
+const stopProgressPolling = () => {
+  if (dlTimer) { clearInterval(dlTimer); dlTimer = null }
+}
+const closeDownloadDialog = () => {
+  // 只是隐藏进度窗，不取消后台下载：继续低频轮询，顶栏图标保持可点（随时调出来）
+  dlVisible.value = false
+  if (dlStatus.value === 'running') {
+    startProgressPolling(false)
+    ElMessage.info(t('update.dlBackgroundHint'))
+  }
+}
+
+
+const gotoDownload = () => {
+  const url = updateInfo.value && updateInfo.value.releaseUrl
+  updateVisible.value = false
+  if (url) window.open(url, '_blank')
+}
+
 const checkUpdate = async () => {
   if (updateChecking.value) return
   updateChecking.value = true
   try {
+    // 后台已有下载任务在跑：直接把进度窗调出来（这就是「上次关掉了，从哪再找到」）
+    try {
+      const p = await updateProgressApi()
+      if (p && (p.status === 'running' || p.status === 'done' || p.status === 'failed')) {
+        dlVisible.value = true
+        dlStatus.value = p.status
+        dlReceived.value = p.received || 0
+        dlTotal.value = p.total || 0
+        dlSpeed.value = 0
+        dlError.value = p.error || ''
+        if (p.status === 'running') startProgressPolling()
+        return
+      }
+    } catch { /* 进度接口不可用就走正常检查 */ }
+
     const r = await checkUpdateApi()
     if (!r || r.success === false) { ElMessage.error((r && r.message) || t('update.checkFail')); return }
     if (!r.hasNew) { ElMessage.success(t('update.upToDate', { v: r.current })); return }
-    // 有新版：展示版本说明，给「在线更新 / 前往下载」两条路
-    try {
-      await ElMessageBox.confirm(
-        t('update.found', { v: r.latest, cur: r.current }) + '\n\n' + String(r.notes || '').slice(0, 800),
-        t('update.title'),
-        {
-          type: 'info',
-          distinguishCancelAndClose: true,
-          showClose: true,
-          closeOnClickModal: false,
-          confirmButtonText: t('update.apply'),
-          cancelButtonText: t('update.goto'),
-          customStyle: { whiteSpace: 'pre-line' }
-        }
-      )
-      // 确认 = 在线更新（下载安装包并拉起安装器）
-      ElMessage.info(t('update.downloading'))
-      const res = await applyUpdateApi()
-      if (res && res.success) ElMessage.success(res.message || t('update.applyDone'))
-      else ElMessage.error((res && res.message) || t('update.applyFail'))
-    } catch (e) {
-      if (e === 'cancel') {
-        // 取消按钮 = 前往下载页
-        window.open(r.releaseUrl || `https://github.com/rick-works/dbmind/releases/tag/v${r.latest}`, '_blank')
-      }
-      // close(×/ESC) = 不动
-    }
-  } catch (e) {
+    showUpdateDialog(r, false)   // 手动检查：不显示「不再提示此版本」
+  } catch {
     ElMessage.error(t('update.checkFail'))
   } finally {
     updateChecking.value = false
   }
+}
 
-
-// ===== 启动自动检测新版本：延迟 3 秒（等界面稳定），失败静默不打扰 =====
-// 有新版弹三态弹窗：立即更新 / 暂不更新 / 不再提示此版本（点右上角 ×）
+// ===== 启动自动检测新版本：延迟后静默检查；有新版才弹窗 =====
+// 三态按钮：立即更新 / 暂不更新 / 不再提示此版本（右上角 ×）
 const UPDATE_SKIP_LS = 'dbmind_update_skip'
-onMounted(() => { setTimeout(autoCheckUpdate, 3000) })
+// 服务可能比页面晚就绪（首次启动要初始化数据库/驱动），失败后重试一次
+onMounted(() => {
+  setTimeout(autoCheckUpdate, 3000)
+  // 启动时也看一眼有没有正在跑的下载任务：有就让顶栏图标进入「查看进度」状态
+  setTimeout(async () => {
+    try {
+      const p = await updateProgressApi()
+      if (p && p.status === 'running') {
+        dlStatus.value = 'running'
+        dlReceived.value = p.received || 0
+        dlTotal.value = p.total || 0
+        startProgressPolling(false)
+      }
+    } catch { }
+  }, 1500)
+})
 const autoCheckUpdate = async () => {
   try {
     const r = await checkUpdateApi()
-    if (!r || r.success === false || !r.hasNew) return
+    if (!r || r.success === false) throw new Error('check failed')
+    if (!r.hasNew) return
     // 用户对同一版本点过「不再提示」就静默
     let skipped = ''
     try { skipped = localStorage.getItem(UPDATE_SKIP_LS) || '' } catch { }
     if (skipped === r.latest) return
-    try {
-      await ElMessageBox.confirm(
-        t('update.autoFound', { v: r.latest, cur: r.current }) + '\n\n' + String(r.notes || '').slice(0, 600) + '\n\n' + t('update.autoSkipHint'),
-        t('update.title'),
-        {
-          type: 'info',
-          distinguishCancelAndClose: true,
-          showClose: true,
-          closeOnClickModal: false,
-          confirmButtonText: t('update.apply'),
-          cancelButtonText: t('update.later')
-        }
-      )
-      ElMessage.info(t('update.downloading'))
-      const res = await applyUpdateApi()
-      if (res && res.success) ElMessage.success(res.message || t('update.applyDone'))
-      else ElMessage.error((res && res.message) || t('update.applyFail'))
-    } catch (e) {
-      // close（右上角 × / ESC）= 不再提示此版本；cancel = 暂不更新
-      if (e === 'close') { try { localStorage.setItem(UPDATE_SKIP_LS, r.latest) } catch { } }
-    }
-  } catch { /* 检测失败静默 */ }
-}}
+    showUpdateDialog(r, true)    // 自动弹出：给「不再提示此版本」
+  } catch {
+    // 首次启动时后端可能还没就绪 —— 8 秒后再试一次，仍失败才静默
+    setTimeout(autoCheckUpdate, 8000)
+  }
+}
 const AiGovernanceDialog = defineAsyncComponent(() => import('../ai/AiGovernanceDialog.vue'))
 const MonitorPanel = defineAsyncComponent(() => import('./MonitorStudio.vue'))  // 监控工作台（tab 全屏版）
 const KnowledgeStudio = defineAsyncComponent(() => import('../knowledge/KnowledgeStudio.vue'))
@@ -6884,6 +7083,53 @@ watch(() => route.query.id, (id) => {
   user-select: text; cursor: text;
 }
 /* ===== AI 解释视图弹窗 ===== */
+/* ===== 检查更新弹窗 ===== */
+/* 注意：el-dialog 是 teleport 渲染的，内部元素不带 scoped 的 data-v，
+   高度/滚动这类「影响内部盒子」的规则必须用 :deep() 穿透，否则写了不生效（弹窗会被内容撑满屏） */
+.upd-dialog :deep(.el-dialog__body) { max-height: 50vh; overflow-y: auto; padding: 4px 20px 8px; }
+.upd-dialog :deep(.el-dialog__header) { padding: 16px 20px 12px; }
+.upd-dialog :deep(.el-dialog__footer) { padding: 10px 20px 14px; }
+.upd-lead { margin: 0 0 10px; font-size: 13px; color: var(--dc-text-mid, #555); }
+.upd-notes { font-size: 12.5px; line-height: 1.7; color: var(--dc-text, #333); }
+.upd-notes :deep(h1), .upd-notes :deep(h2), .upd-notes :deep(h3),
+.upd-notes :deep(h4), .upd-notes :deep(h5) { margin: 12px 0 6px; font-size: 13.5px; font-weight: 700; }
+.upd-notes :deep(h1:first-child), .upd-notes :deep(h2:first-child), .upd-notes :deep(p:first-child) { margin-top: 0; }
+.upd-notes :deep(p) { margin: 0 0 8px; }
+.upd-notes :deep(ul), .upd-notes :deep(ol) { margin: 0 0 10px; padding-left: 20px; }
+.upd-notes :deep(li) { margin-bottom: 4px; }
+.upd-notes :deep(code) {
+  background: var(--dc-bg-soft, #f4f5f7); border-radius: 4px; padding: 1px 5px;
+  font-family: var(--dc-mono, Consolas, monospace); font-size: 12px;
+}
+.upd-notes :deep(pre) {
+  background: var(--dc-bg-soft, #f4f5f7); border-radius: 6px; padding: 10px 12px;
+  overflow-x: auto; margin: 8px 0 12px;
+}
+.upd-notes :deep(pre code) { background: none; padding: 0; font-size: 11.5px; line-height: 1.6; }
+.upd-notes :deep(table) { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 12.5px; }
+.upd-notes :deep(th), .upd-notes :deep(td) {
+  border: 1px solid var(--dc-border, #e3e6eb); padding: 6px 10px; text-align: left;
+}
+.upd-notes :deep(th) { background: var(--dc-bg-soft, #f4f5f7); font-weight: 600; }
+.upd-notes :deep(blockquote) {
+  margin: 8px 0; padding: 6px 12px; border-left: 3px solid var(--dc-border, #dcdfe6);
+  background: var(--dc-bg-soft, #fafbfc); color: var(--dc-text-dim, #888); border-radius: 0 6px 6px 0;
+}
+.upd-notes :deep(hr) { border: none; border-top: 1px solid var(--dc-border, #e3e6eb); margin: 12px 0; }
+.upd-notes :deep(a) { color: var(--dc-link, #409eff); }
+.upd-dir { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; padding: 8px 10px; border: 1px solid var(--dc-border, #e3e6eb); border-radius: 8px; background: var(--dc-bg-soft, #fafbfc); }
+.upd-dir-hint { margin: 8px 0 0; font-size: 12px; color: var(--dc-text-dim, #999); line-height: 1.6; }
+.upd-dir-icon { color: var(--dc-text-dim, #999); font-size: 15px; }
+.upd-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.upd-dl-body { padding: 4px 2px 2px; }
+.upd-dl-meta { margin-top: 10px; font-size: 12.5px; color: var(--dc-text-mid, #666); text-align: center; }
+.upd-dl-err { color: var(--el-color-danger, #f56c6c); word-break: break-all; }
+.upd-dl-tip { margin-top: 8px; font-size: 12px; color: var(--dc-text-dim, #888); text-align: center; line-height: 1.6; }
+.upd-more {
+  display: inline-block; margin-top: 6px; font-size: 12.5px;
+  color: var(--dc-link, #409eff); text-decoration: none;
+}
+.upd-more:hover { text-decoration: underline; }
 .ai-explain-dialog :deep(.el-dialog) {
   max-height: 640px;
   display: flex;
@@ -7006,6 +7252,8 @@ watch(() => route.query.id, (id) => {
 /* ==================== 后台任务中心（顶栏时钟图标） ==================== */
 .bg-task-btn .el-badge__content { z-index: 1; }
 .bg-task-btn { position: relative; }
+.upd-task-btn { position: relative; }
+.upd-task-btn .bg-count { pointer-events: none; }
 .bg-count { position: absolute; top: -3px; right: -4px; min-width: 14px; height: 14px; line-height: 14px; border-radius: 7px; background: var(--dc-primary); color: #fff; font-size: 10px; text-align: center; padding: 0 3px; box-sizing: border-box; }
 .bg-toolbar { display: flex; justify-content: flex-start; margin-bottom: 10px; }
 .bg-task-list { max-height: 300px; overflow-y: auto; }

@@ -40,6 +40,7 @@ pub mod scope;
 pub mod shape;
 pub mod sync;
 pub mod sys;
+pub mod sysproxy;
 pub mod update;
 pub mod tasks;
 pub mod xlsx;
@@ -264,6 +265,9 @@ pub fn routes() -> Router<AppState> {
         // 在线更新：检查 Gitee 最新发行版 / 下载安装包并拉起安装器
         .route("/api/update/check", get(update::check))
         .route("/api/update/apply", post(update::apply))
+        .route("/api/update/progress", get(update::progress))
+    .route("/api/update/dirs", get(update::dirs))
+    .route("/api/update/pick-dir", get(update::pick_dir))
         .route(
             "/api/settings/driver-mirror",
             get(sys::mirror_get).put(sys::mirror_put),
