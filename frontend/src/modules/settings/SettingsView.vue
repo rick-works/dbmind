@@ -2360,6 +2360,9 @@ watch(visible, (v) => {
 /* 覆盖 el-dialog 在暗色主题下的样式 */
 .settings-dialog .el-dialog__header { margin-right: 0; padding: 16px 20px; border-bottom: 1px solid var(--dc-border); }
 .settings-dialog .el-dialog__body { padding: 0; height: calc(100vh - 190px); overflow-y: auto; }
+/* 内容放不下时允许滚动，但滚动条不显示（浏览器缩放/小窗下也不出难看的竖条） */
+.settings-dialog .el-dialog__body { scrollbar-width: none; -ms-overflow-style: none; }
+.settings-dialog .el-dialog__body::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .settings-dialog .el-dialog__headerbtn { top: 4px; right: 8px; }
 .fmt-preview-note { color: var(--dc-text-dim); }
 .fmt-sql-kw { color: var(--dc-sql-kw); font-weight: 600; }
