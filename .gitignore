@@ -32,3 +32,6 @@ go.txt
 Thumbs.db
 .DS_Store
 .playwright-cli/
+
+# 官网源文件：只用于本地预览与手动同步到 gh-pages 分支，不进版本库
+/website/
