@@ -796,7 +796,7 @@
 
           <div class="log-list" v-loading="logLoading">
             <div v-for="(item, i) in logItems" :key="i" class="log-item">
-              <span class="log-time">{{ item.createdAt }}</span>
+              <span class="log-time">{{ fmtLogTime(item.createdAt) }}</span>
               <span class="log-tag" :class="'k-' + item.kind">{{ $t('settings.logs.kind.' + item.kind) }}</span>
               <span class="log-sql" :title="item.sql">{{ item.sql }}</span>
               <span class="log-conn" :title="item.connection">{{ item.connection }}</span>
@@ -1773,6 +1773,12 @@ const clearAllLogs = async () => {
     loadLogs()
   } catch { ElMessage.error(t('settings.logs.msgFailed')) }
 }
+// 时间显示：后端给的 ISO 串可能带「Z+08:00」混合时区（非法格式，Date 解析不可靠）——
+// 直接正则取 YYYY-MM-DDTHH:mm:ss 重排为 MM-DD HH:mm:ss，解析不了就原样返回
+const fmtLogTime = (raw) => {
+  const m = /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(String(raw || ''))
+  return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : String(raw || '')
+}
 watch(activeTab, (tab) => { if (tab === 'logs') { loadAuditLevel(); loadLogs() } })
 
 // ---------- 快捷键自定义 ----------
@@ -1949,14 +1955,15 @@ watch(visible, (v) => {
 .log-level-label { font-size: 13px; color: var(--dc-text-mid); flex-shrink: 0; }
 .log-filter-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
 .log-count { font-size: 12px; color: var(--dc-text-dim); }
-/* 日志面板：限高在视口内（不再撑出弹窗滚动条），内部 flex 分配 —— 列表吃掉全部剩余空间 */
+/* 日志面板：撑满弹窗内容区（body 已固定高），flex 纵向分配 —— 列表吃剩余空间，
+   底边距与其它页签一致；弹窗级滚动条不再出现（超长只在列表内滚） */
 .log-panel {
-  max-height: calc(100vh - 210px);
+  height: 100%;
   overflow: hidden;
   display: flex; flex-direction: column;
 }
 .log-panel .log-title:first-child { margin-top: 0; }
-.log-panel .log-list { flex: 1 1 auto; min-height: 180px; height: auto; }
+.log-panel .log-list { flex: 1 1 auto; min-height: 160px; height: auto; }
 .log-list {
   overflow-y: auto;
   border: 1px solid var(--dc-border);
@@ -2331,7 +2338,7 @@ watch(visible, (v) => {
 
 /* 覆盖 el-dialog 在暗色主题下的样式 */
 .settings-dialog .el-dialog__header { margin-right: 0; padding: 16px 20px; border-bottom: 1px solid var(--dc-border); }
-.settings-dialog .el-dialog__body { padding: 0; }
+.settings-dialog .el-dialog__body { padding: 0; height: calc(100vh - 190px); overflow-y: auto; }
 .settings-dialog .el-dialog__headerbtn { top: 4px; right: 8px; }
 .fmt-preview-note { color: var(--dc-text-dim); }
 .fmt-sql-kw { color: var(--dc-sql-kw); font-weight: 600; }
