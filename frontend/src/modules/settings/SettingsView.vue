@@ -744,7 +744,7 @@
         </div>
 
         <!-- 日志：全类型审计（查询 / 增删改 / DDL / 事务 / AI 调用），可筛可清 -->
-        <div v-show="activeTab === 'logs'" class="settings-panel">
+        <div v-show="activeTab === 'logs'" class="settings-panel log-panel">
           <!-- 运行时日志级别：程序自身的诊断输出（tracing），与下面的审计日志是两回事 -->
           <div class="panel-title log-title">{{ $t('settings.logs.runtimeTitle') }}</div>
           <div class="panel-desc">{{ $t('settings.logs.runtimeDesc') }}</div>
@@ -1949,8 +1949,16 @@ watch(visible, (v) => {
 .log-level-label { font-size: 13px; color: var(--dc-text-mid); flex-shrink: 0; }
 .log-filter-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
 .log-count { font-size: 12px; color: var(--dc-text-dim); }
+/* 日志面板：限高在视口内（不再撑出弹窗滚动条），内部 flex 分配 —— 列表吃掉全部剩余空间 */
+.log-panel {
+  max-height: calc(100vh - 210px);
+  overflow: hidden;
+  display: flex; flex-direction: column;
+}
+.log-panel .log-title:first-child { margin-top: 0; }
+.log-panel .log-list { flex: 1 1 auto; min-height: 180px; height: auto; }
 .log-list {
-  height: max(340px, calc(100vh - 545px)); overflow-y: auto;
+  overflow-y: auto;
   border: 1px solid var(--dc-border);
   border-radius: 8px; background: var(--dc-bg-soft);
 }
