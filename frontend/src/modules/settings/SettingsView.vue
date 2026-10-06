@@ -745,22 +745,9 @@
 
         <!-- 日志：全类型审计（查询 / 增删改 / DDL / 事务 / AI 调用），可筛可清 -->
         <div v-show="activeTab === 'logs'" class="settings-panel">
-          <div class="panel-title">{{ $t('settings.logs.title') }}</div>
-          <div class="panel-desc">{{ $t('settings.logs.desc') }}</div>
-
-          <div class="log-level-row">
-            <span class="log-level-label">{{ $t('settings.logs.levelLabel') }}</span>
-            <el-radio-group v-model="auditLevel" size="small" @change="saveAuditLevel">
-              <el-radio-button value="all">{{ $t('settings.logs.level.all') }}</el-radio-button>
-              <el-radio-button value="write">{{ $t('settings.logs.level.write') }}</el-radio-button>
-              <el-radio-button value="error">{{ $t('settings.logs.level.error') }}</el-radio-button>
-              <el-radio-button value="off">{{ $t('settings.logs.level.off') }}</el-radio-button>
-            </el-radio-group>
-          </div>
-
-          <!-- 运行日志级别：程序自身的诊断日志（tracing），与上面的审计日志是两回事 -->
-          <div class="panel-title log-title">{{ $t('settings.language.logLevel') }}</div>
-          <div class="panel-desc">{{ $t('settings.language.logLevelTip') }}</div>
+          <!-- 运行时日志级别：程序自身的诊断输出（tracing），与下面的审计日志是两回事 -->
+          <div class="panel-title log-title">{{ $t('settings.logs.runtimeTitle') }}</div>
+          <div class="panel-desc">{{ $t('settings.logs.runtimeDesc') }}</div>
           <div class="log-level-options">
             <div
               v-for="lv in logLevels"
@@ -777,8 +764,20 @@
             </div>
           </div>
 
+          <div class="panel-title log-title">{{ $t('settings.logs.auditTitle') }}</div>
+          <div class="panel-desc">{{ $t('settings.logs.desc') }}</div>
+          <div class="log-level-row">
+            <span class="log-level-label">{{ $t('settings.logs.levelLabel') }}</span>
+            <el-radio-group v-model="auditLevel" size="small" @change="saveAuditLevel">
+              <el-radio-button value="all">{{ $t('settings.logs.level.all') }}</el-radio-button>
+              <el-radio-button value="write">{{ $t('settings.logs.level.write') }}</el-radio-button>
+              <el-radio-button value="error">{{ $t('settings.logs.level.error') }}</el-radio-button>
+              <el-radio-button value="off">{{ $t('settings.logs.level.off') }}</el-radio-button>
+            </el-radio-group>
+          </div>
+
           <div class="log-filter-row">
-            <el-select v-model="logKind" size="small" style="width: 140px" @change="loadLogs">
+            <el-select v-model="logKind" size="small" style="width: 140px" @change="logPage = 1; loadLogs()">
               <el-option value="" :label="$t('settings.logs.kind.all')" />
               <el-option value="query" :label="$t('settings.logs.kind.query')" />
               <el-option value="write" :label="$t('settings.logs.kind.write')" />
@@ -787,7 +786,7 @@
               <el-option value="ai" :label="$t('settings.logs.kind.ai')" />
             </el-select>
             <el-input v-model="logQuery" size="small" style="width: 220px" clearable
-                      :placeholder="$t('settings.logs.searchPh')" @keyup.enter="loadLogs" @clear="loadLogs" />
+                      :placeholder="$t('settings.logs.searchPh')" @keyup.enter="logPage = 1; loadLogs()" @clear="logPage = 1; loadLogs()" />
             <el-button size="small" :icon="Search" @click="loadLogs">{{ $t('settings.logs.refresh') }}</el-button>
             <span class="log-count">{{ $t('settings.logs.count', { n: logItems.length }) }}</span>
             <el-button size="small" type="danger" plain style="margin-left: auto" @click="clearAllLogs">
@@ -806,6 +805,16 @@
             </div>
             <div v-if="!logItems.length && !logLoading" class="cache-empty">{{ $t('settings.logs.empty') }}</div>
           </div>
+
+          <el-pagination
+            layout="prev, pager, next"
+            size="small"
+            background
+            :page-size="50"
+            :total="logTotal"
+            :current-page="logPage"
+            @current-change="(p) => { logPage = p; loadLogs() }"
+          />
         </div>
 
         <!-- 6. 通知 -->
@@ -1713,6 +1722,13 @@ const logKind = ref('')
 const logQuery = ref('')
 const logItems = ref([])
 const logLoading = ref(false)
+const logPage = ref(1)
+const logHasMore = ref(false)
+const LOG_PAGE_SIZE = 50
+// 合并视图算不出准确总数：用「当前页位置 + 是否还有下一页」估算给 el-pagination
+const logTotal = computed(() =>
+  logHasMore.value ? logPage.value * LOG_PAGE_SIZE + 1 : (logPage.value - 1) * LOG_PAGE_SIZE + logItems.value.length
+)
 
 const loadAuditLevel = async () => {
   try {
@@ -1724,14 +1740,23 @@ const saveAuditLevel = async (v) => {
   try {
     await putSetting('audit.level', v)
     ElMessage.success(t('settings.logs.levelSaved'))
+    logPage.value = 1
     loadLogs()
   } catch { ElMessage.error(t('settings.logs.msgFailed')) }
 }
 const loadLogs = async () => {
   logLoading.value = true
   try {
-    const r = await getLogs({ limit: 500, kind: logKind.value || undefined, q: logQuery.value || undefined })
-    logItems.value = r.items || []
+    // 多取一条判断「还有下一页」；翻页用 offset
+    const r = await getLogs({
+      limit: LOG_PAGE_SIZE + 1,
+      offset: (logPage.value - 1) * LOG_PAGE_SIZE,
+      kind: logKind.value || undefined,
+      q: logQuery.value || undefined
+    })
+    const items = r.items || []
+    logHasMore.value = items.length > LOG_PAGE_SIZE
+    logItems.value = items.slice(0, LOG_PAGE_SIZE)
   } catch { ElMessage.error(t('settings.logs.msgFailed')) }
   logLoading.value = false
 }
@@ -1744,6 +1769,7 @@ const clearAllLogs = async () => {
   try {
     await clearLogs()
     ElMessage.success(t('settings.logs.cleared'))
+    logPage.value = 1
     loadLogs()
   } catch { ElMessage.error(t('settings.logs.msgFailed')) }
 }
@@ -1924,10 +1950,11 @@ watch(visible, (v) => {
 .log-filter-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
 .log-count { font-size: 12px; color: var(--dc-text-dim); }
 .log-list {
-  max-height: min(620px, calc(100vh - 380px)); overflow-y: auto;
+  height: 320px; overflow-y: auto;
   border: 1px solid var(--dc-border);
   border-radius: 8px; background: var(--dc-bg-soft);
 }
+.log-list + .el-pagination { margin-top: 12px; justify-content: flex-end; }
 .log-item {
   display: flex; align-items: center; gap: 10px;
   padding: 7px 12px; border-bottom: 1px solid var(--dc-border); font-size: 12.5px;
