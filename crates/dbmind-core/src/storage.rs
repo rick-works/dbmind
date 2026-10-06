@@ -412,6 +412,11 @@ impl Store {
 
     /// 统一日志：合并 query_history 与 ai_audit 两个来源，按时间倒序。
     /// kind 筛选（空 = 全部）、q 关键字（LIKE 语句/提示词与连接名）、offset 翻页。
+    /// level 审计类别筛选（设置 → 日志的类别下拉）：
+    ///   - `query` 查询操作 / `write` 数据操作 / `ddl` 表操作 / `tx` 事务操作 / `exec` 其他执行
+    ///   - `ai`    只看 AI 调用（来自 ai_audit）
+    ///   - `error` 只看失败/报错记录
+    ///   - `off`   不展示任何记录
     /// limit 传 N+1 由调用方判断「还有没有下一页」。
     pub fn list_logs(
         &self,
@@ -419,23 +424,38 @@ impl Store {
         offset: usize,
         kind: Option<&str>,
         q: Option<&str>,
+        level: Option<&str>,
     ) -> Result<Vec<LogEntry>> {
         let conn = self.lock();
         let limit = limit.clamp(1, 2000) as i64;
         let offset = offset as i64;
         let mut out: Vec<LogEntry> = Vec::new();
+        // 审计类别：off = 不展示；ai 只看 AI；error 只看失败；其余按执行类别精确匹配
+        let level = level.unwrap_or("all");
+        if level == "off" {
+            return Ok(out);
+        }
+        let exec_level = matches!(level, "query" | "write" | "ddl" | "tx" | "exec").then_some(level);
 
-        let want_exec = matches!(kind, None | Some("exec"))
-            || matches!(kind, Some("query" | "write" | "ddl" | "tx"));
+        let want_exec = exec_level.is_some()
+            || (level == "all" || level == "error")
+                && (matches!(kind, None | Some("exec")) || matches!(kind, Some("query" | "write" | "ddl" | "tx")));
         if want_exec {
             let like = format!("%{}%", q.unwrap_or("").replace('%', ""));
-            let mut stmt = conn.prepare(
+            // 类别附加条件：error 走 status，其余执行类别的类别值已进 kind 参数
+            let level_clause = if level == "error" { "AND status = 'error'" } else { "" };
+            let kind_arg = match exec_level {
+                Some(l) => l,
+                None => kind.unwrap_or(""),
+            };
+            let sql = format!(
                 "SELECT sql, COALESCE(connection_name, connection_id, ''), status, row_count, \
                  duration_ms, error_code, created_at, kind FROM query_history \
                  WHERE (?1 = '' OR kind = ?1) AND (?2 = '' OR sql LIKE ?2 OR connection_name LIKE ?2) \
-                 ORDER BY created_at DESC, rowid DESC LIMIT ?3 OFFSET ?4",
-            )?;
-            let kind_arg = kind.unwrap_or("");
+                 {level_clause} \
+                 ORDER BY created_at DESC, rowid DESC LIMIT ?3 OFFSET ?4"
+            );
+            let mut stmt = conn.prepare(&sql)?;
             let mut rows = stmt.query(params![kind_arg, like, limit, offset])?;
             while let Some(row) = rows.next()? {
                 out.push(LogEntry {
@@ -451,8 +471,12 @@ impl Store {
             }
         }
 
-        // AI 调用（ai_audit：time/kind/prompt）—— 按级别与筛选参与合并
-        let want_ai = matches!(kind, None | Some("ai"));
+        // AI 调用（ai_audit：time/kind/prompt）—— 类别 ai 只看它；all/error 与执行类合并展示
+        let want_ai = match level {
+            "ai" => true,
+            "query" | "write" | "ddl" | "tx" | "exec" => false,
+            _ => matches!(kind, None | Some("ai")),
+        };
         if want_ai {
             let like = format!("%{}%", q.unwrap_or("").replace('%', ""));
             let mut stmt = conn.prepare(
@@ -481,7 +505,51 @@ impl Store {
         Ok(out)
     }
 
+    /// 日志总条数：与 `list_logs` 完全相同的筛选条件（kind / q / 审计类别），
+    /// 但不带分页 —— 给界面「共 N 条」与分页页数用真实数字，而不是前端估算。
+    pub fn count_logs(&self, kind: Option<&str>, q: Option<&str>, level: Option<&str>) -> Result<i64> {
+        let conn = self.lock();
+        let level = level.unwrap_or("all");
+        if level == "off" {
+            return Ok(0);
+        }
+        let exec_level = matches!(level, "query" | "write" | "ddl" | "tx" | "exec").then_some(level);
+        let like = format!("%{}%", q.unwrap_or("").replace('%', ""));
+        let mut total: i64 = 0;
+
+        let want_exec = exec_level.is_some()
+            || (level == "all" || level == "error")
+                && (matches!(kind, None | Some("exec")) || matches!(kind, Some("query" | "write" | "ddl" | "tx")));
+        if want_exec {
+            let clause = if level == "error" { "AND status = 'error'" } else { "" };
+            let kind_arg = match exec_level {
+                Some(l) => l,
+                None => kind.unwrap_or(""),
+            };
+            let sql = format!(
+                "SELECT COUNT(1) FROM query_history \
+                 WHERE (?1 = '' OR kind = ?1) AND (?2 = '' OR sql LIKE ?2 OR connection_name LIKE ?2) \
+                 {clause}"
+            );
+            total += conn.query_row(&sql, params![kind_arg, like], |r| r.get::<_, i64>(0))?;
+        }
+
+        let want_ai = match level {
+            "ai" => true,
+            "query" | "write" | "ddl" | "tx" | "exec" => false,
+            _ => matches!(kind, None | Some("ai")),
+        };
+        if want_ai {
+            let sql = "SELECT COUNT(1) FROM ai_audit WHERE (?1 = '' OR ?1 = 'ai') AND prompt LIKE ?2";
+            let kind_arg = kind.unwrap_or("");
+            total += conn.query_row(sql, params![kind_arg, like], |r| r.get::<_, i64>(0))?;
+        }
+        Ok(total)
+    }
+
     /// 清空全部日志（执行历史 + AI 审计），返回删除总行数。
+    /// 审计日志不做自动清理，也不做「保留 N 条」式的部分清理 ——
+    /// 按用户要求：只有点「清空日志」才清，且一次清空全部记录。
     pub fn clear_logs(&self) -> Result<usize> {
         let conn = self.lock();
         let n1 = conn.execute("DELETE FROM query_history", [])?;
@@ -537,6 +605,8 @@ impl Store {
     /// 为什么要有上限：`query_history` 此前**只增不减** —— 每次编辑器执行都插一行，
     /// 一年下来几十万行，拖慢的正是它自己的索引。按条数保「最近 N 条」、按天数保
     /// 「最近 N 天」，两个维度都留了 0 = 不启用的口子（有人就想永久留着）。
+    /// `ai_audit`（AI 调用审计）同样纳入这两条策略 —— 它此前只受「关闭记录」控制，
+    /// 长期用 AI 面板会无限增长。
     pub fn prune_history(&self, max_entries: usize, retention_days: u32) -> Result<usize> {
         let conn = self.lock();
         let mut removed = 0i64;
@@ -548,16 +618,27 @@ impl Store {
                 "DELETE FROM query_history WHERE created_at < ?1",
                 params![cutoff],
             )? as i64;
+            // AI 审计同样按保留天数清（time 与 created_at 同一时间格式）
+            removed += conn.execute(
+                "DELETE FROM ai_audit WHERE time < ?1",
+                params![cutoff],
+            )? as i64;
         }
         if max_entries > 0 {
             removed += conn.execute(
                 "DELETE FROM query_history WHERE id NOT IN \
-                 (SELECT id FROM query_history ORDER BY created_at DESC, rowid DESC LIMIT ?1)",
+                (SELECT id FROM query_history ORDER BY created_at DESC, rowid DESC LIMIT ?1)",
+                params![max_entries as i64],
+            )? as i64;
+            // AI 审计按条数上限清（它此前只受「关闭记录」控制，长期使用会无限增长）
+            removed += conn.execute(
+                "DELETE FROM ai_audit WHERE id NOT IN \
+                (SELECT id FROM ai_audit ORDER BY time DESC, id DESC LIMIT ?1)",
                 params![max_entries as i64],
             )? as i64;
         }
         Ok(removed as usize)
-    }
+        }
 
     /// 把元数据库做一份**一致性快照**到 `path`（`VACUUM INTO`，迁移数据目录用）。
     ///
@@ -659,8 +740,8 @@ impl Store {
             (SETTINGS_SAFETY_AI_WRITE, "false"),
             (SETTINGS_SCHEMA_TTL, "300"),
             (SETTINGS_QUERY_TIMEOUT, "120"),
-            (SETTINGS_HISTORY_MAX_ENTRIES, "1000"),
-            (SETTINGS_HISTORY_RETENTION_DAYS, "30"),
+            (SETTINGS_HISTORY_MAX_ENTRIES, "0"),
+            (SETTINGS_HISTORY_RETENTION_DAYS, "0"),
             (SETTINGS_TUNNEL_IDLE_TIMEOUT, "1800"),
             (SETTINGS_QUERY_MAX_ROWS, "2000"),
             (SETTINGS_LOG_LEVEL, "info"),

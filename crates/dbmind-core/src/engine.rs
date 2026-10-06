@@ -79,9 +79,9 @@ impl DbMindEngine {
             .as_deref()
             == Some("true");
         crate::agent::set_legacy_tls_enabled(legacy_tls);
-        // 隧道空闲回收时长 + 历史保留策略：开机先对齐一遍（旧库可能积了几万行历史）
+        // 隧道空闲回收时长：开机先对齐一遍
         engine.apply_tunnel_idle_timeout();
-        engine.prune_history();
+        // 历史不再自动清理：审计日志只在用户点「清空日志」时清（避免悄悄丢用户想留的记录）
         engine.reconcile_shadow_read_only();
         engine.refresh_agent_hosts();
         // 首次运行初始化：目录骨架 + （只在真正全新时）示例库与示例连接。
@@ -976,10 +976,8 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         if let Err(e) = self.store.record_history(entry) {
             // 留痕失败不能影响主流程
             tracing::warn!(target: "dbmind::engine", error = %e, "写入历史失败");
-            return;
         }
-        // 顺手清一次：一条 INSERT 换一条 DELETE，比「积了十万行再大扫除」平稳得多
-        self.prune_history();
+        // 不在这里自动清理：审计日志只由用户点「清空日志」清空
     }
 
     /// 按语句首词推导操作分类：query / write / ddl / tx / exec。
@@ -999,18 +997,20 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         }
     }
 
-    /// 按设置清理查询历史（`history.maxEntries` / `history.retentionDays`）。
+    /// 按设置清理审计日志（`history.maxEntries` / `history.retentionDays`）。
+    /// **不在任何时机自动调用** —— 按用户要求，审计日志只在点「清空日志」时清理：
+    /// 自动清理会在用户没察觉时把想留的记录丢掉。这里保留为手动/将来按需调用。
     /// 清理失败只记日志：这是修数据，不该让主流程为它失败。
     pub fn prune_history(&self) -> usize {
         let max = self
             .store
-            .get_usize_setting(Store::KEY_HISTORY_MAX_ENTRIES, 1000)
-            .unwrap_or(1000)
+            .get_usize_setting(Store::KEY_HISTORY_MAX_ENTRIES, 0)
+            .unwrap_or(0)
             .min(100_000);
         let days = self
             .store
-            .get_usize_setting(Store::KEY_HISTORY_RETENTION_DAYS, 30)
-            .unwrap_or(30)
+            .get_usize_setting(Store::KEY_HISTORY_RETENTION_DAYS, 0)
+            .unwrap_or(0)
             .min(3650) as u32;
         match self.store.prune_history(max, days) {
             Ok(0) => 0,
@@ -1107,8 +1107,19 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         offset: usize,
         kind: Option<&str>,
         q: Option<&str>,
+        level: Option<&str>,
     ) -> Result<Vec<LogEntry>> {
-        self.store.list_logs(limit, offset, kind, q)
+        self.store.list_logs(limit, offset, kind, q, level)
+    }
+
+    /// 日志总条数（与 `logs` 同筛选条件，不分页）—— 供界面显示真实「共 N 条」。
+    pub fn logs_count(
+        &self,
+        kind: Option<&str>,
+        q: Option<&str>,
+        level: Option<&str>,
+    ) -> Result<i64> {
+        self.store.count_logs(kind, q, level)
     }
 
     /// 清空全部日志（执行历史 + AI 审计）。

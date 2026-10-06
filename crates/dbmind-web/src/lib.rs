@@ -470,6 +470,9 @@ struct LogsQuery {
     offset: usize,
     kind: Option<String>,
     q: Option<String>,
+    /// 记录级别筛选（all / write / error / off），缺省按 all 处理
+    #[serde(default)]
+    level: Option<String>,
 }
 
 /// 统一日志（执行 + AI 审计合并），供设置 → 日志界面。
@@ -479,11 +482,33 @@ async fn list_logs(State(state): State<AppState>, Query(params): Query<LogsQuery
         let engine = engine.clone();
         blocking(move || Ok(engine.log_level())).await?
     };
-    let logs = blocking(move || {
-        engine.logs(params.limit, params.offset, params.kind.as_deref(), params.q.as_deref())
-    })
+    let kind_arg = params.kind.clone();
+    let q_arg = params.q.clone();
+    let level_arg = params.level.clone();
+    let logs = {
+        let engine = engine.clone();
+        let kind = kind_arg.clone();
+        let q = q_arg.clone();
+        let level = level_arg.clone();
+        blocking(move || {
+            engine.logs(
+                params.limit,
+                params.offset,
+                kind.as_deref(),
+                q.as_deref(),
+                level.as_deref(),
+            )
+        })
+    }
     .await?;
-    Ok(Json(json!({ "level": level, "items": logs })))
+    // 真实总条数（与列表同条件、不分页）：「共 N 条」和分页页数靠它，
+    // 不用前端「当前位置 + 有无下一页」估算
+    let total = {
+        let engine = engine.clone();
+        blocking(move || engine.logs_count(kind_arg.as_deref(), q_arg.as_deref(), level_arg.as_deref()))
+    }
+    .await?;
+    Ok(Json(json!({ "level": level, "total": total, "items": logs })))
 }
 
 async fn clear_logs(State(state): State<AppState>) -> ApiResult {

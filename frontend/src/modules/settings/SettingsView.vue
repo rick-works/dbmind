@@ -1,7 +1,7 @@
 <template>
   <el-dialog
     v-model="visible"
-    width="1200px"
+    width="min(1200px, 96vw)"
     :close-on-click-modal="true"
     align-center
     class="settings-dialog"
@@ -578,15 +578,7 @@
               <el-input-number v-model="queryForm.cacheTtlSecs" :min="30" :max="86400" style="width:160px" />
               <div class="form-tip">{{ $t('settings.query.cacheTtlTip') }}</div>
             </el-form-item>
-            <!-- 历史此前只增不减：按条数与天数两个维度自动清理（0 = 该维度不清理） -->
-            <el-form-item :label="$t('settings.query.historyMax')">
-              <el-input-number v-model="queryForm.historyMax" :min="0" :max="100000" :step="100" style="width:160px" />
-              <div class="form-tip">{{ $t('settings.query.historyMaxTip') }}</div>
-            </el-form-item>
-            <el-form-item :label="$t('settings.query.historyDays')">
-              <el-input-number v-model="queryForm.historyDays" :min="0" :max="3650" style="width:160px" />
-              <div class="form-tip">{{ $t('settings.query.historyDaysTip') }}</div>
-            </el-form-item>
+            <!-- 审计日志不再自动清理，也没有保留上限设置：要清就去「日志」页点「清空日志」 -->
             <!-- NULL 显示样式：本地项（localStorage dbmind_query），watch 即时落盘并热生效 -->
             <el-form-item :label="$t('settings.query.nullStyle')">
               <el-select v-model="queryForm.nullStyle" style="width:160px">
@@ -766,24 +758,19 @@
 
           <div class="panel-title log-title">{{ $t('settings.logs.auditTitle') }}</div>
           <div class="panel-desc">{{ $t('settings.logs.desc') }}</div>
-          <div class="log-level-row">
-            <span class="log-level-label">{{ $t('settings.logs.levelLabel') }}</span>
-            <el-radio-group v-model="auditLevel" size="small" @change="saveAuditLevel">
-              <el-radio-button value="all">{{ $t('settings.logs.level.all') }}</el-radio-button>
-              <el-radio-button value="write">{{ $t('settings.logs.level.write') }}</el-radio-button>
-              <el-radio-button value="error">{{ $t('settings.logs.level.error') }}</el-radio-button>
-              <el-radio-button value="off">{{ $t('settings.logs.level.off') }}</el-radio-button>
-            </el-radio-group>
-          </div>
 
           <div class="log-filter-row">
-            <el-select v-model="logKind" size="small" style="width: 140px" @change="logPage = 1; loadLogs()">
-              <el-option value="" :label="$t('settings.logs.kind.all')" />
-              <el-option value="query" :label="$t('settings.logs.kind.query')" />
-              <el-option value="write" :label="$t('settings.logs.kind.write')" />
-              <el-option value="ddl" :label="$t('settings.logs.kind.ddl')" />
-              <el-option value="tx" :label="$t('settings.logs.kind.tx')" />
-              <el-option value="ai" :label="$t('settings.logs.kind.ai')" />
+            <span class="log-level-label">{{ $t('settings.logs.categoryLabel') }}</span>
+            <el-select v-model="auditLevel" size="small" style="width: 168px" @change="onAuditLevelChange">
+              <el-option value="all" :label="$t('settings.logs.level.all')" />
+              <el-option value="query" :label="$t('settings.logs.level.query')" />
+              <el-option value="write" :label="$t('settings.logs.level.write')" />
+              <el-option value="ddl" :label="$t('settings.logs.level.ddl')" />
+              <el-option value="tx" :label="$t('settings.logs.level.tx')" />
+              <el-option value="exec" :label="$t('settings.logs.level.exec')" />
+              <el-option value="ai" :label="$t('settings.logs.level.ai')" />
+              <el-option value="error" :label="$t('settings.logs.level.error')" />
+              <el-option value="off" :label="$t('settings.logs.level.off')" />
             </el-select>
             <el-input v-model="logQuery" size="small" style="width: 220px" clearable
                       :placeholder="$t('settings.logs.searchPh')" @keyup.enter="logPage = 1; loadLogs()" @clear="logPage = 1; loadLogs()" />
@@ -801,12 +788,21 @@
               <span class="log-conn" :title="item.connection">{{ item.connection }}</span>
               <span class="log-dur" v-if="item.durationMs">{{ item.durationMs }} ms</span>
               <span class="log-status" :class="item.status">{{ item.status }}</span>
+              <!-- 复制这条 SQL：hover 行时在右侧浮现 -->
+              <el-button
+                class="log-copy"
+                size="small"
+                text
+                :icon="DocumentCopy"
+                :title="$t('settings.logs.copySql')"
+                @click.stop="copyLogSql(item.sql)"
+              />
             </div>
             <div v-if="!logItems.length && !logLoading" class="cache-empty">{{ $t('settings.logs.empty') }}</div>
           </div>
 
           <div class="log-pager">
-            <span class="log-count">{{ $t('settings.logs.count', { n: (logPage - 1) * logRows + logItems.length }) }}</span>
+            <span class="log-count">{{ $t('settings.logs.count', { n: logTotal }) }}</span>
             <el-pagination
               layout="prev, pager, next"
               size="small"
@@ -889,22 +885,34 @@
             <span class="about-logo"><img :src="logoMdUrl" alt="DBmind" /></span>
             <div class="about-meta">
               <div class="about-name">{{ $t('settings.about.name') }}</div>
-              <div class="about-ver">{{ $t('settings.about.version', { version: APP_VERSION }) }}</div>
+              <!-- 版本号按语义化三段展示：版本 v大版本.小版本.修订，hover 每段看含义 -->
+              <div class="about-ver">
+                <span class="ver-prefix">{{ $t('settings.about.verLabel') }}</span>
+                <span class="ver-seg" :title="$t('settings.about.verMajorTip')">{{ verParts[0] }}</span>
+                <span class="ver-dot">.</span>
+                <span class="ver-seg" :title="$t('settings.about.verMinorTip')">{{ verParts[1] }}</span>
+                <span class="ver-dot">.</span>
+                <span class="ver-seg" :title="$t('settings.about.verPatchTip')">{{ verParts[2] }}</span>
+              </div>
             </div>
           </div>
 
-          <div class="about-rows">
-            <div class="about-row">
-              <span class="about-k">{{ $t('settings.paths.dataDir') }}</span>
-              <code class="about-v">{{ pathInfo.dataDir }}</code>
-            </div>
-            <div class="about-row">
-              <span class="about-k">{{ $t('settings.paths.driverDir') }}</span>
-              <code class="about-v">{{ pathInfo.driverDir }}</code>
-            </div>
-            <div class="about-row">
-              <span class="about-k">{{ $t('settings.paths.logDir') }}</span>
-              <code class="about-v">{{ pathInfo.logDir || (pathInfo.dataDir + '/logs') }}</code>
+          <!-- 目录说明：与「版本说明」同规格的板块标题 -->
+          <div class="about-block">
+            <div class="about-dbs-title">{{ $t('settings.about.dirsTitle') }}</div>
+            <div class="about-rows">
+              <div class="about-row">
+                <span class="about-k">{{ $t('settings.paths.dataDir') }}</span>
+                <code class="about-v">{{ pathInfo.dataDir }}</code>
+              </div>
+              <div class="about-row">
+                <span class="about-k">{{ $t('settings.paths.driverDir') }}</span>
+                <code class="about-v">{{ pathInfo.driverDir }}</code>
+              </div>
+              <div class="about-row">
+                <span class="about-k">{{ $t('settings.paths.logDir') }}</span>
+                <code class="about-v">{{ pathInfo.logDir || (pathInfo.dataDir + '/logs') }}</code>
+              </div>
             </div>
           </div>
 
@@ -912,6 +920,7 @@
           <!-- 版本说明：标题外置（与其他板块同规格）；版本号做卡片式下拉头，点击展开说明 -->
           <div class="about-block">
             <div class="about-dbs-title">{{ $t('settings.about.releaseTitle') }}</div>
+            <div class="about-ver-rule">{{ $t('settings.about.verRule') }}</div>
             <div class="about-fold" :class="{ open: releaseOpen }">
               <button type="button" class="about-fold-head" @click="releaseOpen = !releaseOpen">
                 <span>{{ $t('settings.about.releaseVersion') }}</span>
@@ -919,7 +928,18 @@
               </button>
               <el-collapse-transition>
                 <div class="about-fold-body" v-show="releaseOpen">
-                  <div class="about-release-line" v-for="line in releaseNotes" :key="line">{{ line }}</div>
+                  <!-- 版本倒序平铺：1.0.1 在上，1.0.0 在下；每条带自己的类型标签与说明 -->
+                  <div class="about-vitem" v-for="rel in releaseList" :key="rel.version">
+                    <div class="about-rel-ver">
+                      <span class="about-rel-no">{{ rel.version }}</span>
+                      <span class="about-rel-tags">
+                        <span class="about-rel-tag" :class="'tag-' + rel.level">{{ $t('settings.about.verTag.' + rel.level) }}</span>
+                        <span class="about-rel-tag tag-latest" v-if="rel.latest">{{ $t('settings.about.releaseLatest') }}</span>
+                      </span>
+                      <span class="about-rel-date" v-if="rel.date">{{ rel.date }}</span>
+                    </div>
+                    <div class="about-release-line" v-for="(line, li) in rel.notes" :key="li">{{ line }}</div>
+                  </div>
                 </div>
               </el-collapse-transition>
             </div>
@@ -947,7 +967,7 @@ import {
   MagicStick, Connection, Brush,
   FolderOpened, EditPen, DataLine, Download, Bell, Operation, Monitor, Plus, Delete,
   CircleCheck, Timer, Moon, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
-  ArrowUp, ArrowDown, Document
+  ArrowUp, ArrowDown, Document, DocumentCopy
 } from '@element-plus/icons-vue'
 import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/topMenu'
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
@@ -987,6 +1007,7 @@ const tabs = [
   { key: 'theme', i18nKey: 'settings.tab.theme', icon: Moon },
   { key: 'editor', i18nKey: 'settings.tab.editor', icon: EditPen },
   { key: 'format', i18nKey: 'settings.tab.format', icon: Brush },
+  { key: 'shortcut', i18nKey: 'settings.tab.shortcut', icon: Pointer },
   { key: 'query', i18nKey: 'settings.tab.query', icon: DataLine },
   { key: 'ai', i18nKey: 'settings.tab.ai', icon: MagicStick },
   { key: 'safety', i18nKey: 'settings.tab.safety', icon: Lock },
@@ -996,7 +1017,6 @@ const tabs = [
   { key: 'cache', i18nKey: 'settings.tab.cache', icon: Delete },
   { key: 'logs', i18nKey: 'settings.tab.logs', icon: Document },
   { key: 'notify', i18nKey: 'settings.tab.notify', icon: Bell },
-  { key: 'shortcut', i18nKey: 'settings.tab.shortcut', icon: Pointer },
   { key: 'about', i18nKey: 'settings.tab.about', icon: Monitor }
 ]
 
@@ -1004,7 +1024,35 @@ const tabs = [
 // 「关于」页的版本说明：随每次发版更新（i18n 键 settings.about.releaseNote1..N）
 const releaseOpen = ref(false) // 版本说明默认收起，点标题栏展开（卡片式下拉）
 
-const releaseNotes = computed(() => [1, 2, 3, 4].map((i) => t(`settings.about.releaseNote${i}`)))
+// 版本号三段（大版本.小版本.修订），缺失段补 0：APP_VERSION 形如 0.1.1
+const verParts = computed(() => {
+  const p = String(APP_VERSION || '0.0.0').split('.')
+  return [p[0] || '0', p[1] || '0', p[2] || '0']
+})
+// 版本说明：按版本倒序（第一个为最新，标「最新」）。版本号从 1.0.0 起 —— 1.0.0 是首个
+// 正式版，之后修 bug 只加修订号（1.0.1）、新增功能加小版本（1.1.0）、不兼容变更才加大版本（2.0.0）。
+// 文案在 locales 里按 `settings.about.relN.version` / `relN.noteM` / `relN.level` 组织。
+const releaseList = computed(() => {
+  const out = []
+  for (let i = 1; i <= 10; i++) {
+    const version = t(`settings.about.rel${i}.version`)
+    if (!version || version === `settings.about.rel${i}.version`) break
+    const notes = []
+    for (let j = 1; j <= 12; j++) {
+      const line = t(`settings.about.rel${i}.note${j}`)
+      if (!line || line === `settings.about.rel${i}.note${j}`) break
+      notes.push(line)
+    }
+    out.push({
+      version,
+      notes,
+      level: t(`settings.about.rel${i}.level`),
+      date: t(`settings.about.rel${i}.date`),
+      latest: i === 1
+    })
+  }
+  return out
+})
 
 // ---------- AI 用量（展示在「AI 服务」页签）----------
 const usage = ref({})
@@ -1356,8 +1404,7 @@ const loadQuery = async () => {
     queryForm.value.timeoutSecs = num('query.timeoutSecs', queryForm.value.timeoutSecs)
     queryForm.value.cacheTtlSecs = num('schema.ttlSecs', queryForm.value.cacheTtlSecs)
     queryForm.value.maxRows = num('query.maxRows', queryForm.value.maxRows)
-    queryForm.value.historyMax = num('history.maxEntries', queryForm.value.historyMax)
-    queryForm.value.historyDays = num('history.retentionDays', queryForm.value.historyDays)
+
     logLevel.value = (s?.['log.level'] || 'info').trim()
   } catch { /* 后端拿不到就维持本地默认（离线/降级也不该挡住设置页） */ }
 }
@@ -1373,8 +1420,7 @@ const saveQuery = async () => {
     await putSetting('query.timeoutSecs', Math.round(queryForm.value.timeoutSecs))
     await putSetting('schema.ttlSecs', Math.round(queryForm.value.cacheTtlSecs))
     await putSetting('query.maxRows', Math.round(queryForm.value.maxRows))
-    await putSetting('history.maxEntries', Math.round(queryForm.value.historyMax))
-    await putSetting('history.retentionDays', Math.round(queryForm.value.historyDays))
+
   } catch (e) {
     ElMessage.error(t('settings.query.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) }))
     return
@@ -1719,51 +1765,64 @@ const clearCheckedCache = async () => {
 }
 
 // ---------- 日志：全类型审计（查询 / 增删改 / DDL / 事务 / AI 调用） ----------
-const auditLevel = ref('all')
-const logKind = ref('')
+// 审计类别只做「展示筛选」，记忆在本地即可 —— 不动 audit.level（写入侧范围设置），
+// 避免用户为了看历史而把后续记录也一并关掉
+const AUDIT_FILTER_KEY = 'dbmind.auditFilter'
+const auditLevel = ref(localStorage.getItem(AUDIT_FILTER_KEY) || 'all')
 const logQuery = ref('')
 const logItems = ref([])
 const logLoading = ref(false)
 const logPage = ref(1)
-const logHasMore = ref(false)
 // 每页 50 条；列表固定高度、内部滚动（表格里允许滚动条）
 const logRows = ref(50)
-// 合并视图算不出准确总数：用「当前页位置 + 是否还有下一页」估算给 el-pagination
-const logTotal = computed(() =>
-  logHasMore.value ? logPage.value * logRows.value + 1 : (logPage.value - 1) * logRows.value + logItems.value.length
-)
+// 总条数由后端按同一筛选条件 count 出来（不再是前端估算）
+const logTotal = ref(0)
 
-const loadAuditLevel = async () => {
-  try {
-    const settings = await getSettings()
-    auditLevel.value = settings['audit.level'] || 'all'
-  } catch { auditLevel.value = 'all' }
-}
-const saveAuditLevel = async (v) => {
-  try {
-    await putSetting('audit.level', v)
-    ElMessage.success(t('settings.logs.levelSaved'))
-    logPage.value = 1
-    loadLogs()
-  } catch { ElMessage.error(t('settings.logs.msgFailed')) }
+// 切换审计类别：只改本地记忆 + 重新拉取（写入侧的记录范围设置不动）
+const onAuditLevelChange = (v) => {
+  localStorage.setItem(AUDIT_FILTER_KEY, v)
+  logPage.value = 1
+  loadLogs()
 }
 const loadLogs = async () => {
   logLoading.value = true
   try {
-    // 多取一条判断「还有下一页」；翻页用 offset，每页行数随列表实测高度自适应
+    // 每页固定 50 条；后端同时返回同条件下的真实总条数（total）
     const rows = logRows.value
     const r = await getLogs({
-      limit: rows + 1,
+      limit: rows,
       offset: (logPage.value - 1) * rows,
-      kind: logKind.value || undefined,
-      q: logQuery.value || undefined
+      q: logQuery.value || undefined,
+      // 审计类别：all / query 查询 / write 数据 / ddl 表 / tx 事务 / exec 其他 / ai AI / error 失败 / off
+      level: auditLevel.value || 'all'
     })
-    const items = r.items || []
-    logHasMore.value = items.length > rows
-    logItems.value = items.slice(0, rows)
+    logItems.value = r.items || []
+    if (typeof r.total === 'number') logTotal.value = r.total
   } catch { ElMessage.error(t('settings.logs.msgFailed')) }
   logLoading.value = false
 }
+// 复制一条日志的 SQL：clipboard API 在非 HTTPS 环境下不可用，回落 execCommand
+const copyLogSql = async (sql) => {
+  const text = sql || ''
+  if (!text) return
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+    } else {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.opacity = '0'
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    }
+    ElMessage.success(t('settings.logs.copied'))
+  } catch { ElMessage.error(t('settings.logs.msgFailed')) }
+}
+// 清空全部审计日志（执行历史 + AI 调用，一次全清）。日志不做自动清理，
+// 也不做部分保留 —— 要清就一次清干净。
 const clearAllLogs = async () => {
   try {
     await ElMessageBox.confirm(t('settings.logs.confirm'), t('settings.logs.clear'), {
@@ -1783,7 +1842,7 @@ const fmtLogTime = (raw) => {
   const m = /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(String(raw || ''))
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : String(raw || '')
 }
-watch(activeTab, (tab) => { if (tab === 'logs') { loadAuditLevel(); loadLogs() } })
+watch(activeTab, (tab) => { if (tab === 'logs') { loadLogs() } })
 
 // ---------- 快捷键自定义 ----------
 const shortcutGroups = SHORTCUT_GROUPS
@@ -1865,7 +1924,7 @@ watch(visible, (v) => {
     loadKnowledge()
     shortcutMap.value = loadShortcuts()
     // 日志页签：弹窗重开也刷新（activeTab 没变时 watch 不会触发，清空后新执行的日志就看不到）
-    if (activeTab.value === 'logs') { loadAuditLevel(); loadLogs() }
+    if (activeTab.value === 'logs') { loadLogs() }
   } else {
     stopRecording()
   }
@@ -1883,7 +1942,9 @@ watch(visible, (v) => {
 
 /* 高度 = 视口的 80%（640px 起步、900px 封顶）：矮屏不出屏，大屏多露内容 ——
    以前定死 560px，内容多时（比如 MCP 页签）右侧滚动条一长条，看着憋屈 */
-.settings-body { display: flex; height: clamp(640px, 80vh, 900px); }
+/* 内容区高度跟随视口（不再用 clamp 的 640px 下限：矮视口下会把弹窗撑出屏幕）。
+   左侧页签栏自己内部滚动，右侧面板内容超高时也各自内部滚 */
+.settings-body { display: flex; height: calc(100vh - 190px); }
 .settings-tabs {
   width: 150px; flex-shrink: 0; border-right: 1px solid var(--dc-border);
   padding: 14px 8px; overflow-y: auto;
@@ -1957,19 +2018,27 @@ watch(visible, (v) => {
 /* 日志：级别选择行 + 筛选行 + 日志列表 */
 .log-level-row { display: flex; align-items: center; gap: 12px; margin: 14px 0 6px; }
 .log-level-label { font-size: 13px; color: var(--dc-text-mid); flex-shrink: 0; }
+/* 紧凑行样式已随模板一并移除（运行时/审计级别恢复标题+说明+卡片的完整布局） */
 .log-filter-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
+/* 复制按钮：常驻显示（行内最右列），hover 才提亮 */
+.log-item .log-copy { flex-shrink: 0; color: var(--dc-text-dim); transition: color .12s; }
+.log-item .log-copy:hover { color: var(--dc-primary); }
 .log-count { font-size: 12px; color: var(--dc-text-dim); }
-/* 日志面板：撑满弹窗内容区（body 已固定高），flex 纵向分配 —— 列表吃剩余空间，
-   底边距与其它页签一致；弹窗级滚动条不再出现（超长只在列表内滚） */
+/* 日志面板：高度 = 内容区高度（settings-body 跟随视口），面板本身在极端矮视口下
+   内部滚动（滚动条落在面板内、不在弹窗右缘），列表吃满剩余空间并在内部滚动，
+   分页条紧随列表底部可见 */
 .log-panel {
   height: 100%;
-  overflow: hidden;
   display: flex; flex-direction: column;
+  overflow-y: auto;
 }
-.log-panel .log-title:first-child { margin-top: 0; }
-.log-panel .log-list { flex: 0 0 auto; overflow-y: auto; }
-.log-list {
-  height: 420px;
+/* 日志页签：内容容器不留底部内边距 —— 面板底边与左侧页签栏底边落在同一条线上，
+   列表顺势多占这 24px。:has 按 .log-panel 存在与否区分，其它页签保持原样 */
+.settings-content:has(.log-panel) { padding-bottom: 0; }
+.log-panel .log-list {
+  flex: 1 1 auto;
+  min-height: 120px;
+  overflow-y: auto;
   border: 1px solid var(--dc-border);
   border-radius: 8px; background: var(--dc-bg-soft);
 }
@@ -2004,7 +2073,9 @@ watch(visible, (v) => {
 .log-status.canceled { color: var(--el-color-warning); }
 .log-status.error { color: var(--el-color-danger); }
 /* 日志级别：标题与「界面语言设置」同级，卡片整行铺开自动换行 */
+/* 段标题的上边距只用于分隔页签内的两段内容；首个标题不留空隙，与其它设置页一致 */
 .log-title { margin-top: 22px; }
+.log-title:first-child { margin-top: 0; }
 .log-level-options { display: flex; gap: 10px; flex-wrap: wrap; width: 100%; max-width: 560px; }
 .log-opt { flex: 1 1 96px; min-width: 96px; padding: 9px 12px; }
 .log-opt .theme-opt-name { font-family: var(--dc-mono, monospace); font-size: 13px; }
@@ -2254,10 +2325,10 @@ watch(visible, (v) => {
   font-size: 13px; color: var(--dc-link); overflow-wrap: anywhere; user-select: all;
 }
 
-/* 关于页板块标题样式：加粗 + 分隔线，视觉层级高于正文 */
+/* 关于页板块标题：与其他设置页签的 .panel-title 同字号同字重（15px/700），无分隔横线 */
 .about-dbs-title {
-  font-size: 14px; font-weight: 700; color: var(--dc-text);
-  padding-bottom: 8px; border-bottom: 1px solid var(--dc-border); margin-bottom: 12px;
+  font-size: 15px; font-weight: 700; color: var(--dc-text-strong, var(--dc-text));
+  margin-bottom: 6px;
 }
 /* 版本说明（折叠）与开源说明块 */
 .about-block { margin-top: 20px; }
@@ -2277,9 +2348,71 @@ watch(visible, (v) => {
 .about-fold-arrow { color: var(--dc-text-dim); font-size: 14px; transition: transform .2s; }
 .about-fold.open .about-fold-arrow { transform: rotate(180deg); }
 .about-fold-body { padding: 2px 14px 12px; }
+/* 版本号三段式：大版本.小版本.修订，悬停每段看含义 */
+.ver-prefix { margin-right: 2px; }
+.ver-seg { font-weight: 700; color: var(--dc-text-strong, var(--dc-text)); cursor: help; border-bottom: 1px dotted var(--dc-text-dim); }
+.ver-dot { color: var(--dc-text-dim); font-weight: 700; }
+/* 版本说明：版本号 + 类型标签 + 说明行 + 左侧时间线竖线 */
+.about-vitem { position: relative; padding-left: 16px; }
+/* 每个版本项上方一条实线：把各版本横向切齐，扫读更清楚 */
+.about-vitem + .about-vitem { margin-top: 14px; padding-top: 14px; }
+.about-vitem::after {
+  content: ""; position: absolute; left: 16px; right: 0; top: 0; height: 1px;
+  background: var(--dc-border);
+}
+.about-vitem:first-child { padding-top: 14px; }
+/* 时间线竖线：从本版本圆点中心向下贯穿到下一版本圆点（top 落在圆点中心，
+   所以最新版圆点上方不会露出一小截线头） */
+.about-vitem::before {
+  content: ""; position: absolute; left: 5px; top: 23px; bottom: -23px;
+  width: 1px; background: var(--dc-border);
+}
+.about-vitem:last-child::before { bottom: 18px; }
+/* 节点圆点：与版本号同一水平线，落在左侧缩进区骑在竖线上
+   （left 用负值从版本行拉回 vitem 的缩进带，-16px = .about-vitem 的 padding-left） */
+.about-rel-ver { position: relative; }
+.about-rel-ver::before {
+  content: ""; position: absolute; left: -16px; top: 50%;
+  width: 11px; height: 11px; margin-top: -5.5px; border-radius: 50%;
+  background: var(--dc-primary, #4f8cff); box-shadow: 0 0 0 3px var(--dc-bg-soft);
+}
+/* 首个正式版用中性灰节点，与后续修订的蓝色区分 */
+.about-vitem:first-of-type .about-rel-ver::before { background: var(--dc-text-dim); }
+/* 首个正式版（1.0.0）用中性灰，与后续修订的蓝色区分 */
+.about-vitem:first-of-type .about-vdot { background: var(--dc-text-dim); }
+/* 版本行用四列网格：圆点 | 版本号 | 标签 | 发布日期。
+   固定列宽保证「版本号 / 标签 / 日期」在各版本之间垂直对齐（v1.0.1 与 v1.0.0 同一列） */
+.about-rel-ver {
+  display: grid; grid-template-columns: 58px 128px 1fr;
+  align-items: center; column-gap: 8px;
+  font-size: 13px; font-weight: 700; color: var(--dc-text); margin-bottom: 8px;
+  font-family: var(--dc-mono, ui-monospace, Consolas, monospace);
+}
+.about-rel-no { white-space: nowrap; }
+.about-rel-tags { display: flex; align-items: center; gap: 6px; }
+/* 发布日期：右对齐灰色小字 */
+.about-rel-date { justify-self: end; font-size: 12px; font-weight: 400; color: var(--dc-text-dim); }
+.about-rel-tag {
+  font-family: var(--dc-text, inherit); font-size: 11px; font-weight: 600;
+  color: var(--dc-primary, #4f8cff); background: var(--dc-primary-wash, rgba(79,140,255,.12));
+  border-radius: 999px; padding: 1px 8px;
+}
+/* 版本类型标签配色：修订=绿、小版本=蓝、大版本=橙、首个版本=灰 */
+.about-rel-tag.tag-patch { color: #16a34a; background: rgba(34, 197, 94, .14); }
+.about-rel-tag.tag-minor { color: #2563eb; background: rgba(59, 130, 246, .14); }
+.about-rel-tag.tag-major { color: #d97706; background: rgba(245, 158, 11, .16); }
+.about-rel-tag.tag-first { color: var(--dc-text-dim); background: rgba(148, 163, 184, .16); }
+.about-rel-tag.tag-latest { color: var(--dc-primary, #4f8cff); background: var(--dc-primary-wash, rgba(79,140,255,.12)); }
+/* 规则说明按其他页签 .panel-desc 的字号（13px） */
+.about-ver-rule { margin: 0 0 18px; font-size: 13px; color: var(--dc-text-dim); line-height: 1.7; }
 .about-block-body { font-size: 13px; color: var(--dc-text-mid); line-height: 1.8; }
-.about-release-line { position: relative; padding-left: 14px; margin-bottom: 6px; }
-.about-release-line::before { content: '·'; position: absolute; left: 2px; color: var(--dc-text-dim); }
+/* 说明行：浅底条目，比裸文字更整齐；左边缘与版本号列对齐（缩进 = 圆点+版本号列宽） */
+.about-release-line {
+  position: relative; padding: 6px 10px 6px 22px; margin: 0 0 4px 16px;
+  background: var(--dc-bg-soft); border-radius: 6px;
+  font-size: 13px; color: var(--dc-text-mid, var(--dc-text-dim)); line-height: 1.65;
+}
+.about-release-line::before { content: '·'; position: absolute; left: 10px; color: var(--dc-primary, #4f8cff); font-weight: 700; }
 .about-license { white-space: pre-line; margin-bottom: 8px; }
 .about-link { color: var(--dc-primary); text-decoration: none; font-size: 13px; }
 .about-link:hover { text-decoration: underline; }
@@ -2344,16 +2477,9 @@ watch(visible, (v) => {
 
 /* 覆盖 el-dialog 在暗色主题下的样式 */
 .settings-dialog .el-dialog__header { margin-right: 0; padding: 16px 20px; border-bottom: 1px solid var(--dc-border); }
-.settings-dialog .el-dialog__body { padding: 0; height: calc(100vh - 190px); overflow-y: auto; }
-/* 日志页签：body 变纵向 flex，日志面板与列表自适应填满 —— 分页条固定在面板底部永远可见，
-   50 条记录在列表内部滚动；其它页签不受影响（:has 按 .log-panel 存在与否区分） */
-.settings-dialog .el-dialog__body:has(.log-panel) { display: flex; flex-direction: column; overflow: hidden; }
-.settings-dialog .el-dialog__body:has(.log-panel) .log-panel {
-  flex: 1 1 auto; min-height: 0;
-  display: flex; flex-direction: column;
-  height: auto;
-}
-.log-panel .log-list { flex: 1 1 auto; min-height: 160px; height: auto; overflow-y: auto; }
+/* 内容区不再写死高度、不再自己滚动：弹窗高度完全由内容决定（各页签不被统一拉高），
+   也没有弹窗级滚动条；日志页签的列表高度在 scoped 样式里按视口反推，超长只在列表内滚 */
+.settings-dialog .el-dialog__body { padding: 0; }
 /* 内容放不下时允许滚动，但滚动条不显示（浏览器缩放/小窗下也不出难看的竖条） */
 .settings-dialog .el-dialog__body { scrollbar-width: none; -ms-overflow-style: none; }
 .settings-dialog .el-dialog__body::-webkit-scrollbar { width: 0; height: 0; display: none; }
