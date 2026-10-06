@@ -1101,8 +1101,14 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
     }
 
     /// 统一日志（执行 + AI 审计合并视图），供设置 → 日志界面使用。
-    pub fn logs(&self, limit: usize, kind: Option<&str>, q: Option<&str>) -> Result<Vec<LogEntry>> {
-        self.store.list_logs(limit, kind, q)
+    pub fn logs(
+        &self,
+        limit: usize,
+        offset: usize,
+        kind: Option<&str>,
+        q: Option<&str>,
+    ) -> Result<Vec<LogEntry>> {
+        self.store.list_logs(limit, offset, kind, q)
     }
 
     /// 清空全部日志（执行历史 + AI 审计）。
@@ -1117,6 +1123,33 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
             .ok()
             .flatten()
             .unwrap_or_else(|| "all".into())
+    }
+
+    /// 界面功能驱动的写库动作（表结构编辑 / 数据还原 / 结构传输 / 监控运维…）
+    /// 补记审计 —— 这些语句走 `internal: true` 不进执行历史，但**同样是改库**，
+    /// 审计里不能缺位。级别过滤与普通执行同管线（record_entry 内）。
+    pub fn audit_external(
+        &self,
+        connection_id: &str,
+        sql: &str,
+        ok: bool,
+        duration_ms: u64,
+        error_code: Option<String>,
+    ) {
+        let connection = match self.store.require_connection(connection_id) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        self.record(
+            true,
+            &connection,
+            sql,
+            if ok { HistoryStatus::Ok } else { HistoryStatus::Error },
+            0,
+            duration_ms,
+            error_code,
+            "ui",
+        );
     }
 
     pub fn settings(&self) -> Result<Vec<(String, String)>> {

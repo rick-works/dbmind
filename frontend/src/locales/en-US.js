@@ -1684,7 +1684,7 @@ export default {
   'settings.logs.title': 'Audit logs',
   'settings.logs.desc': 'Every query, write, schema change, transaction and AI call is recorded — who did what, when, on which database',
   'settings.logs.runtimeTitle': 'Runtime log level',
-  'settings.logs.runtimeDesc': "The app's own diagnostic output (tracing), written to logs/server.out.log — independent of the audit logs below. Switch to debug when troubleshooting",
+  'settings.logs.runtimeDesc': "The app's own diagnostic output (tracing), written to ${data dir}/logs/server.err.log — independent of the audit logs below. Switch to debug when troubleshooting",
   'settings.logs.auditTitle': 'Audit logs',
   'settings.logs.levelLabel': 'Record level',
   'settings.logs.level.all': 'Record all',

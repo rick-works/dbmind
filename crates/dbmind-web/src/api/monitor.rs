@@ -1052,7 +1052,7 @@ pub async fn monitor_kill(
     };
     // 终止会话是**运维动作**（KILL / pg_terminate_backend）：走跟随连接策略的入口，
     // 不进结构浏览那条只读会话（只读连接上 pg_terminate_backend 还会被闸门拦下）
-    match crate::api::meta::run_write_sql_in(&state, &id, &database, sql, 1).await {
+    match crate::api::meta::run_write_sql_in(&state, &id, &database, sql, 1, true).await {
         Ok(_) => Ok(Json(json!({
             "success": true,
             "message": format!("已终止会话 {session_id}"),

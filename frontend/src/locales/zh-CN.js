@@ -1690,7 +1690,7 @@ export default {
   'settings.logs.title': '审计日志',
   'settings.logs.desc': '记录每一次查询、增删改、表结构变更、事务动作与 AI 调用 —— 谁在什么时候对哪个库做了什么，全部留痕可追溯',
   'settings.logs.runtimeTitle': '运行时日志级别',
-  'settings.logs.runtimeDesc': '程序自身的诊断输出（tracing），写入 logs/server.out.log，与下面的审计日志相互独立。排查问题时切 debug，平时 info 就够',
+  'settings.logs.runtimeDesc': '程序自身的诊断输出（tracing），写入 ${数据目录}/logs/server.err.log，与下面的审计日志相互独立。排查问题时切 debug，平时 info 就够',
   'settings.logs.auditTitle': '审计日志',
   'settings.logs.levelLabel': '记录级别',
   'settings.logs.level.all': '全部记录',

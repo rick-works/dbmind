@@ -1752,7 +1752,7 @@ async fn spawn_restore(
                 // 还原是**写库**：必须走「跟随连接策略」的执行入口 ——
         // 结构浏览那条只读会话会让 MySQL 驱动直接拒绝
         // （连接没开只读开关、还原却报 Connection is read-only，实机撞到过）
-        crate::api::meta::run_write_sql_in(&state, &connection_id, &database, sql.clone(), 1)
+        crate::api::meta::run_write_sql_in(&state, &connection_id, &database, sql.clone(), 1, true)
                     .await
                     .map_err(|err| {
                         format!(

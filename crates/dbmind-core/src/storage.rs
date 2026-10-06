@@ -411,15 +411,18 @@ impl Store {
     }
 
     /// 统一日志：合并 query_history 与 ai_audit 两个来源，按时间倒序。
-    /// kind 筛选（空 = 全部）、q 关键字（LIKE 语句/提示词与连接名）。
+    /// kind 筛选（空 = 全部）、q 关键字（LIKE 语句/提示词与连接名）、offset 翻页。
+    /// limit 传 N+1 由调用方判断「还有没有下一页」。
     pub fn list_logs(
         &self,
         limit: usize,
+        offset: usize,
         kind: Option<&str>,
         q: Option<&str>,
     ) -> Result<Vec<LogEntry>> {
         let conn = self.lock();
         let limit = limit.clamp(1, 2000) as i64;
+        let offset = offset as i64;
         let mut out: Vec<LogEntry> = Vec::new();
 
         let want_exec = matches!(kind, None | Some("exec"))
@@ -430,10 +433,10 @@ impl Store {
                 "SELECT sql, COALESCE(connection_name, connection_id, ''), status, row_count, \
                  duration_ms, error_code, created_at, kind FROM query_history \
                  WHERE (?1 = '' OR kind = ?1) AND (?2 = '' OR sql LIKE ?2 OR connection_name LIKE ?2) \
-                 ORDER BY created_at DESC, rowid DESC LIMIT ?3",
+                 ORDER BY created_at DESC, rowid DESC LIMIT ?3 OFFSET ?4",
             )?;
             let kind_arg = kind.unwrap_or("");
-            let mut rows = stmt.query(params![kind_arg, like, limit])?;
+            let mut rows = stmt.query(params![kind_arg, like, limit, offset])?;
             while let Some(row) = rows.next()? {
                 out.push(LogEntry {
                     kind: row.get(7)?,
@@ -455,10 +458,10 @@ impl Store {
             let mut stmt = conn.prepare(
                 "SELECT prompt, kind, time FROM ai_audit \
                  WHERE (?1 = '' OR ?1 = 'ai') AND prompt LIKE ?2 \
-                 ORDER BY time DESC LIMIT ?3",
+                 ORDER BY time DESC LIMIT ?3 OFFSET ?4",
             )?;
             let kind_arg = kind.unwrap_or("");
-            let mut rows = stmt.query(params![kind_arg, like, limit])?;
+            let mut rows = stmt.query(params![kind_arg, like, limit, offset])?;
             while let Some(row) = rows.next()? {
                 out.push(LogEntry {
                     kind: "ai".into(),

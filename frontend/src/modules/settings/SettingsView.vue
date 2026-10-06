@@ -1950,11 +1950,11 @@ watch(visible, (v) => {
 .log-filter-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
 .log-count { font-size: 12px; color: var(--dc-text-dim); }
 .log-list {
-  height: 320px; overflow-y: auto;
+  height: max(340px, calc(100vh - 545px)); overflow-y: auto;
   border: 1px solid var(--dc-border);
   border-radius: 8px; background: var(--dc-bg-soft);
 }
-.log-list + .el-pagination { margin-top: 12px; justify-content: flex-end; }
+.log-list + .el-pagination { margin-top: 10px; justify-content: flex-end; }
 .log-item {
   display: flex; align-items: center; gap: 10px;
   padding: 7px 12px; border-bottom: 1px solid var(--dc-border); font-size: 12.5px;

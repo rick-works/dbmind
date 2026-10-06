@@ -466,6 +466,8 @@ async fn clear_history(State(state): State<AppState>) -> ApiResult {
 struct LogsQuery {
     #[serde(default = "default_history_limit")]
     limit: usize,
+    #[serde(default)]
+    offset: usize,
     kind: Option<String>,
     q: Option<String>,
 }
@@ -478,7 +480,7 @@ async fn list_logs(State(state): State<AppState>, Query(params): Query<LogsQuery
         blocking(move || Ok(engine.log_level())).await?
     };
     let logs = blocking(move || {
-        engine.logs(params.limit, params.kind.as_deref(), params.q.as_deref())
+        engine.logs(params.limit, params.offset, params.kind.as_deref(), params.q.as_deref())
     })
     .await?;
     Ok(Json(json!({ "level": level, "items": logs })))

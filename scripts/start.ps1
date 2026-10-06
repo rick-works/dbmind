@@ -126,7 +126,14 @@ if ($existing) {
     # 踩过：服务是用 Start-Process 起的，继承了当时那个终端（或被脚本调用时的管道）的句柄；
     # 调用方一退出、管道一断，服务下一次写日志就会失败并退出 —— 表现是
     # 「刚启动还能访问，过一会儿就访问不了了」，而且没有任何提示。
-    $logDir = Join-Path $root 'logs'
+    # 服务日志归到**数据目录**的 logs/（与 agent 宿主日志同处，设置 → 日志里的路径说明以此为准）
+    $dbmindHome = Join-Path $env:USERPROFILE '.dbmind'
+    $homePtr = Join-Path $env:USERPROFILE '.dbmind-home'
+    if (Test-Path $homePtr) {
+        $ptr = (Get-Content $homePtr -Raw -Encoding UTF8).Trim()
+        if ($ptr -and (Test-Path $ptr)) { $dbmindHome = $ptr }
+    }
+    $logDir = Join-Path $dbmindHome 'logs'
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     $out = Join-Path $logDir 'server.out.log'
     $err = Join-Path $logDir 'server.err.log'

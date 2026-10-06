@@ -111,13 +111,14 @@ pub async fn run_write_sql_in(
     database: &str,
     sql: String,
     max_rows: usize,
+    audit: bool,
 ) -> XResult<QueryResult> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
     let engine = state.engine();
     let request = QueryRequest {
         connection: target,
-        sql,
+        sql: sql.clone(),
         options: QueryOptions {
             max_rows,
             timeout_ms: 120_000,
@@ -129,7 +130,18 @@ pub async fn run_write_sql_in(
         read_only: None,
         internal: true,
     };
-    blocking(move || engine.execute(request, AccessContext::Web)).await
+    let started = std::time::Instant::now();
+    let outcome = blocking(move || engine.execute(request, AccessContext::Web)).await;
+    // 界面功能驱动的写库动作补记审计（internal 不进执行历史，但改库必须留痕）
+    if audit {
+        let engine = state.engine();
+        let (ok, err_code) = match &outcome {
+            Ok(_) => (true, None),
+            Err(err) => (false, Some(err.message.clone())),
+        };
+        engine.audit_external(conn, &sql, ok, started.elapsed().as_millis() as u64, err_code);
+    }
+    outcome
 }
 
 /// 与 `crate::api::blocking` 干同一件事，唯一区别是**保留内核错误码**。
@@ -2193,7 +2205,7 @@ pub async fn alter(
     let mut last = Value::Null;
     for (index, statement) in statements.iter().enumerate() {
         // 表结构编辑是**写库**：走跟随连接策略的入口（只读会话会被驱动拒绝，见 run_write_sql_in）
-        match run_write_sql_in(&state, &id, &database, statement.clone(), 1).await {
+        match run_write_sql_in(&state, &id, &database, statement.clone(), 1, true).await {
             Ok(result) => {
                 executed += 1;
                 last = shape::query_result_json(&result);
@@ -2278,7 +2290,7 @@ pub async fn table_action(
     // 只删掉 maxRows+1 行、接口照样回 success —— 静默少删。已在宿主侧修正：
     // 只有判定会返回结果集的语句才设上限（见 agents/dbmind-agent-jdbc 的 mayReturnRows）。
     // 清空 / 截断 / 删除 / 重命名表都是写库：走跟随连接策略的入口
-    Ok(Json(match run_write_sql_in(&state, &id, database, sql, 1).await {
+    Ok(Json(match run_write_sql_in(&state, &id, database, sql, 1, true).await {
         Ok(result) => shape::query_result_json(&result),
         Err(err) => shape::query_failure_json(&err.message, 0),
     }))
@@ -2399,7 +2411,7 @@ pub async fn rename_object(
         .get("database")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    match run_write_sql_in(&state, &id, database, sql.clone(), 1).await {
+    match run_write_sql_in(&state, &id, database, sql.clone(), 1, true).await {
         Ok(_) => Ok(Json(json!({ "success": true, "message": format!("已重命名为「{new_name}」"), "sql": sql }))),
         Err(err) => Ok(Json(json!({ "success": false, "message": err.message, "sql": sql }))),
     }
@@ -2624,7 +2636,7 @@ pub async fn user_action(
     let mut done = 0usize;
     for statement in &statements {
         // 建/删用户、授权都是写库：走跟随连接策略的入口
-        if let Err(err) = run_write_sql_in(&state, &id, &database, statement.clone(), 1).await {
+        if let Err(err) = run_write_sql_in(&state, &id, &database, statement.clone(), 1, true).await {
             // 同样要说清「第几条失败、前面几条已生效」——已建好的用户不会被自动回滚
             return Ok(Json(json!({
                 "success": false,
