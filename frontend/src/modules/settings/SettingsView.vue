@@ -59,27 +59,6 @@
             <el-icon :size="13"><InfoFilled /></el-icon>{{ $t('settings.language.partialHint') }}
           </div>
 
-          <!-- 日志级别：标题与「界面语言」同款，卡片另起一行铺满宽度。
-               运行时热切换（web 壳的 tracing reload 层）：排查问题时切 debug、
-               切回 info，当场生效不用重启。只影响壳的日志，不按模块细分 -->
-          <div class="panel-title log-title">{{ $t('settings.language.logLevel') }}</div>
-          <div class="panel-desc">{{ $t('settings.language.logLevelTip') }}</div>
-          <div class="log-level-options">
-            <div
-              v-for="lv in logLevels"
-              :key="lv.value"
-              class="theme-opt log-opt"
-              :class="{ active: logLevel === lv.value }"
-              @click="pickLogLevel(lv.value)"
-            >
-              <div class="theme-opt-info">
-                <div class="theme-opt-name">{{ lv.label }}</div>
-                <div class="theme-opt-desc">{{ lv.desc }}</div>
-              </div>
-              <el-icon v-if="logLevel === lv.value" class="theme-opt-check"><CircleCheck /></el-icon>
-            </div>
-          </div>
-
           <!-- 顶栏菜单：选择顶栏显示哪些功能入口、调整顺序（持久化到 dbmind.db） -->
           <div class="panel-title topmenu-title">{{ $t('settings.topMenu.title') }}</div>
           <div class="panel-desc">{{ $t('settings.topMenu.desc') }}</div>
@@ -777,6 +756,25 @@
               <el-radio-button value="error">{{ $t('settings.logs.level.error') }}</el-radio-button>
               <el-radio-button value="off">{{ $t('settings.logs.level.off') }}</el-radio-button>
             </el-radio-group>
+          </div>
+
+          <!-- 运行日志级别：程序自身的诊断日志（tracing），与上面的审计日志是两回事 -->
+          <div class="panel-title log-title">{{ $t('settings.language.logLevel') }}</div>
+          <div class="panel-desc">{{ $t('settings.language.logLevelTip') }}</div>
+          <div class="log-level-options">
+            <div
+              v-for="lv in logLevels"
+              :key="lv.value"
+              class="theme-opt log-opt"
+              :class="{ active: logLevel === lv.value }"
+              @click="pickLogLevel(lv.value)"
+            >
+              <div class="theme-opt-info">
+                <div class="theme-opt-name">{{ lv.label }}</div>
+                <div class="theme-opt-desc">{{ lv.desc }}</div>
+              </div>
+              <el-icon v-if="logLevel === lv.value" class="theme-opt-check"><CircleCheck /></el-icon>
+            </div>
           </div>
 
           <div class="log-filter-row">
@@ -1830,6 +1828,8 @@ watch(visible, (v) => {
     loadNotify()
     loadKnowledge()
     shortcutMap.value = loadShortcuts()
+    // 日志页签：弹窗重开也刷新（activeTab 没变时 watch 不会触发，清空后新执行的日志就看不到）
+    if (activeTab.value === 'logs') { loadAuditLevel(); loadLogs() }
   } else {
     stopRecording()
   }
@@ -1924,7 +1924,8 @@ watch(visible, (v) => {
 .log-filter-row { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
 .log-count { font-size: 12px; color: var(--dc-text-dim); }
 .log-list {
-  max-height: 420px; overflow-y: auto; border: 1px solid var(--dc-border);
+  max-height: min(620px, calc(100vh - 380px)); overflow-y: auto;
+  border: 1px solid var(--dc-border);
   border-radius: 8px; background: var(--dc-bg-soft);
 }
 .log-item {
