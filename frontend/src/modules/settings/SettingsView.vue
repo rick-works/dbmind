@@ -788,7 +788,6 @@
             <el-input v-model="logQuery" size="small" style="width: 220px" clearable
                       :placeholder="$t('settings.logs.searchPh')" @keyup.enter="logPage = 1; loadLogs()" @clear="logPage = 1; loadLogs()" />
             <el-button size="small" :icon="Search" @click="loadLogs">{{ $t('settings.logs.refresh') }}</el-button>
-            <span class="log-count">{{ $t('settings.logs.count', { n: logItems.length }) }}</span>
             <el-button size="small" type="danger" plain style="margin-left: auto" @click="clearAllLogs">
               <el-icon style="margin-right:4px"><Delete /></el-icon>{{ $t('settings.logs.clear') }}
             </el-button>
@@ -806,15 +805,18 @@
             <div v-if="!logItems.length && !logLoading" class="cache-empty">{{ $t('settings.logs.empty') }}</div>
           </div>
 
-          <el-pagination
-            layout="prev, pager, next"
-            size="small"
-            background
-            :page-size="logRows"
-            :total="logTotal"
-            :current-page="logPage"
-            @current-change="(p) => { logPage = p; loadLogs() }"
-          />
+          <div class="log-pager">
+            <span class="log-count">{{ $t('settings.logs.count', { n: (logPage - 1) * logRows + logItems.length }) }}</span>
+            <el-pagination
+              layout="prev, pager, next"
+              size="small"
+              background
+              :page-size="logRows"
+              :total="logTotal"
+              :current-page="logPage"
+              @current-change="(p) => { logPage = p; loadLogs() }"
+            />
+          </div>
         </div>
 
         <!-- 6. 通知 -->
@@ -1971,7 +1973,9 @@ watch(visible, (v) => {
   border: 1px solid var(--dc-border);
   border-radius: 8px; background: var(--dc-bg-soft);
 }
-.log-panel .el-pagination { margin: 10px 0 0; justify-content: flex-end; }
+.log-panel .log-pager { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin: 10px 0 0; }
+.log-panel .log-count { font-size: 12.5px; color: var(--dc-text-dim); font-variant-numeric: tabular-nums; }
+.log-panel .el-pagination { justify-content: flex-end; }
 .log-item {
   display: flex; align-items: center; gap: 10px;
   padding: 7px 12px; border-bottom: 1px solid var(--dc-border); font-size: 12.5px;
@@ -2341,6 +2345,15 @@ watch(visible, (v) => {
 /* 覆盖 el-dialog 在暗色主题下的样式 */
 .settings-dialog .el-dialog__header { margin-right: 0; padding: 16px 20px; border-bottom: 1px solid var(--dc-border); }
 .settings-dialog .el-dialog__body { padding: 0; height: calc(100vh - 190px); overflow-y: auto; }
+/* 日志页签：body 变纵向 flex，日志面板与列表自适应填满 —— 分页条固定在面板底部永远可见，
+   50 条记录在列表内部滚动；其它页签不受影响（:has 按 .log-panel 存在与否区分） */
+.settings-dialog .el-dialog__body:has(.log-panel) { display: flex; flex-direction: column; overflow: hidden; }
+.settings-dialog .el-dialog__body:has(.log-panel) .log-panel {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  height: auto;
+}
+.log-panel .log-list { flex: 1 1 auto; min-height: 160px; height: auto; overflow-y: auto; }
 /* 内容放不下时允许滚动，但滚动条不显示（浏览器缩放/小窗下也不出难看的竖条） */
 .settings-dialog .el-dialog__body { scrollbar-width: none; -ms-overflow-style: none; }
 .settings-dialog .el-dialog__body::-webkit-scrollbar { width: 0; height: 0; display: none; }
