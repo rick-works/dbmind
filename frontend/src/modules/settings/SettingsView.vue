@@ -810,7 +810,7 @@
             layout="prev, pager, next"
             size="small"
             background
-            :page-size="50"
+            :page-size="20"
             :total="logTotal"
             :current-page="logPage"
             @current-change="(p) => { logPage = p; loadLogs() }"
@@ -1724,7 +1724,7 @@ const logItems = ref([])
 const logLoading = ref(false)
 const logPage = ref(1)
 const logHasMore = ref(false)
-const LOG_PAGE_SIZE = 50
+const LOG_PAGE_SIZE = 20
 // 合并视图算不出准确总数：用「当前页位置 + 是否还有下一页」估算给 el-pagination
 const logTotal = computed(() =>
   logHasMore.value ? logPage.value * LOG_PAGE_SIZE + 1 : (logPage.value - 1) * LOG_PAGE_SIZE + logItems.value.length
@@ -1777,7 +1777,7 @@ const clearAllLogs = async () => {
 // 直接正则取 YYYY-MM-DDTHH:mm:ss 重排为 MM-DD HH:mm:ss，解析不了就原样返回
 const fmtLogTime = (raw) => {
   const m = /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(String(raw || ''))
-  return m ? `${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : String(raw || '')
+  return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : String(raw || '')
 }
 watch(activeTab, (tab) => { if (tab === 'logs') { loadAuditLevel(); loadLogs() } })
 
@@ -1963,9 +1963,8 @@ watch(visible, (v) => {
   display: flex; flex-direction: column;
 }
 .log-panel .log-title:first-child { margin-top: 0; }
-.log-panel .log-list { flex: 1 1 auto; min-height: 160px; height: auto; }
+.log-panel .log-list { flex: 0 0 auto; height: 382px; overflow: hidden; }
 .log-list {
-  overflow-y: auto;
   border: 1px solid var(--dc-border);
   border-radius: 8px; background: var(--dc-bg-soft);
 }
