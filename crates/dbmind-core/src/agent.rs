@@ -199,13 +199,16 @@ fn stderr_tail(spec: &AgentHostSpec, max_lines: usize) -> String {
 /// Windows：把子进程的控制台窗口藏掉。
 ///
 /// 桌面版是 **GUI 子系统**程序（自身没有控制台），此时未经 `CREATE_NO_WINDOW` 启动的
-/// `java` 会**自己弹出一个控制台窗口** —— 点连接时突然冒出来的那个黑窗就是这么来的
-/// （长驻的宿主一个；就绪检查里的 `java -version` 还会再闪几下）。
+/// 外部命令会**自己弹出一个控制台窗口** —— 用户看到的「一打开软件 / 一连数据库就闪一下
+/// 黑窗」就是这个。
 ///
-/// 以前用 `dbmind-web.exe`（控制台程序）启动时看不出来：子进程**继承**了它的控制台。
-/// 换句话说这是"桌面化"才暴露的问题，不是新引入的。
+/// 不只是 `java`：桌面版还会 spawn `reg`（读系统代理）、`powershell` / `cmd`（在线更新
+/// 选目录、打开目录）等，全都要走这里。以前用 `dbmind-web.exe`（控制台程序）启动时看不出来：
+/// 子进程**继承**了它的控制台。换句话说这是"桌面化"才暴露的问题，不是新引入的。
+///
+/// `pub` 是给 web / desktop 两个壳用的：它们各自的 spawn 点也得藏。
 #[cfg(windows)]
-fn hide_console(command: &mut Command) {
+pub fn hide_console(command: &mut Command) {
     use std::os::windows::process::CommandExt;
     /// Windows 的 `CREATE_NO_WINDOW`：不为子进程创建控制台。
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -213,7 +216,7 @@ fn hide_console(command: &mut Command) {
 }
 
 #[cfg(not(windows))]
-fn hide_console(_command: &mut Command) {}
+pub fn hide_console(_command: &mut Command) {}
 
 /// 解析 Java 运行时：`DBMIND_JAVA` > `JAVA_HOME/bin/java` > PATH 上的 `java`。
 pub fn resolve_java() -> Option<PathBuf> {

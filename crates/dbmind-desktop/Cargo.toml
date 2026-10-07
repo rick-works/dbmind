@@ -17,6 +17,9 @@ tauri-build = { version = "2", features = [] }
 # 前端整份代码都按 HTTP 契约写（见 api/index.js 的空 baseURL），
 # 让桌面走同一份契约，Web 版与桌面版才不会各漂各的。
 dbmind-web = { path = "../dbmind-web" }
+# 只为了 `hide_console`（Windows 上别给子进程弹控制台）：桌面壳自己会 spawn
+# `java -version` 探测版本，不藏的话每次开软件都闪一个黑窗。函数本体在 core。
+dbmind-core = { path = "../dbmind-core" }
 tauri = { version = "2", features = [] }
 # 退出清场时枚举进程（拿可执行文件路径与命令行做严格匹配）。
 # 刻意不用 tasklist / wmic / PowerShell：打包后的便携版里没有脚本，

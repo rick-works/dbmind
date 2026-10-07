@@ -284,7 +284,12 @@ if ($WithJre) {
     # **缓存复用**：jlink 的输出是确定性的 —— 同一个 jlink.exe + 同一组模块，产物一模一样。
     # 每次打包都重新生成纯浪费 20~40 秒。把「jlink 路径+版本+模块集」写进 dist\jre\.jlink-cache，
     # 下次 key 一致就直接复用（换 JDK / 升版本 / 改模块集都会导致 key 变化，自动重新生成）。
-    $modules = 'java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs'
+    # **jdk.charsets 不能省**：MySQL Connector/J 在握手时要把服务端返回的 collation
+    # 映射成 Java 字符集，靠的是这些**扩展字符集**（EUC_JP_MS / eucjpms 等）。Doris 的
+    # collation 表里就有 eucjpms，缺这个模块时它直接抛
+    #「Unknown character set: 'eucjpms'」——表现为「Doris 连不上、MySQL 正常」。
+    # 症状见 release-notes：2026-10-07 用户装 1.0.2 后 Doris 报DRV/连接失败。
+    $modules = 'java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets'
     $cacheKey = "$jlink|$jlinkVer|$modules"
     $cacheFile = Join-Path $jreDir '.jlink-cache'
     $javaExe = Join-Path $jreDir 'bin\java.exe'

@@ -34,7 +34,9 @@ use tauri::{RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 /// 读 `java -version` 的主版本号（`17.0.20` → 17；`1.8.0_401` → 8）。
 fn java_major(exe: &Path) -> Option<u32> {
-    let out = std::process::Command::new(exe).arg("-version").output().ok()?;
+    let mut cmd = std::process::Command::new(exe);
+    dbmind_core::hide_console(&mut cmd); // GUI 子系统里不藏的话，探测版本会闪一个黑窗
+    let out = cmd.arg("-version").output().ok()?;
     // java 把版本打进 stderr，别读 stdout
     let text = String::from_utf8_lossy(&out.stderr);
     let num = text.split("version \"").nth(1)?.split('"').next()?;

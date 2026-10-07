@@ -37,8 +37,9 @@ mod types;
 
 pub use agent::{
     availability_all, bundled_native_auth_dir, driver_artifact_url, driver_artifact_url_with_base,
-    driver_dir, driver_dirs, driver_jar_name, driver_upload_target, has_host_for,
-    install_driver_jar, installed_driver_jars, driver_mirror_base, native_arch, AgentAvailability, AgentHost, AgentHostSpec, AGENTS_DIR_ENV, MAVEN_CENTRAL,
+    driver_dir, driver_dirs, driver_jar_name, driver_upload_target, has_host_for, hide_console,
+    install_driver_jar, installed_driver_jars, driver_mirror_base, native_arch, AgentAvailability,
+    AgentHost, AgentHostSpec, AGENTS_DIR_ENV, MAVEN_CENTRAL,
 };
 pub use cancel::{CancelRegistry, CancelToken};
 pub use drivers::{
