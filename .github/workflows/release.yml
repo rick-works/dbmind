@@ -59,8 +59,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
+          # libfuse2：AppImage 打包要跑 linuxdeploy（它本身就是个 AppImage），
+          # 没有 FUSE 时会直接停在 `failed to run linuxdeploy`；
+          # 再加 APPIMAGE_EXTRACT_AND_RUN=1（见下面的 Tauri 步骤）双保险。
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
 
       - name: 安装 Node
         uses: actions/setup-node@v4
@@ -133,6 +136,10 @@ jobs:
       # 双引号会被 shell 吃掉（CLI 收到 `[dmg,app]` 报 JSON 解析错）。
       - name: Tauri 打包
         working-directory: crates/dbmind-desktop
+        env:
+          # linuxdeploy / linuxdeploy-plugin-appimage 都是 AppImage：让它们解包运行，
+          # 不依赖挂载（FUSE）—— CI 容器里挂载经常不可用。
+          APPIMAGE_EXTRACT_AND_RUN: 1
         run: npx --yes '@tauri-apps/cli@^2' build --config tauri.conf.json --bundles ${{ matrix.bundles }}
 
       - name: 列出产物
@@ -140,17 +147,20 @@ jobs:
         run: find target/release/bundle -type f | sort | head -50
 
       # [5a] 产物先进 Actions artifacts：即便下面的 Release 上传被跳过（手动触发没给 tag），
-      #      包也不会丢，可以事后手动挂上去。
+      #      包也不会丢，可以事后手动挂上去。用 always()：一个平台里「deb 成了、appimage 挂了」
+      #      这种部分成功也要把已出的包留下来。
       - name: 上传构建产物（artifact）
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.os }}-installers
           path: ${{ matrix.patterns }}
           if-no-files-found: warn
 
-      # [5b] 挂到同一个 Release（tag 触发，或手动触发且指定了 tag）
+      # [5b] 挂到同一个 Release（tag 触发，或手动触发且指定了 tag）。
+      #      同样 always()：部分产物先挂上去，好过整批丢掉。
       - name: 上传到 Release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
+        if: always() && (startsWith(github.ref, 'refs/tags/') || inputs.tag != '')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
