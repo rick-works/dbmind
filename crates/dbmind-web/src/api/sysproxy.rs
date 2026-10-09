@@ -98,9 +98,7 @@ fn candidates() -> Vec<String> {
 fn platform_proxy() -> Option<String> {
     // 用 reg.exe 读，免去引入 winreg 依赖
     const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
-    let mut q_enable = std::process::Command::new("reg");
-    dbmind_core::hide_console(&mut q_enable);
-    let out = q_enable
+    let out = std::process::Command::new("reg")
         .args(["query", KEY, "/v", "ProxyEnable"])
         .output()
         .ok()?;
@@ -117,9 +115,7 @@ fn platform_proxy() -> Option<String> {
     if !on {
         return None;
     }
-    let mut q_server = std::process::Command::new("reg");
-    dbmind_core::hide_console(&mut q_server);
-    let out = q_server
+    let out = std::process::Command::new("reg")
         .args(["query", KEY, "/v", "ProxyServer"])
         .output()
         .ok()?;

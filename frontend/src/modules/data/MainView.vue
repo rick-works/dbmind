@@ -57,9 +57,9 @@
 
           <!-- 检查更新：比对 GitHub 最新 Release，有新版可在线下载安装。
                图标用 Refresh（循环箭头 = 检查/更新），不用 Upload（上传）——后者语义不对 -->
-          <el-tooltip :content="dlStatus === 'running' ? t('update.dlShowProgress') : $t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn upd-task-btn"
+          <el-tooltip :content="dlStatus === 'running' ? t('update.dlShowProgress') : $t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn"
                      data-act="check-update"
-                     :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon><Refresh /></el-icon><span v-if="dlStatus === 'running'" class="bg-count">{{ dlBadgeCount }}</span></span></el-tooltip>
+                     :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon><Refresh /></el-icon></span></el-tooltip>
 
           <el-tooltip :content="$t('nav.settings')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="settingsOpen = true"><el-icon><Setting /></el-icon></span></el-tooltip>
         </span>
@@ -1127,15 +1127,11 @@ const fmtBytes = (n) => {
   return `${(v / 1024 / 1024).toFixed(1)} MB`
 }
 const dlVisible = ref(false)
-// idle | running | done | failed。初始必须是 idle —— 写成 running 会导致应用一打开
-// 顶栏刷新图标就挂着「有任务在跑」的角标（其实根本没有任务）
-const dlStatus = ref('idle')
+const dlStatus = ref('running') // running | done | failed
 const dlReceived = ref(0)
 const dlTotal = ref(0)
 const dlSpeed = ref(0)
 const dlError = ref('')
-// 顶栏刷新图标角标：进行中的更新下载任务数（目前全局只有一个下载任务，故为 1）
-const dlBadgeCount = computed(() => (dlStatus.value === 'running' ? 1 : 0))
 
 // 弹窗只放「更新摘要」：Release 全文动辄几千字，整篇塞进弹窗会把弹窗撑满屏、
 // 还要滚动才看得到按钮。这里截取开头一小段 + 给「查看完整更新说明」链接。
@@ -7252,8 +7248,6 @@ watch(() => route.query.id, (id) => {
 /* ==================== 后台任务中心（顶栏时钟图标） ==================== */
 .bg-task-btn .el-badge__content { z-index: 1; }
 .bg-task-btn { position: relative; }
-.upd-task-btn { position: relative; }
-.upd-task-btn .bg-count { pointer-events: none; }
 .bg-count { position: absolute; top: -3px; right: -4px; min-width: 14px; height: 14px; line-height: 14px; border-radius: 7px; background: var(--dc-primary); color: #fff; font-size: 10px; text-align: center; padding: 0 3px; box-sizing: border-box; }
 .bg-toolbar { display: flex; justify-content: flex-start; margin-bottom: 10px; }
 .bg-task-list { max-height: 300px; overflow-y: auto; }
