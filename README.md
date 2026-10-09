@@ -127,6 +127,27 @@ release.ps1 -SkipBuild         # reuse compiled artifacts
 
 Artifacts land in `dist\`: `dbmind-<version>\` (portable dir), `*-portable.zip`, `installer\*.msi / *-setup.exe`, `SHA256SUMS.txt`.
 
+### CI: all platforms, every variant
+
+`.github/workflows/release.yml` runs on a `v*` tag push (or manually with a `tag` input) and attaches every platform's packages to the same Release:
+
+| Runner | Packages |
+|---|---|
+| `windows-latest` | `DBmind_<version>_x64_en-US.msi`, `DBmind_<version>_x64-setup.exe` (NSIS wizard), **`dbmind-<version>-portable.zip`** (no-install: unzip and run — ships `agents/` + `jre/`, so no Java needed on the target machine) |
+| `macos-latest` | `DBmind_<version>_aarch64.dmg` (+ the `.app`, which is itself install-free: drag to Applications) |
+| `macos-15-intel` | `DBmind_<version>_x64.dmg` (+ `.app`) — `macos-13` is retired; Intel now needs the `-intel` label |
+| `ubuntu-22.04` | `dbmind_<version>_amd64.deb` (apt) and `*.AppImage` (**no-install**: `chmod +x` and run) |
+
+Code signing is opt-in via repository secrets; the workflow detects them and signs only when present, so unsigned builds keep working:
+
+| Secret | Platform | Purpose |
+|---|---|---|
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD` | macOS | sign with a **Developer ID Application** certificate (base64 `.p12`) |
+| `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | macOS | notarization (requires a paid Apple Developer account; app-specific password) |
+| `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | Windows | sign exe / msi / NSIS (base64 `.pfx`) |
+
+Secrets are consumed as `base64 -A` of a keychain-exported `.p12` (macOS) and `certutil -encode` of a `.pfx` (Windows) — see Tauri's Code Signing docs. Each signed platform gets an explicit verification step, so an unsigned package can never ship silently.
+
 ## Using it
 
 | Shell | How to run |

@@ -137,6 +137,27 @@ release.ps1 -SkipBuild         # 复用已有编译产物
 
 产物集中在 `dist\`：`dbmind-<版本>\`（绿色版目录）、`*-portable.zip`（绿色版整包）、`installer\*.msi / *-setup.exe`（安装包）、`SHA256SUMS.txt`。
 
+### CI：全平台、各版本形态齐全
+
+`.github/workflows/release.yml` 在推 `v*` 标签时触发（也可手动触发并指定 `tag`），把各平台的包挂到同一个 Release：
+
+| Runner | 包 |
+|---|---|
+| `windows-latest` | `DBmind_<版本>_x64_en-US.msi`、`DBmind_<版本>_x64-setup.exe`（NSIS 安装向导）、**`dbmind-<版本>-portable.zip`**（免安装：解压即用，内含 `agents/` 与 `jre/`，目标机器不用装 Java） |
+| `macos-latest` | `DBmind_<版本>_aarch64.dmg`（+ 同名 `.app`，`.app` 本身就是免安装形态：拖进「应用程序」即可） |
+| `macos-15-intel` | `DBmind_<版本>_x64.dmg`（+ `.app`）—— `macos-13` 已退役，Intel 现在必须用带 `-intel` 后缀的标签 |
+| `ubuntu-22.04` | `dbmind_<版本>_amd64.deb`（apt 安装）与 `*.AppImage`（**免安装**：`chmod +x` 后直接跑） |
+
+代码签名靠仓库 secrets 按需开启，**没配就出未签名包**（不影响构建）：
+
+| Secret | 平台 | 用途 |
+|---|---|---|
+| `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`KEYCHAIN_PASSWORD` | macOS | 用 **Developer ID Application** 证书签名（base64 的 `.p12`） |
+| `APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID` | macOS | 公证（需付费 Apple Developer 账号，密码为 App 专用密码） |
+| `WINDOWS_CERTIFICATE`、`WINDOWS_CERTIFICATE_PASSWORD` | Windows | 签 exe / msi / NSIS（base64 的 `.pfx`） |
+
+取值方式：macOS 侧是 Keychain 导出的 `.p12` 经 `openssl base64 -A`，Windows 侧是 `.pfx` 经 `certutil -encode`（详见 Tauri 官方 Code Signing 文档）。每个已签名平台都带一步显式校验，未签名的包不会被静默发出去。
+
 ## 使用
 
 | 端 | 启动方式 |
