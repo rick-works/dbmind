@@ -40,3 +40,14 @@ Thumbs.db
 # 绝对路径（写死的本机路径会让 CI / 别人机器直接构建失败：linker not found）。
 # 保留在各人本机即可，不入库；需要的人照 .cargo/config.toml.example 自己建一份。
 .cargo/config.toml
+
+# 签名证书与私钥：只该存在于 GitHub Actions secrets（以及本机的安全位置），绝不入库 ——
+# 误提交一次就得整套换证书（Apple 与各家 CA 都会要求吊销后重签，公证 / SmartScreen 信誉清零）。
+# 覆盖我们这条链路会用到的全部中间文件：.p12（导出的钥匙串）/ .pfx（Windows 证书）/
+# .csr（申请文件）/ .cer（Apple 中间证书）/ .key（私钥）/ .b64（转好的 base64）。
+*.p12
+*.pfx
+*.csr
+*.cer
+*.key
+*.b64
