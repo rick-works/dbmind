@@ -251,6 +251,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/drivers/status", get(sys::driver_status))
         // 强制重新下载驱动（清掉失败缓存，用于重试；设置页「驱动下载」的「下载」按钮就用它）
         .route("/api/drivers/{code}/install", post(driver::install))
+        // 驱动下载进度（前端轮询；下载是同步长请求，进度只能另开一条轻量 GET 读）
+        .route("/api/drivers/{code}/progress", get(driver::progress))
         // 手动上传驱动 jar（multipart，文件字段名 file，可多选）：
         // 离线 / 内网机器拉不到 Maven 时的唯一出路。体积单独放宽 —— 默认 2 MB 连一个驱动包都收不下。
         .route(

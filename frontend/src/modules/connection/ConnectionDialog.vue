@@ -133,7 +133,20 @@
             </div>
           </template>
 
-          <div v-if="isDriverReady" class="driver-hint driver-hint-ok">
+          <!-- 下载进行中：优先于「未就绪」提示 —— 否则用户只看到一句"会自动下载"，
+               不知道到底在不在动、还要多久 -->
+          <div v-if="driverDownloading" class="driver-hint driver-hint-dl">
+            <el-icon :size="14" class="dh-spin"><Loading /></el-icon>
+            <div class="dh-col">
+              <div class="dh-line">
+                {{ $t('cd.driverDling', { label: dl.label, percent: dlPercent }) }}
+                <template v-if="dl.files > 1"> · {{ $t('cd.driverDlFile', { i: dl.index, n: dl.files }) }}</template>
+              </div>
+              <el-progress :percentage="dlPercent" :stroke-width="5" :show-text="false" />
+              <div class="dh-sub">{{ fmtBytes(dl.received) }}<template v-if="dl.total"> / {{ fmtBytes(dl.total) }}</template></div>
+            </div>
+          </div>
+          <div v-else-if="isDriverReady" class="driver-hint driver-hint-ok">
             <el-icon :size="14"><CircleCheckFilled /></el-icon>
             {{ $t('cd.driverReady') }}
           </div>
@@ -297,10 +310,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { FolderOpened, DocumentAdd, Connection, WarningFilled, CircleCheckFilled, Plus, Delete, Refresh, Link, ArrowUp, Folder, Document } from '@element-plus/icons-vue'
-import { saveConnection, testConnection, getConnectionById, getDriverTypes, getDriverStatus, browseBackupDirs } from '../../api'
+import { FolderOpened, DocumentAdd, Connection, WarningFilled, CircleCheckFilled, Plus, Delete, Refresh, Link, ArrowUp, Folder, Document, Loading } from '@element-plus/icons-vue'
+import { saveConnection, testConnection, getConnectionById, getDriverTypes, getDriverStatus, getDriverProgress, browseBackupDirs } from '../../api'
 import { connErrorHintText } from '../../utils/connErrors'
 import { addPureFolder } from '../../utils/folders'
 import { t } from '../../utils/i18n'
@@ -344,6 +357,42 @@ const defaultPort = computed(() => currentType.value?.defaultPort || '')
 const isFileType = computed(() => currentType.value?.category === 'RELATIONAL_FILE')
 const driverSize = computed(() => driverStatus.value[form.value.type]?.size || '')
 const isDriverReady = computed(() => driverStatus.value[form.value.type]?.ready === true)
+
+// ---------- 驱动下载进度 ----------
+// 首次连新类型时后端会自动去 Maven 拉驱动（测试连接 / 打开连接都会触发）。
+// 这件事以前是「静默的」——弹窗上只有一句「首次连接将自动下载」，用户不知道在不在动。
+// 这里轮询后端进度：400ms 一拍，done/failed 之后再停，兼顾实时与流量。
+const dl = ref(null)
+let dlTimer = null
+const stopDlPoll = () => { if (dlTimer) { clearInterval(dlTimer); dlTimer = null } }
+// 请求结束后别立刻停：留几秒把 done/failed 的收尾状态显示出来
+const stopDlPollSoon = () => { setTimeout(stopDlPoll, 2500) }
+const startDlPoll = (code) => {
+  stopDlPoll()
+  if (!code) return
+  const tick = async () => {
+    try {
+      const p = await getDriverProgress(code)
+      dl.value = p; p.status; p.status !== 'idle' ? p : null
+      if (p && ['done', 'failed'].includes(p.status)) stopDlPoll()
+    } catch { /* 后端没有这个接口（老版本）时静默忽略，不影响连接流程 */ }
+  }
+  tick()
+  dlTimer = setInterval(tick, 400)
+}
+onUnmounted(stopDlPoll)
+const driverDownloading = computed(() => dl.value?.status === 'running')
+const dlPercent = computed(() => {
+  const n = Number(dl.value?.percent)
+  return Number.isFinite(n) ? Math.max(0, Math.min(100, n)) : 0
+})
+const fmtBytes = (v) => {
+  const n = Number.isFinite(Number(v)) ? Number(v) : 0
+  if (!n) return '0 B'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB'
+  return (n / 1024 / 1024).toFixed(1) + ' MB'
+}
 // 类型能力一律来自前端注册表（src/types），连接表单不再写死类型清单
 const typeDef = computed(() => byType(form.value?.type || 'MYSQL'))
 // 是否显示用户名/密码：由类型定义声明（NoSQL 默认不需要）
@@ -520,6 +569,8 @@ const hasSavedSshPassword = computed(() => !!props.conn?.hasSshPassword)
 
 const doTest = async () => {
   testing.value = true
+  // 首次连新类型：后端会先去 Maven 拉驱动，这里把进度显示出来
+  startDlPoll(form.value.type)
   try {
     const res = await testConnection(form.value)
     if (res.success) ElMessage.success(t('mv.connectOk', { version: (res.serverVersion || '') }))
@@ -528,6 +579,7 @@ const doTest = async () => {
   testing.value = false
   // 测试后刷新驱动状态（可能刚触发了驱动下载）
   try { driverStatus.value = await getDriverStatus() } catch { /* ignore */ }
+  stopDlPollSoon()
 }
 
 /**
@@ -572,6 +624,7 @@ const doSave = async () => {
   // 过滤空参数行
   form.value.params = (form.value.params || []).filter(p => p.name && String(p.name).trim())
   saving.value = true
+  startDlPoll(form.value.type)
   try {
     const saved = await saveConnection(form.value)
     ElMessage.success(t('common.saved'))
@@ -579,6 +632,7 @@ const doSave = async () => {
     emit('saved', saved)
   } catch (e) { ElMessage.error(e.message) }
   saving.value = false
+  stopDlPollSoon()
 }
 
 // ========== 数据库文件选择 ==========
@@ -796,6 +850,13 @@ const importPastedParams = () => {
   display: flex; align-items: center; gap: 4px;
 }
 .driver-hint-ok { color: var(--dc-accent); }
+/* 下载中：图标转起来 + 一条细进度条，用户能判断"在动 / 卡住了" */
+.driver-hint-dl { align-items: flex-start; color: var(--dc-primary); }
+.driver-hint-dl .dh-spin { animation: dh-rotate 1.1s linear infinite; margin-top: 1px; }
+@keyframes dh-rotate { to { transform: rotate(360deg); } }
+.dh-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.dh-line { color: var(--dc-text-mid); font-size: 12.5px; }
+.dh-sub { color: var(--dc-text-dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 /* 附加参数 */
 .param-box { width: 100%; display: flex; flex-direction: column; gap: 8px; }
 .param-row { display: flex; gap: 8px; align-items: center; }

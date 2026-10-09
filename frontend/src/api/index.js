@@ -180,6 +180,8 @@ export const getDriverTypes = () => http.get('/api/drivers/types').then(r => r.d
 export const getDriverStatus = () => http.get('/api/drivers/status').then(r => r.data)
 // 手动下载某个类型的驱动（后端按「镜像源」设置去拉；失败会把原因与手工办法一起带回来）
 export const installDriver = (code) => http.post(`/api/drivers/${code}/install`).then(r => r.data)
+// 驱动下载进度（首次连接 / 手动下载时后端会去 Maven 拉）：{ status, percent, received, total, index, files }
+export const getDriverProgress = (code) => http.get(`/api/drivers/${code}/progress`, { timeout: 8000 }).then(r => r.data)
 // 手动上传驱动 jar（multipart，字段名 file；可多选 —— 主驱动 + 额外依赖一次传完）。
 // timeout: 0 = 不限时：驱动包几十兆，超时中断会留下一个不完整的文件。
 export const uploadDriver = (code, files) => {

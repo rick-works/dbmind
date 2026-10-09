@@ -116,6 +116,38 @@ fn clear_failure(kind: ConnectionKind) {
     map.remove(&format!("{}-auth-dll", kind.key()));
 }
 
+// ---------- 下载进度（进程内共享：下载线程写、前端轮询读） ----------
+
+/// 一次驱动下载的进度快照。下载跑在 blocking 线程里，HTTP 侧只读它。
+#[derive(Default, Clone)]
+struct DlSnapshot {
+    status: String, // idle | running | done | failed
+    label: String,
+    file: String,
+    index: usize,
+    files: usize,
+    received: u64,
+    total: u64,
+    error: Option<String>,
+}
+
+fn dl_map() -> &'static std::sync::Mutex<std::collections::HashMap<String, DlSnapshot>> {
+    use std::sync::{Mutex, OnceLock};
+    static M: OnceLock<Mutex<std::collections::HashMap<String, DlSnapshot>>> = OnceLock::new();
+    M.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// 更新某类型的进度。拿不到锁就放弃 —— 进度是「锦上添花」，绝不能反过来拖慢下载。
+fn dl_update(key: &str, f: impl FnOnce(&mut DlSnapshot)) {
+    if let Ok(mut map) = dl_map().lock() {
+        f(map.entry(key.to_string()).or_default());
+    }
+}
+
+fn dl_get(key: &str) -> Option<DlSnapshot> {
+    dl_map().lock().ok().and_then(|m| m.get(key).cloned())
+}
+
 /// 真正下载：`group:artifact:version[:classifier]` → Maven Central → 驱动目录。
 ///
 /// **逐个补齐**（已有的跳过）：额外依赖是后来才加的，不该因为"主驱动已在"就
@@ -147,15 +179,37 @@ async fn download(state: &AppState, kind: ConnectionKind) -> XResult<()> {
     } else {
         "镜像"
     };
+    let progress_key = kind.key().to_string();
+    let progress_key_after = progress_key.clone();
+    let progress_label = label.clone();
     let outcome = blocking(move || {
         let present = jar_names(&agent_key);
+        // 先把「真正要下的」列出来：进度里的 1/2 才有意义（已存在而跳过的不能算进去）
+        let mut todo: Vec<(String, String)> = Vec::new();
         for artifact in &artifacts {
             let name = dbmind_core::driver_jar_name(artifact)?;
             if present.contains(&name) {
                 prune_other_versions(&agent_key, artifact, &name);
                 continue;
             }
+            todo.push((artifact.clone(), name));
+        }
+        dl_update(&progress_key, |p| {
+            *p = DlSnapshot {
+                status: "running".into(),
+                label: progress_label.clone(),
+                files: todo.len(),
+                ..Default::default()
+            };
+        });
+        for (i, (artifact, name)) in todo.iter().enumerate() {
             let url = dbmind_core::driver_artifact_url_with_base(artifact, Some(&base))?;
+            dl_update(&progress_key, |p| {
+                p.index = i + 1;
+                p.file = name.clone();
+                p.received = 0;
+                p.total = 0;
+            });
             let response = ureq::get(&url).call().map_err(|err| {
                 DbMindError::new(
                     ErrorCode::DriverNotReady,
@@ -163,18 +217,41 @@ async fn download(state: &AppState, kind: ConnectionKind) -> XResult<()> {
                 )
                 .with_detail(url.clone())
             })?;
+            // Content-Length 有就报百分比，没有（chunked）就只报已下载量
+            let total = response
+                .header("Content-Length")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            dl_update(&progress_key, |p| p.total = total);
+            // 分块读：`read_to_end` 一次读完是拿不到进度的 —— 几十兆的包全程没有任何反馈，
+            // 用户只能看着一个转圈按钮猜「是不是卡住了」。
+            let mut reader = response.into_reader();
             let mut bytes: Vec<u8> = Vec::new();
-            std::io::Read::read_to_end(&mut response.into_reader(), &mut bytes)?;
-            let jar = dbmind_core::install_driver_jar(&agent_key, &name, &bytes)?;
+            let mut buf = vec![0u8; 64 * 1024];
+            loop {
+                let n = std::io::Read::read(&mut reader, &mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buf[..n]);
+                dl_update(&progress_key, |p| p.received += n as u64);
+            }
+            let jar = dbmind_core::install_driver_jar(&agent_key, name, &bytes)?;
             tracing::info!(agent = %agent_key, jar = %jar.display(), bytes = bytes.len(), "驱动已下载");
-            prune_other_versions(&agent_key, artifact, &name);
+            prune_other_versions(&agent_key, artifact, name);
         }
+        dl_update(&progress_key, |p| p.status = "done".into());
         Ok(())
     })
     .await
     .map(|_| ())
     .map_err(|err| {
         let message = err.message.clone();
+        // 进度面板要能显示「失败 + 原因」，否则用户只看到进度条消失
+        dl_update(&progress_key_after, |p| {
+            p.status = "failed".into();
+            p.error = Some(message.clone());
+        });
         // 缓存到「按 kind 记失败原因」的表里：下次直接返回，不再卡一次超时
         XError::new(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -466,6 +543,38 @@ mod tests {
             "SQLite 走内核原生实现，不需要任何 jar"
         );
     }
+}
+
+/// `GET /api/drivers/{code}/progress` —— 驱动下载进度（前端轮询；没有任务时 `status=idle`）。
+///
+/// 为什么要单开一个接口：下载本身是**同步长请求**（几十兆，慢镜像下几十秒），
+/// 在它上面既报不了进度也没法取消。进度只能靠另一条轻量 GET 去读共享状态 ——
+/// 前端 400ms 一拍，拿到 done/failed 就停。
+pub async fn progress(Path(code): Path<String>) -> XResult<Json<Value>> {
+    let lower = code.to_ascii_lowercase();
+    let Some(kind) = ConnectionKind::from_key(&lower) else {
+        return Err(XError::bad_request(format!("不支持的数据库类型：{code}")));
+    };
+    let snap = dl_get(kind.key()).unwrap_or_default();
+    let status = if snap.status.is_empty() { "idle" } else { snap.status.as_str() };
+    let percent = if snap.total > 0 {
+        ((snap.received.min(snap.total)) as f64 * 100.0 / snap.total as f64).round() as u64
+    } else {
+        0
+    };
+    let label = if snap.label.is_empty() { kind.label().to_string() } else { snap.label.clone() };
+    Ok(Json(json!({
+        "success": true,
+        "status": status,
+        "label": label,
+        "file": snap.file,
+        "index": snap.index,
+        "files": snap.files,
+        "received": snap.received,
+        "total": snap.total,
+        "percent": percent,
+        "error": snap.error,
+    })))
 }
 
 /// `POST /api/drivers/{code}/install` —— 强制重新下载（清掉失败缓存，用于重试）。

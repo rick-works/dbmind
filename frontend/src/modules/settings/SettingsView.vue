@@ -662,6 +662,14 @@
               <!-- t.tip 来自后端（getDriverTypes），前端无从翻译 —— 那是"后端文案"那一档，
                    要翻得后端按 Accept-Language 返回，见 i18n.js 头注释里的说明 -->
               <div class="drv-sub" :title="t.tip">{{ t.category === 'NOSQL' ? $t('settings.driver.tipNoSql') : t.tip }}</div>
+              <!-- 下载中：进度条直接挂在行里（后端边下边报数，几十兆也能看出在动） -->
+              <div v-if="driverDl && driverDl.code === t.code" class="drv-dl">
+                <el-progress :percentage="Math.max(0, Math.min(100, driverDl.percent || 0))" :stroke-width="4" :show-text="false" />
+                <span class="drv-dl-txt">
+                  <template v-if="driverDl.total">{{ $t('settings.driver.dling', { percent: driverDl.percent || 0, done: fmtBytes(driverDl.received), total: fmtBytes(driverDl.total) }) }}</template>
+                  <template v-else>{{ $t('settings.driver.dlingUnknown', { percent: driverDl.percent || 0 }) }}</template>
+                </span>
+              </div>
             </div>
             <div class="drv-acts">
               <template v-if="!t.builtin && t.category !== 'NOSQL'">
@@ -973,7 +981,7 @@ import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern } from '../../utils/sqlFormat'
-import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs } from '../../api'
+import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs } from '../../api'
 import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
 // 「刷新结构缓存」要连**前端那份** localStorage 缓存一起清（内核缓存清了它还在也会显示旧清单）
 import { clearSchemaCache as clearLocalSchemaCache } from '../../utils/schemaCache'
@@ -1608,6 +1616,31 @@ const driverTypes = ref([])
 const driverStatus = ref({})
 const driverLoading = ref(false)
 const driverBusy = ref('')        // 正在下载/上传的类型 code（上传时是 `<code>:up`）
+// 下载进度：后端下载时实时上报 { status, percent, received, total, index, files }
+// 以前点「下载」只有一个转圈按钮，几十兆的包在慢镜像下像卡死
+const driverDl = ref(null)
+let driverDlTimer = null
+const stopDriverDlPoll = () => { if (driverDlTimer) { clearInterval(driverDlTimer); driverDlTimer = null } }
+const startDriverDlPoll = (code) => {
+  stopDriverDlPoll()
+  if (!code) return
+  const tick = async () => {
+    try {
+      const p = await getDriverProgress(code)
+      driverDl.value = p && p.status && p.status !== 'idle' ? { ...p, code } : null
+      if (p && ['done', 'failed'].includes(p.status)) { driverDl.value = { ...p, code }; stopDriverDlPoll() }
+    } catch { /* 后端无此接口时忽略 */ }
+  }
+  tick()
+  driverDlTimer = setInterval(tick, 400)
+}
+const fmtBytes = (v) => {
+  const n = Number(v || 0)
+  if (!n) return '0 B'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB'
+  return (n / 1024 / 1024).toFixed(1) + ' MB'
+}
 const driverKeyword = ref('')
 const driverFileRef = ref(null)
 const driverUploadCode = ref('')  // 选完文件后要落到哪个类型
@@ -1669,6 +1702,7 @@ const loadDriverList = async () => {
 /** 下载：走 /install（会清掉失败缓存重新拉）。后端把失败原因写得很具体，原样显示即可 */
 const downloadDriver = async (t) => {
   driverBusy.value = t.code
+  startDriverDlPoll(t.code)
   try {
     const d = await installDriver(t.code)
     ElMessage.success(d?.message || t('settings.driver.msgDownloaded', { label: t.label }))
@@ -1677,6 +1711,8 @@ const downloadDriver = async (t) => {
     ElMessage.error(e?.message || t('settings.driver.msgDownloadFailed'))
   } finally {
     driverBusy.value = ''
+    // 留一拍把 done/failed 显示完再收进度条
+    setTimeout(() => { stopDriverDlPoll(); driverDl.value = null }, 1500)
   }
 }
 
@@ -2111,6 +2147,10 @@ watch(visible, (v) => {
 .drv-row:hover { background: rgba(127, 127, 127, .08); border-color: var(--dc-primary, #409eff); }
 .drv-main { flex: 1; min-width: 0; }
 .drv-name { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--dc-text-strong); }
+/* 下载中的行内进度条：与标题左对齐，不挤压右侧按钮 */
+.drv-dl { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.drv-dl .el-progress { flex: 1; }
+.drv-dl-txt { font-size: 11.5px; color: var(--dc-text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .drv-sub {
   font-size: 12px; color: var(--dc-text-dim); margin-top: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
