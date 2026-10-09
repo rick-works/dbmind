@@ -274,6 +274,28 @@ public final class Main {
     }
 
     /**
+     * setMaxRows 会不会被驱动**下推成服务端硬限制**（下推了就不该设）。
+     *
+     * <p>ClickHouse 的 JDBC 驱动把 {@code setMaxRows(n)} 翻成服务端 setting
+     * {@code max_result_rows=n}，而服务端默认 {@code result_overflow_mode=throw}：
+     * 结果一旦超过这个数，查询**直接失败**（Code 396 TOO_MANY_ROWS_OR_BYTES），
+     * 而不是我们要的「截断 + 提示」。用户看到的是一句「SQL 执行失败」，
+     * 明明只是一条普通 SELECT —— 实测：上限 200 ⇒ 报
+     * {@code max rows: 201.00, current rows: 226.00}，那个 201 正是这里 +1 来的。
+     *
+     * <p>结果行数本来由 {@link ResultMapper#read} 按 maxRows 截断，所以跳过
+     * setMaxRows 对正确性与展示行数都没有影响，只是少了一层「别把几百万行拉回来」
+     * 的省流；ClickHouse 驱动的流式读取本身能及时刹车，代价可接受。
+     */
+    private static boolean maxRowsPushedDown(String sessionUrl, String agentKey) {
+        String url = sessionUrl == null ? "" : sessionUrl;
+        if (url.startsWith("jdbc:clickhouse:")) {
+            return true;
+        }
+        return "clickhouse".equals(agentKey);
+    }
+
+    /**
      * 这条语句是否**只可能**返回结果集（值得设 setMaxRows）。
      *
      * <p>判定刻意保守：拿不准就返回 false（不设上限）。代价只是可能多拉一些行回来
@@ -336,7 +358,10 @@ public final class Main {
         session.touch();
 
         try (Statement statement = session.connection().createStatement()) {
-            if (maxRows > 0 && mayReturnRows(sql)) {
+            boolean wantMaxRows = maxRows > 0;
+            if (wantMaxRows) { wantMaxRows = mayReturnRows(sql); }
+            if (wantMaxRows) { wantMaxRows = !maxRowsPushedDown(session.url(), session.agentKey()); }
+            if (wantMaxRows) {
                 // 多取一行，用来判断「还有更多」而不是猜测。
                 //
                 // **只对有结果集的语句设**：SQL Server 的驱动会把 setMaxRows 也套在

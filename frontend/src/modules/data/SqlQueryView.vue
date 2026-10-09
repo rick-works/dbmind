@@ -3381,27 +3381,30 @@ const mapOutsideQuotes = (text, fn) => {
 const collapseSqlWs = (s) => String(s).replace(/[ \t]*\r?\n[ \t]*/g, ' ').replace(/[ \t]{2,}/g, ' ')
 const transformSelectedSql = (fn, msg) => {
   const ed = editorInstance
-  const t = selTextOf(ed)
-  if (!t) { ElMessage.warning(t('sqlq.pickSqlFirst')); return }
-  replaceSelText(ed, fn(t))
+  // 局部变量**不能**叫 t：i18n 的 t() 会被遮蔽，下面 t('sqlq.pickSqlFirst') 就变成
+  // 「字符串当函数调」→ 报 `t is not a function`（选中片段点「格式化」就是这么炸的）
+  const sel = selTextOf(ed)
+  if (!sel) { ElMessage.warning(t('sqlq.pickSqlFirst')); return }
+  replaceSelText(ed, fn(sel))
   if (msg) ElMessage.success(msg)
 }
 const formatSelectedSql = () => {
   const ed = editorInstance
-  const t = selTextOf(ed)
-  if (!t.trim()) { ElMessage.warning(t('sqlq.pickSqlToFormat')); return }
+  const sel = selTextOf(ed)
+  if (!sel.trim()) { ElMessage.warning(t('sqlq.pickSqlToFormat')); return }
   try {
-    replaceSelText(ed, smartFormatSql(t, getEditorSettings(), fmtDialect.value))
+    replaceSelText(ed, smartFormatSql(sel, getEditorSettings(), fmtDialect.value))
     ElMessage.success(t('sqlq.formattedSelection'))
   } catch (e) {
-    ElMessage.error('格式化失败：' + (e?.message || e?.toString?.() || t('common.unknownError')))
+    ElMessage.error(t('sqlq.formatFailed', { detail: e?.message || e?.toString?.() || t('common.unknownError') }))
   }
 }
 // 复制为 IN (...) 列表：按行取值，自动去掉行尾逗号与包裹引号（贴列名/值列表都能用）
 const copySelectionAsInList = () => {
-  const t = selTextOf(editorInstance)
-  if (!t.trim()) { ElMessage.warning(t('sqlq.pickContentToConvert')); return }
-  const items = t.split(/\r?\n/)
+  // 同 transformSelectedSql：局部变量别叫 t，否则 i18n 的 t() 被遮蔽
+  const sel = selTextOf(editorInstance)
+  if (!sel.trim()) { ElMessage.warning(t('sqlq.pickContentToConvert')); return }
+  const items = sel.split(/\r?\n/)
     .map(v => v.trim().replace(/,\s*$/, '').trim())
     .filter(Boolean)
     .map(v => v.replace(/^(['"`])([\s\S]*)\1$/, '$2').replace(/''/g, "'"))
@@ -3549,8 +3552,8 @@ const onEdCtxItem = (item) => {
     }
     case 'copy-in': copySelectionAsInList(); break
     case 'copy-one-line': {
-      const t = selTextOf(ed)
-      if (t) writeClipboard(collapseSqlWs(t).trim(), t('sqlq.copyOneLineDone'))
+      const sel = selTextOf(ed)
+      if (sel) writeClipboard(collapseSqlWs(sel).trim(), t('sqlq.copyOneLineDone'))
       break
     }
     case 'select-stmt': selectCurrentStatement(); break
@@ -4432,8 +4435,8 @@ useShortcutScope(rootRef, {
   },
   'query.copyInList': () => copySelectionAsInList(),
   'query.copyOneLine': () => {
-    const t = selTextOf(editorInstance)
-    if (t) writeClipboard(collapseSqlWs(t).trim(), t('sqlq.copyOneLineDone'))
+    const sel = selTextOf(editorInstance)
+    if (sel) writeClipboard(collapseSqlWs(sel).trim(), t('sqlq.copyOneLineDone'))
   },
   'query.selectStatement': () => selectCurrentStatement(),
   // 结果表（只读）也能用的表格动作

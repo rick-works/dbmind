@@ -1008,12 +1008,20 @@ async fn count_by_probe(
 }
 
 /// 跑一条计数语句并取第一行第一列的整数；任何失败都算「统计不出」。
+///
+/// ⚠️ 取值必须走 [`shape::value_to_i64`]，**不能**直接 `as_i64()`：ClickHouse 的
+/// `count(*)` 回来是浮点（真机 `t=real v=2377550.0`），而 serde_json 对浮点型 Number
+/// 的 `as_i64()` 返回 None。后果不是"少显示一个数"，而是**整条计数链路全废**：
+/// ①派生表 COUNT 与 ②裸 FROM 直数（真机的两个主出口）都返回"统计不出"，
+/// 退到 ③CTE 显式列名表 —— ClickHouse 不认 `with t(c0,c1) as (...)` 这种写法，
+/// 再退到 ④二分探测，而 2.3M 行要 ~44 次往返，早被 10s 预算掐断 ⇒ 界面永远没有总数。
+/// 与树上行数是同一个坑（那处已修），这里统一取值口径。
 async fn try_count(state: &AppState, id: &str, database: &str, sql: String) -> Option<i64> {
     let result = run_sql_in(state, id, database, sql, 1).await.ok()?;
     rows_of(&result)
         .first()
         .and_then(|row| row.values().next())
-        .and_then(Value::as_i64)
+        .and_then(shape::value_to_i64)
 }
 
 /// 表的建表语句：优先问数据库自己（`show create table` / `sqlite_master` / H2 的 `script`），

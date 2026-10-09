@@ -54,6 +54,10 @@ export const buildSqlFormatOptions = (s) => ({
 // ly 各值：
 //   none=内联（不换行）；clause/join/setop=对应 sql-formatter 内置关键字角色（前换行 / 前换行+缩进 / 前后各换行）；
 //   afterBreak/afterBreakIndent=先按内联排版，再在关键字后断行（后换行 / 后换行+缩进，由 applyBreakAfter 后处理）。
+//
+// 注意 `clause`（前换行）：sql-formatter 的 reservedClauses 角色**除前换行外**还会把该子句的
+// 内容整体挪到下一行并缩进（`FROM\n  users u`）。标签只承诺「前换行」，用户看到的是「前后各换行」——
+// 所以这里用 applyBreakBeforeOnly 把「关键字独占一行」的情况收回成 `FROM users u`。
 // 旧版 spaceBefore/spaceAfter/spaceAround（加空格）与 none 输出相同已下线，历史数据读取时一律视作 none。
 const LY_LAYOUT = {
   none: null,
@@ -217,6 +221,34 @@ const applyBreakAfter = (text, rules, tabWidth) => {
   return out
 }
 
+// 「前换行」只该在关键字**前**断行：把「关键字独占一行」时紧随其后的内容接回关键字后面。
+//
+// 为什么需要它：`clause` 走的是 sql-formatter 的 reservedClauses 角色，该角色在换行之后还会
+// 把子句内容另起一行并缩进（实测 `FROM\n  users u`），于是「前换行」看起来成了「前后各换行」。
+// 只并**紧邻的那一行**、且仅当关键字行除了关键字什么都没有时动手 —— 这样多表子句
+// （`FROM users u,` + 缩进续行 / 后续 JOIN 等）不会被动，缩进层级也保持引擎给的样子。
+const applyBreakBeforeOnly = (text, rules) => {
+  const targets = rules.filter((r) => r.ly === 'clause')
+  if (!targets.length) return text
+  let lines = String(text).split('\n')
+  for (const r of targets) {
+    const alone = new RegExp('^\\s*' + phrasePat(r.kw) + '\\s*$', 'i')
+    const out = []
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]
+      // 下一行必须有内容才并：空行（用户要求的关键字间空行）保持原样
+      if (alone.test(line) && i + 1 < lines.length && lines[i + 1].trim()) {
+        out.push(line.replace(/\s+$/, '') + ' ' + lines[i + 1].trim())
+        i++
+        continue
+      }
+      out.push(line)
+    }
+    lines = out
+  }
+  return lines.join('\n')
+}
+
 // 格式化 SQL：若配置了关键字排版规则，则克隆所选方言并注入对应集合，
 // 让用户关键字获得与内置同类关键字一致的排版/大小写行为；失败时回退到普通 format。
 // language 为 sql-formatter 方言名（如 mysql/transactsql），缺省用标准 SQL。
@@ -246,6 +278,9 @@ export const formatSql = (text, s, language) => {
   if (lowerRules.length) out = applyLowerCase(out, lowerRules)
   const upperRules = rules.filter((r) => r.cs === 'upper')
   if (upperRules.length) out = applyUpperCase(out, upperRules)
+  if (rules.some((r) => r.ly === 'clause')) {
+    out = applyBreakBeforeOnly(out, rules)
+  }
   if (rules.some((r) => r.ly === 'afterBreak' || r.ly === 'afterBreakIndent')) {
     out = applyBreakAfter(out, rules, options.tabWidth)
   }
