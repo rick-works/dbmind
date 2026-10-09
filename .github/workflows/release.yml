@@ -39,6 +39,7 @@ jobs:
             patterns: |
               target/release/bundle/msi/*.msi
               target/release/bundle/nsis/*-setup.exe
+              dist/dbmind-*-portable.zip
           - name: macOS (aarch64)
             os: macos-latest
             bundles: dmg app
@@ -123,6 +124,14 @@ jobs:
             --strip-debug --no-header-files --no-man-pages --compress=zip-6 --output dist/jre
           du -sh dist/jre
 
+      # [3b] 免安装（绿色）版要的是**全工作区**的 release 产物：dbmind.exe（CLI）、
+      #      dbmind-web.exe、dbmind-mcp.exe、dbmind-desktop.exe。tauri build 只编桌面壳
+      #      那一个，所以这一步单独跑（增量，tauri build 会复用同一批产物）。
+      - name: 后端打包（release，供免安装版使用）
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cargo build --release
+
       # [4] 桌面安装包。bundle.targets 在 tauri.conf.json 里写的是 msi+nsis（Windows 专用），
       #     这里按平台覆盖包型：Windows=msi nsis / macOS=dmg app / Linux=deb appimage。
       #     用 --bundles 而不是 --config '{"bundle":{"targets":[…]}}'：后者要塞 JSON，
@@ -145,6 +154,22 @@ jobs:
       - name: 列出产物
         shell: bash
         run: find target/release/bundle -type f | sort | head -50
+
+      # [4b] Windows 免安装（绿色）版：解压即用，不写注册表、不需要安装。
+      #      复用本机 scripts\package.ps1 的组装逻辑（同一份清单，避免两处漂移）：
+      #      exe ×4 + agents/ + web/ + start.bat + README/LICENSE。
+      #      它**不含** jre/，所以这里按 release.ps1 的做法补上 dist\jre —— 否则目标机器
+      #      没装 Java 17+ 时，SQL Server / Mongo / Redis / ES / JDBC 一律「驱动未就绪」。
+      #      压缩用 tar.exe -a（bsdtar 自带 zip 支持），比 Compress-Archive 快一个量级。
+      - name: 组装免安装版并压缩（Windows）
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/package.ps1 -SkipCargo -SkipAgents -SkipFrontend
+          $ver = (Select-String -Path Cargo.toml -Pattern '(?m)^version = "([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          Copy-Item dist/jre "dist/dbmind-$ver/jre" -Recurse -Force
+          tar.exe -a -c -f "dist/dbmind-$ver-portable.zip" -C dist "dbmind-$ver"
+          Get-ChildItem "dist/dbmind-$ver-portable.zip" | Select-Object Name, @{n='MB';e={[math]::Round($_.Length/1MB,1)}}
 
       # [5a] 产物先进 Actions artifacts：即便下面的 Release 上传被跳过（手动触发没给 tag），
       #      包也不会丢，可以事后手动挂上去。用 always()：一个平台里「deb 成了、appimage 挂了」
