@@ -33,13 +33,13 @@ jobs:
         include:
           - name: macOS (aarch64)
             os: macos-latest
-            targets: '["dmg","app"]'
+            bundles: dmg app
             patterns: |
               target/release/bundle/dmg/*.dmg
               target/release/bundle/macos/*.app
           - name: Linux (x86_64)
             os: ubuntu-22.04
-            targets: '["deb","appimage"]'
+            bundles: deb appimage
             patterns: |
               target/release/bundle/deb/*.deb
               target/release/bundle/appimage/*.AppImage
@@ -105,7 +105,9 @@ jobs:
       #     这里用 --config 覆盖成当前平台的包型（dmg/app 或 deb/appimage）。
       - name: Tauri 打包
         working-directory: crates/dbmind-desktop
-        run: npx --yes '@tauri-apps/cli@^2' build --config tauri.conf.json --config "{\"bundle\":{\"targets\":${{ matrix.targets }}}}"
+        # 用 --bundles 而不是 --config '{"bundle":{"targets":[...]}}'：后者要塞 JSON，
+        # 里面的双引号会被 shell 吃掉（第一跑就撞上了：CLI 收到 `[dmg,app]` 报 JSON 解析错）。
+        run: npx --yes '@tauri-apps/cli@^2' build --config tauri.conf.json --bundles ${{ matrix.bundles }}
 
       - name: 列出产物
         run: find target/release/bundle -type f | sort | head -50
