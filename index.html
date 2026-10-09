@@ -636,6 +636,7 @@
             <li><b>后台任务不再「永远停在后台收尾」</b>：以前「停止」只是个标志位，工作体卡在某处等待上就再也查不到它 —— 真机那次任务跑了 21 分钟，界面一直显示「任务仍在后台收尾」，关窗口、点停止都没用，而进程侧 0% CPU、一条数据库连接都没有</li>
             <li><b>改成每一步的真实截止时间</b>：数据库调用本来就有硬截止时间（内核发宿主 <code>timeoutMs + 2s</code> → QueryTimeout，取消经 <code>Statement.cancel</code> 打到驱动）；这次补上流水线内部的交接（发页 / 取批 / 等协程收尾 / 等并发槽位），统一 660 秒截止 —— 超时后任务以具体原因结束，例如「写入侧 11 分钟没有取走数据，判定下游已停止」，而不是笼统的"卡住"</li>
             <li><b>兜底看门狗</b>：某条路径若仍无任何进展，30 分钟后强制结束并落 error，日志写明「这条路径缺少截止时间」—— 既是保险，也是「该修哪里」的探针；已写入的部分保留、不回滚</li>
+            <li><b>三平台、各形态齐全</b>：Windows（安装向导 / MSI / <b>免安装 zip</b>）、macOS（Apple 芯片与 Intel 双 dmg）、Linux（deb / <b>免安装 AppImage</b>）—— 同一套流水线、同一份源码，包内自带精简 Java 运行时，目标机器不必另装 Java</li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.4" target="_blank" rel="noopener">发布说明</a>
