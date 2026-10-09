@@ -35,6 +35,16 @@ pub const TASK_TTL: Duration = Duration::from_secs(30 * 60);
 /// 每个任务最多保留多少行日志（界面上就是个滚动文本框，攒太多只是占内存）。
 const MAX_LOGS: usize = 200;
 
+/// 卡死看门狗的**心跳间隔**（见 `TaskRegistry::spawn`）。
+const STALL_TICK: Duration = Duration::from_secs(30);
+
+/// 多久**毫无进展**才判定卡死。
+///
+/// 取 10 分钟这个量级：分页粒度下真在干活的任务，计数或日志总会变；而等待用户决策的
+/// 分支（备份的安装提示）自带 300 秒超时，不会撞上这里。误杀方向是"慢任务被提前收尾"，
+/// 比"永远挂着不停"好收拾 —— 后者会让界面一直显示「任务仍在后台收尾」。
+const STALL_LIMIT: Duration = Duration::from_secs(10 * 60);
+
 /// 任务生命周期。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TaskStatus {
@@ -339,6 +349,8 @@ impl Task {
     pub fn add_rows_written(&self, n: u64) { *lock(&self.rows_written) += n; }
     pub fn add_rows_failed(&self, n: u64) { *lock(&self.rows_failed) += n; }
     pub fn rows_read(&self) -> u64 { *lock(&self.rows_read) }
+    /// 已写入行数（看门狗判「还有没有进展」用）。
+    pub fn rows_written(&self) -> u64 { *lock(&self.rows_written) }
 
     pub fn add_done(&self, delta: u64) {
         let mut done = lock(&self.done);
@@ -521,12 +533,61 @@ impl TaskRegistry {
     {
         let task = self.create(kind, prefix);
         let running = task.clone();
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             // 兜底守卫：工作体若 panic，状态不会永远停在 running ——
             // 那会让界面无限轮询下去，比直接报错难受得多。
             let guard = FinishGuard(running.clone(), false);
             let outcome = work(running).await;
             guard.finish(outcome);
+        });
+        // ==================== 卡死看门狗 ====================
+        //
+        // 为什么必须有这一层：`cancel()` 只是落一个标志位，工作体是在**分页/分批之间**
+        // 才查得到它 —— 一旦工作体卡在某个 await 上（最典型：网络切换、对端掉线之后，
+        // 某次读或写再也回不来），标志位永远没机会被看到，任务就永远停在 running：
+        // 界面上显示「任务仍在后台收尾，已允许关闭窗口」，关掉窗口也只是关掉窗口，
+        // 后台那条协程仍然挂着，刷新页面依旧能看到它 —— 真机就这么挂过一次（同步任务
+        // 21 分钟无进展，宿主进程 0% CPU、连一条数据库连接都没有）。
+        //
+        // 判据只看**进展**（完成数 / 读取数 / 写入数 / 日志序号）：这一整段时间里一个
+        // 都不动，就说明它不是在慢慢干，而是卡住了。真在干活的慢任务按分页粒度更新计数，
+        // 不会误判。
+        //
+        // 判死后三件事：① 把原因写进任务日志（用户能看到为什么，而不是干等）；
+        // ② 落终态 error（前端不再无限轮询，进度卡与任务中心都收口）；
+        // ③ `abort()` 真正中止工作体 —— 只是改状态而不停协程，就成了"假结束"。
+        let watch = task.clone();
+        tokio::spawn(async move {
+            let stamp = |t: &Task| (t.done(), t.rows_read(), t.rows_written(), t.logs_seq());
+            let mut last = stamp(&watch);
+            let mut idle = Duration::ZERO;
+            loop {
+                tokio::time::sleep(STALL_TICK).await;
+                if watch.status() != TaskStatus::Running {
+                    return;
+                }
+                let now = stamp(&watch);
+                if now == last {
+                    idle += STALL_TICK;
+                } else {
+                    last = now;
+                    idle = Duration::ZERO;
+                }
+                if idle >= STALL_LIMIT {
+                    let minutes = STALL_LIMIT.as_secs() / 60;
+                    watch.log(format!(
+                        "任务已连续 {minutes} 分钟没有任何进展，判定为卡死（多为连接被中断 / \
+                         网络切换后对端不再响应）——已强制结束；已写入的部分保留，不回滚"
+                    ));
+                    watch.set_status(TaskStatus::Error);
+                    watch.set_message(format!(
+                        "任务长时间无进展（{minutes} 分钟），已强制结束：连接可能已断开"
+                    ));
+                    persist_task(&watch);
+                    handle.abort();
+                    return;
+                }
+            }
         });
         task
     }
