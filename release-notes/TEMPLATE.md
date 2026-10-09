@@ -22,12 +22,24 @@
 
 - **功能名**：说明 + 关键细节
 
-## 下载（Windows x64）
+## 安装包（全平台）
 
-| 文件 | 说明 | 大小 |
-|---|---|---|
-| DBmind_1.1.0_x64-setup.exe | Windows 安装程序（推荐，自带 Java 运行时） | XX MB |
-| DBmind_1.1.0_x64_en-US.msi | MSI 安装包（企业批量部署） | XX MB |
+**别再把标题写成「下载（Windows x64）」**：现在每个平台都有"安装版 + 免安装版"两种形态
+（见 .github/workflows/release.yml 的矩阵），标题要能覆盖全平台，表格也要列全。
+
+| 平台 | 文件 | 形态与适用场景 | 大小 |
+|---|---|---|---|
+| Windows | DBmind_<版本>_x64-setup.exe | 安装向导（推荐） | XX MB |
+| Windows | DBmind_<版本>_x64_en-US.msi | MSI 包（企业批量部署 / 静默安装） | XX MB |
+| Windows | dbmind-<版本>-portable.zip | **免安装**：解压即用，不写注册表 | XX MB |
+| macOS（Apple 芯片） | DBmind_<版本>_aarch64.dmg | 安装镜像：拖进「应用程序」 | XX MB |
+| macOS（Intel） | DBmind_<版本>_x64.dmg | 安装镜像：拖进「应用程序」 | XX MB |
+| Linux（Debian / Ubuntu） | DBmind_<版本>_amd64.deb | apt 安装，带开始菜单项 | XX MB |
+| Linux（通用发行版） | DBmind_<版本>_amd64.AppImage | **免安装**：`chmod +x` 后直接运行 | XX MB |
+
+- 每个包都自带精简 Java 运行时（目标机器不必另装 Java）—— 这句一定要写，它是用户最关心的一点。
+- 没配签名证书时补一句未签名提示：macOS 首次打开要去「隐私与安全性」放行，
+  Windows 会提示「未知发布者」。配了证书就走签名验证步骤，无需此提示。
 
 ## 升级提示
 
