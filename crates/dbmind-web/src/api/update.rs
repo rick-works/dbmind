@@ -407,7 +407,9 @@ fn pick_dir_native(title: &str) -> Option<String> {
          $d.Description = '{t}'; $d.ShowNewFolderButton = $true; \
          if ($d.ShowDialog() -eq 'OK') {{ $d.SelectedPath }}"
     );
-    let out = std::process::Command::new("powershell")
+    let mut ps_cmd = std::process::Command::new("powershell");
+    dbmind_core::hide_console(&mut ps_cmd);
+    let out = ps_cmd
         .args(["-NoProfile", "-STA", "-WindowStyle", "Hidden", "-Command", &ps])
         .output()
         .ok()?;
