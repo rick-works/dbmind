@@ -153,9 +153,11 @@ jobs:
       # [3b] 免安装（绿色）版要的是**全工作区**的 release 产物：dbmind.exe（CLI）、
       #      dbmind-web.exe、dbmind-mcp.exe、dbmind-desktop.exe。tauri build 只编桌面壳
       #      那一个，所以这一步单独跑（增量，tauri build 会复用同一批产物）。
+      #      这里**绝不能用 `shell: bash`**：Windows 上 Git Bash 把 /usr/bin 放到 PATH 前面，
+      #      rustc 找到的 link.exe 就变成 Git 自带的 coreutils `link`，报
+      #      `linking with link.exe failed: exit code 1`（与下面 Tauri 步骤同一个坑，真踩过）。
       - name: 后端打包（release，供免安装版使用）
         if: runner.os == 'Windows'
-        shell: bash
         run: cargo build --release
 
       # [3c] 代码签名。证书放 Actions secrets，**没配就跳过并照常出未签名包** ——

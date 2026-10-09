@@ -1,0 +1,61 @@
+# 临时诊断（用完即删）：定位 Tauri 打 AppImage 时报 `failed to run linuxdeploy` 的真实原因。
+# 做法是把 Tauri 内部下载的同一个 linuxdeploy 拉到手上直接跑，逐种启动方式试一遍，
+# 并把"缺哪个动态库"打出来。只跑 Linux，两分钟出结果。
+name: diag-appimage
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 环境信息
+        run: |
+          uname -a
+          grep -E '^(VERSION_ID|VERSION_CODENAME)' /etc/os-release
+          ls -l /dev/fuse 2>&1 || echo "没有 /dev/fuse"
+          which fusermount fusermount3 2>&1 || echo "没有 fusermount"
+          dpkg -l | grep -i fuse || echo "未安装任何 fuse 包"
+
+      - name: 装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libfuse2 file
+
+      - name: 下载 linuxdeploy（与 Tauri 用的同一版本）
+        run: |
+          curl -sSL -o /tmp/linuxdeploy "https://github.com/tauri-apps/binary-releases/releases/download/linuxdeploy-07333c6/linuxdeploy-x86_64.AppImage"
+          curl -sSL -o /tmp/plugin "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage"
+          chmod +x /tmp/linuxdeploy /tmp/plugin
+          ls -l /tmp/linuxdeploy /tmp/plugin
+          file /tmp/linuxdeploy
+
+      - name: 四种启动方式逐一试
+        run: |
+          echo "===== A 直接跑（依赖 FUSE 挂载）"
+          if /tmp/linuxdeploy --version 2>&1; then echo "A: 成功"; else echo "A: 失败"; fi
+
+          echo "===== B APPIMAGE_EXTRACT_AND_RUN=1（我们在工作流里设的）"
+          if APPIMAGE_EXTRACT_AND_RUN=1 /tmp/linuxdeploy --version 2>&1; then echo "B: 成功"; else echo "B: 失败"; fi
+
+          echo "===== C --appimage-extract-and-run 参数"
+          if /tmp/linuxdeploy --appimage-extract-and-run --version 2>&1; then echo "C: 成功"; else echo "C: 失败"; fi
+
+          echo "===== D 先手动解包再执行（完全绕开 AppImage 运行时）"
+          cd /tmp
+          if ./linuxdeploy --appimage-extract >/dev/null 2>&1; then
+            ls -l /tmp/squashfs-root/AppRun
+            echo "-- 缺哪些动态库："
+            ldd /tmp/squashfs-root/AppRun 2>&1 | grep -i "not found" || echo "（无缺失）"
+            if /tmp/squashfs-root/AppRun --version 2>&1; then echo "D: 成功"; else echo "D: 失败"; fi
+          else
+            echo "解包失败"
+          fi
+
+      - name: 插件 AppImage 同样试一次
+        run: |
+          if APPIMAGE_EXTRACT_AND_RUN=1 /tmp/plugin --help 2>&1 | head -5; then echo "plugin: 成功"; else echo "plugin: 失败"; fi
