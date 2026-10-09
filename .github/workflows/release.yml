@@ -181,8 +181,19 @@ jobs:
             exit 0
           }
           New-Item -ItemType directory -Path certificate -Force | Out-Null
-          Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
-          certutil -decode certificate/tempCert.txt certificate/certificate.pfx
+          Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE -Encoding ASCII
+          certutil -decode certificate/tempCert.txt certificate/certificate.pfx 2>$null
+          if (-not (Test-Path certificate/certificate.pfx)) {
+            # 兜底：有人贴的是"纯 base64"（`openssl base64 -A` 那种一整行，没有 ----- 边界行），
+            # 而 certutil -decode 只认带边界行的 PEM 样式 —— 这里自己按 64 字符折行、
+            # 补上边界行再解一次，两种贴法都能用。
+            $flat = ($env:WINDOWS_CERTIFICATE -replace '[^A-Za-z0-9+/=]', '')
+            $wrapped = for ($i = 0; $i -lt $flat.Length; $i += 64) { $flat.Substring($i, [Math]::Min(64, $flat.Length - $i)) }
+            @('-----BEGIN CERTIFICATE-----') + $wrapped + @('-----END CERTIFICATE-----') |
+              Set-Content -Path certificate/tempCert.txt -Encoding ASCII
+            certutil -decode certificate/tempCert.txt certificate/certificate.pfx
+          }
+          if (-not (Test-Path certificate/certificate.pfx)) { throw 'WINDOWS_CERTIFICATE 解码失败：应为 .pfx 的 base64' }
           $pw = ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText
           $cert = Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password $pw
           Remove-Item -Path certificate -Recurse -Force
@@ -203,10 +214,17 @@ jobs:
             echo "::notice::未配置 APPLE_CERTIFICATE：产出未签名/未公证的 mac 包（用户首次打开要去「隐私与安全性」手动放行）"
             exit 0
           fi
+          # secret 里贴的可能是 `certutil -encode` 的输出：带 `-----BEGIN CERTIFICATE-----` /
+          # `-----END CERTIFICATE-----` 两行，还可能带换行。GNU 与 BSD 的 base64 都不认这些
+          # 非 base64 字符（会直接报错退出），所以先去掉分隔行与所有空白再解码 ——
+          # 这样"整段复制粘贴"也能用，不必要求对方手工删头尾。
+          printf '%s' "$APPLE_CERTIFICATE" | sed -e '/^-----/d' | tr -d '[:space:]' > certificate.b64
           # macOS 自带 base64 的解码开关是 -D，GNU 的是 -d/--decode，两边都试
-          if ! printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > certificate.p12 2>/dev/null; then
-            printf '%s' "$APPLE_CERTIFICATE" | base64 -D > certificate.p12
+          if ! base64 --decode < certificate.b64 > certificate.p12 2>/dev/null; then
+            base64 -D < certificate.b64 > certificate.p12 2>/dev/null || base64 -d < certificate.b64 > certificate.p12
           fi
+          rm -f certificate.b64
+          if [ ! -s certificate.p12 ]; then echo "::error::APPLE_CERTIFICATE 解码失败（应为 .p12 的 base64）"; exit 1; fi
           security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
           security default-keychain -s build.keychain
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
