@@ -154,9 +154,59 @@ release.ps1 -SkipBuild         # 复用已有编译产物
 |---|---|---|
 | `APPLE_CERTIFICATE`、`APPLE_CERTIFICATE_PASSWORD`、`KEYCHAIN_PASSWORD` | macOS | 用 **Developer ID Application** 证书签名（base64 的 `.p12`） |
 | `APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID` | macOS | 公证（需付费 Apple Developer 账号，密码为 App 专用密码） |
-| `WINDOWS_CERTIFICATE`、`WINDOWS_CERTIFICATE_PASSWORD` | Windows | 签 exe / msi / NSIS（base64 的 `.pfx`） |
+| `WINDOWS_CERTIFICATE`、`WINDOWS_CERTIFICATE_PASSWORD` | Windows | 用本机证书存储里的证书签 exe / msi / NSIS（`signtool`，base64 的 `.pfx`） |
+| `AZURE_SIGN_ENDPOINT`、`AZURE_SIGN_ACCOUNT`、`AZURE_SIGN_PROFILE`、`AZURE_SIGN_DESCRIPTION` + `AZURE_CLIENT_ID`、`AZURE_TENANT_ID`、`AZURE_CLIENT_SECRET` | Windows | **Azure Artifact Signing**（原名 Trusted Signing）云签名 —— 私钥在硬件模块里、根本拿不到 `.pfx` 的证书走这条 |
 
-取值方式：macOS 侧是 Keychain 导出的 `.p12` 经 `openssl base64 -A`，Windows 侧是 `.pfx` 经 `certutil -encode`（详见 Tauri 官方 Code Signing 文档）。每个已签名平台都带一步显式校验，未签名的包不会被静默发出去。
+证书有效期是**规矩**不是意外，请按“定期轮换”来规划：
+
+- **Windows 代码签名证书：上限 460 天**（CA/B Forum 的 CSC-31，2026-03-01 起签发的证书一律不得超；此前是 39 个月）。且 2023-06-01 起私钥必须存放在硬件加密模块里 —— 这正是新证书通常没有 `.pfx` 可导、需要上面那条云签名的原因。
+- **Apple**：**$99/年会员资格必须持续有效**才能签新包（Developer ID 证书本身 5 年、描述文件 18 年，每类最多 5 张）。
+- **“永久证书”不存在**：私钥一旦泄露无法撤回，只能靠到期强制失效兜底；而**过期前签好的包永远能用** —— 签名里带时间戳，校验的是“签名那一刻证书有效”，不是现在。换证就是：把新证书填进 secret，重跑一次。
+
+<details>
+<summary><b>每个 secret 怎么生成</b></summary>
+
+**macOS —— 不需要 Mac，Windows 上用 OpenSSL 就够。**
+
+1. 加入 Apple Developer Program（$99/年），打开 *Certificates, Identifiers & Profiles → Certificates → + → **Developer ID Application***，上传 CSR：
+   ```bash
+   openssl req -new -newkey rsa:2048 -nodes -keyout apple.key -out apple.csr \
+     -subj "/CN=你的名字/emailAddress=你的Apple账号邮箱"
+   ```
+2. 下载 `developerid_application.cer`，拼出 `.p12`（把 Apple 的中间证书一起链上）：
+   ```bash
+   curl -O https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+   openssl x509 -inform DER -in DeveloperIDG2CA.cer -out ca.pem
+   openssl x509 -inform DER -in developerid_application.cer -out cert.pem
+   openssl pkcs12 -export -inkey apple.key -in cert.pem -certfile ca.pem -out apple.p12
+   ```
+   （有 Mac 的话更简单：双击 `.cer` 装进钥匙串，再从「我的证书」里导出 `.p12`。）
+3. 转 base64：macOS `openssl base64 -A -in apple.p12 -out apple.b64`；Windows `certutil -encode apple.p12 apple.b64`。把**整个文件内容**贴进 `APPLE_CERTIFICATE` —— 带不带 `-----BEGIN-----` 边界行都行，工作流会自己剥掉。
+4. `KEYCHAIN_PASSWORD` 只是 CI 临时钥匙串的密码，随手一串随机字符即可。
+5. 公证：`APPLE_PASSWORD` 填**App 专用密码**（appleid.apple.com → 登录与安全），`APPLE_TEAM_ID` 在 Membership 页面。
+
+**Windows（本机证书）**：`certutil -encode code.pfx code.b64` → 整份内容给 `WINDOWS_CERTIFICATE`，密码给 `WINDOWS_CERTIFICATE_PASSWORD`。
+
+**Windows（云签名）**：开通 Azure Artifact Signing（约 $9.99/月），记下 endpoint / account / 证书配置文件（profile）三个名字；再建一个 Entra ID 应用注册并授予 *Artifact Signing Certificate Profile Signer* 角色，把它的 client id / tenant id / client secret 填进 `AZURE_*` 那几个 secret。工作流会自己装 `artifact-signing-cli` 并接到 Tauri 的 `signCommand` 上。
+
+```powershell
+$repo = 'rick-works/dbmind'
+gh secret set APPLE_CERTIFICATE           --repo $repo --body (Get-Content apple.b64 -Raw -Encoding ASCII)
+gh secret set APPLE_CERTIFICATE_PASSWORD  --repo $repo   # 会提示输入
+gh secret set KEYCHAIN_PASSWORD           --repo $repo
+gh secret set APPLE_ID                    --repo $repo
+gh secret set APPLE_PASSWORD              --repo $repo
+gh secret set APPLE_TEAM_ID               --repo $repo
+gh secret set WINDOWS_CERTIFICATE           --repo $repo --body (Get-Content code.b64 -Raw -Encoding ASCII)
+gh secret set WINDOWS_CERTIFICATE_PASSWORD  --repo $repo
+gh secret list --repo $repo
+```
+
+配好后重跑工作流即可 —— 手动触发时把 `tag` 输入留空，签名产物只进 Actions artifacts，不动已发布的 Release。
+
+</details>
+
+每个已签名平台都带一步显式校验（`codesign --verify` + `stapler validate`；`Get-AuthenticodeSignature`），未签名的包不会被静默发出去。`*.p12 / *.pfx / *.csr / *.cer / *.key / *.b64` 已加进 `.gitignore`：私钥只存在于 secrets。
 
 ## 使用
 

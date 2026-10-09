@@ -8,13 +8,26 @@
 #            「应用程序」即可，不写任何安装记录）
 #   Linux    dbmind_<版本>_amd64.deb（apt 装）、*.AppImage（**免安装**：chmod +x 后直接跑）
 #
-# 签名：有证书就自动签，没配 certificates 就照常出未签名包（见 [3c]/[3d] 两步的注释）。
+# 签名：有证书就自动签，没配 certificates 就照常出未签名包（见 [3c]/[3c-2]/[3d] 几步的注释）。
 #   需要的 Actions secrets（全部可选，逐个独立生效）：
 #     APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / KEYCHAIN_PASSWORD  —— mac 签名（必需三件）
 #     APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID                           —— mac 公证（可选，配齐才做）
-#     WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD                  —— Windows 签名
+#     WINDOWS_CERTIFICATE / WINDOWS_CERTIFICATE_PASSWORD                  —— Windows 签名（有 .pfx 时）
+#     AZURE_SIGN_ENDPOINT / AZURE_SIGN_ACCOUNT / AZURE_SIGN_PROFILE       —— Windows 云签名（拿不到 .pfx 时）
+#     AZURE_CLIENT_ID / AZURE_TENANT_ID / AZURE_CLIENT_SECRET             —— 上面那套云签名的凭据
+#     AZURE_SIGN_DESCRIPTION                                              —— 可选，显示在 UAC 提示里，默认 DBmind
 #   生成方式：mac 用 Keychain 导出 .p12 再 `openssl base64 -A`；Windows 用 .pfx 再
-#   `certutil -encode`（即 base64）。见 Tauri 官方 Code Signing 文档。
+#   `certutil -encode`（即 base64）。见 Tauri 官方 Code Signing 文档与 README 的 CI 小节。
+#
+#   ⚠️ 有效期的现实（决定了你得定期换证书，这不是我们偷懒）：
+#     · Windows 代码签名证书：CA/B Forum 的 CSC-31 把上限从 39 个月压到 **460 天**，
+#       2026-03-01 起签发的证书一律不得超过 —— 也就是**必须每年换一次**；
+#       且 2023-06-01 起私钥必须放在硬件加密模块里，所以新证书多半根本没有 .pfx 可导，
+#       这正是上面 Azure 云签名那条路存在的原因。
+#     · Apple：**会员资格 $99/年必须持续有效**才能签新包（旧的已签名包不受影响）；
+#       Developer ID 证书本身 5 年、描述文件 18 年。证书过期后已签名的包照常运行 ——
+#       因为签名里带时间戳，验证的是"签名那一刻证书有效"。
+#     · 所以"永久证书"不存在：证书一旦泄露不可撤回，只能靠到期强制失效兜底。
 #
 # 为什么要统一：macOS 的 .app/.dmg 只能在 macOS 上打（Xcode 工具链），Linux 的 .deb/.AppImage
 # 需要 Linux 工具链（webkit2gtk 等），Windows 的 msi/nsis 只能在 Windows 上打 —— 三份机器
@@ -45,6 +58,17 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # 签名相关的值统一提到 job 级：一来 `if:` 里不能直接引用 secrets，但可以引用 env
+    # （没配就是空串，所有签名分支自动跳过）；二来 signCommand 由 Tauri 在构建进程里执行，
+    # 需要这些变量已经在环境里。GitHub 会把 secrets 值在日志里打码，不会泄漏。
+    env:
+      AZURE_SIGN_ENDPOINT: ${{ secrets.AZURE_SIGN_ENDPOINT }}
+      AZURE_SIGN_ACCOUNT: ${{ secrets.AZURE_SIGN_ACCOUNT }}
+      AZURE_SIGN_PROFILE: ${{ secrets.AZURE_SIGN_PROFILE }}
+      AZURE_SIGN_DESCRIPTION: ${{ secrets.AZURE_SIGN_DESCRIPTION }}
+      AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
     strategy:
       fail-fast: false
       matrix:
@@ -200,6 +224,18 @@ jobs:
           "WINDOWS_CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
           Write-Host "已导入签名证书：$($cert.Subject)  指纹 $($cert.Thumbprint)"
 
+      # [3c-2] Windows 的另一条签名路：**云签名**（Azure Artifact Signing，原名 Trusted Signing）。
+      #        为什么需要它：CA/B Forum 从 2023-06-01 起要求代码签名私钥必须存放在硬件加密模块里，
+      #        所以现在新签发的证书通常**根本没有 .pfx 可导**（私钥在令牌或云 HSM 里）。
+      #        云签名不导出私钥：Tauri 用 bundle.windows.signCommand 调 CLI，由 Azure 在云端签。
+      #        配置齐全才安装（cargo install 要几分钟，没必要每跑都装）。
+      - name: 安装 Azure 签到 CLI（Windows，配了云签名才装）
+        if: runner.os == 'Windows' && env.AZURE_SIGN_ACCOUNT != ''
+        shell: pwsh
+        run: |
+          cargo install artifact-signing-cli --locked
+          artifact-signing-cli --version
+
       - name: 导入签名证书（macOS，有 secrets 才生效）
         if: runner.os == 'macOS'
         env:
@@ -275,10 +311,10 @@ jobs:
             echo "::warning::dist/jre/lib/server 不存在，跳过（AppImage 可能会因缺 libjvm.so 失败）"
           fi
 
-      # [3d] 生成这一跑要用的 Tauri 配置：以 tauri.conf.json 为底整份复制，Windows 有证书时
-      #      注入 bundle.windows 的签名三件套。**显式 --config 指向这一份**而不是依赖 CLI 的
-      #      多配置合并，也避开把 JSON 塞进命令行的老坑（引号会被 shell 吃掉，真踩过）。
-      #      tauri.ci.json 与 tauri.conf.json 同目录，所以里面 ../.. 这类相对路径照旧成立。
+      # [3d] 生成这一跑要用的 Tauri 配置：以 tauri.conf.json 为底整份复制，Windows 有签名条件时
+      #      注入 bundle.windows 的签名配置（两种方式二选一，见下）。**显式 --config 指向这一份**
+      #      而不是依赖 CLI 的多配置合并，也避开把 JSON 塞进命令行的老坑（引号会被 shell 吃掉，
+      #      真踩过）。tauri.ci.json 与 tauri.conf.json 同目录，里面 ../.. 这类相对路径照旧成立。
       - name: 生成 CI 用 Tauri 配置
         shell: bash
         working-directory: crates/dbmind-desktop
@@ -287,15 +323,33 @@ jobs:
             const fs = require("fs");
             const cfg = JSON.parse(fs.readFileSync("tauri.conf.json", "utf8"));
             const thumb = process.env.WINDOWS_CERT_THUMBPRINT || "";
+            const azAccount = process.env.AZURE_SIGN_ACCOUNT || "";
+            const azProfile = process.env.AZURE_SIGN_PROFILE || "";
+            const azEndpoint = process.env.AZURE_SIGN_ENDPOINT || "";
+            const azDesc = process.env.AZURE_SIGN_DESCRIPTION || "DBmind";
+            let how = "未启用";
             if (thumb) {
+              // 方式一：证书已导入本机证书存储 —— Tauri 默认实现调 Windows SDK 的 signtool，
+              // 靠指纹找到它。时间戳（timestamp）必须给：没有它，证书一过期已签名的包就失效。
               cfg.bundle.windows = Object.assign({}, cfg.bundle.windows, {
                 certificateThumbprint: thumb,
                 digestAlgorithm: "sha256",
                 timestampUrl: "http://timestamp.digicert.com",
               });
+              how = "本机证书（signtool，指纹 " + thumb.slice(0, 8) + "...）";
+            } else if (azAccount && azProfile && azEndpoint) {
+              // 方式二：私钥在云 HSM 里（新签发证书的常态），改让 Tauri 调 artifact-signing-cli。
+              // 命令直接在这里拼好，不留 $VAR 让 shell 去展开 —— signCommand 由 Tauri 交给
+              // Windows 命令行执行，变量展开行为各平台不一致，拼死字符串最稳。
+              const desc = azDesc.replace(/"/g, "");
+              cfg.bundle.windows = Object.assign({}, cfg.bundle.windows, {
+                signCommand: "artifact-signing-cli -e " + azEndpoint + " -a " + azAccount +
+                  " -c " + azProfile + " -d \"" + desc + "\" %1",
+              });
+              how = "Azure Artifact Signing（" + azAccount + " / " + azProfile + "）";
             }
             fs.writeFileSync("tauri.ci.json", JSON.stringify(cfg, null, 2));
-            console.log("tauri.ci.json 已生成，Windows 签名 =", thumb || "未启用");
+            console.log("tauri.ci.json 已生成，Windows 签名 =", how);
           '
 
       # [4] 桌面安装包。bundle.targets 在 tauri.conf.json 里写的是 msi+nsis（Windows 专用），
@@ -367,7 +421,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          if (-not $env:WINDOWS_CERT_THUMBPRINT) {
+          if (-not $env:WINDOWS_CERT_THUMBPRINT -and -not $env:AZURE_SIGN_ACCOUNT) {
             Write-Host "未签名构建，跳过校验"
             exit 0
           }

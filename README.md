@@ -144,9 +144,59 @@ Code signing is opt-in via repository secrets; the workflow detects them and sig
 |---|---|---|
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `KEYCHAIN_PASSWORD` | macOS | sign with a **Developer ID Application** certificate (base64 `.p12`) |
 | `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | macOS | notarization (requires a paid Apple Developer account; app-specific password) |
-| `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | Windows | sign exe / msi / NSIS (base64 `.pfx`) |
+| `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | Windows | sign exe / msi / NSIS with a certificate in the local store (`signtool`, base64 `.pfx`) |
+| `AZURE_SIGN_ENDPOINT`, `AZURE_SIGN_ACCOUNT`, `AZURE_SIGN_PROFILE`, `AZURE_SIGN_DESCRIPTION` + `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_CLIENT_SECRET` | Windows | cloud signing via **Azure Artifact Signing** (formerly Trusted Signing) — for certificates whose private key lives in a hardware module, i.e. no `.pfx` to export |
 
-Secrets are consumed as `base64 -A` of a keychain-exported `.p12` (macOS) and `certutil -encode` of a `.pfx` (Windows) — see Tauri's Code Signing docs. Each signed platform gets an explicit verification step, so an unsigned package can never ship silently.
+Certificate lifetimes are set by policy, not by accident — plan for rotation:
+
+- **Windows code signing: max 460 days** (CA/B Forum CSC-31, mandatory for certificates issued from 2026-03-01; it used to be 39 months). Since 2023-06-01 the private key must sit in a hardware crypto module, which is exactly why new certificates usually come without a `.pfx` and why the Azure cloud-signing path exists.
+- **Apple**: the **$99/year membership must stay active** to sign new builds (Developer ID certificates themselves last 5 years, provisioning profiles 18 years, max 5 certificates per type).
+- **Nothing to "permanently enable":** a certificate that leaks cannot be un-leaked, so expiry is the backstop. Artifacts signed *before* expiry keep working forever — signatures carry a timestamp, so verification checks that the certificate was valid at signing time, not now. Renewal = drop the new certificate into the secret and re-run.
+
+<details>
+<summary><b>How to produce each secret</b></summary>
+
+**macOS** — you do *not* need a Mac; OpenSSL on Windows is enough.
+
+1. Join the Apple Developer Program ($99/year), then *Certificates, Identifiers & Profiles → Certificates → + → **Developer ID Application*** and upload a CSR:
+   ```bash
+   openssl req -new -newkey rsa:2048 -nodes -keyout apple.key -out apple.csr \
+     -subj "/CN=Your Name/emailAddress=your@apple.id"
+   ```
+2. Download `developerid_application.cer` and build a `.p12` (chaining Apple's intermediate CA):
+   ```bash
+   curl -O https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+   openssl x509 -inform DER -in DeveloperIDG2CA.cer -out ca.pem
+   openssl x509 -inform DER -in developerid_application.cer -out cert.pem
+   openssl pkcs12 -export -inkey apple.key -in cert.pem -certfile ca.pem -out apple.p12
+   ```
+   (On a Mac instead: double-click the `.cer`, then export the entry from *My Certificates* as `.p12`.)
+3. Base64 it: macOS `openssl base64 -A -in apple.p12 -out apple.b64`; Windows `certutil -encode apple.p12 apple.b64`. Paste the **whole file** into `APPLE_CERTIFICATE` — boundary lines are fine, the workflow strips them.
+4. `KEYCHAIN_PASSWORD` is just a throwaway password for the temporary keychain CI creates.
+5. Notarization: `APPLE_PASSWORD` is an **app-specific password** (appleid.apple.com → Sign-In and Security), `APPLE_TEAM_ID` is on the Membership page.
+
+**Windows, local certificate** — `certutil -encode code.pfx code.b64` → `WINDOWS_CERTIFICATE` (whole file), password → `WINDOWS_CERTIFICATE_PASSWORD`.
+
+**Windows, cloud signing** — register Azure Artifact Signing (~$9.99/month), note the endpoint / account / certificate-profile names, and create an Entra ID app registration holding the *Artifact Signing Certificate Profile Signer* role; feed its client id / tenant id / client secret into the `AZURE_*` secrets. The workflow installs `artifact-signing-cli` and wires it into Tauri's `signCommand` on its own.
+
+```powershell
+$repo = 'rick-works/dbmind'
+gh secret set APPLE_CERTIFICATE           --repo $repo --body (Get-Content apple.b64 -Raw -Encoding ASCII)
+gh secret set APPLE_CERTIFICATE_PASSWORD  --repo $repo   # prompts for the value
+gh secret set KEYCHAIN_PASSWORD           --repo $repo
+gh secret set APPLE_ID                    --repo $repo
+gh secret set APPLE_PASSWORD              --repo $repo
+gh secret set APPLE_TEAM_ID               --repo $repo
+gh secret set WINDOWS_CERTIFICATE           --repo $repo --body (Get-Content code.b64 -Raw -Encoding ASCII)
+gh secret set WINDOWS_CERTIFICATE_PASSWORD  --repo $repo
+gh secret list --repo $repo
+```
+
+Then re-run the workflow — a manual dispatch with an empty `tag` keeps the signed packages in Actions artifacts and leaves the published Release untouched.
+
+</details>
+
+Each signed platform runs an explicit verification step (`codesign --verify` + `stapler validate`; `Get-AuthenticodeSignature`), so an unsigned package can never ship silently. `*.p12 / *.pfx / *.csr / *.cer / *.key / *.b64` are gitignored: private keys live in secrets only.
 
 ## Using it
 
