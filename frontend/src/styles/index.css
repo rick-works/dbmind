@@ -905,6 +905,18 @@ html[data-theme="light"] .el-loading-mask {
    放全局样式：组件文件常被同时编辑，单一来源不会互相覆盖。
    选择器加重一档：scoped 样式带 [data-v-*]，同权重时胜负由顺序决定。 */
 .empty-hint.empty-hint { max-width: 1120px; padding: 14px 20px 16px; gap: 12px; }
+/* KPI 小格的基础布局：模板在 MainView 空态顶部；下面那些 .empty-hint.empty-hint .ek*
+   只覆盖字号与间距 —— 基础块当初随模板一起被删，这里补回来。 */
+.empty-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.ek {
+  display: flex; flex-direction: column; gap: 2px; min-width: 0;
+  background: var(--dc-bg-card); border: 1px solid var(--dc-border);
+  border-radius: 10px; padding: 10px 14px;
+}
+.ek-k { font-size: 13px; color: var(--dc-text-dim); }
+.ek-v { font-size: 24px; font-weight: 400; color: var(--dc-text); line-height: 1.15; }
+.ek-v.ok { color: #10b981; }
+@media (max-width: 640px) { .empty-kpis { grid-template-columns: minmax(0, 1fr); } }
 .empty-hint.empty-hint .empty-kpis { max-width: none; margin: 0; gap: 10px; }
 .empty-hint.empty-hint .ek { padding: 10px 14px; }
 .empty-hint.empty-hint .ek-k { font-size: 12.5px; letter-spacing: .02em; }

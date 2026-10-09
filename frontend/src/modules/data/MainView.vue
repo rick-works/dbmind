@@ -254,12 +254,29 @@
         </div>
         <!-- 无 tab 时直接展示引导页 -->
         <div v-else-if="tabs.length === 0" class="empty-hint">
-          <!-- 空态 = 首页仪表盘：快速开始 / 常用操作 → 最近查询 / MCP → 趋势 / 失败查询。
-               只留有操作价值的块 —— KPI 数字、查询统计这类「看看而已」的都砍了；
+          <!-- 空态 = 首页仪表盘：KPI → 快速开始 / 常用操作 → 最近查询 / MCP → 趋势 / 失败查询。
+               KPI（总连接数 / 已连接数 / 连接类型）曾按「只留有操作价值的块」砍掉，
+               但「有多少家底、活了几条」是第一眼问题，已按要求加回顶部；
                外层 .empty-stack 用 margin:auto 垂直居中：内容不满一屏时上下留白均分，
                超出一屏时 margin 自动归零 + 容器本身可滚，顶部不会被裁（比
                justify-content:center 安全）。 -->
           <div class="empty-stack">
+          <!-- KPI：总连接数 / 已连接数 / 连接类型 —— 先给「家底」，
+               扫一眼就知道有多少数据源、活了几条、都什么类型 -->
+          <div class="empty-kpis">
+            <div class="ek">
+              <span class="ek-k">{{ $t('empty.kpiTotal') }}</span>
+              <span class="ek-v">{{ allConnections.length }}</span>
+            </div>
+            <div class="ek">
+              <span class="ek-k">{{ $t('empty.kpiConnected') }}</span>
+              <span class="ek-v" :class="{ ok: connectedCount > 0 }">{{ connectedCount }}</span>
+            </div>
+            <div class="ek">
+              <span class="ek-k">{{ $t('empty.kpiTypes') }}</span>
+              <span class="ek-v" :title="connTypeSummary">{{ connTypeCount }}</span>
+            </div>
+          </div>
           <div class="empty-grid">
             <!-- 左：快速开始（点一行即打开该连接） -->
             <div class="empty-block">
@@ -6398,6 +6415,18 @@ watch(() => route.query.id, (id) => {
     selectConn(id)
   }
 })
+
+// ---------- 首页 KPI：总连接数 / 已连接数 / 连接类型 ----------
+// 已连接的口径与树里连接名旁的绿点一致（连上且没报过错）——
+// 同一个「连上了」不该有两套判断。
+const connectedCount = computed(() =>
+  allConnections.value.filter(c => isConnOpen(c.id) && !connErrorSet.value.has(String(c.id))).length
+)
+const connTypeCount = computed(() => new Set(allConnections.value.map(c => String(c.type || ''))).size)
+// 悬停看具体类型名：数量是概览，名字才是想确认的东西
+const connTypeSummary = computed(() =>
+  [...new Set(allConnections.value.map(c => typeLabel(c.type)))].join(' / ')
+)
 </script>
 
 <style scoped>

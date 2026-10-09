@@ -1397,6 +1397,9 @@ export default {
   'tree.multiCancel': '取消',
 
   // ---------- 首页仪表盘（无页签时的空态） ----------
+  'empty.kpiTotal': '总连接数',
+  'empty.kpiConnected': '已连接',
+  'empty.kpiTypes': '连接类型',
   'empty.quickStart': '快速开始',
   'empty.commonActions': '常用操作',
   'empty.recentQueries': '最近查询',

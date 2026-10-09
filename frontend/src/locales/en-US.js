@@ -1391,6 +1391,9 @@ export default {
   'tree.multiCancel': 'Cancel',
 
   // ---------- Home dashboard (empty state) ----------
+  'empty.kpiTotal': 'Connections',
+  'empty.kpiConnected': 'Connected',
+  'empty.kpiTypes': 'Types',
   'empty.quickStart': 'Quick start',
   'empty.commonActions': 'Common actions',
   'empty.recentQueries': 'Recent queries',
