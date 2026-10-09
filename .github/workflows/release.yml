@@ -1,22 +1,24 @@
-# 多平台打包（macOS / Linux）—— 由 GitHub Actions 的对应 runner 构建，
+# 三平台统一打包（Windows / macOS / Linux）—— 一套流程、三个 runner，产物挂同一个 Release。
 #
-# 打完把安装包挂到同一个 Release 上。Windows 的 msi/nsis 仍由本机 scripts\release.ps1 产出。
+# 为什么要统一：macOS 的 .app/.dmg 只能在 macOS 上打（Xcode 工具链），Linux 的 .deb/.AppImage
+# 需要 Linux 工具链（webkit2gtk 等），Windows 的 msi/nsis 只能在 Windows 上打 —— 三份机器
+# 三套手工步骤，迟早漂移。现在三平台走**同一段 YAML**：同样的前端构建、同样的四个 Java 宿主、
+# 同样模块集的 jlink JRE、同样一条 tauri build，只有「包型」和「系统依赖」按平台不同。
 #
-# 为什么必须走 CI：macOS 的 .app/.dmg 只能在 macOS 上打（需要 Xcode 工具链），
-# Linux 的 .deb/.AppImage 也需要 Linux 工具链（webkit2gtk 等）—— Windows 上无法交叉出这两类包。
+# 触发：
+#   - 推 v* 标签（推荐）：产物自动挂到该标签的 Release
+#   - 手动 workflow_dispatch：可指定 tag 输入，给已发布的版本补包（不必重打标签）
 #
-# 触发：推 v* 标签（与 Windows 包同一个 Release），或手动 workflow_dispatch。
-name: release-mac-linux
+# 本机 scripts\release.ps1 保留作离线/无网环境下的 Windows 出包（内容与本文件同构）。
+name: release
 
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      # 手动补跑时把产物挂到哪个 Release（留空 = 用当前 ref 名）。
-      # 用途：标签早就推过了、或只想补一次 mac/linux 包，不必重新打标签。
       tag:
-        description: '要上传到的 Release 标签（如 v1.0.4）'
+        description: '要上传到的 Release 标签（如 v1.0.4）；留空 = 用当前 ref 名'
         required: false
         default: ''
 
@@ -31,6 +33,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Windows (x64)
+            os: windows-latest
+            bundles: msi nsis
+            patterns: |
+              target/release/bundle/msi/*.msi
+              target/release/bundle/nsis/*-setup.exe
           - name: macOS (aarch64)
             os: macos-latest
             bundles: dmg app
@@ -59,7 +67,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: 安装 JDK（宿主 jar 与自带 JRE 都要用）
+      # 宿主 jar 要它编译，自带 JRE 要它的 jlink
+      - name: 安装 JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -71,13 +80,14 @@ jobs:
       - name: 缓存 cargo
         uses: Swatinem/rust-cache@v2
 
-      # [1] 前端产物 —— tauri.conf.json 把 ../../frontend/dist 作为 web/ 打进包
+      # 下面所有 run 都显式指定 bash：Windows runner 默认是 pwsh，
+      # 而这里的循环/路径写法要三平台一致（Git Bash 在 Windows runner 上是现成的）。
       #
-      # 用 `npm install` 而不是 `npm ci`：仓库里的 frontend/package-lock.json 与 package.json
-      # 已经不同步（npm ci 会直接拒绝：lock 里的 @rolldown/pluginutils@0.9.0 不满足
-      # 需求的 1.0.1 等等）。锁文件该在维护者机器上 `npm install` 重新生成后提交；
-      # 在那之前用 install 让 CI 能出包，别把发版卡在锁文件上。
+      # [1] 前端产物 —— tauri.conf.json 把 ../../frontend/dist 作为 web/ 打进包
+      #     用 `npm install` 而不是 `npm ci`：仓库里的 package-lock.json 与 package.json
+      #     已经不同步（npm ci 直接拒装），锁文件该由维护者重新生成后提交。
       - name: 构建前端
+        shell: bash
         working-directory: frontend
         run: |
           npm install --no-audit --no-fund
@@ -85,6 +95,7 @@ jobs:
 
       # [2] 四个 Java 宿主 jar —— 缺了它们，装完只有 SQLite 能用（其它类型全报「驱动未就绪」）
       - name: 构建 Java 宿主
+        shell: bash
         run: |
           for m in jdbc mongodb redis elasticsearch; do
             echo "== dbmind-agent-$m"
@@ -92,9 +103,10 @@ jobs:
           done
 
       # [3] 自带 JRE（jlink 精简运行时）—— 目标机器不装 Java 也能连库。
-      #     模块集与 scripts/release.ps1 保持一致：jdk.charsets 少了会让 Doris 连不上
+      #     模块集与 scripts/release.ps1 一致：jdk.charsets 少了会让 Doris 连不上
       #     （MySQL Connector/J 要把 collation 映射成 Java 字符集）。
       - name: 生成自带 JRE
+        shell: bash
         run: |
           rm -rf dist/jre
           jlink --add-modules java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets \
@@ -102,18 +114,20 @@ jobs:
           du -sh dist/jre
 
       # [4] 桌面安装包。bundle.targets 在 tauri.conf.json 里写的是 msi+nsis（Windows 专用），
-      #     这里用 --config 覆盖成当前平台的包型（dmg/app 或 deb/appimage）。
+      #     这里按平台覆盖包型：Windows=msi nsis / macOS=dmg app / Linux=deb appimage。
+      #     用 --bundles 而不是 --config '{"bundle":{"targets":[…]}}'：后者要塞 JSON，
+      #     双引号会被 shell 吃掉（真踩过：CLI 收到 `[dmg,app]` 报 JSON 解析错）。
       - name: Tauri 打包
+        shell: bash
         working-directory: crates/dbmind-desktop
-        # 用 --bundles 而不是 --config '{"bundle":{"targets":[...]}}'：后者要塞 JSON，
-        # 里面的双引号会被 shell 吃掉（第一跑就撞上了：CLI 收到 `[dmg,app]` 报 JSON 解析错）。
         run: npx --yes '@tauri-apps/cli@^2' build --config tauri.conf.json --bundles ${{ matrix.bundles }}
 
       - name: 列出产物
+        shell: bash
         run: find target/release/bundle -type f | sort | head -50
 
-      # [5a] 产物先进 Actions artifacts：即便下面的 Release 上传被跳过（例如手动触发时
-      #      没给 tag），包也不会丢，可以事后手动挂上去。
+      # [5a] 产物先进 Actions artifacts：即便下面的 Release 上传被跳过（手动触发没给 tag），
+      #      包也不会丢，可以事后手动挂上去。
       - name: 上传构建产物（artifact）
         uses: actions/upload-artifact@v4
         with:
@@ -121,8 +135,7 @@ jobs:
           path: ${{ matrix.patterns }}
           if-no-files-found: warn
 
-      # [5b] 挂到同一个 Release（tag 触发，或手动触发且指定了 tag）。
-      #      只新增本平台资产，不动 Windows 那两个。
+      # [5b] 挂到同一个 Release（tag 触发，或手动触发且指定了 tag）
       - name: 上传到 Release
         if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
         uses: softprops/action-gh-release@v2
