@@ -8,7 +8,10 @@
 #            「应用程序」即可，不写任何安装记录）
 #   Linux    dbmind_<版本>_amd64.deb（apt 装）、*.AppImage（**免安装**：chmod +x 后直接跑）
 #
-# 签名：有证书就自动签，没配 certificates 就照常出未签名包（见 [3c]/[3c-2]/[3d] 几步的注释）。
+# 签名：有证书就自动签；没配证书也**不是裸奔** —— macOS 侧会退到 ad-hoc 签名
+#   （Apple 芯片要求所有可执行代码至少带 ad-hoc 签名，否则用户双击会被系统拦成"已损坏"），
+#   Windows 侧则是未签名安装包（SmartScreen 提示「未知发布者」）。
+#   详见 [3c]/[3c-2]/[3d]/[4a] 几步的注释。
 #   需要的 Actions secrets（全部可选，逐个独立生效）：
 #     APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / KEYCHAIN_PASSWORD  —— mac 签名（必需三件）
 #     APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID                           —— mac 公证（可选，配齐才做）
@@ -328,6 +331,17 @@ jobs:
             const azEndpoint = process.env.AZURE_SIGN_ENDPOINT || "";
             const azDesc = process.env.AZURE_SIGN_DESCRIPTION || "DBmind";
             let how = "未启用";
+            let howMac = "未启用";
+            // macOS：没有真证书时给 ad-hoc 签名（伪身份 "-"）兜底。
+            // 为什么必须有：Apple 芯片上**所有可执行代码都必须带有效签名**（至少 ad-hoc）才能运行，
+            // 否则用户下载后双击会直接被系统拦掉（常见表现是「已损坏，无法打开」）。
+            // ad-hoc 签名不能让 Gatekeeper 自动放行（那要真证书 + 公证），但它把"打不开"变成
+            // "右键打开 / 到隐私与安全性点仍要打开就能用" —— 这是没证书时的最优解。
+            // 真证书在场时（导入步骤会导出 APPLE_SIGNING_IDENTITY）绝不设这个值，否则会顶掉真身份。
+            if (process.env.RUNNER_OS === "macOS" && !process.env.APPLE_SIGNING_IDENTITY) {
+              cfg.bundle.macOS = Object.assign({}, cfg.bundle.macOS, { signingIdentity: "-" });
+              howMac = "ad-hoc（无证书兜底，用户首次打开需手动放行）";
+            }
             if (thumb) {
               // 方式一：证书已导入本机证书存储 —— Tauri 默认实现调 Windows SDK 的 signtool，
               // 靠指纹找到它。时间戳（timestamp）必须给：没有它，证书一过期已签名的包就失效。
@@ -349,7 +363,7 @@ jobs:
               how = "Azure Artifact Signing（" + azAccount + " / " + azProfile + "）";
             }
             fs.writeFileSync("tauri.ci.json", JSON.stringify(cfg, null, 2));
-            console.log("tauri.ci.json 已生成，Windows 签名 =", how);
+            console.log("tauri.ci.json 已生成，Windows 签名 =", how, "| macOS 签名 =", howMac);
           '
 
       # [4] 桌面安装包。bundle.targets 在 tauri.conf.json 里写的是 msi+nsis（Windows 专用），
@@ -405,16 +419,18 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
-            echo "未签名构建，跳过校验"
-            exit 0
-          fi
           for app in target/release/bundle/macos/*.app; do
             [ -d "$app" ] || continue
-            codesign --verify --deep --strict --verbose=2 "$app"
-            codesign -dv --verbose=4 "$app" 2>&1 | grep -E 'Authority|TeamIdentifier'
-            echo "== 公证票据"
-            xcrun stapler validate "$app" && echo "stapler: OK"
+            # 无论有没有真证书，签名都必须能校验通过：无证书时我们给的是 ad-hoc 签名，
+            # 它在 Apple 芯片上是"能不能被打开"的前提，所以这里不能跳过。
+            codesign --verify --deep --strict --verbose=2 "$app" && echo "codesign 校验通过"
+            codesign -dv --verbose=4 "$app" 2>&1 | grep -E 'Authority|TeamIdentifier|Signature' || true
+            if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
+              echo "== 公证票据"
+              xcrun stapler validate "$app" && echo "stapler: OK"
+            else
+              echo "::notice::未配证书：本包是 ad-hoc 签名（能打开，但 Gatekeeper 不会自动放行）"
+            fi
           done
 
       - name: 验证签名（Windows）

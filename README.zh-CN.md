@@ -208,6 +208,8 @@ gh secret list --repo $repo
 
 每个已签名平台都带一步显式校验（`codesign --verify` + `stapler validate`；`Get-AuthenticodeSignature`），未签名的包不会被静默发出去。`*.p12 / *.pfx / *.csr / *.cer / *.key / *.b64` 已加进 `.gitignore`：私钥只存在于 secrets。
 
+**没有证书时，macOS 包也不会"裸奔"**：会自动注入 `signingIdentity: "-"` 做 ad-hoc 签名（只有确实没有真身份时才注入，不会顶掉真证书）。原因是 Apple 芯片上所有可执行代码都必须至少带 ad-hoc 签名，否则应用根本起不来 —— 有了它，用户看到的是「右键 → 打开一次」，而不是「已损坏，无法打开」。Windows 侧则是未签名安装包，SmartScreen 会问一次。给用户看的文案写在发版说明的「首次安装与打开」一节。
+
 ## 使用
 
 | 端 | 启动方式 |

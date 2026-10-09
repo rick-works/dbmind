@@ -198,6 +198,8 @@ Then re-run the workflow — a manual dispatch with an empty `tag` keeps the sig
 
 Each signed platform runs an explicit verification step (`codesign --verify` + `stapler validate`; `Get-AuthenticodeSignature`), so an unsigned package can never ship silently. `*.p12 / *.pfx / *.csr / *.cer / *.key / *.b64` are gitignored: private keys live in secrets only.
 
+**Without certificates, macOS builds still get an ad-hoc signature** (`signingIdentity: "-"`, injected only when no real identity is present). On Apple Silicon every piece of executable code must carry at least an ad-hoc signature or the app cannot launch at all, so this turns "the app is damaged and won't open" into "right-click → Open once". Windows builds then simply ship unsigned and SmartScreen asks for confirmation. Any user-facing wording for that is in the release notes ("First install and launch").
+
 ## Using it
 
 | Shell | How to run |
