@@ -377,7 +377,7 @@
           "org.slf4j:slf4j-api:1.7.36"
         ],
         "driverClass": "com.clickhouse.jdbc.ClickHouseDriver",
-        "urlTemplate": "jdbc:clickhouse://{host}:{port}/{database}?compress=0"
+        "urlTemplate": "jdbc:clickhouse://{host}:{port}/{database}?compress=0&result_overflow_mode=break"
       },
       "key": "clickhouse",
       "label": "ClickHouse",

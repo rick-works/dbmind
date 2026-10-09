@@ -21,7 +21,15 @@ jdbc:
   driverClass: com.clickhouse.jdbc.ClickHouseDriver
   # compress=0：驱动默认开 LZ4，缺 lz4-java 时握手会失败（打开库时报 "Magic is not correct" 一类
   # IOException）。这一项仍强制补上。
-  urlTemplate: "jdbc:clickhouse://{host}:{port}/{database}?compress=0"
+  #
+  # result_overflow_mode=break：驱动会把 JDBC 的 setMaxRows(n) 下推成服务端 setting
+  # `max_result_rows=n`，而**服务端默认的溢出动作是 throw** —— 一超限整条查询就报
+  # Code 396 TOO_MANY_ROWS_OR_BYTES（真机：上限 200 ⇒ "max rows: 201.00, current rows: 226.00"）。
+  # 改成 break = 服务端提前刹车但**截断返回**，超出部分由宿主按上限截断并给「已截断」提示。
+  # 这条上限不能不要：不设时服务端会把整表流下来（实测 237 万行），而驱动在长结果流上的
+  # RowBinary 解析会错位，抛出「Failed to read boolean value, expect 0 (false) or 1 (true)
+  # but we got: 105」这种完全对不上号的报错。
+  urlTemplate: "jdbc:clickhouse://{host}:{port}/{database}?compress=0&result_overflow_mode=break"
   # artifact **必须带 `all` 分类器**：默认包是瘦包（1 MB），缺 slf4j /
   # clickhouse-http-client 等传递依赖，装载时直接 NoClassDefFoundError:
   # org/slf4j/LoggerFactory（实测），而「驱动已就绪」只看 jar 在不在 ——

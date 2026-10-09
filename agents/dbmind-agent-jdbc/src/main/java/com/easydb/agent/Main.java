@@ -274,26 +274,24 @@ public final class Main {
     }
 
     /**
-     * setMaxRows 会不会被驱动**下推成服务端硬限制**（下推了就不该设）。
+     * ClickHouse 的行数上限为什么**还是要设**（历史坑，别再改回去）。
      *
-     * <p>ClickHouse 的 JDBC 驱动把 {@code setMaxRows(n)} 翻成服务端 setting
-     * {@code max_result_rows=n}，而服务端默认 {@code result_overflow_mode=throw}：
-     * 结果一旦超过这个数，查询**直接失败**（Code 396 TOO_MANY_ROWS_OR_BYTES），
-     * 而不是我们要的「截断 + 提示」。用户看到的是一句「SQL 执行失败」，
-     * 明明只是一条普通 SELECT —— 实测：上限 200 ⇒ 报
-     * {@code max rows: 201.00, current rows: 226.00}，那个 201 正是这里 +1 来的。
+     * <p>它的驱动把 {@code setMaxRows(n)} 翻成服务端 setting {@code max_result_rows=n}，
+     * 而服务端默认 {@code result_overflow_mode=throw}：结果一超限，整条查询直接失败
+     * （Code 396 TOO_MANY_ROWS_OR_BYTES）。实测：上限 200 ⇒ 报
+     * {@code max rows: 201.00, current rows: 226.00}，那个 201 正是调用处的 +1。
      *
-     * <p>结果行数本来由 {@link ResultMapper#read} 按 maxRows 截断，所以跳过
-     * setMaxRows 对正确性与展示行数都没有影响，只是少了一层「别把几百万行拉回来」
-     * 的省流；ClickHouse 驱动的流式读取本身能及时刹车，代价可接受。
+     * <p>曾经的处理是「对 ClickHouse 干脆不设这个上限」，那是**更糟**的一条路：
+     * 服务端于是把整表流下来（实测 237 万行），而驱动在长流上的 RowBinary 解析会错位，
+     * 抛出 {@code Failed to read boolean value, expect 0 (false) or 1 (true) but we got: 105}
+     * —— 一句完全对不上号的报错（短结果集不触发，所以「只取 200 行」时看着是好的）。
+     *
+     * <p>现在的做法是两件事一起：**上限照设**（服务端提前刹车、少拉数据），
+     * 同时在 ClickHouse 的 JDBC URL 里带上 {@code result_overflow_mode=break}
+     * （见 plugins/connection-types/clickhouse.yaml）—— 同样是服务端截断，
+     * 但换成「返回已取到的行」而不是「报错」，于是超出部分由
+     * {@link ResultMapper#read} 按 maxRows 正常截断并给出「已截断」提示。
      */
-    private static boolean maxRowsPushedDown(String sessionUrl, String agentKey) {
-        String url = sessionUrl == null ? "" : sessionUrl;
-        if (url.startsWith("jdbc:clickhouse:")) {
-            return true;
-        }
-        return "clickhouse".equals(agentKey);
-    }
 
     /**
      * 这条语句是否**只可能**返回结果集（值得设 setMaxRows）。
@@ -360,7 +358,6 @@ public final class Main {
         try (Statement statement = session.connection().createStatement()) {
             boolean wantMaxRows = maxRows > 0;
             if (wantMaxRows) { wantMaxRows = mayReturnRows(sql); }
-            if (wantMaxRows) { wantMaxRows = !maxRowsPushedDown(session.url(), session.agentKey()); }
             if (wantMaxRows) {
                 // 多取一行，用来判断「还有更多」而不是猜测。
                 //
@@ -370,6 +367,16 @@ public final class Main {
                 // 菜单「清空表」传 maxRows=1 ⇒ 只删 2 行，表里剩下一大半数据。
                 // 结果行数本来也由 ResultMapper.read 按 maxRows 截断，这里只是
                 // 「别一次把几百万行拉回来」的省流手段，去掉对读语句的正确性没有影响。
+                //
+                // ClickHouse 特别注意：它把这个上限**下推成服务端限制** `max_result_rows`，
+                // 服务端默认 `result_overflow_mode=throw` —— 一超限整条查询就报
+                // Code 396 TOO_MANY_ROWS_OR_BYTES 直接失败。所以它的 JDBC URL 里带了
+                // `result_overflow_mode=break`（见 plugins/connection-types/clickhouse.yaml）：
+                // 同样是服务端提前刹车，但改成**截断返回**而不是报错。
+                // 这一条不能省：不设上限时服务端会把整表（实测 237 万行）流下来，而
+                // 驱动的 RowBinary 解析在长流上会错位，抛出
+                // 「Failed to read boolean value, expect 0 (false) or 1 (true) but we got: 105」
+                // 这类完全对不上号的报错（小结果集不会触发）。
                 statement.setMaxRows(maxRows + 1);
             }
             if (timeoutMs > 0) {
