@@ -1,0 +1,18 @@
+# 本机构建加速（可选）：用工具链自带的 rust-lld 代替 MSVC 的 link.exe。
+#
+# 为什么值得：Windows 上默认链接器 link.exe 慢，而 dev 构建（debug = 2）还要写一个
+# 约 168 MB 的 PDB —— 那正是「改一行也要等一两分钟」的主要来源（链接阶段没有输出，
+# 看起来像卡死）。rust-lld 快得多，且不用额外安装。只影响最终链接这一步，
+# 不会触发全量重编。
+#
+# 用法：把本文件复制成同目录下的 `config.toml`，并把路径换成**你自己机器**上的
+# rust-lld 路径（`rustc --print sysroot` 打出来就是工具链根目录，再拼
+# `\lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe`）。
+#
+# 为什么这个文件不能直接入库：路径是每台机器各不相同的绝对路径，入库会让
+# CI 与别人的机器直接构建失败（`linker ... rust-lld.exe not found`）。仓库里
+# 已经把它加进 .gitignore，各人本机建一份即可。
+#
+# 例：
+# [target.x86_64-pc-windows-msvc]
+# linker = "C:\\Users\\<你>\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\lib\\rustlib\\x86_64-pc-windows-msvc\\bin\\rust-lld.exe"

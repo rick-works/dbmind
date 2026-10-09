@@ -74,6 +74,13 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      # Windows 上显式准备 MSVC 工具链环境（cl.exe / link.exe）。GitHub 的 windows runner
+      # 自带 VS，但环境变量要靠它设进当前会话 —— 否则出现「msvc targets depend on the msvc
+      # linker but link.exe was not found」这类看着像缺组件的报错。
+      - name: 准备 MSVC 环境
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
 

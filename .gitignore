@@ -35,3 +35,8 @@ Thumbs.db
 
 # 官网源文件：只用于本地预览与手动同步到 gh-pages 分支，不进版本库
 /website/
+
+# 本机构建加速配置：.cargo/config.toml 里的 rust-lld 链接器路径是**每台机器各不相同**的
+# 绝对路径（写死的本机路径会让 CI / 别人机器直接构建失败：linker not found）。
+# 保留在各人本机即可，不入库；需要的人照 .cargo/config.toml.example 自己建一份。
+.cargo/config.toml
