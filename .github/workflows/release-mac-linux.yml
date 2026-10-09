@@ -72,10 +72,15 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       # [1] 前端产物 —— tauri.conf.json 把 ../../frontend/dist 作为 web/ 打进包
+      #
+      # 用 `npm install` 而不是 `npm ci`：仓库里的 frontend/package-lock.json 与 package.json
+      # 已经不同步（npm ci 会直接拒绝：lock 里的 @rolldown/pluginutils@0.9.0 不满足
+      # 需求的 1.0.1 等等）。锁文件该在维护者机器上 `npm install` 重新生成后提交；
+      # 在那之前用 install 让 CI 能出包，别把发版卡在锁文件上。
       - name: 构建前端
         working-directory: frontend
         run: |
-          npm ci
+          npm install --no-audit --no-fund
           npm run build
 
       # [2] 四个 Java 宿主 jar —— 缺了它们，装完只有 SQLite 能用（其它类型全报「驱动未就绪」）
