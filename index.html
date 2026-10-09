@@ -270,13 +270,13 @@
   body.doc-only > *:not(nav):not(#docs) { display: none !important; }
   /* 赞助：普通区块嵌在安全区之后（不做独占视图） */
   #sponsor { padding-top: 76px; padding-bottom: 76px; }
-  .sponsor-wrap { display: flex; justify-content: center; }
+  .sponsor-wrap { display: flex; flex-direction: column; align-items: center; }
   .sponsor-card {
     max-width: 620px; width: 100%; text-align: center;
     background: var(--card); border: 1px solid var(--border); border-radius: 18px;
-    padding: 44px 40px;
+    padding: 36px 40px 40px;
   }
-  .sponsor-emoji { font-size: 42px; margin-bottom: 10px; }
+  .sponsor-emoji { font-size: 42px; margin-bottom: 18px; }
   .sponsor-card h2 { font-size: 24px; font-weight: 800; margin-bottom: 14px; }
   .sponsor-lead { color: var(--dim); font-size: 14.5px; line-height: 1.9; margin-bottom: 30px; }
   .qr-row { display: flex; gap: 26px; justify-content: center; margin-bottom: 24px; }
@@ -594,13 +594,10 @@
 
 <section id="sponsor">
   <div class="wrap sponsor-wrap">
+    <h2 class="sec-title reveal">请作者喝杯咖啡</h2>
+    <p class="sec-sub reveal">DBmind 完全免费、开源，不联网收集任何数据 —— 用着顺手的话，可以请作者喝一杯</p>
     <div class="sponsor-card reveal">
       <div class="sponsor-emoji">☕</div>
-      <h2>请作者喝杯咖啡</h2>
-      <p class="sponsor-lead">
-        DBmind 免费使用，不联网收集任何数据。
-        如果它帮你省下了时间、少加了班，欢迎请作者喝杯咖啡 —— 每一份支持都是继续打磨功能的动力。
-      </p>
       <div class="qr-row">
         <div class="qr-card">
           <img src="sponsor-wechat.png" alt="微信赞赏码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
