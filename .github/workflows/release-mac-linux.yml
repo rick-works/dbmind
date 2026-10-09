@@ -1,12 +1,5 @@
 # 多平台打包（macOS / Linux）—— 由 GitHub Actions 的对应 runner 构建，
 #
-# ⚠️ 启用方法：把本文件复制到 `.github/workflows/release-mac-linux.yml`。
-#    暂时放在 scripts/ci/ 下，是因为推送用的 Personal Access Token **没有 `workflow` scope**
-#    （GitHub 会直接拒收带 `.github/workflows/` 改动的推送：
-#     "refusing to allow a Personal Access Token to create or update workflow ... without `workflow` scope"）。
-#    两种启用方式任选：① 给 token 勾上 `workflow` 权限后由维护者移动该文件；
-#    ② 直接在 GitHub 网页上新建 `.github/workflows/release-mac-linux.yml` 并粘贴本文件内容。
-#
 # 打完把安装包挂到同一个 Release 上。Windows 的 msi/nsis 仍由本机 scripts\release.ps1 产出。
 #
 # 为什么必须走 CI：macOS 的 .app/.dmg 只能在 macOS 上打（需要 Xcode 工具链），
@@ -19,6 +12,13 @@ on:
   push:
     tags: ['v*']
   workflow_dispatch:
+    inputs:
+      # 手动补跑时把产物挂到哪个 Release（留空 = 用当前 ref 名）。
+      # 用途：标签早就推过了、或只想补一次 mac/linux 包，不必重新打标签。
+      tag:
+        description: '要上传到的 Release 标签（如 v1.0.4）'
+        required: false
+        default: ''
 
 permissions:
   contents: write # 上传 Release 资产
@@ -105,12 +105,21 @@ jobs:
       - name: 列出产物
         run: find target/release/bundle -type f | sort | head -50
 
-      # [5] 挂到同一个 Release（tag 触发时）。--clobber 语义由 action 处理：
-      #     只新增本平台资产，不动 Windows 那两个。
+      # [5a] 产物先进 Actions artifacts：即便下面的 Release 上传被跳过（例如手动触发时
+      #      没给 tag），包也不会丢，可以事后手动挂上去。
+      - name: 上传构建产物（artifact）
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.os }}-installers
+          path: ${{ matrix.patterns }}
+          if-no-files-found: warn
+
+      # [5b] 挂到同一个 Release（tag 触发，或手动触发且指定了 tag）。
+      #      只新增本平台资产，不动 Windows 那两个。
       - name: 上传到 Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') || inputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: ${{ matrix.patterns }}
           fail_on_unmatched_files: false
