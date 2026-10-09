@@ -234,6 +234,9 @@
   .rel-links { display: flex; gap: 10px; flex-wrap: wrap; }
   .rel-links .btn { padding: 8px 16px; font-size: 13px; }
   body.version-only > *:not(nav):not(#releases) { display: none !important; }
+  /* 版本区默认不参与滚动流：只有点导航「版本」进入独占视图才出现（与「文档」同一套路）。
+     漏掉这条的话，一路下滑就会在赞助区后面撞见整版版本说明，跟「独占视图」的定位自相矛盾。 */
+  body:not(.version-only) #releases { display: none !important; }
   body.version-only #releases { padding: 96px 0 60px; }
   body.version-only .rel-timeline { margin-top: 0; }
   body.version-only #releases .reveal { opacity: 1; transform: none; }
