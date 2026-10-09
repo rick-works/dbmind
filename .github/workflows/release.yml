@@ -124,8 +124,14 @@ jobs:
       #     这里按平台覆盖包型：Windows=msi nsis / macOS=dmg app / Linux=deb appimage。
       #     用 --bundles 而不是 --config '{"bundle":{"targets":[…]}}'：后者要塞 JSON，
       #     双引号会被 shell 吃掉（真踩过：CLI 收到 `[dmg,app]` 报 JSON 解析错）。
+      # ⚠️ 这一步**不能**写 `shell: bash`：在 Windows 上 Git Bash 会把 `/usr/bin` 放到 PATH 前面，
+      # 于是 rustc 找到的 `link.exe` 变成 Git 自带的 coreutils `link`
+      # （`C:\Program Files\Git\usr\bin\link.exe`，报 `extra operand ...`），而不是 MSVC 链接器。
+      # 各平台用默认 shell（Windows=pwsh / 其它=bash）时 PATH 才是对的 —— 真踩过这一脚。
+      #
+      # 包型用 --bundles 而不是 --config '{"bundle":{"targets":[…]}}'：后者要塞 JSON，
+      # 双引号会被 shell 吃掉（CLI 收到 `[dmg,app]` 报 JSON 解析错）。
       - name: Tauri 打包
-        shell: bash
         working-directory: crates/dbmind-desktop
         run: npx --yes '@tauri-apps/cli@^2' build --config tauri.conf.json --bundles ${{ matrix.bundles }}
 
