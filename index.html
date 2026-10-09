@@ -622,14 +622,37 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
-      <!-- v1.0.2（最新） -->
+      <!-- v1.0.3（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.0.3</span>
+            <span class="rel-tag tag-patch">修订</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-09</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>ClickHouse 查询不再被行数上限误杀</b>：驱动会把上限下推成服务端 <code>max_result_rows</code>，而服务端默认溢出动作是 <code>throw</code> —— 结果一超限整条 SQL 直接失败（Code 396 TOO_MANY_ROWS_OR_BYTES），表数据浏览（200 条/页）与 SQL 执行都会踩到。现在连接串带上 <code>result_overflow_mode=break</code>：服务端照旧提前刹车，但改成截断返回，超出部分由客户端提示「已截断」</li>
+            <li><b>乱码报错 <code>Failed to read boolean value…</code> 一并消失</b>：不设上限时服务端会把整表流下来（实测 237 万行），驱动在长结果流上的二进制解析会错位；现在上限照设（服务端截断），既少拉数据也不再错位</li>
+            <li><b>总数（基数）一直显示 -1 修复</b>：ClickHouse 的 <code>count(*)</code> 回来是浮点，取值只认整数导致派生表 / 裸 FROM 两层计数全部「统计不出」，最后退到二分探测被 10 秒预算掐断；现在整数 / 浮点 / 字符串三种形态都认</li>
+            <li><b>选中片段「格式化」报 <code>t is not a function</code> 修复</b>：函数内的局部变量遮蔽了 i18n 的 <code>t()</code>；「大写 / 小写 / 单行 / 复制为 IN 列表 / 复制为单行」等受同一问题影响的 5 处一并修好</li>
+            <li><b>关键字「前换行」不再多断一行</b>：<code>FROM</code> 选「前换行」时得到 <code>FROM users u</code>，而不是关键字独占一行后再把内容挪到下一行缩进</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.3" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.3" target="_blank" rel="noopener">下载 v1.0.3</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.0.2 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
           <div class="rel-head">
             <span class="rel-ver">v1.0.2</span>
             <span class="rel-tag tag-patch">修订</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-07</span>
           </div>
           <ul class="rel-notes">
