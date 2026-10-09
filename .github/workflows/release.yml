@@ -232,6 +232,31 @@ jobs:
             echo "::notice::只签名不公证（缺 APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID 之一）"
           fi
 
+      # [3e] AppImage 打包的必经之路是 linuxdeploy：它用 `ldd <绝对路径>`（继承父进程环境）
+      #      逐个解析 AppDir 里每个 ELF 的依赖，**任何一个缺失都直接抛错退出** ——
+      #      真机报的是：
+      #        Deploying dependencies for ELF file .../jre/lib/librmi.so
+      #        ERROR: Could not find dependency: libjvm.so
+      #        ERROR: Failed to deploy dependencies for existing files
+      #      原因：JDK 把 libjvm.so 放在 jre/lib/server/ 下，由启动器在运行时把它加进搜索路径，
+      #      而 jre/lib/*.so 的 RPATH 是 $ORIGIN（也就是 lib/），静态解析当然找不到。
+      #      这里在 lib/ 下补一条指向 server/*.so 的软链，ldd 就能在 $ORIGIN 命中；
+      #      命中路径本来就在 AppDir 内，linuxdeploy 视为"已部署"，不会再拷一份。
+      #      运行时不受影响（JVM 依旧走 lib/server）。deb 不经过 linuxdeploy，加不加都能打。
+      - name: 补 JRE 软链以适配 AppImage（Linux）
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if [ -d dist/jre/lib/server ]; then
+            for f in dist/jre/lib/server/*.so; do
+              [ -e "$f" ] || continue
+              ln -sf "server/$(basename "$f")" "dist/jre/lib/$(basename "$f")"
+              echo "linked lib/$(basename "$f") -> server/$(basename "$f")"
+            done
+          else
+            echo "::warning::dist/jre/lib/server 不存在，跳过（AppImage 可能会因缺 libjvm.so 失败）"
+          fi
+
       # [3d] 生成这一跑要用的 Tauri 配置：以 tauri.conf.json 为底整份复制，Windows 有证书时
       #      注入 bundle.windows 的签名三件套。**显式 --config 指向这一份**而不是依赖 CLI 的
       #      多配置合并，也避开把 JSON 塞进命令行的老坑（引号会被 shell 吃掉，真踩过）。
@@ -337,9 +362,13 @@ jobs:
             if ($sig.Status -ne 'Valid') { throw ("签名无效：" + $f.FullName) }
           }
 
+      # 注意别写成 `find ... | sort | head -50`：GitHub 的 bash 默认带 -o pipefail，
+      # head 读够行数就退出，find/sort 拿到 SIGPIPE 以非 0 退出，整步就"莫名失败"
+      # （曾在 mac 上看到 `Process completed with exit code 2`，产物其实好好的）。
+      # 用 sed -n '1,50p' 读完所有输入，就不会有这个问题。
       - name: 列出产物
         shell: bash
-        run: find target/release/bundle -type f | sort | head -50
+        run: find target/release/bundle -type f 2>/dev/null | sort | sed -n '1,50p' || true
 
       # [4b] Windows 免安装（绿色）版：解压即用，不写注册表、不需要安装。
       #      复用本机 scripts\package.ps1 的组装逻辑（同一份清单，避免两处漂移）：
