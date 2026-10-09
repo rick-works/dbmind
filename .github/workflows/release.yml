@@ -272,7 +272,33 @@ jobs:
           # linuxdeploy / linuxdeploy-plugin-appimage 都是 AppImage：让它们解包运行，
           # 不依赖挂载（FUSE）—— CI 容器里挂载经常不可用。
           APPIMAGE_EXTRACT_AND_RUN: 1
-        run: npx --yes '@tauri-apps/cli@^2' build --config tauri.ci.json --bundles ${{ matrix.bundles }}
+        # `-v` 不只是"多打日志"这么简单：Tauri 的 AppImage 打包在默认（Error）级别下会把
+        # linuxdeploy 的 stdout/stderr 整段丢掉，只回一句固定文案 `failed to run linuxdeploy`，
+        # 完全没有可诊断信息；提到 verbose 才会走 output_ok 分支把子进程输出打出来。
+        run: npx --yes '@tauri-apps/cli@^2' build -v --config tauri.ci.json --bundles ${{ matrix.bundles }}
+
+      # [4a'] AppImage 失败时的兜底诊断：拿 Tauri 下载的同版 linuxdeploy，对着它留下的
+      #       AppDir 原样再跑一遍，把 stderr 完整打出来（Tauri 自己会吞掉）。
+      - name: 诊断 AppImage（仅 Linux 失败时）
+        if: failure() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          echo "== bundle/appimage 目录"
+          ls -la target/release/bundle/appimage 2>&1 | head -20
+          LD=$(find "$HOME/.cache/tauri" -name 'linuxdeploy-*.AppImage' 2>/dev/null | head -1)
+          APPDIR=$(find target/release/bundle/appimage -maxdepth 1 -name '*.AppDir' 2>/dev/null | head -1)
+          echo "linuxdeploy = $LD"
+          echo "appdir      = $APPDIR"
+          if [ -n "$LD" ] && [ -n "$APPDIR" ]; then
+            chmod +x "$LD"
+            echo "== 手动复跑（verbosity 2）"
+            APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 OUTPUT=/tmp/diag.AppImage \
+              "$LD" --appimage-extract-and-run --verbosity 2 \
+              --appdir "$PWD/$APPDIR" --plugin gtk --output appimage 2>&1 | tail -80 || true
+          fi
+          echo "== 资源"
+          df -h /tmp | tail -1
+          free -m
 
       # [4a] 签名是"有证书才发生"的，所以必须显式**验证**一次：否则未签名的包会被静默发出去，
       #      而用户那边只看到"未知发布者"/"已损坏"这类模糊症状。
