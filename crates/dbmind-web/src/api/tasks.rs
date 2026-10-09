@@ -38,12 +38,17 @@ const MAX_LOGS: usize = 200;
 /// 卡死看门狗的**心跳间隔**（见 `TaskRegistry::spawn`）。
 const STALL_TICK: Duration = Duration::from_secs(30);
 
-/// 多久**毫无进展**才判定卡死。
+/// 多久**毫无进展**才判定卡死 —— 这是**最后一道兜底**，不是主机制。
 ///
-/// 取 10 分钟这个量级：分页粒度下真在干活的任务，计数或日志总会变；而等待用户决策的
-/// 分支（备份的安装提示）自带 300 秒超时，不会撞上这里。误杀方向是"慢任务被提前收尾"，
-/// 比"永远挂着不停"好收拾 —— 后者会让界面一直显示「任务仍在后台收尾」。
-const STALL_LIMIT: Duration = Duration::from_secs(10 * 60);
+/// 主机制是**每一步的真实截止时间**：数据库调用有（内核发宿主的是 `timeoutMs + 2s`，
+/// 超时即 `QueryTimeout`，用户取消还会经 `Statement.cancel()` 打到驱动），流水线内部的
+/// 交接也有（见 `sync.rs` 的 `PIPE_WAIT`：发页/取批/等协程/等并发槽位）。
+///
+/// 兜底存在的理由：万一某条路径漏了截止时间（新写的循环、别的任务类型、我们自己代码里
+/// 的锁等待），也不该让界面永远挂在「任务仍在后台收尾」上。它触发时会在任务日志里
+/// **明确写成兜底**（提示这条路径缺少截止时间），好据此把真正的截止时间补上 —— 所以它
+/// 既是保险，也是一个"该修哪里"的探针。时间放宽到 30 分钟，避免把慢任务误收。
+const STALL_LIMIT: Duration = Duration::from_secs(30 * 60);
 
 /// 任务生命周期。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -576,8 +581,9 @@ impl TaskRegistry {
                 if idle >= STALL_LIMIT {
                     let minutes = STALL_LIMIT.as_secs() / 60;
                     watch.log(format!(
-                        "任务已连续 {minutes} 分钟没有任何进展，判定为卡死（多为连接被中断 / \
-                         网络切换后对端不再响应）——已强制结束；已写入的部分保留，不回滚"
+                        "任务已连续 {minutes} 分钟没有任何进展，兜底看门狗判定为卡死——\
+                         这条路径缺少截止时间（正常应由某一步的超时先报出来），\
+                         请把本行日志反馈给开发；已强制结束，已写入的部分保留、不回滚"
                     ));
                     watch.set_status(TaskStatus::Error);
                     watch.set_message(format!(

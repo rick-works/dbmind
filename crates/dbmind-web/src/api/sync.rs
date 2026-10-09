@@ -68,6 +68,58 @@ const STREAM_LOAD_MAX_BYTES: usize = 16 * 1024 * 1024;
 /// （20 万行就是 20 万次加锁 + 20 万次前端快照变化，纯属白烧 CPU）。
 const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(300);
 
+/// 流水线**内部交接**的截止时间（读取侧发页 / 写入侧取批 / 等协程收尾 / 等并发槽位）。
+///
+/// 为什么要有它：数据库调用自己是有硬截止时间的（内核发给宿主的是 `timeoutMs + 2s`，
+/// 超时即 `QueryTimeout`，取消还会经 `Statement.cancel()` 打到驱动），可**流水线内部的
+/// 交接**原先一个截止时间都没有 —— `send().await` / `acquire().await` / `handle.await`
+/// 只要对端不再响应，就会一直挂着：任务停在 running、界面显示「任务仍在后台收尾」、
+/// 而进程侧 0% CPU、一条数据库连接都没有（真机挂过一次，21 分钟）。
+///
+/// 取值：比单次数据库调用的上限（直拷路径 600s）再宽一点 —— 正常的慢只会慢在**调用**上，
+/// 不会慢在"没人来取我刚读到的这一页"上；这里等不到人就是真卡住了。
+const PIPE_WAIT: std::time::Duration = std::time::Duration::from_secs(660);
+
+/// 往流水线通道发一页/一批：带**真实截止时间**。
+///
+/// 对端超过 [`PIPE_WAIT`] 还没来取，就说明它已经停止（而不是"任务在慢慢跑"）——
+/// 返回 Err 让调用方按"下游已停止"收工，而不是无限期挂在 `send().await` 上。
+async fn send_with_deadline<T>(
+    tx: &tokio::sync::mpsc::Sender<T>,
+    value: T,
+    peer: &str,
+) -> Result<(), String> {
+    match tokio::time::timeout(PIPE_WAIT, tx.send(value)).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err("下游已关闭".to_string()),
+        Err(_) => Err(format!(
+            "{peer} {} 分钟没有取走数据，判定下游已停止（连接可能已断开）",
+            PIPE_WAIT.as_secs() / 60
+        )),
+    }
+}
+
+/// 从流水线通道取下一页：同样带**真实截止时间**。
+///
+/// 取不到（读取侧停止）时把原因写进 `read_error`，让上层如实报「读取侧已停止」，
+/// 而不是把它当成"读完了"悄悄成功。返回 `None` 表示这个对象的数据流结束。
+async fn recv_with_deadline<T>(
+    rx: &mut tokio::sync::mpsc::Receiver<T>,
+    read_error: &mut Option<String>,
+    peer: &str,
+) -> Option<T> {
+    match tokio::time::timeout(PIPE_WAIT, rx.recv()).await {
+        Ok(next) => next,
+        Err(_) => {
+            *read_error = Some(format!(
+                "{peer} {} 分钟没有给出下一页，判定其已停止（连接可能已断开）",
+                PIPE_WAIT.as_secs() / 60
+            ));
+            None
+        }
+    }
+}
+
 // ------------------------------------------------------------------ 请求
 
 #[derive(Deserialize, Default, Clone)]
@@ -2372,7 +2424,7 @@ async fn sync_table_inner(
 
                     }
 
-                    if page_tx.send(PageMsg::Page(rows)).await.is_err() {
+                    if send_with_deadline(&page_tx, PageMsg::Page(rows), "写入侧").await.is_err() {
 
                         break;
 
@@ -2390,7 +2442,7 @@ async fn sync_table_inner(
 
                 Err(err) => {
 
-                    let _ = page_tx.send(PageMsg::Failed(err.message)).await;
+                    let _ = send_with_deadline(&page_tx, PageMsg::Failed(err.message), "写入侧").await;
 
                     break;
 
@@ -2411,7 +2463,7 @@ async fn sync_table_inner(
 
     let mut read_error: Option<String> = None;
 
-    'outer: while let Some(msg) = page_rx.recv().await {
+    'outer: while let Some(msg) = recv_with_deadline(&mut page_rx, &mut read_error, "读取侧").await {
 
         match msg {
 
@@ -2527,12 +2579,12 @@ async fn sync_table_inner(
                 let batch_rows = pending_insert.len() as u64;
                 // **并发写池**：整批移交给 writer，读循环继续攒下一批（读写完全解耦）
                 if let Some(tx) = &write_tx {
-                    if tx.send(pending_insert).await.is_err() {
+                    if let Err(why) = send_with_deadline(tx, pending_insert, "写入侧").await {
                         let msg = write_err
                             .lock()
                             .await
                             .clone()
-                            .unwrap_or_else(|| "写池异常退出".to_string());
+                            .unwrap_or(why);
                         return ObjResult::failed(ty, table, msg);
                     }
                     pending_insert = Vec::new();
@@ -2607,7 +2659,7 @@ async fn sync_table_inner(
     }
     // 流水线收尾：丢掉 rx 让预取协程退出，并等它结束
     drop(page_rx);
-    let _ = prefetch_task.await;
+    let _ = tokio::time::timeout(PIPE_WAIT, prefetch_task).await;
     if canceled {
         note.push_str("（已取消：已写入的部分保留，不回滚）");
     }
@@ -2617,12 +2669,12 @@ async fn sync_table_inner(
     // **并发写池收尾**：残余批次入队 → 关通道 → 等 writer 全部落账 → 合流行数
     if let Some(tx) = write_tx.take() {
         if !pending_insert.is_empty() {
-            let _ = tx.send(pending_insert).await;
+            let _ = send_with_deadline(&tx, pending_insert, "写入侧").await;
             pending_insert = Vec::new();
         }
         drop(tx); // 关闭通道：writer 消费完剩余批次后自然退出
         for handle in writer_handles.drain(..) {
-            let _ = handle.await;
+            let _ = tokio::time::timeout(PIPE_WAIT, handle).await;
         }
         inserted += shared_inserted.load(Ordering::SeqCst);
         if let Some(msg) = write_err.lock().await.take() {
@@ -3033,7 +3085,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                             let (_, _, errors, _, _) = *counters.lock().unwrap();
                             errors > 0
                         });
-                    let permit = sem.acquire_owned().await.ok();
+                    let permit = tokio::time::timeout(PIPE_WAIT, sem.acquire_owned()).await.ok().and_then(|r| r.ok());
                     if blocked {
                         if task.is_canceled() {
                             *slot.lock().unwrap() = Some(json!({
@@ -3093,7 +3145,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 }));
             }
             for handle in handles {
-                let _ = handle.await;
+                let _ = tokio::time::timeout(PIPE_WAIT, handle).await;
             }
             let (ok, skipped, errors, inserted, updated) = *counters.lock().unwrap();
             let results: Vec<Value> = slots
