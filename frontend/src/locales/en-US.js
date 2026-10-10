@@ -15,6 +15,7 @@ export default {
   'settings.topMenu.desc': 'Choose which entries appear in the top bar and reorder them',
   'nav.sync': 'Data transfer',
   'nav.governance': 'Governance',
+  'nav.drivers': 'Drivers',
   'nav.monitor': 'Monitoring',
   'nav.knowledge': 'Knowledge base',
   'nav.ai': 'AI assistant',
@@ -35,6 +36,9 @@ export default {
   'update.dlProgress': '{done} of {total} downloaded, {speed}/s',
   'update.dlDone': 'Download finished, starting the installer',
   'update.dlBackground': 'Keep downloading in background',
+  'update.dlRetry': 'Retry',
+  'update.dlCopyLink': 'Copy download link',
+  'update.dlClose': 'Close',
   'update.moreNotes': 'View full release notes →',
   'update.neverAgain': 'Don\'t remind for this version',
   'update.title': 'Check for updates',
@@ -1430,7 +1434,7 @@ export default {
   'settings.tab.editor': 'Editor',
   'settings.tab.format': 'Formatting',
   'settings.tab.query': 'Query',
-  'settings.tab.driver': 'Driver download',
+  'settings.tab.driver': 'Driver manager',
   'settings.tab.paths': 'Storage paths',
   'settings.tab.notify': 'Notifications',
   'settings.tab.shortcut': 'Shortcuts',
@@ -1619,8 +1623,8 @@ export default {
   'settings.query.nullAsBlank': 'Blank',
   'settings.query.cacheRefreshed': 'Schema cache refreshed (all connections)',
 
-  // ---------- Settings · Driver download ----------
-  'settings.driver.title': 'Driver download',
+  // ---------- Settings · Driver manager ----------
+  'settings.driver.title': 'Driver manager',
   'settings.driver.desc': 'Drivers are downloaded automatically the first time you connect a new database type',
   'settings.driver.mirror': 'Mirror',
   'settings.driver.mirrorAliyun': 'Aliyun',

@@ -982,7 +982,7 @@
     </template>
   </el-dialog>
 
-  <!-- 下载进度：后台任务在跑，这里只展示（关掉窗口不会中断下载） -->
+  <!-- 下载进度：**只在后台下载真的在跑时才展示**（关掉窗口不会中断下载） -->
   <el-dialog
     v-model="dlVisible"
     class="upd-dl"
@@ -1002,10 +1002,22 @@
         <span v-else-if="dlStatus === 'done'">{{ t('update.dlDone') }}</span>
         <span v-else class="upd-dl-err">{{ dlError }}</span>
       </div>
+      <!-- 过程说明（换源 / 续传 / 第几次重试）：只在下载进行中才有意义 -->
+      <div v-if="dlStatus === 'running' && dlNote" class="upd-dl-tip">{{ dlNote }}</div>
       <div v-if="dlStatus === 'done'" class="upd-dl-tip">{{ t('update.applyDone') }}</div>
     </div>
     <template #footer>
-      <el-button v-if="dlStatus !== 'running'" size="small" type="primary" @click="closeDownloadDialog">{{ t('common.confirm') }}</el-button>
+      <!-- 失败必须能**原地重试**：以前失败后只能重启软件，点更新图标永远弹回同一个报错页 -->
+      <template v-if="dlStatus === 'failed'">
+        <el-button size="small" @click="closeDownloadDialog">{{ t('update.dlClose') }}</el-button>
+        <el-button v-if="dlUrl" size="small" @click="copyText(dlUrl, t('common.copied'))">{{ t('update.dlCopyLink') }}</el-button>
+        <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
+        <el-button size="small" type="primary" @click="retryDownload">{{ t('update.dlRetry') }}</el-button>
+      </template>
+      <template v-else-if="dlStatus !== 'running'">
+        <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
+        <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('common.confirm') }}</el-button>
+      </template>
       <el-button v-else size="small" @click="closeDownloadDialog">{{ t('update.dlBackground') }}</el-button>
     </template>
   </el-dialog>
@@ -1118,7 +1130,11 @@ const ConnectionDialog = defineAsyncComponent(() => import('../connection/Connec
 const DataSourcePicker = defineAsyncComponent(() => import('../../common/DataSourcePicker.vue'))
 const ObjectFormDialog = defineAsyncComponent(() => import('../../common/objectforms/ObjectFormDialog.vue'))
 const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView.vue'))
-import { checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi, openLocalDir as openLocalDirApi, updateDirs as updateDirsApi, pickUpdateDir as pickUpdateDirApi } from '../../api'
+import {
+  checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi,
+  dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi,
+  updateDirs as updateDirsApi, pickUpdateDir as pickUpdateDirApi
+} from '../../api'
 
 // ===== 检查更新：与 GitHub 最新 Release 比对；有新版可在线下载安装 =====
 // 说明正文按 Markdown 渲染（Release body 里带下载表格），不再显示原始文本
@@ -1144,11 +1160,16 @@ const fmtBytes = (n) => {
   return `${(v / 1024 / 1024).toFixed(1)} MB`
 }
 const dlVisible = ref(false)
-const dlStatus = ref('running') // running | done | failed
+// 初值必须是 idle：以前写成 'running'，于是**还没开始下载**时顶栏图标的提示就已经是
+// 「查看下载进度」，点开却是个空进度 —— 用户一眼就看出不对。
+const dlStatus = ref('idle') // idle | running | done | failed
 const dlReceived = ref(0)
 const dlTotal = ref(0)
 const dlSpeed = ref(0)
 const dlError = ref('')
+// 过程说明（换源 / 续传 / 第几次重试），来自后端 note —— 不是错误，画在进度条下方
+const dlNote = ref('')
+const dlUrl = ref('')
 
 // 弹窗只放「更新摘要」：Release 全文动辄几千字，整篇塞进弹窗会把弹窗撑满屏、
 // 还要滚动才看得到按钮。这里截取开头一小段 + 给「查看完整更新说明」链接。
@@ -1201,6 +1222,9 @@ const doApplyUpdate = async () => {
   await startDownload(dir)
 }
 
+// 失败后原地重试：沿用上次选的目录（没选过就交给后端用系统临时目录）
+const retryDownload = () => { startDownload(dlDir.value || '') }
+
 // 真正开始下载（目录已定）
 const startDownload = async (dir) => {
   dlVisible.value = true
@@ -1209,6 +1233,8 @@ const startDownload = async (dir) => {
   dlTotal.value = 0
   dlSpeed.value = 0
   dlError.value = ''
+  dlNote.value = ''
+  dlUrl.value = ''
   startProgressPolling()
   try {
     const res = await applyUpdateApi(dir)
@@ -1233,9 +1259,12 @@ const startProgressPolling = (fast = true) => {
       dlReceived.value = p.received || 0
       dlTotal.value = p.total || 0
       dlSpeed.value = p.speed || 0
+      dlNote.value = p.note || ''
+      dlUrl.value = p.url || ''
       if (p.status === 'done' || p.status === 'failed') {
         dlStatus.value = p.status
         if (p.status === 'failed') dlError.value = p.error || t('update.applyFail')
+        dlNote.value = ''
         stopProgressPolling()
       } else {
         dlStatus.value = p.status || 'running'
@@ -1255,7 +1284,11 @@ const closeDownloadDialog = () => {
   if (dlStatus.value === 'running') {
     startProgressPolling(false)
     ElMessage.info(t('update.dlBackgroundHint'))
+    return
   }
+  // 已结束（成功/失败）就把后端那份终态也清掉：留着的话下次点图标会被它拦住，
+  // 又变回「只能重启软件」（真机踩过）
+  try { dismissUpdateApi() } catch { /* 忽略 */ }
 }
 
 
@@ -1272,15 +1305,21 @@ const checkUpdate = async () => {
     // 后台已有下载任务在跑：直接把进度窗调出来（这就是「上次关掉了，从哪再找到」）
     try {
       const p = await updateProgressApi()
-      if (p && (p.status === 'running' || p.status === 'done' || p.status === 'failed')) {
+      if (p && p.status === 'running') {
         dlVisible.value = true
-        dlStatus.value = p.status
+        dlStatus.value = 'running'
         dlReceived.value = p.received || 0
         dlTotal.value = p.total || 0
-        dlSpeed.value = 0
-        dlError.value = p.error || ''
-        if (p.status === 'running') startProgressPolling()
+        dlSpeed.value = p.speed || 0
+        dlNote.value = p.note || ''
+        dlUrl.value = p.url || ''
+        startProgressPolling()
         return
+      }
+      // 已结束的任务（成功/失败）**不该拦住下一次检查**：以前失败后点图标永远弹回同一个
+      // 报错页，得重启软件才行。这里先把终态清掉，再走正常的检查流程。
+      if (p && (p.status === 'done' || p.status === 'failed')) {
+        try { await dismissUpdateApi() } catch { /* 清不掉也不挡检查 */ }
       }
     } catch { /* 进度接口不可用就走正常检查 */ }
 
@@ -1589,20 +1628,11 @@ const topMenuRun = (id) => {
   if (id === 'compare') openCompare()
   else if (id === 'sync') openSync()
   else if (id === 'governance') governanceOpen.value = true
+  // 驱动管理：直接打开设置的驱动页签（openSettings 的第二个参数就是直达页签）
+  else if (id === 'drivers') openSettings('driver')
   else if (id === 'monitor') openMonitor()
   else if (id === 'bgCenter') { bgCenterMode.value = 'history'; bgCenterOpen.value = true; refreshBgStatus() }
   else if (id === 'newScript') newQueryTab()
-}
-const TOPMENU_LS = 'dbmind_topmenu'
-const readTopMenuCfg = () => {
-  const allIds = TOP_MENU_ITEMS.map((m) => m.id)
-  try {
-    const raw = JSON.parse(localStorage.getItem(TOPMENU_LS) || '{}')
-    // order 只保留合法 id，老配置里没有的新项**追加**到末尾；hidden 也按合法 id 过滤
-    const order = (Array.isArray(raw.order) ? raw.order : []).filter((id) => allIds.includes(id))
-    allIds.forEach((id) => { if (!order.includes(id)) order.push(id) })
-    return { order, hidden: (Array.isArray(raw.hidden) ? raw.hidden : []).filter((id) => allIds.includes(id)) }
-  } catch { return { order: allIds, hidden: [] } }
 }
 const compareDialogOpen = ref(false)
 const syncDialogOpen = ref(false)

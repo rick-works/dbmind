@@ -38,6 +38,11 @@ struct Progress {
     installer: Option<String>,
     version: Option<String>,
     proxy: Option<String>,
+    /// 过程说明（换源 / 续传 / 第几次重试）。**不是错误** —— 前端画在进度条下方，
+    /// 让"怎么变慢了、怎么又重新开始了"有解释，而不是看起来像卡住。
+    note: Option<String>,
+    /// 实际在用的下载地址（可能已切到镜像），失败时可复制去手动下载
+    url: Option<String>,
 }
 
 fn progress_cell() -> &'static Arc<std::sync::Mutex<Progress>> {
@@ -51,9 +56,15 @@ fn progress_cell() -> &'static Arc<std::sync::Mutex<Progress>> {
     })
 }
 
-/// 构造一个带代理（若系统代理可用）的 ureq Agent
+/// 构造一个带代理（若系统代理可用）的 ureq Agent。
+///
+/// `timeout_read` 是「卡住」与「慢」的分水岭：只设总超时的话，网络中断或黑洞连接会让一个
+/// read 一直阻塞到总超时（1800 秒）—— 界面上就是永远停在某个百分比、看着像死机。
+/// 单次读超时一设，停滞 30 秒即报错，上层才好自动重试 / 续传 / 换源。
 fn agent() -> ureq::Agent {
-    let builder = ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10));
+    let builder = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(30));
     match super::sysproxy::resolve() {
         Some(p) => match ureq::Proxy::new(&p) {
             Ok(proxy) => builder.proxy(proxy).build(),
@@ -242,6 +253,8 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
             }
         };
         let dest = resolve_dir(want_dir.as_deref()).join(&name);
+        // 下载源候选（直连优先，配了镜像再追加），逐个试
+        let sources = download_sources(&url);
         if let Some(dir) = dest.parent() {
             if let Err(e) = std::fs::create_dir_all(dir) {
                 let mut p = cell.lock().unwrap();
@@ -250,7 +263,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 return;
             }
         }
-        match download_with_progress(&url, &dest, &cell) {
+        match download_with_progress(&sources, &dest, &cell) {
             Ok(()) => {
                 let installer = dest.to_string_lossy().to_string();
                 let ok = launch_installer(&dest);
@@ -300,13 +313,127 @@ pub struct ApplyReq {
     #[serde(default)]
     pub dir: Option<String>,
 }
-/// 下载并持续写入进度
+/// 自动手段全失败后给用户的手动兜底地址
+const RELEASE_PAGE: &str = "https://github.com/rick-works/dbmind/releases";
+
+/// 下载源候选：GitHub 直连优先；配了 `DBMIND_UPDATE_MIRROR` 才追加镜像前缀。
+///
+/// **为什么不默认内置公共镜像**：镜像是一个能替换包内容的中间人（它替我们跟 GitHub 握手，
+/// 转交的字节由它决定）。在安装包既没有签名也没有校验和之前，自动走第三方镜像等于把
+/// "发什么包"交给别人 —— 这不是能替用户默认打开的开关。所以只认用户自己给的可信前缀
+/// （企业 Nexus / 自建反代：`DBMIND_UPDATE_MIRROR=https://mirror.example.com/gh/`，
+/// 按 `<前缀><原地址>` 拼接，也支持含 `{url}` 的模板写法），或者照常开代理
+/// （系统代理会被自动识别，见 sysproxy）。
+fn download_sources(url: &str) -> Vec<String> {
+    let mut out = vec![url.to_string()];
+    if let Ok(prefix) = std::env::var("DBMIND_UPDATE_MIRROR") {
+        let prefix = prefix.trim();
+        if !prefix.is_empty() {
+            out.push(if prefix.contains("{url}") {
+                prefix.replace("{url}", url)
+            } else {
+                format!("{prefix}{url}")
+            });
+        }
+    }
+    out
+}
+
+/// 断点续传用的临时文件（下完才改名成最终安装包）。
+///
+/// 直接写最终文件名的话，中途断掉会留下一个「看着像装好了」的半个包 ——
+/// 用户双击只会得到一句莫名其妙的错误。`.part` 一眼就知道是没下完的。
+fn part_path(dest: &std::path::Path) -> std::path::PathBuf {
+    let mut s = dest.as_os_str().to_os_string();
+    s.push(".part");
+    std::path::PathBuf::from(s)
+}
+
+fn human_bytes(n: u64) -> String {
+    if n < 1024 {
+        return format!("{n} B");
+    }
+    if n < 1024 * 1024 {
+        return format!("{:.0} KB", n as f64 / 1024.0);
+    }
+    format!("{:.1} MB", n as f64 / 1024.0 / 1024.0)
+}
+
+/// 下载安装包：**续传 + 重试 + 换源**，全部失败才报错。
+///
+/// 为什么值得这么绕：安装包几十 MB，而「下到一半断了 / 慢得像停了」是常态，
+/// 偏偏这时候机器上往往**没有代理**（用户报的正是这个场景）。于是：
+///   1. 先写 `<安装包>.part`，成功才改名 —— 中断不留半个"安装包"；
+///   2. 重试带 `Range` 续传（回 206 就接着下，回 200 就从头来）；
+///   3. 停滞 30 秒由 `timeout_read` 触发报错，不会挂到总超时；
+///   4. 大文件开局 15 秒还拿不到 512 KB，判定"这个源太慢"，直接换下一个源。
 fn download_with_progress(
-    url: &str,
+    sources: &[String],
     dest: &std::path::Path,
     cell: &Arc<std::sync::Mutex<Progress>>,
 ) -> dbmind_core::Result<()> {
+    let part = part_path(dest);
+    let mut errs: Vec<String> = Vec::new();
+    for (si, src) in sources.iter().enumerate() {
+        for attempt in 1..=2u32 {
+            let done = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+            let note = if si > 0 {
+                Some(if done > 0 {
+                    format!("直连不畅，改用镜像源，并从已下载的 {} 继续", human_bytes(done))
+                } else {
+                    "直连不畅，改用镜像源重试".to_string()
+                })
+            } else if attempt > 1 {
+                Some(format!("第 {attempt} 次重试（已下载 {}，接着下）", human_bytes(done)))
+            } else {
+                None
+            };
+            cell.lock().unwrap().note = note;
+            match download_once(src, &part, cell) {
+                Ok(()) => {
+                    std::fs::rename(&part, dest).map_err(|e| {
+                        DbMindError::new(ErrorCode::Internal, format!("保存安装包失败：{e}"))
+                    })?;
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        target: "dbmind::update",
+                        url = %src, attempt, error = %e.message, "安装包下载失败"
+                    );
+                    errs.push(e.message);
+                    // 同源重试前稍等，避开瞬时抖动（换源不等待，直接上）
+                    if attempt == 1 {
+                        std::thread::sleep(Duration::from_secs(3));
+                    }
+                }
+            }
+        }
+    }
+    {
+        let mut p = cell.lock().unwrap();
+        p.note = None;
+        p.url = sources.first().cloned();
+    }
+    Err(DbMindError::new(
+        ErrorCode::Internal,
+        format!(
+            "在线更新下载失败：{}。\n可改用：① 启动代理后重试（软件会自动使用系统代理）；\
+             ② 指定镜像源（环境变量 DBMIND_UPDATE_MIRROR，形如 https://mirror.example.com/gh/）；\
+             ③ 直接到发布页手动下载 {RELEASE_PAGE}",
+            errs.join("；")
+        ),
+    ))
+}
+
+/// 下**一次**（某个源的一次尝试）：续传偏移、进度上报、慢速判定都在这里。
+fn download_once(
+    url: &str,
+    part: &std::path::Path,
+    cell: &Arc<std::sync::Mutex<Progress>>,
+) -> dbmind_core::Result<()> {
     use std::io::Write;
+    let offset = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
     let mut req = agent()
         .get(url)
         .set("User-Agent", "dbmind-updater")
@@ -314,51 +441,95 @@ fn download_with_progress(
     if let Some(tk) = github_token() {
         req = req.set("Authorization", &format!("Bearer {tk}"));
     }
+    if offset > 0 {
+        req = req.set("Range", &format!("bytes={offset}-"));
+    }
     let resp = req.call().map_err(|e| {
         DbMindError::new(
             ErrorCode::Internal,
-            format!("下载安装包失败：{e}（若你在用代理，请确认代理程序已启动）"),
+            format!("连接下载地址失败：{e}（若在使用代理，请确认代理程序已启动）"),
         )
     })?;
-    let total = resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+    // 206 = 服务端认了 Range（接着下）；200 = 不认，只能从零重来
+    let resuming = resp.status() == 206 && offset > 0;
+    if offset > 0 && !resuming {
+        // 不续传却把新数据追加到旧文件后面，会得到一个坏包 —— 先清掉
+        let _ = std::fs::remove_file(part);
+    }
+    let total = if resuming {
+        // Content-Range: bytes 100-999/1000 → 取斜杠后的总长度
+        resp.header("Content-Range")
+            .and_then(|v| v.rsplit('/').next().map(str::to_string))
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(0)
+    } else {
+        resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
+    };
+    let base = if resuming { offset } else { 0 };
     {
         let mut p = cell.lock().unwrap();
+        p.url = Some(url.to_string());
         p.total = total;
+        p.received = base;
+        if base > 0 {
+            p.note = Some(format!("从已下载的 {} 继续", human_bytes(base)));
+        }
     }
-    let mut file = std::fs::File::create(dest)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.create(true);
+    if resuming {
+        opts.append(true);
+    } else {
+        opts.write(true);
+    }
+    let mut file = opts
+        .open(part)
         .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("写安装包失败：{e}")))?;
     let mut reader = resp.into_reader();
     let mut buf = vec![0u8; 256 * 1024];
-    let mut received: u64 = 0;
+    let mut got: u64 = 0;
     let mut last_report = Instant::now();
+    let attempt_started = Instant::now();
+    // 只有大文件才判"慢"：小文件按字节数判会把正常慢速误判成故障
+    let judge_slow = total == 0 || total > 4 * 1024 * 1024;
     loop {
-        let n = reader
-            .read(&mut buf)
-            .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("下载中断：{e}")))?;
+        let n = reader.read(&mut buf).map_err(|e| {
+            DbMindError::new(
+                ErrorCode::Internal,
+                format!("下载中断（已下 {}）：{e}", human_bytes(base + got)),
+            )
+        })?;
         if n == 0 {
             break;
         }
         file.write_all(&buf[..n])
             .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("写安装包失败：{e}")))?;
-        received += n as u64;
-        // 每 200ms 更新一次，避免频繁加锁
+        got += n as u64;
+        // 每 200ms 上报一次（进度条要顺，又不能频繁加锁）
         if last_report.elapsed() >= Duration::from_millis(200) {
             let secs = cell.lock().unwrap().started.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.001);
             let mut p = cell.lock().unwrap();
-            p.received = received;
-            p.speed = (received as f64 / secs) as u64;
+            p.received = base + got;
+            p.speed = (p.received as f64 / secs.max(0.001)) as u64;
             last_report = Instant::now();
+        }
+        // 慢速判定：开局 15 秒还拿不到 512 KB，就别在这儿耗着了（换源比死等强）
+        if judge_slow && got < 512 * 1024 && attempt_started.elapsed() > Duration::from_secs(15) {
+            return Err(DbMindError::new(
+                ErrorCode::Internal,
+                format!("下载速度过慢（15 秒仅 {}），已换下一个下载源", human_bytes(base + got)),
+            ));
         }
     }
     {
         let mut p = cell.lock().unwrap();
-        p.received = received;
+        p.received = base + got;
         p.speed = 0;
     }
-    if total > 0 && received + 1024 < total {
+    if total > 0 && base + got + 1024 < total {
         return Err(DbMindError::new(
             ErrorCode::Internal,
-            format!("安装包不完整（{}/{} 字节），请重试", received, total),
+            format!("安装包不完整（{}/{} 字节）", base + got, total),
         ));
     }
     Ok(())
@@ -502,8 +673,27 @@ pub async fn progress() -> Json<Value> {
         "speed": p.speed,
         "elapsed": elapsed,
         "error": p.error,
+        "note": p.note,
+        "url": p.url,
         "installer": p.installer,
         "version": p.version,
         "proxy": p.proxy,
     }))
+}
+
+/// POST /api/update/dismiss —— 清掉**已结束**（done / failed）的任务状态。
+///
+/// 为什么必须有它：状态只活在进程里，而前端只在 `running` 时才该弹进度窗。
+/// 失败后如果不清，用户再点更新图标只会反复弹回同一个报错页 —— 必须重启软件
+/// 才能恢复（真机踩过）。运行中的任务**不能**清，否则会把正在下载的进度抹掉。
+pub async fn dismiss() -> Json<Value> {
+    let mut p = progress_cell().lock().unwrap();
+    if p.status == "running" {
+        return Json(json!({ "success": false, "message": "下载仍在进行中" }));
+    }
+    *p = Progress {
+        status: "idle".into(),
+        ..Default::default()
+    };
+    Json(json!({ "success": true }))
 }

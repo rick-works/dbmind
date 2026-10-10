@@ -606,7 +606,7 @@
           </div>
         </div>
 
-        <!-- 4. 驱动下载 -->
+        <!-- 4. 驱动管理（顶栏也有直达入口） -->
         <div v-show="activeTab === 'driver'" class="settings-panel">
           <div class="panel-title">{{ $t('settings.driver.title') }}</div>
           <div class="panel-desc">{{ $t('settings.driver.desc') }}</div>

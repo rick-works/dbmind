@@ -19,6 +19,7 @@ export default {
   'settings.topMenu.desc': '勾选顶栏显示哪些功能入口，并用上下按钮调整顺序',
   'nav.sync': '数据传输',
   'nav.governance': '数据治理',
+  'nav.drivers': '驱动管理',
   'nav.monitor': '服务监控',
   'nav.knowledge': '知识库',
   'nav.ai': 'AI 助手',
@@ -39,6 +40,9 @@ export default {
   'update.dlProgress': '已下载 {done} / {total}，速度 {speed}/s',
   'update.dlDone': '下载完成，正在启动安装向导',
   'update.dlBackground': '后台继续下载',
+  'update.dlRetry': '重试',
+  'update.dlCopyLink': '复制下载链接',
+  'update.dlClose': '关闭',
   'update.moreNotes': '查看完整更新说明 →',
   'update.neverAgain': '此版本不再提示',
   'update.title': '检查更新',
@@ -1436,7 +1440,7 @@ export default {
   'settings.tab.editor': '编辑器',
   'settings.tab.format': '格式化',
   'settings.tab.query': '查询',
-  'settings.tab.driver': '驱动下载',
+  'settings.tab.driver': '驱动管理',
   'settings.tab.paths': '存储路径',
   'settings.tab.notify': '通知',
   'settings.tab.shortcut': '快捷键',
@@ -1625,8 +1629,8 @@ export default {
   'settings.query.nullAsParen': '(NULL)',
   'settings.query.nullAsBlank': '空白',
 
-  // ---------- 设置 · 驱动下载 ----------
-  'settings.driver.title': '驱动下载',
+  // ---------- 设置 · 驱动管理 ----------
+  'settings.driver.title': '驱动管理',
   'settings.driver.desc': '首次连接新类型时自动下载驱动',
   'settings.driver.mirror': '镜像源',
   'settings.driver.mirrorAliyun': '阿里云',

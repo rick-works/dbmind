@@ -209,6 +209,9 @@ export const applyUpdate = (dir) => http.post('/api/update/apply', { dir: dir ||
 export const pickUpdateDir = (title) => http.get('/api/update/pick-dir', { params: { title }, timeout: 600000 }).then(r => r.data)
 export const updateDirs = () => http.get('/api/update/dirs', { timeout: 10000 }).then(r => r.data)
 export const updateProgress = () => http.get('/api/update/progress', { timeout: 10000 }).then(r => r.data)
+// 清掉已结束（成功/失败）的更新任务状态：失败后必须还能重新检查，
+// 而不是每次点更新图标都弹回同一个报错页（要重启软件才行）
+export const dismissUpdate = () => http.post('/api/update/dismiss').then(r => r.data)
 export const putSetting = (key, value) =>
   http.put(`/api/dbmind/settings/${encodeURIComponent(key)}`, { value: String(value) }).then(r => r.data)
 // 一键作废**所有**连接的结构缓存（设置 → 查询 →「刷新结构缓存」）

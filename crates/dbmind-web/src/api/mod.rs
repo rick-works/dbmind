@@ -264,10 +264,14 @@ pub fn routes() -> Router<AppState> {
             get(sys::paths_get).put(sys::paths_put),
         )
         .route("/api/settings/open-dir", post(sys::open_dir))
-        // 在线更新：检查 Gitee 最新发行版 / 下载安装包并拉起安装器
+        // 在线更新：检查 GitHub 最新发行版 / 后台下载安装包并拉起安装器
+        //（注释原先写的是 Gitee，实现一直是 GitHub Releases —— 顺手纠正）
         .route("/api/update/check", get(update::check))
         .route("/api/update/apply", post(update::apply))
         .route("/api/update/progress", get(update::progress))
+        // 清掉已结束（成功/失败）的任务状态：否则失败后每点一次更新图标都只会
+        // 重新弹出同一个报错页，必须重启软件（真机踩过）
+        .route("/api/update/dismiss", post(update::dismiss))
     .route("/api/update/dirs", get(update::dirs))
     .route("/api/update/pick-dir", get(update::pick_dir))
         .route(
