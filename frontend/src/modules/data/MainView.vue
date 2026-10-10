@@ -6675,11 +6675,15 @@ const connTypeSummary = computed(() =>
 /* conn 节点行：与 tree-node 同构，确保 flex 填充 */
 .conn-row { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
 .conn-label { flex: 1; min-width: 0; }
-/* 拖拽：数据源行可抓取 */
-/* 原来这里是 grab / grabbing —— 也就是树上那个"抓取手型"光标。
-   拖拽换目录仍然可用，但不再用一只手去提示（按需求去掉）。 */
-.dc-tree :deep(.el-tree-node__content .conn-row) { cursor: default; }
-.dc-tree :deep(.el-tree-node__content:active .conn-row) { cursor: default; }
+/* 拖拽：数据源行可抓取（拖拽换目录仍然可用）—— 但**不用抓取手型**：
+   这里原来写的是 grab / grabbing，也就是那个"抓取手"，早先已按需求去掉。
+   现在统一成**普通手型**（pointer）：整棵树的节点都是"可点"的
+   （数据源=打开连接、库=打开/预览、分类=展开、表=预览），光标就该是同一个手。
+   原先只有数据源那一行写了 cursor: default，于是同屏里"数据源是箭头、其余是手"
+   （用户反馈"只有放到数据库上是箭头"）—— 现统一为手。 */
+.dc-tree :deep(.el-tree-node__content),
+.dc-tree :deep(.el-tree-node__content .conn-row),
+.dc-tree :deep(.el-tree-node__content:active .conn-row) { cursor: pointer; }
 /* 被拖起的节点半透明 */
 .dc-tree :deep(.el-tree-node.is-dragging > .el-tree-node__content) { opacity: .45; }
 /* 放置目标：目录节点高亮，提示"可放入此文件夹" */
