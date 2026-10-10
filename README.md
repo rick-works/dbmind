@@ -138,6 +138,34 @@ Artifacts land in `dist\`: `dbmind-<version>\` (portable dir), `*-portable.zip`,
 | `macos-15-intel` | `DBmind_<version>_x64.dmg` (+ `.app`) — `macos-13` is retired; Intel now needs the `-intel` label |
 | `ubuntu-22.04` | `dbmind_<version>_amd64.deb` (apt) and `*.AppImage` (**no-install**: `chmod +x` and run) |
 
+### macOS: the first launch is blocked once (expected — the build is fine)
+
+macOS always blocks an app that was *downloaded from the internet* and is **not notarised by Apple** —
+that is a macOS rule, not something the app can bypass. To open it: click OK, then go to
+**System Settings → Privacy & Security**, scroll to *Security*, click **Open Anyway**, confirm once.
+After that, double-clicking works normally. **No sudo, no terminal commands needed**
+(the DMG ships this note as `首次打开请看这里.txt` too).
+
+To never see that dialog at all: the switch is the *downloaded from the internet* flag
+(`com.apple.quarantine`), and it is set **by whatever program downloaded the file** — fetch it another way
+and Gatekeeper has nothing to check:
+
+```bash
+# (1) curl never sets that flag. Replace <version> with the latest from the releases page, e.g. 1.2.7
+curl -LO https://github.com/rick-works/dbmind/releases/download/v<version>/DBmind_<version>_aarch64.dmg
+open DBmind_<version>_aarch64.dmg     # mount, drag to Applications, double-click — no prompt
+#     (on Intel, swap aarch64 for x64)
+
+# (2) Homebrew cask: --no-quarantine strips that flag for you
+brew install --cask --no-quarantine rick-works/tap/dbmind
+```
+
+Two things worth knowing so you do not chase them twice: the **signature cannot be dropped** —
+on Apple silicon code needs at least an ad-hoc signature, and removing it does not remove a dialog,
+it makes the app refuse to launch (macOS then says it *is damaged*); and **even with signing plus
+notarisation the first launch still shows one dialog**, just the friendlier one with an **Open** button.
+Notarisation needs a paid Apple Developer account ($99/year — see the table below).
+
 Code signing is opt-in via repository secrets; the workflow detects them and signs only when present, so unsigned builds keep working:
 
 | Secret | Platform | Purpose |

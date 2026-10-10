@@ -148,6 +148,29 @@ release.ps1 -SkipBuild         # 复用已有编译产物
 | `macos-15-intel` | `DBmind_<版本>_x64.dmg`（+ `.app`）—— `macos-13` 已退役，Intel 现在必须用带 `-intel` 后缀的标签 |
 | `ubuntu-22.04` | `dbmind_<版本>_amd64.deb`（apt 安装）与 `*.AppImage`（**免安装**：`chmod +x` 后直接跑） |
 
+### macOS 首次打开会被系统拦一次（正常，不是坏了）
+
+macOS 对「从网上下载、且没有经过 Apple 公证」的 App 一定会拦一次 —— 这是系统规则，应用侧绕不过。
+装的时候：点「好」→「系统设置 → 隐私与安全性」→ 在「安全性」里点「**仍要打开**」→ 确认，
+之后双击就能正常打开。**不用 sudo、不用敲命令**（DMG 里也附了这份说明：`首次打开请看这里.txt`）。
+
+想**一次都不弹**：弹窗的开关其实是文件上那个「从网上下载」的标记（`com.apple.quarantine`），
+而它是**下载它的那个程序**打上去的 —— 换个方式拿到文件，系统就不会去检查：
+
+```bash
+# ① curl（curl 不打这个标记）。把 <版本> 换成发布页上的最新版本号，例如 1.2.7
+curl -LO https://github.com/rick-works/dbmind/releases/download/v<版本>/DBmind_<版本>_aarch64.dmg
+open DBmind_<版本>_aarch64.dmg     # 挂载 → 拖进「应用程序」→ 双击，全程不弹
+#    （Intel 机器把文件名里的 aarch64 换成 x64）
+
+# ② Homebrew cask：--no-quarantine 会替你摘掉那个标记
+brew install --cask --no-quarantine rick-works/tap/dbmind
+```
+
+另外两点容易白折腾，写在这里省得再试：**签名不能去掉**（Apple 芯片上最少要 ad-hoc 签名，
+去掉不是"少一个弹窗"而是"打不开"，系统会说"已损坏"）；**签名 + 公证都齐时，第一次打开也仍会弹一次**，
+只是换成带「打开」按钮的那种（点一下就进）—— 公证需要付费的 Apple 开发者账号（$99/年，见下表）。
+
 代码签名靠仓库 secrets 按需开启，**没配就出未签名包**（不影响构建）：
 
 | Secret | 平台 | 用途 |
