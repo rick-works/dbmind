@@ -303,6 +303,54 @@
   }
   .qr-label { color: #1e293b; font-weight: 700; font-size: 14px; }
   .sponsor-note { color: var(--dim); font-size: 13px; }
+  /* 赞助者名单（放在收款码下面）—— 同色系、弱一档：
+     不跟收款码抢注意力，但让人一眼看到"确实有具体的人在支持"。
+     数据在 website/sponsors.js，本页只负责把它渲染出来。 */
+  .thanks {
+    /* 宽度与上方收款码卡片（.sponsor-card: 620px）保持一致 —— 两块不一样宽看着像没对齐 */
+    margin-top: 26px; max-width: 620px; width: 100%; text-align: center;
+    background: var(--card); border: 1px solid var(--border); border-radius: 18px;
+    padding: 28px 30px 24px;
+  }
+  .thanks-head h3 { font-size: 18px; font-weight: 800; margin-bottom: 8px; }
+  .thanks-emoji { margin-right: 6px; }
+  .thanks-sub { color: var(--dim); font-size: 13px; line-height: 1.9; }
+  .thanks-count { color: var(--dim); font-size: 12.5px; margin-top: 14px; }
+  .thanks-count b { color: var(--text); font-weight: 700; padding: 0 2px; }
+  .thanks-group { margin-top: 18px; }
+  .thanks-group-title { font-size: 12.5px; font-weight: 700; color: var(--dim); letter-spacing: .06em; margin-bottom: 10px; }
+  /* 名单：自适应列数，窄屏自动折成一列 */
+  .thanks-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .sp {
+    display: flex; align-items: flex-start; gap: 10px; text-align: left;
+    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 12px;
+  }
+  /* 特别感谢：暖色描边 + 金色头像（一眼能区分，又不喧哗） */
+  .sp-star { border-color: rgba(251, 191, 36, .32); }
+  .sp-av {
+    width: 28px; height: 28px; border-radius: 50%; flex: 0 0 auto; overflow: hidden;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 12.5px; font-weight: 700; color: #06231f;
+    background: linear-gradient(135deg, #2dd4bf, #4f8cff);
+  }
+  .sp-star .sp-av { background: linear-gradient(135deg, #fcd34d, #f97316); }
+  .sp-av img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .sp-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .sp-name { font-size: 13.5px; font-weight: 600; color: var(--text); display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+  .sp-name a { color: inherit; text-decoration: none; border-bottom: 1px dashed rgba(148, 163, 184, .5); }
+  .sp-name a:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  .sp-date { font-size: 11px; color: var(--dim); font-weight: 400; }
+  .sp-msg {
+    font-size: 12.5px; color: var(--dim); line-height: 1.7;
+    overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  }
+  .thanks-empty { color: var(--dim); font-size: 13px; padding: 16px 0 4px; }
+  .thanks-howto {
+    color: var(--dim); font-size: 12.5px; line-height: 1.9;
+    margin-top: 18px; padding-top: 16px; border-top: 1px dashed var(--border);
+  }
+  @media (max-width: 640px) { .thanks { padding: 22px 18px 18px; } }
   /* 滚动条配色：全局细圆角主题化（目录面板、正文区一致） */
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -613,6 +661,19 @@
         </div>
       </div>
       <p class="sponsor-note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
+    </div>
+
+    <!-- 赞助者名单：数据在 website/sponsors.js（只改那个文件即可，本页不用动） -->
+    <div class="thanks reveal" id="thanks">
+      <div class="thanks-head">
+        <h3><span class="thanks-emoji">🙏</span>感谢这些朋友</h3>
+        <p class="thanks-sub">按最近一次支持排序。扫码时备注昵称就会出现在这里；不想具名，写「匿名」也一样记着。</p>
+      </div>
+      <!-- 名单由脚本填进来：没有数据时不摆一排假名字，只留一句实话 -->
+      <div id="thanksBody"></div>
+      <p class="thanks-howto">
+        想上榜？上面扫码时备注一句「DBmind」+ 你的昵称即可。也欢迎提 issue / PR —— 同样是支持。
+      </p>
     </div>
   </div>
 </section>
@@ -998,6 +1059,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
   </div>
 </footer>
 
+<script src="sponsors.js"></script>
 <script>
   // 滚动显现
   const io = new IntersectionObserver((es) => {
@@ -1085,6 +1147,108 @@ WHERE dt = :dt AND org = :org;</code></pre>
       else setActive(0)
     }
   }, { passive: true })
+
+  // ---------- 赞助者名单（数据在 sponsors.js） ----------
+  // 三条规矩：
+  //   1. 数据缺失 / 加载失败 → 当作空名单（页面照常，不报错、不摆假名字）；
+  //   2. 分组只两档（特别感谢 / 感谢支持），组内按 date 倒序 —— 组内顺序不手工维护；
+  //   3. 全部用 textContent 拼 DOM：昵称和留言是"外部输入"，绝不塞 innerHTML。
+  ;(() => {
+    const box = document.getElementById('thanksBody')
+    if (!box) return
+    const list = (Array.isArray(window.DBMIND_SPONSORS) ? window.DBMIND_SPONSORS : [])
+      .filter(s => s && typeof s === 'object' && (s.name || s.message))
+    if (!list.length) {
+      const p = document.createElement('p')
+      p.className = 'thanks-empty'
+      p.textContent = '还没有人上榜 —— 第一个名字会出现在这里'
+      box.appendChild(p)
+      return
+    }
+    const byDate = (a, b) => String(b.date || '').localeCompare(String(a.date || ''))
+    const stars = list.filter(s => s.tier === 'star').sort(byDate)
+    const rest = list.filter(s => s.tier !== 'star').sort(byDate)
+
+    const count = document.createElement('div')
+    count.className = 'thanks-count'
+    const n = document.createElement('b')
+    n.textContent = String(list.length)
+    count.append('已经收到 ', n, ' 位朋友的支持')
+    box.appendChild(count)
+
+    // 头像里的那个字：中文取一个字、英文取一个字母，都够认
+    const initial = (s) => {
+      // 打码昵称（*勇 / ＊明 / ···）在赞助名单里很常见：先把前导星号与分隔符去掉再取字，
+      // 否则头像圆里就顶着一个「*」，看着像图没加载出来
+      const t = String(s.name || '').trim().replace(/^[*＊·・\s.．_—-]+/, '')
+      return t ? Array.from(t)[0] : '☕'
+    }
+    const card = (s) => {
+      const el = document.createElement('div')
+      el.className = 'sp' + (s.tier === 'star' ? ' sp-star' : '')
+      const av = document.createElement('span')
+      av.className = 'sp-av'
+      if (s.avatar) {
+        const img = document.createElement('img')
+        img.src = s.avatar
+        img.alt = ''
+        img.loading = 'lazy'
+        // 头像挂了就退回首字，别留一个破图
+        img.onerror = () => { img.remove(); av.textContent = initial(s) }
+        av.appendChild(img)
+      } else {
+        av.textContent = initial(s)
+      }
+      const main = document.createElement('span')
+      main.className = 'sp-main'
+      const nm = document.createElement('span')
+      nm.className = 'sp-name'
+      const nameText = String(s.name || '匿名')
+      if (s.link) {
+        const a = document.createElement('a')
+        a.href = s.link
+        a.target = '_blank'
+        a.rel = 'noopener noreferrer'
+        a.textContent = nameText
+        nm.appendChild(a)
+      } else {
+        nm.textContent = nameText
+      }
+      if (s.date) {
+        const d = document.createElement('span')
+        d.className = 'sp-date'
+        d.textContent = s.date
+        nm.appendChild(d)
+      }
+      main.appendChild(nm)
+      if (s.message) {
+        const m = document.createElement('span')
+        m.className = 'sp-msg'
+        m.textContent = String(s.message)
+        m.title = String(s.message)   // 两行截断后，悬停看全文
+        main.appendChild(m)
+      }
+      el.append(av, main)
+      if (s.tier === 'star') el.title = '特别感谢'
+      return el
+    }
+    const group = (title, items) => {
+      if (!items.length) return
+      const wrap = document.createElement('div')
+      wrap.className = 'thanks-group'
+      const h = document.createElement('div')
+      h.className = 'thanks-group-title'
+      h.textContent = title
+      wrap.appendChild(h)
+      const grid = document.createElement('div')
+      grid.className = 'thanks-list'
+      items.forEach(s => grid.appendChild(card(s)))
+      wrap.appendChild(grid)
+      box.appendChild(wrap)
+    }
+    group('特别感谢', stars)
+    group('感谢支持', rest)
+  })()
 </script>
 </body>
 </html>
