@@ -323,15 +323,11 @@ fn main() {
     tauri::Builder::default()
         .setup(move |app| {
             // 窗口在这里建、而不是写在 tauri.conf.json 里：端口是**运行时**定的。
-            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(origin.parse()?))
+            let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(origin.parse()?))
                 .title("DBmind")
                 .inner_size(1440.0, 900.0)
                 .min_inner_size(1024.0, 640.0)
                 .center()
-                // 去掉系统标题栏（那条深色横条与应用的浅色界面不搭）。
-                // 代价是拖动与最小化/最大化/关闭**全都没有了**，所以前端有配套的
-                // DesktopTitleBar.vue（拖动区 + 三个按钮），权限见 capabilities/default.json。
-                .decorations(false)
                 // 页面加载结果打出来（重定向 stderr 就能拿到）：
                 // "窗口开着"不等于"页面加载成功" —— 白窗口同样是开着的，
                 // 而这类故障在现场只能靠猜。留一行日志，排查时有据可查。
@@ -339,8 +335,25 @@ fn main() {
                     if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
                         eprintln!("前端页面加载完成: {}", payload.url());
                     }
-                })
-                .build()?;
+                });
+
+            // 系统标题栏怎么处理，**必须按平台分**（踩过）：
+            //  · Windows / Linux：整条标题栏都不要（decorations(false)）。拖动与最小化/最大化/
+            //    关闭由页面自绘 —— 顶栏右侧那三个按钮（`.win-acts`），权限见 capabilities/default.json。
+            //  · macOS：**不能**用 decorations(false)。那样连系统红绿灯也一起没了，而前端偏偏
+            //    又因为 isMacShell 不去画自己的按钮（它的注释假设"macOS 保留系统红绿灯"），
+            //    两头一凑：窗口既没有标题栏、也关不掉最小化不了（用户反馈"上面的菜单没有"）。
+            //    改用 Overlay：红绿灯仍在、标题文字隐藏、内容铺到标题栏下面 ——
+            //    顶栏那 84px 左边距（`.topbar.is-mac`）正是留给红绿灯的。
+            //    ⚠️ Overlay 要求 decorations 保持 true（默认），所以这条分支**不能**再关装饰。
+            #[cfg(target_os = "macos")]
+            let builder = builder
+                .title_bar_style(tauri::TitleBarStyle::Overlay)
+                .hidden_title(true);
+            #[cfg(not(target_os = "macos"))]
+            let builder = builder.decorations(false);
+
+            let window = builder.build()?;
 
             // 判据：无边框后内外尺寸只差一圈**窗口边框**（十几个逻辑像素，随 DPI 取整）；
             // 若还带着系统标题栏，会**再多出约 32 个逻辑像素**（标题栏本身）。

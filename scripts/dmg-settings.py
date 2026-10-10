@@ -42,7 +42,8 @@ show_pathbar = False
 show_sidebar = False
 arrange_by = None
 label_pos = 'bottom'
-icon_size = 96
+# 128 = macOS 磁盘镜像里"两个大图标"的经典尺寸（用户口径：不要密密麻麻的小图标）
+icon_size = 128
 
 # 卷图标用桌面壳那份（就是 v1.2.1 起按 Apple 网格留白重做过的那张）
 _icon = 'crates/dbmind-desktop/icons/icon.icns'
