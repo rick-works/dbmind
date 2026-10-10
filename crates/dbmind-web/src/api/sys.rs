@@ -343,6 +343,44 @@ pub async fn open_dir(
     Ok(Json(json!({ "success": true, "path": target })))
 }
 
+/// 用**系统默认浏览器**打开链接（更新弹窗的「前往下载页」、设置页外链、AI 回答里的链接都走它）。
+///
+/// 为什么必须有它：桌面壳是 Tauri 的 WebView，`window.open(...)` 和 `<a target="_blank">`
+/// 在里面**什么都不做** —— 既不弹新窗也不交给系统浏览器，用户点了像没点（真机反馈：
+/// 「点完这个没反应」）。壳里唯一可靠的出路是让后端去喊系统：
+/// Windows `cmd /C start`、macOS `open`、Linux `xdg-open`。
+///
+/// 只放行 http/https：这是把**用户给的东西**交给系统去执行，别给 `file:` 或自定义协议留口子。
+pub async fn open_url(Json(body): Json<Value>) -> XResult<Json<Value>> {
+    let url = body
+        .get("url")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(XError::bad_request("只支持 http/https 链接"));
+    }
+    #[cfg(windows)]
+    {
+        let mut cmd = std::process::Command::new("cmd");
+        // 别闪黑窗：这条路径是用户点一下链接触发的，弹个控制台窗口很突兀
+        dbmind_core::hide_console(&mut cmd);
+        cmd.args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|e| XError::internal(format!("打开链接失败：{e}")))?;
+    }
+    #[cfg(not(windows))]
+    {
+        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        std::process::Command::new(opener)
+            .arg(&url)
+            .spawn()
+            .map_err(|e| XError::internal(format!("打开链接失败：{e}")))?;
+    }
+    Ok(Json(json!({ "success": true, "url": url })))
+}
+
 pub async fn mirror_get(State(state): State<AppState>) -> XResult<Json<Value>> {
     let engine = state.engine();
     let value = blocking(move || engine.get_setting(KEY_DRIVER_MIRROR)).await?;

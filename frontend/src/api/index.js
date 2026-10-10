@@ -193,6 +193,8 @@ export const uploadDriver = (code, files) => {
 export const getDriverMirror = () => http.get('/api/settings/driver-mirror').then(r => r.data)
 // 在系统文件管理器里打开目录（设置 → 存储路径 →「打开目录」）；不传路径时打开导出产物目录
 export const openLocalDir = (path) => http.post('/api/settings/open-dir', path ? { path } : {}).then(r => r.data)
+// 用系统默认浏览器打开链接：桌面壳（Tauri WebView）里 window.open / target=_blank 都不生效
+export const openExternalUrl = (url) => http.post('/api/settings/open-url', { url }).then(r => r.data)
 export const saveDriverMirror = (mirror) => http.put('/api/settings/driver-mirror', { mirror }).then(r => r.data)
 // 旧版 TLS 兼容开关（连接仅支持 TLS 1.0 的旧数据库，如 SQL Server 2008/2012；重启应用后生效）
 export const getLegacyTls = () => http.get('/api/settings/legacy-tls').then(r => r.data)

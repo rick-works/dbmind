@@ -264,6 +264,8 @@ pub fn routes() -> Router<AppState> {
             get(sys::paths_get).put(sys::paths_put),
         )
         .route("/api/settings/open-dir", post(sys::open_dir))
+        // 用系统浏览器打开外链（桌面壳里 window.open / target=_blank 都是无效的）
+        .route("/api/settings/open-url", post(sys::open_url))
         // 在线更新：检查 GitHub 最新发行版 / 后台下载安装包并拉起安装器
         //（注释原先写的是 Gitee，实现一直是 GitHub Releases —— 顺手纠正）
         .route("/api/update/check", get(update::check))

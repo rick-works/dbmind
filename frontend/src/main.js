@@ -81,6 +81,7 @@ import { getNotifySettings, hydrateUIFromBackend, reloadEditorSettings, reloadQu
 import { initTheme } from './utils/theme'
 import { t, initI18n, refreshLocaleFromStorage } from './utils/i18n'
 import { resetShortcutCache } from './utils/shortcuts'
+import { installExternalLinkHandler } from './utils/externalLinks'
 
 // 清理历史遗留的浏览器存储键。
 //
@@ -224,6 +225,8 @@ ElMessage.info = (msg, options) => {
 // 响应式，设置即刻跟上）；后端不可达时沿用本地缓存，绝不阻塞启动。
 initTheme()
 initI18n()
+// 外链一律交系统浏览器：壳里 window.open / target=_blank 打不开任何东西
+installExternalLinkHandler()
 app.mount('#app')
 hydrateUIFromBackend()
   .then(() => router.isReady())
