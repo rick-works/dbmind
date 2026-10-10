@@ -3170,9 +3170,13 @@ useShortcutScope(rootRef, {
     linear-gradient(var(--dc-primary), var(--dc-primary)),
     linear-gradient(var(--dc-primary), var(--dc-primary)),
     linear-gradient(var(--dc-primary), var(--dc-primary)),
+    /* 表头淡色叠**两层** ≈ 两倍浓度（浅色 10% → 约 19%，深色 15% → 约 28%）：
+       表头是 sticky 的、上沿压着一整列数据，太淡就看不出这列被选中了。
+       要更浓 / 更淡，增删这一层即可 —— 注意 background-position / background-size 的列表要同步增减。 */
+    linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft)),
     linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft));
-  background-position: top, bottom, left, right, center;
-  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%;
+  background-position: top, bottom, left, right, center, center;
+  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%, 100% 100%;
   background-repeat: no-repeat;
 }
 .data-table tbody tr.selected.row-sel-top td,
@@ -3193,9 +3197,13 @@ useShortcutScope(rootRef, {
     linear-gradient(var(--dc-primary), var(--dc-primary)),
     linear-gradient(var(--dc-primary), var(--dc-primary)),
     linear-gradient(var(--dc-primary), var(--dc-primary)),
+    /* 表头淡色叠**两层** ≈ 两倍浓度（浅色 10% → 约 19%，深色 15% → 约 28%）：
+       表头是 sticky 的、上沿压着一整列数据，太淡就看不出这列被选中了。
+       要更浓 / 更淡，增删这一层即可 —— 注意 background-position / background-size 的列表要同步增减。 */
+    linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft)),
     linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft));
-  background-position: top, bottom, left, right, center;
-  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%;
+  background-position: top, bottom, left, right, center, center;
+  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%, 100% 100%;
   background-repeat: no-repeat;
 }
 /* 选中整列：四边都收口成完整矩形（与框选同一套框线语言，用户最新口径） */
