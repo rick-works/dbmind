@@ -623,14 +623,37 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
-      <!-- v1.0.4（最新） -->
+      <!-- v1.1.0（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.1.0</span>
+            <span class="rel-tag tag-minor">小版本</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-10</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>不开代理也能更新了</b>：直连 GitHub 下载安装包在国内经常完全不通（实测 21 秒超时、0 字节，而取版本信息却只要 1.1 秒）—— 现在直连不通就自动改用国内镜像，并在下载完成后<b>用 GitHub 官方公布的校验值核对完整性</b>，对不上直接丢弃重下。镜像替换不了这个校验值，所以既不逼你开代理，也不用担心安装包被中途换掉</li>
+            <li><b>断了能接着下</b>：断网、切 WiFi 之后从已下载的部分续传，进度窗里写明「第 2 次重试（已下载 12.3 MB，接着下）」以及当前从哪个源下载；失败窗新增「重试」，<b>不用再关掉软件重开</b>（以前一次失败后，每次点更新图标都弹回同一个报错页）</li>
+            <li><b>进度提示不再误导</b>：只有真的在后台下载时才显示「查看下载进度」（以前一打开软件就显示，点进去却是空进度）</li>
+            <li><b>驱动管理</b>：设置里的「驱动下载」改名「驱动管理」，<b>顶栏也加了同名入口</b>一键直达 —— 驱动装没装、缺哪些、换镜像源、手动上传都在一页</li>
+            <li><b>生产保护默认开启</b>：标注为生产的库，改动数据的操作（执行脚本 / 改结构 / 编辑数据 / 导入同步还原）默认一律拦下，查询不受影响；开发、测试与未标注的库照常。需要临时改生产数据时，在「设置 → 安全与会话」里关掉即可</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.1.0" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.1.0" target="_blank" rel="noopener">下载 v1.1.0</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.0.4 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
           <div class="rel-head">
             <span class="rel-ver">v1.0.4</span>
             <span class="rel-tag tag-patch">修订</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-09</span>
           </div>
           <ul class="rel-notes">
