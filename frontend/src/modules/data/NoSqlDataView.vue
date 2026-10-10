@@ -739,6 +739,9 @@ const applyTableHover = (e) => {
     cell.style.cursor = 'col-resize'
     lastHover = cell
   } else {
+    // ⚠️ 同另两个网格：从列中线挪到**同一格**中间时，cell 与 lastHover 相同，
+    // 上面那句"换了格子才清"不触发，这一格会一直挂着 ↔（用户反馈：看着没规律）。
+    if (cell && cell.style.cursor) cell.style.cursor = ''
     lastHover = null
   }
   wrap.style.cursor = vi >= 0 ? 'col-resize' : ''

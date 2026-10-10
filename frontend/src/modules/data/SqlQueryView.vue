@@ -1254,6 +1254,11 @@ const applyResultTableHover = (e) => {
     cell.style.cursor = 'col-resize'
     resultLastHover = cell
   } else {
+    // ⚠️ 这里必须把**当前格**的内联 cursor 也清掉：指针从列中线挪到**同一格**的中间时，
+    // cell 与 resultLastHover 是同一个，上面那句"换了格子才清"不会触发 ——
+    // 于是这一格会一直挂着 ↔，表现就是"有时候放到表头中间也是 ↔"、且看着没规律
+    //（必须先经过这一列的中线才会复发，用户反馈）。
+    if (cell && cell.style.cursor) cell.style.cursor = ''
     resultLastHover = null
   }
   wrap.style.cursor = ci >= 0 ? 'col-resize' : ''

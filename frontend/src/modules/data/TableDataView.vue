@@ -2457,6 +2457,9 @@ const applyGridHover = (e) => {
     cell.style.cursor = 'col-resize'
     lastHoverCell = cell
   } else {
+    // ⚠️ 同结果表格：从列中线挪到**同一格**中间时，cell 与 lastHoverCell 相同，
+    // 上面那句"换了格子才清"不触发，这一格会一直挂着 ↔（用户反馈：看着没规律）。
+    if (cell && cell.style.cursor) cell.style.cursor = ''
     lastHoverCell = null
   }
   wrap.style.cursor = col ? 'col-resize' : ''
