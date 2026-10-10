@@ -4991,11 +4991,16 @@ onBeforeUnmount(() => {
 }
 /* 行高来自设置（编辑器页签的「结果表格行高」，变量挂在 .data-table-wrap 上）；
    必须与 JS 里的 VT_ROW_H 同源，否则虚拟滚动占位行高度不符 */
-.data-table td { padding: 0 10px; height: var(--grid-row-h, 26px); line-height: var(--grid-row-h, 26px); border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 数据格 = 手型：单元格可单击选中、双击快捷编辑、按住拖框选，手型是诚实的暗示；
+   表头同为手型，于是鼠标在整张表上不再来回变（三个网格统一口径）。
+   例外：列宽把手（贴列缘 ±5px）仍是 col-resize —— 那是有意的（Excel/DataGrip 同款）。 */
+.data-table td { padding: 0 10px; height: var(--grid-row-h, 26px); line-height: var(--grid-row-h, 26px); border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 /* 表头字段类型图标：裸图标（无底色/无固定盒子，与表预览/NoSQL 统一）；
    vertical-align: middle 让图标与字段名垂直居中在同一条线上。
-   颜色由全局 th-t-* 按类型族给，这里不写 color（scoped 优先级会压掉全局配色） */
-.data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; vertical-align: middle; margin-right: 5px; cursor: default; }
+   颜色由全局 th-t-* 按类型族给，这里不写 color（scoped 优先级会压掉全局配色）。
+   也不写 cursor：图标是**表头单元格的一部分**，点它同样会选中整列/切排序，
+   所以让它继承表头的手型 —— 写 default 会让表头里又冒出一种箭头（用户反馈过"表头符号不统一"）。 */
+.data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; vertical-align: middle; margin-right: 5px; }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 表头排序按钮：固定在列头右缘垂直居中（右侧 26px 已预留，与表预览/NoSQL 同款） */
 .data-table th .th-sort {
@@ -5115,8 +5120,13 @@ onBeforeUnmount(() => {
    注意：列宽热区那条不受影响 —— 它在 JS 里写的是**内联** cursor（内联优先级高于这里），
    离开热区时置空 → 自然落回这里的手型；贴边 ±5px 那一档是有意的（Excel/DataGrip 同款）。 */
 .data-table th[data-gkey] { cursor: pointer; }
-/* 数据格：与表数据 / NoSQL 对齐（它们的 tbody tr 一直是手型）—— 单元格可点选、双击可快捷编辑。
-   窗口占位行（vt-gap）只是撑高的空行，排除掉，别让它也变手。 */
+/* 数据格一律手型（三处网格口径一致）—— 单元格可单击选中、双击快捷编辑、按住拖框选。
+   本视图的 td 规则里没写 cursor，靠这条从 tr 继承（另两个网格是直接写在 .data-table td 上）。
+   ⚠️ 原来这里写的是"表数据/NoSQL 的 tbody tr 一直是手型"——不准确：它们虽然也有
+   `tbody tr { cursor: pointer }`，但被同一份样式里的 `.data-table td { cursor: default }`
+   盖掉了（td 铺满整行），所以那两个网格的数据格一直是箭头，与表头的手型不一致（用户反馈）。
+   现已把三处的数据格统一为手型。
+   窗口占位行（vt-gap）只是撑高的空行，排除掉，别让它也变手（col-gap 占位格在可视区外）。 */
 .data-table tbody tr:not(.vt-gap) { cursor: pointer; }
 .data-table th.row-sel-th :deep(.el-checkbox), .data-table td.row-sel-td :deep(.el-checkbox) { margin-right: 0; }
 .lead-check { height: 18px; display: inline-flex; }

@@ -3132,7 +3132,9 @@ useShortcutScope(rootRef, {
    颜色由全局 index.css 的 th-t-* 按类型族给（这里不能再写 color，scoped 优先级会压掉它） */
 .data-table th .th-type-ic {
   display: inline-flex; align-items: center; flex: 0 0 auto;
-  margin-right: 5px; cursor: default;
+  /* 不写 cursor：图标属于表头单元格，点它一样选列/排序 → 继承表头手型；
+     写 default 会让表头里又出现一种箭头（用户反馈"表头符号不统一"） */
+  margin-right: 5px;
 }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 主键 🔑：字段名后面的小号裸图标（琥珀色） */
@@ -3144,7 +3146,10 @@ useShortcutScope(rootRef, {
   padding: 0 10px; height: var(--grid-row-h, 26px); line-height: var(--grid-row-h, 26px);
   border: 1px solid var(--dc-border); color: var(--dc-text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-  cursor: default;
+  /* 数据格 = 手型：单元格可单击选中、双击快捷编辑、按住拖框选，手型是诚实的暗示；
+     且表头同为手型，鼠标在整张表上不再来回变（三个网格统一口径）。
+     例外：列宽把手（贴列缘 ±5px）仍是 col-resize —— 那是有意的（Excel/DataGrip 同款）。 */
+  cursor: pointer;
 }
 
 /* 列宽拖拽把手：加宽到 10px 并右移，覆盖表头右缘外侧，抓取更可靠。
