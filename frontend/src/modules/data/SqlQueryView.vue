@@ -5093,6 +5093,13 @@ onBeforeUnmount(() => {
   padding: 0; text-align: center; vertical-align: middle; line-height: 1;
 }
 .data-table th.row-sel-th { background-color: var(--dc-bg-table-head); cursor: pointer; }
+/* 列头整格可点（单击选中整列、右缘排序图标切排序）→ 手型。
+   表数据 / NoSQL 的列头有 .sortable 给 cursor: pointer，结果表格这边漏了 ——
+   于是同屏里"排序图标是手、距列边界 ±5px 的列宽热区是横竖箭头、中间是默认箭头"，
+   看着像三套规矩（用户反馈）。
+   注意：列宽热区那条不受影响 —— 它在 JS 里写的是**内联** cursor（内联优先级高于这里），
+   离开热区时置空 → 自然落回这里的手型；贴边 ±5px 那一档是有意的（Excel/DataGrip 同款）。 */
+.data-table th[data-gkey] { cursor: pointer; }
 .data-table th.row-sel-th :deep(.el-checkbox), .data-table td.row-sel-td :deep(.el-checkbox) { margin-right: 0; }
 .lead-check { height: 18px; display: inline-flex; }
 /* 行号列（Excel 行头）：显示序号，点/拖选行；选中行时行号一起高亮
