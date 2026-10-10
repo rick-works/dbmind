@@ -1,43 +1,43 @@
-{
-  "$schema": "https://schema.tauri.app/config/2",
-  "productName": "DBmind",
-  "version": "1.1.0",
-  "identifier": "com.dbmind.desktop",
-  "build": {
-    "frontendDist": "../../frontend/dist"
-  },
-  "app": {
-    "windows": [],
-    "security": {
-      "csp": null
-    }
-  },
-  "bundle": {
-    "active": true,
-    "targets": [
-      "msi",
-      "nsis"
-    ],
-    "icon": [
-      "icons/icon.ico",
-      "icons/icon.png"
-    ],
-    "fileAssociations": [
-      {
-        "ext": ["db"],
-        "name": "DBmind Database",
-        "description": "DBmind database file",
-        "role": "Editor",
-        "mimeType": "application/x-dbmind-database"
-      }
-    ],
-    "resources": {
-      "../../dist/jre": "jre", "../../frontend/dist": "web",
-      "../../agents/dbmind-agent-jdbc/target/dbmind-agent-jdbc.jar": "agents/dbmind-agent-jdbc.jar",
-      "../../agents/dbmind-agent-mongodb/target/dbmind-agent-mongodb.jar": "agents/dbmind-agent-mongodb.jar",
-      "../../agents/dbmind-agent-redis/target/dbmind-agent-redis.jar": "agents/dbmind-agent-redis.jar",
-      "../../agents/dbmind-agent-elasticsearch/target/dbmind-agent-elasticsearch.jar": "agents/dbmind-agent-elasticsearch.jar",
-      "../../resources/native-auth/": "native-auth/"
-    }
-  }
-}
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DBmind",
+  "version": "1.1.0",
+  "identifier": "com.dbmind.desktop",
+  "build": {
+    "frontendDist": "../../frontend/dist"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "msi",
+      "nsis"
+    ],
+    "icon": [
+      "icons/icon.ico",
+      "icons/icon.png"
+    ],
+    "fileAssociations": [
+      {
+        "ext": ["db"],
+        "name": "DBmind Database",
+        "description": "DBmind database file",
+        "role": "Editor",
+        "mimeType": "application/x-dbmind-database"
+      }
+    ],
+    "resources": {
+      "../../dist/jre": "jre", "../../frontend/dist": "web",
+      "../../agents/dbmind-agent-jdbc/target/dbmind-agent-jdbc.jar": "agents/dbmind-agent-jdbc.jar",
+      "../../agents/dbmind-agent-mongodb/target/dbmind-agent-mongodb.jar": "agents/dbmind-agent-mongodb.jar",
+      "../../agents/dbmind-agent-redis/target/dbmind-agent-redis.jar": "agents/dbmind-agent-redis.jar",
+      "../../agents/dbmind-agent-elasticsearch/target/dbmind-agent-elasticsearch.jar": "agents/dbmind-agent-elasticsearch.jar",
+      "../../resources/native-auth/": "native-auth/"
+    }
+  }
+}
