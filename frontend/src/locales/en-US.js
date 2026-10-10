@@ -1808,6 +1808,7 @@ export default {
   'settings.about.rel1.note6': 'Production protection is on by default: for databases marked Production (red badge, or in the PROD group) every data-changing operation — running scripts, editing structure or data, import/sync/restore — is refused by default, while queries are unaffected. Dev/test/unmarked databases behave as before. Turn it off under Settings → Safety & sessions when you really need to change production data',
   'settings.about.rel1.note7': 'If you had turned production protection off yourself, this upgrade turns it on once (old builds cannot tell "you turned it off" from "it was the default"). Switch it off again and it stays off',
   'settings.about.rel1.note8': 'Also fixed: the Safety & sessions page could not read the saved switch values (it showed defaults, and saving them overwrote your settings)',
+  'settings.about.rel1.note9': 'Downloads now pick a source for you: the app times the candidates and uses the fastest one — no source list, no "switch source" button. The dialog keeps just the progress bar and downloaded/speed/time-left, and a leftover partial file that fails verification is discarded and re-downloaded instead of leaving every mirror answering 416',
   'settings.about.rel2.version': 'v1.0.4',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-10-09',
