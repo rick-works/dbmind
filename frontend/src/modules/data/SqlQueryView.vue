@@ -332,7 +332,10 @@
                     @contextmenu.prevent.stop="onResultRowContextMenu($event, vtStart + idx)">
                   <span class="row-num-tx">{{ vtStart + idx + 1 }}</span>
                 </td>
-                <td v-for="c in resultVisibleCols" :key="'d' + (vtStart + idx) + '_' + c.idx"
+                <!-- 左侧被回收的列：只撑宽度（colspan），且**不给 data-gkey** —— 它不参与框选，
+                     否则鼠标停在这里会被当成"某一格"（选框会以它为锚点）。 -->
+                <td v-if="resultColLead > 0" class="col-gap" :colspan="resultColLead"></td>
+                <td v-for="c in resultColsSlice" :key="'d' + (vtStart + idx) + '_' + c.idx"
                     :class="[cellAlignClass(row[c.name], resultTypeOf(c.idx)), { 'null-cell': row[c.name] == null, 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name), 'active-cell': resultActiveCell && resultActiveCell.rowIdx === (vtStart + idx) && resultActiveCell.col === c.name && noResultBulkSelection }]"
                     :title="row[c.name] == null ? nullDisplay() : String(row[c.name])" :data-gkey="(vtStart + idx + 1) + ':' + c.idx"
                     @click="onResultCellClick(vtStart + idx, c.name)"
@@ -344,6 +347,9 @@
                   <!-- ⚠️ 同 TableDataView：不要在这里加 v-memo（与分支切换冲突会让补丁抛 insertBefore 而失效） -->
 <span>{{ row[c.name] == null ? nullDisplay() : formatDbValue(row[c.name]) }}</span>
                 </td>
+                <!-- 右侧被回收的列：同上，占位撑宽 -->
+                <td v-if="resultColEnd < resultVisibleCols.length" class="col-gap"
+                    :colspan="resultVisibleCols.length - resultColEnd"></td>
               </tr>
               <tr v-if="vtGapBottom > 0" class="vt-gap">
                 <td :colspan="resultVisibleCols.length + 1" :style="{ height: vtGapBottom + 'px' }"></td>
@@ -1019,8 +1025,16 @@ watch(() => (result.value?.columns || []).join('\u0001'), async () => {
 })
 // 字段显示/隐藏变化后重新按可见列测量宽度
 watch(() => resultVisibleCols.value.map(c => c.idx).join(','), () => {
-  nextTick(() => { if ((result.value?.rows || []).length) measureResultColumns() })
+  nextTick(() => {
+    if ((result.value?.rows || []).length) measureResultColumns()
+    // 列集合变了（显隐 / 换位）→ 各列宽随之变，横向窗口必须跟着重算，否则会停在旧切片上
+    syncResultColWindow()
+  })
 })
+// 列宽变了 → 窗口边界跟着挪（测量完成、拖宽松手、双击自适应、重置列宽都会替换整个对象）
+// flush: 'post' —— 等 DOM 更新完再读 scrollLeft，浏览器在布局后可能已把它夹到新范围内；
+// 拖宽期间本对象是逐帧整体替换的，这里就逐帧算一次 —— 窗口没变会立刻 return，几乎零开销。
+watch(resultColWidths, () => syncResultColWindow(), { flush: 'post' })
 
 // ========== 结果表格虚拟滚动：仅渲染可视区行，大幅减少 DOM 与内存 ==========
 // 行高由设置页「结果表格行高」驱动。**必须**与 CSS（.data-table td 的 height/line-height）
@@ -1042,6 +1056,47 @@ let vtLastScroll = 0
 // 拖滚动条 / PageDown 一帧就能跳几百上千像素，可视区整段落在已渲染窗口之外 → 一条空白
 //（浅色主题下就是"白色闪一下"）。改成**同步**算：Vue 的更新走微任务，会在同一帧绘制之前刷完，
 // 行先补好再画。（窗口没变时写 ref 是空操作 —— Vue 的 ref 会先比较值，所以慢速滚动几乎零开销。）
+// ========== 结果表格列窗口化：只渲染可视区那几列（表头与 colgroup 仍全量） ==========
+// 为什么横着也要窗口化：开销在**单元格总数** —— 行窗口只解决了纵向。100 列 × 40 行仍是四千格，
+// 每格都带内容、对齐类与选中/悬浮判定，横向拖滚动条时就是几千次 patch（表数据那边同一个结论）。
+// 为什么**表头与 `<colgroup>` 不窗口化**：
+//   ① 一行而已，开销可忽略；
+//   ② 列宽拖拽热区是按**表头 cellIndex** 定位的（见 resultEdgeColIdx），表头若只渲染切片，列号换算全错；
+//   ③ colgroup 全量出 <col>，总宽才不会被压回去（table-layout: fixed 下少写一列宽就错一分）。
+// 数据行里用左右两个占位格（col-gap + colspan）撑住被回收列的宽度，否则后面的列会左移串位。
+// ⚠️ `data-gkey` 必须继续用**原始列下标 c.idx**（隐藏列会跳号，框选定位与取值都按这套坐标走），
+//    所以这里切片切的是 resultVisibleCols 数组本身、而 gkey 仍取 c.idx —— 与表数据的 colLead+ci 不同。
+const COL_CHUNK = 4        // 换窗粒度（列）：同块内不重建 DOM，避免横向每滚一像素就 patch 一次
+const COL_BUFFER_PX = 600  // 窗口左右各多留的缓冲（像素）：拖一次滚动条的跳跃也就几百像素
+const resultColLead = ref(0)
+const resultColEnd = ref(0)
+const resultColsSlice = computed(() => resultVisibleCols.value.slice(resultColLead.value, resultColEnd.value))
+const resultColWidthOf = (c) => resultColWidths.value[c.idx] || resultDefaultColWidth(c.name)
+const syncResultColWindow = () => {
+  const host = resultTableWrapRef.value
+  const total = resultVisibleCols.value.length
+  if (!host || !total) { resultColLead.value = 0; resultColEnd.value = total; return }
+  const vw = host.clientWidth || 0
+  // 页签在 display:none 期间容器尺寸是 0：这时若照 0 算，窗口会被压成空窗口（切回来像"列全没了"）。
+  // 干脆不动，靠 ResizeObserver 与 dc-tab-change 的重算兜回来。
+  if (!vw) return
+  const cols = resultVisibleCols.value
+  const left = host.scrollLeft - COL_BUFFER_PX
+  const right = host.scrollLeft + vw + COL_BUFFER_PX
+  let start = 0
+  let x = 0
+  while (start < total && x + resultColWidthOf(cols[start]) <= left) { x += resultColWidthOf(cols[start]); start++ }
+  let acc = x
+  let end = start
+  while (end < total && acc < right) { acc += resultColWidthOf(cols[end]); end++ }
+  end = Math.min(total, end + 1)  // 多留一列：右侧还有余量时不会立刻露白
+  // 块化吸附：同块内不换窗，横向滚动不会每像素重建 DOM；窗口没变则直接 return（不写 ref＝整表不重建）
+  const s0 = Math.max(0, Math.floor(start / COL_CHUNK) * COL_CHUNK)
+  const e0 = Math.min(total, Math.ceil(end / COL_CHUNK) * COL_CHUNK)
+  if (s0 === resultColLead.value && e0 === resultColEnd.value) return
+  resultColLead.value = s0
+  resultColEnd.value = e0
+}
 const onResultTableScroll = () => {
   const wrap = resultTableWrapRef.value
   const total = (result.value?.rows || []).length
@@ -1060,7 +1115,10 @@ const onResultTableScroll = () => {
   vtEnd.value = last
   vtGapTop.value = first * VT_ROW_H.value
   vtGapBottom.value = (total - last) * VT_ROW_H.value
-  // 发生过滚动：下一次 mousemove 即便指针没动也要重判一次热区（鼠标底下那行已被回收）
+  // 横向的同款：一个 scroll 事件里顺带把"该显示哪几列"也同步算掉（同样不能放到下一帧 ——
+  // 放到下一帧就会出现"该补的列还没补上"的空窗，理由见上面那段 rAF 注释）
+  syncResultColWindow()
+  // 发生过滚动：下一次 mousemove 即便指针没动也要重判一次热区（鼠标底下那行/那列已被回收）
   resultScrolledSinceMove = true
 }
 // 行高改了：已渲染的上下占位行是按旧行高算的，按当前滚动位置重算一次（否则会跳一下）
@@ -1670,14 +1728,30 @@ const tabMoveResult = (dir) => {
   applyResActive(r, c, false)
 }
 const pageRowStepResult = () => Math.max(1, Math.floor((resultTableWrapRef.value?.clientHeight || 400) / 32) - 1)
-const ensureResultActiveVisible = () => {
+// 让活动单元格可见。列窗口化后目标列**可能还没渲染**（被回收成占位格了）——
+// 那时 querySelector 必然落空，原来的写法会"按下方向键，活动格跑到屏幕外"。
+// 因此补一条：先按列宽累加算出它该在的水平位置，把 scrollLeft 挪过去，下一帧窗口补上这列后再重试一次。
+// retry 只给一次：万一滚不动（已在两端），也不会无限递归。
+const ensureResultActiveVisible = (retry = true) => {
   nextTick(() => {
     const a = resultActiveCell.value
-    if (!a || !resultTableWrapRef.value) return
+    const host = resultTableWrapRef.value
+    if (!a || !host) return
     const ci = resGkeyColOf(a.col)
     if (ci < 0) return
-    const el = resultTableWrapRef.value.querySelector(`[data-gkey="${(a.rowIdx + 1)}:${ci}"]`)
-    if (el) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const el = host.querySelector(`[data-gkey="${(a.rowIdx + 1)}:${ci}"]`)
+    if (el) { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); return }
+    if (!retry) return
+    const visIdx = resVisibleIdxOf(a.col)
+    if (visIdx < 0) return
+    const cols = resultVisibleCols.value
+    let x = RESULT_LEAD_COL_WIDTH
+    for (let i = 0; i < visIdx; i++) x += resultColWidthOf(cols[i])
+    const colW = resultColWidthOf(cols[visIdx])
+    if (x < host.scrollLeft) host.scrollLeft = Math.max(0, x)
+    else if (x + colW > host.scrollLeft + host.clientWidth) host.scrollLeft = x + colW - host.clientWidth
+    syncResultColWindow()
+    nextTick(() => ensureResultActiveVisible(false))
   })
 }
 const onResultKeyDown = (e) => {
@@ -4891,6 +4965,9 @@ onBeforeUnmount(() => {
 /* 已排序列：文字主色 + 底部 2px 主色条（与表预览/NoSQL 同款） */
 .data-table th.sort-asc, .data-table th.sort-desc { color: var(--dc-primary); box-shadow: inset 0 -2px 0 var(--dc-primary); }
 .data-table tbody tr.vt-gap td { padding: 0; height: auto; line-height: 0; border: none; background: transparent !important; font-size: 0; }
+/* 列窗口化的左右占位格：只负责撑住被回收列的宽度（colspan），保证表格总宽与各列位置不变。
+   不能有边框 / 内边距 / 背景 —— 否则会沿占位格露出多余的线；它也不带 data-gkey，不参与框选。 */
+.data-table tbody td.col-gap { padding: 0; border: none; background: transparent; }
 /* 斑马纹：一律用 background-color —— background 简写会把行/列选中的外沿渐变线（background-image）清掉 */
 .data-table tbody tr:nth-child(even) td { background-color: var(--dc-bg-soft); }
 /* ===== 行 / 列选中：与单元格框选同一套观感（整块淡色填充 + 沿整块外沿画 2px 主色边线）
