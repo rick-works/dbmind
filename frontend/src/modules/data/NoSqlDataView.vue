@@ -324,11 +324,22 @@ const padBottom = computed(() => {
   if (!virtualEnabled.value) return 0
   return Math.max(0, displayRows.value.length - Math.min(vpEnd.value, displayRows.value.length)) * VP_ROW_H.value
 })
+// 每次**现算**"谁在真正滚动"，不缓存（原因见 TableDataView 同处的注释：
+// 页签隐藏时容器尺寸为 0，判定失败会把外层容器缓存下来，之后窗口/点击全错位）。
 const scrollHost = () => {
   const w = tableWrapRef.value
   if (w && w.scrollHeight > w.clientHeight) return w
   return gridRef.value || w
 }
+const forgetScrollHost = () => {}
+// 切页签后重新解析"谁在滚动"并重算可视窗口。
+// 为什么必须做：页签在 display:none 期间容器尺寸是 0 —— 那时解析出的滚动容器与可视窗口
+// 都是按 0 尺寸算的（甚至可能缓存成外层容器），切回来若不重来一遍，就可能一直读错容器的
+// scrollTop，窗口永不更新，表现就是「表格像卡死了」。MainView 在切换后立即广播一次、
+// 80ms 后再补一次（应付布局尚未稳定），这里跟着重解析一次即可。
+const onTabChangeResync = () => { forgetScrollHost(); syncViewport() }
+onMounted(() => window.addEventListener('dc-tab-change', onTabChangeResync))
+onBeforeUnmount(() => window.removeEventListener('dc-tab-change', onTabChangeResync))
 const syncViewport = () => {
   const all = displayRows.value
   const n = all.length
@@ -353,7 +364,8 @@ watch(VP_ROW_H, () => { nextTick(syncViewport) })
 // ⚠️ 别改回 requestAnimationFrame 节流：rAF 回调要等下一帧，浏览器会先按新 scrollTop 把旧内容
 // 滚过去画出来，下一帧才补上该出现的行 —— 快速滚动时可视区整段落空，看到的就是一条空白。
 // 同步算走微任务，能在同一帧绘制前把行补好。详见 utils/rowWindow.js 的注释。
-const onTableScroll = () => { syncViewport() }
+// 滚动过就打个标记：下一次 mousemove 即便指针没动也要重判热区
+const onTableScroll = () => { nsqlScrolledSinceMove = true; syncViewport() }
 
 // ===== 排序（当前页内；NoSQL 文档接口不支持 ORDER BY）=====
 const orderColumn = ref('')
@@ -476,6 +488,7 @@ const load = async (p) => {
     vpStart.value = 0
     vpEnd.value = Math.min(virtualEnabled.value ? 1000 : (rows.value.length || 0), rows.value.length || 0)
     nextTick(() => {
+      forgetScrollHost()   // 新数据到达、容器可能刚挂上：重新解析"谁在滚动"，别用上一批的缓存
       const host = scrollHost()
       if (host) host.scrollTop = 0
       syncViewport()
@@ -589,7 +602,25 @@ const edgeColIdx = (e) => {
   return vi
 }
 
+// mousemove 每帧最多处理一次，且"指针没动、期间也没滚动"时直接丢弃（滚动后浏览器会补发
+// mousemove，而命中判定要读 getBoundingClientRect = 强制布局，虚拟滚动刚改完 DOM 时最贵）
+let nsqlMoveRaf = 0
+let nsqlMoveEvent = null
+let nsqlMoveXY = ''
+let nsqlScrolledSinceMove = false
 const onTableMove = (e) => {
+  const xy = e.clientX + ':' + e.clientY
+  if (xy === nsqlMoveXY && !nsqlScrolledSinceMove) return
+  nsqlMoveXY = xy
+  nsqlMoveEvent = e
+  if (nsqlMoveRaf) return
+  nsqlMoveRaf = requestAnimationFrame(() => {
+    nsqlMoveRaf = 0
+    nsqlScrolledSinceMove = false
+    if (nsqlMoveEvent) applyTableHover(nsqlMoveEvent)
+  })
+}
+const applyTableHover = (e) => {
   const wrap = tableWrapRef.value
   if (!wrap) return
   if (drag) { wrap.style.cursor = 'col-resize'; return }

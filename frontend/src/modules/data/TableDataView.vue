@@ -189,7 +189,7 @@
                     @contextmenu.prevent.stop="onCellContextMenu($event, row, col)"
                     @click="onCellClick(row, col, $event)">
                   <template v-if="editingCell && editingCell.row === row && editingCell.col === col">
-                    <input ref="cellInputRef" v-model="editingCell.value"
+                    <input v-model="editingCell.value"
                            class="cell-input"
                            @keydown.enter="onCellEnter"
                            @keydown.tab.prevent="onCellTab"
@@ -200,7 +200,10 @@
                     <!-- v-memo：内容没变就跳过该格的 vnode 创建与 diff。
                          光标移动 / 选中变化时，上千个未变单元格的文本子树不再重建（Vue 仍会 patch 外层 td 的选中类，那一步很轻）。
                          memo key 用原始值 row[col]：值变了 key 必变 → 一定重渲染，绝不会显示旧值。 -->
-                    <span v-memo="[row[col], querySettingsLive.nullStyle]">{{ formatCell(row[col]) }}</span>
+                    <!-- ⚠️ 这里**不要**加 v-memo：它与上面 v-if/v-else 的分支切换（编辑框 ↔ 文本）撞在一起时，
+     Vue 的补丁会找不到锚点并抛 "insertBefore of undefined"，整条更新队列随之失效（界面像卡死）。
+     多渲染一次文本的代价，远小于渲染器崩掉。 -->
+<span>{{ formatCell(row[col]) }}</span>
                   </template>
                 </td>
               </tr>
@@ -449,9 +452,35 @@ const activeFilterCount = computed(() => filters.value.length)
 // ========== 编辑状态 ==========
 const selectedRowIndex = ref(-1)
 const editingCell = ref(null)
-const cellInputRef = ref(null)
+// 编辑框的引用**不能用 ref**：输入框在 v-for 里，Vue 只会把 ref 记成"最后一个渲染过的"元素，
+// 而焦点/选区需要的是"当前这一个"。见 startEdit 里的取法。
 
-const hasChanges = computed(() => rows.value.some(r => r._editState === 'new' || r._editState === 'modified' || r._editState === 'deleted'))
+
+// ========== 脏状态：以**数据**为准 ==========
+// 一行到底改没改，直接与载入时的 _original 逐列比；`_editState` 只作为"新增/删除"这类
+// 无值可比的标记使用。
+//
+// 为什么不能只信 _editState：它是个**单向粘性**标记 —— 编辑时置成 'modified'，而"值又改回原样"
+// 并不会把它清掉。于是只要有任何一条路径漏了复位（把值手动改回去、批量填充/清空、撤销…），
+// 界面就一边显示"有未保存的修改 / 修改 N 格"，一边数据其实与原始一模一样 —— 用户反馈的
+// 「修改撤销了还是提示有修改」就是这一类。
+// 现在：写值的入口按数据重算状态，横幅那层再兜一次底 ——
+// 保证"说有修改"一定意味着"真有修改"，反过来也成立。
+const rowEqualsOriginal = (row) => {
+  const o = row._original
+  if (!o) return false
+  for (const k in o) {
+    if (row[k] !== o[k]) return false
+  }
+  return true
+}
+const syncRowState = (row) => {
+  if (!row || row._editState === 'new' || row._editState === 'deleted') return
+  row._editState = rowEqualsOriginal(row) ? 'original' : 'modified'
+}
+const hasChanges = computed(() => rows.value.some(r =>
+  r._editState === 'new' || r._editState === 'deleted' || !rowEqualsOriginal(r)
+))
 
 // 显示的行（过滤掉已删除的和手动隐藏的；都保留在 rows 里用于保存）
 // 只依赖 rows 身份 + deletedRids/hiddenRows 两个集合：单元格值编辑只改行内字段，
@@ -498,11 +527,17 @@ const padBottom = computed(() => {
 })
 // 实际承载滚动的容器：内层 .data-table-wrap 高度为 100% 且 overflow:auto，正常是它滚动；
 // 极端情况下（外层被撑高）回退到外层 .table-scroll，避免滚动事件收不到。
+// 每次**现算**"谁在真正滚动"，不缓存。
+// 教训：缓存过就出过事 —— 页签在 display:none 期间容器尺寸是 0，scrollHeight/clientHeight
+// 判定必然失败，于是把**外层容器**缓存了下来；此后一直读外层容器的 scrollTop（永远是 0），
+// 可视窗口按错误位置渲染：界面出现大片空白、点到的格子和看到的对不上、看着像卡死。
+// 多读两次布局换来的稳定，比省这一次读值钱。forgetScrollHost 留作空实现，不动调用点。
 const scrollHost = () => {
   const w = gridWrap.value
   if (w && w.scrollHeight > w.clientHeight) return w
   return gridRef.value || w
 }
+const forgetScrollHost = () => {}
 const syncViewport = () => {
   const total = displayRows.value.length
   if (!total) { vpStart.value = 0; vpEnd.value = 0; return }
@@ -525,7 +560,8 @@ const syncViewport = () => {
 // 滚过去画出来，下一帧才补上该出现的行 —— 拖滚动条 / PageDown 一跳几百像素时可视区整段落空，
 // 看到的就是一条空白（"白屏闪一下"）。同步算走微任务，能在同一帧绘制前把行补好。
 // 详见 utils/rowWindow.js 的注释。
-const onTableScroll = () => { syncViewport() }
+// 滚动过就打个标记：下一次 mousemove 即便指针没动也要重判热区（指针底下的行/列已被回收）
+const onTableScroll = () => { gridScrolledSinceMove = true; syncViewport() }
 // 行高改了：占位行是按旧行高算的，按当前滚动位置重算一次（否则会跳一下）
 watch(VP_ROW_H, () => { nextTick(syncViewport) })
 
@@ -1458,7 +1494,8 @@ const openQueryWithValue = (col) => {
 const setCellNull = (row, col) => {
   if (!row || !col || props.readOnly) return
   row[col] = null
-  if (row._editState === 'original') row._editState = 'modified'
+  // 按数据重算（原本值就是 NULL 时不该变成"已修改"）
+  syncRowState(row)
 }
 const removeRow = (row) => {
   const idx = rows.value.indexOf(row)
@@ -1521,27 +1558,42 @@ const onCtxItemHover = (item, i, e) => {
 
 const startEdit = (row, col, event) => {
   if (row._editState === 'deleted' || props.readOnly) return
-  editingCell.value = { row, col, value: row[col] === null || row[col] === undefined ? '' : String(row[col]) }
+  const initial = row[col] === null || row[col] === undefined ? '' : String(row[col])
+  // initial 记下"进编辑框时的原文"：提交时若一个字都没改，就一个字节都不写（见 confirmEdit）
+  editingCell.value = { row, col, value: initial, initial }
   nextTick(() => {
-    const input = (event && event.target && event.target.querySelector) ? event.target.querySelector('.cell-input') : null
-    if (input || cellInputRef.value) (input || cellInputRef.value).focus()
-    if (input || cellInputRef.value) (input || cellInputRef.value).select()
+    // 编辑框此刻才渲染出来，所以要在这里取。两条路：
+    //   1. 从被双击的那个格子里找（最准）；
+    //   2. 退而求其次，从表格容器里找那个**唯一**的 .cell-input。
+    // **绝不能用 ref**：输入框在 v-for 里，Vue 只会把它记成"最后一个渲染过的"元素 ——
+    // 而编辑框同时只会存在一个、且在 nextTick 之前还没渲染，于是 ref 常指向**上一次编辑**
+    // 遗留的那个元素，focus()/select() 就把焦点与选区挪到了别的格子上
+    //（真机现象：双击空格格，光标跑到右边那格）。
+    const fromCell = (event && event.target && event.target.querySelector) ? event.target.querySelector('.cell-input') : null
+    const input = fromCell || (gridWrap.value ? gridWrap.value.querySelector('input.cell-input') : null)
+    if (input) { input.focus(); input.select() }
   })
 }
 
 // 单元格赋值归一化：按列类型还原数值/布尔。编辑框与「从 Excel 粘贴」进来的都是字符串，
 // 直接以字符串提交会在严格类型库（ClickHouse/PG/Oracle 等）报类型不匹配
 const normalizeCellValue = (col, raw) => {
-  const trimmed = String(raw == null ? '' : raw).trim()
-  let v = trimmed === '' ? null : trimmed
+  // 只有**真正的空字符串**才算"置空"。以前这里先 trim 再判空 —— 于是「一个空格」这种
+  // **合法值**会被悄悄改成 NULL：真机反馈就是「双击空格格、什么都没输，值变成 NULL 了，
+  // 再打空格还是 NULL，像撤不掉」。宁可原样保留用户写的空白，也不替他改数据。
+  // （类型识别仍按 trim 后的文本判断：数值列 " 12 " 依然认成 12；但只有识别成功才替换值，
+  //   否则存原样 —— 判据与"存什么"分开。）
+  const s = String(raw == null ? '' : raw)
+  let v = s === '' ? null : s
   if (v !== null) {
+    const t = s.trim()
     const meta = columnMetas.value.find(c => c.name === col)
-    const t = meta ? String(meta.type || '') : ''
-    if (/^(U?INT\d*|FLOAT\d*|DOUBLE|REAL|DECIMAL|NUMERIC|NUMBER|BIGINT|SMALLINT|TINYINT|MEDIUMINT|INTEGER)/i.test(t)
-        && !isNaN(Number(v))) {
-      v = Number(v)
-    } else if (/^(BOOL|BOOLEAN|LOGICAL)/i.test(t) && /^(true|false)$/i.test(v)) {
-      v = /^true$/i.test(v)
+    const type = meta ? String(meta.type || '') : ''
+    if (/^(U?INT\d*|FLOAT\d*|DOUBLE|REAL|DECIMAL|NUMERIC|NUMBER|BIGINT|SMALLINT|TINYINT|MEDIUMINT|INTEGER)/i.test(type)
+        && !isNaN(Number(t))) {
+      v = Number(t)
+    } else if (/^(BOOL|BOOLEAN|LOGICAL)/i.test(type) && /^(true|false)$/i.test(t)) {
+      v = /^true$/i.test(t)
     }
   }
   return v
@@ -1551,13 +1603,17 @@ const applyCellValue = (row, col, raw) => {
   const v = normalizeCellValue(col, raw)
   if (v === row[col]) return false
   row[col] = v
-  if (row._editState === 'original') row._editState = 'modified'
+  // 双向重算：改回原值要能立刻退掉"已修改"（以前只单向置 modified，退不回来）
+  syncRowState(row)
   return true
 }
 const confirmEdit = () => {
   if (!editingCell.value) return
-  const { row, col, value } = editingCell.value
-  applyCellValue(row, col, value)
+  const { row, col, value, initial } = editingCell.value
+  // 没动过就**一个字节都不写**：双击打开、随手点别处（blur 会触发提交）不该产生"修改"，
+  // 更不该让归一化顺手改掉原值 —— 空格变 NULL 那条路就是这么被走出来的。
+  // （initial 可能是 undefined：那是"直接打字进入编辑"的路径，值本来就变了，照常提交。）
+  if (value !== initial) applyCellValue(row, col, value)
   editingCell.value = null
 }
 // 编辑框里 Enter 提交并下移（Shift+Enter 上移）、Tab 提交并右移（Excel 行为）
@@ -1881,7 +1937,11 @@ const revertChanges = () => {
         if (col in r._original) r[col] = r._original[col]
       }
     }
-    r._editState = 'original'
+    // 还原之后按**数据**定状态，而不是无脑写 'original'：
+    // 万一某列没能还原（值确实与原始不同），状态也得如实停在"已修改"，
+    // 否则就变成"界面说没改动、实际存进去却变了" —— 那比横幅亮着更危险。
+    r._editState = r._editState === 'new' || r._editState === 'deleted' ? r._editState : 'original'
+    syncRowState(r)
     kept.push(r)
   }
   // 撤销会复活所有被删行，deletedRids 一并清空（与上面 displayRows 的过滤保持一致）
@@ -1893,7 +1953,7 @@ const revertChanges = () => {
   selectedSet.value = new Set()
   activeCell.value = null
   editingCell.value = null
-  nextTick(() => { const host = scrollHost(); if (host) host.scrollTop = 0; syncViewport() })
+  nextTick(() => { forgetScrollHost(); const host = scrollHost(); if (host) host.scrollTop = 0; syncViewport() })
 }
 
 const saveChanges = async () => {
@@ -2018,11 +2078,20 @@ const gridWrap = ref(null)
 // 容器尺寸变化（拖拽侧栏、窗口缩放）时重算可视区，避免窗口化渲染留下空白
 let vpObserver = null
 watch(gridWrap, (el) => {
+  // 容器换了（懒加载页签首次挂上、切表）→ 重新解析"谁在滚动"，别用上一张表的缓存
+  forgetScrollHost()
   if (vpObserver) { vpObserver.disconnect(); vpObserver = null }
   if (!el) return
-  vpObserver = new ResizeObserver(() => { syncViewport() })
+  vpObserver = new ResizeObserver(() => { forgetScrollHost(); syncViewport() })
   vpObserver.observe(el)
 })
+// 切页签后重新解析"谁在滚动"并重算可视窗口。
+// 为什么必须做：页签在 display:none 期间容器尺寸是 0 —— 那时解析出的滚动容器与可视窗口
+// 都是按 0 尺寸算的（甚至可能缓存成外层容器），切回来若不重来一遍，就可能一直读错容器的
+// scrollTop，窗口永不更新，表现就是「表格像卡死了」。MainView 在切换后立即广播一次、
+// 80ms 后再补一次（应付布局尚未稳定），这里跟着重解析一次即可。
+const onTabChangeResync = () => { forgetScrollHost(); syncViewport() }
+onMounted(() => window.addEventListener('dc-tab-change', onTabChangeResync))
 let resizeState = null
 let lastResizeAt = 0
 let lastDragAt = 0
@@ -2267,6 +2336,8 @@ onUnmounted(() => {
   if (loadController) { loadController.abort(); loadController = null }
   if (loadTimer) { clearInterval(loadTimer); loadTimer = null }
   if (resizeState) onColResizeEnd()
+  window.removeEventListener('dc-tab-change', onTabChangeResync)
+  if (gridMoveRaf) cancelAnimationFrame(gridMoveRaf)
   if (vpObserver) { vpObserver.disconnect(); vpObserver = null }
   // 表格是懒加载页签，关掉页签即卸载；导出进行中关掉页签，轮询不能留着继续打后端
   exportTask.close()
@@ -2296,7 +2367,26 @@ const colAtEdge = (e) => {
   return null
 }
 
+// mousemove 每帧最多处理一次，且"指针没动、期间也没滚动"时直接丢弃：
+// 滚动后浏览器会补发 mousemove（指针没动），而命中判定要读 getBoundingClientRect（强制布局），
+// 在虚拟滚动刚改完 DOM 的那一刻最贵。丢掉没意义的那些，滚动就不被拖。
+let gridMoveRaf = 0
+let gridMoveEvent = null
+let gridMoveXY = ''
+let gridScrolledSinceMove = false
 const onGridMove = (e) => {
+  const xy = e.clientX + ':' + e.clientY
+  if (xy === gridMoveXY && !gridScrolledSinceMove) return
+  gridMoveXY = xy
+  gridMoveEvent = e
+  if (gridMoveRaf) return
+  gridMoveRaf = requestAnimationFrame(() => {
+    gridMoveRaf = 0
+    gridScrolledSinceMove = false
+    if (gridMoveEvent) applyGridHover(gridMoveEvent)
+  })
+}
+const applyGridHover = (e) => {
   const wrap = gridWrap.value
   if (!wrap || resizeState || isColDragging()) return
   const cell = e.target.closest('th, td')

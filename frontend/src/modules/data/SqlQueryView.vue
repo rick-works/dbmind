@@ -341,7 +341,8 @@
                   <!-- v-memo：内容没变就跳过该格的 vnode 创建与 diff；memo key 用原始值，值变必重渲染
                        （NULL 样式也在 key 里：设置页改样式能直接重渲染，不必重跑查询）。
                        展示走 formatDbValue（ISO 时间戳的 T 换空格），原始值不动（复制/编辑仍拿原文） -->
-                  <span v-memo="[row[c.name], querySettingsLive.nullStyle]">{{ row[c.name] == null ? nullDisplay() : formatDbValue(row[c.name]) }}</span>
+                  <!-- ⚠️ 同 TableDataView：不要在这里加 v-memo（与分支切换冲突会让补丁抛 insertBefore 而失效） -->
+<span>{{ row[c.name] == null ? nullDisplay() : formatDbValue(row[c.name]) }}</span>
                 </td>
               </tr>
               <tr v-if="vtGapBottom > 0" class="vt-gap">
@@ -1059,9 +1060,19 @@ const onResultTableScroll = () => {
   vtEnd.value = last
   vtGapTop.value = first * VT_ROW_H.value
   vtGapBottom.value = (total - last) * VT_ROW_H.value
+  // 发生过滚动：下一次 mousemove 即便指针没动也要重判一次热区（鼠标底下那行已被回收）
+  resultScrolledSinceMove = true
 }
 // 行高改了：已渲染的上下占位行是按旧行高算的，按当前滚动位置重算一次（否则会跳一下）
 watch(VT_ROW_H, () => { nextTick(() => onResultTableScroll()) })
+// 切页签后重新解析"谁在滚动"并重算可视窗口。
+// 为什么必须做：页签在 display:none 期间容器尺寸是 0 —— 那时解析出的滚动容器与可视窗口
+// 都是按 0 尺寸算的（甚至可能缓存成外层容器），切回来若不重来一遍，就可能一直读错容器的
+// scrollTop，窗口永不更新，表现就是「表格像卡死了」。MainView 在切换后立即广播一次、
+// 80ms 后再补一次（应付布局尚未稳定），这里跟着重解析一次即可。
+const onTabChangeResync = () => { onResultTableScroll() }
+onMounted(() => window.addEventListener('dc-tab-change', onTabChangeResync))
+onBeforeUnmount(() => window.removeEventListener('dc-tab-change', onTabChangeResync))
 // 新结果集（行数变化）时回到顶部并初始化可视区间
 watch(() => (result.value?.rows || []).length, () => {
   const wrap = resultTableWrapRef.value
@@ -1095,6 +1106,7 @@ watch(() => resultTableWrapRef.value, (wrap) => {
   vtObserver.observe(wrap)
 })
 onBeforeUnmount(() => {
+  if (resultMoveRaf) cancelAnimationFrame(resultMoveRaf)
   if (vtObserver) { vtObserver.disconnect(); vtObserver = null }
 })
 
@@ -1115,7 +1127,27 @@ const resultEdgeColIdx = (e) => {
   if (k < 0 || k >= vis.length) return -1
   return vis[k].idx
 }
+// mousemove 每帧最多处理一次，且"指针没动、期间也没滚动"时直接丢弃：
+// 浏览器在滚动后会补发若干 mousemove（指针没动、坐标没变），而下面的命中判定要读
+// getBoundingClientRect（**强制布局**）—— 虚拟滚动刚改完 DOM 时这一下最贵。
+// 把这些没意义的事件丢掉，滚动期间就不会被它们拖住。
+let resultMoveRaf = 0
+let resultMoveEvent = null
+let resultMoveXY = ''
+let resultScrolledSinceMove = false
 const onResultTableMove = (e) => {
+  const xy = e.clientX + ':' + e.clientY
+  if (xy === resultMoveXY && !resultScrolledSinceMove) return
+  resultMoveXY = xy
+  resultMoveEvent = e
+  if (resultMoveRaf) return
+  resultMoveRaf = requestAnimationFrame(() => {
+    resultMoveRaf = 0
+    resultScrolledSinceMove = false
+    if (resultMoveEvent) applyResultTableHover(resultMoveEvent)
+  })
+}
+const applyResultTableHover = (e) => {
   const wrap = resultTableWrapRef.value
   if (!wrap) return
   if (isResultColDragging()) return
