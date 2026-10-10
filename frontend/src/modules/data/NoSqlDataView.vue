@@ -1724,8 +1724,24 @@ onBeforeUnmount(() => {
   background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%;
   background-repeat: no-repeat;
 }
-.data-table tbody tr.selected td,
-.data-table thead tr.selected th { background-color: var(--dc-primary-soft) !important; }
+/* 行选中：整行淡色底（表体用半透明色没问题 —— 底下就是表格底色） */
+.data-table tbody tr.selected td { background-color: var(--dc-primary-soft) !important; }
+/* ⚠️ 表头（thead）是 position: sticky + z-index: 2，盖在数据行上面；--dc-primary-soft 是半透明色，
+   表头若直接用，滚动时下面的数据会从表头里"透"出来（看着像表头里也有数据、很乱）。
+   表头这一档：不透明表头底色打底，淡色用最上层渐变叠上去；四条 2px 边线写在前（在前＝在上），
+   淡色垫底。`--sel-t/b/l/r` 仍由下面几条按需置 2px（自定义属性按 used value 解析）。 */
+.data-table thead tr.selected th {
+  background-color: var(--dc-bg-table-head);
+  background-image:
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft));
+  background-position: top, bottom, left, right, center;
+  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%;
+  background-repeat: no-repeat;
+}
 .data-table tbody tr.selected.row-sel-top td,
 .data-table thead tr.selected.row-sel-top th { --sel-t: 2px; }
 .data-table tbody tr.selected.row-sel-bottom td,
@@ -1735,7 +1751,20 @@ onBeforeUnmount(() => {
 .data-table tbody tr.selected td:last-child,
 .data-table thead tr.selected th:last-child { --sel-r: 2px; }
 .data-table tbody tr td.col-selected { background-color: var(--dc-primary-soft); }
-.data-table th.col-selected { --sel-t: 2px; background-color: var(--dc-primary-soft); }
+/* 列选中的表头：sticky，必须不透明（同上面那段） */
+.data-table th.col-selected {
+  --sel-t: 2px;
+  background-color: var(--dc-bg-table-head);
+  background-image:
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft));
+  background-position: top, bottom, left, right, center;
+  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%;
+  background-repeat: no-repeat;
+}
 /* 选中整列：四边都收口成完整矩形（与框选同一套框线语言） */
 .data-table th.col-selected.col-sel-l, .data-table td.col-selected.col-sel-l { --sel-l: 2px; }
 .data-table th.col-selected.col-sel-r, .data-table td.col-selected.col-sel-r { --sel-r: 2px; }

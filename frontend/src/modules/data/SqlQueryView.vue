@@ -4909,9 +4909,27 @@ onBeforeUnmount(() => {
   background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%;
   background-repeat: no-repeat;
 }
-/* 行选中（含标题行）：整行淡色底，整块四周一个框 */
-.data-table tbody tr.selected td,
-.data-table thead tr.selected th { background-color: var(--dc-primary-soft) !important; }
+/* 行选中：整行淡色底，整块四周一个框 */
+.data-table tbody tr.selected td { background-color: var(--dc-primary-soft) !important; }
+/* ⚠️ 表头（thead）是 position: sticky + z-index: 2，它**盖在数据行上面**；而 --dc-primary-soft 是半透明色
+   （浅色 rgba(37, 99, 235, .1) / 深色 rgba(79, 140, 255, .15)）。表体用它毫无问题 —— 底下就是表格底色；
+   表头若直接用，滚动时下面的数据会从表头里"透"出来，看着像表头里也有数据、很乱（用户反馈）。
+   所以表头这一档改成：**不透明的表头底色打底**（background-color），淡色改用最上层的渐变叠上去。
+   图层顺序要留意 —— background-image 里写在前面的在最上面：四条 2px 边线在上、淡色垫在它们下面，
+   于是边线依旧是干净的主色。`--sel-t/b/l/r` 仍由下面几条按需置为 2px：自定义属性按 used value 解析，
+   写在后面的 --sel-* 声明照样作用到这上面来。 */
+.data-table thead tr.selected th {
+  background-color: var(--dc-bg-table-head);
+  background-image:
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft));
+  background-position: top, bottom, left, right, center;
+  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%;
+  background-repeat: no-repeat;
+}
 .data-table tbody tr.selected.row-sel-top td,
 .data-table thead tr.selected.row-sel-top th { --sel-t: 2px; }
 .data-table tbody tr.selected.row-sel-bottom td,
@@ -4920,9 +4938,22 @@ onBeforeUnmount(() => {
 .data-table thead tr.selected th:first-child { --sel-l: 2px; }
 .data-table tbody tr.selected td:last-child,
 .data-table thead tr.selected th:last-child { --sel-r: 2px; }
-/* 列选中：表头与该列单元格同底色，表头就是这块的顶边，到「最后一行」收底边 */
+/* 列选中：表体单元格保持半透明淡色（底下的表格底色透一点上来，无妨）；表头就是这块的顶边，
+   到「最后一行」收底边。表头**必须不透明** —— 同上，它是 sticky 的，否则数据会从列头上透出来。 */
 .data-table tbody tr td.col-selected { background-color: var(--dc-primary-soft); }
-.data-table th.col-selected { --sel-t: 2px; background-color: var(--dc-primary-soft); }
+.data-table th.col-selected {
+  --sel-t: 2px;
+  background-color: var(--dc-bg-table-head);
+  background-image:
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft));
+  background-position: top, bottom, left, right, center;
+  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%;
+  background-repeat: no-repeat;
+}
 /* 选中整列：四边都收口成完整矩形（与表预览/NoSQL 同一套框线语言，用户口径） */
 .data-table th.col-selected.col-sel-l, .data-table td.col-selected.col-sel-l { --sel-l: 2px; }
 .data-table th.col-selected.col-sel-r, .data-table td.col-selected.col-sel-r { --sel-r: 2px; }
@@ -4964,7 +4995,18 @@ onBeforeUnmount(() => {
 }
 .row-num-tx { display: inline-block; }
 /* 拖拽列排序反馈 */
-.data-table th.col-drag-over { box-shadow: inset 2px 0 0 var(--dc-primary); background: var(--dc-primary-wash); }
+/* 拖列落点提示：同样是表头（sticky），不能透 —— 不透明底色 + 一层 wash 渐变。
+   原来用 `background` 简写：既让数据透出来，又会把上面那套 background-image（选中边线）清掉；
+   而且 background-position/size 不重置的话，会接着用上面 5 个值的列表（size 第一项是 100% var(--sel-t)，
+   对单层图就是 100% 0 = 高度 0，完全看不见），所以这里必须把它们显式写回单值。 */
+.data-table th.col-drag-over {
+  box-shadow: inset 2px 0 0 var(--dc-primary);
+  background-color: var(--dc-bg-table-head);
+  background-image: linear-gradient(var(--dc-primary-wash), var(--dc-primary-wash));
+  background-position: center;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
 /* 选中的列（Ctrl/Cmd 点表头加选、Shift 连选）：表头高亮 + 底部主色条 */
 /* 选中的列：底色与外沿边线见上方「行 / 列选中」样式块 */
 .data-table th.col-dragging { opacity: 0.5; }

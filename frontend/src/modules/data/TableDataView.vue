@@ -182,7 +182,9 @@
                     @contextmenu.prevent.stop="onRowContextMenu($event, row)">
                   <span class="row-num-tx">{{ rowIndex(row) + 1 }}</span>
                 </td>
-                <td v-for="(col, ci) in visibleColumns" :key="col" :data-gkey="(rowIndex(row) + 1) + ':' + ci"
+                <!-- 横向窗口的左占位：不渲染的列也要占住宽度，否则后面的列会左移串位 -->
+              <td v-if="colLead > 0" class="col-gap" :colspan="colLead" />
+              <td v-for="(col, ci) in visibleColsSlice" :key="col" :data-gkey="(rowIndex(row) + 1) + ':' + (colLead + ci)"
                     :class="[cellAlignClass(row[col], colTypeMap[col]), { 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col), 'col-sel-l': selEdges.colLeft.has(col), 'col-sel-r': selEdges.colRight.has(col), 'active-cell': activeCell && activeCell.row === row && activeCell.col === col && noBulkSelection, 'editing': editingCell && editingCell.row === row && editingCell.col === col }]"
                     :title="formatCell(row[col])"
                     @dblclick="startEdit(row, col, $event)"
@@ -206,6 +208,8 @@
 <span>{{ formatCell(row[col]) }}</span>
                   </template>
                 </td>
+              <!-- 右占位：同样只为撑住宽度 -->
+              <td v-if="colEnd < visibleColumns.length" class="col-gap" :colspan="visibleColumns.length - colEnd" />
               </tr>
               <!-- 窗口化渲染：下方占位行 -->
               <tr v-if="padBottom > 0" class="vp-pad-row" aria-hidden="true">
@@ -561,7 +565,7 @@ const syncViewport = () => {
 // 看到的就是一条空白（"白屏闪一下"）。同步算走微任务，能在同一帧绘制前把行补好。
 // 详见 utils/rowWindow.js 的注释。
 // 滚动过就打个标记：下一次 mousemove 即便指针没动也要重判热区（指针底下的行/列已被回收）
-const onTableScroll = () => { gridScrolledSinceMove = true; syncViewport() }
+const onTableScroll = () => { gridScrolledSinceMove = true; syncViewport(); syncColWindow() }
 // 行高改了：占位行是按旧行高算的，按当前滚动位置重算一次（否则会跳一下）
 watch(VP_ROW_H, () => { nextTick(syncViewport) })
 
@@ -1893,12 +1897,22 @@ const onKeyDown = (e) => {
       }
   }
 }
-const ensureActiveVisible = () => {
+const ensureActiveVisible = (retry = true) => {
   if (!activeCell.value || !gridWrap.value) return
   nextTick(() => {
     const host = scrollHost()
-    const el = gridWrap.value.querySelector(`[data-gkey="${(rowIndex(activeCell.value.row) + 1) + ':' + visibleColumns.value.indexOf(activeCell.value.col)}"]`)
-    if (el && host) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const idx = visibleColumns.value.indexOf(activeCell.value.col)
+    const el = gridWrap.value.querySelector(`[data-gkey="${(rowIndex(activeCell.value.row) + 1) + ':' + idx}"]`)
+    if (el && host) { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); return }
+    // 目标列不在横向窗口里（列虚拟化）→ 先把 scrollLeft 挪到它，再重试一次
+    if (!el && host && retry && idx >= 0) {
+      let left = 0
+      for (let i = 0; i < idx; i++) left += renderColWidth(visibleColumns.value[i])
+      const w = renderColWidth(activeCell.value.col)
+      if (left < host.scrollLeft) host.scrollLeft = left
+      else if (left + w > host.scrollLeft + host.clientWidth) host.scrollLeft = left + w - host.clientWidth
+      nextTick(() => { syncColWindow(); ensureActiveVisible(false) })
+    }
   })
 }
 
@@ -2073,6 +2087,40 @@ const saveColWidths = () => {
     localStorage.setItem(colWidthStoreKey(), JSON.stringify(out))
   } catch (e) { /* 隐私模式 / 配额满：存不进去就算了 */ }
 }
+// ========== 列窗口（横向虚拟化）==========
+// 宽表真正的开销在**单元格总数**：行窗口只解决纵向，30 列 × 五十来行仍是一千五百多个格子，
+// 排版与重绘都按这个量级走。这里把横向也窗口化，只渲染横向可见的那几列（左右各留缓冲），
+// 单元格数直接降一个数量级。表头不窗口化（一行而已），所以列宽热区那套 cellIndex 计算不受影响。
+const COL_CHUNK = 4         // 换窗口的粒度（列）：横向滚动时不至于每像素重渲染一次
+const COL_BUFFER_PX = 600   // 左右各留的缓冲（像素）
+const colLead = ref(0)
+const colEnd = ref(0)
+const visibleColsSlice = computed(() => visibleColumns.value.slice(colLead.value, colEnd.value))
+const syncColWindow = () => {
+  const cols = visibleColumns.value
+  const total = cols.length
+  if (!total) { colLead.value = 0; colEnd.value = total; return }
+  const host = scrollHost()
+  const sl = host ? host.scrollLeft : 0
+  const vw = (host && host.clientWidth) || 0
+  const left = sl - COL_BUFFER_PX
+  const right = sl + vw + COL_BUFFER_PX
+  let x = 0
+  let start = 0
+  while (start < total && x + renderColWidth(cols[start]) <= left) { x += renderColWidth(cols[start]); start++ }
+  let acc = x
+  let end = start
+  while (end < total && acc < right) { acc += renderColWidth(cols[end]); end++ }
+  end = Math.min(total, end + 1)
+  // 块化：起点向下取整、终点向上取整到 COL_CHUNK —— 同一块内窗口一个格子都不重建
+  const s0 = Math.max(0, Math.floor(start / COL_CHUNK) * COL_CHUNK)
+  const e0 = Math.min(total, Math.ceil(end / COL_CHUNK) * COL_CHUNK)
+  if (s0 === colLead.value && e0 === colEnd.value) return
+  colLead.value = s0
+  colEnd.value = e0
+}
+// 列集合变化（换表 / 隐藏列）与首次挂载后各算一次
+watch(visibleColumns, () => nextTick(syncColWindow))
 const colResizing = ref(false)
 const gridWrap = ref(null)
 // 容器尺寸变化（拖拽侧栏、窗口缩放）时重算可视区，避免窗口化渲染留下空白
@@ -2082,7 +2130,7 @@ watch(gridWrap, (el) => {
   forgetScrollHost()
   if (vpObserver) { vpObserver.disconnect(); vpObserver = null }
   if (!el) return
-  vpObserver = new ResizeObserver(() => { forgetScrollHost(); syncViewport() })
+  vpObserver = new ResizeObserver(() => { forgetScrollHost(); syncViewport(); syncColWindow() })
   vpObserver.observe(el)
 })
 // 切页签后重新解析"谁在滚动"并重算可视窗口。
@@ -3108,9 +3156,25 @@ useShortcutScope(rootRef, {
   background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%;
   background-repeat: no-repeat;
 }
-/* 行选中（含标题行）：整行淡色底，整块四周一个框 */
-.data-table tbody tr.selected td,
-.data-table thead tr.selected th { background-color: var(--dc-primary-soft) !important; }
+/* 行选中：整行淡色底，整块四周一个框 */
+.data-table tbody tr.selected td { background-color: var(--dc-primary-soft) !important; }
+/* ⚠️ 表头（thead）是 position: sticky + z-index: 2，盖在数据行上面；--dc-primary-soft 是半透明色
+   （浅色 rgba(37, 99, 235, .1) / 深色 rgba(79, 140, 255, .15)）。表体用它无妨（底下就是表格底色），
+   表头若直接用，滚动时数据会从表头里"透"出来 —— 表头里看着也有数据、很乱（用户反馈）。
+   表头这一档改成：不透明表头底色打底，淡色用最上层渐变叠上去；四条 2px 边线写在前（图层次序在前＝在上），
+   淡色垫底，边线依旧干净。`--sel-t/b/l/r` 仍由下面几条按需置 2px（自定义属性按 used value 解析）。 */
+.data-table thead tr.selected th {
+  background-color: var(--dc-bg-table-head);
+  background-image:
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft));
+  background-position: top, bottom, left, right, center;
+  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%;
+  background-repeat: no-repeat;
+}
 .data-table tbody tr.selected.row-sel-top td,
 .data-table thead tr.selected.row-sel-top th { --sel-t: 2px; }
 .data-table tbody tr.selected.row-sel-bottom td,
@@ -3119,9 +3183,21 @@ useShortcutScope(rootRef, {
 .data-table thead tr.selected th:first-child { --sel-l: 2px; }
 .data-table tbody tr.selected td:last-child,
 .data-table thead tr.selected th:last-child { --sel-r: 2px; }
-/* 列选中：表头与该列单元格同底色，表头就是这块的顶边，到「最后一行」收底边 */
+/* 列选中：表体单元格保持半透明淡色；表头（sticky）同样必须不透明，否则数据会从列头上透出来 */
 .data-table tbody tr td.col-selected { background-color: var(--dc-primary-soft); }
-.data-table th.col-selected { --sel-t: 2px; background-color: var(--dc-primary-soft); }
+.data-table th.col-selected {
+  --sel-t: 2px;
+  background-color: var(--dc-bg-table-head);
+  background-image:
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary), var(--dc-primary)),
+    linear-gradient(var(--dc-primary-soft), var(--dc-primary-soft));
+  background-position: top, bottom, left, right, center;
+  background-size: 100% var(--sel-t), 100% var(--sel-b), var(--sel-l) 100%, var(--sel-r) 100%, 100% 100%;
+  background-repeat: no-repeat;
+}
 /* 选中整列：四边都收口成完整矩形（与框选同一套框线语言，用户最新口径） */
 .data-table th.col-selected.col-sel-l, .data-table td.col-selected.col-sel-l { --sel-l: 2px; }
 .data-table th.col-selected.col-sel-r, .data-table td.col-selected.col-sel-r { --sel-r: 2px; }
@@ -3139,6 +3215,8 @@ useShortcutScope(rootRef, {
 .data-table tbody tr.row-new td { background-color: var(--dc-success-wash) !important; }
 .data-table tbody tr.row-modified td { background-color: var(--dc-warning-wash) !important; }
 .data-table tbody tr.row-deleted { display: none; }
+/* 横向占位格：只负责撑住"没渲染的那些列"的宽度，不能有边框/内边距/背景 */
+.data-table tbody td.col-gap { padding: 0; border: none; background: transparent; }
 
 .row-num-th, .row-num-td {
   width: 40px; min-width: 40px; max-width: 40px;
@@ -3174,7 +3252,18 @@ useShortcutScope(rootRef, {
 }
 .row-num-tx { display: inline-block; }
 /* 拖拽列排序时的视觉反馈 */
-.data-table th.col-drag-over { box-shadow: inset 2px 0 0 var(--dc-primary); background: var(--dc-primary-wash); }
+/* 拖列落点提示：同样是表头（sticky），不能透 —— 不透明底色 + 一层 wash 渐变。
+   原来用 `background` 简写：既让数据透出来，又会清掉上面那套 background-image（选中边线）；
+   background-position/size 也必须显式写回单值（否则会接着用上面 5 值列表，size 首项是 100% var(--sel-t)，
+   单层图就成了 100% 0 = 高度 0，看不见）。 */
+.data-table th.col-drag-over {
+  box-shadow: inset 2px 0 0 var(--dc-primary);
+  background-color: var(--dc-bg-table-head);
+  background-image: linear-gradient(var(--dc-primary-wash), var(--dc-primary-wash));
+  background-position: center;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
 /* 选中的列（Ctrl/Cmd 点表头加选、Shift 连选）：表头高亮 + 底部主色条 */
 /* 选中的列：底色与外沿边线见上方「行 / 列选中」样式块 */
 .data-table th.col-dragging { opacity: 0.5; }
