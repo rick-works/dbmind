@@ -38,6 +38,8 @@
   --dc-bg-table-head: #2b3242;
   /* 表头与数据区之间的那条压边线（2px，画在 th 上，吸顶滚动时跟着走） */
   --dc-table-head-line: rgba(255, 255, 255, .14);
+  /* 吸顶"浮起感"：表头压着数据滚动时，在表头下沿投一道很轻的影（滚回顶部即消失） */
+  --dc-head-shadow: rgba(0, 0, 0, .45);
   --dc-scrollbar: #3d4250;
   --dc-scrollbar-hover: #4a5062;
   --dc-mask: rgba(16, 18, 24, .72); /* 遮罩 */
@@ -122,6 +124,8 @@ html[data-theme="light"] {
      换成明显更深、也更偏蓝的一档，读起来才像"表头"。 */
   --dc-bg-table-head: #e4ebf8;
   --dc-table-head-line: #c3d0e6;
+  /* 吸顶"浮起感"：表头压着数据滚动时，在表头下沿投一道很轻的影（滚回顶部即消失） */
+  --dc-head-shadow: rgba(15, 23, 42, .14);
   --dc-scrollbar: #c4cdda;
   --dc-scrollbar-hover: #adb8c9;
   --dc-mask: rgba(30, 41, 59, .34);
@@ -171,6 +175,26 @@ html[data-theme="light"] {
 html[data-theme="dark"] {
   color-scheme: dark;
   /* 变量取 :root 深色值，无需重复定义 */
+}
+
+/* ===== 吸顶表头的"浮起感"（三个网格共用，故写在全局）=====
+   只有滚起来（表格上挂 .head-stuck）时才在表头下沿投一道很轻的影，滚回顶部就没了 ——
+   静止的页面不该有多余层次，只有"表头压着数据在滚"这一刻才需要。
+   两条规则必须都写：
+     · 三个网格的 .data-table th 是各自 scoped 的，scoped 会加 [data-v-xxx] 属性选择器；
+       这里用 .data-table.head-stuck thead th（0,2,2）压过 scoped 的基础表头规则（0,2,1）。
+     · 而已排序列的规则（.data-table th.sort-asc[data-v] = 0,3,1）比上面那条更"重"，
+       压不过 → 单独再写一条排序态变体（0,3,2），把主色 2px 排序条一并带上，否则排序列的
+       压边线会被这道投影顶掉。
+   用 inset 阴影（下沿那条压边线）+ 外阴影（浮起）叠在一起 —— box-shadow 是一条属性，
+   所以这里必须把压边线一起重写，不能只写外阴影。几何取 0 3px 8px -2px：往下 3px、模糊 8px、
+   负展开 2px，落到"很轻"的程度，相邻列各自的模糊区几乎不叠出色带。 */
+.data-table.head-stuck thead th {
+  box-shadow: inset 0 -2px 0 var(--dc-table-head-line), 0 3px 8px -2px var(--dc-head-shadow);
+}
+.data-table.head-stuck thead th.sort-asc,
+.data-table.head-stuck thead th.sort-desc {
+  box-shadow: inset 0 -2px 0 var(--dc-primary), 0 3px 8px -2px var(--dc-head-shadow);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }

@@ -66,7 +66,7 @@
            @contextmenu.prevent="onGridContextMenu">
         <!-- 总宽用内联 width 显式给出（与表预览同一套）：
              table-layout:fixed 下不给的话，浏览器会把余量摊回各列 —— 列宽拖不窄 -->
-        <table class="data-table" :class="{ 'col-resizing': colResizing }"
+        <table class="data-table" :class="{ 'col-resizing': colResizing, 'head-stuck': headStuck }"
                :style="{ width: tableWidth + 'px' }">
           <colgroup>
             <col class="row-num-col" style="width: 40px" />
@@ -348,9 +348,13 @@ const forgetScrollHost = () => {}
 const onTabChangeResync = () => { forgetScrollHost(); syncViewport(); syncColWindow() }
 onMounted(() => window.addEventListener('dc-tab-change', onTabChangeResync))
 onBeforeUnmount(() => window.removeEventListener('dc-tab-change', onTabChangeResync))
+// 吸顶浮起感：滚动量 > 0 时表头下沿投一道很轻的影（规则见 styles/index.css 的 .head-stuck）。
+// ⚠️ 放在所有提前返回之前 —— 行数少（未开行窗口）时照样能竖向滚动，那道影也得有。
+const headStuck = ref(false)
 const syncViewport = () => {
   const all = displayRows.value
   const n = all.length
+  headStuck.value = ((scrollHost() || {}).scrollTop || 0) > 2
   if (!n) { vpStart.value = 0; vpEnd.value = 0; return }
   if (!virtualEnabled.value) { vpStart.value = 0; vpEnd.value = n; return }
   const host = scrollHost()

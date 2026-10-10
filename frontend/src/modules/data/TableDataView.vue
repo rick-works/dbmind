@@ -103,7 +103,7 @@
              :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px' }"
              @mousemove="onGridMove" @mouseleave="onGridLeave" @mousedown="onGridDown"
              @scroll.passive="onTableScroll" @contextmenu.prevent="onGridContextMenu">
-          <table class="data-table" :class="{ 'col-resizing': colResizing }"
+          <table class="data-table" :class="{ 'col-resizing': colResizing, 'head-stuck': headStuck }"
                  :style="{ width: tableWidth + 'px' }">
             <colgroup>
               <col class="row-num-col" />
@@ -542,8 +542,12 @@ const scrollHost = () => {
   return gridRef.value || w
 }
 const forgetScrollHost = () => {}
+// 吸顶浮起感：滚动量 > 0 时表头下沿投一道很轻的影（规则见 styles/index.css 的 .head-stuck）。
+// ⚠️ 放在所有提前返回之前 —— 行数少（未开行窗口）时照样能竖向滚动，那道影也得有。
+const headStuck = ref(false)
 const syncViewport = () => {
   const total = displayRows.value.length
+  headStuck.value = ((scrollHost() || {}).scrollTop || 0) > 2
   if (!total) { vpStart.value = 0; vpEnd.value = 0; return }
   if (!virtualEnabled.value) { vpStart.value = 0; vpEnd.value = total; return }
   const host = scrollHost()

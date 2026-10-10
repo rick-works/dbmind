@@ -271,7 +271,7 @@
              @scroll.passive="onResultTableScroll"
              @mousemove="onResultTableMove" @mousedown="onResultTableDown" @mouseleave="onResultTableLeave"
              @contextmenu.prevent="onResultGridContextMenu">
-          <table class="data-table" :class="{ 'col-resizing': resultColResizing }"
+          <table class="data-table" :class="{ 'col-resizing': resultColResizing, 'head-stuck': headStuck }"
                  :style="{ width: resultTableWidth + 'px' }">
             <colgroup>
               <col class="row-sel-col" style="width: 40px" />
@@ -1097,10 +1097,14 @@ const syncResultColWindow = () => {
   resultColLead.value = s0
   resultColEnd.value = e0
 }
+// 吸顶浮起感：滚动量 > 0 时表头下沿投一道很轻的影（规则见 styles/index.css 的 .head-stuck）。
+// 阈值留 2px 死区，免得 1px 的抖动让影子闪烁。
+const headStuck = ref(false)
 const onResultTableScroll = () => {
   const wrap = resultTableWrapRef.value
   const total = (result.value?.rows || []).length
   if (!wrap || !total) return
+  headStuck.value = (wrap.scrollTop || 0) > 2
   const s = wrap.scrollTop
   const { start: first, end: last } = rowWindow({
     scrollTop: s,
