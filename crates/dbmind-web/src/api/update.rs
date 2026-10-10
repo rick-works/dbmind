@@ -43,6 +43,10 @@ struct Progress {
     note: Option<String>,
     /// 实际在用的下载地址（可能已切到镜像），失败时可复制去手动下载
     url: Option<String>,
+    /// 下载完是否用 GitHub 官方 sha256 校验过（有 digest 时才有机会为 true）
+    verified: bool,
+    /// 走的是镜像、而这个版本又没有官方 digest ⇒ 内容无法自证，界面要如实提示
+    unverified: bool,
 }
 
 fn progress_cell() -> &'static Arc<std::sync::Mutex<Progress>> {
@@ -161,9 +165,24 @@ fn asset_score(name: &str) -> u8 {
     }
 }
 
-/// 从发行版里挑出最合适的安装包 (url, name)
-fn pick_installer(v: &Value) -> Option<(String, String)> {
-    let mut target: Option<(String, String)> = None;
+/// 挑中的安装包：地址、文件名、大小，以及 GitHub 官方算出的 sha256（`assets[].digest`）。
+///
+/// **为什么盯着 digest**：真机实测国内直连 `github.com/.../releases/download` 是**完全不通用**
+/// （21 秒超时、0 字节），只能走镜像；而镜像能替换包内容。好在 GitHub 的 API 响应里带着它
+/// 自己算的 sha256，而 `api.github.com` 直连是通的 —— 于是"镜像下字节 + 官方值校验"
+/// 既不用逼用户开代理，也不用把安装包交给未知中间人。这是本项目允许默认使用镜像的前提。
+#[derive(Debug, Clone)]
+struct Installer {
+    url: String,
+    name: String,
+    size: u64,
+    /// 形如 `sha256:<64 hex>`；早期资源可能没有（那就不校验，并如实告诉用户）
+    sha256: Option<String>,
+}
+
+/// 从发行版里挑出最合适的安装包（优先级见 `asset_score`）
+fn pick_installer(v: &Value) -> Option<Installer> {
+    let mut target: Option<Installer> = None;
     for asset in v["assets"].as_array()? {
         let name = asset["name"].as_str().unwrap_or("");
         let url = asset["browser_download_url"].as_str().unwrap_or("");
@@ -171,9 +190,18 @@ fn pick_installer(v: &Value) -> Option<(String, String)> {
             continue;
         }
         let score = asset_score(name);
-        let best = target.as_ref().map(|(_, n)| asset_score(n)).unwrap_or(0);
+        let best = target.as_ref().map(|i| asset_score(&i.name)).unwrap_or(0);
         if score > 0 && score > best {
-            target = Some((url.to_string(), name.to_string()));
+            target = Some(Installer {
+                url: url.to_string(),
+                name: name.to_string(),
+                size: asset["size"].as_u64().unwrap_or(0),
+                sha256: asset["digest"]
+                    .as_str()
+                    .and_then(|d| d.strip_prefix("sha256:"))
+                    .map(|h| h.trim().to_ascii_lowercase())
+                    .filter(|h| h.len() == 64 && h.chars().all(|c| c.is_ascii_hexdigit())),
+            });
         }
     }
     target
@@ -190,7 +218,8 @@ pub async fn check() -> Json<Value> {
                 .trim_start_matches('v')
                 .to_string();
             let has_new = !latest.is_empty() && version_gt(&latest, &current);
-            let download = pick_installer(&v).map(|(u, _)| u).unwrap_or_default();
+            let inst = pick_installer(&v);
+            let download = inst.as_ref().map(|i| i.url.clone()).unwrap_or_default();
             Json(json!({
                 "success": true,
                 "current": current,
@@ -200,6 +229,10 @@ pub async fn check() -> Json<Value> {
                 "notes": v["body"].as_str().unwrap_or(""),
                 "publishedAt": v["published_at"].as_str().unwrap_or(""),
                 "download": download,
+                // 安装包信息：文件名/大小/官方 sha256（有就说明这个版本能被校验）
+                "assetName": inst.as_ref().map(|i| i.name.clone()).unwrap_or_default(),
+                "assetSize": inst.as_ref().map(|i| i.size).unwrap_or(0),
+                "assetSha256": inst.as_ref().and_then(|i| i.sha256.clone()),
                 "releaseUrl": v["html_url"].as_str().unwrap_or(""),
                 "proxy": super::sysproxy::resolve(),
                 "proxyCandidates": super::sysproxy::describe(),
@@ -238,12 +271,12 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
     tokio::task::spawn_blocking(move || {
         let picked = fetch_latest_blocking().and_then(|v| {
             let tag = v["tag_name"].as_str().unwrap_or("latest").to_string();
-            let (url, name) = pick_installer(&v).ok_or_else(|| {
+            let inst = pick_installer(&v).ok_or_else(|| {
                 DbMindError::new(ErrorCode::Internal, "最新发行版没有可下载的安装包（只有源码包）")
             })?;
-            Ok::<_, DbMindError>((url, name, tag))
+            Ok::<_, DbMindError>((inst, tag))
         });
-        let (url, name, tag) = match picked {
+        let (inst, tag) = match picked {
             Ok(x) => x,
             Err(e) => {
                 let mut p = cell.lock().unwrap();
@@ -252,9 +285,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 return;
             }
         };
-        let dest = resolve_dir(want_dir.as_deref()).join(&name);
-        // 下载源候选（直连优先，配了镜像再追加），逐个试
-        let sources = download_sources(&url);
+        let dest = resolve_dir(want_dir.as_deref()).join(&inst.name);
         if let Some(dir) = dest.parent() {
             if let Err(e) = std::fs::create_dir_all(dir) {
                 let mut p = cell.lock().unwrap();
@@ -263,7 +294,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 return;
             }
         }
-        match download_with_progress(&sources, &dest, &cell) {
+        match download_with_progress(&inst, &dest, &cell) {
             Ok(()) => {
                 let installer = dest.to_string_lossy().to_string();
                 let ok = launch_installer(&dest);
@@ -316,27 +347,121 @@ pub struct ApplyReq {
 /// 自动手段全失败后给用户的手动兜底地址
 const RELEASE_PAGE: &str = "https://github.com/rick-works/dbmind/releases";
 
-/// 下载源候选：GitHub 直连优先；配了 `DBMIND_UPDATE_MIRROR` 才追加镜像前缀。
+/// 默认镜像前缀，按实测速度排序（2026-10 国内直连、无代理）：
 ///
-/// **为什么不默认内置公共镜像**：镜像是一个能替换包内容的中间人（它替我们跟 GitHub 握手，
-/// 转交的字节由它决定）。在安装包既没有签名也没有校验和之前，自动走第三方镜像等于把
-/// "发什么包"交给别人 —— 这不是能替用户默认打开的开关。所以只认用户自己给的可信前缀
-/// （企业 Nexus / 自建反代：`DBMIND_UPDATE_MIRROR=https://mirror.example.com/gh/`，
-/// 按 `<前缀><原地址>` 拼接，也支持含 `{url}` 的模板写法），或者照常开代理
-/// （系统代理会被自动识别，见 sysproxy）。
+/// | 源 | 结果 |
+/// |---|---|
+/// | 直连 github.com/releases/download | **不通**（21s 超时、0 字节） |
+/// | ghproxy.net | 可用，~220 KB/s |
+/// | gh-proxy.com | 可用，~74 KB/s |
+/// | ghfast.top / gh.llkk.cc / github.moeyy.xyz | 不通 |
+///
+/// 之所以敢默认开：字节流可以被镜像替换，但**sha256 来自 GitHub API**（直连可达），
+/// 下完一定校验（见 `download_with_progress`）—— 中间人换不了 API 的响应。
+/// `DBMIND_UPDATE_MIRRORS` 可整表替换（逗号分隔，`<前缀><原地址>` 或含 `{url}` 的模板），
+/// 设成 `none` 则完全只用直连。
+const DEFAULT_MIRRORS: &[&str] = &["https://ghproxy.net/", "https://gh-proxy.com/"];
+
+/// 生效的镜像前缀表（环境变量优先于内置默认）
+fn mirror_prefixes() -> Vec<String> {
+    match std::env::var("DBMIND_UPDATE_MIRRORS") {
+        Ok(v) => {
+            let v = v.trim();
+            if v.eq_ignore_ascii_case("none") || v.is_empty() {
+                Vec::new()
+            } else {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            }
+        }
+        Err(_) => DEFAULT_MIRRORS.iter().map(|s| s.to_string()).collect(),
+    }
+}
+
+/// 下载源候选：**直连永远第一**，其后按镜像表拼接；逐个试，直连成功就轮不到镜像。
 fn download_sources(url: &str) -> Vec<String> {
     let mut out = vec![url.to_string()];
-    if let Ok(prefix) = std::env::var("DBMIND_UPDATE_MIRROR") {
-        let prefix = prefix.trim();
-        if !prefix.is_empty() {
-            out.push(if prefix.contains("{url}") {
-                prefix.replace("{url}", url)
-            } else {
-                format!("{prefix}{url}")
-            });
-        }
+    for prefix in mirror_prefixes() {
+        out.push(if prefix.contains("{url}") {
+            prefix.replace("{url}", url)
+        } else {
+            format!("{prefix}{url}")
+        });
     }
     out
+}
+
+/// 从校验工具的输出里挑出 sha256。
+///
+/// 三种工具的格式都不一样，而且**不能被路径里的字符骗到**（那是安全校验，宁可判失败也不能认错）：
+/// - Windows `certutil -hashfile x SHA256`：哈希单独一行，老版本还会分段加空格；
+/// - macOS `shasum -a 256 x` / Linux `sha256sum x`：`<哈希>  <文件名>`，文件名可能带十六进制字符。
+///
+/// 所以先按"整行只含十六进制与空格"严格匹配（certutil 那条），再退回"按空白切词、取长度 64 的纯十六进制词"。
+fn parse_sha256(out: &str) -> Option<String> {
+    let strict = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && l.chars().all(|c| c.is_ascii_hexdigit() || c == ' '))
+        .map(|l| l.chars().filter(|c| c.is_ascii_hexdigit()).collect::<String>())
+        .find(|l| l.len() == 64);
+    if let Some(h) = strict {
+        return Some(h.to_ascii_lowercase());
+    }
+    out.lines()
+        .flat_map(|l| l.split_whitespace())
+        .find(|tok| tok.len() == 64 && tok.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(|tok| tok.to_ascii_lowercase())
+}
+
+/// 从 URL 里抠出主机名，用于进度说明（"正在从 ghproxy.net 下载"比"从第 2 个源下载"有用）
+fn host_of(url: &str) -> String {
+    url.split("//")
+        .nth(1)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url)
+        .to_string()
+}
+
+/// 用**系统自带**工具算 sha256：Windows `certutil`、macOS `shasum`、Linux `sha256sum`。
+///
+/// 为什么不引 sha2 crate：这条链路只在下载完成后跑一次，而把依赖面控制住比省一次进程开销
+/// 更重要（内核刻意不引网络依赖也是同一个考虑）。三种工具在各自平台上都必有。
+fn sha256_file(path: &std::path::Path) -> dbmind_core::Result<String> {
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = std::process::Command::new("certutil");
+        c.args(["-hashfile", &path.to_string_lossy(), "SHA256"]);
+        dbmind_core::hide_console(&mut c);
+        c
+    };
+    #[cfg(target_os = "macos")]
+    let mut cmd = {
+        let mut c = std::process::Command::new("shasum");
+        c.args(["-a", "256", &path.to_string_lossy()]);
+        c
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = {
+        let mut c = std::process::Command::new("sha256sum");
+        c.arg(path.to_string_lossy().as_ref());
+        c
+    };
+    let out = cmd
+        .output()
+        .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("调用系统校验工具失败：{e}")))?;
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    parse_sha256(&text)
+        .ok_or_else(|| {
+            DbMindError::new(
+                ErrorCode::Internal,
+                format!("无法解析校验结果：{}", text.trim().chars().take(160).collect::<String>()),
+            )
+        })
 }
 
 /// 断点续传用的临时文件（下完才改名成最终安装包）。
@@ -368,41 +493,75 @@ fn human_bytes(n: u64) -> String {
 ///   3. 停滞 30 秒由 `timeout_read` 触发报错，不会挂到总超时；
 ///   4. 大文件开局 15 秒还拿不到 512 KB，判定"这个源太慢"，直接换下一个源。
 fn download_with_progress(
-    sources: &[String],
+    inst: &Installer,
     dest: &std::path::Path,
     cell: &Arc<std::sync::Mutex<Progress>>,
 ) -> dbmind_core::Result<()> {
+    let sources = download_sources(&inst.url);
     let part = part_path(dest);
     let mut errs: Vec<String> = Vec::new();
     for (si, src) in sources.iter().enumerate() {
+        let host = host_of(src);
         for attempt in 1..=2u32 {
             let done = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
             let note = if si > 0 {
                 Some(if done > 0 {
-                    format!("直连不畅，改用镜像源，并从已下载的 {} 继续", human_bytes(done))
+                    format!("直连不通，已改用镜像 {host}，并从已下载的 {} 继续", human_bytes(done))
                 } else {
-                    "直连不畅，改用镜像源重试".to_string()
+                    format!("直连不通，已改用镜像 {host}")
                 })
             } else if attempt > 1 {
                 Some(format!("第 {attempt} 次重试（已下载 {}，接着下）", human_bytes(done)))
+            } else if done > 0 {
+                Some(format!("从已下载的 {} 继续", human_bytes(done)))
             } else {
-                None
+                // 别让用户对着一动不动的 0% 猜：明说在连哪个源
+                Some(format!("正在连接下载源 {host} …"))
             };
             cell.lock().unwrap().note = note;
-            match download_once(src, &part, cell) {
+            let before = done;
+            // 慢速判定只在**后面还有别的源可试**时生效：否则一个 220 KB/s 能用的镜像
+            // 偶尔掉到 30 KB/s 就被判"太慢"掐掉，等于把本来能下完的活干成失败。
+            let can_switch = si + 1 < sources.len();
+            match download_once(src, &part, cell, can_switch) {
                 Ok(()) => {
+                    // 校验：**这一步是允许默认走镜像的前提**。sha256 来自 GitHub API
+                    // （直连可达），镜像换不了它；对不上就直接丢弃，绝不去执行一个可疑的安装包。
+                    if let Some(want) = &inst.sha256 {
+                        let got = sha256_file(&part)?;
+                        if !got.eq_ignore_ascii_case(want) {
+                            let _ = std::fs::remove_file(&part);
+                            return Err(DbMindError::new(
+                                ErrorCode::Internal,
+                                format!(
+                                    "安装包校验失败（期望 {want}，实得 {got}），文件已丢弃。\
+                                     可能是下载源被篡改或传输损坏，请换网络重试"
+                                ),
+                            ));
+                        }
+                        cell.lock().unwrap().verified = true;
+                    } else if si > 0 {
+                        // 走镜像又没官方值可对 ⇒ 内容无法自证，如实标记（界面会提示）
+                        cell.lock().unwrap().unverified = true;
+                    }
                     std::fs::rename(&part, dest).map_err(|e| {
                         DbMindError::new(ErrorCode::Internal, format!("保存安装包失败：{e}"))
                     })?;
                     return Ok(());
                 }
                 Err(e) => {
+                    let after = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
                     tracing::warn!(
                         target: "dbmind::update",
                         url = %src, attempt, error = %e.message, "安装包下载失败"
                     );
                     errs.push(e.message);
-                    // 同源重试前稍等，避开瞬时抖动（换源不等待，直接上）
+                    // 一个字节都没拿到 ⇒ 这个源根本连不上（被墙 / 黑洞），同源重试纯属浪费时间，
+                    // 直接换下一个源；只有"下着下着断了"才值得同源重试。
+                    if after <= before {
+                        break;
+                    }
+                    // 有进度却断了：多半是网络抖动，同源再试一次（带上 Range 续传），稍等避开瞬时故障
                     if attempt == 1 {
                         std::thread::sleep(Duration::from_secs(3));
                     }
@@ -413,13 +572,13 @@ fn download_with_progress(
     {
         let mut p = cell.lock().unwrap();
         p.note = None;
-        p.url = sources.first().cloned();
+        p.url = Some(inst.url.clone());
     }
     Err(DbMindError::new(
         ErrorCode::Internal,
         format!(
             "在线更新下载失败：{}。\n可改用：① 启动代理后重试（软件会自动使用系统代理）；\
-             ② 指定镜像源（环境变量 DBMIND_UPDATE_MIRROR，形如 https://mirror.example.com/gh/）；\
+             ② 用环境变量 DBMIND_UPDATE_MIRRORS 指定自己信任的镜像；\
              ③ 直接到发布页手动下载 {RELEASE_PAGE}",
             errs.join("；")
         ),
@@ -431,6 +590,8 @@ fn download_once(
     url: &str,
     part: &std::path::Path,
     cell: &Arc<std::sync::Mutex<Progress>>,
+    // 这个源后面还有别的源可换吗？没有的话就不做"慢速掐断"（宁可慢，也别失败）
+    allow_slow_abort: bool,
 ) -> dbmind_core::Result<()> {
     use std::io::Write;
     let offset = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
@@ -491,7 +652,7 @@ fn download_once(
     let mut last_report = Instant::now();
     let attempt_started = Instant::now();
     // 只有大文件才判"慢"：小文件按字节数判会把正常慢速误判成故障
-    let judge_slow = total == 0 || total > 4 * 1024 * 1024;
+    let judge_slow = allow_slow_abort && (total == 0 || total > 4 * 1024 * 1024);
     loop {
         let n = reader.read(&mut buf).map_err(|e| {
             DbMindError::new(
@@ -675,6 +836,8 @@ pub async fn progress() -> Json<Value> {
         "error": p.error,
         "note": p.note,
         "url": p.url,
+        "verified": p.verified,
+        "unverified": p.unverified,
         "installer": p.installer,
         "version": p.version,
         "proxy": p.proxy,

@@ -1005,6 +1005,8 @@
       <!-- 过程说明（换源 / 续传 / 第几次重试）：只在下载进行中才有意义 -->
       <div v-if="dlStatus === 'running' && dlNote" class="upd-dl-tip">{{ dlNote }}</div>
       <div v-if="dlStatus === 'done'" class="upd-dl-tip">{{ t('update.applyDone') }}</div>
+      <div v-if="dlStatus === 'done' && dlVerified" class="upd-dl-tip">{{ t('update.dlVerified') }}</div>
+      <div v-if="dlStatus === 'done' && dlUnverified" class="upd-dl-tip">{{ t('update.dlUnverified') }}</div>
     </div>
     <template #footer>
       <!-- 失败必须能**原地重试**：以前失败后只能重启软件，点更新图标永远弹回同一个报错页 -->
@@ -1170,6 +1172,9 @@ const dlError = ref('')
 // 过程说明（换源 / 续传 / 第几次重试），来自后端 note —— 不是错误，画在进度条下方
 const dlNote = ref('')
 const dlUrl = ref('')
+// 下载完成后：是否用 GitHub 官方 sha256 校验过；走了镜像又没官方值时可自证性为 0，界面必须说清
+const dlVerified = ref(false)
+const dlUnverified = ref(false)
 
 // 弹窗只放「更新摘要」：Release 全文动辄几千字，整篇塞进弹窗会把弹窗撑满屏、
 // 还要滚动才看得到按钮。这里截取开头一小段 + 给「查看完整更新说明」链接。
@@ -1235,6 +1240,8 @@ const startDownload = async (dir) => {
   dlError.value = ''
   dlNote.value = ''
   dlUrl.value = ''
+  dlVerified.value = false
+  dlUnverified.value = false
   startProgressPolling()
   try {
     const res = await applyUpdateApi(dir)
@@ -1261,6 +1268,8 @@ const startProgressPolling = (fast = true) => {
       dlSpeed.value = p.speed || 0
       dlNote.value = p.note || ''
       dlUrl.value = p.url || ''
+      dlVerified.value = !!p.verified
+      dlUnverified.value = !!p.unverified
       if (p.status === 'done' || p.status === 'failed') {
         dlStatus.value = p.status
         if (p.status === 'failed') dlError.value = p.error || t('update.applyFail')
@@ -1313,6 +1322,8 @@ const checkUpdate = async () => {
         dlSpeed.value = p.speed || 0
         dlNote.value = p.note || ''
         dlUrl.value = p.url || ''
+        dlVerified.value = !!p.verified
+        dlUnverified.value = !!p.unverified
         startProgressPolling()
         return
       }
