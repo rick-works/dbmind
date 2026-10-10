@@ -479,8 +479,10 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
    「图标颜色都一样了」根因即此），浅色主题覆盖为深色。 */
 :root {
   /* 文本/字符串列的类型图标：原来给的是灰（#9aa7b8），与"没上色"几乎无差别 ——
-     文本列在实际表里占最多，于是整排表头看着像图标都没有颜色。改成青绿（应用里本来就有这一族色）。 */
-  --th-t-text: #4ecdc4;
+     文本列在实际表里占最多，于是整排表头看着像图标都没有颜色。
+     中间试过青绿 #4ecdc4，但它和布尔绿 #4ade80 在表头里几乎分不出（用户反馈"2 个绿色差不多了"），
+     所以落到玫红：与已有的蓝(数值)/紫(日期)/橙(JSON)/绿(布尔)/琥珀(键)/灰(二进制) 都拉开。 */
+  --th-t-text: #f472b6;
   --th-t-num:  #6ea8ff;
   --th-t-date: #a78bfa;
   --th-t-json: #f0a24b;
@@ -489,8 +491,8 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
   --th-t-key:  #f0b355;
 }
 html[data-theme="light"] {
-  /* 同上：浅色下要用更深一档的青绿，压在浅蓝表头底上才够清楚 */
-  --th-t-text: #0f8b85;
+  /* 同上：浅色下要用更深一档的玫红，压在浅蓝表头底 #e4ebf8 上才够清楚 */
+  --th-t-text: #be185d;
   --th-t-num:  #2f6fdd;
   --th-t-date: #7c5cd6;
   --th-t-json: #c77414;
