@@ -728,11 +728,16 @@ const applyTableHover = (e) => {
   if (drag) { wrap.style.cursor = 'col-resize'; return }
   const cell = e.target.closest('th, td')
   if (lastHover && lastHover !== cell) lastHover.style.cursor = ''
-  // 光标统一交给 CSS：列头一律手型（用户口径：几个表格要统一，不能"有的地方是手、有的是 ↔"）。
-  // 这里只清掉残留的内联 cursor，不再自己设 col-resize —— 列宽调整照样可用：
-  // .col-resizer 的 mousedown 与 edgeColIdx 的几何判定都没动，真正拖起来后由 .col-resizing 强制成 ↔。
-  if (lastHover) { lastHover.style.cursor = ''; lastHover = null }
-  if (wrap.style.cursor) wrap.style.cursor = ''
+  // 光标口径（用户最终口径）：列头整格是手型（CSS 给），**只有列与列之间的中线附近**显示 ↔。
+  // 中线只有 1px，照 1px 判定抓不住，所以按 edgeColIdx 的 ±EDGE_GAP 判定。
+  const vi = edgeColIdx(e)
+  if (vi >= 0 && cell) {
+    cell.style.cursor = 'col-resize'
+    lastHover = cell
+  } else {
+    lastHover = null
+  }
+  wrap.style.cursor = vi >= 0 ? 'col-resize' : ''
 }
 const onTableLeave = () => {
   const wrap = tableWrapRef.value
@@ -1815,12 +1820,12 @@ onBeforeUnmount(() => {
 }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 列宽拖拽把手 */
-/* 列宽把手：**光标继承列头（手型）** —— 用户口径是"列头一律手型"，所以这里不再自己写 col-resize，
-   只保留 10px 命中区与 mousedown 抓取。真正拖起来时由 .col-resizing / document.body 强制成 ↔，
-   那时的反馈照样清楚；列与列之间本来就有 1px 边框线指示边界在哪。 */
+/* 列宽把手：就压在**列与列之间的中线**上（right:-5px + 10px 宽 = 跨中线两侧各 5px），
+   所以这里必须是 col-resize —— 用户口径：列头整格是手，但中线上要是列宽调整的 ↔。
+   它同时提供 mousedown 抓取与这条 10px 的命中带。 */
 .col-resizer {
   position: absolute; top: 0; right: -5px; bottom: 0; width: 10px;
-  cursor: inherit; z-index: 6; user-select: none;
+  cursor: col-resize; z-index: 6; user-select: none;
 }
 .data-table.col-resizing { cursor: col-resize; user-select: none; }
 .data-table td {

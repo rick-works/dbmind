@@ -1237,12 +1237,21 @@ const applyResultTableHover = (e) => {
   if (resultScrolling) return
   if (isResultColDragging()) return
   if (resultDrag) { wrap.style.cursor = 'col-resize'; return }
-  // 光标统一交给 CSS：列头一律手型（用户口径：几个表格要统一，不能"有的地方是手、有的是 ↔"）。
-  // 这里只负责清掉可能残留在某格上的**内联** cursor（窗口复用后会留下），不再自己设 col-resize。
-  // 列宽调整照样可用：按下时按几何判定（onResultTableDown 用的仍是 resultEdgeColIdx），
-  // 真正拖起来后由 document.body 强制成 ↔，那一刻的反馈很清楚；列之间本来也有 1px 边框指示边界。
-  if (resultLastHover) { resultLastHover.style.cursor = ''; resultLastHover = null }
-  if (wrap.style.cursor) wrap.style.cursor = ''
+  // 光标口径（用户最终口径；前两版把它改反过，这里定死）：
+  //   · 列头**整格**是手型（可点：单击选列、排序图标切排序）—— 由 CSS 给，不在这里写；
+  //   · 只在**列与列之间的中线**附近显示列宽调整的 ↔（离开就清掉，让 CSS 的手型露出来）。
+  // 中线本身只有 1px 宽，照 1px 判定鼠标根本抓不住，所以留 ±RESULT_EDGE_GAP 的带子。
+  // 真正拖起来后由 document.body 强制 ↔，与这里一致，不会有跳变。
+  const cell = e.target.closest('th, td')
+  if (resultLastHover && resultLastHover !== cell) resultLastHover.style.cursor = ''
+  const ci = resultEdgeColIdx(e)
+  if (ci >= 0 && cell) {
+    cell.style.cursor = 'col-resize'
+    resultLastHover = cell
+  } else {
+    resultLastHover = null
+  }
+  wrap.style.cursor = ci >= 0 ? 'col-resize' : ''
 }
 const onResultTableLeave = () => {
   if (resultTableWrapRef.value) {
