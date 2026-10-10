@@ -4932,7 +4932,12 @@ onBeforeUnmount(() => {
 .data-table thead { position: sticky; top: -1px; z-index: 2; }
 /* 表头：保留竖向分隔线（用户口径）；右侧多留 26px 给绝对定位的排序图标，
    字段名省略号在图标前收住（窄列不重叠）。有注释时表头两行，高度交给内容 */
-.data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 5px 26px 5px 10px; height: auto; line-height: 1.3; vertical-align: middle; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; }
+/* 表头底的对比靠主题变量（浅色 #e4ebf8 / 深色 #2b3242，比数据区明显一档）；
+   这里再加一条 2px 压边线把"表头 / 数据"分开 —— 这是"一眼看出是表头"最有效的一笔。
+   用 inset 阴影而不是 border-bottom：表是 border-collapse: collapse，折叠后的下边框由 table 画，
+   不跟着吸顶走（同上面 thead 那段注释说的"上边缝"是一个道理）。
+   注意排序态会用自己的主色 2px 条覆盖它（见下面 .sort-asc/.sort-desc），那是对的。 */
+.data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 5px 26px 5px 10px; height: auto; line-height: 1.3; vertical-align: middle; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; box-shadow: inset 0 -2px 0 var(--dc-table-head-line); }
 /* 表头文字块：竖排两行 —— 第一行「类型图标 + 字段名」，第二行注释顶格 */
 .data-table th .th-text {
   display: inline-flex; flex-direction: column; justify-content: center;

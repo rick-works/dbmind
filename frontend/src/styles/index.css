@@ -33,7 +33,11 @@
   --dc-bg-input: #1c1f27;      /* 输入框底 */
   --dc-bg-pop: #2b3040;        /* 下拉/popper/message 底 */
   --dc-bg-hover: #2c3140;      /* hover */
-  --dc-bg-table-head: #1e222c; /* 表头 */
+  /* 表头底：必须与**数据区**（含斑马纹 --dc-bg-soft）明显拉开一档，否则"看不出是表头"。
+     深色主题下取比卡片略亮的一档（原来 #1e222c 与内嵌块 #1a1d24 太近）。 */
+  --dc-bg-table-head: #2b3242;
+  /* 表头与数据区之间的那条压边线（2px，画在 th 上，吸顶滚动时跟着走） */
+  --dc-table-head-line: rgba(255, 255, 255, .14);
   --dc-scrollbar: #3d4250;
   --dc-scrollbar-hover: #4a5062;
   --dc-mask: rgba(16, 18, 24, .72); /* 遮罩 */
@@ -114,7 +118,10 @@ html[data-theme="light"] {
   --dc-bg-input: #ffffff;
   --dc-bg-pop: #ffffff;
   --dc-bg-hover: #e8edf6;
-  --dc-bg-table-head: #f1f4f9;
+  /* 原来是 #f1f4f9 —— 与斑马纹 --dc-bg-soft(#f4f6fb) 几乎同色，表头看着就是"又一行数据"。
+     换成明显更深、也更偏蓝的一档，读起来才像"表头"。 */
+  --dc-bg-table-head: #e4ebf8;
+  --dc-table-head-line: #c3d0e6;
   --dc-scrollbar: #c4cdda;
   --dc-scrollbar-hover: #adb8c9;
   --dc-mask: rgba(30, 41, 59, .34);

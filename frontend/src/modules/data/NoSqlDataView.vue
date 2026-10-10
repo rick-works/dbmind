@@ -1773,6 +1773,10 @@ onBeforeUnmount(() => {
   padding: 5px 26px 5px 10px; height: auto; line-height: 1.3; vertical-align: middle;
   border: 1px solid var(--dc-border); white-space: nowrap;
   overflow: hidden;
+  /* 与数据区之间的 2px 压边线：表头底的对比靠主题变量（浅色 #e4ebf8 / 深色 #2b3242，
+     比数据区明显一档），这条线是"一眼看出是表头"最有效的一笔。
+     用 inset 阴影而非 border-bottom：border-collapse 折叠后的下边框由 table 画、不跟吸顶走。 */
+  box-shadow: inset 0 -2px 0 var(--dc-table-head-line);
 }
 .data-table th.sortable { cursor: pointer; user-select: none; }
 .data-table th.sortable:hover { color: var(--dc-text); }
