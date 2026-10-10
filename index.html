@@ -655,11 +655,11 @@
             <span class="rel-date">2026-10-09</span>
           </div>
           <ul class="rel-notes">
-            <li><b>ClickHouse 查询不再被行数上限误杀</b>：驱动会把上限下推成服务端 <code>max_result_rows</code>，而服务端默认溢出动作是 <code>throw</code> —— 结果一超限整条 SQL 直接失败（Code 396 TOO_MANY_ROWS_OR_BYTES），表数据浏览（200 条/页）与 SQL 执行都会踩到。现在连接串带上 <code>result_overflow_mode=break</code>：服务端照旧提前刹车，但改成截断返回，超出部分由客户端提示「已截断」</li>
-            <li><b>乱码报错 <code>Failed to read boolean value…</code> 一并消失</b>：不设上限时服务端会把整表流下来（实测 237 万行），驱动在长结果流上的二进制解析会错位；现在上限照设（服务端截断），既少拉数据也不再错位</li>
-            <li><b>总数（基数）一直显示 -1 修复</b>：ClickHouse 的 <code>count(*)</code> 回来是浮点，取值只认整数导致派生表 / 裸 FROM 两层计数全部「统计不出」，最后退到二分探测被 10 秒预算掐断；现在整数 / 浮点 / 字符串三种形态都认</li>
-            <li><b>选中片段「格式化」报 <code>t is not a function</code> 修复</b>：函数内的局部变量遮蔽了 i18n 的 <code>t()</code>；「大写 / 小写 / 单行 / 复制为 IN 列表 / 复制为单行」等受同一问题影响的 5 处一并修好</li>
-            <li><b>关键字「前换行」不再多断一行</b>：<code>FROM</code> 选「前换行」时得到 <code>FROM users u</code>，而不是关键字独占一行后再把内容挪到下一行缩进</li>
+            <li><b>点开一张两千多行的表不再「执行失败」</b>：程序为了知道「还有没有下一页」，取数时会多要一条，而 ClickHouse 把它理解成「超过就整条报错」—— 表里行数一多，点开就是一条失败。现在改成「取到上限就停下并提示已截断」，和 MySQL / Doris / SQL Server 表现一致</li>
+            <li><b>另一个莫名其妙的报错也一起消失了</b>：提示「读取布尔值失败」的那种报错其实是同一处问题的另一面 —— 以前为了绕开限制干脆不设上限，服务端于是把整张表（实测 237 万行）一起推下来，读的过程就出错了；现在上限照设，数据也少拉了很多</li>
+            <li><b>总数不再显示 -1</b>：ClickHouse 返回的计数是小数，程序以前只认整数，取不到就等于「统计不出来」，界面上便永远看不到总条数（「总数统计中…」一闪就没了）；现在各种数字形态都认，与左侧树的表行数、质量规则的违规数口径一致</li>
+            <li><b>选中一段 SQL 点「格式化」不再报错</b>：以前会弹 <code>t is not a function</code>；「大写 / 小写 / 单行」「复制为 IN 列表」「复制为单行」等受同一问题影响的 5 处一并修好</li>
+            <li><b>关键字「前换行」不再多断一行</b>：<code>FROM</code> 选「前换行」时现在得到 <code>FROM users u</code>，而不是关键字独占一行后再把内容挪到下一行缩进</li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.3" target="_blank" rel="noopener">发布说明</a>
@@ -678,11 +678,11 @@
             <span class="rel-date">2026-10-07</span>
           </div>
           <ul class="rel-notes">
-            <li><b>在线更新打通</b>：自动识别系统代理下载（Windows 注册表 / macOS scutil / Linux gsettings），可自选保存目录，下载完成自动拉起安装器</li>
-            <li><b>下载可放后台</b>：关掉进度窗下载继续进行，顶栏刷新图标显示任务角标，点一下随时调回进度窗</li>
-            <li><b>更新说明按 Markdown 渲染</b>：表格与列表正常显示，并修正「关于」页版本号与实际安装包不一致的问题</li>
-            <li><b>装机反馈修复</b>：精简 JRE 补上 <code>jdk.charsets</code> 模块（Doris 连不上）、启动与连接时不再闪黑窗</li>
-            <li><b>首页 KPI 面板</b>：总连接数 / 已连接数 / 连接类型，空态首页一眼看清家底</li>
+            <li><b>配了代理也能下载更新</b>：自动识别系统代理（Windows / macOS / Linux 都支持）—— 以前在代理环境下点更新就是一直下载不动；现在会自动走代理，探测不到可用代理时也不会把其它请求一起拖住</li>
+            <li><b>下载可以放后台</b>：关掉进度窗，下载继续进行，顶栏更新图标显示任务角标，点一下随时调回进度窗；下载完自动拉起安装器</li>
+            <li><b>更新说明能正常排版</b>：表格与列表都按原样显示，内容太长会折叠成「查看完整更新说明 →」；顺带修掉「关于」页版本号与实际安装包不一致的问题</li>
+            <li><b>装机反馈修复</b>：Doris 连不上（自带运行环境缺字符集模块）已修，Doris 驱动换成与 MySQL 同一版本；启动与连接时不再闪黑窗</li>
+            <li><b>首页 KPI 面板</b>：空态首页顶部恢复「总连接数 / 已连接数 / 连接类型」，一眼看清家底；驱动下载也显示实时进度（慢镜像下不再像卡死）</li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.2" target="_blank" rel="noopener">发布说明</a>
@@ -701,9 +701,9 @@
             <span class="rel-date">2026-10-06</span>
           </div>
           <ul class="rel-notes">
-            <li><b>审计日志增强</b>：按类别筛选（查询 / 数据 / 表操作 / 事务 / 其他执行 / AI / 失败）、一键复制 SQL、真实总条数与页数</li>
-            <li><b>日志不再自动清理</b>：只在点「清空日志」时一次清空全部记录（执行历史 + AI 调用）</li>
-            <li><b>设置界面细节修复</b>：弹窗高度自适应视口、日志列表内滚动、分页条常驻可见、窄屏自适应宽度</li>
+            <li><b>审计日志增强</b>：按类别筛选（查询 / 数据 / 表操作 / 事务 / 其他执行 / AI / 失败）、一键复制 SQL，总条数与页数都是准数</li>
+            <li><b>日志不再自动清理</b>：只在你点「清空日志」时才清空（执行历史 + AI 调用都算在内）—— 以前启动和执行时会悄悄丢掉老记录</li>
+            <li><b>设置界面细节修复</b>：弹窗高度跟随窗口、日志列表内滚动、分页条常驻可见、窄窗口不再裁内容；「关于」页新增目录说明</li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.1" target="_blank" rel="noopener">发布说明</a>
@@ -722,10 +722,10 @@
             <span class="rel-date">2026-09-28</span>
           </div>
           <ul class="rel-notes">
-            <li><b>AI 加持</b>：SQL 解释 / 优化建议 / 报错自动修复 / 性能诊断 / 智能问答，结合库结构给出可执行建议</li>
-            <li><b>多数据源统一管理</b>：MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / 达梦 / 人大金仓 等 17+ 种</li>
-            <li><b>事务模式与结果集直接编辑</b>：改数据可自查、可回滚、确认后提交</li>
-            <li><b>智能 SQL 编辑器与千万级结果集</b>：补全 / 格式化 / 分块执行 / 片段库 / 模板变量，异步统计、虚拟滚动</li>
+            <li><b>AI 加持</b>：SQL 解释 / 优化建议 / 报错自动修复 / 性能诊断 / 智能问答，结合你的库结构给出能落地的建议</li>
+            <li><b>一个工作台管住 17+ 种数据源</b>：MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / 达梦 / 人大金仓 等</li>
+            <li><b>事务模式与结果集直接编辑</b>：改数据可自查、可回滚，确认后再提交；过期改动自动作废，不会改错行</li>
+            <li><b>智能 SQL 编辑器与超大结果集</b>：补全 / 格式化 / 分块执行 / 片段库 / 模板变量；上千万行的表也能一秒见数</li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.0" target="_blank" rel="noopener">发布说明</a>
