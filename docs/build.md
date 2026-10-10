@@ -92,3 +92,14 @@ gh release create v<版本> --title "DBmind v<版本>" --generate-notes `
   dist\installer\DBmind_<版本>_x64-setup.exe `
   dist\installer\DBmind_<版本>_x64_en-US.msi
 ```
+
+3. 同步 Homebrew cask（cask 在**另一个仓库** `rick-works/homebrew-tap`；用户据此
+   `brew install --cask --no-quarantine rick-works/tap/dbmind` 装 mac 版，全程不弹那道拦截窗）：
+
+```powershell
+powershell -File scripts\update-homebrew-cask.ps1        # 取最新 Release；也可 -Version 1.2.7
+```
+
+脚本从 GitHub API 读两个 `.dmg` 的 sha256（`assets[].digest`，不用下载 100+MB），
+改写 tap 里的 `Casks/dbmind.rb` 并推送。**为什么不做进 CI**：跨仓库推送需要额外的 PAT
+（Actions 自带的 `GITHUB_TOKEN` 只能写当前仓库），而这件事每次发版只跑一次 —— 脚本比长期密钥划算。
