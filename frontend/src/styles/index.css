@@ -478,7 +478,9 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
    颜色走主题变量：默认深色主题下用亮色（暗底上中暗色全都糊成一片，真机反馈
    「图标颜色都一样了」根因即此），浅色主题覆盖为深色。 */
 :root {
-  --th-t-text: #9aa7b8;
+  /* 文本/字符串列的类型图标：原来给的是灰（#9aa7b8），与"没上色"几乎无差别 ——
+     文本列在实际表里占最多，于是整排表头看着像图标都没有颜色。改成青绿（应用里本来就有这一族色）。 */
+  --th-t-text: #4ecdc4;
   --th-t-num:  #6ea8ff;
   --th-t-date: #a78bfa;
   --th-t-json: #f0a24b;
@@ -487,7 +489,8 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
   --th-t-key:  #f0b355;
 }
 html[data-theme="light"] {
-  --th-t-text: #5b6b7d;
+  /* 同上：浅色下要用更深一档的青绿，压在浅蓝表头底上才够清楚 */
+  --th-t-text: #0f8b85;
   --th-t-num:  #2f6fdd;
   --th-t-date: #7c5cd6;
   --th-t-json: #c77414;
