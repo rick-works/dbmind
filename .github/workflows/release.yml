@@ -457,10 +457,26 @@ jobs:
           fi
           echo "app = $app"
           echo "dmg = $dmg"
-          python3 -m pip install --quiet --user dmgbuild \
-            || { echo "::warning::装不上 dmgbuild，保留 Tauri 原样 DMG"; exit 0; }
+          # ⚠️ 不能用 `pip install --user`：runner 上的 Python 是 Homebrew 装的，受
+          #    PEP 668（externally-managed-environment）保护，直接装会被拒 —— v1.2.2 就是
+          #    这么失败的（日志里那句 ##[warning]装不上 dmgbuild）。
+          #    优先用 venv 绕开；venv 不可用（极少见）时退到 --break-system-packages
+          #    —— 那只是往一个一次性的 runner 里装，不会有副作用。
+          venv="$RUNNER_TEMP/dmgvenv"
+          dmgbuild_bin=""
+          if python3 -m venv "$venv" 2>/dev/null \
+             && "$venv/bin/pip" install --quiet --upgrade pip dmgbuild 2>/dev/null; then
+            dmgbuild_bin="$venv/bin/dmgbuild"
+          elif python3 -m pip install --quiet --user --break-system-packages dmgbuild 2>/dev/null; then
+            dmgbuild_bin="python3 -m dmgbuild"
+          fi
+          if [ -z "$dmgbuild_bin" ]; then
+            echo "::warning::装不上 dmgbuild，保留 Tauri 原样 DMG"
+            exit 0
+          fi
+          echo "dmgbuild 入口 = $dmgbuild_bin"
           out="$RUNNER_TEMP/DBmind-styled.dmg"
-          if python3 -m dmgbuild -s scripts/dmg-settings.py "DBmind" "$out"; then
+          if $dmgbuild_bin -s scripts/dmg-settings.py "DBmind" "$out"; then
             cp "$out" "$dmg"
             echo "已用 dmgbuild 重做 DMG 外观"
           else

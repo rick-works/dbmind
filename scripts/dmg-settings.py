@@ -26,6 +26,11 @@ icon_locations = {
     'Applications': (480, 190),
 }
 
+# 压缩成只读镜像。**必须显式写**：dmgbuild 的默认格式是 UDRW（可读写、不压缩），
+# 不写这一行出来的镜像会比 Tauri 那个大好几倍。
+format = 'UDZO'
+compression_level = 9
+
 # 窗口位置与尺寸（宽度与 tauri.conf.json 的 bundle.macOS.dmg.windowSize 保持一致，
 # 这样两套打包方式出来的观感是同一个）
 window_rect = ((200, 120), (660, 400))
