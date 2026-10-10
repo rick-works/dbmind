@@ -152,6 +152,27 @@ fn dl_get(key: &str) -> Option<DlSnapshot> {
 ///
 /// **逐个补齐**（已有的跳过）：额外依赖是后来才加的，不该因为"主驱动已在"就
 /// 整段跳过 —— 那会让缺依赖的类型永远停在"缺 slf4j"上，只能靠手工清目录。
+/// 驱动下载的候选仓库根（顺序 = 优先级）。
+///
+/// - 用户**明确设了**镜像（阿里云 / 腾讯云 / 内网自定义根…）→ 只返回他设的那一个：
+///   绝不偷偷换源。企业内网仓库往往是唯一通路，换到公网既不通、也不合规。
+/// - 没设过，或设成「自动」→ 返回国内常用镜像 + Maven 中心，按顺序试：
+///   连不上或太慢就自动换下一个，用户全程无感知（页面上不需要任何选择）。
+fn driver_base_candidates(mirror: Option<&str>) -> Vec<String> {
+    let explicit = mirror
+        .map(str::trim)
+        .filter(|m| !m.is_empty() && !m.eq_ignore_ascii_case("auto"));
+    match explicit {
+        Some(m) => vec![dbmind_core::driver_mirror_base(Some(m))],
+        None => vec![
+            dbmind_core::driver_mirror_base(Some("aliyun")),
+            dbmind_core::driver_mirror_base(Some("huawei")),
+            dbmind_core::driver_mirror_base(Some("tencent")),
+            dbmind_core::MAVEN_CENTRAL.to_string(),
+        ],
+    }
+}
+
 async fn download(state: &AppState, kind: ConnectionKind) -> XResult<()> {
     let Some(agent_key) = kind.agent_key().map(str::to_string) else {
         return Ok(());
@@ -173,12 +194,7 @@ async fn download(state: &AppState, kind: ConnectionKind) -> XResult<()> {
         .await
         .ok()
         .flatten();
-    let base = dbmind_core::driver_mirror_base(mirror.as_deref());
-    let source = if base == dbmind_core::MAVEN_CENTRAL {
-        "Maven 中心"
-    } else {
-        "镜像"
-    };
+    let bases = driver_base_candidates(mirror.as_deref());
     let progress_key = kind.key().to_string();
     let progress_key_after = progress_key.clone();
     let progress_label = label.clone();
@@ -203,20 +219,43 @@ async fn download(state: &AppState, kind: ConnectionKind) -> XResult<()> {
             };
         });
         for (i, (artifact, name)) in todo.iter().enumerate() {
-            let url = dbmind_core::driver_artifact_url_with_base(artifact, Some(&base))?;
             dl_update(&progress_key, |p| {
                 p.index = i + 1;
                 p.file = name.clone();
                 p.received = 0;
                 p.total = 0;
             });
-            let response = ureq::get(&url).call().map_err(|err| {
-                DbMindError::new(
-                    ErrorCode::DriverNotReady,
-                    format!("从{source}下载 {label} 驱动失败（{name}）：{err}"),
-                )
-                .with_detail(url.clone())
-            })?;
+            // 逐个候选源试，拿第一个能用的：
+            // 总超时 60 秒 —— 连不上、或慢得离谱（60 秒还没把这一份下完）就换下一个源。
+            // 换源只写日志，不动界面：用户不需要知道中间换过源，只该看到"驱动装好了"。
+            let mut picked: Option<(ureq::Response, String)> = None;
+            let mut errs: Vec<String> = Vec::new();
+            for base in &bases {
+                let url = dbmind_core::driver_artifact_url_with_base(artifact, Some(base))?;
+                match ureq::get(&url).timeout(std::time::Duration::from_secs(60)).call() {
+                    Ok(resp) => {
+                        picked = Some((resp, base.clone()));
+                        break;
+                    }
+                    Err(err) => {
+                        tracing::warn!(url = %url, error = %err, "驱动源不可用，自动换源");
+                        errs.push(err.to_string());
+                    }
+                }
+            }
+            let (response, used_base) = match picked {
+                Some(v) => v,
+                None => {
+                    return Err(DbMindError::new(
+                        ErrorCode::DriverNotReady,
+                        format!(
+                            "下载 {label} 驱动失败（{name}）：所有下载源都不可用（{}）",
+                            errs.join("；")
+                        ),
+                    ))
+                }
+            };
+            tracing::info!(source = %used_base, file = %name, "驱动下载中");
             // Content-Length 有就报百分比，没有（chunked）就只报已下载量
             let total = response
                 .header("Content-Length")

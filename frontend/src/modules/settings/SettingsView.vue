@@ -613,9 +613,12 @@
 
           <el-form label-width="110px" label-position="left" class="ai-form">
             <el-form-item :label="$t('settings.driver.mirror')">
-            <el-select v-model="driverForm.mirror" style="width:240px">
+            <el-select v-model="driverForm.mirror" class="driver-mirror-select" :style="{ width: mirrorSelectWidth + 'px' }">
               <!-- 镜像商名是**专有名词**：Maven Central 哪个语言都这么写；
                    阿里云 / 华为云 / 腾讯云 在英文界面下用它们自己的英文名 -->
+              <!-- 「自动」是默认：不给用户添选择题 —— 后台按网络实时挑最快的源，
+                   用户设过镜像才用他设的（见后端 driver_base_candidates） -->
+              <el-option value="auto" :label="$t('settings.driver.mirrorAuto')" />
               <el-option value="maven" label="Maven Central" />
               <el-option value="aliyun" :label="$t('settings.driver.mirrorAliyun')" />
               <el-option value="huawei" :label="$t('settings.driver.mirrorHuawei')" />
@@ -631,9 +634,9 @@
             <el-form-item :label="$t('settings.driver.actualSource')">
               <div class="mirror-link">
                 <a v-if="mirrorBase" :href="mirrorBase" target="_blank" rel="noopener">{{ mirrorBase }}</a>
-                <span v-else>{{ $t('settings.driver.actualSourceNone') }}</span>
+                <!-- 自动模式没有"某一个"仓库根可显示，就说明它会怎么选 —— 空占位等于什么都没说 -->
+                <span v-else>{{ $t(driverForm.mirror === 'auto' ? 'settings.driver.actualSourceAuto' : 'settings.driver.actualSourceNone') }}</span>
               </div>
-              <div class="form-tip">{{ $t('settings.driver.actualSourceTip') }}</div>
             </el-form-item>
             </el-form>
 
@@ -1009,7 +1012,8 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v)
 })
 
-const activeTab = ref('ai')
+// 默认落在「通用」：点齿轮开设置时先看的是最常用的那一页（显式指定页签的入口不受影响，见下方 initialTab）
+const activeTab = ref('general')
 
 // 页签只存 i18nKey，不存中文原文 —— 文案统一由字典给（见 utils/i18n.js）。
 // 存一份中文再「顺便翻译」等于同一句话有两个真相，改文案时必然漏掉一处。
@@ -1574,12 +1578,18 @@ const logLevels = [
 // 值可以是关键字（maven/aliyun/huawei/tencent）或自定义内网仓库根（http(s):// 开头的 URL）——
 // 关键字 → URL 的映射前后端各有一份（后端是 agent.rs 的 driver_mirror_base），改动要两边同步。
 const MIRROR_BASES = {
-  maven: '',
+  // 自动：值本身不代表某个仓库根（后端按网络实时挑），所以这里给空串 ——
+  // 关键是**它必须在表里**，否则下面 `MIRROR_BASES[raw] !== undefined` 判定不过，
+  // 'auto' 会被当成"旧数据里的自定义 URL"或干脆退化成 Maven Central。
+  auto: '',
+  // Maven Central 也得给出真实仓库根：以前这里是空串，于是选中它时「实际下载源」什么都不显示，
+  // 只剩下方那句通用提示 —— 用户没法确认到底会从哪儿下。（与后端 MAVEN_CENTRAL 常量一致）
+  maven: 'https://repo.maven.apache.org/maven2',
   aliyun: 'https://maven.aliyun.com/repository/public/',
   huawei: 'https://repo.huaweicloud.com/repository/maven/',
   tencent: 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
 }
-const driverForm = ref({ mirror: 'maven', customUrl: '' })
+const driverForm = ref({ mirror: 'auto', customUrl: '' })
 // 实际生效的仓库根：关键字查表；自定义用填写的 URL（空 = Maven Central）
 const mirrorBase = computed(() => {
   if (driverForm.value.mirror === 'custom') {
@@ -1587,22 +1597,41 @@ const mirrorBase = computed(() => {
   }
   return MIRROR_BASES[driverForm.value.mirror] || ''
 })
-const loadDriver = async () => {
+// 下拉宽度跟着**当前选中项**的文字走：选「自动」时那串说明要完整显示，选「华为云」时就该收窄 ——
+// 写死一个宽度，不是这次被截断，就是那次空出一大截。用 canvas 量选中项本身的文字 + 箭头余量，
+// 字体从下拉自身取；量不出来退回一个"够宽"的值，宁宽不截。
+const MIRROR_LABELS = () => ({
+  auto: t('settings.driver.mirrorAuto'),
+  maven: 'Maven Central',
+  aliyun: t('settings.driver.mirrorAliyun'),
+  huawei: t('settings.driver.mirrorHuawei'),
+  tencent: t('settings.driver.mirrorTencent'),
+  custom: t('settings.driver.mirrorCustom')
+})
+const mirrorSelectWidth = ref(240)
+const measureMirrorWidth = () => {
+  const text = MIRROR_LABELS()[driverForm.value.mirror] || ''
+  let font = '14px sans-serif'
   try {
-    const d = await getDriverMirror()
-    const raw = (d && d.mirror) || 'maven'
-    if (MIRROR_BASES[raw] !== undefined) {
-      driverForm.value.mirror = raw
-      driverForm.value.customUrl = ''
-    } else if (raw) {
-      // 旧数据里存的自定义 URL：回填到自定义输入框
-      driverForm.value.mirror = 'custom'
-      driverForm.value.customUrl = raw
-    } else {
-      driverForm.value.mirror = 'maven'
+    const el = document.querySelector('.driver-mirror-select input, .driver-mirror-select .el-select__selected-item')
+    if (el) {
+      const cs = getComputedStyle(el)
+      font = [cs.fontStyle, cs.fontWeight, cs.fontSize, cs.fontFamily].filter(Boolean).join(' ')
     }
-  } catch (e) { ElMessage.error(t('settings.driver.msgLoadFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) })) }
+  } catch { /* 取不到字体就用默认 */ }
+  try {
+    const ctx = document.createElement('canvas').getContext('2d')
+    ctx.font = font
+    // 不要再设下限：下限就是变相的固定宽度（上一版给了 180px，于是选「阿里云」也一直是那么宽）。
+    // 宽度只由**当前这条文字**决定，+56 是右侧箭头与左右内边距。
+    mirrorSelectWidth.value = Math.ceil(ctx.measureText(String(text)).width) + 56
+  } catch {
+    mirrorSelectWidth.value = 320
+  }
 }
+// 选中项一变就重新量（下拉里换选项，框宽跟着变）
+watch(() => driverForm.value.mirror, () => nextTick(measureMirrorWidth))
+onMounted(() => nextTick(measureMirrorWidth))
 const saveDriver = async () => {
   // 自定义模式存填写的 URL（必须是 http(s) 开头的仓库根）；关键字模式存关键字
   const value = driverForm.value.mirror === 'custom'
@@ -1610,9 +1639,9 @@ const saveDriver = async () => {
     : driverForm.value.mirror
   try {
     const d = await saveDriverMirror(value)
-    const raw = (d && d.mirror) || 'maven'
+    const raw = (d && d.mirror) || 'auto'
     if (MIRROR_BASES[raw] !== undefined) {
-      driverForm.value.mirror = raw
+      driverForm.value.mirror = raw || 'auto'
       driverForm.value.customUrl = ''
     } else if (raw) {
       driverForm.value.mirror = 'custom'
@@ -1892,7 +1921,14 @@ const fmtLogTime = (raw) => {
   const m = /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(String(raw || ''))
   return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}` : String(raw || '')
 }
-watch(activeTab, (tab) => { if (tab === 'logs') { loadLogs() } })
+// 切到哪个页签就加载哪个页签的数据。
+// 「驱动管理」原来只靠打开设置时那一次 loadDriverList()：那次是在面板还隐藏（v-show 未显示）时跑的，
+// 结果列表常常是空的，得手点一下「刷新」才出来（真机反馈）。挂在这里，切过去就一定是新的。
+// nextTick：等面板真的显示出来再去加载，避免又踩同样的时机问题。
+watch(activeTab, (tab) => {
+  if (tab === 'logs') { loadLogs() }
+  if (tab === 'driver') { nextTick(loadDriverList) }
+})
 
 // ---------- 快捷键自定义 ----------
 const shortcutGroups = SHORTCUT_GROUPS
