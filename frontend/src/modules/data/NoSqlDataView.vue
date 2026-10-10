@@ -132,7 +132,12 @@
                   @contextmenu.prevent.stop="onRowContextMenu($event, row)">
                 <span class="row-num-tx">{{ rowIndex(row) + 1 }}</span>
               </td>
-              <td v-for="(col, ci) in visibleColumns" :key="'d' + col" :data-gkey="(rowIndex(row) + 1) + ':' + ci"
+              <!-- 左侧被回收的列：只撑宽度（colspan），且不给 data-gkey —— 它不参与框选，
+                   否则鼠标停在这里会被当成"某一格"（选框会以它为锚点） -->
+              <td v-if="colLead > 0" class="col-gap" :colspan="colLead"></td>
+              <!-- gkey 里的列号必须是**完整可见列下标**（= colLead + 切片内下标），
+                   取值 cellByGkey / 键盘导航 / 框选都按这套坐标走，切片只影响"渲染了哪几列" -->
+              <td v-for="(col, ci) in colsSlice" :key="'d' + col" :data-gkey="(rowIndex(row) + 1) + ':' + (colLead + ci)"
                   :class="{ 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col),
                             'col-sel-l': selEdges.colLeft.has(col), 'col-sel-r': selEdges.colRight.has(col),
                             'active-cell': activeCell && activeCell.row === row && activeCell.col === col && noBulkSelection }"
@@ -143,6 +148,9 @@
                 <span v-if="isJsonCell(row, col)" class="json-cell">{{ fmtVal(row[col]) }}</span>
                 <span v-else>{{ fmtVal(row[col]) }}</span>
               </td>
+              <!-- 右侧被回收的列：同上，占位撑宽 -->
+              <td v-if="colEnd < visibleColumns.length" class="col-gap"
+                  :colspan="visibleColumns.length - colEnd"></td>
             </tr>
             <!-- 窗口化渲染：下方占位行 -->
             <tr v-if="padBottom > 0" class="vp-pad-row" aria-hidden="true">
@@ -337,7 +345,7 @@ const forgetScrollHost = () => {}
 // 都是按 0 尺寸算的（甚至可能缓存成外层容器），切回来若不重来一遍，就可能一直读错容器的
 // scrollTop，窗口永不更新，表现就是「表格像卡死了」。MainView 在切换后立即广播一次、
 // 80ms 后再补一次（应付布局尚未稳定），这里跟着重解析一次即可。
-const onTabChangeResync = () => { forgetScrollHost(); syncViewport() }
+const onTabChangeResync = () => { forgetScrollHost(); syncViewport(); syncColWindow() }
 onMounted(() => window.addEventListener('dc-tab-change', onTabChangeResync))
 onBeforeUnmount(() => window.removeEventListener('dc-tab-change', onTabChangeResync))
 const syncViewport = () => {
@@ -365,7 +373,8 @@ watch(VP_ROW_H, () => { nextTick(syncViewport) })
 // 滚过去画出来，下一帧才补上该出现的行 —— 快速滚动时可视区整段落空，看到的就是一条空白。
 // 同步算走微任务，能在同一帧绘制前把行补好。详见 utils/rowWindow.js 的注释。
 // 滚动过就打个标记：下一次 mousemove 即便指针没动也要重判热区
-const onTableScroll = () => { nsqlScrolledSinceMove = true; syncViewport() }
+// 横竖一起算：同一个 scroll 事件里把"该显示哪几行"与"该显示哪几列"都同步算掉（同步、不用 rAF，理由同上）
+const onTableScroll = () => { nsqlScrolledSinceMove = true; syncViewport(); syncColWindow() }
 
 // ===== 排序（当前页内；NoSQL 文档接口不支持 ORDER BY）=====
 const orderColumn = ref('')
@@ -490,8 +499,9 @@ const load = async (p) => {
     nextTick(() => {
       forgetScrollHost()   // 新数据到达、容器可能刚挂上：重新解析"谁在滚动"，别用上一批的缓存
       const host = scrollHost()
-      if (host) host.scrollTop = 0
+      if (host) { host.scrollTop = 0; host.scrollLeft = 0 }   // 新结果也回到最左（列窗口随之为首屏）
       syncViewport()
+      syncColWindow()
     })
   } catch (e) {
     if (stopRequested) {
@@ -536,17 +546,22 @@ const defaultColWidth = (name) => Math.min(480, String(name || '').length * 15 +
 
 const MIN_COL_WIDTH = 60
 const MAX_COL_WIDTH = 480
+// 用户手动拖过 / 自适应过的列名：横向窗口化后做惰性补测时要跳过它们（否则拖好的宽度会被测回去）
+const manualCols = new Set()
 const naturalColWidth = (col, limit) => {
   const vi = visibleColumns.value.indexOf(col)
   if (vi < 0) return defaultColWidth(col)
   const wrap = tableWrapRef.value
-  const ths = wrap?.querySelectorAll('thead th') || []
   const sampleRows = wrap?.querySelectorAll('tbody tr:not(.vp-pad-row)') || []
   const sample = Math.min(sampleRows.length, limit)
-  // th/td 的第 0 个是行号列，数据列从 1 开始
-  let max = ths[vi + 1] ? ths[vi + 1].scrollWidth : 0
+  // ⚠️ 不能再按位置取列（原先是 ths[vi+1] / td[vi+1]）：数据行做了横向列窗口化，行里还有
+  //    左右占位格，位置与列号不再对应 —— 会测到别的列的宽度。改成按 data-gkey 取：
+  //    表头是全量渲染的，必然命中；数据格用「行内 gkey 后缀」取，被回收的列取不到就只按表头估宽
+  //    （滚进窗口后由 measureWindowCols 补测）。
+  const th = wrap?.querySelector(`thead th[data-gkey="0:${vi}"]`)
+  let max = th ? th.scrollWidth : 0
   for (let r = 0; r < sample; r++) {
-    const td = sampleRows[r]?.querySelectorAll('td')[vi + 1]
+    const td = sampleRows[r]?.querySelector(`td[data-gkey$=":${vi}"]`)
     if (td) max = Math.max(max, td.scrollWidth)
   }
   const natural = max > 0 ? max + 26 : defaultColWidth(col)
@@ -569,6 +584,7 @@ const tableWidth = computed(() => {
 
 const autoFitCol = (col) => {
   if (!visibleColumns.value.includes(col)) return
+  manualCols.add(col)   // 自适应＝用户意图：惰性补测不要覆盖它
   colWidths.value = { ...colWidths.value, [col]: naturalColWidth(col, 30) }
 }
 // 选中多列时一起自适应（右键「列宽自适应」在多列选中时走这里）
@@ -589,18 +605,97 @@ const onTableDblClick = (e) => {
   autoFitCol(visibleColumns.value[vi])
 }
 
-// 贴列缘检测：返回**可见数据列**下标（cellIndex 含行号列，减 1；贴左缘属于前一列）
+// 贴列缘检测：返回**可见数据列**下标（贴左缘属于前一列）
+// ⚠️ 列号改成优先读 data-gkey：数据行做了横向列窗口化，行里多了左右两个占位格（无 gkey），
+//    `cellIndex` 与列号不再对应（表头仍是全量渲染、没有占位格，所以仅在 th 上回退用 cellIndex，
+//    行号列占 cellIndex 0，故减 1）。占位格既无 gkey 又不是 th → 直接返回 -1，不会误判成某一列。
 const edgeColIdx = (e) => {
   const cell = e.target.closest('th, td')
   if (!cell || !cell.closest('table')) return -1
+  const gk = cell.getAttribute ? cell.getAttribute('data-gkey') : null
+  const base = gk && gk.includes(':')
+    ? Number(gk.split(':')[1])
+    : (cell.tagName === 'TH' ? cell.cellIndex - 1 : -1)
+  if (!(base >= 0)) return -1
   const rect = cell.getBoundingClientRect()
   const x = e.clientX
   let vi = -1
-  if (x >= rect.right - 10 && x <= rect.right + 8) vi = cell.cellIndex - 1
-  else if (cell.cellIndex > 1 && x >= rect.left - 8 && x <= rect.left + 10) vi = cell.cellIndex - 2
+  if (x >= rect.right - 10 && x <= rect.right + 8) vi = base
+  else if (base > 0 && x >= rect.left - 8 && x <= rect.left + 10) vi = base - 1
   if (vi < 0 || vi >= visibleColumns.value.length) return -1
   return vi
 }
+
+// ===== 横向列窗口化：数据行只渲染可视区那几列（表头与 colgroup 仍全量）=====
+// 为什么横着也要窗口化：开销在**单元格总数** —— 行窗口只解决了纵向。宽文档（几百个字段）时
+// 一屏三百行 × 上百列就是几万格，横向拖动时全是 patch（表数据、SQL 结果表格是同一套结论）。
+// 为什么**表头与 `<colgroup>` 不窗口化**：
+//   ① 一行而已，开销可忽略；
+//   ② 列宽拖拽热区（edgeColIdx）与列宽测量都按表头取列，表头只渲染切片会让列号换算全错；
+//   ③ colgroup 全量出 <col>，总宽才不被 table-layout:fixed 压回去。
+// 数据行里用左右两个占位格（col-gap + colspan）撑住被回收列的宽度，否则后面的列会左移串位。
+// ⚠️ 本视图的 `data-gkey` 用的是**可见列下标**（hiddenColumns 过滤后重新编号，不跳号），
+//    所以切片内第 i 列的 gkey 是 colLead + i —— cellByGkey / 键盘导航 / 框选取值都按这套坐标走。
+const COL_CHUNK = 4        // 换窗粒度（列）：同块内不重建 DOM，避免横向每滚一像素就 patch 一次
+const COL_BUFFER_PX = 600  // 窗口左右各多留的缓冲（像素）：拖一次滚动条的跳跃也就几百像素
+const colLead = ref(0)
+const colEnd = ref(0)
+const colsSlice = computed(() => visibleColumns.value.slice(colLead.value, colEnd.value))
+const colWidthOf = (name) => colWidths.value[name] || defaultColWidth(name)
+const syncColWindow = () => {
+  const host = scrollHost()
+  const total = visibleColumns.value.length
+  if (!host || !total) { colLead.value = 0; colEnd.value = total; return }
+  const vw = host.clientWidth || 0
+  // 页签在 display:none 期间容器尺寸是 0：照 0 算会把窗口压成空窗口（切回来像"列全没了"）。
+  // 干脆不动，交给 dc-tab-change 与 ResizeObserver 的重算兜回来。
+  if (!vw) return
+  const cols = visibleColumns.value
+  const left = host.scrollLeft - COL_BUFFER_PX
+  const right = host.scrollLeft + vw + COL_BUFFER_PX
+  let start = 0
+  let x = 0
+  while (start < total && x + colWidthOf(cols[start]) <= left) { x += colWidthOf(cols[start]); start++ }
+  let acc = x
+  let end = start
+  while (end < total && acc < right) { acc += colWidthOf(cols[end]); end++ }
+  end = Math.min(total, end + 1)  // 多留一列：右侧还有余量时不会立刻露白
+  const s0 = Math.max(0, Math.floor(start / COL_CHUNK) * COL_CHUNK)
+  const e0 = Math.min(total, Math.ceil(end / COL_CHUNK) * COL_CHUNK)
+  if (s0 === colLead.value && e0 === colEnd.value) return  // 窗口没变：不写 ref，DOM 不重建
+  colLead.value = s0
+  colEnd.value = e0
+  // 补测放下一帧：读 scrollWidth 会强制布局，别堵在滚动事件里
+  nextTick(measureWindowCols)
+}
+// 横向窗口化后，按 DOM 位置取列的宽度测量只能覆盖当前窗口 —— 新滚进来的列若还是
+// 表头估的宽（没有数据样本），在这里补测一次。用户手动拖过 / 自适应过的列不碰。
+const dataMeasuredCols = new Set()
+const measureWindowCols = () => {
+  const cols = visibleColumns.value
+  let next = null
+  for (let i = colLead.value; i < colEnd.value && i < cols.length; i++) {
+    const c = cols[i]
+    if (!c || manualCols.has(c) || dataMeasuredCols.has(c)) continue
+    if (!next) next = { ...colWidths.value }
+    next[c] = naturalColWidth(c, 10)
+    dataMeasuredCols.add(c)
+  }
+  if (next) colWidths.value = next
+}
+// 列集合 / 列宽变了都要重算窗口（显隐、换位、测量完成、拖宽松手、列宽自适应）
+watch(() => visibleColumns.value.join('\u0000'), () => nextTick(() => { syncColWindow(); measureWindowCols() }))
+watch(colWidths, () => syncColWindow(), { flush: 'post' })
+// 容器尺寸变化（拖分栏、切页签回来）→ 必须重算。本视图原先没有 ResizeObserver：
+// 横向窗口是按容器可视宽度算的，宽度变了不重算就会停在旧切片上。
+let colWinObserver = null
+watch(tableWrapRef, (wrap) => {
+  if (colWinObserver) { colWinObserver.disconnect(); colWinObserver = null }
+  if (!wrap) return
+  colWinObserver = new ResizeObserver(() => syncColWindow())
+  colWinObserver.observe(wrap)
+})
+onBeforeUnmount(() => { if (colWinObserver) { colWinObserver.disconnect(); colWinObserver = null } })
 
 // mousemove 每帧最多处理一次，且"指针没动、期间也没滚动"时直接丢弃（滚动后浏览器会补发
 // mousemove，而命中判定要读 getBoundingClientRect = 强制布局，虚拟滚动刚改完 DOM 时最贵）
@@ -679,6 +774,7 @@ const onDragMove = (e) => {
 const onDragEnd = () => {
   if (drag) {
     const finalW = Math.round(Math.max(0, drag.currentW))
+    manualCols.add(drag.col)   // 拖过就是用户指定宽度：惰性补测不再覆盖
     colWidths.value = { ...colWidths.value, [drag.col]: finalW }
     if (drag.colEl) drag.colEl.style.willChange = ''
     lastResizeAt = Date.now()
@@ -1083,12 +1179,27 @@ const pageRowStep = () => {
   const n = host ? Math.floor(host.clientHeight / (VP_ROW_H || 32)) : 10
   return Math.max(1, n - 1)
 }
-const ensureActiveVisible = () => {
+// 让活动单元格可见。列窗口化后目标列**可能还没渲染**（被回收成占位格）——那时 querySelector
+// 必然落空，原来会"按下方向键，活动格跑到屏幕外"。补一条：先按列宽累加算出它该在的水平位置，
+// 把 scrollLeft 挪过去，下一帧窗口补上这列后再重试一次。retry 只给一次，避免无限递归。
+const ensureActiveVisible = (retry = true) => {
   if (!activeCell.value || !tableWrapRef.value) return
   nextTick(() => {
     const host = scrollHost()
-    const el = tableWrapRef.value.querySelector(`[data-gkey="${(rowIndex(activeCell.value.row) + 1) + ':' + visibleColumns.value.indexOf(activeCell.value.col)}"]`)
-    if (el && host) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    const a = activeCell.value
+    if (!a || !host) return
+    const vi = visibleColumns.value.indexOf(a.col)
+    if (vi < 0) return
+    const el = tableWrapRef.value.querySelector(`[data-gkey="${(rowIndex(a.row) + 1) + ':' + vi}"]`)
+    if (el) { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); return }
+    if (!retry) return
+    let x = 40   // 行号列定宽 40px
+    for (let i = 0; i < vi; i++) x += colWidthOf(visibleColumns.value[i])
+    const colW = colWidthOf(visibleColumns.value[vi])
+    if (x < host.scrollLeft) host.scrollLeft = Math.max(0, x)
+    else if (x + colW > host.scrollLeft + host.clientWidth) host.scrollLeft = x + colW - host.clientWidth
+    syncColWindow()
+    nextTick(() => ensureActiveVisible(false))
   })
 }
 
@@ -1783,6 +1894,9 @@ onBeforeUnmount(() => {
 .sel-summary .ss-item { white-space: nowrap; }
 .sel-summary .ss-item b { color: var(--dc-text); font-weight: 600; font-variant-numeric: tabular-nums; }
 /* 窗口化占位行：只负责撑高 */
+/* 列窗口化的左右占位格：只负责撑住被回收列的宽度（colspan），保证表格总宽与各列位置不变。
+   不能有边框 / 内边距 / 背景 —— 否则会沿占位格露出多余的线；它也不带 data-gkey，不参与框选。 */
+.data-table tbody td.col-gap { padding: 0; border: none; background: transparent; }
 .data-table tbody tr.vp-pad-row { cursor: default; }
 .data-table tbody tr.vp-pad-row td { padding: 0; border: 0; background: transparent !important; }
 .data-table tbody tr.vp-pad-row:hover td { background: transparent !important; }
