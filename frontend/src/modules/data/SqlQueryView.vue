@@ -1124,6 +1124,8 @@ const onResultTableScroll = () => {
   syncResultColWindow()
   // 发生过滚动：下一次 mousemove 即便指针没动也要重判一次热区（鼠标底下那行/那列已被回收）
   resultScrolledSinceMove = true
+  // 但滚动过程中先别真去判（那要读 rect = 强制布局，每帧一次就发涩）—— 见 markResultScrolling
+  markResultScrolling()
 }
 // 行高改了：已渲染的上下占位行是按旧行高算的，按当前滚动位置重算一次（否则会跳一下）
 watch(VT_ROW_H, () => { nextTick(() => onResultTableScroll()) })
@@ -1197,6 +1199,22 @@ let resultMoveRaf = 0
 let resultMoveEvent = null
 let resultMoveXY = ''
 let resultScrolledSinceMove = false
+// 滚动中（尤其是拖滚动条 / 拖窗口边缘）先不做悬浮判定：
+// applyResultTableHover 要读 getBoundingClientRect（**强制布局**），而滚动这一帧刚改过 DOM
+// （行窗口、列窗口都在换），每帧一次强制布局就是"拖起来发涩"的来源。
+// 停手（120ms 没有新的 scroll）后再补判一次 —— 鼠标底下的热区不会漏，滚动过程里也不白花这笔钱。
+let resultScrolling = false
+let resultScrollIdleTimer = 0
+const markResultScrolling = () => {
+  resultScrolling = true
+  if (resultScrollIdleTimer) clearTimeout(resultScrollIdleTimer)
+  resultScrollIdleTimer = setTimeout(() => {
+    resultScrollIdleTimer = 0
+    resultScrolling = false
+    if (resultMoveEvent) applyResultTableHover(resultMoveEvent)
+  }, 120)
+}
+onBeforeUnmount(() => { if (resultScrollIdleTimer) clearTimeout(resultScrollIdleTimer) })
 const onResultTableMove = (e) => {
   const xy = e.clientX + ':' + e.clientY
   if (xy === resultMoveXY && !resultScrolledSinceMove) return
@@ -1212,6 +1230,9 @@ const onResultTableMove = (e) => {
 const applyResultTableHover = (e) => {
   const wrap = resultTableWrapRef.value
   if (!wrap) return
+  // 滚动中直接跳过：见 markResultScrolling 的注释（读 rect 会强制布局，滚动每帧一次就是拖拽发涩的来源）。
+  // 注意这里**不能**顺手把 cursor 清掉 —— 滚动期间指针多半压在滚动条上，清/设来回切反而会闪。
+  if (resultScrolling) return
   if (isResultColDragging()) return
   if (resultDrag) { wrap.style.cursor = 'col-resize'; return }
   const cell = e.target.closest('th, td')
