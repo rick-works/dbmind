@@ -1002,6 +1002,8 @@
         <span v-else-if="dlStatus === 'done'">{{ t('update.dlDone') }}</span>
         <span v-else class="upd-dl-err">{{ dlError }}</span>
       </div>
+      <!-- 让"闷"变透明：从哪个源下、走没走代理、还要多久（只给速度，用户只能干等） -->
+      <div v-if="dlStatus === 'running'" class="upd-dl-meta">{{ dlSourceText }}</div>
       <!-- 过程说明（换源 / 续传 / 第几次重试）：只在下载进行中才有意义 -->
       <div v-if="dlStatus === 'running' && dlNote" class="upd-dl-tip">{{ dlNote }}</div>
       <div v-if="dlStatus === 'done'" class="upd-dl-tip">{{ t('update.applyDone') }}</div>
@@ -1020,7 +1022,11 @@
         <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
         <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('common.confirm') }}</el-button>
       </template>
-      <el-button v-else size="small" @click="closeDownloadDialog">{{ t('update.dlBackground') }}</el-button>
+      <template v-else>
+        <!-- 代理慢于镜像时（实测：本机代理 ~143KB/s、镜像 ~220KB/s），给用户一条主动换源的路 -->
+        <el-button size="small" :loading="dlSwitching" @click="switchSource">{{ t('update.dlSwitchSource') }}</el-button>
+        <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('update.dlBackground') }}</el-button>
+      </template>
     </template>
   </el-dialog>
 
@@ -1134,7 +1140,7 @@ const ObjectFormDialog = defineAsyncComponent(() => import('../../common/objectf
 const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView.vue'))
 import {
   checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi,
-  dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi,
+  cancelUpdate as cancelUpdateApi, dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi,
   updateDirs as updateDirsApi, pickUpdateDir as pickUpdateDirApi
 } from '../../api'
 
@@ -1175,6 +1181,28 @@ const dlUrl = ref('')
 // 下载完成后：是否用 GitHub 官方 sha256 校验过；走了镜像又没官方值时可自证性为 0，界面必须说清
 const dlVerified = ref(false)
 const dlUnverified = ref(false)
+// 当前是不是走代理（后端探测结果）+ 换源请求进行中
+const dlProxy = ref('')
+const dlSwitching = ref(false)
+
+// 剩余时间：有总大小与速度才算得出来，否则留空（不要瞎猜）
+const dlEtaText = computed(() => {
+  const rest = (Number(dlTotal.value) || 0) - (Number(dlReceived.value) || 0)
+  const sp = Number(dlSpeed.value) || 0
+  if (rest <= 0 || sp <= 0) return ''
+  const s = Math.round(rest / sp)
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0')
+})
+// 一行讲清"从哪下、走不走代理、还要多久"
+const dlSourceText = computed(() => {
+  let host = ''
+  try { host = new URL(dlUrl.value).host } catch { host = '' }
+  const via = dlProxy.value
+    ? t('update.dlViaProxy', { proxy: dlProxy.value })
+    : t('update.dlDirect')
+  const eta = dlEtaText.value ? ' · ' + t('update.dlEta', { time: dlEtaText.value }) : ''
+  return (host ? host + ' · ' : '') + via + eta
+})
 
 // 弹窗只放「更新摘要」：Release 全文动辄几千字，整篇塞进弹窗会把弹窗撑满屏、
 // 还要滚动才看得到按钮。这里截取开头一小段 + 给「查看完整更新说明」链接。
@@ -1230,8 +1258,26 @@ const doApplyUpdate = async () => {
 // 失败后原地重试：沿用上次选的目录（没选过就交给后端用系统临时目录）
 const retryDownload = () => { startDownload(dlDir.value || '') }
 
+// 换个更快的源：先取消当前下载（已下载的 .part 保留），再让后端镜像优先重下 —— 会接着下
+const switchSource = async () => {
+  if (dlSwitching.value) return
+  dlSwitching.value = true
+  dlNote.value = t('update.dlSwitching')
+  try { await cancelUpdateApi() } catch { /* 取消失败也让后面的重试照常进行 */ }
+  // 等后台真的停下来（最多 20 秒），否则后端会以"任务已在进行中"拒绝新的下载
+  for (let i = 0; i < 40; i++) {
+    await new Promise((r) => setTimeout(r, 500))
+    try {
+      const p = await updateProgressApi()
+      if (!p || p.status !== 'running') break
+    } catch { break }
+  }
+  stopProgressPolling()
+  await startDownload(dlDir.value || '', true)
+}
+
 // 真正开始下载（目录已定）
-const startDownload = async (dir) => {
+const startDownload = async (dir, preferMirror = false) => {
   dlVisible.value = true
   dlStatus.value = 'running'
   dlReceived.value = 0
@@ -1242,9 +1288,10 @@ const startDownload = async (dir) => {
   dlUrl.value = ''
   dlVerified.value = false
   dlUnverified.value = false
+  dlSwitching.value = false
   startProgressPolling()
   try {
-    const res = await applyUpdateApi(dir)
+    const res = await applyUpdateApi(dir, preferMirror)
     if (!res || res.success === false) {
       dlStatus.value = 'failed'
       dlError.value = (res && res.message) || t('update.applyFail')
@@ -1270,6 +1317,7 @@ const startProgressPolling = (fast = true) => {
       dlUrl.value = p.url || ''
       dlVerified.value = !!p.verified
       dlUnverified.value = !!p.unverified
+      dlProxy.value = p.proxy || ''
       if (p.status === 'done' || p.status === 'failed') {
         dlStatus.value = p.status
         if (p.status === 'failed') dlError.value = p.error || t('update.applyFail')
@@ -1324,6 +1372,7 @@ const checkUpdate = async () => {
         dlUrl.value = p.url || ''
         dlVerified.value = !!p.verified
         dlUnverified.value = !!p.unverified
+        dlProxy.value = p.proxy || ''
         startProgressPolling()
         return
       }

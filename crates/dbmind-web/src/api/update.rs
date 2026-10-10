@@ -47,6 +47,8 @@ struct Progress {
     verified: bool,
     /// 走的是镜像、而这个版本又没有官方 digest ⇒ 内容无法自证，界面要如实提示
     unverified: bool,
+    /// 用户点了「换个更快的源」：下载循环看到就退出（保留已下载的 .part，随后换源续传）
+    cancel: bool,
 }
 
 fn progress_cell() -> &'static Arc<std::sync::Mutex<Progress>> {
@@ -267,6 +269,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
 
     let cell = progress_cell().clone();
     let want_dir = req.dir.clone();
+    let prefer = req.prefer_mirror;
     // 下载是纯阻塞 IO（几十 MB），放 blocking 线程池，不占 async worker
     tokio::task::spawn_blocking(move || {
         let picked = fetch_latest_blocking().and_then(|v| {
@@ -294,7 +297,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 return;
             }
         }
-        match download_with_progress(&inst, &dest, &cell) {
+        match download_with_progress(&inst, &dest, &cell, prefer) {
             Ok(()) => {
                 let installer = dest.to_string_lossy().to_string();
                 let ok = launch_installer(&dest);
@@ -343,6 +346,9 @@ pub struct ApplyReq {
     /// 下载保存目录（用户在更新弹窗里选）
     #[serde(default)]
     pub dir: Option<String>,
+    /// 用户主动"换源"：**镜像优先**（仍带官方 sha256 校验，且从已下载的 .part 续传）
+    #[serde(default)]
+    pub prefer_mirror: bool,
 }
 /// 自动手段全失败后给用户的手动兜底地址
 const RELEASE_PAGE: &str = "https://github.com/rick-works/dbmind/releases";
@@ -381,14 +387,26 @@ fn mirror_prefixes() -> Vec<String> {
 }
 
 /// 下载源候选：**直连永远第一**，其后按镜像表拼接；逐个试，直连成功就轮不到镜像。
-fn download_sources(url: &str) -> Vec<String> {
-    let mut out = vec![url.to_string()];
-    for prefix in mirror_prefixes() {
-        out.push(if prefix.contains("{url}") {
-            prefix.replace("{url}", url)
-        } else {
-            format!("{prefix}{url}")
-        });
+fn download_sources(url: &str, prefer_mirror: bool) -> Vec<String> {
+    let direct = url.to_string();
+    let mirrors: Vec<String> = mirror_prefixes()
+        .into_iter()
+        .map(|prefix| {
+            if prefix.contains("{url}") {
+                prefix.replace("{url}", url)
+            } else {
+                format!("{prefix}{url}")
+            }
+        })
+        .collect();
+    // 平时直连优先（直连通就轮不到镜像）；用户点了"换源"则反过来，直接上镜像
+    let mut out = Vec::with_capacity(mirrors.len() + 1);
+    if prefer_mirror {
+        out.extend(mirrors);
+        out.push(direct);
+    } else {
+        out.push(direct);
+        out.extend(mirrors);
     }
     out
 }
@@ -496,8 +514,9 @@ fn download_with_progress(
     inst: &Installer,
     dest: &std::path::Path,
     cell: &Arc<std::sync::Mutex<Progress>>,
+    prefer_mirror: bool,
 ) -> dbmind_core::Result<()> {
-    let sources = download_sources(&inst.url);
+    let sources = download_sources(&inst.url, prefer_mirror);
     let part = part_path(dest);
     let mut errs: Vec<String> = Vec::new();
     for (si, src) in sources.iter().enumerate() {
@@ -674,6 +693,13 @@ fn download_once(
             p.speed = (p.received as f64 / secs.max(0.001)) as u64;
             last_report = Instant::now();
         }
+        // 用户点了「换个更快的源」：立刻退出，保留 .part 让下一次从断点续传
+        if cell.lock().unwrap().cancel {
+            return Err(DbMindError::new(
+                ErrorCode::Internal,
+                format!("已取消当前下载（已下载的 {} 保留，换源后会接着下）", human_bytes(base + got)),
+            ));
+        }
         // 慢速判定：开局 15 秒还拿不到 512 KB，就别在这儿耗着了（换源比死等强）
         if judge_slow && got < 512 * 1024 && attempt_started.elapsed() > Duration::from_secs(15) {
             return Err(DbMindError::new(
@@ -842,6 +868,20 @@ pub async fn progress() -> Json<Value> {
         "version": p.version,
         "proxy": p.proxy,
     }))
+}
+
+/// POST /api/update/cancel —— 取消正在进行的下载（用户要换源时用）。
+///
+/// 只**打个标记**，由下载循环在下一批数据时看到并退出：已经写的 `.part` 保留，
+/// 所以"换个更快的源重试"能从已下载的位置接着下 —— 不必从头再来一遍几十兆。
+pub async fn cancel() -> Json<Value> {
+    let mut p = progress_cell().lock().unwrap();
+    if p.status != "running" {
+        return Json(json!({ "success": false, "message": "当前没有正在进行的下载" }));
+    }
+    p.cancel = true;
+    p.note = Some("正在取消当前下载…".into());
+    Json(json!({ "success": true }))
 }
 
 /// POST /api/update/dismiss —— 清掉**已结束**（done / failed）的任务状态。

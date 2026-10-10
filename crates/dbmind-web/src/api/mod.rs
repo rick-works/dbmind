@@ -272,6 +272,8 @@ pub fn routes() -> Router<AppState> {
         // 清掉已结束（成功/失败）的任务状态：否则失败后每点一次更新图标都只会
         // 重新弹出同一个报错页，必须重启软件（真机踩过）
         .route("/api/update/dismiss", post(update::dismiss))
+        // 取消当前下载（用户点「换个更快的源」）：只打标记，已下载的部分保留
+        .route("/api/update/cancel", post(update::cancel))
     .route("/api/update/dirs", get(update::dirs))
     .route("/api/update/pick-dir", get(update::pick_dir))
         .route(
