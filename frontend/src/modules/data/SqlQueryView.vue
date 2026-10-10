@@ -1177,7 +1177,9 @@ onBeforeUnmount(() => {
 // 列宽拖拽热区：只在**表头**上判定，且热区很窄（Excel / DataGrip 同款）。
 // 之前在数据格上也按 ±8~10px 判定，窄列两侧热区几乎盖满整格，
 // 鼠标"放进单元格里"就会变成左右箭头，和普通单元格（手型）不一致
-const RESULT_EDGE_GAP = 5
+// 贴右缘多少像素算"要调列宽"。7px → 边界两侧共 14px 的带子，比原来的 ±5 好抓；
+// 再大就会侵入窄列（60px 的列里两条边界就占掉近一半，鼠标放中间也变箭头）。
+const RESULT_EDGE_GAP = 7
 const resultEdgeColIdx = (e) => {
   const cell = e.target.closest('th')
   if (!cell || !cell.closest('table')) return -1

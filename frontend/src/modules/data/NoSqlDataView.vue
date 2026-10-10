@@ -614,7 +614,10 @@ const onTableDblClick = (e) => {
 //    `cellIndex` 与列号不再对应（表头仍是全量渲染、没有占位格，所以仅在 th 上回退用 cellIndex，
 //    行号列占 cellIndex 0，故减 1）。占位格既无 gkey 又不是 th → 直接返回 -1，不会误判成某一列。
 const edgeColIdx = (e) => {
-  const cell = e.target.closest('th, td')
+  // ⚠️ 只认表头（th）：与表预览、结果表格统一。原先写的是 closest('th, td')，于是**数据行**里
+  // 靠近列边界也会变成列宽调整的横竖箭头，同屏里"一会儿手、一会儿十字"，用户反馈过。
+  // 表头本来就有一个 10px 宽的 .col-resizer span 专门承担这件事，数据格不必再分一份。
+  const cell = e.target.closest('th')
   if (!cell || !cell.closest('table')) return -1
   const gk = cell.getAttribute ? cell.getAttribute('data-gkey') : null
   const base = gk && gk.includes(':')
