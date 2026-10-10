@@ -684,14 +684,32 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
-      <!-- v1.1.0（最新） -->
+      <!-- v1.1.1（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.1.1</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-10</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>修掉三个表格编辑的坑</b>：双击空格格不再被悄悄改成 NULL（空白值原样保留）；双击后光标与选区不再跑到隔壁格；把值改回原样、或点撤销之后，不再仍旧显示「有未保存的修改」</li>
+            <li><b>修掉一处会让整块界面卡死的崩溃</b>：单元格文本上的渲染优化与「显示文本 ↔ 换成编辑框」的分支切换冲突，会让补丁抛 <code>insertBefore</code> 错，之后所有更新都失效 —— 双击几次后界面像卡住、连关页签都没反应。已摘掉那个优化</li>
+            <li><b>大表更跟手</b>：换渲染窗口改为按 120px 一块（同一块内滚动不再重建任何格子，重渲染次数实测降到约 1/5）；鼠标移动每帧最多处理一次；切页签后重新解析滚动容器与可视窗口</li>
+            <li><b>结果表格行高默认 22 → 26</b>：点选更舒服；老版本里存过 22 的会自动升一次，自己改过的值不再被碰</li>
+          </ul>
+        </div>
+      </article>
+
+      <!-- v1.1.0 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
           <div class="rel-head">
             <span class="rel-ver">v1.1.0</span>
             <span class="rel-tag tag-minor">小版本</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-10</span>
           </div>
           <ul class="rel-notes">
@@ -1069,7 +1087,9 @@ WHERE dt = :dt AND org = :org;</code></pre>
 
   // 导航高亮：滚动到哪个区块，对应导航项点亮（顶部时点亮「首页」）
   // 值 = 导航项下标（首页0 功能1 工作流2 安全3 赞助4 版本5 文档6）
-  const navMap = { features: 1, workflow: 2, security: 3, docs: 6 }
+  // 每个区块都要登记：漏登记的区块滚到它时不会点亮自己，而是**继续显示上一个区块的高亮** ——
+  // 表现就是"点赞助、亮的却是安全"（此前 #sponsor 与 #releases 都漏了）。
+  const navMap = { features: 1, workflow: 2, security: 3, sponsor: 4, releases: 5, docs: 6 }
   const navItems = [...document.querySelectorAll('.nav-links a:not(.nav-cta)')]
   const setActive = (i) => navItems.forEach((a, j) => a.classList.toggle('active', j === i))
   setActive(0)
