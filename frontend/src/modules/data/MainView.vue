@@ -982,33 +982,35 @@
     </template>
   </el-dialog>
 
-  <!-- 下载进度：**只在后台下载真的在跑时才展示**（关掉窗口不会中断下载） -->
+  <!-- 在线更新：安装包下载进度（关掉窗口不会中断下载） -->
   <el-dialog
     v-model="dlVisible"
     class="upd-dl"
     width="420px"
-    :title="t('update.downloading')"
+    :title="t('update.dlTitle')"
     :show-close="dlStatus === 'running'"
     :close-on-click-modal="false"
   >
     <div class="upd-dl-body">
+      <!-- 进度条居中、百分比放进条内：以前百分比孤零零挂在最右，跟进度不像一件事 -->
       <el-progress
         :percentage="dlTotal > 0 ? Math.min(100, Math.round((dlReceived / dlTotal) * 100)) : 0"
         :status="dlStatus === 'failed' ? 'exception' : dlStatus === 'done' ? 'success' : undefined"
-        :stroke-width="10"
+        :stroke-width="16"
+        :text-inside="true"
       />
-      <div class="upd-dl-meta">
-        <span v-if="dlStatus === 'running'">{{ t('update.dlProgress', { done: fmtBytes(dlReceived), total: fmtBytes(dlTotal), speed: fmtBytes(dlSpeed) }) }}</span>
-        <span v-else-if="dlStatus === 'done'">{{ t('update.dlDone') }}</span>
+      <div class="upd-dl-stats">
+        <span v-if="dlStatus === 'running'">{{ dlRunningText }}</span>
+        <span v-else-if="dlStatus === 'done'" class="upd-dl-ok">{{ t('update.dlDone') }}</span>
         <span v-else class="upd-dl-err">{{ dlError }}</span>
       </div>
-      <!-- 让"闷"变透明：从哪个源下、走没走代理、还要多久（只给速度，用户只能干等） -->
-      <div v-if="dlStatus === 'running'" class="upd-dl-meta">{{ dlSourceText }}</div>
-      <!-- 过程说明（换源 / 续传 / 第几次重试）：只在下载进行中才有意义 -->
-      <div v-if="dlStatus === 'running' && dlNote" class="upd-dl-tip">{{ dlNote }}</div>
-      <div v-if="dlStatus === 'done'" class="upd-dl-tip">{{ t('update.applyDone') }}</div>
-      <div v-if="dlStatus === 'done' && dlVerified" class="upd-dl-tip">{{ t('update.dlVerified') }}</div>
-      <div v-if="dlStatus === 'done' && dlUnverified" class="upd-dl-tip">{{ t('update.dlUnverified') }}</div>
+      <div v-if="dlStatus === 'done'" class="upd-dl-sub">{{ t('update.applyDone') }}</div>
+      <div v-if="dlStatus === 'done' && dlVerified" class="upd-dl-sub">{{ t('update.dlVerified') }}</div>
+      <div v-if="dlStatus === 'done' && dlUnverified" class="upd-dl-sub">{{ t('update.dlUnverified') }}</div>
+      <!-- 失败时给一句"下一步怎么办"，而不是只丢一段错误文本 -->
+      <div v-if="dlStatus === 'failed'" class="upd-dl-sub">{{ t('update.dlFailTip') }}</div>
+      <!-- 过程说明（自动选源 / 续传 / 重连 / 第几次重试）：只在下进行中才有意义 -->
+      <div v-if="dlStatus === 'running' && dlNote" class="upd-dl-sub">{{ dlNote }}</div>
     </div>
     <template #footer>
       <!-- 失败必须能**原地重试**：以前失败后只能重启软件，点更新图标永远弹回同一个报错页 -->
@@ -1022,11 +1024,7 @@
         <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
         <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('common.confirm') }}</el-button>
       </template>
-      <template v-else>
-        <!-- 代理慢于镜像时（实测：本机代理 ~143KB/s、镜像 ~220KB/s），给用户一条主动换源的路 -->
-        <el-button size="small" :loading="dlSwitching" @click="switchSource">{{ t('update.dlSwitchSource') }}</el-button>
-        <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('update.dlBackground') }}</el-button>
-      </template>
+      <el-button v-else size="small" @click="closeDownloadDialog">{{ t('update.dlBackground') }}</el-button>
     </template>
   </el-dialog>
 
@@ -1140,7 +1138,7 @@ const ObjectFormDialog = defineAsyncComponent(() => import('../../common/objectf
 const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView.vue'))
 import {
   checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi,
-  cancelUpdate as cancelUpdateApi, dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi,
+  dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi,
   updateDirs as updateDirsApi, pickUpdateDir as pickUpdateDirApi
 } from '../../api'
 
@@ -1181,13 +1179,13 @@ const dlUrl = ref('')
 // 下载完成后：是否用 GitHub 官方 sha256 校验过；走了镜像又没官方值时可自证性为 0，界面必须说清
 const dlVerified = ref(false)
 const dlUnverified = ref(false)
-// 当前是不是走代理（后端探测结果）+ 换源请求进行中
-const dlProxy = ref('')
-const dlSwitching = ref(false)
-// 当前用的是第几个源、共几个源（界面显示"源 2/4"）；"换个更快的源"按这个算下一个
-const dlSourceIndex = ref(0)
-const dlSourceTotal = ref(0)
-const dlUsingProxy = ref(true)
+// 进度条下方那一行：已下载 / 速度 / 剩余时间（源由后端自动挑，界面不提供选择）
+const dlRunningText = computed(() => {
+  const base = t('update.dlProgress', {
+    done: fmtBytes(dlReceived.value), total: fmtBytes(dlTotal.value), speed: fmtBytes(dlSpeed.value)
+  })
+  return dlEtaText.value ? base + ' · ' + t('update.dlEta', { time: dlEtaText.value }) : base
+})
 
 // 剩余时间：有总大小与速度才算得出来，否则留空（不要瞎猜）
 const dlEtaText = computed(() => {
@@ -1197,20 +1195,7 @@ const dlEtaText = computed(() => {
   const s = Math.round(rest / sp)
   return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0')
 })
-// 一行讲清"从哪下、走不走代理、还要多久"
-const dlSourceText = computed(() => {
-  let host = ''
-  try { host = new URL(dlUrl.value).host } catch { host = '' }
-  const n = dlSourceTotal.value > 1
-    ? t('update.dlSourceN', { i: dlSourceIndex.value + 1, n: dlSourceTotal.value }) + ' · '
-    : ''
-  // 走不走代理要按**当前这条源**说：末尾那条"直连不走代理"与前面几条不是一回事
-  const via = !dlUsingProxy.value
-    ? t('update.dlNoProxy')
-    : (dlProxy.value ? t('update.dlViaProxy', { proxy: dlProxy.value }) : t('update.dlDirect'))
-  const eta = dlEtaText.value ? ' · ' + t('update.dlEta', { time: dlEtaText.value }) : ''
-  return n + (host ? host + ' · ' : '') + via + eta
-})
+
 
 // 弹窗只放「更新摘要」：Release 全文动辄几千字，整篇塞进弹窗会把弹窗撑满屏、
 // 还要滚动才看得到按钮。这里截取开头一小段 + 给「查看完整更新说明」链接。
@@ -1266,29 +1251,9 @@ const doApplyUpdate = async () => {
 // 失败后原地重试：沿用上次选的目录（没选过就交给后端用系统临时目录）
 const retryDownload = () => { startDownload(dlDir.value || '') }
 
-// 换个更快的源：先取消当前下载（已下载的 .part 保留），再让后端镜像优先重下 —— 会接着下
-const switchSource = async () => {
-  if (dlSwitching.value) return
-  dlSwitching.value = true
-  dlNote.value = t('update.dlSwitching')
-  try { await cancelUpdateApi() } catch { /* 取消失败也让后面的重试照常进行 */ }
-  // 等后台真的停下来（最多 20 秒），否则后端会以"任务已在进行中"拒绝新的下载
-  for (let i = 0; i < 40; i++) {
-    await new Promise((r) => setTimeout(r, 500))
-    try {
-      const p = await updateProgressApi()
-      if (!p || p.status !== 'running') break
-    } catch { break }
-  }
-  // 轮换到下一个源：绕一圈，最后那条"直连不走代理"就是这么被轮到的
-  const total = dlSourceTotal.value || 1
-  const next = (dlSourceIndex.value + 1) % total
-  stopProgressPolling()
-  await startDownload(dlDir.value || '', next)
-}
 
 // 真正开始下载（目录已定）
-const startDownload = async (dir, sourceIndex = 0) => {
+const startDownload = async (dir) => {
   dlVisible.value = true
   dlStatus.value = 'running'
   dlReceived.value = 0
@@ -1299,10 +1264,9 @@ const startDownload = async (dir, sourceIndex = 0) => {
   dlUrl.value = ''
   dlVerified.value = false
   dlUnverified.value = false
-  dlSwitching.value = false
   startProgressPolling()
   try {
-    const res = await applyUpdateApi(dir, sourceIndex)
+    const res = await applyUpdateApi(dir)
     if (!res || res.success === false) {
       dlStatus.value = 'failed'
       dlError.value = (res && res.message) || t('update.applyFail')
@@ -1328,10 +1292,6 @@ const startProgressPolling = (fast = true) => {
       dlUrl.value = p.url || ''
       dlVerified.value = !!p.verified
       dlUnverified.value = !!p.unverified
-      dlProxy.value = p.proxy || ''
-      dlSourceIndex.value = p.sourceIndex || 0
-      dlSourceTotal.value = p.sourceTotal || 0
-      dlUsingProxy.value = p.usingProxy !== false
       if (p.status === 'done' || p.status === 'failed') {
         dlStatus.value = p.status
         if (p.status === 'failed') dlError.value = p.error || t('update.applyFail')
@@ -1386,10 +1346,6 @@ const checkUpdate = async () => {
         dlUrl.value = p.url || ''
         dlVerified.value = !!p.verified
         dlUnverified.value = !!p.unverified
-        dlProxy.value = p.proxy || ''
-        dlSourceIndex.value = p.sourceIndex || 0
-        dlSourceTotal.value = p.sourceTotal || 0
-        dlUsingProxy.value = p.usingProxy !== false
         startProgressPolling()
         return
       }
@@ -7253,10 +7209,12 @@ const connTypeSummary = computed(() =>
 .upd-dir-hint { margin: 8px 0 0; font-size: 12px; color: var(--dc-text-dim, #999); line-height: 1.6; }
 .upd-dir-icon { color: var(--dc-text-dim, #999); font-size: 15px; }
 .upd-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
-.upd-dl-body { padding: 4px 2px 2px; }
-.upd-dl-meta { margin-top: 10px; font-size: 12.5px; color: var(--dc-text-mid, #666); text-align: center; }
-.upd-dl-err { color: var(--el-color-danger, #f56c6c); word-break: break-all; }
-.upd-dl-tip { margin-top: 8px; font-size: 12px; color: var(--dc-text-dim, #888); text-align: center; line-height: 1.6; }
+.upd-dl-body { padding: 10px 8px 6px; }
+/* 进度条与文字之间留白大一点，别挤在一起；百分比在条内，视线不用来回跳 */
+.upd-dl-stats { margin-top: 18px; font-size: 13px; color: var(--dc-text-mid, #666); text-align: center; }
+.upd-dl-ok { color: var(--el-color-success, #67c23a); }
+.upd-dl-err { color: var(--el-color-danger, #f56c6c); word-break: break-all; line-height: 1.7; }
+.upd-dl-sub { margin-top: 10px; font-size: 12px; color: var(--dc-text-dim, #888); text-align: center; line-height: 1.7; word-break: break-all; }
 .upd-more {
   display: inline-block; margin-top: 6px; font-size: 12.5px;
   color: var(--dc-link, #409eff); text-decoration: none;

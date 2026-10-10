@@ -76,9 +76,17 @@ fn progress_cell() -> &'static Arc<std::sync::Mutex<Progress>> {
 /// read 一直阻塞到总超时（1800 秒）—— 界面上就是永远停在某个百分比、看着像死机。
 /// 单次读超时一设，停滞 30 秒即报错，上层才好自动重试 / 续传 / 换源。
 fn agent(use_proxy: bool) -> ureq::Agent {
+    build_agent(use_proxy, 30)
+}
+
+/// 按用途构造客户端：`read_secs` 是单次读超时。
+///
+/// 测速必须用**很短**的读超时（2 秒）：它沿用的是下载那条通道的话，一个不响应的源
+/// 会把探测拖到 30 秒，四个源加起来让用户白等十几秒（真机就是这样，看着像卡住）。
+fn build_agent(use_proxy: bool, read_secs: u64) -> ureq::Agent {
     let builder = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(10))
-        .timeout_read(Duration::from_secs(30));
+        .timeout_connect(Duration::from_secs(10).min(Duration::from_secs(read_secs)))
+        .timeout_read(Duration::from_secs(read_secs));
     if !use_proxy {
         // 显式不走代理：用户的代理节点有时**比直连还慢**（实测同机 120KB/s vs 3.8MB/s），
         // 所以源列表末尾留一条直连的路，用户点"换源"能轮到它。
@@ -525,7 +533,73 @@ fn human_bytes(n: u64) -> String {
     format!("{:.1} MB", n as f64 / 1024.0 / 1024.0)
 }
 
-/// 下载安装包：**续传 + 重试 + 换源 + 慢连接重连**，全部失败才报错。
+/// 给一个源"测速"：只取前 256 KB，返回近似速度（字节/秒）；失败返回 None。
+///
+/// 为什么必须测：四个候选（直连经代理 / 各镜像 / 直连不走代理）里哪个快，取决于当时的网络、
+/// 代理节点、运营商 —— 只有现场量才知道。让用户自己去点"换个源"是把这件事推给了他。
+fn probe_source(src: &Source) -> Option<u64> {
+    let deadline = Instant::now();
+    let resp = build_agent(src.use_proxy, 2)
+        .get(&src.url)
+        .set("User-Agent", "dbmind-updater")
+        .set("Range", "bytes=0-393215")
+        .timeout(Duration::from_secs(3))
+        .call()
+        .ok()?;
+    let mut reader = resp.into_reader();
+    let mut buf = [0u8; 64 * 1024];
+    let mut got: u64 = 0;
+    // **只在收到第一个字节之后才计时**：把建连 / TLS 握手算进去的话，链路很快但握手慢的源
+    // 会被误判成"慢"（真机：探到 197 KB/s，真下起来 4 MB/s）。
+    let mut t_first: Option<Instant> = None;
+    while got < 384 * 1024 {
+        // 硬上限：再慢就不再等了（测速只需知道"谁快"，不需要跑完）
+        if deadline.elapsed() > Duration::from_secs(3) {
+            break;
+        }
+        match reader.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                if t_first.is_none() {
+                    t_first = Some(Instant::now());
+                }
+                got += n as u64;
+            }
+            Err(_) => break,
+        }
+    }
+    let secs = t_first?.elapsed().as_secs_f64();
+    if got == 0 || secs <= 0.0 {
+        return None;
+    }
+    Some((got as f64 / secs) as u64)
+}
+
+/// 并发给所有候选源测速，返回最快的那个（都失败则 None）。
+///
+/// 并发而不是一个一个试：串行最坏要等 4×4 秒，用户会觉得"点了没反应"。
+/// 代价是所有源各多下 256 KB（约 1 MB），换来的是"不用挑、直接走最快的路"。
+fn pick_fastest_source(sources: &[Source]) -> Option<(Source, u64)> {
+    let handles: Vec<_> = sources
+        .iter()
+        .cloned()
+        .map(|s| std::thread::spawn(move || {
+            let sp = probe_source(&s);
+            (s, sp)
+        }))
+        .collect();
+    let mut best: Option<(Source, u64)> = None;
+    for h in handles {
+        if let Ok((s, Some(sp))) = h.join() {
+            if best.as_ref().map(|(_, b)| sp > *b).unwrap_or(true) {
+                best = Some((s, sp));
+            }
+        }
+    }
+    best
+}
+
+/// 下载安装包：**续传 + 重试 + 自动选源 + 慢连接重连**，全部失败才报错。
 ///
 /// 为什么值得这么绕：安装包几十 MB，而「下到一半断了 / 慢得像停了」是常态，于是：
 ///   1. 先写 `<安装包>.part`，成功才改名 —— 中断不留半个"安装包"；
@@ -542,14 +616,64 @@ fn download_with_progress(
     start_index: usize,
 ) -> dbmind_core::Result<()> {
     let all = build_sources(&inst.url);
+    // start_index 保留给排查用（0 = 正常；非 0 = 从第 n 个源起，跳过前面的）
     let start = start_index % all.len();
-    // 从用户指定的源开始，绕一圈回到前面 —— 这样"换个源"永远有下一个可试
-    let mut sources: Vec<Source> = all[start..].to_vec();
-    sources.extend_from_slice(&all[..start]);
+    // **自动选源**：现场并发测速，最快的排第一，其余按原顺序兜底。
+    // 用户不需要、也不应该自己挑源 —— 哪个快只有现场量得准。
+    let mut sources: Vec<Source> = Vec::with_capacity(all.len());
+    let mut picked: Option<(String, u64)> = None;
+    {
+        // 测速最多 3 秒，但"什么都不显示"会被当成卡住 —— 先说一句在干嘛
+        let mut p = cell.lock().unwrap();
+        p.note = Some("正在测速挑选最快的下载源…".into());
+    }
+    if let Some((fast, sp)) = pick_fastest_source(&all) {
+        picked = Some((host_of(&fast.url), sp));
+        sources.push(fast.clone());
+        for s in &all {
+            if s.url != fast.url || s.use_proxy != fast.use_proxy {
+                sources.push(s.clone());
+            }
+        }
+    } else {
+        sources = all.clone();
+    }
     let source_total = sources.len();
+    let _ = start;
     let part = part_path(dest);
+    // 上一次可能已经把整包下完了（"取消"来得太晚、改名失败……），留下一个**完整**的 `.part`。
+    // 这时再带 `Range: bytes=<全长>-` 去要，服务端一律回 **416**（区间越界）—— 四个源全失败，
+    // 用户看到的是一堵 416（真机踩过）。所以先看本地这份够不够大：够就先校验，过了直接用，
+    // 没过（或尺寸对不上）就删掉重下。
+    if inst.size > 0 {
+        if let Ok(meta) = std::fs::metadata(&part) {
+            if meta.len() >= inst.size {
+                let ok = match &inst.sha256 {
+                    Some(want) => sha256_file(&part)
+                        .map(|got| got.eq_ignore_ascii_case(want))
+                        .unwrap_or(false),
+                    None => meta.len() == inst.size,
+                };
+                if ok {
+                    std::fs::rename(&part, dest).map_err(|e| {
+                        DbMindError::new(ErrorCode::Internal, format!("保存安装包失败：{e}"))
+                    })?;
+                    if inst.sha256.is_some() {
+                        cell.lock().unwrap().verified = true;
+                    }
+                    return Ok(());
+                }
+                tracing::warn!(target: "dbmind::update", "本地 .part 尺寸够但校验不过，丢弃重下");
+                let _ = std::fs::remove_file(&part);
+            }
+        }
+    }
     let mut errs: Vec<String> = Vec::new();
     for (si, src) in sources.iter().enumerate() {
+        // 取消要**立刻**停：否则每个源还要再试两次、各等 3 秒，用户会以为"点了取消没反应"
+        if cell.lock().unwrap().cancel {
+            return Err(DbMindError::new(ErrorCode::Internal, "已取消当前下载（已下载的部分保留）".to_string()));
+        }
         // 顺序是"绕一圈"后的：只有 si==0 才意味着还在原定起点上
         let is_start = si == 0;
         let host = host_of(&src.url);
@@ -566,6 +690,12 @@ fn download_with_progress(
                 Some(format!("第 {attempt} 次重试（已下载 {}，接着下）", human_bytes(done)))
             } else if done > 0 {
                 Some(format!("从已下载的 {} 继续", human_bytes(done)))
+            } else if let Some((h, sp)) = &picked {
+                // 让用户知道"软件自己挑了个最快的源"，而不是莫名其妙换了个地址
+                Some(format!(
+                    "已自动选择最快的源 {h}（实测 {}/秒），正在连接 …",
+                    human_bytes(*sp)
+                ))
             } else {
                 // 别让用户对着一动不动的 0% 猜：明说在连哪个源、走不走代理
                 Some(format!("正在连接 {host}{via} …"))
@@ -599,8 +729,9 @@ fn download_with_progress(
                             ));
                         }
                         cell.lock().unwrap().verified = true;
-                    } else if !is_start {
-                        // 不是原定起点（多半走了镜像）又没官方值可对 ⇒ 内容无法自证，如实标记
+                    } else if src.url != inst.url {
+                        // 用的不是官方地址（多半是镜像）又没官方 digest 可对 ⇒ 内容无法自证，如实标记。
+                        // 注意判据是**实际地址**：自动选源之后，第一个用的可能就是镜像。
                         cell.lock().unwrap().unverified = true;
                     }
                     std::fs::rename(&part, dest).map_err(|e| {
@@ -614,9 +745,14 @@ fn download_with_progress(
                         target: "dbmind::update",
                         url = %src.url, attempt, error = %e.message, "安装包下载失败"
                     );
-                    // 先取出"是不是慢速断开"再 push（message 是 String，push 会把它 move 走）
+                    // 先取出两个判定再 push（message 是 String，push 会把它 move 走）
                     let slow_abort = e.message.contains("速度过慢");
+                    let canceled = e.message.starts_with("已取消");
                     errs.push(e.message);
+                    // 取消：整个任务到此为止，不必再换源重试
+                    if canceled {
+                        return Err(DbMindError::new(ErrorCode::Internal, "已取消当前下载（已下载的部分保留）".to_string()));
+                    }
                     // 一个字节都没拿到 ⇒ 这个源根本连不上（被墙 / 黑洞），同源重试纯属浪费时间，
                     // 直接换下一个源；只有"下着下着断了"才值得同源重试。
                     if after <= before {
@@ -636,13 +772,30 @@ fn download_with_progress(
         p.note = None;
         p.url = Some(inst.url.clone());
     }
+    // 每个源的报错里常带着几百字符的签名 URL，全量拼进界面就是一堵墙 —— 只留前两条、各截断。
+    let brief: Vec<String> = errs
+        .iter()
+        .take(2)
+        .map(|e| {
+            let one = e.split_whitespace().collect::<Vec<_>>().join(" ");
+            if one.chars().count() > 120 {
+                one.chars().take(120).collect::<String>() + "…"
+            } else {
+                one
+            }
+        })
+        .collect();
+    let more = if errs.len() > brief.len() {
+        format!("（另有 {} 个下载源也失败）", errs.len() - brief.len())
+    } else {
+        String::new()
+    };
     Err(DbMindError::new(
         ErrorCode::Internal,
         format!(
-            "在线更新下载失败：{}。\n可改用：① 启动代理后重试（软件会自动使用系统代理）；\
-             ② 用环境变量 DBMIND_UPDATE_MIRRORS 指定自己信任的镜像；\
-             ③ 直接到发布页手动下载 {RELEASE_PAGE}",
-            errs.join("；")
+            "下载失败：{}{more}。\n可以点「重试」再来一次（已下载的部分会保留）；\
+             或到发布页手动下载：{RELEASE_PAGE}",
+            brief.join("；")
         ),
     ))
 }
@@ -674,6 +827,15 @@ fn download_once(
             format!("连接下载地址失败：{e}（若在使用代理，请确认代理程序已启动）"),
         )
     })?;
+    if resp.status() == 416 && offset > 0 {
+        // 416 = 我这边要的区间越界（本地那份已经 >= 远端大小）。留着它只会让**每个源**都回 416，
+        // 直接丢弃，让下一次尝试从 0 开始。
+        let _ = std::fs::remove_file(part);
+        return Err(DbMindError::new(
+            ErrorCode::Internal,
+            "本地已下载部分不小于远端文件，已丢弃并从零重下".to_string(),
+        ));
+    }
     // 206 = 服务端认了 Range（接着下）；200 = 不认，只能从零重来
     let resuming = resp.status() == 206 && offset > 0;
     if offset > 0 && !resuming {

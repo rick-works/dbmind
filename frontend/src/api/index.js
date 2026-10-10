@@ -204,11 +204,8 @@ export const saveLegacyTls = (allowLegacyTls) => http.put('/api/settings/legacy-
 export const getSettings = () => http.get('/api/dbmind/settings').then(r => r.data)
 // 在线更新：检查 Gitee 最新发行版 / 下载安装包并拉起安装器（桌面端覆盖安装）
 export const checkUpdate = () => http.get('/api/update/check', { timeout: 20000 }).then(r => r.data)
-// sourceIndex = 从第几个下载源开始（点「换个更快的源」时传当前源 +1，可绕圈轮换；仍校验官方 sha256）
-export const applyUpdate = (dir, sourceIndex = 0) =>
-  http.post('/api/update/apply', { dir: dir || null, sourceIndex }, { timeout: 600000 }).then(r => r.data)
-// 取消当前下载：已下载的部分保留，换源后会接着下
-export const cancelUpdate = () => http.post('/api/update/cancel').then(r => r.data)
+// 下载安装包并由后端自动选源（源快慢由后端现场测速决定，界面不提供选择）
+export const applyUpdate = (dir) => http.post('/api/update/apply', { dir: dir || null }, { timeout: 600000 }).then(r => r.data)
 // 下载进度（后台任务写、前端轮询）：{ status, received, total, speed, error, ... }
 export const pickUpdateDir = (title) => http.get('/api/update/pick-dir', { params: { title }, timeout: 600000 }).then(r => r.data)
 export const updateDirs = () => http.get('/api/update/dirs', { timeout: 10000 }).then(r => r.data)
