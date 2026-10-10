@@ -411,6 +411,34 @@ jobs:
           df -h /tmp | tail -1
           free -m
 
+      # [4a-0] macOS 依赖体检：主可执行文件里**不允许**出现 /opt/homebrew 或 /usr/local 下的
+      #        动态库。这一关是 v1.2.0 崩出来的教训 —— libssh2 在 unix 上默认链**系统的**
+      #        OpenSSL，CI 里就链到 Homebrew 的 /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib，
+      #        用户的 M1 上要么没有它、要么 hardened runtime 的库校验不认它的 Team ID，
+      #        双击直接崩在 DYLD 的 Library not loaded。
+      #        现在由 dbmind-core 的 ssh2/vendored-openssl 静态链（见 crates/dbmind-core/Cargo.toml），
+      #        这里守住别退回去。纯读 otool，不依赖网络、不依赖证书。
+      - name: 检查 macOS 二进制不含本机第三方动态库
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          if [ -z "$app" ]; then echo "::error::没找到 .app 产物"; exit 1; fi
+          echo "app = $app"
+          fail=0
+          for exe in "$app"/Contents/MacOS/*; do
+            [ -f "$exe" ] || continue
+            echo "== otool -L $exe"
+            otool -L "$exe"
+            bad=$(otool -L "$exe" | tail -n +2 | awk '{print $1}' | grep -E '^(/opt/homebrew|/usr/local)' || true)
+            if [ -n "$bad" ]; then
+              echo "::error::$exe 链到了本机第三方动态库（用户机器上不会有）：$bad"
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then exit 1; fi
+          echo "OK：没有 /opt/homebrew、/usr/local 下的动态依赖"
+
       # [4a] 签名是"有证书才发生"的，所以必须显式**验证**一次：否则未签名的包会被静默发出去，
       #      而用户那边只看到"未知发布者"/"已损坏"这类模糊症状。
       #      判断证书在不在放在脚本里（GITHUB_ENV 写的变量就是普通环境变量，最稳），

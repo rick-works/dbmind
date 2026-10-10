@@ -14,8 +14,21 @@ chrono = { workspace = true }
 tracing = { workspace = true }
 rusqlite = { workspace = true }
 # SSH 隧道（跳板机）。选 libssh2 而不是 russh：本 crate 是**同步**的（没有 tokio），
-# 而 libssh2 的 C 源码由 libssh2-sys 用 cc 直接编进产物 —— 不需要系统 OpenSSL、
-# 不需要 cmake / nasm / perl，Windows 上用它的 CNG 后端即可，打包也不会多出动态库。
+# 而 libssh2 的 C 源码由 libssh2-sys 用 cc 直接编进产物 —— 不需要 cmake / nasm。
+#
+# ⚠️ macOS / Linux 上必须开 vendored-openssl，这不是可选项：
+#   libssh2 在 unix 上会链**系统的** OpenSSL。CI 的 macOS runner 上那就是 Homebrew 的
+#   /opt/homebrew/opt/openssl@3/lib/libssl.3.dylib —— 于是打出来的 .app 里带着一条指向
+#   Homebrew 的绝对路径。用户机器上没有它（或 hardened runtime 的库校验不认它的 Team ID）
+#   → 双击即崩：DYLD "Library not loaded: libssl.3.dylib"（v1.2.0 在 M1 上实测，见
+#   release-notes/v1.2.1.md）。vendored-openssl 让 openssl-src 从源码编一份并**静态链进
+#   二进制**，包内不再有任何外部 .so / .dylib，也就不再依赖目标机器装过什么。
+#   Windows 不走这条路：libssh2-sys 在 Windows 上用 WinCNG（系统 CryptoAPI），本来就不需要
+#   OpenSSL（`ssh2` 的另一个特性 openssl-on-win32 才是显式改成用它）。
+[target.'cfg(unix)'.dependencies]
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+
+[target.'cfg(windows)'.dependencies]
 ssh2 = "0.9"
 
 [build-dependencies]
