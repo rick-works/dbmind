@@ -292,6 +292,7 @@
 import { ref, watch, onMounted, onUnmounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { t } from '../../utils/i18n'
 import { querySettingsLive, editorSettingsLive } from '../../utils/settings'
+import { numericTypeHint, isNumericLiteral } from '../../utils/dbType'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, Delete, Sort, SortUp, SortDown, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { getTableData, listColumns, saveTableData, aiFilter, exportData } from '../../api'
@@ -401,8 +402,8 @@ const typeIcon = (col) => {
   if (/bool/.test(t)) return SwitchIcon
   if (/json/.test(t)) return Tickets
   if (/(blob|binary|bytea|image|raw)/.test(t)) return Document
-  if (/^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money)/.test(t)) return Histogram
-  if (/^(date|time|datetime|timestamp|year)/.test(t)) return Calendar
+  if (numericTypeHint(t) === true) return Histogram
+  if (/date|time|year/.test(t)) return Calendar
   if (/^(char|varchar|text|string|clob|enum|set|uuid|nchar|nvarchar)/.test(t)) return Document
   return Grid
 }
@@ -412,8 +413,8 @@ const typeClass = (col) => {
   if (/bool/.test(t)) return 'th-t-bool'
   if (/json/.test(t)) return 'th-t-json'
   if (/(blob|binary|bytea|image|raw)/.test(t)) return 'th-t-blob'
-  if (/^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money)/.test(t)) return 'th-t-num'
-  if (/^(date|time|datetime|timestamp|year)/.test(t)) return 'th-t-date'
+  if (numericTypeHint(t) === true) return 'th-t-num'
+  if (/date|time|year/.test(t)) return 'th-t-date'
   return 'th-t-text'
 }
 const loading = ref(false)
@@ -559,10 +560,8 @@ const isRowSelected = (row) => selectedSet.value.has(row._rid)
 // ========== 选中区汇总（底栏，与 SQL 结果表同一套做法）==========
 // 优先级：单元格区域 > 选中整行 > 选中整列（同一时刻只有一块选区，见各 focus*/clear* 函数）。
 // 计数按"格子数"给（与 Excel 一致），求和/均值/最小/最大只统计**数值类型**的列。
-const NUMERIC_SUMMARY_RE = /^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money|serial)/i
-// 类型拿不到时的兜底判定：值本身是**严格数字面量**才算（别把字符串硬加起来）。
-// 有的源 /columns 返回空（Doris 的 JDBC getColumns 踩过），汇总不能跟着哑掉。
-const NUMERIC_LITERAL_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
+// 数值判定见 utils/dbType（类型只用来否决；ClickHouse 的 UInt64 / Nullable(Decimal…) 也算数值）
+// 有的源 /columns 返回空（Doris 的 JDBC getColumns 踩过）：那时直接按值判，汇总不跟着哑掉。
 /** 汇总数字显示：整数不带小数点，小数最多两位（均值常常是除出来的） */
 const fmtSummaryNum = (n) => (n == null || !Number.isFinite(n)) ? '' : (Number.isInteger(n) ? String(n) : Number(n.toFixed(2)).toLocaleString())
 
@@ -581,12 +580,10 @@ const selectionSummary = computed(() => {
     acc.cells++
     const v = row[col]
     if (v == null) return
-    // 数值判定：类型已知按类型；类型缺失（/columns 返回空的源）看值本身 ——
-    // 严格数字面量才参与求和，普通文本列不会被误加
-    const type = String(colTypeMap.value[col] || '').toLowerCase()
-    if (type) {
-      if (!NUMERIC_SUMMARY_RE.test(type)) return
-    } else if (!NUMERIC_LITERAL_RE.test(String(v).trim())) return
+    // 数值判定：类型只用来否决（明确是文本/时间/二进制 → 不算），其余看值本身 ——
+    // 严格数字字面量才参与求和，普通文本列不会被误加
+    if (numericTypeHint(colTypeMap.value[col]) === false) return
+    if (!isNumericLiteral(v)) return
     const n = Number(v)
     if (!Number.isFinite(n)) return
     acc.nums++

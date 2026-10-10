@@ -623,14 +623,16 @@ const showAllResultCols = () => { hiddenResultCols.value = new Set() }
 
 // 结果表头字段类型（类型来自后端 columnTypes；**查询端点经常不带** ——
 // 此时按首个非空值推断，保证 SQL 编辑器结果与表预览/NoSQL 的表头图标一致）
+// 列类型判定统一走 utils/dbType（能认 UInt64 / Nullable(Decimal(18, 2)) 这类带包装的写法）
+import { numericTypeHint, isNumericLiteral } from '../../utils/dbType'
 const resultTypeOf = (ci) => (result.value?.columnTypes || [])[ci] || ''
 const resultKindOf = (ci) => {
   const t = resultTypeOf(ci).toLowerCase()
   if (/bool/.test(t)) return 'bool'
   if (/json/.test(t)) return 'json'
   if (/(blob|binary|bytea|image|raw|byte)/.test(t)) return 'blob'
-  if (/^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money|serial)/.test(t)) return 'num'
-  if (/^(date|time|datetime|timestamp|year)/.test(t)) return 'date'
+  if (numericTypeHint(t) === true) return 'num'
+  if (/date|time|year/.test(t)) return 'date'
   if (t) return 'text'
   const col = (result.value?.columns || [])[ci]
   for (const r of (result.value?.rows || [])) {
@@ -784,10 +786,9 @@ const recountTotal = () => {
 // ========== 结果表：选中区汇总（底栏状态区）==========
 // 优先级：单元格区域 > 选中行 > 选中列（同一时刻只会存在一块选区，见 focusResult* 那几个函数）。
 // 计数按"格子数"给（和 Excel 一致），求和/均值只统计**数值类型**的列 —— 把字符串硬加起来没有意义。
-const NUMERIC_TYPE_RE = /^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|number|bit|money|serial)/i
-// 类型缺失时的兜底：值是**严格数字面量**才算（有的源列类型拿不到，汇总不能跟着哑掉）
-const NUMERIC_LITERAL_RE = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/
-const isNumericResultCol = (idx) => NUMERIC_TYPE_RE.test(String(resultTypeOf(idx) || '').toLowerCase())
+// 数值判定见 utils/dbType：类型只用来**否决**（明确是文本/时间就不算），
+// 其余情况（ClickHouse 的 UInt64、Nullable(Decimal…)，或类型拿不到）一律让值自己说话
+// —— 以前要求"类型必须以 int/decimal 开头"，于是这些数字格全被判成非数值，只出"选中 N 格"。
 /** 数字显示：整数不带小数点，小数最多两位（汇总值常常是除出来的） */
 const fmtNum = (n) => (n == null || !Number.isFinite(n)) ? '' : (Number.isInteger(n) ? String(n) : Number(n.toFixed(2)).toLocaleString())
 
@@ -806,11 +807,9 @@ const resultSelectionSummary = computed(() => {
     acc.cells++
     const v = row[name]
     if (v == null) return
-    // 类型已知按类型；类型缺失看值本身（严格数字面量），普通文本列不会被误加
-    const typed = String(resultTypeOf(c) || '')
-    if (typed) {
-      if (!NUMERIC_TYPE_RE.test(typed.toLowerCase())) return
-    } else if (!NUMERIC_LITERAL_RE.test(String(v).trim())) return
+    // 类型只用来否决（明确是文本/时间/二进制 → 不算），其余让值说话：必须是严格数字字面量
+    if (numericTypeHint(resultTypeOf(c)) === false) return
+    if (!isNumericLiteral(v)) return
     const n = Number(v)
     if (!Number.isFinite(n)) return
     acc.nums++
