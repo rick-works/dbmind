@@ -49,7 +49,15 @@ struct Progress {
     unverified: bool,
     /// 用户点了「换个更快的源」：下载循环看到就退出（保留已下载的 .part，随后换源续传）
     cancel: bool,
+    /// 当前用的是第几个源（0 基）、一共几个源；界面显示"源 2/4"
+    source_index: usize,
+    source_total: usize,
+    /// 当前这条源走不走代理（末尾那条"直连不走代理"是 false）
+    using_proxy: bool,
 }
+
+/// 低于这个速度且持续 20 秒以上，就断开重连（新连接往往能换到更好的线路 / 节点）
+const SLOW_FLOOR: u64 = 150 * 1024;
 
 fn progress_cell() -> &'static Arc<std::sync::Mutex<Progress>> {
     use std::sync::OnceLock;
@@ -67,10 +75,15 @@ fn progress_cell() -> &'static Arc<std::sync::Mutex<Progress>> {
 /// `timeout_read` 是「卡住」与「慢」的分水岭：只设总超时的话，网络中断或黑洞连接会让一个
 /// read 一直阻塞到总超时（1800 秒）—— 界面上就是永远停在某个百分比、看着像死机。
 /// 单次读超时一设，停滞 30 秒即报错，上层才好自动重试 / 续传 / 换源。
-fn agent() -> ureq::Agent {
+fn agent(use_proxy: bool) -> ureq::Agent {
     let builder = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(30));
+    if !use_proxy {
+        // 显式不走代理：用户的代理节点有时**比直连还慢**（实测同机 120KB/s vs 3.8MB/s），
+        // 所以源列表末尾留一条直连的路，用户点"换源"能轮到它。
+        return builder.build();
+    }
     match super::sysproxy::resolve() {
         Some(p) => match ureq::Proxy::new(&p) {
             Ok(proxy) => builder.proxy(proxy).build(),
@@ -94,7 +107,7 @@ fn github_token() -> Option<String> {
 
 /// 发一次请求并解析 JSON。auth 为 None 时匿名访问。
 fn request_release(auth: Option<&str>) -> dbmind_core::Result<Value> {
-    let mut req = agent()
+    let mut req = agent(true)
         .get(RELEASE_LATEST)
         .set("User-Agent", "dbmind-updater")
         .timeout(Duration::from_secs(10));
@@ -263,13 +276,15 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
             status: "running".into(),
             started: Some(Instant::now()),
             proxy: super::sysproxy::resolve(),
+            source_index: req.source_index.unwrap_or(0),
+            source_total: 0,
             ..Default::default()
         };
     }
 
     let cell = progress_cell().clone();
     let want_dir = req.dir.clone();
-    let prefer = req.prefer_mirror;
+    let start_index = req.source_index.unwrap_or(0);
     // 下载是纯阻塞 IO（几十 MB），放 blocking 线程池，不占 async worker
     tokio::task::spawn_blocking(move || {
         let picked = fetch_latest_blocking().and_then(|v| {
@@ -297,7 +312,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 return;
             }
         }
-        match download_with_progress(&inst, &dest, &cell, prefer) {
+        match download_with_progress(&inst, &dest, &cell, start_index) {
             Ok(()) => {
                 let installer = dest.to_string_lossy().to_string();
                 let ok = launch_installer(&dest);
@@ -346,9 +361,10 @@ pub struct ApplyReq {
     /// 下载保存目录（用户在更新弹窗里选）
     #[serde(default)]
     pub dir: Option<String>,
-    /// 用户主动"换源"：**镜像优先**（仍带官方 sha256 校验，且从已下载的 .part 续传）
+    /// 从第几个下载源开始（用户点「换个更快的源」时传当前源 +1）。
+    /// 仍带官方 sha256 校验，且从已下载的 .part 续传。
     #[serde(default)]
-    pub prefer_mirror: bool,
+    pub source_index: Option<usize>,
 }
 /// 自动手段全失败后给用户的手动兜底地址
 const RELEASE_PAGE: &str = "https://github.com/rick-works/dbmind/releases";
@@ -386,28 +402,35 @@ fn mirror_prefixes() -> Vec<String> {
     }
 }
 
-/// 下载源候选：**直连永远第一**，其后按镜像表拼接；逐个试，直连成功就轮不到镜像。
-fn download_sources(url: &str, prefer_mirror: bool) -> Vec<String> {
-    let direct = url.to_string();
-    let mirrors: Vec<String> = mirror_prefixes()
-        .into_iter()
-        .map(|prefix| {
-            if prefix.contains("{url}") {
-                prefix.replace("{url}", url)
-            } else {
-                format!("{prefix}{url}")
-            }
-        })
-        .collect();
-    // 平时直连优先（直连通就轮不到镜像）；用户点了"换源"则反过来，直接上镜像
-    let mut out = Vec::with_capacity(mirrors.len() + 1);
-    if prefer_mirror {
-        out.extend(mirrors);
-        out.push(direct);
-    } else {
-        out.push(direct);
-        out.extend(mirrors);
+/// 一个候选下载源。`use_proxy` 单独标出来：代理节点有时比直连慢得多，
+/// 所以除了"直连 / 镜像（都走代理）"，列表末尾还留一条**直连不走代理**的路。
+#[derive(Clone)]
+struct Source {
+    url: String,
+    use_proxy: bool,
+}
+
+/// 源列表：直连（走代理）→ 各镜像（走代理）→ 直连（**不走代理**）。
+///
+/// 顺序即优先级：正常情况下第一条就成了；失败或过慢才依次往后。
+/// 最后那条"不走代理"只在代理这条路有问题时才有意义，所以放最后。
+fn build_sources(url: &str) -> Vec<Source> {
+    let mut out = vec![Source {
+        url: url.to_string(),
+        use_proxy: true,
+    }];
+    for prefix in mirror_prefixes() {
+        let u = if prefix.contains("{url}") {
+            prefix.replace("{url}", url)
+        } else {
+            format!("{prefix}{url}")
+        };
+        out.push(Source { url: u, use_proxy: true });
     }
+    out.push(Source {
+        url: url.to_string(),
+        use_proxy: false,
+    });
     out
 }
 
@@ -502,47 +525,64 @@ fn human_bytes(n: u64) -> String {
     format!("{:.1} MB", n as f64 / 1024.0 / 1024.0)
 }
 
-/// 下载安装包：**续传 + 重试 + 换源**，全部失败才报错。
+/// 下载安装包：**续传 + 重试 + 换源 + 慢连接重连**，全部失败才报错。
 ///
-/// 为什么值得这么绕：安装包几十 MB，而「下到一半断了 / 慢得像停了」是常态，
-/// 偏偏这时候机器上往往**没有代理**（用户报的正是这个场景）。于是：
+/// 为什么值得这么绕：安装包几十 MB，而「下到一半断了 / 慢得像停了」是常态，于是：
 ///   1. 先写 `<安装包>.part`，成功才改名 —— 中断不留半个"安装包"；
 ///   2. 重试带 `Range` 续传（回 206 就接着下，回 200 就从头来）；
 ///   3. 停滞 30 秒由 `timeout_read` 触发报错，不会挂到总超时；
-///   4. 大文件开局 15 秒还拿不到 512 KB，判定"这个源太慢"，直接换下一个源。
+///   4. **慢而不死也要管**：速度低于 `SLOW_FLOOR` 持续 20 秒，主动断开重连 ——
+///      长连接会在代理链路上悄悄劣化（实测同一条代理：旧连接 120 KB/s、新连接 3 MB/s），
+///      换条连接往往比等它自己恢复快得多；
+///   5. 用户点「换个更快的源」时从下一个源开始（`start_index`），绕一圈轮换。
 fn download_with_progress(
     inst: &Installer,
     dest: &std::path::Path,
     cell: &Arc<std::sync::Mutex<Progress>>,
-    prefer_mirror: bool,
+    start_index: usize,
 ) -> dbmind_core::Result<()> {
-    let sources = download_sources(&inst.url, prefer_mirror);
+    let all = build_sources(&inst.url);
+    let start = start_index % all.len();
+    // 从用户指定的源开始，绕一圈回到前面 —— 这样"换个源"永远有下一个可试
+    let mut sources: Vec<Source> = all[start..].to_vec();
+    sources.extend_from_slice(&all[..start]);
+    let source_total = sources.len();
     let part = part_path(dest);
     let mut errs: Vec<String> = Vec::new();
     for (si, src) in sources.iter().enumerate() {
-        let host = host_of(src);
+        // 顺序是"绕一圈"后的：只有 si==0 才意味着还在原定起点上
+        let is_start = si == 0;
+        let host = host_of(&src.url);
+        let via = if src.use_proxy { "" } else { "（不走代理）" };
         for attempt in 1..=2u32 {
             let done = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-            let note = if si > 0 {
+            let note = if !is_start {
                 Some(if done > 0 {
-                    format!("直连不通，已改用镜像 {host}，并从已下载的 {} 继续", human_bytes(done))
+                    format!("已换到 {host}{via}，并从已下载的 {} 继续", human_bytes(done))
                 } else {
-                    format!("直连不通，已改用镜像 {host}")
+                    format!("已换到下载源 {host}{via}")
                 })
             } else if attempt > 1 {
                 Some(format!("第 {attempt} 次重试（已下载 {}，接着下）", human_bytes(done)))
             } else if done > 0 {
                 Some(format!("从已下载的 {} 继续", human_bytes(done)))
             } else {
-                // 别让用户对着一动不动的 0% 猜：明说在连哪个源
-                Some(format!("正在连接下载源 {host} …"))
+                // 别让用户对着一动不动的 0% 猜：明说在连哪个源、走不走代理
+                Some(format!("正在连接 {host}{via} …"))
             };
-            cell.lock().unwrap().note = note;
+            {
+                let mut p = cell.lock().unwrap();
+                p.note = note;
+                p.url = Some(src.url.clone());
+                p.source_index = (start + si) % source_total;
+                p.source_total = source_total;
+                p.using_proxy = src.use_proxy;
+            }
             let before = done;
-            // 慢速判定只在**后面还有别的源可试**时生效：否则一个 220 KB/s 能用的镜像
-            // 偶尔掉到 30 KB/s 就被判"太慢"掐掉，等于把本来能下完的活干成失败。
-            let can_switch = si + 1 < sources.len();
-            match download_once(src, &part, cell, can_switch) {
+            // 允许"慢速重连"的条件：同源还有一次重试机会，或后面还有别的源。
+            // 最后一条路上不能再掐（宁可慢，也别把一个能下完的活干成失败）。
+            let can_retry = attempt == 1 || si + 1 < sources.len();
+            match download_once(&src.url, src.use_proxy, &part, cell, can_retry) {
                 Ok(()) => {
                     // 校验：**这一步是允许默认走镜像的前提**。sha256 来自 GitHub API
                     // （直连可达），镜像换不了它；对不上就直接丢弃，绝不去执行一个可疑的安装包。
@@ -559,8 +599,8 @@ fn download_with_progress(
                             ));
                         }
                         cell.lock().unwrap().verified = true;
-                    } else if si > 0 {
-                        // 走镜像又没官方值可对 ⇒ 内容无法自证，如实标记（界面会提示）
+                    } else if !is_start {
+                        // 不是原定起点（多半走了镜像）又没官方值可对 ⇒ 内容无法自证，如实标记
                         cell.lock().unwrap().unverified = true;
                     }
                     std::fs::rename(&part, dest).map_err(|e| {
@@ -572,16 +612,19 @@ fn download_with_progress(
                     let after = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
                     tracing::warn!(
                         target: "dbmind::update",
-                        url = %src, attempt, error = %e.message, "安装包下载失败"
+                        url = %src.url, attempt, error = %e.message, "安装包下载失败"
                     );
+                    // 先取出"是不是慢速断开"再 push（message 是 String，push 会把它 move 走）
+                    let slow_abort = e.message.contains("速度过慢");
                     errs.push(e.message);
                     // 一个字节都没拿到 ⇒ 这个源根本连不上（被墙 / 黑洞），同源重试纯属浪费时间，
                     // 直接换下一个源；只有"下着下着断了"才值得同源重试。
                     if after <= before {
                         break;
                     }
-                    // 有进度却断了：多半是网络抖动，同源再试一次（带上 Range 续传），稍等避开瞬时故障
-                    if attempt == 1 {
+                    // 有进度却断了 / 太慢被主动断开：同源再试一次（带上 Range 续传）。
+                    // 慢速重连**不等待**（等的就是新连接），真断了才稍等避开瞬时故障。
+                    if attempt == 1 && !slow_abort {
                         std::thread::sleep(Duration::from_secs(3));
                     }
                 }
@@ -607,14 +650,15 @@ fn download_with_progress(
 /// 下**一次**（某个源的一次尝试）：续传偏移、进度上报、慢速判定都在这里。
 fn download_once(
     url: &str,
+    use_proxy: bool,
     part: &std::path::Path,
     cell: &Arc<std::sync::Mutex<Progress>>,
-    // 这个源后面还有别的源可换吗？没有的话就不做"慢速掐断"（宁可慢，也别失败）
-    allow_slow_abort: bool,
+    // 还允许再试一次吗？（允许才做慢速断开重连；最后一条路上宁可慢也不掐）
+    can_retry: bool,
 ) -> dbmind_core::Result<()> {
     use std::io::Write;
     let offset = std::fs::metadata(part).map(|m| m.len()).unwrap_or(0);
-    let mut req = agent()
+    let mut req = agent(use_proxy)
         .get(url)
         .set("User-Agent", "dbmind-updater")
         .timeout(Duration::from_secs(1800));
@@ -670,8 +714,12 @@ fn download_once(
     let mut got: u64 = 0;
     let mut last_report = Instant::now();
     let attempt_started = Instant::now();
+    // 速度用**最近 6 秒的滑窗**算，而不是"任务开始至今的平均"：
+    // 平均值会骗人 —— 从 25 MB 处续传的任务头几秒显示成几百 KB/s，长连接劣化时又看不出"现在变慢了"。
+    let mut window: std::collections::VecDeque<(Instant, u64)> = std::collections::VecDeque::new();
+    window.push_back((Instant::now(), base));
     // 只有大文件才判"慢"：小文件按字节数判会把正常慢速误判成故障
-    let judge_slow = allow_slow_abort && (total == 0 || total > 4 * 1024 * 1024);
+    let judge_slow = can_retry && (total == 0 || total > 4 * 1024 * 1024);
     loop {
         let n = reader.read(&mut buf).map_err(|e| {
             DbMindError::new(
@@ -687,24 +735,41 @@ fn download_once(
         got += n as u64;
         // 每 200ms 上报一次（进度条要顺，又不能频繁加锁）
         if last_report.elapsed() >= Duration::from_millis(200) {
-            let secs = cell.lock().unwrap().started.map(|s| s.elapsed().as_secs_f64()).unwrap_or(0.001);
-            let mut p = cell.lock().unwrap();
-            p.received = base + got;
-            p.speed = (p.received as f64 / secs.max(0.001)) as u64;
-            last_report = Instant::now();
+            let now = Instant::now();
+            let total_now = base + got;
+            window.push_back((now, total_now));
+            while window.len() > 2 && now.duration_since(window[0].0) > Duration::from_secs(6) {
+                window.pop_front();
+            }
+            let (t0, b0) = window[0];
+            let dt = now.duration_since(t0).as_secs_f64();
+            let speed = if dt >= 0.5 { ((total_now - b0) as f64 / dt) as u64 } else { 0 };
+            {
+                let mut p = cell.lock().unwrap();
+                p.received = total_now;
+                p.speed = speed;
+            }
+            last_report = now;
+            // 慢连接看门狗：**不是"开局慢"就换**，而是"一直慢"才断开重连（带 Range 续传）。
+            // 长连接在代理链路上会悄悄劣化（实测同一条代理：旧连接 120 KB/s、新连接 3 MB/s），
+            // 重连往往几秒就恢复 —— 比死等它自己好起来快得多，也不必从 0 重下。
+            if judge_slow
+                && dt >= 1.0
+                && speed > 0
+                && speed < SLOW_FLOOR
+                && attempt_started.elapsed() > Duration::from_secs(20)
+            {
+                return Err(DbMindError::new(
+                    ErrorCode::Internal,
+                    format!("连接速度过慢（约 {}/秒），已断开重连并接着下", human_bytes(speed)),
+                ));
+            }
         }
         // 用户点了「换个更快的源」：立刻退出，保留 .part 让下一次从断点续传
         if cell.lock().unwrap().cancel {
             return Err(DbMindError::new(
                 ErrorCode::Internal,
                 format!("已取消当前下载（已下载的 {} 保留，换源后会接着下）", human_bytes(base + got)),
-            ));
-        }
-        // 慢速判定：开局 15 秒还拿不到 512 KB，就别在这儿耗着了（换源比死等强）
-        if judge_slow && got < 512 * 1024 && attempt_started.elapsed() > Duration::from_secs(15) {
-            return Err(DbMindError::new(
-                ErrorCode::Internal,
-                format!("下载速度过慢（15 秒仅 {}），已换下一个下载源", human_bytes(base + got)),
             ));
         }
     }
@@ -864,6 +929,9 @@ pub async fn progress() -> Json<Value> {
         "url": p.url,
         "verified": p.verified,
         "unverified": p.unverified,
+        "sourceIndex": p.source_index,
+        "sourceTotal": p.source_total,
+        "usingProxy": p.using_proxy,
         "installer": p.installer,
         "version": p.version,
         "proxy": p.proxy,

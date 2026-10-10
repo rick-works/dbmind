@@ -1184,6 +1184,10 @@ const dlUnverified = ref(false)
 // 当前是不是走代理（后端探测结果）+ 换源请求进行中
 const dlProxy = ref('')
 const dlSwitching = ref(false)
+// 当前用的是第几个源、共几个源（界面显示"源 2/4"）；"换个更快的源"按这个算下一个
+const dlSourceIndex = ref(0)
+const dlSourceTotal = ref(0)
+const dlUsingProxy = ref(true)
 
 // 剩余时间：有总大小与速度才算得出来，否则留空（不要瞎猜）
 const dlEtaText = computed(() => {
@@ -1197,11 +1201,15 @@ const dlEtaText = computed(() => {
 const dlSourceText = computed(() => {
   let host = ''
   try { host = new URL(dlUrl.value).host } catch { host = '' }
-  const via = dlProxy.value
-    ? t('update.dlViaProxy', { proxy: dlProxy.value })
-    : t('update.dlDirect')
+  const n = dlSourceTotal.value > 1
+    ? t('update.dlSourceN', { i: dlSourceIndex.value + 1, n: dlSourceTotal.value }) + ' · '
+    : ''
+  // 走不走代理要按**当前这条源**说：末尾那条"直连不走代理"与前面几条不是一回事
+  const via = !dlUsingProxy.value
+    ? t('update.dlNoProxy')
+    : (dlProxy.value ? t('update.dlViaProxy', { proxy: dlProxy.value }) : t('update.dlDirect'))
   const eta = dlEtaText.value ? ' · ' + t('update.dlEta', { time: dlEtaText.value }) : ''
-  return (host ? host + ' · ' : '') + via + eta
+  return n + (host ? host + ' · ' : '') + via + eta
 })
 
 // 弹窗只放「更新摘要」：Release 全文动辄几千字，整篇塞进弹窗会把弹窗撑满屏、
@@ -1272,12 +1280,15 @@ const switchSource = async () => {
       if (!p || p.status !== 'running') break
     } catch { break }
   }
+  // 轮换到下一个源：绕一圈，最后那条"直连不走代理"就是这么被轮到的
+  const total = dlSourceTotal.value || 1
+  const next = (dlSourceIndex.value + 1) % total
   stopProgressPolling()
-  await startDownload(dlDir.value || '', true)
+  await startDownload(dlDir.value || '', next)
 }
 
 // 真正开始下载（目录已定）
-const startDownload = async (dir, preferMirror = false) => {
+const startDownload = async (dir, sourceIndex = 0) => {
   dlVisible.value = true
   dlStatus.value = 'running'
   dlReceived.value = 0
@@ -1291,7 +1302,7 @@ const startDownload = async (dir, preferMirror = false) => {
   dlSwitching.value = false
   startProgressPolling()
   try {
-    const res = await applyUpdateApi(dir, preferMirror)
+    const res = await applyUpdateApi(dir, sourceIndex)
     if (!res || res.success === false) {
       dlStatus.value = 'failed'
       dlError.value = (res && res.message) || t('update.applyFail')
@@ -1318,6 +1329,9 @@ const startProgressPolling = (fast = true) => {
       dlVerified.value = !!p.verified
       dlUnverified.value = !!p.unverified
       dlProxy.value = p.proxy || ''
+      dlSourceIndex.value = p.sourceIndex || 0
+      dlSourceTotal.value = p.sourceTotal || 0
+      dlUsingProxy.value = p.usingProxy !== false
       if (p.status === 'done' || p.status === 'failed') {
         dlStatus.value = p.status
         if (p.status === 'failed') dlError.value = p.error || t('update.applyFail')
@@ -1373,6 +1387,9 @@ const checkUpdate = async () => {
         dlVerified.value = !!p.verified
         dlUnverified.value = !!p.unverified
         dlProxy.value = p.proxy || ''
+        dlSourceIndex.value = p.sourceIndex || 0
+        dlSourceTotal.value = p.sourceTotal || 0
+        dlUsingProxy.value = p.usingProxy !== false
         startProgressPolling()
         return
       }
