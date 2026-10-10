@@ -19,9 +19,17 @@
       "nsis"
     ],
     "icon": [
+      "icons/icon.icns",
       "icons/icon.ico",
       "icons/icon.png"
     ],
+    "macOS": {
+      "dmg": {
+        "windowSize": { "width": 660, "height": 400 },
+        "appPosition": { "x": 180, "y": 180 },
+        "applicationFolderPosition": { "x": 480, "y": 180 }
+      }
+    },
     "fileAssociations": [
       {
         "ext": ["db"],

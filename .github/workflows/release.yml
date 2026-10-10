@@ -439,6 +439,26 @@ jobs:
           if [ "$fail" -ne 0 ]; then exit 1; fi
           echo "OK：没有 /opt/homebrew、/usr/local 下的动态依赖"
 
+      # [4a-1] DMG 布局体检：用户要的是「把图标拖进应用程序」那种安装方式，那么 DMG 挂载后
+      #        根目录必须同时有 .app 和一个指向 /Applications 的软链。这里挂上去实看一眼并把
+      #        目录列出来 —— 缺软链只告警不失败（先让包出得去），但日志里能一眼看到真相。
+      - name: 检查 DMG 的安装布局（macOS）
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          dmg=$(find target/release/bundle/dmg -maxdepth 1 -name '*.dmg' | head -1)
+          if [ -z "$dmg" ]; then echo "::warning::没找到 dmg 产物"; exit 0; fi
+          echo "dmg = $dmg"
+          mnt=$(hdiutil attach "$dmg" -nobrowse -readonly | tail -1 | awk '{print $NF}')
+          echo "挂载点 = $mnt"
+          ls -la "$mnt"
+          if [ -L "$mnt/Applications" ]; then
+            echo "OK：有指向 /Applications 的软链，是「拖进应用程序」的布局"
+          else
+            echo "::warning::DMG 根目录里没有 Applications 软链 —— 用户没法直接拖进去安装"
+          fi
+          hdiutil detach "$mnt" -quiet || true
+
       # [4a] 签名是"有证书才发生"的，所以必须显式**验证**一次：否则未签名的包会被静默发出去，
       #      而用户那边只看到"未知发布者"/"已损坏"这类模糊症状。
       #      判断证书在不在放在脚本里（GITHUB_ENV 写的变量就是普通环境变量，最稳），
