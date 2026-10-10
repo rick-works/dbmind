@@ -1237,18 +1237,12 @@ const applyResultTableHover = (e) => {
   if (resultScrolling) return
   if (isResultColDragging()) return
   if (resultDrag) { wrap.style.cursor = 'col-resize'; return }
-  const cell = e.target.closest('th, td')
-  if (resultLastHover && resultLastHover !== cell) {
-    resultLastHover.style.cursor = ''
-  }
-  const ci = resultEdgeColIdx(e)
-  if (ci >= 0 && cell) {
-    cell.style.cursor = 'col-resize'
-    resultLastHover = cell
-  } else {
-    resultLastHover = null
-  }
-  wrap.style.cursor = ci >= 0 ? 'col-resize' : ''
+  // 光标统一交给 CSS：列头一律手型（用户口径：几个表格要统一，不能"有的地方是手、有的是 ↔"）。
+  // 这里只负责清掉可能残留在某格上的**内联** cursor（窗口复用后会留下），不再自己设 col-resize。
+  // 列宽调整照样可用：按下时按几何判定（onResultTableDown 用的仍是 resultEdgeColIdx），
+  // 真正拖起来后由 document.body 强制成 ↔，那一刻的反馈很清楚；列之间本来也有 1px 边框指示边界。
+  if (resultLastHover) { resultLastHover.style.cursor = ''; resultLastHover = null }
+  if (wrap.style.cursor) wrap.style.cursor = ''
 }
 const onResultTableLeave = () => {
   if (resultTableWrapRef.value) {
@@ -5102,6 +5096,9 @@ onBeforeUnmount(() => {
    注意：列宽热区那条不受影响 —— 它在 JS 里写的是**内联** cursor（内联优先级高于这里），
    离开热区时置空 → 自然落回这里的手型；贴边 ±5px 那一档是有意的（Excel/DataGrip 同款）。 */
 .data-table th[data-gkey] { cursor: pointer; }
+/* 数据格：与表数据 / NoSQL 对齐（它们的 tbody tr 一直是手型）—— 单元格可点选、双击可快捷编辑。
+   窗口占位行（vt-gap）只是撑高的空行，排除掉，别让它也变手。 */
+.data-table tbody tr:not(.vt-gap) { cursor: pointer; }
 .data-table th.row-sel-th :deep(.el-checkbox), .data-table td.row-sel-td :deep(.el-checkbox) { margin-right: 0; }
 .lead-check { height: 18px; display: inline-flex; }
 /* 行号列（Excel 行头）：显示序号，点/拖选行；选中行时行号一起高亮

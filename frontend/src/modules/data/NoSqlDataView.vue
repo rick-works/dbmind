@@ -728,14 +728,11 @@ const applyTableHover = (e) => {
   if (drag) { wrap.style.cursor = 'col-resize'; return }
   const cell = e.target.closest('th, td')
   if (lastHover && lastHover !== cell) lastHover.style.cursor = ''
-  const vi = edgeColIdx(e)
-  if (vi >= 0 && cell) {
-    cell.style.cursor = 'col-resize'
-    lastHover = cell
-  } else {
-    lastHover = null
-  }
-  wrap.style.cursor = vi >= 0 ? 'col-resize' : ''
+  // 光标统一交给 CSS：列头一律手型（用户口径：几个表格要统一，不能"有的地方是手、有的是 ↔"）。
+  // 这里只清掉残留的内联 cursor，不再自己设 col-resize —— 列宽调整照样可用：
+  // .col-resizer 的 mousedown 与 edgeColIdx 的几何判定都没动，真正拖起来后由 .col-resizing 强制成 ↔。
+  if (lastHover) { lastHover.style.cursor = ''; lastHover = null }
+  if (wrap.style.cursor) wrap.style.cursor = ''
 }
 const onTableLeave = () => {
   const wrap = tableWrapRef.value
@@ -1785,6 +1782,10 @@ onBeforeUnmount(() => {
      用 inset 阴影而非 border-bottom：border-collapse 折叠后的下边框由 table 画、不跟吸顶走。 */
   box-shadow: inset 0 -2px 0 var(--dc-table-head-line);
 }
+/* 列头一律手型（用户口径：几个表格要统一，不能"有的地方是手、有的是 ↔"）。
+   原先只有 .sortable 那一档是手 —— 但表头里可点的不止它们，贴边的把手区又单独写 col-resize，
+   于是同一行表头里光标来回变。现在整格统一交给这条，把手的光标见下面 .col-resizer。 */
+.data-table th { cursor: pointer; }
 .data-table th.sortable { cursor: pointer; user-select: none; }
 .data-table th.sortable:hover { color: var(--dc-text); }
 /* 已排序列：文字主色 + 底部 2px 主色条 */
@@ -1814,9 +1815,12 @@ onBeforeUnmount(() => {
 }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 列宽拖拽把手 */
+/* 列宽把手：**光标继承列头（手型）** —— 用户口径是"列头一律手型"，所以这里不再自己写 col-resize，
+   只保留 10px 命中区与 mousedown 抓取。真正拖起来时由 .col-resizing / document.body 强制成 ↔，
+   那时的反馈照样清楚；列与列之间本来就有 1px 边框线指示边界在哪。 */
 .col-resizer {
   position: absolute; top: 0; right: -5px; bottom: 0; width: 10px;
-  cursor: col-resize; z-index: 6; user-select: none;
+  cursor: inherit; z-index: 6; user-select: none;
 }
 .data-table.col-resizing { cursor: col-resize; user-select: none; }
 .data-table td {
