@@ -2406,13 +2406,17 @@ const colAtEdge = (e) => {
   const rect = cell.getBoundingClientRect()
   const ci = cell.cellIndex
   const x = e.clientX
+  // 判定带子**随列宽缩窄**：原先固定 ±EDGE_GAP，窄列（60px）上两条中线各占 10px，
+  // 鼠标停在格子中间也会变 ↔（用户反馈："没放到竖线上 有的列头 也显示 ↔"）。
+  // 取列宽 8%，上限仍是 EDGE_GAP，下限 2px —— 窄列中间必留出手型区。
+  const gap = Math.max(2, Math.min(EDGE_GAP, Math.round(rect.width * 0.08)))
   // 靠近右缘 -> 调整本列
-  if (x >= rect.right - EDGE_GAP && x <= rect.right + EDGE_GAP) {
+  if (x >= rect.right - gap && x <= rect.right + gap) {
     const idx = ci - 1 // 第0列是行号列
     return idx >= 0 && idx < visibleColumns.value.length ? visibleColumns.value[idx] : null
   }
   // 靠近左缘 -> 调整左侧相邻列
-  if (x >= rect.left - EDGE_GAP && x <= rect.left + EDGE_GAP) {
+  if (x >= rect.left - gap && x <= rect.left + gap) {
     const idx = ci - 2
     return idx >= 0 && idx < visibleColumns.value.length ? visibleColumns.value[idx] : null
   }
@@ -3148,7 +3152,7 @@ useShortcutScope(rootRef, {
    所以这里必须是 col-resize —— 用户口径：列头整格是手，但中线上要是列宽调整的 ↔。
    它同时提供 mousedown 抓取与这条 10px 的命中带。 */
 .col-resizer {
-  position: absolute; top: 0; right: -5px; bottom: 0; width: 10px;
+  position: absolute; top: 0; right: -3px; bottom: 0; width: 6px;
   cursor: col-resize; z-index: 6; user-select: none;
 }
 .data-table.col-resizing { cursor: col-resize; user-select: none; }

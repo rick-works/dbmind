@@ -1187,9 +1187,14 @@ const resultEdgeColIdx = (e) => {
   const x = e.clientX
   const vis = resultVisibleCols.value
   const lead = cell.cellIndex - RESULT_LEAD // 可见列位置
+  // 判定带子**随列宽缩窄**：原先写死 ±7px，60px 的窄列上两条中线各占 14px，
+  // 鼠标停在格子中间也会变 ↔（用户反馈："没放到竖线上 有的列头 也显示 ↔"）。
+  // 现在按列宽 8% 取，上限仍是 RESULT_EDGE_GAP（7px），下限 2px（再小就抓不住）——
+  // 窄列中间一定留得出手型区，宽列仍保持好抓的 ±7。
+  const gap = Math.max(2, Math.min(RESULT_EDGE_GAP, Math.round(rect.width * 0.08)))
   let k = -1
-  if (x >= rect.right - RESULT_EDGE_GAP && x <= rect.right + RESULT_EDGE_GAP) k = lead
-  else if (lead - 1 >= 0 && x >= rect.left - RESULT_EDGE_GAP && x <= rect.left + RESULT_EDGE_GAP) k = lead - 1
+  if (x >= rect.right - gap && x <= rect.right + gap) k = lead
+  else if (lead - 1 >= 0 && x >= rect.left - gap && x <= rect.left + gap) k = lead - 1
   if (k < 0 || k >= vis.length) return -1
   return vis[k].idx
 }

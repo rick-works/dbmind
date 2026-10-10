@@ -626,9 +626,13 @@ const edgeColIdx = (e) => {
   if (!(base >= 0)) return -1
   const rect = cell.getBoundingClientRect()
   const x = e.clientX
+  // 判定带子**随列宽缩窄**：原先写死右 10 / 左 8，窄列上两条中线几乎盖满整格，
+  // 鼠标停在格子中间也会变 ↔（用户反馈："没放到竖线上 有的列头 也显示 ↔"）。
+  // 顺便把原来左右不对称的口径统一成一个值：列宽 8%，上限 8px，下限 2px。
+  const gap = Math.max(2, Math.min(8, Math.round(rect.width * 0.08)))
   let vi = -1
-  if (x >= rect.right - 10 && x <= rect.right + 8) vi = base
-  else if (base > 0 && x >= rect.left - 8 && x <= rect.left + 10) vi = base - 1
+  if (x >= rect.right - gap && x <= rect.right + gap) vi = base
+  else if (base > 0 && x >= rect.left - gap && x <= rect.left + gap) vi = base - 1
   if (vi < 0 || vi >= visibleColumns.value.length) return -1
   return vi
 }
@@ -1824,7 +1828,7 @@ onBeforeUnmount(() => {
    所以这里必须是 col-resize —— 用户口径：列头整格是手，但中线上要是列宽调整的 ↔。
    它同时提供 mousedown 抓取与这条 10px 的命中带。 */
 .col-resizer {
-  position: absolute; top: 0; right: -5px; bottom: 0; width: 10px;
+  position: absolute; top: 0; right: -3px; bottom: 0; width: 6px;
   cursor: col-resize; z-index: 6; user-select: none;
 }
 .data-table.col-resizing { cursor: col-resize; user-select: none; }
