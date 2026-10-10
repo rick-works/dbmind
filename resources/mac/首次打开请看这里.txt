@@ -1,0 +1,55 @@
+DBmind —— 首次打开请看这里
+==========================
+
+双击 DBmind.app 时，系统会弹一个只有「好」按钮的拦截窗：
+
+    无法打开“DBmind.app”，因为 Apple 无法检查其是否包含恶意软件。
+
+这不是"有毒"—— macOS 对"从网上下载、且没有经过 Apple 公证"的 App 一律拦一次。
+按下面三步走，一次就够：
+
+  1. 点「好」关掉那个窗；
+  2. 打开「系统设置 → 隐私与安全性」，往下滚到「安全性」，
+     会看到刚才那次拦截的记录，点「仍要打开」；
+  3. 再确认一次。之后双击就能正常打开了。
+
+不用 sudo，也不用敲任何命令。
+
+
+想一次都不弹？换一种方式拿到这份文件即可
+--------------------------------------
+览器会给下载的文件打一个"从网上下载"的标记，系统见到这个标记才会去检查。
+下面两条路径不打这个标记，所以什么都不会弹（也不需要 sudo）：
+
+  1) 用 curl 下载（先在发布页看最新版本号，例如 1.2.7）：
+
+     curl -LO https://github.com/rick-works/dbmind/releases/download/v1.2.7/DBmind_1.2.7_aarch64.dmg
+     open DBmind_1.2.7_aarch64.dmg
+
+     （Intel 机器把文件名里的 aarch64 换成 x64）
+
+  2) 用 Homebrew：
+
+     brew install --cask --no-quarantine rick-works/tap/dbmind
+
+发布页：https://github.com/rick-works/dbmind/releases/latest
+
+
+DBmind — first launch (English)
+===============================
+
+macOS blocks apps downloaded from the internet unless Apple has notarised them,
+so the first double-click shows a dialog whose only button is "OK". To open it:
+
+  1. Click OK to dismiss the dialog.
+  2. Open System Settings -> Privacy & Security, scroll down to "Security",
+     find the entry about the blocked app and click "Open Anyway".
+  3. Confirm once. After that, double-clicking works normally.
+
+No sudo and no terminal commands needed.
+
+To avoid that dialog entirely, fetch the file without a browser (a browser sets
+the "downloaded from the internet" flag; curl and Homebrew do not):
+
+     curl -LO https://github.com/rick-works/dbmind/releases/download/v1.2.7/DBmind_1.2.7_aarch64.dmg
+     brew install --cask --no-quarantine rick-works/tap/dbmind

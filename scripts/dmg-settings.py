@@ -17,13 +17,23 @@ app = 'target/release/bundle/macos/DBmind.app'
 app_name = os.path.basename(app)
 
 files = [app]
+# 首次打开会被 macOS 拦一次（未公证），把说明一起放进镜像 —— 用户被拦的那一刻，
+# 这份说明就在同一个窗口里，不用再去网上翻步骤。
+_first_launch = 'resources/mac/首次打开请看这里.txt'
+if os.path.exists(_first_launch):
+    files.append(_first_launch)
+else:
+    print('warn: 没找到首次打开说明（resources/mac/首次打开请看这里.txt），镜像里只有 App')
+
 # 右侧那个「应用程序」软链 —— 有它才是"拖进去安装"，不是让用户自己想办法
 symlinks = {'Applications': '/Applications'}
 
-# 左：App；右：应用程序。横向拉开距离，中间就是"拖过去"的动线。
+# 左：App；右：应用程序。横向拉开距离，中间就是"拖过去"的动线；
+# 说明书放在下方居中（y 向下增大）。
 icon_locations = {
     app_name: (180, 190),
     'Applications': (480, 190),
+    '首次打开请看这里.txt': (330, 350),
 }
 
 # 压缩成只读镜像。**必须显式写**：dmgbuild 的默认格式是 UDRW（可读写、不压缩），
