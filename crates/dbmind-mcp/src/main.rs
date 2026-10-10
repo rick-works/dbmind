@@ -476,7 +476,8 @@ impl Server {
                     "version": dbmind_core::VERSION,
                     "protocolVersion": PROTOCOL_VERSION,
                     "aiWriteEnabled": self.setting(Store::KEY_AI_WRITE_ENABLED).as_deref() == Some("true"),
-                    "productionProtection": self.setting(Store::KEY_PROTECT_PRODUCTION).as_deref() == Some("true"),
+                    // 生产保护默认开启：键缺失时也报 true（否则模型会以为保护没开）
+                    "productionProtection": self.flag(Store::KEY_PROTECT_PRODUCTION, true),
                     "blockDangerous": self.setting(Store::KEY_BLOCK_DANGEROUS).as_deref() == Some("true"),
                     "maxWriteRows": self.setting(Store::KEY_MAX_WRITE_ROWS).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0),
                     "defaultConnection": self.setting(Store::KEY_MCP_DEFAULT_CONNECTION).unwrap_or_default(),

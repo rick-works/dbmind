@@ -390,7 +390,7 @@ export default {
   'settings.safety.title': 'Safety & sessions',
   'settings.safety.desc': 'These take effect immediately, no restart needed',
   'settings.safety.protectProduction': 'Production protection',
-  'settings.safety.protectProductionTip': 'For databases marked Production (red badge), every change — running scripts, editing structure or data, import/sync/restore — is refused; queries are never affected. Databases marked dev/test or unmarked are unaffected',
+  'settings.safety.protectProductionTip': 'For databases marked Production (red badge), every change — running scripts, editing structure or data, import/sync/restore — is refused; queries are never affected. Databases marked dev/test or unmarked are unaffected. On by default; switch it off above when you really need to change production data',
   'settings.safety.aiWrite': 'Allow AI to write',
   'settings.safety.aiWriteTip': 'When off, the AI agent can only query and analyse. Turn it on only when you want the AI to modify data on your behalf',
   'settings.safety.maxSessions': 'Max simultaneous connections',

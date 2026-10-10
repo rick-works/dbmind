@@ -59,7 +59,9 @@ impl DbMindEngine {
     pub fn from_store(store: Store) -> Result<Self> {
         let store = Arc::new(store);
         let policy = SafetyPolicy::new()
-            .with_production_protection(store.get_bool_setting(Store::KEY_PROTECT_PRODUCTION, false)?)
+            // 生产保护**默认开启**（键缺失时的兜底也取 true，与 storage 的种子口径一致）：
+            // 它只拦"标注为生产环境"的数据源，未标注的开发/测试库写操作照常。
+            .with_production_protection(store.get_bool_setting(Store::KEY_PROTECT_PRODUCTION, true)?)
             .with_ai_write(store.get_bool_setting(Store::KEY_AI_WRITE_ENABLED, false)?)
             .with_block_dangerous(store.get_bool_setting(Store::KEY_BLOCK_DANGEROUS, false)?)
             .with_max_write_rows(store.get_usize_setting(Store::KEY_MAX_WRITE_ROWS, 0)? as u64);
@@ -1994,6 +1996,16 @@ mod tests {
                 AccessContext::Mcp,
             )
             .unwrap();
+    }
+
+    #[test]
+    fn 生产保护默认开启() {
+        // 默认值来自 settings 的种子（storage.rs 的 seed_settings），不是 SafetyPolicy::default()
+        let engine = DbMindEngine::in_memory().unwrap();
+        assert!(
+            engine.policy().protect_production,
+            "新库的生产保护应为默认开启"
+        );
     }
 
     #[test]

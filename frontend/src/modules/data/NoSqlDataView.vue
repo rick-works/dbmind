@@ -59,6 +59,7 @@
         </div>
       </div>
       <div v-if="displayRows.length" class="data-table-wrap" ref="tableWrapRef" tabindex="0"
+           :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 22) + 'px' }"
            @scroll="onTableScroll"
            @mousemove="onTableMove" @mousedown="onTableDown" @mouseleave="onTableLeave"
            @dblclick="onTableDblClick"
@@ -210,7 +211,7 @@ import { saveBlobAs } from '../../utils/useExportTask'
 import { ArrowUp, ArrowDown, Refresh, Download, Operation, Sort, SortUp, SortDown, Loading,
          Histogram, Calendar, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getQuerySettings } from '../../utils/settings'
+import { getQuerySettings, editorSettingsLive } from '../../utils/settings'
 import { noSqlDocuments, cancelNoSql } from '../../api'
 import { t } from '../../utils/i18n'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
@@ -299,7 +300,9 @@ const plainVal = (v) => {
 }
 
 // ===== 窗口化渲染（固定行高）=====
-const VP_ROW_H = 32
+// 行高跟设置页「结果表格行高」走；**必须**与 CSS（.data-table td 的 height/line-height）同源，
+// 否则上下占位行的高度与真实行高不等，滚动定位会漂。
+const VP_ROW_H = computed(() => editorSettingsLive.value.gridRowHeight || 22)
 const VP_BUFFER = 12
 const VP_THRESHOLD = 200
 const vpStart = ref(0)
@@ -314,10 +317,10 @@ const visibleRows = computed(() => {
   return all.slice(start, end)
 })
 const padTop = computed(() =>
-  virtualEnabled.value ? Math.min(vpStart.value, displayRows.value.length) * VP_ROW_H : 0)
+  virtualEnabled.value ? Math.min(vpStart.value, displayRows.value.length) * VP_ROW_H.value : 0)
 const padBottom = computed(() => {
   if (!virtualEnabled.value) return 0
-  return Math.max(0, displayRows.value.length - Math.min(vpEnd.value, displayRows.value.length)) * VP_ROW_H
+  return Math.max(0, displayRows.value.length - Math.min(vpEnd.value, displayRows.value.length)) * VP_ROW_H.value
 })
 const scrollHost = () => {
   const w = tableWrapRef.value
@@ -332,11 +335,13 @@ const syncViewport = () => {
   const host = scrollHost()
   const s = host ? host.scrollTop : 0
   const clientH = (host && host.clientHeight) || 1
-  const first = Math.max(0, Math.floor(s / VP_ROW_H) - VP_BUFFER)
-  const count = Math.ceil(clientH / VP_ROW_H) + VP_BUFFER * 2
+  const first = Math.max(0, Math.floor(s / VP_ROW_H.value) - VP_BUFFER)
+  const count = Math.ceil(clientH / VP_ROW_H.value) + VP_BUFFER * 2
   vpStart.value = Math.min(first, Math.max(0, n - 1))
   vpEnd.value = Math.min(n, vpStart.value + count)
 }
+// 行高改了：占位行是按旧行高算的，按当前滚动位置重算一次（否则会跳一下）
+watch(VP_ROW_H, () => { nextTick(syncViewport) })
 const onTableScroll = () => {
   if (vpRaf) return
   vpRaf = requestAnimationFrame(() => { vpRaf = 0; syncViewport() })
@@ -1654,7 +1659,9 @@ onBeforeUnmount(() => {
 }
 .data-table.col-resizing { cursor: col-resize; user-select: none; }
 .data-table td {
-  padding: 0 10px; height: 32px; line-height: 32px;
+  /* 行高来自设置页「结果表格行高」（变量挂在 .data-table-wrap 上），
+     必须与 JS 里的 VP_ROW_H 同源 */
+  padding: 0 10px; height: var(--grid-row-h, 22px); line-height: var(--grid-row-h, 22px);
   border: 1px solid var(--dc-border); color: var(--dc-text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   cursor: default;

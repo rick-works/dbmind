@@ -11,8 +11,10 @@ use crate::statement::{classify, split_statements};
 use crate::types::{AccessContext, ConnectionRecord};
 use std::collections::HashSet;
 
-/// 默认策略：桌面/CLI 可正常读写，AI/MCP 通道只读，生产保护关闭
-/// （生产保护与 AI 写入两项在启动时从设置载入，并可在运行期切换）。
+/// 默认策略：桌面/CLI 可正常读写，AI/MCP 通道只读，**生产保护开启**
+/// （生产保护与 AI 写入两项在启动时从设置载入，并可在运行期切换；
+/// `Default` 只给出结构初值，真正生效的默认值来自 settings 的种子，
+/// 见 `crates/dbmind-core/src/storage.rs` 的 `seed_settings` / `migrate_settings`）。
 #[derive(Debug, Clone, Default)]
 pub struct SafetyPolicy {
     /// 被标记为只读的连接 id（存储层的 `read_only` 字段是单一真源，这里做内存叠加）。

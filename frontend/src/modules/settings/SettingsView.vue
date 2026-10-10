@@ -349,6 +349,11 @@
               <el-input-number v-model="editorForm.gridFontSize" :min="10" :max="20" :step="1" controls-position="right" style="width:120px" />
               <span class="unit">px</span>
             </el-form-item>
+            <el-form-item :label="$t('settings.editor.gridRowHeight')">
+              <el-input-number v-model="editorForm.gridRowHeight" :min="20" :max="48" :step="2" controls-position="right" style="width:120px" />
+              <span class="unit">px</span>
+              <div class="form-tip">{{ $t('settings.editor.gridRowHeightTip') }}</div>
+            </el-form-item>
             <el-form-item :label="$t('settings.editor.tabSize')">
               <el-select v-model="editorForm.tabSize" style="width:120px">
                 <el-option :value="2" :label="$t('settings.editor.spaces', { n: 2 })" />
@@ -1464,7 +1469,9 @@ const onRefreshCache = async () => {
 }
 
 // ===== 安全与会话（全部存后端 app_settings；安全开关与会话上限改动即时生效） =====
-const safetyForm = ref({ protectProduction: false, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: false, blockDangerous: false, maxWriteRows: 0 })
+// protectProduction 默认 true：与后端种子（storage.rs 的 seed_settings）保持一致，
+// 否则首次加载、或后端暂时读不到时，开关会显示成"关"，与内核实际策略不符。
+const safetyForm = ref({ protectProduction: true, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: false, blockDangerous: false, maxWriteRows: 0 })
 
 // ---------- MCP 服务 ----------
 // 配置存后端 app_settings：MCP 壳**每次工具调用都现读**，保存后下一次调用即生效，不用重启客户端
@@ -1503,15 +1510,19 @@ const saveMcp = async () => {
 const loadSafety = async () => {
   try {
     const [s, tls] = await Promise.all([getSettings(), getLegacyTls().catch(() => null)])
-    const flag = (key, fallback) => (s?.[key] === 'true' || s?.[key] === '1') ? true : (s?.[key] === 'false' || s?.[key] === '0' ? false : fallback)
-    safetyForm.value.protectProduction = flag('safety.protectProduction', false)
-    safetyForm.value.aiWriteEnabled = flag('safety.aiWriteEnabled', false)
-    safetyForm.value.blockDangerous = flag('safety.blockDangerousStatements', false)
-    safetyForm.value.maxWriteRows = num('safety.maxWriteRows', 0)
+    // ⚠️ `num` 必须定义在**第一次使用之前**：原先它写在下方，`maxWriteRows` 那行先调用了它
+    // → TDZ 抛 ReferenceError → 整个 try 被 catch 吞掉 → 表单永远停在默认值
+    //（表象是"设置页显示的开关/数字与实际生效的对不上，一保存还把用户的设置覆盖成默认"）。
     const num = (key, fallback) => {
       const n = Number(s?.[key])
       return Number.isFinite(n) && n >= 0 ? n : fallback
     }
+    const flag = (key, fallback) => (s?.[key] === 'true' || s?.[key] === '1') ? true : (s?.[key] === 'false' || s?.[key] === '0' ? false : fallback)
+    // 兜底取 true：与后端种子一致（生产保护默认开启）
+    safetyForm.value.protectProduction = flag('safety.protectProduction', true)
+    safetyForm.value.aiWriteEnabled = flag('safety.aiWriteEnabled', false)
+    safetyForm.value.blockDangerous = flag('safety.blockDangerousStatements', false)
+    safetyForm.value.maxWriteRows = num('safety.maxWriteRows', 0)
     safetyForm.value.maxSessions = num('session.maxPerHost', 32)
     // 内核按**秒**读；界面用分钟更好读（0 = 不按空闲回收）
     safetyForm.value.idleMinutes = Math.round(num('session.idleTimeoutSecs', 0) / 60)

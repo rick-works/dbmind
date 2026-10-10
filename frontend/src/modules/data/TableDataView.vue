@@ -100,6 +100,7 @@
       </div>
       <div class="table-scroll" ref="gridRef" @scroll="onTableScroll">
         <div v-if="displayRows.length" class="data-table-wrap" ref="gridWrap" tabindex="0"
+             :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 22) + 'px' }"
              @mousemove="onGridMove" @mouseleave="onGridLeave" @mousedown="onGridDown"
              @scroll="onTableScroll" @contextmenu.prevent="onGridContextMenu">
           <table class="data-table" :class="{ 'col-resizing': colResizing }"
@@ -290,7 +291,7 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { t } from '../../utils/i18n'
-import { querySettingsLive } from '../../utils/settings'
+import { querySettingsLive, editorSettingsLive } from '../../utils/settings'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, Delete, Sort, SortUp, SortDown, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { getTableData, listColumns, saveTableData, aiFilter, exportData } from '../../api'
@@ -466,7 +467,10 @@ const ridToDispIdx = computed(() => {
 // ========== 窗口化渲染（大表只渲染可视区行） ==========
 // 行数少时保持原样整表渲染；超过阈值后只渲染可视区 ± 缓冲行，上下用占位行撑起滚动高度。
 // 与 SqlQueryView 的虚拟滚动同一思路（固定行高），避免几千行 × 几十列产生的几十万 DOM 节点。
-const VP_ROW_H = 32      // 单行高度（px）：td padding 6px + 12px 字号，单元格 nowrap 保证等高
+// 单行高度（px）：由设置页「结果表格行高」驱动。**必须**与 CSS（.data-table td 的
+// height/line-height）同源 —— 这里是上下占位行的换算基准，不等就会让滚动定位漂。
+// （旧注释"td padding 6px + 12px 字号"已过时：行高早就是固定值，不再由 padding 撑出来。）
+const VP_ROW_H = computed(() => editorSettingsLive.value.gridRowHeight || 22)
 const VP_BUFFER = 12     // 可视区上下各多渲染的缓冲行
 // 行数超过该值才启用窗口化。原来是 500 —— 可默认页大小就是 200 行，于是永远够不着：
 // 200 行 × 13 列 = 2600 个格子全部渲染，任何一次列宽变化都要给整张表重新排版
@@ -484,10 +488,10 @@ const visibleRows = computed(() => {
   const end = Math.max(start, Math.min(vpEnd.value, all.length))
   return all.slice(start, end)
 })
-const padTop = computed(() => (virtualEnabled.value ? Math.min(vpStart.value, displayRows.value.length) * VP_ROW_H : 0))
+const padTop = computed(() => (virtualEnabled.value ? Math.min(vpStart.value, displayRows.value.length) * VP_ROW_H.value : 0))
 const padBottom = computed(() => {
   if (!virtualEnabled.value) return 0
-  return Math.max(0, displayRows.value.length - Math.min(vpEnd.value, displayRows.value.length)) * VP_ROW_H
+  return Math.max(0, displayRows.value.length - Math.min(vpEnd.value, displayRows.value.length)) * VP_ROW_H.value
 })
 // 实际承载滚动的容器：内层 .data-table-wrap 高度为 100% 且 overflow:auto，正常是它滚动；
 // 极端情况下（外层被撑高）回退到外层 .table-scroll，避免滚动事件收不到。
@@ -503,8 +507,8 @@ const syncViewport = () => {
   const host = scrollHost()
   const s = host ? host.scrollTop : 0
   const clientH = (host && host.clientHeight) || 1
-  const first = Math.max(0, Math.floor(s / VP_ROW_H) - VP_BUFFER)
-  const count = Math.ceil(clientH / VP_ROW_H) + VP_BUFFER * 2
+  const first = Math.max(0, Math.floor(s / VP_ROW_H.value) - VP_BUFFER)
+  const count = Math.ceil(clientH / VP_ROW_H.value) + VP_BUFFER * 2
   vpStart.value = Math.min(first, Math.max(0, total - 1))
   vpEnd.value = Math.min(total, vpStart.value + count)
 }
@@ -512,6 +516,8 @@ const onTableScroll = () => {
   if (vpRaf) return
   vpRaf = requestAnimationFrame(() => { vpRaf = 0; syncViewport() })
 }
+// 行高改了：占位行是按旧行高算的，按当前滚动位置重算一次（否则会跳一下）
+watch(VP_ROW_H, () => { nextTick(syncViewport) })
 
 // 如果通过单元格框选选中了某行，也允许删除该行
 const selectedGridRowIndex = computed(() => {
@@ -1643,7 +1649,7 @@ const tabMove = (dir) => {
 // PageUp / PageDown 的步长：按可视高度折算行数
 const pageRowStep = () => {
   const host = scrollHost()
-  const n = host ? Math.floor(host.clientHeight / (VP_ROW_H || 32)) : 10
+  const n = host ? Math.floor(host.clientHeight / (VP_ROW_H.value || 22)) : 10
   return Math.max(1, n - 1)
 }
 // 直接输入字符即进入编辑（Excel：新输入覆盖原值）
@@ -2969,7 +2975,9 @@ useShortcutScope(rootRef, {
 .data-table th .th-pk-ic { display: inline-flex; align-items: center; flex: 0 0 auto; margin-left: 4px; color: var(--dc-warning, #e6a23c); }
 .data-table th .th-pk-ic .el-icon { font-size: 12px; }
 .data-table td {
-  padding: 0 10px; height: 32px; line-height: 32px;
+  /* 行高来自设置页「结果表格行高」（变量挂在 .data-table-wrap 上），
+     必须与 JS 里的 VP_ROW_H 同源 */
+  padding: 0 10px; height: var(--grid-row-h, 22px); line-height: var(--grid-row-h, 22px);
   border: 1px solid var(--dc-border); color: var(--dc-text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   cursor: default;

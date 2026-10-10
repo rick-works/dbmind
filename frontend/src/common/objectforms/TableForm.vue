@@ -1,5 +1,6 @@
 <template>
-  <div class="obj-form">
+  <div class="obj-form"
+       :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 22) + 'px' }">
     <!-- 不用 border-card：那会带一层灰底标题带 + Element 自带下划线，
          与「编辑表结构」的"纯文字页签 + 独立卡片"不是一回事（见下方样式）。 -->
     <el-tabs v-model="activeTab" class="table-tabs">
@@ -236,6 +237,8 @@
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+// 字段表 / 索引表的行高跟随设置页「结果表格行高」（--grid-row-h 由模板上的 style 注入）
+import { editorSettingsLive } from '../../utils/settings'
 import { Plus, Delete, Top, Bottom, Grid, DocumentCopy } from '@element-plus/icons-vue'
 import { has, qt, sq, buildType, ddlStyleOf, uid } from './objectFormUtils'
 import { t } from '../../utils/i18n'
@@ -662,6 +665,10 @@ emit('sql', genSql())
 .col-tab .field-table-wrap { flex: 1; overflow: auto; border: 1px solid var(--dc-border-soft); border-radius: 8px; }
 .idx-tab { padding-top: 6px; }
 .idx-tab .card-actions { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 8px; }
+/* 行高统一由设置页「结果表格行高」驱动（--grid-row-h 由模板 style 注入）：
+   数据行高 = 设置值；行内控件高 = 设置值 − 上下各 1px 内边距。
+   **控件才是行高的天花板**（td 的 height 只是下限）—— 与编辑表结构页同一套算法。 */
+.obj-form { --ctl-h: max(18px, calc(var(--grid-row-h, 22px) - 2px)); }
 .field-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .field-table th { position: sticky; top: 0; z-index: 1; background: var(--dc-bg-code); color: var(--dc-text-mid); font-weight: 600; font-size: 13px; text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--dc-border-soft); white-space: nowrap; }
 .field-table td { padding: 4px 4px; border-bottom: 1px solid var(--dc-border-soft); vertical-align: middle; }
@@ -706,6 +713,16 @@ emit('sql', genSql())
 /* 索引表表头/内容左对齐 */
 .table-tabs :deep(.el-table th.el-table__cell > .cell),
 .table-tabs :deep(.el-table td.el-table__cell > .cell) { text-align: left; }
+/* 索引页签是 el-table：行高由单元格内容撑出来 —— 控件跟 --ctl-h 走、内边距与编辑表结构页
+   同一套（Element 的 td 自带 4px 0 会额外撑高，先清零）。这样两个页面、两个页签的行高
+   全都跟着设置页的「结果表格行高」动。 */
+.table-tabs :deep(.el-table td.el-table__cell) { padding: 0; }
+.table-tabs :deep(.el-table th.el-table__cell > .cell) { padding: 2px 9px; }
+.table-tabs :deep(.el-table td.el-table__cell > .cell) { padding: 1px 9px; }
+.table-tabs :deep(.el-table .el-input__inner) { height: var(--ctl-h, 20px); }
+.table-tabs :deep(.el-table .el-input__wrapper),
+.table-tabs :deep(.el-table .el-select__wrapper) { min-height: var(--ctl-h, 20px); }
+.table-tabs :deep(.el-table .el-button--small) { height: var(--ctl-h, 20px); }
 
 /* ======================================================================
    ↓↓↓ 与「编辑表结构」(modules/data/TableDetailView.vue) 对齐的覆盖层 ↓↓↓
@@ -813,12 +830,14 @@ emit('sql', genSql())
   z-index: 3;
   background: var(--dc-bg-soft); color: var(--dc-text-strong);
   font-weight: 600; font-size: 12px; letter-spacing: .02em; text-align: left;
-  padding: 6px 9px; border-bottom: 1px solid var(--dc-border); white-space: nowrap;
+  padding: 5px 9px; border-bottom: 1px solid var(--dc-border); white-space: nowrap;
 }
-/* 行高收到约 27px；行分隔线用 --dc-border 而不是最浅的 soft（soft 在部分屏幕
-   上几乎看不见，用户反馈过"框线都没了"） */
+/* 行高收到约 22px（控件 20px + 上下各 1px 内边距）—— 行高由**行内控件高度**决定，
+   见下面「行内控件压到 20px」那条；行分隔线用 --dc-border 而不是最浅的 soft
+   （soft 在部分屏幕上几乎看不见，用户反馈过"框线都没了"） */
 .field-table td {
-  padding: 2px 9px; background: var(--dc-bg-card);
+  /* height 只是**下限**（多行内容仍可撑高）：真正的行高由行内控件的 --ctl-h 决定 */
+  padding: 1px 9px; height: var(--grid-row-h, 22px); background: var(--dc-bg-card);
   border-bottom: 1px solid var(--dc-border); vertical-align: middle;
 }
 /* 表头是**两行**（35px 空行 + 标题行），滚动时两行都要固定 */
@@ -836,9 +855,10 @@ emit('sql', genSql())
 .field-table tbody td:first-child { text-align: center; }
 .field-table tbody td:first-child { padding-left: 4px; padding-right: 4px; }
 
-/* 行内控件统一压到 22px：否则它们会成为新的"行高天花板" */
-.field-table :deep(.el-input__inner) { height: 22px; }
-.field-table :deep(.el-input__wrapper) { min-height: 22px; }
+/* 行内控件高度 = --ctl-h（= 设置的行高 − 上下各 1px 内边距）：
+   行高不是 padding 决定的，是它们决定的 —— 不跟着算就是个"行高天花板" */
+.field-table :deep(.el-input__inner) { height: var(--ctl-h, 20px); }
+.field-table :deep(.el-input__wrapper) { min-height: var(--ctl-h, 20px); }
 /* ↓↓↓ 让表格"像表格"的关键：单元格里的输入控件默认**隐形**（透明底 + 无描边），
    整张表读起来是一列列文字；鼠标移到该行才浮出输入框的样子，聚焦时给主色描边。
    少了这三条，新建表的每个格子都是常驻输入框 —— 而且底色还会被 index.css 的全局
@@ -862,9 +882,9 @@ emit('sql', genSql())
   background-color: var(--dc-bg-hover) !important;
   box-shadow: 0 0 0 1px var(--dc-primary) inset !important;
 }
-.field-table :deep(.el-select__wrapper) { min-height: 22px; }
-.field-table :deep(.el-button--small) { height: 22px; padding: 0 6px; }
-.field-table :deep(.el-checkbox) { margin-right: 0; height: 22px; }
+.field-table :deep(.el-select__wrapper) { min-height: var(--ctl-h, 20px); }
+.field-table :deep(.el-button--small) { height: var(--ctl-h, 20px); padding: 0 6px; }
+.field-table :deep(.el-checkbox) { margin-right: 0; height: var(--ctl-h, 20px); }
 .field-table :deep(.el-checkbox),
 .field-table :deep(.el-checkbox__inner),
 .field-table :deep(.el-switch) { z-index: auto; }

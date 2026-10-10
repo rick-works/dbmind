@@ -13,6 +13,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, RwLock};
 
 const SETTINGS_SAFETY_PRODUCTION: &str = "safety.protectProduction";
+/// 「生产保护默认开启」的一次性迁移标记（见 `migrate_settings`）。
+///
+/// 为什么要标记：老库里播种的是 `false`，而 `INSERT OR IGNORE` 不会覆盖已有行 ——
+/// 单改种子只对新库生效。有了标记才能做到"老库打开一次、之后用户自己关掉就不再动它"。
+const SETTINGS_SAFETY_PRODUCTION_MIGRATED: &str =
+    "safety.protectProduction.defaultOnMigrated";
 const SETTINGS_SAFETY_AI_WRITE: &str = "safety.aiWriteEnabled";
 /// 危险语句拦截：无 WHERE 的 UPDATE/DELETE、TRUNCATE、DROP 一律拒绝。
 const SETTINGS_SAFETY_BLOCK_DANGEROUS: &str = "safety.blockDangerousStatements";
@@ -103,6 +109,7 @@ impl Store {
             path,
         };
         store.seed_settings()?;
+        store.migrate_settings()?;
         Ok(store)
     }
 
@@ -733,10 +740,28 @@ impl Store {
     pub const KEY_MCP_TOOLS_QUERY: &'static str = SETTINGS_MCP_TOOLS_QUERY;
     pub const KEY_MCP_TOOLS_HISTORY: &'static str = SETTINGS_MCP_TOOLS_HISTORY;
 
+    /// 设置项的一次性迁移（只做"种子改不了已存在行"这类补丁）。
+    ///
+    /// 目前只有一条：**生产保护默认开启**。老库里该键已被播种成 `false`，改 `seed_settings`
+    /// 只影响新库，已装好的库会一直停在关闭状态 —— 所以这里补一次带标记的迁移。
+    ///
+    /// 取舍：老库里的 `false` 分不清是「用户主动关的」还是「当初的种子值」，一律按
+    /// **安全优先**打开一次；用户若确实要关，再点一次即可（有标记在，不会被再次打开）。
+    fn migrate_settings(&self) -> Result<()> {
+        if self.get_setting(SETTINGS_SAFETY_PRODUCTION_MIGRATED)?.is_some() {
+            return Ok(());
+        }
+        self.set_setting(SETTINGS_SAFETY_PRODUCTION, "true")?;
+        self.set_setting(SETTINGS_SAFETY_PRODUCTION_MIGRATED, "1")?;
+        Ok(())
+    }
+
     fn seed_settings(&self) -> Result<()> {
         let conn = self.lock();
         for (key, value) in [
-            (SETTINGS_SAFETY_PRODUCTION, "false"),
+            // 生产保护：**默认开启**。它只作用于"标注为生产环境"的数据源（角标/分组任一），
+            // 未标注的开发测试库完全不受影响 —— 代价小、收益是"连错库也不会误改生产数据"。
+            (SETTINGS_SAFETY_PRODUCTION, "true"),
             (SETTINGS_SAFETY_AI_WRITE, "false"),
             (SETTINGS_SCHEMA_TTL, "300"),
             (SETTINGS_QUERY_TIMEOUT, "120"),
@@ -1794,6 +1819,40 @@ mod tests {
     }
 
     #[test]
+    fn 生产保护默认开启且迁移只翻一次() {
+        let s = store();
+        // 新库：种子就是 true
+        assert_eq!(
+            s.get_setting(Store::KEY_PROTECT_PRODUCTION).unwrap().as_deref(),
+            Some("true"),
+            "新库的生产保护应为默认开启"
+        );
+        // 用户主动关掉之后，再跑迁移不该把它打开
+        s.set_setting(Store::KEY_PROTECT_PRODUCTION, "false").unwrap();
+        s.migrate_settings().unwrap();
+        assert_eq!(
+            s.get_setting(Store::KEY_PROTECT_PRODUCTION).unwrap().as_deref(),
+            Some("false"),
+            "用户关掉后不该被迁移重复打开"
+        );
+        // 模拟老库：值为 false 且没有迁移标记 → 迁移负责打开一次
+        {
+            let conn = s.lock();
+            conn.execute(
+                "DELETE FROM app_settings WHERE key = ?1",
+                params![SETTINGS_SAFETY_PRODUCTION_MIGRATED],
+            )
+            .unwrap();
+        }
+        s.migrate_settings().unwrap();
+        assert_eq!(
+            s.get_setting(Store::KEY_PROTECT_PRODUCTION).unwrap().as_deref(),
+            Some("true"),
+            "老库（无标记）应被迁移打开"
+        );
+    }
+
+    #[test]
     fn 结构缓存读写与作废() {
         let store = store();
         store.put_schema("c1", Store::SCHEMA_OBJECTS_KEY, "[]").unwrap();
@@ -1948,6 +2007,9 @@ mod tests {
                 } else {
                     None
                 },
+                // 这两个字段是后加的（操作分类 / 调用来源），补上才编得过
+                kind: "query",
+                source: "system",
             })
             .unwrap();
         }

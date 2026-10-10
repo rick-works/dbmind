@@ -1,5 +1,6 @@
 <template>
-  <div v-loading="loading" class="table-edit-page">
+  <div v-loading="loading" class="table-edit-page"
+       :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 22) + 'px' }">
     <!-- 顶部标题栏 -->
     <div class="form-tab-header">
       <div class="header-title">
@@ -412,6 +413,8 @@
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { t } from '../../utils/i18n'
+// 字段表 / 索引表的行高跟随设置页「结果表格行高」（--grid-row-h 由模板上的 style 注入）
+import { editorSettingsLive } from '../../utils/settings'
 // 说明：本文件多个 DDL 生成函数把局部变量起名为 t（带引号的表名），会遮蔽翻译函数 t()；
 // 这里另存一个引用 tr，专供那些函数内部使用（见 buildColumnSql 里的 sp_rename 注释）。
 const tr = t
@@ -1232,8 +1235,8 @@ const colParts = () => {
     const distCol = ddlStyle.value === 'doris' ? dorisDistColName() : ''
     for (const r of modified) {
       if (distCol && String(r.name || '').trim().toLowerCase() === distCol) {
-        // 注意：本函数里 `t` 已被上面的 `const t = qt(props.table)`（引号表名）遮住，
-        // 这里必须用 i18n 别名 tr（见文件头）—— 直接写 t(...) 等于调字符串，必炸（真机踩过）
+        // 注意：本函数里 `t` 已被上面的引号表名变量遮住（那是 const t = qt(...)），
+        // 这里必须用 i18n 别名 tr（见文件头）—— 否则等于拿字符串当函数调，必炸（真机踩过）
         parts.push(`-- ${tr('tdet.dorisDistSkip', { col: String(r.name || '').trim() })}`)
         continue
       }
@@ -1822,17 +1825,20 @@ const load = async () => {
       } catch { /* 拿不到就留空 */ }
     }
     // 表选项回显（先校正排序规则，再对基线快照，避免加载即产生差异）
-    const t = (tables || []).find(x => x.name === props.table)
-    const coll = t?.charset || ''
+    // 变量名**不能叫 t**：这里在 loadSchema 作用域内，会把 i18n 的 t() 遮住 ——
+    // 下面 catch 里的 t('tdet.loadSchemaFailed', …) 就变成"拿表格对象当函数调"，
+    // 于是"加载表结构失败"时连错误提示都抛异常（guard 报过这条，真机可复现）。
+    const tbl = (tables || []).find(x => x.name === props.table)
+    const coll = tbl?.charset || ''
     tableForm.value = {
-      engine: t?.engine || (engines.value[0] || ''),
+      engine: tbl?.engine || (engines.value[0] || ''),
       charset: coll ? String(coll).split('_')[0] : (charsets.value[0] || ''),
       collation: coll || '',
       autoIncrement: '',
-      comment: t?.comment || '',
+      comment: tbl?.comment || '',
       // ClickHouse 的排序键 / 分区键（以及 engine）：后端从 system.tables 回填，只读展示
-      sortingKey: t?.sortingKey || '',
-      partitionKey: t?.partitionKey || '',
+      sortingKey: tbl?.sortingKey || '',
+      partitionKey: tbl?.partitionKey || '',
       dorisModel: '', dorisDistCol: '', dorisBuckets: '', dorisReplication: ''
     }
     // Doris 建表属性（模型/分桶/副本）建表后不可改：从 DDL 解析后只读回显
@@ -1842,7 +1848,7 @@ const load = async () => {
         const parsed = parseDorisDdl(ddlRes?.ddl || '')
         // 表清单的 comment 是数据库现状的权威值 —— DDL 解析（取「最后一个 COMMENT」）
         // 偶尔会因 DDL 形状差异取到别的注释，不能让它覆盖现状（否则打开就误报「注释有改动」）
-        parsed.comment = t?.comment || parsed.comment
+        parsed.comment = tbl?.comment || parsed.comment
         Object.assign(tableForm.value, parsed)
         // DDL 回填后重照基线快照：保证刚打开时基线与显示值一致（不产生假差异）
         optsBase.comment = tableForm.value.comment
@@ -2285,6 +2291,12 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .ted-alert { margin-bottom: 12px; }
 .ted-alert :deep(.el-alert__title) { font-size: 13px; }
 
+/* 行高统一由设置页「结果表格行高」驱动（--grid-row-h 由模板 style 注入）：
+   数据行高 = 设置值；行内控件高 = 设置值 − 上下各 1px 内边距。
+   **控件才是行高的天花板**（td 的 height 只是下限）—— 控件不跟着算，
+   调大设置就只会看到行变高、输入框纹丝不动（这就是之前"没跟着变"的原因）。 */
+.table-edit-page { --ctl-h: max(18px, calc(var(--grid-row-h, 22px) - 2px)); }
+
 /* ===== 字段表格（HTML 表格，与新建表一致） ===== */
 .field-table {
   width: 100%;
@@ -2315,11 +2327,11 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   font-size: 12px;
   letter-spacing: .02em;
   text-align: left;
-  /* 左右 9px：列与列的区分靠留白。上下 9px → 6px：标题行随数据行一起收
-     （35px → 约 29px），两者比例保持不变。
+  /* 左右 9px：列与列的区分靠留白。上下 9px → 6px → 5px：标题行随数据行一起收
+     （35px → 约 27px），两者比例保持不变。
      注意 thead 里那个 35px 的空行**不动** —— 页签与工具栏住在那儿，
      而且标题行的 sticky top: 35px 正是按它算出来的。 */
-  padding: 6px 9px;
+  padding: 5px 9px;
   border-bottom: 1px solid var(--dc-border);
   white-space: nowrap;
 }
@@ -2330,7 +2342,8 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 /* 行高压缩：上下内边距 5px → 2px（配合下面的控件压缩，行高从 43px 收到约 27px）。
    左右 8px → 9px：与表头的 9px 对齐（差 1px 在高分屏上就能看出输入框比表头偏左）。
    首列例外，见下面 :first-child 的 4px（序号列居中，不需要 9px）。 */
-.field-table td { padding: 2px 9px; background: var(--dc-bg-card); border-bottom: 1px solid var(--dc-border); vertical-align: middle; }
+/* height 只是**下限**（多行内容仍可撑高）：真正的行高由行内控件的 --ctl-h 决定 */
+.field-table td { padding: 1px 9px; height: var(--grid-row-h, 22px); background: var(--dc-bg-card); border-bottom: 1px solid var(--dc-border); vertical-align: middle; }
 /* 列竖线：标题行与数据行逐格画右边框（separate 边框模式各画各的，不会叠加变粗）。
    最后一列不画 —— 否则与容器外框并成两条线。
    表格的第一行（thead 里那个 35px 的"空行"）**不加竖线**：页签与工具栏就住在那一行，
@@ -2347,20 +2360,20 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .field-table tbody td:first-child { text-align: center; }
 .field-table tbody td:first-child { padding-left: 4px; padding-right: 4px; }
 
-/* ===== 行内控件统一压到 22px（配合 row 的 2px 内边距） =====
-   输入框/下拉/小按钮 Element 的 small 尺寸都是 24px，这里一并收到 22px，
-   否则它们会成为新的"行高天花板"。 */
-.field-table :deep(.el-input__inner) { height: 22px; }
-.field-table :deep(.el-input__wrapper) { min-height: 22px; }
-.field-table :deep(.el-select__wrapper) { min-height: 22px; }
-.field-table :deep(.el-button--small) { height: 22px; padding: 0 6px; }
+/* ===== 行内控件高度 = --ctl-h（= 设置的行高 − 上下各 1px 内边距） =====
+   输入框/下拉/小按钮 Element 的 small 尺寸都是 24px，这里一并收到 --ctl-h，
+   否则它们会成为新的"行高天花板"——行高不是 padding 决定的，是它们决定的。 */
+.field-table :deep(.el-input__inner) { height: var(--ctl-h, 20px); }
+.field-table :deep(.el-input__wrapper) { min-height: var(--ctl-h, 20px); }
+.field-table :deep(.el-select__wrapper) { min-height: var(--ctl-h, 20px); }
+.field-table :deep(.el-button--small) { height: var(--ctl-h, 20px); padding: 0 6px; }
 /* 主键 / 可空 / 自增等开关列：表头与内容居中，其余列左对齐 */
 .field-table th.c-center,
 .field-table td.c-center { text-align: center; }
 /* 勾选框自带 margin-right，居中后会偏 —— 去掉才真正居中；标签文本这里不需要 */
-/* height: 32px → 22px：**这是行高 43px 的真正来源**（Element 的勾选框默认 32px 高，
-   比同一行里的输入框还高 8px）。压到 22px 后与输入框齐平。 */
-.field-table :deep(.el-checkbox) { margin-right: 0; height: 22px; }
+/* height: 32px → --ctl-h：**这是行高的真正来源**（Element 的勾选框默认 32px 高，
+   比同一行里的输入框还高 8px）。跟输入框一样取 --ctl-h，两者才齐平。 */
+.field-table :deep(.el-checkbox) { margin-right: 0; height: var(--ctl-h, 20px); }
 /* 双保险：把表格内勾选框的层级压回 auto（Element 默认给 __inner 设了 z-index: 1，
    那正是它盖住粘性表头的原因）。乘号/勾号的绘制不受影响，这里只动层叠。 */
 .field-table :deep(.el-checkbox),
@@ -2468,11 +2481,12 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 /* 索引表表头/内容左对齐 */
 .idx-tab :deep(.el-table th.el-table__cell > .cell),
 .idx-tab :deep(.el-table td.el-table__cell > .cell) { text-align: left; }
-/* 尺寸与字段表对齐：表头 cell 上下 3px（+内容约 24px ≈ 30px，字段表 29px）、
-   数据 cell 上下 2px（实测行高 30px，字段表 29px）。 */
-.idx-tab :deep(.el-table th.el-table__cell > .cell) { padding: 3px 9px !important; }
+/* 尺寸与字段表对齐：表头 cell 上下 2px、数据 cell 上下 1px
+   （字段表那套已经收到"控件 20px + 1px 内边距 ≈ 22px"，索引表跟着一起收，
+   否则两个页签切换时行高差一截）。 */
+.idx-tab :deep(.el-table th.el-table__cell > .cell) { padding: 2px 9px !important; }
 /* 左右 4px → 9px：与表头的 9px 对齐（原来输入框的框左缘比列表头偏左 5px） */
-.idx-tab :deep(.el-table td.el-table__cell > .cell) { padding: 2px 9px !important; }
+.idx-tab :deep(.el-table td.el-table__cell > .cell) { padding: 1px 9px !important; }
 .idx-tab :deep(.el-table td.el-table__cell) {
   background: transparent !important;
   border-bottom: 1px solid var(--dc-border) !important;
@@ -2494,7 +2508,12 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .idx-tab :deep(.el-table .el-table__row.row-is-new > td.el-table__cell) { background: rgba(61, 220, 151, .08) !important; }
 .idx-tab :deep(.el-table .el-table__row.row-is-modified > td.el-table__cell) { background: rgba(245, 179, 77, .1) !important; }
 .idx-tab :deep(.el-table .el-input__wrapper) { padding: 0 6px; }
-.idx-tab :deep(.el-table .el-input__inner) { font-size: 13px; }
+.idx-tab :deep(.el-table .el-input__inner) { font-size: 13px; height: var(--ctl-h, 20px); }
+/* 索引页签是 el-table：行高由单元格内容撑出来，里面的控件也得跟 --ctl-h 走 ——
+   否则字段表跟着设置变、索引表不变，两个页签的行高会差一截。 */
+.idx-tab :deep(.el-table .el-input__wrapper),
+.idx-tab :deep(.el-table .el-select__wrapper) { min-height: var(--ctl-h, 20px); }
+.idx-tab :deep(.el-table .el-button--small) { height: var(--ctl-h, 20px); }
 /* 索引表与字段表同一套观感：控件默认隐形、悬停该行才浮出、聚焦给主色描边。
    否则在「字段定义 / 索引」之间切换时，像换了一套界面。 */
 .idx-tab :deep(.el-input__wrapper),

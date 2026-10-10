@@ -395,7 +395,7 @@ export default {
   'settings.safety.title': '安全与会话',
   'settings.safety.desc': '这些开关改完立即生效，不用重启软件',
   'settings.safety.protectProduction': '生产保护',
-  'settings.safety.protectProductionTip': '给数据库标了生产红标的，一切改动数据的操作（编辑器执行、改表结构、编辑数据、导入/同步/还原）都会被拦下，查询不受影响。标了开发、测试或没标红标的库不受影响',
+  'settings.safety.protectProductionTip': '给数据库标了生产红标的，一切改动数据的操作（编辑器执行、改表结构、编辑数据、导入/同步/还原）都会被拦下，查询不受影响。标了开发、测试或没标红标的库不受影响。**默认开启**，确实需要临时改生产数据时可在上方关掉',
   'settings.safety.aiWrite': '允许 AI 写库',
   'settings.safety.aiWriteTip': '关闭后，AI 智能体只能执行查询与分析；需要它代为修改数据时再打开',
   'settings.safety.maxSessions': '最多同时连接数',

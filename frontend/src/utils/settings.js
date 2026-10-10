@@ -8,6 +8,11 @@ export const editorDefaults = {
   autoCloseBrackets: true,  // 括号/引号自动补齐（SQL 语言定义没有 autoClosingPairs，需强制 always）
   quickSuggest: true,       // 智能补全：输入时自动弹出表名列名/函数建议
   gridFontSize: 14,  // 结果表格字号（与 SQL 编辑器独立）
+  // 结果表格行高：SQL 查询结果 / 表数据预览 / NoSQL 预览三张数据网格共用，默认 22（紧凑，
+  // 一屏尽量多看几行）。注意这**不是**纯样式项：三张表各自还有一份 JS 行高常量
+  // （SqlQueryView 的 VT_ROW_H、TableDataView / NoSqlDataView 的 VP_ROW_H）参与虚拟滚动
+  // 占位行计算，两边必须取同一个值，否则占位高度与真实行高不等、滚动定位会漂。
+  gridRowHeight: 22,
   // SQL 格式化全局默认：关键字排版规则之外的统一外观（规则未覆盖的关键字/大小写均取此处默认）。
   // 方言不在此配置——查询编辑器按连接类型自动识别，设置预览固定用标准 SQL。
   sqlKeywordCase: 'preserve',       // 关键字大小写：preserve=保持原样（默认，不动用户写法）| upper=大写 | lower=小写
