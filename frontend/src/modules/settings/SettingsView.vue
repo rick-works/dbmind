@@ -977,7 +977,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
-  MagicStick, Connection, Brush,
+  MagicStick, Connection, Brush, Box,
   FolderOpened, EditPen, DataLine, Download, Bell, Operation, Monitor, Plus, Delete,
   CircleCheck, Timer, Moon, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
   ArrowUp, ArrowDown, Document, DocumentCopy
@@ -1025,7 +1025,9 @@ const tabs = [
   { key: 'ai', i18nKey: 'settings.tab.ai', icon: MagicStick },
   { key: 'safety', i18nKey: 'settings.tab.safety', icon: Lock },
   { key: 'mcp', i18nKey: 'settings.tab.mcp', icon: Connection },
-  { key: 'driver', i18nKey: 'settings.tab.driver', icon: Download },
+  // 图标与顶栏「驱动管理」入口用同一个（utils/topMenu.js 里的 Box）——
+  // 同一个功能在两处出现不同图标，用户要对两次才能确认是同一个地方
+  { key: 'driver', i18nKey: 'settings.tab.driver', icon: Box },
   { key: 'paths', i18nKey: 'settings.tab.paths', icon: FolderOpened },
   { key: 'cache', i18nKey: 'settings.tab.cache', icon: Delete },
   { key: 'logs', i18nKey: 'settings.tab.logs', icon: Document },
