@@ -966,9 +966,10 @@ async fn shutdown_signal() {
 /// `None`，于是"自己起内核"的桌面版打开就是一张「未托管前端产物」的白页
 /// （只有恰好复用了外部带 `--dist` 的 `dbmind-web.exe` 时才看不出来，所以一直没暴露）。
 ///
-/// 顺序：`DBMIND_DIST` 环境变量（显式指定最优先）→ **exe 旁的 `web/`**
-/// （便携版与安装包的布局，二者都把产物放在可执行文件旁边）→ 开发态沿 `target/<profile>/`
-/// 向上找仓库里的 `frontend/dist`。
+/// 顺序：`DBMIND_DIST` 环境变量（显式指定最优先）→ 打包态的 `web/`
+/// （候选目录见 [`dbmind_core::paths::app_resource_roots`]：Windows 在 exe 旁、
+/// macOS 在 `.app/Contents/Resources/`、Linux 在 `usr/lib/<产品名>/`）
+/// → 开发态沿 `target/<profile>/` 向上找仓库里的 `frontend/dist`。
 fn detect_dist() -> Option<PathBuf> {
     let is_dist = |dir: &PathBuf| dir.join("index.html").is_file();
 
@@ -979,12 +980,16 @@ fn detect_dist() -> Option<PathBuf> {
         }
     }
 
-    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
-
-    let beside = dir.join("web");
-    if is_dist(&beside) {
-        return Some(beside);
+    // ⚠️ 这里以前只找"exe 旁边的 web/"。Windows 上成立（便携版/MSI 都这么摆），
+    //    但 macOS 的 .app 里 exe 在 Contents/MacOS/、资源在 Contents/Resources/
+    //    —— 于是 macOS 版永远找不到前端产物，窗口就是一片黑（release-notes/v1.2.2.md）。
+    if let Some(hit) = dbmind_core::paths::find_resource_path("web/index.html") {
+        if let Some(dir) = hit.parent() {
+            return Some(dir.to_path_buf());
+        }
     }
+
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
 
     // 开发态：exe 在 target/debug 或 target/release 下，往上两三层就是仓库根
     for depth in ["../../", "../../../", "../../../../"] {

@@ -275,7 +275,8 @@ pub(crate) fn agent_hosts_visible() -> bool {
 ///
 /// 1. 该宿主专属环境变量（`DBMIND_AGENT_JAR` / `DBMIND_AGENT_MONGODB_JAR` …）
 /// 2. `DBMIND_AGENTS_DIR`（打包器给的资源目录）
-/// 3. 可执行文件旁的 `agents/`
+/// 3. 打包态资源根下的 `agents/` —— Windows 在 exe 旁、macOS 在 `.app/Contents/Resources/`、
+///    Linux 在 `usr/lib/<产品名>/`（见 [`crate::paths::app_resource_roots`]）
 /// 4. **仅 debug 构建**：开发态仓库路径
 pub fn resolve_agent_jar(spec: &AgentHostSpec) -> Option<PathBuf> {
     // 测试构建默认看不到宿主包（见 `agent_hosts_visible`）：否则开发机上跑单测
@@ -295,13 +296,10 @@ pub fn resolve_agent_jar(spec: &AgentHostSpec) -> Option<PathBuf> {
             return Some(candidate);
         }
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("agents").join(spec.jar_name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
+    // ⚠️ 这里以前只找"exe 旁边的 agents/"。macOS 的 .app 里资源在 Contents/Resources/
+    //    —— 于是 macOS 版一个宿主都解析不到，MySQL/Mongo/Redis/ES 全部报"驱动未就绪"。
+    if let Some(candidate) = crate::paths::find_resource_path(&format!("agents/{}", spec.jar_name)) {
+        return Some(candidate);
     }
     // 开发态兜底：**只在 debug 构建里启用**。
     //

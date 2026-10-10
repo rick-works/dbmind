@@ -105,3 +105,48 @@ pub fn ensure_parent(file: &Path) -> Result<()> {
     }
     Ok(())
 }
+
+/// 打包进来的**资源**目录候选（`web/` 前端产物、`agents/` 宿主 jar、`jre/` 自带运行时
+/// 都住在这些根下面），按优先级排列。
+///
+/// 为什么必须"多候选"：不同打包方式把资源放在完全不同的地方 ——
+///   · Windows 便携版 / MSI / NSIS：与 exe **同级**（`<exe目录>\web`、`\agents`、`\jre`）；
+///   · macOS `.app`：exe 在 `DBmind.app/Contents/MacOS/`，而 Tauri 的 `bundle.resources`
+///     落在 **`Contents/Resources/`**（即 exe 目录的**上一级**再进 `Resources/`）；
+///   · Linux deb / AppImage：exe 在 `usr/bin/`，资源在 `usr/lib/<产品名>/`；
+///     AppImage 运行时会额外给一个 `$APPDIR` 指向挂载根。
+///
+/// 这三处（`web/`、`agents/`、`jre/`）原先都只认"exe 旁边"一种布局，于是 macOS 版出现
+/// 连环故障：页面白屏（找不到 `web/`）＋ 数据源一律"驱动未就绪"（找不到 `agents/`、`jre/`）。
+/// 教训写在 release-notes/v1.2.2.md 里。
+pub fn app_resource_roots() -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            roots.push(dir.to_path_buf());
+            if let Some(up) = dir.parent() {
+                // macOS：Contents/MacOS → Contents/Resources
+                roots.push(up.join("Resources"));
+                // Linux：usr/bin → usr/lib/<产品名>
+                roots.push(up.join("lib").join("DBmind"));
+                roots.push(up.join("lib").join("dbmind-desktop"));
+            }
+        }
+    }
+    // AppImage：运行期把挂载根放在 APPDIR 里
+    if let Some(appdir) = std::env::var_os("APPDIR") {
+        let base = PathBuf::from(appdir);
+        roots.push(base.join("usr").join("lib").join("DBmind"));
+        roots.push(base.join("usr").join("bin"));
+    }
+    roots
+}
+
+/// 在 [`app_resource_roots`] 里找第一个含 `relative`（如 `web/index.html`、
+/// `agents/dbmind-agent-jdbc.jar`）的**完整路径**。
+pub fn find_resource_path(relative: &str) -> Option<PathBuf> {
+    app_resource_roots()
+        .into_iter()
+        .map(|root| root.join(relative))
+        .find(|candidate| candidate.exists())
+}

@@ -439,6 +439,34 @@ jobs:
           if [ "$fail" -ne 0 ]; then exit 1; fi
           echo "OK：没有 /opt/homebrew、/usr/local 下的动态依赖"
 
+      # [4b] 用 dmgbuild 重做 DMG 外观（macOS）。
+      #      为什么不用 Tauri 自带的：CI 上 Tauri 给 create-dmg 传 --skip-jenkins，
+      #      跳过"设窗口背景与图标位置"的 AppleScript（headless runner 上 Finder 自动化不可靠），
+      #      于是 DMG 就是「两个图标堆在左上角」的朴素窗口（用户反馈"安装的页面不对"）。
+      #      dmgbuild 自己写 .DS_Store、不经过 Finder，所以能在这里跑出正常的拖拽布局。
+      #      **失败一律只告警**：宁可出一个朴素但可用的 DMG，也不能因为外观把整包卡住。
+      - name: 重做 DMG 外观（dmgbuild，macOS）
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          app=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          dmg=$(find target/release/bundle/dmg -maxdepth 1 -name '*.dmg' | head -1)
+          if [ -z "$app" ] || [ -z "$dmg" ]; then
+            echo "::warning::没有 .app 或 .dmg，跳过外观重做"
+            exit 0
+          fi
+          echo "app = $app"
+          echo "dmg = $dmg"
+          python3 -m pip install --quiet --user dmgbuild \
+            || { echo "::warning::装不上 dmgbuild，保留 Tauri 原样 DMG"; exit 0; }
+          out="$RUNNER_TEMP/DBmind-styled.dmg"
+          if python3 -m dmgbuild -s scripts/dmg-settings.py "DBmind" "$out"; then
+            cp "$out" "$dmg"
+            echo "已用 dmgbuild 重做 DMG 外观"
+          else
+            echo "::warning::dmgbuild 出错，保留 Tauri 原样 DMG（功能不受影响）"
+          fi
+
       # [4a-1] DMG 布局体检：用户要的是「把图标拖进应用程序」那种安装方式，那么 DMG 挂载后
       #        根目录必须同时有 .app 和一个指向 /Applications 的软链。这里挂上去实看一眼并把
       #        目录列出来 —— 缺软链只告警不失败（先让包出得去），但日志里能一眼看到真相。

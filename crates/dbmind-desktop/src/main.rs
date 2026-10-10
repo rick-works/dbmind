@@ -57,8 +57,22 @@ fn java_major(exe: &Path) -> Option<u32> {
 /// 而提示里看不出根因是版本。用户实测撞过，所以这里做一次主动选择。
 ///
 /// 顺序：已有的 DBMIND_JAVA > exe 旁的 jre / jdk（便携版可自带）> JAVA_HOME >
+/// 宿主用的 Java 可执行文件名：Windows 是 `java.exe`，其它平台是 `java`。
+///
+/// ⚠️ 这里（以及下面的 JAVA_HOME / PATH 查找）原先一律写死 `java.exe` —— 在 macOS / Linux
+/// 上等于"永远找不到 Java"，连包自带的 `jre/` 也形同虚设。见 release-notes/v1.2.2.md。
+fn java_bin_name() -> &'static str {
+    if cfg!(windows) {
+        "java.exe"
+    } else {
+        "java"
+    }
+}
+
 /// PATH > 常见安装目录。多个候选时取版本最高的那个。
 fn ensure_java() {
+    let java_bin = java_bin_name();
+
     if let Some(existing) = std::env::var_os("DBMIND_JAVA") {
         let path = PathBuf::from(existing);
         if path.is_file() {
@@ -67,71 +81,70 @@ fn ensure_java() {
         }
     }
 
-    // 包**自带**的运行时（exe 旁的 jre/ 或 jdk/）单独成一层：只要 ≥17 就直接用它，
+    // 包**自带**的运行时（资源根下的 jre/ 或 jdk/）单独成一层：只要 ≥17 就直接用它，
     // **不**参与后面的"取版本最高"。
     //
     // 这一层是必须的：包自带 JRE 的用意就是"不依赖目标机器装了什么"，
     // 若还跟系统 Java 比版本，用户机器上有个更新的 Java 就会顶掉它，
     // 自带运行时等于白打（实测踩过：包里带 17、机器上有 25，壳选了 25）。
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            for sub in ["jre/bin/java.exe", "jdk/bin/java.exe"] {
-                let bundled = dir.join(sub);
-                if !bundled.is_file() {
-                    continue;
-                }
-                if let Some(major) = java_major(&bundled) {
-                    if major >= 17 {
-                        eprintln!("Java 宿主：使用自带的运行时 {}（版本 {major}）", bundled.display());
-                        std::env::set_var("DBMIND_JAVA", &bundled);
-                        return;
-                    }
-                    eprintln!("Java 宿主：自带的运行时版本过低（{major}），改为查找系统上的 Java 17+");
-                }
+    //
+    // 资源根由 `dbmind_core::paths::app_resource_roots` 给：Windows 在 exe 旁、
+    // macOS 在 `.app/Contents/Resources/`、Linux 在 `usr/lib/<产品名>/`。
+    let bundled_java =
+        |sub: &str| dbmind_core::paths::find_resource_path(&format!("{sub}/bin/{java_bin}"));
+    for sub in ["jre", "jdk"] {
+        let Some(bundled) = bundled_java(sub) else {
+            continue;
+        };
+        if let Some(major) = java_major(&bundled) {
+            if major >= 17 {
+                eprintln!("Java 宿主：使用自带的运行时 {}（版本 {major}）", bundled.display());
+                std::env::set_var("DBMIND_JAVA", &bundled);
+                return;
             }
+            eprintln!("Java 宿主：自带的运行时版本过低（{major}），改为查找系统上的 Java 17+");
         }
     }
 
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     // 系统上找：JAVA_HOME / PATH / 常见安装目录 —— 这几处**取版本最高的那个**
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            // 自带运行时版本不合规时，仍把它作为候选（至少有个可用的）
-            for sub in ["jre/bin/java.exe", "jdk/bin/java.exe"] {
-                let candidate = dir.join(sub);
-                if candidate.is_file() {
-                    candidates.push(candidate);
-                }
-            }
+    // 自带运行时版本不合规时，仍把它作为候选（至少有个可用的）
+    for sub in ["jre", "jdk"] {
+        if let Some(candidate) = bundled_java(sub) {
+            candidates.push(candidate);
         }
     }
     if let Some(home) = std::env::var_os("JAVA_HOME") {
-        let candidate = PathBuf::from(home).join("bin/java.exe");
+        let candidate = PathBuf::from(home).join("bin").join(java_bin);
         if candidate.is_file() {
             candidates.push(candidate);
         }
     }
     if let Some(path_var) = std::env::var_os("PATH") {
         for entry in std::env::split_paths(&path_var) {
-            let candidate = entry.join("java.exe");
+            let candidate = entry.join(java_bin);
             if candidate.is_file() {
                 candidates.push(candidate);
             }
         }
     }
-    // 常见安装位置：JDK 装在这里时通常**没有**配进 JAVA_HOME / PATH
-    for root in [
-        "C:\\Program Files\\Java",
-        "C:\\Program Files\\Eclipse Adoptium",
-        "C:\\Program Files\\Microsoft\\jdk",
-        "D:\\develop\\tools",
-    ] {
-        if let Ok(entries) = std::fs::read_dir(root) {
-            for entry in entries.flatten() {
-                let candidate = entry.path().join("bin/java.exe");
-                if candidate.is_file() {
-                    candidates.push(candidate);
+    // 常见安装位置（**仅 Windows**）：JDK 装在这里时通常没有配进 JAVA_HOME / PATH。
+    // macOS 的 JDK 在 /Library/Java/JavaVirtualMachines，`/usr/bin/java` 会挂过去，
+    // 上面 PATH 那一条已经覆盖，所以这里不需要按平台再列一遍目录。
+    if cfg!(windows) {
+        for root in [
+            "C:\\Program Files\\Java",
+            "C:\\Program Files\\Eclipse Adoptium",
+            "C:\\Program Files\\Microsoft\\jdk",
+            "D:\\develop\\tools",
+        ] {
+            if let Ok(entries) = std::fs::read_dir(root) {
+                for entry in entries.flatten() {
+                    let candidate = entry.path().join("bin").join(java_bin);
+                    if candidate.is_file() {
+                        candidates.push(candidate);
+                    }
                 }
             }
         }
