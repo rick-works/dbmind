@@ -1809,6 +1809,7 @@ export default {
   'settings.about.rel1.note7': 'If you had turned production protection off yourself, this upgrade turns it on once (old builds cannot tell "you turned it off" from "it was the default"). Switch it off again and it stays off',
   'settings.about.rel1.note8': 'Also fixed: the Safety & sessions page could not read the saved switch values (it showed defaults, and saving them overwrote your settings)',
   'settings.about.rel1.note9': 'Downloads now pick a source for you: the app times the candidates and uses the fastest one — no source list, no "switch source" button. The dialog keeps just the progress bar and downloaded/speed/time-left, and a leftover partial file that fails verification is discarded and re-downloaded instead of leaving every mirror answering 416',
+  'settings.about.rel1.note10': 'Two more fixes: selecting numeric cells in a result grid shows sum / average / min / max again (ClickHouse reports types like UInt64 or Nullable(Decimal(18, 2)), which the old "must start with int/decimal" test never matched, so numeric columns were treated as text), and external links — including "Open the release page" — now actually open: inside the desktop shell window.open does nothing, so links are handed to the system browser',
   'settings.about.rel2.version': 'v1.0.4',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-10-09',

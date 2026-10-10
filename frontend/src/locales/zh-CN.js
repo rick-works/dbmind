@@ -1815,6 +1815,7 @@ export default {
   'settings.about.rel1.note7': '如果你的生产保护以前是**你自己关掉**的，升级后会被打开一次（老版本里分不清「你关的」和「当初的默认值」），再关掉一次即可，之后不会再被翻回来',
   'settings.about.rel1.note8': '另修一处：设置页「安全与会话」以前读不到已保存的开关值（界面显示的是默认值，一点保存还会把你的设置覆盖掉）—— 已修',
   'settings.about.rel1.note9': '更新下载更省心：下载源由软件自己现场测速挑最快的（不用你选、也没有「换个源」按钮），进度窗只留进度条与「已下载 / 速度 / 剩余时间」；上次没下完的残片若不可用会自动丢弃重下，不会再出现「每个源都报 416」那种死局',
+  'settings.about.rel1.note10': '另修两处：结果表格里框选数字格不出「求和 / 均值 / 最值」——ClickHouse 的类型名是 UInt64、Nullable(Decimal(18, 2)) 这种写法，判定要求「以 int/decimal 开头」一个都匹配不上，数字列被当成了文本；以及「前往下载页」和界面里所有外部链接点了没反应（桌面壳里 window.open 不生效），现在一律交给系统默认浏览器打开',
   'settings.about.rel2.version': 'v1.0.4',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-10-09',
