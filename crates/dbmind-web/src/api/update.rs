@@ -575,28 +575,35 @@ fn probe_source(src: &Source) -> Option<u64> {
     Some((got as f64 / secs) as u64)
 }
 
-/// 并发给所有候选源测速，返回最快的那个（都失败则 None）。
+/// 并发给所有候选源测速，返回**按"探通没探通 + 快慢"排好序**的源列表。
 ///
 /// 并发而不是一个一个试：串行最坏要等 4×4 秒，用户会觉得"点了没反应"。
 /// 代价是所有源各多下 256 KB（约 1 MB），换来的是"不用挑、直接走最快的路"。
-fn pick_fastest_source(sources: &[Source]) -> Option<(Source, u64)> {
+///
+/// **为什么返回整份排序，而不是只挑最快的那个**：只挑最快时，一旦**所有**源都没探通
+/// （免费镜像被限流、代理没装、直连被墙 —— 真机就撞上过），调用方只能退回"原顺序"，
+/// 而原顺序的头一条恰恰是**已知不通**的 github 直连：用户盯着 0 字节干等十几秒才轮到镜像。
+/// 排好序之后，探通的源必定排在没探通的前面（同样探通则快的在前），
+/// 于是"能下就先下、下不动再退回去挨个试"，不会再把时间浪费在明知不通的路上。
+fn rank_sources(sources: &[Source]) -> Vec<Source> {
     let handles: Vec<_> = sources
         .iter()
         .cloned()
-        .map(|s| std::thread::spawn(move || {
-            let sp = probe_source(&s);
-            (s, sp)
-        }))
+        .enumerate()
+        .map(|(i, s)| std::thread::spawn(move || (i, probe_source(&s), s)))
         .collect();
-    let mut best: Option<(Source, u64)> = None;
-    for h in handles {
-        if let Ok((s, Some(sp))) = h.join() {
-            if best.as_ref().map(|(_, b)| sp > *b).unwrap_or(true) {
-                best = Some((s, sp));
-            }
-        }
-    }
-    best
+    let mut probed: Vec<(usize, Option<u64>, Source)> = handles
+        .into_iter()
+        .filter_map(|h| h.join().ok())
+        .collect();
+    // 探通的在前（按速度降序），没探通的在后（保持原顺序，便于排查时看"原定优先级"）
+    probed.sort_by(|a, b| match (a.1, b.1) {
+        (Some(x), Some(y)) => y.cmp(&x).then(a.0.cmp(&b.0)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.0.cmp(&b.0),
+    });
+    probed.into_iter().map(|(_, _, s)| s).collect()
 }
 
 /// 下载安装包：**续传 + 重试 + 自动选源 + 慢连接重连**，全部失败才报错。
@@ -618,19 +625,12 @@ fn download_with_progress(
     let all = build_sources(&inst.url);
     // start_index 保留给排查用（0 = 正常；非 0 = 从第 n 个源起，跳过前面的）
     let start = start_index % all.len();
-    // **自动选源**：现场并发测速，最快的排第一，其余按原顺序兜底。
+    // **自动选源**：现场并发测速，探通的排前面（最快的在最前），没探通的留在后面兜底。
     // 用户不需要、也不应该自己挑源 —— 哪个快只有现场量得准。
-    let mut sources: Vec<Source> = Vec::with_capacity(all.len());
-    if let Some((fast, _sp)) = pick_fastest_source(&all) {
-        sources.push(fast.clone());
-        for s in &all {
-            if s.url != fast.url || s.use_proxy != fast.use_proxy {
-                sources.push(s.clone());
-            }
-        }
-    } else {
-        sources = all.clone();
-    }
+    // 测速要 3 秒左右，这段时间进度条停在 0 B：一句话都不说，用户看到的就是"点了没反应"
+    //（真机反馈）。所以只补一条等待提示，连上第一个字节后立刻清掉（见 `download_once`）。
+    cell.lock().unwrap().note = Some("正在选择下载源…".to_string());
+    let sources = rank_sources(&all);
     let source_total = sources.len();
     let _ = start;
     let part = part_path(dest);
@@ -684,9 +684,10 @@ fn download_with_progress(
             } else if done > 0 {
                 Some(format!("从已下载的 {} 继续", human_bytes(done)))
             } else {
-                // 一切正常时**不留话**：进度条 + 已下载/速度/剩余就够了。
-                // 测速、选源、连哪个主机都是实现细节，摆出来只会让界面显得吵。
-                None
+                // 一上来、一个字节都还没有：给一条**等待型**提示。正常网络下它一闪而过，
+                // 但这个源其实连不上时要等满一次连接超时（10 秒）—— 那 10 秒界面若一个字都没有，
+                // 用户判定就是"点了没反应"（真机反馈）。连上后由 `download_once` 立刻清掉。
+                Some(format!("正在连接 {host}{via}…"))
             };
             {
                 let mut p = cell.lock().unwrap();
@@ -847,6 +848,11 @@ fn download_once(
         p.received = base;
         if base > 0 {
             p.note = Some(format!("从已下载的 {} 继续", human_bytes(base)));
+        } else if p.note.as_deref().map(|n| n.starts_with("正在")).unwrap_or(false) {
+            // 连上了（响应头与长度都拿到了）：清掉"正在选择下载源 / 正在连接 X"这类**等待型**提示。
+            // 判据用前缀："正在…"是等待（连上就没意义了），而"已换到…/第 N 次重试…/从已下载的…"
+            // 是**解释型**，要留到这次下载结束 —— 它们回答的是"数字在动，可为什么我又在等"。
+            p.note = None;
         }
     }
     let mut opts = std::fs::OpenOptions::new();

@@ -60,7 +60,7 @@
       </div>
       <div v-if="displayRows.length" class="data-table-wrap" ref="tableWrapRef" tabindex="0"
            :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 22) + 'px' }"
-           @scroll="onTableScroll"
+           @scroll.passive="onTableScroll"
            @mousemove="onTableMove" @mousedown="onTableDown" @mouseleave="onTableLeave"
            @dblclick="onTableDblClick"
            @contextmenu.prevent="onGridContextMenu">
@@ -215,6 +215,7 @@ import { getQuerySettings, editorSettingsLive } from '../../utils/settings'
 import { noSqlDocuments, cancelNoSql } from '../../api'
 import { t } from '../../utils/i18n'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
+import { rowWindow } from '../../utils/rowWindow'
 import { useExcelSelection } from '../../utils/excelSelection'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
 
@@ -307,7 +308,8 @@ const VP_BUFFER = 12
 const VP_THRESHOLD = 200
 const vpStart = ref(0)
 const vpEnd = ref(0)
-let vpRaf = 0
+// 上一次算窗口时的滚动位置：交给 rowWindow 判断「这一跳跨了多少行」（快速滚动要多渲染前方几行）
+let vpLastScroll = 0
 const virtualEnabled = computed(() => displayRows.value.length > VP_THRESHOLD)
 const visibleRows = computed(() => {
   const all = displayRows.value
@@ -334,18 +336,24 @@ const syncViewport = () => {
   if (!virtualEnabled.value) { vpStart.value = 0; vpEnd.value = n; return }
   const host = scrollHost()
   const s = host ? host.scrollTop : 0
-  const clientH = (host && host.clientHeight) || 1
-  const first = Math.max(0, Math.floor(s / VP_ROW_H.value) - VP_BUFFER)
-  const count = Math.ceil(clientH / VP_ROW_H.value) + VP_BUFFER * 2
-  vpStart.value = Math.min(first, Math.max(0, n - 1))
-  vpEnd.value = Math.min(n, vpStart.value + count)
+  const { start, end } = rowWindow({
+    scrollTop: s,
+    clientHeight: (host && host.clientHeight) || 1,
+    rowH: VP_ROW_H.value,
+    total: n,
+    prevScrollTop: vpLastScroll,
+    buffer: VP_BUFFER
+  })
+  vpLastScroll = s
+  vpStart.value = start
+  vpEnd.value = end
 }
 // 行高改了：占位行是按旧行高算的，按当前滚动位置重算一次（否则会跳一下）
 watch(VP_ROW_H, () => { nextTick(syncViewport) })
-const onTableScroll = () => {
-  if (vpRaf) return
-  vpRaf = requestAnimationFrame(() => { vpRaf = 0; syncViewport() })
-}
+// ⚠️ 别改回 requestAnimationFrame 节流：rAF 回调要等下一帧，浏览器会先按新 scrollTop 把旧内容
+// 滚过去画出来，下一帧才补上该出现的行 —— 快速滚动时可视区整段落空，看到的就是一条空白。
+// 同步算走微任务，能在同一帧绘制前把行补好。详见 utils/rowWindow.js 的注释。
+const onTableScroll = () => { syncViewport() }
 
 // ===== 排序（当前页内；NoSQL 文档接口不支持 ORDER BY）=====
 const orderColumn = ref('')
@@ -1608,7 +1616,7 @@ onBeforeUnmount(() => {
 .has-more-alert { margin: 0; }
 
 /* ===== 原生表格 —— 与表预览（TableDataView）保持一致 ===== */
-.data-table-wrap { flex: 1; min-height: 0; overflow: auto; contain: layout paint; }
+.data-table-wrap { flex: 1; min-height: 0; overflow: auto; contain: layout paint; overflow-anchor: none; }
 /* 容器带 tabindex=0（键盘导航要接焦点），点击单元格后 JS 会 focus 它 ——
    必须压掉浏览器默认的黑色 focus 轮廓，否则整块滚动区外围出现两道黑线 */
 .data-table-wrap:focus { outline: none; }

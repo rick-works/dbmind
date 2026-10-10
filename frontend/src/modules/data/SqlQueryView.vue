@@ -570,6 +570,7 @@ import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
 import { useExcelSelection } from '../../utils/excelSelection'
 import { cellAlignClass } from '../../utils/cellAlign'
+import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
   CaretRight, Download, MagicStick, TrendCharts, Loading,
@@ -1033,24 +1034,31 @@ const vtVisibleRows = computed(() => {
   const rows = result.value?.rows || []
   return rows.slice(vtStart.value, vtEnd.value)
 })
-let vtRaf = 0
+// 上一次算窗口时的滚动位置：交给 rowWindow 判断「这一跳跨了多少行」，跳得远就多渲染前方几行
+let vtLastScroll = 0
+// ⚠️ 这里**不能**用 requestAnimationFrame 节流（老实现就是那样，症状是快速滚动时白屏）：
+// rAF 回调要等下一帧才跑，浏览器会先按新的 scrollTop 把**旧内容**滚过去并画出来，下一帧才补上该出现的行。
+// 拖滚动条 / PageDown 一帧就能跳几百上千像素，可视区整段落在已渲染窗口之外 → 一条空白
+//（浅色主题下就是"白色闪一下"）。改成**同步**算：Vue 的更新走微任务，会在同一帧绘制之前刷完，
+// 行先补好再画。（窗口没变时写 ref 是空操作 —— Vue 的 ref 会先比较值，所以慢速滚动几乎零开销。）
 const onResultTableScroll = () => {
-  if (vtRaf) return
-  vtRaf = requestAnimationFrame(() => {
-    vtRaf = 0
-    const wrap = resultTableWrapRef.value
-    const total = (result.value?.rows || []).length
-    if (!wrap || !total) return
-    const s = wrap.scrollTop
-    const clientH = wrap.clientHeight || 1
-    const first = Math.max(0, Math.floor(s / VT_ROW_H.value) - VT_BUFFER)
-    const count = Math.ceil(clientH / VT_ROW_H.value) + VT_BUFFER * 2
-    const last = Math.min(total, first + count)
-    vtStart.value = first
-    vtEnd.value = last
-    vtGapTop.value = first * VT_ROW_H.value
-    vtGapBottom.value = (total - last) * VT_ROW_H.value
+  const wrap = resultTableWrapRef.value
+  const total = (result.value?.rows || []).length
+  if (!wrap || !total) return
+  const s = wrap.scrollTop
+  const { start: first, end: last } = rowWindow({
+    scrollTop: s,
+    clientHeight: wrap.clientHeight || 1,
+    rowH: VT_ROW_H.value,
+    total,
+    prevScrollTop: vtLastScroll,
+    buffer: VT_BUFFER
   })
+  vtLastScroll = s
+  vtStart.value = first
+  vtEnd.value = last
+  vtGapTop.value = first * VT_ROW_H.value
+  vtGapBottom.value = (total - last) * VT_ROW_H.value
 }
 // 行高改了：已渲染的上下占位行是按旧行高算的，按当前滚动位置重算一次（否则会跳一下）
 watch(VT_ROW_H, () => { nextTick(() => onResultTableScroll()) })
@@ -1058,6 +1066,9 @@ watch(VT_ROW_H, () => { nextTick(() => onResultTableScroll()) })
 watch(() => (result.value?.rows || []).length, () => {
   const wrap = resultTableWrapRef.value
   if (wrap) wrap.scrollTop = 0
+  // 复位"上次滚动位置"：换了结果集要按新位置重新判断跳跃距离，
+  // 否则会拿上一页滚到底的位置算出巨额缓冲（一次渲染上千行）
+  vtLastScroll = 0
   const n = result.value?.rows?.length || 0
   vtStart.value = 0
   vtEnd.value = Math.min(n, 100)
@@ -1084,7 +1095,6 @@ watch(() => resultTableWrapRef.value, (wrap) => {
   vtObserver.observe(wrap)
 })
 onBeforeUnmount(() => {
-  if (vtRaf) cancelAnimationFrame(vtRaf)
   if (vtObserver) { vtObserver.disconnect(); vtObserver = null }
 })
 
@@ -4772,7 +4782,10 @@ onBeforeUnmount(() => {
   color: var(--dc-primary);
 }
 .grid-loading-text { font-size: 14px; color: var(--dc-text-mid); }
-.data-table-wrap { flex: 1; overflow: auto; contain: layout paint; }
+/* overflow-anchor: none —— 关掉浏览器的"滚动锚定"。
+   虚拟滚动每帧都在改上下占位行的高度，锚定机制会据此**反过来调 scrollTop**，
+   两者打架的表现就是小幅度跳动 / 闪烁；虚拟列表一律关掉它。 */
+.data-table-wrap { flex: 1; overflow: auto; contain: layout paint; overflow-anchor: none; }
 .result-chart-wrap { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .data-table .fill-col { padding: 0; border: none; background: transparent !important; min-width: 1px; }
 .data-table-wrap.col-resizing, .data-table-wrap.col-resizing * { cursor: col-resize !important; user-select: none; }
