@@ -621,14 +621,7 @@ fn download_with_progress(
     // **自动选源**：现场并发测速，最快的排第一，其余按原顺序兜底。
     // 用户不需要、也不应该自己挑源 —— 哪个快只有现场量得准。
     let mut sources: Vec<Source> = Vec::with_capacity(all.len());
-    let mut picked: Option<(String, u64)> = None;
-    {
-        // 测速最多 3 秒，但"什么都不显示"会被当成卡住 —— 先说一句在干嘛
-        let mut p = cell.lock().unwrap();
-        p.note = Some("正在测速挑选最快的下载源…".into());
-    }
-    if let Some((fast, sp)) = pick_fastest_source(&all) {
-        picked = Some((host_of(&fast.url), sp));
+    if let Some((fast, _sp)) = pick_fastest_source(&all) {
         sources.push(fast.clone());
         for s in &all {
             if s.url != fast.url || s.use_proxy != fast.use_proxy {
@@ -690,15 +683,10 @@ fn download_with_progress(
                 Some(format!("第 {attempt} 次重试（已下载 {}，接着下）", human_bytes(done)))
             } else if done > 0 {
                 Some(format!("从已下载的 {} 继续", human_bytes(done)))
-            } else if let Some((h, sp)) = &picked {
-                // 让用户知道"软件自己挑了个最快的源"，而不是莫名其妙换了个地址
-                Some(format!(
-                    "已自动选择最快的源 {h}（实测 {}/秒），正在连接 …",
-                    human_bytes(*sp)
-                ))
             } else {
-                // 别让用户对着一动不动的 0% 猜：明说在连哪个源、走不走代理
-                Some(format!("正在连接 {host}{via} …"))
+                // 一切正常时**不留话**：进度条 + 已下载/速度/剩余就够了。
+                // 测速、选源、连哪个主机都是实现细节，摆出来只会让界面显得吵。
+                None
             };
             {
                 let mut p = cell.lock().unwrap();
