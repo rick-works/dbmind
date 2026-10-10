@@ -267,7 +267,7 @@
         </div>
         <!-- 数据表格（模板里 ref 自动解包：editorSettings 已是设置对象，.value 反而是 undefined —— 真机崩过） -->
         <div v-if="result?.success && result?.rows?.length" class="data-table-wrap" ref="resultTableWrapRef" tabindex="0"
-        :style="{ '--grid-fs': (editorSettings.gridFontSize || 14) + 'px', '--grid-row-h': (editorSettings.gridRowHeight || 22) + 'px' }"
+        :style="{ '--grid-fs': (editorSettings.gridFontSize || 14) + 'px', '--grid-row-h': (editorSettings.gridRowHeight || 26) + 'px' }"
              @scroll.passive="onResultTableScroll"
              @mousemove="onResultTableMove" @mousedown="onResultTableDown" @mouseleave="onResultTableLeave"
              @contextmenu.prevent="onResultGridContextMenu">
@@ -1024,7 +1024,7 @@ watch(() => resultVisibleCols.value.map(c => c.idx).join(','), () => {
 // ========== 结果表格虚拟滚动：仅渲染可视区行，大幅减少 DOM 与内存 ==========
 // 行高由设置页「结果表格行高」驱动。**必须**与 CSS（.data-table td 的 height/line-height）
 // 同源：这里是虚拟滚动占位行的换算基准，两边不等就会让滚动定位与"到底"判定都漂。
-const VT_ROW_H = computed(() => editorSettings.gridRowHeight || 22)
+const VT_ROW_H = computed(() => editorSettings.gridRowHeight || 26)
 const VT_BUFFER = 12
 const vtStart = ref(0)
 const vtEnd = ref(0)
@@ -4840,7 +4840,7 @@ onBeforeUnmount(() => {
 }
 /* 行高来自设置（编辑器页签的「结果表格行高」，变量挂在 .data-table-wrap 上）；
    必须与 JS 里的 VT_ROW_H 同源，否则虚拟滚动占位行高度不符 */
-.data-table td { padding: 0 10px; height: var(--grid-row-h, 22px); line-height: var(--grid-row-h, 22px); border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.data-table td { padding: 0 10px; height: var(--grid-row-h, 26px); line-height: var(--grid-row-h, 26px); border: 1px solid var(--dc-border); color: var(--dc-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* 表头字段类型图标：裸图标（无底色/无固定盒子，与表预览/NoSQL 统一）；
    vertical-align: middle 让图标与字段名垂直居中在同一条线上。
    颜色由全局 th-t-* 按类型族给，这里不写 color（scoped 优先级会压掉全局配色） */

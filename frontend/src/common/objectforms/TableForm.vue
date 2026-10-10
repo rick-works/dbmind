@@ -1,6 +1,6 @@
 <template>
   <div class="obj-form"
-       :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 22) + 'px' }">
+       :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px' }">
     <!-- 不用 border-card：那会带一层灰底标题带 + Element 自带下划线，
          与「编辑表结构」的"纯文字页签 + 独立卡片"不是一回事（见下方样式）。 -->
     <el-tabs v-model="activeTab" class="table-tabs">
@@ -668,7 +668,7 @@ emit('sql', genSql())
 /* 行高统一由设置页「结果表格行高」驱动（--grid-row-h 由模板 style 注入）：
    数据行高 = 设置值；行内控件高 = 设置值 − 上下各 1px 内边距。
    **控件才是行高的天花板**（td 的 height 只是下限）—— 与编辑表结构页同一套算法。 */
-.obj-form { --ctl-h: max(18px, calc(var(--grid-row-h, 22px) - 2px)); }
+.obj-form { --ctl-h: max(18px, calc(var(--grid-row-h, 26px) - 2px)); }
 .field-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .field-table th { position: sticky; top: 0; z-index: 1; background: var(--dc-bg-code); color: var(--dc-text-mid); font-weight: 600; font-size: 13px; text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--dc-border-soft); white-space: nowrap; }
 .field-table td { padding: 4px 4px; border-bottom: 1px solid var(--dc-border-soft); vertical-align: middle; }
@@ -837,7 +837,7 @@ emit('sql', genSql())
    （soft 在部分屏幕上几乎看不见，用户反馈过"框线都没了"） */
 .field-table td {
   /* height 只是**下限**（多行内容仍可撑高）：真正的行高由行内控件的 --ctl-h 决定 */
-  padding: 1px 9px; height: var(--grid-row-h, 22px); background: var(--dc-bg-card);
+  padding: 1px 9px; height: var(--grid-row-h, 26px); background: var(--dc-bg-card);
   border-bottom: 1px solid var(--dc-border); vertical-align: middle;
 }
 /* 表头是**两行**（35px 空行 + 标题行），滚动时两行都要固定 */

@@ -8,11 +8,11 @@ export const editorDefaults = {
   autoCloseBrackets: true,  // 括号/引号自动补齐（SQL 语言定义没有 autoClosingPairs，需强制 always）
   quickSuggest: true,       // 智能补全：输入时自动弹出表名列名/函数建议
   gridFontSize: 14,  // 结果表格字号（与 SQL 编辑器独立）
-  // 结果表格行高：SQL 查询结果 / 表数据预览 / NoSQL 预览三张数据网格共用，默认 22（紧凑，
-  // 一屏尽量多看几行）。注意这**不是**纯样式项：三张表各自还有一份 JS 行高常量
+  // 结果表格行高：SQL 查询结果 / 表数据预览 / NoSQL 预览三张数据网格共用，默认 26（比默认字号
+  // 略宽松，既好点选、一屏也不少看几行）。注意这**不是**纯样式项：三张表各自还有一份 JS 行高常量
   // （SqlQueryView 的 VT_ROW_H、TableDataView / NoSqlDataView 的 VP_ROW_H）参与虚拟滚动
   // 占位行计算，两边必须取同一个值，否则占位高度与真实行高不等、滚动定位会漂。
-  gridRowHeight: 22,
+  gridRowHeight: 26,
   // SQL 格式化全局默认：关键字排版规则之外的统一外观（规则未覆盖的关键字/大小写均取此处默认）。
   // 方言不在此配置——查询编辑器按连接类型自动识别，设置预览固定用标准 SQL。
   sqlKeywordCase: 'preserve',       // 关键字大小写：preserve=保持原样（默认，不动用户写法）| upper=大写 | lower=小写
@@ -104,6 +104,15 @@ export const migrateEditor = (raw) => {
     if (raw.gridFontSize === 13) { raw.gridFontSize = 14; changed = true }
     if (raw.sqlKeywordCase === 'upper') { raw.sqlKeywordCase = 'preserve'; changed = true }
     raw._defaultsMigrated = true
+    changed = true
+  }
+  // 行高默认值 22 → 26（**一次性**，与上面同一个道理）：
+  // 22 是旧默认值，而整份 editorSettings 会在用户改动**任何一项**时一起写盘 ——
+  // 于是"从没动过行高"的人也会把 22 冻在缓存里，只改默认值根本到不了他们那儿。
+  // 门槛标志落盘后，用户自己调过的值（哪怕恰好是 22）不再被碰。
+  if (!raw._rowHeight26Migrated) {
+    if (raw.gridRowHeight === 22) { raw.gridRowHeight = 26; changed = true }
+    raw._rowHeight26Migrated = true
     changed = true
   }
   if (changed) { try { localStorage.setItem('dbmind_editor', JSON.stringify(raw)) } catch { /* 忽略写失败 */ } }

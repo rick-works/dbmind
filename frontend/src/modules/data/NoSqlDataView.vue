@@ -59,7 +59,7 @@
         </div>
       </div>
       <div v-if="displayRows.length" class="data-table-wrap" ref="tableWrapRef" tabindex="0"
-           :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 22) + 'px' }"
+           :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px' }"
            @scroll.passive="onTableScroll"
            @mousemove="onTableMove" @mousedown="onTableDown" @mouseleave="onTableLeave"
            @dblclick="onTableDblClick"
@@ -303,7 +303,7 @@ const plainVal = (v) => {
 // ===== 窗口化渲染（固定行高）=====
 // 行高跟设置页「结果表格行高」走；**必须**与 CSS（.data-table td 的 height/line-height）同源，
 // 否则上下占位行的高度与真实行高不等，滚动定位会漂。
-const VP_ROW_H = computed(() => editorSettingsLive.value.gridRowHeight || 22)
+const VP_ROW_H = computed(() => editorSettingsLive.value.gridRowHeight || 26)
 const VP_BUFFER = 12
 const VP_THRESHOLD = 200
 const vpStart = ref(0)
@@ -1669,7 +1669,7 @@ onBeforeUnmount(() => {
 .data-table td {
   /* 行高来自设置页「结果表格行高」（变量挂在 .data-table-wrap 上），
      必须与 JS 里的 VP_ROW_H 同源 */
-  padding: 0 10px; height: var(--grid-row-h, 22px); line-height: var(--grid-row-h, 22px);
+  padding: 0 10px; height: var(--grid-row-h, 26px); line-height: var(--grid-row-h, 26px);
   border: 1px solid var(--dc-border); color: var(--dc-text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   cursor: default;

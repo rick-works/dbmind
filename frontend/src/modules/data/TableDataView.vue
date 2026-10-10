@@ -100,7 +100,7 @@
       </div>
       <div class="table-scroll" ref="gridRef" @scroll.passive="onTableScroll">
         <div v-if="displayRows.length" class="data-table-wrap" ref="gridWrap" tabindex="0"
-             :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 22) + 'px' }"
+             :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px' }"
              @mousemove="onGridMove" @mouseleave="onGridLeave" @mousedown="onGridDown"
              @scroll.passive="onTableScroll" @contextmenu.prevent="onGridContextMenu">
           <table class="data-table" :class="{ 'col-resizing': colResizing }"
@@ -472,7 +472,7 @@ const ridToDispIdx = computed(() => {
 // 单行高度（px）：由设置页「结果表格行高」驱动。**必须**与 CSS（.data-table td 的
 // height/line-height）同源 —— 这里是上下占位行的换算基准，不等就会让滚动定位漂。
 // （旧注释"td padding 6px + 12px 字号"已过时：行高早就是固定值，不再由 padding 撑出来。）
-const VP_ROW_H = computed(() => editorSettingsLive.value.gridRowHeight || 22)
+const VP_ROW_H = computed(() => editorSettingsLive.value.gridRowHeight || 26)
 const VP_BUFFER = 12     // 可视区上下各多渲染的缓冲行
 // 行数超过该值才启用窗口化。原来是 500 —— 可默认页大小就是 200 行，于是永远够不着：
 // 200 行 × 13 列 = 2600 个格子全部渲染，任何一次列宽变化都要给整张表重新排版
@@ -2982,7 +2982,7 @@ useShortcutScope(rootRef, {
 .data-table td {
   /* 行高来自设置页「结果表格行高」（变量挂在 .data-table-wrap 上），
      必须与 JS 里的 VP_ROW_H 同源 */
-  padding: 0 10px; height: var(--grid-row-h, 22px); line-height: var(--grid-row-h, 22px);
+  padding: 0 10px; height: var(--grid-row-h, 26px); line-height: var(--grid-row-h, 26px);
   border: 1px solid var(--dc-border); color: var(--dc-text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   cursor: default;

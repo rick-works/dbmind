@@ -1,6 +1,6 @@
 <template>
   <div v-loading="loading" class="table-edit-page"
-       :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 22) + 'px' }">
+       :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px' }">
     <!-- 顶部标题栏 -->
     <div class="form-tab-header">
       <div class="header-title">
@@ -2295,7 +2295,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    数据行高 = 设置值；行内控件高 = 设置值 − 上下各 1px 内边距。
    **控件才是行高的天花板**（td 的 height 只是下限）—— 控件不跟着算，
    调大设置就只会看到行变高、输入框纹丝不动（这就是之前"没跟着变"的原因）。 */
-.table-edit-page { --ctl-h: max(18px, calc(var(--grid-row-h, 22px) - 2px)); }
+.table-edit-page { --ctl-h: max(18px, calc(var(--grid-row-h, 26px) - 2px)); }
 
 /* ===== 字段表格（HTML 表格，与新建表一致） ===== */
 .field-table {
@@ -2343,7 +2343,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    左右 8px → 9px：与表头的 9px 对齐（差 1px 在高分屏上就能看出输入框比表头偏左）。
    首列例外，见下面 :first-child 的 4px（序号列居中，不需要 9px）。 */
 /* height 只是**下限**（多行内容仍可撑高）：真正的行高由行内控件的 --ctl-h 决定 */
-.field-table td { padding: 1px 9px; height: var(--grid-row-h, 22px); background: var(--dc-bg-card); border-bottom: 1px solid var(--dc-border); vertical-align: middle; }
+.field-table td { padding: 1px 9px; height: var(--grid-row-h, 26px); background: var(--dc-bg-card); border-bottom: 1px solid var(--dc-border); vertical-align: middle; }
 /* 列竖线：标题行与数据行逐格画右边框（separate 边框模式各画各的，不会叠加变粗）。
    最后一列不画 —— 否则与容器外框并成两条线。
    表格的第一行（thead 里那个 35px 的"空行"）**不加竖线**：页签与工具栏就住在那一行，

@@ -1535,7 +1535,7 @@ export default {
   'settings.editor.gridFontSize': '结果表格字号',
   'settings.editor.gridFontSizeTip': '查询结果表格里数据格子的字号，与上方 SQL 编辑器的字号互相独立',
   'settings.editor.gridRowHeight': '结果表格行高',
-  'settings.editor.gridRowHeightTip': 'SQL 查询结果、表数据预览、NoSQL 预览三处数据表格的行高；默认 22px，调大更宽松（一屏少看几行）',
+  'settings.editor.gridRowHeightTip': 'SQL 查询结果、表数据预览、NoSQL 预览三处数据表格的行高；默认 26px，调大更宽松（一屏少看几行）',
   'settings.editor.tabSize': 'Tab 宽度',
   'settings.editor.spaces': '{n} 空格',
   'settings.editor.lineNumbers': '显示行号',

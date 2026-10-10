@@ -1529,7 +1529,7 @@ export default {
   'settings.editor.gridFontSize': 'Result grid font size',
   'settings.editor.gridFontSizeTip': 'Font size of cells in the query result grid, independent of the SQL editor font size above',
   'settings.editor.gridRowHeight': 'Result grid row height',
-  'settings.editor.gridRowHeightTip': 'Row height of the three data grids (SQL results, table data preview, NoSQL preview). 22px by default; increase it for a roomier grid',
+  'settings.editor.gridRowHeightTip': 'Row height of the three data grids (SQL results, table data preview, NoSQL preview). 26px by default; increase it for a roomier grid',
   'settings.editor.tabSize': 'Tab width',
   'settings.editor.spaces': '{n} spaces',
   'settings.editor.lineNumbers': 'Show line numbers',
