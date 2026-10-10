@@ -133,5 +133,38 @@ export const desktopShell = {
       canceled = true
       if (unsubscribe) unsubscribe()
     }
+  },
+
+  /**
+   * 订阅「窗口是否全屏」。
+   *
+   * 为什么需要：macOS 下顶栏给系统红绿灯留了一段左内缩（它们与菜单同一行，见
+   * MainView 的 `.topbar.is-mac`）。而**全屏时系统会把那三个圆点连同标题栏条带一起收走** ——
+   * 那段留白就白留了，看着左上角一片空（用户反馈"全屏之后左上角很空，把菜单往左挪呗"）。
+   * 所以视图要在全屏时把它撤掉。与最大化同源：都跟着窗口尺寸变化事件走。
+   */
+  onFullscreenChange(callback) {
+    if (legacy && legacy.onFullscreenChange) return legacy.onFullscreenChange(callback)
+    if (!hasTauri) return () => { }
+
+    let unsubscribe = null
+    let canceled = false
+    ;(async () => {
+      try {
+        const win = await tauriWindow()
+        callback(await win.isFullscreen())
+        const off = await win.onResized(async () => {
+          try { callback(await win.isFullscreen()) } catch { }
+        })
+        if (canceled) off()
+        else unsubscribe = off
+      } catch (e) {
+        reportFailure('读取全屏状态', e)
+      }
+    })()
+    return () => {
+      canceled = true
+      if (unsubscribe) unsubscribe()
+    }
   }
 }

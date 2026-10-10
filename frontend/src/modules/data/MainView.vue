@@ -5,7 +5,7 @@
          移动超过阈值才真正开始拖 —— 这样双击最大化不会被拖动抢走。
          两条"捷径"都刻意不用：data-tauri-drag-region 要靠壳注入的脚本兜底（行为不在自己手里），
          -webkit-app-region 是 Chromium 私有拖动特性、会和上面那套互相打架。 -->
-    <header class="topbar" :class="{ 'is-desktop': isDesktop, 'is-mac': isMacShell }"
+    <header class="topbar" :class="{ 'is-desktop': isDesktop, 'is-mac': isMacShell, 'is-mac-fs': macFullscreen }"
             @mousedown="onTopbarMouseDown"
             @mousemove="onTopbarMouseMove"
             @mouseup="onTopbarMouseUp"
@@ -1485,6 +1485,13 @@ const isDesktop = winApi.available
 const isMacShell = isDesktop && winApi.platform === 'darwin'
 const winMaximized = ref(false)
 let offWinMax = null
+/**
+ * macOS 是否处于全屏。全屏时系统会把那三个红绿灯连同标题栏条带一起收走，而顶栏里
+ * 给它们让位的 84px 左内缩还留着 —— 于是左上角空一块（用户反馈"全屏之后左上角很空"）。
+ * 所以这里跟着窗口状态走，全屏时给顶栏加 .is-mac-fs 把那段留白撤掉。
+ */
+const macFullscreen = ref(false)
+let offMacFs = null
 const winMinimize = () => winApi && winApi.minimize()
 const winToggleMax = () => winApi && winApi.toggleMaximize()
 /**
@@ -1613,12 +1620,14 @@ const onTopbarMouseUp = () => { topbarDrag.armed = false }
  */
 onMounted(() => {
   if (winApi && !isMacShell) offWinMax = winApi.onMaximizeChange((v) => { winMaximized.value = v })
+  // macOS：顶栏给红绿灯留了 84px 左内缩，全屏时它们会被系统收走，那段留白跟着撤
+  if (winApi && isMacShell) offMacFs = winApi.onFullscreenChange((v) => { macFullscreen.value = v })
   // 欢迎页的「最近查询」：首次进来就取一次（失败无所谓，那块会显示一句说明）
   loadHistory()
   // 纯分组从后端设置加载（并顺带完成 localStorage 旧数据的一次性迁移）
   loadPureFolders()
 })
-onBeforeUnmount(() => { if (offWinMax) offWinMax() })
+onBeforeUnmount(() => { if (offWinMax) offWinMax(); if (offMacFs) offMacFs() })
 
 const aiOpen = ref(false)
 /**
@@ -6523,10 +6532,19 @@ const connTypeSummary = computed(() =>
    而它原本只是留给**已不在仓库里的 Electron 壳**用的 —— 留着弊大于利。 */
 .topbar.is-desktop { padding-right: 0; }
 /* macOS 的系统红绿灯按钮占着左上角，给品牌区让位 */
-/* macOS：窗口用**系统标题栏**（见 dbmind-desktop/src/main.rs 的注释），红绿灯在系统那条
-   28pt 条带里、由系统自己摆正；全屏时条带连同它一起消失。
-   所以顶栏**不再需要**给红绿灯让位的那段左内缩 —— 留着只会在全屏时留下一片空白
-   （用户反馈"全屏之后左上角很空"）。这里保持与其它平台一致的普通内边距。 */
+/* macOS：窗口用 Overlay（见 dbmind-desktop/src/main.rs 的注释）—— 系统那三个红绿灯浮在
+   顶栏上、**与菜单同一行**（用户要的就是这个：不要单独占一行）。
+   代价是它们的纵向位置由系统钉在标题栏那条 **28pt** 条带里（圆点中心距顶 14pt），
+   而 wry 的 inset_traffic_lights 只让改横向 —— 所以这里把顶栏高度定成 **28px**，
+   内容中心（align-items: center）也落在 14px，两边才是同一条水平线。
+   （40px 时中心在 20px，比圆点低 6px，看着就是"三个圆点飘在上边"。）
+   左边 84px 是给那三个圆点让位；全屏时系统会把它们连同条带一起收走，
+   那段留白必须撤掉，否则左上角空一块 —— 见下面的 .is-mac-fs。 */
+.topbar.is-mac { height: 28px; padding-left: 84px; }
+.topbar.is-mac.is-mac-fs { padding-left: 10px; }
+/* 28px 的条带里，导航项原本 6px 的上下内边距会把行高撑到 ~29px，收紧一档才不挤 */
+.topbar.is-mac .top-nav-item { padding: 3px 10px; }
+.topbar.is-mac .topbar-logo { width: 20px; height: 20px; }
 .win-acts { margin-left: auto; align-self: stretch; display: flex; align-items: stretch; }
 /* 窗口按钮：图标 16px 与左侧图标组一致（真机反馈 14px 偏小不协调） */
 .win-act {
