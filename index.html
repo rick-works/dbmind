@@ -505,6 +505,15 @@
       <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener">免费下载</a>
       <a class="btn btn-ghost" href="#features">看看能做什么 ↓</a>
     </div>
+    <!-- macOS 首次打开的说明放在下载按钮正下方：未公证的 App 一定会被系统拦一次，
+         用户在下载前就该知道怎么放行，不必去翻 Release 说明。
+         用内联样式：这一段只此一处，不值得为它去改站点样式表。 -->
+    <p style="margin: 16px auto 0; max-width: 820px; text-align: left; font-size: 13.5px; line-height: 1.85; opacity: .78;">
+      <b>macOS 首次打开</b>：未公证的 App 一定会被系统拦一次 —— 点「好」之后到
+      「系统设置 → 隐私与安全性」点「<b>仍要打开</b>」即可，<b>不用 sudo、不用敲命令</b>
+      （DMG 里也附了这份说明）。想一次都不弹：<code>brew install --cask --no-quarantine rick-works/tap/dbmind</code>，
+      或用 <code>curl</code> 下载 —— 那个"已下载"标记是浏览器打的，换个下载方式系统就不会检查。
+    </p>
   </div>
 </header>
 
