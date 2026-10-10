@@ -6523,7 +6523,10 @@ const connTypeSummary = computed(() =>
    而它原本只是留给**已不在仓库里的 Electron 壳**用的 —— 留着弊大于利。 */
 .topbar.is-desktop { padding-right: 0; }
 /* macOS 的系统红绿灯按钮占着左上角，给品牌区让位 */
-.topbar.is-mac { padding-left: 84px; }
+/* macOS：窗口用**系统标题栏**（见 dbmind-desktop/src/main.rs 的注释），红绿灯在系统那条
+   28pt 条带里、由系统自己摆正；全屏时条带连同它一起消失。
+   所以顶栏**不再需要**给红绿灯让位的那段左内缩 —— 留着只会在全屏时留下一片空白
+   （用户反馈"全屏之后左上角很空"）。这里保持与其它平台一致的普通内边距。 */
 .win-acts { margin-left: auto; align-self: stretch; display: flex; align-items: stretch; }
 /* 窗口按钮：图标 16px 与左侧图标组一致（真机反馈 14px 偏小不协调） */
 .win-act {

@@ -346,10 +346,15 @@ fn main() {
             //    改用 Overlay：红绿灯仍在、标题文字隐藏、内容铺到标题栏下面 ——
             //    顶栏那 84px 左边距（`.topbar.is-mac`）正是留给红绿灯的。
             //    ⚠️ Overlay 要求 decorations 保持 true（默认），所以这条分支**不能**再关装饰。
-            #[cfg(target_os = "macos")]
-            let builder = builder
-                .title_bar_style(tauri::TitleBarStyle::Overlay)
-                .hidden_title(true);
+            // macOS 上**保留系统标题栏**（decorations 默认就是 true，这里什么都不设）。
+            //   曾经试过 Overlay（内容铺到标题栏下面、红绿灯浮在顶栏上），两个问题都没治：
+            //     · wry 的 inset_traffic_lights **只能改横向**，纵向由系统的 28pt 条带固定
+            //       （圆点中心在距顶 14pt）；我们的顶栏是 40px（中心 20px），于是那三个圆点
+            //       看着"飘在上边"（用户反馈"位置看起来奇怪"）；
+            //     · 全屏时系统会把整条标题栏连红绿灯一起收走，顶栏里给它们留的 84px 就空着
+            //       （用户反馈"全屏之后左上角很空，把菜单往左挪呗"）—— 页面写死的内缩修不干净。
+            //   交给系统：它自己把圆点摆在条带正中，全屏时条带连留白一起消失，两件事同时归零。
+            //   Windows / Linux 照旧整条标题栏都不要（页面自绘窗口按钮，见 .win-acts）。
             #[cfg(not(target_os = "macos"))]
             let builder = builder.decorations(false);
 
