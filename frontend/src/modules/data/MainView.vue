@@ -6612,6 +6612,12 @@ const connTypeSummary = computed(() =>
 .top-nav-item {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 6px 11px; margin-right: 2px;
+  /* 居中基准统一成"紧行盒"（min-height 保住原来的可点区域/悬停高度，约 6+21+6）：
+     原来文字用的是继承来的行盒（≈1.5 倍字号），图标用的是紧盒（line-height:1），
+     两个盒子等心对齐时**字形在行盒里并不居中**（字体上下留白不对称），
+     于是文字看着偏高、图标像没对齐（用户反馈）。两边都收紧后按字形居中才准。 */
+  min-height: 33px;
+  line-height: 1;
   /* 字号/图标走「设置 → 通用 → 界面尺寸」写的 CSS 变量（见 utils/appearance.js），
      没设过时用后面的默认值兜底 —— 大小与原来完全一致 */
   font-size: var(--dc-nav-fs, 14px); font-weight: 500; color: var(--dc-text);
