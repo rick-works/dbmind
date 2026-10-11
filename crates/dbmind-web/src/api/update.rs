@@ -444,6 +444,8 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 std::thread::sleep(Duration::from_secs(3));
                 let ok = launch_installer(&dest);
                 if ok {
+                    // 先把"装完删包"的助手挂起来，再让宿主退出：它脱离进程，能活过我们
+                    schedule_installer_cleanup(&dest);
                     // 稍等一下让安装器就位（Windows 是加载 NSIS、macOS 是挂载镜像），再让宿主
                     // **优雅退出**：安装器为腾出文件锁会强杀本进程，而强杀不走 RunEvent::Exit，
                     // 退出清场（结束 java 宿主）就不会执行 —— 那些 java 会变成孤儿留在后台。
@@ -1209,6 +1211,10 @@ hdiutil detach "$MNT" -quiet 2>/dev/null
 rmdir "$MNT" 2>/dev/null
 echo "已覆盖完成"
 
+# 更新包用完即删：不然「下载」目录里一版一个 dmg，几次更新就堆成一排（用户反馈）。
+# 只在**原地覆盖成功**这条路上删 —— 下面两条退回分支要把镜像留给用户自己拖，删了就没了
+rm -f "$DMG"
+
 # 4) 重新打开新版：用 -n 明起一个新实例（旧进程已确认退出，不会重复开），
 #    首次可能因 LaunchServices 还在收尾而失败，重试几次；全失败就退回打开镜像
 touch "$APP" 2>/dev/null
@@ -1247,6 +1253,43 @@ fn current_app_bundle() -> Option<std::path::PathBuf> {
         .find(|p| p.extension().map(|e| e == "app").unwrap_or(false))
         .map(|p| p.to_path_buf())
 }
+
+/// 装完之后**自动删掉更新包**：否则「下载」目录里一版一个安装包，几次更新就堆成一排
+/// （用户反馈的那张截图正是这样）。
+///
+/// 为什么必须是一个**脱离父进程的独立助手**：此刻安装包正被安装器占用（删不掉），而我们
+/// 下面马上就会让宿主优雅退出 —— 助手得活过我们，并且一直重试到文件解锁为止。
+/// 助手无窗口（CREATE_NO_WINDOW | DETACHED_PROCESS）、失败也不影响更新（最多留个包）。
+#[cfg(windows)]
+fn schedule_installer_cleanup(path: &std::path::Path) {
+    use std::os::windows::process::CommandExt;
+    // 路径里可能有单引号，按 PowerShell 的规则写成两个
+    let p = path.to_string_lossy().replace('\'', "''");
+    let script = format!(
+        "$p = '{p}'; for ($i = 0; $i -lt 180; $i++) {{ \
+           try {{ Remove-Item -LiteralPath $p -Force -ErrorAction Stop; exit 0 }} \
+           catch {{ Start-Sleep -Seconds 2 }} }}"
+    );
+    let mut cmd = std::process::Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        &script,
+    ]);
+    // 两个都要：CREATE_NO_WINDOW 不闪黑框；DETACHED_PROCESS 让助手活过本进程退出
+    cmd.creation_flags(0x0800_0000 | 0x0000_0008);
+    let _ = cmd.spawn();
+}
+
+/// 更新包清理（非 Windows）：
+///   · macOS 由安装脚本自己删（见上面的 SHELL 脚本）；
+///   · Linux 不动 —— AppImage 本身就是应用（删掉等于删掉用户刚下到的新版），
+///     deb 交给包管理器，我们无法确知它何时读完文件。
+#[cfg(not(windows))]
+fn schedule_installer_cleanup(_path: &std::path::Path) {}
 
 /// 拉起安装包（Linux：deb / AppImage 交给桌面环境；同样等返回、看退出码）
 #[cfg(all(unix, not(target_os = "macos")))]

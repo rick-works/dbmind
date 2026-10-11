@@ -1007,11 +1007,10 @@
         <span v-else-if="dlStatus === 'done'" class="upd-dl-ok">{{ t('update.dlDone') }}</span>
         <span v-else class="upd-dl-err">{{ dlError }}</span>
       </div>
-      <div v-if="dlStatus === 'done'" class="upd-dl-sub">{{ t('update.applyDone') }}</div>
-      <!-- 落地路径：万一自动打开被系统挡住（Windows 的 UAC / 杀软、macOS 的策略都可能拦），
-           这句话就是唯一的自救线索 —— 照着路径双击那个文件即可安装 -->
-      <div v-if="dlStatus === 'done' && dlInstaller" class="upd-dl-sub">{{ t('update.applyDonePath', { path: dlInstaller }) }}</div>
-      <div v-if="dlStatus === 'done' && dlVerified" class="upd-dl-sub">{{ t('update.dlVerified') }}</div>
+      <!-- 完成态**只说一句状态**（上面那行「下载完成，正在安装更新」）。
+           「会自动关闭/自动打开」「安装包存哪」这些已经挪到点「在线更新」时的确认弹窗里 ——
+           下载过程中的提示没必要在完成时再重复一遍（用户反馈）。
+           唯一留下的是下面这条**风险提示**：走了镜像又拿不到官方校验值时，必须说清它自证不了完整性。 -->
       <div v-if="dlStatus === 'done' && dlUnverified" class="upd-dl-sub">{{ t('update.dlUnverified') }}</div>
       <!-- 失败时给一句"下一步怎么办"，而不是只丢一段错误文本 -->
       <div v-if="dlStatus === 'failed'" class="upd-dl-sub">{{ t('update.dlFailTip') }}</div>
@@ -1078,7 +1077,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent, h } from 'vue'
 
 import { applyTaskSnapshot, finishExport } from '../../utils/useExportTask'
 import { useRoute, useRouter } from 'vue-router'
@@ -1176,15 +1175,12 @@ const dlVisible = ref(false)
 const dlStatus = ref('idle') // idle | running | done | failed
 const dlReceived = ref(0)
 const dlTotal = ref(0)
-// 安装包最终落地路径（后端算的，完成时才是有意义的值）：显示给用户，自动打开失败时他能自己去双击
-const dlInstaller = ref('')
 const dlSpeed = ref(0)
 const dlError = ref('')
 // 过程说明（换源 / 续传 / 第几次重试），来自后端 note —— 不是错误，画在进度条下方
 const dlNote = ref('')
 const dlUrl = ref('')
-// 下载完成后：是否用 GitHub 官方 sha256 校验过；走了镜像又没官方值时可自证性为 0，界面必须说清
-const dlVerified = ref(false)
+// 走了镜像又没官方 sha256 时可自证性为 0，界面必须说清（这条是风险提示，不随"完成态精简"去掉）
 const dlUnverified = ref(false)
 // 进度条下方那一行：已下载 / 速度 / 剩余时间（源由后端自动挑，界面不提供选择）
 const dlRunningText = computed(() => {
@@ -1250,11 +1246,17 @@ const closeUpdateDialog = (neverAgain) => {
 // 确认后**不再弹"选择保存位置"**（装个更新还要挑文件夹太啰嗦）：安装包固定落系统的「下载」目录
 // （由后端 resolve_dir 决定），想找它点弹窗里的「打开所在文件夹」。
 const doApplyUpdate = async () => {
+  // 两行短句、各自成段：用 h() 渲染而不是往字符串里塞换行 —— MessageBox 会把换行折成空格
+  const body = h('div', { class: 'upd-confirm-body' }, [
+    h('p', null, t('update.confirmLine1')),
+    h('p', null, t('update.confirmLine2'))
+  ])
   try {
-    await ElMessageBox.confirm(t('update.confirmBody'), t('update.dlTitle'), {
+    await ElMessageBox.confirm(body, t('update.dlTitle'), {
       confirmButtonText: t('update.confirmOk'),
       cancelButtonText: t('common.cancel'),
-      type: 'info'
+      type: 'info',
+      customClass: 'upd-confirm'
     })
   } catch {
     return // 点了取消：什么都不做，仍停在版本说明页
@@ -1277,7 +1279,6 @@ const startDownload = async (dir) => {
   dlError.value = ''
   dlNote.value = ''
   dlUrl.value = ''
-  dlVerified.value = false
   dlUnverified.value = false
   startProgressPolling()
   try {
@@ -1305,8 +1306,6 @@ const startProgressPolling = (fast = true) => {
       dlSpeed.value = p.speed || 0
       dlNote.value = p.note || ''
       dlUrl.value = p.url || ''
-      dlInstaller.value = p.installer || ''
-      dlVerified.value = !!p.verified
       dlUnverified.value = !!p.unverified
       if (p.status === 'done' || p.status === 'failed') {
         dlStatus.value = p.status
@@ -1361,7 +1360,6 @@ const checkUpdate = async () => {
         dlSpeed.value = p.speed || 0
         dlNote.value = p.note || ''
         dlUrl.value = p.url || ''
-        dlVerified.value = !!p.verified
         dlUnverified.value = !!p.unverified
         startProgressPolling()
         return
@@ -7403,6 +7401,24 @@ const connTypeSummary = computed(() =>
 </style>
 
 <style>
+/* 「在线更新」的确认框（customClass: upd-confirm）。
+   **必须放在全局块**：消息框是 Element 用 JS 创建再 teleport 到 body 的 —— 它不带本组件的
+   作用域属性，我们传进去那段 h() 也不是在渲染上下文里建的，放 scoped 里一条都命不中
+   （第一版就是这么写的，等于没生效）。
+   为什么不用默认样式：它按"危险操作确认"设计 —— 标题小、正文挤、按钮也小，看着像系统弹窗
+   而不是应用里的一步。这里按应用观感重画：标题加粗一档、正文 13.5px/1.85 分两段、
+   按钮统一 92×32；颜色全用主题变量，深色模式自动跟随 */
+.upd-confirm { border-radius: var(--dc-radius, 10px); padding: 18px 20px 14px; }
+.upd-confirm .el-message-box__header { padding: 0 0 10px; }
+.upd-confirm .el-message-box__title { font-size: 15px; font-weight: 600; color: var(--dc-text); }
+.upd-confirm .el-message-box__content { padding: 0; }
+.upd-confirm .el-message-box__status { font-size: 20px; }
+.upd-confirm-body { font-size: 13.5px; line-height: 1.85; color: var(--dc-text-mid, #666); }
+.upd-confirm-body p { margin: 0; }
+.upd-confirm .el-message-box__btns { padding-top: 16px; }
+.upd-confirm .el-message-box__btns .el-button { min-width: 92px; height: 32px; font-size: 13.5px; }
+.upd-confirm .el-message-box__btns .el-button + .el-button { margin-left: 10px; }
+
 /* 顶栏「数据」下拉菜单（teleport 到 body，需全局样式） */
 .dc-top-menu { min-width: 160px; }
 .dc-top-menu .el-dropdown-menu__item { min-height: 36px; }
