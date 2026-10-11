@@ -5000,7 +5000,13 @@ onBeforeUnmount(() => {
 .result-footer :deep(.el-pagination .el-pager li),
 .result-footer :deep(.el-pagination .btn-prev),
 .result-footer :deep(.el-pagination .btn-next),
-.result-footer :deep(.el-pagination .el-select__wrapper) { font-size: var(--grid-fs, 13px); }
+.result-footer :deep(.el-pagination .el-select__wrapper),
+/* 下拉里显示的那行文字、以及跳页输入框：Element 给它们各自写了字号，
+   只覆盖 wrapper / __jump 不够 —— 表现就是「200条/页」和跳页那个数字不跟着变（用户反馈） */
+.result-footer :deep(.el-pagination .el-select__selected-item),
+.result-footer :deep(.el-pagination .el-select__placeholder),
+.result-footer :deep(.el-pagination .el-input__wrapper),
+.result-footer :deep(.el-pagination .el-input__inner) { font-size: var(--grid-fs, 13px); }
 /* 总数统计中：紧贴分页器左侧，弱化显示（计数是后台补的，别抢注意力） */
 .count-pending {
   margin-left: auto; display: inline-flex; align-items: center; gap: 4px;
