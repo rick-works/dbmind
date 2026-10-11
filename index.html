@@ -704,9 +704,9 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>关闭询问修好了</b>：点过右上角 × 之后的「关闭 / 最小化到托盘」在三个平台都能用了 —— 此前两个按钮点了都没反应（壳自己的命令被 Tauri 的 ACL 挡住了，事件方向不受影响，所以弹窗照常出现）</li>
-            <li><b>在线更新改成一键静默升级</b>：点一次「立即更新」→ 它自己下载 → 静默安装 → 自动重启成新版，全程没有安装向导，安装目录不变、设置与连接都留着</li>
-            <li><b>macOS 更新后不用再手动放行</b>：安装时自动去掉「从网上下载」的隔离标记，也不再是"挂上镜像让你自己拖"</li>
+            <li><b>关闭询问修好了</b>：点「关闭」或「最小化到托盘」不再没反应</li>
+            <li><b>在线更新改成一键静默升级</b>：点一次就自动下载、安装、重启成新版，不再弹安装向导</li>
+            <li><b>macOS 更新后不再需要手动放行</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.12" target="_blank" rel="noopener">发布说明</a>
@@ -725,9 +725,9 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>「在线更新」修好了</b>：Windows 上不再弹「Windows 找不到文件 …setup.exe」（那是拉起安装器时路径被 cmd 拆坏了，文件其实好好躺在下载目录里），macOS 更新完会正常挂载安装镜像</li>
-            <li><b>更新完成时显示安装包保存路径</b>：万一自动打开被系统拦住（UAC、杀软、macOS 策略），照着路径双击那个文件也能装</li>
-            <li><b>拉起前先确认文件真的落地</b>：没落地就直说没落到哪，而不是拿一个不存在的路径去拉、让系统弹错</li>
+            <li><b>修好在线更新</b>：Windows 不再报「找不到文件」，macOS 能正常打开安装镜像</li>
+            <li><b>更新完成时显示安装包保存在哪，可手动双击安装</b></li>
+            <li><b>安装包没成功落地时会说清原因</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.11" target="_blank" rel="noopener">发布说明</a>
@@ -746,10 +746,9 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>关闭窗口前先问一句</b>：退出，还是最小化到托盘？三个系统同一套行为 —— 右上角 ×、Alt+F4、任务栏右键关闭、macOS 红点都会问。只在界面上拦自绘的那个 × 是不够的，其余途径会绕过询问直接退出</li>
-            <li><b>新增托盘图标</b>：左键点一下把窗口叫回来，右键菜单里有「显示主窗口 / 退出 DBmind」；最小化后应用与后台的数据库宿主继续运行，连接不断</li>
-            <li><b>回车默认落在「最小化到托盘」</b>：那是可逆的那个选择，误按一下不会丢工作现场；要退出就明确点「关闭」</li>
-            <li><b>顺带把出包流水线提速</b>（Rust 构建放宽并行度 + npm / maven 依赖缓存）：上一次 Windows 16.6 分钟、macOS Intel 18 分钟，往后应当明显缩短</li>
+            <li><b>关闭窗口前先问一句</b>：退出，还是最小化到托盘（三个系统一致）</li>
+            <li><b>新增托盘图标</b>：点一下把窗口叫回来，右键可退出</li>
+            <li><b>打包流水线提速（后续版本发布更快）</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.10" target="_blank" rel="noopener">发布说明</a>
@@ -768,9 +767,9 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>更新不再问你装到哪</b>：安装包固定落到系统的「下载」目录，点一下就开始下（Windows 上把「下载」改到别的盘、或被 OneDrive 接管，也能落对地方）</li>
-            <li><b>Windows 更新不再停在「已安装」那一页</b>：以前会问「先卸载 / 不卸载」且默认勾着「先卸载」（有清掉配置的风险）；现在一条进度条原地覆盖装完，连接与设置都留着，装完自动把新版拉起来</li>
-            <li><b>页签条清爽了</b>：只显示表名 / 对象名，「连接 · 库」收进悬浮提示 —— 鼠标停一下就看得见全路径</li>
+            <li><b>在线更新不再问你装到哪</b>：安装包固定存到系统「下载」目录</li>
+            <li><b>Windows 更新不再停在「已安装」页：原地覆盖，装完自动打开新版</b></li>
+            <li><b>页签只显示表名 / 对象名，连接与库名收进悬浮提示</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.9" target="_blank" rel="noopener">发布说明</a>
@@ -789,9 +788,10 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>在线更新按你的系统挑安装包</b>：以前苹果版点「在线更新」下回来的是一个 exe（装了也起不来）；现在 macOS 拿 dmg、Linux 拿 deb、Windows 拿 setup.exe，架构也不会拿错</li>
-            <li><b>对齐口径重新统一</b>：NoSQL 预览也和另外两个网格用同一套规则（数字 / 日期靠右、布尔居中、文本靠左）；NULL 跟同列真值对齐，不再出现「数字靠右、NULL 靠左」</li>
-            <li><b>深色模式与 macOS 安装页</b>：深色下「有未保存的修改」提示条不再亮成一片浅黄；DMG 窗口居中、说明书那行文件名不再被窗口裁掉</li>
+            <li><b>在线更新按系统挑安装包</b>：macOS 拿 dmg、Linux 拿 deb、Windows 拿 setup.exe</li>
+            <li><b>NoSQL 预览与结果表格对齐规则统一，NULL 跟着同列真值对齐</b></li>
+            <li><b>深色模式下「有未保存的修改」提示条不再过亮</b></li>
+            <li><b>macOS 安装窗口居中，说明书那行文件名不再被裁掉</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.8" target="_blank" rel="noopener">发布说明</a>
@@ -810,8 +810,8 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>DMG 里多了一份说明书</b>：macOS 拦下未公证的 App 时，那份「首次打开请看这里」就在同一个窗口里，写清三步放行（点「好」→ 系统设置 →「隐私与安全性」→「仍要打开」）</li>
-            <li><b>一次都不弹的两条做法</b>：用 curl 下载（浏览器才会给文件打"从网上下载"的标记），或用 Homebrew 的 <code>--no-quarantine</code></li>
+            <li><b>macOS 安装包里多了一份「首次打开请看这里」，写清三步放行</b></li>
+            <li><b>两条完全不弹提示的安装方式</b>：curl 下载、Homebrew --no-quarantine</li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.7" target="_blank" rel="noopener">发布说明</a>
@@ -830,8 +830,8 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>macOS 窗口形态定稿</b>：红绿灯与菜单同一行，按系统那条 28pt 标题栏的基准对齐</li>
-            <li><b>全屏不再空一块</b>：左上角不再留着那片空白</li>
+            <li><b>macOS 窗口形态定稿</b>：红绿灯与菜单同一行</li>
+            <li><b>全屏时左上角不再空一块</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.6" target="_blank" rel="noopener">发布说明</a>
@@ -850,8 +850,8 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>macOS 的窗口交给系统管</b>：红绿灯回到它该在的位置（改用系统标题栏）</li>
-            <li><b>全屏不留白</b>：撤掉左侧那一片空白</li>
+            <li><b>macOS 窗口交回系统管理，红绿灯回到正常位置</b></li>
+            <li><b>全屏不再留白</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.5" target="_blank" rel="noopener">发布说明</a>
@@ -870,8 +870,8 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>DMG 改成两个大图标</b>：图标尺寸 128，拖一下就能装（不再是密密的小图标）</li>
-            <li><b>窗口恢复系统红绿灯</b>：上一版引入的「没有标题栏、也关不掉」一并修掉</li>
+            <li><b>macOS 安装镜像改成两个大图标，拖一下就能装</b></li>
+            <li><b>恢复系统红绿灯，修掉「没有标题栏也关不掉」</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.4" target="_blank" rel="noopener">发布说明</a>
@@ -890,8 +890,7 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>只为一件事</b>：把 macOS 的 DMG 安装页修成正经的「拖进应用程序」—— App 里的代码一行没动</li>
-            <li>做法：不用 Tauri 自带的 DMG 打包（CI 上会跳过设置窗口布局的步骤），改用 dmgbuild 自己写 <code>.DS_Store</code></li>
+            <li><b>重做 macOS 安装界面</b>：正经的「拖进应用程序」（App 代码未动）</li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.3" target="_blank" rel="noopener">发布说明</a>
@@ -910,8 +909,8 @@
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
-            <li><b>修掉「打开是一片黑」</b>：打包进去的资源没被找到（web / agents / JRE 改为按平台资源根解析）</li>
-            <li><b>DMG 安装页</b>：改用 dmgbuild 重做，绕开 CI 上 Finder 自动化不可靠、界面很朴素的问题</li>
+            <li><b>修掉 macOS 打开一片黑</b>：打包进去的资源没找到</li>
+            <li><b>macOS 安装界面重做</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.2" target="_blank" rel="noopener">发布说明</a>
@@ -930,8 +929,8 @@
             <span class="rel-date">2026-10-10</span>
           </div>
           <ul class="rel-notes">
-            <li><b>修掉 macOS 双击就打不开</b>：原先链到 CI 机器上 Homebrew 的 <code>libssl.3.dylib</code>（用户机器上没有）；现在让 OpenSSL 静态链进二进制，并加了 CI 守卫盯着别再退回去</li>
-            <li><b>macOS 图标与 DMG</b>：图标按 Apple 的网格留白重做（不再比邻居大一圈）；DMG 明确「拖进应用程序」的布局</li>
+            <li><b>修掉 macOS 双击打不开</b>：不再依赖系统里没有的库</li>
+            <li><b>macOS 图标按 Apple 规范重做</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.1" target="_blank" rel="noopener">发布说明</a>
@@ -950,9 +949,9 @@
             <span class="rel-date">2026-10-10</span>
           </div>
           <ul class="rel-notes">
-            <li><b>驱动不用再挑镜像</b>：没设置时按「阿里云 → 华为云 → 腾讯云 → Maven 中心」依次试，某个源慢或不通就自动换下一个（自己设过镜像的仍只走你设的那个）</li>
-            <li><b>宽表横向滚动更跟手</b>：结果表格与 NoSQL 预览做了列窗口化，只渲染可视区那几列</li>
-            <li><b>表头一眼可辨</b>：底色拉开 + 压边线 + 滚动时轻微浮起；表头、数据格与资源树的光标也统一成手型</li>
+            <li><b>驱动下载不用再挑镜像</b>：自动在国内几个源之间试</li>
+            <li><b>宽表横向滚动更流畅（只渲染可见列）</b></li>
+            <li><b>表头更清晰，光标统一成手型</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.0" target="_blank" rel="noopener">发布说明</a>
@@ -970,10 +969,9 @@
             <span class="rel-date">2026-10-10</span>
           </div>
           <ul class="rel-notes">
-            <li><b>修掉三个表格编辑的坑</b>：双击空格格不再被悄悄改成 NULL（空白值原样保留）；双击后光标与选区不再跑到隔壁格；把值改回原样、或点撤销之后，不再仍旧显示「有未保存的修改」</li>
-            <li><b>修掉一处会让整块界面卡死的崩溃</b>：单元格文本上的渲染优化与「显示文本 ↔ 换成编辑框」的分支切换冲突，会让补丁抛 <code>insertBefore</code> 错，之后所有更新都失效 —— 双击几次后界面像卡住、连关页签都没反应。已摘掉那个优化</li>
-            <li><b>大表更跟手</b>：换渲染窗口改为按 120px 一块（同一块内滚动不再重建任何格子，重渲染次数实测降到约 1/5）；鼠标移动每帧最多处理一次；切页签后重新解析滚动容器与可视窗口</li>
-            <li><b>结果表格行高默认 22 → 26</b>：点选更舒服；老版本里存过 22 的会自动升一次，自己改过的值不再被碰</li>
+            <li><b>修掉三个表格编辑问题（空格被改成 NULL、双击后光标跑位、改回原样仍显示未保存）</b></li>
+            <li><b>修掉一处会让界面卡死的崩溃</b></li>
+            <li><b>大表滚动更流畅；结果表格默认行高 22 → 26</b></li>
           </ul>
         </div>
       </article>
@@ -988,14 +986,13 @@
             <span class="rel-date">2026-10-10</span>
           </div>
           <ul class="rel-notes">
-            <li><b>不开代理也能更新了</b>：直连 GitHub 下载安装包在国内经常完全不通（实测 21 秒超时、0 字节，而取版本信息却只要 1.1 秒）—— 现在直连不通就自动改用国内镜像，并在下载完成后<b>用 GitHub 官方公布的校验值核对完整性</b>，对不上直接丢弃重下。镜像替换不了这个校验值，所以既不逼你开代理，也不用担心安装包被中途换掉</li>
-            <li><b>断了能接着下</b>：断网、切 WiFi 之后从已下载的部分续传，进度窗里写明「第 2 次重试（已下载 12.3 MB，接着下）」以及当前从哪个源下载；失败窗新增「重试」，<b>不用再关掉软件重开</b>（以前一次失败后，每次点更新图标都弹回同一个报错页）</li>
-            <li><b>进度提示不再误导</b>：只有真的在后台下载时才显示「查看下载进度」（以前一打开软件就显示，点进去却是空进度）</li>
-            <li><b>驱动管理</b>：设置里的「驱动下载」改名「驱动管理」，<b>顶栏也加了同名入口</b>一键直达 —— 驱动装没装、缺哪些、换镜像源、手动上传都在一页</li>
-            <li><b>生产保护默认开启</b>：标注为生产的库，改动数据的操作（执行脚本 / 改结构 / 编辑数据 / 导入同步还原）默认一律拦下，查询不受影响；开发、测试与未标注的库照常。需要临时改生产数据时，在「设置 → 安全与会话」里关掉即可</li>
-            <li><b>下载源不用你挑、速度是实时的</b>：软件自己并发测速，从直连 / 国内镜像 / 不走代理几条路里选最快的那条，进度窗只留进度条与已下载、速度、剩余时间；连接变慢会自动断开重连并续传，上次没下完的残片若不可用会自动丢弃重下</li>
-            <li><b>另修两处</b>：结果表格框选数字格恢复「求和 / 均值 / 最值」（ClickHouse 的 <code>UInt64</code>、<code>Nullable(Decimal(18, 2))</code> 这类类型名以前认不出来，被当成文本列）；界面里所有外部链接 —— 含「前往下载页」与 AI 回答里的链接 —— 改为交给系统默认浏览器打开，以前在桌面壳里点了没反应</li>
-            <li><b>滚动更跟手、下载不再"没反应"</b>：结果表格拖滚动条 / 快速上下滚不再闪白条（虚拟滚动原来把「该显示哪几行」放到下一帧算，浏览器先按新位置把旧内容画了一遍）；在线更新改为「探通的下载源排在前面」，不会再退回原顺序先撞已知不通的直连干等十几秒，测速与连接期间界面会说明正在做什么</li>
+            <li><b>不开代理也能更新</b>：直连不通自动走国内镜像，并用官方校验值核对完整性</li>
+            <li><b>断网或切换网络后能接着下，失败可直接重试</b></li>
+            <li><b>驱动管理独立入口</b>：装没装、缺哪些、换源、手动上传都在一页</li>
+            <li><b>生产库保护默认开启</b>：改数据的操作默认拦下（查询不受影响）</li>
+            <li><b>下载源自动测速选最快，显示速度与剩余时间</b></li>
+            <li><b>结果表格框选数字格恢复求和 / 均值 / 最值；外部链接改为系统浏览器打开</b></li>
+            <li><b>结果表格滚动不再闪白条</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.1.0" target="_blank" rel="noopener">发布说明</a>
@@ -1014,10 +1011,8 @@
             <span class="rel-date">2026-10-09</span>
           </div>
           <ul class="rel-notes">
-            <li><b>卡住的传输任务不再"悄悄挂住"</b>：以前它只在「每读完一页、每写完一批」的空隙里看一眼你有没有点停止，一旦停在「等对方回话」那一步（网络切换、对方断开之后最常见）就永远轮不到检查 —— 于是任务跑了 21 分钟、界面一直显示「仍在后台收尾」，关窗口和点停止都没用，其实早就走不下去了</li>
-            <li><b>现在卡住会如实告诉你</b>：所有等待都有明确上限，超时后任务自己结束，并说明<b>具体卡在哪</b>，例如「下游 11 分钟没有取走数据，判定连接可能已断开」，而不是只丢一句"失败"；已经写进库里的数据会保留、不回滚，该快的也没变慢</li>
-            <li><b>兜底保护</b>：万一还有没照顾到的情况，30 分钟后也会自动结束，并在日志里记下它停在哪一步方便反馈</li>
-            <li><b>三平台、各形态齐全</b>：Windows（安装向导 / MSI / <b>免安装 zip</b>）、macOS（Apple 芯片与 Intel 双 dmg）、Linux（deb / <b>免安装 AppImage</b>）—— 同一套流水线、同一份源码，包内自带精简 Java 运行时，目标机器不必另装 Java</li>
+            <li><b>卡住的传输任务不再「悄悄挂住」：超时会结束，并说清卡在哪</b></li>
+            <li><b>兜底</b>：30 分钟自动结束，日志记下停在哪一步</li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.4" target="_blank" rel="noopener">发布说明</a>
@@ -1036,11 +1031,10 @@
             <span class="rel-date">2026-10-09</span>
           </div>
           <ul class="rel-notes">
-            <li><b>点开一张两千多行的表不再「执行失败」</b>：程序为了知道「还有没有下一页」，取数时会多要一条，而 ClickHouse 把它理解成「超过就整条报错」—— 表里行数一多，点开就是一条失败。现在改成「取到上限就停下并提示已截断」，和 MySQL / Doris / SQL Server 表现一致</li>
-            <li><b>另一个莫名其妙的报错也一起消失了</b>：提示「读取布尔值失败」的那种报错其实是同一处问题的另一面 —— 以前为了绕开限制干脆不设上限，服务端于是把整张表（实测 237 万行）一起推下来，读的过程就出错了；现在上限照设，数据也少拉了很多</li>
-            <li><b>总数不再显示 -1</b>：ClickHouse 返回的计数是小数，程序以前只认整数，取不到就等于「统计不出来」，界面上便永远看不到总条数（「总数统计中…」一闪就没了）；现在各种数字形态都认，与左侧树的表行数、质量规则的违规数口径一致</li>
-            <li><b>选中一段 SQL 点「格式化」不再报错</b>：以前会弹 <code>t is not a function</code>；「大写 / 小写 / 单行」「复制为 IN 列表」「复制为单行」等受同一问题影响的 5 处一并修好</li>
-            <li><b>关键字「前换行」不再多断一行</b>：<code>FROM</code> 选「前换行」时现在得到 <code>FROM users u</code>，而不是关键字独占一行后再把内容挪到下一行缩进</li>
+            <li><b>修掉 ClickHouse 大表「执行失败」和「读取布尔值失败」</b></li>
+            <li><b>总数不再显示 -1</b></li>
+            <li><b>选中 SQL 点「格式化」不再报错</b></li>
+            <li><b>关键字「前换行」不再多断一行</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.3" target="_blank" rel="noopener">发布说明</a>
@@ -1059,11 +1053,11 @@
             <span class="rel-date">2026-10-07</span>
           </div>
           <ul class="rel-notes">
-            <li><b>配了代理也能下载更新</b>：自动识别系统代理（Windows / macOS / Linux 都支持）—— 以前在代理环境下点更新就是一直下载不动；现在会自动走代理，探测不到可用代理时也不会把其它请求一起拖住</li>
-            <li><b>下载可以放后台</b>：关掉进度窗，下载继续进行，顶栏更新图标显示任务角标，点一下随时调回进度窗；下载完自动拉起安装器</li>
-            <li><b>更新说明能正常排版</b>：表格与列表都按原样显示，内容太长会折叠成「查看完整更新说明 →」；顺带修掉「关于」页版本号与实际安装包不一致的问题</li>
-            <li><b>装机反馈修复</b>：Doris 连不上（自带运行环境缺字符集模块）已修，Doris 驱动换成与 MySQL 同一版本；启动与连接时不再闪黑窗</li>
-            <li><b>首页 KPI 面板</b>：空态首页顶部恢复「总连接数 / 已连接数 / 连接类型」，一眼看清家底；驱动下载也显示实时进度（慢镜像下不再像卡死）</li>
+            <li><b>配了代理也能下载更新（自动识别系统代理）</b></li>
+            <li><b>下载可放后台，顶栏图标显示进度</b></li>
+            <li><b>更新说明排版修复；「关于」页版本号与安装包一致</b></li>
+            <li><b>修掉 Doris 连不上、启动与连接时闪黑窗</b></li>
+            <li><b>首页恢复 KPI（总连接数 / 已连接数 / 连接类型）；驱动下载显示实时进度</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.2" target="_blank" rel="noopener">发布说明</a>
@@ -1082,9 +1076,10 @@
             <span class="rel-date">2026-10-06</span>
           </div>
           <ul class="rel-notes">
-            <li><b>审计日志增强</b>：按类别筛选（查询 / 数据 / 表操作 / 事务 / 其他执行 / AI / 失败）、一键复制 SQL，总条数与页数都是准数</li>
-            <li><b>日志不再自动清理</b>：只在你点「清空日志」时才清空（执行历史 + AI 调用都算在内）—— 以前启动和执行时会悄悄丢掉老记录</li>
-            <li><b>设置界面细节修复</b>：弹窗高度跟随窗口、日志列表内滚动、分页条常驻可见、窄窗口不再裁内容；「关于」页新增目录说明</li>
+            <li><b>审计日志</b>：按类别筛选、一键复制 SQL，条数与页数准确</li>
+            <li><b>日志不再自动清理，只在你点「清空日志」时清空</b></li>
+            <li><b>设置界面细节修复（弹窗高度、列表内滚动、分页常驻）</b></li>
+            <li><b>「关于」页新增目录说明</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.1" target="_blank" rel="noopener">发布说明</a>
@@ -1103,10 +1098,10 @@
             <span class="rel-date">2026-09-28</span>
           </div>
           <ul class="rel-notes">
-            <li><b>AI 加持</b>：SQL 解释 / 优化建议 / 报错自动修复 / 性能诊断 / 智能问答，结合你的库结构给出能落地的建议</li>
-            <li><b>一个工作台管住 17+ 种数据源</b>：MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / 达梦 / 人大金仓 等</li>
-            <li><b>事务模式与结果集直接编辑</b>：改数据可自查、可回滚，确认后再提交；过期改动自动作废，不会改错行</li>
-            <li><b>智能 SQL 编辑器与超大结果集</b>：补全 / 格式化 / 分块执行 / 片段库 / 模板变量；上千万行的表也能一秒见数</li>
+            <li><b>AI 加持</b>：SQL 解释 / 优化建议 / 报错修复 / 性能诊断 / 智能问答</li>
+            <li><b>一个工作台管住 17+ 种数据源（MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / 达梦 / 人大金仓 等）</b></li>
+            <li><b>事务模式与结果集直接编辑</b>：改完可自查、可回滚</li>
+            <li><b>智能 SQL 编辑器与超大结果集：上千万行的表也能一秒见数</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.0.0" target="_blank" rel="noopener">发布说明</a>
