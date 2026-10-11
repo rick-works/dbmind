@@ -118,6 +118,16 @@ for (const [file, noteLines] of Object.entries(notes)) {
   })
 }
 
+// 3) 官网：版本区要跟着加条目（源在主仓 website/index.html，发布用 scripts/publish-site.ps1）
+//    这一步曾经整段被漏掉 —— 官网一连落后 8 个版本（用户反馈"官网版本内容都没更新"），
+//    所以这里做一次检查并明确提示，而不是只在文档里写一句。
+const site = path.join(ROOT, 'website/index.html')
+if (fs.existsSync(site) && !fs.readFileSync(site, 'utf8').includes(`>v${version}<`)) {
+  console.log(`\n注意：官网 website/index.html 里还没出现 v${version} —— 记得`)
+  console.log('      ① 在版本区顶部加一条（并把「最新」标从上一版挪过来）；')
+  console.log('      ② 跑 scripts\\publish-site.ps1 推到 gh-pages，线上才会更新。')
+}
+
 console.log(`${dryRun ? '[dry-run] 将修改' : '已修改'}：${version}（${level}，${date}）`)
 if (changed.length) changed.forEach((f) => console.log('  · ' + f))
 console.log('\n接下来把两处占位说明换成真实更新要点：')

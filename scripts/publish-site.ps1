@@ -1,0 +1,69 @@
+﻿<#
+把主仓的 website/index.html 发布到 gh-pages 分支（GitHub Pages 的源）。
+
+为什么需要它：官网的源原先**只活在 gh-pages 分支里** —— 主仓看不见它，于是每次发版都容易
+漏更新（用户原话："之前你官网版本内容都没更新"，一漏就是 8 个版本）。
+现在 website/ 纳入主仓跟踪，发版时改的是主仓那份，再用这个脚本推上 gh-pages，
+改动就有 diff、能被 review；release.mjs 里还会检查"新版本的条目加了没"。
+
+用法：
+  powershell -ExecutionPolicy Bypass -File scripts\publish-site.ps1
+  powershell -ExecutionPolicy Bypass -File scripts\publish-site.ps1 -Message "官网：..."
+
+凭据：优先 $env:GH_TOKEN，其次 `gh auth token`。
+#>
+[CmdletBinding()]
+param(
+    [string]$Message = '官网：同步 website/index.html',
+    [string]$WorkDir = (Join-Path $env:TEMP 'dbmind-gh-pages')
+)
+
+$ErrorActionPreference = 'Stop'
+$root = Split-Path -Parent $PSScriptRoot
+Set-Location $root
+
+$src = Join-Path $root 'website\index.html'
+if (-not (Test-Path $src)) { throw "没找到官网源文件：$src" }
+
+# ---- 准备 gh-pages 工作树 ----
+# 用 worktree 而不是 checkout：不切换当前分支，不会打断手头的改动；已存在就复用。
+$listed = (git worktree list) -join "`n"
+if ($listed -notmatch [regex]::Escape($WorkDir)) {
+    if (Test-Path $WorkDir) { git worktree remove $WorkDir --force 2>&1 | Out-Null }
+    git worktree add $WorkDir gh-pages 2>&1 | Out-Null
+}
+$dest = Join-Path $WorkDir 'index.html'
+if (-not (Test-Path $dest)) { throw "工作树里没有 index.html：$dest" }
+
+# 只换 index.html；图片、sponsors.js、.nojekyll 不动
+Copy-Item $src $dest -Force
+
+# ---- 没改动就什么都不做 ----
+# 少了这道判断，重复跑会在下面的 commit 上抛错（"nothing to commit" 退出码非 0，
+# 而 $ErrorActionPreference='Stop' 会把它当异常）
+$pending = (git -C $WorkDir status --porcelain) -join "`n"
+if ($pending -notmatch 'index\.html') {
+    Write-Host '官网内容无变化，无需推送' -ForegroundColor Green
+    exit 0
+}
+git -C $WorkDir add index.html
+git -C $WorkDir commit -q -m $Message
+Write-Host ('已提交：' + ((git -C $WorkDir log --oneline -1) -join ''))
+
+# ---- 推送（github 在国内时通时断，重试）----
+$tok = $env:GH_TOKEN
+if (-not $tok) {
+    try { $tok = (& gh auth token 2>$null | Select-Object -First 1).Trim() } catch { $tok = '' }
+}
+if (-not $tok) { throw '没有可用的 GitHub 凭据：先设 $env:GH_TOKEN，或执行 gh auth login' }
+$pushUrl = "https://rick-works:$tok@github.com/rick-works/dbmind.git"
+$pushed = $false
+for ($k = 1; $k -le 8; $k++) {
+    & git -C $WorkDir -c http.proxy= -c https.proxy= push $pushUrl refs/heads/gh-pages:refs/heads/gh-pages 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) { $pushed = $true; Write-Host ("  已推送 gh-pages（第 $k 次）") -ForegroundColor Green; break }
+    Write-Host ("  第 $k 次推送失败（github 时通时断），重试…") -ForegroundColor Yellow
+    Start-Sleep -Seconds 12
+}
+if (-not $pushed) { throw '推送失败：本地 gh-pages 已提交，稍后重跑本脚本即可' }
+
+Write-Host '完成。GitHub Pages 会在几十秒内重新构建。' -ForegroundColor Green
