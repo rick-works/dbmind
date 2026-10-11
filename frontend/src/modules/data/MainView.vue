@@ -999,7 +999,7 @@
       <el-progress
         :percentage="dlTotal > 0 ? Math.min(100, Math.round((dlReceived / dlTotal) * 100)) : 0"
         :status="dlStatus === 'failed' ? 'exception' : dlStatus === 'done' ? 'success' : undefined"
-        :stroke-width="16"
+        :stroke-width="10"
         :text-inside="true"
       />
       <div class="upd-dl-stats">
@@ -1207,8 +1207,17 @@ const dlEtaText = computed(() => {
 // 弹窗只放「更新摘要」：Release 全文动辄几千字，整篇塞进弹窗会把弹窗撑满屏、
 // 还要滚动才看得到按钮。这里截取开头一小段 + 给「查看完整更新说明」链接。
 const UPDATE_NOTES_LIMIT = 320
+// Release 正文是给 GitHub 页面看的，除了更新要点还捎带两样在应用里没用的东西：
+//   ① `## 更新说明` 这个小标题 —— 弹窗上方那句"发现新版本…，更新内容："已经说了，重复；
+//   ② `## 安装包` 那张表（哪个文件适合谁、多大）—— 又长又占地方，还会把弹窗撑到要滚动。
+// 先摘掉再截断，否则那 320 字额度会被表格吃掉，要点还没显示完就被截了。
+const stripReleaseExtras = (s) => String(s || '')
+  .replace(/^##\s*更新说明\s*$/m, '')
+  .split(/^##\s*(安装包|Assets|Downloads|Packages)\s*$/m)[0]
 const showUpdateDialog = (r, isAuto) => {
-  const raw = String(r.notes || '')
+  // 先 trim 再比长度：否则结尾的换行/空白会让下面判成"被截断了"，
+  // 于是明明一条要点都没漏，却白挂一个「查看完整更新说明」链接
+  const raw = stripReleaseExtras(r.notes).trim()
   let cut = raw.slice(0, UPDATE_NOTES_LIMIT)
   // 切在段落边界（空行），避免半句话 / 半截表格
   const br = cut.lastIndexOf('\n\n')
@@ -7314,6 +7323,9 @@ const connTypeSummary = computed(() =>
 .upd-dir-icon { color: var(--dc-text-dim, #999); font-size: 15px; }
 .upd-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
 .upd-dl-body { padding: 10px 8px 6px; }
+/* 进度条做细一点（原来是 16px，看着笨重）。条内的百分比要跟着调小、行高压到条高，
+   否则细条里塞 12px 的字会顶出来 */
+.upd-dl :deep(.el-progress-bar__innerText) { font-size: 10px; line-height: 10px; }
 /* 进度条与文字之间留白大一点，别挤在一起；百分比在条内，视线不用来回跳 */
 .upd-dl-stats { margin-top: 18px; font-size: 13px; color: var(--dc-text-mid, #666); text-align: center; }
 .upd-dl-ok { color: var(--el-color-success, #67c23a); }
