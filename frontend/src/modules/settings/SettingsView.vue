@@ -79,8 +79,9 @@
               这三项都是"微调"，上下限刻意收窄，避免把界面搞坏。 -->
           <div class="panel-title topmenu-title">{{ $t('settings.appearance.title') }}</div>
           <div class="panel-desc">{{ $t('settings.appearance.desc') }}</div>
-          <!-- 170px：装得下「顶栏菜单文字（含图标）」这种较长标签，不然会折成两行 -->
-          <el-form label-width="170px" @submit.prevent>
+          <!-- 200px：装得下「顶栏菜单文字（含图标）」这种较长标签（11 个汉字 ≈156px + 内边距）；
+               再加 .appearance-form 里的 nowrap，保证任何宽度下都不折行 -->
+          <el-form label-width="200px" class="appearance-form" @submit.prevent>
             <el-form-item :label="$t('settings.appearance.navFont')">
               <el-input-number v-model="appearance.navFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />
               <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
@@ -2470,6 +2471,10 @@ watch(visible, (v) => {
 }
 /* 空规则提示：整格居中（占满一行的单元格，靠左会像"表格少了一列"） */
 .fmt-tbl-empty { font-size: 12px; color: var(--dc-text-dim); background: var(--dc-bg-code); text-align: center; }
+/* 「通用 → 界面尺寸」表单：标签一律不换行。
+   标签是右边距对齐到输入框的，长一点会被折成两行（「顶栏菜单文字（含图标）」就被折过），
+   加宽 label-width 之外再显式 nowrap 兜住 —— 换行比溢出难看得多。 */
+.appearance-form :deep(.el-form-item__label) { white-space: nowrap; }
 .fmt-rule-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; }
 .fmt-preview {
   background: var(--dc-bg-code); border: 1px solid var(--dc-border); border-radius: 10px;
