@@ -439,27 +439,15 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                     ));
                     return;
                 }
-                // 留出读提示的时间再开装。安装器一起来就会把本进程关掉，提示一闪而过的话用户会以为
-                // "点了没反应"（v1.2.11 那个"关闭询问失效"就是这么被误读的）。
-                std::thread::sleep(Duration::from_secs(3));
-                let ok = launch_installer(&dest);
-                if ok {
-                    // 先把"装完删包"的助手挂起来，再让宿主退出：它脱离进程，能活过我们
-                    schedule_installer_cleanup(&dest);
-                    // 稍等一下让安装器就位（Windows 是加载 NSIS、macOS 是挂载镜像），再让宿主
-                    // **优雅退出**：安装器为腾出文件锁会强杀本进程，而强杀不走 RunEvent::Exit，
-                    // 退出清场（结束 java 宿主）就不会执行 —— 那些 java 会变成孤儿留在后台。
-                    std::thread::sleep(Duration::from_millis(1500));
-                    notify_install_hook();
-                } else {
-                    let mut p = cell.lock().unwrap();
-                    p.status = "failed".into();
-                    // 失败文案**必须带路径**：自动拉起被系统挡住时，用户双击这个文件就能自己装 ——
-                    // 这才是能真正解决问题的一句话（原话只说"请手动运行它"，却没说清是哪个文件）。
-                    p.error = Some(format!(
-                        "安装包已下载到 {installer}，但自动启动被系统拒绝 —— 双击这个文件即可安装"
-                    ));
-                }
+                // 到这里**停在"已下载、等你确认"**：不再自动开装。
+                // "点了更新就该立刻装上"这个假设在慢网下并不成立 —— 下载可能横跨十几分钟，
+                // 用户可能在忙别的、或想把包留到稍后再装。所以由前端在下载完成后给一个
+                // 「现在更新」按钮，确认后才调 POST /api/update/install（见下面的 install）。
+                tracing::info!(
+                    target: "dbmind::update",
+                    installer = %installer,
+                    "安装包已就绪，等用户确认后再安装"
+                );
             }
             Err(e) => {
                 let mut p = cell.lock().unwrap();
@@ -939,32 +927,56 @@ fn download_with_progress(
         p.note = None;
         p.url = Some(inst.url.clone());
     }
-    // 每个源的报错里常带着几百字符的签名 URL，全量拼进界面就是一堵墙 —— 只留前两条、各截断。
-    let brief: Vec<String> = errs
-        .iter()
-        .take(2)
-        .map(|e| {
-            let one = e.split_whitespace().collect::<Vec<_>>().join(" ");
-            if one.chars().count() > 120 {
-                one.chars().take(120).collect::<String>() + "…"
-            } else {
-                one
-            }
-        })
-        .collect();
-    let more = if errs.len() > brief.len() {
-        format!("（另有 {} 个下载源也失败）", errs.len() - brief.len())
-    } else {
-        String::new()
-    };
+    // 失败文案**只留一句**：源报错里常带几百字符的签名 URL，原样拼出来是一堵墙
+    //（用户反馈："失败的文案也简化下"）。细节不丢 —— 每条源的报错上面都 tracing::warn 过，
+    // 排查看日志；界面这边只需要一句话 + 一个可操作的下一步。
+    let _ = RELEASE_PAGE; // 发布页地址仍留给"复制下载链接"那条路（见 progress 的 url 字段）
     Err(DbMindError::new(
         ErrorCode::Internal,
         format!(
-            "下载失败：{}{more}。\n可以点「重试」再来一次（已下载的部分会保留）；\
-             或到发布页手动下载：{RELEASE_PAGE}",
-            brief.join("；")
+            "下载失败（{} 个下载源都没成功）。可以点「重试」继续，已下载的部分会保留",
+            errs.len()
         ),
     ))
+}
+
+// ---------- POST /api/update/install —— 用户点了「现在更新」才真正开装 ----------
+
+/// 把"下载"和"安装"拆成两步的理由：下载可以在后台慢慢跑（窗口关了也继续），
+/// 而"什么时候关掉应用去装"该由用户决定 —— 所以下载完成后不再自动装，等这个接口。
+pub async fn install() -> Json<Value> {
+    let (path, status) = {
+        let p = progress_cell().lock().unwrap();
+        (p.installer.clone(), p.status.clone())
+    };
+    let Some(path) = path else {
+        return Json(json!({ "success": false, "message": "还没有下载好的安装包" }));
+    };
+    if status != "done" {
+        return Json(json!({ "success": false, "message": "安装包还没下载完成" }));
+    }
+    let dest = std::path::PathBuf::from(&path);
+    if !dest.is_file() {
+        return Json(json!({ "success": false, "message": format!("安装包不在了：{path}") }));
+    }
+    if !launch_installer(&dest) {
+        // 自动拉起被系统挡住（Windows 的 UAC / 杀软、macOS 的策略都可能拦）时，
+        // **路径就是唯一的自救线索** —— 照着它双击那个文件即可安装。
+        return Json(json!({
+            "success": false,
+            "message": format!("安装包已下载到 {path}，但自动启动被系统拒绝 —— 双击这个文件即可安装")
+        }));
+    }
+    // 先把"装完删包"的助手挂起来（它脱离本进程，能活过我们退出），再让宿主**优雅退出**：
+    // 安装器为腾出文件锁会强杀本进程，而强杀不走 RunEvent::Exit，退出清场（结束 java 宿主）
+    // 就不会执行 —— 那些 java 会变成孤儿留在后台。
+    schedule_installer_cleanup(&dest);
+    std::thread::spawn(move || {
+        // 留一点时间让上面的响应回到前端（前端据此把界面切到"正在安装"）
+        std::thread::sleep(Duration::from_millis(1200));
+        notify_install_hook();
+    });
+    Json(json!({ "success": true }))
 }
 
 /// 下**一次**（某个源的一次尝试）：续传偏移、进度上报、慢速判定都在这里。

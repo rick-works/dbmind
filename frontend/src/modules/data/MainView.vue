@@ -1026,8 +1026,8 @@
            下载过程中的提示没必要在完成时再重复一遍（用户反馈）。
            唯一留下的是下面这条**风险提示**：走了镜像又拿不到官方校验值时，必须说清它自证不了完整性。 -->
       <div v-if="dlStatus === 'done' && dlUnverified" class="upd-dl-sub">{{ t('update.dlUnverified') }}</div>
-      <!-- 失败时给一句"下一步怎么办"，而不是只丢一段错误文本 -->
-      <div v-if="dlStatus === 'failed'" class="upd-dl-sub">{{ t('update.dlFailTip') }}</div>
+      <!-- 失败时不再另加一行"下一步怎么办"：后端那句话本身就是一句简短的可操作提示
+           （"下载失败（N 个下载源都没成功）。可以点「重试」继续…"），加一行反而更啰嗦 -->
       <!-- 过程说明（自动选源 / 续传 / 重连 / 第几次重试）：只在下进行中才有意义 -->
       <div v-if="dlStatus === 'running' && dlNote" class="upd-dl-sub">{{ dlNote }}</div>
     </div>
@@ -1038,6 +1038,13 @@
         <el-button v-if="dlUrl" size="small" @click="copyText(dlUrl, t('common.copied'))">{{ t('update.dlCopyLink') }}</el-button>
         <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
         <el-button size="small" type="primary" @click="retryDownload">{{ t('update.dlRetry') }}</el-button>
+      </template>
+      <!-- 下载完成：这里才是**真正那一步确认** —— 安装会关掉应用，得用户点头。
+           「稍后」也不丢东西：包留在本地，弹窗里随时能再点「现在更新」。 -->
+      <template v-else-if="dlStatus === 'done'">
+        <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
+        <el-button size="small" @click="closeDownloadDialog">{{ t('update.dlLater') }}</el-button>
+        <el-button size="small" type="primary" @click="askInstall">{{ t('update.dlNow') }}</el-button>
       </template>
       <template v-else-if="dlStatus !== 'running'">
         <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
@@ -1096,7 +1103,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent, h } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent } from 'vue'
 
 import { applyTaskSnapshot, finishExport } from '../../utils/useExportTask'
 import { useRoute, useRouter } from 'vue-router'
@@ -1163,7 +1170,7 @@ const ObjectFormDialog = defineAsyncComponent(() => import('../../common/objectf
 const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView.vue'))
 import {
   checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi,
-  dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi
+  installUpdate as installUpdateApi, dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi
   } from '../../api'
 
 // ===== 检查更新：与 GitHub 最新 Release 比对；有新版可在线下载安装 =====
@@ -1201,6 +1208,8 @@ const dlNote = ref('')
 const dlUrl = ref('')
 // 走了镜像又没官方 sha256 时可自证性为 0，界面必须说清（这条是风险提示，不随"完成态精简"去掉）
 const dlUnverified = ref(false)
+// 后台跑完（成功/失败）只提示一次：轮询会反复读到同一个终态
+const announced = ref(false)
 // 进度条下方那一行：已下载 / 速度 / 剩余时间（源由后端自动挑，界面不提供选择）
 const dlRunningText = computed(() => {
   const base = t('update.dlProgress', {
@@ -1265,21 +1274,8 @@ const closeUpdateDialog = (neverAgain) => {
 // 确认后**不再弹"选择保存位置"**（装个更新还要挑文件夹太啰嗦）：安装包固定落系统的「下载」目录
 // （由后端 resolve_dir 决定），想找它点弹窗里的「打开所在文件夹」。
 const doApplyUpdate = async () => {
-  // 一句话说清"会发生什么"并以问句收尾（文案由用户定稿）；用 h() 渲染成独立段落，
-  // 而不是往字符串里塞换行 —— MessageBox 会把换行折成空格
-  const body = h('div', { class: 'upd-confirm-body' }, [
-    h('p', null, t('update.confirmAsk'))
-  ])
-  try {
-    await ElMessageBox.confirm(body, t('update.dlTitle'), {
-      confirmButtonText: t('update.confirmOk'),
-      cancelButtonText: t('common.cancel'),
-      type: 'info',
-      customClass: 'upd-box'
-    })
-  } catch {
-    return // 点了取消：什么都不做，仍停在版本说明页
-  }
+  // 点「在线更新」直接开始下载 —— **不再先弹确认**。
+  // 确认挪到了下载完成之后：那时用户才知道要等多久、也才真的要决定"现在装还是稍后装"。
   updateVisible.value = false
   await startDownload('')
 }
@@ -1290,6 +1286,69 @@ const retryDownload = () => { startDownload('') }
 // 「换个更快的源」：与重试走同一条路（后端每次换源都会**重新测速**，并从 .part 续传）；
 // 名字分开只为在界面上一眼看出它解决的是"太慢"，而不是"失败了"。
 const switchSource = () => { startDownload('') }
+
+// ===== 下载完成后的那一步：问一次，再装 =====
+// 下载可以在后台慢慢跑，装则要**关掉应用** —— 所以"确认"放在这里，而不是点更新的时候。
+// 后台下载完成时（弹窗已关）也走这里，主动把窗口弹出来问一句。
+// 后台下载完成时（弹窗已关）主动弹的那个「更新包已下载完成 / 稍后 · 现在更新」
+const announceReady = async () => {
+  try {
+    await ElMessageBox.confirm(t('update.installAskBody'), t('update.dlReadyTitle'), {
+      confirmButtonText: t('update.dlNow'),
+      cancelButtonText: t('update.dlLater'),
+      type: 'info',
+      customClass: 'upd-box'
+    })
+  } catch {
+    return // 「稍后」：包留在本地，随时能再点「现在更新」
+  }
+  askInstall()
+}
+
+// 「现在更新」之后的**那一步确认**：再问一次"确定现在装吗"。
+// 文案与上一个框刻意不同 —— 同一个问题问两遍还一模一样，用户会以为是卡住了。
+const askInstall = async () => {
+  try {
+    await ElMessageBox.confirm(t('update.installConfirmBody'), t('update.dlTitle'), {
+      confirmButtonText: t('update.dlNow'),
+      cancelButtonText: t('common.cancel'),
+      type: 'info',
+      customClass: 'upd-box'
+    })
+  } catch {
+    return // 取消：什么都不做
+  }
+  doInstall()
+}
+const doInstall = async () => {
+  try {
+    const r = await installUpdateApi()
+    if (!r || r.success === false) {
+      // 自动拉起被系统挡住时，后端给的这句话里带着安装包路径（双击即可安装）
+      ElMessage.error((r && r.message) || t('update.applyFail'))
+      return
+    }
+    // 安装器已拉起：本进程一秒多后就会被关掉，界面收到这儿就够了
+    dlVisible.value = false
+  } catch (e) {
+    ElMessage.error((e && e.message) || t('update.applyFail'))
+  }
+}
+
+// 后台下载失败：同样主动弹一次，而不是等用户自己点回进度窗才看见
+const announceDownloadFail = async () => {
+  try {
+    await ElMessageBox.confirm(dlError.value || t('update.applyFail'), t('update.dlFailTitle'), {
+      confirmButtonText: t('update.dlRetry'),
+      cancelButtonText: t('update.dlClose'),
+      type: 'error',
+      customClass: 'upd-box'
+    })
+  } catch {
+    return // 关闭：什么都不做
+  }
+  retryDownload()
+}
 
 
 // 真正开始下载（目录已定）
@@ -1303,6 +1362,7 @@ const startDownload = async (dir) => {
   dlNote.value = ''
   dlUrl.value = ''
   dlUnverified.value = false
+  announced.value = false
   startProgressPolling()
   try {
     const res = await applyUpdateApi(dir)
@@ -1331,10 +1391,18 @@ const startProgressPolling = (fast = true) => {
       dlUrl.value = p.url || ''
       dlUnverified.value = !!p.unverified
       if (p.status === 'done' || p.status === 'failed') {
+        // 弹窗开着 → 界面自己会显示结果；弹窗关着（用户在后台更新）→ **主动**把窗口弹出来，
+        // 成功问一句"现在更新吗"，失败告诉他可以重试。只弹一次（轮询会反复读到同一个终态）。
+        const wasOpen = dlVisible.value
         dlStatus.value = p.status
         if (p.status === 'failed') dlError.value = p.error || t('update.applyFail')
         dlNote.value = ''
         stopProgressPolling()
+        if (!wasOpen && !announced.value) {
+          announced.value = true
+          if (p.status === 'done') announceReady()
+          else announceDownloadFail()
+        }
       } else {
         dlStatus.value = p.status || 'running'
       }

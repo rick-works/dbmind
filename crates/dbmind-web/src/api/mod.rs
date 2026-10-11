@@ -271,6 +271,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/update/check", get(update::check))
         .route("/api/update/apply", post(update::apply))
         .route("/api/update/progress", get(update::progress))
+        // 下载完成后用户点「现在更新」才真正开装（下载与安装拆成两步）
+        .route("/api/update/install", post(update::install))
         // 清掉已结束（成功/失败）的任务状态：否则失败后每点一次更新图标都只会
         // 重新弹出同一个报错页，必须重启软件（真机踩过）
         .route("/api/update/dismiss", post(update::dismiss))
