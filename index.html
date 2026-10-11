@@ -693,14 +693,216 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
-      <!-- v1.1.1（最新） -->
+      <!-- v1.2.9（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.9</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>更新不再问你装到哪</b>：安装包固定落到系统的「下载」目录，点一下就开始下（Windows 上把「下载」改到别的盘、或被 OneDrive 接管，也能落对地方）</li>
+            <li><b>Windows 更新不再停在「已安装」那一页</b>：以前会问「先卸载 / 不卸载」且默认勾着「先卸载」（有清掉配置的风险）；现在一条进度条原地覆盖装完，连接与设置都留着，装完自动把新版拉起来</li>
+            <li><b>页签条清爽了</b>：只显示表名 / 对象名，「连接 · 库」收进悬浮提示 —— 鼠标停一下就看得见全路径</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.9" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.9" target="_blank" rel="noopener">下载 v1.2.9</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.8 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.8</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>在线更新按你的系统挑安装包</b>：以前苹果版点「在线更新」下回来的是一个 exe（装了也起不来）；现在 macOS 拿 dmg、Linux 拿 deb、Windows 拿 setup.exe，架构也不会拿错</li>
+            <li><b>对齐口径重新统一</b>：NoSQL 预览也和另外两个网格用同一套规则（数字 / 日期靠右、布尔居中、文本靠左）；NULL 跟同列真值对齐，不再出现「数字靠右、NULL 靠左」</li>
+            <li><b>深色模式与 macOS 安装页</b>：深色下「有未保存的修改」提示条不再亮成一片浅黄；DMG 窗口居中、说明书那行文件名不再被窗口裁掉</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.8" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.8" target="_blank" rel="noopener">下载 v1.2.8</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.7 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.7</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>DMG 里多了一份说明书</b>：macOS 拦下未公证的 App 时，那份「首次打开请看这里」就在同一个窗口里，写清三步放行（点「好」→ 系统设置 →「隐私与安全性」→「仍要打开」）</li>
+            <li><b>一次都不弹的两条做法</b>：用 curl 下载（浏览器才会给文件打"从网上下载"的标记），或用 Homebrew 的 <code>--no-quarantine</code></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.7" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.7" target="_blank" rel="noopener">下载 v1.2.7</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.6 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.6</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>macOS 窗口形态定稿</b>：红绿灯与菜单同一行，按系统那条 28pt 标题栏的基准对齐</li>
+            <li><b>全屏不再空一块</b>：左上角不再留着那片空白</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.6" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.6" target="_blank" rel="noopener">下载 v1.2.6</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.5 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.5</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>macOS 的窗口交给系统管</b>：红绿灯回到它该在的位置（改用系统标题栏）</li>
+            <li><b>全屏不留白</b>：撤掉左侧那一片空白</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.5" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.5" target="_blank" rel="noopener">下载 v1.2.5</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.4 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.4</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>DMG 改成两个大图标</b>：图标尺寸 128，拖一下就能装（不再是密密的小图标）</li>
+            <li><b>窗口恢复系统红绿灯</b>：上一版引入的「没有标题栏、也关不掉」一并修掉</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.4" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.4" target="_blank" rel="noopener">下载 v1.2.4</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.3 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.3</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>只为一件事</b>：把 macOS 的 DMG 安装页修成正经的「拖进应用程序」—— App 里的代码一行没动</li>
+            <li>做法：不用 Tauri 自带的 DMG 打包（CI 上会跳过设置窗口布局的步骤），改用 dmgbuild 自己写 <code>.DS_Store</code></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.3" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.3" target="_blank" rel="noopener">下载 v1.2.3</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.2 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.2</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>修掉「打开是一片黑」</b>：打包进去的资源没被找到（web / agents / JRE 改为按平台资源根解析）</li>
+            <li><b>DMG 安装页</b>：改用 dmgbuild 重做，绕开 CI 上 Finder 自动化不可靠、界面很朴素的问题</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.2" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.2" target="_blank" rel="noopener">下载 v1.2.2</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.1 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.1</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-10</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>修掉 macOS 双击就打不开</b>：原先链到 CI 机器上 Homebrew 的 <code>libssl.3.dylib</code>（用户机器上没有）；现在让 OpenSSL 静态链进二进制，并加了 CI 守卫盯着别再退回去</li>
+            <li><b>macOS 图标与 DMG</b>：图标按 Apple 的网格留白重做（不再比邻居大一圈）；DMG 明确「拖进应用程序」的布局</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.1" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.1" target="_blank" rel="noopener">下载 v1.2.1</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.0 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.0</span>
+            <span class="rel-tag tag-minor">小版本</span>
+            <span class="rel-date">2026-10-10</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>驱动不用再挑镜像</b>：没设置时按「阿里云 → 华为云 → 腾讯云 → Maven 中心」依次试，某个源慢或不通就自动换下一个（自己设过镜像的仍只走你设的那个）</li>
+            <li><b>宽表横向滚动更跟手</b>：结果表格与 NoSQL 预览做了列窗口化，只渲染可视区那几列</li>
+            <li><b>表头一眼可辨</b>：底色拉开 + 压边线 + 滚动时轻微浮起；表头、数据格与资源树的光标也统一成手型</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.0" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.0" target="_blank" rel="noopener">下载 v1.2.0</a>
+          </div>
+        </div>
+      </article>
+
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
           <div class="rel-head">
             <span class="rel-ver">v1.1.1</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-10</span>
           </div>
           <ul class="rel-notes">
