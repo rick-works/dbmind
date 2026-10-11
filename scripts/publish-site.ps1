@@ -62,8 +62,15 @@ $pushUrl = "https://rick-works:$tok@github.com/rick-works/dbmind.git"
 $pushed = $false
 $proxy = Get-GitProxyArgs   # 有系统代理就用（没开就是空数组 = 直连）
 for ($k = 1; $k -le 8; $k++) {
+    # git 会把进度写进 stderr，而 $ErrorActionPreference='Stop' 会把原生命令的 stderr 当成
+    # **终止错误** —— 于是"其实推成功了"也会抛 NativeCommandError、脚本以 1 退出（踩过）。
+    # 这里临时放宽，成败只看 $LASTEXITCODE。
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     & git -C $WorkDir @proxy push $pushUrl refs/heads/gh-pages:refs/heads/gh-pages 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) { $pushed = $true; Write-Host ("  已推送 gh-pages（第 $k 次）") -ForegroundColor Green; break }
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prev
+    if ($code -eq 0) { $pushed = $true; Write-Host ("  已推送 gh-pages（第 $k 次）") -ForegroundColor Green; break }
     Write-Host ("  第 $k 次推送失败（github 时通时断），重试…") -ForegroundColor Yellow
     Start-Sleep -Seconds 12
 }
