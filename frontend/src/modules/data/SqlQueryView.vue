@@ -4993,20 +4993,14 @@ onBeforeUnmount(() => {
 /* 底栏文字统一跟「结果表格字号」走（--grid-fs 由 .result-grid 提供）：
    与表格同字号，次要信息（统计 / 选中汇总）比它小 1px，层级关系保留 */
 .result-time { font-size: var(--grid-fs, 13px); color: var(--dc-text-dim); font-weight: 500; }
-/* 分页器自己有固定字号（size="small" 是 12px），要逐个内部件覆盖才跟得上 */
-.result-footer :deep(.el-pagination) { font-size: var(--grid-fs, 13px); }
-.result-footer :deep(.el-pagination .el-pagination__total),
-.result-footer :deep(.el-pagination .el-pagination__jump),
-.result-footer :deep(.el-pagination .el-pager li),
-.result-footer :deep(.el-pagination .btn-prev),
-.result-footer :deep(.el-pagination .btn-next),
-.result-footer :deep(.el-pagination .el-select__wrapper),
-/* 下拉里显示的那行文字、以及跳页输入框：Element 给它们各自写了字号，
-   只覆盖 wrapper / __jump 不够 —— 表现就是「200条/页」和跳页那个数字不跟着变（用户反馈） */
-.result-footer :deep(.el-pagination .el-select__selected-item),
-.result-footer :deep(.el-pagination .el-select__placeholder),
-.result-footer :deep(.el-pagination .el-input__wrapper),
-.result-footer :deep(.el-pagination .el-input__inner) { font-size: var(--grid-fs, 13px); }
+/* 分页器字号：**整个子树统一**，不再逐个列举内部件。
+   原因：Element 把字号分别写在 wrapper / selected-item / placeholder / input__inner /
+   pager / btn 等多个元素上（还按 size 分级），逐条列举漏过两次 ——
+   先是「200条/页」的文字、接着是跳页输入框，都是"看着列全了其实漏了"。
+   这里直接对 .el-pagination 及其后代统一，一次到位；!important 用来压过 Element 的
+   按尺寸分级样式（.el-pagination--small 等）。作用域只在结果区底栏，不影响别处分页器。 */
+.result-footer :deep(.el-pagination),
+.result-footer :deep(.el-pagination *) { font-size: var(--grid-fs, 13px) !important; }
 /* 总数统计中：紧贴分页器左侧，弱化显示（计数是后台补的，别抢注意力） */
 .count-pending {
   margin-left: auto; display: inline-flex; align-items: center; gap: 4px;
