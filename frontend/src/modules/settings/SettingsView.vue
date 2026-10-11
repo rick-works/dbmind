@@ -2350,25 +2350,27 @@ watch(visible, (v) => {
 .scb-clear { color: var(--dc-danger); font-size: 12px; cursor: pointer; margin-left: 4px; user-select: none; }
 .scb-clear:hover { text-decoration: underline; }
 
-/* SQL 格式化面板 */
+/* SQL 格式化面板
+   ⚠️ 字号基准：整套设置面板是 13px（见全局样式），这一块原来写死 14px，比别的页整整大一档
+   （用户反馈"这字体有点大了吧"）。以下统一压回一档：正文 13px、次要说明 12px。 */
 .fmt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
 .fmt-card {
   background: var(--dc-bg-soft); border: 1px solid var(--dc-border); border-radius: 10px;
-  padding: 14px 16px 14px;
+  padding: 13px 15px 13px;
 }
 .fmt-card-wide { grid-column: 1 / -1; }
 /* 卡片标题用一条虚线分隔（与表头同一套观感）：否则标题和下面一堆设置项糊在一起，
    两个卡片都变成"一大块内容"，看不出层次 */
 .fmt-card-title {
   display: flex; align-items: center; gap: 6px;
-  font-size: 14px; font-weight: 600; color: var(--dc-text);
-  margin: 0 0 12px; padding-bottom: 10px;
+  font-size: 13px; font-weight: 600; color: var(--dc-text);
+  margin: 0 0 11px; padding-bottom: 9px;
   border-bottom: 1px dashed var(--dc-border);
 }
 .fmt-card-title .el-icon { color: var(--dc-primary); }
-.fmt-card-sub { font-size: 13px; font-weight: 400; color: var(--dc-text-dim); margin-left: 2px; }
+.fmt-card-sub { font-size: 12px; font-weight: 400; color: var(--dc-text-dim); margin-left: 2px; }
 .fmt-glob-cols { display: flex; align-items: stretch; gap: 12px 40px; margin-top: 2px; }
-.fmt-glob-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
+.fmt-glob-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
 /* 两列各自等高（flex 行的默认拉伸），**第二个小节贴底**：左列第一节 4 行、右列 3 行，
    内容排下去第二节的起始位置必然错开 —— 把末节推到底部后，两列末节行数相同（都是 2 行），
    「运算符」与「语句间隔」的标题就齐平了 */
@@ -2377,23 +2379,23 @@ watch(visible, (v) => {
 .fmt-glob-sec { min-width: 0; }
 .fmt-glob-sec-title {
   display: flex; align-items: center; gap: 6px;
-  font-size: 13px; font-weight: 600; letter-spacing: .3px;
+  font-size: 12px; font-weight: 600; letter-spacing: .3px;
   /* 小节标题比正文标签略深一档：原来跟说明文字一样淡，四个小节的"分组感"出不来 */
   color: var(--dc-text-mid);
-  margin: 0 0 10px;
+  margin: 0 0 9px;
 }
-.fmt-glob-sec-title::before { content: ''; width: 3px; height: 13px; background: var(--dc-primary); border-radius: 2px; }
+.fmt-glob-sec-title::before { content: ''; width: 3px; height: 12px; background: var(--dc-primary); border-radius: 2px; }
 /* 每行 = 左标签 + 右侧 160px 固定槽（下拉/数字/开关都占同一个槽）：
    之前用 space-between，开关被撑到列最右缘、和下拉框（150px）数字框（140px）三种右缘互不对齐，
    开关行中间一大段空白，看着松散。统一槽位后左缘右缘都在一条线上。 */
-.fmt-glob-it { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; min-height: 32px; }
+.fmt-glob-it { display: flex; align-items: center; gap: 12px; margin-bottom: 11px; min-height: 30px; }
 .fmt-glob-it:last-child { margin-bottom: 0; }
 .fmt-glob-lb {
-  font-size: 14px; color: var(--dc-text-mid); flex: 1 1 auto; overflow: hidden;
+  font-size: 13px; color: var(--dc-text-mid); flex: 1 1 auto; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
-.fmt-glob-sel { width: 160px; flex: 0 0 auto; font-size: 14px; }
-.fmt-glob-num { width: 160px; flex: 0 0 auto; font-size: 14px; }
+.fmt-glob-sel { width: 160px; flex: 0 0 auto; font-size: 13px; }
+.fmt-glob-num { width: 160px; flex: 0 0 auto; font-size: 13px; }
 /* 数字框**填满**它那 160px 的槽：元素默认的 el-input-number 比槽窄一点，
    于是同一列里"下拉框满宽、数字框窄一截"，左缘看着参差（截图里差的就是这十几像素） */
 .fmt-glob-num :deep(.el-input-number) { width: 100%; }
@@ -2401,18 +2403,18 @@ watch(visible, (v) => {
 /* 归一化 Element 控件内部字号，与行标签保持一致 */
 .fmt-glob-sel :deep(.el-select__wrapper),
 .fmt-glob-sel :deep(.el-select__selected-item),
-.fmt-glob-num :deep(.el-input__inner) { font-size: 14px; }
+.fmt-glob-num :deep(.el-input__inner) { font-size: 13px; }
 /* 整个格式化区统一基准字号，控件/按钮归一 */
-.fmt-grid, .fmt-preview { font-size: 14px; }
-.fmt-grid :deep(.el-button), .fmt-rule-add :deep(.el-button) { font-size: 14px; }
+.fmt-grid, .fmt-preview { font-size: 13px; }
+.fmt-grid :deep(.el-button), .fmt-rule-add :deep(.el-button) { font-size: 13px; }
 /* 关键字排版规则：真表格 —— 每列（含序号、不带缩进时的「-」）都在带边框的格子里，
    列宽固定，多行之间能对齐；控件撑满格子，观感统一 */
 .fmt-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .fmt-tbl th, .fmt-tbl td {
   border: 1px solid var(--dc-border);
-  padding: 5px 8px;
+  padding: 4px 8px;
   vertical-align: middle;
-  font-size: 14px;
+  font-size: 13px;
 }
 .fmt-tbl th { font-weight: 600; color: var(--dc-text-dim); background: var(--dc-bg-code); }
 .fmt-c-idx { width: 56px; text-align: center; color: var(--dc-text-dim); }
@@ -2427,33 +2429,33 @@ watch(visible, (v) => {
 .fmt-tbl :deep(.el-input-number) { width: 100%; }
 .fmt-tbl :deep(.el-input__inner),
 .fmt-tbl :deep(.el-select__wrapper),
-.fmt-tbl :deep(.el-select__selected-item) { font-size: 14px; }
+.fmt-tbl :deep(.el-select__selected-item) { font-size: 13px; }
 .fmt-c-iw :deep(.el-input__inner) { text-align: center; }
 /* 不带缩进的排版：这一列显示「-」。
    外面**必须也套一层框**（尺寸、圆角、描边都对齐可编辑时那个 el-input-number），
    否则同一列里"有框的是能配的、没框的是不能配的"，一行行看下来不齐（用户反馈）。 */
 .fmt-iw-na {
   display: flex; align-items: center; justify-content: center;
-  min-height: 32px;
+  min-height: 30px;
   border-radius: var(--el-border-radius-base, 4px);
   box-shadow: 0 0 0 1px var(--dc-border) inset;
   background: var(--dc-bg-code);
   color: var(--dc-text-dim);
-  font-size: 14px;
+  font-size: 13px;
 }
 /* 空规则提示：整格居中（占满一行的单元格，靠左会像"表格少了一列"） */
-.fmt-tbl-empty { font-size: 13px; color: var(--dc-text-dim); background: var(--dc-bg-code); text-align: center; }
+.fmt-tbl-empty { font-size: 12px; color: var(--dc-text-dim); background: var(--dc-bg-code); text-align: center; }
 .fmt-rule-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; }
 .fmt-preview {
   background: var(--dc-bg-code); border: 1px solid var(--dc-border); border-radius: 10px;
   padding: 12px 14px;
 }
 .fmt-preview-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
-.fmt-preview-title { font-size: 14px; font-weight: 600; color: var(--dc-text); display: flex; align-items: center; gap: 6px; }
-.fmt-preview-tip { font-size: 13px; color: var(--dc-text-dim); }
+.fmt-preview-title { font-size: 13px; font-weight: 600; color: var(--dc-text); display: flex; align-items: center; gap: 6px; }
+.fmt-preview-tip { font-size: 12px; color: var(--dc-text-dim); }
 .fmt-preview-code {
   margin: 0; font-family: 'SF Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 13px; line-height: 1.7; color: var(--dc-code-text); white-space: pre-wrap; word-break: break-word;
+  font-size: 12px; line-height: 1.7; color: var(--dc-code-text); white-space: pre-wrap; word-break: break-word;
 }
 
 /* AI 知识库 */
