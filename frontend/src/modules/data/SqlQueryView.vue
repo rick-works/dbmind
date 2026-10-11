@@ -5300,7 +5300,11 @@ onBeforeUnmount(() => {
 .var-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .var-name { font-family: monospace; font-size: 13px; color: var(--dc-primary); width: 110px; text-align: right; flex-shrink: 0; }
 .var-hint { font-size: 12px; color: var(--dc-text-dim); line-height: 1.6; }
-/* 单元格编辑缓冲条：贴在底栏上方，弱底色提醒还有改动没落地 */
-.edit-bar { display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-top: 1px solid var(--dc-border); background: var(--el-color-warning-light-9); flex-shrink: 0; }
+/* 单元格编辑缓冲条：贴在底栏上方，弱底色提醒还有改动没落地。
+   底色用主题令牌 --dc-warning-wash，**别用 Element 的 --el-color-warning-light-9** ——
+   那是 Element 浅色主题的色阶，而本项目的深色是默认主题、并没有引入 Element 的深色变量表，
+   于是深色下这条只有它亮成一片浅黄（用户反馈"深色模式修改数据的提示背景太亮"）。
+   --dc-warning-wash 在深色是 rgba(245,179,77,.16)、浅色是 rgba(217,119,6,.12)，两边都合适。 */
+.edit-bar { display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-warning-wash); flex-shrink: 0; }
 .edit-bar-text { font-size: 12px; color: var(--dc-text); }
 </style>

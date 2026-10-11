@@ -138,9 +138,9 @@
               <!-- gkey 里的列号必须是**完整可见列下标**（= colLead + 切片内下标），
                    取值 cellByGkey / 键盘导航 / 框选都按这套坐标走，切片只影响"渲染了哪几列" -->
               <td v-for="(col, ci) in colsSlice" :key="'d' + col" :data-gkey="(rowIndex(row) + 1) + ':' + (colLead + ci)"
-                  :class="{ 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col),
+                  :class="[cellAlignOf(row[col], col), { 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col),
                             'col-sel-l': selEdges.colLeft.has(col), 'col-sel-r': selEdges.colRight.has(col),
-                            'active-cell': activeCell && activeCell.row === row && activeCell.col === col && noBulkSelection }"
+                            'active-cell': activeCell && activeCell.row === row && activeCell.col === col && noBulkSelection }]"
                   :title="fmtVal(row[col])"
                   @click="onCellClick(row, col, $event)"
                   @dblclick="openCellDetail(row, col)"
@@ -223,6 +223,7 @@ import { getQuerySettings, editorSettingsLive } from '../../utils/settings'
 import { noSqlDocuments, cancelNoSql } from '../../api'
 import { t } from '../../utils/i18n'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
+import { cellAlignClass, columnAlignClasses } from '../../utils/cellAlign'
 import { rowWindow } from '../../utils/rowWindow'
 import { useExcelSelection } from '../../utils/excelSelection'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
@@ -278,6 +279,21 @@ const showAllColumns = () => { hiddenColumns.value = new Set() }
 const rows = ref([]) // 当前行数据（带身份）；展示层是 displayRows（去掉手动隐藏的行）
 const hiddenRows = ref(new Set())
 const displayRows = computed(() => rows.value.filter(r => !hiddenRows.value.has(r._rid)))
+/**
+ * 单元格对齐：与结果表格 / 表预览同一套口径（Excel：数字/日期靠右、布尔居中、文本靠左）。
+ *
+ * 本视图原先没有任何对齐类 —— 一律左对齐。同屏对比另外两个网格（数字都靠右）就显出不一致了，
+ * 用户要求一并统一。NoSQL 的列没有字段类型（文档结构是动态的），所以列类型一律留空，
+ * 完全按**这一列的值**判：这正是 columnAlignClasses 在类型拿不到时的那条分支。
+ *
+ * NULL 也一样：没有值可判，就跟这一列的多数派对齐（见 utils/cellAlign.columnAlignClasses），
+ * 不然一列里数字靠右、NULL 靠左的错位会重演一遍。
+ */
+const nullAlignMap = computed(() =>
+  columnAlignClasses(displayRows.value, visibleColumns.value.map((name) => ({ name })))
+)
+/** 单元格对齐：值按值判；NULL 跟这一列的值整体怎么排 */
+const cellAlignOf = (v, col) => (v == null ? (nullAlignMap.value[col] || '') : cellAlignClass(v, ''))
 let ridSeq = 0
 const nextRid = () => 'r' + (++ridSeq)
 const rowIndex = (row) => row._idx
@@ -1848,6 +1864,16 @@ onBeforeUnmount(() => {
      例外：列宽把手（贴列缘 ±5px）仍是 col-resize —— 那是有意的（Excel/DataGrip 同款）。 */
   cursor: pointer;
 }
+/* NULL：灰 + 斜体，明显区别于真实数据（与结果表格 / 表预览同款 —— 本视图原先漏了这条，
+   于是 NoSQL 里的 NULL 和普通文本长得一模一样） */
+.data-table td.null-cell {
+  color: var(--dc-text-weak, var(--dc-text-dim));
+  font-style: italic;
+}
+/* Excel 对齐规则：数字 / 日期右对齐、布尔居中（判定见 utils/cellAlign.js）；
+   NULL 单元格按列拿到同一套类，于是和同列的真实值对齐一致 */
+.data-table td.al-r { text-align: right; }
+.data-table td.al-c { text-align: center; }
 .data-table tbody tr { cursor: pointer; }
 /* 斑马纹按真实行号而非 DOM 奇偶：窗口化渲染会插占位行，nth-child 会错位 */
 .data-table tbody tr.row-alt td { background-color: var(--dc-bg-soft); }

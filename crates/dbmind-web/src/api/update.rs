@@ -175,16 +175,92 @@ fn version_gt(a: &str, b: &str) -> bool {
     false
 }
 
-/// 附件得分：NSIS 安装包 > MSI > 绿色版 zip > 其他
-fn asset_score(name: &str) -> u8 {
-    if name.ends_with("-setup.exe") {
-        3
-    } else if name.ends_with(".msi") {
-        2
-    } else if name.ends_with(".zip") {
-        1
+/// 本机属于哪个平台（编译期决定：每个平台的发行版各编一次，cfg! 就是运行期常量）
+#[allow(dead_code)] // 单次构建里只会构造其中一个变体，其余变体只作为 match 分支出现
+#[derive(Clone, Copy)]
+enum PkgTarget {
+    Windows,
+    MacArm,
+    MacX64,
+    Linux,
+}
+
+const fn pkg_target() -> PkgTarget {
+    if cfg!(target_os = "windows") {
+        PkgTarget::Windows
+    } else if cfg!(target_os = "macos") {
+        if cfg!(target_arch = "aarch64") {
+            PkgTarget::MacArm
+        } else {
+            PkgTarget::MacX64
+        }
     } else {
-        0
+        PkgTarget::Linux
+    }
+}
+
+/// 附件得分：本机平台之外的一律 0 分（打分规则见 `asset_score_for`）
+fn asset_score(name: &str) -> u8 {
+    asset_score_for(pkg_target(), name)
+}
+
+/// 附件得分：**先按平台过滤**，再在同一平台的包里挑最省事的那个。
+///
+/// 为什么必须过滤：真机反馈 —— 苹果版点「在线更新」下到的是 `.exe`。原因就是这里原来只按后缀
+/// 打分（`-setup.exe` 3 分 > `.msi` 2 分 > `.zip` 1 分），**完全没有平台概念**，于是任何平台上
+/// 都挑中分数最高的那个 Windows 安装包，macOS 拉回来一个 exe，装了也起不来。
+/// 现在不匹配本机平台的包一律 0 分（见 pick_installer：分数必须 > 0 才会被选中），
+/// 于是「苹果版下到 exe / Linux 版下到 msi」这类错配从根上没了；实在没有合适的包就返回 None，
+/// 界面据此只给「前往下载页」，而不是塞一个装不上的文件给用户。
+///
+/// 平台走**入参**而不是直接读 `pkg_target()`：这样四种平台的规则都能在任意一台机器上测到
+/// （一次构建只编一个平台，M 芯片那条分支否则永远没人验证过 —— 见文件末尾的测试）。
+fn asset_score_for(target: PkgTarget, name: &str) -> u8 {
+    let n = name.to_ascii_lowercase();
+    match target {
+        // Windows：NSIS 安装包 > MSI > 绿色版 zip
+        PkgTarget::Windows => {
+            if n.ends_with("-setup.exe") {
+                3
+            } else if n.ends_with(".msi") {
+                2
+            } else if n.ends_with(".zip") {
+                1
+            } else {
+                0
+            }
+        }
+        // macOS（Apple 芯片）：只认 aarch64 的 dmg；不带架构名的通用 dmg 兜底。
+        // Intel 的 dmg 明确排除 —— M 芯片上装 x64 包要靠 Rosetta，不该由更新器悄悄决定。
+        PkgTarget::MacArm => {
+            if n.ends_with(".dmg") && n.contains("aarch64") {
+                3
+            } else if n.ends_with(".dmg") && !n.contains("x64") {
+                2
+            } else {
+                0
+            }
+        }
+        // macOS（Intel）：只认 x64 的 dmg；不带架构名的通用 dmg 兜底
+        PkgTarget::MacX64 => {
+            if n.ends_with(".dmg") && n.contains("x64") {
+                3
+            } else if n.ends_with(".dmg") && !n.contains("aarch64") {
+                2
+            } else {
+                0
+            }
+        }
+        // Linux：deb 优先（能进包管理器、带开始菜单项），AppImage 兜底
+        PkgTarget::Linux => {
+            if n.ends_with(".deb") {
+                3
+            } else if n.ends_with(".appimage") {
+                1
+            } else {
+                0
+            }
+        }
     }
 }
 
@@ -1123,4 +1199,65 @@ pub async fn dismiss() -> Json<Value> {
         ..Default::default()
     };
     Json(json!({ "success": true }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// v1.2.0 发行版里真实存在的七个文件名（四平台产物）
+    const ASSETS: &[&str] = &[
+        "DBmind_1.2.0_x64-setup.exe",
+        "DBmind_1.2.0_x64_en-US.msi",
+        "dbmind-1.2.0-portable.zip",
+        "DBmind_1.2.0_aarch64.dmg",
+        "DBmind_1.2.0_x64.dmg",
+        "DBmind_1.2.0_amd64.deb",
+        "DBmind_1.2.0_amd64.AppImage",
+    ];
+
+    /// 按 pick_installer 的规则挑一次：分数 > 0 且取最高
+    fn pick_for(target: PkgTarget) -> Option<&'static str> {
+        let mut best: Option<(&'static str, u8)> = None;
+        for name in ASSETS {
+            let s = asset_score_for(target, name);
+            if s > 0 && best.map(|(_, b)| s > b).unwrap_or(true) {
+                best = Some((*name, s));
+            }
+        }
+        best.map(|(n, _)| n)
+    }
+
+    /// 四个平台各自挑中自己那一个（本机一次只编一个平台，但四个分支都测得动）
+    #[test]
+    fn picks_its_own_installer_on_every_platform() {
+        assert_eq!(pick_for(PkgTarget::Windows), Some("DBmind_1.2.0_x64-setup.exe"));
+        assert_eq!(pick_for(PkgTarget::MacArm), Some("DBmind_1.2.0_aarch64.dmg"));
+        assert_eq!(pick_for(PkgTarget::MacX64), Some("DBmind_1.2.0_x64.dmg"));
+        assert_eq!(pick_for(PkgTarget::Linux), Some("DBmind_1.2.0_amd64.deb"));
+    }
+
+    /// 回归：苹果版**绝不能再**挑中 Windows 安装包（真机反馈的那次：macOS 下到 exe）
+    #[test]
+    fn mac_never_competes_for_windows_installer() {
+        for t in [PkgTarget::MacArm, PkgTarget::MacX64] {
+            for name in ASSETS {
+                let win =
+                    name.ends_with(".exe") || name.ends_with(".msi") || name.ends_with(".zip");
+                if win {
+                    assert_eq!(asset_score_for(t, name), 0, "{name} 不该在 macOS 上参与竞争");
+                }
+            }
+        }
+    }
+
+    /// 架构不匹配的 dmg 也不挑：M 芯片不要 Intel 包（装了得靠 Rosetta），反之亦然
+    #[test]
+    fn wrong_arch_dmg_is_not_picked() {
+        assert_eq!(asset_score_for(PkgTarget::MacArm, "DBmind_1.2.0_x64.dmg"), 0);
+        assert_eq!(asset_score_for(PkgTarget::MacX64, "DBmind_1.2.0_aarch64.dmg"), 0);
+        // 不带架构名的通用 dmg 仍兜底
+        assert_eq!(asset_score_for(PkgTarget::MacArm, "DBmind_1.2.0.dmg"), 2);
+        assert_eq!(asset_score_for(PkgTarget::MacX64, "DBmind_1.2.0.dmg"), 2);
+    }
 }
