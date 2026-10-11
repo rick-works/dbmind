@@ -31,6 +31,9 @@ export default {
   'update.dlBackgroundHint': 'Downloading continues in background - click the refresh icon in the top bar to check progress',
   'update.dlProgress': '{done} of {total} downloaded, {speed}/s',
   'update.dlDone': 'Download finished, starting the installer',
+  // Show the path on completion: if the system refuses to auto-launch it (Windows UAC / antivirus,
+  // macOS policy), the user can just double-click the file instead of wondering where it went
+  'update.applyDonePath': 'Saved to: {path} (double-click it if it did not open automatically)',
   'update.dlBackground': 'Keep downloading in background',
   'update.dlRetry': 'Retry',
   'update.dlCopyLink': 'Copy download link',

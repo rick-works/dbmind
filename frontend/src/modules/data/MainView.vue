@@ -1008,6 +1008,9 @@
         <span v-else class="upd-dl-err">{{ dlError }}</span>
       </div>
       <div v-if="dlStatus === 'done'" class="upd-dl-sub">{{ t('update.applyDone') }}</div>
+      <!-- 落地路径：万一自动打开被系统挡住（Windows 的 UAC / 杀软、macOS 的策略都可能拦），
+           这句话就是唯一的自救线索 —— 照着路径双击那个文件即可安装 -->
+      <div v-if="dlStatus === 'done' && dlInstaller" class="upd-dl-sub">{{ t('update.applyDonePath', { path: dlInstaller }) }}</div>
       <div v-if="dlStatus === 'done' && dlVerified" class="upd-dl-sub">{{ t('update.dlVerified') }}</div>
       <div v-if="dlStatus === 'done' && dlUnverified" class="upd-dl-sub">{{ t('update.dlUnverified') }}</div>
       <!-- 失败时给一句"下一步怎么办"，而不是只丢一段错误文本 -->
@@ -1173,6 +1176,8 @@ const dlVisible = ref(false)
 const dlStatus = ref('idle') // idle | running | done | failed
 const dlReceived = ref(0)
 const dlTotal = ref(0)
+// 安装包最终落地路径（后端算的，完成时才是有意义的值）：显示给用户，自动打开失败时他能自己去双击
+const dlInstaller = ref('')
 const dlSpeed = ref(0)
 const dlError = ref('')
 // 过程说明（换源 / 续传 / 第几次重试），来自后端 note —— 不是错误，画在进度条下方
@@ -1279,6 +1284,7 @@ const startProgressPolling = (fast = true) => {
       dlSpeed.value = p.speed || 0
       dlNote.value = p.note || ''
       dlUrl.value = p.url || ''
+      dlInstaller.value = p.installer || ''
       dlVerified.value = !!p.verified
       dlUnverified.value = !!p.unverified
       if (p.status === 'done' || p.status === 'failed') {

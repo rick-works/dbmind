@@ -399,15 +399,24 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
         match download_with_progress(&inst, &dest, &cell, start_index) {
             Ok(()) => {
                 let installer = dest.to_string_lossy().to_string();
-                let ok = launch_installer(&dest);
+                // 拉起之前先确认文件真的落地了：改名、杀软、权限都可能让"下载成功却没到位"。
+                // 没到位就直接说清，而不是拿着一个不存在的路径去拉、让系统弹一句「找不到文件」。
+                let landed = dest.is_file();
+                let ok = landed && launch_installer(&dest);
                 let mut p = cell.lock().unwrap();
-                p.installer = Some(installer);
+                p.installer = Some(installer.clone());
                 p.version = Some(tag.trim_start_matches('v').to_string());
                 if ok {
                     p.status = "done".into();
                 } else {
                     p.status = "failed".into();
-                    p.error = Some("安装包已下载，但启动安装器失败，请手动运行它".into());
+                    // 失败文案**必须带路径**：自动拉起被系统挡住时，用户双击这个文件就能自己装 ——
+                    // 这才是能真正解决问题的一句话（原话只说"请手动运行它"，却没说清是哪个文件）。
+                    p.error = Some(if landed {
+                        format!("安装包已下载到 {installer}，但自动启动被系统拒绝 —— 双击这个文件即可安装")
+                    } else {
+                        format!("安装包下载后没落到 {installer}（文件不存在），请重新下载")
+                    });
                 }
             }
             Err(e) => {
@@ -1049,33 +1058,52 @@ fn download_once(
     Ok(())
 }
 
+/// 拉起安装包（Windows）。
+///
+/// 参数是给 Tauri 的 NSIS 模板的（见 tauri-bundler 的 installer.nsi；模板会忽略不认识的参数）：
+///   /P       passive：只显示进度条，不弹任何提问页 —— 否则会停在「已安装」那一页问要不要先卸载
+///   /UPDATE  更新模式：明确走「不先卸载、原地覆盖」，老用户的连接与设置不会被清掉
+///   /R       装完自动把主程序拉起来；否则更新完桌面上什么都不剩
+///
+/// ⚠️ 这里**不能再走 `cmd /C start`，更不能自己加引号** —— v1.2.9 / v1.2.10 真机反馈：
+/// 手写的 `"…"` 会被 Rust 的参数转义再包一层（变成 `\"…\"`），而 cmd.exe 对 `\"` 的解析
+/// 与 CreateProcess 那套规则不一样，路径被拆坏 → 弹出「Windows 找不到文件 C:\…\setup.exe」，
+/// 可文件明明就躺在那里（实测 sha256 与官方值一致）。直接 CreateProcess 起它：
+/// 转义由 Rust 按系统规则做，路径带空格也正确。
 #[cfg(windows)]
 fn launch_installer(path: &std::path::Path) -> bool {
     use std::os::windows::process::CommandExt;
-    // 更新时**替用户拍板**，别让安装器停在「已安装」那一页问「要不要先卸载」（用户反馈：
-    // 更新不该让人做这种选择）。Tauri 的 NSIS 模板认这几个参数（见 tauri-bundler 的 installer.nsi）：
-    //   /P       passive：只显示进度条，不弹任何提问页
-    //   /UPDATE  更新模式：明确走「不先卸载、原地覆盖」分支（模板里 $UpdateMode=1 → 直接跳到 reinst_done），
-    //            即便 /P 不被支持，也不会"先卸载再装"—— 老用户的连接与设置才不会被清掉
-    //   /R       装完自动把主程序拉起来；否则更新完桌面上什么都不剩
-    // 模板会忽略不认识的参数，所以最坏情况是退回今天的行为（还弹那一页），不会更糟。
-    // 路径加引号：cmd 会二次解析，带空格的路径（例如装在 C:\Program Files 下）不加引号会被拆开。
-    let quoted = format!("\"{}\"", path.display());
-    std::process::Command::new("cmd")
-        .args(["/C", "start", "", quoted.as_str(), "/P", "/UPDATE", "/R"])
+    std::process::Command::new(path)
+        .args(["/P", "/UPDATE", "/R"])
+        // DETACHED_PROCESS：安装器要**活过本进程退出**，否则用户一点确定它就跟着没了
         .creation_flags(0x0000_0008)
         .spawn()
         .is_ok()
 }
 
+/// 拉起安装包（macOS：dmg 交给 open 挂载）。
+///
+/// 用 `status()` **等它返回**，而不是 `spawn()` 只看"进程起没起来"：
+/// open 自己失败时（文件不在、被系统策略拒绝）退出码非 0，只有这样我们才能如实告诉用户
+/// "没打开"，而不是界面说「安装向导已启动」、实际什么都没发生
+/// （v1.2.10 真机反馈：苹果版更新完没自动弹出安装）。
 #[cfg(target_os = "macos")]
 fn launch_installer(path: &std::path::Path) -> bool {
-    std::process::Command::new("open").arg(path).spawn().is_ok()
+    std::process::Command::new("open")
+        .arg(path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
+/// 拉起安装包（Linux：deb / AppImage 交给桌面环境；同样等返回、看退出码）
 #[cfg(all(unix, not(target_os = "macos")))]
 fn launch_installer(path: &std::path::Path) -> bool {
-    std::process::Command::new("xdg-open").arg(path).spawn().is_ok()
+    std::process::Command::new("xdg-open")
+        .arg(path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 #[cfg(not(any(windows, unix)))]

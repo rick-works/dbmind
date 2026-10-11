@@ -35,6 +35,9 @@ export default {
   'update.dlBackgroundHint': '下载在后台继续，点顶栏的刷新图标可随时查看进度',
   'update.dlProgress': '已下载 {done} / {total}，速度 {speed}/s',
   'update.dlDone': '下载完成，正在启动安装向导',
+  // 完成时把落地路径写出来：万一系统没接受自动启动（Windows 的 UAC / 杀软、macOS 的策略都可能拦），
+  // 用户看着这句话就能自己去双击那个文件，不用再问"它下到哪了"
+  'update.applyDonePath': '已保存到：{path}（若没有自动打开，双击它即可安装）',
   'update.dlBackground': '后台继续下载',
   'update.dlRetry': '重试',
   'update.dlCopyLink': '复制下载链接',
