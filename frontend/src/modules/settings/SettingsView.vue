@@ -499,57 +499,72 @@
                 <span class="fmt-card-sub">{{ $t('settings.format.rulesSub') }}</span>
               </div>
 
-              <div class="fmt-tbl">
-                <div class="fmt-tr fmt-th">
-                  <span class="fmt-tc-idx">{{ $t('settings.format.colIndex') }}</span>
-                  <span class="fmt-tc-kw">{{ $t('settings.format.colKeyword') }}</span>
-                  <span class="fmt-tc-cs">{{ $t('settings.format.colCase') }}</span>
-                  <span class="fmt-tc-ly">{{ $t('settings.format.colLayout') }}</span>
-                  <span class="fmt-tc-iw">{{ $t('settings.format.colIndent') }}</span>
-                  <span class="fmt-tc-op"></span>
-                </div>
-                <div v-if="!editorForm.sqlKeywordRules.length" class="fmt-tbl-empty">{{ $t('settings.format.emptyRules') }}</div>
-                <div v-for="(rule, i) in editorForm.sqlKeywordRules" :key="i" class="fmt-tr">
-                  <span class="fmt-tc-idx">{{ i + 1 }}</span>
-                  <div class="fmt-tc-kw">
-                    <el-autocomplete
-                      v-model="rule.kw"
-                      :fetch-suggestions="queryKwSuggestions"
-                      :placeholder="$t('settings.format.kwPlaceholder')"
-                    />
-                  </div>
-                  <el-select v-model="rule.cs" class="fmt-tc-cs" :title="$t('settings.format.csKeepTip')">
-                    <el-option value="upper" :label="$t('settings.format.caseUpper')" />
-                    <el-option value="lower" :label="$t('settings.format.caseLower')" />
-                    <el-option value="keep" :label="$t('settings.format.casePreserve')" />
-                  </el-select>
-                  <el-select v-model="rule.ly" class="fmt-tc-ly">
-                    <el-option value="none" :label="$t('settings.format.lyNone')" />
-                    <el-option value="clause" :label="$t('settings.format.lyClause')" />
-                    <el-option value="join" :label="$t('settings.format.lyJoin')" />
-                    <el-option value="afterBreak" :label="$t('settings.format.lyAfterBreak')" />
-                    <el-option value="afterBreakIndent" :label="$t('settings.format.lyAfterBreakIndent')" />
-                    <el-option value="setop" :label="$t('settings.format.lySetop')" />
-                  </el-select>
-                  <!-- 缩进宽度：只在该排版确实带缩进时可编辑；留空 = 跟随上方全局值（占位符显示的就是它）。
-                       不带缩进的排版**显示成「-」**，而不是灰着一个数字 —— 灰框里带数字会被误读成
-                       "这个关键字已经配了宽度"（用户反馈）。值本身仍留在数据里，换回带缩进的排版就回来。 -->
-                  <div v-if="!ruleHasIndent(rule.ly)" class="fmt-tc-iw fmt-tc-iw-na" :title="$t('settings.format.indentNA')">-</div>
-                  <el-input-number
-                    v-else
-                    v-model="rule.iw"
-                    class="fmt-tc-iw"
-                    :min="0"
-                    :max="12"
-                    :step="1"
-                    :controls="false"
-                    :placeholder="String(editorForm.sqlTabWidth || 2)"
-                    :title="$t('settings.format.indentTip', { n: editorForm.sqlTabWidth || 2 })"
-                    @change="(v) => onIndentChange(rule, v)"
-                  />
-                  <el-button class="fmt-tc-op" text :icon="Delete" :title="$t('settings.format.deleteRule')" @click="removeKeywordRule(i)" />
-                </div>
-              </div>
+              <!-- 用**表格**渲染：每列（含序号、以及不带缩进时的「-」）都自带格子边框，
+                   整块看起来就是一张表 —— 比"一行行悬浮的控件"更容易对齐、也更清楚哪格是哪列 -->
+              <table class="fmt-tbl">
+                <thead>
+                  <tr>
+                    <th class="fmt-c-idx">{{ $t('settings.format.colIndex') }}</th>
+                    <th class="fmt-c-kw">{{ $t('settings.format.colKeyword') }}</th>
+                    <th class="fmt-c-cs">{{ $t('settings.format.colCase') }}</th>
+                    <th class="fmt-c-ly">{{ $t('settings.format.colLayout') }}</th>
+                    <th class="fmt-c-iw">{{ $t('settings.format.colIndent') }}</th>
+                    <th class="fmt-c-op"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!editorForm.sqlKeywordRules.length">
+                    <td colspan="6" class="fmt-tbl-empty">{{ $t('settings.format.emptyRules') }}</td>
+                  </tr>
+                  <tr v-for="(rule, i) in editorForm.sqlKeywordRules" :key="i">
+                    <td class="fmt-c-idx">{{ i + 1 }}</td>
+                    <td class="fmt-c-kw">
+                      <el-autocomplete
+                        v-model="rule.kw"
+                        :fetch-suggestions="queryKwSuggestions"
+                        :placeholder="$t('settings.format.kwPlaceholder')"
+                      />
+                    </td>
+                    <td class="fmt-c-cs">
+                      <el-select v-model="rule.cs" :title="$t('settings.format.csKeepTip')">
+                        <el-option value="upper" :label="$t('settings.format.caseUpper')" />
+                        <el-option value="lower" :label="$t('settings.format.caseLower')" />
+                        <el-option value="keep" :label="$t('settings.format.casePreserve')" />
+                      </el-select>
+                    </td>
+                    <td class="fmt-c-ly">
+                      <el-select v-model="rule.ly">
+                        <el-option value="none" :label="$t('settings.format.lyNone')" />
+                        <el-option value="clause" :label="$t('settings.format.lyClause')" />
+                        <el-option value="join" :label="$t('settings.format.lyJoin')" />
+                        <el-option value="afterBreak" :label="$t('settings.format.lyAfterBreak')" />
+                        <el-option value="afterBreakIndent" :label="$t('settings.format.lyAfterBreakIndent')" />
+                        <el-option value="setop" :label="$t('settings.format.lySetop')" />
+                      </el-select>
+                    </td>
+                    <td class="fmt-c-iw">
+                      <!-- 缩进宽度：只在该排版确实带缩进时可编辑；留空 = 跟随上方全局值（占位符显示的就是它）。
+                           不带缩进的排版**显示成「-」**，而不是灰着一个数字 —— 灰框里带数字会被误读成
+                           "这个关键字已经配了宽度"（用户反馈）。值本身仍留在数据里，换回带缩进的排版就回来。 -->
+                      <div v-if="!ruleHasIndent(rule.ly)" class="fmt-iw-na" :title="$t('settings.format.indentNA')">-</div>
+                      <el-input-number
+                        v-else
+                        v-model="rule.iw"
+                        :min="0"
+                        :max="12"
+                        :step="1"
+                        :controls="false"
+                        :placeholder="String(editorForm.sqlTabWidth || 2)"
+                        :title="$t('settings.format.indentTip', { n: editorForm.sqlTabWidth || 2 })"
+                        @change="(v) => onIndentChange(rule, v)"
+                      />
+                    </td>
+                    <td class="fmt-c-op">
+                      <el-button text :icon="Delete" :title="$t('settings.format.deleteRule')" @click="removeKeywordRule(i)" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
 
               <div class="fmt-rule-add">
                 <el-button type="primary" plain :icon="Plus" @click="addKeywordRule">{{ $t('settings.format.addRule') }}</el-button>
@@ -2343,40 +2358,33 @@ watch(visible, (v) => {
 /* 整个格式化区统一基准字号，控件/按钮归一 */
 .fmt-grid, .fmt-preview { font-size: 14px; }
 .fmt-grid :deep(.el-button), .fmt-rule-add :deep(.el-button) { font-size: 14px; }
-.fmt-tbl { display: flex; flex-direction: column; }
-.fmt-tr { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.fmt-th {
-  font-size: 14px; font-weight: 600; color: var(--dc-text-dim);
-  border-bottom: 1px dashed var(--dc-border); padding-bottom: 6px; margin-bottom: 10px;
+/* 关键字排版规则：真表格 —— 每列（含序号、不带缩进时的「-」）都在带边框的格子里，
+   列宽固定，多行之间能对齐；控件撑满格子，观感统一 */
+.fmt-tbl { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.fmt-tbl th, .fmt-tbl td {
+  border: 1px solid var(--dc-border);
+  padding: 5px 8px;
+  vertical-align: middle;
+  font-size: 14px;
 }
-.fmt-tc-idx { flex: 0 0 36px; text-align: center; font-size: 14px; color: var(--dc-text-dim); }
-.fmt-tc-kw { flex: 1 1 auto; min-width: 0; }
-.fmt-tc-cs { flex: 0 0 118px; }
-.fmt-tc-ly { flex: 0 0 226px; }
-/* 关键字级缩进宽度：窄一点、居中，和表头对齐 */
-.fmt-tc-iw { flex: 0 0 92px; }
-.fmt-tc-iw :deep(.el-input-number) { width: 100%; }
-.fmt-tc-iw :deep(.el-input__inner) { font-size: 14px; text-align: center; }
-/* 不带缩进的排版：这一列显示「-」，居中且弱化，别让人误以为"已经配了宽度" */
-.fmt-tc-iw-na {
-  display: flex; align-items: center; justify-content: center;
-  min-height: 32px; font-size: 14px; color: var(--dc-text-dim);
-}
-.fmt-tc-op { flex: 0 0 36px; }
-.fmt-tc-kw :deep(.el-autocomplete) { width: 100%; }
-.fmt-tc-kw :deep(.el-input) { width: 100%; }
-.fmt-tc-kw :deep(.el-input__wrapper) { background: var(--dc-bg-code); box-shadow: 0 0 0 1px var(--dc-border) inset; }
-/* 表格内控件字号与行标签统一 */
-.fmt-tc-kw :deep(.el-input__inner),
-.fmt-tc-cs :deep(.el-select__wrapper),
-.fmt-tc-cs :deep(.el-select__selected-item),
-.fmt-tc-ly :deep(.el-select__wrapper),
-.fmt-tc-ly :deep(.el-select__selected-item) { font-size: 14px; }
-.fmt-tbl-empty {
-  font-size: 13px; color: var(--dc-text-dim); background: var(--dc-bg-code);
-  border: 1px dashed var(--dc-border); border-radius: 8px; padding: 12px 14px;
-  margin-bottom: 4px;
-}
+.fmt-tbl th { font-weight: 600; color: var(--dc-text-dim); background: var(--dc-bg-code); }
+.fmt-c-idx { width: 56px; text-align: center; color: var(--dc-text-dim); }
+.fmt-c-cs { width: 128px; }
+.fmt-c-ly { width: 208px; }
+.fmt-c-iw { width: 104px; }
+.fmt-c-op { width: 52px; }
+.fmt-c-op :deep(.el-button) { margin: 0 auto; display: flex; }
+.fmt-tbl :deep(.el-autocomplete),
+.fmt-tbl :deep(.el-input),
+.fmt-tbl :deep(.el-select),
+.fmt-tbl :deep(.el-input-number) { width: 100%; }
+.fmt-tbl :deep(.el-input__inner),
+.fmt-tbl :deep(.el-select__wrapper),
+.fmt-tbl :deep(.el-select__selected-item) { font-size: 14px; }
+.fmt-c-iw :deep(.el-input__inner) { text-align: center; }
+/* 不带缩进的排版：这一列显示「-」，居中且弱化（格子边框由表格提供） */
+.fmt-iw-na { text-align: center; color: var(--dc-text-dim); }
+.fmt-tbl-empty { font-size: 13px; color: var(--dc-text-dim); background: var(--dc-bg-code); }
 .fmt-rule-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
 .fmt-preview {
   background: var(--dc-bg-code); border: 1px solid var(--dc-border); border-radius: 10px;
