@@ -209,8 +209,10 @@ export const checkUpdate = () => http.get('/api/update/check', { timeout: 20000 
 // 下载安装包并由后端自动选源（源快慢由后端现场测速决定，界面不提供选择）
 export const applyUpdate = (dir) => http.post('/api/update/apply', { dir: dir || null }, { timeout: 600000 }).then(r => r.data)
 // 下载进度（后台任务写、前端轮询）：{ status, received, total, speed, error, ... }
-export const pickUpdateDir = (title) => http.get('/api/update/pick-dir', { params: { title }, timeout: 600000 }).then(r => r.data)
-export const updateDirs = () => http.get('/api/update/dirs', { timeout: 10000 }).then(r => r.data)
+// 说明：更新包固定落在系统「下载」目录，所以前端不再有"选保存位置"这一步，也就没有对应调用。
+// 后端的 /api/update/pick-dir 与 /api/update/dirs 保留着（通用工具：系统目录选择器 / 常用目录列表），
+// 将来要做「导出到…」之类的流程可以直接接。
+
 export const updateProgress = () => http.get('/api/update/progress', { timeout: 10000 }).then(r => r.data)
 // 清掉已结束（成功/失败）的更新任务状态：失败后必须还能重新检查，
 // 而不是每次点更新图标都弹回同一个报错页（要重启软件才行）

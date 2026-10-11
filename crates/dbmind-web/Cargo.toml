@@ -11,6 +11,9 @@ path = "src/main.rs"
 
 [dependencies]
 dbmind-core = { workspace = true }
+# 系统标准目录（在线更新的安装包默认落到「下载」）。自己拼 %USERPROFILE%\Downloads 不行：
+# Windows 上「下载」常被重定向到别的盘或 OneDrive，只有 Known Folder API 拿得到真实路径
+dirs = "6"
 serde_json = { workspace = true }
 # 任务 id 与产物文件名里的时间戳（本地时区，用户看文件名就知道什么时候导的）
 chrono = { workspace = true }

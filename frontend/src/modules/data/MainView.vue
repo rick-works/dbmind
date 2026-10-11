@@ -1139,22 +1139,20 @@ const ObjectFormDialog = defineAsyncComponent(() => import('../../common/objectf
 const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView.vue'))
 import {
   checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi,
-  dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi,
-  updateDirs as updateDirsApi, pickUpdateDir as pickUpdateDirApi
-} from '../../api'
+  dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi
+  } from '../../api'
 
 // ===== 检查更新：与 GitHub 最新 Release 比对；有新版可在线下载安装 =====
 // 说明正文按 Markdown 渲染（Release body 里带下载表格），不再显示原始文本
 const updateChecking = ref(false)
 const updateInfo = ref(null)   // { latest, current, notesHtml, releaseUrl }
 const updateVisible = ref(false)
-// 下载保存位置：点「在线更新」后弹窗让用户选，选完才开始下载。
-// 目录里不做自动清理 —— 文件留在用户自己找得到的地方，留不留他说了算。
-const DL_DIR_LS = 'dbmind_update_dir'
-const dlDir = ref(localStorage.getItem(DL_DIR_LS) || '')
+// 「打开所在文件夹」：不传路径 = 打开后端认定的下载目录（系统的「下载」）。
+// 为什么不再记一个"用户选的目录"：更新流程已经不提供选择位置了（见 doApplyUpdate），
+// 安装包固定落在系统「下载」；目录里不做自动清理，留不留由用户决定。
 const openDownloadDir = async () => {
   try {
-    await openLocalDirApi(dlDir.value || null)
+    await openLocalDirApi(null)
   } catch {
     ElMessage.warning(t('update.dlDirOpenFail'))
   }
@@ -1229,28 +1227,15 @@ const closeUpdateDialog = (neverAgain) => {
   updateVisible.value = false
 }
 
-// 点「在线更新」：先让用户选保存位置，选完才开始下载
+// 点「在线更新」：直接开始下载 —— **不再弹"选择保存位置"**（用户反馈：装个更新还要挑文件夹太啰嗦）。
+// 安装包固定落在系统的「下载」目录（由后端 resolve_dir 决定），想找它点弹窗里的「打开所在文件夹」。
 const doApplyUpdate = async () => {
   updateVisible.value = false
-  let picked
-  try {
-    picked = await pickUpdateDirApi(t('update.dlPickTitle'))
-  } catch (e) {
-    ElMessage.error((e && e.message) || t('update.dlDirOpenFail'))
-    return
-  }
-  if (!picked || !picked.success) {
-    ElMessage.error((picked && picked.message) || t('update.dlDirOpenFail'))
-    return
-  }
-  if (!picked.dir) return   // 用户在系统对话框里点了取消，不作处理
-  const dir = String(picked.dir).trim()
-  try { localStorage.setItem(DL_DIR_LS, dir) } catch { /* 隐私模式，忽略 */ }
-  await startDownload(dir)
+  await startDownload('')
 }
 
-// 失败后原地重试：沿用上次选的目录（没选过就交给后端用系统临时目录）
-const retryDownload = () => { startDownload(dlDir.value || '') }
+// 失败后原地重试：仍是同一个目录（系统的「下载」），后端会接着已下载的 .part 续传
+const retryDownload = () => { startDownload('') }
 
 
 // 真正开始下载（目录已定）

@@ -781,6 +781,7 @@ dependencies = [
  "axum",
  "chrono",
  "dbmind-core",
+ "dirs",
  "regex",
  "serde",
  "serde_json",

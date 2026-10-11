@@ -421,7 +421,8 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
     Json(json!({ "success": true, "started": true }))
 }
 
-/// 下载目标目录：用户指定优先（更新弹窗里选的保存位置），否则用系统临时目录。
+/// 下载目标目录：默认就是系统的「下载」目录，**不让用户选位置**（用户反馈：更新时还要挑文件夹太啰嗦）。
+/// 调用方（旧版前端 / 高级用法）显式给了目录时才用它给的那个。
 ///
 /// 不做自动清理：文件落在用户自己找得到的目录里，留不留由用户决定
 /// (放在 C:UsersRickAppDataLocalTemp 下既难找，也只能等系统临时文件策略被动回收)。
@@ -435,6 +436,35 @@ fn resolve_dir(dir: Option<&str>) -> std::path::PathBuf {
             return p;
         }
         tracing::warn!(target: "dbmind::update", dir = %p.display(), "指定的保存目录不可用，改用临时目录");
+    }
+    downloads_dir()
+}
+
+/// 系统的「下载」目录 —— 在线更新默认把安装包放这里（不再弹"选择文件夹"）。
+///
+/// 为什么用 `dirs::download_dir()` 而不是拼 `%USERPROFILE%\Downloads`：Windows 上「下载」这个
+/// 已知文件夹常被用户重定向到别的盘（或被 OneDrive 接管），只有 Known Folder API 拿得到真实路径；
+/// 拼字符串在那种机器上会指向一个不存在的目录，用户回头就"找不到安装包"。
+///
+/// 三级兜底，保证任何环境都下得动：标准下载目录 → 家目录下的 Downloads → 临时目录。
+fn downloads_dir() -> std::path::PathBuf {
+    if let Some(d) = dirs::download_dir() {
+        if d.is_dir() || std::fs::create_dir_all(&d).is_ok() {
+            return d;
+        }
+    }
+    let home = dirs::home_dir().or_else(|| {
+        std::env::var("USERPROFILE")
+            .ok()
+            .or_else(|| std::env::var("HOME").ok())
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from)
+    });
+    if let Some(h) = home {
+        let d = h.join("Downloads");
+        if d.is_dir() || std::fs::create_dir_all(&d).is_ok() {
+            return d;
+        }
     }
     std::env::temp_dir().join("dbmind-update")
 }
@@ -1022,8 +1052,17 @@ fn download_once(
 #[cfg(windows)]
 fn launch_installer(path: &std::path::Path) -> bool {
     use std::os::windows::process::CommandExt;
+    // 更新时**替用户拍板**，别让安装器停在「已安装」那一页问「要不要先卸载」（用户反馈：
+    // 更新不该让人做这种选择）。Tauri 的 NSIS 模板认这几个参数（见 tauri-bundler 的 installer.nsi）：
+    //   /P       passive：只显示进度条，不弹任何提问页
+    //   /UPDATE  更新模式：明确走「不先卸载、原地覆盖」分支（模板里 $UpdateMode=1 → 直接跳到 reinst_done），
+    //            即便 /P 不被支持，也不会"先卸载再装"—— 老用户的连接与设置才不会被清掉
+    //   /R       装完自动把主程序拉起来；否则更新完桌面上什么都不剩
+    // 模板会忽略不认识的参数，所以最坏情况是退回今天的行为（还弹那一页），不会更糟。
+    // 路径加引号：cmd 会二次解析，带空格的路径（例如装在 C:\Program Files 下）不加引号会被拆开。
+    let quoted = format!("\"{}\"", path.display());
     std::process::Command::new("cmd")
-        .args(["/C", "start", "", &path.to_string_lossy()])
+        .args(["/C", "start", "", quoted.as_str(), "/P", "/UPDATE", "/R"])
         .creation_flags(0x0000_0008)
         .spawn()
         .is_ok()
@@ -1125,7 +1164,8 @@ pub async fn pick_dir(
 
 /// GET /api/update/dirs —— 常用保存位置候选（跨平台）
 ///
-/// 目录选择是用户的事：把「临时目录 / 桌面 / 下载 / 文档」列出来让他挑一个。
+/// 更新流程**不再**让用户选保存位置（安装包固定落系统「下载」），这个端点留着给需要
+/// 「挑一个目录」的其他场景用：把「下载 / 桌面 / 文档 / 家目录」列出来供选。
 /// 项目里没有系统级文件夹选择对话框（Tauri 的 dialog 只在桌面壳可用，web 版没有），
 /// 所以走应用内弹窗 + 允许手填任意路径。
 pub async fn dirs() -> Json<Value> {
@@ -1134,7 +1174,9 @@ pub async fn dirs() -> Json<Value> {
         .unwrap_or_else(|_| ".".into());
     let home = std::path::PathBuf::from(home);
     let temp_dir = std::env::temp_dir();
-    let default_dir = temp_dir.join("dbmind-update");
+    // 默认目录与实际下载目录保持一致（系统的「下载」）——
+    // 否则调用方拿它当默认值，会把用户指到临时目录去
+    let default_dir = downloads_dir();
     let p = |x: std::path::PathBuf| x.to_string_lossy().to_string();
     Json(json!({
         "temp": p(default_dir.clone()),
@@ -1259,5 +1301,32 @@ mod tests {
         // 不带架构名的通用 dmg 仍兜底
         assert_eq!(asset_score_for(PkgTarget::MacArm, "DBmind_1.2.0.dmg"), 2);
         assert_eq!(asset_score_for(PkgTarget::MacX64, "DBmind_1.2.0.dmg"), 2);
+    }
+
+    /// 安装包默认落系统「下载」目录（用户不用选位置），而不是临时目录
+    #[test]
+    fn installer_goes_to_downloads_by_default() {
+        let dir = resolve_dir(None);
+        assert_eq!(dir, downloads_dir(), "没指定目录时应落在系统的下载目录");
+        assert!(dir.is_dir(), "下载目录要真实存在（不存在就建出来）：{}", dir.display());
+        assert_ne!(
+            dir,
+            std::env::temp_dir().join("dbmind-update"),
+            "不该再退到临时目录"
+        );
+    }
+
+    /// 调用方显式给了目录时仍听它的（旧版前端 / 高级用法还能指定）
+    #[test]
+    fn explicit_dir_wins() {
+        let d = std::env::temp_dir();
+        let ds = d.to_string_lossy().to_string();
+        assert_eq!(resolve_dir(Some(&ds)), d);
+        // 还不存在、但建得出来的路径也认（resolve_dir 会 create_dir_all）
+        let fresh = std::env::temp_dir().join("dbmind-update-test-dir");
+        let _ = std::fs::remove_dir_all(&fresh);
+        let fs_ = fresh.to_string_lossy().to_string();
+        assert_eq!(resolve_dir(Some(&fs_)), fresh);
+        let _ = std::fs::remove_dir_all(&fresh);
     }
 }
