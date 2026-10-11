@@ -62,6 +62,13 @@ for (const tag of tags) {
   // 幂等：切掉上一次生成的表格与它上面的标题，只留人工写的要点
   let bullets = fs.readFileSync(file, 'utf8').split('\n## 安装包')[0].trimEnd()
   bullets = bullets.replace(/^##\s*更新说明\s*\n+/, '')
+  // 要点统一排成有序列表 —— 正文每一行都带序号。人工随手写 `- 一句` 或 `1. 一句` 都行，
+  // 这里统一重排（既保证序号连续，也避免手写序号漏号/跳号）。
+  bullets = bullets
+    .split('\n')
+    .filter((l) => l.trim())
+    .map((l, i) => `${i + 1}. ${l.trim().replace(/^(?:\d+\.|[-*+])\s+/, '')}`)
+    .join('\n')
 
   const { assets } = gh(['release', 'view', tag, '--repo', REPO, '--json', 'assets'])
   const rows = []
