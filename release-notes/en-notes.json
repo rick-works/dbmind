@@ -1,5 +1,9 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.14": [
+    "Result grid font size now scales the whole result area: column headers, the footer (elapsed time / totals / selection summary) and the pager all follow it",
+    "The pager's rows-per-page text and the page-jump input follow as well — no more large grid text sitting next to tiny chrome"
+  ],
   "v1.2.13": [
     "Two new formatting options: comma position (after / before the field) and indent style (standard / tabular left / tabular right)",
     "Keyword layout rules gained an indent-width column: set it per keyword, leave empty to follow the global value, or 0 for no indent",
