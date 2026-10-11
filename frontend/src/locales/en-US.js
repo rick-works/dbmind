@@ -1806,7 +1806,7 @@ export default {
   'settings.notify.onSuccess': 'Show a popup when an action succeeds',
   'settings.notify.autoClose': 'Auto-close error popups',
   'settings.notify.save': 'Save settings',
-  'settings.notify.msgSaved': 'Notification settings saved',
+  'settings.notify.msgSaved': 'Settings saved',
 
   // ---------- Settings · About ----------
   'settings.about.name': 'DBmind',
