@@ -142,4 +142,14 @@ console.log('\n接下来把两处占位说明换成真实更新要点：')
 console.log(`  frontend/src/locales/zh-CN.js  → settings.about.rel1.note1..${NOTE_SLOTS}`)
 console.log(`  frontend/src/locales/en-US.js  → settings.about.rel1.note1..${NOTE_SLOTS}`)
 console.log('\n然后构建：cd frontend && npm run build')
+
+// 4) GitHub Release 的**标题只写版本号**（用户要求）。
+//    v1.2.11 那次我手动 gh release edit 时传了 --title 'v1.2.11：修复…'，于是在 Release
+//    列表里只有它是一行长句、其余 18 个都是纯版本号，看着很乱。描述写进正文第一行的 H1
+//    （release-notes/v<版本>.md 的第一行）就够了，标题不必重复。
+//    注意 CI 那条路本来就没问题：action-gh-release 不传 name 时默认用 tag 当标题；
+//    只有手动改的时候才要当心 —— 别传 --title，或显式传 --title v<版本>。
+console.log(`\n注意：Release 标题只写版本号（v${version}）`)
+console.log('      手动 gh release edit 时不要传 --title 描述；' +
+  `要改就 --title v${version}。`)
 if (dryRun) console.log('\n（dry-run 未写入任何文件）')
