@@ -340,11 +340,58 @@ pub async fn check() -> Json<Value> {
             let has_new = !latest.is_empty() && version_gt(&latest, &current);
             let inst = pick_installer(&v);
             let download = inst.as_ref().map(|i| i.url.clone()).unwrap_or_default();
+            // 本机的「下载」目录里**已经躺着这个版本的完整安装包**吗？
+            // 常见的两种来路：上一轮下载完（状态还在内存里，但应用重启过就没了），
+            // 或者用户在别处手动下过一份丢在这儿。
+            // 认出来的话就把状态补成 "done" —— 这样用户再点更新图标，看到的是「现在更新」，
+            // 而不是又一份版本说明、更不会把几十兆从头再下一遍。
+            // 三种情况要分开：正在下载 → 什么都不动（真实进度比磁盘更可信）；
+            // 状态里已经是这个文件 → 也不用再校验一遍（省一次哈希）；
+            // 其余且文件确实完整 → 补状态。
+            let mut downloaded = false;
+            let mut restore: Option<(String, u64, bool)> = None;
+            if has_new {
+                if let Some(i) = inst.as_ref() {
+                    let path = resolve_dir(None).join(&i.name);
+                    let path_str = path.to_string_lossy().to_string();
+                    let (same, busy) = {
+                        let p = progress_cell().lock().unwrap();
+                        (
+                            p.status == "done" && p.installer.as_deref() == Some(path_str.as_str()),
+                            p.status == "running",
+                        )
+                    };
+                    if same {
+                        downloaded = true;
+                    } else if !busy && installer_is_ready(&path, i) {
+                        downloaded = true;
+                        restore = Some((path_str, i.size, i.sha256.is_some()));
+                    }
+                }
+            }
+            if let Some((path_str, total, verified)) = restore {
+                let mut p = progress_cell().lock().unwrap();
+                if p.status != "running" {
+                    *p = Progress {
+                        status: "done".into(),
+                        received: total,
+                        total,
+                        installer: Some(path_str),
+                        version: Some(latest.clone()),
+                        verified,
+                        // 没有官方 sha256 就无法自证完整（跟走镜像下载时的口径一致）
+                        unverified: !verified,
+                        ..Default::default()
+                    };
+                }
+            }
             Json(json!({
                 "success": true,
                 "current": current,
                 "latest": latest,
                 "hasNew": has_new,
+                // 这个版本的安装包已经在本地就绪（前端据此直接给「现在更新」那一屏）
+                "downloaded": downloaded,
                 "name": v["name"].as_str().unwrap_or(""),
                 "notes": v["body"].as_str().unwrap_or(""),
                 "publishedAt": v["published_at"].as_str().unwrap_or(""),
@@ -662,6 +709,26 @@ fn part_path(dest: &std::path::Path) -> std::path::PathBuf {
     std::path::PathBuf::from(s)
 }
 
+/// 本机这份文件是不是**这一个**安装包：尺寸必须完全对上；有官方 sha256 就再核一遍内容。
+///
+/// 用途：下载目录里已经躺着同一个包时（上一轮下完就改名了、或应用重启把内存里的下载状态丢了），
+/// 别再让用户白等几十兆。注意判据是**最终文件名**（`dest`）而不是 `.part` —— 包下完就会改名，
+/// 只认 `.part` 会把"已经下好的包"当成没下过，于是从头再来一遍。
+fn installer_is_ready(path: &std::path::Path, inst: &Installer) -> bool {
+    if inst.size == 0 {
+        return false;
+    }
+    match std::fs::metadata(path) {
+        Ok(meta) if meta.len() == inst.size => match &inst.sha256 {
+            Some(want) => sha256_file(path)
+                .map(|got| got.eq_ignore_ascii_case(want))
+                .unwrap_or(false),
+            None => true,
+        },
+        _ => false,
+    }
+}
+
 fn human_bytes(n: u64) -> String {
     if n < 1024 {
         return format!("{n} B");
@@ -773,6 +840,13 @@ fn download_with_progress(
     // 测速这几秒刻意**不出提示**（原来有一条「正在选择下载源…」）：进度条 + 顶栏图标的状态
     // 已经说明"在干活"，再挂一句反而啰嗦（用户反馈）。下面循环里也只保留"换源"那一条。
     let part = part_path(dest);
+    // **最终文件**已经在了（下完就改名成它了）：直接用，别再下一次。
+    // 这在"下完之后应用重启过"时最常见 —— 进度状态只活在内存里，重启就没了；不认这个文件，
+    // 用户点一次「在线更新」就要白等几十兆（而文件明明就在他本机的「下载」目录里）。
+    if installer_is_ready(dest, inst) {
+        cell.lock().unwrap().verified = inst.sha256.is_some();
+        return Ok(());
+    }
     // 上一次可能已经把整包下完了（"取消"来得太晚、改名失败……），留下一个**完整**的 `.part`。
     // 这时再带 `Range: bytes=<全长>-` 去要，服务端一律回 **416**（区间越界）—— 四个源全失败，
     // 用户看到的是一堵 416（真机踩过）。所以先看本地这份够不够大：够就先校验，过了直接用，

@@ -1425,9 +1425,10 @@ const closeDownloadDialog = () => {
     ElMessage.info(t('update.dlBackgroundHint'))
     return
   }
-  // 已结束（成功/失败）就把后端那份终态也清掉：留着的话下次点图标会被它拦住，
-  // 又变回「只能重启软件」（真机踩过）
-  try { dismissUpdateApi() } catch { /* 忽略 */ }
+  // 终态分两种：失败 → 清掉后端那份状态（留着下次点图标会被它拦住，又变回「只能重启软件」）；
+  // 成功 → **不清**：包还躺在本机的「下载」目录里，点了「稍后」多半待会儿就回来装，
+  //        那时顶栏图标一点就该回到这一屏（完成态 + 「现在更新」），而不是又弹版本说明
+  if (dlStatus.value === 'failed') { try { dismissUpdateApi() } catch { /* 忽略 */ } }
 }
 
 
@@ -1465,34 +1466,68 @@ const maybeAnnounceUpgraded = (cur) => {
   })
 }
 
+// 「包已经下好了」那一屏：进度 100% + 「现在更新」。
+// 两条入口都用它 —— 顶栏图标点开（checkUpdate）与启动时的自动检查（autoCheckUpdate），
+// 免得同一件事在两处各写一遍、将来改一处漏一处。
+const showReadyDialog = (p) => {
+  dlVisible.value = true
+  dlStatus.value = 'done'
+  dlReceived.value = (p && p.received) || 0
+  dlTotal.value = (p && p.total) || 0
+  dlSpeed.value = 0
+  dlUrl.value = (p && p.url) || ''
+  dlUnverified.value = !!(p && p.unverified)
+  dlError.value = ''
+}
+
 const checkUpdate = async () => {
   if (updateChecking.value) return
   updateChecking.value = true
   try {
-    // 后台已有下载任务在跑：直接把进度窗调出来（这就是「上次关掉了，从哪再找到」）
-    try {
-      const p = await updateProgressApi()
-      if (p && p.status === 'running') {
-        dlVisible.value = true
-        dlStatus.value = 'running'
-        dlReceived.value = p.received || 0
-        dlTotal.value = p.total || 0
-        dlSpeed.value = p.speed || 0
-        dlUrl.value = p.url || ''
-        dlUnverified.value = !!p.unverified
-        startProgressPolling()
-        return
-      }
-      // 已结束的任务（成功/失败）**不该拦住下一次检查**：以前失败后点图标永远弹回同一个
-      // 报错页，得重启软件才行。这里先把终态清掉，再走正常的检查流程。
-      if (p && (p.status === 'done' || p.status === 'failed')) {
-        try { await dismissUpdateApi() } catch { /* 清不掉也不挡检查 */ }
-      }
-    } catch { /* 进度接口不可用就走正常检查 */ }
+    // 先看后端有没有**上一轮留下的下载任务**（它活在进程里，关掉进度窗也不会没）
+    let p = null
+    try { p = await updateProgressApi() } catch { /* 进度接口不可用就走正常检查 */ }
+
+    // 1) 正在下：直接把进度窗调出来（这就是「上次关掉了，从哪再找到」）
+    if (p && p.status === 'running') {
+      dlVisible.value = true
+      dlStatus.value = 'running'
+      dlReceived.value = p.received || 0
+      dlTotal.value = p.total || 0
+      dlSpeed.value = p.speed || 0
+      dlUrl.value = p.url || ''
+      dlUnverified.value = !!p.unverified
+      startProgressPolling()
+      return
+    }
 
     const r = await checkUpdateApi()
     if (!r || r.success === false) { ElMessage.error((r && r.message) || t('update.checkFail')); return }
     maybeAnnounceUpgraded(r.current)   // 这次启动是不是刚更新完
+
+    // 后台在"本机已有这个版本的完整安装包"时会把状态补成 done（见 check 的实现）——
+    // 补读一次进度，好让下面那段把它认出来（应用重启过之后，内存里那份状态就没了，
+    // 只剩磁盘上这个包；不认它就会重下一遍，几十兆）
+    if (r.downloaded && !(p && p.status === 'done')) {
+      try { p = await updateProgressApi() } catch { /* 读不到就按普通流程走 */ }
+    }
+
+    // 2) **包已经下好了**：用户再点这个图标，要的就是"把它装上"。
+    //    以前这里一律清掉任务重走检查，于是又弹回版本说明、还得再点一次「在线更新」
+    //    （用户反馈）。现在直接把完成态那一屏给他：进度 100% + 「现在更新」。
+    //    但**过期包**不能这么办：下完之后又发了新版，latest 已经不是它，装下去等于退版本 ——
+    //    这种情况仍按老路清掉、走正常检查（重新下新版）。p.version 缺失时也不冒这个险。
+    const pIsLatest = !!((p && p.version) && String(p.version).trim() === String(r.latest).trim())
+    if (p && p.status === 'done' && r.hasNew && pIsLatest) {
+      showReadyDialog(p)
+      return
+    }
+    // 3) 用不上的终态（失败的、已过期的包）：清掉 —— 留着的话下次点图标又被它拦住，
+    //    又变回「只能重启软件」（真机踩过）
+    if (p && (p.status === 'done' || p.status === 'failed')) {
+      try { await dismissUpdateApi() } catch { /* 清不掉也不挡检查 */ }
+    }
+
     if (!r.hasNew) { ElMessage.success(t('update.upToDate', { v: r.current })); return }
     showUpdateDialog(r, false)   // 手动检查：不显示「不再提示此版本」
   } catch {
@@ -1505,6 +1540,8 @@ const checkUpdate = async () => {
 // ===== 启动自动检测新版本：延迟后静默检查；有新版才弹窗 =====
 // 三态按钮：立即更新 / 暂不更新 / 不再提示此版本（右上角 ×）
 const UPDATE_SKIP_LS = 'dbmind_update_skip'
+// 「包已下好」那一屏每次启动只提示一次：用户点了「稍后」，就别每次开机都弹
+const READY_LS = 'dbmind_update_ready'
 // 服务可能比页面晚就绪（首次启动要初始化数据库/驱动），失败后重试一次
 onMounted(() => {
   setTimeout(autoCheckUpdate, 3000)
@@ -1531,6 +1568,16 @@ const autoCheckUpdate = async () => {
     let skipped = ''
     try { skipped = localStorage.getItem(UPDATE_SKIP_LS) || '' } catch { }
     if (skipped === r.latest) return
+    // 包**已经下好**了：这时该问的是"现在就装吗"，而不是再摆一遍版本说明 ——
+    // 说明里那个「在线更新」按钮点下去也只是回到这个已经下好的包（用户反馈：明明下好了还弹说明）
+    if (r.downloaded) {
+      let told = ''
+      try { told = localStorage.getItem(READY_LS) || '' } catch { }
+      if (told === r.latest) return
+      try { localStorage.setItem(READY_LS, r.latest) } catch { }
+      try { showReadyDialog(await updateProgressApi()) } catch { showReadyDialog(null) }
+      return
+    }
     showUpdateDialog(r, true)    // 自动弹出：给「不再提示此版本」
   } catch {
     // 首次启动时后端可能还没就绪 —— 8 秒后再试一次，仍失败才静默
