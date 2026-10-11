@@ -6596,7 +6596,9 @@ const connTypeSummary = computed(() =>
   color: var(--dc-text-dim);
   transition: background .15s ease, color .15s ease;
 }
-.win-act svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; }
+/* 窗口按钮（– □ ✕）也跟「顶栏图标」走：它们本来就是按"和左侧图标组一致"定的尺寸
+   （见上面那条注释），写死 16px 的话改了图标大小这一排就不协调了 */
+.win-act svg { width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); fill: none; stroke: currentColor; stroke-width: 1.4; }
 .win-act:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
 .win-act.is-close:hover { background: #e81123; color: #fff; }
 /* 顶栏品牌 logo：显示 22px，源图 64px（2 倍屏不糊，体积几 KB）。
@@ -6619,7 +6621,15 @@ const connTypeSummary = computed(() =>
 .top-nav-item:hover { background: var(--dc-primary-wash); color: var(--dc-text-strong); }
 .top-nav-item.dc-top-active { color: var(--dc-primary); font-weight: 600; }
 .top-nav-arrow { font-size: var(--dc-nav-fs, 14px); color: var(--dc-text-dim); }
-.top-nav-item .el-icon { font-size: var(--dc-nav-icon, 16px); }
+/* 顶栏图标（左侧菜单项 + 右侧那组图标按钮都是 .top-nav-item，这里一条全覆盖）：
+   ① 尺寸跟「设置 → 通用 → 界面尺寸 → 顶栏图标」走；
+   ② 顺手把图标盒子收紧（行高 1 + flex 居中）—— el-icon 默认继承外层的行高，盒子比字形高，
+      居中后视觉中心会比文字低一点，看着"图标和字没对齐"（用户反馈）。 */
+.top-nav-item .el-icon {
+  font-size: var(--dc-nav-icon, 16px);
+  display: inline-flex; align-items: center; justify-content: center;
+  line-height: 1; flex: 0 0 auto;
+}
 .conn-label { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--dc-tree-fs, 14px); color: var(--dc-text); }
 .conn-label.t-mysql { }
 .conn-label.t-doris { }
