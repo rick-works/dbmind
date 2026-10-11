@@ -1592,6 +1592,7 @@ export default {
   'settings.format.colLayout': 'Layout',
   'settings.format.colIndent': 'Indent',
   'settings.format.indentTip': 'Spaces per indent level for this keyword (0 = no indent); leave empty to follow the global indent width above ({n}). Only applies to "break before + indent" / "break after + indent"',
+  'settings.format.indentNA': 'The current layout does not indent, so the indent width does not apply (switch to "break before + indent" / "break after + indent" to configure it)',
   'settings.format.emptyRules': 'No rules yet — everything uses the global layout above',
   'settings.format.kwPlaceholder': 'Type a keyword or phrase (or pick from the list)',
   'settings.format.csKeepTip': 'With "Preserve", the keyword keeps the case you typed',

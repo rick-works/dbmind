@@ -1598,6 +1598,7 @@ export default {
   'settings.format.colLayout': '排版',
   'settings.format.colIndent': '缩进宽度',
   'settings.format.indentTip': '该关键字每级缩进用几个空格（可填 0 = 不缩进）；留空则跟随上面的全局缩进宽度（{n}）。只有「前换行 + 缩进 / 后换行 + 缩进」用得上',
+  'settings.format.indentNA': '当前排版不带缩进，缩进宽度用不上（换回「前换行 + 缩进 / 后换行 + 缩进」即可配置）',
   'settings.format.emptyRules': '暂无规则，全部按上方「全局排版」格式化',
   'settings.format.kwPlaceholder': '输入关键字/短语（可从列表里选）',
   'settings.format.csKeepTip': '换行关键字选「保持原样」时按输入写法保留大小写',

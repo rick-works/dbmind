@@ -531,15 +531,18 @@
                     <el-option value="afterBreakIndent" :label="$t('settings.format.lyAfterBreakIndent')" />
                     <el-option value="setop" :label="$t('settings.format.lySetop')" />
                   </el-select>
-                  <!-- 缩进宽度：只在该排版确实带缩进时可编辑；留空 = 跟随上方全局值（占位符显示的就是它） -->
+                  <!-- 缩进宽度：只在该排版确实带缩进时可编辑；留空 = 跟随上方全局值（占位符显示的就是它）。
+                       不带缩进的排版**显示成「-」**，而不是灰着一个数字 —— 灰框里带数字会被误读成
+                       "这个关键字已经配了宽度"（用户反馈）。值本身仍留在数据里，换回带缩进的排版就回来。 -->
+                  <div v-if="!ruleHasIndent(rule.ly)" class="fmt-tc-iw fmt-tc-iw-na" :title="$t('settings.format.indentNA')">-</div>
                   <el-input-number
+                    v-else
                     v-model="rule.iw"
                     class="fmt-tc-iw"
                     :min="0"
                     :max="12"
                     :step="1"
                     :controls="false"
-                    :disabled="!ruleHasIndent(rule.ly)"
                     :placeholder="String(editorForm.sqlTabWidth || 2)"
                     :title="$t('settings.format.indentTip', { n: editorForm.sqlTabWidth || 2 })"
                     @change="(v) => onIndentChange(rule, v)"
@@ -2350,10 +2353,15 @@ watch(visible, (v) => {
 .fmt-tc-kw { flex: 1 1 auto; min-width: 0; }
 .fmt-tc-cs { flex: 0 0 118px; }
 .fmt-tc-ly { flex: 0 0 226px; }
-/* 关键字级缩进宽度：窄一点、居中，和表头对齐；置灰时就是"跟随全局"的样子 */
+/* 关键字级缩进宽度：窄一点、居中，和表头对齐 */
 .fmt-tc-iw { flex: 0 0 92px; }
 .fmt-tc-iw :deep(.el-input-number) { width: 100%; }
 .fmt-tc-iw :deep(.el-input__inner) { font-size: 14px; text-align: center; }
+/* 不带缩进的排版：这一列显示「-」，居中且弱化，别让人误以为"已经配了宽度" */
+.fmt-tc-iw-na {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 32px; font-size: 14px; color: var(--dc-text-dim);
+}
 .fmt-tc-op { flex: 0 0 36px; }
 .fmt-tc-kw :deep(.el-autocomplete) { width: 100%; }
 .fmt-tc-kw :deep(.el-input) { width: 100%; }
