@@ -1233,7 +1233,10 @@ html[data-theme="light"] .el-loading-mask {
 .empty-hint.empty-hint .ek-k { font-size: 13px; }
 .empty-hint.empty-hint .empty-dss-head { font-size: 13.5px; margin-bottom: 10px; }
 .empty-hint.empty-hint .empty-ds { height: 38px; }
-.empty-hint.empty-hint .ds-name { font-size: 14px; }
+/* 连接名字跟右列「常用操作」保持同一档（13.5px）。
+   这里曾经单独提到 14px，结果同一张卡里"名字 14 / 标题 13.5 / 操作 13.5"三种字号，
+   看上去就是"左边那一列字怎么大了"（用户反馈）。 */
+.empty-hint.empty-hint .ds-name { font-size: 13.5px; }
 .empty-hint.empty-hint .ds-type { font-size: 11.5px; height: 19px; line-height: 19px; }
 .empty-hint.empty-hint .empty-act { font-size: 13.5px; padding: 8px; }
 .empty-hint.empty-hint .empty-hi { padding: 6px 8px; }

@@ -464,6 +464,14 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 return;
             }
         }
+        // **下载还没开始就把目标路径记进状态**：弹窗里「打开所在文件夹」在下载中、失败时也要能用 ——
+        // 少了这条路径，前端只能让后端去开它的默认目录，用户点开看到的是 .dbmind（数据目录），
+        // 而不是安装包所在的系统「下载」目录（用户反馈）。
+        // 装（install）另有 status == "done" 把关，所以提前写上不会造成"没下完就装"。
+        {
+            let mut p = cell.lock().unwrap();
+            p.installer = Some(dest.to_string_lossy().to_string());
+        }
         match download_with_progress(&inst, &dest, &cell, start_index) {
             Ok(()) => {
                 let installer = dest.to_string_lossy().to_string();

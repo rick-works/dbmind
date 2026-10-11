@@ -1179,12 +1179,14 @@ import {
 const updateChecking = ref(false)
 const updateInfo = ref(null)   // { latest, current, notesHtml, releaseUrl }
 const updateVisible = ref(false)
-// 「打开所在文件夹」：不传路径 = 打开后端认定的下载目录（系统的「下载」）。
+// 「打开所在文件夹」：把**安装包完整路径**交给后端 —— 后端对文件是"打开所在文件夹并选中它"。
+// 以前这里传 null，后端就只能开它自己的默认目录（数据库所在的那个 .dbmind），
+// 用户点完看到的是数据目录、里面根本没有安装包（用户反馈）。
 // 为什么不再记一个"用户选的目录"：更新流程已经不提供选择位置了（见 doApplyUpdate），
 // 安装包固定落在系统「下载」；目录里不做自动清理，留不留由用户决定。
 const openDownloadDir = async () => {
   try {
-    await openLocalDirApi(null)
+    await openLocalDirApi(dlInstaller.value || null)
   } catch {
     ElMessage.warning(t('update.dlDirOpenFail'))
   }
@@ -1205,6 +1207,9 @@ const dlTotal = ref(0)
 const dlSpeed = ref(0)
 const dlError = ref('')
 const dlUrl = ref('')
+// 安装包在本机的完整路径（后端**下载一开始**就写进进度状态）：「打开所在文件夹」靠它定位，
+// 下载中/失败时也要能用 —— 那时包还不存在，更要能带用户去看那个目录
+const dlInstaller = ref('')
 // 走了镜像又没官方 sha256 时可自证性为 0，界面必须说清（这条是风险提示，不随"完成态精简"去掉）
 const dlUnverified = ref(false)
 // 后台跑完（成功/失败）只提示一次：轮询会反复读到同一个终态
@@ -1392,6 +1397,7 @@ const startProgressPolling = (fast = true) => {
       dlTotal.value = p.total || 0
       dlSpeed.value = p.speed || 0
       dlUrl.value = p.url || ''
+      dlInstaller.value = p.installer || ''
       dlUnverified.value = !!p.unverified
       if (p.status === 'done' || p.status === 'failed') {
         // 弹窗开着 → 界面自己会显示结果；弹窗关着（用户在后台更新）→ **主动**把窗口弹出来，
@@ -1476,6 +1482,7 @@ const showReadyDialog = (p) => {
   dlTotal.value = (p && p.total) || 0
   dlSpeed.value = 0
   dlUrl.value = (p && p.url) || ''
+  dlInstaller.value = (p && p.installer) || ''
   dlUnverified.value = !!(p && p.unverified)
   dlError.value = ''
 }
@@ -1496,6 +1503,7 @@ const checkUpdate = async () => {
       dlTotal.value = p.total || 0
       dlSpeed.value = p.speed || 0
       dlUrl.value = p.url || ''
+      dlInstaller.value = p.installer || ''
       dlUnverified.value = !!p.unverified
       startProgressPolling()
       return

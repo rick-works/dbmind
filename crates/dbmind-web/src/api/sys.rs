@@ -321,12 +321,18 @@ pub async fn open_dir(
     } else {
         requested
     };
-    if !std::path::Path::new(&target).exists() {
+    let target_path = std::path::PathBuf::from(&target);
+    // 给的是**文件**还是目录，决定"打开"的含义（见下各平台注释）：
+    // 更新弹窗的「打开所在文件夹」传的是安装包完整路径，要的是"打开所在文件夹并选中它"。
+    #[cfg(not(windows))]
+    let is_file = target_path.is_file();
+    if !target_path.exists() {
         // 目录不存在时先建出来：用户点的是「打开导出目录」，而导出还没发生过
         std::fs::create_dir_all(&target)?;
     }
     #[cfg(windows)]
     {
+        // `explorer <文件>` 本身就是"打开所在文件夹并选中它"，目录则是打开该目录 —— 一条命令两种语义
         std::process::Command::new("explorer")
             .arg(&target)
             .spawn()
@@ -334,11 +340,31 @@ pub async fn open_dir(
     }
     #[cfg(not(windows))]
     {
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-        std::process::Command::new(opener)
-            .arg(&target)
-            .spawn()
-            .map_err(|e| XError::internal(format!("打开目录失败：{e}")))?;
+        if cfg!(target_os = "macos") {
+            // 必须显式 `-R`：裸 `open <文件>` 会拿着默认程序去执行/挂载它（dmg 会被挂上），
+            // 那是"打开这个文件"，不是"打开它所在的文件夹"
+            let mut cmd = std::process::Command::new("open");
+            if is_file {
+                cmd.arg("-R");
+            }
+            cmd.arg(&target)
+                .spawn()
+                .map_err(|e| XError::internal(format!("打开目录失败：{e}")))?;
+        } else {
+            // Linux 的 xdg-open 只认目录：给文件就退一层，开它所在的目录
+            let open_target = if is_file {
+                target_path
+                    .parent()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| target.clone())
+            } else {
+                target.clone()
+            };
+            std::process::Command::new("xdg-open")
+                .arg(&open_target)
+                .spawn()
+                .map_err(|e| XError::internal(format!("打开目录失败：{e}")))?;
+        }
     }
     Ok(Json(json!({ "success": true, "path": target })))
 }
