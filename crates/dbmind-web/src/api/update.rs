@@ -1370,6 +1370,22 @@ pub async fn dismiss() -> Json<Value> {
 mod tests {
     use super::*;
 
+    /// 安装前的**宿主钩子**：注册之后，`notify_install_hook()` 要把它叫起来。
+    ///
+    /// 守的是"开装之前让壳优雅退出"那条路 —— 安装器为腾出文件锁会强杀本进程，不走这个钩子
+    /// （宿主注册的是 `app.exit(0)`）退出清场就不会执行，用户的 java 宿主会变成孤儿留在后台。
+    /// 钩子是全局静态、重复注册会被忽略，所以这里只注册一次、连叫两次看计数。
+    #[test]
+    fn install_hook_fires_on_notify() {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        set_install_hook(Box::new(|| {
+            CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        notify_install_hook();
+        notify_install_hook();
+        assert_eq!(CALLS.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
     /// v1.2.0 发行版里真实存在的七个文件名（四平台产物）
     const ASSETS: &[&str] = &[
         "DBmind_1.2.0_x64-setup.exe",
