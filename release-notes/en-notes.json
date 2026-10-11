@@ -1,0 +1,104 @@
+{
+  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.12": [
+    "Fixed the dead close dialog: “Quit” and “Minimize to tray” now work",
+    "Updates are one click and silent: download, install and restart all happen by themselves",
+    "No more manual “allow” step after updating on macOS"
+  ],
+  "v1.2.11": [
+    "Fixed in-app update: Windows no longer reports “file not found”, macOS opens the image properly",
+    "The dialog shows where the installer was saved, so you can install it by hand",
+    "If the package fails to land, you get a clear reason"
+  ],
+  "v1.2.10": [
+    "Closing the window asks first: quit, or minimize to tray",
+    "New tray icon: click to bring the window back, right-click to quit",
+    "Faster build pipeline (future releases come out sooner)"
+  ],
+  "v1.2.9": [
+    "Update no longer asks where to save: the package always goes to your Downloads folder",
+    "Windows updates no longer stop at the “already installed” page — they overwrite in place and reopen the app",
+    "Tabs show only the table or object name; connection and database live in the tooltip"
+  ],
+  "v1.2.8": [
+    "Updates pick the right package for your OS: dmg on macOS, deb on Linux, setup.exe on Windows",
+    "Alignment is unified across the grids; NULL follows the column’s values",
+    "The dark-mode “unsaved changes” bar is no longer too bright",
+    "The macOS install window is centered, and the readme line is no longer cut off"
+  ],
+  "v1.2.7": [
+    "The macOS image now includes a “first launch” guide with the three steps",
+    "Two ways to avoid the prompt entirely: curl download, or Homebrew --no-quarantine"
+  ],
+  "v1.2.6": [
+    "macOS window finalised: traffic lights share the menu’s line",
+    "No more empty gap in the top-left corner when full screen"
+  ],
+  "v1.2.5": [
+    "The macOS window is back under system control; traffic lights are where they belong",
+    "No more blank strip in full screen"
+  ],
+  "v1.2.4": [
+    "The macOS image now uses two big icons — just drag them",
+    "System traffic lights restored; fixed the “no title bar and cannot close” case"
+  ],
+  "v1.2.3": [
+    "Rebuilt the macOS install screen: a proper “drag into Applications”"
+  ],
+  "v1.2.2": [
+    "Fixed the black screen on macOS: packaged resources were not found",
+    "Rebuilt the macOS install screen"
+  ],
+  "v1.2.1": [
+    "Fixed macOS apps not opening on double click: no more dependency on a library that is not there",
+    "macOS icon redone to Apple’s grid"
+  ],
+  "v1.2.0": [
+    "Driver downloads no longer need a mirror choice: it tries several domestic sources by itself",
+    "Wide tables scroll more smoothly (only visible columns are rendered)",
+    "Clearer table headers; pointers unified to a hand cursor"
+  ],
+  "v1.1.1": [
+    "Fixed three cell-editing issues (blank turned into NULL, cursor jumping after double click, “unsaved” shown after reverting)",
+    "Fixed a crash that could freeze the whole UI",
+    "Smoother scrolling on large tables; default row height 22 → 26"
+  ],
+  "v1.1.0": [
+    "Updates work without a proxy: falls back to domestic mirrors and verifies integrity with the official checksum",
+    "Resumes after network changes; failed downloads can be retried",
+    "Driver Manager entry: what is installed, what is missing, mirror switch, manual upload",
+    "Production protection on by default: data-changing actions are blocked (queries unaffected)",
+    "Download source is speed-tested automatically and shows speed and remaining time",
+    "Sum / average / min / max restored for numeric selections; external links open in the system browser",
+    "No more white flicker while scrolling results"
+  ],
+  "v1.0.4": [
+    "Stuck transfers no longer hang silently: they time out and say where they stopped",
+    "Backstop: auto-finish after 30 minutes, with the stopping point logged"
+  ],
+  "v1.0.3": [
+    "Fixed ClickHouse “execution failed” and “failed to read boolean” on large tables",
+    "Total count no longer shows -1",
+    "“Format” on a SQL selection no longer errors",
+    "“Newline before keyword” no longer adds an extra break"
+  ],
+  "v1.0.2": [
+    "Updates download behind a proxy (system proxy is detected automatically)",
+    "Downloads can run in the background; the top-bar icon shows progress",
+    "Release notes render properly; the About page version matches the package",
+    "Fixed Doris failing to connect and black console flashes on start/connect",
+    "Home KPI panel restored (total/connected connections, types); driver downloads show live progress"
+  ],
+  "v1.0.1": [
+    "Audit log: filter by category, one-click SQL copy, accurate counts and pages",
+    "Logs are no longer cleared automatically — only via “Clear logs”",
+    "Settings UI fixes (dialog height, inner scrolling, always-visible pager)",
+    "The About page now lists directories"
+  ],
+  "v1.0.0": [
+    "AI assistance: SQL explanation / optimisation / error fixing / performance diagnosis / Q&A",
+    "One workbench for 17+ data sources (MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / DMDB / Kingbase …)",
+    "Transaction mode and direct result editing: review and roll back before committing",
+    "Smart SQL editor and huge result sets: millions of rows in a blink"
+  ]
+}

@@ -13,8 +13,9 @@
  *   node scripts/sync-release-notes.mjs v1.2.12         # 只处理指定版本
  *   node scripts/sync-release-notes.mjs --no-push       # 只改本地文件，不动 GitHub
  *
- * 关于「关于」页的**英文**要点：本脚本只同步中文（`zh-CN.js`）。英文那份（`en-US.js`）请手工
- * 同步 —— 脚本会在结尾提醒哪些版本与中文条数不一致。
+ * 关于「关于」页的**英文**要点：中文从 `release-notes/<版本>.md` 自动取；英文另有一份
+ * 翻译 `release-notes/en-notes.json`（键是版本号、值是该版本的英文要点数组），它会被同步进
+ * `en-US.js`。新增版本时在那边补一段即可；缺翻译或条数与中文不一致时脚本会点名提醒。
  *
  * 幂等：安装包表格与要点顺序都按 md 重排，重复跑不会叠加。
  */
@@ -28,6 +29,7 @@ const REPO = 'rick-works/dbmind'
 const NOTES_DIR = path.join(ROOT, 'release-notes')
 const SITE = path.join(ROOT, 'website', 'index.html')
 const ZH = path.join(ROOT, 'frontend', 'src', 'locales', 'zh-CN.js')
+const EN = path.join(ROOT, 'frontend', 'src', 'locales', 'en-US.js')
 
 // 安装包表格：顺序固定 Windows → macOS → Linux，形态说明沿用既有口径
 const ORDER = [
@@ -180,16 +182,45 @@ for (const [tag, bullets] of bulletsByTag) {
   console.log(`应用「关于」页（中文）：更新 ${changed} 个版本的要点`)
 }
 
-// 英文那份提醒
-const en = fs.readFileSync(path.join(ROOT, 'frontend', 'src', 'locales', 'en-US.js'), 'utf8')
-const enCounts = {}
-for (const m of en.matchAll(/'settings\.about\.rel(\d+)\.note(\d+)'/g)) {
-  enCounts[m[1]] = Math.max(enCounts[m[1]] || 0, Number(m[2]))
+// ---------- ④ 应用「关于」页（英文）：从 release-notes/en-notes.json 同步 ----------
+{
+  const src = path.join(NOTES_DIR, 'en-notes.json')
+  if (!fs.existsSync(src)) {
+    console.log('应用「关于」页（英文）：release-notes/en-notes.json 不存在，跳过')
+  } else {
+    const map = JSON.parse(fs.readFileSync(src, 'utf8'))
+    const lines = fs.readFileSync(EN, 'utf8').split('\n')
+    const order = [...bulletsByTag.keys()]
+    const missing = []
+    let changed = 0
+    for (let n = 1; n <= order.length; n++) {
+      const tag = order[n - 1]
+      const notes = map[tag]
+      if (!Array.isArray(notes) || !notes.length) {
+        missing.push(tag)
+        continue
+      }
+      const start = lines.findIndex((l) => l.includes(`'settings.about.rel${n}.version'`))
+      if (start < 0) continue
+      const blockRe = new RegExp(`'settings\\.about\\.rel${n}\\.(version|level|date|note\\d+)'`)
+      let end = start
+      while (end + 1 < lines.length && blockRe.test(lines[end + 1])) end++
+      const kept = lines.slice(start, end + 1).filter((l) => !/\.note\d+'/.test(l))
+      const newNotes = notes.map(
+        (b, k) => `  'settings.about.rel${n}.note${k + 1}': '${String(b).replace(/'/g, "\\'")}',`
+      )
+      lines.splice(start, end - start + 1, ...kept, ...newNotes)
+      changed++
+      if (notes.length !== bulletsByTag.get(tag).length) {
+        missing.push(`${tag}(条数 ${notes.length} vs 中文 ${bulletsByTag.get(tag).length})`)
+      }
+    }
+    fs.writeFileSync(EN, lines.join('\n'), 'utf8')
+    console.log(
+      `应用「关于」页（英文）：更新 ${changed} 个版本的要点` +
+        (missing.length ? `\n注意：以下版本英文待补或条数与中文不一致 —— ${missing.join('、')}` : '')
+    )
+  }
 }
-const mismatch = [...bulletsByTag.entries()].filter(([, b], i) => (enCounts[i + 1] || 0) !== b.length)
-console.log(
-  mismatch.length
-    ? `提醒：英文要点（en-US.js）需要手工同步，条数不一致的版本：${mismatch.map(([t]) => t).join(', ')}`
-    : '英文要点条数已与中文一致'
-)
+
 console.log(noPush ? '（--no-push：未改动 GitHub）' : `已推送 ${pushed} 个 Release 正文`)
