@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.15": [
+    "Online update: a one-line heads-up before it starts — the app will close automatically and reopen as the new version once installed, instead of vanishing",
+    "Fixed macOS not reopening the app after an update: if the in-place install cannot be done it no longer stops silently — it opens the DMG so you can drag the app in, and reopening now retries by itself",
+    "The check-for-updates dialog now shows only what changed — the release asset table is no longer rendered there",
+    "The download progress bar is slimmer",
+    "The top-bar language button (中 / EN) is no longer bold — it matches the weight of the icons beside it"
+  ],
   "v1.2.14": [
     "Result grid font size now scales the whole result area: column headers, the footer (elapsed time / totals / selection summary) and the pager all follow it",
     "The pager's rows-per-page text and the page-jump input follow as well — no more large grid text sitting next to tiny chrome"
