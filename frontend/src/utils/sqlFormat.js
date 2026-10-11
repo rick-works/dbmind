@@ -259,6 +259,27 @@ const applyJoinIndent = (text, rules, tabWidth) => {
   return out
 }
 
+// 「逗号位置」：sql-formatter 15.8.2 **没有**这个选项（FormatOptions 里只有那 14 个），
+// 所以只能在引擎输出之后按行搬动逗号。
+//   after（默认）字段后：`a,` 换行 `b`  —— 引擎原本的输出就是这样，直接不动
+//   before      字段前：`a`   换行 `, b`
+// 只处理「行尾逗号 + 下一行是内容行」；下一行以右括号开头时不搬 —— 否则会排出 `, )` 这种一眼错的形状。
+const applyCommaPosition = (text, mode) => {
+  if (mode !== 'before') return text
+  const lines = String(text).split('\n')
+  for (let i = 0; i < lines.length - 1; i++) {
+    const cur = lines[i].replace(/\s+$/, '')
+    if (!cur.endsWith(',')) continue
+    const next = lines[i + 1]
+    const nt = next.trim()
+    if (!nt || /^[)\]}]/.test(nt)) continue
+    lines[i] = cur.slice(0, -1).replace(/\s+$/, '')
+    // 逗号挪到下一行内容之前，缩进沿用该行
+    lines[i + 1] = /^\s*/.exec(next)[0] + ', ' + nt
+  }
+  return lines.join('\n')
+}
+
 // 「前换行」只该在关键字**前**断行：把「关键字独占一行」时紧随其后的内容接回关键字后面。
 //
 // 为什么需要它：`clause` 走的是 sql-formatter 的 reservedClauses 角色，该角色在换行之后还会
@@ -325,6 +346,9 @@ export const formatSql = (text, s, language) => {
   if (rules.some((r) => r.ly === 'afterBreak' || r.ly === 'afterBreakIndent')) {
     out = applyBreakAfter(out, rules, options.tabWidth)
   }
+  // 全局后处理（与关键字规则无关，只看设置项）。放在最后：它按行搬动逗号，
+  // 让上面那些按关键字搬行的规则先落定，避免互相干扰。
+  out = applyCommaPosition(out, norm(s.sqlCommaPosition, 'after'))
   return out
 }
 

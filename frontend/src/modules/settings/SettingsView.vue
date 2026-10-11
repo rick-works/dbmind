@@ -463,6 +463,15 @@
                       <span class="fmt-glob-lb" :title="$t('settings.format.indentWidthTip')">{{ $t('settings.format.indentWidth') }}</span>
                       <el-input-number v-model="editorForm.sqlTabWidth" :min="1" :max="8" :disabled="editorForm.sqlUseTabs" class="fmt-glob-num" />
                     </div>
+                    <!-- 缩进风格：引擎本就支持三种（标准 / 表格左对齐 / 表格右对齐），此前只有默认值、没有入口 -->
+                    <div class="fmt-glob-it">
+                      <span class="fmt-glob-lb" :title="$t('settings.format.indentStyleTip')">{{ $t('settings.format.indentStyle') }}</span>
+                      <el-select v-model="editorForm.sqlIndentStyle" class="fmt-glob-sel">
+                        <el-option value="standard" :label="$t('settings.format.indentStandard')" />
+                        <el-option value="tabularLeft" :label="$t('settings.format.indentTabularLeft')" />
+                        <el-option value="tabularRight" :label="$t('settings.format.indentTabularRight')" />
+                      </el-select>
+                    </div>
                     <div class="fmt-glob-it">
                       <span class="fmt-glob-lb">{{ $t('settings.format.useTabs') }}</span>
                       <span class="fmt-glob-swslot"><el-switch v-model="editorForm.sqlUseTabs" /></span>
@@ -470,6 +479,14 @@
                     <div class="fmt-glob-it">
                       <span class="fmt-glob-lb" :title="$t('settings.format.exprWidthTip')">{{ $t('settings.format.exprWidth') }}</span>
                       <el-input-number v-model="editorForm.sqlExpressionWidth" :min="20" :max="200" :step="10" class="fmt-glob-num" />
+                    </div>
+                    <!-- 逗号位置：字段后=引擎原样（默认）；字段前=逗号挪到下一字段之前 -->
+                    <div class="fmt-glob-it">
+                      <span class="fmt-glob-lb" :title="$t('settings.format.commaTip')">{{ $t('settings.format.commaPosition') }}</span>
+                      <el-select v-model="editorForm.sqlCommaPosition" class="fmt-glob-sel">
+                        <el-option value="after" :label="$t('settings.format.commaAfter')" />
+                        <el-option value="before" :label="$t('settings.format.commaBefore')" />
+                      </el-select>
                     </div>
                   </div>
 
@@ -2051,10 +2068,17 @@ const resetAllShortcuts = () => {
 
 onBeforeUnmount(stopRecording)
 
+// 弹窗**已经开着**时再次点名页签：上面的 watch 只在"打开"这一刻生效，
+// 于是"设置本来就没关 + 右键 → 格式化设置"会停在原页签，用户看到的是"点了没反应"。
+// 单独盯 initialTab：值一变且弹窗可见就跟着切。
+watch(() => props.initialTab, (tab) => {
+  if (tab && visible.value) activeTab.value = tab
+})
+
 // 弹窗打开时加载数据
 watch(visible, (v) => {
   if (v) {
-    // 调用方可以点名页签（首页 MCP 卡「前往设置」直达 MCP 页签）
+    // 调用方可以点名页签（首页 MCP 卡「前往设置」直达 MCP 页签、编辑器右键「格式化设置」等）
     if (props.initialTab) activeTab.value = props.initialTab
     load()
     loadPaths()

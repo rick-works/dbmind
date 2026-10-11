@@ -3707,6 +3707,11 @@ const onEditorContextMenu = (e) => {
   items.push({ label: t('mdk.copy'), command: 'copy', shortcut: 'Ctrl+C', disabled: !hasSel })
   items.push({ label: t('common.paste'), command: 'paste', shortcut: 'Ctrl+V' })
   items.push({ label: t('common.selectAll'), command: 'select-all', shortcut: 'Ctrl+A' })
+  // —— 设置（直达对应页签）：格式化效果不满意时，第一反应就是"去哪儿调"，
+  //     手边这个右键菜单里能直接跳过去，不用再去翻右上角齿轮。
+  sep()
+  items.push({ label: t('sqlq.ctxEditorSettings'), command: 'open-editor-settings' })
+  items.push({ label: t('sqlq.ctxFormatSettings'), command: 'open-format-settings' })
 
   edCtxSub.value = null
   edCtx.value = { visible: true, x: e.clientX, y: e.clientY, items }
@@ -3726,6 +3731,14 @@ const onEdCtxItem = (item) => {
   if (!item || item.sep || item.sub || item.disabled) return
   const ed = editorInstance
   closeEdCtx()
+  // 设置类命令**不依赖编辑器实例**，所以放在 if (!ed) 之前 —— 编辑器还没就绪也照样能打开设置。
+  // 走 MainView 监听的那个全局事件（dc-open-settings），与首页 MCP 卡「前往设置」同一条链路。
+  if (item.command === 'open-editor-settings' || item.command === 'open-format-settings') {
+    window.dispatchEvent(new CustomEvent('dc-open-settings', {
+      detail: { tab: item.command === 'open-editor-settings' ? 'editor' : 'format' }
+    }))
+    return
+  }
   if (!ed) return
   // **先还焦点再执行**：粘贴/剪切等剪贴板操作要求编辑器持有焦点
   //（navigator.clipboard.readText 在无焦点时直接失败，此前是先 trigger 后 focus，

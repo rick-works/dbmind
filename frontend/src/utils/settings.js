@@ -19,6 +19,9 @@ export const editorDefaults = {
   sqlIdentifierCase: 'preserve',    // 标识符大小写
   sqlDataTypeCase: 'preserve',      // 数据类型大小写
   sqlFunctionCase: 'preserve',      // 函数名大小写
+  sqlIndentStyle: 'standard',       // 缩进风格：standard=标准 | tabularLeft=表格左对齐 | tabularRight=表格右对齐
+                                    // ⚠️ 这个键**必须**在这里有默认值：格式化侧一直用 norm(sqlIndentStyle, 'standard') 兜底，
+                                    // 所以输出没错；但设置界面是直接绑 editorForm 的，没有默认值就会显示成空（"请选择"）。
   sqlTabWidth: 2,                   // 缩进宽度（空格个数）
   sqlUseTabs: false,                // 是否用 Tab 缩进（开启后忽略缩进宽度）
   sqlExpressionWidth: 50,           // 表达式超过该宽度自动折行
@@ -26,6 +29,7 @@ export const editorDefaults = {
   sqlLogicalOperatorNewline: 'before', // 逻辑运算符 AND/OR 换行位置：before=前换行 | after=后换行
   sqlNewlineBeforeSemicolon: false, // 分号是否独占一行
   sqlDenseOperators: false,         // 运算符两侧是否不加空格（a=b+1）
+  sqlCommaPosition: 'after',        // 逗号位置：after=字段后（默认，即引擎原样）| before=字段前（, 前置到下一行）
   // 关键字排版规则：每条 { kw: 关键字/短语, cs: upper=大写 | lower=小写 | keep=保持原样, ly: none=内联 | clause=前换行 | join=前换行+缩进 | afterBreak=后换行 | afterBreakIndent=后换行+缩进 | setop=前后各换行 }
   // 不配置任何规则时，所有关键字均按上述全局默认排版
   sqlKeywordRules: []
