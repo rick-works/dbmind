@@ -615,17 +615,6 @@ fn parse_sha256(out: &str) -> Option<String> {
         .map(|tok| tok.to_ascii_lowercase())
 }
 
-/// 从 URL 里抠出主机名，用于进度说明（"正在从 ghproxy.net 下载"比"从第 2 个源下载"有用）
-fn host_of(url: &str) -> String {
-    url.split("//")
-        .nth(1)
-        .unwrap_or(url)
-        .split('/')
-        .next()
-        .unwrap_or(url)
-        .to_string()
-}
-
 /// 用**系统自带**工具算 sha256：Windows `certutil`、macOS `shasum`、Linux `sha256sum`。
 ///
 /// 为什么不引 sha2 crate：这条链路只在下载完成后跑一次，而把依赖面控制住比省一次进程开销
@@ -781,9 +770,8 @@ fn download_with_progress(
     let _ = start_index;
     // **自动选源**：现场并发测速，探通的排前面（最快的在最前），没探通的留在后面兜底。
     // 用户不需要、也不应该自己挑源 —— 哪个快只有现场量得准。
-    // 测速要几秒，这段时间进度条停在 0 B：一句话都不说，用户看到的就是"点了没反应"
-    //（真机反馈）。所以只补一条等待提示，连上第一个字节后立刻清掉（见 `download_once`）。
-    cell.lock().unwrap().note = Some("正在选择下载源…".to_string());
+    // 测速这几秒刻意**不出提示**（原来有一条「正在选择下载源…」）：进度条 + 顶栏图标的状态
+    // 已经说明"在干活"，再挂一句反而啰嗦（用户反馈）。下面循环里也只保留"换源"那一条。
     let part = part_path(dest);
     // 上一次可能已经把整包下完了（"取消"来得太晚、改名失败……），留下一个**完整**的 `.part`。
     // 这时再带 `Range: bytes=<全长>-` 去要，服务端一律回 **416**（区间越界）—— 四个源全失败，
@@ -827,33 +815,19 @@ fn download_with_progress(
         let Some(src) = ranked.iter().find(|s| !tried.contains(&source_key(s))).cloned() else {
             break; // 所有源都试过一轮，收工（下面统一报错）
         };
-        // 首次尝试（还没换过源）与"换源之后"给的提示不同，见下面的 note
-        let is_start = tried.is_empty();
         tried.insert(source_key(&src));
         let si = ranked
             .iter()
             .position(|s| source_key(s) == source_key(&src))
             .unwrap_or(0);
-        let host = host_of(&src.url);
-        let via = if src.use_proxy { "" } else { "（不走代理）" };
         for attempt in 1..=2u32 {
             let done = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
-            // 提示只留两类，其余一律不显示：
-            //   · **等待型**：正在选择下载源 / 正在连接 X…（连上就清）—— 没有它，慢源那 10 秒
-            //     连接超时期间界面一个字都没有，用户判定成"点了没反应"（真机反馈）；
-            //   · **换源**：已换到 X —— 用户点了「换个更快的源」（或系统自动切了源），
-            //     总得让人知道现在走的是哪个源，否则那个按钮看着像没生效。
-            // 刻意**不为"续传 / 第 N 次重试"单出一行**：这些是自动恢复的常态，进度条上的数字
-            // 已经在说"在往前走"了（用户反馈：那两句都嫌吵）。
-            let note = if !is_start {
-                Some(format!("已换到 {host}{via}"))
-            } else {
-                // 一上来、以及同源重试时：给等待型提示，连上后由 `download_once` 立刻清掉。
-                Some(format!("正在连接 {host}{via}…"))
-            };
             {
                 let mut p = cell.lock().unwrap();
-                p.note = note;
+                // 进度条下面**一律不出提示**：续传 / 第 N 次重试 / 正在连接… / 正在选择下载源… /
+                // 已换到 X —— 逐条都被反馈嫌吵，索性全去掉。进度与速度那一行已经说明一切；
+                // 真要排查看日志（每条源失败、每次换源都 tracing::warn/info 过）。
+                p.note = None;
                 p.url = Some(src.url.clone());
                 p.source_index = si;
                 p.source_total = ranked.len();
@@ -1032,13 +1006,8 @@ fn download_once(
         p.url = Some(url.to_string());
         p.total = total;
         p.received = base;
-        // 连上了（响应头与长度都拿到了）：清掉"正在选择下载源 / 正在连接 X"这类**等待型**提示。
-        // 判据用前缀："正在…"是等待（连上就没意义了），而"已换到…/第 N 次重试…"是**解释型**，
-        // 要留到这次下载结束 —— 它们回答的是"数字在动，可为什么我又在等"。
-        // 续传（base > 0）不再单出一行提示：进度条上的数字本身就说明"是从这儿接着下的"。
-        if p.note.as_deref().map(|n| n.starts_with("正在")).unwrap_or(false) {
-            p.note = None;
-        }
+        // 提示不再在这里清理：现在只剩"已换到 X"一种（换源时写的），
+        // 它要留到这次下载结束才由外层统一清掉（见下载末尾 p.note = None）。
     }
     let mut opts = std::fs::OpenOptions::new();
     opts.create(true);

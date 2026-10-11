@@ -1028,8 +1028,8 @@
       <div v-if="dlStatus === 'done' && dlUnverified" class="upd-dl-sub">{{ t('update.dlUnverified') }}</div>
       <!-- 失败时不再另加一行"下一步怎么办"：后端那句话本身就是一句简短的可操作提示
            （"下载失败（N 个下载源都没成功）。可以点「重试」继续…"），加一行反而更啰嗦 -->
-      <!-- 过程说明（自动选源 / 续传 / 重连 / 第几次重试）：只在下进行中才有意义 -->
-      <div v-if="dlStatus === 'running' && dlNote" class="upd-dl-sub">{{ dlNote }}</div>
+      <!-- 进度条下面**不再有"过程说明"那一行**：换源 / 续传 / 重试 / 连接中 都嫌吵（用户反馈），
+           后端也不再产生 note —— 进度与速度那一行已经说明一切，细节去日志看 -->
     </div>
     <template #footer>
       <!-- 失败必须能**原地重试**：以前失败后只能重启软件，点更新图标永远弹回同一个报错页 -->
@@ -1170,7 +1170,8 @@ const ObjectFormDialog = defineAsyncComponent(() => import('../../common/objectf
 const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView.vue'))
 import {
   checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi,
-  installUpdate as installUpdateApi, dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi
+  cancelUpdate as cancelUpdateApi, installUpdate as installUpdateApi,
+  dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi
   } from '../../api'
 
 // ===== 检查更新：与 GitHub 最新 Release 比对；有新版可在线下载安装 =====
@@ -1203,8 +1204,6 @@ const dlReceived = ref(0)
 const dlTotal = ref(0)
 const dlSpeed = ref(0)
 const dlError = ref('')
-// 过程说明（换源 / 续传 / 第几次重试），来自后端 note —— 不是错误，画在进度条下方
-const dlNote = ref('')
 const dlUrl = ref('')
 // 走了镜像又没官方 sha256 时可自证性为 0，界面必须说清（这条是风险提示，不随"完成态精简"去掉）
 const dlUnverified = ref(false)
@@ -1283,9 +1282,15 @@ const doApplyUpdate = async () => {
 // 失败后原地重试：仍是同一个目录（系统的「下载」），后端会接着已下载的 .part 续传
 const retryDownload = () => { startDownload('') }
 
-// 「换个更快的源」：与重试走同一条路（后端每次换源都会**重新测速**，并从 .part 续传）；
-// 名字分开只为在界面上一眼看出它解决的是"太慢"，而不是"失败了"。
-const switchSource = () => { startDownload('') }
+// 「换个更快的源」：**先取消、再重新开始**。
+// 只调 apply 不行 —— 后端在"任务进行中"会直接返回不干活（"下载任务已在进行中"），
+// 按钮会看着像没生效。取消会保留已下载的 .part；重新开始时后端**重新测速排源**，
+// 于是从断点接着下、走的是当下最快的那个源。
+const switchSource = async () => {
+  try { await cancelUpdateApi() } catch { /* 取消失败也让下面再试一次 */ }
+  await new Promise((r) => setTimeout(r, 900))   // 给下载循环一点时间看到取消标志
+  await startDownload('')
+}
 
 // ===== 下载完成后的那一步：问一次，再装 =====
 // 下载可以在后台慢慢跑，装则要**关掉应用** —— 所以"确认"放在这里，而不是点更新的时候。
@@ -1359,7 +1364,6 @@ const startDownload = async (dir) => {
   dlTotal.value = 0
   dlSpeed.value = 0
   dlError.value = ''
-  dlNote.value = ''
   dlUrl.value = ''
   dlUnverified.value = false
   announced.value = false
@@ -1387,7 +1391,6 @@ const startProgressPolling = (fast = true) => {
       dlReceived.value = p.received || 0
       dlTotal.value = p.total || 0
       dlSpeed.value = p.speed || 0
-      dlNote.value = p.note || ''
       dlUrl.value = p.url || ''
       dlUnverified.value = !!p.unverified
       if (p.status === 'done' || p.status === 'failed') {
@@ -1396,7 +1399,6 @@ const startProgressPolling = (fast = true) => {
         const wasOpen = dlVisible.value
         dlStatus.value = p.status
         if (p.status === 'failed') dlError.value = p.error || t('update.applyFail')
-        dlNote.value = ''
         stopProgressPolling()
         if (!wasOpen && !announced.value) {
           announced.value = true
@@ -1476,7 +1478,6 @@ const checkUpdate = async () => {
         dlReceived.value = p.received || 0
         dlTotal.value = p.total || 0
         dlSpeed.value = p.speed || 0
-        dlNote.value = p.note || ''
         dlUrl.value = p.url || ''
         dlUnverified.value = !!p.unverified
         startProgressPolling()

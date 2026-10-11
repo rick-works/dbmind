@@ -216,6 +216,8 @@ export const applyUpdate = (dir) => http.post('/api/update/apply', { dir: dir ||
 export const updateProgress = () => http.get('/api/update/progress', { timeout: 10000 }).then(r => r.data)
 // 清掉已结束（成功/失败）的更新任务状态：失败后必须还能重新检查，
 // 而不是每次点更新图标都弹回同一个报错页（要重启软件才行）
+// 「换个更快的源」要这两步配合：先 cancel（保留已下载的 .part），再重新 apply（重新测速 + 断点续传）
+export const cancelUpdate = () => http.post('/api/update/cancel', null, { timeout: 10000 }).then(r => r.data)
 // 下载与安装是两步：apply 只负责下好；用户点「现在更新」才走这个真正开装
 export const installUpdate = () => http.post('/api/update/install', null, { timeout: 30000 }).then(r => r.data)
 export const dismissUpdate = () => http.post('/api/update/dismiss').then(r => r.data)
