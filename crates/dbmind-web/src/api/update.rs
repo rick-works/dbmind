@@ -1136,36 +1136,93 @@ fn launch_installer(path: &std::path::Path) -> bool {
 ///     输出格式随系统版本变（APFS 那行还带尾随空格），解析过一次就知道不值当。
 ///   · 脚本里**等旧进程退出**再 `open`：同名 .app 已经在运行时，`open` 只会把旧的那个叫到
 ///     前台，不会换成新代码。宿主会在这之前优雅关掉自己（见 `INSTALL_HOOK`）；万一没关成，
-///     脚本最多等 30 秒后自己收尾。
+///     脚本最多等 30 秒后自己收尾。`pkill` 之后**再等一次**，直到进程表里真的没有它。
+///   · 重开用 `open -n`（明起一个新实例）并**重试 5 次**：旧实例刚退时 LaunchServices 还在
+///     收尾，首次 open 有概率什么也不做 —— 这正是"mac 升级完不自动打开"最像的一条成因。
 ///   · 这里用 `spawn()` 而不是 `status()`：脚本要等本进程退出，等它返回就是死锁。
-///   · 挂载或找不到 .app 时**退回老行为**（挂上 dmg 让用户自己拖），至少不让人卡住 ——
-///     顺带一提：脚本内部也留了不写入就退出的分支，所以"更新完发现应用没了"这种最坏情况
-///     只会出现在 `ditto` 本身失败（磁盘满、没权限）时。
+///   · **刻意不用 `set -e`**：挂载失败、镜像里没有 .app、`ditto` 被系统拦下（macOS 13+ 对改写
+///     /Applications 下的 .app 有额外授权要求）…… 任何一步失败都必须走到"给用户一个可见结果"
+///     —— 要么重开新版，要么至少把 dmg 弹出来让用户自己拖。中途静默退出是最糟的形态：
+///     应用已经关了、屏幕上什么都没有，用户只会以为"更新把软件弄没了"。
+///   · 全程写 `~/Library/Logs/DBmind-update.log`：脚本活在应用进程之外，出问题时界面已经没了，
+///     这个文件是唯一的现场。
 #[cfg(target_os = "macos")]
 fn launch_installer(path: &std::path::Path) -> bool {
     const SCRIPT: &str = r#"
-set -e
+# 全程写日志：脚本运行在应用进程之外，出问题时界面已经没了，这个文件是唯一的现场。
+# 路径：~/Library/Logs/DBmind-update.log（访达 → 前往文件夹 → 粘贴即可）
+LOG="$HOME/Library/Logs/DBmind-update.log"
+# 目录不可写就落临时目录：`exec` 的重定向失败在非交互 shell 里会**直接结束脚本** ——
+# 记日志失败绝不该把更新本身弄挂，这里先把目录挑好再 exec
+[ -w "$(dirname "$LOG")" ] 2>/dev/null || LOG="${TMPDIR:-/tmp}/dbmind-update.log"
+exec >>"$LOG" 2>&1
+echo "=== $(date '+%F %T') 开始更新"
 DMG="$1"
 APP="$2"
-MNT=$(mktemp -d "${TMPDIR:-/tmp}/dbmind-dmg.XXXXXX")
-hdiutil attach -nobrowse -noverify -readonly -mountpoint "$MNT" "$DMG" >/dev/null
-SRC=$(ls -d "$MNT"/*.app 2>/dev/null | head -1)
-if [ -z "$SRC" ]; then
-  hdiutil detach "$MNT" -quiet 2>/dev/null || true
-  rmdir "$MNT" 2>/dev/null || true
+echo "dmg=$DMG"
+echo "app=$APP"
+
+# 刻意**不用 `set -e`**：任何一步失败都必须走到"给用户一个可见结果"（重开新版，或至少弹出镜像），
+# 否则就是最糟的形态 —— 应用已经关了，屏幕上什么都没有，用户以为"更新把软件弄没了"。
+MNT=$(mktemp -d "${TMPDIR:-/tmp}/dbmind-dmg.XXXXXX") || { echo "mktemp 失败"; open "$DMG"; exit 5; }
+if ! hdiutil attach -nobrowse -noverify -readonly -mountpoint "$MNT" "$DMG"; then
+  echo "挂载失败 → 弹出镜像让用户手动拖"
+  rmdir "$MNT" 2>/dev/null
   open "$DMG"
   exit 4
 fi
+SRC=$(ls -d "$MNT"/*.app 2>/dev/null | head -1)
+if [ -z "$SRC" ]; then
+  echo "镜像里没有 .app → 弹出镜像让用户手动拖"
+  hdiutil detach "$MNT" -quiet 2>/dev/null
+  rmdir "$MNT" 2>/dev/null
+  open "$DMG"
+  exit 4
+fi
+echo "src=$SRC"
+
+# 1) 等旧进程退出（宿主会优雅关掉自己；最多等 30 秒），再补一刀
 for i in $(seq 1 100); do
   pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1 || break
   sleep 0.3
 done
-pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1 && pkill -f "$APP/Contents/MacOS/" || true
-ditto "$SRC" "$APP"
-xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
-hdiutil detach "$MNT" -quiet 2>/dev/null || true
-rmdir "$MNT" 2>/dev/null || true
-open "$APP"
+pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1 && pkill -f "$APP/Contents/MacOS/"
+# 2) 再等它**真的从进程表消失** —— 名字相同的旧实例还在跑时，open 只会把它叫到前台，
+#    看到的仍是旧代码（"升级完没反应"里最像的一条）
+for i in $(seq 1 30); do
+  pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1 || break
+  sleep 0.3
+done
+
+# 3) 原地覆盖（路径不变）。macOS 13+ 对改写 /Applications 下的 .app 有额外授权要求，
+#    被系统拦下时 ditto 会失败 —— 这时**不能就此收工**（应用已关、用户什么都看不到），
+#    退回"弹出镜像让用户拖"：拖拽由访达完成，权限是用户给的，一定成功
+if ! ditto "$SRC" "$APP"; then
+  echo "覆盖失败（权限或占用）→ 弹出镜像让用户手动拖"
+  hdiutil detach "$MNT" -quiet 2>/dev/null
+  rmdir "$MNT" 2>/dev/null
+  open "$DMG"
+  exit 6
+fi
+xattr -dr com.apple.quarantine "$APP" 2>/dev/null
+hdiutil detach "$MNT" -quiet 2>/dev/null
+rmdir "$MNT" 2>/dev/null
+echo "已覆盖完成"
+
+# 4) 重新打开新版：用 -n 明起一个新实例（旧进程已确认退出，不会重复开），
+#    首次可能因 LaunchServices 还在收尾而失败，重试几次；全失败就退回打开镜像
+touch "$APP" 2>/dev/null
+for i in 1 2 3 4 5; do
+  if open -n "$APP" 2>/dev/null; then
+    echo "已重新打开（第 $i 次尝试）"
+    exit 0
+  fi
+  echo "第 $i 次 open 失败，重试"
+  sleep 1
+done
+echo "多次 open 失败 → 弹出镜像让用户手动拖"
+open "$DMG"
+exit 7
 "#;
     let Some(bundle) = current_app_bundle() else {
         // 拿不到 .app 路径（例如直接跑可执行文件）：退回老行为

@@ -1235,9 +1235,21 @@ const closeUpdateDialog = (neverAgain) => {
   updateVisible.value = false
 }
 
-// 点「在线更新」：直接开始下载 —— **不再弹"选择保存位置"**（用户反馈：装个更新还要挑文件夹太啰嗦）。
-// 安装包固定落在系统的「下载」目录（由后端 resolve_dir 决定），想找它点弹窗里的「打开所在文件夹」。
+// 点「在线更新」：先给一句**一句话的交待**再开始下载。
+// 为什么要这一步：更新会让应用自己关掉（不打招呼就消失，用户第一反应是"崩了"）。
+// 文案刻意只写事实、不加解释（"应用会自动关闭，装好后自动打开成新版。"）—— 提示太长就没人看。
+// 确认后**不再弹"选择保存位置"**（装个更新还要挑文件夹太啰嗦）：安装包固定落系统的「下载」目录
+// （由后端 resolve_dir 决定），想找它点弹窗里的「打开所在文件夹」。
 const doApplyUpdate = async () => {
+  try {
+    await ElMessageBox.confirm(t('update.confirmBody'), t('update.dlTitle'), {
+      confirmButtonText: t('update.confirmOk'),
+      cancelButtonText: t('common.cancel'),
+      type: 'info'
+    })
+  } catch {
+    return // 点了取消：什么都不做，仍停在版本说明页
+  }
   updateVisible.value = false
   await startDownload('')
 }
