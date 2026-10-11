@@ -152,4 +152,6 @@ console.log('\n然后构建：cd frontend && npm run build')
 console.log(`\n注意：Release 标题只写版本号（v${version}）`)
 console.log('      手动 gh release edit 时不要传 --title 描述；' +
   `要改就 --title v${version}。`)
+console.log('      正文照 release-notes/TEMPLATE.md 写简短版：只列「更新了什么」，')
+console.log('      2~5 条、每条一句话；不放发布日期 / 安装包表格 / Linux 说明 / 升级提示。')
 if (dryRun) console.log('\n（dry-run 未写入任何文件）')
