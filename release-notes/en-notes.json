@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.16": [
+    "Online update: when the package is already downloaded, the toolbar icon (and the startup check) goes straight to Update now instead of showing the release notes first — and a complete installer already on disk is reused instead of being downloaded twice, even after a restart",
+    "Online update: all in-progress chatter under the progress bar is gone (retry counters, resume notices, source selection) — only progress and speed remain",
+    "Online update: switch to a faster source really switches now (cancel, re-rank, resume from the breakpoint); failures can be retried in place, finishing in the background or failing pops a dialog, and the installer is removed after a successful update",
+    "The two update dialogs now match the rest of the app (badge in the title, same button sizing), and the confirmation reads statement first, question last",
+    "Home dashboard: the connection-name font in Quick start now matches the actions column on the right"
+  ],
   "v1.2.15": [
     "Online update: a one-line heads-up before it starts — the app will close automatically and reopen as the new version once installed, instead of vanishing",
     "Fixed macOS not reopening the app after an update: if the in-place install cannot be done it no longer stops silently — it opens the DMG so you can drag the app in, and reopening now retries by itself",
