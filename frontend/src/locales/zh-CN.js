@@ -19,7 +19,7 @@ export default {
   'settings.appearance.desc': '顶栏菜单、顶栏右侧图标与左侧树的尺寸，改完立即生效（不需要重启）',
   'settings.appearance.navFont': '顶栏菜单文字（含图标）',
   'settings.appearance.navIcon': '顶栏右侧图标',
-  'settings.appearance.treeFont': '左侧树文字',
+  'settings.appearance.treeFont': '左侧树文字（含图标）',
   'settings.topMenu.title': '顶栏菜单',
   'settings.topMenu.desc': '勾选顶栏显示哪些功能入口，并用上下按钮调整顺序',
   'nav.sync': '数据传输',
