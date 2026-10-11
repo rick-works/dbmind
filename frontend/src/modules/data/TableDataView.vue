@@ -185,7 +185,7 @@
                 <!-- 横向窗口的左占位：不渲染的列也要占住宽度，否则后面的列会左移串位 -->
               <td v-if="colLead > 0" class="col-gap" :colspan="colLead" />
               <td v-for="(col, ci) in visibleColsSlice" :key="col" :data-gkey="(rowIndex(row) + 1) + ':' + (colLead + ci)"
-                    :class="[cellAlignClass(row[col], colTypeMap[col]), { 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col), 'col-sel-l': selEdges.colLeft.has(col), 'col-sel-r': selEdges.colRight.has(col), 'active-cell': activeCell && activeCell.row === row && activeCell.col === col && noBulkSelection, 'editing': editingCell && editingCell.row === row && editingCell.col === col }]"
+                    :class="[cellAlignOf(row[col], col), { 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col), 'col-sel-l': selEdges.colLeft.has(col), 'col-sel-r': selEdges.colRight.has(col), 'active-cell': activeCell && activeCell.row === row && activeCell.col === col && noBulkSelection, 'editing': editingCell && editingCell.row === row && editingCell.col === col }]"
                     :title="formatCell(row[col])"
                     @dblclick="startEdit(row, col, $event)"
                     @contextmenu.prevent.stop="onCellContextMenu($event, row, col)"
@@ -309,7 +309,7 @@ import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
 import { getQuerySettings } from '../../utils/settings'
 import { useShortcutScope } from '../../utils/useShortcuts'
 import { useExcelSelection } from '../../utils/excelSelection'
-import { cellAlignClass } from '../../utils/cellAlign'
+import { cellAlignClass, columnAlignClasses } from '../../utils/cellAlign'
 import { rowWindow } from '../../utils/rowWindow'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import { quoteStyleOf } from '../../types'
@@ -490,6 +490,19 @@ const hasChanges = computed(() => rows.value.some(r =>
 // 只依赖 rows 身份 + deletedRids/hiddenRows 两个集合：单元格值编辑只改行内字段，
 // 不碰这两个集合，所以 displayRows 不会在逐字符输入时重算（否则重建数组会让可视窗口整片重渲染）
 const displayRows = computed(() => rows.value.filter(r => !deletedRids.value.has(r._rid) && !hiddenRows.value.has(r._rid)))
+/**
+ * NULL 单元格的对齐：**按列算一次、缓存住**（见 utils/cellAlign.columnAlignClasses）。
+ *
+ * 不能只靠 colTypeMap：CHAR / VARCHAR 里存的是 `02301` 这类编码，类型说"文本"（左对齐）、
+ * 值却像数字（右对齐）—— 于是同一列里数字靠右、NULL 靠左（用户反馈"null 和数字对齐呀"）。
+ * 现在看这一列的值整体怎么排；列类型明确是数字 / 日期 / 布尔时仍以类型为准。
+ */
+const nullAlignMap = computed(() =>
+  columnAlignClasses(displayRows.value, visibleColumns.value.map((name) => ({ name, type: colTypeMap.value[name] })))
+)
+/** 单元格对齐：值按值判（Excel 规则）；NULL 跟这一列的值整体怎么排 */
+const cellAlignOf = (v, col) =>
+  v == null ? (nullAlignMap.value[col] || '') : cellAlignClass(v, colTypeMap.value[col])
 
 // _rid → displayRows 下标，供拖选时由 DOM 行反查（O(1)）。
 // 以前每次 mousemove 都 findIndex 扫全表，上万行时一次拖选就是几十万次比较

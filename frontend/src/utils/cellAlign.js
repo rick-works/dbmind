@@ -3,7 +3,9 @@
  *   - 数字（含「看起来是数字」的值）→ 右对齐
  *   - 日期 / 时间 → 右对齐（Excel 对日期同样右对齐）
  *   - 布尔（true/false）→ 居中
- *   - 文本、NULL、空值 → 左对齐（返回空串，走默认样式）
+ *   - 文本、空值 → 左对齐（返回空串，走默认样式）
+ *   - **NULL → 跟同列的真实值对齐**（见 [`columnAlignClasses`]）：值本身没有类型可判，
+ *     只按字段类型判会与同列的值错位（用户反馈"null 和数字对齐呀"）
  *
  * 用法：`:class="[cellAlignClass(row[col]), { ...其它类 }]"`，配合
  *      `.data-table td.al-r { text-align: right }` / `.al-c { text-align: center }`。
@@ -35,8 +37,12 @@ export const alignByType = (colType) => {
  * @returns {''|'al-r'|'al-c'} 对齐用的 class（'' = 左对齐，默认）
  */
 export const cellAlignClass = (v, colType) => {
-  // NULL 没有值可判断，就跟着字段类型走（数字 / 日期列的 NULL 同样靠右，与 Excel 一致），
-  // 不再一律居中 —— 一列里右对齐的数字中间夹几个居中的 NULL，看着很乱
+  // NULL 没有值可判断，只好跟着字段类型走（数字 / 日期列的 NULL 同样靠右，与 Excel 一致），
+  // 不再一律居中 —— 一列里右对齐的数字中间夹几个居中的 NULL，看着很乱。
+  // ⚠️ 但只有字段类型**拿得到且认得**时这条才准：SQL 结果集常常没有列类型，
+  //    CHAR 列里还可能是 `02301` 这种"类型说文本、值像数字"的编码 —— 那两种情况下
+  //    这里会返回空串（左对齐），而同一列的值按值判成右对齐，于是同列里数字靠右、NULL 靠左。
+  //    所以**网格里 NULL 一律不要直接调本函数**，改用 columnAlignClasses（按列算一次、缓存住）。
   if (v == null) return alignByType(colType)
   if (typeof v === 'number' || typeof v === 'bigint') {
     // NaN / Infinity 也归到数字一侧，与 Excel 一致
@@ -54,4 +60,49 @@ export const cellAlignClass = (v, colType) => {
   if (NUM_RE.test(s)) return 'al-r'
   if (DATE_RE.test(s) || TIME_RE.test(s)) return 'al-r'
   return ''
+}
+
+/** 一列最多看多少个非空值来定调：够判断"这列整体怎么排"就行，不必扫完整列 */
+const SAMPLE_LIMIT = 200
+
+/**
+ * 按列算 NULL 单元格该用的对齐（值本身仍走 [`cellAlignClass`]）。
+ *
+ * 为什么要按列算：NULL 没有值可判断，只按字段类型走会与同列的真值错位 ——
+ *   · SQL 结果集的列类型经常拿不到（查询端点不带 columnTypes）→ 返回空串（左对齐），
+ *     而同一列的值 `'02301'` 按"看着像数字"判成右对齐；
+ *   · 表预览里 CHAR / VARCHAR 存的是 `02301` 这类编码，类型说"文本"（左）、值却像数字（右）。
+ * 两种情况的观感都是"同一列里数字靠右、NULL 靠左"（用户反馈"null 和数字对齐呀"）。
+ *
+ * 规则：列类型明确是数字 / 日期 → 靠右、布尔 → 居中（类型说了算）；
+ * 类型拿不到或不认识时，看这一列**非空值**的多数派 —— 多数像数字 → 靠右，否则靠左。
+ *
+ * **按列算一次、由调用方缓存在 computed 里**：表里 NULL 可能有上千个，
+ * 每个格子现扫一遍自己那一列是 O(行数²)。
+ *
+ * @param {Array<object>} rows 已加载的行（桌面端是当前页，最多几百行）
+ * @param {Array<{name: string, type?: string}>} cols 列（名字 + 原始类型串）
+ * @returns {Object} 列名 → 对齐类（'' 表示左对齐，走默认样式）
+ */
+export const columnAlignClasses = (rows, cols) => {
+  const map = Object.create(null)
+  for (const c of cols || []) {
+    const name = c && c.name
+    if (!name) continue
+    // 类型说了算（数字 / 日期 / 布尔）
+    const byType = alignByType(c.type)
+    if (byType) { map[name] = byType; continue }
+    // 类型没有或不认识 → 看这一列的值怎么排
+    let seen = 0
+    let numeric = 0
+    for (const r of rows || []) {
+      const v = r ? r[name] : null
+      if (v == null) continue
+      seen++
+      if (cellAlignClass(v, '') === 'al-r') numeric++
+      if (seen >= SAMPLE_LIMIT) break
+    }
+    map[name] = seen > 0 && numeric * 2 > seen ? 'al-r' : ''
+  }
+  return map
 }

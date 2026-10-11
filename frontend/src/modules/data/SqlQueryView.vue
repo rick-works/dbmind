@@ -336,7 +336,7 @@
                      否则鼠标停在这里会被当成"某一格"（选框会以它为锚点）。 -->
                 <td v-if="resultColLead > 0" class="col-gap" :colspan="resultColLead"></td>
                 <td v-for="c in resultColsSlice" :key="'d' + (vtStart + idx) + '_' + c.idx"
-                    :class="[cellAlignClass(row[c.name], resultTypeOf(c.idx)), { 'null-cell': row[c.name] == null, 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name), 'active-cell': resultActiveCell && resultActiveCell.rowIdx === (vtStart + idx) && resultActiveCell.col === c.name && noResultBulkSelection }]"
+                    :class="[resultCellAlign(row[c.name], c.idx, c.name), { 'null-cell': row[c.name] == null, 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name), 'active-cell': resultActiveCell && resultActiveCell.rowIdx === (vtStart + idx) && resultActiveCell.col === c.name && noResultBulkSelection }]"
                     :title="row[c.name] == null ? nullDisplay() : String(row[c.name])" :data-gkey="(vtStart + idx + 1) + ':' + c.idx"
                     @click="onResultCellClick(vtStart + idx, c.name)"
                     @dblclick.stop="onCellQuickEdit(vtStart + idx, c.name, row)"
@@ -576,7 +576,7 @@ import { errMsg } from '../../utils/errMsg'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
 import { useExcelSelection } from '../../utils/excelSelection'
-import { cellAlignClass } from '../../utils/cellAlign'
+import { cellAlignClass, columnAlignClasses } from '../../utils/cellAlign'
 import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
@@ -658,6 +658,27 @@ const KIND_CLASS = { bool: 'th-t-bool', json: 'th-t-json', blob: 'th-t-blob', nu
 const KIND_ICON = { bool: SwitchIcon, json: Tickets, blob: Document, num: Histogram, date: Calendar, text: Document }
 const resultTypeClass = (ci) => KIND_CLASS[resultKindOf(ci)] || 'th-t-text'
 const resultTypeIcon = (ci) => KIND_ICON[resultKindOf(ci)] || Grid
+/**
+ * NULL 单元格的对齐：**按列算一次、缓存住**（见 utils/cellAlign.columnAlignClasses）。
+ *
+ * 这里不能沿用 `resultTypeOf`：它取的是**后端给的** columnTypes，而查询端点经常不带类型，
+ * 于是 NULL 落到左对齐（alignByType('') → 空串），同一列的值却按"看着像数字"判成右对齐 ——
+ * 一列里数字靠右、NULL 靠左（用户反馈"null 和数字对齐呀"）。
+ * 表头那个类型图标早就有兜底推断（resultKindOf 看首个非空值），但对齐没跟上；
+ * 现在改成看**这一列的值整体怎么排**，两边就一致了。
+ */
+const resultNullAlign = computed(() =>
+  columnAlignClasses(
+    result.value?.rows || [],
+    resultVisibleCols.value.map((c) => ({ name: c.name, type: resultTypeOf(c.idx) }))
+  )
+)
+/**
+ * 单元格对齐：值按值判（Excel 规则）；NULL 没有值可判 → 跟着这一列的值整体怎么排。
+ * @param v 原始值；ci 列下标（取后端列类型用）；name 列名（查上面的缓存）
+ */
+const resultCellAlign = (v, ci, name) =>
+  v == null ? (resultNullAlign.value[name] || '') : cellAlignClass(v, resultTypeOf(ci))
 // 多段 SQL 结果：一次执行返回多条结果集时，以「结果1/结果2…」tab 逐条展示
 const resultItems = ref([]) // [{ label, res }]
 const activeResultIdx = ref(0)
