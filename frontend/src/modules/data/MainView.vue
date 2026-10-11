@@ -6638,7 +6638,8 @@ const connTypeSummary = computed(() =>
   display: inline-flex; align-items: center; justify-content: center;
   line-height: 1; flex: 0 0 auto;
 }
-.top-icon-btn .el-icon { font-size: var(--dc-nav-icon, 16px); }
+/* 右侧那组图标的尺寸由 index.css 的 `.top-icon-btn.top-icon-btn .el-icon` 决定
+   （双类名权重更高，这里再写一条也不会生效，只会造成"两处真相"），故此处不重复声明。 */
 .conn-label { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--dc-tree-fs, 14px); color: var(--dc-text); }
 .conn-label.t-mysql { }
 .conn-label.t-doris { }
@@ -7165,7 +7166,7 @@ const connTypeSummary = computed(() =>
 .ctx-index-wrap { max-height: 56vh; overflow: auto; }
 .ctx-index-empty { padding: 24px 4px; font-size: 13px; color: var(--dc-text-dim); text-align: center; }
 .tree-icon { font-size: var(--dc-tree-icon, 15px); }
-.node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; font-size: 14px; line-height: 1.4; font-weight: 400; color: var(--dc-text); }
+.node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; font-size: var(--dc-tree-fs, 14px); line-height: 1.4; font-weight: 400; color: var(--dc-text); }
 /* 文字轻重分层：连接名比对象名重一档，当前库名再加粗。
    这样"连接 → 库 → 对象"三层在长列表里能一眼分开，不必靠颜色去猜。 */
 .conn-label { font-weight: 500; color: var(--dc-text-strong); }
@@ -7187,7 +7188,8 @@ const connTypeSummary = computed(() =>
 }
 .dc-tree { background: transparent; --el-tree-text-color: var(--dc-text); --el-tree-node-hover-bg-color: var(--dc-bg-hover); font-size: var(--dc-tree-fs, 14px); }
 /* 字号加大后，行高放宽一点更舒展 */
-.dc-tree :deep(.el-tree-node__content) { height: 30px; }
+/* 行高跟着树字号走（14px 时正好 30px，与原来一致），否则字调大了会被挤 */
+.dc-tree :deep(.el-tree-node__content) { height: calc(var(--dc-tree-fs, 14px) + 16px); }
 /* 树展开/折叠：直接瞬间开合，不要 element 默认 300ms 的 max-height 过渡（旧写法覆盖的 .collapse-transition 类名对 el-tree 无效） */
 .dc-tree :deep(.el-collapse-transition-enter-active),
 .dc-tree :deep(.el-collapse-transition-leave-active) { transition: none !important; }

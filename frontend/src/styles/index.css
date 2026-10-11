@@ -1213,7 +1213,10 @@ html[data-theme="light"] .el-loading-mask {
   width: 30px; height: 30px; padding: 0; justify-content: center;
   border-radius: 8px;
 }
-.top-icon-btn.top-icon-btn .el-icon { margin: 0; font-size: 16px; }
+/* 右侧那组图标按钮的图标尺寸：这里才是"权威"规则（双类名提高权重，压过组件里的 scoped 规则），
+   所以「设置 → 通用 → 界面尺寸 → 顶栏右侧图标」必须写在这里才生效
+   —— 之前写死在组件里那条被这条压掉了，用户反馈"加大没反应"。 */
+.top-icon-btn.top-icon-btn .el-icon { margin: 0; font-size: var(--dc-nav-icon, 16px); }
 
 /* 语言钮：图标组里唯一用文字的一枚（「中 / EN」比任何语言图标都直白），
    尺寸与 30px 图标钮完全对齐，字重压到中等以免比图标显重 */
