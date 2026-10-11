@@ -33,8 +33,6 @@ export default {
   'update.autoFound': '发现新版本 v{v}（当前 v{cur}），更新内容：',
   'update.later': '暂不更新',
   'update.autoSkipHint': '不想再收到此版本的提示？点右上角 × 即可。',
-  'update.dlOpenDir': '打开所在文件夹',
-  'update.dlDirOpenFail': '打不开该目录',
   'update.dlStart': '开始下载',
   'update.dlShowProgress': '查看下载进度',
   'update.dlBackgroundHint': '下载在后台继续，点顶栏的刷新图标可随时查看进度',

@@ -1036,18 +1036,15 @@
       <template v-if="dlStatus === 'failed'">
         <el-button size="small" @click="closeDownloadDialog">{{ t('update.dlClose') }}</el-button>
         <el-button v-if="dlUrl" size="small" @click="copyText(dlUrl, t('common.copied'))">{{ t('update.dlCopyLink') }}</el-button>
-        <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
         <el-button size="small" type="primary" @click="retryDownload">{{ t('update.dlRetry') }}</el-button>
       </template>
       <!-- 下载完成：这里才是**真正那一步确认** —— 安装会关掉应用，得用户点头。
            「稍后」也不丢东西：包留在本地，弹窗里随时能再点「现在更新」。 -->
       <template v-else-if="dlStatus === 'done'">
-        <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
         <el-button size="small" @click="closeDownloadDialog">{{ t('update.dlLater') }}</el-button>
         <el-button size="small" type="primary" @click="askInstall">{{ t('update.dlNow') }}</el-button>
       </template>
       <template v-else-if="dlStatus !== 'running'">
-        <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
         <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('common.confirm') }}</el-button>
       </template>
       <template v-else>
@@ -1171,7 +1168,7 @@ const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView
 import {
   checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi,
   cancelUpdate as cancelUpdateApi, installUpdate as installUpdateApi,
-  dismissUpdate as dismissUpdateApi, openLocalDir as openLocalDirApi
+  dismissUpdate as dismissUpdateApi
   } from '../../api'
 
 // ===== 检查更新：与 GitHub 最新 Release 比对；有新版可在线下载安装 =====
@@ -1179,18 +1176,6 @@ import {
 const updateChecking = ref(false)
 const updateInfo = ref(null)   // { latest, current, notesHtml, releaseUrl }
 const updateVisible = ref(false)
-// 「打开所在文件夹」：把**安装包完整路径**交给后端 —— 后端对文件是"打开所在文件夹并选中它"。
-// 以前这里传 null，后端就只能开它自己的默认目录（数据库所在的那个 .dbmind），
-// 用户点完看到的是数据目录、里面根本没有安装包（用户反馈）。
-// 为什么不再记一个"用户选的目录"：更新流程已经不提供选择位置了（见 doApplyUpdate），
-// 安装包固定落在系统「下载」；目录里不做自动清理，留不留由用户决定。
-const openDownloadDir = async () => {
-  try {
-    await openLocalDirApi(dlInstaller.value || null)
-  } catch {
-    ElMessage.warning(t('update.dlDirOpenFail'))
-  }
-}
 // 下载进度（后台任务在跑，前端只轮询展示）
 const fmtBytes = (n) => {
   const v = Number(n) || 0
@@ -1207,9 +1192,6 @@ const dlTotal = ref(0)
 const dlSpeed = ref(0)
 const dlError = ref('')
 const dlUrl = ref('')
-// 安装包在本机的完整路径（后端**下载一开始**就写进进度状态）：「打开所在文件夹」靠它定位，
-// 下载中/失败时也要能用 —— 那时包还不存在，更要能带用户去看那个目录
-const dlInstaller = ref('')
 // 走了镜像又没官方 sha256 时可自证性为 0，界面必须说清（这条是风险提示，不随"完成态精简"去掉）
 const dlUnverified = ref(false)
 // 后台跑完（成功/失败）只提示一次：轮询会反复读到同一个终态
@@ -1397,7 +1379,6 @@ const startProgressPolling = (fast = true) => {
       dlTotal.value = p.total || 0
       dlSpeed.value = p.speed || 0
       dlUrl.value = p.url || ''
-      dlInstaller.value = p.installer || ''
       dlUnverified.value = !!p.unverified
       if (p.status === 'done' || p.status === 'failed') {
         // 弹窗开着 → 界面自己会显示结果；弹窗关着（用户在后台更新）→ **主动**把窗口弹出来，
@@ -1482,7 +1463,6 @@ const showReadyDialog = (p) => {
   dlTotal.value = (p && p.total) || 0
   dlSpeed.value = 0
   dlUrl.value = (p && p.url) || ''
-  dlInstaller.value = (p && p.installer) || ''
   dlUnverified.value = !!(p && p.unverified)
   dlError.value = ''
 }
@@ -1503,7 +1483,6 @@ const checkUpdate = async () => {
       dlTotal.value = p.total || 0
       dlSpeed.value = p.speed || 0
       dlUrl.value = p.url || ''
-      dlInstaller.value = p.installer || ''
       dlUnverified.value = !!p.unverified
       startProgressPolling()
       return

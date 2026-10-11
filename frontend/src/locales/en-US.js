@@ -29,8 +29,6 @@ export default {
   'update.autoFound': 'New version v{v} available (current v{cur}). Changes:',
   'update.later': 'Not now',
   'update.autoSkipHint': 'Tip: click the close button (top-right) to skip this version.',
-  'update.dlOpenDir': 'Open folder',
-  'update.dlDirOpenFail': 'Cannot open that folder',
   'update.dlStart': 'Start download',
   'update.dlShowProgress': 'View download progress',
   'update.dlBackgroundHint': 'Downloading continues in background - click the refresh icon in the top bar to check progress',
