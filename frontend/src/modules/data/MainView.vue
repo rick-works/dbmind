@@ -961,12 +961,20 @@
     class="upd-dialog"
     width="560px"
     align-center
-    :title="`${t('update.title')} · v${updateInfo && updateInfo.latest}`"
     :close-on-click-modal="false"
     :style="{ maxHeight: '76vh', display: 'flex', flexDirection: 'column' }"
     :body-style="{ flex: '1 1 auto', minHeight: '0', overflowY: 'auto', padding: '4px 20px 10px' }"
     @close="closeUpdateDialog(false)"
   >
+    <!-- 标题走 #header 槽位（与「数据传输 / 数据对比 / 数据库 DDL」等弹窗一致）：
+         圆角渐变徽标 + 文字。用 title 属性只有一行光秃秃的文字，和别的弹窗放一起显得少一截（用户反馈）。
+         图标沿用顶栏「检查更新」那枚 Refresh —— 同一个动作，不用两个图标 -->
+    <template #header>
+      <div class="dlg-title">
+        <span class="dlg-title-ic"><el-icon :size="16"><Refresh /></el-icon></span>
+        <span>{{ t('update.title') }} · v{{ updateInfo && updateInfo.latest }}</span>
+      </div>
+    </template>
     <div v-if="updateInfo" class="upd-body">
       <p class="upd-lead">{{ t('update.found', { v: updateInfo.latest, cur: updateInfo.current }) }}</p>
       <!-- eslint-disable-next-line vue/no-v-html -- 说明来自自家 Release，渲染器已转义 -->
@@ -990,10 +998,16 @@
     v-model="dlVisible"
     class="upd-dl"
     width="420px"
-    :title="t('update.dlTitle')"
     :show-close="dlStatus === 'running'"
     :close-on-click-modal="false"
   >
+    <!-- 与上面那个弹窗同款标题（同一条流程里的两屏，样式不该两样） -->
+    <template #header>
+      <div class="dlg-title">
+        <span class="dlg-title-ic"><el-icon :size="16"><Download /></el-icon></span>
+        <span>{{ t('update.dlTitle') }}</span>
+      </div>
+    </template>
     <div class="upd-dl-body">
       <!-- 进度条居中、百分比放进条内：以前百分比孤零零挂在最右，跟进度不像一件事 -->
       <el-progress
