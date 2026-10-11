@@ -39,8 +39,6 @@
 | Linux（Debian / Ubuntu） | DBmind_<版本>_amd64.deb | apt 安装，带开始菜单项 | XX MB |
 | Linux（通用发行版） | DBmind_<版本>_amd64.AppImage | **免安装**：`chmod +x` 后直接运行 | XX MB |
 
-- 每个包都自带精简 Java 运行时（目标机器不必另装 Java）。
-
 ---
 
 ## 要点这部分怎么写
