@@ -830,6 +830,9 @@ fn download_with_progress(
         let via = if src.use_proxy { "" } else { "（不走代理）" };
         for attempt in 1..=2u32 {
             let done = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
+            // 提示只有两类：**等待型**（"正在连接 X…"，连上就清掉）与**解释型**（换源 / 重试，
+            // 留到这次下载结束）。刻意**不再为"单纯续传"单出一行** —— 中途续上是常态，
+            // 那句「从已下载的 X 继续」只是把进度条上已有的数字又说一遍（用户反馈：去掉）。
             let note = if !is_start {
                 Some(if done > 0 {
                     format!("已换到 {host}{via}，并从已下载的 {} 继续", human_bytes(done))
@@ -838,8 +841,6 @@ fn download_with_progress(
                 })
             } else if attempt > 1 {
                 Some(format!("第 {attempt} 次重试（已下载 {}，接着下）", human_bytes(done)))
-            } else if done > 0 {
-                Some(format!("从已下载的 {} 继续", human_bytes(done)))
             } else {
                 // 一上来、一个字节都还没有：给一条**等待型**提示。正常网络下它一闪而过，
                 // 但这个源其实连不上时要等满一次连接超时（10 秒）—— 那 10 秒界面若一个字都没有，
@@ -1003,12 +1004,11 @@ fn download_once(
         p.url = Some(url.to_string());
         p.total = total;
         p.received = base;
-        if base > 0 {
-            p.note = Some(format!("从已下载的 {} 继续", human_bytes(base)));
-        } else if p.note.as_deref().map(|n| n.starts_with("正在")).unwrap_or(false) {
-            // 连上了（响应头与长度都拿到了）：清掉"正在选择下载源 / 正在连接 X"这类**等待型**提示。
-            // 判据用前缀："正在…"是等待（连上就没意义了），而"已换到…/第 N 次重试…/从已下载的…"
-            // 是**解释型**，要留到这次下载结束 —— 它们回答的是"数字在动，可为什么我又在等"。
+        // 连上了（响应头与长度都拿到了）：清掉"正在选择下载源 / 正在连接 X"这类**等待型**提示。
+        // 判据用前缀："正在…"是等待（连上就没意义了），而"已换到…/第 N 次重试…"是**解释型**，
+        // 要留到这次下载结束 —— 它们回答的是"数字在动，可为什么我又在等"。
+        // 续传（base > 0）不再单出一行提示：进度条上的数字本身就说明"是从这儿接着下的"。
+        if p.note.as_deref().map(|n| n.starts_with("正在")).unwrap_or(false) {
             p.note = None;
         }
     }
