@@ -6621,15 +6621,18 @@ const connTypeSummary = computed(() =>
 .top-nav-item:hover { background: var(--dc-primary-wash); color: var(--dc-text-strong); }
 .top-nav-item.dc-top-active { color: var(--dc-primary); font-weight: 600; }
 .top-nav-arrow { font-size: var(--dc-nav-fs, 14px); color: var(--dc-text-dim); }
-/* 顶栏图标（左侧菜单项 + 右侧那组图标按钮都是 .top-nav-item，这里一条全覆盖）：
-   ① 尺寸跟「设置 → 通用 → 界面尺寸 → 顶栏图标」走；
-   ② 顺手把图标盒子收紧（行高 1 + flex 居中）—— el-icon 默认继承外层的行高，盒子比字形高，
-      居中后视觉中心会比文字低一点，看着"图标和字没对齐"（用户反馈）。 */
+/* 顶栏图标分两类，各跟各的设置（用户明确的分工）：
+   · 左侧菜单项里的图标（.top-nav-item，但不是 .top-icon-btn）→ 跟「顶栏菜单文字」走：
+     图标 = 文字 + 2px（原来 14 → 16 就是这个关系），所以文字调大时图标同步变大，不会一大一小。
+   · 右侧那组图标按钮（.top-icon-btn）→ 跟「顶栏右侧图标」走，独立一档。
+   两类都顺手把图标盒子收紧（行高 1 + flex 居中）—— el-icon 默认继承外层行高、盒子比字形高，
+   居中后视觉中心比文字略低，看着"图标和字没对齐"（用户反馈）。 */
 .top-nav-item .el-icon {
-  font-size: var(--dc-nav-icon, 16px);
+  font-size: calc(var(--dc-nav-fs, 14px) + 2px);
   display: inline-flex; align-items: center; justify-content: center;
   line-height: 1; flex: 0 0 auto;
 }
+.top-icon-btn .el-icon { font-size: var(--dc-nav-icon, 16px); }
 .conn-label { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--dc-tree-fs, 14px); color: var(--dc-text); }
 .conn-label.t-mysql { }
 .conn-label.t-doris { }
