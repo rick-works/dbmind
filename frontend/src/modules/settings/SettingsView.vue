@@ -2354,12 +2354,16 @@ watch(visible, (v) => {
 .fmt-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
 .fmt-card {
   background: var(--dc-bg-soft); border: 1px solid var(--dc-border); border-radius: 10px;
-  padding: 14px 16px 10px;
+  padding: 14px 16px 14px;
 }
 .fmt-card-wide { grid-column: 1 / -1; }
+/* 卡片标题用一条虚线分隔（与表头同一套观感）：否则标题和下面一堆设置项糊在一起，
+   两个卡片都变成"一大块内容"，看不出层次 */
 .fmt-card-title {
   display: flex; align-items: center; gap: 6px;
-  font-size: 14px; font-weight: 600; color: var(--dc-text); margin-bottom: 12px;
+  font-size: 14px; font-weight: 600; color: var(--dc-text);
+  margin: 0 0 12px; padding-bottom: 10px;
+  border-bottom: 1px dashed var(--dc-border);
 }
 .fmt-card-title .el-icon { color: var(--dc-primary); }
 .fmt-card-sub { font-size: 13px; font-weight: 400; color: var(--dc-text-dim); margin-left: 2px; }
@@ -2373,7 +2377,9 @@ watch(visible, (v) => {
 .fmt-glob-sec { min-width: 0; }
 .fmt-glob-sec-title {
   display: flex; align-items: center; gap: 6px;
-  font-size: 13px; font-weight: 600; letter-spacing: .3px; color: var(--dc-text-dim);
+  font-size: 13px; font-weight: 600; letter-spacing: .3px;
+  /* 小节标题比正文标签略深一档：原来跟说明文字一样淡，四个小节的"分组感"出不来 */
+  color: var(--dc-text-mid);
   margin: 0 0 10px;
 }
 .fmt-glob-sec-title::before { content: ''; width: 3px; height: 13px; background: var(--dc-primary); border-radius: 2px; }
@@ -2388,6 +2394,9 @@ watch(visible, (v) => {
 }
 .fmt-glob-sel { width: 160px; flex: 0 0 auto; font-size: 14px; }
 .fmt-glob-num { width: 160px; flex: 0 0 auto; font-size: 14px; }
+/* 数字框**填满**它那 160px 的槽：元素默认的 el-input-number 比槽窄一点，
+   于是同一列里"下拉框满宽、数字框窄一截"，左缘看着参差（截图里差的就是这十几像素） */
+.fmt-glob-num :deep(.el-input-number) { width: 100%; }
 .fmt-glob-swslot { width: 160px; flex: 0 0 auto; display: flex; align-items: center; }
 /* 归一化 Element 控件内部字号，与行标签保持一致 */
 .fmt-glob-sel :deep(.el-select__wrapper),
@@ -2434,7 +2443,7 @@ watch(visible, (v) => {
 }
 /* 空规则提示：整格居中（占满一行的单元格，靠左会像"表格少了一列"） */
 .fmt-tbl-empty { font-size: 13px; color: var(--dc-text-dim); background: var(--dc-bg-code); text-align: center; }
-.fmt-rule-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
+.fmt-rule-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; }
 .fmt-preview {
   background: var(--dc-bg-code); border: 1px solid var(--dc-border); border-radius: 10px;
   padding: 12px 14px;
