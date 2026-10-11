@@ -95,6 +95,59 @@
               <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
             </el-form-item>
           </el-form>
+
+          <!-- 主题：原来是独立页签，并进「通用」—— 语言 / 顶栏 / 尺寸 / 主题都是"界面"这一类，放一起好找。
+               这里只保留内容，外层的 settings-panel 壳去掉（已经在通用页签里了）。 -->
+          <div class="panel-title topmenu-title">{{ $t('settings.theme.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.theme.desc') }}</div>
+
+          <div class="theme-options">
+            <div
+              v-for="opt in themeOptions"
+              :key="opt.mode"
+              class="theme-opt"
+              :class="{ active: themeForm.mode === opt.mode }"
+              @click="setThemeMode(opt.mode)"
+            >
+              <div class="theme-prev" :class="'prev-' + opt.mode">
+                <span class="pv-sidebar"></span>
+                <span class="pv-main">
+                  <span class="pv-line"></span>
+                  <span class="pv-line short"></span>
+                  <span class="pv-line"></span>
+                  <span class="pv-ctl"></span>
+                </span>
+              </div>
+              <div class="theme-opt-info">
+                <div class="theme-opt-name">{{ $t(opt.i18nKey) }}</div>
+                <div class="theme-opt-desc">{{ $t(opt.descKey) }}</div>
+              </div>
+              <el-icon v-if="themeForm.mode === opt.mode" class="theme-opt-check"><CircleCheck /></el-icon>
+            </div>
+          </div>
+
+          <div v-if="themeForm.mode === 'system'" class="theme-hint">
+            <el-icon :size="13"><Timer /></el-icon>{{ $t('settings.theme.followHint', { mode: systemModeText }) }}
+          </div>
+
+          <!-- 通知：同样从独立页签并过来（它自带「保存」按钮，因为存的是后端 app_settings） -->
+          <div class="panel-title topmenu-title">{{ $t('settings.notify.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.notify.desc') }}</div>
+
+          <el-form label-width="110px" label-position="left" class="ai-form">
+            <el-form-item :label="$t('settings.notify.group')">
+              <div class="checkbox-group">
+                <el-checkbox v-model="notifyForm.success">{{ $t('settings.notify.onSuccess') }}</el-checkbox>
+                <el-checkbox v-model="notifyForm.autoClose">{{ $t('settings.notify.autoClose') }}</el-checkbox>
+              </div>
+            </el-form-item>
+          </el-form>
+
+          <div class="actions">
+            <el-button type="primary" @click="saveNotify">
+              <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.notify.save') }}
+            </el-button>
+          </div>
         </div>
 
         <!-- 0.5 安全与会话（后端 app_settings：改安全开关与会话上限都会即时生效） -->
@@ -321,40 +374,7 @@
         <!-- 知识库已独立为顶部导航的「知识库」工作台（左栏库列表 + 文档 / 召回测试 / 分段设置），
              设置里不再重复放一份入口与实现 -->
 
-        <!-- 主题 -->
-        <div v-show="activeTab === 'theme'" class="settings-panel">
-          <div class="panel-title">{{ $t('settings.theme.title') }}</div>
-          <div class="panel-desc">{{ $t('settings.theme.desc') }}</div>
-
-          <div class="theme-options">
-            <div
-              v-for="opt in themeOptions"
-              :key="opt.mode"
-              class="theme-opt"
-              :class="{ active: themeForm.mode === opt.mode }"
-              @click="setThemeMode(opt.mode)"
-            >
-              <div class="theme-prev" :class="'prev-' + opt.mode">
-                <span class="pv-sidebar"></span>
-                <span class="pv-main">
-                  <span class="pv-line"></span>
-                  <span class="pv-line short"></span>
-                  <span class="pv-line"></span>
-                  <span class="pv-ctl"></span>
-                </span>
-              </div>
-              <div class="theme-opt-info">
-                <div class="theme-opt-name">{{ $t(opt.i18nKey) }}</div>
-                <div class="theme-opt-desc">{{ $t(opt.descKey) }}</div>
-              </div>
-              <el-icon v-if="themeForm.mode === opt.mode" class="theme-opt-check"><CircleCheck /></el-icon>
-            </div>
-          </div>
-
-          <div v-if="themeForm.mode === 'system'" class="theme-hint">
-            <el-icon :size="13"><Timer /></el-icon>{{ $t('settings.theme.followHint', { mode: systemModeText }) }}
-          </div>
-        </div>
+        <!-- 主题已并进「通用」页（内容见上面通用页签里的主题一节） -->
 
         <!-- 编辑器 -->
         <div v-show="activeTab === 'editor'" class="settings-panel">
@@ -901,26 +921,7 @@
           </div>
         </div>
 
-        <!-- 6. 通知 -->
-        <div v-show="activeTab === 'notify'" class="settings-panel">
-          <div class="panel-title">{{ $t('settings.notify.title') }}</div>
-          <div class="panel-desc">{{ $t('settings.notify.desc') }}</div>
-
-          <el-form label-width="110px" label-position="left" class="ai-form">
-            <el-form-item :label="$t('settings.notify.group')">
-              <div class="checkbox-group">
-                <el-checkbox v-model="notifyForm.success">{{ $t('settings.notify.onSuccess') }}</el-checkbox>
-                <el-checkbox v-model="notifyForm.autoClose">{{ $t('settings.notify.autoClose') }}</el-checkbox>
-              </div>
-            </el-form-item>
-          </el-form>
-
-          <div class="actions">
-            <el-button type="primary" @click="saveNotify">
-              <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.notify.save') }}
-            </el-button>
-          </div>
-        </div>
+        <!-- 通知已并进「通用」页 -->
 
         <!-- 7. 快捷键 -->
         <div v-show="activeTab === 'shortcut'" class="settings-panel">
@@ -1051,8 +1052,8 @@ import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   MagicStick, Connection, Brush, Box,
-  FolderOpened, EditPen, DataLine, Download, Bell, Operation, Monitor, Plus, Delete,
-  CircleCheck, Timer, Moon, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
+  FolderOpened, EditPen, DataLine, Download, Operation, Monitor, Plus, Delete,
+  CircleCheck, Timer, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
   ArrowUp, ArrowDown, Document, DocumentCopy
 } from '@element-plus/icons-vue'
 import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/topMenu'
@@ -1095,8 +1096,8 @@ const activeTab = ref('general')
 // 排序逻辑：**使用频率从高到低** —— 外观与日常操作（通用/主题/编辑器/格式化/查询）
 // 在前，AI 与安全居中，系统级（驱动/存储/缓存）靠后，通知/快捷键/关于收尾
 const tabs = [
+  // 主题 / 通知 已并进「通用」页（都属于全局界面与行为偏好），所以菜单里不再各占一项
   { key: 'general', i18nKey: 'settings.tab.general', icon: Flag },
-  { key: 'theme', i18nKey: 'settings.tab.theme', icon: Moon },
   { key: 'editor', i18nKey: 'settings.tab.editor', icon: EditPen },
   { key: 'format', i18nKey: 'settings.tab.format', icon: Brush },
   { key: 'shortcut', i18nKey: 'settings.tab.shortcut', icon: Pointer },
@@ -1110,7 +1111,6 @@ const tabs = [
   { key: 'paths', i18nKey: 'settings.tab.paths', icon: FolderOpened },
   { key: 'cache', i18nKey: 'settings.tab.cache', icon: Delete },
   { key: 'logs', i18nKey: 'settings.tab.logs', icon: Document },
-  { key: 'notify', i18nKey: 'settings.tab.notify', icon: Bell },
   { key: 'about', i18nKey: 'settings.tab.about', icon: Monitor }
 ]
 
@@ -2098,14 +2098,17 @@ onBeforeUnmount(stopRecording)
 // 于是"设置本来就没关 + 右键 → 格式化设置"会停在原页签，用户看到的是"点了没反应"。
 // 单独盯 initialTab：值一变且弹窗可见就跟着切。
 watch(() => props.initialTab, (tab) => {
-  if (tab && visible.value) activeTab.value = tab
+  // 不存在的页签名（例如合并前的 'theme' / 'notify'）统一落到「通用」，别留白
+  if (tab && visible.value) activeTab.value = tabs.some((t) => t.key === tab) ? tab : 'general'
 })
 
 // 弹窗打开时加载数据
 watch(visible, (v) => {
   if (v) {
-    // 调用方可以点名页签（首页 MCP 卡「前往设置」直达 MCP 页签、编辑器右键「格式化设置」等）
-    if (props.initialTab) activeTab.value = props.initialTab
+    // 调用方可以点名页签（首页 MCP 卡「前往设置」直达 MCP 页签、编辑器右键「格式化设置」等）。
+    // 页签被合并/改名后，旧入口可能传来一个已不存在的名字（如 'theme' / 'notify'）——
+    // 这种情况落到「通用」，不要把内容区留白。
+    if (props.initialTab) activeTab.value = tabs.some((t) => t.key === props.initialTab) ? props.initialTab : 'general'
     load()
     loadPaths()
     loadEditor()
