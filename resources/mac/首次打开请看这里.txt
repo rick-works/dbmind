@@ -15,10 +15,20 @@ DBmind —— 首次打开请看这里
 
 不用 sudo，也不用敲任何命令。
 
+已经装进「应用程序」、双击还是被拦？一条命令去掉那个标记
+--------------------------------------------------------
+上面三步是推荐做法（不敲任何命令）。已经装好、又不想翻系统设置的，也可以直接去标记：
+
+  xattr -dr com.apple.quarantine /Applications/DBmind.app
+
+这就是拖进「应用程序」后的标准路径；放在别处就换成实际路径 —— 在终端里先敲
+xattr -dr com.apple.quarantine 再补一个空格，然后把 DBmind.app 从访达拖进终端窗口，
+路径会自己补上，回车即可。
+
 
 想一次都不弹？换一种方式拿到这份文件即可
 --------------------------------------
-览器会给下载的文件打一个"从网上下载"的标记，系统见到这个标记才会去检查。
+浏览器会给下载的文件打一个"从网上下载"的标记，系统见到这个标记才会去检查。
 下面两条路径不打这个标记，所以什么都不会弹（也不需要 sudo）：
 
   1) 用 curl 下载（先在发布页看最新版本号，例如 1.2.7）：
@@ -47,6 +57,17 @@ so the first double-click shows a dialog whose only button is "OK". To open it:
   3. Confirm once. After that, double-clicking works normally.
 
 No sudo and no terminal commands needed.
+
+Already in Applications and still blocked? One command clears the flag
+----------------------------------------------------------------------
+The three steps above are the recommended way (no terminal needed). If it is
+already installed and you would rather not dig through System Settings:
+
+     xattr -dr com.apple.quarantine /Applications/DBmind.app
+
+That is the standard path after dragging it into Applications. If it lives
+elsewhere: type xattr -dr com.apple.quarantine plus a space, then drag
+DBmind.app from Finder into the terminal window and press Return.
 
 To avoid that dialog entirely, fetch the file without a browser (a browser sets
 the "downloaded from the internet" flag; curl and Homebrew do not):
