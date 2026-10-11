@@ -61,7 +61,13 @@ const normalizeRules = (rules) => {
     if (seen.has(key)) return out
     seen.add(key)
     const ly = LY_VALUES.includes(r.ly) ? r.ly : (LEGACY_MODE_LY[r.mode] || 'none')
-    out.push({ kw, cs: r.cs === 'keep' ? 'keep' : (r.cs === 'lower' ? 'lower' : 'upper'), ly })
+    const rule = { kw, cs: r.cs === 'keep' ? 'keep' : (r.cs === 'lower' ? 'lower' : 'upper'), ly }
+    // 关键字级缩进宽度 iw：只对**带缩进的排版**（前换行+缩进 / 后换行+缩进）有意义，
+    // 留空 = 跟随全局 sqlTabWidth。这里只做取值收敛（1~12 的整数），"这个排版用不用得上"
+    // 由排版方式决定（见 utils/sqlFormat.js 的 INDENT_LAYOUTS）。
+    const iw = Math.round(Number(r.iw))
+    if (Number.isFinite(iw) && iw >= 1 && iw <= 12) rule.iw = iw
+    out.push(rule)
     return out
   }, [])
 }

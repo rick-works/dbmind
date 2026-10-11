@@ -505,6 +505,7 @@
                   <span class="fmt-tc-kw">{{ $t('settings.format.colKeyword') }}</span>
                   <span class="fmt-tc-cs">{{ $t('settings.format.colCase') }}</span>
                   <span class="fmt-tc-ly">{{ $t('settings.format.colLayout') }}</span>
+                  <span class="fmt-tc-iw">{{ $t('settings.format.colIndent') }}</span>
                   <span class="fmt-tc-op"></span>
                 </div>
                 <div v-if="!editorForm.sqlKeywordRules.length" class="fmt-tbl-empty">{{ $t('settings.format.emptyRules') }}</div>
@@ -530,6 +531,19 @@
                     <el-option value="afterBreakIndent" :label="$t('settings.format.lyAfterBreakIndent')" />
                     <el-option value="setop" :label="$t('settings.format.lySetop')" />
                   </el-select>
+                  <!-- 缩进宽度：只在该排版确实带缩进时可编辑；留空 = 跟随上方全局值（占位符显示的就是它） -->
+                  <el-input-number
+                    v-model="rule.iw"
+                    class="fmt-tc-iw"
+                    :min="1"
+                    :max="12"
+                    :step="1"
+                    :controls="false"
+                    :disabled="!ruleHasIndent(rule.ly)"
+                    :placeholder="String(editorForm.sqlTabWidth || 2)"
+                    :title="$t('settings.format.indentTip', { n: editorForm.sqlTabWidth || 2 })"
+                    @change="(v) => onIndentChange(rule, v)"
+                  />
                   <el-button class="fmt-tc-op" text :icon="Delete" :title="$t('settings.format.deleteRule')" @click="removeKeywordRule(i)" />
                 </div>
               </div>
@@ -988,7 +1002,7 @@ import {
 import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/topMenu'
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
-import { formatSql, keywordCandidates, sqlKeywordPattern } from '../../utils/sqlFormat'
+import { formatSql, keywordCandidates, sqlKeywordPattern, ruleHasIndent } from '../../utils/sqlFormat'
 import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs } from '../../api'
 import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
 // 「刷新结构缓存」要连**前端那份** localStorage 缓存一起清（内核缓存清了它还在也会显示旧清单）
@@ -1332,7 +1346,11 @@ const loadEditor = () => {
       ? raw.sqlKeywordRules.map((r) => ({
         kw: (r && r.kw) || '',
         cs: (r && r.cs) === 'keep' ? 'keep' : (r && r.cs) === 'lower' ? 'lower' : 'upper',
-        ly: ['none', 'clause', 'join', 'afterBreak', 'afterBreakIndent', 'setop'].includes(r && r.ly) ? r.ly : 'none'
+        ly: ['none', 'clause', 'join', 'afterBreak', 'afterBreakIndent', 'setop'].includes(r && r.ly) ? r.ly : 'none',
+        // 关键字级缩进宽度：留空/非法一律当作"未配置"（undefined，不写这个键），交给全局
+        iw: (r && String(r.iw ?? '').trim() !== '' && Number.isFinite(Math.round(Number(r.iw))))
+          ? Math.round(Number(r.iw))
+          : undefined
       }))
       : []
     editorForm.value = { ...editorDefaults, ...raw, sqlKeywordRules: rules }
@@ -1361,8 +1379,15 @@ const kwLyLabel = (ly) => ({
   setop: t('settings.format.lySetop')
 })[ly] || t('settings.format.lyNone')
 const kwCsLabel = (cs) => (cs === 'keep' ? t('settings.format.casePreserve') : (cs === 'lower' ? t('settings.format.caseLower') : t('settings.format.caseUpper')))
+// 新规则不带 iw（= 跟随全局缩进宽度）；只有排到「带缩进」时那一列才可编辑
 const addKeywordRule = () => { editorForm.value.sqlKeywordRules.push({ kw: '', cs: 'upper', ly: 'none' }) }
 const removeKeywordRule = (index) => { editorForm.value.sqlKeywordRules.splice(index, 1) }
+// 清空 = 跟随全局：el-input-number 清空时给的是 null/undefined，统一收敛成"不写这个键"，
+// 免得落盘成 null 后又要在格式化里多判一次
+const onIndentChange = (rule, v) => {
+  const n = Math.round(Number(v))
+  rule.iw = String(v ?? '').trim() !== '' && Number.isFinite(n) && n >= 1 && n <= 12 ? n : undefined
+}
 
 // 关键字候选：标准 SQL 关键字（含常用短语）的去重列表，输入时实时过滤；
 // 其它方言专属关键字（如 T-SQL 的 TOP）也可直接手输，规则在对应连接的编辑器中仍会生效。
@@ -2323,6 +2348,10 @@ watch(visible, (v) => {
 .fmt-tc-kw { flex: 1 1 auto; min-width: 0; }
 .fmt-tc-cs { flex: 0 0 118px; }
 .fmt-tc-ly { flex: 0 0 226px; }
+/* 关键字级缩进宽度：窄一点、居中，和表头对齐；置灰时就是"跟随全局"的样子 */
+.fmt-tc-iw { flex: 0 0 92px; }
+.fmt-tc-iw :deep(.el-input-number) { width: 100%; }
+.fmt-tc-iw :deep(.el-input__inner) { font-size: 14px; text-align: center; }
 .fmt-tc-op { flex: 0 0 36px; }
 .fmt-tc-kw :deep(.el-autocomplete) { width: 100%; }
 .fmt-tc-kw :deep(.el-input) { width: 100%; }

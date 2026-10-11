@@ -64,6 +64,13 @@ const LY_LAYOUT = {
   afterBreak: null, afterBreakIndent: null,
   clause: 'reservedClauses', join: 'reservedJoins', setop: 'reservedSetOperations'
 }
+
+// 哪些排版方式"带缩进"—— 只有它们用得上关键字级缩进宽度（规则里的 iw）。
+//   join            前换行 + 缩进：关键字整行按一级缩进（引擎给的是全局 tabWidth，规则配了 iw 就按 iw 换算）
+//   afterBreakIndent 后换行 + 缩进：关键字后的内容再向下一级缩进（这一级用 iw）
+// 其余（内联 / 前换行 / 后换行 / 前后各换行）都不产生额外缩进，设置界面里那一列会置灰。
+export const INDENT_LAYOUTS = ['join', 'afterBreakIndent']
+export const ruleHasIndent = (ly) => INDENT_LAYOUTS.includes(ly)
 const LEGACY_MODE_LY = { kw: 'none', clause: 'clause', join: 'join', setop: 'setop' }
 const RULE_BUCKETS = ['reservedKeywords', 'reservedClauses', 'reservedJoins', 'reservedSetOperations']
 
@@ -78,7 +85,10 @@ const rulesOf = (s) => {
       ? r.ly
       : (LEGACY_MODE_LY[r && r.mode] || 'none')
     const cs = (r && r.cs) === 'keep' ? 'keep' : (r && r.cs) === 'lower' ? 'lower' : 'upper'
-    out.push({ kw: kw.toUpperCase(), cs, ly })
+    // iw：关键字级缩进宽度，0 = 未配置（跟随全局 tabWidth）。只对带缩进的排版生效。
+    const n = Math.round(Number(r && r.iw))
+    const iw = ruleHasIndent(ly) && Number.isFinite(n) && n >= 1 && n <= 12 ? n : 0
+    out.push({ kw: kw.toUpperCase(), cs, ly, iw })
   }
   return out
 }
@@ -213,10 +223,37 @@ const applyBreakAfter = (text, rules, tabWidth) => {
       const after = line.slice(m.index + m[0].length)
       if (!after.trim()) continue
       const indent = /^\s*/.exec(line)[0]
-      const extra = r.ly === 'afterBreakIndent' ? ' '.repeat(Math.max(0, tabWidth || 2)) : ''
+      // 缩进宽度：这条规则单独配了 iw 就用它，否则跟随全局 tabWidth（默认 2）
+      const width = r.iw > 0 ? r.iw : (tabWidth || 2)
+      const extra = r.ly === 'afterBreakIndent' ? ' '.repeat(Math.max(0, width)) : ''
       lines[i] = line.slice(0, m.index + m[0].length) + '\n' + indent + extra + after.trimStart()
     }
     out = lines.join('\n')
+  }
+  return out
+}
+
+// 「前换行 + 缩进」的缩进是引擎按**全局** tabWidth 给的（整行缩进一级）。规则里单独配了缩进宽度时，
+// 按**层级**换算过去：level × iw —— 这样嵌套里的同名关键字也跟着自己的宽度走，层级关系不被打乱
+// （例如子查询里的 FROM 仍比外层深一级）。
+// 只认「关键字出现在行首」的行：引擎给这种排版的写法本来就是关键字起头，不会误伤表达式里的同名词。
+const applyJoinIndent = (text, rules, tabWidth) => {
+  const targets = rules.filter((r) => r.ly === 'join' && r.iw > 0)
+  if (!targets.length) return text
+  const base = Math.max(1, tabWidth || 2)
+  let out = String(text)
+  for (const r of targets) {
+    const re = new RegExp('^([ \\t]*)' + phrasePat(r.kw), 'i')
+    out = out
+      .split('\n')
+      .map((line) => {
+        const m = re.exec(line)
+        if (!m) return line
+        const level = Math.round(m[1].length / base)
+        if (level < 1) return line
+        return ' '.repeat(level * r.iw) + line.slice(m[1].length)
+      })
+      .join('\n')
   }
   return out
 }
@@ -280,6 +317,9 @@ export const formatSql = (text, s, language) => {
   if (upperRules.length) out = applyUpperCase(out, upperRules)
   if (rules.some((r) => r.ly === 'clause')) {
     out = applyBreakBeforeOnly(out, rules)
+  }
+  if (rules.some((r) => r.ly === 'join' && r.iw > 0)) {
+    out = applyJoinIndent(out, rules, options.tabWidth)
   }
   if (rules.some((r) => r.ly === 'afterBreak' || r.ly === 'afterBreakIndent')) {
     out = applyBreakAfter(out, rules, options.tabWidth)
