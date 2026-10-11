@@ -2408,7 +2408,8 @@ watch(visible, (v) => {
   color: var(--dc-text-dim);
   font-size: 14px;
 }
-.fmt-tbl-empty { font-size: 13px; color: var(--dc-text-dim); background: var(--dc-bg-code); }
+/* 空规则提示：整格居中（占满一行的单元格，靠左会像"表格少了一列"） */
+.fmt-tbl-empty { font-size: 13px; color: var(--dc-text-dim); background: var(--dc-bg-code); text-align: center; }
 .fmt-rule-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
 .fmt-preview {
   background: var(--dc-bg-code); border: 1px solid var(--dc-border); border-radius: 10px;
