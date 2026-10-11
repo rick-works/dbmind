@@ -62,8 +62,10 @@ export default {
   'update.dlNow': '现在更新',
   'update.dlLater': '稍后',
   'update.dlReadyTitle': '更新包已下载完成',
-  'update.installAskBody': '应用会自动关闭，装好后自动打开成新版。',
-  'update.installConfirmBody': '确定现在更新？应用会自动关闭，装好后自动打开成新版。',
+  'update.installAskBody': '应用会自动关闭，装好后自动打开新版',
+  // 问句放在最后（用户反馈：先问"确定现在更新？"再解释，读起来是断的）。
+  // 也不能留句号：句子末尾已经是问号了，中间再塞一个句号会把一句话切成两半。
+  'update.installConfirmBody': '应用会自动关闭，装好后自动打开新版，确定现在更新？',
   'update.dlFailTitle': '下载失败',
   'update.goto': '前往下载页',
   'update.downloading': '正在下载安装包，请稍候…',

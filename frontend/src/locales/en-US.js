@@ -58,8 +58,9 @@ export default {
   'update.dlNow': 'Update now',
   'update.dlLater': 'Later',
   'update.dlReadyTitle': 'Update package ready',
-  'update.installAskBody': 'The app will close and reopen as the new version once installed.',
-  'update.installConfirmBody': 'Update now? The app will close and reopen as the new version once installed.',
+  'update.installAskBody': 'The app will close and reopen as the new version once installed',
+  // 与中文同序：说明在前、问句在后（原本问句打头，读起来是断的）
+  'update.installConfirmBody': 'The app will close and reopen as the new version once installed — update now?',
   'update.dlFailTitle': 'Download failed',
   'update.goto': 'Open download page',
   'update.downloading': 'Downloading installer, please wait…',
