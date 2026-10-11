@@ -259,7 +259,11 @@
                 :title="$t('sqlq.msServerTip')">{{ item.res.executeTime }}ms</span>
         </button>
       </div>
-      <div class="result-grid">
+      <!-- 结果区字号/行高变量挂在**这一层**（表格与底栏的共同父级）：
+           贴在 .data-table-wrap 上的话，兄弟节点 .result-footer（耗时 / 总计 / 分页）就吃不到，
+           表现是"改了结果表格字号，底栏文字没变"（用户反馈）。 -->
+      <div class="result-grid"
+        :style="{ '--grid-fs': (editorSettings.gridFontSize || 14) + 'px', '--grid-row-h': (editorSettings.gridRowHeight || 26) + 'px' }">
         <!-- 加载遮罩：查询/翻页时可取消（与数据表一致） -->
         <div v-if="running" class="grid-loading-overlay">
           <div class="grid-loading-box">
@@ -271,7 +275,6 @@
         </div>
         <!-- 数据表格（模板里 ref 自动解包：editorSettings 已是设置对象，.value 反而是 undefined —— 真机崩过） -->
         <div v-if="result?.success && result?.rows?.length" class="data-table-wrap" ref="resultTableWrapRef" tabindex="0"
-        :style="{ '--grid-fs': (editorSettings.gridFontSize || 14) + 'px', '--grid-row-h': (editorSettings.gridRowHeight || 26) + 'px' }"
              @scroll.passive="onResultTableScroll"
              @mousemove="onResultTableMove" @mousedown="onResultTableDown" @mouseleave="onResultTableLeave"
              @contextmenu.prevent="onResultGridContextMenu">
@@ -4975,7 +4978,7 @@ onBeforeUnmount(() => {
   box-shadow: var(--dc-shadow-sm, 0 2px 12px rgba(0, 0, 0, 0.08));
   color: var(--dc-primary);
 }
-.grid-loading-text { font-size: 14px; color: var(--dc-text-mid); }
+.grid-loading-text { font-size: var(--grid-fs, 14px); color: var(--dc-text-mid); }
 /* overflow-anchor: none —— 关掉浏览器的"滚动锚定"。
    虚拟滚动每帧都在改上下占位行的高度，锚定机制会据此**反过来调 scrollTop**，
    两者打架的表现就是小幅度跳动 / 闪烁；虚拟列表一律关掉它。 */
@@ -4985,27 +4988,37 @@ onBeforeUnmount(() => {
 .data-table-wrap.col-resizing, .data-table-wrap.col-resizing * { cursor: col-resize !important; user-select: none; }
 /* 底栏布局与数据表一致：耗时 + 选中统计**同在左侧**，分页器 margin-left:auto 靠右
    （以前 space-between 把统计挤到正中间，两边看起来不是一个产品） */
-.result-footer { display: flex; align-items: center; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; }
+.result-footer { display: flex; align-items: center; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; font-size: var(--grid-fs, 13px); }
 .result-footer > .el-pagination { margin-left: auto; }
-.result-time { font-size: 13px; color: var(--dc-text-dim); font-weight: 500; }
+/* 底栏文字统一跟「结果表格字号」走（--grid-fs 由 .result-grid 提供）：
+   与表格同字号，次要信息（统计 / 选中汇总）比它小 1px，层级关系保留 */
+.result-time { font-size: var(--grid-fs, 13px); color: var(--dc-text-dim); font-weight: 500; }
+/* 分页器自己有固定字号（size="small" 是 12px），要逐个内部件覆盖才跟得上 */
+.result-footer :deep(.el-pagination) { font-size: var(--grid-fs, 13px); }
+.result-footer :deep(.el-pagination .el-pagination__total),
+.result-footer :deep(.el-pagination .el-pagination__jump),
+.result-footer :deep(.el-pagination .el-pager li),
+.result-footer :deep(.el-pagination .btn-prev),
+.result-footer :deep(.el-pagination .btn-next),
+.result-footer :deep(.el-pagination .el-select__wrapper) { font-size: var(--grid-fs, 13px); }
 /* 总数统计中：紧贴分页器左侧，弱化显示（计数是后台补的，别抢注意力） */
 .count-pending {
   margin-left: auto; display: inline-flex; align-items: center; gap: 4px;
-  font-size: 12px; color: var(--dc-text-dim);
+  font-size: calc(var(--grid-fs, 13px) - 1px); color: var(--dc-text-dim);
 }
 .count-pending + .el-pagination { margin-left: 0; }
 /* 可点击的总数：悬停变主色 + 提示「点我重新统计」，点击强制重数一次。
    margin-left:auto 把自己推到右侧、紧贴分页器（分页器遇它就让出 auto 边距） */
 .total-refresh {
   margin-left: auto; display: inline-flex; align-items: center;
-  font-size: 13px; color: var(--dc-text-dim); cursor: pointer;
+  font-size: var(--grid-fs, 13px); color: var(--dc-text-dim); cursor: pointer;
   user-select: none; border-radius: 4px; padding: 0 4px;
   transition: color .12s, background .12s;
 }
 .total-refresh:hover { color: var(--dc-primary); background: var(--dc-bg-hover); }
 .total-refresh + .el-pagination { margin-left: 0; }
 /* 选中区汇总：夹在耗时与分页之间，弱化显示、数字加粗，避免抢分页的注意力 */
-.result-summary { display: inline-flex; align-items: center; gap: 10px; font-size: 12px; color: var(--dc-text-dim); flex-wrap: wrap; }
+.result-summary { display: inline-flex; align-items: center; gap: 10px; font-size: calc(var(--grid-fs, 13px) - 1px); color: var(--dc-text-dim); flex-wrap: wrap; }
 .result-summary .rs-item { white-space: nowrap; }
 .result-summary .rs-item b { color: var(--dc-text); font-weight: 600; font-variant-numeric: tabular-nums; }
 /* 表格宽度 = 首列 + 各列宽度之和，由模板上的内联 width（resultTableWidth）给出，不再 width:100%：
@@ -5034,7 +5047,8 @@ onBeforeUnmount(() => {
 .data-table th .th-line1 { display: flex; align-items: center; min-width: 0; }
 .data-table th .th-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .data-table th .th-comment {
-  font-size: 11px; font-weight: 400; color: var(--dc-text-dim);
+  /* 表头内部的字号都跟「结果表格字号」走（比正文小 2px，层级不变） */
+  font-size: calc(var(--grid-fs, 13px) - 2px); font-weight: 400; color: var(--dc-text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
 /* 行高来自设置（编辑器页签的「结果表格行高」，变量挂在 .data-table-wrap 上）；
@@ -5049,12 +5063,12 @@ onBeforeUnmount(() => {
    也不写 cursor：图标是**表头单元格的一部分**，点它同样会选中整列/切排序，
    所以让它继承表头的手型 —— 写 default 会让表头里又冒出一种箭头（用户反馈过"表头符号不统一"）。 */
 .data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; vertical-align: middle; margin-right: 5px; }
-.data-table th .th-type-ic .el-icon { font-size: 12px; }
+.data-table th .th-type-ic .el-icon { font-size: calc(var(--grid-fs, 13px) - 1px); }
 /* 表头排序按钮：固定在列头右缘垂直居中（右侧 26px 已预留，与表预览/NoSQL 同款） */
 .data-table th .th-sort {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center;
-  font-size: 13px; color: var(--dc-text-dim); z-index: 3;
+  font-size: var(--grid-fs, 13px); color: var(--dc-text-dim); z-index: 3;
   opacity: .35; cursor: pointer; transition: opacity .12s, color .12s;
 }
 .data-table th:hover .th-sort { opacity: .9; }
@@ -5184,7 +5198,7 @@ onBeforeUnmount(() => {
    表现就是序号列缺边线、看着没被选中 */
 .data-table td.row-sel-td {
   cursor: pointer; user-select: none;
-  color: var(--dc-text-dim); font-size: 12px;
+  color: var(--dc-text-dim); font-size: calc(var(--grid-fs, 13px) - 1px);
 }
 .data-table td.row-sel-td:hover { background-color: var(--dc-primary-wash); color: var(--dc-text); }
 .data-table td.row-sel-td.row-num-on {
