@@ -422,6 +422,7 @@
                       'tab-drop-before': dragOverTabId === tab.id && dragTabId !== tab.id && dragOverSide === 'before',
                       'tab-drop-after': dragOverTabId === tab.id && dragTabId !== tab.id && dragOverSide === 'after'
                     }"
+                    :title="tabTitle(tab)"
                     draggable="true"
                     @dragstart="onTabDragStart($event, tab)"
                     @dragover="onTabDragOver($event, tab)"
@@ -430,7 +431,9 @@
                     @contextmenu.prevent="showTabCtxMenu($event, tab)">
                 <!-- 连接环境外显：PROD 连接的页签带红色 P 标（防误连） -->
                 <span v-if="isProdTab(tab)" class="tab-prod-dot" :title="$t('nav.prodTabTip')">P</span>
-                {{ tab.dirty ? '* ' : '' }}{{ tabLabel(tab) }}
+                <!-- 页签只显示表名 / 对象名，「连接 · 库」的全路径放悬浮提示（tabTitle）；
+                     用原生 title 而不是 el-tooltip：页签自己带拖拽排序的鼠标事件，别再叠一层浮层 -->
+                {{ tab.dirty ? '* ' : '' }}{{ tabLabelShort(tab) }}
               </span>
             </template>
             <TableDataView v-if="tab.type === 'table'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :table="tab.table" :readOnly="tab.readOnly" @update-table-rows="onUpdateTableRows" @open-query="onOpenQueryFromTable" />
@@ -5684,6 +5687,21 @@ const tabLabel = (tab) => {
     else base = parts.join(' · ') + ' · ' + base
   }
   return base
+}
+
+// 页签上**只显示最末一段**（表名 / 对象名 / 库名），「连接 · 库」前缀留给悬浮提示。
+// 用户反馈：页签条上的内容太长（连接名 + 库名 + 表名），连接名与库名可以不要。
+// 前缀是 tabLabel 用 ' · ' 拼出来的，所以取最后一段即可（没有前缀时原样返回）。
+// 注意：确认类对话框（"关闭这些页签？"）仍然用 tabLabel 全路径 —— 那时候必须分得清是哪个连接/库。
+const tabLabelShort = (tab) => {
+  const full = tabLabel(tab)
+  const i = full.lastIndexOf(' · ')
+  return i < 0 ? full : full.slice(i + 3)
+}
+// 悬浮提示：只有"短标题之外还有信息"时才给 title —— 否则会悬浮弹出一段和字面一模一样的东西
+const tabTitle = (tab) => {
+  const full = tabLabel(tab)
+  return full === tabLabelShort(tab) ? '' : full
 }
 
 const onObjFormSaved = (db, cat) => {
