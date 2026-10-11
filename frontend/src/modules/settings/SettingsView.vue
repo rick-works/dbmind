@@ -79,7 +79,8 @@
               这三项都是"微调"，上下限刻意收窄，避免把界面搞坏。 -->
           <div class="panel-title topmenu-title">{{ $t('settings.appearance.title') }}</div>
           <div class="panel-desc">{{ $t('settings.appearance.desc') }}</div>
-          <el-form label-width="140px" @submit.prevent>
+          <!-- 170px：装得下「顶栏菜单文字（含图标）」这种较长标签，不然会折成两行 -->
+          <el-form label-width="170px" @submit.prevent>
             <el-form-item :label="$t('settings.appearance.navFont')">
               <el-input-number v-model="appearance.navFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />
               <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
