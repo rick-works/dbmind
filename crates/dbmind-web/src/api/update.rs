@@ -575,6 +575,11 @@ struct Source {
     use_proxy: bool,
 }
 
+/// 源的唯一标识（地址 + 是否走代理）：下载循环用它记"这个源已经试过了"。
+fn source_key(s: &Source) -> String {
+    format!("{}|{}", s.url, s.use_proxy)
+}
+
 /// 源列表：直连（走代理）→ 各镜像（走代理）→ 直连（**不走代理**）。
 ///
 /// 顺序即优先级：正常情况下第一条就成了；失败或过慢才依次往后。
@@ -690,17 +695,21 @@ fn human_bytes(n: u64) -> String {
     format!("{:.1} MB", n as f64 / 1024.0 / 1024.0)
 }
 
-/// 给一个源"测速"：只取前 256 KB，返回近似速度（字节/秒）；失败返回 None。
+/// 给一个源"测速"：取前 2 MB，返回近似速度（字节/秒）；失败返回 None。
 ///
-/// 为什么必须测：四个候选（直连经代理 / 各镜像 / 直连不走代理）里哪个快，取决于当时的网络、
+/// 为什么必须测：几个候选（直连经代理 / 各镜像 / 直连不走代理）里哪个快，取决于当时的网络、
 /// 代理节点、运营商 —— 只有现场量才知道。让用户自己去点"换个源"是把这件事推给了他。
+///
+/// 样本量从 384 KB / 3 秒提到 **2 MB / 6 秒**：镜像常常"先猛后限速"（前几百 KB 几 MB/s，
+/// 之后掉到几十 KB/s），样本太短会把这个**瞬时爆发**当成真实速度，于是排到第一、
+/// 用户就卡在它上面（真机：不开代理时 16 KB/s、剩 45 分钟）。样本够长才算得出"持续速度"。
 fn probe_source(src: &Source) -> Option<u64> {
     let deadline = Instant::now();
     let resp = build_agent(src.use_proxy, 2)
         .get(&src.url)
         .set("User-Agent", "dbmind-updater")
-        .set("Range", "bytes=0-393215")
-        .timeout(Duration::from_secs(3))
+        .set("Range", "bytes=0-2097151")
+        .timeout(Duration::from_secs(6))
         .call()
         .ok()?;
     let mut reader = resp.into_reader();
@@ -709,9 +718,9 @@ fn probe_source(src: &Source) -> Option<u64> {
     // **只在收到第一个字节之后才计时**：把建连 / TLS 握手算进去的话，链路很快但握手慢的源
     // 会被误判成"慢"（真机：探到 197 KB/s，真下起来 4 MB/s）。
     let mut t_first: Option<Instant> = None;
-    while got < 384 * 1024 {
+    while got < 2 * 1024 * 1024 {
         // 硬上限：再慢就不再等了（测速只需知道"谁快"，不需要跑完）
-        if deadline.elapsed() > Duration::from_secs(3) {
+        if deadline.elapsed() > Duration::from_secs(6) {
             break;
         }
         match reader.read(&mut buf) {
@@ -780,16 +789,13 @@ fn download_with_progress(
     start_index: usize,
 ) -> dbmind_core::Result<()> {
     let all = build_sources(&inst.url);
-    // start_index 保留给排查用（0 = 正常；非 0 = 从第 n 个源起，跳过前面的）
-    let start = start_index % all.len();
+    // start_index 现在只是"给排查留个入口"（选源由测速决定，不看它）
+    let _ = start_index;
     // **自动选源**：现场并发测速，探通的排前面（最快的在最前），没探通的留在后面兜底。
     // 用户不需要、也不应该自己挑源 —— 哪个快只有现场量得准。
-    // 测速要 3 秒左右，这段时间进度条停在 0 B：一句话都不说，用户看到的就是"点了没反应"
+    // 测速要几秒，这段时间进度条停在 0 B：一句话都不说，用户看到的就是"点了没反应"
     //（真机反馈）。所以只补一条等待提示，连上第一个字节后立刻清掉（见 `download_once`）。
     cell.lock().unwrap().note = Some("正在选择下载源…".to_string());
-    let sources = rank_sources(&all);
-    let source_total = sources.len();
-    let _ = start;
     let part = part_path(dest);
     // 上一次可能已经把整包下完了（"取消"来得太晚、改名失败……），留下一个**完整**的 `.part`。
     // 这时再带 `Range: bytes=<全长>-` 去要，服务端一律回 **416**（区间越界）—— 四个源全失败，
@@ -819,13 +825,27 @@ fn download_with_progress(
         }
     }
     let mut errs: Vec<String> = Vec::new();
-    for (si, src) in sources.iter().enumerate() {
-        // 取消要**立刻**停：否则每个源还要再试两次、各等 3 秒，用户会以为"点了取消没反应"
+    // 已经试过的源（地址 + 是否走代理 做键）：不再回头，避免在同一批慢源上反复打转
+    let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
+    loop {
+        // 取消要**立刻**停：否则每个源还要再试两次、各等几秒，用户会以为"点了取消没反应"
         if cell.lock().unwrap().cancel {
             return Err(DbMindError::new(ErrorCode::Internal, "已取消当前下载（已下载的部分保留）".to_string()));
         }
-        // 顺序是"绕一圈"后的：只有 si==0 才意味着还在原定起点上
-        let is_start = si == 0;
+        // **每次换源都重新测速排源**：镜像的快慢在几分钟内就能翻转（同一条网络上实测同一个镜像
+        // 163 KB/s ↔ 4 KB/s），只在开头排一次会让用户卡在"当时最快、现在最慢"的源上干等
+        //（用户反馈：不开代理时只有 16 KB/s、要 45 分钟）。
+        let ranked = rank_sources(&all);
+        let Some(src) = ranked.iter().find(|s| !tried.contains(&source_key(s))).cloned() else {
+            break; // 所有源都试过一轮，收工（下面统一报错）
+        };
+        // 首次尝试（还没换过源）与"换源之后"给的提示不同，见下面的 note
+        let is_start = tried.is_empty();
+        tried.insert(source_key(&src));
+        let si = ranked
+            .iter()
+            .position(|s| source_key(s) == source_key(&src))
+            .unwrap_or(0);
         let host = host_of(&src.url);
         let via = if src.use_proxy { "" } else { "（不走代理）" };
         for attempt in 1..=2u32 {
@@ -851,14 +871,14 @@ fn download_with_progress(
                 let mut p = cell.lock().unwrap();
                 p.note = note;
                 p.url = Some(src.url.clone());
-                p.source_index = (start + si) % source_total;
-                p.source_total = source_total;
+                p.source_index = si;
+                p.source_total = ranked.len();
                 p.using_proxy = src.use_proxy;
             }
             let before = done;
             // 允许"慢速重连"的条件：同源还有一次重试机会，或后面还有别的源。
             // 最后一条路上不能再掐（宁可慢，也别把一个能下完的活干成失败）。
-            let can_retry = attempt == 1 || si + 1 < sources.len();
+            let can_retry = attempt == 1 || tried.len() < ranked.len();
             match download_once(&src.url, src.use_proxy, &part, cell, can_retry) {
                 Ok(()) => {
                     // 校验：**这一步是允许默认走镜像的前提**。sha256 来自 GitHub API

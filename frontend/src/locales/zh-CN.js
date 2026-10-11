@@ -42,7 +42,11 @@ export default {
   'update.dlDone': '下载完成，正在安装更新',
   // 完成时把落地路径写出来：万一系统没接受自动启动（Windows 的 UAC / 杀软、macOS 的策略都可能拦），
   // 用户看着这句话就能自己去双击那个文件，不用再问"它下到哪了"
-  'update.dlBackground': '后台继续下载',
+  'update.dlBackground': '后台更新',
+  'update.dlFaster': '换个更快的源',
+  'update.doneTitle': '更新成功',
+  'update.doneBody': '已更新到 v{v}，可以直接使用了。',
+  'update.doneOk': '好的',
   'update.dlRetry': '重试',
   'update.dlCopyLink': '复制下载链接',
   'update.dlClose': '关闭',

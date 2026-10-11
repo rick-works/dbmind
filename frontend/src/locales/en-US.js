@@ -38,7 +38,11 @@ export default {
   'update.dlDone': 'Download finished, installing the update',
   // Show the path on completion: if the system refuses to auto-launch it (Windows UAC / antivirus,
   // macOS policy), the user can just double-click the file instead of wondering where it went
-  'update.dlBackground': 'Keep downloading in background',
+  'update.dlBackground': 'Update in background',
+  'update.dlFaster': 'Try a faster source',
+  'update.doneTitle': 'Update installed',
+  'update.doneBody': 'Updated to v{v} — ready to use.',
+  'update.doneOk': 'OK',
   'update.dlRetry': 'Retry',
   'update.dlCopyLink': 'Copy download link',
   'update.dlClose': 'Close',

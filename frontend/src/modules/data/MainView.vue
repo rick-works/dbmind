@@ -1043,7 +1043,12 @@
         <el-button size="small" @click="openDownloadDir">{{ t('update.dlOpenDir') }}</el-button>
         <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('common.confirm') }}</el-button>
       </template>
-      <el-button v-else size="small" @click="closeDownloadDialog">{{ t('update.dlBackground') }}</el-button>
+      <template v-else>
+        <!-- 运行中还留了一条"自救"的路：镜像快慢随时翻转，不该让人只能干等。
+             按一次 = 重新测速、换到当下最快的源，并从已下载的断点接着下 -->
+        <el-button size="small" @click="switchSource">{{ t('update.dlFaster') }}</el-button>
+        <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('update.dlBackground') }}</el-button>
+      </template>
     </template>
   </el-dialog>
 
@@ -1270,7 +1275,7 @@ const doApplyUpdate = async () => {
       confirmButtonText: t('update.confirmOk'),
       cancelButtonText: t('common.cancel'),
       type: 'info',
-      customClass: 'upd-confirm'
+      customClass: 'upd-box'
     })
   } catch {
     return // 点了取消：什么都不做，仍停在版本说明页
@@ -1281,6 +1286,10 @@ const doApplyUpdate = async () => {
 
 // 失败后原地重试：仍是同一个目录（系统的「下载」），后端会接着已下载的 .part 续传
 const retryDownload = () => { startDownload('') }
+
+// 「换个更快的源」：与重试走同一条路（后端每次换源都会**重新测速**，并从 .part 续传）；
+// 名字分开只为在界面上一眼看出它解决的是"太慢"，而不是"失败了"。
+const switchSource = () => { startDownload('') }
 
 
 // 真正开始下载（目录已定）
@@ -1359,6 +1368,33 @@ const gotoDownload = () => {
   if (url) openExternal(url)
 }
 
+// ===== 更新成功提示 =====
+// 「后台更新」装完会把应用关掉再重开，所以"更新成功"只能在**下次启动**时说 ——
+// 在下载完成那一刻抢着弹，用户还没看清窗口就退出去装包了。
+// 判据：把当前版本记在本地，启动后发现比上次**更高**就弹一次（首次运行、版本回退都不弹）。
+const VERSION_LS = 'dbmind_last_version'
+const cmpVersion = (a, b) => {
+  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0)
+  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] || 0) - (pb[i] || 0)
+    if (d !== 0) return d
+  }
+  return 0
+}
+const maybeAnnounceUpgraded = (cur) => {
+  if (!cur) return
+  let prev = ''
+  try { prev = localStorage.getItem(VERSION_LS) || '' } catch { /* 隐私模式等：只影响这次提示 */ }
+  try { localStorage.setItem(VERSION_LS, String(cur)) } catch { }
+  if (!prev || cmpVersion(cur, prev) <= 0) return
+  ElMessageBox.alert(t('update.doneBody', { v: cur }), t('update.doneTitle'), {
+    confirmButtonText: t('update.doneOk'),
+    type: 'success',
+    customClass: 'upd-box'
+  })
+}
+
 const checkUpdate = async () => {
   if (updateChecking.value) return
   updateChecking.value = true
@@ -1387,6 +1423,7 @@ const checkUpdate = async () => {
 
     const r = await checkUpdateApi()
     if (!r || r.success === false) { ElMessage.error((r && r.message) || t('update.checkFail')); return }
+    maybeAnnounceUpgraded(r.current)   // 这次启动是不是刚更新完
     if (!r.hasNew) { ElMessage.success(t('update.upToDate', { v: r.current })); return }
     showUpdateDialog(r, false)   // 手动检查：不显示「不再提示此版本」
   } catch {
@@ -1419,6 +1456,7 @@ const autoCheckUpdate = async () => {
   try {
     const r = await checkUpdateApi()
     if (!r || r.success === false) throw new Error('check failed')
+    maybeAnnounceUpgraded(r.current)   // 这次启动是不是刚更新完（装完重开就会命中）
     if (!r.hasNew) return
     // 用户对同一版本点过「不再提示」就静默
     let skipped = ''
@@ -7415,25 +7453,24 @@ const connTypeSummary = computed(() =>
 </style>
 
 <style>
-/* 「在线更新」的确认框（customClass: upd-confirm）。
+/* 在线更新流程里的消息框，两个共用（customClass: upd-box）：
+   更新前的确认框，以及更新成功后的提示框。
    **必须放在全局块**：消息框是 Element 用 JS 创建再 teleport 到 body 的 —— 它不带本组件的
    作用域属性，我们传进去那段 h() 也不是在渲染上下文里建的，放 scoped 里一条都命不中。
    框体 / 标题 / 正文的观感由 index.css 那套全局消息框样式统一负责，这里**不再重复定义**，
-   只补两处：① 正文两行紧凑一些；② 按钮改成与「前往下载页 / 在线更新」同规格 ——
-   MessageBox 默认按钮是 32px/14px 的大号，同一条流程里前后两屏按钮一大一小（用户反馈）。 */
-/* 标题不加粗：与同一条流程里另两个弹窗的标题一致（那两个走 #header 槽位，字重 400）；
-   全局消息框标题是 600，这里只压这一个框，不动其它消息框 */
-.upd-confirm .el-message-box__title { font-weight: 400; }
-.upd-confirm .el-message-box__content { padding: 0; }
+   只补两处：① 标题不加粗、正文紧凑一些；② 按钮改成与「前往下载页 / 在线更新」同规格 ——
+   MessageBox 默认按钮是 32px/14px 的大号，同一条流程里前后几屏按钮一大一小（用户反馈）。 */
+.upd-box .el-message-box__title { font-weight: 400; }
+.upd-box .el-message-box__content { padding: 0; }
 .upd-confirm-body { font-size: 13.5px; line-height: 1.85; color: var(--dc-text-mid, #666); }
 .upd-confirm-body p { margin: 0; }
-.upd-confirm .el-message-box__btns { padding-top: 16px; }
+.upd-box .el-message-box__btns { padding-top: 16px; }
 /* 与 Element size="small" 的原值逐项对齐：高 24、字 12、内边距 5×11、圆角 5；
    宽度随文字走（不再写死 min-width），和后面那排一致 */
-.upd-confirm .el-message-box__btns .el-button {
+.upd-box .el-message-box__btns .el-button {
   height: 24px; padding: 5px 11px; font-size: 12px; border-radius: 5px;
 }
-.upd-confirm .el-message-box__btns .el-button + .el-button { margin-left: 10px; }
+.upd-box .el-message-box__btns .el-button + .el-button { margin-left: 10px; }
 
 /* 顶栏「数据」下拉菜单（teleport 到 body，需全局样式） */
 .dc-top-menu { min-width: 160px; }
