@@ -15,6 +15,7 @@
  * **幂等**：要点之后的内容整体重写，所以重复跑不会叠出两张表。
  *
  * 正文结构（与 release-notes/TEMPLATE.md 配套）：
+ *   ## 更新说明                       ← 本脚本补（人工只写下面的要点）
  *   - 要点若干条（人工写，只讲更新了什么）
  *
  *   ## 安装包
@@ -58,8 +59,9 @@ for (const tag of tags) {
     console.log(`${tag}  跳过（release-notes/${tag}.md 不存在）`)
     continue
   }
-  // 幂等：切掉上一次可能生成的表格，只留人工写的要点
-  const bullets = fs.readFileSync(file, 'utf8').split('\n## 安装包')[0].trimEnd()
+  // 幂等：切掉上一次生成的表格与它上面的标题，只留人工写的要点
+  let bullets = fs.readFileSync(file, 'utf8').split('\n## 安装包')[0].trimEnd()
+  bullets = bullets.replace(/^##\s*更新说明\s*\n+/, '')
 
   const { assets } = gh(['release', 'view', tag, '--repo', REPO, '--json', 'assets'])
   const rows = []
@@ -74,6 +76,8 @@ for (const tag of tags) {
   }
 
   const body = [
+    '## 更新说明',
+    '',
     bullets,
     '',
     '## 安装包',
