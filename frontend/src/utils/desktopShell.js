@@ -43,7 +43,13 @@ function reportFailure(step, error) {
   console.error('[desktopShell] ' + step + ' 失败：', error)
   if (lastFailure === detail) return
   lastFailure = detail
-  try { document.title = t('ds.windowUnavailable', { detail }) } catch { }
+  // ⚠️ 这里**必须**走 setTitle（IPC），不能写 `document.title = …` —— 页面上改 document.title
+  // 不会改变 Tauri 的原生窗口标题（下面 setTitle 的注释就写着这一条），于是"点了没反应"时
+  // 外部**完全看不到原因**。1.2.11 的关闭询问正是这样：壳命令被 ACL 拒了（capabilities 里漏了
+  // `allow-close-action`），页面静默失败，用户只看到"点了没反应"，查起来得靠远程调试。
+  try {
+    tauriWindow().then((win) => win.setTitle(t('ds.windowUnavailable', { detail }))).catch(() => { })
+  } catch { }
 }
 
 /** macOS 上系统会给红绿灯按钮，页面不该再画一套（Tauri 下 decorations 的差异见各平台的壳实现） */

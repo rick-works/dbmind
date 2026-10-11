@@ -1,0 +1,18 @@
+# 桌面壳自己的命令 `close_action` 的权限声明 —— 没有它，页面就调不动这条命令。
+#
+# 为什么必须有这个文件：Tauri v2 只在三种情况下查 ACL ——插件命令、应用声明了 ACL 清单、
+# **请求来自非本地来源**。而本应用的前端是从 http://127.0.0.1:<port> 加载的（内核在本地起着
+# 一个 HTTP 服务），在 Tauri 眼里属于**远程来源**，于是每一条 app 命令都要有一条权限，
+# 再在 capabilities/default.json 里引用。
+#
+# 漏了会怎样（1.2.11 真机反馈，查了半天）：关闭询问弹得出来 —— 因为"壳 → 页面"的**事件**不走 ACL；
+# 但点「关闭」/「最小化到托盘」毫无反应 —— 因为"页面 → 壳"的 **invoke 被 ACL 拒**，
+# 控制台里的原话是 `Command close_action not allowed by ACL`，而用户看到的只是"点了没反应"。
+#
+# ⚠️ 以后**新增 app 命令**时照抄这个模式：在这里加一条 [[permission]]（identifier 用
+# `allow-<命令名，下划线换连字符>`、commands.allow 写命令原名），再到 capabilities/default.json
+# 引用该 identifier。生成的 desktop-schema.json 里不会列出 app 命令，别去那儿找。
+[[permission]]
+identifier = "allow-close-action"
+description = "允许页面回应「关闭窗口」的选择（退出应用 / 最小化到托盘）"
+commands.allow = ["close_action"]
