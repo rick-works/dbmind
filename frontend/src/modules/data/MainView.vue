@@ -1260,10 +1260,10 @@ const closeUpdateDialog = (neverAgain) => {
 // 确认后**不再弹"选择保存位置"**（装个更新还要挑文件夹太啰嗦）：安装包固定落系统的「下载」目录
 // （由后端 resolve_dir 决定），想找它点弹窗里的「打开所在文件夹」。
 const doApplyUpdate = async () => {
-  // 两行短句、各自成段：用 h() 渲染而不是往字符串里塞换行 —— MessageBox 会把换行折成空格
+  // 一句话说清"会发生什么"并以问句收尾（文案由用户定稿）；用 h() 渲染成独立段落，
+  // 而不是往字符串里塞换行 —— MessageBox 会把换行折成空格
   const body = h('div', { class: 'upd-confirm-body' }, [
-    h('p', null, t('update.confirmLine1')),
-    h('p', null, t('update.confirmLine2'))
+    h('p', null, t('update.confirmAsk'))
   ])
   try {
     await ElMessageBox.confirm(body, t('update.dlTitle'), {
@@ -7421,6 +7421,9 @@ const connTypeSummary = computed(() =>
    框体 / 标题 / 正文的观感由 index.css 那套全局消息框样式统一负责，这里**不再重复定义**，
    只补两处：① 正文两行紧凑一些；② 按钮改成与「前往下载页 / 在线更新」同规格 ——
    MessageBox 默认按钮是 32px/14px 的大号，同一条流程里前后两屏按钮一大一小（用户反馈）。 */
+/* 标题不加粗：与同一条流程里另两个弹窗的标题一致（那两个走 #header 槽位，字重 400）；
+   全局消息框标题是 600，这里只压这一个框，不动其它消息框 */
+.upd-confirm .el-message-box__title { font-weight: 400; }
 .upd-confirm .el-message-box__content { padding: 0; }
 .upd-confirm-body { font-size: 13.5px; line-height: 1.85; color: var(--dc-text-mid, #666); }
 .upd-confirm-body p { margin: 0; }
