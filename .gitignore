@@ -33,10 +33,12 @@ Thumbs.db
 .DS_Store
 .playwright-cli/
 
-# 官网源文件（website/index.html）**入库跟踪** —— 它原先只活在 gh-pages 分支里、主仓看不见，
+# 官网源文件：**只把 index.html 入库跟踪** —— 它原先只活在 gh-pages 分支里、主仓看不见，
 # 于是每次发版都容易漏更新（一漏就是 8 个版本，用户反馈"官网版本内容都没更新"）。
-# 入库后有 diff、能被 review；发版流程见 scripts/publish-site.ps1，
-# release.mjs 里还会检查"新版本的条目加了没"。
+# 入库后有 diff、能被 review；图片 / sponsors.js / .nojekyll 变动极少，仍只留在 gh-pages 分支。
+# 发版流程见 scripts/publish-site.ps1，release.mjs 里还会检查"新版本的条目加了没"。
+/website/*
+!/website/index.html
 
 # 本机构建加速配置：.cargo/config.toml 里的 rust-lld 链接器路径是**每台机器各不相同**的
 # 绝对路径（写死的本机路径会让 CI / 别人机器直接构建失败：linker not found）。
