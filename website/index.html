@@ -693,14 +693,36 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
-      <!-- v1.2.9（最新） -->
+      <!-- v1.2.10（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.10</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>关闭窗口前先问一句</b>：退出，还是最小化到托盘？三个系统同一套行为 —— 右上角 ×、Alt+F4、任务栏右键关闭、macOS 红点都会问。只在界面上拦自绘的那个 × 是不够的，其余途径会绕过询问直接退出</li>
+            <li><b>新增托盘图标</b>：左键点一下把窗口叫回来，右键菜单里有「显示主窗口 / 退出 DBmind」；最小化后应用与后台的数据库宿主继续运行，连接不断</li>
+            <li><b>回车默认落在「最小化到托盘」</b>：那是可逆的那个选择，误按一下不会丢工作现场；要退出就明确点「关闭」</li>
+            <li><b>顺带把出包流水线提速</b>（Rust 构建放宽并行度 + npm / maven 依赖缓存）：上一次 Windows 16.6 分钟、macOS Intel 18 分钟，往后应当明显缩短</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.10" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.10" target="_blank" rel="noopener">下载 v1.2.10</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.9 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
           <div class="rel-head">
             <span class="rel-ver">v1.2.9</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
