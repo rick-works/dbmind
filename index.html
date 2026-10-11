@@ -693,14 +693,35 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
-      <!-- v1.2.10（最新） -->
+      <!-- v1.2.11（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.11</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>「在线更新」修好了</b>：Windows 上不再弹「Windows 找不到文件 …setup.exe」（那是拉起安装器时路径被 cmd 拆坏了，文件其实好好躺在下载目录里），macOS 更新完会正常挂载安装镜像</li>
+            <li><b>更新完成时显示安装包保存路径</b>：万一自动打开被系统拦住（UAC、杀软、macOS 策略），照着路径双击那个文件也能装</li>
+            <li><b>拉起前先确认文件真的落地</b>：没落地就直说没落到哪，而不是拿一个不存在的路径去拉、让系统弹错</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.11" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.11" target="_blank" rel="noopener">下载 v1.2.11</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.10 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
           <div class="rel-head">
             <span class="rel-ver">v1.2.10</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
