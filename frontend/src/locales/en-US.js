@@ -1551,6 +1551,7 @@ export default {
   'settings.editor.save': 'Save editor settings',
   'settings.editor.reset': 'Restore defaults',
   'settings.editor.msgSaved': 'Settings saved — the query editor will apply them when formatting',
+  'settings.editor.loadFailed': 'Failed to read editor settings: changes will not be saved (to avoid overwriting your existing configuration with defaults)',
 
   // ---------- Settings · SQL formatting ----------
   'settings.format.title': 'SQL formatting',

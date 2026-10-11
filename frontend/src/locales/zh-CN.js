@@ -1557,6 +1557,7 @@ export default {
   'settings.editor.save': '保存编辑器设置',
   'settings.editor.reset': '恢复默认',
   'settings.editor.msgSaved': 'SQL 格式化设置已保存，查询编辑器后续格式化将应用',
+  'settings.editor.loadFailed': '编辑器设置读取失败：本次改动不会被保存（以免用默认值覆盖原有配置）',
 
   // ---------- 设置 · SQL 格式化 ----------
   'settings.format.title': 'SQL 格式化',

@@ -1349,6 +1349,11 @@ const savePaths = async () => {
 
 // ---------- localStorage 配置（默认值统一来自 utils/settings.js） ----------
 const editorForm = ref({ ...editorDefaults, sqlKeywordRules: [] })
+// 只有**成功读取**过设置才允许落盘（见下方那个 deep watcher）。
+// 理由：loadEditor 抛错时表单会被兜底成一组默认值，这时只要表单发生任何一次改动，
+// watcher 就会把这组默认值写回 localStorage —— 用户的编辑器设置（含关键字排版规则）就没了。
+// "读失败 → 写默认值"是设置被清空最经典的一条链路。
+let editorLoaded = false
 const loadEditor = () => {
   try {
     const raw = JSON.parse(localStorage.getItem('dbmind_editor') || '{}')
@@ -1374,11 +1379,20 @@ const loadEditor = () => {
       }))
       : []
     editorForm.value = { ...editorDefaults, ...raw, sqlKeywordRules: rules }
-  } catch { editorForm.value = { ...editorDefaults, sqlKeywordRules: [] } }
+    editorLoaded = true
+  } catch (e) {
+    editorForm.value = { ...editorDefaults, sqlKeywordRules: [] }
+    // 读不出来就**说出来**：以前这里是静默兜底，界面上看着像"从来没配过"，
+    // 用户根本不知道自己的设置为什么会不见（见 editorLoaded 的注释）
+    console.error('[settings] 读取编辑器设置失败：', e)
+    try { ElMessage.warning(t('settings.editor.loadFailed')) } catch { }
+  }
 }
 // **改完即生效**：用户最常踩的坑就是切了开关没点保存，回去看编辑器"没反应"。
 // 深度监听静默落盘 + 热更新（落盘与刷新只在这一处做），「保存」按钮仅作显式确认。
 watch(editorForm, () => {
+  // 没成功读过设置就不写：否则"读失败兜底出的默认值"会被一次改动落盘，覆盖掉用户的全部配置
+  if (!editorLoaded) return
   persistUI('dbmind_editor', JSON.stringify(editorForm.value))
   reloadEditorSettings()
 }, { deep: true })
@@ -2382,8 +2396,18 @@ watch(visible, (v) => {
 .fmt-tbl :deep(.el-select__wrapper),
 .fmt-tbl :deep(.el-select__selected-item) { font-size: 14px; }
 .fmt-c-iw :deep(.el-input__inner) { text-align: center; }
-/* 不带缩进的排版：这一列显示「-」，居中且弱化（格子边框由表格提供） */
-.fmt-iw-na { text-align: center; color: var(--dc-text-dim); }
+/* 不带缩进的排版：这一列显示「-」。
+   外面**必须也套一层框**（尺寸、圆角、描边都对齐可编辑时那个 el-input-number），
+   否则同一列里"有框的是能配的、没框的是不能配的"，一行行看下来不齐（用户反馈）。 */
+.fmt-iw-na {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 32px;
+  border-radius: var(--el-border-radius-base, 4px);
+  box-shadow: 0 0 0 1px var(--dc-border) inset;
+  background: var(--dc-bg-code);
+  color: var(--dc-text-dim);
+  font-size: 14px;
+}
 .fmt-tbl-empty { font-size: 13px; color: var(--dc-text-dim); background: var(--dc-bg-code); }
 .fmt-rule-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0; }
 .fmt-preview {
