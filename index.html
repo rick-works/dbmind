@@ -693,14 +693,35 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
-      <!-- v1.2.11（最新） -->
+      <!-- v1.2.12（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.12</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>关闭询问修好了</b>：点过右上角 × 之后的「关闭 / 最小化到托盘」在三个平台都能用了 —— 此前两个按钮点了都没反应（壳自己的命令被 Tauri 的 ACL 挡住了，事件方向不受影响，所以弹窗照常出现）</li>
+            <li><b>在线更新改成一键静默升级</b>：点一次「立即更新」→ 它自己下载 → 静默安装 → 自动重启成新版，全程没有安装向导，安装目录不变、设置与连接都留着</li>
+            <li><b>macOS 更新后不用再手动放行</b>：安装时自动去掉「从网上下载」的隔离标记，也不再是"挂上镜像让你自己拖"</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.12" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.12" target="_blank" rel="noopener">下载 v1.2.12</a>
+          </div>
+        </div>
+      </article>
+
+      <!-- v1.2.11 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
           <div class="rel-head">
             <span class="rel-ver">v1.2.11</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
