@@ -61,6 +61,14 @@ write('Cargo.toml', (s) => s.replace(/(\[workspace\.package\][\s\S]*?version = "
 write('frontend/package.json', (s) => s.replace(/("version": ")[^"]+(")/, `$1${version}$2`))
 write('crates/dbmind-desktop/tauri.conf.json', (s) => s.replace(/("version": ")[^"]+(")/, `$1${version}$2`))
 
+// 1b) 还有两处"跟着版本走"的产物，原先靠人记得，漏过：
+//   · Cargo.lock —— 各 workspace crate（dbmind-*）的版本号。漏了很隐蔽：Cargo.toml 已是新版本、
+//     锁文件里还写着旧版本，要等谁跑一次 cargo 才被悄悄改回来（1.2.7 那次就漏了，事后手工补的）。
+//   · macOS 的 DMG 说明书 —— 里面那条 curl 一行命令写死了版本号（要能直接复制粘贴才顺手），
+//     说明书是随包发出去的，不跟着改就会指向上一版的文件名。
+write('Cargo.lock', (s) => s.replace(/(\[\[package\]\]\nname = "dbmind-[^"]*"\nversion = ")[^"]+(")/g, `$1${version}$2`))
+write('resources/mac/首次打开请看这里.txt', (s) => s.replace(/\d+\.\d+\.\d+/g, version))
+
 // 2) locales：新版本插到 rel1，旧版本顺延
 const NOTE_SLOTS = 3
 const notes = {
