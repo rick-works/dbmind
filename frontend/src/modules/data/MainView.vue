@@ -7417,20 +7417,19 @@ const connTypeSummary = computed(() =>
 <style>
 /* 「在线更新」的确认框（customClass: upd-confirm）。
    **必须放在全局块**：消息框是 Element 用 JS 创建再 teleport 到 body 的 —— 它不带本组件的
-   作用域属性，我们传进去那段 h() 也不是在渲染上下文里建的，放 scoped 里一条都命不中
-   （第一版就是这么写的，等于没生效）。
-   为什么不用默认样式：它按"危险操作确认"设计 —— 标题小、正文挤、按钮也小，看着像系统弹窗
-   而不是应用里的一步。这里按应用观感重画：标题加粗一档、正文 13.5px/1.85 分两段、
-   按钮统一 92×32；颜色全用主题变量，深色模式自动跟随 */
-.upd-confirm { border-radius: var(--dc-radius, 10px); padding: 18px 20px 14px; }
-.upd-confirm .el-message-box__header { padding: 0 0 10px; }
-.upd-confirm .el-message-box__title { font-size: 15px; font-weight: 600; color: var(--dc-text); }
+   作用域属性，我们传进去那段 h() 也不是在渲染上下文里建的，放 scoped 里一条都命不中。
+   框体 / 标题 / 正文的观感由 index.css 那套全局消息框样式统一负责，这里**不再重复定义**，
+   只补两处：① 正文两行紧凑一些；② 按钮改成与「前往下载页 / 在线更新」同规格 ——
+   MessageBox 默认按钮是 32px/14px 的大号，同一条流程里前后两屏按钮一大一小（用户反馈）。 */
 .upd-confirm .el-message-box__content { padding: 0; }
-.upd-confirm .el-message-box__status { font-size: 20px; }
 .upd-confirm-body { font-size: 13.5px; line-height: 1.85; color: var(--dc-text-mid, #666); }
 .upd-confirm-body p { margin: 0; }
 .upd-confirm .el-message-box__btns { padding-top: 16px; }
-.upd-confirm .el-message-box__btns .el-button { min-width: 92px; height: 32px; font-size: 13.5px; }
+/* 与 Element size="small" 的原值逐项对齐：高 24、字 12、内边距 5×11、圆角 5；
+   宽度随文字走（不再写死 min-width），和后面那排一致 */
+.upd-confirm .el-message-box__btns .el-button {
+  height: 24px; padding: 5px 11px; font-size: 12px; border-radius: 5px;
+}
 .upd-confirm .el-message-box__btns .el-button + .el-button { margin-left: 10px; }
 
 /* 顶栏「数据」下拉菜单（teleport 到 body，需全局样式） */
