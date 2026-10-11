@@ -25,12 +25,13 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use std::path::Path;
 
 use sysinfo::System;
-use tauri::{RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
 /// 读 `java -version` 的主版本号（`17.0.20` → 17；`1.8.0_401` → 8）。
 fn java_major(exe: &Path) -> Option<u32> {
@@ -301,6 +302,38 @@ fn wait_ready(port: u16) {
     eprintln!("内嵌内核在 {READY_TIMEOUT:?} 内未就绪，仍打开窗口");
 }
 
+/// 前端已经确认「关闭」：置位后放行真正的关闭，不再拦截询问。
+/// 用静态量而不是 Tauri 状态对象 —— 窗口事件回调里读它最省事，不依赖 app 句柄。
+static ALLOW_CLOSE: AtomicBool = AtomicBool::new(false);
+
+/// 把主窗口叫回来（托盘菜单「显示主窗口」与托盘左键都走它）
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+    }
+}
+
+/// 页面回应「关闭窗口」时的选择：
+///   close = 真的关闭（连带退出应用）；tray = 最小化到托盘；其它 = 取消（什么都不做）
+#[tauri::command]
+fn close_action(window: tauri::WebviewWindow, action: String) {
+    match action.as_str() {
+        "close" => {
+            // 显式退出，而不是只 close 窗口：**有托盘时"关掉最后一个窗口"不会结束进程**
+            // （托盘图标还在 → 应用继续活着，用户会以为没关掉）。走 app.exit 仍会触发
+            // RunEvent::Exit，子进程清场逻辑不受影响。
+            ALLOW_CLOSE.store(true, Ordering::SeqCst);
+            window.app_handle().exit(0);
+        }
+        "tray" => {
+            let _ = window.hide();
+        }
+        _ => {}
+    }
+}
+
 fn main() {
     // 必须在起内核**之前**：这个选择是通过进程环境变量传给内核的
     ensure_java();
@@ -377,10 +410,65 @@ fn main() {
                     inner.width, inner.height, outer.width, outer.height
                 );
             }
+
+            // ── 关闭窗口前先问一句：直接关（退出）还是最小化到托盘 ──
+            // 拦在**壳**里，而不是只在页面上拦：右上角 ×、Alt+F4、任务栏右键关闭、macOS 红点……
+            // 所有关闭途径最后都走到 WindowEvent::CloseRequested，这里一处兜住；
+            // 只在页面上拦只能盖住自绘的那一个按钮。
+            // 页面收到事件后弹自己的对话框（与界面同一套观感），再用 close_action 命令回复。
+            {
+                let w = window.clone();
+                window.on_window_event(move |ev| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = ev {
+                        if ALLOW_CLOSE.load(Ordering::SeqCst) {
+                            return; // 前端已确认关闭：放行
+                        }
+                        api.prevent_close();
+                        let _ = w.emit("dbmind:close-requested", ());
+                    }
+                });
+            }
+
+            // ── 托盘 ──
+            // 既然提供"最小化到托盘"，就必须留一条回去的路，否则窗口一藏就再也叫不出来。
+            // 菜单两项够用：显示主窗口 / 退出 DBmind（退出走 app.exit，仍会触发 RunEvent::Exit 清场）。
+            // Linux 侧托盘依赖 libayatana-appindicator（CI 构建时装了 dev 包，deb/AppImage 自带运行时）。
+            let show_item = tauri::menu::MenuItemBuilder::with_id("show", "显示主窗口").build(app)?;
+            let quit_item = tauri::menu::MenuItemBuilder::with_id("quit", "退出 DBmind").build(app)?;
+            let tray_menu = tauri::menu::MenuBuilder::new(app)
+                .items(&[&show_item, &quit_item])
+                .build()?;
+            let mut tray = tauri::tray::TrayIconBuilder::new()
+                .menu(&tray_menu)
+                // Windows / Linux 的习惯是"左键点图标把窗口叫回来"，所以菜单只走右键
+                .show_menu_on_left_click(false)
+                .tooltip("DBmind");
+            if let Some(icon) = app.default_window_icon() {
+                tray = tray.icon(icon.clone());
+            }
+            tray.on_menu_event(|app, ev| match ev.id().as_ref() {
+                "show" => show_main_window(app),
+                "quit" => app.exit(0),
+                _ => {}
+            })
+            .on_tray_icon_event(|tray, ev| {
+                if let tauri::tray::TrayIconEvent::Click {
+                    button: tauri::tray::MouseButton::Left,
+                    button_state: tauri::tray::MouseButtonState::Up,
+                    ..
+                } = ev
+                {
+                    show_main_window(tray.app_handle());
+                }
+            })
+            .build(app)?;
+
             Ok(())
         })
         // 用 build + run(回调) 而不是 run(context)：要在应用真正退出时清场。
         // 右上角 ×、Alt+F4、任务栏右键关闭……最终都会走到这里 —— 一处兜住全部关闭途径。
+        // 页面回应「关闭窗口」的选择（关闭 / 最小化到托盘）走这个命令
+        .invoke_handler(tauri::generate_handler![close_action])
         .build(tauri::generate_context!())
         .expect("Tauri 初始化失败")
         .run(|_app, event| {

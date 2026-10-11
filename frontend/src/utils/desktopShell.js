@@ -166,5 +166,48 @@ export const desktopShell = {
       canceled = true
       if (unsubscribe) unsubscribe()
     }
+  },
+
+  /**
+   * 订阅「用户要关闭窗口」。
+   *
+   * 壳（`crates/dbmind-desktop/src/main.rs`）把所有关闭途径都拦下了 —— 右上角 ×、Alt+F4、
+   * 任务栏右键关闭、macOS 红点 —— 拦下后发这个事件；页面弹自己的对话框问一句，
+   * 再用 `respondClose` 回话。**不订阅就等于关不掉**（窗口一直在），所以视图一挂载就要订上。
+   */
+  onCloseRequested(callback) {
+    if (legacy) return () => { }
+    if (!hasTauri) return () => { }
+
+    let unsubscribe = null
+    let canceled = false
+    ;(async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event')
+        const off = await listen('dbmind:close-requested', () => callback())
+        if (canceled) off()
+        else unsubscribe = off
+      } catch (e) {
+        reportFailure('订阅关闭事件', e)
+      }
+    })()
+    return () => {
+      canceled = true
+      if (unsubscribe) unsubscribe()
+    }
+  },
+
+  /**
+   * 回应「关闭窗口」的选择：
+   *   'close' = 真的关闭（退出应用）；'tray' = 最小化到托盘；其它 = 取消（窗口保持原样）
+   */
+  async respondClose(action) {
+    if (!hasTauri) return
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      await invoke('close_action', { action: String(action || '') })
+    } catch (e) {
+      reportFailure('回应关闭', e)
+    }
   }
 }

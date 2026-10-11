@@ -20,7 +20,8 @@ dbmind-web = { path = "../dbmind-web" }
 # 只为了 `hide_console`（Windows 上别给子进程弹控制台）：桌面壳自己会 spawn
 # `java -version` 探测版本，不藏的话每次开软件都闪一个黑窗。函数本体在 core。
 dbmind-core = { path = "../dbmind-core" }
-tauri = { version = "2", features = [] }
+# tray-icon：关闭窗口时给"最小化到托盘"用（没有托盘就没法把那扇窗叫回来）
+tauri = { version = "2", features = ["tray-icon"] }
 # 退出清场时枚举进程（拿可执行文件路径与命令行做严格匹配）。
 # 刻意不用 tasklist / wmic / PowerShell：打包后的便携版里没有脚本，
 # 而这些外部工具在新系统上有的已弃用、有的行为不一致。

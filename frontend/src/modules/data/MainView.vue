@@ -1561,6 +1561,39 @@ const winClose = async () => {
   }
   winApi.close()
 }
+
+/**
+ * 关闭窗口前，壳会把这次关闭拦下来问一句：退出应用，还是最小化到托盘。
+ *
+ * 壳（`crates/dbmind-desktop/src/main.rs`）拦的是 `WindowEvent::CloseRequested` ——
+ * 右上角 ×、Alt+F4、任务栏右键关闭、macOS 红点**都走那里**，所以这里一处就能覆盖全部关闭途径
+ * （只在页面上拦自绘的那个 ×，其余途径会绕过询问直接退）。
+ *
+ * 对话框用应用自己的，而不是系统弹窗：与界面同一套观感，也才能跟着语言走。
+ *   「最小化到托盘」（也是回车默认）→ 藏进托盘，托盘图标左键或菜单可随时叫回来
+ *   「关闭」                        → 真的退出（照旧会走 RunEvent::Exit 清场）
+ *   × / ESC                         → 取消，窗口保持原样
+ * 回车默认落在"最小化到托盘"这一侧：它是**可逆**的那个选择，误按不会丢工作现场。
+ */
+const askBeforeClose = async () => {
+  try {
+    await ElMessageBox.confirm(t('ds.closeAskMsg'), t('ds.closeAskTitle'), {
+      confirmButtonText: t('ds.closeTray'),
+      cancelButtonText: t('ds.closeApp'),
+      distinguishCancelAndClose: true, // 区分「取消按钮」与「右上角 ×」：前者=关闭，后者=什么都不做
+      type: 'warning',
+      closeOnClickModal: false
+    })
+    await winApi.respondClose('tray')            // 点了「最小化到托盘」
+  } catch (action) {
+    if (action === 'cancel') await winApi.respondClose('close')   // 点了「关闭」
+    else await winApi.respondClose('cancel')                      // × / ESC：保持原样
+  }
+}
+// 订阅关闭请求。放在 setup 里即可：MainView 是根视图（不会卸载），一次订阅覆盖整个生命周期。
+// 注意这一步不能漏 —— 壳拦下关闭后只在页面回话时才真正关，没订上就等于窗口关不掉。
+onMounted(() => { winApi.onCloseRequested(askBeforeClose) })
+
 /** 双击顶栏空白处 = 最大化 / 还原（无边框窗口系统不再代劳；落在导航/按钮上时不动窗口） */
 const onTopbarDblClick = (e) => {
   if (!isDesktop || isMacShell) return

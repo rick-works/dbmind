@@ -606,6 +606,11 @@ export default {
   'aictx.tableListFailed': '表清单加载失败',
   'bk.restore': '还原',
   'ds.windowUnavailable': 'DBmind · 窗口控制不可用（{detail}）',
+  // 关闭窗口前问一句：退出 还是 最小化到托盘
+  'ds.closeAskTitle': '关闭 DBmind？',
+  'ds.closeAskMsg': '要退出应用，还是最小化到托盘？最小化后可从托盘图标（任务栏右下角 / 菜单栏）随时把窗口叫回来。',
+  'ds.closeApp': '关闭',
+  'ds.closeTray': '最小化到托盘',
   'busy.elapsed': '已用时 {t}',
   'busy.working': '处理中…',
   'mdk.runTip': '试跑（只读，取前 100 行）',

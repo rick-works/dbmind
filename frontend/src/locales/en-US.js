@@ -600,6 +600,11 @@ export default {
   'aictx.tableListFailed': 'Could not load the table list',
   'bk.restore': 'Restore',
   'ds.windowUnavailable': 'DBmind · window controls unavailable ({detail})',
+  // Ask before closing the window: quit, or keep it in the tray
+  'ds.closeAskTitle': 'Close DBmind?',
+  'ds.closeAskMsg': 'Quit the app, or minimize it to the tray? If you minimize, click the tray icon (menu bar or notification area) to bring the window back at any time.',
+  'ds.closeApp': 'Quit',
+  'ds.closeTray': 'Minimize to tray',
   'busy.elapsed': '{t} elapsed',
   'busy.working': 'Working…',
   'mdk.runTip': 'Dry run (read-only, first 100 rows)',
