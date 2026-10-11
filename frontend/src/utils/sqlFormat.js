@@ -85,9 +85,10 @@ const rulesOf = (s) => {
       ? r.ly
       : (LEGACY_MODE_LY[r && r.mode] || 'none')
     const cs = (r && r.cs) === 'keep' ? 'keep' : (r && r.cs) === 'lower' ? 'lower' : 'upper'
-    // iw：关键字级缩进宽度，0 = 未配置（跟随全局 tabWidth）。只对带缩进的排版生效。
-    const n = Math.round(Number(r && r.iw))
-    const iw = ruleHasIndent(ly) && Number.isFinite(n) && n >= 1 && n <= 12 ? n : 0
+    // iw：关键字级缩进宽度，null = 未配置（跟随全局 tabWidth）。
+    // ⚠️ 0 是**有效值**（该关键字不缩进），不能拿 0 当"未配置"的哨兵 —— 两者必须分开。
+    const n = r && r.iw !== undefined && r.iw !== null && String(r.iw).trim() !== '' ? Math.round(Number(r.iw)) : NaN
+    const iw = ruleHasIndent(ly) && Number.isFinite(n) && n >= 0 && n <= 12 ? n : null
     out.push({ kw: kw.toUpperCase(), cs, ly, iw })
   }
   return out
@@ -223,8 +224,8 @@ const applyBreakAfter = (text, rules, tabWidth) => {
       const after = line.slice(m.index + m[0].length)
       if (!after.trim()) continue
       const indent = /^\s*/.exec(line)[0]
-      // 缩进宽度：这条规则单独配了 iw 就用它，否则跟随全局 tabWidth（默认 2）
-      const width = r.iw > 0 ? r.iw : (tabWidth || 2)
+      // 缩进宽度：这条规则单独配了 iw 就用它（0 也算配了 = 不缩进），否则跟随全局 tabWidth（默认 2）
+      const width = Number.isFinite(r.iw) ? r.iw : (tabWidth || 2)
       const extra = r.ly === 'afterBreakIndent' ? ' '.repeat(Math.max(0, width)) : ''
       lines[i] = line.slice(0, m.index + m[0].length) + '\n' + indent + extra + after.trimStart()
     }
@@ -238,7 +239,7 @@ const applyBreakAfter = (text, rules, tabWidth) => {
 // （例如子查询里的 FROM 仍比外层深一级）。
 // 只认「关键字出现在行首」的行：引擎给这种排版的写法本来就是关键字起头，不会误伤表达式里的同名词。
 const applyJoinIndent = (text, rules, tabWidth) => {
-  const targets = rules.filter((r) => r.ly === 'join' && r.iw > 0)
+  const targets = rules.filter((r) => r.ly === 'join' && Number.isFinite(r.iw))
   if (!targets.length) return text
   const base = Math.max(1, tabWidth || 2)
   let out = String(text)
@@ -318,7 +319,7 @@ export const formatSql = (text, s, language) => {
   if (rules.some((r) => r.ly === 'clause')) {
     out = applyBreakBeforeOnly(out, rules)
   }
-  if (rules.some((r) => r.ly === 'join' && r.iw > 0)) {
+  if (rules.some((r) => r.ly === 'join' && Number.isFinite(r.iw))) {
     out = applyJoinIndent(out, rules, options.tabWidth)
   }
   if (rules.some((r) => r.ly === 'afterBreak' || r.ly === 'afterBreakIndent')) {

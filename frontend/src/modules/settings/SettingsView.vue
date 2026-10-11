@@ -535,7 +535,7 @@
                   <el-input-number
                     v-model="rule.iw"
                     class="fmt-tc-iw"
-                    :min="1"
+                    :min="0"
                     :max="12"
                     :step="1"
                     :controls="false"
@@ -1347,8 +1347,10 @@ const loadEditor = () => {
         kw: (r && r.kw) || '',
         cs: (r && r.cs) === 'keep' ? 'keep' : (r && r.cs) === 'lower' ? 'lower' : 'upper',
         ly: ['none', 'clause', 'join', 'afterBreak', 'afterBreakIndent', 'setop'].includes(r && r.ly) ? r.ly : 'none',
-        // 关键字级缩进宽度：留空/非法一律当作"未配置"（undefined，不写这个键），交给全局
-        iw: (r && String(r.iw ?? '').trim() !== '' && Number.isFinite(Math.round(Number(r.iw))))
+        // 关键字级缩进宽度：留空/越界一律当作"未配置"（undefined，不写这个键）交给全局；
+        // **0 是合法值**（该关键字不缩进），只有空值/非数字/超出 0~12 才丢弃
+        iw: (r && String(r.iw ?? '').trim() !== '' && Number.isFinite(Math.round(Number(r.iw)))
+          && Math.round(Number(r.iw)) >= 0 && Math.round(Number(r.iw)) <= 12)
           ? Math.round(Number(r.iw))
           : undefined
       }))
@@ -1383,10 +1385,10 @@ const kwCsLabel = (cs) => (cs === 'keep' ? t('settings.format.casePreserve') : (
 const addKeywordRule = () => { editorForm.value.sqlKeywordRules.push({ kw: '', cs: 'upper', ly: 'none' }) }
 const removeKeywordRule = (index) => { editorForm.value.sqlKeywordRules.splice(index, 1) }
 // 清空 = 跟随全局：el-input-number 清空时给的是 null/undefined，统一收敛成"不写这个键"，
-// 免得落盘成 null 后又要在格式化里多判一次
+// 免得落盘成 null 后又要在格式化里多判一次。**0 是合法值**（该关键字不缩进），必须留下。
 const onIndentChange = (rule, v) => {
   const n = Math.round(Number(v))
-  rule.iw = String(v ?? '').trim() !== '' && Number.isFinite(n) && n >= 1 && n <= 12 ? n : undefined
+  rule.iw = String(v ?? '').trim() !== '' && Number.isFinite(n) && n >= 0 && n <= 12 ? n : undefined
 }
 
 // 关键字候选：标准 SQL 关键字（含常用短语）的去重列表，输入时实时过滤；
