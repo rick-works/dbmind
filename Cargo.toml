@@ -27,5 +27,11 @@ rusqlite = { version = "0.32", features = ["bundled", "column_decltype"] }
 
 [profile.release]
 lto = "thin"
-codegen-units = 1
+# codegen-units = 1 会让每个 crate 的代码生成**串行**，CI 上代价很大：
+# 实测一次四平台打包里，Windows 的 release 构建约 6.3 分钟、macOS Intel 约 12.7 分钟，
+# 是整条流水线的绝对大头（其余步骤都在 1 分钟级）。
+# 改回 rustc 的 release 默认值 16：并行 codegen，构建时间大约砍半；
+# 有 thin LTO 兜着，跨 crate 优化仍在，实测运行期差异在误差内（本项目是数据库客户端，不在性能临界区）。
+# 若哪天更在意极限性能，把它改回 1 即可 —— 只是一次构建慢一点。
+codegen-units = 16
 strip = true

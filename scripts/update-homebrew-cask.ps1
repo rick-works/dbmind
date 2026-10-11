@@ -28,6 +28,9 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+# 系统代理助手（Windows 的代理在注册表里，git 默认不读 —— 开代理时直连会一直超时）
+. (Join-Path $PSScriptRoot 'git-proxy.ps1')
+$proxy = Get-GitProxyArgs   # fetch / clone / push 都用它：有代理就走，没开就是空数组（直连）
 
 $repo = 'rick-works/dbmind'
 $tapRepo = 'rick-works/homebrew-tap'
@@ -60,12 +63,12 @@ Write-Host ('  intel ' + $intel)
 # ---------------------------------------------------------------- 更新 tap 工作副本
 $git = Join-Path $TapDir '.git'
 if (Test-Path $git) {
-    & git -C $TapDir fetch -q origin
+    & git -C $TapDir @proxy fetch -q origin
     & git -C $TapDir checkout -q main
     & git -C $TapDir reset -q --hard origin/main
 } else {
     if (Test-Path $TapDir) { Remove-Item $TapDir -Recurse -Force }
-    & git clone -q ("https://github.com/" + $tapRepo + ".git") $TapDir
+    & git @proxy clone -q ("https://github.com/" + $tapRepo + ".git") $TapDir
 }
 
 $cask = Join-Path $TapDir 'Casks/dbmind.rb'
@@ -99,7 +102,7 @@ if ($pending -notmatch 'dbmind\.rb') {
 $pushUrl = "https://rick-works:$tok@github.com/$tapRepo.git"
 $pushed = $false
 for ($k = 1; $k -le 8; $k++) {
-    & git -C $TapDir -c http.proxy= -c https.proxy= push $pushUrl main 2>&1 | Out-Null
+    & git -C $TapDir @proxy push $pushUrl main 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { $pushed = $true; Write-Host ("  推送 OK（第 $k 次）") -ForegroundColor Green; break }
     Write-Host ("  第 $k 次推送失败（github 时通时断），重试…") -ForegroundColor Yellow
     Start-Sleep -Seconds 12

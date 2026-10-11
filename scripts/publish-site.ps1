@@ -21,6 +21,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
+# 系统代理助手（Windows 的代理在注册表里，git 默认不读 —— 开代理时直连会一直超时）
+. (Join-Path $PSScriptRoot 'git-proxy.ps1')
 
 $src = Join-Path $root 'website\index.html'
 if (-not (Test-Path $src)) { throw "没找到官网源文件：$src" }
@@ -58,8 +60,9 @@ if (-not $tok) {
 if (-not $tok) { throw '没有可用的 GitHub 凭据：先设 $env:GH_TOKEN，或执行 gh auth login' }
 $pushUrl = "https://rick-works:$tok@github.com/rick-works/dbmind.git"
 $pushed = $false
+$proxy = Get-GitProxyArgs   # 有系统代理就用（没开就是空数组 = 直连）
 for ($k = 1; $k -le 8; $k++) {
-    & git -C $WorkDir -c http.proxy= -c https.proxy= push $pushUrl refs/heads/gh-pages:refs/heads/gh-pages 2>&1 | Out-Null
+    & git -C $WorkDir @proxy push $pushUrl refs/heads/gh-pages:refs/heads/gh-pages 2>&1 | Out-Null
     if ($LASTEXITCODE -eq 0) { $pushed = $true; Write-Host ("  已推送 gh-pages（第 $k 次）") -ForegroundColor Green; break }
     Write-Host ("  第 $k 次推送失败（github 时通时断），重试…") -ForegroundColor Yellow
     Start-Sleep -Seconds 12

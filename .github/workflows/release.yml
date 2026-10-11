@@ -119,17 +119,24 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
 
+      # 缓存 npm 与 maven：前端的依赖与四个 Java 宿主的依赖在四台 runner 上是同一份，
+      # 不缓存的话每个 job 都要重新下载（实测前端 ~65s、Java 宿主 ~40-50s）。
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       # 宿主 jar 要它编译，自带 JRE 要它的 jlink
+      # cache: maven —— 四个 Java 宿主的依赖（Maven 中央仓库那几个大包）缓存起来，
+      # 不缓存时每个 job 都要重新拉一遍
       - name: 安装 JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
+          cache: maven
 
       # Windows 上显式准备 MSVC 工具链环境（cl.exe / link.exe）。GitHub 的 windows runner
       # 自带 VS，但环境变量要靠它设进当前会话 —— 否则出现「msvc targets depend on the msvc
