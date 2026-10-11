@@ -78,7 +78,15 @@ const notes = {
 
 for (const [file, noteLines] of Object.entries(notes)) {
   write(`frontend/src/locales/${file}`, (s) => {
-    const lines = s.split('\n')
+    // 保留原文件的换行风格：下面按行切分再拼回去，若一律用 '\n' 会把行尾的 \r 吃掉，
+    // 让工作区的这两个文件从 CRLF 变成 LF（本仓库 core.autocrlf=true，提交时会被规范化回去，
+    // 所以 git 层看不出问题，但本地编辑器里整个文件会显示成「改过了」）。按原风格拼回最省事。
+    // 顺带说明一个**常见误解**：发版时这两个文件动辄整片 diff（v1.2.10 是 182/184 行、v1.2.11 是
+    // 190/192 行）**不是换行问题**，而是本脚本的设计 —— 新增版本插到 rel1，旧版本整体顺延为
+    // rel2、rel3…，于是 rel 段里每一行的键名都变了。要核验内容有没有丢，看两边的键数量是否相等即可。
+    const crlf = s.includes('\r\n')
+    const eol = crlf ? '\r\n' : '\n'
+    const lines = s.split(/\r?\n/)
     const firstIdx = lines.findIndex((l) => /'settings\.about\.rel\d+\.version':/.test(l))
     if (firstIdx < 0) {
       console.error(`  ! ${file} 里找不到 settings.about.relN.version，请手工处理`)
