@@ -1811,7 +1811,7 @@ export default {
   'settings.notify.group': '消息提示',
   'settings.notify.onSuccess': '操作成功时弹出提示',
   'settings.notify.autoClose': '错误提示自动关闭',
-  'settings.notify.save': '保存通知设置',
+  'settings.notify.save': '保存设置',
   'settings.notify.msgSaved': '通知设置已保存',
 
   // ---------- 设置 · 关于 ----------

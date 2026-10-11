@@ -59,6 +59,39 @@
             <el-icon :size="13"><InfoFilled /></el-icon>{{ $t('settings.language.partialHint') }}
           </div>
 
+          <!-- 主题：原独立页签，并进「通用」并紧跟界面语言（两者最相关）—— 用户要求放在语言下面 -->
+          <div class="panel-title topmenu-title">{{ $t('settings.theme.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.theme.desc') }}</div>
+
+          <div class="theme-options">
+            <div
+              v-for="opt in themeOptions"
+              :key="opt.mode"
+              class="theme-opt"
+              :class="{ active: themeForm.mode === opt.mode }"
+              @click="setThemeMode(opt.mode)"
+            >
+              <div class="theme-prev" :class="'prev-' + opt.mode">
+                <span class="pv-sidebar"></span>
+                <span class="pv-main">
+                  <span class="pv-line"></span>
+                  <span class="pv-line short"></span>
+                  <span class="pv-line"></span>
+                  <span class="pv-ctl"></span>
+                </span>
+              </div>
+              <div class="theme-opt-info">
+                <div class="theme-opt-name">{{ $t(opt.i18nKey) }}</div>
+                <div class="theme-opt-desc">{{ $t(opt.descKey) }}</div>
+              </div>
+              <el-icon v-if="themeForm.mode === opt.mode" class="theme-opt-check"><CircleCheck /></el-icon>
+            </div>
+          </div>
+
+          <div v-if="themeForm.mode === 'system'" class="theme-hint">
+            <el-icon :size="13"><Timer /></el-icon>{{ $t('settings.theme.followHint', { mode: systemModeText }) }}
+          </div>
+
           <!-- 顶栏菜单：选择顶栏显示哪些功能入口、调整顺序（持久化到 dbmind.db） -->
           <div class="panel-title topmenu-title">{{ $t('settings.topMenu.title') }}</div>
           <div class="panel-desc">{{ $t('settings.topMenu.desc') }}</div>
@@ -95,40 +128,6 @@
               <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
             </el-form-item>
           </el-form>
-
-          <!-- 主题：原来是独立页签，并进「通用」—— 语言 / 顶栏 / 尺寸 / 主题都是"界面"这一类，放一起好找。
-               这里只保留内容，外层的 settings-panel 壳去掉（已经在通用页签里了）。 -->
-          <div class="panel-title topmenu-title">{{ $t('settings.theme.title') }}</div>
-          <div class="panel-desc">{{ $t('settings.theme.desc') }}</div>
-
-          <div class="theme-options">
-            <div
-              v-for="opt in themeOptions"
-              :key="opt.mode"
-              class="theme-opt"
-              :class="{ active: themeForm.mode === opt.mode }"
-              @click="setThemeMode(opt.mode)"
-            >
-              <div class="theme-prev" :class="'prev-' + opt.mode">
-                <span class="pv-sidebar"></span>
-                <span class="pv-main">
-                  <span class="pv-line"></span>
-                  <span class="pv-line short"></span>
-                  <span class="pv-line"></span>
-                  <span class="pv-ctl"></span>
-                </span>
-              </div>
-              <div class="theme-opt-info">
-                <div class="theme-opt-name">{{ $t(opt.i18nKey) }}</div>
-                <div class="theme-opt-desc">{{ $t(opt.descKey) }}</div>
-              </div>
-              <el-icon v-if="themeForm.mode === opt.mode" class="theme-opt-check"><CircleCheck /></el-icon>
-            </div>
-          </div>
-
-          <div v-if="themeForm.mode === 'system'" class="theme-hint">
-            <el-icon :size="13"><Timer /></el-icon>{{ $t('settings.theme.followHint', { mode: systemModeText }) }}
-          </div>
 
           <!-- 通知：同样从独立页签并过来（它自带「保存」按钮，因为存的是后端 app_settings） -->
           <div class="panel-title topmenu-title">{{ $t('settings.notify.title') }}</div>
