@@ -79,6 +79,7 @@ import router from './router'
 import './styles/index.css'
 import { getNotifySettings, hydrateUIFromBackend, reloadEditorSettings, reloadQuerySettings } from './utils/settings'
 import { initTheme } from './utils/theme'
+import { applyAppearance } from './utils/appearance'
 import { t, initI18n, refreshLocaleFromStorage } from './utils/i18n'
 import { resetShortcutCache } from './utils/shortcuts'
 import { installExternalLinkHandler } from './utils/externalLinks'
@@ -227,6 +228,10 @@ initTheme()
 initI18n()
 // 外链一律交系统浏览器：壳里 window.open / target=_blank 打不开任何东西
 installExternalLinkHandler()
+// 界面尺寸（顶部菜单文字/图标、左侧树文字）：上电即把偏好写到 :root 的 CSS 变量上，
+// 免得先按默认尺寸渲染一帧再跳一下
+applyAppearance()
+
 app.mount('#app')
 hydrateUIFromBackend()
   .then(() => router.isReady())

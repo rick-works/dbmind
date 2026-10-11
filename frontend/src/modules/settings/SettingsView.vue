@@ -74,6 +74,25 @@
               </span>
             </div>
           </div>
+
+          <!-- 界面尺寸：改完立即生效（写 :root 的 CSS 变量，见 utils/appearance.js），不需要重启。
+              这三项都是"微调"，上下限刻意收窄，避免把界面搞坏。 -->
+          <div class="panel-title topmenu-title">{{ $t('settings.appearance.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.appearance.desc') }}</div>
+          <el-form label-width="140px" @submit.prevent>
+            <el-form-item :label="$t('settings.appearance.navFont')">
+              <el-input-number v-model="appearance.navFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />
+              <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
+            </el-form-item>
+            <el-form-item :label="$t('settings.appearance.navIcon')">
+              <el-input-number v-model="appearance.navIconSize" :min="12" :max="22" :step="1" @change="onAppearanceChange" />
+              <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
+            </el-form-item>
+            <el-form-item :label="$t('settings.appearance.treeFont')">
+              <el-input-number v-model="appearance.treeFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />
+              <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
+            </el-form-item>
+          </el-form>
         </div>
 
         <!-- 0.5 安全与会话（后端 app_settings：改安全开关与会话上限都会即时生效） -->
@@ -1035,11 +1054,16 @@ import {
   ArrowUp, ArrowDown, Document, DocumentCopy
 } from '@element-plus/icons-vue'
 import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/topMenu'
+import { getAppearance, saveAppearance } from '../../utils/appearance'
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern, ruleHasIndent } from '../../utils/sqlFormat'
 import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs } from '../../api'
 import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
+// 界面尺寸：当前值由 utils/appearance.js 从 localStorage 读；改动即写 :root 的 CSS 变量并落盘，
+// 所以顶栏/左侧树当场变化，不需要「保存」也不需要重启
+const appearance = ref(getAppearance())
+const onAppearanceChange = () => { appearance.value = saveAppearance(appearance.value) }
 // 「刷新结构缓存」要连**前端那份** localStorage 缓存一起清（内核缓存清了它还在也会显示旧清单）
 import { clearSchemaCache as clearLocalSchemaCache } from '../../utils/schemaCache'
 import DbLogo from '../../common/DbLogo.vue'

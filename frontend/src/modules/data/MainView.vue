@@ -6610,15 +6610,17 @@ const connTypeSummary = computed(() =>
 .top-nav-item {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 6px 11px; margin-right: 2px;
-  font-size: 14px; font-weight: 500; color: var(--dc-text);
+  /* 字号/图标走「设置 → 通用 → 界面尺寸」写的 CSS 变量（见 utils/appearance.js），
+     没设过时用后面的默认值兜底 —— 大小与原来完全一致 */
+  font-size: var(--dc-nav-fs, 14px); font-weight: 500; color: var(--dc-text);
   border-radius: 6px; cursor: pointer; transition: all .15s;
   user-select: none;
 }
 .top-nav-item:hover { background: var(--dc-primary-wash); color: var(--dc-text-strong); }
 .top-nav-item.dc-top-active { color: var(--dc-primary); font-weight: 600; }
-.top-nav-arrow { font-size: 14px; color: var(--dc-text-dim); }
-.top-nav-item .el-icon { font-size: 16px; }
-.conn-label { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: 14px; color: var(--dc-text); }
+.top-nav-arrow { font-size: var(--dc-nav-fs, 14px); color: var(--dc-text-dim); }
+.top-nav-item .el-icon { font-size: var(--dc-nav-icon, 16px); }
+.conn-label { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--dc-tree-fs, 14px); color: var(--dc-text); }
 .conn-label.t-mysql { }
 .conn-label.t-doris { }
 .conn-label.t-postgresql { }
@@ -7143,7 +7145,7 @@ const connTypeSummary = computed(() =>
 /* 索引元数据弹窗：内容区限高（索引多的表不至于把弹窗撑到天上去） */
 .ctx-index-wrap { max-height: 56vh; overflow: auto; }
 .ctx-index-empty { padding: 24px 4px; font-size: 13px; color: var(--dc-text-dim); text-align: center; }
-.tree-icon { font-size: 15px; }
+.tree-icon { font-size: var(--dc-tree-icon, 15px); }
 .node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; font-size: 14px; line-height: 1.4; font-weight: 400; color: var(--dc-text); }
 /* 文字轻重分层：连接名比对象名重一档，当前库名再加粗。
    这样"连接 → 库 → 对象"三层在长列表里能一眼分开，不必靠颜色去猜。 */
@@ -7164,7 +7166,7 @@ const connTypeSummary = computed(() =>
   background: linear-gradient(90deg, var(--dc-primary-wash), transparent);
   box-shadow: inset 2px 0 0 var(--dc-primary);
 }
-.dc-tree { background: transparent; --el-tree-text-color: var(--dc-text); --el-tree-node-hover-bg-color: var(--dc-bg-hover); font-size: 14px; }
+.dc-tree { background: transparent; --el-tree-text-color: var(--dc-text); --el-tree-node-hover-bg-color: var(--dc-bg-hover); font-size: var(--dc-tree-fs, 14px); }
 /* 字号加大后，行高放宽一点更舒展 */
 .dc-tree :deep(.el-tree-node__content) { height: 30px; }
 /* 树展开/折叠：直接瞬间开合，不要 element 默认 300ms 的 max-height 过渡（旧写法覆盖的 .collapse-transition 类名对 el-tree 无效） */

@@ -178,7 +178,8 @@ const UI_BACKEND_KEYS = {
   'ui.theme': 'dbmind_theme',
   'ui.locale': 'dbmind_locale',
   'ui.shortcuts': 'dbmind_shortcuts',
-  'ui.topmenu': 'dbmind_topmenu'
+  'ui.topmenu': 'dbmind_topmenu',
+  'ui.appearance': 'dbmind_appearance'
 }
 const pushTimers = {}
 /** 落一层 UI 设置：`raw` 是**原样**写进 localStorage 的字符串（调用方自己序列化）。 */

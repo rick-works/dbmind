@@ -1,5 +1,13 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.13": [
+    "Two new formatting options: comma position (after / before the field) and indent style (standard / tabular left / tabular right)",
+    "Keyword layout rules gained an indent-width column: set it per keyword, leave empty to follow the global value, or 0 for no indent",
+    "The editor context menu now has “Editor settings” / “Format settings” entries that jump straight to the right page",
+    "Settings panel polish: rules render as a bordered table, with control alignment and font sizes matching the other pages",
+    "General settings gained interface sizes: adjust the top menu text / icons and the left tree text, applied immediately",
+    "Fixed the occasional blank script tab: a failed Monaco load is no longer cached forever, and now says what to do"
+  ],
   "v1.2.12": [
     "Fixed the dead close dialog: “Quit” and “Minimize to tray” now work",
     "Updates are one click and silent: download, install and restart all happen by themselves",
