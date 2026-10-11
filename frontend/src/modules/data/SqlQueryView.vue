@@ -1,6 +1,9 @@
 <template>
+  <!-- --sqlq-fs：编辑器区（工具栏 / 语句条 / 底栏）的文字基准 = 「编辑器设置 → 字体大小」。
+       挂在根节点上统一给下面各处算，默认 14px 时各处尺寸与改动前逐值一致。
+       注意结果区用的是另一个变量（--grid-fs = 「结果表格字号」），两者互不影响。 -->
   <div class="sql-query-view" :class="{ 'with-result': resultVisible }" ref="rootRef"
-       :style="resultVisible ? { '--editor-ratio': String(editorRatio) } : null">
+       :style="{ '--sqlq-fs': (editorSettings.fontSize || 14) + 'px', ...(resultVisible ? { '--editor-ratio': String(editorRatio) } : {}) }">
     <div class="editor-area">
       <div class="editor-head">
         <!-- 连接选择器 -->
@@ -4878,7 +4881,20 @@ onBeforeUnmount(() => {
 }
 .editor-area { min-height: 0; display: flex; flex-direction: column; background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: var(--dc-radius); overflow: hidden; box-shadow: var(--dc-shadow-sm); }
 .editor-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--dc-border); gap: 10px; }
-.editor-title { font-weight: 600; font-size: 14px; }
+.editor-title { font-weight: 600; font-size: var(--sqlq-fs, 14px); }
+/* 工具栏（连接/库下拉 + 那一排按钮）跟着编辑器字体大小走：
+   字号比基准小 2px（=Element 的 size="small" 原值 12px），高度跟着字号 +10px（原来就是 24px），
+   这样调大字号时按钮不会把字挤在固定高度里 */
+.editor-head :deep(.el-button) {
+  font-size: calc(var(--sqlq-fs, 14px) - 2px);
+  height: calc(var(--sqlq-fs, 14px) + 10px);
+}
+.editor-head :deep(.el-select__wrapper) {
+  font-size: calc(var(--sqlq-fs, 14px) - 2px);
+  min-height: calc(var(--sqlq-fs, 14px) + 10px);
+}
+.editor-head :deep(.el-select__selected-item),
+.editor-head :deep(.el-select__placeholder) { font-size: calc(var(--sqlq-fs, 14px) - 2px); }
 
 /* 选择器组 */
 .selector-group { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -4888,7 +4904,7 @@ onBeforeUnmount(() => {
 .schema-select { width: 140px; }
 
 .sel-logo { margin-right: 4px; }
-.sel-icon { font-size: 14px; color: var(--dc-primary); margin-right: 4px; }
+.sel-icon { font-size: var(--sqlq-fs, 14px); color: var(--dc-primary); margin-right: 4px; }
 
 /* 下拉选项样式 */
 .opt-row { display: flex; align-items: center; gap: 8px; }
@@ -4910,25 +4926,25 @@ onBeforeUnmount(() => {
 .model-btn,
 .ai-act-btn {
   display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
-  height: 24px; padding: 0 8px; border-radius: 6px; cursor: pointer;
+  height: calc(var(--sqlq-fs, 14px) + 10px); padding: 0 8px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--dc-border); background: var(--dc-bg-card); color: var(--dc-text);
-  font-size: 13px; font-family: inherit;
+  font-size: calc(var(--sqlq-fs, 14px) - 1px); font-family: inherit;
   transition: color .15s ease, border-color .15s ease, background .15s ease;
 }
 .model-btn:hover,
 .ai-act-btn:hover { color: var(--dc-primary); border-color: var(--dc-primary); }
 .model-btn-ic,
-.ai-act-btn-ic { color: var(--dc-primary); font-size: 14px; }
+.ai-act-btn-ic { color: var(--dc-primary); font-size: var(--sqlq-fs, 14px); }
 .model-btn-tx { max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .model-btn-caret,
-.ai-act-btn-caret { font-size: 13px; color: var(--dc-text-weak); }
-.kbd { background: var(--dc-bg-soft); border: 1px solid var(--dc-border); border-radius: 4px; padding: 1px 5px; font-size: 11px; margin-left: 6px; }
+.ai-act-btn-caret { font-size: calc(var(--sqlq-fs, 14px) - 1px); color: var(--dc-text-weak); }
+.kbd { background: var(--dc-bg-soft); border: 1px solid var(--dc-border); border-radius: 4px; padding: 1px 5px; font-size: calc(var(--sqlq-fs, 14px) - 3px); margin-left: 6px; }
 .editor-body { flex: 1; min-height: 0; padding: 6px; position: relative; }
 /* 编辑器底部状态栏 */
 .editor-status {
   flex: 0 0 auto; display: flex; align-items: center; gap: 14px;
   padding: 4px 10px; border-top: 1px solid var(--dc-border);
-  background: var(--dc-bg-soft); font-size: 11.5px; color: var(--dc-text-mid);
+  background: var(--dc-bg-soft); font-size: calc(var(--sqlq-fs, 14px) - 2.5px); color: var(--dc-text-mid);
   white-space: nowrap; overflow: hidden;
 }
 .editor-status .st-item { flex: 0 0 auto; }
@@ -5320,9 +5336,9 @@ onBeforeUnmount(() => {
   background: var(--dc-bg-soft);
   overflow-x: auto;
 }
-.stmt-bar-label { font-size: 12px; color: var(--dc-text-dim); margin-right: 2px; white-space: nowrap; }
+.stmt-bar-label { font-size: calc(var(--sqlq-fs, 14px) - 2px); color: var(--dc-text-dim); margin-right: 2px; white-space: nowrap; }
 .stmt-chip {
-  font-size: 12px; line-height: 1; padding: 4px 8px;
+  font-size: calc(var(--sqlq-fs, 14px) - 2px); line-height: 1; padding: 4px 8px;
   border: 1px solid var(--dc-border); border-radius: 10px;
   background: var(--dc-bg-card); color: var(--dc-text-mid);
   cursor: pointer; white-space: nowrap;
