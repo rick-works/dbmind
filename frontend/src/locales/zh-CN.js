@@ -601,6 +601,9 @@ export default {
   'sce.format': '格式化',
   'sce.loading': '编辑器加载中…',
   'sce.loadFailed': '编辑器加载失败：{detail}',
+  // 编辑器资源加载失败时给的出口：重新加载界面会连同 index.html 与新的 chunk 一起重取，
+  // 「前端刚被替换过」这种情况（旧 chunk 404）只有它能救
+  'sce.reload': '重新加载',
   'sce.formatDone': '格式化完成',
   'sce.formatFailed': '格式化失败：{detail}',
   'aictx.ungrouped': '未分组',

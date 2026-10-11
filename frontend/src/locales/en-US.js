@@ -595,6 +595,9 @@ export default {
   'sce.format': 'Format',
   'sce.loading': 'Loading the editor…',
   'sce.loadFailed': 'Could not load the editor: {detail}',
+  // Reloading re-fetches index.html and the new chunks — the only cure when the frontend was
+  // replaced under a running app (old chunk 404)
+  'sce.reload': 'Reload',
   'sce.formatDone': 'Formatting done',
   'sce.formatFailed': 'Formatting failed: {detail}',
   'aictx.ungrouped': 'Ungrouped',

@@ -194,6 +194,10 @@
           class="vue-monaco-editor"
           @mount="onEditorMount"
         />
+        <div v-else-if="monacoFailed" class="editor-loading">
+          <span>{{ $t('sce.loadFailed', { detail: monacoError }) }}</span>
+          <el-button text type="primary" size="small" @click="reloadUi">{{ $t('sce.reload') }}</el-button>
+        </div>
         <div v-else class="editor-loading">{{ $t('sce.loading') }}</div>
       </div>
       <!-- 底部状态栏：光标位置 / 选中信息 / 总行数 / 格式化方言 -->
@@ -2803,8 +2807,18 @@ const monacoReady = ref(false)
 
 // 导出走异步任务，显示进度条和实时日志
 const exportTask = useExportTask()
+// 加载失败不能停在"加载中"（那会让人以为它一直在加载）：给出原因 + 一个出口。
+// 「重新加载」= location.reload()：会把 index.html 与新的 chunk 一起重取 —— 前端刚被替换过时
+// （旧 chunk 404）这是唯一有效的办法；只是偶发抖动的话，重开一个脚本页签也会重新 import
+// （utils/monaco.js 不再缓存失败）。
+const monacoFailed = ref(false)
+const monacoError = ref('')
+const reloadUi = () => { try { location.reload() } catch { } }
 ensureMonaco().then(() => { monacoReady.value = true })
-  .catch((e) => ElMessage.error('编辑器加载失败：' + (e && e.message ? e.message : e)))
+  .catch((e) => {
+    monacoFailed.value = true
+    monacoError.value = (e && e.message) ? e.message : String(e)
+  })
 let editorInstance = null
 
 // ===== 语句面包屑 + 报错语句标红（多段脚本的定位能力）=====

@@ -25,6 +25,10 @@
         class="sql-code-monaco"
         @mount="onEditorMount"
       />
+      <div v-else-if="monacoFailed" class="sql-code-loading">
+        <span>{{ $t('sce.loadFailed', { detail: monacoError }) }}</span>
+        <el-button text type="primary" size="small" @click="reloadUi">{{ $t('sce.reload') }}</el-button>
+      </div>
       <div v-else class="sql-code-loading">{{ $t('sce.loading') }}</div>
       <div v-if="!value && placeholder" class="sql-code-placeholder">{{ placeholder }}</div>
     </div>
@@ -64,8 +68,16 @@ const value = computed({
 const editorRef = ref(null)
 // Monaco 约 2.6MB，改为按需加载：加载完成前先渲染占位，避免拖慢首屏
 const monacoReady = ref(false)
+// 失败时不能停在"加载中"：给出原因 + 重新加载的出口（与 SqlQueryView 同一套；
+// 见 utils/monaco.js 里"失败不缓存"那段说明）
+const monacoFailed = ref(false)
+const monacoError = ref('')
+const reloadUi = () => { try { location.reload() } catch { } }
 ensureMonaco().then(() => { monacoReady.value = true })
-  .catch((e) => ElMessage.error(t('sce.loadFailed', { detail: (e && e.message ? e.message : e) })))
+  .catch((e) => {
+    monacoFailed.value = true
+    monacoError.value = (e && e.message) ? e.message : String(e)
+  })
 const editorInstance = ref(null)
 const formatting = ref(false)
 const providerDisposables = []

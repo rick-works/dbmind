@@ -34,6 +34,10 @@ let loading = null
 
 export function ensureMonaco() {
   if (loading) return loading
+  // ⚠️ 失败**不能**缓存。原先 `loading` 直接就是那个 async IIFE 的 Promise：一旦它被拒绝
+  // （典型场景是前端刚被替换过、旧 chunk 已 404），整个会话里**每个**编辑器都拿到同一个失败
+  // 结果 —— 用户看到的就是"打开脚本一片空白 / 一直显示加载中"，而且之后每个脚本页签都一样，
+  // 只能重启应用。现在失败时把自己清掉，下次挂载会重新 import，重新开个脚本页签就能自愈。
   loading = (async () => {
     const [monacoMod, workerMod] = await Promise.all([
       import('monaco-editor/esm/vs/editor/editor.api'),
@@ -123,6 +127,10 @@ export function ensureMonaco() {
       colors: {}
     })
     return monacoMod
-  })()
+  })().catch((e) => {
+    // 见函数开头：失败就清空缓存，让下一次调用（下一个编辑器挂载 / 用户重开脚本页签）重试
+    loading = null
+    throw e
+  })
   return loading
 }
