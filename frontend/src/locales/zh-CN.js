@@ -34,7 +34,7 @@ export default {
   'update.dlShowProgress': '查看下载进度',
   'update.dlBackgroundHint': '下载在后台继续，点顶栏的刷新图标可随时查看进度',
   'update.dlProgress': '已下载 {done} / {total}，速度 {speed}/s',
-  'update.dlDone': '下载完成，正在启动安装向导',
+  'update.dlDone': '下载完成，正在安装更新',
   // 完成时把落地路径写出来：万一系统没接受自动启动（Windows 的 UAC / 杀软、macOS 的策略都可能拦），
   // 用户看着这句话就能自己去双击那个文件，不用再问"它下到哪了"
   'update.applyDonePath': '已保存到：{path}（若没有自动打开，双击它即可安装）',
@@ -55,7 +55,7 @@ export default {
   'update.apply': '在线更新',
   'update.goto': '前往下载页',
   'update.downloading': '正在下载安装包，请稍候…',
-  'update.applyDone': '安装向导已启动，完成后请关闭本应用并重新打开新版',
+  'update.applyDone': '更新正在安装 —— 应用会自动重启，几秒钟后回来就是新版（不用管它）',
   'update.applyFail': '在线更新失败，请前往下载页手动更新',
   'update.checkFail': '检查更新失败（无法连接更新服务器）',
   'nav.prodTabTip': '生产环境连接（PROD）—— 谨慎操作',

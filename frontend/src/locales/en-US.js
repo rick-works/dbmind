@@ -30,7 +30,7 @@ export default {
   'update.dlShowProgress': 'View download progress',
   'update.dlBackgroundHint': 'Downloading continues in background - click the refresh icon in the top bar to check progress',
   'update.dlProgress': '{done} of {total} downloaded, {speed}/s',
-  'update.dlDone': 'Download finished, starting the installer',
+  'update.dlDone': 'Download finished, installing the update',
   // Show the path on completion: if the system refuses to auto-launch it (Windows UAC / antivirus,
   // macOS policy), the user can just double-click the file instead of wondering where it went
   'update.applyDonePath': 'Saved to: {path} (double-click it if it did not open automatically)',
@@ -51,7 +51,7 @@ export default {
   'update.apply': 'Update online',
   'update.goto': 'Open download page',
   'update.downloading': 'Downloading installer, please wait…',
-  'update.applyDone': 'Installer launched — finish it, then close and reopen this app',
+  'update.applyDone': 'Installing the update — the app restarts by itself, and you will be back on the new version in a few seconds',
   'update.applyFail': 'Online update failed — please download from the release page',
   'update.checkFail': 'Update check failed (cannot reach the update server)',
   'nav.prodTabTip': 'Production connection (PROD) — be careful',

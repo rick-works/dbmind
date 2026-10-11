@@ -355,6 +355,17 @@ fn main() {
     let origin = format!("http://127.0.0.1:{port}");
     tauri::Builder::default()
         .setup(move |app| {
+            // 在线更新要装新版时，安装器会覆盖正在运行的 exe —— 它会**强杀**本进程来腾出文件锁。
+            // 强杀不走 RunEvent::Exit，退出清场（结束 java 宿主）就不会执行，那些 java 会变成孤儿
+            // 留在后台。注册这个钩子：内核在开装前通知我们，我们走 app.exit(0) 优雅退出、清场照跑，
+            // 随后安装器接管（Windows 的 /R、macOS 脚本里的 open 会把新版拉起来）。
+            {
+                let handle = app.handle().clone();
+                dbmind_web::api::update::set_install_hook(Box::new(move || {
+                    let _ = handle.exit(0);
+                }));
+            }
+
             // 窗口在这里建、而不是写在 tauri.conf.json 里：端口是**运行时**定的。
             let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(origin.parse()?))
                 .title("DBmind")

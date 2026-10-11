@@ -23,6 +23,27 @@ use std::io::Read;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// 宿主（桌面壳）注册的钩子：**在线更新即将开始安装**时会被调用一次。
+///
+/// 为什么需要：安装器要覆盖正在运行的 exe，会先把本进程杀掉 —— 那是**强杀**，不走 Tauri 的
+/// `RunEvent::Exit`，于是退出清场（结束 java 宿主等）不会执行，那些 java 会变成孤儿留在后台。
+/// 桌面壳注册的钩子做的是 `app.exit(0)`：优雅退出、清场照跑，随后交给安装器接管。
+///
+/// 宿主没注册也不打紧（例如 `dbmind-web` 以服务方式单独跑）：不通知，安装照常进行。
+static INSTALL_HOOK: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// 由宿主注册：见 [`INSTALL_HOOK`] 的说明。重复注册会被忽略（第一次生效）。
+pub fn set_install_hook(hook: Box<dyn Fn() + Send + Sync>) {
+    let _ = INSTALL_HOOK.set(hook);
+}
+
+/// 安装即将开始：通知宿主一声（没注册就什么都不做）。
+fn notify_install_hook() {
+    if let Some(h) = INSTALL_HOOK.get() {
+        h();
+    }
+}
+
 const RELEASE_LATEST: &str = "https://api.github.com/repos/rick-works/dbmind/releases/latest";
 
 // ---------- 下载进度（进程内共享：后台任务写、HTTP 读） ----------
@@ -402,21 +423,40 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 // 拉起之前先确认文件真的落地了：改名、杀软、权限都可能让"下载成功却没到位"。
                 // 没到位就直接说清，而不是拿着一个不存在的路径去拉、让系统弹一句「找不到文件」。
                 let landed = dest.is_file();
-                let ok = landed && launch_installer(&dest);
-                let mut p = cell.lock().unwrap();
-                p.installer = Some(installer.clone());
-                p.version = Some(tag.trim_start_matches('v').to_string());
-                if ok {
+                // 先把终态写进状态里，**再**等一会儿去装：装的时候本进程会被安装器关掉（它要覆盖
+                // 正在运行的 exe），用户看到的最后一句提示必须提前亮出来，否则界面会卡在"下载中"。
+                {
+                    let mut p = cell.lock().unwrap();
+                    p.installer = Some(installer.clone());
+                    p.version = Some(tag.trim_start_matches('v').to_string());
                     p.status = "done".into();
+                }
+                if !landed {
+                    let mut p = cell.lock().unwrap();
+                    p.status = "failed".into();
+                    p.error = Some(format!(
+                        "安装包下载后没落到 {installer}（文件不存在），请重新下载"
+                    ));
+                    return;
+                }
+                // 留出读提示的时间再开装。安装器一起来就会把本进程关掉，提示一闪而过的话用户会以为
+                // "点了没反应"（v1.2.11 那个"关闭询问失效"就是这么被误读的）。
+                std::thread::sleep(Duration::from_secs(3));
+                let ok = launch_installer(&dest);
+                if ok {
+                    // 稍等一下让安装器就位（Windows 是加载 NSIS、macOS 是挂载镜像），再让宿主
+                    // **优雅退出**：安装器为腾出文件锁会强杀本进程，而强杀不走 RunEvent::Exit，
+                    // 退出清场（结束 java 宿主）就不会执行 —— 那些 java 会变成孤儿留在后台。
+                    std::thread::sleep(Duration::from_millis(1500));
+                    notify_install_hook();
                 } else {
+                    let mut p = cell.lock().unwrap();
                     p.status = "failed".into();
                     // 失败文案**必须带路径**：自动拉起被系统挡住时，用户双击这个文件就能自己装 ——
                     // 这才是能真正解决问题的一句话（原话只说"请手动运行它"，却没说清是哪个文件）。
-                    p.error = Some(if landed {
-                        format!("安装包已下载到 {installer}，但自动启动被系统拒绝 —— 双击这个文件即可安装")
-                    } else {
-                        format!("安装包下载后没落到 {installer}（文件不存在），请重新下载")
-                    });
+                    p.error = Some(format!(
+                        "安装包已下载到 {installer}，但自动启动被系统拒绝 —— 双击这个文件即可安装"
+                    ));
                 }
             }
             Err(e) => {
@@ -1061,39 +1101,94 @@ fn download_once(
 /// 拉起安装包（Windows）。
 ///
 /// 参数是给 Tauri 的 NSIS 模板的（见 tauri-bundler 的 installer.nsi；模板会忽略不认识的参数）：
-///   /P       passive：只显示进度条，不弹任何提问页 —— 否则会停在「已安装」那一页问要不要先卸载
-///   /UPDATE  更新模式：明确走「不先卸载、原地覆盖」，老用户的连接与设置不会被清掉
-///   /R       装完自动把主程序拉起来；否则更新完桌面上什么都不剩
+///   /S        silent：**完全不弹界面** —— 用户点一次「立即更新」，剩下的自己完成
+///   /UPDATE   更新模式：走「不先卸载、原地覆盖」，安装目录沿用上一次的（不算新装、设置与连接都留着）
+///   /R        装完自动把主程序拉起来 —— 用户看到的就是"应用闪一下，回来是新版"
 ///
-/// ⚠️ 这里**不能再走 `cmd /C start`，更不能自己加引号** —— v1.2.9 / v1.2.10 真机反馈：
-/// 手写的 `"…"` 会被 Rust 的参数转义再包一层（变成 `\"…\"`），而 cmd.exe 对 `\"` 的解析
-/// 与 CreateProcess 那套规则不一样，路径被拆坏 → 弹出「Windows 找不到文件 C:\…\setup.exe」，
-/// 可文件明明就躺在那里（实测 sha256 与官方值一致）。直接 CreateProcess 起它：
-/// 转义由 Rust 按系统规则做，路径带空格也正确。
+/// 真机实测（开发这一版时，应用**正在运行**的前提下跑 `/S /UPDATE /R`）：
+///   3 秒时应用已被安装器自动关掉、exe 已被换成新版；9 秒时应用**自己回来了**；
+///   全程没有出现任何窗口标题 —— 一路静默，没有"请先关闭应用"那种打断框。
+///
+/// ⚠️ 这里**不能再走 `cmd /C start`，更不能自己加引号** —— v1.2.9 真机反馈：手写的 `"…"` 会被
+/// Rust 的参数转义再包一层（`\"…\"`），而 cmd.exe 对 `\"` 的解析与 CreateProcess 那套规则不一样，
+/// 路径被拆坏 → 弹「Windows 找不到文件 C:\…\setup.exe」，可文件明明躺在那里（sha256 与官方一致）。
+/// 直接 CreateProcess 起它：转义由 Rust 按系统规则做，路径带空格也正确。
 #[cfg(windows)]
 fn launch_installer(path: &std::path::Path) -> bool {
     use std::os::windows::process::CommandExt;
     std::process::Command::new(path)
-        .args(["/P", "/UPDATE", "/R"])
-        // DETACHED_PROCESS：安装器要**活过本进程退出**，否则用户一点确定它就跟着没了
+        .args(["/S", "/UPDATE", "/R"])
+        // DETACHED_PROCESS：安装器要**活过本进程退出** —— 我们随后就让壳优雅退出，它得继续把活干完
         .creation_flags(0x0000_0008)
         .spawn()
         .is_ok()
 }
 
-/// 拉起安装包（macOS：dmg 交给 open 挂载）。
+/// 拉起安装包（macOS）：**静默装完**，而不是挂上镜像让用户自己拖。
 ///
-/// 用 `status()` **等它返回**，而不是 `spawn()` 只看"进程起没起来"：
-/// open 自己失败时（文件不在、被系统策略拒绝）退出码非 0，只有这样我们才能如实告诉用户
-/// "没打开"，而不是界面说「安装向导已启动」、实际什么都没发生
-/// （v1.2.10 真机反馈：苹果版更新完没自动弹出安装）。
+/// 目标是和 Windows 那条一致的"点一次就完事"：挂载 dmg（`-nobrowse` 不弹 Finder 窗口）→
+/// 把镜像里的 `DBmind.app` 用 `ditto` 覆盖到**当前这个 app 所在的位置**（目录不变）→
+/// 去掉「从网上下载」的隔离标记（否则新版首次打开还得去「隐私与安全性」手动放行，那正是
+/// 更新体验里最别扭的一步）→ 卸载镜像 → 重新打开。
+///
+/// 几个刻意的细节：
+///   · **用 `-mountpoint` 挂到自建的空目录**，而不是解析 `hdiutil` 输出的挂载点 ——
+///     输出格式随系统版本变（APFS 那行还带尾随空格），解析过一次就知道不值当。
+///   · 脚本里**等旧进程退出**再 `open`：同名 .app 已经在运行时，`open` 只会把旧的那个叫到
+///     前台，不会换成新代码。宿主会在这之前优雅关掉自己（见 `INSTALL_HOOK`）；万一没关成，
+///     脚本最多等 30 秒后自己收尾。
+///   · 这里用 `spawn()` 而不是 `status()`：脚本要等本进程退出，等它返回就是死锁。
+///   · 挂载或找不到 .app 时**退回老行为**（挂上 dmg 让用户自己拖），至少不让人卡住 ——
+///     顺带一提：脚本内部也留了不写入就退出的分支，所以"更新完发现应用没了"这种最坏情况
+///     只会出现在 `ditto` 本身失败（磁盘满、没权限）时。
 #[cfg(target_os = "macos")]
 fn launch_installer(path: &std::path::Path) -> bool {
-    std::process::Command::new("open")
+    const SCRIPT: &str = r#"
+set -e
+DMG="$1"
+APP="$2"
+MNT=$(mktemp -d "${TMPDIR:-/tmp}/dbmind-dmg.XXXXXX")
+hdiutil attach -nobrowse -noverify -readonly -mountpoint "$MNT" "$DMG" >/dev/null
+SRC=$(ls -d "$MNT"/*.app 2>/dev/null | head -1)
+if [ -z "$SRC" ]; then
+  hdiutil detach "$MNT" -quiet 2>/dev/null || true
+  rmdir "$MNT" 2>/dev/null || true
+  open "$DMG"
+  exit 4
+fi
+for i in $(seq 1 100); do
+  pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1 || break
+  sleep 0.3
+done
+pgrep -f "$APP/Contents/MacOS/" >/dev/null 2>&1 && pkill -f "$APP/Contents/MacOS/" || true
+ditto "$SRC" "$APP"
+xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+hdiutil detach "$MNT" -quiet 2>/dev/null || true
+rmdir "$MNT" 2>/dev/null || true
+open "$APP"
+"#;
+    let Some(bundle) = current_app_bundle() else {
+        // 拿不到 .app 路径（例如直接跑可执行文件）：退回老行为
+        return std::process::Command::new("open").arg(path).spawn().is_ok();
+    };
+    std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(SCRIPT)
+        .arg("sh")
         .arg(path)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .arg(&bundle)
+        .spawn()
+        .is_ok()
+}
+
+/// 当前程序所在的 `.app` 包的绝对路径（不在 bundle 里跑就是 None）。
+#[cfg(target_os = "macos")]
+fn current_app_bundle() -> Option<std::path::PathBuf> {
+    std::env::current_exe()
+        .ok()?
+        .ancestors()
+        .find(|p| p.extension().map(|e| e == "app").unwrap_or(false))
+        .map(|p| p.to_path_buf())
 }
 
 /// 拉起安装包（Linux：deb / AppImage 交给桌面环境；同样等返回、看退出码）
