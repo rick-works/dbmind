@@ -693,6 +693,28 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.19 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.19</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-12</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>表预览总条数修对了</b>：ClickHouse 的 count(*) 返回的是浮点，此前取不出来，于是只显示「共 200 条」（本页行数）还翻不动页；现在显示真实条数、分页可用，各数据源一并核对</li>
+            <li><b>数据治理 → 容量统计的行数</b>同样修正：ClickHouse 下不再恒为 0 或显示「未知」</li>
+            <li><b>设置 → 界面尺寸新增「TAB 栏文字（工作区页签）」</b>：工作区那排页签（如「脚本 1 ×」）的字号从此跟随设置，改完立即生效、不需要重启</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.19" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.19" target="_blank" rel="noopener">下载 v1.2.19</a>
+          </div>
+        </div>
+      </article>
+
       <!-- v1.2.18 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +722,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.18</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-12</span>
           </div>
           <ul class="rel-notes">
