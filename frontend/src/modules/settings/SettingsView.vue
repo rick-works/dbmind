@@ -2499,14 +2499,28 @@ watch(visible, (v) => {
 /* 「通用 → 界面尺寸」表单：标签一律不换行。
    标签是右边距对齐到输入框的，长一点会被折成两行（「顶栏菜单文字（含图标）」就被折过），
    加宽 label-width 之外再显式 nowrap 兜住 —— 换行比溢出难看得多。 */
-.appearance-form :deep(.el-form-item__label) { white-space: nowrap; text-align: right; padding-right: 10px; }
-/* 两列排布（用户要求）：8 个尺寸项单列时弹窗右半边整片空着。
-   两列各占一半 + 列间距 20px；标签宽度仍是 200px，保证长标签（TAB 栏文字（工作区页签））不折行。 */
+/* 标签：宽度交给网格的 max-content（把 EP 注入的行内宽度压掉），文字右对齐、不折行 */
+.appearance-form :deep(.el-form-item__label) {
+  width: auto !important;
+  margin: 0;
+  padding-right: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+/* 「界面尺寸」= 两列，且标签紧贴控件（照「SQL 格式化」那页的样子，用户指定）：
+   网格四列 = [标签][控件][标签][控件]，标签列取**该列最长的标签**（max-content）——
+   于是标签右对齐、与控件只隔 12px，同一列的输入框还自动对齐成竖线。
+   `display: contents` 让 el-form-item 内部的 label / content 直接成为网格项；
+   行距改用 grid 的 row-gap（form-item 自身的 margin 在 contents 下失效）。 */
 .appearance-form {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 20px;
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+  column-gap: 12px;
+  row-gap: 14px;
+  align-items: center;
 }
+.appearance-form :deep(.el-form-item) { display: contents; }
+.appearance-form :deep(.el-form-item__content) { margin-left: 0 !important; }
 .fmt-rule-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; }
 .fmt-preview {
   background: var(--dc-bg-code); border: 1px solid var(--dc-border); border-radius: 10px;
