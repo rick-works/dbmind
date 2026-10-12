@@ -159,6 +159,9 @@
                 <!-- 数据源节点：DB Logo + 连接名 + 环境角标 -->
                 <span v-else-if="data.kind === 'conn'" class="conn-row"
                       @mouseenter="onConnEnter($event, data)" @mouseleave="onConnLeave">
+                  <!-- 连接行最左的小菱形（用户要的"连接处小菱形"）：颜色跟这一行的环境角标同源
+                       （envColor，与 env-folder 的图标同色），一眼看出这条连接属于哪套环境 -->
+                  <span class="conn-diamond" :style="{ background: envColor(data.env) }"></span>
                   <span class="logo-wrap">
                     <DbLogo :type="data.connType" :size="14" :connected="isConnOpen(data.connId) && !connErrorSet.has(String(data.connId))" class="tree-logo" />
                   </span>
@@ -7049,6 +7052,17 @@ const connTypeSummary = computed(() =>
 
 /* conn 节点行：与 tree-node 同构，确保 flex 填充 */
 .conn-row { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
+/* 连接行最左的小菱形：6px 的方块转 45° 就是了（不用图标字体）。
+   颜色由模板里的 envColor(data.env) 内联给，跟环境角标/环境目录图标同色；
+   不给阴影、不加动画 —— 侧栏节点很多，装饰别再触发重绘。 */
+.conn-diamond {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  transform: rotate(45deg);
+  opacity: .9;
+}
 .conn-label { flex: 1; min-width: 0; }
 /* 拖拽：数据源行可抓取（拖拽换目录仍然可用）—— 但**不用抓取手型**：
    这里原来写的是 grab / grabbing，也就是那个"抓取手"，早先已按需求去掉。
