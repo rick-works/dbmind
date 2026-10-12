@@ -866,6 +866,15 @@
           <li class="ctx-item" @click="dbCtxDumpSql()">
             <el-icon><Download /></el-icon>{{ $t('tree.menu.dumpSql') }}
           </li>
+          <!-- 数据对比 / 数据传输：直接复用顶栏那两个入口 —— 它们吃的是「当前连接 + 当前库」，
+               所以先把当前库切到这个库，源就自动是它（用户要的「从哪个库右击就选中哪个」）。
+               文案沿用顶栏的 nav.compare / nav.sync，两处字一模一样。 -->
+          <li class="ctx-item" @click="dbCtxCompare()">
+            <el-icon><Operation /></el-icon>{{ $t('nav.compare') }}
+          </li>
+          <li class="ctx-item" @click="dbCtxSync()">
+            <el-icon><Switch /></el-icon>{{ $t('nav.sync') }}
+          </li>
           <li class="ctx-item" @click="openBackupRestore('backup', treeCtxMenu.data?.connId, treeCtxMenu.data?.db || treeCtxMenu.data?.label)">
             <el-icon><Download /></el-icon>{{ $t('tree.menu.backupDb') }}
           </li>
@@ -6549,6 +6558,28 @@ const ensureDbConn = (d) => {
     sessionStorage.setItem('dbmind.currentConnId', targetConnId)
     dbs.value = dbsByConn.value[targetConnId] || []
   }
+}
+
+/* 右击数据库 → 数据对比 / 数据传输：与顶栏按钮是同一件事，只是把**源**预先切到右击这个库。
+   顶栏那两个弹窗读的是 `conn` + `currentDb`（见模板里的 :conn / :database），所以这里
+   先 ensureDbConn（它只切连接，不管库）+ setCurrentDb，再打开。
+   nextTick 打开：顶栏入口若发现弹窗已是打开态会先关、下一帧再开（否则「点了没反应」），
+   这里跟着它一个节奏，避免边界上开关打架。 */
+const dbCtxCompare = () => {
+  const d = treeCtxMenu.value.data
+  if (!d) return
+  closeTreeCtxMenu()
+  ensureDbConn(d)
+  setCurrentDb(d.realDb || d.db || d.label)
+  nextTick(openCompare)
+}
+const dbCtxSync = () => {
+  const d = treeCtxMenu.value.data
+  if (!d) return
+  closeTreeCtxMenu()
+  ensureDbConn(d)
+  setCurrentDb(d.realDb || d.db || d.label)
+  nextTick(openSync)
 }
 
 const dbCtxNewQuery = () => {
