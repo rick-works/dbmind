@@ -2249,7 +2249,7 @@ async fn sync_table_inner(
     // 仅**纯插入/清空重建**启用 —— upsert 要「先读目标已有键 → 逐行比对更新」，并行会
     // 乱序重复更新，维持串行。写批内存上界 = (W+1) × 16MB（字节上限对所有目标生效）。
     let parallel_writes = effective_mode != DataMode::Upsert;
-    let write_workers = if use_stream { 2usize } else { 3usize };
+    let write_workers = if use_stream { 3usize } else { 6usize };
     let mut write_tx: Option<tokio::sync::mpsc::Sender<Vec<Vec<CellValue>>>> = None;
     let mut writer_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
     let shared_inserted = Arc::new(AtomicU64::new(0));
