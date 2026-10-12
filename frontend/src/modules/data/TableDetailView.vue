@@ -224,31 +224,25 @@
                                   :placeholder="needsLength(c.typeBase) ? $t('tdet.colPrecision') : ''" :title="needsLength(c.typeBase) ? $t('tdet.scaleTip') : ''" />
                       </td>
                       <td class="c-center">
-                        <!-- 主键列必然非空：勾选框在这里禁用，而不是等数据库把 ALTER 拒掉。
-                             参考 Navicat：勾选框后跟「是/否」文字，比一个孤零零的方框好读得多。
-                             列序也照参考：可为空在前、主键在后。 -->
-                        <span class="bool-cell">
-                          <span class="bool-text">{{ c.nullable ? $t('tdet.yes') : $t('tdet.no') }}</span>
-                          <el-checkbox v-model="c.nullable" :disabled="inputDisabled(c) || !!c.primaryKey"
-                                       :title="c.primaryKey ? $t('tdet.pkNotNull') : ''" />
-                        </span>
+                        <!-- 是/否一律只用勾选框（勾=是、不勾=否），不再跟「是/否」文字 —— 全库统一（用户反馈）。
+                             主键列必然非空：勾选框在这里禁用，而不是等数据库把 ALTER 拒掉。 -->
+                        <el-checkbox v-model="c.nullable" :disabled="inputDisabled(c) || !!c.primaryKey"
+                                     :title="c.primaryKey ? $t('tdet.pkNotNull') : ''" />
                       </td>
                       <td v-if="showPkCol" class="c-center">
-                        <el-checkbox v-if="canEditPkOf(c)" v-model="c.primaryKey" @change="onPkChange(c)" :title="$t('tdet.setPk')" />
-                        <el-icon v-else-if="c.primaryKey" color="#f5b34d" :size="15"><StarFilled /></el-icon>
-                        <span v-else class="pk-none">—</span>
+                        <!-- 能改的给可点的勾选框，不能改的给禁用勾选框 —— 状态照样一眼看得出（原来用一个星标图标） -->
+                        <el-checkbox v-model="c.primaryKey" :disabled="!canEditPkOf(c)"
+                                     @change="onPkChange(c)" :title="$t('tdet.setPk')" />
                       </td>
+                      <!-- 这三列只读：勾选框禁用 —— 勾=是、不勾=否，不再用「是」标签与「—」 -->
                       <td v-if="showOrderKey" class="c-center">
-                        <el-tag v-if="isSortCol(c)" size="small" type="success" effect="plain">{{ $t('tdet.yes') }}</el-tag>
-                        <span v-else class="pk-none">—</span>
+                        <el-checkbox :model-value="isSortCol(c)" disabled :title="$t('tdet.sortKeyTip')" />
                       </td>
                       <td v-if="showDist" class="c-center">
-                        <el-tag v-if="isDistCol(c)" size="small" type="success" effect="plain">{{ $t('tdet.yes') }}</el-tag>
-                        <span v-else class="pk-none">—</span>
+                        <el-checkbox :model-value="isDistCol(c)" disabled :title="$t('tdet.distColTip')" />
                       </td>
                       <td v-if="showPart" class="c-center">
-                        <el-tag v-if="isPartCol(c)" size="small" type="success" effect="plain">{{ $t('tdet.yes') }}</el-tag>
-                        <span v-else class="pk-none">—</span>
+                        <el-checkbox :model-value="isPartCol(c)" disabled :title="$t('tdet.partColTip')" />
                       </td>
                       <td>
                         <!-- 始终渲染输入框，默认值为 NULL 时以占位提示；输入即覆盖（原实现只显示 NULL 标签，导致无法编辑） -->
@@ -890,9 +884,10 @@ const exprHasCol = (expr, name) => {
   const n = String(name || '').trim()
   return !!n && colRefRe(n).test(String(expr || ''))
 }
-// 排序键：两种来源都认 —— 后端若按列回填了 sortKey 就用它，否则从基本信息那段排序键表达式里认
-// （CH 的主键默认等于排序键，界面上 CH 是不显示主键列的，所以这一列就是它唯一的回显）
-const isSortCol = (c) => !!c.sortKey || exprHasCol(tableForm.value.sortingKey, c.name)
+// 排序键：只从基本信息那段排序键表达式里认列名。
+// 注意**不要**再去看 `c.sortKey` —— 后端的 column_json 把这个字段写死成 false，从来没人回填
+// （见 dbmind-core 的 shape.rs），拿它当判据就是"永远是「—」"（用户实测踩过）。
+const isSortCol = (c) => exprHasCol(tableForm.value.sortingKey, c.name)
 // 分区键：注意 tableForm 是 ref，脚本里必须写 .value ——
 // 漏掉就会读到 undefined、整列永远显示「—」（基本信息明明写着 id，字段列表却说没有，用户反馈）
 const isPartCol = (c) => exprHasCol(tableForm.value.partitionKey, c.name)
