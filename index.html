@@ -693,6 +693,28 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.18 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.18</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-12</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>编辑表结构</b>：加载期间终于有「加载中」提示了（v-loading 指令此前从未注册、被静默失效），转圈样式也不再卡顿</li>
+            <li><b>字段表（编辑表结构与新建表）</b>：只渲染看得见的行 —— 几百列的大表滚动跟手、不再冒白块；「类型」格平时是纯文本，点一下才展开下拉选择</li>
+            <li><b>顺手修掉几处小毛病</b>：字段表选中态只剩一种样式（首行不再看起来像被选中）、注释格输入框底色与旁边一致、字段表头不再夹带 SQL 英文、在线更新的确认框改成「说明在前、问句在后」并去掉「打开所在文件夹」按钮</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.18" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.18" target="_blank" rel="noopener">下载 v1.2.18</a>
+          </div>
+        </div>
+      </article>
+
       <!-- v1.2.17 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +722,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.17</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-12</span>
           </div>
           <ul class="rel-notes">
