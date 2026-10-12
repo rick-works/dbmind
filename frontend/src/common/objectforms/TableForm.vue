@@ -1058,6 +1058,22 @@ emit('sql', genSql())
   border-right: 1px solid var(--dc-border) !important;
   padding: 0 !important;
 }
+/* 索引行与「字段定义」行**同一套**选中态（字段行见本文件后半段覆盖层 1320-1321：
+   `.sel-row` → 底色 + `td:first-child` 上的 `inset` 竖条。色值与竖条粗细都照抄那边，
+   两个页签切换时不该有两套强调）。
+
+   要点同上（编辑表结构里有一模一样的一段）：上面那条 `background: transparent !important`
+   会连 Element 的 hover 底色一起压掉，所以这里的底色必须**同样带 !important 且写在它之后**；
+   用 `:focus-within` 是因为索引行里全是控件 —— 光标进控件整行就亮，等价于字段行"选中"的观感。 */
+.idx-tab :deep(.el-table__body tr:hover > td.el-table__cell) {
+  background: var(--dc-bg-hover) !important;
+}
+.idx-tab :deep(.el-table__body tr:focus-within > td.el-table__cell) {
+  background: rgba(79, 140, 255, .16) !important;
+}
+.idx-tab :deep(.el-table__body tr:focus-within > td.el-table__cell:first-child) {
+  box-shadow: inset 2px 0 0 var(--dc-primary);
+}
 /* 最后一列不画右边框（否则与外框并成双线） */
 .idx-tab :deep(.el-table th.el-table__cell:last-child),
 .idx-tab :deep(.el-table td.el-table__cell:last-child) { border-right: none !important; }

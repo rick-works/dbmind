@@ -2622,6 +2622,25 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   border-right: 1px solid var(--dc-border) !important;
   padding: 0 !important;
 }
+/* 索引行与「字段定义」行**同一套**选中态：浅底 + 左侧主色竖条
+   （字段行见本文件 2583-2584：`:focus-within` → `--dc-primary-wash` 底色 + `td:first-child`
+    上 `inset 3px` 竖条。用户要求两边一致）。
+
+   两个必须注意的点：
+   1. 上面那条 `background: transparent !important` 把 Element 自己的 hover 底色也压掉了 ——
+      所以这里的底色规则必须**同样带 !important 且写在它之后**，否则不生效（这就是"索引行
+      看着比字段行淡"的成因）。
+   2. 用 `:focus-within` 而不是"点击选中"：索引行里全是控件，光标一进控件整行就该亮起来 ——
+      这正是字段行的判据，两边因此天然一致，也不需要额外维护一份"当前行"状态。 */
+.idx-tab :deep(.el-table__body tr:hover > td.el-table__cell) {
+  background: var(--dc-bg-hover) !important;
+}
+.idx-tab :deep(.el-table__body tr:focus-within > td.el-table__cell) {
+  background: var(--dc-primary-wash) !important;
+}
+.idx-tab :deep(.el-table__body tr:focus-within > td.el-table__cell:first-child) {
+  box-shadow: inset 3px 0 0 var(--dc-primary);
+}
 /* 最后一列不画右边框（否则与外框并成双线） */
 .idx-tab :deep(.el-table th.el-table__cell:last-child),
 .idx-tab :deep(.el-table td.el-table__cell:last-child) { border-right: none !important; }

@@ -1767,10 +1767,20 @@ pub async fn data_save(
 
     let (success, message) = match &error {
         None => (true, format!("已提交 {executed} 条语句，影响 {affected} 行")),
-        Some(err) => (
-            false,
-            format!("第 {} 条失败（共 {total} 条，已成功 {executed} 条）：{err}", executed + 1),
-        ),
+        // 同一口径：前端已经加了「保存失败：」这层动作前缀，这里再报「第几条失败（共几条…）」
+        // 就是套娃（用户实测看到的原话是「保存失败：第 1 条失败（共 1 条，已成功 0 条）：…」）。
+        // 只留原因；「已成功 N 条」只在真有语句生效时才补。
+        Some(err) => {
+            let reason = err.strip_prefix("SQL 执行失败：").unwrap_or(err);
+            (
+                false,
+                if executed == 0 {
+                    reason.to_string()
+                } else {
+                    format!("{reason}（前 {executed} 条已成功）")
+                },
+            )
+        }
     };
     Ok(Json(json!({
         "success": success,
@@ -2293,16 +2303,26 @@ pub async fn alter(
                     object.insert("failedIndex".to_string(), json!(index + 1));
                     object.insert("totalStatements".to_string(), json!(statements.len()));
                     object.insert("executedStatements".to_string(), json!(executed));
-                    object.insert(
-                        "message".to_string(),
-                        json!(format!(
-                            "第 {}/{} 条执行失败：{}（前 {} 条已生效，DDL 无法自动回滚）",
-                            index + 1,
-                            statements.len(),
-                            err.message,
-                            executed
-                        )),
-                    );
+                    // 文案只留「为什么失败」。原先这里是
+                    // 「第 1/1 条执行失败：SQL 执行失败：<数据库原话>（前 0 条已生效，DDL 无法自动回滚）」
+                    // —— 三层前缀 + 一句常识说明，用户看到的是一条又长又套娃的提示，
+                    // 真正有用的只有中间那句数据库原话（用户实测截图就是这么弹的）。
+                    //
+                    // 三处收紧：
+                    // ① 条数不进文案 ——「第 1/1 条」在单语句时零信息；而且 payload 里本来就有
+                    //    failedIndex / totalStatements / executedStatements 三个结构化字段，
+                    //    界面要展示条数直接读它们，不必写进给人看的这句话里；
+                    // ② 「已生效」只在**真的执行过**前面的语句时才说（这时库已经不是原样了，
+                    //    才是用户需要知道的），「DDL 无法自动回滚」是常识，删；
+                    // ③ 去掉最内层的「SQL 执行失败：」前缀 —— 外面已经说了"保存失败"，
+                    //    再说一遍是同一件事（前端会加动作前缀）。
+                    let reason = err.message.strip_prefix("SQL 执行失败：").unwrap_or(&err.message);
+                    let tip = if executed == 0 {
+                        String::new()
+                    } else {
+                        format!("（前 {executed} 条已生效，无法自动回滚）")
+                    };
+                    object.insert("message".to_string(), json!(format!("{reason}{tip}")));
                 }
                 return Ok(Json(payload));
             }
@@ -2710,16 +2730,14 @@ pub async fn user_action(
     for statement in &statements {
         // 建/删用户、授权都是写库：走跟随连接策略的入口
         if let Err(err) = run_write_sql_in(&state, &id, &database, statement.clone(), 1, true).await {
-            // 同样要说清「第几条失败、前面几条已生效」——已建好的用户不会被自动回滚
+            // 文案与 alter 那条同一口径（见上面那段注释）：只留数据库原话。
+            // 已建好的用户不会被自动回滚 —— 但**只在真有语句生效时**才补这一句，
+            // 「第 1/1 条执行失败」这种零信息前缀不再出现（前端自己会加"保存失败"这类动作前缀）。
+            let reason = err.message.strip_prefix("SQL 执行失败：").unwrap_or(&err.message);
+            let tip = if done == 0 { String::new() } else { format!("（前 {done} 条已生效）") };
             return Ok(Json(json!({
                 "success": false,
-                "message": format!(
-                    "第 {}/{} 条执行失败：{}（前 {} 条已生效）",
-                    done + 1,
-                    statements.len(),
-                    err.message,
-                    done
-                ),
+                "message": format!("{reason}{tip}"),
             })));
         }
         done += 1;
