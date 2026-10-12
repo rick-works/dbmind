@@ -1,6 +1,11 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
-  "v1.2.18": [
+  "v1.2.19": [
+      "The table preview row total is fixed - ClickHouse returns count(*) as a floating point number, which we could not read, so the footer showed only 200 rows and paging was stuck; it now shows the real total and pages properly, and all data sources were checked",
+      "Data governance - capacity statistics read the row count the same tolerant way, so on ClickHouse it no longer shows 0 or unknown",
+      "Settings - General - UI size gains a Tab bar text option: the font size of the workspace tab strip (for example the script tab) now follows it, taking effect immediately without a restart"
+    ],
+    "v1.2.18": [
       "Edit Structure: the loading indicator finally shows while it loads (the v-loading directive was never registered, so it silently did nothing), and the spinner no longer stutters",
       "The field tables in Edit Structure and New Table now render only the rows you can see - wide tables with hundreds of columns scroll smoothly with no blank patches, and the type cell stays plain text until you click it to open the dropdown",
       "Small fixes along the way: a single selection style in the field table (the first row no longer looks selected), the comment cell input matches its neighbours, no more SQL keywords in the field-table headers, and the update confirmation now reads statement first / question last with the Open folder button removed"
