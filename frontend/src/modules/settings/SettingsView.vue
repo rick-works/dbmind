@@ -112,9 +112,10 @@
               这几项都是"微调"，上下限刻意收窄，避免把界面搞坏。 -->
           <div class="panel-title topmenu-title">{{ $t('settings.appearance.title') }}</div>
           <div class="panel-desc">{{ $t('settings.appearance.desc') }}</div>
-          <!-- 200px：装得下「顶栏菜单文字（含图标）」这种较长标签（11 个汉字 ≈156px + 内边距）；
-               再加 .appearance-form 里的 nowrap，保证任何宽度下都不折行 -->
-          <el-form label-width="200px" class="appearance-form" @submit.prevent>
+          <!-- 标签宽度**按内容自适应**（不再固定 200px）：固定宽度下「顶栏右侧图标」这类短标签
+               会跟右侧的输入框隔出一大段空白（用户反馈「标题与框不要离那么远」）。
+               auto 让每行的控件紧贴标签；标签仍是右对齐（EP 默认），长标签由 nowrap 保证不折行。 -->
+          <el-form label-width="auto" class="appearance-form" @submit.prevent>
             <el-form-item :label="$t('settings.appearance.navFont')">
               <el-input-number v-model="appearance.navFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />
               <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
@@ -2498,7 +2499,7 @@ watch(visible, (v) => {
 /* 「通用 → 界面尺寸」表单：标签一律不换行。
    标签是右边距对齐到输入框的，长一点会被折成两行（「顶栏菜单文字（含图标）」就被折过），
    加宽 label-width 之外再显式 nowrap 兜住 —— 换行比溢出难看得多。 */
-.appearance-form :deep(.el-form-item__label) { white-space: nowrap; }
+.appearance-form :deep(.el-form-item__label) { white-space: nowrap; text-align: right; padding-right: 10px; }
 /* 两列排布（用户要求）：8 个尺寸项单列时弹窗右半边整片空着。
    两列各占一半 + 列间距 20px；标签宽度仍是 200px，保证长标签（TAB 栏文字（工作区页签））不折行。 */
 .appearance-form {
