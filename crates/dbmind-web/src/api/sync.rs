@@ -2308,6 +2308,10 @@ async fn sync_table_inner(
                         break; // 已有同伴失败：本表作废，剩余批次不再尝试
                     }
                     let batch_rows = batch.len() as u64;
+                    // 埋点：本批"写"的实际耗时（不含排队等待 —— 计时从领到批之后开始）。
+                    // 用途：回答"传输慢是卡在读还是卡在写" —— 若每批写都很快、整表却慢，
+                    // 瓶颈就在读侧分页（每页一次 RPC + 整页 JSON 解析）。
+                    let t_batch = std::time::Instant::now();
                     // Stream Load 成功 → 直接记账后进下一批（continue）；
                     // 失败 → 本批回退 INSERT 管道，与纯 INSERT 路径合流到同一个 outcome
                     let outcome = if use_stream_w && !fallback.load(Ordering::SeqCst) {
@@ -2338,6 +2342,15 @@ async fn sync_table_inner(
                     } else {
                         write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref(), &table_w).await
                     };
+                    // 埋点出口：只记超过 500ms 的慢批，长表不刷屏（阈值内属正常，不记）
+                    {
+                        let ms = t_batch.elapsed().as_millis();
+                        if ms > 500 {
+                            if let Some(t) = &task_w {
+                                t.log(format!("表 {table_w}：本批 {batch_rows} 行，写入耗时 {ms} ms"));
+                            }
+                        }
+                    }
                     match outcome {
                         Ok(ok_rows) => {
                             inserted_ctr.fetch_add(ok_rows, Ordering::SeqCst);
