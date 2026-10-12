@@ -2440,10 +2440,13 @@ watch(visible, (v) => {
 .fmt-glob-col .fmt-glob-sec + .fmt-glob-sec { margin-top: 0; }
 .fmt-glob-sec { min-width: 0; }
 .fmt-glob-sec-title {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 600; letter-spacing: .3px;
-  /* 小节标题比正文标签略深一档：原来跟说明文字一样淡，四个小节的"分组感"出不来 */
-  color: var(--dc-text-mid);
+  /* 右对齐到下面的标签列（宽度与 .fmt-glob-lb 的 110px 一致）：
+     小标题的右端与「关键字」等标签的右端落在同一条竖线上（用户要求）。
+     字号 12 → 13 并用更实的字色 —— 原来又小又淡，四个小节的分组感出不来。 */
+  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+  width: 110px;
+  font-size: 13px; font-weight: 650; letter-spacing: .3px;
+  color: var(--dc-text);
   margin: 0 0 9px;
 }
 .fmt-glob-sec-title::before { content: ''; width: 3px; height: 12px; background: var(--dc-primary); border-radius: 2px; }
@@ -2454,20 +2457,21 @@ watch(visible, (v) => {
 .fmt-glob-it:last-child { margin-bottom: 0; }
 .fmt-glob-lb {
   font-size: 13px; color: var(--dc-text-mid); white-space: nowrap;
-  /* 固定 108px 且**左对齐**：标签起点与小节标题（大小写/运算符…）落在同一条竖线上，
-     控件紧跟在标签列之后并撑满剩余宽度（用户要求「记录与标题对齐」）。
-     108px 是全部标签里最长的「表达式换行宽度」所需宽度（13px 字体下约 98px + 余量）。 */
-  flex: 0 0 108px;
-  text-align: left;
+  /* 固定 110px + **右对齐**：所有标签的右端对齐成一条竖线、紧挨右侧控件，
+     控件再往右是紧凑定宽（见下面 .fmt-glob-sel/.num）—— 与「界面尺寸」那栏同一套观感
+     （用户给的就是那张参考图：标签右对齐 + 控件紧凑）。110px 装得下最长的
+     「表达式换行宽度」（13px 字体约 98px）。 */
+  flex: 0 0 110px;
+  text-align: right;
   overflow: hidden; text-overflow: ellipsis;
 }
-/* 控件填满标签右侧的整格（与「界面尺寸」那栏的观感一致）：定宽会让整行右半留空 */
-.fmt-glob-sel { flex: 1 1 auto; min-width: 110px; font-size: 13px; }
-.fmt-glob-num { flex: 1 1 auto; min-width: 110px; font-size: 13px; }
+/* 控件紧凑定宽（参考图里就是这种"标签 + 小控件"的行，行尾留白是正常的） */
+.fmt-glob-sel { flex: 0 0 170px; width: 170px; font-size: 13px; }
+.fmt-glob-num { flex: 0 0 170px; width: 170px; font-size: 13px; }
 /* 数字框**填满**它那 160px 的槽：元素默认的 el-input-number 比槽窄一点，
    于是同一列里"下拉框满宽、数字框窄一截"，左缘看着参差（截图里差的就是这十几像素） */
 .fmt-glob-num :deep(.el-input-number) { width: 100%; }
-.fmt-glob-swslot { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
+.fmt-glob-swslot { flex: 0 0 170px; display: flex; align-items: center; }
 /* 归一化 Element 控件内部字号，与行标签保持一致 */
 .fmt-glob-sel :deep(.el-select__wrapper),
 .fmt-glob-sel :deep(.el-select__selected-item),
