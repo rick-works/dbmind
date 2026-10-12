@@ -743,11 +743,11 @@
              可能天然排第一但并未置顶，那时仍应显示"置顶分组"） -->
         <li v-if="customFolders.includes(treeCtxMenu.env) && !pinnedFolders.includes(treeCtxMenu.env)"
             class="ctx-item" @click="treeCtxPinFolder(treeCtxMenu.env)">
-          <span class="ctx-pin">📌</span>{{ $t('tree.menu.pinFolder') }}
+          <span class="ctx-pin" style="width:1em;flex:none;display:inline-flex;align-items:center;justify-content:center">📌</span>{{ $t('tree.menu.pinFolder') }}
         </li>
         <li v-else-if="pinnedFolders.includes(treeCtxMenu.env)"
             class="ctx-item" @click="treeCtxUnpinFolder(treeCtxMenu.env)">
-          <span class="ctx-pin">📌</span>{{ $t('tree.menu.unpinFolder') }}
+          <span class="ctx-pin" style="width:1em;flex:none;display:inline-flex;align-items:center;justify-content:center">📌</span>{{ $t('tree.menu.unpinFolder') }}
         </li>
         <li class="ctx-item" @click="startRenameGroup(treeCtxMenu.env)">
           <el-icon><Edit /></el-icon>{{ $t('tree.menu.renameFolder') }}
