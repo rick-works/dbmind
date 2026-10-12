@@ -2839,8 +2839,22 @@ const gotoStatement = (s) => {
   const ed = editorInstance
   const model = ed && ed.getModel()
   if (!ed || !model) return
-  const start = model.getPositionAt(s.start)
-  const end = model.getPositionAt(s.end)
+  // 偏移量必须以**编辑器模型自己的文本**为准：面包屑是用 sql.value 算偏移的，
+  // 一旦两者不同源（换行符 CRLF/LF 差异、编辑后没同步回 sql 等），getPositionAt 就会落到
+  // 另一条语句上（真机现象：点「结果1」跳去了第 3 条）。这里按序号在模型文本里重算区间，
+  // 重算不出来（模型与面包屑数量对不上）才退回原偏移。
+  let startOff = s.start
+  let endOff = s.end
+  if (s && s.i >= 1) {
+    const ranges = splitSqlStatementRanges(model.getValue())
+    const r = ranges[s.i - 1]
+    if (r) {
+      startOff = r.start
+      endOff = r.end
+    }
+  }
+  const start = model.getPositionAt(startOff)
+  const end = model.getPositionAt(endOff)
   const range = {
     startLineNumber: start.lineNumber, startColumn: start.column,
     endLineNumber: end.lineNumber, endColumn: end.column
