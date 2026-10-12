@@ -377,8 +377,8 @@ pub async fn capacity(
                     if table.is_empty() {
                         continue;
                     }
-                    let rows = row.get("num_rows").and_then(Value::as_i64).unwrap_or(0);
-                    let bytes = row.get("bytes").and_then(Value::as_i64).unwrap_or(0);
+                    let rows = row.get("num_rows").and_then(|v| crate::api::shape::value_to_i64(v)).unwrap_or(0);
+                    let bytes = row.get("bytes").and_then(|v| crate::api::shape::value_to_i64(v)).unwrap_or(0);
                     let comment = row
                         .get("comment")
                         .and_then(Value::as_str)
@@ -423,7 +423,7 @@ pub async fn capacity(
                         if let Some(value) = rows_of(&result)
                             .first()
                             .and_then(|row| row.values().next())
-                            .and_then(Value::as_i64)
+                            .and_then(|v| crate::api::shape::value_to_i64(v))
                         {
                             if value >= 0 {
                                 stats[index]["rows"] = json!(value);
@@ -469,7 +469,7 @@ pub async fn capacity(
                 Ok(result) => rows_of(&result)
                     .first()
                     .and_then(|row| row.values().next())
-                    .and_then(Value::as_i64)
+                    .and_then(|v| crate::api::shape::value_to_i64(v))
                     .unwrap_or(-1),
                 Err(_) => -1,
             };
