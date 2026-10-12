@@ -40,6 +40,17 @@
                   <td class="basic-label">{{ $t('tdet.primaryKey') }}</td>
                   <td><el-input :model-value="pkPreview" size="small" disabled /></td>
                 </tr>
+                <!-- ClickHouse 的存储引擎：位置与编辑页一致（紧跟主键那组信息）。
+                     编辑页那行是只读的（表建好后改不了），这里**可填** —— 建表本来就要指定。 -->
+                <tr v-if="isClickHouse">
+                  <td class="basic-label">{{ $t('tf.engine') }}</td>
+                  <td>
+                    <el-select v-if="(features.engines || []).length" v-model="form.engine" size="small" clearable filterable>
+                      <el-option v-for="e in features.engines" :key="e" :label="e" :value="e" />
+                    </el-select>
+                    <el-input v-else v-model="form.engine" size="small" clearable placeholder="MergeTree()" />
+                  </td>
+                </tr>
                 <!-- ClickHouse 专属：排序键 / 分区键（编辑页也有这两行，字段一一对应）。
                      排序键由「字段定义」里勾选的排序键列决定（与编辑页展示的是同一件事），这里只读回显；
                      分区键是建表要指定的**表达式**，所以可填。 -->
@@ -79,38 +90,42 @@
                   <td class="basic-label" :title="$t('tf.replicasTip')">{{ $t('tf.replicas') }}</td>
                   <td><el-input v-model="form.dorisReplication" type="number" size="small" /></td>
                 </tr>
-                <!-- 存储引擎：MySQL 系走 supportsTableOptions；ClickHouse **不给引擎清单**
-                     （supportsTableOptions=false），但建表必须指定 —— 所以这里单独为它开出来，
-                     并按编辑页的做法在"没有清单"时退化为文本框，而不是整行消失。 -->
-                <tr v-if="(has(features,'supportsTableOptions') && !isDoris) || isClickHouse">
+                <!-- 表注释：位置与编辑页一致（在 Doris 那组属性之后、引擎之前） -->
+                <tr v-if="has(features,'supportsComment')">
+                  <td class="basic-label">{{ $t('tf.tableComment') }}</td>
+                  <td><el-input v-model="form.comment" size="small" clearable /></td>
+                </tr>
+                <!-- 存储引擎（MySQL 系等）：条件与编辑页 showEngineField 一致（supportsTableOptions && !Doris）；
+                     ClickHouse 不走这行（它有自己的行，在上面）。 -->
+                <tr v-if="has(features,'supportsTableOptions') && !isDoris">
                   <td class="basic-label">{{ $t('tf.engine') }}</td>
                   <td>
                     <el-select v-if="(features.engines || []).length" v-model="form.engine" size="small" clearable filterable>
                       <el-option v-for="e in features.engines" :key="e" :label="e" :value="e" />
                     </el-select>
-                    <el-input v-else v-model="form.engine" size="small" clearable placeholder="MergeTree()" />
+                    <el-input v-else v-model="form.engine" size="small" clearable />
                   </td>
                 </tr>
-                <tr v-if="has(features,'supportsTableOptions') && !isClickHouse && !isDoris && (features.charsets || []).length">
+                <!-- 字符集 / 排序规则：条件与编辑页 showCharsetField 完全一致（supportsTableOptions && !CH && !Doris）。
+                     与编辑页一样，**不看清单长度** —— 清单为空时退化成文本框，而不是整行消失
+                     （后端映射里没有的字符集，如手输的 ucs2，就是这种情况）。 -->
+                <tr v-if="has(features,'supportsTableOptions') && !isClickHouse && !isDoris">
                   <td class="basic-label">{{ $t('tf.charset') }}</td>
                   <td>
-                    <el-select v-model="form.charset" size="small" clearable filterable @change="onCharsetChange">
+                    <el-select v-if="(features.charsets || []).length" v-model="form.charset" size="small" clearable filterable @change="onCharsetChange">
                       <el-option v-for="c in features.charsets" :key="c" :label="c" :value="c" />
                     </el-select>
+                    <el-input v-else v-model="form.charset" size="small" clearable @change="onCharsetChange" />
                   </td>
                 </tr>
-                <tr v-if="has(features,'supportsTableOptions') && !isClickHouse && !isDoris && collations.length">
+                <tr v-if="has(features,'supportsTableOptions') && !isClickHouse && !isDoris">
                   <td class="basic-label">{{ $t('tf.collation') }}</td>
                   <td>
-                    <el-select v-model="form.collation" size="small" clearable filterable>
+                    <el-select v-if="collations.length" v-model="form.collation" size="small" clearable filterable>
                       <el-option v-for="c in collations" :key="c" :label="c" :value="c" />
                     </el-select>
+                    <el-input v-else v-model="form.collation" size="small" clearable />
                   </td>
-                </tr>
-                <!-- 表注释：位置与编辑页一致（放在 Doris 那组属性之后，而不是紧跟表名） -->
-                <tr v-if="has(features,'supportsComment')">
-                  <td class="basic-label">{{ $t('tf.tableComment') }}</td>
-                  <td><el-input v-model="form.comment" size="small" clearable /></td>
                 </tr>
                 <!-- 表级自增起始值（MySQL 系）：建表时能设、建完就改不了，所以这里可填 -->
                 <tr v-if="showAutoIncStart">
