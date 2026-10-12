@@ -466,8 +466,19 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
    早期曾把左右压成 0（单列框选时竖线看着像"游离的蓝条"，反馈过两次）——按最新口径恢复。 */
 .data-table td.grid-cell-selected.sel-l, .data-table th.grid-cell-selected.sel-l { --sel-l: 2px; }
 .data-table td.grid-cell-selected.sel-r, .data-table th.grid-cell-selected.sel-r { --sel-r: 2px; }
-.el-loading-mask { background-color: var(--dc-mask); backdrop-filter: blur(3px); }
-.el-loading-spinner .circular { width: 34px; height: 34px; animation: dc-rotate .9s linear infinite; filter: drop-shadow(0 0 6px var(--dc-primary-glow)); }
+/* 遮罩不做整页模糊：backdrop-filter 要每帧重算整块背景，转圈同时进行就是肉眼可见的卡顿
+   （用户反馈"圈会卡顿"）；半透明底色本身已经足够把内容压下去。 */
+.el-loading-mask { background-color: var(--dc-mask); }
+.el-loading-spinner .circular {
+  width: 34px;
+  height: 34px;
+  animation: dc-rotate .9s linear infinite;
+  /* 这里**不能**挂 filter: drop-shadow —— 它作用在一个一直旋转的元素上，
+     浏览器每帧都要重新算那道发光，WebView 里就是卡顿的主要来源。
+     想让圈更好看请用会随 transform 一起走的东西（如加粗描边 stroke-width），别再上滤镜。 */
+  will-change: transform;
+  transform-origin: 50% 50%;
+}
 .el-loading-spinner .path { stroke: var(--dc-primary) !important; stroke-width: 3; stroke-linecap: round; }
 .el-loading-text { display: none !important; }
 
@@ -920,8 +931,8 @@ html[data-theme="light"] .el-progress-bar__outer {
    默认遮罩是接近纯白的半透明层，深色主题下会非常突兀且"看起来像没加载"。
    这里跟随主题给一个协调的底色，并统一转圈与文字颜色。 */
 .el-loading-mask {
+  /* 同样不加 backdrop-filter：哪怕 1px，也要每帧对整页做一次模糊合成 */
   background-color: rgba(16, 18, 24, .60);
-  backdrop-filter: blur(1px);
 }
 html[data-theme="light"] .el-loading-mask {
   background-color: rgba(255, 255, 255, .72);
