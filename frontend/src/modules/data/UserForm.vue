@@ -80,7 +80,9 @@
           </div>
           <div v-if="privSeg === 'db'">
             <div v-if="form.dbPrivileges.length === 0" class="empty-tip">{{ $t('upv.noDbPriv') }}</div>
-            <div v-for="(row, i) in form.dbPrivileges" :key="i" class="priv-row">
+            <!-- 四个权限列表的 key 都改用对象身份：删掉中间一行时，下标 key 会让后面几行复用
+             组件实例，行内 el-select（库/对象/权限）的过滤态会串到别的行 -->
+        <div v-for="(row, i) in form.dbPrivileges" :key="rowKey(row)" class="priv-row">
               <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable style="width: 180px">
                 <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
               </el-select>
@@ -97,7 +99,7 @@
           </div>
           <div v-if="privSeg === 'table'">
             <div v-if="form.tablePrivileges.length === 0" class="empty-tip">{{ $t('upv.noTablePriv') }}</div>
-            <div v-for="(row, i) in form.tablePrivileges" :key="i" class="priv-row">
+            <div v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)" class="priv-row">
               <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable style="width: 140px" @change="onTablePrivDbChange(i)">
                 <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
               </el-select>
@@ -142,7 +144,7 @@
           </div>
           <div v-if="mssqlPrivSeg === 'schema'">
             <div v-if="form.schemaPrivileges.length === 0" class="empty-tip">{{ $t('upv.noSchemaPriv') }}</div>
-            <div v-for="(row, i) in form.schemaPrivileges" :key="i" class="priv-row">
+            <div v-for="(row, i) in form.schemaPrivileges" :key="rowKey(row)" class="priv-row">
               <el-select v-model="row.schema" size="small" :placeholder="$t('upv.phPickSchema')" filterable style="width: 180px">
                 <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
               </el-select>
@@ -155,7 +157,7 @@
           </div>
           <div v-if="mssqlPrivSeg === 'object'">
             <div v-if="form.objectPrivileges.length === 0" class="empty-tip">{{ $t('upv.noObjectPriv') }}</div>
-            <div v-for="(row, i) in form.objectPrivileges" :key="i" class="priv-row">
+            <div v-for="(row, i) in form.objectPrivileges" :key="rowKey(row)" class="priv-row">
               <el-input v-model="row.schema" size="small" placeholder="Schema" style="width: 120px" />
               <el-input v-model="row.object" size="small" :placeholder="$t('upv.phObject')" style="flex:1;min-width:160px" />
               <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:180px">
@@ -209,6 +211,7 @@ import { ElMessage } from 'element-plus'
 import { t } from '../../utils/i18n'
 import { User, Key, CaretRight, CopyDocument, Close, DocumentCopy, Plus, Delete } from '@element-plus/icons-vue'
 import { userAction, listDatabases, listTables, listSchemas } from '../../api'
+import { rowKey } from '../../utils/rowKey'
 
 const props = defineProps({
   conn: { type: Object, required: true },

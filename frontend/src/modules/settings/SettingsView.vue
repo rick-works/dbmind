@@ -596,7 +596,9 @@
                   <tr v-if="!editorForm.sqlKeywordRules.length">
                     <td colspan="6" class="fmt-tbl-empty">{{ $t('settings.format.emptyRules') }}</td>
                   </tr>
-                  <tr v-for="(rule, i) in editorForm.sqlKeywordRules" :key="i">
+                  <!-- 关键字规则可增删：key 用对象身份，删中间一行时不会让 el-autocomplete
+                       的内部查询态跟错行（这些行还要被序列化保存，所以不能往对象里加 _uid） -->
+                  <tr v-for="(rule, i) in editorForm.sqlKeywordRules" :key="rowKey(rule)">
                     <td class="fmt-c-idx">{{ i + 1 }}</td>
                     <td class="fmt-c-kw">
                       <el-autocomplete
@@ -1109,6 +1111,7 @@ import {
 } from '../../utils/shortcuts'
 import { APP_VERSION } from '../../version'
 import logoMdUrl from '../../assets/logo-md.png'
+import { rowKey } from '../../utils/rowKey'
 import {
   getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange
 } from '../../utils/theme'

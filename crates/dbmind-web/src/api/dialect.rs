@@ -1218,7 +1218,7 @@ impl Dialect {
             // H2 / DB2 的 information_schema 都带 remarks（就是表注释）
             "h2" => Meta::Sql(
                 "select table_name as table_name, coalesce(remarks, '') as comment \
-                 from information_schema.tables where table_schema = 'PUBLIC'"
+                 from information_schema.tables where table_schema = current_schema"
                     .to_string(),
             ),
             "db2" => Meta::Sql(
@@ -2419,7 +2419,7 @@ impl Dialect {
             // H2：表数能拿到；占用空间不在 information_schema 里，如实给「—」
             "h2" => Meta::Sql(
                 "select count(*) as tables, '—' as sizeText \
-                 from information_schema.tables where table_schema = 'PUBLIC'"
+                 from information_schema.tables where table_schema = current_schema"
                     .to_string(),
             ),
             // DB2：syscat.tables 的页数（4KB 页）换算成 MB（数据页 + 索引页）

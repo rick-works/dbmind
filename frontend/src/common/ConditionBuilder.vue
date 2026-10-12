@@ -11,7 +11,9 @@
 
     <el-empty v-if="!data.items.length" :description="$t('cb.empty')" :image-size="40" />
     <div v-else class="cb-rows">
-      <div v-for="(it, i) in data.items" :key="i" class="cb-row">
+      <!-- key 用对象身份（rowKey）而不是下标：删掉中间一行时，下标会让后面几行"顶上"复用
+           同一个 key，行内 el-select 的**过滤态**会跟错行（看着像"点了没反应"） -->
+      <div v-for="(it, i) in data.items" :key="rowKey(it)" class="cb-row">
         <el-select v-model="it.field" size="small" :placeholder="$t('dgen.colField')"
                    class="cb-field">
           <el-option v-for="c in columns" :key="c.name" :label="c.name" :value="c.name" />
@@ -43,6 +45,7 @@ import { ref, computed, watch } from 'vue'
 import { Plus, Delete } from '@element-plus/icons-vue'
 import { COND_OPS, buildConditionSql, needValue } from '../utils/cond'
 import { t } from '../utils/i18n'
+import { rowKey } from '../utils/rowKey'
 
 const props = defineProps({
   columns: { type: Array, default: () => [] },

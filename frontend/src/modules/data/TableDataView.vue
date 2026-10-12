@@ -47,7 +47,9 @@
           暂无筛选条件，点击右上 <b>{{ $t('cb.addCondition') }}</b> 开始配置高级搜索
         </div>
         <div v-else class="filter-rows">
-          <div v-for="(f, idx) in filters" :key="idx" class="filter-row">
+          <!-- 行 key 用对象身份：删掉中间一行时下标 key 会让后面几行复用组件实例，
+               行内下拉的过滤态会串位（同 ConditionBuilder / UserForm） -->
+          <div v-for="(f, idx) in filters" :key="stableRowKey(f)" class="filter-row">
             <el-select v-if="idx > 0" v-model="f.join" size="small" style="width: 80px"
                        @change="onFilterChange">
               <el-option :label="$t('tdv.and')" value="AND" />
@@ -313,6 +315,9 @@ import { cellAlignClass, columnAlignClasses } from '../../utils/cellAlign'
 import { rowWindow } from '../../utils/rowWindow'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import { quoteStyleOf } from '../../types'
+// 这里本来就有一个 `const rowKey = (row) => row._rid`（数据行自带稳定 _rid），
+// 所以导入的通用版**改名**，只给筛选行用（筛选行是本地构造的，没有 _rid）。
+import { rowKey as stableRowKey } from '../../utils/rowKey'
 
 const props = defineProps({ conn: Object, database: String, table: String, readOnly: Boolean })
 const emit = defineEmits(['update-table-rows', 'open-query'])

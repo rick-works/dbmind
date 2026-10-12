@@ -80,6 +80,19 @@ struct Progress {
 /// 低于这个速度且持续 20 秒以上，就断开重连（新连接往往能换到更好的线路 / 节点）
 const SLOW_FLOOR: u64 = 150 * 1024;
 
+/// 互斥锁中毒不该让更新接口永久 500。
+///
+/// 更新进度的锁是**进程级 OnceLock**：任何一处持锁时 panic（网络/文件/解析都可能），
+/// std 的 Mutex 就被"毒化"，此后**所有** `.lock().unwrap()` 都会 panic —— 表现是点一次
+/// 检查更新之后，这个功能永远只回 500。这里照 `tasks.rs` 的 lock()：中毒也把数据取出来，
+/// 进度只是"数字 + 文本"，没有跨字段不变量，恢复出来的值最多晚一拍。
+fn lock<T>(cell: &std::sync::Arc<std::sync::Mutex<T>>) -> std::sync::MutexGuard<'_, T> {
+    match cell.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 fn progress_cell() -> &'static Arc<std::sync::Mutex<Progress>> {
     use std::sync::OnceLock;
     static CELL: OnceLock<Arc<std::sync::Mutex<Progress>>> = OnceLock::new();
@@ -355,7 +368,7 @@ pub async fn check() -> Json<Value> {
                     let path = resolve_dir(None).join(&i.name);
                     let path_str = path.to_string_lossy().to_string();
                     let (same, busy) = {
-                        let p = progress_cell().lock().unwrap();
+                        let p = lock(progress_cell());
                         (
                             p.status == "done" && p.installer.as_deref() == Some(path_str.as_str()),
                             p.status == "running",
@@ -370,7 +383,7 @@ pub async fn check() -> Json<Value> {
                 }
             }
             if let Some((path_str, total, verified)) = restore {
-                let mut p = progress_cell().lock().unwrap();
+                let mut p = lock(progress_cell());
                 if p.status != "running" {
                     *p = Progress {
                         status: "done".into(),
@@ -417,13 +430,13 @@ pub async fn check() -> Json<Value> {
 
 pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
     {
-        let p = progress_cell().lock().unwrap();
+        let p = lock(progress_cell());
         if p.status == "running" {
             return Json(json!({ "success": true, "started": false, "message": "下载任务已在进行中" }));
         }
     }
     {
-        let mut p = progress_cell().lock().unwrap();
+        let mut p = lock(progress_cell());
         *p = Progress {
             status: "running".into(),
             started: Some(Instant::now()),
@@ -449,7 +462,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
         let (inst, tag) = match picked {
             Ok(x) => x,
             Err(e) => {
-                let mut p = cell.lock().unwrap();
+                let mut p = lock(&cell);
                 p.status = "failed".into();
                 p.error = Some(e.message);
                 return;
@@ -458,7 +471,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
         let dest = resolve_dir(want_dir.as_deref()).join(&inst.name);
         if let Some(dir) = dest.parent() {
             if let Err(e) = std::fs::create_dir_all(dir) {
-                let mut p = cell.lock().unwrap();
+                let mut p = lock(&cell);
                 p.status = "failed".into();
                 p.error = Some(format!("创建临时目录失败：{e}"));
                 return;
@@ -469,7 +482,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
         // 而不是安装包所在的系统「下载」目录（用户反馈）。
         // 装（install）另有 status == "done" 把关，所以提前写上不会造成"没下完就装"。
         {
-            let mut p = cell.lock().unwrap();
+            let mut p = lock(&cell);
             p.installer = Some(dest.to_string_lossy().to_string());
         }
         match download_with_progress(&inst, &dest, &cell, start_index) {
@@ -481,13 +494,13 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 // 先把终态写进状态里，**再**等一会儿去装：装的时候本进程会被安装器关掉（它要覆盖
                 // 正在运行的 exe），用户看到的最后一句提示必须提前亮出来，否则界面会卡在"下载中"。
                 {
-                    let mut p = cell.lock().unwrap();
+                    let mut p = lock(&cell);
                     p.installer = Some(installer.clone());
                     p.version = Some(tag.trim_start_matches('v').to_string());
                     p.status = "done".into();
                 }
                 if !landed {
-                    let mut p = cell.lock().unwrap();
+                    let mut p = lock(&cell);
                     p.status = "failed".into();
                     p.error = Some(format!(
                         "安装包下载后没落到 {installer}（文件不存在），请重新下载"
@@ -505,7 +518,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
                 );
             }
             Err(e) => {
-                let mut p = cell.lock().unwrap();
+                let mut p = lock(&cell);
                 p.status = "failed".into();
                 p.error = Some(e.message);
             }
@@ -852,7 +865,7 @@ fn download_with_progress(
     // 这在"下完之后应用重启过"时最常见 —— 进度状态只活在内存里，重启就没了；不认这个文件，
     // 用户点一次「在线更新」就要白等几十兆（而文件明明就在他本机的「下载」目录里）。
     if installer_is_ready(dest, inst) {
-        cell.lock().unwrap().verified = inst.sha256.is_some();
+        lock(&cell).verified = inst.sha256.is_some();
         return Ok(());
     }
     // 上一次可能已经把整包下完了（"取消"来得太晚、改名失败……），留下一个**完整**的 `.part`。
@@ -873,7 +886,7 @@ fn download_with_progress(
                         DbMindError::new(ErrorCode::Internal, format!("保存安装包失败：{e}"))
                     })?;
                     if inst.sha256.is_some() {
-                        cell.lock().unwrap().verified = true;
+                        lock(&cell).verified = true;
                     }
                     return Ok(());
                 }
@@ -887,7 +900,7 @@ fn download_with_progress(
     let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
     loop {
         // 取消要**立刻**停：否则每个源还要再试两次、各等几秒，用户会以为"点了取消没反应"
-        if cell.lock().unwrap().cancel {
+        if lock(&cell).cancel {
             return Err(DbMindError::new(ErrorCode::Internal, "已取消当前下载（已下载的部分保留）".to_string()));
         }
         // **每次换源都重新测速排源**：镜像的快慢在几分钟内就能翻转（同一条网络上实测同一个镜像
@@ -905,7 +918,7 @@ fn download_with_progress(
         for attempt in 1..=2u32 {
             let done = std::fs::metadata(&part).map(|m| m.len()).unwrap_or(0);
             {
-                let mut p = cell.lock().unwrap();
+                let mut p = lock(&cell);
                 // 进度条下面**一律不出提示**：续传 / 第 N 次重试 / 正在连接… / 正在选择下载源… /
                 // 已换到 X —— 逐条都被反馈嫌吵，索性全去掉。进度与速度那一行已经说明一切；
                 // 真要排查看日志（每条源失败、每次换源都 tracing::warn/info 过）。
@@ -935,11 +948,11 @@ fn download_with_progress(
                                 ),
                             ));
                         }
-                        cell.lock().unwrap().verified = true;
+                        lock(&cell).verified = true;
                     } else if src.url != inst.url {
                         // 用的不是官方地址（多半是镜像）又没官方 digest 可对 ⇒ 内容无法自证，如实标记。
                         // 注意判据是**实际地址**：自动选源之后，第一个用的可能就是镜像。
-                        cell.lock().unwrap().unverified = true;
+                        lock(&cell).unverified = true;
                     }
                     std::fs::rename(&part, dest).map_err(|e| {
                         DbMindError::new(ErrorCode::Internal, format!("保存安装包失败：{e}"))
@@ -975,7 +988,7 @@ fn download_with_progress(
         }
     }
     {
-        let mut p = cell.lock().unwrap();
+        let mut p = lock(&cell);
         p.note = None;
         p.url = Some(inst.url.clone());
     }
@@ -998,7 +1011,7 @@ fn download_with_progress(
 /// 而"什么时候关掉应用去装"该由用户决定 —— 所以下载完成后不再自动装，等这个接口。
 pub async fn install() -> Json<Value> {
     let (path, status) = {
-        let p = progress_cell().lock().unwrap();
+        let p = lock(progress_cell());
         (p.installer.clone(), p.status.clone())
     };
     let Some(path) = path else {
@@ -1084,7 +1097,7 @@ fn download_once(
     };
     let base = if resuming { offset } else { 0 };
     {
-        let mut p = cell.lock().unwrap();
+        let mut p = lock(&cell);
         p.url = Some(url.to_string());
         p.total = total;
         p.received = base;
@@ -1137,7 +1150,7 @@ fn download_once(
             let dt = now.duration_since(t0).as_secs_f64();
             let speed = if dt >= 0.5 { ((total_now - b0) as f64 / dt) as u64 } else { 0 };
             {
-                let mut p = cell.lock().unwrap();
+                let mut p = lock(&cell);
                 p.received = total_now;
                 p.speed = speed;
             }
@@ -1158,7 +1171,7 @@ fn download_once(
             }
         }
         // 用户点了「换个更快的源」：立刻退出，保留 .part 让下一次从断点续传
-        if cell.lock().unwrap().cancel {
+        if lock(&cell).cancel {
             return Err(DbMindError::new(
                 ErrorCode::Internal,
                 format!("已取消当前下载（已下载的 {} 保留，换源后会接着下）", human_bytes(base + got)),
@@ -1166,7 +1179,7 @@ fn download_once(
         }
     }
     {
-        let mut p = cell.lock().unwrap();
+        let mut p = lock(&cell);
         p.received = base + got;
         p.speed = 0;
     }
@@ -1492,7 +1505,7 @@ pub async fn dirs() -> Json<Value> {
 
 /// GET /api/update/progress —— 下载进度
 pub async fn progress() -> Json<Value> {
-    let p = progress_cell().lock().unwrap();
+    let p = lock(progress_cell());
     let elapsed = p.started.map(|s| s.elapsed().as_secs()).unwrap_or(0);
     Json(json!({
         "status": p.status,
@@ -1519,7 +1532,7 @@ pub async fn progress() -> Json<Value> {
 /// 只**打个标记**，由下载循环在下一批数据时看到并退出：已经写的 `.part` 保留，
 /// 所以"换个更快的源重试"能从已下载的位置接着下 —— 不必从头再来一遍几十兆。
 pub async fn cancel() -> Json<Value> {
-    let mut p = progress_cell().lock().unwrap();
+    let mut p = lock(progress_cell());
     if p.status != "running" {
         return Json(json!({ "success": false, "message": "当前没有正在进行的下载" }));
     }
@@ -1534,7 +1547,7 @@ pub async fn cancel() -> Json<Value> {
 /// 失败后如果不清，用户再点更新图标只会反复弹回同一个报错页 —— 必须重启软件
 /// 才能恢复（真机踩过）。运行中的任务**不能**清，否则会把正在下载的进度抹掉。
 pub async fn dismiss() -> Json<Value> {
-    let mut p = progress_cell().lock().unwrap();
+    let mut p = lock(progress_cell());
     if p.status == "running" {
         return Json(json!({ "success": false, "message": "下载仍在进行中" }));
     }
