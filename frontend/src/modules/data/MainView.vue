@@ -2420,13 +2420,24 @@ const folderRefresh = ref(0)
         const connUrlOf = (data) => connUrl({ type: data.connType, username: data.username, host: data.host, port: data.port })
 
 /* 连接悬浮卡的坐标与开合。卡片被 Teleport 到 body，没法再靠祖先的 :hover 显示，
-   所以进节点时记一次鼠标位置（clientX/clientY 是视口坐标，配 position: fixed 正好），
-   离开时关掉。用 ref 而非 reactive：本文件处处用 ref，免得再踩一次"忘了 .value"。 */
+   所以进节点时算一次位置、离开时关掉。用 ref 而非 reactive：本文件处处用 ref，
+   免得再踩一次"忘了 .value"。
+
+   位置刻意**贴连接行的右边**而不是光标底下：跟着光标走会盖住下面的连接，
+   既挡视线也挡点击（用户反馈"弹在后面，影响点击了"）。
+   再做一次视口收边：右边放不下就翻到行的左侧，下边放不下就往上提。 */
+const CARD_W = 340
+const CARD_H = 230
 const connCard = ref({ show: false, id: '', x: 0, y: 0 })
 const onConnEnter = (e, data) => {
   connCard.value.id = data && data.connId ? String(data.connId) : ''
-  connCard.value.x = e.clientX + 14
-  connCard.value.y = e.clientY - 6
+  const r = e.currentTarget.getBoundingClientRect()
+  let x = r.right + 10
+  let y = r.top - 4
+  if (x + CARD_W > window.innerWidth) x = Math.max(8, r.left - CARD_W - 10)
+  if (y + CARD_H > window.innerHeight) y = Math.max(8, window.innerHeight - CARD_H)
+  connCard.value.x = x
+  connCard.value.y = y
   connCard.value.show = true
 }
 const onConnLeave = () => { connCard.value.show = false }
