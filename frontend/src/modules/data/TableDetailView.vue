@@ -1,6 +1,7 @@
 <template>
+  <!-- 整页字号吃「设置 → 界面尺寸 → 数据视图表格」（--dc-data-fs）：字段表/索引表跟着走 -->
   <div v-loading="loading" class="table-edit-page"
-       :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px' }">
+       :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px', fontSize: 'var(--dc-data-fs, 13px)' }">
     <!-- 顶部标题栏 -->
     <div class="form-tab-header">
       <div class="header-title">

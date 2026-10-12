@@ -127,6 +127,23 @@
               <el-input-number v-model="appearance.treeFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />
               <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
             </el-form-item>
+            <!-- 第二批：项目里字号写得最多、又最常被抱怨的四处（首页卡片 / 弹窗 / 数据视图 / 消息提示） -->
+            <el-form-item :label="$t('settings.appearance.homeFont')">
+              <el-input-number v-model="appearance.homeFontSize" :min="11" :max="18" :step="1" @change="onAppearanceChange" />
+              <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
+            </el-form-item>
+            <el-form-item :label="$t('settings.appearance.dialogFont')">
+              <el-input-number v-model="appearance.dialogFontSize" :min="12" :max="20" :step="1" @change="onAppearanceChange" />
+              <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
+            </el-form-item>
+            <el-form-item :label="$t('settings.appearance.dataFont')">
+              <el-input-number v-model="appearance.dataFontSize" :min="11" :max="18" :step="1" @change="onAppearanceChange" />
+              <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
+            </el-form-item>
+            <el-form-item :label="$t('settings.appearance.toastFont')">
+              <el-input-number v-model="appearance.toastFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />
+              <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
+            </el-form-item>
             <!-- 工作区页签（脚本 1 × 那一排）的字号：顶栏那排是"菜单"，由上面 navFont 控制，别混 -->
             <el-form-item :label="$t('settings.appearance.tabFont')">
               <el-input-number v-model="appearance.tabFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />

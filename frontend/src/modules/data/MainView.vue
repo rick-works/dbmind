@@ -7314,8 +7314,8 @@ const connTypeSummary = computed(() =>
   width: 100%;
   }
 .empty-head { text-align: center; }
-.empty-head h3 { font-size: 18px; font-weight: 650; color: var(--dc-text); margin: 0 0 6px; letter-spacing: .5px; }
-.empty-head p { font-size: 13px; color: var(--dc-text-dim); margin: 0; }
+.empty-head h3 { font-size: calc(var(--dc-home-fs, 13px) + 5px); font-weight: 650; color: var(--dc-text); margin: 0 0 6px; letter-spacing: .5px; }
+.empty-head p { font-size: var(--dc-home-fs, 13px); color: var(--dc-text-dim); margin: 0; }
 /* 卡片等分整行：与下面两栏左右对齐（之前是居中，和通栏的两栏对不上，看着就乱） */
 .empty-cards {
   display: flex; gap: 14px; flex-wrap: wrap; width: 100%;
@@ -7344,7 +7344,7 @@ const connTypeSummary = computed(() =>
 }
 .empty-card .el-icon { color: var(--dc-text-dim); }
 .empty-card:hover .el-icon { color: var(--dc-primary); }
-.empty-card span { font-size: 14px; font-weight: 600; }
+.empty-card span { font-size: calc(var(--dc-home-fs, 13px) + 1px); font-weight: 600; }
 .empty-card small { font-size: 12px; color: var(--dc-text-dim); opacity: .8; }
 /* ---- 首页仪表盘：内容块 / 操作项 / MCP 片段 ----
    .empty-stack 承担行间距并**垂直居中**：内容不满一屏时上下留白均分，
@@ -7352,6 +7352,9 @@ const connTypeSummary = computed(() =>
 .empty-stack {
   display: flex; flex-direction: column; gap: 10px;
   width: 100%; margin: auto 0; text-align: left;
+  /* 首页字号基准（设置 → 界面尺寸 → 首页卡片文字）：其余尺寸都按它加减，
+     这样一处调节整页跟着变，不用逐个改 */
+  font-size: var(--dc-home-fs, 13px);
 }
 /* 每个内容块是一张卡：里面的行必须**扁平**（卡里再套卡很难看） */
 .empty-block {
@@ -7371,7 +7374,7 @@ const connTypeSummary = computed(() =>
 .empty-act:hover { background: var(--dc-bg-hover); color: var(--dc-primary); }
 
 /* 说明文字并入标题行（省一行高度，也不再有"孤零零一句提示"） */
-.mcp-inline { font-size: 11.5px; color: var(--dc-text-dim); letter-spacing: 0; }
+.mcp-inline { font-size: calc(var(--dc-home-fs, 13px) - 1.5px); color: var(--dc-text-dim); letter-spacing: 0; }
 .mcp-code {
   position: relative; padding: 8px 10px; border-radius: 8px;
   background: var(--dc-bg-soft); border: 1px solid var(--dc-border);
@@ -7389,7 +7392,7 @@ const connTypeSummary = computed(() =>
 .empty-dss { width: 100%; }
 .empty-dss-head {
   display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
-  font-size: 12px; color: var(--dc-text-dim); letter-spacing: .06em;
+  font-size: calc(var(--dc-home-fs, 13px) - 1px); color: var(--dc-text-dim); letter-spacing: .06em;
 }
 /* 标题后面拉一条细线到底，把「分组标题」和卡片区分开 */
 .empty-dss-head::after { content: ''; flex: 1; height: 1px; background: var(--dc-border); }
@@ -7421,10 +7424,10 @@ const connTypeSummary = computed(() =>
 .empty-ds:hover .ds-go { color: var(--dc-primary); }
 /* 列表形态：名字在左、类型·主机靠右同一行（单列宽度够，一行比两行更好扫读） */
 .ds-main { display: flex; flex-direction: row; align-items: baseline; gap: 12px; min-width: 0; flex: 1; }
-.ds-sub { margin-left: auto; font-size: 11.5px; color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ds-sub { margin-left: auto; font-size: calc(var(--dc-home-fs, 13px) - 1.5px); color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ds-go { color: var(--dc-text-dim); font-size: 13px; flex-shrink: 0; }
-.ds-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 550; flex: 0 1 auto; }
-.ds-type { margin-left: auto; font-size: 11.5px; color: var(--dc-text-dim); flex-shrink: 0; }
+.ds-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dc-home-fs, 13px); font-weight: 550; flex: 0 1 auto; }
+.ds-type { margin-left: auto; font-size: calc(var(--dc-home-fs, 13px) - 1.5px); color: var(--dc-text-dim); flex-shrink: 0; }
 .ds-env {
   font-size: 11px; color: var(--dc-text-dim); flex-shrink: 0;
   background: var(--dc-bg-soft); border: 1px solid var(--dc-border); border-radius: 999px; padding: 0 6px;
@@ -7463,8 +7466,8 @@ const connTypeSummary = computed(() =>
   font-family: 'SF Mono', ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--dc-text);
 }
 
-.hi-meta { flex-shrink: 0; font-size: 11px; color: var(--dc-text-dim); }
-.empty-hs-none { font-size: 12px; color: var(--dc-text-dim); opacity: .85; padding: 10px 2px; }
+.hi-meta { flex-shrink: 0; font-size: calc(var(--dc-home-fs, 13px) - 2px); color: var(--dc-text-dim); }
+.empty-hs-none { font-size: calc(var(--dc-home-fs, 13px) - 1px); color: var(--dc-text-dim); opacity: .85; padding: 10px 2px; }
 .tree-node { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; padding: 2px 0; }
 /* 近 7 天趋势：7 根柱等分一行，成功/失败两段堆叠（失败在下段，红一眼可见）。
    趋势卡与右侧「数据工具」等高（grid stretch），图区 flex:1 吃掉剩余高度、

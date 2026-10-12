@@ -264,7 +264,10 @@ body {
   border-radius: 12px;
   box-shadow: var(--dc-shadow);
 }
-.el-dialog__title { color: var(--dc-text-strong); font-weight: 600; }
+/* 弹窗标题/正文吃「设置 → 界面尺寸 → 弹窗标题与正文」（--dc-dlg-fs，见 utils/appearance.js）：
+   标题在基准上 +4px，与原来的 18px 一致；正文等于基准。 */
+.el-dialog__title { color: var(--dc-text-strong); font-weight: 600; font-size: calc(var(--dc-dlg-fs, 14px) + 4px); }
+.el-dialog__body { font-size: var(--dc-dlg-fs, 14px); }
 .el-input__wrapper, .el-select__wrapper, .el-textarea__inner {
   background-color: var(--dc-bg-input) !important;
   box-shadow: 0 0 0 1px var(--dc-border-soft) inset !important;
@@ -341,7 +344,13 @@ input[type="number"] {
   box-shadow: none !important;
 }
 .el-message { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; border-radius: 8px !important; box-shadow: var(--dc-shadow-sm) !important; }
-.el-message .el-message__content { color: var(--dc-text) !important; }
+.el-message .el-message__content { color: var(--dc-text) !important; font-size: var(--dc-toast-fs, 14px); }
+/* 右下角通知同理（右上角弹提示与通知是同一类信息） */
+.el-notification__title { font-size: calc(var(--dc-toast-fs, 14px) + 1px); }
+.el-notification__content { font-size: var(--dc-toast-fs, 14px); }
+/* 确认框（删除/危险操作）也算弹窗：标题与正文一起跟随 */
+.el-message-box__title { font-size: calc(var(--dc-dlg-fs, 14px) + 1px) !important; }
+.el-message-box__message { font-size: var(--dc-dlg-fs, 14px); }
 .el-table { --el-table-bg-color: transparent; --el-table-tr-bg-color: transparent; --el-table-header-bg-color: var(--dc-bg-table-head); --el-table-header-text-color: var(--dc-text-dim); --el-table-border-color: var(--dc-border-soft); --el-table-row-hover-bg-color: var(--dc-bg-hover); --el-table-text-color: var(--dc-text); }
 .el-table th.el-table__cell { font-weight: 600; }
 .el-tabs__item { color: var(--dc-text-dim); }

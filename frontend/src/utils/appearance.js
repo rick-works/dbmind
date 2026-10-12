@@ -16,7 +16,12 @@ export const appearanceDefaults = {
   navFontSize: 14, // 顶部菜单文字（px）
   navIconSize: 16, // 顶部菜单图标（px）
   treeFontSize: 14,
-  tabFontSize: 14  // 工作区页签（TAB 栏）文字（px） // 左侧树文字（px）
+  tabFontSize: 14, // 工作区页签（TAB 栏）文字（px） // 左侧树文字（px）
+  // 第二批：把硬编码得最多、最常看错的四处也交出去
+  homeFontSize: 13,   // 欢迎页（首页卡片：标题/连接名/历史 SQL）
+  dialogFontSize: 14, // 弹窗标题与正文
+  dataFontSize: 13,   // 数据视图（表数据、表结构的表格）
+  toastFontSize: 14   // 消息提示（toast / 通知）
 }
 
 // 取值范围：只做收敛，避免手填 0 或 200 把界面搞坏。
@@ -25,7 +30,11 @@ const RANGES = {
   navFontSize: [12, 18],
   navIconSize: [12, 22],
   treeFontSize: [12, 18],
-  tabFontSize: [12, 18]
+  tabFontSize: [12, 18],
+  homeFontSize: [11, 18],
+  dialogFontSize: [12, 20],
+  dataFontSize: [11, 18],
+  toastFontSize: [12, 18]
 }
 
 const clampOne = (key, v) => {
@@ -45,7 +54,11 @@ export const getAppearance = () => {
     navFontSize: clampOne('navFontSize', raw.navFontSize),
     navIconSize: clampOne('navIconSize', raw.navIconSize),
     treeFontSize: clampOne('treeFontSize', raw.treeFontSize),
-    tabFontSize: clampOne('tabFontSize', raw.tabFontSize)
+    tabFontSize: clampOne('tabFontSize', raw.tabFontSize),
+    homeFontSize: clampOne('homeFontSize', raw.homeFontSize),
+    dialogFontSize: clampOne('dialogFontSize', raw.dialogFontSize),
+    dataFontSize: clampOne('dataFontSize', raw.dataFontSize),
+    toastFontSize: clampOne('toastFontSize', raw.toastFontSize)
   }
 }
 
@@ -58,6 +71,10 @@ export const applyAppearance = (a = getAppearance()) => {
   root.style.setProperty('--dc-tab-fs', a.tabFontSize + 'px')
   // 左侧树的图标跟着文字走（+1px）：只放大文字、图标原地不动会显得头重脚轻
   root.style.setProperty('--dc-tree-icon', a.treeFontSize + 1 + 'px')
+  root.style.setProperty('--dc-home-fs', a.homeFontSize + 'px')
+  root.style.setProperty('--dc-dlg-fs', a.dialogFontSize + 'px')
+  root.style.setProperty('--dc-data-fs', a.dataFontSize + 'px')
+  root.style.setProperty('--dc-toast-fs', a.toastFontSize + 'px')
 }
 
 /** 保存并立即应用；返回收敛后的值（供表单回填，避免输入框里留着越界的数字） */
@@ -66,7 +83,11 @@ export const saveAppearance = (a) => {
     navFontSize: clampOne('navFontSize', a && a.navFontSize),
     navIconSize: clampOne('navIconSize', a && a.navIconSize),
     treeFontSize: clampOne('treeFontSize', a && a.treeFontSize),
-    tabFontSize: clampOne('tabFontSize', a && a.tabFontSize)
+    tabFontSize: clampOne('tabFontSize', a && a.tabFontSize),
+    homeFontSize: clampOne('homeFontSize', a && a.homeFontSize),
+    dialogFontSize: clampOne('dialogFontSize', a && a.dialogFontSize),
+    dataFontSize: clampOne('dataFontSize', a && a.dataFontSize),
+    toastFontSize: clampOne('toastFontSize', a && a.toastFontSize)
   }
   persistUI(APPEARANCE_KEY, JSON.stringify(next))
   applyAppearance(next)
