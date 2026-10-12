@@ -1770,7 +1770,7 @@ async fn sync_table_inner(
         // schema 只有 SQL Server 那条路要用（扩展属性必须点名 schema）；PG / Oracle / DM / DB2
         // 的 `comment on table <名>` 不带 schema 也会落到当前 search_path 的表上 ——
         // 之前这里硬写 "dbo"，那些库拼出来的语句必然报错，而失败是静默的（注释全丢）。
-        let comment_schema = if target_kind.key() == "sqlserver" { "dbo" } else { "" };
+        let comment_schema = if target_kind.kind.key() == "sqlserver" { "dbo" } else { "" };
         let post_comments = target_kind.post_create_comments(
             target_name.trim_matches(|c| c == '"' || c == '`' || c == ']'),
             &src_column_comments,
