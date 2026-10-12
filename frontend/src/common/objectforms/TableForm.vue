@@ -865,7 +865,9 @@ emit('sql', genSql())
    会被上面这条 .tab-inner.col-tab, .tab-inner.idx-tab 压掉 —— 之前就是这么静默失效的
    （用户反馈：新建表的索引页"乱了"）。 */
 .tab-inner.col-tab { padding: 0; }
-.tab-inner.idx-tab { padding: 35px 0 0; }
+/* box-sizing: border-box 与编辑页同款：这层容器是 height: 100%，padding 算进总高才不会
+   白白多出 35px 把底部撑出容器（编辑页那条加在 .idx-body 上，也是这么写的）。 */
+.tab-inner.idx-tab { padding: 35px 0 0; box-sizing: border-box; }
 .tab-inner { overflow: hidden; }
 /* 表格容器贴内容长（12 行的表原来会在下面拖出一大片带边框的空白）。
    横向**允许滚动**（编辑页那边是 hidden，因为它列宽总和恰好小于容器）：
