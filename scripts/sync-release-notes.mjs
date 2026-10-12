@@ -46,6 +46,15 @@ const human = (b) => (b < 1048576 ? (b / 1024).toFixed(1) + ' KB' : (b / 1048576
 const gh = (args) => JSON.parse(execFileSync('gh', args, { encoding: 'utf8' }))
 const num = (tag) => Number(tag.replace(/^v/, '').split('.').map((n) => n.padStart(3, '0')).join(''))
 
+/**
+ * md 的行内装饰 → 纯文本。
+ *
+ * md 是给 GitHub 看的（那边 `**粗**` 有意义），但它同时是官网 HTML 与应用「关于」页的源。
+ * 那两处一个是 HTML、一个是 Vue 纯文本插值：星号/反引号落进去就是**字面符号**
+ * （踩过：官网条目里出现 `**大树不再卡**`，关于页显示 `**一批稳定性修复**`）。
+ */
+const mdPlain = (s) => String(s).replace(/\*\*/g, '').replace(/`/g, '')
+
 const argv = process.argv.slice(2)
 const noPush = argv.includes('--no-push')
 const only = argv.filter((a) => !a.startsWith('--'))
@@ -132,14 +141,19 @@ for (const [tag, bullets] of bulletsByTag) {
     const tag = (inner.match(/rel-ver">(v[\d.]+)</) || [])[1]
     const bullets = tag && bulletsByTag.get(tag)
     if (!bullets) return whole
-    // 要点：`标题：说明` 时把标题加粗（与官网原有观感一致）
+    // 要点：`标题：说明` 时把标题加粗（与官网原有观感一致）。
+    //
+    // 先剥掉 markdown 的装饰：md 里为了 GitHub 的观感常写 `**标题**：说明`，
+    // 而这一层是 **HTML** —— 那些星号会原样显示（曾经把 `**大树不再卡**` 包进 <b>，
+    // 线上就是字面星号）。反引号同理（HTML 里要有样式才有意义，这里按纯文本处理）。
     const lis = bullets
       .map((b) => {
-        const i = b.indexOf('：')
+        const t = mdPlain(b)
+        const i = t.indexOf('：')
         const text =
           i > 0 && i <= 14
-            ? `<b>${b.slice(0, i)}</b>${b.slice(i)}`
-            : `<b>${b}</b>`
+            ? `<b>${t.slice(0, i)}</b>${t.slice(i)}`
+            : `<b>${t}</b>`
         return `            <li>${text}</li>`
       })
       .join('\n')
@@ -160,22 +174,30 @@ for (const [tag, bullets] of bulletsByTag) {
 
 // ---------- ③ 应用「关于」页（中文）：relN.noteX ----------
 {
-  const lines = fs.readFileSync(ZH, 'utf8').split('\n')
+  let lines = fs.readFileSync(ZH, 'utf8').split('\n')
   const order = [...bulletsByTag.keys()] // rel1 = 最新
+  // 先把**所有** relN.noteX 行清掉，再按版本重新插到 version/level/date 后面。
+  //
+  // 为什么不能只替换"紧跟 version 的那个连续块"：历史上要点块被手工搬过家（发版时把 relN 的
+  // version/level/date 整体下移了一格，而 note 行留在原处），于是同一个版本的 note 行散落在
+  // 别处 —— 只替换连续块会漏掉它们，结果是**重复键**（guard 报"重复键 99 个"，页面上一套新一套旧）。
+  // 清空重插就不必再假设"块是连续的"。
+  lines = lines.filter((l) => !/^\s*'settings\.about\.rel\d+\.note\d+'/.test(l))
   let changed = 0
   for (let n = 1; n <= order.length; n++) {
     const bullets = bulletsByTag.get(order[n - 1])
     const start = lines.findIndex((l) => l.includes(`'settings.about.rel${n}.version'`))
     if (start < 0) continue
-    // 该版本的块 = 紧跟其后的 version/level/date/note 行（这几个键是连着的）
-    const blockRe = new RegExp(`'settings\\.about\\.rel${n}\\.(version|level|date|note\\d+)'`)
+    // 该版本的块 = 紧跟其后的 version/level/date 行
+    const blockRe = new RegExp(`'settings\\.about\\.rel${n}\\.(version|level|date)'`)
     let end = start
     while (end + 1 < lines.length && blockRe.test(lines[end + 1])) end++
-    const kept = lines.slice(start, end + 1).filter((l) => !/\.note\d+'/.test(l))
+    // 关于页是**纯文本**（Vue 直接插值，不渲染 HTML），所以剥掉 md 装饰：
+    // `**加粗**` 会显示字面星号，反引号也没有对应样式。
     const newNotes = bullets.map(
-      (b, k) => `  'settings.about.rel${n}.note${k + 1}': '${b.replace(/'/g, "\\'")}',`
+      (b, k) => `  'settings.about.rel${n}.note${k + 1}': '${mdPlain(b).replace(/'/g, "\\'")}',`
     )
-    lines.splice(start, end - start + 1, ...kept, ...newNotes)
+    lines.splice(end + 1, 0, ...newNotes)
     changed++
   }
   fs.writeFileSync(ZH, lines.join('\n'), 'utf8')
@@ -200,14 +222,19 @@ for (const [tag, bullets] of bulletsByTag) {
         missing.push(tag)
         continue
       }
+      // 先清掉**这个版本**散落各处的旧 note 行（原因见 ③ 的注释：块不保证连续，
+      // 只替换连续块会留下重复键）。这里按版本清、不整体清：某个版本缺英文翻译时
+      // 上面的 `continue` 会跳过它，整体清会把它的英文要点抹掉。
+      const noteRe = new RegExp(`^\\s*'settings\\.about\\.rel${n}\\.note\\d+'`)
+      for (let k = lines.length - 1; k >= 0; k--) if (noteRe.test(lines[k])) lines.splice(k, 1)
       const start = lines.findIndex((l) => l.includes(`'settings.about.rel${n}.version'`))
       if (start < 0) continue
-      const blockRe = new RegExp(`'settings\\.about\\.rel${n}\\.(version|level|date|note\\d+)'`)
+      const blockRe = new RegExp(`'settings\\.about\\.rel${n}\\.(version|level|date)'`)
       let end = start
       while (end + 1 < lines.length && blockRe.test(lines[end + 1])) end++
-      const kept = lines.slice(start, end + 1).filter((l) => !/\.note\d+'/.test(l))
+      const kept = lines.slice(start, end + 1)
       const newNotes = notes.map(
-        (b, k) => `  'settings.about.rel${n}.note${k + 1}': '${String(b).replace(/'/g, "\\'")}',`
+        (b, k) => `  'settings.about.rel${n}.note${k + 1}': '${mdPlain(b).replace(/'/g, "\\'")}',`
       )
       lines.splice(start, end - start + 1, ...kept, ...newNotes)
       changed++
@@ -252,6 +279,34 @@ for (const [tag, bullets] of bulletsByTag) {
         `⚠ 应用「关于」页（${name}）：rel1.version 仍是 ${first.trim()} —— ` +
           `请把 relN 的 version/level/date 三行整体下移一格，并在最前面插入 ${newest} 的三行`
       )
+    }
+  }
+}
+
+// ---------- ⑥ 把官网推到 gh-pages ----------
+//
+// **改好源文件 ≠ 线上更新**：官网线上是 `gh-pages` 分支，必须跑一次
+// `scripts/publish-site.ps1`（在 worktree 里换掉 index.html → commit → push）。
+// 这一步被整段漏掉过两次：官网一连落后 8 个版本（publish-site.ps1 的注释里就记着用户那句
+// "官网版本内容都没更新"），v1.2.20 又是只改了源、没推分支，用户在官网版本页又看出来了。
+// 所以不再"只提醒"——直接在这里执行：本脚本跑完，Release / 官网 / 关于页三处就该都到位。
+if (noPush) {
+  console.log('（--no-push：跳过官网发布）')
+} else {
+  const ps1 = path.join(ROOT, 'scripts', 'publish-site.ps1')
+  if (!fs.existsSync(ps1)) {
+    console.log('⚠ 没找到 scripts/publish-site.ps1 —— 官网需要手动发布到 gh-pages')
+  } else {
+    try {
+      execFileSync(
+        'powershell',
+        ['-ExecutionPolicy', 'Bypass', '-File', ps1, '-Message', `官网：加 v${tags[0].replace(/^v/, '')} 版本条目`],
+        { cwd: ROOT, stdio: 'inherit' },
+      )
+    } catch {
+      // 发布失败不该把同步脚本判为失败（本地文件与 Release 正文都已经好了），
+      // 但必须说清楚"线上还没更新"，并给出可重复执行的补救命令。
+      console.log('⚠ 官网发布失败 —— 手动跑 scripts\\publish-site.ps1（可重复执行，不会叠加）')
     }
   }
 }

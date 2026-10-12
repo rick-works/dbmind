@@ -38,6 +38,32 @@ $dest = Join-Path $WorkDir 'index.html'
 if (-not (Test-Path $dest)) { throw "工作树里没有 index.html：$dest" }
 
 # 只换 index.html；图片、sponsors.js、.nojekyll 不动
+
+# ---- 取凭据（提到前面：下面要先跟远端对齐一次）----
+$tok = $env:GH_TOKEN
+if (-not $tok) {
+    try { $tok = (& gh auth token 2>$null | Select-Object -First 1).Trim() } catch { $tok = '' }
+}
+if (-not $tok) { throw '没有可用的 GitHub 凭据：先设 $env:GH_TOKEN，或执行 gh auth login' }
+$pushUrl = "https://rick-works:$tok@github.com/rick-works/dbmind.git"
+$proxy = Get-GitProxyArgs   # 有系统代理就用（没开就是空数组 = 直连）
+
+# ---- 先把工作树对齐到远端 gh-pages ----
+# 本地 gh-pages 落后时，直接 commit 再 push 会被判"非快进"而拒绝；而脚本失败提示里的
+# "稍后重跑本脚本即可"在这种情况下**永远重跑不成功**（本地始终落后，冲突的是同一处）。
+# 先 fetch 远端再硬对齐：我们只关心 index.html 一个文件，而它下面会被整份覆盖，
+# 所以"以远端为基线"是安全的（其余文件保持远端版本，不会被本地的旧副本回退）。
+$prev = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+& git -C $WorkDir @proxy fetch $pushUrl refs/heads/gh-pages 2>&1 | Out-Null
+if ($LASTEXITCODE -eq 0) {
+    & git -C $WorkDir reset --hard FETCH_HEAD 2>&1 | Out-Null
+    Write-Host '  已对齐远端 gh-pages' -ForegroundColor DarkGray
+} else {
+    Write-Host '  拉取远端失败（可能是网络），按本地提交继续' -ForegroundColor Yellow
+}
+$ErrorActionPreference = $prev
+
 Copy-Item $src $dest -Force
 
 # ---- 没改动就什么都不做 ----
@@ -53,14 +79,8 @@ git -C $WorkDir commit -q -m $Message
 Write-Host ('已提交：' + ((git -C $WorkDir log --oneline -1) -join ''))
 
 # ---- 推送（github 在国内时通时断，重试）----
-$tok = $env:GH_TOKEN
-if (-not $tok) {
-    try { $tok = (& gh auth token 2>$null | Select-Object -First 1).Trim() } catch { $tok = '' }
-}
-if (-not $tok) { throw '没有可用的 GitHub 凭据：先设 $env:GH_TOKEN，或执行 gh auth login' }
-$pushUrl = "https://rick-works:$tok@github.com/rick-works/dbmind.git"
+# 凭据 / $pushUrl / $proxy 已在上面（跟远端对齐那一步）取好，这里不再重复获取。
 $pushed = $false
-$proxy = Get-GitProxyArgs   # 有系统代理就用（没开就是空数组 = 直连）
 for ($k = 1; $k -le 8; $k++) {
     # git 会把进度写进 stderr，而 $ErrorActionPreference='Stop' 会把原生命令的 stderr 当成
     # **终止错误** —— 于是"其实推成功了"也会抛 NativeCommandError、脚本以 1 退出（踩过）。
