@@ -562,7 +562,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
-import { t } from '../../utils/i18n'
+import { t, tMsg } from '../../utils/i18n'
 import VueMonacoEditor from '@guolao/vue-monaco-editor'
 import { ensureMonaco } from '../../utils/monaco'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
@@ -4211,7 +4211,7 @@ const formatSql = () => {
     sql.value = smartFormatSql(sql.value, getEditorSettings(), fmtDialect.value)
     ElMessage.success(t('sce.formatDone'))
   } catch (e) {
-    ElMessage.error('格式化失败：' + (e?.message || e?.toString?.() || t('common.unknownError')))
+    ElMessage.error(t('sqlq.msgFormatFailed') + (e?.message || e?.toString?.() || t('common.unknownError')))
   }
 }
 

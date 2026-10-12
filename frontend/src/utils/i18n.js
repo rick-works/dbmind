@@ -85,6 +85,24 @@ export const te = (key) => {
     Object.prototype.hasOwnProperty.call(DICTS[FALLBACK] || {}, k)
 }
 
+/**
+ * 把**后端下发的固定文案**翻成当前语言。
+ *
+ * 后端有几条 message 是拼死的英文（`Query OK, 3 rows affected` / `… rows returned`），
+ * 前端如果直接 `ElMessage.success(res.message)`，中文界面里就会冒出英文（用户反馈）。
+ * 这里按已知模板翻译，**认不出的原样返回** —— 数据库驱动抛的原始错误（语法错、约束冲突）
+ * 本来就该原样给用户看，既不能吞掉、也不能瞎翻。
+ */
+export const tMsg = (message) => {
+  const s = String(message == null ? '' : message).trim()
+  if (!s) return ''
+  let m = /^Query OK,\s*(\d+)\s+rows?\s+affected$/i.exec(s)
+  if (m) return t('sqlq.affectedOk', { n: m[1] })
+  m = /^Query OK,\s*(\d+)\s+rows?\s+returned$/i.exec(s)
+  if (m) return t('sqlq.returnedOk', { n: m[1] })
+  return s
+}
+
 /** 切换语言：持久化（后端真身 + 本地缓存）、同步 <html lang>、更新标题，其余交给响应式。 */
 export const setLocale = (code) => {
   const next = normalize(code) || FALLBACK
@@ -117,4 +135,4 @@ export const refreshLocaleFromStorage = () => {
 }
 
 /** `<script setup>` 里用：`const { t } = useI18n()`。 */
-export const useI18n = () => ({ t, te, locale, setLocale, LOCALES })
+export const useI18n = () => ({ t, te, tMsg, locale, setLocale, LOCALES })

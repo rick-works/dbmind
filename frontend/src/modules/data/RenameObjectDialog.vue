@@ -45,7 +45,7 @@ import { ElMessage } from 'element-plus'
 import { Edit } from '@element-plus/icons-vue'
 import { renameObject } from '../../api'
 import { errMsg } from '../../utils/errMsg'
-import { t } from '../../utils/i18n'
+import { t, tMsg } from '../../utils/i18n'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -119,7 +119,7 @@ const submit = async () => {
       database: c.db, type: c.type, name: c.oldName, newName: val, previewOnly: false
     })
     if (!res.success) throw new Error(res.message || t('rn.failed'))
-    ElMessage.success(res.message || t('rn.done', { kind: label.value, from: c.oldName, to: val }))
+    ElMessage.success(tMsg(res.message) || t('rn.done', { kind: label.value, from: c.oldName, to: val }))
     visible.value = false
     emit('renamed', { connId: c.connId, db: c.db, type: c.type, oldName: c.oldName, newName: val })
   } catch (e) {

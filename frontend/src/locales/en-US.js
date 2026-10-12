@@ -2172,6 +2172,13 @@ export default {
   'sqlq.aiFix': 'AI fix',
   'sqlq.noResult': 'No results',
   'sqlq.affectedOk': 'OK — {n} row(s) affected',
+  'sqlq.returnedOk': 'OK — {n} row(s) returned',
+  // Backend-emitted fixed messages → UI language (see tMsg in utils/i18n.js)
+  'sqlq.msgFormatFailed': 'Format failed: ',
+  'tdv.msgSaveFailed': 'Save failed: ',
+  'tdv.msgLoadFailed': 'Load failed: ',
+  'tdv.msgExportFailed': 'Export failed: ',
+  'tdv.msgPkSortLocked': 'ClickHouse does not allow changing primary key / sort key columns: ',
   'sqlq.queryResult': 'query result',
   'sqlq.summaryTitle': 'Selection summary (numeric columns only)',
   'sqlq.sumCells': '{n} cells selected',

@@ -9,7 +9,7 @@ import { ref, computed, onBeforeUnmount, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Warning, User, Timer, Coin, Setting, Connection, Cpu, DataLine, Lock, Clock, TrendCharts, Loading, CircleCloseFilled, InfoFilled, CircleCheck, Odometer, ArrowDown, Histogram, Document, Memo, Monitor, Grid, Files, Operation, Share, Postcard, Switch } from '@element-plus/icons-vue'
 import { monitorOverview, monitorKill, listConnections } from '../../api'
-import { t } from '../../utils/i18n'
+import { t, tMsg } from '../../utils/i18n'
 
 const props = defineProps({
   connId: { type: [String, Number], default: '' },
@@ -272,7 +272,7 @@ const kill = async (row, sessionId) => {
     await ElMessageBox.confirm(t('mon.killConfirmBody', { id: sessionId, tip }), t('mon.killTitle'), { type: 'warning', confirmButtonText: t('mon.kill'), cancelButtonText: t('common.cancel') })
   } catch { return }
   const r = await monitorKill(props.connId, props.database || undefined, sessionId)
-  if (r?.success) { ElMessage.success(r.message || t('mon.killed')); fetch() }
+  if (r?.success) { ElMessage.success(tMsg(r.message) || t('mon.killed')); fetch() }
   else ElMessage.error(r?.message || t('mon.killFailed'))
 }
 

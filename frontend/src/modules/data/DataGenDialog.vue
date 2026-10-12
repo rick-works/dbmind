@@ -243,7 +243,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick, Refresh, CircleClose } from '@element-plus/icons-vue'
 import { listColumns, dataGenPreview, dataGenStart, dataGenTask, dataGenCancel } from '../../api'
 import { errMsg } from '../../utils/errMsg'
-import { t } from '../../utils/i18n'
+import { t, tMsg } from '../../utils/i18n'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -449,7 +449,7 @@ const finishJob = (res) => {
     pushLog(res.message || t('dgen.logWritten', { n: res.done || 0 }), 'success')
     if (res.executeTime) pushLog(t('dgen.logDbMs', { ms: res.executeTime }), 'info')
     notices.value = res.notices || []
-    ElMessage.success(res.message || t('dgen.genDone'))
+    ElMessage.success(tMsg(res.message) || t('dgen.genDone'))
     emit('done')
   } else if (res.status === 'canceled') {
     pushLog(res.message || t('dgen.canceled'), 'warn')

@@ -1164,7 +1164,7 @@ import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onRe
 import { locale, setLocale } from '../../utils/i18n'
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
 import { buildCatChildren, buildObjectCategories, isFunctionRoutine } from './treeNodes'
-import { t } from '../../utils/i18n'
+import { t, tMsg } from '../../utils/i18n'
 import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
 import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor } from '@element-plus/icons-vue'
@@ -5676,7 +5676,7 @@ const doTableAction = async (action, label) => {
   try {
     const res = await tableAction(conn.value.id, d.db || currentDb.value, d.table, action)
     if (res.success) {
-      ElMessage.success(res.message || t('mv.opSuccess', { label }))
+        ElMessage.success(tMsg(res.message) || t('mv.opSuccess', { label }))
       if (action === 'drop') {
         // 关闭该表相关的数据/结构页签
         const db = d.db || currentDb.value

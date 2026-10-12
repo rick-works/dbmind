@@ -29,7 +29,7 @@ import { ElMessage } from 'element-plus'
 import { Edit } from '@element-plus/icons-vue'
 import { tableAction } from '../../api'
 import { errMsg } from '../../utils/errMsg'
-import { t } from '../../utils/i18n'
+import { t, tMsg } from '../../utils/i18n'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -63,7 +63,7 @@ const submit = async () => {
   try {
     const res = await tableAction(c.connId, c.db, c.oldName, 'rename', val)
     if (!res.success) throw new Error(res.message || t('rn.failed'))
-    ElMessage.success(res.message || t('rnt.done', { from: c.oldName, to: val }))
+    ElMessage.success(tMsg(res.message) || t('rnt.done', { from: c.oldName, to: val }))
     visible.value = false
     emit('renamed', { connId: c.connId, db: c.db, oldName: c.oldName, newName: val })
   } catch (e) {

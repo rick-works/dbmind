@@ -297,7 +297,7 @@
 
 <script setup>
 import { ref, watch, onMounted, onUnmounted, onBeforeUnmount, computed, nextTick } from 'vue'
-import { t } from '../../utils/i18n'
+import { t, tMsg } from '../../utils/i18n'
 import { querySettingsLive, editorSettingsLive } from '../../utils/settings'
 import { numericTypeHint, isNumericLiteral } from '../../utils/dbType'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -2011,7 +2011,7 @@ const saveChanges = async () => {
       if (props.conn?.type === 'clickhouse') {
         const keyHit = Object.keys(data).filter(n => pkCols.includes(n))
         if (keyHit.length) {
-          ElMessage.warning('ClickHouse 不允许修改主键/排序键列：' + keyHit.join(', '))
+          ElMessage.warning(t('tdv.msgPkSortLocked') + keyHit.join(', '))
           return
         }
       }
@@ -2040,10 +2040,10 @@ const saveChanges = async () => {
       ElMessage.success(t('tdv.saveOk'))
       await load(page.value)
     } else {
-      ElMessage.error('保存失败：' + res.message)
+      ElMessage.error(t('tdv.msgSaveFailed') + res.message)
     }
   } catch (e) {
-    ElMessage.error('保存失败：' + (e.message || t('common.unknownError')))
+    ElMessage.error(t('tdv.msgSaveFailed') + (e.message || t('common.unknownError')))
   } finally {
     loading.value = false
   }
@@ -2677,7 +2677,7 @@ const load = async (p = 1, opts = null) => {
     }
     const res = await getTableData(props.conn.id, params, signal)
     if (signal.aborted) return
-    if (!res.success) { ElMessage.error('加载失败：' + res.message); return }
+    if (!res.success) { ElMessage.error(t('tdv.msgLoadFailed') + res.message); return }
     rows.value = stampRows(res.rows || [])
     // 新数据用新的 _rid，旧的隐藏行标记已失效，清掉避免菜单里出现t('tdv.showAllRows')却什么都没隐藏
     hiddenRows.value = new Set()
@@ -2707,7 +2707,7 @@ const load = async (p = 1, opts = null) => {
   } catch (e) {
     // 用户取消 / 被新请求替换：静默返回，不动已有数据
     if (signal.aborted || e?.name === 'AbortError') return
-    ElMessage.error('加载失败：' + (e?.message || e))
+    ElMessage.error(t('tdv.msgLoadFailed') + (e?.message || e))
   } finally {
     // 仅当仍是当前请求时才复位状态，避免旧请求把新请求的 loading 关掉
     if (loadController === controller) {
@@ -2934,7 +2934,7 @@ const onExport = async (cmd) => {
     if (saved.canceled) return
     ElMessage.success(t('mv.exportSavedAs', { name: saved.name }))
   } catch (e) {
-    ElMessage.error('导出失败：' + (e?.message || e))
+    ElMessage.error(t('tdv.msgExportFailed') + (e?.message || e))
   }
 }
 

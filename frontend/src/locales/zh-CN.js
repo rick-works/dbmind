@@ -2178,6 +2178,13 @@ export default {
   'sqlq.aiFix': 'AI 修复',
   'sqlq.noResult': '暂无结果',
   'sqlq.affectedOk': '执行成功，影响 {n} 行',
+  'sqlq.returnedOk': '执行成功，返回 {n} 行',
+  // 后端下发的固定文案 → 界面语言（见 utils/i18n.js 的 tMsg）
+  'sqlq.msgFormatFailed': '格式化失败：',
+  'tdv.msgSaveFailed': '保存失败：',
+  'tdv.msgLoadFailed': '加载失败：',
+  'tdv.msgExportFailed': '导出失败：',
+  'tdv.msgPkSortLocked': 'ClickHouse 不允许修改主键/排序键列：',
   'sqlq.queryResult': '查询结果',
   'sqlq.summaryTitle': '选中区汇总（只统计数值类型列）',
   'sqlq.sumCells': '选中 {n} 格',
