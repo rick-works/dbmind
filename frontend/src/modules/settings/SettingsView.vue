@@ -2426,7 +2426,8 @@ watch(visible, (v) => {
    内容排下去第二节的起始位置必然错开 —— 把末节推到底部后，两列末节行数相同（都是 2 行），
    「运算符」与「语句间隔」的标题就齐平了 */
 .fmt-glob-col .fmt-glob-sec { min-width: 0; }
-.fmt-glob-col .fmt-glob-sec + .fmt-glob-sec { margin-top: auto; }
+/* 小节之间用固定间距（原先 margin-top: auto 把它们推到列的上下两端，中间空一大块） */
+.fmt-glob-col .fmt-glob-sec + .fmt-glob-sec { margin-top: 6px; }
 .fmt-glob-sec { min-width: 0; }
 .fmt-glob-sec-title {
   display: flex; align-items: center; gap: 6px;
@@ -2442,19 +2443,19 @@ watch(visible, (v) => {
 .fmt-glob-it { display: flex; align-items: center; gap: 12px; margin-bottom: 11px; min-height: 30px; }
 .fmt-glob-it:last-child { margin-bottom: 0; }
 .fmt-glob-lb {
-  font-size: 13px; color: var(--dc-text-mid); flex: 1 1 auto; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap;
-  /* 标签占满控件左侧的整段空间（flex: 1 1 auto），所以只需要把文字**右对齐**，
-     它就会紧挨右边的控件 —— 原先默认左对齐，「关键字」这种短标签跟右边的下拉
-     之间隔着一两百像素（用户反馈「标题离框那么远」）。与「界面尺寸」那一栏同款处理。 */
+  font-size: 13px; color: var(--dc-text-mid); white-space: nowrap;
+  /* 紧凑固定宽 + 右对齐：标签紧挨右侧控件，且整行不会被标签撑成"半行空白"。
+     用 flex: 1 1 auto（占满行）会把控件顶到列最右边、列左侧空一大片，正是用户说的"很丑"。 */
+  flex: 0 0 118px;
   text-align: right;
 }
-.fmt-glob-sel { width: 160px; flex: 0 0 auto; font-size: 13px; }
-.fmt-glob-num { width: 160px; flex: 0 0 auto; font-size: 13px; }
+/* 控件撑开列的剩余宽度（与「界面尺寸」那栏的观感一致）：定宽 160px 会让整行右半留空 */
+.fmt-glob-sel { flex: 1 1 auto; min-width: 120px; max-width: 300px; font-size: 13px; }
+.fmt-glob-num { flex: 1 1 auto; min-width: 120px; max-width: 300px; font-size: 13px; }
 /* 数字框**填满**它那 160px 的槽：元素默认的 el-input-number 比槽窄一点，
    于是同一列里"下拉框满宽、数字框窄一截"，左缘看着参差（截图里差的就是这十几像素） */
 .fmt-glob-num :deep(.el-input-number) { width: 100%; }
-.fmt-glob-swslot { width: 160px; flex: 0 0 auto; display: flex; align-items: center; }
+.fmt-glob-swslot { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; }
 /* 归一化 Element 控件内部字号，与行标签保持一致 */
 .fmt-glob-sel :deep(.el-select__wrapper),
 .fmt-glob-sel :deep(.el-select__selected-item),
