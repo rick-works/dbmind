@@ -30,8 +30,11 @@ export function splitSqlStatementRanges(sql) {
   const pushRange = (from, to) => {
     const raw = s.slice(from, to)
     const text = raw.trim()
-    // 空段与纯注释段不算一条语句
-    if (!text || /^--/.test(text) || text.startsWith('/*')) return
+    // 空段、以及**纯注释段**才算不上一条语句。
+    // 关键：不能只判"开头是不是注释"—— 注释里的分号不算分隔符，所以一条注释后面紧跟的
+    // 真语句会和它分进**同一段**（`-- 注释\nSELECT …;`），那一段开头是 -- 但**含真语句**，
+    // 按开头丢掉就会少算（真机现象：9 条里注释掉 2 条，结果集是 7 条，顶部却显示"共 5 条语句"）。
+    if (!stripLeadingComments(text)) return
     const start = from + (raw.length - raw.trimStart().length)
     list.push({ start, end: start + text.length, text })
   }
@@ -86,6 +89,30 @@ export function splitSqlStatementRanges(sql) {
   }
   pushRange(stmtStart, n)
   return list
+}
+
+/**
+ * 去掉开头的行注释（-- / #）与块注释（斜杠星号 … 星号斜杠），返回剩下的正文。
+ * 用途只有一个：判断"这一段里到底有没有真语句"。
+ * 返回空串 ⇒ 纯注释/空白，不算一条语句；返回非空 ⇒ 哪怕只有半句，也要算。
+ */
+function stripLeadingComments(text) {
+  let t = String(text || '').trimStart()
+  for (;;) {
+    if (t.startsWith('--') || t.startsWith('#')) {
+      const nl = t.indexOf('\n')
+      if (nl < 0) return ''
+      t = t.slice(nl + 1).trimStart()
+      continue
+    }
+    if (t.startsWith('/*')) {
+      const end = t.indexOf('*/')
+      if (end < 0) return ''
+      t = t.slice(end + 2).trimStart()
+      continue
+    }
+    return t
+  }
 }
 
 /** 只要每段文本（执行链路沿用这个） */
