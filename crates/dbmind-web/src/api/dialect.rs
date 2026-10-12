@@ -18,6 +18,31 @@
 use dbmind_core::{ColumnDetail, ConnectionKind};
 
 /// 元数据查询的三档结果。
+/// 这个方言的 **DDL 能不能回滚**（能不能把一批变更包进一个事务）。
+///
+/// 能回滚的：PostgreSQL / KingbaseES / SQLite / SQL Server / DB2 / Derby / H2 —— 它们的事务
+/// 覆盖 DDL，中途失败可以整体 ROLLBACK。
+///
+/// **不能**回滚的：MySQL / MariaDB / Doris / ClickHouse（DDL 会隐式提交）、Oracle / DM
+/// （DDL 前后自动提交）—— 事务对它们没有意义。这类方言的原子性靠**前端把整批变更合并成
+/// 一条 ALTER**（一条语句里的多个子句是原子的，见 `TableDetailView.vue` 的
+/// `mergedAlterStatement`），以及索引修改一律「先建后删 → 改名」（见那边的 `usesTempNameIndexSwap`）。
+pub fn ddl_transactional(key: &str) -> bool {
+    matches!(
+        key,
+        "postgresql" | "kingbase" | "sqlite" | "sqlserver" | "db2" | "derby" | "h2"
+    )
+}
+
+/// 开事务的语句。T-SQL 里单独的 `BEGIN` 是语句块开始（不是开事务），必须写全。
+pub fn tx_begin(key: &str) -> &'static str {
+    if key == "sqlserver" {
+        "BEGIN TRANSACTION"
+    } else {
+        "BEGIN"
+    }
+}
+
 pub enum Meta {
     Sql(String),
     Absent,

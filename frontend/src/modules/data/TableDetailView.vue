@@ -1280,11 +1280,24 @@ const samePk = (a, b) => a.length === b.length && a.every((x, i) => x === b[i])
 // 索引：先输出需要 DROP 的（供删除/重建），供列变更前清理。
 // **只改名字**的已存在索引不在这里删 —— 见下面 idxCreateParts 的改名分支：
 // 删掉再建会让撑着自增列的那条索引短暂消失，MySQL 直接拒绝（errorCode=1075）。
+/* 索引「修改」的策略按方言分三种，**共同点是不让旧索引在任何一步消失**：
+   · 可合并方言（mysql/doris/clickhouse）：DROP 与 ADD 落在**同一条 ALTER** 里，整条原子
+     （见 mergedAlterStatement 的说明）；
+   · 改名方言（oracle/dm/pg/kingbase）：临时名新建 → 删旧 → 改名（T2 实测三步都不丢旧索引）；
+   · 其余（sqlite/mssql/db2/derby/h2）：仍先删后建，但整批由后端放进**事务**（失败整体回滚，
+     这些方言的 DDL 是可回滚的；MySQL/Oracle 的 DDL 会隐式提交，事务对它们没意义）。 */
+const tmpIndexSwapDialects = ['oracle', 'dm', 'pg', 'kingbase']
+const usesTempNameIndexSwap = computed(() => tmpIndexSwapDialects.includes(ddlStyle.value))
+/** 临时索引名：短、可识别，且不会与用户已有名字撞（用完就改回原名） */
+const tmpIndexName = (name) => (String(name || 'idx').slice(0, 40) + '__dbmind_new')
+
 const idxDropParts = () => {
   const parts = []
   const renamable = (r) => canRenameIndex.value && idxPureRename(r)
   const removed = idxRows.value.filter(r => r._state === 'deleted')
-  const modified = idxRows.value.filter(r => r._state === 'loaded' && idxChanged(r) && !renamable(r))
+  // 走「临时名新建 → 删旧 → 改名」的方言：这里**先不删**，删的时机在那个三步里（否则中间会有空档）
+  const modified = idxRows.value.filter(r =>
+    r._state === 'loaded' && idxChanged(r) && !renamable(r) && !usesTempNameIndexSwap.value)
   for (const r of [...removed, ...modified]) {
     const oldName = r._orig && r._orig.name
     if (oldName) parts.push(dropIndexSql(oldName))
@@ -1301,6 +1314,20 @@ const idxCreateParts = () => {
     // 只改名字 → 走原生 RENAME：索引不消失，自增列的键也就不受影响
     if (canRenameIndex.value && idxPureRename(r)) {
       parts.push(renameIndexSql(String(r._orig.name).trim(), String(r.name).trim()))
+      continue
+    }
+    // 「修改」且方言走临时名交换：**先建后删再改名**，任何一步失败旧索引都还在
+    // （否则 DROP 成功、CREATE 失败就丢索引 —— 用户实测过的那个 bug）
+    if (usesTempNameIndexSwap.value && r._state === 'loaded' && r._orig) {
+      const oldName = String(r._orig.name || '').trim()
+      const newName = String(r.name || '').trim() || oldName
+      const tmp = tmpIndexName(newName)
+      const create = createIndexSql({ ...r, name: tmp })
+      if (create) {
+        parts.push(create)                              // ① 临时名新建（旧索引还在）
+        parts.push(dropIndexSql(oldName))               // ② 删旧
+        parts.push(renameIndexSql(tmp, newName))        // ③ 临时名改成原名
+      }
       continue
     }
     const s = createIndexSql(r)
@@ -1475,13 +1502,51 @@ const pendingCount = computed(() => {
   return c.added + c.modified + c.deleted + i.added + i.modified + i.deleted + (optsChanged.value ? 1 : 0)
 })
 
+/** 本表方言能不能把「删索引 / 改列 / 建索引 / 表选项」全部塞进**一条** ALTER。 */
+const canMergeAlter = computed(() => ['mysql', 'doris', 'clickhouse'].includes(ddlStyle.value))
+
+const ALTER_PREFIX = 'ALTER TABLE ' + qt(props.table) + ' '
+
+/**
+ * 把已生成的那串语句并成**一条** ALTER（只有 `ALTER TABLE 本表 …` 形状的子句能并）。
+ *
+ * 为什么值得并：MySQL/InnoDB 的 DDL **没有事务**（每条 ALTER 结束就隐式提交），逐条执行时
+ * 中间那条失败，前面已经删掉的索引/列就再也回不来了 —— 用户实测：「索引增加一个字段，
+ * 因为先删除，执行报错后原来的索引也直接没了」。
+ * 而**一条 ALTER 里的多个子句是原子的**：实测
+ * `ALTER TABLE t MODIFY COLUMN …, DROP INDEX a, ADD INDEX a (id, name)` 失败时整条一条都不生效 —
+ * 索引还是原来的、列也没被改掉（T7）。
+ *
+ * 任何一段不是这个形状（例如 MySQL 删自增列主键时要分步铺垫、Doris 那条"改不了"的注释行）
+ * 就返回 null，调用方退回逐条执行 —— 那种情况本来就不是「删了再建」，不会丢结构。
+ */
+const mergedAlterStatement = () => {
+  const clauses = []
+  for (const stmt of [...idxDropParts(), ...colParts(), ...idxCreateParts(), ...optParts()]) {
+    for (const piece of String(stmt).split(';\n')) {
+      const one = piece.trim()
+      if (!one || one.startsWith('--')) return null
+      if (!one.startsWith(ALTER_PREFIX)) return null
+      clauses.push(one.slice(ALTER_PREFIX.length))
+    }
+  }
+  return clauses.length ? [ALTER_PREFIX.trimEnd() + ' ' + clauses.join(', ')] : []
+}
+
 // 完整变更脚本：先清理索引 → 字段变更 → 重建/新增索引 → 表选项
-const scriptParts = computed(() => [
-  ...idxDropParts(),
-  ...colParts(),
-  ...idxCreateParts(),
-  ...optParts()
-])
+const scriptParts = computed(() => {
+  // 能合并的方言：并成一条（原子；失败不破坏原结构）
+  if (canMergeAlter.value) {
+    const merged = mergedAlterStatement()
+    if (merged) return merged
+  }
+  return [
+    ...idxDropParts(),
+    ...colParts(),
+    ...idxCreateParts(),
+    ...optParts()
+  ]
+})
 /** SQL 预览是否收起（预览已移到编辑区下方，可折叠；默认展开） */
 const sqlCollapsed = ref(false)
 

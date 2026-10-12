@@ -1733,7 +1733,6 @@ pub async fn data_save(
         })));
     }
 
-    let total = statements.len();
     let engine = state.engine();
     let (affected, executed, error) = blocking(move || {
         let mut affected: i64 = 0;
@@ -2284,6 +2283,28 @@ pub async fn alter(
         return Err(XError::bad_request("sql 里没有可执行的语句"));
     }
 
+    let kind_key = record.kind().key();
+    // 事务兜底：**DDL 可回滚**的方言（PG / SQLite / SQL Server / DB2 / Derby / H2）把整批变更包进
+    // 一个事务 —— 中途失败整体 ROLLBACK，不会留下「删了一半」的结构。用户的要求正是这一条：
+    // 基础信息 / 字段定义 / 索引，**修改失败都不要破坏原来的结构**。
+    //
+    // MySQL / Oracle / Doris / ClickHouse 的 DDL 会隐式提交（Oracle 甚至显式提交），事务对它们
+    // 没有意义 —— 它们的原子性靠界面把整批变更**合并成一条 ALTER**，见
+    // `dialect::ddl_transactional` 的注释。实测（MySQL）：START TRANSACTION + INSERT + ROLLBACK
+    // 之后 COUNT 归 0 ⇒ 这条链路是持久会话，事务确实生效，所以这句兜底对可回滚方言是真管用的。
+    let in_tx = crate::api::dialect::ddl_transactional(kind_key);
+    if in_tx {
+        let _ = run_write_sql_in(
+            &state,
+            &id,
+            &database,
+            crate::api::dialect::tx_begin(kind_key).to_string(),
+            1,
+            true,
+        )
+        .await;
+    }
+
     let mut executed = 0usize;
     let mut last = Value::Null;
     for (index, statement) in statements.iter().enumerate() {
@@ -2294,15 +2315,22 @@ pub async fn alter(
                 last = shape::query_result_json(&result);
             }
             Err(err) => {
-                // 已执行的那些**不会回滚**（DDL 多数不可回滚），所以要说清
-                // 「第几条失败、前几条已生效」，而不是丢一句失败就走 ——
-                // 用户需要知道库现在处在什么状态。
+                // 包了事务的先整体回滚：库就跟没执行过一样（这才叫"失败不破坏原结构"）。
+                // 没包事务的（MySQL/Oracle/Doris/CH）往下如实说明"前 N 条已生效"。
+                if in_tx {
+                    let _ = run_write_sql_in(&state, &id, &database, "ROLLBACK".to_string(), 1, true)
+                        .await;
+                }
                 let mut payload = shape::query_failure_json(&err.message, 0);
                 if let Some(object) = payload.as_object_mut() {
                     object.insert("failedSql".to_string(), json!(statement));
                     object.insert("failedIndex".to_string(), json!(index + 1));
                     object.insert("totalStatements".to_string(), json!(statements.len()));
-                    object.insert("executedStatements".to_string(), json!(executed));
+                    // 回滚过就一条都没生效，别报一个会误导人的"已执行 N 条"
+                    object.insert(
+                        "executedStatements".to_string(),
+                        json!(if in_tx { 0 } else { executed }),
+                    );
                     // 文案只留「为什么失败」。原先这里是
                     // 「第 1/1 条执行失败：SQL 执行失败：<数据库原话>（前 0 条已生效，DDL 无法自动回滚）」
                     // —— 三层前缀 + 一句常识说明，用户看到的是一条又长又套娃的提示，
@@ -2317,7 +2345,10 @@ pub async fn alter(
                     // ③ 去掉最内层的「SQL 执行失败：」前缀 —— 外面已经说了"保存失败"，
                     //    再说一遍是同一件事（前端会加动作前缀）。
                     let reason = err.message.strip_prefix("SQL 执行失败：").unwrap_or(&err.message);
-                    let tip = if executed == 0 {
+                    let tip = if in_tx {
+                        // 已经整体回滚：表结构保持原样，这正是用户要的结果，说一句就够
+                        "（已回滚，表结构保持原样）".to_string()
+                    } else if executed == 0 {
                         String::new()
                     } else {
                         format!("（前 {executed} 条已生效，无法自动回滚）")
@@ -2327,6 +2358,9 @@ pub async fn alter(
                 return Ok(Json(payload));
             }
         }
+    }
+    if in_tx {
+        let _ = run_write_sql_in(&state, &id, &database, "COMMIT".to_string(), 1, true).await;
     }
     if let Some(object) = last.as_object_mut() {
         object.insert("totalStatements".to_string(), json!(statements.len()));
