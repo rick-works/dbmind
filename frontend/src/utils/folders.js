@@ -46,6 +46,34 @@ export async function loadPureFolders() {
   return pureFolders.value
 }
 
+/* ===== 置顶分组 =====
+   记录"被置顶的分组全路径"（列表顺序即置顶优先级），存后端 app_settings 的 ui.folderPins。
+   真正决定树上顺序的是 MainView 的 customFolders —— 那边会把这些路径提到最前。
+   不能靠调 pureFolders 的顺序实现：customFolders 是「连接的 group ∪ 纯分组」的并集，
+   带连接的分组不在 pureFolders 里，挪它没用。 */
+export const pinnedFolders = ref([])
+
+export async function loadPinnedFolders() {
+  try {
+    const s = await getSettings()
+    const raw = s?.['ui.folderPins']
+    const arr = raw ? JSON.parse(raw) : []
+    pinnedFolders.value = Array.isArray(arr) ? arr.filter(f => f && typeof f === 'string') : []
+  } catch { /* 离线降级：维持当前值 */ }
+  return pinnedFolders.value
+}
+
+export async function savePinnedFolders() {
+  try { await putSetting('ui.folderPins', JSON.stringify(pinnedFolders.value)) } catch { /* 忽略 */ }
+}
+
+/** 把某个分组置顶：从列表里摘掉再放最前，然后落盘 */
+export async function pinFolder(path) {
+  if (!path) return
+  pinnedFolders.value = [path, ...pinnedFolders.value.filter(p => p !== path)]
+  await savePinnedFolders()
+}
+
 export async function savePureFolders() {
   try {
     await putSetting('ui.folders', JSON.stringify(pureFolders.value))

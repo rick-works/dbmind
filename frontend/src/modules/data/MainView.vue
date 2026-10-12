@@ -738,6 +738,11 @@
         <li class="ctx-item" @click="treeCtxNewFolder(treeCtxMenu.env)">
           <el-icon><FolderAdd /></el-icon>{{ $t('tree.menu.newFolder') }}
         </li>
+        <!-- 置顶分组：已经在最前时隐藏（避免点了没反应的迷惑）；只对自定义分组出现 -->
+        <li v-if="customFolders.includes(treeCtxMenu.env) && customFolders[0] !== treeCtxMenu.env"
+            class="ctx-item" @click="treeCtxPinFolder(treeCtxMenu.env)">
+          <el-icon><ArrowUp /></el-icon>{{ $t('tree.menu.pinFolder') }}
+        </li>
         <li class="ctx-item" @click="startRenameGroup(treeCtxMenu.env)">
           <el-icon><Edit /></el-icon>{{ $t('tree.menu.renameFolder') }}
         </li>
@@ -1127,6 +1132,7 @@ import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { compareTaskStatus, compareCancel, syncCancel } from '../../api'
 import { recordRecentConnection } from '../../utils/recentConnections'
 import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
+import { pinnedFolders, loadPinnedFolders, pinFolder } from '../../utils/folders'
 import { buildConnectionBundle, parseConnectionBundle, importPayloadOf, downloadJson } from '../../utils/connTransfer'
 import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType } from '../../types'
 import AiPanel from '../ai/AiPanel.vue'
@@ -1826,7 +1832,7 @@ onMounted(() => {
   // 欢迎页的「最近查询」：首次进来就取一次（失败无所谓，那块会显示一句说明）
   loadHistory()
   // 纯分组从后端设置加载（并顺带完成 localStorage 旧数据的一次性迁移）
-  loadPureFolders()
+  loadPureFolders(); loadPinnedFolders()
 })
 onBeforeUnmount(() => { if (offWinMax) offWinMax(); if (offMacFs) offMacFs() })
 
@@ -2377,7 +2383,12 @@ const customFolders = computed(() => {
     if (env && !PREDEF_ENVS.includes(env)) set.add(env)
   }
   for (const f of pureFolders.value) if (f && !PREDEF_ENVS.includes(f)) set.add(f)
-  return Array.from(set)
+  const arr = Array.from(set)
+  // 置顶分组：pinnedFolders 里记的路径（按记录顺序）提到最前，其余保持原相对顺序不变。
+  // 顺序完全由这个数组下标决定（buildTree 的 envOrder 就是它打头），所以只改这里即可。
+  const pins = pinnedFolders.value.filter(p => arr.includes(p))
+  if (!pins.length) return arr
+  return [...pins, ...arr.filter(p => !pins.includes(p))]
 })
 
 const refreshFolders = () => folderRefresh.value++
@@ -2789,6 +2800,21 @@ const onFolderCreated = async (name) => {
 // 新建分组：**不再弹窗问名字**，直接建一个默认名并立刻进入改名态（光标落在名字上，直接输入即可）。
 // **多级目录**：env 现在可能是路径（`公司资源/研发`）—— 在它下面新建 = 建子目录，
 // 新路径 = `父路径/默认名`，树上嵌套渲染（无限级）。
+// 置顶分组：把该分组挪到所有自定义分组最前，并持久化（ui.folderPins）。
+const treeCtxPinFolder = async (env) => {
+  closeTreeCtxMenu()
+  if (!env) return
+  if (customFolders.value[0] === env) return
+  try {
+    await pinFolder(env)
+    folderRefresh.value++
+    await buildTree()
+    ElMessage.success(t('mv.pinnedGroup', { name: env.split('/').pop() }))
+  } catch (e) {
+    ElMessage.error(t('mv.pinFailed', { detail: (e && e.message) ? e.message : String(e) }))
+  }
+}
+
 const treeCtxNewFolder = async (env) => {
   closeTreeCtxMenu()
   const base = env ? env + '/' + t('mv.newGroup') : t('mv.newGroup')
@@ -4172,7 +4198,7 @@ const lazyLoadRaw = async (node, resolve) => {
 const refreshTree = async () => {
   treeLoading.value = true
   // 纯分组也在「刷新」的语义里：后端删了分组，点一下刷新树上就要消失
-  await loadPureFolders()
+  await loadPureFolders(); loadPinnedFolders()
   // 没有任何连接时也要继续：空态下刷新同样该重画树（以前直接 return，
   // 空态下按钮点了没反应，用户以为坏了）
   if (conn.value) {
