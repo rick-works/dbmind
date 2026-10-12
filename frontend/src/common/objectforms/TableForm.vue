@@ -905,12 +905,12 @@ emit('sql', genSql())
 .row-idx { color: var(--dc-text-dim); font-size: 13px; }
 .field-table tbody tr { cursor: pointer; }
 .field-table tbody tr:hover { background: var(--dc-bg-hover); }
-.field-table tr.pk-row { background: rgba(79, 140, 255, .05); }
-.field-table tr.ok-row { background: rgba(103, 194, 58, .05); }
+/* 选中态只有一种：任何一行被选中都是同一个蓝底 + 左侧竖条。
+   原先还给"主键行 / 排序键行"加了常驻底色（pk-row / ok-row），看着就像**首行一直被选中**，
+   而且它和真正选中那一行的颜色还不一样（用户反馈）。这两层常驻底色去掉 ——
+   "这行是主键 / 排序键"本来就由勾选框一眼看得出。 */
 .field-table tbody tr.sel-row { background: rgba(79, 140, 255, .16) !important; box-shadow: inset 2px 0 0 var(--dc-primary); }
 .field-table tbody tr.sel-row:hover { background: rgba(79, 140, 255, .22) !important; }
-.field-table tbody tr.pk-row.sel-row { background: rgba(79, 140, 255, .2) !important; }
-.field-table tbody tr.ok-row.sel-row { background: rgba(103, 194, 58, .18) !important; box-shadow: inset 2px 0 0 var(--dc-success); }
 /* ===== 空状态卡：字段 / 索引**共用这一套** =====
    编辑页那张虚线卡（.idx-empty）的同款；放在这里是为了让新建表的两个页签空状态
    长得完全一样 —— 两处各写一套，早晚会不一致（之前就是：索引是空表格、字段是一行文字）。
@@ -1013,7 +1013,12 @@ emit('sql', genSql())
 /* 注释格：输入框 + 悬停浮出的「展开」按钮（与编辑页同一套）。
    按钮绝对定位 —— 出现/消失都不挤动输入框（否则鼠标一扫，文字就跳位置）。 */
 .cmt-cell { position: relative; display: flex; align-items: center; background: inherit; }
+/* 输入框的底色/边框要显式抹平：旁边几格是 <td> 里直接放 el-input，走的是主题那条规则；
+   注释格多包了一层 div.cmt-cell，选择器不再命中它，于是它会显示成"实心输入框"，
+   与旁边的格子不是同一种底色（用户反馈：只有注释那格背景色不一样）。 */
 .cmt-cell :deep(.el-input) { width: 100%; }
+.cmt-cell :deep(.el-input__wrapper) { background: transparent; box-shadow: none; }
+.cmt-cell :deep(.el-input__wrapper.is-focus) { box-shadow: 0 0 0 1px var(--dc-primary) inset; }
 .cmt-expand {
   position: absolute;
   right: 0;
