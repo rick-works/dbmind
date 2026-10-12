@@ -1,6 +1,11 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
-  "v1.2.16": [
+  "v1.2.17": [
+      "Table editor: New Table and Edit Structure show only the columns that really apply per data source; on Doris the field table can tick Bucketing columns and shares the same data as the distribution list in Basic info (tick either side and the other follows, and CREATE TABLE reads the same source); ClickHouse gains a Partition key column and the Primary key column is no longer hidden - every column-level setting that feeds a table-level one can now be ticked right in the field table",
+      "Edit Structure: fixed the Sort key / Partition key read-back (they showed a dash no matter how the table was set up); added read-only Bucketing columns and Partition key columns; yes/no is now always a single checkbox (Nullable, Primary key, Sort key, Bucketing, Partition key) - identical across data sources, with no more yes tags or dashes",
+      "New Table: a field comment can be edited in a multi-line dialog (double-click or the expand button), matching Edit Structure; data source fixes - column comments were never read on DM (Dameng) and H2 (the comment cell stayed empty), DM no longer shows an auto-increment checkbox that can never be ticked, and MySQL DEFAULT NULL now reads back as default NULL; also removed the SQL keywords leaking into the field-table headers (Bucketing / Sort key / Partition key) and dropped the Open folder button from the updater"
+    ],
+    "v1.2.16": [
     "Online update: when the package is already downloaded, the toolbar icon (and the startup check) goes straight to Update now instead of showing the release notes first — and a complete installer already on disk is reused instead of being downloaded twice, even after a restart",
     "Online update: all in-progress chatter under the progress bar is gone (retry counters, resume notices, source selection) — only progress and speed remain",
     "Online update: switch to a faster source really switches now (cancel, re-rank, resume from the breakpoint); failures can be retried in place, finishing in the background or failing pops a dialog, and the installer is removed after a successful update",
