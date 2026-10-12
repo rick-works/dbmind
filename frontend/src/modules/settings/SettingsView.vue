@@ -2420,14 +2420,24 @@ watch(visible, (v) => {
 }
 .fmt-card-title .el-icon { color: var(--dc-primary); }
 .fmt-card-sub { font-size: 12px; font-weight: 400; color: var(--dc-text-dim); margin-left: 2px; }
-.fmt-glob-cols { display: flex; align-items: stretch; gap: 12px 40px; margin-top: 2px; }
-.fmt-glob-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 16px; }
+/* 四个小节放进**同一个网格**（下面 .fmt-glob-col 用 display:contents 拆掉原来的两列容器）：
+   原先左列 6 行、右列 7 行各自排，导致「运算符」「语句间隔」两个小节不在同一水平线上，整块发虚。
+   现在按行铺：[大小写][运算符] / [缩进与换行][语句间隔]，每个小节的标题自动对齐。 */
+.fmt-glob-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 44px;
+  row-gap: 18px;
+  align-items: start;
+  margin-top: 2px;
+}
+.fmt-glob-col { display: contents; }
 /* 两列各自等高（flex 行的默认拉伸），**第二个小节贴底**：左列第一节 4 行、右列 3 行，
    内容排下去第二节的起始位置必然错开 —— 把末节推到底部后，两列末节行数相同（都是 2 行），
    「运算符」与「语句间隔」的标题就齐平了 */
 .fmt-glob-col .fmt-glob-sec { min-width: 0; }
-/* 小节之间用固定间距（原先 margin-top: auto 把它们推到列的上下两端，中间空一大块） */
-.fmt-glob-col .fmt-glob-sec + .fmt-glob-sec { margin-top: 6px; }
+/* 小节间距交给外层网格的 row-gap（原先 margin-top: auto 把它们推到列的上下两端，中间空一大块） */
+.fmt-glob-col .fmt-glob-sec + .fmt-glob-sec { margin-top: 0; }
 .fmt-glob-sec { min-width: 0; }
 .fmt-glob-sec-title {
   display: flex; align-items: center; gap: 6px;
@@ -2449,9 +2459,9 @@ watch(visible, (v) => {
   flex: 0 0 118px;
   text-align: right;
 }
-/* 控件撑开列的剩余宽度（与「界面尺寸」那栏的观感一致）：定宽 160px 会让整行右半留空 */
-.fmt-glob-sel { flex: 1 1 auto; min-width: 120px; max-width: 300px; font-size: 13px; }
-.fmt-glob-num { flex: 1 1 auto; min-width: 120px; max-width: 300px; font-size: 13px; }
+/* 控件填满标签右侧的整格（与「界面尺寸」那栏的观感一致）：定宽会让整行右半留空 */
+.fmt-glob-sel { flex: 1 1 auto; min-width: 110px; font-size: 13px; }
+.fmt-glob-num { flex: 1 1 auto; min-width: 110px; font-size: 13px; }
 /* 数字框**填满**它那 160px 的槽：元素默认的 el-input-number 比槽窄一点，
    于是同一列里"下拉框满宽、数字框窄一截"，左缘看着参差（截图里差的就是这十几像素） */
 .fmt-glob-num :deep(.el-input-number) { width: 100%; }
