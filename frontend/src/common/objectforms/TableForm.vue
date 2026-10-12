@@ -187,6 +187,7 @@
                 <col :style="{ width: colWidths.nullable }" />
                 <col v-if="showPkCol" :style="{ width: colWidths.pk }" />
                 <col v-if="showOrderKey" :style="{ width: colWidths.sort }" />
+                <col v-if="isDoris" :style="{ width: colWidths.dist }" />
                 <col :style="{ width: colWidths.def }" />
                 <col v-if="showAutoIncrement" :style="{ width: colWidths.auto }" />
                 <col v-if="showComment" :style="{ width: colWidths.comment }" />
@@ -213,6 +214,8 @@
                   <th class="c-center" style="width:76px">{{ $t('tf.colNullable') }}</th>
                   <th v-if="showPkCol" class="c-center" style="width:56px">{{ $t('tf.colPrimary') }}</th>
                   <th v-if="showOrderKey" class="c-center" style="width:70px" :title="$t('tf.orderKeyTip')">{{ $t('tf.orderKey') }}</th>
+                  <!-- Doris 的分桶列：与基本信息里那个分桶列下拉是同一件事（勾这里 = 下拉里选中） -->
+                  <th v-if="isDoris" class="c-center" style="width:70px" :title="$t('tf.distColPh')">{{ $t('tf.distCol') }}</th>
                   <th style="width:132px">{{ $t('tf.colDefault') }}</th>
                   <th v-if="showAutoIncrement" class="c-center" style="width:56px">{{ $t('tf.colAutoInc') }}</th>
                   <th v-if="showComment">{{ $t('tdet.comment') }}</th>
@@ -233,14 +236,39 @@
                   <td class="c-center"><el-checkbox v-model="c.nullable" /></td>
                   <td v-if="showPkCol" class="c-center"><el-checkbox v-model="c.primaryKey" @click.stop @change="onChKeyChange(c)" /></td>
                   <td v-if="showOrderKey" class="c-center"><el-checkbox v-model="c.orderKey" @click.stop @change="onChKeyChange(c)" :title="$t('tf.orderKeyCellTip')" /></td>
+                  <!-- 分桶列：只能勾 Key 列（Doris 的硬约束：DISTRIBUTED BY 的列必须先参与 Key），
+                       读写的是 form.dorisDistCol —— 与基本信息的下拉天然联动 -->
+                  <td v-if="isDoris" class="c-center">
+                    <el-checkbox :model-value="distPicked(c)" :disabled="!isKeyCol(c)" @change="toggleDist(c, $event)" />
+                  </td>
                   <td><el-input v-model="c.defaultValue" size="small" /></td>
                   <td v-if="showAutoIncrement" class="c-center"><el-checkbox v-model="c.autoIncrement" @change="onAutoIncChange(c)" /></td>
-                  <td v-if="showComment"><el-input v-model="c.comment" size="small" /></td>
+                  <!-- 注释列很窄，长注释在格子里看不全：悬停该行时右侧浮出「展开」，双击输入框也一样
+                       —— 两者都打开多行大编辑框（与「编辑表结构」同一套）。 -->
+                  <td v-if="showComment">
+                    <div class="cmt-cell">
+                      <el-input v-model="c.comment" size="small" @dblclick="openComment(c)" />
+                      <el-button text size="small" :icon="EditPen" class="cmt-expand"
+                                 :title="$t('tdet.zoomComment')" @click.stop="openComment(c)" />
+                    </div>
+                  </td>
                   <td class="c-center"><el-button text size="small" :icon="Delete" class="dc-del" @click="removeColumn(i)" /></td>
                 </tr>
               </tbody>
             </table>
           </div>
+          <!-- 注释的长文本编辑框（与「编辑表结构」同一个：字段名 + 字数 + 多行输入） -->
+          <el-dialog v-model="commentDlg.visible" :title="$t('tdet.editComment')" width="520px" append-to-body>
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <el-tag size="small" effect="plain" type="info">{{ commentDlg.field || $t('tdet.newField') }}</el-tag>
+              <span style="margin-left:auto;font-size:12px;color:var(--dc-text-dim)">{{ $t('tdet.charCount', { n: commentDlg.text.length }) }}</span>
+            </div>
+            <el-input v-model="commentDlg.text" type="textarea" :autosize="{ minRows: 4, maxRows: 12 }" />
+            <template #footer>
+              <el-button size="small" @click="commentDlg.visible = false">{{ $t('common.cancel') }}</el-button>
+              <el-button size="small" type="primary" @click="applyComment">{{ $t('common.confirm') }}</el-button>
+            </template>
+          </el-dialog>
         </div>
       </el-tab-pane>
 
@@ -302,7 +330,7 @@ import { ref, reactive, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 // 字段表 / 索引表的行高跟随设置页「结果表格行高」（--grid-row-h 由模板上的 style 注入）
 import { editorSettingsLive } from '../../utils/settings'
-import { Plus, Delete, Top, Bottom, Grid, DocumentCopy } from '@element-plus/icons-vue'
+import { Plus, Delete, Top, Bottom, Grid, DocumentCopy, EditPen } from '@element-plus/icons-vue'
 import { has, qt, sq, buildType, ddlStyleOf, uid } from './objectFormUtils'
 import { t } from '../../utils/i18n'
 
@@ -327,16 +355,19 @@ const showComment = computed(() => has(props.features, 'supportsComment'))
 const headSpan = computed(() => 8
   + (showPkCol.value ? 1 : 0)
   + (showOrderKey.value ? 1 : 0)
+  + (isDoris.value ? 1 : 0)
   + (showAutoIncrement.value ? 1 : 0)
   + (showComment.value ? 1 : 0))
 /* 列宽与「编辑表结构」同一套机制：写**相对权重**（与列宽本身无关、最终合计 100%），
    按当前显示的列归一化成百分比 —— 于是窗口宽窄、少显示了哪几列，表格都精确铺满。
    直接写死像素时，容器比列宽之和大右侧就留白、小了就溢出（真机反复出现过）。 */
-const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, def: 12, auto: 5, comment: 30, ops: 5 }
+const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, dist: 7, def: 12, auto: 5, comment: 30, ops: 5 }
 const colWidths = computed(() => {
   const keys = ['idx', 'name', 'type', 'len', 'prec', 'nullable']
   if (showPkCol.value) keys.push('pk')
   if (showOrderKey.value) keys.push('sort')
+  // Doris 的「分桶列」：与基本信息里那个分桶列下拉是同一件事（见 distPicked / toggleDist）
+  if (isDoris.value) keys.push('dist')
   keys.push('def')
   if (showAutoIncrement.value) keys.push('auto')
   if (showComment.value) keys.push('comment')
@@ -381,6 +412,35 @@ const CH_ENGINES = [
 const namedCols = computed(() => cols.filter(c => String(c.name || '').trim()))
 // 排序键 = 哪些列参与 ORDER BY（与「字段定义」里每行的「排序键」勾选框是同一件事）
 const orderKeyCols = computed(() => namedCols.value.filter(c => c.orderKey).map(c => String(c.name).trim()))
+/* ===== Doris 的「分桶列」：字段表里的勾选框 ↔ 基本信息里的分桶列下拉 =====
+   两边读写的是**同一份数据** form.dorisDistCol，所以天然联动：
+   勾选框按列名进出这个数组，下拉选的也是列名。 */
+const distPicked = (c) => form.dorisDistCol.includes(String(c.name || '').trim())
+/** 分桶列必须是 Key 列（Doris 的硬约束：DISTRIBUTED BY 的列得先参与 Key） */
+const isKeyCol = (c) => dorisKeyCols.value.includes(String(c.name || '').trim())
+const toggleDist = (c, on) => {
+  const name = String(c.name || '').trim()
+  if (!name) return
+  const set = new Set(form.dorisDistCol)
+  if (on) set.add(name)
+  else set.delete(name)
+  form.dorisDistCol = [...set]
+}
+
+/* ===== 注释格的长文本弹窗（与「编辑表结构」同一套：悬停浮出「展开」、双击输入框也行） ===== */
+const commentDlg = reactive({ visible: false, text: '', field: '', row: null })
+const openComment = (row) => {
+  commentDlg.row = row
+  // 只存名字，空名字的兜底文案交给模板里的 $t（本组件没有 i18n hook，脚本里拿不到 t）
+  commentDlg.field = String(row.name || '').trim()
+  commentDlg.text = String(row.comment || '')
+  commentDlg.visible = true
+}
+const applyComment = () => {
+  if (commentDlg.row) commentDlg.row.comment = commentDlg.text
+  commentDlg.visible = false
+}
+
 /** 下拉里改了排序键 → 同步回每列的 orderKey（勾成排序键的列必须 NOT NULL，交给 onChKeyChange） */
 const onOrderKeyPick = (picked) => {
   const want = new Set(picked || [])
@@ -916,6 +976,24 @@ emit('sql', genSql())
 .idx-tab :deep(.el-table td.el-table__cell > .cell .el-input__wrapper),
 .idx-tab :deep(.el-table td.el-table__cell > .cell .el-select__wrapper) { padding-left: 0 !important; }
 .idx-ops { display: inline-flex; align-items: center; gap: 2px; }
+/* 注释格：输入框 + 悬停浮出的「展开」按钮（与编辑页同一套）。
+   按钮绝对定位 —— 出现/消失都不挤动输入框（否则鼠标一扫，文字就跳位置）。 */
+.cmt-cell { position: relative; display: flex; align-items: center; background: inherit; }
+.cmt-cell :deep(.el-input) { width: 100%; }
+.cmt-expand {
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 2px;
+  border-radius: 4px;
+  background: inherit;
+  color: var(--dc-text-dim);
+  opacity: 0;
+  transition: opacity .15s ease, color .15s ease;
+}
+.field-table tbody tr:hover .cmt-expand { opacity: 1; }
+.cmt-expand:hover { color: var(--dc-primary); }
 /* 索引区滚动容器：撑满剩余高度、内容自己滚（编辑页同款）。
    注意这里**不加** padding-top —— 那 35px 让位已经由 .tab-inner.idx-tab 提供，
    两处都加就成了 70px。 */
