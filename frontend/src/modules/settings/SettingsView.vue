@@ -2443,7 +2443,7 @@ watch(visible, (v) => {
   /* 右对齐到下面的标签列（宽度与 .fmt-glob-lb 的 110px 一致）：
      小标题的右端与「关键字」等标签的右端落在同一条竖线上（用户要求）。
      字号 12 → 13 并用更实的字色 —— 原来又小又淡，四个小节的分组感出不来。 */
-  display: flex; align-items: center; justify-content: flex-end; gap: 6px;
+  display: flex; align-items: center; justify-content: flex-start; gap: 6px;
   width: 110px;
   font-size: 13px; font-weight: 650; letter-spacing: .3px;
   color: var(--dc-text);
@@ -2462,7 +2462,7 @@ watch(visible, (v) => {
      （用户给的就是那张参考图：标签右对齐 + 控件紧凑）。110px 装得下最长的
      「表达式换行宽度」（13px 字体约 98px）。 */
   flex: 0 0 110px;
-  text-align: right;
+  text-align: left;   /* 用户要求换左对齐试试（原来是右对齐） */
   overflow: hidden; text-overflow: ellipsis;
 }
 /* 控件紧凑定宽（参考图里就是这种"标签 + 小控件"的行，行尾留白是正常的） */
