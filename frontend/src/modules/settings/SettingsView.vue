@@ -2454,10 +2454,12 @@ watch(visible, (v) => {
 .fmt-glob-it:last-child { margin-bottom: 0; }
 .fmt-glob-lb {
   font-size: 13px; color: var(--dc-text-mid); white-space: nowrap;
-  /* 紧凑固定宽 + 右对齐：标签紧挨右侧控件，且整行不会被标签撑成"半行空白"。
-     用 flex: 1 1 auto（占满行）会把控件顶到列最右边、列左侧空一大片，正是用户说的"很丑"。 */
-  flex: 0 0 118px;
-  text-align: right;
+  /* 固定 108px 且**左对齐**：标签起点与小节标题（大小写/运算符…）落在同一条竖线上，
+     控件紧跟在标签列之后并撑满剩余宽度（用户要求「记录与标题对齐」）。
+     108px 是全部标签里最长的「表达式换行宽度」所需宽度（13px 字体下约 98px + 余量）。 */
+  flex: 0 0 108px;
+  text-align: left;
+  overflow: hidden; text-overflow: ellipsis;
 }
 /* 控件填满标签右侧的整格（与「界面尺寸」那栏的观感一致）：定宽会让整行右半留空 */
 .fmt-glob-sel { flex: 1 1 auto; min-width: 110px; font-size: 13px; }
