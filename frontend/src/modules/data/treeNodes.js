@@ -16,10 +16,23 @@
 export const isFunctionRoutine = (o) =>
   String((o && o.routineType) || '').toUpperCase() === 'FUNCTION'
 
-// 构造单个分类的子节点。
+// 一页多少个对象。超过就先只渲染一页 + 一个「显示更多」节点。
+//
+// 为什么分页而不是一次全给：el-tree 没有虚拟滚动，而唯一带虚拟滚动的 el-tree-v2
+// **不支持懒加载、也不支持拖拽**（见 element-plus/es/components/tree-v2 的 props 与 emits：
+// 没有 `lazy`/`load`，也没有 `draggable`/`node-drag-*`）—— 换过去等于把这棵树的两条命脉
+// 一起废掉。而一个库几千张表一次全渲染就是几千个 DOM 节点，并且此后**任何**状态变化
+// （鼠标扫过连接节点、行数回填、切页签…）都要把已渲染节点的插槽函数重跑一遍，
+// 这就是「树卡」的来源。
+//
+// 分页走的是 el-tree **原生懒加载**：「显示更多」自身就是一个懒加载父节点，展开它再给
+// 下一批，于是 DOM 恒定在一页（视口里能看到的量级），展开成本仍是 O(1)。
+export const TREE_PAGE = 200
+
+// 构造单个分类的**一页**子节点。
 // buildObjectCategories（整库建树）与 MainView.refreshCatNode（只刷新一个分类）共用，
 // 保证刷新前后节点 id / 携带字段完全一致，避免映射漂移（如用户缺 name/host、对象缺 @@table 后缀）。
-export const buildCatChildren = ({ cat, connId, db, items = [] }) => {
+const catItemNodes = ({ cat, connId, db, items = [] }) => {
   const arr = Array.isArray(items) ? items : []
   if (cat === 'tables') {
     return arr.filter(t => (t.type || 'TABLE') === 'TABLE').map(t => ({
@@ -79,6 +92,34 @@ export const buildCatChildren = ({ cat, connId, db, items = [] }) => {
       }
     })
 }
+
+/**
+ * 取一批分类子节点：`buildCatChildren` 取第一页；「显示更多」节点展开时取它之后的下一页。
+ *
+ * 「显示更多」节点自带三个字段供下一批使用：`offset`（这一批从第几个开始）、
+ * `allItems`（整份清单，**只在内存里**，不落缓存也不进持久层）、`i18nN`（还剩多少个，用于文案）。
+ * 另外它的 id / kind / 字段形状与普通节点一样规矩，避免行数药丸、右键菜单、拖拽、
+ * 搜索在它身上走岔路。
+ */
+export const pagedCatChildren = ({ cat, connId, db, all = [], offset = 0 }) => {
+  const arr = Array.isArray(all) ? all : []
+  const page = arr.slice(offset, offset + TREE_PAGE)
+  const next = offset + page.length
+  const nodes = catItemNodes({ cat, connId, db, items: page })
+  const rest = arr.length - next
+  if (rest > 0) {
+    nodes.push({
+      id: 'more:' + connId + ':' + db + ':' + cat + ':' + next, label: '', kind: 'more',
+      i18nKey: 'tree.more', i18nN: rest,
+      cat, db, connId, offset: next, allItems: arr
+    })
+  }
+  return nodes
+}
+
+// 分类子节点的对外入口：只给第一页（多出来的交给「显示更多」节点）。
+export const buildCatChildren = ({ cat, connId, db, items = [] }) =>
+  pagedCatChildren({ cat, connId, db, all: items, offset: 0 })
 
 export const buildObjectCategories = ({
   connId, db, tables = [], procs = [], triggers = [], events = [], users = [], scripts = []

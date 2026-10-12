@@ -100,6 +100,8 @@ export default {
   'tree.cat.users': '用户',
   'tree.cat.scripts': '脚本',
   'tree.empty': '暂无对象',
+  // 大树分页：一个分类超过 TREE_PAGE（treeNodes.js）个对象时，末尾的节点
+  'tree.more': '显示更多（还有 {n} 个）',
   'tree.loading': '加载中…',
   'tree.resizerTitle': '拖拽调整宽度',
   'tree.collapseTree': '折叠对象浏览器',

@@ -93,6 +93,8 @@ export default {
   'tree.cat.users': 'Users',
   'tree.cat.scripts': 'Scripts',
   'tree.empty': 'No objects',
+  // big tree paging: shown at the end of a category with more than TREE_PAGE objects
+  'tree.more': 'Show more ({n} left)',
   'tree.loading': 'Loading…',
   'tree.resizerTitle': 'Drag to resize',
   'tree.collapseTree': 'Collapse the object explorer',

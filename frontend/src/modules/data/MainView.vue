@@ -158,7 +158,7 @@
                 </el-icon>
                 <!-- 数据源节点：DB Logo + 连接名 + 环境角标 -->
                 <span v-else-if="data.kind === 'conn'" class="conn-row"
-                      @mouseenter="onConnEnter($event, data)" @mouseleave="onConnLeave">
+                      @mouseenter="onConnEnter($event, data)" @mouseleave="onConnLeave($event, data)">
                   <span class="logo-wrap">
                     <DbLogo :type="data.connType" :size="14" :connected="isConnOpen(data.connId) && !connErrorSet.has(String(data.connId))" class="tree-logo" />
                   </span>
@@ -169,30 +169,9 @@
                   <!-- 只读徽标：这个状态决定写操作会不会被拦，得随时看得见（藏在编辑弹窗里没人记得住） -->
                   <span v-if="data.readOnly" class="ro-badge">{{ $t('cd.readOnlyShort') }}</span>
                   <span class="env-corner" :class="'env-corner-' + (data.env || 'none')">{{ envShort(data.env) }}</span>
-                  <!-- 悬浮信息卡：Teleport 到 body 再固定定位 ——
-                       树容器是 overflow-y:auto / overflow-x:hidden / contain:layout，
-                       卡片留在节点里会被整块裁掉（用户反馈"悬浮没出来"，当时看到的
-                       那个气泡其实是浏览器原生 title 提示）。 -->
-                  <Teleport to="body">
-                    <span v-if="connCard.show && connCard.id === data.connId" class="conn-info-card"
-                          :ref="setCardRef"
-                          :class="{ flip: connCard.flip }"
-                          :style="{ left: connCard.x + 'px', top: connCard.y + 'px' }">
-                      <!-- 卡片左侧的小菱形"尖"：指向这条连接（卡片弹在节点右边，所以朝左；
-                           靠窗口右边缘翻到左边时，flip 会让它改朝右） -->
-                      <span class="ci-arrow"></span>
-                      <span class="ci-row"><b>{{ $t('connTip.name') }}</b>{{ data.name }}</span>
-                      <span class="ci-row"><b>{{ $t('connTip.url') }}</b>{{ connUrlOf(data) || '—' }}</span>
-                      <span class="ci-row"><b>{{ $t('connTip.host') }}</b>{{ data.host || '—' }}</span>
-                      <span class="ci-row"><b>{{ $t('connTip.port') }}</b>{{ data.port || '—' }}</span>
-                      <span class="ci-row"><b>{{ $t('connTip.user') }}</b>{{ data.username || '—' }}</span>
-                      <span class="ci-row"><b>{{ $t('connTip.type') }}</b>{{ labelOf(data.connType) }}</span>
-                      <span class="ci-row"><b>{{ $t('connTip.env') }}</b>{{ envTitle(data.env) }}</span>
-                      <!-- 备注与只读原先靠节点上的原生 title 提示，现在挪进卡片 -->
-                      <span v-if="data.note" class="ci-row"><b>{{ $t('connTip.note') }}</b>{{ data.note }}</span>
-                      <span v-if="data.readOnly" class="ci-row"><b>{{ $t('connTip.readOnly') }}</b>{{ $t('cd.readOnlyTip') }}</span>
-                    </span>
-                  </Teleport>
+                  <!-- 悬浮信息卡已搬进独立组件 ConnInfoCard（挂在树容器后面，见下方），
+                       状态不再放在本组件里 —— 原因见那个文件的顶部注释：
+                       卡片状态留在插槽里，鼠标每扫过一次连接节点都要重渲染整棵树。 -->
                 </span>
                 <!-- 库图标：**未打开=变暗**。
                      原先用"当前库=蓝、其它=黄"来区分 —— 那是拿**颜色**说**状态**，
@@ -230,6 +209,9 @@
                 <el-icon v-else-if="data.kind === 'user'" class="tree-icon" color="#a855f7"><User /></el-icon>
                 <el-icon v-else-if="data.kind === 'placeholder' && data.label === $t('tree.loading')" class="tree-icon placeholder-spin" color="#4f8cff"><Loading /></el-icon>
                 <el-icon v-else-if="data.kind === 'placeholder'" class="tree-icon" color="#555a68"><DocumentRemove /></el-icon>
+                <!-- 「显示更多」：大树分页的一页边界（一个分类超过 TREE_PAGE 个对象时出现，
+                     见 treeNodes.js）。它自己也是懒加载父节点，展开就给下一批。 -->
+                <el-icon v-else-if="data.kind === 'more'" class="tree-icon" color="#7a8194"><ArrowDown /></el-icon>
                 <el-icon v-else class="tree-icon" color="#f5b34d"><Coin /></el-icon>
                 <!-- 「加载中…」占位只出转圈图标、不出文字；但**说明性**占位（如"未取到库清单"）
                      必须把文字显示出来 —— 否则用户只看到一个没有任何解释的图标。 -->
@@ -241,7 +223,7 @@
                           @blur="commitRenameGroup()" />
                 <span v-else-if="data.kind !== 'conn' && !(data.kind === 'placeholder' && data.label === $t('tree.loading'))"
                       class="node-label"
-                      :class="{ 'env-folder-label': data.kind === 'env-folder', 'db-label-current': data.kind === 'db' && isDbOpened(data), 'hint-label': data.kind === 'placeholder' }">{{ data.i18nKey ? $t(data.i18nKey) : (data.label || node.label) }}</span>
+                      :class="{ 'env-folder-label': data.kind === 'env-folder', 'db-label-current': data.kind === 'db' && isDbOpened(data), 'hint-label': data.kind === 'placeholder' }">{{ nodeText(data, node) }}</span>
                 <!-- 行数未知时整个不显示（不是显示 0，也不是留一个空药丸）：
                      「不知道」和「这张表是空的」必须能一眼区分开 -->
                 <el-tag v-if="data.kind === 'table' && (tableRows[data.id] != null || data.rows != null)" size="small" effect="dark" class="row-tag">{{ tableRows[data.id] != null ? tableRows[data.id] : data.rows }}</el-tag>
@@ -260,6 +242,9 @@
               <div class="tree-empty">{{ $t('tree.empty') }}</div>
             </template>
           </el-tree>
+          <!-- 连接节点的悬浮信息卡：独立组件（原因见该文件顶部注释 —— 把卡片状态搬出本组件后，
+               鼠标扫过连接节点不再让整棵树重渲染）。它只渲染一个 Teleport，不占布局。 -->
+          <ConnInfoCard ref="connCardRef" />
           </div>
         </div>
       </aside>
@@ -1163,7 +1148,7 @@ import { Sunny, Moon, Clock, Reading, Delete as ElDelete } from '@element-plus/i
 import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 import { locale, setLocale } from '../../utils/i18n'
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
-import { buildCatChildren, buildObjectCategories, isFunctionRoutine } from './treeNodes'
+import { buildCatChildren, buildObjectCategories, isFunctionRoutine, pagedCatChildren } from './treeNodes'
 import { t, tMsg } from '../../utils/i18n'
 import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
@@ -1180,6 +1165,7 @@ import AiPanel from '../ai/AiPanel.vue'
 import logoSmUrl from '../../assets/logo-sm.png'
 import SaveToKbDialog from '../knowledge/SaveToKbDialog.vue'
 import DbLogo from '../../common/DbLogo.vue'
+import ConnInfoCard from './ConnInfoCard.vue'
 
 // ===== 按需加载的视图与弹窗 =====
 // 下面这些组件只有「打开某个 tab」或「点开某个弹窗」之后才会用到，静态 import 会把它们全部打进首屏 index chunk，
@@ -2433,47 +2419,26 @@ const folderRefresh = ref(0)
         }
         const connUrlOf = (data) => connUrl({ type: data.connType, username: data.username, host: data.host, port: data.port })
 
-/* 连接悬浮卡的坐标与开合。卡片被 Teleport 到 body，没法再靠祖先的 :hover 显示，
-   所以进节点时算一次位置、离开时关掉。用 ref 而非 reactive：本文件处处用 ref，
-   免得再踩一次"忘了 .value"。
+/* 连接悬浮卡：位置与开合**都已搬进 ConnInfoCard 组件**，这里只负责把节点数据和算好的
+   URL 递过去、离开时关掉。
 
-   位置刻意**贴连接行的右边**而不是光标底下：跟着光标走会盖住下面的连接，
-   既挡视线也挡点击（用户反馈"弹在后面，影响点击了"）。
-   再做一次视口收边：右边放不下就翻到行的左侧，下边放不下就往上提。 */
-const CARD_W = 340
-const CARD_ROW_H = 17.4
-/* 卡片高度不定（备注/只读/长 URL 折行都会加行），所以：先按行数估一个，
-   渲染出来后再用实测高度校正一次。目标是让卡片的**竖直中心**对齐节点中心
-   （用户反馈：原来卡片从节点往下长、看着偏下，"往上挪、尽量居中"）。 */
-const estCardH = (data) => 32 + CARD_ROW_H * (7 + (data && data.note ? 1 : 0) + (data && data.readOnly ? 1 : 0))
-let cardEl = null
-const setCardRef = (el) => { cardEl = el }
-const centerCardY = (rowRect, h) => {
-  const y = rowRect.top + rowRect.height / 2 - h / 2
-  return Math.max(8, Math.min(y, window.innerHeight - h - 8))
-}
-const connCard = ref({ show: false, id: '', x: 0, y: 0, flip: false })
+   为什么必须搬走：卡片状态原来放在本组件里、并且被树的插槽读取，于是**鼠标每扫过一次
+   连接节点**都要改 5 次响应式数据 → 整个 MainView 重渲染 → el-tree 收到新的插槽函数
+   → **已渲染的全部节点**（大库展开时上千个）的插槽函数重跑一遍。表现就是「鼠标扫过连接，
+   整棵树卡一下」。搬走之后，悬浮不再进入本组件的渲染依赖，树也就不跟着重渲染了。
+   卡片自身的定位（贴行右侧 10px、竖直居中、右侧放不下翻到左侧）都在子组件里。 */
+const connCardRef = ref(null)
 const onConnEnter = (e, data) => {
-  connCard.value.id = data && data.connId ? String(data.connId) : ''
-  const r = e.currentTarget.getBoundingClientRect()
-  let x = r.right + 10
-  connCard.value.flip = false
-  // flip：卡片被窗口右边缘逼到节点左侧时，左边那个菱形尖要改朝右（见 .conn-info-card.flip）
-  if (x + CARD_W > window.innerWidth) {
-    x = Math.max(8, r.left - CARD_W - 10)
-    connCard.value.flip = true
-  }
-  connCard.value.x = x
-  connCard.value.y = centerCardY(r, estCardH(data))
-  connCard.value.show = true
-  // 等这一帧渲染完，用卡片真实高度再校正一次（首次悬停时用的是估算值，
-  // 长 URL 折行会让估算差十几像素）。这里用 setTimeout(0) 而不是 nextTick：
-  // 不额外引依赖，时序同样是"DOM 更新之后"。
-  setTimeout(() => {
-    if (cardEl && connCard.value.show) connCard.value.y = centerCardY(r, cardEl.offsetHeight)
-  }, 0)
+  const el = e.currentTarget
+  const ref = connCardRef.value
+  if (!el || !ref) return
+  // URL 在这里算：connUrl 是本文件的局部函数；这是**命令式**调用，不进渲染依赖，
+  // 所以算它不会牵动树的渲染。
+  ref.open(data, { url: connUrlOf(data), rect: el.getBoundingClientRect() })
 }
-const onConnLeave = () => { connCard.value.show = false }
+const onConnLeave = (e, data) => {
+  if (connCardRef.value) connCardRef.value.close(data && data.connId)
+}
 
 const customFolders = computed(() => {
   // eslint-disable-next-line no-unused-expressions
@@ -4305,6 +4270,15 @@ const lazyLoadRaw = async (node, resolve) => {
       // 手动展开这条路也要写表：数字立刻正确，不必等预取（两条路写同一个来源）
       if (Array.isArray(items)) catCounts.value[data.id] = items.length
       resolve(finishLazyChildren(data, buildCatChildren({ cat: data.cat, connId: data.connId, db: data.db, items })))
+    } else if (data.kind === 'more') {
+      // 「显示更多」：接着渲染下一批（每批 TREE_PAGE 个）。走 el-tree 自己的懒加载 ——
+      // 既不用动引擎，也不会出现"一次多渲染两千个节点"的 DOM 峰值。
+      // 行数不必在这里重查：展开这个分类时已经对整库发过一次批量 COUNT(*)，新露出来的表直接命中。
+      resolve(finishLazyChildren(data, pagedCatChildren({
+        cat: data.cat, connId: data.connId, db: data.db,
+        all: Array.isArray(data.allItems) ? data.allItems : [],
+        offset: data.offset || 0
+      })))
     } else if (data.children && data.children.length) {
       // 懒加载模式下 el-tree 会忽略 data.children：分类目录（Tables/Views/Procedures 等）
       // 必须在这里显式返回预置子节点，否则最内层目录展开后为空
@@ -4457,9 +4431,20 @@ const collapseNode = (key) => {
 // `catalog` 必须在这里：Doris 的 catalog 节点下面是库，它当然"装得下子节点"。
 // 漏掉它的后果不只是"没箭头" —— 点击与右键也各自按 kind 分支，三处都不认它，
 // 于是那个节点**点也没反应、右键也没反应**（用户反馈的就是这个）。
-const EXPANDABLE_KINDS = new Set(['env-folder', 'conn', 'db', 'schema', 'category', 'catalog'])
+// `more` 是分页的「显示更多」节点（见 treeNodes.js 的 TREE_PAGE）：它自己就是懒加载父节点，
+// 漏掉它就没有展开箭头 —— 而箭头正是"再取一批"的唯一入口。
+const EXPANDABLE_KINDS = new Set(['env-folder', 'conn', 'db', 'schema', 'category', 'catalog', 'more'])
 /** 能不能展开：能装子节点的类型才算（Redis 库的 key 不进树，标了 leaf 就不算）。 */
 const canExpandNode = (data) => !!data && !data.leaf && EXPANDABLE_KINDS.has(data.kind)
+/**
+ * 节点文字的**唯一**出口：分类名等走 i18nKey（写在模板里才能"切语言立刻变"），
+ * 「显示更多」还要带上剩余数量（i18nN）。所有节点共用这一处，免得某个分支漏了参数。
+ */
+const nodeText = (data, node) => {
+  if (!data) return ''
+  if (!data.i18nKey) return data.label || (node && node.label) || ''
+  return data.i18nN != null ? t(data.i18nKey, { n: data.i18nN }) : t(data.i18nKey)
+}
 /** 是不是正在加载：el-tree 懒加载会把 node.loading 置位；连接另有自己的标记。 */
 const isNodeLoading = (node, data) => {
   if (node && node.loading) return true
