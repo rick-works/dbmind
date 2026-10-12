@@ -738,10 +738,16 @@
         <li class="ctx-item" @click="treeCtxNewFolder(treeCtxMenu.env)">
           <el-icon><FolderAdd /></el-icon>{{ $t('tree.menu.newFolder') }}
         </li>
-        <!-- 置顶分组：已经在最前时隐藏（避免点了没反应的迷惑）；只对自定义分组出现 -->
-        <li v-if="customFolders.includes(treeCtxMenu.env) && customFolders[0] !== treeCtxMenu.env"
+        <!-- 置顶 / 取消置顶：只对自定义分组出现；已置顶的显示"取消置顶"，
+             其余显示"置顶分组"（判据就是置顶列表本身，与"是不是第一个"无关 —— 新建的分组
+             可能天然排第一但并未置顶，那时仍应显示"置顶分组"） -->
+        <li v-if="customFolders.includes(treeCtxMenu.env) && !pinnedFolders.includes(treeCtxMenu.env)"
             class="ctx-item" @click="treeCtxPinFolder(treeCtxMenu.env)">
           <span class="ctx-pin">📌</span>{{ $t('tree.menu.pinFolder') }}
+        </li>
+        <li v-else-if="pinnedFolders.includes(treeCtxMenu.env)"
+            class="ctx-item" @click="treeCtxUnpinFolder(treeCtxMenu.env)">
+          <span class="ctx-pin">📌</span>{{ $t('tree.menu.unpinFolder') }}
         </li>
         <li class="ctx-item" @click="startRenameGroup(treeCtxMenu.env)">
           <el-icon><Edit /></el-icon>{{ $t('tree.menu.renameFolder') }}
@@ -1132,7 +1138,7 @@ import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { compareTaskStatus, compareCancel, syncCancel } from '../../api'
 import { recordRecentConnection } from '../../utils/recentConnections'
 import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
-import { pinnedFolders, loadPinnedFolders, pinFolder } from '../../utils/folders'
+import { pinnedFolders, loadPinnedFolders, pinFolder, unpinFolder } from '../../utils/folders'
 import { buildConnectionBundle, parseConnectionBundle, importPayloadOf, downloadJson } from '../../utils/connTransfer'
 import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType } from '../../types'
 import AiPanel from '../ai/AiPanel.vue'
@@ -2800,6 +2806,20 @@ const onFolderCreated = async (name) => {
 // 新建分组：**不再弹窗问名字**，直接建一个默认名并立刻进入改名态（光标落在名字上，直接输入即可）。
 // **多级目录**：env 现在可能是路径（`公司资源/研发`）—— 在它下面新建 = 建子目录，
 // 新路径 = `父路径/默认名`，树上嵌套渲染（无限级）。
+// 取消置顶：从置顶列表里摘掉，回到普通分组的位置（其余分组的相对顺序不变）
+const treeCtxUnpinFolder = async (env) => {
+  closeTreeCtxMenu()
+  if (!env) return
+  try {
+    await unpinFolder(env)
+    folderRefresh.value++
+    await buildTree()
+    ElMessage.success(t('mv.unpinnedGroup', { name: env.split('/').pop() }))
+  } catch (e) {
+    ElMessage.error(t('mv.pinFailed', { detail: (e && e.message) ? e.message : String(e) }))
+  }
+}
+
 // 置顶分组：把该分组挪到所有自定义分组最前，并持久化（ui.folderPins）。
 const treeCtxPinFolder = async (env) => {
   closeTreeCtxMenu()

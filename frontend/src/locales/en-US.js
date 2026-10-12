@@ -3515,6 +3515,8 @@ export default {
   'tree.menu.newFolder': 'New group',
   'tree.menu.renameFolder': 'Rename group',
   'tree.menu.pinFolder': 'Pin to top',
+  'tree.menu.unpinFolder': 'Unpin',
+  'mv.unpinnedGroup': 'Unpinned "{name}"',
   'mv.pinnedGroup': 'Pinned "{name}" to top',
   'mv.pinFailed': 'Pin failed: {detail}',
   'tree.menu.deleteFolder': 'Delete group',

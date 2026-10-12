@@ -3523,6 +3523,8 @@ export default {
   'tree.menu.newFolder': '新建分组',
   'tree.menu.renameFolder': '重命名分组',
   'tree.menu.pinFolder': '置顶分组',
+  'tree.menu.unpinFolder': '取消置顶',
+  'mv.unpinnedGroup': '已取消「{name}」的置顶',
   'mv.pinnedGroup': '已将「{name}」置顶',
   'mv.pinFailed': '置顶失败：{detail}',
   'tree.menu.deleteFolder': '删除分组',

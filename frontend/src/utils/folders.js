@@ -67,6 +67,13 @@ export async function savePinnedFolders() {
   try { await putSetting('ui.folderPins', JSON.stringify(pinnedFolders.value)) } catch { /* 忽略 */ }
 }
 
+/** 取消置顶：从列表里摘掉并落盘（其余置顶项的相对顺序不变） */
+export async function unpinFolder(path) {
+  if (!path) return
+  pinnedFolders.value = pinnedFolders.value.filter(p => p !== path)
+  await savePinnedFolders()
+}
+
 /** 把某个分组置顶：从列表里摘掉再放最前，然后落盘 */
 export async function pinFolder(path) {
   if (!path) return
