@@ -157,7 +157,8 @@
                   <FolderOpened v-if="node.expanded" /><Folder v-else />
                 </el-icon>
                 <!-- 数据源节点：DB Logo + 连接名 + 环境角标 -->
-                <span v-else-if="data.kind === 'conn'" class="conn-row">
+                <span v-else-if="data.kind === 'conn'" class="conn-row"
+                      @mouseenter="onConnEnter($event, data)" @mouseleave="onConnLeave">
                   <span class="logo-wrap">
                     <DbLogo :type="data.connType" :size="14" :connected="isConnOpen(data.connId) && !connErrorSet.has(String(data.connId))" class="tree-logo" />
                   </span>
@@ -166,14 +167,22 @@
                         :title="data.note ? (data.name + '：' + data.note) : data.name">{{ data.label || data.name || node.label }}</span>
                   <!-- 只读徽标：这个状态决定写操作会不会被拦，得随时看得见（藏在编辑弹窗里没人记得住） -->
                   <span v-if="data.readOnly" class="ro-badge" :title="$t('cd.readOnlyTip')">{{ $t('cd.readOnlyShort') }}</span>
-                  <span class="env-corner" :class="'env-corner-' + (data.env || 'none')" :title="envTitle(data.env)">{{ envShort(data.env) }}</span><span class="conn-info-card">
-                    <span class="ci-row"><b>{{ $t('connTip.name') }}</b>{{ data.name }}</span>
-                    <span class="ci-row"><b>{{ $t('connTip.url') }}</b>{{ connUrlOf(data) || '—' }}</span>
-                    <span class="ci-row"><b>{{ $t('connTip.host') }}</b>{{ data.host || '—' }}</span>
-                    <span class="ci-row"><b>{{ $t('connTip.port') }}</b>{{ data.port || '—' }}</span>
-                    <span class="ci-row"><b>{{ $t('connTip.user') }}</b>{{ data.username || '—' }}</span>
-                    <span class="ci-row"><b>{{ $t('connTip.type') }}</b>{{ labelOf(data.connType) }}</span>
-                  </span>
+                  <span class="env-corner" :class="'env-corner-' + (data.env || 'none')" :title="envTitle(data.env)">{{ envShort(data.env) }}</span>
+                  <!-- 悬浮信息卡：Teleport 到 body 再固定定位 ——
+                       树容器是 overflow-y:auto / overflow-x:hidden / contain:layout，
+                       卡片留在节点里会被整块裁掉（用户反馈"悬浮没出来"，当时看到的
+                       那个气泡其实是浏览器原生 title 提示）。 -->
+                  <Teleport to="body">
+                    <span v-if="connCard.show && connCard.id === data.connId" class="conn-info-card"
+                          :style="{ left: connCard.x + 'px', top: connCard.y + 'px' }">
+                      <span class="ci-row"><b>{{ $t('connTip.name') }}</b>{{ data.name }}</span>
+                      <span class="ci-row"><b>{{ $t('connTip.url') }}</b>{{ connUrlOf(data) || '—' }}</span>
+                      <span class="ci-row"><b>{{ $t('connTip.host') }}</b>{{ data.host || '—' }}</span>
+                      <span class="ci-row"><b>{{ $t('connTip.port') }}</b>{{ data.port || '—' }}</span>
+                      <span class="ci-row"><b>{{ $t('connTip.user') }}</b>{{ data.username || '—' }}</span>
+                      <span class="ci-row"><b>{{ $t('connTip.type') }}</b>{{ labelOf(data.connType) }}</span>
+                    </span>
+                  </Teleport>
                 </span>
                 <!-- 库图标：**未打开=变暗**。
                      原先用"当前库=蓝、其它=黄"来区分 —— 那是拿**颜色**说**状态**，
@@ -2404,6 +2413,18 @@ const folderRefresh = ref(0)
         return scheme + '://' + auth + c.host + port
         }
         const connUrlOf = (data) => connUrl({ type: data.connType, username: data.username, host: data.host, port: data.port })
+
+/* 连接悬浮卡的坐标与开合。卡片被 Teleport 到 body，没法再靠祖先的 :hover 显示，
+   所以进节点时记一次鼠标位置（clientX/clientY 是视口坐标，配 position: fixed 正好），
+   离开时关掉。用 ref 而非 reactive：本文件处处用 ref，免得再踩一次"忘了 .value"。 */
+const connCard = ref({ show: false, id: '', x: 0, y: 0 })
+const onConnEnter = (e, data) => {
+  connCard.value.id = data && data.connId ? String(data.connId) : ''
+  connCard.value.x = e.clientX + 14
+  connCard.value.y = e.clientY - 6
+  connCard.value.show = true
+}
+const onConnLeave = () => { connCard.value.show = false }
 
 const customFolders = computed(() => {
   // eslint-disable-next-line no-unused-expressions
