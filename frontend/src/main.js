@@ -8,8 +8,11 @@ import {
   ElInput, ElInputNumber, ElOption, ElOptionGroup, ElPagination, ElProgress,
   ElRadio, ElRadioButton, ElRadioGroup, ElScrollbar, ElSelect, ElSlider, ElStep, ElSteps, ElSwitch, ElTabPane, ElTable,
   ElTableColumn, ElTabs, ElTag, ElTooltip, ElTree, ElUpload, ElConfigProvider,
-  ElMessage
+  ElMessage, ElLoading
 } from 'element-plus'
+// loading 是**指令**（v-loading），按需注册组件的写法不会自动带上它 ——
+// 不注册的话 v-loading 静默失效，编辑表结构加载期间就像"页面是空的"（用户反馈）
+import 'element-plus/es/components/loading/style/css'
 import 'element-plus/theme-chalk/base.css'
 import 'element-plus/es/components/alert/style/css'
 import 'element-plus/es/components/autocomplete/style/css'
@@ -140,6 +143,7 @@ const icons = {
 for (const [key, component] of Object.entries(icons)) {
   app.component(key, component)
 }
+app.use(ElLoading)
 app.use(router)
 
 // 全局文案函数：模板里写 `$t('nav.settings')` 即可。

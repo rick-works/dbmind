@@ -2006,6 +2006,9 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 <style scoped>
 /* ===== 页面骨架（与"新建表"一致：顶栏 + 左编辑右预览） ===== */
 .table-edit-page {
+  /* v-loading 的遮罩是绝对定位的，挂在"最近一个定位祖先"上 —— 这块必须自己有定位，
+     否则加载期间遮罩会跑到别处或被别的东西盖住（看起来就像没加 loading） */
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
