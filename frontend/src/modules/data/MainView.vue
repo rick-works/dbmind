@@ -175,6 +175,7 @@
                        那个气泡其实是浏览器原生 title 提示）。 -->
                   <Teleport to="body">
                     <span v-if="connCard.show && connCard.id === data.connId" class="conn-info-card"
+                          :ref="setCardRef"
                           :class="{ flip: connCard.flip }"
                           :style="{ left: connCard.x + 'px', top: connCard.y + 'px' }">
                       <!-- 卡片左侧的小菱形"尖"：指向这条连接（卡片弹在节点右边，所以朝左；
@@ -2431,23 +2432,37 @@ const folderRefresh = ref(0)
    既挡视线也挡点击（用户反馈"弹在后面，影响点击了"）。
    再做一次视口收边：右边放不下就翻到行的左侧，下边放不下就往上提。 */
 const CARD_W = 340
-const CARD_H = 230
+const CARD_ROW_H = 17.4
+/* 卡片高度不定（备注/只读/长 URL 折行都会加行），所以：先按行数估一个，
+   渲染出来后再用实测高度校正一次。目标是让卡片的**竖直中心**对齐节点中心
+   （用户反馈：原来卡片从节点往下长、看着偏下，"往上挪、尽量居中"）。 */
+const estCardH = (data) => 32 + CARD_ROW_H * (7 + (data && data.note ? 1 : 0) + (data && data.readOnly ? 1 : 0))
+let cardEl = null
+const setCardRef = (el) => { cardEl = el }
+const centerCardY = (rowRect, h) => {
+  const y = rowRect.top + rowRect.height / 2 - h / 2
+  return Math.max(8, Math.min(y, window.innerHeight - h - 8))
+}
 const connCard = ref({ show: false, id: '', x: 0, y: 0, flip: false })
 const onConnEnter = (e, data) => {
   connCard.value.id = data && data.connId ? String(data.connId) : ''
   const r = e.currentTarget.getBoundingClientRect()
   let x = r.right + 10
-  let y = r.top - 4
-  // flip：卡片被窗口右边缘逼到节点左侧时，左侧那个菱形尖要改朝右（见 .conn-info-card.flip）
   connCard.value.flip = false
+  // flip：卡片被窗口右边缘逼到节点左侧时，左边那个菱形尖要改朝右（见 .conn-info-card.flip）
   if (x + CARD_W > window.innerWidth) {
     x = Math.max(8, r.left - CARD_W - 10)
     connCard.value.flip = true
   }
-  if (y + CARD_H > window.innerHeight) y = Math.max(8, window.innerHeight - CARD_H)
   connCard.value.x = x
-  connCard.value.y = y
+  connCard.value.y = centerCardY(r, estCardH(data))
   connCard.value.show = true
+  // 等这一帧渲染完，用卡片真实高度再校正一次（首次悬停时用的是估算值，
+  // 长 URL 折行会让估算差十几像素）。这里用 setTimeout(0) 而不是 nextTick：
+  // 不额外引依赖，时序同样是"DOM 更新之后"。
+  setTimeout(() => {
+    if (cardEl && connCard.value.show) connCard.value.y = centerCardY(r, cardEl.offsetHeight)
+  }, 0)
 }
 const onConnLeave = () => { connCard.value.show = false }
 

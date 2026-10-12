@@ -497,7 +497,7 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
 .conn-info-card .ci-arrow {
   position: absolute;
   left: -5px;
-  top: 8px;
+  top: calc(50% - 4px);
   width: 8px;
   height: 8px;
   background: var(--dc-bg-pop);
