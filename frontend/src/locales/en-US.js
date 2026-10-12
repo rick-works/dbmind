@@ -1824,7 +1824,8 @@ export default {
   'settings.about.version': 'Version v{version}',
   'settings.about.releaseTitle': 'Release notes',
   'settings.about.dirsTitle': 'Directories',
-  'settings.about.releaseVersion': 'v1.2.19',
+  // kept in sync with rel1.version by scripts/sync-release-notes.mjs (easy to miss when releasing)
+  'settings.about.releaseVersion': 'v1.2.20',
   'settings.about.verLabel': 'Version v',
   'settings.about.verMajorTip': 'Major: bumped for breaking changes (data format, config, API)',
   'settings.about.verMinorTip': 'Minor: bumped for new features, patch resets to 0',

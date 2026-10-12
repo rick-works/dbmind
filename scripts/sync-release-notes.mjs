@@ -223,4 +223,37 @@ for (const [tag, bullets] of bulletsByTag) {
   }
 }
 
+// ---------- ⑤ 「当前版本」+ 一致性提醒 ----------
+//
+// 这里处理的是发版最容易漏的两处（v1.2.20 就漏了第一处，用户在「关于」页看出来了）：
+//  ① `settings.about.releaseVersion` —— 折叠头那个"当前版本"，**必须跟着最新 tag 走**；
+//  ② `relN.version / level / date` 三行 —— ③ 只重写要点（noteX），**不搬这三行**，
+//     所以新增版本时要手工把这三行**整体下移一格**、并在最前面插入新版本的三行。
+//     没搬的后果：页面顶部写着新版号、列表第一格还挂着旧版号。
+//
+// 第 ② 条**只提醒、不自动改**：自动挪位一旦判断错（比如重复跑、或中间漏过一版），
+// 会把 27 个版本的槽位整体错位 —— 那比漏改一处严重得多。宁可让它吵一句。
+{
+  const newest = tags[0]
+  for (const [file, name] of [
+    [ZH, '中文'],
+    [EN, '英文'],
+  ]) {
+    const lines = fs.readFileSync(file, 'utf8').split('\n')
+    const i = lines.findIndex((l) => l.includes("'settings.about.releaseVersion'"))
+    if (i >= 0 && !lines[i].includes(`'${newest}'`)) {
+      lines[i] = `  'settings.about.releaseVersion': '${newest}',`
+      fs.writeFileSync(file, lines.join('\n'), 'utf8')
+      console.log(`应用「关于」页（${name}）：当前版本 → ${newest}`)
+    }
+    const first = lines.find((l) => l.includes("'settings.about.rel1.version'"))
+    if (first && !first.includes(`'${newest}'`)) {
+      console.log(
+        `⚠ 应用「关于」页（${name}）：rel1.version 仍是 ${first.trim()} —— ` +
+          `请把 relN 的 version/level/date 三行整体下移一格，并在最前面插入 ${newest} 的三行`
+      )
+    }
+  }
+}
+
 console.log(noPush ? '（--no-push：未改动 GitHub）' : `已推送 ${pushed} 个 Release 正文`)

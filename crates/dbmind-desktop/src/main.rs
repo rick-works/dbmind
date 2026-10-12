@@ -212,7 +212,7 @@ fn cleanup_child_processes() {
         let is_our_web = process
             .name()
             .to_string_lossy()
-            .eq_ignore_ascii_case("dbmind-web.exe")
+            .eq_ignore_ascii_case(WEB_EXE_NAME)
             && match (&exe_dir, exe_path) {
                 (Some(dir), Some(exe)) => exe.parent().map(|p| p == dir.as_path()).unwrap_or(false),
                 _ => false,
@@ -240,6 +240,16 @@ fn cleanup_child_processes() {
 const DEFAULT_PORT: u16 = 20361;
 /// 默认端口被占用时，往后尝试的端口个数
 const PORT_SCAN: u16 = 20;
+
+/// 独立内核进程的文件名（退出清场按它匹配）。
+///
+/// 原先这里写死 `dbmind-web.exe` —— 在 mac / Linux 上**永远匹配不到**（那边的可执行文件
+/// 没有 `.exe` 后缀），于是残留的内核进程不会被清掉，会一直占着默认端口；之后每次启动
+/// 都"复用"它。这正是要按版本校验复用的另一个理由，但名字也该按平台写对。
+#[cfg(windows)]
+const WEB_EXE_NAME: &str = "dbmind-web.exe";
+#[cfg(not(windows))]
+const WEB_EXE_NAME: &str = "dbmind-web";
 /// 等内嵌内核就绪的上限
 const READY_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -247,25 +257,40 @@ const READY_TIMEOUT: Duration = Duration::from_secs(15);
 ///
 /// 手写报文是为了不给壳添一个 HTTP 客户端依赖 —— 这里只需要一个 GET，
 /// 而壳层依赖越多，编译越慢、供应链越长。
-fn is_dbmind(port: u16) -> bool {
+fn dbmind_health(port: u16) -> Option<String> {
     let addr: SocketAddr = ([127, 0, 0, 1], port).into();
-    let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(400)) else {
-        return false;
-    };
+    let stream = TcpStream::connect_timeout(&addr, Duration::from_millis(400)).ok()?;
+    let mut stream = stream;
     let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
     let request = format!(
         "GET /api/dbmind/health HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
     );
-    if stream.write_all(request.as_bytes()).is_err() {
-        return false;
-    }
+    stream.write_all(request.as_bytes()).ok()?;
     let mut body = String::new();
     // 读失败（对端不是 HTTP、被截断）就当不是
-    if stream.read_to_string(&mut body).is_err() {
-        return false;
-    }
+    stream.read_to_string(&mut body).ok()?;
     // 别用 `"ok":true` 硬匹配：不同 serde 版本/格式化方式会带空格
-    body.contains("\"ok\"") && body.contains("true")
+    if body.contains("\"ok\"") && body.contains("true") {
+        Some(body)
+    } else {
+        None
+    }
+}
+
+fn is_dbmind(port: u16) -> bool {
+    dbmind_health(port).is_some()
+}
+
+/// 从 health 正文里取 `version`（老内核可能没这个字段 → None）。
+///
+/// 手工取而不引 `serde_json`：壳层刻意保持零依赖（编译快、供应链短），
+/// 而 health 的正文格式是我们自己定的（`{"ok":true,"version":"1.2.20"}`）。
+fn health_version(body: &str) -> Option<String> {
+    let key = "\"version\"";
+    let rest = &body[body.find(key)? + key.len()..];
+    let start = rest.find('"')? + 1;
+    let end = rest[start..].find('"')? + start;
+    Some(rest[start..end].to_string())
 }
 
 fn port_free(port: u16) -> bool {
@@ -273,9 +298,31 @@ fn port_free(port: u16) -> bool {
 }
 
 /// 定下这次要连哪个端口，以及**要不要自己起内核**。
-fn resolve_port() -> (u16, bool) {
-    if is_dbmind(DEFAULT_PORT) {
-        return (DEFAULT_PORT, false);
+///
+/// `allow_reuse` = 允许复用"已经在跑的另一个实例"的内核。复用要满足**两条**，缺一就自己起：
+///  ① 端口上答 health 的确实是 DBmind；
+///  ② **版本与本机这份一致**。
+///
+/// 为什么要看版本（mac 白屏的根因）：应用窗口指向的是 `http://127.0.0.1:<port>` 这个内嵌内核，
+/// 而不是内嵌静态资源。若复用了**旧版本的常驻内核**——最常见的就是刚被更新脚本 `pkill` 掉、
+/// 还没退干净的旧实例——轻则界面是旧版，重则它在窗口导航那一刻死掉：端口没人监听 →
+/// **macOS 的 WKWebView 加载失败时什么都不画（纯白）**，而 Windows 的 WebView2 会画一张错误页。
+/// 这就是"同样更新，只有 mac 白屏"的来源。
+fn resolve_port(allow_reuse: bool) -> (u16, bool) {
+    if allow_reuse {
+        if let Some(body) = dbmind_health(DEFAULT_PORT) {
+            let found = health_version(&body);
+            // 没有 version 字段（很旧的内核）也**不复用**：宁可贵一点自己起一个，
+            // 也不要把窗口挂在一个来路不明的内核上。
+            if found.as_deref() == Some(env!("CARGO_PKG_VERSION")) {
+                return (DEFAULT_PORT, false);
+            }
+            eprintln!(
+                "端口 {DEFAULT_PORT} 上的内核版本是 {}（本机 {}）→ 不复用，另起一个",
+                found.as_deref().unwrap_or("未知"),
+                env!("CARGO_PKG_VERSION")
+            );
+        }
     }
     for port in DEFAULT_PORT..DEFAULT_PORT.saturating_add(PORT_SCAN) {
         if port_free(port) {
@@ -299,7 +346,42 @@ fn wait_ready(port: u16) {
         std::thread::sleep(Duration::from_millis(120));
     }
     // 超时不拦着开窗口：前端会显示"连不上后端"，比一个沉默的白窗口有用
-    eprintln!("内嵌内核在 {READY_TIMEOUT:?} 内未就绪，仍打开窗口");
+    eprintln!("内核在 {READY_TIMEOUT:?} 内未就绪，仍打开窗口");
+    // 但**要留下证据**：macOS 上这一刻窗口就是纯白，用户在应用里看不到任何提示，
+    // 而壳的 stderr 在 .app 双击启动时没人看得到。写一份文件日志，
+    // 下次"更新完白屏"可以直接看它（也可能只是内核起得慢，所以措辞要分清）。
+    append_shell_log(&format!(
+        "内核在 {READY_TIMEOUT:?} 内未就绪（端口 {port}）——窗口仍会打开；\
+         若界面空白，请检查该端口是否有残留的旧内核，或前端产物 web/index.html 是否缺失"
+    ));
+}
+
+/// 往 `~/.dbmind/logs/shell.log` 追加一行（失败就算了，绝不影响启动）。
+///
+/// 为什么需要它：macOS 上"内核没起来"的表现是**纯白窗口**，而壳的 stderr 在双击 .app 启动时
+/// 无处可见；线上排查这个只能靠一个落盘的文件。桌面壳以前不写任何日志文件（只有 java 宿主写），
+/// 这里补上最小的一条通道。
+fn append_shell_log(line: &str) {
+    use std::io::Write;
+    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else {
+        return;
+    };
+    let dir = std::path::PathBuf::from(home).join(".dbmind").join("logs");
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("shell.log"))
+    else {
+        return;
+    };
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let _ = writeln!(file, "[{stamp}] {line}");
 }
 
 /// 前端已经确认「关闭」：置位后放行真正的关闭，不再拦截询问。
@@ -338,7 +420,22 @@ fn main() {
     // 必须在起内核**之前**：这个选择是通过进程环境变量传给内核的
     ensure_java();
 
-    let (port, need_spawn) = resolve_port();
+    let (mut port, mut need_spawn) = resolve_port(true);
+
+    // 即便决定复用，也要**先确认这一刻它真的可用**：更新脚本会在同一时间把旧实例关掉，
+    // 于是"刚才还有人答 health"到开窗那一刻可能已经失效。不等就开窗 → 窗口导航到死端口 →
+    // macOS 上是纯白（WKWebView 加载失败不画任何东西），Windows 上是一张错误页。
+    if !need_spawn {
+        wait_ready(port);
+        if is_dbmind(port) {
+            eprintln!("检测到 {port} 端口已有**同版本** DBmind 实例，复用它");
+        } else {
+            eprintln!("{port} 端口上的实例已不可用（可能正在退出）→ 改为自己起一个内核");
+            let (fallback, _) = resolve_port(false);
+            port = fallback;
+            need_spawn = true;
+        }
+    }
 
     if need_spawn {
         // 库位置与 CLI 一致（默认 ~/.dbmind，可用 DBMIND_STORE 覆盖）：
@@ -348,8 +445,6 @@ fn main() {
             eprintln!("内嵌内核启动失败：{err}");
         }
         wait_ready(port);
-    } else {
-        eprintln!("检测到 {port} 端口已有 DBmind 实例，复用它");
     }
 
     let origin = format!("http://127.0.0.1:{port}");

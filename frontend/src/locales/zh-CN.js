@@ -1831,7 +1831,10 @@ export default {
   'settings.about.version': '版本 v{version}',
   'settings.about.releaseTitle': '版本说明',
   'settings.about.dirsTitle': '目录说明',
-  'settings.about.releaseVersion': 'v1.2.19',
+  // 折叠头的「当前版本」——**必须跟 rel1.version 一起改**（发版时最容易漏的就是这一行：
+  // rel1..relN 挪位了、它没挪，于是页面顶部写 v1.2.20、红框里却还是 v1.2.19）。
+  // 同步脚本 sync-release-notes.mjs 现在也会维护它（见脚本里那一步）。
+  'settings.about.releaseVersion': 'v1.2.20',
   'settings.about.verLabel': '版本 v',
   'settings.about.verMajorTip': '大版本：不兼容的重大变更（数据格式、配置、接口重做）时 +1，并归零后两段',
   'settings.about.verMinorTip': '小版本：新增功能时 +1，并归零修订号',

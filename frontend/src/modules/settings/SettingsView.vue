@@ -1165,11 +1165,14 @@ const verParts = computed(() => {
 // 文案在 locales 里按 `settings.about.relN.version` / `relN.noteM` / `relN.level` 组织。
 const releaseList = computed(() => {
   const out = []
-  for (let i = 1; i <= 10; i++) {
+  // 上限只是"防御性上界"，循环**遇到缺失键就 break** —— 所以放宽不会显示空条目，
+  // 只会让更多版本能显示出来。原先写死 10 / 12，结果是：新增版本把它往前挤时，
+  // 老版本被 10 截掉；而版本要点一旦超过 12 条（v1.2.20 就是 14 条），后两条永远不显示。
+  for (let i = 1; i <= 40; i++) {
     const version = t(`settings.about.rel${i}.version`)
     if (!version || version === `settings.about.rel${i}.version`) break
     const notes = []
-    for (let j = 1; j <= 12; j++) {
+    for (let j = 1; j <= 20; j++) {
       const line = t(`settings.about.rel${i}.note${j}`)
       if (!line || line === `settings.about.rel${i}.note${j}`) break
       notes.push(line)
