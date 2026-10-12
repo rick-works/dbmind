@@ -385,8 +385,34 @@ html[data-theme="dark"] .el-button:not(.el-button--primary):not(.el-button--succ
 .el-button--warning.is-plain,
 .el-button--danger.is-plain { filter: none; }
 .el-pagination { --el-pagination-bg-color: transparent; --el-pagination-button-color: var(--dc-text); }
-.el-pagination.is-background .btn-prev, .el-pagination.is-background .btn-next, .el-pagination.is-background .el-pager li { background-color: var(--dc-bg-card); color: var(--dc-text); border-radius: 6px; }
-.el-pagination.is-background .el-pager li.is-active { background-color: var(--dc-primary); box-shadow: 0 2px 8px var(--dc-primary-glow); }
+/* 分页器按钮：EP 的 `is-background` 底色取自 --el-fill-color-blank（默认纯白），
+   暗色主题下两头的上一页/下一页就成了白块（用户反馈）。这里必须 !important ——
+   Element 的样式在 index.css **之后**加载，同优先级下只有 !important 能压过它。
+   非当前页统一软底 + 细边框，悬停提亮，当前页仍是主色。 */
+.el-pagination.is-background .btn-prev,
+.el-pagination.is-background .btn-next,
+.el-pagination.is-background .el-pager li {
+  background-color: var(--dc-bg-soft) !important;
+  color: var(--dc-text-dim) !important;
+  border: 1px solid var(--dc-border);
+  border-radius: 6px;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+.el-pagination.is-background .btn-prev:hover:not(:disabled),
+.el-pagination.is-background .btn-next:hover:not(:disabled),
+.el-pagination.is-background .el-pager li:hover:not(.is-active) {
+  background-color: var(--dc-bg-hover) !important;
+  color: var(--dc-text) !important;
+  border-color: var(--dc-border-hover);
+}
+.el-pagination.is-background .el-pager li.is-active {
+  background-color: var(--dc-primary) !important;
+  color: #fff !important;
+  border-color: var(--dc-primary);
+  box-shadow: 0 2px 8px var(--dc-primary-glow);
+}
+.el-pagination.is-background .btn-prev:disabled,
+.el-pagination.is-background .btn-next:disabled { opacity: .45; cursor: not-allowed; }
 .el-form-item__label { color: var(--dc-text-dim); }
 .el-switch.is-checked .el-switch__core { background-color: var(--dc-primary); border-color: var(--dc-primary); }
 .el-dropdown-menu { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; border-radius: 8px !important; box-shadow: var(--dc-shadow) !important; }
