@@ -515,8 +515,10 @@ const LEN_REQUIRED = {
   mysql: ['VARCHAR', 'CHAR', 'VARBINARY', 'BINARY', 'DECIMAL', 'NUMERIC'],
   mssql: ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR', 'VARBINARY', 'BINARY', 'DECIMAL', 'NUMERIC'],
   oracle: ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'DECIMAL', 'NUMERIC', 'RAW'],
-  // DB2 / Derby 的 VARCHAR / CHAR / DECIMAL 必须带长度（无参语法错）
-  db2: ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC', 'GRAPHIC', 'VARGRAPHIC'],
+  // Derby 的 VARCHAR / CHAR / DECIMAL 必须带长度（无参语法错）。
+  // （原来的 DB2 那条**删掉了**：这里的键是 ddlStyle，而 db2 的 ddlStyle 是 `generic`
+  //   —— `LEN_REQUIRED['db2']` 永远命中不了，留着只会让人以为校验生效了。真要支持 DB2，
+  //   得先让 needsLength 认"方言 kind"而不是 ddlStyle。）
   derby: ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC'],
   // CH：Decimal 必须给 (精度, 标度)，FixedString 必须给定长；DateTime64 有缺省 3 可不填
   clickhouse: ['DECIMAL', 'FIXEDSTRING']
@@ -745,7 +747,10 @@ const buildColRows = () => {
     const lenVal = comma < 0 ? lp : lp.slice(0, comma)
     const scaleVal = comma < 0 ? '' : lp.slice(comma + 1)
     const dv = c.defaultValue
+    // MySQL 系（含 Doris）把 `DEFAULT NULL` 取回来是**字符串 "NULL"**（只有"根本没写默认值"才是真 NULL），
+    // 不认这一种，「默认值」那格就会把"默认 NULL"显示成字面量 NULL、还勾不回去。
     const dvNull = dv === null || dv === undefined
+      || (dv === 'NULL' && ['mysql', 'mariadb', 'doris'].includes(ddlStyle.value))
     return {
       _uid: 'c' + (++colUid) + '_' + i,
       _state: 'loaded',

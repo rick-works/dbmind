@@ -441,7 +441,13 @@ fn edit_capabilities(kind: &str) -> Value {
         "mysql" | "mariadb" => ("mysql", "BACKTICK", true, true, true, true, true),
         "doris" => ("doris", "BACKTICK", true, true, true, true, true),
         "postgresql" | "kingbase" => ("pg", "DOUBLE", true, true, false, false, true),
-        "oracle" | "dm" => ("oracle", "DOUBLE", true, true, false, true, true),
+        // Oracle 12c+ 的标识列能查到（user_tab_identity_cols），自增如实给 true。
+      // DM 单独拆出来给 false：达梦的标识列记在哪张系统视图上、没有实例可验证（见 dialect.rs 里
+      // column_types 的 dm 分支注释）。原先跟着 Oracle 一起 true，结果界面上给了个**永远勾不上**的
+      // 自增勾选框 —— 列已有 IDENTITY 也显示成没自增，等于骗人（用户反馈排查出来的同类问题）。
+      // 与其留一个查不出来的勾选框，不如如实不显示这一列。
+      "oracle" => ("oracle", "DOUBLE", true, true, false, true, true),
+      "dm" => ("oracle", "DOUBLE", true, true, false, false, true),
         "sqlserver" => ("mssql", "BRACKET", true, true, false, true, true),
         // SQLite 没有 ALTER COLUMN：只能加列或重建表，如实说不能改
         "sqlite" => ("sqlite", "DOUBLE", false, false, false, false, false),
