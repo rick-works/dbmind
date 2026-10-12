@@ -2499,9 +2499,12 @@ watch(visible, (v) => {
 /* 「通用 → 界面尺寸」表单：标签一律不换行。
    标签是右边距对齐到输入框的，长一点会被折成两行（「顶栏菜单文字（含图标）」就被折过），
    加宽 label-width 之外再显式 nowrap 兜住 —— 换行比溢出难看得多。 */
-/* 标签：宽度交给网格的 max-content（把 EP 注入的行内宽度压掉），文字右对齐、不折行 */
+/* 标签：宽度交给网格的 max-content（把 EP 注入的行内宽度压掉），文字右对齐、不折行。
+   `justify-self: end` 是关键 —— 网格项默认贴左，短标签（如「消息提示文字」）就会跟右边的
+   输入框隔出上百像素（用户反复反馈的"标题离框那么远"）。end 让它靠到列右端，紧挨控件。 */
 .appearance-form :deep(.el-form-item__label) {
   width: auto !important;
+  justify-self: end;
   margin: 0;
   padding-right: 0;
   text-align: right;
