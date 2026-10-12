@@ -1330,7 +1330,11 @@ const idxCreateParts = () => {
       }
       continue
     }
-    const s = createIndexSql(r)
+    // 能合并索引的方言用 `ALTER TABLE … ADD INDEX …` 形态：它**既是合法独立语句**，
+    // 又能被 mergeAlterRuns 并进同一条 ALTER —— 于是"删旧 + 建新"落在一条原子语句里
+    //（实测：`ALTER TABLE t DROP INDEX a, ADD INDEX a USING BTREE (id,name)` 成功；
+    //  其中一句非法则整条不生效，旧索引与列都保持原样）。
+    const s = mergeableIndexDialect.value ? indexAddStatement(r) : createIndexSql(r)
     if (s) parts.push(s)
   }
   return parts
@@ -1502,50 +1506,61 @@ const pendingCount = computed(() => {
   return c.added + c.modified + c.deleted + i.added + i.modified + i.deleted + (optsChanged.value ? 1 : 0)
 })
 
-/** 本表方言能不能把「删索引 / 改列 / 建索引 / 表选项」全部塞进**一条** ALTER。 */
-const canMergeAlter = computed(() => ['mysql', 'doris', 'clickhouse'].includes(ddlStyle.value))
+/* 能合并 ALTER 子句的方言：**一条 ALTER 里的多个子句是原子的**（MySQL 实测：只要有一句非法，
+   整条一句都不生效 —— 索引还是原来的、列也没被改）。这些方言都没有事务 DDL，靠"并成一条"
+   来保证"失败不破坏原结构"。
+   · mysql/mariadb/doris/clickhouse：连索引也能塞进同一条 ALTER，所以"删旧 + 建新"是一条原子语句；
+   · oracle/dm：DROP INDEX / CREATE INDEX / RENAME 不是 alter_table_clause，只能保持独立语句
+     （由"先建后删改名"保证不丢索引），但**列变更与表选项**照样并成一条。 */
+const canMergeAlter = computed(() =>
+  ['mysql', 'doris', 'clickhouse', 'oracle', 'dm'].includes(ddlStyle.value))
+
+/** 索引也用 `ALTER TABLE … ADD INDEX …` 形态的方言（这样能和删旧并进同一条 ALTER） */
+const mergeableIndexDialect = computed(() => ['mysql', 'doris'].includes(ddlStyle.value))
 
 const ALTER_PREFIX = 'ALTER TABLE ' + qt(props.table) + ' '
 
 /**
- * 把已生成的那串语句并成**一条** ALTER（只有 `ALTER TABLE 本表 …` 形状的子句能并）。
+ * 把语句串按「能并的就并」重排：连续的 `ALTER TABLE 本表 …` 片段合成**一条** ALTER，
+ * 其余语句（CREATE INDEX / DROP INDEX / RENAME …，以及注释行）**保持原位、保持独立**。
  *
- * 为什么值得并：MySQL/InnoDB 的 DDL **没有事务**（每条 ALTER 结束就隐式提交），逐条执行时
- * 中间那条失败，前面已经删掉的索引/列就再也回不来了 —— 用户实测：「索引增加一个字段，
- * 因为先删除，执行报错后原来的索引也直接没了」。
- * 而**一条 ALTER 里的多个子句是原子的**：实测
- * `ALTER TABLE t MODIFY COLUMN …, DROP INDEX a, ADD INDEX a (id, name)` 失败时整条一条都不生效 —
- * 索引还是原来的、列也没被改掉（T7）。
+ * 为什么并：这些方言的 DDL 没有事务（MySQL/Oracle/Doris/ClickHouse 都会隐式提交），逐条执行时
+ * 中间那条失败，前面已经删掉的东西就再也回不来 —— 用户实测：「索引增加一个字段，因为先删除，
+ * 执行报错后原来的索引也直接没了」。并成一条就没有中间态。
  *
- * 任何一段不是这个形状（例如 MySQL 删自增列主键时要分步铺垫、Doris 那条"改不了"的注释行）
- * 就返回 null，调用方退回逐条执行 —— 那种情况本来就不是「删了再建」，不会丢结构。
+ * 为什么不"有一段不能并就整批退回逐条"：Oracle/DM 的 DROP INDEX 天生不是 ALTER 形状，
+ * 整批退回等于让它们的列变更又变成非原子。这里只把**那一段**留在外面，其余照并。
  */
-const mergedAlterStatement = () => {
-  const clauses = []
-  for (const stmt of [...idxDropParts(), ...colParts(), ...idxCreateParts(), ...optParts()]) {
+const mergeAlterRuns = (parts) => {
+  const out = []
+  let run = []
+  const flush = () => {
+    if (run.length) out.push(ALTER_PREFIX.trimEnd() + ' ' + run.join(', '))
+    run = []
+  }
+  for (const stmt of parts) {
     for (const piece of String(stmt).split(';\n')) {
       const one = piece.trim()
-      if (!one || one.startsWith('--')) return null
-      if (!one.startsWith(ALTER_PREFIX)) return null
-      clauses.push(one.slice(ALTER_PREFIX.length))
+      if (!one) continue
+      // 注释行（例如 Doris 那条"分桶列改不了"）：独立保留，执行端会忽略
+      if (one.startsWith('--')) { flush(); out.push(one); continue }
+      if (!one.startsWith(ALTER_PREFIX)) { flush(); out.push(one); continue }
+      const clause = one.slice(ALTER_PREFIX.length)
+      // Oracle/DM：RENAME COLUMN 是独立形式，不能与其它 alter_table_clause 并列
+      if ((ddlStyle.value === 'oracle' || ddlStyle.value === 'dm') && /^RENAME\s/i.test(clause)) {
+        flush(); out.push(one); continue
+      }
+      run.push(clause)
     }
   }
-  return clauses.length ? [ALTER_PREFIX.trimEnd() + ' ' + clauses.join(', ')] : []
+  flush()
+  return out
 }
 
 // 完整变更脚本：先清理索引 → 字段变更 → 重建/新增索引 → 表选项
 const scriptParts = computed(() => {
-  // 能合并的方言：并成一条（原子；失败不破坏原结构）
-  if (canMergeAlter.value) {
-    const merged = mergedAlterStatement()
-    if (merged) return merged
-  }
-  return [
-    ...idxDropParts(),
-    ...colParts(),
-    ...idxCreateParts(),
-    ...optParts()
-  ]
+  const parts = [...idxDropParts(), ...colParts(), ...idxCreateParts(), ...optParts()]
+  return canMergeAlter.value ? mergeAlterRuns(parts) : parts
 })
 /** SQL 预览是否收起（预览已移到编辑区下方，可折叠；默认展开） */
 const sqlCollapsed = ref(false)
@@ -1718,6 +1733,22 @@ const idxRowClass = ({ row }) => {
   if (row._state === 'new') return 'row-is-new'
   if (row._state === 'loaded' && idxChanged(row)) return 'row-is-modified'
   return ''
+}
+
+/**
+ * 合并形态的建索引：`ALTER TABLE t ADD [UNIQUE][FULLTEXT|SPATIAL ]INDEX name [USING X] (cols)`。
+ * 实测（MySQL）：普通 / UNIQUE / 带 USING / 不带 USING 都能作为一条 ALTER 的子句，
+ * 也能作为独立语句执行 —— 所以它既能被合并，单独发也不会语法错。
+ */
+const indexAddStatement = (f) => {
+  const cols = (f.columns || []).map(x => qt(x)).join(', ')
+  const unique = f.unique ? 'UNIQUE ' : ''
+  const ft = f.indexType === 'FULLTEXT' ? 'FULLTEXT ' : (f.indexType === 'SPATIAL' ? 'SPATIAL ' : '')
+  const using = (f.indexType === 'BTREE' || f.indexType === 'HASH') ? ` USING ${f.indexType}` : ''
+  // 列清单在前、USING 在后：这是 **Doris** 的写法（`ADD INDEX name (cols) USING BTREE`），
+  // 实测 MySQL 也接受（`ADD [UNIQUE|FULLTEXT] INDEX name (cols) [USING X]` 都通过）——
+  // 一份语句同时喂两家，不必按方言分叉。
+  return `ALTER TABLE ${qt(props.table)} ADD ${unique}${ft}INDEX ${qt(f.name)} (${cols})${using}`
 }
 
 const createIndexSql = (f) => {
