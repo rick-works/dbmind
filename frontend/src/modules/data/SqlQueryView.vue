@@ -2827,7 +2827,13 @@ let editorInstance = null
 // ===== 语句面包屑 + 报错语句标红（多段脚本的定位能力）=====
 // 每条语句的原文区间（splitSqlStatementRanges 给字符偏移，转 Monaco 位置用）
 const stmtBreadcrumbs = computed(() => {
-  const text = sql.value || ''
+  // 切句与编号一律以**编辑器模型**的文本为准（拿不到才退回 sql.value）。
+  // 两者不同源时（典型：你刚在编辑器里把第一条注释掉，而 sql 还没同步回来），
+  // 顶部会显示旧条数（如"共 7 条"）而结果却有 8 个 —— 编号和结果就错位了，
+  // 于是点「结果1」看起来"跳错了"（其实跳的是第一条**可执行**语句）。
+  const ed = editorInstance
+  const model = ed && ed.getModel ? ed.getModel() : null
+  const text = ((model && model.getValue) ? model.getValue() : '') || sql.value || ''
   const ranges = splitSqlStatementRanges(text)
   if (ranges.length <= 1) return []
   return ranges.map((r, i) => ({
