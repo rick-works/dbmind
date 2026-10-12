@@ -693,6 +693,28 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.17 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.17</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-12</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>表结构编辑器</b>：新建表与编辑表都只显示该数据源真正适用的列；Doris 的字段表可以直接勾「分桶列」，与基本信息里的分布列是同一份数据（勾哪边另一边跟着变，建表语句也是同一份）；ClickHouse 补上「分区键」列，并把一直藏着的主键列显示出来 —— 每个数据源里列能参与的表级设置都能在字段表里直接勾</li>
+            <li><b>编辑表结构</b>：修好「排序键 / 分区键」的回显（此前无论表里怎么设，字段列表里永远显示「—」）；新增只读的「分桶列」「分区键」两列；是/否 一律只用勾选框（可为空、主键、排序键、分桶列、分区键）—— 全数据源一个样子，不再出现「是」标签与破折号</li>
+            <li><b>新建表与数据源修复</b>：字段「注释」支持双击或点按钮打开多行编辑框；达梦与 H2 的列注释此前读不到（注释格永远是空的）、达梦不再显示一个永远勾不上的自增勾选框、MySQL 的 DEFAULT NULL 正确回显成「默认 NULL」；顺带去掉字段表头里夹带的 SQL 英文与在线更新的「打开所在文件夹」按钮</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.17" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.17" target="_blank" rel="noopener">下载 v1.2.17</a>
+          </div>
+        </div>
+      </article>
+
       <!-- v1.2.16 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +722,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.16</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-11</span>
           </div>
           <ul class="rel-notes">
