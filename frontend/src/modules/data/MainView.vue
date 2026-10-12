@@ -2387,6 +2387,24 @@ window.addEventListener('scroll', closeTreeCtxMenu, true)
 // 自定义目录 = 所有 connection.group 中非预置、非空的值 ∪ 后端「纯目录」
 // （还没有任何连接的分组，唯一真相源在后端 app_settings 的 ui.folders，见 utils/folders.js）
 const folderRefresh = ref(0)
+        // 文件型连接没有 host/port，返回空串，卡片里显示「—」。
+        const CONN_SCHEME = {
+        MYSQL: 'mysql', MARIADB: 'mysql', DORIS: 'mysql',
+        POSTGRESQL: 'postgres', KINGBASE: 'postgres',
+        CLICKHOUSE: 'clickhouse', SQLSERVER: 'sqlserver', ORACLE: 'oracle',
+        REDIS: 'redis', MONGODB: 'mongodb', DB2: 'db2', DM: 'dm',
+        ELASTICSEARCH: 'http'
+        }
+        const FILE_TYPES = ['SQLITE', 'H2', 'DERBY']
+        const connUrl = (c) => {
+        if (!c || FILE_TYPES.includes(c.type) || !c.host) return ''
+        const scheme = CONN_SCHEME[c.type] || String(c.type || '').toLowerCase()
+        const auth = c.username ? c.username + '@' : ''
+        const port = c.port ? ':' + c.port : ''
+        return scheme + '://' + auth + c.host + port
+        }
+        const connUrlOf = (data) => connUrl({ type: data.connType, username: data.username, host: data.host, port: data.port })
+
 const customFolders = computed(() => {
   // eslint-disable-next-line no-unused-expressions
   folderRefresh.value
@@ -3813,23 +3831,6 @@ const buildTree = async () => {
         }))
 
         // 由连接对象拼出 `scheme://user@host:port`（**绝不拼口令** —— 后端本来也不回传 password）。
-        // 文件型连接没有 host/port，返回空串，卡片里显示「—」。
-        const CONN_SCHEME = {
-        MYSQL: 'mysql', MARIADB: 'mysql', DORIS: 'mysql',
-        POSTGRESQL: 'postgres', KINGBASE: 'postgres',
-        CLICKHOUSE: 'clickhouse', SQLSERVER: 'sqlserver', ORACLE: 'oracle',
-        REDIS: 'redis', MONGODB: 'mongodb', DB2: 'db2', DM: 'dm',
-        ELASTICSEARCH: 'http'
-        }
-        const FILE_TYPES = ['SQLITE', 'H2', 'DERBY']
-        const connUrl = (c) => {
-        if (!c || FILE_TYPES.includes(c.type) || !c.host) return ''
-        const scheme = CONN_SCHEME[c.type] || String(c.type || '').toLowerCase()
-        const auth = c.username ? c.username + '@' : ''
-        const port = c.port ? ':' + c.port : ''
-        return scheme + '://' + auth + c.host + port
-        }
-        const connUrlOf = (data) => connUrl({ type: data.connType, username: data.username, host: data.host, port: data.port })
       // 带路径的目录 → 嵌套进父节点；顶层目录/预置环境/未分组直接挂根。
       // 全部走 ensureFolderNode 统一索引 —— 否则「父目录先被子目录递归创建、
       // 轮到自己时又新建一份」会出现重复的顶层节点（真机踩过）。
