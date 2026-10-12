@@ -854,6 +854,12 @@ emit('sql', genSql())
 .field-table thead tr:last-child th:first-child,
 .field-table tbody td:first-child { text-align: center; }
 .field-table tbody td:first-child { padding-left: 4px; padding-right: 4px; }
+/* ===== 表头文字与内容格里的文字对齐（与「编辑表结构」同一处修正） =====
+   表头是纯文字、内容格里是控件（输入框 / 下拉），控件自带左内边距（输入框 7px、下拉 8px），
+   表头只有 9px → 差 7~8px，整列看着是歪的（用户反馈）。这里控件统一到 7px、表头补 7px 缩进。
+   本页的控件是"隐形"的（透明底无描边，整张表读起来是一列列文字），所以这 7px 更显眼。 */
+.field-table :deep(.el-select__wrapper) { padding-left: 7px; }
+.field-table thead tr:last-child th:not(.c-center):not(:first-child) { padding-left: 16px; }
 
 /* 行内控件高度 = --ctl-h（= 设置的行高 − 上下各 1px 内边距）：
    行高不是 padding 决定的，是它们决定的 —— 不跟着算就是个"行高天花板" */

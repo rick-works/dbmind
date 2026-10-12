@@ -2370,6 +2370,16 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 /* 主键 / 可空 / 自增等开关列：表头与内容居中，其余列左对齐 */
 .field-table th.c-center,
 .field-table td.c-center { text-align: center; }
+/* ===== 表头文字与内容格里的文字对齐 =====
+   表头是纯文字、内容格里是控件（输入框 / 下拉），而控件**自带**左内边距 ——
+   Element 的 .el-input__wrapper 留 7px、.el-select__wrapper 留 8px，表头只有 9px，
+   于是"表头文字"比"控件里的文字"往左差 7~8px，整列看着就是歪的（用户反馈：表头没有输入框、
+   内容有输入框，所以对不齐）。实测数据：字段名 差 7.0px、类型 差 8.0px、长度/精度/默认值/注释 各 7.0px。
+   做两件事：① 两个控件的左内边距统一到 7px（下拉原本 8px，那 1px 会与输入框错开）；
+   ② 表头补上同样的 7px 缩进（9 + 7 = 16px）。
+   只对左对齐的列生效：居中的那几列（可空 / 主键 / 排序键 / 自增 / 操作）加了缩进会把居中推歪。 */
+.field-table :deep(.el-select__wrapper) { padding-left: 7px; }
+.field-table thead tr:last-child th:not(.c-center):not(:first-child) { padding-left: 16px; }
 /* 勾选框自带 margin-right，居中后会偏 —— 去掉才真正居中；标签文本这里不需要 */
 /* height: 32px → --ctl-h：**这是行高的真正来源**（Element 的勾选框默认 32px 高，
    比同一行里的输入框还高 8px）。跟输入框一样取 --ctl-h，两者才齐平。 */
