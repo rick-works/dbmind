@@ -732,6 +732,83 @@ emit('sql', genSql())
    一起搬过来）。**改这里时请对照 TableDetailView.vue 的样式块同步改。**
    ====================================================================== */
 
+/* ===== 索引页签的 el-table：与编辑表结构逐条对齐 =====
+   （对应规则见 modules/data/TableDetailView.vue 的「索引表格主题」段 —— 改那边请同步改这里。）
+   上面那套（.table-tabs :deep(.el-table …)）是本组件早先的薄版本：只压了行高与内边距，
+   缺了表头底色 / 列竖线 / 最后一列居中 / 控件隐形等一大半 —— 于是同一个「索引」页签，
+   新建表和编辑表结构看起来是两张不同的表（用户反馈：改成和编辑表结构一样的）。
+   注意：这套一律挂在 .idx-tab 下 —— 它只包住「索引」这个页签，别的页签的控件不受影响。 */
+.idx-tab :deep(.el-table) {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  /* 表头与字段表格同色（--dc-bg-code 比字段表浅一档，两页签并排看就是两张表） */
+  --el-table-header-bg-color: var(--dc-bg-soft);
+  --el-table-header-text-color: var(--dc-text-strong);
+  --el-table-border-color: var(--dc-border-soft);
+  --el-table-row-hover-bg-color: var(--dc-primary-wash);
+  --el-table-border: 1px solid var(--dc-border-soft);
+}
+.idx-tab :deep(.el-table__inner-wrapper::before) { display: none; }
+.idx-tab :deep(.el-table th.el-table__cell) {
+  background: var(--dc-bg-soft) !important;
+  color: var(--dc-text-mid) !important;
+  border-bottom: 1px solid var(--dc-border) !important;
+  /* 列竖线：el-table 默认**没有**列分隔线，和字段表并排看就是两张不同的表 */
+  border-right: 1px solid var(--dc-border) !important;
+  /* 内边距挪到 .cell 上（Element 的 td 自带 4px 0，会把行撑高） */
+  padding: 0 !important;
+}
+.idx-tab :deep(.el-table th.el-table__cell > .cell),
+.idx-tab :deep(.el-table td.el-table__cell > .cell) { text-align: left; }
+/* 尺寸与字段表对齐：表头 cell 上下 2px、数据 cell 上下 1px */
+.idx-tab :deep(.el-table th.el-table__cell > .cell) { padding: 2px 9px !important; }
+.idx-tab :deep(.el-table td.el-table__cell > .cell) { padding: 1px 9px !important; }
+.idx-tab :deep(.el-table td.el-table__cell) {
+  background: transparent !important;
+  border-bottom: 1px solid var(--dc-border) !important;
+  border-right: 1px solid var(--dc-border) !important;
+  padding: 0 !important;
+}
+/* 最后一列不画右边框（否则与外框并成双线） */
+.idx-tab :deep(.el-table th.el-table__cell:last-child),
+.idx-tab :deep(.el-table td.el-table__cell:last-child) { border-right: none !important; }
+/* 操作列：表头与内容都**居中**（原来是跟着全局左对齐走的）。
+   .idx-ops 是 inline-flex，所以父级 .cell 的 text-align: center 就能把它整体居中。 */
+.idx-tab :deep(.el-table th.el-table__cell:last-child > .cell),
+.idx-tab :deep(.el-table td.el-table__cell:last-child > .cell) { text-align: center !important; }
+/* 表头文字与格子里控件内的文字对齐：控件**自带**左内边距（输入框 6px、下拉 8px），
+   表头只有 9px → 整列看着是歪的。把控件及其内层的左内边距压到 0，两边都从 cell 的 9px 起。 */
+.idx-tab :deep(.el-table td.el-table__cell > .cell > .el-input),
+.idx-tab :deep(.el-table td.el-table__cell > .cell > .el-select) { padding-left: 0 !important; }
+.idx-tab :deep(.el-table td.el-table__cell > .cell .el-input__wrapper),
+.idx-tab :deep(.el-table td.el-table__cell > .cell .el-select__wrapper) { padding-left: 0 !important; }
+.idx-ops { display: inline-flex; align-items: center; gap: 2px; }
+.idx-tab :deep(.el-table .el-input__wrapper) { padding: 0 6px; }
+.idx-tab :deep(.el-table .el-input__inner) { font-size: 13px; height: var(--ctl-h, 20px); }
+/* 行高由单元格内容撑出来，里面的控件也得跟 --ctl-h 走 —— 否则字段表跟着设置变、
+   索引表不变，两个页签的行高会差一截 */
+.idx-tab :deep(.el-table .el-input__wrapper),
+.idx-tab :deep(.el-table .el-select__wrapper) { min-height: var(--ctl-h, 20px); }
+.idx-tab :deep(.el-table .el-button--small) { height: var(--ctl-h, 20px); }
+/* 控件默认**隐形**（透明底 + 无描边），整张表读起来是一列列文字；悬停该行才浮出、聚焦给主色描边。
+   少了这段，新建表的索引格里全是常驻输入框，和编辑页一眼就能看出不是一套。 */
+.idx-tab :deep(.el-input__wrapper),
+.idx-tab :deep(.el-select__wrapper) {
+  background-color: transparent !important;
+  box-shadow: none !important;
+  transition: background .15s ease, box-shadow .15s ease;
+}
+.idx-tab :deep(.el-table__row:hover .el-input__wrapper),
+.idx-tab :deep(.el-table__row:hover .el-select__wrapper) {
+  background-color: var(--dc-bg-hover) !important;
+  box-shadow: 0 0 0 1px var(--dc-border) inset !important;
+}
+.idx-tab :deep(.el-input__wrapper.is-focus),
+.idx-tab :deep(.el-select__wrapper.is-focused) {
+  background-color: var(--dc-bg-hover) !important;
+  box-shadow: 0 0 0 1px var(--dc-primary) inset !important;
+}
+
 /* 页签条 + 工具条 + 表格 = **同一张卡**：整块只画一层边框/圆角/卡片底，
    页签条相当于这张卡的"标题行"，表格与工具栏不再各自套边框。 */
 .table-tabs {
