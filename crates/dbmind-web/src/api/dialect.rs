@@ -1246,20 +1246,40 @@ impl Dialect {
                  where o.type = 'U' and i.name is not null order by o.name, i.name"
                     .to_string(),
             ),
+            // Oracle / DM：原来只查 user_indexes 的 name/table，**不查列** —— 所以
+            // 「包含字段」恒为空。列与列序在 user_ind_columns 里；顺带把 uniqueness 归一成
+            // `isUnique`（0/1，前端归一化认这个键）、index_type 作为「类型」列。
             "oracle" | "dm" => Meta::Sql(
-                "select index_name as \"name\", table_name as \"table\" from user_indexes \
-                 order by table_name, index_name"
+                "select i.index_name as \"name\", i.table_name as \"table\", \
+                 case when i.uniqueness = 'UNIQUE' then 1 else 0 end as \"isUnique\", \
+                 i.index_type as \"type\", \
+                 listagg(c.column_name, ',') within group (order by c.column_position) as \"columns\" \
+                 from user_indexes i \
+                 join user_ind_columns c on c.index_name = i.index_name and c.table_name = i.table_name \
+                 group by i.index_name, i.table_name, i.uniqueness, i.index_type \
+                 order by i.table_name, i.index_name"
                     .to_string(),
             ),
+            // DB2：同理，列在 syscat.indexcoluse（colseq 是列序）
             "db2" => Meta::Sql(
-                "select indexname as \"name\", tabname as \"table\" from syscat.indexes \
-                 where tabschema = current schema order by tabname, indexname"
+                "select i.indexname as \"name\", i.tabname as \"table\", \
+                 case when i.uniquerule = 'U' then 1 else 0 end as \"isUnique\", \
+                 listagg(c.colname, ',') within group (order by c.colseq) as \"columns\" \
+                 from syscat.indexes i \
+                 join syscat.indexcoluse c on c.indschema = i.indschema and c.indname = i.indname \
+                 where i.tabschema = current schema \
+                 group by i.indexname, i.tabname, i.uniquerule \
+                 order by i.tabname, i.indexname"
                     .to_string(),
             ),
             // Derby **没有 syscat schema**（那是 DB2 的）：老写法在这里报
             // `Table/View 'SYSCAT.INDEXES' does not exist`（实测）。
             // 索引在 sys.sysconglomerates（isindex 标记），表名要连 sys.systables，
             // 且必须按 schema 过滤 —— 不然会把系统索引（SYSCONGLOMERATES_INDEX1 之类）全列出来。
+            // 列：「包含字段」在 Derby 上**取不到** —— sys 目录里索引列只在
+            // SYS.SYSCONGLOMERATES.descriptor 这个二进制描述符里，没有可查询的列。
+            // 如实空着，别为了"看着有东西"去猜一个必然报错的查询（一旦报错，整个索引页签
+            // 会 500，反而比空更难解释）。界面上那一列会是"请选择"，不会再假装有值。
             "derby" => Meta::Sql(
                 "select c.conglomeratename as \"name\", t.tablename as \"table\" \
                  from sys.sysconglomerates c \
@@ -1269,13 +1289,30 @@ impl Dialect {
                  order by t.tablename, c.conglomeratename"
                     .to_string(),
             ),
+            // H2：列在 information_schema.index_columns；H2 的 GROUP_CONCAT 默认分隔符就是逗号。
+            // isUnique 只能从索引类型名上认（H2 的 information_schema.indexes 没有唯一性列）——
+            // 尽力而为，认不出就当非唯一，不猜别的。
             "h2" => Meta::Sql(
-                "select index_name as \"name\", table_name as \"table\" from information_schema.indexes \
-                 order by table_name, index_name"
+                "select i.index_name as \"name\", i.table_name as \"table\", \
+                 case when i.index_type_name like '%UNIQUE%' then 1 else 0 end as \"isUnique\", \
+                 group_concat(c.column_name order by c.ordinal_position separator ',') as \"columns\" \
+                 from information_schema.indexes i \
+                 left join information_schema.index_columns c \
+                   on c.index_name = i.index_name and c.table_name = i.table_name \
+                 group by i.index_name, i.table_name, i.index_type_name \
+                 order by i.table_name, i.index_name"
                     .to_string(),
             ),
+            // ClickHouse：原来只取 name/table/type，**不取列** —— 于是「编辑表结构 → 索引」
+            // 里的「包含字段」永远是空的（用户反馈"字段没显示出来"）。`expr` 就是跳数索引的
+            // 列/表达式，接上 `columns` 就行（实测 `expr as "columns"` 返回 `event_time`）。
+            //
+            // **不要**加 `where database = currentDatabase()`：原句不带 WHERE，一次列出所有库
+            // （界面自己按表名过滤）；加了之后，当前会话库不是 system 时就一行都查不到
+            //（实测在 default 库下返回 0 行，等于把功能弄丢）。
             "clickhouse" => Meta::Sql(
-                "select name, table, type from system.data_skipping_indices order by table, name"
+                "select name, table, type, expr as \"columns\" from system.data_skipping_indices \
+                 order by table, name"
                     .to_string(),
             ),
             _ => Meta::Unwritten,
@@ -1480,6 +1517,19 @@ impl Dialect {
             ("oracle" | "dm", "trigger") => Meta::Sql(format!(
                 "select dbms_metadata.get_ddl('TRIGGER', upper({name_literal})) as definition from dual"
             )),
+            // 以下三组是**该方言根本没有这类对象**，不是"没实现"：如实返回 `Absent`。
+            // 这个区别很重要（见 export.rs 导出循环里的注释）：
+            //   `Absent`    → 该方言没有这种东西，界面不摆"查看定义/编辑"，导出**静默跳过**；
+            //   `Unwritten` → 功能还没写，导出会逐个对象提示"定义查询尚未实现，未导出"。
+            // PG / Kingbase / Oracle / DM / DB2 / H2 / Derby 都没有 MySQL 那种事件调度器；
+            // ClickHouse / Doris 没有存储过程/函数/触发器/事件；
+            // Derby 的例程没有可查目录（下面 Derby 分支的注释里也说了）。
+            ("postgresql" | "kingbase" | "oracle" | "dm" | "db2" | "h2" | "derby", "event") => {
+                Meta::Absent
+            }
+            ("clickhouse" | "doris", "procedure" | "function" | "trigger" | "event") => Meta::Absent,
+            ("derby", "procedure" | "function") => Meta::Absent,
+            ("sqlserver", "event") => Meta::Absent,
             ("sqlserver", _) => Meta::Sql(format!(
                 "select object_definition(object_id({name_literal})) as definition"
             )),
@@ -1674,9 +1724,10 @@ impl Dialect {
     /// 于是目标表建出来是「结构对、注释全空」，还得人工补一遍。
     /// 注释由调用方按**源表**取好传进来（`column_comments` 的键是列名小写）。
     ///
-    /// 只有能**内联**注释的方言（MySQL / MariaDB / Doris / ClickHouse）会写进语句；
-    /// PG / Oracle / SQL Server 的注释必须另发 `comment on …`，本轮不写（不猜语法），
-    /// SQLite / Derby 没有注释这个概念，如实跳过。
+    /// 只有能**内联**注释的方言（MySQL / MariaDB / Doris / ClickHouse）会写进建表语句；
+    /// PG / Oracle / SQL Server 的注释必须**另发**语句 —— 那一步在
+    /// [`Dialect::post_create_comments`]（建表之后由 sync.rs 执行 `comment on …` /
+    /// `sp_addextendedproperty`）；SQLite / Derby 没有注释这个概念，如实跳过。
     pub fn create_table_with_comments(
         &self,
         table: &str,
@@ -1763,7 +1814,7 @@ impl Dialect {
                 }
             }
             // 字段注释：**内联**进列定义（只有这几个方言收这种写法）。
-            // PG / Oracle / SQL Server 必须另发 `comment on column …`，不能内联；
+            // PG / Oracle / SQL Server 由 `post_create_comments` 另发 `comment on column …`；
             // SQLite / Derby 没有注释概念 —— 都留空，宁可没注释也不生成语法错的语句。
             if matches!(self.kind.key(), "mysql" | "mariadb" | "doris" | "clickhouse") {
                 if let Some(comment) = column_comments.get(&column.name.to_ascii_lowercase()) {

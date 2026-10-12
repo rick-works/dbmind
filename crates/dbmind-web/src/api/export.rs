@@ -40,7 +40,7 @@ use serde_json::{json, Map, Value};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-use crate::api::dialect::Dialect;
+use crate::api::dialect::{Dialect, Meta};
 use crate::api::error::{XError, XResult};
 use crate::api::meta::{rows_of, run_sql_in};
 use crate::api::shape;
@@ -1353,6 +1353,12 @@ async fn export_dump(
             ("event", "事件", &req.events),
         ] {
             for name in names {
+                // `Absent` = 该方言**没有**这类对象（PG 没有事件、ClickHouse 没有例程…）：
+                // 静默跳过。以前这里只看 `sql()` 是否为 None，于是"没这类对象"与"还没实现"
+                // 被当成同一件事，每个对象都打一句"定义查询尚未实现，未导出" —— 看着像漏导了东西。
+                if matches!(dialect.object_source(kind, name), Meta::Absent) {
+                    continue;
+                }
                 match dialect.object_source(kind, name).sql() {
                     Some(sql) => {
                         let result = run_sql_in(state, id, &req.database, sql, 5).await?;

@@ -487,18 +487,25 @@ const onTableScroll = () => {
   const tr = el.querySelector('tbody tr:not(.vpad)')
   if (tr && tr.offsetHeight) rowH.value = tr.offsetHeight
 }
+/* 注意：`cols` 是 **reactive 数组**（`form.columns`，见上面 418 行），**不是 ref** ——
+   这里曾经写成 `cols.value.length`，于是 `cols.value` 恒为 undefined，一进「字段定义」页签
+   就抛 `TypeError: Cannot read properties of undefined (reading 'length')`
+   （用户截图：控制台整屏刷这个错，且每个响应式 tick 重抛一次）。
+
+   别为了省事把 `cols` 改成 ref：全文件几十处按**数组**用它（filter/slice/splice/…），
+   改 ref 会连锁崩。窗口化只是"少渲染几行"，用不着动数据结构。 */
 const winStart = computed(() => {
-  if (cols.value.length <= WINDOW_MIN) return 0
+  if (cols.length <= WINDOW_MIN) return 0
   return Math.max(0, Math.floor(scrollTop.value / Math.max(1, rowH.value)) - ROW_BUFFER)
 })
 const windowedCols = computed(() => {
-  if (cols.value.length <= WINDOW_MIN) return cols.value
-  const end = Math.min(cols.value.length, Math.ceil((scrollTop.value + viewH.value) / Math.max(1, rowH.value)) + ROW_BUFFER)
-  return cols.value.slice(winStart.value, end)
+  if (cols.length <= WINDOW_MIN) return cols
+  const end = Math.min(cols.length, Math.ceil((scrollTop.value + viewH.value) / Math.max(1, rowH.value)) + ROW_BUFFER)
+  return cols.slice(winStart.value, end)
 })
 const winEnd = computed(() => winStart.value + windowedCols.value.length)
 const padTop = computed(() => winStart.value * rowH.value)
-const padBottom = computed(() => Math.max(0, (cols.value.length - winEnd.value) * rowH.value))
+const padBottom = computed(() => Math.max(0, (cols.length - winEnd.value) * rowH.value))
 /* 类型下拉是每行最重的组件，平时只用来"看"：平时渲染成纯文本，点一下才换成下拉并自动展开 */
 const activeType = ref('')
 
