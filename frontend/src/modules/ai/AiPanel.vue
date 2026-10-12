@@ -1609,7 +1609,7 @@ onMounted(() => { scrollBottom(); loadConnList(); warmCtx(); loadKbMeta() })
   box-shadow: 0 6px 16px var(--dc-primary-glow);
 }
 .welcome-hero-tx { min-width: 0; }
-.welcome-title { font-size: 16px; font-weight: 700; color: var(--dc-text); }
+.welcome-title { font-size: 14px; font-weight: 700; color: var(--dc-text); }
 .welcome-sub { margin-top: 2px; font-size: 13px; color: var(--dc-text-weak); line-height: 1.55; }
 /* 功能介绍：3 条并排（图标 + 名称 + 一行说明），说清它和普通聊天的区别 */
 .welcome-intro { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
