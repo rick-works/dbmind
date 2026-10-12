@@ -1,6 +1,22 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
-  "v1.2.19": [
+  "v1.2.20": [
+      "Edit Structure now finds columns in a non-default schema: for PostgreSQL / SQL Server / KingbaseES the tree addresses objects as database.schema, but the columns path only ever looked at the connection's default schema (public on PG, dbo on SQL Server) - so a table in another schema listed fine yet showed no fields. The whole chain (columns, DDL, indexes, comments, column-type enrichment) now uses the schema you clicked",
+      "A missing column list is no longer reported as silence: on Doris it used to come back as an empty list, which reads as a broken table; it now states the reason (wrong database, table does not exist, or no read access to information_schema)",
+      "The object tree no longer stutters: opening a database with thousands of tables renders the first 200 rows and grows the rest in the background (the list stays flat - no Show more row), and hovering a connection no longer re-renders the whole tree",
+      "Data transfer: fixed Row size too large (8126) when creating tables on MySQL targets (two over-wide type mappings, explicit DYNAMIC row format, and the error now reports the column sizes), plus faster writes through more parallelism and batched transactions",
+      "Data transfer - Select objects: the type chips became filters - clicking Tables shows only tables, clicking Views shows only views, and clicking again returns to all; switching types no longer drops the objects you already ticked",
+      "Data compare / Data transfer: fixed the database not being preselected; the database context menu gained Data compare and Data transfer and preselects the database you right-clicked",
+      "Column type spellings are unified: the same type no longer looks different in the picker and in the grid (MySQL returns VARCHAR, Doris STRING, PostgreSQL varchar ...) - the echo now follows each source's own metadata",
+      "New table / Edit Structure: fixed an error when opening the Fields tab, fixed deleting the wrong row once a table has more than 80 columns, and the type cell font now matches its neighbours",
+      "Tree context menus close when you click a menu item or anywhere else (they used to stay open and block the view)",
+      "SQL editor: clicking a result tab selects the matching statement (same behaviour as the statement tabs on top); the statement breadcrumb and locating now use the editor's own text, fixing wrong numbering after commenting out the first statement and jumping to the wrong statement",
+      "Connection hover card: no longer covers the list or blocks clicks, vertically centred, with a small arrow pointing at the connection and a font size matching the rest of the app",
+      "Folders can be pinned: Pin folder in the folder context menu, and the order is persisted",
+      "Settings: more UI-size options (home cards, dialog title and body, data grid, toasts, tab bar text), and the SQL formatting and UI size pages were re-laid out",
+      "A batch of stability fixes: the settings dialog aborted the rest of its loading because of a function that no longer exists (driver list, notifications, knowledge base and shortcuts showed up empty), missing and duplicated dictionary keys, timers stacking up after the view remounts, columns of one table leaking into another while switching tabs, row state mixing up in editable lists, and background reader coroutines no longer report success when they die"
+    ],
+    "v1.2.19": [
       "The table preview row total is fixed - ClickHouse returns count(*) as a floating point number, which we could not read, so the footer showed only 200 rows and paging was stuck; it now shows the real total and pages properly, and all data sources were checked",
       "Data governance - capacity statistics read the row count the same tolerant way, so on ClickHouse it no longer shows 0 or unknown",
       "Settings - General - UI size gains a Tab bar text option: the font size of the workspace tab strip (for example the script tab) now follows it, taking effect immediately without a restart"
