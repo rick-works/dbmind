@@ -209,9 +209,6 @@
                 <el-icon v-else-if="data.kind === 'user'" class="tree-icon" color="#a855f7"><User /></el-icon>
                 <el-icon v-else-if="data.kind === 'placeholder' && data.label === $t('tree.loading')" class="tree-icon placeholder-spin" color="#4f8cff"><Loading /></el-icon>
                 <el-icon v-else-if="data.kind === 'placeholder'" class="tree-icon" color="#555a68"><DocumentRemove /></el-icon>
-                <!-- 「显示更多」：大树分页的一页边界（一个分类超过 TREE_PAGE 个对象时出现，
-                     见 treeNodes.js）。它自己也是懒加载父节点，展开就给下一批。 -->
-                <el-icon v-else-if="data.kind === 'more'" class="tree-icon" color="#7a8194"><ArrowDown /></el-icon>
                 <el-icon v-else class="tree-icon" color="#f5b34d"><Coin /></el-icon>
                 <!-- 「加载中…」占位只出转圈图标、不出文字；但**说明性**占位（如"未取到库清单"）
                      必须把文字显示出来 —— 否则用户只看到一个没有任何解释的图标。 -->
@@ -1148,7 +1145,7 @@ import { Sunny, Moon, Clock, Reading, Delete as ElDelete } from '@element-plus/i
 import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 import { locale, setLocale } from '../../utils/i18n'
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
-import { buildCatChildren, buildObjectCategories, isFunctionRoutine, pagedCatChildren } from './treeNodes'
+import { buildCatChildren, buildObjectCategories, isFunctionRoutine, TREE_FIRST_PAGE } from './treeNodes'
 import { t, tMsg } from '../../utils/i18n'
 import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
@@ -4011,13 +4008,43 @@ const dbChildNodes = (connId, connType, dbList, catalog) => {
   * 所以每次给子节点都顺手把标记改回来：有子节点 = 不是叶子。
   */
   const finishLazyChildren = (data, children) => {
-  data.children = children
-  const node = treeRef.value?.getNode(data.id)
-  if (node) {
-    node.isLeaf = children.length === 0
-    node.loaded = true
+    data.children = children
+    const node = treeRef.value?.getNode(data.id)
+    if (node) {
+      node.isLeaf = children.length === 0
+      node.loaded = true
+    }
+    return children
   }
-  return children
+
+  // 后台续页：每批补 GROW_CHUNK 个，直到把这一类的对象**全部**铺开。
+  const GROW_CHUNK = 200
+  /**
+   * 分类展开后，把剩下的对象在**后台**一批批补上（界面上不出现任何「显示更多」节点 ——
+   * 用户要的是完整平铺的清单，中间插一行反而挡事）。
+   *
+   * 靠的是 el-tree 的既定路径：把节点的 `data.children` 换成"更长的数组"，节点组件里的
+   * watcher 会调 `updateChildren()`，而它是**按 node-key 匹配已有子节点、只把新增的插进去**
+   * （见 element-plus/es/components/tree/src/model/node.mjs 的 updateChildren），
+   * 所以已渲染的节点不会重建 —— 每批只建新增的那 200 个。
+   *
+   * 必须经过 `treeRef.getNode()` 拿到的那个**响应式代理**去写：直接改我们手里原始的 data
+   * 对象不会触发任何更新（同文件 onUpdateTableRows 的注释里踩过这个坑：只改 node.data
+   * 实测界面不刷新）。
+   */
+  const growCategoryInBackground = (data, all) => {
+    let shown = Math.min(TREE_FIRST_PAGE, all.length)
+    const step = () => {
+      const node = treeRef.value && data.id ? treeRef.value.getNode(data.id) : null
+      // 节点没了（树被重建 / 已刷新）就停：此时这个 data 也不再被渲染
+      if (!node || !node.data) return
+      const next = all.slice(0, Math.min(shown + GROW_CHUNK, all.length))
+      node.data.children = next
+      shown = next.length
+      if (shown < all.length) setTimeout(step, 60)
+    }
+    // 先让"首屏那一页"这一帧画出来，再开始补
+    setTimeout(step, 150)
   }
 
 /**
@@ -4269,16 +4296,11 @@ const lazyLoadRaw = async (node, resolve) => {
       const items = Array.isArray(data.catItems) ? data.catItems : await loadCategoryItems(data)
       // 手动展开这条路也要写表：数字立刻正确，不必等预取（两条路写同一个来源）
       if (Array.isArray(items)) catCounts.value[data.id] = items.length
-      resolve(finishLazyChildren(data, buildCatChildren({ cat: data.cat, connId: data.connId, db: data.db, items })))
-    } else if (data.kind === 'more') {
-      // 「显示更多」：接着渲染下一批（每批 TREE_PAGE 个）。走 el-tree 自己的懒加载 ——
-      // 既不用动引擎，也不会出现"一次多渲染两千个节点"的 DOM 峰值。
-      // 行数不必在这里重查：展开这个分类时已经对整库发过一次批量 COUNT(*)，新露出来的表直接命中。
-      resolve(finishLazyChildren(data, pagedCatChildren({
-        cat: data.cat, connId: data.connId, db: data.db,
-        all: Array.isArray(data.allItems) ? data.allItems : [],
-        offset: data.offset || 0
-      })))
+      const all = buildCatChildren({ cat: data.cat, connId: data.connId, db: data.db, items })
+      // 首屏只给 TREE_FIRST_PAGE 个：点开就"有东西"，剩下的交给后台分批补全。
+      // 界面上不出现任何「显示更多」节点，用户最终看到的是**完整平铺的清单**（用户要求）。
+      resolve(finishLazyChildren(data, all.slice(0, TREE_FIRST_PAGE)))
+      if (all.length > TREE_FIRST_PAGE) growCategoryInBackground(data, all)
     } else if (data.children && data.children.length) {
       // 懒加载模式下 el-tree 会忽略 data.children：分类目录（Tables/Views/Procedures 等）
       // 必须在这里显式返回预置子节点，否则最内层目录展开后为空
@@ -4431,19 +4453,14 @@ const collapseNode = (key) => {
 // `catalog` 必须在这里：Doris 的 catalog 节点下面是库，它当然"装得下子节点"。
 // 漏掉它的后果不只是"没箭头" —— 点击与右键也各自按 kind 分支，三处都不认它，
 // 于是那个节点**点也没反应、右键也没反应**（用户反馈的就是这个）。
-// `more` 是分页的「显示更多」节点（见 treeNodes.js 的 TREE_PAGE）：它自己就是懒加载父节点，
-// 漏掉它就没有展开箭头 —— 而箭头正是"再取一批"的唯一入口。
-const EXPANDABLE_KINDS = new Set(['env-folder', 'conn', 'db', 'schema', 'category', 'catalog', 'more'])
+const EXPANDABLE_KINDS = new Set(['env-folder', 'conn', 'db', 'schema', 'category', 'catalog'])
 /** 能不能展开：能装子节点的类型才算（Redis 库的 key 不进树，标了 leaf 就不算）。 */
 const canExpandNode = (data) => !!data && !data.leaf && EXPANDABLE_KINDS.has(data.kind)
-/**
- * 节点文字的**唯一**出口：分类名等走 i18nKey（写在模板里才能"切语言立刻变"），
- * 「显示更多」还要带上剩余数量（i18nN）。所有节点共用这一处，免得某个分支漏了参数。
- */
+/** 节点文字的**唯一**出口：分类名等走 i18nKey（写在模板里，才能做到切语言立刻变）。 */
 const nodeText = (data, node) => {
   if (!data) return ''
   if (!data.i18nKey) return data.label || (node && node.label) || ''
-  return data.i18nN != null ? t(data.i18nKey, { n: data.i18nN }) : t(data.i18nKey)
+  return t(data.i18nKey)
 }
 /** 是不是正在加载：el-tree 懒加载会把 node.loading 置位；连接另有自己的标记。 */
 const isNodeLoading = (node, data) => {
