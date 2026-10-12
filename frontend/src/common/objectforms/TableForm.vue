@@ -208,21 +208,21 @@
             <el-table-column :label="$t('tf.idxUnique')" width="64">
               <template #default="{ row }"><el-switch v-model="row.unique" size="small" /></template>
             </el-table-column>
-            <el-table-column v-if="(features.indexTypes || []).length" :label="$t('tf.colType')" width="120">
+            <el-table-column v-if="(features.indexTypes || []).length" :label="$t('tf.colType')" width="130">
               <template #default="{ row }">
                 <el-select v-model="row.indexType" size="small" clearable>
                   <el-option v-for="t in features.indexTypes" :key="t" :label="t" :value="t" />
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column :label="$t('tf.idxColumns')" min-width="180">
+            <el-table-column :label="$t('tf.idxColumns')" min-width="200">
               <template #default="{ row }">
                 <el-select v-model="row.columns" size="small" multiple filterable collapse-tags :multiple-limit="0">
                   <el-option v-for="c in cols.filter(x => x.name.trim())" :key="c.uid" :label="c.name" :value="c.name.trim()" />
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column :label="$t('tdet.actions')" width="50">
+            <el-table-column :label="$t('tdet.actions')" width="110">
               <template #default="{ $index }">
                 <el-button text size="small" :icon="Delete" class="dc-del" @click="idxs.splice($index, 1)" />
               </template>
@@ -790,6 +790,12 @@ emit('sql', genSql())
 .idx-tab :deep(.el-table td .el-tag) { height: var(--ctl-h, 20px); }
 .idx-tab :deep(.el-table td .el-select__wrapper:has(.el-tag)) { min-height: calc(var(--ctl-h, 20px) + 6px); }
 .idx-tab :deep(.el-table td .el-tag .el-tag__content) { line-height: var(--ctl-h, 20px); }
+/* 标签是**横向**越框的真正原因：Element 的多选标签靠一层负外边距贴左（它预期外层有正常的
+   左内边距），而我们把外层的 padding-left 压成 0 去对齐表头文字 —— 于是标签被顶到框外 6px
+   （实测 wrapper.left=1069、tag.left=1063，用户反馈"还在框外面"）。
+   把负外边距清零：标签正好落在 cell 的 9px 上，与表头「包含字段」同一条竖线，也不越出边框。 */
+.idx-tab :deep(.el-table td .el-select__wrapper .el-select__selection),
+.idx-tab :deep(.el-table td .el-select__wrapper .el-tag) { margin-left: 0 !important; }
 .idx-tab :deep(.el-table .el-input__wrapper) { padding: 0 6px; }
 .idx-tab :deep(.el-table .el-input__inner) { font-size: 13px; height: var(--ctl-h, 20px); }
 /* 行高由单元格内容撑出来，里面的控件也得跟 --ctl-h 走 —— 否则字段表跟着设置变、
