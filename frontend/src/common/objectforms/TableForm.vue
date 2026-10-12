@@ -33,9 +33,35 @@
                   <td class="basic-label">{{ $t('tf.tableName') }}</td>
                   <td><el-input v-model="form.name" :disabled="editMode" size="small" clearable /></td>
                 </tr>
-                <tr v-if="has(features,'supportsComment')">
-                  <td class="basic-label">{{ $t('tf.tableComment') }}</td>
-                  <td><el-input v-model="form.comment" size="small" clearable /></td>
+                <!-- 表概况：与「编辑表结构」同一组（行数 / 列数 / 索引数 / 主键）。
+                     这一组读的是"这张表是什么样"，不是要填的东西 —— 所以一律**禁用**（编辑页同款）。
+                     列数 / 索引数按你正在定义的内容实时算；行数要表建好才有，恒为「—」。 -->
+                <tr>
+                  <td class="basic-label">{{ $t('tdet.rowCount') }}</td>
+                  <td><el-input model-value="—" size="small" disabled /></td>
+                </tr>
+                <tr>
+                  <td class="basic-label">{{ $t('tdet.colCount') }}</td>
+                  <td><el-input :model-value="colCountFilled" size="small" disabled /></td>
+                </tr>
+                <tr>
+                  <td class="basic-label">{{ $t('tdet.indexCount') }}</td>
+                  <td><el-input :model-value="idxs.length" size="small" disabled /></td>
+                </tr>
+                <tr v-if="pkPreview !== '—'">
+                  <td class="basic-label">{{ $t('tdet.primaryKey') }}</td>
+                  <td><el-input :model-value="pkPreview" size="small" disabled /></td>
+                </tr>
+                <!-- ClickHouse 专属：排序键 / 分区键（编辑页也有这两行，字段一一对应）。
+                     排序键由「字段定义」里勾选的排序键列决定（与编辑页展示的是同一件事），这里只读回显；
+                     分区键是建表要指定的**表达式**，所以可填。 -->
+                <tr v-if="isClickHouse">
+                  <td class="basic-label">{{ $t('tdet.orderKey') }}</td>
+                  <td><el-input :model-value="orderKeyPreview" size="small" disabled /></td>
+                </tr>
+                <tr v-if="isClickHouse">
+                  <td class="basic-label">{{ $t('tdet.partitionKey') }}</td>
+                  <td><el-input v-model="form.partitionKey" size="small" clearable /></td>
                 </tr>
                 <!-- Doris 专属：数据模型 / 分桶列 / 分桶数 / 副本数 -->
                 <tr v-if="isDoris">
@@ -88,6 +114,16 @@
                       <el-option v-for="c in collations" :key="c" :label="c" :value="c" />
                     </el-select>
                   </td>
+                </tr>
+                <!-- 表注释：位置与编辑页一致（放在 Doris 那组属性之后，而不是紧跟表名） -->
+                <tr v-if="has(features,'supportsComment')">
+                  <td class="basic-label">{{ $t('tf.tableComment') }}</td>
+                  <td><el-input v-model="form.comment" size="small" clearable /></td>
+                </tr>
+                <!-- 表级自增起始值（MySQL 系）：建表时能设、建完就改不了，所以这里可填 -->
+                <tr v-if="showAutoIncStart">
+                  <td class="basic-label">{{ $t('tdet.autoIncrement') }}</td>
+                  <td><el-input v-model="form.autoIncrementStart" type="number" size="small" :placeholder="$t('tdet.autoIncPlaceholder')" /></td>
                 </tr>
               </tbody>
             </table>
@@ -297,12 +333,36 @@ const emptyCol = () => ({ uid: uid(), name: '', type: 'VARCHAR', length: '255', 
 
 const form = reactive({
   name: '', comment: '', engine: '', charset: '', collation: '',
+  // ClickHouse：分区键（表达式，建表必填，形如 toYYYYMM(ts)）；排序键不在这里 ——
+  // 它由「字段定义」里勾选的排序键列决定，本页只回显（见 orderKeyPreview）
+  partitionKey: '',
+  // MySQL 系：表级自增起始值（AUTO_INCREMENT=n）
+  autoIncrementStart: '',
   dorisModel: 'DUPLICATE KEY', dorisDistCol: [], dorisBuckets: 10, dorisReplication: 1,
   columns: [emptyCol()],
   indexes: []
 })
 const cols = form.columns
 const idxs = form.indexes
+
+/* 表概况里那几行的只读回显 —— 与「编辑表结构」同一组字段（用户反馈：两边展示的字段要一样）。 */
+const pkPreview = computed(() => {
+  const pks = cols.filter(c => String(c.name || '').trim() && c.primaryKey).map(c => String(c.name).trim())
+  return pks.length ? pks.join(', ') : '—'
+})
+/** 排序键预览：与 genClickhouseSql 的 ORDER BY 同源（勾了排序键的列，退化为主键列，再退化 tuple()） */
+const orderKeyPreview = computed(() => {
+  const keys = cols.filter(c => String(c.name || '').trim() && c.orderKey).map(c => String(c.name).trim())
+  if (keys.length) return '(' + keys.join(', ') + ')'
+  const pks = cols.filter(c => String(c.name || '').trim() && c.primaryKey).map(c => String(c.name).trim())
+  return pks.length ? '(' + pks.join(', ') + ')' : 'tuple()'
+})
+// 自增起始值：只有"能改表选项 + 支持自增"的库才有（Doris / ClickHouse 都没有这个概念），
+// 口径与编辑页 showAutoIncField 一致
+const showAutoIncStart = computed(() => has(props.features, 'supportsTableOptions')
+  && has(props.features, 'supportsAutoIncrement') && !isClickHouse.value && !isDoris.value)
+// 表概况里的「列数 / 索引数」按正在定义的内容实时算
+const colCountFilled = computed(() => cols.filter(c => String(c.name || '').trim()).length)
 
 
 
@@ -558,6 +618,10 @@ const genClickhouseSql = (f, qn, cols) => {
   // MergeTree 族带 ()；Log/TinyLog/Memory/Null 等无参引擎不加括号
   if (/mergeTree/i.test(eng) && !eng.includes('(')) sql += '\nENGINE = ' + eng + '()'
   else sql += '\nENGINE = ' + eng
+  // PARTITION BY 必须排在 ENGINE 之后、ORDER BY 之前（ClickHouse 的语法顺序）。
+  // 分区键是个**表达式**（toYYYYMM(ts) / toDate(ts) / 直接写列名都行），所以原样拼、不加引号。
+  const part = String(form.partitionKey || '').trim()
+  if (part) sql += '\nPARTITION BY ' + part
   // {{ $t('tf.orderKeyCellTip') }}(ORDER BY)：优先「{{ $t('tf.orderKeyCellTip') }}」勾选列；未勾选时退化为主键列
   const sortRaw = cols.filter(c => c.orderKey && c.name.trim()).map(c => c.name.trim())
   const pkRaw = cols.filter(c => c.primaryKey && c.name.trim()).map(c => c.name.trim())
@@ -629,6 +693,10 @@ const genSql = () => {
     if (form.charset) opts.push('DEFAULT CHARSET=' + form.charset)
     if (form.collation) opts.push('COLLATE=' + form.collation)
     if (form.comment) opts.push("COMMENT='" + sq(form.comment) + "'")
+    // 表级自增起始值（AUTO_INCREMENT=n）：列级那条第 460 行只写 AUTO_INCREMENT，不带起始值，
+    // 两者不冲突 —— 起始值本来就是表级选项。清空则不写，交给数据库默认。
+    const ai = Number(form.autoIncrementStart)
+    if (Number.isFinite(ai) && ai > 0) opts.push('AUTO_INCREMENT=' + ai)
     if (opts.length) parts[0] += ' ' + opts.join(' ')
   }
 
