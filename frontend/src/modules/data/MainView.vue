@@ -159,9 +159,6 @@
                 <!-- 数据源节点：DB Logo + 连接名 + 环境角标 -->
                 <span v-else-if="data.kind === 'conn'" class="conn-row"
                       @mouseenter="onConnEnter($event, data)" @mouseleave="onConnLeave">
-                  <!-- 连接行最左的小菱形（用户要的"连接处小菱形"）：颜色跟这一行的环境角标同源
-                       （envColor，与 env-folder 的图标同色），一眼看出这条连接属于哪套环境 -->
-                  <span class="conn-diamond" :style="{ background: envColor(data.env) }"></span>
                   <span class="logo-wrap">
                     <DbLogo :type="data.connType" :size="14" :connected="isConnOpen(data.connId) && !connErrorSet.has(String(data.connId))" class="tree-logo" />
                   </span>
@@ -178,7 +175,11 @@
                        那个气泡其实是浏览器原生 title 提示）。 -->
                   <Teleport to="body">
                     <span v-if="connCard.show && connCard.id === data.connId" class="conn-info-card"
+                          :class="{ flip: connCard.flip }"
                           :style="{ left: connCard.x + 'px', top: connCard.y + 'px' }">
+                      <!-- 卡片左侧的小菱形"尖"：指向这条连接（卡片弹在节点右边，所以朝左；
+                           靠窗口右边缘翻到左边时，flip 会让它改朝右） -->
+                      <span class="ci-arrow"></span>
                       <span class="ci-row"><b>{{ $t('connTip.name') }}</b>{{ data.name }}</span>
                       <span class="ci-row"><b>{{ $t('connTip.url') }}</b>{{ connUrlOf(data) || '—' }}</span>
                       <span class="ci-row"><b>{{ $t('connTip.host') }}</b>{{ data.host || '—' }}</span>
@@ -2431,13 +2432,18 @@ const folderRefresh = ref(0)
    再做一次视口收边：右边放不下就翻到行的左侧，下边放不下就往上提。 */
 const CARD_W = 340
 const CARD_H = 230
-const connCard = ref({ show: false, id: '', x: 0, y: 0 })
+const connCard = ref({ show: false, id: '', x: 0, y: 0, flip: false })
 const onConnEnter = (e, data) => {
   connCard.value.id = data && data.connId ? String(data.connId) : ''
   const r = e.currentTarget.getBoundingClientRect()
   let x = r.right + 10
   let y = r.top - 4
-  if (x + CARD_W > window.innerWidth) x = Math.max(8, r.left - CARD_W - 10)
+  // flip：卡片被窗口右边缘逼到节点左侧时，左侧那个菱形尖要改朝右（见 .conn-info-card.flip）
+  connCard.value.flip = false
+  if (x + CARD_W > window.innerWidth) {
+    x = Math.max(8, r.left - CARD_W - 10)
+    connCard.value.flip = true
+  }
   if (y + CARD_H > window.innerHeight) y = Math.max(8, window.innerHeight - CARD_H)
   connCard.value.x = x
   connCard.value.y = y
@@ -7052,17 +7058,6 @@ const connTypeSummary = computed(() =>
 
 /* conn 节点行：与 tree-node 同构，确保 flex 填充 */
 .conn-row { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; }
-/* 连接行最左的小菱形：6px 的方块转 45° 就是了（不用图标字体）。
-   颜色由模板里的 envColor(data.env) 内联给，跟环境角标/环境目录图标同色；
-   不给阴影、不加动画 —— 侧栏节点很多，装饰别再触发重绘。 */
-.conn-diamond {
-  flex: 0 0 auto;
-  width: 6px;
-  height: 6px;
-  border-radius: 1px;
-  transform: rotate(45deg);
-  opacity: .9;
-}
 .conn-label { flex: 1; min-width: 0; }
 /* 拖拽：数据源行可抓取（拖拽换目录仍然可用）—— 但**不用抓取手型**：
    这里原来写的是 grab / grabbing，也就是那个"抓取手"，早先已按需求去掉。

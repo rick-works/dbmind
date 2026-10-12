@@ -491,6 +491,28 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
   box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
   pointer-events: none;
 }
+/* 卡片左侧那个小菱形"尖"（用户给的参考样式）：8px 方块转 45°，
+   只描左边与下边（与卡片同底色同边框色）→ 朝左的箭头，指着右边这张卡片对应的连接；
+   卡片被窗口右边缘逼到左侧时 .flip 会把它改朝右。 */
+.conn-info-card .ci-arrow {
+  position: absolute;
+  left: -5px;
+  top: 8px;
+  width: 8px;
+  height: 8px;
+  background: var(--dc-bg-pop);
+  border-left: 1px solid var(--dc-border);
+  border-bottom: 1px solid var(--dc-border);
+  transform: rotate(45deg);
+}
+.conn-info-card.flip .ci-arrow {
+  left: auto;
+  right: -5px;
+  border-left: none;
+  border-bottom: none;
+  border-right: 1px solid var(--dc-border);
+  border-top: 1px solid var(--dc-border);
+}
 .conn-info-card .ci-row {
   display: flex;
   gap: 10px;
