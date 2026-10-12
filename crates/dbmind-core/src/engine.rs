@@ -836,6 +836,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
             cancel: &cancel,
             read_only,
             session,
+            schema: request.schema.as_deref(),
         });
 
         // 4) 无论成败都要注销登记，并留痕

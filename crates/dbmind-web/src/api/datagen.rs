@@ -693,6 +693,7 @@ async fn run_sql(state: &AppState, conn: &str, database: &str, sql: &str) -> Res
     let target = crate::api::scope::resolve(state, conn, database).await?;
     let engine = state.engine();
     let request = QueryRequest {
+        schema: None,
         read_only: None,
         connection: target,
         sql: sql.to_string(),

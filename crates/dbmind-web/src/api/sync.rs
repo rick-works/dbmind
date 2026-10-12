@@ -457,6 +457,7 @@ async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<S
 async fn run_target(state: &AppState, target: &str, sql: &str) -> XResult<dbmind_core::QueryResult> {
     let engine = state.engine();
     let request = dbmind_core::QueryRequest {
+        schema: None,
         read_only: None,
         connection: target.to_string(),
         sql: sql.to_string(),

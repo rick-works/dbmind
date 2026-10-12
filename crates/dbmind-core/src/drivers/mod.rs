@@ -31,6 +31,12 @@ pub struct QueryCall<'a> {
     /// `None` = 不要求亲和，按「这个连接复用一条」处理（CLI / MCP 的默认行为）。
     /// 单连接类型会**忽略**它 —— 那些类型只有一条物理连接可给（见驱动实现）。
     pub session: Option<&'a str>,
+    /// 在哪个 **schema** 下执行这条语句（PG / SQL Server / Kingbase 的「库.模式」里那一层）。
+    ///
+    /// 代理会"临时切 schema → 执行 → 切回"（`connection.setSchema`），因为元数据 SQL
+    /// 用的 `current_schema()` / `::regclass` / `object_id()` 只看连接自己的 schema。
+    /// `None` = 不动它，行为与以前完全一致（用户自己的查询永远走这一支）。
+    pub schema: Option<&'a str>,
 }
 
 /// 一次元数据调用的上下文。

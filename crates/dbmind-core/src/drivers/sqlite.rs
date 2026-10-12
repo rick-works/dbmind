@@ -536,6 +536,7 @@ mod tests {
             cancel: &cancel,
             read_only,
             session: None,
+            schema: None,
         })
     }
 

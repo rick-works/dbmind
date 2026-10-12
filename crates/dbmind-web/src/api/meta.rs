@@ -46,6 +46,19 @@ pub async fn run_sql(
     run_sql_in(state, conn, "", sql, max_rows).await
 }
 
+/// 从「库.模式」里取出 schema（非分层库、或没写模式时是 `None`）。
+///
+/// 为什么不给 `run_sql_in` / `run_meta_sql` 加参数、而是从 `database` 里拆：
+/// 这两个入口有 **30 多处**调用方（DDL / 索引 / 注释 / 列类型补全 / 库清单 / 统计…），
+/// 而它们传下来的本来就是同一个「库.模式」字符串 —— 在这里拆一次，所有元数据 SQL 一次性
+/// 都对（代理会"临时切 schema → 执行 → 切回"），调用方一行都不用改。
+///
+/// 取不到方言（连接刚被删掉之类）不报错：schema 只是"更精确"，缺了顶多退回老行为。
+async fn meta_schema_of(state: &AppState, conn: &str, database: &str) -> Option<String> {
+    let dialect = Dialect::new(require_record(state, conn).await.ok()?.kind());
+    split_db_schema(database, &dialect).1
+}
+
 /// 同上，但**切到指定库**执行 —— 跨库浏览全靠它。
 ///
 /// `database` 为空 = 用连接自己绑定的那个库。非空时由 `scope::resolve` 决定是直接用主连接、
@@ -61,7 +74,9 @@ pub async fn run_sql_in(
     // 元数据也是「连上去查」：驱动没装就先下（离线时只失败一次，原因会被缓存）
     crate::api::driver::ensure_for_connection(state, &target).await?;
     let engine = state.engine();
+    let schema = meta_schema_of(state, conn, database).await;
     let request = QueryRequest {
+        schema,
         connection: target,
         sql,
         options: QueryOptions {
@@ -117,6 +132,7 @@ pub async fn run_write_sql_in(
     crate::api::driver::ensure_for_connection(state, &target).await?;
     let engine = state.engine();
     let request = QueryRequest {
+        schema: None,
         connection: target,
         sql: sql.clone(),
         options: QueryOptions {
@@ -192,7 +208,9 @@ async fn run_meta_sql(
     // `run_sql_in` 的同类注释与实测）。所以这里既去掉 `internal:browse` 亲和键
     // （它会参与会话键计算，正是分裂的原因），也把只读标记对齐。
     // 另：元数据**不进查询历史**（`internal`），理由见 `run_sql_in`。
+    let schema = meta_schema_of(state, conn, database).await;
     let first = QueryRequest {
+        schema: schema.clone(),
         read_only: Some(true),
         connection: target.clone(),
         sql: sql.clone(),
@@ -211,6 +229,7 @@ async fn run_meta_sql(
             // 重试那次与首次保持完全一致（同只读会话）：会话失效时宿主已摘掉坏会话，
             // 这一次会真的重连
             let retry = QueryRequest {
+                schema,
                 read_only: Some(true),
                 connection: target,
                 sql,
@@ -1121,15 +1140,10 @@ pub async fn columns(
         engine.list_columns_fresh_in(&target, &queried, schema_for_call.as_deref())
     })
     .await?;
-    // 「补类型 / 注释 / 自增」这条也带着「库.模式」，但它的方言 SQL 用的是 `current_schema()` /
-    // `::regclass` / `object_id()` —— 都只看连接的默认 schema。拿别的 schema 去查会**取到同名的
-    // 另一张表**，把别人的注释和类型贴过来（比空还坏）。所以指定了 schema 时**跳过**这一步，
-    // 类型回落到驱动自己给的列类型；等方言 SQL 支持按 schema 取（下一步）再补全。
-    let extras = if schema.is_some() {
-        std::collections::HashMap::new()
-    } else {
-        enrich_column_types(&state, &id, &database, &table, &mut columns).await
-    };
+    // 「补类型 / 注释 / 自增」这条也走「库.模式」：它的方言 SQL 用的是 `current_schema()` /
+    // `::regclass` / `object_id()`（只看连接自己的 schema），所以 run_sql_in 会把 schema 交给
+    // 代理"临时切过去再切回"（见 QueryRequest::schema 的说明）—— 这正是"指定 schema 时一次全对"的关键。
+    let extras = enrich_column_types(&state, &id, &database, &table, &mut columns).await;
     let mut payload = shape::columns_json(&columns);
     // 注释 / 自增 / 额外属性：内核的列元数据里没有这几位，
     // 而 `shape::column_json` 之前把 `comment` 写死 null、`autoIncrement` 写死 false ——
@@ -1771,6 +1785,7 @@ pub async fn data_save(
         let mut executed = 0usize;
         for sql in statements {
             let request = QueryRequest {
+                schema: None,
                 read_only: None,
                 connection: target.clone(),
                 sql,

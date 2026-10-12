@@ -634,6 +634,12 @@ impl Driver for AgentDriver {
 
                 let mut params = Map::new();
                 params.insert("sessionId".to_string(), json!(key));
+                // 元数据类语句（DDL / 索引 / 注释 / 列类型补全）带上目标 schema：代理会
+                // "临时切过去 → 执行 → 切回"，好让那句 SQL 里的 current_schema() / ::regclass /
+                // object_id() 都看对那一层。**用户自己的查询恒为 None**，行为与以前完全一致。
+                if let Some(schema) = call.schema.filter(|s| !s.is_empty()) {
+                    params.insert("schema".to_string(), json!(schema));
+                }
                 params.insert("sql".to_string(), json!(call.sql));
                 params.insert("maxRows".to_string(), json!(call.options.max_rows));
                 params.insert("timeoutMs".to_string(), json!(call.options.timeout_ms));

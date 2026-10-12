@@ -91,6 +91,7 @@ pub async fn databases(
 async fn redis_db_count(state: &AppState, id: &str) -> Option<usize> {
     let engine = state.engine();
     let request = QueryRequest {
+        schema: None,
         read_only: None,
         connection: id.to_string(),
         sql: "CONFIG GET databases".to_string(),
@@ -285,6 +286,7 @@ pub async fn documents(
     // 全局默认上限再夹一层（与 SQL 编辑器同一把尺子，见 `query::max_rows_cap`）
     let max_rows = size.min(crate::api::query::max_rows_cap(&state).await);
     let request = QueryRequest {
+        schema: None,
         read_only,
         connection: id,
         sql: command,
@@ -350,6 +352,7 @@ fn quote_key(key: &str) -> String {
 async fn redis_array_reply(state: &AppState, id: &str, sql: String) -> Option<Vec<Option<String>>> {
     let engine = state.engine();
     let request = QueryRequest {
+        schema: None,
         read_only: None,
         connection: id.to_string(),
         sql,
@@ -382,6 +385,7 @@ async fn redis_array_reply(state: &AppState, id: &str, sql: String) -> Option<Ve
 async fn redis_reply_summary(state: &AppState, id: &str, sql: String) -> Option<String> {
     let engine = state.engine();
     let request = QueryRequest {
+        schema: None,
         read_only: None,
         connection: id.to_string(),
         sql,
@@ -589,6 +593,7 @@ pub async fn execute(
     let engine = state.engine();
     let execution_id = dbmind_core::DbMindEngine::next_execution_id();
     let request = QueryRequest {
+        schema: None,
         read_only: None,
         connection: id,
         sql: command,
@@ -637,6 +642,7 @@ async fn redis_select_db(state: &AppState, id: &str, database: &str) -> Result<(
     };
     let engine = state.engine();
     let request = QueryRequest {
+        schema: None,
         read_only: None,
         connection: id.to_string(),
         sql: format!("SELECT {target}"),

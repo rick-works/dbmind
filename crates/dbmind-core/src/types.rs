@@ -468,6 +468,16 @@ pub struct QueryRequest {
     /// 漏标 = 真实操作被淹没；误标 = 用户敲过的语句查不到。
     #[serde(default)]
     pub internal: bool,
+    /// 这条语句要在哪个 **schema** 下执行（PG / SQL Server / Kingbase 的「库.模式」里那一层）。
+    ///
+    /// 为什么需要它：这些库的**元数据** SQL（DDL / 索引 / 注释 / 列类型补全）用的都是
+    /// `current_schema()` / `::regclass` / `object_id()` —— 它们只看"连接自己的" schema，
+    /// 于是非默认 schema 下的表会取不到、甚至**取到同名的另一张表**（把别人的注释贴过来）。
+    ///
+    /// 内核把"临时切到目标 schema → 执行 → 切回"交给代理完成（见 `agent_driver` 的 query）：
+    /// 一条语句一次切换，不依赖连接默认值。**用户自己的查询不带这个字段**，行为完全不变。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema: Option<String>,
 }
 
 impl QueryRequest {
@@ -480,6 +490,7 @@ impl QueryRequest {
             session: None,
             read_only: None,
             internal: false,
+            schema: None,
         }
     }
 

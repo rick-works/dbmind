@@ -174,6 +174,7 @@ pub async fn execute(
     // 全局默认上限再夹一层：分页大小是「想要多少」，设置里的 maxRows 是「最多给多少」
     let max_rows = size.min(max_rows_cap(&state).await);
     let request = QueryRequest {
+        schema: None,
         read_only: None,
         connection: target,
         sql: effective,
@@ -380,6 +381,7 @@ pub async fn execute_batch(
         let outcome = blocking(move || {
             engine.execute(
                 QueryRequest {
+                    schema: None,
                     read_only: None,
                     connection: target,
                     sql: statement,
@@ -552,6 +554,7 @@ fn run_statements(
         // 执行期间**不持锁**：这条语句可能跑几分钟，持锁会让状态查询全部排队
         let outcome = engine.execute(
             QueryRequest {
+                schema: None,
                 read_only: None,
                 connection: connection.clone(),
                 sql: statement.clone(),

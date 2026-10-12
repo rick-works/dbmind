@@ -249,6 +249,7 @@ async fn run_sql(state: &AppState, conn: &str, database: &str, sql: &str) -> Res
     crate::api::driver::ensure_for_connection(state, &target).await?;
     let engine = state.engine();
     let request = QueryRequest {
+        schema: None,
         read_only: None,
         connection: target,
         sql: sql.to_string(),

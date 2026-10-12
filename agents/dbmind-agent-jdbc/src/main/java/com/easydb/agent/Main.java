@@ -355,6 +355,30 @@ public final class Main {
         boolean compact = request.has("compact") && request.get("compact").getAsBoolean();
         session.touch();
 
+        // 元数据类语句（DDL / 索引 / 注释 / 列类型补全）会带上 schema：临时把会话切到那一层，
+        // 好让语句里的 current_schema() / ::regclass / object_id() 都看对（PG / SQL Server / Kingbase）。
+        // **用户自己的查询不带这个字段**，这一整段都不走 —— 行为与以前完全一致。
+        // MySQL 系忽略了它（它们没有 schema 层级，调用方也不会传）。
+        String schemaToUse = null;
+        if (request.has("schema") && !request.get("schema").isJsonNull()) {
+            String rawSchema = request.get("schema").getAsString();
+            if (rawSchema != null && !rawSchema.trim().isEmpty()) {
+                schemaToUse = rawSchema.trim();
+            }
+        }
+        String previousSchema = null;
+        boolean schemaSwitched = false;
+        if (schemaToUse != null && !isMysqlFamily(session)) {
+            try {
+                previousSchema = session.connection().getSchema();
+                session.connection().setSchema(schemaToUse);
+                schemaSwitched = true;
+            } catch (Exception e) {
+                // 切不过去说明这个 schema 不存在/驱动不支持：如实按默认 schema 执行，别让整句话失败
+                trace("按 schema 切会话失败（" + schemaToUse + "），改按默认 schema 执行：" + e);
+            }
+        }
+
         try (Statement statement = session.connection().createStatement()) {
             boolean wantMaxRows = maxRows > 0;
             if (wantMaxRows) { wantMaxRows = mayReturnRows(sql); }
@@ -426,6 +450,16 @@ public final class Main {
                 dropSession(session);
             }
             throw failure;
+        } finally {
+            // 切过 schema 就切回去：这是**共享会话**，留着会把下一次调用（用户自己的查询）
+            // 也带进那个 schema —— 那不是它的语义。
+            if (schemaSwitched) {
+                try {
+                    session.connection().setSchema(previousSchema);
+                } catch (Exception ignored) {
+                    // 切不回去不影响本次结果；下次调用会按自己的需要再切
+                }
+            }
         }
     }
 
