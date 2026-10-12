@@ -52,18 +52,7 @@
                     <!-- 这四行原来是**纯文字**，与上下那些「禁用输入框」的行不是一套外观
                          （行高一高一低、文字起始位置也不同）。统一套上禁用输入框：
                          仍是只读，但整张表的行高与对齐完全一致。 -->
-                    <tr>
-                      <td class="basic-label">{{ $t('tdet.rowCount') }}</td>
-                      <td><el-input :model-value="rowCountText" size="small" disabled /></td>
-                    </tr>
-                    <tr>
-                      <td class="basic-label">{{ $t('tdet.colCount') }}</td>
-                      <td><el-input :model-value="displayCols.length" size="small" disabled /></td>
-                    </tr>
-                    <tr>
-                      <td class="basic-label">{{ $t('tdet.indexCount') }}</td>
-                      <td><el-input :model-value="displayIdxRows.length" size="small" disabled /></td>
-                    </tr>
+                    <!-- 行数 / 列数 / 索引数三行已按反馈去掉（新增表与编辑表都不再展示这三个数） -->
                     <!-- 主键行：数据库没有主键概念时不显示（如 Doris，主键就是建表时的 Key 列，
                          这里恒为「—」，摆一行占位只会让人困惑） -->
                     <tr v-if="pkText && pkText !== '—'">

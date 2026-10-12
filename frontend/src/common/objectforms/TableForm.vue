@@ -36,18 +36,6 @@
                 <!-- 表概况：与「编辑表结构」同一组（行数 / 列数 / 索引数 / 主键）。
                      这一组读的是"这张表是什么样"，不是要填的东西 —— 所以一律**禁用**（编辑页同款）。
                      列数 / 索引数按你正在定义的内容实时算；行数要表建好才有，恒为「—」。 -->
-                <tr>
-                  <td class="basic-label">{{ $t('tdet.rowCount') }}</td>
-                  <td><el-input model-value="—" size="small" disabled /></td>
-                </tr>
-                <tr>
-                  <td class="basic-label">{{ $t('tdet.colCount') }}</td>
-                  <td><el-input :model-value="colCountFilled" size="small" disabled /></td>
-                </tr>
-                <tr>
-                  <td class="basic-label">{{ $t('tdet.indexCount') }}</td>
-                  <td><el-input :model-value="idxs.length" size="small" disabled /></td>
-                </tr>
                 <tr v-if="pkPreview !== '—'">
                   <td class="basic-label">{{ $t('tdet.primaryKey') }}</td>
                   <td><el-input :model-value="pkPreview" size="small" disabled /></td>
@@ -91,15 +79,19 @@
                   <td class="basic-label" :title="$t('tf.replicasTip')">{{ $t('tf.replicas') }}</td>
                   <td><el-input v-model="form.dorisReplication" type="number" size="small" /></td>
                 </tr>
-                <tr v-if="has(features,'supportsTableOptions') && (features.engines || []).length">
+                <!-- 存储引擎：MySQL 系走 supportsTableOptions；ClickHouse **不给引擎清单**
+                     （supportsTableOptions=false），但建表必须指定 —— 所以这里单独为它开出来，
+                     并按编辑页的做法在"没有清单"时退化为文本框，而不是整行消失。 -->
+                <tr v-if="(has(features,'supportsTableOptions') && !isDoris) || isClickHouse">
                   <td class="basic-label">{{ $t('tf.engine') }}</td>
                   <td>
-                    <el-select v-model="form.engine" size="small" clearable filterable>
+                    <el-select v-if="(features.engines || []).length" v-model="form.engine" size="small" clearable filterable>
                       <el-option v-for="e in features.engines" :key="e" :label="e" :value="e" />
                     </el-select>
+                    <el-input v-else v-model="form.engine" size="small" clearable placeholder="MergeTree()" />
                   </td>
                 </tr>
-                <tr v-if="has(features,'supportsTableOptions') && (features.charsets || []).length">
+                <tr v-if="has(features,'supportsTableOptions') && !isClickHouse && !isDoris && (features.charsets || []).length">
                   <td class="basic-label">{{ $t('tf.charset') }}</td>
                   <td>
                     <el-select v-model="form.charset" size="small" clearable filterable @change="onCharsetChange">
@@ -107,7 +99,7 @@
                     </el-select>
                   </td>
                 </tr>
-                <tr v-if="has(features,'supportsTableOptions') && collations.length">
+                <tr v-if="has(features,'supportsTableOptions') && !isClickHouse && !isDoris && collations.length">
                   <td class="basic-label">{{ $t('tf.collation') }}</td>
                   <td>
                     <el-select v-model="form.collation" size="small" clearable filterable>
@@ -361,8 +353,7 @@ const orderKeyPreview = computed(() => {
 // 口径与编辑页 showAutoIncField 一致
 const showAutoIncStart = computed(() => has(props.features, 'supportsTableOptions')
   && has(props.features, 'supportsAutoIncrement') && !isClickHouse.value && !isDoris.value)
-// 表概况里的「列数 / 索引数」按正在定义的内容实时算
-const colCountFilled = computed(() => cols.filter(c => String(c.name || '').trim()).length)
+
 
 
 
