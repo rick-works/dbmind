@@ -1287,10 +1287,24 @@ const samePk = (a, b) => a.length === b.length && a.every((x, i) => x === b[i])
    · 改名方言（oracle/dm/pg/kingbase）：临时名新建 → 删旧 → 改名（T2 实测三步都不丢旧索引）；
    · 其余（sqlite/mssql/db2/derby/h2）：仍先删后建，但整批由后端放进**事务**（失败整体回滚，
      这些方言的 DDL 是可回滚的；MySQL/Oracle 的 DDL 会隐式提交，事务对它们没意义）。 */
-const tmpIndexSwapDialects = ['oracle', 'dm', 'pg', 'kingbase']
+// 同样按 ddlStyle（不是连接类型）：oracle 覆盖 Oracle + DM，pg 覆盖 PostgreSQL / KingbaseES / H2。
+// db2 的 ddlStyle 是 'generic' → 既不在合并里、也不在临时名交换里，索引修改仍是"先删后建"，
+// 而 DB2 的事务兜底见后端 ddl_transactional 的说明（暂无）—— 这条是已知缺口，真机上遇到再补。
+const tmpIndexSwapDialects = ['oracle', 'pg']
 const usesTempNameIndexSwap = computed(() => tmpIndexSwapDialects.includes(ddlStyle.value))
 /** 临时索引名：短、可识别，且不会与用户已有名字撞（用完就改回原名） */
-const tmpIndexName = (name) => (String(name || 'idx').slice(0, 40) + '__dbmind_new')
+/**
+ * 临时索引名。原名可能很长、也可能带中文（长度按**字节**算），所以：
+ * · 非 ASCII 一律换成 `_`，避免一个中文三字节把预算吃光；
+ * · Oracle 系（含 DM —— 它们的 ddlStyle 都是 'oracle'）标识符上限 30 字节（12.1 及以前），
+ *   取 10 + 后缀 12 = 22 字节，两种版本都不会撞上限；其余方言 40 + 12 = 52（pg 63 / mysql 64 /
+ *   SQL Server 128 都够）。
+ */
+const tmpIndexName = (name) => {
+  const limit = ddlStyle.value === 'oracle' ? 10 : 40
+  const safe = String(name || 'idx').replace(/[^\x20-\x7E]/g, '_')
+  return safe.slice(0, limit) + '__dbmind_new'
+}
 
 const idxDropParts = () => {
   const parts = []
@@ -1513,8 +1527,11 @@ const pendingCount = computed(() => {
    · mysql/mariadb/doris/clickhouse：连索引也能塞进同一条 ALTER，所以"删旧 + 建新"是一条原子语句；
    · oracle/dm：DROP INDEX / CREATE INDEX / RENAME 不是 alter_table_clause，只能保持独立语句
      （由"先建后删改名"保证不丢索引），但**列变更与表选项**照样并成一条。 */
+// 注意 ddlStyle 由后端 edit_capabilities 下发，**不是连接类型**：
+// dm→'oracle'、h2/kingbase→'pg'、db2→'generic'、sqlserver→'mssql'（见 meta.rs 的 edit_capabilities）。
+// 所以这里只列真实会出现的那几个，别再写域名（写了也不会命中，反而误导后来人）。
 const canMergeAlter = computed(() =>
-  ['mysql', 'doris', 'clickhouse', 'oracle', 'dm'].includes(ddlStyle.value))
+  ['mysql', 'doris', 'clickhouse', 'oracle'].includes(ddlStyle.value))
 
 /** 索引也用 `ALTER TABLE … ADD INDEX …` 形态的方言（这样能和删旧并进同一条 ALTER） */
 const mergeableIndexDialect = computed(() => ['mysql', 'doris'].includes(ddlStyle.value))
@@ -1707,6 +1724,11 @@ const idxRowClass = ({ row }) => {
  */
 const indexAddStatement = (f) => {
   const cols = (f.columns || []).map(x => qt(x)).join(', ')
+  // PRIMARY 不是普通索引：MySQL 里 `ADD INDEX \`PRIMARY\` (…)` 会被拒（"Duplicate key name" 之类），
+  // 必须写成 `ADD PRIMARY KEY (…)`。改主键行（换列）时走这里。
+  if (ddlStyle.value === 'mysql' && String(f.name || '').toUpperCase() === 'PRIMARY') {
+    return `ALTER TABLE ${qt(props.table)} ADD PRIMARY KEY (${cols})`
+  }
   const unique = f.unique ? 'UNIQUE ' : ''
   const ft = f.indexType === 'FULLTEXT' ? 'FULLTEXT ' : (f.indexType === 'SPATIAL' ? 'SPATIAL ' : '')
   const using = (f.indexType === 'BTREE' || f.indexType === 'HASH') ? ` USING ${f.indexType}` : ''
@@ -1784,8 +1806,14 @@ const mySqlDropPrimaryKeySql = () => {
 }
 
 const dropIndexSql = (name) => {
-  if (ddlStyle.value === 'mysql') {
-    if (String(name).toUpperCase() === 'PRIMARY') return mySqlDropPrimaryKeySql()
+  // Doris 与 MySQL 同一套 DROP INDEX 写法（它走 MySQL 协议）：**必须带 `ALTER TABLE` 前缀** ——
+  // 一是语法本身要求（Doris 的 `DROP INDEX` 要 `ON 表`），二是只有这样它才能被并进
+  // mergeAlterRuns 的那条原子 ALTER（裸 `DROP INDEX` 不是 ALTER 形状，会被 flush 出去，
+  // 于是 Doris 的"改索引"又变成先删后建 —— Doris 没有事务回滚，失败就丢索引）。
+  if (ddlStyle.value === 'mysql' || ddlStyle.value === 'doris') {
+    if (ddlStyle.value === 'mysql' && String(name).toUpperCase() === 'PRIMARY') {
+      return mySqlDropPrimaryKeySql()
+    }
     return `ALTER TABLE ${qt(props.table)} DROP INDEX ${qt(name)}`
   }
   if (ddlStyle.value === 'mssql') return `DROP INDEX ${qt(name)} ON ${qt(props.table)}`
@@ -1817,21 +1845,25 @@ const rebuildIndex = async (row) => {
       const autoCol = (columns.value || []).find(c => /auto_increment/i.test(String(c.extra || '')))
       const includesAuto = isPk && autoCol && (row.columns || []).some(c =>
         String(c).trim().toLowerCase() === String(autoCol.name).trim().toLowerCase())
-      if (includesAuto) {
-        // MySQL 自增列必须始终被索引。重建主键时先给自增列加一个临时唯一索引，
-        // 再交换主键，最后删掉临时索引，避免 MODIFY COLUMN 导致注释/默认值等属性丢失。
-        const tmpName = qt('_上游_tmp_ai_' + String(autoCol.name).replace(/[^a-zA-Z0-9_]/g, '').slice(0, 50))
-        const colName = qt(autoCol.name)
-        sql = `ALTER TABLE ${qt(props.table)} ADD UNIQUE INDEX ${tmpName} (${colName});\n` +
-          `ALTER TABLE ${qt(props.table)} DROP PRIMARY KEY;\n` +
-          `ALTER TABLE ${qt(props.table)} ADD PRIMARY KEY (${cols});\n` +
-          `ALTER TABLE ${qt(props.table)} DROP INDEX ${tmpName}`
+      if (isPk) {
+        // 主键重建：**一条语句**里先删后加（MySQL 按"最终状态"校验自增列必须被索引，
+        // 所以不需要原来那套"加临时唯一索引 → 换主键 → 删临时索引"的分步铺垫了 ——
+        // 实测 `ALTER TABLE t DROP PRIMARY KEY, ADD PRIMARY KEY (id, a)` 一条即成功）。
+        //
+        // 为什么必须并成一条：分步执行时中间态"自增列没有键"会被 MySQL 拒绝（1075），
+        // 而分开执行又意味着**逐条隐式提交** —— 第二句失败就把主键弄没了（用户要求：
+        // 失败不破坏原结构）。一条语句没有中间态。
+        // `includesAuto` 只影响提示文案，语句形态与是否自增无关。
+        sql = `ALTER TABLE ${qt(props.table)} DROP PRIMARY KEY, ADD PRIMARY KEY (${cols})`
       } else {
         const unique = row.unique ? 'UNIQUE ' : ''
         const ft = row.indexType === 'FULLTEXT' ? 'FULLTEXT ' : (row.indexType === 'SPATIAL' ? 'SPATIAL ' : '')
         const using = (row.indexType === 'BTREE' || row.indexType === 'HASH') ? ` USING ${row.indexType}` : ''
-        sql = `ALTER TABLE ${qt(props.table)} DROP INDEX ${qt(row.name)};\n` +
-          `CREATE ${unique}${ft}INDEX ${qt(row.name)}${using} ON ${qt(props.table)} (${cols})`
+        // 同样并成一条：`DROP INDEX` + `ADD INDEX` 同句是原子的（实测：任一句非法则整条不生效，
+        // 索引与列都保持原样）。原先写成 `DROP INDEX …; CREATE INDEX … ON …` 两条，
+        // 第二条失败就丢索引 —— 而"重建索引"本来就是来修索引的，不能再把索引弄没。
+        sql = `ALTER TABLE ${qt(props.table)} DROP INDEX ${qt(row.name)}, ` +
+          `ADD ${unique}${ft}INDEX ${qt(row.name)} (${cols})${using}`
       }
     } else {
       ElMessage.warning(t('tdet.rebuildUnsupported'))

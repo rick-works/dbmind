@@ -387,10 +387,14 @@ fn split_db_schema(database: &str, dialect: &Dialect) -> (String, Option<String>
 /// 特例保留参数：`(max)` 这类编辑器表达不了的形态（SQL Server 的 NVARCHAR(max)）。
 fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
     match kind.key() {
+        // 类型清单的**大小写跟该库自身元数据的报法一致**：MySQL 系（含 Doris）的
+        // information_schema 一律回大写（`VARCHAR`），列表就写大写 —— 否则「下拉里是 varchar、
+        // 回显出来是 VARCHAR」，同一个类型两种写法（用户反馈）。
+        // PG 系的元数据本来就回小写（`varchar`/`timestamptz`），那里保持小写才是一致的。
         "mysql" | "mariadb" | "doris" => vec![
-            "int", "bigint", "smallint", "tinyint", "decimal", "float", "double",
-            "varchar", "char", "text", "longtext", "date", "datetime", "timestamp",
-            "time", "json", "blob",
+            "INT", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "FLOAT", "DOUBLE",
+            "VARCHAR", "CHAR", "TEXT", "LONGTEXT", "DATE", "DATETIME", "TIMESTAMP",
+            "TIME", "JSON", "BLOB",
         ],
         "postgresql" | "kingbase" => vec![
             "integer", "bigint", "smallint", "numeric", "real", "double precision",

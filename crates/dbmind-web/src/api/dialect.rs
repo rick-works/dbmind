@@ -28,10 +28,13 @@ use dbmind_core::{ColumnDetail, ConnectionKind};
 /// 一条 ALTER**（一条语句里的多个子句是原子的，见 `TableDetailView.vue` 的
 /// `mergedAlterStatement`），以及索引修改一律「先建后删 → 改名」（见那边的 `usesTempNameIndexSwap`）。
 pub fn ddl_transactional(key: &str) -> bool {
-    matches!(
-        key,
-        "postgresql" | "kingbase" | "sqlite" | "sqlserver" | "db2" | "derby" | "h2"
-    )
+    // 只列**真的有 `BEGIN` 语句**、且 DDL 参与事务的方言。
+    //
+    // 为什么把 db2 / derby / h2 从这份名单里去掉了：它们没有 `BEGIN` 这个语句（要靠 JDBC 的
+    // autoCommit 开关），原来放在这里等于"发了句没人认的 BEGIN"⇒ autoCommit 仍是开着的、
+    // 每条 DDL 自己提交 ⇒ 我们却对外宣称"失败整体回滚"——比不做更坏。要做对得走内核那套
+    // 事务入口（Driver::tx_control / `setautocommit=false`），那是独立一件事，先如实摘掉。
+    matches!(key, "postgresql" | "kingbase" | "sqlite" | "sqlserver")
 }
 
 /// 开事务的语句。T-SQL 里单独的 `BEGIN` 是语句块开始（不是开事务），必须写全。
