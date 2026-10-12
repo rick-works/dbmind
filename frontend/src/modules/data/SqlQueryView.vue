@@ -3892,6 +3892,14 @@ const selectResultTab = (i) => {
   const item = resultItems.value[i]
   if (!item) return
   if (i === activeResultIdx.value && result.value === item.res) return
+  // 结果页签 ↔ 语句页签联动：点「结果 N」就把编辑器定位并选中第 N 条语句 ——
+  // 与顶部「语句 N」用的是同一个 gotoStatement（选中整段 + 滚动居中 + 聚焦），行为完全一致。
+  // 对应关系靠**顺序**：两边都出自同一套"按分号切句"，results 是 statements 的有序前缀
+  //（某条失败即中断，见后端 query.rs），所以下标天然一一对应。
+  // 注意：若执行的是"选中的片段"，下标是片段内的序号 —— 与整篇语句列表会有偏差，
+  // 这种情况定位可能不准（与执行失败时的 markErrorStatement 是同一处历史偏差，暂不处理）。
+  const stmt = stmtBreadcrumbs.value[i]
+  if (stmt) gotoStatement(stmt)
   activeResultIdx.value = i
   result.value = item.res
   // 换结果集 ⇒ 行号基准变了，编辑缓冲作废（快照守卫也会拦过期提交）
