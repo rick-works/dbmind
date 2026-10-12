@@ -55,6 +55,26 @@ const num = (tag) => Number(tag.replace(/^v/, '').split('.').map((n) => n.padSta
  */
 const mdPlain = (s) => String(s).replace(/\*\*/g, '').replace(/`/g, '')
 
+/**
+ * 要点 → 官网 `<li>` 列表。
+ *
+ * `标题：说明` 时把标题加粗（与官网原有观感一致）。先剥 md 装饰：md 是给 GitHub 看的
+ * （`**粗**` 有意义），而这一层是 **HTML** —— 星号会原样显示（曾把 `**大树不再卡**` 包进
+ * `<b>`，线上就是字面星号）。反引号同理（HTML 里要有样式才有意义，这里按纯文本处理）。
+ */
+const noteLis = (bullets) =>
+  bullets
+    .map((b) => {
+      const t = mdPlain(b)
+      const i = t.indexOf('：')
+      const text = i > 0 && i <= 14 ? `<b>${t.slice(0, i)}</b>${t.slice(i)}` : `<b>${t}</b>`
+      return `            <li>${text}</li>`
+    })
+    .join('\n')
+
+/** 版本类型 → 官网标签文字（与既有条目口径一致） */
+const LEVEL_TEXT = { patch: '修订版', minor: '小版本', major: '大版本' }
+
 const argv = process.argv.slice(2)
 const noPush = argv.includes('--no-push')
 const only = argv.filter((a) => !a.startsWith('--'))
@@ -141,31 +161,60 @@ for (const [tag, bullets] of bulletsByTag) {
     const tag = (inner.match(/rel-ver">(v[\d.]+)</) || [])[1]
     const bullets = tag && bulletsByTag.get(tag)
     if (!bullets) return whole
-    // 要点：`标题：说明` 时把标题加粗（与官网原有观感一致）。
-    //
-    // 先剥掉 markdown 的装饰：md 里为了 GitHub 的观感常写 `**标题**：说明`，
-    // 而这一层是 **HTML** —— 那些星号会原样显示（曾经把 `**大树不再卡**` 包进 <b>，
-    // 线上就是字面星号）。反引号同理（HTML 里要有样式才有意义，这里按纯文本处理）。
-    const lis = bullets
-      .map((b) => {
-        const t = mdPlain(b)
-        const i = t.indexOf('：')
-        const text =
-          i > 0 && i <= 14
-            ? `<b>${t.slice(0, i)}</b>${t.slice(i)}`
-            : `<b>${t}</b>`
-        return `            <li>${text}</li>`
-      })
-      .join('\n')
-    let out = inner.replace(/<ul class="rel-notes">[\s\S]*?<\/ul>/, `<ul class="rel-notes">\n${lis}\n          </ul>`)
-    // 「最新」标：先全部摘掉，只留最新那一条
-    out = out.replace(/\s*<span class="rel-tag tag-latest">[^<]*<\/span>/, '')
-    if (tag === newest) {
-      out = out.replace(/(<span class="rel-tag tag-(?:patch|minor|major)">[^<]*<\/span>)/, '$1\n            <span class="rel-tag tag-latest">最新</span>')
-    }
+    const lis = noteLis(bullets)
+    const out = inner.replace(/<ul class="rel-notes">[\s\S]*?<\/ul>/, `<ul class="rel-notes">\n${lis}\n          </ul>`)
     touched++
     return `<article class="rel-item reveal">${out}</article>`
   })
+  // 新版本在官网里**还没有条目** → 直接建一条插到时间线最上面。
+  //
+  // 原先这里只更新"已存在"的条目，新增版本得靠 release.mjs 的**提醒**去手工加
+  // （提示原文就是"记得① 在版本区顶部加一条"）—— 而"记得"这种事已经漏过两次：官网一连
+  // 落后 8 个版本、v1.2.20 又是只推了源没推分支。要点、类型、日期都在仓库里，没有理由靠记性。
+  if (!new RegExp(`rel-ver">${newest}<`).test(html)) {
+    const zh = fs.readFileSync(ZH, 'utf8')
+    const pick = (key) =>
+      (zh.match(new RegExp(`'settings\\.about\\.rel1\\.${key}': '([^']*)'`)) || [])[1] || ''
+    const level = pick('level') || 'patch'
+    const item = [
+      `      <!-- ${newest}（最新） -->`,
+      '      <article class="rel-item reveal">',
+      '        <div class="rel-rail"><span class="rel-dot"></span></div>',
+      '        <div class="rel-body">',
+      '          <div class="rel-head">',
+      `            <span class="rel-ver">${newest}</span>`,
+      `            <span class="rel-tag tag-${level}">${LEVEL_TEXT[level] || LEVEL_TEXT.patch}</span>`,
+      '            <span class="rel-tag tag-latest">最新</span>',
+      `            <span class="rel-date">${pick('date')}</span>`,
+      '          </div>',
+      '          <ul class="rel-notes">',
+      noteLis(bulletsByTag.get(newest) || []),
+      '          </ul>',
+      '          <div class="rel-links">',
+      `            <a class="btn btn-primary" href="https://github.com/${REPO}/releases/tag/${newest}" target="_blank" rel="noopener">发布说明</a>`,
+      `            <a class="btn btn-ghost" href="https://github.com/${REPO}/releases/tag/${newest}" target="_blank" rel="noopener">下载 ${newest}</a>`,
+      '          </div>',
+      '        </div>',
+      '      </article>',
+      '',
+    ].join('\n')
+    // 锚点要容忍 CRLF：文件在 Windows 上是 \r\n，写死 \n 会**匹配不上** —— 而日志照旧会喊
+    // "已自动新建"（因为它只看 touched），线上却什么都没变（踩过）。
+    const eol = html.includes('\r\n') ? '\r\n' : '\n'
+    html = html.replace(/(<div class="rel-timeline">\r?\n)/, `$1${item.replace(/\n/g, eol)}`)
+    touched++
+    console.log(`官网：${newest} 原先没有条目，已自动新建（要点 ${(bulletsByTag.get(newest) || []).length} 条）`)
+  }
+  // 「最新」标**全局只留一个**：先全摘掉，再给最新那条加上。
+  // 不能只在上面那个循环里做 —— 单版本同步（`sync-release-notes.mjs v1.2.21`）时循环只认这一个
+  // 版本，其它条目原样返回，上一版的「最新」就留下来了（踩过：官网同时出现两个「最新」）。
+  html = html.replace(/\s*<span class="rel-tag tag-latest">[^<]*<\/span>/g, '')
+  html = html.replace(
+    new RegExp(
+      `(<span class="rel-ver">${newest}</span>[\\s\\S]*?<span class="rel-tag tag-(?:patch|minor|major)">[^<]*</span>)`,
+    ),
+    '$1\n            <span class="rel-tag tag-latest">最新</span>',
+  )
   html = html.replace(/<!--\s*(v[\d.]+)（最新）\s*-->/, '<!-- $1 -->')
   html = html.replace('<!-- ' + newest + ' -->', `<!-- ${newest}（最新） -->`)
   fs.writeFileSync(SITE, html, 'utf8')
@@ -176,16 +225,19 @@ for (const [tag, bullets] of bulletsByTag) {
 {
   let lines = fs.readFileSync(ZH, 'utf8').split('\n')
   const order = [...bulletsByTag.keys()] // rel1 = 最新
-  // 先把**所有** relN.noteX 行清掉，再按版本重新插到 version/level/date 后面。
-  //
-  // 为什么不能只替换"紧跟 version 的那个连续块"：历史上要点块被手工搬过家（发版时把 relN 的
-  // version/level/date 整体下移了一格，而 note 行留在原处），于是同一个版本的 note 行散落在
-  // 别处 —— 只替换连续块会漏掉它们，结果是**重复键**（guard 报"重复键 99 个"，页面上一套新一套旧）。
-  // 清空重插就不必再假设"块是连续的"。
-  lines = lines.filter((l) => !/^\s*'settings\.about\.rel\d+\.note\d+'/.test(l))
   let changed = 0
   for (let n = 1; n <= order.length; n++) {
     const bullets = bulletsByTag.get(order[n - 1])
+    // 先清掉**这个版本**散落各处的旧 note 行，再插到 version/level/date 之后。
+    //
+    // 为什么不能只替换"紧跟 version 的那个连续块"：历史上要点块被手工搬过家（发版时把 relN 的
+    // version/level/date 整体下移，而 note 行留在原处），于是同一个版本的 note 行散落在别处 ——
+    // 只替换连续块会漏掉它们，结果是**重复键**（guard 报"重复键 99 个"，页面上一套新一套旧）。
+    //
+    // 也不能"整体清空再重插"：本脚本支持只同步某一个版本（`sync-release-notes.mjs v1.2.21`，
+    // 文档里的常规用法），整体清空会把**其它版本**的要点一起删掉（踩过：zh 的 rel2/rel3 要点被清成 0）。
+    const noteRe = new RegExp(`^\\s*'settings\\.about\\.rel${n}\\.note\\d+'`)
+    for (let k = lines.length - 1; k >= 0; k--) if (noteRe.test(lines[k])) lines.splice(k, 1)
     const start = lines.findIndex((l) => l.includes(`'settings.about.rel${n}.version'`))
     if (start < 0) continue
     // 该版本的块 = 紧跟其后的 version/level/date 行
