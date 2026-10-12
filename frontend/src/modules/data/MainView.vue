@@ -166,7 +166,14 @@
                         :title="data.note ? (data.name + '：' + data.note) : data.name">{{ data.label || data.name || node.label }}</span>
                   <!-- 只读徽标：这个状态决定写操作会不会被拦，得随时看得见（藏在编辑弹窗里没人记得住） -->
                   <span v-if="data.readOnly" class="ro-badge" :title="$t('cd.readOnlyTip')">{{ $t('cd.readOnlyShort') }}</span>
-                  <span class="env-corner" :class="'env-corner-' + (data.env || 'none')" :title="envTitle(data.env)">{{ envShort(data.env) }}</span>
+                  <span class="env-corner" :class="'env-corner-' + (data.env || 'none')" :title="envTitle(data.env)">{{ envShort(data.env) }}</span><span class="conn-info-card">
+                    <span class="ci-row"><b>{{ $t('connTip.name') }}</b>{{ data.name }}</span>
+                    <span class="ci-row"><b>{{ $t('connTip.url') }}</b>{{ connUrlOf(data) || '—' }}</span>
+                    <span class="ci-row"><b>{{ $t('connTip.host') }}</b>{{ data.host || '—' }}</span>
+                    <span class="ci-row"><b>{{ $t('connTip.port') }}</b>{{ data.port || '—' }}</span>
+                    <span class="ci-row"><b>{{ $t('connTip.user') }}</b>{{ data.username || '—' }}</span>
+                    <span class="ci-row"><b>{{ $t('connTip.type') }}</b>{{ labelOf(data.connType) }}</span>
+                  </span>
                 </span>
                 <!-- 库图标：**未打开=变暗**。
                      原先用"当前库=蓝、其它=黄"来区分 —— 那是拿**颜色**说**状态**，
@@ -3787,7 +3794,8 @@ const buildTree = async () => {
       // 跳过没有 conn 的空分组
       if (conns.length === 0 && !customFolders.value.includes(env)) continue
       // 连接节点不带 children：懒加载模式下展开时才会加载数据库列表
-      const connNodes = conns.map(c => ({
+      // 悬浮信息卡要显示 host/port/用户名，节点上原来只带了子集，这里一次带上（比模板里再回查更省）
+  const connNodes = conns.map(c => ({
         id: 'conn:' + c.id, label: c.name, name: c.name, kind: 'conn',
         connId: String(c.id), env: envTagOf(c), connType: c.type,
         // 记录真实所属目录（environment），右键"新建连接"时继承所在目录而非角标环境
@@ -3798,8 +3806,30 @@ const buildTree = async () => {
         note: c.note || '',
         // 只读标记：树上直接摆出来。这个状态藏在编辑弹窗的「高级选项」里，
         // 而它决定的是「写操作会不会被拦」—— 用户需要随时看得见，不能靠记
-        readOnly: !!c.readOnly
-      }))
+        readOnly: !!c.readOnly,
+        host: c.host || '',
+        port: c.port || '',
+        username: c.username || ''
+        }))
+
+        // 由连接对象拼出 `scheme://user@host:port`（**绝不拼口令** —— 后端本来也不回传 password）。
+        // 文件型连接没有 host/port，返回空串，卡片里显示「—」。
+        const CONN_SCHEME = {
+        MYSQL: 'mysql', MARIADB: 'mysql', DORIS: 'mysql',
+        POSTGRESQL: 'postgres', KINGBASE: 'postgres',
+        CLICKHOUSE: 'clickhouse', SQLSERVER: 'sqlserver', ORACLE: 'oracle',
+        REDIS: 'redis', MONGODB: 'mongodb', DB2: 'db2', DM: 'dm',
+        ELASTICSEARCH: 'http'
+        }
+        const FILE_TYPES = ['SQLITE', 'H2', 'DERBY']
+        const connUrl = (c) => {
+        if (!c || FILE_TYPES.includes(c.type) || !c.host) return ''
+        const scheme = CONN_SCHEME[c.type] || String(c.type || '').toLowerCase()
+        const auth = c.username ? c.username + '@' : ''
+        const port = c.port ? ':' + c.port : ''
+        return scheme + '://' + auth + c.host + port
+        }
+        const connUrlOf = (data) => connUrl({ type: data.connType, username: data.username, host: data.host, port: data.port })
       // 带路径的目录 → 嵌套进父节点；顶层目录/预置环境/未分组直接挂根。
       // 全部走 ensureFolderNode 统一索引 —— 否则「父目录先被子目录递归创建、
       // 轮到自己时又新建一份」会出现重复的顶层节点（真机踩过）。

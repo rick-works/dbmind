@@ -469,6 +469,37 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
 /* 遮罩不做整页模糊：backdrop-filter 要每帧重算整块背景，转圈同时进行就是肉眼可见的卡顿
    （用户反馈"圈会卡顿"）；半透明底色本身已经足够把内容压下去。 */
 .el-loading-mask { background-color: var(--dc-mask); }
+
+/* 连接节点的悬浮信息卡（纯 CSS：卡片就挂在 .conn-row 里，靠 :hover 显示）。
+   不用 el-tooltip / el-popover —— 它们 teleport 到 body，样式要另写全局、还容易在拖拽时乱飘。 */
+.conn-row { position: relative; }
+.conn-info-card { display: none; }
+.conn-row:hover .conn-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  position: absolute;
+  left: calc(100% + 8px);
+  top: -4px;
+  z-index: 40;
+  min-width: 250px;
+  max-width: 380px;
+  padding: 10px 12px;
+  background: var(--dc-bg-pop);
+  border: 1px solid var(--dc-border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+  pointer-events: none;
+}
+.conn-info-card .ci-row {
+  display: flex;
+  gap: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--dc-text);
+  word-break: break-all;
+}
+.conn-info-card .ci-row b { flex: 0 0 48px; color: var(--dc-text-dim); font-weight: 400; }
 .el-loading-spinner .circular {
   width: 34px;
   height: 34px;
