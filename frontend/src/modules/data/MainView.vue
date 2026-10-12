@@ -7058,7 +7058,8 @@ const connTypeSummary = computed(() =>
   align-items: center !important;
   justify-content: center;
   line-height: normal;
-  font-size: 14px !important;
+  /* 字号跟随设置页「界面尺寸 → TAB 栏文字」（--dc-tab-fs 由 utils/appearance.js 注入） */
+  font-size: var(--dc-tab-fs, 14px) !important;
   position: relative;
   transition: color .15s, background .15s;
 }

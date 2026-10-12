@@ -109,7 +109,7 @@
           </div>
 
           <!-- 界面尺寸：改完立即生效（写 :root 的 CSS 变量，见 utils/appearance.js），不需要重启。
-              这三项都是"微调"，上下限刻意收窄，避免把界面搞坏。 -->
+              这几项都是"微调"，上下限刻意收窄，避免把界面搞坏。 -->
           <div class="panel-title topmenu-title">{{ $t('settings.appearance.title') }}</div>
           <div class="panel-desc">{{ $t('settings.appearance.desc') }}</div>
           <!-- 200px：装得下「顶栏菜单文字（含图标）」这种较长标签（11 个汉字 ≈156px + 内边距）；
@@ -125,6 +125,11 @@
             </el-form-item>
             <el-form-item :label="$t('settings.appearance.treeFont')">
               <el-input-number v-model="appearance.treeFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />
+              <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
+            </el-form-item>
+            <!-- 工作区页签（脚本 1 × 那一排）的字号：顶栏那排是"菜单"，由上面 navFont 控制，别混 -->
+            <el-form-item :label="$t('settings.appearance.tabFont')">
+              <el-input-number v-model="appearance.tabFontSize" :min="12" :max="18" :step="1" @change="onAppearanceChange" />
               <span style="margin-left:8px;font-size:13px;color:var(--dc-text-dim)">px</span>
             </el-form-item>
           </el-form>

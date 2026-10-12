@@ -15,7 +15,8 @@ export const APPEARANCE_KEY = 'dbmind_appearance'
 export const appearanceDefaults = {
   navFontSize: 14, // 顶部菜单文字（px）
   navIconSize: 16, // 顶部菜单图标（px）
-  treeFontSize: 14 // 左侧树文字（px）
+  treeFontSize: 14,
+  tabFontSize: 14  // 工作区页签（TAB 栏）文字（px） // 左侧树文字（px）
 }
 
 // 取值范围：只做收敛，避免手填 0 或 200 把界面搞坏。
@@ -23,7 +24,8 @@ export const appearanceDefaults = {
 const RANGES = {
   navFontSize: [12, 18],
   navIconSize: [12, 22],
-  treeFontSize: [12, 18]
+  treeFontSize: [12, 18],
+  tabFontSize: [12, 18]
 }
 
 const clampOne = (key, v) => {
@@ -42,7 +44,8 @@ export const getAppearance = () => {
   return {
     navFontSize: clampOne('navFontSize', raw.navFontSize),
     navIconSize: clampOne('navIconSize', raw.navIconSize),
-    treeFontSize: clampOne('treeFontSize', raw.treeFontSize)
+    treeFontSize: clampOne('treeFontSize', raw.treeFontSize),
+    tabFontSize: clampOne('tabFontSize', raw.tabFontSize)
   }
 }
 
@@ -52,6 +55,7 @@ export const applyAppearance = (a = getAppearance()) => {
   root.style.setProperty('--dc-nav-fs', a.navFontSize + 'px')
   root.style.setProperty('--dc-nav-icon', a.navIconSize + 'px')
   root.style.setProperty('--dc-tree-fs', a.treeFontSize + 'px')
+  root.style.setProperty('--dc-tab-fs', a.tabFontSize + 'px')
   // 左侧树的图标跟着文字走（+1px）：只放大文字、图标原地不动会显得头重脚轻
   root.style.setProperty('--dc-tree-icon', a.treeFontSize + 1 + 'px')
 }
@@ -61,7 +65,8 @@ export const saveAppearance = (a) => {
   const next = {
     navFontSize: clampOne('navFontSize', a && a.navFontSize),
     navIconSize: clampOne('navIconSize', a && a.navIconSize),
-    treeFontSize: clampOne('treeFontSize', a && a.treeFontSize)
+    treeFontSize: clampOne('treeFontSize', a && a.treeFontSize),
+    tabFontSize: clampOne('tabFontSize', a && a.tabFontSize)
   }
   persistUI(APPEARANCE_KEY, JSON.stringify(next))
   applyAppearance(next)

@@ -15,6 +15,7 @@ export default {
   'settings.appearance.desc': 'Sizes for the top menu, the top bar right icons and the left tree — applied immediately, no restart',
   'settings.appearance.navFont': 'Top menu text (incl. icons)',
   'settings.appearance.navIcon': 'Top bar right icons',
+  'settings.appearance.tabFont': 'Tab bar text (workspace tabs)',
   'settings.appearance.treeFont': 'Left tree text (incl. icons)',
   'settings.topMenu.title': 'Top menu',
   'settings.topMenu.desc': 'Choose which entries appear in the top bar and reorder them',
