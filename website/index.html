@@ -693,6 +693,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.20 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.20</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-13</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>非默认「模式」下的字段修好了</b>：PostgreSQL / SQL Server / 人大金仓 的表如果在 public、dbo 之外的模式里，以前能列出表、打开却没有字段；现在字段、建表语句、索引、注释、类型都按你点的那一层取</li>
+            <li><b>大树不再卡</b>：上千张表的库，展开先出前 200 行、其余在后台补齐（列表始终是完整平铺的）；鼠标扫过连接节点也不再让整棵树重绘</li>
+            <li><b>数据传输</b>：修 MySQL 目标建表报 Row size too large (8126)；写入侧并发与批事务调优，大表更快；「选择对象」的类型徽标改成筛选器 —— 点「表」只看表、点「视图」只看视图，再点一次回到全部</li>
+            <li><b>一批稳定性修复</b>：设置页打开时不再因一个不存在的函数中断后续加载（驱动列表 / 通知 / 知识库 / 快捷键因此是空的）；列类型「下拉与回显」写法统一；右击菜单点别处会关闭；切换表时字段不再串到另一张表；后台读取协程异常不再误报「成功」</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.20" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.20" target="_blank" rel="noopener">下载 v1.2.20</a>
+          </div>
+        </div>
+      </article>
+
       <!-- v1.2.19 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +723,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.19</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-12</span>
           </div>
           <ul class="rel-notes">
