@@ -1560,8 +1560,8 @@ pub async fn data(
     let total = match run_sql_in(&state, &id, &database, count_sql, 1).await {
         Ok(count_result) => rows_of(&count_result)
             .first()
-            .and_then(|row| row.values().next())
-            .and_then(Value::as_i64)
+
+            .map(|row| cell_int(row, "cnt").or_else(|| row.values().find_map(shape::value_to_i64)).unwrap_or(-1))
             .unwrap_or(-1),
         Err(_) => -1,
     };
