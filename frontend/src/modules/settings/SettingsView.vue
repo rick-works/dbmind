@@ -676,7 +676,9 @@
               <!-- 页大小是**纯数字**：不放进字典。放进字典就要为每种语言各维护 9 条，
                    而它们在任何语言下都是同一个数字 —— 徒增错漏面。 -->
               <el-select v-model="queryForm.pageSize" style="width:160px">
-                <el-option v-for="n in [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]" :key="n"
+                <!-- 用户要求补三档：20000 / 50000 / 100000（大表整页看数时用；实际取数仍受
+                     下面「最大行数」限制，所以调大这里不会把查询拖垮） -->
+                <el-option v-for="n in [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]" :key="n"
                            :value="n" :label="$t('settings.query.perPage', { n })" />
               </el-select>
               <div class="form-tip">{{ $t('settings.query.pageSizeTip') }}</div>
