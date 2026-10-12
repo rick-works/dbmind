@@ -2593,8 +2593,9 @@ const loadHistory = async () => {
   try {
     // 底部「近 7 天趋势 / 失败查询」需要更多样本（最近 8 条撑不起一周的图），多取一份
     const [rows, many] = await Promise.all([listHistory(8), listHistory(200)])
-    // 4 条：加了第四行卡片后竖向空间更紧 —— 首页宁可少两条也别出现滚动条
-    recentHistory.value = (Array.isArray(rows) ? rows : []).slice(0, 4)
+    // 6 条（用户要求）：原先 4 条是怕首页出现滚动条，实测右侧「MCP 服务」卡片比它高，
+    // 6 条正好把两栏拉齐，还多给两条历史 —— 取数已经拿了 8 条，不用改请求
+    recentHistory.value = (Array.isArray(rows) ? rows : []).slice(0, 6)
     trendHistory.value = Array.isArray(many) ? many : []
   } catch {
     // 拿不到历史不影响欢迎页的其它内容（新库本来就没有历史）
@@ -7357,10 +7358,13 @@ const connTypeSummary = computed(() =>
   width: 100%; text-align: left; padding: 9px 12px;
   background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: 10px;
 }
-.empty-acts { display: flex; flex-direction: column; }
+/* 「常用操作」与左侧「快速开始」保持同一套行距（用户要求两栏看着一致）：
+   行高固定 36px + 行间距 2px，和 .empty-ds / .empty-dss-list 完全对齐 ——
+   原先这里是 padding: 5px 8px（行高约 30px），两栏并排就能看出高低不齐。 */
+.empty-acts { display: flex; flex-direction: column; gap: 2px; }
 .empty-act {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
-  padding: 5px 8px; border: none; border-radius: 8px; cursor: pointer;
+  height: 36px; padding: 0 10px; border: none; border-radius: 8px; cursor: pointer;
   background: transparent; font: inherit; color: var(--dc-text);
   transition: background .15s ease;
 }
