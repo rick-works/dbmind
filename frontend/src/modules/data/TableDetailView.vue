@@ -431,6 +431,7 @@ import { editorSettingsLive } from '../../utils/settings'
 const tr = t
 import { Plus, Delete, Refresh, CopyDocument, CaretRight, Grid, DocumentCopy, StarFilled, Document, EditPen, Search } from '@element-plus/icons-vue'
 import { listColumns, listIndexes, listTables, alterTable, getFeatures, executeSql, getTableDdl, getTableCounts } from '../../api'
+import { mergeAlterRuns } from './alterMerge'
 
 const props = defineProps({ conn: Object, database: String, table: String })
 
@@ -1518,49 +1519,13 @@ const canMergeAlter = computed(() =>
 /** 索引也用 `ALTER TABLE … ADD INDEX …` 形态的方言（这样能和删旧并进同一条 ALTER） */
 const mergeableIndexDialect = computed(() => ['mysql', 'doris'].includes(ddlStyle.value))
 
-const ALTER_PREFIX = 'ALTER TABLE ' + qt(props.table) + ' '
-
-/**
- * 把语句串按「能并的就并」重排：连续的 `ALTER TABLE 本表 …` 片段合成**一条** ALTER，
- * 其余语句（CREATE INDEX / DROP INDEX / RENAME …，以及注释行）**保持原位、保持独立**。
- *
- * 为什么并：这些方言的 DDL 没有事务（MySQL/Oracle/Doris/ClickHouse 都会隐式提交），逐条执行时
- * 中间那条失败，前面已经删掉的东西就再也回不来 —— 用户实测：「索引增加一个字段，因为先删除，
- * 执行报错后原来的索引也直接没了」。并成一条就没有中间态。
- *
- * 为什么不"有一段不能并就整批退回逐条"：Oracle/DM 的 DROP INDEX 天生不是 ALTER 形状，
- * 整批退回等于让它们的列变更又变成非原子。这里只把**那一段**留在外面，其余照并。
- */
-const mergeAlterRuns = (parts) => {
-  const out = []
-  let run = []
-  const flush = () => {
-    if (run.length) out.push(ALTER_PREFIX.trimEnd() + ' ' + run.join(', '))
-    run = []
-  }
-  for (const stmt of parts) {
-    for (const piece of String(stmt).split(';\n')) {
-      const one = piece.trim()
-      if (!one) continue
-      // 注释行（例如 Doris 那条"分桶列改不了"）：独立保留，执行端会忽略
-      if (one.startsWith('--')) { flush(); out.push(one); continue }
-      if (!one.startsWith(ALTER_PREFIX)) { flush(); out.push(one); continue }
-      const clause = one.slice(ALTER_PREFIX.length)
-      // Oracle/DM：RENAME COLUMN 是独立形式，不能与其它 alter_table_clause 并列
-      if ((ddlStyle.value === 'oracle' || ddlStyle.value === 'dm') && /^RENAME\s/i.test(clause)) {
-        flush(); out.push(one); continue
-      }
-      run.push(clause)
-    }
-  }
-  flush()
-  return out
-}
-
 // 完整变更脚本：先清理索引 → 字段变更 → 重建/新增索引 → 表选项
+// 合并逻辑在 ./alterMerge.js（纯模块，可跑断言 —— 它一旦失效就会退回"先删后建"，会丢索引）
 const scriptParts = computed(() => {
   const parts = [...idxDropParts(), ...colParts(), ...idxCreateParts(), ...optParts()]
-  return canMergeAlter.value ? mergeAlterRuns(parts) : parts
+  return canMergeAlter.value
+    ? mergeAlterRuns({ table: qt(props.table), kind: ddlStyle.value, parts })
+    : parts
 })
 /** SQL 预览是否收起（预览已移到编辑区下方，可折叠；默认展开） */
 const sqlCollapsed = ref(false)
