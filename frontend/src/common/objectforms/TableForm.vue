@@ -121,19 +121,22 @@
                    有 colgroup 时它优先，空行的 colspan 就不再影响列宽。
                    「说明」那列**故意不给宽度**：表格宽度是 100%，富余宽度只落到它头上，
                    其余列宽恒定（长文本列就该拿富余）。 -->
+              <!-- 列宽与「编辑表结构」同机制：**百分比**（按当前显示的列归一化到 100%）。
+                   写死像素时，容器比列宽之和大右侧就留白、小了就溢出；百分比与容器宽度无关、
+                   合计恒为 100% ⇒ 表格必然严丝合缝铺满。权重只表达相对比例（见 COL_WEIGHTS）。 -->
               <colgroup>
-                <col style="width:32px" />
-                <col style="width:120px" />
-                <col style="width:110px" />
-                <col style="width:64px" />
-                <col style="width:64px" />
-                <col style="width:56px" />
-                <col style="width:56px" />
-                <col v-if="showOrderKey" style="width:70px" />
-                <col style="width:150px" />
-                <col v-if="showAutoIncrement" style="width:56px" />
-                <col v-if="showComment" />
-                <col style="width:40px" />
+                <col :style="{ width: colWidths.idx }" />
+                <col :style="{ width: colWidths.name }" />
+                <col :style="{ width: colWidths.type }" />
+                <col :style="{ width: colWidths.len }" />
+                <col :style="{ width: colWidths.prec }" />
+                <col :style="{ width: colWidths.nullable }" />
+                <col v-if="showPkCol" :style="{ width: colWidths.pk }" />
+                <col v-if="showOrderKey" :style="{ width: colWidths.sort }" />
+                <col :style="{ width: colWidths.def }" />
+                <col v-if="showAutoIncrement" :style="{ width: colWidths.auto }" />
+                <col v-if="showComment" :style="{ width: colWidths.comment }" />
+                <col :style="{ width: colWidths.ops }" />
               </colgroup>
               <thead>
                 <!-- 第一行是 35px 空行：页签与工具条就"住"在这一行（与「编辑表结构」同一套做法）。
@@ -148,18 +151,18 @@
                        · 解法是让**长文本那一列不写宽度**：富余宽度只落到它头上，
                          其余列宽恒定。这里由「备注/说明」承担（没这一列时落到末列）。
                        · 序号收到 32px：它只放一位数。 -->
-                  <th style="width:32px" :title="$t('tf.colOrder')">#</th>
-                  <th style="width:120px">{{ $t('tf.colName') }}</th>
-                  <th style="width:110px">{{ $t('tf.colType') }}</th>
+                  <th style="width:40px">#</th>
+                  <th>{{ $t('tf.colName') }}</th>
+                  <th style="width:120px">{{ $t('tf.colType') }}</th>
                   <th style="width:64px">{{ $t('tf.colLength') }}</th>
                   <th style="width:64px">{{ $t('tf.colPrecision') }}</th>
-                  <th class="c-center" style="width:56px">{{ $t('tf.colPrimary') }}</th>
-                  <th class="c-center" style="width:56px">{{ $t('tf.colNullable') }}</th>
+                  <th class="c-center" style="width:76px">{{ $t('tf.colNullable') }}</th>
+                  <th v-if="showPkCol" class="c-center" style="width:56px">{{ $t('tf.colPrimary') }}</th>
                   <th v-if="showOrderKey" class="c-center" style="width:70px" :title="$t('tf.orderKeyTip')">{{ $t('tf.orderKey') }}</th>
-                  <th style="width:150px">{{ $t('tf.colDefault') }}</th>
+                  <th style="width:132px">{{ $t('tf.colDefault') }}</th>
                   <th v-if="showAutoIncrement" class="c-center" style="width:56px">{{ $t('tf.colAutoInc') }}</th>
-                  <th v-if="showComment">{{ $t('udv.fComment') }}</th>
-                  <th class="c-center" style="width:40px">{{ $t('tf.colOps') }}</th>
+                  <th v-if="showComment">{{ $t('tdet.comment') }}</th>
+                  <th class="c-center" style="width:56px">{{ $t('tf.colOps') }}</th>
                 </tr>
               </thead>
               <tbody>
@@ -173,8 +176,8 @@
                   </td>
                   <td><el-input v-model="c.length" size="small" /></td>
                   <td><el-input v-model="c.scale" size="small" /></td>
-                  <td class="c-center"><el-checkbox v-model="c.primaryKey" @click.stop @change="onChKeyChange(c)" /></td>
                   <td class="c-center"><el-checkbox v-model="c.nullable" /></td>
+                  <td v-if="showPkCol" class="c-center"><el-checkbox v-model="c.primaryKey" @click.stop @change="onChKeyChange(c)" /></td>
                   <td v-if="showOrderKey" class="c-center"><el-checkbox v-model="c.orderKey" @click.stop @change="onChKeyChange(c)" :title="$t('tf.orderKeyCellTip')" /></td>
                   <td><el-input v-model="c.defaultValue" size="small" /></td>
                   <td v-if="showAutoIncrement" class="c-center"><el-checkbox v-model="c.autoIncrement" @change="onAutoIncChange(c)" /></td>
@@ -191,8 +194,13 @@
       <el-tab-pane :label="$t('tf.tabIndexes', { n: idxs.length })" name="indexes">
         <div class="tab-inner idx-tab">
           <div class="card-actions">
-            <el-button size="small" type="primary" :icon="Plus" @click="addIndex">{{ $t('tf.addIndex') }}</el-button>
+            <!-- ClickHouse 不支持建索引，编辑页那边这个按钮也不显示（allowIndexEdit） -->
+            <el-button v-if="!isClickHouse" size="small" type="primary" :icon="Plus" @click="addIndex">{{ $t('tf.addIndex') }}</el-button>
           </div>
+          <!-- 索引区滚动容器（与编辑页的 .idx-body 同一角色）：撑满剩余高度、自己滚，
+               表格跟着容器撑满（于是滚轮在手边，而不是把整页顶长）。
+               顶部那 35px 的让位由 .tab-inner.idx-tab 的 padding 提供，这里不再补。 -->
+          <div class="idx-body">
           <!-- 空状态：与「字段定义」页签、与编辑页同一张虚线卡（.empty-card 一套样式）。
                索引这里尤其明显 —— 一行表头 + 一大片空白最难看。 -->
           <div v-if="!idxs.length" class="empty-card">
@@ -201,7 +209,7 @@
             <div class="empty-card-text">{{ $t('tdet.noIndexHint') }}</div>
             <el-button size="small" type="primary" :icon="Plus" @click="addIndex">{{ $t('tf.addIndex') }}</el-button>
           </div>
-          <el-table v-else :data="idxs" size="small" :empty-text="$t('tf.noIndexes')">
+          <el-table v-else :data="idxs" size="small" height="100%" :empty-text="$t('tf.noIndexes')">
             <el-table-column :label="$t('tf.idxName')" min-width="140">
               <template #default="{ row }"><el-input v-model="row.name" size="small" /></template>
             </el-table-column>
@@ -228,6 +236,7 @@
               </template>
             </el-table-column>
           </el-table>
+          </div>
         </div>
       </el-tab-pane>
     </el-tabs>
@@ -252,15 +261,37 @@ const emit = defineEmits(['sql'])
 const activeTab = ref('basic')
 
 const isClickHouse = computed(() => ddlStyleOf(props.features) === 'clickhouse')
-// 各列是否显示由后端 features（数据源能力）决定
+const isDoris = computed(() => has(props.features, 'doris') || ddlStyleOf(props.features) === 'doris')
+// 各列是否显示由后端 features（数据源能力）决定 —— 与「编辑表结构」逐条对齐：
+// 主键列在 Doris / ClickHouse 下整列不显示（这两边没有"每列主键"概念，摆一列「—」不如不显示）
+const showPkCol = computed(() => !isDoris.value && !isClickHouse.value)
 const showOrderKey = computed(() => isClickHouse.value)
-const showAutoIncrement = computed(() => has(props.features, 'supportsAutoIncrement'))
+// 自增列：Doris 的自增只能建表时指定、编辑器对它没有任何可操作项，同样不显示
+const showAutoIncrement = computed(() => has(props.features, 'supportsAutoIncrement') && !isDoris.value && !isClickHouse.value)
 const showComment = computed(() => has(props.features, 'supportsComment'))
-// 字段表总列数：固定列 #/字段名/类型/长度/精度/主键/可空/默认值/删除 =9；{{ $t('tf.orderKeyCellTip') }}/自增/注释按能力追加
-const headSpan = computed(() => 9
+// 字段表总列数：固定列 #/字段名/类型/长度/精度/可空/默认值/删除 = 8；主键/排序键/自增/注释按能力追加
+const headSpan = computed(() => 8
+  + (showPkCol.value ? 1 : 0)
   + (showOrderKey.value ? 1 : 0)
   + (showAutoIncrement.value ? 1 : 0)
   + (showComment.value ? 1 : 0))
+/* 列宽与「编辑表结构」同一套机制：写**相对权重**（与列宽本身无关、最终合计 100%），
+   按当前显示的列归一化成百分比 —— 于是窗口宽窄、少显示了哪几列，表格都精确铺满。
+   直接写死像素时，容器比列宽之和大右侧就留白、小了就溢出（真机反复出现过）。 */
+const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, def: 12, auto: 5, comment: 30, ops: 5 }
+const colWidths = computed(() => {
+  const keys = ['idx', 'name', 'type', 'len', 'prec', 'nullable']
+  if (showPkCol.value) keys.push('pk')
+  if (showOrderKey.value) keys.push('sort')
+  keys.push('def')
+  if (showAutoIncrement.value) keys.push('auto')
+  if (showComment.value) keys.push('comment')
+  keys.push('ops')
+  const total = keys.reduce((sum, k) => sum + COL_WEIGHTS[k], 0)
+  const out = {}
+  for (const k of keys) out[k] = ((COL_WEIGHTS[k] / total) * 100).toFixed(3) + '%'
+  return out
+})
 
 const emptyCol = () => ({ uid: uid(), name: '', type: 'VARCHAR', length: '255', scale: '', nullable: true, defaultValue: '', autoIncrement: false, primaryKey: false, orderKey: false, comment: '', _sel: false })
 
@@ -273,7 +304,7 @@ const form = reactive({
 const cols = form.columns
 const idxs = form.indexes
 
-const isDoris = computed(() => has(props.features, 'doris'))
+
 
 /// 该有默认值的字段，一律给上默认值（**所有类型**共用这一处判断）：
 ///   存储引擎：优先 InnoDB（MySQL 系），其次 MergeTree（ClickHouse），否则用后端的第一个；
@@ -783,6 +814,17 @@ emit('sql', genSql())
 .idx-tab :deep(.el-table td.el-table__cell > .cell .el-input__wrapper),
 .idx-tab :deep(.el-table td.el-table__cell > .cell .el-select__wrapper) { padding-left: 0 !important; }
 .idx-ops { display: inline-flex; align-items: center; gap: 2px; }
+/* 索引区滚动容器：撑满剩余高度、内容自己滚（编辑页同款）。
+   注意这里**不加** padding-top —— 那 35px 让位已经由 .tab-inner.idx-tab 提供，
+   两处都加就成了 70px。 */
+.idx-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
 /* 多选下拉（包含字段）里的「标签」比单行控件高：外层被 --ctl-h 压到 20~24px 时，标签会从框里
    溢出来（用户反馈：字段显示到框外面去了）。两处收紧：① 标签自身高度跟着 --ctl-h，别用 Element
    默认那 24px；② 这一格的最小高度给标签留出余量（--ctl-h + 上下各 2px 内边距 + 上下各 1px）。
@@ -883,12 +925,11 @@ emit('sql', genSql())
 .tab-inner.idx-tab { padding: 35px 0 0; box-sizing: border-box; }
 .tab-inner { overflow: hidden; }
 /* 表格容器贴内容长（12 行的表原来会在下面拖出一大片带边框的空白）。
-   横向**允许滚动**（编辑页那边是 hidden，因为它列宽总和恰好小于容器）：
-   新建表的列更多（含排序键/自增/说明等），窗口窄时总宽会超出去 ——
-   裁掉的就等于"看不见的列"，那比多一条滚动条严重得多。 */
+   横向**不滚动**，与编辑页一致：列宽已是按权重归一化的百分比，合计恒为 100%，
+   容器多宽都能铺满，不需要横向滚动条（真需要时是列太多了，该靠折叠列解决）。 */
 .col-tab .field-table-wrap {
   flex: 0 1 auto; max-height: 100%;
-  overflow-x: auto; overflow-y: auto;
+  overflow-x: hidden; overflow-y: auto;
   border: none; border-radius: 0; background: transparent; min-height: 0;
 }
 
@@ -909,6 +950,9 @@ emit('sql', genSql())
 
 /* ---- 字段表格本体 ---- */
 .field-table {
+  width: 100%;
+  /* 与编辑页同值：窄于 860px 时列会被压扁（那时该收起侧栏，而不是把列挤没） */
+  min-width: 860px;
   /* **不能用 collapse**：collapsed 边框 + sticky 表头在 Chromium 上会留残影
      （表头下面几行的勾选框会"透过"表头显示）。separate + border-spacing: 0
      观感一致，但粘性表头的重绘正常。 */
