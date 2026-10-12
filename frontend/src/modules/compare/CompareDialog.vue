@@ -595,9 +595,20 @@ const loadConnections = async () => {
     src.value.connectionId = props.conn.id
     tgt.value.connectionId = props.conn.id
     await loadSrcDbs()
-    // 预填库必须在清单里才保留（清单是 internal 裸名；树曾给过 `internal.ods`
-    // 这类全限定名 —— 不在清单就丢掉，别让无效值带进后续请求）
-    if (!srcDbs.value.includes(props.database || '')) src.value.database = ''
+    // 预填库：必须在清单里才用（清单是 internal 裸名；树曾给过 `internal.ods`
+    // 这类全限定名 —— 与清单对不上就丢掉，别让无效值带进后续请求）。
+    //
+    // 注意：这里原先**只写了「不在清单就清空」**，从来没有把 props.database 赋进去 ——
+    // 于是「数据对比」从任何入口进来（首页快速开始 / 连接右键 / 库右键）库都是「请选择」，
+    // 只有连接会被预选（用户实测截图）。数据传输那边是对的，这里照它补上。
+    const wantDb = String(props.database || '')
+    if (wantDb && srcDbs.value.includes(wantDb)) {
+      src.value.database = wantDb
+      // 带上库的子级（schema / 表）：不调这一步，下一步的「表」下拉是空的
+      await onSrcDbChange()
+    } else {
+      src.value.database = ''
+    }
     // 表预填以**库已有效**为前提：库被上面清掉时还填表，会造出「库空、表已选」的
     // 非法组合，下一步校验都拦不住它进 run 请求
     if (src.value.database && props.tables?.length === 1) src.value.table = props.tables[0].name
