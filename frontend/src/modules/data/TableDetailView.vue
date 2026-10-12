@@ -153,7 +153,8 @@
                           class="col-search" :placeholder="$t('tdet.searchCols')" />
                 <el-button size="small" type="primary" :icon="Plus" @click="addColRow">{{ $t('tdet.addColumn') }}</el-button>
               </div>
-              <div class="field-table-wrap">
+              <!-- 几百行时整表全渲染会卡：只渲染看得见的那些行（见脚本 windowedCols 那段） -->
+              <div ref="scroller" class="field-table-wrap" @scroll.passive="onTableScroll">
                 <table class="field-table">
                   <!-- 列宽写在 colgroup 上：`table-layout: fixed` 只认**第一行**的列宽，
                        而第一行是那个 colspan 的空行（页签与工具栏住的地方），
@@ -201,9 +202,14 @@
                     </tr>
                   </thead>
                   <tbody>
-                    <tr v-for="(c, i) in visibleCols" :key="c._uid"
+                    <!-- 虚拟滚动：只渲染看得见的行，上下各用一个空行撑住滚动高度。
+                         256 行的表里每行十几个输入框/下拉/勾选框，全渲染就是"上下滚动发卡"的根因。 -->
+                    <tr v-if="padTop" class="vpad">
+                      <td :colspan="headSpan" :style="{ height: padTop + 'px' }"></td>
+                    </tr>
+                    <tr v-for="(c, i) in windowedCols" :key="c._uid"
                         :class="{ 'r-new': c._state === 'new', 'r-mod': c._state === 'loaded' && colChanged(c) }">
-                      <td><span class="row-idx">{{ i + 1 }}</span></td>
+                      <td><span class="row-idx">{{ winStart + i + 1 }}</span></td>
                       <td>
                         <el-input v-model="c.name" size="small" clearable
                                   :disabled="nameDisabled(c)"
@@ -273,6 +279,10 @@
                       <td :colspan="headSpan" class="empty-row">
                         {{ displayCols.length ? $t('tdet.noMatchingCol', { q: colSearch }) : $t('tdet.noColumns') }}
                       </td>
+                    </tr>
+                    <!-- 底部占位：把剩余行的高度撑出来，滚动条长度与真实行数一致 -->
+                    <tr v-if="padBottom" class="vpad">
+                      <td :colspan="headSpan" :style="{ height: padBottom + 'px' }"></td>
                     </tr>
                   </tbody>
                 </table>
@@ -903,6 +913,42 @@ const isDistCol = (c) => {
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
     .includes(n)
 }
+
+/* ===== 字段表的虚拟滚动 =====
+   256 行的表里每行十几个输入框/下拉/勾选框（实测约三千个组件），全渲染时滚动必然发卡 ——
+   浏览器不是"滚一张图"，而是每动一点就带着整张表重新排、重新画。
+   这里只渲染"看得见的窗口 + 上下各 12 行"，剩下用两个空行（.vpad）把滚动高度撑住。 */
+const scroller = ref(null)
+const scrollTop = ref(0)
+const viewH = ref(600)
+const rowH = ref(26)
+const ROW_BUFFER = 12
+// 行少的时候不窗口化：一次全渲染更省事，也免得首帧量不到行高
+const WINDOW_MIN = 80
+const onTableScroll = () => {
+  const el = scroller.value
+  if (!el) return
+  scrollTop.value = el.scrollTop
+  if (el.clientHeight) viewH.value = el.clientHeight
+  // 行高跟着设置页的「结果表格行高」走，所以每次滚动重新量一次（读一次布局，很便宜）
+  const tr = el.querySelector('tbody tr:not(.vpad)')
+  if (tr && tr.offsetHeight) rowH.value = tr.offsetHeight
+}
+const windowedCols = computed(() => {
+  const all = visibleCols.value
+  if (all.length <= WINDOW_MIN) return all
+  const start = Math.max(0, Math.floor(scrollTop.value / Math.max(1, rowH.value)) - ROW_BUFFER)
+  const end = Math.min(all.length, Math.ceil((scrollTop.value + viewH.value) / Math.max(1, rowH.value)) + ROW_BUFFER)
+  return all.slice(start, end)
+})
+const winStart = computed(() => {
+  const all = visibleCols.value
+  if (all.length <= WINDOW_MIN) return 0
+  return Math.max(0, Math.floor(scrollTop.value / Math.max(1, rowH.value)) - ROW_BUFFER)
+})
+const winEnd = computed(() => winStart.value + windowedCols.value.length)
+const padTop = computed(() => winStart.value * rowH.value)
+const padBottom = computed(() => Math.max(0, (visibleCols.value.length - winEnd.value) * rowH.value))
 // 主键列：Doris 没有「每列主键」概念（主键=建表时的 Key 列，界面上恒为「—」）、
 // ClickHouse 同理 —— 整列不显示，比一列无意义的「—」干净
 const showPkCol = computed(() => !isDoris.value && !isCH.value)
@@ -2338,6 +2384,10 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    下面这条让屏幕外的行跳过布局与绘制、滚到近处再渲染（Chromium / WebView2 支持）。
    别再给行加 filter / backdrop-filter / box-shadow：那会让每行单独做一次合成，反而更卡。 */
 .field-table tbody tr { content-visibility: auto; contain-intrinsic-size: auto 28px; }
+/* 虚拟滚动的上下占位行：只有高度，不要内边距/边框（否则会把滚动条撑长），
+   也别让 content-visibility 跳过它们 —— 那样高度就没了，滚动条会乱跳 */
+.field-table tbody tr.vpad { content-visibility: visible; }
+.field-table tbody tr.vpad td { padding: 0; border-bottom: none; }
 
 /* ===== 字段表格（HTML 表格，与新建表一致） ===== */
 .field-table {
