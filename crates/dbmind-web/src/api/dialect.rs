@@ -1848,7 +1848,11 @@ impl Dialect {
                     Some(comment) => format!(" comment={}", self.literal(comment)),
                     None => String::new(),
                 };
-                " default charset=utf8mb4".to_string() + &comment
+                // 显式 row_format=dynamic：同步过来的宽表（几百列很常见）在 5.6/5.7 默认的
+                // COMPACT 行格式下，每个长文本列内联 768 字节前缀 —— 十几个 TEXT 列就撞上 8126 的
+                // 「Row size too large」；DYNAMIC 下只留 ~20 字节的指针。服务器若已是 DYNAMIC，
+                // 这句写了也无害（幂等），所以不判断版本、统一带上。
+                " row_format=dynamic default charset=utf8mb4".to_string() + &comment
             }
             // Doris 的表级注释跟在 PROPERTIES 里（见上方 doris 分支自行拼接），这里不动
             _ => String::new(),
@@ -2441,9 +2445,26 @@ impl TypeFamily {
             "string" => Self::Text { len: None, long: true },
             "fixedstring" => Self::Text { len: first, long: false },
             "datetime64" => Self::DateTime { tz: false },
-            "decimal32" | "decimal64" | "decimal128" | "decimal256" => Self::Decimal {
+            // ClickHouse 的 `Decimal32(S)` / `Decimal64(S)` / `Decimal128(S)` / `Decimal256(S)`：
+            // 括号里是 **scale**，精度由位数定（9 / 18 / 38 / 76）。
+            // 原先一律写 38 ⇒ `Decimal64(2)` 被渲染成 `decimal(38,2)`：语义没错，但 InnoDB 每列
+            // 内联从 9 字节涨到 17 字节 —— 宽表同步时是「Row size too large (> 8126)」的帮凶
+            //（用户实测：ClickHouse → MySQL 传输，几百列的表建表被拒）。按位数给准精度。
+            "decimal32" => Self::Decimal {
+                precision: 9,
+                scale: first.unwrap_or(0).min(9) as u8,
+            },
+            "decimal64" => Self::Decimal {
+                precision: 18,
+                scale: first.unwrap_or(0).min(18) as u8,
+            },
+            "decimal128" => Self::Decimal {
                 precision: 38,
                 scale: first.unwrap_or(0).min(38) as u8,
+            },
+            "decimal256" => Self::Decimal {
+                precision: 76,
+                scale: first.unwrap_or(0).min(76) as u8,
             },
             // 无符号整型：映射到有符号的"大一档"，超范围的一律落到定点，避免溢出
             "uint8" => Self::Int { bytes: 2 },
@@ -2522,6 +2543,16 @@ impl TypeFamily {
                     "oracle" | "dm" => format!("number({precision},{scale})"),
                     "clickhouse" => format!("Decimal({precision},{scale})"),
                     "sqlite" => "numeric".to_string(),
+                    // MySQL 系精度上限 65、Doris 38：上面 ClickHouse 的 `Decimal256(s)` 解析出来是
+                    // 76 位，不夹住目标端会直接报「Too big precision」。夹精度时 scale 一并压进范围。
+                    "mysql" | "mariadb" => {
+                        let p = precision.min(65);
+                        format!("decimal({p},{})", scale.min(p))
+                    }
+                    "doris" => {
+                        let p = precision.min(38);
+                        format!("decimal({p},{})", scale.min(p))
+                    }
                     _ => format!("decimal({precision},{scale})"),
                 }
             }
@@ -2831,6 +2862,23 @@ mod tests {
         // ClickHouse → PG
         assert_eq!(pg.map_type(Some(ConnectionKind::Clickhouse), "UInt64"), "numeric(20,0)");
         assert_eq!(pg.map_type(Some(ConnectionKind::Clickhouse), "String"), "text");
+        // ClickHouse → MySQL：String 该落 longtext（不是大 varchar）；`DecimalNN(s)` 括号里是 scale、
+        // 精度由位数定 —— 曾经一律按 38 位算，`Decimal64(2)` 被写成 `decimal(38,2)`，每列内联从
+        // 9 字节涨到 17 字节，宽表同步时就是「Row size too large (> 8126)」的帮凶（真机踩过）
+        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "String"), "longtext");
+        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Nullable(String)"), "longtext");
+        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal32(2)"), "decimal(9,2)");
+        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal64(2)"), "decimal(18,2)");
+        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal128(4)"), "decimal(38,4)");
+        // 76 位超出 MySQL 的上限 65：必须夹住，否则建表直接报「Too big precision」
+        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal256(4)"), "decimal(65,4)");
+        // 建表必须显式 row_format=dynamic：老服务器默认 COMPACT，长文本列每列内联 768 字节前缀，
+        // 十几个 TEXT 列就撞上 8126 行上限
+        let mysql_ddl = mysql.create_table_from_columns("t", &[col("a", "String", None)], None);
+        assert!(
+            mysql_ddl.to_ascii_lowercase().contains("row_format=dynamic"),
+            "实际：{mysql_ddl}"
+        );
         // 认不出的族降级为文本：宁可能存下，也不要建表就语法错
         assert_eq!(mysql.map_type(Some(ConnectionKind::Postgresql), "geometry"), "longtext");
     }

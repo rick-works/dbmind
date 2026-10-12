@@ -1709,7 +1709,29 @@ async fn sync_table_inner(
             src_table_comment.as_deref(),
         );
         if let Err(err) = run_target(state, &tgt_target, &ddl).await {
-            return ObjResult::failed(ty, table, format!("建表失败：{}", err.message));
+            let mut msg = format!("建表失败：{}", err.message);
+            // 「Row size too large (> 8126)」（MySQL 1118）：目标表列太多/太宽，DDL 这边已经做到
+            // 头了（长文本列早就是 longtext、行格式也显式 dynamic），剩下能帮上忙的是**报出规模** ——
+            // 多少列、其中多少列是长文本，用户才知道该精简列、还是该换个目标库。
+            if err.message.to_ascii_lowercase().contains("row size too large") {
+                let total = source_columns.len();
+                let wide = source_columns
+                    .iter()
+                    .filter(|c| {
+                        let t = c.type_name.clone().unwrap_or_default().to_ascii_lowercase();
+                        ["string", "text", "blob", "clob", "json"]
+                            .iter()
+                            .any(|key| t.contains(key))
+                    })
+                    .count();
+                msg.push_str(&format!(
+                    "（本表共 {total} 列，其中 {wide} 列是长文本。MySQL/InnoDB 单行上限 8126 字节，\
+                     列太多时无论怎么映射类型都建不出来：① 只同步真正需要的列；\
+                     ② 目标改用 Doris / PostgreSQL / ClickHouse（它们没有这个行宽限制）；\
+                     ③ 若目标 MySQL 是 5.6/5.7，确认行格式为 DYNAMIC —— 本工具建表已显式指定。）"
+                ));
+            }
+            return ObjResult::failed(ty, table, msg);
         }
         created = true;
     } else if opts.policy == Policy::Drop {
