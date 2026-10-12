@@ -2499,6 +2499,13 @@ watch(visible, (v) => {
    标签是右边距对齐到输入框的，长一点会被折成两行（「顶栏菜单文字（含图标）」就被折过），
    加宽 label-width 之外再显式 nowrap 兜住 —— 换行比溢出难看得多。 */
 .appearance-form :deep(.el-form-item__label) { white-space: nowrap; }
+/* 两列排布（用户要求）：8 个尺寸项单列时弹窗右半边整片空着。
+   两列各占一半 + 列间距 20px；标签宽度仍是 200px，保证长标签（TAB 栏文字（工作区页签））不折行。 */
+.appearance-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 20px;
+}
 .fmt-rule-add { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 10px 0 0; }
 .fmt-preview {
   background: var(--dc-bg-code); border: 1px solid var(--dc-border); border-radius: 10px;
