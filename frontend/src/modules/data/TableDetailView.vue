@@ -1561,12 +1561,23 @@ const isLoadedIdx = (r) => r._state === 'loaded'
 const allowIndexEdit = computed(() => ddlStyle.value !== 'clickhouse')
 
 const buildIdxRows = () => {
-  idxRows.value = (indexes.value || []).map((ix, i) => ({
-    _uid: 'ix' + (++idxUid) + '_' + i, _state: 'loaded',
-    name: ix.name, unique: !!ix.unique, indexType: ix.type || (indexTypes.value[0] || ''),
-    columns: [...(ix.columns || [])],
-    _orig: { name: ix.name, unique: !!ix.unique, indexType: ix.type || '', columns: [...(ix.columns || [])] }
-  }))
+  /* 「类型」这一格**必须与基线同源**：行里给的是 `ix.type || 兜底类型`，基线里以前却写的是
+     `ix.type || ''` —— 于是后端不返回 type 时（MySQL 的索引查询原先就不返回），
+     行 = 'BTREE'、基线 = ''，`idxChanged` 里那句 `r.indexType !== o.indexType` **永远为真** ⇒
+     每个索引都恒被判成「已修改」：行上挂着「修改N」、SQL 预览里永远有 DROP+CREATE、
+     保存成功后重新 load 还是同一套错配 —— 用户看到的就是「保存成功了，但界面还是未提交的样子」。
+
+     所以兜底值先在**一处**算好，行与基线共用同一个值。 */
+  const fallbackType = indexTypes.value[0] || ''
+  idxRows.value = (indexes.value || []).map((ix, i) => {
+    const t = ix.type || fallbackType
+    return {
+      _uid: 'ix' + (++idxUid) + '_' + i, _state: 'loaded',
+      name: ix.name, unique: !!ix.unique, indexType: t,
+      columns: [...(ix.columns || [])],
+      _orig: { name: ix.name, unique: !!ix.unique, indexType: t, columns: [...(ix.columns || [])] }
+    }
+  })
 }
 const newIdxRow = () => ({
   _uid: 'ixn' + (++idxUid), _state: 'new',

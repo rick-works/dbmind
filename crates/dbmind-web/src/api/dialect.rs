@@ -1213,9 +1213,10 @@ impl Dialect {
             ),
             "mysql" | "mariadb" => Meta::Sql(
                 "select index_name as `name`, table_name as `table`, non_unique as nonUnique, \
+                 index_type as `type`, \
                  group_concat(column_name order by seq_in_index separator ',') as `columns` \
                  from information_schema.statistics where table_schema = database() \
-                 group by table_name, index_name, non_unique order by table_name, index_name"
+                 group by table_name, index_name, non_unique, index_type order by table_name, index_name"
                     .to_string(),
             ),
             // Doris：**不能**用 MySQL 那种 `group_concat(x order by y separator ',')` 写法 ——
