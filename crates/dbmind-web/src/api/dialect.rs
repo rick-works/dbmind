@@ -2174,22 +2174,28 @@ impl Dialect {
                  c.column_id as ordinal \
                  from user_tab_columns c where c.table_name = upper({quoted})"
             )),
-            // DM（达梦）：只给类型与注释。
+            // DM（达梦）：类型 + 注释（与 Oracle 同一套写法 —— 达梦是 Oracle 兼容的，
+            // 连表注释那边用的也是 `user_col_comments`，见本文件上方 table_comments）。
+            // 注释这一项**曾经漏了**：select 里根本没取 comment，界面上「注释」列却有
+            // （supportsComment 为真），于是那一格永远是空的（用户反馈排查出来的同类问题）。
             //
             // **不自增检测**：达梦的标识列（`IDENTITY(1,1)`）记在哪张系统视图上，我没有实例可验证；
             // 而 `user_tab_identity_cols` 在达梦上是否存在同样未验证 —— 一旦那句 SQL 报错，
             // 整张表的类型/注释补全都会一起丢掉（比少一个自增标记更糟）。所以这里留白，
             // 而不是拿一个没验证过的视图去赌。
             "dm" => Meta::Sql(format!(
-                "select column_name as column_name, \
+                "select c.column_name as column_name, \
                  case \
-                   when data_type = 'NUMBER' and data_precision is not null \
-                     then 'number(' || data_precision || coalesce(',' || data_scale, '') || ')' \
-                   when data_type in ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR') \
-                     then lower(data_type) || '(' || data_length || ')' \
-                   else lower(data_type) \
-                 end as type_text \
-                 from user_tab_columns where table_name = upper({quoted})"
+                   when c.data_type = 'NUMBER' and c.data_precision is not null \
+                     then 'number(' || c.data_precision || coalesce(',' || c.data_scale, '') || ')' \
+                   when c.data_type in ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR') \
+                     then lower(c.data_type) || '(' || c.data_length || ')' \
+                   else lower(c.data_type) \
+                 end as type_text, \
+                 coalesce((select cc.comments from user_col_comments cc \
+                           where cc.table_name = c.table_name \
+                             and cc.column_name = c.column_name), '') as comment \
+                 from user_tab_columns c where c.table_name = upper({quoted})"
             )),
             // SQLite：声明类型原样读回（`varchar(50)` 就在表结构里）。
             //
@@ -2206,6 +2212,8 @@ impl Dialect {
             )),
             // H2：information_schema.columns 有长度/精度，自己拼回 `varchar(50)`。
             // 长度大于 100 万的不当"长度"用（CLOB 一类会报 2^31-1，拼进类型文本没意义）
+            // 列注释在 H2 的 information_schema.columns 里叫 `remarks`（老的 1.4 与 2.x 都有），
+            // 同样**曾经漏取**：界面「注释」列可见却永远空着。
             "h2" => Meta::Sql(format!(
                 "select column_name as column_name, \
                  case \
@@ -2216,7 +2224,8 @@ impl Dialect {
                    when numeric_precision is not null \
                      then lower(data_type) || '(' || numeric_precision || ')' \
                    else lower(data_type) \
-                 end as type_text \
+                 end as type_text, \
+                 coalesce(remarks, '') as comment \
                  from information_schema.columns where table_name = upper({quoted})"
             )),
             // DB2：syscat.columns 的 typename/length/scale
