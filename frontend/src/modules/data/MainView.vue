@@ -2391,8 +2391,23 @@ const backupRestore = ref({ visible: false, mode: 'backup', connectionId: '', da
 const openBackupRestore = (mode, connId, db) => {
   backupRestore.value = { visible: true, mode, connectionId: String(connId || ''), database: db || '' }
 }
-// 点击外部自动关闭
-window.addEventListener('click', closeTreeCtxMenu)
+// 点击外部自动关闭 —— **捕获阶段**，三个右键菜单共用。
+//
+// 原先挂在冒泡阶段（window.addEventListener('click', closeXxx)），而点击路径上到处都有
+// .stop：树节点被点选、页签、顶栏按钮都带 —— 事件到不了 window，菜单就"点了别处还杵在那儿
+// 挡着"（用户反馈：点击弹窗里的按钮和点击其他地方都该关，否则影响操作）。
+// 捕获阶段跑在所有冒泡处理器之前，谁也拦不掉；菜单内部的点击**跳过**（它们各自有
+// @click.stop 的关闭逻辑，不能被这里抢先摘掉，否则子菜单/重命名输入框会被打断）。
+// 再补一个 mousedown：右键改点别处时（mousedown → contextmenu）先关掉旧菜单，免得新旧叠着。
+const ctxOutsideGuard = (e) => {
+  const t = e.target
+  if (t && t.closest && t.closest('.tree-ctx-menu, .ctx-menu, .tab-ctx-menu')) return
+  closeTreeCtxMenu()
+  closeTabCtxMenu()
+  closeCtxMenu()
+}
+window.addEventListener('click', ctxOutsideGuard, true)
+window.addEventListener('mousedown', ctxOutsideGuard, true)
 window.addEventListener('scroll', closeTreeCtxMenu, true)
 
 // 自定义目录 = 所有 connection.group 中非预置、非空的值 ∪ 后端「纯目录」
@@ -4898,7 +4913,6 @@ const showTabCtxMenu = (e, tab) => {
   })
 }
 const closeTabCtxMenu = () => { tabCtxMenu.value.show = false }
-window.addEventListener('click', closeTabCtxMenu)
 window.addEventListener('scroll', closeTabCtxMenu, true)
 
 const tabCtxClose = (mode) => {
@@ -5309,7 +5323,9 @@ const ctxSub = (key) => { ctxMenu.value.subKey = key }
 const closeCtxMenu = () => { ctxMenu.value.show = false; ctxMenu.value.subKey = null }
 // 具名而非匿名：匿名函数没法 removeEventListener，卸载后就永远留在 window 上了
 const onCtxMenuEscape = (e) => { if (e.key === 'Escape') closeCtxMenu() }
-window.addEventListener('click', closeCtxMenu)
+// 点外部关闭统一走 ctxOutsideGuard（捕获阶段，见 closeTreeCtxMenu 那段）。
+// 原先这里还单独挂了一份冒泡期的 click —— 树节点/页签/顶栏上的 .stop 会让它收不到事件，
+// 而且重挂组件时容易叠份，已并入 guard。
 window.addEventListener('keydown', onCtxMenuEscape)
 
 // ====== 表右键菜单操作 ======
@@ -6866,11 +6882,10 @@ onBeforeUnmount(() => {
   // 摘掉挂在 window 上的监听。这些原本是「注册了就不管」的，
   // 而 MainView 在某些页签切换场景下会整个卸载再挂回来，
   // 于是每重挂一次就多叠一份回调 —— 表现是点一下、滚一下，同一段逻辑被执行 N 次。
-  window.removeEventListener('click', closeTreeCtxMenu)
+  window.removeEventListener('click', ctxOutsideGuard, true)
+  window.removeEventListener('mousedown', ctxOutsideGuard, true)
   window.removeEventListener('scroll', closeTreeCtxMenu, true)
-  window.removeEventListener('click', closeTabCtxMenu)
   window.removeEventListener('scroll', closeTabCtxMenu, true)
-  window.removeEventListener('click', closeCtxMenu)
   window.removeEventListener('keydown', onCtxMenuEscape)
   window.removeEventListener('dc-scripts-changed', onScriptsChanged)
   window.removeEventListener('keydown', onGlobalKey)

@@ -964,13 +964,18 @@ emit('sql', genSql())
    屏幕外的问题由虚拟滚动解决，高度由上下占位行精确撑住。 */
 .field-table tbody tr.vpad { content-visibility: visible; }
 .field-table tbody tr.vpad td { padding: 0; border-bottom: none; }
-/* 类型格的"纯文本态"：点一下才换成下拉（与编辑表结构一致） */
+/* 类型格的"纯文本态"：点一下才换成下拉（与编辑表结构一致）。
+   字号必须**显式**写：这一格是普通 span，不写就跟 body 的 14px 走 —— 而同排的
+   字段名/长度/精度/注释都是 12px 的输入框、表头也是 12px，于是单单那个类型字大一圈
+   （用户反馈："这个字体可以小点，跟别的一样"）。12px 是在应用里**量出来的**
+   （类型格 14px、同排输入框 12px、表头 12px）。 */
 .field-table .cell-text {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 0 4px;
+  font-size: 12px;
   cursor: pointer;
 }
 .field-table tbody tr:hover { background: var(--dc-bg-hover); }

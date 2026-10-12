@@ -2514,13 +2514,16 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    也别让 content-visibility 跳过它们 —— 那样高度就没了，滚动条会乱跳 */
 .field-table tbody tr.vpad { content-visibility: visible; }
 .field-table tbody tr.vpad td { padding: 0; border-bottom: none; }
-/* 类型格的"纯文本态"：占位与输入框一致，点一下才换成下拉（给个手型提示可点） */
+/* 类型格的"纯文本态"：占位与输入框一致，点一下才换成下拉（给个手型提示可点）。
+   字号显式写 12px（与新建表同一处问题一并修）：这一格是普通 span，不写就跟 body 的
+   14px 走，比同排 12px 的输入框/表头明显大一圈。 */
 .field-table .cell-text {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 0 4px;
+  font-size: 12px;
   cursor: pointer;
 }
 .field-table .cell-text.cell-off { opacity: .55; cursor: not-allowed; }
