@@ -625,9 +625,9 @@ async fn sync_indexes(
                     continue;
                 }
                 let name = row.get("name").and_then(Value::as_str).unwrap_or("");
-                let unique = row.get("non_unique").and_then(Value::as_i64) == Some(0)
+                let unique = row.get("non_unique").and_then(crate::api::shape::value_to_i64) == Some(0)
                     || row.get("unique").and_then(Value::as_bool) == Some(true)
-                    || row.get("isUnique").and_then(Value::as_i64) == Some(1);
+                    || row.get("isUnique").and_then(crate::api::shape::value_to_i64) == Some(1);
                 // 列清单：PG 系从 indexdef 里抠括号；解析不出就跳过，不编造
                 let columns: Vec<String> = match row.get("columns").and_then(Value::as_str) {
                     Some(s) if !s.trim().is_empty() => s
@@ -840,7 +840,7 @@ fn encode_stream_json(
 /// Doris 返回的数字字段可能是 JSON number 也可能是字符串（版本差异），两种都认。
 fn doris_number(v: Option<&serde_json::Value>) -> u64 {
     match v {
-        Some(serde_json::Value::Number(n)) => n.as_u64().unwrap_or(0),
+        Some(serde_json::Value::Number(n)) => n.as_u64().or_else(|| n.as_f64().map(|v| v as u64)).unwrap_or(0),
         Some(serde_json::Value::String(s)) => s.trim().parse().unwrap_or(0),
         _ => 0,
     }
