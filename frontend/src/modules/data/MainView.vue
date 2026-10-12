@@ -5556,7 +5556,11 @@ const ctxGenSql = async (tpl) => {
     const where = cols.length ? `\nWHERE ${quoteIdent(cols[0], connType)} = ?` : ''
     sql = `DELETE FROM ${t}${where};\n`
   }
-  newQueryTab({ connId: cid, database: db, initialSql: sql })
+  // 生成后**自动格式化**（用户要求）：走与「查看 DDL」同一条 autoFormatDdl ——
+  // 按当前连接的方言 + 「设置 → SQL 格式化」里的关键字大小写/缩进排版；
+  // 格式化抛错、或分号/括号/BEGIN-END/引号数量发生变化（结构可能被改坏）时，
+  // 自动退回未格式化的原文，保证编辑器里一定有可用内容。
+  newQueryTab({ connId: cid, database: db, initialSql: autoFormatDdl(sql, connType) })
 }
 
 // 危险操作：清空 / 截断 / 删除表
