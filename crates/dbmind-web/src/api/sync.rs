@@ -1566,7 +1566,9 @@ fn key_of(row: &[CellValue], indexes: &[usize]) -> String {
 /// 把整张表的写入包进一个事务，只在结尾 commit 一次，写入吞吐能翻数倍。
 /// 语义保持：成功/失败/取消都 **commit**（「已写入的部分保留，不回滚」是既有约定，
 /// 失败时保留的正是事务里已执行成功的那些行）。
-/// 仅 MySQL / MariaDB 启用（Doris 的事务没有实际意义；其它方言各有自己的提交语义）。
+/// 按目标方言开事务包批：MySQL/MariaDB（autocommit 开关）、PostgreSQL/Kingbase、SQLite、SQL Server
+/// （begin/commit）。Doris 的事务没有实际意义，ClickHouse / Oracle / 达梦 / DB2 没有可用的 SQL 级
+/// begin —— 这些照旧逐条提交（慢，但功能不缺）。
 #[allow(clippy::too_many_arguments)]
 async fn sync_table(
     state: &AppState,
@@ -1577,22 +1579,25 @@ async fn sync_table(
     target_table: &str,
     opts: &Opts,
 ) -> ObjResult {
-    let use_txn = match require_record(state, &tgt.conn).await {
+    // 目标方言决定怎么开事务：MySQL 系用 autocommit 开关，PG/SQLite 用标准 begin/commit，
+    // SQL Server 用 begin transaction。Doris 的事务没有实际意义，ClickHouse/Oracle/达梦/DB2
+    // 也没有可用的 SQL 级 begin —— 这些照旧逐条提交（功能不缺，只是慢）。
+    let txn = match require_record(state, &tgt.conn).await {
         Ok(record) => {
-            opts.sync_data && matches!(Dialect::new(record.kind()).kind.key(), "mysql" | "mariadb")
+            if opts.sync_data { txn_batch(Dialect::new(record.kind()).kind.key()) } else { None }
         }
         Err(err) => return ObjResult::failed("table", table, err.message),
     };
-    if !use_txn {
+    let Some((txn_begin, txn_end, txn_restore)) = txn else {
         return sync_table_inner(state, task, src, tgt, table, target_table, opts).await;
-    }
+    };
     let Ok(tgt_target) = crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await else {
         return ObjResult::failed("table", table, "解析目标连接失败");
     };
     if let Some(task) = task {
         task.log(format!("表 {table}：开启事务（整表一次提交）"));
     }
-    if let Err(err) = run_target(state, &tgt_target, "set autocommit = 0").await {
+    if let Err(err) = run_target(state, &tgt_target, txn_begin).await {
         // 开不了事务就退回 autocommit 逐条写入 —— 慢，但功能不缺
         if let Some(task) = task {
             task.log(format!("表 {table}：开启事务失败，退回逐条提交（{}）", err.message));
@@ -1601,12 +1606,27 @@ async fn sync_table(
     }
     let result = sync_table_inner(state, task, src, tgt, table, target_table, opts).await;
     // 无论成功/失败/取消都 commit：与「已写入的部分保留」的既有语义一致
-    let _ = run_target(state, &tgt_target, "commit").await;
-    let _ = run_target(state, &tgt_target, "set autocommit = 1").await;
+    let _ = run_target(state, &tgt_target, txn_end).await;
+    if !txn_restore.is_empty() {
+        let _ = run_target(state, &tgt_target, txn_restore).await;
+    }
     if let Some(task) = task {
         task.log(format!("表 {table}：提交事务"));
     }
     result
+}
+
+/// 目标方言的「开事务 / 提交 / 收尾复位」三条语句；`None` = 该方言不批事务（照旧逐条提交）。
+/// MySQL 系靠 autocommit 开关；PG/SQLite 用标准 begin/commit；SQL Server 用 begin transaction。
+/// Doris / ClickHouse / Oracle / 达梦 / DB2 故意不列 —— 它们没有可用的 SQL 级 begin，
+/// 硬上会直接把写入路径打挂。
+fn txn_batch(kind: &str) -> Option<(&'static str, &'static str, &'static str)> {
+    match kind {
+        "mysql" | "mariadb" => Some(("set autocommit = 0", "commit", "set autocommit = 1")),
+        "postgresql" | "kingbase" | "sqlite" => Some(("begin", "commit", "")),
+        "sqlserver" => Some(("begin transaction", "commit", "")),
+        _ => None,
+    }
 }
 
 /// 同步一张表（内层：实际传输逻辑）。
@@ -2550,7 +2570,9 @@ async fn sync_table_inner(
                 }
         for row in page {
             consumed += 1;
-            let is_existing = effective_mode != DataMode::Insert
+            // 只有 upsert 需要"这行在目标里已存在吗"。Insert / TruncateInsert 下 existing 必然为空，
+            // 原来那个 `!= Insert` 会把 TruncateInsert 也带进来 —— 每行白算一次 key_of（宽表 5 万行/页纯烧 CPU）。
+            let is_existing = effective_mode == DataMode::Upsert
                 && !key_indexes.is_empty()
                 && existing.contains(&key_of(&row, &key_indexes));
             if is_existing {
