@@ -46,6 +46,9 @@ const SETTINGS_HISTORY_RETENTION_DAYS: &str = "history.retentionDays";
 const SETTINGS_TUNNEL_IDLE_TIMEOUT: &str = "tunnel.idleTimeoutSecs";
 /// 全局默认返回行数上限（编辑器/数据浏览的兜底上限；前端还要再被分页大小夹一层）。
 const SETTINGS_QUERY_MAX_ROWS: &str = "query.maxRows";
+/// 一次性迁移标记：查询默认值调整过（超时 120→300、返回行数上限 2000→0 不限制）后置位，
+/// 与 SETTINGS_SAFETY_PRODUCTION_MIGRATED 同一套路，保证只跑一次。
+const SETTINGS_QUERY_DEFAULTS_MIGRATED: &str = "query.defaultsMigrated";
 /// 日志级别（trace/debug/info/warn/error；web 壳在运行时热切换 tracing 过滤器）。
 pub const SETTINGS_LOG_LEVEL: &str = "log.level";
 /// 审计日志级别（all / write / error / off）—— 设置 → 日志里用户自选的记录范围。
@@ -748,6 +751,18 @@ impl Store {
     /// 取舍：老库里的 `false` 分不清是「用户主动关的」还是「当初的种子值」，一律按
     /// **安全优先**打开一次；用户若确实要关，再点一次即可（有标记在，不会被再次打开）。
     fn migrate_settings(&self) -> Result<()> {
+        // 一次性默认值调整：超时 120 → 300（5 分钟）、返回行数上限 2000 → 0（不限制）。
+        // 只改**恰好等于旧默认值**的键 —— 用户自己填过的数字不碰（与前端 fontSize 的迁移同一取舍）。
+        // 注意要放在下面那条"已经迁移过就直接返回"之前，否则老库永远走不到这里。
+        if self.get_setting(SETTINGS_QUERY_DEFAULTS_MIGRATED)?.is_none() {
+            if self.get_setting(SETTINGS_QUERY_TIMEOUT)?.as_deref().map(str::trim) == Some("120") {
+                self.set_setting(SETTINGS_QUERY_TIMEOUT, "300")?;
+            }
+            if self.get_setting(SETTINGS_QUERY_MAX_ROWS)?.as_deref().map(str::trim) == Some("2000") {
+                self.set_setting(SETTINGS_QUERY_MAX_ROWS, "0")?;
+            }
+            self.set_setting(SETTINGS_QUERY_DEFAULTS_MIGRATED, "1")?;
+        }
         if self.get_setting(SETTINGS_SAFETY_PRODUCTION_MIGRATED)?.is_some() {
             return Ok(());
         }
@@ -764,11 +779,12 @@ impl Store {
             (SETTINGS_SAFETY_PRODUCTION, "true"),
             (SETTINGS_SAFETY_AI_WRITE, "false"),
             (SETTINGS_SCHEMA_TTL, "300"),
-            (SETTINGS_QUERY_TIMEOUT, "120"),
+            (SETTINGS_QUERY_TIMEOUT, "300"),
             (SETTINGS_HISTORY_MAX_ENTRIES, "0"),
             (SETTINGS_HISTORY_RETENTION_DAYS, "0"),
             (SETTINGS_TUNNEL_IDLE_TIMEOUT, "1800"),
-            (SETTINGS_QUERY_MAX_ROWS, "2000"),
+            // 0 = 不限制返回行数（用户要求）。引擎侧在读设置时把 0 换成极大值（见 api/query.rs）
+            (SETTINGS_QUERY_MAX_ROWS, "0"),
             (SETTINGS_LOG_LEVEL, "info"),
             (SETTINGS_AUDIT_LEVEL, "all"),
             (SETTINGS_MCP_MAX_ROWS, "2000"),

@@ -38,8 +38,8 @@ export const editorDefaults = {
 // 默认值与后端种子一致 —— 界面在拿到后端值之前先用它们占位，避免表单闪一下空值
 export const queryDefaults = {
   pageSize: 200, confirmDanger: true,
-  timeoutSecs: 120, cacheTtlSecs: 300,
-  maxRows: 2000, historyMax: 1000, historyDays: 30,
+  timeoutSecs: 300, cacheTtlSecs: 300,   // 超时默认 5 分钟
+  maxRows: 0, historyMax: 1000, historyDays: 30,   // 0 = 不限制返回行数
   nullStyle: 'null'  // NULL 单元格显示：'null'=NULL | 'paren'=(NULL) | 'blank'=空白
 }
 export const notifyDefaults = { success: true, autoClose: true }

@@ -23,7 +23,10 @@ use crate::api::error::{XError, XResult};
 use crate::api::{blocking, require_record, shape};
 use crate::AppState;
 
-/// 编辑器执行的超时（毫秒）：读设置 `query.timeoutSecs`（1..=600，缺省 120）。
+/// 编辑器执行的超时（毫秒）：读设置 `query.timeoutSecs`（1..=600，缺省 300 = 5 分钟）。
+///
+/// 缺省从 120 提到 300：用户实测跑大表时两分钟就够呛（且默认值要与「查询设置」里
+/// 显示的 5 分钟一致，否则界面显示与服务端行为各说各话）。
 ///
 /// 为什么从写死 120 秒改成可配：跑大报表/复杂分析的人嫌它不够，误发笛卡尔积的人
 /// 又要干等满两分钟 —— 两类用户要的不是同一个数字，那就该放到设置里去。
@@ -37,24 +40,34 @@ async fn editor_timeout_ms(state: &AppState) -> u64 {
     let secs = raw
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map(|secs| secs.clamp(1, 600))
-        .unwrap_or(120);
+        .unwrap_or(300);
     secs * 1000
 }
 
-/// 全局默认返回行数上限（100..=100000，缺省 2000）。
+/// 全局默认返回行数上限。**0 = 不限制**（缺省 0），非 0 按 100..=100000 收敛。
+///
+/// 语义与界面一致（用户要求）：设置里填 0 表示「不限制」，填 N 表示最多 N 行。
+/// 「不限制」返回一个**大而安全**的数而不是 `usize::MAX`：内核取数里有
+/// `setMaxRows(max_rows + 1)` 这类写法，MAX 会溢出。
 ///
 /// 以前各执行入口各写死一个数字（编辑器 2000、批量 2000、NoSQL 浏览另有自己的），
-/// 用户在设置里找不到「一次最多拿回多少行」。统一成一个键后：界面请求的 `size`
-/// 还会被它再夹一层 —— 分页大小是「想要多少」，这里是「最多给多少」。
+/// 统一成一个键后：界面请求的 `size` 还会被它再夹一层 —— 分页大小是「想要多少」，
+/// 这里是「最多给多少」。
 pub(crate) async fn max_rows_cap(state: &AppState) -> usize {
+    const UNLIMITED: usize = 1_000_000_000;
     let engine = state.engine();
     let raw = blocking(move || engine.get_setting(dbmind_core::Store::KEY_QUERY_MAX_ROWS))
         .await
         .ok()
         .flatten();
-    raw.and_then(|value| value.trim().parse::<usize>().ok())
-        .map(|n| n.clamp(100, 100_000))
-        .unwrap_or(2000)
+    let n = raw
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    if n == 0 {
+        UNLIMITED
+    } else {
+        n.clamp(100, 100_000)
+    }
 }
 
 #[derive(Default)]

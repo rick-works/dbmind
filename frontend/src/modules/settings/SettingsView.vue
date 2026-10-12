@@ -690,7 +690,8 @@
               <div class="form-tip">{{ $t('settings.query.timeoutSecsTip') }}</div>
             </el-form-item>
             <el-form-item :label="$t('settings.query.maxRows')">
-              <el-input-number v-model="queryForm.maxRows" :min="100" :max="100000" :step="500" style="width:160px" />
+              <!-- min 允许 0：0 = 不限制（后端在 max_rows_cap 里把 0 换成极大值） -->
+              <el-input-number v-model="queryForm.maxRows" :min="0" :max="100000" :step="500" style="width:160px" />
               <div class="form-tip">{{ $t('settings.query.maxRowsTip') }}</div>
             </el-form-item>
             <el-form-item :label="$t('settings.query.cacheTtl')">
