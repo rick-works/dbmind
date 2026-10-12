@@ -7359,12 +7359,12 @@ const connTypeSummary = computed(() =>
   background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: 10px;
 }
 /* 「常用操作」与左侧「快速开始」保持同一套行距（用户要求两栏看着一致）：
-   行高固定 36px + 行间距 2px，和 .empty-ds / .empty-dss-list 完全对齐 ——
-   原先这里是 padding: 5px 8px（行高约 30px），两栏并排就能看出高低不齐。 */
+   行高 38px + 行间距 2px，和 .empty-ds / .empty-dss-list 完全对齐。
+   38 是**实测值**：左侧声明 36 但被内容顶到 38，所以这里直接按 38 写，别只跟声明值。 */
 .empty-acts { display: flex; flex-direction: column; gap: 2px; }
 .empty-act {
   display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
-  height: 36px; padding: 0 10px; border: none; border-radius: 8px; cursor: pointer;
+  height: 38px; padding: 0 10px; border: none; border-radius: 8px; cursor: pointer;
   background: transparent; font: inherit; color: var(--dc-text);
   transition: background .15s ease;
 }
@@ -7404,12 +7404,14 @@ const connTypeSummary = computed(() =>
    块本身不随连接数变高 —— 连接再多首页也不会被撑长。 */
 .empty-dss-list {
   display: grid; grid-template-columns: 1fr; gap: 2px;
-  max-height: 150px; overflow-y: auto; padding-right: 2px;
+  /* 4 行要 4×38 + 3×2 = 158px：之前写 150px，第 4 行被裁掉一小截（实测行高 38，
+     不是声明里的 36 —— 内容把它顶高了）。 */
+  max-height: 158px; overflow-y: auto; padding-right: 2px;
 }
 .empty-ds {
   display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
-  /* 固定行高 36px：列表"正好 4 行"的高度才算得准，也不会因字体变化跳动 */
-  height: 36px; padding: 0 10px; border-radius: 8px; cursor: pointer;
+  /* 行高按**实测值** 38px 写死（原先声明 36，实际被内容顶到 38，算行数就算不准） */
+  height: 38px; padding: 0 10px; border-radius: 8px; cursor: pointer;
   background: transparent; border: none;
   transition: background .15s ease; font: inherit; color: var(--dc-text);
 }
