@@ -1,6 +1,11 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
-  "v1.2.17": [
+  "v1.2.18": [
+      "Edit Structure: the loading indicator finally shows while it loads (the v-loading directive was never registered, so it silently did nothing), and the spinner no longer stutters",
+      "The field tables in Edit Structure and New Table now render only the rows you can see - wide tables with hundreds of columns scroll smoothly with no blank patches, and the type cell stays plain text until you click it to open the dropdown",
+      "Small fixes along the way: a single selection style in the field table (the first row no longer looks selected), the comment cell input matches its neighbours, no more SQL keywords in the field-table headers, and the update confirmation now reads statement first / question last with the Open folder button removed"
+    ],
+    "v1.2.17": [
       "Table editor: New Table and Edit Structure show only the columns that really apply per data source; on Doris the field table can tick Bucketing columns and shares the same data as the distribution list in Basic info (tick either side and the other follows, and CREATE TABLE reads the same source); ClickHouse gains a Partition key column and the Primary key column is no longer hidden - every column-level setting that feeds a table-level one can now be ticked right in the field table",
       "Edit Structure: fixed the Sort key / Partition key read-back (they showed a dash no matter how the table was set up); added read-only Bucketing columns and Partition key columns; yes/no is now always a single checkbox (Nullable, Primary key, Sort key, Bucketing, Partition key) - identical across data sources, with no more yes tags or dashes",
       "New Table: a field comment can be edited in a multi-line dialog (double-click or the expand button), matching Edit Structure; data source fixes - column comments were never read on DM (Dameng) and H2 (the comment cell stayed empty), DM no longer shows an auto-increment checkbox that can never be ticked, and MySQL DEFAULT NULL now reads back as default NULL; also removed the SQL keywords leaking into the field-table headers (Bucketing / Sort key / Partition key) and dropped the Open folder button from the updater"
