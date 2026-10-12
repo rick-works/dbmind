@@ -3318,6 +3318,8 @@ export default {
   'sync.selectedSuffix': '{total}',
   'sync.hasN': '{label}: {n}',
   'sync.noN': 'This database has no {label}',
+  // how the type chips work (click one to show only it; click again for all)
+  'sync.chipTip': 'Click to show this type only; click again for all',
   'sync.noObjects': 'This database has no objects to sync yet',
   'sync.selectAll': 'Select all',
   'sync.noMatch': 'No matching object',

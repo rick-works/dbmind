@@ -3325,6 +3325,8 @@ export default {
   'sync.selectedSuffix': '{total} 个',
   'sync.hasN': '包含 {label} {n} 个',
   'sync.noN': '当前库没有 {label}',
+  // 类型徽标的用法提示（点哪个只看哪个，再点一次回到全部）
+  'sync.chipTip': '点击只看这一类，再点一次看全部',
   'sync.noObjects': '当前库暂无可同步的对象',
   'sync.selectAll': '全部选择',
   'sync.noMatch': '没有匹配的对象',

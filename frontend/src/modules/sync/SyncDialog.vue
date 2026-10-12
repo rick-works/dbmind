@@ -90,7 +90,7 @@
         <button v-for="t in objTypes" :key="t.key" type="button" class="type-chip"
                 :class="{ active: t.checked, empty: objState[t.key].list.length === 0 }"
                 :disabled="taskRunning || objState[t.key].list.length === 0"
-                :title="objState[t.key].list.length ? $t('sync.hasN', { label: t.label, n: objState[t.key].list.length }) : $t('sync.noN', { label: t.label })"
+                :title="(objState[t.key].list.length ? $t('sync.hasN', { label: t.label, n: objState[t.key].list.length }) : $t('sync.noN', { label: t.label })) + ' · ' + $t('sync.chipTip')"
                 @click="toggleType(t)">
           <span class="chip-ic"><el-icon :size="13"><component :is="TYPE_ICON[t.key]" /></el-icon></span>
           <span class="chip-name">{{ t.label }}</span>
@@ -565,7 +565,10 @@ const logClass = (line) => {
 
 // ==================== 派生数据 ====================
 const totalSelected = computed(() => objTypes.reduce((s, t) => s + objState[t.key].selected.length, 0))
-const totalAvailable = computed(() => objTypes.reduce((s, t) => s + (t.checked ? objState[t.key].list.length : 0), 0))
+// 分母是**已加载的全部对象**（不随类型筛选变）：类型徽标现在只是"看哪一类"的筛选器，
+// 切走时已勾选的对象仍然保留在 transferred 列表里 —— 分母跟着筛选变会让「已选 5 / 2」这种
+// 不可能的数字出现，用户会以为界面坏了。
+const totalAvailable = computed(() => objTypes.reduce((s, t) => s + objState[t.key].list.length, 0))
 const availableCount = computed(() => objTypes.reduce((s, t) => s + (objState[t.key].list.length ? 1 : 0), 0))
 const filteredObjs = computed(() => {
   const kw = keyword.value.trim().toLowerCase()
@@ -630,9 +633,26 @@ const typeLabel = (t) => (typeMeta()[t]?.label) || t
 const typeAbbr = (t) => (typeMeta()[t]?.abbr) || t
 
 // ==================== 类型 / 对象操作 ====================
+const checkedTypes = computed(() => objTypes.filter(t => t.checked))
+/**
+ * 类型徽标是**筛选器**，不是"要不要同步这一类"的开关：
+ * 点哪个类型就只看哪个（用户要求「表就显示表，视图就显示视图」）；
+ * 再点一次当前这个 → 回到「全部」（所有有内容的类型都勾上，用来一次勾完表+视图）。
+ *
+ * 与原实现的两点差别，都是刻意的：
+ * 1. **独占**而不并集 —— 并集下点「视图」会变成表+视图，59 张表排在前，视图那两行在底部，
+ *    用户看到的就是"点了没反应"。
+ * 2. **切走不清空已选** —— 原实现在取消勾选时 `selected = []`，筛选语义下这等于
+ *    「我挑了半天的表，只是看一眼视图就全没了」。已选对象与筛选互不影响，
+ *    顶部「已选 N」始终统计全部类型。
+ */
 const toggleType = (t) => {
-  t.checked = !t.checked
-  if (!t.checked) objState[t.key].selected = []
+  const backToAll = t.checked && checkedTypes.value.length === 1
+  for (const x of objTypes) {
+    if (x === t && backToAll) continue
+    x.checked = backToAll ? objState[x.key].list.length > 0 : x.key === t.key
+  }
+  if (backToAll) t.checked = true
 }
 const isSelected = (o) => objState[o.type].selected.includes(o.name)
 const toggleObj = (o, v) => {
