@@ -45,22 +45,33 @@
                 <tr v-if="isClickHouse">
                   <td class="basic-label">{{ $t('tf.engine') }}</td>
                   <td>
-                    <el-select v-if="(features.engines || []).length" v-model="form.engine" size="small" clearable filterable>
-                      <el-option v-for="e in features.engines" :key="e" :label="e" :value="e" />
+                    <!-- 常用引擎给下拉，清单外的（新版引擎 / 自建）照样能手输 —— 有下拉但不被下拉限制 -->
+                    <el-select v-model="form.engine" size="small" clearable filterable allow-create placeholder="MergeTree()">
+                      <el-option v-for="e in CH_ENGINES" :key="e" :label="e" :value="e" />
                     </el-select>
-                    <el-input v-else v-model="form.engine" size="small" clearable placeholder="MergeTree()" />
                   </td>
                 </tr>
                 <!-- ClickHouse 专属：排序键 / 分区键（编辑页也有这两行，字段一一对应）。
-                     排序键由「字段定义」里勾选的排序键列决定（与编辑页展示的是同一件事），这里只读回显；
-                     分区键是建表要指定的**表达式**，所以可填。 -->
+                     排序键 = 哪些列参与 ORDER BY —— 下拉即选，与「字段定义」里每行的「排序键」
+                     勾选框是同一件事（改这里会同步勾选，反之亦然）。
+                     分区键是**表达式**，从列名起手（toYYYYMM(col) / toDate(col)）最常见，所以
+                     下拉给列名、清单外直接敲（allow-create）。 -->
                 <tr v-if="isClickHouse">
                   <td class="basic-label">{{ $t('tdet.orderKey') }}</td>
-                  <td><el-input :model-value="orderKeyPreview" size="small" disabled /></td>
+                  <td>
+                    <el-select :model-value="orderKeyCols" multiple clearable filterable size="small"
+                               @change="onOrderKeyPick">
+                      <el-option v-for="c in namedCols" :key="c.uid" :label="c.name" :value="String(c.name).trim()" />
+                    </el-select>
+                  </td>
                 </tr>
                 <tr v-if="isClickHouse">
                   <td class="basic-label">{{ $t('tdet.partitionKey') }}</td>
-                  <td><el-input v-model="form.partitionKey" size="small" clearable /></td>
+                  <td>
+                    <el-select v-model="form.partitionKey" size="small" clearable filterable allow-create>
+                      <el-option v-for="c in namedCols" :key="c.uid" :label="c.name" :value="String(c.name).trim()" />
+                    </el-select>
+                  </td>
                 </tr>
                 <!-- Doris 专属：数据模型 / 分桶列 / 分桶数 / 副本数 -->
                 <tr v-if="isDoris">
@@ -357,13 +368,30 @@ const pkPreview = computed(() => {
   const pks = cols.filter(c => String(c.name || '').trim() && c.primaryKey).map(c => String(c.name).trim())
   return pks.length ? pks.join(', ') : '—'
 })
-/** 排序键预览：与 genClickhouseSql 的 ORDER BY 同源（勾了排序键的列，退化为主键列，再退化 tuple()） */
-const orderKeyPreview = computed(() => {
-  const keys = cols.filter(c => String(c.name || '').trim() && c.orderKey).map(c => String(c.name).trim())
-  if (keys.length) return '(' + keys.join(', ') + ')'
-  const pks = cols.filter(c => String(c.name || '').trim() && c.primaryKey).map(c => String(c.name).trim())
-  return pks.length ? '(' + pks.join(', ') + ')' : 'tuple()'
-})
+/* ===== 基本信息页里做成下拉的三项（ClickHouse）=====
+   排序键 / 分区键 / 存储引擎都不是自由文本，而是"从已有列或已知引擎里挑" —— 做成下拉，
+   不该让人靠记拼写（用户反馈）。清单外的值一律 allow-create 手输，不被清单限制。 */
+// ClickHouse 常用引擎：MergeTree 族 + 日志族 + 特殊表
+const CH_ENGINES = [
+  'MergeTree()', 'ReplacingMergeTree()', 'SummingMergeTree()', 'AggregatingMergeTree()',
+  'CollapsingMergeTree()', 'VersionedCollapsingMergeTree()', 'GraphiteMergeTree()',
+  'Log', 'TinyLog', 'StripeLog', 'Memory', 'Null',
+]
+// 已命名的列（下拉选项来源）
+const namedCols = computed(() => cols.filter(c => String(c.name || '').trim()))
+// 排序键 = 哪些列参与 ORDER BY（与「字段定义」里每行的「排序键」勾选框是同一件事）
+const orderKeyCols = computed(() => namedCols.value.filter(c => c.orderKey).map(c => String(c.name).trim()))
+/** 下拉里改了排序键 → 同步回每列的 orderKey（勾成排序键的列必须 NOT NULL，交给 onChKeyChange） */
+const onOrderKeyPick = (picked) => {
+  const want = new Set(picked || [])
+  for (const c of namedCols.value) {
+    const on = want.has(String(c.name).trim())
+    if (c.orderKey !== on) {
+      c.orderKey = on
+      onChKeyChange(c)
+    }
+  }
+}
 // 自增起始值：只有"能改表选项 + 支持自增"的库才有（Doris / ClickHouse 都没有这个概念），
 // 口径与编辑页 showAutoIncField 一致
 const showAutoIncStart = computed(() => has(props.features, 'supportsTableOptions')
