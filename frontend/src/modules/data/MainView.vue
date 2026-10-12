@@ -163,11 +163,12 @@
                     <DbLogo :type="data.connType" :size="14" :connected="isConnOpen(data.connId) && !connErrorSet.has(String(data.connId))" class="tree-logo" />
                   </span>
                   <!-- hover 显示备注：库里看不出"这条连接是干嘛的"，备注能一句话说清 -->
-                  <span class="node-label conn-label"
-                        :title="data.note ? (data.name + '：' + data.note) : data.name">{{ data.label || data.name || node.label }}</span>
+                  <!-- 不挂 :title —— 那个原生小气泡会压在悬浮信息卡上（用户反馈"小的框提示去掉"）。
+                       原先 title 里的备注/环境/只读说明都挪进卡片，信息不少。 -->
+                  <span class="node-label conn-label">{{ data.label || data.name || node.label }}</span>
                   <!-- 只读徽标：这个状态决定写操作会不会被拦，得随时看得见（藏在编辑弹窗里没人记得住） -->
-                  <span v-if="data.readOnly" class="ro-badge" :title="$t('cd.readOnlyTip')">{{ $t('cd.readOnlyShort') }}</span>
-                  <span class="env-corner" :class="'env-corner-' + (data.env || 'none')" :title="envTitle(data.env)">{{ envShort(data.env) }}</span>
+                  <span v-if="data.readOnly" class="ro-badge">{{ $t('cd.readOnlyShort') }}</span>
+                  <span class="env-corner" :class="'env-corner-' + (data.env || 'none')">{{ envShort(data.env) }}</span>
                   <!-- 悬浮信息卡：Teleport 到 body 再固定定位 ——
                        树容器是 overflow-y:auto / overflow-x:hidden / contain:layout，
                        卡片留在节点里会被整块裁掉（用户反馈"悬浮没出来"，当时看到的
@@ -181,6 +182,10 @@
                       <span class="ci-row"><b>{{ $t('connTip.port') }}</b>{{ data.port || '—' }}</span>
                       <span class="ci-row"><b>{{ $t('connTip.user') }}</b>{{ data.username || '—' }}</span>
                       <span class="ci-row"><b>{{ $t('connTip.type') }}</b>{{ labelOf(data.connType) }}</span>
+                      <span class="ci-row"><b>{{ $t('connTip.env') }}</b>{{ envTitle(data.env) }}</span>
+                      <!-- 备注与只读原先靠节点上的原生 title 提示，现在挪进卡片 -->
+                      <span v-if="data.note" class="ci-row"><b>{{ $t('connTip.note') }}</b>{{ data.note }}</span>
+                      <span v-if="data.readOnly" class="ci-row"><b>{{ $t('connTip.readOnly') }}</b>{{ $t('cd.readOnlyTip') }}</span>
                     </span>
                   </Teleport>
                 </span>
