@@ -741,7 +741,7 @@
         <!-- 置顶分组：已经在最前时隐藏（避免点了没反应的迷惑）；只对自定义分组出现 -->
         <li v-if="customFolders.includes(treeCtxMenu.env) && customFolders[0] !== treeCtxMenu.env"
             class="ctx-item" @click="treeCtxPinFolder(treeCtxMenu.env)">
-          <el-icon><ArrowUp /></el-icon>{{ $t('tree.menu.pinFolder') }}
+          <span class="ctx-pin">📌</span>{{ $t('tree.menu.pinFolder') }}
         </li>
         <li class="ctx-item" @click="startRenameGroup(treeCtxMenu.env)">
           <el-icon><Edit /></el-icon>{{ $t('tree.menu.renameFolder') }}
@@ -1832,7 +1832,7 @@ onMounted(() => {
   // 欢迎页的「最近查询」：首次进来就取一次（失败无所谓，那块会显示一句说明）
   loadHistory()
   // 纯分组从后端设置加载（并顺带完成 localStorage 旧数据的一次性迁移）
-  loadPureFolders(); loadPinnedFolders()
+  loadPureFolders(); loadPinnedFolders().then(() => buildTree())
 })
 onBeforeUnmount(() => { if (offWinMax) offWinMax(); if (offMacFs) offMacFs() })
 
@@ -3752,7 +3752,9 @@ const buildTree = async () => {
     }
     const ensureFolderNode = (path) => {
       if (folderIndex.has(path)) return folderIndex.get(path)
-      const node = { id: 'env:' + path, label: segLabel(path), kind: 'env-folder', env: path, children: [] }
+      // 置顶的分组在名字后面带一个图钉（重启后也要在，所以判据取持久化的 pinnedFolders）
+  const pinned = pinnedFolders.value.includes(path)
+  const node = { id: 'env:' + path, label: segLabel(path) + (pinned ? ' 📌' : ''), kind: 'env-folder', env: path, children: [] }
       folderIndex.set(path, node)
       const idx = path.lastIndexOf('/')
       const parentPath = idx > 0 ? path.slice(0, idx) : ''
@@ -4198,7 +4200,7 @@ const lazyLoadRaw = async (node, resolve) => {
 const refreshTree = async () => {
   treeLoading.value = true
   // 纯分组也在「刷新」的语义里：后端删了分组，点一下刷新树上就要消失
-  await loadPureFolders(); loadPinnedFolders()
+  await loadPureFolders(); loadPinnedFolders().then(() => buildTree())
   // 没有任何连接时也要继续：空态下刷新同样该重画树（以前直接 return，
   // 空态下按钮点了没反应，用户以为坏了）
   if (conn.value) {
