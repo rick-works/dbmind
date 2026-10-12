@@ -216,10 +216,14 @@
                                   :placeholder="c._state === 'new' ? $t('tdet.newColName') : ''" />
                       </td>
                       <td>
-                        <el-select v-model="c.typeBase" size="small" filterable allow-create
-                                   :disabled="typeDisabled(c)" class="type-select">
+                        <!-- 平时是纯文本，点一下才变成下拉并自动展开（见 activeType 那段注释） -->
+                        <el-select v-if="activeType === c._uid" v-model="c.typeBase" size="small" filterable
+                                   allow-create automatic-dropdown :disabled="typeDisabled(c)" class="type-select"
+                                   @change="activeType = ''" @blur="activeType = ''">
                           <el-option v-for="t in typeOptions" :key="t" :label="t" :value="t" />
                         </el-select>
+                        <span v-else class="cell-text" :class="{ 'cell-off': typeDisabled(c) }"
+                              :title="c.typeBase" @click="onTypeClick(c)">{{ c.typeBase }}</span>
                       </td>
                       <td>
                         <el-input v-model="c.length" size="small" :disabled="lenDisabled(c)"
@@ -922,9 +926,19 @@ const scroller = ref(null)
 const scrollTop = ref(0)
 const viewH = ref(600)
 const rowH = ref(26)
-const ROW_BUFFER = 12
+// 缓冲给足：12 行时快速拖动会跑在渲染前面（拖到的地方还是占位行 = 一片空白），
+// 30 行既跟得上手，渲染量也还是只有几十行
+const ROW_BUFFER = 30
 // 行少的时候不窗口化：一次全渲染更省事，也免得首帧量不到行高
 const WINDOW_MIN = 80
+/* 类型下拉是每行最重的组件（256 行就是 256 个 el-select，= 一个输入框 + 弹出层 + 标签），
+   而它平时只是用来"看"。这里平时渲染成纯文本（几乎零成本），点一下才换成下拉并自动展开 ——
+   虚拟滚动每次换窗口都要挂载新行，行越轻越不卡。 */
+const activeType = ref('')
+const onTypeClick = (c) => {
+  if (typeDisabled(c)) return
+  activeType.value = c._uid
+}
 const onTableScroll = () => {
   const el = scroller.value
   if (!el) return
@@ -2383,11 +2397,23 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    默认**屏幕外的行也要参与布局与绘制**，滚动时整张表跟着重排 —— 就是"上下滚动有点卡"的来源。
    下面这条让屏幕外的行跳过布局与绘制、滚到近处再渲染（Chromium / WebView2 支持）。
    别再给行加 filter / backdrop-filter / box-shadow：那会让每行单独做一次合成，反而更卡。 */
-.field-table tbody tr { content-visibility: auto; contain-intrinsic-size: auto 28px; }
+/* 这里**不要**给行加 content-visibility: auto —— 它按"估算高度"跳过绘制，
+   滚快了就会出现一块块空白（用户反馈"滑快了会有白出现"，根因即此）。
+   屏幕外的问题已经由虚拟滚动解决，高度由上下占位行精确撑住，不需要它。 */
 /* 虚拟滚动的上下占位行：只有高度，不要内边距/边框（否则会把滚动条撑长），
    也别让 content-visibility 跳过它们 —— 那样高度就没了，滚动条会乱跳 */
 .field-table tbody tr.vpad { content-visibility: visible; }
 .field-table tbody tr.vpad td { padding: 0; border-bottom: none; }
+/* 类型格的"纯文本态"：占位与输入框一致，点一下才换成下拉（给个手型提示可点） */
+.field-table .cell-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  cursor: pointer;
+}
+.field-table .cell-text.cell-off { opacity: .55; cursor: not-allowed; }
 
 /* ===== 字段表格（HTML 表格，与新建表一致） ===== */
 .field-table {
