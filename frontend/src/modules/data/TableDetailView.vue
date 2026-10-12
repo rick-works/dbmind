@@ -239,7 +239,7 @@
                         <span v-else class="pk-none">—</span>
                       </td>
                       <td v-if="showOrderKey" class="c-center">
-                        <el-tag v-if="c.sortKey" size="small" type="success" effect="plain">{{ $t('tdet.yes') }}</el-tag>
+                        <el-tag v-if="isSortCol(c)" size="small" type="success" effect="plain">{{ $t('tdet.yes') }}</el-tag>
                         <span v-else class="pk-none">—</span>
                       </td>
                       <td v-if="showDist" class="c-center">
@@ -884,14 +884,25 @@ const showPart = computed(() => isCH.value)
 // 后端给的分区键是一段**表达式**（toYYYYMM(ts) 这种），所以按词边界找列名 ——
 // _seq 不会被 seq 误命中（判定口径与新建表的 togglePartition 一致）
 const colRefRe = (name) => new RegExp('(^|[^0-9A-Za-z_])' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([^0-9A-Za-z_]|$)')
-const isPartCol = (c) => {
-  const n = String(c.name || '').trim()
-  return !!n && colRefRe(n).test(String(tableForm.partitionKey || ''))
+/** 这段（排序键/分区键）表达式里是否出现了这一列。后端给的是 (id) / toYYYYMM(ts) 这类表达式，
+ *  所以按词边界找列名：_seq 不会被 seq 误命中。 */
+const exprHasCol = (expr, name) => {
+  const n = String(name || '').trim()
+  return !!n && colRefRe(n).test(String(expr || ''))
 }
-// 分桶列：后端给的是一串列名，按名字比对
-const isDistCol = (c) => String(dorisDistColName() || '')
-  .split(',').map(s => s.trim()).filter(Boolean)
-  .includes(String(c.name || '').trim())
+// 排序键：两种来源都认 —— 后端若按列回填了 sortKey 就用它，否则从基本信息那段排序键表达式里认
+// （CH 的主键默认等于排序键，界面上 CH 是不显示主键列的，所以这一列就是它唯一的回显）
+const isSortCol = (c) => !!c.sortKey || exprHasCol(tableForm.value.sortingKey, c.name)
+// 分区键：注意 tableForm 是 ref，脚本里必须写 .value ——
+// 漏掉就会读到 undefined、整列永远显示「—」（基本信息明明写着 id，字段列表却说没有，用户反馈）
+const isPartCol = (c) => exprHasCol(tableForm.value.partitionKey, c.name)
+// 分桶列：后端给的是一串列名，按名字比对（dorisDistColName 已统一小写，这里也跟着小写比）
+const isDistCol = (c) => {
+  const n = String(c.name || '').trim().toLowerCase()
+  return !!n && String(dorisDistColName() || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    .includes(n)
+}
 // 主键列：Doris 没有「每列主键」概念（主键=建表时的 Key 列，界面上恒为「—」）、
 // ClickHouse 同理 —— 整列不显示，比一列无意义的「—」干净
 const showPkCol = computed(() => !isDoris.value && !isCH.value)
