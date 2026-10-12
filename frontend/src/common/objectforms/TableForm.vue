@@ -188,6 +188,7 @@
                 <col v-if="showPkCol" :style="{ width: colWidths.pk }" />
                 <col v-if="showOrderKey" :style="{ width: colWidths.sort }" />
                 <col v-if="isDoris" :style="{ width: colWidths.dist }" />
+                <col v-if="isClickHouse" :style="{ width: colWidths.part }" />
                 <col :style="{ width: colWidths.def }" />
                 <col v-if="showAutoIncrement" :style="{ width: colWidths.auto }" />
                 <col v-if="showComment" :style="{ width: colWidths.comment }" />
@@ -216,6 +217,8 @@
                   <th v-if="showOrderKey" class="c-center" style="width:70px" :title="$t('tf.orderKeyTip')">{{ $t('tf.orderKey') }}</th>
                   <!-- Doris 的分桶列：与基本信息里那个分桶列下拉是同一件事（勾这里 = 下拉里选中） -->
                   <th v-if="isDoris" class="c-center" style="width:70px" :title="$t('tf.distColPh')">{{ $t('tf.distCol') }}</th>
+                  <!-- ClickHouse 的分区键：单列。基本信息那格还能写表达式（toYYYYMM(ts)），这里勾上 = 用这一列 -->
+                  <th v-if="isClickHouse" class="c-center" style="width:70px">{{ $t('tdet.partitionKey') }}</th>
                   <th style="width:132px">{{ $t('tf.colDefault') }}</th>
                   <th v-if="showAutoIncrement" class="c-center" style="width:56px">{{ $t('tf.colAutoInc') }}</th>
                   <th v-if="showComment">{{ $t('tdet.comment') }}</th>
@@ -240,6 +243,10 @@
                        读写的是 form.dorisDistCol —— 与基本信息的下拉天然联动 -->
                   <td v-if="isDoris" class="c-center">
                     <el-checkbox :model-value="distPicked(c)" :disabled="!isKeyCol(c)" @change="toggleDist(c, $event)" />
+                  </td>
+                  <!-- 分区键是单值：勾这一列会把上一个换掉；取消则把基本信息那格清空（见 togglePartition） -->
+                  <td v-if="isClickHouse" class="c-center">
+                    <el-checkbox :model-value="partitionPicked(c)" @change="togglePartition(c, $event)" />
                   </td>
                   <td><el-input v-model="c.defaultValue" size="small" /></td>
                   <td v-if="showAutoIncrement" class="c-center"><el-checkbox v-model="c.autoIncrement" @change="onAutoIncChange(c)" /></td>
@@ -346,7 +353,12 @@ const isClickHouse = computed(() => ddlStyleOf(props.features) === 'clickhouse')
 const isDoris = computed(() => has(props.features, 'doris') || ddlStyleOf(props.features) === 'doris')
 // 各列是否显示由后端 features（数据源能力）决定 —— 与「编辑表结构」逐条对齐：
 // 主键列在 Doris / ClickHouse 下整列不显示（这两边没有"每列主键"概念，摆一列「—」不如不显示）
-const showPkCol = computed(() => !isDoris.value && !isClickHouse.value)
+// 主键列对**所有**数据源都显示。以前 Doris / ClickHouse 被排除在外，后果：
+//   · ClickHouse 的 PRIMARY KEY (...) 代码里早就支持（见 genClickhouseSql），但勾选框藏起来
+//     → c.primaryKey 恒为 false → 那个分支永远走不到，用户设不了和 ORDER BY 不同的主键；
+//   · Doris 的 Key 列（就是它的"主键"）由此推导（见 dorisKeyCols），藏起来等于无处可设
+//     → 只能吃"没有主键就取第一个字段"的兜底。勾上主键后 dorisKeyCols / UNIQUE KEY / 分桶列约束一起生效。
+const showPkCol = computed(() => true)
 const showOrderKey = computed(() => isClickHouse.value)
 // 自增列：Doris 的自增只能建表时指定、编辑器对它没有任何可操作项，同样不显示
 const showAutoIncrement = computed(() => has(props.features, 'supportsAutoIncrement') && !isDoris.value && !isClickHouse.value)
@@ -356,18 +368,21 @@ const headSpan = computed(() => 8
   + (showPkCol.value ? 1 : 0)
   + (showOrderKey.value ? 1 : 0)
   + (isDoris.value ? 1 : 0)
+  + (isClickHouse.value ? 1 : 0)
   + (showAutoIncrement.value ? 1 : 0)
   + (showComment.value ? 1 : 0))
 /* 列宽与「编辑表结构」同一套机制：写**相对权重**（与列宽本身无关、最终合计 100%），
    按当前显示的列归一化成百分比 —— 于是窗口宽窄、少显示了哪几列，表格都精确铺满。
    直接写死像素时，容器比列宽之和大右侧就留白、小了就溢出（真机反复出现过）。 */
-const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, dist: 7, def: 12, auto: 5, comment: 30, ops: 5 }
+const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, dist: 7, part: 7, def: 12, auto: 5, comment: 30, ops: 5 }
 const colWidths = computed(() => {
   const keys = ['idx', 'name', 'type', 'len', 'prec', 'nullable']
   if (showPkCol.value) keys.push('pk')
   if (showOrderKey.value) keys.push('sort')
   // Doris 的「分桶列」：与基本信息里那个分桶列下拉是同一件事（见 distPicked / toggleDist）
   if (isDoris.value) keys.push('dist')
+  // ClickHouse 的「分区键」：与基本信息里那个分区键框是同一件事（见 partitionPicked）
+  if (isClickHouse.value) keys.push('part')
   keys.push('def')
   if (showAutoIncrement.value) keys.push('auto')
   if (showComment.value) keys.push('comment')
@@ -425,6 +440,25 @@ const toggleDist = (c, on) => {
   if (on) set.add(name)
   else set.delete(name)
   form.dorisDistCol = [...set]
+}
+
+/* ===== ClickHouse 的「分区键」：字段表里的勾选框 ↔ 基本信息里的分区键框 =====
+   两边读写同一份数据 form.partitionKey，所以天然联动。
+   与排序键/分桶列不同，它是**单值**、而且常写成表达式（toYYYYMM(ts) / toDate(ts)）：
+   · 认它：表达式里出现了这一列的名字就算勾上（所以 TOYYYYMM(创建时间) 那种也能认出来）；
+     按词边界匹配，_seq 不会被 seq 误命中。
+   · 勾上：直接把这一列写进去（想加函数就去基本信息那格里改）。
+   · 取消：表达式里提到它就整段清掉 —— 单值，没有"改一半"的中间态。 */
+const colRefRe = (name) => new RegExp('(^|[^0-9A-Za-z_])' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([^0-9A-Za-z_]|$)')
+const partitionPicked = (c) => {
+  const n = String(c.name || '').trim()
+  return !!n && colRefRe(n).test(String(form.partitionKey || ''))
+}
+const togglePartition = (c, on) => {
+  const n = String(c.name || '').trim()
+  if (!n) return
+  if (on) form.partitionKey = n
+  else if (partitionPicked(c)) form.partitionKey = ''
 }
 
 /* ===== 注释格的长文本弹窗（与「编辑表结构」同一套：悬停浮出「展开」、双击输入框也行） ===== */
