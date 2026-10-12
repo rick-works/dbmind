@@ -166,7 +166,7 @@
             <div class="empty-card-text">{{ $t('tf.noFieldsHint') }}</div>
             <el-button size="small" type="primary" :icon="Plus" @click="addColumn">{{ $t('tf.addColumn') }}</el-button>
           </div>
-          <div v-else class="field-table-wrap">
+          <div v-else ref="scroller" class="field-table-wrap" @scroll.passive="onTableScroll">
             <table class="field-table">
               <!-- 列宽必须写在 colgroup 里，**不能只靠表头那行的 style**：
                    表头第一行是 35px 空行（一个 colspan 全列的 th），固定布局只认
@@ -226,11 +226,16 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(c, i) in cols" :key="c.uid" :class="{ 'pk-row': c.primaryKey, 'ok-row': c.orderKey, 'sel-row': c._sel }" @click="selectRow(c)">
-                  <td><span class="row-idx">{{ i + 1 }}</span></td>
+                                    <!-- 虚拟滚动：只渲染看得见的行，上下各用一个空行撑住滚动高度（与编辑表结构同一套） -->
+                    <tr v-if="padTop" class="vpad">
+                      <td :colspan="headSpan" :style="{ height: padTop + 'px' }"></td>
+                    </tr>
+                    <tr v-for="(c, i) in windowedCols" :key="c.uid" :class="{ 'pk-row': c.primaryKey, 'ok-row': c.orderKey, 'sel-row': c._sel }" @click="selectRow(c)">
+                  <td><span class="row-idx">{{ winStart + i + 1 }}</span></td>
                   <td><el-input v-model="c.name" size="small" clearable /></td>
                   <td>
-                    <el-select v-model="c.type" size="small" filterable allow-create class="type-select">
+                    <span v-if="activeType !== c.uid" class="cell-text" :title="c.type" @click="activeType = c.uid">{{ c.type }}</span>
+                        <el-select v-else v-model="c.type" size="small" filterable allow-create automatic-dropdown class="type-select" @change="activeType = ''" @blur="activeType = ''">
                       <el-option v-for="t in features.columnTypes || []" :key="t" :label="t" :value="t" />
                     </el-select>
                   </td>
@@ -260,6 +265,10 @@
                     </div>
                   </td>
                   <td class="c-center"><el-button text size="small" :icon="Delete" class="dc-del" @click="removeColumn(i)" /></td>
+                </tr>
+                <!-- 底部占位：把剩余行的高度撑出来，滚动条长度与真实行数一致 -->
+                <tr v-if="padBottom" class="vpad">
+                  <td :colspan="headSpan" :style="{ height: padBottom + 'px' }"></td>
                 </tr>
               </tbody>
             </table>
@@ -460,6 +469,38 @@ const togglePartition = (c, on) => {
   if (on) form.partitionKey = n
   else if (partitionPicked(c)) form.partitionKey = ''
 }
+
+/* ===== 字段表的虚拟滚动（与编辑表结构同一套）=====
+   行多时整表全渲染会卡：每行十几个输入框/下拉/勾选框，全渲染就是"滚动发卡"的根因。
+   这里只渲染"看得见的窗口 + 上下各 30 行"，剩下用两个空行（.vpad）把滚动高度撑住。 */
+const scroller = ref(null)
+const scrollTop = ref(0)
+const viewH = ref(600)
+const rowH = ref(26)
+const ROW_BUFFER = 30
+const WINDOW_MIN = 80
+const onTableScroll = () => {
+  const el = scroller.value
+  if (!el) return
+  scrollTop.value = el.scrollTop
+  if (el.clientHeight) viewH.value = el.clientHeight
+  const tr = el.querySelector('tbody tr:not(.vpad)')
+  if (tr && tr.offsetHeight) rowH.value = tr.offsetHeight
+}
+const winStart = computed(() => {
+  if (cols.value.length <= WINDOW_MIN) return 0
+  return Math.max(0, Math.floor(scrollTop.value / Math.max(1, rowH.value)) - ROW_BUFFER)
+})
+const windowedCols = computed(() => {
+  if (cols.value.length <= WINDOW_MIN) return cols.value
+  const end = Math.min(cols.value.length, Math.ceil((scrollTop.value + viewH.value) / Math.max(1, rowH.value)) + ROW_BUFFER)
+  return cols.value.slice(winStart.value, end)
+})
+const winEnd = computed(() => winStart.value + windowedCols.value.length)
+const padTop = computed(() => winStart.value * rowH.value)
+const padBottom = computed(() => Math.max(0, (cols.value.length - winEnd.value) * rowH.value))
+/* 类型下拉是每行最重的组件，平时只用来"看"：平时渲染成纯文本，点一下才换成下拉并自动展开 */
+const activeType = ref('')
 
 /* ===== 注释格的长文本弹窗（与「编辑表结构」同一套：悬停浮出「展开」、双击输入框也行） ===== */
 const commentDlg = reactive({ visible: false, text: '', field: '', row: null })
@@ -905,7 +946,19 @@ emit('sql', genSql())
 .row-idx { color: var(--dc-text-dim); font-size: 13px; }
 .field-table tbody tr { cursor: pointer; }
 /* 与编辑表结构一致：屏幕外的行跳过布局与绘制（几十上百行时滚动明显更顺） */
-.field-table tbody tr { content-visibility: auto; contain-intrinsic-size: auto 28px; }
+/* 这里**不要**给行加 content-visibility: auto —— 它按"估算高度"跳过绘制，滚快了会出现白块。
+   屏幕外的问题由虚拟滚动解决，高度由上下占位行精确撑住。 */
+.field-table tbody tr.vpad { content-visibility: visible; }
+.field-table tbody tr.vpad td { padding: 0; border-bottom: none; }
+/* 类型格的"纯文本态"：点一下才换成下拉（与编辑表结构一致） */
+.field-table .cell-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 4px;
+  cursor: pointer;
+}
 .field-table tbody tr:hover { background: var(--dc-bg-hover); }
 /* 选中态只有一种：任何一行被选中都是同一个蓝底 + 左侧竖条。
    原先还给"主键行 / 排序键行"加了常驻底色（pk-row / ok-row），看着就像**首行一直被选中**，
