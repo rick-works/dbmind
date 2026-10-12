@@ -57,7 +57,7 @@
 
           <!-- 检查更新：比对 GitHub 最新 Release，有新版可在线下载安装。
                图标用 Refresh（循环箭头 = 检查/更新），不用 Upload（上传）——后者语义不对 -->
-          <el-tooltip :content="dlStatus === 'running' ? t('update.dlShowProgress') : $t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn"
+          <el-tooltip :content="dlStatus === 'running' ? $t('update.dlShowProgress') : $t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn"
                      data-act="check-update"
                      :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon><Refresh /></el-icon></span></el-tooltip>
 
@@ -1000,23 +1000,23 @@
     <template #header>
       <div class="dlg-title">
         <span class="dlg-title-ic"><el-icon :size="16"><Refresh /></el-icon></span>
-        <span>{{ t('update.title') }} · v{{ updateInfo && updateInfo.latest }}</span>
+        <span>{{ $t('update.title') }} · v{{ updateInfo && updateInfo.latest }}</span>
       </div>
     </template>
     <div v-if="updateInfo" class="upd-body">
-      <p class="upd-lead">{{ t('update.found', { v: updateInfo.latest, cur: updateInfo.current }) }}</p>
+      <p class="upd-lead">{{ $t('update.found', { v: updateInfo.latest, cur: updateInfo.current }) }}</p>
       <!-- eslint-disable-next-line vue/no-v-html -- 说明来自自家 Release，渲染器已转义 -->
       <div class="upd-notes markdown-body" v-html="updateInfo.notesHtml"></div>
       <a v-if="updateInfo.truncated" class="upd-more" :href="updateInfo.releaseUrl"
-         target="_blank" rel="noopener">{{ t('update.moreNotes') }}</a>
+         target="_blank" rel="noopener">{{ $t('update.moreNotes') }}</a>
     </div>
     <template #footer>
       <div class="upd-footer">
         <!-- 「不再提示此版本」只在自动弹出时出现；手动点图标检查时不显示。
              右上角 × / ESC 只是关闭（不记 skip，下次有新版照常提示） -->
-        <el-button v-if="updateInfo && updateInfo.isAuto" size="small" @click="closeUpdateDialog(true)">{{ t('update.neverAgain') }}</el-button>
-        <el-button size="small" @click="gotoDownload">{{ t('update.goto') }}</el-button>
-        <el-button size="small" type="primary" @click="doApplyUpdate">{{ t('update.apply') }}</el-button>
+        <el-button v-if="updateInfo && updateInfo.isAuto" size="small" @click="closeUpdateDialog(true)">{{ $t('update.neverAgain') }}</el-button>
+        <el-button size="small" @click="gotoDownload">{{ $t('update.goto') }}</el-button>
+        <el-button size="small" type="primary" @click="doApplyUpdate">{{ $t('update.apply') }}</el-button>
       </div>
     </template>
   </el-dialog>
@@ -1033,7 +1033,7 @@
     <template #header>
       <div class="dlg-title">
         <span class="dlg-title-ic"><el-icon :size="16"><Download /></el-icon></span>
-        <span>{{ t('update.dlTitle') }}</span>
+        <span>{{ $t('update.dlTitle') }}</span>
       </div>
     </template>
     <div class="upd-dl-body">
@@ -1046,14 +1046,14 @@
       />
       <div class="upd-dl-stats">
         <span v-if="dlStatus === 'running'">{{ dlRunningText }}</span>
-        <span v-else-if="dlStatus === 'done'" class="upd-dl-ok">{{ t('update.dlDone') }}</span>
+        <span v-else-if="dlStatus === 'done'" class="upd-dl-ok">{{ $t('update.dlDone') }}</span>
         <span v-else class="upd-dl-err">{{ dlError }}</span>
       </div>
       <!-- 完成态**只说一句状态**（上面那行「下载完成，正在安装更新」）。
            「会自动关闭/自动打开」「安装包存哪」这些已经挪到点「在线更新」时的确认弹窗里 ——
            下载过程中的提示没必要在完成时再重复一遍（用户反馈）。
            唯一留下的是下面这条**风险提示**：走了镜像又拿不到官方校验值时，必须说清它自证不了完整性。 -->
-      <div v-if="dlStatus === 'done' && dlUnverified" class="upd-dl-sub">{{ t('update.dlUnverified') }}</div>
+      <div v-if="dlStatus === 'done' && dlUnverified" class="upd-dl-sub">{{ $t('update.dlUnverified') }}</div>
       <!-- 失败时不再另加一行"下一步怎么办"：后端那句话本身就是一句简短的可操作提示
            （"下载失败（N 个下载源都没成功）。可以点「重试」继续…"），加一行反而更啰嗦 -->
       <!-- 进度条下面**不再有"过程说明"那一行**：换源 / 续传 / 重试 / 连接中 都嫌吵（用户反馈），
@@ -1062,24 +1062,24 @@
     <template #footer>
       <!-- 失败必须能**原地重试**：以前失败后只能重启软件，点更新图标永远弹回同一个报错页 -->
       <template v-if="dlStatus === 'failed'">
-        <el-button size="small" @click="closeDownloadDialog">{{ t('update.dlClose') }}</el-button>
-        <el-button v-if="dlUrl" size="small" @click="copyText(dlUrl, t('common.copied'))">{{ t('update.dlCopyLink') }}</el-button>
-        <el-button size="small" type="primary" @click="retryDownload">{{ t('update.dlRetry') }}</el-button>
+        <el-button size="small" @click="closeDownloadDialog">{{ $t('update.dlClose') }}</el-button>
+        <el-button v-if="dlUrl" size="small" @click="copyText(dlUrl, $t('common.copied'))">{{ $t('update.dlCopyLink') }}</el-button>
+        <el-button size="small" type="primary" @click="retryDownload">{{ $t('update.dlRetry') }}</el-button>
       </template>
       <!-- 下载完成：这里才是**真正那一步确认** —— 安装会关掉应用，得用户点头。
            「稍后」也不丢东西：包留在本地，弹窗里随时能再点「现在更新」。 -->
       <template v-else-if="dlStatus === 'done'">
-        <el-button size="small" @click="closeDownloadDialog">{{ t('update.dlLater') }}</el-button>
-        <el-button size="small" type="primary" @click="askInstall">{{ t('update.dlNow') }}</el-button>
+        <el-button size="small" @click="closeDownloadDialog">{{ $t('update.dlLater') }}</el-button>
+        <el-button size="small" type="primary" @click="askInstall">{{ $t('update.dlNow') }}</el-button>
       </template>
       <template v-else-if="dlStatus !== 'running'">
-        <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('common.confirm') }}</el-button>
+        <el-button size="small" type="primary" @click="closeDownloadDialog">{{ $t('common.confirm') }}</el-button>
       </template>
       <template v-else>
         <!-- 运行中还留了一条"自救"的路：镜像快慢随时翻转，不该让人只能干等。
              按一次 = 重新测速、换到当下最快的源，并从已下载的断点接着下 -->
-        <el-button size="small" @click="switchSource">{{ t('update.dlFaster') }}</el-button>
-        <el-button size="small" type="primary" @click="closeDownloadDialog">{{ t('update.dlBackground') }}</el-button>
+        <el-button size="small" @click="switchSource">{{ $t('update.dlFaster') }}</el-button>
+        <el-button size="small" type="primary" @click="closeDownloadDialog">{{ $t('update.dlBackground') }}</el-button>
       </template>
     </template>
   </el-dialog>
@@ -1937,7 +1937,9 @@ const bgPageRows = computed(() => {
  *  用它会虚高）；运行中 = 后端时长 + 距上次刷新的本地推进，**1 秒心跳**刷新显示
  *  （bgTick 只触发重渲染，不发请求）；已中断但没记下结束时间的旧记录显示 — */
 const bgTick = ref(0)
-setInterval(() => { bgTick.value++ }, 1000)
+// 具名保存：MainView 在某些页签场景下会整个卸载再挂回来（见 onBeforeUnmount 的注释），
+// 不摘掉的话每重挂一次就多一个 1 秒心跳（累加时钟会越跑越快）。
+const bgTickTimer = setInterval(() => { bgTick.value++ }, 1000)
 const bgDurationText = (t) => {
   bgTick.value
   if (bgStatusOf(t.id) !== 'running' && !t.finishedAt) return '—'
@@ -2069,7 +2071,8 @@ watch(() => bgTasks.length, (n) => {
 })
 // 挂载后拉一次 + 每 5 秒刷新（任务少，几个请求的事），徽标才「活」
 onMounted(() => { refreshBgStatus() })
-setInterval(refreshBgStatus, 5000)
+// 同样具名保存：重挂组件时旧的 5 秒轮询必须停，否则每 5 秒重复打一次后台任务接口
+const bgRefreshTimer = setInterval(refreshBgStatus, 5000)
 const bgRunningCount = computed(() =>
   bgTasks.filter(t => (bgStatusMap.value[t.id] || 'running') === 'running').length
 )
@@ -3959,15 +3962,22 @@ const onTreeNodeDrop = async (draggingNode, dropNode, dropType) => {
 // 加载当前库的表列表（供数据对比/同步弹窗使用）
 const refreshAllTables = async () => {
   if (!conn.value || !currentDb.value) { allTables.value = []; return }
+  // 记下"这次请求是给谁发的"：切库/切连接后，先发的响应可能后到 ——
+  // 不校验就会把当前库的表清单覆盖成**上一个库**的（SQL 编辑器的表名下拉跟着串）。
+  const cid = conn.value.id
+  const db = currentDb.value
   try {
-    const tables = isNoSql.value ? [] : await listTables(conn.value.id, currentDb.value)
+    const tables = isNoSql.value ? [] : await listTables(cid, db)
+    if (!conn.value || conn.value.id !== cid || currentDb.value !== db) return
     allTables.value = tables.filter(t => (t.type || 'TABLE') === 'TABLE')
     // 把这批新数据写回持久缓存（口径与 refreshCatNode 一致）：本函数只在「刷新对象」
     // 时跑，拿到的就是最新的；不写回的话，下次展开该库仍会先渲染旧清单
     if (!isNoSql.value && Array.isArray(tables)) {
-      writeSchemaCache('tables:' + conn.value.id + ':' + currentDb.value, tables)
+      writeSchemaCache('tables:' + cid + ':' + db, tables)
     }
-  } catch { allTables.value = [] }
+  } catch {
+    if (conn.value && conn.value.id === cid && currentDb.value === db) allTables.value = []
+  }
 }
 
 // 连接节点的库子节点统一构造（缓存命中 / 后台加载完成两处共用，避免字段漂移）
@@ -4047,12 +4057,26 @@ const dbChildNodes = (connId, connType, dbList, catalog) => {
    * 对象不会触发任何更新（同文件 onUpdateTableRows 的注释里踩过这个坑：只改 node.data
    * 实测界面不刷新）。
    */
+  // 后台补页的"代次"。同一分类会被三处写 children：本函数、"刷新"（refreshCatNode）、
+  // "重载库"（refreshDbNode）。后两者一跑，先前那条链若还在跑就会把**刚刷出来的新清单
+  // 又覆盖回旧清单**（表现："刷新完闪回去，还能看到已删掉的表"）。
+  const growGens = new Map()
+  const bumpGrowGen = (id) => {
+    const g = (growGens.get(id) || 0) + 1
+    growGens.set(id, g)
+    return g
+  }
   const growCategoryInBackground = (data, all) => {
+    const gen = bumpGrowGen(data.id)
+    const startNode = treeRef.value ? treeRef.value.getNode(data.id) : null
     let shown = Math.min(TREE_FIRST_PAGE, all.length)
     const step = () => {
+      // ① 代次变了（被"刷新"打断）→ 停，别覆盖人家刚拿到的新清单
+      if ((growGens.get(data.id) || 0) !== gen) return
       const node = treeRef.value && data.id ? treeRef.value.getNode(data.id) : null
-      // 节点没了（树被重建 / 已刷新）就停：此时这个 data 也不再被渲染
-      if (!node || !node.data) return
+      // ② 节点没了，或被**整棵重建**（重载库会重建分类节点）→ 停。只比对 id 不够：
+      //    重建后 id 相同但是**另一个对象**，继续写就是往新节点里灌旧数据。
+      if (!node || !node.data || (startNode && node !== startNode)) return
       const next = all.slice(0, Math.min(shown + GROW_CHUNK, all.length))
       node.data.children = next
       shown = next.length
@@ -5990,6 +6014,8 @@ const refreshCatNode = async (db, cat, connId) => {
     // 下次展开直接用它渲染，不必再打一次库
     if (catKey && Array.isArray(items)) writeSchemaCache(catKey, items)
     const children = buildCatChildren({ cat, connId: cid, db, items })
+    // 作废可能还在跑的"后台补页"链：它的清单是刷新**之前**的，继续补就会把这份新清单覆盖回去
+    bumpGrowGen(key)
     node.data.children = children
     const oldKeys = node.childNodes.map(c => c.key)
     for (const k of oldKeys) {
@@ -6890,6 +6916,17 @@ onBeforeUnmount(() => {
   window.removeEventListener('dc-scripts-changed', onScriptsChanged)
   window.removeEventListener('keydown', onGlobalKey)
   if (exportPollTimer) { clearInterval(exportPollTimer); exportPollTimer = null }
+  // 定时器也要停。这几个原本是"设了就不管"的：
+  //  · bgTick 每秒 +1（重挂一次多一个心跳 → 后台任务的"已运行时长"会越走越快）
+  //  · bgRefresh 每 5 秒打一次后台任务接口（重挂一次就多打一轮）
+  //  · dangerTimer/dangerShowTimer 是危险操作（清表/删库）的确认倒计时
+  //  · dlTimer/filterTimer 是下载进度与搜索防抖
+  if (bgTickTimer) clearInterval(bgTickTimer)
+  if (bgRefreshTimer) clearInterval(bgRefreshTimer)
+  if (dangerTimer) { clearInterval(dangerTimer); dangerTimer = null }
+  if (dangerShowTimer) { clearTimeout(dangerShowTimer); dangerShowTimer = null }
+  if (dlTimer) { clearInterval(dlTimer); dlTimer = null }
+  if (filterTimer) { clearTimeout(filterTimer); filterTimer = null }
 })
 
 // 监听 URL id 变化（如外部链接跳转）

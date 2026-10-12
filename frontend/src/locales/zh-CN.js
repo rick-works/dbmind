@@ -202,7 +202,7 @@ export default {
   'mv.aiAnswer': 'AI 回答',
   'mv.actionFailed': '动作执行失败',
   'mv.scriptUnsaved': '脚本「{name}」有未保存的修改，是否保存？',
- 'mv.txCloseAsk': '这些页签的事务还有未提交的修改，关窗将回滚：{names}',
+  'mv.txCloseAsk': '这些页签的事务还有未提交的修改，关窗将回滚：{names}',
   'mv.structureSuffix': ' (结构)',
   'mv.pickConnFirst': '请先在左侧对象树选中一个连接，再执行「编辑连接」',
   'mv.deleteScriptBody': '确定删除脚本「{name}」？',
@@ -2109,6 +2109,8 @@ export default {
   'sqlq.stmtCount': '共 {n} 条语句',
   'sqlq.runThisStmt': '只执行这条语句',
   'sqlq.joinSameCol': '同名列 · 可能是关联列',
+  // JOIN 补全项右侧那行小字「详情」（SqlQueryView 里生成 ON a.x = b.x 片段时用）
+  'sqlq.joinFullSnippet': '补全整条关联条件',
   'sqlq.timingRowTitle': '查看语句 {n} 的结果',
   'sqlq.msServerTip': '服务端执行耗时（不含网络传输）；左下角为端到端总耗时，两者本不相等',
   'sqlq.msE2eTip': '端到端总耗时（含网络传输与结果落地）；各结果 tab 上为服务端执行耗时',
@@ -2140,7 +2142,9 @@ export default {
   'sqlq.txRolledBack': '已回滚（ROLLBACK）',
   'sqlq.txFail': '事务操作失败',
   'sqlq.txReset': '连接已切换，事务状态已复位',
-  'sqlq.pickConnFirst': '请先在上方选择数据源',
+  // 这里原本还有一条重复的 'sqlq.pickConnFirst'（值还不一样），已删除 ——
+  // JS 对象里后定义者生效，删掉靠前这条才**不改变现有行为**；
+  // 重复键会让"到底哪个值生效"要翻代码顺序才知道，项目自带的 guard 脚本会直接报出来。
   'sqlq.txCloseTitle': '有未提交的事务',
   'sqlq.txCloseWarn': '此页签的事务里还有未提交的修改，关闭将回滚这些修改。',
   'sqlq.txCloseRollback': '回滚并关闭',

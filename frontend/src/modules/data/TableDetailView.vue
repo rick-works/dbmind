@@ -628,7 +628,10 @@ const stripChNullable = (raw) => {
 
 const splitTypeText = (raw) => {
   const s = (raw || '').trim()
-  const m = s.match(/^([A-Za-z_]+)\s*\(([^)]*)\)(.*)$/)
+  // 类型名允许**含数字**：ClickHouse 的 `DateTime64(3)`、SQL Server 的 `datetime2(7)`、
+  // `Decimal64(...)` 都带数字。原先只认纯字母，这类会落到下面"整体当 base、opaque=false"，
+  // 于是①类型格被大写显示 ②"长度"输入框被错误地放开（填了也被 buildType 忽略）。
+  const m = s.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)(.*)$/)
   if (m) {
     const base = m[1].toUpperCase()
     if (!/^\d+(,\d+)?$/.test(m[2].trim().replace(/\s+/g, ''))) {
@@ -1942,7 +1945,12 @@ const ensureFeatures = async () => {
   if (!featuresLoaded) { await loadFeatures(); featuresLoaded = true }
 }
 
+// 请求代次：快速连开/切换两张表时，**先发的响应可能后到** —— 不校验就会把 A 表的字段
+// 写到 B 表的页签上（标题是 B、字段是 A）。每次 load 自增，await 回来只要不是最新代次
+// 就整段丢弃，一个状态都不改。
+let loadSeq = 0
 const load = async () => {
+  const seq = ++loadSeq
   loading.value = true
   ddlMode.value = false
   ddlText.value = ''
@@ -1953,6 +1961,7 @@ const load = async () => {
       listIndexes(props.conn.id, props.database).catch(() => []),
       listTables(props.conn.id, props.database).catch(() => [])
     ])
+    if (seq !== loadSeq) return
     columns.value = cols || []
     indexes.value = (idxRes || []).filter(i => i.table === props.table)
     tablesRef.value = tables || []
@@ -2052,11 +2061,13 @@ const load = async () => {
         // 表清单的 comment 是数据库现状的权威值 —— DDL 解析（取「最后一个 COMMENT」）
         // 偶尔会因 DDL 形状差异取到别的注释，不能让它覆盖现状（否则打开就误报「注释有改动」）
         parsed.comment = tbl?.comment || parsed.comment
-        Object.assign(tableForm.value, parsed)
+        // 代次校验：这一段的 DDL 是**另一张表**拉回来的话，绝不能写进当前表
+        if (seq === loadSeq) Object.assign(tableForm.value, parsed)
         // DDL 回填后重照基线快照：保证刚打开时基线与显示值一致（不产生假差异）
         optsBase.comment = tableForm.value.comment
       } catch { /* DDL 取不到时留空 */ }
     }
+    if (seq !== loadSeq) return
     onCharsetChange()
     const f = tableForm.value
     optsBase.engine = f.engine
@@ -2066,9 +2077,10 @@ const load = async () => {
     optsBase.comment = f.comment
     if (ddlStyle.value === 'mssql') mssqlPk.value = await mssqlPkName()
   } catch (e) {
-    ElMessage.error(t('tdet.loadSchemaFailed', { detail: (e?.message || e) }))
+    if (seq === loadSeq) ElMessage.error(t('tdet.loadSchemaFailed', { detail: (e?.message || e) }))
   } finally {
-    loading.value = false
+    // 只有"最新那次"能关加载态：过期请求关掉会把新请求的转圈一起熄掉
+    if (seq === loadSeq) loading.value = false
   }
 }
 

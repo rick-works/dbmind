@@ -106,7 +106,7 @@ export default {
   'mv.oneDirty': 'Script {names} has unsaved changes',
   'mv.manyDirty': '{n} scripts have unsaved changes: {names}',
   'mv.closeAsk': '{head} — save before closing?',
- 'mv.txCloseAsk': 'These tabs have uncommitted transaction changes — closing rolls them back: {names}',
+  'mv.txCloseAsk': 'These tabs have uncommitted transaction changes — closing rolls them back: {names}',
   'mv.unsavedTitle': 'Unsaved changes',
   'mv.closeConnTitle': 'Close connection',
   'mv.closeConnTabs': '{n} script tab(s) are using this connection ({names}); closing it will close them too. Continue?',
@@ -2103,6 +2103,8 @@ export default {
   'sqlq.stmtCount': '{n} statements',
   'sqlq.runThisStmt': 'Run only this statement',
   'sqlq.joinSameCol': 'Same-name column · likely join key',
+  // detail line next to the JOIN completion item (SqlQueryView builds `ON a.x = b.x`)
+  'sqlq.joinFullSnippet': 'Complete the full join condition',
   'sqlq.timingRowTitle': 'View result of statement {n}',
   'sqlq.msServerTip': 'Server-side execution time (excludes network); bottom-left is end-to-end total',
   'sqlq.msE2eTip': 'End-to-end total (network + transfer included); per-tab values are server-side execution time',
@@ -2134,7 +2136,8 @@ export default {
   'sqlq.txRolledBack': 'Rolled back',
   'sqlq.txFail': 'Transaction operation failed',
   'sqlq.txReset': 'Connection switched, transaction state reset',
-  'sqlq.pickConnFirst': 'Pick a data source first',
+  // a duplicate 'sqlq.pickConnFirst' used to live here (with a different value) — removed:
+  // the later definition wins in a JS object, so dropping the earlier one keeps behaviour.
   'sqlq.txCloseTitle': 'Uncommitted transaction',
   'sqlq.txCloseWarn': 'This tab has uncommitted changes in its transaction — closing will roll them back.',
   'sqlq.txCloseRollback': 'Roll back & close',

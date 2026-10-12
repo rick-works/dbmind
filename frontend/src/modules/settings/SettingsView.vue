@@ -2153,7 +2153,10 @@ watch(visible, (v) => {
     loadSafety()
     loadMcp()
     loadCache()
-    loadDriver()
+    // 这里原先多调了一个 loadDriver() —— 全文件根本没有这个函数（是早期改名的遗留），
+    // 于是每次打开设置都抛 ReferenceError，**把它后面的 loadDriverList / loadNotify /
+    // loadKnowledge / 快捷键 全部带崩**（表现：驱动列表、通知、知识库、快捷键都是空的）。
+    // 项目自带的 guard 脚本会报这个"调用了没声明的函数"。
     loadDriverList()
     loadNotify()
     loadKnowledge()
