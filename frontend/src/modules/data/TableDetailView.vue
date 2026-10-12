@@ -171,6 +171,8 @@
                     <col :style="{ width: colWidths.nullable }" />
                     <col v-if="showPkCol" :style="{ width: colWidths.pk }" />
                     <col v-if="showOrderKey" :style="{ width: colWidths.sort }" />
+                    <col v-if="showDist" :style="{ width: colWidths.dist }" />
+                    <col v-if="showPart" :style="{ width: colWidths.part }" />
                     <col :style="{ width: colWidths.def }" />
                     <col v-if="showAutoIncrement" :style="{ width: colWidths.auto }" />
                     <col v-if="showComment" :style="{ width: colWidths.comment }" />
@@ -189,6 +191,9 @@
                       <th class="c-center" style="width:76px">{{ $t('tdet.nullable') }}</th>
                       <th v-if="showPkCol" class="c-center" style="width:56px">{{ $t('tdet.primaryKey') }}</th>
                       <th v-if="showOrderKey" class="c-center" style="width:70px" :title="$t('tdet.sortKeyTip')">{{ $t('tdet.sortKeyCol') }}</th>
+                      <!-- 只读回显：Doris 的分布列 / CH 的分区键建表后都改不了，这里只告诉你"是不是它" -->
+                      <th v-if="showDist" class="c-center" style="width:70px" :title="$t('tdet.distColTip')">{{ $t('tdet.distributedBy') }}</th>
+                      <th v-if="showPart" class="c-center" style="width:70px" :title="$t('tdet.partColTip')">{{ $t('tdet.partitionKey') }}</th>
                       <th style="width:132px">{{ $t('tdet.defaultValue') }}</th>
                       <th v-if="showAutoIncrement" class="c-center" style="width:56px">{{ $t('tdet.autoIncCol') }}</th>
                       <th v-if="showComment">{{ $t('tdet.comment') }}</th>
@@ -235,6 +240,14 @@
                       </td>
                       <td v-if="showOrderKey" class="c-center">
                         <el-tag v-if="c.sortKey" size="small" type="success" effect="plain">{{ $t('tdet.yes') }}</el-tag>
+                        <span v-else class="pk-none">—</span>
+                      </td>
+                      <td v-if="showDist" class="c-center">
+                        <el-tag v-if="isDistCol(c)" size="small" type="success" effect="plain">{{ $t('tdet.yes') }}</el-tag>
+                        <span v-else class="pk-none">—</span>
+                      </td>
+                      <td v-if="showPart" class="c-center">
+                        <el-tag v-if="isPartCol(c)" size="small" type="success" effect="plain">{{ $t('tdet.yes') }}</el-tag>
                         <span v-else class="pk-none">—</span>
                       </td>
                       <td>
@@ -846,11 +859,13 @@ const applyComment = () => {
  */
 // 权重（相对比例，最终归一化为百分比）：字段名收窄、注释放大（用户实测反馈：
 // 字段名一屏都放得下还占大片宽度，注释反而挤在 100px 里看不全）
-const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, def: 12, auto: 5, comment: 30, ops: 5 }
+const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, dist: 7, part: 7, def: 12, auto: 5, comment: 30, ops: 5 }
 const colWidths = computed(() => {
   const keys = ['idx', 'name', 'type', 'len', 'prec', 'nullable']
   if (showPkCol.value) keys.push('pk')
   if (showOrderKey.value) keys.push('sort')
+  if (showDist.value) keys.push('dist')
+  if (showPart.value) keys.push('part')
   keys.push('def')
   if (showAutoIncrement.value) keys.push('auto')
   if (showComment.value) keys.push('comment')
@@ -861,6 +876,22 @@ const colWidths = computed(() => {
   return out
 })
 const showOrderKey = computed(() => isCH.value)
+// 分桶列 / 分区键：编辑页只做**只读回显**（与上面「排序键」列同一口径）—— CH 的 PARTITION BY
+// 与 Doris 的分布列建表后就改不了，本页也从不为它们生成 ALTER（见 colParts 里"跳过该列的 MODIFY"
+// 那段）。加这两列是为了跟新建表对齐：一眼看出这一列现在是不是分桶列 / 分区键。
+const showDist = computed(() => isDoris.value)
+const showPart = computed(() => isCH.value)
+// 后端给的分区键是一段**表达式**（toYYYYMM(ts) 这种），所以按词边界找列名 ——
+// _seq 不会被 seq 误命中（判定口径与新建表的 togglePartition 一致）
+const colRefRe = (name) => new RegExp('(^|[^0-9A-Za-z_])' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '([^0-9A-Za-z_]|$)')
+const isPartCol = (c) => {
+  const n = String(c.name || '').trim()
+  return !!n && colRefRe(n).test(String(tableForm.partitionKey || ''))
+}
+// 分桶列：后端给的是一串列名，按名字比对
+const isDistCol = (c) => String(dorisDistColName() || '')
+  .split(',').map(s => s.trim()).filter(Boolean)
+  .includes(String(c.name || '').trim())
 // 主键列：Doris 没有「每列主键」概念（主键=建表时的 Key 列，界面上恒为「—」）、
 // ClickHouse 同理 —— 整列不显示，比一列无意义的「—」干净
 const showPkCol = computed(() => !isDoris.value && !isCH.value)
@@ -870,6 +901,8 @@ const showAutoIncrement = computed(() => has('supportsAutoIncrement') && !isDori
 const showComment = computed(() => has('supportsComment'))
 const headSpan = computed(() => 9
   + (showOrderKey.value ? 1 : 0)
+  + (showDist.value ? 1 : 0)
+  + (showPart.value ? 1 : 0)
   + (showAutoIncrement.value ? 1 : 0)
   + (showComment.value ? 1 : 0))
 
