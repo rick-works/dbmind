@@ -217,12 +217,12 @@
             </el-table-column>
             <el-table-column :label="$t('tf.idxColumns')" min-width="180">
               <template #default="{ row }">
-                <el-select v-model="row.columns" size="small" multiple filterable :multiple-limit="0">
+                <el-select v-model="row.columns" size="small" multiple filterable collapse-tags :multiple-limit="0">
                   <el-option v-for="c in cols.filter(x => x.name.trim())" :key="c.uid" :label="c.name" :value="c.name.trim()" />
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column width="50">
+            <el-table-column :label="$t('tdet.actions')" width="50">
               <template #default="{ $index }">
                 <el-button text size="small" :icon="Delete" class="dc-del" @click="idxs.splice($index, 1)" />
               </template>
@@ -783,6 +783,13 @@ emit('sql', genSql())
 .idx-tab :deep(.el-table td.el-table__cell > .cell .el-input__wrapper),
 .idx-tab :deep(.el-table td.el-table__cell > .cell .el-select__wrapper) { padding-left: 0 !important; }
 .idx-ops { display: inline-flex; align-items: center; gap: 2px; }
+/* 多选下拉（包含字段）里的「标签」比单行控件高：外层被 --ctl-h 压到 20~24px 时，标签会从框里
+   溢出来（用户反馈：字段显示到框外面去了）。两处收紧：① 标签自身高度跟着 --ctl-h，别用 Element
+   默认那 24px；② 这一格的最小高度给标签留出余量（--ctl-h + 上下各 2px 内边距 + 上下各 1px）。
+   行高设置照样生效 —— td 的 height 只是下限，内容更高时行自己会长。 */
+.idx-tab :deep(.el-table td .el-tag) { height: var(--ctl-h, 20px); }
+.idx-tab :deep(.el-table td .el-select__wrapper:has(.el-tag)) { min-height: calc(var(--ctl-h, 20px) + 6px); }
+.idx-tab :deep(.el-table td .el-tag .el-tag__content) { line-height: var(--ctl-h, 20px); }
 .idx-tab :deep(.el-table .el-input__wrapper) { padding: 0 6px; }
 .idx-tab :deep(.el-table .el-input__inner) { font-size: 13px; height: var(--ctl-h, 20px); }
 /* 行高由单元格内容撑出来，里面的控件也得跟 --ctl-h 走 —— 否则字段表跟着设置变、
