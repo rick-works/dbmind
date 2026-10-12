@@ -2333,6 +2333,12 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    调大设置就只会看到行变高、输入框纹丝不动（这就是之前"没跟着变"的原因）。 */
 .table-edit-page { --ctl-h: max(18px, calc(var(--grid-row-h, 26px) - 2px)); }
 
+/* 字段表可能有几百行（这张表实测 256 列），每行里面还各有一整套输入框/下拉/勾选框。
+   默认**屏幕外的行也要参与布局与绘制**，滚动时整张表跟着重排 —— 就是"上下滚动有点卡"的来源。
+   下面这条让屏幕外的行跳过布局与绘制、滚到近处再渲染（Chromium / WebView2 支持）。
+   别再给行加 filter / backdrop-filter / box-shadow：那会让每行单独做一次合成，反而更卡。 */
+.field-table tbody tr { content-visibility: auto; contain-intrinsic-size: auto 28px; }
+
 /* ===== 字段表格（HTML 表格，与新建表一致） ===== */
 .field-table {
   width: 100%;

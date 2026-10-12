@@ -904,6 +904,8 @@ emit('sql', genSql())
 .field-table td.c-center { text-align: center; }
 .row-idx { color: var(--dc-text-dim); font-size: 13px; }
 .field-table tbody tr { cursor: pointer; }
+/* 与编辑表结构一致：屏幕外的行跳过布局与绘制（几十上百行时滚动明显更顺） */
+.field-table tbody tr { content-visibility: auto; contain-intrinsic-size: auto 28px; }
 .field-table tbody tr:hover { background: var(--dc-bg-hover); }
 /* 选中态只有一种：任何一行被选中都是同一个蓝底 + 左侧竖条。
    原先还给"主键行 / 排序键行"加了常驻底色（pk-row / ok-row），看着就像**首行一直被选中**，
