@@ -1767,11 +1767,15 @@ async fn sync_table_inner(
         // 建表后才能补的注释（SQL Server 的扩展属性等）：create_table_with_comments
         // 写不进去的方言在这里逐条执行 —— 之前 SQL Server 目标的注释全空（真机反馈）。
         // 失败静默：注释是有价值的补充，不该让它挡住数据同步。
+        // schema 只有 SQL Server 那条路要用（扩展属性必须点名 schema）；PG / Oracle / DM / DB2
+        // 的 `comment on table <名>` 不带 schema 也会落到当前 search_path 的表上 ——
+        // 之前这里硬写 "dbo"，那些库拼出来的语句必然报错，而失败是静默的（注释全丢）。
+        let comment_schema = if target_kind.key() == "sqlserver" { "dbo" } else { "" };
         let post_comments = target_kind.post_create_comments(
             target_name.trim_matches(|c| c == '"' || c == '`' || c == ']'),
             &src_column_comments,
             src_table_comment.as_deref(),
-            "dbo",
+            comment_schema,
         );
         for sql in &post_comments {
             let _ = run_target(state, &tgt_target, sql).await;

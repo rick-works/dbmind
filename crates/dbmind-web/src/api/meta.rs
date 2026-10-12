@@ -601,7 +601,19 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
     Ok(json!({
         "type": kind.key().to_ascii_uppercase(),
         "columnTypes": column_types(kind),
-        "indexTypes": Vec::<&str>::new(),
+        // 索引类型清单：前端「索引 → 类型」那两处下拉读的就是它（`features.indexTypes`）。
+        // 原先恒为空数组 ⇒ 下拉无项、`v-if="indexTypes.length"` 的那一列**整列不显示**（白写了）。
+        // 这里按方言给一份可用的小名单；下拉带 allow-create 的话，名单外的值照样能手输。
+        "indexTypes": match kind.key() {
+            "mysql" | "mariadb" => vec!["BTREE", "HASH", "FULLTEXT", "SPATIAL"],
+            "doris" => vec!["BTREE", "INVERTED", "BITMAP", "BLOOMFILTER"],
+            "postgresql" | "kingbase" => vec!["btree", "hash", "gist", "gin", "spgist", "brin"],
+            "oracle" | "dm" => vec!["NORMAL", "UNIQUE", "BITMAP", "FUNCTION-BASED NORMAL"],
+            "sqlserver" => vec!["CLUSTERED", "NONCLUSTERED", "UNIQUE", "COLUMNSTORE"],
+            "clickhouse" => vec!["minmax", "set", "bloom_filter", "ngrambf_v1", "tokenbf_v1"],
+            "sqlite" => vec!["INDEX", "UNIQUE"],
+            _ => Vec::new(),
+        },
         // 存储引擎：MySQL 系的标准引擎是服务端常量清单（InnoDB 等一直是这些名字）；
         // 其它方言没有这个概念，如实给空数组。前端下拉带 `allow-create`，
         // 清单外的值照样能手输 —— 所以宁可给一份有用的小名单，也不给空数组

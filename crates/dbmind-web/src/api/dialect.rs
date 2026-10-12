@@ -1881,9 +1881,38 @@ impl Dialect {
         schema: &str,
     ) -> Vec<String> {
         if self.key() != "sqlserver" {
-            // PG / Oracle / DM / DB2 的 comment on 与 mssql 的扩展属性，建表场景先覆盖
-            // SQL Server（真机缺口最大）；其余方言沿用既有路径，后续按需补。
-            return Vec::new();
+            // PG / Oracle / DM / DB2 / H2 的注释必须是**独立语句**（`comment on …`），
+            // 不能像 MySQL 那样内联进列定义 —— 建表段也只对内联方言写注释，所以跨库同步
+            // 到这些库时表注释、列注释会**全丢**（真机缺口）。这里补上这一档。
+            //
+            // 不支持的如实给空：SQLite / Derby 压根没有注释概念；ClickHouse 的注释走
+            // `ALTER TABLE … COMMENT COLUMN` 且建表本来就内联写了；MySQL 系已在建表段内联。
+            if !matches!(
+                self.key(),
+                "postgresql" | "kingbase" | "oracle" | "dm" | "db2" | "h2"
+            ) {
+                return Vec::new();
+            }
+            let full = if schema.trim().is_empty() {
+                self.quote(table)
+            } else {
+                format!("{}.{}", self.quote(schema), self.quote(table))
+            };
+            let mut out = Vec::new();
+            if let Some(tc) = table_comment.map(str::trim).filter(|c| !c.is_empty()) {
+                out.push(format!("comment on table {full} is {}", self.literal(tc)));
+            }
+            for (name, comment) in column_comments {
+                if comment.trim().is_empty() {
+                    continue;
+                }
+                out.push(format!(
+                    "comment on column {full}.{} is {}",
+                    self.quote(name),
+                    self.literal(comment)
+                ));
+            }
+            return out;
         }
         let sq_schema = format!("N{}", self.literal(schema));
         let sq_table = format!("N{}", self.literal(table));
