@@ -432,6 +432,7 @@ const tr = t
 import { Plus, Delete, Refresh, CopyDocument, CaretRight, Grid, DocumentCopy, StarFilled, Document, EditPen, Search } from '@element-plus/icons-vue'
 import { listColumns, listIndexes, listTables, alterTable, getFeatures, executeSql, getTableDdl, getTableCounts } from '../../api'
 import { mergeAlterRuns } from './alterMerge'
+import { canonTypeBase } from './typeName'
 
 const props = defineProps({ conn: Object, database: String, table: String })
 
@@ -771,7 +772,11 @@ const buildColRows = () => {
       _uid: 'c' + (++colUid) + '_' + i,
       _state: 'loaded',
       name: c.name,
-      typeBase: sp.base, length: lenVal, scale: scaleVal, opaque: sp.opaque,
+      // 类型写法向**清单**对齐（见 typeName.js 的规则）：数据库报 `datetime`/`varchar(64)`、
+      // 清单里是 `DATETIME`/`VARCHAR`，两边就统一成清单那个写法，不再"下拉一种、回显另一种"。
+      // opaque（`Nullable(Decimal(10,2))` 这类整体形态）原样保留 —— 那种串不是单个类型名。
+      typeBase: sp.opaque ? sp.base : canonTypeBase(sp.base, typeOptions.value),
+      length: lenVal, scale: scaleVal, opaque: sp.opaque,
       nullable: !!c.nullable,
       defaultIsNull: dvNull, defaultValue: dvNull ? '' : String(dv),
       autoIncrement: !!c.autoIncrement, primaryKey: !!c.primaryKey,

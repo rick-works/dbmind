@@ -264,7 +264,7 @@
                                  :title="$t('tdet.zoomComment')" @click.stop="openComment(c)" />
                     </div>
                   </td>
-                  <td class="c-center"><el-button text size="small" :icon="Delete" class="dc-del" @click="removeColumn(i)" /></td>
+                  <td class="c-center"><el-button text size="small" :icon="Delete" class="dc-del" @click="removeColumn(c)" /></td>
                 </tr>
                 <!-- 底部占位：把剩余行的高度撑出来，滚动条长度与真实行数一致 -->
                 <tr v-if="padBottom" class="vpad">
@@ -613,7 +613,14 @@ const isChOrderKeyCol = (c) => {
 }
 
 const addColumn = () => cols.push(emptyCol())
-const removeColumn = (i) => { if (cols.length > 1) cols.splice(i, 1); else ElMessage.warning(t('tf.keepOne')) }
+// 按**行对象**删，不能按 `v-for` 的下标：这张表是窗口化渲染的（列多时只渲染一屏），
+// 下标是"窗口内第几行"，直接 splice 会把另一行的列删掉（列数 >80 才暴露，实测）。
+const removeColumn = (row) => {
+  const i = cols.indexOf(row)
+  if (i < 0) return
+  if (cols.length > 1) cols.splice(i, 1)
+  else ElMessage.warning(t('tf.keepOne'))
+}
 const selectRow = (c) => {
   for (const col of cols) col._sel = col === c
 }

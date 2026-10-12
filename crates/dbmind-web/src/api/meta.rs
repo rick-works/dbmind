@@ -391,15 +391,26 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         // information_schema 一律回大写（`VARCHAR`），列表就写大写 —— 否则「下拉里是 varchar、
         // 回显出来是 VARCHAR」，同一个类型两种写法（用户反馈）。
         // PG 系的元数据本来就回小写（`varchar`/`timestamptz`），那里保持小写才是一致的。
-        "mysql" | "mariadb" | "doris" => vec![
+        "mysql" | "mariadb" => vec![
             "INT", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "FLOAT", "DOUBLE",
             "VARCHAR", "CHAR", "TEXT", "LONGTEXT", "DATE", "DATETIME", "TIMESTAMP",
             "TIME", "JSON", "BLOB",
         ],
+        // Doris 与 MySQL 同一套类型，但它自己的元数据报 `string`（它的 VARCHAR 别名）——
+        // 清单里带上 STRING，前端的"回显向清单对齐"才能把它收进同一种写法（见 typeName.js）。
+        "doris" => vec![
+            "INT", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "FLOAT", "DOUBLE",
+            "VARCHAR", "STRING", "CHAR", "TEXT", "LONGTEXT", "DATE", "DATETIME", "TIMESTAMP",
+            "TIME", "JSON", "BLOB",
+        ],
+        // PG 系：前面的标准写法给人看，后面这几个是 **PG 自己 `udt_name` 报出来的写法**
+        // （int2/int4/int8/float4/float8/varchar/bool）—— 少一个，回显就会是清单外的名字，
+        // "下拉 = 回显"就断了（见 typeName.js）。
         "postgresql" | "kingbase" => vec![
             "integer", "bigint", "smallint", "numeric", "real", "double precision",
             "character varying", "text", "boolean", "date", "timestamp", "timestamptz",
             "time", "jsonb", "uuid", "bytea",
+            "int2", "int4", "int8", "float4", "float8", "varchar", "bool",
         ],
         "sqlserver" => vec![
             "int", "bigint", "smallint", "tinyint", "decimal", "float", "real",
