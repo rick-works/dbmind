@@ -857,10 +857,15 @@ emit('sql', genSql())
   box-shadow: 0 1px 2px rgba(16, 24, 40, .10);
 }
 
-/* 表格那两个页签**不留内边距**：表格直接贴到卡片内缘，左右两侧的"框线"就是
-   卡片自身那条边框，下方由最后一行的下边框收口。 */
-.tab-inner.col-tab,
-.tab-inner.idx-tab { padding: 0; }
+/* 表格页签**不留左右/下内边距**：表格直接贴到卡片内缘，左右两侧的"框线"就是
+   卡片自身那条边框，下方由最后一行的下边框收口。
+   唯独**顶部那 35px 是索引页签必须的**：工具条（.card-actions）是绝对定位、就站在这一条里，
+   而索引页的 el-table 没有字段表那行 35px 空行 —— 不补出这段距离，表头会被工具条直接压住。
+   写法必须是两个类（.tab-inner.idx-tab）：单类的 .idx-tab{padding-top:35px} 优先级更低，
+   会被上面这条 .tab-inner.col-tab, .tab-inner.idx-tab 压掉 —— 之前就是这么静默失效的
+   （用户反馈：新建表的索引页"乱了"）。 */
+.tab-inner.col-tab { padding: 0; }
+.tab-inner.idx-tab { padding: 35px 0 0; }
 .tab-inner { overflow: hidden; }
 /* 表格容器贴内容长（12 行的表原来会在下面拖出一大片带边框的空白）。
    横向**允许滚动**（编辑页那边是 hidden，因为它列宽总和恰好小于容器）：
@@ -886,10 +891,6 @@ emit('sql', genSql())
   margin-right: auto; font-size: 12.5px; color: var(--dc-text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-
-/* 索引页用的是 el-table（没有那行 35px 空行），自己补出这段距离，
-   否则表头会被绝对定位的工具条直接压住 */
-.idx-tab { padding-top: 35px; }
 
 /* ---- 字段表格本体 ---- */
 .field-table {
