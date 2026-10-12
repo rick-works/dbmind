@@ -2592,10 +2592,19 @@ async fn sync_table_inner(
                 // 更新逐行做：跨方言的批量 UPDATE 没有统一写法，硬拼会踩到方言差异
                 let sql =
                     build_update(&target_name, &columns, &target_types, &row, &key_indexes, target_kind);
+                // 埋点：upsert 的"逐行 UPDATE"每行一次 RPC，是它最容易慢的地方。
+                // 只抽样记（每 500 行取一个采样 + 单次 >200ms），既能看到单行成本，也不会刷屏。
+                let t_upd = std::time::Instant::now();
                 match run_target(state, &tgt_target, &sql).await {
                     Ok(_) => {
                         updated += 1;
-                        if let Some(task) = task { task.add_rows_written(1); }
+                        if let Some(task) = task {
+                            task.add_rows_written(1);
+                            let ms = t_upd.elapsed().as_millis();
+                            if ms > 200 && updated % 500 == 1 {
+                                task.log(format!("表 {table}：upsert 单行更新耗时 {ms} ms（逐行 RPC 是 upsert 的固有开销，目标库索引越重越慢）"));
+                            }
+                        }
                     }
                     Err(err) => {
                         if let Some(task) = task { task.add_rows_failed(1); }
@@ -2604,7 +2613,12 @@ async fn sync_table_inner(
                 }
                 continue;
             }
-            pending_bytes += json_row_bytes(&row);
+            // json_row_bytes 是每行一次 JSON 序列化（宽表 × 百万行是纯 CPU 开销），
+            // 它只用来判断"够不够一批"，所以每 8 行精确算一次、按 8 倍计入 —— 偏保守
+            // （宁可早一点刷批，也不会把内存上界估小），省掉 7/8 的序列化。
+            if pending_insert.len() % 8 == 0 {
+                pending_bytes += json_row_bytes(&row) * 8;
+            }
             pending_insert.push(row);
             // 触发条件**双重**：行数到 flush_at，或攒批字节到 STREAM_LOAD_MAX_BYTES
             //（对所有目标生效 —— 并发模式下 (W+1) 批在途，字节上限就是内存上界）
