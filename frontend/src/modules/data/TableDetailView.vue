@@ -2510,6 +2510,17 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    .idx-ops 是 inline-flex，所以父级 .cell 的 text-align: center 就能把它整体居中。 */
 .idx-tab :deep(.el-table th.el-table__cell:last-child > .cell),
 .idx-tab :deep(.el-table td.el-table__cell:last-child > .cell) { text-align: center !important; }
+/* ===== 表头文字与格子里控件内的文字对齐（与字段表页签同一个问题）=====
+   表头 cell 与数据 cell 的左右内边距都是 9px，但数据格里是控件（el-input / el-select），
+   控件**自带**左内边距：实测输入框再进 6px、下拉再进 8px —— 于是「索引名」表头比格子里的
+   data_time_idx 偏左 6px、「包含字段」比下拉里的文字偏左 8px（用户反馈：表头没有输入框、
+   内容有输入框，所以对不齐）。
+   修法：把这两类控件及其内层包装的左内边距压到 0，两边就都从 cell 的 9px 起。
+   只动左内边距（右内边距保留，长内容该省略还是省略）。开关（唯一）与居中的操作列不受影响。 */
+.idx-tab :deep(.el-table td.el-table__cell > .cell > .el-input),
+.idx-tab :deep(.el-table td.el-table__cell > .cell > .el-select) { padding-left: 0 !important; }
+.idx-tab :deep(.el-table td.el-table__cell > .cell .el-input__wrapper),
+.idx-tab :deep(.el-table td.el-table__cell > .cell .el-select__wrapper) { padding-left: 0 !important; }
 /* 操作列里的「重建 + 删除」并排一行（合成一列后的内部排布） */
 .idx-ops { display: inline-flex; align-items: center; gap: 2px; }
 /* 重建按钮：图标化后与删除按钮同一套观感 —— 平时是主色图标，悬停给一层浅底 */
