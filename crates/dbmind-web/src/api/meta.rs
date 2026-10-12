@@ -1107,12 +1107,29 @@ pub async fn columns(
         .get("table")
         .ok_or_else(|| XError::bad_request("缺少 table 参数"))?;
     let database = params.get("database").unwrap_or_default();
+    let (_, dialect) = ctx_of(&state, &id).await?;
+    // 「库.模式」里的**模式**那一层（PG / SQL Server / Kingbase 的树上会拼在库名后面）。
+    // 不拆出来会怎样（用户反馈）：这些库取列走 JDBC `getColumns`，而它只认连接默认 schema
+    // （PG=public、SQLServer=dbo）—— 别的 schema 下的表就"能列出表、字段却是空的"。
+    let (_, schema) = split_db_schema(&database, &dialect);
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
     let engine = state.engine();
     // 表名要进闭包（移动），而下面补类型时还要再用一次，所以先复制一份
     let queried = table.clone();
-    let mut columns = blocking(move || engine.list_columns_fresh(&target, &queried)).await?;
-    let extras = enrich_column_types(&state, &id, &database, &table, &mut columns).await;
+    let schema_for_call = schema.clone();
+    let mut columns = blocking(move || {
+        engine.list_columns_fresh_in(&target, &queried, schema_for_call.as_deref())
+    })
+    .await?;
+    // 「补类型 / 注释 / 自增」这条也带着「库.模式」，但它的方言 SQL 用的是 `current_schema()` /
+    // `::regclass` / `object_id()` —— 都只看连接的默认 schema。拿别的 schema 去查会**取到同名的
+    // 另一张表**，把别人的注释和类型贴过来（比空还坏）。所以指定了 schema 时**跳过**这一步，
+    // 类型回落到驱动自己给的列类型；等方言 SQL 支持按 schema 取（下一步）再补全。
+    let extras = if schema.is_some() {
+        std::collections::HashMap::new()
+    } else {
+        enrich_column_types(&state, &id, &database, &table, &mut columns).await
+    };
     let mut payload = shape::columns_json(&columns);
     // 注释 / 自增 / 额外属性：内核的列元数据里没有这几位，
     // 而 `shape::column_json` 之前把 `comment` 写死 null、`autoIncrement` 写死 false ——

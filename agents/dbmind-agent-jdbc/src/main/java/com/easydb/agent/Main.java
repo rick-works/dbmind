@@ -615,10 +615,19 @@ public final class Main {
     private static JsonElement columns(JsonObject request) {
         Session session = session(request);
         String table = required(request, "table");
+        // 可选的 schema：PG / SQL Server / Kingbase 的「库.模式」里那一层（内核按需传）。
+        // 不传 = 老行为（按连接的默认 schema 读）。
+        String schema = null;
+        if (request.has("schema") && !request.get("schema").isJsonNull()) {
+            String raw = request.get("schema").getAsString();
+            if (raw != null && !raw.trim().isEmpty()) {
+                schema = raw.trim();
+            }
+        }
         session.touch();
         // 大小写敏感差异（H2/Derby 大写、PG 小写）用候选名兜一层，比让用户自己试要省事
         for (String candidate : caseVariants(table)) {
-            JsonArray columns = readColumns(session, candidate);
+            JsonArray columns = readColumns(session, candidate, schema);
             if (!columns.isEmpty()) {
                 return columns;
             }
@@ -794,10 +803,11 @@ public final class Main {
         }
     }
 
-    private static JsonArray readColumns(Session session, String table) {
+    private static JsonArray readColumns(Session session, String table, String schema) {
         // MySQL 系（mysql / mariadb / doris）先走 information_schema 快路径：
         // Doris 实测 JDBC getColumns 稳定返回空（而 information_schema 直查列类型齐全）——
         // 列类型一断，前端的表头类型 / 高级筛选 / 选中区汇总会跟着全部哑掉。
+        // 快路径按 `TABLE_SCHEMA = database()` 取，而 MySQL 系没有 schema 层级，所以与 schema 参数无关。
         if (isMysqlFamily(session)) {
             JsonArray fast = columnsViaInformationSchema(session, table);
             if (fast != null && !fast.isEmpty()) {
@@ -808,23 +818,49 @@ public final class Main {
         try {
             DatabaseMetaData meta = session.connection().getMetaData();
             String[] scope = lookupScope(session.connection());
-            Set<String> primaryKeys = readPrimaryKeys(meta, scope, table);
-            try (ResultSet resultSet = meta.getColumns(scope[0], scope[1], table, "%")) {
-                while (resultSet.next()) {
-                    JsonObject column = new JsonObject();
-                    String name = resultSet.getString("COLUMN_NAME");
-                    column.addProperty("name", name);
-                    column.addProperty("typeName", resultSet.getString("TYPE_NAME"));
-                    String nullable = resultSet.getString("IS_NULLABLE");
-                    column.addProperty("nullable", nullable == null || !nullable.equalsIgnoreCase("NO"));
-                    column.addProperty("primaryKey", primaryKeys.contains(name));
-                    String defaultValue = resultSet.getString("COLUMN_DEF");
-                    if (defaultValue == null) {
-                        column.add("defaultValue", null);
-                    } else {
-                        column.addProperty("defaultValue", defaultValue);
+            // 指定了 schema 就**临时把会话切到那一层**：`getColumns` 与 `getPrimaryKeys` 会同时跟着看它
+            // —— 这正是"能列出表、字段却是空的"的根因（两条路原先都只看连接默认 schema：
+            // PG=public / SQLServer=dbo）。用 `setSchema()` 而不是往 SQL 里拼前缀，是因为主键那条路
+            // 走的是 JDBC 元数据 API，拼前缀对它无效。用完立刻切回去，免得泄漏给同一会话的下一次调用。
+            String previousSchema = null;
+            boolean schemaSwitched = false;
+            if (schema != null && !schema.isEmpty()) {
+                try {
+                    previousSchema = session.connection().getSchema();
+                    session.connection().setSchema(schema);
+                    scope = new String[] {scope[0], schema};
+                    schemaSwitched = true;
+                } catch (Exception e) {
+                    trace("按 schema 切会话失败（" + schema + "），改按默认 schema 读：" + e);
+                }
+            }
+            try {
+                Set<String> primaryKeys = readPrimaryKeys(meta, scope, table);
+                try (ResultSet resultSet = meta.getColumns(scope[0], scope[1], table, "%")) {
+                    while (resultSet.next()) {
+                        JsonObject column = new JsonObject();
+                        String name = resultSet.getString("COLUMN_NAME");
+                        column.addProperty("name", name);
+                        column.addProperty("typeName", resultSet.getString("TYPE_NAME"));
+                        String nullable = resultSet.getString("IS_NULLABLE");
+                        column.addProperty("nullable", nullable == null || !nullable.equalsIgnoreCase("NO"));
+                        column.addProperty("primaryKey", primaryKeys.contains(name));
+                        String defaultValue = resultSet.getString("COLUMN_DEF");
+                        if (defaultValue == null) {
+                            column.add("defaultValue", null);
+                        } else {
+                            column.addProperty("defaultValue", defaultValue);
+                        }
+                        columns.add(column);
                     }
-                    columns.add(column);
+                }
+            } finally {
+                if (schemaSwitched) {
+                    try {
+                        session.connection().setSchema(previousSchema);
+                    } catch (Exception ignored) {
+                        // 切不回去不影响本次结果；下次调用会重新按自己的 schema 处理
+                    }
                 }
             }
         } catch (SQLException e) {

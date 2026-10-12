@@ -691,6 +691,14 @@ impl Driver for AgentDriver {
             let mut params = Map::new();
             params.insert("sessionId".to_string(), json!(session_id));
             params.insert("table".to_string(), json!(table));
+            // schema 只在 PG / SQL Server / Kingbase 这类**分层**库里非空。
+            // 代理收到它就用 `connection.setSchema()` 让 getColumns / getPrimaryKeys
+            // 都看这一层 —— 否则它们只看连接的默认 schema（PG=public / SQLServer=dbo），
+            // 别的 schema 下的表就会"能列出表、字段却是空的"（用户反馈的正是这个）。
+            // 不带这个参数时行为与以前完全一致（老代理收到未知键会忽略）。
+            if let Some(schema) = call.schema.filter(|s| !s.is_empty()) {
+                params.insert("schema".to_string(), json!(schema));
+            }
             let value = self.host.call(None, "columns", params, None)?;
             let columns: Vec<ColumnDetail> = serde_json::from_value(value)?;
             Ok(columns)

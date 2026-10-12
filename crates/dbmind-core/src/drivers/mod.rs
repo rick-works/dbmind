@@ -47,7 +47,14 @@ pub struct MetaCall<'a> {
     pub config: &'a ConnectionConfig,
     /// 该连接（引擎层面）是否为只读。
     pub read_only: bool,
-}
+    /// 要读的 **schema**（PG / SQL Server / Kingbase 的「库.模式」里的模式那一层）。
+    ///
+    /// 为什么放在这里而不是加进 trait 方法的参数：这些元数据方法（列 / 表 / 索引）
+    /// 都会往下走到代理，而"看哪一层 schema"对它们是同一件事；加进 `MetaCall`
+    /// 就不用逐个改签名（改签名会波及 CLI / MCP / AI / 备份等十来处调用）。
+    /// 非分层库（MySQL 系、SQLite、Doris…）恒为 `None`。
+    pub schema: Option<&'a str>,
+    }
 
 pub trait Driver: Send + Sync {
     fn kind(&self) -> ConnectionKind;

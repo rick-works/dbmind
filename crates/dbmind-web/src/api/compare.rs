@@ -450,6 +450,8 @@ fn spawn_side_stream(
     tx: tokio::sync::mpsc::Sender<Result<SidePage, String>>,
 ) {
     tokio::spawn(async move {
+        // 异常展开时补发失败信号（见 SideGuard 的注释）。正常路径在末尾 disarm()。
+        let guard = SideGuard::new(tx.clone());
         let list = columns
             .iter()
             .map(|name| dialect.quote(name))
@@ -523,7 +525,41 @@ fn spawn_side_stream(
                 }
             }
         }
+        // 走到这里 = 正常收尾（含上面所有 break）—— 解除守卫，别把"正常读完"报成失败
+        guard.disarm();
     });
+}
+
+/// 「辅助协程异常终止」必须**说出去**，不能被当成"读完了"。
+///
+/// 这个协程是数据源侧的产数据方。它 panic 时，通道会随 unwind 一起被丢掉，而主循环把
+/// "通道关闭"当成"正常读完"（见 `SideStream::next_row` 的 `None` 分支）—— 于是**少读的那部分
+/// 被当成读完了，任务报成功**。这不是"卡住"，比卡住更坏：结果看着是对的，其实是半份。
+///
+/// 守卫在 Drop 里补发一条 `Err`，主循环就会如实报错、把这次比对判失败。
+/// 正常路径在每个退出点之后 `disarm()`，所以"正常结束"不会被误报成失败。
+/// 用 `try_send` 而不是 `send`：Drop 里不能 await，而且此刻下游可能已经走了（发不出去就算了，
+/// 它本来也不再看这些数据了）。
+struct SideGuard(tokio::sync::mpsc::Sender<Result<SidePage, String>>, bool);
+
+impl SideGuard {
+    fn new(tx: tokio::sync::mpsc::Sender<Result<SidePage, String>>) -> Self {
+        Self(tx, true)
+    }
+
+    fn disarm(mut self) {
+        self.1 = false;
+    }
+}
+
+impl Drop for SideGuard {
+    fn drop(&mut self) {
+        if self.1 {
+            let _ = self.0.try_send(Err(
+                "数据读取协程异常终止（驱动异常或内存不足），本次比对结果不完整".to_string(),
+            ));
+        }
+    }
 }
 
 /// 比对键在**输出列清单**里的下标（流式页的行按这个序取键值）

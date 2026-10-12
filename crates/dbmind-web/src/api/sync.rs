@@ -2403,6 +2403,37 @@ async fn sync_table_inner(
 
     }
 
+    /// 「读取侧（预取）协程异常终止」必须**说出去**，不能被当成"读完了"。
+    ///
+    /// 预取协程 panic 时 `page_tx` 会随 unwind 被丢掉，而主循环的 `recv_with_deadline`
+    /// 把"通道关闭"当成正常读完（它只在**超时**时写 `read_error`）—— 于是**少读的那部分被当成
+    /// 读完了，任务报成功**：同步出来的表看着成功，其实缺数据。
+    ///
+    /// 守卫在 Drop 里补发一条 `PageMsg::Failed`，主循环的 `Failed` 分支会写 `read_error` 并收工。
+    /// 正常路径在任务体末尾 `disarm()`，所以正常结束不会被误报成失败。
+    /// 用 `try_send`：Drop 里不能 await，而且此刻下游可能已经走了。
+    struct PrefetchGuard(tokio::sync::mpsc::Sender<PageMsg>, bool);
+
+    impl PrefetchGuard {
+        fn new(tx: tokio::sync::mpsc::Sender<PageMsg>) -> Self {
+            Self(tx, true)
+        }
+
+        fn disarm(mut self) {
+            self.1 = false;
+        }
+    }
+
+    impl Drop for PrefetchGuard {
+        fn drop(&mut self) {
+            if self.1 {
+                let _ = self.0.try_send(PageMsg::Failed(
+                    "读取侧协程异常终止（驱动异常或内存不足），本次同步数据不完整".to_string(),
+                ));
+            }
+        }
+    }
+
     let (page_tx, mut page_rx) = tokio::sync::mpsc::channel::<PageMsg>(4);
 
     let prefetch_state = state.clone();
@@ -2420,6 +2451,9 @@ async fn sync_table_inner(
     let prefetch_where = opts.where_clause.clone();
 
     let prefetch_task = tokio::spawn(async move {
+
+        // 异常展开时补发失败信号（见 PrefetchGuard 的注释）。正常路径在末尾 disarm()。
+        let guard = PrefetchGuard::new(page_tx.clone());
 
         let mut offset = 0u64;
 
@@ -2510,6 +2544,9 @@ async fn sync_table_inner(
             }
 
         }
+
+        // 正常收尾（含所有 break）→ 解除守卫，别把"正常读完"报成失败
+        guard.disarm();
 
     });
 

@@ -544,7 +544,7 @@ mod tests {
     }
 
     fn meta<'a>(config: &'a ConnectionConfig, read_only: bool) -> MetaCall<'a> {
-        MetaCall { config, read_only }
+        MetaCall { config, read_only, schema: None }
     }
 
     fn temp_db(tag: &str) -> std::path::PathBuf {

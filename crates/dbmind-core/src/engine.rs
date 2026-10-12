@@ -496,8 +496,9 @@ impl DbMindEngine {
             .list_tables(crate::drivers::MetaCall {
                 config: &record.config,
                 read_only,
-            })?;
-        self.store
+                schema: None,
+                })?;
+                self.store
             .put_schema(&record.id, key, &serde_json::to_string(&tables)?)?;
         Ok(tables)
     }
@@ -512,9 +513,49 @@ impl DbMindEngine {
         self.columns(id_or_name, table, true)
     }
 
+    /// 单表列，**并指定 schema**（PG / SQL Server / Kingbase 的「库.模式」用得上）。
+    ///
+    /// 为什么另开一对 `_in` 而不给上面两个加参数：`list_columns*` 在 CLI / MCP / AI / 备份
+    /// 等十来处被调用，那些地方手上只有「库」——加参数等于逼它们统统写 `None`（纯噪音）。
+    /// 老签名保持不动，需要看某一层 schema 的调用方（web 的 `/columns`）用这对新入口。
+    pub fn list_columns_in(
+        &self,
+        id_or_name: &str,
+        table: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<ColumnDetail>> {
+        self.columns_in(id_or_name, table, schema, false)
+    }
+
+    /// 同 [`Self::list_columns_in`]，但绕过缓存。
+    pub fn list_columns_fresh_in(
+        &self,
+        id_or_name: &str,
+        table: &str,
+        schema: Option<&str>,
+    ) -> Result<Vec<ColumnDetail>> {
+        self.columns_in(id_or_name, table, schema, true)
+    }
+
     fn columns(&self, id_or_name: &str, table: &str, refresh: bool) -> Result<Vec<ColumnDetail>> {
+        self.columns_in(id_or_name, table, None, refresh)
+    }
+
+    fn columns_in(
+        &self,
+        id_or_name: &str,
+        table: &str,
+        schema: Option<&str>,
+        refresh: bool,
+    ) -> Result<Vec<ColumnDetail>> {
         let record = self.store.require_connection(id_or_name)?;
-        let key = Store::schema_columns_key(table);
+        // 缓存键**必须**带上 schema：同一个库里 `a.users` 与 `b.users` 是两张不同的表，
+        // 键一样就会互相顶掉 —— 表现为"表名对、字段是另一张的"，比空还难查。
+        // 新键与旧键不兼容 ⇒ 老缓存自然失效一轮，代价只是一次重新拉取。
+        let key = match schema.filter(|s| !s.is_empty()) {
+            Some(s) => format!("table:{}:{table}", s),
+            None => Store::schema_columns_key(table),
+        };
         if !refresh {
             if let Some(payload) = self.store.fresh_schema(&record.id, &key, self.schema_ttl_secs())? {
                 if let Ok(columns) = serde_json::from_str(&payload) {
@@ -528,9 +569,10 @@ impl DbMindEngine {
             crate::drivers::MetaCall {
                 config: &record.config,
                 read_only,
-            },
-            table,
-        )?;
+                schema,
+                },
+                table,
+                )?;
         self.store
             .put_schema(&record.id, &key, &serde_json::to_string(&columns)?)?;
         Ok(columns)
