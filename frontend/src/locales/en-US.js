@@ -21,6 +21,7 @@ export default {
   'settings.appearance.dataFont': 'Data view grid',
   'settings.appearance.toastFont': 'Message toast text',
   'settings.appearance.treeFont': 'Left tree text (incl. icons)',
+  'settings.appearance.reset': 'Reset to defaults',
   'settings.topMenu.title': 'Top menu',
   'settings.topMenu.desc': 'Choose which entries appear in the top bar and reorder them',
   'nav.sync': 'Data transfer',

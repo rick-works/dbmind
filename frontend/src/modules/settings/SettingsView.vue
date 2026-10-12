@@ -110,7 +110,7 @@
 
           <!-- 界面尺寸：改完立即生效（写 :root 的 CSS 变量，见 utils/appearance.js），不需要重启。
               这几项都是"微调"，上下限刻意收窄，避免把界面搞坏。 -->
-          <div class="panel-title topmenu-title">{{ $t('settings.appearance.title') }}</div>
+          <div class="panel-title topmenu-title" style="display:flex;align-items:center;gap:10px"><span>{{ $t('settings.appearance.title') }}</span><el-button size="small" text type="primary" @click="resetAppearance">{{ $t('settings.appearance.reset') }}</el-button></div>
           <div class="panel-desc">{{ $t('settings.appearance.desc') }}</div>
           <!-- 标签宽度**按内容自适应**（不再固定 200px）：固定宽度下「顶栏右侧图标」这类短标签
                会跟右侧的输入框隔出一大段空白（用户反馈「标题与框不要离那么远」）。
@@ -1082,7 +1082,7 @@ import {
   ArrowUp, ArrowDown, Document, DocumentCopy
 } from '@element-plus/icons-vue'
 import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/topMenu'
-import { getAppearance, saveAppearance } from '../../utils/appearance'
+import { getAppearance, saveAppearance, appearanceDefaults } from '../../utils/appearance'
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern, ruleHasIndent } from '../../utils/sqlFormat'
@@ -1091,7 +1091,15 @@ import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEdi
 // 界面尺寸：当前值由 utils/appearance.js 从 localStorage 读；改动即写 :root 的 CSS 变量并落盘，
 // 所以顶栏/左侧树当场变化，不需要「保存」也不需要重启
 const appearance = ref(getAppearance())
-const onAppearanceChange = () => { appearance.value = saveAppearance(appearance.value) }
+const onAppearanceChange = () => {
+  const before = appearance.value.dataFontSize
+  appearance.value = saveAppearance(appearance.value)
+  // 正向联动：「数据视图表格」与编辑器的「结果表格字号」是同一件事的两个入口
+  //（一个查结果、一个看表数据，值不一致时用户不知道该调哪个）—— 这边改了同步过去。
+  if (appearance.value.dataFontSize !== before) editorForm.value.gridFontSize = appearance.value.dataFontSize
+}
+/** 一键恢复默认：把界面尺寸各项打回默认值（与编辑器页的「恢复默认」同一做法，改完立即生效） */
+const resetAppearance = () => { appearance.value = saveAppearance({ ...appearanceDefaults }) }
 // 「刷新结构缓存」要连**前端那份** localStorage 缓存一起清（内核缓存清了它还在也会显示旧清单）
 import { clearSchemaCache as clearLocalSchemaCache } from '../../utils/schemaCache'
 import DbLogo from '../../common/DbLogo.vue'
@@ -1462,6 +1470,10 @@ watch(editorForm, () => {
   // 没成功读过设置就不写：否则"读失败兜底出的默认值"会被一次改动落盘，覆盖掉用户的全部配置
   if (!editorLoaded) return
   persistUI('dbmind_editor', JSON.stringify(editorForm.value))
+  // 反向联动：编辑器里的「结果表格字号」同样写回界面尺寸的「数据视图表格」（见 onAppearanceChange）
+  if (appearance.value.dataFontSize !== editorForm.value.gridFontSize) {
+    appearance.value = saveAppearance({ ...appearance.value, dataFontSize: editorForm.value.gridFontSize })
+  }
   reloadEditorSettings()
 }, { deep: true })
 const saveEditor = () => {
