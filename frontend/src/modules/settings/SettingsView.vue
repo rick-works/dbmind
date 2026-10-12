@@ -2444,6 +2444,10 @@ watch(visible, (v) => {
 .fmt-glob-lb {
   font-size: 13px; color: var(--dc-text-mid); flex: 1 1 auto; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
+  /* 标签占满控件左侧的整段空间（flex: 1 1 auto），所以只需要把文字**右对齐**，
+     它就会紧挨右边的控件 —— 原先默认左对齐，「关键字」这种短标签跟右边的下拉
+     之间隔着一两百像素（用户反馈「标题离框那么远」）。与「界面尺寸」那一栏同款处理。 */
+  text-align: right;
 }
 .fmt-glob-sel { width: 160px; flex: 0 0 auto; font-size: 13px; }
 .fmt-glob-num { width: 160px; flex: 0 0 auto; font-size: 13px; }
