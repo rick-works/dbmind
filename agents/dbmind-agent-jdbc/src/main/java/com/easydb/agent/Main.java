@@ -830,7 +830,40 @@ public final class Main {
         } catch (SQLException e) {
             throw metadataFailure(session, e, "读取列信息失败");
         }
+        // Doris 走到这里还空，就**明确报错**，不要把"取不到"当成"没有列"。
+        //
+        // 为什么只对 Doris 收紧：它的 JDBC `getColumns` 实测**稳定返回空**（所以才有上面那条
+        // information_schema 快路径）；快路径一旦不适用（没权限 / 老版本 / 表名或当前库不对），
+        // 通用 API 也只会给空 —— 于是接口如实返回 200 `[]`，界面显示"这张表没有字段"。
+        // 用户看到的是"表是坏的"，而真正的原因（权限/库/schema）被吞掉了。
+        // MySQL / MariaDB 不套这条：它们的 getColumns 是能用的，真空表也合法。
+        if (columns.isEmpty() && isDoris(session)) {
+            throw metadataFailure(session, new SQLException(
+                    "Doris 的列元数据取不到：information_schema 快路径未命中，JDBC 元数据同样为空。"
+                            + "常见原因：当前库不对、表不存在，或该账号没有 information_schema 的读权限。"),
+                    "读取列信息失败");
+        }
         return columns;
+    }
+
+    /**
+     * 这条会话是不是 Doris。
+     *
+     * <p>双重判据：以**驱动报的数据库产品名**为准（Doris 用自己的名字，比 URL 可靠 ——
+     * Doris 走的就是 MySQL 协议，URL 上区分不出来），再退回 {@code agentKey}。
+     * 单看 agentKey 不够：它的取值受内核侧配置影响，和这里期望的字符串不保证一致
+     * （{@link #isMysqlFamily} 的注释里记过这个坑：判断失配会让整条路径静默不生效）。
+     */
+    private static boolean isDoris(Session session) {
+        try {
+            String product = session.connection().getMetaData().getDatabaseProductName();
+            if (product != null && product.toLowerCase().contains("doris")) {
+                return true;
+            }
+        } catch (Exception ignored) {
+            // 取不到产品名就退回 agentKey，不影响主流程
+        }
+        return "doris".equals(session.agentKey());
     }
 
     /**
