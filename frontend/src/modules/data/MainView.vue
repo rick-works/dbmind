@@ -7724,16 +7724,16 @@ const connTypeSummary = computed(() =>
 .trend-bar { width: 100%; }
 .trend-bar.ok { background: var(--dc-primary); opacity: .75; border-radius: 0; }
 .trend-bar.bad { background: var(--el-color-danger, #e25c5c); }
-.trend-n { font-size: 12px; font-weight: 600; color: var(--dc-text-mid); line-height: 1; min-height: 12px; }
-.trend-label { font-size: 11px; color: var(--dc-text-dim); line-height: 1; }
+.trend-n { font-size: calc(var(--dc-home-fs, 13px) - 1px); font-weight: 600; color: var(--dc-text-mid); line-height: 1; min-height: 12px; }
+.trend-label { font-size: calc(var(--dc-home-fs, 13px) - 2px); color: var(--dc-text-dim); line-height: 1; }
 
 /* 树内重命名：输入框就地替换分组名，宽度跟着名字走、不撑满整行 */
 .tree-rename-input { width: 132px; flex-shrink: 0; }
 .tree-rename-input :deep(.el-input__wrapper) { padding: 0 6px; }
 /* 多选浮条：出现在工具条与树之间；选中的节点整行加一层主色浅底 */
 .multi-bar { display: flex; align-items: center; gap: 6px; margin: 6px 8px 0; padding: 4px 6px; border-radius: 6px; background: var(--dc-primary-wash); }
-.multi-count { flex: 1; font-size: 12px; color: var(--dc-primary); white-space: nowrap; }
-.multi-act { font-size: 12px; padding: 2px 8px; border: 1px solid var(--dc-border); border-radius: 4px; background: var(--dc-bg-card); color: var(--dc-text); cursor: pointer; }
+.multi-count { flex: 1; font-size: calc(var(--dc-home-fs, 13px) - 1px); color: var(--dc-primary); white-space: nowrap; }
+.multi-act { font-size: calc(var(--dc-home-fs, 13px) - 1px); padding: 2px 8px; border: 1px solid var(--dc-border); border-radius: 4px; background: var(--dc-bg-card); color: var(--dc-text); cursor: pointer; }
 .multi-act:hover:not(:disabled) { border-color: var(--dc-primary); color: var(--dc-primary); }
 .multi-act.danger:hover:not(:disabled) { border-color: #ef4444; color: #ef4444; }
 .multi-act:disabled { opacity: .55; cursor: default; }

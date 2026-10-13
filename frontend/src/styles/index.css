@@ -1142,28 +1142,28 @@ html[data-theme="light"] .el-loading-mask {
 @media (max-width: 640px) { .empty-kpis { grid-template-columns: minmax(0, 1fr); } }
 .empty-hint.empty-hint .empty-kpis { max-width: none; margin: 0; gap: 10px; }
 .empty-hint.empty-hint .ek { padding: 10px 14px; }
-.empty-hint.empty-hint .ek-k { font-size: 12.5px; letter-spacing: .02em; }
+.empty-hint.empty-hint .ek-k { font-size: calc(var(--dc-home-fs, 13px) - 0.5px); letter-spacing: .02em; }
 .empty-hint.empty-hint .ek-v { font-size: 21px; font-weight: 650; letter-spacing: .2px; line-height: 1.15; }
 .empty-hint.empty-hint .empty-grid { gap: 12px; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
 .empty-hint.empty-hint .empty-block { padding: 12px 14px; }
-.empty-hint.empty-hint .empty-dss-head { font-size: 13px; font-weight: 600; color: var(--dc-text); letter-spacing: .03em; gap: 7px; margin-bottom: 9px; }
+.empty-hint.empty-hint .empty-dss-head { font-size: var(--dc-home-fs, 13px); font-weight: 600; color: var(--dc-text); letter-spacing: .03em; gap: 7px; margin-bottom: 9px; }
 .empty-hint.empty-hint .empty-dss-head::before { content: ''; width: 3px; height: 13px; border-radius: 2px; background: var(--dc-primary); flex-shrink: 0; }
 .empty-hint.empty-hint .empty-dss-head::after { background: var(--dc-border); opacity: .7; }
-.empty-hint.empty-hint .empty-dss-count { font-size: 11.5px; font-weight: 500; color: var(--dc-text-dim); min-width: 22px; padding: 0 6px; }
+.empty-hint.empty-hint .empty-dss-count { font-size: calc(var(--dc-home-fs, 13px) - 1.5px); font-weight: 500; color: var(--dc-text-dim); min-width: 22px; padding: 0 6px; }
 .empty-hint.empty-hint .empty-dss-list { max-height: 150px; }
 .empty-hint.empty-hint .empty-ds { height: 36px; }
-.empty-hint.empty-hint .ds-name { font-size: 13.5px; }
+.empty-hint.empty-hint .ds-name { font-size: calc(var(--dc-home-fs, 13px) + 0.5px); }
 .empty-hint.empty-hint .ds-sub,
-.empty-hint.empty-hint .ds-type { font-size: 12px; }
-.empty-hint.empty-hint .ds-env { font-size: 11px; padding: 0 6px; }
+.empty-hint.empty-hint .ds-type { font-size: calc(var(--dc-home-fs, 13px) - 1px); }
+.empty-hint.empty-hint .ds-env { font-size: calc(var(--dc-home-fs, 13px) - 2px); padding: 0 6px; }
 .empty-hint.empty-hint .empty-hi { padding: 4px 8px; }
-.empty-hint.empty-hint .hi-sql { font-size: 12.5px; max-width: 68%; }
-.empty-hint.empty-hint .hi-meta { font-size: 11.5px; }
-.empty-hint.empty-hint .mcp-code code { font-size: 12px; line-height: 1.55; }
-.empty-hint.empty-hint .empty-tips { font-size: 13px; opacity: .75; margin-top: 2px; }
+.empty-hint.empty-hint .hi-sql { font-size: calc(var(--dc-home-fs, 13px) - 0.5px); max-width: 68%; }
+.empty-hint.empty-hint .hi-meta { font-size: calc(var(--dc-home-fs, 13px) - 1.5px); }
+.empty-hint.empty-hint .mcp-code code { font-size: calc(var(--dc-home-fs, 13px) - 1px); line-height: 1.55; }
+.empty-hint.empty-hint .empty-tips { font-size: var(--dc-home-fs, 13px); opacity: .75; margin-top: 2px; }
 .empty-hint.empty-hint .empty-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
 .empty-hint.empty-hint .es { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 8px; background: var(--dc-bg-soft); border: 1px solid var(--dc-border); }
-.empty-hint.empty-hint .es-k { font-size: 11.5px; color: var(--dc-text-dim); }
+.empty-hint.empty-hint .es-k { font-size: calc(var(--dc-home-fs, 13px) - 1.5px); color: var(--dc-text-dim); }
 .empty-hint.empty-hint .es-v { font-size: 18px; font-weight: 650; color: var(--dc-text); line-height: 1.15; }
 .empty-hint.empty-hint .es-v.ok { color: #10b981; }
 .empty-hint.empty-hint .es-v.bad { color: #f43f5e; }
@@ -1179,15 +1179,15 @@ html[data-theme="light"] .el-loading-mask {
    → 主机名紧跟其后；箭头只在悬停时划入，静态时行更干净。 */
 .empty-hint.empty-hint .empty-ds { height: 38px; padding: 0 10px; gap: 10px; border-radius: 9px; }
 .empty-hint.empty-hint .ds-main { align-items: center; gap: 10px; }
-.empty-hint.empty-hint .ds-name { flex: 0 0 auto; min-width: 112px; max-width: 42%; font-size: 13.5px; font-weight: 600; }
+.empty-hint.empty-hint .ds-name { flex: 0 0 auto; min-width: 112px; max-width: 42%; font-size: calc(var(--dc-home-fs, 13px) + 0.5px); font-weight: 600; }
 .empty-hint.empty-hint .ds-sub { margin-left: 0; display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .empty-hint.empty-hint .ds-type {
-  flex-shrink: 0; font-size: 11px; font-weight: 550; line-height: 18px; height: 18px;
+  flex-shrink: 0; font-size: calc(var(--dc-home-fs, 13px) - 2px); font-weight: 550; line-height: 18px; height: 18px;
   padding: 0 8px; border-radius: 999px;
   color: var(--dc-primary); background: var(--dc-primary-wash);
   border: 1px solid var(--dc-primary-light);
 }
-.empty-hint.empty-hint .ds-host { font-size: 11.5px; color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty-hint.empty-hint .ds-host { font-size: calc(var(--dc-home-fs, 13px) - 1.5px); color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .empty-hint.empty-hint .ds-go { opacity: 0; transform: translateX(-4px); transition: opacity .15s ease, transform .15s ease, color .15s ease; }
 .empty-hint.empty-hint .empty-ds:hover .ds-go { opacity: 1; transform: none; }
 /* ============ 主页「快速开始」列表 v5：收敛视觉语言 ============
@@ -1235,8 +1235,8 @@ html[data-theme="light"] .el-loading-mask {
    间距同步放开（行内 gap 与圆点），否则字号变大了反而显得拥挤。 */
 .empty-hint.empty-hint .empty-hi { padding: 5px 8px; gap: 9px; }
 .empty-hint.empty-hint .hi-dot { width: 8px; height: 8px; }
-.empty-hint.empty-hint .hi-sql { font-size: 13.5px; max-width: 66%; }
-.empty-hint.empty-hint .hi-meta { font-size: 12.5px; }
+.empty-hint.empty-hint .hi-sql { font-size: calc(var(--dc-home-fs, 13px) + 0.5px); max-width: 66%; }
+.empty-hint.empty-hint .hi-meta { font-size: calc(var(--dc-home-fs, 13px) - 0.5px); }
 /* ============ 主页 v10：两处"奇怪"的根因 ============
    ① 快速开始：名字宽度随内容变 → 每行的胶囊起点都不一样（看着错位）。
       改成**名字固定成列**（150px，长名省略），胶囊与主机随之成列对齐。
@@ -1248,8 +1248,8 @@ html[data-theme="light"] .el-loading-mask {
   display: grid; grid-template-columns: 8px minmax(0, 1fr) auto;
   align-items: center; column-gap: 9px; padding: 5px 8px;
 }
-.empty-hint.empty-hint .hi-sql { max-width: none; font-size: 13.5px; }
-.empty-hint.empty-hint .hi-meta { min-width: 132px; text-align: right; font-size: 12.5px; }
+.empty-hint.empty-hint .hi-sql { max-width: none; font-size: calc(var(--dc-home-fs, 13px) + 0.5px); }
+.empty-hint.empty-hint .hi-meta { min-width: 132px; text-align: right; font-size: calc(var(--dc-home-fs, 13px) - 0.5px); }
 /* ============ 主页「快速开始」v11：元信息靠右 ============
    名字固定 150px 成列之后，右侧还留着一大片空白 —— 把「类型胶囊 + 主机名」推到行尾，
    与「最近查询」的元信息一样靠右，两张卡片的阅读节奏统一（左：名字 / 右：元信息）。
@@ -1262,8 +1262,8 @@ html[data-theme="light"] .el-loading-mask {
    底色铺满整块；字号 12 → 13px、行高 1.65，缩进 JSON 读起来更清楚。 */
 .empty-hint.empty-hint .empty-block:has(.mcp-code) { display: flex; flex-direction: column; }
 .empty-hint.empty-hint .mcp-code { flex: 1; padding: 10px 12px; overflow: auto; }
-.empty-hint.empty-hint .mcp-code code { font-size: 13px; line-height: 1.65; }
-.empty-hint.empty-hint .mcp-inline { font-size: 12px; }
+.empty-hint.empty-hint .mcp-code code { font-size: var(--dc-home-fs, 13px); line-height: 1.65; }
+.empty-hint.empty-hint .mcp-inline { font-size: calc(var(--dc-home-fs, 13px) - 1px); }
 /* ============ 侧栏工具条（新建连接 / 新建目录 / 展开 / 收缩 / 刷新）============
    原来这些动作散落在右键菜单和欢迎页 —— 放到对象浏览器标题下一行，手边就有。
    尺寸与左侧树的密度对齐（26px 方钮、圆角 7px），悬停才上色，静态时不抢注意力。 */
@@ -1416,24 +1416,24 @@ html[data-theme="light"] .el-loading-mask {
 /* ============ 主页字号再提一档 ============
    三档层次：数字（最大、字重 650）> 名字/标题（600）> 元信息（400、最浅）。
    每一档都比上一版大 0.5~3px，并同步放开行高与行距 —— 只放大字号不放开间距会更挤。 */
-.empty-hint.empty-hint .ek-v { font-size: 24px; }
-.empty-hint.empty-hint .ek-k { font-size: 13px; }
-.empty-hint.empty-hint .empty-dss-head { font-size: 13.5px; margin-bottom: 10px; }
+.empty-hint.empty-hint .ek-v { font-size: calc(var(--dc-home-fs, 13px) + 11px); }
+.empty-hint.empty-hint .ek-k { font-size: var(--dc-home-fs, 13px); }
+.empty-hint.empty-hint .empty-dss-head { font-size: calc(var(--dc-home-fs, 13px) + 0.5px); margin-bottom: 10px; }
 .empty-hint.empty-hint .empty-ds { height: 38px; }
 /* 连接名字跟右列「常用操作」保持同一档（13.5px）。
    这里曾经单独提到 14px，结果同一张卡里"名字 14 / 标题 13.5 / 操作 13.5"三种字号，
    看上去就是"左边那一列字怎么大了"（用户反馈）。 */
-.empty-hint.empty-hint .ds-name { font-size: 13.5px; }
-.empty-hint.empty-hint .ds-type { font-size: 11.5px; height: 19px; line-height: 19px; }
-.empty-hint.empty-hint .empty-act { font-size: 13.5px; padding: 8px; }
+.empty-hint.empty-hint .ds-name { font-size: calc(var(--dc-home-fs, 13px) + 0.5px); }
+.empty-hint.empty-hint .ds-type { font-size: calc(var(--dc-home-fs, 13px) - 1.5px); height: 19px; line-height: 19px; }
+.empty-hint.empty-hint .empty-act { font-size: calc(var(--dc-home-fs, 13px) + 0.5px); padding: 8px; }
 .empty-hint.empty-hint .empty-hi { padding: 6px 8px; }
-.empty-hint.empty-hint .hi-sql { font-size: 14px; }
-.empty-hint.empty-hint .hi-meta { font-size: 12.5px; }
-.empty-hint.empty-hint .es-v { font-size: 20px; }
-.empty-hint.empty-hint .es-k { font-size: 12px; }
-.empty-hint.empty-hint .mcp-code code { font-size: 13px; }
-.empty-hint.empty-hint .empty-hs-none { font-size: 12.5px; }
-.empty-hint.empty-hint .empty-tips { font-size: 13.5px; }
+.empty-hint.empty-hint .hi-sql { font-size: calc(var(--dc-home-fs, 13px) + 1px); }
+.empty-hint.empty-hint .hi-meta { font-size: calc(var(--dc-home-fs, 13px) - 0.5px); }
+.empty-hint.empty-hint .es-v { font-size: calc(var(--dc-home-fs, 13px) + 7px); }
+.empty-hint.empty-hint .es-k { font-size: calc(var(--dc-home-fs, 13px) - 1px); }
+.empty-hint.empty-hint .mcp-code code { font-size: var(--dc-home-fs, 13px); }
+.empty-hint.empty-hint .empty-hs-none { font-size: calc(var(--dc-home-fs, 13px) - 0.5px); }
+.empty-hint.empty-hint .empty-tips { font-size: calc(var(--dc-home-fs, 13px) + 0.5px); }
 /* 数字不再加粗：层级改由"字号 + 颜色深浅"表达（KPI 24px / 统计 20px，都是常规字重）。
    徽标里的计数（小标题右侧那颗）也一并回到常规字重，避免只有它一处变粗。 */
 .empty-hint.empty-hint .ek-v { font-weight: 400; }
@@ -1514,3 +1514,13 @@ html[data-theme="dark"] .el-alert--success.is-light {
   background: var(--dc-bg-soft);
   border-color: var(--dc-border);
 }
+/* ---- 「设置 → 界面尺寸 → 数据视图表格」真正生效的地方 ----
+   Element 的 .el-table 自带 font-size（走 --el-table-font-size），只在**容器**上设字号是管不到它的，
+   所以这里按"数据视图"的容器显式覆盖表格根字号；用容器限定范围，设置页/关于页里的表格不受影响。 */
+.table-data-view .el-table,
+.sql-query-view .el-table,
+.table-edit-page .el-table { font-size: var(--dc-data-fs, 14px); }
+/* 表头与单元格跟随（EP 用行高/字号各自的变量，但字号是从 .el-table 继承下来的） */
+.table-data-view .el-table .cell,
+.sql-query-view .el-table .cell,
+.table-edit-page .el-table .cell { font-size: inherit; }
