@@ -1514,6 +1514,7 @@ export default {
   'settings.ai.presetLabel': '快速选择服务商',
   'settings.ai.addModel': '添加模型',
   'settings.ai.test': '测试连接',
+  'settings.ai.resetConfirm': '确定恢复默认吗？已配置的模型清单与密钥会被清空（需重新添加）。',
   'settings.ai.saveConfig': '保存配置',
   'settings.ai.usageTitle': '用量统计',
   'settings.ai.usageRange': '近 {n} 天',

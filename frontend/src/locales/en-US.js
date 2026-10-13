@@ -1507,6 +1507,7 @@ export default {
   'settings.ai.presetLabel': 'Quick provider presets',
   'settings.ai.addModel': 'Add model',
   'settings.ai.test': 'Test connection',
+  'settings.ai.resetConfirm': 'Restore defaults? The configured model list and its keys will be cleared (you will need to add them again).',
   'settings.ai.saveConfig': 'Save configuration',
   'settings.ai.usageTitle': 'Usage',
   'settings.ai.usageRange': 'Last {n} days',

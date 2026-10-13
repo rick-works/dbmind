@@ -218,6 +218,7 @@
 
           <div class="actions">
             <el-button type="primary" :icon="Check" @click="saveSafety">{{ $t('settings.safety.save') }}</el-button>
+            <el-button text @click="resetSafety">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -257,6 +258,7 @@
 
           <div class="actions">
             <el-button type="primary" :icon="Check" @click="saveMcp">{{ $t('settings.mcp.save') }}</el-button>
+            <el-button text @click="resetMcp">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -338,6 +340,7 @@
             <el-button type="primary" :loading="saving" @click="save">
               <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.ai.saveConfig') }}
             </el-button>
+            <el-button text @click="resetAi">{{ $t('settings.editor.reset') }}</el-button>
           </div>
 
           <!-- 用量统计：它属于「模型服务用了多少」，放在这里比放在知识库里合适 -->
@@ -751,6 +754,7 @@
             <el-button type="primary" @click="saveDriver">
             <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.driver.saveMirror') }}
             </el-button>
+            <el-button text @click="resetDriver">{{ $t('settings.editor.reset') }}</el-button>
             <el-button @click="loadDriverList" :loading="driverLoading">
             <el-icon style="margin-right:4px"><Refresh /></el-icon>{{ $t('common.refresh') }}
             </el-button>
@@ -877,6 +881,9 @@
               </div>
               <el-icon v-if="logLevel === lv.value" class="theme-opt-check"><CircleCheck /></el-icon>
             </div>
+          <div class="actions" style="margin-top:10px">
+            <el-button text @click="resetLogLevel">{{ $t('settings.editor.reset') }}</el-button>
+          </div>
           </div>
 
           <div class="panel-title log-title">{{ $t('settings.logs.auditTitle') }}</div>
@@ -1250,7 +1257,10 @@ const setThemeMode = (mode) => {
 }
 
 // ---------- AI 配置 ----------
-const form = ref({ enabled: false, models: [], privacyMode: 'allow', auditEnabled: false })
+// 「恢复默认」的**唯一来源**：表单初始化与恢复默认共用同一份常量，避免两处漂移。
+// 下面这四组默认值与后端种子（storage.rs / seed_settings）和各自 loadXxx 的兜底值一致。
+const aiDefaults = { enabled: false, models: [], privacyMode: 'allow', auditEnabled: false }
+const form = ref({ ...aiDefaults })
 const saving = ref(false)
 const testingId = ref('')
 const activeModelId = ref('')
@@ -1304,6 +1314,16 @@ const payload = () => ({
   models: (form.value.models || []).map(m => ({ ...m, embedding: m.embedding ? 'true' : 'false' }))
 })
 
+/** 恢复默认：清掉 AI 配置（模型清单会一起没了，所以先确认一次），确认后立即落盘 */
+const resetAi = async () => {
+  try {
+    await ElMessageBox.confirm(t('settings.ai.resetConfirm'), t('settings.editor.reset'), {
+      type: 'warning', confirmButtonText: t('settings.editor.reset'), cancelButtonText: t('common.cancel')
+    })
+  } catch { return }
+  form.value = { ...aiDefaults }
+  await save()
+}
 const save = async () => {
   const names = form.value.models.map(m => m.name?.trim()).filter(Boolean)
   const dup = names.find((n, i) => names.indexOf(n) !== i)
@@ -1612,11 +1632,13 @@ const onRefreshCache = async () => {
 // ===== 安全与会话（全部存后端 app_settings；安全开关与会话上限改动即时生效） =====
 // protectProduction 默认 true：与后端种子（storage.rs 的 seed_settings）保持一致，
 // 否则首次加载、或后端暂时读不到时，开关会显示成"关"，与内核实际策略不符。
-const safetyForm = ref({ protectProduction: true, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: false, blockDangerous: false, maxWriteRows: 0 })
+const safetyDefaults = { protectProduction: true, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: false, blockDangerous: false, maxWriteRows: 0 }
+const safetyForm = ref({ ...safetyDefaults })
 
 // ---------- MCP 服务 ----------
 // 配置存后端 app_settings：MCP 壳**每次工具调用都现读**，保存后下一次调用即生效，不用重启客户端
-const mcpForm = ref({ defaultConnection: '', maxRows: 2000, timeoutSecs: 30, toolsStructure: true, toolsQuery: true, toolsHistory: true })
+const mcpDefaults = { defaultConnection: '', maxRows: 2000, timeoutSecs: 30, toolsStructure: true, toolsQuery: true, toolsHistory: true }
+const mcpForm = ref({ ...mcpDefaults })
 const connOptions = ref([])
 const loadMcp = async () => {
   try {
@@ -1633,6 +1655,11 @@ const loadMcp = async () => {
   } catch (e) {
     ElMessage.error(t('settings.query.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) }))
   }
+}
+/** 恢复默认：打回 MCP 服务的出厂值并立即落盘 */
+const resetMcp = async () => {
+  mcpForm.value = { ...mcpDefaults }
+  await saveMcp()
 }
 const saveMcp = async () => {
   try {
@@ -1672,6 +1699,11 @@ const loadSafety = async () => {
     safetyForm.value.allowLegacyTls = !!(tls && tls.allowLegacyTls)
   } catch { /* 同上：降级到默认值 */ }
 }
+/** 恢复默认：打回安全与会话的出厂值并立即落盘（与「查询」页的做法一致：重置即生效） */
+const resetSafety = async () => {
+  safetyForm.value = { ...safetyDefaults }
+  await saveSafety()
+}
 const saveSafety = async () => {
   try {
     await putSetting('safety.protectProduction', safetyForm.value.protectProduction)
@@ -1688,7 +1720,14 @@ const saveSafety = async () => {
 }
 
 // 日志级别：选完即存即生效（web 壳热切换 tracing 过滤器），不用单独的保存按钮
-const logLevel = ref('info')
+// 运行时日志级别的默认值（前端页面文案也是"平时 info 就够"）
+const LOG_LEVEL_DEFAULT = 'info'
+const logLevel = ref(LOG_LEVEL_DEFAULT)
+/** 恢复默认：日志级别打回 info 并立即生效 */
+const resetLogLevel = async () => {
+  logLevel.value = LOG_LEVEL_DEFAULT
+  await saveLogLevel(LOG_LEVEL_DEFAULT)
+}
 const saveLogLevel = async (level) => {
   try {
     await putSetting('log.level', level)
@@ -1724,7 +1763,8 @@ const MIRROR_BASES = {
   huawei: 'https://repo.huaweicloud.com/repository/maven/',
   tencent: 'https://mirrors.cloud.tencent.com/nexus/repository/maven-public/'
 }
-const driverForm = ref({ mirror: 'auto', customUrl: '' })
+const driverDefaults = { mirror: 'auto', customUrl: '' }
+const driverForm = ref({ ...driverDefaults })
 // 实际生效的仓库根：关键字查表；自定义用填写的 URL（空 = Maven Central）
 const mirrorBase = computed(() => {
   if (driverForm.value.mirror === 'custom') {
@@ -1767,6 +1807,11 @@ const measureMirrorWidth = () => {
 // 选中项一变就重新量（下拉里换选项，框宽跟着变）
 watch(() => driverForm.value.mirror, () => nextTick(measureMirrorWidth))
 onMounted(() => nextTick(measureMirrorWidth))
+/** 恢复默认：镜像源打回「自动」（customUrl 一并清空）并立即落盘 */
+const resetDriver = async () => {
+  driverForm.value = { ...driverDefaults }
+  await saveDriver()
+}
 const saveDriver = async () => {
   // 自定义模式存填写的 URL（必须是 http(s) 开头的仓库根）；关键字模式存关键字
   const value = driverForm.value.mirror === 'custom'
