@@ -10,7 +10,8 @@
  *   isNoSql(conn.type)                        // 替代 ['MONGODB','REDIS',...].includes()
  *   quoteStyleOf(type)                        // 'BACKTICK' | 'BRACKET' | 'DOUBLE_QUOTE'
  */
-import DEFAULT_DEF from './base'
+import DEFAULT_DEF from './base'
+
 import { t } from '../utils/i18n'
 
 const modules = import.meta.glob('./*.js', { eager: true })
@@ -47,6 +48,9 @@ export const quoteStyleOf = (code) => byType(code).quoteStyle
 
 /** 是否需要 schema 层级导航：'none' | 'schema' */
 export const schemaLevelOf = (code) => byType(code).schemaLevel
+
+/** 「库」这一层要不要画（Oracle 不画：它就是连接里的服务名 / PDB，永远只有一条） */
+export const hideDbLevelOf = (code) => Boolean(byType(code).hideDbLevel)
 
 /** 通用能力取值：cap(type, 'defaultPort') */
 export const cap = (code, key) => byType(code)[key]

@@ -1164,7 +1164,7 @@ import { recordRecentConnection } from '../../utils/recentConnections'
 import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
 import { pinnedFolders, loadPinnedFolders, pinFolder, unpinFolder } from '../../utils/folders'
 import { buildConnectionBundle, parseConnectionBundle, importPayloadOf, downloadJson } from '../../utils/connTransfer'
-import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType } from '../../types'
+import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType, hideDbLevelOf } from '../../types'
 import AiPanel from '../ai/AiPanel.vue'
 import logoSmUrl from '../../assets/logo-sm.png'
 import SaveToKbDialog from '../knowledge/SaveToKbDialog.vue'
@@ -4198,7 +4198,7 @@ const dbListToDbNodes = (connId, connType, dbList, catalog) => {
  * 绝不能把它变成空节点。
  */
 const dbOrSchemaNodes = async (connId, connType, dbList, catalog) => {
-  if (connType === 'ORACLE' && !catalog) {
+  if (hideDbLevelOf(connType) && !catalog) {
     const list = (Array.isArray(dbList) ? dbList : []).filter((db) => String(db) !== NO_DEFAULT_DB)
     if (list.length === 1) {
       try {

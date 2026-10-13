@@ -7,6 +7,9 @@ export default {
   category: 'RELATIONAL',
   noSql: false,
   schemaLevel: 'schema',
+  // 「库」这一层对 Oracle 是噪音：它就是**连接里填的服务名 / PDB**（换 PDB 得换连接），
+  // 永远只有一条。树与编辑器都用这个标记决定「不画这一层」。
+  hideDbLevel: true,
   defaultSchema: '',
   quoteStyle: 'DOUBLE_QUOTE',
   logo: 'oracle.svg',

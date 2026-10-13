@@ -31,7 +31,7 @@
           </el-select>
 
           <!-- 数据库选择器（catalog 方言下显示的是当前 catalog 内的裸库名） -->
-          <el-select v-model="selectedDbShort" size="small" class="db-select"
+          <el-select v-if="!hideDbSelect" v-model="selectedDbShort" size="small" class="db-select"
                      :loading="loadingDbs" @change="onDbShortChange">
             <template #prefix>
               <el-icon class="sel-icon"><Coin /></el-icon>
@@ -595,7 +595,7 @@ import {
   Sort, SortUp, SortDown, Collection, RefreshLeft
 } from '@element-plus/icons-vue'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
-import { isNoSql as isNoSqlType, schemaLevelOf, byType } from '../../types'
+import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
 
 const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabDatabase: String, initialSql: String, autoRun: Boolean })
@@ -2785,6 +2785,9 @@ const isNoSql = computed(() => isNoSqlType(connType.value))
 // SQL 格式化方言：跟随当前连接类型自动识别（未知类型回退标准 SQL）
 const fmtDialect = computed(() => connDialectOf(connType.value))
 const showSchemaSelect = computed(() => schemaLevelOf(connType.value) === 'schema')
+// 「库」下拉要不要画：Oracle 不画 —— 它的库就是连接里填的服务名 / PDB（换 PDB 得换连接），
+// 永远只有一条，多一个下拉纯属噪音。与左侧树同一口径（标记见 types/oracle.js 的 hideDbLevel）。
+const hideDbSelect = computed(() => hideDbLevelOf(connType.value))
 // 连接下拉：按目录（environment）分组（一级：目录名；二级：连接名）。
 // **未分组的连接归入「开发」**—— 用户要求：下拉里不该出现「未分组」这种分组，
 // 每个连接都应该落在 开发/测试/生产 之一（默认开发，后续可拖拽改）。
@@ -4573,6 +4576,17 @@ const loadDbList = async (cid) => {
 const loadDatabases = async () => {
   const cid = selectedConnId.value || props.conn?.id
   if (!cid) { databases.value = []; selectedDatabase.value = ''; return }
+  // Oracle 这类「库就是连接固有目标」的类型：**不去列库、也不给它下拉** ——
+  // 库值直接用连接自己的 database（页签带过来的全限定名若属于同一连接则优先），
+  // 于是模式下拉与查询请求（database + schema）都照常工作。
+  if (hideDbSelect.value) {
+    databases.value = []
+    dbCatalogs.value = []
+    const own = String(selectedConn.value?.database || '').trim()
+    const fromTab = String(props.database || '').trim()
+    selectedDatabase.value = own && fromTab.startsWith(own) ? fromTab : (own || fromTab)
+    return
+  }
   const cached = readDbListCache(cid)
   if (cached) {
     databases.value = cached.list               // 有缓存先渲染
