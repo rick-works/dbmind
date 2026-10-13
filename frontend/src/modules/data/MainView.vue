@@ -5044,7 +5044,11 @@ const fillRealRowCounts = async (connId, db, tables, onlyMissing = false) => {
   // 表现就是"同一个库里有的表有行数、有的没有"。而"空表"要显示 0 恰恰**只能**靠这次
   // 精确回填（估算那条 SQL 故意把 0 当成"不知道"→ null，见 dialect.rs 的 table_rows）。
   // 所以按小批走：单批失败不影响其它批，空表也能稳定拿到 0。
-  const CHUNK = 40
+  //
+  // 批次**特意取小**：实测后端是**一张一张** COUNT(*)（339 张表一次请求要 52 秒！），
+  // 那段时间界面上就是"有的表有数字、有的空着"。20 张约 2~3 秒，第一批回来就开始填，
+  // 后面逐批补齐 —— 用户看到的是一条条填上，而不是干等一分钟。
+  const CHUNK = 20
   for (let i = 0; i < names.length; i += CHUNK) {
     try {
       const counts = await getTableCounts(connId, db, names.slice(i, i + CHUNK))
