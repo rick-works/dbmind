@@ -110,7 +110,7 @@
 
           <!-- 界面尺寸：改完立即生效（写 :root 的 CSS 变量，见 utils/appearance.js），不需要重启。
               这几项都是"微调"，上下限刻意收窄，避免把界面搞坏。 -->
-          <div class="panel-title topmenu-title" style="display:flex;align-items:center;gap:10px"><span>{{ $t('settings.appearance.title') }}</span><el-button size="small" text type="primary" @click="resetAppearance">{{ $t('settings.appearance.reset') }}</el-button></div>
+          <div class="panel-title topmenu-title"><span>{{ $t('settings.appearance.title') }}</span></div>
           <div class="panel-desc">{{ $t('settings.appearance.desc') }}</div>
           <!-- 标签宽度**按内容自适应**（不再固定 200px）：固定宽度下「顶栏右侧图标」这类短标签
                会跟右侧的输入框隔出一大段空白（用户反馈「标题与框不要离那么远」）。
@@ -165,6 +165,10 @@
             </el-form-item>
           </el-form>
 
+
+          <div class="actions">
+            <el-button text @click="resetGeneral">{{ $t('settings.editor.reset') }}</el-button>
+          </div>
         </div>
 
         <!-- 0.5 安全与会话（后端 app_settings：改安全开关与会话上限都会即时生效） -->
@@ -826,9 +830,6 @@
           <el-form label-width="110px" label-position="left" class="ai-form">
             <el-form-item :label="$t('settings.paths.dataDir')">
               <el-input v-model="pathForm.dataDir" :placeholder="pathInfo.defaultDataDir">
-                <template #append>
-                  <el-button @click="resetDataDir">{{ $t('settings.editor.reset') }}</el-button>
-                </template>
               </el-input>
               <div class="form-tip">{{ $t('settings.paths.dataDirTip') }}</div>
             </el-form-item>
@@ -838,6 +839,7 @@
             <el-button type="primary" :loading="savingPath" @click="savePaths">
               <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.paths.save') }}
             </el-button>
+            <el-button text @click="resetDataDir">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -956,9 +958,6 @@
             <div class="scb-head">
               <span class="scb-title">{{ $t('shortcut.bindings') }}</span>
               <span class="flex-spacer"></span>
-              <el-button size="small" text type="primary" :disabled="!hasCustomShortcuts" @click="resetAllShortcuts">
-                {{ $t('settings.editor.reset') }}
-              </el-button>
             </div>
             <div v-for="g in shortcutGroups" :key="g.key" class="scb-group">
               <!-- 组名与条目文案都在字典里，键名由 id 派生（见 utils/shortcuts.js 头注释） -->
@@ -987,6 +986,10 @@
                 </div>
               </div>
             </div>
+          </div>
+
+          <div class="actions">
+            <el-button text :disabled="!hasCustomShortcuts" @click="resetAllShortcuts">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -1099,6 +1102,13 @@ const onAppearanceChange = () => {
 }
 /** 一键恢复默认：把界面尺寸各项打回默认值（与编辑器页的「恢复默认」同一做法，改完立即生效） */
 const resetAppearance = () => { appearance.value = saveAppearance({ ...appearanceDefaults }) }
+
+/** 通用页的「恢复默认」：界面尺寸 + 消息提示（本页这两组都是纯界面偏好）。
+    顶栏菜单的显示与顺序**不动** —— 那是用户自己排的，重置掉反而添乱。 */
+const resetGeneral = () => {
+  resetAppearance()
+  notifyForm.value = { ...notifyDefaults } // 该表单有 watch 即时落盘，不必再调保存
+}
 // 「刷新结构缓存」要连**前端那份** localStorage 缓存一起清（内核缓存清了它还在也会显示旧清单）
 import { clearSchemaCache as clearLocalSchemaCache } from '../../utils/schemaCache'
 import DbLogo from '../../common/DbLogo.vue'

@@ -38,6 +38,7 @@ export default {
   'update.dlStart': 'Start download',
   'update.dlShowProgress': 'View download progress',
   'update.dlBackgroundHint': 'Downloading continues in background - click the refresh icon in the top bar to check progress',
+  'update.dlPreparing': 'Checking download sources…',
   'update.dlProgress': '{done} of {total} downloaded, {speed}/s',
   'update.dlDone': 'Download complete — ready to install',
   // Show the path on completion: if the system refuses to auto-launch it (Windows UAC / antivirus,

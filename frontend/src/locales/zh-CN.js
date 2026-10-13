@@ -42,6 +42,7 @@ export default {
   'update.dlStart': '开始下载',
   'update.dlShowProgress': '查看下载进度',
   'update.dlBackgroundHint': '下载在后台继续，点顶栏的刷新图标可随时查看进度',
+  'update.dlPreparing': '正在检测下载源…',
   'update.dlProgress': '已下载 {done} / {total}，速度 {speed}/s',
   'update.dlDone': '下载完成，可以更新了',
   // 完成时把落地路径写出来：万一系统没接受自动启动（Windows 的 UAC / 杀软、macOS 的策略都可能拦），

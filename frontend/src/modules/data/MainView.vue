@@ -1045,6 +1045,8 @@
         :status="dlStatus === 'failed' ? 'exception' : dlStatus === 'done' ? 'success' : undefined"
         :stroke-width="10"
         :text-inside="true"
+        :indeterminate="dlPreparing"
+        :show-text="!dlPreparing"
       />
       <div class="upd-dl-stats">
         <span v-if="dlStatus === 'running'">{{ dlRunningText }}</span>
@@ -1233,7 +1235,14 @@ const dlUnverified = ref(false)
 // 后台跑完（成功/失败）只提示一次：轮询会反复读到同一个终态
 const announced = ref(false)
 // 进度条下方那一行：已下载 / 速度 / 剩余时间（源由后端自动挑，界面不提供选择）
+// "准备中"：后端在**开始下载之前**要测速、按当下网络挑最快的镜像源，这一段可能持续十几秒。
+// 这时既没有总大小、也没有任何字节，如实报"已下载 0 B / 0 B，速度 0 B/s"就是一句废话 +
+// 一根不动的空条（用户反馈"不要都是 0 停在这很久"）——改成说清此刻在做什么。
+const dlPreparing = computed(() => dlStatus.value === 'running' && Number(dlTotal.value) === 0 && Number(dlReceived.value) === 0)
+
+// 进度条下方那一行：准备中说"正在检测下载源…"；真开始后报 已下载 / 速度 / 剩余时间
 const dlRunningText = computed(() => {
+  if (dlPreparing.value) return t('update.dlPreparing')
   const base = t('update.dlProgress', {
     done: fmtBytes(dlReceived.value), total: fmtBytes(dlTotal.value), speed: fmtBytes(dlSpeed.value)
   })
