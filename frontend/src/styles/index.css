@@ -1524,3 +1524,8 @@ html[data-theme="dark"] .el-alert--success.is-light {
 .table-data-view .el-table .cell,
 .sql-query-view .el-table .cell,
 .table-edit-page .el-table .cell { font-size: inherit; }
+/* ---- 「设置 → 界面尺寸 → 数据视图表格」：接住**自绘表格** ----
+   表数据 / SQL 结果 / NoSQL 这几个视图的网格是自绘的 <table class="data-table">（不是 Element 的 .el-table），
+   所以上面那条 .el-table 规则管不到它们；这里用两级选择器（压过组件内单类名规则）让表格字号跟随设置。
+   --grid-fs 由各视图根节点注入（值就是 var(--dc-data-fs)），这里再兜一层，防止某个视图忘了注入。 */
+.data-table-wrap .data-table { font-size: var(--grid-fs, var(--dc-data-fs, 14px)); }

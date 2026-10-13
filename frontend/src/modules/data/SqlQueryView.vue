@@ -263,7 +263,7 @@
            贴在 .data-table-wrap 上的话，兄弟节点 .result-footer（耗时 / 总计 / 分页）就吃不到，
            表现是"改了结果表格字号，底栏文字没变"（用户反馈）。 -->
       <div class="result-grid"
-        :style="{ '--grid-fs': (editorSettings.gridFontSize || 14) + 'px', '--grid-row-h': (editorSettings.gridRowHeight || 26) + 'px' }">
+        :style="{ '--grid-fs': 'var(--dc-data-fs, 14px)', '--grid-row-h': (editorSettings.gridRowHeight || 26) + 'px' }">
         <!-- 加载遮罩：查询/翻页时可取消（与数据表一致） -->
         <div v-if="running" class="grid-loading-overlay">
           <div class="grid-loading-box">
