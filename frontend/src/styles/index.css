@@ -1562,3 +1562,29 @@ html[data-theme="dark"] .el-alert--success.is-light {
   font-size: var(--dc-data-fs, 13px) !important;
   width: 1em; height: 1em;
 }
+/* ---- 数据视图底栏「N 条/页」下拉的文字色 ----
+   Element 的分页下拉默认用**正文亮色**，在深色底上比同一行的「1.01s」「共 N 条」（都是弱化色）亮一档，
+   看着"太白"、不像一个整体。这里把这三个数据视图底栏里的分页下拉压到与旁边同一档；
+   悬停时回到正文色（可点感）。**下拉弹层是 teleport 到 body 的**，所以下面的选项不受影响。 */
+.table-data-view .pager .el-pagination__sizes,
+.table-data-view .pager .el-pagination__sizes *,
+.nosql-view .pager .el-pagination__sizes,
+.nosql-view .pager .el-pagination__sizes *,
+.sql-query-view .result-footer .el-pagination__sizes,
+.sql-query-view .result-footer .el-pagination__sizes * {
+  color: var(--dc-text-dim) !important;
+}
+.table-data-view .pager .el-pagination__sizes:hover,
+.table-data-view .pager .el-pagination__sizes:hover *,
+.nosql-view .pager .el-pagination__sizes:hover,
+.nosql-view .pager .el-pagination__sizes:hover *,
+.sql-query-view .result-footer .el-pagination__sizes:hover,
+.sql-query-view .result-footer .el-pagination__sizes:hover * {
+  color: var(--dc-text) !important;
+}
+/* 「共 N 条」和它同一档（原本就是弱化色，这里只是显式钉住，免得被别处覆盖） */
+.table-data-view .pager .el-pagination__total,
+.nosql-view .pager .el-pagination__total,
+.sql-query-view .result-footer .el-pagination__total {
+  color: var(--dc-text-dim) !important;
+}
