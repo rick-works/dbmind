@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.25": [
+        "Data-view font sizes now really follow the settings: the home page card text (it used to ignore the setting) and whole-page sizes for table data / NoSQL / SQL results (grid, footer with elapsed time and row count, pager and toolbar together); the footer page-size text is dimmed to match its neighbours",
+        "Rows per page now uses one shared list in the settings page and all three data grids (up to 100000; it used to be four different lists, and the grids stopped at 10000)",
+        "A round of frontend/backend fixes: backup download is streamed, backup and restore child processes can be cancelled, SQL Server database names and sync/compare table names are quoted per dialect, closing a SQL tab mid-export leaves no task behind, column lists no longer get crossed when switching knowledge bases or compare tables, and a failed refresh no longer reports success"
+    ],
     "v1.2.24": [
         "Online update: installing now asks only once (it used to ask twice, so two taps of Enter could restart the app without warning) and says clearly that updating closes DBmind and reopens the new version; the startup check also removes installers in the Downloads folder that are not newer than the running version",
         "Interface-size settings now really work: fixed the home page card font that never changed (hard-coded sizes in the stylesheet were overriding it), and the case where a change reverted after reopening the dialog",
