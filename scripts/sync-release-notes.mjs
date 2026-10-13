@@ -225,9 +225,21 @@ for (const [tag, bullets] of bulletsByTag) {
 {
   let lines = fs.readFileSync(ZH, 'utf8').split('\n')
   const order = [...bulletsByTag.keys()] // rel1 = 最新
+  // 槽位**按版本号反查**，不要按顺序去数：`order` 来自"有 md 的版本"，中间某版本缺 md、
+  // 或只同步某一个版本时，顺序就会与词典里的 relN 错位 —— 结果是 A 版本的要点写进 B 版本的槽位
+  // （清旧行时也会清错版本）。用 `relN.version` 建"版本 → 槽位"映射，就与顺序无关了。
+  const slotOf = (() => {
+    const map = {}
+    const re = /'settings\.about\.rel(\d+)\.version': '([^']+)'/g
+    let m
+    while ((m = re.exec(lines.join('\n')))) map[m[2]] = Number(m[1])
+    return map
+  })()
   let changed = 0
-  for (let n = 1; n <= order.length; n++) {
-    const bullets = bulletsByTag.get(order[n - 1])
+  for (const tag of order) {
+    const n = slotOf[tag]
+    if (!n) continue
+    const bullets = bulletsByTag.get(tag)
     // 先清掉**这个版本**散落各处的旧 note 行，再插到 version/level/date 之后。
     //
     // 为什么不能只替换"紧跟 version 的那个连续块"：历史上要点块被手工搬过家（发版时把 relN 的
@@ -266,10 +278,22 @@ for (const [tag, bullets] of bulletsByTag) {
     const lines = fs.readFileSync(EN, 'utf8').split('\n')
     const order = [...bulletsByTag.keys()]
     const missing = []
+    // 槽位按版本号反查（同 ③）：与 order 的顺序无关
+    const slotOf = (() => {
+      const m2 = {}
+      const re = /'settings\.about\.rel(\d+)\.version': '([^']+)'/g
+      let m
+      while ((m = re.exec(lines.join('\n')))) m2[m[2]] = Number(m[1])
+      return m2
+    })()
     let changed = 0
-    for (let n = 1; n <= order.length; n++) {
-      const tag = order[n - 1]
+    for (const tag of order) {
+      const n = slotOf[tag]
       const notes = map[tag]
+      if (!n) {
+        missing.push(`${tag}(词典里没有它的槽位)`)
+        continue
+      }
       if (!Array.isArray(notes) || !notes.length) {
         missing.push(tag)
         continue
@@ -349,16 +373,22 @@ if (noPush) {
   if (!fs.existsSync(ps1)) {
     console.log('⚠ 没找到 scripts/publish-site.ps1 —— 官网需要手动发布到 gh-pages')
   } else {
+    // PowerShell 的可执行名按平台不同：Windows 是 `powershell`，mac/Linux 是 `pwsh`。
+    // 写死 `powershell` 的话在 mac/Linux 上发版会 ENOENT → 被下面 catch 吞掉 → **官网永远不更新
+    // 且没有任何醒目的提示**（正是"改好源≠线上更新"那类漏项）。
+    const shell = process.platform === 'win32' ? 'powershell' : 'pwsh'
     try {
       execFileSync(
-        'powershell',
+        shell,
         ['-ExecutionPolicy', 'Bypass', '-File', ps1, '-Message', `官网：加 v${tags[0].replace(/^v/, '')} 版本条目`],
         { cwd: ROOT, stdio: 'inherit' },
       )
-    } catch {
+    } catch (err) {
       // 发布失败不该把同步脚本判为失败（本地文件与 Release 正文都已经好了），
-      // 但必须说清楚"线上还没更新"，并给出可重复执行的补救命令。
-      console.log('⚠ 官网发布失败 —— 手动跑 scripts\\publish-site.ps1（可重复执行，不会叠加）')
+      // 但必须**大声**说清楚"线上还没更新"，并给出可重复执行的补救命令与真实原因。
+      console.error(`\n⚠⚠ 官网没有发布成功：${err && err.message ? err.message : err}`)
+      console.error('   线上仍是旧内容。请手动执行（可重复跑，不会叠加）：')
+      console.error('   powershell -ExecutionPolicy Bypass -File scripts\\publish-site.ps1\n')
     }
   }
 }

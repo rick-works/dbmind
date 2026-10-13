@@ -552,7 +552,11 @@ const openPicker = () => { pickerVisible.value = true }
 const onTypePicked = (code) => {
   const prevName = form.value?.name || ''
   const prevEnv = form.value?.env || 'DEV'
-  const prevEnvironment = form.value?.environment || props.customFolders[0] || ''
+  // 换数据源类型时保留「所在分组」：原名是 environment，后来统一改叫 group，
+  // 这一处漏改了 —— 之前写的是 `group: prevGroup`，而全文件根本没有 prevGroup，
+  // 于是这里必抛 ReferenceError：表单不重置 → **换类型完全无效**（旧的主机/端口/库残留，
+  // 很容易把 A 类库的配置存成 B 类）。guard 只查「调用了没声明的函数」，查不到裸标识符，所以没拦住。
+  const prevGroup = form.value?.group || props.customFolders[0] || ''
   jdbcUrlManuallyEdited.value = false
   form.value = {
     ...typeDefaults(code),

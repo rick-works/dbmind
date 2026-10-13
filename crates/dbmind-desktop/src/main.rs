@@ -267,8 +267,11 @@ fn dbmind_health(port: u16) -> Option<String> {
     );
     stream.write_all(request.as_bytes()).ok()?;
     let mut body = String::new();
-    // 读失败（对端不是 HTTP、被截断）就当不是
-    stream.read_to_string(&mut body).ok()?;
+    // 读超时**不当失败**：读超时只是"对端没关连接"，而我们靠 `Connection: close` 与
+    // Content-Length 本来就能拿到完整正文 —— 用 `.ok()?` 会把已经读到的正文一起丢掉，
+    // 于是明明健康的实例被判成"不是 DBmind"→ 不复用 → 平白多起一个内核。
+    // 这里忽略读错误，只用已读到的内容判断。
+    let _ = stream.read_to_string(&mut body);
     // 别用 `"ok":true` 硬匹配：不同 serde 版本/格式化方式会带空格
     if body.contains("\"ok\"") && body.contains("true") {
         Some(body)
@@ -286,11 +289,13 @@ fn is_dbmind(port: u16) -> bool {
 /// 手工取而不引 `serde_json`：壳层刻意保持零依赖（编译快、供应链短），
 /// 而 health 的正文格式是我们自己定的（`{"ok":true,"version":"1.2.20"}`）。
 fn health_version(body: &str) -> Option<String> {
-    let key = "\"version\"";
+    // 匹配**完整前缀** `"version":"`，而不是裸 `"version"`：health 正文将来只要多一个
+    // 名字里带 version 的键（`dbVersion` / `proxyVersion`…），裸匹配就会取到那个值 →
+    // 与本机版本不符 → 判定「不复用」→ 用户开第二个窗口会平白多起一个内核。
+    let key = "\"version\":\"";
     let rest = &body[body.find(key)? + key.len()..];
-    let start = rest.find('"')? + 1;
-    let end = rest[start..].find('"')? + start;
-    Some(rest[start..end].to_string())
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
 }
 
 fn port_free(port: u16) -> bool {
@@ -337,13 +342,29 @@ fn resolve_port(allow_reuse: bool) -> (u16, bool) {
 ///
 /// 不等的话，窗口会比后端先就绪，前端首屏会先拿到一次连接失败 ——
 /// 它自己会重试，但用户看到的是"白屏闪一下"。通常几百毫秒就好。
-fn wait_ready(port: u16) {
-    let deadline = Instant::now() + READY_TIMEOUT;
+/// 等内核就绪；**不打印任何东西**，由调用方决定说什么
+/// （复用探活失败是预期内的分支，不该刷一条吓人的超时日志）。
+fn wait_ready_until(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if is_dbmind(port) {
-            return;
+            return true;
         }
         std::thread::sleep(Duration::from_millis(120));
+    }
+    false
+}
+
+/// 复用别人内核时的探活窗口。
+///
+/// 只要确认"这一刻还在"就够了 —— 旧实例正在退出时（更新脚本 pkill 掉的那一个）会在几十毫秒内消失。
+/// 这里若用满 `READY_TIMEOUT`，「复用失败 → 自己起一个内核」这条兜底路径就会白等十几秒，
+/// 而且全程没有窗口（用户会以为卡死了）。
+const REUSE_PROBE: Duration = Duration::from_secs(4);
+
+fn wait_ready(port: u16) {
+    if wait_ready_until(port, READY_TIMEOUT) {
+        return;
     }
     // 超时不拦着开窗口：前端会显示"连不上后端"，比一个沉默的白窗口有用
     eprintln!("内核在 {READY_TIMEOUT:?} 内未就绪，仍打开窗口");
@@ -426,8 +447,9 @@ fn main() {
     // 于是"刚才还有人答 health"到开窗那一刻可能已经失效。不等就开窗 → 窗口导航到死端口 →
     // macOS 上是纯白（WKWebView 加载失败不画任何东西），Windows 上是一张错误页。
     if !need_spawn {
-        wait_ready(port);
-        if is_dbmind(port) {
+        // 复用前先探活，但窗口要短：这一刻它可能正在退出（更新脚本恰好同时把旧内核关掉），
+        // 确认"还在"就够了 —— 用满 15 秒会让兜底路径白等（全程没有窗口）。
+        if wait_ready_until(port, REUSE_PROBE) {
             eprintln!("检测到 {port} 端口已有**同版本** DBmind 实例，复用它");
         } else {
             eprintln!("{port} 端口上的实例已不可用（可能正在退出）→ 改为自己起一个内核");

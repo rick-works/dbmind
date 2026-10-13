@@ -244,25 +244,34 @@ const loadObjects = async (type) => {
 }
 
 // 打开弹窗时重置状态并拉取对象列表
+//
+// 请求代次：快速「关闭再打开」、或打开期间切库时，上一次的 listTables 可能**后到**，
+// 把 tables/views 覆盖成**上一个库**的清单 —— 那会按错误的清单去导出（选了 A 库的表、
+// 实际去 dump B 库）。每次打开自增，回来的不是最新代次就整段丢弃。
+let loadSeq = 0
 watch(() => props.modelValue, (open) => {
   if (!open || !props.database || !props.conn) return
+  const seq = ++loadSeq
   reset()
   loading.value = true
   ;(async () => {
     try {
       const list = await listTables(props.conn.id, props.database)
+      if (seq !== loadSeq) return
       tables.value = list.filter(t => (t.type || 'TABLE') === 'TABLE').map(t => t.name)
       views.value = list.filter(t => t.type === 'VIEW').map(t => t.name)
     } catch (e) {
+      if (seq !== loadSeq) return
       tables.value = []
       ElMessage.error(t('dump.loadTablesFailed'))
     }
+    if (seq !== loadSeq) return
     // 异步加载其他对象
     loadObjects('function')
     loadObjects('procedure')
     loadObjects('trigger')
     loadObjects('event')
-  })().finally(() => { loading.value = false })
+  })().finally(() => { if (seq === loadSeq) loading.value = false })
 })
 
 // 切换导出格式时重置

@@ -208,6 +208,9 @@ const fullSql = computed(() => {
   return parts.join('\n')
 })
 
+// 请求代次：同一面板里快速切换用户时，先发的响应可能后到 —— 不校验就会把 A 用户的
+// 属主/权限显示成 B 用户的（张冠李戴）。每次 load 自增，回来的不是最新代次就整段丢弃。
+let loadSeq = 0
 const load = async () => {
   // 缺连接时**不能静默返回**：那会渲染成一个「有标题、没内容」的空壳页，
   // 与「这个用户确实没有属性」无法区分 —— 这次就是这么误导人的
@@ -216,19 +219,22 @@ const load = async () => {
     error.value = t('udv.connUnknown')
     return
   }
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
   try {
     const res = await getUserInfo(props.conn.id, props.database, props.name)
+    if (seq !== loadSeq) return
     if (res.error) {
       error.value = res.error
     } else {
       info.value = res
     }
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = t('odv.loadFailedDetail', { detail: (e.message || e) })
   } finally {
-    loading.value = false
+    if (seq === loadSeq) loading.value = false
   }
 }
 

@@ -2339,9 +2339,11 @@ pub async fn alter(
     // 没有意义 —— 它们的原子性靠界面把整批变更**合并成一条 ALTER**，见
     // `dialect::ddl_transactional` 的注释。实测（MySQL）：START TRANSACTION + INSERT + ROLLBACK
     // 之后 COUNT 归 0 ⇒ 这条链路是持久会话，事务确实生效，所以这句兜底对可回滚方言是真管用的。
-    let in_tx = crate::api::dialect::ddl_transactional(kind_key);
+    let mut in_tx = crate::api::dialect::ddl_transactional(kind_key);
     if in_tx {
-        let _ = run_write_sql_in(
+        // BEGIN 失败就不能再当作"在事务里"：下面若真出错，报「已回滚」就是撒谎
+        // （根本没有事务，前面的改动已经落库）。这时按"没包事务"如实说「前 N 条已生效」。
+        let began = run_write_sql_in(
             &state,
             &id,
             &database,
@@ -2349,7 +2351,12 @@ pub async fn alter(
             1,
             true,
         )
-        .await;
+        .await
+        .is_ok();
+        if !began {
+            in_tx = false;
+            tracing::warn!("事务 BEGIN 失败：本批变更不做整体回滚，出错时按实际生效条数如实报告");
+        }
     }
 
     let mut executed = 0usize;
@@ -2407,7 +2414,25 @@ pub async fn alter(
         }
     }
     if in_tx {
-        let _ = run_write_sql_in(&state, &id, &database, "COMMIT".to_string(), 1, true).await;
+        if let Err(err) = run_write_sql_in(&state, &id, &database, "COMMIT".to_string(), 1, true).await {
+            // **绝不能吞**：COMMIT 才是真正落库的那一步 —— 延迟约束校验、序列化失败、磁盘满、
+            // 锁等待超时都可能在这一刻才报错。原先这里是 `let _ =`，于是接口照样回
+            // 「N 条语句全部执行成功」，而库其实**整体回滚了**：用户以为改好了，实际没改（静默假成功）。
+            let _ = run_write_sql_in(&state, &id, &database, "ROLLBACK".to_string(), 1, true).await;
+            let mut payload = shape::query_failure_json(&err.message, 0);
+            if let Some(object) = payload.as_object_mut() {
+                object.insert("failedIndex".to_string(), json!(statements.len()));
+                object.insert("totalStatements".to_string(), json!(statements.len()));
+                // 提交失败 = 一条都没生效，别报会误导人的「已执行 N 条」
+                object.insert("executedStatements".to_string(), json!(0));
+                let reason = err.message.strip_prefix("SQL 执行失败：").unwrap_or(&err.message);
+                object.insert(
+                    "message".to_string(),
+                    json!(format!("{reason}（提交失败，已整体回滚，表结构保持原样）")),
+                );
+            }
+            return Ok(Json(payload));
+        }
     }
     if let Some(object) = last.as_object_mut() {
         object.insert("totalStatements".to_string(), json!(statements.len()));

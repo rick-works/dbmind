@@ -468,6 +468,9 @@ const effectiveKeyword = computed(() => {
 let cancelController = null
 let execId = null
 let stopRequested = false
+// 请求代次：入口多（翻页 / 搜索 / 查询 / 切集合），`stopRequested` 会在新请求开始时被重置，
+// 所以只靠它拦不住"上一个请求后到"（见 load 内的注释）
+let loadSeq = 0
 
 const clearAllSelections = () => {
   selectedSet.value = new Set()
@@ -479,10 +482,16 @@ const clearAllSelections = () => {
 
 const load = async (p) => {
   if (!props.conn) return
+  // 请求代次：本视图的入口很多（翻页 / 搜索回车 / 点查询 / 切集合），而 `stopRequested`
+  // 在新的 load 里会被重置为 false —— 于是**上一个请求后到**时它看到的是 false，
+  // 直接把 `result/rows` 覆盖成上一个集合/上一页的数据（串数据）。代次不对就整段丢弃。
+  const seq = ++loadSeq
   page.value = p || 1
   loading.value = true
   stopRequested = false
   execId = 'n_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
+  // 旧的请求顺手取消（后端也在跑同一次查询，取消掉省资源）；它的 catch 会被代次拦住，不会报错
+  if (cancelController) cancelController.abort()
   cancelController = new AbortController()
   const queryStart = Date.now()
   elapsedTime.value = 0
@@ -495,6 +504,8 @@ const load = async (p) => {
       page: page.value, size: size.value, keyword: effectiveKeyword.value,
       executionId: execId
     }, cancelController.signal)
+    // 过期请求（已被更新的 load 取代）：整段丢弃，一个状态都别改
+    if (seq !== loadSeq) return
     if (stopRequested) {
       result.value = { rows: [], columns: [], message: t('nsql.canceled'), notices: [], success: false, executeTime: elapsedTime.value }
       rows.value = []
@@ -524,6 +535,8 @@ const load = async (p) => {
       syncColWindow()
     })
   } catch (e) {
+    // 过期请求的失败（多半是被上面 abort 掉的）不提示、也不改状态
+    if (seq !== loadSeq) return
     if (stopRequested) {
       result.value = { rows: [], columns: [], message: t('nsql.canceled'), notices: [], success: false, executeTime: elapsedTime.value }
       rows.value = []
@@ -532,10 +545,13 @@ const load = async (p) => {
     }
     ElMessage.error(t('nsql.queryFailed', { detail: e.message }))
   } finally {
-    if (queryTimer) { clearInterval(queryTimer); queryTimer = null }
-    loading.value = false
-    cancelController = null
-    execId = null
+    // 只有最新那次能收尾：过期请求若在这里清计时器/加载态/控制器，会把新请求的一起清掉
+    if (seq === loadSeq) {
+      if (queryTimer) { clearInterval(queryTimer); queryTimer = null }
+      loading.value = false
+      cancelController = null
+      execId = null
+    }
   }
 }
 

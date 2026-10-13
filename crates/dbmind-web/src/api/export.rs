@@ -1573,9 +1573,13 @@ pub async fn single(
     req.validate()?;
     let path = temp_path(req.format.ext())?;
     let outcome = export_query(&state, &id, &req, &path, None).await;
-    let bytes = std::fs::read(&path).unwrap_or_default();
+    // 先读、再删，最后才传播导出本身的错误（顺序不能颠倒：临时产物无论成败都要删掉）。
+    // 这里**不能用 `unwrap_or_default`**：读产物失败（权限 / 磁盘 / 杀软锁文件 / 只写了一半）
+    // 会变成"返回 0 字节 + 200"，用户下载到一个空文件以为导出成功 —— 静默丢数据。
+    let read = std::fs::read(&path);
     let _ = std::fs::remove_file(&path);
     let outcome = outcome?;
+    let bytes = read.map_err(|e| XError::internal(format!("读取导出产物失败：{e}")))?;
     tracing::info!(rows = outcome.rows, "同步导出完成");
     Ok(file_response(bytes, req.format.media(), &export_name(&req)))
 }
@@ -1591,9 +1595,12 @@ pub async fn db(
     let ext = if req.format.packed() { "zip" } else { req.format.ext() };
     let path = temp_path(ext)?;
     let outcome = export_dump(&state, &id, &req, &path, None).await;
-    let bytes = std::fs::read(&path).unwrap_or_default();
+    // 与同步导出同一处纪律：先读、再删、最后传播导出错误；
+    // 读产物失败必须报错，不能变成"0 字节 + 200"的静默假成功。
+    let read = std::fs::read(&path);
     let _ = std::fs::remove_file(&path);
     let outcome = outcome?;
+    let bytes = read.map_err(|e| XError::internal(format!("读取导出产物失败：{e}")))?;
     tracing::info!(rows = outcome.rows, "同步整库转储完成");
     let media = if req.format.packed() {
         "application/zip"

@@ -119,19 +119,26 @@ const formatMeta = (k, v) => {
   return s.replace(/(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2})(\.\d+)/g, '$1')
 }
 
+// 请求代次：同一面板里快速切换对象时（props 变化会重跑 load），**先发的响应可能后到**，
+// 不校验就会把 A 对象的 DDL 显示成 B 对象的（张冠李戴）。每次 load 自增，回来的不是最新代次就整段丢弃。
+let loadSeq = 0
 const load = async () => {
   if (!props.conn || !props.name) return
+  const seq = ++loadSeq
   loading.value = true
   error.value = ''
   try {
     const res = await getObjectInfo(props.conn.id, props.database, props.type, props.name)
+    if (seq !== loadSeq) return
     info.value = res
     meta.value = res.meta || {}
     ddl.value = res.ddl || t('odv.noDdl')
   } catch (e) {
+    if (seq !== loadSeq) return
     error.value = t('odv.loadFailedDetail', { detail: e.message })
   } finally {
-    loading.value = false
+    // 只有最新那次能关加载态：过期请求关掉会把新请求的转圈一起熄掉
+    if (seq === loadSeq) loading.value = false
   }
 }
 
