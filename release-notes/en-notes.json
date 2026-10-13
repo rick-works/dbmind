@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.23": [
+        "Online update: after you click it the dialog first says it is checking download sources (no longer sitting at 0 B / 0 B), and shows downloaded size, speed and time left only once the download really starts",
+        "Settings: Restore defaults now sits next to the settings it affects (page-level ones share the row with Save, shortcuts in the card header, log level right under the level cards), and is a bordered button everywhere",
+        "Trimmed a batch of hints: closing the window now just asks whether to quit or minimize to the tray, and the update prompt button reads Do not show this version again"
+    ],
   "v1.2.22": [
       "Writes on read-only or production connections are now blocked the moment you click: import data, generate data, truncate table, clear table, drop table/object and rename. If the connection is read-only, or is marked Production with production protection on, the action is refused right away and the dialog never opens - previously you had to walk through the whole flow and only got rejected on submit",
       "Blocked-by-safety notices now appear in one place (top right) and can take you straight to the fix: the duplicate message in the middle is gone, the read-only notice carries an 'Edit data source ->' button that opens that data source's editor on the Advanced tab with the Read-only switch highlighted, and the production-protection notice opens Settings -> Security & session. Same behaviour in the structure page, data editing, SQL editor and rename dialogs",
