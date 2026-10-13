@@ -108,9 +108,42 @@ public final class Main {
         shutdown();
     }
 
+    /**
+     * 哪些方法要**按会话串行**。
+     *
+     * <p>刻意不含 {@code cancel}：它必须能插队才能取消正在跑的查询，而且走的是
+     * {@code Statement.cancel()} —— JDBC 明确允许从另一个线程调用，本身线程安全。
+     * 也不含 connect / ping / handshake / shutdown：它们不碰已有连接。
+     */
+    private static boolean needsSessionLock(String method) {
+        return switch (method) {
+            case "tables", "columns", "setautocommit", "commit", "rollback" -> true;
+            default -> false;
+        };
+    }
+
+    /** 按 sessionId 取会话；取不到就返回 null（让后续的 session() 去报那个更清楚的错）。 */
+    private static Session sessionOf(JsonObject request) {
+        if (!request.has("sessionId") || request.get("sessionId").isJsonNull()) {
+            return null;
+        }
+        String sid = request.get("sessionId").getAsString();
+        return sid == null || sid.isEmpty() ? null : SESSIONS.get(sid);
+    }
+
     private static void dispatch(JsonObject request) {
         String id = request.has("id") && !request.get("id").isJsonNull() ? request.get("id").getAsString() : "";
         String method = request.has("method") ? request.get("method").getAsString() : "";
+        // 同一条物理连接**只能串行用**：JDBC 的 Connection 不是线程安全的。
+        // 每个请求都跑在线程池里（那是为了让 cancel 能插队），于是「界面同时要字段 + 索引」
+        // 这种平常操作，会让两个线程同时用同一条连接 —— Oracle 实测直接搅坏驱动内部状态，
+        // 报 ORA-17027（流已被关闭）/ ORA-17401（违反协议），而且**这条连接此后就废了**：
+        // 之后每个请求都失败，界面表现就是「编辑表结构」读不出字段。
+        // 所以除 cancel 外，凡碰连接的请求按会话排队（口径见 needsSessionLock）。
+        Session locked = needsSessionLock(method) ? sessionOf(request) : null;
+        if (locked != null) {
+            locked.lock();
+        }
         try {
             JsonElement result = switch (method) {
                 case "handshake" -> handshake();
