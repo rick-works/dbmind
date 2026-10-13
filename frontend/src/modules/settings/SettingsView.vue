@@ -1453,6 +1453,10 @@ const editorForm = ref({ ...editorDefaults, sqlKeywordRules: [] })
 // watcher 就会把这组默认值写回 localStorage —— 用户的编辑器设置（含关键字排版规则）就没了。
 // "读失败 → 写默认值"是设置被清空最经典的一条链路。
 let editorLoaded = false
+// 载入时「结果表格字号」的值：只有用户**真的改了**它，才回写外观页的「数据视图表格」。
+// 不加这个快照的话，Vue 的 watch 是异步的——等它触发时 editorLoaded 已是 true，
+// 于是"载入设置"这一步也会被当成用户修改，把外观页刚调好的值又按旧值盖回去（用户踩过）。
+let editorLoadedGridFs = null
 const loadEditor = () => {
   try {
     const raw = JSON.parse(localStorage.getItem('dbmind_editor') || '{}')
@@ -1478,9 +1482,11 @@ const loadEditor = () => {
       }))
       : []
     editorForm.value = { ...editorDefaults, ...raw, sqlKeywordRules: rules }
+    editorLoadedGridFs = editorForm.value.gridFontSize
     editorLoaded = true
   } catch (e) {
     editorForm.value = { ...editorDefaults, sqlKeywordRules: [] }
+    editorLoadedGridFs = editorForm.value.gridFontSize
     // 读不出来就**说出来**：以前这里是静默兜底，界面上看着像"从来没配过"，
     // 用户根本不知道自己的设置为什么会不见（见 editorLoaded 的注释）
     console.error('[settings] 读取编辑器设置失败：', e)
@@ -1494,7 +1500,9 @@ watch(editorForm, () => {
   if (!editorLoaded) return
   persistUI('dbmind_editor', JSON.stringify(editorForm.value))
   // 反向联动：编辑器里的「结果表格字号」同样写回界面尺寸的「数据视图表格」（见 onAppearanceChange）
-  if (appearance.value.dataFontSize !== editorForm.value.gridFontSize) {
+  // 反向联动只认"用户改的"：与载入时的快照比，一样就说明这次是加载，不动外观页的值
+  if (editorForm.value.gridFontSize !== editorLoadedGridFs) {
+    editorLoadedGridFs = editorForm.value.gridFontSize
     appearance.value = saveAppearance({ ...appearance.value, dataFontSize: editorForm.value.gridFontSize })
   }
   reloadEditorSettings()
@@ -1503,6 +1511,7 @@ const saveEditor = () => {
   ElMessage.success(t('settings.editor.msgSaved'))
 }
 const resetEditor = () => { editorForm.value = { ...editorDefaults, sqlKeywordRules: [] }; saveEditor() }
+editorLoadedGridFs = editorForm.value.gridFontSize
 
 // ---------- 关键字排版规则（SQL 格式化） ----------
 // 每条规则 = { kw: 关键字/短语, cs: upper=大写 | lower=小写 | keep=保持原样, ly: 排版方式 }
