@@ -389,7 +389,7 @@ import { aiChat, aiChatStream, aiDataDict, aiInsight, aiWarmup, aiExportDoc, get
 import KbIngestPanel from './KbIngestPanel.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { t, te } from '../../utils/i18n'
-import { schemaLevelOf } from '../../types'
+import { schemaLevelOf, hideDbLevelOf } from '../../types'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
 
 const props = defineProps({
@@ -910,9 +910,13 @@ const ctxNeedSchema = computed(() => {
 })
 /** 传给后端的库标识：模式层级类型用「库.模式」复合串，其余类型原样 */
 const ctxEffectiveDatabase = computed(() => {
-  if (!ctxDatabase.value) return ''
-  if (ctxNeedSchema.value && ctxSchema.value) return `${ctxDatabase.value}.${ctxSchema.value}`
-  return ctxDatabase.value
+  // Oracle 这类「库就是连接固有目标」的类型，上下文里**没有库这一层**（见 hideDbLevelOf）：
+  // 库值直接用连接自己的 database，否则去掉库层后请求会变成"没有库"。
+  const base = ctxDatabase.value
+    || (hideDbLevelOf(ctxConn.value?.type) ? String(ctxConn.value?.database || '') : '')
+  if (!base) return ''
+  if (ctxNeedSchema.value && ctxSchema.value) return `${base}.${ctxSchema.value}`
+  return base
 })
 /** 当前选中项（取最深一层）对应的下拉 value，用于高亮 */
 const ctxSelectedValue = computed(() => {
@@ -1034,6 +1038,18 @@ const loadCtxChildren = async (item) => {
   try {
     if (item.level === 0) {
       const connId = ctxUnwrap(item.value)
+      const conn = (connList.value || []).find(c => String(c.id) === String(connId))
+      if (hideDbLevelOf(conn?.type)) {
+        // 该类型的「库」就是连接里填的服务名 / PDB（换 PDB 得换连接），永远只有一条 ——
+        // 与左侧树、SQL 编辑器同一口径：连接下面**直接列模式**，不画库这一层。
+        const raw = await listSchemas(connId, conn?.database || '')
+        children = (raw || [])
+          .map(s => (typeof s === 'string' ? s : (s.name || s.schema || '')))
+          .filter(Boolean)
+          .map(s => makeCtxItem('sc:' + s, String(s), 1, false, item.value))
+        ctxCache.value.set(item.value, children)
+        return children
+      }
       const dbs = await listDatabases(connId)
       const needSchema = connNeedsSchema(connId)
       children = (dbs || []).map(d => makeCtxItem('db:' + d, String(d), 1, needSchema, item.value))
@@ -1073,9 +1089,15 @@ const selectCtxByItem = (item) => {
     if (!cur.parentValue) break
     cur = ctxFlatItems.value.find(i => i.value === cur.parentValue)
   }
-  ctxConnId.value = ctxUnwrap(chain[0]?.value)
-  ctxDatabase.value = ctxUnwrap(chain[1]?.value)
-  ctxSchema.value = ctxUnwrap(chain[2]?.value)
+  // 按**项的类型**（value 前缀）回填，而不是按链上下标 —— Oracle 不画库层，
+  // 链是「连接 → 模式」，按下标会把模式名塞进「库」里、模式反而空着。
+  ctxDatabase.value = ''
+  for (const node of chain) {
+    const raw = ctxUnwrap(node.value)
+    if (node.value.startsWith('conn:')) ctxConnId.value = raw
+    else if (node.value.startsWith('db:')) ctxDatabase.value = raw
+    else if (node.value.startsWith('sc:')) ctxSchema.value = raw
+  }
   // 用户**主动**在工具条上换了上下文：之前那个"聚焦表"不再适用，清掉。
   // 不清的话会出现「已经切到别的库了，提问还被"只基于表 X 回答"绑着」。
   // （右键「发送到 AI」那条路不走这里 —— 它直接设 ctxTable，见 applyPending）

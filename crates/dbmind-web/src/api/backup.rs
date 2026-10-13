@@ -1542,9 +1542,12 @@ async fn list_object_names(
     dialect: &Dialect,
     kind: &str,
 ) -> Vec<String> {
+    // 与树上的例程/触发器清单同一口径：带上模式（Oracle 靠它做 owner 过滤），
+    // 免得「清单里是这个模式的对象、导出的却是另一个模式的」。
+    let schema = crate::api::meta::split_db_schema(database, dialect).1;
     let meta = match kind {
-        "function" | "procedure" => dialect.procedures(),
-        "trigger" => dialect.triggers(),
+        "function" | "procedure" => dialect.procedures(schema.as_deref()),
+        "trigger" => dialect.triggers(schema.as_deref()),
         "event" => dialect.events(),
         _ => return Vec::new(),
     };

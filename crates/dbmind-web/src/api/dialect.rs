@@ -1379,7 +1379,15 @@ _ => Meta::Unwritten,
         }
     }
 
-    pub fn procedures(&self) -> Meta {
+    /// 例程清单（存储过程 / 函数）。
+    ///
+    /// `schema` = 要查哪个模式的例程（树上就是模式节点）；`None` = 交给会话当前模式。
+    ///
+    /// Oracle 以前用 `user_objects`，它只认**会话当前模式**，而例程请求根本不收 schema
+    /// —— 树上点哪个模式都是 0（连 SYS 都是 0，一眼假）。这里改成 `all_objects` +
+    /// `owner` 明确过滤：判据来自请求本身，不赌「代理有没有真的切 schema」。
+    /// 两边都 upper()：未加引号的标识符在字典里是大写，但用户也可能建了带引号的小写模式。
+    pub fn procedures(&self, schema: Option<&str>) -> Meta {
         match self.key() {
             // SQLite 没有存储过程这个概念 —— 空数组是事实。
             "sqlite" => Meta::Absent,
@@ -1405,9 +1413,20 @@ _ => Meta::Unwritten,
                  where type in ('FN','IF','TF') order by name"
                     .to_string(),
             ),
-            "oracle" | "dm" => Meta::Sql(
-                "select object_name as \"name\", object_type as \"routineType\" from user_objects \
-                 where object_type in ('PROCEDURE','FUNCTION') order by object_name"
+            "oracle" => match schema {
+                Some(schema) if !schema.trim().is_empty() => Meta::Sql(format!(
+                    "select object_name as \"name\", object_type as \"routineType\" from all_objects where object_type in ('PROCEDURE','FUNCTION') and upper(owner) = upper('{}') order by object_name",
+                    schema.trim().replace('\'', "''")
+                )),
+                _ => Meta::Sql(
+                    "select object_name as \"name\", object_type as \"routineType\" from user_objects where object_type in ('PROCEDURE','FUNCTION') order by object_name"
+                        .to_string(),
+                ),
+            },
+            // DM（达梦）这里**不动**：它的数据字典大小写跟 Oracle 不完全一致，
+            // 没在真机上验证过 owner 过滤，宁可不改，也不要造一个「看着像修好了」的改动。
+            "dm" => Meta::Sql(
+                "select object_name as \"name\", object_type as \"routineType\" from user_objects where object_type in ('PROCEDURE','FUNCTION') order by object_name"
                     .to_string(),
             ),
             "db2" => Meta::Sql(
@@ -1437,7 +1456,9 @@ _ => Meta::Unwritten,
         }
     }
 
-    pub fn triggers(&self) -> Meta {
+    /// 触发器清单。`schema` 含义同 `procedures`（Oracle 同样是
+    /// `user_triggers` → `all_triggers` + `owner` 过滤）。
+    pub fn triggers(&self, schema: Option<&str>) -> Meta {
         match self.key() {
             "sqlite" => Meta::Sql(
                 "select name, tbl_name as \"table\" from sqlite_master where type = 'trigger' order by name"
@@ -1461,9 +1482,19 @@ _ => Meta::Unwritten,
                  left join sys.objects o on o.object_id = t.parent_id order by t.name"
                     .to_string(),
             ),
-            "oracle" | "dm" => Meta::Sql(
-                "select trigger_name as \"name\", table_name as \"table\" from user_triggers \
-                 order by trigger_name"
+            "oracle" => match schema {
+                Some(schema) if !schema.trim().is_empty() => Meta::Sql(format!(
+                    "select trigger_name as \"name\", table_name as \"table\" from all_triggers where upper(owner) = upper('{}') order by trigger_name",
+                    schema.trim().replace('\'', "''")
+                )),
+                _ => Meta::Sql(
+                    "select trigger_name as \"name\", table_name as \"table\" from user_triggers order by trigger_name"
+                        .to_string(),
+                ),
+            },
+            // DM 同上：先不动。
+            "dm" => Meta::Sql(
+                "select trigger_name as \"name\", table_name as \"table\" from user_triggers order by trigger_name"
                     .to_string(),
             ),
             "db2" => Meta::Sql(

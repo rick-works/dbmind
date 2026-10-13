@@ -388,7 +388,7 @@ fn cell_int(row: &Map<String, Value>, key: &str) -> Option<i64> {
     shape::value_to_i64(found?)
 }
 
-fn split_db_schema(database: &str, dialect: &Dialect) -> (String, Option<String>) {
+pub(crate) fn split_db_schema(database: &str, dialect: &Dialect) -> (String, Option<String>) {
     if !dialect.is_schema_aware() {
         return (database.to_string(), None);
     }
@@ -606,8 +606,9 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
     // 这两种情况在界面上应当是**同一个结论**：别显示。
     let has = |meta: Meta| matches!(meta, Meta::Sql(_));
     let index_ok = has(dialect.indexes());
-    let proc_ok = has(dialect.procedures());
-    let trigger_ok = has(dialect.triggers());
+    // 能力探测只关心「有没有 SQL」，不关心查哪个模式 —— 传 None
+    let proc_ok = has(dialect.procedures(None));
+    let trigger_ok = has(dialect.triggers(None));
     let event_ok = has(dialect.events());
     let user_ok = has(dialect.users());
     let ddl_ok = has(dialect.ddl("__probe__"));
@@ -2215,11 +2216,15 @@ pub async fn procedures(
 ) -> XResult<Json<Value>> {
     let params = Params::parse(raw.as_deref());
     let (_, dialect) = ctx_of(&state, &id).await?;
+    let database = params.get("database").unwrap_or_default();
+    // 把「库.模式」里的模式拆出来交给方言：Oracle 的例程要靠它做 owner 过滤
+    // （不拆的话查的是会话当前模式，树上点任何模式都是 0）。
+    let schema = split_db_schema(&database, &dialect).1;
     meta_list(
         &state,
         &id,
-        &params.get("database").unwrap_or_default(),
-        dialect.procedures(),
+        &database,
+        dialect.procedures(schema.as_deref()),
         "存储过程/函数清单",
     )
     .await
@@ -2233,11 +2238,13 @@ pub async fn triggers(
 ) -> XResult<Json<Value>> {
     let params = Params::parse(raw.as_deref());
     let (_, dialect) = ctx_of(&state, &id).await?;
+    let database = params.get("database").unwrap_or_default();
+    let schema = split_db_schema(&database, &dialect).1; // 同 procedures：模式要传给方言
     meta_list(
         &state,
         &id,
-        &params.get("database").unwrap_or_default(),
-        dialect.triggers(),
+        &database,
+        dialect.triggers(schema.as_deref()),
         "触发器清单",
     )
     .await
