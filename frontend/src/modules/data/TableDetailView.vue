@@ -2155,9 +2155,18 @@ const save = async () => {
           // 用**行内样式**而不是 class：ElNotification 渲染在 body 下，本组件的 scoped 样式未必命中
           message: h('div', { style: 'max-width:460px;line-height:1.5' }, [
             h('div', detail),
-            h('div', { style: 'margin-top:6px;font-size:12px;opacity:.75' }, t('tdet.prodBlockedHint')),
-            h('a', {
-              style: 'display:inline-block;margin-top:8px;font-weight:600;cursor:pointer',
+            // 放开路径：一行标题 + 两条分行（原来一整句挤一起，读起来费劲）
+            h('div', { style: 'margin-top:9px;font-size:12px;opacity:.75' }, [
+              h('div', t('tdet.prodBlockedHintTitle')),
+              h('div', { style: 'margin-top:3px' }, '· ' + t('tdet.prodBlockedPath1')),
+              h('div', { style: 'margin-top:1px' }, '· ' + t('tdet.prodBlockedPath2'))
+            ]),
+            // 「去设置」做成**蓝色按钮**（原来是个随通知主题的链接色，在黄色通知里显脏）
+            h('button', {
+              type: 'button',
+              style:
+                'margin-top:10px;padding:4px 12px;border:none;border-radius:6px;cursor:pointer;' +
+                'font-size:12px;font-weight:600;color:#fff;background:var(--el-color-primary,#409eff)',
               onClick: openSafetySettings
             }, t('tdet.prodBlockedGo'))
           ])

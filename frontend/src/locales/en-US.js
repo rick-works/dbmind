@@ -2458,7 +2458,10 @@ export default {
   'tdet.noChangesToSave': 'There is nothing to save',
   // production-protection block: offer a way out instead of a dead end
   'tdet.prodBlockedTitle': 'Blocked by production protection',
-  'tdet.prodBlockedHint': 'To allow it: Settings -> Security & session -> turn off "Protect production databases"; or mark this data source as Development instead of Production.',
+  // one heading + two paths (was a single run-on line)
+  'tdet.prodBlockedHintTitle': 'How to allow it',
+  'tdet.prodBlockedPath1': 'Settings -> Security & session -> turn off "Protect production databases"',
+  'tdet.prodBlockedPath2': 'or mark this data source as Development instead of Production',
   'tdet.prodBlockedGo': 'Open settings ->',
   // hover card for tables / views in the tree (comment only)
   'tree.tip.comment': 'Comment',

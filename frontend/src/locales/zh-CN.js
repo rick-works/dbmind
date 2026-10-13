@@ -2466,7 +2466,10 @@ export default {
   'tdet.noChangesToSave': '当前没有需要保存的修改',
   // 被「生产库保护」拦下时：不是一句死路提示，给一条能直接走通的路（前端会弹带「去设置」的通知）
   'tdet.prodBlockedTitle': '被「生产库保护」拦下了',
-  'tdet.prodBlockedHint': '放开限制的路径：设置 → 安全与会话 → 关掉「生产库保护」；或者把该数据源的环境从「生产」改成「开发」。',
+  // 拆成一行标题 + 两条路径：原来是一整句挤在一起，斜杠与引号连成一片，读起来费劲
+  'tdet.prodBlockedHintTitle': '放开限制的路径',
+  'tdet.prodBlockedPath1': '设置 → 安全与会话 → 关掉「生产库保护」',
+  'tdet.prodBlockedPath2': '或把该数据源的环境从「生产」改成「开发」',
   'tdet.prodBlockedGo': '去设置 →',
   // 树上悬浮「表 / 视图」的注释卡片（只显示注释；没有就明确说「无注释」）
   'tree.tip.comment': '注释',
