@@ -341,8 +341,66 @@ fn pick_installer(v: &Value) -> Option<Installer> {
 }
 
 /// GET /api/update/check —— 本地版本 vs GitHub 最新发行版
+/// 从安装包文件名里认出版本号：DBmind_1.2.22_x64-setup.exe / dbmind-1.2.22-portable.zip /
+/// DBmind_1.2.22_aarch64.dmg 都认 —— 只要名字里有 `x.y.z` 就算（必须是本应用的安装包命名）。
+fn installer_version_of(name: &str) -> Option<String> {
+    let lower = name.to_ascii_lowercase();
+    if !(lower.starts_with("dbmind") || lower.starts_with("dbmind_")) {
+        return None;
+    }
+    let bytes: Vec<char> = name.chars().collect();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            let mut parts = 0;
+            while i < bytes.len() {
+                if bytes[i].is_ascii_digit() {
+                    i += 1;
+                } else if bytes[i] == '.' {
+                    parts += 1;
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            if parts >= 2 {
+                let s: String = bytes[start..i].iter().collect();
+                let s = s.trim_end_matches('.').to_string();
+                if s.split('.').count() >= 3 {
+                    return Some(s);
+                }
+            }
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+/// 清理**已经用不上**的安装包：版本 ≤ 当前运行版本的都是历史残留（本次更新已经装上了）。
+///
+/// 为什么放在 check() 里：它是每次启动检查的必经之处，幂等，而且不需要再多一个接口。
+/// 只动「下载」目录里**文件名符合本应用安装包命名**的文件 —— 用户其它下载一律不碰。
+/// 比当前版本**新**的包一定留着：安装万一没生效（装到别处 / 被系统拦下），那份包是唯一的自救线索。
+fn prune_old_installers(current: &str) {
+    let dir = resolve_dir(None);
+    let Ok(rd) = std::fs::read_dir(&dir) else { return };
+    for entry in rd.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(ver) = installer_version_of(&name) else { continue };
+        if version_gt(&ver, current) { continue }
+        let path = entry.path();
+        if std::fs::remove_file(&path).is_ok() {
+            tracing::info!(target: "dbmind::update", file = %path.display(), "已清理历史安装包");
+        }
+    }
+}
+
 pub async fn check() -> Json<Value> {
     let current = env!("CARGO_PKG_VERSION").to_string();
+    // 顺手把历史安装包清掉（详见 prune_old_installers 的注释）
+    prune_old_installers(&current);
     match fetch_latest().await {
         Ok(v) => {
             let latest = v["tag_name"]
