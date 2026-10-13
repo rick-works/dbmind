@@ -7567,7 +7567,7 @@ const connTypeSummary = computed(() =>
 .empty-card .el-icon { color: var(--dc-text-dim); }
 .empty-card:hover .el-icon { color: var(--dc-primary); }
 .empty-card span { font-size: calc(var(--dc-home-fs, 13px) + 1px); font-weight: 600; }
-.empty-card small { font-size: 12px; color: var(--dc-text-dim); opacity: .8; }
+.empty-card small { font-size: calc(var(--dc-home-fs, 13px) - 1px); color: var(--dc-text-dim); opacity: .8; }
 /* ---- 首页仪表盘：内容块 / 操作项 / MCP 片段 ----
    .empty-stack 承担行间距并**垂直居中**：内容不满一屏时上下留白均分，
    超出一屏时 margin:auto 归零 + 容器 overflow 可滚，顶部不会被裁。 */
@@ -7605,7 +7605,7 @@ const connTypeSummary = computed(() =>
 }
 .mcp-code code {
   display: block; font-family: 'SF Mono', ui-monospace, Consolas, monospace;
-  font-size: 12px; line-height: 1.4; white-space: pre; color: var(--dc-text);
+  font-size: calc(var(--dc-home-fs, 13px) - 1px); line-height: 1.4; white-space: pre; color: var(--dc-text);
 }
 /* 多行文本时按钮放右上角（竖居中的话会压住中间那几行 JSON） */
 .mcp-copy { position: absolute; right: 4px; top: 4px; }
@@ -7647,14 +7647,14 @@ const connTypeSummary = computed(() =>
 /* 列表形态：名字在左、类型·主机靠右同一行（单列宽度够，一行比两行更好扫读） */
 .ds-main { display: flex; flex-direction: row; align-items: baseline; gap: 12px; min-width: 0; flex: 1; }
 .ds-sub { margin-left: auto; font-size: calc(var(--dc-home-fs, 13px) - 1.5px); color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ds-go { color: var(--dc-text-dim); font-size: 13px; flex-shrink: 0; }
+.ds-go { color: var(--dc-text-dim); font-size: var(--dc-home-fs, 13px); flex-shrink: 0; }
 .ds-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--dc-home-fs, 13px); font-weight: 550; flex: 0 1 auto; }
 .ds-type { margin-left: auto; font-size: calc(var(--dc-home-fs, 13px) - 1.5px); color: var(--dc-text-dim); flex-shrink: 0; }
 .ds-env {
-  font-size: 11px; color: var(--dc-text-dim); flex-shrink: 0;
+  font-size: calc(var(--dc-home-fs, 13px) - 2px); color: var(--dc-text-dim); flex-shrink: 0;
   background: var(--dc-bg-soft); border: 1px solid var(--dc-border); border-radius: 999px; padding: 0 6px;
 }
-.empty-ds-more { grid-column: 1 / -1; font-size: 12px; color: var(--dc-text-dim); opacity: .8; }
+.empty-ds-more { grid-column: 1 / -1; font-size: calc(var(--dc-home-fs, 13px) - 1px); color: var(--dc-text-dim); opacity: .8; }
 
 /* 下半部分两栏：左边数据源、右边最近查询（都是真实内容，把宽度用起来）
    `minmax(0, 1fr)` 不能写成 `1fr`：grid item 的**自动最小尺寸**由内容决定，
@@ -7685,7 +7685,7 @@ const connTypeSummary = computed(() =>
    让 SQL 按内容占位（上限 74%），元信息紧跟其后。 */
 .hi-sql {
   flex: 0 1 auto; max-width: 74%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-family: 'SF Mono', ui-monospace, Consolas, monospace; font-size: 11.5px; color: var(--dc-text);
+  font-family: 'SF Mono', ui-monospace, Consolas, monospace; font-size: calc(var(--dc-home-fs, 13px) - 1.5px); color: var(--dc-text);
 }
 
 .hi-meta { flex-shrink: 0; font-size: calc(var(--dc-home-fs, 13px) - 2px); color: var(--dc-text-dim); }

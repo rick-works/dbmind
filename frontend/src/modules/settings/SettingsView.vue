@@ -403,10 +403,9 @@
               <el-input-number v-model="editorForm.fontSize" :min="10" :max="20" :step="1" controls-position="right" style="width:120px" />
               <span class="unit">px</span>
             </el-form-item>
-            <el-form-item :label="$t('settings.editor.gridFontSize')">
-              <el-input-number v-model="editorForm.gridFontSize" :min="10" :max="20" :step="1" controls-position="right" style="width:120px" />
-              <span class="unit">px</span>
-            </el-form-item>
+            <!-- 「结果表格字号」已删：它与「通用 → 界面尺寸 → 数据视图表格」是**同一个值**
+                 （appearance.dataFontSize，两边双向同步），摆两个入口用户不知道该调哪个。
+                 行高（dataRowHeight）是这里独有的，保留。 -->
             <el-form-item :label="$t('settings.editor.gridRowHeight')">
               <el-input-number v-model="editorForm.gridRowHeight" :min="20" :max="48" :step="2" controls-position="right" style="width:120px" />
               <span class="unit">px</span>
@@ -2320,6 +2319,12 @@ watch(visible, (v) => {
 .preset-label { font-size: 12px; color: var(--dc-text-dim); margin-bottom: 8px; }
 .preset-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .actions { margin-top: 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+/* 次要按钮（「恢复默认」）：去掉边框/底色，悬停也只用下划线 ——
+   Element 的 text 按钮悬停会铺一层浅色底，看着像个按钮框（用户反馈「恢复默认变成按钮样式」）。 */
+.actions :deep(.el-button.is-text) { border: none; background: transparent; box-shadow: none; }
+.actions :deep(.el-button.is-text:hover) {
+  background: transparent; color: var(--dc-link); text-decoration: underline;
+}
 
 /* ===== 驱动下载：数据源 × 驱动状态列表 ===== */
 .drv-search { width: 180px; }
