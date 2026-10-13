@@ -693,6 +693,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.25（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.25</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-13</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>数据视图的字号终于全跟设置走了：首页卡片文字（之前怎么调都不动）、表数据 / NoSQL / SQL 结果三处表格的整页字号（表格、底栏耗时与总条数、分页、工具条一起变），底栏「N 条/页」的文字色也压到与旁边同一档</b></li>
+            <li><b>「每页条数」在设置页与三个数据表格里共用同一套选项（最大 100000）—— 原来四处各写一套，表格那边只到 10000</b></li>
+            <li><b>一轮前后端巡检修复</b>：备份下载改流式（大 dump 不再吃光内存）、备份与还原的子进程可被取消（取消会连子进程一起杀掉）、SQL Server 建库名与同步/对比的表名按方言加引号（保留字表名不再语法错）、导出中关掉 SQL 页签不再残留任务、切换知识库或比对表时列清单不再串数据、刷新失败不再误报成功</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.25" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.25" target="_blank" rel="noopener">下载 v1.2.25</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.24（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +721,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.24</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-13</span>
           </div>
           <ul class="rel-notes">

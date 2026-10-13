@@ -1853,7 +1853,7 @@ export default {
   'settings.about.rel1.date': '2026-10-13',
   'settings.about.rel1.note1': '数据视图的字号终于全跟设置走了：首页卡片文字（之前怎么调都不动）、表数据 / NoSQL / SQL 结果三处表格的整页字号（表格、底栏耗时与总条数、分页、工具条一起变），底栏「N 条/页」的文字色也压到与旁边同一档',
   'settings.about.rel1.note2': '「每页条数」在设置页与三个数据表格里共用同一套选项（最大 100000）—— 原来四处各写一套，表格那边只到 10000',
-  'settings.about.rel1.note3': '一轮前后端巡检修复：备份下载改流式（大 dump 不再吃光内存）、备份与还原的子进程可被取消、SQL Server 建库名与同步/对比的表名按方言加引号、导出中关掉 SQL 页签不再残留任务、切换知识库或比对表时列清单不再串数据、刷新失败不再误报成功',
+  'settings.about.rel1.note3': '一轮前后端巡检修复：备份下载改流式（大 dump 不再吃光内存）、备份与还原的子进程可被取消（取消会连子进程一起杀掉）、SQL Server 建库名与同步/对比的表名按方言加引号（保留字表名不再语法错）、导出中关掉 SQL 页签不再残留任务、切换知识库或比对表时列清单不再串数据、刷新失败不再误报成功',
   'settings.about.rel2.version': 'v1.2.24',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-10-13',
