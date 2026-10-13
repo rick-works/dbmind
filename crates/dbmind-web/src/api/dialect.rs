@@ -312,7 +312,11 @@ impl Dialect {
     }
 
     pub fn is_schema_aware(&self) -> bool {
-        matches!(self.key(), "postgresql" | "kingbase" | "sqlserver")
+        // 这里的名单必须与 YAML 的 `traits.schemaAware` 对齐 —— 以前它写死三个类型，
+        // 于是 oracle 明明在 YAML 里写着 schemaAware: true，行为却和 false 一样：
+        // 「库.模式」不拆、表/列都按会话默认 schema 取，用户在 system 会话里看不到
+        // DBMIND 的表（连表清单都会串成 SYS 的）。
+        matches!(self.key(), "postgresql" | "kingbase" | "sqlserver" | "oracle")
     }
 
     /// 这个类型的 `database` 是「服务器上的一个库」（服务器管着很多个、可以切换），
@@ -461,6 +465,13 @@ impl Dialect {
                     .to_string(),
             ),
             // 其余类型的 schemaLevel 在前端就是 'none'，树不会请求它；返回空数组是事实。
+            // Oracle：「库」那一层是服务名 / PDB，表实际挂在**用户（schema）**下面 ——
+            // 树里列 all_users，就是 Navicat 左侧那一列（SYS / SYSTEM / OUTLN / … 都在）。
+            // 不开这层的话，表清单只能看到当前会话 schema 自己的表：连 system 时看不到
+            // DBMIND.T_TEST 的字段。
+            "oracle" => Meta::Sql(
+                "select username as name from all_users order by username".to_string(),
+            ),
             _ => Meta::Absent,
         }
     }
@@ -504,7 +515,27 @@ impl Dialect {
                  where o.schema_id = schema_id({}) and o.type in ('U','V') order by o.name",
                 self.literal(schema)
             )),
-            _ => Meta::Unwritten,
+            // Oracle：`num_rows` 和 PG 的 reltuples 一样是**统计估算**（没 ANALYZE 过就是 null），
+            // 精确行数由前端拿 COUNT(*) 回填；表注释取自 all_tab_comments —— 结构编辑器的
+            // 「表注释」框正是从这个清单里读的，缺了它改完注释再打开又是空的。
+            // `rows` 在 Oracle 是保留字，别名加双引号（内核按大小写不敏感取值，键仍是 rows）。
+                        // Oracle：`num_rows` 与 PG 的 reltuples 同为**统计估算**（没 ANALYZE 过就是 null），
+            // 精确行数由前端拿 COUNT(*) 回填；表注释取自 all_tab_comments —— 结构编辑器的
+            // 「表注释」框正是从这个清单里读的，缺了它改完注释再打开又是空的。
+            // 不用 union all 拼「表 + 视图」：all_objects 一次就够，SQL 越短越不容易出岔子。
+                        // Oracle：表与视图一起列，一条 SQL 搞定（不用 union all —— 越短越不容易出岔子）。
+            // num_rows 是**统计估算**（没 ANALYZE 过就是 null），精确行数由前端 COUNT(*) 回填；
+            // 表注释取自 all_tab_comments：结构编辑器的「表注释」框就是从这个清单里读的。
+                        // Oracle：表 + 视图两段 union all 一起列。两个别名必须加双引号 —— `rows` 与 `comment`
+            // 在 Oracle 里都是保留字/关键字，不加引号会直接 ORA-00923（真机踩过，别改回去）。
+            // num_rows 是**统计估算**（没 ANALYZE 过就是 0/null），精确行数由前端 COUNT(*) 回填；
+            // 表注释取自 all_tab_comments：结构编辑器的「表注释」框就是从这个清单里读的。
+            "oracle" => Meta::Sql(format!(
+                "select t.table_name as name, t.num_rows as \"rows\", cc.comments as \"comment\" from all_tables t left join all_tab_comments cc on cc.owner = t.owner and cc.table_name = t.table_name where t.owner = {} union all select v.view_name as name, null as \"rows\", null as \"comment\" from all_views v where v.owner = {} order by name",
+                self.literal(&schema.to_uppercase()),
+                self.literal(&schema.to_uppercase())
+            )),
+_ => Meta::Unwritten,
         }
     }
 

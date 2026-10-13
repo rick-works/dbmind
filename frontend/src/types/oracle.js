@@ -6,7 +6,7 @@ export default {
   label: 'Oracle',
   category: 'RELATIONAL',
   noSql: false,
-  schemaLevel: 'none',
+  schemaLevel: 'schema',
   defaultSchema: '',
   quoteStyle: 'DOUBLE_QUOTE',
   logo: 'oracle.svg',
