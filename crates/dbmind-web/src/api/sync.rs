@@ -288,7 +288,26 @@ impl Side {
     /// 见 scope::resolve 的 catalog 分支），语句里的表名必须自己全限定
     /// （`internal.xms.sales`，Doris 认三段式）。MySQL/SQL Server 等类型的
     /// `db.table` / `db.schema.table` 全限定天然合法，行为不变。
-    fn scoped(&self, table: &str) -> String {
+    /// 同 [`Side::scoped`]，但**不加引号** —— 拼出来的名字是喂给 JDBC `getColumns` 这类
+    /// **元数据 API** 的，那边要裸的 schema/table，加了引号反而找不到表（同 compare.rs 的 qualified_meta）。
+    fn scoped_meta(&self, table: &str) -> String {
+        let prefix = if self.catalog {
+            self.scope.trim().to_string()
+        } else {
+            self.schema
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_default()
+        };
+        if prefix.is_empty() || table.contains('.') {
+            table.to_string()
+        } else {
+            format!("{prefix}.{table}")
+        }
+    }
+    fn scoped(&self, table: &str, dialect: Dialect) -> String {
         // 前缀规则（真机踩坑总结）：
         // - Doris（catalog 方言）：必须带 `catalog.库` 全限定 —— 它的连接级库不可用；
         // - **schema 方言（SQL Server/PG）绝不带库名**：影子连接已切到目标库，
@@ -305,10 +324,12 @@ impl Side {
                 .map(str::to_string)
                 .unwrap_or_default()
         };
+        // 标识符按方言加引号：保留字 / 含特殊字符的表名裸拼会直接语法错
+        //（目标侧本来就走 dialect.quote，这里补上，两侧口径一致）。
         if prefix.is_empty() || table.contains('.') {
-            table.to_string()
+            dialect.quote(table)
         } else {
-            format!("{prefix}.{table}")
+            dialect.quote(&format!("{prefix}.{table}"))
         }
     }
 }
@@ -338,7 +359,7 @@ async fn columns_of(
     let target = crate::api::scope::resolve(state, &side.conn, &side.scope).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
     let names = {
-        let qualified = side.scoped(table);
+        let qualified = side.scoped_meta(table);
         if qualified == table {
             vec![table.to_string()]
         } else {
@@ -556,7 +577,7 @@ fn select_base(side: &Side, table: &str, columns: &[String], dialect: Dialect) -
         .map(|name| dialect.quote(name))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("select {list} from {}", side.scoped(table))
+    format!("select {list} from {}", side.scoped(table, dialect))
 }
 
 /// 建表后把**源表的非主键索引**搬到目标（「建表包含索引」选项）。
@@ -582,7 +603,7 @@ async fn sync_indexes(
     let mut indexes: Vec<(String, bool, Vec<String>)> = Vec::new();
     let mysql_family = matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris");
     if mysql_family {
-        let show_sql = format!("show index from {}", src.scoped(table));
+        let show_sql = format!("show index from {}", src.scoped(table, Dialect::new(source_kind.kind.clone())));
         if let Ok(result) = run_sql_in(state, &src.conn, &src.scope, show_sql, 5000).await {
             // 大小写不敏感取列（有的驱动把列名折成大写）
             let cell = |row: &serde_json::Map<String, Value>, key: &str| -> Option<String> {

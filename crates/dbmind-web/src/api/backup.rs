@@ -1057,7 +1057,7 @@ async fn run_cli_backup(
     let file_path = path.display().to_string();
     let sqlite_file = record.config.file_path.clone().unwrap_or_default();
 
-    let mut command = cli_command(
+    let command = cli_command(
         kind,
         spec,
         false,
@@ -1121,7 +1121,7 @@ async fn run_cli_restore(
     .unwrap_or_default();
     let file_path = path.display().to_string();
     let sqlite_file = record.config.file_path.clone().unwrap_or_default();
-    let mut command = cli_command(
+    let command = cli_command(
         kind,
         spec,
         true,
