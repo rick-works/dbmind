@@ -7375,12 +7375,12 @@ const connTypeSummary = computed(() =>
   border-color: var(--ec, #8b95a3);
 }
 /* 环境色调：只给两个变量，颜色公式在上一条里（改色只改这里） */
-.env-corner-DEV { --ec: #3ddc97; --ec-bg: rgba(61,220,151,.16); }
-.env-corner-TEST { --ec: #f59e0b; --ec-bg: rgba(245,158,11,.16); }
-.env-corner-PROD { --ec: #ef4444; --ec-bg: rgba(239,68,68,.16); }
-.env-corner-STAGING { --ec: #a78bfa; --ec-bg: rgba(167,139,250,.16); }
-.env-corner-UAT { --ec: #06b6d4; --ec-bg: rgba(6,182,212,.16); }
-.env-corner-none { --ec: #8b95a3; --ec-bg: rgba(107,114,128,.16); }
+.env-corner-DEV { --ec: #3ddc97; --ec-bg: rgba(61,220,151, .12); }
+.env-corner-TEST { --ec: #f59e0b; --ec-bg: rgba(245,158,11, .12); }
+.env-corner-PROD { --ec: #ef4444; --ec-bg: rgba(239,68,68, .12); }
+.env-corner-STAGING { --ec: #a78bfa; --ec-bg: rgba(167,139,250, .12); }
+.env-corner-UAT { --ec: #06b6d4; --ec-bg: rgba(6,182,212, .12); }
+.env-corner-none { --ec: #8b95a3; --ec-bg: rgba(107,114,128, .12); }
 /* 环境文件夹节点：靠文字加粗 + 顶部分隔（通过 el-tree 第一层选择器） */
 .dc-tree :deep(.el-tree > .el-tree-node > .el-tree-node__content) {
   border-top: 1px solid var(--dc-border);
