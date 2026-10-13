@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.26": [
+        "Online update: only the newest installer is kept, older versions are cleaned up automatically (each upgrade used to leave one more behind in Downloads)",
+        "Backup and restore: large uploads are streamed to disk instead of buffered whole, a failed or cancelled restore no longer leaves a half-written file, and cancelling a command-line backup or restore really stops the process",
+        "Import and export: an oversized entry inside an xlsx now reports an error instead of silently blanking every text cell, and exported file names avoid Windows trailing dots or spaces and reserved names such as CON and NUL"
+    ],
     "v1.2.25": [
         "Data-view font sizes now really follow the settings: the home page card text (it used to ignore the setting) and whole-page sizes for table data / NoSQL / SQL results (grid, footer with elapsed time and row count, pager and toolbar together); the footer page-size text is dimmed to match its neighbours",
         "Rows per page now uses one shared list in the settings page and all three data grids (up to 100000; it used to be four different lists, and the grids stopped at 10000)",
