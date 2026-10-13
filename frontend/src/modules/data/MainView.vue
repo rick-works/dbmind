@@ -4294,7 +4294,7 @@ const calibrateDatabases = async (connId, data) => {
     if (connId === currentConnId.value) dbs.value = list
     const same = Array.isArray(prev) && prev.length === list.length && prev.every((v, i) => v === list[i])
     if (same) return
-    data.children = await dbListToDbNodes(connId, data.connType, list)
+    data.children = await dbOrSchemaNodes(connId, data.connType, list)
     treeRef.value?.updateKeyChildren(data.id, data.children)
     console.info('[展开] 库列表已按后端校准（' + (prev ? prev.length : 0) + ' → ' + list.length + '）')
   } catch (e) {
@@ -4410,10 +4410,10 @@ const lazyLoadRaw = async (node, resolve) => {
         // 会落到 internal 的同名库，两种形态在执行链路上等价。
         try {
           const list = await listDatabases(connId, only)
-          resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, list)))
+          resolve(finishLazyChildren(data, await dbOrSchemaNodes(connId, data.connType, list)))
         } catch (e) {
           showConnFail(errMsg(e, t('mv.loadDbsFailed')))
-          resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, [])))
+          resolve(finishLazyChildren(data, await dbOrSchemaNodes(connId, data.connType, [])))
         }
         return
       }
@@ -4435,7 +4435,7 @@ const lazyLoadRaw = async (node, resolve) => {
       // 否则空库连接会在占位节点与重新请求之间死循环
       if (connId in dbsByConn.value) {
         const cachedDbs = dbsByConn.value[connId]
-        resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, cachedDbs)))
+        resolve(finishLazyChildren(data, await dbOrSchemaNodes(connId, data.connType, cachedDbs)))
         return
         }
       // 持久缓存命中：**立刻**渲染（每个连接首次建连要 5~10 秒，展开过的连接不该再等一次），
@@ -4445,7 +4445,7 @@ const lazyLoadRaw = async (node, resolve) => {
         const hit = readSchemaCache('dbs:' + connId)
         if (hit && Array.isArray(hit.value)) {
           dbsByConn.value[connId] = hit.value
-          resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, hit.value)))
+          resolve(finishLazyChildren(data, await dbOrSchemaNodes(connId, data.connType, hit.value)))
           calibrateDatabases(connId, data)
           return
         }
@@ -4478,7 +4478,7 @@ const lazyLoadRaw = async (node, resolve) => {
           // 库列表已经在手上了，先画出来；表列表回来再补齐右侧。
           refreshAllTables().catch((e) => console.warn('[展开] 表列表后台加载失败', e))
           }
-        data.children = await dbListToDbNodes(connId, data.connType, dbList)
+        data.children = await dbOrSchemaNodes(connId, data.connType, dbList)
         // 一次 resolve 真内容（不再有"先占位、后台替换"那一套）：
         // 占位原本是为了"展开即时生效"，而现在展开由**拿到结果**决定。
         resolve(data.children)
@@ -4514,7 +4514,7 @@ const lazyLoadRaw = async (node, resolve) => {
         showConnFail(errMsg(e, t('mv.loadDbsFailed')))
         return []
       })
-      resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, list, data.catalog)))
+      resolve(finishLazyChildren(data, await dbOrSchemaNodes(connId, data.connType, list, data.catalog)))
     } else if (data.kind === 'db') {
       resolve(finishLazyChildren(data, await buildDbDetailNodes(data)))
     } else if (data.kind === 'schema') {
@@ -7035,7 +7035,7 @@ const catalogCtxRefresh = async () => {
   }
   try {
     const list = await listDatabases(String(d.connId), d.catalog)
-    const children = await dbListToDbNodes(String(d.connId), d.connType, list, d.catalog)
+    const children = await dbOrSchemaNodes(String(d.connId), d.connType, list, d.catalog)
     d.children = children
     treeRef.value?.updateKeyChildren(d.id, children)
     ElMessage.success(t('mv.refreshed'))
