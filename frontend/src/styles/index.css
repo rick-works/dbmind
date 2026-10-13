@@ -1524,8 +1524,20 @@ html[data-theme="dark"] .el-alert--success.is-light {
 .table-data-view .el-table .cell,
 .sql-query-view .el-table .cell,
 .table-edit-page .el-table .cell { font-size: inherit; }
+/* 自绘表格的**单元格**往往自己写了字号（有的还写死在 th/td 上），只在 <table> 上设字号是继承不下去的 ——
+   这里把单元格改回"继承表格"，于是「数据视图表格」一处生效就够。 */
+.data-table-wrap .data-table th,
+.data-table-wrap .data-table td { font-size: inherit; }
 /* ---- 「设置 → 界面尺寸 → 数据视图表格」：接住**自绘表格** ----
-   表数据 / SQL 结果 / NoSQL 这几个视图的网格是自绘的 <table class="data-table">（不是 Element 的 .el-table），
-   所以上面那条 .el-table 规则管不到它们；这里用两级选择器（压过组件内单类名规则）让表格字号跟随设置。
-   --grid-fs 由各视图根节点注入（值就是 var(--dc-data-fs)），这里再兜一层，防止某个视图忘了注入。 */
-.data-table-wrap .data-table { font-size: var(--grid-fs, var(--dc-data-fs, 14px)); }
+   表数据 / SQL 结果 / NoSQL 这三个网格是自绘的 <table class="data-table">（不是 Element 的 .el-table），
+   而且组件里把字号**写死在 .data-table / th / td 上**，加上 Vue 作用域样式（[data-v-xxx]）把优先级拉到和
+   普通两级选择器打平——组件样式又是在本文件**之后**注入的，所以不打 !important 永远盖不住。
+   作用域仅限 `.data-table-wrap` 里的表格，也就是这三个数据视图，不会波及别处。 */
+.data-table-wrap .data-table {
+  font-size: var(--grid-fs, var(--dc-data-fs, 14px)) !important;
+}
+/* 单元格跟表格走（组件里若有 th/td 的字号，一并让位） */
+.data-table-wrap .data-table th,
+.data-table-wrap .data-table td {
+  font-size: inherit !important;
+}
