@@ -55,6 +55,42 @@ use dbmind_core::ConnectionRecord;
 use crate::AppState;
 use error::{XError, XResult};
 
+/// 把「上游/用户给的名字」变成可以安全落盘的文件名。
+///
+/// 备份与导出共用这一份 —— 以前两处各写一遍，修了一处忘了另一处（真发生过）。
+///
+/// 除了替换分隔符与 `: * ? " < > |`，还要处理两件 Windows 上真会咬人的事：
+/// - 结尾的**点和空格**会被静默吃掉：写下去的名字和这里返回的不一致，之后按这名字再找就找不到；
+/// - `CON / PRN / AUX / NUL / COM1 / LPT1` 这些**设备名**会直接写失败（前面加下划线规避）。
+pub(crate) fn safe_file_name(name: &str, fallback: &str) -> String {
+    let cleaned: String = name
+        .chars()
+        .map(|c| {
+            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = cleaned.trim_end_matches(['.', ' ']).to_string();
+    let kept = if trimmed.trim().is_empty() {
+        fallback.to_string()
+    } else {
+        trimmed
+    };
+    let upper = kept.to_ascii_uppercase();
+    let head = upper.split('.').next().unwrap_or("");
+    let reserved = matches!(head, "CON" | "PRN" | "AUX" | "NUL")
+        || (head.len() == 4
+            && (head.starts_with("COM") || head.starts_with("LPT"))
+            && head.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        format!("_{kept}")
+    } else {
+        kept
+    }
+}
 /// 把阻塞的内核调用挪到 blocking 线程池（内核是 SQLite + 文件 IO + 子进程，全是阻塞的）。
 pub(crate) async fn blocking<T, F>(task: F) -> XResult<T>
 where

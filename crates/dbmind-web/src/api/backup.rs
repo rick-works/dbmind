@@ -923,25 +923,8 @@ pub async fn start(
 }
 
 fn safe_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
-        .collect();
-    // Windows 落盘会把**结尾的点和空格**静默吃掉（写下去的名字和这里返回的不一致，后面按这名字再找就找不到），
-    // 设备名（CON/PRN/NUL…）会直接写失败 —— 一并规避。落盘名本来还带 stamp_ 前缀，这里只是兜住极端输入。
-    let trimmed = cleaned.trim_end_matches(['.', ' ']).to_string();
-    let trimmed = if trimmed.trim().is_empty() { "backup".to_string() } else { trimmed };
-    let upper = trimmed.to_ascii_uppercase();
-    let base = upper.split('.').next().unwrap_or("");
-    let reserved = matches!(base, "CON" | "PRN" | "AUX" | "NUL")
-        || (base.len() == 4
-            && (base.starts_with("COM") || base.starts_with("LPT"))
-            && base.as_bytes()[3].is_ascii_digit());
-    if reserved {
-        format!("_{trimmed}")
-    } else {
-        trimmed
-    }
+    // 实现见 crate::api::safe_file_name（备份与导出共用一份，避免两处逻辑再漂移）
+    crate::api::safe_file_name(name, "backup")
 }
 
 /// 拼一条命令行工具的调用（备份 / 还原共用）。
@@ -1614,47 +1597,63 @@ pub async fn restore_start(
 ) -> XResult<Json<Value>> {
     let mut connection_id = String::new();
     let mut database = String::new();
-    let mut file_name = String::new();
-    let mut bytes: Option<Vec<u8>> = None;
-    while let Some(field) = multipart
+    // **边收边写**：上传的备份动辄几个 GB，先在内存里攒齐再落盘会直接把内存吃光、
+    // 首字节也要等到整个文件传完。这里收到一块就写一块（异步 IO，也不占 tokio worker）。
+    let mut saved: Option<(PathBuf, u64)> = None;
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|e| XError::bad_request(format!("解析上传表单失败：{e}")))?
     {
         let name = field.name().unwrap_or_default().to_string();
         let source_name = field.file_name().map(str::to_string);
-        let data = field
-            .bytes()
-            .await
-            .map_err(|e| XError::bad_request(format!("读取上传内容失败：{e}")))?;
-        match name.as_str() {
-            "file" => {
-                file_name = source_name.unwrap_or_default();
-                bytes = Some(data.to_vec());
+        if name == "file" {
+            let file_name = source_name.unwrap_or_default();
+            let dir = dbmind_core::paths::work_dir().join("restore");
+            dbmind_core::paths::ensure_dir(&dir)?;
+            let path = dir.join(format!(
+                "{}_{}",
+                tasks::stamp(),
+                safe_name(if file_name.is_empty() { "upload.sql" } else { &file_name })
+            ));
+            let mut file = tokio::fs::File::create(&path)
+                .await
+                .map_err(|e| XError::internal(format!("保存上传文件失败：{e}")))?;
+            use tokio::io::AsyncWriteExt;
+            let mut total: u64 = 0;
+            while let Some(chunk) = field
+                .chunk()
+                .await
+                .map_err(|e| XError::bad_request(format!("读取上传内容失败：{e}")))?
+            {
+                file.write_all(&chunk)
+                    .await
+                    .map_err(|e| XError::internal(format!("保存上传文件失败：{e}")))?;
+                total += chunk.len() as u64;
             }
-            "connectionId" => connection_id = String::from_utf8_lossy(&data).trim().to_string(),
-            "database" => database = String::from_utf8_lossy(&data).trim().to_string(),
-            _ => {}
+            file.flush()
+                .await
+                .map_err(|e| XError::internal(format!("保存上传文件失败：{e}")))?;
+            saved = Some((path, total));
+        } else {
+            let data = field
+                .bytes()
+                .await
+                .map_err(|e| XError::bad_request(format!("读取上传内容失败：{e}")))?;
+            match name.as_str() {
+                "connectionId" => connection_id = String::from_utf8_lossy(&data).trim().to_string(),
+                "database" => database = String::from_utf8_lossy(&data).trim().to_string(),
+                _ => {}
+            }
         }
     }
-    let bytes = bytes.ok_or_else(|| XError::bad_request("没有收到上传的备份文件（字段名应为 file）"))?;
-    if bytes.is_empty() {
+    let (path, total) = saved
+        .ok_or_else(|| XError::bad_request("没有收到上传的备份文件（字段名应为 file）"))?;
+    if total == 0 {
+        // 空文件别留在产物目录里
+        let _ = tokio::fs::remove_file(&path).await;
         return Err(XError::bad_request("上传的备份文件是空的"));
     }
-    // 落盘再还原：还原过程要多次读这个文件，留在内存里对大备份不合适
-    let dir = dbmind_core::paths::work_dir().join("restore");
-    dbmind_core::paths::ensure_dir(&dir)?;
-    let path = dir.join(format!(
-        "{}_{}",
-        tasks::stamp(),
-        safe_name(if file_name.is_empty() { "upload.sql" } else { &file_name })
-    ));
-    // 上传的备份可能是几个 GB：整块写盘要走阻塞线程池，别占着 tokio worker。
-    let write_path = path.clone();
-    tokio::task::spawn_blocking(move || std::fs::write(&write_path, &bytes))
-        .await
-        .map_err(|e| XError::internal(format!("保存上传文件失败：工作线程异常：{e}")))?
-        .map_err(|e| XError::internal(format!("保存上传文件失败：{e}")))?;
     spawn_restore(
         &state,
         connection_id,

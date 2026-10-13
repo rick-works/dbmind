@@ -1511,15 +1511,8 @@ where
 }
 
 fn safe_file_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
-        .collect();
-    if cleaned.trim().is_empty() {
-        "table".to_string()
-    } else {
-        cleaned
-    }
+    // 与备份共用一份实现（见 crate::api::safe_file_name）；导出这边的兜底名是 table
+    crate::api::safe_file_name(name, "table")
 }
 
 fn write_text(path: &FsPath, text: &str) -> XResult<()> {
