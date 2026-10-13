@@ -422,7 +422,9 @@
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, h } from 'vue'
-import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+// 安全拦截的统一提示（右上角通知 + 「去设置」按钮）：与拦截器、其它页面共用同一套
+import { isSafetyBlock, showSafetyNotice } from '../../utils/safetyNotice'
 import { t } from '../../utils/i18n'
 // 字段表 / 索引表的行高跟随设置页「结果表格行高」（--grid-row-h 由模板上的 style 注入）
 import { editorSettingsLive } from '../../utils/settings'
@@ -2143,39 +2145,10 @@ const save = async () => {
     await load()
   } catch (e) {
     const detail = String(e?.message || e)
-    // 「生产库保护」把这次修改拦下了：原来只弹一句红字，用户不知道去哪儿放开。
-    // 这里给一条**能直接走通**的路：通知里带「去设置」链接，直达 设置 → 安全与会话。
-    // （后端那句提示是固定中文，与界面语言无关 —— 按它判定最稳，不看界面文案。）
-    if (detail.includes('生产保护') || e?.code === 'DBMIND-SAFETY-0003') {
-      try {
-        ElNotification({
-          type: 'warning',
-          title: t('tdet.prodBlockedTitle'),
-          duration: 12000,
-          // 用**行内样式**而不是 class：ElNotification 渲染在 body 下，本组件的 scoped 样式未必命中
-          message: h('div', { style: 'max-width:460px;line-height:1.5' }, [
-            h('div', detail),
-            // 放开路径：一行标题 + 两条分行（原来一整句挤一起，读起来费劲）
-            h('div', { style: 'margin-top:9px;font-size:12px;opacity:.75' }, [
-              h('div', t('tdet.prodBlockedHintTitle')),
-              h('div', { style: 'margin-top:3px' }, '· ' + t('tdet.prodBlockedPath1')),
-              h('div', { style: 'margin-top:1px' }, '· ' + t('tdet.prodBlockedPath2'))
-            ]),
-            // 「去设置」做成**蓝色按钮**（原来是个随通知主题的链接色，在黄色通知里显脏）
-            h('button', {
-              type: 'button',
-              style:
-                'margin-top:10px;padding:4px 12px;border:none;border-radius:6px;cursor:pointer;' +
-                'font-size:12px;font-weight:600;color:#fff;background:var(--el-color-primary,#409eff)',
-              onClick: openSafetySettings
-            }, t('tdet.prodBlockedGo'))
-          ])
-        })
-      } catch (err) {
-        // 兜底：通知若因任何原因起不来（样式缺失、VNode 出错…），也必须让用户看到一句话 ——
-        // 这类"被拦下却毫无提示"是用户最难自查的（他以为点了没反应）。
-        ElMessage.error(t('tdet.saveFailed', { detail }))
-      }
+    // 安全拦截（生产保护 / 只读连接）：统一走 utils/safetyNotice —— 右上角通知 + 「去设置」按钮。
+    // 同一函数也接在 api 拦截器上，所以别的页面遇到同类拦截同样从这个位置弹。
+    if (isSafetyBlock(detail)) {
+      showSafetyNotice(detail)
     } else {
       ElMessage.error(t('tdet.saveFailed', { detail }))
     }

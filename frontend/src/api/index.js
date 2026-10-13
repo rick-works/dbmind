@@ -17,6 +17,9 @@ if (localToken) {
   })
 }
 
+// 安全拦截（生产保护 / 只读连接 / AI 只读）的统一提示：见 utils/safetyNotice.js
+import { isSafetyBlock, showSafetyNotice } from '../utils/safetyNotice'
+
 http.interceptors.response.use(
   (response) => response,
   (error) => {
@@ -45,6 +48,14 @@ http.interceptors.response.use(
       } else {
         error.message = t('api.requestFailed', { status: error.response.status })
       }
+    }
+    // 安全拦截（生产保护 / 只读连接 / AI 只读）：**在这里统一弹右上角通知**（带「去设置」按钮），
+    // 并标记 `safetyNotified` —— 各调用方据此不再弹一条重复的红字提示。
+    // 放在拦截器里，是为了让"任何页面"的拦截提示都在同一个位置、同一套样式
+    // （用户要求：类似警告类的消息框都在右上角这个位置弹，别的地方有也一起）。
+    if (isSafetyBlock(error.message)) {
+      showSafetyNotice(error.message)
+      error.safetyNotified = true
     }
     // 「AI 服务未配置」这类引导性错误：界面会弹确认框/链接引导去设置，
     // 拦截器里再打一行 error 级堆栈纯属控制台噪音 —— 降为 debug。

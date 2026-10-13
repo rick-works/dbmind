@@ -911,7 +911,8 @@ const loadSegment = async (item, p, size) => {
     // 总数未知时异步补齐（后端已不同步 COUNT，见 fetchCountFor）
     fetchCountFor(result.value, item.segmentSql)
   } catch (e) {
-    if (!cancelRequested.value) ElMessage.error(e?.message || t('common.unknownError'))
+    // 安全拦截（生产保护 / 只读连接）已在 api 拦截器里统一弹出右上角通知，这里不再叠一条红字
+    if (!cancelRequested.value && !e?.safetyNotified) ElMessage.error(e?.message || t('common.unknownError'))
   } finally {
     cancelController = null
     running.value = false

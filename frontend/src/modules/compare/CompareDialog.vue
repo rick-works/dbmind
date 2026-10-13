@@ -767,7 +767,7 @@ const run = async () => {
     // **任务开始后收起向导**：进度窗已在最前（append-to-body），后面的向导框留着挡视线
     emit('update:modelValue', false)
   } catch (e) {
-    ElMessage.error(e.message)
+    if (!e?.safetyNotified) ElMessage.error(e.message)
     loading.value = false
     showProgressDlg.value = false
   }
@@ -852,7 +852,7 @@ const stopRun = async () => {
     }, 15000)
   } catch (e) {
     stopping.value = false
-    ElMessage.error(e.message)
+    if (!e?.safetyNotified) ElMessage.error(e.message)
   }
 }
 
