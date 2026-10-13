@@ -167,7 +167,7 @@
 
 
           <div class="actions">
-            <el-button text @click="resetGeneral">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetGeneral">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -222,7 +222,7 @@
 
           <div class="actions">
             <el-button type="primary" :icon="Check" @click="saveSafety">{{ $t('settings.safety.save') }}</el-button>
-            <el-button text @click="resetSafety">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetSafety">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -262,7 +262,7 @@
 
           <div class="actions">
             <el-button type="primary" :icon="Check" @click="saveMcp">{{ $t('settings.mcp.save') }}</el-button>
-            <el-button text @click="resetMcp">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetMcp">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -344,7 +344,7 @@
             <el-button type="primary" :loading="saving" @click="save">
               <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.ai.saveConfig') }}
             </el-button>
-            <el-button text @click="resetAi">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetAi">{{ $t('settings.editor.reset') }}</el-button>
           </div>
 
           <!-- 用量统计：它属于「模型服务用了多少」，放在这里比放在知识库里合适 -->
@@ -449,7 +449,7 @@
           </el-form>
 
           <div class="actions">
-            <el-button text @click="resetEditor">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetEditor">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -661,7 +661,7 @@
           </div>
 
           <div class="actions">
-            <el-button text @click="resetEditor">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetEditor">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -713,10 +713,10 @@
             <el-button type="primary" @click="saveQuery">
               <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.query.save') }}
             </el-button>
-            <el-button text @click="resetQuery">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetQuery">{{ $t('settings.editor.reset') }}</el-button>
             <!-- 维护动作：历史与结构缓存都在无限增长/有有效期，总要有个手动出口 -->
-            <el-button type="danger" text :icon="Delete" @click="onClearHistory">{{ $t('settings.query.clearHistory') }}</el-button>
-            <el-button text :icon="Refresh" @click="onRefreshCache">{{ $t('settings.query.refreshCache') }}</el-button>
+            <el-button type="danger" :icon="Delete" @click="onClearHistory">{{ $t('settings.query.clearHistory') }}</el-button>
+            <el-button :icon="Refresh" @click="onRefreshCache">{{ $t('settings.query.refreshCache') }}</el-button>
           </div>
         </div>
 
@@ -758,7 +758,7 @@
             <el-button type="primary" @click="saveDriver">
             <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.driver.saveMirror') }}
             </el-button>
-            <el-button text @click="resetDriver">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetDriver">{{ $t('settings.editor.reset') }}</el-button>
             <el-button @click="loadDriverList" :loading="driverLoading">
             <el-icon style="margin-right:4px"><Refresh /></el-icon>{{ $t('common.refresh') }}
             </el-button>
@@ -839,7 +839,7 @@
             <el-button type="primary" :loading="savingPath" @click="savePaths">
               <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.paths.save') }}
             </el-button>
-            <el-button text @click="resetDataDir">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetDataDir">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
@@ -884,7 +884,7 @@
               <el-icon v-if="logLevel === lv.value" class="theme-opt-check"><CircleCheck /></el-icon>
             </div>
           <div class="actions" style="margin-top:10px">
-            <el-button text @click="resetLogLevel">{{ $t('settings.editor.reset') }}</el-button>
+            <el-button @click="resetLogLevel">{{ $t('settings.editor.reset') }}</el-button>
           </div>
           </div>
 
@@ -958,6 +958,7 @@
             <div class="scb-head">
               <span class="scb-title">{{ $t('shortcut.bindings') }}</span>
               <span class="flex-spacer"></span>
+              <el-button :disabled="!hasCustomShortcuts" @click="resetAllShortcuts">{{ $t('settings.editor.reset') }}</el-button>
             </div>
             <div v-for="g in shortcutGroups" :key="g.key" class="scb-group">
               <!-- 组名与条目文案都在字典里，键名由 id 派生（见 utils/shortcuts.js 头注释） -->
@@ -986,10 +987,6 @@
                 </div>
               </div>
             </div>
-          </div>
-
-          <div class="actions">
-            <el-button text :disabled="!hasCustomShortcuts" @click="resetAllShortcuts">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
 
