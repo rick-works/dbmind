@@ -399,6 +399,7 @@ const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStruct
 
 // 任务状态
 let pollTimer = null
+let tickTimer = null
 const taskId = ref('')
 const taskRunning = ref(false)
 
@@ -479,7 +480,8 @@ const onRowsFetched = (read, written, running) => {
   fetchAt.value = now
 }
 const runningTick = ref(0)
-setInterval(() => { if (taskRunning.value) runningTick.value++ }, 100)
+// 句柄必须存下来：这个 100ms 心跳跟着组件活，不清理的话每次打开「数据传输」都留一个孤儿定时器
+tickTimer = setInterval(() => { if (taskRunning.value) runningTick.value++ }, 100)
 const extrapolate = (base, rate) => {
   runningTick.value
   if (!taskRunning.value || !fetchAt.value) return base
@@ -1036,6 +1038,8 @@ const stopPolling = () => {
 }
 
 onBeforeUnmount(() => {
+  // 心跳定时器一并停掉（见它的声明处）
+  if (tickTimer) { clearInterval(tickTimer); tickTimer = null }
   stopPolling()
   // 兜底定时器一起清掉：组件都没了，它再去改状态只会报"操作已卸载的组件"
   if (stopGuard) { clearTimeout(stopGuard); stopGuard = null }

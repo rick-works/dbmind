@@ -400,7 +400,12 @@ fn prune_old_installers(current: &str) {
 pub async fn check() -> Json<Value> {
     let current = env!("CARGO_PKG_VERSION").to_string();
     // 顺手把历史安装包清掉（详见 prune_old_installers 的注释）
-    prune_old_installers(&current);
+    {
+        // 这是同步文件 IO（read_dir + remove_file），放到阻塞线程池里跑：
+        // 直接写在 async 里会占住一个 tokio worker（本函数每次启动都会走到）。
+        let cur = current.clone();
+        let _ = tokio::task::spawn_blocking(move || prune_old_installers(&cur)).await;
+    }
     match fetch_latest().await {
         Ok(v) => {
             let latest = v["tag_name"]

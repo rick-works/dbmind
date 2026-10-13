@@ -1409,7 +1409,7 @@ html[data-theme="light"] .el-loading-mask {
    尺寸与 30px 图标钮完全对齐。
    字重写死 400（常规，不加粗）：这一排都是线性图标，两三个加粗的字会明显比图标重
    （用户反馈）。**显式写**而不是删掉这行 —— 上面还有继承来的字重，删了就又变粗了。 */
-.top-lang-btn.top-lang-btn { width: 30px; height: 30px; font-size: 12.5px; font-weight: 400; color: var(--dc-text); }
+.top-lang-btn.top-lang-btn { width: 30px; height: 30px; font-size: calc(var(--dc-nav-fs, 14px) - 1.5px); font-weight: 400; color: var(--dc-text); }
 .top-lang-btn.top-lang-btn:hover { color: var(--dc-text-strong); }
 /* 顶栏导航要占满宽度，右侧那组才能真正贴到最右（原来 .top-nav 只有内容宽，margin-left:auto 无从发力） */
 .top-nav.top-nav { flex: 1 1 auto; min-width: 0; }
