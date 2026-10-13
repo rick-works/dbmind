@@ -378,23 +378,54 @@ fn installer_version_of(name: &str) -> Option<String> {
     None
 }
 
-/// 清理**已经用不上**的安装包：版本 ≤ 当前运行版本的都是历史残留（本次更新已经装上了）。
+/// 清理历史安装包：**只留最新的那一版**，其余旧版本一律删掉。
 ///
 /// 为什么放在 check() 里：它是每次启动检查的必经之处，幂等，而且不需要再多一个接口。
 /// 只动「下载」目录里**文件名符合本应用安装包命名**的文件 —— 用户其它下载一律不碰。
-/// 比当前版本**新**的包一定留着：安装万一没生效（装到别处 / 被系统拦下），那份包是唯一的自救线索。
+///
+/// 三种情况分开处理（口径见 `pick_installers_to_prune`，那边有单测）：
+/// - 最高那一版（可能同时有 exe / msi / dmg 几个文件）**留着** —— 更新没装上时它是唯一的自救线索；
+/// - 比它旧的一律删（以前的口径是"≤ 当前运行版本才删"，结果升到新版后，旧的那一份会一直躺着）；
+/// - 而如果连最高那一版都不比当前运行版本新（例如只躺着 1.2.20、应用已经是 1.2.25），整批都删 ——
+///   它既不是最新版，也救不了任何东西，留着只是白占几十兆内存盘。
 fn prune_old_installers(current: &str) {
     let dir = resolve_dir(None);
     let Ok(rd) = std::fs::read_dir(&dir) else { return };
+    let mut found: Vec<(String, String)> = Vec::new();
     for entry in rd.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         let Some(ver) = installer_version_of(&name) else { continue };
-        if version_gt(&ver, current) { continue }
-        let path = entry.path();
+        found.push((name, ver));
+    }
+    for name in pick_installers_to_prune(&found, current) {
+        let path = dir.join(&name);
         if std::fs::remove_file(&path).is_ok() {
             tracing::info!(target: "dbmind::update", file = %path.display(), "已清理历史安装包");
         }
     }
+}
+
+/// 该删哪些安装包（纯函数：删的是用户「下载」目录里的真文件，口径得能被单测盯住）。
+///
+/// `found` 是「文件名 → 版本号」清单，返回该删的文件名。
+fn pick_installers_to_prune(found: &[(String, String)], current: &str) -> Vec<String> {
+    let mut newest: Option<&str> = None;
+    for (_, ver) in found {
+        if newest.map(|n| version_gt(ver, n)).unwrap_or(true) {
+            newest = Some(ver);
+        }
+    }
+    let Some(newest) = newest else { return Vec::new() };
+    if !version_gt(newest, current) {
+        // 最高版本也不比当前运行版本新：整批都是历史残留
+        return found.iter().map(|(name, _)| name.clone()).collect();
+    }
+    // 只留最高版本（同版本的多个文件都留），其余旧版本全删
+    found
+        .iter()
+        .filter(|(_, ver)| ver.as_str() != newest)
+        .map(|(name, _)| name.clone())
+        .collect()
 }
 
 pub async fn check() -> Json<Value> {
@@ -1750,5 +1781,42 @@ mod tests {
         let fs_ = fresh.to_string_lossy().to_string();
         assert_eq!(resolve_dir(Some(&fs_)), fresh);
         let _ = std::fs::remove_dir_all(&fresh);
+    }
+
+    /// 安装包清理口径：**只留最高版本**，其余旧版本全删。
+    ///
+    /// 以前是"版本 ≤ 当前运行版本才删"，于是升到新版之后，上一版那份包会一直留着；
+    /// 现在只留最高的一版（"更新没装上"时的自救线索），旧的全清。
+    #[test]
+    fn prune_keeps_only_newest_installer() {
+        let f = |n: &str, v: &str| (n.to_string(), v.to_string());
+        let found = vec![
+            f("DBmind_1.2.20_x64-setup.exe", "1.2.20"),
+            f("DBmind_1.2.25_x64-setup.exe", "1.2.25"),
+            f("DBmind_1.2.26_x64-setup.exe", "1.2.26"),
+            f("DBmind_1.2.26_aarch64.dmg", "1.2.26"),
+        ];
+        // 比当前运行的更新：只删非最高的；同版本的两个文件都留
+        assert_eq!(
+            pick_installers_to_prune(&found, "1.2.25"),
+            vec![
+                "DBmind_1.2.20_x64-setup.exe".to_string(),
+                "DBmind_1.2.25_x64-setup.exe".to_string(),
+            ]
+        );
+        // 最高版本就是当前版本（刚装完）：不留
+        let same = vec![f("DBmind_1.2.25_x64-setup.exe", "1.2.25")];
+        assert_eq!(
+            pick_installers_to_prune(&same, "1.2.25"),
+            vec!["DBmind_1.2.25_x64-setup.exe".to_string()]
+        );
+        // 只有更旧的包躺着：整批删
+        let old = vec![f("DBmind_1.2.20_x64-setup.exe", "1.2.20")];
+        assert_eq!(
+            pick_installers_to_prune(&old, "1.2.25"),
+            vec!["DBmind_1.2.20_x64-setup.exe".to_string()]
+        );
+        // 一个安装包都没有：什么都不删
+        assert!(pick_installers_to_prune(&[], "1.2.25").is_empty());
     }
 }
