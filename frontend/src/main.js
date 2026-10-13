@@ -1,4 +1,6 @@
 import { createApp } from 'vue'
+// 安全拦截（只读 / 生产保护）统一走右上角通知：中间的 ElMessage 出口处过滤掉重复那条
+import { consumeSafetyMessage } from './utils/safetyNotice'
 // ==================== Element Plus 按需引入 ====================
 // 不再全量 app.use(ElementPlus) 与 dist/index.css：仅注册实际用到的组件与其样式，
 // 打包体积显著减小（element chunk 1.17MB → 明显更小）。
@@ -207,6 +209,10 @@ const mergeMsgOpts = (orig, msg, options, defaults) => {
 const origError = ElMessage.error
 ElMessage.error = (msg, options) => {
   const raw = toErrText(msg)
+  // 只读 / 生产保护这类**安全拦截**只留在右上角（那条通知带「去修改数据源」），
+  // 中间不再蹦一条「保存失败：…被标记为只读…」——同一件事说两遍，中间那条还挡着表格（用户反馈）。
+  // 注意：要判断的是整条文案里是否含拦截原话（调用方常带「保存失败：」前缀）。
+  if (consumeSafetyMessage(raw)) return
   // Error 对象额外打印完整堆栈到控制台，便于定位根因（界面仍给出行信息）
   if (msg instanceof Error && msg.stack) console.error('[DBmind 错误详情]', msg.stack)
   // 含换行或内容较长时按 HTML 渲染，完整展示多行细节

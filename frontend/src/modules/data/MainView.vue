@@ -7334,32 +7334,36 @@ const connTypeSummary = computed(() =>
 /* logo 容器：承载角标 */
 .logo-wrap { position: relative; display: inline-flex; flex-shrink: 0; }
 
-/* 「只读」徽标：跟在连接名后面（环境角标之前）。
-   warning 色系 —— 它是一句**提醒**（这条连接写不进去），不是分类标签。 */
-.ro-badge {
-  flex: none; display: inline-flex; align-items: center;
-  font-size: 10px; line-height: 1; padding: 2px 4px; border-radius: 4px;
-  color: var(--dc-warning); background: var(--dc-warning-wash);
-  border: 1px solid var(--dc-warning);
-}
-
-/* 环境角标：与文字水平居中 */
+/* 连接名后面的两个角标：「环境」（开发 / 测试 / 生产 …）与「只读」。
+   两者**共用同一套度量与字体**，只差颜色 —— 颜色各自表达含义（环境是分类，只读是提醒）。
+   用户反馈：它们原先长得像两种东西（只读：10px、无固定高、圆角 4；环境：11px、加粗、高 13、圆角 3，
+   连字重都不一样），一眼看过去不像一组。
+   现在收敛到同一组数值 —— **改其中一个就要连另一个一起改**。 */
+.ro-badge,
 .env-corner {
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   min-width: 15px;
-  height: 13px;
-  padding: 0 4px;
-  margin-left: 3px;
-  font-size: 11px;
-  font-weight: 700;
+  height: 15px;
+  padding: 0 5px;
+  margin-left: 4px;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.2px;
-  border-radius: 3px;
+  letter-spacing: 0;
+  border-radius: 4px;
+  border: 1px solid transparent;
   vertical-align: middle;
-  flex-shrink: 0;
   user-select: none;
+}
+/* 「只读」：warning 色系 —— 它是一句**提醒**（这条连接写不进去），不是分类标签 */
+.ro-badge {
+  color: var(--dc-warning);
+  background: var(--dc-warning-wash);
+  border-color: var(--dc-warning);
 }
 .env-corner-DEV { background: rgba(61,220,151,.15); color: #3ddc97; border: 1px solid rgba(61,220,151,.45); }
 .env-corner-TEST { background: rgba(245,158,11,.15); color: #f59e0b; border: 1px solid rgba(245,158,11,.45); }

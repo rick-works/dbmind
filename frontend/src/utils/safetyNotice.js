@@ -57,6 +57,29 @@ export const setSafetyConnResolver = (fn) => {
   connResolver = typeof fn === 'function' ? fn : (() => '')
 }
 
+// 最近一次"安全拦截"提示的时间：给 ElMessage 出口过滤用（见 consumeSafetyMessage）
+let lastSafetyAt = 0
+
+/**
+ * 给「中间那条提示」把关：安全拦截只留在右上角。
+ *
+ * 起因（用户反馈）：只读/生产拦截时，右上角弹了通知，**中间还同时蹦一条**
+ * 「保存失败：连接「…」被标记为只读，WRITE 语句已被拒绝」—— 同一件事说两遍，中间那条还挡着表格。
+ * 拦截的调用方遍布各处（数据编辑保存、导入、结构页、AI 面板…），而且它们**判断不出**"这是安全拦截"
+ * （拿到的只是后端那句原文）—— 与其一个个改调用方，不如在 `ElMessage.error` 这个**唯一出口**处理：
+ * 是安全拦截就丢掉中间那条；若刚才没人弹过右上角，就补弹一次（保证不漏提示）。
+ *
+ * 返回 true = 这条已经由右上角负责，调用方不要再显示中间那条。
+ */
+export const consumeSafetyMessage = (text) => {
+  if (!isSafetyBlock(text)) return false
+  const now = Date.now()
+  // 6 秒内已经弹过右上角通知（拦截器的、或重命名弹窗的）→ 直接丢掉，不重复说
+  if (now - lastSafetyAt > 6000) showSafetyNotice(text)
+  else lastSafetyAt = now
+  return true
+}
+
 // 同一句话短时间内只弹一次：一次操作可能在几处各报一次（结果面板 + 提示），叠三个通知很吵
 let lastShown = { text: '', at: 0 }
 
@@ -81,6 +104,9 @@ export const showSafetyNotice = (detail, opts = {}) => {
   // 它长得跟真按钮一模一样，用户点下去毫无反应（用户反馈「点这个没弹出、没反应」）。
   // 我的自动化探针当时用 tn.click()，所以
   const now = Date.now()
+  // 记在案：稍后同一个拦截可能又被调用方用 ElMessage 报一遍（「保存失败：…被标记为只读」），
+  // 出口过滤据此把那条中间提示丢掉（见 consumeSafetyMessage）。
+  lastSafetyAt = now
   if (text && text === lastShown.text && now - lastShown.at < 4000) return
   lastShown = { text, at: now }
   try {
