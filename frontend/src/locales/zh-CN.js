@@ -2464,6 +2464,10 @@ export default {
   'tdet.prodAlterBody': '这条连接标记为「生产环境」，即将执行结构变更：\n{summary}\n\n确认继续吗？',
   'tdet.prodAlterConfirm': '确认执行',
   'tdet.noChangesToSave': '当前没有需要保存的修改',
+  // 被「生产库保护」拦下时：不是一句死路提示，给一条能直接走通的路（前端会弹带「去设置」的通知）
+  'tdet.prodBlockedTitle': '被「生产库保护」拦下了',
+  'tdet.prodBlockedHint': '放开限制的路径：设置 → 安全与会话 → 关掉「生产库保护」；或者把该数据源的环境从「生产」改成「开发」。',
+  'tdet.prodBlockedGo': '去设置 →',
   'tdet.savedOk': '表结构修改已保存',
   'tdet.dorisDistSkip': 'Doris 分桶列 {col} 不允许修改（连注释也不行，数据库会拒绝）—— 这列的改动已跳过；如需修改请重建表',
   'tdet.saveFailed': '保存失败：{detail}',
@@ -2471,7 +2475,8 @@ export default {
   'tdet.copyFailedDetail': '复制失败：{detail}',
   'tdet.fetchDdlFailed': '获取 DDL 失败：{detail}',
   'tdet.noChangesComment': '-- 暂无改动',
-  'tdet.ddlEmpty': '-- 暂无改动\n-- 调整字段/索引/表选项后，将自动生成对应的 ALTER SQL',
+  // 一条就够（用户反馈：原来两行是重复的 —— 第二行本来就是对第一行的补充说明）
+  'tdet.ddlEmpty': '-- 暂无改动；调整字段/索引/表选项后，这里会自动生成对应的 ALTER SQL',
   'tdet.newColName': '新字段名',
   'tdet.no': '否',
   'tdet.pkNotNull': '主键列不可为空',

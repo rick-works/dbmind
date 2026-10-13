@@ -1141,6 +1141,18 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         self.store.list_history(limit, connection_id.as_deref())
     }
 
+    /// 近 N 天按天聚合的查询量：`(日期 YYYY-MM-DD, 成功, 失败)`。
+    ///
+    /// 起点按**本地日期**算（今天往前 `days-1` 天），与写入侧 `chrono::Local` 的口径一致，
+    /// 否则跨零点时柱子的日期会整体错一天。
+    pub fn query_trend(&self, days: u32) -> Result<Vec<(String, i64, i64)>> {
+        let days = days.clamp(1, 90) as i64;
+        let from = (chrono::Local::now() - chrono::Duration::days(days - 1))
+            .format("%Y-%m-%d")
+            .to_string();
+        self.store.query_trend_since(&from)
+    }
+
     pub fn clear_history(&self) -> Result<usize> {
         self.store.clear_history()
     }

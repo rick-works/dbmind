@@ -463,6 +463,31 @@ async fn clear_history(State(state): State<AppState>) -> ApiResult {
 }
 
 #[derive(Debug, Deserialize)]
+struct TrendQuery {
+    #[serde(default = "default_trend_days")]
+    days: u32,
+}
+
+fn default_trend_days() -> u32 {
+    7
+}
+
+/// `GET /api/dbmind/history/trend` —— 近 N 天查询趋势（按天聚合）：`{ items: [{day, ok, fail}] }`。
+///
+/// 为什么不让前端数 `/history`：那个端点有 limit 截断（默认 50、上限 1000），
+/// 拿它按天分桶时"执行量一大就只剩最近两三天"，看起来就像趋势没持久化。
+/// 这里直接对持久化的历史做 GROUP BY：老数据立刻可见、也不受条数限制。
+async fn query_trend(State(state): State<AppState>, Query(params): Query<TrendQuery>) -> ApiResult {
+    let engine = state.engine();
+    let rows = blocking(move || engine.query_trend(params.days)).await?;
+    let items: Vec<Value> = rows
+        .into_iter()
+        .map(|(day, ok, fail)| json!({ "day": day, "ok": ok, "fail": fail }))
+        .collect();
+    Ok(Json(json!({ "items": items })))
+}
+
+#[derive(Debug, Deserialize)]
 struct LogsQuery {
     #[serde(default = "default_history_limit")]
     limit: usize,
@@ -708,6 +733,7 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
         .route("/query/{execution_id}/cancel", post(cancel_execution))
         .route("/executions", get(active_executions))
         .route("/history", get(list_history).delete(clear_history))
+        .route("/history/trend", get(query_trend))
         .route("/logs", get(list_logs).delete(clear_logs))
         .route("/schema-cache", delete(clear_all_schema_cache))
         .route("/cache", get(cache_list).post(cache_clear))

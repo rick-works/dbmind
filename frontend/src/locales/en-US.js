@@ -2456,6 +2456,10 @@ export default {
   'tdet.prodAlterBody': 'This connection is marked as production and you are about to change the structure:\n{summary}\n\nContinue?',
   'tdet.prodAlterConfirm': 'Run it',
   'tdet.noChangesToSave': 'There is nothing to save',
+  // production-protection block: offer a way out instead of a dead end
+  'tdet.prodBlockedTitle': 'Blocked by production protection',
+  'tdet.prodBlockedHint': 'To allow it: Settings -> Security & session -> turn off "Protect production databases"; or mark this data source as Development instead of Production.',
+  'tdet.prodBlockedGo': 'Open settings ->',
   'tdet.savedOk': 'Table structure changes saved',
   'tdet.dorisDistSkip': 'Doris distribution column {col} cannot be altered (not even its comment — the database refuses); that column\u2019s change was skipped; recreate the table to change it',
   'tdet.saveFailed': 'Save failed: {detail}',
@@ -2463,7 +2467,8 @@ export default {
   'tdet.copyFailedDetail': 'Copy failed: {detail}',
   'tdet.fetchDdlFailed': 'Failed to fetch the DDL: {detail}',
   'tdet.noChangesComment': '-- no changes',
-  'tdet.ddlEmpty': '-- no changes\n-- the matching ALTER SQL is generated automatically once you edit columns, indexes or table options',
+  // one line is enough (was two overlapping lines)
+  'tdet.ddlEmpty': '-- no changes; the matching ALTER SQL is generated here as soon as you edit columns, indexes or table options',
   'tdet.newColName': 'New column name',
   'tdet.no': 'No',
   'tdet.pkNotNull': 'A primary key column cannot be nullable',

@@ -1153,6 +1153,8 @@ import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Gri
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { compareTaskStatus, compareCancel, syncCancel } from '../../api'
+// 近 7 天趋势的按天聚合（后端从持久化的 query_history 直接聚合，不再由前端数最近 200 条）
+import { queryTrend } from '../../api'
 import { recordRecentConnection } from '../../utils/recentConnections'
 import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
 import { pinnedFolders, loadPinnedFolders, pinFolder, unpinFolder } from '../../utils/folders'
@@ -2571,36 +2573,64 @@ const warmUpBeforeFirstClick = async () => {
 /** 欢迎页的「最近查询」：首次进来就取一次（失败无所谓，那块会显示一句说明） */
 const loadHistory = async () => {
   try {
-    // 底部「近 7 天趋势 / 失败查询」需要更多样本（最近 8 条撑不起一周的图），多取一份
-    const [rows, many] = await Promise.all([listHistory(8), listHistory(200)])
+    // 底部「近 7 天趋势 / 失败查询」：**优先用后端按天聚合**（`queryTrend`，数据来自持久化的
+    // query_history，不受条数截断影响）；多取一份 listHistory(200) 只是兜底（老内核没这个端点）。
+    const [rows, many, agg] = await Promise.all([
+      listHistory(8),
+      listHistory(200),
+      queryTrend(7).catch(() => null)
+    ])
     // 6 条（用户要求）：原先 4 条是怕首页出现滚动条，实测右侧「MCP 服务」卡片比它高，
     // 6 条正好把两栏拉齐，还多给两条历史 —— 取数已经拿了 8 条，不用改请求
     recentHistory.value = (Array.isArray(rows) ? rows : []).slice(0, 6)
     trendHistory.value = Array.isArray(many) ? many : []
+    trendAgg.value = Array.isArray(agg?.items) ? agg.items : []
   } catch {
     // 拿不到历史不影响欢迎页的其它内容（新库本来就没有历史）
     recentHistory.value = []
     trendHistory.value = []
+    trendAgg.value = []
   }
 }
 
 /** 近 7 天趋势 / 失败查询的数据源（比「最近查询」的 6 条多） */
 const trendHistory = ref([])
+/** 后端按天聚合的趋势（优选；空数组 = 拿不到，退回 trendHistory 兜底） */
+const trendAgg = ref([])
 
 /** 近 7 天每天的执行量：按自然日分桶，没有记录的天也占位（柱高 0），图才是连续的一周 */
 const trendDays = computed(() => {
-  const list = Array.isArray(trendHistory.value) ? trendHistory.value : []
   const now = new Date()
+  /** 本地自然日 → `YYYY-MM-DD`（与后端 `substr(created_at,1,10)` 的口径一致，都按本地时区） */
+  const dayKey = (d) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   const days = []
   for (let i = 6; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i)
-    days.push({ key: d.toDateString(), label: (d.getMonth() + 1) + '/' + d.getDate(), count: 0, fails: 0 })
+    days.push({ key: dayKey(d), label: (d.getMonth() + 1) + '/' + d.getDate(), count: 0, fails: 0 })
   }
-  const byDay = new Map(days.map((d, i) => [d.key, i]))
+  // ① 后端按天聚合优先：它数的是**持久化的全部历史**，不受"只取 200 条"的截断影响
+  //    （原先正是这个截断让图退化成"只剩最近两三天"，看着像趋势没持久化）
+  const agg = Array.isArray(trendAgg.value) ? trendAgg.value : []
+  if (agg.length) {
+    const byKey = new Map(days.map((d, i) => [d.key, i]))
+    for (const it of agg) {
+      const i = byKey.get(String(it.day))
+      if (i === undefined) continue
+      const ok = Number(it.ok || 0)
+      const fail = Number(it.fail || 0)
+      days[i].count = ok + fail
+      days[i].fails = fail
+    }
+    return days
+  }
+  // ② 兜底（老内核没有那个端点）：按原来的口径数最近 200 条历史
+  const list = Array.isArray(trendHistory.value) ? trendHistory.value : []
+  const byKey = new Map(days.map((d, i) => [d.key, i]))
   for (const h of list) {
     const t = h.createdAt ? new Date(h.createdAt) : null
     if (!t || isNaN(t.getTime())) continue
-    const i = byDay.get(t.toDateString())
+    const i = byKey.get(dayKey(t))
     if (i === undefined) continue
     days[i].count++
     if (h.status !== 'ok') days[i].fails++
@@ -5009,19 +5039,28 @@ const fillRealRowCounts = async (connId, db, tables, onlyMissing = false) => {
     names = names.filter(name => tableRows.value['table:' + connId + ':' + db + ':' + name] == null)
   }
   if (!connId || !db || !names.length) return
-  try {
-    const counts = await getTableCounts(connId, db, names)
-    if (!counts) return
-    // 等一帧让 el-tree 先按估算值建出节点，再回填精确行数
-    await nextTick()
-    Object.keys(counts).forEach(name => {
-      const n = counts[name]
-      if (typeof n === 'number' && n >= 0) {
-        onUpdateTableRows({ connId, database: db, table: name, rows: n })
-      }
-    })
-  } catch (e) {
-    // 回填失败不影响主流程：保留估算值
+  // **分批**：一次把几百张表塞进一个请求时，后端是一张一张 COUNT(*)，
+  // 慢表/个别表超时就被跳过（后端注释：「单张表统计失败不该让整次回填失败」）——
+  // 表现就是"同一个库里有的表有行数、有的没有"。而"空表"要显示 0 恰恰**只能**靠这次
+  // 精确回填（估算那条 SQL 故意把 0 当成"不知道"→ null，见 dialect.rs 的 table_rows）。
+  // 所以按小批走：单批失败不影响其它批，空表也能稳定拿到 0。
+  const CHUNK = 40
+  for (let i = 0; i < names.length; i += CHUNK) {
+    try {
+      const counts = await getTableCounts(connId, db, names.slice(i, i + CHUNK))
+      if (!counts) continue
+      // 等一帧让 el-tree 先按估算值建出节点，再回填精确行数
+      await nextTick()
+      Object.keys(counts).forEach(name => {
+        const n = counts[name]
+        // `n >= 0`：**0 要显示**（这张表是空的）；取不到的表后端根本不返回该键（"不知道"）
+        if (typeof n === 'number' && n >= 0) {
+          onUpdateTableRows({ connId, database: db, table: name, rows: n })
+        }
+      })
+    } catch (e) {
+      // 这一批失败不影响其它批：保留估算值
+    }
   }
 }
 

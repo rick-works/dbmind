@@ -377,6 +377,37 @@ impl Store {
         Ok(out)
     }
 
+    /// 近 N 天**按天聚合**的查询量：`(日期 YYYY-MM-DD, 成功数, 失败数)`。
+    ///
+    /// 为什么要它：首页的「近 7 天查询趋势」原先是前端取最近 200 条历史再按天分桶 ——
+    /// 执行量一大，图就只剩最近两三天（用户看到的是"趋势没持久化，升级后就没了"）。
+    /// 这里直接从**持久化的** `query_history` 聚合：老数据立刻可见、零迁移，
+    /// 也不受"取多少条"的截断影响。
+    ///
+    /// `status` 口径与前端保持一致：**不等于 `ok` 都算失败**（含用户取消）。
+    /// `created_at` 是本地时区的 RFC3339，取前 10 位就是本地自然日（与前端分桶口径一致）。
+    pub fn query_trend_since(&self, from_day: &str) -> Result<Vec<(String, i64, i64)>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT substr(created_at, 1, 10) AS day, \
+             SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END) AS ok_count, \
+             SUM(CASE WHEN status <> 'ok' THEN 1 ELSE 0 END) AS fail_count \
+             FROM query_history WHERE substr(created_at, 1, 10) >= ?1 \
+             GROUP BY day ORDER BY day",
+        )?;
+        let mut out = Vec::new();
+        for row in stmt.query_map(params![from_day], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })? {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn clear_history(&self) -> Result<usize> {
         let conn = self.lock();
         Ok(conn.execute("DELETE FROM query_history", [])?)

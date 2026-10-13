@@ -256,6 +256,13 @@ export const monitorOverview = async (id, database) => { const b = await baseOf(
 // 查询历史（**内核原生接口**，上游那层没有）：最近执行过的 SQL。
 // 欢迎页的「最近查询」用它 —— 一行一条，点一下把那句 SQL 开成新脚本。
 export const listHistory = (limit = 8) => http.get('/api/dbmind/history', { params: { limit } }).then(r => r.data)
+/**
+ * 近 N 天查询趋势（按天聚合：`{ items: [{ day, ok, fail }] }`）。
+ *
+ * 由**后端从持久化的 query_history 聚合**，而不是前端取最近 200 条自己数 ——
+ * 原先那个口径下，执行量一大图就只剩最近两三天（看起来像"趋势没持久化、升级后就没了"）。
+ */
+export const queryTrend = (days = 7) => http.get('/api/dbmind/history/trend', { params: { days } }).then(r => r.data)
 // 清空查询历史（`DELETE /api/dbmind/history`）：清的是**全部**记录，没有按条删除的接口 ——
 // 历史表里也没有"来源"字段，老记录无法事后区分是不是程序发的，所以只能整体清。
 export const clearHistory = () => http.delete('/api/dbmind/history').then(r => r.data)

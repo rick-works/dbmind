@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <!-- 整页字号吃「设置 → 界面尺寸 → 数据视图表格」（--dc-data-fs）：字段表/索引表跟着走 -->
   <div v-loading="loading" class="table-edit-page"
        :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px', fontSize: 'var(--dc-data-fs, 13px)' }">
@@ -421,8 +421,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, h } from 'vue'
+import { ElMessage, ElMessageBox, ElNotification } from 'element-plus'
 import { t } from '../../utils/i18n'
 // 字段表 / 索引表的行高跟随设置页「结果表格行高」（--grid-row-h 由模板上的 style 注入）
 import { editorSettingsLive } from '../../utils/settings'
@@ -2113,6 +2113,11 @@ const confirmProdWrite = async (summary) => {
   }
 }
 
+/** 直达「设置 → 安全与会话」：与首页 MCP 卡的「前往设置」同一套机制（MainView 监听这个事件） */
+const openSafetySettings = () => {
+  window.dispatchEvent(new CustomEvent('dc-open-settings', { detail: { tab: 'safety' } }))
+}
+
 const save = async () => {
   if (!pendingCount.value) return ElMessage.info(t('tdet.noChangesToSave'))
   const probs = issues.value
@@ -2137,7 +2142,28 @@ const save = async () => {
     }
     await load()
   } catch (e) {
-    ElMessage.error(t('tdet.saveFailed', { detail: (e?.message || e) }))
+    const detail = String(e?.message || e)
+    // 「生产库保护」把这次修改拦下了：原来只弹一句红字，用户不知道去哪儿放开。
+    // 这里给一条**能直接走通**的路：通知里带「去设置」链接，直达 设置 → 安全与会话。
+    // （后端那句提示是固定中文，与界面语言无关 —— 按它判定最稳，不看界面文案。）
+    if (detail.includes('生产保护') || e?.code === 'DBMIND-SAFETY-0003') {
+      ElNotification({
+        type: 'warning',
+        title: t('tdet.prodBlockedTitle'),
+        duration: 12000,
+        // 用**行内样式**而不是 class：ElNotification 渲染在 body 下，本组件的 scoped 样式未必命中
+        message: h('div', { style: 'max-width:460px;line-height:1.5' }, [
+          h('div', detail),
+          h('div', { style: 'margin-top:6px;font-size:12px;opacity:.75' }, t('tdet.prodBlockedHint')),
+          h('a', {
+            style: 'display:inline-block;margin-top:8px;font-weight:600;cursor:pointer',
+            onClick: openSafetySettings
+          }, t('tdet.prodBlockedGo'))
+        ])
+      })
+    } else {
+      ElMessage.error(t('tdet.saveFailed', { detail }))
+    }
   } finally {
     saving.value = false
   }
@@ -2706,7 +2732,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    位置必须在这几条斑马纹规则**之后**，同优先级下靠顺序取胜。 */
 .field-table tbody tr:focus-within td { background: var(--dc-primary-wash); }
 .field-table tbody tr:focus-within td:first-child { box-shadow: inset 3px 0 0 var(--dc-primary); }
-.dc-del { color: var(--dc-text-dim); }
+.dc-del { color: var(--dc-danger); }
 .dc-del:hover { color: var(--dc-danger); background: rgba(255, 97, 97, .1); }
 
 /* 索引表格主题 */

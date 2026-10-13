@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="obj-form"
        :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px' }">
     <!-- 不用 border-card：那会带一层灰底标题带 + Element 自带下划线，
@@ -1007,7 +1007,7 @@ emit('sql', genSql())
 .empty-card-text { font-size: 12.5px; color: var(--dc-text-dim); margin-bottom: 8px; }
 /* （原"每字段一个 el-form 的网格"那套规则已随标记一起去掉：
      基本信息现在是 .field-table.basic-table 两列表，规则见上面的 basic-table 段。） */
-.dc-del { color: var(--dc-text-dim); }
+.dc-del { color: var(--dc-danger); }
 .dc-del:hover { color: var(--dc-danger); background: rgba(255,97,97,.1); }
 .type-select { width: 100%; }
 :deep(.el-table) { --el-table-header-bg-color: var(--dc-bg-code); }

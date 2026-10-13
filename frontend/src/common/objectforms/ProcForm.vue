@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="obj-form">
     <div class="form-card">
       <div class="card-title">
@@ -336,7 +336,7 @@ const parseParams = (raw) => {
 .sub-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--dc-text); margin-bottom: 8px; }
 .sub-title .el-button { margin-left: auto; }
 .card-tip { font-size: 12px; color: var(--dc-text-dim); font-weight: 400; }
-.dc-del { color: var(--dc-text-dim); }
+.dc-del { color: var(--dc-danger); }
 .dc-del:hover { color: var(--dc-danger); background: rgba(255,97,97,.1); }
 .mb8 { margin-bottom: 8px; }
 .body-tip { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 12px; color: var(--dc-text-dim); }
