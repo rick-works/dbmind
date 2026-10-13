@@ -76,20 +76,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows (x64)
+          # Windows 拆成两个 job（打包并行）——起因：Windows 单 job 里串行做 msi + nsis + 免安装 zip，
+          # 总时长 1080 秒是四平台里最慢的（决定整条流水线时长）。两个 job 各自完整构建、只是打包的东西不同：
+          # 前端的产出（32s）、Java 宿主（49s）、JRE（20s）会各做一遍，但它们是**并行**的，不占墙钟。
+          - name: Windows (x64) · MSI
             os: windows-latest
-            bundles: msi nsis
+            art: windows-msi
+            bundles: msi
             patterns: |
               target/release/bundle/msi/*.msi
+          - name: Windows (x64) · NSIS + 免安装版
+            os: windows-latest
+            art: windows-nsis
+            bundles: nsis
+            portables: 'true'   # 免安装 zip 只在这个 job 组装（它要全工作区的 CLI/web/mcp 产物）
+            patterns: |
               target/release/bundle/nsis/*-setup.exe
               dist/dbmind-*-portable.zip
           - name: macOS (aarch64)
+            art: macos-arm64
             os: macos-latest
             bundles: dmg app
             patterns: |
               target/release/bundle/dmg/*.dmg
               target/release/bundle/macos/*.app
           - name: macOS (x86_64 / Intel)
+            art: macos-x64
             # macos-13 已退役；GitHub 现在把编号型标签都给了 Apple 芯片，
             # Intel 必须用带 -intel 后缀的标签（macos-15-intel / macos-26-intel）。
             # 在 Intel runner 上 dtolnay/rust-toolchain 装的就是 x86_64-apple-darwin，
@@ -100,6 +112,7 @@ jobs:
               target/release/bundle/dmg/*.dmg
               target/release/bundle/macos/*.app
           - name: Linux (x86_64)
+            art: linux-x64
             os: ubuntu-22.04
             bundles: deb appimage
             patterns: |
@@ -577,7 +590,7 @@ jobs:
       #      没装 Java 17+ 时，SQL Server / Mongo / Redis / ES / JDBC 一律「驱动未就绪」。
       #      压缩用 tar.exe -a（bsdtar 自带 zip 支持），比 Compress-Archive 快一个量级。
       - name: 组装免安装版并压缩（Windows）
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && matrix.portables == 'true'
         shell: pwsh
         run: |
           ./scripts/package.ps1 -SkipCargo -SkipAgents -SkipFrontend
@@ -593,7 +606,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-installers
+          name: ${{ matrix.art }}-installers
           path: ${{ matrix.patterns }}
           if-no-files-found: warn
 
