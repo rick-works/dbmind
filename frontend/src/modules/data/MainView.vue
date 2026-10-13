@@ -228,10 +228,7 @@
                              只是不借它的 fixed 定位 —— 这里由提示自己定位）。 -->
                         <template #content>
                           <span class="obj-info-card">
-                            <span class="oi-row">
-                              <b>{{ $t('tree.tip.comment') }}</b>
-                              <span :class="{ 'oi-none': !data.comment }">{{ data.comment || $t('tree.tip.noComment') }}</span>
-                            </span>
+                            <span :class="data.comment ? 'oi-text' : 'oi-none'">{{ data.comment || $t('tree.tip.noComment') }}</span>
                           </span>
                         </template>
                         <span>{{ nodeText(data, node) }}</span>

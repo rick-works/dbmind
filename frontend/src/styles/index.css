@@ -533,7 +533,7 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-width: 176px;
+  min-width: 120px;
   max-width: 340px;
   padding: 8px 10px;
   font-size: 12px;
@@ -543,10 +543,10 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
 }
-.obj-info-card .oi-row { display: flex; gap: 10px; font-size: 12px; line-height: 1.45; color: var(--dc-text); word-break: break-all; }
-.obj-info-card .oi-row b { flex: 0 0 42px; font-size: 12px; color: var(--dc-text-dim); font-weight: 400; }
-/* "无注释"用次要色：与有注释时一眼可分 */
-.obj-info-card .oi-none { color: var(--dc-text-dim); }
+/* 只显示注释本身（用户要求去掉「注释」两个字），所以不给键名列留位置 */
+.obj-info-card .oi-text { font-size: 12px; line-height: 1.45; color: var(--dc-text); word-break: break-all; }
+/* 「无注释」用次要色：与有注释时一眼可分 */
+.obj-info-card .oi-none { font-size: 12px; line-height: 1.45; color: var(--dc-text-dim); }
 .obj-tip-popper.el-popper,
 .obj-tip-popper.el-popper.is-light {
   /* 加 !important 的理由：Element 用 `.el-popper.is-light` 给气泡设了底色/边框/内边距，
@@ -556,7 +556,13 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
   border: none !important;
   box-shadow: none !important;
 }
-.obj-tip-popper.el-popper .el-popper__arrow { display: none !important; }
+/* 三角「尖」跟连接卡一致（用户要求"也加三角符号"）：连接卡是 8px 方块转 45°、只描左边与下边；
+   这里用 el-tooltip 自带的箭头，只把它的底色/边框换成卡片那套 —— placement="right" 时它正好在
+   卡片左中、指着左边那一行，与连接卡的位置一致。 */
+.obj-tip-popper.el-popper .el-popper__arrow::before {
+  background: var(--dc-bg-pop) !important;
+  border: 1px solid var(--dc-border) !important;
+}
 /* 卡片左侧那个小菱形"尖"（用户给的参考样式）：8px 方块转 45°，
    只描左边与下边（与卡片同底色同边框色）→ 朝左的箭头，指着右边这张卡片对应的连接；
    卡片被窗口右边缘逼到左侧时 .flip 会把它改朝右。 */

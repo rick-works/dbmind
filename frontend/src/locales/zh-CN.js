@@ -2472,8 +2472,7 @@ export default {
   'tdet.prodBlockedPath2': '或把该数据源的环境从「生产」改成「开发」',
   'tdet.prodBlockedGo': '去设置 →',
   // 树上悬浮「表 / 视图」的注释卡片（只显示注释；没有就明确说「无注释」）
-  'tree.tip.comment': '注释',
-  'tree.tip.noComment': '（无注释）',
+  'tree.tip.noComment': '无注释',
   'tdet.savedOk': '表结构修改已保存',
   'tdet.dorisDistSkip': 'Doris 分桶列 {col} 不允许修改（连注释也不行，数据库会拒绝）—— 这列的改动已跳过；如需修改请重建表',
   'tdet.saveFailed': '保存失败：{detail}',
