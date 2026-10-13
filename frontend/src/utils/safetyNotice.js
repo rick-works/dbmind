@@ -39,7 +39,7 @@ export const openSafetySettings = () => {
 let lastShown = { text: '', at: 0 }
 
 /** 弹出安全拦截通知（右上角）。重复句 4 秒内忽略。 */
-export const showSafetyNotice = (detail) => {
+export const showSafetyNotice = (detail, title) => {
   const text = String(detail || '')
   const now = Date.now()
   if (text && text === lastShown.text && now - lastShown.at < 4000) return
@@ -47,7 +47,7 @@ export const showSafetyNotice = (detail) => {
   try {
     ElNotification({
       type: 'warning',
-      title: t('tdet.prodBlockedTitle'),
+      title: title || t('tdet.prodBlockedTitle'),
       duration: 12000,
       // 用**行内样式**：通知渲染在 body 下，组件的 scoped 样式命中不了
       message: h('div', { style: 'max-width:560px;line-height:1.5' }, [

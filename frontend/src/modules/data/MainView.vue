@@ -1154,7 +1154,8 @@ import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/ba
 import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor } from '@element-plus/icons-vue'
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
-import { compareTaskStatus, compareCancel, syncCancel } from '../../api'
+import { compareTaskStatus, compareCancel, syncCancel, getSettings } from '../../api'
+import { showSafetyNotice } from '../../utils/safetyNotice'
 // 近 7 天趋势的按天聚合（后端从持久化的 query_history 直接聚合，不再由前端数最近 200 条）
 import { queryTrend } from '../../api'
 import { recordRecentConnection } from '../../utils/recentConnections'
@@ -1618,6 +1619,41 @@ const allConnections = ref([])
 // 按 tab 归属的连接 ID 解析连接对象；找不到时回退到当前选中连接。
 // 用于跨数据源打开表结构/数据 tab：右键所属连接可能不是当前 conn，直接拿 conn 会导致串台或 null 报错
 /** 页签对应连接是否生产环境（PROD）——页签上挂红 P 标防误连 */
+// ===== 写操作的前置闸门：只读连接 / 生产保护 =====
+// 「点了导入 → 选完文件 → 传完才被告知被拦」是最气人的顺序（用户反馈「不要导入了之后再判定拦截」）。
+// 判定提到**点击那一刻**：连接是只读、或 PROD 且开着生产保护 → 直接右上角通知 + 拦下，弹窗都不开。
+// 清空 / 截断 / 删除表 / 删除对象 / 删除集合 / 重命名 / 导入 / 数据生成 都走这道闸。
+//
+// 它只是**体验层**的第一道闸：真正的判定仍在后端（设置可能刚被别处改过、脚本也可能绕过界面），
+// 所以后端拦截那条路必须保留（导入弹窗、结构页保存、编辑器执行仍会各兜一层）。
+const safetyProtectProd = ref(true) // 默认 true：与后端种子（storage.rs 的 seed_settings）一致
+const loadSafetyFlags = async () => {
+  try {
+    const s = await getSettings()
+    const v = s && s['safety.protectProduction']
+    // 与设置页同一套解析：只有明确的 'false'/'0' 才算关（缺省 = 开）
+    safetyProtectProd.value = !(v === 'false' || v === '0')
+  } catch { /* 取不到就维持默认（开）：宁可多提醒一次，也不放过对生产库的写操作 */ }
+}
+
+
+/**
+ * 写操作入口的统一前置闸门。true = 放行；false = 已拦下（并弹了带「去设置」的右上角通知）。
+ * `act` 传这次动作的名字（如「导入数据」），让提示说清"是什么被拦了"。
+ */
+const guardWrite = (connId, act) => {
+  const c = connFor(connId) || {}
+  const name = c.name || c.label || ''
+  if (c.readOnly) {
+    showSafetyNotice(t('mv.blockReadOnlyDetail', { name, act }), t('tdet.blockTitleReadOnly'))
+    return false
+  }
+  if (safetyProtectProd.value && String(c.env || '').toUpperCase() === 'PROD') {
+    showSafetyNotice(t('mv.blockProdDetail', { name, act }))
+    return false
+  }
+  return true
+}
 const isProdTab = (tab) => String((connFor(tab.connId) || {}).env || '').toUpperCase() === 'PROD'
 const connFor = (connId) => {
   if (connId == null) return conn.value
@@ -2107,6 +2143,14 @@ const resumeBgTask = (t) => {
   syncDialogOpen.value = true
 }
 const settingsOpen = ref(false)
+
+// 安全开关（只读 / 生产保护）的缓存刷新：
+// ⚠**必须写在这里**（settingsOpen 声明之后）—— 写在文件上方会踩 TDZ：
+//   setup 阶段执行到 watch(settingsOpen, …) 时那个 const 还没初始化 →
+//   ReferenceError → **整个应用挂不上**（表现是全白、树是空的，且资源和缓存都正常，
+//   极难从现象联想到"某一行位置放错了"）。这条注释留在这里防止再犯。
+watch(settingsOpen, (open) => { if (!open) loadSafetyFlags() })
+onMounted(loadSafetyFlags)
 /** 要直达的设置页签（'' = 上次停留的页签）。首页 MCP 卡「前往设置」用 */
 const settingsTab = ref('')
 const openSettings = (tab = '') => { settingsTab.value = tab; settingsOpen.value = true }
@@ -5430,6 +5474,7 @@ const ctxOpenDetail = async () => {
 const ctxRenameTable = () => {
   const d = ctxMenu.value.data
   if (!d || !d.connId) return
+  if (!guardWrite(d.connId || currentConnId.value, t('common.rename'))) { closeCtxMenu(); return }
   renameTableCtx.value = { connId: d.connId, db: d.db || currentDb.value, oldName: d.table }
   closeCtxMenu()
   renameTableVisible.value = true
@@ -5445,6 +5490,7 @@ const onTableRenamed = ({ connId, db, oldName, newName }) => {
 const ctxRenameObject = () => {
   const d = ctxMenu.value.data
   if (!d) return
+  if (!guardWrite(d.connId || currentConnId.value, t('common.rename'))) { closeCtxMenu(); return }
   renameObjectCtx.value = {
     connId: d.connId || currentConnId.value,
     db: d.db || currentDb.value,
@@ -5473,6 +5519,8 @@ const ctxShowDdl = async () => {
 const ctxOpenImport = () => {
   const d = ctxMenu.value.data
   if (!d) return
+  // 前置闸门：只读 / 生产保护 → 点击即拦，**不打开导入弹窗**（用户反馈：不要等导完再判定）
+  if (!guardWrite(d.connId || currentConnId.value, t('menu.importData'))) { closeCtxMenu(); return }
   ctxImportTarget.value = { ...d, db: d.db || currentDb.value }
   closeCtxMenu()
   ctxImportVisible.value = true
@@ -5485,6 +5533,7 @@ const ctxOpenDataGen = () => {
   const d = ctxMenu.value.data
   if (!d) return
   const cid = d.connId || currentConnId.value
+  if (!guardWrite(cid, t('menu.dataGen'))) { closeCtxMenu(); return }
   ctxDataGenTarget.value = { ...d, connId: cid, db: d.db || currentDb.value }
   closeCtxMenu()
   ctxDataGenVisible.value = true
@@ -5673,6 +5722,7 @@ const ctxGenSql = async (tpl) => {
 const ctxClearTable = () => {
   if (!ctxMenu.value.data) return
   const d = ctxMenu.value.data
+  if (!guardWrite(d.connId || currentConnId.value, t('mv.clearTableTitle'))) { closeCtxMenu(); return }
   closeCtxMenu()
   ElMessageBox.confirm(
     t('mv.clearTableBody', { name: d.table }),
@@ -5683,6 +5733,7 @@ const ctxClearTable = () => {
 const ctxTruncateTable = () => {
   if (!ctxMenu.value.data) return
   const d = ctxMenu.value.data
+  if (!guardWrite(d.connId || currentConnId.value, t('mv.truncateTitle'))) { closeCtxMenu(); return }
   closeCtxMenu()
   ElMessageBox.confirm(
     t('mv.truncateBody', { name: d.table }),
@@ -5693,6 +5744,7 @@ const ctxTruncateTable = () => {
 const ctxDropTable = () => {
   if (!ctxMenu.value.data) return
   const d = ctxMenu.value.data
+  if (!guardWrite(d.connId || currentConnId.value, t('mv.dropTableTitle'))) { closeCtxMenu(); return }
   closeCtxMenu()
   ElMessageBox.confirm(
     t('mv.dropTableBody', { name: d.table }),
@@ -5826,6 +5878,7 @@ const ctxOpenNoSqlData = () => {
 const ctxDropCollection = () => {
   if (!ctxMenu.value.data) return
   const d = ctxMenu.value.data
+  if (!guardWrite(d.connId || currentConnId.value, t('common.delete'))) { closeCtxMenu(); return }
   closeCtxMenu()
   const label = d.connType === 'REDIS' ? 'Key' : (d.connType === 'ELASTICSEARCH' ? t('mv.catIndex') : t('mv.catCollection'))
   ElMessageBox.confirm(t('mv.deleteItemBody', { kind: label, name: d.label }), t('mv.deleteConfirmTitle'), {
@@ -6470,6 +6523,7 @@ const objDrop = () => {
   const d = ctxMenu.value.data
   if (!d) return
   const db = d.db || currentDb.value
+  if (!guardWrite(d.connId || currentConnId.value, t('common.delete'))) { closeCtxMenu(); return }
   closeCtxMenu()
   const map = {
     view: t('mv.catView'), function: t('mv.catFunc'), procedure: t('mv.catProc'),
