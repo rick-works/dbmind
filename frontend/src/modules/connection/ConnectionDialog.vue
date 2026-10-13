@@ -225,7 +225,7 @@
 
           <!-- 只读连接：连接记录上的标记，后端走内核 set_read_only（同时更新存储与内存策略）。
                开启后这个连接上的**写操作会被内核拦下**（报「安全拦截」），不是界面上的软提示。 -->
-          <el-form-item :label="$t('cd.readOnly')">
+          <el-form-item :label="$t('cd.readOnly')" class="conn-readonly-item">
             <el-switch v-model="form.readOnly" />
             <span class="form-tip">{{ $t('cd.readOnlyTip') }}</span>
           </el-form-item>
@@ -310,7 +310,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { FolderOpened, DocumentAdd, Connection, WarningFilled, CircleCheckFilled, Plus, Delete, Refresh, Link, ArrowUp, Folder, Document, Loading } from '@element-plus/icons-vue'
 import { saveConnection, testConnection, getConnectionById, getDriverTypes, getDriverStatus, getDriverProgress, browseBackupDirs } from '../../api'
@@ -326,7 +326,9 @@ const props = defineProps({
   conn: Object,
   customFolders: { type: Array, default: () => [] },
   initialGroup: { type: String, default: '' },
-  initialType: { type: String, default: '' }
+  initialType: { type: String, default: '' },
+  // 'readOnly' = 从安全拦截通知点过来：自动切到「高级」页签、把「只读」那一项滚进视野并闪一下
+  focus: { type: String, default: '' }
 })
 const emit = defineEmits(['update:modelValue', 'saved', 'folder-added'])
 
@@ -495,6 +497,18 @@ const initForm = async () => {
   const authDefs = typeDef.value.authTypes || []
   if (authDefs.length && !authDefs.some(a => a.value === form.value.authType)) {
     form.value.authType = authDefs[0].value
+  }
+  // 「直达只读开关」：从安全拦截通知的按钮点过来时，用户就是来改这一项的 ——
+  // 自动切到「高级」页签 + 把它滚到视野中央 + 闪一下，省掉"自己找在哪一页/翻半天"。
+  if (props.focus === 'readOnly') {
+    activeTab.value = 'advanced'
+    await nextTick()
+    const el = document.querySelector('.conn-readonly-item')
+    if (el) {
+      el.scrollIntoView({ block: 'center' })
+      el.classList.add('flash-hl')
+      setTimeout(() => el.classList.remove('flash-hl'), 1800)
+    }
   }
   // SSH 字段归一化
   if (form.value.sshEnabled == null) form.value.sshEnabled = false
@@ -827,6 +841,12 @@ const importPastedParams = () => {
 }
 
 .conn-tabs :deep(.el-tabs__header) { margin-bottom: 14px; }
+/* 「直达只读」时的高亮：进来先亮一下再淡出（不用一直亮，亮完就恢复正常） */
+.conn-readonly-item.flash-hl { animation: hl-flash 1.7s ease-out; border-radius: 8px; }
+@keyframes hl-flash {
+  0%, 55% { background: var(--el-color-primary-light-9, #ecf5ff); }
+  100% { background: transparent; }
+}
 
 .form-row { display: flex; gap: 12px; }
 .form-row .el-form-item { margin-right: 0; margin-bottom: 18px; }

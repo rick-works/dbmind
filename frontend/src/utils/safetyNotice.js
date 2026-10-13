@@ -39,24 +39,36 @@ export const openSafetySettings = () => {
 let lastShown = { text: '', at: 0 }
 
 /** 弹出安全拦截通知（右上角）。重复句 4 秒内忽略。 */
-export const showSafetyNotice = (detail, title) => {
+export const showSafetyNotice = (detail, opts = {}) => {
+  // 兼容旧调用：第二参传字符串时就是标题（历史上是 showSafetyNotice(detail, title)）
+  const o = typeof opts === 'string' ? { title: opts } : (opts || {})
   const text = String(detail || '')
+  // 只读 / 生产 是**两套话**：放开的地方不一样（一个去改数据源，一个去关全局保护）。
+  // 没显式指定就按正文自适应 —— 后端返回的拦截消息里写着"只读"，据此换成只读那套文案与按钮。
+  const readOnly = o.kind ? o.kind === 'readonly' : /只读/.test(text)
+  const title = o.title || t(readOnly ? 'tdet.blockTitleReadOnly' : 'tdet.prodBlockedTitle')
+  const hints = o.hints || (readOnly ? [t('tdet.blockReadOnlyHint')] : [t('tdet.prodBlockedPath1'), t('tdet.prodBlockedPath2')])
+  // 只读且没给"去修改数据源"的回调时**不显示按钮**：那时按钮只能指向「安全与会话」，
+  // 而那里管的是生产保护，跟只读没关系 —— 指错地方比不给按钮更让人迷惑。
+  const action = o.onAction || (readOnly ? null : openSafetySettings)
+  const actionText = o.actionText || (readOnly ? t('tdet.blockReadOnlyGo') : t('tdet.prodBlockedGo'))
   const now = Date.now()
   if (text && text === lastShown.text && now - lastShown.at < 4000) return
   lastShown = { text, at: now }
   try {
     ElNotification({
       type: 'warning',
-      title: title || t('tdet.prodBlockedTitle'),
+      title,
       duration: 12000,
       // 用**行内样式**：通知渲染在 body 下，组件的 scoped 样式命中不了
       message: h('div', { style: 'max-width:560px;line-height:1.5' }, [
         h('div', text),
         h('div', { style: 'margin-top:9px;font-size:12px;opacity:.75' }, [
           h('div', t('tdet.prodBlockedHintTitle')),
-          // nowrap：这两条路径要**保持一行**（以前在窄框里断成「改成「开/发」」，很难读）
-          h('div', { style: 'margin-top:3px;white-space:nowrap' }, '· ' + t('tdet.prodBlockedPath1')),
-          h('div', { style: 'margin-top:1px;white-space:nowrap' }, '· ' + t('tdet.prodBlockedPath2'))
+          // nowrap：这些路径要**保持一行**（以前在窄框里断成「改成「开/发」」，很难读）
+          ...hints.map((line, i) =>
+            h('div', { style: `margin-top:${i === 0 ? 3 : 1}px;white-space:nowrap` }, line)
+          )
         ]),
         h(
           'button',
@@ -65,9 +77,9 @@ export const showSafetyNotice = (detail, title) => {
             style:
               'margin-top:10px;padding:4px 12px;border:none;border-radius:6px;cursor:pointer;' +
               'font-size:12px;font-weight:600;color:#fff;background:var(--el-color-primary,#409eff)',
-            onClick: openSafetySettings
+            onClick: action
           },
-          t('tdet.prodBlockedGo')
+          actionText
         )
       ])
     })

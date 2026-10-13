@@ -2458,6 +2458,9 @@ export default {
   'tdet.noChangesToSave': 'There is nothing to save',
   // production-protection block: offer a way out instead of a dead end
   // pre-click gate: say why it was blocked and how to allow it
+  // read-only block: its own hint + button (read-only is a per-connection switch)
+  'tdet.blockReadOnlyHint': 'Edit this data source -> "Advanced" tab -> turn off "Read-only"',
+  'tdet.blockReadOnlyGo': 'Edit data source ->',
   'tdet.blockTitleReadOnly': 'Blocked by the read-only connection',
   'mv.blockReadOnlyDetail': 'Connection "{name}" is read-only (queries only), so "{act}" was blocked right away. Turn off "Read-only" in the connection settings to run it.',
   'mv.blockProdDetail': 'Connection "{name}" is marked Production and "Production protection" is on, so "{act}" (a data-changing operation) was blocked right away. Turn the protection off in Settings -> Security & session, or mark this data source as Development.',

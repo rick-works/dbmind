@@ -712,7 +712,7 @@
                       @open-conn="onRecentConn" />
 
     <!-- 新建/编辑连接 -->
-    <ConnectionDialog v-model="connDialogVisible" :conn="editingConn" :custom-folders="customFolders" :initial-group="connDialogInitialEnv" :initial-type="connDialogInitialType" @saved="onConnSaved" @folder-added="refreshFolders" />
+    <ConnectionDialog v-model="connDialogVisible" :conn="editingConn" :custom-folders="customFolders" :initial-group="connDialogInitialEnv" :focus="connDialogFocus" :initial-type="connDialogInitialType" @saved="onConnSaved" @folder-added="refreshFolders" />
 
     <!-- 数据库 DDL 弹窗 -->
     <el-dialog v-model="dbDdlVisible" width="720px" append-to-body class="main-dialog">
@@ -1644,12 +1644,22 @@ const loadSafetyFlags = async () => {
 const guardWrite = (connId, act) => {
   const c = connFor(connId) || {}
   const name = c.name || c.label || ''
-  if (c.readOnly) {
-    showSafetyNotice(t('mv.blockReadOnlyDetail', { name, act }), t('tdet.blockTitleReadOnly'))
-    return false
-  }
+  // ⚠ 顺序：**先判生产保护**再判只读。
+  // 一个连接可能既标了生产、又开了只读；只提示只读的话，用户照着通知去关掉「只读」，
+  // 下一次还是被拦（因为生产保护还在），等于给了一条走不通的路。
+  // 生产保护是全局那道更狠的闸（要动设置或改环境），先让它出场。
   if (safetyProtectProd.value && String(c.env || '').toUpperCase() === 'PROD') {
     showSafetyNotice(t('mv.blockProdDetail', { name, act }))
+    return false
+  }
+  if (c.readOnly) {
+    showSafetyNotice(t('mv.blockReadOnlyDetail', { name, act }), {
+      kind: 'readonly',
+      title: t('tdet.blockTitleReadOnly'),
+      // 按钮直达**这个数据源**的编辑弹窗（并停在「只读」那一项）——
+      // 只读是连接级的开关，去「设置 → 安全与会话」是找不到的（用户反馈：要让提示能直接去改）
+      onAction: () => treeCtxEditConn(connId, 'readOnly')
+    })
     return false
   }
   return true
@@ -2798,14 +2808,18 @@ const clockText = (iso) => {
 watch(() => tabs.value.length, (n) => { if (n === 0) loadHistory() })
 
 // 打开新建/编辑连接弹窗（initialEnv/initialType 仅在新建时生效）
-const openConnDialog = (c, initialEnv, initialType) => {
+const openConnDialog = (c, initialEnv, initialType, focus) => {
   editingConn.value = c || null
   connDialogInitialEnv.value = initialEnv || ''
   connDialogInitialType.value = initialType || ''
+  connDialogFocus.value = focus || ''
   connDialogVisible.value = true
 }
 const connDialogInitialEnv = ref('')
 const connDialogInitialType = ref('')
+// 数据源弹窗的「直达项」：从安全拦截通知的按钮点过来时，告诉弹窗直接停在「只读」那一项
+// （见 ConnectionDialog 的 focus 属性：切到「高级」页签 + 滚进视野 + 闪一下）
+const connDialogFocus = ref('')
 
 // 新建连接：先弹数据源选择器，选择后再进入连接表单
 const openNewConn = (env) => {
@@ -3068,10 +3082,10 @@ const treeCtxDeleteFolder = async (env) => {
   } catch (e) { ElMessage.error(t('mv.deleteFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) })) }
 }
 
-const treeCtxEditConn = async (connId) => {
+const treeCtxEditConn = async (connId, focus) => {
   closeTreeCtxMenu()
   const c = allConnections.value.find(x => x.id === connId)
-  if (c) openConnDialog(c)
+  if (c) openConnDialog(c, '', '', focus)
 }
 const treeCtxTestConn = async (connId) => {
   closeTreeCtxMenu()
