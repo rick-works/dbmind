@@ -666,8 +666,12 @@ const selectKb = async (kb) => {
 
 const loadDocs = async () => {
   if (!activeId.value) return
+  // 记住这次请求是给哪个库的：快速切换知识库时，先发的请求可能后返回，
+  // 不校验就会把「左边已是新库、右边还是旧库的资料」这种串数据画出来。
+  const wantKb = activeId.value
   try {
-    const d = await kbDocs({ kbId: activeId.value })
+    const d = await kbDocs({ kbId: wantKb })
+    if (wantKb !== activeId.value) return // 期间又切了库：这次结果作废
     docs.value = (d && d.docs) || []
     if (d && d.indexMode) indexMode.value = d.indexMode
     vectorsReady.value = d ? d.vectorsReady !== false : true

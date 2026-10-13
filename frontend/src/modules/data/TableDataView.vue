@@ -2059,8 +2059,9 @@ const refreshData = async () => {
   selectedSet.value = new Set()
   activeCell.value = null
   editingCell.value = null
-  await load(page.value)
-  ElMessage.success(t('tdv.refreshOk'))
+  // load 失败或被取消时返回 false（成功路径返回 undefined）：
+  // 别在一条红色失败提示后面紧接着再弹一句绿色"刷新成功"。
+  if ((await load(page.value)) !== false) ElMessage.success(t('tdv.refreshOk'))
 }
 
 // ========== 列宽拖拽调整（列头与任意数据行竖线均可拖动） ==========
@@ -2682,8 +2683,8 @@ const load = async (p = 1, opts = null) => {
       params.cursorDir = opts.cursorDir
     }
     const res = await getTableData(props.conn.id, params, signal)
-    if (signal.aborted) return
-    if (!res.success) { ElMessage.error(t('tdv.msgLoadFailed') + res.message); return }
+    if (signal.aborted) return false
+    if (!res.success) { ElMessage.error(t('tdv.msgLoadFailed') + res.message); return false }
     rows.value = stampRows(res.rows || [])
     // 新数据用新的 _rid，旧的隐藏行标记已失效，清掉避免菜单里出现t('tdv.showAllRows')却什么都没隐藏
     hiddenRows.value = new Set()
@@ -2712,8 +2713,9 @@ const load = async (p = 1, opts = null) => {
     }
   } catch (e) {
     // 用户取消 / 被新请求替换：静默返回，不动已有数据
-    if (signal.aborted || e?.name === 'AbortError') return
+    if (signal.aborted || e?.name === 'AbortError') return false
     ElMessage.error(t('tdv.msgLoadFailed') + (e?.message || e))
+    return false
   } finally {
     // 仅当仍是当前请求时才复位状态，避免旧请求把新请求的 loading 关掉
     if (loadController === controller) {

@@ -323,7 +323,11 @@ pub fn routes() -> Router<AppState> {
             "/api/backup/task/{id}/{decision}",
             post(backup::install_decision),
         )
-        .route("/api/backup/restore/start", post(backup::restore_start))
+        // 上传备份还原：备份动辄几个 GB，axum 默认 2MB 会把请求直接挡掉（import / driver 上传都放宽了）
+        .route(
+            "/api/backup/restore/start",
+            post(backup::restore_start).layer(DefaultBodyLimit::max(backup::RESTORE_UPLOAD_LIMIT)),
+        )
         .route(
             "/api/backup/restore/start-local",
             post(backup::restore_start_local),

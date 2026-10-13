@@ -4857,6 +4857,8 @@ watch(() => props.database, (val) => {
   }
 })
 onBeforeUnmount(() => {
+  // 导出还在跑时页签可能被直接关掉：关掉任务（清轮询 + 避免任务跑完在已卸载的页签里触发下载/提示）
+  try { exportTask.close() } catch { /* 忽略 */ }
   // 摘掉注册到全局 monaco.languages 的补全/格式化 provider（见 onEditorMount）
   monacoProviders.splice(0).forEach((d) => { try { d?.dispose?.() } catch { /* ignore */ } })
   if (queryTimer) { clearInterval(queryTimer); queryTimer = null }

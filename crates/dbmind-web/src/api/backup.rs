@@ -1071,12 +1071,13 @@ async fn run_cli_backup(
     )?;
     let tool = if kind.key() == "sqlite" { "sqlite3" } else { spec.tool };
     task.step(format!("执行 {tool}（备份到 {}）", path.display()));
-    // mysqldump / pg_dump 能跑几分钟：同步 output() 会一直占着 tokio worker（整个服务卡住）。
-    let fail_msg = format!("执行 {tool} 失败");
-    let output = tokio::task::spawn_blocking(move || command.output())
+    // 用 tokio 的异步子进程 + kill_on_drop：任务被取消 / 看门狗 abort 时，子进程会跟着被杀掉
+    // （std 的 spawn_blocking 做不到 —— 取消只落标志位，mysqldump 会继续跑完并写完文件）。
+    let output = tokio::process::Command::from(command)
+        .kill_on_drop(true)
+        .output()
         .await
-        .map_err(|e| XError::internal(format!("{fail_msg}：工作线程异常：{e}")))?
-        .map_err(|err| XError::internal(format!("{fail_msg}：{err}")))?;
+        .map_err(|err| XError::internal(format!("执行 {tool} 失败：{err}")))?;
     let mut text = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if text.is_empty() {
         text = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1135,9 +1136,12 @@ async fn run_cli_restore(
     let tool = if kind.key() == "sqlite" { "sqlite3" } else { spec.restore_tool };
     task.step(format!("执行 {tool} 还原 {}", path.display()));
     // 还原（psql/mysql/sqlcmd）同样能跑几分钟：和备份侧一样挪到阻塞线程池，别占着 tokio worker。
-    let output = tokio::task::spawn_blocking(move || command.output())
+    // 用 tokio 的异步子进程 + kill_on_drop：任务被取消 / 看门狗 abort 时，子进程会跟着被杀掉
+    // （std 的 spawn_blocking 做不到 —— 取消只落标志位，mysqldump 会继续跑完并写完文件）。
+    let output = tokio::process::Command::from(command)
+        .kill_on_drop(true)
+        .output()
         .await
-        .map_err(|e| XError::internal(format!("执行 {tool} 失败：工作线程异常：{e}")))?
         .map_err(|err| XError::internal(format!("执行 {tool} 失败：{err}")))?;
     let mut text = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if text.is_empty() {
@@ -1866,6 +1870,10 @@ pub async fn install_decision(
     view["success"] = json!(true);
     Ok(Json(view))
 }
+
+/// 「上传备份文件还原」的请求体上限：备份文件动辄几个 GB，axum 默认 2MB 会直接把它挡在门外。
+/// 这里给一个宽松但有界的上限（真正的流式接收另说，先保证大文件能传上来）。
+pub const RESTORE_UPLOAD_LIMIT: usize = 16 * 1024 * 1024 * 1024;
 
 /// `GET /api/backup/download/{taskId}` —— 下载备份文件。
 pub async fn download(State(state): State<AppState>, Path(task_id): Path<String>) -> Response {
