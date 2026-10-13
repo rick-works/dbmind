@@ -76,6 +76,11 @@ jobs:
       # 这一条是本次提速的关键之一 —— 详见那里的注释。
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
+      # ⚠ 必须有这一条：实测踩过 —— GitHub 的缓存服务抖动时（sccache 读到 "Our services
+      #   aren't available right now"），sccache 会**拒绝启动**，而 RUSTC_WRAPPER 又设在 job 级，
+      #   于是每一次 rustc 调用都失败、四个平台全挂在编译上（第一次试运行就是这么挂的）。
+      #   打开它之后：缓存后端出问题只会退化成"这次不缓存"，构建照常走完。
+      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     strategy:
       fail-fast: false
       matrix:
