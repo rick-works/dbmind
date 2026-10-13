@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.24": [
+        "Online update: installing now asks only once (it used to ask twice, so two taps of Enter could restart the app without warning) and says clearly that updating closes DBmind and reopens the new version; the startup check also removes installers in the Downloads folder that are not newer than the running version",
+        "Interface-size settings now really work: fixed the home page card font that never changed (hard-coded sizes in the stylesheet were overriding it), and the case where a change reverted after reopening the dialog",
+        "The Data view table size now covers table data, NoSQL and SQL results, and applies to the whole view: the grid, the footer with elapsed time and row count, the pager and the toolbar all follow it"
+    ],
     "v1.2.23": [
         "Online update: after you click it the dialog first says it is checking download sources (no longer sitting at 0 B / 0 B), and shows downloaded size, speed and time left only once the download really starts",
         "Settings: Restore defaults now sits next to the settings it affects (page-level ones share the row with Save, shortcuts in the card header, log level right under the level cards), and is a bordered button everywhere",
