@@ -35,6 +35,28 @@ export const openSafetySettings = () => {
   window.dispatchEvent(new CustomEvent('dc-open-settings', { detail: { tab: 'safety' } }))
 }
 
+/**
+ * 直达某个数据源的编辑弹窗（并停在「只读」那一项）——由 MainView 监听这个全局事件。
+ * 通知渲染在 body 下，拿不到组件方法，所以跟「去设置」一样用事件回传。
+ */
+export const requestEditConn = (connId, focus) => {
+  if (!connId) return
+  window.dispatchEvent(new CustomEvent('dc-open-conn', { detail: { connId, focus } }))
+}
+
+/**
+ * 「当前连接」的解析器 —— 由 MainView 注册。
+ *
+ * 为什么需要它：**后端返回**的只读拦截（走 api 拦截器那条路）前端手里没有连接对象，
+ * 于是那条通知给不出「去修改数据源」的按钮 —— 而用户点到的正是它（截图里那句
+ * 「连接「公司Mysql · test」被标记为只读」就是后端原话）。注册之后，凡是这类通知
+ * 都能拿到"用户当前正在看的连接"，按钮就能真的打开那个数据源的编辑页。
+ */
+let connResolver = () => ''
+export const setSafetyConnResolver = (fn) => {
+  connResolver = typeof fn === 'function' ? fn : (() => '')
+}
+
 // 同一句话短时间内只弹一次：一次操作可能在几处各报一次（结果面板 + 提示），叠三个通知很吵
 let lastShown = { text: '', at: 0 }
 
@@ -48,10 +70,16 @@ export const showSafetyNotice = (detail, opts = {}) => {
   const readOnly = o.kind ? o.kind === 'readonly' : /只读/.test(text)
   const title = o.title || t(readOnly ? 'tdet.blockTitleReadOnly' : 'tdet.prodBlockedTitle')
   const hints = o.hints || (readOnly ? [t('tdet.blockReadOnlyHint')] : [t('tdet.prodBlockedPath1'), t('tdet.prodBlockedPath2')])
-  // 只读且没给"去修改数据源"的回调时**不显示按钮**：那时按钮只能指向「安全与会话」，
-  // 而那里管的是生产保护，跟只读没关系 —— 指错地方比不给按钮更让人迷惑。
-  const action = o.onAction || (readOnly ? null : openSafetySettings)
+  // 按钮动作的优先级：调用方给的回调 > 只读时"打开那个数据源的编辑页" > 生产保护时"去设置"。
+  // 只读且**连连接都定位不到**时就是 null —— 那时按钮只能指向「安全与会话」，而那里管的是
+  // 生产保护，跟只读没关系（指错地方比不给按钮更让人迷惑）。
+  const connId = o.connId || (readOnly ? connResolver() : '')
+  const action =
+    o.onAction || (readOnly ? (connId ? () => requestEditConn(connId, 'readOnly') : null) : openSafetySettings)
   const actionText = o.actionText || (readOnly ? t('tdet.blockReadOnlyGo') : t('tdet.prodBlockedGo'))
+  // ⚠ 没有 action 时**必须不渲染按钮**：原先无条件渲染一个 onClick:null 的按钮 ——
+  // 它长得跟真按钮一模一样，用户点下去毫无反应（用户反馈「点这个没弹出、没反应」）。
+  // 我的自动化探针当时用 tn.click()，所以
   const now = Date.now()
   if (text && text === lastShown.text && now - lastShown.at < 4000) return
   lastShown = { text, at: now }
@@ -70,17 +98,19 @@ export const showSafetyNotice = (detail, opts = {}) => {
             h('div', { style: `margin-top:${i === 0 ? 3 : 1}px;white-space:nowrap` }, line)
           )
         ]),
-        h(
-          'button',
-          {
-            type: 'button',
-            style:
-              'margin-top:10px;padding:4px 12px;border:none;border-radius:6px;cursor:pointer;' +
-              'font-size:12px;font-weight:600;color:#fff;background:var(--el-color-primary,#409eff)',
-            onClick: action
-          },
-          actionText
-        )
+        action
+          ? h(
+              'button',
+              {
+                type: 'button',
+                style:
+                  'margin-top:10px;padding:4px 12px;border:none;border-radius:6px;cursor:pointer;' +
+                  'font-size:12px;font-weight:600;color:#fff;background:var(--el-color-primary,#409eff)',
+                onClick: action
+              },
+              actionText
+            )
+          : null
       ])
     })
   } catch {

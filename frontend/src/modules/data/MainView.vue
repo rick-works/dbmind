@@ -1155,7 +1155,7 @@ import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Gri
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { compareTaskStatus, compareCancel, syncCancel, getSettings } from '../../api'
-import { showSafetyNotice } from '../../utils/safetyNotice'
+import { showSafetyNotice, setSafetyConnResolver } from '../../utils/safetyNotice'
 // 近 7 天趋势的按天聚合（后端从持久化的 query_history 直接聚合，不再由前端数最近 200 条）
 import { queryTrend } from '../../api'
 import { recordRecentConnection } from '../../utils/recentConnections'
@@ -2160,14 +2160,29 @@ const settingsOpen = ref(false)
 //   ReferenceError → **整个应用挂不上**（表现是全白、树是空的，且资源和缓存都正常，
 //   极难从现象联想到"某一行位置放错了"）。这条注释留在这里防止再犯。
 watch(settingsOpen, (open) => { if (!open) loadSafetyFlags() })
-onMounted(loadSafetyFlags)
+onMounted(() => {
+  loadSafetyFlags()
+  // 注册「当前连接」解析器：写在 onMounted 里是为了避开 TDZ —— currentConnId 声明在文件下方，
+  // setup 阶段直接读它会 ReferenceError（这个坑本轮刚踩过一次，整页挂不上）。
+  setSafetyConnResolver(() => currentConnId.value)
+})
 /** 要直达的设置页签（'' = 上次停留的页签）。首页 MCP 卡「前往设置」用 */
 const settingsTab = ref('')
 const openSettings = (tab = '') => { settingsTab.value = tab; settingsOpen.value = true }
 // AI 助手等子组件通过全局事件请求打开设置（如「AI 服务未配置」提示里的直达链接）
 const onOpenSettingsEvent = (e) => openSettings(e.detail?.tab || '')
+// 安全拦截通知的「去修改数据源 →」：打开目标连接的编辑弹窗，并停在要改的那一项上
+// （focus='readOnly' → 切到「高级」页签 + 把「只读」滚进视野 + 闪一下）。
+// 引用的 treeCtxEditConn 声明在文件下方，但这里只在**点击时**才求值，不会踩 TDZ。
+const onOpenConnEvent = (e) => {
+  const d = (e && e.detail) || {}
+  if (d.connId) treeCtxEditConn(d.connId, d.focus || '')
+}
 window.addEventListener('dc-open-settings', onOpenSettingsEvent)
+// 安全拦截通知里的「去修改数据源 →」：通知在 body 下，用全局事件把 connId 回传到本组件
+window.addEventListener('dc-open-conn', onOpenConnEvent)
 onBeforeUnmount(() => window.removeEventListener('dc-open-settings', onOpenSettingsEvent))
+onBeforeUnmount(() => window.removeEventListener('dc-open-conn', onOpenConnEvent))
 
 // ===== 顶栏右侧：主题 / 语言 快速切换（原来只有知识库 / AI / 设置三枚）=====
 /** 主题模式：system / light / dark，点一次按这个顺序循环 */
@@ -3084,8 +3099,11 @@ const treeCtxDeleteFolder = async (env) => {
 
 const treeCtxEditConn = async (connId, focus) => {
   closeTreeCtxMenu()
-  const c = allConnections.value.find(x => x.id === connId)
-  if (c) openConnDialog(c, '', '', focus)
+  // id 比较用 String() 两边裹一致：树节点给的是字符串、接口原值可能是数字，严格比较会"静默点不动"
+  const c = allConnections.value.find(x => String(x.id) === String(connId))
+  // **查不到也不要静默什么都不做**（用户报的"点了没反应"就是这种）：
+  // 只带 id 交给弹窗，它会自己按 id 去后端拉详情（ConnectionDialog.initForm 已有这条路）。
+  openConnDialog(c || { id: connId }, '', '', focus)
 }
 const treeCtxTestConn = async (connId) => {
   closeTreeCtxMenu()
@@ -3099,7 +3117,7 @@ const treeCtxTestConn = async (connId) => {
 }
 const treeCtxDeleteConn = async (connId) => {
   closeTreeCtxMenu()
-  const c = allConnections.value.find(x => x.id === connId)
+  const c = allConnections.value.find(x => String(x.id) === String(connId))
   if (!c) return
   try {
     await ElMessageBox.confirm(t('mv.deleteConnBody', { name: c.name }), t('mv.deleteConfirmTitle'), { type: 'warning' })

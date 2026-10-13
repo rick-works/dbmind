@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <!-- 整页字号吃「设置 → 界面尺寸 → 数据视图表格」（--dc-data-fs）：字段表/索引表跟着走 -->
   <div v-loading="loading" class="table-edit-page"
        :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px', fontSize: 'var(--dc-data-fs, 13px)' }">
@@ -2148,7 +2148,9 @@ const save = async () => {
     // 安全拦截（生产保护 / 只读连接）：统一走 utils/safetyNotice —— 右上角通知 + 「去设置」按钮。
     // 同一函数也接在 api 拦截器上，所以别的页面遇到同类拦截同样从这个位置弹。
     if (isSafetyBlock(detail)) {
-      showSafetyNotice(detail)
+      // 带上本页对应的连接：只读拦截的通知要能一键打开**这个数据源**的编辑页
+      // （通知渲染在 body 下，拿不到连接对象，只能这里传进去）
+      showSafetyNotice(detail, { connId: props.conn?.id })
     } else {
       ElMessage.error(t('tdet.saveFailed', { detail }))
     }
