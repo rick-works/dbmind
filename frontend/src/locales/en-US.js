@@ -1841,7 +1841,7 @@ export default {
   'settings.about.rel1.level': 'patch',
   'settings.about.rel1.date': '2026-10-13',
   'settings.about.rel1.note1': 'Online update: installing now asks only once (it used to ask twice, so two taps of Enter could restart the app without warning) and says clearly that updating closes DBmind and reopens the new version; the startup check also removes installers in the Downloads folder that are not newer than the running version',
-  'settings.about.rel1.note2': 'Interface-size settings now really work: fixed the home page card font that never changed (hard-coded sizes in the stylesheet were overriding it) and the case where a change reverted after reopening the dialog',
+  'settings.about.rel1.note2': 'Interface-size settings now really work: fixed the home page card font that never changed (hard-coded sizes in the stylesheet were overriding it), and the case where a change reverted after reopening the dialog',
   'settings.about.rel1.note3': 'The Data view table size now covers table data, NoSQL and SQL results, and applies to the whole view: the grid, the footer with elapsed time and row count, the pager and the toolbar all follow it',
   'settings.about.rel2.version': 'v1.2.23',
   'settings.about.rel2.level': 'patch',
