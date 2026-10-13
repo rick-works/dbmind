@@ -642,7 +642,7 @@
                       />
                     </td>
                     <td class="fmt-c-op">
-                      <el-button text :icon="Delete" :title="$t('settings.format.deleteRule')" @click="removeKeywordRule(i)" />
+                      <el-button type="danger" text :icon="Delete" :title="$t('settings.format.deleteRule')" @click="removeKeywordRule(i)" />
                     </td>
                   </tr>
                 </tbody>
@@ -718,7 +718,7 @@
             </el-button>
             <el-button text @click="resetQuery">{{ $t('settings.editor.reset') }}</el-button>
             <!-- 维护动作：历史与结构缓存都在无限增长/有有效期，总要有个手动出口 -->
-            <el-button text :icon="Delete" @click="onClearHistory">{{ $t('settings.query.clearHistory') }}</el-button>
+            <el-button type="danger" text :icon="Delete" @click="onClearHistory">{{ $t('settings.query.clearHistory') }}</el-button>
             <el-button text :icon="Refresh" @click="onRefreshCache">{{ $t('settings.query.refreshCache') }}</el-button>
           </div>
         </div>

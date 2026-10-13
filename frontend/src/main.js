@@ -36,6 +36,10 @@ import 'element-plus/es/components/input/style/css'
 import 'element-plus/es/components/input-number/style/css'
 import 'element-plus/es/components/loading/style/css'
 import 'element-plus/es/components/message/style/css'
+// 通知（ElNotification）：生产保护拦截那条提示用的就是它。
+// **样式必须显式引入**：本工程是按需引样式（不用 dist/index.css），漏了它通知会"渲染了但没样式" ——
+// 看起来就是"点完确认执行什么提示都没有"（真机踩过）。
+import 'element-plus/es/components/notification/style/css'
 import 'element-plus/es/components/message-box/style/css'
 import 'element-plus/es/components/option/style/css'
 import 'element-plus/es/components/option-group/style/css'

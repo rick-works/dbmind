@@ -93,7 +93,7 @@
                   <el-option v-for="p in group.items" :key="p.value" :label="p.label" :value="p.value" />
                 </el-option-group>
               </el-select>
-              <el-button size="small" :icon="Delete" @click="removeDbPriv(i)" />
+              <el-button type="danger" size="small" :icon="Delete" @click="removeDbPriv(i)" />
             </div>
             <el-button size="small" :icon="Plus" @click="addDbPriv" class="add-row-btn">{{ $t('upv.addDbPriv') }}</el-button>
           </div>
@@ -111,7 +111,7 @@
                   <el-option v-for="p in group.items" :key="p.value" :label="p.label" :value="p.value" />
                 </el-option-group>
               </el-select>
-              <el-button size="small" :icon="Delete" @click="removeTablePriv(i)" />
+              <el-button type="danger" size="small" :icon="Delete" @click="removeTablePriv(i)" />
             </div>
             <el-button size="small" :icon="Plus" @click="addTablePriv" class="add-row-btn">{{ $t('upv.addTablePriv') }}</el-button>
           </div>
@@ -151,7 +151,7 @@
               <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:200px">
                 <el-option v-for="p in mssqlSchemaPrivs" :key="p.value" :label="p.label" :value="p.value" />
               </el-select>
-              <el-button size="small" :icon="Delete" @click="removeSchemaPriv(i)" />
+              <el-button type="danger" size="small" :icon="Delete" @click="removeSchemaPriv(i)" />
             </div>
             <el-button size="small" :icon="Plus" @click="addSchemaPriv" class="add-row-btn">{{ $t('upv.addSchemaPriv') }}</el-button>
           </div>
@@ -163,7 +163,7 @@
               <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:180px">
                 <el-option v-for="p in mssqlObjectPrivs" :key="p.value" :label="p.label" :value="p.value" />
               </el-select>
-              <el-button size="small" :icon="Delete" @click="removeObjectPriv(i)" />
+              <el-button type="danger" size="small" :icon="Delete" @click="removeObjectPriv(i)" />
             </div>
             <el-button size="small" :icon="Plus" @click="addObjectPriv" class="add-row-btn">{{ $t('upv.addObjectPriv') }}</el-button>
           </div>

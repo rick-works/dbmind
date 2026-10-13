@@ -2147,20 +2147,26 @@ const save = async () => {
     // 这里给一条**能直接走通**的路：通知里带「去设置」链接，直达 设置 → 安全与会话。
     // （后端那句提示是固定中文，与界面语言无关 —— 按它判定最稳，不看界面文案。）
     if (detail.includes('生产保护') || e?.code === 'DBMIND-SAFETY-0003') {
-      ElNotification({
-        type: 'warning',
-        title: t('tdet.prodBlockedTitle'),
-        duration: 12000,
-        // 用**行内样式**而不是 class：ElNotification 渲染在 body 下，本组件的 scoped 样式未必命中
-        message: h('div', { style: 'max-width:460px;line-height:1.5' }, [
-          h('div', detail),
-          h('div', { style: 'margin-top:6px;font-size:12px;opacity:.75' }, t('tdet.prodBlockedHint')),
-          h('a', {
-            style: 'display:inline-block;margin-top:8px;font-weight:600;cursor:pointer',
-            onClick: openSafetySettings
-          }, t('tdet.prodBlockedGo'))
-        ])
-      })
+      try {
+        ElNotification({
+          type: 'warning',
+          title: t('tdet.prodBlockedTitle'),
+          duration: 12000,
+          // 用**行内样式**而不是 class：ElNotification 渲染在 body 下，本组件的 scoped 样式未必命中
+          message: h('div', { style: 'max-width:460px;line-height:1.5' }, [
+            h('div', detail),
+            h('div', { style: 'margin-top:6px;font-size:12px;opacity:.75' }, t('tdet.prodBlockedHint')),
+            h('a', {
+              style: 'display:inline-block;margin-top:8px;font-weight:600;cursor:pointer',
+              onClick: openSafetySettings
+            }, t('tdet.prodBlockedGo'))
+          ])
+        })
+      } catch (err) {
+        // 兜底：通知若因任何原因起不来（样式缺失、VNode 出错…），也必须让用户看到一句话 ——
+        // 这类"被拦下却毫无提示"是用户最难自查的（他以为点了没反应）。
+        ElMessage.error(t('tdet.saveFailed', { detail }))
+      }
     } else {
       ElMessage.error(t('tdet.saveFailed', { detail }))
     }

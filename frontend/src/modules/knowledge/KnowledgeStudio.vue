@@ -138,7 +138,7 @@
                 <el-button size="small" text :icon="Refresh" :title="$t('ks.reindex')"
                            :disabled="!cfg.buildVector" @click="doReindex" />
                 <span class="kbs-head-ops-sep"></span>
-                <el-button size="small" text :icon="Delete" :title="$t('ks.deleteKb')" class="kbs-head-del"
+                <el-button type="danger" size="small" text :icon="Delete" :title="$t('ks.deleteKb')" class="kbs-head-del"
                            @click="removeKb" />
               </span>
             </div>
@@ -191,7 +191,7 @@
                 </span>
               </div>
             </div>
-            <el-button size="small" text :icon="Delete" :title="$t('ks.deleteDoc')" class="kbs-doc-del"
+            <el-button type="danger" size="small" text :icon="Delete" :title="$t('ks.deleteDoc')" class="kbs-doc-del"
                        @click.stop="removeDoc(d)" />
           </div>
 

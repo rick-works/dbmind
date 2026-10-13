@@ -220,7 +220,31 @@
                           @blur="commitRenameGroup()" />
                 <span v-else-if="data.kind !== 'conn' && !(data.kind === 'placeholder' && data.label === $t('tree.loading'))"
                       class="node-label"
-                      :class="{ 'env-folder-label': data.kind === 'env-folder', 'db-label-current': data.kind === 'db' && isDbOpened(data), 'hint-label': data.kind === 'placeholder' }">{{ nodeText(data, node) }}</span>
+                      :class="{ 'env-folder-label': data.kind === 'env-folder', 'db-label-current': data.kind === 'db' && isDbOpened(data), 'hint-label': data.kind === 'placeholder' }"><el-tooltip
+                        :disabled="!objTipEnabled(data)" :show-after="280" placement="right" effect="dark">
+                        <!-- 悬浮看表注释（用户要求）：有注释显示注释，没有就明确说「无注释」 -->
+                        <template #content>
+                          <div style="max-width:320px;line-height:1.55">
+                            <div style="font-weight:600;margin-bottom:4px">
+                              {{ data.label }}<span style="font-weight:400;opacity:.6;margin-left:6px">{{ data.kind === 'view' ? $t('tree.cat.views') : $t('tree.cat.tables') }}</span>
+                            </div>
+                            <div style="display:flex;gap:6px">
+                              <span style="opacity:.6;flex:none">{{ $t('tree.tip.comment') }}</span>
+                              <span v-if="data.comment">{{ data.comment }}</span>
+                              <span v-else style="opacity:.6">{{ $t('tree.tip.noComment') }}</span>
+                            </div>
+                            <div style="display:flex;gap:6px">
+                              <span style="opacity:.6;flex:none">{{ $t('tree.tip.rows') }}</span>
+                              <span>{{ objRowText(data) }}</span>
+                            </div>
+                            <div style="display:flex;gap:6px">
+                              <span style="opacity:.6;flex:none">{{ $t('tree.tip.where') }}</span>
+                              <span>{{ data.db }}</span>
+                            </div>
+                          </div>
+                        </template>
+                        <span>{{ nodeText(data, node) }}</span>
+                      </el-tooltip></span>
                 <!-- 行数未知时整个不显示（不是显示 0，也不是留一个空药丸）：
                      「不知道」和「这张表是空的」必须能一眼区分开 -->
                 <el-tag v-if="data.kind === 'table' && (tableRows[data.id] != null || data.rows != null)" size="small" effect="dark" class="row-tag">{{ tableRows[data.id] != null ? tableRows[data.id] : data.rows }}</el-tag>
@@ -338,7 +362,7 @@
                 <!-- 清空历史：后端一直有 DELETE /api/dbmind/history，界面却没有入口。
                      只在**有记录**时出现 —— 空卡片上摆一个点了也没用的按钮是噪音。 -->
                 <el-tooltip v-if="recentHistory.length" :content="$t('empty.clearHistory')" placement="top">
-                  <el-button class="empty-head-btn" text size="small" :icon="Delete"
+                  <el-button type="danger" class="empty-head-btn" text size="small" :icon="Delete"
                              @click="onClearHistory" />
                 </el-tooltip>
               </div>
@@ -5030,6 +5054,14 @@ const onUpdateTableRows = ({ connId, database, table, rows }) => {
 // `onlyMissing = true`：只查**还不知道行数**的表。被动展开走这条 —— 否则每次展开
 // （包括命中持久缓存那种）都会对着整库重跑一遍 COUNT(*)，300 张表的库就是 300 条查询，
 // 而树上的数字多数时候没变。显式「刷新」传 false：用户要的就是最新值。
+/** 树上「悬浮看注释」的提示只给表与视图（其它节点没有注释的概念） */
+const objTipEnabled = (d) => !!d && (d.kind === 'table' || d.kind === 'view')
+/** 提示卡片里的行数：与树上的徽标同源（精确值优先 → 估算值 → 都没有就说「未统计」） */
+const objRowText = (d) => {
+  const n = tableRows.value[d.id] != null ? tableRows.value[d.id] : d.rows
+  return n == null ? t('tree.tip.rowsUnknown') : String(n)
+}
+
 const fillRealRowCounts = async (connId, db, tables, onlyMissing = false) => {
   let names = (Array.isArray(tables) ? tables : [])
     .filter(t => (t.type || 'TABLE') === 'TABLE')

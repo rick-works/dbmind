@@ -41,7 +41,8 @@ const catItemNodes = ({ cat, connId, db, items = [] }) => {
   }
   if (cat === 'views') {
     return arr.filter(t => t.type === 'VIEW').map(v => ({
-      id: 'view:' + connId + ':' + db + ':' + v.name, label: v.name, kind: 'view', table: v.name, db, connId
+      // comment 一并带上：树上悬浮要显示对象注释（表与视图同一套提示）
+      id: 'view:' + connId + ':' + db + ':' + v.name, label: v.name, kind: 'view', table: v.name, comment: v.comment, db, connId
     }))
   }
   if (cat === 'users') {
