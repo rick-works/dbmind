@@ -19,6 +19,11 @@
   --dc-success: #3ddc97;
   --dc-danger: #ff6161;
   --dc-warning: #f5b34d;
+  /* 「开发」环境角标的绿：**分主题**取值（和 --dc-warning 同一套思路）。
+     深色背景上用明亮的薄荷绿最清楚；浅色背景上同一个绿发亮刺眼（用户反馈"浅色主题下开发的绿色有点不舒服"），
+     所以浅色主题里换成更沉一点的绿（见 html[data-theme="light"] 那段）。 */
+  --dc-env-dev: #3ddc97;
+  --dc-env-dev-wash: rgba(61, 220, 151, .12);
   --dc-purple: #a78bfa;
   --dc-on-primary: #ffffff;    /* 主色底/渐变上的文字与图标 */
 
@@ -165,6 +170,9 @@ html[data-theme="light"] {
   --dc-success: #16a34a;
   --dc-success-wash: rgba(22, 163, 74, .10);
   --dc-warning: #d97706;
+  /* 浅色主题的「开发」绿：从霓虹薄荷 #3ddc97 换成 #16a34a（沉一些、不刺眼，与浅色下的 --dc-warning 同一明度档） */
+  --dc-env-dev: #16a34a;
+  --dc-env-dev-wash: rgba(22, 163, 74, .12);
   --dc-danger: #dc2626;
   --dc-on-primary: #ffffff;    /* 浅色主色较深，白字对比更清晰 */
 
