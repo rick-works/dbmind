@@ -668,7 +668,8 @@ const loadSrcColumns = async () => {
     if (wantTable !== src.value.table) return // 期间换了表：这次结果作废
     srcCols.value = cols
   } catch (e) {
-    srcCols.value = []
+    // 过期请求失败也不能动新表的数据（同上面的守卫）
+    if (wantTable === src.value.table) srcCols.value = []
   }
 }
 watch(() => src.value.table, () => loadSrcColumns())
@@ -717,7 +718,8 @@ const loadTgtColumns = async () => {
     if (wantTable !== tgt.value.table) return
     tgtCols.value = cols
   } catch (e) {
-    tgtCols.value = []
+    // 过期请求失败也不能动新表的数据（同上）
+    if (wantTable === tgt.value.table) tgtCols.value = []
   }
 }
 // 比对键里混入「全选」哨兵值时剔除（el-option value=__all__）

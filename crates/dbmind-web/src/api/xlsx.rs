@@ -323,18 +323,18 @@ pub fn parse(bytes: &[u8]) -> XResult<Vec<Vec<Option<String>>>> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|e| XError::bad_request(format!("这不是有效的 .xlsx（zip 打不开）：{e}")))?;
 
-    let shared = entry_text(&mut zip, "xl/sharedStrings.xml")
+    let shared = entry_text(&mut zip, "xl/sharedStrings.xml")?
         .map(|xml| shared_strings(&xml))
         .unwrap_or_default();
 
-    let workbook = entry_text(&mut zip, "xl/workbook.xml").unwrap_or_default();
+    let workbook = entry_text(&mut zip, "xl/workbook.xml")?.unwrap_or_default();
     let date1904 = workbook.contains("date1904=\"1\"") || workbook.contains("date1904=\"true\"");
-    let date_xf = entry_text(&mut zip, "xl/styles.xml")
+    let date_xf = entry_text(&mut zip, "xl/styles.xml")?
         .map(|xml| date_styles(&xml))
         .unwrap_or_default();
 
-    let sheet_path = sheet_path_in(&mut zip, &workbook);
-    let sheet = entry_text(&mut zip, &sheet_path).ok_or_else(|| {
+    let sheet_path = sheet_path_in(&mut zip, &workbook)?;
+    let sheet = entry_text(&mut zip, &sheet_path)?.ok_or_else(|| {
         XError::bad_request(format!(
             "这个 .xlsx 里找不到工作表（期望 {sheet_path}）—— 文件可能损坏，或只存了宏"
         ))
@@ -347,25 +347,41 @@ pub fn parse(bytes: &[u8]) -> XResult<Vec<Vec<Option<String>>>> {
     Ok(rows)
 }
 
-/// 读 zip 里的一个文本条目（不存在 / 解码失败都当「没有」，调用方各自兜底）。
-fn entry_text<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, name: &str) -> Option<String> {
-    // **限大小**：xlsx 是个 zip，恶意/损坏文件能做成"解压炸弹"（某个条目解出来几十 GB），
-    // 不限的话 read_to_end 直接把内存吃光。正常工作簿的这些条目远小于此。
-    const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
-    let mut file = zip.by_name(name).ok()?;
+const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
+
+/// 条目超过上限时的统一说法（把"多大 / 上限多少"讲清楚，别让人以为文件坏了）。
+fn entry_too_big(name: &str, size: u64) -> XError {
+    XError::bad_request(format!(
+        ".xlsx 内部条目 {name} 有 {} MB，超过 {} MB 上限：文件异常或过大，为免吃满内存已中止导入",
+        size / (1024 * 1024),
+        MAX_ENTRY_BYTES / (1024 * 1024)
+    ))
+}
+
+/// 读 zip 里的一个文本条目。
+///
+/// - 条目**不存在** ⇒ `Ok(None)`（调用方各自兜底：没有共享字符串表是很正常的）；
+/// - 条目**超过大小上限** ⇒ `Err` —— 这两种情况必须分开。xlsx 是个 zip，恶意/损坏文件
+///   能做"解压炸弹"（某个条目解出来几十 GB），不限大小 read_to_end 会把内存吃光；
+///   但若把"超限"当成"没有"，`sharedStrings.xml` 一被丢掉，整张表**所有文本单元格会静默变空**，
+///   用户只看到"数据没了"却收不到任何提示。
+fn entry_text<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, name: &str) -> XResult<Option<String>> {
+    let Some(mut file) = zip.by_name(name).ok() else {
+        return Ok(None);
+    };
     if file.size() > MAX_ENTRY_BYTES {
-        return None;
+        return Err(entry_too_big(name, file.size()));
     }
     let mut buffer = Vec::new();
     file.by_ref()
         .take(MAX_ENTRY_BYTES + 1)
         .read_to_end(&mut buffer)
-        .ok()?;
+        .map_err(|e| XError::bad_request(format!("读取 .xlsx 内部条目 {name} 失败：{e}")))?;
     // 条目自称的大小可以撒谎（zip 头是文件里的数据），读进来再核一次
     if buffer.len() as u64 > MAX_ENTRY_BYTES {
-        return None;
+        return Err(entry_too_big(name, buffer.len() as u64));
     }
-    Some(String::from_utf8_lossy(&buffer).into_owned())
+    Ok(Some(String::from_utf8_lossy(&buffer).into_owned()))
 }
 
 /// 第一个工作表在 zip 里的路径。
@@ -373,7 +389,7 @@ fn entry_text<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, name: &str) -> Optio
 /// **不能假设它叫 `sheet1.xml`**：用户在 Excel 里调整过工作表顺序、或删过又建过之后，
 /// 第一个工作表完全可能是 `sheet2.xml`。所以先按 `workbook.xml` 的声明 + 关系文件解析，
 /// 解析不出来再退回「编号最小的那个」。
-fn sheet_path_in<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, workbook: &str) -> String {
+fn sheet_path_in<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, workbook: &str) -> XResult<String> {
     // 先把兜底路径算出来：`file_names()` 是对 zip 的**只读**借用，
     // 与后面读文件条目的可变借用不能共存（借用检查器会直接拦下）
     let fallback = {
@@ -391,20 +407,20 @@ fn sheet_path_in<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, workbook: &str) -
 
     // workbook.xml 里第一个 <sheet ... r:id="rIdN"/> 就是「第一个工作表」
     let Some(rid) = first_sheet_rel(workbook) else {
-        return fallback;
+        return Ok(fallback);
     };
-    let Some(rels) = entry_text(zip, "xl/_rels/workbook.xml.rels") else {
-        return fallback;
+    let Some(rels) = entry_text(zip, "xl/_rels/workbook.xml.rels")? else {
+        return Ok(fallback);
     };
     let Some(target) = relationship_target(&rels, &rid) else {
-        return fallback;
+        return Ok(fallback);
     };
     // 关系里的 Target 可能是相对路径（`worksheets/sheet1.xml`）或绝对路径（`/xl/worksheets/...`）
     let trimmed = target.trim_start_matches('/');
     if trimmed.starts_with("xl/") {
-        trimmed.to_string()
+        Ok(trimmed.to_string())
     } else {
-        format!("xl/{trimmed}")
+        Ok(format!("xl/{trimmed}"))
     }
 }
 

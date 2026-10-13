@@ -1347,6 +1347,12 @@ const announceReady = async () => {
   doInstall()
 }
 
+/** 撤掉「待生效版本」标记。安装器根本没被拉起来时（接口失败 / 抛错）必须清掉，
+    否则下次启动 maybeAnnounceUpgraded 会误报「上次更新好像没装上」—— 那次压根没装。 */
+const clearPendingUpdate = () => {
+  try { localStorage.removeItem(PENDING_LS) } catch { /* 隐私模式等：只影响这次提示 */ }
+}
+
 const doInstall = async () => {
   // 记下这次要装的版本：装完重启后如果版本没变，就在启动时提醒一句（见 maybeAnnounceUpgraded）
   try { localStorage.setItem(PENDING_LS, String((updateInfo.value && updateInfo.value.latest) || '')) } catch { /* 忽略 */ }
@@ -1354,12 +1360,15 @@ const doInstall = async () => {
     const r = await installUpdateApi()
     if (!r || r.success === false) {
       // 自动拉起被系统挡住时，后端给的这句话里带着安装包路径（双击即可安装）
+      // 安装器没被拉起：撤掉标记，免得下次启动误报「上次更新没装上」
+      clearPendingUpdate()
       ElMessage.error((r && r.message) || t('update.applyFail'))
       return
     }
     // 安装器已拉起：本进程一秒多后就会被关掉，界面收到这儿就够了
     dlVisible.value = false
   } catch (e) {
+    clearPendingUpdate()
     ElMessage.error((e && e.message) || t('update.applyFail'))
   }
 }

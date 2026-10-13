@@ -675,7 +675,7 @@ const loadDocs = async () => {
     docs.value = (d && d.docs) || []
     if (d && d.indexMode) indexMode.value = d.indexMode
     vectorsReady.value = d ? d.vectorsReady !== false : true
-  } catch (e) { docs.value = [] }
+  } catch (e) { if (wantKb === activeId.value) docs.value = [] }
 }
 
 // ---------- 向导 ----------

@@ -1022,6 +1022,15 @@ fn cli_command(
     Ok(command)
 }
 
+/// 等任务被取消（用户点「取消」/ 看门狗判定超时）。
+///
+/// CLI 子进程一跑就是几十分钟，中途必须能被打断：在 `select!` 里跟它赛跑，
+/// 取消这一路胜出时 `wait_with_output` 的 future 被丢掉 → `kill_on_drop` 终止子进程。
+async fn wait_canceled(task: &Task) {
+    while !task.is_canceled() {
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+    }
+}
 /// 用命令行工具备份。
 async fn run_cli_backup(
     state: &AppState,
@@ -1064,13 +1073,23 @@ async fn run_cli_backup(
     )?;
     let tool = if kind.key() == "sqlite" { "sqlite3" } else { spec.tool };
     task.step(format!("执行 {tool}（备份到 {}）", path.display()));
-    // 用 tokio 的异步子进程 + kill_on_drop：任务被取消 / 看门狗 abort 时，子进程会跟着被杀掉
-    // （std 的 spawn_blocking 做不到 —— 取消只落标志位，mysqldump 会继续跑完并写完文件）。
-    let output = tokio::process::Command::from(command)
+    // 自己 spawn 再等：**光落取消标志位不够** —— .output().await 期间打断不了，
+    // 用户点了取消、界面写着"已取消"，mysqldump 其实还在后台跑完并写文件。
+    // 这里 select 一个「取消轮询」，取消时丢掉 wait 的 future → kill_on_drop 杀掉子进程。
+    let child = tokio::process::Command::from(command)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
-        .output()
-        .await
+        .spawn()
         .map_err(|err| XError::internal(format!("执行 {tool} 失败：{err}")))?;
+    let output = tokio::select! {
+        out = child.wait_with_output() => {
+            out.map_err(|err| XError::internal(format!("等待 {tool} 结束失败：{err}")))?
+        }
+        _ = wait_canceled(&task) => {
+            return Err(XError::bad_request(format!("任务已取消：已终止 {tool} 进程")));
+        }
+    };
     let mut text = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if text.is_empty() {
         text = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1128,14 +1147,24 @@ async fn run_cli_restore(
     )?;
     let tool = if kind.key() == "sqlite" { "sqlite3" } else { spec.restore_tool };
     task.step(format!("执行 {tool} 还原 {}", path.display()));
-    // 还原（psql/mysql/sqlcmd）同样能跑几分钟：和备份侧一样挪到阻塞线程池，别占着 tokio worker。
-    // 用 tokio 的异步子进程 + kill_on_drop：任务被取消 / 看门狗 abort 时，子进程会跟着被杀掉
-    // （std 的 spawn_blocking 做不到 —— 取消只落标志位，mysqldump 会继续跑完并写完文件）。
-    let output = tokio::process::Command::from(command)
+    // 还原（psql/mysql/sqlcmd）同样能跑几分钟：用 tokio 的异步子进程，别占着 tokio worker。
+    // 自己 spawn 再等：**光落取消标志位不够** —— .output().await 期间打断不了，
+    // 用户点了取消、界面写着"已取消"，mysqldump 其实还在后台跑完并写文件。
+    // 这里 select 一个「取消轮询」，取消时丢掉 wait 的 future → kill_on_drop 杀掉子进程。
+    let child = tokio::process::Command::from(command)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .kill_on_drop(true)
-        .output()
-        .await
+        .spawn()
         .map_err(|err| XError::internal(format!("执行 {tool} 失败：{err}")))?;
+    let output = tokio::select! {
+        out = child.wait_with_output() => {
+            out.map_err(|err| XError::internal(format!("等待 {tool} 结束失败：{err}")))?
+        }
+        _ = wait_canceled(&task) => {
+            return Err(XError::bad_request(format!("任务已取消：已终止 {tool} 进程")));
+        }
+    };
     let mut text = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if text.is_empty() {
         text = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1597,17 +1626,36 @@ pub async fn restore_start(
 ) -> XResult<Json<Value>> {
     let mut connection_id = String::new();
     let mut database = String::new();
-    // **边收边写**：上传的备份动辄几个 GB，先在内存里攒齐再落盘会直接把内存吃光、
-    // 首字节也要等到整个文件传完。这里收到一块就写一块（异步 IO，也不占 tokio worker）。
+    // **边收边写**：上传的备份动辄几个 GB，先在内存里攒齐再落盘会把内存吃光、
+    // 首字节也要等整个文件传完。这里收到一块写一块（异步 IO，不占 tokio worker）。
+    //
+    // 落盘的文件在**每条失败路径**上都要删掉：半截的 dump 留在产物目录里没人认领，只会白占磁盘。
     let mut saved: Option<(PathBuf, u64)> = None;
-    while let Some(mut field) = multipart
-        .next_field()
-        .await
-        .map_err(|e| XError::bad_request(format!("解析上传表单失败：{e}")))?
-    {
+    // 删除发出去就不管（不 await）：失败分支里只写一行，别让清理把错误路径拖长
+    let drop_file = |path: &PathBuf| {
+        let path = path.clone();
+        tokio::spawn(async move {
+            let _ = tokio::fs::remove_file(&path).await;
+        });
+    };
+    loop {
+        let mut field = match multipart.next_field().await {
+            Ok(Some(field)) => field,
+            Ok(None) => break,
+            Err(e) => {
+                if let Some((prev, _)) = saved.take() {
+                    drop_file(&prev);
+                }
+                return Err(XError::bad_request(format!("解析上传表单失败：{e}")));
+            }
+        };
         let name = field.name().unwrap_or_default().to_string();
         let source_name = field.file_name().map(str::to_string);
         if name == "file" {
+            // 表单里出现第二个 file 字段：前一个删掉，别留孤儿文件
+            if let Some((prev, _)) = saved.take() {
+                drop_file(&prev);
+            }
             let file_name = source_name.unwrap_or_default();
             let dir = dbmind_core::paths::work_dir().join("restore");
             dbmind_core::paths::ensure_dir(&dir)?;
@@ -1616,30 +1664,45 @@ pub async fn restore_start(
                 tasks::stamp(),
                 safe_name(if file_name.is_empty() { "upload.sql" } else { &file_name })
             ));
-            let mut file = tokio::fs::File::create(&path)
-                .await
-                .map_err(|e| XError::internal(format!("保存上传文件失败：{e}")))?;
+            let mut file = match tokio::fs::File::create(&path).await {
+                Ok(file) => file,
+                Err(e) => return Err(XError::internal(format!("保存上传文件失败：{e}"))),
+            };
             use tokio::io::AsyncWriteExt;
             let mut total: u64 = 0;
-            while let Some(chunk) = field
-                .chunk()
-                .await
-                .map_err(|e| XError::bad_request(format!("读取上传内容失败：{e}")))?
-            {
-                file.write_all(&chunk)
-                    .await
-                    .map_err(|e| XError::internal(format!("保存上传文件失败：{e}")))?;
+            loop {
+                let chunk = match field.chunk().await {
+                    Ok(Some(chunk)) => chunk,
+                    Ok(None) => break,
+                    Err(e) => {
+                        drop(file);
+                        drop_file(&path);
+                        return Err(XError::bad_request(format!("读取上传内容失败：{e}")));
+                    }
+                };
+                if let Err(e) = file.write_all(&chunk).await {
+                    drop(file);
+                    drop_file(&path);
+                    return Err(XError::internal(format!("保存上传文件失败：{e}")));
+                }
                 total += chunk.len() as u64;
             }
-            file.flush()
-                .await
-                .map_err(|e| XError::internal(format!("保存上传文件失败：{e}")))?;
+            if let Err(e) = file.flush().await {
+                drop(file);
+                drop_file(&path);
+                return Err(XError::internal(format!("保存上传文件失败：{e}")));
+            }
             saved = Some((path, total));
         } else {
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| XError::bad_request(format!("读取上传内容失败：{e}")))?;
+            let data = match field.bytes().await {
+                Ok(data) => data,
+                Err(e) => {
+                    if let Some((prev, _)) = saved.take() {
+                        drop_file(&prev);
+                    }
+                    return Err(XError::bad_request(format!("读取上传内容失败：{e}")));
+                }
+            };
             match name.as_str() {
                 "connectionId" => connection_id = String::from_utf8_lossy(&data).trim().to_string(),
                 "database" => database = String::from_utf8_lossy(&data).trim().to_string(),
@@ -1650,19 +1713,23 @@ pub async fn restore_start(
     let (path, total) = saved
         .ok_or_else(|| XError::bad_request("没有收到上传的备份文件（字段名应为 file）"))?;
     if total == 0 {
-        // 空文件别留在产物目录里
-        let _ = tokio::fs::remove_file(&path).await;
+        drop_file(&path);
         return Err(XError::bad_request("上传的备份文件是空的"));
     }
-    spawn_restore(
+    // 起任务前还要校验连接与库：这一步失败，刚落的文件同样要删掉
+    let started = spawn_restore(
         &state,
         connection_id,
         Some(database),
-        path,
+        path.clone(),
         "auto".to_string(),
         None,
     )
-    .await
+    .await;
+    if started.is_err() {
+        drop_file(&path);
+    }
+    started
 }
 
 /// 起一个还原任务（上传与本机路径两条入口共用）。
