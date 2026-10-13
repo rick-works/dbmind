@@ -7365,12 +7365,22 @@ const connTypeSummary = computed(() =>
   background: var(--dc-warning-wash);
   border-color: var(--dc-warning);
 }
-.env-corner-DEV { background: rgba(61,220,151,.15); color: #3ddc97; border: 1px solid rgba(61,220,151,.45); }
-.env-corner-TEST { background: rgba(245,158,11,.15); color: #f59e0b; border: 1px solid rgba(245,158,11,.45); }
-.env-corner-PROD { background: rgba(239,68,68,.16); color: #ef4444; border: 1px solid rgba(239,68,68,.5); }
-.env-corner-STAGING { background: rgba(167,139,250,.15); color: #a78bfa; border: 1px solid rgba(167,139,250,.45); }
-.env-corner-UAT { background: rgba(6,182,212,.15); color: #06b6d4; border: 1px solid rgba(6,182,212,.45); }
-.env-corner-none { background: rgba(107,114,128,.15); color: #8b95a3; border: 1px solid rgba(107,114,128,.4); }
+/* 环境角标：与「只读」**同一套公式**（文字 = 实色、边框 = 同一个实色、底色 = 16% 淡色），只有色调不同。
+   原先每个环境各写一条 `border: 1px solid rgba(hue,.45)`，文字又来自另一个 0.45 的来源 ——
+   于是环境角标的文字与边框都只有 45% 不透明度：**尺寸一样却看着又细又淡**，跟只读放一起像两种东西
+   （用户反馈"框的样式、框的大小、字体大小看起来还是不一样"，实测盒 31x15、10px/600 都一致，差的就是这个）。 */
+.env-corner {
+  color: var(--ec, #8b95a3);
+  background: var(--ec-bg, rgba(107,114,128,.16));
+  border-color: var(--ec, #8b95a3);
+}
+/* 环境色调：只给两个变量，颜色公式在上一条里（改色只改这里） */
+.env-corner-DEV { --ec: #3ddc97; --ec-bg: rgba(61,220,151,.16); }
+.env-corner-TEST { --ec: #f59e0b; --ec-bg: rgba(245,158,11,.16); }
+.env-corner-PROD { --ec: #ef4444; --ec-bg: rgba(239,68,68,.16); }
+.env-corner-STAGING { --ec: #a78bfa; --ec-bg: rgba(167,139,250,.16); }
+.env-corner-UAT { --ec: #06b6d4; --ec-bg: rgba(6,182,212,.16); }
+.env-corner-none { --ec: #8b95a3; --ec-bg: rgba(107,114,128,.16); }
 /* 环境文件夹节点：靠文字加粗 + 顶部分隔（通过 el-tree 第一层选择器） */
 .dc-tree :deep(.el-tree > .el-tree-node > .el-tree-node__content) {
   border-top: 1px solid var(--dc-border);
