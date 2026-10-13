@@ -1842,8 +1842,8 @@ export default {
   'settings.about.rel1.version': 'v1.2.26',
   'settings.about.rel1.level': 'patch',
   'settings.about.rel1.date': '2026-10-13',
-  'settings.about.rel1.note1': 'Online update: only the newest installer is kept - older versions are cleaned up automatically (each upgrade used to leave one more behind in your Downloads),'
-  'settings.about.rel1.note2': 'Backup and restore: large uploads are now streamed to disk instead of being buffered whole, a failed or cancelled restore no longer leaves a half-written file, and cancelling a command-line backup or restore really stops the process,'
+  'settings.about.rel1.note1': 'Online update: only the newest installer is kept - older versions are cleaned up automatically (each upgrade used to leave one more behind in your Downloads),',
+  'settings.about.rel1.note2': 'Backup and restore: large uploads are now streamed to disk instead of being buffered whole, a failed or cancelled restore no longer leaves a half-written file, and cancelling a command-line backup or restore really stops the process,',
   'settings.about.rel1.note3': 'Import and export: an oversized entry inside an .xlsx now reports an error instead of silently blanking every text cell, and exported file names also avoid Windows trailing dots or spaces and reserved names such as CON and NUL',
   'settings.about.rel2.version': 'v1.2.25',
   'settings.about.rel2.level': 'patch',
