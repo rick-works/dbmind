@@ -1406,8 +1406,10 @@ _ => Meta::Unwritten,
                     .to_string(),
             ),
             "oracle" | "dm" => Meta::Sql(
-                "select object_name as \"name\", object_type as \"routineType\" from user_objects \
-                 where object_type in ('PROCEDURE','FUNCTION') order by object_name"
+                "select owner; '.'; object_name as \"name\", object_type as \"routineType\" \
+                 from all_objects where object_type in ('PROCEDURE','FUNCTION') \
+                 and owner not in ('SYS','SYSTEM','XDB','MDSYS','CTXSYS','DVSYS','LBACSYS','ORDSYS','WMSYS') \
+                 order by owner, object_name"
                     .to_string(),
             ),
             "db2" => Meta::Sql(
@@ -1462,8 +1464,10 @@ _ => Meta::Unwritten,
                     .to_string(),
             ),
             "oracle" | "dm" => Meta::Sql(
-                "select trigger_name as \"name\", table_name as \"table\" from user_triggers \
-                 order by trigger_name"
+                "select owner; '.'; trigger_name as \"name\", table_owner; '.'; table_name as \"table\" \
+                 from all_triggers \
+                 where owner not in ('SYS','SYSTEM','XDB','MDSYS','CTXSYS','DVSYS','LBACSYS','ORDSYS','WMSYS') \
+                 order by owner, trigger_name"
                     .to_string(),
             ),
             "db2" => Meta::Sql(

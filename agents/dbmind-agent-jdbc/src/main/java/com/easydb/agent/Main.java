@@ -287,6 +287,18 @@ public final class Main {
             // 部分驱动不支持只读提示；内核的策略闸门才是权威
         }
 
+        // 元数据**预热**：Oracle 上第一次调用 DatabaseMetaData 要付一笔很重的初始化账
+        // （实测首次 >30 秒，之后 20ms 级），而内核给元数据请求的超时是 30 秒 ——
+        // 用户第一次点开「表结构」就撞在超时线上（报"agent 调用 columns 超过 30000 ms"）。
+        // 这里在**建会话时**用一个不存在的表名把账提前付掉：getColumns 返回空、不报错，
+        // 代价落在"正在连接"这一步（那一步本来就要等几秒），而不是元数据的 30 秒超时线上。
+        try (ResultSet warmUp = connection.getMetaData().getColumns(null, null, "DBMIND_META_WARMUP", "%")) {
+            while (warmUp.next()) {
+                // 不存在的表：这里只会是空集
+            }
+        } catch (Exception ignored) {
+            // 预热失败不影响任何功能
+        }
         Session previous = SESSIONS.put(sessionId, new Session(sessionId, agentKey, url, connection));
         if (previous != null) {
             previous.close();
