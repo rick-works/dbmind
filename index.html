@@ -693,6 +693,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.24（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.24</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-13</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>在线更新</b>：安装只问一次（原来在下载完与开装前各问一次，连按两次回车就会「没打招呼地重启」），并写清"会关闭 DBmind、装好后自动打开新版"；启动检查时还会清理「下载」目录里不高于当前版本的历史安装包（只删本应用下载的那些；比当前版本新的保留，免得安装没生效时连自救的包也没了）</li>
+            <li><b>界面尺寸设置真正生效</b>：修好「首页卡片文字」怎么调都不动（被样式表里写死的字号盖住），以及"改完再打开又变回去"（编辑器设置的加载把旧值反向覆盖回来）</li>
+            <li><b>「数据视图表格」扩到表数据 / NoSQL / SQL 结果三处，并改成整页跟随——表格、底栏耗时与总条数、分页、工具条一起变</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.24" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.24" target="_blank" rel="noopener">下载 v1.2.24</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.23（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +721,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.23</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-13</span>
           </div>
           <ul class="rel-notes">
