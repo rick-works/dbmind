@@ -176,6 +176,9 @@ jobs:
       - name: 缓存 cargo
         uses: Swatinem/rust-cache@v2
         with:
+          # key 必须按 job 区分：拆分后有两个 Windows job，同 key 会互相覆盖缓存，
+          # 下一轮就可能恢复到一个"半新半旧"的 target（实测耗时忽快忽慢就是这个原因）。
+          key: ${{ matrix.art }}
           cache-on-failure: true
 
       # 下面所有 run 都显式指定 bash：Windows runner 默认是 pwsh，
