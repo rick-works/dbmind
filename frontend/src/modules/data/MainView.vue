@@ -4153,7 +4153,7 @@ const NO_DEFAULT_DB = '(default)'
  *   · 展开库时 `?database=<catalog>.<库>` 原样传给后端，由后端走
  *     `<catalog>.information_schema` 查询（见 dialect::tables_in_catalog）。
  */
-const dbChildNodes = (connId, connType, dbList, catalog) => {
+const dbListToDbNodes = (connId, connType, dbList, catalog) => {
   const raw = Array.isArray(dbList) ? dbList : []
   const list = raw.filter(db => isNoSqlType(connType) || String(db) !== NO_DEFAULT_DB)
   // 过滤后一个库都没有：说明真正发生的是「列库查询没成功」，而不是「这台服务器没有库」。
@@ -4178,13 +4178,52 @@ const dbChildNodes = (connId, connType, dbList, catalog) => {
   }
 
   /**
-  * 懒加载 resolve 之前的统一收尾：**必须重置 `isLeaf`**。
+ 
+
+ * 懒加载 resolve 之前的统一收尾：**必须重置 `isLeaf`**。
   *
   * el-tree 在懒加载 resolve 出**空数组**时会把节点标成 `isLeaf = true`，而这个标记是
   * **粘住**的：之后再 resolve 出真实子节点，el-tree 依然认为"这是叶子"，一个子节点都不渲染 ——
   * 表现就是**节点展开着、里面却空的，而服务器上明明有库**（实测节点上就挂着 `is-leaf`）。
   * 所以每次给子节点都顺手把标记改回来：有子节点 = 不是叶子。
   */
+
+/**
+ * 库层节点 —— 或它在某些类型上的「隐含前缀」展开。
+ *
+ * Oracle：「库」这一层就是**连接里填的服务名 / PDB**，不是能切换的库（换 PDB 得换连接），
+ * 所以它永远只有一条，画出来纯属噪音。沿用上面 Doris「只有一个 catalog 就不画那一层」
+ * 的同一口径：把它当隐含前缀，直接铺开成「模式」那一层；模式节点的 `db` 仍是 `FREE.DBMIND`，
+ * 下游请求与"展开了库层"时完全一致。读不到模式清单（权限不足等）就退回原来的库层 ——
+ * 绝不能把它变成空节点。
+ */
+const dbOrSchemaNodes = async (connId, connType, dbList, catalog) => {
+  if (connType === 'ORACLE' && !catalog) {
+    const list = (Array.isArray(dbList) ? dbList : []).filter((db) => String(db) !== NO_DEFAULT_DB)
+    if (list.length === 1) {
+      try {
+        const schemas = await listSchemas(connId, list[0])
+        if (Array.isArray(schemas) && schemas.length) {
+          return schemas.map((s) => ({
+            id: 'schema:' + connId + ':' + list[0] + ':' + s,
+            label: s,
+            kind: 'schema',
+            db: list[0] + '.' + s,
+            realDb: list[0],
+            schema: s,
+            connId,
+            connType,
+            leaf: false
+          }))
+        }
+      } catch (e) {
+        /* 读不到模式就退回库层，别让节点空着 */
+      }
+    }
+  }
+  return await dbListToDbNodes(connId, connType, dbList, catalog)
+}
+
   const finishLazyChildren = (data, children) => {
     data.children = children
     const node = treeRef.value?.getNode(data.id)
@@ -4255,7 +4294,7 @@ const calibrateDatabases = async (connId, data) => {
     if (connId === currentConnId.value) dbs.value = list
     const same = Array.isArray(prev) && prev.length === list.length && prev.every((v, i) => v === list[i])
     if (same) return
-    data.children = dbChildNodes(connId, data.connType, list)
+    data.children = await dbListToDbNodes(connId, data.connType, list)
     treeRef.value?.updateKeyChildren(data.id, data.children)
     console.info('[展开] 库列表已按后端校准（' + (prev ? prev.length : 0) + ' → ' + list.length + '）')
   } catch (e) {
@@ -4371,10 +4410,10 @@ const lazyLoadRaw = async (node, resolve) => {
         // 会落到 internal 的同名库，两种形态在执行链路上等价。
         try {
           const list = await listDatabases(connId, only)
-          resolve(finishLazyChildren(data, dbChildNodes(connId, data.connType, list)))
+          resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, list)))
         } catch (e) {
           showConnFail(errMsg(e, t('mv.loadDbsFailed')))
-          resolve(finishLazyChildren(data, dbChildNodes(connId, data.connType, [])))
+          resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, [])))
         }
         return
       }
@@ -4396,7 +4435,7 @@ const lazyLoadRaw = async (node, resolve) => {
       // 否则空库连接会在占位节点与重新请求之间死循环
       if (connId in dbsByConn.value) {
         const cachedDbs = dbsByConn.value[connId]
-        resolve(finishLazyChildren(data, dbChildNodes(connId, data.connType, cachedDbs)))
+        resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, cachedDbs)))
         return
         }
       // 持久缓存命中：**立刻**渲染（每个连接首次建连要 5~10 秒，展开过的连接不该再等一次），
@@ -4406,7 +4445,7 @@ const lazyLoadRaw = async (node, resolve) => {
         const hit = readSchemaCache('dbs:' + connId)
         if (hit && Array.isArray(hit.value)) {
           dbsByConn.value[connId] = hit.value
-          resolve(finishLazyChildren(data, dbChildNodes(connId, data.connType, hit.value)))
+          resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, hit.value)))
           calibrateDatabases(connId, data)
           return
         }
@@ -4439,7 +4478,7 @@ const lazyLoadRaw = async (node, resolve) => {
           // 库列表已经在手上了，先画出来；表列表回来再补齐右侧。
           refreshAllTables().catch((e) => console.warn('[展开] 表列表后台加载失败', e))
           }
-        data.children = dbChildNodes(connId, data.connType, dbList)
+        data.children = await dbListToDbNodes(connId, data.connType, dbList)
         // 一次 resolve 真内容（不再有"先占位、后台替换"那一套）：
         // 占位原本是为了"展开即时生效"，而现在展开由**拿到结果**决定。
         resolve(data.children)
@@ -4475,7 +4514,7 @@ const lazyLoadRaw = async (node, resolve) => {
         showConnFail(errMsg(e, t('mv.loadDbsFailed')))
         return []
       })
-      resolve(finishLazyChildren(data, dbChildNodes(connId, data.connType, list, data.catalog)))
+      resolve(finishLazyChildren(data, await dbListToDbNodes(connId, data.connType, list, data.catalog)))
     } else if (data.kind === 'db') {
       resolve(finishLazyChildren(data, await buildDbDetailNodes(data)))
     } else if (data.kind === 'schema') {
@@ -6996,7 +7035,7 @@ const catalogCtxRefresh = async () => {
   }
   try {
     const list = await listDatabases(String(d.connId), d.catalog)
-    const children = dbChildNodes(String(d.connId), d.connType, list, d.catalog)
+    const children = await dbListToDbNodes(String(d.connId), d.connType, list, d.catalog)
     d.children = children
     treeRef.value?.updateKeyChildren(d.id, children)
     ElMessage.success(t('mv.refreshed'))
