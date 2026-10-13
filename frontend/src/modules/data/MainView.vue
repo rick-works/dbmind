@@ -1074,7 +1074,7 @@
            「稍后」也不丢东西：包留在本地，弹窗里随时能再点「现在更新」。 -->
       <template v-else-if="dlStatus === 'done'">
         <el-button size="small" @click="closeDownloadDialog">{{ $t('update.dlLater') }}</el-button>
-        <el-button size="small" type="primary" @click="askInstall">{{ $t('update.dlNow') }}</el-button>
+        <el-button size="small" type="primary" @click="doInstall">{{ $t('update.dlNow') }}</el-button>
       </template>
       <template v-else-if="dlStatus !== 'running'">
         <el-button size="small" type="primary" @click="closeDownloadDialog">{{ $t('common.confirm') }}</el-button>
@@ -1326,37 +1326,27 @@ const switchSource = async () => {
 
 // ===== 下载完成后的那一步：问一次，再装 =====
 // 下载可以在后台慢慢跑，装则要**关掉应用** —— 所以"确认"放在这里，而不是点更新的时候。
-// 后台下载完成时（弹窗已关）也走这里，主动把窗口弹出来问一句。
-// 后台下载完成时（弹窗已关）主动弹的那个「更新包已下载完成 / 稍后 · 现在更新」
+// 下载完成后**唯一**的那层确认。
+// 以前这里之后还叠了一层 askInstall（"确定现在装吗"）—— 同一个决定问两遍，用户按两次回车
+// 就"没打招呼地重启了"（用户真机反馈）。现在：一次问清，点「现在更新」就直接装。
+// autofocus:false + closeOnClickModal:false：回车不会顺手确认、点到外面也不会当确认。
 const announceReady = async () => {
+  const v = (updateInfo.value && updateInfo.value.latest) || ''
   try {
-    await ElMessageBox.confirm(t('update.installAskBody'), t('update.dlReadyTitle'), {
+    await ElMessageBox.confirm(t('update.installAskBody', { v }), t('update.dlReadyTitle'), {
       confirmButtonText: t('update.dlNow'),
       cancelButtonText: t('update.dlLater'),
       type: 'info',
+      autofocus: false,
+      closeOnClickModal: false,
       customClass: 'upd-box'
     })
   } catch {
     return // 「稍后」：包留在本地，随时能再点「现在更新」
   }
-  askInstall()
-}
-
-// 「现在更新」之后的**那一步确认**：再问一次"确定现在装吗"。
-// 文案与上一个框刻意不同 —— 同一个问题问两遍还一模一样，用户会以为是卡住了。
-const askInstall = async () => {
-  try {
-    await ElMessageBox.confirm(t('update.installConfirmBody'), t('update.dlTitle'), {
-      confirmButtonText: t('update.dlNow'),
-      cancelButtonText: t('common.cancel'),
-      type: 'info',
-      customClass: 'upd-box'
-    })
-  } catch {
-    return // 取消：什么都不做
-  }
   doInstall()
 }
+
 const doInstall = async () => {
   try {
     const r = await installUpdateApi()
