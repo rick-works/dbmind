@@ -349,9 +349,22 @@ pub fn parse(bytes: &[u8]) -> XResult<Vec<Vec<Option<String>>>> {
 
 /// 读 zip 里的一个文本条目（不存在 / 解码失败都当「没有」，调用方各自兜底）。
 fn entry_text<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, name: &str) -> Option<String> {
+    // **限大小**：xlsx 是个 zip，恶意/损坏文件能做成"解压炸弹"（某个条目解出来几十 GB），
+    // 不限的话 read_to_end 直接把内存吃光。正常工作簿的这些条目远小于此。
+    const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
     let mut file = zip.by_name(name).ok()?;
+    if file.size() > MAX_ENTRY_BYTES {
+        return None;
+    }
     let mut buffer = Vec::new();
-    file.read_to_end(&mut buffer).ok()?;
+    file.by_ref()
+        .take(MAX_ENTRY_BYTES + 1)
+        .read_to_end(&mut buffer)
+        .ok()?;
+    // 条目自称的大小可以撒谎（zip 头是文件里的数据），读进来再核一次
+    if buffer.len() as u64 > MAX_ENTRY_BYTES {
+        return None;
+    }
     Some(String::from_utf8_lossy(&buffer).into_owned())
 }
 

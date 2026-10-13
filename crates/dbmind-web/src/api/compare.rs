@@ -133,12 +133,34 @@ fn join_scope(database: &Option<String>, schema: &Option<String>) -> String {
 }
 
 /// 表名（带上模式，用于元数据查询）。
-fn qualified(table: &str, schema: &Option<String>) -> String {
+/// 表名（带上模式，用于**拼 SQL**）。
+///
+/// 标识符必须走方言引号：保留字 / 含特殊字符 / 大小写敏感的表名裸拼会直接语法错
+///（同项目的 `export.rs::qualified` 就是这么做的）。
+///
+/// ⚠ 只给"拼进 SQL 文本"的地方用；喂给 JDBC `getColumns` 之类**元数据 API** 时不能加引号
+///（那边要的是裸的 schema/table，加了引号反而找不到表 —— 见 columns_facts）。
+/// 元数据名（schema.table）：喂给 JDBC `getColumns` 这类**元数据 API** 用 ——
+/// 那边要的是**裸**的 schema/table，加引号反而找不到表。拼 SQL 请用下面的 qualified。
+fn qualified_meta(table: &str, schema: &Option<String>) -> String {
     let schema = schema.clone().unwrap_or_default();
     if schema.trim().is_empty() || table.contains('.') {
         table.to_string()
     } else {
         format!("{schema}.{table}")
+    }
+}
+
+fn qualified(table: &str, schema: &Option<String>, dialect: Dialect) -> String {
+    let table = table.trim();
+    if table.is_empty() || table.contains('.') {
+        return dialect.quote(table);
+    }
+    let schema = schema.clone().unwrap_or_default();
+    if schema.trim().is_empty() {
+        dialect.quote(table)
+    } else {
+        dialect.quote(&format!("{schema}.{table}"))
     }
 }
 
@@ -196,7 +218,8 @@ async fn columns_facts(
     // 先试「模式.表」，失败再退回「表」：JDBC 的 `DatabaseMetaData.getColumns`
     // 是把 schema 与 table 分开传的，把 `dbo.orders` 当表名交给它，各家驱动表现不一
     // （有的当字面表名找不到、有的会自己拆）。所以两条路都试，哪条通算哪条。
-    let qualified_name = qualified(table, schema);
+    // 这一份是给 JDBC 元数据 API 的，必须**裸名**（见 qualified_meta 的注释）
+    let qualified_name = qualified_meta(table, schema);
     let mut columns = {
         let engine = state.engine();
         let name = qualified_name.clone();
@@ -385,6 +408,7 @@ async fn count_rows(
     table: &str,
     schema: Option<&str>,
     condition: Option<&str>,
+    dialect: Dialect,
 ) -> u64 {
     let where_part = condition
         .map(str::trim)
@@ -392,7 +416,7 @@ async fn count_rows(
         .map(|c| format!(" where {c}"))
         .unwrap_or_default();
     let schema_owned = schema.map(|s| s.to_string());
-    let sql = format!("select count(*) from {}{where_part}", qualified(table, &schema_owned));
+    let sql = format!("select count(*) from {}{where_part}", qualified(table, &schema_owned, dialect));
     match run_sql_in(state, conn, scope, sql, 1).await {
         Ok(result) => match result.rows.first().and_then(|r| r.first()) {
             Some(CellValue::Integer(v)) => (*v).max(0) as u64,
@@ -457,7 +481,7 @@ fn spawn_side_stream(
             .map(|name| dialect.quote(name))
             .collect::<Vec<_>>()
             .join(", ");
-        let mut sql = format!("select {list} from {}", qualified(&table, &schema));
+        let mut sql = format!("select {list} from {}", qualified(&table, &schema, dialect));
         if let Some(condition) = condition.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
             sql.push_str(&format!(" where {condition}"));
         }
@@ -950,10 +974,12 @@ pub async fn start(
                 let src_count = count_rows(
                     &state, &source_conn, &source_scope, &body.source_table,
                     body.source_schema.as_deref(), body.source_condition.as_deref(),
+        source_dialect,
                 ).await;
                 let tgt_count = count_rows(
                     &state, &target_conn, &target_scope, &target_table,
                     body.target_schema.as_deref(), body.target_condition.as_deref(),
+        target_dialect,
                 ).await;
                 let mut est_total = src_count + tgt_count;
                 task.set_total(if est_total > 0 { est_total as i64 } else { -1 });

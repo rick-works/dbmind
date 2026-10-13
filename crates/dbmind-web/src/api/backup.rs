@@ -1071,9 +1071,12 @@ async fn run_cli_backup(
     )?;
     let tool = if kind.key() == "sqlite" { "sqlite3" } else { spec.tool };
     task.step(format!("执行 {tool}（备份到 {}）", path.display()));
-    let output = command
-        .output()
-        .map_err(|err| XError::internal(format!("执行 {tool} 失败：{err}")))?;
+    // mysqldump / pg_dump 能跑几分钟：同步 output() 会一直占着 tokio worker（整个服务卡住）。
+    let fail_msg = format!("执行 {tool} 失败");
+    let output = tokio::task::spawn_blocking(move || command.output())
+        .await
+        .map_err(|e| XError::internal(format!("{fail_msg}：工作线程异常：{e}")))?
+        .map_err(|err| XError::internal(format!("{fail_msg}：{err}")))?;
     let mut text = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if text.is_empty() {
         text = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1624,7 +1627,12 @@ pub async fn restore_start(
         tasks::stamp(),
         safe_name(if file_name.is_empty() { "upload.sql" } else { &file_name })
     ));
-    std::fs::write(&path, &bytes).map_err(|e| XError::internal(format!("保存上传文件失败：{e}")))?;
+    // 上传的备份可能是几个 GB：整块写盘要走阻塞线程池，别占着 tokio worker。
+    let write_path = path.clone();
+    tokio::task::spawn_blocking(move || std::fs::write(&write_path, &bytes))
+        .await
+        .map_err(|e| XError::internal(format!("保存上传文件失败：工作线程异常：{e}")))?
+        .map_err(|e| XError::internal(format!("保存上传文件失败：{e}")))?;
     spawn_restore(
         &state,
         connection_id,
@@ -1865,22 +1873,50 @@ pub async fn download(State(state): State<AppState>, Path(task_id): Path<String>
     let Some(artifact) = task.artifact() else {
         return (StatusCode::BAD_REQUEST, "备份文件尚未生成").into_response();
     };
-    match std::fs::read(&artifact.path) {
-        Ok(bytes) => (
-            [
-                (header::CONTENT_TYPE, artifact.media_type.clone()),
-                (
-                    header::CONTENT_DISPOSITION,
-                    tasks::content_disposition(&artifact.filename),
-                ),
-            ],
-            bytes,
-        )
-            .into_response(),
-        Err(_) => (
-            StatusCode::NOT_FOUND,
-            format!("备份文件不存在：{}", artifact.path.display()),
-        )
-            .into_response(),
-    }
+    // 流式返回：原来是 std::fs::read 把整个备份读进内存 —— 几十 GB 的整库 dump 会直接 OOM，
+    // 而且读盘那段时间会占住一个 tokio worker（用户看到"点了下载就卡住"）。
+    // 现在"分块读 → 通道 → 流式响应"，内存里只有一个块。
+    let path = artifact.path.clone();
+    let file = match tokio::fs::File::open(&path).await {
+        Ok(file) => file,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("备份文件不存在：{}", path.display()),
+            )
+                .into_response();
+        }
+    };
+    // 4 个块的缓冲：够填满网络，又不会把内存撑起来
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(4);
+    tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut file = file;
+        let mut buf = vec![0u8; 256 * 1024];
+        loop {
+            match file.read(&mut buf).await {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.send(Ok(axum::body::Bytes::copy_from_slice(&buf[..n]))).await.is_err() {
+                        break; // 客户端断开：停止读盘
+                    }
+                }
+                Err(err) => {
+                    let _ = tx.send(Err(err)).await;
+                    break;
+                }
+            }
+        }
+    });
+    (
+        [
+            (header::CONTENT_TYPE, artifact.media_type.clone()),
+            (
+                header::CONTENT_DISPOSITION,
+                tasks::content_disposition(&artifact.filename),
+            ),
+        ],
+        axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
+    )
+        .into_response()
 }

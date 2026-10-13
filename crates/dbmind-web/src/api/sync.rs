@@ -436,7 +436,12 @@ async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<S
         "sqlserver" => {
             // db_id 的参数是**字符串字面量**（N'..'）—— 用方括号会被当成列引用
             //（真机：「列名 'sync_audit' 无效」），只有 CREATE DATABASE 用方括号
-            format!("if db_id(N'{}') is null create database [{}]", db_name, db_name)
+            format!(
+                "if db_id(N'{}') is null create database {}",
+                // 字面量里的单引号要写成两个；标识符走方言引号（库名可能带引号/方括号）
+                db_name.replace("'", "''"),
+                target_kind.quote(&db_name)
+            )
         }
         _ => format!("create database {}", target_kind.quote(&db_name)),
     };
