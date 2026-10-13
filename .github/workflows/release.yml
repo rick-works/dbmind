@@ -72,15 +72,6 @@ jobs:
       AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-      # sccache：把 rustc 的编译产物缓存到 GitHub Actions 自己的缓存后端（见下面「sccache」那一步）。
-      # 这一条是本次提速的关键之一 —— 详见那里的注释。
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "true"
-      # ⚠ 必须有这一条：实测踩过 —— GitHub 的缓存服务抖动时（sccache 读到 "Our services
-      #   aren't available right now"），sccache 会**拒绝启动**，而 RUSTC_WRAPPER 又设在 job 级，
-      #   于是每一次 rustc 调用都失败、四个平台全挂在编译上（第一次试运行就是这么挂的）。
-      #   打开它之后：缓存后端出问题只会退化成"这次不缓存"，构建照常走完。
-      SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
     strategy:
       fail-fast: false
       matrix:
@@ -157,16 +148,7 @@ jobs:
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # sccache —— **编译结果级**缓存，这次提速的主要来源。
-      # 为什么需要它：rust-cache 缓存的是 target/ 目录，而本项目的 target 体积大、命中不稳；
-      # 一旦没命中，每个平台就要从零编译一遍 —— 实测 Linux / macOS 的「Tauri 打包」单步就要
-      # 6~6.5 分钟（Windows 更久），是整条流水线的绝对大头（整条约 20 分钟）。
-      # sccache 按"输入哈希"复用每个 crate 的编译产物（含最终链接结果），跨运行、跨 job 都有效。
-      - name: sccache（编译缓存）
-        uses: mozilla-actions/sccache-action@v0.0.6
 
-      # Tauri 打包要下载自己的打包工具（linuxdeploy / WiX / NSIS 等，几十秒到一两分钟），
-      # 四台 runner 各下一份、每次运行都重下 —— 缓存起来（按平台各一份）。
       - name: 缓存 Tauri 打包工具
         uses: actions/cache@v4
         with:
@@ -177,7 +159,6 @@ jobs:
           restore-keys: |
             tauri-tools-${{ runner.os }}-
 
-      # cargo 的 registry + target 缓存：能命中更快，命不中也有 sccache 兜着。
       # cache-on-failure：构建失败时也保留缓存（排查期间不必每次重编）。
       - name: 缓存 cargo
         uses: Swatinem/rust-cache@v2
@@ -268,7 +249,6 @@ jobs:
           Write-Host "已导入签名证书：$($cert.Subject)  指纹 $($cert.Thumbprint)"
 
       # [3c-2] Windows 的另一条签名路：**云签名**（Azure Artifact Signing，原名 Trusted Signing）。
-      #        为什么需要它：CA/B Forum 从 2023-06-01 起要求代码签名私钥必须存放在硬件加密模块里，
       #        所以现在新签发的证书通常**根本没有 .pfx 可导**（私钥在令牌或云 HSM 里）。
       #        云签名不导出私钥：Tauri 用 bundle.windows.signCommand 调 CLI，由 Azure 在云端签。
       #        配置齐全才安装（cargo install 要几分钟，没必要每跑都装）。
