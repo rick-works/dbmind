@@ -2468,12 +2468,9 @@ export default {
   'tdet.prodBlockedTitle': '被「生产库保护」拦下了',
   'tdet.prodBlockedHint': '放开限制的路径：设置 → 安全与会话 → 关掉「生产库保护」；或者把该数据源的环境从「生产」改成「开发」。',
   'tdet.prodBlockedGo': '去设置 →',
-  // 树上悬浮「表 / 视图」的提示卡片
+  // 树上悬浮「表 / 视图」的注释卡片（只显示注释；没有就明确说「无注释」）
   'tree.tip.comment': '注释',
   'tree.tip.noComment': '（无注释）',
-  'tree.tip.rows': '行数',
-  'tree.tip.rowsUnknown': '未统计',
-  'tree.tip.where': '所在库',
   'tdet.savedOk': '表结构修改已保存',
   'tdet.dorisDistSkip': 'Doris 分桶列 {col} 不允许修改（连注释也不行，数据库会拒绝）—— 这列的改动已跳过；如需修改请重建表',
   'tdet.saveFailed': '保存失败：{detail}',

@@ -526,6 +526,37 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
   box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
   pointer-events: none;
 }
+/* 树上「表 / 视图」的注释悬浮卡：**视觉与上面那张连接卡完全一致**（用户要求"样式跟这个一样"），
+   只是不借它的 fixed 定位 —— 这里由 el-tooltip 负责摆位。
+   提示气泡自己的壳要去掉（透明 / 无边框 / 无内边距 / 无箭头），否则会套在卡片外面形成双层白框。 */
+.obj-info-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 176px;
+  max-width: 340px;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  background: var(--dc-bg-pop);
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+}
+.obj-info-card .oi-row { display: flex; gap: 10px; font-size: 12px; line-height: 1.45; color: var(--dc-text); word-break: break-all; }
+.obj-info-card .oi-row b { flex: 0 0 42px; font-size: 12px; color: var(--dc-text-dim); font-weight: 400; }
+/* "无注释"用次要色：与有注释时一眼可分 */
+.obj-info-card .oi-none { color: var(--dc-text-dim); }
+.obj-tip-popper.el-popper,
+.obj-tip-popper.el-popper.is-light {
+  /* 加 !important 的理由：Element 用 `.el-popper.is-light` 给气泡设了底色/边框/内边距，
+     不提升优先级会盖不住 → 卡片外面套一层白框。作用域仅限这个 popper-class，不会波及别处。 */
+  padding: 0 !important;
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+.obj-tip-popper.el-popper .el-popper__arrow { display: none !important; }
 /* 卡片左侧那个小菱形"尖"（用户给的参考样式）：8px 方块转 45°，
    只描左边与下边（与卡片同底色同边框色）→ 朝左的箭头，指着右边这张卡片对应的连接；
    卡片被窗口右边缘逼到左侧时 .flip 会把它改朝右。 */

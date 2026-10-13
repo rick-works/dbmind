@@ -221,27 +221,18 @@
                 <span v-else-if="data.kind !== 'conn' && !(data.kind === 'placeholder' && data.label === $t('tree.loading'))"
                       class="node-label"
                       :class="{ 'env-folder-label': data.kind === 'env-folder', 'db-label-current': data.kind === 'db' && isDbOpened(data), 'hint-label': data.kind === 'placeholder' }"><el-tooltip
-                        :disabled="!objTipEnabled(data)" :show-after="280" placement="right" effect="dark">
-                        <!-- 悬浮看表注释（用户要求）：有注释显示注释，没有就明确说「无注释」 -->
+                        :disabled="!objTipEnabled(data)" :show-after="280" placement="right" effect="light"
+                        popper-class="obj-tip-popper">
+                        <!-- 悬浮只看**表注释**（用户要求：不用那么复杂）：有注释显示注释，没有就说「无注释」。
+                             卡片外观沿用连接悬浮卡那套（.obj-info-card 的样式与 .conn-info-card 一致，
+                             只是不借它的 fixed 定位 —— 这里由提示自己定位）。 -->
                         <template #content>
-                          <div style="max-width:320px;line-height:1.55">
-                            <div style="font-weight:600;margin-bottom:4px">
-                              {{ data.label }}<span style="font-weight:400;opacity:.6;margin-left:6px">{{ data.kind === 'view' ? $t('tree.cat.views') : $t('tree.cat.tables') }}</span>
-                            </div>
-                            <div style="display:flex;gap:6px">
-                              <span style="opacity:.6;flex:none">{{ $t('tree.tip.comment') }}</span>
-                              <span v-if="data.comment">{{ data.comment }}</span>
-                              <span v-else style="opacity:.6">{{ $t('tree.tip.noComment') }}</span>
-                            </div>
-                            <div style="display:flex;gap:6px">
-                              <span style="opacity:.6;flex:none">{{ $t('tree.tip.rows') }}</span>
-                              <span>{{ objRowText(data) }}</span>
-                            </div>
-                            <div style="display:flex;gap:6px">
-                              <span style="opacity:.6;flex:none">{{ $t('tree.tip.where') }}</span>
-                              <span>{{ data.db }}</span>
-                            </div>
-                          </div>
+                          <span class="obj-info-card">
+                            <span class="oi-row">
+                              <b>{{ $t('tree.tip.comment') }}</b>
+                              <span :class="{ 'oi-none': !data.comment }">{{ data.comment || $t('tree.tip.noComment') }}</span>
+                            </span>
+                          </span>
                         </template>
                         <span>{{ nodeText(data, node) }}</span>
                       </el-tooltip></span>
@@ -5056,11 +5047,6 @@ const onUpdateTableRows = ({ connId, database, table, rows }) => {
 // 而树上的数字多数时候没变。显式「刷新」传 false：用户要的就是最新值。
 /** 树上「悬浮看注释」的提示只给表与视图（其它节点没有注释的概念） */
 const objTipEnabled = (d) => !!d && (d.kind === 'table' || d.kind === 'view')
-/** 提示卡片里的行数：与树上的徽标同源（精确值优先 → 估算值 → 都没有就说「未统计」） */
-const objRowText = (d) => {
-  const n = tableRows.value[d.id] != null ? tableRows.value[d.id] : d.rows
-  return n == null ? t('tree.tip.rowsUnknown') : String(n)
-}
 
 const fillRealRowCounts = async (connId, db, tables, onlyMissing = false) => {
   let names = (Array.isArray(tables) ? tables : [])

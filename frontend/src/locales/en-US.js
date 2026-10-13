@@ -2460,12 +2460,9 @@ export default {
   'tdet.prodBlockedTitle': 'Blocked by production protection',
   'tdet.prodBlockedHint': 'To allow it: Settings -> Security & session -> turn off "Protect production databases"; or mark this data source as Development instead of Production.',
   'tdet.prodBlockedGo': 'Open settings ->',
-  // hover card for tables / views in the tree
+  // hover card for tables / views in the tree (comment only)
   'tree.tip.comment': 'Comment',
   'tree.tip.noComment': '(no comment)',
-  'tree.tip.rows': 'Rows',
-  'tree.tip.rowsUnknown': 'not counted',
-  'tree.tip.where': 'Database',
   'tdet.savedOk': 'Table structure changes saved',
   'tdet.dorisDistSkip': 'Doris distribution column {col} cannot be altered (not even its comment — the database refuses); that column\u2019s change was skipped; recreate the table to change it',
   'tdet.saveFailed': 'Save failed: {detail}',
