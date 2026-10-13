@@ -165,11 +165,6 @@
             </el-form-item>
           </el-form>
 
-          <div class="actions">
-            <el-button type="primary" @click="saveNotify">
-              <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.notify.save') }}
-            </el-button>
-          </div>
         </div>
 
         <!-- 0.5 安全与会话（后端 app_settings：改安全开关与会话上限都会即时生效） -->
@@ -448,9 +443,6 @@
           </el-form>
 
           <div class="actions">
-            <el-button type="primary" @click="saveEditor">
-              <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.editor.save') }}
-            </el-button>
             <el-button text @click="resetEditor">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
@@ -663,7 +655,6 @@
           </div>
 
           <div class="actions">
-            <el-button type="primary" :icon="Check" @click="saveEditor">{{ $t('settings.format.save') }}</el-button>
             <el-button text @click="resetEditor">{{ $t('settings.editor.reset') }}</el-button>
           </div>
         </div>
@@ -1938,10 +1929,6 @@ const loadNotify = () => {
     const raw = JSON.parse(localStorage.getItem('dbmind_notify') || '{}')
     notifyForm.value = { ...notifyDefaults, ...raw }
   } catch { notifyForm.value = { ...notifyDefaults } }
-}
-const saveNotify = () => {
-  persistUI('dbmind_notify', JSON.stringify(notifyForm.value))
-  ElMessage.success(t('settings.notify.msgSaved'))
 }
 // 同编辑器：改完即存（main.js 的弹层包装每次弹出实时读），不依赖保存按钮
 watch(notifyForm, () => {
