@@ -693,6 +693,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.26（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.26</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-13</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>在线更新</b>：安装包只留最新的一版，旧版本自动清掉（以前升一版就多留一份在下载目录里）</li>
+            <li><b>备份与还原</b>：上传大备份改为边收边写（不再整块进内存），中途失败或取消不再留下半截文件；命令行备份/还原点「取消」真能停掉进程（以前界面显示已取消，mysqldump 还在后台跑完）</li>
+            <li><b>导入与导出</b>：xlsx 内部条目超限会明确报错（以前会把整张表的文本单元格静默变空）；导出的文件名在 Windows 上也规避了结尾的点/空格与 CON、NUL 这类保留名</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.26" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.26" target="_blank" rel="noopener">下载 v1.2.26</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.25（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +721,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.25</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-13</span>
           </div>
           <ul class="rel-notes">
