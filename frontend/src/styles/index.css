@@ -388,6 +388,16 @@ input[type="number"] {
 .el-tabs__nav-wrap::after { background-color: var(--dc-border); }
 .el-tabs__active-bar { background-color: var(--dc-primary); height: 2px; }
 .el-tag { border-radius: 4px; }
+/* 按钮文字统一用界面字体。
+   浏览器对 <button> 带一条 UA 默认规则（Chrome 是 `font: ... Arial`），而 Element 的按钮
+   只设了字号、没设字族 —— 于是**全项目的按钮文字**都会落回 Arial，在中文界面里明显不是一套字
+   （用户反馈「把这些按钮的字体优化一下」：实测按钮文字 Arial、弹窗正文 -apple-system）。
+   这里覆盖到所有按钮：继承界面字体（PingFang / 微软雅黑 / Segoe UI 那一套）。
+   需要等宽字体的按钮（代码类）另有更具体的选择器，优先级更高，不受影响。 */
+button,
+.el-button,
+.el-button > span { font-family: inherit; }
+
 .el-button { transition: all .15s ease; }
 .el-button:not(.is-text):not(.is-link):hover { transform: translateY(-1px); box-shadow: 0 2px 8px var(--dc-shadow-sm); }
 /* 实心主色按钮：渐变底 + 白字；必须排除 .is-plain —— 否则 plain 按钮拿到实心渐变底，
