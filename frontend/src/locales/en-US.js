@@ -38,6 +38,8 @@ export default {
   'update.dlStart': 'Start download',
   'update.dlShowProgress': 'View download progress',
   'update.dlBackgroundHint': 'Downloading in the background',
+  'update.installMissedTitle': 'The last update does not seem to have installed',
+  'update.installMissedBody': 'It should have installed v{want}, but the app is still v{now}. That step was most likely blocked by the system (for example a permission prompt was cancelled), or it installed a DBmind in another location. Click Update online again to install it manually.',
   'update.dlPreparing': 'Checking download sources…',
   'update.dlProgress': '{done} of {total} downloaded, {speed}/s',
   'update.dlDone': 'Download complete — ready to install',

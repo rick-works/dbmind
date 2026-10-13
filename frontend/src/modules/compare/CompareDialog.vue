@@ -658,11 +658,15 @@ const loadSrcTables = async () => {
   srcTables.value = await listTables(src.value.connectionId, src.value.database)
 }
 const loadSrcColumns = async () => {
+  // 记住这次是给哪张表取的：快速切表时先发的可能后返回，不校验就会显示成上一张表的列
+  const wantTable = src.value.table
   srcCols.value = []
   opts.value.keyColumns = []
   if (!src.value.connectionId || !src.value.database || !src.value.table) return
   try {
-    srcCols.value = await listColumns(src.value.connectionId, src.value.database, src.value.table)
+    const cols = await listColumns(src.value.connectionId, src.value.database, src.value.table)
+    if (wantTable !== src.value.table) return // 期间换了表：这次结果作废
+    srcCols.value = cols
   } catch (e) {
     srcCols.value = []
   }
@@ -704,10 +708,14 @@ const loadTgtTables = async () => {
   tgtTables.value = await listTables(tgt.value.connectionId, tgt.value.database)
 }
 const loadTgtColumns = async () => {
+  // 同 loadSrcColumns：回来时校验表没被换掉，避免列清单串到上一张表
+  const wantTable = tgt.value.table
   tgtCols.value = []
   if (!tgt.value.connectionId || !tgt.value.database || !tgt.value.table) return
   try {
-    tgtCols.value = await listColumns(tgt.value.connectionId, tgt.value.database, tgt.value.table)
+    const cols = await listColumns(tgt.value.connectionId, tgt.value.database, tgt.value.table)
+    if (wantTable !== tgt.value.table) return
+    tgtCols.value = cols
   } catch (e) {
     tgtCols.value = []
   }

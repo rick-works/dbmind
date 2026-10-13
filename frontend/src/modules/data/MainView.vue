@@ -1348,6 +1348,8 @@ const announceReady = async () => {
 }
 
 const doInstall = async () => {
+  // 记下这次要装的版本：装完重启后如果版本没变，就在启动时提醒一句（见 maybeAnnounceUpgraded）
+  try { localStorage.setItem(PENDING_LS, String((updateInfo.value && updateInfo.value.latest) || '')) } catch { /* 忽略 */ }
   try {
     const r = await installUpdateApi()
     if (!r || r.success === false) {
@@ -1466,6 +1468,8 @@ const gotoDownload = () => {
 // 在下载完成那一刻抢着弹，用户还没看清窗口就退出去装包了。
 // 判据：把当前版本记在本地，启动后发现比上次**更高**就弹一次（首次运行、版本回退都不弹）。
 const VERSION_LS = 'dbmind_last_version'
+// 点「现在更新」前把目标版本记下来：下次启动如果当前版本还低于它，说明那次安装没生效
+const PENDING_LS = 'dbmind_pending_update'
 const cmpVersion = (a, b) => {
   const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0)
   const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0)
@@ -1480,6 +1484,21 @@ const maybeAnnounceUpgraded = (cur) => {
   let prev = ''
   try { prev = localStorage.getItem(VERSION_LS) || '' } catch { /* 隐私模式等：只影响这次提示 */ }
   try { localStorage.setItem(VERSION_LS, String(cur)) } catch { }
+  // 「上次点了更新、但没装上」的兜底：doInstall 前记了目标版本，启动时若当前版本仍低于它，
+  // 说明那次安装没生效（被系统拦下 / 装到了另一份）。一直静默的话，用户只会觉得"更新了还是旧版"。
+  try {
+    const pending = localStorage.getItem(PENDING_LS) || ''
+    if (pending) {
+      localStorage.removeItem(PENDING_LS)
+      if (cmpVersion(pending, cur) > 0) {
+        ElMessageBox.alert(
+          t('update.installMissedBody', { want: pending, now: cur }),
+          t('update.installMissedTitle'),
+          { confirmButtonText: t('update.doneOk'), type: 'warning', customClass: 'upd-box' }
+        )
+      }
+    }
+  } catch { /* 隐私模式等：只影响这次提示 */ }
   if (!prev || cmpVersion(cur, prev) <= 0) return
   ElMessageBox.alert(t('update.doneBody', { v: cur }), t('update.doneTitle'), {
     confirmButtonText: t('update.doneOk'),

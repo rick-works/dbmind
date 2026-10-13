@@ -143,7 +143,7 @@
 
 <script setup>
 // 数据库转储弹窗（从 MainView 拆出）：打开时自动拉取各类型对象列表，本地生成 SQL/DDL 并下载。
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { t } from '../../utils/i18n'
 import { listTables, listProcedures, listTriggers, listEvents, exportDbStart } from '../../api'
@@ -194,6 +194,8 @@ const allTrigger = ref(false)
 const allEvent = ref(false)
 // 转储走异步任务，显示进度条 + 实时日志 + 可取消 + 完成后自动下载
 const exportTask = useExportTask()
+// 转储进行中被卸载（换页、关窗）：关掉任务，别留一个孤儿轮询
+onBeforeUnmount(() => exportTask.close())
 const totalSelected = computed(() =>
   selectedTable.value.length +
   selectedView.value.length +

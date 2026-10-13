@@ -927,10 +927,20 @@ fn safe_name(name: &str) -> String {
         .chars()
         .map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
         .collect();
-    if cleaned.trim().is_empty() {
-        "backup".to_string()
+    // Windows 落盘会把**结尾的点和空格**静默吃掉（写下去的名字和这里返回的不一致，后面按这名字再找就找不到），
+    // 设备名（CON/PRN/NUL…）会直接写失败 —— 一并规避。落盘名本来还带 stamp_ 前缀，这里只是兜住极端输入。
+    let trimmed = cleaned.trim_end_matches(['.', ' ']).to_string();
+    let trimmed = if trimmed.trim().is_empty() { "backup".to_string() } else { trimmed };
+    let upper = trimmed.to_ascii_uppercase();
+    let base = upper.split('.').next().unwrap_or("");
+    let reserved = matches!(base, "CON" | "PRN" | "AUX" | "NUL")
+        || (base.len() == 4
+            && (base.starts_with("COM") || base.starts_with("LPT"))
+            && base.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        format!("_{trimmed}")
     } else {
-        cleaned
+        trimmed
     }
 }
 
@@ -1580,11 +1590,17 @@ pub async fn restore_start_local(
         .clone()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| XError::bad_request("缺少 filePath 参数（要还原哪个备份文件）"))?;
+    // 先确认是个真实存在的文件：路径写错/文件被删时立刻给出明确错误，而不是等还原任务里再失败。
+    // （这是**本机**端点，文件由用户自己的选择器挑出来，没法也不该在这里做目录沙箱。）
+    let local_path = PathBuf::from(&file_path);
+    if !local_path.is_file() {
+        return Err(XError::bad_request(format!("找不到这个备份文件：{file_path}")));
+    }
     spawn_restore(
         &state,
         body.connection_id.clone(),
         body.database.clone(),
-        PathBuf::from(file_path),
+        local_path,
         body.engine.clone().unwrap_or_else(|| "auto".to_string()),
         body.cli.clone(),
     )
@@ -1861,6 +1877,11 @@ pub async fn install_decision(
     };
     // 路径末段是 `install-confirm` / `install-manual` / `install-skip`；
     // 备份与还原两条路由共用这个处理器（决定本身与是哪个方向无关）
+    // 只认三种决定：未知取值被当成"跳过"会让调用方以为用户表过态（真机调试时很难看出来）。
+    let raw_decision = action.trim_start_matches("install-").to_string();
+    if !matches!(raw_decision.as_str(), "confirm" | "manual" | "skip") {
+        return Err(XError::bad_request(format!("不认识的决定：{raw_decision}")));
+    }
     let decision = action
         .trim_start_matches("install-")
         .trim_start_matches("restore-")

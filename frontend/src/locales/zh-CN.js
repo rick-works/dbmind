@@ -42,6 +42,8 @@ export default {
   'update.dlStart': '开始下载',
   'update.dlShowProgress': '查看下载进度',
   'update.dlBackgroundHint': '下载在后台继续',
+  'update.installMissedTitle': '上次更新好像没装上',
+  'update.installMissedBody': '本该装上 v{want}，但当前还是 v{now}。多半是那一步被系统拦下了（例如权限提示被取消），或它装到了另一个位置的 DBmind；想手动装就再点一次「在线更新」。',
   'update.dlPreparing': '正在检测下载源…',
   'update.dlProgress': '已下载 {done} / {total}，速度 {speed}/s',
   'update.dlDone': '下载完成，可以更新了',
