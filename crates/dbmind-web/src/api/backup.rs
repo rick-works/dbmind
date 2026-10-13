@@ -1134,8 +1134,10 @@ async fn run_cli_restore(
     )?;
     let tool = if kind.key() == "sqlite" { "sqlite3" } else { spec.restore_tool };
     task.step(format!("执行 {tool} 还原 {}", path.display()));
-    let output = command
-        .output()
+    // 还原（psql/mysql/sqlcmd）同样能跑几分钟：和备份侧一样挪到阻塞线程池，别占着 tokio worker。
+    let output = tokio::task::spawn_blocking(move || command.output())
+        .await
+        .map_err(|e| XError::internal(format!("执行 {tool} 失败：工作线程异常：{e}")))?
         .map_err(|err| XError::internal(format!("执行 {tool} 失败：{err}")))?;
     let mut text = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if text.is_empty() {
