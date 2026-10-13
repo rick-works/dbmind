@@ -220,19 +220,8 @@
                           @blur="commitRenameGroup()" />
                 <span v-else-if="data.kind !== 'conn' && !(data.kind === 'placeholder' && data.label === $t('tree.loading'))"
                       class="node-label"
-                      :class="{ 'env-folder-label': data.kind === 'env-folder', 'db-label-current': data.kind === 'db' && isDbOpened(data), 'hint-label': data.kind === 'placeholder' }"><el-tooltip
-                        :disabled="!objTipEnabled(data)" :show-after="280" placement="right" effect="light"
-                        popper-class="obj-tip-popper">
-                        <!-- 悬浮只看**表注释**（用户要求：不用那么复杂）：有注释显示注释，没有就说「无注释」。
-                             卡片外观沿用连接悬浮卡那套（.obj-info-card 的样式与 .conn-info-card 一致，
-                             只是不借它的 fixed 定位 —— 这里由提示自己定位）。 -->
-                        <template #content>
-                          <span class="obj-info-card">
-                            <span :class="data.comment ? 'oi-text' : 'oi-none'">{{ data.comment || $t('tree.tip.noComment') }}</span>
-                          </span>
-                        </template>
-                        <span>{{ nodeText(data, node) }}</span>
-                      </el-tooltip></span>
+                      :class="{ 'env-folder-label': data.kind === 'env-folder', 'db-label-current': data.kind === 'db' && isDbOpened(data), 'hint-label': data.kind === 'placeholder' }"
+                      @mouseenter="onObjEnter($event, data)" @mouseleave="onObjLeave($event, data)">{{ nodeText(data, node) }}</span>
                 <!-- 行数未知时整个不显示（不是显示 0，也不是留一个空药丸）：
                      「不知道」和「这张表是空的」必须能一眼区分开 -->
                 <el-tag v-if="data.kind === 'table' && (tableRows[data.id] != null || data.rows != null)" size="small" effect="dark" class="row-tag">{{ tableRows[data.id] != null ? tableRows[data.id] : data.rows }}</el-tag>
@@ -254,6 +243,7 @@
           <!-- 连接节点的悬浮信息卡：独立组件（原因见该文件顶部注释 —— 把卡片状态搬出本组件后，
                鼠标扫过连接节点不再让整棵树重渲染）。它只渲染一个 Teleport，不占布局。 -->
           <ConnInfoCard ref="connCardRef" />
+          <ObjCommentCard ref="objCardRef" />
           </div>
         </div>
       </aside>
@@ -1177,6 +1167,7 @@ import logoSmUrl from '../../assets/logo-sm.png'
 import SaveToKbDialog from '../knowledge/SaveToKbDialog.vue'
 import DbLogo from '../../common/DbLogo.vue'
 import ConnInfoCard from './ConnInfoCard.vue'
+import ObjCommentCard from './ObjCommentCard.vue'
 
 // ===== 按需加载的视图与弹窗 =====
 // 下面这些组件只有「打开某个 tab」或「点开某个弹窗」之后才会用到，静态 import 会把它们全部打进首屏 index chunk，
@@ -2467,6 +2458,23 @@ const onConnEnter = (e, data) => {
 }
 const onConnLeave = (e, data) => {
   if (connCardRef.value) connCardRef.value.close(data && data.connId)
+}
+
+/** 表 / 视图的注释悬浮卡：与连接卡同一套（命令式 open/close，不进渲染依赖，树不跟着重渲染）。
+    锚点取**整行**（.el-tree-node__content）而不是那段文字 —— 卡片因此贴在行的右侧**外面**，
+    与连接卡的位置观感一致（用户要求"位置也跟连接悬浮一样，在外面"）。 */
+const objCardRef = ref(null)
+const onObjEnter = (e, data) => {
+  const ref = objCardRef.value
+  if (!ref || !data) return
+  if (data.kind !== 'table' && data.kind !== 'view') return
+  const el = e.currentTarget
+  const row = (el && el.closest && el.closest('.el-tree-node__content')) || el
+  if (!row) return
+  ref.open(data, { rect: row.getBoundingClientRect() })
+}
+const onObjLeave = (e, data) => {
+  if (objCardRef.value) objCardRef.value.close(data && data.id)
 }
 
 const customFolders = computed(() => {
@@ -5042,8 +5050,6 @@ const onUpdateTableRows = ({ connId, database, table, rows }) => {
 // `onlyMissing = true`：只查**还不知道行数**的表。被动展开走这条 —— 否则每次展开
 // （包括命中持久缓存那种）都会对着整库重跑一遍 COUNT(*)，300 张表的库就是 300 条查询，
 // 而树上的数字多数时候没变。显式「刷新」传 false：用户要的就是最新值。
-/** 树上「悬浮看注释」的提示只给表与视图（其它节点没有注释的概念） */
-const objTipEnabled = (d) => !!d && (d.kind === 'table' || d.kind === 'view')
 
 const fillRealRowCounts = async (connId, db, tables, onlyMissing = false) => {
   let names = (Array.isArray(tables) ? tables : [])

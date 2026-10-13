@@ -530,10 +530,14 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
    只是不借它的 fixed 定位 —— 这里由 el-tooltip 负责摆位。
    提示气泡自己的壳要去掉（透明 / 无边框 / 无内边距 / 无箭头），否则会套在卡片外面形成双层白框。 */
 .obj-info-card {
+  /* 与 .conn-info-card 同款：fixed 由组件按行矩形摆位（树容器会裁掉非 fixed 的东西） */
+  position: fixed;
+  z-index: 4000;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-width: 120px;
+  /* 宽度**按内容自适应**（用户要求）：不设 min-width，长注释到 340px 才折行 */
+  width: max-content;
   max-width: 340px;
   padding: 8px 10px;
   font-size: 12px;
@@ -542,27 +546,34 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
   border: 1px solid var(--dc-border);
   border-radius: 8px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .28);
+  pointer-events: none;
 }
-/* 只显示注释本身（用户要求去掉「注释」两个字），所以不给键名列留位置 */
+/* 左侧小菱形「尖」：与 .conn-info-card .ci-arrow 同一套（8px 方块转 45°，只描左边与下边） */
+.obj-info-card .oi-arrow {
+  position: absolute;
+  left: -5px;
+  top: calc(50% - 4px);
+  width: 8px;
+  height: 8px;
+  background: var(--dc-bg-pop);
+  border-left: 1px solid var(--dc-border);
+  border-bottom: 1px solid var(--dc-border);
+  transform: rotate(45deg);
+}
+/* 右侧放不下被翻到左侧时，尖改朝右 */
+.obj-info-card.flip .oi-arrow {
+  left: auto;
+  right: -5px;
+  border-left: none;
+  border-bottom: none;
+  border-right: 1px solid var(--dc-border);
+  border-top: 1px solid var(--dc-border);
+}
 .obj-info-card .oi-text { font-size: 12px; line-height: 1.45; color: var(--dc-text); word-break: break-all; }
-/* 「无注释」用次要色：与有注释时一眼可分 */
 .obj-info-card .oi-none { font-size: 12px; line-height: 1.45; color: var(--dc-text-dim); }
-.obj-tip-popper.el-popper,
-.obj-tip-popper.el-popper.is-light {
-  /* 加 !important 的理由：Element 用 `.el-popper.is-light` 给气泡设了底色/边框/内边距，
-     不提升优先级会盖不住 → 卡片外面套一层白框。作用域仅限这个 popper-class，不会波及别处。 */
-  padding: 0 !important;
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-/* 三角「尖」跟连接卡一致（用户要求"也加三角符号"）：连接卡是 8px 方块转 45°、只描左边与下边；
-   这里用 el-tooltip 自带的箭头，只把它的底色/边框换成卡片那套 —— placement="right" 时它正好在
-   卡片左中、指着左边那一行，与连接卡的位置一致。 */
-.obj-tip-popper.el-popper .el-popper__arrow::before {
-  background: var(--dc-bg-pop) !important;
-  border: 1px solid var(--dc-border) !important;
-}
+/* （原先这里还有一组 .obj-tip-popper：那时表注释用的是 el-tooltip，气泡会被树容器裁掉、
+   还要额外把它的壳透明化。现在改成了与连接卡同一套「Teleport + fixed + JS 摆位」，
+   这些覆盖规则不再需要。） */
 /* 卡片左侧那个小菱形"尖"（用户给的参考样式）：8px 方块转 45°，
    只描左边与下边（与卡片同底色同边框色）→ 朝左的箭头，指着右边这张卡片对应的连接；
    卡片被窗口右边缘逼到左侧时 .flip 会把它改朝右。 */

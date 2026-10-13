@@ -42,6 +42,8 @@
 // 确认后再执行；成功后回调父级同步已打开页签并刷新树分类节点。
 import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+// 安全拦截（生产保护 / 只读）统一走右上角通知：与结构页、SQL 编辑器同一套
+import { isSafetyBlock, showSafetyNotice } from '../../utils/safetyNotice'
 import { Edit } from '@element-plus/icons-vue'
 import { renameObject } from '../../api'
 import { errMsg } from '../../utils/errMsg'
@@ -123,7 +125,11 @@ const submit = async () => {
     visible.value = false
     emit('renamed', { connId: c.connId, db: c.db, type: c.type, oldName: c.oldName, newName: val })
   } catch (e) {
-    ElMessage.error(t('rn.failedDetail', { detail: errMsg(e) }))
+    // 生产保护 / 只读连接这类**拦截**：走统一的右上角通知（带「去设置」），
+    // 不在弹窗里再闪一条（用户反馈：重命名失败的位置与内容都不对）。
+    const detail = errMsg(e)
+    if (isSafetyBlock(detail)) showSafetyNotice(detail)
+    else ElMessage.error(t('rn.failedDetail', { detail }))
   } finally {
     loading.value = false
   }

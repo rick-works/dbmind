@@ -21,7 +21,17 @@ if (localToken) {
 import { isSafetyBlock, showSafetyNotice } from '../utils/safetyNotice'
 
 http.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // 有些接口用 **200 + `success:false`** 表达失败（安全拦截就是这么回的），不走 error 分支 ——
+    // 在这里也弹一次同样的右上角通知并打标记，保证"任何页面、任何返回形态"的拦截提示
+    // 都从同一个位置出现（用户要求：类似警告类的消息框都在右上角弹，别的地方有也一起）。
+    const d = response && response.data
+    if (d && typeof d === 'object' && d.success === false && isSafetyBlock(d.message)) {
+      showSafetyNotice(d.message)
+      d.safetyNotified = true
+    }
+    return response
+  },
   (error) => {
     // 主动取消的请求（AbortController）不是错误，直接透传，避免误报网络失败
     if (error && (error.code === 'ERR_CANCELED' || error.name === 'CanceledError' || error.name === 'AbortError')) {
