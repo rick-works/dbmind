@@ -1541,3 +1541,24 @@ html[data-theme="dark"] .el-alert--success.is-light {
 .data-table-wrap .data-table td {
   font-size: inherit !important;
 }
+/* ---- 「设置 → 界面尺寸 → 数据视图表格」= 这三个数据视图的**整页字号** ----
+   用户的要求是"都要变"：表格变大了，底栏（耗时 / 总条数 / 分页 / 前往）、工具条、
+   提示文字还是小字就很割裂。这里按视图容器兜住这些部件（含 Element 分页控件）。
+   作用域只有这三个数据视图，不影响设置页等其它地方的表格/分页。 */
+.table-data-view .toolbar, .table-data-view .toolbar *,
+.table-data-view .pager, .table-data-view .pager *,
+.table-data-view .load-time, .table-data-view .empty-tip, .table-data-view .sel-summary,
+.nosql-view .toolbar, .nosql-view .toolbar *,
+.nosql-view .pager, .nosql-view .pager *,
+.nosql-view .load-time, .nosql-view .empty-tip, .nosql-view .sel-summary,
+.sql-query-view .result-footer, .sql-query-view .result-footer *,
+.sql-query-view .load-time, .sql-query-view .sel-summary {
+  font-size: var(--dc-data-fs, 13px) !important;
+}
+/* 图标（分页箭头、工具按钮里的图标）不跟着放大字号，否则会撑歪控件 */
+.table-data-view .pager .el-icon, .table-data-view .pager svg,
+.nosql-view .pager .el-icon, .nosql-view .pager svg,
+.sql-query-view .result-footer .el-icon, .sql-query-view .result-footer svg {
+  font-size: var(--dc-data-fs, 13px) !important;
+  width: 1em; height: 1em;
+}
