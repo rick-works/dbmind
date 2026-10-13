@@ -220,6 +220,7 @@ import { ArrowUp, ArrowDown, Refresh, Download, Operation, Sort, SortUp, SortDow
          Histogram, Calendar, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getQuerySettings, editorSettingsLive } from '../../utils/settings'
+import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { noSqlDocuments, cancelNoSql } from '../../api'
 import { t } from '../../utils/i18n'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
@@ -257,7 +258,7 @@ const formatElapsed = (ms) => {
 }
 
 const pageSizes = computed(() => {
-  const base = [50, 100, 200, 500, 1000]
+  const base = [...PAGE_SIZE_OPTIONS]
   if (querySettings.pageSize > 0 && !base.includes(querySettings.pageSize)) base.unshift(querySettings.pageSize)
   return base.sort((a, b) => a - b)
 })

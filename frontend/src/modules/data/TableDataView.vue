@@ -301,6 +301,7 @@
 import { ref, watch, onMounted, onUnmounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { t, tMsg } from '../../utils/i18n'
 import { querySettingsLive, editorSettingsLive } from '../../utils/settings'
+import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { numericTypeHint, isNumericLiteral } from '../../utils/dbType'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowUp, ArrowDown, Delete, Sort, SortUp, SortDown, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
@@ -439,7 +440,7 @@ const total = ref(0)
 const page = ref(1)
 const size = ref(qs.pageSize > 0 ? qs.pageSize : 1000)
 const pageSizes = computed(() => {
-  const base = [1000, 2000, 5000, 10000]
+  const base = [...PAGE_SIZE_OPTIONS]
   if (qs.pageSize > 0 && !base.includes(qs.pageSize)) base.unshift(qs.pageSize)
   return base.sort((a, b) => a - b)
 })

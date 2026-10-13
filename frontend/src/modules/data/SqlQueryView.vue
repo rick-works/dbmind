@@ -573,6 +573,7 @@ import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
 import { exportData } from '../../api'
 import { ElMessage, ElMessageBox, ElSelect, ElOption } from 'element-plus'
 import { editorSettingsLive, getEditorSettings, getQuerySettings, querySettingsLive } from '../../utils/settings'
+import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { getResolvedTheme, monacoTheme, onResolvedThemeChange } from '../../utils/theme'
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
 import { builtinFunctions, functionInsertText, smartCase } from '../../utils/sqlCompletions'
@@ -714,7 +715,7 @@ const pageSize = ref(querySettings.pageSize)
 const currentPage = ref(1)
 // 分页选项：保证当前默认值始终可选，其余保留大数据量浏览档位
 const queryPageSizes = computed(() => {
-  const base = [1000, 2000, 5000, 10000]
+  const base = [...PAGE_SIZE_OPTIONS]
   if (querySettings.pageSize > 0 && !base.includes(querySettings.pageSize)) base.unshift(querySettings.pageSize)
   return base.sort((a, b) => a - b)
 })

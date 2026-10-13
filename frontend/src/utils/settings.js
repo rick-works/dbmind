@@ -171,6 +171,10 @@ export const getNotifySettings = () => ({ ...notifyDefaults, ...readJSON('dbmind
 //
 // 动态 import 引 api：本模块被 i18n / theme / shortcuts 静态引用，
 // 静态引 api 会形成 i18n → settings → api → i18n 循环。
+/** 「每页条数」的候选值 —— 设置页（查询）那个下拉与三个数据表格底部的分页**共用这一份**。
+    以前四处各写一套（设置页 12 档、表数据 4 档、NoSQL 5 档），用户看到的"能选多少"不一致；
+    现在统一，最大 100000（实际取数仍受「最大行数」限制，调大这里不会把查询拖垮）。 */
+export const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]
 const UI_BACKEND_KEYS = {
   'ui.editor': 'dbmind_editor',
   'ui.query': 'dbmind_query',

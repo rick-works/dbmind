@@ -677,7 +677,7 @@
               <el-select v-model="queryForm.pageSize" style="width:160px">
                 <!-- 用户要求补三档：20000 / 50000 / 100000（大表整页看数时用；实际取数仍受
                      下面「最大行数」限制，所以调大这里不会把查询拖垮） -->
-                <el-option v-for="n in [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]" :key="n"
+                <el-option v-for="n in PAGE_SIZE_OPTIONS" :key="n"
                            :value="n" :label="$t('settings.query.perPage', { n })" />
               </el-select>
               <div class="form-tip">{{ $t('settings.query.pageSizeTip') }}</div>
@@ -1086,6 +1086,7 @@ import { getAppearance, saveAppearance, appearanceDefaults } from '../../utils/a
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern, ruleHasIndent } from '../../utils/sqlFormat'
 import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs } from '../../api'
+import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
 // 界面尺寸：当前值由 utils/appearance.js 从 localStorage 读；改动即写 :root 的 CSS 变量并落盘，
 // 所以顶栏/左侧树当场变化，不需要「保存」也不需要重启
