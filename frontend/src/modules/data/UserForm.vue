@@ -60,7 +60,8 @@
                         <span v-if="!form.attrs[d.key]" class="attr-hint">{{ $t('udv.unlimited') }}</span>
                       </span>
                       <span v-else-if="d.kind === 'plugin'" class="attr-num">
-                        <el-select v-model="form.attrs[d.key]" size="small">
+                        <el-select :model-value="authPluginModel" size="small"
+                                   @update:model-value="(v) => { form.attrs.authPlugin = v }">
                           <el-option v-for="p in pluginOptions" :key="p" :label="p" :value="p" />
                         </el-select>
                         <span v-if="form.attrs.authPlugin !== attrsBase.authPlugin" class="attr-hint">{{ $t('upv.pluginNeedsPassword') }}</span>
@@ -670,6 +671,13 @@ const editableAttrs = computed(() => {
 const pluginOptions = computed(() => {
   const cur = String(form.value.attrs.authPlugin || '').trim()
   return cur && !ATTR_PLUGINS.includes(cur) ? [cur].concat(ATTR_PLUGINS) : ATTR_PLUGINS
+})
+
+// 认证插件的绑定：**取不到种子值时直接回落到明细列** —— 不管哪种入口打开的表单
+// （右键编辑 / 用户管理页里点编辑），只要 fields 里有 plugin，这一格就不会是空的。
+const authPluginModel = computed({
+  get: () => String(form.value.attrs.authPlugin || attrText(attrRaw('plugin')) || ''),
+  set: (v) => { form.value.attrs.authPlugin = v },
 })
 
 // 只交改动过的项
@@ -1639,6 +1647,13 @@ watch(() => props.editData, (d) => {
   }))
   baseSnapshot.value = formSnapshot()
 }, { immediate: true })
+
+// fields 晚到时补种一次（attrsBase 已种过就不再动 —— 免得覆盖用户正在改的值）
+watch(() => props.editData?.fields, (f) => {
+  if (!f || !Object.keys(f).length) return
+  if (Object.keys(attrsBase.value).length) return
+  seedAttrs()
+})
 
 watch(() => props.conn?.id, loadDatabases, { immediate: true })
 watch(() => props.database, loadSchemas, { immediate: true })
