@@ -450,6 +450,8 @@
                     @contextmenu.prevent="showTabCtxMenu($event, tab)">
                 <!-- 连接环境外显：PROD 连接的页签带红色 P 标（防误连） -->
                 <span v-if="isProdTab(tab)" class="tab-prod-dot" :title="$t('nav.prodTabTip')">P</span>
+                <!-- 类型图标：页签只显示最后一层（表名 / 对象名），是什么类型靠这个图标认 -->
+                <el-icon class="tab-icon"><component :is="tabIcon(tab)" /></el-icon>
                 <!-- 页签只显示表名 / 对象名，「连接 · 库」的全路径放悬浮提示（tabTitle）；
                      用原生 title 而不是 el-tooltip：页签自己带拖拽排序的鼠标事件，别再叠一层浮层 -->
                 {{ tab.dirty ? '* ' : '' }}{{ tabLabelShort(tab) }}
@@ -6501,18 +6503,41 @@ const tabPath = (tab) => {
 // 多连接 / 多库各开同名的页签，一眼能分清是哪条路径下的（悬浮提示与"关闭这些页签？"用这个）。
 const tabLabel = (tab) => tabPath(tab).join('.')
 
-// 页签条上只显示「数据源 + 末段」（`公司Mysql.mytable`）：库名与完整路径留给悬浮提示。
-// 之前反馈过页签太长（连接名 + 库名 + 表名都堆在页签条上），但**数据源名称要留着、还要在前**
-// —— 多连接下同名的表/用户，光看末段分不出在哪条连接上。
+// 页签条上**只显示最后一层**（表名 / 对象名 / 用户名）：连接名与库名留给悬浮提示与
+// "关闭这些页签？"确认框。用户口径："页签只展示最后一层就好了" —— 真机上连接名可以是
+// 几十个字符的长串（`公司Doris-woasjdkl…`），拼在最前面会把整条页签条撑爆。
+// 连接环境靠页签前面的类型图标 + PROD 红标来认，路径靠悬浮提示。
 // 注意：确认类对话框仍然用 tabLabel 全路径 —— 那时候必须分得清是哪个连接/库。
 const tabLabelShort = (tab) => {
   const p = tabPath(tab)
   const last = String(p[p.length - 1] ?? '')
   // 末段自己可能还带一层分隔（用户表单的 label 是「编辑用户 · demo1@%」）—— 取最末一段
   const i = last.lastIndexOf(' · ')
-  const tail = i < 0 ? last : last.slice(i + 3)
-  if (p.length <= 1) return tail
-  return p[0] + '.' + tail
+  return i < 0 ? last : last.slice(i + 3)
+}
+
+// 页签的类型图标：一眼看出这个页签打开的是什么（表数据 / 表结构 / SQL / 用户 / 视图…）。
+// 只挑**已经导入**的图标用，不为一个页签再拉一批进来。
+const tabIcon = (tab) => {
+  switch (tab.type) {
+    case 'table': return Grid                          // 表数据
+    case 'detail': return DocumentCopy                 // 表结构（看的是 DDL）
+    case 'sql': return Document                        // SQL 脚本
+    case 'nosql': return Coin                          // Redis / NoSQL 集合
+    case 'object': return tab.objectType === 'view' ? View : SetUp   // 视图 / 过程·函数·触发器等
+    case 'user': return User                           // 用户详情
+    case 'user-form': return User                      // 编辑 / 新建用户
+    case 'users': return UserFilled                    // 用户管理页
+    case 'form':                                       // 新建 / 编辑对象
+      if (tab.cat === 'views') return View
+      if (tab.cat === 'tables') return Grid
+      return Edit
+    case 'er': return Connection                       // ER 图
+    case 'monitor': return Timer                       // 监控
+    case 'ai': return MagicStick                       // AI 助手
+    case 'knowledge': return Reading                   // 知识库
+    default: return Document
+  }
 }
 
 // 悬浮提示：只有"短标题之外还有信息"时才给 title —— 否则会悬浮弹出一段和字面一模一样的东西
@@ -7812,6 +7837,8 @@ const connTypeSummary = computed(() =>
 .dc-tabs :deep(.el-tabs__item) { cursor: default; }
 .dc-tabs :deep(.el-tabs__item:active) { cursor: default; }
 .tab-label { display: inline-flex; align-items: center; position: relative; }
+/* 类型图标：压一点、淡一点，别跟页签文字抢（在 PROD 红标之后、文字之前） */
+.tab-icon { margin-right: 5px; font-size: 13px; opacity: .8; }
 /* PROD 连接的页签红 P 标：防误连 */
 .tab-prod-dot {
   display: inline-flex; align-items: center; justify-content: center;
