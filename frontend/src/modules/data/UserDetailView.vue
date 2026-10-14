@@ -304,14 +304,21 @@ onBeforeUnmount(onSqlResizeEnd)
   display: flex;
   flex-direction: column;
   background: var(--dc-bg-deep);
+  /* 四周留 5px：卡片贴着面板边缘时，8px 圆角会被边线"压平"，看起来像没做圆角 */
+  padding: 5px;
+  box-sizing: border-box;
+  gap: 5px;
 }
+/* 顶部标题栏：独立成一张小卡（与「编辑表结构」/编辑用户同一形态） */
 .form-tab-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--dc-border-soft);
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
   background: var(--dc-bg-soft);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
   flex-shrink: 0;
 }
 .header-title {

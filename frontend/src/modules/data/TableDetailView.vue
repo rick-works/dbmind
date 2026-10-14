@@ -1960,12 +1960,16 @@ const load = async () => {
   ddlMode.value = false
   ddlText.value = ''
   try {
-    await ensureFeatures()
+    // ensureFeatures 与三个数据请求**并行**：它们互不依赖（数据请求只用连接/库/表名），
+    // 串行 await 等于白等一个往返 —— 冷启动时这一跳实测 100~200ms，用户感知就是"打开变慢"。
+    // 结果在后面（Doris 分支）才用得到，所以在数据请求之后再 await 一次即可。
+    const featPending = ensureFeatures()
     const [cols, idxRes, tables] = await Promise.all([
       listColumns(props.conn.id, props.database, props.table),
       listIndexes(props.conn.id, props.database).catch(() => []),
       listTables(props.conn.id, props.database).catch(() => [])
     ])
+    await featPending
     if (seq !== loadSeq) return
     columns.value = cols || []
     indexes.value = (idxRes || []).filter(i => i.table === props.table)
