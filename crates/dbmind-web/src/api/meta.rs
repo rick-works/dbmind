@@ -2581,7 +2581,21 @@ pub async fn rename_object(
         return Err(XError::bad_request("重命名需要原名与新名"));
     }
     let (_, dialect) = ctx_of(&state, &id).await?;
-    let from = dialect.quote(&name);
+    // 模式：请求里的「库.模式」拆出来的那半（没有就是 None）
+    let schema = body
+        .get("database")
+        .and_then(Value::as_str)
+        .map(|db| split_db_schema(db, &dialect).1)
+        .unwrap_or(None);
+    // Oracle 的 `RENAME` **旧名可以带模式，而且必须带** —— DBMind 的会话刻意不按树上
+    // 选中的模式切换（与取定义那几处同一个原因），不带就只能改会话自己模式里的对象。
+    // 其余方言的改名语法把模式交给会话处理（MySQL/ClickHouse 的会话库是按请求切的）。
+    let from = match (dialect.kind.key(), schema.as_deref()) {
+        ("oracle", Some(owner)) if !owner.trim().is_empty() => {
+            format!("{}.{}", dialect.quote(owner), dialect.quote(&name))
+        }
+        _ => dialect.quote(&name),
+    };
     let to = dialect.quote(&new_name);
     let sql = match object_type.as_str() {
         "table" => match dialect.table_action(&name, "rename", Some(&new_name)) {
@@ -2596,6 +2610,35 @@ pub async fn rename_object(
             "mysql" | "mariadb" | "doris" | "clickhouse" => {
                 format!("rename table {from} to {to}")
             }
+            // Oracle：**没有** `ALTER VIEW … RENAME TO` —— 真机报 `ORA-00922: 选项缺失或无效`；
+            // 入口是 `RENAME old TO new`，但它的旧名**不能带模式**（带上报 `ORA-01765
+            // 不允许指定表的所有者名称`），也就是**只能改自己模式里的对象**。
+            // 两条都是造临时视图、走这个接口实测出来的。
+            // 所以：会话就是该模式 → 发 `RENAME`；不是 → 如实说清楚（与其发一句注定
+            // 失败的 SQL，不如告诉用户该怎么做）。
+            "oracle" => {
+                let owner = schema.clone().unwrap_or_default();
+                let me = run_sql_in(&state, &id, "", "select user from dual".to_string(), 1)
+                    .await
+                    .map(|result| pick_ddl(&result))
+                    .unwrap_or_default();
+                let me = me.trim().to_string();
+                if !owner.trim().is_empty() && !me.is_empty() && !owner.eq_ignore_ascii_case(&me) {
+                    return Err(XError::bad_request(format!(
+                        "Oracle 不能重命名别的模式（{owner}）里的视图：它只有 `RENAME 旧名 TO 新名`，\
+                         而旧名不允许带模式。请在查询页用 `create or replace view` 重建，\
+                         或用 {owner} 账号执行"
+                    )));
+                }
+                format!("rename {} to {to}", dialect.quote(&name))
+            }
+            // SQL Server：与表改名同一个入口 `sp_rename`（它同样没有 ALTER VIEW … RENAME TO）
+            "sqlserver" => format!(
+                "exec sp_rename {}, {}",
+                dialect.literal(&name),
+                dialect.literal(&new_name)
+            ),
+            // DM / H2 / Derby：没真机验证过改名语法，保持原样（与别处"没验证就不动"同一个原则）
             _ => format!("alter view {from} rename to {to}"),
         },
         "index" => match dialect.kind.key() {
