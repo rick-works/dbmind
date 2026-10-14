@@ -8,9 +8,6 @@
         <el-tag v-if="form.name" size="small" effect="plain">{{ form.name }}</el-tag>
         <el-tag size="small" effect="plain" type="info">{{ conn?.name }}</el-tag>
       </div>
-      <div class="header-actions">
-        <el-button size="small" :icon="Close" @click="emit('close')">{{ $t('common.close') }}</el-button>
-      </div>
     </div>
 
     <!-- 主体：上方分页签的表单 + 下方 SQL 预览（与「编辑表结构」同一套布局） -->
@@ -163,7 +160,7 @@
           </el-tab-pane>
 
           <!-- ===== 数据库权限 ===== -->
-          <el-tab-pane v-if="hasDbTab" :label="$t('upv.tabDb')" name="database">
+          <el-tab-pane v-if="hasDbTab" :label="dbTabLabel" name="database">
             <!-- 动作条：与页签**同一行**、贴右（照「编辑表结构」的排法）：
                  绝对定位到卡片右上角，表格里不再单独占一行 -->
             <div class="tab-actions">
@@ -393,12 +390,12 @@
       </div>
 
       <!-- 分隔条：与「编辑表结构」同一套（向上拖 = 预览变高，双击最大/最小） -->
-      <div v-show="!sqlCollapsed" class="sql-resizer"
+      <div v-if="dirty" v-show="!sqlCollapsed" class="sql-resizer"
            :title="$t('tdet.resizerTitle')"
            @mousedown.prevent="onSqlResizeStart" @dblclick="onSqlResizeDblClick"></div>
 
       <!-- SQL 预览：挪到**下方**（原来在右侧固定栏），点标题行折叠/展开 -->
-      <div ref="sqlAreaRef" class="sql-area" :class="{ collapsed: sqlCollapsed }"
+      <div v-if="dirty" ref="sqlAreaRef" class="sql-area" :class="{ collapsed: sqlCollapsed }"
            :style="sqlCollapsed ? null : { height: sqlHeight + 'px' }">
         <div class="sql-head" @click="sqlCollapsed = !sqlCollapsed"
              :title="sqlCollapsed ? $t('tdet.expandSql') : $t('tdet.collapseSql')">
@@ -414,8 +411,8 @@
         <div class="sql-foot">
           <span class="sql-tip">{{ $t('upv.previewTip') }}</span>
           <div class="sql-foot-actions">
-            <el-button size="small" text :icon="CopyDocument" @click="copySql">{{ $t('upv.copySql') }}</el-button>
-            <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk" @click="submit">
+            <el-button size="small" text :icon="CopyDocument" :disabled="!dirty" @click="copySql">{{ $t('upv.copySql') }}</el-button>
+            <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk || !dirty" @click="submit">
               {{ editMode ? $t('upv.saveChanges') : $t('upv.execCreate') }}
             </el-button>
           </div>
@@ -429,7 +426,7 @@
 import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { t } from '../../utils/i18n'
-import { User, CaretRight, CopyDocument, Close, DocumentCopy, Plus, Delete } from '@element-plus/icons-vue'
+import { User, CaretRight, CopyDocument, DocumentCopy, Plus, Delete } from '@element-plus/icons-vue'
 import { userAction, listDatabases, listTables, listSchemas } from '../../api'
 import { rowKey } from '../../utils/rowKey'
 
@@ -537,7 +534,19 @@ const hasGranularTab = computed(() => isMysql.value || isMssql.value || isOracle
 // Oracle 的「角色」是单独一层（与系统权限、对象权限并列）
 const hasRolesTab = computed(() => isOracle.value)
 // 页签标题按类型取：同一层在不同家的说法不一样（Oracle 的"服务器级"其实就是系统权限）
-const serverTabLabel = computed(() => (isOracle.value ? t('upv.tabSystemPrivs') : t('upv.tabServer')))
+// 同一层在不同家叫法不同，按数据库类型取**准确**的名字：
+//   MySQL/MariaDB/Doris → 全局权限（GLOBAL PRIVILEGES，它没有"服务器"这一层）
+//   SQL Server → 服务器角色（它这一层给的就是固定服务器角色）
+//   Oracle → 系统权限（SYSTEM PRIVILEGES）
+//   PostgreSQL / Kingbase → 角色（集群级只有角色，没有直接的权限授予）
+const serverTabLabel = computed(() => (
+  isOracle.value ? t('upv.tabSystemPrivs')
+    : isMssql.value ? t('upv.tabServerRoles')
+      : isPgsql.value ? t('upv.tabRoles')
+        : t('upv.tabGlobal')
+))
+// 数据库那一页：MySQL 系是"库级权限"，SQL Server 给的是数据库角色
+const dbTabLabel = computed(() => (isMssql.value ? t('upv.segDbRoles') : t('upv.tabDb')))
 const granularTabLabel = computed(() => (
   isOracle.value ? t('upv.tabObjects')
     : isMssql.value ? t('upv.tabSchemaObject')
@@ -1196,6 +1205,32 @@ const submit = async () => {
   }
 }
 
+// ===== 改动检测：打开表单时 SQL 预览**不展示**，动过任何一处才出现 =====
+// 快照只取"用户能改的那些字段"，并按值排序 —— 否则勾选顺序不同会被当成改动。
+// 打开时（editData 的 watch，immediate）存一份基准，之后比对即知有没有动过。
+const formSnapshot = () => JSON.stringify({
+  name: form.value.name,
+  password: form.value.password,
+  host: form.value.host,
+  privileges: [...(form.value.privileges || [])].sort(),
+  roles: [...(form.value.roles || [])].sort(),
+  serverRoles: [...(form.value.serverRoles || [])].sort(),
+  dbPrivileges: (form.value.dbPrivileges || []).map((r) => ({
+    database: r.database, privileges: [...(r.privileges || [])].sort(),
+  })),
+  tablePrivileges: (form.value.tablePrivileges || []).map((r) => ({
+    database: r.database, table: r.table, privileges: [...(r.privileges || [])].sort(),
+  })),
+  schemaPrivileges: (form.value.schemaPrivileges || []).map((r) => ({
+    schema: r.schema, privileges: [...(r.privileges || [])].sort(),
+  })),
+  objectPrivileges: (form.value.objectPrivileges || []).map((r) => ({
+    schema: r.schema, object: r.object, privileges: [...(r.privileges || [])].sort(),
+  })),
+})
+const baseSnapshot = ref('')
+const dirty = computed(() => formSnapshot() !== baseSnapshot.value)
+
 watch(() => props.editData, (d) => {
   if (d && d.name) {
     form.value.name = d.name
@@ -1212,6 +1247,8 @@ watch(() => props.editData, (d) => {
   } else {
     form.value = { name: '', password: '', host: '%', privileges: [], roles: [], dbPrivileges: [], tablePrivileges: [], serverRoles: [], schemaPrivileges: [], objectPrivileges: [], grants: [] }
   }
+  // 刚打开（或切换用户）时存一份基准：此刻"没动过"，SQL 预览不展示
+  baseSnapshot.value = formSnapshot()
 }, { immediate: true })
 
 watch(() => props.conn?.id, loadDatabases, { immediate: true })
@@ -1279,14 +1316,23 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
   display: flex;
   flex-direction: column;
   background: var(--dc-bg-deep);
+  /* 四周留 5px：贴着面板边缘时，卡片的 8px 圆角会被面板边线"压平"，看起来就像没做圆角
+     （「编辑表结构」那边也是这么处理的，注释写着"用户反馈『都加圆角啊』正是这个"）。 */
+  padding: 5px;
+  box-sizing: border-box;
+  gap: 5px;
 }
+/* 顶部标题栏：**独立成一张小卡**（8px 圆角 + 完整边框 + 浅底 + 同款轻阴影），
+   与下面的页签卡之间留 5px 缝（见 .form-tab 的 gap）。 */
 .form-tab-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--dc-border-soft);
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
   background: var(--dc-bg-soft);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
   flex-shrink: 0;
 }
 .header-title {
@@ -1759,7 +1805,7 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
    flex-grow 重新拉大 —— 真机实测"拖到 0 却量出 705px"）；表单区吃掉剩下的那部分。 */
 /* 左右**不留内边距**：与「编辑表结构」同一口径（那里若两侧缩进，页签卡就比下方的
    SQL 预览窄一圈，实测 890 vs 914，两块面板看着宽度不一致）。 */
-.form-area { padding: 5px 0 0; flex: 1 1 auto; min-height: 0; }
+.form-area { padding: 0; flex: 1 1 auto; min-height: 0; }
 /* 左右**不留外边距**：与「编辑表结构」同一口径 —— 那边表单卡与预览区同宽
    （都贴着面板左右边），这里若缩进 8px 就会比上方的卡片窄一圈（实测差 16px）。 */
 .sql-area { margin: 0; flex: 0 0 auto; }

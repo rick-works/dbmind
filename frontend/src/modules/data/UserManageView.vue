@@ -207,9 +207,15 @@ onMounted(async () => {
 
 <style scoped>
 .user-manage { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--dc-bg); }
+/* 顶部工具条：与「编辑表结构」的标题栏同一形态 —— 独立一张小卡
+   （8px 圆角 + 完整边框 + 浅底 + 轻阴影），四周留 5px 缝给圆角呼吸。 */
 .um-head {
   display: flex; align-items: center; gap: 8px; padding: 8px 12px; flex-wrap: wrap;
-  border-bottom: 1px solid var(--dc-border); background: var(--dc-bg-card);
+  margin: 5px 5px 0;
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  background: var(--dc-bg-soft);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
 }
 .um-head-icon { color: #a855f7; }
 .um-title { font-size: 13px; font-weight: 600; color: var(--dc-text); margin-right: 4px; }

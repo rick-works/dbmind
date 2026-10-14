@@ -2864,6 +2864,8 @@ export default {
   'upv.previewTip': '执行前请确认语句：改权限时会先撤销原有授权，再按当前勾选重新授予',
   'upv.tabServer': '服务器权限',
   'upv.tabDb': '数据库权限',
+  'upv.tabGlobal': '全局权限',
+  'upv.tabServerRoles': '服务器角色',
   'upv.tabGranular': '细粒度权限',
   'upv.tabSystemPrivs': '系统权限',
   'upv.tabRoles': '角色',
@@ -2876,7 +2878,7 @@ export default {
   'upv.colAction': '操作',
 
   'upv.tabTables': '表权限',
-  'upv.tabSchemaObject': '架构与对象权限',
+  'upv.tabSchemaObject': 'Schema 与对象权限',
   'upv.phPickObject': '对象名',
   'upv.noObjectPrivOracle': '还没有对象权限，点击右上角「添加对象权限」',
   'upv.addObjectPrivOracle': '添加对象权限',

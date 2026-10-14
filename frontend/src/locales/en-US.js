@@ -2852,6 +2852,8 @@ export default {
   'upv.previewTip': 'Review the statements before running: privileges are revoked first, then re-granted as selected',
   'upv.tabServer': 'Server privileges',
   'upv.tabDb': 'Database privileges',
+  'upv.tabGlobal': 'Global privileges',
+  'upv.tabServerRoles': 'Server roles',
   'upv.tabGranular': 'Fine-grained privileges',
   'upv.tabSystemPrivs': 'System privileges',
   'upv.tabRoles': 'Roles',
