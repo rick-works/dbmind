@@ -28,6 +28,15 @@ use crate::AppState;
 /// 元数据查询的默认行上限：元数据是「列表」，给足但不放任。
 const META_MAX_ROWS: usize = 5000;
 
+/// 「连接失效后重连重试一次」只在这个窗口内做。
+///
+/// 重试本来是给**会话被服务端掐掉**这种情况用的：下一次调用立刻被拒（毫秒级），
+/// 重连一次很值得。但如果失败是**超时**（TCP/握手连不上），重试就是把同一段等待
+/// 再交一遍学费 —— 真机实测一条连不上的 MySQL：10 秒连接超时 × 2 = 20 秒，
+/// 用户点开连接一直转圈，还以为是自己库慢。这条线只对「等得已经够久了」的失败生效，
+/// 与方言无关，所有数据源一视同仁。
+const CONNECT_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_secs(5);
+
 // ------------------------------------------------------------------ 基础工具
 
 pub(crate) async fn ctx_of(state: &AppState, id: &str) -> XResult<(ConnectionRecord, Dialect)> {
@@ -223,7 +232,21 @@ async fn run_meta_sql(
         internal: true,
     };
     let engine_first = engine.clone();
+    let attempt_started = std::time::Instant::now();
     match run_kernel(move || engine_first.execute(first, AccessContext::Web)).await {
+        // 连接失败但**不是快速失败**（撞的是连接超时）：不再重试。
+        // 见 CONNECT_RETRY_WINDOW 的说明 —— 重试只会让用户多等一整段超时。
+        Err(err)
+            if err.code == ErrorCode::ConnConnectFailed
+                && attempt_started.elapsed() >= CONNECT_RETRY_WINDOW =>
+        {
+            tracing::warn!(
+                connection = %conn,
+                waited_ms = attempt_started.elapsed().as_millis() as u64,
+                "元数据查询连接失败且是超时（不是被拒），不再重试"
+            );
+            Err(err.into())
+        }
         Err(err) if err.code == ErrorCode::ConnConnectFailed => {
             tracing::warn!(connection = %conn, "元数据查询遇到连接失效，重连后重试一次");
             // 重试那次与首次保持完全一致（同只读会话）：会话失效时宿主已摘掉坏会话，

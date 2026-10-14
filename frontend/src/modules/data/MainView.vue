@@ -1160,7 +1160,8 @@ import { compareTaskStatus, compareCancel, syncCancel, getSettings } from '../..
 import { showSafetyNotice, setSafetyConnResolver } from '../../utils/safetyNotice'
 // 近 7 天趋势的按天聚合（后端从持久化的 query_history 直接聚合，不再由前端数最近 200 条）
 import { queryTrend } from '../../api'
-import { recordRecentConnection } from '../../utils/recentConnections'
+import { recordRecentConnection, rankRecentConnections } from '../../utils/recentConnections'
+import { readUnreachableIds, markUnreachable, clearUnreachable } from '../../utils/connHealth'
 import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
 import { pinnedFolders, loadPinnedFolders, pinFolder, unpinFolder } from '../../utils/folders'
 import { buildConnectionBundle, parseConnectionBundle, importPayloadOf, downloadJson } from '../../utils/connTransfer'
@@ -2599,11 +2600,67 @@ const loadAllConnections = async () => {
   treeLoading.value = true
   try {
     allConnections.value = await listConnections()
+    // 连接列表一到手就在后台预热（见 prewarmRecentConnections）。稍等一下再开始，
+    // 让首屏那一波请求先过去，别和启动抢资源。
+    setTimeout(() => { prewarmRecentConnections() }, 500)
   } catch (e) {
     allConnections.value = []
     ElMessage.error(t('mv.loadConnsFailed', { detail: (e?.message || e) }))
   } finally {
     treeLoading.value = false
+  }
+}
+
+/**
+ * 后台把「最近用过的几条连接」提前连上。
+ *
+ * 为什么值得做：建会话（JDBC 建连）是**每种数据源都躲不掉**的一笔账，而且不便宜 ——
+ * 真机实测 Oracle / ClickHouse 建连 2.4 秒、SQL Server 1 秒、MySQL 0.3 秒。
+ * 这笔账目前是**用户点开那一刻**才付的，「打开数据库」就是等这几秒。
+ * 这里在启动后对最近用过的几条静默打一次它们树下第一层本来就要打的接口：
+ * 会话建好，库 / 模式清单也顺手进了前端缓存（`xplore.dblist.*`），点开就是现成的。
+ *
+ * 三个刻意的取舍：
+ * ① 只预热**最近用过的**（跨会话记录的「最近连接」，最多 5 条），不是所有连接 ——
+ *    启动时去连 9 台服务器既慢又冒犯；
+ * ② **串行**按「最近用过」的顺序热身，且**跳过最近连不上的**（见 utils/connHealth.js）：
+ *    同一个代理进程里的多次建连是排队的（实测并发预热时 Oracle 首枪被拖到 6~11 秒），
+ *    串行 + 最近优先最实在 —— 而一条已下线的 Doris 要等满一次建连超时（10 秒），
+ *    所以失败过的先记下来别再试；
+ * ③ 失败一律静默：死连接、权限不足都不该在启动时弹窗（用户还没点它），
+ *    真点开时该报的错照旧报。
+ */
+const prewarmRecentConnections = async () => {
+  // 覆盖**全部**「最近用过」（最多 MAX_RECENT 条）：只预热前几条的话，后面的照样冷启动，
+  // 而那几条恰恰是用户真会点开的（这份名单就是跨会话记录的「最近连接」）。
+  const unreachable = new Set(readUnreachableIds().map(String))
+  const picked = rankRecentConnections(allConnections.value).filter(c => c && c.id && !unreachable.has(String(c.id)))
+  // **串行**按「最近用过」的顺序热身，最可能被点开的那条最先就绪。
+  // 为什么不是并行：同一个代理进程里的多次建连是**排队**的（实测并发预热时，Oracle 的首枪
+  // 反而被拖到 6~11 秒），串行至少能保证「第一条已经好了」是实打实的。
+  for (const conn of picked) {
+    const cid = String(conn.id)
+    try {
+      if (hideDbLevelOf(conn.type)) {
+        // 这种类型树上没有「库」这一层（见 types 里的 hideDbLevel）：只热身模式清单。
+        // 少建一条会话很重要 —— 每条会话都要真连一次库（实测 Oracle 建连 2.4 秒），
+        // 而多出来的那条「库会话」界面根本用不到，却会跟用户点开时抢同一条链路。
+        await listSchemas(cid, conn.database || '')
+      } else {
+        await listDatabases(cid)
+        if (schemaLevelOf(conn.type) === 'schema') await listSchemas(cid, conn.database || '')
+      }
+      clearUnreachable(cid)   // 连上了：撤掉之前的失败记录
+    } catch (e) {
+      // 预热失败不影响任何功能；但**记住它**，别让下次启动再拿别人陪它等一遍。
+      //
+      // 例外：**客户端自己中断**的不算（应用正在关、页面正在刷新）——
+      // 那种"失败"跟这台库能不能连毫无关系。真机上就踩过：反复重启应用做验证，
+      // 每次都在预热飞到一半时把页面杀掉，于是最好用的那条连接被记成"连不上"、
+      // 之后 30 分钟每次启动都被跳过，等于把预热关掉了。
+      const aborted = e && (e.name === 'AbortError' || e.code === 'ERR_CANCELED')
+      if (!aborted) markUnreachable(cid)
+    }
   }
 }
 
