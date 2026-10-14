@@ -1774,7 +1774,15 @@ onBeforeUnmount(() => {
 <style scoped>
 .nosql-view { height: 100%; display: flex; flex-direction: column; padding: 8px; gap: 8px; }
 /* ===== 工具栏 / 高级搜索面板（对齐表预览）===== */
-.toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+/* 工具条：独立成一张圆角小卡（与「表数据」/「编辑表结构」同一形态） */
+.toolbar {
+  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  background: var(--dc-bg-soft);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
+}
 .toolbar .left, .toolbar .right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .toolbar .right :deep(.el-button + .el-button) { margin-left: 0; }
 .advanced-panel {
