@@ -349,9 +349,6 @@
           <el-icon class="sql-fold" :class="{ folded: sqlCollapsed }"><CaretRight /></el-icon>
           <el-icon><DocumentCopy /></el-icon>
           <span>{{ $t('upv.sqlPreview') }}</span>
-          <el-tag size="small" effect="plain" type="info" class="sql-state" :class="previewOk ? 'ok' : 'warn'">
-            {{ previewOk ? $t('upv.statusOk') : $t('upv.statusIncomplete') }}
-          </el-tag>
           <span class="sql-fold-tx">{{ sqlCollapsed ? $t('tdet.expand') : $t('tdet.collapse') }}</span>
         </div>
         <div v-show="!sqlCollapsed" class="sql-body">
@@ -1150,9 +1147,12 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
   padding: 10px 12px;
   font-size: 13px;
   color: var(--dc-text-dim);
+  /* 一档浅底 + 下边框，把"标题 / 代码 / 底栏"三层分开（与「编辑表结构」一致） */
+  background: var(--dc-bg-soft);
   border-bottom: 1px solid var(--dc-border-soft);
   flex-shrink: 0;
 }
+.sql-head:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
 .sql-state { font-size: 12px; margin-left: auto; }
 .sql-state.ok { --el-tag-bg-color: var(--dc-success-wash); --el-tag-border-color: var(--dc-success); --el-tag-text-color: var(--dc-success); }
 .sql-state.warn { --el-tag-bg-color: var(--dc-warning-wash); --el-tag-border-color: var(--dc-warning); --el-tag-text-color: var(--dc-warning); }
@@ -1167,13 +1167,13 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
   font-family: "SF Mono", Consolas, monospace;
   font-size: 13px;
   line-height: 1.7;
-  color: var(--dc-link);
+  color: var(--dc-code-text);
   white-space: pre-wrap;
   word-break: break-all;
 }
 .sql-foot {
-  padding: 10px 12px;
-  border-top: 1px solid var(--dc-border-soft);
+  padding: 8px 12px;
+  border-top: 1px solid var(--dc-border);
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -1322,7 +1322,9 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .tab-card :deep(.el-tabs) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tab-card :deep(.el-tabs__header) {
   height: 35px; margin: 0; padding: 0; flex: 0 0 35px;
-  border-bottom: 1px solid var(--dc-border-soft);
+  /* 分隔线用 --dc-border（不是浅一档的 soft）：参照物那里这条线由表格表头的下边框给出，
+     用的就是 --dc-border，浅一档在部分屏幕上几乎看不见。 */
+  border-bottom: 1px solid var(--dc-border);
   background: transparent;
 }
 .tab-card :deep(.el-tabs__nav-wrap) { height: 35px; padding: 0 8px; }
@@ -1333,7 +1335,9 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
   height: 30px !important;
   line-height: 30px;
   padding: 0 14px !important;
-  font-size: 13px;
+  /* 字号必须 !important：全局还有一条 .el-tabs__item 是 14px，会把组件样式压掉
+     （真机实测本组件算出来就是 14px，比参照物大一档） */
+  font-size: 13px !important;
   color: var(--dc-text-mid);
   border-radius: 6px !important;
   /* 必须 !important：MainView 里有一条全局 .dc-tabs .el-tabs__item.is-active 会命中这里 */
@@ -1341,10 +1345,13 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
   transition: background .15s ease, color .15s ease;
 }
 .tab-card :deep(.el-tabs__item:hover) { color: var(--dc-text-strong); }
+/* 激活项：**白底 + 一层轻阴影**（与「编辑表结构」一致）。
+   原来是灰底（--dc-bg-soft），在纯白卡片里像一块没擦干净的印子。 */
 .tab-card :deep(.el-tabs__item.is-active) {
   color: var(--dc-primary) !important;
   font-weight: 600;
-  background: var(--dc-bg-soft) !important;
+  background: var(--dc-bg-card) !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .10);
 }
 /* Element 给页签内容区铺了一层淡灰蓝（--el-color-info-light-9，实测 rgb(228,233,242)）：
    表体/表头都是白的，于是**表格下面**透出这块底色，看着就像"表底下压着一个背景块"，
@@ -1443,7 +1450,8 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* 右列「值」里是成片的复选框：行高交给内容（表头/其它行仍是 26px 紧凑行） */
 .ft-perms { padding: 4px 8px !important; height: auto; }
 .ft-center { text-align: center; }
-.ft-empty { padding: 10px 9px !important; color: var(--dc-text-dim); font-size: 12.5px; text-align: center; }
+/* 空态：照字段表的 .empty-row（居中、上下 18px、13px 字） */
+.ft-empty { padding: 18px 0 !important; text-align: center; color: var(--dc-text-dim); font-size: 13px; }
 /* 权限页签：不留内边距，表格直接贴卡片内缘（与「编辑表结构」同一处理） */
 .grant-alert { margin: 10px 12px 0; }
 .tab-inner.grant-tab { padding: 0; }
@@ -1484,20 +1492,44 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .mx-table :deep(.el-tag) { margin-top: 2px; }
 .form-table :deep(.el-input__inner) { height: var(--ctl-h, 20px); }
 .form-table :deep(.el-input__wrapper) { min-height: var(--ctl-h, 20px); }
+/* ===== 让表格"像表格"：单元格里的输入控件默认**隐形**（透明底 + 无描边），
+   整张表读起来是一列列文字；鼠标移到该行才浮出输入框的样子，聚焦时给主色描边。
+   （与「编辑表结构」的字段表同一处理 —— 用户反馈"框不要留"就是指这个。）
+   必须 !important：index.css 有一套全局的 `.el-input__wrapper { background-color: …!important }`。 */
+.form-table :deep(.el-input__wrapper),
+.form-table :deep(.el-select__wrapper) {
+  background-color: transparent !important;
+  box-shadow: none !important;
+  transition: background .15s ease, box-shadow .15s ease;
+}
+.form-table tbody tr:hover :deep(.el-input__wrapper),
+.form-table tbody tr:hover :deep(.el-select__wrapper) {
+  background-color: var(--dc-bg-hover) !important;
+  box-shadow: 0 0 0 1px var(--dc-border) inset !important;
+}
+.form-table :deep(.el-input__wrapper.is-focus),
+.form-table :deep(.el-select__wrapper.is-focused) {
+  background-color: var(--dc-bg-hover) !important;
+  box-shadow: 0 0 0 1px var(--dc-primary) inset !important;
+}
+/* 行悬停：与字段表同色 */
+.form-table tbody tr:hover td { background: var(--dc-bg-hover); }
 /* 底栏：左提示 + 右按钮（与「编辑表结构」同一排法） */
-.sql-tip { flex: 1; font-size: 12px; color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sql-tip { font-size: 12px; color: var(--dc-text-dim); margin-right: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grant-alert { margin-bottom: 2px; }
 
-/* SQL 预览：通栏在下方（原来是右侧 380px 固定栏） */
+/* SQL 预览：通栏在下方（原来是右侧 380px 固定栏）——与上方的表格卡同一套外观：
+   1px 细边框 + 8px 圆角 + 卡片底 + 同一层轻阴影；overflow: hidden 让圆角不被头部/底栏顶成直角 */
 .sql-area {
   width: auto;
-  margin: 0 14px 12px;
+  margin: 0;
   flex-shrink: 0;
   min-height: 0;
   border: 1px solid var(--dc-border);
   border-radius: 8px;
   background: var(--dc-bg-card);
   box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
+  overflow: hidden;
 }
 .sql-area.collapsed { height: auto !important; }
 .sql-area .sql-body { flex: 1; min-height: 0; overflow: auto; }
@@ -1514,7 +1546,7 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .sql-fold { transition: transform .15s ease; }
 .sql-fold.folded { transform: rotate(-90deg); }
 .sql-fold-tx { margin-left: auto; font-size: 12px; color: var(--dc-text-dim); }
-.sql-foot-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.sql-foot-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .sql-head { cursor: pointer; }
 
 /* ===== 间距收紧（用户反馈：边距太大）===== */
@@ -1525,7 +1557,7 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .form-area { padding: 5px 0 0; flex: 1 1 auto; min-height: 0; }
 /* 左右**不留外边距**：与「编辑表结构」同一口径 —— 那边表单卡与预览区同宽
    （都贴着面板左右边），这里若缩进 8px 就会比上方的卡片窄一圈（实测差 16px）。 */
-.sql-area { margin: 0 0 8px; flex: 0 0 auto; }
+.sql-area { margin: 0; flex: 0 0 auto; }
 .tab-inner { gap: 8px; }
 
 /* ===== 对象权限表格（权限做列，勾选即授予）===== */
