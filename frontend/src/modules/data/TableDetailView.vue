@@ -7,7 +7,8 @@
       <div class="header-title">
         <el-icon :size="16" class="header-icon"><Grid /></el-icon>
         <span class="header-text">{{ $t('tdet.editStructure') }}</span>
-        <el-tag size="small" effect="plain" type="info">{{ conn?.name }} / {{ database }} / {{ table }}</el-tag>
+        <!-- 路径：数据源名称在前，中间用 `.` 连接 -->
+        <el-tag size="small" effect="plain" type="info">{{ [conn?.name, database, table].filter(Boolean).join('.') }}</el-tag>
       </div>
       <!-- 操作按钮统一挪到下方 SQL 预览栏（与「保存修改」同一行）：
            它们本就是围绕 SQL 预览的动作，摆在标题栏右侧离预览最远。这里只留 DDL 模式的提示。 -->

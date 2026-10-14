@@ -3137,6 +3137,7 @@ export default {
   'udv.deny': 'Denied',
   'udv.yes': 'Yes',
   'udv.no': 'No',
+  'udv.unlimited': 'Unlimited',
   'udv.connUnknown': 'Could not tell which data source this user belongs to — close this tab, select a data source on the left, then open it again',
   'udv.mysqlUser': 'MySQL user',
   'udv.sqlserverUser': 'SQL Server user',

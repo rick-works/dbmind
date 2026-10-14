@@ -6,7 +6,8 @@
         <div class="header-title">
           <el-icon :size="16" class="header-icon"><component :is="catIcon" /></el-icon>
           <span class="header-text">{{ title }}</span>
-          <el-tag size="small" effect="plain" type="info">{{ conn?.name }} / {{ database }}</el-tag>
+          <!-- 路径：数据源名称在前，中间用 `.` 连接 -->
+          <el-tag size="small" effect="plain" type="info">{{ [conn?.name, database].filter(Boolean).join('.') }}</el-tag>
         </div>
         <div class="header-actions">
           <el-button size="small" text :icon="CopyDocument" @click="copySql">{{ $t('oft.copySql') }}</el-button>

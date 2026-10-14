@@ -6475,7 +6475,9 @@ const objCatLabel = (cat, connType, kind) => {
   return m[cat] || cat
 }
 // tab 标题渲染：procs 表单在函数场景下把"存储过程"替换为"函数"
-const tabLabel = (tab) => {
+// 页签标题的**路径段**：数据源名称在最前，之后是库名与页签自己的名字。
+// 脚本页签是用户自己命名的、AI / 知识库是全局页签，都不带数据源语境，保持原样。
+const tabPath = (tab) => {
   const ct = tab.connType || conn.value?.type
   const isFn = tab.object?.kind === 'function' || tab.formKind === 'function' || ct === 'CLICKHOUSE'
   let base = tab.type === 'sql' ? (tab.scriptName || tab.label) : tab.label
@@ -6485,30 +6487,34 @@ const tabLabel = (tab) => {
     const proc = t('mv.catProc')
     base = base.replace(new RegExp(proc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), t('mv.catFunc'))
   }
-  // **路径放全**（用户口径）：带数据源上下文的页签，标题前缀「连接 · 库」——
-  // 多连接 / 多库各开同名的页签，一眼能分清是哪条路径下的。脚本页签是用户自己
-  // 命名的、AI / 知识库是全局页签，都不带数据源语境，保持原样。
-  if (!isGlobalTab(tab) && tab.type !== 'sql') {
-    const connName = allConnections.value.find(x => String(x.id) === String(tab.connId || ''))?.name
-    const parts = [connName, tab.database].filter(Boolean)
-    // 页签文本与库名相同时不再重复拼一份（Redis 的 db 页签 label 就是库名，
-    // 原来会显示成「本地Redis · db0 · db0」）
-    if (!parts.length) { /* 无前缀，保持原样 */ }
-    else if (base === tab.database) base = parts.join(' · ')
-    else base = parts.join(' · ') + ' · ' + base
-  }
-  return base
+  if (isGlobalTab(tab) || tab.type === 'sql') return [base]
+  const connName = allConnections.value.find(x => String(x.id) === String(tab.connId || ''))?.name
+  const parts = [connName, tab.database].filter(Boolean)
+  // 页签文本与库名相同时不再重复拼一份（Redis 的 db 页签 label 就是库名，
+  // 原来会显示成「本地Redis · db0 · db0」）
+  if (!parts.length) return [base]
+  if (base === tab.database) return parts
+  return parts.concat(base)
 }
 
-// 页签上**只显示最末一段**（表名 / 对象名 / 库名），「连接 · 库」前缀留给悬浮提示。
-// 用户反馈：页签条上的内容太长（连接名 + 库名 + 表名），连接名与库名可以不要。
-// 前缀是 tabLabel 用 ' · ' 拼出来的，所以取最后一段即可（没有前缀时原样返回）。
-// 注意：确认类对话框（"关闭这些页签？"）仍然用 tabLabel 全路径 —— 那时候必须分得清是哪个连接/库。
+// 全路径：**数据源在前，中间用 `.` 连接**（用户口径）——如 `公司Mysql.mydb.mytable`。
+// 多连接 / 多库各开同名的页签，一眼能分清是哪条路径下的（悬浮提示与"关闭这些页签？"用这个）。
+const tabLabel = (tab) => tabPath(tab).join('.')
+
+// 页签条上只显示「数据源 + 末段」（`公司Mysql.mytable`）：库名与完整路径留给悬浮提示。
+// 之前反馈过页签太长（连接名 + 库名 + 表名都堆在页签条上），但**数据源名称要留着、还要在前**
+// —— 多连接下同名的表/用户，光看末段分不出在哪条连接上。
+// 注意：确认类对话框仍然用 tabLabel 全路径 —— 那时候必须分得清是哪个连接/库。
 const tabLabelShort = (tab) => {
-  const full = tabLabel(tab)
-  const i = full.lastIndexOf(' · ')
-  return i < 0 ? full : full.slice(i + 3)
+  const p = tabPath(tab)
+  const last = String(p[p.length - 1] ?? '')
+  // 末段自己可能还带一层分隔（用户表单的 label 是「编辑用户 · demo1@%」）—— 取最末一段
+  const i = last.lastIndexOf(' · ')
+  const tail = i < 0 ? last : last.slice(i + 3)
+  if (p.length <= 1) return tail
+  return p[0] + '.' + tail
 }
+
 // 悬浮提示：只有"短标题之外还有信息"时才给 title —— 否则会悬浮弹出一段和字面一模一样的东西
 const tabTitle = (tab) => {
   const full = tabLabel(tab)
@@ -6705,6 +6711,19 @@ const openUserDetail = () => {
 // **非当前连接**的对象（见 connFor 的注释），用全局 conn 会去问错误的服务器；
 // 而当前连接为空时（启动后直接双击用户节点）`conn.value.id` 直接抛 TypeError，
 // 被下面的 catch 吞掉 → 编辑表单里权限全空、还看不出哪里错了。
+// 用户详情里的**明细列**（各库不同，见后端 dialect.rs 的 user_info）原样带进 editData，
+// 供表单的「基本信息」展示。只挑标量：授权清单 / 结构化行是数组或对象，它们另有去处
+// （权限页签与 SQL 预览），塞进「标签 - 值」表只会变成一串没有标签的东西。
+const pickUserDetailFields = (info) => {
+  const out = {}
+  for (const [k, v] of Object.entries(info || {})) {
+    if (v === null || v === undefined) continue
+    if (typeof v === 'object') continue
+    out[k] = v
+  }
+  return out
+}
+
 const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
   const parts = String(fullName).split('@')
   const editData = { name: name || parts[0], host: host || (parts.length > 1 ? parts[1] : '') }
@@ -6718,6 +6737,8 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
   const isOracle = target.type === 'ORACLE'
   try {
     const info = await getUserInfo(target.id, db, fullName)
+    // 明细列随 editData 一起交给「基本信息」（原来这里只取了 name / host，其余全丢）
+    editData.fields = pickUserDetailFields(info)
     if (isMssql) {
       const parsed = parseSqlServerPerms(info)
       editData.serverRoles = parsed.serverRoles

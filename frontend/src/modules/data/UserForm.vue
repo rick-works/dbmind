@@ -5,8 +5,8 @@
       <div class="header-title">
         <el-icon :size="16" class="header-icon"><User /></el-icon>
         <span class="header-text">{{ editMode ? $t('upv.editUser') : $t('upv.newUser') }}</span>
-        <el-tag v-if="form.name" size="small" effect="plain">{{ form.name }}</el-tag>
-        <el-tag size="small" effect="plain" type="info">{{ conn?.name }}</el-tag>
+        <!-- 路径：**数据源名称在前**，中间用 `.` 连接（原来是「用户名」在前、连接名单一个标签） -->
+        <el-tag size="small" effect="plain" type="info">{{ headPath }}</el-tag>
       </div>
     </div>
 
@@ -47,6 +47,14 @@
                   <tr v-if="isMysql">
                     <td class="ft-label">{{ $t('upv.fieldHost') }}</td>
                     <td><el-input v-model="form.host" size="small" clearable :placeholder="$t('upv.phHost')" /></td>
+                  </tr>
+                  <!-- 跟着数据源类型来的只读明细（Oracle 的表空间/状态、SQL Server 的登录名/默认架构、
+                       PG 的 rol*、ClickHouse 的 storage/auth、MySQL 的插件/账号锁定…）。
+                       这些列后端本来就返回了（见 dialect.rs 的 user_info），原来前端只取了 name / host，
+                       于是不管哪种库都只有「用户名 / 密码 / 主机」三行。 -->
+                  <tr v-for="it in detailItems" :key="it.key">
+                    <td class="ft-label">{{ it.label }}</td>
+                    <td class="ft-value" :class="it.cls">{{ it.value }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -475,6 +483,7 @@ import { t } from '../../utils/i18n'
 import { User, CaretRight, CopyDocument, DocumentCopy, Plus, Delete } from '@element-plus/icons-vue'
 import { userAction, listDatabases, listTables, listSchemas } from '../../api'
 import { rowKey } from '../../utils/rowKey'
+import { userDetailItems } from '../../utils/userFields'
 
 const props = defineProps({
   conn: { type: Object, required: true },
@@ -508,6 +517,16 @@ const mssqlServerRoles = [
   'sysadmin', 'securityadmin', 'serveradmin', 'setupadmin',
   'processadmin', 'diskadmin', 'dbcreator', 'bulkadmin'
 ]
+
+// 标题栏的路径：数据源名称在前 + `.` 连接（新建时还没有用户名，只显示数据源）
+const headPath = computed(() => [props.conn?.name, form.value.name].filter(Boolean).join('.'))
+
+// 「基本信息」里跟着数据源类型来的只读项。权限类列（MySQL 的 t.* 里有几十个 *_PRIV）
+// 不在这里列 —— 它们各自有页签；认证串一律不显示（密码只写不读，与其它地方的取数口径一致）。
+const detailItems = computed(() => userDetailItems(props.editData?.fields, {
+  // 权限名本身不进「基本信息」（它们各自有页签）；凭据列的屏蔽在 util 里统一做
+  hideRe: /PRIV$/
+}))
 
 const isMysql = computed(() => {
   // 局部名不叫 t：本文件已 import { t } 做翻译，叫 t 会在本作用域遮蔽它
@@ -1826,6 +1845,10 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .form-table td:last-child { border-right: none; }
 /* 左列「项目」：读作行标题（字号略小、颜色偏灰），与表头一样左对齐。
    权限页签里它还要放「计数 + 全选/清空」，所以允许换行。 */
+/* 明细值：与用户详情页同一套口径（允许 / 是 用主色，禁止 / 否 用弱化色） */
+.ft-value { color: var(--dc-text); }
+.ft-value.allow, .ft-value.yes { color: var(--dc-accent); }
+.ft-value.deny, .ft-value.no { color: var(--dc-text-dim); }
 .ft-label {
   display: flex;
   align-items: center;

@@ -3150,6 +3150,7 @@ export default {
   'udv.deny': '禁止',
   'udv.yes': '是',
   'udv.no': '否',
+  'udv.unlimited': '不限制',
   'udv.connUnknown': '未确定该用户所属的数据源，请关闭本页签、在左侧选中数据源后重开',
   'udv.mysqlUser': 'MySQL 用户',
   'udv.sqlserverUser': 'SQL Server 用户',
