@@ -136,6 +136,11 @@
 
           <!-- ===== 数据库权限 ===== -->
           <el-tab-pane v-if="hasDbTab" :label="$t('upv.tabDb')" name="database">
+            <!-- 动作条：与页签**同一行**、贴右（照「编辑表结构」的排法）：
+                 绝对定位到卡片右上角，表格里不再单独占一行 -->
+            <div class="tab-actions">
+              <el-button v-if="isMysql" size="small" type="primary" :icon="Plus" @click="addDbPriv">{{ $t('upv.addDbPriv') }}</el-button>
+            </div>
             <div class="tab-inner grant-tab">
               <!-- MySQL 系：一行一个库，每个库级权限一列 -->
               <table v-if="isMysql" class="form-table mx-table">
@@ -165,11 +170,6 @@
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeDbPriv(i)" />
                     </td>
                   </tr>
-                  <tr class="ft-add-row">
-                    <td :colspan="dbPrivColumns.length + 2">
-                      <el-button size="small" text type="primary" :icon="Plus" @click="addDbPriv">{{ $t('upv.addDbPriv') }}</el-button>
-                    </td>
-                  </tr>
                 </tbody>
               </table>
 
@@ -195,6 +195,15 @@
 
           <!-- ===== 细粒度权限（库/表、Schema/对象）===== -->
           <el-tab-pane v-if="hasGranularTab" :label="granularTabLabel" name="granular">
+            <!-- 动作条：与页签同一行、贴右；SQL Server 这一页有两张表，所以两个按钮 -->
+            <div class="tab-actions">
+              <el-button v-if="isOracle" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addObjectPrivOracle') }}</el-button>
+              <el-button v-if="isMysql" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addTablePriv') }}</el-button>
+              <template v-if="isMssql">
+                <el-button size="small" type="primary" :icon="Plus" @click="addSchemaPriv">{{ $t('upv.addSchemaPriv') }}</el-button>
+                <el-button size="small" type="primary" :icon="Plus" @click="addObjectPriv">{{ $t('upv.addObjectPriv') }}</el-button>
+              </template>
+            </div>
             <div class="tab-inner grant-tab">
               <!-- Oracle：对象权限（「模式 · 名称」两列冻结，权限项当列横向滚动） -->
               <table v-if="isOracle" class="form-table mx-table">
@@ -226,11 +235,6 @@
                     </td>
                     <td class="mx-cell">
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeTablePriv(i)" />
-                    </td>
-                  </tr>
-                  <tr class="ft-add-row">
-                    <td :colspan="objectPrivColumns.length + 3">
-                      <el-button size="small" text type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addObjectPrivOracle') }}</el-button>
                     </td>
                   </tr>
                 </tbody>
@@ -268,11 +272,6 @@
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeTablePriv(i)" />
                     </td>
                   </tr>
-                  <tr class="ft-add-row">
-                    <td :colspan="tablePrivColumns.length + 3">
-                      <el-button size="small" text type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addTablePriv') }}</el-button>
-                    </td>
-                  </tr>
                 </tbody>
               </table>
 
@@ -302,11 +301,6 @@
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeSchemaPriv(i)" />
                     </td>
                   </tr>
-                  <tr class="ft-add-row">
-                    <td :colspan="schemaPrivColumns.length + 2">
-                      <el-button size="small" text type="primary" :icon="Plus" @click="addSchemaPriv">{{ $t('upv.addSchemaPriv') }}</el-button>
-                    </td>
-                  </tr>
                 </tbody>
               </table>
 
@@ -332,11 +326,6 @@
                     </td>
                     <td class="mx-cell">
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeObjectPriv(i)" />
-                    </td>
-                  </tr>
-                  <tr class="ft-add-row">
-                    <td :colspan="objectPrivColumnsMssql.length + 3">
-                      <el-button size="small" text type="primary" :icon="Plus" @click="addObjectPriv">{{ $t('upv.addObjectPriv') }}</el-button>
                     </td>
                   </tr>
                 </tbody>
@@ -1360,14 +1349,44 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* Element 给页签内容区铺了一层淡灰蓝（--el-color-info-light-9，实测 rgb(228,233,242)）：
    表体/表头都是白的，于是**表格下面**透出这块底色，看着就像"表底下压着一个背景块"，
    与「编辑表结构」的纯白卡不一样（用户反馈"背景样式还是不一样"）。显式盖回透明。 */
+/* position/overflow 也要放开（Element 给 content 预置了 relative + hidden）：
+   右上角那条 .tab-actions 要**上浮到页签这一行**、锚点是卡片，中间这几层若不是
+   static/visible，它就会被定位到内容区里、还可能被裁掉。
+   滚动因此交给页签内容自己（.tab-inner { overflow: auto }）—— 与「编辑表结构」同一处理。 */
 .tab-card :deep(.el-tabs__content) {
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  position: static;
+  overflow: visible;
   background: transparent !important;
 }
+.tab-card :deep(.el-tab-pane) { height: 100%; position: static; overflow: visible; }
 /* 页签内容：与卡片同一列宽，卡片之间留缝 */
-.tab-inner { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+.tab-inner {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  overflow: auto;      /* 滚动在这里（内容区已放开 overflow，好让动作条能上浮到页签行） */
+}
+
+/* 页签行右侧的动作条（「+ 添加…」）：绝对定位到卡片右上角、与页签同一行、纵向居中。
+   右缩进 13px 让按钮右缘落在纵向滚动条左侧，与表格右缘基本齐平。
+   max-width 给左侧页签留位置，窄屏时不会叠到页签上。 */
+.tab-actions {
+  position: absolute;
+  top: 0;
+  right: 13px;
+  height: 35px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: calc(100% - 320px);
+  z-index: 5;
+  flex-shrink: 0;
+}
 /* 基本信息页签里是一张**表格**：不留内边距，表格直接贴到卡片内缘
    （左右那两条"框线"就是卡片自身那条边框 —— 与「编辑表结构」的字段表同一处理）。
    选择器要写 `.tab-inner.basic-tab`：两个类在同一个元素上，写成后代选择器匹配不到。 */
@@ -1424,13 +1443,11 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* 右列「值」里是成片的复选框：行高交给内容（表头/其它行仍是 26px 紧凑行） */
 .ft-perms { padding: 4px 8px !important; height: auto; }
 .ft-center { text-align: center; }
-.ft-empty { padding: 8px 9px !important; color: var(--dc-text-dim); font-size: 12.5px; }
+.ft-empty { padding: 10px 9px !important; color: var(--dc-text-dim); font-size: 12.5px; text-align: center; }
 /* 权限页签：不留内边距，表格直接贴卡片内缘（与「编辑表结构」同一处理） */
 .grant-alert { margin: 10px 12px 0; }
 .tab-inner.grant-tab { padding: 0; }
-/* 「添加…」收进表格里当最后一行：与上面几行同一套网格线，不再单独飘一个按钮 */
-.ft-add-row td { padding: 3px 9px; }
-.ft-add-row :deep(.el-button) { padding: 0 6px; height: var(--ctl-h, 20px); }
+/* 注：「+ 添加…」已挪到页签行右上角（.tab-actions），表格里不再占一行 */
 
 /* ===== 矩阵表：**权限项当列**，主体列冻结，权限列横向滚动（与各家客户端一致）=====
    列宽不能用 fixed：权限列要按内容（`CREATE TEMPORARY TABLES` 这种名字）自己撑开。
