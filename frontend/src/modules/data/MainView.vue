@@ -2467,6 +2467,21 @@ const isConnOpen = (connId) => {
   if (connLoadingSet.value.has(sid)) return false
   return sid in dbsByConn.value || tabs.value.some(t => String(t.connId || '') === sid)
 }
+/**
+ * 节点**自己那条库名**（模式节点 = 「库.模式」，库节点 = 库名）。
+ *
+ * 为什么不能直接用 `data.db`：右键模式节点时菜单会拿到一份**改写过的副本**
+ * （`{ ...data, db: data.realDb }`，把「库.模式」压成「库」，好让查看建库语句 / 转储 SQL /
+ * 备份还原这些动作作用在**库**上）。凡是**按节点身份**做事的地方 —— 打开/关闭、图标明暗、
+ * 页签归属 —— 读了那份 `db` 就会判错：真机上先是「灰节点写关闭数据库」，修好之后又变成
+ * 「点关闭数据库关不掉、图标还亮着」（关闭时拿 `FREE` 去比当前库 `FREE.ANONYMOUS`）。
+ * 节点自己的库名永远能从 `realDb + schema` 拼回来（两者在副本里都还在）。
+ */
+const nodeOwnDb = (data) => {
+  if (!data) return ''
+  if (data.kind === 'schema' && data.schema) return String(data.realDb || '') + '.' + String(data.schema)
+  return String(data.db || '')
+}
 
 // 表右键菜单状态（subKey: 'sql-tpl' | 'export' | null，控制二级子菜单）
 const ctxMenu = ref({ show: false, x: 0, y: 0, subKey: null, data: null })
@@ -4840,14 +4855,8 @@ const isNodeLoading = (node, data) => {
  */
 const isDbOpened = (data) => {
   if (!data || (data.kind !== 'db' && data.kind !== 'schema')) return false
-  // ⚠️ 模式节点**不能直接读 `data.db`**：右键菜单会给它一份改写过的副本
-  // （`{ ...data, db: data.realDb }`，把「库.模式」压成「库」，好让查看建库语句/转储
-  // 作用在库上）—— 直接读会拿到 `FREE`，于是图标判 `FREE.ANONYMOUS`、菜单判 `FREE`，
-  // 两处对不上：真机上就是「图标亮着，右键却写"打开数据库"」。节点自己的那条库名
-  // 永远能从 `realDb + schema` 拼回来（两者在副本里都还在）。
-  const db = (data.kind === 'schema' && data.schema)
-    ? String(data.realDb || '') + '.' + String(data.schema)
-    : String(data.db || '')
+  // ⚠️ 一律走 `nodeOwnDb`，别直接读 `data.db`（菜单那份是改写过的副本，见 helper 的说明）
+  const db = nodeOwnDb(data)
   if (!db) return false
   // **模式**（Oracle / DM 这类没有库层的类型）必须**精确相等**才算打开：
   // 不能走 inCurrentDb 的前缀规则 —— 当前库是连接级的 `FREE` 时，`FREE.ANONYMOUS`
@@ -6924,26 +6933,31 @@ const dbCtxToggleOpen = () => {
   closeTreeCtxMenu()
   // 与菜单文案、图标明暗同一个判据（见 isDbCurrentOpen 的说明）
   const isOpen = isDbOpened(d)
+  // ⚠️ 关/开、断会话、页签归属全都用**节点自己那条库名**，不能用 `d.db` ——
+  // 右键模式的菜单里那是被改写成「库」的副本（`FREE`），用它去比当前库 `FREE.ANONYMOUS`
+  // 永远不等，于是"关了等于没关"：当前库没清、页签没关、图标照样亮（真机复现过）。
+  const db = nodeOwnDb(d)
+  const sid = String(d.connId || currentConnId.value || '')
+  if (!db) return
   if (isOpen) {
-    // 关闭数据库：清空当前库，关闭该库相关的 tab，收起节点
-            // **真正断开会话**：该库的语句跑在它的影子连接上，调后端按库断掉 ——
-            // 只清前端状态的话，内核池里那条会话还挂数据库上（用户要求真正关闭）
-            const closeSid = String(d.connId || currentConnId.value || '')
-            if (closeSid && d.db) {
-              disconnectDatabase(closeSid, d.db).catch(() => {})
-            }
-            if (currentConnId.value && currentDbByConn.value[currentConnId.value] === d.db) {
-      currentDb.value = ''
-      delete currentDbByConn.value[currentConnId.value]
-    }
+    // 关闭数据库：真正断开会话 → 清当前库 → 关该库的页签 → 收起节点。
+    // **真正断开会话**：该库的语句跑在它的影子连接上，调后端按库断掉 ——
+    // 只清前端状态的话，内核池里那条会话还挂数据库上（用户要求真正关闭）。
+    if (sid) disconnectDatabase(sid, db).catch(() => {})
+    // 清「当前库」：按**节点自己的连接**清（右击的可能是非当前连接里的库），
+    // 当前连接才对得上时才动全局的 currentDb。
+    if (String(currentDbByConn.value[sid] || '') === db) delete currentDbByConn.value[sid]
+    if (String(currentConnId.value || '') === sid && String(currentDb.value || '') === db) currentDb.value = ''
     // 关闭属于该数据库的 tab（表数据、表结构、对象、表单等）。
-    // 只关这个连接下的 —— 页签栏全局之后，别的数据源的同名库不能被牵连
-    const sid = String(d.connId || currentConnId.value || '')
+    // 只关这个连接下的 —— 页签栏全局之后，别的数据源的同名库不能被牵连；
+    // 反过来，**同一个库**的页签必须都关掉（含没写 connId 的），否则 isDbOpened 里
+    // "开着这个库的页签也算打开"那条会让图标一直亮着 —— 判定与清理必须同一口径。
     tabs.value = tabs.value.filter(t => {
-      // 保留不依赖特定数据库的 tab（如不带 database 的 sql 脚本）
-      if (!t.database) return true
-      if (String(t.connId || '') !== sid) return true
-      return t.database !== d.db
+      if (!t.database) return true                                  // 不依赖库的页签（脚本等）
+      if (String(t.database) !== db) return true                    // 别的库
+      const tabConn = String(t.connId || '')
+      if (tabConn && sid && tabConn !== sid) return true            // 别的连接里的同名库
+      return false
     })
     // 如果当前激活的 tab 被关闭了，切换到第一个可用 tab
     if (activeTab.value && !tabs.value.find(t => t.id === activeTab.value)) {
@@ -6955,7 +6969,7 @@ const dbCtxToggleOpen = () => {
   } else {
     // 打开数据库：先切换到目标连接（若不同），再设为当前库，展开节点
     ensureDbConn(d)
-    setCurrentDb(d.db)
+    setCurrentDb(db)
     refreshAllTables()
     nextTick(() => {
       expandNode(d.id)
@@ -7003,8 +7017,11 @@ const dbCtxNewQuery = () => {
   if (!d) return
   closeTreeCtxMenu()
   ensureDbConn(d)
-  setCurrentDb(d.db)
-  newQueryTab({ connId: String(d.connId), database: d.db })
+  // 库值用节点自己的那条（模式 = 「库.模式」）：与"左键点开这个节点"完全一致，
+  // 否则在模式上右键新建查询会退化成整个库、把模式丢掉。
+  const db = nodeOwnDb(d)
+  setCurrentDb(db)
+  newQueryTab({ connId: String(d.connId), database: db })
 }
 
 const dbCtxShowDdl = async () => {
