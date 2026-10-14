@@ -17,7 +17,6 @@
       <el-button size="small" type="primary" :icon="Plus" :disabled="!canManage" @click="openCreate">
         {{ $t('um.newUser') }}
       </el-button>
-      <span class="um-hint">{{ $t('um.grantHint') }}</span>
     </div>
 
     <!-- 主体 -->
@@ -27,30 +26,49 @@
       <div v-else-if="unsupported" class="um-empty">{{ $t('um.unsupported', { type: typeLabel(curConn?.type) }) }}</div>
       <div v-else-if="notImplemented" class="um-empty">{{ $t('um.notImplemented', { type: typeLabel(curConn?.type) }) }}</div>
       <div v-else-if="error" class="um-empty um-err">{{ error }}</div>
-      <el-table v-else :data="rows" v-loading="loading" size="small" height="100%" stripe>
-        <el-table-column prop="name" :label="$t('um.colName')" min-width="200" show-overflow-tooltip />
-        <el-table-column v-if="hasHost" prop="host" :label="$t('um.colHost')" min-width="140" show-overflow-tooltip />
-        <el-table-column :label="$t('um.colSuper')" width="120">
-          <template #default="{ row }">
-            <el-tag v-if="row.isSuper" size="small" type="warning" effect="plain">{{ $t('um.superTag') }}</el-tag>
-            <span v-else class="um-dash">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column :label="$t('um.colComment')" min-width="200" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.comment || '—' }}</template>
-        </el-table-column>
-        <el-table-column :label="$t('um.colActions')" width="170" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openEdit(row)">{{ $t('um.editUser') }}</el-button>
-            <el-button link type="danger" size="small" :disabled="!canManage" @click="dropUser(row)">
-              {{ $t('common.delete') }}
-            </el-button>
-          </template>
-        </el-table-column>
-        <template #empty>
-          <span class="um-dash">{{ $t('um.empty') }}</span>
-        </template>
-      </el-table>
+      <!-- 列表：与数据视图/字段表**同一套表格样式**（表头浅底 + 横竖网格 + 紧凑行 + 贴卡片内缘）。
+           这里自己出表而不用 el-table：只有五列、几十行，原生表才能真正和项目其它表格一个模样
+           （el-table 自带一整套边框/斑马纹/悬停样式，要压很久还容易跟主题打架）。 -->
+      <div v-else class="um-table-wrap" v-loading="loading">
+        <table class="um-table">
+          <colgroup>
+            <col style="width: 220px" />
+            <col v-if="hasHost" style="width: 160px" />
+            <col style="width: 120px" />
+            <col />
+            <col style="width: 170px" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>{{ $t('um.colName') }}</th>
+              <th v-if="hasHost">{{ $t('um.colHost') }}</th>
+              <th class="um-c">{{ $t('um.colSuper') }}</th>
+              <th>{{ $t('um.colComment') }}</th>
+              <th class="um-act">{{ $t('um.colActions') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="!rows.length">
+              <td :colspan="hasHost ? 5 : 4" class="um-empty-row">{{ $t('um.empty') }}</td>
+            </tr>
+            <tr v-for="row in rows" :key="String(row.name) + '@' + String(row.host || '')">
+              <td :title="row.name">{{ row.name }}</td>
+              <td v-if="hasHost" :title="row.host">{{ row.host }}</td>
+              <td class="um-c">
+                <el-tag v-if="row.isSuper" size="small" type="warning" effect="plain">{{ $t('um.superTag') }}</el-tag>
+                <span v-else class="um-dash">—</span>
+              </td>
+              <td :title="row.comment">{{ row.comment || '—' }}</td>
+              <td class="um-act">
+                <el-button link type="primary" size="small" @click="openEdit(row)">{{ $t('um.editUser') }}</el-button>
+                <el-button link type="danger" size="small" :disabled="!canManage" @click="dropUser(row)">
+                  {{ $t('common.delete') }}
+                </el-button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </div>
 </template>
@@ -222,8 +240,64 @@ onMounted(async () => {
 .um-conn { width: 220px; }
 .um-opt-name { float: left; }
 .um-opt-type { float: right; color: var(--dc-text-dim); font-size: 12px; margin-left: 12px; }
-.um-hint { font-size: 12px; color: var(--dc-text-dim); }
-.um-body { flex: 1; min-height: 0; padding: 8px 12px 12px; }
+/* 主体留 5px：与上方工具条卡同一圈缝，圆角才不会被面板边线"压平" */
+.um-body { flex: 1; min-height: 0; padding: 5px; display: flex; flex-direction: column; }
+
+/* ===== 列表：项目统一的表格样式（与字段表/数据视图同一套口径）===== */
+.um-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--dc-bg-card);
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+}
+.um-table {
+  width: 100%;
+  border-collapse: separate;   /* 与吸顶表头同用不能 collapse（本项目踩过：会出现残影） */
+  border-spacing: 0;
+  table-layout: fixed;
+  font-size: 13px;
+}
+.um-table th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--dc-bg-soft);
+  color: var(--dc-text-strong);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: .02em;
+  text-align: left;
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--dc-border);
+  border-right: 1px solid var(--dc-border);
+  white-space: nowrap;
+}
+.um-table td {
+  padding: 1px 9px;
+  height: 26px;
+  background: var(--dc-bg-card);
+  border-bottom: 1px solid var(--dc-border);
+  border-right: 1px solid var(--dc-border);
+  vertical-align: middle;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 最后一列不画竖线：否则与卡片外框并成两条 */
+.um-table th:last-child,
+.um-table td:last-child { border-right: none; }
+.um-table tbody tr:hover td { background: var(--dc-bg-hover); }
+.um-c { text-align: center; }
+.um-act { text-align: right; }
+.um-empty-row {
+  height: auto !important;
+  padding: 18px 0 !important;
+  text-align: center;
+  color: var(--dc-text-dim);
+  font-size: 13px;
+}
 .um-empty { color: var(--dc-text-dim); font-size: 13px; padding: 24px 4px; }
 .um-err { color: var(--el-color-danger); }
 .um-dash { color: var(--dc-text-dim); }
