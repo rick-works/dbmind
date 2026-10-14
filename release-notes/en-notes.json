@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.27": [
+        "Users and privileges reworked end to end: user management moved to the top bar (a connection-level page) and uses the same layout as Edit table structure (tabs on top, SQL preview below); privileges are shown as a matrix (privileges as columns, scrolled horizontally) and grants now emit only the difference - unticking a privilege sends just that one REVOKE instead of the whole set",
+        "Oracle users can be created, have their password changed and be dropped, with system privileges / roles / object privileges granted in three layers; on SQL Server all four layers (system privileges, server roles, database roles, object privileges) really land in the database",
+        "Writes are refused right when you click: on read-only or production-marked connections, create / delete / save no longer let you fill in the whole form first - they are blocked on the spot with a notice kept at the top of the page; for data sources that only support viewing users (such as DM) the form is read-only",
+        "A round of must-fix Oracle work: the schema layer is supported (no more extra database level), views are no longer always empty in the tree, routine and trigger counts are no longer always 0, and reading columns the first time went from 30 seconds to about 4; renames now follow each dialect (RENAME on Oracle, RENAME TABLE on ClickHouse), and fetching object definitions and editing table structure no longer fail",
+        "PostgreSQL / KingbaseES user details used to fail to open (the detail query's string concatenation and null handling were copied from SQL Server) and now work; the metadata list lost its artificial 5000-row cap (the tree shows 5000+ instead of pretending to be complete), and opening a database pre-warms recently used connections in the background"
+    ],
     "v1.2.26": [
         "Online update: only the newest installer is kept, older versions are cleaned up automatically (each upgrade used to leave one more behind in Downloads)",
         "Backup and restore: large uploads are streamed to disk instead of buffered whole, a failed or cancelled restore no longer leaves a half-written file, and cancelling a command-line backup or restore really stops the process",
