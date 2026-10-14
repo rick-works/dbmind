@@ -1554,7 +1554,9 @@ async fn list_object_names(
     let Meta::Sql(sql) = meta else {
         return Vec::new();
     };
-    let Ok(result) = run_sql_in(state, conn, database, sql, 2000).await else {
+    // 上限与结构浏览同一处常量（以前这里写死 2000：大库的例程清单会被悄悄截掉一截，
+    // 备份出来少了几个过程却没有任何提示）。
+    let Ok(result) = run_sql_in(state, conn, database, sql, crate::api::meta::META_MAX_ROWS).await else {
         return Vec::new();
     };
     let mut names = Vec::new();

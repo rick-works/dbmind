@@ -41,8 +41,13 @@
  *
  * v2：早期版本的 SQL Server 库清单缓存里混入过 schema 名（db_owner / dbo 等），
  *     那些键必须作废。
+ *
+ * v3：表/视图清单在 v2 时期受内核 `META_MAX_ROWS = 5000` 的**截断**（Oracle 的 SYS
+ *     库里 10195 个对象只缓存了 5000 条）。内核已去掉这个人为上限，但旧键里的那份
+ *     残缺清单会被继续当成合法内容渲染出来 —— 展开 SYS 还是「表 438 · 视图 4562」，
+ *     看上去就像新代码没生效。
  */
-const PREFIX = 'dbmind.schema-cache.v2.'
+const PREFIX = 'dbmind.schema-cache.v3.'
 
 /** 缓存 TTL：15 分钟。 */
 export const SCHEMA_CACHE_TTL_MS = 15 * 60 * 1000

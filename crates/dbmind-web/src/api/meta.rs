@@ -26,7 +26,17 @@ use crate::api::{blocking, conn as conn_api, require_record, shape, Params};
 use crate::AppState;
 
 /// 元数据查询的默认行上限：元数据是「列表」，给足但不放任。
-const META_MAX_ROWS: usize = 5000;
+/// 元数据清单（表/视图、例程、触发器、用户…）的**行数上界**。
+///
+/// 以前这里是写死的 5000，于是**静默截断**：Oracle 的 SYS 有 8180 个视图，
+/// 树上只给 4562（表 438 + 视图 4562 正好 5000），少的三千多个一声不响 ——
+/// 「看起来就是全部」比少几行更坏。
+///
+/// 现在**不设人为上限**，直接取引擎的硬顶（`QueryOptions::HARD_MAX_ROWS`，
+/// 内核每请求都会 `clamp` 到这个值）：真实库里再大的 schema 也到不了，
+/// 而物理上仍有一条线兜底 —— 真撞上了（见 `meta_list` 的 warn 与界面上的 `+`）
+/// 也还是"如实说出来"，不是悄悄少给。所有数据源共用这一条。
+pub(crate) const META_MAX_ROWS: usize = QueryOptions::HARD_MAX_ROWS;
 
 /// 「连接失效后重连重试一次」只在这个窗口内做。
 ///
