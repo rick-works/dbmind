@@ -60,7 +60,7 @@
                         <span v-if="!form.attrs[d.key]" class="attr-hint">{{ $t('udv.unlimited') }}</span>
                       </span>
                       <span v-else-if="d.kind === 'plugin'" class="attr-num">
-                        <el-select :model-value="authPluginModel" size="small"
+                        <el-select class="attr-select" :model-value="authPluginModel" size="small"
                                    @update:model-value="(v) => { form.attrs.authPlugin = v }">
                           <el-option v-for="p in pluginOptions" :key="p" :label="p" :value="p" />
                         </el-select>
@@ -2090,6 +2090,10 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* 可改项：数字输入 + 提示（0 = 不限制）；插件下拉 + "要同时填口令"的提示 */
 .attr-num { display: inline-flex; align-items: center; gap: 8px; }
 .attr-hint { font-size: 12px; color: var(--dc-text-dim); }
+/* ⚠️ Element 的 select 默认 width:100%，放进 inline-flex 的 .attr-num 里会被缩到只剩箭头
+   （实测 34px，选中项 opacity:0 —— 值在 DOM 里但看不见，用户看到的就是"没回显"）。
+   给一个明确宽度，选中项就会显出来。 */
+.attr-select { width: 210px; }
 /* ⚠️ 这里**不能** display:flex：.ft-label 是 <td>，一旦它不再是 table-cell，
    盒高就不再跟整行齐平 —— 于是每格的右边框各画一段、上下**接不上**
    （用户反馈"表格竖线没连上"就是这么来的）。居中交给 .form-table td 的
