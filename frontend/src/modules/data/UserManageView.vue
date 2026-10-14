@@ -5,7 +5,7 @@
       <el-icon :size="16" class="um-head-icon"><User /></el-icon>
       <span class="um-title">{{ $t('nav.userManage') }}</span>
 
-      <el-select v-model="selId" size="small" class="um-conn" filterable
+      <el-select v-model="selId" size="small" class="um-conn" filterable clearable
                  :placeholder="$t('um.pickConn')" @change="onConnChange">
         <el-option v-for="c in conns" :key="c.id" :label="c.name" :value="String(c.id)">
           <span class="um-opt-name">{{ c.name }}</span>
@@ -22,7 +22,8 @@
 
     <!-- 主体 -->
     <div class="um-body">
-      <div v-if="!conns.length" class="um-empty">{{ $t('um.noConn') }}</div>
+      <div v-if="noSelection" class="um-empty">{{ $t('um.pickConnHint') }}</div>
+      <div v-else-if="!conns.length" class="um-empty">{{ $t('um.noConn') }}</div>
       <div v-else-if="unsupported" class="um-empty">{{ $t('um.unsupported', { type: typeLabel(curConn?.type) }) }}</div>
       <div v-else-if="notImplemented" class="um-empty">{{ $t('um.notImplemented', { type: typeLabel(curConn?.type) }) }}</div>
       <div v-else-if="error" class="um-empty um-err">{{ error }}</div>
@@ -75,10 +76,9 @@ import { listConnections, listUsers, getFeatures, userAction } from '../../api'
 import { t } from '../../utils/i18n'
 
 const props = defineProps({
-  // 打开这个页签时的连接（不传就用连接列表里的第一个）
-  connId: { type: String, default: '' },
-  // 用户对象所在的库（Oracle/DM 这类是「库.模式」形态，交给后端拆）
-  database: { type: String, default: '' },
+  // 左侧当前选中的连接 / 库：**跟随它们**（用户在左边选了，这里自动带出来）
+  activeConnId: { type: String, default: '' },
+  activeDb: { type: String, default: '' },
   // 表单保存后 MainView 会 +1，用来刷新清单（跨组件的"该刷新了"信号）
   reloadTick: { type: Number, default: 0 }
 })
@@ -108,7 +108,9 @@ const curConn = computed(() => conns.value.find(c => String(c.id) === String(sel
 // 有没有"主机"这一维，由数据说了算（MySQL 系才带 host），不写死类型名单
 const hasHost = computed(() => rows.value.some(r => r && r.host))
 // 该类型有没有"用户"这个概念（与树上原来用的同一个字段）
-const unsupported = computed(() => !selId.value || features.value.supportsUsers === false)
+// 没选连接：显示"去左边选一个"的提示（而不是去连一个没选的库）
+const noSelection = computed(() => !selId.value)
+const unsupported = computed(() => features.value.supportsUsers === false)
 // 能力表里**根本没有这个字段** = 该类型连用户管理这条链路都没实现（如 Redis / MongoDB）。
 // 与"有这个类型但取不到清单"区分开：前者不该去发那个注定 404 的请求，后者要如实报错。
 const notImplemented = computed(() => featLoaded.value && features.value.supportsUsers === undefined)
@@ -117,6 +119,8 @@ const canManage = computed(() => !!selId.value && features.value.supportsUsers !
   && features.value.supportsUserManage !== false)
 
 const reload = async () => {
+  // 没选连接就是空的 —— 不预选第一个（用户要求：没选就默认为空，
+  // 而且第一个连接常常是连不上的，预选它只会先甩一条红色报错）
   if (!selId.value) { rows.value = []; features.value = {}; return }
   loading.value = true
   error.value = ''
@@ -127,7 +131,7 @@ const reload = async () => {
       rows.value = []
       return
     }
-    const list = await listUsers(selId.value, props.database || '')
+    const list = await listUsers(selId.value, props.activeDb || '')
     rows.value = Array.isArray(list) ? list : []
   } catch (e) {
     rows.value = []
@@ -139,6 +143,18 @@ const reload = async () => {
 }
 
 const onConnChange = () => reload()
+
+// 默认**不预选**任何连接；左侧一选（或切换）就自动带出来。
+// 只跟着「连接」走，不因为用户在这里手动换过就把跟随关掉 —— 左侧的选择是更明确的意图。
+watch(() => props.activeConnId, (val) => {
+  const id = String(val || '')
+  if (id && id !== selId.value) {
+    selId.value = id
+    reload()
+  }
+}, { immediate: true })
+// 左侧换了库（如从 FREE 切到 FREE.SYS）：同一个连接下也要重新取清单
+watch(() => props.activeDb, () => { if (selId.value) reload() })
 
 const openCreate = () => {
   if (!canManage.value) return
@@ -183,8 +199,8 @@ onMounted(async () => {
   } catch (e) {
     conns.value = []
   }
-  // 优先用打开时的连接；否则第一个（列表顺序就是侧栏里的顺序）
-  selId.value = String(props.connId || conns.value[0]?.id || '')
+  // 不预选：等左侧选中（watch 会带出来）。连接列表为空时也不用报错。
+  selId.value = String(props.activeConnId || '')
   await reload()
 })
 </script>

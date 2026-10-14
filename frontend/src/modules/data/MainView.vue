@@ -470,8 +470,8 @@
                       :edit-mode="tab.mode === 'edit'" :edit-data="tab.editData"
                       @saved="onUserFormSaved" @close="closeTab(tab.id)" />
             <!-- 用户管理页：按连接管理用户（新增/编辑授权/删除），与树无关 -->
-            <UserManageView v-else-if="tab.type === 'users'" :conn-id="tab.connId || currentConnId"
-                            :database="tab.database || ''" :reload-tick="userListTick"
+            <UserManageView v-else-if="tab.type === 'users'" :active-conn-id="String(currentConnId || '')"
+                            :active-db="String(currentDb || '')" :reload-tick="userListTick"
                             @open-form="onUserManageForm" />
             <ObjectFormTab v-else-if="tab.type === 'form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                            :cat="tab.cat" :mode="tab.mode" :object="tab.object" @saved="onObjFormSaved"

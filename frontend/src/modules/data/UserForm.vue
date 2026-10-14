@@ -191,17 +191,39 @@
                   <span>{{ $t('upv.tabObjects') }}</span>
                 </div>
                 <div v-if="form.tablePrivileges.length === 0" class="empty-tip">{{ $t('upv.noObjectPrivOracle') }}</div>
-                <div v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)" class="priv-row">
-                  <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickSchema')" filterable style="width: 160px" @change="onTablePrivDbChange(i)">
-                    <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
-                  </el-select>
-                  <el-select v-model="row.table" size="small" :placeholder="$t('upv.phPickObject')" filterable style="width: 180px" :loading="row._loading">
-                    <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
-                  </el-select>
-                  <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:180px">
-                    <el-option v-for="p in oracleObjectPrivs" :key="p" :label="p" :value="p" />
-                  </el-select>
-                  <el-button type="danger" size="small" :icon="Delete" @click="removeTablePriv(i)" />
+                <!-- 表格形态：一行一个「模式.对象」，**每个权限一列**，勾选即授予（照用户给的样子） -->
+                <div v-else class="obj-grid-wrap">
+                  <table class="obj-grid">
+                    <thead>
+                      <tr>
+                        <th class="og-schema">{{ $t('upv.colSchema') }}</th>
+                        <th class="og-object">{{ $t('upv.colObject') }}</th>
+                        <th v-for="p in objectPrivColumns" :key="p" class="og-priv" :title="p">{{ p }}</th>
+                        <th class="og-del"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)">
+                        <td>
+                          <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickSchema')" filterable @change="onTablePrivDbChange(i)">
+                            <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
+                          </el-select>
+                        </td>
+                        <td>
+                          <el-select v-model="row.table" size="small" :placeholder="$t('upv.phPickObject')" filterable :loading="row._loading">
+                            <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
+                          </el-select>
+                        </td>
+                        <td v-for="p in objectPrivColumns" :key="p" class="og-cell">
+                          <el-checkbox :model-value="hasObjectPriv(row, p)"
+                                       @change="(v) => toggleObjectPriv(row, p, v)" />
+                        </td>
+                        <td class="og-cell">
+                          <el-button type="danger" size="small" :icon="Delete" text @click="removeTablePriv(i)" />
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
                 <el-button size="small" :icon="Plus" @click="addTablePriv" class="add-row-btn">{{ $t('upv.addObjectPrivOracle') }}</el-button>
               </div>
@@ -379,6 +401,26 @@ const oracleRoles = [
   'SELECT_CATALOG_ROLE', 'EXECUTE_CATALOG_ROLE', 'DELETE_CATALOG_ROLE', 'RECOVERY_CATALOG_OWNER',
   'SCHEDULER_ADMIN', 'OEM_MONITOR', 'AQ_ADMINISTRATOR_ROLE'
 ]
+// 表格的列 = 白名单里的权限 ∪ 现有授权里出现的其它名字（一个都不能隐身：
+// 服务器返回了哪个名字，界面就必须能看见、能取消，否则保存时会把它悄悄撤掉）
+const objectPrivColumns = computed(() => {
+  const known = new Set(oracleObjectPrivs)
+  const extras = []
+  for (const row of form.value.tablePrivileges || []) {
+    for (const p of row.privileges || []) {
+      const name = String(p || '').trim()
+      if (name && !known.has(name) && !extras.includes(name)) extras.push(name)
+    }
+  }
+  return [...oracleObjectPrivs, ...extras]
+})
+const hasObjectPriv = (row, priv) => (row.privileges || []).includes(priv)
+const toggleObjectPriv = (row, priv, checked) => {
+  const list = row.privileges || (row.privileges = [])
+  const at = list.indexOf(priv)
+  if (checked && at < 0) list.push(priv)
+  if (!checked && at >= 0) list.splice(at, 1)
+}
 const oracleObjectPrivs = [
   'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'ALTER', 'INDEX', 'REFERENCES', 'READ',
   'EXECUTE', 'DEBUG', 'FLASHBACK', 'ON COMMIT REFRESH', 'QUERY REWRITE'
@@ -904,9 +946,9 @@ watch(() => props.editData, (d) => {
 watch(() => props.conn?.id, loadDatabases, { immediate: true })
 watch(() => props.database, loadSchemas, { immediate: true })
 // ===== 底部 SQL 预览的折叠 / 拖拽（与「编辑表结构」同一套手感）=====
-const SQL_H_DEFAULT = 240
+const SQL_H_DEFAULT = 380
 const SQL_H_MIN = 96
-const FORM_MIN = 160
+const FORM_MIN = 140
 const sqlAreaRef = ref(null)
 const sqlCollapsed = ref(false)
 const sqlHeight = ref(SQL_H_DEFAULT)
@@ -1226,4 +1268,26 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .sql-fold-tx { margin-left: auto; font-size: 12px; color: var(--dc-text-dim); }
 .sql-foot-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .sql-head { cursor: pointer; }
+
+/* ===== 间距收紧（用户反馈：边距太大）===== */
+.form-area { padding: 0 8px 6px; }
+.sql-area { margin: 0 8px 8px; }
+.tab-inner { gap: 8px; }
+
+/* ===== 对象权限表格（权限做列，勾选即授予）===== */
+.obj-grid-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--dc-border); border-radius: 6px; }
+.obj-grid { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.obj-grid th, .obj-grid td { border-bottom: 1px solid var(--dc-border-soft); border-right: 1px solid var(--dc-border-soft); padding: 2px 4px; }
+.obj-grid thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--dc-bg-soft); color: var(--dc-text-dim); font-weight: 500;
+  white-space: nowrap; text-align: left; padding: 6px 6px;
+}
+.obj-grid tbody tr:hover { background: var(--dc-primary-wash); }
+.og-schema { min-width: 120px; }
+.og-object { min-width: 160px; }
+.og-priv { width: 82px; text-align: center; }
+.og-cell { text-align: center; }
+.obj-grid :deep(.el-select) { width: 100%; }
+.obj-grid :deep(.el-checkbox) { margin-right: 0; height: auto; }
 </style>
