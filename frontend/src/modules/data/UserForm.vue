@@ -947,8 +947,12 @@ watch(() => props.conn?.id, loadDatabases, { immediate: true })
 watch(() => props.database, loadSchemas, { immediate: true })
 // ===== 底部 SQL 预览的折叠 / 拖拽（与「编辑表结构」同一套手感）=====
 const SQL_H_DEFAULT = 380
-const SQL_H_MIN = 96
-const FORM_MIN = 140
+// 最低 = 只留标题行（40px）：用户要求"最低能到最低"，再往下就没法用标题行拉回来了。
+// 折叠态（点标题行）另有 .collapsed，仍然能看到底部按钮。
+const SQL_H_MIN = 40
+// 上方表单**不预留**高度：往上拖可以把预览拉到顶（0 = 允许压到没有）。
+// 表单区自己有 overflow: auto，压扁了也不会把内容挤丢。
+const FORM_MIN = 0
 const sqlAreaRef = ref(null)
 const sqlCollapsed = ref(false)
 const sqlHeight = ref(SQL_H_DEFAULT)

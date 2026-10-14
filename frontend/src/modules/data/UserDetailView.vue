@@ -257,8 +257,8 @@ watch(() => [props.conn?.id, props.database, props.name], load, { immediate: tru
 
 // ===== 底部 SQL 预览的折叠 / 拖拽（与「编辑表结构」同一套手感）=====
 const SQL_H_DEFAULT = 260
-const SQL_H_MIN = 96   // 标题行 + 底部按钮行，再低就只剩两条杠
-const FORM_MIN = 120   // 上方详情卡的最小保留高度 —— 拖到最顶也不能把详情完全盖住
+const SQL_H_MIN = 40   // 只留标题行：最低能到最低（点标题行仍可折叠/展开）
+const FORM_MIN = 0     // 上方详情卡不预留高度：往上拖可以把预览拉到顶
 const sqlAreaRef = ref(null)
 const sqlCollapsed = ref(false)
 const sqlHeight = ref(SQL_H_DEFAULT)
