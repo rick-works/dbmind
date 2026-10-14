@@ -179,11 +179,18 @@
                      现在：颜色恒为琥珀（类型），明暗说状态，行尾绿点再说一次"它开着"。 -->
                 <el-icon v-else-if="data.kind === 'db'" class="tree-icon"
                          :class="{ 'tree-icon-dim': !isDbOpened(data) }" color="#f5b34d"><Coin /></el-icon>
-                <el-icon v-else-if="data.kind === 'schema'" class="tree-icon" color="#f5b34d">
-                  <FolderOpened v-if="node.expanded" /><Folder v-else />
+                <!-- 模式图标：**没有「库」这一层的类型**（Oracle / DM，见 hideDbLevelOf）
+                     把模式顶在"库"的位置上 —— 用户眼里它就是那个库，图标必须与其它类型的
+                     「库」一致（数据库形状的 Coin），不能是文件夹；否则同一个位置、
+                     同一件事，两种类型两个样子。有库层的（PG / SQL Server）仍然是文件夹：
+                     那里形状在说层级（库 / 模式）。 -->
+                <el-icon v-else-if="data.kind === 'schema'" class="tree-icon"
+                         :class="{ 'tree-icon-dim': !isDbOpened(data) }" color="#f5b34d">
+                  <Coin v-if="hideDbLevelOf(data.connType)" />
+                  <FolderOpened v-else-if="node.expanded" /><Folder v-else />
                 </el-icon>
                 <!-- catalog（Doris 的 internal / 外部 catalog）：比"库"更高一层的命名空间。
-                     颜色沿用"容器"族的琥珀，只换形状 —— 与「库=Coin / schema=Folder」同一套规则
+                     颜色沿用"容器"族的琥珀，只换形状 —— 与「库=Coin / 有库层的 schema=Folder」同一套规则
                      （颜色说类型族、形状说层级）。不给它图标的话会落到末尾的兜底分支，
                      和「库」长得一模一样，树上分不出来。 -->
                 <el-icon v-else-if="data.kind === 'catalog'" class="tree-icon"
@@ -4825,11 +4832,14 @@ const isNodeLoading = (node, data) => {
 }
 /**
  * 库是不是"已打开"：当前库就是打开的（树上一次只展开一个库的表）。
- * 它同时决定两件事：库图标满色还是变暗、
- * 行尾要不要那个绿点。
+ * 它同时决定两件事：库图标满色还是变暗、行尾要不要那个绿点。
+ *
+ * 也认 `kind === 'schema'`：Oracle / DM 没有「库」这一层（见 hideDbLevelOf），
+ * 模式节点顶替的就是"库"的位置，图标自然也该跟着亮/暗 —— 同一套口径，
+ * 不另写一份判断。
  */
 const isDbOpened = (data) => {
-  if (!data || data.kind !== 'db') return false
+  if (!data || (data.kind !== 'db' && data.kind !== 'schema')) return false
   if (inCurrentDb(data.db)) return true
   // 开着同一个库的**页签**，同样算"已打开"。
   // 为什么需要：Redis 的库不进树（点它是开一个「该库全部键」页签，见 `openRedisDb`），
