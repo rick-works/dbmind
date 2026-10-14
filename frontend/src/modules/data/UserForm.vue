@@ -59,18 +59,17 @@
           <!-- ===== 服务器权限 ===== -->
           <el-tab-pane v-if="hasServerTab" :label="serverTabLabel" name="server">
             <div class="tab-inner grant-tab">
-              <!-- MySQL 系：全局权限 —— 一行一个分组，**每个权限一列**，勾选即授予；
-                   左列（分组名 + 计数 + 全选/清空）冻结，权限列横向滚动 -->
-              <table v-if="isMysql" class="form-table mx-table">
+              <!-- MySQL 系：全局权限 —— 「权限项当列」。
+                   分组写在**表头第一行**（colspan 跨它自己的那几列，带计数与全选/清空），
+                   第二行才是权限名；主体只有一行（就是这个用户）。
+                   原来是"一行一个分组"：每组只在自己那几列上打勾，34 列 × 4 行里大半是空的，
+                   读起来一片空洞，也看不出"这一格为什么不给勾"。 -->
+              <table v-if="isMysql" class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
-                    <th class="mx-fix mx-f1">{{ $t('tdet.item') }}</th>
-                    <th v-for="p in globalPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="group in globalPrivGroups" :key="group.key">
-                    <td class="mx-fix mx-f1 ft-label">
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('tdet.item') }}</th>
+                    <th v-for="(group, gi) in globalPrivGroups" :key="group.key" :colspan="globalGroupSpans[gi]"
+                        class="mx-grp" :title="group.label">
                       <span class="ft-group-name">{{ group.label }}</span>
                       <span class="priv-group-count">{{ group.checked }} / {{ group.total }}</span>
                       <span v-if="group.key !== 'all'" class="priv-group-actions">
@@ -79,11 +78,17 @@
                         <button :disabled="group.checked === 0"
                                 @click="setGroupPrivileges(group.items.map(p => p.value), false)">{{ $t('common.clear') }}</button>
                       </span>
-                    </td>
+                    </th>
+                  </tr>
+                  <tr>
+                    <th v-for="p in globalPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="mx-fix mx-f1 ft-label">{{ $t('upv.privileges') }}</td>
                     <td v-for="p in globalPrivColumns" :key="p" class="mx-cell">
-                      <!-- 这一列不属于本分组 → 留空格（分组之间不重叠，硬勾会让两组计数打架） -->
-                      <el-checkbox v-if="globalGroupHas(group, p)"
-                                   :model-value="hasIn('privileges', p)"
+                      <el-checkbox :model-value="hasIn('privileges', p)"
                                    @change="(v) => toggleList('privileges', p, v)" />
                     </td>
                   </tr>
@@ -691,8 +696,28 @@ const privColumns = (base, rows) => {
   return cols
 }
 // MySQL 全局权限：所有分组的并集（分组之间不重叠，但列取并集才能一张表放下）
-const globalPrivColumns = computed(() => privColumns(globalPrivOptions.value.map((p) => p.value), [form.value]))
-const globalGroupHas = (group, priv) => group.items.some((p) => p.value === priv)
+// 分组写在**表头第一行**（colspan 跨它自己的那几列），所以还要知道每组占了几列 ——
+// 按"首次出现"计数，万一清单里有重名也不会把表头撑歪。
+const globalPrivColumns = computed(() => {
+  const seen = new Set()
+  const cols = []
+  for (const g of globalPrivGroups.value) {
+    for (const p of g.items) {
+      if (!seen.has(p.value)) { seen.add(p.value); cols.push(p.value) }
+    }
+  }
+  return cols
+})
+const globalGroupSpans = computed(() => {
+  const seen = new Set()
+  return globalPrivGroups.value.map((g) => {
+    let n = 0
+    for (const p of g.items) {
+      if (!seen.has(p.value)) { seen.add(p.value); n += 1 }
+    }
+    return n
+  })
+})
 // 库级 / 表级（MySQL 系）
 const dbPrivColumns = computed(() => privColumns(objectPrivs.map((p) => p.value), form.value.dbPrivileges))
 const tablePrivColumns = computed(() => privColumns(objectPrivs.map((p) => p.value), form.value.tablePrivileges))
@@ -1484,6 +1509,19 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 }
 /* 冻结线：两列右侧各画一条，滚动时能看清冻到哪儿（`!important` 压过最后列不画竖线那条） */
 .mx-f1, .mx-f2 { border-right: 1px solid var(--dc-border) !important; }
+
+/* ===== 分组表头（MySQL 全局权限）=====
+   第一行是分组名（colspan 跨它的列，带计数与全选/清空），第二行才是权限名。
+   第一行**不吸顶**：它带计数与按钮，实测高 59px，硬给它 top: 0 再让第二行 top: 27px，
+   两行纵向滚动时会叠在一起。这一页主体只有一行、纵向本来就不会滚动，
+   所以让第一行随表头滚走、只把权限名列吸在顶上更稳（也不会和冻结列表头打架）。 */
+.mx-grouped thead tr:first-child th { position: static; }
+.mx-grouped thead tr:last-child th { top: 0; }
+/* 分组名读作"这一段是干什么的"：左对齐、颜色比权限名深一档；计数与全选/清空跟在后面 */
+.mx-grp { text-align: left; }
+.mx-grp .ft-group-name { color: var(--dc-text-strong); }
+.mx-grp .priv-group-count { font-size: 11.5px; }
+.mx-grp .priv-group-actions { margin-left: 2px; }
 .mx-priv { text-align: center; min-width: 74px; padding-left: 6px !important; padding-right: 6px !important; }
 .mx-cell { text-align: center; padding-left: 2px !important; padding-right: 2px !important; }
 .mx-act { width: 48px; }
