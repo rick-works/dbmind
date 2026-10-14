@@ -5831,6 +5831,27 @@ const quoteIdent = (name, type) => {
   return '"' + s.replace(/"/g, '""') + '"'
 }
 
+/**
+ * 「删除 / 改名对象」时写在对象名前面的**容器名**：模式型数据库取**模式**（树上 `db` 是
+ * 「库.模式」，如 Oracle 的 `FREE.SYS` → `SYS`、PG 的 `succbi.dbo` → `dbo`），
+ * 其余取**库名**（MySQL / ClickHouse / Doris 的树只有库这一层）。
+ *
+ * 为什么非带不可：对象名不带容器时按**会话默认库/模式**解析，树上点一个不在默认里的对象
+ * 就会「引用了不存在的对象 / 未找到」—— 与"取对象定义那次不带 owner 报 ORA-31603"同一个坑。
+ *
+ * 单库型（SQLite 的文件名、H2 的内存库名）**不能**当容器用，直接不写。
+ */
+const dropContainer = (db, connType) => {
+  const raw = String(db || '').trim()
+  if (!raw) return ''
+  const ct = String(connType || '').toUpperCase()
+  if (['SQLITE', 'H2'].includes(ct)) return ''
+  const schemaAware = ['ORACLE', 'DM', 'POSTGRESQL', 'KINGBASE', 'SQLSERVER'].includes(ct)
+  if (!schemaAware) return raw
+  const i = raw.lastIndexOf('.')
+  return i >= 0 ? raw.slice(i + 1) : raw
+}
+
 const ctxCopyName = () => {
   if (!ctxMenu.value.data) return
   const d = ctxMenu.value.data
@@ -6794,12 +6815,23 @@ const objDrop = () => {
 
 const doDropObject = async (d, db, label) => {
   const name = objName(d)
+  // 连接用**节点自己的**：右击的可能是非当前连接里的对象（原来是 conn.value.id，
+  // 那种情况下会删到当前连接的同名对象上去）
+  const cid = String(d.connId || currentConnId.value || '')
+  const targetConn = allConnections.value.find(x => String(x.id) === cid) || conn.value
+  const ct = String(targetConn?.type || '').toUpperCase()
+  const q = (str) => quoteIdent(str, ct)
+  const cont = dropContainer(db, ct)
+  const target = cont ? `${q(cont)}.${q(name)}` : q(name)
+  // `IF EXISTS` 不是所有家都认：Oracle / DM / DB2 / Derby 的 DROP 里**没有**这个子句
+  // （Oracle 报 ORA-00933），MySQL / PG / SQLite / ClickHouse / SQL Server 2016+ / H2 认
+  const ie = ['ORACLE', 'DM', 'DB2', 'DERBY'].includes(ct) ? '' : ' IF EXISTS'
   let sql
-  if (d.objectKind === 'view') sql = `DROP VIEW IF EXISTS ${quoteIdent(name)}`
-  else if (d.objectKind === 'function') sql = `DROP FUNCTION IF EXISTS ${quoteIdent(name)}`
-  else if (d.objectKind === 'procedure') sql = `DROP PROCEDURE IF EXISTS ${quoteIdent(name)}`
-  else if (d.objectKind === 'trigger') sql = `DROP TRIGGER IF EXISTS ${quoteIdent(name)}`
-  else if (d.objectKind === 'event') sql = `DROP EVENT IF EXISTS ${quoteIdent(name)}`
+  if (d.objectKind === 'view') sql = `DROP VIEW${ie} ${target}`
+  else if (d.objectKind === 'function') sql = `DROP FUNCTION${ie} ${target}`
+  else if (d.objectKind === 'procedure') sql = `DROP PROCEDURE${ie} ${target}`
+  else if (d.objectKind === 'trigger') sql = `DROP TRIGGER${ie} ${target}`
+  else if (d.objectKind === 'event') sql = `DROP EVENT${ie} ${target}`
   else {
     // 原来这里是光秃秃的 `return`：右键点「删除」什么都不发生，也没有任何提示，
     // 用户只会以为界面卡住了。索引不在这个树的管辖范围内（它在表结构的「索引」页签里管），
@@ -6808,7 +6840,7 @@ const doDropObject = async (d, db, label) => {
     return
   }
   try {
-    const res = await alterTable(conn.value.id, db, sql)
+    const res = await alterTable(cid || conn.value.id, db, sql)
     if (res.success) {
       ElMessage.success(t('mv.kindDeleted', { kind: label, name: d.label }))
       // 关闭该对象的详情页签
