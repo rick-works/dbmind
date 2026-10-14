@@ -2849,6 +2849,7 @@ export default {
   'upv.copySql': 'Copy SQL',
   'upv.basic': 'Basic information',
   'upv.tabBasic': 'Basic',
+  'upv.previewTip': 'Review the statements before running: privileges are revoked first, then re-granted as selected',
   'upv.tabServer': 'Server privileges',
   'upv.tabDb': 'Database privileges',
   'upv.tabGranular': 'Fine-grained privileges',

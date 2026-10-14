@@ -16,8 +16,9 @@
     <!-- 主体：上方分页签的表单 + 下方 SQL 预览（与「编辑表结构」同一套布局） -->
     <div class="form-tab-body">
       <div class="form-area">
-        <!-- 字页签：纯文字（激活项主色 + 加粗），不用边框卡片 —— 与 TableDetailView 一致 -->
-        <el-tabs v-model="tab" class="table-tabs user-tabs">
+        <!-- 卡片：页签（35px 那一行）与内容**同一张卡**，与「编辑表结构」一个形态 -->
+        <div class="tab-card">
+        <el-tabs v-model="tab" class="table-tabs">
           <!-- ===== 基本信息 ===== -->
           <el-tab-pane :label="$t('upv.tabBasic')" name="basic">
             <div class="tab-inner">
@@ -25,29 +26,26 @@
               <el-alert v-if="!hasAnyGrantTab" type="info" :closable="false" show-icon class="grant-alert">
                 <template #title>{{ $t('upv.grantUnsupported', { type: connTypeLabel }) }}</template>
               </el-alert>
-              <div class="form-card">
-                <div class="card-title">
-                  <div class="card-title-icon"><el-icon><User /></el-icon></div>
-                  <span>{{ $t('upv.basic') }}</span>
-                </div>
-                <div class="form-grid">
-                  <el-form label-position="top" size="small">
-                    <el-form-item :label="$t('upv.fieldUser')" required>
-                      <el-input v-model="form.name" clearable :disabled="editMode" />
-                    </el-form-item>
-                  </el-form>
-                  <el-form label-position="top" size="small">
-                    <el-form-item :label="$t('upv.fieldPassword')" :required="!editMode">
-                      <el-input v-model="form.password" type="password" show-password clearable :placeholder="editMode ? $t('upv.phPasswordKeep') : $t('upv.phPassword')" />
-                    </el-form-item>
-                  </el-form>
-                  <el-form v-if="isMysql" label-position="top" size="small">
-                    <el-form-item :label="$t('upv.fieldHost')">
-                      <el-input v-model="form.host" clearable :placeholder="$t('upv.phHost')" />
-                    </el-form-item>
-                  </el-form>
-                </div>
-              </div>
+              <!-- 基本信息：与「编辑表结构」同一张「标签 / 值」表（行高、对齐一致） -->
+              <table class="form-table">
+                <tbody>
+                  <tr>
+                    <td class="ft-label">{{ $t('upv.fieldUser') }}</td>
+                    <td><el-input v-model="form.name" size="small" clearable :disabled="editMode" /></td>
+                  </tr>
+                  <tr>
+                    <td class="ft-label">{{ $t('upv.fieldPassword') }}</td>
+                    <td>
+                      <el-input v-model="form.password" size="small" type="password" show-password clearable
+                                :placeholder="editMode ? $t('upv.phPasswordKeep') : $t('upv.phPassword')" />
+                    </td>
+                  </tr>
+                  <tr v-if="isMysql">
+                    <td class="ft-label">{{ $t('upv.fieldHost') }}</td>
+                    <td><el-input v-model="form.host" size="small" clearable :placeholder="$t('upv.phHost')" /></td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           </el-tab-pane>
 
@@ -289,6 +287,7 @@
             </div>
           </el-tab-pane>
         </el-tabs>
+        </div>
       </div>
 
       <!-- 分隔条：与「编辑表结构」同一套（向上拖 = 预览变高，双击最大/最小） -->
@@ -308,17 +307,19 @@
             {{ previewOk ? $t('upv.statusOk') : $t('upv.statusIncomplete') }}
           </el-tag>
           <span class="sql-fold-tx">{{ sqlCollapsed ? $t('tdet.expand') : $t('tdet.collapse') }}</span>
-          <span class="sql-foot-actions" @click.stop>
-            <el-button size="small" text :icon="CopyDocument" @click="copySql">{{ $t('upv.copySql') }}</el-button>
-          </span>
         </div>
-        <div class="sql-body">
+        <div v-show="!sqlCollapsed" class="sql-body">
           <pre><code>{{ previewSql || $t('upv.sqlPlaceholder') }}</code></pre>
         </div>
+        <!-- 与「编辑表结构」同一排法：左边一句说明，右边一排动作按钮 -->
         <div class="sql-foot">
-          <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk" @click="submit">
-            {{ editMode ? $t('upv.saveChanges') : $t('upv.execCreate') }}
-          </el-button>
+          <span class="sql-tip">{{ $t('upv.previewTip') }}</span>
+          <div class="sql-foot-actions">
+            <el-button size="small" text :icon="CopyDocument" @click="copySql">{{ $t('upv.copySql') }}</el-button>
+            <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk" @click="submit">
+              {{ editMode ? $t('upv.saveChanges') : $t('upv.execCreate') }}
+            </el-button>
+          </div>
         </div>
       </div>
     </div>
@@ -1217,32 +1218,59 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* 表单区：内容多，自己滚动（预览固定在下） */
 .form-area { overflow: auto; padding: 0 14px 10px; gap: 0; }
 
-/* 字页签：纯文字，激活项主色 + 加粗；去掉 Element 自带的下划线指示条 */
-.user-tabs :deep(.el-tabs__header) { margin: 0 0 10px; border-bottom: none; background: transparent; }
-.user-tabs :deep(.el-tabs__nav-wrap::after) { display: none; }
-.user-tabs :deep(.el-tabs__active-bar) { display: none; }
-.user-tabs :deep(.el-tabs__nav) { padding-top: 8px; }
-.user-tabs :deep(.el-tabs__item) {
+/* ===== 卡片 + 页签一体（与「编辑表结构」同一形态）=====
+   页签就是卡片的第一行（35px，带一条分隔线）：纯文字、激活项主色 + 加粗，
+   内容区在它下面 —— 不再是"浮在卡片上方的一条独立页签"。 */
+.tab-card {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--dc-bg-card);
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
+  overflow: hidden;
+}
+.tab-card :deep(.el-tabs) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tab-card :deep(.el-tabs__header) {
+  height: 35px; margin: 0; padding: 0; flex: 0 0 35px;
+  border-bottom: 1px solid var(--dc-border-soft);
+  background: transparent;
+}
+.tab-card :deep(.el-tabs__nav-wrap) { height: 35px; padding: 0 8px; }
+.tab-card :deep(.el-tabs__nav-wrap::after) { display: none; }
+.tab-card :deep(.el-tabs__active-bar) { display: none; }
+.tab-card :deep(.el-tabs__nav) { height: 35px; display: flex; align-items: center; }
+.tab-card :deep(.el-tabs__item) {
   height: 30px !important;
   line-height: 30px;
   padding: 0 14px !important;
   font-size: 13px;
   color: var(--dc-text-mid);
   border-radius: 6px !important;
-  /* 必须 !important：MainView 里有一条全局 .dc-tabs .el-tabs__item.is-active 规则会命中这里 */
+  /* 必须 !important：MainView 里有一条全局 .dc-tabs .el-tabs__item.is-active 会命中这里 */
   background: transparent !important;
-  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+  transition: background .15s ease, color .15s ease;
 }
-.user-tabs :deep(.el-tabs__item:hover) { color: var(--dc-text-strong); }
-.user-tabs :deep(.el-tabs__item.is-active) {
+.tab-card :deep(.el-tabs__item:hover) { color: var(--dc-text-strong); }
+.tab-card :deep(.el-tabs__item.is-active) {
   color: var(--dc-primary) !important;
   font-weight: 600;
-  background: var(--dc-bg-card) !important;
-  box-shadow: 0 1px 2px rgba(16, 24, 40, .10);
+  background: var(--dc-bg-soft) !important;
 }
-.user-tabs :deep(.el-tabs__content) { overflow: visible; }
+.tab-card :deep(.el-tabs__content) { flex: 1; min-height: 0; overflow: auto; }
 /* 页签内容：与卡片同一列宽，卡片之间留缝 */
-.tab-inner { display: flex; flex-direction: column; gap: 10px; padding-bottom: 4px; }
+.tab-inner { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+
+/* 基本信息那张「标签 / 值」表：与「编辑表结构」的行高、对齐一致 */
+.form-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.form-table td { border-bottom: 1px solid var(--dc-border-soft); padding: 5px 8px; vertical-align: middle; }
+.form-table tr:last-child td { border-bottom: none; }
+.ft-label { width: 150px; color: var(--dc-text-dim); background: var(--dc-bg-soft); }
+/* 底栏：左提示 + 右按钮（与「编辑表结构」同一排法） */
+.sql-tip { flex: 1; font-size: 12px; color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grant-alert { margin-bottom: 2px; }
 
 /* SQL 预览：通栏在下方（原来是右侧 380px 固定栏） */

@@ -2861,6 +2861,7 @@ export default {
   'upv.copySql': '复制 SQL',
   'upv.basic': '基本信息',
   'upv.tabBasic': '基本信息',
+  'upv.previewTip': '执行前请确认语句：改权限时会先撤销原有授权，再按当前勾选重新授予',
   'upv.tabServer': '服务器权限',
   'upv.tabDb': '数据库权限',
   'upv.tabGranular': '细粒度权限',
