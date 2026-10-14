@@ -489,7 +489,11 @@ const composePlaceholder = computed(() => PLACEHOLDERS.value[tab.value] || t('ai
 const contextLabel = computed(() => {
   const conn = (connList.value || []).find(c => String(c.id) === String(ctxConnId.value))
   const name = conn?.name || conn?.type || props.conn?.name || props.conn?.type || ''
-  return [name, ctxDatabase.value, ctxSchema.value, ctxTable.value].filter(Boolean).join(' · ')
+  // Oracle / DM 这类「库就是连接固有目标」的类型（见 hideDbLevelOf）：上下文里**没有"库"这一层**，
+  // 把服务名（FREE）在这儿再拼一遍只是重复 —— 左侧树、SQL 编辑器工具条都已经不显示它了，
+  // 同一个东西不该在三处有两种说法。
+  const dbPart = hideDbLevelOf(conn?.type || props.conn?.type) ? '' : ctxDatabase.value
+  return [name, dbPart, ctxSchema.value, ctxTable.value].filter(Boolean).join(' · ')
 })
 
 /** 输入框实例（点击示例后聚焦用） */
