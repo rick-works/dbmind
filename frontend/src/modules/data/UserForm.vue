@@ -59,68 +59,52 @@
           <!-- ===== 服务器权限 ===== -->
           <el-tab-pane v-if="hasServerTab" :label="serverTabLabel" name="server">
             <div class="tab-inner grant-tab">
-              <!-- 与「编辑表结构」同一张表：贴卡片内缘 + 表头浅底 + 横竖网格。
-                   左列是「项目」（这一段权限叫什么），右列是值（权限复选框）——
-                   不再是"紫色小标题 + 内层卡片"那种两块拼起来的形态。 -->
-              <table class="form-table">
-                <colgroup>
-                  <col style="width:200px" />
-                  <col />
-                </colgroup>
+              <!-- MySQL 系：全局权限 —— 一行一个分组，**每个权限一列**，勾选即授予；
+                   左列（分组名 + 计数 + 全选/清空）冻结，权限列横向滚动 -->
+              <table v-if="isMysql" class="form-table mx-table">
                 <thead>
-                  <tr><th>{{ $t('tdet.item') }}</th><th>{{ $t('tdet.value') }}</th></tr>
+                  <tr>
+                    <th class="mx-fix mx-f1">{{ $t('tdet.item') }}</th>
+                    <th v-for="p in globalPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                  </tr>
                 </thead>
                 <tbody>
-                  <!-- MySQL 系：全局权限，一组一行 -->
-                  <template v-if="isMysql">
-                    <tr v-for="group in globalPrivGroups" :key="group.key">
-                      <td class="ft-label">
-                        <span class="ft-group-name">{{ group.label }}</span>
-                        <span class="priv-group-count">{{ group.checked }} / {{ group.total }}</span>
-                        <span v-if="group.key !== 'all'" class="priv-group-actions">
-                          <button :disabled="group.checked === group.total"
-                                  @click="setGroupPrivileges(group.items.map(p => p.value), true)">{{ $t('common.selectAll') }}</button>
-                          <button :disabled="group.checked === 0"
-                                  @click="setGroupPrivileges(group.items.map(p => p.value), false)">{{ $t('common.clear') }}</button>
-                        </span>
-                      </td>
-                      <td class="ft-perms">
-                        <el-checkbox-group v-model="form.privileges" class="perm-grid">
-                          <el-checkbox v-for="p in group.items" :key="p.value" :label="p.value" :value="p.value">
-                            {{ p.label }}
-                          </el-checkbox>
-                        </el-checkbox-group>
-                      </td>
-                    </tr>
-                  </template>
-
-                  <!-- SQL Server：服务器角色 -->
-                  <tr v-if="isMssql">
-                    <td class="ft-label">{{ $t('upv.segServer') }}</td>
-                    <td class="ft-perms">
-                      <el-checkbox-group v-model="form.serverRoles" class="perm-grid">
-                        <el-checkbox v-for="r in mssqlServerRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
-                      </el-checkbox-group>
+                  <tr v-for="group in globalPrivGroups" :key="group.key">
+                    <td class="mx-fix mx-f1 ft-label">
+                      <span class="ft-group-name">{{ group.label }}</span>
+                      <span class="priv-group-count">{{ group.checked }} / {{ group.total }}</span>
+                      <span v-if="group.key !== 'all'" class="priv-group-actions">
+                        <button :disabled="group.checked === group.total"
+                                @click="setGroupPrivileges(group.items.map(p => p.value), true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="group.checked === 0"
+                                @click="setGroupPrivileges(group.items.map(p => p.value), false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </td>
+                    <td v-for="p in globalPrivColumns" :key="p" class="mx-cell">
+                      <!-- 这一列不属于本分组 → 留空格（分组之间不重叠，硬勾会让两组计数打架） -->
+                      <el-checkbox v-if="globalGroupHas(group, p)"
+                                   :model-value="hasIn('privileges', p)"
+                                   @change="(v) => toggleList('privileges', p, v)" />
                     </td>
                   </tr>
+                </tbody>
+              </table>
 
-                  <!-- Oracle：系统权限 -->
-                  <tr v-if="isOracle">
-                    <td class="ft-label">{{ $t('upv.tabSystemPrivs') }}</td>
-                    <td class="ft-perms">
-                      <el-checkbox-group v-model="form.privileges" class="perm-grid">
-                        <el-checkbox v-for="p in oracleSystemPrivs" :key="p" :label="p" :value="p">{{ p }}</el-checkbox>
-                      </el-checkbox-group>
-                    </td>
+              <!-- SQL Server 服务器角色 / Oracle 系统权限 / PostgreSQL 角色：
+                   勾选项本身就是名字，一个一列，只有一行 -->
+              <table v-else class="form-table mx-table">
+                <thead>
+                  <tr>
+                    <th class="mx-fix mx-f1">{{ $t('tdet.item') }}</th>
+                    <th v-for="p in serverColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
                   </tr>
-
-                  <!-- PostgreSQL / Kingbase：角色是集群级的 -->
-                  <tr v-if="isPgsql">
-                    <td class="ft-label">{{ $t('upv.roleAssignPg') }}</td>
-                    <td class="ft-perms">
-                      <el-checkbox-group v-model="form.roles" class="perm-grid">
-                        <el-checkbox v-for="r in pgRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
-                      </el-checkbox-group>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="mx-fix mx-f1 ft-label">{{ serverRowLabel }}</td>
+                    <td v-for="p in serverColumns" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasIn(serverModelKey, p)"
+                                   @change="(v) => toggleList(serverModelKey, p, v)" />
                     </td>
                   </tr>
                 </tbody>
@@ -131,21 +115,18 @@
           <!-- ===== 角色（Oracle）===== -->
           <el-tab-pane v-if="hasRolesTab" :label="$t('upv.tabRoles')" name="roles">
             <div class="tab-inner grant-tab">
-              <table class="form-table">
-                <colgroup>
-                  <col style="width:200px" />
-                  <col />
-                </colgroup>
+              <table class="form-table mx-table">
                 <thead>
-                  <tr><th>{{ $t('tdet.item') }}</th><th>{{ $t('tdet.value') }}</th></tr>
+                  <tr>
+                    <th class="mx-fix mx-f1">{{ $t('tdet.item') }}</th>
+                    <th v-for="p in oracleRoles" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                  </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td class="ft-label">{{ $t('upv.tabRoles') }}</td>
-                    <td class="ft-perms">
-                      <el-checkbox-group v-model="form.roles" class="perm-grid">
-                        <el-checkbox v-for="r in oracleRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
-                      </el-checkbox-group>
+                    <td class="mx-fix mx-f1 ft-label">{{ $t('upv.tabRoles') }}</td>
+                    <td v-for="p in oracleRoles" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasIn('roles', p)" @change="(v) => toggleList('roles', p, v)" />
                     </td>
                   </tr>
                 </tbody>
@@ -156,67 +137,55 @@
           <!-- ===== 数据库权限 ===== -->
           <el-tab-pane v-if="hasDbTab" :label="$t('upv.tabDb')" name="database">
             <div class="tab-inner grant-tab">
-              <!-- MySQL 系：库级权限 —— 一行一个库 -->
-              <table v-if="isMysql" class="form-table">
-                <colgroup>
-                  <col style="width:240px" />
-                  <col />
-                  <col style="width:56px" />
-                </colgroup>
+              <!-- MySQL 系：一行一个库，每个库级权限一列 -->
+              <table v-if="isMysql" class="form-table mx-table">
                 <thead>
                   <tr>
-                    <th>{{ $t('upv.colDb') }}</th>
-                    <th>{{ $t('upv.colPriv') }}</th>
-                    <th class="ft-center">{{ $t('upv.colAction') }}</th>
+                    <th class="mx-fix mx-f1">{{ $t('upv.colDb') }}</th>
+                    <th v-for="p in dbPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-if="form.dbPrivileges.length === 0">
-                    <td colspan="3" class="ft-empty">{{ $t('upv.noDbPriv') }}</td>
+                    <td :colspan="dbPrivColumns.length + 2" class="ft-empty">{{ $t('upv.noDbPriv') }}</td>
                   </tr>
                   <tr v-for="(row, i) in form.dbPrivileges" :key="rowKey(row)">
-                    <td>
+                    <td class="mx-fix mx-f1">
                       <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable>
                         <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
                       </el-select>
                       <el-tag v-if="isDbMissing(row.database)" size="small" type="warning" effect="plain">{{ $t('upv.dbMissing') }}</el-tag>
                       <el-tag v-if="isDorisSystemDb(row.database)" size="small" type="info" effect="plain">{{ $t('upv.dorisSystemDb') }}</el-tag>
                     </td>
-                    <td>
-                      <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')">
-                        <el-option-group v-for="group in objectPrivGroups(row)" :key="group.key" :label="group.label">
-                          <el-option v-for="p in group.items" :key="p.value" :label="p.label" :value="p.value" />
-                        </el-option-group>
-                      </el-select>
+                    <td v-for="p in dbPrivColumns" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
                     </td>
-                    <td class="ft-center">
+                    <td class="mx-cell">
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeDbPriv(i)" />
                     </td>
                   </tr>
                   <tr class="ft-add-row">
-                    <td colspan="3">
+                    <td :colspan="dbPrivColumns.length + 2">
                       <el-button size="small" text type="primary" :icon="Plus" @click="addDbPriv">{{ $t('upv.addDbPriv') }}</el-button>
                     </td>
                   </tr>
                 </tbody>
               </table>
 
-              <!-- SQL Server：数据库角色 -->
-              <table v-if="isMssql" class="form-table">
-                <colgroup>
-                  <col style="width:200px" />
-                  <col />
-                </colgroup>
+              <!-- SQL Server：数据库角色 —— 一个角色一列 -->
+              <table v-if="isMssql" class="form-table mx-table">
                 <thead>
-                  <tr><th>{{ $t('tdet.item') }}</th><th>{{ $t('tdet.value') }}</th></tr>
+                  <tr>
+                    <th class="mx-fix mx-f1">{{ $t('tdet.item') }}</th>
+                    <th v-for="p in mssqlRoles" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                  </tr>
                 </thead>
                 <tbody>
                   <tr>
-                    <td class="ft-label">{{ $t('upv.segDbRoles') }}</td>
-                    <td class="ft-perms">
-                      <el-checkbox-group v-model="form.roles" class="perm-grid">
-                        <el-checkbox v-for="r in mssqlRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
-                      </el-checkbox-group>
+                    <td class="mx-fix mx-f1 ft-label">{{ $t('upv.segDbRoles') }}</td>
+                    <td v-for="p in mssqlRoles" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasIn('roles', p)" @change="(v) => toggleList('roles', p, v)" />
                     </td>
                   </tr>
                 </tbody>
@@ -227,20 +196,14 @@
           <!-- ===== 细粒度权限（库/表、Schema/对象）===== -->
           <el-tab-pane v-if="hasGranularTab" :label="granularTabLabel" name="granular">
             <div class="tab-inner grant-tab">
-              <!-- Oracle：对象权限（「模式.对象」一行，**每个权限一列**，勾选即授予） -->
-              <table v-if="isOracle" class="form-table obj-grid">
-                <colgroup>
-                  <col style="width:150px" />
-                  <col style="width:230px" />
-                  <col v-for="p in objectPrivColumns" :key="p" style="width:78px" />
-                  <col style="width:52px" />
-                </colgroup>
+              <!-- Oracle：对象权限（「模式 · 名称」两列冻结，权限项当列横向滚动） -->
+              <table v-if="isOracle" class="form-table mx-table">
                 <thead>
                   <tr>
-                    <th class="og-schema">{{ $t('upv.colSchema') }}</th>
-                    <th class="og-object">{{ $t('upv.colObject') }}</th>
-                    <th v-for="p in objectPrivColumns" :key="p" class="og-priv" :title="p">{{ p }}</th>
-                    <th class="og-del"></th>
+                    <th class="mx-fix mx-f1">{{ $t('upv.colSchema') }}</th>
+                    <th class="mx-fix mx-f2">{{ $t('upv.colObject') }}</th>
+                    <th v-for="p in objectPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -248,21 +211,20 @@
                     <td :colspan="objectPrivColumns.length + 3" class="ft-empty">{{ $t('upv.noObjectPrivOracle') }}</td>
                   </tr>
                   <tr v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)">
-                    <td>
+                    <td class="mx-fix mx-f1">
                       <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickSchema')" filterable @change="onTablePrivDbChange(i)">
                         <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
                       </el-select>
                     </td>
-                    <td>
+                    <td class="mx-fix mx-f2">
                       <el-select v-model="row.table" size="small" :placeholder="$t('upv.phPickObject')" filterable :loading="row._loading">
                         <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
                       </el-select>
                     </td>
-                    <td v-for="p in objectPrivColumns" :key="p" class="og-cell">
-                      <el-checkbox :model-value="hasObjectPriv(row, p)"
-                                   @change="(v) => toggleObjectPriv(row, p, v)" />
+                    <td v-for="p in objectPrivColumns" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
                     </td>
-                    <td class="og-cell">
+                    <td class="mx-cell">
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeTablePriv(i)" />
                     </td>
                   </tr>
@@ -274,131 +236,106 @@
                 </tbody>
               </table>
 
-              <!-- MySQL 系：表级 —— 一行一张表 -->
-              <table v-if="isMysql" class="form-table">
-                <colgroup>
-                  <col style="width:170px" />
-                  <col style="width:200px" />
-                  <col />
-                  <col style="width:56px" />
-                </colgroup>
+              <!-- MySQL 系：表级（「数据库 · 表」两列冻结） -->
+              <table v-if="isMysql" class="form-table mx-table">
                 <thead>
                   <tr>
-                    <th>{{ $t('upv.colDb') }}</th>
-                    <th>{{ $t('upv.colTableName') }}</th>
-                    <th>{{ $t('upv.colPriv') }}</th>
-                    <th class="ft-center">{{ $t('upv.colAction') }}</th>
+                    <th class="mx-fix mx-f1">{{ $t('upv.colDb') }}</th>
+                    <th class="mx-fix mx-f2">{{ $t('upv.colTableName') }}</th>
+                    <th v-for="p in tablePrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-if="form.tablePrivileges.length === 0">
-                    <td colspan="4" class="ft-empty">{{ $t('upv.noTablePriv') }}</td>
+                    <td :colspan="tablePrivColumns.length + 3" class="ft-empty">{{ $t('upv.noTablePriv') }}</td>
                   </tr>
                   <tr v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)">
-                    <td>
+                    <td class="mx-fix mx-f1">
                       <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable @change="onTablePrivDbChange(i)">
                         <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
                       </el-select>
                     </td>
-                    <td>
+                    <td class="mx-fix mx-f2">
                       <el-select v-model="row.table" size="small" :placeholder="$t('upv.phPickTable')" filterable :loading="row._loading">
                         <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
                       </el-select>
                     </td>
-                    <td>
-                      <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')">
-                        <el-option-group v-for="group in objectPrivGroups(row)" :key="group.key" :label="group.label">
-                          <el-option v-for="p in group.items" :key="p.value" :label="p.label" :value="p.value" />
-                        </el-option-group>
-                      </el-select>
+                    <td v-for="p in tablePrivColumns" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
                     </td>
-                    <td class="ft-center">
+                    <td class="mx-cell">
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeTablePriv(i)" />
                     </td>
                   </tr>
                   <tr class="ft-add-row">
-                    <td colspan="4">
+                    <td :colspan="tablePrivColumns.length + 3">
                       <el-button size="small" text type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addTablePriv') }}</el-button>
                     </td>
                   </tr>
                 </tbody>
               </table>
 
-              <!-- SQL Server：Schema 级 -->
-              <table v-if="isMssql" class="form-table">
-                <colgroup>
-                  <col style="width:200px" />
-                  <col />
-                  <col style="width:56px" />
-                </colgroup>
+              <!-- SQL Server：Schema 级（模式冻结） -->
+              <table v-if="isMssql" class="form-table mx-table">
                 <thead>
                   <tr>
-                    <th>{{ $t('upv.colSchema') }}</th>
-                    <th>{{ $t('upv.colPriv') }}</th>
-                    <th class="ft-center">{{ $t('upv.colAction') }}</th>
+                    <th class="mx-fix mx-f1">{{ $t('upv.colSchema') }}</th>
+                    <th v-for="p in schemaPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-if="form.schemaPrivileges.length === 0">
-                    <td colspan="3" class="ft-empty">{{ $t('upv.noSchemaPriv') }}</td>
+                    <td :colspan="schemaPrivColumns.length + 2" class="ft-empty">{{ $t('upv.noSchemaPriv') }}</td>
                   </tr>
                   <tr v-for="(row, i) in form.schemaPrivileges" :key="rowKey(row)">
-                    <td>
+                    <td class="mx-fix mx-f1">
                       <el-select v-model="row.schema" size="small" :placeholder="$t('upv.phPickSchema')" filterable>
                         <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
                       </el-select>
                     </td>
-                    <td>
-                      <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')">
-                        <el-option v-for="p in mssqlSchemaPrivs" :key="p.value" :label="p.label" :value="p.value" />
-                      </el-select>
+                    <td v-for="p in schemaPrivColumns" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
                     </td>
-                    <td class="ft-center">
+                    <td class="mx-cell">
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeSchemaPriv(i)" />
                     </td>
                   </tr>
                   <tr class="ft-add-row">
-                    <td colspan="3">
+                    <td :colspan="schemaPrivColumns.length + 2">
                       <el-button size="small" text type="primary" :icon="Plus" @click="addSchemaPriv">{{ $t('upv.addSchemaPriv') }}</el-button>
                     </td>
                   </tr>
                 </tbody>
               </table>
 
-              <!-- SQL Server：对象级 -->
-              <table v-if="isMssql" class="form-table">
-                <colgroup>
-                  <col style="width:150px" />
-                  <col style="width:230px" />
-                  <col />
-                  <col style="width:56px" />
-                </colgroup>
+              <!-- SQL Server：对象级（「模式 · 对象」两列冻结，两者都可手写） -->
+              <table v-if="isMssql" class="form-table mx-table">
                 <thead>
                   <tr>
-                    <th>{{ $t('upv.colSchema') }}</th>
-                    <th>{{ $t('upv.colObject') }}</th>
-                    <th>{{ $t('upv.colPriv') }}</th>
-                    <th class="ft-center">{{ $t('upv.colAction') }}</th>
+                    <th class="mx-fix mx-f1">{{ $t('upv.colSchema') }}</th>
+                    <th class="mx-fix mx-f2">{{ $t('upv.colObject') }}</th>
+                    <th v-for="p in objectPrivColumnsMssql" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-if="form.objectPrivileges.length === 0">
-                    <td colspan="4" class="ft-empty">{{ $t('upv.noObjectPriv') }}</td>
+                    <td :colspan="objectPrivColumnsMssql.length + 3" class="ft-empty">{{ $t('upv.noObjectPriv') }}</td>
                   </tr>
                   <tr v-for="(row, i) in form.objectPrivileges" :key="rowKey(row)">
-                    <td><el-input v-model="row.schema" size="small" placeholder="Schema" /></td>
-                    <td><el-input v-model="row.object" size="small" :placeholder="$t('upv.phObject')" /></td>
-                    <td>
-                      <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')">
-                        <el-option v-for="p in mssqlObjectPrivs" :key="p.value" :label="p.label" :value="p.value" />
-                      </el-select>
+                    <td class="mx-fix mx-f1"><el-input v-model="row.schema" size="small" placeholder="Schema" /></td>
+                    <td class="mx-fix mx-f2"><el-input v-model="row.object" size="small" :placeholder="$t('upv.phObject')" /></td>
+                    <td v-for="p in objectPrivColumnsMssql" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
                     </td>
-                    <td class="ft-center">
+                    <td class="mx-cell">
                       <el-button type="danger" size="small" :icon="Delete" text @click="removeObjectPriv(i)" />
                     </td>
                   </tr>
                   <tr class="ft-add-row">
-                    <td colspan="4">
+                    <td :colspan="objectPrivColumnsMssql.length + 3">
                       <el-button size="small" text type="primary" :icon="Plus" @click="addObjectPriv">{{ $t('upv.addObjectPriv') }}</el-button>
                     </td>
                   </tr>
@@ -752,6 +689,46 @@ const pgRoles = [
   'pg_read_all_data', 'pg_write_all_data', 'pg_read_server_files',
   'pg_write_server_files', 'pg_execute_server_program'
 ]
+
+// ===== 矩阵表（权限项当列）=====
+// 列 = 固定清单 ∪ 数据里出现的名字 —— 与「一个都不能隐身」同一条原则：
+// 服务器返回了哪个权限名，界面就必须有一列能看见、能取消（否则保存时会把它悄悄撤掉）。
+const privColumns = (base, rows) => {
+  const seen = new Set()
+  const cols = []
+  const push = (v) => {
+    const name = String(v || '').trim()
+    if (name && !seen.has(name)) { seen.add(name); cols.push(name) }
+  }
+  ;(base || []).forEach(push)
+  ;[...(rows || [])].forEach((r) => (r && r.privileges ? r.privileges : []).forEach(push))
+  return cols
+}
+// MySQL 全局权限：所有分组的并集（分组之间不重叠，但列取并集才能一张表放下）
+const globalPrivColumns = computed(() => privColumns(globalPrivOptions.value.map((p) => p.value), [form.value]))
+const globalGroupHas = (group, priv) => group.items.some((p) => p.value === priv)
+// 库级 / 表级（MySQL 系）
+const dbPrivColumns = computed(() => privColumns(objectPrivs.map((p) => p.value), form.value.dbPrivileges))
+const tablePrivColumns = computed(() => privColumns(objectPrivs.map((p) => p.value), form.value.tablePrivileges))
+// SQL Server 的 Schema 级 / 对象级
+const schemaPrivColumns = computed(() => privColumns(mssqlSchemaPrivs.map((p) => p.value), form.value.schemaPrivileges))
+const objectPrivColumnsMssql = computed(() => privColumns(mssqlObjectPrivs.map((p) => p.value), form.value.objectPrivileges))
+// 服务器权限那一页：勾选项本身就是「角色名 / 权限名」，一个一列，只有一行
+const serverColumns = computed(() => (
+  isOracle.value ? oracleSystemPrivs : isMssql.value ? mssqlServerRoles : isPgsql.value ? pgRoles : []
+))
+const serverRowLabel = computed(() => (
+  isOracle.value ? t('upv.tabSystemPrivs') : isMssql.value ? t('upv.segServer') : t('upv.roleAssignPg')
+))
+// 这一页写的是 form 里的哪个数组（Oracle 系统权限 → privileges，SQL Server → serverRoles，PG → roles）
+const serverModelKey = computed(() => (isMssql.value ? 'serverRoles' : isPgsql.value ? 'roles' : 'privileges'))
+const hasIn = (key, value) => (form.value[key] || []).includes(value)
+// 换新数组而不是原地改 —— form 是 ref，换引用才会触发重渲染（本文件多处踩过）
+const toggleList = (key, value, checked) => {
+  const set = new Set(form.value[key] || [])
+  if (checked) set.add(value); else set.delete(value)
+  form.value[key] = [...set]
+}
 
 const previewOk = computed(() => {
   if (!form.value.name.trim()) return false
@@ -1454,6 +1431,40 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* 「添加…」收进表格里当最后一行：与上面几行同一套网格线，不再单独飘一个按钮 */
 .ft-add-row td { padding: 3px 9px; }
 .ft-add-row :deep(.el-button) { padding: 0 6px; height: var(--ctl-h, 20px); }
+
+/* ===== 矩阵表：**权限项当列**，主体列冻结，权限列横向滚动（与各家客户端一致）=====
+   列宽不能用 fixed：权限列要按内容（`CREATE TEMPORARY TABLES` 这种名字）自己撑开。
+   冻结列的 left 偏移必须写死，所以第一列要用 min/max 把宽度钉住 ——
+   否则第二列的 left 会随第一列实际宽度漂移，滚动时两列互相盖住。 */
+.mx-table { table-layout: auto; min-width: 0; }
+.mx-table th,
+.mx-table td { white-space: nowrap; }
+.mx-fix {
+  position: sticky;
+  z-index: 2;                      /* 盖住横向滚过来的权限列 */
+  background: var(--dc-bg-card);   /* 必须不透明，否则下面的内容会透出来 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* 表头那格的冻结要注意层级：表头本身已是 sticky top + z-index 3，
+   冻结列表头要再高一层（4）才能同时盖住"横向滚来的表头"和"纵向滚来的数据格" */
+.mx-table thead .mx-fix { background: var(--dc-bg-soft); z-index: 4; }
+.mx-f1 {
+  left: 0;
+  width: 190px; min-width: 190px; max-width: 190px;
+}
+.mx-f2 {
+  left: 190px;                     /* = 第一列的宽度 */
+  width: 220px; min-width: 220px; max-width: 220px;
+}
+/* 冻结线：两列右侧各画一条，滚动时能看清冻到哪儿（`!important` 压过最后列不画竖线那条） */
+.mx-f1, .mx-f2 { border-right: 1px solid var(--dc-border) !important; }
+.mx-priv { text-align: center; min-width: 74px; padding-left: 6px !important; padding-right: 6px !important; }
+.mx-cell { text-align: center; padding-left: 2px !important; padding-right: 2px !important; }
+.mx-act { width: 48px; }
+.mx-cell :deep(.el-checkbox) { margin-right: 0; height: auto; }
+.mx-table :deep(.el-select) { width: 100%; }
+.mx-table :deep(.el-tag) { margin-top: 2px; }
 .form-table :deep(.el-input__inner) { height: var(--ctl-h, 20px); }
 .form-table :deep(.el-input__wrapper) { min-height: var(--ctl-h, 20px); }
 /* 底栏：左提示 + 右按钮（与「编辑表结构」同一排法） */
