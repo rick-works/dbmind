@@ -715,13 +715,19 @@ _ => Meta::Unwritten,
                      from mysql.user t where {filter} limit 1"
                 ))
             }
+            // PG / Kingbase：这一条原来是从 SQL Server 那份**抄过来的**，两处语法在 PG 上都不成立：
+            //   · `'a' + 'b'`：PG 的字符串拼接是 `||`，`+` 只有数值有 —— 直接报
+            //     `operator does not exist: unknown + text`（42883），整条详情查询失败；
+            //   · `isnull(x, '')`：那是 SQL Server 的函数，PG 只有 `coalesce`（42883 同名错误）。
+            // 结果是「PG 连用户清单都看得到、点进去却是没有找到用户」。这里的 `||` 与 `coalesce`
+            // 两家（PG / KingbaseES 的 PG 兼容模式）都认。
             "postgresql" | "kingbase" => Meta::Sql(format!(
                 "select r.rolname as name, \
                  cast(r.rolsuper as int) as is_superuser, \
                  cast(r.rolcanlogin as int) as can_login, \
                  cast(r.rolcreatedb as int) as can_create_db, \
-                 'create role ' + quote_ident(r.rolname) + ' login' as create_user_sql, \
-                 isnull(string_agg(case when a.privilege_type is not null then \
+                 'create role ' || quote_ident(r.rolname) || ' login' as create_user_sql, \
+                 coalesce(string_agg(case when a.privilege_type is not null then \
                    'grant ' || a.privilege_type || ' on ' || quote_ident(a.table_schema) || '.' || \
                    quote_ident(a.table_name) || ' to ' || quote_ident(r.rolname) || ';' end, chr(10)), '') as grants_text \
                  from pg_roles r \
