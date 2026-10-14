@@ -4840,7 +4840,14 @@ const isNodeLoading = (node, data) => {
  */
 const isDbOpened = (data) => {
   if (!data || (data.kind !== 'db' && data.kind !== 'schema')) return false
-  const db = String(data.db || '')
+  // ⚠️ 模式节点**不能直接读 `data.db`**：右键菜单会给它一份改写过的副本
+  // （`{ ...data, db: data.realDb }`，把「库.模式」压成「库」，好让查看建库语句/转储
+  // 作用在库上）—— 直接读会拿到 `FREE`，于是图标判 `FREE.ANONYMOUS`、菜单判 `FREE`，
+  // 两处对不上：真机上就是「图标亮着，右键却写"打开数据库"」。节点自己的那条库名
+  // 永远能从 `realDb + schema` 拼回来（两者在副本里都还在）。
+  const db = (data.kind === 'schema' && data.schema)
+    ? String(data.realDb || '') + '.' + String(data.schema)
+    : String(data.db || '')
   if (!db) return false
   // **模式**（Oracle / DM 这类没有库层的类型）必须**精确相等**才算打开：
   // 不能走 inCurrentDb 的前缀规则 —— 当前库是连接级的 `FREE` 时，`FREE.ANONYMOUS`
@@ -6901,19 +6908,22 @@ const onExportProgressClose = () => {
   exportProgressVisible.value = false
   if (exportPollTimer) { clearInterval(exportPollTimer); exportPollTimer = null }
 }
-// 判断当前右键的数据库是否已打开（是当前连接的当前库）
-const isDbCurrentOpen = computed(() => {
-  const d = treeCtxMenu.value.data
-  if (!d) return false
-  return String(d.connId || currentConnId.value) === String(currentConnId.value) && d.db === currentDb.value
-})
+/**
+ * 右键的库/模式是不是"已打开" —— **直接复用图标那套判据**（`isDbOpened`）。
+ *
+ * 为什么不在这里再写一份：真机上出现过「图标是灰的（未打开），右键却写着「关闭数据库」」
+ * —— 两处各写一遍，迟早对不上（本文件里同类事故已经不止一次）。
+ * 现在图标、菜单、页签口径共用同一个函数，颜色与文案不可能再打架。
+ */
+const isDbCurrentOpen = computed(() => isDbOpened(treeCtxMenu.value.data))
 
 // ====== 数据库节点右键菜单操作 ======
 const dbCtxToggleOpen = () => {
   const d = treeCtxMenu.value.data
   if (!d) return
   closeTreeCtxMenu()
-  const isOpen = String(d.connId || currentConnId.value) === String(currentConnId.value) && d.db === currentDb.value
+  // 与菜单文案、图标明暗同一个判据（见 isDbCurrentOpen 的说明）
+  const isOpen = isDbOpened(d)
   if (isOpen) {
     // 关闭数据库：清空当前库，关闭该库相关的 tab，收起节点
             // **真正断开会话**：该库的语句跑在它的影子连接上，调后端按库断掉 ——
