@@ -2877,7 +2877,9 @@ async fn sync_view(
             Err(err) => return ObjResult::failed("view", name, err.message),
         },
     );
-    let Some(ddl_sql) = source_kind.ddl(name).sql() else {
+    // 源侧的模式也带上（Oracle 的 get_ddl 不带 owner 会去会话默认模式里找，跨模式必失败）
+    let src_schema = crate::api::meta::split_db_schema(&src.scope, &source_kind).1;
+    let Some(ddl_sql) = source_kind.ddl(name, src_schema.as_deref()).sql() else {
         return ObjResult::skipped(
             "view",
             name,
@@ -2949,7 +2951,8 @@ async fn sync_object_source(
         Ok(record) => Dialect::new(record.kind()),
         Err(err) => return ObjResult::failed(kind, name, err.message),
     };
-    let Some(sql) = source_kind.object_source(kind, name).sql() else {
+    let src_schema = crate::api::meta::split_db_schema(&src.scope, &source_kind).1;
+    let Some(sql) = source_kind.object_source(kind, name, src_schema.as_deref()).sql() else {
         return ObjResult::skipped(
             kind,
             name,

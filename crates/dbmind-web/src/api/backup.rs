@@ -1503,7 +1503,9 @@ async fn export_objects(
                 writeln!(out, "{sql};").map_err(|e| XError::internal(e.to_string()))?;
             }
         }
-        match dialect.object_source(kind, name) {
+        // 模式带上：Oracle 的 get_ddl 不带 owner 会去会话默认模式里找，跨模式导不出来
+        let schema = crate::api::meta::split_db_schema(database, dialect).1;
+        match dialect.object_source(kind, name, schema.as_deref()) {
             Meta::Sql(sql) => {
                 let result = run_sql_in(state, conn, database, sql, 10).await?;
                 let definition = pick_ddl(&result);

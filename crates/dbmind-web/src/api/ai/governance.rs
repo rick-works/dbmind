@@ -726,6 +726,8 @@ pub async fn impact(
     // 视图依赖：取定义文本，看有没有提到这张表
     let all = tables_of(&state, &conn, &database).await?;
     let dialect = Dialect::new(require_record(&state, &conn).await?.kind());
+    // 模式在循环外算一次（Oracle 的 get_ddl 要靠 owner；不传就只能靠会话默认模式）
+    let view_schema = crate::api::meta::split_db_schema(&database, &dialect).1;
     let mut views: Vec<Value> = Vec::new();
     let mut views_checked = 0usize;
     for view in all
@@ -733,7 +735,7 @@ pub async fn impact(
         .filter(|item| item.kind == dbmind_core::TableKind::View)
         .take(MAX_VIEWS)
     {
-        let Some(sql) = dialect.ddl(&view.name).sql() else {
+        let Some(sql) = dialect.ddl(&view.name, view_schema.as_deref()).sql() else {
             continue;
         };
         views_checked += 1;

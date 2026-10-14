@@ -894,9 +894,24 @@ _ => Meta::Unwritten,
     }
 
     /// 表/视图的建表语句。
-    pub fn ddl(&self, table: &str) -> Meta {
+    ///
+    /// `schema` = 该对象所在的模式（请求里的「库.模式」拆出来的那半；调用方用
+    /// [`crate::api::meta::split_db_schema`]）。**不能只靠会话默认模式**：DBMind 的查询
+    /// 会话刻意不按"树上选中的模式"切换（不赌代理有没有真的切 schema），于是
+    /// 在 SYS 下点一张表、会话默认模式却是 SYSTEM 时，Oracle 会报 ORA-31603
+    /// 「对象在方案 SYSTEM 中未找到」—— 这就是真机上报的那个错。
+    pub fn ddl(&self, table: &str, schema: Option<&str>) -> Meta {
         let t = self.quote(table);
         let lit = self.literal(table);
+        // 模式名做**字符串字面量**（有才用）；PG 侧还要它替掉 current_schema()
+        let schema_lit = schema
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| self.literal(s));
+        let ns = match &schema_lit {
+            Some(s) => s.clone(),
+            None => "current_schema()".to_string(),
+        };
         match self.key() {
             "sqlite" => Meta::Sql(format!(
                 "select sql from sqlite_master where type in ('table','view') and name = {}",
@@ -988,17 +1003,28 @@ _ => Meta::Unwritten,
                  join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped \
                  left join pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum \
                  where c.relname = {lit} and c.relkind = 'r' \
-                   and c.relnamespace = (select oid from pg_namespace where nspname = current_schema()) \
+                   and c.relnamespace = (select oid from pg_namespace where nspname = {ns}) \
                  group by c.relname"
             )),
             // Oracle：`dbms_metadata.get_ddl` 就是官方给完整 DDL 的入口（含存储属性），
             // 比手拼可靠；按存在性自动选 TABLE / VIEW。DM 走手工拼列（它的 dbms_metadata 支持面不确定）
-            "oracle" => Meta::Sql(format!(
-                "select dbms_metadata.get_ddl( \
-                   case when exists (select 1 from user_views where view_name = upper({lit})) \
-                        then 'VIEW' else 'TABLE' end, \
-                   upper({lit})) as ddl from dual"
-            )),
+            "oracle" => match &schema_lit {
+                // 带 owner 的正版：类型判断也换成 all_views（user_views 只看会话自己模式，
+                // 在 SYS 下点一张视图而会话是 SYSTEM 时会判成 TABLE，取到的 DDL 还是别人的）
+                Some(owner) => Meta::Sql(format!(
+                    "select dbms_metadata.get_ddl( \
+                       case when exists (select 1 from all_views where view_name = upper({lit}) \
+                                          and owner = upper({owner})) \
+                            then 'VIEW' else 'TABLE' end, \
+                       upper({lit}), upper({owner})) as ddl from dual"
+                )),
+                None => Meta::Sql(format!(
+                    "select dbms_metadata.get_ddl( \
+                       case when exists (select 1 from user_views where view_name = upper({lit})) \
+                            then 'VIEW' else 'TABLE' end, \
+                       upper({lit})) as ddl from dual"
+                )),
+            },
             // Oracle/DM 通用兜底：手工拼列（listagg）+ 视图原文（user_views.text 两家都有）
             "dm" => Meta::Sql(format!(
                 "select 'create or replace view ' || lower(view_name) || ' as' || chr(10) || text as ddl \
@@ -1546,9 +1572,46 @@ _ => Meta::Unwritten,
         }
     }
 
-    /// 对象定义（右键「编辑」用它取到 SQL 再转 ALTER）。
-    pub fn object_source(&self, object_type: &str, name: &str) -> Meta {
+    /// Oracle 的 `dbms_metadata.get_ddl(...)`：有 owner 就把 owner 也带上。
+///
+/// 为什么非带不可：`get_ddl` 不带 owner 时按**会话默认模式**解析，而 DBMind 的查询会话
+/// 刻意不按"树上选中的模式"切换（不赌代理有没有真的切 schema）。于是"在 SYS 下点一个过程"
+/// 会去 SYSTEM 里找，报 ORA-31603 —— 真机上报的就是这个。
+/// owner 也 `upper()`：未加引号的标识符在字典里是大写，但用户可能建了带引号的小写模式。
+fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -> String {
+    match schema_lit {
+        Some(owner) => format!(
+            "select dbms_metadata.get_ddl('{kind}', upper({name_literal}), upper({owner})) as definition from dual"
+        ),
+        None => format!(
+            "select dbms_metadata.get_ddl('{kind}', upper({name_literal})) as definition from dual"
+        ),
+    }
+}
+
+/// 对象定义（右键「编辑」用它取到 SQL 再转 ALTER）。
+    ///
+    /// `schema` 含义同 [`Self::ddl`]：Oracle 要靠它做 `owner`，PG 要靠它筛 `pg_namespace`。
+    /// 不带时：Oracle 的 `get_ddl` 按会话默认模式找（真机就是这么报 ORA-31603 的），
+    /// PG 会在所有非系统模式里取第一个同名对象。
+    pub fn object_source(&self, object_type: &str, name: &str, schema: Option<&str>) -> Meta {
         let name_literal = self.literal(name);
+        let schema_lit = schema
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| self.literal(s));
+        // PG：追加命名空间条件（空串 = 保持原行为，不动没给模式的调用方）
+        let ns_filter = match &schema_lit {
+            Some(s) => format!(" and n.nspname = {s}"),
+            None => String::new(),
+        };
+        // pg_proc 那条没有 n 别名，单独一个（按 pronamespace 比）
+        let proc_ns_filter = match &schema_lit {
+            Some(s) => format!(
+                " and p.pronamespace = (select oid from pg_namespace where nspname = {s})"
+            ),
+            None => String::new(),
+        };
         match (self.key(), object_type) {
             ("sqlite", _) => Meta::Sql(format!(
                 "select sql from sqlite_master where name = {name_literal}"
@@ -1573,11 +1636,11 @@ _ => Meta::Unwritten,
             ("postgresql" | "kingbase", "view") => Meta::Sql(format!(
                 "select pg_get_viewdef(c.oid) as definition from pg_class c \
                  join pg_namespace n on n.oid = c.relnamespace \
-                 where c.relname = {name_literal} and n.nspname not in ('pg_catalog','information_schema')"
+                 where c.relname = {name_literal} and n.nspname not in ('pg_catalog','information_schema'){ns_filter}"
             )),
             ("postgresql" | "kingbase", "procedure" | "function") => Meta::Sql(format!(
                 "select pg_get_functiondef(p.oid) as definition from pg_proc p \
-                 where p.proname = {name_literal} limit 1"
+                 where p.proname = {name_literal}{proc_ns_filter} limit 1"
             )),
             // PG 的触发器定义（含 `ON <表>` 与 WHEN 条件），`pg_get_triggerdef` 就是官方入口
             ("postgresql" | "kingbase", "trigger") => Meta::Sql(format!(
@@ -1585,20 +1648,29 @@ _ => Meta::Unwritten,
                  join pg_class c on c.oid = t.tgrelid \
                  join pg_namespace n on n.oid = c.relnamespace \
                  where t.tgname = {name_literal} and not t.tgisinternal \
-                   and n.nspname not in ('pg_catalog','information_schema')"
+                   and n.nspname not in ('pg_catalog','information_schema'){ns_filter}"
             )),
-            // Oracle / DM：`dbms_metadata.get_ddl` 给的是 `CREATE OR REPLACE ...` 全文，
-            // 比逐行拼 `user_source` 可靠（后者还要自己补换行与结尾分号）
-            ("oracle" | "dm", "view") => Meta::Sql(format!(
+            // Oracle：`dbms_metadata.get_ddl` 给的是 `CREATE OR REPLACE ...` 全文，比逐行拼
+            // `user_source` 可靠。**必须带 owner**（第三个参数）—— 不带就按会话默认模式找，
+            // 在 SYS 下双击一个过程而会话是 SYSTEM 时会报 ORA-31603「对象在方案 SYSTEM 中未找到」。
+            ("oracle", "view") => Meta::Sql(Self::oracle_get_ddl("VIEW", &name_literal, &schema_lit)),
+            ("oracle", "procedure") => {
+                Meta::Sql(Self::oracle_get_ddl("PROCEDURE", &name_literal, &schema_lit))
+            }
+            ("oracle", "function") => Meta::Sql(Self::oracle_get_ddl("FUNCTION", &name_literal, &schema_lit)),
+            ("oracle", "trigger") => Meta::Sql(Self::oracle_get_ddl("TRIGGER", &name_literal, &schema_lit)),
+            // DM（达梦）：三参 `get_ddl` 没真机验证过（它的 dbms_metadata 支持面不确定），
+            // 先保持两句 —— 与「达梦的例程清单先不动」同一个原则。
+            ("dm", "view") => Meta::Sql(format!(
                 "select dbms_metadata.get_ddl('VIEW', upper({name_literal})) as definition from dual"
             )),
-            ("oracle" | "dm", "procedure") => Meta::Sql(format!(
+            ("dm", "procedure") => Meta::Sql(format!(
                 "select dbms_metadata.get_ddl('PROCEDURE', upper({name_literal})) as definition from dual"
             )),
-            ("oracle" | "dm", "function") => Meta::Sql(format!(
+            ("dm", "function") => Meta::Sql(format!(
                 "select dbms_metadata.get_ddl('FUNCTION', upper({name_literal})) as definition from dual"
             )),
-            ("oracle" | "dm", "trigger") => Meta::Sql(format!(
+            ("dm", "trigger") => Meta::Sql(format!(
                 "select dbms_metadata.get_ddl('TRIGGER', upper({name_literal})) as definition from dual"
             )),
             // 以下三组是**该方言根本没有这类对象**，不是"没实现"：如实返回 `Absent`。

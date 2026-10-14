@@ -1345,6 +1345,7 @@ async fn export_dump(
         // 与右键「查看定义」是同一条路，那边显示得出来，这边就该导得出去。
         // （早前这里只导出视图，其余类型在开头写一句"N 个存储过程未导出"就完了：
         //  用户既不知道是哪一个，也不知道为什么。现在按对象逐个说明。）
+        let schema = crate::api::meta::split_db_schema(&req.database, &dialect).1;
         for (kind, label, names) in [
             ("view", "视图", &req.views),
             ("procedure", "存储过程", &req.procedures),
@@ -1356,10 +1357,10 @@ async fn export_dump(
                 // `Absent` = 该方言**没有**这类对象（PG 没有事件、ClickHouse 没有例程…）：
                 // 静默跳过。以前这里只看 `sql()` 是否为 None，于是"没这类对象"与"还没实现"
                 // 被当成同一件事，每个对象都打一句"定义查询尚未实现，未导出" —— 看着像漏导了东西。
-                if matches!(dialect.object_source(kind, name), Meta::Absent) {
+                if matches!(dialect.object_source(kind, name, schema.as_deref()), Meta::Absent) {
                     continue;
                 }
-                match dialect.object_source(kind, name).sql() {
+                match dialect.object_source(kind, name, schema.as_deref()).sql() {
                     Some(sql) => {
                         let result = run_sql_in(state, id, &req.database, sql, 5).await?;
                         let mut found = false;

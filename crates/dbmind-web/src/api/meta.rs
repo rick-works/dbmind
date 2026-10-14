@@ -653,7 +653,8 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
     let trigger_ok = has(dialect.triggers(None));
     let event_ok = has(dialect.events());
     let user_ok = has(dialect.users());
-    let ddl_ok = has(dialect.ddl("__probe__"));
+    // 能力探测只关心"有没有 SQL"，不关心哪个模式
+    let ddl_ok = has(dialect.ddl("__probe__", None));
     // 「能列出用户」和「能看详情 / 能改」是两档能力：
     // Oracle / DM / ClickHouse 有用户列表，但 user_info / user_action_sql 未实现 ——
     // 树里有用户节点、右键「查看 / 编辑 / 删除」却必然 501。
@@ -671,7 +672,7 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
     // （ClickHouse / DB2 / H2 / Derby）点下去必然 501 —— 界面据此不摆这两个菜单项。
     let object_ddl_kinds: Vec<&str> = ["view", "procedure", "function", "trigger", "event"]
         .into_iter()
-        .filter(|object_kind| has(dialect.object_source(object_kind, "__probe__")))
+        .filter(|object_kind| has(dialect.object_source(object_kind, "__probe__", None)))
         .collect();
     // 结构编辑相关的能力挂在同一份 payload 上（界面一次性取，避免多一次往返）
     let edit = edit_capabilities(kind.key());
@@ -1918,7 +1919,10 @@ pub(crate) async fn build_table_ddl(
     table: &str,
 ) -> XResult<(String, bool)> {
     let (_, dialect) = ctx_of(state, id).await?;
-    let sql = match dialect.ddl(table) {
+    // 模式（「库.模式」拆出来的那半）交给方言：Oracle 靠它做 owner、PG 靠它筛命名空间。
+    // 不传的话 Oracle 会按会话默认模式找表，跨模式直接 ORA-31603。
+    let schema = split_db_schema(database, &dialect).1;
+    let sql = match dialect.ddl(table, schema.as_deref()) {
         Meta::Sql(sql) => sql,
         Meta::Absent => return Ok((String::new(), false)),
         Meta::Unwritten => {
@@ -2152,7 +2156,9 @@ pub async fn object_info(
         })));
     }
     let (_, dialect) = ctx_of(&state, &id).await?;
-    let sql = match dialect.object_source(&object_type, &name) {
+    // 同 build_table_ddl：模式要传给方言（Oracle 的 owner 过滤就靠它）
+    let schema = split_db_schema(&database, &dialect).1;
+    let sql = match dialect.object_source(&object_type, &name, schema.as_deref()) {
         Meta::Sql(sql) => sql,
         Meta::Absent => return Ok(Json(json!({ "ddl": "", "sql": "" }))),
         Meta::Unwritten => {
