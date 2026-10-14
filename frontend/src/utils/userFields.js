@@ -66,6 +66,15 @@ export const userFieldLabelMap = () => ({
   PASSWORD_REQUIRE_CURRENT: t('udv.fPwdRequireCurrent'), USER_ATTRIBUTES: t('udv.fUserAttributes')
 })
 
+// 时间列统一格式化：各家回的原样不同（MySQL 是 `2026-09-03T05:19:41`、Oracle 是
+// `2026-07-05 11:36:44`），这里把 ISO 的 `T` 换成空格、去掉毫秒与时区尾巴，读起来一致。
+// 只动"看着就是时间戳"的字符串，别的值原样返回。
+const DATEISH = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/
+export const formatFieldTime = (value) => {
+  if (typeof value !== 'string' || !DATEISH.test(value)) return value
+  return value.replace('T', ' ').replace(/\.\d+/, '').replace(/(Z|[+-]\d{2}:?\d{2})$/, '')
+}
+
 // 认不出来的键退回原始键名，不要吞掉 —— 后端加了列但这里没加标签时，至少能看到是哪一列
 export const userFieldLabel = (key) => {
   const m = userFieldLabelMap()
@@ -124,7 +133,7 @@ export const userDetailItems = (obj, opts = {}) => {
       val = yes ? t('udv.yes') : t('udv.no')
       cls = yes ? 'yes' : 'no'
     }
-    items.push({ key: k, label: userFieldLabel(k), value: val, cls })
+    items.push({ key: k, label: userFieldLabel(k), value: cls ? val : formatFieldTime(val), cls })
   }
   return items
 }

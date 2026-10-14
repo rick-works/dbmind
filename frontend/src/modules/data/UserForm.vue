@@ -61,7 +61,7 @@
                       </span>
                       <span v-else-if="d.kind === 'plugin'" class="attr-num">
                         <el-select v-model="form.attrs[d.key]" size="small">
-                          <el-option v-for="p in ATTR_PLUGINS" :key="p" :label="p" :value="p" />
+                          <el-option v-for="p in pluginOptions" :key="p" :label="p" :value="p" />
                         </el-select>
                         <span v-if="form.attrs.authPlugin !== attrsBase.authPlugin" class="attr-hint">{{ $t('upv.pluginNeedsPassword') }}</span>
                       </span>
@@ -665,6 +665,13 @@ const editableAttrs = computed(() => {
   return defs
 })
 
+// 插件下拉的选项：**当前值一定要在选项里** —— el-select 找不到匹配项时就显示空，
+// 看着像"没回显"（实际是库里那个插件名不在我们的候选清单里，比如某个第三方插件）
+const pluginOptions = computed(() => {
+  const cur = String(form.value.attrs.authPlugin || '').trim()
+  return cur && !ATTR_PLUGINS.includes(cur) ? [cur].concat(ATTR_PLUGINS) : ATTR_PLUGINS
+})
+
 // 只交改动过的项
 const attrDelta = computed(() => {
   const out = {}
@@ -699,7 +706,11 @@ const mysqlAttrClause = () => {
 // 权限类列（MySQL 的 t.* 里有几十个 *_PRIV）不在这里列（它们各自有页签）；
 // 凭据列与授权文本的屏蔽在 utils/userFields.js 里统一做。
 const detailItems = computed(() => userDetailItems(props.editData?.fields, {
-  hide: editableAttrs.value.flatMap((d) => ATTR_RAW_KEYS[d.key] || []),
+  // 已经摆成控件的项不再重复显示；但**取不到值的项除外** ——
+  // 那种情况下藏着它就等于整项都看不见了（宁可多显示一行只读值）
+  hide: editableAttrs.value
+    .filter((d) => d.kind !== 'text' || String(form.value.attrs[d.key] || '').trim())
+    .flatMap((d) => ATTR_RAW_KEYS[d.key] || []),
   hideRe: /PRIV$/
 }))
 
@@ -2064,11 +2075,11 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* 可改项：数字输入 + 提示（0 = 不限制）；插件下拉 + "要同时填口令"的提示 */
 .attr-num { display: inline-flex; align-items: center; gap: 8px; }
 .attr-hint { font-size: 12px; color: var(--dc-text-dim); }
+/* ⚠️ 这里**不能** display:flex：.ft-label 是 <td>，一旦它不再是 table-cell，
+   盒高就不再跟整行齐平 —— 于是每格的右边框各画一段、上下**接不上**
+   （用户反馈"表格竖线没连上"就是这么来的）。居中交给 .form-table td 的
+   vertical-align: middle，间距交给 padding。 */
 .ft-label {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 4px 8px;
   font-size: 12.5px;
   color: var(--dc-text-mid);
 }
