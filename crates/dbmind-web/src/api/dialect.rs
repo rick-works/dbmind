@@ -136,6 +136,58 @@ pub struct Dialect {
 ///
 /// `databases` / `tables` 里的名字都是**授权目标**（要授给这个用户的库/表），
 /// 不是「用户拥有的库表」—— 用完整的 `(目标, 权限)` 结构，避免调用方把两者搞混。
+/// 一条「要撤销的授权」。只有**没有"一把全撤"语句**的方言才用得上：
+/// Oracle 没有 `revoke all privileges from u`，撤销必须逐条点名，所以由界面把
+/// "原来有、现在没有了"的那些算好传进来（见 UserForm 的 revoke 计算）。
+#[derive(Clone, Debug, Default)]
+pub struct GrantRevoke {
+    /// `global`（系统权限）| `role`（角色）| `object`（对象权限）
+    pub scope: String,
+    pub privilege: String,
+    pub owner: String,
+    pub object: String,
+}
+
+/// Oracle 系统权限白名单（`grant <这些> to u`）。权限名会被**拼进 SQL**，
+/// 所以只放行清单里的 —— 界面传别的名字一律拒绝，不拼进语句。
+pub const ORACLE_SYSTEM_PRIVS: [&str; 30] = [
+    "CREATE SESSION", "CREATE TABLE", "CREATE ANY TABLE", "ALTER ANY TABLE", "DROP ANY TABLE",
+    "SELECT ANY TABLE", "INSERT ANY TABLE", "UPDATE ANY TABLE", "DELETE ANY TABLE",
+    "CREATE VIEW", "CREATE ANY VIEW", "CREATE SEQUENCE", "CREATE PROCEDURE", "CREATE ANY PROCEDURE",
+    "CREATE TRIGGER", "CREATE ANY TRIGGER", "CREATE TYPE", "CREATE SYNONYM", "CREATE ANY SYNONYM",
+    "CREATE DATABASE LINK", "CREATE JOB", "CREATE MATERIALIZED VIEW", "CREATE ROLE", "CREATE USER",
+    "ALTER USER", "DROP USER", "ALTER SESSION", "UNLIMITED TABLESPACE", "DEBUG CONNECT SESSION",
+    "QUERY REWRITE"
+];
+
+/// Oracle 角色白名单（角色名同样是拼进 SQL 的，必须过白名单）。
+pub const ORACLE_ROLES: [&str; 12] = [
+    "CONNECT", "RESOURCE", "DBA", "EXP_FULL_DATABASE", "IMP_FULL_DATABASE",
+    "SELECT_CATALOG_ROLE", "EXECUTE_CATALOG_ROLE", "DELETE_CATALOG_ROLE", "RECOVERY_CATALOG_OWNER",
+    "SCHEDULER_ADMIN", "OEM_MONITOR", "AQ_ADMINISTRATOR_ROLE"
+];
+
+/// Oracle 对象权限白名单（`grant <这些> on <owner>.<object> to u`）。
+pub const ORACLE_OBJECT_PRIVS: [&str; 13] = [
+    "SELECT", "INSERT", "UPDATE", "DELETE", "ALTER", "INDEX", "REFERENCES", "READ",
+    "EXECUTE", "DEBUG", "FLASHBACK", "ON COMMIT REFRESH", "QUERY REWRITE"
+];
+
+fn in_list(list: &[&str], name: &str) -> bool {
+    let upper = name.trim().to_ascii_uppercase();
+    !upper.is_empty() && list.iter().any(|item| item.eq_ignore_ascii_case(&upper))
+}
+
+pub fn is_oracle_system_priv(name: &str) -> bool { in_list(&ORACLE_SYSTEM_PRIVS, name) }
+pub fn is_oracle_role(name: &str) -> bool { in_list(&ORACLE_ROLES, name) }
+pub fn is_oracle_object_priv(name: &str) -> bool { in_list(&ORACLE_OBJECT_PRIVS, name) }
+
+/// 界面在「系统权限」页签里既能勾系统权限、也能勾角色（Oracle 的授权实际就这两类），
+/// 所以这一层的校验器是两者的并集。
+pub fn is_oracle_grantable(name: &str) -> bool {
+    is_oracle_system_priv(name) || is_oracle_role(name)
+}
+
 #[derive(Default)]
 pub struct UserPrivileges {
     /// 全局：`grant <这些> on *.* to ...`
@@ -697,6 +749,17 @@ _ => Meta::Unwritten,
             "clickhouse" => {
                 Meta::Sql(format!("show grants for {}", self.quote(user)))
             }
+            // Oracle：三张字典视图正好对应三层 —— 系统权限 / 角色 / 对象权限。
+            // 列形状与 MySQL 那三张视图**保持一致**（scope, privilege, owner, object），
+            // 前端一套解析器就能吃两家，不再各写一份（那条老教训）。
+            // 视图用 `dba_*`：它们要 SELECT_CATALOG_ROLE —— 没有权限时这句会失败，
+            // 界面会**如实报"读不到现有权限"**（而不是显示成"什么都没有"，那会让人
+            // 误以为可以放心保存）。SQL 一律写成**单行**：续行的反斜杠拼接被搅坏过。
+            // 注：权限名用 `PRIVILEGE` 而不是 `PRIVILEGE_CN`，避免用到只有中文环境才有的列。
+            "oracle" => Meta::Sql(format!(
+                "select 'global' as scope, privilege as privilege, '' as owner, '' as object_name from dba_sys_privs where grantee = upper({}) union all select 'role', granted_role, '', '' from dba_role_privs where grantee = upper({}) union all select 'object', privilege, owner, table_name from dba_tab_privs where grantee = upper({})",
+                self.literal(user), self.literal(user), self.literal(user)
+            )),
             _ => Meta::Unwritten,
         }
     }
@@ -714,6 +777,7 @@ _ => Meta::Unwritten,
         host: &str,
         roles: &[String],
         privileges: &UserPrivileges,
+        revokes: &[GrantRevoke],
         reset_privileges: bool,
     ) -> Meta {
         let u = self.quote(user);
@@ -911,21 +975,22 @@ _ => Meta::Unwritten,
                     // 引号里的内容原样保留 —— 大小写与 @ 这类特殊字符都不会被改写。
                     let pwd_id = self.quote(password);
                     parts.push(format!("create user {u} identified by {pwd_id}"));
+                    // 建号时就把"能登录 + 界面勾的角色/系统权限/对象权限"一起授了 ——
+                    // 建完还得再点一次保存才生效，是让人白跑一趟（用户反馈过）。
                     parts.push(format!("grant create session to {u}"));
-                    for role in &role_parts {
-                        parts.push(format!("grant {role} to {u}"));
-                    }
+                    parts.extend(Self::oracle_grant_parts(&u, roles, privileges));
                     parts.join(";\n")
                 }
                 "alter" => {
+                    // 先撤后授：撤销由界面按"原来有、现在没有了"算好传进来
+                    // （Oracle 没有 `revoke all privileges from u` 这种一把全撤）。
                     let mut parts: Vec<String> = Vec::new();
                     if !password.is_empty() {
                         let pwd_id = self.quote(password);
                         parts.push(format!("alter user {u} identified by {pwd_id}"));
                     }
-                    for role in &role_parts {
-                        parts.push(format!("grant {role} to {u}"));
-                    }
+                    parts.extend(Self::oracle_revoke_parts(&u, revokes));
+                    parts.extend(Self::oracle_grant_parts(&u, roles, privileges));
                     if parts.is_empty() {
                         return Meta::Unwritten;
                     }
@@ -1619,7 +1684,94 @@ _ => Meta::Unwritten,
         }
     }
 
-    /// Oracle 的 `dbms_metadata.get_ddl(...)`：有 owner 就把 owner 也带上。
+    /// Oracle 的**授予**部分：角色 + 系统权限 + 对象权限。
+///
+/// 三类分别对应字典里的三层（角色 / 系统权限 / 对象权限），语句形态也各不同：
+/// `grant <角色> to u`、`grant <系统权限> to u`、`grant <权限> on <模式>.<对象> to u`。
+/// 角色与权限名都来自白名单（调用方已校验过），标识符一律 `quote()`，不留手工拼接的口子。
+fn oracle_grant_parts(u: &str, roles: &[String], privileges: &UserPrivileges) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // 角色（`roles` 与 `privileges.global` 都可能带角色名，去重后再发，免得同句两遍）
+    for name in roles.iter().chain(privileges.global.iter()) {
+        let name = name.trim().to_ascii_uppercase();
+        if name.is_empty() || !seen.insert("r:".to_string() + &name) {
+            continue;
+        }
+        if crate::api::dialect::is_oracle_role(&name) {
+            parts.push(format!("grant {name} to {u}"));
+        } else if crate::api::dialect::is_oracle_system_priv(&name) {
+            parts.push(format!("grant {name} to {u}"));
+        }
+    }
+    // 对象权限：`database` 字段对 Oracle 就是**模式名**（树上的「库.模式」拆出来的那半）
+    for (owner, object, privs) in &privileges.tables {
+        let owner = owner.trim();
+        let object = object.trim();
+        if owner.is_empty() || object.is_empty() {
+            continue;
+        }
+        let items: Vec<String> = privs
+            .iter()
+            .map(|p| p.trim().to_ascii_uppercase())
+            .filter(|p| crate::api::dialect::is_oracle_object_priv(p))
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        parts.push(format!(
+            "grant {} on {}.{} to {u}",
+            items.join(", "),
+            Self::quote_oracle(owner),
+            Self::quote_oracle(object)
+        ));
+    }
+    parts
+}
+
+/// Oracle 的**撤销**部分：界面按"原来有、现在没有了"算好传进来，这里只负责成句。
+fn oracle_revoke_parts(u: &str, revokes: &[GrantRevoke]) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for row in revokes {
+        let name = row.privilege.trim().to_ascii_uppercase();
+        if name.is_empty() {
+            continue;
+        }
+        match row.scope.trim().to_ascii_lowercase().as_str() {
+            "object" => {
+                let owner = row.owner.trim();
+                let object = row.object.trim();
+                if owner.is_empty() || object.is_empty() || !crate::api::dialect::is_oracle_object_priv(&name) {
+                    continue;
+                }
+                parts.push(format!(
+                    "revoke {name} on {}.{} from {u}",
+                    Self::quote_oracle(owner),
+                    Self::quote_oracle(object)
+                ));
+            }
+            "role" => {
+                if crate::api::dialect::is_oracle_role(&name) {
+                    parts.push(format!("revoke {name} from {u}"));
+                }
+            }
+            // 系统权限
+            _ => {
+                if crate::api::dialect::is_oracle_system_priv(&name) {
+                    parts.push(format!("revoke {name} from {u}"));
+                }
+            }
+        }
+    }
+    parts
+}
+
+/// Oracle 的双引号标识符（这里不能借 `Dialect::quote`：那两个函数在 impl 之外使用）。
+fn quote_oracle(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Oracle 的 `dbms_metadata.get_ddl(...)`：有 owner 就把 owner 也带上。
 ///
 /// 为什么非带不可：`get_ddl` 不带 owner 时按**会话默认模式**解析，而 DBMind 的查询会话
 /// 刻意不按"树上选中的模式"切换（不赌代理有没有真的切 schema）。于是"在 SYS 下点一个过程"

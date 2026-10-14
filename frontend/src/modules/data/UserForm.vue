@@ -52,7 +52,7 @@
           </el-tab-pane>
 
           <!-- ===== 服务器权限 ===== -->
-          <el-tab-pane v-if="hasServerTab" :label="$t('upv.tabServer')" name="server">
+          <el-tab-pane v-if="hasServerTab" :label="serverTabLabel" name="server">
             <div class="tab-inner">
               <!-- MySQL 系：全局权限 -->
               <div v-if="isMysql" class="form-card">
@@ -95,6 +95,19 @@
                 </div>
               </div>
 
+              <!-- Oracle：系统权限 -->
+              <div v-if="isOracle" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.tabSystemPrivs') }}</span>
+                </div>
+                <div class="perm-grid compact">
+                  <el-checkbox-group v-model="form.privileges">
+                    <el-checkbox v-for="p in oracleSystemPrivs" :key="p" :label="p" :value="p">{{ p }}</el-checkbox>
+                  </el-checkbox-group>
+                </div>
+              </div>
+
               <!-- PostgreSQL / Kingbase：角色是集群级的 -->
               <div v-if="isPgsql" class="form-card">
                 <div class="card-title">
@@ -104,6 +117,23 @@
                 <div class="perm-grid compact">
                   <el-checkbox-group v-model="form.roles">
                     <el-checkbox v-for="r in pgRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
+                  </el-checkbox-group>
+                </div>
+              </div>
+            </div>
+          </el-tab-pane>
+
+          <!-- ===== 角色（Oracle）===== -->
+          <el-tab-pane v-if="hasRolesTab" :label="$t('upv.tabRoles')" name="roles">
+            <div class="tab-inner">
+              <div class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.tabRoles') }}</span>
+                </div>
+                <div class="perm-grid compact">
+                  <el-checkbox-group v-model="form.roles">
+                    <el-checkbox v-for="r in oracleRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
                   </el-checkbox-group>
                 </div>
               </div>
@@ -152,8 +182,30 @@
           </el-tab-pane>
 
           <!-- ===== 细粒度权限（库/表、Schema/对象）===== -->
-          <el-tab-pane v-if="hasGranularTab" :label="$t('upv.tabGranular')" name="granular">
+          <el-tab-pane v-if="hasGranularTab" :label="granularTabLabel" name="granular">
             <div class="tab-inner">
+              <!-- Oracle：对象权限（模式.对象 —— 这是 Oracle 最细的一层） -->
+              <div v-if="isOracle" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.tabObjects') }}</span>
+                </div>
+                <div v-if="form.tablePrivileges.length === 0" class="empty-tip">{{ $t('upv.noObjectPrivOracle') }}</div>
+                <div v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)" class="priv-row">
+                  <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickSchema')" filterable style="width: 160px" @change="onTablePrivDbChange(i)">
+                    <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
+                  </el-select>
+                  <el-select v-model="row.table" size="small" :placeholder="$t('upv.phPickObject')" filterable style="width: 180px" :loading="row._loading">
+                    <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
+                  </el-select>
+                  <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:180px">
+                    <el-option v-for="p in oracleObjectPrivs" :key="p" :label="p" :value="p" />
+                  </el-select>
+                  <el-button type="danger" size="small" :icon="Delete" @click="removeTablePriv(i)" />
+                </div>
+                <el-button size="small" :icon="Plus" @click="addTablePriv" class="add-row-btn">{{ $t('upv.addObjectPrivOracle') }}</el-button>
+              </div>
+
               <!-- MySQL 系：表级 -->
               <div v-if="isMysql" class="form-card">
                 <div class="card-title">
@@ -308,15 +360,47 @@ const isDbMissing = (db) => {
 
 const isMssql = computed(() => props.conn?.type === 'SQLSERVER')
 const isPgsql = computed(() => props.conn?.type === 'POSTGRESQL')
+// Oracle：系统权限 / 角色 / 对象权限三层。
+// ⚠️ 下面三张清单与后端 `dialect.rs` 的 ORACLE_SYSTEM_PRIVS / ORACLE_ROLES /
+// ORACLE_OBJECT_PRIVS **必须一致**：后端会再校验一遍并拒绝清单外的名字，
+// 这里只决定界面能勾什么 —— 不一致的表现是"勾了却报不在白名单"。
+const isOracle = computed(() => props.conn?.type === 'ORACLE')
+const oracleSystemPrivs = [
+  'CREATE SESSION', 'CREATE TABLE', 'CREATE ANY TABLE', 'ALTER ANY TABLE', 'DROP ANY TABLE',
+  'SELECT ANY TABLE', 'INSERT ANY TABLE', 'UPDATE ANY TABLE', 'DELETE ANY TABLE',
+  'CREATE VIEW', 'CREATE ANY VIEW', 'CREATE SEQUENCE', 'CREATE PROCEDURE', 'CREATE ANY PROCEDURE',
+  'CREATE TRIGGER', 'CREATE ANY TRIGGER', 'CREATE TYPE', 'CREATE SYNONYM', 'CREATE ANY SYNONYM',
+  'CREATE DATABASE LINK', 'CREATE JOB', 'CREATE MATERIALIZED VIEW', 'CREATE ROLE', 'CREATE USER',
+  'ALTER USER', 'DROP USER', 'ALTER SESSION', 'UNLIMITED TABLESPACE', 'DEBUG CONNECT SESSION',
+  'QUERY REWRITE'
+]
+const oracleRoles = [
+  'CONNECT', 'RESOURCE', 'DBA', 'EXP_FULL_DATABASE', 'IMP_FULL_DATABASE',
+  'SELECT_CATALOG_ROLE', 'EXECUTE_CATALOG_ROLE', 'DELETE_CATALOG_ROLE', 'RECOVERY_CATALOG_OWNER',
+  'SCHEDULER_ADMIN', 'OEM_MONITOR', 'AQ_ADMINISTRATOR_ROLE'
+]
+const oracleObjectPrivs = [
+  'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'ALTER', 'INDEX', 'REFERENCES', 'READ',
+  'EXECUTE', 'DEBUG', 'FLASHBACK', 'ON COMMIT REFRESH', 'QUERY REWRITE'
+]
 const isClickhouse = computed(() => props.conn?.type === 'CLICKHOUSE')
 
 // ===== 页签可见性：**按数据库类型出对应界面** =====
 // MySQL 系：服务器(全局) / 数据库(库级) / 细粒度(表级)；
 // SQL Server：服务器角色 / 数据库角色 / 细粒度(Schema + 对象)；
 // PG、Kingbase：角色是集群级的，只有服务器权限这一页。
-const hasServerTab = computed(() => isMysql.value || isMssql.value || isPgsql.value)
+const hasServerTab = computed(() => isMysql.value || isMssql.value || isPgsql.value || isOracle.value)
 const hasDbTab = computed(() => isMysql.value || isMssql.value)
-const hasGranularTab = computed(() => isMysql.value || isMssql.value)
+const hasGranularTab = computed(() => isMysql.value || isMssql.value || isOracle.value)
+// Oracle 的「角色」是单独一层（与系统权限、对象权限并列）
+const hasRolesTab = computed(() => isOracle.value)
+// 页签标题按类型取：同一层在不同家的说法不一样（Oracle 的"服务器级"其实就是系统权限）
+const serverTabLabel = computed(() => (isOracle.value ? t('upv.tabSystemPrivs') : t('upv.tabServer')))
+const granularTabLabel = computed(() => (
+  isOracle.value ? t('upv.tabObjects')
+    : isMssql.value ? t('upv.tabSchemaObject')
+      : t('upv.tabTables')
+))
 const hasAnyGrantTab = computed(() => hasServerTab.value || hasDbTab.value)
 // 类型名（给"该类型还没实现自动授权"那句提示用）
 const connTypeLabel = computed(() => {
@@ -596,6 +680,30 @@ const previewSql = computed(() => {
         if (g && !g.startsWith('--')) sql += `\nGRANT ${g} TO \`${form.value.name}\`;`
       }
     }
+  } else if (isOracle.value) {
+    // Oracle：建号 / 改密 + 三层（系统权限 / 角色 / 对象权限）+ 撤销差异。
+    // 与 MySQL 那段同一写法（本地预览，口令一律显示 ***）。
+    const who = `"${form.value.name}"`
+    const lines = []
+    if (!props.editMode) {
+      lines.push(`CREATE USER ${who} IDENTIFIED BY "***";`)
+      lines.push(`GRANT CREATE SESSION TO ${who};`)
+    } else if (form.value.password) {
+      lines.push(`ALTER USER ${who} IDENTIFIED BY "***";`)
+    }
+    for (const r of oracleRevokes()) {
+      lines.push(r.scope === 'object'
+        ? `REVOKE ${r.privilege} ON "${r.owner}"."${r.object}" FROM ${who};`
+        : `REVOKE ${r.privilege} FROM ${who};`)
+    }
+    for (const p of form.value.privileges || []) lines.push(`GRANT ${p} TO ${who};`)
+    for (const r of form.value.roles || []) lines.push(`GRANT ${r} TO ${who};`)
+    for (const row of form.value.tablePrivileges || []) {
+      if (row.database && row.table && row.privileges?.length) {
+        lines.push(`GRANT ${row.privileges.join(', ')} ON "${row.database}"."${row.table}" TO ${who};`)
+      }
+    }
+    sql = lines.join('\n')
   } else if (isH2.value) {
     if (!props.editMode) {
       sql = `CREATE USER ${form.value.name} PASSWORD '***';`
@@ -691,6 +799,36 @@ const loadSchemas = async () => {
   }
 }
 
+/**
+ * 算「要撤销的授权」：界面里**原来有、现在没有了**的那些。
+ *
+ * 为什么是界面来算：打开表单时已经读过一遍现有授权（`editData.oracleRows`），
+ * 用户在这份状态上增删勾选，差异只有界面知道；后端拿到的只是"最终状态"。
+ * 逐条点名是因为 Oracle 没有 `revoke all privileges from u` 这种一把全撤。
+ */
+const oracleRevokes = () => {
+  const all = (props.editData && props.editData.oracleRows) || []
+  if (!Array.isArray(all) || all.length === 0) return []
+  const up = (v) => String(v || '').trim().toUpperCase()
+  const desired = new Set()
+  for (const p of form.value.privileges || []) desired.add('global|' + up(p))
+  for (const r of form.value.roles || []) desired.add('role|' + up(r))
+  for (const row of form.value.tablePrivileges || []) {
+    for (const p of row.privileges || []) {
+      desired.add('object|' + up(row.database) + '|' + up(row.table) + '|' + up(p))
+    }
+  }
+  return all
+    .filter((r) => r && r.privilege)
+    .filter((r) => {
+      const key = r.scope === 'object'
+        ? 'object|' + up(r.owner) + '|' + up(r.object) + '|' + up(r.privilege)
+        : String(r.scope) + '|' + up(r.privilege)
+      return !desired.has(key)
+    })
+    .map((r) => ({ scope: r.scope, privilege: r.privilege, owner: r.owner || '', object: r.object || '' }))
+}
+
 const submit = async () => {
   if (!previewOk.value) return
   saving.value = true
@@ -712,6 +850,16 @@ const submit = async () => {
     }
     if (isClickhouse.value) {
       opts.grants = form.value.grants || []
+    }
+    if (isOracle.value) {
+      // 三层一起交：系统权限（privileges）/ 角色（roles）/ 对象权限（tablePrivileges，
+      // 这里的 database 字段对 Oracle 就是**模式名**）。
+      opts.privileges = form.value.privileges
+      opts.roles = form.value.roles
+      opts.tablePrivileges = form.value.tablePrivileges.map(r => ({ database: r.database, table: r.table, privileges: r.privileges }))
+      // Oracle 没有"一把全撤"（不像 MySQL 的 revoke all privileges），所以由这里把
+      // **原来有、现在没有了**的那些算出来交给后端逐条 revoke。
+      opts.revoke = oracleRevokes()
     }
     const res = await userAction(props.conn.id, {
       action: props.editMode ? 'alter' : 'create',

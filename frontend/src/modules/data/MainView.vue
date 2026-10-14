@@ -6715,6 +6715,7 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
   }
   const isMssql = target.type === 'SQLSERVER'
   const isClickhouse = target.type === 'CLICKHOUSE'
+  const isOracle = target.type === 'ORACLE'
   try {
     const info = await getUserInfo(target.id, db, fullName)
     if (isMssql) {
@@ -6725,6 +6726,21 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
       editData.objectPrivileges = parsed.objectPrivileges
     } else if (isClickhouse && info.grants && Array.isArray(info.grants)) {
       editData.grants = info.grants.filter(g => g && !g.startsWith('--'))
+    } else if (isOracle && Array.isArray(info.grantRows)) {
+      // Oracle：结构化的一份（scope/privilege/owner/object）既是回填来源，
+      // 也是"保存时算撤销差异"的底稿 —— 所以原样留一份在 editData 里。
+      const rows = info.grantRows.filter(r => r && r.privilege)
+      editData.oracleRows = rows
+      editData.privileges = rows.filter(r => r.scope === 'global').map(r => r.privilege)
+      editData.roles = rows.filter(r => r.scope === 'role').map(r => r.privilege)
+      // 对象权限按「模式.对象」归并成一行（同一条 grant 可以带多个权限）
+      const byObj = new Map()
+      for (const r of rows.filter(r => r.scope === 'object')) {
+        const key = String(r.owner || '') + '.' + String(r.object || '')
+        if (!byObj.has(key)) byObj.set(key, { database: r.owner || '', table: r.object || '', privileges: [] })
+        byObj.get(key).privileges.push(r.privilege)
+      }
+      editData.tablePrivileges = [...byObj.values()]
     } else if (info.privileges || info.dbPrivileges || info.tablePrivileges) {
       // Doris 等方言直接返回结构化权限（其 SHOW GRANTS 不含权限明细）
       editData.privileges = info.privileges || []

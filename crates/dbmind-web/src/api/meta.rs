@@ -669,6 +669,8 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
         "%",
         &[],
         &crate::api::dialect::UserPrivileges::default(),
+        // 撤销清单一律为空 —— 探测只关心"这个方言有没有生成 SQL 的能力"
+        &[],
         false,
     ));
     // 各类对象「查看 / 编辑」靠 `object_source`（取定义）；没实现的那几类
@@ -2761,40 +2763,44 @@ pub async fn user_info(
     // 不让 SQL 用 `group_concat` 拼一行，因为它有 1024 的会话上限会静默截断（见 `user_grants`）。
     // 其余方言（PG / SQL Server）本来就在 SQL 里用 `string_agg` / `for xml path` 拼好了
     // `grants_text`，且没有长度上限，所以沿用。
-    let account_user = row
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let account_host = row
-        .get("host")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
-    let grants: Vec<Value> = match dialect.user_grants(&account_user, &account_host) {
-        Meta::Sql(query) => {
-            let detail = run_sql_in(&state, &id, &database, query, 10_000)
-                .await
-                .map(|result| rows_of(&result))
-                .unwrap_or_default();
-            detail
-                .iter()
-                .filter_map(|item| grant_line(item, &dialect, &account_user, &account_host))
-                .map(|line| json!(line))
-                .collect()
-        }
-        // `grants_text` 是换行分隔的文本，界面会对它 `.map()` —— 必须转成数组，
-        // 给字符串会在前端直接抛异常
-        _ => row
-            .get("grants_text")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .map(|line| json!(line))
-            .collect(),
-    };
+    // 列名大小写各家不同：MySQL 回来的是小写，Oracle 是 `NAME` —— 必须按名字取、忽略大小写。
+    // 曾经写死 `row.get("name")`：Oracle 上取不到 → 账号名成了空串 →
+    // 权限查询变成 `grantee = upper('')` → 一行都查不到，界面显示成"这个用户没有权限"
+    // （真机上就是这么误导人的：明明刚授过权）。
+    let account_user = pick_field(&row, &["name", "user", "username"]);
+    let account_host = pick_field(&row, &["host"]);
+    let (grants, grant_rows): (Vec<Value>, Vec<Value>) =
+        match dialect.user_grants(&account_user, &account_host) {
+            Meta::Sql(query) => {
+                let detail = run_sql_in(&state, &id, &database, query, 10_000)
+                    .await
+                    .map(|result| rows_of(&result))
+                    .unwrap_or_default();
+                let lines = detail
+                    .iter()
+                    .filter_map(|item| grant_line(item, &dialect, &account_user, &account_host))
+                    .map(|line| json!(line))
+                    .collect();
+                // 结构化的一份（`scope / privilege / owner / object`）：界面要按层级回填成
+                // 可编辑的表单，再据此算"哪些被取消了"（撤销清单）。只有拼好的
+                // `GRANT ...` 文本没法可靠反解 —— 权限名里就带空格（`CREATE ANY TABLE`）。
+                // 只有 4 列形状的方言（MySQL 的三张视图 / Oracle 的三本字典）才给，其余空数组。
+                (lines, grant_rows_of(&detail))
+            }
+            // `grants_text` 是换行分隔的文本，界面会对它 `.map()` —— 必须转成数组，
+            // 给字符串会在前端直接抛异常
+            _ => (
+                row.get("grants_text")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(|line| json!(line))
+                    .collect(),
+                Vec::new(),
+            ),
+        };
     let mut out = Map::new();
     for (key, value) in row {
         if key == "grants_text" {
@@ -2814,6 +2820,8 @@ pub async fn user_info(
         out.insert(key, value);
     }
     out.insert("grants".to_string(), Value::Array(grants));
+    // 结构化的一份，界面按层级回填表单、并据此算撤销清单（见上面的注释）
+    out.insert("grantRows".to_string(), Value::Array(grant_rows));
     Ok(Json(Value::Object(out)))
 }
 
@@ -2853,12 +2861,13 @@ pub async fn user_action(
     let options = body.get("options").cloned().unwrap_or_else(|| json!({}));
     let (_, dialect) = ctx_of(&state, &id).await?;
     let mysql_family = matches!(dialect.kind.key(), "mysql" | "mariadb" | "doris");
+    let oracle_family = matches!(dialect.kind.key(), "oracle");
 
     // 哪些权限入参已经真正实现：MySQL 系连接的三层（全局/库级/表级）—— 由
     // `user_action_sql` 拼出 `grant`/`revoke`；其余（模式级、对象级、服务器角色、
     // ClickHouse 的授权项）仍未实现。**只有确实支持的才放行**，不支持的一律明确拒绝，
     // 而不是默默建好用户却什么都没授。
-    const UNSUPPORTED: [(&str, &str); 7] = [
+    const UNSUPPORTED: [(&str, &str); 8] = [
         ("privileges", "全局权限"),
         ("dbPrivileges", "库级权限"),
         ("tablePrivileges", "表级权限"),
@@ -2866,6 +2875,7 @@ pub async fn user_action(
         ("objectPrivileges", "对象级权限"),
         ("serverRoles", "服务器角色"),
         ("grants", "授权项"),
+        ("revoke", "撤销授权"),
     ];
     if let Some(object) = options.as_object() {
         for (key, label) in UNSUPPORTED {
@@ -2881,8 +2891,13 @@ pub async fn user_action(
             if !filled {
                 continue;
             }
-            let handled = mysql_family
-                && matches!(key, "privileges" | "dbPrivileges" | "tablePrivileges");
+            // MySQL 系：全局 / 库级 / 表级三层。
+            // Oracle：系统权限（`privileges`）/ 角色（`roles`，不在本表里）/ 对象权限
+            // （`tablePrivileges`，它的 `database` 就是模式名）+ 撤销清单（`revoke`，
+            // Oracle 没有"一把全撤"，只能逐条点名）。
+            let handled = (mysql_family
+                && matches!(key, "privileges" | "dbPrivileges" | "tablePrivileges"))
+                || (oracle_family && matches!(key, "privileges" | "tablePrivileges" | "revoke"));
             if !handled {
                 return Err(XError::bad_request(format!(
                     "「{label}」的自动分配尚未实现：请先只做「新建用户 / 改密 / 删除用户」，\
@@ -2892,10 +2907,64 @@ pub async fn user_action(
         }
     }
     // 权限名会被**拼进 SQL**，所以逐个过白名单（见 `is_mysql_privilege`）
+    // Oracle：系统权限那一层（`privileges`）收的是**系统权限或角色**，
+    // 对象权限（`tablePrivileges`）是另一张白名单 —— 两者的校验器必须分开给。
+    let global_valid: fn(&str) -> bool = if oracle_family {
+        crate::api::dialect::is_oracle_grantable
+    } else {
+        crate::api::dialect::is_mysql_privilege
+    };
+    let object_valid: fn(&str) -> bool = if oracle_family {
+        crate::api::dialect::is_oracle_object_priv
+    } else {
+        crate::api::dialect::is_mysql_privilege
+    };
     let privileges = crate::api::dialect::UserPrivileges {
-        global: checked_privileges(options.get("privileges"))?,
-        databases: privilege_db_rows(options.get("dbPrivileges"))?,
-        tables: privilege_table_rows(options.get("tablePrivileges"))?,
+        global: checked_privileges(options.get("privileges"), global_valid)?,
+        databases: if oracle_family {
+            // Oracle 没有"库级授权"这一层（库就是实例）：给了就明确拒绝，
+            // 不默默忽略 —— 界面会照实说明，不会让人以为授上了。
+            if options.get("dbPrivileges").and_then(Value::as_array).map(|a| !a.is_empty()).unwrap_or(false) {
+                return Err(XError::bad_request(
+                    "Oracle 没有「数据库级」授权这一层：对象权限请写在「对象权限」里（模式.对象）",
+                ));
+            }
+            Vec::new()
+        } else {
+            privilege_db_rows(options.get("dbPrivileges"), global_valid)?
+        },
+        tables: privilege_table_rows(options.get("tablePrivileges"), object_valid)?,
+    };
+
+    // Oracle 的撤销清单：界面按"原来有、现在没有了"算好传进来。
+    // 名字同样要过白名单（与授予同一个理由：会被拼进 SQL）。
+    let revokes: Vec<crate::api::dialect::GrantRevoke> = if oracle_family {
+        let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
+        for item in options.get("revoke").and_then(Value::as_array).cloned().unwrap_or_default() {
+            let scope = item.get("scope").and_then(Value::as_str).unwrap_or("global").trim().to_lowercase();
+            let privilege = item.get("privilege").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if privilege.is_empty() {
+                continue;
+            }
+            let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let ok = match scope.as_str() {
+                "object" => crate::api::dialect::is_oracle_object_priv(&privilege)
+                    && !owner.is_empty() && !object.is_empty(),
+                "role" => crate::api::dialect::is_oracle_role(&privilege),
+                "global" => crate::api::dialect::is_oracle_system_priv(&privilege),
+                _ => false,
+            };
+            if !ok {
+                return Err(XError::bad_request(format!(
+                    "「{privilege}」不在可撤销的白名单里（或缺少模式/对象名）：已拒绝执行"
+                )));
+            }
+            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object });
+        }
+        out
+    } else {
+        Vec::new()
     };
     let roles: Vec<String> = options
         .get("roles")
@@ -2920,6 +2989,7 @@ pub async fn user_action(
         host,
         &roles,
         &privileges,
+        &revokes,
         reset_privileges,
     ) {
         Meta::Sql(sql) => sql,
@@ -2961,6 +3031,46 @@ pub async fn user_action(
     })))
 }
 
+/// `user_grants` 的结果 -> `[{scope, privilege, owner, object}]`。
+///
+/// 只认 4 列形状（MySQL 的三张视图 / Oracle 的三本字典都长这样）；列名对不上
+/// （PG / SQL Server 走的是 `grants_text` 那条路）就返回空数组 —— 界面对空数组
+/// 就是"没有可编辑的授权明细"，而不会去猜。
+/// 从结果行里按**列名**取值（忽略大小写，按候选顺序取第一个命中的）。
+///
+/// 为什么需要它：列名的大小写由方言决定（MySQL 小写、Oracle 大写），
+/// 而 `serde_json::Map` 的键是**区分大小写**的 —— 写死一个大小写就有一半方言取不到值，
+/// 表现还不是报错，而是"字段是空的"（比报错更难查）。
+fn pick_field(row: &Map<String, Value>, names: &[&str]) -> String {
+    for name in names {
+        for (key, value) in row.iter() {
+            if key.eq_ignore_ascii_case(name) {
+                if let Some(text) = value.as_str() {
+                    return text.to_string();
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn grant_rows_of(rows: &[Map<String, Value>]) -> Vec<Value> {
+    let mut out: Vec<Value> = Vec::new();
+    for row in rows {
+        let scope = pick_field(row, &["scope"]).to_ascii_lowercase();
+        if scope.is_empty() {
+            continue;
+        }
+        out.push(json!({
+            "scope": scope,
+            "privilege": pick_field(row, &["privilege"]),
+            "owner": pick_field(row, &["owner", "db_name"]),
+            "object": pick_field(row, &["object", "object_name", "table_name"]),
+        }));
+    }
+    out
+}
+
 /// 把 `user_grants` 的一行（scope / privilege / db_name / table_name）拼成
 /// `GRANT <权限> ON <目标> TO <账号>;` 文本 —— 与 MySQL `SHOW GRANTS` 同形，
 /// 界面（`parseMySqlGrants`）按它分全局 / 库级 / 表级三层。
@@ -2975,18 +3085,32 @@ fn grant_line(
     if dialect.kind.key() == "clickhouse" {
         return row.values().find_map(Value::as_str).map(str::to_string);
     }
-    let scope = row.get("scope").and_then(Value::as_str).unwrap_or("");
-    let privilege = row.get("privilege").and_then(Value::as_str).unwrap_or("");
-    let db_name = row.get("db_name").and_then(Value::as_str).unwrap_or("");
-    let table_name = row.get("table_name").and_then(Value::as_str).unwrap_or("");
+    // 列名一律**按名字取、忽略大小写**：MySQL 回来的是小写，Oracle 是 `PRIVILEGE` /
+    // `OWNER` / `TABLE_NAME`。写死一种大小写就有一半方言取不到值，而且不报错
+    // （表现是"授权明细是空的"，比报错难查得多）。
+    let scope = pick_field(row, &["scope"]).to_ascii_lowercase();
+    let privilege = pick_field(row, &["privilege"]);
+    let owner = pick_field(row, &["owner", "db_name"]);
+    let object = pick_field(row, &["object", "object_name", "table_name"]);
     if privilege.is_empty() || account_user.is_empty() {
         return None;
     }
-    let target = match scope {
+    // Oracle 的三层：系统权限 / 角色都不带 ON，对象权限带 `ON "模式"."对象"`，
+    // 账号也不写成 `'u'@'h'`（Oracle 没有 host 这一维）。
+    if dialect.kind.key() == "oracle" {
+        return match scope.as_str() {
+            "object" if !owner.is_empty() && !object.is_empty() => Some(format!(
+                "GRANT {privilege} ON \"{owner}\".\"{object}\" TO \"{account_user}\";"
+            )),
+            "role" | "global" => Some(format!("GRANT {privilege} TO \"{account_user}\";")),
+            _ => None,
+        };
+    }
+    let target = match scope.as_str() {
         "global" => "*.*".to_string(),
-        "schema" if !db_name.is_empty() => format!("{}.*", dialect.quote(db_name)),
-        "table" if !db_name.is_empty() && !table_name.is_empty() => {
-            format!("{}.{}", dialect.quote(db_name), dialect.quote(table_name))
+        "schema" if !owner.is_empty() => format!("{}.*", dialect.quote(&owner)),
+        "table" if !owner.is_empty() && !object.is_empty() => {
+            format!("{}.{}", dialect.quote(&owner), dialect.quote(&object))
         }
         _ => return None,
     };
@@ -3002,14 +3126,17 @@ fn grant_line(
 /// `ALL PRIVILEGES` 单独归一：它和具体权限并列（`GRANT ALL PRIVILEGES, SELECT ON ...`）
 /// 是有歧义的写法，而语义上 `ALL` 已经覆盖后者 —— 只留 `ALL PRIVILEGES` 一条，
 /// 生成出来的语句既短又不会有歧义。
-fn checked_privileges(value: Option<&Value>) -> XResult<Vec<String>> {
+/// 权限名会被**拼进授权语句**，所以不在白名单里的一律拒绝、绝不拼。
+/// 白名单由调用方给：各家不同，**同一家不同层级也不同**（Oracle 的对象权限与
+/// 系统权限就是两张表），写死一张表的下场是"Oracle 的系统权限全被拒"。
+fn checked_privileges(value: Option<&Value>, valid: fn(&str) -> bool) -> XResult<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for item in value.and_then(Value::as_array).cloned().unwrap_or_default() {
         let name = item.as_str().unwrap_or("").trim();
         if name.is_empty() {
             continue;
         }
-        if !crate::api::dialect::is_mysql_privilege(name) {
+        if !valid(name) {
             return Err(XError::bad_request(format!(
                 "不认识的权限名「{name}」：已拒绝执行 —— 权限名会拼进授权语句，\
                  不在白名单里的一律不拼"
@@ -3027,7 +3154,7 @@ fn checked_privileges(value: Option<&Value>) -> XResult<Vec<String>> {
 }
 
 /// 库级权限行：`[{database, privileges}]`。
-fn privilege_db_rows(value: Option<&Value>) -> XResult<Vec<(String, Vec<String>)>> {
+fn privilege_db_rows(value: Option<&Value>, valid: fn(&str) -> bool) -> XResult<Vec<(String, Vec<String>)>> {
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
     for row in value.and_then(Value::as_array).cloned().unwrap_or_default() {
         let database = row
@@ -3039,13 +3166,13 @@ fn privilege_db_rows(value: Option<&Value>) -> XResult<Vec<(String, Vec<String>)
         if database.is_empty() {
             continue;
         }
-        out.push((database, checked_privileges(row.get("privileges"))?));
+        out.push((database, checked_privileges(row.get("privileges"), valid)?));
     }
     Ok(out)
 }
 
 /// 表级权限行：`[{database, table, privileges}]`。
-fn privilege_table_rows(value: Option<&Value>) -> XResult<Vec<(String, String, Vec<String>)>> {
+fn privilege_table_rows(value: Option<&Value>, valid: fn(&str) -> bool) -> XResult<Vec<(String, String, Vec<String>)>> {
     let mut out: Vec<(String, String, Vec<String>)> = Vec::new();
     for row in value.and_then(Value::as_array).cloned().unwrap_or_default() {
         let database = row
@@ -3063,11 +3190,7 @@ fn privilege_table_rows(value: Option<&Value>) -> XResult<Vec<(String, String, V
         if database.is_empty() || table.is_empty() {
             continue;
         }
-        out.push((
-            database,
-            table,
-            checked_privileges(row.get("privileges"))?,
-        ));
+        out.push((database, table, checked_privileges(row.get("privileges"), valid)?));
     }
     Ok(out)
 }
