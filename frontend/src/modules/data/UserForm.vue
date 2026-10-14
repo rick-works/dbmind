@@ -390,12 +390,12 @@
       </div>
 
       <!-- 分隔条：与「编辑表结构」同一套（向上拖 = 预览变高，双击最大/最小） -->
-      <div v-if="dirty" v-show="!sqlCollapsed" class="sql-resizer"
+      <div v-show="!sqlCollapsed" class="sql-resizer"
            :title="$t('tdet.resizerTitle')"
            @mousedown.prevent="onSqlResizeStart" @dblclick="onSqlResizeDblClick"></div>
 
       <!-- SQL 预览：挪到**下方**（原来在右侧固定栏），点标题行折叠/展开 -->
-      <div v-if="dirty" ref="sqlAreaRef" class="sql-area" :class="{ collapsed: sqlCollapsed }"
+      <div ref="sqlAreaRef" class="sql-area" :class="{ collapsed: sqlCollapsed }"
            :style="sqlCollapsed ? null : { height: sqlHeight + 'px' }">
         <div class="sql-head" @click="sqlCollapsed = !sqlCollapsed"
              :title="sqlCollapsed ? $t('tdet.expandSql') : $t('tdet.collapseSql')">
@@ -405,14 +405,15 @@
           <span class="sql-fold-tx">{{ sqlCollapsed ? $t('tdet.expand') : $t('tdet.collapse') }}</span>
         </div>
         <div v-show="!sqlCollapsed" class="sql-body">
-          <pre><code>{{ previewSql || $t('upv.sqlPlaceholder') }}</code></pre>
+          <!-- 默认不显示 SQL 文本：勾选/取消之后（有差量了）才出语句；框本身一直留着 -->
+          <pre><code>{{ dirty ? previewSql : '' }}​{{ dirty ? '' : $t('upv.sqlPlaceholder') }}</code></pre>
         </div>
         <!-- 与「编辑表结构」同一排法：左边一句说明，右边一排动作按钮 -->
         <div class="sql-foot">
           <span class="sql-tip">{{ $t('upv.previewTip') }}</span>
           <div class="sql-foot-actions">
-            <el-button size="small" text :icon="CopyDocument" :disabled="!dirty" @click="copySql">{{ $t('upv.copySql') }}</el-button>
-            <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk || !dirty" @click="submit">
+            <el-button size="small" text :icon="CopyDocument" :disabled="!previewSql" @click="copySql">{{ $t('upv.copySql') }}</el-button>
+            <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk" @click="submit">
               {{ editMode ? $t('upv.saveChanges') : $t('upv.execCreate') }}
             </el-button>
           </div>
@@ -918,6 +919,91 @@ const previewOk = computed(() => {
   return true
 })
 
+// ===== 「只出差量」的授权 =====
+// 打开表单时服务端给的那份授权存进 orig，之后拿当前表单逐项比对：
+//   · 勾选了一个原本没有的   → 只出这一条的 GRANT
+//   · 取消勾选了一个原本有的 → 只出这一条的 REVOKE
+// 不再"先 REVOKE ALL PRIVILEGES, GRANT OPTION 再按表单全量重授"（用户要求：授权机制不要全删）。
+// ⚠️ 同一份差量既用来**预览**、也交给**后端执行** —— 两处必须同源，
+//    否则"看到的"和"真正执行的"会对不上（这是这一块最容易骗到人的地方）。
+const orig = ref({ privileges: [], dbPrivileges: [], tablePrivileges: [], serverRoles: [], roles: [], schemaPrivileges: [], objectPrivileges: [], grants: [] })
+const asSet = (arr) => new Set((arr || []).filter(Boolean))
+const listDiff = (before, after) => {
+  const b = asSet(before)
+  const a = asSet(after)
+  return { added: [...a].filter((x) => !b.has(x)), removed: [...b].filter((x) => !a.has(x)) }
+}
+// 行级（库 / 表 / 模式 / 对象）：按"行键"配对，逐行算差；
+// 行键变了（比如把某行的库名改了）就当成"旧行整条撤销 + 新行整条授予"。
+const rowsDiff = (before, after, keyOf) => {
+  const out = { added: [], removed: [] }
+  const bmap = new Map((before || []).filter((r) => keyOf(r)).map((r) => [keyOf(r), r]))
+  const amap = new Map((after || []).filter((r) => keyOf(r)).map((r) => [keyOf(r), r]))
+  for (const [k, a] of amap) {
+    const d = listDiff(bmap.get(k) ? bmap.get(k).privileges : [], a.privileges)
+    if (d.added.length) out.added.push({ key: k, row: a, privs: d.added })
+  }
+  for (const [k, b] of bmap) {
+    const d = listDiff(b.privileges, amap.get(k) ? amap.get(k).privileges : [])
+    if (d.removed.length) out.removed.push({ key: k, row: b, privs: d.removed })
+  }
+  return out
+}
+const dbKey = (r) => (r && r.database ? String(r.database) : '')
+const tableKey = (r) => (r && r.database && r.table ? r.database + '.' + r.table : '')
+const schemaKey = (r) => (r && r.schema ? String(r.schema) : '')
+const objectKey = (r) => (r && r.schema && r.object ? r.schema + '.' + r.object : '')
+const allRows = (rows, withKey) => (rows || [])
+  .filter((r) => withKey(r) && r.privileges && r.privileges.length)
+  .map((r) => ({ key: withKey(r), row: r, privs: [...r.privileges] }))
+
+const changes = computed(() => {
+  const o = orig.value
+  const f = form.value
+  // 新建用户：没有"原状态"，勾了什么就授什么
+  if (!props.editMode) {
+    return {
+      global: { added: [...asSet(f.privileges)], removed: [] },
+      serverRoles: { added: [...asSet(f.serverRoles)], removed: [] },
+      roles: { added: [...asSet(f.roles)], removed: [] },
+      db: { added: allRows(f.dbPrivileges, dbKey), removed: [] },
+      table: { added: allRows(f.tablePrivileges, tableKey), removed: [] },
+      schema: { added: allRows(f.schemaPrivileges, schemaKey), removed: [] },
+      object: { added: allRows(f.objectPrivileges, objectKey), removed: [] }
+    }
+  }
+  return {
+    global: listDiff(o.privileges, f.privileges),
+    serverRoles: listDiff(o.serverRoles, f.serverRoles),
+    roles: listDiff(o.roles, f.roles),
+    db: rowsDiff(o.dbPrivileges, f.dbPrivileges, dbKey),
+    table: rowsDiff(o.tablePrivileges, f.tablePrivileges, tableKey),
+    schema: rowsDiff(o.schemaPrivileges, f.schemaPrivileges, schemaKey),
+    object: rowsDiff(o.objectPrivileges, f.objectPrivileges, objectKey)
+  }
+})
+// 差量里有没有"要执行的语句"（撤销也算）
+const hasChanges = computed(() => {
+  const c = changes.value
+  return ['global', 'serverRoles', 'roles', 'db', 'table', 'schema', 'object'].some((k) => {
+    const g = c[k]
+    return (g.added && g.added.length) || (g.removed && g.removed.length)
+  }) || !!form.value.password || !props.editMode
+})
+// 交给后端的撤销清单（scope 与 Oracle 那套同一形状：owner/object 为空的按目标层级理解）
+const revokePayload = computed(() => {
+  const c = changes.value
+  const out = []
+  for (const p of c.global.removed) out.push({ scope: 'global', privilege: p, owner: '', object: '' })
+  for (const p of c.serverRoles.removed) out.push({ scope: 'server-role', privilege: p, owner: '', object: '' })
+  for (const p of c.roles.removed) out.push({ scope: 'role', privilege: p, owner: '', object: '' })
+  for (const r of c.db.removed) for (const p of r.privs) out.push({ scope: 'db', privilege: p, owner: r.key, object: '' })
+  for (const r of c.table.removed) for (const p of r.privs) out.push({ scope: 'table', privilege: p, owner: r.row.database, object: r.row.table })
+  for (const r of c.schema.removed) for (const p of r.privs) out.push({ scope: 'schema', privilege: p, owner: r.key, object: '' })
+  for (const r of c.object.removed) for (const p of r.privs) out.push({ scope: 'object', privilege: p, owner: r.row.schema, object: r.row.object })
+  return out
+})
+
 const previewSql = computed(() => {
   if (!previewOk.value) return ''
   const action = props.editMode ? 'ALTER' : 'CREATE'
@@ -926,56 +1012,42 @@ const previewSql = computed(() => {
     const h = form.value.host || '%'
     // 没填密码就不要拼 `ALTER USER 'x'@'%';` —— MySQL 里这是语法错误。
     // 「只改权限、不改密码」是常见操作，那时本来就只该有 revoke/grant。
+    const who = `'${form.value.name}'@'${h}'`
     const lines = []
     if (!props.editMode) {
-      lines.push(`CREATE USER '${form.value.name}'@'${h}'${form.value.password ? " IDENTIFIED BY '***'" : ''};`)
+      lines.push(`CREATE USER ${who}${form.value.password ? " IDENTIFIED BY '***'" : ''};`)
     } else if (form.value.password) {
-      lines.push(`ALTER USER '${form.value.name}'@'${h}' IDENTIFIED BY '***';`)
+      lines.push(`ALTER USER ${who} IDENTIFIED BY '***';`)
     }
-    if (props.editMode) {
-      // 权限以表单为准：先清空该用户的授权，再按表单重授（后端就是这么执行的）
-      lines.push(`REVOKE ALL PRIVILEGES, GRANT OPTION FROM '${form.value.name}'@'${h}';`)
-    }
+    const c = changes.value
+    // 先撤销（只撤"取消了勾选"的那些），再授予（只授"新勾上"的那些）
+    const grantOption = (privs) => privs.filter((p) => p !== 'GRANT OPTION')
+    const hasGrantOption = (privs) => privs.includes('GRANT OPTION')
+    for (const p of c.global.removed) lines.push(`REVOKE ${p} ON *.* FROM ${who};`)
+    for (const r of c.db.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON \`${r.key}\`.* FROM ${who};`)
+    for (const r of c.table.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON \`${r.row.database}\`.\`${r.row.table}\` FROM ${who};`)
+    const g = grantOption(c.global.added)
+    if (g.length) lines.push(`GRANT ${g.join(', ')} ON *.* TO ${who}${hasGrantOption(c.global.added) ? ' WITH GRANT OPTION' : ''};`)
+    else if (hasGrantOption(c.global.added)) lines.push(`GRANT USAGE ON *.* TO ${who} WITH GRANT OPTION;`)
+    for (const r of c.db.added) lines.push(`GRANT ${r.privs.join(', ')} ON \`${r.key}\`.* TO ${who};`)
+    for (const r of c.table.added) lines.push(`GRANT ${r.privs.join(', ')} ON \`${r.row.database}\`.\`${r.row.table}\` TO ${who};`)
     sql = lines.join('\n')
-    if (form.value.privileges?.length) {
-      sql += `\nGRANT ${form.value.privileges.join(', ')} ON *.* TO '${form.value.name}'@'${h}';`
-    }
-    for (const row of form.value.dbPrivileges) {
-      if (row.database && row.privileges?.length) {
-        sql += `\nGRANT ${row.privileges.join(', ')} ON \`${row.database}\`.* TO '${form.value.name}'@'${h}';`
-      }
-    }
-    for (const row of form.value.tablePrivileges) {
-      if (row.database && row.table && row.privileges?.length) {
-        sql += `\nGRANT ${row.privileges.join(', ')} ON \`${row.database}\`.\`${row.table}\` TO '${form.value.name}'@'${h}';`
-      }
-    }
   } else if (isMssql.value) {
     if (!props.editMode && form.value.password) {
       sql = `CREATE LOGIN [${form.value.name}] WITH PASSWORD='***';\nCREATE USER [${form.value.name}] FOR LOGIN [${form.value.name}];`
     } else if (props.editMode && form.value.password) {
       sql = `ALTER LOGIN [${form.value.name}] WITH PASSWORD='***';`
     }
-    if (form.value.serverRoles?.length) {
-      for (const r of form.value.serverRoles) {
-        sql += `\nALTER SERVER ROLE [${r}] ADD MEMBER [${form.value.name}];`
-      }
-    }
-    if (form.value.roles?.length) {
-      for (const r of form.value.roles) {
-        sql += `\nALTER ROLE [${r}] ADD MEMBER [${form.value.name}];`
-      }
-    }
-    for (const row of form.value.schemaPrivileges) {
-      if (row.schema && row.privileges?.length) {
-        sql += `\nGRANT ${row.privileges.join(', ')} ON SCHEMA::[${row.schema}] TO [${form.value.name}];`
-      }
-    }
-    for (const row of form.value.objectPrivileges) {
-      if (row.schema && row.object && row.privileges?.length) {
-        sql += `\nGRANT ${row.privileges.join(', ')} ON [${row.schema}].[${row.object}] TO [${form.value.name}];`
-      }
-    }
+    const c = changes.value
+    const u = `[${form.value.name}]`
+    for (const r of c.serverRoles.removed) sql += `\nALTER SERVER ROLE [${r}] DROP MEMBER ${u};`
+    for (const r of c.serverRoles.added) sql += `\nALTER SERVER ROLE [${r}] ADD MEMBER ${u};`
+    for (const r of c.roles.removed) sql += `\nALTER ROLE [${r}] DROP MEMBER ${u};`
+    for (const r of c.roles.added) sql += `\nALTER ROLE [${r}] ADD MEMBER ${u};`
+    for (const r of c.schema.removed) for (const p of r.privs) sql += `\nREVOKE ${p} ON SCHEMA::[${r.key}] FROM ${u};`
+    for (const r of c.schema.added) sql += `\nGRANT ${r.privs.join(', ')} ON SCHEMA::[${r.key}] TO ${u};`
+    for (const r of c.object.removed) for (const p of r.privs) sql += `\nREVOKE ${p} ON [${r.row.schema}].[${r.row.object}] FROM ${u};`
+    for (const r of c.object.added) sql += `\nGRANT ${r.privs.join(', ')} ON [${r.row.schema}].[${r.row.object}] TO ${u};`
   } else if (isPgsql.value) {
     if (!props.editMode) {
       sql = `CREATE USER "${form.value.name}"`
@@ -984,11 +1056,10 @@ const previewSql = computed(() => {
     } else if (form.value.password) {
       sql = `ALTER USER "${form.value.name}" WITH PASSWORD '***';`
     }
-    if (form.value.roles?.length) {
-      for (const r of form.value.roles) {
-        sql += `\nGRANT "${r}" TO "${form.value.name}";`
-      }
-    }
+    const c = changes.value
+    const who = `"${form.value.name}"`
+    for (const r of c.roles.removed) sql += `\nREVOKE "${r}" FROM ${who};`
+    for (const r of c.roles.added) sql += `\nGRANT "${r}" TO ${who};`
   } else if (isClickhouse.value) {
     if (!props.editMode) {
       sql = `CREATE USER \`${form.value.name}\``
@@ -1157,6 +1228,8 @@ const submit = async () => {
   try {
     const opts = {}
     if (isMysql.value) {
+      // 撤销清单与预览同源：只交"取消了勾选"的那些，后端不再 revoke all
+      opts.revoke = revokePayload.value
       opts.privileges = form.value.privileges
       opts.dbPrivileges = form.value.dbPrivileges.map(r => ({ database: r.database, privileges: r.privileges }))
       opts.tablePrivileges = form.value.tablePrivileges.map(r => ({ database: r.database, table: r.table, privileges: r.privileges }))
@@ -1247,7 +1320,18 @@ watch(() => props.editData, (d) => {
   } else {
     form.value = { name: '', password: '', host: '%', privileges: [], roles: [], dbPrivileges: [], tablePrivileges: [], serverRoles: [], schemaPrivileges: [], objectPrivileges: [], grants: [] }
   }
-  // 刚打开（或切换用户）时存一份基准：此刻"没动过"，SQL 预览不展示
+  // 刚打开（或切换用户）时存基准与原状态：此刻"没动过"，预览不展示 SQL 文本；
+  // 之后所有 GRANT/REVOKE 都按"与这份原状态的差"来出（见 changes 计算）。
+  orig.value = JSON.parse(JSON.stringify({
+    privileges: form.value.privileges,
+    dbPrivileges: form.value.dbPrivileges,
+    tablePrivileges: form.value.tablePrivileges,
+    serverRoles: form.value.serverRoles,
+    roles: form.value.roles,
+    schemaPrivileges: form.value.schemaPrivileges,
+    objectPrivileges: form.value.objectPrivileges,
+    grants: form.value.grants
+  }))
   baseSnapshot.value = formSnapshot()
 }, { immediate: true })
 

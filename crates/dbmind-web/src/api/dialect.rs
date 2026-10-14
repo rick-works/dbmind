@@ -837,15 +837,19 @@ _ => Meta::Unwritten,
                     "drop" => return Meta::Sql(format!("drop user {full}")),
                     _ => return Meta::Unwritten,
                 }
-                // 权限**以表单为准**：先清空该用户的授权，再按表单重授。
-                // 只 grant 不 revoke 的话，「取消勾选」只是看起来取消了 —— 库里权限还在。
+                // 授权**只出差量**：界面把"原来有、现在没有了"的算好传进来，逐条点名撤销；
+                // 勾选的再由下面的循环逐条授予。
                 //
-                // 只用这一条合体形式，不逐目标 `revoke ... on \`db\`.*`：
-                // 实测这条 `revoke all privileges, grant option from <用户>` **连库级/表级
-                // 授权一起清掉**（清完再看只剩 USAGE），而逐目标 revoke 反而会在
-                // 「该目标本来就没授权」时报 1141（`There is no such grant defined`）。
+                // 从前用的是 `revoke all privileges, grant option from <用户>` + 全量重授：
+                // 那样确实省事（连库级/表级一并清干净），但会把用户**别处**拿到的授权也抹掉再重建。
+                // 逐目标 revoke 以前不敢用，是因为它会在"该目标本来就没授权"时报 1141
+                // （`There is no such grant defined`）—— 而现在点名撤的都是**真差量**
+                // （只撤"原来确实有、现在取消了"的），撤不到没有的东西上，这个坑自然绕开了。
+                // `reset_privileges` 只在客户端没交差量清单（老调用方）时才为真。
                 if reset_privileges {
                     parts.push(format!("revoke all privileges, grant option from {full}"));
+                } else {
+                    parts.extend(self.mysql_revoke_parts(&full, revokes));
                 }
                 // `GRANT OPTION` 不是普通权限项，而是 `WITH GRANT OPTION` 子句 ——
                 // 拼成 `grant GRANT OPTION on ...` 是错的（MySQL 的 priv_type 里没有它）。
@@ -1725,6 +1729,40 @@ fn oracle_grant_parts(u: &str, roles: &[String], privileges: &UserPrivileges) ->
             Self::quote_oracle(owner),
             Self::quote_oracle(object)
         ));
+    }
+    parts
+}
+
+/// MySQL 的**撤销**部分：界面按"原来有、现在没有了"算好传进来，这里只负责成句。
+/// 与 Oracle 那套同一机制，只是作用目标写法不同：
+///   scope=global        → `revoke <priv> on *.* from <u>`
+///   scope=db            → `revoke <priv> on \`<库>\`.* from <u>`
+///   scope=table         → `revoke <priv> on \`<库>\`.\`<表>\` from <u>`
+/// `GRANT OPTION` 也走这一层（它是 `revoke ... grant option` 子句的一部分，MySQL 里合法）。
+fn mysql_revoke_parts(&self, full: &str, revokes: &[GrantRevoke]) -> Vec<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for row in revokes {
+        let name = row.privilege.trim().to_ascii_uppercase();
+        if name.is_empty() {
+            continue;
+        }
+        let owner = row.owner.trim();
+        let object = row.object.trim();
+        match row.scope.trim().to_ascii_lowercase().as_str() {
+            "db" | "table" | "object" | "schema" => {
+                if owner.is_empty() {
+                    continue;
+                }
+                let target = if object.is_empty() {
+                    format!("{}.*", self.quote(owner))
+                } else {
+                    format!("{}.{}", self.quote(owner), self.quote(object))
+                };
+                parts.push(format!("revoke {name} on {target} from {full}"));
+            }
+            // 全局（含 GRANT OPTION）
+            _ => parts.push(format!("revoke {name} on *.* from {full}")),
+        }
     }
     parts
 }

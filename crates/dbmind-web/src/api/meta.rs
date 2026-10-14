@@ -2895,8 +2895,10 @@ pub async fn user_action(
             // Oracle：系统权限（`privileges`）/ 角色（`roles`，不在本表里）/ 对象权限
             // （`tablePrivileges`，它的 `database` 就是模式名）+ 撤销清单（`revoke`，
             // Oracle 没有"一把全撤"，只能逐条点名）。
+            // `revoke` = 界面按"原来有、现在没有了"算好的**撤销清单**。
+            // MySQL 也要收（授权改成只出差量之后，撤销不再靠 `revoke all`）。
             let handled = (mysql_family
-                && matches!(key, "privileges" | "dbPrivileges" | "tablePrivileges"))
+                && matches!(key, "privileges" | "dbPrivileges" | "tablePrivileges" | "revoke"))
                 || (oracle_family && matches!(key, "privileges" | "tablePrivileges" | "revoke"));
             if !handled {
                 return Err(XError::bad_request(format!(
@@ -2938,7 +2940,34 @@ pub async fn user_action(
 
     // Oracle 的撤销清单：界面按"原来有、现在没有了"算好传进来。
     // 名字同样要过白名单（与授予同一个理由：会被拼进 SQL）。
-    let revokes: Vec<crate::api::dialect::GrantRevoke> = if oracle_family {
+    let revokes: Vec<crate::api::dialect::GrantRevoke> = if mysql_family {
+        // MySQL：scope = global（全局，`on *.*`）/ db（库级，owner=库）/ table（表级，owner=库 + object=表）
+        // 名字一样要过白名单 —— 会被拼进 SQL（与授予同一个理由）。
+        let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
+        for item in options.get("revoke").and_then(Value::as_array).cloned().unwrap_or_default() {
+            let scope = item.get("scope").and_then(Value::as_str).unwrap_or("global").trim().to_lowercase();
+            let privilege = item.get("privilege").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if privilege.is_empty() {
+                continue;
+            }
+            let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let ok = match scope.as_str() {
+                // 库级 / 表级走的都是对象权限白名单（与 dbPrivileges / tablePrivileges 同一个校验器）
+                "db" => object_valid(&privilege) && !owner.is_empty(),
+                "table" | "object" | "schema" => object_valid(&privilege) && !owner.is_empty() && !object.is_empty(),
+                "global" | "server-role" | "role" => global_valid(&privilege),
+                _ => false,
+            };
+            if !ok {
+                return Err(XError::bad_request(format!(
+                    "「{privilege}」不在可撤销的白名单里（或缺少库/表名）：已拒绝执行"
+                )));
+            }
+            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object });
+        }
+        out
+    } else if oracle_family {
         let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
         for item in options.get("revoke").and_then(Value::as_array).cloned().unwrap_or_default() {
             let scope = item.get("scope").and_then(Value::as_str).unwrap_or("global").trim().to_lowercase();
@@ -2977,10 +3006,12 @@ pub async fn user_action(
         })
         .unwrap_or_default();
 
-    // 「权限以表单为准」：改权限时先清空该用户的授权，再按表单重授 ——
-    // 否则「取消勾选」只是看起来取消了（旧授权还在）。清空只由这一条语句负责，
-    // 细节（为什么不能逐目标 revoke）见 `user_action_sql` 里的注释。
-    let reset_privileges = mysql_family && action == "alter";
+    // 授权**只出差量**：界面把"原来有、现在没有了"的算好放在 `revoke` 里，后端逐条点名撤销，
+    // 勾选的那些再逐条授予 —— 不再"先 revoke all privileges, grant option 再按表单全量重授"
+    // （那种做法会把用户别处的授权也一并抹掉再重建，用户明确要求不要这样做）。
+    // 只有在客户端**没交** `revoke` 这份清单时（老调用方），才退回"一把全撤"。
+    let diff_mode = options.get("revoke").is_some();
+    let reset_privileges = mysql_family && action == "alter" && !diff_mode;
 
     let sql = match dialect.user_action_sql(
         &action,
