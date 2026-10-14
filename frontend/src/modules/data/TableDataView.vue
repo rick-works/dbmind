@@ -3023,8 +3023,17 @@ useShortcutScope(rootRef, {
 </script>
 
 <style scoped>
-.table-data-view { height: 100%; display: flex; flex-direction: column; padding: 10px; gap: 10px; }
-.toolbar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+.table-data-view { height: 100%; display: flex; flex-direction: column; padding: 5px; gap: 5px; }
+/* 工具条：**独立成一张圆角小卡**（与「编辑表结构」的标题栏同一形态）。
+   四周 5px 是必须的 —— 贴着面板边缘时 8px 圆角会被边线压平，看着像没做圆角。 */
+.toolbar {
+  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  background: var(--dc-bg-soft);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
+}
 .toolbar .left, .toolbar .right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .toolbar .right :deep(.el-button + .el-button) { margin-left: 0; }
 

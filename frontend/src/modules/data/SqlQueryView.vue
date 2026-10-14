@@ -4898,7 +4898,7 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.sql-query-view { height: 100%; display: grid; grid-template-rows: 1fr; gap: 6px; padding: 10px; }
+.sql-query-view { height: 100%; display: grid; grid-template-rows: 1fr; gap: 6px; padding: 5px; }
 .dlg-title { display: flex; align-items: center; gap: 8px; }
 .dlg-title-ic {
   width: 26px; height: 26px; border-radius: 7px; display: inline-flex;
@@ -4923,7 +4923,17 @@ onBeforeUnmount(() => {
     minmax(0, calc((1 - var(--editor-ratio, 0.6)) * (100% - 6px)));
 }
 .editor-area { min-height: 0; display: flex; flex-direction: column; background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: var(--dc-radius); overflow: hidden; box-shadow: var(--dc-shadow-sm); }
-.editor-head { display: flex; justify-content: space-between; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--dc-border); gap: 10px; }
+/* 标题条与「编辑表结构」同一口径：**一档浅底**（原来是纯白 + 一条下边框，看着是"另一块"）。
+   它住在编辑器卡（.editor-area，自身 8px 圆角 + overflow: hidden）里，所以上两角跟着卡圆即可。 */
+.editor-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 8px 12px;
+  background: var(--dc-bg-soft);
+  border-bottom: 1px solid var(--dc-border);
+  /* 上两角与编辑器卡自身的圆角一致（卡是 var(--dc-radius)=10px） */
+  border-radius: var(--dc-radius) var(--dc-radius) 0 0;
+  gap: 10px;
+}
 .editor-title { font-weight: 600; font-size: 14px; }
 
 /* 选择器组 */
