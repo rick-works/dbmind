@@ -68,7 +68,7 @@
                     <th v-for="g in globalGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
                       <span class="ft-group-name">{{ g.label }}</span>
                       <span class="priv-group-count">{{ countIn('privileges', g.items) }} / {{ g.items.length }}</span>
-                      <span v-if="g.key !== 'all'" class="priv-group-actions">
+                      <span class="priv-group-actions">
                         <button :disabled="countIn('privileges', g.items) === g.items.length"
                                 @click="setList('privileges', g.items, true)">{{ $t('common.selectAll') }}</button>
                         <button :disabled="countIn('privileges', g.items) === 0"
