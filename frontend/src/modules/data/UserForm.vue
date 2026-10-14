@@ -1633,7 +1633,13 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
   border: none;
   background: none;
   padding: 0 2px;
+  /* 字体要**显式跟着走**：原生 <button> 不继承父级字体，不写这一行它就用浏览器的
+     默认 UI 字体 —— 同一行里"分组名 / 计数 / 全选 清空"会呈现三种字形
+     （用户反馈"这个字体也保持一致啊"）。行高也钉一下：button 默认 line-height: normal，
+     会把这一行撑得比旁边略高。 */
+  font-family: inherit;
   font-size: 12px;
+  line-height: 1.2;
   color: var(--dc-link);
   cursor: pointer;
   transition: opacity .15s;
@@ -1880,8 +1886,10 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
    选择器必须把 th 带上：`.form-table th { text-align: left }` 是"类+元素"，只写 .mx-grp
    优先级更低，会被它压掉（真机实测压成 left，居中不生效）。 */
 .form-table th.mx-grp { text-align: center; }
-.mx-grp .ft-group-name { color: var(--dc-text-strong); }
-.mx-grp .priv-group-count { font-size: 11.5px; }
+/* 分类行整体 12px：分组名、计数、全选/清空 三处同一字号（原来是 13 / 11.5 / 12 三种）。 */
+.mx-grp { font-size: 12px; }
+.mx-grp .ft-group-name { color: var(--dc-text-strong); font-size: 12px; }
+.mx-grp .priv-group-count { font-size: 12px; }
 .mx-grp .priv-group-actions { margin-left: 2px; }
 /* 分类表头分**两行**：第一行「分组名 + 已勾/共几项」，第二行「全选 / 清空」。
    动作条用**块级 flex**，效果是两件事一起成立：

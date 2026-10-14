@@ -289,8 +289,14 @@ onMounted(async () => {
 .um-table th:last-child,
 .um-table td:last-child { border-right: none; }
 .um-table tbody tr:hover td { background: var(--dc-bg-hover); }
+/* 该居中的列居中：超级用户（只有"标签或一个破折号"）与操作（两个按钮）。
+   操作列原来是右对齐 —— 单独贴右时比别的列"多出一截空白"，居中后与超级用户列同一条中线。 */
 .um-c { text-align: center; }
-.um-act { text-align: right; }
+.um-act { text-align: center; }
+/* 表头也要居中：`.um-table th { text-align: left }` 是"类 + 元素"，优先级比 .um-c/.um-act 高一档，
+   只写类名会被它压成左对齐 —— 于是"表头左、数据居中"看着就是错位的。 */
+.um-table th.um-c,
+.um-table th.um-act { text-align: center; }
 .um-empty-row {
   height: auto !important;
   padding: 18px 0 !important;
