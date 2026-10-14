@@ -4840,13 +4840,21 @@ const isNodeLoading = (node, data) => {
  */
 const isDbOpened = (data) => {
   if (!data || (data.kind !== 'db' && data.kind !== 'schema')) return false
-  if (inCurrentDb(data.db)) return true
-  // 开着同一个库的**页签**，同样算"已打开"。
+  const db = String(data.db || '')
+  if (!db) return false
+  // **模式**（Oracle / DM 这类没有库层的类型）必须**精确相等**才算打开：
+  // 不能走 inCurrentDb 的前缀规则 —— 当前库是连接级的 `FREE` 时，`FREE.ANONYMOUS`
+  // 会被 `startsWith('FREE.')` 判成"已打开"，于是下面**所有模式一齐变亮**
+  // （真机上就是这样：默认该全灰，结果全亮，颜色看着也不对）。
+  if (data.kind === 'schema') {
+    if (db === String(currentDb.value || '')) return true
+  } else if (inCurrentDb(db)) {
+    return true
+  }
+  // 开着同一个库（模式）的**页签**，同样算"已打开"。
   // 为什么需要：Redis 的库不进树（点它是开一个「该库全部键」页签，见 `openRedisDb`），
   // 它也不会被设成 currentDb —— 只认 currentDb 的话，点了库图标永远是暗的
   // （用户反馈："点击一会图标不亮"）。口径与上面的 `isConnOpen` 保持一致。
-  const db = String(data.db || '')
-  if (!db) return false
   const nodeConn = String(data.connId || '')
   return tabs.value.some((t) => {
     if (String(t.database || '') !== db) return false
