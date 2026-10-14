@@ -46,7 +46,11 @@
                   </tr>
                   <tr v-if="isMysql">
                     <td class="ft-label">{{ $t('upv.fieldHost') }}</td>
-                    <td><el-input v-model="form.host" size="small" clearable :placeholder="$t('upv.phHost')" /></td>
+                    <!-- ⚠️ 编辑态禁用：MySQL 的账号身份就是「用户名@主机」，而 ALTER USER **改不了 host**
+                         —— 允许改的话，SQL 会指向一个不存在的账号（报错 or 什么都不发生）。
+                         主机只影响"另一个账号"，要换主机是新建一个账号的事，不是改这一个。 -->
+                    <td><el-input v-model="form.host" size="small" clearable :disabled="editMode"
+                                  :placeholder="$t('upv.phHost')" /></td>
                   </tr>
                   <!-- 能改的项给控件（用户要求"能更改的都放开"）：改完点保存，
                        由后端按方言拼 ALTER 子句执行 -->
@@ -558,7 +562,12 @@ const mssqlServerRoles = [
 ]
 
 // 标题栏的路径：数据源名称在前 + `.` 连接（新建时还没有用户名，只显示数据源）
-const headPath = computed(() => [props.conn?.name, form.value.name].filter(Boolean).join('.'))
+const headPath = computed(() => {
+  // MySQL 系的账号是「用户名@主机」—— 同名不同主机是两个账号，头里带全才分得清
+  // （页签条上仍然只显示最后一层，全路径在悬浮提示里）
+  const who = isMysql.value && form.value.host ? `${form.value.name}@${form.value.host}` : form.value.name
+  return [props.conn?.name, who].filter(Boolean).join('.')
+})
 
 // ===== 基本信息里「能改的那些」=====
 // 各库能改的子集不同（执行那侧按方言拼 ALTER 子句，见后端 dialect.rs 的 user_action_sql）：
