@@ -469,7 +469,7 @@
             <UserDetailView v-else-if="tab.type === 'user'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                             :name="tab.userName" @edit="onUserDetailEdit" />
             <UserForm v-else-if="tab.type === 'user-form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
-                      :edit-mode="tab.mode === 'edit'" :edit-data="tab.editData"
+                      :edit-mode="tab.mode === 'edit'" :edit-data="tab.editData" :read-only="!!tab.readOnly"
                       @saved="onUserFormSaved" @close="closeTab(tab.id)" />
             <!-- 用户管理页：按连接管理用户（新增/编辑授权/删除），与树无关 -->
             <UserManageView v-else-if="tab.type === 'users'" :active-conn-id="String(currentConnId || '')"
@@ -1168,11 +1168,14 @@ import { buildCatChildren, buildObjectCategories, isFunctionRoutine, TREE_FIRST_
 import { t, tMsg } from '../../utils/i18n'
 import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
-import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor } from '@element-plus/icons-vue'
+import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor } from '@element-plus/icons-vue'
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { compareTaskStatus, compareCancel, syncCancel, getSettings } from '../../api'
 import { showSafetyNotice, setSafetyConnResolver } from '../../utils/safetyNotice'
+// 生产判定（角标 / 分组 / 旧分组键，与后端 is_prod_environment 同一口径）——
+// 与用户管理页 / 用户表单共用同一个判定，避免"这里认、那里不认"
+import { isProdConn } from '../../utils/connGuard'
 // 近 7 天趋势的按天聚合（后端从持久化的 query_history 直接聚合，不再由前端数最近 200 条）
 import { queryTrend } from '../../api'
 import { recordRecentConnection, rankRecentConnections } from '../../utils/recentConnections'
@@ -1693,7 +1696,10 @@ const guardWrite = (connId, act) => {
   // 一个连接可能既标了生产、又开了只读；只提示只读的话，用户照着通知去关掉「只读」，
   // 下一次还是被拦（因为生产保护还在），等于给了一条走不通的路。
   // 生产保护是全局那道更狠的闸（要动设置或改环境），先让它出场。
-  if (safetyProtectProd.value && String(c.env || '').toUpperCase() === 'PROD') {
+  // 生产判定用共用的 `isProdConn`（角标 env / 分组 group / 旧分组键 environment）——
+  // 从前这里只看角标，于是"分组标了生产、角标没标"的数据源在这儿毫无提示，
+  // 一路操作完才被后端拦下。
+  if (safetyProtectProd.value && isProdConn(c)) {
     showSafetyNotice(t('mv.blockProdDetail', { name, act }))
     return false
   }
@@ -6819,25 +6825,35 @@ const openUserEdit = async () => {
     name: d.name || (host ? String(fullName).split('@')[0] : fullName),
     host
   })
-  openTab({ id: tabKey('user-form:edit:' + fullName, cid), type: 'user-form', mode: 'edit', editData, connId: cid, database: db, label: t('mv.editUserLabel', { name: fullName }) })
+  openTab({
+    id: tabKey('user-form:edit:' + fullName, cid), type: 'user-form', mode: 'edit', editData,
+    // 该类型没有"改用户"的能力（如达梦只有清单与详情）⇒ 表单只给看
+    readOnly: !featureOf(cid, 'supportsUserManage'),
+    connId: cid, database: db, label: t('mv.editUserLabel', { name: fullName })
+  })
 }
 
 const userDrop = () => {
   const d = ctxMenu.value.data
   if (!d) return
   const db = d.db || currentDb.value
+  // 连接跟**这个节点自己**的走，不能拿全局 conn：右键菜单可以作用于非当前连接的对象，
+  // 用全局 conn 会去删**另一个服务器**上的同名账号（这是最不该猜错的一处）。
+  const cid = String(d.connId || currentConnId.value || '')
   closeCtxMenu()
   const name = d.objectName || d.label
   const parts = name.split('@')
   const userName = parts[0]
   const host = parts.length > 1 ? parts[1] : ''
+  // 只读 / 生产保护：删除用户是写操作，点击那一刻就拦下（与用户管理页同一个闸门）
+  if (!guardWrite(cid, t('common.delete'))) return
   ElMessageBox.confirm(
     t('mv.deleteUserBody', { name }),
           t('mv.deleteUserTitle'),
     { type: 'error', confirmButtonText: t('mv.dropConfirm'), cancelButtonText: t('common.cancel') }
   ).then(async () => {
     try {
-      const res = await userAction(conn.value.id, { action: 'drop', database: db, userName, host })
+      const res = await userAction(cid, { action: 'drop', database: db, userName, host })
       if (res.success) {
         ElMessage.success(t('mv.userDeleted', { name }))
         refreshCatNode(db, 'users')
@@ -6850,14 +6866,16 @@ const userDrop = () => {
 
 // 详情页的「编辑用户」：连接/库跟着**详情页自己**（用户可能早已切走当前连接）
 const onUserDetailEdit = ({ name, connId, database }) => {
-  openUserEditByName(name, connId, database)
+  const cid = String(connId || currentConnId.value || '')
+  // 与右键「编辑用户」同一口径：该类型不支持改用户时，表单只给看
+  openUserEditByName(name, cid, database, !featureOf(cid, 'supportsUserManage'))
 }
 
-const openUserEditByName = async (fullName, connId, db) => {
+const openUserEditByName = async (fullName, connId, db, readOnly = false) => {
   const cid = String(connId || currentConnId.value || '')
   const database = db || currentDb.value
   const editData = await buildUserEditData({ fullName, db: database, connId: cid })
-  openTab({ id: tabKey('user-form:edit:' + fullName, cid), type: 'user-form', mode: 'edit', editData, connId: cid, database, label: t('mv.editUserLabel', { name: fullName }) })
+  openTab({ id: tabKey('user-form:edit:' + fullName, cid), type: 'user-form', mode: 'edit', editData, readOnly, connId: cid, database, label: t('mv.editUserLabel', { name: fullName }) })
 }
 
 // ===== 用户管理页（顶栏第一个入口）=====
@@ -6874,7 +6892,9 @@ const openUserManage = () => {
 }
 
 // 页面里点「新增用户 / 编辑·授权」→ 打开既有 UserForm 页签
-const onUserManageForm = async ({ mode, connId, database, fullName }) => {
+// `readOnly` 由用户管理页按该类型的能力给出（如达梦只有清单与详情）：那时表单只给看，
+// 保存按钮置灰 —— 免得填完才被后端回一句"不支持这个操作"。
+const onUserManageForm = async ({ mode, connId, database, fullName, readOnly }) => {
   const cid = String(connId || currentConnId.value || '')
   if (mode === 'create') {
     openTab({
@@ -6883,7 +6903,7 @@ const onUserManageForm = async ({ mode, connId, database, fullName }) => {
     })
     return
   }
-  await openUserEditByName(fullName, cid, database)
+  await openUserEditByName(fullName, cid, database, readOnly)
 }
 
 const onUserFormSaved = () => {

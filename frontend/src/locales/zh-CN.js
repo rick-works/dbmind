@@ -48,6 +48,9 @@ export default {
   'um.unsupported': '{type} 没有「用户」这个概念，不需要在这里管理',
   'um.notImplemented': '{type} 的用户管理还没实现（它的用户清单与增删改都还没有）',
   'um.grantHint': '「编辑 / 授权」里改密码、主机与权限；权限按各数据库类型支持的范围显示',
+  // 只读 / 生产 的常驻提示（进页面就知道会被拦，而不是填完表单才被拒）
+  'um.guardTipProd': '该数据源标注为生产环境，且「生产库保护」已开启：新增、删除、保存都会被拦下（查看用户与权限不受影响）。',
+  'um.guardTipReadOnly': '该数据源是只读连接：新增、删除、保存都会被拦下（查看用户与权限不受影响）。',
   'um.loadFailed': '取用户清单失败：{detail}',
   'um.deleteTitle': '删除用户',
   'um.deleteBody': '确定删除用户 {name} 吗？它的权限会一并移除，且不可撤销。',
@@ -2886,6 +2889,8 @@ export default {
   'upv.noObjectPrivOracle': '还没有对象权限，点击右上角「添加对象权限」',
   'upv.addObjectPrivOracle': '添加对象权限',
   'upv.grantUnsupported': '{type} 的自动授权尚未实现：这里可以新建用户 / 改密，授权请到查询页用 GRANT',
+  // 该类型连"改用户"都没有（只有清单与详情，如达梦）：整张表单只给看
+  'upv.readOnlyType': '{type} 目前只支持查看用户：新建 / 修改 / 删除请在查询页直接执行 DDL',
   'upv.fieldUser': '用户名',
   'upv.fieldPassword': '密码',
   'upv.fieldHost': '主机',

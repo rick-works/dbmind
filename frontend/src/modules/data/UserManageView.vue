@@ -19,6 +19,13 @@
       </el-button>
     </div>
 
+    <!-- 只读 / 生产保护的常驻提示：**在填表单之前**就告诉用户"这次改动会被拦" ——
+         点击时的右上角通知是同一件事的第二处（拦截发生在点击那一刻，不是保存那一刻）。 -->
+    <div v-if="guardHint" class="um-guard">
+      <span class="um-guard-mark">!</span>
+      <span>{{ guardHint }}</span>
+    </div>
+
     <!-- 主体 -->
     <div class="um-body">
       <div v-if="noSelection" class="um-empty">{{ $t('um.pickConnHint') }}</div>
@@ -92,6 +99,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { User, Refresh, Plus } from '@element-plus/icons-vue'
 import { listConnections, listUsers, getFeatures, userAction } from '../../api'
 import { t } from '../../utils/i18n'
+// 只读 / 生产保护的前置闸门（与 MainView 的 guardWrite 同一口径，见 utils/connGuard.js）
+import { guardConnWrite, isProdConn, loadProtectProd } from '../../utils/connGuard'
 
 const props = defineProps({
   // 左侧当前选中的连接 / 库：**跟随它们**（用户在左边选了，这里自动带出来）
@@ -136,9 +145,25 @@ const notImplemented = computed(() => featLoaded.value && features.value.support
 const canManage = computed(() => !!selId.value && features.value.supportsUsers !== false
   && features.value.supportsUserManage !== false)
 
+// 生产保护开关（缺省为开，与后端 seed_settings 一致）。判定要在**点击那一刻**就有值，
+// 所以与清单一起刷新（接口本身有 30 秒缓存，不会因此多一次往返）。
+const prodProtect = ref(true)
+// 只读 / 生产的**常驻提示**：非空 = 这个数据源上的增删改都会被拦下（查看不受影响）。
+// 这是"填完表单才被拒"的正面解法：进页面就知道，而不是等提交。
+const guardHint = computed(() => {
+  const c = curConn.value
+  if (!c) return ''
+  if (prodProtect.value && isProdConn(c)) return t('um.guardTipProd')
+  if (c.readOnly) return t('um.guardTipReadOnly')
+  return ''
+})
+// 写操作前置闸门：true = 放行；false = 已拦下（右上角通知里带「去修改数据源」）
+const guard = (act) => guardConnWrite(curConn.value, act)
+
 const reload = async () => {
   // 没选连接就是空的 —— 不预选第一个（用户要求：没选就默认为空，
   // 而且第一个连接常常是连不上的，预选它只会先甩一条红色报错）
+  prodProtect.value = await loadProtectProd()
   if (!selId.value) { rows.value = []; features.value = {}; return }
   loading.value = true
   error.value = ''
@@ -176,16 +201,25 @@ watch(() => props.activeDb, () => { if (selId.value) reload() })
 
 const openCreate = () => {
   if (!canManage.value) return
+  // 只读 / 生产 在**点击那一刻**就拦下（与树上清空/删除表同一个顺序：不要填完再被拒）
+  if (!guard(t('um.newUser'))) return
   emit('open-form', { mode: 'create', connId: selId.value, database: props.database || '' })
 }
 const openEdit = (row) => {
   const host = row.host || ''
   const fullName = host ? row.name + '@' + host : row.name
-  emit('open-form', { mode: 'edit', connId: selId.value, database: props.database || '', name: row.name, host, fullName })
+  // 编辑本身只是读详情（不改库），所以**不在这里拦**；拦在表单的「保存」。
+  // `readOnly` = 该类型没有"改用户"的能力（如达梦只有清单与详情）—— 那时表单只给看，
+  // 保存按钮置灰，免得填完才被告知"不支持"。
+  emit('open-form', {
+    mode: 'edit', connId: selId.value, database: props.database || '',
+    name: row.name, host, fullName, readOnly: !canManage.value
+  })
 }
 const dropUser = (row) => {
   const host = row.host || ''
   const fullName = host ? row.name + '@' + host : row.name
+  if (!guard(t('um.deleteTitle'))) return
   ElMessageBox.confirm(
     t('um.deleteBody', { name: fullName }),
     t('um.deleteTitle'),
@@ -240,6 +274,26 @@ onMounted(async () => {
 .um-conn { width: 220px; }
 .um-opt-name { float: left; }
 .um-opt-type { float: right; color: var(--dc-text-dim); font-size: 12px; margin-left: 12px; }
+/* 只读 / 生产 的常驻提示条：与工具条同一圈缝、同一圆角，橙色描边 + 浅底
+   （不是红色：这不是"出错了"，是"这里的改动会被拦"）。 */
+.um-guard {
+  display: flex; align-items: center; gap: 7px;
+  margin: 5px 5px 0;
+  padding: 6px 11px;
+  border: 1px solid var(--el-color-warning-light-5, #f3d19e);
+  border-radius: 8px;
+  background: var(--el-color-warning-light-9, #fdf6ec);
+  color: var(--el-color-warning-dark-2, #b88230);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.um-guard-mark {
+  flex: none;
+  width: 15px; height: 15px; line-height: 15px; text-align: center;
+  border-radius: 50%;
+  background: var(--el-color-warning, #e6a23c);
+  color: #fff; font-size: 11px; font-weight: 700;
+}
 /* 主体留 5px：与上方工具条卡同一圈缝，圆角才不会被面板边线"压平" */
 .um-body { flex: 1; min-height: 0; padding: 5px; display: flex; flex-direction: column; }
 

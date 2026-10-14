@@ -19,8 +19,13 @@
           <!-- ===== 基本信息 ===== -->
           <el-tab-pane :label="$t('upv.tabBasic')" name="basic">
             <div class="tab-inner basic-tab">
+              <!-- 该类型没有"改用户"的能力（只有清单 / 详情）：整张表单只给看 ——
+                   输入项与保存按钮全置灰，而不是让人填完才被后端回一句"不支持这个操作" -->
+              <el-alert v-if="readOnly" type="warning" :closable="false" show-icon class="grant-alert">
+                <template #title>{{ $t('upv.readOnlyType', { type: connTypeLabel }) }}</template>
+              </el-alert>
               <!-- 该类型还没有自动授权：如实说明，别摆一堆点了会报错的控件 -->
-              <el-alert v-if="!hasAnyGrantTab" type="info" :closable="false" show-icon class="grant-alert">
+              <el-alert v-else-if="!hasAnyGrantTab" type="info" :closable="false" show-icon class="grant-alert">
                 <template #title>{{ $t('upv.grantUnsupported', { type: connTypeLabel }) }}</template>
               </el-alert>
               <!-- 基本信息：与「编辑表结构」同一张「标签 / 值」表（行高、对齐一致） -->
@@ -35,12 +40,13 @@
                 <tbody>
                   <tr>
                     <td class="ft-label">{{ $t('upv.fieldUser') }}</td>
-                    <td><el-input v-model="form.name" size="small" clearable :disabled="editMode" /></td>
+                    <td><el-input v-model="form.name" size="small" clearable :disabled="editMode || readOnly" /></td>
                   </tr>
                   <tr>
                     <td class="ft-label">{{ $t('upv.fieldPassword') }}</td>
                     <td>
                       <el-input v-model="form.password" size="small" type="password" show-password clearable
+                                :disabled="readOnly"
                                 :placeholder="editMode ? $t('upv.phPasswordKeep') : $t('upv.phPassword')" />
                     </td>
                   </tr>
@@ -49,29 +55,30 @@
                     <!-- ⚠️ 编辑态禁用：MySQL 的账号身份就是「用户名@主机」，而 ALTER USER **改不了 host**
                          —— 允许改的话，SQL 会指向一个不存在的账号（报错 or 什么都不发生）。
                          主机只影响"另一个账号"，要换主机是新建一个账号的事，不是改这一个。 -->
-                    <td><el-input v-model="form.host" size="small" clearable :disabled="editMode"
+                    <td><el-input v-model="form.host" size="small" clearable :disabled="editMode || readOnly"
                                   :placeholder="$t('upv.phHost')" /></td>
                   </tr>
                   <!-- 能改的项给控件（用户要求"能更改的都放开"）：改完点保存，
-                       由后端按方言拼 ALTER 子句执行 -->
+                       由后端按方言拼 ALTER 子句执行。readOnly（该类型不支持改）时一律置灰。 -->
                   <tr v-for="d in editableAttrs" :key="d.key">
                     <td class="ft-label">{{ d.label }}</td>
                     <td class="ft-value">
-                      <el-switch v-if="d.kind === 'bool'" v-model="form.attrs[d.key]"
+                      <el-switch v-if="d.kind === 'bool'" v-model="form.attrs[d.key]" :disabled="readOnly"
                                  :active-text="$t('udv.yes')" :inactive-text="$t('udv.no')" />
                       <span v-else-if="d.kind === 'num'" class="attr-num">
-                        <el-input-number v-model="form.attrs[d.key]" size="small" :min="0" :step="1" controls-position="right" />
+                        <el-input-number v-model="form.attrs[d.key]" size="small" :min="0" :step="1" :disabled="readOnly" controls-position="right" />
                         <span v-if="!form.attrs[d.key]" class="attr-hint">{{ $t('udv.unlimited') }}</span>
                       </span>
                       <span v-else-if="d.kind === 'plugin'" class="attr-num">
                         <el-select class="attr-select" :model-value="authPluginModel" size="small"
+                                   :disabled="readOnly"
                                    :placeholder="$t('upv.attrDefault')"
                                    @update:model-value="(v) => { form.attrs.authPlugin = v }">
                           <el-option v-for="p in pluginOptions" :key="p" :label="p" :value="p" />
                         </el-select>
                         <span v-if="form.attrs.authPlugin !== attrsBase.authPlugin" class="attr-hint">{{ $t('upv.pluginNeedsPassword') }}</span>
                       </span>
-                      <el-input v-else v-model="form.attrs[d.key]" size="small" />
+                      <el-input v-else v-model="form.attrs[d.key]" size="small" :disabled="readOnly" />
                     </td>
                   </tr>
                   <!-- 跟着数据源类型来的只读明细（Oracle 的表空间/状态、SQL Server 的登录名/默认架构、
@@ -507,7 +514,7 @@
           <span class="sql-tip">{{ $t('upv.previewTip') }}</span>
           <div class="sql-foot-actions">
             <el-button size="small" text :icon="CopyDocument" :disabled="!previewSql" @click="copySql">{{ $t('upv.copySql') }}</el-button>
-            <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk" @click="submit">
+            <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk || readOnly" @click="submit">
               {{ editMode ? $t('upv.saveChanges') : $t('upv.execCreate') }}
             </el-button>
           </div>
@@ -525,12 +532,17 @@ import { User, CaretRight, CopyDocument, DocumentCopy, Plus, Delete } from '@ele
 import { userAction, listDatabases, listTables, listSchemas } from '../../api'
 import { rowKey } from '../../utils/rowKey'
 import { userDetailItems } from '../../utils/userFields'
+// 只读 / 生产保护的前置闸门（与用户管理页、MainView 同一口径）
+import { guardConnWrite } from '../../utils/connGuard'
 
 const props = defineProps({
   conn: { type: Object, required: true },
   database: { type: String, default: '' },
   editMode: { type: Boolean, default: false },
-  editData: { type: Object, default: () => ({}) }
+  editData: { type: Object, default: () => ({}) },
+  // 该类型没有"改用户"的能力（如达梦：只有清单与详情）时置 true ——
+  // 表单只给看：输入项与保存按钮全部置灰，免得填完才被后端告知"不支持这个操作"。
+  readOnly: { type: Boolean, default: false }
 })
 
 const emit = defineEmits(['saved', 'close'])
@@ -749,7 +761,10 @@ const isDbMissing = (db) => {
 }
 
 const isMssql = computed(() => props.conn?.type === 'SQLSERVER')
-const isPgsql = computed(() => props.conn?.type === 'POSTGRESQL')
+// KingbaseES 与 PostgreSQL **共用同一套分支**：后端 `user_action_sql` / `users` / `user_info`
+// 的分支都是 `postgresql | kingbase`，这里只认 POSTGRESQL 的话，KingbaseES 连"角色"这一页
+// 都出不来（界面上还写着"该类型还没实现自动授权"）—— 前后端对同一个类型给出两套结论。
+const isPgsql = computed(() => props.conn?.type === 'POSTGRESQL' || props.conn?.type === 'KINGBASE')
 // Oracle：系统权限 / 角色 / 对象权限三层。
 // ⚠️ 下面三张清单与后端 `dialect.rs` 的 ORACLE_SYSTEM_PRIVS / ORACLE_ROLES /
 // ORACLE_OBJECT_PRIVS **必须一致**：后端会再校验一遍并拒绝清单外的名字，
@@ -1366,17 +1381,15 @@ const previewSql = computed(() => {
     for (const r of c.roles.removed) sql += `\nREVOKE "${r}" FROM ${who};`
     for (const r of c.roles.added) sql += `\nGRANT "${r}" TO ${who};`
   } else if (isClickhouse.value) {
+    // 与 submit 同一口径：只出「建号 / 改密」，**不拼 GRANT**。
+    // 原来把 `show grants for` 原样带回的整句（`GRANT SELECT ON db.* TO u`）
+    // 前面再套一层 `GRANT … TO u` —— 拼出来的语句是错的，而真执行时后端又会整次拒绝。
     if (!props.editMode) {
       sql = `CREATE USER \`${form.value.name}\``
       if (form.value.password) sql += ` IDENTIFIED BY '***'`
       sql += ';'
     } else if (form.value.password) {
       sql = `ALTER USER \`${form.value.name}\` IDENTIFIED BY '***';`
-    }
-    if (form.value.grants?.length) {
-      for (const g of form.value.grants) {
-        if (g && !g.startsWith('--')) sql += `\nGRANT ${g} TO \`${form.value.name}\`;`
-      }
     }
   } else if (isOracle.value) {
     // Oracle：建号 / 改密 + 三层（系统权限 / 角色 / 对象权限）+ 撤销差异。
@@ -1534,7 +1547,10 @@ const oracleRevokes = () => {
 }
 
 const submit = async () => {
-  if (!previewOk.value) return
+  if (!previewOk.value || props.readOnly) return
+  // 只读 / 生产保护：在**点击那一刻**拦下（与用户管理页、MainView 同一个闸门、同一句提示）。
+  // 后端那道闸照旧保留（设置可能刚被改过），这里只是不让用户白填一遍表单。
+  if (!guardConnWrite(props.conn || {}, t(props.editMode ? 'upv.saveChanges' : 'upv.execCreate'))) return
   saving.value = true
   try {
     const opts = {}
@@ -1563,9 +1579,11 @@ const submit = async () => {
     if (isPgsql.value) {
       opts.roles = form.value.roles
     }
-    if (isClickhouse.value) {
-      opts.grants = form.value.grants || []
-    }
+    // ClickHouse：**不交 `grants`**。界面上没有编辑它的入口（它只有基本属性页），
+    // 而 `grants` 里装的是 `show grants for` 原样带回的整句 GRANT，属于"没有对照基准"的文本 ——
+    // 从前把它原样发回后端，后端按「未实现的授权项」**直接拒绝整次保存**（真机复现：
+    // `editData.grants` 非空 ⇒ 改个密码都报"「授权项」的自动分配尚未实现"）。
+    // 授权要改就按后端提示去查询页执行 GRANT；这里只管新建 / 改密 / 删除。
     if (isOracle.value) {
       // 三层一起交：系统权限（privileges）/ 角色（roles）/ 对象权限（tablePrivileges，
       // 这里的 database 字段对 Oracle 就是**模式名**）。
