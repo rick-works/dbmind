@@ -1561,7 +1561,10 @@ const sqlCollapsed = ref(false)
    与 SQL 查询界面的结果区分隔条同一套手感：往上拖变高、双击在最大/最小之间切换。
    默认给 260px —— 预览本身是要读的，贴着内容高度只能看到两行。 */
 const SQL_H_DEFAULT = 260
-const SQL_H_MIN = 96   // 标题行 + 底部按钮行，再低就只剩两条杠
+// 最低 = **0**：与用户表单/用户详情一样，允许把预览整个拖走（只留上面那条 6px 分隔条）。
+// 原来写 96（标题行 + 底栏）是怕"按钮被切掉"，但用户明确要"最低能到最低"：
+// 拖到最低时底栏确实看不到了，往上拖一下就回来（分隔条一直在，tooltip 也写着双击最大/最小）。
+const SQL_H_MIN = 0
 /** 预览区的 DOM 引用：算高度上限时要拿它所在容器的**实际**可用高度 */
 const sqlAreaRef = ref(null)
 /**
@@ -1569,7 +1572,7 @@ const sqlAreaRef = ref(null)
  *
  * 原来写死视口 70%，于是往上拖到一定程度就顶住不动了（"到不了最上"）。
  * 改成量容器（.form-tab-body）：编辑区能收成 0，所以拖到最上时预览可以占满整块主体。
- * 下限仍是标题行 + 底栏 —— 再低按钮会被切掉；要"只剩标题行"请点标题行收起。
+ * 下限是 0（可压到没有，只留分隔条）；往上拖即可还原，双击分隔条还能一键最大化。
  */
 const sqlMaxH = () => {
   const parent = sqlAreaRef.value?.parentElement
@@ -2183,8 +2186,14 @@ watch(pendingCount, (n) => { if (n > 0 && ddlMode.value) ddlMode.value = false }
 
 onMounted(async () => {
   await load()
-  // 首屏就把预览高度收敛到容器可用高度内：窗口不高时默认 260px 会顶出去
-  sqlHeight.value = Math.min(sqlHeight.value, sqlMaxH())
+  // 首屏就把预览高度收敛到容器可用高度内：窗口不高时默认 260px 会顶出去。
+  //
+  // ⚠️ 但**布局还没量到时不能收敛**：这一刻 clientHeight 可能只有几像素（还没排版），
+  // 收敛的结果是把预览压成一条线。以前 `SQL_H_MIN = 96` 兜住了它，把最小放开到 0 之后
+  // 这个洞就露出来了（真机实测：打开「编辑表结构」预览初始高度 = 1px）。
+  // 量到的可用高度太小就认定"还没排版"，保持默认值。
+  const available = sqlMaxH()
+  if (available > SQL_H_MIN + 40) sqlHeight.value = Math.min(sqlHeight.value, available)
 })
 watch(() => [props.conn?.id, props.database, props.table], () => {
   tab.value = 'basic'
