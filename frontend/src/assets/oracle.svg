@@ -1,1 +1,10 @@
-<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg t="1788276729552" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="7651" xmlns:xlink="http://www.w3.org/1999/xlink" width="16" height="16"><path d="M700.256 188.256H323.776C144.96 188.256 0.032 333.216 0.032 512c0 178.752 144.864 323.648 323.584 323.744h376.672c178.816 0 323.744-144.96 323.744-323.744S879.072 188.256 700.288 188.256z m-8.256 533.408H332.192a209.76 209.76 0 0 1-0.224-419.328h360.032c115.808 0 209.664 93.856 209.664 209.664s-93.856 209.664-209.664 209.664z" fill="#F80000" p-id="7652"></path></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="Oracle">
+  <!-- Oracle：数据库（圆柱）形状 —— 与其它类型在树上"长得就是一台数据库"的口径一致。
+       以前这里是 Oracle 那个红色圆环 O：在 14px 的树里是一个色块，和旁边 MySQL 的
+       数据库图标不是一路的视觉语言（用户点名要改成数据库形状）。
+       颜色仍用 Oracle 官方红（#F80000），靠顶面高亮 + 两道盘线做出圆柱的立体感。 -->
+  <path d="M16 3C9.94 3 5 5.01 5 7.5v17C5 27 9.94 29 16 29s11-1.99 11-4.5v-17C27 5.01 22.06 3 16 3z" fill="#F80000"/>
+  <ellipse cx="16" cy="7.5" rx="11" ry="4.5" fill="#FF6B6B"/>
+  <path d="M5 14.3c0 2.49 4.94 4.5 11 4.5s11-2.01 11-4.5" fill="none" stroke="#B30000" stroke-width="1.7" stroke-linecap="round"/>
+  <path d="M5 20.7c0 2.49 4.94 4.5 11 4.5s11-2.01 11-4.5" fill="none" stroke="#B30000" stroke-width="1.7" stroke-linecap="round"/>
+</svg>
