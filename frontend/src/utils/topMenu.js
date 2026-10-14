@@ -3,11 +3,15 @@
 // 启动水合完成后 settings 会广播 dbmind-ui-hydrated，这里重读一次。
 // 消费方：MainView（渲染顶栏）、SettingsView 通用页签（配置界面）。
 import { ref, computed } from 'vue'
-import { Switch, Promotion, DataAnalysis, Box, Monitor, Clock, Plus } from '@element-plus/icons-vue'
+import { Switch, Promotion, DataAnalysis, Box, Monitor, Clock, Plus, User } from '@element-plus/icons-vue'
 import { persistUI } from './settings'
 import { t } from './i18n'
 
 export const TOP_MENU_ITEMS = [
+  // 用户管理放**第一个**：新增用户 / 编辑授权 / 删用户日常都在这页，放最前面最顺手。
+  // （新增项会被插到"默认顺序里排在它前面且用户配置里存在"的那一项之后 —— 排在第一位
+  //   就意味着老用户的配置里它也会落到最前，见 readTopMenuCfg。）
+  { id: 'users', icon: User, label: () => t('nav.userManage') },
   { id: 'compare', icon: Switch, label: () => t('nav.compare') },
   { id: 'sync', icon: Promotion, label: () => t('nav.sync') },
   { id: 'governance', icon: DataAnalysis, label: () => t('nav.governance') },

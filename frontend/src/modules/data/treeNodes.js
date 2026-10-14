@@ -103,7 +103,7 @@ export const buildCatChildren = ({ cat, connId, db, items = [] }) =>
   catItemNodes({ cat, connId, db, items })
 
 export const buildObjectCategories = ({
-  connId, db, tables = [], procs = [], triggers = [], events = [], users = [], scripts = []
+  connId, db, tables = [], procs = [], triggers = [], events = [], scripts = []
 }) => {
   // 表与视图来自同一个 listTables 结果（后端 /tables 会同时返回 TABLE 与 VIEW），
   // 因此 views 分类复用 tables 数组，再由 buildCatChildren 按 type === 'VIEW' 过滤；
@@ -112,7 +112,9 @@ export const buildObjectCategories = ({
   // 存储过程与函数同理：同一个 listProcedures 结果，由 buildCatChildren 按 routineType
   // 拆成 procs / functions 两个分类。所以下面**两个键必须都指向 procs 数组** ——
   // 少写一个的后果与当初漏掉 views 一模一样：那一类恒为 0、节点在树里根本不出现。
-  const rawByCat = { tables, views: tables, procs, functions: procs, triggers, events, users, scripts }
+  // 注意：**没有 users** —— 用户管理已搬到顶栏那一页（UserManageView），
+  // 树里不再摆这个分类。
+  const rawByCat = { tables, views: tables, procs, functions: procs, triggers, events, scripts }
   // `label` 保留英文原文：一是作兜底，二是供树内搜索匹配（见 MainView 的 filterNode）。
   // 界面上显示的其实是 `i18nKey` 对应的译文 —— 分类名原来写死英文，
   // 中文界面下也一直显示 Tables/Views，就是因为这里没有可翻译的键。
@@ -137,7 +139,6 @@ export const buildObjectCategories = ({
       mkCat('functions', 'Functions'),
       mkCat('triggers', 'Triggers'),
       mkCat('events', 'Events'),
-      mkCat('users', 'Users'),
       mkCat('scripts', 'Scripts')
     ]
   }

@@ -469,6 +469,10 @@
             <UserForm v-else-if="tab.type === 'user-form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                       :edit-mode="tab.mode === 'edit'" :edit-data="tab.editData"
                       @saved="onUserFormSaved" @close="closeTab(tab.id)" />
+            <!-- 用户管理页：按连接管理用户（新增/编辑授权/删除），与树无关 -->
+            <UserManageView v-else-if="tab.type === 'users'" :conn-id="tab.connId || currentConnId"
+                            :database="tab.database || ''" :reload-tick="userListTick"
+                            @open-form="onUserManageForm" />
             <ObjectFormTab v-else-if="tab.type === 'form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                            :cat="tab.cat" :mode="tab.mode" :object="tab.object" @saved="onObjFormSaved"
                            @kind="tab.formKind = $event" @close="closeTab(tab.id)" />
@@ -1196,6 +1200,8 @@ const NoSqlDataView = defineAsyncComponent(() => import('./NoSqlDataView.vue'))
 const ObjectDetailView = defineAsyncComponent(() => import('./ObjectDetailView.vue'))
 const UserDetailView = defineAsyncComponent(() => import('./UserDetailView.vue'))
 const UserForm = defineAsyncComponent(() => import('./UserForm.vue'))
+// 用户管理：顶栏第一个入口打开的独立页面（连接级，不跟着当前库走）
+const UserManageView = defineAsyncComponent(() => import('./UserManageView.vue'))
 const ObjectFormTab = defineAsyncComponent(() => import('./ObjectFormTab.vue'))
 const DbDumpDialog = defineAsyncComponent(() => import('./DbDumpDialog.vue'))
 const DbSearchDialog = defineAsyncComponent(() => import('./DbSearchDialog.vue'))
@@ -1995,6 +2001,7 @@ const topMenuRun = (id) => {
   else if (id === 'drivers') openSettings('driver')
   else if (id === 'monitor') openMonitor()
   else if (id === 'bgCenter') { bgCenterMode.value = 'history'; bgCenterOpen.value = true; refreshBgStatus() }
+  else if (id === 'users') openUserManage()
   else if (id === 'newScript') newQueryTab()
 }
 const compareDialogOpen = ref(false)
@@ -6791,8 +6798,35 @@ const openUserEditByName = async (fullName, connId, db) => {
   openTab({ id: tabKey('user-form:edit:' + fullName, cid), type: 'user-form', mode: 'edit', editData, connId: cid, database, label: t('mv.editUserLabel', { name: fullName }) })
 }
 
-const onUserFormSaved = (db) => {
-  if (db) refreshCatNode(db, 'users')
+// ===== 用户管理页（顶栏第一个入口）=====
+// 为什么从树上搬到顶栏：用户是**连接级**对象，散在每棵库树里既不好找，也没法在
+// 一个地方对照着管。清单、能力判定、表单全部复用既有链路（/users、/features、UserForm），
+// 这里只负责"开页签"与"保存后让列表刷新"。
+const userListTick = ref(0)
+
+const openUserManage = () => {
+  openTab({
+    id: 'users', type: 'users', connId: String(currentConnId.value || ''),
+    database: '', label: t('nav.userManage')
+  })
+}
+
+// 页面里点「新增用户 / 编辑·授权」→ 打开既有 UserForm 页签
+const onUserManageForm = async ({ mode, connId, database, fullName }) => {
+  const cid = String(connId || currentConnId.value || '')
+  if (mode === 'create') {
+    openTab({
+      id: tabKey('user-form:create:' + (++tabSeq), cid), type: 'user-form', mode: 'create',
+      editData: {}, connId: cid, database: database || '', label: t('mv.newUserTitle')
+    })
+    return
+  }
+  await openUserEditByName(fullName, cid, database)
+}
+
+const onUserFormSaved = () => {
+  // 保存完让「用户管理」列表刷新（树上的用户分类已下掉，不再需要刷它）
+  userListTick.value += 1
 }
 
 const objDrop = () => {
