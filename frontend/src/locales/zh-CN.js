@@ -2870,6 +2870,11 @@ export default {
   'upv.tabObjects': '对象权限',
   'upv.colSchema': '模式',
   'upv.colObject': '名称',
+  'upv.colDb': '数据库',
+  'upv.colTableName': '表',
+  'upv.colPriv': '权限',
+  'upv.colAction': '操作',
+
   'upv.tabTables': '表权限',
   'upv.tabSchemaObject': '架构与对象权限',
   'upv.phPickObject': '对象名',

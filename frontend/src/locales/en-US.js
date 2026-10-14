@@ -2858,6 +2858,11 @@ export default {
   'upv.tabObjects': 'Object privileges',
   'upv.colSchema': 'Schema',
   'upv.colObject': 'Object',
+  'upv.colDb': 'Database',
+  'upv.colTableName': 'Table',
+  'upv.colPriv': 'Privilege',
+  'upv.colAction': 'Action',
+
   'upv.tabTables': 'Table privileges',
   'upv.tabSchemaObject': 'Schema & object privileges',
   'upv.phPickObject': 'Object name',
