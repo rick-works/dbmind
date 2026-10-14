@@ -2880,6 +2880,7 @@ export default {
   'upv.tabTables': '表权限',
   'upv.tabSchemaObject': 'Schema 与对象权限',
   'upv.tabSchema': 'Schema 权限',
+  'upv.attrDefault': '默认（跟随服务器）',
   'upv.pluginNeedsPassword': '改认证插件要同时填口令（不带口令改插件会被置空，就登不进去了）',
   'upv.phPickObject': '对象名',
   'upv.noObjectPrivOracle': '还没有对象权限，点击右上角「添加对象权限」',

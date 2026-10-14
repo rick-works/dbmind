@@ -807,6 +807,56 @@ _ => Meta::Unwritten,
     /// 只生成有把握的那几件事。**细粒度权限（库/表/模式/对象级 GRANT）不在这里做**：
     /// 那是一片权限矩阵，拼错就是「授多了」或「授错了」——调用方会在收到这类入参时明确拒绝，
     /// 而不是默默建好用户却什么都没授（界面成功提示会把"什么都没做"说成成功）。
+    /// MySQL 的属性子句串：认证（identified …）/ 配额（with max_*）/ 密码过期 / 账户锁定。
+    ///
+    /// `CREATE USER` 与 `ALTER USER` **共用这一份** —— 两处的子句顺序完全一样
+    /// （auth_option → WITH 资源项 → PASSWORD EXPIRE → ACCOUNT LOCK），顺序错了直接报语法错；
+    /// 分开写迟早会漂成"新建能带上、改的时候带不上"。
+    ///
+    /// 返回 `None` = 这个组合不能用：插件不在白名单，或**改**插件却没给口令
+    /// （`identified with x` 不带 BY 会把口令置空，用户当场登不进去）。
+    fn mysql_attr_clause(&self, password: &str, attrs: &UserAttrs, pwd: &str, is_create: bool) -> Option<String> {
+        let mut clause = String::new();
+        if let Some(plugin) = attrs.auth_plugin.as_deref() {
+            if !is_mysql_auth_plugin(plugin) {
+                return None;
+            }
+            if !is_create && password.is_empty() {
+                return None;
+            }
+            clause.push_str(&format!(" identified with {plugin}"));
+            if !password.is_empty() {
+                clause.push_str(&format!(" by {pwd}"));
+            }
+        } else if !password.is_empty() {
+            clause.push_str(&format!(" identified by {pwd}"));
+        }
+        // 配额（0 = 不限制）
+        let mut quota: Vec<String> = Vec::new();
+        if let Some(v) = attrs.max_queries_per_hour {
+            quota.push(format!("max_queries_per_hour {v}"));
+        }
+        if let Some(v) = attrs.max_updates_per_hour {
+            quota.push(format!("max_updates_per_hour {v}"));
+        }
+        if let Some(v) = attrs.max_connections_per_hour {
+            quota.push(format!("max_connections_per_hour {v}"));
+        }
+        if let Some(v) = attrs.max_user_connections {
+            quota.push(format!("max_user_connections {v}"));
+        }
+        if !quota.is_empty() {
+            clause.push_str(&format!(" with {}", quota.join(" ")));
+        }
+        if let Some(v) = attrs.password_expired {
+            clause.push_str(if v { " password expire" } else { " password expire never" });
+        }
+        if let Some(v) = attrs.account_locked {
+            clause.push_str(if v { " account lock" } else { " account unlock" });
+        }
+        Some(clause)
+    }
+
     pub fn user_action_sql(
         &self,
         action: &str,
@@ -828,10 +878,18 @@ _ => Meta::Unwritten,
             "sqlserver" => Meta::Sql(match action {
                 // 不带口令 = 建「映射到登录名」的库用户；带口令 = 建包含数据库用户（contained）
                 "create" => {
-                    let mut sql = if password.is_empty() {
+                    // 属性：默认架构（`create user x with password = p, default_schema = s`）
+                    let mut opts: Vec<String> = Vec::new();
+                    if !password.is_empty() {
+                        opts.push(format!("password = {pwd}"));
+                    }
+                    if let Some(v) = attrs.default_schema.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        opts.push(format!("default_schema = {}", self.quote(v)));
+                    }
+                    let mut sql = if opts.is_empty() {
                         format!("create user {u}")
                     } else {
-                        format!("create user {u} with password = {pwd}")
+                        format!("create user {u} with {}", opts.join(", "))
                     };
                     for role in &role_parts {
                         sql.push_str(&format!(";\nalter role {role} add member {u}"));
@@ -884,53 +942,21 @@ _ => Meta::Unwritten,
                 let mut parts: Vec<String> = Vec::new();
                 match action {
                     "create" => {
-                        let mut create = format!("create user {full}");
-                        if !password.is_empty() {
-                            create.push_str(&format!(" identified by {pwd}"));
+                        match self.mysql_attr_clause(password, attrs, &pwd, true) {
+                            Some(clause) => parts.push(format!("create user {full}{clause}")),
+                            None => return Meta::Unwritten,
                         }
-                        parts.push(create);
                     }
                     "alter" => {
-                        // 密码 / 认证插件 / 配额 / 密码过期 / 账户锁定**合成一条** `alter user`。
-                        // ⚠️ 子句顺序必须按 MySQL 的语法来：auth_option（IDENTIFIED …）→
-                        // resource_option（WITH MAX_*）→ password_option（PASSWORD EXPIRE）→
-                        // account_option（ACCOUNT LOCK）。顺序错了直接报语法错。
-                        let mut clause = String::new();
-                        if let Some(plugin) = attrs.auth_plugin.as_deref() {
-                            // 改插件**必须连口令一起给**：`identified with x`（不带 BY）会把口令置空，
-                            // 用户当场就登不进去了。
-                            if !is_mysql_auth_plugin(plugin) || password.is_empty() {
-                                return Meta::Unwritten;
+                        // 与 create 同一份子句（见 mysql_attr_clause），只是多一条：
+                        // 「改插件必须连口令一起给」在那里判掉了。
+                        match self.mysql_attr_clause(password, attrs, &pwd, false) {
+                            Some(clause) => {
+                                if !clause.is_empty() {
+                                    parts.push(format!("alter user {full}{clause}"));
+                                }
                             }
-                            clause.push_str(&format!(" identified with {plugin} by {pwd}"));
-                        } else if !password.is_empty() {
-                            clause.push_str(&format!(" identified by {pwd}"));
-                        }
-                        // 配额（0 = 不限制）。四个是一组，给哪个写哪个。
-                        let mut quota: Vec<String> = Vec::new();
-                        if let Some(v) = attrs.max_queries_per_hour {
-                            quota.push(format!("max_queries_per_hour {v}"));
-                        }
-                        if let Some(v) = attrs.max_updates_per_hour {
-                            quota.push(format!("max_updates_per_hour {v}"));
-                        }
-                        if let Some(v) = attrs.max_connections_per_hour {
-                            quota.push(format!("max_connections_per_hour {v}"));
-                        }
-                        if let Some(v) = attrs.max_user_connections {
-                            quota.push(format!("max_user_connections {v}"));
-                        }
-                        if !quota.is_empty() {
-                            clause.push_str(&format!(" with {}", quota.join(" ")));
-                        }
-                        if let Some(v) = attrs.password_expired {
-                            clause.push_str(if v { " password expire" } else { " password expire never" });
-                        }
-                        if let Some(v) = attrs.account_locked {
-                            clause.push_str(if v { " account lock" } else { " account unlock" });
-                        }
-                        if !clause.is_empty() {
-                            parts.push(format!("alter user {full}{clause}"));
+                            None => return Meta::Unwritten,
                         }
                     }
                     "drop" => return Meta::Sql(format!("drop user {full}")),
@@ -1002,7 +1028,16 @@ _ => Meta::Unwritten,
             // PG 的「用户」就是带 login 的角色（MySQL 语境的 host 在这里没有意义，忽略）
             "postgresql" | "kingbase" => Meta::Sql(match action {
                 "create" => {
-                    let mut sql = format!("create role {u} login");
+                    // 属性：三个开关（与 alter 同一套字面量）；没给就沿用"可登录"
+                    let mut flags: Vec<&str> = Vec::new();
+                    flags.push(if attrs.can_login.unwrap_or(true) { "login" } else { "nologin" });
+                    if let Some(v) = attrs.is_superuser {
+                        flags.push(if v { "superuser" } else { "nosuperuser" });
+                    }
+                    if let Some(v) = attrs.can_create_db {
+                        flags.push(if v { "createdb" } else { "nocreatedb" });
+                    }
+                    let mut sql = format!("create role {u} {}", flags.join(" "));
                     if !password.is_empty() {
                         sql.push_str(&format!(" password {pwd}"));
                     }
@@ -1091,7 +1126,21 @@ _ => Meta::Unwritten,
                     // `ORA-00988: 密码缺失或无效`（真机上就是这么报的）。
                     // 引号里的内容原样保留 —— 大小写与 @ 这类特殊字符都不会被改写。
                     let pwd_id = self.quote(password);
-                    parts.push(format!("create user {u} identified by {pwd_id}"));
+                    // 属性：表空间 / 概要文件 / 账户锁定（与 alter 同一套写法）
+                    let mut create = format!("create user {u} identified by {pwd_id}");
+                    if let Some(v) = attrs.default_tablespace.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        create.push_str(&format!(" default tablespace {}", self.quote(v)));
+                    }
+                    if let Some(v) = attrs.temporary_tablespace.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        create.push_str(&format!(" temporary tablespace {}", self.quote(v)));
+                    }
+                    if let Some(v) = attrs.profile.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        create.push_str(&format!(" profile {}", self.quote(v)));
+                    }
+                    if let Some(v) = attrs.account_locked {
+                        create.push_str(if v { " account lock" } else { " account unlock" });
+                    }
+                    parts.push(create);
                     // 建号时就把"能登录 + 界面勾的角色/系统权限/对象权限"一起授了 ——
                     // 建完还得再点一次保存才生效，是让人白跑一趟（用户反馈过）。
                     parts.push(format!("grant create session to {u}"));

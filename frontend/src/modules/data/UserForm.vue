@@ -61,6 +61,7 @@
                       </span>
                       <span v-else-if="d.kind === 'plugin'" class="attr-num">
                         <el-select class="attr-select" :model-value="authPluginModel" size="small"
+                                   :placeholder="$t('upv.attrDefault')"
                                    @update:model-value="(v) => { form.attrs.authPlugin = v }">
                           <el-option v-for="p in pluginOptions" :key="p" :label="p" :value="p" />
                         </el-select>
@@ -621,7 +622,8 @@ const seedAttrs = () => {
     o.disabled = attrYes(attrRaw('disabled'))
     o.defaultSchema = attrText(attrRaw('default_schema'))
   } else if (isPgsql.value) {
-    o.canLogin = attrYes(attrRaw('can_login'))
+    // 新建时默认"可登录" —— 后端 CREATE ROLE 拼的就是 login，界面别显示成"否"让人误会
+    o.canLogin = props.editMode ? attrYes(attrRaw('can_login')) : true
     o.isSuperuser = attrYes(attrRaw('is_superuser'))
     o.canCreateDb = attrYes(attrRaw('can_create_db'))
   }
@@ -629,9 +631,10 @@ const seedAttrs = () => {
   attrsBase.value = { ...o }
 }
 
-// 可改项清单。新建用户时不给：还没有"原值"可改（属性是建完之后调的 ALTER）
+// 可改项清单。**新建时同样摆出来** —— 用户口径"新建用户的信息也加全"：
+// 建号时就该能直接指定账户锁定 / 配额 / 认证插件 / 表空间，而不是建完再进编辑页改一遍。
+// 新建时没有"原值"，基准就是各家的默认值（见 seedAttrs），提交时只带改过的那些。
 const editableAttrs = computed(() => {
-  if (!props.editMode) return []
   const defs = []
   if (isMysql.value) {
     defs.push(
@@ -1558,7 +1561,7 @@ const submit = async () => {
     // 属性（配额 / 锁定 / 表空间 / 默认架构 / rol* 开关）：只交改动过的项
     const attrs = { ...attrDelta.value }
     if (Object.keys(attrs).length) {
-      if (attrs.authPlugin && !form.value.password) {
+      if (attrs.authPlugin && !form.value.password && props.editMode) {
         // 改插件却不给口令：MySQL 的 `IDENTIFIED WITH x`（不带 BY）会把口令置空 —— 那是把人锁在门外
         ElMessage.warning(t('upv.pluginNeedsPassword'))
         return

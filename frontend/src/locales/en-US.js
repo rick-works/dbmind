@@ -2868,6 +2868,7 @@ export default {
   'upv.tabTables': 'Table privileges',
   'upv.tabSchemaObject': 'Schema & object privileges',
   'upv.tabSchema': 'Schema privileges',
+  'upv.attrDefault': 'Default (follow the server)',
   'upv.pluginNeedsPassword': 'Changing the auth plugin needs a password as well (without it the password is cleared and you cannot log in)',
   'upv.phPickObject': 'Object name',
   'upv.noObjectPrivOracle': 'No object privileges yet - use \"Add object privilege\" at the top right',
