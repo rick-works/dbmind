@@ -1689,6 +1689,12 @@ _ => Meta::Unwritten,
                     match self.key() {
                         // MySQL 系与 DB2 有各自的 RENAME TABLE
                         "mysql" | "mariadb" | "db2" => Meta::Sql(format!("rename table {t} to {n}")),
+                        // ClickHouse **没有** `ALTER TABLE … RENAME TO`：它会报
+                        // `Code: 62 … Syntax error: failed at position N (to): to xxx. Expected COLUMN`
+                        // （它的 ALTER TABLE RENAME 只认 `RENAME COLUMN old TO new`）。
+                        // 改表名要用独立的 `RENAME TABLE a TO b` —— 真机上两种形式都对过：
+                        // 前者 Code 62，后者 OK。
+                        "clickhouse" => Meta::Sql(format!("rename table {t} to {n}")),
                         // SQL Server **没有** `ALTER TABLE … RENAME TO` —— 改表名只有 `sp_rename`。
                         // 之前它落进下面的通用分支，用户点「重命名表」只会拿到一句语法错。
                         // 两个细节：sp_rename 收的是**裸名**（它自己解析，不要带标识符引号）；
@@ -1698,8 +1704,8 @@ _ => Meta::Unwritten,
                             self.literal(table),
                             self.literal(new_name)
                         )),
-                        // PostgreSQL / SQLite / Oracle / H2 / Derby / Doris / ClickHouse
-                        // 都是 `ALTER TABLE … RENAME TO`
+                        // PostgreSQL / SQLite / Oracle / H2 / Derby / Doris
+                        // 都是 `ALTER TABLE … RENAME TO`（ClickHouse 见上面单独一支）
                         _ => Meta::Sql(format!("alter table {t} rename to {n}")),
                     }
                 }

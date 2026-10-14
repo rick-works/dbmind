@@ -2584,7 +2584,12 @@ pub async fn rename_object(
         },
         "view" => match dialect.kind.key() {
             "sqlite" => return Err(XError::bad_request("SQLite 不支持重命名视图（可以删掉重建）")),
-            "mysql" | "mariadb" | "doris" => format!("rename table {from} to {to}"),
+            // MySQL 系：视图与表一样走 `RENAME TABLE`。
+            // ClickHouse：视图在它这里**就是一个表**（引擎不同而已），同样只认 `RENAME TABLE` ——
+            // `ALTER VIEW … RENAME TO` 它没有（与表改名同一个坑，真机对着两种形式验过）。
+            "mysql" | "mariadb" | "doris" | "clickhouse" => {
+                format!("rename table {from} to {to}")
+            }
             _ => format!("alter view {from} rename to {to}"),
         },
         "index" => match dialect.kind.key() {
