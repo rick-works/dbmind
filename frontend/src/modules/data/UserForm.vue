@@ -173,7 +173,16 @@
                   <!-- 分类行（colspan 跨它那几列）：一行一个库，每组的"已勾数"随行而变，这里只写分类名 -->
                   <tr>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colDb') }}</th>
-                    <th v-for="g in dbGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th v-for="g in dbGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ rowsCount(form.dbPrivileges, g.items) }} / {{ rowsTotal(form.dbPrivileges, g.items) }}</span>
+                      <span class="priv-group-actions">
+                        <button :disabled="rowsCount(form.dbPrivileges, g.items) === rowsTotal(form.dbPrivileges, g.items)"
+                                @click="setRowsPrivileges(form.dbPrivileges, g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="rowsCount(form.dbPrivileges, g.items) === 0"
+                                @click="setRowsPrivileges(form.dbPrivileges, g.items, false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </th>
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
@@ -252,7 +261,16 @@
                   <tr>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colSchema') }}</th>
                     <th class="mx-fix mx-f2" rowspan="2">{{ $t('upv.colObject') }}</th>
-                    <th v-for="g in objectGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th v-for="g in objectGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ rowsCount(form.tablePrivileges, g.items) }} / {{ rowsTotal(form.tablePrivileges, g.items) }}</span>
+                      <span class="priv-group-actions">
+                        <button :disabled="rowsCount(form.tablePrivileges, g.items) === rowsTotal(form.tablePrivileges, g.items)"
+                                @click="setRowsPrivileges(form.tablePrivileges, g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="rowsCount(form.tablePrivileges, g.items) === 0"
+                                @click="setRowsPrivileges(form.tablePrivileges, g.items, false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </th>
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
@@ -290,7 +308,16 @@
                   <tr>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colDb') }}</th>
                     <th class="mx-fix mx-f2" rowspan="2">{{ $t('upv.colTableName') }}</th>
-                    <th v-for="g in tableGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th v-for="g in tableGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ rowsCount(form.tablePrivileges, g.items) }} / {{ rowsTotal(form.tablePrivileges, g.items) }}</span>
+                      <span class="priv-group-actions">
+                        <button :disabled="rowsCount(form.tablePrivileges, g.items) === rowsTotal(form.tablePrivileges, g.items)"
+                                @click="setRowsPrivileges(form.tablePrivileges, g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="rowsCount(form.tablePrivileges, g.items) === 0"
+                                @click="setRowsPrivileges(form.tablePrivileges, g.items, false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </th>
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
@@ -327,7 +354,16 @@
                 <thead>
                   <tr>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colSchema') }}</th>
-                    <th v-for="g in schemaGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th v-for="g in schemaGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ rowsCount(form.schemaPrivileges, g.items) }} / {{ rowsTotal(form.schemaPrivileges, g.items) }}</span>
+                      <span class="priv-group-actions">
+                        <button :disabled="rowsCount(form.schemaPrivileges, g.items) === rowsTotal(form.schemaPrivileges, g.items)"
+                                @click="setRowsPrivileges(form.schemaPrivileges, g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="rowsCount(form.schemaPrivileges, g.items) === 0"
+                                @click="setRowsPrivileges(form.schemaPrivileges, g.items, false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </th>
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
@@ -360,7 +396,16 @@
                   <tr>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colSchema') }}</th>
                     <th class="mx-fix mx-f2" rowspan="2">{{ $t('upv.colObject') }}</th>
-                    <th v-for="g in objectGroupedMssql" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th v-for="g in objectGroupedMssql" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ rowsCount(form.objectPrivileges, g.items) }} / {{ rowsTotal(form.objectPrivileges, g.items) }}</span>
+                      <span class="priv-group-actions">
+                        <button :disabled="rowsCount(form.objectPrivileges, g.items) === rowsTotal(form.objectPrivileges, g.items)"
+                                @click="setRowsPrivileges(form.objectPrivileges, g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="rowsCount(form.objectPrivileges, g.items) === 0"
+                                @click="setRowsPrivileges(form.objectPrivileges, g.items, false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </th>
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
@@ -406,7 +451,7 @@
         </div>
         <div v-show="!sqlCollapsed" class="sql-body">
           <!-- 默认不显示 SQL 文本：勾选/取消之后（有差量了）才出语句；框本身一直留着 -->
-          <pre><code>{{ dirty ? previewSql : '' }}​{{ dirty ? '' : $t('upv.sqlPlaceholder') }}</code></pre>
+          <pre><code>{{ previewSql || $t('upv.sqlPlaceholder') }}</code></pre>
         </div>
         <!-- 与「编辑表结构」同一排法：左边一句说明，右边一排动作按钮 -->
         <div class="sql-foot">
@@ -885,6 +930,26 @@ const objectGroupedMssql = computed(() => groupByDefs(objectPrivColumnsMssql.val
 // 分类表头里的「已勾 / 共几项」与「整组全选 / 清空」（只对"权限存在一个数组里"的那几页用；
 // 库级/表级/对象级是**一行一个对象**，每组数量随行而变，那里只写分类名）
 const countIn = (key, values) => (form.value[key] || []).filter((v) => values.includes(v)).length
+// 行级页签（库 / 表 / Schema / 对象）是"一行一个对象"，所以分类表头里的计数按**格子**算：
+//   分子 = 已勾的格子数（这些行里勾了多少个该组权限），分母 = 行数 × 该组权限数。
+// 「全选 / 清空」作用于**所有行** —— 与网格里的勾选是同一件事，只是批量做。
+const rowsCount = (rows, values) => {
+  let n = 0
+  for (const r of rows || []) {
+    for (const v of values || []) {
+      if ((r.privileges || []).includes(v)) n += 1
+    }
+  }
+  return n
+}
+const rowsTotal = (rows, values) => (rows || []).length * (values || []).length
+const setRowsPrivileges = (rows, values, checked) => {
+  for (const r of rows || []) {
+    const set = new Set(r.privileges || [])
+    values.forEach((v) => (checked ? set.add(v) : set.delete(v)))
+    r.privileges = [...set]
+  }
+}
 const setList = (key, values, checked) => {
   const set = new Set(form.value[key] || [])
   values.forEach((v) => (checked ? set.add(v) : set.delete(v)))
@@ -1818,6 +1883,10 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .mx-grp .ft-group-name { color: var(--dc-text-strong); }
 .mx-grp .priv-group-count { font-size: 11.5px; }
 .mx-grp .priv-group-actions { margin-left: 2px; }
+/* 动作条必须是 **inline-flex**：原来写 display: flex 是块级，
+   `text-align: center` 管不到它 —— 于是"分组名 + 计数"居中了、紧跟的「全选 清空」却贴在
+   左边，整格看着就是歪的（用户反馈"全选和清空没居中啊"）。 */
+.mx-grp .priv-group-actions { display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
 .mx-grp .priv-group-actions button { vertical-align: middle; }
 .mx-priv { text-align: center; min-width: 74px; padding-left: 6px !important; padding-right: 6px !important; }
 .mx-cell { text-align: center; padding-left: 2px !important; padding-right: 2px !important; }

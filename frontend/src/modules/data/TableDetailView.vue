@@ -372,7 +372,8 @@
           <el-icon class="sql-fold" :class="{ folded: sqlCollapsed }"><CaretRight /></el-icon>
           <el-icon><DocumentCopy /></el-icon>
           <span>{{ $t('tdet.sqlPreview') }}</span>
-          <!-- 展开/收起跟在标题后（同一处切换），状态标签才推到最右 -->
+          <!-- 「展开/收起」挪到**最右**（与「编辑用户」的预览头一致）：
+               标题左侧留白由它的 margin-left: auto 撑开，状态标签落在它左边。 -->
           <span class="sql-fold-tx">{{ sqlCollapsed ? $t('tdet.expand') : $t('tdet.collapse') }}</span>
           <!-- 状态标签只在**有内容可说**时出现：无改动时正文已经写着
                「-- 暂无改动 / -- 调整字段/索引/表选项后…」，再挂一个「暂无修改」是重复。 -->
@@ -2906,7 +2907,10 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .sql-fold-tx { font-size: 12px; color: var(--dc-text-weak); }
 /* 收起时把「执行前请确认…」一并收掉，只留保存按钮 */
 .sql-area.collapsed .sql-tip { display: none; }
-.sql-state { font-size: 12px; margin-left: auto; }
+/* 「展开/收起」在最右：由它的 margin-left: auto 把整段推到右边，
+   状态标签因此落在它**左侧**（不再各自争 auto 间距）。 */
+.sql-fold-tx { margin-left: auto; }
+.sql-state { font-size: 12px; margin-left: 8px; }
 .sql-body {
   flex: 1;
   overflow: auto;
