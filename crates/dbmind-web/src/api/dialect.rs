@@ -515,25 +515,18 @@ impl Dialect {
                  where o.schema_id = schema_id({}) and o.type in ('U','V') order by o.name",
                 self.literal(schema)
             )),
-            // Oracle：`num_rows` 和 PG 的 reltuples 一样是**统计估算**（没 ANALYZE 过就是 null），
-            // 精确行数由前端拿 COUNT(*) 回填；表注释取自 all_tab_comments —— 结构编辑器的
-            // 「表注释」框正是从这个清单里读的，缺了它改完注释再打开又是空的。
-            // `rows` 在 Oracle 是保留字，别名加双引号（内核按大小写不敏感取值，键仍是 rows）。
-                        // Oracle：`num_rows` 与 PG 的 reltuples 同为**统计估算**（没 ANALYZE 过就是 null），
-            // 精确行数由前端拿 COUNT(*) 回填；表注释取自 all_tab_comments —— 结构编辑器的
-            // 「表注释」框正是从这个清单里读的，缺了它改完注释再打开又是空的。
-            // 不用 union all 拼「表 + 视图」：all_objects 一次就够，SQL 越短越不容易出岔子。
-                        // Oracle：表与视图一起列，一条 SQL 搞定（不用 union all —— 越短越不容易出岔子）。
-            // num_rows 是**统计估算**（没 ANALYZE 过就是 null），精确行数由前端 COUNT(*) 回填；
-            // 表注释取自 all_tab_comments：结构编辑器的「表注释」框就是从这个清单里读的。
-                        // Oracle：表 + 视图两段 union all 一起列。两个别名必须加双引号 —— `rows` 与 `comment`
-            // 在 Oracle 里都是保留字/关键字，不加引号会直接 ORA-00923（真机踩过，别改回去）。
-            // num_rows 是**统计估算**（没 ANALYZE 过就是 0/null），精确行数由前端 COUNT(*) 回填；
-            // 表注释取自 all_tab_comments：结构编辑器的「表注释」框就是从这个清单里读的。
+            // Oracle：表与视图一起列（union all 两段），并且**必须带上 `type` 列** ——
+            // 前端就是按 `type === 'VIEW'` 把视图分到「视图」分类的：少了这一列，
+            // 视图会被当成表混进「表」里，「视图」节点永远是空的。
+            // （真机踩过：SYSTEM 下 41 个对象、视图 0 —— 就是这个原因。）
+            // `rows` / `comment` / `type` 都加双引号：前两个在 Oracle 里是关键字，
+            // 不加会直接 ORA-00923。num_rows 是**统计估算**（没 ANALYZE 过就是 null），
+            // 精确行数由前端 COUNT(*) 回填；注释取自 all_tab_comments（表和视图都在里面），
+            // 结构编辑器的「表注释」框就是从这个清单里读的。
+            // SQL 写成**一整行**：续行拼接被搅坏过一次（报 ORA-03405），别再拆。
             "oracle" => Meta::Sql(format!(
-                "select t.table_name as name, t.num_rows as \"rows\", cc.comments as \"comment\" from all_tables t left join all_tab_comments cc on cc.owner = t.owner and cc.table_name = t.table_name where t.owner = {} union all select v.view_name as name, null as \"rows\", null as \"comment\" from all_views v where v.owner = {} order by name",
-                self.literal(&schema.to_uppercase()),
-                self.literal(&schema.to_uppercase())
+                "select t.table_name as name, t.num_rows as \"rows\", cc.comments as \"comment\", 'TABLE' as \"type\" from all_tables t left join all_tab_comments cc on cc.owner = t.owner and cc.table_name = t.table_name where t.owner = {owner} union all select v.view_name as name, null as \"rows\", cc.comments as \"comment\", 'VIEW' as \"type\" from all_views v left join all_tab_comments cc on cc.owner = v.owner and cc.table_name = v.view_name where v.owner = {owner} order by name",
+                owner = self.literal(&schema.to_uppercase())
             )),
 _ => Meta::Unwritten,
         }
