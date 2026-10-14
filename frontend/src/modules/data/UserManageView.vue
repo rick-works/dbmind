@@ -304,7 +304,23 @@ onMounted(async () => {
   color: var(--dc-text-dim);
   font-size: 13px;
 }
-.um-empty { color: var(--dc-text-dim); font-size: 13px; padding: 24px 4px; }
+/* 空态：**整块居中**。
+   原来是贴着工具条的一行小字（左上角），下面一大片空白 —— 用户反馈"这个位置优化下"。
+   用 min-height 视口比例而不是 flex:1：这些空态 div 与后面的表格是兄弟节点，
+   父容器不一定是 flex 列，靠 min-height 才在两种结构下都居中。 */
+.um-empty {
+  color: var(--dc-text-mid);
+  font-size: 13.5px;
+  line-height: 1.8;
+  padding: 48px 24px;
+  min-height: 52vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  max-width: 560px;
+  margin: 0 auto;
+}
 .um-err { color: var(--el-color-danger); }
 .um-dash { color: var(--dc-text-dim); }
 </style>
