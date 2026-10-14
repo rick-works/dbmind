@@ -68,15 +68,14 @@
                 <thead>
                   <tr>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('tdet.item') }}</th>
-                    <th v-for="(group, gi) in globalPrivGroups" :key="group.key" :colspan="globalGroupSpans[gi]"
-                        class="mx-grp" :title="group.label">
-                      <span class="ft-group-name">{{ group.label }}</span>
-                      <span class="priv-group-count">{{ group.checked }} / {{ group.total }}</span>
-                      <span v-if="group.key !== 'all'" class="priv-group-actions">
-                        <button :disabled="group.checked === group.total"
-                                @click="setGroupPrivileges(group.items.map(p => p.value), true)">{{ $t('common.selectAll') }}</button>
-                        <button :disabled="group.checked === 0"
-                                @click="setGroupPrivileges(group.items.map(p => p.value), false)">{{ $t('common.clear') }}</button>
+                    <th v-for="g in globalGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ countIn('privileges', g.items) }} / {{ g.items.length }}</span>
+                      <span v-if="g.key !== 'all'" class="priv-group-actions">
+                        <button :disabled="countIn('privileges', g.items) === g.items.length"
+                                @click="setList('privileges', g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="countIn('privileges', g.items) === 0"
+                                @click="setList('privileges', g.items, false)">{{ $t('common.clear') }}</button>
                       </span>
                     </th>
                   </tr>
@@ -97,10 +96,22 @@
 
               <!-- SQL Server 服务器角色 / Oracle 系统权限 / PostgreSQL 角色：
                    勾选项本身就是名字，一个一列，只有一行 -->
-              <table v-else class="form-table mx-table">
+              <table v-else class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
-                    <th class="mx-fix mx-f1">{{ $t('tdet.item') }}</th>
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('tdet.item') }}</th>
+                    <th v-for="g in serverGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ countIn(serverModelKey, g.items) }} / {{ g.items.length }}</span>
+                      <span class="priv-group-actions">
+                        <button :disabled="countIn(serverModelKey, g.items) === g.items.length"
+                                @click="setList(serverModelKey, g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="countIn(serverModelKey, g.items) === 0"
+                                @click="setList(serverModelKey, g.items, false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </th>
+                  </tr>
+                  <tr>
                     <th v-for="p in serverColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
                   </tr>
                 </thead>
@@ -120,10 +131,22 @@
           <!-- ===== 角色（Oracle）===== -->
           <el-tab-pane v-if="hasRolesTab" :label="$t('upv.tabRoles')" name="roles">
             <div class="tab-inner grant-tab">
-              <table class="form-table mx-table">
+              <table class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
-                    <th class="mx-fix mx-f1">{{ $t('tdet.item') }}</th>
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('tdet.item') }}</th>
+                    <th v-for="g in rolesGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ countIn('roles', g.items) }} / {{ g.items.length }}</span>
+                      <span class="priv-group-actions">
+                        <button :disabled="countIn('roles', g.items) === g.items.length"
+                                @click="setList('roles', g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="countIn('roles', g.items) === 0"
+                                @click="setList('roles', g.items, false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </th>
+                  </tr>
+                  <tr>
                     <th v-for="p in oracleRoles" :key="p" class="mx-priv" :title="p">{{ p }}</th>
                   </tr>
                 </thead>
@@ -148,12 +171,16 @@
             </div>
             <div class="tab-inner grant-tab">
               <!-- MySQL 系：一行一个库，每个库级权限一列 -->
-              <table v-if="isMysql" class="form-table mx-table">
+              <table v-if="isMysql" class="form-table mx-table mx-grouped">
                 <thead>
+                  <!-- 分类行（colspan 跨它那几列）：一行一个库，每组的"已勾数"随行而变，这里只写分类名 -->
                   <tr>
-                    <th class="mx-fix mx-f1">{{ $t('upv.colDb') }}</th>
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colDb') }}</th>
+                    <th v-for="g in dbGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                  <tr>
                     <th v-for="p in dbPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
-                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -179,10 +206,22 @@
               </table>
 
               <!-- SQL Server：数据库角色 —— 一个角色一列 -->
-              <table v-if="isMssql" class="form-table mx-table">
+              <table v-if="isMssql" class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
-                    <th class="mx-fix mx-f1">{{ $t('tdet.item') }}</th>
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('tdet.item') }}</th>
+                    <th v-for="g in mssqlDbRolesGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ countIn('roles', g.items) }} / {{ g.items.length }}</span>
+                      <span class="priv-group-actions">
+                        <button :disabled="countIn('roles', g.items) === g.items.length"
+                                @click="setList('roles', g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="countIn('roles', g.items) === 0"
+                                @click="setList('roles', g.items, false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </th>
+                  </tr>
+                  <tr>
                     <th v-for="p in mssqlRoles" :key="p" class="mx-priv" :title="p">{{ p }}</th>
                   </tr>
                 </thead>
@@ -211,13 +250,16 @@
             </div>
             <div class="tab-inner grant-tab">
               <!-- Oracle：对象权限（「模式 · 名称」两列冻结，权限项当列横向滚动） -->
-              <table v-if="isOracle" class="form-table mx-table">
+              <table v-if="isOracle" class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
-                    <th class="mx-fix mx-f1">{{ $t('upv.colSchema') }}</th>
-                    <th class="mx-fix mx-f2">{{ $t('upv.colObject') }}</th>
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colSchema') }}</th>
+                    <th class="mx-fix mx-f2" rowspan="2">{{ $t('upv.colObject') }}</th>
+                    <th v-for="g in objectGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                  <tr>
                     <th v-for="p in objectPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
-                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -246,13 +288,16 @@
               </table>
 
               <!-- MySQL 系：表级（「数据库 · 表」两列冻结） -->
-              <table v-if="isMysql" class="form-table mx-table">
+              <table v-if="isMysql" class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
-                    <th class="mx-fix mx-f1">{{ $t('upv.colDb') }}</th>
-                    <th class="mx-fix mx-f2">{{ $t('upv.colTableName') }}</th>
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colDb') }}</th>
+                    <th class="mx-fix mx-f2" rowspan="2">{{ $t('upv.colTableName') }}</th>
+                    <th v-for="g in tableGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                  <tr>
                     <th v-for="p in tablePrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
-                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -281,12 +326,15 @@
               </table>
 
               <!-- SQL Server：Schema 级（模式冻结） -->
-              <table v-if="isMssql" class="form-table mx-table">
+              <table v-if="isMssql" class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
-                    <th class="mx-fix mx-f1">{{ $t('upv.colSchema') }}</th>
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colSchema') }}</th>
+                    <th v-for="g in schemaGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                  <tr>
                     <th v-for="p in schemaPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
-                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -310,13 +358,16 @@
               </table>
 
               <!-- SQL Server：对象级（「模式 · 对象」两列冻结，两者都可手写） -->
-              <table v-if="isMssql" class="form-table mx-table">
+              <table v-if="isMssql" class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
-                    <th class="mx-fix mx-f1">{{ $t('upv.colSchema') }}</th>
-                    <th class="mx-fix mx-f2">{{ $t('upv.colObject') }}</th>
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colSchema') }}</th>
+                    <th class="mx-fix mx-f2" rowspan="2">{{ $t('upv.colObject') }}</th>
+                    <th v-for="g in objectGroupedMssql" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">{{ g.label }}</th>
+                    <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                  <tr>
                     <th v-for="p in objectPrivColumnsMssql" :key="p" class="mx-priv" :title="p">{{ p }}</th>
-                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -708,16 +759,127 @@ const globalPrivColumns = computed(() => {
   }
   return cols
 })
-const globalGroupSpans = computed(() => {
-  const seen = new Set()
-  return globalPrivGroups.value.map((g) => {
-    let n = 0
-    for (const p of g.items) {
-      if (!seen.has(p.value)) { seen.add(p.value); n += 1 }
-    }
-    return n
-  })
-})
+// ===== 表头分类：把权限名按「这一类是干什么的」分组，写在表头第一行（colspan 跨它那几列）。
+// 分组**只决定表头怎么摆**，不改变集合：清单里提到但这里没列到的名字会落进「其它」。
+const groupByDefs = (names, defs) => {
+  const used = new Set()
+  const groups = []
+  for (const def of defs) {
+    const items = names.filter((n) => def.values.includes(n))
+    if (!items.length) continue
+    items.forEach((n) => used.add(n))
+    groups.push({ key: def.key, label: t(def.labelKey), items })
+  }
+  const rest = names.filter((n) => !used.has(n))
+  if (rest.length) {
+    // 定义里已经有一个「其它」时把兜底项并进去 —— 否则表头会并排出现两个「其它」
+    // （服务器返回的额外权限名如 USE 会落进兜底那组，真机实测就是这样）。
+    const at = groups.findIndex((g) => g.key === 'other')
+    if (at >= 0) groups[at] = { ...groups[at], items: [...groups[at].items, ...rest] }
+    else groups.push({ key: 'other', label: t('upv.grpOther'), items: rest })
+  }
+  return groups
+}
+// MySQL 系（库级/表级与全局同一套清单）：快捷(ALL) + 数据读写 / 对象与结构 / 服务器管理
+const mysqlGroupDefs = [{ key: 'all', labelKey: 'upv.grpQuick', values: ['ALL PRIVILEGES'] }, ...privGroupDefs]
+// Oracle 对象权限
+const oracleObjGroupDefs = [
+  { key: 'data', labelKey: 'upv.grpData', values: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { key: 'object', labelKey: 'upv.grpObject', values: ['ALTER', 'INDEX', 'REFERENCES'] },
+  { key: 'exec', labelKey: 'upv.grpExec', values: ['EXECUTE', 'DEBUG'] },
+  { key: 'other', labelKey: 'upv.grpOther', values: ['READ', 'FLASHBACK', 'ON COMMIT REFRESH', 'QUERY REWRITE'] }
+]
+// Oracle 系统权限
+const oracleSysGroupDefs = [
+  { key: 'session', labelKey: 'upv.grpSession', values: ['CREATE SESSION', 'ALTER SESSION'] },
+  {
+    key: 'data',
+    labelKey: 'upv.grpData',
+    values: ['SELECT ANY TABLE', 'INSERT ANY TABLE', 'UPDATE ANY TABLE', 'DELETE ANY TABLE']
+  },
+  {
+    key: 'object',
+    labelKey: 'upv.grpObject',
+    values: [
+      'CREATE TABLE', 'CREATE ANY TABLE', 'ALTER ANY TABLE', 'DROP ANY TABLE',
+      'CREATE VIEW', 'CREATE ANY VIEW', 'CREATE SEQUENCE',
+      'CREATE PROCEDURE', 'CREATE ANY PROCEDURE', 'CREATE TRIGGER', 'CREATE ANY TRIGGER',
+      'CREATE TYPE', 'CREATE SYNONYM', 'CREATE ANY SYNONYM', 'CREATE MATERIALIZED VIEW'
+    ]
+  },
+  {
+    key: 'admin',
+    labelKey: 'upv.grpAdmin',
+    values: [
+      'CREATE ROLE', 'CREATE USER', 'ALTER USER', 'DROP USER', 'UNLIMITED TABLESPACE',
+      'CREATE DATABASE LINK', 'CREATE JOB', 'DEBUG CONNECT SESSION'
+    ]
+  },
+  { key: 'other', labelKey: 'upv.grpOther', values: ['QUERY REWRITE'] }
+]
+// Oracle 角色
+const oracleRoleGroupDefs = [
+  { key: 'common', labelKey: 'upv.grpCommon', values: ['CONNECT', 'RESOURCE', 'DBA'] },
+  {
+    key: 'catalog',
+    labelKey: 'upv.grpCatalog',
+    values: ['SELECT_CATALOG_ROLE', 'EXECUTE_CATALOG_ROLE', 'DELETE_CATALOG_ROLE', 'RECOVERY_CATALOG_OWNER']
+  },
+  { key: 'impexp', labelKey: 'upv.grpImpExp', values: ['EXP_FULL_DATABASE', 'IMP_FULL_DATABASE'] },
+  { key: 'admin', labelKey: 'upv.grpAdmin', values: ['SCHEDULER_ADMIN', 'OEM_MONITOR', 'AQ_ADMINISTRATOR_ROLE'] }
+]
+// SQL Server 服务器角色 / 数据库角色
+const mssqlServerRoleGroupDefs = [
+  { key: 'admin', labelKey: 'upv.grpAdmin', values: ['sysadmin', 'securityadmin', 'serveradmin', 'setupadmin'] },
+  { key: 'object', labelKey: 'upv.grpObject', values: ['dbcreator', 'diskadmin', 'processadmin', 'bulkadmin'] }
+]
+const mssqlDbRoleGroupDefs = [
+  { key: 'data', labelKey: 'upv.grpData', values: ['db_owner', 'db_datawriter', 'db_datareader'] },
+  {
+    key: 'object',
+    labelKey: 'upv.grpObject',
+    values: ['db_ddladmin', 'db_securityadmin', 'db_accessadmin', 'db_backupoperator']
+  },
+  { key: 'other', labelKey: 'upv.grpOther', values: ['db_denydatawriter', 'db_denydatareader'] }
+]
+// SQL Server Schema 级 / 对象级权限
+const mssqlPrivGroupDefs = [
+  { key: 'data', labelKey: 'upv.grpData', values: ['SELECT', 'INSERT', 'UPDATE', 'DELETE'] },
+  { key: 'exec', labelKey: 'upv.grpExec', values: ['EXECUTE', 'REFERENCES', 'VIEW DEFINITION'] }
+]
+// PostgreSQL 角色
+const pgRoleGroupDefs = [
+  { key: 'data', labelKey: 'upv.grpData', values: ['pg_read_all_data', 'pg_write_all_data'] },
+  {
+    key: 'admin',
+    labelKey: 'upv.grpAdmin',
+    values: ['pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program']
+  }
+]
+
+const globalGrouped = computed(() => groupByDefs(globalPrivColumns.value, mysqlGroupDefs))
+const dbGrouped = computed(() => groupByDefs(dbPrivColumns.value, mysqlGroupDefs))
+const tableGrouped = computed(() => groupByDefs(tablePrivColumns.value, mysqlGroupDefs))
+const serverGrouped = computed(() =>
+  groupByDefs(
+    serverColumns.value,
+    isOracle.value ? oracleSysGroupDefs : isMssql.value ? mssqlServerRoleGroupDefs : pgRoleGroupDefs,
+  ),
+)
+const rolesGrouped = computed(() => groupByDefs(oracleRoles, oracleRoleGroupDefs))
+const mssqlDbRolesGrouped = computed(() => groupByDefs(mssqlRoles, mssqlDbRoleGroupDefs))
+const objectGrouped = computed(() => groupByDefs(objectPrivColumns.value, oracleObjGroupDefs))
+const schemaGrouped = computed(() => groupByDefs(schemaPrivColumns.value, mssqlPrivGroupDefs))
+const objectGroupedMssql = computed(() => groupByDefs(objectPrivColumnsMssql.value, mssqlPrivGroupDefs))
+
+// 分类表头里的「已勾 / 共几项」与「整组全选 / 清空」（只对"权限存在一个数组里"的那几页用；
+// 库级/表级/对象级是**一行一个对象**，每组数量随行而变，那里只写分类名）
+const countIn = (key, values) => (form.value[key] || []).filter((v) => values.includes(v)).length
+const setList = (key, values, checked) => {
+  const set = new Set(form.value[key] || [])
+  values.forEach((v) => (checked ? set.add(v) : set.delete(v)))
+  form.value[key] = [...set]
+}
 // 库级 / 表级（MySQL 系）
 const dbPrivColumns = computed(() => privColumns(objectPrivs.map((p) => p.value), form.value.dbPrivileges))
 const tablePrivColumns = computed(() => privColumns(objectPrivs.map((p) => p.value), form.value.tablePrivileges))
@@ -1515,13 +1677,18 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
    第一行**不吸顶**：它带计数与按钮，实测高 59px，硬给它 top: 0 再让第二行 top: 27px，
    两行纵向滚动时会叠在一起。这一页主体只有一行、纵向本来就不会滚动，
    所以让第一行随表头滚走、只把权限名列吸在顶上更稳（也不会和冻结列表头打架）。 */
-.mx-grouped thead tr:first-child th { position: static; }
+/* 分类行不吸顶（它带计数与按钮，比权限行高，硬吸顶会和下一行叠住）；
+   但**冻结列**那一格要照旧吸顶 —— 它 rowspan=2 跨两行，横向滚动时得一直贴左边。 */
+.mx-grouped thead tr:first-child th:not(.mx-fix) { position: static; }
 .mx-grouped thead tr:last-child th { top: 0; }
-/* 分组名读作"这一段是干什么的"：左对齐、颜色比权限名深一档；计数与全选/清空跟在后面 */
-.mx-grp { text-align: left; }
+/* 分类名**居中**在它跨的那几列中间（用户要求）；计数与全选/清空跟在名字后面同一行。
+   选择器必须把 th 带上：`.form-table th { text-align: left }` 是"类+元素"，只写 .mx-grp
+   优先级更低，会被它压掉（真机实测压成 left，居中不生效）。 */
+.form-table th.mx-grp { text-align: center; }
 .mx-grp .ft-group-name { color: var(--dc-text-strong); }
 .mx-grp .priv-group-count { font-size: 11.5px; }
 .mx-grp .priv-group-actions { margin-left: 2px; }
+.mx-grp .priv-group-actions button { vertical-align: middle; }
 .mx-priv { text-align: center; min-width: 74px; padding-left: 6px !important; padding-right: 6px !important; }
 .mx-cell { text-align: center; padding-left: 2px !important; padding-right: 2px !important; }
 .mx-act { width: 48px; }
