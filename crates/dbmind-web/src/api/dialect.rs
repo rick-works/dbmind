@@ -211,6 +211,27 @@ pub const ORACLE_OBJECT_PRIVS: [&str; 13] = [
     "EXECUTE", "DEBUG", "FLASHBACK", "ON COMMIT REFRESH", "QUERY REWRITE"
 ];
 
+/// SQL Server 数据库级 / 对象级权限白名单（`grant <这些> on …`）。
+/// 权限名会**原样拼进 SQL**，所以只放行清单里的。
+pub const MSSQL_PRIVILEGES: [&str; 10] = [
+    "SELECT", "INSERT", "UPDATE", "DELETE", "EXECUTE", "REFERENCES",
+    "CONTROL", "ALTER", "VIEW DEFINITION", "TAKE OWNERSHIP"
+];
+
+pub fn is_mssql_privilege(name: &str) -> bool {
+    in_list(&MSSQL_PRIVILEGES, name)
+}
+
+/// 角色名 / 架构名 / 对象名这类**标识符**：只允许字母数字与 `_ $ # @ . -`（会再用 [] 圈起来）。
+/// 不是为了防注入（`quote` 已经在做），而是**不给明显不是名字的东西开口子** ——
+/// 这些名字同样会被拼进语句。
+pub fn is_plain_ident(name: &str) -> bool {
+    let n = name.trim();
+    !n.is_empty()
+        && n.len() <= 128
+        && n.chars().all(|c| c.is_alphanumeric() || "_$#@.- ".contains(c))
+}
+
 fn in_list(list: &[&str], name: &str) -> bool {
     let upper = name.trim().to_ascii_uppercase();
     !upper.is_empty() && list.iter().any(|item| item.eq_ignore_ascii_case(&upper))
@@ -925,8 +946,48 @@ _ => Meta::Unwritten,
                             ));
                         }
                     }
+                    // 授权（SQL Server 的四层，与界面上的四张表一一对应）：
+                    //   privileges.global   = **服务器角色**（服务器级就是它的"全局"）
+                    //   roles               = 数据库角色
+                    //   privileges.databases= **Schema 级**（(架构, 权限清单)）
+                    //   privileges.tables   = **对象级**（(架构, 对象, 权限清单)）
                     for role in &role_parts {
                         parts.push(format!("alter role {role} add member {u}"));
+                    }
+                    for role in &privileges.global {
+                        parts.push(format!("alter server role {} add member {u}", self.quote(role)));
+                    }
+                    for (schema, privs) in &privileges.databases {
+                        if privs.is_empty() {
+                            continue;
+                        }
+                        parts.push(format!(
+                            "grant {} on schema::{} to {u}",
+                            privs.join(", "),
+                            self.quote(schema)
+                        ));
+                    }
+                    for (schema, object, privs) in &privileges.tables {
+                        if privs.is_empty() {
+                            continue;
+                        }
+                        parts.push(format!(
+                            "grant {} on {}.{} to {u}",
+                            privs.join(", "),
+                            self.quote(schema),
+                            self.quote(object)
+                        ));
+                    }
+                    // 撤销：界面按"原来有、现在没有了"算好传进来（逐条点名，不全删重授）
+                    for r in revokes {
+                        let sql = match r.scope.as_str() {
+                            "serverrole" => format!("alter server role {} drop member {u}", self.quote(&r.privilege)),
+                            "role" => format!("alter role {} drop member {u}", self.quote(&r.privilege)),
+                            "schema" => format!("revoke {} on schema::{} from {u}", r.privilege, self.quote(&r.owner)),
+                            "object" => format!("revoke {} on {}.{} from {u}", r.privilege, self.quote(&r.owner), self.quote(&r.object)),
+                            _ => return Meta::Unwritten,
+                        };
+                        parts.push(sql);
                     }
                     if parts.is_empty() {
                         return Meta::Unwritten;

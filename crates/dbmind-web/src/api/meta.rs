@@ -2896,6 +2896,7 @@ pub async fn user_action(
     };
     let (_, dialect) = ctx_of(&state, &id).await?;
     let mysql_family = matches!(dialect.kind.key(), "mysql" | "mariadb" | "doris");
+    let mssql_family = dialect.kind.key() == "sqlserver";
     let oracle_family = matches!(dialect.kind.key(), "oracle");
 
     // 哪些权限入参已经真正实现：MySQL 系连接的三层（全局/库级/表级）—— 由
@@ -2934,7 +2935,11 @@ pub async fn user_action(
             // MySQL 也要收（授权改成只出差量之后，撤销不再靠 `revoke all`）。
             let handled = (mysql_family
                 && matches!(key, "privileges" | "dbPrivileges" | "tablePrivileges" | "revoke"))
-                || (oracle_family && matches!(key, "privileges" | "tablePrivileges" | "revoke"));
+                || (oracle_family && matches!(key, "privileges" | "tablePrivileges" | "revoke"))
+                // SQL Server：四层（服务器角色 / 数据库角色 / Schema 级 / 对象级）+ 撤销差量。
+                // `roles`（数据库角色）本来就不在这张表里，一直可以用（真机验证过）。
+                || (mssql_family
+                    && matches!(key, "serverRoles" | "schemaPrivileges" | "objectPrivileges" | "revoke"));
             if !handled {
                 return Err(XError::bad_request(format!(
                     "「{label}」的自动分配尚未实现：请先只做「新建用户 / 改密 / 删除用户」，\
@@ -2956,9 +2961,38 @@ pub async fn user_action(
     } else {
         crate::api::dialect::is_mysql_privilege
     };
+    // SQL Server 的「Schema 级 / 对象级」与 MySQL 的「库级 / 表级」形状一致，只是字段名不同
+    // （schema→database、object→table）—— 换名后复用同一套解析与白名单校验，
+    // 不为第三个方言再写一份解析（那份迟早会和前两份漂开）。
+    let rename_rows = |v: Option<&Value>, obj: bool| -> Option<Value> {
+        v.and_then(Value::as_array).map(|rows| {
+            Value::Array(
+                rows.iter()
+                    .map(|r| {
+                        let mut o = serde_json::Map::new();
+                        o.insert("database".into(), r.get("schema").cloned().unwrap_or(json!("")));
+                        o.insert("privileges".into(), r.get("privileges").cloned().unwrap_or(json!([])));
+                        if obj {
+                            o.insert("table".into(), r.get("object").cloned().unwrap_or(json!("")));
+                        }
+                        Value::Object(o)
+                    })
+                    .collect(),
+            )
+        })
+    };
+    let mssql_schema_rows = rename_rows(options.get("schemaPrivileges"), false);
+    let mssql_object_rows = rename_rows(options.get("objectPrivileges"), true);
     let privileges = crate::api::dialect::UserPrivileges {
-        global: checked_privileges(options.get("privileges"), global_valid)?,
-        databases: if oracle_family {
+        global: if mssql_family {
+            // SQL Server 的"全局"= 服务器角色（角色名也会拼进 SQL，所以过名字白名单）
+            checked_privileges(options.get("serverRoles"), crate::api::dialect::is_plain_ident)?
+        } else {
+            checked_privileges(options.get("privileges"), global_valid)?
+        },
+        databases: if mssql_family {
+            privilege_db_rows(mssql_schema_rows.as_ref(), crate::api::dialect::is_mssql_privilege)?
+        } else if oracle_family {
             // Oracle 没有"库级授权"这一层（库就是实例）：给了就明确拒绝，
             // 不默默忽略 —— 界面会照实说明，不会让人以为授上了。
             if options.get("dbPrivileges").and_then(Value::as_array).map(|a| !a.is_empty()).unwrap_or(false) {
@@ -2970,7 +3004,11 @@ pub async fn user_action(
         } else {
             privilege_db_rows(options.get("dbPrivileges"), global_valid)?
         },
-        tables: privilege_table_rows(options.get("tablePrivileges"), object_valid)?,
+        tables: if mssql_family {
+            privilege_table_rows(mssql_object_rows.as_ref(), crate::api::dialect::is_mssql_privilege)?
+        } else {
+            privilege_table_rows(options.get("tablePrivileges"), object_valid)?
+        },
     };
 
     // Oracle 的撤销清单：界面按"原来有、现在没有了"算好传进来。
@@ -2997,6 +3035,37 @@ pub async fn user_action(
             if !ok {
                 return Err(XError::bad_request(format!(
                     "「{privilege}」不在可撤销的白名单里（或缺少库/表名）：已拒绝执行"
+                )));
+            }
+            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object });
+        }
+        out
+    } else if mssql_family {
+        // SQL Server：scope = serverrole（服务器角色，privilege=角色名）/ role（数据库角色，同上）
+        // / schema（架构级，owner=架构）/ object（对象级，owner=架构 + object=对象）
+        let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
+        for item in options.get("revoke").and_then(Value::as_array).cloned().unwrap_or_default() {
+            let scope = item.get("scope").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+            let privilege = item.get("privilege").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if privilege.is_empty() {
+                continue;
+            }
+            let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let ok = match scope.as_str() {
+                // 角色名是标识符、不是权限名 —— 两者都会拼进 SQL，都不许乱来
+                "serverrole" | "role" => crate::api::dialect::is_plain_ident(&privilege),
+                "schema" => crate::api::dialect::is_mssql_privilege(&privilege) && !owner.is_empty(),
+                "object" => {
+                    crate::api::dialect::is_mssql_privilege(&privilege)
+                        && !owner.is_empty()
+                        && !object.is_empty()
+                }
+                _ => false,
+            };
+            if !ok {
+                return Err(XError::bad_request(format!(
+                    "「{privilege}」不在可撤销的白名单里（或缺少架构/对象名）：已拒绝执行"
                 )));
             }
             out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object });

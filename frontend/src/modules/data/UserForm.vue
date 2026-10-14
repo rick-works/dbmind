@@ -1550,6 +1550,15 @@ const submit = async () => {
       opts.roles = form.value.roles
       opts.schemaPrivileges = form.value.schemaPrivileges.map(r => ({ schema: r.schema, privileges: r.privileges }))
       opts.objectPrivileges = form.value.objectPrivileges.map(r => ({ schema: r.schema, object: r.object, privileges: r.privileges }))
+      // 撤销：**按差量点名**（"原来有、现在没有了"的那些）—— 与预览同源。
+      // 不再"先全删再重授"：那样会把用户别处拿到的授权也一并抹掉再重建。
+      const mc = changes.value
+      opts.revoke = [
+        ...mc.serverRoles.removed.map((r) => ({ scope: 'serverrole', privilege: r, owner: '', object: '' })),
+        ...mc.roles.removed.map((r) => ({ scope: 'role', privilege: r, owner: '', object: '' })),
+        ...mc.schema.removed.flatMap((r) => r.privs.map((p) => ({ scope: 'schema', privilege: p, owner: r.key, object: '' }))),
+        ...mc.object.removed.flatMap((r) => r.privs.map((p) => ({ scope: 'object', privilege: p, owner: r.row.schema, object: r.row.object }))),
+      ]
     }
     if (isPgsql.value) {
       opts.roles = form.value.roles
