@@ -232,7 +232,9 @@
                      未加载时显示 0 会被读成"这一类没有对象"（和"还没查"完全是两回事）。 -->
                 <!-- 数量：预取的**响应式表**优先（不必点开就有 ✓），否则回落到 children.length；
                      两者都没有就不显示 —— "还没取到" 与 "这一类是 0" 必须能分清。 -->
-                <span v-if="data.kind === 'category' && catCounts[data.id] != null" class="cat-count">{{ catCounts[data.id] }}</span>
+                <span v-if="data.kind === 'category' && catCounts[data.id] != null" class="cat-count"
+
+                      :title="catCountTitle(data)">{{ catCountText(data) }}</span>
                 <span v-if="data.kind === 'env-folder'" class="env-count">{{ (data.children || []).length }}</span>
               </span>
             </template>
@@ -3850,6 +3852,64 @@ const buildDbDetailNodes = async (dbNode) => {
  * 始终不出现 —— 说明"我 mutate 的节点对象"与"模板渲染用的那一份"并不总是同一个，
  * 依赖对象身份就等于把显示寄托在一个看不见的假设上。这张表由模板直接观察，稳定。
  */
+/**
+ * 内核元数据清单的**单次上限**，必须与 `crates/dbmind-web/src/api/meta.rs` 的
+ * `META_MAX_ROWS` 一致（改一处就得改另一处）。
+ *
+ * 为什么要在前端也认这个数：到顶就意味着**被截断了**。真机实测 Oracle 的 SYS：
+ * 库里 8180 个视图，清单只到 5000（表 438 + 视图 4562 正好 5000）——
+ * 若原样显示 4562，读的人会以为"就这么些"，而事实是**少了三千多个**。
+ * 到顶时数字后面加个 `+`，把"还有更多"说出来。
+ */
+const META_LIST_LIMIT = 5000
+
+/**
+ * 分类 → 它所用**清单**的种类。表和视图来自**同一次** `/tables`，
+ * 存储过程与函数来自**同一次** `/procedures`，其余分类各拉各的。
+ */
+const LIST_KIND_OF_CAT = {
+  tables: 'tables', views: 'tables',
+  procs: 'routines', functions: 'routines',
+  triggers: 'triggers', events: 'events', users: 'users', scripts: 'scripts'
+}
+/**
+ * 「这一次清单拉取撞了上限」——key = `连接:库:清单种类`。
+ *
+ * 为什么按**清单**而不是按分类记：表和视图来自同一次 `/tables`、过程与函数来自
+ * 同一次 `/procedures`。Oracle 的 SYS 就是活例子 —— 库里 8180 个视图 + 438 张表，
+ * 清单只到 5000：表 438、视图 4562，**两个都没到 5000，却都被截断了**，
+ * 只看单个分类的数字看不出来，得记住"那份清单本身到顶了"。
+ *
+ * 键里**必须带清单种类**：只按 `连接:库` 记的话，一份 `/tables` 到顶会把同一个
+ * schema 下的存储过程、触发器、用户…全都标上 `+`（写这版时就踩了，真机上看到
+ * 「触发器 0+」才发现）。
+ */
+const truncatedLists = ref({})
+const listKindKey = (connId, db, kind) => connId + ':' + db + ':' + kind
+/** 记下「这份清单到顶了」 */
+const markTruncatedList = (connId, db, kind, rawLength) => {
+  if (rawLength >= META_LIST_LIMIT) truncatedLists.value[listKindKey(connId, db, kind)] = true
+}
+/** 这个分类的清单是不是被截断过（自己到顶，或它与兄弟分类共用的那份清单到顶） */
+const isCatTruncated = (data) => {
+  const n = catCounts.value[data.id]
+  if (n == null) return false
+  const kind = LIST_KIND_OF_CAT[data.cat] || data.cat
+  return n >= META_LIST_LIMIT || truncatedLists.value[listKindKey(data.connId, data.db, kind)] === true
+}
+/** 分类计数怎么显示：截断就加 `+`（见 META_LIST_LIMIT / truncatedLists 的说明） */
+const catCountText = (data) => {
+  const n = catCounts.value[data.id]
+  if (n == null) return ''
+  return isCatTruncated(data) ? n + '+' : String(n)
+}
+/** 截断时的解释（没截断就不挂 title，别给每个数字都加一句废话） */
+const catCountTitle = (data) => {
+  const n = catCounts.value[data.id]
+  if (n == null || !isCatTruncated(data)) return ''
+  return t('tree.truncated', { n: META_LIST_LIMIT })
+}
+
 const catCounts = ref({})
 
 /** 表的精确行数（节点 id → 行数）：COUNT(*) 回填后写这里，模板直接观察（同分类计数的道理） */
@@ -3915,6 +3975,8 @@ const loadCategoryItems = async (data) => {
       const cacheKey = 'tables:' + connId + ':' + db
       const hit = readSchemaCache(cacheKey)
       if (hit && Array.isArray(hit.value)) {
+        // 缓存里那份就是当初拉到的全部：到顶了照样要记（"被截断"这件事不因缓存而改变）
+        markTruncatedList(connId, db, 'tables', hit.value.length)
         const want0 = cat === 'tables' ? 'TABLE' : 'VIEW'
         const mine0 = hit.value.filter(t => (t.type || 'TABLE') === want0)
         if (cat === 'tables' && inCurrentDb(db)) allTables.value = mine0
@@ -3937,6 +3999,7 @@ const loadCategoryItems = async (data) => {
       const tables = await listTables(connId, db)
       const list = Array.isArray(tables) ? tables : []
       writeSchemaCache(cacheKey, list)
+      markTruncatedList(connId, db, 'tables', list.length)
       // `/tables` 一次返回**表和视图**（dify 实测 7 = 表 2 + 视图 5）。所以"这一类有多少个"
       // 必须按类型分开算：拿 list.length 去当表数，Tables 与 Views 会各显示 7 —— 数字看着
       // 有了却全是错的，比没有数字更坏。分类自己的清单也一并按类型收敛，展开与计数同源。
@@ -3967,6 +4030,7 @@ const loadCategoryItems = async (data) => {
       data.catLoaded = true
       const routines = await listProcedures(connId, db)
       const list = Array.isArray(routines) ? routines : []
+      markTruncatedList(connId, db, 'routines', list.length)
       return list.filter(o => (cat === 'functions' ? isFunctionRoutine(o) : !isFunctionRoutine(o)))
     }
     if (cat === 'triggers' && can.triggers) { data.catLoaded = true; return await listTriggers(connId, db) }

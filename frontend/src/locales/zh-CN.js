@@ -102,6 +102,7 @@ export default {
   'tree.cat.users': '用户',
   'tree.cat.scripts': '脚本',
   'tree.empty': '暂无对象',
+  'tree.truncated': '已达 {n} 条上限，库里可能还有更多',
   'tree.loading': '加载中…',
   'tree.resizerTitle': '拖拽调整宽度',
   'tree.collapseTree': '折叠对象浏览器',

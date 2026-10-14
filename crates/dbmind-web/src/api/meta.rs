@@ -376,9 +376,18 @@ async fn meta_list(
         Meta::Unwritten => Err(not_written(state, id, feature).await),
         Meta::Sql(sql) => {
             let result = run_meta_sql(state, id, database, sql, META_MAX_ROWS).await?;
-            Ok(Value::Array(
-                rows_of(&result).into_iter().map(Value::Object).collect(),
-            ))
+            let rows = rows_of(&result);
+            // 到顶 = 很可能被截断了。这里只写一条**警告**（界面上的 `5000+` 由前端按
+            // META_MAX_ROWS 显示）：静默截断最坏的地方不是少几行，而是"看起来就是全部"。
+            if rows.len() >= META_MAX_ROWS {
+                tracing::warn!(
+                    connection = %id,
+                    feature,
+                    limit = META_MAX_ROWS,
+                    "元数据清单到达行数上限，结果可能已被截断"
+                );
+            }
+            Ok(Value::Array(rows.into_iter().map(Value::Object).collect()))
         }
     }
 }

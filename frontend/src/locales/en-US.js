@@ -95,6 +95,7 @@ export default {
   'tree.cat.users': 'Users',
   'tree.cat.scripts': 'Scripts',
   'tree.empty': 'No objects',
+  'tree.truncated': 'Hit the {n}-item limit; there may be more in the database',
   'tree.loading': 'Loading…',
   'tree.resizerTitle': 'Drag to resize',
   'tree.collapseTree': 'Collapse the object explorer',
