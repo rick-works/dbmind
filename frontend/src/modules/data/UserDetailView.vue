@@ -373,7 +373,7 @@ onBeforeUnmount(onSqlResizeEnd)
   flex-direction: column;
   flex: 0 0 auto;   /* 高度只认内联那一个（旧布局的 flex: 1 会在拖矮时把它拉大） */
   min-height: 0;
-  margin: 0 8px 8px;
+  margin: 0 0 8px;
 }
 .sql-area.collapsed { height: auto !important; }
 /* 分隔条：本身就是上下两块卡片之间那道缝（6px + 透明底），悬停变主色 */

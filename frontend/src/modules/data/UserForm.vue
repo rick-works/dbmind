@@ -21,13 +21,20 @@
         <el-tabs v-model="tab" class="table-tabs">
           <!-- ===== 基本信息 ===== -->
           <el-tab-pane :label="$t('upv.tabBasic')" name="basic">
-            <div class="tab-inner">
+            <div class="tab-inner basic-tab">
               <!-- 该类型还没有自动授权：如实说明，别摆一堆点了会报错的控件 -->
               <el-alert v-if="!hasAnyGrantTab" type="info" :closable="false" show-icon class="grant-alert">
                 <template #title>{{ $t('upv.grantUnsupported', { type: connTypeLabel }) }}</template>
               </el-alert>
               <!-- 基本信息：与「编辑表结构」同一张「标签 / 值」表（行高、对齐一致） -->
               <table class="form-table">
+                <colgroup>
+                  <col style="width:180px" />
+                  <col />
+                </colgroup>
+                <thead>
+                  <tr><th>{{ $t('tdet.item') }}</th><th>{{ $t('tdet.value') }}</th></tr>
+                </thead>
                 <tbody>
                   <tr>
                     <td class="ft-label">{{ $t('upv.fieldUser') }}</td>
@@ -1263,12 +1270,53 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .tab-card :deep(.el-tabs__content) { flex: 1; min-height: 0; overflow: auto; }
 /* 页签内容：与卡片同一列宽，卡片之间留缝 */
 .tab-inner { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+/* 基本信息页签里是一张**表格**：不留内边距，表格直接贴到卡片内缘
+   （左右那两条"框线"就是卡片自身那条边框 —— 与「编辑表结构」的字段表同一处理）。
+   选择器要写 `.tab-inner.basic-tab`：两个类在同一个元素上，写成后代选择器匹配不到。 */
+.tab-inner.basic-tab { padding: 0; }
+.grant-alert { margin: 10px 12px 0; }
 
-/* 基本信息那张「标签 / 值」表：与「编辑表结构」的行高、对齐一致 */
-.form-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
-.form-table td { border-bottom: 1px solid var(--dc-border-soft); padding: 5px 8px; vertical-align: middle; }
-.form-table tr:last-child td { border-bottom: none; }
-.ft-label { width: 150px; color: var(--dc-text-dim); background: var(--dc-bg-soft); }
+/* 基本信息那张「项目 / 值」表：照「编辑表结构」的 .field-table 那套 ——
+   表头浅底 + 横竖网格 + 26px 紧凑行。行高不是 padding 决定的、是行内控件决定的，
+   所以控件也压到同一高度（--ctl-h）。 */
+.tab-card { --grid-row-h: 26px; --ctl-h: 20px; }
+.form-table {
+  width: 100%;
+  border-collapse: separate;   /* 不能用 collapse：与吸顶表头同用会出残影（字段表里踩过） */
+  border-spacing: 0;
+  table-layout: fixed;
+  font-size: 13px;
+}
+.form-table th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--dc-bg-soft);
+  color: var(--dc-text-strong);
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: .02em;
+  text-align: left;
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--dc-border);
+  border-right: 1px solid var(--dc-border);
+  white-space: nowrap;
+}
+.form-table td {
+  padding: 1px 9px;
+  height: var(--grid-row-h, 26px);
+  background: var(--dc-bg-card);
+  border-bottom: 1px solid var(--dc-border);
+  border-right: 1px solid var(--dc-border);
+  vertical-align: middle;
+}
+/* 最后一列不画竖线：否则会与卡片外框并成两条线 */
+.form-table th:last-child,
+.form-table td:last-child { border-right: none; }
+/* 左列「项目」：读作行标题（字号略小、颜色偏灰），与表头一样左对齐 */
+.ft-label { font-size: 12.5px; color: var(--dc-text-mid); white-space: nowrap; }
+.form-table :deep(.el-input__inner) { height: var(--ctl-h, 20px); }
+.form-table :deep(.el-input__wrapper) { min-height: var(--ctl-h, 20px); }
 /* 底栏：左提示 + 右按钮（与「编辑表结构」同一排法） */
 .sql-tip { flex: 1; font-size: 12px; color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .grant-alert { margin-bottom: 2px; }
@@ -1305,8 +1353,12 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* ===== 间距收紧（用户反馈：边距太大）===== */
 /* 高度分配钉死：预览只认内联那一个 height（旧布局给过 flex: 1，不钉死时拖到很矮会被
    flex-grow 重新拉大 —— 真机实测"拖到 0 却量出 705px"）；表单区吃掉剩下的那部分。 */
-.form-area { padding: 0 8px 6px; flex: 1 1 auto; min-height: 0; }
-.sql-area { margin: 0 8px 8px; flex: 0 0 auto; }
+/* 左右**不留内边距**：与「编辑表结构」同一口径（那里若两侧缩进，页签卡就比下方的
+   SQL 预览窄一圈，实测 890 vs 914，两块面板看着宽度不一致）。 */
+.form-area { padding: 5px 0 0; flex: 1 1 auto; min-height: 0; }
+/* 左右**不留外边距**：与「编辑表结构」同一口径 —— 那边表单卡与预览区同宽
+   （都贴着面板左右边），这里若缩进 8px 就会比上方的卡片窄一圈（实测差 16px）。 */
+.sql-area { margin: 0 0 8px; flex: 0 0 auto; }
 .tab-inner { gap: 8px; }
 
 /* ===== 对象权限表格（权限做列，勾选即授予）===== */
