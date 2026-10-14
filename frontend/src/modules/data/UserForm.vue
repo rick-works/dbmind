@@ -1,196 +1,242 @@
 <template>
   <div class="form-tab">
-    <!-- 顶部标题栏 -->
+    <!-- 顶部标题栏（与「编辑表结构」同一形态） -->
     <div class="form-tab-header">
       <div class="header-title">
         <el-icon :size="16" class="header-icon"><User /></el-icon>
         <span class="header-text">{{ editMode ? $t('upv.editUser') : $t('upv.newUser') }}</span>
+        <el-tag v-if="form.name" size="small" effect="plain">{{ form.name }}</el-tag>
         <el-tag size="small" effect="plain" type="info">{{ conn?.name }}</el-tag>
       </div>
       <div class="header-actions">
-        <el-button size="small" text :icon="CopyDocument" @click="copySql">{{ $t('upv.copySql') }}</el-button>
         <el-button size="small" :icon="Close" @click="emit('close')">{{ $t('common.close') }}</el-button>
       </div>
     </div>
 
-    <!-- 主体：左表单 + 右预览 -->
+    <!-- 主体：上方分页签的表单 + 下方 SQL 预览（与「编辑表结构」同一套布局） -->
     <div class="form-tab-body">
-      <!-- 左侧表单 -->
       <div class="form-area">
-        <!-- 基本信息 -->
-        <div class="form-card">
-          <div class="card-title">
-            <div class="card-title-icon"><el-icon><User /></el-icon></div>
-            <span>{{ $t('upv.basic') }}</span>
-          </div>
-          <div class="form-grid">
-            <el-form label-position="top" size="small">
-              <el-form-item :label="$t('upv.fieldUser')" required>
-                <el-input v-model="form.name" clearable :disabled="editMode" />
-              </el-form-item>
-            </el-form>
-            <el-form label-position="top" size="small">
-              <el-form-item :label="$t('upv.fieldPassword')" :required="!editMode">
-                <el-input v-model="form.password" type="password" show-password clearable :placeholder="editMode ? $t('upv.phPasswordKeep') : $t('upv.phPassword')" />
-              </el-form-item>
-            </el-form>
-            <el-form v-if="isMysql" label-position="top" size="small">
-              <el-form-item :label="$t('upv.fieldHost')">
-                <el-input v-model="form.host" clearable :placeholder="$t('upv.phHost')" />
-              </el-form-item>
-            </el-form>
-          </div>
-        </div>
-
-        <!-- MySQL 权限分配 -->
-        <div v-if="isMysql" class="form-card">
-          <div class="card-title">
-            <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
-            <span>{{ $t('upv.privileges') }}</span>
-          </div>
-          <div class="priv-seg">
-            <button
-              v-for="s in segOptions"
-              :key="s.value"
-              class="seg-btn"
-              :class="{ active: privSeg === s.value }"
-              @click="privSeg = s.value"
-            >{{ s.label }}</button>
-          </div>
-          <div v-if="privSeg === 'global'" class="priv-groups">
-            <div v-for="group in globalPrivGroups" :key="group.key" class="priv-group">
-              <div class="priv-group-title">
-                <span>{{ group.label }}</span>
-                <span class="priv-group-count">{{ group.checked }} / {{ group.total }}</span>
-                <span class="priv-group-line" />
-                <!-- 「快捷（全部权限）」那一组的勾选框本身就是开关，不再配按钮 -->
-                <span v-if="group.key !== 'all'" class="priv-group-actions">
-                  <button :disabled="group.checked === group.total"
-                          @click="setGroupPrivileges(group.items.map(p => p.value), true)">{{ $t('common.selectAll') }}</button>
-                  <button :disabled="group.checked === 0"
-                          @click="setGroupPrivileges(group.items.map(p => p.value), false)">{{ $t('common.clear') }}</button>
-                </span>
+        <!-- 字页签：纯文字（激活项主色 + 加粗），不用边框卡片 —— 与 TableDetailView 一致 -->
+        <el-tabs v-model="tab" class="table-tabs user-tabs">
+          <!-- ===== 基本信息 ===== -->
+          <el-tab-pane :label="$t('upv.tabBasic')" name="basic">
+            <div class="tab-inner">
+              <!-- 该类型还没有自动授权：如实说明，别摆一堆点了会报错的控件 -->
+              <el-alert v-if="!hasAnyGrantTab" type="info" :closable="false" show-icon class="grant-alert">
+                <template #title>{{ $t('upv.grantUnsupported', { type: connTypeLabel }) }}</template>
+              </el-alert>
+              <div class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon"><el-icon><User /></el-icon></div>
+                  <span>{{ $t('upv.basic') }}</span>
+                </div>
+                <div class="form-grid">
+                  <el-form label-position="top" size="small">
+                    <el-form-item :label="$t('upv.fieldUser')" required>
+                      <el-input v-model="form.name" clearable :disabled="editMode" />
+                    </el-form-item>
+                  </el-form>
+                  <el-form label-position="top" size="small">
+                    <el-form-item :label="$t('upv.fieldPassword')" :required="!editMode">
+                      <el-input v-model="form.password" type="password" show-password clearable :placeholder="editMode ? $t('upv.phPasswordKeep') : $t('upv.phPassword')" />
+                    </el-form-item>
+                  </el-form>
+                  <el-form v-if="isMysql" label-position="top" size="small">
+                    <el-form-item :label="$t('upv.fieldHost')">
+                      <el-input v-model="form.host" clearable :placeholder="$t('upv.phHost')" />
+                    </el-form-item>
+                  </el-form>
+                </div>
               </div>
-              <el-checkbox-group v-model="form.privileges" class="perm-grid compact">
-                <el-checkbox v-for="p in group.items" :key="p.value" :label="p.value" :value="p.value">
-                  {{ p.label }}
-                </el-checkbox>
-              </el-checkbox-group>
             </div>
-          </div>
-          <div v-if="privSeg === 'db'">
-            <div v-if="form.dbPrivileges.length === 0" class="empty-tip">{{ $t('upv.noDbPriv') }}</div>
-            <!-- 四个权限列表的 key 都改用对象身份：删掉中间一行时，下标 key 会让后面几行复用
-             组件实例，行内 el-select（库/对象/权限）的过滤态会串到别的行 -->
-        <div v-for="(row, i) in form.dbPrivileges" :key="rowKey(row)" class="priv-row">
-              <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable style="width: 180px">
-                <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
-              </el-select>
-              <el-tag v-if="isDbMissing(row.database)" size="small" type="warning" effect="plain">{{ $t('upv.dbMissing') }}</el-tag>
-              <el-tag v-if="isDorisSystemDb(row.database)" size="small" type="info" effect="plain">{{ $t('upv.dorisSystemDb') }}</el-tag>
-              <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:200px">
-                <el-option-group v-for="group in objectPrivGroups(row)" :key="group.key" :label="group.label">
-                  <el-option v-for="p in group.items" :key="p.value" :label="p.label" :value="p.value" />
-                </el-option-group>
-              </el-select>
-              <el-button type="danger" size="small" :icon="Delete" @click="removeDbPriv(i)" />
-            </div>
-            <el-button size="small" :icon="Plus" @click="addDbPriv" class="add-row-btn">{{ $t('upv.addDbPriv') }}</el-button>
-          </div>
-          <div v-if="privSeg === 'table'">
-            <div v-if="form.tablePrivileges.length === 0" class="empty-tip">{{ $t('upv.noTablePriv') }}</div>
-            <div v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)" class="priv-row">
-              <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable style="width: 140px" @change="onTablePrivDbChange(i)">
-                <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
-              </el-select>
-              <el-select v-model="row.table" size="small" :placeholder="$t('upv.phPickTable')" filterable style="width: 160px" :loading="row._loading">
-                <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
-              </el-select>
-              <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:180px">
-                <el-option-group v-for="group in objectPrivGroups(row)" :key="group.key" :label="group.label">
-                  <el-option v-for="p in group.items" :key="p.value" :label="p.label" :value="p.value" />
-                </el-option-group>
-              </el-select>
-              <el-button type="danger" size="small" :icon="Delete" @click="removeTablePriv(i)" />
-            </div>
-            <el-button size="small" :icon="Plus" @click="addTablePriv" class="add-row-btn">{{ $t('upv.addTablePriv') }}</el-button>
-          </div>
-        </div>
+          </el-tab-pane>
 
-        <!-- SQL Server 权限分配 -->
-        <div v-if="isMssql" class="form-card">
-          <div class="card-title">
-            <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
-            <span>{{ $t('upv.privilegesMssql') }}</span>
-          </div>
-          <div class="priv-seg">
-            <button
-              v-for="s in mssqlSegOptions"
-              :key="s.value"
-              class="seg-btn"
-              :class="{ active: mssqlPrivSeg === s.value }"
-              @click="mssqlPrivSeg = s.value"
-            >{{ s.label }}</button>
-          </div>
-          <div v-if="mssqlPrivSeg === 'server'" class="perm-grid compact">
-            <el-checkbox-group v-model="form.serverRoles">
-              <el-checkbox v-for="r in mssqlServerRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
-            </el-checkbox-group>
-          </div>
-          <div v-if="mssqlPrivSeg === 'db'" class="perm-grid compact">
-            <el-checkbox-group v-model="form.roles">
-              <el-checkbox v-for="r in mssqlRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
-            </el-checkbox-group>
-          </div>
-          <div v-if="mssqlPrivSeg === 'schema'">
-            <div v-if="form.schemaPrivileges.length === 0" class="empty-tip">{{ $t('upv.noSchemaPriv') }}</div>
-            <div v-for="(row, i) in form.schemaPrivileges" :key="rowKey(row)" class="priv-row">
-              <el-select v-model="row.schema" size="small" :placeholder="$t('upv.phPickSchema')" filterable style="width: 180px">
-                <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
-              </el-select>
-              <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:200px">
-                <el-option v-for="p in mssqlSchemaPrivs" :key="p.value" :label="p.label" :value="p.value" />
-              </el-select>
-              <el-button type="danger" size="small" :icon="Delete" @click="removeSchemaPriv(i)" />
-            </div>
-            <el-button size="small" :icon="Plus" @click="addSchemaPriv" class="add-row-btn">{{ $t('upv.addSchemaPriv') }}</el-button>
-          </div>
-          <div v-if="mssqlPrivSeg === 'object'">
-            <div v-if="form.objectPrivileges.length === 0" class="empty-tip">{{ $t('upv.noObjectPriv') }}</div>
-            <div v-for="(row, i) in form.objectPrivileges" :key="rowKey(row)" class="priv-row">
-              <el-input v-model="row.schema" size="small" placeholder="Schema" style="width: 120px" />
-              <el-input v-model="row.object" size="small" :placeholder="$t('upv.phObject')" style="flex:1;min-width:160px" />
-              <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:180px">
-                <el-option v-for="p in mssqlObjectPrivs" :key="p.value" :label="p.label" :value="p.value" />
-              </el-select>
-              <el-button type="danger" size="small" :icon="Delete" @click="removeObjectPriv(i)" />
-            </div>
-            <el-button size="small" :icon="Plus" @click="addObjectPriv" class="add-row-btn">{{ $t('upv.addObjectPriv') }}</el-button>
-          </div>
-        </div>
+          <!-- ===== 服务器权限 ===== -->
+          <el-tab-pane v-if="hasServerTab" :label="$t('upv.tabServer')" name="server">
+            <div class="tab-inner">
+              <!-- MySQL 系：全局权限 -->
+              <div v-if="isMysql" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.privileges') }}</span>
+                </div>
+                <div class="priv-groups">
+                  <div v-for="group in globalPrivGroups" :key="group.key" class="priv-group">
+                    <div class="priv-group-title">
+                      <span>{{ group.label }}</span>
+                      <span class="priv-group-count">{{ group.checked }} / {{ group.total }}</span>
+                      <span class="priv-group-line" />
+                      <span v-if="group.key !== 'all'" class="priv-group-actions">
+                        <button :disabled="group.checked === group.total"
+                                @click="setGroupPrivileges(group.items.map(p => p.value), true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="group.checked === 0"
+                                @click="setGroupPrivileges(group.items.map(p => p.value), false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </div>
+                    <el-checkbox-group v-model="form.privileges" class="perm-grid compact">
+                      <el-checkbox v-for="p in group.items" :key="p.value" :label="p.value" :value="p.value">
+                        {{ p.label }}
+                      </el-checkbox>
+                    </el-checkbox-group>
+                  </div>
+                </div>
+              </div>
 
-        <!-- PostgreSQL 角色分配 -->
-        <div v-if="isPgsql" class="form-card">
-          <div class="card-title">
-            <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
-            <span>{{ $t('upv.roleAssignPg') }}</span>
-          </div>
-          <div class="perm-grid compact">
-            <el-checkbox-group v-model="form.roles">
-              <el-checkbox v-for="r in pgRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
-            </el-checkbox-group>
-          </div>
-        </div>
+              <!-- SQL Server：服务器角色 -->
+              <div v-if="isMssql" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.segServer') }}</span>
+                </div>
+                <div class="perm-grid compact">
+                  <el-checkbox-group v-model="form.serverRoles">
+                    <el-checkbox v-for="r in mssqlServerRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
+                  </el-checkbox-group>
+                </div>
+              </div>
+
+              <!-- PostgreSQL / Kingbase：角色是集群级的 -->
+              <div v-if="isPgsql" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.roleAssignPg') }}</span>
+                </div>
+                <div class="perm-grid compact">
+                  <el-checkbox-group v-model="form.roles">
+                    <el-checkbox v-for="r in pgRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
+                  </el-checkbox-group>
+                </div>
+              </div>
+            </div>
+          </el-tab-pane>
+
+          <!-- ===== 数据库权限 ===== -->
+          <el-tab-pane v-if="hasDbTab" :label="$t('upv.tabDb')" name="database">
+            <div class="tab-inner">
+              <!-- MySQL 系：库级权限 -->
+              <div v-if="isMysql" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.segDb') }}</span>
+                </div>
+                <div v-if="form.dbPrivileges.length === 0" class="empty-tip">{{ $t('upv.noDbPriv') }}</div>
+                <div v-for="(row, i) in form.dbPrivileges" :key="rowKey(row)" class="priv-row">
+                  <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable style="width: 180px">
+                    <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
+                  </el-select>
+                  <el-tag v-if="isDbMissing(row.database)" size="small" type="warning" effect="plain">{{ $t('upv.dbMissing') }}</el-tag>
+                  <el-tag v-if="isDorisSystemDb(row.database)" size="small" type="info" effect="plain">{{ $t('upv.dorisSystemDb') }}</el-tag>
+                  <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:200px">
+                    <el-option-group v-for="group in objectPrivGroups(row)" :key="group.key" :label="group.label">
+                      <el-option v-for="p in group.items" :key="p.value" :label="p.label" :value="p.value" />
+                    </el-option-group>
+                  </el-select>
+                  <el-button type="danger" size="small" :icon="Delete" @click="removeDbPriv(i)" />
+                </div>
+                <el-button size="small" :icon="Plus" @click="addDbPriv" class="add-row-btn">{{ $t('upv.addDbPriv') }}</el-button>
+              </div>
+
+              <!-- SQL Server：数据库角色 -->
+              <div v-if="isMssql" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.segDbRoles') }}</span>
+                </div>
+                <div class="perm-grid compact">
+                  <el-checkbox-group v-model="form.roles">
+                    <el-checkbox v-for="r in mssqlRoles" :key="r" :label="r" :value="r">{{ r }}</el-checkbox>
+                  </el-checkbox-group>
+                </div>
+              </div>
+            </div>
+          </el-tab-pane>
+
+          <!-- ===== 细粒度权限（库/表、Schema/对象）===== -->
+          <el-tab-pane v-if="hasGranularTab" :label="$t('upv.tabGranular')" name="granular">
+            <div class="tab-inner">
+              <!-- MySQL 系：表级 -->
+              <div v-if="isMysql" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.segTable') }}</span>
+                </div>
+                <div v-if="form.tablePrivileges.length === 0" class="empty-tip">{{ $t('upv.noTablePriv') }}</div>
+                <div v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)" class="priv-row">
+                  <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable style="width: 140px" @change="onTablePrivDbChange(i)">
+                    <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
+                  </el-select>
+                  <el-select v-model="row.table" size="small" :placeholder="$t('upv.phPickTable')" filterable style="width: 160px" :loading="row._loading">
+                    <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
+                  </el-select>
+                  <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:180px">
+                    <el-option-group v-for="group in objectPrivGroups(row)" :key="group.key" :label="group.label">
+                      <el-option v-for="p in group.items" :key="p.value" :label="p.label" :value="p.value" />
+                    </el-option-group>
+                  </el-select>
+                  <el-button type="danger" size="small" :icon="Delete" @click="removeTablePriv(i)" />
+                </div>
+                <el-button size="small" :icon="Plus" @click="addTablePriv" class="add-row-btn">{{ $t('upv.addTablePriv') }}</el-button>
+              </div>
+
+              <!-- SQL Server：Schema 级 + 对象级（同一页签里上下两块） -->
+              <div v-if="isMssql" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.segSchema') }}</span>
+                </div>
+                <div v-if="form.schemaPrivileges.length === 0" class="empty-tip">{{ $t('upv.noSchemaPriv') }}</div>
+                <div v-for="(row, i) in form.schemaPrivileges" :key="rowKey(row)" class="priv-row">
+                  <el-select v-model="row.schema" size="small" :placeholder="$t('upv.phPickSchema')" filterable style="width: 180px">
+                    <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
+                  </el-select>
+                  <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:200px">
+                    <el-option v-for="p in mssqlSchemaPrivs" :key="p.value" :label="p.label" :value="p.value" />
+                  </el-select>
+                  <el-button type="danger" size="small" :icon="Delete" @click="removeSchemaPriv(i)" />
+                </div>
+                <el-button size="small" :icon="Plus" @click="addSchemaPriv" class="add-row-btn">{{ $t('upv.addSchemaPriv') }}</el-button>
+              </div>
+              <div v-if="isMssql" class="form-card">
+                <div class="card-title">
+                  <div class="card-title-icon purple"><el-icon><Key /></el-icon></div>
+                  <span>{{ $t('upv.segObject') }}</span>
+                </div>
+                <div v-if="form.objectPrivileges.length === 0" class="empty-tip">{{ $t('upv.noObjectPriv') }}</div>
+                <div v-for="(row, i) in form.objectPrivileges" :key="rowKey(row)" class="priv-row">
+                  <el-input v-model="row.schema" size="small" placeholder="Schema" style="width: 120px" />
+                  <el-input v-model="row.object" size="small" :placeholder="$t('upv.phObject')" style="flex:1;min-width:160px" />
+                  <el-select v-model="row.privileges" size="small" multiple collapse-tags :placeholder="$t('upv.phPickPriv')" style="flex:1;min-width:180px">
+                    <el-option v-for="p in mssqlObjectPrivs" :key="p.value" :label="p.label" :value="p.value" />
+                  </el-select>
+                  <el-button type="danger" size="small" :icon="Delete" @click="removeObjectPriv(i)" />
+                </div>
+                <el-button size="small" :icon="Plus" @click="addObjectPriv" class="add-row-btn">{{ $t('upv.addObjectPriv') }}</el-button>
+              </div>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
       </div>
 
-      <!-- 右侧 SQL 预览 -->
-      <div class="sql-area">
-        <div class="sql-head">
+      <!-- 分隔条：与「编辑表结构」同一套（向上拖 = 预览变高，双击最大/最小） -->
+      <div v-show="!sqlCollapsed" class="sql-resizer"
+           :title="$t('tdet.resizerTitle')"
+           @mousedown.prevent="onSqlResizeStart" @dblclick="onSqlResizeDblClick"></div>
+
+      <!-- SQL 预览：挪到**下方**（原来在右侧固定栏），点标题行折叠/展开 -->
+      <div ref="sqlAreaRef" class="sql-area" :class="{ collapsed: sqlCollapsed }"
+           :style="sqlCollapsed ? null : { height: sqlHeight + 'px' }">
+        <div class="sql-head" @click="sqlCollapsed = !sqlCollapsed"
+             :title="sqlCollapsed ? $t('tdet.expandSql') : $t('tdet.collapseSql')">
+          <el-icon class="sql-fold" :class="{ folded: sqlCollapsed }"><CaretRight /></el-icon>
           <el-icon><DocumentCopy /></el-icon>
           <span>{{ $t('upv.sqlPreview') }}</span>
           <el-tag size="small" effect="plain" type="info" class="sql-state" :class="previewOk ? 'ok' : 'warn'">
             {{ previewOk ? $t('upv.statusOk') : $t('upv.statusIncomplete') }}
           </el-tag>
+          <span class="sql-fold-tx">{{ sqlCollapsed ? $t('tdet.expand') : $t('tdet.collapse') }}</span>
+          <span class="sql-foot-actions" @click.stop>
+            <el-button size="small" text :icon="CopyDocument" @click="copySql">{{ $t('upv.copySql') }}</el-button>
+          </span>
         </div>
         <div class="sql-body">
           <pre><code>{{ previewSql || $t('upv.sqlPlaceholder') }}</code></pre>
@@ -206,7 +252,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { t } from '../../utils/i18n'
 import { User, Key, CaretRight, CopyDocument, Close, DocumentCopy, Plus, Delete } from '@element-plus/icons-vue'
@@ -238,25 +284,9 @@ const form = ref({
 const saving = ref(false)
 const databases = ref([])
 const schemas = ref([])
-const privSeg = ref('global')
-// 与其它模块同理：表里只存 labelKey，文案在下面的 computed 里现取。
-// 直接把中文写进模块常量，语言会被"冻"在加载那一刻 —— 切到英文后这两个分段选择器还是中文。
-const SEG_OPTIONS = [
-  { labelKey: 'upv.segGlobal', value: 'global' },
-  { labelKey: 'upv.segDb', value: 'db' },
-  { labelKey: 'upv.segTable', value: 'table' }
-]
-const segOptions = computed(() => SEG_OPTIONS.map(o => ({ value: o.value, label: t(o.labelKey) })))
-
-const mssqlPrivSeg = ref('server')
-const MSSQL_SEG_OPTIONS = [
-  { labelKey: 'upv.segServer', value: 'server' },
-  { labelKey: 'upv.segDbRoles', value: 'db' },
-  { labelKey: 'upv.segSchema', value: 'schema' },
-  { labelKey: 'upv.segObject', value: 'object' }
-]
-const mssqlSegOptions = computed(() => MSSQL_SEG_OPTIONS.map(o => ({ value: o.value, label: t(o.labelKey) })))
-
+// 当前页签：基本信息 / 服务器权限 / 数据库权限 / 细粒度权限
+// （原来是每张卡里再放一个"分段按钮"，层级与「编辑表结构」不一致，用户要求改成页签形态）
+const tab = ref('basic')
 const mssqlServerRoles = [
   'sysadmin', 'securityadmin', 'serveradmin', 'setupadmin',
   'processadmin', 'diskadmin', 'dbcreator', 'bulkadmin'
@@ -279,6 +309,25 @@ const isDbMissing = (db) => {
 const isMssql = computed(() => props.conn?.type === 'SQLSERVER')
 const isPgsql = computed(() => props.conn?.type === 'POSTGRESQL')
 const isClickhouse = computed(() => props.conn?.type === 'CLICKHOUSE')
+
+// ===== 页签可见性：**按数据库类型出对应界面** =====
+// MySQL 系：服务器(全局) / 数据库(库级) / 细粒度(表级)；
+// SQL Server：服务器角色 / 数据库角色 / 细粒度(Schema + 对象)；
+// PG、Kingbase：角色是集群级的，只有服务器权限这一页。
+const hasServerTab = computed(() => isMysql.value || isMssql.value || isPgsql.value)
+const hasDbTab = computed(() => isMysql.value || isMssql.value)
+const hasGranularTab = computed(() => isMysql.value || isMssql.value)
+const hasAnyGrantTab = computed(() => hasServerTab.value || hasDbTab.value)
+// 类型名（给"该类型还没实现自动授权"那句提示用）
+const connTypeLabel = computed(() => {
+  const map = {
+    MYSQL: 'MySQL', MARIADB: 'MariaDB', DORIS: 'Apache Doris', POSTGRESQL: 'PostgreSQL',
+    KINGBASE: 'KingbaseES', SQLSERVER: 'SQL Server', ORACLE: 'Oracle', DM: '达梦',
+    CLICKHOUSE: 'ClickHouse', SQLITE: 'SQLite', REDIS: 'Redis', MONGODB: 'MongoDB', H2: 'H2'
+  }
+  const key = String(props.conn?.type || '').toUpperCase()
+  return map[key] || key || ''
+})
 const isH2 = computed(() => props.conn?.type === 'H2')
 const isDerby = computed(() => props.conn?.type === 'DERBY')
 
@@ -706,6 +755,55 @@ watch(() => props.editData, (d) => {
 
 watch(() => props.conn?.id, loadDatabases, { immediate: true })
 watch(() => props.database, loadSchemas, { immediate: true })
+// ===== 底部 SQL 预览的折叠 / 拖拽（与「编辑表结构」同一套手感）=====
+const SQL_H_DEFAULT = 240
+const SQL_H_MIN = 96
+const FORM_MIN = 160
+const sqlAreaRef = ref(null)
+const sqlCollapsed = ref(false)
+const sqlHeight = ref(SQL_H_DEFAULT)
+const sqlMaxH = () => {
+  const parent = sqlAreaRef.value?.parentElement
+  const available = (parent ? parent.clientHeight : Math.round(window.innerHeight * 0.7)) - FORM_MIN
+  return Math.max(SQL_H_MIN, available)
+}
+let sqlDrag = null
+const onSqlResizeStart = (e) => {
+  sqlDrag = { startY: e.clientY, startH: sqlHeight.value }
+  document.body.style.cursor = 'row-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onSqlResizeMove)
+  window.addEventListener('mouseup', onSqlResizeEnd)
+}
+const onSqlResizeMove = (e) => {
+  if (!sqlDrag) return
+  const next = sqlDrag.startH + (sqlDrag.startY - e.clientY)
+  sqlHeight.value = Math.min(sqlMaxH(), Math.max(SQL_H_MIN, Math.round(next)))
+}
+const onSqlResizeEnd = () => {
+  sqlDrag = null
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  window.removeEventListener('mousemove', onSqlResizeMove)
+  window.removeEventListener('mouseup', onSqlResizeEnd)
+}
+const onSqlResizeDblClick = () => {
+  const max = sqlMaxH()
+  sqlHeight.value = sqlHeight.value >= max - 8 ? SQL_H_MIN : max
+}
+onBeforeUnmount(onSqlResizeEnd)
+
+// 页签在类型之间切换时可能变得不可见（如从 MySQL 切到 Oracle）：拉回「基本信息」，
+// 否则 el-tabs 会停在空内容上（看着像页面坏了）
+watch([hasServerTab, hasDbTab, hasGranularTab], () => {
+  const ok = ['basic', 'server', 'database', 'granular'].filter((k) => (
+    k === 'basic'
+    || (k === 'server' && hasServerTab.value)
+    || (k === 'database' && hasDbTab.value)
+    || (k === 'granular' && hasGranularTab.value)
+  ))
+  if (!ok.includes(tab.value)) tab.value = 'basic'
+})
 </script>
 
 <style scoped>
@@ -915,4 +1013,69 @@ watch(() => props.database, loadSchemas, { immediate: true })
   color: var(--dc-on-primary);
   font-weight: 500;
 }
+
+/* ===== 与「编辑表结构」(TableDetailView) 统一的形态：上方页签 + 下方 SQL 预览 ===== */
+
+/* 主体改成纵向：表单在上、预览在下（原来是左右分栏） */
+.form-tab-body { flex-direction: column; }
+
+/* 表单区：内容多，自己滚动（预览固定在下） */
+.form-area { overflow: auto; padding: 0 14px 10px; gap: 0; }
+
+/* 字页签：纯文字，激活项主色 + 加粗；去掉 Element 自带的下划线指示条 */
+.user-tabs :deep(.el-tabs__header) { margin: 0 0 10px; border-bottom: none; background: transparent; }
+.user-tabs :deep(.el-tabs__nav-wrap::after) { display: none; }
+.user-tabs :deep(.el-tabs__active-bar) { display: none; }
+.user-tabs :deep(.el-tabs__nav) { padding-top: 8px; }
+.user-tabs :deep(.el-tabs__item) {
+  height: 30px !important;
+  line-height: 30px;
+  padding: 0 14px !important;
+  font-size: 13px;
+  color: var(--dc-text-mid);
+  border-radius: 6px !important;
+  /* 必须 !important：MainView 里有一条全局 .dc-tabs .el-tabs__item.is-active 规则会命中这里 */
+  background: transparent !important;
+  transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+}
+.user-tabs :deep(.el-tabs__item:hover) { color: var(--dc-text-strong); }
+.user-tabs :deep(.el-tabs__item.is-active) {
+  color: var(--dc-primary) !important;
+  font-weight: 600;
+  background: var(--dc-bg-card) !important;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, .10);
+}
+.user-tabs :deep(.el-tabs__content) { overflow: visible; }
+/* 页签内容：与卡片同一列宽，卡片之间留缝 */
+.tab-inner { display: flex; flex-direction: column; gap: 10px; padding-bottom: 4px; }
+.grant-alert { margin-bottom: 2px; }
+
+/* SQL 预览：通栏在下方（原来是右侧 380px 固定栏） */
+.sql-area {
+  width: auto;
+  margin: 0 14px 12px;
+  flex-shrink: 0;
+  min-height: 0;
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  background: var(--dc-bg-card);
+  box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
+}
+.sql-area.collapsed { height: auto !important; }
+.sql-area .sql-body { flex: 1; min-height: 0; overflow: auto; }
+/* 分隔条：就是上下两块之间那道缝（6px + 透明底），悬停变主色 */
+.sql-resizer { height: 6px; flex: 0 0 6px; cursor: row-resize; position: relative; z-index: 2; background: transparent; }
+.sql-resizer::before {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px; height: 4px; border-radius: 3px;
+  background: var(--dc-text-dim); opacity: .45;
+  transition: background .15s ease, opacity .15s ease;
+}
+.sql-resizer:hover::before { background: var(--dc-primary); opacity: 1; }
+.sql-fold { transition: transform .15s ease; }
+.sql-fold.folded { transform: rotate(-90deg); }
+.sql-fold-tx { margin-left: auto; font-size: 12px; color: var(--dc-text-dim); }
+.sql-foot-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.sql-head { cursor: pointer; }
 </style>
