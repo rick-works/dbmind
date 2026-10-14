@@ -257,7 +257,7 @@ watch(() => [props.conn?.id, props.database, props.name], load, { immediate: tru
 
 // ===== 底部 SQL 预览的折叠 / 拖拽（与「编辑表结构」同一套手感）=====
 const SQL_H_DEFAULT = 260
-const SQL_H_MIN = 40   // 只留标题行：最低能到最低（点标题行仍可折叠/展开）
+const SQL_H_MIN = 0    // 最低可压到没有（只留分隔条，往上拖即可还原）
 const FORM_MIN = 0     // 上方详情卡不预留高度：往上拖可以把预览拉到顶
 const sqlAreaRef = ref(null)
 const sqlCollapsed = ref(false)
@@ -371,9 +371,9 @@ onBeforeUnmount(onSqlResizeEnd)
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  flex-shrink: 0;
+  flex: 0 0 auto;   /* 高度只认内联那一个（旧布局的 flex: 1 会在拖矮时把它拉大） */
   min-height: 0;
-  margin: 0 14px 12px;
+  margin: 0 8px 8px;
 }
 .sql-area.collapsed { height: auto !important; }
 /* 分隔条：本身就是上下两块卡片之间那道缝（6px + 透明底），悬停变主色 */

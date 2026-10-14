@@ -947,9 +947,10 @@ watch(() => props.conn?.id, loadDatabases, { immediate: true })
 watch(() => props.database, loadSchemas, { immediate: true })
 // ===== 底部 SQL 预览的折叠 / 拖拽（与「编辑表结构」同一套手感）=====
 const SQL_H_DEFAULT = 380
-// 最低 = 只留标题行（40px）：用户要求"最低能到最低"，再往下就没法用标题行拉回来了。
-// 折叠态（点标题行）另有 .collapsed，仍然能看到底部按钮。
-const SQL_H_MIN = 40
+// 最低 = **0**：用户要求"最低可以再低点"，于是允许把整个预览拖走（只留下面那条 6px 分隔条）。
+// 不会找不回来：分隔条一直在（悬停变主色、有 tooltip"双击最大/最小"），往上拖即可还原；
+// 另外点标题行的折叠态（.collapsed）也仍然保留。
+const SQL_H_MIN = 0
 // 上方表单**不预留**高度：往上拖可以把预览拉到顶（0 = 允许压到没有）。
 // 表单区自己有 overflow: auto，压扁了也不会把内容挤丢。
 const FORM_MIN = 0
@@ -1274,8 +1275,10 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .sql-head { cursor: pointer; }
 
 /* ===== 间距收紧（用户反馈：边距太大）===== */
-.form-area { padding: 0 8px 6px; }
-.sql-area { margin: 0 8px 8px; }
+/* 高度分配钉死：预览只认内联那一个 height（旧布局给过 flex: 1，不钉死时拖到很矮会被
+   flex-grow 重新拉大 —— 真机实测"拖到 0 却量出 705px"）；表单区吃掉剩下的那部分。 */
+.form-area { padding: 0 8px 6px; flex: 1 1 auto; min-height: 0; }
+.sql-area { margin: 0 8px 8px; flex: 0 0 auto; }
 .tab-inner { gap: 8px; }
 
 /* ===== 对象权限表格（权限做列，勾选即授予）===== */
