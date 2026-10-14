@@ -48,6 +48,26 @@
                     <td class="ft-label">{{ $t('upv.fieldHost') }}</td>
                     <td><el-input v-model="form.host" size="small" clearable :placeholder="$t('upv.phHost')" /></td>
                   </tr>
+                  <!-- 能改的项给控件（用户要求"能更改的都放开"）：改完点保存，
+                       由后端按方言拼 ALTER 子句执行 -->
+                  <tr v-for="d in editableAttrs" :key="d.key">
+                    <td class="ft-label">{{ d.label }}</td>
+                    <td class="ft-value">
+                      <el-switch v-if="d.kind === 'bool'" v-model="form.attrs[d.key]"
+                                 :active-text="$t('udv.yes')" :inactive-text="$t('udv.no')" />
+                      <span v-else-if="d.kind === 'num'" class="attr-num">
+                        <el-input-number v-model="form.attrs[d.key]" size="small" :min="0" :step="1" controls-position="right" />
+                        <span v-if="!form.attrs[d.key]" class="attr-hint">{{ $t('udv.unlimited') }}</span>
+                      </span>
+                      <span v-else-if="d.kind === 'plugin'" class="attr-num">
+                        <el-select v-model="form.attrs[d.key]" size="small">
+                          <el-option v-for="p in ATTR_PLUGINS" :key="p" :label="p" :value="p" />
+                        </el-select>
+                        <span v-if="form.attrs.authPlugin !== attrsBase.authPlugin" class="attr-hint">{{ $t('upv.pluginNeedsPassword') }}</span>
+                      </span>
+                      <el-input v-else v-model="form.attrs[d.key]" size="small" />
+                    </td>
+                  </tr>
                   <!-- 跟着数据源类型来的只读明细（Oracle 的表空间/状态、SQL Server 的登录名/默认架构、
                        PG 的 rol*、ClickHouse 的 storage/auth、MySQL 的插件/账号锁定…）。
                        这些列后端本来就返回了（见 dialect.rs 的 user_info），原来前端只取了 name / host，
@@ -251,16 +271,15 @@
             </div>
           </el-tab-pane>
 
-          <!-- ===== 细粒度权限（库/表、Schema/对象）===== -->
-          <el-tab-pane v-if="hasGranularTab" :label="granularTabLabel" name="granular">
-            <!-- 动作条：与页签同一行、贴右；SQL Server 这一页有两张表，所以两个按钮 -->
+          <!-- ===== 细粒度权限 =====
+               MySQL 系 = 表权限一页、Oracle = 对象权限一页；**SQL Server 拆成两页**
+               （Schema 级 / 对象级）—— 原来两张表挤在同一页里上下叠着，读起来分不清
+               是"同一份权限的两个视图"还是"两件事"（用户要求拆开）。 -->
+          <el-tab-pane v-if="hasGranularTab && !isMssql" :label="granularTabLabel" name="granular">
+            <!-- 动作条：与页签同一行、贴右 -->
             <div class="tab-actions">
               <el-button v-if="isOracle" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addObjectPrivOracle') }}</el-button>
               <el-button v-if="isMysql" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addTablePriv') }}</el-button>
-              <template v-if="isMssql">
-                <el-button size="small" type="primary" :icon="Plus" @click="addSchemaPriv">{{ $t('upv.addSchemaPriv') }}</el-button>
-                <el-button size="small" type="primary" :icon="Plus" @click="addObjectPriv">{{ $t('upv.addObjectPriv') }}</el-button>
-              </template>
             </div>
             <div class="tab-inner grant-tab">
               <!-- Oracle：对象权限（「模式 · 名称」两列冻结，权限项当列横向滚动） -->
@@ -357,6 +376,14 @@
                 </tbody>
               </table>
 
+            </div>
+          </el-tab-pane>
+          <!-- SQL Server：Schema 级与对象级**各占一页**（原来两张表挤在同一页里上下叠着） -->
+          <el-tab-pane v-if="isMssql" :label="$t('upv.tabSchema')" name="schema">
+            <div class="tab-actions">
+              <el-button size="small" type="primary" :icon="Plus" @click="addSchemaPriv">{{ $t('upv.addSchemaPriv') }}</el-button>
+            </div>
+            <div class="tab-inner grant-tab">
               <!-- SQL Server：Schema 级（模式冻结） -->
               <table v-if="isMssql" class="form-table mx-table mx-grouped">
                 <thead>
@@ -397,7 +424,14 @@
                   </tr>
                 </tbody>
               </table>
+            </div>
+          </el-tab-pane>
 
+          <el-tab-pane v-if="isMssql" :label="$t('upv.tabObjects')" name="object">
+            <div class="tab-actions">
+              <el-button size="small" type="primary" :icon="Plus" @click="addObjectPriv">{{ $t('upv.addObjectPriv') }}</el-button>
+            </div>
+            <div class="tab-inner grant-tab">
               <!-- SQL Server：对象级（「模式 · 对象」两列冻结，两者都可手写） -->
               <table v-if="isMssql" class="form-table mx-table mx-grouped">
                 <thead>
@@ -438,6 +472,7 @@
               </table>
             </div>
           </el-tab-pane>
+
         </el-tabs>
         </div>
       </div>
@@ -504,7 +539,9 @@ const form = ref({
   tablePrivileges: [],
   serverRoles: [],
   schemaPrivileges: [],
-  objectPrivileges: []
+  objectPrivileges: [],
+  // 可编辑的用户属性（账户锁定 / 配额 / 插件 / 表空间…），见 editableAttrs
+  attrs: {}
 })
 
 const saving = ref(false)
@@ -521,10 +558,148 @@ const mssqlServerRoles = [
 // 标题栏的路径：数据源名称在前 + `.` 连接（新建时还没有用户名，只显示数据源）
 const headPath = computed(() => [props.conn?.name, form.value.name].filter(Boolean).join('.'))
 
-// 「基本信息」里跟着数据源类型来的只读项。权限类列（MySQL 的 t.* 里有几十个 *_PRIV）
-// 不在这里列 —— 它们各自有页签；认证串一律不显示（密码只写不读，与其它地方的取数口径一致）。
+// ===== 基本信息里「能改的那些」=====
+// 各库能改的子集不同（执行那侧按方言拼 ALTER 子句，见后端 dialect.rs 的 user_action_sql）：
+//   MySQL 系    : ACCOUNT LOCK/UNLOCK、PASSWORD EXPIRE、WITH MAX_*、IDENTIFIED WITH <插件>
+//   Oracle / DM : ACCOUNT LOCK/UNLOCK、默认 / 临时表空间、概要文件
+//   SQL Server  : WITH DEFAULT_SCHEMA、ALTER LOGIN DISABLE/ENABLE
+//   PG/Kingbase : LOGIN / SUPERUSER / CREATEDB
+// 提交只带**改动过的**项（attrsBase 是打开表单那一刻的基准），没动过的不会出现在 SQL 里。
+const ATTR_PLUGINS = ['mysql_native_password', 'caching_sha2_password', 'sha256_password', 'unix_socket']
+
+// 从用户详情的明细列里取值：各家键名大小写与下划线都不一样（`account_locked` / `ACCOUNT_LOCKED`），
+// 去掉非字母数字再比（与 utils/userFields.js 的 normKey 同一口径）。
+const attrRaw = (name) => {
+  const want = String(name).toUpperCase().replace(/[^A-Z0-9]/g, '')
+  for (const [k, v] of Object.entries(props.editData?.fields || {})) {
+    if (String(k).toUpperCase().replace(/[^A-Z0-9]/g, '') === want) return v
+  }
+  return undefined
+}
+const attrYes = (v) => v === true || v === 1 || v === '1' || v === 'Y' || String(v).toLowerCase() === 'yes'
+const attrNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0 }
+const attrText = (v) => (v === undefined || v === null ? '' : String(v))
+
+// 每个可改项在明细列里的原始键名（大小写两套都列上）：改控件的不再在下面重复显示一遍
+const ATTR_RAW_KEYS = {
+  accountLocked: ['account_locked', 'ACCOUNT_LOCKED', 'account_status', 'ACCOUNT_STATUS'],
+  passwordExpired: ['password_expired', 'PASSWORD_EXPIRED'],
+  maxQueriesPerHour: ['max_questions', 'MAX_QUESTIONS'],
+  maxUpdatesPerHour: ['max_updates', 'MAX_UPDATES'],
+  maxConnectionsPerHour: ['max_connections', 'MAX_CONNECTIONS'],
+  maxUserConnections: ['max_user_connections', 'MAX_USER_CONNECTIONS'],
+  authPlugin: ['plugin', 'PLUGIN'],
+  defaultTablespace: ['default_tablespace', 'DEFAULT_TABLESPACE'],
+  temporaryTablespace: ['temporary_tablespace', 'TEMPORARY_TABLESPACE'],
+  profile: ['profile', 'PROFILE'],
+  disabled: ['disabled', 'is_disabled'],
+  defaultSchema: ['default_schema', 'default_schema_name'],
+  canLogin: ['can_login', 'rolcanlogin'],
+  isSuperuser: ['is_superuser', 'rolsuper'],
+  canCreateDb: ['can_create_db', 'rolcreatedb']
+}
+
+const attrsBase = ref({})
+const seedAttrs = () => {
+  const o = {}
+  if (isMysql.value) {
+    o.accountLocked = attrYes(attrRaw('account_locked'))
+    o.passwordExpired = attrYes(attrRaw('password_expired'))
+    o.maxQueriesPerHour = attrNum(attrRaw('max_questions'))
+    o.maxUpdatesPerHour = attrNum(attrRaw('max_updates'))
+    o.maxConnectionsPerHour = attrNum(attrRaw('max_connections'))
+    o.maxUserConnections = attrNum(attrRaw('max_user_connections'))
+    o.authPlugin = attrText(attrRaw('plugin'))
+  } else if (isOracle.value) {
+    // Oracle 的状态是 OPEN / LOCKED / EXPIRED… —— 这里只管"锁没锁"
+    o.accountLocked = attrText(attrRaw('account_status')).toUpperCase().indexOf('LOCKED') >= 0
+    o.defaultTablespace = attrText(attrRaw('default_tablespace'))
+    o.temporaryTablespace = attrText(attrRaw('temporary_tablespace'))
+    o.profile = attrText(attrRaw('profile'))
+  } else if (isMssql.value) {
+    o.disabled = attrYes(attrRaw('disabled'))
+    o.defaultSchema = attrText(attrRaw('default_schema'))
+  } else if (isPgsql.value) {
+    o.canLogin = attrYes(attrRaw('can_login'))
+    o.isSuperuser = attrYes(attrRaw('is_superuser'))
+    o.canCreateDb = attrYes(attrRaw('can_create_db'))
+  }
+  form.value.attrs = o
+  attrsBase.value = { ...o }
+}
+
+// 可改项清单。新建用户时不给：还没有"原值"可改（属性是建完之后调的 ALTER）
+const editableAttrs = computed(() => {
+  if (!props.editMode) return []
+  const defs = []
+  if (isMysql.value) {
+    defs.push(
+      { key: 'accountLocked', label: t('udv.fAccountLocked'), kind: 'bool' },
+      { key: 'passwordExpired', label: t('udv.fPwdExpired'), kind: 'bool' },
+      { key: 'maxQueriesPerHour', label: t('udv.fMaxQuestions'), kind: 'num' },
+      { key: 'maxUpdatesPerHour', label: t('udv.fMaxUpdates'), kind: 'num' },
+      { key: 'maxConnectionsPerHour', label: t('udv.fMaxConnections'), kind: 'num' },
+      { key: 'maxUserConnections', label: t('udv.fMaxUserConnections'), kind: 'num' },
+      { key: 'authPlugin', label: t('udv.fPlugin'), kind: 'plugin' }
+    )
+  } else if (isOracle.value) {
+    defs.push(
+      { key: 'accountLocked', label: t('udv.fAccountLocked'), kind: 'bool' },
+      { key: 'defaultTablespace', label: t('udv.fTablespace'), kind: 'text' },
+      { key: 'temporaryTablespace', label: t('udv.fTempTablespace'), kind: 'text' },
+      { key: 'profile', label: t('udv.fProfile'), kind: 'text' }
+    )
+  } else if (isMssql.value) {
+    defs.push({ key: 'defaultSchema', label: t('udv.fSchema'), kind: 'text' })
+    // 只有"带登录名"的用户（不是包含数据库用户）才 DISABLE 得了 —— 没有登录名就不摆这个开关
+    if (attrText(attrRaw('login_name')).trim()) {
+      defs.push({ key: 'disabled', label: t('udv.fDisabled'), kind: 'bool' })
+    }
+  } else if (isPgsql.value) {
+    defs.push(
+      { key: 'canLogin', label: t('udv.fCanLogin'), kind: 'bool' },
+      { key: 'isSuperuser', label: t('udv.fSuperuser'), kind: 'bool' },
+      { key: 'canCreateDb', label: t('udv.fCanCreateDb'), kind: 'bool' }
+    )
+  }
+  return defs
+})
+
+// 只交改动过的项
+const attrDelta = computed(() => {
+  const out = {}
+  for (const d of editableAttrs.value) {
+    const v = form.value.attrs[d.key]
+    if (v === attrsBase.value[d.key]) continue
+    out[d.key] = v
+  }
+  return out
+})
+
+// MySQL 的属性子句（预览用；执行的子句在后端 dialect.rs，两边同一套写法）。
+// 顺序按 MySQL 的 ALTER USER 语法：auth_option → WITH 资源项 → PASSWORD EXPIRE → ACCOUNT LOCK，
+// 顺序错了直接报语法错。
+const mysqlAttrClause = () => {
+  const a = attrDelta.value
+  let s = ''
+  if (a.authPlugin) s += ` IDENTIFIED WITH ${a.authPlugin} BY '***'`
+  else if (form.value.password) s += " IDENTIFIED BY '***'"
+  const quotas = []
+  if (a.maxQueriesPerHour !== undefined) quotas.push(`MAX_QUERIES_PER_HOUR ${a.maxQueriesPerHour}`)
+  if (a.maxUpdatesPerHour !== undefined) quotas.push(`MAX_UPDATES_PER_HOUR ${a.maxUpdatesPerHour}`)
+  if (a.maxConnectionsPerHour !== undefined) quotas.push(`MAX_CONNECTIONS_PER_HOUR ${a.maxConnectionsPerHour}`)
+  if (a.maxUserConnections !== undefined) quotas.push(`MAX_USER_CONNECTIONS ${a.maxUserConnections}`)
+  if (quotas.length) s += ` WITH ${quotas.join(' ')}`
+  if (a.passwordExpired !== undefined) s += a.passwordExpired ? ' PASSWORD EXPIRE' : ' PASSWORD EXPIRE NEVER'
+  if (a.accountLocked !== undefined) s += a.accountLocked ? ' ACCOUNT LOCK' : ' ACCOUNT UNLOCK'
+  return s
+}
+
+// 「基本信息」里跟着数据源类型来的**只读**项（已摆成控件的那些不再重复显示）。
+// 权限类列（MySQL 的 t.* 里有几十个 *_PRIV）不在这里列（它们各自有页签）；
+// 凭据列与授权文本的屏蔽在 utils/userFields.js 里统一做。
 const detailItems = computed(() => userDetailItems(props.editData?.fields, {
-  // 权限名本身不进「基本信息」（它们各自有页签）；凭据列的屏蔽在 util 里统一做
+  hide: editableAttrs.value.flatMap((d) => ATTR_RAW_KEYS[d.key] || []),
   hideRe: /PRIV$/
 }))
 
@@ -1100,8 +1275,10 @@ const previewSql = computed(() => {
     const lines = []
     if (!props.editMode) {
       lines.push(`CREATE USER ${who}${form.value.password ? " IDENTIFIED BY '***'" : ''};`)
-    } else if (form.value.password) {
-      lines.push(`ALTER USER ${who} IDENTIFIED BY '***';`)
+    } else {
+      // 属性（插件 / 配额 / 密码过期 / 账户锁定）与改密合成一条 ALTER USER —— 见 mysqlAttrClause
+      const clause = mysqlAttrClause()
+      if (clause) lines.push(`ALTER USER ${who}${clause};`)
     }
     const c = changes.value
     // 先撤销（只撤"取消了勾选"的那些），再授予（只授"新勾上"的那些）
@@ -1124,6 +1301,13 @@ const previewSql = computed(() => {
     }
     const c = changes.value
     const u = `[${form.value.name}]`
+    // 属性：默认架构；禁用走 ALTER LOGIN（要有登录名，包含数据库用户没有）
+    const a = attrDelta.value
+    if (a.defaultSchema !== undefined) sql += `\nALTER USER ${u} WITH DEFAULT_SCHEMA = [${a.defaultSchema}];`
+    if (a.disabled !== undefined) {
+      const login = attrText(attrRaw('login_name')).trim()
+      if (login) sql += `\nALTER LOGIN [${login}] ${a.disabled ? 'DISABLE' : 'ENABLE'};`
+    }
     for (const r of c.serverRoles.removed) sql += `\nALTER SERVER ROLE [${r}] DROP MEMBER ${u};`
     for (const r of c.serverRoles.added) sql += `\nALTER SERVER ROLE [${r}] ADD MEMBER ${u};`
     for (const r of c.roles.removed) sql += `\nALTER ROLE [${r}] DROP MEMBER ${u};`
@@ -1142,6 +1326,12 @@ const previewSql = computed(() => {
     }
     const c = changes.value
     const who = `"${form.value.name}"`
+    const flags = []
+    const a = attrDelta.value
+    if (a.canLogin !== undefined) flags.push(a.canLogin ? 'LOGIN' : 'NOLOGIN')
+    if (a.isSuperuser !== undefined) flags.push(a.isSuperuser ? 'SUPERUSER' : 'NOSUPERUSER')
+    if (a.canCreateDb !== undefined) flags.push(a.canCreateDb ? 'CREATEDB' : 'NOCREATEDB')
+    if (flags.length) sql += `\nALTER ROLE ${who} ${flags.join(' ')};`
     for (const r of c.roles.removed) sql += `\nREVOKE "${r}" FROM ${who};`
     for (const r of c.roles.added) sql += `\nGRANT "${r}" TO ${who};`
   } else if (isClickhouse.value) {
@@ -1168,6 +1358,12 @@ const previewSql = computed(() => {
     } else if (form.value.password) {
       lines.push(`ALTER USER ${who} IDENTIFIED BY "***";`)
     }
+    // 属性：锁定 / 默认表空间 / 临时表空间 / 概要文件（一次改一项最稳）
+    const oa = attrDelta.value
+    if (oa.accountLocked !== undefined) lines.push(`ALTER USER ${who} ${oa.accountLocked ? 'ACCOUNT LOCK' : 'ACCOUNT UNLOCK'};`)
+    if (oa.defaultTablespace !== undefined) lines.push(`ALTER USER ${who} DEFAULT TABLESPACE ${oa.defaultTablespace};`)
+    if (oa.temporaryTablespace !== undefined) lines.push(`ALTER USER ${who} TEMPORARY TABLESPACE ${oa.temporaryTablespace};`)
+    if (oa.profile !== undefined) lines.push(`ALTER USER ${who} PROFILE ${oa.profile};`)
     for (const r of oracleRevokes()) {
       lines.push(r.scope === 'object'
         ? `REVOKE ${r.privilege} ON "${r.owner}"."${r.object}" FROM ${who};`
@@ -1340,6 +1536,17 @@ const submit = async () => {
       // **原来有、现在没有了**的那些算出来交给后端逐条 revoke。
       opts.revoke = oracleRevokes()
     }
+    // 属性（配额 / 锁定 / 表空间 / 默认架构 / rol* 开关）：只交改动过的项
+    const attrs = { ...attrDelta.value }
+    if (Object.keys(attrs).length) {
+      if (attrs.authPlugin && !form.value.password) {
+        // 改插件却不给口令：MySQL 的 `IDENTIFIED WITH x`（不带 BY）会把口令置空 —— 那是把人锁在门外
+        ElMessage.warning(t('upv.pluginNeedsPassword'))
+        return
+      }
+      if (attrs.disabled !== undefined) attrs.loginName = attrText(attrRaw('login_name'))
+      opts.attrs = attrs
+    }
     const res = await userAction(props.conn.id, {
       action: props.editMode ? 'alter' : 'create',
       database: props.database,
@@ -1384,6 +1591,7 @@ const formSnapshot = () => JSON.stringify({
   objectPrivileges: (form.value.objectPrivileges || []).map((r) => ({
     schema: r.schema, object: r.object, privileges: [...(r.privileges || [])].sort(),
   })),
+  attrs: form.value.attrs,
 })
 const baseSnapshot = ref('')
 const dirty = computed(() => formSnapshot() !== baseSnapshot.value)
@@ -1402,8 +1610,10 @@ watch(() => props.editData, (d) => {
     form.value.objectPrivileges = (d.objectPrivileges || []).map(r => ({ ...r }))
     form.value.grants = d.grants || []
   } else {
-    form.value = { name: '', password: '', host: '%', privileges: [], roles: [], dbPrivileges: [], tablePrivileges: [], serverRoles: [], schemaPrivileges: [], objectPrivileges: [], grants: [] }
+    form.value = { name: '', password: '', host: '%', privileges: [], roles: [], dbPrivileges: [], tablePrivileges: [], serverRoles: [], schemaPrivileges: [], objectPrivileges: [], grants: [], attrs: {} }
   }
+  // 属性基准（可改项的"原值"）：与权限基准同一时刻存下，之后按差提交
+  seedAttrs()
   // 刚打开（或切换用户）时存基准与原状态：此刻"没动过"，预览不展示 SQL 文本；
   // 之后所有 GRANT/REVOKE 都按"与这份原状态的差"来出（见 changes 计算）。
   orig.value = JSON.parse(JSON.stringify({
@@ -1467,11 +1677,13 @@ onBeforeUnmount(onSqlResizeEnd)
 // 页签在类型之间切换时可能变得不可见（如从 MySQL 切到 Oracle）：拉回「基本信息」，
 // 否则 el-tabs 会停在空内容上（看着像页面坏了）
 watch([hasServerTab, hasDbTab, hasGranularTab], () => {
-  const ok = ['basic', 'server', 'database', 'granular'].filter((k) => (
+  const ok = ['basic', 'server', 'database', 'granular', 'schema', 'object'].filter((k) => (
     k === 'basic'
     || (k === 'server' && hasServerTab.value)
     || (k === 'database' && hasDbTab.value)
-    || (k === 'granular' && hasGranularTab.value)
+    || (k === 'granular' && hasGranularTab.value && !isMssql.value)
+    // SQL Server 的细粒度分成两页（Schema 级 / 对象级）
+    || ((k === 'schema' || k === 'object') && isMssql.value)
   ))
   if (!ok.includes(tab.value)) tab.value = 'basic'
 })
@@ -1849,6 +2061,9 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .ft-value { color: var(--dc-text); }
 .ft-value.allow, .ft-value.yes { color: var(--dc-accent); }
 .ft-value.deny, .ft-value.no { color: var(--dc-text-dim); }
+/* 可改项：数字输入 + 提示（0 = 不限制）；插件下拉 + "要同时填口令"的提示 */
+.attr-num { display: inline-flex; align-items: center; gap: 8px; }
+.attr-hint { font-size: 12px; color: var(--dc-text-dim); }
 .ft-label {
   display: flex;
   align-items: center;

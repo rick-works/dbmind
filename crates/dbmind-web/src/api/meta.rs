@@ -672,6 +672,8 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
         // 撤销清单一律为空 —— 探测只关心"这个方言有没有生成 SQL 的能力"
         &[],
         false,
+        // 属性（配额 / 锁定 / 表空间这些）同样与"有没有生成 SQL 的能力"无关
+        &crate::api::dialect::UserAttrs::default(),
     ));
     // 各类对象「查看 / 编辑」靠 `object_source`（取定义）；没实现的那几类
     // （ClickHouse / DB2 / H2 / Derby）点下去必然 501 —— 界面据此不摆这两个菜单项。
@@ -2859,6 +2861,39 @@ pub async fn user_action(
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let options = body.get("options").cloned().unwrap_or_else(|| json!({}));
+    // 可改的用户属性（配额 / 账户锁定 / 表空间 / 开关）—— 只带改动过的项。
+    // 这个文件统一是"现场取字段"的写法（没有专门的请求体结构体），这里跟着来：
+    // 认不出来的键会被忽略，但**不会**因此吞掉别的键（各字段单独取）。
+    let attrs = {
+        let a = options.get("attrs");
+        let flag = |k: &str| a.and_then(|v| v.get(k)).and_then(Value::as_bool);
+        let num = |k: &str| a.and_then(|v| v.get(k)).and_then(Value::as_i64);
+        let text = |k: &str| {
+            a.and_then(|v| v.get(k))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+        };
+        crate::api::dialect::UserAttrs {
+            account_locked: flag("accountLocked"),
+            password_expired: flag("passwordExpired"),
+            max_queries_per_hour: num("maxQueriesPerHour"),
+            max_updates_per_hour: num("maxUpdatesPerHour"),
+            max_connections_per_hour: num("maxConnectionsPerHour"),
+            max_user_connections: num("maxUserConnections"),
+            auth_plugin: text("authPlugin"),
+            default_tablespace: text("defaultTablespace"),
+            temporary_tablespace: text("temporaryTablespace"),
+            profile: text("profile"),
+            disabled: flag("disabled"),
+            default_schema: text("defaultSchema"),
+            login_name: text("loginName"),
+            can_login: flag("canLogin"),
+            is_superuser: flag("isSuperuser"),
+            can_create_db: flag("canCreateDb"),
+        }
+    };
     let (_, dialect) = ctx_of(&state, &id).await?;
     let mysql_family = matches!(dialect.kind.key(), "mysql" | "mariadb" | "doris");
     let oracle_family = matches!(dialect.kind.key(), "oracle");
@@ -3022,6 +3057,7 @@ pub async fn user_action(
         &privileges,
         &revokes,
         reset_privileges,
+        &attrs,
     ) {
         Meta::Sql(sql) => sql,
         _ => {

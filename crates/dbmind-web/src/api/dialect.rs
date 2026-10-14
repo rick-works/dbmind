@@ -148,6 +148,44 @@ pub struct GrantRevoke {
     pub object: String,
 }
 
+/// 用户属性：编辑表单「基本信息」里那批**能改的项**（配额 / 账户锁定 / 表空间 / 开关）。
+///
+/// **只带改动过的**：`None` = 这一项不动。各家支持的子集不同（见 `user_action_sql`
+/// 各分支），传了本方言不支持的项会被忽略、不会拼进 SQL —— 前端按方言决定摆哪些控件，
+/// 这里是第二道闸。
+#[derive(Debug, Default, Clone)]
+pub struct UserAttrs {
+    // MySQL 系
+    pub account_locked: Option<bool>,
+    pub password_expired: Option<bool>,
+    pub max_queries_per_hour: Option<i64>,
+    pub max_updates_per_hour: Option<i64>,
+    pub max_connections_per_hour: Option<i64>,
+    pub max_user_connections: Option<i64>,
+    pub auth_plugin: Option<String>,
+    // Oracle / DM
+    pub default_tablespace: Option<String>,
+    pub temporary_tablespace: Option<String>,
+    pub profile: Option<String>,
+    // SQL Server
+    pub disabled: Option<bool>,
+    pub default_schema: Option<String>,
+    pub login_name: Option<String>,
+    // PostgreSQL / Kingbase
+    pub can_login: Option<bool>,
+    pub is_superuser: Option<bool>,
+    pub can_create_db: Option<bool>,
+}
+
+/// MySQL 的认证插件白名单：插件名会**原样拼进 SQL**（`identified with <插件>`），
+/// 所以只认名单内的 —— 与权限名同一个道理。
+pub fn is_mysql_auth_plugin(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_lowercase().as_str(),
+        "mysql_native_password" | "caching_sha2_password" | "sha256_password" | "unix_socket"
+    )
+}
+
 /// Oracle 系统权限白名单（`grant <这些> to u`）。权限名会被**拼进 SQL**，
 /// 所以只放行清单里的 —— 界面传别的名字一律拒绝，不拼进语句。
 pub const ORACLE_SYSTEM_PRIVS: [&str; 30] = [
@@ -779,6 +817,7 @@ _ => Meta::Unwritten,
         privileges: &UserPrivileges,
         revokes: &[GrantRevoke],
         reset_privileges: bool,
+        attrs: &UserAttrs,
     ) -> Meta {
         let u = self.quote(user);
         let pwd = self.literal(password);
@@ -804,6 +843,30 @@ _ => Meta::Unwritten,
                     if !password.is_empty() {
                         parts.push(format!("alter user {u} with password = {pwd}"));
                     }
+                    // 属性：默认架构；「禁用」走 ALTER LOGIN（要有登录名 —— 包含数据库用户没有，
+                    // 那种用户禁不了，前端也不摆这个开关）
+                    if let Some(v) = attrs
+                        .default_schema
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        parts.push(format!("alter user {u} with default_schema = {}", self.quote(v)));
+                    }
+                    if let Some(v) = attrs.disabled {
+                        if let Some(login) = attrs
+                            .login_name
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                        {
+                            parts.push(format!(
+                                "alter login {} {}",
+                                self.quote(login),
+                                if v { "disable" } else { "enable" }
+                            ));
+                        }
+                    }
                     for role in &role_parts {
                         parts.push(format!("alter role {role} add member {u}"));
                     }
@@ -828,10 +891,46 @@ _ => Meta::Unwritten,
                         parts.push(create);
                     }
                     "alter" => {
-                        // 只改权限、不改密码是常见操作 ⇒ ALTER 只在给了密码时才生成。
-                        // （以前这里没密码就返回 Unwritten，等于「改权限」这条路根本走不通）
-                        if !password.is_empty() {
-                            parts.push(format!("alter user {full} identified by {pwd}"));
+                        // 密码 / 认证插件 / 配额 / 密码过期 / 账户锁定**合成一条** `alter user`。
+                        // ⚠️ 子句顺序必须按 MySQL 的语法来：auth_option（IDENTIFIED …）→
+                        // resource_option（WITH MAX_*）→ password_option（PASSWORD EXPIRE）→
+                        // account_option（ACCOUNT LOCK）。顺序错了直接报语法错。
+                        let mut clause = String::new();
+                        if let Some(plugin) = attrs.auth_plugin.as_deref() {
+                            // 改插件**必须连口令一起给**：`identified with x`（不带 BY）会把口令置空，
+                            // 用户当场就登不进去了。
+                            if !is_mysql_auth_plugin(plugin) || password.is_empty() {
+                                return Meta::Unwritten;
+                            }
+                            clause.push_str(&format!(" identified with {plugin} by {pwd}"));
+                        } else if !password.is_empty() {
+                            clause.push_str(&format!(" identified by {pwd}"));
+                        }
+                        // 配额（0 = 不限制）。四个是一组，给哪个写哪个。
+                        let mut quota: Vec<String> = Vec::new();
+                        if let Some(v) = attrs.max_queries_per_hour {
+                            quota.push(format!("max_queries_per_hour {v}"));
+                        }
+                        if let Some(v) = attrs.max_updates_per_hour {
+                            quota.push(format!("max_updates_per_hour {v}"));
+                        }
+                        if let Some(v) = attrs.max_connections_per_hour {
+                            quota.push(format!("max_connections_per_hour {v}"));
+                        }
+                        if let Some(v) = attrs.max_user_connections {
+                            quota.push(format!("max_user_connections {v}"));
+                        }
+                        if !quota.is_empty() {
+                            clause.push_str(&format!(" with {}", quota.join(" ")));
+                        }
+                        if let Some(v) = attrs.password_expired {
+                            clause.push_str(if v { " password expire" } else { " password expire never" });
+                        }
+                        if let Some(v) = attrs.account_locked {
+                            clause.push_str(if v { " account lock" } else { " account unlock" });
+                        }
+                        if !clause.is_empty() {
+                            parts.push(format!("alter user {full}{clause}"));
                         }
                     }
                     "drop" => return Meta::Sql(format!("drop user {full}")),
@@ -917,6 +1016,20 @@ _ => Meta::Unwritten,
                     if !password.is_empty() {
                         parts.push(format!("alter role {u} password {pwd}"));
                     }
+                    // 属性：三个开关合成一条 alter role（PG 的 role 属性就是这些字面开关）
+                    let mut flags: Vec<&str> = Vec::new();
+                    if let Some(v) = attrs.can_login {
+                        flags.push(if v { "login" } else { "nologin" });
+                    }
+                    if let Some(v) = attrs.is_superuser {
+                        flags.push(if v { "superuser" } else { "nosuperuser" });
+                    }
+                    if let Some(v) = attrs.can_create_db {
+                        flags.push(if v { "createdb" } else { "nocreatedb" });
+                    }
+                    if !flags.is_empty() {
+                        parts.push(format!("alter role {u} {}", flags.join(" ")));
+                    }
                     for role in &role_parts {
                         parts.push(format!("grant {role} to {u}"));
                     }
@@ -992,6 +1105,34 @@ _ => Meta::Unwritten,
                     if !password.is_empty() {
                         let pwd_id = self.quote(password);
                         parts.push(format!("alter user {u} identified by {pwd_id}"));
+                    }
+                    // 属性（一次一项最稳）：账户锁定 / 默认表空间 / 临时表空间 / 概要文件。
+                    // 表空间与概要文件收的是**标识符**（不是字符串），用 quote 而不是 literal；
+                    // 空串当"没填"忽略 —— 否则会拼出 `default tablespace ""` 这种错语句。
+                    if let Some(v) = attrs.account_locked {
+                        parts.push(format!(
+                            "alter user {u} {}",
+                            if v { "account lock" } else { "account unlock" }
+                        ));
+                    }
+                    if let Some(v) = attrs
+                        .default_tablespace
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        parts.push(format!("alter user {u} default tablespace {}", self.quote(v)));
+                    }
+                    if let Some(v) = attrs
+                        .temporary_tablespace
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        parts.push(format!("alter user {u} temporary tablespace {}", self.quote(v)));
+                    }
+                    if let Some(v) = attrs.profile.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        parts.push(format!("alter user {u} profile {}", self.quote(v)));
                     }
                     parts.extend(Self::oracle_revoke_parts(&u, revokes));
                     parts.extend(Self::oracle_grant_parts(&u, roles, privileges));
