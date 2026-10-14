@@ -1883,10 +1883,17 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .mx-grp .ft-group-name { color: var(--dc-text-strong); }
 .mx-grp .priv-group-count { font-size: 11.5px; }
 .mx-grp .priv-group-actions { margin-left: 2px; }
-/* 动作条必须是 **inline-flex**：原来写 display: flex 是块级，
-   `text-align: center` 管不到它 —— 于是"分组名 + 计数"居中了、紧跟的「全选 清空」却贴在
-   左边，整格看着就是歪的（用户反馈"全选和清空没居中啊"）。 */
-.mx-grp .priv-group-actions { display: inline-flex; align-items: center; gap: 8px; vertical-align: middle; }
+/* 分类表头分**两行**：第一行「分组名 + 已勾/共几项」，第二行「全选 / 清空」。
+   动作条用**块级 flex**，效果是两件事一起成立：
+     · 它必然另起一行（不会跟第一行挤在一起 —— 之前用 inline-flex 就是挤在一行）；
+     · justify-content: center 让它整行居中（cell 上的 text-align 管不到块级 flex）。 */
+.mx-grp .priv-group-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
 .mx-grp .priv-group-actions button { vertical-align: middle; }
 .mx-priv { text-align: center; min-width: 74px; padding-left: 6px !important; padding-right: 6px !important; }
 .mx-cell { text-align: center; padding-left: 2px !important; padding-right: 2px !important; }
