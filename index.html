@@ -693,6 +693,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.27（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.27</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-15</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>用户与权限整体重做</b>：用户管理移到顶部（连接级页面），界面与「编辑表结构」统一（上方页签、下方 SQL 预览）；权限改成矩阵表——权限项当列、横向滚动；授权只出差量，取消勾选只发这一条 REVOKE，不再整份重发</li>
+            <li><b>Oracle 用户可新建 / 改密 / 删除，并按「系统权限 / 角色 / 对象权限」三层授权；SQL Server 的系统权限、服务器角色、数据库角色、对象权限四层都能真正落库</b></li>
+            <li><b>写入前先拦</b>：只读连接与标注为生产环境的库，新增 / 删除 / 保存点下去就被拦下并在页面顶部常驻提示（以前是填完表单才被后端拒绝）；达梦这类只支持查看用户的数据源，表单直接是只读的</li>
+            <li><b>Oracle 一批必修</b>：支持「模式」层（不再多出一层多余的「库」）、树上的「视图」不再恒为空、例程与触发器计数不再恒为 0、首次读列从 30 秒降到 4 秒上下；改名类操作按各家方言走（Oracle 用 RENAME、ClickHouse 用 RENAME TABLE），取对象定义与编辑表结构几个必报错的操作也修好了</li>
+            <li><b>PostgreSQL / KingbaseES 的用户详情以前打不开（详情查询里的字符串拼接与判空函数是从 SQL Server 抄来的），现在能正常查看；元数据清单去掉 5000 条的人为上限（撞上引擎硬顶时树上显示 5000+，不再装作完整），打开数据库会后台预热最近用过的连接</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.27" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.27" target="_blank" rel="noopener">下载 v1.2.27</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.26（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +723,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.26</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-13</span>
           </div>
           <ul class="rel-notes">
