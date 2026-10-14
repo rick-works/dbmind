@@ -662,7 +662,10 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
     let user_manage_ok = has(dialect.user_action_sql(
         "create",
         "__probe__",
-        "",
+        // 口令给占位值而不是空串：Oracle 这类"必须带口令才建得了用户"的方言，
+        // 空口令会被 create 分支判成 Unwritten —— 于是**明明实现了却报成没实现**
+        // （真机现象：SQL 补好了，页面上的「新增用户」仍然置灰）。
+        "__probe__",
         "%",
         &[],
         &crate::api::dialect::UserPrivileges::default(),

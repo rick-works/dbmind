@@ -889,6 +889,53 @@ _ => Meta::Unwritten,
                 "drop" => format!("drop user {u}"),
                 _ => return Meta::Unwritten,
             }),
+            // Oracle：`create user / alter user ... identified by / drop user`。
+            // 与 PG、ClickHouse 一样忽略 host（Oracle 没有 (user, host) 二元组）。
+            //
+            // 两条刻意的取舍：
+            // · 建完顺手 `grant create session` —— 不然新建的用户**连不上去**，等于没建好；
+            //   这不是"多授了权限"，是建一个有登录能力的用户的最小集合。
+            // · 删除用**不带 cascade** 的 `drop user` —— 带 cascade 会把该用户 schema 下的
+            //   所有对象一起删掉，那是不可逆的破坏；他自己的对象就该由 ORA-01922 拦下来、
+            //   让管理员显式去执行 `drop user ... cascade`，而不是我们替他决定。
+            "oracle" => Meta::Sql(match action {
+                "create" => {
+                    let mut parts: Vec<String> = Vec::new();
+                    if password.is_empty() {
+                        // 没有口令就建不了 Oracle 用户（它必须带 identified by）
+                        return Meta::Unwritten;
+                    }
+                    // ⚠️ 口令要用**双引号标识符**，不能用 `pwd`（单引号字符串字面量）：
+                    // Oracle 的 `identified by` 收的是标识符，给字面量会报
+                    // `ORA-00988: 密码缺失或无效`（真机上就是这么报的）。
+                    // 引号里的内容原样保留 —— 大小写与 @ 这类特殊字符都不会被改写。
+                    let pwd_id = self.quote(password);
+                    parts.push(format!("create user {u} identified by {pwd_id}"));
+                    parts.push(format!("grant create session to {u}"));
+                    for role in &role_parts {
+                        parts.push(format!("grant {role} to {u}"));
+                    }
+                    parts.join(";\n")
+                }
+                "alter" => {
+                    let mut parts: Vec<String> = Vec::new();
+                    if !password.is_empty() {
+                        let pwd_id = self.quote(password);
+                        parts.push(format!("alter user {u} identified by {pwd_id}"));
+                    }
+                    for role in &role_parts {
+                        parts.push(format!("grant {role} to {u}"));
+                    }
+                    if parts.is_empty() {
+                        return Meta::Unwritten;
+                    }
+                    parts.join(";\n")
+                }
+                "drop" => format!("drop user {u}"),
+                _ => return Meta::Unwritten,
+            }),
+            // DM（达梦）：语法与 Oracle 相近，但没真机验证过，先保持 Unwritten ——
+            // 与别处"没验证就不动"同一个原则。
             _ => Meta::Unwritten,
         }
     }
