@@ -693,6 +693,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.28（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.28</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-15</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>修一个我自己引入的回归</b>：处理 Oracle 的问题时加的「元数据预热」忘了只给 Oracle，所有数据库的每个新会话都在付这笔账（跨库找一张不存在的表）—— 树展开一次要建几十个会话，表现出来就是「所有库展开都变慢、编辑表结构转半天」。现在预热只在 Oracle 上做</li>
+            <li><b>ClickHouse 的建连从 2.4 秒回到 0.1 秒级：驱动默认走的 Apache HttpClient 路径在 Windows 上每次建连固定多 2 秒以上，换成驱动自带的 URLConnection 路径（实测取列 2.9 秒 → 0.2 秒）</b></li>
+            <li><b>编辑表结构页也挂上只读 / 生产环境的常驻提示条（与用户管理页同一形态）：只读连接或标注为生产的库，进页面就知道保存会被拦下，而不是改完点「保存修改」才被拒</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.28" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.28" target="_blank" rel="noopener">下载 v1.2.28</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.27（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +721,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.27</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-15</span>
           </div>
           <ul class="rel-notes">

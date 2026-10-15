@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.28": [
+        "Fixed a regression of my own making: the metadata warm-up added while fixing Oracle was applied to every data source, so every new session on every database paid for a cross-schema lookup of a table that does not exist - expanding a database opens dozens of sessions, which showed up as every database getting slower to expand and the table editor taking forever. The warm-up now only runs on Oracle",
+        "ClickHouse connections are back from 2.4 seconds to the 0.1-second range: the JDBC driver defaults to an Apache HttpClient code path that costs 2+ seconds per connection on Windows; switched to the driver built-in URLConnection path (fetching columns measured at 2.9s -> 0.2s)",
+        "The table editor now shows the same standing notice as the user page for read-only / production connections: on read-only connections or databases marked Production you learn up front that saving will be blocked, instead of being told after you hit Save"
+    ],
     "v1.2.27": [
         "Users and privileges reworked end to end: user management moved to the top bar (a connection-level page) and uses the same layout as Edit table structure (tabs on top, SQL preview below); privileges are shown as a matrix (privileges as columns, scrolled horizontally) and grants now emit only the difference - unticking a privilege sends just that one REVOKE instead of the whole set",
         "Oracle users can be created, have their password changed and be dropped, with system privileges / roles / object privileges granted in three layers; on SQL Server all four layers (system privileges, server roles, database roles, object privileges) really land in the database",
