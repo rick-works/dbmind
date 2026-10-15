@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.30": [
+        "User management permission matrix overhaul: every column header across all databases now carries an inline Chinese description (including the full ClickHouse privilege set, external data sources and the SQL Server ANY family) - no more guessing English privilege names",
+        "ClickHouse users can now be granted table/view level privileges via a new Table Privileges tab (pick a database and a table, tick privileges, get GRANT … ON db.table); database-privilege group counters no longer show a zero denominator",
+        "Privilege column captions enlarged from 10px to 11px; dynamically returned privilege names now get a fallback description assembled from verb + noun rules",
+        "MySQL 5.7 compatibility: CREATE ROLE / DROP ROLE are hidden automatically when the server is 5.7 (they only exist in 8.0; ticking them caused error 1064 on save)",
+        "Fixed metadata calls (table editor, tree expansion) queuing forever after the first one and hitting the 30-second timeout (session lock leak in the embedded agent)"
+    ],
     "v1.2.29": [
         "In the dark theme the read-only / production standing notice is no longer a glaring bright-yellow band: its colors now come from per-theme variables (dark blends a low-opacity tint into the background with bright text; the light theme keeps the classic pale-yellow band). Applies to both the user page and the table editor",
         "User management is now strictly connection-scoped: the list, forms and deletion no longer carry the database selected in the tree - this fixes a real-device failure where selecting a schema on Oracle and then switching the picker to MySQL sent that old name along and failed with Unknown database; selecting a data source (the connection node) in the tree is now enough, no need to drill down to a database level",
