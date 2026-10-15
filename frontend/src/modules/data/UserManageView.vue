@@ -103,9 +103,9 @@ import { t } from '../../utils/i18n'
 import { guardConnWrite, isProdConn, loadProtectProd } from '../../utils/connGuard'
 
 const props = defineProps({
-  // 左侧当前选中的连接 / 库：**跟随它们**（用户在左边选了，这里自动带出来）
+  // 左侧当前选中的**连接**：跟随它（用户在左边选了连接，这里自动带出来）。
+  // 只跟连接、不跟库 —— 用户是连接级对象，选到哪一层库都与此页无关。
   activeConnId: { type: String, default: '' },
-  activeDb: { type: String, default: '' },
   // 表单保存后 MainView 会 +1，用来刷新清单（跨组件的"该刷新了"信号）
   reloadTick: { type: Number, default: 0 }
 })
@@ -174,7 +174,11 @@ const reload = async () => {
       rows.value = []
       return
     }
-    const list = await listUsers(selId.value, props.activeDb || '')
+    // 用户是**连接级**对象（清单/表单/删除都不依赖某个库）。这里曾经跟着
+    // 左侧选中的库走：树里选着 Oracle 的 system、下拉切到 MySQL，清单请求还带着
+    // 那个库名 —— MySQL 直接报 Unknown database 'free.system'（真机回归）。
+    // 所以一律不带库：选连接就够了，不需要选到数据库层级。
+    const list = await listUsers(selId.value, '')
     rows.value = Array.isArray(list) ? list : []
   } catch (e) {
     rows.value = []
@@ -196,14 +200,14 @@ watch(() => props.activeConnId, (val) => {
     reload()
   }
 }, { immediate: true })
-// 左侧换了库（如从 FREE 切到 FREE.SYS）：同一个连接下也要重新取清单
-watch(() => props.activeDb, () => { if (selId.value) reload() })
+// 左侧换了库**不再重新取清单**：用户是连接级对象，清单不依赖某个库
+// （以前跟着换，树里选着 Oracle 的库、下拉切到 MySQL 就会带着那个库名去请求而报错）。
 
 const openCreate = () => {
   if (!canManage.value) return
   // 只读 / 生产 在**点击那一刻**就拦下（与树上清空/删除表同一个顺序：不要填完再被拒）
   if (!guard(t('um.newUser'))) return
-  emit('open-form', { mode: 'create', connId: selId.value, database: props.database || '' })
+  emit('open-form', { mode: 'create', connId: selId.value, database: '' })
 }
 const openEdit = (row) => {
   const host = row.host || ''
@@ -227,7 +231,7 @@ const dropUser = (row) => {
   ).then(async () => {
     try {
       const res = await userAction(selId.value, {
-        action: 'drop', database: props.database || '', userName: row.name, host
+        action: 'drop', database: '', userName: row.name, host
       })
       if (res && res.success) {
         ElMessage.success(t('um.deleted', { name: fullName }))
@@ -274,16 +278,18 @@ onMounted(async () => {
 .um-conn { width: 220px; }
 .um-opt-name { float: left; }
 .um-opt-type { float: right; color: var(--dc-text-dim); font-size: 12px; margin-left: 12px; }
-/* 只读 / 生产 的常驻提示条：与工具条同一圈缝、同一圆角，橙色描边 + 浅底
-   （不是红色：这不是"出错了"，是"这里的改动会被拦"）。 */
+/* 只读 / 生产 的常驻提示条：与工具条同一圈缝、同一圆角
+   （不是红色：这不是"出错了"，是"这里的改动会被拦"）。
+   配色用 --dc-warn-* 分主题变量：深色下低透明度融底 + 亮字，不再用 Element
+   的浅黄底（那是浅色主题的值，深色下刺眼）。 */
 .um-guard {
   display: flex; align-items: center; gap: 7px;
   margin: 5px 5px 0;
   padding: 6px 11px;
-  border: 1px solid var(--el-color-warning-light-5, #f3d19e);
+  border: 1px solid var(--dc-warn-border);
   border-radius: 8px;
-  background: var(--el-color-warning-light-9, #fdf6ec);
-  color: var(--el-color-warning-dark-2, #b88230);
+  background: var(--dc-warn-wash);
+  color: var(--dc-warn-text);
   font-size: 12.5px;
   line-height: 1.5;
 }
@@ -291,7 +297,7 @@ onMounted(async () => {
   flex: none;
   width: 15px; height: 15px; line-height: 15px; text-align: center;
   border-radius: 50%;
-  background: var(--el-color-warning, #e6a23c);
+  background: var(--dc-warning);
   color: #fff; font-size: 11px; font-weight: 700;
 }
 /* 主体留 5px：与上方工具条卡同一圈缝，圆角才不会被面板边线"压平" */

@@ -25,6 +25,13 @@
   --dc-env-dev: #3ddc97;
   --dc-env-dev-wash: rgba(61, 220, 151, .12);
   --dc-env-test: #f59e0b;
+  /* 只读/生产的常驻提示条（用户管理 / 编辑表结构共用）：**分主题**取值。
+     不能用 Element 的 light-9 浅黄底 —— 那是浅色主题的值，深色下一条亮带浮在
+     暗页面上非常刺眼（用户实测反馈"这个提示太亮了"）。深色下底与描边用警告色的
+     低透明度（融进底色），文字直接用亮警告色；浅色主题在下面单独覆盖。 */
+  --dc-warn-wash: rgba(245, 179, 77, .10);
+  --dc-warn-border: rgba(245, 179, 77, .32);
+  --dc-warn-text: #f5b34d;
   --dc-env-test-wash: rgba(245, 158, 11, .12);
   --dc-env-prod: #ef4444;
   --dc-env-prod-wash: rgba(239, 68, 68, .12);
@@ -141,6 +148,10 @@ html[data-theme="light"] {
   --dc-table-head-line: #c3d0e6;
   /* 吸顶"浮起感"：表头压着数据滚动时，在表头下沿投一道很轻的影（滚回顶部即消失） */
   --dc-head-shadow: rgba(15, 23, 42, .14);
+  /* 提示条（浅色覆盖）：浅底深字的经典警示条 */
+  --dc-warn-wash: #fdf6ec;
+  --dc-warn-border: #f3d19e;
+  --dc-warn-text: #b88230;
   --dc-scrollbar: #c4cdda;
   --dc-scrollbar-hover: #adb8c9;
   --dc-mask: rgba(30, 41, 59, .34);

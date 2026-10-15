@@ -2284,16 +2284,17 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .header-title .header-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .header-icon { color: var(--dc-primary); flex-shrink: 0; }
 .header-actions { display: flex; gap: 6px; flex-shrink: 0; }
-/* 只读 / 生产 的常驻提示条：与用户管理页同一形态 —— 与上面那张卡同一圈缝、同一圆角，
-   橙色描边 + 浅底（不是红色：这不是"出错了"，是"这里的改动会被拦下"）。 */
+/* 只读 / 生产 的常驻提示条：与用户管理页同一形态 —— 与上面那张卡同一圈缝、同一圆角
+   （不是红色：这不是"出错了"，是"这里的改动会被拦下"）。
+   配色用 --dc-warn-* 分主题变量：深色下低透明度融底 + 亮字，浅色下浅黄底深字。 */
 .ted-guard {
   display: flex; align-items: center; gap: 7px;
   margin: 5px 0 0;
   padding: 6px 11px;
-  border: 1px solid var(--el-color-warning-light-5, #f3d19e);
+  border: 1px solid var(--dc-warn-border);
   border-radius: 8px;
-  background: var(--el-color-warning-light-9, #fdf6ec);
-  color: var(--el-color-warning-dark-2, #b88230);
+  background: var(--dc-warn-wash);
+  color: var(--dc-warn-text);
   font-size: 12.5px;
   line-height: 1.5;
   flex-shrink: 0;
@@ -2302,7 +2303,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   flex: none;
   width: 15px; height: 15px; line-height: 15px; text-align: center;
   border-radius: 50%;
-  background: var(--el-color-warning, #e6a23c);
+  background: var(--dc-warning);
   color: #fff; font-size: 11px; font-weight: 700;
 }
 

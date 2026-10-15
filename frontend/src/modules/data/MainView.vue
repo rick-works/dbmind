@@ -471,9 +471,10 @@
             <UserForm v-else-if="tab.type === 'user-form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                       :edit-mode="tab.mode === 'edit'" :edit-data="tab.editData" :read-only="!!tab.readOnly"
                       @saved="onUserFormSaved" @close="closeTab(tab.id)" />
-            <!-- 用户管理页：按连接管理用户（新增/编辑授权/删除），与树无关 -->
+            <!-- 用户管理页：按连接管理用户（新增/编辑授权/删除），只跟连接不跟库 ——
+                 树里选中数据源（连接节点）就够了，带库反而会在切换数据源时把上一个连接的库名带过来 -->
             <UserManageView v-else-if="tab.type === 'users'" :active-conn-id="String(currentConnId || '')"
-                            :active-db="String(currentDb || '')" :reload-tick="userListTick"
+                            :reload-tick="userListTick"
                             @open-form="onUserManageForm" />
             <ObjectFormTab v-else-if="tab.type === 'form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                            :cat="tab.cat" :mode="tab.mode" :object="tab.object" @saved="onObjFormSaved"
