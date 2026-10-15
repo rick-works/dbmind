@@ -871,7 +871,7 @@ watch(() => props.modelValue, async (open) => {
 
 <style>
 /* 弹窗外壳样式必须放全局块：el-dialog 由 teleport 挂到 body，scoped / :deep 无法命中其根节点
-   （ObjectFormDialog、SettingsView 的弹窗外壳样式同理） */
+   （SettingsView 的弹窗外壳样式同理） */
 .datagen-dialog.el-dialog {
   /* 固定宽度：窗口不够宽时收缩为「视口宽 - 48px」，避免超出视口被左右裁切、遮罩层出现横向滚动条 */
   width: min(1000px, calc(100% - 48px));

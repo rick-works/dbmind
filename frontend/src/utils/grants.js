@@ -25,11 +25,13 @@ const normalizePriv = (p) => {
 // Doris 的库/表可能带 catalog 前缀（如 internal.db1.*），取最后一段作为库名
 const stripCatalog = (name) => (name && name.includes('.') ? name.split('.').pop() : name)
 
-// MySQL：把 SHOW GRANTS 输出解析为 全局权限 / 库级权限 / 表级权限 三层结构
+// MySQL：把 SHOW GRANTS 输出解析为 全局权限 / 库级权限 / 表级权限 / 例程权限 四层结构
+// （例程级 = 对单个存储过程/函数的 EXECUTE，`ON PROCEDURE `db`.`p`` —— 类型字是语法的一部分）
 export const parseMySqlGrants = (grants) => {
   const globalPrivs = new Set()
   const dbPrivMap = new Map()
   const tablePrivMap = new Map()
+  const routinePrivMap = new Map()
   for (const g of grants) {
     if (!g || typeof g !== 'string') continue
     const match = g.match(/GRANT\s+(.+?)\s+ON\s+(.+?)\s+TO/i)
@@ -37,7 +39,11 @@ export const parseMySqlGrants = (grants) => {
     const privPart = match[1].trim()
     const onPart = match[2].trim()
     const privList = privPart.split(',').map(normalizePriv).filter(Boolean)
-    if (onPart === '*.*') {
+    // WITH GRANT OPTION 后缀（ClickHouse 的 show grants / MySQL 都这么渲染）：
+    // 不认的话这一份授权在界面里就"隐身"了，保存时也不会撤 —— 两头都不对
+    if (/\bWITH\s+GRANT\s+OPTION\b/i.test(g)) privList.push('GRANT OPTION')
+    // `ON *`（不带库名）：ClickHouse 把全局层写成单星（MySQL 是 *.*）
+    if (onPart === '*.*' || onPart === '*') {
       for (const p of privList) globalPrivs.add(p)
     } else {
       const dbMatch = onPart.match(/^`?([^`]+)`?\.\*$/)
@@ -47,14 +53,25 @@ export const parseMySqlGrants = (grants) => {
         for (const p of privList) existing.add(p)
         dbPrivMap.set(db, existing)
       } else {
-        const tableMatch = onPart.match(/^`?([^`]+)`?\.`?([^`]+)`?$/)
-        if (tableMatch) {
-          const db = stripCatalog(tableMatch[1])
-          const table = tableMatch[2]
-          const key = `${db}.${table}`
-          const existing = tablePrivMap.get(key) || new Set()
+        const routineMatch = onPart.match(/^(PROCEDURE|FUNCTION)\s+`?([^`]+)`?\.`?([^`]+)`?$/i)
+        if (routineMatch) {
+          const kind = routineMatch[1].toUpperCase()
+          const db = stripCatalog(routineMatch[2])
+          const routine = routineMatch[3]
+          const key = `${db}.${kind}:${routine}`
+          const existing = routinePrivMap.get(key) || new Set()
           for (const p of privList) existing.add(p)
-          tablePrivMap.set(key, existing)
+          routinePrivMap.set(key, existing)
+        } else {
+          const tableMatch = onPart.match(/^`?([^`]+)`?\.`?([^`]+)`?$/)
+          if (tableMatch) {
+            const db = stripCatalog(tableMatch[1])
+            const table = tableMatch[2]
+            const key = `${db}.${table}`
+            const existing = tablePrivMap.get(key) || new Set()
+            for (const p of privList) existing.add(p)
+            tablePrivMap.set(key, existing)
+          }
         }
       }
     }
@@ -65,6 +82,11 @@ export const parseMySqlGrants = (grants) => {
     tablePrivileges: Array.from(tablePrivMap.entries()).map(([key, set]) => {
       const [database, table] = key.split('.')
       return { database, table, privileges: Array.from(set) }
+    }),
+    routinePrivileges: Array.from(routinePrivMap.entries()).map(([key, set]) => {
+      const [dbAndKind, routine] = key.split(':')
+      const dot = dbAndKind.indexOf('.')
+      return { database: dbAndKind.slice(0, dot), kind: dbAndKind.slice(dot + 1), routine, privileges: Array.from(set) }
     })
   }
 }

@@ -63,6 +63,7 @@ import { ElMessage } from 'element-plus'
 import { CopyDocument, Close, DocumentCopy, CaretRight, Grid, View, Files, Operation, Cpu, Setting, BellFilled, Timer } from '@element-plus/icons-vue'
 import { getFeatures, getObjectInfo, getTableDdl, alterTable } from '../../api'
 import { errMsg } from '../../utils/errMsg'
+import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { has } from '../../common/objectforms/objectFormUtils'
 import { t } from '../../utils/i18n'
 import TableForm from '../../common/objectforms/TableForm.vue'
@@ -164,6 +165,9 @@ const copySql = async () => {
 
 const submit = async () => {
   if (!previewOk.value) return ElMessage.warning(t('oft.needInfo'))
+  // 只读连接 / 生产保护：点击那一刻拦下（右上角通知，与全站写入口同一闸门、同一句提示）
+  await loadProtectProd()
+  if (!guardConnWrite(props.conn || {}, t(props.mode === 'edit' ? 'oft.saveEdit' : 'oft.doCreate'))) return
   saving.value = true
   try {
     const res = await alterTable(props.conn.id, props.database, previewSql.value)

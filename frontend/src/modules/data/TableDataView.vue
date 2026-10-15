@@ -300,6 +300,7 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, onBeforeUnmount, computed, nextTick } from 'vue'
 import { t, tMsg } from '../../utils/i18n'
+import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { querySettingsLive, editorSettingsLive } from '../../utils/settings'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { numericTypeHint, isNumericLiteral } from '../../utils/dbType'
@@ -1995,6 +1996,9 @@ const revertChanges = () => {
 
 const saveChanges = async () => {
   if (!props.conn?.id || !props.database || !props.table) return
+  // 只读 / 生产保护：点击那一刻拦下（与全站写入口同一闸门、同一款右上角通知）
+  await loadProtectProd()
+  if (!guardConnWrite(props.conn || {}, t('tdv.saveChanges'))) return
   const pkCols = columnMetas.value.filter(c => c.primaryKey).map(c => c.name)
   const inserts = []
   const updates = []

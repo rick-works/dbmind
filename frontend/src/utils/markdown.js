@@ -80,7 +80,6 @@ const RE_TABLE_SEP = /^\s*\|?[\s:|-]+\|[\s:|-]*$/
  * opts.sqlActions=true 时，**顶层**每个 SQL 代码块会额外带一组操作按钮
  * （插入编辑器 / 复制），按钮用 data-sql-act + data-sql-idx 标注，
  * 由宿主容器做事件委托（v-html 无法绑定 Vue 事件）。
- * 索引与 extractSqlBlocks() 的返回顺序严格一致。
  */
 export const renderMarkdown = (md, opts = {}) => {
   const withSqlActions = !!opts.sqlActions
@@ -243,7 +242,3 @@ export const extractCodeBlocks = (md) => {
   }
   return out
 }
-
-/** 只取 SQL 类代码块的正文（用于「替换并执行」这类仅对 SQL 有意义的动作） */
-export const extractSqlBlocks = (md) =>
-  extractCodeBlocks(md).filter((b) => isSqlLang(b.lang)).map((b) => b.code)

@@ -29,11 +29,7 @@
                 <template #title>{{ $t('upv.grantUnsupported', { type: connTypeLabel }) }}</template>
               </el-alert>
               <!-- 基本信息：与「编辑表结构」同一张「标签 / 值」表（行高、对齐一致） -->
-              <table class="form-table">
-                <colgroup>
-                  <col style="width:180px" />
-                  <col />
-                </colgroup>
+              <table class="form-table basic-table">
                 <thead>
                   <tr><th>{{ $t('tdet.item') }}</th><th>{{ $t('tdet.value') }}</th></tr>
                 </thead>
@@ -63,20 +59,30 @@
                   <tr v-for="d in editableAttrs" :key="d.key">
                     <td class="ft-label">{{ d.label }}</td>
                     <td class="ft-value">
-                      <el-switch v-if="d.kind === 'bool'" v-model="form.attrs[d.key]" :disabled="readOnly"
-                                 :active-text="$t('udv.yes')" :inactive-text="$t('udv.no')" />
+                      <!-- 是/否就一个勾选框：勾了=是，没勾=否（用户要求） -->
+                      <el-checkbox v-if="d.kind === 'bool'" :model-value="!!form.attrs[d.key]" :disabled="readOnly"
+                                   @update:model-value="(v) => { form.attrs[d.key] = v }">
+                        {{ form.attrs[d.key] ? $t('udv.yes') : $t('udv.no') }}
+                      </el-checkbox>
                       <span v-else-if="d.kind === 'num'" class="attr-num">
                         <el-input-number v-model="form.attrs[d.key]" size="small" :min="0" :step="1" :disabled="readOnly" controls-position="right" />
                         <span v-if="!form.attrs[d.key]" class="attr-hint">{{ $t('udv.unlimited') }}</span>
                       </span>
                       <span v-else-if="d.kind === 'plugin'" class="attr-num">
-                        <el-select class="attr-select" :model-value="authPluginModel" size="small"
-                                   :disabled="readOnly"
-                                   :placeholder="$t('upv.attrDefault')"
-                                   @update:model-value="(v) => { form.attrs.authPlugin = v }">
-                          <el-option v-for="p in pluginOptions" :key="p" :label="p" :value="p" />
-                        </el-select>
-                        <span v-if="form.attrs.authPlugin !== attrsBase.authPlugin" class="attr-hint">{{ $t('upv.pluginNeedsPassword') }}</span>
+                        <!-- 只读连接：disabled 的 el-select 文字呈灰占位样式，看着像"没显示值"
+                             （用户反馈"认证插件还是没显示"）。只读时改用与明细行一致的普通文字 ——
+                             值本身来自 mysql.user 的 plugin 列：MySQL/MariaDB 有真实插件名，
+                             Doris 该列就是空串（FE 不存插件名，也不支持 SHOW CREATE USER），
+                             如实显示「默认（跟随服务器）」就是数据库能给的全部信息。 -->
+                        <span v-if="readOnly" class="plugin-readonly">{{ authPluginLabel }}</span>
+                        <template v-else>
+                          <el-select class="attr-select" :model-value="authPluginModel" size="small"
+                                     @update:model-value="(v) => { form.attrs.authPlugin = v }">
+                            <el-option v-for="p in pluginOptions" :key="p" :value="p"
+                                       :label="p === '__server_default__' ? $t('upv.attrDefault') : p" />
+                          </el-select>
+                          <span v-if="form.attrs.authPlugin !== attrsBase.authPlugin" class="attr-hint">{{ $t('upv.pluginNeedsPassword') }}</span>
+                        </template>
                       </span>
                       <el-input v-else v-model="form.attrs[d.key]" size="small" :disabled="readOnly" />
                     </td>
@@ -118,7 +124,7 @@
                     </th>
                   </tr>
                   <tr>
-                    <th v-for="p in globalPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th v-for="p in globalPrivColumns" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -150,7 +156,7 @@
                     </th>
                   </tr>
                   <tr>
-                    <th v-for="p in serverColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th v-for="p in serverColumns" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -185,7 +191,7 @@
                     </th>
                   </tr>
                   <tr>
-                    <th v-for="p in oracleRoles" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th v-for="p in oracleRoles" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -205,7 +211,7 @@
             <!-- 动作条：与页签**同一行**、贴右（照「编辑表结构」的排法）：
                  绝对定位到卡片右上角，表格里不再单独占一行 -->
             <div class="tab-actions">
-              <el-button v-if="isMysql" size="small" type="primary" :icon="Plus" @click="addDbPriv">{{ $t('upv.addDbPriv') }}</el-button>
+              <el-button v-if="isMysql || isClickhouse || isPgsql" size="small" type="primary" :icon="Plus" @click="addDbPriv">{{ $t('upv.addDbPriv') }}</el-button>
             </div>
             <div class="tab-inner grant-tab">
               <!-- MySQL 系：一行一个库，每个库级权限一列 -->
@@ -227,7 +233,7 @@
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
-                    <th v-for="p in dbPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th v-for="p in dbPrivColumns" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -236,13 +242,58 @@
                   </tr>
                   <tr v-for="(row, i) in form.dbPrivileges" :key="rowKey(row)">
                     <td class="mx-fix mx-f1">
-                      <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable>
+                      <!-- 多选：一次勾多个库自动拆成多行（都继承本行已勾的权限） -->
+                      <el-select :model-value="asArr(row.database)" size="small" :placeholder="$t('upv.phPickDb')" filterable multiple collapse-tags @change="(vals) => onDbPrivMulti(i, vals)">
                         <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
                       </el-select>
                       <el-tag v-if="isDbMissing(row.database)" size="small" type="warning" effect="plain">{{ $t('upv.dbMissing') }}</el-tag>
                       <el-tag v-if="isDorisSystemDb(row.database)" size="small" type="info" effect="plain">{{ $t('upv.dorisSystemDb') }}</el-tag>
                     </td>
                     <td v-for="p in dbPrivColumns" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
+                    </td>
+                    <td class="mx-cell">
+                      <el-button type="danger" size="small" :icon="Delete" text @click="removeDbPriv(i)" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <!-- ClickHouse：一行一个库，权限列与全局页签同一套清单（CH 的库权限就是
+                   `GRANT … ON db.*`，和 MySQL 系同构）。database 字段选 system.databases
+                   里的库；ALL 列等于一次性勾满所有权限。 -->
+              <table v-if="isClickhouse" class="form-table mx-table mx-grouped">
+                <thead>
+                  <tr>
+                    <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colDb') }}</th>
+                    <th v-for="g in chDbGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                      <span class="ft-group-name">{{ g.label }}</span>
+                      <span class="priv-group-count">{{ rowsCount(form.dbPrivileges, g.items) }} / {{ rowsTotal(form.dbPrivileges, g.items) || g.items.length }}</span>
+                      <span class="priv-group-actions">
+                        <button :disabled="rowsCount(form.dbPrivileges, g.items) === rowsTotal(form.dbPrivileges, g.items) && rowsTotal(form.dbPrivileges, g.items) > 0"
+                                @click="setRowsPrivileges(form.dbPrivileges, g.items, true)">{{ $t('common.selectAll') }}</button>
+                        <button :disabled="rowsCount(form.dbPrivileges, g.items) === 0"
+                                @click="setRowsPrivileges(form.dbPrivileges, g.items, false)">{{ $t('common.clear') }}</button>
+                      </span>
+                    </th>
+                    <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                  <tr>
+                    <th v-for="p in chPrivColumns" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="form.dbPrivileges.length === 0">
+                    <td :colspan="chPrivColumns.length + 2" class="ft-empty">{{ $t('upv.noDbPriv') }}</td>
+                  </tr>
+                  <tr v-for="(row, i) in form.dbPrivileges" :key="rowKey(row)">
+                    <td class="mx-fix mx-f1">
+                      <el-select :model-value="asArr(row.database)" size="small" :placeholder="$t('upv.phPickDb')" filterable multiple collapse-tags @change="(vals) => onDbPrivMulti(i, vals)">
+                        <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
+                      </el-select>
+                      <el-tag v-if="isDbMissing(row.database)" size="small" type="warning" effect="plain">{{ $t('upv.dbMissing') }}</el-tag>
+                    </td>
+                    <td v-for="p in chPrivColumns" :key="p" class="mx-cell">
                       <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
                     </td>
                     <td class="mx-cell">
@@ -269,7 +320,7 @@
                     </th>
                   </tr>
                   <tr>
-                    <th v-for="p in mssqlRoles" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th v-for="p in mssqlRoles" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -277,6 +328,37 @@
                     <td class="mx-fix mx-f1 ft-label">{{ $t('upv.segDbRoles') }}</td>
                     <td v-for="p in mssqlRoles" :key="p" class="mx-cell">
                       <el-checkbox :model-value="hasIn('roles', p)" @change="(v) => toggleList('roles', p, v)" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <!-- PostgreSQL/KingbaseES：模式级（USAGE / CREATE）—— 一行一个模式。
+                   PG 的"库级"授权就是模式级（`grant usage on schema "s" to "u"`），
+                   模式下拉来自 listSchemas（与 Oracle 对象权限同一份）。 -->
+              <table v-if="isPgsql" class="form-table mx-table mx-grouped">
+                <thead>
+                  <tr>
+                    <th class="mx-fix mx-f1">{{ $t('upv.colSchema') }}</th>
+                    <th v-for="p in pgSchemaPrivs" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
+                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="form.dbPrivileges.length === 0">
+                    <td :colspan="pgSchemaPrivs.length + 2" class="ft-empty">{{ $t('upv.noDbPriv') }}</td>
+                  </tr>
+                  <tr v-for="(row, i) in form.dbPrivileges" :key="rowKey(row)">
+                    <td class="mx-fix mx-f1">
+                      <el-select :model-value="asArr(row.database)" size="small" :placeholder="$t('upv.phPickSchema')" filterable multiple collapse-tags @change="(vals) => onDbPrivMulti(i, vals)">
+                        <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
+                      </el-select>
+                    </td>
+                    <td v-for="p in pgSchemaPrivs" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
+                    </td>
+                    <td class="mx-cell">
+                      <el-button type="danger" size="small" :icon="Delete" text @click="removeDbPriv(i)" />
                     </td>
                   </tr>
                 </tbody>
@@ -292,7 +374,7 @@
             <!-- 动作条：与页签同一行、贴右 -->
             <div class="tab-actions">
               <el-button v-if="isOracle" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addObjectPrivOracle') }}</el-button>
-              <el-button v-if="isMysql" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addTablePriv') }}</el-button>
+              <el-button v-if="isMysql || isPgsql || isClickhouse" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addTablePriv') }}</el-button>
             </div>
             <div class="tab-inner grant-tab">
               <!-- Oracle：对象权限（「模式 · 名称」两列冻结，权限项当列横向滚动） -->
@@ -314,7 +396,7 @@
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
-                    <th v-for="p in objectPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th v-for="p in objectPrivColumns" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -328,8 +410,10 @@
                       </el-select>
                     </td>
                     <td class="mx-fix mx-f2">
-                      <el-select v-model="row.table" size="small" :placeholder="$t('upv.phPickObject')" filterable :loading="row._loading">
-                        <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
+                      <el-select :model-value="asArr(row.table)" size="small" :placeholder="$t('upv.phPickObject')" filterable multiple collapse-tags :loading="row._loading" @change="(vals) => onTablePrivMulti(i, vals)">
+                        <el-option v-for="t in row._tables || []" :key="'t:' + t" :label="t" :value="t" />
+                        <!-- 例程/包带类型后缀：同名对象（表和过程重名）能看出是哪个 -->
+                        <el-option v-for="r in row._routines || []" :key="'r:' + r.type + ':' + r.name" :label="routineOptionLabel(r)" :value="r.name" />
                       </el-select>
                     </td>
                     <td v-for="p in objectPrivColumns" :key="p" class="mx-cell">
@@ -342,17 +426,19 @@
                 </tbody>
               </table>
 
-              <!-- MySQL 系：表级（「数据库 · 表」两列冻结） -->
-              <table v-if="isMysql" class="form-table mx-table mx-grouped">
+              <!-- MySQL 系 + ClickHouse：表级（「数据库 · 表」两列冻结）。
+                   CH 的表级授权（grant … on db.tbl）与 MySQL 同构，权限列用 CH 自己的
+                   清单（与 CH 全局/库级同一套名字）；MySQL 用表级清单。 -->
+              <table v-if="isMysql || isClickhouse" class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colDb') }}</th>
                     <th class="mx-fix mx-f2" rowspan="2">{{ $t('upv.colTableName') }}</th>
-                    <th v-for="g in tableGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
+                    <th v-for="g in granularGroups" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
                       <span class="ft-group-name">{{ g.label }}</span>
-                      <span class="priv-group-count">{{ rowsCount(form.tablePrivileges, g.items) }} / {{ rowsTotal(form.tablePrivileges, g.items) }}</span>
+                      <span class="priv-group-count">{{ rowsCount(form.tablePrivileges, g.items) }} / {{ rowsTotal(form.tablePrivileges, g.items) || g.items.length }}</span>
                       <span class="priv-group-actions">
-                        <button :disabled="rowsCount(form.tablePrivileges, g.items) === rowsTotal(form.tablePrivileges, g.items)"
+                        <button :disabled="rowsCount(form.tablePrivileges, g.items) === rowsTotal(form.tablePrivileges, g.items) && rowsTotal(form.tablePrivileges, g.items) > 0"
                                 @click="setRowsPrivileges(form.tablePrivileges, g.items, true)">{{ $t('common.selectAll') }}</button>
                         <button :disabled="rowsCount(form.tablePrivileges, g.items) === 0"
                                 @click="setRowsPrivileges(form.tablePrivileges, g.items, false)">{{ $t('common.clear') }}</button>
@@ -361,12 +447,12 @@
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
-                    <th v-for="p in tablePrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th v-for="p in granularCols" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-if="form.tablePrivileges.length === 0">
-                    <td :colspan="tablePrivColumns.length + 3" class="ft-empty">{{ $t('upv.noTablePriv') }}</td>
+                    <td :colspan="granularCols.length + 3" class="ft-empty">{{ $t('upv.noTablePriv') }}</td>
                   </tr>
                   <tr v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)">
                     <td class="mx-fix mx-f1">
@@ -375,11 +461,47 @@
                       </el-select>
                     </td>
                     <td class="mx-fix mx-f2">
-                      <el-select v-model="row.table" size="small" :placeholder="$t('upv.phPickTable')" filterable :loading="row._loading">
+                      <el-select :model-value="asArr(row.table)" size="small" :placeholder="$t('upv.phPickTable')" filterable multiple collapse-tags :loading="row._loading" @change="(vals) => onTablePrivMulti(i, vals)">
                         <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
                       </el-select>
                     </td>
-                    <td v-for="p in tablePrivColumns" :key="p" class="mx-cell">
+                    <td v-for="p in granularCols" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
+                    </td>
+                    <td class="mx-cell">
+                      <el-button type="danger" size="small" :icon="Delete" text @click="removeTablePriv(i)" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <!-- PostgreSQL/KingbaseES：表级（「模式 · 表」两列，权限列固定七项）。
+                   模式下拉与 PG 模式级同一份 schemas；表清单 listTables(模式)。 -->
+              <table v-if="isPgsql" class="form-table mx-table mx-grouped">
+                <thead>
+                  <tr>
+                    <th class="mx-fix mx-f1">{{ $t('upv.colSchema') }}</th>
+                    <th class="mx-fix mx-f2">{{ $t('upv.colTableName') }}</th>
+                    <th v-for="p in pgTablePrivs" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
+                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="form.tablePrivileges.length === 0">
+                    <td :colspan="pgTablePrivs.length + 3" class="ft-empty">{{ $t('upv.noTablePriv') }}</td>
+                  </tr>
+                  <tr v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)">
+                    <td class="mx-fix mx-f1">
+                      <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickSchema')" filterable @change="onTablePrivDbChange(i)">
+                        <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
+                      </el-select>
+                    </td>
+                    <td class="mx-fix mx-f2">
+                      <el-select :model-value="asArr(row.table)" size="small" :placeholder="$t('upv.phPickTable')" filterable multiple collapse-tags :loading="row._loading" @change="(vals) => onTablePrivMulti(i, vals)">
+                        <el-option v-for="t in row._tables || []" :key="t" :label="t" :value="t" />
+                      </el-select>
+                    </td>
+                    <td v-for="p in pgTablePrivs" :key="p" class="mx-cell">
                       <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
                     </td>
                     <td class="mx-cell">
@@ -391,6 +513,60 @@
 
             </div>
           </el-tab-pane>
+          <!-- MySQL 系：例程权限（对**单个**存储过程/函数授 EXECUTE）—— 库级/全局的
+               EXECUTE 只能"整个库都能跑"，够不到"只让跑这一个"。Doris 没有例程，不画 -->
+          <el-tab-pane v-if="showRoutineTab" :label="$t('upv.tabRoutines')" name="routines">
+            <div class="tab-actions">
+              <el-button size="small" type="primary" :icon="Plus" @click="addRoutinePriv">{{ $t('upv.addRoutinePriv') }}</el-button>
+            </div>
+            <div class="tab-inner grant-tab">
+              <table class="form-table">
+                <thead>
+                  <tr>
+                    <th class="rt-db">{{ isMysqlFamily ? $t('upv.colDb') : $t('upv.colSchema') }}</th>
+                    <th class="rt-kind">{{ $t('upv.colKind') }}</th>
+                    <th>{{ $t('upv.colRoutine') }}</th>
+                    <!-- 列头只放权限名（与表权限/全局权限那些 tab 一致）：
+                         'GRANT OPTION 授权他人' 这种双语全称放 title 里悬浮看，
+                         118px 的列宽塞不下全称，会被 nowrap 截成"…授" -->
+                    <th class="rt-priv" :title="$t('upv.execute')"><span class="pv-name">EXECUTE</span><span v-if="privLabel('EXECUTE')" class="pv-cn">{{ privLabel('EXECUTE') }}</span></th>
+                    <!-- GRANT OPTION 只有 MySQL 系给（PG 例程只授 EXECUTE；PG 的
+                         WITH GRANT OPTION 是子句不是权限名，后端白名单也只放 EXECUTE） -->
+                    <th v-if="isMysqlFamily" class="rt-priv" :title="$t('upv.grantOption')"><span class="pv-name">GRANT OPTION</span><span v-if="privLabel('GRANT OPTION')" class="pv-cn">{{ privLabel('GRANT OPTION') }}</span></th>
+                    <th class="rt-act">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="form.routinePrivileges.length === 0">
+                    <td :colspan="isMysqlFamily ? 6 : 5" class="ft-empty">{{ $t('upv.noRoutinePriv') }}</td>
+                  </tr>
+                  <tr v-for="(row, i) in form.routinePrivileges" :key="rowKey(row)">
+                    <td class="rt-db">
+                      <el-select v-model="row.database" size="small" :placeholder="isMysqlFamily ? $t('upv.phPickDb') : $t('upv.phPickSchema')" filterable @change="onRoutineDbChange(row)">
+                        <el-option v-for="d in (isMysqlFamily ? databases : schemas)" :key="d" :label="d" :value="d" />
+                      </el-select>
+                    </td>
+                    <td class="rt-kind">
+                      <el-select v-model="row.kind" size="small" @change="onRoutineKindChange(row)">
+                        <el-option value="PROCEDURE" :label="$t('upv.kindProcedure')" />
+                        <el-option value="FUNCTION" :label="$t('upv.kindFunction')" />
+                      </el-select>
+                    </td>
+                    <td>
+                      <el-select :model-value="asArr(row.routine)" size="small" :placeholder="$t('upv.phPickRoutine')" filterable multiple collapse-tags :loading="row._loading" allow-create @change="(vals) => onRoutinePrivMulti(i, vals)">
+                        <el-option v-for="r in rowRoutineOptions(row)" :key="r" :label="r" :value="r" />
+                      </el-select>
+                    </td>
+                    <td class="rt-priv"><el-checkbox :model-value="hasObjectPriv(row, 'EXECUTE')" @change="(v) => toggleObjectPriv(row, 'EXECUTE', v)" /></td>
+                    <td v-if="isMysqlFamily" class="rt-priv"><el-checkbox :model-value="hasObjectPriv(row, 'GRANT OPTION')" @change="(v) => toggleObjectPriv(row, 'GRANT OPTION', v)" /></td>
+                    <td class="rt-act">
+                      <el-button type="danger" size="small" :icon="Delete" text @click="removeRoutinePriv(i)" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </el-tab-pane>
           <!-- SQL Server：Schema 级与对象级**各占一页**（原来两张表挤在同一页里上下叠着） -->
           <el-tab-pane v-if="isMssql" :label="$t('upv.tabSchema')" name="schema">
             <div class="tab-actions">
@@ -398,9 +574,12 @@
             </div>
             <div class="tab-inner grant-tab">
               <!-- SQL Server：Schema 级（模式冻结） -->
-              <table v-if="isMssql" class="form-table mx-table mx-grouped">
+              <table v-if="isMssql" class="form-table mx-table mx-grouped mx-with-db">
                 <thead>
                   <tr>
+                    <!-- 行级选库：用户管理入口没有库上下文（连接默认目录常是 master），
+                         授权语句前会 `use [库];` 切过去 —— 不选库就看不到业务库的 schema -->
+                    <th class="mx-fix mx-db" rowspan="2">{{ $t('upv.colDb') }}</th>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colSchema') }}</th>
                     <th v-for="g in schemaGrouped" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
                       <span class="ft-group-name">{{ g.label }}</span>
@@ -415,17 +594,23 @@
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
-                    <th v-for="p in schemaPrivColumns" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th v-for="p in schemaPrivColumns" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-if="form.schemaPrivileges.length === 0">
-                    <td :colspan="schemaPrivColumns.length + 2" class="ft-empty">{{ $t('upv.noSchemaPriv') }}</td>
+                    <td :colspan="schemaPrivColumns.length + 3" class="ft-empty">{{ $t('upv.noSchemaPriv') }}</td>
                   </tr>
                   <tr v-for="(row, i) in form.schemaPrivileges" :key="rowKey(row)">
+                    <td class="mx-fix mx-db">
+                      <el-select v-model="row.database" size="small" :placeholder="$t('upv.phConnDefault')"
+                                 filterable @change="ensureRowSchemas(row)">
+                        <el-option v-for="d in databases" :key="d" :label="d" :value="d" />
+                      </el-select>
+                    </td>
                     <td class="mx-fix mx-f1">
-                      <el-select v-model="row.schema" size="small" :placeholder="$t('upv.phPickSchema')" filterable>
-                        <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
+                      <el-select :model-value="asArr(row.schema)" size="small" :placeholder="$t('upv.phPickSchema')" filterable allow-create multiple collapse-tags @change="(vals) => onMssqlSchemaPrivMulti(i, vals)">
+                        <el-option v-for="s in rowSchemaOptions(row)" :key="s" :label="s" :value="s" />
                       </el-select>
                     </td>
                     <td v-for="p in schemaPrivColumns" :key="p" class="mx-cell">
@@ -446,9 +631,10 @@
             </div>
             <div class="tab-inner grant-tab">
               <!-- SQL Server：对象级（「模式 · 对象」两列冻结，两者都可手写） -->
-              <table v-if="isMssql" class="form-table mx-table mx-grouped">
+              <table v-if="isMssql" class="form-table mx-table mx-grouped mx-with-db">
                 <thead>
                   <tr>
+                    <th class="mx-fix mx-db" rowspan="2">{{ $t('upv.colDb') }}</th>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colSchema') }}</th>
                     <th class="mx-fix mx-f2" rowspan="2">{{ $t('upv.colObject') }}</th>
                     <th v-for="g in objectGroupedMssql" :key="g.key" :colspan="g.items.length" class="mx-grp" :title="g.label">
@@ -464,16 +650,28 @@
                     <th class="mx-act" rowspan="2">{{ $t('upv.colAction') }}</th>
                   </tr>
                   <tr>
-                    <th v-for="p in objectPrivColumnsMssql" :key="p" class="mx-priv" :title="p">{{ p }}</th>
+                    <th v-for="p in objectPrivColumnsMssql" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   <tr v-if="form.objectPrivileges.length === 0">
-                    <td :colspan="objectPrivColumnsMssql.length + 3" class="ft-empty">{{ $t('upv.noObjectPriv') }}</td>
+                    <td :colspan="objectPrivColumnsMssql.length + 4" class="ft-empty">{{ $t('upv.noObjectPriv') }}</td>
                   </tr>
                   <tr v-for="(row, i) in form.objectPrivileges" :key="rowKey(row)">
-                    <td class="mx-fix mx-f1"><el-input v-model="row.schema" size="small" placeholder="Schema" /></td>
-                    <td class="mx-fix mx-f2"><el-input v-model="row.object" size="small" :placeholder="$t('upv.phObject')" /></td>
+                    <td class="mx-fix mx-db">
+                      <el-select v-model="row.database" size="small" :placeholder="$t('upv.phConnDefault')"
+                                 filterable @change="ensureRowSchemas(row)">
+                        <el-option v-for="d in databases" :key="d" :label="d" :value="d" />
+                      </el-select>
+                    </td>
+                    <td class="mx-fix mx-f1">
+                      <el-select :model-value="asArr(row.schema)" size="small" placeholder="Schema" filterable allow-create default-first-option multiple collapse-tags @change="(vals) => onMssqlSchemaPrivMulti(i, vals)">
+                        <el-option v-for="s in rowSchemaOptions(row)" :key="s" :label="s" :value="s" />
+                      </el-select>
+                    </td>
+                    <td class="mx-fix mx-f2">
+                      <el-select :model-value="asArr(row.object)" size="small" :placeholder="$t('upv.phObject')" filterable allow-create default-first-option multiple collapse-tags @change="(vals) => onMssqlObjectPrivMulti(i, vals)" />
+                    </td>
                     <td v-for="p in objectPrivColumnsMssql" :key="p" class="mx-cell">
                       <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
                     </td>
@@ -514,7 +712,11 @@
           <span class="sql-tip">{{ $t('upv.previewTip') }}</span>
           <div class="sql-foot-actions">
             <el-button size="small" text :icon="CopyDocument" :disabled="!previewSql" @click="copySql">{{ $t('upv.copySql') }}</el-button>
-            <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk || readOnly" @click="submit">
+            <!-- 重置：把表单铺回刚打开的样子（没有未保存改动时置灰） -->
+            <el-button size="small" text :icon="RefreshLeft" :disabled="saving || !dirty" @click="resetChanges">{{ $t('upv.resetChanges') }}</el-button>
+            <!-- 编辑态没有差量（也没有改密码）就不允许提交：没有东西可执行，
+                 点了只会白跑一趟还容易让人误以为"保存过了" -->
+            <el-button size="small" type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk || readOnly || (editMode && !hasChanges)" @click="submit">
               {{ editMode ? $t('upv.saveChanges') : $t('upv.execCreate') }}
             </el-button>
           </div>
@@ -525,11 +727,12 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
-import { t } from '../../utils/i18n'
-import { User, CaretRight, CopyDocument, DocumentCopy, Plus, Delete } from '@element-plus/icons-vue'
-import { userAction, listDatabases, listTables, listSchemas } from '../../api'
+import { t, locale } from '../../utils/i18n'
+import { User, CaretRight, CopyDocument, DocumentCopy, Plus, Delete, RefreshLeft } from '@element-plus/icons-vue'
+import { userAction, listDatabases, listTables, listSchemas, listProcedures } from '../../api'
+import { isFunctionRoutine } from './treeNodes'
 import { rowKey } from '../../utils/rowKey'
 import { userDetailItems } from '../../utils/userFields'
 // 只读 / 生产保护的前置闸门（与用户管理页、MainView 同一口径）
@@ -555,6 +758,7 @@ const form = ref({
   roles: [],
   dbPrivileges: [],
   tablePrivileges: [],
+  routinePrivileges: [],
   serverRoles: [],
   schemaPrivileges: [],
   objectPrivileges: [],
@@ -664,9 +868,14 @@ const editableAttrs = computed(() => {
       { key: 'maxQueriesPerHour', label: t('udv.fMaxQuestions'), kind: 'num' },
       { key: 'maxUpdatesPerHour', label: t('udv.fMaxUpdates'), kind: 'num' },
       { key: 'maxConnectionsPerHour', label: t('udv.fMaxConnections'), kind: 'num' },
-      { key: 'maxUserConnections', label: t('udv.fMaxUserConnections'), kind: 'num' },
-      { key: 'authPlugin', label: t('udv.fPlugin'), kind: 'plugin' }
+      { key: 'maxUserConnections', label: t('udv.fMaxUserConnections'), kind: 'num' }
     )
+    // 认证插件：**数据库回了现值才摆出来**（用户口径"回显不了的就不显示"）——
+    // Doris 的 mysql.user 里 plugin 是空串（FE 不存插件名），这类就不出现这一行；
+    // MySQL / MariaDB 有真实插件名，正常回显 + 可改。
+    if (effectiveAuthPlugin.value.trim()) {
+      defs.push({ key: 'authPlugin', label: t('udv.fPlugin'), kind: 'plugin' })
+    }
   } else if (isOracle.value) {
     defs.push(
       { key: 'accountLocked', label: t('udv.fAccountLocked'), kind: 'bool' },
@@ -691,18 +900,27 @@ const editableAttrs = computed(() => {
 })
 
 // 插件下拉的选项：**当前值一定要在选项里** —— el-select 找不到匹配项时就显示空，
-// 看着像"没回显"（实际是库里那个插件名不在我们的候选清单里，比如某个第三方插件）
+// 看着像"没回显"（实际是库里那个插件名不在我们的候选清单里，比如某个第三方插件）。
 const pluginOptions = computed(() => {
-  const cur = String(form.value.attrs.authPlugin || '').trim()
+  const cur = effectiveAuthPlugin.value.trim()
   return cur && !ATTR_PLUGINS.includes(cur) ? [cur].concat(ATTR_PLUGINS) : ATTR_PLUGINS
 })
+
+// 有效值：优先表单里的选择，回落到明细列的 plugin（与 seedAttrs 同口径）。
+// 「回显不了就不显示」：数据库没回 plugin（Doris 的 plugin 列是空串）时整行不摆出来，
+// 也不再提供「默认（跟随服务器）」这类占位选项 —— 界面上只出现数据库真实报告的值。
+const effectiveAuthPlugin = computed(() =>
+  String(form.value.attrs.authPlugin || attrText(attrRaw('plugin')) || ''))
 
 // 认证插件的绑定：**取不到种子值时直接回落到明细列** —— 不管哪种入口打开的表单
 // （右键编辑 / 用户管理页里点编辑），只要 fields 里有 plugin，这一格就不会是空的。
 const authPluginModel = computed({
-  get: () => String(form.value.attrs.authPlugin || attrText(attrRaw('plugin')) || ''),
+  get: () => effectiveAuthPlugin.value,
   set: (v) => { form.value.attrs.authPlugin = v },
 })
+
+// 只读态的纯文字展示值：数据库回什么就显示什么
+const authPluginLabel = computed(() => effectiveAuthPlugin.value.trim())
 
 // 只交改动过的项
 const attrDelta = computed(() => {
@@ -753,6 +971,11 @@ const isMysql = computed(() => {
 })
 // Doris 会对新建用户自动授予系统库（information_schema/mysql）的只读权限
 const isDoris = computed(() => props.conn?.type === 'DORIS')
+// 例程权限页签：MySQL / MariaDB（EXECUTE + GRANT OPTION，MySQL 语法）与
+// PostgreSQL / KingbaseES（只 EXECUTE，PG 语法）才有。Doris 是 MySQL 协议但没有
+// 例程与 mysql.procs_priv；Oracle 的例程 EXECUTE 走「对象权限」（读回同源）。
+const isMysqlFamily = computed(() => ['MYSQL', 'MARIADB'].includes(props.conn?.type))
+const showRoutineTab = computed(() => isMysqlFamily.value || isPgsql.value)
 const isDorisSystemDb = (db) => isDoris.value && ['information_schema', 'mysql'].includes(String(db || '').toLowerCase())
 // 库列表已加载且当前授权的库不在其中：MySQL 删库不会清理 mysql.db 的授权行，属于残留授权
 const isDbMissing = (db) => {
@@ -814,9 +1037,10 @@ const isClickhouse = computed(() => props.conn?.type === 'CLICKHOUSE')
 // MySQL 系：服务器(全局) / 数据库(库级) / 细粒度(表级)；
 // SQL Server：服务器角色 / 数据库角色 / 细粒度(Schema + 对象)；
 // PG、Kingbase：角色是集群级的，只有服务器权限这一页。
-const hasServerTab = computed(() => isMysql.value || isMssql.value || isPgsql.value || isOracle.value)
-const hasDbTab = computed(() => isMysql.value || isMssql.value)
-const hasGranularTab = computed(() => isMysql.value || isMssql.value || isOracle.value)
+const hasServerTab = computed(() => isMysql.value || isMssql.value || isPgsql.value || isOracle.value || isClickhouse.value)
+// PG 的「数据库权限」页 = 模式级（USAGE/CREATE）；PG 也有表权限页
+const hasDbTab = computed(() => isMysql.value || isMssql.value || isClickhouse.value || isPgsql.value)
+const hasGranularTab = computed(() => isMysql.value || isMssql.value || isOracle.value || isPgsql.value || isClickhouse.value)
 // Oracle 的「角色」是单独一层（与系统权限、对象权限并列）
 const hasRolesTab = computed(() => isOracle.value)
 // 页签标题按类型取：同一层在不同家的说法不一样（Oracle 的"服务器级"其实就是系统权限）
@@ -909,8 +1133,55 @@ const withExtras = (base, values) => {
     ...extras.map((v) => ({ value: v, label: v }))
   ]
 }
-const globalPrivOptions = computed(() => withExtras(mysqlPrivs, form.value.privileges))
+// MySQL 5.7 没有 CREATE ROLE / DROP ROLE（8.0 才引入）：照 8.0 清单展示的话，
+// 勾上保存必 1064 语法错（实测 5.7.42）。按 user-info 带回的服务器版本隐藏，
+// 提交时同样剥掉（防御：旧页签残留的勾选不该发出去）。
+const mysql57 = computed(() => isMysql.value && /^5\./.test(String(props.editData?.serverVersion || '')))
+const strip57 = (arr) => (mysql57.value
+  ? arr.filter((p) => !['CREATE ROLE', 'DROP ROLE'].includes(String(p.value || p).toUpperCase()))
+  : arr)
+const globalPrivOptions = computed(() => withExtras(strip57(mysqlPrivs), form.value.privileges))
 const objectPrivOptions = (row) => withExtras(objectPrivs, row?.privileges)
+
+// ClickHouse 的权限清单：与后端 dialect.rs 的 CLICKHOUSE_PRIVILEGES 白名单**一致**
+// （权限名原样拼进 GRANT，两端必须同一套）。标签直接用权限名本身 —— CH 的
+// 权限名没有歧义，不需要译文。ALL = 全部权限（相当于 MySQL 的 ALL PRIVILEGES）。
+const chPrivs = [
+  { value: 'ALL', label: 'ALL' },
+  { value: 'SELECT', label: 'SELECT' },
+  { value: 'INSERT', label: 'INSERT' },
+  { value: 'ALTER', label: 'ALTER' },
+  { value: 'CREATE', label: 'CREATE' },
+  { value: 'DROP', label: 'DROP' },
+  { value: 'TRUNCATE', label: 'TRUNCATE' },
+  { value: 'OPTIMIZE', label: 'OPTIMIZE' },
+  { value: 'SHOW', label: 'SHOW' },
+  { value: 'SYSTEM', label: 'SYSTEM' }
+]
+// 与 withExtras 同一兜底：服务器回的清单外权限名也要能看见、能取消 ——
+// 少摆一个就等于保存时把它悄悄撤掉。
+const chPrivOptions = computed(() => {
+  const known = new Set(chPrivs.map((p) => p.value))
+  const extras = [...new Set(form.value.privileges || [])].filter((v) => v && !known.has(v))
+  return [
+    ...chPrivs.map((p) => ({ value: p.value, label: p.label })),
+    ...extras.map((v) => ({ value: v, label: v }))
+  ]
+})
+const chPrivColumns = computed(() => chPrivOptions.value.map((p) => p.value))
+// 分组与 MySQL 同一口径：快捷(ALL) / 数据读写 / 对象与结构 / 服务器管理；清单外落「其它」
+const chPrivGroupDefs = [
+  { key: 'all', labelKey: 'upv.grpQuick', values: ['ALL'] },
+  { key: 'chdata', labelKey: 'upv.grpData', values: ['SELECT', 'INSERT'] },
+  { key: 'chobject', labelKey: 'upv.grpObject', values: ['ALTER', 'CREATE', 'DROP', 'TRUNCATE', 'OPTIMIZE', 'SHOW'] },
+  { key: 'chadmin', labelKey: 'upv.grpAdmin', values: ['SYSTEM'] }
+]
+// 库权限页签的列分组（与全局页签同一套清单）
+const chDbGrouped = computed(() => groupByDefs(chPrivColumns.value, chPrivGroupDefs))
+// 细粒度（表级）页签的列与分组：CH 用自己的清单（与全局/库级同一套名字），
+// MySQL 系用表级清单 —— 一张表两个类型共用（后端对 CH 的 `grant … on db.tbl` 已支持）
+const granularCols = computed(() => (isClickhouse.value ? chPrivColumns.value : tablePrivColumns.value))
+const granularGroups = computed(() => (isClickhouse.value ? chDbGrouped.value : tableGrouped.value))
 
 // 权限按用途分组 —— 三十二个勾选框平铺着没人看得下去，按「数据读写 / 对象与结构 /
 // 服务器管理」分开后一眼就能定位（这也是各家客户端的老做法）。
@@ -1026,6 +1297,189 @@ const pgRoles = [
   'pg_read_all_data', 'pg_write_all_data', 'pg_read_server_files',
   'pg_write_server_files', 'pg_execute_server_program'
 ]
+// PG 的模式级 / 表级 / 例程级权限 —— 与后端 dialect.rs 的 PG_SCHEMA_PRIVS /
+// PG_TABLE_PRIVS 必须一致（后端会再校验并拒绝清单外的名字）。
+const pgSchemaPrivs = ['USAGE', 'CREATE']
+const pgTablePrivs = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']
+
+// ===== 列头第二行的小字中文说明 =====
+// 矩阵列头此前只有英文名（SELECT / INSERT …），不知道哪列是干什么的。各家
+// {value,labelKey} 清单本来就带双语说明，这里统一登记成 value→labelKey 的注册表，
+// 列头渲染时剥掉开头的英文名、只把中文部分放到第二行小字。
+const PRIV_LABEL_KEYS = {}
+const putPrivLabels = (arr) => (arr || []).forEach((p) => {
+  // **必须带 labelKey 才登记**：chPrivs 用的是 `label`（就等于英文名），若不设防，
+  // 它会把 mysqlPrivs/objectPrivs 已登记好的 SELECT/INSERT/ALTER… 全部覆盖成
+  // undefined —— 结果就是"UPDATE 有小字、SELECT 没有"这种见鬼的半边缺失（实测）
+  if (p && p.value && p.labelKey) PRIV_LABEL_KEYS[String(p.value).toUpperCase()] = p.labelKey
+})
+putPrivLabels(mysqlPrivs)
+putPrivLabels(objectPrivs)
+putPrivLabels(mssqlSchemaPrivs)
+putPrivLabels(mssqlObjectPrivs)
+// chPrivs / oracleObjectPrivs 是裸清单（没有 labelKey），不放进注册表盖别人的
+// 牌子；CH 独有的几个名字（ALL / TRUNCATE / OPTIMIZE / SHOW / SYSTEM）补手工映射
+PRIV_LABEL_KEYS['ALL'] = 'upv.all'
+PRIV_LABEL_KEYS['TRUNCATE'] = 'upv.truncate'
+PRIV_LABEL_KEYS['OPTIMIZE'] = 'upv.optimize'
+PRIV_LABEL_KEYS['SHOW'] = 'upv.show'
+PRIV_LABEL_KEYS['SYSTEM'] = 'upv.system'
+// 角色名没有 {value,labelKey} 清单（它们是裸字符串数组），单独给一张表
+const ROLE_LABEL_KEYS = {
+  SYSADMIN: 'upv.rolSysadmin', SECURITYADMIN: 'upv.rolSecurityadmin', SERVERADMIN: 'upv.rolServeradmin',
+  SETUPADMIN: 'upv.rolSetupadmin', PROCESSADMIN: 'upv.rolProcessadmin', DISKADMIN: 'upv.rolDiskadmin',
+  DBCREATOR: 'upv.rolDbcreator', BULKADMIN: 'upv.rolBulkadmin',
+  DB_OWNER: 'upv.rolDbOwner', DB_DATAREADER: 'upv.rolDbDatareader', DB_DATAWRITER: 'upv.rolDbDatawriter',
+  DB_DDLADMIN: 'upv.rolDbDdladmin', DB_SECURITYADMIN: 'upv.rolDbSecurityadmin', DB_ACCESSADMIN: 'upv.rolDbAccessadmin',
+  DB_BACKUPOPERATOR: 'upv.rolDbBackupoperator', DB_DENYDATAREADER: 'upv.rolDbDenydatareader',
+  DB_DENYDATAWRITER: 'upv.rolDbDenydatawriter', PUBLIC: 'upv.rolPublic',
+  CONNECT: 'upv.rolConnect', RESOURCE: 'upv.rolResource', DBA: 'upv.rolDba',
+  EXP_FULL_DATABASE: 'upv.rolExpFull', IMP_FULL_DATABASE: 'upv.rolImpFull',
+  SELECT_CATALOG_ROLE: 'upv.rolSelCatalog', EXECUTE_CATALOG_ROLE: 'upv.rolExecCatalog',
+  DELETE_CATALOG_ROLE: 'upv.rolDelCatalog', RECOVERY_CATALOG_OWNER: 'upv.rolRecoveryOwner',
+  SCHEDULER_ADMIN: 'upv.rolSchedulerAdmin', OEM_MONITOR: 'upv.rolOemMonitor', AQ_ADMINISTRATOR_ROLE: 'upv.rolAqAdmin',
+  PG_READ_ALL_DATA: 'upv.rolPgReadAll', PG_WRITE_ALL_DATA: 'upv.rolPgWriteAll',
+  PG_READ_SERVER_FILES: 'upv.rolPgReadFiles', PG_WRITE_SERVER_FILES: 'upv.rolPgWriteFiles',
+  PG_EXECUTE_SERVER_PROGRAM: 'upv.rolPgExecProg'
+}
+// ===== 动态权限名的兜底小字 =====
+// 「一个都不能隐身」原则下，服务器返回的清单外权限名（ClickHouse 的 SHOW GRANTS
+// 一口气带回 CHECK / UNDROP TABLE / BACKUP / KILL QUERY / ROW POLICY …几十个）
+// 也会变成列头，但它们不在 {value,labelKey} 静态清单里 —— 没有说明就是两眼一抹黑。
+// 这里内置一张双语兜底表（不进 locales：这些名字只在动态列里出现，没必要进字典文件），
+// 命中不了再用「动词+名词」组合规则拼一条（CREATE ROW POLICY → 创建行策略）。
+const PRIV_CN_EXACT = {
+  CHECK: ['检查表（校验数据完整性）', 'Verify table integrity'],
+  'UNDROP TABLE': ['恢复被删除的表', 'Undrop a dropped table'],
+  BACKUP: ['备份数据', 'Back up data'],
+  RESTORE: ['恢复备份', 'Restore from backup'],
+  'MOVE PARTITION BETWEEN SHARDS': ['在分片间移动分区', 'Move partition between shards'],
+  'ROLE ADMIN': ['管理角色与授权', 'Administer roles & grants'],
+  'NAMED COLLECTION': ['使用命名集合（连接参数集）', 'Use named collections'],
+  DICTGET: ['读取字典数据', 'Read dictionary data'],
+  SOURCES: ['使用外部数据源（文件/URL 等）', 'Use external data sources'],
+  CLUSTER: ['集群管理操作', 'Cluster operations'],
+  INTROSPECTION: ['使用内省函数（地址/符号调试）', 'Introspection functions'],
+  'ACCESS MANAGEMENT': ['管理用户/角色/配额/档案', 'Manage users, roles, quotas'],
+  DEBUG: ['调试 PL/SQL 代码', 'Debug PL/SQL code'],
+  FLASHBACK: ['闪回查询历史数据', 'Flashback query'],
+  'QUERY REWRITE': ['查询重写（物化视图）', 'Query rewrite (materialized views)'],
+  'ON COMMIT REFRESH': ['提交时刷新物化视图', 'Refresh materialized view on commit'],
+  READ: ['读取目录对象', 'Read (directory objects)'],
+  WRITE: ['写入目录对象', 'Write (directory objects)'],
+  USAGE: ['使用模式/资源', 'Usage on schema'],
+  IMPERSONATE: ['模拟其他用户身份', 'Impersonate other users'],
+  'VIEW ANY DATABASE': ['查看所有数据库', 'View any database'],
+  'VIEW SERVER STATE': ['查看服务器状态', 'View server state'],
+  'ALLOW SQL SECURITY NONE': ['允许 SQL SECURITY NONE（视图不做权限检查）', 'Allow SQL SECURITY NONE'],
+  DISPLAYSECRETSINSHOWANDSELECT: ['在 SHOW/SELECT 结果中显示密钥', 'Display secrets in SHOW/SELECT'],
+  'TABLE ENGINE': ['使用表引擎（ENGINE = …）', 'Use table engines'],
+  // ALTER 的细分子项（ClickHouse 按粒度拆成一条条授权，SHOW GRANTS 会原样带回）
+  'ALTER UPDATE': ['按条件修改数据', 'Update rows by condition'],
+  'ALTER DELETE': ['按条件删除数据', 'Delete rows by condition'],
+  'ALTER COLUMN': ['修改列结构', 'Alter columns'],
+  'ALTER ADD COLUMN': ['新增列', 'Add columns'],
+  'ALTER MODIFY COLUMN': ['修改列类型', 'Modify columns'],
+  'ALTER DROP COLUMN': ['删除列', 'Drop columns'],
+  'ALTER CLEAR COLUMN': ['清空列数据', 'Clear columns'],
+  'ALTER COMMENT COLUMN': ['修改列注释', 'Comment columns'],
+  'ALTER INDEX': ['修改索引', 'Alter indexes'],
+  'ALTER ADD INDEX': ['新增索引', 'Add indexes'],
+  'ALTER DROP INDEX': ['删除索引', 'Drop indexes'],
+  'ALTER CONSTRAINT': ['修改约束', 'Alter constraints'],
+  'ALTER TTL': ['修改存活期(TTL)', 'Alter TTL'],
+  'ALTER SETTINGS': ['修改表设置', 'Alter settings'],
+  'ALTER MOVE PARTITION': ['移动分区', 'Move partitions'],
+  'ALTER FREEZE': ['冻结分区快照', 'Freeze partitions'],
+  'ALTER COMMENT': ['修改注释', 'Alter comments'],
+  // SOURCES 的细分：能用作表引擎/字典源的每类外部数据源各是一个权限
+  REMOTE: ['访问远程 ClickHouse', 'Access remote ClickHouse'],
+  'REMOTE SECURE': ['访问远程 ClickHouse（TLS）', 'Access remote ClickHouse (TLS)'],
+  MONGO: ['访问 MongoDB 数据源', 'Access MongoDB source'],
+  MONGODB: ['访问 MongoDB 数据源', 'Access MongoDB source'],
+  REDIS: ['访问 Redis 数据源', 'Access Redis source'],
+  MYSQL: ['访问外部 MySQL 数据源', 'Access external MySQL source'],
+  POSTGRES: ['访问外部 PostgreSQL 数据源', 'Access external PostgreSQL source'],
+  POSTGRESQL: ['访问外部 PostgreSQL 数据源', 'Access external PostgreSQL source'],
+  SQLITE: ['访问 SQLite 数据源', 'Access SQLite source'],
+  ODBC: ['访问 ODBC 数据源', 'Access ODBC source'],
+  JDBC: ['访问 JDBC 数据源', 'Access JDBC source'],
+  HDFS: ['访问 HDFS 文件', 'Access HDFS files'],
+  S3: ['访问 S3 对象存储', 'Access S3 storage'],
+  HIVE: ['访问 Hive 数据源', 'Access Hive source'],
+  AZURE: ['访问 Azure Blob 存储', 'Access Azure Blob storage'],
+  KAFKA: ['访问 Kafka 数据源', 'Access Kafka source'],
+  NATS: ['访问 NATS 数据源', 'Access NATS source'],
+  RABBITMQ: ['访问 RabbitMQ 数据源', 'Access RabbitMQ source'],
+  YTSAURUS: ['访问 YTsaurus 数据源', 'Access YTsaurus source'],
+  'ARROW FLIGHT': ['访问 Arrow Flight 数据源', 'Access Arrow Flight source'],
+  BIGQUERY: ['访问 BigQuery 数据源', 'Access BigQuery source'],
+  URL: ['访问 URL 数据源', 'Access URL source']
+}
+// 组合规则的动词/名词（zh / en）；en 的名词按单复数分开写，别自作聪明加括号
+const PRIV_CN_VERB = {
+  CREATE: ['创建', 'Create'], ALTER: ['修改', 'Alter'], DROP: ['删除', 'Drop'],
+  SHOW: ['查看', 'Show'], KILL: ['终止', 'Kill'], SET: ['设置', 'Set']
+}
+const PRIV_CN_NOUN = {
+  DATABASE: ['库', 'database'], DATABASES: ['库', 'databases'],
+  TABLE: ['表', 'table'], TABLES: ['表', 'tables'],
+  'TEMPORARY TABLE': ['临时表', 'temporary table'],
+  VIEW: ['视图', 'view'], DICTIONARY: ['字典', 'dictionary'], DICTIONARIES: ['字典', 'dictionaries'],
+  FUNCTION: ['函数', 'function'], 'ROW POLICY': ['行策略', 'row policy'],
+  'MASKING POLICY': ['脱敏策略', 'masking policy'], QUOTA: ['配额', 'quota'],
+  'SETTINGS PROFILE': ['设置档案', 'settings profile'],
+  USER: ['用户', 'user'], USERS: ['用户', 'users'], ROLE: ['角色', 'role'], ROLES: ['角色', 'roles'],
+  'NAMED COLLECTION': ['命名集合', 'named collection'],
+  'NAMED COLLECTIONS': ['命名集合', 'named collections'],
+  PARTITION: ['分区', 'partition'], QUERY: ['查询', 'query'], TRANSACTION: ['事务', 'transaction'],
+  ACCESS: ['访问管理设置', 'access settings'], CACHE: ['缓存', 'cache'], REPLICA: ['副本', 'replica'],
+  MERGES: ['后台合并', 'merges'], FETCHES: ['后台拉取', 'fetches'], MOVES: ['后台搬移', 'moves'],
+  LOGS: ['系统日志', 'logs'], FILE: ['文件', 'file'], URL: ['URL 数据源', 'url source'],
+  COLUMN: ['列', 'column'], COLUMNS: ['列', 'columns'], INDEX: ['索引', 'index'],
+  GRANTS: ['授权', 'grants'], LOGIN: ['登录名', 'login'],
+  LOGINS: ['登录名', 'logins'], SERVER: ['服务器', 'server'], CONNECTION: ['连接', 'connection'],
+  'LINKED SERVER': ['链接服务器', 'linked server'],
+  HANDLERS: ['处理器（表函数）', 'handlers'], SOURCES: ['外部数据源', 'external sources'],
+  DEFINER: ['DEFINER（定义者）', 'definer']
+}
+// 取某个权限/角色的中文小字：没有登记、或中文与英文名相同（英文界面）就返回空 →
+// 模板里 v-if 不渲染第二行，列头保持单行
+const privLabel = (p) => {
+  const name = String(p || '').trim()
+  if (!name) return ''
+  const upper = name.toUpperCase()
+  const key = PRIV_LABEL_KEYS[upper] || ROLE_LABEL_KEYS[upper]
+  if (key) {
+    const text = t(key)
+    let rest = text.startsWith(name) ? text.slice(name.length) : text
+    rest = rest.replace(/^[-—·、\s]+/, '').trim()
+    if (rest && rest !== name) return rest
+  }
+  const en = locale.value === 'en-US'
+  // 1) 兜底表精确命中
+  const hit = PRIV_CN_EXACT[upper]
+  if (hit) return en ? hit[1] : hit[0]
+  // 2) 组合规则：CREATE/ALTER/DROP/SHOW/KILL + (ANY)? + 名词
+  //    MSSQL 的权限形如 ALTER ANY DATABASE（"修改任意库"），ANY 可以剥掉再查名词
+  const m = /^(CREATE|ALTER|DROP|SHOW|KILL)\s+(ANY\s+)?(.+)$/.exec(upper)
+  if (m) {
+    const verb = PRIV_CN_VERB[m[1]]
+    const noun = PRIV_CN_NOUN[m[3]]
+    if (verb && noun) {
+      const any = m[2] ? (en ? ' any ' : '任意') : (en ? ' ' : '')
+      return en ? `${verb[1]}${any}${noun[1]}` : `${verb[0]}${any}${noun[0]}`
+    }
+  }
+  // 3) SYSTEM 细分子项（SYSTEM SHUTDOWN / SYSTEM STOP MERGES …）统一给通用说明
+  if (/^SYSTEM\b/.test(upper)) {
+    const text = t('upv.system')
+    let rest = text.startsWith('SYSTEM') ? text.slice('SYSTEM'.length) : text
+    rest = rest.replace(/^[-—·、\s]+/, '').trim()
+    if (rest) return rest
+  }
+  return ''
+}
 
 // ===== 矩阵表（权限项当列）=====
 // 列 = 固定清单 ∪ 数据里出现的名字 —— 与「一个都不能隐身」同一条原则：
@@ -1158,7 +1612,10 @@ const tableGrouped = computed(() => groupByDefs(tablePrivColumns.value, mysqlGro
 const serverGrouped = computed(() =>
   groupByDefs(
     serverColumns.value,
-    isOracle.value ? oracleSysGroupDefs : isMssql.value ? mssqlServerRoleGroupDefs : pgRoleGroupDefs,
+    isOracle.value ? oracleSysGroupDefs
+      : isMssql.value ? mssqlServerRoleGroupDefs
+        : isClickhouse.value ? chPrivGroupDefs
+          : pgRoleGroupDefs,
   ),
 )
 const rolesGrouped = computed(() => groupByDefs(oracleRoles, oracleRoleGroupDefs))
@@ -1203,10 +1660,12 @@ const schemaPrivColumns = computed(() => privColumns(mssqlSchemaPrivs.map((p) =>
 const objectPrivColumnsMssql = computed(() => privColumns(mssqlObjectPrivs.map((p) => p.value), form.value.objectPrivileges))
 // 服务器权限那一页：勾选项本身就是「角色名 / 权限名」，一个一列，只有一行
 const serverColumns = computed(() => (
-  isOracle.value ? oracleSystemPrivs : isMssql.value ? mssqlServerRoles : isPgsql.value ? pgRoles : []
+  isOracle.value ? oracleSystemPrivs : isMssql.value ? mssqlServerRoles : isPgsql.value ? pgRoles
+    : isClickhouse.value ? chPrivColumns.value : []
 ))
 const serverRowLabel = computed(() => (
-  isOracle.value ? t('upv.tabSystemPrivs') : isMssql.value ? t('upv.segServer') : t('upv.roleAssignPg')
+  isOracle.value ? t('upv.tabSystemPrivs') : isMssql.value ? t('upv.segServer')
+    : isClickhouse.value ? t('upv.privileges') : t('upv.roleAssignPg')
 ))
 // 这一页写的是 form 里的哪个数组（Oracle 系统权限 → privileges，SQL Server → serverRoles，PG → roles）
 const serverModelKey = computed(() => (isMssql.value ? 'serverRoles' : isPgsql.value ? 'roles' : 'privileges'))
@@ -1256,8 +1715,11 @@ const rowsDiff = (before, after, keyOf) => {
 }
 const dbKey = (r) => (r && r.database ? String(r.database) : '')
 const tableKey = (r) => (r && r.database && r.table ? r.database + '.' + r.table : '')
-const schemaKey = (r) => (r && r.schema ? String(r.schema) : '')
-const objectKey = (r) => (r && r.schema && r.object ? r.schema + '.' + r.object : '')
+// 例程行的身份 = 库 + 类型 + 名字（同名的过程与函数是两个对象）
+const routineKey = (r) => (r && r.database && r.routine ? r.database + '.' + (r.kind || 'PROCEDURE') + ':' + r.routine : '')
+// 行级选库：库也参与行的身份（不同库里的同名 schema 是两行授权）
+const schemaKey = (r) => (r && r.schema ? (r.database ? r.database + '.' : '') + String(r.schema) : '')
+const objectKey = (r) => (r && r.schema && r.object ? (r.database ? r.database + '.' : '') + r.schema + '.' + r.object : '')
 const allRows = (rows, withKey) => (rows || [])
   .filter((r) => withKey(r) && r.privileges && r.privileges.length)
   .map((r) => ({ key: withKey(r), row: r, privs: [...r.privileges] }))
@@ -1273,6 +1735,7 @@ const changes = computed(() => {
       roles: { added: [...asSet(f.roles)], removed: [] },
       db: { added: allRows(f.dbPrivileges, dbKey), removed: [] },
       table: { added: allRows(f.tablePrivileges, tableKey), removed: [] },
+      routine: { added: allRows(f.routinePrivileges, routineKey), removed: [] },
       schema: { added: allRows(f.schemaPrivileges, schemaKey), removed: [] },
       object: { added: allRows(f.objectPrivileges, objectKey), removed: [] }
     }
@@ -1283,6 +1746,7 @@ const changes = computed(() => {
     roles: listDiff(o.roles, f.roles),
     db: rowsDiff(o.dbPrivileges, f.dbPrivileges, dbKey),
     table: rowsDiff(o.tablePrivileges, f.tablePrivileges, tableKey),
+    routine: rowsDiff(o.routinePrivileges, f.routinePrivileges, routineKey),
     schema: rowsDiff(o.schemaPrivileges, f.schemaPrivileges, schemaKey),
     object: rowsDiff(o.objectPrivileges, f.objectPrivileges, objectKey)
   }
@@ -1290,7 +1754,7 @@ const changes = computed(() => {
 // 差量里有没有"要执行的语句"（撤销也算）
 const hasChanges = computed(() => {
   const c = changes.value
-  return ['global', 'serverRoles', 'roles', 'db', 'table', 'schema', 'object'].some((k) => {
+  return ['global', 'serverRoles', 'roles', 'db', 'table', 'routine', 'schema', 'object'].some((k) => {
     const g = c[k]
     return (g.added && g.added.length) || (g.removed && g.removed.length)
   }) || !!form.value.password || !props.editMode
@@ -1302,8 +1766,11 @@ const revokePayload = computed(() => {
   for (const p of c.global.removed) out.push({ scope: 'global', privilege: p, owner: '', object: '' })
   for (const p of c.serverRoles.removed) out.push({ scope: 'server-role', privilege: p, owner: '', object: '' })
   for (const p of c.roles.removed) out.push({ scope: 'role', privilege: p, owner: '', object: '' })
-  for (const r of c.db.removed) for (const p of r.privs) out.push({ scope: 'db', privilege: p, owner: r.key, object: '' })
+  // PG 的「库级」实为模式级：撤销 scope 用 'schema'（后端拼 `revoke … on schema …`）
+  for (const r of c.db.removed) for (const p of r.privs) out.push({ scope: isPgsql.value ? 'schema' : 'db', privilege: p, owner: r.key, object: '' })
   for (const r of c.table.removed) for (const p of r.privs) out.push({ scope: 'table', privilege: p, owner: r.row.database, object: r.row.table })
+  // 例程级撤销：kind 要带上（`on procedure ...` 是语法的一部分）
+  for (const r of c.routine.removed) for (const p of r.privs) out.push({ scope: 'routine', privilege: p, owner: r.row.database, object: r.row.routine, kind: r.row.kind || 'PROCEDURE' })
   for (const r of c.schema.removed) for (const p of r.privs) out.push({ scope: 'schema', privilege: p, owner: r.key, object: '' })
   for (const r of c.object.removed) for (const p of r.privs) out.push({ scope: 'object', privilege: p, owner: r.row.schema, object: r.row.object })
   return out
@@ -1333,11 +1800,15 @@ const previewSql = computed(() => {
     for (const p of c.global.removed) lines.push(`REVOKE ${p} ON *.* FROM ${who};`)
     for (const r of c.db.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON \`${r.key}\`.* FROM ${who};`)
     for (const r of c.table.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON \`${r.row.database}\`.\`${r.row.table}\` FROM ${who};`)
+    // 例程级：`ON PROCEDURE `db`.`p`` 的类型字是语法的一部分
+    const routineType = (kind) => (String(kind).toUpperCase() === 'FUNCTION' ? 'FUNCTION' : 'PROCEDURE')
+    for (const r of c.routine.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON ${routineType(r.row.kind)} \`${r.row.database}\`.\`${r.row.routine}\` FROM ${who};`)
     const g = grantOption(c.global.added)
     if (g.length) lines.push(`GRANT ${g.join(', ')} ON *.* TO ${who}${hasGrantOption(c.global.added) ? ' WITH GRANT OPTION' : ''};`)
     else if (hasGrantOption(c.global.added)) lines.push(`GRANT USAGE ON *.* TO ${who} WITH GRANT OPTION;`)
     for (const r of c.db.added) lines.push(`GRANT ${r.privs.join(', ')} ON \`${r.key}\`.* TO ${who};`)
     for (const r of c.table.added) lines.push(`GRANT ${r.privs.join(', ')} ON \`${r.row.database}\`.\`${r.row.table}\` TO ${who};`)
+    for (const r of c.routine.added) lines.push(`GRANT ${r.privs.join(', ')} ON ${routineType(r.row.kind)} \`${r.row.database}\`.\`${r.row.routine}\` TO ${who};`)
     sql = lines.join('\n')
   } else if (isMssql.value) {
     if (!props.editMode && form.value.password) {
@@ -1358,10 +1829,12 @@ const previewSql = computed(() => {
     for (const r of c.serverRoles.added) sql += `\nALTER SERVER ROLE [${r}] ADD MEMBER ${u};`
     for (const r of c.roles.removed) sql += `\nALTER ROLE [${r}] DROP MEMBER ${u};`
     for (const r of c.roles.added) sql += `\nALTER ROLE [${r}] ADD MEMBER ${u};`
-    for (const r of c.schema.removed) for (const p of r.privs) sql += `\nREVOKE ${p} ON SCHEMA::[${r.key}] FROM ${u};`
-    for (const r of c.schema.added) sql += `\nGRANT ${r.privs.join(', ')} ON SCHEMA::[${r.key}] TO ${u};`
-    for (const r of c.object.removed) for (const p of r.privs) sql += `\nREVOKE ${p} ON [${r.row.schema}].[${r.row.object}] FROM ${u};`
-    for (const r of c.object.added) sql += `\nGRANT ${r.privs.join(', ')} ON [${r.row.schema}].[${r.row.object}] TO ${u};`
+    // 行级选库：行里带了库就 `USE [库];` 切过去（与后端生成的语句同源同形）
+    const useDb = (db) => (db ? `USE [${db}]; ` : '')
+    for (const r of c.schema.removed) for (const p of r.privs) sql += `\n${useDb(r.row.database)}REVOKE ${p} ON SCHEMA::[${r.row.schema}] FROM ${u};`
+    for (const r of c.schema.added) sql += `\n${useDb(r.row.database)}GRANT ${r.privs.join(', ')} ON SCHEMA::[${r.row.schema}] TO ${u};`
+    for (const r of c.object.removed) for (const p of r.privs) sql += `\n${useDb(r.row.database)}REVOKE ${p} ON [${r.row.schema}].[${r.row.object}] FROM ${u};`
+    for (const r of c.object.added) sql += `\n${useDb(r.row.database)}GRANT ${r.privs.join(', ')} ON [${r.row.schema}].[${r.row.object}] TO ${u};`
   } else if (isPgsql.value) {
     if (!props.editMode) {
       sql = `CREATE USER "${form.value.name}"`
@@ -1380,17 +1853,35 @@ const previewSql = computed(() => {
     if (flags.length) sql += `\nALTER ROLE ${who} ${flags.join(' ')};`
     for (const r of c.roles.removed) sql += `\nREVOKE "${r}" FROM ${who};`
     for (const r of c.roles.added) sql += `\nGRANT "${r}" TO ${who};`
+    // 细粒度三层：模式（USAGE/CREATE）/ 表（七项）/ 例程（EXECUTE）——与后端
+    // user_action_sql 的 pg 分支同形（本地预览，同一算法只出不带口令的语句）。
+    const rt = (kind) => (String(kind).toUpperCase() === 'PROCEDURE' ? 'PROCEDURE' : 'FUNCTION')
+    for (const r of c.db.removed) for (const p of r.privs) sql += `\nREVOKE ${p.toLowerCase()} ON SCHEMA "${r.key}" FROM ${who};`
+    for (const r of c.table.removed) for (const p of r.privs) sql += `\nREVOKE ${p.toLowerCase()} ON TABLE "${r.row.database}"."${r.row.table}" FROM ${who};`
+    for (const r of c.routine.removed) for (const p of r.privs) sql += `\nREVOKE ${p.toLowerCase()} ON ${rt(r.row.kind)} "${r.row.database}"."${r.row.routine}" FROM ${who};`
+    for (const r of c.db.added) sql += `\nGRANT ${r.privs.join(', ').toLowerCase()} ON SCHEMA "${r.key}" TO ${who};`
+    for (const r of c.table.added) sql += `\nGRANT ${r.privs.join(', ').toLowerCase()} ON TABLE "${r.row.database}"."${r.row.table}" TO ${who};`
+    for (const r of c.routine.added) sql += `\nGRANT ${r.privs.join(', ').toLowerCase()} ON ${rt(r.row.kind)} "${r.row.database}"."${r.row.routine}" TO ${who};`
   } else if (isClickhouse.value) {
-    // 与 submit 同一口径：只出「建号 / 改密」，**不拼 GRANT**。
-    // 原来把 `show grants for` 原样带回的整句（`GRANT SELECT ON db.* TO u`）
-    // 前面再套一层 `GRANT … TO u` —— 拼出来的语句是错的，而真执行时后端又会整次拒绝。
+    // 与 MySQL 系同一算法：建号 / 改密 + 「原来有、现在没有了」逐条撤销 + 新勾选逐条授予
+    // （CH 的 RBAC：全局 ON *.* / 库 ON db.* / 表 ON db.table）。
+    const who = `\`${form.value.name}\``
+    const lines = []
     if (!props.editMode) {
-      sql = `CREATE USER \`${form.value.name}\``
-      if (form.value.password) sql += ` IDENTIFIED BY '***'`
-      sql += ';'
+      let s = `CREATE USER ${who}`
+      if (form.value.password) s += ` IDENTIFIED BY '***'`
+      lines.push(s + ';')
     } else if (form.value.password) {
-      sql = `ALTER USER \`${form.value.name}\` IDENTIFIED BY '***';`
+      lines.push(`ALTER USER ${who} IDENTIFIED BY '***';`)
     }
+    const c = changes.value
+    for (const p of c.global.removed) lines.push(`REVOKE ${p} ON *.* FROM ${who};`)
+    for (const r of c.db.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON \`${r.key}\`.* FROM ${who};`)
+    for (const r of c.table.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON \`${r.row.database}\`.\`${r.row.table}\` FROM ${who};`)
+    if (c.global.added.length) lines.push(`GRANT ${c.global.added.join(', ')} ON *.* TO ${who};`)
+    for (const r of c.db.added) lines.push(`GRANT ${r.privs.join(', ')} ON \`${r.key}\`.* TO ${who};`)
+    for (const r of c.table.added) lines.push(`GRANT ${r.privs.join(', ')} ON \`${r.row.database}\`.\`${r.row.table}\` TO ${who};`)
+    sql = lines.join('\n')
   } else if (isOracle.value) {
     // Oracle：建号 / 改密 + 三层（系统权限 / 角色 / 对象权限）+ 撤销差异。
     // 与 MySQL 那段同一写法（本地预览，口令一律显示 ***）。
@@ -1454,8 +1945,100 @@ const removeDbPriv = (i) => {
   form.value.dbPrivileges.splice(i, 1)
 }
 
+// ===== 下拉多选 ⇒ 拆行 =====
+// 一行里一次选中多个对象（库 / 表 / 例程 / 模式）：第一行留第一个，其余各拆成
+// 独立的一行 —— 每行仍然是"一个目标 + 若干权限"的形状，后端/撤销差量的行身份
+// （dbKey / tableKey / routineKey…）完全不用动。新拆出的行**继承当前行已勾的权限**
+//（先勾权限再一把选多个库是常见操作，继承才符合直觉），清空选择 = 清空该行目标。
+const asArr = (v) => (v ? [v] : [])
+const splitMultiRow = (list, i, field, vals, make) => {
+  const row = list[i]
+  const picked = (vals || []).filter((v) => v !== '' && v != null)
+  if (!picked.length) {
+    row[field] = ''
+    return
+  }
+  row[field] = picked[0]
+  const extras = picked.slice(1).map((v) => make(v, row))
+  if (extras.length) list.splice(i + 1, 0, ...extras)
+}
+// 库 / 模式级（MySQL、ClickHouse 的库 与 PG 的模式同形状：{database, privileges}）
+const onDbPrivMulti = (i, vals) => splitMultiRow(form.value.dbPrivileges, i, 'database', vals, (v, src) => ({
+  database: v,
+  privileges: [...(src.privileges || [])]
+}))
+// 表 / 对象级：MySQL 与 PG 同形状 {database, table}；_tables/_routines 一并带走（同模式免重查）
+const onTablePrivMulti = (i, vals) => splitMultiRow(form.value.tablePrivileges, i, 'table', vals, (v, src) => ({
+  database: src.database,
+  table: v,
+  privileges: [...(src.privileges || [])],
+  _tables: src._tables,
+  _routines: src._routines,
+  _loading: false
+}))
+// SQL Server：{database, schema} / {database, schema, object}
+const onMssqlSchemaPrivMulti = (i, vals) => splitMultiRow(form.value.schemaPrivileges, i, 'schema', vals, (v, src) => ({
+  database: src.database,
+  schema: v,
+  privileges: [...(src.privileges || [])]
+}))
+const onMssqlObjectPrivMulti = (i, vals) => splitMultiRow(form.value.objectPrivileges, i, 'object', vals, (v, src) => ({
+  database: src.database,
+  schema: src.schema,
+  object: v,
+  privileges: [...(src.privileges || [])]
+}))
+// 例程：{database, kind, routine}
+const onRoutinePrivMulti = (i, vals) => splitMultiRow(form.value.routinePrivileges, i, 'routine', vals, (v, src) => ({
+  database: src.database,
+  kind: src.kind,
+  routine: v,
+  privileges: [...(src.privileges || [])]
+}))
+
 const addTablePriv = () => {
   form.value.tablePrivileges.push({ database: '', table: '', privileges: [], _tables: [], _loading: false })
+}
+
+// ===== 例程权限（MySQL 系：对单个存储过程/函数授 EXECUTE）=====
+// 例程清单按库缓存（同一个库的过程+函数来自同一次 /procedures），行内按类型过滤
+const routineCache = reactive({})
+const routineList = (db) => routineCache[db] || null
+const fetchRoutines = async (db) => {
+  if (routineCache[db]) return routineCache[db]
+  routineCache[db] = []
+  try {
+    const res = await listProcedures(props.conn.id, db)
+    const list = (Array.isArray(res) ? res : []).map(o => ({ name: o.name || o, fn: isFunctionRoutine(o) }))
+    routineCache[db] = list
+  } catch {
+    routineCache[db] = []
+  }
+  return routineCache[db]
+}
+const rowRoutineOptions = (row) => {
+  const list = routineList(row.database) || []
+  return list.filter(r => (row.kind === 'FUNCTION') === r.fn).map(r => r.name)
+}
+const ensureRowRoutines = async (row) => {
+  if (!props.conn || !row.database) return
+  row._loading = true
+  await fetchRoutines(row.database)
+  row._loading = false
+}
+const addRoutinePriv = () => {
+  // MySQL 系的日常是存储过程；PG 日常是函数（PG 里 procedure 较少）
+  form.value.routinePrivileges.push({ database: '', kind: isMysqlFamily.value ? 'PROCEDURE' : 'FUNCTION', routine: '', privileges: [] })
+}
+const removeRoutinePriv = (i) => {
+  form.value.routinePrivileges.splice(i, 1)
+}
+const onRoutineDbChange = (row) => {
+  row.routine = ''
+  ensureRowRoutines(row)
+}
+const onRoutineKindChange = (row) => {
+  row.routine = ''
 }
 const removeTablePriv = (i) => {
   form.value.tablePrivileges.splice(i, 1)
@@ -1465,6 +2048,7 @@ const onTablePrivDbChange = async (i) => {
   const row = form.value.tablePrivileges[i]
   row.table = ''
   row._tables = []
+  row._routines = []
   if (!row.database || !props.conn) return
   row._loading = true
   try {
@@ -1472,20 +2056,39 @@ const onTablePrivDbChange = async (i) => {
     row._tables = (res || []).map(t => t.name || t)
   } catch {
     row._tables = []
-  } finally {
-    row._loading = false
   }
+  // Oracle：对象下拉**并入例程与包**（存储过程/函数/包）—— EXECUTE 是它们的主权限，
+  // 以前下拉里只有表+视图，想给过程授 EXECUTE 只能去手写 SQL。读回时例程授权
+  // 本来就落在对象权限里（dba_tab_privs 不分对象类型），所以不需要单独一页。
+  if (isOracle.value) {
+    try {
+      const routines = await listProcedures(props.conn.id, row.database)
+      row._routines = (Array.isArray(routines) ? routines : []).map((o) => ({
+        name: o.name || o,
+        type: String(o.routineType || 'PROCEDURE').toUpperCase()
+      }))
+    } catch {
+      row._routines = []
+    }
+  }
+  row._loading = false
+}
+
+// Oracle 对象下拉里例程/包的显示名（类型后缀用 i18n；类型来自 /procedures 的 routineType）
+const routineOptionLabel = (r) => {
+  const kindKey = r.type === 'FUNCTION' ? 'upv.kindFunction' : r.type === 'PACKAGE' ? 'upv.kindPackage' : 'upv.kindProcedure'
+  return `${r.name} · ${t(kindKey)}`
 }
 
 const addSchemaPriv = () => {
-  form.value.schemaPrivileges.push({ schema: '', privileges: [] })
+  form.value.schemaPrivileges.push({ database: '', schema: '', privileges: [] })
 }
 const removeSchemaPriv = (i) => {
   form.value.schemaPrivileges.splice(i, 1)
 }
 
 const addObjectPriv = () => {
-  form.value.objectPrivileges.push({ schema: '', object: '', privileges: [] })
+  form.value.objectPrivileges.push({ database: '', schema: '', object: '', privileges: [] })
 }
 const removeObjectPriv = (i) => {
   form.value.objectPrivileges.splice(i, 1)
@@ -1493,7 +2096,8 @@ const removeObjectPriv = (i) => {
 
 const loadDatabases = async () => {
   if (!props.conn) return
-  if (isMysql.value) {
+  // mssql 也要库名清单：schema/object 权限**行级选库**（行里选了库，授权语句才会 `use [库]`）
+  if (isMysql.value || isClickhouse.value || isMssql.value) {
     try {
       const res = await listDatabases(props.conn.id)
       databases.value = (res || []).map(d => d.name || d)
@@ -1507,12 +2111,31 @@ const loadDatabases = async () => {
 }
 
 const loadSchemas = async () => {
-  if (!props.conn || !isMssql.value) return
+  // PG/Kingbase 的模式级 / 表级 / 例程级三页都要用模式清单
+  if (!props.conn || (!isMssql.value && !isPgsql.value)) return
   try {
     const res = await listSchemas(props.conn.id, props.database)
     schemas.value = (res || []).map(s => s.name || s)
   } catch {
     schemas.value = []
+  }
+}
+
+// ===== 行级选库：每行的 schema 候选跟随**该行选的库** =====
+// 按库缓存（key：库名 / '__conn' = 连接默认库），同一库的多行共用一次请求。
+const rowSchemas = reactive({})
+const rowDbKey = (db) => (db ? String(db) : '__conn')
+const rowSchemaOptions = (row) => rowSchemas[rowDbKey(row?.database)] || schemas.value
+const ensureRowSchemas = async (row) => {
+  if (!props.conn || !isMssql.value) return
+  const key = rowDbKey(row?.database)
+  if (rowSchemas[key]) return
+  rowSchemas[key] = []
+  try {
+    const res = await listSchemas(props.conn.id, row?.database || '')
+    rowSchemas[key] = (res || []).map(s => s.name || s)
+  } catch {
+    rowSchemas[key] = []
   }
 }
 
@@ -1551,39 +2174,56 @@ const submit = async () => {
   // 只读 / 生产保护：在**点击那一刻**拦下（与用户管理页、MainView 同一个闸门、同一句提示）。
   // 后端那道闸照旧保留（设置可能刚被改过），这里只是不让用户白填一遍表单。
   if (!guardConnWrite(props.conn || {}, t(props.editMode ? 'upv.saveChanges' : 'upv.execCreate'))) return
+  // 与按钮同一个门禁：编辑态没有任何差量（也没改密码）就别发请求
+  if (props.editMode && !hasChanges.value) return
   saving.value = true
   try {
     const opts = {}
     if (isMysql.value) {
       // 撤销清单与预览同源：只交"取消了勾选"的那些，后端不再 revoke all
       opts.revoke = revokePayload.value
-      opts.privileges = form.value.privileges
+      // 5.7 上 CREATE ROLE / DROP ROLE 不存在（1064）：哪怕旧页签残留了勾选也不发出去
+      opts.privileges = mysql57.value
+        ? form.value.privileges.filter((p) => !['CREATE ROLE', 'DROP ROLE'].includes(String(p).toUpperCase()))
+        : form.value.privileges
       opts.dbPrivileges = form.value.dbPrivileges.map(r => ({ database: r.database, privileges: r.privileges }))
       opts.tablePrivileges = form.value.tablePrivileges.map(r => ({ database: r.database, table: r.table, privileges: r.privileges }))
+      // 例程级：对单个存储过程/函数授 EXECUTE（后端拼 `grant execute on procedure ...`）
+      opts.routinePrivileges = form.value.routinePrivileges.map(r => ({ database: r.database, kind: r.kind || 'PROCEDURE', routine: r.routine, privileges: r.privileges }))
     }
     if (isMssql.value) {
       opts.serverRoles = form.value.serverRoles
       opts.roles = form.value.roles
-      opts.schemaPrivileges = form.value.schemaPrivileges.map(r => ({ schema: r.schema, privileges: r.privileges }))
-      opts.objectPrivileges = form.value.objectPrivileges.map(r => ({ schema: r.schema, object: r.object, privileges: r.privileges }))
+      opts.schemaPrivileges = form.value.schemaPrivileges.map(r => ({ database: r.database || '', schema: r.schema, privileges: r.privileges }))
+      opts.objectPrivileges = form.value.objectPrivileges.map(r => ({ database: r.database || '', schema: r.schema, object: r.object, privileges: r.privileges }))
       // 撤销：**按差量点名**（"原来有、现在没有了"的那些）—— 与预览同源。
       // 不再"先全删再重授"：那样会把用户别处拿到的授权也一并抹掉再重建。
+      // schema/object 级带上**行级选的库**（后端在 REVOKE 前加 use [库];）
       const mc = changes.value
       opts.revoke = [
         ...mc.serverRoles.removed.map((r) => ({ scope: 'serverrole', privilege: r, owner: '', object: '' })),
         ...mc.roles.removed.map((r) => ({ scope: 'role', privilege: r, owner: '', object: '' })),
-        ...mc.schema.removed.flatMap((r) => r.privs.map((p) => ({ scope: 'schema', privilege: p, owner: r.key, object: '' }))),
-        ...mc.object.removed.flatMap((r) => r.privs.map((p) => ({ scope: 'object', privilege: p, owner: r.row.schema, object: r.row.object }))),
+        ...mc.schema.removed.flatMap((r) => r.privs.map((p) => ({ scope: 'schema', privilege: p, owner: r.row.schema, database: r.row.database || '', object: '' }))),
+        ...mc.object.removed.flatMap((r) => r.privs.map((p) => ({ scope: 'object', privilege: p, owner: r.row.schema, database: r.row.database || '', object: r.row.object }))),
       ]
     }
     if (isPgsql.value) {
       opts.roles = form.value.roles
+      // 细粒度三层（后端 pg 分支同形）：dbPrivileges 的 database 字段 = 模式名
+      opts.dbPrivileges = form.value.dbPrivileges.map(r => ({ database: r.database, privileges: r.privileges }))
+      opts.tablePrivileges = form.value.tablePrivileges.map(r => ({ database: r.database, table: r.table, privileges: r.privileges }))
+      opts.routinePrivileges = form.value.routinePrivileges.map(r => ({ database: r.database, kind: r.kind || 'FUNCTION', routine: r.routine, privileges: r.privileges }))
+      opts.revoke = revokePayload.value
     }
-    // ClickHouse：**不交 `grants`**。界面上没有编辑它的入口（它只有基本属性页），
-    // 而 `grants` 里装的是 `show grants for` 原样带回的整句 GRANT，属于"没有对照基准"的文本 ——
-    // 从前把它原样发回后端，后端按「未实现的授权项」**直接拒绝整次保存**（真机复现：
-    // `editData.grants` 非空 ⇒ 改个密码都报"「授权项」的自动分配尚未实现"）。
-    // 授权要改就按后端提示去查询页执行 GRANT；这里只管新建 / 改密 / 删除。
+    // ClickHouse：与 MySQL 系同一套差量语义 —— 勾选的三层权限（全局/库/表）+「取消了勾选」
+    // 的逐条撤销；`grants`（show grants 原文）不回传。后端按 CLICKHOUSE_PRIVILEGES
+    // 白名单拼 GRANT / REVOKE。
+    if (isClickhouse.value) {
+      opts.revoke = revokePayload.value
+      opts.privileges = form.value.privileges
+      opts.dbPrivileges = form.value.dbPrivileges.map(r => ({ database: r.database, privileges: r.privileges }))
+      opts.tablePrivileges = form.value.tablePrivileges.map(r => ({ database: r.database, table: r.table, privileges: r.privileges }))
+    }
     if (isOracle.value) {
       // 三层一起交：系统权限（privileges）/ 角色（roles）/ 对象权限（tablePrivileges，
       // 这里的 database 字段对 Oracle 就是**模式名**）。
@@ -1643,18 +2283,23 @@ const formSnapshot = () => JSON.stringify({
   tablePrivileges: (form.value.tablePrivileges || []).map((r) => ({
     database: r.database, table: r.table, privileges: [...(r.privileges || [])].sort(),
   })),
+  routinePrivileges: (form.value.routinePrivileges || []).map((r) => ({
+    database: r.database, kind: r.kind || 'PROCEDURE', routine: r.routine, privileges: [...(r.privileges || [])].sort(),
+  })),
   schemaPrivileges: (form.value.schemaPrivileges || []).map((r) => ({
-    schema: r.schema, privileges: [...(r.privileges || [])].sort(),
+    database: r.database || '', schema: r.schema, privileges: [...(r.privileges || [])].sort(),
   })),
   objectPrivileges: (form.value.objectPrivileges || []).map((r) => ({
-    schema: r.schema, object: r.object, privileges: [...(r.privileges || [])].sort(),
+    database: r.database || '', schema: r.schema, object: r.object, privileges: [...(r.privileges || [])].sort(),
   })),
   attrs: form.value.attrs,
 })
 const baseSnapshot = ref('')
 const dirty = computed(() => formSnapshot() !== baseSnapshot.value)
 
-watch(() => props.editData, (d) => {
+// 表单种子：按 editData 把整个表单铺回"刚打开"的样子。watch 与「重置」按钮共用 ——
+// 重置就是重新铺一遍（而不是手写反向 diff，那是给自己埋雷）。
+const seedFormFromEditData = (d) => {
   if (d && d.name) {
     form.value.name = d.name
     form.value.host = d.host || '%'
@@ -1663,12 +2308,13 @@ watch(() => props.editData, (d) => {
     form.value.roles = d.roles || []
     form.value.dbPrivileges = (d.dbPrivileges || []).map(r => ({ ...r }))
     form.value.tablePrivileges = (d.tablePrivileges || []).map(r => ({ ...r, _tables: [], _loading: false }))
+    form.value.routinePrivileges = (d.routinePrivileges || []).map(r => ({ database: r.database || '', kind: r.kind || 'PROCEDURE', routine: r.routine || '', privileges: r.privileges || [], _loading: false }))
     form.value.serverRoles = d.serverRoles || []
-    form.value.schemaPrivileges = (d.schemaPrivileges || []).map(r => ({ ...r }))
-    form.value.objectPrivileges = (d.objectPrivileges || []).map(r => ({ ...r }))
+    form.value.schemaPrivileges = (d.schemaPrivileges || []).map(r => ({ database: r.database || '', ...r }))
+    form.value.objectPrivileges = (d.objectPrivileges || []).map(r => ({ database: r.database || '', ...r }))
     form.value.grants = d.grants || []
   } else {
-    form.value = { name: '', password: '', host: '%', privileges: [], roles: [], dbPrivileges: [], tablePrivileges: [], serverRoles: [], schemaPrivileges: [], objectPrivileges: [], grants: [], attrs: {} }
+    form.value = { name: '', password: '', host: '%', privileges: [], roles: [], dbPrivileges: [], tablePrivileges: [], routinePrivileges: [], serverRoles: [], schemaPrivileges: [], objectPrivileges: [], grants: [], attrs: {} }
   }
   // 属性基准（可改项的"原值"）：与权限基准同一时刻存下，之后按差提交
   seedAttrs()
@@ -1678,14 +2324,28 @@ watch(() => props.editData, (d) => {
     privileges: form.value.privileges,
     dbPrivileges: form.value.dbPrivileges,
     tablePrivileges: form.value.tablePrivileges,
+    routinePrivileges: form.value.routinePrivileges,
     serverRoles: form.value.serverRoles,
     roles: form.value.roles,
     schemaPrivileges: form.value.schemaPrivileges,
     objectPrivileges: form.value.objectPrivileges,
+    // （schema/object 行自带 database —— 行级选库）
     grants: form.value.grants
   }))
+  // 例程权限：回填的行要预取候选清单（不然下拉是空的）。PG/Kingbase 同样要
+  //（/procedures 对 PG 按模式过滤，database 字段传的就是模式名）
+  if (showRoutineTab.value) (form.value.routinePrivileges || []).forEach((r) => ensureRowRoutines(r))
   baseSnapshot.value = formSnapshot()
-}, { immediate: true })
+}
+
+watch(() => props.editData, (d) => seedFormFromEditData(d), { immediate: true })
+
+// 「重置」：把表单铺回刚打开时的样子（含权限勾选 / 改了一半的密码 / 属性开关）。
+// 新建态 = 清空重填；编辑态 = 丢弃所有未保存的改动。
+const resetChanges = () => {
+  seedFormFromEditData(props.editData)
+  ElMessage.success(t('upv.resetDone'))
+}
 
 // fields 晚到时补种一次（attrsBase 已种过就不再动 —— 免得覆盖用户正在改的值）
 watch(() => props.editData?.fields, (f) => {
@@ -2117,8 +2777,12 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
   border-right: 1px solid var(--dc-border);
   vertical-align: middle;
 }
-/* 最后一列不画竖线：否则会与卡片外框并成两条线 */
-.form-table th:last-child,
+/* 最后一列不画竖线：否则会与卡片外框并成两条线。
+   ⚠️ 只能对**整表真正的最后一列**生效 —— :last-child 匹配的是"本行的最后一个
+   子元素"，分组表头（mx-grouped）第二行里排最后的权限列（如 GRANT OPTION，
+   而操作列 rowspan 跨在第一行）会被误判成最后一列，结果它与操作列之间的
+   竖线消失（用户实测指出）。第一行（或单行表头）的最后才是真最后一列。 */
+.form-table thead tr:first-child th:last-child,
 .form-table td:last-child { border-right: none; }
 /* 左列「项目」：读作行标题（字号略小、颜色偏灰），与表头一样左对齐。
    权限页签里它还要放「计数 + 全选/清空」，所以允许换行。 */
@@ -2132,7 +2796,25 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* ⚠️ Element 的 select 默认 width:100%，放进 inline-flex 的 .attr-num 里会被缩到只剩箭头
    （实测 34px，选中项 opacity:0 —— 值在 DOM 里但看不见，用户看到的就是"没回显"）。
    给一个明确宽度，选中项就会显出来。 */
-.attr-select { width: 210px; }
+/* 数字（配额/连接数）：默认居中看着发飘，用户要求**居左** —— scoped 样式够不到
+   Element 内部 DOM，必须 :deep() 穿透；输入框别占满整列，收紧到 100px */
+.attr-num :deep(.el-input-number) { width: 100px; }
+.attr-num :deep(.el-input__inner) { text-align: left; }
+/* 值列**整体左对齐**：el-input / el-select 的 wrapper 自带 ~11px 左内边距，
+   文字起点比复选框（无内边距）靠右一截 —— 同一列里出现两条左缘（用户圈出来
+   的就是这条缝）。把基本信息表里输入/下拉的左内边距清零，各行内容从同一条
+   线开始（右内边距保留：口令小眼睛、下拉箭头还靠它贴边）。 */
+.basic-table :deep(.el-input__wrapper),
+.basic-table :deep(.el-select__wrapper) { padding-left: 0; }
+/* 下拉宽度自适应内容、箭头紧贴文字（与「编辑表结构」的下拉同一观感）：
+   EP 的单选选中项是**绝对定位**的，wrapper 量不到内容会塌成只剩箭头（实测 34px）——
+   把 selection / 选中项改回文档流，wrapper 就能收缩包裹内容了。 */
+.attr-select.el-select { width: auto; max-width: 100%; }
+.attr-select :deep(.el-select__wrapper) { min-width: 0; width: auto; }
+.attr-select :deep(.el-select__selection) { width: auto; }
+.attr-select :deep(.el-select__placeholder) { position: static; transform: none; }
+/* 只读态的认证插件：普通文字（与明细值同色），不要 disabled select 的灰占位样式 */
+.plugin-readonly { color: var(--dc-text); }
 /* ⚠️ 这里**不能** display:flex：.ft-label 是 <td>，一旦它不再是 table-cell，
    盒高就不再跟整行齐平 —— 于是每格的右边框各画一段、上下**接不上**
    （用户反馈"表格竖线没连上"就是这么来的）。居中交给 .form-table td 的
@@ -2141,6 +2823,13 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
   font-size: 12.5px;
   color: var(--dc-text-mid);
 }
+/* 基本信息表：项目列**紧贴内容宽**且不换行 —— Doris 的明细键名很长
+   （password_policy.password_creation_time ~38 字符），固定 180px 装不下会
+   溢出盖住右列的值（用户反馈"值显示不出来"）。auto 布局 + width:1% 让左列
+   收缩到最长键名的宽度（放得下、不换行），剩余宽度全归值列 ——
+   不要 auto 布局默认的"按比例摊剩余空间"（那会把左列摊得很宽，用户反馈过）。 */
+.basic-table { table-layout: auto; }
+.basic-table .ft-label { width: 1%; white-space: nowrap; }
 .ft-group-name { color: var(--dc-text); font-weight: 500; }
 /* 右列「值」里是成片的复选框：行高交给内容（表头/其它行仍是 26px 紧凑行） */
 .ft-perms { padding: 4px 8px !important; height: auto; }
@@ -2169,6 +2858,14 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 /* 表头那格的冻结要注意层级：表头本身已是 sticky top + z-index 3，
    冻结列表头要再高一层（4）才能同时盖住"横向滚来的表头"和"纵向滚来的数据格" */
 .mx-table thead .mx-fix { background: var(--dc-bg-soft); z-index: 4; }
+/* 行级选库的「数据库」列（SQL Server schema/object 权限）：最左冻结，比模式列窄一点。
+   ⚠️ 只在带这列的表（.mx-with-db）里偏移 mx-f1/mx-f2 —— 服务器角色/数据库角色等
+   没有「数据库」列的表还是从 0 起排，否则第一列会被顶出一块空白（实测样式串了） */
+.mx-with-db .mx-db {
+  left: 0;
+  width: 150px; min-width: 150px; max-width: 150px;
+  border-right: 1px solid var(--dc-border) !important;
+}
 .mx-f1 {
   left: 0;
   width: 190px; min-width: 190px; max-width: 190px;
@@ -2177,8 +2874,23 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
   left: 190px;                     /* = 第一列的宽度 */
   width: 220px; min-width: 220px; max-width: 220px;
 }
+.mx-with-db .mx-f1 {
+  left: 150px;                     /* = 数据库列的宽度 */
+}
+.mx-with-db .mx-f2 {
+  left: 340px;                     /* = 数据库列 + 第一列 */
+}
 /* 冻结线：两列右侧各画一条，滚动时能看清冻到哪儿（`!important` 压过最后列不画竖线那条） */
 .mx-f1, .mx-f2 { border-right: 1px solid var(--dc-border) !important; }
+
+/* ===== 例程权限（MySQL 系）=====
+   列少且宽，不做冻结：库名/类型/例程/两个勾/删除，直接平均排 */
+.rt-db { width: 180px; }
+.rt-kind { width: 130px; }
+/* GRANT OPTION 两个词 nowrap 才不被折行截断（90px 时实测只剩 "GRANT OPTIO"） */
+.rt-priv { width: 118px; text-align: center; white-space: nowrap; }
+.rt-priv + .rt-priv { border-left: 1px solid var(--dc-border); }
+.rt-act { width: 60px; text-align: center; }
 
 /* ===== 分组表头（MySQL 全局权限）=====
    第一行是分组名（colspan 跨它的列，带计数与全选/清空），第二行才是权限名。
@@ -2193,6 +2905,15 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
    选择器必须把 th 带上：`.form-table th { text-align: left }` 是"类+元素"，只写 .mx-grp
    优先级更低，会被它压掉（真机实测压成 left，居中不生效）。 */
 .form-table th.mx-grp { text-align: center; }
+/* 权限列头（SELECT/INSERT…）：同理必须带上 th 压过 .form-table th 的 left ——
+   用户指出"列头还有没居中的"就是这批（勾选框居中了、列头还贴左）。 */
+.form-table th.mx-priv { text-align: center; }
+/* 例程权限页签的列头用的是自己的类 rt-priv（EXECUTE / GRANT OPTION），同一条压制问题 */
+.form-table th.rt-priv { text-align: center; }
+/* 列头第二行小字：英文名在上、中文说明在下（SELECT / 查询）——
+   两行都是块级，跟着 th 的 text-align 居中；小字弱化、不换行 */
+.pv-name { display: block; }
+.pv-cn { display: block; font-size: 11px; line-height: 1.3; font-weight: 400; color: var(--el-text-color-secondary); margin-top: 1px; white-space: nowrap; }
 /* 分类行整体 12px：分组名、计数、全选/清空 三处同一字号（原来是 13 / 11.5 / 12 三种）。 */
 .mx-grp { font-size: 12px; }
 .mx-grp .ft-group-name { color: var(--dc-text-strong); font-size: 12px; }
@@ -2213,7 +2934,9 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .mx-priv { text-align: center; min-width: 74px; padding-left: 6px !important; padding-right: 6px !important; }
 .mx-cell { text-align: center; padding-left: 2px !important; padding-right: 2px !important; }
 .mx-act { width: 48px; }
-.mx-cell :deep(.el-checkbox) { margin-right: 0; height: auto; }
+/* 勾选框**真居中**：不依赖 td 的 text-align（inline-flex 在个别 tab 里仍贴左，
+   实测 SQL Server 对象权限页），直接让勾选框占满整格再内容居中 */
+.mx-cell :deep(.el-checkbox) { margin-right: 0; height: auto; width: 100%; justify-content: center; }
 .mx-table :deep(.el-select) { width: 100%; }
 .mx-table :deep(.el-tag) { margin-top: 2px; }
 .form-table :deep(.el-input__inner) { height: var(--ctl-h, 20px); }

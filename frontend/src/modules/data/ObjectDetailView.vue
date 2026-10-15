@@ -63,7 +63,7 @@ const ddl = ref('')
 const loading = ref(false)
 const error = ref('')
 
-// 对象类型 → 表单分类（ObjectFormDialog）
+// 对象类型 → 表单分类（ObjectFormTab）
 const catOf = (t) => ({ index: 'indexes', function: 'procs', procedure: 'procs', trigger: 'triggers', event: 'events' }[t] || 'indexes')
 
 // 仅索引保留「可视化编辑」入口；视图/存储过程/函数/触发器/事件不再提供

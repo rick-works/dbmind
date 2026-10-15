@@ -94,7 +94,7 @@
  * · 能力判定用 `/features` 里的 `supportsUsers / supportsUserManage`（与树上原来那套
  *   完全同一个来源），不支持的类型在这里**如实说明**，而不是摆一堆点了报错的按钮。
  */
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { User, Refresh, Plus } from '@element-plus/icons-vue'
 import { listConnections, listUsers, getFeatures, userAction } from '../../api'
@@ -258,7 +258,24 @@ onMounted(async () => {
   // 不预选：等左侧选中（watch 会带出来）。连接列表为空时也不用报错。
   selId.value = String(props.activeConnId || '')
   await reload()
+  // 设置页保存「安全与会话」后立即重读生产保护开关：常驻提示与点击闸门同步刷新，
+  // 不等页面重载（用户实测：关掉保护后不刷新浏览器仍会被旧值拦下）
+  window.addEventListener('dbmind-safety-changed', onSafetyChanged)
+  // 「编辑数据源」保存后（改只读/分组等）：这里**自己拉连接列表**，不在 MainView 的
+  // 响应式链上 —— 收到广播后重拉列表，curConn（computed）与只读横幅即時刷新
+  window.addEventListener('dbmind-conns-changed', onConnsChanged)
 })
+onBeforeUnmount(() => {
+  window.removeEventListener('dbmind-safety-changed', onSafetyChanged)
+  window.removeEventListener('dbmind-conns-changed', onConnsChanged)
+})
+const onSafetyChanged = async () => { prodProtect.value = await loadProtectProd() }
+const onConnsChanged = async () => {
+  try {
+    const list = await listConnections()
+    conns.value = Array.isArray(list) ? list : []
+  } catch { /* 保留旧列表 */ }
+}
 </script>
 
 <style scoped>

@@ -103,6 +103,19 @@ async fn run_sql_in_inner(
     let target = crate::api::scope::resolve(state, conn, database).await?;
     // 元数据也是「连上去查」：驱动没装就先下（离线时只失败一次，原因会被缓存）
     crate::api::driver::ensure_for_connection(state, &target).await?;
+    // SQL 层切库兜底（SQL Server）：与 run_meta_sql 同一套双保险 —— 影子连接负责把执行
+    // 落到目标库，这里再用 `use [库];` 兜一层，行数/索引/DDL/用户操作驱动的语句同理
+    // 不会因为落回主连接而打错库（用户实测过表清单串台）。
+    let sql = {
+        let base = require_record(state, conn).await?;
+        let dialect = Dialect::new(base.kind());
+        if dialect.wants_use_switch() {
+            let (db, _) = split_db_schema(database, &dialect);
+            if db.is_empty() { sql } else { format!("use {}; {}", dialect.quote(&db), sql) }
+        } else {
+            sql
+        }
+    };
     let engine = state.engine();
     let schema = meta_schema_of(state, conn, database).await;
     let request = QueryRequest {
@@ -248,6 +261,20 @@ async fn run_meta_sql(
 ) -> XResult<QueryResult> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
+    // SQL 层切库兜底（SQL Server）：这批元数据 SQL 全是「库内限定」（from sys.objects …），
+    // 正确性完全押在「执行真的落在影子连接上」。万一落回主连接（旧影子落库 / 会话复用
+    // 异常），就会查出**默认库**的表 —— 两个库节点显示同一份清单（用户实测的"串台"）。
+    // 影子连接是第一道保险，这里补第二道：显式 `use [库];`。USE 到同一个库对影子无副作用。
+    let sql = {
+        let base = require_record(state, conn).await?;
+        let dialect = Dialect::new(base.kind());
+        if dialect.wants_use_switch() {
+            let (db, _) = split_db_schema(database, &dialect);
+            if db.is_empty() { sql } else { format!("use {}; {}", dialect.quote(&db), sql) }
+        } else {
+            sql
+        }
+    };
     let engine = state.engine();
     // 与结构浏览共用**同一条只读会话**。
     //
@@ -2363,14 +2390,16 @@ pub async fn users(
 ) -> XResult<Json<Value>> {
     let params = Params::parse(raw.as_deref());
     let (_, dialect) = ctx_of(&state, &id).await?;
-    let value = meta_list(
-        &state,
-        &id,
-        &params.get("database").unwrap_or_default(),
-        dialect.users(),
-        "用户清单",
-    )
-    .await?;
+    // 用户清单大多是**全局目录**（mysql.user / pg_roles / all_users / system.users），
+    // 不该带库上下文：Doris 实测连接带着 `test` 库打开用户管理时，驱动先 `use test`
+    // 直接报「Unknown database 'test'」（errCode 2 / 1049），整个清单都拉不出来。
+    // 只有 SQL Server 的清单是库级的（sys.database_principals），才需要 database。
+    let database = if dialect.kind.key() == "sqlserver" {
+        params.get("database").unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let value = meta_list(&state, &id, &database, dialect.users(), "用户清单").await?;
     let normalized = match value {
         Value::Array(rows) => Value::Array(
             rows.into_iter()
@@ -2778,6 +2807,13 @@ pub async fn user_info(
     }
     let database = params.get("database").unwrap_or_default();
     let (_, dialect) = ctx_of(&state, &id).await?;
+    // 与用户清单同一条规矩：用户详情是全局目录查询（mysql.user / pg_roles / all_users /
+    // system.users），**不带库上下文** —— Doris 带着不存在的库打开会直接「Unknown database」。
+    let database = if dialect.kind.key() == "sqlserver" {
+        database
+    } else {
+        String::new()
+    };
     let sql = match dialect.user_info(name.trim()) {
         Meta::Sql(sql) => sql,
         _ => {
@@ -2806,10 +2842,12 @@ pub async fn user_info(
     let (grants, grant_rows): (Vec<Value>, Vec<Value>) =
         match dialect.user_grants(&account_user, &account_host) {
             Meta::Sql(query) => {
-                let detail = run_sql_in(&state, &id, &database, query, 10_000)
-                    .await
-                    .map(|result| rows_of(&result))
-                    .unwrap_or_default();
+                let detail = expand_grant_rows(
+                    run_sql_in(&state, &id, &database, query, 10_000)
+                        .await
+                        .map(|result| rows_of(&result))
+                        .unwrap_or_default(),
+                );
                 let lines = detail
                     .iter()
                     .filter_map(|item| grant_line(item, &dialect, &account_user, &account_host))
@@ -2856,6 +2894,22 @@ pub async fn user_info(
     out.insert("grants".to_string(), Value::Array(grants));
     // 结构化的一份，界面按层级回填表单、并据此算撤销清单（见上面的注释）
     out.insert("grantRows".to_string(), Value::Array(grant_rows));
+    // MySQL 顺带带回服务器版本：**5.7 没有 CREATE ROLE / DROP ROLE**（8.0 才引入），
+    // 界面若照 8.0 的清单展示，勾上保存必 1064 语法错（实测 5.7.42）。前端按版本隐藏。
+    // 只查纯 MySQL —— MariaDB 版本串是 10.x、Doris 有自己的角色体系，不能按 5.x 一刀切。
+    let server_version = if dialect.kind.key() == "mysql" {
+        match run_meta_sql(&state, &id, "", "select version() as v".to_string(), 1).await {
+            Ok(r) => rows_of(&r)
+                .into_iter()
+                .next()
+                .map(|row| pick_field(&row, &["v", "version"]))
+                .unwrap_or_default(),
+            Err(_) => String::new(),
+        }
+    } else {
+        String::new()
+    };
+    out.insert("serverVersion".to_string(), json!(server_version));
     Ok(Json(Value::Object(out)))
 }
 
@@ -2927,9 +2981,20 @@ pub async fn user_action(
         }
     };
     let (_, dialect) = ctx_of(&state, &id).await?;
+    // 与 user_info 同一条规矩（用户详情是全局目录，不带库上下文）：只有 SQL Server
+    // 需要 database 上下文。**必须在这里兜底** —— 客户端传什么都不信：实测从 Oracle
+    // 连接切到 MySQL 后，残留的库名（Oracle Free 版的 PDB 就叫 FREE）跟着进了
+    // user-action，写通道执行 `use free` 直接 1049 Unknown database 'free'。
+    let database = if dialect.kind.key() == "sqlserver" {
+        database.to_string()
+    } else {
+        String::new()
+    };
     let mysql_family = matches!(dialect.kind.key(), "mysql" | "mariadb" | "doris");
     let mssql_family = dialect.kind.key() == "sqlserver";
     let oracle_family = matches!(dialect.kind.key(), "oracle");
+    let clickhouse_family = dialect.kind.key() == "clickhouse";
+    let pg_family = matches!(dialect.kind.key(), "postgresql" | "kingbase");
 
     // 哪些权限入参已经真正实现：MySQL 系连接的三层（全局/库级/表级）—— 由
     // `user_action_sql` 拼出 `grant`/`revoke`；其余（模式级、对象级、服务器角色、
@@ -2966,12 +3031,21 @@ pub async fn user_action(
             // `revoke` = 界面按"原来有、现在没有了"算好的**撤销清单**。
             // MySQL 也要收（授权改成只出差量之后，撤销不再靠 `revoke all`）。
             let handled = (mysql_family
-                && matches!(key, "privileges" | "dbPrivileges" | "tablePrivileges" | "revoke"))
+                && matches!(key, "privileges" | "dbPrivileges" | "tablePrivileges" | "routinePrivileges" | "revoke"))
                 || (oracle_family && matches!(key, "privileges" | "tablePrivileges" | "revoke"))
+                // ClickHouse：与 MySQL 系同构的三层（全局 ON *.* / 库 ON db.* / 表 ON db.table）
+                // + 撤销差量，见 user_action_sql 的 clickhouse 分支。
+                || (clickhouse_family
+                    && matches!(key, "privileges" | "dbPrivileges" | "tablePrivileges" | "revoke"))
                 // SQL Server：四层（服务器角色 / 数据库角色 / Schema 级 / 对象级）+ 撤销差量。
                 // `roles`（数据库角色）本来就不在这张表里，一直可以用（真机验证过）。
                 || (mssql_family
-                    && matches!(key, "serverRoles" | "schemaPrivileges" | "objectPrivileges" | "revoke"));
+                    && matches!(key, "serverRoles" | "schemaPrivileges" | "objectPrivileges" | "revoke"))
+                // PostgreSQL/KingbaseES：模式（USAGE/CREATE）/ 表（七项）/ 例程（EXECUTE）
+                // + 撤销差量。「数据库权限」tab 对 PG 交的是**模式级**授权（dbPrivileges
+                // 的 database 字段就是模式名），见 user_action_sql 的 pg 分支。
+                || (pg_family
+                    && matches!(key, "dbPrivileges" | "tablePrivileges" | "routinePrivileges" | "revoke"));
             if !handled {
                 return Err(XError::bad_request(format!(
                     "「{label}」的自动分配尚未实现：请先只做「新建用户 / 改密 / 删除用户」，\
@@ -2980,41 +3054,41 @@ pub async fn user_action(
             }
         }
     }
+    // Doris 没有例程（连 mysql.procs_priv 这张表都没有，dialect.rs 的 user_grants
+    // 也排除了它）。它在 mysql_family 白名单里，若不放行这里会被照单全收、拼出
+    // MySQL 的 `grant execute on procedure …` —— 在 Doris 上执行必炸。明确拒绝。
+    if dialect.kind.key() == "doris"
+        && options
+            .get("routinePrivileges")
+            .and_then(Value::as_array)
+            .map(|a| !a.is_empty())
+            .unwrap_or(false)
+    {
+        return Err(XError::bad_request(
+            "Doris 没有存储过程/函数，不支持例程级授权（本次没有对数据库做任何改动）",
+        ));
+    }
     // 权限名会被**拼进 SQL**，所以逐个过白名单（见 `is_mysql_privilege`）
     // Oracle：系统权限那一层（`privileges`）收的是**系统权限或角色**，
     // 对象权限（`tablePrivileges`）是另一张白名单 —— 两者的校验器必须分开给。
     let global_valid: fn(&str) -> bool = if oracle_family {
         crate::api::dialect::is_oracle_grantable
+    } else if clickhouse_family {
+        crate::api::dialect::is_clickhouse_privilege
     } else {
         crate::api::dialect::is_mysql_privilege
     };
     let object_valid: fn(&str) -> bool = if oracle_family {
         crate::api::dialect::is_oracle_object_priv
+    } else if clickhouse_family {
+        crate::api::dialect::is_clickhouse_privilege
     } else {
         crate::api::dialect::is_mysql_privilege
     };
-    // SQL Server 的「Schema 级 / 对象级」与 MySQL 的「库级 / 表级」形状一致，只是字段名不同
-    // （schema→database、object→table）—— 换名后复用同一套解析与白名单校验，
-    // 不为第三个方言再写一份解析（那份迟早会和前两份漂开）。
-    let rename_rows = |v: Option<&Value>, obj: bool| -> Option<Value> {
-        v.and_then(Value::as_array).map(|rows| {
-            Value::Array(
-                rows.iter()
-                    .map(|r| {
-                        let mut o = serde_json::Map::new();
-                        o.insert("database".into(), r.get("schema").cloned().unwrap_or(json!("")));
-                        o.insert("privileges".into(), r.get("privileges").cloned().unwrap_or(json!([])));
-                        if obj {
-                            o.insert("table".into(), r.get("object").cloned().unwrap_or(json!("")));
-                        }
-                        Value::Object(o)
-                    })
-                    .collect(),
-            )
-        })
-    };
-    let mssql_schema_rows = rename_rows(options.get("schemaPrivileges"), false);
-    let mssql_object_rows = rename_rows(options.get("objectPrivileges"), true);
+    // SQL Server 的「Schema 级 / 对象级」改为**行级选库**专用解析（不再借 MySQL 的
+    // 库级/表级形状）：每行自带「数据库」，授权语句前会 `use [库];` —— 用户管理入口
+    // 没有库上下文（database 传空），不选库就会把授权打到连接默认目录（master）上。
+    // 库名 / 模式名 / 对象名都会拼进 SQL：一律过 is_plain_ident 白名单。
     let privileges = crate::api::dialect::UserPrivileges {
         global: if mssql_family {
             // SQL Server 的"全局"= 服务器角色（角色名也会拼进 SQL，所以过名字白名单）
@@ -3023,7 +3097,8 @@ pub async fn user_action(
             checked_privileges(options.get("privileges"), global_valid)?
         },
         databases: if mssql_family {
-            privilege_db_rows(mssql_schema_rows.as_ref(), crate::api::dialect::is_mssql_privilege)?
+            // mssql 的 schema 级不再走 MySQL 的库级形状（见下方 schema_grants）
+            Vec::new()
         } else if oracle_family {
             // Oracle 没有"库级授权"这一层（库就是实例）：给了就明确拒绝，
             // 不默默忽略 —— 界面会照实说明，不会让人以为授上了。
@@ -3033,19 +3108,43 @@ pub async fn user_action(
                 ));
             }
             Vec::new()
+        } else if pg_family {
+            // PG 的「库级」= 模式级（USAGE / CREATE），database 字段就是模式名
+            privilege_db_rows(options.get("dbPrivileges"), crate::api::dialect::is_pg_schema_priv)?
         } else {
             privilege_db_rows(options.get("dbPrivileges"), global_valid)?
         },
         tables: if mssql_family {
-            privilege_table_rows(mssql_object_rows.as_ref(), crate::api::dialect::is_mssql_privilege)?
+            // mssql 的对象级不再走 MySQL 的表级形状（见下方 object_grants）
+            Vec::new()
+        } else if pg_family {
+            privilege_table_rows(options.get("tablePrivileges"), crate::api::dialect::is_pg_table_priv)?
         } else {
             privilege_table_rows(options.get("tablePrivileges"), object_valid)?
+        },
+        schema_grants: if mssql_family {
+            mssql_schema_grant_rows(options.get("schemaPrivileges"), crate::api::dialect::is_mssql_privilege)?
+        } else {
+            Vec::new()
+        },
+        object_grants: if mssql_family {
+            mssql_object_grant_rows(options.get("objectPrivileges"), crate::api::dialect::is_mssql_privilege)?
+        } else {
+            Vec::new()
+        },
+        routines: if mysql_family {
+            privilege_routine_rows(options.get("routinePrivileges"), global_valid)?
+        } else if pg_family {
+            privilege_routine_rows(options.get("routinePrivileges"), crate::api::dialect::is_pg_routine_priv)?
+        } else {
+            Vec::new()
         },
     };
 
     // Oracle 的撤销清单：界面按"原来有、现在没有了"算好传进来。
     // 名字同样要过白名单（与授予同一个理由：会被拼进 SQL）。
-    let revokes: Vec<crate::api::dialect::GrantRevoke> = if mysql_family {
+    // ClickHouse 与 MySQL 的 scope 形状一致（global/db/table），同一套解析直接共用。
+    let revokes: Vec<crate::api::dialect::GrantRevoke> = if mysql_family || clickhouse_family {
         // MySQL：scope = global（全局，`on *.*`）/ db（库级，owner=库）/ table（表级，owner=库 + object=表）
         // 名字一样要过白名单 —— 会被拼进 SQL（与授予同一个理由）。
         let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
@@ -3057,10 +3156,18 @@ pub async fn user_action(
             }
             let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
             let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            // 例程级撤销：kind = PROCEDURE / FUNCTION（要拼进 `on procedure ...`，必须校验）
+            let kind = item.get("kind").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
             let ok = match scope.as_str() {
                 // 库级 / 表级走的都是对象权限白名单（与 dbPrivileges / tablePrivileges 同一个校验器）
                 "db" => object_valid(&privilege) && !owner.is_empty(),
                 "table" | "object" | "schema" => object_valid(&privilege) && !owner.is_empty() && !object.is_empty(),
+                "routine" => {
+                    object_valid(&privilege)
+                        && !owner.is_empty()
+                        && !object.is_empty()
+                        && matches!(kind.as_str(), "PROCEDURE" | "FUNCTION")
+                }
                 "global" | "server-role" | "role" => global_valid(&privilege),
                 _ => false,
             };
@@ -3069,7 +3176,7 @@ pub async fn user_action(
                     "「{privilege}」不在可撤销的白名单里（或缺少库/表名）：已拒绝执行"
                 )));
             }
-            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object });
+            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object, db: String::new(), kind });
         }
         out
     } else if mssql_family {
@@ -3084,9 +3191,13 @@ pub async fn user_action(
             }
             let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
             let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            // 行级选库：schema/object 级撤销可带目标库（空 = 连接当前目录，旧行为）
+            let db = item.get("database").and_then(Value::as_str).unwrap_or("").trim().to_string();
             let ok = match scope.as_str() {
-                // 角色名是标识符、不是权限名 —— 两者都会拼进 SQL，都不许乱来
-                "serverrole" | "role" => crate::api::dialect::is_plain_ident(&privilege),
+                // 角色名是标识符、不是权限名 —— 两者都会拼进 SQL，都不许乱来。
+                // 'server-role'（带连字符）是 revokePayload 里的形状，兼容一下，
+                // 省得两处口径漂移又出一个"不在白名单"
+                "serverrole" | "server-role" | "role" => crate::api::dialect::is_plain_ident(&privilege),
                 "schema" => crate::api::dialect::is_mssql_privilege(&privilege) && !owner.is_empty(),
                 "object" => {
                     crate::api::dialect::is_mssql_privilege(&privilege)
@@ -3095,12 +3206,14 @@ pub async fn user_action(
                 }
                 _ => false,
             };
-            if !ok {
+            if !ok || (!db.is_empty() && !crate::api::dialect::is_plain_ident(&db)) {
                 return Err(XError::bad_request(format!(
                     "「{privilege}」不在可撤销的白名单里（或缺少架构/对象名）：已拒绝执行"
                 )));
             }
-            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object });
+            // 兼容 revokePayload 的 'server-role' 写法：统一成 SQL 构造器认的 'serverrole'
+            let scope = if scope == "server-role" { "serverrole".to_string() } else { scope };
+            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object, db, kind: String::new() });
         }
         out
     } else if oracle_family {
@@ -3125,7 +3238,43 @@ pub async fn user_action(
                     "「{privilege}」不在可撤销的白名单里（或缺少模式/对象名）：已拒绝执行"
                 )));
             }
-            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object });
+            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object, db: String::new(), kind: String::new() });
+        }
+        out
+    } else if pg_family {
+        // PostgreSQL/KingbaseES：scope = schema（owner=模式）/ table（owner=模式 + object=表）
+        // / routine|function（owner=模式 + object=例程 + kind=PROCEDURE|FUNCTION）
+        let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
+        for item in options.get("revoke").and_then(Value::as_array).cloned().unwrap_or_default() {
+            let scope = item.get("scope").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
+            let privilege = item.get("privilege").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if privilege.is_empty() {
+                continue;
+            }
+            let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let kind = item.get("kind").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+            let ok = match scope.as_str() {
+                "schema" => crate::api::dialect::is_pg_schema_priv(&privilege) && !owner.is_empty(),
+                "table" => {
+                    crate::api::dialect::is_pg_table_priv(&privilege)
+                        && !owner.is_empty()
+                        && !object.is_empty()
+                }
+                "routine" | "function" => {
+                    crate::api::dialect::is_pg_routine_priv(&privilege)
+                        && !owner.is_empty()
+                        && !object.is_empty()
+                        && matches!(kind.as_str(), "PROCEDURE" | "FUNCTION")
+                }
+                _ => false,
+            };
+            if !ok {
+                return Err(XError::bad_request(format!(
+                    "「{privilege}」不在可撤销的白名单里（或缺少模式/对象名）：已拒绝执行"
+                )));
+            }
+            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object, db: String::new(), kind });
         }
         out
     } else {
@@ -3222,6 +3371,85 @@ fn pick_field(row: &Map<String, Value>, names: &[&str]) -> String {
     String::new()
 }
 
+/// 把 `user_grants` 查回来的行**展开**成「一行一权限」：
+///
+/// 1. MySQL 系的例程行（`mysql.procs_priv`）：一行带回空格分隔的原始 `Proc_priv`
+///    （`Execute Alter Routine Grant`）—— SQL 侧不按 LIKE 拆三段，因为那条 UNION
+///    必须压在一个 TCP 段以内（见 `Dialect::user_grants` 里关于 VPN 满尺寸包被丢的
+///    实测注释），拆分在这里做：Execute→EXECUTE、Alter Routine→ALTER ROUTINE、
+///    Grant→GRANT OPTION。
+/// 2. 带 `grant_option` 列的行（information_schema 三张视图，值为 YES/NO）：
+///    YES 时**多补一行** `GRANT OPTION` —— 与旧版「GRANT OPTION 三段 UNION」等价。
+///
+/// 没有 `grant_option` 列的方言（Oracle / PG …）原样通过，不受影响。
+fn expand_grant_rows(rows: Vec<Map<String, Value>>) -> Vec<Map<String, Value>> {
+    let mut out: Vec<Map<String, Value>> = Vec::with_capacity(rows.len());
+    // GRANT OPTION 去重：旧 SQL 用 `select distinct` 保证同一目标只出一条
+    // （demo1 对 dify 的十几个权限都 grantable ⇒ 不去重就是十几条重复的
+    //  `GRANT GRANT OPTION ON dify.*`，界面勾选会被灌进一堆同名项）
+    let mut seen_option: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for row in rows {
+        let grantable = pick_field(&row, &["grant_option"]).eq_ignore_ascii_case("yes");
+        let scope = pick_field(&row, &["scope"]).to_ascii_lowercase();
+        let privilege = pick_field(&row, &["privilege"]);
+        let routine = scope == "routine";
+        // GRANT OPTION：结构上仍属于同一行所指向的目标，补一行同目标、权限名为 GRANT OPTION 的记录
+        if grantable {
+            let key = format!(
+                "{}|{}|{}",
+                scope,
+                pick_field(&row, &["db_name"]),
+                pick_field(&row, &["table_name"])
+            );
+            if seen_option.insert(key) {
+                let mut r = row.clone();
+                r.insert("privilege".to_string(), json!("GRANT OPTION"));
+                r.remove("grant_option");
+                out.push(r);
+            }
+        }
+        if routine {
+            // Proc_priv 是 SET 列：MySQL 存成**逗号分隔**的 `Execute,Grant`
+            // （GRANT OPTION 成员渲染成 'Grant'！），也可能是空格分隔的老格式。
+            // 只按空白切会把 'Execute,Grant' 整个当成未知 token —— 回显时
+            // GRANT OPTION 勾选丢失（实测）。逗号和空白都当分隔符。
+            let mut tokens = privilege
+                .split(|c: char| c == ',' || c.is_whitespace())
+                .filter(|s| !s.is_empty())
+                .peekable();
+            while let Some(tok) = tokens.next() {
+                let name = if tok.eq_ignore_ascii_case("execute") {
+                    "EXECUTE".to_string()
+                } else if tok.eq_ignore_ascii_case("alter") {
+                    // `Alter Routine` 是两个词，吞掉后面的 Routine
+                    if let Some(next) = tokens.peek() {
+                        if next.eq_ignore_ascii_case("routine") {
+                            tokens.next();
+                        }
+                    }
+                    "ALTER ROUTINE".to_string()
+                } else if tok.eq_ignore_ascii_case("grant") {
+                    // 同理 `Grant Option`
+                    if let Some(next) = tokens.peek() {
+                        if next.eq_ignore_ascii_case("option") {
+                            tokens.next();
+                        }
+                    }
+                    "GRANT OPTION".to_string()
+                } else {
+                    tok.to_string()
+                };
+                let mut r = row.clone();
+                r.insert("privilege".to_string(), json!(name));
+                out.push(r);
+            }
+            continue;
+        }
+        out.push(row);
+    }
+    out
+}
+
 fn grant_rows_of(rows: &[Map<String, Value>]) -> Vec<Value> {
     let mut out: Vec<Value> = Vec::new();
     for row in rows {
@@ -3274,11 +3502,42 @@ fn grant_line(
             _ => None,
         };
     }
+    // PostgreSQL/KingbaseES：模式 / 表 / 例程三层（read-back 的 scope 就是 schema/table/function）。
+    // 账号没有 host 这一维；例程带 `ON FUNCTION "模式"."名字"`（签名可省略，歧义由数据库报错）。
+    if matches!(dialect.kind.key(), "postgresql" | "kingbase") {
+        let who = dialect.quote(account_user);
+        return match scope.as_str() {
+            "schema" if !owner.is_empty() => {
+                Some(format!("GRANT {privilege} ON SCHEMA {} TO {who};", dialect.quote(&owner)))
+            }
+            "table" if !owner.is_empty() && !object.is_empty() => Some(format!(
+                "GRANT {privilege} ON TABLE {}.{} TO {who};",
+                dialect.quote(&owner),
+                dialect.quote(&object)
+            )),
+            "function" | "procedure" if !owner.is_empty() && !object.is_empty() => {
+                let object_type = if scope == "procedure" { "PROCEDURE" } else { "FUNCTION" };
+                Some(format!(
+                    "GRANT {privilege} ON {object_type} {}.{} TO {who};",
+                    dialect.quote(&owner),
+                    dialect.quote(&object)
+                ))
+            }
+            _ => None,
+        };
+    }
     let target = match scope.as_str() {
         "global" => "*.*".to_string(),
         "schema" if !owner.is_empty() => format!("{}.*", dialect.quote(&owner)),
         "table" if !owner.is_empty() && !object.is_empty() => {
             format!("{}.{}", dialect.quote(&owner), dialect.quote(&object))
+        }
+        // 例程级：object 列是 `类型:名字`（user_grants 里 concat 出来的），还原成
+        // `ON PROCEDURE `db`.`p`` —— 类型字是 MySQL 语法的一部分，必须带上
+        "routine" if !owner.is_empty() && !object.is_empty() => {
+            let (kind, routine) = object.split_once(':').unwrap_or(("PROCEDURE", &object));
+            let routine_type = if kind.eq_ignore_ascii_case("function") { "function" } else { "procedure" };
+            format!("{routine_type} {}.{}", dialect.quote(&owner), dialect.quote(routine))
         }
         _ => return None,
     };
@@ -3359,6 +3618,99 @@ fn privilege_table_rows(value: Option<&Value>, valid: fn(&str) -> bool) -> XResu
             continue;
         }
         out.push((database, table, checked_privileges(row.get("privileges"), valid)?));
+    }
+    Ok(out)
+}
+
+/// MySQL 例程级权限行：`[{database, routine, kind(PROCEDURE|FUNCTION), privileges}]`。
+/// 对**单个**存储过程/函数授 EXECUTE —— 库名/例程名会被拼进 SQL（过 is_plain_ident），
+/// 权限名过白名单后再收窄到例程层合法的子集（EXECUTE / GRANT OPTION，其余丢弃）。
+fn privilege_routine_rows(
+    value: Option<&Value>,
+    valid: fn(&str) -> bool,
+) -> XResult<Vec<(String, String, String, Vec<String>)>> {
+    let mut out: Vec<(String, String, String, Vec<String>)> = Vec::new();
+    for row in value.and_then(Value::as_array).cloned().unwrap_or_default() {
+        let database = row.get("database").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let routine = row.get("routine").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let kind = row.get("kind").and_then(Value::as_str).unwrap_or("PROCEDURE").trim().to_ascii_uppercase();
+        if database.is_empty() || routine.is_empty() {
+            continue;
+        }
+        if !matches!(kind.as_str(), "PROCEDURE" | "FUNCTION") {
+            continue;
+        }
+        for (label, name) in [("库名", &database), ("例程名", &routine)] {
+            if !crate::api::dialect::is_plain_ident(name) {
+                return Err(XError::bad_request(format!(
+                    "{label}「{name}」不合法：已拒绝执行 —— 名字会拼进授权语句，不在白名单里的一律不拼"
+                )));
+            }
+        }
+        let privs: Vec<String> = checked_privileges(row.get("privileges"), valid)?
+            .into_iter()
+            // 双重过滤：例程层合法的名字（EXECUTE / GRANT OPTION）**且**过方言白名单 ——
+            // PG 的 is_pg_routine_priv 只认 EXECUTE，GRANT OPTION 在这里就会被挡掉
+            // （PG 里它是 WITH GRANT OPTION 子句，拼成权限名是语法错误）。
+            .filter(|p| valid(p) && matches!(p.as_str(), "EXECUTE" | "GRANT OPTION"))
+            .collect();
+        if privs.is_empty() {
+            continue;
+        }
+        out.push((database, routine, kind, privs));
+    }
+    Ok(out)
+}
+
+/// SQL Server 的 Schema 级授权行：`[{database(库，可空), schema, privileges}]` —— **行级选库**。
+/// 库非空时后端会在 GRANT 前加 `use [库];`；库名/模式名会拼进 SQL，一律过 is_plain_ident。
+fn mssql_schema_grant_rows(
+    value: Option<&Value>,
+    valid: fn(&str) -> bool,
+) -> XResult<Vec<(String, String, Vec<String>)>> {
+    let mut out: Vec<(String, String, Vec<String>)> = Vec::new();
+    for row in value.and_then(Value::as_array).cloned().unwrap_or_default() {
+        let db = row.get("database").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let schema = row.get("schema").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        if schema.is_empty() {
+            continue;
+        }
+        if !db.is_empty() && !crate::api::dialect::is_plain_ident(&db) {
+            return Err(XError::bad_request(format!(
+                "库名「{db}」不合法：已拒绝执行 —— 名字会拼进授权语句，不在白名单里的一律不拼"
+            )));
+        }
+        if !crate::api::dialect::is_plain_ident(&schema) {
+            return Err(XError::bad_request(format!(
+                "模式名「{schema}」不合法：已拒绝执行 —— 名字会拼进授权语句，不在白名单里的一律不拼"
+            )));
+        }
+        out.push((db, schema, checked_privileges(row.get("privileges"), valid)?));
+    }
+    Ok(out)
+}
+
+/// SQL Server 的对象级授权行：`[{database(库，可空), schema, object, privileges}]` —— 同上。
+fn mssql_object_grant_rows(
+    value: Option<&Value>,
+    valid: fn(&str) -> bool,
+) -> XResult<Vec<(String, String, String, Vec<String>)>> {
+    let mut out: Vec<(String, String, String, Vec<String>)> = Vec::new();
+    for row in value.and_then(Value::as_array).cloned().unwrap_or_default() {
+        let db = row.get("database").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let schema = row.get("schema").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let object = row.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        if schema.is_empty() || object.is_empty() {
+            continue;
+        }
+        for (label, name) in [("库名", &db), ("模式名", &schema), ("对象名", &object)] {
+            if !name.is_empty() && !crate::api::dialect::is_plain_ident(name) {
+                return Err(XError::bad_request(format!(
+                    "{label}「{name}」不合法：已拒绝执行 —— 名字会拼进授权语句，不在白名单里的一律不拼"
+                )));
+            }
+        }
+        out.push((db, schema, object, checked_privileges(row.get("privileges"), valid)?));
     }
     Ok(out)
 }

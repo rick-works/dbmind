@@ -10,6 +10,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Warning, User, Timer, Coin, Setting, Connection, Cpu, DataLine, Lock, Clock, TrendCharts, Loading, CircleCloseFilled, InfoFilled, CircleCheck, Odometer, ArrowDown, Histogram, Document, Memo, Monitor, Grid, Files, Operation, Share, Postcard, Switch } from '@element-plus/icons-vue'
 import { monitorOverview, monitorKill, listConnections } from '../../api'
 import { t, tMsg } from '../../utils/i18n'
+import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 
 const props = defineProps({
   connId: { type: [String, Number], default: '' },
@@ -91,15 +92,22 @@ watch(() => props.connId, () => { error.value = ''; data.value = null; prevQuest
 
 /** 连接名：按 connId 从连接列表解析，用于头部展示 */
 const connName = ref('')
-watch(() => props.connId, async () => {
+const killConn = ref(null)
+const loadConnInfo = async () => {
   connName.value = ''
   if (!props.connId) return
   try {
     const list = await listConnections()
     const arr = Array.isArray(list) ? list : (list?.data || [])
-    connName.value = arr.find(c => String(c.id) === String(props.connId))?.name || ''
+    const hit = arr.find(c => String(c.id) === String(props.connId))
+    connName.value = hit?.name || ''
+    killConn.value = hit || null
   } catch { /* 拿不到连接名不影响监控功能 */ }
-}, { immediate: true })
+}
+watch(() => props.connId, loadConnInfo, { immediate: true })
+// 「编辑数据源」保存后：连接名/只读态要跟着刷新（本页自己拉连接列表，不在 MainView 响应式链上）
+const onConnsChanged = () => loadConnInfo()
+window.addEventListener('dbmind-conns-changed', onConnsChanged)
 
 const fetchedAtText = computed(() => {
   if (!data.value?.fetchedAt) return ''
@@ -266,6 +274,9 @@ const killIdOf = (row, idCols) => {
 }
 
 const kill = async (row, sessionId) => {
+  // 终止会话是破坏型写操作：只读 / 生产保护连接在点击那一刻拦下（全站统一闸门）
+  await loadProtectProd()
+  if (!guardConnWrite(killConn.value || {}, t('mon.kill'))) return
   const q = row.waiting_query || row.blocking_query || row.query || row.info || row.sql_text || ''
   const tip = q ? `\n\n${String(q).slice(0, 120)}` : ''
   try {
@@ -342,7 +353,7 @@ const startAuto = () => {
 const stopAuto = () => { if (timer) { clearInterval(timer); timer = null } }
 const stopCatchup = () => { if (catchupTimer) { clearTimeout(catchupTimer); catchupTimer = null } }
 
-onBeforeUnmount(() => { stopAuto(); stopCatchup() })
+onBeforeUnmount(() => { stopAuto(); stopCatchup(); window.removeEventListener('dbmind-conns-changed', onConnsChanged) })
 </script>
 
 <template>

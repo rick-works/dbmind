@@ -146,6 +146,11 @@ pub struct GrantRevoke {
     pub privilege: String,
     pub owner: String,
     pub object: String,
+    /// SQL Server 专用：schema/object 级撤销的**目标库**（行级选库）。空 = 不切库。
+    pub db: String,
+    /// MySQL 专用：routine 级撤销的例程类型（PROCEDURE / FUNCTION）——
+    /// `revoke execute on procedure ...` 里类型是语法的一部分，缺了就拼不出合法语句。
+    pub kind: String,
 }
 
 /// 用户属性：编辑表单「基本信息」里那批**能改的项**（配额 / 账户锁定 / 表空间 / 开关）。
@@ -219,7 +224,27 @@ pub const MSSQL_PRIVILEGES: [&str; 10] = [
 ];
 
 pub fn is_mssql_privilege(name: &str) -> bool {
-    in_list(&MSSQL_PRIVILEGES, name)
+    in_list(&MSSQL_PRIVILEGES, name) || is_safe_name(name)
+}
+
+/// PostgreSQL/KingbaseES 授权白名单（这些名字会被**原样拼进** GRANT/REVOKE）。
+/// 模式级只有 USAGE / CREATE；表级七项（PG 标准表权限）；例程级只放 EXECUTE
+/// （PG 的 `WITH GRANT OPTION` 是子句不是权限名，界面不给这个勾，名单里就不收）。
+pub const PG_SCHEMA_PRIVS: [&str; 2] = ["USAGE", "CREATE"];
+pub const PG_TABLE_PRIVS: [&str; 7] = [
+    "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER",
+];
+
+pub fn is_pg_schema_priv(name: &str) -> bool {
+    in_list(&PG_SCHEMA_PRIVS, name)
+}
+
+pub fn is_pg_table_priv(name: &str) -> bool {
+    in_list(&PG_TABLE_PRIVS, name)
+}
+
+pub fn is_pg_routine_priv(name: &str) -> bool {
+    name.trim().eq_ignore_ascii_case("EXECUTE")
 }
 
 /// 角色名 / 架构名 / 对象名这类**标识符**：只允许字母数字与 `_ $ # @ . -`（会再用 [] 圈起来）。
@@ -237,9 +262,28 @@ fn in_list(list: &[&str], name: &str) -> bool {
     !upper.is_empty() && list.iter().any(|item| item.eq_ignore_ascii_case(&upper))
 }
 
-pub fn is_oracle_system_priv(name: &str) -> bool { in_list(&ORACLE_SYSTEM_PRIVS, name) }
-pub fn is_oracle_role(name: &str) -> bool { in_list(&ORACLE_ROLES, name) }
-pub fn is_oracle_object_priv(name: &str) -> bool { in_list(&ORACLE_OBJECT_PRIVS, name) }
+/// 白名单之外的「安全形状」兜底。
+///
+/// 各家的 SHOW GRANTS / 系统视图会返回**大量清单里没列全**的权限名 —— ClickHouse
+/// 的 `UNDROP TABLE` / `dictGet` / `KILL QUERY` / `SOURCES`…（几十个）、MySQL 8 的
+/// 动态权限（BACKUP_ADMIN…）、Oracle 的 `ADMINISTER …`。按「一个都不能隐身」
+/// 原则界面必须显示并允许取消它们，后端一概拒绝的话，用户对这类账号**什么都保存
+/// 不了**（实测 ClickHouse 的 default 用户，动任何一处保存必报「不认识的权限名」）。
+///
+/// 所以名单校验统一加这条兜底：名字必须是「字母/数字/下划线、词间单个空格」的形状。
+/// 拼进 SQL 不会有注入风险（引号/括号/分号/注释/空白换行一律到不了 SQL），
+/// 真正写错的权限名由数据库如实报语法/未知错误 —— 与名单内名字同一待遇。
+pub fn is_safe_name(name: &str) -> bool {
+    let s = name.trim();
+    !s.is_empty()
+        && s.split(' ').all(|w| {
+            !w.is_empty() && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        })
+}
+
+pub fn is_oracle_system_priv(name: &str) -> bool { in_list(&ORACLE_SYSTEM_PRIVS, name) || is_safe_name(name) }
+pub fn is_oracle_role(name: &str) -> bool { in_list(&ORACLE_ROLES, name) || is_safe_name(name) }
+pub fn is_oracle_object_priv(name: &str) -> bool { in_list(&ORACLE_OBJECT_PRIVS, name) || is_safe_name(name) }
 
 /// 界面在「系统权限」页签里既能勾系统权限、也能勾角色（Oracle 的授权实际就这两类），
 /// 所以这一层的校验器是两者的并集。
@@ -255,6 +299,16 @@ pub struct UserPrivileges {
     pub databases: Vec<(String, Vec<String>)>,
     /// 表级：`grant <这些> on \`db\`.\`tbl\` to ...`
     pub tables: Vec<(String, String, Vec<String>)>,
+    /// SQL Server 专用 —— schema 级（库, schema, 权限）授权，**行级选库**。
+    /// 用户管理入口没有库上下文（database 传空），不选库就会把 GRANT 打到连接默认
+    /// 目录（通常是 master）上 —— 实测踩过。库非空时语句前加 `use [库];`；空 = 旧行为。
+    pub schema_grants: Vec<(String, String, Vec<String>)>,
+    /// SQL Server 专用 —— 对象级（库, schema, 对象, 权限）授权，同上。
+    pub object_grants: Vec<(String, String, String, Vec<String>)>,
+    /// MySQL 专用 —— 例程级（库, 例程, 类型, 权限）授权：对**单个**存储过程/函数
+    /// 授 `EXECUTE`（语法 `grant execute on procedure `db`.`p` to u`）。库级/全局的
+    /// EXECUTE 只能「整个库都能跑」，够不到「只让跑这一个」—— 这是例程层存在的意义。
+    pub routines: Vec<(String, String, String, Vec<String>)>,
 }
 
 /// MySQL 静态权限白名单。
@@ -303,6 +357,35 @@ pub const MYSQL_PRIVILEGES: [&str; 33] = [
 pub fn is_mysql_privilege(name: &str) -> bool {
     let upper = name.trim().to_ascii_uppercase();
     MYSQL_PRIVILEGES.contains(&upper.as_str())
+        // 兜底见 is_safe_name：MySQL 8 动态权限（BACKUP_ADMIN 等）不在静态名单里，
+        // 但读回/界面都必须能带、能取消 —— 拒绝了用户就没法保存
+        || is_safe_name(name)
+}
+
+/// ClickHouse 的 RBAC 权限名（与前端 UserForm 的 chPrivs **同一套**）：
+/// 权限名会原样拼进 `GRANT / REVOKE`，两端必须对齐。`ALL`（可带 `PRIVILEGES`）
+/// 是 CH 的"全部权限"。
+pub const CLICKHOUSE_PRIVILEGES: [&str; 11] = [
+    "ALL",
+    "ALL PRIVILEGES",
+    "SELECT",
+    "INSERT",
+    "ALTER",
+    "CREATE",
+    "DROP",
+    "TRUNCATE",
+    "OPTIMIZE",
+    "SHOW",
+    "SYSTEM",
+];
+
+/// 是否是 ClickHouse 认得的权限名（大小写不敏感）。
+pub fn is_clickhouse_privilege(name: &str) -> bool {
+    let upper = name.trim().to_ascii_uppercase();
+    CLICKHOUSE_PRIVILEGES.contains(&upper.as_str())
+        // 兜底见 is_safe_name：CH 的 SHOW GRANTS 会带出几十个清单外权限
+        // （UNDROP TABLE / dictGet / KILL QUERY / SOURCES…），拒绝了就没法保存
+        || is_safe_name(name)
 }
 
 /// 各家的保留字（取并集，大小写不敏感）。
@@ -428,6 +511,13 @@ impl Dialect {
         // 「库.模式」不拆、表/列都按会话默认 schema 取，用户在 system 会话里看不到
         // DBMIND 的表（连表清单都会串成 SYS 的）。
         matches!(self.key(), "postgresql" | "kingbase" | "sqlserver" | "oracle")
+    }
+
+    /// 这个类型的元数据 SQL 是「库内限定」的，执行前要补一句 `use [库];` 兜底
+    /// （SQL Server 专属：影子连接负责落库，USE 是第二道保险 —— 防止执行落回主连接
+    /// 时把默认库的表当成目标库的，两个库节点显示同一份清单，用户实测过）。
+    pub fn wants_use_switch(&self) -> bool {
+        matches!(self.key(), "sqlserver")
     }
 
     /// 这个类型的 `database` 是「服务器上的一个库」（服务器管着很多个、可以切换），
@@ -781,34 +871,48 @@ _ => Meta::Unwritten,
     /// 已知覆盖：**静态**权限。8.0 的动态权限（`mysql.global_grants`）与角色授予
     /// 不在这三张视图里，需要时按 `role_edges` 另补（5.7 没有那张表，先不引用）。
     pub fn user_grants(&self, user: &str, host: &str) -> Meta {
-        let grantee = format!(
-            "concat(quote({}), '@', quote({}))",
-            self.literal(user),
-            self.literal(host)
-        );
+        // grantee 在 information_schema 视图里是**带引号的字符串** `'user'@'host'`：
+        // 在 Rust 侧拼好整个串再走 literal() 转义 —— 比 `concat(quote(…))` 短得多。
+        // **长度就是正确性**：实测（公司 VPN，路由被隧道接管且上行丢弃满 MSS 的包），
+        // 整句超过一个 TCP 段（≈1.4KB）时第一个满尺寸段被丢，重传退避 ~19 秒后连接
+        // 被重置，界面表现就是「点编辑/授权没反应」。所以列名/字面量一律从短。
+        let grantee = self.literal(&format!("'{}'@'{}'", user, host));
         match self.key() {
-            "mysql" | "mariadb" | "doris" => Meta::Sql(format!(
-                "select 'global' as scope, privilege_type as privilege, '' as db_name, '' as table_name \
-                   from information_schema.user_privileges where grantee = {grantee} \
-                 union all \
-                 select 'schema', privilege_type, table_schema, '' \
-                   from information_schema.schema_privileges where grantee = {grantee} \
-                 union all \
-                 select 'table', privilege_type, table_schema, table_name \
-                   from information_schema.table_privileges where grantee = {grantee} \
-                 union all \
-                 select distinct 'global', 'GRANT OPTION', '', '' \
-                   from information_schema.user_privileges \
-                  where grantee = {grantee} and is_grantable = 'YES' \
-                 union all \
-                 select distinct 'schema', 'GRANT OPTION', table_schema, '' \
-                   from information_schema.schema_privileges \
-                  where grantee = {grantee} and is_grantable = 'YES' \
-                 union all \
-                 select distinct 'table', 'GRANT OPTION', table_schema, table_name \
-                   from information_schema.table_privileges \
-                  where grantee = {grantee} and is_grantable = 'YES'"
-            )),
+            "mysql" | "mariadb" | "doris" => {
+                // 例程级授权不在 information_schema 里，只在 mysql.procs_priv：一行多权限、
+                // 空格分隔（`Execute Alter Routine Grant`）。**不在 SQL 里按 LIKE 拆成三段** ——
+                // 那会把整句顶过一个 TCP 段（见上），拆分挪到 Rust 侧做（expand_grant_rows）。
+                // 一行带回原始 Proc_priv + `类型:名字`（PROCEDURE:p / FUNCTION:f）。
+                // 第 5 列 is_grantable 直接随行带回（替代「GRANT OPTION 单独三段 UNION」）。
+                // Doris 是 MySQL 协议但没有 mysql.procs_priv 这张表，查了必炸 —— 排除。
+                let routine_sql = if self.key() == "doris" {
+                    String::new()
+                } else {
+                    format!(
+                        " union all select 'routine', Proc_priv, Db, concat(Routine_type, ':', Routine_name), '' from mysql.procs_priv where User = {} and Host = {}",
+                        self.literal(user),
+                        self.literal(host)
+                    )
+                };
+                Meta::Sql(format!(
+                    "select 'global' as scope, privilege_type as privilege, '' as db_name, '' as table_name, is_grantable as grant_option from information_schema.user_privileges where grantee = {grantee} \
+                 union all select 'schema', privilege_type, table_schema, '', is_grantable from information_schema.schema_privileges where grantee = {grantee} \
+                 union all select 'table', privilege_type, table_schema, table_name, is_grantable from information_schema.table_privileges where grantee = {grantee}{routine_sql}"
+                ))
+            }
+            // PostgreSQL/KingbaseES：模式（USAGE/CREATE）/ 表 / 例程（EXECUTE）三层，
+            // 各来自一张 information_schema 视图。grantee 是**裸角色名**（没有 MySQL 的
+            // 'u'@'h' 形状）。information_schema 只列「显式授给这个角色」的权限：
+            // 通过角色继承来的不在内 —— 与 SUPERUSER 全能也不在内，如实展示。
+            // 整句同样要压在一个 TCP 段以内（见上方 mysql 分支的 VPN 实测注释）。
+            "postgresql" | "kingbase" => {
+                let who = self.literal(user);
+                Meta::Sql(format!(
+                    "select 'schema' as scope, privilege_type as privilege, object_name as db_name, '' as table_name from information_schema.usage_privileges where grantee = {who} and object_type = 'SCHEMA' and object_name not in ('information_schema','pg_catalog') \
+                 union all select 'table', privilege_type, table_schema, table_name from information_schema.role_table_grants where grantee = {who} and table_schema not in ('information_schema','pg_catalog') \
+                 union all select case when p.prokind = 'p' then 'procedure' else 'function' end as scope, g.privilege_type as privilege, g.specific_schema as db_name, g.routine_name as table_name from information_schema.role_routine_grants g join pg_proc p on p.proname = g.routine_name join pg_namespace pn on pn.oid = p.pronamespace and pn.nspname = g.specific_schema where g.grantee = {who} and g.specific_schema not in ('information_schema','pg_catalog')"
+                ))
+            }
             // ClickHouse：`show grants for` 每行就是一条可执行的 GRANT 语句，
             // 由 grant_line 的 clickhouse 分支**原样**带回 —— 不做任何解析重组。
             "clickhouse" => {
@@ -963,22 +1067,30 @@ _ => Meta::Unwritten,
                     for role in &privileges.global {
                         parts.push(format!("alter server role {} add member {u}", self.quote(role)));
                     }
-                    for (schema, privs) in &privileges.databases {
+                    // Schema 级 / 对象级：**行级选库** —— 界面每行自带「数据库」，
+                    // 授权在哪个库执行就先 `use [库];` 切过去（连默认目录常是 master，
+                    // 不切库会把授权打到错的地方）。库为空 = 旧行为（当前目录执行）。
+                    let use_prefix = |db: &str| -> String {
+                        if db.is_empty() { String::new() } else { format!("use {}; ", self.quote(db)) }
+                    };
+                    for (db, schema, privs) in &privileges.schema_grants {
                         if privs.is_empty() {
                             continue;
                         }
                         parts.push(format!(
-                            "grant {} on schema::{} to {u}",
+                            "{}grant {} on schema::{} to {u}",
+                            use_prefix(db),
                             privs.join(", "),
                             self.quote(schema)
                         ));
                     }
-                    for (schema, object, privs) in &privileges.tables {
+                    for (db, schema, object, privs) in &privileges.object_grants {
                         if privs.is_empty() {
                             continue;
                         }
                         parts.push(format!(
-                            "grant {} on {}.{} to {u}",
+                            "{}grant {} on {}.{} to {u}",
+                            use_prefix(db),
                             privs.join(", "),
                             self.quote(schema),
                             self.quote(object)
@@ -986,11 +1098,12 @@ _ => Meta::Unwritten,
                     }
                     // 撤销：界面按"原来有、现在没有了"算好传进来（逐条点名，不全删重授）
                     for r in revokes {
+                        let pre = use_prefix(&r.db);
                         let sql = match r.scope.as_str() {
                             "serverrole" => format!("alter server role {} drop member {u}", self.quote(&r.privilege)),
                             "role" => format!("alter role {} drop member {u}", self.quote(&r.privilege)),
-                            "schema" => format!("revoke {} on schema::{} from {u}", r.privilege, self.quote(&r.owner)),
-                            "object" => format!("revoke {} on {}.{} from {u}", r.privilege, self.quote(&r.owner), self.quote(&r.object)),
+                            "schema" => format!("{}revoke {} on schema::{} from {u}", pre, r.privilege, self.quote(&r.owner)),
+                            "object" => format!("{}revoke {} on {}.{} from {u}", pre, r.privilege, self.quote(&r.owner), self.quote(&r.object)),
                             _ => return Meta::Unwritten,
                         };
                         parts.push(sql);
@@ -1082,6 +1195,23 @@ _ => Meta::Unwritten,
                         tail(with_option)
                     ));
                 }
+                // 例程级：对**单个**存储过程/函数授 EXECUTE —— MySQL 语法里
+                // `on procedure `db`.`p`` 的类型字是语法的一部分，不能省。
+                for (database, routine, kind, privs) in &privileges.routines {
+                    let (items, with_option) = split_grant_option(privs);
+                    if items.is_empty() {
+                        continue;
+                    }
+                    let routine_type = if kind.eq_ignore_ascii_case("function") { "function" } else { "procedure" };
+                    parts.push(format!(
+                        "grant {} on {} {}.{} to {full}{}",
+                        items.join(", "),
+                        routine_type,
+                        self.quote(database),
+                        self.quote(routine),
+                        tail(with_option)
+                    ));
+                }
                 let (global_items, global_option) = split_grant_option(&privileges.global);
                 if !global_items.is_empty() {
                     parts.push(format!(
@@ -1092,8 +1222,80 @@ _ => Meta::Unwritten,
                 }
                 Meta::Sql(parts.join(";\n"))
             }
-            // PG 的「用户」就是带 login 的角色（MySQL 语境的 host 在这里没有意义，忽略）
-            "postgresql" | "kingbase" => Meta::Sql(match action {
+            // PG 的「用户」就是带 login 的角色（MySQL 语境的 host 在这里没有意义，忽略）。
+            // 细粒度授权（模式 / 表 / 例程）与撤销：create 与 alter 共用一套拼法 ——
+            // 模式 `grant usage on schema "s" to "u"`；表 `on table "s"."t"`；
+            // 例程 `on function|procedure "s"."r"`（PG 11+ 签名可省略，同名歧义由数据库报错）。
+            // 权限名已在 meta.rs 过白名单（is_pg_schema_priv / is_pg_table_priv / EXECUTE）。
+            "postgresql" | "kingbase" => {
+                let mut pg_parts: Vec<String> = Vec::new();
+                if action == "create" || action == "alter" {
+                    for (schema, items) in &privileges.databases {
+                        if schema.trim().is_empty() || items.is_empty() {
+                            continue;
+                        }
+                        pg_parts.push(format!(
+                            "grant {} on schema {} to {u}",
+                            items.join(", ").to_lowercase(),
+                            self.quote(schema)
+                        ));
+                    }
+                    for (schema, table, items) in &privileges.tables {
+                        if schema.trim().is_empty() || table.trim().is_empty() || items.is_empty() {
+                            continue;
+                        }
+                        pg_parts.push(format!(
+                            "grant {} on table {}.{} to {u}",
+                            items.join(", ").to_lowercase(),
+                            self.quote(schema),
+                            self.quote(table)
+                        ));
+                    }
+                    for (schema, routine, kind, items) in &privileges.routines {
+                        if schema.trim().is_empty() || routine.trim().is_empty() || items.is_empty() {
+                            continue;
+                        }
+                        let object_type = if kind.eq_ignore_ascii_case("procedure") { "procedure" } else { "function" };
+                        pg_parts.push(format!(
+                            "grant {} on {object_type} {}.{} to {u}",
+                            items.join(", ").to_lowercase(),
+                            self.quote(schema),
+                            self.quote(routine)
+                        ));
+                    }
+                    for r in revokes {
+                        match r.scope.as_str() {
+                            "schema" if !r.owner.trim().is_empty() => {
+                                pg_parts.push(format!(
+                                    "revoke {} on schema {} from {u}",
+                                    r.privilege.to_lowercase(),
+                                    self.quote(&r.owner)
+                                ));
+                            }
+                            "table" if !r.owner.trim().is_empty() && !r.object.trim().is_empty() => {
+                                pg_parts.push(format!(
+                                    "revoke {} on table {}.{} from {u}",
+                                    r.privilege.to_lowercase(),
+                                    self.quote(&r.owner),
+                                    self.quote(&r.object)
+                                ));
+                            }
+                            "routine" | "function"
+                                if !r.owner.trim().is_empty() && !r.object.trim().is_empty() =>
+                            {
+                                let object_type = if r.kind.eq_ignore_ascii_case("procedure") { "procedure" } else { "function" };
+                                pg_parts.push(format!(
+                                    "revoke {} on {object_type} {}.{} from {u}",
+                                    r.privilege.to_lowercase(),
+                                    self.quote(&r.owner),
+                                    self.quote(&r.object)
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                Meta::Sql(match action {
                 "create" => {
                     // 属性：三个开关（与 alter 同一套字面量）；没给就沿用"可登录"
                     let mut flags: Vec<&str> = Vec::new();
@@ -1110,6 +1312,10 @@ _ => Meta::Unwritten,
                     }
                     for role in &role_parts {
                         sql.push_str(&format!(";\ngrant {role} to {u}"));
+                    }
+                    for part in &pg_parts {
+                        sql.push_str(";\n");
+                        sql.push_str(part);
                     }
                     sql
                 }
@@ -1135,6 +1341,7 @@ _ => Meta::Unwritten,
                     for role in &role_parts {
                         parts.push(format!("grant {role} to {u}"));
                     }
+                    parts.extend(pg_parts.iter().cloned());
                     if parts.is_empty() {
                         return Meta::Unwritten;
                     }
@@ -1142,36 +1349,96 @@ _ => Meta::Unwritten,
                 }
                 "drop" => format!("drop role {u}"),
                 _ => return Meta::Unwritten,
-            }),
+            })
+            }
             // ClickHouse：用户没有 (user, host) 二元组，host 参数没有意义（忽略）。
-            // 细粒度授权同样不在这里做 —— 调用方对非白名单入参会明确拒绝。
-            "clickhouse" => Meta::Sql(match action {
-                "create" => {
-                    let mut sql = format!("create user {u}");
-                    if !password.is_empty() {
-                        sql.push_str(&format!(" identified by {pwd}"));
+            // 授权与 MySQL 系同构：全局 `ON *.*` / 库 `ON db.*` / 表 `ON db.table`，
+            // 权限名过 CLICKHOUSE_PRIVILEGES 白名单（原样拼 SQL，名单外直接跳过）。
+            // 撤销按调用方算好的**差量**逐条点名 —— 与 MySQL「不全删重授」同一取舍。
+            "clickhouse" => {
+                let ch_target = |scope: &str, owner: &str, object: &str| -> Option<String> {
+                    match scope {
+                        "global" => Some("*.*".to_string()),
+                        "db" if !owner.trim().is_empty() => Some(format!("{}.*", self.quote(owner))),
+                        "table" if !owner.trim().is_empty() && !object.trim().is_empty() => {
+                            Some(format!("{}.{}", self.quote(owner), self.quote(object)))
+                        }
+                        _ => None,
                     }
-                    for role in &role_parts {
-                        sql.push_str(&format!(";\ngrant {role} to {u}"));
+                };
+                let mut parts: Vec<String> = Vec::new();
+                match action {
+                    "create" => {
+                        let mut sql = format!("create user {u}");
+                        if !password.is_empty() {
+                            sql.push_str(&format!(" identified by {pwd}"));
+                        }
+                        parts.push(sql);
                     }
-                    sql
+                    "alter" => {
+                        if !password.is_empty() {
+                            parts.push(format!("alter user {u} identified by {pwd}"));
+                        }
+                    }
+                    "drop" => return Meta::Sql(format!("drop user {u}")),
+                    _ => return Meta::Unwritten,
                 }
-                "alter" => {
-                    let mut parts: Vec<String> = Vec::new();
-                    if !password.is_empty() {
-                        parts.push(format!("alter user {u} identified by {pwd}"));
-                    }
-                    for role in &role_parts {
-                        parts.push(format!("grant {role} to {u}"));
-                    }
-                    if parts.is_empty() {
-                        return Meta::Unwritten;
-                    }
-                    parts.join(";\n")
+                for role in &role_parts {
+                    parts.push(format!("grant {role} to {u}"));
                 }
-                "drop" => format!("drop user {u}"),
-                _ => return Meta::Unwritten,
-            }),
+                for r in revokes {
+                    if !is_clickhouse_privilege(&r.privilege) {
+                        continue;
+                    }
+                    if let Some(target) = ch_target(&r.scope, &r.owner, &r.object) {
+                        parts.push(format!("revoke {} on {} from {u}", r.privilege.trim().to_ascii_uppercase(), target));
+                    }
+                }
+                // CH 这层不提供 WITH GRANT OPTION（界面没给这个开关），不需要拆 grant option
+                for p in &privileges.global {
+                    if !is_clickhouse_privilege(p) {
+                        continue;
+                    }
+                    parts.push(format!("grant {} on *.* to {u}", p.trim().to_ascii_uppercase()));
+                }
+                for (database, privs) in &privileges.databases {
+                    if database.trim().is_empty() {
+                        continue;
+                    }
+                    let names: Vec<String> = privs
+                        .iter()
+                        .filter(|p| is_clickhouse_privilege(p))
+                        .map(|p| p.trim().to_ascii_uppercase())
+                        .collect();
+                    if names.is_empty() {
+                        continue;
+                    }
+                    parts.push(format!("grant {} on {}.* to {u}", names.join(", "), self.quote(database)));
+                }
+                for (database, table, privs) in &privileges.tables {
+                    if database.trim().is_empty() || table.trim().is_empty() {
+                        continue;
+                    }
+                    let names: Vec<String> = privs
+                        .iter()
+                        .filter(|p| is_clickhouse_privilege(p))
+                        .map(|p| p.trim().to_ascii_uppercase())
+                        .collect();
+                    if names.is_empty() {
+                        continue;
+                    }
+                    parts.push(format!(
+                        "grant {} on {}.{} to {u}",
+                        names.join(", "),
+                        self.quote(database),
+                        self.quote(table)
+                    ));
+                }
+                if parts.is_empty() {
+                    return Meta::Unwritten;
+                }
+                Meta::Sql(parts.join(";\n"))
+            }
             // Oracle：`create user / alter user ... identified by / drop user`。
             // 与 PG、ClickHouse 一样忽略 host（Oracle 没有 (user, host) 二元组）。
             //
@@ -1792,13 +2059,23 @@ _ => Meta::Unwritten,
                  order by routine_name"
                     .to_string(),
             ),
-            "postgresql" | "kingbase" => Meta::Sql(
-                "select p.proname as name, \
-                 case when p.prokind = 'f' then 'FUNCTION' else 'PROCEDURE' end as routineType \
-                 from pg_proc p join pg_namespace n on n.oid = p.pronamespace \
-                 where n.nspname not in ('pg_catalog','information_schema') order by p.proname"
-                    .to_string(),
-            ),
+            "postgresql" | "kingbase" => {
+                // 带了 schema（树的「库.模式」或用户表单传的模式名）就只列该模式的例程；
+                // 没带才回退到「全库非系统模式」。与 MySQL 的 `routine_schema = database()`
+                // 同一语义：下拉里列的就是当前模式自己的过程/函数。
+                let filter = match schema {
+                    Some(s) if !s.trim().is_empty() => {
+                        format!("and n.nspname = '{}'", s.trim().replace('\'', "''"))
+                    }
+                    _ => String::from("and n.nspname not in ('pg_catalog','information_schema')"),
+                };
+                Meta::Sql(format!(
+                    "select p.proname as name, \
+                     case when p.prokind = 'f' then 'FUNCTION' else 'PROCEDURE' end as routineType \
+                     from pg_proc p join pg_namespace n on n.oid = p.pronamespace \
+                     where true {filter} order by p.proname"
+                ))
+            }
             "sqlserver" => Meta::Sql(
                 "select name, 'PROCEDURE' as routineType from sys.procedures \
                  union all select name, 'FUNCTION' as routineType from sys.objects \
@@ -1807,11 +2084,12 @@ _ => Meta::Unwritten,
             ),
             "oracle" => match schema {
                 Some(schema) if !schema.trim().is_empty() => Meta::Sql(format!(
-                    "select object_name as \"name\", object_type as \"routineType\" from all_objects where object_type in ('PROCEDURE','FUNCTION') and upper(owner) = upper('{}') order by object_name",
+                    // PACKAGE 不带 BODY：EXECUTE 只授予说明（spec），对 BODY 授权是语法错
+                    "select object_name as \"name\", object_type as \"routineType\" from all_objects where object_type in ('PROCEDURE','FUNCTION','PACKAGE') and upper(owner) = upper('{}') order by object_name",
                     schema.trim().replace('\'', "''")
                 )),
                 _ => Meta::Sql(
-                    "select object_name as \"name\", object_type as \"routineType\" from user_objects where object_type in ('PROCEDURE','FUNCTION') order by object_name"
+                    "select object_name as \"name\", object_type as \"routineType\" from user_objects where object_type in ('PROCEDURE','FUNCTION','PACKAGE') order by object_name"
                         .to_string(),
                 ),
             },
@@ -1932,7 +2210,16 @@ _ => Meta::Unwritten,
                     .to_string(),
             ),
             "sqlserver" => Meta::Sql(
-                "select name from sys.database_principals where type in ('S','U') order by name"
+                // 库级用户清单，但**过滤系统内置账号**：dbo / guest / sys / INFORMATION_SCHEMA
+                // 是每个库都有的固定用户，## 开头的（##MS_Policy… 等）是证书/服务签名映射用户
+                // —— 全都不是用户建的，列出来只会误导（用户反馈「SQL Server 展示的用户不对」）。
+                // 注意增删改链路（create user / alter user / drop user）都是库级口径，这里
+                // 不能换成 sys.server_principals（登录级），否则编辑/授权/删除全对不上。
+                "select name from sys.database_principals \
+                 where type in ('S','U') \
+                   and name not in ('dbo','guest','sys','INFORMATION_SCHEMA') \
+                   and name not like '#%' \
+                 order by name"
                     .to_string(),
             ),
             "oracle" | "dm" => {
@@ -2016,6 +2303,18 @@ fn mysql_revoke_parts(&self, full: &str, revokes: &[GrantRevoke]) -> Vec<String>
                     format!("{}.{}", self.quote(owner), self.quote(object))
                 };
                 parts.push(format!("revoke {name} on {target} from {full}"));
+            }
+            // 例程级：`revoke execute on procedure `db`.`p` from u` —— 类型字是语法的一部分
+            "routine" => {
+                if owner.is_empty() || object.is_empty() {
+                    continue;
+                }
+                let routine_type = if row.kind.eq_ignore_ascii_case("function") { "function" } else { "procedure" };
+                parts.push(format!(
+                    "revoke {name} on {routine_type} {}.{} from {full}",
+                    self.quote(owner),
+                    self.quote(object)
+                ));
             }
             // 全局（含 GRANT OPTION）
             _ => parts.push(format!("revoke {name} on *.* from {full}")),

@@ -292,6 +292,7 @@ import { listConnections, listDatabases, listSchemas, listTables, listProcedures
 // 否则会出现"树上算函数、同步时算存储过程"这种两边对不上的分叉
 import { isFunctionRoutine } from '../data/treeNodes'
 import { t } from '../../utils/i18n'
+import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { addBgTask, bgTasks } from './backgroundTasks'
 
 const props = defineProps({ modelValue: Boolean, conn: Object, database: String, resumeTaskId: String })
@@ -783,6 +784,10 @@ const loadSrcObjects = async () => {
 const run = async () => {
   if (!src.value.connectionId || !src.value.database) return ElMessage.warning(t('sync.pickSourceDb'))
   if (!tgt.value.connectionId || !tgt.value.database) return ElMessage.warning(t('sync.pickTargetDb'))
+  // 目标库是要被写入的一方：只读 / 生产保护连接在点击执行那一刻就拦下（全站统一闸门）
+  await loadProtectProd()
+  const targetConn = connections.value.find(x => String(x.id) === String(tgt.value.connectionId))
+  if (!guardConnWrite(targetConn || {}, t('nav.sync'))) return
   if (totalSelected.value === 0) return ElMessage.warning(t('sync.pickObjectsWarn'))
   if (src.value.connectionId === tgt.value.connectionId && src.value.database === tgt.value.database) {
     return ElMessage.warning(t('sync.sameDb'))

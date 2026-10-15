@@ -134,5 +134,4 @@ export const refreshLocaleFromStorage = () => {
   else initI18n()
 }
 
-/** `<script setup>` 里用：`const { t } = useI18n()`。 */
-export const useI18n = () => ({ t, te, tMsg, locale, setLocale, LOCALES })
+/** `<script setup>` 里直接 `import { t } from '../utils/i18n'` 使用。 */

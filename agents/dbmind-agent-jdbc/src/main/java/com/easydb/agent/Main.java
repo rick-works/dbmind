@@ -175,6 +175,14 @@ public final class Main {
             write(Protocol.failure(id, e.code(), e.getMessage(), e.detail()));
         } catch (Throwable e) {
             write(Protocol.failure(id, "DBMIND-QUERY-0002", internalMessage(e), stackTrace(e)));
+        } finally {
+            // 锁必须**必定**归还。这里曾经没有 finally —— 第一次 tables/columns 之后这条会话的锁
+            // 就永久泄漏，同一条会话上的后续元数据请求全部无限排队：界面表现是「编辑表结构 /
+            // 生成 SQL 转很久然后 30 秒超时」，而 jstack 里一排 worker 全停在 Session.lock()
+            // （1.2.28 起带的回归，树展开正常、只有第二回元数据调用必卡，就是它）。
+            if (locked != null) {
+                locked.unlock();
+            }
         }
     }
 

@@ -552,7 +552,6 @@ export const aiPatrol = (payload) => http.post('/api/ai/patrol', payload).then(r
 // 数据治理（规则引擎，几乎零 AI 成本）
 export const aiScanSensitive = (payload) => http.post('/api/ai/governance/sensitive', payload).then(r => r.data)
 export const aiQualityRules = (payload) => http.post('/api/ai/governance/quality/rules', payload).then(r => r.data)
-export const aiQualityCheck = (payload) => http.post('/api/ai/governance/quality/check', payload).then(r => r.data)
 // 可配置业务规则：类型目录 / 读取 / 保存 / 删除 / 已配置表 / 批量扫描 / 报告
 export const aiQualityTypes = () => http.get('/api/ai/quality/types').then(r => r.data)
 export const aiQualitySaved = (payload) => http.post('/api/ai/quality/rules/saved', payload).then(r => r.data)
@@ -566,10 +565,9 @@ export const getErGraph = (payload) => http.post('/api/ai/governance/er-graph', 
 export const aiCapacity = (payload) => http.post('/api/ai/governance/capacity', payload).then(r => r.data)
 // 命令面板：自然语言 → 操作计划
 export const aiPlan = (payload) => http.post('/api/ai/plan', payload).then(r => r.data)
-// P1 能力：数据洞察 / 慢查询诊断 / Agent 智能分析
+// P1 能力：数据洞察 / 慢查询诊断
 export const aiInsight = (payload) => http.post('/api/ai/insight', payload).then(r => r.data)
 export const aiDiagnose = (payload) => http.post('/api/ai/diagnose', payload).then(r => r.data)
-export const aiAgent = (payload) => http.post('/api/ai/agent', payload).then(r => r.data)
 
 // SQL 快捷验证（不消耗 AI 调用）：执行计划 / 试跑（只读，强制限行）
 export const aiSqlPlan = (payload) => http.post('/api/ai/sql/plan', payload).then(r => r.data)

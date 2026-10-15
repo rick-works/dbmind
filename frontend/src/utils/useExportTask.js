@@ -14,16 +14,6 @@ const POLL_MS = 300
 /** 日志区最多保留多少行：长导出会写出成百上千条，别让 DOM 一直涨 */
 const MAX_UI_LOGS = 500
 
-export function downloadBlob(blob, name, format) {
-  const ext = extMap[format] || format
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${name}_${Date.now()}.${ext}`
-  a.click()
-  URL.revokeObjectURL(url)
-}
-
 /** 导出文件名：下载与另存为共用同一口径，免得两条路生成的名字不一样 */
 export function exportFileName(name, format) {
   const ext = extMap[format] || format

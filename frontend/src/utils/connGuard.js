@@ -78,9 +78,10 @@ export const guardConnWrite = (conn, act) => {
   return true
 }
 
-/** 只读 / 生产 两类拦截的**同一条提示语**（页面上的常驻提示条用，与点击时的通知同一口径）。 */
-export const connGuardHint = (conn) => {
-  if (protectProd && isProdConn(conn)) return t('um.guardTipProd')
-  if (conn && conn.readOnly) return t('um.guardTipReadOnly')
-  return ''
-}
+// 设置页保存「安全与会话」后广播 dbmind-safety-changed：这里**立即重读**开关，
+// 不等 30 秒 TTL、更不等页面重载 —— 否则「关掉保护回到页面马上点保存」仍会被旧值拦下
+//（用户实测：必须刷新浏览器才生效）。派发处见 SettingsView.saveSafety。
+window.addEventListener('dbmind-safety-changed', () => {
+  flagLoadedAt = 0
+  loadProtectProd()
+})

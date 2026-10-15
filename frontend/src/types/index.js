@@ -18,8 +18,6 @@ const modules = import.meta.glob('./*.js', { eager: true })
 
 /** code -> 类型定义（已合入默认能力） */
 const DB_TYPES = {}
-/** 收集到的类型码顺序列表 */
-const ALL_CODES = []
 
 for (const path of Object.keys(modules)) {
   // 跳过非类型定义文件
@@ -30,7 +28,6 @@ for (const path of Object.keys(modules)) {
   for (const it of items) {
     if (!it || !it.code) continue
     DB_TYPES[it.code] = { ...DEFAULT_DEF, ...it }
-    if (!ALL_CODES.includes(it.code)) ALL_CODES.push(it.code)
   }
 }
 
@@ -52,7 +49,4 @@ export const schemaLevelOf = (code) => byType(code).schemaLevel
 /** 「库」这一层要不要画（Oracle 不画：它就是连接里的服务名 / PDB，永远只有一条） */
 export const hideDbLevelOf = (code) => Boolean(byType(code).hideDbLevel)
 
-/** 通用能力取值：cap(type, 'defaultPort') */
-export const cap = (code, key) => byType(code)[key]
-
-export { DB_TYPES, ALL_CODES }
+export { DB_TYPES }

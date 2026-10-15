@@ -24,12 +24,23 @@
         </el-tooltip>
 
         <!-- 顶栏菜单项**可配置**：显示哪些、顺序如何，在「设置 → 通用 → 顶栏菜单」里
-             设置并持久化（dbmind.db）。默认与历史版本一致 -->
-        <span v-for="mi in topMenuVisible" :key="mi.id" class="top-nav-item"
+             设置并持久化（dbmind.db）。展示规则：启用的菜单最多直接显示 6 个，
+             第 7 个起收进「更多」下拉；启用的不超过 6 个时不显示「更多」。 -->
+        <span v-for="mi in topMenuPrimary" :key="mi.id" class="top-nav-item"
               :class="{ 'top-nav-action': mi.id === 'newScript' }"
               @click="topMenuRun(mi.id)">
           <el-icon><component :is="mi.icon" /></el-icon>{{ mi.label() }}
         </span>
+        <el-dropdown v-if="topMenuOverflow.length" trigger="hover" placement="bottom" @command="topMenuRun">
+          <span class="top-nav-item top-nav-more">{{ $t('nav.more') }}<el-icon class="more-caret"><ArrowDown /></el-icon></span>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item v-for="mi in topMenuOverflow" :key="mi.id" :command="mi.id">
+                <el-icon class="more-item-icon"><component :is="mi.icon" /></el-icon>{{ mi.label() }}
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <span class="top-nav-right">
           <el-tooltip :content="$t('nav.knowledge')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': knowledgeOpen }" @click="openKnowledge"><el-icon><Reading /></el-icon></span></el-tooltip>
           <el-tooltip :content="$t('nav.ai')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': aiOpen }" @click="toggleAi"><el-icon><MagicStick /></el-icon></span></el-tooltip>
@@ -52,14 +63,18 @@
               </div>
             </div>
           </span>
+          <!-- 刷新整站：location.reload()。界面上偶尔有"该刷新的地方没刷新"的漏网之鱼
+               （连接改了只读、设置改了……），用户不必去按 F5，右上角点一下整站重来 -->
+          <el-tooltip :content="$t('nav.reloadApp')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="reloadApp"><el-icon><Refresh /></el-icon></span></el-tooltip>
+
           <el-tooltip :content="themeTip" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': themeMode !== 'system' }" @click="cycleTheme"><el-icon><component :is="themeIcon" /></el-icon></span></el-tooltip>
           <el-tooltip :content="langTip" placement="bottom"><span class="top-nav-item top-icon-btn top-lang-btn" @click="toggleLocale">{{ localeShort }}</span></el-tooltip>
 
           <!-- 检查更新：比对 GitHub 最新 Release，有新版可在线下载安装。
-               图标用 Refresh（循环箭头 = 检查/更新），不用 Upload（上传）——后者语义不对 -->
+               图标用 Upload（向上箭头 = 升级）——Refresh 让给左侧的「刷新整站」了 -->
           <el-tooltip :content="dlStatus === 'running' ? $t('update.dlShowProgress') : $t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn"
                      data-act="check-update"
-                     :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon><Refresh /></el-icon></span></el-tooltip>
+                     :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon><Upload /></el-icon></span></el-tooltip>
 
           <el-tooltip :content="$t('nav.settings')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="settingsOpen = true"><el-icon><Setting /></el-icon></span></el-tooltip>
         </span>
@@ -92,7 +107,7 @@
                后者挪到顶栏（那里才有位置）。这 5 个动作仍然贴着树，用起来不离手。 -->
           <!-- 工具条（重做）：只留三个动作 —— 新建分组 / 新建连接 / 刷新。
                等宽、带文字：只剩三个时，"图标 + 文字"比五个纯图标更能撑住这一栏，也更好认。
-               展开/收缩两个函数仍在（expandTreeOneLevel / collapseTreeAll），想加回来只需再放两个按钮。 -->
+               （历史上的一键展开/收缩按钮已移除，函数也从代码里清掉了，要恢复去 git 历史找。） -->
           <!-- 一行搞定：三个动作 + 搜索框。300px 宽里三个带文字的按钮 + 搜索框放不下，
                所以按钮回到"纯图标 + 悬停提示"（标题写在 el-tooltip 里），把宽度让给搜索。 -->
           <div class="tree-tools">
@@ -458,7 +473,7 @@
               </span>
             </template>
             <TableDataView v-if="tab.type === 'table'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :table="tab.table" :readOnly="tab.readOnly" @update-table-rows="onUpdateTableRows" @open-query="onOpenQueryFromTable" />
-            <SqlQueryView v-else-if="tab.type === 'sql'" :ref="el => setSqlRef(tab.id, el)" :conn="conn" :database="currentDb" :script-name="tab.scriptName" :tab-conn-id="tab.connId" :tab-database="tab.database" :initial-sql="tab.initialSql" :auto-run="tab.autoRun" @save="onScriptSave(tab.id, $event)" @dirty-change="onScriptDirty(tab.id, $event)" @sql-change="onScriptSqlChange(tab.id, $event)" @conn-change="onEditorConnChange" @db-change="onEditorDbChange" />
+            <SqlQueryView v-else-if="tab.type === 'sql'" :ref="el => setSqlRef(tab.id, el)" :conn="conn" :database="currentDb" :script-name="tab.scriptName" :tab-conn-id="tab.connId" :tab-database="tab.database" :initial-sql="tab.initialSql" :auto-run="tab.autoRun" :sql-loading="!!tab.sqlLoading" @save="onScriptSave(tab.id, $event)" @dirty-change="onScriptDirty(tab.id, $event)" @sql-change="onScriptSqlChange(tab.id, $event)" @conn-change="onEditorConnChange" @db-change="onEditorDbChange" />
             <ErDiagramView v-else-if="tab.type === 'er'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :conn-id="tab.connId" />
 
             <TableDetailView v-else-if="tab.type === 'detail'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :table="tab.table" @deleted="onDetailDeleted" />
@@ -966,20 +981,14 @@
     </li>
   </ul>
 
-  <!-- 可视化新建/编辑对象对话框（按数据库方言渲染，覆盖表/视图/索引/存储过程/触发器/事件） -->
-  <ObjectFormDialog
-    v-if="conn"
-    v-model="objForm.visible"
-    :conn="conn"
-    :database="objFormDb || currentDb"
-    :cat="objForm.cat"
-    :mode="objForm.mode"
-    :object="objForm.object"
-    @saved="onObjFormSaved"
-  />
-
   <!-- 树 CRUD 弹窗：新建库 / 新建分组 / 重命名分组 / 重命名表（逻辑在各子组件中，父只保留开关 / 上下文 / 刷新回调） -->
   <NewDbDialog v-model="newDbVisible" :conn-id="newDbCtx.connId" :conn-type="newDbCtx.connType" @created="onNewDbCreated" />
+  <!-- 脚本管理：跨连接/跨库列表 + 搜索 + 增删改查（增/改回 SQL 编辑器） -->
+  <ScriptManagerDialog
+    v-model="scriptsOpen"
+    @open="onScriptMgrOpen"
+    @create="onScriptMgrCreate"
+  />
   <FolderDialogs v-model:new-open="folderCreateVisible" v-model:rename-open="folderRenameVisible"
                  :env="folderEnv" :connections="allConnections"
                  @folder-created="onFolderCreated" @folder-renamed="onFolderRenamed" />
@@ -1161,6 +1170,10 @@ import { readSchemaCache, writeSchemaCache, removeSchemaCache, invalidateSchemaC
 import { parseMySqlGrants, parseSqlServerPerms } from '../../utils/grants'
 import { getEditorSettings } from '../../utils/settings'
 import { topMenuVisible } from '../../utils/topMenu'
+// 顶栏直显上限：启用的菜单超过这个数时，第 N+1 个起收进「更多」下拉
+const TOP_MENU_MAX = 6
+const topMenuPrimary = computed(() => topMenuVisible.value.slice(0, TOP_MENU_MAX))
+const topMenuOverflow = computed(() => topMenuVisible.value.slice(TOP_MENU_MAX))
 import { Sunny, Moon, Clock, Reading, Delete as ElDelete } from '@element-plus/icons-vue'
 import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 import { locale, setLocale } from '../../utils/i18n'
@@ -1223,7 +1236,7 @@ const CompareDialog = defineAsyncComponent(() => import('../compare/CompareDialo
 const SyncDialog = defineAsyncComponent(() => import('../sync/SyncDialog.vue'))
 const ConnectionDialog = defineAsyncComponent(() => import('../connection/ConnectionDialog.vue'))
 const DataSourcePicker = defineAsyncComponent(() => import('../../common/DataSourcePicker.vue'))
-const ObjectFormDialog = defineAsyncComponent(() => import('../../common/objectforms/ObjectFormDialog.vue'))
+const ScriptManagerDialog = defineAsyncComponent(() => import('./ScriptManagerDialog.vue'))
 const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView.vue'))
 import {
   checkUpdate as checkUpdateApi, applyUpdate as applyUpdateApi, updateProgress as updateProgressApi,
@@ -1551,6 +1564,9 @@ const showReadyDialog = (p) => {
   dlUnverified.value = !!(p && p.unverified)
   dlError.value = ''
 }
+
+// 刷新整站：location.reload()（右上角第一个图标）—— 界面有"该刷新没刷新"的漏网之鱼时的兜底
+const reloadApp = () => location.reload()
 
 const checkUpdate = async () => {
   if (updateChecking.value) return
@@ -1975,29 +1991,9 @@ const pendingAi = ref(null)
 const aiPanelRef = ref(null)
 
 /**
- * 一键展开：只展开**已经加载过**的节点。
- *
- * lazy 模式下展开未加载节点会触发一次远程加载 —— 那等于"点一下就把所有连接都连一遍"，
- * 不是"展开"该有的代价。所以这里只逐层展开已加载的：环境分组立刻展开，连接/库要用户自己点
- * （点一次再按一次，可以继续往里展开一层）。
+ * 一键展开/收缩：曾经的顶栏按钮已删除（懒加载树「一键展开」要连一遍所有连接，代价不对）；
+ * 真要恢复，从 git 历史里把 expandTreeOneLevel / collapseTreeAll 拉回来再放两个按钮即可。
  */
-const expandTreeOneLevel = () => {
-  const store = treeRef.value?.store
-  if (!store || !store.nodesMap) return
-  Object.keys(store.nodesMap).forEach(key => {
-    const node = store.nodesMap[key]
-    if (node && !node.expanded && node.loaded && node.childNodes && node.childNodes.length) node.expand()
-  })
-}
-/** 一键收缩：全部收起。收起**不会触发任何加载**，所以可以放心一次收干净。 */
-const collapseTreeAll = () => {
-  const store = treeRef.value?.store
-  if (!store || !store.nodesMap) return
-  Object.keys(store.nodesMap).forEach(key => {
-    const node = store.nodesMap[key]
-    if (node && node.expanded) node.collapse()
-  })
-}
 const treeWidth = ref(360)
 const sidebarHidden = ref(false)
 
@@ -2011,7 +2007,20 @@ const topMenuRun = (id) => {
   else if (id === 'monitor') openMonitor()
   else if (id === 'bgCenter') { bgCenterMode.value = 'history'; bgCenterOpen.value = true; refreshBgStatus() }
   else if (id === 'users') openUserManage()
+  else if (id === 'scripts') scriptsOpen.value = true
   else if (id === 'newScript') newQueryTab()
+}
+// ===== 脚本管理（跨连接/跨库，增/改在 SQL 编辑器里进行）=====
+const scriptsOpen = ref(false)
+// 打开某个脚本：复用树的 openScript（connId/db/scriptId 定位，内容注入 + scriptName 绑定覆盖保存）
+const onScriptMgrOpen = (data) => {
+  scriptsOpen.value = false
+  openScript(data)
+}
+// 新建脚本：回 SQL 编辑器（未命名脚本保存时会自动建档）
+const onScriptMgrCreate = () => {
+  scriptsOpen.value = false
+  newQueryTab()
 }
 const compareDialogOpen = ref(false)
 const syncDialogOpen = ref(false)
@@ -2408,9 +2417,11 @@ const restoreSession = () => {
     // 跨页面加载复用会让一份过期的库列表永远生效（见 saveConnState 的注释）。
     // 展开连接时按需重新拉取，拿到的一定是现状。
     if (d.currentDbByConn) currentDbByConn.value = d.currentDbByConn
-    // 页签：全局一条列表；旧版本的快照按连接分开存，摊平后照旧能用
+    // 页签：全局一条列表；旧版本的快照按连接分开存，摊平后照旧能用。
+    // sqlLoading 一并剥掉：那是一瞬间的「生成 SQL 列加载中」状态，
+    // 快照里若带着它，恢复后会永远卡在「SQL 正在加载中…」且编辑器置灰。
     if (Array.isArray(d.tabs)) {
-      tabs.value = d.tabs
+      tabs.value = d.tabs.map(t => ({ ...t, sqlLoading: false }))
       activeTab.value = d.tabs.some(t => t.id === d.activeTab) ? d.activeTab : (d.tabs[0]?.id || '')
     } else if (d.tabsByConn) {
       tabs.value = tabsFromLegacySnapshot(d)
@@ -2534,6 +2545,8 @@ const dbSearchVisible = ref(false)
 const dbRunSqlVisible = ref(false)
 const backupRestore = ref({ visible: false, mode: 'backup', connectionId: '', database: '' })
 const openBackupRestore = (mode, connId, db) => {
+  // 还原是整库覆盖写，备份只是导出 —— 还原入口也走统一前置闸门（只读 / 生产保护）
+  if (mode === 'restore' && !guardWrite(connId, t('tree.menu.restoreDb'))) return
   backupRestore.value = { visible: true, mode, connectionId: String(connId || ''), database: db || '' }
 }
 // 点击外部自动关闭 —— **捕获阶段**，三个右键菜单共用。
@@ -3550,6 +3563,8 @@ const treeCtxCopyConn = async (connId) => {
   }
 }
 const treeCtxNewDb = (connId) => {
+  // 建库属于 DDL 写操作，走统一前置闸门（只读 / 生产保护）
+  if (!guardWrite(connId, t('tree.menu.newDb'))) return
   closeTreeCtxMenu()
   const c = allConnections.value.find(x => String(x.id) === String(connId))
   newDbCtx.value = { connId, connType: c?.type || '' }
@@ -3705,6 +3720,9 @@ const onConnSaved = async (savedConn) => {
   await loadAllConnections()
   // 立即重建左侧树，保证新建/编辑后的数据源无需刷新页面即可显示在树中
   await buildTree()
+  // 广播给**自己拉连接列表**的页签（用户管理等）：它们不在 MainView 的 connFor 响应式链上，
+  // 不广播的话「改只读/改分组」后那些页签还是旧对象 —— 横幅、拦截判定全是旧值（用户实测）
+  try { window.dispatchEvent(new CustomEvent('dbmind-conns-changed')) } catch { /* 非浏览器环境忽略 */ }
   if (editingConn.value) {
     // 编辑：若修改了当前连接，重新加载
     if (conn.value && editingConn.value.id === conn.value.id) {
@@ -4903,6 +4921,11 @@ const onArrowClick = (data, node) => {
     selectConn(data.connId)
     return
   }
+  // 库/模式节点：**箭头展开也算"打开"** —— 图标点亮（isDbOpened）认的是 currentDb，
+  // 只点箭头不落 currentDb 的话，用户看着就是"展开了却没亮"（SQL Server 的 BI 实测反馈）
+  if ((data.kind === 'db' || data.kind === 'schema') && data.db && data.db !== currentDb.value) {
+    setCurrentDb(data.db)
+  }
   if (node?.expanded) collapseNode(data.id)
   else expandNode(data.id)
 }
@@ -5020,7 +5043,7 @@ const openScript = (data) => {
   // 切换到脚本所属库，确保编辑器下拉选中正确数据库
   setCurrentDb(data.db)
   // 记录 scriptName：保存/自动保存将覆盖更新同名脚本，而非重复新建
-  openTab({ id: 'sql:' + (++tabSeq), type: 'sql', label: s.name, scriptName: s.name, dirty: false,
+  openTab({ id: nextSqlTabId(), type: 'sql', label: s.name, scriptName: s.name, dirty: false,
     connId: data.connId || currentConnId.value, database: data.db })
   // 等待 SqlQueryView 挂载后再注入内容
   setTimeout(() => {
@@ -5110,15 +5133,30 @@ const openDetail = async (data, kind) => {
   activeTab.value = id
 }
 
+// tabSeq 在页面刷新后归零，而快照恢复的页签仍占着 sql:1..N —— 直接 ++ 会撞上已有 id，
+// openTab 撞见重复 id 只会切换不新建（表现为「生成 SQL 跳去了脚本 1」），所以取号前先查重
+const nextSqlTabId = () => {
+  let id
+  do { id = 'sql:' + (++tabSeq) } while (tabs.value.some(t => t.id === id))
+  return id
+}
+
 const newQueryTab = (opts = {}) => {
-  openTab({
-    id: 'sql:' + (++tabSeq), type: 'sql', label: t('mv.scriptN', { n: tabSeq }), scriptName: '', dirty: false,
+  const tab = {
+    id: nextSqlTabId(), type: 'sql', label: t('mv.scriptN', { n: tabSeq }), scriptName: '', dirty: false,
     connId: opts.connId || currentConnId.value,
     database: opts.database || currentDb.value,
     initialSql: opts.initialSql || '',
     // 新建脚本时若要求自动执行（AI 结果里点「插入并执行」），由 SqlQueryView 挂载后自己跑
-    autoRun: !!opts.autoRun
-  })
+    autoRun: !!opts.autoRun,
+    // 「生成 SQL」的异步加载态：true = 列还没回来，编辑器置灰 + 显示「SQL 正在加载中…」，
+    // 列到了由发起方回填 initialSql 并把本位翻回 false
+    sqlLoading: !!opts.sqlLoading
+  }
+  openTab(tab)
+  // 返回 tabs 里的**代理**而非原始对象：调用方（如「生成 SQL」）在列返回后
+  // 还要往 tab.initialSql 回填 —— 改原始对象不会触发响应式，编辑器会一直空着
+  return tabs.value.find(t => t.id === tab.id) || tab
 }
 
 // ===== Ctrl/⌘ + K：唤起统一的 AI 助手入口（并直接切到「指令」页签）=====
@@ -5632,6 +5670,11 @@ const onTreeNodeContextMenu = (e, data) => {
       subKey: null,
       data: { ...data, objectKind: data.kind }
     }
+    // 「生成 SQL」要按真实列结构出模板 —— 趁用户悬停子菜单的这点时间**先把列查了**
+    // （见 ctxGenSql）：点下去时 promise 多半已就位，页签不用先等一次 columns 往返。
+    ctxColsPromise = (data.connId && data.db)
+      ? listColumns(data.connId, data.db, data.table || data.label).catch(() => [])
+      : null
     nextTick(() => {
       const el = document.querySelector('.ctx-menu')
       if (!el) return
@@ -5972,7 +6015,40 @@ const ctxCopyViewDdl = async () => {
 }
 
 // 生成 SQL 模板并注入 SQL 编辑器（基于真实列结构）
-const ctxGenSql = async (tpl) => {
+// **页签立即打开**（用户要求）：点菜单项就出脚本页签，列还没回来时编辑器置灰 +
+// 显示「SQL 正在加载中…」，列到了自动换成完整 SQL 才允许编辑。
+// （原来要先等 columns 往返才开页签，网络稍慢就是干等。）
+// 「生成 SQL」的列预取（右键弹出菜单时发起，见 onTreeNodeContextMenu）；
+// null = 没预取（节点缺 connId/db），点菜单项时现查
+let ctxColsPromise = null
+const buildGenSql = (tpl, t, cols, connType) => {
+  if (tpl === 'select') {
+    // 查询不用 *：把字段逐个列出；有注释就把中文注释跟在字段后面 ——
+    // 形如 `a, -- 备注`：逗号在字段后、注释之前（放注释后面会被一起注释掉），
+    // 最后一列不带逗号。
+    return cols.length
+      ? 'SELECT\n' + cols.map((c, i) => {
+          const cm = String(c.comment || '').trim().replace(/\s+/g, ' ')
+          const line = '  ' + quoteIdent(c.name, connType) + (i < cols.length - 1 ? ',' : '')
+          return cm ? `${line} -- ${cm}` : line
+        }).join('\n') + `\nFROM ${t};\n`
+      : `SELECT * FROM ${t};\n`
+  }
+  if (tpl === 'insert') {
+    return cols.length
+      ? `INSERT INTO ${t} (${cols.map(c => quoteIdent(c.name, connType)).join(', ')})\nVALUES (${cols.map(() => '?').join(', ')});\n`
+      : `INSERT INTO ${t} (...);\n`
+  }
+  if (tpl === 'update') {
+    const sets = cols.length ? cols.map(c => `  ${quoteIdent(c.name, connType)} = ?`).join(',\n') : '  col = ?'
+    const where = cols.length ? `\nWHERE ${quoteIdent(cols[0].name, connType)} = ?` : ''
+    return `UPDATE ${t}\nSET\n${sets}${where};\n`
+  }
+  // delete：WHERE 尽量用主键列；拿不到列就退化为裸模板（执行前用户自己补条件）
+  const where = cols.length ? `\nWHERE ${quoteIdent(cols[0].name, connType)} = ?` : ''
+  return `DELETE FROM ${t}${where};\n`
+}
+const ctxGenSql = (tpl) => {
   if (!ctxMenu.value.data) return
   const d = ctxMenu.value.data
   // 关键：使用右键命中表所属的连接（tab 节点已带 connId），而非当前活动连接，
@@ -5982,32 +6058,19 @@ const ctxGenSql = async (tpl) => {
   const db = d.db || currentDb.value
   const name = d.table || d.label
   closeCtxMenu()
-  let cols = []
-  try {
-    const list = await listColumns(cid, db, name)
-    cols = list.map(c => c.name).filter(Boolean)
-  } catch { /* 列信息获取失败时生成无列模板 */ }
   const t = quoteIdent(name, connType)
-  let sql = ''
-  if (tpl === 'select') {
-    sql = `SELECT * FROM ${t};\n`
-  } else if (tpl === 'insert') {
-    sql = cols.length
-      ? `INSERT INTO ${t} (${cols.map(c => quoteIdent(c, connType)).join(', ')})\nVALUES (${cols.map(() => '?').join(', ')});\n`
-      : `INSERT INTO ${t} (...);\n`
-  } else if (tpl === 'update') {
-    const sets = cols.length ? cols.map(c => `  ${quoteIdent(c, connType)} = ?`).join(',\n') : '  col = ?'
-    const where = cols.length ? `\nWHERE ${quoteIdent(cols[0], connType)} = ?` : ''
-    sql = `UPDATE ${t}\nSET\n${sets}${where};\n`
-  } else if (tpl === 'delete') {
-    const where = cols.length ? `\nWHERE ${quoteIdent(cols[0], connType)} = ?` : ''
-    sql = `DELETE FROM ${t}${where};\n`
-  }
-  // 生成后**自动格式化**（用户要求）：走与「查看 DDL」同一条 autoFormatDdl ——
-  // 按当前连接的方言 + 「设置 → SQL 格式化」里的关键字大小写/缩进排版；
-  // 格式化抛错、或分号/括号/BEGIN-END/引号数量发生变化（结构可能被改坏）时，
-  // 自动退回未格式化的原文，保证编辑器里一定有可用内容。
-  newQueryTab({ connId: cid, database: db, initialSql: autoFormatDdl(sql, connType) })
+  const tab = newQueryTab({ connId: cid, database: db, initialSql: '', sqlLoading: true })
+  const pending = ctxColsPromise || listColumns(cid, db, name)
+  ctxColsPromise = null
+  pending.then((list) => {
+    const cols = (list || []).filter(c => c && c.name)
+    const sql = buildGenSql(tpl, t, cols, connType)
+    // 生成后**自动格式化**（用户要求）：走与「查看 DDL」同一条 autoFormatDdl ——
+    // 按当前连接的方言 + 「设置 → SQL 格式化」里的关键字大小写/缩进排版；
+    // 格式化抛错、或分号/括号/BEGIN-END/引号数量发生变化（结构可能被改坏）时，
+    // 自动退回未格式化的原文，保证编辑器里一定有可用内容。
+    tab.initialSql = autoFormatDdl(sql, connType)
+  }).catch(() => {}).finally(() => { tab.sqlLoading = false })
 }
 
 // 危险操作：清空 / 截断 / 删除表
@@ -6464,9 +6527,6 @@ const objCopyName = () => {
   copyText(objName(d), d.objectKind === 'view' ? t('mv.viewNameCopied') : t('mv.nameCopied'))
 }
 
-// ====== 可视化新建 / 编辑对象（ObjectFormDialog） ======
-const objForm = ref({ visible: false, cat: 'tables', mode: 'create', object: {} })
-const objFormDb = ref('')
 // 对象 kind → 表单分类
 const OBJ_CAT = { view: 'views', function: 'procs', procedure: 'procs', trigger: 'triggers', event: 'events' }
 // 当前连接类型（根据连接 id 从连接列表查，避免依赖 conn 的赋值时序）
@@ -6554,11 +6614,9 @@ const tabTitle = (tab) => {
 }
 
 const onObjFormSaved = (db, cat) => {
-  // 刷新对象所属分类节点（精确刷新，不刷新整个库）
-  const database = db || objFormDb.value || currentDb.value
-  const category = cat || objForm.value.cat
-  if (database && category) refreshCatNode(database, category)
-  else if (database) refreshDbNode(database)
+  // 刷新对象所属分类节点（精确刷新，不刷新整个库）—— 表单页签（ObjectFormTab）保存后回调
+  if (db && cat) refreshCatNode(db, cat)
+  else if (db) refreshDbNode(db)
 }
 
 // 对象定义 → 可编辑脚本。各引擎「改定义体」的语法差异很大，不能统一把 CREATE 换成 ALTER：
@@ -6771,6 +6829,8 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
     const info = await getUserInfo(target.id, db, fullName)
     // 明细列随 editData 一起交给「基本信息」（原来这里只取了 name / host，其余全丢）
     editData.fields = pickUserDetailFields(info)
+    // 服务器版本（只有纯 MySQL 会带）：5.7 没有 CREATE ROLE / DROP ROLE，界面按它隐藏
+    editData.serverVersion = info.serverVersion || ''
     if (isMssql) {
       const parsed = parseSqlServerPerms(info)
       editData.serverRoles = parsed.serverRoles
@@ -6778,7 +6838,16 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
       editData.schemaPrivileges = parsed.schemaPrivileges
       editData.objectPrivileges = parsed.objectPrivileges
     } else if (isClickhouse && info.grants && Array.isArray(info.grants)) {
-      editData.grants = info.grants.filter(g => g && !g.startsWith('--'))
+      // ClickHouse：SHOW GRANTS 的行就是 `GRANT … ON db.* TO user` 文本，与 MySQL
+      // 同构 —— 复用同一套解析回填（全局/库/表三层），另留一份**结构化底稿**
+      // chGrantRows（scope/privilege/owner/object，一权限一行），保存时算撤销差量用。
+      const lines = info.grants.filter(g => g && !g.startsWith('--'))
+      editData.grants = lines
+      const parsed = parseMySqlGrants(lines)
+      editData.privileges = parsed.privileges
+      editData.dbPrivileges = parsed.dbPrivileges
+      editData.tablePrivileges = parsed.tablePrivileges
+      editData.routinePrivileges = parsed.routinePrivileges || []
     } else if (isOracle && Array.isArray(info.grantRows)) {
       // Oracle：结构化的一份（scope/privilege/owner/object）既是回填来源，
       // 也是"保存时算撤销差异"的底稿 —— 所以原样留一份在 editData 里。
@@ -6794,6 +6863,38 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
         byObj.get(key).privileges.push(r.privilege)
       }
       editData.tablePrivileges = [...byObj.values()]
+    } else if ((target.type === 'POSTGRESQL' || target.type === 'KINGBASE') && Array.isArray(info.grantRows)) {
+      // PG/KingbaseES：三层细粒度读回（scope = schema / table / function|procedure）。
+      // 模式级落在 dbPrivileges（database 字段就是模式名）；例程行的 scope 本身就带
+      // function/procedure 类型 —— 撤销要拼 `on function|procedure`，回填时转成 kind。
+      const rows = info.grantRows.filter(r => r && r.privilege)
+      editData.pgRows = rows
+      // 同一目标的多条授权并成一行（`grant select, update on …` 是两次授权也能并）。
+      // 例程同名重载（不同签名）读回是重复行，这里也一并归并。
+      const merge = (list, keyOf, make) => {
+        const byKey = new Map()
+        for (const r of list) {
+          const key = keyOf(r)
+          if (!byKey.has(key)) byKey.set(key, make(r))
+          byKey.get(key).privileges.push(r.privilege)
+        }
+        return [...byKey.values()]
+      }
+      editData.dbPrivileges = merge(
+        rows.filter(r => r.scope === 'schema'),
+        (r) => String(r.owner || ''),
+        (r) => ({ database: r.owner || '', privileges: [] })
+      )
+      editData.tablePrivileges = merge(
+        rows.filter(r => r.scope === 'table'),
+        (r) => String(r.owner || '') + '.' + String(r.object || ''),
+        (r) => ({ database: r.owner || '', table: r.object || '', privileges: [] })
+      )
+      editData.routinePrivileges = merge(
+        rows.filter(r => r.scope === 'function' || r.scope === 'procedure'),
+        (r) => String(r.owner || '') + ':' + String(r.object || ''),
+        (r) => ({ database: r.owner || '', kind: String(r.scope).toUpperCase(), routine: r.object || '', privileges: [] })
+      )
     } else if (info.privileges || info.dbPrivileges || info.tablePrivileges) {
       // Doris 等方言直接返回结构化权限（其 SHOW GRANTS 不含权限明细）
       editData.privileges = info.privileges || []
@@ -6804,6 +6905,7 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
       editData.privileges = parsed.privileges
       editData.dbPrivileges = parsed.dbPrivileges
       editData.tablePrivileges = parsed.tablePrivileges
+      editData.routinePrivileges = parsed.routinePrivileges || []
     }
     if (info.roles && !isMssql) editData.roles = info.roles
   } catch (e) {
@@ -6832,37 +6934,6 @@ const openUserEdit = async () => {
     readOnly: !featureOf(cid, 'supportsUserManage'),
     connId: cid, database: db, label: t('mv.editUserLabel', { name: fullName })
   })
-}
-
-const userDrop = () => {
-  const d = ctxMenu.value.data
-  if (!d) return
-  const db = d.db || currentDb.value
-  // 连接跟**这个节点自己**的走，不能拿全局 conn：右键菜单可以作用于非当前连接的对象，
-  // 用全局 conn 会去删**另一个服务器**上的同名账号（这是最不该猜错的一处）。
-  const cid = String(d.connId || currentConnId.value || '')
-  closeCtxMenu()
-  const name = d.objectName || d.label
-  const parts = name.split('@')
-  const userName = parts[0]
-  const host = parts.length > 1 ? parts[1] : ''
-  // 只读 / 生产保护：删除用户是写操作，点击那一刻就拦下（与用户管理页同一个闸门）
-  if (!guardWrite(cid, t('common.delete'))) return
-  ElMessageBox.confirm(
-    t('mv.deleteUserBody', { name }),
-          t('mv.deleteUserTitle'),
-    { type: 'error', confirmButtonText: t('mv.dropConfirm'), cancelButtonText: t('common.cancel') }
-  ).then(async () => {
-    try {
-      const res = await userAction(cid, { action: 'drop', database: db, userName, host })
-      if (res.success) {
-        ElMessage.success(t('mv.userDeleted', { name }))
-        refreshCatNode(db, 'users')
-      } else {
-        ElMessage.error(t('mv.deleteFailed', { detail: (res.message || t('common.unknownError')) }))
-      }
-    } catch (e) { ElMessage.error(t('mv.deleteFailed', { detail: errMsg(e) })) }
-  }).catch(() => {})
 }
 
 // 详情页的「编辑用户」：连接/库跟着**详情页自己**（用户可能早已切走当前连接）
@@ -7212,6 +7283,8 @@ let dbCtxTarget = null
 const dbCtxRunSqlFile = () => {
   const d = treeCtxMenu.value.data
   if (!d) return
+  // SQL 文件内容任意（DDL/DML 都可能），属于写操作入口，走统一前置闸门
+  if (!guardWrite(d.connId, t('tree.menu.runSqlFile'))) return
   ensureDbConn(d)
   dbCtxTarget = d.db
   closeTreeCtxMenu()
@@ -7395,6 +7468,8 @@ const catalogCtxDrop = () => {
 
 onMounted(async () => {
   window.addEventListener('dc-scripts-changed', onScriptsChanged)
+  // 设置页保存「安全与会话」后立即重读生产保护开关（不等页面重载）
+  window.addEventListener('dbmind-safety-changed', loadSafetyFlags)
   window.addEventListener('keydown', onGlobalKey)
   await loadAllConnections()
   // 仅渲染树（展示所有配置好的连接），不自动连接任何数据源
@@ -7447,6 +7522,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', closeTabCtxMenu, true)
   window.removeEventListener('keydown', onCtxMenuEscape)
   window.removeEventListener('dc-scripts-changed', onScriptsChanged)
+  window.removeEventListener('dbmind-safety-changed', loadSafetyFlags)
   window.removeEventListener('keydown', onGlobalKey)
   if (exportPollTimer) { clearInterval(exportPollTimer); exportPollTimer = null }
   // 定时器也要停。这几个原本是"设了就不管"的：
@@ -7563,6 +7639,17 @@ const connTypeSummary = computed(() =>
 }
 .top-nav-item:hover { background: var(--dc-primary-wash); color: var(--dc-text-strong); }
 .top-nav-item.dc-top-active { color: var(--dc-primary); font-weight: 600; }
+/* 「更多」下拉的触发项：与普通菜单项同款，仅补个收起的箭头 */
+.top-nav-more .more-caret { font-size: 12px; margin-left: 1px; transition: transform .15s; }
+.top-nav-more:hover .more-caret { transform: rotate(180deg); }
+/* el-dropdown 的触发元素可获得焦点：鼠标移走后浏览器默认的黑色 focus outline
+   会一直留在框上（用户反馈的"黑框"）—— 只在顶栏这一处去掉，不影响全局可达性 */
+.topbar .el-dropdown:focus,
+.topbar .el-dropdown:focus-visible,
+.topbar .el-dropdown:focus-within,
+.topbar .top-nav-more:focus,
+.topbar .top-nav-more:focus-visible,
+.topbar .top-nav-more:focus-within { outline: none; box-shadow: none; }
 .top-nav-arrow { font-size: var(--dc-nav-fs, 14px); color: var(--dc-text-dim); }
 /* 顶栏图标分两类，各跟各的设置（用户明确的分工）：
    · 左侧菜单项里的图标（.top-nav-item，但不是 .top-icon-btn）→ 跟「顶栏菜单文字」走：
@@ -7817,10 +7904,36 @@ const connTypeSummary = computed(() =>
   line-height: normal !important;
   display: flex;
   align-items: center;
-  color: var(--dc-text-dim);
+  justify-content: center;
+  color: var(--dc-text-mid);
+}
+/* 两端滚动箭头做成**带圆形背景的小按钮** —— 与语句条的 ‹ › 同一款（用户要求）：
+   Element 原生是通栏的光秃箭头，这里给里面的图标套 18px 圆底 + 描边，悬停变主色。 */
+.dc-tabs :deep(.el-tabs__nav-prev .el-icon),
+.dc-tabs :deep(.el-tabs__nav-next .el-icon) {
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--dc-border);
+  border-radius: 50%;
+  background: var(--dc-bg-card);
+  font-size: 12px;
+  transition: color .12s, border-color .12s;
 }
 .dc-tabs :deep(.el-tabs__nav-prev:hover),
-.dc-tabs :deep(.el-tabs__nav-next:hover) { color: var(--dc-text); }
+.dc-tabs :deep(.el-tabs__nav-next:hover) { color: var(--dc-text-mid); }
+.dc-tabs :deep(.el-tabs__nav-prev:hover .el-icon),
+.dc-tabs :deep(.el-tabs__nav-next:hover .el-icon) {
+  color: var(--dc-primary);
+  border-color: var(--dc-primary);
+}
+/* 已滚到头的那一侧箭头隐藏（用户要求）：EP 原生就会给到头的箭头打 is-disabled
+   （起点→prev、终点→next，随滚动实时切换），直接借这个类隐藏，无需自建监听 */
+.dc-tabs :deep(.el-tabs__nav-prev.is-disabled),
+.dc-tabs :deep(.el-tabs__nav-next.is-disabled) { display: none; }
 .dc-tabs :deep(.el-tabs__nav-wrap::after) { background-color: var(--dc-border); height: 1px; }
 .dc-tabs :deep(.el-tabs__item) {
   border: none !important;

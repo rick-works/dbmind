@@ -445,7 +445,7 @@ import { listColumns, listIndexes, listTables, alterTable, getFeatures, executeS
 import { mergeAlterRuns } from './alterMerge'
 import { canonTypeBase } from './typeName'
 // 只读 / 生产保护的口径（与用户管理页、MainView 同一份，见 utils/connGuard.js）
-import { isProdConn, loadProtectProd } from '../../utils/connGuard'
+import { isProdConn, loadProtectProd, guardConnWrite } from '../../utils/connGuard'
 
 const props = defineProps({ conn: Object, database: String, table: String })
 
@@ -1628,7 +1628,12 @@ const onSqlResizeDblClick = () => {
   const max = sqlMaxH()
   sqlHeight.value = sqlHeight.value >= max - 8 ? SQL_H_MIN : max
 }
-onBeforeUnmount(onSqlResizeEnd)
+onBeforeUnmount(() => {
+  onSqlResizeEnd()
+  window.removeEventListener('dbmind-safety-changed', onSafetyChanged)
+})
+
+const onSafetyChanged = async () => { prodProtect.value = await loadProtectProd() }
 
 const previewSql = computed(() => scriptParts.value.length ? scriptParts.value.join(';\n') + ';' : '')
 const previewBody = computed(() => {
@@ -1856,6 +1861,9 @@ const dropIndexSql = (name) => {
 }
 
 const rebuildIndex = async (row) => {
+  // 重建索引会改库（DROP/ADD INDEX）：只读 / 生产保护在点击那一刻拦下（与 save 同一闸门）
+  await loadProtectProd()
+  if (!guardConnWrite(props.conn || {}, t('tdet.rebuildIndex'))) return
   try {
     await ElMessageBox.confirm(
       t('tdet.rebuildIndexBody', { name: (row.name || '') }),
@@ -2154,6 +2162,10 @@ const openSafetySettings = () => {
 
 const save = async () => {
   if (!pendingCount.value) return ElMessage.info(t('tdet.noChangesToSave'))
+  // 只读 / 生产保护：**前置**拦截（点击那一刻，不让用户改完结构才知道被拒）；
+  // 后端那道闸照旧保留，下面的 confirmProdWrite（生产二次确认）继续独立生效
+  await loadProtectProd()
+  if (!guardConnWrite(props.conn || {}, t('tdet.saveChanges'))) return
   const probs = issues.value
   if (probs.length) return ElMessage.warning(probs[0])
   const script = scriptParts.value.join(';\n') + ';'
@@ -2214,6 +2226,9 @@ const showDdl = async () => {
 watch(pendingCount, (n) => { if (n > 0 && ddlMode.value) ddlMode.value = false })
 
 onMounted(async () => {
+  // 设置页保存「安全与会话」后立即重读生产保护开关：常驻提示条与点击闸门同步刷新，
+  // 不等页面重载（与 MainView / 用户管理同一机制，见 SettingsView.saveSafety 的广播）
+  window.addEventListener('dbmind-safety-changed', onSafetyChanged)
   await load()
   // 首屏就把预览高度收敛到容器可用高度内：窗口不高时默认 260px 会顶出去。
   //

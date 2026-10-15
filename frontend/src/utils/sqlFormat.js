@@ -24,14 +24,6 @@ export const connDialectOf = (typeCode) => ({
   DORIS: 'mysql', KINGBASE: 'postgresql', DM: 'plsql'
 })[String(typeCode || '').toUpperCase()] || ''
 
-// 拆分为关键字数组：支持英文/中文逗号、分号、换行分隔；多词短语（如 LEFT JOIN）请用空格连接
-export const splitKeywords = (text) =>
-  String(text || '')
-    .split(/[,，;；\n\r]+/)
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .filter((s, i, arr) => arr.indexOf(s) === i)
-
 const norm = (v, fallback) => (v === undefined || v === null || v === '' ? fallback : v)
 
 // 由应用设置项构建 sql-formatter 的通用 FormatOptions
@@ -264,20 +256,93 @@ const applyJoinIndent = (text, rules, tabWidth) => {
 //   after（默认）字段后：`a,` 换行 `b`  —— 引擎原本的输出就是这样，直接不动
 //   before      字段前：`a`   换行 `, b`
 // 只处理「行尾逗号 + 下一行是内容行」；下一行以右括号开头时不搬 —— 否则会排出 `, )` 这种一眼错的形状。
-const applyCommaPosition = (text, mode) => {
-  if (mode !== 'before') return text
-  const lines = String(text).split('\n')
-  for (let i = 0; i < lines.length - 1; i++) {
-    const cur = lines[i].replace(/\s+$/, '')
-    if (!cur.endsWith(',')) continue
-    const next = lines[i + 1]
-    const nt = next.trim()
-    if (!nt || /^[)\]}]/.test(nt)) continue
-    lines[i] = cur.slice(0, -1).replace(/\s+$/, '')
-    // 逗号挪到下一行内容之前，缩进沿用该行
-    lines[i + 1] = /^\s*/.exec(next)[0] + ', ' + nt
+// 找出行内 `--` / `#` 行注释的起点（跳过字符串字面量里的假注释）；没有返回 -1
+const findLineCommentIndex = (s) => {
+  let inS = false
+  let inD = false
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]
+    if (ch === "'" && !inD) inS = !inS
+    else if (ch === '"' && !inS) inD = !inD
+    else if (!inS && !inD && ch === '-' && s[i + 1] === '-') return i
+    else if (!inS && !inD && ch === '#' && (i === 0 || /\s/.test(s[i - 1]))) return i
   }
-  return lines.join('\n')
+  return -1
+}
+
+const applyCommaPosition = (text, mode) => {
+  if (mode !== 'before' && mode !== 'after') return text
+  const lines = String(text).split('\n')
+  if (mode === 'before') {
+    // 1) 逗号独占一行（sql-formatter 遇到「字段后跟行注释」时会这么排）→ 并入下一行行首
+    for (let i = 0; i < lines.length - 1; i++) {
+      if (lines[i].trim() !== ',') continue
+      const next = lines[i + 1]
+      const nt = next.trim()
+      if (!nt || nt.startsWith(',')) continue
+      lines[i + 1] = /^\s*/.exec(next)[0] + ', ' + nt
+      lines.splice(i, 1)
+      i--
+    }
+    // 2) 行尾逗号 → 下一行内容之前，缩进沿用该行
+    for (let i = 0; i < lines.length - 1; i++) {
+      const cur = lines[i].replace(/\s+$/, '')
+      if (!cur.endsWith(',')) continue
+      const next = lines[i + 1]
+      const nt = next.trim()
+      if (!nt || nt.startsWith(',') || /^[)\]}]/.test(nt)) continue
+      lines[i] = cur.slice(0, -1).replace(/\s+$/, '')
+      lines[i + 1] = /^\s*/.exec(next)[0] + ', ' + nt
+    }
+    // 3) 逗号贴在行注释**前**（`a, -- 测试1`，多半是上一次「字段后」的产物；
+    //    行尾是注释不是逗号，所以判断的是「注释之前那段是否以逗号结尾」）→
+    //    挪到下一行行首。**必须从后往前搬**：`a, -- 1` / `b, -- 2` / `c -- 3`
+    //    顺序搬会连着动两行，倒着搬每行只搬自己的那一颗。
+    for (let i = lines.length - 2; i >= 0; i--) {
+      const cur = lines[i].replace(/\s+$/, '')
+      const idx = findLineCommentIndex(cur)
+      if (idx < 0) continue
+      const head = cur.slice(0, idx).replace(/\s+$/, '')
+      if (!head.endsWith(',')) continue
+      const headClean = head.slice(0, -1).replace(/\s+$/, '')
+      if (!headClean) continue
+      const next = lines[i + 1]
+      const nt = next.trim()
+      if (!nt || nt.startsWith(',') || /^[)\]}]/.test(nt)) continue
+      // 逗号搬走，**注释留在本行**（`1 a, -- 测试1` → `1 a -- 测试1`）——
+      // 刚才第一版把注释整个丢了
+      lines[i] = headClean + ' ' + cur.slice(idx).trim()
+      lines[i + 1] = /^\s*/.exec(next)[0] + ', ' + nt
+    }
+    return lines.join('\n')
+  }
+  // after：把行首的逗号挪回**上一行字段的后面**。上一行带 `--` 行注释时必须
+  // 插在注释**之前**（`a, -- 测试1`）—— 塞到注释后面会被注释吞掉，等于把下一列
+  // 也注释掉（用户反馈："逗号应该贴在字段的后面，不是注释的后面"）。
+  const out = [lines[0]]
+  for (let i = 1; i < lines.length; i++) {
+    const nt = lines[i].trim()
+    if (!nt.startsWith(',')) {
+      out.push(lines[i])
+      continue
+    }
+    const prev = (out[out.length - 1] || '').replace(/\s+$/, '')
+    // 上一行没内容（空行 / 开括号）就不动，避免拼出非法布局
+    if (!prev || /[([{]$/.test(prev)) {
+      out.push(lines[i])
+      continue
+    }
+    const idx = findLineCommentIndex(prev)
+    if (idx >= 0) {
+      out[out.length - 1] = prev.slice(0, idx).replace(/\s+$/, '') + ', ' + prev.slice(idx).trim()
+    } else {
+      out[out.length - 1] = prev + ','
+    }
+    // 逗号后面还跟着内容（如 ", b"）就把剩下的留在本行；纯逗号行直接消失
+    const rest = nt.slice(1).trim()
+    if (rest) out.push(/^\s*/.exec(lines[i])[0] + rest)
+  }
+  return out.join('\n')
 }
 
 // 「前换行」只该在关键字**前**断行：把「关键字独占一行」时紧随其后的内容接回关键字后面。
@@ -311,6 +376,29 @@ const applyBreakBeforeOnly = (text, rules) => {
 // 格式化 SQL：若配置了关键字排版规则，则克隆所选方言并注入对应集合，
 // 让用户关键字获得与内置同类关键字一致的排版/大小写行为；失败时回退到普通 format。
 // language 为 sql-formatter 方言名（如 mysql/transactsql），缺省用标准 SQL。
+
+// sql-formatter 的已知怪癖：**行内 `-- 注释` 之后的下一行会被硬顶出一个空行**
+// （select 列表逐列带注释时，每列之间都多一个空行，用户反馈"格式化会换行"）。
+// 收敛：紧跟在「以 `--` 行注释结尾」的行后面的空行删掉。块注释（*/ 结尾）与
+// 字符串里的 `--` 不受影响——前者另有排版，后者罕见且误删的代价只是少一个空行。
+const endsWithLineComment = (line) => {
+  const t = line.trim()
+  if (!t || /\*\/\s*$/.test(t)) return false
+  return /(^|\s)--(?!\s*$)/.test(t) || /^#/.test(t)
+}
+const collapseBlankAfterLineComment = (sql) => {
+  const lines = sql.split('\n')
+  const out = []
+  for (let i = 0; i < lines.length; i++) {
+    const prev = out[out.length - 1]
+    if (lines[i].trim() === '' && prev && endsWithLineComment(prev)) {
+      continue // 注释行后面 formatter 硬塞的空行，不要
+    }
+    out.push(lines[i])
+  }
+  return out.join('\n')
+}
+
 export const formatSql = (text, s, language) => {
   const primary = norm(language, 'sql')
   const options = buildSqlFormatOptions(s)
@@ -349,6 +437,7 @@ export const formatSql = (text, s, language) => {
   // 全局后处理（与关键字规则无关，只看设置项）。放在最后：它按行搬动逗号，
   // 让上面那些按关键字搬行的规则先落定，避免互相干扰。
   out = applyCommaPosition(out, norm(s.sqlCommaPosition, 'after'))
+  out = collapseBlankAfterLineComment(out)
   return out
 }
 

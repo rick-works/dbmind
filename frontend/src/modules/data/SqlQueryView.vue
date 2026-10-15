@@ -174,15 +174,25 @@
         </div>
       </div>
       <div class="editor-body" @contextmenu.prevent="onEditorContextMenu">
-        <!-- 语句面包屑：多段脚本时列出每条语句，点击选中并定位；悬停 ▶ 只执行那一条 -->
+        <!-- 「生成 SQL」列加载中：盖一层提示并置灰编辑器（readOnly 见 editorOptions） -->
+        <div v-if="sqlLoading" class="sql-loading-mask">{{ $t('sqlq.sqlLoading') }}</div>
+        <!-- 语句面包屑：多段脚本时列出每条语句，点击选中并定位；悬停 ▶ 只执行那一条。
+             **永远一行**：放不下不换行，两端出 ‹ › 箭头横向滚动（用户要求）。 -->
         <div class="stmt-bar" v-if="stmtBreadcrumbs.length">
-          <span class="stmt-bar-label">{{ $t('sqlq.stmtCount', { n: stmtBreadcrumbs.length }) }}</span>
-          <button v-for="s in stmtBreadcrumbs.slice(0, 40)" :key="s.i" type="button" class="stmt-chip"
-                  :title="s.firstLine" @click="gotoStatement(s)">
-            语句 {{ s.i }}
-            <span class="stmt-run" :title="$t('sqlq.runThisStmt')" @click.stop="runStatement(s)"><el-icon :size="10"><CaretRight /></el-icon></span>
+          <button v-if="stmtScroll.left" type="button" class="stmt-nav" @click="scrollStmt(-1)">
+            <el-icon :size="12"><CaretLeft /></el-icon>
           </button>
-          <span class="stmt-chip" v-if="stmtBreadcrumbs.length > 40">…</span>
+          <span class="stmt-bar-label">{{ $t('sqlq.stmtCount', { n: stmtBreadcrumbs.length }) }}</span>
+          <div class="stmt-strip" ref="stmtStripEl" @scroll="updateStmtScroll">
+            <button v-for="s in stmtBreadcrumbs" :key="s.i" type="button" class="stmt-chip"
+                    :title="s.firstLine" @click="gotoStatement(s)">
+              语句 {{ s.i }}
+              <span class="stmt-run" :title="$t('sqlq.runThisStmt')" @click.stop="runStatement(s)"><el-icon :size="10"><CaretRight /></el-icon></span>
+            </button>
+          </div>
+          <button v-if="stmtScroll.right" type="button" class="stmt-nav" @click="scrollStmt(1)">
+            <el-icon :size="12"><CaretRight /></el-icon>
+          </button>
         </div>
         <VueMonacoEditor
           v-if="monacoReady"
@@ -581,6 +591,7 @@ import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import { useShortcutScope } from '../../utils/useShortcuts'
 import { loadShortcuts } from '../../utils/shortcuts'
 import { errMsg } from '../../utils/errMsg'
+import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
 import { useExcelSelection } from '../../utils/excelSelection'
@@ -588,7 +599,7 @@ import { cellAlignClass, columnAlignClasses } from '../../utils/cellAlign'
 import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
-  CaretRight, Download, MagicStick, TrendCharts, Loading,
+  CaretRight, CaretLeft, Download, MagicStick, TrendCharts, Loading,
   Close, CircleCloseFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
@@ -598,12 +609,22 @@ import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, 
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
 
-const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabDatabase: String, initialSql: String, autoRun: Boolean })
+const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabDatabase: String, initialSql: String, autoRun: Boolean, sqlLoading: Boolean })
 const emit = defineEmits(['save', 'dirty-change', 'conn-change', 'db-change', 'sql-change'])
 
+const sqlLoading = computed(() => !!props.sqlLoading)
 const sql = ref(props.initialSql || '')
 const lastSavedSql = ref(props.initialSql || '')
 const isDirty = ref(false)
+// 「生成 SQL」：列加载完成后父级会更新 initialSql —— 用户还没动过编辑器（非 dirty）
+// 就跟着换成完整 SQL；动过就不覆盖，避免抹掉用户正在敲的内容
+watch(() => props.initialSql, (v) => {
+  // 注意不拦 sqlLoading：生成 SQL 时父级先回填 initialSql、随后才翻 sqlLoading=false，
+  // 若在这里拦掉，SQL 就永远进不了编辑器（先显示、等加载位翻 false 后才可编辑）
+  if (v == null || isDirty.value || sql.value === v) return
+  sql.value = v
+  lastSavedSql.value = v
+})
 
 // 内容变化 → 防抖通知父级：父级据此更新页签快照，刷新后才不会退回「打开这份页签时」的内容
 let sqlChangeTimer = null
@@ -2051,6 +2072,10 @@ const editsBusy = ref(false)
 const discardEdits = () => { pendingEdits.value = [] }
 const commitEdits = async () => {
   if (editsBusy.value || !pendingEdits.value.length) return
+  // 只读连接 / 生产保护：点击那一刻就拦下并弹右上角通知（与用户管理、表单同一闸门），
+  // 不然只读数据源上点「提交修改」毫无反应 —— 后端拦了但这里把失败吞得无声无息
+  await loadProtectProd()
+  if (!guardConnWrite(selectedConn.value || props.conn || {}, t('sqlq.commitEdits'))) return
   const first = pendingEdits.value[0]
   if (!first || result.value !== first.snapshot || result.value?.rows !== first.rowsRef) {
     ElMessage.warning(t('sqlq.editsStale'))
@@ -2838,7 +2863,12 @@ const stmtBreadcrumbs = computed(() => {
   // 于是点「结果1」看起来"跳错了"（其实跳的是第一条**可执行**语句）。
   const ed = editorInstance
   const model = ed && ed.getModel ? ed.getModel() : null
-  const text = ((model && model.getValue) ? model.getValue() : '') || sql.value || ''
+  // sql.value 必须**无条件**读一次：editorInstance 不是响应式的，model.getValue()
+  // 的结果 Vue 也追踪不到 —— 原来的 `model.getValue() || sql.value` 在模型非空时
+  // 短路掉了 sql.value，computed 没有任何依赖，打字时永不重算，「语句1/语句2」
+  // 块要等刷新才出现。编辑器输入正是通过 v-model 同步进 sql 这条路驱动的。
+  const synced = sql.value
+  const text = ((model && model.getValue) ? model.getValue() : '') || synced || ''
   const ranges = splitSqlStatementRanges(text)
   if (ranges.length <= 1) return []
   return ranges.map((r, i) => ({
@@ -2846,6 +2876,86 @@ const stmtBreadcrumbs = computed(() => {
     firstLine: (r.text.split('\n')[0] || '').slice(0, 120)
   }))
 })
+// ===== 每条语句首行的绿色「▶ 执行」标记：点一下只跑那一条（用户要求） =====
+// 实现：给每条语句的起始行挂 beforeContentClassName 装饰（CSS ::before 画绿色 ▶），
+// 鼠标按下命中该装饰元素时，选中那条语句并走 runSql 的既有链路 ——
+// 变量弹窗 / 危险 SQL 确认 / 只读拦截 / 历史记录全部照常生效，不另起一条执行通道。
+let stmtGlyphDecos = []
+let stmtGlyphTimer = 0
+// 执行失败的语句行（红 ▶）+ 完整报错（hover 展示）：与绿色 ▶ **共用同一个标记位**，
+// 错误行把 ▶ 染红而不是并排放两个图标 —— glyph 边栏只有一条 ~20px 带，并排必然重叠。
+let stmtErrorLines = new Set()
+let stmtErrMsg = ''
+// 语句级 ▶ 的本次执行内容：非空时 getExecutableSql 直接用它（绕开选区/整段）
+let stmtRunSql = null
+const updateStmtGlyphs = () => {
+  const ed = editorInstance
+  const model = ed && ed.getModel ? ed.getModel() : null
+  if (!ed || !model) return
+  // SQL 还在加载（编辑器置灰）时不画：等 initialSql 注入后内容变化会再触发一次
+  if (props.sqlLoading) {
+    stmtGlyphDecos = ed.deltaDecorations(stmtGlyphDecos, [])
+    return
+  }
+  const text = model.getValue() || sql.value || ''
+  const decos = splitSqlStatementRanges(text).map((r) => {
+    const p = model.getPositionAt(r.start)
+    const isErr = stmtErrorLines.has(p.lineNumber)
+    return {
+      range: { startLineNumber: p.lineNumber, startColumn: 1, endLineNumber: p.lineNumber, endColumn: 1 },
+      // 挂在**行号左侧的 glyph 边栏**：默认绿 ▶（可执行），报错行红 ▶（hover 看报错，点击重跑）
+      options: {
+        glyphMarginClassName: isErr ? 'sqlq-sql-run-glyph sqlq-sql-run-err' : 'sqlq-sql-run-glyph',
+        glyphMarginHoverMessage: isErr && stmtErrMsg
+          ? { value: '**SQL 执行失败**\n\n' + stmtErrMsg.replace(/\n/g, '\n\n') }
+          : { value: t('sqlq.stmtRunTip') },
+        stickiness: 1,
+        overviewRuler: null
+      }
+    }
+  })
+  stmtGlyphDecos = ed.deltaDecorations(stmtGlyphDecos, decos)
+}
+const runStatementAt = (lineNumber) => {
+  const ed = editorInstance
+  const model = ed && ed.getModel ? ed.getModel() : null
+  if (!ed || !model || running.value) return
+  const hit = splitSqlStatementRanges(model.getValue() || sql.value || '')
+    .map((r) => ({ r, p1: model.getPositionAt(r.start) }))
+    .find((x) => x.p1.lineNumber === lineNumber)
+  if (!hit) return
+  // **不走选区**：以前这里把语句 setSelection 再借「选中优先」执行 —— 但选区会一直留在
+  // 编辑器里（多行选区左缘顶到边栏，用户看到一条竖线，反馈"重新设计"）。改为直接把
+  // 这条语句塞给本次执行（stmtRunSql 在 getExecutableSql 里最优先），编辑器不动。
+  ed.revealLineInCenter(hit.p1.lineNumber)
+  stmtRunSql = hit.r.text
+  Promise.resolve(runSql()).finally(() => { stmtRunSql = null })
+}
+watch(() => props.sqlLoading, () => nextTick(updateStmtGlyphs))
+onBeforeUnmount(() => { if (stmtGlyphTimer) clearTimeout(stmtGlyphTimer) })
+// ===== 语句条的横向滚动：永远一行，放不下出 ‹ › 箭头（用户要求） =====
+const stmtStripEl = ref(null)
+const stmtScroll = ref({ left: false, right: false })
+const updateStmtScroll = () => {
+  const el = stmtStripEl.value
+  if (!el) {
+    stmtScroll.value = { left: false, right: false }
+    return
+  }
+  stmtScroll.value = {
+    left: el.scrollLeft > 1,
+    right: el.scrollLeft + el.clientWidth < el.scrollWidth - 1,
+  }
+}
+const scrollStmt = (dir) => {
+  const el = stmtStripEl.value
+  if (el) el.scrollBy({ left: dir * 240, behavior: 'smooth' })
+}
+// 语句数量变化 / 窗口宽度变化都要重算两端箭头的显隐
+watch(stmtBreadcrumbs, () => nextTick(updateStmtScroll))
+const onStmtResize = () => updateStmtScroll()
+onMounted(() => window.addEventListener('resize', onStmtResize))
+onBeforeUnmount(() => window.removeEventListener('resize', onStmtResize))
 const gotoStatement = (s) => {
   const ed = editorInstance
   const model = ed && ed.getModel()
@@ -2887,6 +2997,12 @@ const clearStmtError = () => {
     try { ed.deltaDecorations(stmtErrorDecorations, []) } catch { /* 编辑器可能已销毁 */ }
   }
   stmtErrorDecorations = []
+  // 错误行标记一并清掉（红 ▶ 恢复成绿 ▶，见 updateStmtGlyphs）
+  if (stmtErrorLines.size) {
+    stmtErrorLines = new Set()
+    stmtErrMsg = ''
+    updateStmtGlyphs()
+  }
 }
 /** 执行失败后定位出错语句：不整条爆红 —— 只在语句首行标红点（悬停看完整报错），
  *  且尽量把「报错里提到的标识符」（如 Unknown column 'j' 的 j）单独划红线。
@@ -2927,16 +3043,11 @@ const markErrorStatement = (res, stmtIndex, preferSql) => {
   }
   const msg = String(res?.message || '')
   const decos = []
-  // ① 语句首行 glyph 红点：入口指示，悬停显示完整报错（不遮正文）
-  decos.push({
-    range: { startLineNumber: startPos.lineNumber, startColumn: 1, endLineNumber: startPos.lineNumber, endColumn: 1 },
-    options: {
-      isWholeLine: true,
-      glyphMarginClassName: 'stmt-err-glyph',
-      glyphMarginHoverMessage: { value: '**SQL 执行失败**\n\n' + msg.replace(/\n/g, '\n\n') },
-      stickiness: 1
-    }
-  })
+  // ① 错误行指示：不再单独画红点（会和绿 ▶ 重叠）—— 改为把该行的 ▶ 染红
+  //    （见 updateStmtGlyphs 的 stmtErrorLines 分支）：hover 显示完整报错，点击重跑该条。
+  stmtErrorLines = new Set([startPos.lineNumber])
+  stmtErrMsg = msg
+  updateStmtGlyphs()
   // ② 精确到出错标识符：报错信息里第一个引号包住的词（如 'j'）在语句内按整词匹配
   const tm = /'([^'\n]{1,64})'/.exec(msg)
   if (tm && /[a-z_]/i.test(tm[1])) {
@@ -3114,7 +3225,10 @@ const notifyScriptsChanged = () => {
 
 const editorOptions = computed(() => ({
   automaticLayout: true,
-  // 左侧 glyphMargin：报错语句的红点指示画在这里
+  // 「生成 SQL」列加载中：编辑器**置灰不可编辑**（用户要求），列到了由父级
+  // 更新 initialSql 并把 sqlLoading 翻回 false —— 这里的 computed 会随之恢复可编辑
+  readOnly: props.sqlLoading,
+  // 左侧 glyphMargin：语句「▶ 执行」标记与报错红 ▶ 都画在这里（同一标记位，错误行染红）
   glyphMargin: true,
   // 空编辑器的引导提示（contrib/placeholderText）：一眼知道这里写什么、怎么执行
   placeholder: t('sqlq.editorPlaceholder'),
@@ -3263,10 +3377,38 @@ const decorateOnColumns = (cols, lineText, typedPrefix, aliasMap) => {
   return { list, otherPrefix: m[1], onStartCol: m.index + m[0].length + 1 }
 }
 
-const onEditorMount = (editor, monaco) => {
+const onEditorMount = (editor) => {
   editorInstance = editor
-  // 注册自定义补全提供者
-  if (monaco) {
+  // 语句级「▶ 执行」：点击行号左侧 glyph 边栏里的绿色标记只跑那一条。
+  // 注意：@guolao 封装的 @mount 回调在本项目配置下**不传第二个 monaco 参数**
+  // （实测 undefined，此前用 monaco.MouseTargetType 直接抛错被吞 = 点了没反应），
+  // 所以这里用数值字面量 2（= MouseTargetType.GUTTER_GLYPH_MARGIN，Monaco 0.56 定值），
+  // 并配 x 坐标兜底 —— gutter 命中时 target.position 也可能为 null，不能只信它。
+  editor.onMouseDown((e) => {
+    try {
+      const t = e?.target
+      if (!t) return
+      const layout = editor.getLayoutInfo()
+      const x = e?.event?.posx
+      const inGlyphByX = typeof x === 'number'
+        && x >= layout.glyphMarginLeft
+        && x < layout.glyphMarginLeft + layout.glyphMarginWidth
+      const GUTTER_GLYPH_MARGIN = 2
+      const inGlyph = t.type === GUTTER_GLYPH_MARGIN || inGlyphByX
+      if (!inGlyph) return
+      const line = t.position?.lineNumber ?? t.range?.startLineNumber
+      if (line) runStatementAt(line)
+    } catch { /* 判定失败不影响编辑器 */ }
+  })
+  editor.onDidChangeModelContent(() => {
+    clearTimeout(stmtGlyphTimer)
+    stmtGlyphTimer = setTimeout(updateStmtGlyphs, 350)
+  })
+  updateStmtGlyphs()
+  // 注册自定义补全/格式化 provider：**必须走 ensureMonaco()** —— @guolao 封装的 @mount
+  // 回调在本项目配置下不传 monaco 参数（实测 undefined），旧写法 `if (monaco)` 恒假，
+  // 补全与格式化 provider 从未注册过（静默失效）。ensureMonaco 是单例 Promise，直接拿现成的。
+  ensureMonaco().then((monaco) => {
     monacoProviders.push(monaco.languages.registerCompletionItemProvider('sql', {
       // 仅在点号处强制触发（库.schema.表 级联）；避免输入空格/换行时无谓弹出
       triggerCharacters: ['.'],
@@ -3520,7 +3662,7 @@ const onEditorMount = (editor, monaco) => {
 
     // 快捷键不再在此硬绑定：统一由下方 useShortcutScope 分发，
     // 键位可在「设置 → 快捷键」中自定义
-  }
+  }).catch(() => { /* monaco 加载失败时编辑器本身也会失败，这里不再重复报 */ })
 
   // 光标 / 选中状态，供底部状态栏显示
   editor.onDidChangeCursorPosition((e) => {
@@ -3822,6 +3964,8 @@ const onEdCtxItem = (item) => {
 // 编辑器选区，出现「明明跑的是全部，翻到第 2 页却只跑了选中片段」的错位。
 let lastExecSql = ''
 const getExecutableSql = (reuseLast = false) => {
+  // 语句级 ▶ 的本次执行：最优先 —— 点击绿 ▶ 只跑那一条，且不动编辑器选区
+  if (stmtRunSql) return stmtRunSql
   if (reuseLast && lastExecSql) return lastExecSql
   if (forceRunAll || !editorInstance) return sql.value.trim()
   const selection = editorInstance.getSelection()
@@ -3942,19 +4086,20 @@ const selectResultTab = (i) => {
   clearColSelect()
 }
 
-// ===== 生产库保护（生产库二次确认）=====
-// 与下面的「危险 SQL 确认」是**两条独立的闸**，别合并理解：
-// - 危险 SQL 确认看的是**语句**（DELETE/DROP/TRUNCATE），用户可以在设置里关掉（天天写生产的人会关）；
-// - 生产库确认看的是**连接**（环境标记为 PROD），只要在写就确认，**不跟随那个设置**
-//   —— 关掉前者是"我知道自己在写什么"，不该顺带失去后者这层兜底。
-const isProdConnection = () => String(props.conn?.env || '').toUpperCase() === 'PROD'
+// ===== 写语句识别 =====
+// 「写 SQL 拦截」看的是**语句**（见 WRITE_SQL_RE），执行前的拦截判定在 runSql 里走
+// guardConnWrite（只读连接一律拦；生产连接跟随「生产库保护」开关）。
+// 另有一条独立的「危险 SQL 确认」（DELETE/DROP/TRUNCATE…，设置里可关）仍在后面生效。
 const WRITE_SQL_RE = /^\s*(insert|update|delete|replace|merge|truncate|drop|alter|create|rename|grant|revoke|call|exec|execute|load\s+data|set\s+global)\b/i
 const isWriteSql = (text) => String(text || '')
   .split('\n')
   .map(line => line.replace(/--.*$/, '').trim())
   .filter(Boolean)
   .some(line => WRITE_SQL_RE.test(line))
-const firstSqlLine = (text) => String(text || '').split('\n').map(s => s.trim()).filter(Boolean)[0] || ''
+// NoSQL（Mongo/Redis）写命令识别：比 SQL 宽松 —— 方法名（insertOne/updateMany/drop…）
+// 与 Redis 写动词（SET/DEL/HSET/EXPIRE…）。只用于闸门判定：连接既非只读也未标生产时无感。
+const WRITE_NOSQL_RE = /\.(insert|insertone|insertmany|update|updateone|updatemany|replaceone|delete|deleteone|deletemany|remove|drop|renamecollection|createindex|createcollection|bulkwrite|findandmodify)\b|\b(set|setnx|setex|getset|getdel|del|unlink|hset|hsetnx|hmset|hdel|lpush|rpush|lpushx|rpushx|lset|linsert|ltrim|lpop|rpop|sadd|srem|spop|sinterstore|sunionstore|sdiffstore|zadd|zincrby|zrem|zremrangebyrank|zremrangebyscore|zinterstore|zunionstore|incr|incrby|incrbyfloat|decr|decrby|append|setrange|mset|msetnx|expire|pexpire|expireat|persist|rename|renamenx|flushdb|flushall|swapdb|move|migrate|restore|copy)\b/i
+const isWriteNoSql = (text) => WRITE_NOSQL_RE.test(String(text || ''))
 
 // ===== 写操作影响行预览：UPDATE/DELETE 执行前先算「将影响多少行」=====
 // DELETE → 直接包一层 COUNT；UPDATE → 截取 WHERE 段包 COUNT（字符串里再出现 where 的
@@ -4095,15 +4240,12 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
     }
   }
   lastExecSql = execSql
-  // 生产库保护：PROD 连接上写操作再确认一次（读操作不打扰）
-  if (!isNoSql.value && isProdConnection() && isWriteSql(execSql)) {
-    try {
-      await ElMessageBox.confirm(
-        '这条连接标记为「生产环境」，即将执行写操作：\n' + firstSqlLine(execSql) + '\n\n确认继续吗？',
-        t('sqlq.prodWriteTitle'),
-        { type: 'warning', confirmButtonText: t('sqlq.prodWriteConfirm'), cancelButtonText: t('tree.multiCancel'), closeOnClickModal: false, closeOnPressEscape: false }
-      )
-    } catch { return }
+  // 只读连接 / 生产库保护：写语句（含 NoSQL 的 Mongo/Redis 写命令）在**点击那一刻**就拦下
+  // （与「提交修改」、用户管理同一个闸门、同一款右上角通知）。只读一律拦；标注生产的连接
+  // 在「生产库保护」开启时拦（保护关掉就放行 —— 开关在 设置 → 安全与会话）。
+  if (isNoSql.value ? isWriteNoSql(execSql) : isWriteSql(execSql)) {
+    await loadProtectProd()
+    if (!guardConnWrite(selectedConn.value || props.conn || {}, t('sqlq.writeAct'))) return
   }
   // 查询设置t('settings.query.confirmDanger')：危险 SQL 二次确认（仅关系型数据库）。
   // 每次执行时实时读取，确保设置页保存后立即生效（querySettings 为 setup 时快照）
@@ -4980,6 +5122,14 @@ onBeforeUnmount(() => {
 .ai-act-btn-caret { font-size: 13px; color: var(--dc-text-weak); }
 .kbd { background: var(--dc-bg-soft); border: 1px solid var(--dc-border); border-radius: 4px; padding: 1px 5px; font-size: 11px; margin-left: 6px; }
 .editor-body { flex: 1; min-height: 0; padding: 6px; position: relative; }
+/* 「生成 SQL」列加载中：编辑器上方的半透明遮罩 + 提示文案（编辑器本身 readOnly 置灰） */
+.sql-loading-mask {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; align-items: center; justify-content: center;
+  background: color-mix(in srgb, var(--dc-bg-card) 62%, transparent);
+  color: var(--dc-text-mid); font-size: 13px; letter-spacing: .05em;
+  pointer-events: none;
+}
 /* 编辑器底部状态栏 */
 .editor-status {
   flex: 0 0 auto; display: flex; align-items: center; gap: 14px;
@@ -5317,6 +5467,25 @@ onBeforeUnmount(() => {
 </style>
 
 <style>
+/* 语句起始行在行号左侧 glyph 边栏里的「▶ 执行」标记：
+   挂在 Monaco 生成的 DOM 上，必须用全局样式。::before 画三角形，hover 提亮放大。
+   绿 = 可执行；红（.sqlq-sql-run-err）= 该条执行失败（hover 看报错，点击重跑）。 */
+.sqlq-sql-run-glyph::before {
+  content: '\25B6';
+  color: #16a34a;
+  font-size: 10px;
+  margin-left: 5px;
+  cursor: pointer;
+  transition: transform .12s, color .12s;
+  display: inline-block;
+}
+.sqlq-sql-run-glyph:hover::before {
+  color: #22c55e;
+  transform: scale(1.3);
+}
+.sqlq-sql-run-glyph.sqlq-sql-run-err::before { color: #dc2626; }
+.sqlq-sql-run-glyph.sqlq-sql-run-err:hover::before { color: #ef4444; transform: scale(1.3); }
+
 /* 结果表右键菜单（teleport 到 body，需全局样式） */
 .grid-ctx-menu {
   position: fixed; z-index: 3000; min-width: 168px;
@@ -5360,23 +5529,36 @@ onBeforeUnmount(() => {
 
 <!-- 报错语句标红 + 语句面包屑：decorations/chips 落在 Monaco 内部 DOM 与全局层，须用非 scoped 样式 -->
 <style>
-/* 报错语句：首行 glyph 红点（悬停显示完整报错）+ 出错标识符红波浪线 */
-.stmt-err-glyph {
-  background: radial-gradient(circle, #e34d4d 0 45%, transparent 50%);
-  cursor: pointer;
-}
+/* 报错语句：行内出错标识符红波浪线（行首的指示与绿 ▶ 合并为红 ▶，样式见 .sqlq-sql-run-err） */
 .stmt-err-token {
   text-decoration: underline wavy #e34d4d;
   text-underline-offset: 3px;
 }
 .stmt-bar {
-  display: flex; align-items: center; gap: 4px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;
   padding: 3px 8px; flex-shrink: 0;
   border-bottom: 1px solid var(--dc-border);
   background: var(--dc-bg-soft);
-  overflow-x: auto;
+  overflow: hidden;
 }
-.stmt-bar-label { font-size: 12px; color: var(--dc-text-dim); margin-right: 2px; white-space: nowrap; }
+.stmt-bar-label { font-size: 12px; color: var(--dc-text-dim); margin-right: 2px; white-space: nowrap; flex-shrink: 0; }
+/* 语句带：一行放多少是多少，超出横向滚（滚动条隐藏，用两端箭头导航） */
+.stmt-strip {
+  display: flex; align-items: center; gap: 4px;
+  flex: 1 1 auto; min-width: 0;
+  overflow-x: auto; scrollbar-width: none;
+}
+.stmt-strip::-webkit-scrollbar { display: none; }
+/* 两端 ‹ › 箭头：只在对应方向还有内容时出现 */
+.stmt-nav {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex-shrink: 0;
+  border: 1px solid var(--dc-border); border-radius: 9px;
+  background: var(--dc-bg-card); color: var(--dc-text-mid);
+  cursor: pointer;
+  transition: color .12s, border-color .12s;
+}
+.stmt-nav:hover { color: var(--dc-primary); border-color: var(--dc-primary); }
 .stmt-chip {
   font-size: 12px; line-height: 1; padding: 4px 8px;
   border: 1px solid var(--dc-border); border-radius: 10px;

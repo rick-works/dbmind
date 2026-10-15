@@ -1111,7 +1111,7 @@ const resetGeneral = () => {
 import { clearSchemaCache as clearLocalSchemaCache } from '../../utils/schemaCache'
 import DbLogo from '../../common/DbLogo.vue'
 import {
-  loadShortcuts, saveShortcuts, SHORTCUT_DEFS, SHORTCUT_GROUPS,
+  loadShortcuts, saveShortcuts, resetShortcutCache, SHORTCUT_DEFS, SHORTCUT_GROUPS,
   keysTokens, eventToKeys, setShortcutSuppressed
 } from '../../utils/shortcuts'
 import { APP_VERSION } from '../../version'
@@ -1732,6 +1732,9 @@ const saveSafety = async () => {
     await putSetting('tunnel.idleTimeoutSecs', Math.round(safetyForm.value.tunnelIdleMinutes) * 60)
     // 幂等接口，直接存，不为它维护「上次值」的状态
     await saveLegacyTls(safetyForm.value.allowLegacyTls)
+    // 广播给所有挂着的闸门（connGuard / MainView / 用户管理等）：立即重读开关，
+    // 不等各自的缓存 TTL 或页面重载 —— 否则关掉保护后马上点保存仍会被旧值拦下
+    window.dispatchEvent(new CustomEvent('dbmind-safety-changed'))
     ElMessage.success(t('settings.safety.msgSaved'))
   } catch (e) { ElMessage.error(t('settings.safety.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) })) }
 }
@@ -2159,6 +2162,8 @@ const beginRecordShortcut = (id) => {
     if (!keys) return // 纯修饰键（Ctrl/Shift/Alt 单独按下）忽略
     shortcutMap.value = { ...shortcutMap.value, [id]: keys }
     saveShortcuts(shortcutMap.value)
+    // 快捷键的消费方（useShortcutScope）读的是模块级缓存，不清的话改完要刷新才生效
+    resetShortcutCache()
     // 名称取自字典（键名由 id 派生）；万一 id 对不上就退回 id 本身，别显示空白
     const name = SHORTCUT_DEFS.some(d => d.id === id) ? t(`shortcut.${id}.label`) : id
     ElMessage.success(t('shortcut.msgChanged', { name, keys }))
@@ -2172,6 +2177,7 @@ const clearShortcut = (id) => {
   stopRecording()
   shortcutMap.value = { ...shortcutMap.value, [id]: '' }
   saveShortcuts(shortcutMap.value)
+  resetShortcutCache()
 }
 
 const resetAllShortcuts = () => {
@@ -2180,6 +2186,7 @@ const resetAllShortcuts = () => {
   SHORTCUT_DEFS.forEach(x => { d[x.id] = x.default })
   shortcutMap.value = d
   saveShortcuts(d)
+  resetShortcutCache()
   ElMessage.success(t('shortcut.msgReset'))
 }
 
