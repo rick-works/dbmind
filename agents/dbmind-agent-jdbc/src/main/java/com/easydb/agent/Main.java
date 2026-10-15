@@ -292,12 +292,19 @@ public final class Main {
         // 用户第一次点开「表结构」就撞在超时线上（报"agent 调用 columns 超过 30000 ms"）。
         // 这里在**建会话时**用一个不存在的表名把账提前付掉：getColumns 返回空、不报错，
         // 代价落在"正在连接"这一步（那一步本来就要等几秒），而不是元数据的 30 秒超时线上。
-        try (ResultSet warmUp = connection.getMetaData().getColumns(null, null, "DBMIND_META_WARMUP", "%")) {
-            while (warmUp.next()) {
-                // 不存在的表：这里只会是空集
+        //
+        // ⚠️ 只对 Oracle 做。这段曾经无条件执行，「Oracle 的药」被所有类型一起吃了：
+        // getColumns(null, …) 在 MySQL / SQL Server / ClickHouse 上各有实打实的代价
+        // （catalog=null 意味着跨库找这张不存在的表），而树展开一次要建几十个会话，
+        // 每个都付一次 —— 用户看到的就是「处理完 Oracle 的问题之后，所有库展开都变慢」。
+        if ("oracle".equals(agentKey)) {
+            try (ResultSet warmUp = connection.getMetaData().getColumns(null, null, "DBMIND_META_WARMUP", "%")) {
+                while (warmUp.next()) {
+                    // 不存在的表：这里只会是空集
+                }
+            } catch (Exception ignored) {
+                // 预热失败不影响任何功能
             }
-        } catch (Exception ignored) {
-            // 预热失败不影响任何功能
         }
         Session previous = SESSIONS.put(sessionId, new Session(sessionId, agentKey, url, connection));
         if (previous != null) {
