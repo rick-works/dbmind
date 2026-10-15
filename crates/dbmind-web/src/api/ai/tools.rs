@@ -28,7 +28,7 @@ use crate::api::ai::read_only;
 use crate::api::ai::AiRequest;
 use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
-use crate::api::meta::{rows_of, run_sql_in};
+use crate::api::meta::{rows_of, run_sql_in, run_sql_in_background};
 use crate::api::shape;
 use crate::api::{blocking, require_record};
 use crate::AppState;
@@ -123,7 +123,8 @@ pub async fn sql_try_run(
     let conn = need_conn(&req)?;
     let database = req.database.clone().unwrap_or_default();
     let limit = req.limit.unwrap_or(TRY_RUN_DEFAULT).clamp(1, TRY_RUN_MAX);
-    let result = run_sql_in(&state, &conn, &database, sql.clone(), limit as usize).await?;
+    // AI 试跑执行的是用户给的语句，可能很重：走独立会话键，不占元数据那条连接
+    let result = run_sql_in_background(&state, &conn, &database, sql.clone(), limit as usize).await?;
     Ok(Json(json!({
         "success": true,
         "result": shape::query_result_json(&result),

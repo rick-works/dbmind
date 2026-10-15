@@ -41,7 +41,7 @@ use serde_json::{json, Value};
 use crate::api::ai::tools::{columns_of, tables_of};
 use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
-use crate::api::meta::{rows_of, run_sql_in};
+use crate::api::meta::{rows_of, run_sql_in_background};
 use crate::api::require_record;
 use crate::api::shape;
 use crate::AppState;
@@ -604,7 +604,8 @@ async fn eval_rules(
             },
             RuleKind::Rows(condition) => {
                 let sql = format!("select count(*) as cnt from {table_quoted} where {condition}");
-                match run_sql_in(state, conn, database, sql, 1).await {
+                // 巡检的逐条件探测是后台批量：独立会话键，不占元数据那条连接
+                match run_sql_in_background(state, conn, database, sql, 1).await {
                     Ok(result) => {
                         // ⚠️ 取不到违规数时**绝不能当成 0**：0 的含义是"一条违规都没有"（规则通过），
                         // 而"取不到"必须报出去。以前这里写 `as_i64().unwrap_or(0)`，
@@ -637,7 +638,7 @@ async fn eval_rules(
                 probe,
                 violated,
                 label,
-            } => match run_sql_in(state, conn, database, probe, 1).await {
+            } => match run_sql_in_background(state, conn, database, probe, 1).await {
                 Ok(result) => {
                     let row = rows_of(&result).into_iter().next().unwrap_or_default();
                     let total = row.get("total").and_then(Value::as_f64).unwrap_or(0.0);
@@ -1029,7 +1030,8 @@ pub async fn violations(
         "select * from ({union}) dbmind_violations {}",
         dialect.limit_clause(offset, limit)
     );
-    let result = run_sql_in(&state, &conn, &database, paged, limit as usize).await?;
+    // 违规扫描的 union 分页查询可能很重：走独立会话键，不占元数据那条连接
+    let result = run_sql_in_background(&state, &conn, &database, paged, limit as usize).await?;
     // 按**结果列的位置**取值，而不是按名字查：
     // 首列在 SQL 里叫 `rule_name`、在界面上显示为「规则」，按名字查会全部取成 null
     let rows: Vec<Vec<Value>> = result
@@ -1042,7 +1044,7 @@ pub async fn violations(
     let need_total = req.with_total.unwrap_or(true);
     let total = if need_total {
         let count_sql = format!("select count(*) as cnt from ({union}) dbmind_violations");
-        match run_sql_in(&state, &conn, &database, count_sql, 1).await {
+        match run_sql_in_background(&state, &conn, &database, count_sql, 1).await {
             // 与 Err 分支同一口径：取不到就是「未知」(-1)，不要写 0 ——
             // 0 表示"一条违规都没有"，而这里恰恰是不知道有几条。
             Ok(result) => rows_of(&result)

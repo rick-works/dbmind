@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 use crate::api::ai::tools::{columns_of, tables_of};
 use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
-use crate::api::meta::{rows_of, run_sql_in};
+use crate::api::meta::{rows_of, run_sql_in_background};
 use crate::api::require_record;
 use crate::AppState;
 
@@ -269,7 +269,8 @@ async fn table_comments(
     let Some(sql) = dialect.table_comments(table).sql() else {
         return out;
     };
-    let Ok(result) = run_sql_in(state, conn, database, sql, 1000).await else {
+    // 治理是后台批量任务：整条链路走独立会话键，不占元数据那条连接
+    let Ok(result) = run_sql_in_background(state, conn, database, sql, 1000).await else {
         return out;
     };
     for row in rows_of(&result) {
@@ -365,7 +366,7 @@ pub async fn capacity(
     let mut note: Option<String> = None;
 
     if let Some(sql) = capacity_sql(dialect.kind.key()) {
-        match run_sql_in(&state, &conn, &database, sql.to_string(), MAX_TABLES_HARD).await {
+        match run_sql_in_background(&state, &conn, &database, sql.to_string(), MAX_TABLES_HARD).await {
             Ok(result) => {
                 size_supported = true;
                 for row in rows_of(&result) {
@@ -418,7 +419,7 @@ pub async fn capacity(
                     recounted += 1;
                     let count_sql = dialect.count_sql(&table);
                     if let Ok(result) =
-                        run_sql_in(&state, &conn, &database, count_sql, 1).await
+                        run_sql_in_background(&state, &conn, &database, count_sql, 1).await
                     {
                         if let Some(value) = rows_of(&result)
                             .first()
@@ -465,7 +466,7 @@ pub async fn capacity(
         // 表数上限（≤500）保证了最坏情况可控。
         for table in names.iter().take(MAX_TABLES_HARD) {
             let count_sql = dialect.count_sql(table);
-            let rows = match run_sql_in(&state, &conn, &database, count_sql, 1).await {
+            let rows = match run_sql_in_background(&state, &conn, &database, count_sql, 1).await {
                 Ok(result) => rows_of(&result)
                     .first()
                     .and_then(|row| row.values().next())
@@ -739,7 +740,7 @@ pub async fn impact(
             continue;
         };
         views_checked += 1;
-        if let Ok(result) = run_sql_in(&state, &conn, &database, sql, 20).await {
+        if let Ok(result) = run_sql_in_background(&state, &conn, &database, sql, 20).await {
             let mentions = rows_of(&result)
                 .iter()
                 .flat_map(|row| row.values())

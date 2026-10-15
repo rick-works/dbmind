@@ -336,7 +336,8 @@ pub async fn explain_sql(
         // 都不是「一句 EXPLAIN」能拿到的 —— 宁可不做，也不发一条会改会话状态的语句
         _ => return Ok(None),
     };
-    let result = crate::api::meta::run_sql_in(state, conn, database, statement, 200).await?;
+    // 聊天里执行的语句用户可给任意 SQL（可能很重）：走独立会话键，不占元数据那条连接
+    let result = crate::api::meta::run_sql_in_background(state, conn, database, statement, 200).await?;
     let rows = crate::api::meta::rows_of(&result);
     let text = rows
         .iter()

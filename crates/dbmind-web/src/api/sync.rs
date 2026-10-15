@@ -36,7 +36,7 @@ use std::sync::Arc;
 use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
 use crate::api::export::sql_literal;
-use crate::api::meta::run_sql_in;
+use crate::api::meta::{run_sql_in, run_sql_in_background};
 use crate::api::{blocking, require_record};
 use crate::AppState;
 
@@ -566,7 +566,8 @@ async fn fetch_page(
             }
         }
     };
-    let result = run_sql_in(state, conn, scope, sql, PAGE as usize).await?;
+    // 传输的**源端拉数**（一页一页翻到完）是长任务：走独立会话键，不占元数据那条连接
+    let result = run_sql_in_background(state, conn, scope, sql, PAGE as usize).await?;
     Ok(result.rows)
 }
 

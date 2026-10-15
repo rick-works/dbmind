@@ -92,24 +92,6 @@ pub async fn run_sql_in(
     run_sql_in_inner(state, conn, database, sql, max_rows, None).await
 }
 
-/// 同 [`run_sql_in`]，但带**独立的会话亲和键** —— 给「行数回填」这类后台批量任务用。
-///
-/// 回填一批要串行跑几十条 `COUNT(*)`，以前与表结构 / 表清单等元数据**共用同一个
-/// 会话键**（也就共用同一条 JDBC 连接）：树里把几个库都展开时，回填把连接占满，
-/// 用户点开「编辑表结构」的取列请求只能排在几十条 COUNT 后面 —— 服务器一忙就
-/// 撞上元数据 30 秒超时（真机回归：v1.2.28 修了预热与 ClickHouse 建连后仍复现）。
-/// 独立亲和键 ⇒ 独立物理会话 ⇒ 回填再忙也不堵用户的元数据请求。
-/// 代价是每个库多一条连接（一条给回填、一条给元数据），换来互不阻塞。
-async fn run_sql_in_background(
-    state: &AppState,
-    conn: &str,
-    database: &str,
-    sql: String,
-    max_rows: usize,
-) -> XResult<QueryResult> {
-    run_sql_in_inner(state, conn, database, sql, max_rows, Some("internal:rowcount")).await
-}
-
 async fn run_sql_in_inner(
     state: &AppState,
     conn: &str,
@@ -132,7 +114,9 @@ async fn run_sql_in_inner(
             timeout_ms: 120_000,
         },
         execution_id: None,
-        // 刻意**不**给会话亲和键，让它复用元数据那条会话。
+        // 刻意**不**给会话亲和键（`session: None`），让它复用元数据那条会话；
+        // 唯一的例外是 [`run_sql_in_background`]（行数回填）带独立键 `internal:rowcount` ——
+        // 回填几十条 COUNT 不能和用户的元数据请求挤同一条连接（见该函数注释）。
         //
         // 原来这里写的是 `Some("internal:browse")`，本意是「别和用户页签的会话抢」——
         // 那份隔离是对的（用户查询自带 key，仍互不干扰），但代价被低估了：
@@ -143,8 +127,6 @@ async fn run_sql_in_inner(
         //
         // 去掉之后两者共用一条会话（内核本来就是单连接泳道，同一会话上串行执行）。
         // 浏览类语句都是只读 SELECT，不会污染会话状态。
-        // 例外：[`run_sql_in_background`]（行数回填）带独立键 `internal:rowcount` ——
-        // 回填几十条 COUNT 不能和用户的元数据请求挤同一条连接（见该函数注释）。
         session: session.map(String::from),
         // 还要把只读标记对齐：结构浏览对这类库走的是**只读会话**
         // （`metadata_session_key` 里 `session_key(config, true)`），而 `execute` 缺省按
@@ -159,6 +141,23 @@ async fn run_sql_in_inner(
     };
     blocking(move || engine.execute(request, AccessContext::Web)).await
 }
+/// 同 [`run_sql_in`]，但带**独立的会话亲和键** —— 给「行数回填」这类后台批量任务用。
+/// 回填一批要串行跑几十条 `COUNT(*)`，以前与表结构 / 表清单等元数据**共用同一个
+/// 会话键**（也就共用同一条 JDBC 连接）：树里把几个库都展开时，回填把连接占满，
+/// 用户点开「编辑表结构」的取列请求只能排在几十条 COUNT 后面 —— 服务器一忙就
+/// 撞上元数据 30 秒超时（真机回归：v1.2.28 修了预热与 ClickHouse 建连后仍复现）。
+/// 独立亲和键 ⇒ 独立物理会话 ⇒ 回填再忙也不堵用户的元数据请求。
+/// 代价是每个库多一条连接（一条给回填、一条给元数据），换来互不阻塞。
+pub(crate) async fn run_sql_in_background(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+    sql: String,
+    max_rows: usize,
+) -> XResult<QueryResult> {
+    run_sql_in_inner(state, conn, database, sql, max_rows, Some("internal:rowcount")).await
+}
+
 
 /// 同 [`run_sql_in`]，但**跟随连接的读写策略**（`read_only: None`）——
 /// 给界面功能里那些**会写库**的语句用：还原、表结构编辑、清空/删除表、终止会话、建用户。
@@ -3443,20 +3442,28 @@ mod tests {
         assert_eq!(names[pick(&names, &values)], "whatever");
     }
 
+    /// 测试用的白名单：涵盖 SELECT/INSERT/UPDATE/DELETE/ALL PRIVILEGES。
+    fn 测试白名单(s: &str) -> bool {
+        matches!(
+            s.to_ascii_uppercase().as_str(),
+            "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "ALL PRIVILEGES"
+        )
+    }
+
     /// 权限名会被**拼进授权语句**，所以只认白名单：伪造值必须被拒，
     /// 而不是「拼进去试试」——拼错了就是授多了或授错了。
     #[test]
     fn 权限名只认白名单() {
         assert_eq!(
-            checked_privileges(Some(&json!(["select", "INSERT"]))).unwrap(),
+            checked_privileges(Some(&json!(["select", "INSERT"])), 测试白名单).unwrap(),
             vec!["SELECT", "INSERT"]
         );
-        assert!(checked_privileges(Some(&json!(["HACK; drop database dify"]))).is_err());
-        assert!(checked_privileges(Some(&json!(["TOTALLY_FAKE"]))).is_err());
-        assert!(checked_privileges(None).unwrap().is_empty());
+        assert!(checked_privileges(Some(&json!(["HACK; drop database dify"])), 测试白名单).is_err());
+        assert!(checked_privileges(Some(&json!(["TOTALLY_FAKE"])), 测试白名单).is_err());
+        assert!(checked_privileges(None, 测试白名单).unwrap().is_empty());
         // 表单的「全部权限」就是 ALL PRIVILEGES（合法写法）；与具体权限并列时归一成 ALL
         assert_eq!(
-            checked_privileges(Some(&json!(["ALL PRIVILEGES", "SELECT"]))).unwrap(),
+            checked_privileges(Some(&json!(["ALL PRIVILEGES", "SELECT"])), 测试白名单).unwrap(),
             vec!["ALL PRIVILEGES"]
         );
     }
@@ -3464,19 +3471,25 @@ mod tests {
     /// 库级/表级权限行：缺库名或表名的行直接跳过 —— 宁可少授，也不拼出半截 SQL。
     #[test]
     fn 权限行的解析与过滤() {
-        let rows = privilege_table_rows(Some(&json!([
-            { "database": "dify", "table": "boxoffice", "privileges": ["SELECT"] },
-            { "database": "dify", "privileges": ["SELECT"] }
-        ])))
+        let rows = privilege_table_rows(
+            Some(&json!([
+                { "database": "dify", "table": "boxoffice", "privileges": ["SELECT"] },
+                { "database": "dify", "privileges": ["SELECT"] }
+            ])),
+            测试白名单,
+        )
         .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "dify");
         assert_eq!(rows[0].1, "boxoffice");
 
-        let dbs = privilege_db_rows(Some(&json!([
-            { "database": "", "privileges": ["SELECT"] },
-            { "database": "dify", "privileges": ["SELECT", "UPDATE"] }
-        ])))
+        let dbs = privilege_db_rows(
+            Some(&json!([
+                { "database": "", "privileges": ["SELECT"] },
+                { "database": "dify", "privileges": ["SELECT", "UPDATE"] }
+            ])),
+            测试白名单,
+        )
         .unwrap();
         assert_eq!(dbs.len(), 1);
         assert_eq!(dbs[0].1, vec!["SELECT", "UPDATE"]);

@@ -30,7 +30,7 @@ use serde_json::{json, Map, Value};
 
 use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
-use crate::api::meta::run_sql_in;
+use crate::api::meta::{run_sql_in, run_sql_in_background};
 use crate::api::shape;
 use crate::api::{blocking, require_record};
 use crate::AppState;
@@ -522,7 +522,8 @@ fn spawn_side_stream(
                     format!("{sql}{glue} ({keyset}) order by {order_cols} limit {page_size}")
                 }
             };
-            match run_sql_in(&state, &conn, &scope, page_sql, page_size).await {
+            // 对比的对账拉数（一页页翻）是长任务：走独立会话键，不占元数据那条连接
+            match run_sql_in_background(&state, &conn, &scope, page_sql, page_size).await {
                 Ok(result) => {
                     if columns_out.is_none() {
                         columns_out = Some(result.columns.iter().map(|c| c.name.clone()).collect());

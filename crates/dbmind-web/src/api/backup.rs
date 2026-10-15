@@ -42,7 +42,7 @@ use crate::api::dialect::{Dialect, Meta};
 use crate::api::meta::pick_ddl;
 use crate::api::error::{XError, XResult};
 use crate::api::export::{ddl_of, sql_literal};
-use crate::api::meta::run_sql_in;
+use crate::api::meta::{run_sql_in, run_sql_in_background};
 use crate::api::tasks::{self, Artifact, Task};
 use crate::api::{blocking, require_record, Params};
 use crate::AppState;
@@ -1357,7 +1357,9 @@ async fn builtin_backup(
                     } else {
                         format!("select * from ({base}) dbmind_page {page}")
                     };
-                    let result = run_sql_in(state, conn, database, sql, batch).await?;
+                    // 备份是**长任务**（分批拉到完）：走独立会话键，不占元数据那条连接
+                    //（否则备份期间的结构浏览/表编辑全部排队，见 run_sql_in_background 注释）。
+                    let result = run_sql_in_background(state, conn, database, sql, batch).await?;
                     let got = result.rows.len();
                     for row in &result.rows {
                         let values: Vec<String> = row

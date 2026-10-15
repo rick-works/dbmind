@@ -1,5 +1,9 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.29": [
+        "In the dark theme the read-only / production standing notice is no longer a glaring bright-yellow band: its colors now come from per-theme variables (dark blends a low-opacity tint into the background with bright text; the light theme keeps the classic pale-yellow band). Applies to both the user page and the table editor",
+        "User management is now strictly connection-scoped: the list, forms and deletion no longer carry the database selected in the tree - this fixes a real-device failure where selecting a schema on Oracle and then switching the picker to MySQL sent that old name along and failed with Unknown database; selecting a data source (the connection node) in the tree is now enough, no need to drill down to a database level"
+    ],
     "v1.2.28": [
         "Fixed a regression of my own making: the metadata warm-up added while fixing Oracle was applied to every data source, so every new session on every database paid for a cross-schema lookup of a table that does not exist - expanding a database opens dozens of sessions, which showed up as every database getting slower to expand and the table editor taking forever. The warm-up now only runs on Oracle",
         "ClickHouse connections are back from 2.4 seconds to the 0.1-second range: the JDBC driver defaults to an Apache HttpClient code path that costs 2+ seconds per connection on Windows; switched to the driver built-in URLConnection path (fetching columns measured at 2.9s -> 0.2s)",

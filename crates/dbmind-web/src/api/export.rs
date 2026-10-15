@@ -42,7 +42,7 @@ use zip::{CompressionMethod, ZipWriter};
 
 use crate::api::dialect::{Dialect, Meta};
 use crate::api::error::{XError, XResult};
-use crate::api::meta::{rows_of, run_sql_in};
+use crate::api::meta::{rows_of, run_sql_in, run_sql_in_background};
 use crate::api::shape;
 use crate::api::tasks::{self, Artifact, Task};
 use crate::api::xlsx::{SheetSpec, Workbook};
@@ -1149,7 +1149,9 @@ async fn export_query(
         }
         let sql = paging_sql(&base, offset, page_size, dialect);
         let t_fetch = std::time::Instant::now();
-        let result = run_sql_in(state, id, &req.database, sql, page_size as usize).await?;
+        // 导出是**长任务**（一页一页拉到完）：走独立会话键，不占元数据那条连接 ——
+        // 否则导出大表期间「编辑表结构 / 树展开」的取列请求全部排在后面（30 秒超时）。
+        let result = run_sql_in_background(state, id, &req.database, sql, page_size as usize).await?;
         if profile {
             fetch_ms += t_fetch.elapsed().as_secs_f64() * 1000.0;
         }
@@ -1459,7 +1461,7 @@ where
             task.check_canceled().map_err(XError::internal)?;
         }
         let sql = paging_sql(&base, offset, page_size, dialect);
-        let result = match run_sql_in(state, id, &req.database, sql, page_size as usize).await {
+        let result = match run_sql_in_background(state, id, &req.database, sql, page_size as usize).await {
             Ok(result) => result,
             Err(err) => {
                 // 单张表失败不该让整库转储作废：记下来继续，最后统一汇报
