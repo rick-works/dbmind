@@ -693,6 +693,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.30（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.30</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-16</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>用户管理权限矩阵全面增强</b>：所有数据库、所有权限项的列头都带中文小字说明（含 ClickHouse 全套权限、各外部数据源、SQL Server ANY 系列），不用再猜英文权限名</li>
+            <li><b>ClickHouse 用户支持表/视图级授权：新增「表权限」页签，选库选表勾权限即可生成 GRANT … ON 库.表；数据库权限的分组计数分母不再显示 0</b></li>
+            <li><b>权限列头小字从 10px 放大到 11px，更易读；动态出现的未知权限名也有兜底说明（动词 + 名词自动组词）</b></li>
+            <li><b>MySQL 5.7 兼容</b>：服务器是 5.7 时自动隐藏 CREATE ROLE / DROP ROLE（8.0 才有，勾上保存必报 1064 语法错）</li>
+            <li><b>修复编辑表结构 / 树展开等元数据调用在首次之后无限排队、30 秒超时的问题（内嵌 agent 的会话锁泄漏）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.30" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.30" target="_blank" rel="noopener">下载 v1.2.30</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.29（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +723,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.29</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-15</span>
           </div>
           <ul class="rel-notes">
