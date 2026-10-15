@@ -24,6 +24,7 @@ go.txt
 .export-broken.bak
 .i18n-pairs*.txt
 .i18n-apply.ps1
+_uitest/
 
 # 编辑器 / 系统
 .idea/
