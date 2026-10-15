@@ -1878,6 +1878,7 @@ export default {
   'settings.about.rel1.date': '2026-10-15',
   'settings.about.rel1.note1': '深色主题下，只读 / 生产的常驻提示条不再是一条刺眼的亮黄带：配色改为分主题取值（深色下融进底色的低透明度 + 亮字，浅色主题维持原来的浅黄底深字），用户管理页与编辑表结构页同时生效',
   'settings.about.rel1.note2': '用户管理彻底连接级化：清单、表单、删除不再带着树里选中的库名 —— 修一个真机报错（树里选着 Oracle 的库、下拉切到 MySQL，请求还带着那个库名，报 Unknown database \'free.system\'）；同时树里选中数据源（连接节点）就能打开对应的用户管理，不需要选到数据库层级',
+  'settings.about.rel1.note3': '一批「长任务」不再与用户的元数据请求挤同一条数据库连接：导出、备份、数据传输、数据对比、AI 试跑、质量巡检、治理扫描、行数回填现在各走独立连接 —— 树里多库展开或跑大任务时，编辑表结构 / 树展开不再排在几十条重查询后面转半天，然后报 30 秒超时',
   'settings.about.rel2.version': 'v1.2.28',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-10-15',

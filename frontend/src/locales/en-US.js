@@ -1868,6 +1868,7 @@ export default {
   'settings.about.rel1.date': '2026-10-15',
   'settings.about.rel1.note1': 'In the dark theme the read-only / production standing notice is no longer a glaring bright-yellow band: its colors now come from per-theme variables (dark blends a low-opacity tint into the background with bright text; the light theme keeps the classic pale-yellow band). Applies to both the user page and the table editor',
   'settings.about.rel1.note2': 'User management is now strictly connection-scoped: the list, forms and deletion no longer carry the database selected in the tree - this fixes a real-device failure where selecting a schema on Oracle and then switching the picker to MySQL sent that old name along and failed with Unknown database; selecting a data source (the connection node) in the tree is now enough, no need to drill down to a database level',
+  'settings.about.rel1.note3': 'Long-running tasks no longer share the metadata connection: export, backup, data transfer, compare, AI trial runs, quality scans, governance scans and row-count backfill now each use their own JDBC session, so expanding several databases or running a big job no longer makes the table editor and the tree wait behind dozens of heavy queries and hit the 30-second timeout',
   'settings.about.rel2.version': 'v1.2.28',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-10-15',
