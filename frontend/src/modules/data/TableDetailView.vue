@@ -17,6 +17,13 @@
       </div>
     </div>
 
+    <!-- 只读 / 生产保护的常驻提示：**在动手改之前**就说明"这次保存会被拦下"——
+         与用户管理页是同一条提示、同一形态（点「保存修改」时的拦截通知是同一件事的第二处）。 -->
+    <div v-if="guardHint" class="ted-guard">
+      <span class="ted-guard-mark">!</span>
+      <span>{{ guardHint }}</span>
+    </div>
+
     <!-- 主体：左编辑 + 右预览 -->
     <div class="form-tab-body">
       <!-- 左侧编辑区 -->
@@ -437,8 +444,21 @@ import { Plus, Delete, Refresh, CopyDocument, CaretRight, Grid, DocumentCopy, St
 import { listColumns, listIndexes, listTables, alterTable, getFeatures, executeSql, getTableDdl, getTableCounts } from '../../api'
 import { mergeAlterRuns } from './alterMerge'
 import { canonTypeBase } from './typeName'
+// 只读 / 生产保护的口径（与用户管理页、MainView 同一份，见 utils/connGuard.js）
+import { isProdConn, loadProtectProd } from '../../utils/connGuard'
 
 const props = defineProps({ conn: Object, database: String, table: String })
+
+// 只读 / 生产保护的**常驻提示**：非空 = 这个数据源上的结构变更会被拦下（查看不受影响）。
+// 与用户管理页同一条口径 —— 进页面就知道，而不是改完点「保存修改」才被后端拒。
+const prodProtect = ref(true)
+const guardHint = computed(() => {
+  const c = props.conn
+  if (!c) return ''
+  if (prodProtect.value && isProdConn(c)) return t('tdet.guardTipProd')
+  if (c.readOnly) return t('tdet.guardTipReadOnly')
+  return ''
+})
 
 // ==================== 方言能力（features 由后端下发） ====================
 
@@ -1959,6 +1979,9 @@ let loadSeq = 0
 const load = async () => {
   const seq = ++loadSeq
   loading.value = true
+  // 生产保护开关（缺省为开，与后端 seed_settings 一致）：与结构数据一起刷新。
+  // 接口自己有 30 秒缓存，所以这一跳不会真的每次多一次往返。
+  prodProtect.value = await loadProtectProd()
   ddlMode.value = false
   ddlText.value = ''
   try {
@@ -2261,6 +2284,27 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .header-title .header-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .header-icon { color: var(--dc-primary); flex-shrink: 0; }
 .header-actions { display: flex; gap: 6px; flex-shrink: 0; }
+/* 只读 / 生产 的常驻提示条：与用户管理页同一形态 —— 与上面那张卡同一圈缝、同一圆角，
+   橙色描边 + 浅底（不是红色：这不是"出错了"，是"这里的改动会被拦下"）。 */
+.ted-guard {
+  display: flex; align-items: center; gap: 7px;
+  margin: 5px 0 0;
+  padding: 6px 11px;
+  border: 1px solid var(--el-color-warning-light-5, #f3d19e);
+  border-radius: 8px;
+  background: var(--el-color-warning-light-9, #fdf6ec);
+  color: var(--el-color-warning-dark-2, #b88230);
+  font-size: 12.5px;
+  line-height: 1.5;
+  flex-shrink: 0;
+}
+.ted-guard-mark {
+  flex: none;
+  width: 15px; height: 15px; line-height: 15px; text-align: center;
+  border-radius: 50%;
+  background: var(--el-color-warning, #e6a23c);
+  color: #fff; font-size: 11px; font-weight: 700;
+}
 
 /* 编辑区在上、SQL 预览在下（原来预览是右侧 380px 固定栏）。
    纵向堆叠后两者都按 flex 分配高度，因此都必须是可收缩的（min-height: 0）。 */

@@ -2519,6 +2519,10 @@ export default {
   'tdet.rebuildFailed': 'Failed to rebuild the index: {detail}',
   'tdet.dorisNoColProps': '[Doris] Column properties could not be read, so MODIFY will omit the aggregation type (Doris will then report "Can not change aggregation type")',
   'tdet.loadSchemaFailed': 'Failed to load the table structure: {detail}',
+  // Standing notice for read-only / production connections (same wording as the user page:
+  // you learn that this save will be blocked before you start editing)
+  'tdet.guardTipProd': 'This data source is marked Production and production protection is on: structure changes will be blocked (viewing the structure is not affected).',
+  'tdet.guardTipReadOnly': 'This data source is a read-only connection: structure changes will be blocked (viewing the structure is not affected).',
   'tdet.resetDone': 'Reset to the current database structure',
   'tdet.prodAlterTitle': 'Confirm a structure change on production',
   'tdet.prodAlterBody': 'This connection is marked as production and you are about to change the structure:\n{summary}\n\nContinue?',

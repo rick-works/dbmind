@@ -2528,6 +2528,9 @@ export default {
   'tdet.rebuildFailed': '重建索引失败：{detail}',
   'tdet.dorisNoColProps': '[Doris] 未取到列属性，MODIFY 不会带聚合类型（Doris 会因此报 Can not change aggregation type）',
   'tdet.loadSchemaFailed': '加载表结构失败：{detail}',
+  // 只读 / 生产 的常驻提示（与用户管理页同一条口径：进页面就知道这次保存会被拦）
+  'tdet.guardTipProd': '该数据源标注为生产环境，且「生产库保护」已开启：结构变更会被拦下（查看结构不受影响）。',
+  'tdet.guardTipReadOnly': '该数据源是只读连接：结构变更会被拦下（查看结构不受影响）。',
   'tdet.resetDone': '已重置为数据库当前结构',
   'tdet.prodAlterTitle': '生产库结构变更确认',
   'tdet.prodAlterBody': '这条连接标记为「生产环境」，即将执行结构变更：\n{summary}\n\n确认继续吗？',
