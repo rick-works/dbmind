@@ -29,7 +29,13 @@ jdbc:
   # 这条上限不能不要：不设时服务端会把整表流下来（实测 237 万行），而驱动在长结果流上的
   # RowBinary 解析会错位，抛出「Failed to read boolean value, expect 0 (false) or 1 (true)
   # but we got: 105」这种完全对不上号的报错。
-  urlTemplate: "jdbc:clickhouse://{host}:{port}/{database}?compress=0&result_overflow_mode=break"
+  # http_connection_provider=HTTP_URL_CONNECTION：驱动默认走 Apache HttpClient 5，
+  # 而那条路在 Windows 上**每次建连固定多 2 秒以上**（真机实测 2.3~2.8s，同一台机器上
+  # curl 0.1s、JDK HttpClient 0.05~0.19s、URLConnection 0.08~0.17s —— 网络与服务器都快，
+  # 时间全花在 Apache 那条路的连接初始化里）。树展开要发几十个请求（表清单 + 逐张 COUNT(*)），
+  # 每个都要新建会话 ⇒ 表现成「左侧树转半天」「表结构 30 秒超时」。换 URLConnection 路径后
+  # 建连回到 0.1s 级（DBMind 只用普通 query / 元数据，没用到 Apache 路径的独有特性）。
+  urlTemplate: "jdbc:clickhouse://{host}:{port}/{database}?compress=0&result_overflow_mode=break&http_connection_provider=HTTP_URL_CONNECTION"
   # artifact **必须带 `all` 分类器**：默认包是瘦包（1 MB），缺 slf4j /
   # clickhouse-http-client 等传递依赖，装载时直接 NoClassDefFoundError:
   # org/slf4j/LoggerFactory（实测），而「驱动已就绪」只看 jar 在不在 ——
