@@ -31,8 +31,10 @@
 
 ## 安装包
 
-> 这一段由 `node scripts/fill-release-assets.mjs <版本>` 生成（顺序固定：Windows → macOS → Linux，
-> 只列该版本实际发出来的文件，体积取自 Release API）。手别改，改了下次跑脚本会被覆盖。
+> 这一段由 `node scripts/sync-release-notes.mjs <版本>` 一并生成（顺序固定：Windows → macOS → Linux，
+> 只列该版本实际发出来的文件，体积取自 Release API 的 assets）。手别改，改了下次跑脚本会被覆盖。
+> 注意：只有 CI 出完包（或本机 release.ps1 出完包、Release 已挂上资产）之后跑，表格才有体积；
+> 打标签前那次同步会提示「读不到 Release 资产，保留原有表格」，属正常。
 
 | 平台 | 文件 | 形态与适用场景 | 大小 |
 |---|---|---|---|
