@@ -127,6 +127,8 @@ release.ps1 -SkipBuild         # reuse compiled artifacts
 
 Artifacts land in `dist\`: `dbmind-<version>\` (portable dir), `*-portable.zip`, `installer\*.msi / *-setup.exe`, `SHA256SUMS.txt`.
 
+> **Releases go through CI** (recommended). The complete checklist — how to pick the version level, what `release.mjs` rewrites, why the highlights must be committed *before* tagging, backfilling the Release body and website after CI, syncing the Homebrew cask, and what to verify — lives in [`docs/build.md`](docs/build.md) (Chinese). Local `release.ps1` is only the offline fallback.
+
 ### CI: all platforms, every variant
 
 `.github/workflows/release.yml` runs on a `v*` tag push (or manually with a `tag` input) and attaches every platform's packages to the same Release:

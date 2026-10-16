@@ -137,6 +137,8 @@ release.ps1 -SkipBuild         # 复用已有编译产物
 
 产物集中在 `dist\`：`dbmind-<版本>\`（绿色版目录）、`*-portable.zip`（绿色版整包）、`installer\*.msi / *-setup.exe`（安装包）、`SHA256SUMS.txt`。
 
+> **发版走 CI**（推荐）：完整流程 —— 版本级别怎么选、`release.mjs` 改哪 6 处、要点为什么必须在打标签前落进代码、CI 完成后回填 Release 正文与官网、同步 Homebrew cask、验证清单 —— 见 [`docs/build.md` 的发版流程一节](docs/build.md#发版流程一步不落)。本机 `release.ps1` 只是断网/CI 不可用时的备用出包。
+
 ### CI：全平台、各版本形态齐全
 
 `.github/workflows/release.yml` 在推 `v*` 标签时触发（也可手动触发并指定 `tag`），把各平台的包挂到同一个 Release：
