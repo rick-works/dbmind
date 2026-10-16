@@ -504,6 +504,12 @@
                              :focus-kb-id="pendingKbFocus" @focus-done="pendingKbFocus = ''" />
             <!-- 监控工作台：关键指标卡片 + 锁等待/会话/慢查询/表空间/关键参数，支持终止会话 -->
             <MonitorPanel v-else-if="tab.type === 'monitor'" :conn-id="tab.connId" :database="tab.database" />
+            <!-- 对象清单：双击树上的类别节点（表/视图/存储过程/函数/触发器/事件/脚本）打开，
+                 表格列出全部对象 + 末尾操作栏；动作回到 MainView 复用右键菜单同款实现 -->
+            <ObjectListView v-else-if="tab.type === 'catlist'" :conn="connFor(tab.connId)" :cat="tab.cat"
+                            :database="tab.database" :conn-id="tab.connId" :reload-tick="catListReloadTick"
+                            :connections="allConnections" :dbs-by-conn="dbsByConn"
+                            @act="(e) => onCatListAct(tab, e)" />
           </el-tab-pane>
         </el-tabs>
       </main>
@@ -1182,7 +1188,7 @@ import { buildCatChildren, buildObjectCategories, isFunctionRoutine, TREE_FIRST_
 import { t, tMsg } from '../../utils/i18n'
 import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
-import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor } from '@element-plus/icons-vue'
+import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch } from '@element-plus/icons-vue'
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { compareTaskStatus, compareCancel, syncCancel, getSettings } from '../../api'
@@ -1676,6 +1682,7 @@ const AiGovernanceDialog = defineAsyncComponent(() => import('../ai/AiGovernance
 const MonitorPanel = defineAsyncComponent(() => import('./MonitorStudio.vue'))  // 监控工作台（tab 全屏版）
 const KnowledgeStudio = defineAsyncComponent(() => import('../knowledge/KnowledgeStudio.vue'))
 const CommandPalette = defineAsyncComponent(() => import('../ai/CommandPalette.vue'))
+const ObjectListView = defineAsyncComponent(() => import('./ObjectListView.vue'))  // 对象清单（双击类别节点）
 
 const route = useRoute()
 const router = useRouter()
@@ -5013,8 +5020,12 @@ const onTreeDoubleClick = async (e) => {
   // 连接节点统一由单击处理（打开/展开/收起），双击不再单独处理
   if (data.kind === 'conn') return
   // 目录节点双击已由 onNodeClick 处理展开/收起，这里跳过（Redis db 除外）
-  if (data.kind === 'env-folder' || data.kind === 'schema' || data.kind === 'category'
-      || data.kind === 'catalog') {
+  // 例外：对象类别节点（表/视图/存储过程/函数/触发器/事件/脚本）双击 = 打开对象清单页签
+  if (data.kind === 'category') {
+    openCatList(data)
+    return
+  }
+  if (data.kind === 'env-folder' || data.kind === 'schema' || data.kind === 'catalog') {
     return
   }
   if (data.kind === 'db' && data.connType !== 'REDIS') {
@@ -5106,6 +5117,139 @@ const openNoSql = (data) => {
     id: tabKey('nosql:' + data.collection, cid), type: 'nosql', collection: data.collection,
     database: data.database, kind: data.kind, connId: cid, label: data.collection
   })
+}
+
+// ===== 对象清单页签（双击树上的类别节点）=====
+// 类别节点：单击仍是展开/收起；双击在这里开一张「对象清单」页签 —— 表格列出该类别
+// 全部对象 + 末尾操作栏，行双击执行该类别最常用的动作（详见 ObjectListView）。
+const openCatList = (data) => {
+  const cid = String(data.connId || currentConnId.value || '')
+  const db = data.db || currentDb.value
+  // 树节点的 label 是英文字面量（树上渲染时才走 i18nKey），页签标题要本地化：
+  // 优先 i18nKey，回退到 objCatLabel 的口径（CH 的 procs 显示为「函数」）
+  const label = data.i18nKey ? t(data.i18nKey) : objCatLabel(data.cat, connTypeOf(cid))
+  openTab({
+    id: tabKey('catlist:' + data.cat + ':' + db, cid), type: 'catlist', cat: data.cat,
+    database: db, connId: cid, label
+  })
+}
+
+// 清单页的操作/行双击 → 复用右键菜单同款打开逻辑。node 是按清单行**伪造的树节点**
+//（与树节点同形状：kind/objectKind/table/objectName/db/connId/label），
+// 这样 openTable / openDetail / openObject / objEditScript 这些既有函数可以直接吃。
+const CAT_KIND = { tables: 'table', views: 'view', procs: 'procedure', functions: 'function', triggers: 'trigger', events: 'event' }
+// 删除成功后让清单自动重载（组件 watch 这个 tick）
+const catListReloadTick = ref(0)
+const onCatListAct = async (tab, e) => {
+  const { action, row } = e || {}
+  if (!row) return
+  // 连接/库优先用**页内当前**值（组件顶部下拉可能已切换），回退到页签自身的
+  const cid = String(e.connId || tab.connId || currentConnId.value || '')
+  const db = e.database || tab.database || currentDb.value
+  if (tab.cat === 'scripts') {
+    if (action === 'open') openScript({ connId: cid, db, scriptId: row.id, label: row.name })
+    // 脚本存在 localStorage：删除就是删本地那条记录（与树右键「删除脚本」同一函数），
+    // 不走 guardWrite（没碰数据库），确认框用脚本专用的文案
+    if (action === 'drop') {
+      try {
+        await ElMessageBox.confirm(
+          t('mv.deleteScriptBody', { name: row.name }), t('mv.deleteScriptTitle'),
+          { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
+        )
+      } catch { return }
+      deleteScriptNode({ connId: cid, db, scriptId: row.id, label: row.name })
+      catListReloadTick.value++
+    }
+    return
+  }
+  const kind = CAT_KIND[tab.cat] || 'table'
+  const node = { kind, objectKind: kind, table: row.name, objectName: row.name, label: row.name, db, connId: cid }
+  if (action === 'data') {
+    await openTable(node)
+  } else if (action === 'structure') {
+    await openDetail(node)
+  } else if (action === 'view') {
+    if (tab.cat === 'views') {
+      // 视图与右键菜单同款：打开对象定义页（SHOW CREATE VIEW）
+      openTab({
+        id: tabKey('object:view:' + row.name, cid), type: 'object', objectType: 'view',
+        objectName: row.name, connId: cid, database: db, label: row.name + t('mv.definitionSuffix')
+      })
+    } else {
+      openObject(node, kind, row.name)
+    }
+  } else if (action === 'edit') {
+    // objEditScript 从 ctxMenu.data 取节点：放进去再调，等价于在该对象上点右键「编辑」
+    ctxMenu.value.data = node
+    await objEditScript()
+  } else if (action === 'ddl') {
+    try {
+      const res = await getTableDdl(cid, db, row.name)
+      ctxDdl.value = res.ddl || ''
+      ctxDdlVisible.value = true
+    } catch (err) {
+      ElMessage.error(t('mv.ddlFailed', { detail: errMsg(err) }))
+    }
+  } else if (action === 'drop' && tab.cat !== 'tables') {
+    // 视图 / 存储过程 / 函数 / 触发器 / 事件：**复用树右键「删除」那一套**
+    //（DROP 按对象种类与方言生成、IF EXISTS 规则、详情页签与树节点的收尾都在 doDropObject 里），
+    // 不在这里另写一份 —— 两份实现早晚会漂开，而 DROP 是删数据的事，漂开的代价最大。
+    if (!guardWrite(cid, t('common.delete'))) return
+    const ok = await confirmDropObject(node, db)
+    if (ok) catListReloadTick.value++   // 删掉的那一行从清单里消失（组件 watch 这个 tick）
+  } else if (action === 'drop') {
+    // 与树上右键「删除表」同一套闸门与确认：先过只读/生产保护，再弹红色确认框。
+    // 清单页是多行环境，误触概率比右键高 —— 确认必须走，且文案带全限定名。
+    if (!guardWrite(cid, t('mv.dropTableTitle'))) return
+    try {
+      await ElMessageBox.confirm(
+        t('mv.dropTableBody', { name: db ? db + '.' + row.name : row.name }),
+        t('mv.dropTableTitle'),
+        { type: 'error', confirmButtonText: t('mv.dropConfirm'), cancelButtonText: t('common.cancel') }
+      )
+    } catch { return }
+    try {
+      const res = await tableAction(cid, db, row.name, 'drop')
+      if (res.success) {
+        ElMessage.success(tMsg(res.message) || t('mv.opSuccess', { label: t('mv.dropTableTitle') }))
+        catListReloadTick.value++
+        // 该表的数据/结构页签一并关掉（与树上删除同一处理）
+        const idx = tabs.value.findIndex(tb => (tb.type === 'table' || tb.type === 'detail') && tb.table === row.name && (tb.database || currentDb.value) === db && String(tb.connId || '') === cid)
+        if (idx !== -1) tabs.value.splice(idx, 1)
+        if (!tabs.value.find(tb => tb.id === activeTab.value)) {
+          activeTab.value = tabs.value[tabs.value.length - 1]?.id || ''
+        }
+      } else {
+        ElMessage.error(tMsg(res.message) || t('mv.opFail', { label: t('mv.dropTableTitle') }))
+      }
+    } catch (err) {
+      ElMessage.error(errMsg(err))
+    }
+  } else if (action === 'indexes') {
+    // 与 ctxShowIndexes 同一套状态与过滤（索引清单各库列名不一，按「任一字段=表名」过滤）
+    ctxIndexTable.value = row.name
+    ctxIndexCols.value = []
+    ctxIndexRows.value = []
+    ctxIndexVisible.value = true
+    ctxIndexLoading.value = true
+    try {
+      const res = await listIndexes(cid, db)
+      const rws = Array.isArray(res?.rows) ? res.rows : (Array.isArray(res) ? res : [])
+      const cols = (Array.isArray(res?.columns) && res.columns.length) ? res.columns : Object.keys(rws[0] || {})
+      let filtered = rws.filter(r => Object.values(r || {}).some(v => String(v) === row.name))
+      if (!filtered.length) {
+        const low = String(row.name).toLowerCase()
+        filtered = rws.filter(r => Object.values(r || {}).some(v => String(v).toLowerCase().includes(low)))
+      }
+      ctxIndexCols.value = cols
+      ctxIndexRows.value = filtered
+    } catch (err) {
+      ctxIndexVisible.value = false
+      ElMessage.error(t('mv.loadIndexesFailed', { detail: errMsg(err) }))
+    } finally {
+      ctxIndexLoading.value = false
+    }
+  }
 }
 
 const openRedisDb = (data) => {
@@ -6601,6 +6745,14 @@ const tabIcon = (tab) => {
       return Edit
     case 'er': return Connection                       // ER 图
     case 'monitor': return Timer                       // 监控
+    // 对象清单：图标跟类别走（与树上类别图标同一套语义）
+    case 'catlist':
+      if (tab.cat === 'tables') return Grid
+      if (tab.cat === 'views') return View
+      if (tab.cat === 'procs' || tab.cat === 'functions') return SetUp
+      if (tab.cat === 'triggers') return Stopwatch
+      if (tab.cat === 'events') return Timer
+      return Document
     case 'ai': return MagicStick                       // AI 助手
     case 'knowledge': return Reading                   // 知识库
     default: return Document
@@ -6983,22 +7135,28 @@ const onUserFormSaved = () => {
   userListTick.value += 1
 }
 
+/** 对象删除的**确认框**（树右键与「对象清单页」共用）：文案按对象种类给，
+ *  确认后交给 doDropObject 生成 DROP 并收尾。返回 Promise<boolean>（真删了才算 true）。 */
+const confirmDropObject = (d, db) => {
+  const map = {
+    view: t('mv.catView'), function: t('mv.catFunc'), procedure: t('mv.catProc'),
+    trigger: t('mv.catTrigger'), event: t('mv.catEvent')
+  }
+  const label = map[d.objectKind] || t('mv.catObject')
+  return ElMessageBox.confirm(
+    t('mv.deleteItemBody', { kind: label, name: d.label }),
+    t('mv.deleteKindTitle', { kind: label }),
+    { type: 'error', confirmButtonText: t('mv.dropConfirm'), cancelButtonText: t('common.cancel') }
+  ).then(() => doDropObject(d, db, label)).catch(() => false)
+}
+
 const objDrop = () => {
   const d = ctxMenu.value.data
   if (!d) return
   const db = d.db || currentDb.value
   if (!guardWrite(d.connId || currentConnId.value, t('common.delete'))) { closeCtxMenu(); return }
   closeCtxMenu()
-  const map = {
-    view: t('mv.catView'), function: t('mv.catFunc'), procedure: t('mv.catProc'),
-    trigger: t('mv.catTrigger'), event: t('mv.catEvent')
-  }
-  const label = map[d.objectKind] || t('mv.catObject')
-  ElMessageBox.confirm(
-    t('mv.deleteItemBody', { kind: label, name: d.label }),
-          t('mv.deleteKindTitle', { kind: label }),
-    { type: 'error', confirmButtonText: t('mv.dropConfirm'), cancelButtonText: t('common.cancel') }
-  ).then(() => doDropObject(d, db, label)).catch(() => {})
+  confirmDropObject(d, db)
 }
 
 const doDropObject = async (d, db, label) => {
@@ -7039,10 +7197,11 @@ const doDropObject = async (d, db, label) => {
       const cat = catMap[d.objectKind]
       if (cat) refreshCatNode(db, cat)
       else refreshDbNode(db)
-    } else {
-      ElMessage.error(t('mv.deleteFailed', { detail: (res.message || t('common.unknownError')) }))
+      return true
     }
+    ElMessage.error(t('mv.deleteFailed', { detail: (res.message || t('common.unknownError')) }))
   } catch (e) { ElMessage.error(t('mv.deleteFailed', { detail: errMsg(e) })) }
+  return false
 }
 
 const objRefresh = () => {

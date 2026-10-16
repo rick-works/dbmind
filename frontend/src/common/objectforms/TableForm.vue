@@ -210,8 +210,8 @@
                   <th style="width:40px">#</th>
                   <th>{{ $t('tf.colName') }}</th>
                   <th style="width:120px">{{ $t('tf.colType') }}</th>
-                  <th style="width:64px">{{ $t('tf.colLength') }}</th>
-                  <th style="width:64px">{{ $t('tf.colPrecision') }}</th>
+                  <th class="c-center" style="width:88px">{{ $t('tf.colLength') }}</th>
+                  <th class="c-center" style="width:88px">{{ $t('tf.colPrecision') }}</th>
                   <th class="c-center" style="width:76px">{{ $t('tf.colNullable') }}</th>
                   <th v-if="showPkCol" class="c-center" style="width:56px">{{ $t('tf.colPrimary') }}</th>
                   <th v-if="showOrderKey" class="c-center" style="width:70px" :title="$t('tf.orderKeyTip')">{{ $t('tf.orderKey') }}</th>
@@ -239,8 +239,8 @@
                       <el-option v-for="t in features.columnTypes || []" :key="t" :label="t" :value="t" />
                     </el-select>
                   </td>
-                  <td><el-input v-model="c.length" size="small" /></td>
-                  <td><el-input v-model="c.scale" size="small" /></td>
+                  <td class="c-center"><el-input v-model="c.length" size="small" /></td>
+                  <td class="c-center"><el-input v-model="c.scale" size="small" /></td>
                   <td class="c-center"><el-checkbox v-model="c.nullable" /></td>
                   <td v-if="showPkCol" class="c-center"><el-checkbox v-model="c.primaryKey" @click.stop @change="onChKeyChange(c)" /></td>
                   <td v-if="showOrderKey" class="c-center"><el-checkbox v-model="c.orderKey" @click.stop @change="onChKeyChange(c)" :title="$t('tf.orderKeyCellTip')" /></td>

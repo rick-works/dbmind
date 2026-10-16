@@ -581,13 +581,19 @@ pub fn columns_json(columns: &[ColumnDetail]) -> Value {
 /// 各家能拿到的项本来就不同（MySQL 有引擎/排序规则、ClickHouse 还有排序键/分区键、
 /// PG/Oracle/SQL Server 只有注释），不硬凑、也不让方言 SQL 里的杂列漏进接口。
 pub fn merge_table_options(payload: &mut Value, rows: &[serde_json::Map<String, Value>]) {
-    const OPTION_KEYS: [&str; 6] = [
+    const OPTION_KEYS: [&str; 12] = [
         "engine",
         "charset",
         "collation",
         "comment",
         "sortingKey",
         "partitionKey",
+        "createTime",
+        "rows",
+        "owner",
+        "size",
+        "tablespace",
+        "lastAnalyzed",
     ];
     let mut options: std::collections::HashMap<String, serde_json::Map<String, Value>> =
         std::collections::HashMap::new();

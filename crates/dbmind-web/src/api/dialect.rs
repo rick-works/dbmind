@@ -636,8 +636,15 @@ impl Dialect {
             return Meta::Absent;
         }
         Meta::Sql(format!(
+            // 列要与 `table_options` **对齐**：对象清单页是按库名（`catalog.库`）请求的，
+            // 走的正是这条；少一列的效果就是「同一个库，从页内下拉切换时列有值、从树点进去全空」。
+            // 真机踩过：Doris 表清单的「创建时间」恒空，因为这里没查 create_time。
+            // 视图的假注释（'VIEW'）同 `table_options` 一样判掉。
             "select table_name as table_name, engine as engine, \
-             table_collation as charset, coalesce(table_comment, '') as comment \
+             table_collation as charset, \
+             case when table_type = 'VIEW' and table_comment = 'VIEW' then '' \
+                  else coalesce(table_comment, '') end as comment, \
+             create_time as createTime \
              from {catalog}.information_schema.tables where table_schema = {}",
             self.literal(database)
         ))
@@ -1871,36 +1878,64 @@ _ => Meta::Unwritten,
         let db = self.literal(db_value);
         match self.key() {
             "mysql" | "mariadb" | "doris" => Meta::Sql(format!(
+                // 视图的 `table_comment` 是 MySQL 自己填的**字面量 'VIEW'**（视图没注释时），
+                // 原样带出去就是「每个视图的注释都写着 VIEW」——语义上它不是注释而是类型噪音，
+                // 这里按「视图 + 值恰为 VIEW」判掉；真表的同名注释不受影响。
                 "select table_name as table_name, engine as engine, \
-                 table_collation as charset, coalesce(table_comment, '') as comment \
+                 table_collation as charset, \
+                 case when table_type = 'VIEW' and table_comment = 'VIEW' then '' \
+                      else coalesce(table_comment, '') end as comment, \
+                 create_time as createTime \
                  from information_schema.tables where table_schema = {db}"
             )),
             // ClickHouse：`system.tables` 一次把引擎、排序键、分区键、注释都给全
             // —— 这三项正是它「建表时确定、之后改不了」的部分，所以界面只读展示。
+            //
+            // **不要**在这里查 `create_time`：CH 的 `system.tables` 没有这一列
+            // （26.8 实测，只有 `metadata_modification_time`，含义是元数据最后修改时间，
+            // 拿来冒充建表时间就是撒谎）。写了它的后果不是「少一列」而是**整条 SQL 报
+            // Code 47 Unknown expression identifier** ⇒ 引擎/排序键/分区键/注释**一起变空**，
+            // 界面上就是「CH 的表除了名字啥都没有」。CH 的建表时间本来就取不到，如实不提供。
             "clickhouse" => Meta::Sql(format!(
+                // 排序键去掉最外层括号：CH 存的是 DDL 里的字面量，`order by (id)` 回的就是
+                // `(id)`，而界面要的是列/表达式本身（`id`）—— 括号是 DDL 语法不是名字的一部分。
+                // 用户反馈：清单与「编辑表结构 → 基本信息」都显示成 `(id)`。
+                // 只剥一层：`(a, b)` → `a, b`；本来就是 `id` 的（`order by id`）原样返回。
                 "select name as table_name, engine as engine, \
-                 sorting_key as sortingKey, partition_key as partitionKey, \
-                 coalesce(comment, '') as comment \
+                 replaceRegexpAll(sorting_key, '^\\((.*)\\)$', '\\1') as sortingKey, \
+                 partition_key as partitionKey, coalesce(comment, '') as comment \
                  from system.tables where database = {db}"
             )),
-            // PG / Kingbase：没有引擎与表级字符集，只有表注释（同 `table_comments` 的写法）
+            // PG / Kingbase：估算行数（reltuples，未 ANALYZE 时是 -1，压成 0）、属主、
+            // 总占用（表+索引+toast）、表注释 —— 对象清单页一屏能看到表有多大、归谁
             "postgresql" | "kingbase" => Meta::Sql(format!(
                 "select c.relname as table_name, \
+                 greatest(c.reltuples, 0)::bigint::text as rows, \
+                 pg_get_userbyid(c.relowner) as owner, \
+                 pg_size_pretty(pg_total_relation_size(c.oid)) as size, \
                  coalesce(obj_description(c.oid, 'pg_class'), '') as comment \
                  from pg_class c join pg_namespace n on n.oid = c.relnamespace \
-                 where n.nspname = {db} and c.relkind = 'r'"
+                 where n.nspname = {db} and c.relkind in ('r','p')"
             )),
-            // Oracle / DM：`user_tab_comments` 就是当前 schema 的表注释
+            // Oracle / DM：估算行数（num_rows，统计信息）、表空间、最近 ANALYZE 时间、注释。
+            // 注意：原句只查 user_tab_comments，注释里 join 一下 user_tables 才能带出这些列
             "oracle" | "dm" => Meta::Sql(
-                "select table_name as table_name, coalesce(comments, '') as comment \
-                 from user_tab_comments where table_type = 'TABLE'"
+                "select t.table_name as table_name, to_char(t.num_rows) as rows, \
+                 t.tablespace_name as tablespace, \
+                 to_char(t.last_analyzed, 'yyyy-mm-dd hh24:mi:ss') as lastAnalyzed, \
+                 coalesce(c.comments, '') as comment \
+                 from user_tables t \
+                 left join user_tab_comments c on c.table_name = t.table_name"
                     .to_string(),
             ),
-            // SQL Server：表注释存在扩展属性 `MS_Description`（与列注释同一处）
+            // SQL Server：真实行数（sys.partitions 的 heap/聚簇索引行）、建表时间、
+            // 表注释仍在扩展属性 `MS_Description`（与列注释同一处）
             "sqlserver" => Meta::Sql(
-                "select t.name as table_name, \
+                "select t.name as table_name, cast(p.rows as varchar(20)) as rows, \
+                 convert(varchar(19), t.create_date, 120) as createTime, \
                  cast(ep.value as nvarchar(4000)) as comment \
                  from sys.tables t \
+                 join sys.partitions p on p.object_id = t.object_id and p.index_id in (0, 1) \
                  left join sys.extended_properties ep \
                    on ep.major_id = t.object_id and ep.minor_id = 0 and ep.name = 'MS_Description'"
                     .to_string(),
@@ -2054,7 +2089,9 @@ _ => Meta::Unwritten,
             // 之前跟着 MySQL 一起来了，于是树上画出「存储过程 / 函数」两个分类、点进去恒为空。
             "doris" => Meta::Absent,
             "mysql" | "mariadb" => Meta::Sql(
-                "select routine_name as `name`, routine_type as routineType \
+                "select routine_name as `name`, routine_type as routineType, \
+                 created, last_altered as lastAltered, \
+                 sql_data_access as dataAccess, security_type as securityType \
                  from information_schema.routines where routine_schema = database() \
                  order by routine_name"
                     .to_string(),
@@ -2188,7 +2225,8 @@ _ => Meta::Unwritten,
             // Doris 没有事件调度器
             "doris" => Meta::Absent,
             "mysql" | "mariadb" => Meta::Sql(
-                "select event_name as `name`, status, interval_value, interval_field \
+                "select event_name as `name`, status, interval_value, interval_field, \
+                 last_executed as lastExecuted, execute_at as executeAt, ends \
                  from information_schema.events where event_schema = database() order by event_name"
                     .to_string(),
             ),

@@ -196,8 +196,8 @@
                       <th style="width:40px">#</th>
                       <th>{{ $t('tdet.colName') }}</th>
                       <th style="width:120px">{{ $t('tdet.colType') }}</th>
-                      <th style="width:64px">{{ $t('tdet.colLength') }}</th>
-                      <th style="width:64px">{{ $t('tdet.colPrecision') }}</th>
+                      <th class="c-center" style="width:88px">{{ $t('tdet.colLength') }}</th>
+                      <th class="c-center" style="width:88px">{{ $t('tdet.colPrecision') }}</th>
                       <th class="c-center" style="width:76px">{{ $t('tdet.nullable') }}</th>
                       <th v-if="showPkCol" class="c-center" style="width:56px">{{ $t('tdet.primaryKey') }}</th>
                       <th v-if="showOrderKey" class="c-center" style="width:70px" :title="$t('tdet.sortKeyTip')">{{ $t('tdet.sortKeyCol') }}</th>
@@ -234,11 +234,11 @@
                         <span v-else class="cell-text" :class="{ 'cell-off': typeDisabled(c) }"
                               :title="c.typeBase" @click="onTypeClick(c)">{{ c.typeBase }}</span>
                       </td>
-                      <td>
+                      <td class="c-center">
                         <el-input v-model="c.length" size="small" :disabled="lenDisabled(c)"
                                   :placeholder="lenPlaceholder(c)" :title="lenPlaceholder(c)" />
                       </td>
-                      <td>
+                      <td class="c-center">
                         <el-input v-model="c.scale" size="small" :disabled="lenDisabled(c)"
                                   :placeholder="needsLength(c.typeBase) ? $t('tdet.colPrecision') : ''" :title="needsLength(c.typeBase) ? $t('tdet.scaleTip') : ''" />
                       </td>
