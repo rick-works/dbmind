@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.31": [
+        "New Object List page: double-click a category in the tree (tables / views / procedures / functions / triggers / events / scripts) to list every object of that kind in one screen, with per-row actions for data, structure, DDL and edit",
+        "Views, procedures, functions, triggers, events and scripts can now be deleted straight from the object list (same confirmation dialog and read-only / production guards as the tree context menu - it is just an extra entry point)",
+        "ClickHouse and Doris table lists fixed: in ClickHouse the engine, sorting key, partition key and comment used to come back empty (one metadata query asked for a column that does not exist, so the whole statement failed), and in Doris the create time was always empty",
+        "Object list columns are now chosen per data source, showing only what that source can actually provide (SQLite/Derby have no table comments, non-MySQL routines have no security mode, and the Doris engine/charset values were meaningless placeholders)",
+        "Object list layout aligned with the table data page: non-bold headers, matching padding, and the action column pinned to the right when columns overflow; two display bugs fixed along the way (MySQL view comment shown as VIEW, engine MergeTree shown as Merge ree)"
+    ],
     "v1.2.30": [
         "User management permission matrix overhaul: every column header across all databases now carries an inline Chinese description (including the full ClickHouse privilege set, external data sources and the SQL Server ANY family) - no more guessing English privilege names",
         "ClickHouse users can now be granted table/view level privileges via a new Table Privileges tab (pick a database and a table, tick privileges, get GRANT … ON db.table); database-privilege group counters no longer show a zero denominator",
