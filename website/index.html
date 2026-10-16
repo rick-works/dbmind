@@ -693,6 +693,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.31（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.31</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-16</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>新增「对象清单」页</b>：双击树上的表/视图/存储过程/函数/触发器/事件/脚本类别，一屏列出该类别的全部对象，行内直接查看数据、结构、DDL、编辑</li>
+            <li><b>视图、存储过程、函数、触发器、事件、脚本都可以在清单页直接删除（与树上右键同一套确认框和只读/生产连接闸门，只多了一个入口）</b></li>
+            <li><b>ClickHouse 与 Doris 的表清单修好：CH 的引擎、排序键、分区键、注释原来全是空的（一条元数据 SQL 查了不存在的列，整条报错），Doris 的创建时间原来恒空</b></li>
+            <li><b>各数据源的清单列改成「拿得到什么就摆什么」：拿不到值的列不再显示（SQLite/Derby 没有表注释、非 MySQL 的例程没有安全模式等属性、Doris 的引擎/字符集是无含义占位）</b></li>
+            <li><b>清单页排版与表数据页对齐</b>：表头不加粗、四周留白一致，列多到横向滚动时操作列固定在最右；顺手修掉两处显示问题（MySQL 视图的「注释」列显示成 VIEW、引擎 MergeTree 显示成 Merge ree）</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.31" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.31" target="_blank" rel="noopener">下载 v1.2.31</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.30（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +723,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.30</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-16</span>
           </div>
           <ul class="rel-notes">
