@@ -53,9 +53,14 @@
         <div class="head-actions">
           <el-button v-if="running" size="small" type="danger" @click="stopSql">
             <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('sqlq.stop') }} </el-button>
+          <!-- 无选区时执行的是**光标所在的那一段**（编辑器里框线标出的就是它），
+               文案与快捷键表里的「执行当前 SQL」对齐；跑整段脚本走「执行全部」。 -->
           <el-button v-else size="small" type="primary" @click="() => runSql()"
-                     :title="hasEditorSelection ? $t('sqlq.runSelTitle', { n: selChars }) : $t('shortcut.query.runAll.label')">
-            <el-icon style="margin-right:4px"><CaretRight /></el-icon>{{ hasEditorSelection ? $t('sqlq.runSel') : $t('evf.everyRun') }}
+                     :title="hasEditorSelection ? $t('sqlq.runSelTitle', { n: selChars }) : $t('sqlq.runCurTitle')">
+            <el-icon style="margin-right:4px"><CaretRight /></el-icon>{{ hasEditorSelection ? $t('sqlq.runSel') : $t('sqlq.run') }}
+          </el-button>
+          <el-button size="small" @click="runSqlAll" :title="$t('sqlq.runAllTitle')">
+            <el-icon style="margin-right:4px"><DArrowRight /></el-icon>{{ $t('sqlq.runAll') }}
           </el-button>
           <el-button v-if="!isNoSql" size="small" :icon="Brush" @click="formatSql"
                      :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')">{{ hasEditorSelection ? $t('sqlq.fmtSel') : $t('sce.format') }}</el-button>
@@ -603,7 +608,7 @@ import {
   Close, CircleCloseFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
-  Sort, SortUp, SortDown, Collection, RefreshLeft
+  Sort, SortUp, SortDown, Collection, RefreshLeft, DArrowRight
 } from '@element-plus/icons-vue'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType } from '../../types'
@@ -2916,6 +2921,148 @@ const updateStmtGlyphs = () => {
   })
   stmtGlyphDecos = ed.deltaDecorations(stmtGlyphDecos, decos)
 }
+// ===== 「执行」的目标段：四周画框（用户要求）=====
+// 目的：一眼看出「执行」会跑哪一段 —— 框线与 getExecutableSql **共用同一个判定**
+// （选区优先，其次 statementAtCursor），所以框住的永远就是真正会被执行的那段，
+// 不会"框一段、跑另一段"。判定规则见 stmtBoxTarget 的注释。
+// 实现：给目标**每一行**挂 isWholeLine 装饰（左右边线），首行补上边线、末行补下边线，
+// 拼起来正好是一个框；Monaco 生成的 DOM 不带组件 scoped 属性 ⇒ 样式写在文件末尾的全局块里。
+let stmtBoxDecos = []
+let stmtBoxKey = ''
+let stmtBoxTimer = 0
+const clearStmtBox = () => {
+  const ed = editorInstance
+  if (ed && stmtBoxDecos.length) {
+    try { ed.deltaDecorations(stmtBoxDecos, []) } catch { /* 编辑器可能已销毁 */ }
+  }
+  stmtBoxDecos = []
+  stmtBoxKey = ''
+}
+/**
+ * 光标**落在**的语句区间（splitSqlStatementRanges 的字符偏移区间）；没落在任何一段上返回 null。
+ *
+ * 判定口径（用户要求："光标不在语句上就别画框；多段 SQL 才画"）：
+ *   - 单段脚本直接 null —— 只有一段时框住整篇只是噪音（与上方语句面包屑同口径），
+ *     执行链路同样退回"跑整段"，行为与以前完全一致；
+ *   - 偏移落在 [start, end] 内，或光标所在**行**在该段的起止行之间（行尾空白、末句分号之后仍算）；
+ *   - **不再**"落到两段之间就取它前面那一段"：空行、两段之间、末尾之外都算"不在语句上"。
+ *     旧规则下光标挪到空行/文末，框线仍亮着前一段，用户看到的是一条"没人看"的框（截图反馈）；
+ *   - 首尾"贴边"宽容：光标与语句之间只隔**紧邻的空白**（写完 SQL 顺手回车停在末尾空行、
+ *     或程序化插入后停在文首空行）时，仍算在这一段上 —— 这是最常见的"写完就执行"姿势；
+ *     隔出空行就算不在语句上（见函数体里的 nearBlank）。
+ */
+const statementAtCursor = () => {
+  const ed = editorInstance
+  const model = ed && ed.getModel ? ed.getModel() : null
+  if (!ed || !model) return null
+  const text = model.getValue() || ''
+  const ranges = splitSqlStatementRanges(text)
+  if (ranges.length <= 1) return null
+  const pos = ed.getPosition()
+  if (!pos) return null
+  const offset = model.getOffsetAt(pos)
+  const hit = ranges.find((r) => {
+    if (offset >= r.start && offset <= r.end) return true
+    return pos.lineNumber >= model.getPositionAt(r.start).lineNumber
+      && pos.lineNumber <= model.getPositionAt(r.end).lineNumber
+  })
+  if (hit) return hit
+  // 首尾"贴边"宽容：只有**紧邻**语句的空白（允许整行空白，但不允许隔出空行）才算"还在这一段上"。
+  //   - 末尾：写完 SQL 顺手回车，光标停在末尾那个空行上 —— 最常见，不能判成不在语句上；
+  //   - 开头：程序化插入 SQL 后光标停在 (1,1) 而脚本前面带空行（「插入并执行」链路）。
+  // 光标再往里走（中间隔了空行）就算不在语句上：框线消失 —— 用户要求"光标都移走了就别画框"。
+  // 换行符三种都要认（\n / \r\n / 单独 \r）：CRLF 脚本（从文件导入、或外部带 CR 的内容）里
+  // 模型的分隔符就是 \r\n，只认 \n 会让"贴边"判定失效 —— 末尾回车停在空行上反而没框。
+  const nearBlank = (from, to) => /^[ \t]*(?:\r\n|\r|\n)?[ \t]*$/.test(text.slice(from, to))
+  const tail = ranges[ranges.length - 1]
+  // 语句区间是「正文」（splitSqlStatementRanges 在**分号处**切开，end 指向分号本身，不含它）。
+  // 于是从 end 起算的"间隔"永远以 ';' 开头，"末尾空行贴边"这条分支从来没生效过 ——
+  // 真机现象：写完最后一条 SQL 顺手回车停在末尾空行，框反而没了。贴边判定要从**分号之后**起算。
+  const tailAfter = text[tail.end] === ';' ? tail.end + 1 : tail.end
+  if (offset > tail.end && nearBlank(tailAfter, offset)) return tail
+  const head = ranges[0]
+  if (offset < head.start && nearBlank(offset, head.start)) return head
+  return null
+}
+/**
+ * 框线要覆盖的行区间（= 点「执行」会跑的那段）；null 表示**不画框**。
+ *
+ * 规则（用户要求："全选时框住全部的选中；光标不在语句上就不画；多段 SQL 才画"）：
+ *   1. 有选区 ⇒ 框住选区覆盖的行（Ctrl+A 就是整篇）—— 选中什么就跑什么，
+ *      框住的与会跑的是同一段；
+ *   2. 无选区 ⇒ 框光标所在的那一段（statementAtCursor）；**不在任何一段上就不画**
+ *      （空行、两段之间、末尾空白之外）；
+ *   3. 单段脚本一律不画（整篇一个框没有信息量）。
+ */
+const stmtBoxTarget = () => {
+  const ed = editorInstance
+  const model = ed && ed.getModel ? ed.getModel() : null
+  if (!ed || !model) return null
+  // SQL 还在加载（编辑器置灰）时不画：等 initialSql 注入后内容变化会再触发一次
+  if (props.sqlLoading) return null
+  if (splitSqlStatementRanges(model.getValue() || '').length <= 1) return null
+  const sel = ed.getSelection()
+  if (sel && !sel.isEmpty()) {
+    const l1 = sel.startLineNumber
+    // 选区停在行首时末行其实一个字符都没选中（Ctrl+A 常见），不算进框里
+    const l2 = (sel.endColumn === 1 && sel.endLineNumber > l1) ? sel.endLineNumber - 1 : sel.endLineNumber
+    return { l1, l2, key: 'sel:' + l1 + ':' + l2 }
+  }
+  const r = statementAtCursor()
+  if (!r) return null
+  return {
+    l1: model.getPositionAt(r.start).lineNumber,
+    l2: model.getPositionAt(r.end).lineNumber,
+    key: r.start + ':' + r.end
+  }
+}
+/** 目标跨几千行时不必逐行挂装饰（重建代价实打实，观感上也只是整屏一个底色）：超限就不画 */
+const STMT_BOX_MAX_LINES = 1500
+const updateStmtBox = () => {
+  const ed = editorInstance
+  const model = ed && ed.getModel ? ed.getModel() : null
+  if (!ed || !model) return
+  const t = stmtBoxTarget()
+  if (!t || t.l2 - t.l1 > STMT_BOX_MAX_LINES) { clearStmtBox(); return }
+  // 同一段/同一选区上重复调用（打字、点选、滚动都会触发）直接返回：装饰不必要地重建会打断选区
+  if (t.key === stmtBoxKey) return
+  const decos = []
+  for (let ln = t.l1; ln <= t.l2; ln++) {
+    const cls = ['sqlq-stmt-box']
+    if (ln === t.l1) cls.push('sqlq-stmt-box-first')
+    if (ln === t.l2) cls.push('sqlq-stmt-box-last')
+    decos.push({
+      range: { startLineNumber: ln, startColumn: 1, endLineNumber: ln, endColumn: 1 },
+      options: { isWholeLine: true, className: cls.join(' '), stickiness: 1, overviewRuler: null }
+    })
+  }
+  stmtBoxDecos = ed.deltaDecorations(stmtBoxDecos, decos)
+  stmtBoxKey = t.key
+}
+/**
+ * 「执行」前的目标校验（只对**首次执行**生效；翻页沿用上次 SQL，不再判定）。
+ *
+ * 多段脚本、无选区、光标又不在任何语句上时**拒绝执行**：这时 getExecutableSql 会退回整篇，
+ * 静默把整个脚本跑出去 —— 对写操作太危险。框线在这时也是空的（框住的才是会跑的），
+ * 用户有"现在没东西可跑"的视觉预期，这里给一句话点明出口（执行全部）。
+ */
+const ensureRunTarget = () => {
+  if (forceRunAll || stmtRunSql) return true
+  const ed = editorInstance
+  const model = ed && ed.getModel ? ed.getModel() : null
+  if (!ed || !model) return true
+  if (splitSqlStatementRanges(model.getValue() || '').length <= 1) return true
+  const sel = ed.getSelection()
+  if (sel && !sel.isEmpty()) return true
+  if (statementAtCursor()) return true
+  ElMessage.warning(t('sqlq.noStmtAtCursor'))
+  return false
+}
+// 光标每动一次都重算代价不小（大脚本下 deltaDecorations 会打乱输入节奏），挪动时给个小延时
+const scheduleStmtBox = () => {
+  if (stmtBoxTimer) clearTimeout(stmtBoxTimer)
+  stmtBoxTimer = setTimeout(updateStmtBox, 60)
+}
 const runStatementAt = (lineNumber) => {
   const ed = editorInstance
   const model = ed && ed.getModel ? ed.getModel() : null
@@ -2931,8 +3078,11 @@ const runStatementAt = (lineNumber) => {
   stmtRunSql = hit.r.text
   Promise.resolve(runSql()).finally(() => { stmtRunSql = null })
 }
-watch(() => props.sqlLoading, () => nextTick(updateStmtGlyphs))
-onBeforeUnmount(() => { if (stmtGlyphTimer) clearTimeout(stmtGlyphTimer) })
+watch(() => props.sqlLoading, () => nextTick(() => { updateStmtGlyphs(); updateStmtBox() }))
+onBeforeUnmount(() => {
+  if (stmtGlyphTimer) clearTimeout(stmtGlyphTimer)
+  if (stmtBoxTimer) clearTimeout(stmtBoxTimer)
+})
 // ===== 语句条的横向滚动：永远一行，放不下出 ‹ › 箭头（用户要求） =====
 const stmtStripEl = ref(null)
 const stmtScroll = ref({ left: false, right: false })
@@ -3268,7 +3418,11 @@ const editorOptions = computed(() => ({
   folding: true,
   foldingHighlight: true,
   bracketPairColorization: { enabled: true },
-  guides: { bracketPairs: true, indentation: true },
+  // 缩进引导线**关掉**：SQL 常见写法是「SELECT 顶格、字段缩进若干格」，缩进量够一个 Tab 宽度时
+  // Monaco 会在正文左缘画一条竖直灰线（indent guide，颜色走主题灰、与语句框无关），
+  // 用户把它当成「框线没闭合留下的那条线」要求去掉（截图反馈）。括号配对引导保留 ——
+  // 它只在真有 () [] {} 配对时才出现，能帮着看嵌套；本就在用的 matchBrackets 不受影响。
+  guides: { bracketPairs: true, indentation: false },
   matchBrackets: 'always',
   autoClosingQuotes: 'always',
   formatOnPaste: true,
@@ -3402,9 +3556,10 @@ const onEditorMount = (editor) => {
   })
   editor.onDidChangeModelContent(() => {
     clearTimeout(stmtGlyphTimer)
-    stmtGlyphTimer = setTimeout(updateStmtGlyphs, 350)
+    stmtGlyphTimer = setTimeout(() => { updateStmtGlyphs(); updateStmtBox() }, 350)
   })
   updateStmtGlyphs()
+  updateStmtBox()
   // 注册自定义补全/格式化 provider：**必须走 ensureMonaco()** —— @guolao 封装的 @mount
   // 回调在本项目配置下不传 monaco 参数（实测 undefined），旧写法 `if (monaco)` 恒假，
   // 补全与格式化 provider 从未注册过（静默失效）。ensureMonaco 是单例 Promise，直接拿现成的。
@@ -3664,12 +3819,14 @@ const onEditorMount = (editor) => {
     // 键位可在「设置 → 快捷键」中自定义
   }).catch(() => { /* monaco 加载失败时编辑器本身也会失败，这里不再重复报 */ })
 
-  // 光标 / 选中状态，供底部状态栏显示
+  // 光标 / 选中状态，供底部状态栏显示；同时刷新「光标所在语句」的框线
   editor.onDidChangeCursorPosition((e) => {
     cursorLine.value = e.position.lineNumber
     cursorColumn.value = e.position.column
+    scheduleStmtBox()
   })
-  editor.onDidChangeCursorSelection((e) => updateEditorStatus(e.selection))
+  // 选区变化也要重算框线（有选区时框住的是选区；Ctrl+A 就得框住整篇）
+  editor.onDidChangeCursorSelection((e) => { updateEditorStatus(e.selection); scheduleStmtBox() })
   updateEditorStatus(editor.getSelection())
 
   // 菜单开着时编辑器滚动（滚轮 / 光标移动带滚动）就把菜单关掉，避免菜单与代码行错位
@@ -3959,7 +4116,7 @@ const onEdCtxItem = (item) => {
   ed.focus()
 }
 
-// 获取当前要执行的 SQL（选中优先，无选中执行全部）
+// 获取当前要执行的 SQL（语句级 ▶ > 翻页沿用 > 选中 > **光标所在语句**）
 // reuseLast：翻页时沿用上次执行的 SQL。否则「执行全部 / 执行选中」之后翻页会再读一次
 // 编辑器选区，出现「明明跑的是全部，翻到第 2 页却只跑了选中片段」的错位。
 let lastExecSql = ''
@@ -3970,7 +4127,14 @@ const getExecutableSql = (reuseLast = false) => {
   if (forceRunAll || !editorInstance) return sql.value.trim()
   const selection = editorInstance.getSelection()
   const selectedText = editorInstance.getModel().getValueInRange(selection).trim()
-  return selectedText || sql.value.trim()
+  if (selectedText) return selectedText
+  // 没有选区时**默认只跑光标所在的那一段**（用户要求）：多段脚本里不必先全选再执行。
+  // 与框线用同一判定（statementAtCursor）⇒ 框住的就是会跑的。要跑整段脚本用
+  // 「执行全部」（右键菜单 / 快捷键），单段脚本这里返回 null，行为与以前完全一致。
+  // 注意：光标不在任何语句上时这里会**退回整篇**（保证 AI 改写/单段脚本等调用方有兜底），
+  // 「执行」按钮那条路另有 ensureRunTarget 把关，不会真的把整篇静默跑出去。
+  const cur = statementAtCursor()
+  return cur ? cur.text : sql.value.trim()
 }
 
 // 「执行全部」：忽略当前选中，强制跑整段脚本（右键菜单用）
@@ -4214,6 +4378,8 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   if (!(selectedConnId.value || props.conn?.id)) { ElMessage.info(t('sqlq.pickConnFirst')); return }
   if (running.value) return
   if (!requireSql()) return
+  // 首次执行先过一道「目标段」校验：多段脚本 + 无选区 + 光标不在任何语句上 ⇒ 拒绝
+  if (page === 1 && !ensureRunTarget()) return
   // 有未提交的单元格修改：翻页/重跑会使行号失效 —— 确认放弃才继续
   if (pendingEdits.value.length) {
     try {
@@ -4298,7 +4464,8 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
       // 分页翻页或单条语句仍走 executeSql，保留原分页能力
       const statements = batchable ? splitSqlStatements(execSql) : []
       if (statements.length > 1) {
-        const b = await executeSqlBatch(connId, execSql, db, execId.value, cancelController.signal)
+        // size 传分页大小：每段只取一页（见 executeSqlBatch 的注释），与单段执行同一口径
+        const b = await executeSqlBatch(connId, execSql, db, execId.value, cancelController.signal, size)
         if (cancelRequested.value) { setResultCancelled(); return }
         showBatchResult(b)
         // 事务模式：批量里有写语句成功 ⇒ 有未提交变更
@@ -5485,6 +5652,36 @@ onBeforeUnmount(() => {
 }
 .sqlq-sql-run-glyph.sqlq-sql-run-err::before { color: #dc2626; }
 .sqlq-sql-run-glyph.sqlq-sql-run-err:hover::before { color: #ef4444; transform: scale(1.3); }
+
+/* 光标所在语句的框（见 updateStmtBox）：一眼看出「执行」会跑哪一段。
+   整行装饰挂的是 Monaco 内部 DOM，**必须全局样式**。
+   四条边拆给两种行：每行出左右边线，首行补上、末行补下，拼成一个框；单行语句两个类都带。
+   **不要再把左边线往外挪**（曾经的 margin-left:-3px + padding-left:3px）：整行装饰挂在
+   .view-line 里，而 view-lines 这一层会按**正文左缘**裁剪，负偏移画出去的左边线（连同首行
+   上边线的左端 3px）会被裁掉 —— 表现就是「蓝框缺了左边、不闭合」（用户截图反馈）。
+   左边线落在正文左缘即可：与上下边线同一个 x，四边自然闭合。
+
+   样式（用户要求「简约好看」）：**不铺底色，只留一圈细虚线**。
+   底色版把整段代码染成蓝色，读代码时像被荧光笔涂过一遍 —— 长语句尤其"重"，且与选中高亮、
+   查找高亮叠在一起会糊成一片。改成虚线后：框只负责"划出范围"，文字保持原本的底色与对比度；
+   虚线本身是"临时边界"的通用语汇（选区、裁剪框），一眼就知道是提示而不是内容。
+   颜色用 primary-light 而不是 primary：虚线比实线视觉重量大，降一档亮度正好，深浅主题都成立。 */
+.monaco-editor .sqlq-stmt-box {
+  border-left: 1px dashed var(--dc-primary-light);
+  border-right: 1px dashed var(--dc-primary-light);
+}
+.monaco-editor .sqlq-stmt-box.sqlq-stmt-box-first {
+  border-top: 1px dashed var(--dc-primary-light);
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
+}
+.monaco-editor .sqlq-stmt-box.sqlq-stmt-box-last {
+  border-bottom: 1px dashed var(--dc-primary-light);
+  border-bottom-left-radius: 5px;
+  border-bottom-right-radius: 5px;
+}
+/* 单行语句：上下边线落在同一行，四角都要圆 */
+.monaco-editor .sqlq-stmt-box.sqlq-stmt-box-first.sqlq-stmt-box-last { border-radius: 5px; }
 
 /* 结果表右键菜单（teleport 到 body，需全局样式） */
 .grid-ctx-menu {

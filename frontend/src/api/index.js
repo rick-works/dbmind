@@ -350,11 +350,14 @@ export const txControl = async (id, action, database = '') => {
 }
 // 多段 SQL 批量执行：同一连接内按分号顺序执行每段，每段独立返回一个 QueryResult
 // （编辑器一次执行多条查询时，结果以「结果1/结果2…」tab 逐条展示）
-export const executeSqlBatch = async (id, sql, database, executionId, signal) => {
+// size：**每段取多少行**（与分页大小同一个数）。必须传 —— 不传后端只能按设置里的
+// 「最多返回行数」算上限，而那个值的默认是 0（不限制）：于是每条语句都把整表拉回来
+// （实测 52 万行 × 2 段），前端实测十几秒。传了它就是「每段一页」，与单段执行等快。
+export const executeSqlBatch = async (id, sql, database, executionId, signal, size) => {
   const b = await baseOf(id)
   const module = b.replace('/api/', '')
   rememberExecId(executionId, module)
-  return http.post(`${b}/query/${id}/batch`, { sql, database, executionId }, { signal }).then(r => {
+  return http.post(`${b}/query/${id}/batch`, { sql, database, executionId, size }, { signal }).then(r => {
     if (!r || !r.data) throw new Error(t('api.emptyResponse'))
     return r.data
   })

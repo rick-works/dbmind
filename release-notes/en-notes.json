@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.32": [
+        "Multi-statement runs (Run all) are much faster: each statement now fetches just one page instead of pulling the whole table - two statements against a 520k-row table went from ~15s to under a second",
+        "New Ctrl+N opens a new script tab; rebindable in Settings -> Shortcuts -> General",
+        "The Run all button now carries a double-triangle icon, so \"run current\" and \"run all\" are easy to tell apart",
+        "The box around the statement at the caret is now a dashed outline with no fill: it marks the range without tinting the code, so long statements no longer look highlighted",
+        "Two box-detection fixes: the outline no longer disappears when the caret sits on the blank line after the last statement or on a leading blank line (the trailing semicolon used to be counted as part of the gap)"
+    ],
     "v1.2.31": [
         "New Object List page: double-click a category in the tree (tables / views / procedures / functions / triggers / events / scripts) to list every object of that kind in one screen, with per-row actions for data, structure, DDL and edit",
         "Views, procedures, functions, triggers, events and scripts can now be deleted straight from the object list (same confirmation dialog and read-only / production guards as the tree context menu - it is just an extra entry point)",

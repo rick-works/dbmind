@@ -1186,6 +1186,9 @@ import { locale, setLocale } from '../../utils/i18n'
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
 import { buildCatChildren, buildObjectCategories, isFunctionRoutine, TREE_FIRST_PAGE } from './treeNodes'
 import { t, tMsg } from '../../utils/i18n'
+// 应用级快捷键（Ctrl+N 新建脚本）：键位表与「录制中/有弹层」两道守卫
+import { loadShortcuts, matchesShortcut, isShortcutSuppressed } from '../../utils/shortcuts'
+import { hasVisibleOverlay } from '../../utils/useShortcuts'
 import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
 import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch } from '@element-plus/icons-vue'
@@ -5309,6 +5312,18 @@ const onGlobalKey = (e) => {
   // Esc：退出多选（多选状态下最顺手的"取消"）
   if (e.key === 'Escape' && multiSel.value.length) {
     clearMultiSelect()
+    return
+  }
+  // Ctrl+N：新建脚本页签（键位可在「设置 → 快捷键 → 通用」改）。
+  // 这是**应用级**动作：焦点在编辑器里也能用（最常见的姿势就是敲完 SQL 顺手开一个新脚本），
+  // 所以不走各视图的 useShortcutScope，而是在这里全局分发。
+  // 两道守卫：设置页正在录制改键位时不响应（否则录 Ctrl+N 会顺手多开一个页签）、
+  // 有可见弹层（对话框/消息框）时不响应（别把背影里的页面改了）。
+  if (!isShortcutSuppressed() && !hasVisibleOverlay()
+      && matchesShortcut(e, loadShortcuts()['app.newScript'])) {
+    e.preventDefault()
+    e.stopPropagation()
+    newQueryTab()
     return
   }
   if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {

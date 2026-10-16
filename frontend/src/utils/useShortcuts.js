@@ -2,7 +2,8 @@ import { onMounted, onBeforeUnmount } from 'vue'
 import { loadShortcuts, matchesShortcut, isShortcutSuppressed } from './shortcuts'
 
 // 当前是否有可见的模态弹层（el-dialog / el-message-box）。隐藏的（display:none）不计。
-function hasVisibleOverlay() {
+// 导出给 MainView 的全局快捷键（Ctrl+N 等）复用：弹层开着时不该在背后新建页签。
+export function hasVisibleOverlay() {
   const els = document.querySelectorAll('.el-overlay, .el-message-box')
   for (const el of els) {
     if (el.getClientRects().length) return true

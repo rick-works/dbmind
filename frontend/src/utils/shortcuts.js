@@ -14,12 +14,15 @@ export const SHORTCUTS_EVT = '上游-shortcuts-changed'
 // 为什么派生而不是给每条再加 i18nKey 字段：id 本身就是唯一且带命名空间的，
 // 手工维护 20×2 个键名迟早会漏一个；派生则不可能漏 —— 缺键时界面直接显示键名，一眼可见。
 export const SHORTCUT_GROUPS = [
+  { key: 'app' },
   { key: 'editor' },
   { key: 'sqlSel' },
   { key: 'grid' }
 ]
 
 export const SHORTCUT_DEFS = [
+  // 应用级：不依赖焦点落在哪个视图里（分发在 MainView 的 onGlobalKey，见那里的守卫）
+  { id: 'app.newScript', group: 'app', default: 'Ctrl+N' },
   { id: 'query.run', group: 'editor', default: 'Ctrl+Enter' },
   { id: 'query.runAll', group: 'editor', default: 'Ctrl+Shift+Enter' },
   { id: 'query.format', group: 'editor', default: 'Shift+Alt+F' },

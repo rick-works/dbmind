@@ -332,6 +332,20 @@ pub async fn execute_batch(
         .get("executionId")
         .and_then(Value::as_str)
         .map(str::to_string);
+    // 每段取多少行 = 前端的分页大小（与单段执行同一个数）。
+    //
+    // **不能再拿 `max_rows_cap` 当每段上限**：设置里那一项的默认值是 0 = 「不限制」，
+    // 落到这里就是 10 亿 —— 于是「每条语句都把整表拉回来」。真机现象：52 万行的表、
+    // 两段相同的 SELECT，界面实测十几秒（用户反馈「一段几百毫秒、两段就要好几秒」），
+    // 而每段显示的 executeTime 只有几百毫秒到 1.7 秒（那个数只计数据库执行段，不含
+    // 结果集逐行 JSON 编码 + 内核解析）。单段执行快的原因正是它按 `size` 取数。
+    // 多段的结果本来就按「每段一页」呈现（前端每个结果 tab 各记 page，翻页只重跑
+    // 这一段），所以按 size 取数与既有交互一致：截断 → totalCount=-1 → 前端异步补总数。
+    let size = body
+        .get("size")
+        .and_then(Value::as_u64)
+        .unwrap_or(2000)
+        .clamp(1, 100_000) as usize;
 
     // 切句用内核的实现（按协议分派：SQL 引号/注释内的分号不切，Redis 一行一条，ES 一行一请求）
     let record = require_record(&state, &id).await?;
@@ -369,7 +383,8 @@ pub async fn execute_batch(
     let started = std::time::Instant::now();
     // 多段执行共用同一个超时/上限：循环里拿不到 async 上下文，先在这里算好
     let timeout_ms = editor_timeout_ms(&state).await;
-    let max_rows = max_rows_cap(&state).await;
+    // 上限 = min(每段页大小, 设置里的「最多返回行数」)：设置只是天花板，不是每段的取数量
+    let max_rows = size.min(max_rows_cap(&state).await);
 
     for (index, statement) in statements.iter().enumerate() {
         let engine = state.engine();

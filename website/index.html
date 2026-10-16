@@ -693,6 +693,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.32（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.32</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-16</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>多段脚本执行（「执行全部」）大幅提速：每段只取当前页的行数，不再把整表拉回来 —— 52 万行的表跑两段由十几秒降到一秒内</b></li>
+            <li><b>新增 Ctrl+N 新建脚本，键位可在「设置 → 快捷键 → 通用」里改</b></li>
+            <li><b>「执行全部」按钮补上 ▶▶ 图标，一眼区分「执行当前」与「执行全部」</b></li>
+            <li><b>光标所在语句的框线改为无底色虚线：只划范围、不染底色，长语句不再像被荧光笔涂过</b></li>
+            <li><b>修好框线的两处判定</b>：光标停在末条语句之后的空行、或文首空行上时框线不再消失（语句末尾的分号此前被算进了「间隔」里）</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.32" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.32" target="_blank" rel="noopener">下载 v1.2.32</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.31（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +723,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.31</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-16</span>
           </div>
           <ul class="rel-notes">
