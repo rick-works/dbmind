@@ -485,12 +485,14 @@
                             :name="tab.userName" @edit="onUserDetailEdit" />
             <UserForm v-else-if="tab.type === 'user-form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                       :edit-mode="tab.mode === 'edit'" :edit-data="tab.editData" :read-only="!!tab.readOnly"
-                      @saved="onUserFormSaved" @close="closeTab(tab.id)" />
+                      :as-role="!!tab.asRole"
+                      @saved="onUserFormSaved" @close="closeTab(tab.id)"
+                      @edit-role="onUserFormEditRole(tab, $event)" />
             <!-- 用户管理页：按连接管理用户（新增/编辑授权/删除），只跟连接不跟库 ——
                  树里选中数据源（连接节点）就够了，带库反而会在切换数据源时把上一个连接的库名带过来 -->
             <UserManageView v-else-if="tab.type === 'users'" :active-conn-id="String(currentConnId || '')"
                             :reload-tick="userListTick"
-                            @open-form="onUserManageForm" />
+                            @open-form="onUserManageForm" @open-role="onUserManageRole" />
             <ObjectFormTab v-else-if="tab.type === 'form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                            :cat="tab.cat" :mode="tab.mode" :object="tab.object" @saved="onObjFormSaved"
                            @kind="tab.formKind = $event" @close="closeTab(tab.id)" />
@@ -799,6 +801,8 @@
         <li class="ctx-item" @click="startRenameGroup(treeCtxMenu.env)">
           <el-icon><Edit /></el-icon>{{ $t('tree.menu.renameFolder') }}
         </li>
+        <!-- 删除分组是**连组里的数据源和子分组一起删**（确认框里会报数量），
+             不是把连接挪到别处 —— 只清 group 的话它们会落回默认分组「数据源」，节点看着还在。 -->
         <li class="ctx-item danger" @click="treeCtxDeleteFolder(treeCtxMenu.env)">
           <el-icon><Delete /></el-icon>{{ $t('tree.menu.deleteFolder') }}
         </li>
@@ -1206,7 +1210,9 @@ import { readUnreachableIds, markUnreachable, clearUnreachable } from '../../uti
 import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
 import { pinnedFolders, loadPinnedFolders, pinFolder, unpinFolder } from '../../utils/folders'
 import { buildConnectionBundle, parseConnectionBundle, importPayloadOf, downloadJson } from '../../utils/connTransfer'
-import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType, hideDbLevelOf } from '../../types'
+import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType, hideDbLevelOf, dbDisplayOf } from '../../types'
+// 占位库 `(default)` 的显示名：只在界面上换成「默认」，node.db 与请求参数仍用原值
+import { dbLabelOf } from '../../utils/dbLabel'
 import AiPanel from '../ai/AiPanel.vue'
 import logoSmUrl from '../../assets/logo-sm.png'
 import SaveToKbDialog from '../knowledge/SaveToKbDialog.vue'
@@ -2656,6 +2662,17 @@ const customFolders = computed(() => {
 
 const refreshFolders = () => folderRefresh.value++
 
+/**
+ * 内置分组名：**未分组连接的落点**。
+ *
+ * 这个名字不是用户建的目录，而是后端读连接时补上的（没存 group 就给这个默认值），
+ * 所以只要还有一条连接没归组，树上就必然有这个节点 —— 它删不掉，改名也只是把这批
+ * 连接一起换个组名（之后新来的未分组连接会重新把它带出来）。
+ * ⚠️ 必须与 `crates/dbmind-web/src/api/shape.rs::DEFAULT_ENVIRONMENT` 保持一致。
+ */
+const DEFAULT_GROUP = '数据源'
+const isDefaultGroup = (env) => String(env || '') === DEFAULT_GROUP
+
 let tabSeq = 0
 
 // 加载所有连接（用于顶部下拉切换）
@@ -3215,33 +3232,86 @@ const onFolderRenamed = async ({ old, new: renamed }) => {
   ElMessage.success(t('mv.groupRenamed', { old: envLabel(old), new: renamed }))
 }
 
+/** 删掉一条连接后要清掉的本地状态：库缓存、当前库、错误标记、它的表页签 */
+const purgeConnCache = (connId) => {
+  const sid = String(connId)
+  delete dbsByConn.value[sid]
+  delete currentDbByConn.value[sid]
+  connErrorSet.value.delete(sid)
+  closeTabsOfConn(sid)
+}
+
+/** 删除/批量删除之后，把"当前连接"落到还活着的连接上（原来的被删掉时切到第一条） */
+const settleCurrentConn = () => {
+  const remaining = allConnections.value
+  if (!remaining.length) {
+    conn.value = null
+    currentConnId.value = null
+    sessionStorage.removeItem('dbmind.currentConnId')
+    return
+  }
+  if (remaining.some(x => String(x.id) === String(currentConnId.value))) return
+  const next = remaining[0]
+  const nid = String(next.id)
+  conn.value = next
+  currentConnId.value = nid
+  sessionStorage.setItem('dbmind.currentConnId', nid)
+  dbs.value = dbsByConn.value[nid] || []
+  currentDb.value = currentDbByConn.value[nid] || ''
+}
+
+/**
+ * 删除分组 = **把组里的东西一起删掉**（用户口径：分组要能真删掉，不能删完还挂在那儿）。
+ *
+ * 删两样：
+ *   1. 组内**所有数据源**（含子分组里的）—— 真删连接，不是把它们的 group 清空
+ *   2. 该分组 + 它的所有子分组（纯目录）
+ *
+ * 为什么不能只清 group：没有分组的连接会被后端补上默认分组名「数据源」（shape.rs 的
+ * DEFAULT_ENVIRONMENT），而默认分组名恰好还是「数据源」—— 于是"清空分组"等于把这些连接
+ * 原样塞回一个同名的分组节点里，看着就是"删了没用、还在"。只有把连接删掉节点才会消失。
+ */
 const treeCtxDeleteFolder = async (env) => {
   closeTreeCtxMenu()
   if (!env) return
   const name = envLabel(env)
-  // 多级目录：删目录连**子目录**一起删（连接移到未分组，不删连接本身）
   const targets = allConnections.value.filter(c => {
     const g = c.group || ''
     return g === env || g.startsWith(env + '/')
   })
+  const subFolders = pureFolders.value.filter(f => f !== env && f.startsWith(env + '/'))
+  let body = t('mv.deleteGroupBody', { name, n: targets.length, m: subFolders.length })
+  if (isDefaultGroup(env)) body += t('mv.deleteDefaultGroupWarn', { name })
   try {
-    await ElMessageBox.confirm(
-      t('mv.deleteGroupBody', { name, n: targets.length }),
-      t('mv.deleteGroupTitle'), { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
-    )
+    await ElMessageBox.confirm(body, t('mv.deleteGroupTitle'), {
+      type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel')
+    })
   } catch { return }
-  try {
-    for (const c of targets) {
-      await saveConnection({ ...c, group: '' })
-    }
-    // 同步后端纯目录（子目录一并移除）
-    pureFolders.value = pureFolders.value.filter(f => !(f === env || f.startsWith(env + '/')))
-    await savePureFolders()
-    folderRefresh.value++
-    await loadAllConnections()
-    await buildTree()
+
+  dangerBegin(t('mv.deleteGroupPhase', { name }), name, { message: t('mv.deleteSubmitted') })
+  const failed = []
+  let ok = 0
+  for (const c of targets) {
+    try {
+      await deleteConnection(c.id)
+      ok++
+      purgeConnCache(c.id)
+    } catch (e) { failed.push(c.name) }
+  }
+  // 目录：本级 + 所有子级一起从纯目录里摘掉
+  pureFolders.value = pureFolders.value.filter(f => !(f === env || f.startsWith(env + '/')))
+  await savePureFolders()
+  folderRefresh.value++
+  await loadAllConnections()
+  await buildTree()
+  settleCurrentConn()
+  if (failed.length) {
+    dangerFinish(false, t('mv.deleteGroupPartial', { ok, total: targets.length, names: failed.join('、') }))
+    ElMessage.warning(t('mv.deleteGroupPartial', { ok, total: targets.length, names: failed.join('、') }))
+  } else {
+    dangerFinish(true, t('mv.groupDeleted', { name }))
     ElMessage.success(t('mv.groupDeleted', { name }))
-  } catch (e) { ElMessage.error(t('mv.deleteFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) })) }
+  }
 }
 
 const treeCtxEditConn = async (connId, focus) => {
@@ -3275,27 +3345,11 @@ const treeCtxDeleteConn = async (connId) => {
     await deleteConnection(connId)
     ElMessage.success(t('mv.deleted'))
     // 清理该连接的状态缓存；页签也跟着关 —— 连接都删了，它的表页签留着也取不到数据
-    const sid = String(connId)
-    delete dbsByConn.value[sid]
-    delete currentDbByConn.value[sid]
-    closeTabsOfConn(sid)
-    const remaining = allConnections.value.filter(x => x.id !== connId)
-    allConnections.value = remaining
+    purgeConnCache(connId)
+    allConnections.value = allConnections.value.filter(x => x.id !== connId)
     await buildTree()
-    if (!remaining.length) {
-      conn.value = null
-      currentConnId.value = null
-      sessionStorage.removeItem('dbmind.currentConnId')
-    } else if (String(connId) === currentConnId.value) {
-      // 删除的是当前连接：静默切换到第一个剩余连接（不展开树、不测试连接）
-      const next = remaining[0]
-      const nid = String(next.id)
-      conn.value = next
-      currentConnId.value = nid
-      sessionStorage.setItem('dbmind.currentConnId', nid)
-      dbs.value = dbsByConn.value[nid] || []
-      currentDb.value = currentDbByConn.value[nid] || ''
-    }
+    // 删的是当前连接时静默切到第一条剩余连接（不展开树、不测试连接）
+    settleCurrentConn()
     dangerFinish(true, t('mv.connDeleted', { name: c.name }))
   } catch (e) {
     dangerFinish(false, t('mv.deleteFailed', { detail: (e?.message || e) }))
@@ -3855,10 +3909,19 @@ const buildDbDetailNodes = async (dbNode) => {
       showErrorModal(msg)
       return []
     })
-    return (Array.isArray(collections) ? collections : []).map(col => ({
-      id: 'nosql:' + connId + ':' + db + ':' + col, label: col, kind: 'collection',
-      collection: col, database: db, connId, connType
-    }))
+    // 后端 `/collections` 给的是**对象数组**（`[{ name, comment }]`，见 crates/dbmind-web/src/api/nosql.rs）。
+    // 这里以前直接把元素当字符串用 ⇒ 树上显示成 `{"comment": null, "name": "demo-pro…"}`、
+    // 页签标题变成 `[object Object]`，点开时 collection 参数是个对象（序列化后为空串），
+    // 后端 trim 后报「缺少 collection 参数」（MongoDB / Elasticsearch 都这样，Redis 不展开树所以没遇到）。
+    // 统一取 name；顺带兼容"老后端返回纯字符串数组"的形状，过滤掉空名字。
+    return (Array.isArray(collections) ? collections : [])
+      .map(col => (typeof col === 'string' ? col : col && col.name))
+      .map(name => String(name == null ? '' : name).trim())
+      .filter(Boolean)
+      .map(name => ({
+        id: 'nosql:' + connId + ':' + db + ':' + name, label: name, kind: 'collection',
+        collection: name, database: db, connId, connType
+      }))
   }
   // 需要 schema 层级的数据库（SQL Server / PostgreSQL / KingbaseES 等）：库下先展示 schema
   if (schemaLevelOf(connType) === 'schema') {
@@ -4359,7 +4422,9 @@ const dbListToDbNodes = (connId, connType, dbList, catalog) => {
     // catalog 层级：库名带上 catalog 前缀，作为后续所有元数据请求的 `database` 参数
     const qualified = catalog ? catalog + '.' + db : db
     return {
-      id: 'db:' + connId + ':' + qualified, label: db, kind: 'db',
+      // label 只用来看：NoSQL 的占位库 `(default)` 落成「默认」，别把括号摆到树上；
+      // db 始终是原值（请求、缓存、节点 id 都靠它）
+      id: 'db:' + connId + ':' + qualified, label: dbLabelOf(db), kind: 'db',
       db: qualified, connId, connType,
       leaf: connType === 'REDIS' // Redis key 不进树
     }
@@ -4383,31 +4448,94 @@ const dbListToDbNodes = (connId, connType, dbList, catalog) => {
  * Oracle：「库」这一层就是**连接里填的服务名 / PDB**，不是能切换的库（换 PDB 得换连接），
  * 所以它永远只有一条，画出来纯属噪音。沿用上面 Doris「只有一个 catalog 就不画那一层」
  * 的同一口径：把它当隐含前缀，直接铺开成「模式」那一层；模式节点的 `db` 仍是 `FREE.DBMIND`，
- * 下游请求与"展开了库层"时完全一致。读不到模式清单（权限不足等）就退回原来的库层 ——
- * 绝不能把它变成空节点。
+ * 下游请求与"展开了库层"时完全一致。
+ *
+ * **读不到模式清单时不退回库层**（连不上 / 权限不足）：那一层的节点就是服务名，
+ * 画出来像"库在这儿、只是没展开"，点开却是空的。改为一行说明（`mv.noSchemaList`）。
  */
+/** 模式节点（Oracle / DM 的「库」层就是这一排） */
+const schemaNodesOf = (connId, connType, database, schemas) => schemas.map((s) => ({
+  id: 'schema:' + connId + ':' + database + ':' + s,
+  label: s,
+  kind: 'schema',
+  db: database + '.' + s,
+  realDb: database,
+  schema: s,
+  connId,
+  connType,
+  leaf: false
+}))
+
+/** 树里"没内容"的一行说明（**绝不返回 `[]`**，理由见 dbListToDbNodes 的空清单分支） */
+const metaHintNode = (id, connId, connType, label) => ({ id, kind: 'placeholder', connId, connType, label })
+
+/**
+ * 模式清单**最多干等多久**（毫秒）。
+ *
+ * 为什么要有一条线：这类类型（Oracle / DM）的连接节点展开后，那一排模式就是用户眼里
+ * 的「库」，所以要真建一次连才拿得到 —— 可达时 2~5 秒（宿主冷启动时更久），
+ * 不可达时要等满一次建连超时（真机实测 >20 秒，期间节点只是一个转圈的箭头）。
+ * 等不到就先给一行说明让节点**立刻展开**，请求继续在后台飞，回来了再回填
+ * （`updateKeyChildren`，与 calibrateDatabases 同一套做法）。
+ *
+ * 取 2.5 秒：可达的库在这里**基本都能等完**（热态 200~400ms、冷态 2~5 秒），
+ * 也就是说正常情况下用户看不到这行占位；只有真的慢/连不上才会露出来。
+ */
+const SCHEMA_PATIENT_MS = 2500
+/** 后台那条请求的兜底超时：内核自己 30 秒会回 504，这里只防"永远不回来" */
+const SCHEMA_CALL_TIMEOUT_MS = 60000
+
+/** 慢路径的后台收尾：请求回来了就把连接节点的子节点换掉（成功换模式、失败换说明） */
+const fillSchemasLater = (connId, database, settled) => {
+  settled.then((res) => {
+    const tree = treeRef.value
+    const node = tree && tree.getNode('conn:' + connId)
+    // 节点没了 / 整棵树重建过（另一个对象）：没有可回填的地方，直接作罢
+    if (!node || !node.data) return
+    const connType = node.data.connType
+    if (res.ok && Array.isArray(res.v) && res.v.length) {
+      clearUnreachable(connId)   // 连上了：撤掉预热那边的失败记录
+      const kids = schemaNodesOf(connId, connType, database, res.v)
+      node.data.children = kids
+      tree.updateKeyChildren(node.data.id, kids)
+      return
+    }
+    const hint = [metaHintNode('ph:' + connId + ':noschema', connId, connType, t('mv.noSchemaList'))]
+    node.data.children = hint
+    tree.updateKeyChildren(node.data.id, hint)
+  })
+}
+
 const dbOrSchemaNodes = async (connId, connType, dbList, catalog) => {
   if (hideDbLevelOf(connType) && !catalog) {
     const list = (Array.isArray(dbList) ? dbList : []).filter((db) => String(db) !== NO_DEFAULT_DB)
     if (list.length === 1) {
-      try {
-        const schemas = await listSchemas(connId, list[0])
-        if (Array.isArray(schemas) && schemas.length) {
-          return schemas.map((s) => ({
-            id: 'schema:' + connId + ':' + list[0] + ':' + s,
-            label: s,
-            kind: 'schema',
-            db: list[0] + '.' + s,
-            realDb: list[0],
-            schema: s,
-            connId,
-            connType,
-            leaf: false
-          }))
-        }
-      } catch (e) {
-        /* 读不到模式就退回库层，别让节点空着 */
+      const database = list[0]
+      // 请求照发，但**不干等**（见 SCHEMA_PATIENT_MS）：先 races 一下，超时就先占位。
+      // 用 settled 包住成败，慢路径上的 rejected 才不会被当成 unhandled rejection。
+      const settled = listSchemas(connId, database, { timeout: SCHEMA_CALL_TIMEOUT_MS }).then(
+        (v) => ({ ok: true, v }),
+        () => ({ ok: false })
+      )
+      const first = await Promise.race([
+        settled,
+        new Promise((done) => setTimeout(() => done({ slow: true }), SCHEMA_PATIENT_MS))
+      ])
+      if (first.slow) {
+        fillSchemasLater(connId, database, settled)
+        return [metaHintNode('ph:' + connId + ':schemaloading', connId, connType, t('mv.schemaLoading'))]
       }
+      if (first.ok && Array.isArray(first.v) && first.v.length) {
+        clearUnreachable(connId)
+        return schemaNodesOf(connId, connType, database, first.v)
+      }
+      // 读不到模式清单时**不再退回「库」层**。
+      //
+      // 库层对这类类型是"隐含前缀"，画出来的那个节点就是服务名（FREE）—— 而它下面
+      // 什么也加载不出来（列模式刚失败过）。用户的判断很直接：网络不通时树上还挂着一个
+      // 服务名节点，看着像"库在这儿、只是没展开"，点开又是空的（真机反馈）。
+      // 同一件事的正确说法只有一句：没连上，取不到模式清单。
+      return [metaHintNode('ph:' + connId + ':noschema', connId, connType, t('mv.noSchemaList'))]
     }
   }
   return await dbListToDbNodes(connId, connType, dbList, catalog)
@@ -5116,9 +5244,14 @@ const openTable = async (data) => {
 
 const openNoSql = (data) => {
   const cid = data.connId ? String(data.connId) : (currentConnId.value ? String(currentConnId.value) : '')
+  // 兜底：集合名必须是字符串。后端 `/collections` 回来的元素是 `{ name, comment }`，
+  // 任何一处忘了取 name，页签标题就会变成 `[object Object]`、请求也会缺 collection 参数。
+  const col = data.collection && typeof data.collection === 'object'
+    ? String(data.collection.name == null ? '' : data.collection.name)
+    : String(data.collection == null ? '' : data.collection)
   openTab({
-    id: tabKey('nosql:' + data.collection, cid), type: 'nosql', collection: data.collection,
-    database: data.database, kind: data.kind, connId: cid, label: data.collection
+    id: tabKey('nosql:' + col, cid), type: 'nosql', collection: col,
+    database: data.database, kind: data.kind, connId: cid, label: col
   })
 }
 
@@ -6717,11 +6850,14 @@ const tabPath = (tab) => {
   }
   if (isGlobalTab(tab) || tab.type === 'sql') return [base]
   const connName = allConnections.value.find(x => String(x.id) === String(tab.connId || ''))?.name
-  const parts = [connName, tab.database].filter(Boolean)
+  // 没有「库」这一层的类型（Oracle / DM）：库那一段是连接里填的服务名，路径里显示它只是噪音
+  // —— 只留模式（`FREE.SYS` → `SYS`，见 types 的 dbDisplayOf）；请求参数里仍是完整串。
+  const dbShown = dbDisplayOf(ct, tab.database)
+  const parts = [connName, dbShown].filter(Boolean)
   // 页签文本与库名相同时不再重复拼一份（Redis 的 db 页签 label 就是库名，
   // 原来会显示成「本地Redis · db0 · db0」）
   if (!parts.length) return [base]
-  if (base === tab.database) return parts
+  if (base === dbShown) return parts
   return parts.concat(base)
 }
 
@@ -6981,9 +7117,19 @@ const pickUserDetailFields = (info) => {
   return out
 }
 
-const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
+// 页签标题里显示的用户名。H2 的默认管理员用户名为空（接口里是 `""`），标题上
+// 摆两个引号很怪 —— 显示成「默认用户 / default」；请求仍用真值 fullName。
+const userLabel = (name, connId) => {
+  const c = connFor(connId)
+  if (c && String(c.type).toUpperCase() === 'H2' && String(name ?? '').trim() === '""') {
+    return t('um.blankUserName')
+  }
+  return name
+}
+
+const buildUserEditData = async ({ fullName, db, name, host, connId, asRole = false }) => {
   const parts = String(fullName).split('@')
-  const editData = { name: name || parts[0], host: host || (parts.length > 1 ? parts[1] : '') }
+  const editData = { name: name || parts[0], host: host || (parts.length > 1 ? parts[1] : ''), asRole }
   const target = connFor(connId ?? currentConnId.value)
   if (!target?.id) {
     ElMessage.error(t('mv.userConnUnknown'))
@@ -6993,7 +7139,8 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
   const isClickhouse = target.type === 'CLICKHOUSE'
   const isOracle = target.type === 'ORACLE'
   try {
-    const info = await getUserInfo(target.id, db, fullName)
+    // asRole：查的是**角色**自身的权限（Oracle/CH/Doris 的角色不在账号目录里）
+    const info = await getUserInfo(target.id, db, fullName, asRole)
     // 明细列随 editData 一起交给「基本信息」（原来这里只取了 name / host，其余全丢）
     editData.fields = pickUserDetailFields(info)
     // 服务器版本（只有纯 MySQL 会带）：5.7 没有 CREATE ROLE / DROP ROLE，界面按它隐藏
@@ -7036,6 +7183,10 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
       // function/procedure 类型 —— 撤销要拼 `on function|procedure`，回填时转成 kind。
       const rows = info.grantRows.filter(r => r && r.privilege)
       editData.pgRows = rows
+      // 角色成员关系（scope = role，后端从 pg_auth_members 补的一层）：
+      // 「服务器权限」页的角色清单是按 form.roles 回填勾选的 —— 不回填就一个勾都没有，
+      // 于是"取消勾选一个角色"这个动作根本发生不了（撤销也就永远发不出去）。
+      editData.roles = rows.filter(r => r.scope === 'role').map(r => r.privilege)
       // 同一目标的多条授权并成一行（`grant select, update on …` 是两次授权也能并）。
       // 例程同名重载（不同签名）读回是重复行，这里也一并归并。
       const merge = (list, keyOf, make) => {
@@ -7047,6 +7198,12 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
         }
         return [...byKey.values()]
       }
+      // 库级（scope = database，owner = 库名）—— 与模式级（scope = schema）分开回填
+      editData.pgDbPrivileges = merge(
+        rows.filter(r => r.scope === 'database'),
+        (r) => String(r.owner || ''),
+        (r) => ({ database: r.owner || '', privileges: [] })
+      )
       editData.dbPrivileges = merge(
         rows.filter(r => r.scope === 'schema'),
         (r) => String(r.owner || ''),
@@ -7062,6 +7219,18 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
         (r) => String(r.owner || '') + ':' + String(r.object || ''),
         (r) => ({ database: r.owner || '', kind: String(r.scope).toUpperCase(), routine: r.object || '', privileges: [] })
       )
+    } else if (target.type === 'H2' && Array.isArray(info.grantRows)) {
+      // H2：只有表级授权一层（schema 放在 owner 里）。同一目标的多条授权并成一行；
+      // 原始行留在 h2Rows —— 保存时按它算"原来有、现在取消了"的撤销差量。
+      const rows = info.grantRows.filter(r => r && r.privilege && r.scope === 'table')
+      editData.h2Rows = rows
+      const byKey = new Map()
+      for (const r of rows) {
+        const key = String(r.owner || '') + '.' + String(r.object || '')
+        if (!byKey.has(key)) byKey.set(key, { database: r.owner || '', table: r.object || '', privileges: [] })
+        byKey.get(key).privileges.push(r.privilege)
+      }
+      editData.tablePrivileges = [...byKey.values()]
     } else if (info.privileges || info.dbPrivileges || info.tablePrivileges) {
       // Doris 等方言直接返回结构化权限（其 SHOW GRANTS 不含权限明细）
       editData.privileges = info.privileges || []
@@ -7073,7 +7242,14 @@ const buildUserEditData = async ({ fullName, db, name, host, connId }) => {
       editData.dbPrivileges = parsed.dbPrivileges
       editData.tablePrivileges = parsed.tablePrivileges
       editData.routinePrivileges = parsed.routinePrivileges || []
+      // MySQL 8 / MariaDB 的角色：后端单独查了 mysql.role_edges，结构化行 scope='role'
+      // （文本那份也在 grants 里，但解析器按 ON 子句吃，角色行没有 ON，反解不可靠）。
+      editData.roles = (info.grantRows || []).filter(r => r && r.scope === 'role').map(r => r.privilege)
     }
+    // 角色候选清单：服务器上出现过的角色（没有它就无法"授一个还没授过的角色"）。
+    // **所有方言都要带** —— PG 的角色页、Oracle 的自定义角色都靠它；
+    // 原来只写在 MySQL 分支里，PG / Oracle 的自定义角色在界面上永远不出现。
+    editData.availableRoles = info.availableRoles || []
     if (info.roles && !isMssql) editData.roles = info.roles
   } catch (e) {
     // 不能静默：拿不到详情时表单会显示成「没有权限」，与「确实没有权限」无法区分
@@ -7099,7 +7275,7 @@ const openUserEdit = async () => {
     id: tabKey('user-form:edit:' + fullName, cid), type: 'user-form', mode: 'edit', editData,
     // 该类型没有"改用户"的能力（如达梦只有清单与详情）⇒ 表单只给看
     readOnly: !featureOf(cid, 'supportsUserManage'),
-    connId: cid, database: db, label: t('mv.editUserLabel', { name: fullName })
+    connId: cid, database: db, label: t('mv.editUserLabel', { name: userLabel(fullName, cid) })
   })
 }
 
@@ -7110,11 +7286,29 @@ const onUserDetailEdit = ({ name, connId, database }) => {
   openUserEditByName(name, cid, database, !featureOf(cid, 'supportsUserManage'))
 }
 
+// 角色权限：以角色为主体另开一张表单（同一套授权矩阵，保存走 alter-role）
+const openRoleEditByName = async (label, connId, db) => {
+  const cid = String(connId || currentConnId.value || '')
+  const database = db || currentDb.value
+  const editData = await buildUserEditData({ fullName: label, db: database, connId: cid, asRole: true })
+  openTab({
+    id: tabKey('user-form:role:' + label, cid), type: 'user-form', mode: 'edit', editData,
+    asRole: true, connId: cid, database, label: t('mv.rolePrivTitle', { name: label })
+  })
+}
+
+// 角色页签里点「编辑角色权限」→ 从当前用户表单跳到该角色的表单
+const onUserFormEditRole = (tab, ev) => {
+  const label = String((ev && ev.label) || '').trim()
+  if (!label) return
+  openRoleEditByName(label, tab && tab.connId, tab && tab.database)
+}
+
 const openUserEditByName = async (fullName, connId, db, readOnly = false) => {
   const cid = String(connId || currentConnId.value || '')
   const database = db || currentDb.value
   const editData = await buildUserEditData({ fullName, db: database, connId: cid })
-  openTab({ id: tabKey('user-form:edit:' + fullName, cid), type: 'user-form', mode: 'edit', editData, readOnly, connId: cid, database, label: t('mv.editUserLabel', { name: fullName }) })
+  openTab({ id: tabKey('user-form:edit:' + fullName, cid), type: 'user-form', mode: 'edit', editData, readOnly, connId: cid, database, label: t('mv.editUserLabel', { name: userLabel(fullName, cid) }) })
 }
 
 // ===== 用户管理页（顶栏第一个入口）=====
@@ -7124,6 +7318,8 @@ const openUserEditByName = async (fullName, connId, db, readOnly = false) => {
 const userListTick = ref(0)
 
 const openUserManage = () => {
+  // 不再在这里拦 NoSQL：用户管理页对"没有用户概念"的类型统一显示一句说明
+  // （与 H2 / SQLite 这些关系型完全同一套空态），入口对所有数据源都开得进去。
   openTab({
     id: 'users', type: 'users', connId: String(currentConnId.value || ''),
     database: '', label: t('nav.userManage')
@@ -7143,6 +7339,14 @@ const onUserManageForm = async ({ mode, connId, database, fullName, readOnly }) 
     return
   }
   await openUserEditByName(fullName, cid, database, readOnly)
+}
+
+// 角色管理页点「编辑 / 授权」→ 以**角色为主体**打开同一张授权表单
+// （asRole=true，保存走 alter-role：只出差量 GRANT / REVOKE）。
+const onUserManageRole = ({ connId, label, name, host }) => {
+  const full = String(label || '').trim() || (host ? `${name}@${host}` : String(name || ''))
+  if (!full) return
+  openRoleEditByName(full, connId, '')
 }
 
 const onUserFormSaved = () => {

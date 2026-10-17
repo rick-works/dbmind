@@ -8,7 +8,11 @@
         <el-select v-model="curConnId" size="small" class="ols-conn" filterable @change="onConnSwitch">
           <el-option v-for="c in connections" :key="c.id" :label="c.name" :value="String(c.id)" />
         </el-select>
-        <el-select v-model="curDb" size="small" class="ols-db" filterable :placeholder="$t('upv.phPickDb')" @change="load">
+        <!-- 库下拉：**没有「库」这一层的类型**（Oracle / DM）不画 —— 它就是连接里填的
+             服务名，永远只有一条；这里显示的是模式（用户眼里的"库"就是这个）。
+             请求仍然带完整串（`服务名.模式`），只是不再把服务名摆到界面上。 -->
+        <span v-if="hideDbLevel" class="ols-db-text" :title="dbShown">{{ dbShown || $t('upv.phPickDb') }}</span>
+        <el-select v-else v-model="curDb" size="small" class="ols-db" filterable :placeholder="$t('upv.phPickDb')" @change="load">
           <el-option v-for="d in dbOptions" :key="d" :label="d" :value="d" />
         </el-select>
         <el-input v-model="keyword" size="small" clearable :placeholder="$t('ols.search')"
@@ -83,6 +87,7 @@ import { t } from '../../utils/i18n'
 import { editorSettingsLive } from '../../utils/settings'
 import { formatDbValue } from '../../utils/cellValue'
 import { listTables, listProcedures, listTriggers, listEvents, getTableCounts, listDatabases } from '../../api'
+import { hideDbLevelOf, dbDisplayOf } from '../../types'
 
 const props = defineProps({
   conn: { type: Object, default: null },
@@ -103,7 +108,10 @@ const localDbs = ref({})
 const dbOptions = computed(() => props.dbsByConn?.[curConnId.value] || localDbs.value[curConnId.value] || [])
 const connName = computed(() => (props.connections.find(c => String(c.id) === curConnId.value) || {}).name || '')
 const onConnSwitch = async (cid) => {
-  curDb.value = ''
+  // 没有「库」这一层的类型（Oracle / DM）：库值固定取该连接自身的服务名 ——
+  // 下拉不画了，但请求必须带（否则列出来的不是这个连接的表）
+  const c = props.connections.find(x => String(x.id) === String(cid))
+  curDb.value = hideDbLevelOf(c?.type) ? String(c?.database || '') : ''
   if (!(props.dbsByConn?.[cid] || localDbs.value[cid])) {
     try {
       const list = await listDatabases(cid)
@@ -147,6 +155,10 @@ const connType = computed(() => {
   const c = props.connections.find(x => String(x.id) === curConnId.value) || props.conn
   return String(c?.type || '').toUpperCase()
 })
+// 「库」这一层要不要画：Oracle / DM 的库就是连接里填的服务名，永远只有一条（见 types）
+const hideDbLevel = computed(() => hideDbLevelOf(connType.value))
+// 这类类型在库的位置上显示**模式**（`FREE.SYS` → `SYS`），服务名不出现在界面上
+const dbShown = computed(() => dbDisplayOf(connType.value, curDb.value))
 const NAME_COL = { prop: 'name', label: 'ols.name', align: 'left' }
 const TABLE_COL_SETS = {
   MYSQL: [
@@ -487,6 +499,14 @@ onBeforeUnmount(() => resizeObs?.disconnect())
 .ols-search { width: 200px; }
 .ols-conn { width: 170px; }
 .ols-db { width: 130px; }
+/* 没有「库」这一层的类型（Oracle / DM）：这里显示的是模式名，做成与下拉同位同高的纯文字，
+   读起来是"当前上下文"，而不是一个还能点开的下拉（点了没东西可选的控件比没有更糟） */
+.ols-db-text {
+  display: inline-flex; align-items: center; height: 24px; max-width: 160px;
+  padding: 0 10px; border-radius: 6px;
+  background: var(--dc-bg-soft, #f4f6f9); color: var(--dc-text-dim, #606266);
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .ols-count { color: var(--dc-text-dim, #909399); font-size: 12px; }
 .ols-flex { flex: 1; }
 /* 表格区：圆角边框（表数据页网格同款），行少时空白也在框内；

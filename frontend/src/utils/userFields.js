@@ -16,7 +16,11 @@ export const userFieldLabelMap = () => ({
   // 小写形式（SQL Server 等）
   name: t('udv.fUser'), host: t('udv.fHost'), user: t('udv.fUser'), type_desc: t('udv.fType'),
   type: t('udv.fType'), default_schema: t('udv.fSchema'), default_schema_name: t('udv.fSchema'),
+  // SQL Server 登录名（服务器级）的默认库 —— 与库内用户的 default_schema 不是同一件事
+  default_database: t('udv.fDefaultDb'), DEFAULT_DATABASE: t('udv.fDefaultDb'),
   disabled: t('udv.fDisabled'), is_disabled: t('udv.fDisabled'), login_name: t('udv.fLoginName'),
+  // H2 的用户只有「是否管理员」这一个属性（没有全局权限层）
+  is_admin: t('udv.fIsAdmin'),
   // PostgreSQL 的 rol* 三项
   is_superuser: t('udv.fSuperuser'), can_login: t('udv.fCanLogin'), can_create_db: t('udv.fCanCreateDb'),
   // ClickHouse 的 system.users 列（驱动可能回大写或小写键名，两套都备）

@@ -30,7 +30,7 @@
             <el-option v-for="c in connections" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
           </el-select>
           <div class="pair">
-            <el-select v-model="src.database" size="small" :disabled="taskRunning" @change="onSrcDbChange">
+            <el-select v-if="!srcHideDb" v-model="src.database" size="small" :disabled="taskRunning" @change="onSrcDbChange">
               <el-option v-for="d in srcDbs" :key="d" :label="d" :value="d" />
             </el-select>
             <el-select v-if="srcNeedSchema" v-model="src.schema" size="small" :disabled="taskRunning" @change="loadSrcObjects">
@@ -49,7 +49,7 @@
             <el-option v-for="c in connections" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
           </el-select>
           <div class="pair">
-            <el-select v-model="tgt.database" size="small" :disabled="taskRunning" @change="onTgtDbChange">
+            <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small" :disabled="taskRunning" @change="onTgtDbChange">
               <el-option v-for="d in tgtDbs" :key="d" :label="d" :value="d" />
             </el-select>
             <el-select v-if="tgtNeedSchema" v-model="tgt.schema" size="small" :disabled="taskRunning">
@@ -288,6 +288,8 @@ import {
   Grid, View, FirstAidKit, SetUp, Lightning, Calendar, Clock
 } from '@element-plus/icons-vue'
 import { listConnections, listDatabases, listSchemas, listTables, listProcedures, listTriggers, listEvents, getFeatures, syncDb, syncTaskStatus, syncCancel } from '../../api'
+// 「库」这一层要不要画（Oracle / DM 没有库层：它就是连接里填的服务名）
+import { hideDbLevelOf } from '../../types'
 // 函数 / 存储过程的判据必须与左侧对象树同源（见 treeNodes.js 的 isFunctionRoutine），
 // 否则会出现"树上算函数、同步时算存储过程"这种两边对不上的分叉
 import { isFunctionRoutine } from '../data/treeNodes'
@@ -371,6 +373,10 @@ const tgtFeatures = ref({})
 // SQL Server / PG 的模式下拉就从不出现（真机踩过：SQL Server 选不了模式）
 const srcNeedSchema = computed(() => srcFeatures.value.supportsSchemas === true)
 const tgtNeedSchema = computed(() => tgtFeatures.value.supportsSchemas === true)
+// 没有「库」这一层的类型（Oracle / DM）：库里填的就是连接自身的服务名，永远一条 ——
+// 下拉不画（画出来就是把服务名摆给用户看），请求里照旧带它（见 loadSrcDbs / loadTgtDbs）
+const srcHideDb = computed(() => hideDbLevelOf(srcInfo.value?.type))
+const tgtHideDb = computed(() => hideDbLevelOf(tgtInfo.value?.type))
 
 const TYPE_ICON = {
   table: Grid, view: View, function: FirstAidKit,
@@ -701,6 +707,14 @@ const onSrcConnChange = async () => {
 }
 const loadSrcDbs = async () => {
   if (!src.value.connectionId) { srcDbs.value = []; return }
+  if (srcHideDb.value) {
+    // 没有库层：库值取连接自身的服务名（下拉不画），直接进「模式」那一步
+    srcDbs.value = []
+    src.value.database = String(srcInfo.value?.database || '')
+    try { srcFeatures.value = await getFeatures(src.value.connectionId) } catch (e) { srcFeatures.value = {} }
+    await onSrcDbChange()
+    return
+  }
   srcDbs.value = await listDatabases(src.value.connectionId)
   // **默认不预选**（用户要求）：库留空由用户自己选 —— 系统库（INFORMATION_SCHEMA）
   // 排第一时自动选中它，反而掩盖了真实业务库
@@ -727,6 +741,14 @@ const onTgtConnChange = async () => {
 }
 const loadTgtDbs = async () => {
   if (!tgt.value.connectionId) { tgtDbs.value = []; return }
+  if (tgtHideDb.value) {
+    // 同源：没有库层就取连接自身的服务名，下拉不画
+    tgtDbs.value = []
+    tgt.value.database = String(tgtInfo.value?.database || '')
+    try { tgtFeatures.value = await getFeatures(tgt.value.connectionId) } catch (e) { tgtFeatures.value = {} }
+    await onTgtDbChange()
+    return
+  }
   tgtDbs.value = await listDatabases(tgt.value.connectionId)
   // 同源：默认不预选
   try { tgtFeatures.value = await getFeatures(tgt.value.connectionId) } catch (e) { tgtFeatures.value = {} }

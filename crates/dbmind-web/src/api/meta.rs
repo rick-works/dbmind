@@ -2388,18 +2388,20 @@ pub async fn users(
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
 ) -> XResult<Json<Value>> {
-    let params = Params::parse(raw.as_deref());
+    // 参数照旧解析（老客户端会带 database），但**不再使用** —— 见下面注释
+    let _params = Params::parse(raw.as_deref());
     let (_, dialect) = ctx_of(&state, &id).await?;
-    // 用户清单大多是**全局目录**（mysql.user / pg_roles / all_users / system.users），
-    // 不该带库上下文：Doris 实测连接带着 `test` 库打开用户管理时，驱动先 `use test`
+    // 用户清单都是**全局目录**（mysql.user / pg_roles / all_users / system.users /
+    // SQL Server 的 sys.server_principals 登录名），与"当前库"无关，一律不带库上下文。
+    // 带库的后果很实在：Doris 实测连接带着 `test` 库打开用户管理时，驱动先 `use test`，
     // 直接报「Unknown database 'test'」（errCode 2 / 1049），整个清单都拉不出来。
-    // 只有 SQL Server 的清单是库级的（sys.database_principals），才需要 database。
-    let database = if dialect.kind.key() == "sqlserver" {
-        params.get("database").unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // （SQL Server 以前是唯一例外 —— 那时列的是库用户；现在改成登录名，见 dialect.users。）
+    let database = String::new();
     let value = meta_list(&state, &id, &database, dialect.users(), "用户清单").await?;
+    // **角色不进用户列表**（用户要求）：角色在「编辑 / 授权」的「角色」页签里看与管理 ——
+    // 那一页本来就要列出全部角色（能授才有意义），新建 / 删除也放在那里，同一处闭环。
+    // 这里的清单只有账号：MySQL/MariaDB 的角色账号在 `dialect.users()` 的 SQL 里已排除，
+    // Oracle / ClickHouse / Doris 的账号表本来就不含角色。
     let normalized = match value {
         Value::Array(rows) => Value::Array(
             rows.into_iter()
@@ -2415,6 +2417,61 @@ pub async fn users(
         other => other,
     };
     Ok(Json(normalized))
+}
+
+// ------------------------------------------------------------------ 角色清单
+
+/// 角色清单（「用户管理」页的「角色管理」页签用）。
+///
+/// 返回 `{ supported, roles: [{ name, host, comment }], message }` —— 三个字段各有分工：
+/// · `supported=false`：这个**服务端版本**没有角色，或这个方言根本没有「角色」这个概念。
+///   界面据此**只显示「用户管理」一个页签**（用户要求：不支持角色就别摆那个页签）。
+///   最典型的是 MySQL 5.7 / MariaDB 10.0.4 以前：`mysql.role_edges` 这张表根本不存在，
+///   `role_inventory()` 的 SQL 一查就报「表不存在」—— 那不是错误，是这个版本真没有角色。
+/// · `roles`：角色清单本身（MySQL 的角色是 `名字@主机`，其余方言只有名字）。
+/// · `message`：拿不到清单时的**原始原因**（只在 `supported=false` 时有值，界面按需展示）。
+pub async fn roles(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> XResult<Json<Value>> {
+    let (_, dialect) = ctx_of(&state, &id).await?;
+    let sql = match dialect.role_inventory() {
+        Meta::Sql(sql) => sql,
+        // 这个概念在方言里就没有（SQLite / H2 / DB2 / Derby / SQL Server：角色不是独立主体
+        // 或压根没有角色）：不是"还没实现"，是"没有这个东西"，两者在这里都是"不显示页签"。
+        _ => return Ok(Json(json!({ "supported": false, "roles": [], "message": "" }))),
+    };
+    // 角色是**全局目录**（mysql.role_edges / pg_roles / dba_roles / system.roles / SHOW ROLES），
+    // 与用户清单同一个理由：一律不带库上下文（带库会让 Doris 报 Unknown database）。
+    let database = String::new();
+    let result = match run_sql_in(&state, &id, &database, sql, META_MAX_ROWS).await {
+        Ok(result) => result,
+        // 版本没有角色（或者这台库上读不到角色目录）：如实说"没有角色清单"，
+        // 不把一条红色报错甩到用户面前 —— 但也**不静默**，原因随 message 带回去。
+        Err(e) => {
+            return Ok(Json(json!({
+                "supported": false,
+                "roles": [],
+                "message": e.message,
+            })))
+        }
+    };
+    let mut out: Vec<Value> = Vec::new();
+    for row in rows_of(&result) {
+        // Doris 的 `SHOW ROLES` 列名是 Name；其余方言由 SQL 起别名 role_name / role_host。
+        // 列名大小写各家不同，一律按名字忽略大小写取（与 user_info 同一条经验）。
+        let name = pick_field(&row, &["role_name", "Name", "rolename"]);
+        if name.trim().is_empty() {
+            continue;
+        }
+        out.push(json!({
+            "name": name,
+            "host": pick_field(&row, &["role_host", "host"]),
+            // Doris 的 SHOW ROLES 带 Comment；其余方言没有这一列 → 空串（界面显示破折号）
+            "comment": pick_field(&row, &["comment", "description"]),
+        }));
+    }
+    Ok(Json(json!({ "supported": true, "roles": out, "message": "" })))
 }
 
 // ------------------------------------------------------------------ 表操作
@@ -2805,16 +2862,37 @@ pub async fn user_info(
     if name.trim().is_empty() {
         return Ok(Json(json!({ "error": "缺少 name 参数" })));
     }
-    let database = params.get("database").unwrap_or_default();
+    let _ = params.get("database");
     let (_, dialect) = ctx_of(&state, &id).await?;
     // 与用户清单同一条规矩：用户详情是全局目录查询（mysql.user / pg_roles / all_users /
-    // system.users），**不带库上下文** —— Doris 带着不存在的库打开会直接「Unknown database」。
-    let database = if dialect.kind.key() == "sqlserver" {
-        database
+    // system.users / SQL Server 的 sys.server_principals 登录名），**不带库上下文** ——
+    // Doris 带着不存在的库打开会直接「Unknown database」；
+    // SQL Server 更狠：界面顺手带上当前库（"default"）时，驱动先 `use default`，
+    // 直接报「Cannot open database "default" requested by the login」，整套用户管理打不开。
+    let database = String::new();
+    // `role=1`：编辑**角色**自身的权限。角色不是账号（Oracle / CH / Doris 根本不在
+    // 账号目录里），不能拿 `user_info` 去查 —— 那会得到"没有找到用户"。
+    let as_role = params
+        .get("role")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    // 界面传来的 `name` 是**列表里那一行的标签**：MySQL 系是 `名字@主机`（角色也是账号形状），
+    // 其余方言就是裸名字。角色这条路走的是 `role_info` / `role_grants`，它们只要**角色名** ——
+    // 不切开的话 MySQL 的 `role_info` 会拿 `user = 'r@%'` 去比，结果 0 行，
+    // 界面表现为「没有找到用户」（实测 MySQL 8.0.46 的角色页打不开）。
+    // 账号那条路不用动：`user_info` 自己会按最后一个 `@` 拆成两列。
+    let role_label = name.trim();
+    let role_name = if as_role && dialect.kind.key() == "mysql" {
+        role_label.rsplit_once('@').map(|(n, _)| n).unwrap_or(role_label)
     } else {
-        String::new()
+        role_label
     };
-    let sql = match dialect.user_info(name.trim()) {
+    let info_meta = if as_role {
+        dialect.role_info(role_name)
+    } else {
+        dialect.user_info(name.trim())
+    };
+    let sql = match info_meta {
         Meta::Sql(sql) => sql,
         _ => {
             return Ok(Json(json!({
@@ -2839,8 +2917,12 @@ pub async fn user_info(
     // （真机上就是这么误导人的：明明刚授过权）。
     let account_user = pick_field(&row, &["name", "user", "username"]);
     let account_host = pick_field(&row, &["host"]);
-    let (grants, grant_rows): (Vec<Value>, Vec<Value>) =
-        match dialect.user_grants(&account_user, &account_host) {
+    let grant_meta = if as_role {
+        dialect.role_grants(&account_user, &account_host)
+    } else {
+        dialect.user_grants(&account_user, &account_host)
+    };
+    let (mut grants, grant_rows): (Vec<Value>, Vec<Value>) = match grant_meta {
             Meta::Sql(query) => {
                 let detail = expand_grant_rows(
                     run_sql_in(&state, &id, &database, query, 10_000)
@@ -2862,9 +2944,10 @@ pub async fn user_info(
             // `grants_text` 是换行分隔的文本，界面会对它 `.map()` —— 必须转成数组，
             // 给字符串会在前端直接抛异常
             _ => (
-                row.get("grants_text")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
+                // 列名大小写各家不同（H2 未加引号时会把别名全大写成 GRANTS_TEXT）：
+                // 按名字忽略大小写取，别再写死小写 —— 否则权限整段被当成普通字段丢掉，
+                // 界面上就是"这个用户没有权限"。
+                pick_field(&row, &["grants_text"])
                     .lines()
                     .map(str::trim)
                     .filter(|line| !line.is_empty())
@@ -2873,9 +2956,84 @@ pub async fn user_info(
                 Vec::new(),
             ),
         };
+    // **角色**这一层：它不在 information_schema 的三张权限视图里
+    // （见 dialect.user_roles 的说明），单独查一次补进结构化行 —— 否则「角色」在界面上
+    // 彻底隐身，用户授过的角色既看不见也撤不掉。
+    // 覆盖所有有独立角色主体的方言：MySQL/MariaDB（role_edges / roles_mapping）、
+    // ClickHouse（system.role_grants）、以及「有角色但本用户不一定有」的
+    // Oracle / Doris / PostgreSQL（它们只需要候选清单，`user_roles` 返回 Unwritten）。
+    let mut available_roles: Vec<Value> = Vec::new();
+    let mut grant_rows = grant_rows;
+    // 角色**也能被授角色**（PG 的成员关系可以层层嵌套），所以 as_role 时同样要查这一层 ——
+    // 只在用户表单里查的话，"角色管理 → 编辑权限"里永远看不到它继承了哪些角色，
+    // 更撤不掉（PG 实测：勾选状态全空，取消勾选也就无从发生）。
+    if matches!(
+        dialect.kind.key(),
+        "mysql" | "mariadb" | "clickhouse" | "oracle" | "doris" | "postgresql" | "kingbase"
+    ) {
+        if let Meta::Sql(q) = dialect.user_roles(&account_user, &account_host) {
+            if let Ok(res) = run_sql_in(&state, &id, &database, q, 1000).await {
+                for item in rows_of(&res) {
+                    let rn = pick_field(&item, &["role_name"]);
+                    let rh = pick_field(&item, &["role_host"]);
+                    if rn.is_empty() {
+                        continue;
+                    }
+                    // MySQL 的角色是账号形状（`名字@host`）；MariaDB 的角色**没有 host**，
+                    // 拼成 `名字@` 会在界面上多出一列对不上的假角色（真机回归发现）。
+                    let mysql_style = dialect.kind.key() == "mysql";
+                    let label = if mysql_style && !rh.is_empty() { format!("{rn}@{rh}") } else { rn.clone() };
+                    grant_rows.push(json!({
+                        "scope": "role",
+                        "privilege": label,
+                        "owner": rn.clone(),
+                        "object": if mysql_style { rh.clone() } else { String::new() },
+                    }));
+                    // 文本那一份也补上（否则「原始授权」里看不到角色，只剩下结构化行）。
+                    // 拼法按方言分三档 —— 曾经一律按 MySQL 写成 `TO 'u'@'h'`：
+                    // MariaDB / CH / Oracle / PG 的角色没有 host，那条语句里就多出一个
+                    // 凭空出现的 `@`（`GRANT 'r' TO 'u'@;`），复制出去是语法错。
+                    let pg_style = matches!(dialect.kind.key(), "postgresql" | "kingbase");
+                    let (role_ref, grantee) = if mysql_style {
+                        (
+                            format!("{}@{}", dialect.literal(&rn), dialect.literal(&rh)),
+                            format!("{}@{}", dialect.literal(&account_user), dialect.literal(&account_host)),
+                        )
+                    } else if pg_style {
+                        // PG/KB 的角色是**标识符**（`grant "r" to "u"`），单引号在这里不合法
+                        (dialect.quote(&rn), dialect.quote(&account_user))
+                    } else {
+                        // MariaDB / ClickHouse / Oracle：账号形状是字符串，用字面量
+                        (dialect.literal(&rn), dialect.literal(&account_user))
+                    };
+                    grants.push(json!(format!("GRANT {role_ref} TO {grantee};")));
+                }
+            }
+        }
+        if let Meta::Sql(q) = dialect.role_inventory() {
+            if let Ok(res) = run_sql_in(&state, &id, &database, q, 1000).await {
+                for item in rows_of(&res) {
+                    // Doris 的 `SHOW ROLES` 列名是 Name（其余方言由 SQL 起别名 role_name）
+                    let rn = pick_field(&item, &["role_name", "Name"]);
+                    let rh = pick_field(&item, &["role_host"]);
+                    if rn.is_empty() {
+                        continue;
+                    }
+                    let dup = available_roles.iter().any(|v| {
+                        v.get("name").and_then(Value::as_str) == Some(rn.as_str())
+                            && v.get("host").and_then(Value::as_str) == Some(rh.as_str())
+                    });
+                    if !dup {
+                        available_roles.push(json!({ "name": rn, "host": rh }));
+                    }
+                }
+            }
+        }
+    }
     let mut out = Map::new();
     for (key, value) in row {
-        if key == "grants_text" {
+        // 同上：大小写不敏感（H2 会把未加引号的别名大写成 GRANTS_TEXT）
+        if key.eq_ignore_ascii_case("grants_text") {
             continue;
         }
         // 口令散列不进界面：MySQL 的用户详情是 `select * from mysql.user`，
@@ -2891,9 +3049,107 @@ pub async fn user_info(
         // 其余键走 `fieldLabelMap` 渲染，不需要在这里做驼峰转换
         out.insert(key, value);
     }
+    // SQL Server：服务器角色得从 `alter server role [x] add member [u];` 里拆出来，
+    // 界面「服务器角色」页签是按**结构化字段**回填勾选的（文本行不反解）。
+    // 不拆的话 sa 明明是 sysadmin，页签里却一个勾都没有。
+    // 注意位置：必须在 `grants` 被移进 out 之前处理。
+    let mssql_server_roles: Vec<Value> = if dialect.kind.key() == "sqlserver" {
+        grants
+            .iter()
+            .filter_map(Value::as_str)
+            .filter_map(|line| {
+                let lower = line.to_ascii_lowercase();
+                let start = lower.find("alter server role ")? + "alter server role ".len();
+                let rest = &line[start..];
+                let end = rest.to_ascii_lowercase().find(" add member")?;
+                let name = rest[..end].trim().trim_matches(|c| c == '[' || c == ']');
+                if name.is_empty() { None } else { Some(json!(name)) }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     out.insert("grants".to_string(), Value::Array(grants));
     // 结构化的一份，界面按层级回填表单、并据此算撤销清单（见上面的注释）
     out.insert("grantRows".to_string(), Value::Array(grant_rows));
+    // MySQL 系的「角色」页要用它列候选（服务器上出现过的角色）——
+    // 没这个清单，界面上只能看到"已授的"，授不了新的。
+    if !available_roles.is_empty() {
+        out.insert("availableRoles".to_string(), Value::Array(available_roles));
+    }
+    if as_role {
+        // 界面据此隐藏"角色""密码/属性"这些对角色没意义的部分
+        out.insert("isRole".to_string(), json!(true));
+    }
+    if !mssql_server_roles.is_empty() {
+        out.insert("serverRoles".to_string(), Value::Array(mssql_server_roles));
+    }
+    // SQL Server 的 Schema / 对象权限是**库级**目录（sys.database_permissions），
+    // 而用户管理入口是连接级（不带库）。这里取一次在线用户库清单，逐库查出该登录名的
+    // 显式授权，每条都带上库名 —— 界面上那两个页签本来就是**行级选库**的形态。
+    // 只收显式 GRANT / WITH GRANT（state 为 G/W）：DENY 不是"拥有"，不能显示成勾选。
+    if dialect.kind.key() == "sqlserver" {
+        let who = dialect.literal(name.trim());
+        let mut schema_rows: Vec<Value> = Vec::new();
+        let mut object_rows: Vec<Value> = Vec::new();
+        if let Ok(list) = run_sql_in(
+            &state,
+            &id,
+            "",
+            "select name from sys.databases where state = 0 and database_id > 4".to_string(),
+            200,
+        )
+        .await
+        {
+            for db_row in rows_of(&list) {
+                let db = pick_field(&db_row, &["name"]);
+                if db.trim().is_empty() {
+                    continue;
+                }
+                // 库名不能拼进 SQL 标识符位置（这里是作为 run_sql_in 的 database 参数，安全）
+                // 注意对象级（class = 1）的 `major_id` 是 **object_id**，不是 schema_id：
+                // 用 `schema_name()` 会拿到 NULL（实测 employees 的 SELECT 回显成空模式，
+                // 前端「模式」列空白，而且保存时会被「schema 为空就跳过」静默丢掉），
+                // 必须用 `object_schema_name()`。schema 级（class = 3）才是 schema_id。
+                let sql = format!(
+                    "select 'schema' as scope, db_name() as db_name, \
+                       schema_name(p.major_id) as schema_name, '' as object_name, \
+                       p.permission_name as permission_name \
+                     from sys.database_permissions p \
+                     join sys.database_principals u on u.principal_id = p.grantee_principal_id \
+                     where u.name = {who} and p.class = 3 and p.state in ('G','W') \
+                     union all \
+                     select 'object', db_name(), object_schema_name(p.major_id), \
+                       object_name(p.major_id), p.permission_name \
+                     from sys.database_permissions p \
+                     join sys.database_principals u on u.principal_id = p.grantee_principal_id \
+                     where u.name = {who} and p.class = 1 and p.state in ('G','W')"
+                );
+                if let Ok(result) = run_sql_in(&state, &id, &db, sql, 5_000).await {
+                    for item in rows_of(&result) {
+                        let scope = pick_field(&item, &["scope"]);
+                        let row = json!({
+                            "database": pick_field(&item, &["db_name"]),
+                            "schema": pick_field(&item, &["schema_name"]),
+                            "object": pick_field(&item, &["object_name"]),
+                            "permission": pick_field(&item, &["permission_name"]),
+                        });
+                        if scope.trim().eq_ignore_ascii_case("schema") {
+                            schema_rows.push(row);
+                        } else if !pick_field(&item, &["object_name"]).trim().is_empty() {
+                            object_rows.push(row);
+                        }
+                    }
+                }
+            }
+        }
+        if !schema_rows.is_empty() {
+            out.insert("schemaPrivileges".to_string(), Value::Array(schema_rows));
+        }
+        if !object_rows.is_empty() {
+            out.insert("objectPrivileges".to_string(), Value::Array(object_rows));
+        }
+    }
     // MySQL 顺带带回服务器版本：**5.7 没有 CREATE ROLE / DROP ROLE**（8.0 才引入），
     // 界面若照 8.0 的清单展示，勾上保存必 1064 语法错（实测 5.7.42）。前端按版本隐藏。
     // 只查纯 MySQL —— MariaDB 版本串是 10.x、Doris 有自己的角色体系，不能按 5.x 一刀切。
@@ -2974,6 +3230,7 @@ pub async fn user_action(
             profile: text("profile"),
             disabled: flag("disabled"),
             default_schema: text("defaultSchema"),
+            default_database: text("defaultDatabase"),
             login_name: text("loginName"),
             can_login: flag("canLogin"),
             is_superuser: flag("isSuperuser"),
@@ -2995,6 +3252,8 @@ pub async fn user_action(
     let oracle_family = matches!(dialect.kind.key(), "oracle");
     let clickhouse_family = dialect.kind.key() == "clickhouse";
     let pg_family = matches!(dialect.kind.key(), "postgresql" | "kingbase");
+    // H2：只有表级授权这一层（没有全局/库级）
+    let h2_family = dialect.kind.key() == "h2";
 
     // 哪些权限入参已经真正实现：MySQL 系连接的三层（全局/库级/表级）—— 由
     // `user_action_sql` 拼出 `grant`/`revoke`；其余（模式级、对象级、服务器角色、
@@ -3045,7 +3304,9 @@ pub async fn user_action(
                 // + 撤销差量。「数据库权限」tab 对 PG 交的是**模式级**授权（dbPrivileges
                 // 的 database 字段就是模式名），见 user_action_sql 的 pg 分支。
                 || (pg_family
-                    && matches!(key, "dbPrivileges" | "tablePrivileges" | "routinePrivileges" | "revoke"));
+                    && matches!(key, "dbPrivileges" | "tablePrivileges" | "routinePrivileges" | "revoke"))
+                // H2：只有表级授权（SELECT/INSERT/UPDATE/DELETE/ALL）+ 撤销差量
+                || (h2_family && matches!(key, "tablePrivileges" | "revoke"));
             if !handled {
                 return Err(XError::bad_request(format!(
                     "「{label}」的自动分配尚未实现：请先只做「新建用户 / 改密 / 删除用户」，\
@@ -3082,6 +3343,8 @@ pub async fn user_action(
         crate::api::dialect::is_oracle_object_priv
     } else if clickhouse_family {
         crate::api::dialect::is_clickhouse_privilege
+    } else if h2_family {
+        crate::api::dialect::is_h2_table_priv
     } else {
         crate::api::dialect::is_mysql_privilege
     };
@@ -3114,6 +3377,13 @@ pub async fn user_action(
         } else {
             privilege_db_rows(options.get("dbPrivileges"), global_valid)?
         },
+        // PG 的**库级**（CONNECT / CREATE / TEMPORARY ON DATABASE）：与上面被借用来
+        // 装模式级的 `databases` 分开，界面也是两页 —— 库是集群里的库，模式是库里的一层。
+        pg_databases: if pg_family {
+            privilege_db_rows(options.get("pgDbPrivileges"), crate::api::dialect::is_pg_database_priv)?
+        } else {
+            Vec::new()
+        },
         tables: if mssql_family {
             // mssql 的对象级不再走 MySQL 的表级形状（见下方 object_grants）
             Vec::new()
@@ -3144,7 +3414,8 @@ pub async fn user_action(
     // Oracle 的撤销清单：界面按"原来有、现在没有了"算好传进来。
     // 名字同样要过白名单（与授予同一个理由：会被拼进 SQL）。
     // ClickHouse 与 MySQL 的 scope 形状一致（global/db/table），同一套解析直接共用。
-    let revokes: Vec<crate::api::dialect::GrantRevoke> = if mysql_family || clickhouse_family {
+    // H2 的 scope 形状与 MySQL 表级一致（owner=schema、object=表），直接共用同一套解析
+    let revokes: Vec<crate::api::dialect::GrantRevoke> = if mysql_family || clickhouse_family || h2_family {
         // MySQL：scope = global（全局，`on *.*`）/ db（库级，owner=库）/ table（表级，owner=库 + object=表）
         // 名字一样要过白名单 —— 会被拼进 SQL（与授予同一个理由）。
         let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
@@ -3168,7 +3439,10 @@ pub async fn user_action(
                         && !object.is_empty()
                         && matches!(kind.as_str(), "PROCEDURE" | "FUNCTION")
                 }
-                "global" | "server-role" | "role" => global_valid(&privilege),
+                // 角色（MySQL 8 / MariaDB）是 `名字@host` 的账号形状，不是权限名：
+                // 只做字符集校验（会拼进 `revoke 'r'@'h' from …`，由 literal 转义）
+                "role" => is_role_ref(&privilege),
+                "global" | "server-role" => global_valid(&privilege),
                 _ => false,
             };
             if !ok {
@@ -3229,7 +3503,10 @@ pub async fn user_action(
             let ok = match scope.as_str() {
                 "object" => crate::api::dialect::is_oracle_object_priv(&privilege)
                     && !owner.is_empty() && !object.is_empty(),
-                "role" => crate::api::dialect::is_oracle_role(&privilege),
+                // 预置角色之外还允许**自定义角色**（「新建角色」建出来的那些）：
+                // 名字同样只放行常规字符（会拼进 `revoke <角色> from …`）。
+                "role" => crate::api::dialect::is_oracle_role(&privilege)
+                    || crate::api::dialect::is_plain_ident(&privilege),
                 "global" => crate::api::dialect::is_oracle_system_priv(&privilege),
                 _ => false,
             };
@@ -3256,11 +3533,16 @@ pub async fn user_action(
             let kind = item.get("kind").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
             let ok = match scope.as_str() {
                 "schema" => crate::api::dialect::is_pg_schema_priv(&privilege) && !owner.is_empty(),
+                // PG 库级：撤销 `revoke connect on database "db" from "u"`（owner = 库名）
+                "database" => crate::api::dialect::is_pg_database_priv(&privilege) && !owner.is_empty(),
                 "table" => {
                     crate::api::dialect::is_pg_table_priv(&privilege)
                         && !owner.is_empty()
                         && !object.is_empty()
                 }
+                // 角色成员关系（取消勾选一个角色 → `revoke "r" from "u"`）：
+                // 这里是**角色名**不是权限名，只放行常规字符（会拼进 SQL）
+                "role" => crate::api::dialect::is_plain_ident(&privilege),
                 "routine" | "function" => {
                     crate::api::dialect::is_pg_routine_priv(&privilege)
                         && !owner.is_empty()
@@ -3290,6 +3572,21 @@ pub async fn user_action(
                 .collect()
         })
         .unwrap_or_default();
+    // MySQL 系的角色是「账号形状」（`名字@host`），会拼进 `grant 'r'@'h' to …`。
+    // 名字与 host 都只放行常规字符（`%` 与 `.` 是 host 的通配/域名写法）。
+    if matches!(dialect.kind.key(), "mysql" | "mariadb") {
+        for r in &roles {
+            let ok = !r.trim().is_empty()
+                && r.trim().chars().all(|c| {
+                    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '%' | '@' | '$')
+                });
+            if !ok {
+                return Err(XError::bad_request(format!(
+                    "角色引用「{r}」里有不认识的字符：已拒绝执行（角色会拼进授权语句）"
+                )));
+            }
+        }
+    }
 
     // 授权**只出差量**：界面把"原来有、现在没有了"的算好放在 `revoke` 里，后端逐条点名撤销，
     // 勾选的那些再逐条授予 —— 不再"先 revoke all privileges, grant option 再按表单全量重授"
@@ -3311,6 +3608,13 @@ pub async fn user_action(
     ) {
         Meta::Sql(sql) => sql,
         _ => {
+            // SQL Server 的"用户"是**服务器登录名**，`create login` 不接受空口令。
+            // 不单说这一句的话，用户只会看到「SQLSERVER 不支持「create」」—— 他明明只是忘了填密码。
+            if dialect.kind.key() == "sqlserver" && action == "create" && password.is_empty() {
+                return Err(XError::bad_request(
+                    "SQL Server 新建用户就是新建登录名，必须设置密码（CREATE LOGIN 不接受空口令）",
+                ));
+            }
             return Err(XError::bad_request(format!(
                 "{} 不支持「{action}」这个用户操作（也可能是缺参数，例如改密需要 password）",
                 dialect.kind.key().to_ascii_uppercase()
@@ -3476,9 +3780,17 @@ fn grant_line(
     account_user: &str,
     account_host: &str,
 ) -> Option<String> {
-    // ClickHouse：`show grants for` 的每行**本身就是**一条 GRANT 语句，
-    // 原样带回即可 —— 没有 scope/privilege 列，也不需要重组（单列结果）。
-    if dialect.kind.key() == "clickhouse" {
+    // 单列文本结果 = 每行**本身就是**一条完整的 GRANT 语句，原样带回即可
+    // （没有 scope/privilege 列，也不需要重组）：
+    //   · ClickHouse：`show grants for` 就是这个形状；
+    //   · MariaDB 的**角色**：它的 information_schema 三张权限视图根本不列角色
+    //     （实测 `user_privileges` 里查不到），只能读 `show grants for '<role>'`，
+    //     同样是单列 —— 少了这条分支，角色权限会整段消失（界面显示成"没有权限"）。
+    // 判据用「有没有 scope 列」而不是写死方言：结构化那条路（MySQL 角色 / MariaDB 账号）
+    // 的行都带 scope，不会被误判成文本。
+    if dialect.kind.key() == "clickhouse"
+        || !row.keys().any(|k| k.eq_ignore_ascii_case("scope"))
+    {
         return row.values().find_map(Value::as_str).map(str::to_string);
     }
     // 列名一律**按名字取、忽略大小写**：MySQL 回来的是小写，Oracle 是 `PRIVILEGE` /
@@ -3507,6 +3819,11 @@ fn grant_line(
     if matches!(dialect.kind.key(), "postgresql" | "kingbase") {
         let who = dialect.quote(account_user);
         return match scope.as_str() {
+            // 库级（CONNECT / CREATE / TEMPORARY ON DATABASE）：owner 列是库名
+            "database" if !owner.is_empty() => Some(format!(
+                "GRANT {privilege} ON DATABASE {} TO {who};",
+                dialect.quote(&owner)
+            )),
             "schema" if !owner.is_empty() => {
                 Some(format!("GRANT {privilege} ON SCHEMA {} TO {who};", dialect.quote(&owner)))
             }
@@ -3526,6 +3843,26 @@ fn grant_line(
             _ => None,
         };
     }
+    // H2：只有表级一层（schema.table），账号也没有 host 这一维 —— 落到下面 MySQL 那条
+    // 通用分支会拼成 `TO '""'@''`（实测），既不是合法 H2 语法，也没法照着执行。
+    // 空用户名（H2 默认用户）统一写成空标识符 `""`。
+    if dialect.kind.key() == "h2" {
+        let raw = account_user.trim();
+        let who = if raw.is_empty() || raw == "\"\"" || raw == "(default)" {
+            "\"\"".to_string()
+        } else {
+            dialect.quote(raw)
+        };
+        return match scope.as_str() {
+            "table" if !owner.is_empty() && !object.is_empty() => Some(format!(
+                "GRANT {privilege} ON {}.{} TO {who};",
+                dialect.quote(&owner),
+                dialect.quote(&object)
+            )),
+            "global" => Some(format!("GRANT {privilege} TO {who};")),
+            _ => None,
+        };
+    }
     let target = match scope.as_str() {
         "global" => "*.*".to_string(),
         "schema" if !owner.is_empty() => format!("{}.*", dialect.quote(&owner)),
@@ -3539,6 +3876,17 @@ fn grant_line(
             let routine_type = if kind.eq_ignore_ascii_case("function") { "function" } else { "procedure" };
             format!("{routine_type} {}.{}", dialect.quote(&owner), dialect.quote(routine))
         }
+        // 角色（MySQL 8 / MariaDB）：角色本身就是账号形状，语句里没有 ON 子句
+        "role" if !owner.is_empty() => {
+            let role_host = if object.is_empty() { "%" } else { object.as_str() };
+            return Some(format!(
+                "GRANT {}@{} TO {}@{};",
+                dialect.literal(&owner),
+                dialect.literal(role_host),
+                dialect.literal(account_user),
+                dialect.literal(account_host)
+            ));
+        }
         _ => return None,
     };
     Some(format!(
@@ -3546,6 +3894,14 @@ fn grant_line(
         dialect.literal(account_user),
         dialect.literal(account_host)
     ))
+}
+
+/// MySQL 的角色引用（`名字@host`）：只放行常规字符，`%` 与 `.` 是 host 的通配/域名写法。
+fn is_role_ref(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '%' | '@' | '$'))
 }
 
 /// 权限名走白名单（它们会被拼进 SQL），大小写不敏感、统一大写、去重。

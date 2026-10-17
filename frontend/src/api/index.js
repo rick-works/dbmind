@@ -260,7 +260,9 @@ export const listDatabases = async (id, catalog) => {
   const params = catalog ? { catalog } : {}
   return http.get(`${b}/${id}/databases`, { params }).then(r => r.data)
 }
-export const listSchemas = async (id, database) => { const b = await baseOf(id); return http.get(`${b}/${id}/schemas`, { params: { database } }).then(r => r.data) }
+// opts：可传 `{ timeout }` 等 axios 配置。树上「展开连接」这条链路会传一个兜底超时 ——
+// 模式清单要真建一次连，连不上时默认的 5 分钟太久（见 MainView 的 SCHEMA_CALL_TIMEOUT_MS）。
+export const listSchemas = async (id, database, opts) => { const b = await baseOf(id); return http.get(`${b}/${id}/schemas`, { params: { database }, ...(opts || {}) }).then(r => r.data) }
 export const listTables = async (id, database) => { const b = await baseOf(id); return http.get(`${b}/${id}/tables`, { params: { database } }).then(r => r.data) }
 // 批量真实行数（SELECT COUNT(*)）：TABLE_ROWS 是估算值（Doris/ClickHouse 等常为 0），展开库后异步回填树节点行数
 export const getTableCounts = async (id, database, tables) => { const b = await baseOf(id); return http.get(`${b}/${id}/table-count`, { params: { database, tables } }).then(r => r.data) }
@@ -300,7 +302,17 @@ export const listProcedures = async (id, database) => { const b = await baseOf(i
 export const listTriggers = async (id, database) => { const b = await baseOf(id); return http.get(`${b}/${id}/triggers`, { params: { database } }).then(r => r.data) }
 export const listEvents = async (id, database) => { const b = await baseOf(id); return http.get(`${b}/${id}/events`, { params: { database } }).then(r => r.data) }
 export const listUsers = async (id, database) => { const b = await baseOf(id); return http.get(`${b}/${id}/users`, { params: { database } }).then(r => r.data) }
-export const getUserInfo = async (id, database, name) => { const b = await baseOf(id); return http.get(`${b}/${id}/user-info`, { params: { database, name } }).then(r => r.data) }
+// 角色清单（用户管理页的「角色管理」页签）：{ supported, roles:[{name,host,comment}], message }
+// supported=false = 这个服务端版本没有角色（MySQL 5.7 / 老 MariaDB）或该方言没有角色概念 ——
+// 界面据此**不显示角色页签**（用户要求），不要把它当成"出错"。
+export const listRoles = async (id) => { const b = await baseOf(id); return http.get(`${b}/${id}/roles`).then(r => r.data) }
+// asRole=true 查的是**角色**自身的权限（Oracle/CH/Doris 的角色不在账号目录里）
+export const getUserInfo = async (id, database, name, asRole = false) => {
+  const b = await baseOf(id)
+  const params = { database, name }
+  if (asRole) params.role = 1
+  return http.get(`${b}/${id}/user-info`, { params }).then(r => r.data)
+}
 export const userAction = async (id, payload) => { const b = await baseOf(id); return http.post(`${b}/${id}/user-action`, payload).then(r => r.data) }
 export const getObjectInfo = async (id, database, type, name) => { const b = await baseOf(id); return http.get(`${b}/${id}/object-info`, { params: { database, type, name } }).then(r => r.data) }
 // 执行 DDL（表结构 / 索引 / 表选项编辑），自动切库

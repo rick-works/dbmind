@@ -8,7 +8,7 @@
         <el-icon :size="16" class="header-icon"><Grid /></el-icon>
         <span class="header-text">{{ $t('tdet.editStructure') }}</span>
         <!-- 路径：数据源名称在前，中间用 `.` 连接 -->
-        <el-tag size="small" effect="plain" type="info">{{ [conn?.name, database, table].filter(Boolean).join('.') }}</el-tag>
+        <el-tag size="small" effect="plain" type="info">{{ [conn?.name, dbDisplayOf(conn?.type, database), table].filter(Boolean).join('.') }}</el-tag>
       </div>
       <!-- 操作按钮统一挪到下方 SQL 预览栏（与「保存修改」同一行）：
            它们本就是围绕 SQL 预览的动作，摆在标题栏右侧离预览最远。这里只留 DDL 模式的提示。 -->
@@ -437,6 +437,8 @@ import { isSafetyBlock, showSafetyNotice } from '../../utils/safetyNotice'
 import { t } from '../../utils/i18n'
 // 字段表 / 索引表的行高跟随设置页「结果表格行高」（--grid-row-h 由模板上的 style 注入）
 import { editorSettingsLive } from '../../utils/settings'
+// 路径里的「库」：没有库层的类型（Oracle / DM）只显示模式，不显示服务名
+import { dbDisplayOf } from '../../types'
 // 说明：本文件多个 DDL 生成函数把局部变量起名为 t（带引号的表名），会遮蔽翻译函数 t()；
 // 这里另存一个引用 tr，专供那些函数内部使用（见 buildColumnSql 里的 sp_rename 注释）。
 const tr = t
@@ -907,7 +909,16 @@ const applyComment = () => {
 // 权重（相对比例，最终归一化为百分比）：字段名收窄、注释放大（用户实测反馈：
 // 字段名一屏都放得下还占大片宽度，注释反而挤在 100px 里看不全）
 const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, dist: 7, part: 7, def: 12, auto: 5, comment: 30, ops: 5 }
-const colWidths = computed(() => {
+/**
+ * 当前**显示**的列（顺序 = 模板里 colgroup / 表头的顺序），字段表列数的唯一事实来源。
+ *
+ * 列宽（colWidths）与空行/空状态的 colspan（headSpan）都从它派生 —— 以前两处各写一份
+ * 条件列表，结果 headSpan 的基数里预含主键、条件里却没再判断：Doris / ClickHouse
+ * （showPkCol 为 false）下 colspan 比真实列多 1，`table-layout: fixed` + colgroup 只有
+ * N 个 col 时浏览器会给空行补一个隐式列，表头空行与占位行的底色比表格内容宽出一条。
+ * 条件只在下面这一处维护，新增列就不会再漏改另一处。
+ */
+const visibleColKeys = computed(() => {
   const keys = ['idx', 'name', 'type', 'len', 'prec', 'nullable']
   if (showPkCol.value) keys.push('pk')
   if (showOrderKey.value) keys.push('sort')
@@ -917,6 +928,10 @@ const colWidths = computed(() => {
   if (showAutoIncrement.value) keys.push('auto')
   if (showComment.value) keys.push('comment')
   keys.push('ops')
+  return keys
+})
+const colWidths = computed(() => {
+  const keys = visibleColKeys.value
   const total = keys.reduce((sum, k) => sum + COL_WEIGHTS[k], 0)
   const out = {}
   for (const k of keys) out[k] = ((COL_WEIGHTS[k] / total) * 100).toFixed(3) + '%'
@@ -1004,12 +1019,8 @@ const showPkCol = computed(() => !isDoris.value && !isCH.value)
 // 不显示
 const showAutoIncrement = computed(() => has('supportsAutoIncrement') && !isDoris.value && !isCH.value)
 const showComment = computed(() => has('supportsComment'))
-const headSpan = computed(() => 9
-  + (showOrderKey.value ? 1 : 0)
-  + (showDist.value ? 1 : 0)
-  + (showPart.value ? 1 : 0)
-  + (showAutoIncrement.value ? 1 : 0)
-  + (showComment.value ? 1 : 0))
+// 表头空行 / 虚拟滚动占位行 / 空状态的 colspan = 当前显示的列数（见 visibleColKeys，别在这里另算）
+const headSpan = computed(() => visibleColKeys.value.length)
 
 const colStat = computed(() => {
   let added = 0, modified = 0, deleted = 0

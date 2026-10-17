@@ -1,7 +1,8 @@
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
+
 import { t } from '../../utils/i18n'
 import { listConnections, listDatabases, listSchemas, listTables } from '../../api'
-import { byType, schemaLevelOf, isNoSql } from '../../types'
+import { byType, schemaLevelOf, isNoSql, hideDbLevelOf } from '../../types'
 
 /** 系统库/模式：默认选中时优先跳过，避免一打开就落在 information_schema 这类系统库上 */
 const SYSTEM_NAMES = /^(information_schema|performance_schema|mysql|sys|system|__internal_schema|pg_catalog|pg_toast|pg_temp_\d*|default|derby|h2|postgres|template0|template1|master|tempdb|msdb|model)$/i
@@ -88,6 +89,12 @@ export function useAiContext(props) {
     const t = activeConn.value?.type || ''
     return !!t && schemaLevelOf(t) === 'schema'
   })
+  /**
+   * 「库」下拉要不要画。Oracle / DM 这类没有库层（见 types 的 hideDbLevelOf）：
+   * 库就是连接里填的服务名，永远只有一条 —— 画出来就是把服务名摆给用户看。
+   * 值仍然要有（listSchemas / 执行请求都要带），由 loadDbs 直接取连接自身的 database。
+   */
+  const hideDb = computed(() => hideDbLevelOf(activeConn.value?.type))
 
   /**
    * 是否为 NoSQL 类型（MongoDB / Redis / Elasticsearch）。
@@ -164,6 +171,15 @@ export function useAiContext(props) {
       dbs.value = []
       database.value = ''
       dbError.value = ''
+      return
+    }
+    if (hideDb.value) {
+      // 没有库层（Oracle / DM）：不去列库（列出来就是那一个服务名），库值直接取连接自身，
+      // 下一步的 loadSchemas / 执行请求照常用它。
+      dbs.value = []
+      dbError.value = ''
+      loadingDbs.value = false
+      database.value = String(conn.database || preferredFromTree().db || '')
       return
     }
     loadingDbs.value = true
@@ -333,7 +349,7 @@ export function useAiContext(props) {
   return {
     conns, connId, dbs, database, schemas, schema,
     tables, loadingTables, tableError, connGroups,
-    activeConn, needSchema, isNoSqlConn, effectiveDatabase,
+    activeConn, needSchema, hideDb, isNoSqlConn, effectiveDatabase,
     loadingDbs, loadingSchemas, dbError,
     connLabel, init, loadConns, loadDbs, loadSchemas, loadTables
   }

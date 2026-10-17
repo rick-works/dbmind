@@ -7,7 +7,7 @@
           <el-icon :size="16" class="header-icon"><component :is="catIcon" /></el-icon>
           <span class="header-text">{{ title }}</span>
           <!-- 路径：数据源名称在前，中间用 `.` 连接 -->
-          <el-tag size="small" effect="plain" type="info">{{ [conn?.name, database].filter(Boolean).join('.') }}</el-tag>
+          <el-tag size="small" effect="plain" type="info">{{ [conn?.name, dbDisplayOf(conn?.type, database)].filter(Boolean).join('.') }}</el-tag>
         </div>
         <div class="header-actions">
           <el-button size="small" text :icon="CopyDocument" @click="copySql">{{ $t('oft.copySql') }}</el-button>
@@ -66,6 +66,8 @@ import { errMsg } from '../../utils/errMsg'
 import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { has } from '../../common/objectforms/objectFormUtils'
 import { t } from '../../utils/i18n'
+// 路径里的「库」：没有库层的类型（Oracle / DM）只显示模式，不显示服务名
+import { dbDisplayOf } from '../../types'
 import TableForm from '../../common/objectforms/TableForm.vue'
 import ViewForm from '../../common/objectforms/ViewForm.vue'
 import IndexForm from '../../common/objectforms/IndexForm.vue'

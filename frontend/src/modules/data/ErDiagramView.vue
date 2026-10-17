@@ -1,7 +1,7 @@
 <template>
   <div class="er-view">
     <div class="er-toolbar">
-      <span class="er-title"><el-icon><Connection /></el-icon>{{ $t('er.title', { db: database }) }}</span>
+      <span class="er-title"><el-icon><Connection /></el-icon>{{ $t('er.title', { db: dbShown }) }}</span>
       <el-input v-model="keyword" size="small" clearable :placeholder="$t('er.searchPlaceholder')" :prefix-icon="Search" style="width:180px" />
       <!--「按命名约定推导」这句注解跟着**搜索框**排，不再单独占一整行：
           它是常驻说明，占一行会把画布白白压矮 30px，而信息量只有一句。
@@ -77,6 +77,8 @@ import { ZoomIn, ZoomOut, FullScreen, Refresh, Download, Search, Connection, Loa
 import dagre from 'dagre'
 import { getErGraph } from '../../api'
 import { t } from '../../utils/i18n'
+// 标题里的「库」：没有库层的类型（Oracle / DM）只显示模式，不显示服务名
+import { dbDisplayOf } from '../../types'
 import { getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 
 const props = defineProps({
@@ -84,6 +86,9 @@ const props = defineProps({
   database: { type: String, default: '' },
   connId: { type: String, default: '' }
 })
+
+/** 标题里显示的「库」：没有库层的类型（Oracle / DM）只留模式，服务名不进标题 */
+const dbShown = computed(() => dbDisplayOf(props.conn?.type, props.database))
 
 const HEADER_H = 30
 const ROW_H = 22

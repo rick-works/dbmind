@@ -25,9 +25,11 @@
             <div class="target-line">
               <span class="target-label">{{ $t('bkp.targetDatabase') }}</span>
               <span class="target-value">
-                <el-select v-model="targetDatabase" :placeholder="$t('bkp.selectDatabase')" style="width: 100%" :loading="dbLoading" filterable>
+                <el-select v-if="showDbSelect" v-model="targetDatabase" :placeholder="$t('bkp.selectDatabase')" style="width: 100%" :loading="dbLoading" filterable>
                   <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
                 </el-select>
+                <!-- 没有「库」这一层的类型（Oracle / DM）：这一行只剩模式，服务名不上界面 -->
+                <span v-else class="target-db-text" :title="dbShown">{{ dbShown || $t('bkp.selectDatabase') }}</span>
               </span>
             </div>
             <div class="target-line">
@@ -322,6 +324,8 @@
 import { ref, computed, watch, nextTick, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { t, locale as uiLocale } from '../../utils/i18n'
+// 「库」这一层要不要画 / 显示什么（Oracle、DM 没有库层：它就是连接里填的服务名）
+import { hideDbLevelOf, dbDisplayOf } from '../../types'
 import { Download, FolderOpened, Folder, ArrowUp, Document, CircleClose, CircleCheck, Loading } from '@element-plus/icons-vue'
 import {
   listDatabases,
@@ -374,7 +378,12 @@ const title = computed(() => {
 })
 
 // 目标数据库始终允许在下拉中确认/修改（默认选中树节点传入的库），防止传参错位后无法纠正
-const showDbSelect = computed(() => true)
+// 「目标数据库」要不要给下拉：没有「库」这一层的类型（Oracle / DM）不给 ——
+// 它的库就是连接里填的服务名（永远一条），下拉里只有那一个值，摆出来就是让用户看服务名。
+// 值仍取 props.database（= 服务名[.模式]），请求口径不变。
+const showDbSelect = computed(() => !hideDbLevelOf(guide.value?.connectionType))
+// 不给下拉时这一行显示什么：只显示模式（见 types 的 dbDisplayOf），服务名不露出来
+const dbShown = computed(() => dbDisplayOf(guide.value?.connectionType, targetDatabase.value))
 
 // 目录/文件选择弹窗：还原时逐级浏览选择备份文件
 const dirBrowser = ref({ visible: false, path: '', parent: null, dirs: [], files: [], fileMode: false })
@@ -1040,6 +1049,13 @@ watch(
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* 没有「库」这一层的类型（Oracle / DM）：这里只剩模式名，纯文字（点了没东西可选的控件比没有更糟） */
+.target-db-text {
+  padding: 0 8px; height: 28px; line-height: 28px;
+  border-radius: 6px; background: var(--dc-bg-soft, #f4f6f9);
+  color: var(--dc-text-dim, #606266); font-size: 13px;
 }
 .text-danger {
   color: var(--el-color-danger);

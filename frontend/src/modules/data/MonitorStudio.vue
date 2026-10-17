@@ -11,6 +11,8 @@ import { Refresh, Warning, User, Timer, Coin, Setting, Connection, Cpu, DataLine
 import { monitorOverview, monitorKill, listConnections } from '../../api'
 import { t, tMsg } from '../../utils/i18n'
 import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
+// 头部 chip 的「库」：没有库层的类型（Oracle / DM）只显示模式，不显示服务名
+import { dbDisplayOf } from '../../types'
 
 const props = defineProps({
   connId: { type: [String, Number], default: '' },
@@ -93,6 +95,8 @@ watch(() => props.connId, () => { error.value = ''; data.value = null; prevQuest
 /** 连接名：按 connId 从连接列表解析，用于头部展示 */
 const connName = ref('')
 const killConn = ref(null)
+/** 头部 chip 里显示的「库」：没有库层的类型（Oracle / DM）只留模式，服务名不露出来 */
+const dbShown = computed(() => dbDisplayOf(killConn.value?.type, data.value?.database || props.database))
 const loadConnInfo = async () => {
   connName.value = ''
   if (!props.connId) return
@@ -367,7 +371,7 @@ onBeforeUnmount(() => { stopAuto(); stopCatchup(); window.removeEventListener('d
             <div class="hero-title">{{ $t('mon.title') }}</div>
             <div class="hero-chips">
               <span class="chip" v-if="connName"><el-icon class="chip-ico"><Connection /></el-icon>{{ connName }}</span>
-              <span class="chip" v-if="data && data.database"><i class="dot"></i>{{ data.database }}</span>
+              <span class="chip" v-if="dbShown"><i class="dot"></i>{{ dbShown }}</span>
               <span class="chip" v-if="fetchedAtText">{{ $t('mon.updatedAt', { time: fetchedAtText }) }}</span>
               <span class="chip chip-live" v-if="autoRefresh"><i class="live-dot"></i>{{ $t('mon.autoRefreshing') }}</span>
               <span class="chip chip-err" v-if="error">{{ error }}</span>

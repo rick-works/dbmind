@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.33": [
+        "User management rebuilt as two tabs: Users and Roles. Roles can be created and dropped, and granted privileges directly as the subject; databases without roles (or versions that predate them, such as SQL Server, SQLite or MySQL 5.7) show only the Users tab",
+        "Role privileges now read back for real: MariaDB roles are read via SHOW GRANTS (the information_schema views do not list roles), PostgreSQL / KingbaseES privilege and role-membership data is decoded from the ACLs and pg_auth_members (visible and revocable), and opening a MySQL role as name@host no longer fails with \"user not found\"",
+        "Oracle and DM no longer show a database level: the service name and database dropdown are gone from the object list, SQL editor, compare / sync / backup, ER diagram, monitoring and AI panels, leaving only the schema; the Oracle schema dropdown that was always empty is fixed too",
+        "Fixed Oracle tables opening with no columns (ORA-17027): column metadata is now read the way the driver requires after switching to the target schema (COLUMN_DEF first); DM is unaffected",
+        "The NoSQL placeholder database (default) is now shown as \"default\" in the SQL editor"
+    ],
     "v1.2.32": [
         "Multi-statement runs (Run all) are much faster: each statement now fetches just one page instead of pulling the whole table - two statements against a 520k-row table went from ~15s to under a second",
         "New Ctrl+N opens a new script tab; rebindable in Settings -> Shortcuts -> General",

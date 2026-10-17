@@ -36,12 +36,14 @@
             <template #prefix>
               <el-icon class="sel-icon"><Coin /></el-icon>
             </template>
-            <el-option v-for="db in dbOptions" :key="db" :label="db" :value="db" />
+            <!-- 显示名走 dbLabelOf：NoSQL 的占位库 `(default)` 显示成「默认」，值仍是原值 -->
+            <el-option v-for="db in dbOptions" :key="db" :label="dbLabelOf(db)" :value="db" />
           </el-select>
 
           <!-- Schema 选择器（仅 SQL Server / PostgreSQL） -->
           <el-select v-if="showSchemaSelect" v-model="selectedSchema" size="small"
-                     class="schema-select" :loading="loadingSchemas" @change="onSchemaChange">
+                     class="schema-select" :loading="loadingSchemas" :placeholder="$t('sqlq.schemaDefault')"
+                     @change="onSchemaChange">
             <template #prefix>
               <el-icon class="sel-icon"><Folder /></el-icon>
             </template>
@@ -109,7 +111,7 @@
               <div class="hist-list" v-if="historyList.length">
                 <div class="hist-item" v-for="(h, i) in historyList" :key="h.id" @click="applyHistory(h)">
                   <div class="hist-meta">
-                    <span class="hist-db">{{ h.db || $t('sqlq.defaultDb') }}</span>
+                    <span class="hist-db">{{ histDbText(h) }}</span>
                     <span class="hist-time">{{ formatHistTime(h.ts) }}</span>
                     <span class="hist-cost" v-if="h.cost">{{ h.cost }}ms</span>
                   </div>
@@ -611,8 +613,10 @@ import {
   Sort, SortUp, SortDown, Collection, RefreshLeft, DArrowRight
 } from '@element-plus/icons-vue'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
-import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType } from '../../types'
+import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
+// 占位库 `(default)` 的显示名（值仍是原值，见 utils/dbLabel）
+import { dbLabelOf } from '../../utils/dbLabel'
 
 const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabDatabase: String, initialSql: String, autoRun: Boolean, sqlLoading: Boolean })
 const emit = defineEmits(['save', 'dirty-change', 'conn-change', 'db-change', 'sql-change'])
@@ -3259,6 +3263,9 @@ const probeSql = ref('')
 
 // ===== SQL 执行历史（本地 localStorage 按连接隔离，最近执行一键回填）=====
 const historyList = ref([])
+/** 历史条目的「库」显示：没有库层的类型（Oracle / DM）只显示模式 —— 服务名不进界面。
+ *  历史是按连接隔离存的，所以类型直接取当前连接（条目自带 connType 时优先）。 */
+const histDbText = (h) => dbDisplayOf(h.connType || connType.value, h.db) || t('sqlq.defaultDb')
 const HISTORY_KEY = (cid) => 'xplore:sql-history:' + cid
 const loadHistory = () => {
   const cid = selectedConnId.value || props.conn?.id
@@ -4894,6 +4901,11 @@ const loadDatabases = async () => {
     const own = String(selectedConn.value?.database || '').trim()
     const fromTab = String(props.database || '').trim()
     selectedDatabase.value = own && fromTab.startsWith(own) ? fromTab : (own || fromTab)
+    // ⚠ 这里**不能直接 return**：下面 loadAfterDb() 才是"库定下来之后"的正事。
+    // 曾经的代价很直观 —— 模式下拉永远「无数据」、编辑器补全没有表名
+    // （真机：MySQL 生成 SQL 后把连接切到 Oracle，模式选不到、SQL 也就跑不了）。
+    // 库层只是**不画**，请求口径与有库层的类型完全一样（database 仍是 服务名[.模式]）。
+    await loadAfterDb()
     return
   }
   const cached = readDbListCache(cid)
@@ -4935,6 +4947,13 @@ const loadDatabases = async () => {
   }
   // schema 与表名互不依赖：并行加载。原来在这里串行 await loadSchemas()，
   // 导致“数据库下拉”要等 schema（新库首次连接 ~1s）才结束转圈。
+  await loadAfterDb()
+}
+
+/** 库定下来之后的正事：加载模式清单（要画模式下拉时）+ 补全用表名。
+ *  两条载入路径（有库层 / 无库层）**共用** —— 曾经无库层那条提前 return 漏掉了它，
+ *  于是 Oracle 的模式下拉恒为「无数据」。 */
+const loadAfterDb = async () => {
   const tasks = [loadTableNames()]
   if (showSchemaSelect.value && selectedDatabase.value) tasks.push(loadSchemas())
   await Promise.all(tasks)
@@ -4969,6 +4988,12 @@ const loadSchemas = async () => {
     const defSch = byType(connType.value).defaultSchema
     if (defSch) {
       selectedSchema.value = schemas.value.includes(defSch) ? defSch : (schemas.value[0] || '')
+    } else if (hideDbSelect.value) {
+      // 没有库层的类型（Oracle / DM）：**不替用户选**。
+      // 只带服务名（不带模式）表示"按登录用户的默认模式执行"，这是既有口径；
+      // 而模式清单是按字母序的，替用户选第一个很可能落到 ANONYMOUS 这类系统账号上 ——
+      // 等于悄悄把执行语义改了。用户要具体模式自己在下拉里挑（页签带过来的模式仍会带出）。
+      selectedSchema.value = ''
     } else {
       selectedSchema.value = schemas.value[0] || ''
     }

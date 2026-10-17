@@ -4,7 +4,9 @@
     <div class="form-tab-header">
       <div class="header-title">
         <el-icon :size="16" class="header-icon"><User /></el-icon>
-        <span class="header-text">{{ editMode ? $t('upv.editUser') : $t('upv.newUser') }}</span>
+        <!-- 角色模式（asRole）标题写成「编辑角色」：这张表单的主体是角色不是账号，
+             写「编辑用户」会让用户以为自己点错了（角色管理页正是从这里进来的）。 -->
+        <span class="header-text">{{ asRole ? $t('upv.editRole') : (editMode ? $t('upv.editUser') : $t('upv.newUser')) }}</span>
         <!-- 路径：**数据源名称在前**，中间用 `.` 连接（原来是「用户名」在前、连接名单一个标签） -->
         <el-tag size="small" effect="plain" type="info">{{ headPath }}</el-tag>
       </div>
@@ -36,13 +38,23 @@
                 <tbody>
                   <tr>
                     <td class="ft-label">{{ $t('upv.fieldUser') }}</td>
-                    <td><el-input v-model="form.name" size="small" clearable :disabled="editMode || readOnly" /></td>
+                    <td class="ft-value">
+                      <!-- 只读类型（DB2 / Derby / 达梦）：纯文本展示，别摆一个灰输入框「看着能改」 -->
+                      <span v-if="readOnly" class="plugin-readonly">{{ form.name }}</span>
+                      <!-- H2 的默认管理员用户名是空串：界面显示「默认用户 / default」，
+                           真值仍是空串（form.name 不动，提交时照旧传 ""） -->
+                      <template v-else-if="isBlankH2User">
+                        <span class="plugin-readonly">{{ $t('um.blankUserName') }}</span>
+                        <span class="attr-hint">{{ $t('upv.blankUserNameHint') }}</span>
+                      </template>
+                      <el-input v-else v-model="form.name" size="small" clearable :disabled="editMode" />
+                    </td>
                   </tr>
-                  <tr>
+                  <!-- 只读类型没有"改密码"这回事（用户由外部认证提供），整行不摆 -->
+                  <tr v-if="!readOnly && !asRole">
                     <td class="ft-label">{{ $t('upv.fieldPassword') }}</td>
                     <td>
                       <el-input v-model="form.password" size="small" type="password" show-password clearable
-                                :disabled="readOnly"
                                 :placeholder="editMode ? $t('upv.phPasswordKeep') : $t('upv.phPassword')" />
                     </td>
                   </tr>
@@ -56,7 +68,7 @@
                   </tr>
                   <!-- 能改的项给控件（用户要求"能更改的都放开"）：改完点保存，
                        由后端按方言拼 ALTER 子句执行。readOnly（该类型不支持改）时一律置灰。 -->
-                  <tr v-for="d in editableAttrs" :key="d.key">
+                  <tr v-for="d in (asRole ? [] : editableAttrs)" :key="d.key">
                     <td class="ft-label">{{ d.label }}</td>
                     <td class="ft-value">
                       <!-- 是/否就一个勾选框：勾了=是，没勾=否（用户要求） -->
@@ -103,6 +115,17 @@
           <!-- ===== 服务器权限 ===== -->
           <el-tab-pane v-if="hasServerTab" :label="serverTabLabel" name="server">
             <div class="tab-inner grant-tab">
+              <!-- PG 的"角色"就是这一页（pg_* 预置 + 自定义），角色的新建 / 删除也放这儿，
+                   与 MySQL 系把它放在「角色」页签是同一个道理：在看得见角色的地方管理。 -->
+              <div v-if="isPgsql && !readOnly" class="role-toolbar">
+                <span class="role-actions">
+                  <el-button size="small" :icon="Plus" @click="openRoleCreate">{{ $t('um.newRole') }}</el-button>
+                  <el-button size="small" :icon="Edit" :disabled="roleDeletable.length === 0"
+                             @click="openRoleEdit">{{ $t('um.editRolePriv') }}</el-button>
+                  <el-button size="small" type="danger" plain :icon="Delete" :disabled="roleDeletable.length === 0"
+                             @click="openRoleDelete">{{ $t('um.deleteRoleTitle') }}</el-button>
+                </span>
+              </div>
               <!-- MySQL 系：全局权限 —— 「权限项当列」。
                    分组写在**表头第一行**（colspan 跨它自己的那几列，带计数与全选/清空），
                    第二行才是权限名；主体只有一行（就是这个用户）。
@@ -172,9 +195,20 @@
             </div>
           </el-tab-pane>
 
-          <!-- ===== 角色（Oracle）===== -->
+          <!-- ===== 角色 ===== -->
           <el-tab-pane v-if="hasRolesTab" :label="$t('upv.tabRoles')" name="roles">
             <div class="tab-inner grant-tab">
+              <!-- 角色的新建 / 删除就在这一页：用户列表只放账号，角色本来就该在
+                   「看得见全部角色」的地方管理（勾选=授给当前用户）。 -->
+              <div v-if="!readOnly" class="role-toolbar">
+                <span class="role-actions">
+                  <el-button size="small" :icon="Plus" @click="openRoleCreate">{{ $t('um.newRole') }}</el-button>
+                  <el-button v-if="rolePrivEditable" size="small" :icon="Edit" :disabled="roleDeletable.length === 0"
+                             @click="openRoleEdit">{{ $t('um.editRolePriv') }}</el-button>
+                  <el-button size="small" type="danger" plain :icon="Delete" :disabled="roleDeletable.length === 0"
+                             @click="openRoleDelete">{{ $t('um.deleteRoleTitle') }}</el-button>
+                </span>
+              </div>
               <table class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
@@ -191,13 +225,16 @@
                     </th>
                   </tr>
                   <tr>
-                    <th v-for="p in oracleRoles" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
+                    <th v-for="p in roleColumns" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
                   </tr>
                 </thead>
                 <tbody>
+                  <tr v-if="roleColumns.length === 0">
+                    <td class="ft-empty" colspan="2">{{ $t('upv.noRoles') }}</td>
+                  </tr>
                   <tr>
                     <td class="mx-fix mx-f1 ft-label">{{ $t('upv.tabRoles') }}</td>
-                    <td v-for="p in oracleRoles" :key="p" class="mx-cell">
+                    <td v-for="p in roleColumns" :key="p" class="mx-cell">
                       <el-checkbox :model-value="hasIn('roles', p)" @change="(v) => toggleList('roles', p, v)" />
                     </td>
                   </tr>
@@ -211,7 +248,8 @@
             <!-- 动作条：与页签**同一行**、贴右（照「编辑表结构」的排法）：
                  绝对定位到卡片右上角，表格里不再单独占一行 -->
             <div class="tab-actions">
-              <el-button v-if="isMysql || isClickhouse || isPgsql" size="small" type="primary" :icon="Plus" @click="addDbPriv">{{ $t('upv.addDbPriv') }}</el-button>
+              <el-button v-if="isMysql || isClickhouse" size="small" type="primary" :icon="Plus" @click="addDbPriv">{{ $t('upv.addDbPriv') }}</el-button>
+              <el-button v-if="isPgsql" size="small" type="primary" :icon="Plus" @click="addPgDbPriv">{{ $t('upv.addPgDbPriv') }}</el-button>
             </div>
             <div class="tab-inner grant-tab">
               <!-- MySQL 系：一行一个库，每个库级权限一列 -->
@@ -333,10 +371,47 @@
                 </tbody>
               </table>
 
-              <!-- PostgreSQL/KingbaseES：模式级（USAGE / CREATE）—— 一行一个模式。
-                   PG 的"库级"授权就是模式级（`grant usage on schema "s" to "u"`），
-                   模式下拉来自 listSchemas（与 Oracle 对象权限同一份）。 -->
+              <!-- PostgreSQL/KingbaseES 的**库级**（CONNECT / CREATE / TEMPORARY ON
+                   DATABASE）—— 一行一个库。"能不能连这个库"与"能不能用这个库里的模式"
+                   是两件事，界面上也是两页（库权限 / 模式权限），按 PG 自己的模型来。 -->
               <table v-if="isPgsql" class="form-table mx-table mx-grouped">
+                <thead>
+                  <tr>
+                    <th class="mx-fix mx-f1">{{ $t('upv.colDb') }}</th>
+                    <th v-for="p in pgDbPrivs" :key="p" class="mx-priv" :title="p"><span class="pv-name">{{ p }}</span><span v-if="privLabel(p)" class="pv-cn">{{ privLabel(p) }}</span></th>
+                    <th class="mx-act">{{ $t('upv.colAction') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="form.pgDbPrivileges.length === 0">
+                    <td :colspan="pgDbPrivs.length + 2" class="ft-empty">{{ $t('upv.noPgDbPriv') }}</td>
+                  </tr>
+                  <tr v-for="(row, i) in form.pgDbPrivileges" :key="rowKey(row)">
+                    <td class="mx-fix mx-f1">
+                      <el-select :model-value="asArr(row.database)" size="small" :placeholder="$t('upv.phPickDb')" filterable multiple collapse-tags @change="(vals) => onPgDbPrivMulti(i, vals)">
+                        <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
+                      </el-select>
+                    </td>
+                    <td v-for="p in pgDbPrivs" :key="p" class="mx-cell">
+                      <el-checkbox :model-value="hasObjectPriv(row, p)" @change="(v) => toggleObjectPriv(row, p, v)" />
+                    </td>
+                    <td class="mx-cell">
+                      <el-button type="danger" size="small" :icon="Delete" text @click="removePgDbPriv(i)" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </el-tab-pane>
+
+          <!-- ===== 模式权限（PG / KingbaseES 专用）=====
+               `grant usage|create on schema "s" to "u"` —— 与上面的库级分开一页。 -->
+          <el-tab-pane v-if="hasPgSchemaTab" :label="$t('upv.tabPgSchema')" name="pg-schema">
+            <div class="tab-actions">
+              <el-button size="small" type="primary" :icon="Plus" @click="addDbPriv">{{ $t('upv.addSchemaPriv') }}</el-button>
+            </div>
+            <div class="tab-inner grant-tab">
+              <table class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
                     <th class="mx-fix mx-f1">{{ $t('upv.colSchema') }}</th>
@@ -346,7 +421,7 @@
                 </thead>
                 <tbody>
                   <tr v-if="form.dbPrivileges.length === 0">
-                    <td :colspan="pgSchemaPrivs.length + 2" class="ft-empty">{{ $t('upv.noDbPriv') }}</td>
+                    <td :colspan="pgSchemaPrivs.length + 2" class="ft-empty">{{ $t('upv.noSchemaPriv') }}</td>
                   </tr>
                   <tr v-for="(row, i) in form.dbPrivileges" :key="rowKey(row)">
                     <td class="mx-fix mx-f1">
@@ -374,7 +449,7 @@
             <!-- 动作条：与页签同一行、贴右 -->
             <div class="tab-actions">
               <el-button v-if="isOracle" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addObjectPrivOracle') }}</el-button>
-              <el-button v-if="isMysql || isPgsql || isClickhouse" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addTablePriv') }}</el-button>
+              <el-button v-if="isMysql || isPgsql || isClickhouse || isH2" size="small" type="primary" :icon="Plus" @click="addTablePriv">{{ $t('upv.addTablePriv') }}</el-button>
             </div>
             <div class="tab-inner grant-tab">
               <!-- Oracle：对象权限（「模式 · 名称」两列冻结，权限项当列横向滚动） -->
@@ -429,7 +504,7 @@
               <!-- MySQL 系 + ClickHouse：表级（「数据库 · 表」两列冻结）。
                    CH 的表级授权（grant … on db.tbl）与 MySQL 同构，权限列用 CH 自己的
                    清单（与 CH 全局/库级同一套名字）；MySQL 用表级清单。 -->
-              <table v-if="isMysql || isClickhouse" class="form-table mx-table mx-grouped">
+              <table v-if="isMysql || isClickhouse || isH2" class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
                     <th class="mx-fix mx-f1" rowspan="2">{{ $t('upv.colDb') }}</th>
@@ -456,8 +531,9 @@
                   </tr>
                   <tr v-for="(row, i) in form.tablePrivileges" :key="rowKey(row)">
                     <td class="mx-fix mx-f1">
-                      <el-select v-model="row.database" size="small" :placeholder="$t('upv.phPickDb')" filterable @change="onTablePrivDbChange(i)">
-                        <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
+                      <!-- H2 没有"库"，授权目标是 schema（PUBLIC / INFORMATION_SCHEMA…） -->
+                      <el-select v-model="row.database" size="small" :placeholder="isH2 ? $t('upv.phPickSchema') : $t('upv.phPickDb')" filterable @change="onTablePrivDbChange(i)">
+                        <el-option v-for="db in (isH2 ? schemas : databases)" :key="db" :label="db" :value="db" />
                       </el-select>
                     </td>
                     <td class="mx-fix mx-f2">
@@ -689,12 +765,14 @@
       </div>
 
       <!-- 分隔条：与「编辑表结构」同一套（向上拖 = 预览变高，双击最大/最小） -->
-      <div v-show="!sqlCollapsed" class="sql-resizer"
+      <div v-show="!sqlCollapsed && !readOnly" class="sql-resizer"
            :title="$t('tdet.resizerTitle')"
            @mousedown.prevent="onSqlResizeStart" @dblclick="onSqlResizeDblClick"></div>
 
-      <!-- SQL 预览：挪到**下方**（原来在右侧固定栏），点标题行折叠/展开 -->
-      <div ref="sqlAreaRef" class="sql-area" :class="{ collapsed: sqlCollapsed }"
+      <!-- SQL 预览：挪到**下方**（原来在右侧固定栏），点标题行折叠/展开。
+           只读类型（DB2 / Derby / 达梦：用户来自外部认证）没有可执行的语句，
+           整块（含下面那排按钮）都不摆 —— 上面已经有「只支持查看」的提示了。 -->
+      <div v-if="!readOnly" ref="sqlAreaRef" class="sql-area" :class="{ collapsed: sqlCollapsed }"
            :style="sqlCollapsed ? null : { height: sqlHeight + 'px' }">
         <div class="sql-head" @click="sqlCollapsed = !sqlCollapsed"
              :title="sqlCollapsed ? $t('tdet.expandSql') : $t('tdet.collapseSql')">
@@ -723,6 +801,63 @@
         </div>
       </div>
     </div>
+
+    <!-- 新建角色：只有名字（MySQL 还要主机）—— 角色没有口令与属性 -->
+    <el-dialog v-model="roleCreateDlg" :title="$t('um.newRole')" width="440px" append-to-body>
+      <div class="role-form">
+        <div class="role-field">
+          <span class="role-label">{{ $t('um.roleName') }}</span>
+          <el-input v-model="roleForm.name" size="small" clearable :placeholder="$t('um.roleNamePh')"
+                    @keyup.enter="submitRoleCreate" />
+        </div>
+        <div v-if="roleHostVisible" class="role-field">
+          <span class="role-label">{{ $t('um.colHost') }}</span>
+          <el-input v-model="roleForm.host" size="small" clearable placeholder="%" />
+        </div>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="roleCreateDlg = false">{{ $t('common.cancel') }}</el-button>
+        <el-button size="small" type="primary" :loading="roleBusy" @click="submitRoleCreate">
+          {{ $t('um.newRole') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 编辑角色权限：选中一个角色 → 以它为**主体**打开同一张授权表单 -->
+    <el-dialog v-model="roleEditDlg" :title="$t('um.editRolePriv')" width="440px" append-to-body>
+      <div class="role-form">
+        <div class="role-field">
+          <span class="role-label">{{ $t('um.roleName') }}</span>
+          <el-select v-model="roleToEdit" size="small" filterable style="flex: 1">
+            <el-option v-for="r in roleDeletable" :key="r" :label="r" :value="r" />
+          </el-select>
+        </div>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="roleEditDlg = false">{{ $t('common.cancel') }}</el-button>
+        <el-button size="small" type="primary" :disabled="!roleToEdit" @click="submitRoleEdit">
+          {{ $t('um.openRolePriv') }}
+        </el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 删除角色：从"服务器上真实存在的自定义角色"里选（预置角色如 DBA 不在清单里） -->
+    <el-dialog v-model="roleDeleteDlg" :title="$t('um.deleteRoleTitle')" width="440px" append-to-body>
+      <div class="role-form">
+        <div class="role-field">
+          <span class="role-label">{{ $t('um.roleName') }}</span>
+          <el-select v-model="roleToDelete" size="small" filterable style="flex: 1">
+            <el-option v-for="r in roleDeletable" :key="r" :label="r" :value="r" />
+          </el-select>
+        </div>
+        <div class="role-dlg-tip">{{ $t('um.deleteRoleBody', { name: roleToDelete || '…' }) }}</div>
+      </div>
+      <template #footer>
+        <el-button size="small" @click="roleDeleteDlg = false">{{ $t('common.cancel') }}</el-button>
+        <el-button size="small" type="danger" :loading="roleBusy" :disabled="!roleToDelete"
+                   @click="submitRoleDelete">{{ $t('um.deleteRoleTitle') }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -730,7 +865,7 @@
 import { ref, reactive, computed, watch, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { t, locale } from '../../utils/i18n'
-import { User, CaretRight, CopyDocument, DocumentCopy, Plus, Delete, RefreshLeft } from '@element-plus/icons-vue'
+import { User, CaretRight, CopyDocument, DocumentCopy, Plus, Delete, Edit, RefreshLeft } from '@element-plus/icons-vue'
 import { userAction, listDatabases, listTables, listSchemas, listProcedures } from '../../api'
 import { isFunctionRoutine } from './treeNodes'
 import { rowKey } from '../../utils/rowKey'
@@ -745,10 +880,13 @@ const props = defineProps({
   editData: { type: Object, default: () => ({}) },
   // 该类型没有"改用户"的能力（如达梦：只有清单与详情）时置 true ——
   // 表单只给看：输入项与保存按钮全部置灰，免得填完才被后端告知"不支持这个操作"。
-  readOnly: { type: Boolean, default: false }
+  readOnly: { type: Boolean, default: false },
+  // 这张表单编辑的是**角色**（不是账号）：隐藏密码 / 属性 / 角色页签，
+  // 保存只发 GRANT / REVOKE 差量（action = alter-role）。
+  asRole: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['saved', 'close'])
+const emit = defineEmits(['saved', 'close', 'edit-role'])
 
 const form = ref({
   name: '',
@@ -757,6 +895,9 @@ const form = ref({
   privileges: [],
   roles: [],
   dbPrivileges: [],
+  // PG 专用：库级（CONNECT / CREATE / TEMPORARY ON DATABASE）。与上面借来装
+  // **模式**级的 dbPrivileges 分开 —— 界面也是两页（库权限 / 模式权限）。
+  pgDbPrivileges: [],
   tablePrivileges: [],
   routinePrivileges: [],
   serverRoles: [],
@@ -781,7 +922,10 @@ const mssqlServerRoles = [
 const headPath = computed(() => {
   // MySQL 系的账号是「用户名@主机」—— 同名不同主机是两个账号，头里带全才分得清
   // （页签条上仍然只显示最后一层，全路径在悬浮提示里）
-  const who = isMysql.value && form.value.host ? `${form.value.name}@${form.value.host}` : form.value.name
+  // H2 默认管理员（用户名为空）：标题上也写「默认用户 / default」，不摆两个引号
+  const who = isBlankH2User.value
+    ? t('um.blankUserName')
+    : (isMysql.value && form.value.host ? `${form.value.name}@${form.value.host}` : form.value.name)
   return [props.conn?.name, who].filter(Boolean).join('.')
 })
 
@@ -820,6 +964,7 @@ const ATTR_RAW_KEYS = {
   temporaryTablespace: ['temporary_tablespace', 'TEMPORARY_TABLESPACE'],
   profile: ['profile', 'PROFILE'],
   disabled: ['disabled', 'is_disabled'],
+  defaultDatabase: ['default_database', 'DEFAULT_DATABASE'],
   defaultSchema: ['default_schema', 'default_schema_name'],
   canLogin: ['can_login', 'rolcanlogin'],
   isSuperuser: ['is_superuser', 'rolsuper'],
@@ -844,8 +989,9 @@ const seedAttrs = () => {
     o.temporaryTablespace = attrText(attrRaw('temporary_tablespace'))
     o.profile = attrText(attrRaw('profile'))
   } else if (isMssql.value) {
+    // 登录名：默认数据库 + 禁用（库用户的 default_schema 不再适用）
     o.disabled = attrYes(attrRaw('disabled'))
-    o.defaultSchema = attrText(attrRaw('default_schema'))
+    o.defaultDatabase = attrText(attrRaw('default_database'))
   } else if (isPgsql.value) {
     // 新建时默认"可登录" —— 后端 CREATE ROLE 拼的就是 login，界面别显示成"否"让人误会
     o.canLogin = props.editMode ? attrYes(attrRaw('can_login')) : true
@@ -884,11 +1030,9 @@ const editableAttrs = computed(() => {
       { key: 'profile', label: t('udv.fProfile'), kind: 'text' }
     )
   } else if (isMssql.value) {
-    defs.push({ key: 'defaultSchema', label: t('udv.fSchema'), kind: 'text' })
-    // 只有"带登录名"的用户（不是包含数据库用户）才 DISABLE 得了 —— 没有登录名就不摆这个开关
-    if (attrText(attrRaw('login_name')).trim()) {
-      defs.push({ key: 'disabled', label: t('udv.fDisabled'), kind: 'bool' })
-    }
+    // 登录名可改的是「默认数据库」与「禁用」；default_schema 属于库内用户，登录名没有
+    defs.push({ key: 'defaultDatabase', label: t('udv.fDefaultDb'), kind: 'text' })
+    defs.push({ key: 'disabled', label: t('udv.fDisabled'), kind: 'bool' })
   } else if (isPgsql.value) {
     defs.push(
       { key: 'canLogin', label: t('udv.fCanLogin'), kind: 'bool' },
@@ -1007,6 +1151,123 @@ const oracleRoles = [
   'SELECT_CATALOG_ROLE', 'EXECUTE_CATALOG_ROLE', 'DELETE_CATALOG_ROLE', 'RECOVERY_CATALOG_OWNER',
   'SCHEDULER_ADMIN', 'OEM_MONITOR', 'AQ_ADMINISTRATOR_ROLE'
 ]
+// 「角色」页签的列：Oracle 是预置角色；MySQL/MariaDB 是后端查回来的自定义角色
+// （`名字@host`，角色本身也是账号形状）。已授但仍不在清单里的也补进来 ——
+// 一个都不能隐身：看不见就没法取消。
+// 角色在界面上的显示名：只有 MySQL 的角色是 `名字@主机`（账号形状），
+// MariaDB / Doris / Oracle / ClickHouse 的角色没有 host，写 `名字@` 是错的。
+const roleLabel = (r) => (String(r?.host || '').trim() ? `${r.name}@${r.host}` : String(r?.name || ''))
+// 本表单里新建 / 删除的角色：`availableRoles` 是打开表单那一刻的快照，
+// 在页签里增删后用这两个增量纠正，免得整页重开（预览也要立刻反映新角色）。
+const localRoles = ref([])
+const removedRoles = ref([])
+const roleColumns = computed(() => {
+  const dead = new Set(removedRoles.value)
+  // Oracle：预置角色 + 服务器上的**自定义角色**（`dba_roles`，用户自己建的）
+  const cols = isOracle.value ? [...oracleRoles] : []
+  for (const r of props.editData?.availableRoles || []) {
+    const label = roleLabel(r)
+    if (label && !dead.has(label) && !cols.includes(label)) cols.push(label)
+  }
+  for (const label of localRoles.value) if (!dead.has(label) && !cols.includes(label)) cols.push(label)
+  for (const r of form.value.roles || []) if (r && !dead.has(r) && !cols.includes(r)) cols.push(r)
+  return cols
+})
+// ===== 角色的新建 / 删除（就在「角色」页签里，用户列表只放账号）=====
+const roleBusy = ref(false)
+const roleCreateDlg = ref(false)
+const roleDeleteDlg = ref(false)
+const roleForm = ref({ name: '', host: '%' })
+const roleToDelete = ref('')
+const roleEditDlg = ref(false)
+const roleToEdit = ref('')
+// 只有 MySQL 的角色是「名字@主机」；MariaDB / Doris / PG / Oracle / CH 都是裸名字
+const roleHostVisible = computed(() => String(props.conn?.type || '').toUpperCase() === 'MYSQL')
+// 可删除的 = 服务器上真实存在的**自定义**角色：Oracle 的预置角色（DBA / CONNECT …）
+// 是 Oracle 自带，删了是真事故，所以不在清单里；PG 的 pg_* 预置角色同理。
+const roleDeletable = computed(() => {
+  const preset = new Set(isOracle.value ? oracleRoles : [])
+  const dead = new Set(removedRoles.value)
+  return roleColumns.value.filter((label) => !preset.has(label) && !dead.has(label))
+})
+const roleHostOf = (label) => {
+  const at = label.lastIndexOf('@')
+  return at > 0 ? { name: label.slice(0, at), host: label.slice(at + 1) } : { name: label, host: '' }
+}
+const openRoleCreate = () => {
+  roleForm.value = { name: '', host: '%' }
+  roleCreateDlg.value = true
+}
+const submitRoleCreate = async () => {
+  if (roleBusy.value) return
+  const name = String(roleForm.value.name || '').trim()
+  if (!name) {
+    ElMessage.warning(t('um.roleNeedName'))
+    return
+  }
+  const host = roleHostVisible.value ? (String(roleForm.value.host || '').trim() || '%') : ''
+  if (!guardConnWrite(props.conn || {}, t('um.newRole'))) return
+  roleBusy.value = true
+  try {
+    const res = await userAction(props.conn.id, {
+      action: 'create-role', database: props.database, userName: name, host
+    })
+    if (res && res.success) {
+      const label = roleHostVisible.value ? `${name}@${host}` : name
+      localRoles.value = [...localRoles.value, label]
+      removedRoles.value = removedRoles.value.filter((x) => x !== label)
+      ElMessage.success(t('um.roleCreated', { name: label }))
+      roleCreateDlg.value = false
+    } else {
+      ElMessage.error(t('um.roleCreateFailed', { detail: (res && res.message) || t('common.unknownError') }))
+    }
+  } catch (e) {
+    ElMessage.error(t('um.roleCreateFailed', { detail: (e && (e.message || String(e))) || '' }))
+  } finally {
+    roleBusy.value = false
+  }
+}
+const openRoleDelete = () => {
+  roleToDelete.value = roleDeletable.value[0] || ''
+  roleDeleteDlg.value = true
+}
+// 编辑角色权限：交给 MainView 另开一张「角色」表单（主体换成角色本身）
+const openRoleEdit = () => {
+  roleToEdit.value = roleDeletable.value[0] || ''
+  roleEditDlg.value = true
+}
+const submitRoleEdit = () => {
+  const label = String(roleToEdit.value || '').trim()
+  if (!label) return
+  roleEditDlg.value = false
+  emit('edit-role', { label })
+}
+const submitRoleDelete = async () => {
+  const label = String(roleToDelete.value || '').trim()
+  if (!label || roleBusy.value) return
+  if (!guardConnWrite(props.conn || {}, t('um.deleteRoleTitle'))) return
+  const { name, host } = roleHostOf(label)
+  roleBusy.value = true
+  try {
+    const res = await userAction(props.conn.id, {
+      action: 'drop-role', database: props.database, userName: name, host
+    })
+    if (res && res.success) {
+      removedRoles.value = [...removedRoles.value, label]
+      // 角色都没了，勾选留着只会在保存时拼出一条必失败（对象不存在）的授权
+      form.value.roles = (form.value.roles || []).filter((x) => x !== label)
+      ElMessage.success(t('um.roleDeleted', { name: label }))
+      roleDeleteDlg.value = false
+      roleToDelete.value = ''
+    } else {
+      ElMessage.error(t('um.deleteFailed', { detail: (res && res.message) || t('common.unknownError') }))
+    }
+  } catch (e) {
+    ElMessage.error(t('um.deleteFailed', { detail: (e && (e.message || String(e))) || '' }))
+  } finally {
+    roleBusy.value = false
+  }
+}
 // 表格的列 = 白名单里的权限 ∪ 现有授权里出现的其它名字（一个都不能隐身：
 // 服务器返回了哪个名字，界面就必须能看见、能取消，否则保存时会把它悄悄撤掉）
 const objectPrivColumns = computed(() => {
@@ -1040,9 +1301,14 @@ const isClickhouse = computed(() => props.conn?.type === 'CLICKHOUSE')
 const hasServerTab = computed(() => isMysql.value || isMssql.value || isPgsql.value || isOracle.value || isClickhouse.value)
 // PG 的「数据库权限」页 = 模式级（USAGE/CREATE）；PG 也有表权限页
 const hasDbTab = computed(() => isMysql.value || isMssql.value || isClickhouse.value || isPgsql.value)
-const hasGranularTab = computed(() => isMysql.value || isMssql.value || isOracle.value || isPgsql.value || isClickhouse.value)
-// Oracle 的「角色」是单独一层（与系统权限、对象权限并列）
-const hasRolesTab = computed(() => isOracle.value)
+// H2 只有表级授权（schema.table），没有"全局/库级"这两层 —— 只出细粒度那一页
+const hasGranularTab = computed(() => isMysql.value || isMssql.value || isOracle.value || isPgsql.value || isClickhouse.value || isH2.value)
+// 「角色」是单独一层：Oracle 预置角色；MySQL 8 / MariaDB / Doris 是服务器上的自定义角色
+// （mysql.role_edges / roles_mapping / SHOW ROLES，后端单独查）；ClickHouse 走 system.roles。
+// PG 不单开这一页 —— 它的「服务器权限」页本来就是角色（pg_* 预置 + 自定义），见 serverColumns。
+const hasRolesTab = computed(() => !props.asRole && (isOracle.value || isMysql.value || isClickhouse.value))
+// Doris 的权限名是 SELECT_PRIV / LOAD_PRIV 那套，与这套列不同名 —— 本版不给"编辑角色权限"
+const rolePrivEditable = computed(() => String(props.conn?.type || '').toUpperCase() !== 'DORIS')
 // 页签标题按类型取：同一层在不同家的说法不一样（Oracle 的"服务器级"其实就是系统权限）
 // 同一层在不同家叫法不同，按数据库类型取**准确**的名字：
 //   MySQL/MariaDB/Doris → 全局权限（GLOBAL PRIVILEGES，它没有"服务器"这一层）
@@ -1056,13 +1322,25 @@ const serverTabLabel = computed(() => (
         : t('upv.tabGlobal')
 ))
 // 数据库那一页：MySQL 系是"库级权限"，SQL Server 给的是数据库角色
-const dbTabLabel = computed(() => (isMssql.value ? t('upv.segDbRoles') : t('upv.tabDb')))
+const dbTabLabel = computed(() => (
+  isMssql.value ? t('upv.segDbRoles')
+    : isPgsql.value ? t('upv.tabPgDb')   // PG 这一页是真的库级（CONNECT/CREATE/TEMPORARY）
+      : t('upv.tabDb')
+))
+// PG 的「模式权限」单独一页（与库级分开）—— 见模板 pg-schema
+const hasPgSchemaTab = computed(() => isPgsql.value)
+// PG 库级的三个权限项（与后端 PG_DATABASE_PRIVS 一致）
+const pgDbPrivs = ['CONNECT', 'CREATE', 'TEMPORARY']
 const granularTabLabel = computed(() => (
   isOracle.value ? t('upv.tabObjects')
     : isMssql.value ? t('upv.tabSchemaObject')
       : t('upv.tabTables')
 ))
-const hasAnyGrantTab = computed(() => hasServerTab.value || hasDbTab.value)
+// 「有没有任何授权页签」：四层都要算 —— 只看前两层的话，H2（只有表级一层）与
+// 纯角色型的库会被误判成"自动授权尚未实现"，明明下面就有表权限页签可勾。
+const hasAnyGrantTab = computed(
+  () => hasServerTab.value || hasDbTab.value || hasGranularTab.value || hasRolesTab.value
+)
 // 类型名（给"该类型还没实现自动授权"那句提示用）
 const connTypeLabel = computed(() => {
   const map = {
@@ -1075,6 +1353,9 @@ const connTypeLabel = computed(() => {
 })
 const isH2 = computed(() => props.conn?.type === 'H2')
 const isDerby = computed(() => props.conn?.type === 'DERBY')
+// H2 的默认管理员用户名是空串，界面上显示成 `""`（SQL 里的真写法）——
+// 用户名那一行要给出解释，否则两个引号看起来像坏了。
+const isBlankH2User = computed(() => isH2.value && String(form.value.name || '').trim() === '""')
 
 // 全局权限的固定清单 = MySQL 的静态权限全集。
 //
@@ -1180,8 +1461,18 @@ const chPrivGroupDefs = [
 const chDbGrouped = computed(() => groupByDefs(chPrivColumns.value, chPrivGroupDefs))
 // 细粒度（表级）页签的列与分组：CH 用自己的清单（与全局/库级同一套名字），
 // MySQL 系用表级清单 —— 一张表两个类型共用（后端对 CH 的 `grant … on db.tbl` 已支持）
-const granularCols = computed(() => (isClickhouse.value ? chPrivColumns.value : tablePrivColumns.value))
-const granularGroups = computed(() => (isClickhouse.value ? chDbGrouped.value : tableGrouped.value))
+// H2 2.x 的表级权限只有这几种（`ALL` 是前四项的简写）—— 给全 MySQL 那一长串没有意义
+const h2Privs = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'ALL']
+const granularCols = computed(() => (
+  isH2.value ? h2Privs : isClickhouse.value ? chPrivColumns.value : tablePrivColumns.value
+))
+const granularGroups = computed(() => {
+  if (isH2.value) {
+    // 复用同一套分组定义（数据读写 / 其它），H2 的列少，分组只是让表头好读
+    return groupByDefs(h2Privs, privGroupDefs)
+  }
+  return isClickhouse.value ? chDbGrouped.value : tableGrouped.value
+})
 
 // 权限按用途分组 —— 三十二个勾选框平铺着没人看得下去，按「数据读写 / 对象与结构 /
 // 服务器管理」分开后一眼就能定位（这也是各家客户端的老做法）。
@@ -1349,6 +1640,19 @@ const ROLE_LABEL_KEYS = {
 // 这里内置一张双语兜底表（不进 locales：这些名字只在动态列里出现，没必要进字典文件），
 // 命中不了再用「动词+名词」组合规则拼一条（CREATE ROW POLICY → 创建行策略）。
 const PRIV_CN_EXACT = {
+  // ===== Oracle 系统权限里"组合规则拼不出人话"的那几条 =====
+  'CREATE SESSION': ['登录数据库（创建会话）', 'Log in (create session)'],
+  'RESTRICTED SESSION': ['受限会话（只允许特权用户登录）', 'Restricted session'],
+  'UNLIMITED TABLESPACE': ['不限表空间配额', 'Unlimited tablespace'],
+  'DEBUG CONNECT SESSION': ['第三方调试器连接本会话', 'Debugger connect session'],
+  'BECOME USER': ['切换为其他用户身份', 'Become user'],
+  'ALTER SYSTEM': ['修改数据库参数', 'Alter system parameters'],
+  'ALTER DATABASE': ['修改数据库（归档/恢复）', 'Alter database'],
+  'AUDIT SYSTEM': ['审计系统操作', 'Audit system'],
+  // PG 库级的 TEMPORARY（只在指定库上建临时表）；CH 的 SET DEFINER
+  TEMPORARY: ['本库建临时表', 'Temporary tables in this database'],
+  'SET DEFINER': ['设置 DEFINER（以他人身份执行）', 'Set definer'],
+  'ANALYZE ANY': ['分析任意表统计信息', 'Analyze any table'],
   CHECK: ['检查表（校验数据完整性）', 'Verify table integrity'],
   'UNDROP TABLE': ['恢复被删除的表', 'Undrop a dropped table'],
   BACKUP: ['备份数据', 'Back up data'],
@@ -1419,7 +1723,11 @@ const PRIV_CN_EXACT = {
 // 组合规则的动词/名词（zh / en）；en 的名词按单复数分开写，别自作聪明加括号
 const PRIV_CN_VERB = {
   CREATE: ['创建', 'Create'], ALTER: ['修改', 'Alter'], DROP: ['删除', 'Drop'],
-  SHOW: ['查看', 'Show'], KILL: ['终止', 'Kill'], SET: ['设置', 'Set']
+  SHOW: ['查看', 'Show'], KILL: ['终止', 'Kill'], SET: ['设置', 'Set'],
+  // Oracle 的 `SELECT ANY TABLE` / `INSERT ANY TABLE` … —— 动词是权限动作本身
+  SELECT: ['查询', 'Select'], INSERT: ['插入', 'Insert'], UPDATE: ['修改', 'Update'],
+  DELETE: ['删除', 'Delete'], EXECUTE: ['执行', 'Execute'], GRANT: ['授予', 'Grant'],
+  AUDIT: ['审计', 'Audit'], ANALYZE: ['分析统计信息', 'Analyze']
 }
 const PRIV_CN_NOUN = {
   DATABASE: ['库', 'database'], DATABASES: ['库', 'databases'],
@@ -1441,8 +1749,33 @@ const PRIV_CN_NOUN = {
   LOGINS: ['登录名', 'logins'], SERVER: ['服务器', 'server'], CONNECTION: ['连接', 'connection'],
   'LINKED SERVER': ['链接服务器', 'linked server'],
   HANDLERS: ['处理器（表函数）', 'handlers'], SOURCES: ['外部数据源', 'external sources'],
-  DEFINER: ['DEFINER（定义者）', 'definer']
+  DEFINER: ['DEFINER（定义者）', 'definer'],
+  // Oracle / 通用：这套名词一补，`CREATE SEQUENCE`、`SELECT ANY TABLE` 这类组合句
+  // 就不用逐条写死（曾经只覆盖到 TABLE/VIEW/USER/ROLE，一半列头是空的）
+  SESSION: ['会话', 'session'], SESSIONS: ['会话', 'sessions'],
+  SEQUENCE: ['序列', 'sequence'], SEQUENCES: ['序列', 'sequences'],
+  PROCEDURE: ['存储过程', 'procedure'], PROCEDURES: ['存储过程', 'procedures'],
+  TRIGGER: ['触发器', 'trigger'], TRIGGERS: ['触发器', 'triggers'],
+  TYPE: ['类型', 'type'], TYPES: ['类型', 'types'],
+  SYNONYM: ['同义词', 'synonym'], SYNONYMS: ['同义词', 'synonyms'],
+  'DATABASE LINK': ['数据库链接', 'database link'],
+  'MATERIALIZED VIEW': ['物化视图', 'materialized view'],
+  'MATERIALIZED VIEWS': ['物化视图', 'materialized views'],
+  JOB: ['作业', 'job'], JOBS: ['作业', 'jobs'],
+  TABLESPACE: ['表空间', 'tablespace'], TABLESPACES: ['表空间', 'tablespaces'],
+  DIRECTORY: ['目录对象', 'directory'], DIRECTORIES: ['目录对象', 'directories'],
+  PROFILE: ['概要文件', 'profile'], PROFILES: ['概要文件', 'profiles'],
+  LIBRARY: ['外部库文件', 'library'], OPERATOR: ['操作员', 'operator'],
+  'INDEXTYPE': ['索引类型', 'indextype'], 'EVALUATION CONTEXT': ['表达式求值环境', 'evaluation context'],
+  'SQL PROFILE': ['SQL 概要', 'SQL profile'], DIMENSION: ['维度', 'dimension'],
+  // 组合规则的动词表（含 Oracle 的 SELECT/INSERT/UPDATE/DELETE/GRANT/AUDIT）
+  // 在下面生成正则，见 privLabel 第 2 条规则
+
+  OUTLINE: ['执行计划大纲', 'outline'], PACKAGE: ['包', 'package'],
+  'JAVA SOURCE': ['Java 源码', 'Java source'], RESOURCE: ['资源', 'resource']
 }
+// 组合规则用的正则：动词表与 PRIV_CN_VERB 同源（增删动词只改一处）
+const PRIV_CN_RE = new RegExp(`^(${Object.keys(PRIV_CN_VERB).join('|')})\\s+(ANY\\s+)?(.+)$`)
 // 取某个权限/角色的中文小字：没有登记、或中文与英文名相同（英文界面）就返回空 →
 // 模板里 v-if 不渲染第二行，列头保持单行
 const privLabel = (p) => {
@@ -1460,9 +1793,10 @@ const privLabel = (p) => {
   // 1) 兜底表精确命中
   const hit = PRIV_CN_EXACT[upper]
   if (hit) return en ? hit[1] : hit[0]
-  // 2) 组合规则：CREATE/ALTER/DROP/SHOW/KILL + (ANY)? + 名词
-  //    MSSQL 的权限形如 ALTER ANY DATABASE（"修改任意库"），ANY 可以剥掉再查名词
-  const m = /^(CREATE|ALTER|DROP|SHOW|KILL)\s+(ANY\s+)?(.+)$/.exec(upper)
+  // 2) 组合规则：<动词> + (ANY)? + 名词 —— 动词表直接用 PRIV_CN_VERB 的键，
+  //    别再手写一份：原先写死 CREATE/ALTER/DROP/SHOW/KILL，于是补进动词表的
+  //    SELECT/INSERT/UPDATE/DELETE 全都白搭（Oracle 的 `SELECT ANY TABLE` 一直没说明）。
+  const m = PRIV_CN_RE.exec(upper)
   if (m) {
     const verb = PRIV_CN_VERB[m[1]]
     const noun = PRIV_CN_NOUN[m[3]]
@@ -1618,7 +1952,14 @@ const serverGrouped = computed(() =>
           : pgRoleGroupDefs,
   ),
 )
-const rolesGrouped = computed(() => groupByDefs(oracleRoles, oracleRoleGroupDefs))
+// Oracle 按预置分类分组；MySQL 的角色是动态清单，不分类（一组全列）
+const rolesGrouped = computed(() => (
+  // 用 roleColumns（不是 oracleRoles）分组：自定义角色不在预置名单里，
+  // 按预置名单分组会把它们整列漏掉（groupByDefs 的兜底「其它」也就不会出现）。
+  isOracle.value
+    ? groupByDefs(roleColumns.value, oracleRoleGroupDefs)
+    : (roleColumns.value.length ? [{ key: 'all', label: t('upv.tabRoles'), items: roleColumns.value }] : [])
+))
 const mssqlDbRolesGrouped = computed(() => groupByDefs(mssqlRoles, mssqlDbRoleGroupDefs))
 const objectGrouped = computed(() => groupByDefs(objectPrivColumns.value, oracleObjGroupDefs))
 const schemaGrouped = computed(() => groupByDefs(schemaPrivColumns.value, mssqlPrivGroupDefs))
@@ -1659,8 +2000,20 @@ const tablePrivColumns = computed(() => privColumns(objectPrivs.map((p) => p.val
 const schemaPrivColumns = computed(() => privColumns(mssqlSchemaPrivs.map((p) => p.value), form.value.schemaPrivileges))
 const objectPrivColumnsMssql = computed(() => privColumns(mssqlObjectPrivs.map((p) => p.value), form.value.objectPrivileges))
 // 服务器权限那一页：勾选项本身就是「角色名 / 权限名」，一个一列，只有一行
+// PG 的「服务器权限」= 角色页：预置的 pg_* 之外，把服务器上**自定义的角色**
+// （`availableRoles`，后端从 pg_roles 里取不能登录的）并进来 —— 用户自己建的角色
+// 不该只出现在 SQL 里。其余类型沿用各自的固定清单。
+const pgAllRoles = computed(() => {
+  const cols = [...pgRoles]
+  for (const r of props.editData?.availableRoles || []) {
+    const label = roleLabel(r)
+    if (label && !cols.includes(label)) cols.push(label)
+  }
+  for (const label of localRoles.value) if (!cols.includes(label)) cols.push(label)
+  return cols.filter((x) => !removedRoles.value.includes(x))
+})
 const serverColumns = computed(() => (
-  isOracle.value ? oracleSystemPrivs : isMssql.value ? mssqlServerRoles : isPgsql.value ? pgRoles
+  isOracle.value ? oracleSystemPrivs : isMssql.value ? mssqlServerRoles : isPgsql.value ? pgAllRoles.value
     : isClickhouse.value ? chPrivColumns.value : []
 ))
 const serverRowLabel = computed(() => (
@@ -1734,6 +2087,7 @@ const changes = computed(() => {
       serverRoles: { added: [...asSet(f.serverRoles)], removed: [] },
       roles: { added: [...asSet(f.roles)], removed: [] },
       db: { added: allRows(f.dbPrivileges, dbKey), removed: [] },
+      pgDb: { added: allRows(f.pgDbPrivileges, dbKey), removed: [] },
       table: { added: allRows(f.tablePrivileges, tableKey), removed: [] },
       routine: { added: allRows(f.routinePrivileges, routineKey), removed: [] },
       schema: { added: allRows(f.schemaPrivileges, schemaKey), removed: [] },
@@ -1745,6 +2099,7 @@ const changes = computed(() => {
     serverRoles: listDiff(o.serverRoles, f.serverRoles),
     roles: listDiff(o.roles, f.roles),
     db: rowsDiff(o.dbPrivileges, f.dbPrivileges, dbKey),
+    pgDb: rowsDiff(o.pgDbPrivileges, f.pgDbPrivileges, dbKey),
     table: rowsDiff(o.tablePrivileges, f.tablePrivileges, tableKey),
     routine: rowsDiff(o.routinePrivileges, f.routinePrivileges, routineKey),
     schema: rowsDiff(o.schemaPrivileges, f.schemaPrivileges, schemaKey),
@@ -1754,7 +2109,7 @@ const changes = computed(() => {
 // 差量里有没有"要执行的语句"（撤销也算）
 const hasChanges = computed(() => {
   const c = changes.value
-  return ['global', 'serverRoles', 'roles', 'db', 'table', 'routine', 'schema', 'object'].some((k) => {
+  return ['global', 'serverRoles', 'roles', 'db', 'pgDb', 'table', 'routine', 'schema', 'object'].some((k) => {
     const g = c[k]
     return (g.added && g.added.length) || (g.removed && g.removed.length)
   }) || !!form.value.password || !props.editMode
@@ -1765,9 +2120,24 @@ const revokePayload = computed(() => {
   const out = []
   for (const p of c.global.removed) out.push({ scope: 'global', privilege: p, owner: '', object: '' })
   for (const p of c.serverRoles.removed) out.push({ scope: 'server-role', privilege: p, owner: '', object: '' })
-  for (const p of c.roles.removed) out.push({ scope: 'role', privilege: p, owner: '', object: '' })
+  for (const p of c.roles.removed) {
+    // 刚在这一页里删掉的角色：对象已经不存在，再发 revoke 必报「角色不存在」
+    if (removedRoles.value.includes(String(p))) continue
+    // 角色：Oracle 是裸名字；MySQL/MariaDB 是 `名字@host`（后端要拿 owner/object 拼 `revoke 'r'@'h'`）
+    if (isMysql.value) {
+      const s = String(p || '')
+      const at = s.lastIndexOf('@')
+      out.push(at > 0
+        ? { scope: 'role', privilege: s, owner: s.slice(0, at), object: s.slice(at + 1) }
+        : { scope: 'role', privilege: s, owner: s, object: '%' })
+    } else {
+      out.push({ scope: 'role', privilege: p, owner: '', object: '' })
+    }
+  }
   // PG 的「库级」实为模式级：撤销 scope 用 'schema'（后端拼 `revoke … on schema …`）
   for (const r of c.db.removed) for (const p of r.privs) out.push({ scope: isPgsql.value ? 'schema' : 'db', privilege: p, owner: r.key, object: '' })
+  // PG 真正的库级（CONNECT / CREATE / TEMPORARY ON DATABASE）
+  for (const r of c.pgDb.removed) for (const p of r.privs) out.push({ scope: 'database', privilege: p, owner: r.key, object: '' })
   for (const r of c.table.removed) for (const p of r.privs) out.push({ scope: 'table', privilege: p, owner: r.row.database, object: r.row.table })
   // 例程级撤销：kind 要带上（`on procedure ...` 是语法的一部分）
   for (const r of c.routine.removed) for (const p of r.privs) out.push({ scope: 'routine', privilege: p, owner: r.row.database, object: r.row.routine, kind: r.row.kind || 'PROCEDURE' })
@@ -1797,12 +2167,20 @@ const previewSql = computed(() => {
     // 先撤销（只撤"取消了勾选"的那些），再授予（只授"新勾上"的那些）
     const grantOption = (privs) => privs.filter((p) => p !== 'GRANT OPTION')
     const hasGrantOption = (privs) => privs.includes('GRANT OPTION')
+    // 角色（MySQL 8 / MariaDB）：`'r'@'h'` 是账号形状，语句里没有 ON 子句
+    const roleRef = (ref) => {
+      const s = String(ref || '')
+      const at = s.lastIndexOf('@')
+      return at > 0 ? `'${s.slice(0, at)}'@'${s.slice(at + 1)}'` : `'${s}'@'%'`
+    }
+    for (const r of c.roles.removed) lines.push(`REVOKE ${roleRef(r)} FROM ${who};`)
     for (const p of c.global.removed) lines.push(`REVOKE ${p} ON *.* FROM ${who};`)
     for (const r of c.db.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON \`${r.key}\`.* FROM ${who};`)
     for (const r of c.table.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON \`${r.row.database}\`.\`${r.row.table}\` FROM ${who};`)
     // 例程级：`ON PROCEDURE `db`.`p`` 的类型字是语法的一部分
     const routineType = (kind) => (String(kind).toUpperCase() === 'FUNCTION' ? 'FUNCTION' : 'PROCEDURE')
     for (const r of c.routine.removed) for (const p of r.privs) lines.push(`REVOKE ${p} ON ${routineType(r.row.kind)} \`${r.row.database}\`.\`${r.row.routine}\` FROM ${who};`)
+    for (const r of c.roles.added) lines.push(`GRANT ${roleRef(r)} TO ${who};`)
     const g = grantOption(c.global.added)
     if (g.length) lines.push(`GRANT ${g.join(', ')} ON *.* TO ${who}${hasGrantOption(c.global.added) ? ' WITH GRANT OPTION' : ''};`)
     else if (hasGrantOption(c.global.added)) lines.push(`GRANT USAGE ON *.* TO ${who} WITH GRANT OPTION;`)
@@ -1811,20 +2189,20 @@ const previewSql = computed(() => {
     for (const r of c.routine.added) lines.push(`GRANT ${r.privs.join(', ')} ON ${routineType(r.row.kind)} \`${r.row.database}\`.\`${r.row.routine}\` TO ${who};`)
     sql = lines.join('\n')
   } else if (isMssql.value) {
+    // SQL Server 的「用户」= **服务器登录名**（连接级，不带库；见后端 dialect.users）。
+    // 新建/改密都是 LOGIN；目标库里的映射用户不在这里顺手建 —— 那会落到连接默认库上，
+    // 而这里连"哪个库"都没选（授权页签自己带行级选库）。
     if (!props.editMode && form.value.password) {
-      sql = `CREATE LOGIN [${form.value.name}] WITH PASSWORD='***';\nCREATE USER [${form.value.name}] FOR LOGIN [${form.value.name}];`
+      sql = `CREATE LOGIN [${form.value.name}] WITH PASSWORD='***';`
     } else if (props.editMode && form.value.password) {
       sql = `ALTER LOGIN [${form.value.name}] WITH PASSWORD='***';`
     }
     const c = changes.value
     const u = `[${form.value.name}]`
-    // 属性：默认架构；禁用走 ALTER LOGIN（要有登录名，包含数据库用户没有）
+    // 属性：默认数据库 / 禁用，两个都是登录名属性
     const a = attrDelta.value
-    if (a.defaultSchema !== undefined) sql += `\nALTER USER ${u} WITH DEFAULT_SCHEMA = [${a.defaultSchema}];`
-    if (a.disabled !== undefined) {
-      const login = attrText(attrRaw('login_name')).trim()
-      if (login) sql += `\nALTER LOGIN [${login}] ${a.disabled ? 'DISABLE' : 'ENABLE'};`
-    }
+    if (a.defaultDatabase !== undefined) sql += `\nALTER LOGIN ${u} WITH DEFAULT_DATABASE = [${a.defaultDatabase}];`
+    if (a.disabled !== undefined) sql += `\nALTER LOGIN ${u} ${a.disabled ? 'DISABLE' : 'ENABLE'};`
     for (const r of c.serverRoles.removed) sql += `\nALTER SERVER ROLE [${r}] DROP MEMBER ${u};`
     for (const r of c.serverRoles.added) sql += `\nALTER SERVER ROLE [${r}] ADD MEMBER ${u};`
     for (const r of c.roles.removed) sql += `\nALTER ROLE [${r}] DROP MEMBER ${u};`
@@ -1856,9 +2234,12 @@ const previewSql = computed(() => {
     // 细粒度三层：模式（USAGE/CREATE）/ 表（七项）/ 例程（EXECUTE）——与后端
     // user_action_sql 的 pg 分支同形（本地预览，同一算法只出不带口令的语句）。
     const rt = (kind) => (String(kind).toUpperCase() === 'PROCEDURE' ? 'PROCEDURE' : 'FUNCTION')
+    // 库级（CONNECT / CREATE / TEMPORARY ON DATABASE）——PG 真正的那一层
+    for (const r of c.pgDb.removed) for (const p of r.privs) sql += `\nREVOKE ${p.toLowerCase()} ON DATABASE "${r.key}" FROM ${who};`
     for (const r of c.db.removed) for (const p of r.privs) sql += `\nREVOKE ${p.toLowerCase()} ON SCHEMA "${r.key}" FROM ${who};`
     for (const r of c.table.removed) for (const p of r.privs) sql += `\nREVOKE ${p.toLowerCase()} ON TABLE "${r.row.database}"."${r.row.table}" FROM ${who};`
     for (const r of c.routine.removed) for (const p of r.privs) sql += `\nREVOKE ${p.toLowerCase()} ON ${rt(r.row.kind)} "${r.row.database}"."${r.row.routine}" FROM ${who};`
+    for (const r of c.pgDb.added) sql += `\nGRANT ${r.privs.join(', ').toLowerCase()} ON DATABASE "${r.key}" TO ${who};`
     for (const r of c.db.added) sql += `\nGRANT ${r.privs.join(', ').toLowerCase()} ON SCHEMA "${r.key}" TO ${who};`
     for (const r of c.table.added) sql += `\nGRANT ${r.privs.join(', ').toLowerCase()} ON TABLE "${r.row.database}"."${r.row.table}" TO ${who};`
     for (const r of c.routine.added) sql += `\nGRANT ${r.privs.join(', ').toLowerCase()} ON ${rt(r.row.kind)} "${r.row.database}"."${r.row.routine}" TO ${who};`
@@ -1883,8 +2264,10 @@ const previewSql = computed(() => {
     for (const r of c.table.added) lines.push(`GRANT ${r.privs.join(', ')} ON \`${r.row.database}\`.\`${r.row.table}\` TO ${who};`)
     sql = lines.join('\n')
   } else if (isOracle.value) {
-    // Oracle：建号 / 改密 + 三层（系统权限 / 角色 / 对象权限）+ 撤销差异。
-    // 与 MySQL 那段同一写法（本地预览，口令一律显示 ***）。
+    // Oracle：建号 / 改密 + 三层（系统权限 / 角色 / 对象权限）的**差量**。
+    // 原来这里直接遍历 form 里的全部权限/角色（不是 changes），于是**一打开用户就**
+    // 显示一串 `GRANT … TO …`，看着像"已改动、待执行"（实测 ANONYMOUS/DBMIND 都这样）。
+    // 与 MySQL 段同一口径：只输出「新勾的」和「取消勾选的」。
     const who = `"${form.value.name}"`
     const lines = []
     if (!props.editMode) {
@@ -1899,25 +2282,44 @@ const previewSql = computed(() => {
     if (oa.defaultTablespace !== undefined) lines.push(`ALTER USER ${who} DEFAULT TABLESPACE ${oa.defaultTablespace};`)
     if (oa.temporaryTablespace !== undefined) lines.push(`ALTER USER ${who} TEMPORARY TABLESPACE ${oa.temporaryTablespace};`)
     if (oa.profile !== undefined) lines.push(`ALTER USER ${who} PROFILE ${oa.profile};`)
-    for (const r of oracleRevokes()) {
-      lines.push(r.scope === 'object'
-        ? `REVOKE ${r.privilege} ON "${r.owner}"."${r.object}" FROM ${who};`
-        : `REVOKE ${r.privilege} FROM ${who};`)
+    const c = changes.value
+    // 先撤销（只撤"取消了勾选"的），再授予（只授"新勾上"的）
+    for (const p of c.global.removed) lines.push(`REVOKE ${p} FROM ${who};`)
+    for (const r of c.roles.removed) lines.push(`REVOKE ${r} FROM ${who};`)
+    for (const r of c.table.removed) {
+      for (const p of r.privs) {
+        lines.push(`REVOKE ${p} ON "${r.row.database}"."${r.row.table}" FROM ${who};`)
+      }
     }
-    for (const p of form.value.privileges || []) lines.push(`GRANT ${p} TO ${who};`)
-    for (const r of form.value.roles || []) lines.push(`GRANT ${r} TO ${who};`)
-    for (const row of form.value.tablePrivileges || []) {
-      if (row.database && row.table && row.privileges?.length) {
-        lines.push(`GRANT ${row.privileges.join(', ')} ON "${row.database}"."${row.table}" TO ${who};`)
+    for (const p of c.global.added) lines.push(`GRANT ${p} TO ${who};`)
+    for (const r of c.roles.added) lines.push(`GRANT ${r} TO ${who};`)
+    for (const r of c.table.added) {
+      if (r.row.database && r.row.table && r.privs.length) {
+        lines.push(`GRANT ${r.privs.join(', ')} ON "${r.row.database}"."${r.row.table}" TO ${who};`)
       }
     }
     sql = lines.join('\n')
   } else if (isH2.value) {
+    // H2 也有**表级**一层授权（schema.table）—— 原来这里只预览建号/改密，
+    // 取消勾选表权限时预览区一直是占位文案（实际保存却真的撤销了，对不上）。
+    // 空用户名（默认用户）在界面上就是 `""`，原样拼即合法标识符。
+    const who = form.value.name
+    const lines = []
     if (!props.editMode) {
-      sql = `CREATE USER ${form.value.name} PASSWORD '***';`
+      lines.push(`CREATE USER ${who} PASSWORD '***';`)
     } else if (form.value.password) {
-      sql = `ALTER USER ${form.value.name} SET PASSWORD '***';`
+      lines.push(`ALTER USER ${who} SET PASSWORD '***';`)
     }
+    const c = changes.value
+    for (const r of c.table.removed) {
+      if (!r.row.database || !r.row.table) continue
+      for (const p of r.privs) lines.push(`REVOKE ${p} ON "${r.row.database}"."${r.row.table}" FROM ${who};`)
+    }
+    for (const r of c.table.added) {
+      if (!r.row.database || !r.row.table || !r.privs.length) continue
+      lines.push(`GRANT ${r.privs.join(', ')} ON "${r.row.database}"."${r.row.table}" TO ${who};`)
+    }
+    sql = lines.join('\n')
   } else if (isDerby.value) {
     if (!props.editMode) {
       sql = `CALL SYSCS_UTIL.SYSCS_CREATE_USER('${form.value.name}', '***');`
@@ -1944,6 +2346,13 @@ const addDbPriv = () => {
 const removeDbPriv = (i) => {
   form.value.dbPrivileges.splice(i, 1)
 }
+// PG 库级（ON DATABASE）那一页的行操作
+const addPgDbPriv = () => {
+  form.value.pgDbPrivileges.push({ database: '', privileges: [] })
+}
+const removePgDbPriv = (i) => {
+  form.value.pgDbPrivileges.splice(i, 1)
+}
 
 // ===== 下拉多选 ⇒ 拆行 =====
 // 一行里一次选中多个对象（库 / 表 / 例程 / 模式）：第一行留第一个，其余各拆成
@@ -1964,6 +2373,11 @@ const splitMultiRow = (list, i, field, vals, make) => {
 }
 // 库 / 模式级（MySQL、ClickHouse 的库 与 PG 的模式同形状：{database, privileges}）
 const onDbPrivMulti = (i, vals) => splitMultiRow(form.value.dbPrivileges, i, 'database', vals, (v, src) => ({
+  database: v,
+  privileges: [...(src.privileges || [])]
+}))
+// PG 库级（ON DATABASE）同样支持一次多选几个库 → 拆行
+const onPgDbPrivMulti = (i, vals) => splitMultiRow(form.value.pgDbPrivileges, i, 'database', vals, (v, src) => ({
   database: v,
   privileges: [...(src.privileges || [])]
 }))
@@ -2105,14 +2519,15 @@ const loadDatabases = async () => {
       databases.value = []
     }
   }
-  if (isMssql.value) {
+  if (isMssql.value || isH2.value) {
     await loadSchemas()
   }
 }
 
 const loadSchemas = async () => {
   // PG/Kingbase 的模式级 / 表级 / 例程级三页都要用模式清单
-  if (!props.conn || (!isMssql.value && !isPgsql.value)) return
+  // H2 的表级授权目标是 schema（PUBLIC / INFORMATION_SCHEMA…），同样需要这份清单
+  if (!props.conn || (!isMssql.value && !isPgsql.value && !isH2.value)) return
   try {
     const res = await listSchemas(props.conn.id, props.database)
     schemas.value = (res || []).map(s => s.name || s)
@@ -2186,6 +2601,8 @@ const submit = async () => {
       opts.privileges = mysql57.value
         ? form.value.privileges.filter((p) => !['CREATE ROLE', 'DROP ROLE'].includes(String(p).toUpperCase()))
         : form.value.privileges
+      // 角色（MySQL 8 / MariaDB）：`名字@host` 形状，后端拼 `grant 'r'@'h' to …`
+      opts.roles = form.value.roles
       opts.dbPrivileges = form.value.dbPrivileges.map(r => ({ database: r.database, privileges: r.privileges }))
       opts.tablePrivileges = form.value.tablePrivileges.map(r => ({ database: r.database, table: r.table, privileges: r.privileges }))
       // 例程级：对单个存储过程/函数授 EXECUTE（后端拼 `grant execute on procedure ...`）
@@ -2209,6 +2626,8 @@ const submit = async () => {
     }
     if (isPgsql.value) {
       opts.roles = form.value.roles
+      // 库级（CONNECT / CREATE / TEMPORARY ON DATABASE）：与下面的模式级分开两个字段
+      opts.pgDbPrivileges = form.value.pgDbPrivileges.map(r => ({ database: r.database, privileges: r.privileges }))
       // 细粒度三层（后端 pg 分支同形）：dbPrivileges 的 database 字段 = 模式名
       opts.dbPrivileges = form.value.dbPrivileges.map(r => ({ database: r.database, privileges: r.privileges }))
       opts.tablePrivileges = form.value.tablePrivileges.map(r => ({ database: r.database, table: r.table, privileges: r.privileges }))
@@ -2223,18 +2642,51 @@ const submit = async () => {
       opts.privileges = form.value.privileges
       opts.dbPrivileges = form.value.dbPrivileges.map(r => ({ database: r.database, privileges: r.privileges }))
       opts.tablePrivileges = form.value.tablePrivileges.map(r => ({ database: r.database, table: r.table, privileges: r.privileges }))
+      // 角色也是 CH 的一层（`grant role to user`）：勾选的角色一并交上去
+      opts.roles = form.value.roles
+    }
+    if (isH2.value) {
+      // H2：只有表级一层。勾选的逐条授予；「原来有、现在取消了」的按 `schema.table|权限`
+      // 点名撤销（H2 没有 `revoke all` 之外的整表清空，逐个点最安全）。
+      opts.tablePrivileges = form.value.tablePrivileges.map(r => ({
+        database: r.database || '', table: r.table, privileges: r.privileges
+      }))
+      const before = (props.editData && props.editData.h2Rows) || []
+      const beforeKeys = new Set(before.map(r => `${r.owner}.${r.object}|${String(r.privilege).toUpperCase()}`))
+      const nowKeys = new Set()
+      for (const r of form.value.tablePrivileges) {
+        for (const t of asArr(r.table)) {
+          for (const p of r.privileges) nowKeys.add(`${r.database}.${t}|${String(p).toUpperCase()}`)
+        }
+      }
+      opts.revoke = [...beforeKeys].filter(k => !nowKeys.has(k)).map(k => {
+        const [target, privilege] = k.split('|')
+        const dot = target.indexOf('.')
+        return {
+          scope: 'table', privilege,
+          owner: target.slice(0, dot), object: target.slice(dot + 1), database: ''
+        }
+      })
     }
     if (isOracle.value) {
-      // 三层一起交：系统权限（privileges）/ 角色（roles）/ 对象权限（tablePrivileges，
-      // 这里的 database 字段对 Oracle 就是**模式名**）。
-      opts.privileges = form.value.privileges
-      opts.roles = form.value.roles
-      opts.tablePrivileges = form.value.tablePrivileges.map(r => ({ database: r.database, table: r.table, privileges: r.privileges }))
+      // 三层只交**新增的**（与预览同源）：新建用户时 changes.added 就是全量，
+      // 编辑时只交新勾的 —— 已经有的权限不必再 GRANT 一遍（重复授权虽幂等，
+      // 但会让人以为"每次保存都在重授全部权限"）。
+      const oc = changes.value
+      opts.privileges = oc.global.added
+      opts.roles = oc.roles.added
+      opts.tablePrivileges = oc.table.added.map(r => ({ database: r.row.database, table: r.row.table, privileges: r.privs }))
       // Oracle 没有"一把全撤"（不像 MySQL 的 revoke all privileges），所以由这里把
       // **原来有、现在没有了**的那些算出来交给后端逐条 revoke。
       opts.revoke = oracleRevokes()
     }
-    // 属性（配额 / 锁定 / 表空间 / 默认架构 / rol* 开关）：只交改动过的项
+    // SQL Server 的用户是**服务器登录名**（`create login`），口令是必需的 ——
+    // 空口令在后端也生成不出语句（方言那边会判成"不支持"），不如在这里说清楚。
+    if (isMssql.value && !props.editMode && !form.value.password) {
+      ElMessage.warning(t('upv.mssqlNeedsPassword'))
+      return
+    }
+    // 属性（配额 / 锁定 / 表空间 / 默认架构 / 默认数据库 / rol* 开关）：只交改动过的项
     const attrs = { ...attrDelta.value }
     if (Object.keys(attrs).length) {
       if (attrs.authPlugin && !form.value.password && props.editMode) {
@@ -2246,15 +2698,18 @@ const submit = async () => {
       opts.attrs = attrs
     }
     const res = await userAction(props.conn.id, {
-      action: props.editMode ? 'alter' : 'create',
+      // 角色模式只发授权差量（后端把它归一到 alter，但不拼 alter user）
+      action: props.asRole ? 'alter-role' : (props.editMode ? 'alter' : 'create'),
       database: props.database,
       userName: form.value.name.trim(),
-      password: form.value.password,
+      password: props.asRole ? '' : form.value.password,
       host: form.value.host || '%',
       options: opts
     })
     if (res.success) {
-      ElMessage.success(props.editMode ? t('upv.userUpdated') : t('upv.userCreated'))
+      ElMessage.success(props.asRole
+        ? t('upv.rolePrivSaved', { name: form.value.name })
+        : (props.editMode ? t('upv.userUpdated') : t('upv.userCreated')))
       emit('saved', props.database)
       emit('close')
     } else {
@@ -2278,6 +2733,9 @@ const formSnapshot = () => JSON.stringify({
   roles: [...(form.value.roles || [])].sort(),
   serverRoles: [...(form.value.serverRoles || [])].sort(),
   dbPrivileges: (form.value.dbPrivileges || []).map((r) => ({
+    database: r.database, privileges: [...(r.privileges || [])].sort(),
+  })),
+  pgDbPrivileges: (form.value.pgDbPrivileges || []).map((r) => ({
     database: r.database, privileges: [...(r.privileges || [])].sort(),
   })),
   tablePrivileges: (form.value.tablePrivileges || []).map((r) => ({
@@ -2307,6 +2765,7 @@ const seedFormFromEditData = (d) => {
     form.value.privileges = d.privileges || []
     form.value.roles = d.roles || []
     form.value.dbPrivileges = (d.dbPrivileges || []).map(r => ({ ...r }))
+    form.value.pgDbPrivileges = (d.pgDbPrivileges || []).map(r => ({ ...r }))
     form.value.tablePrivileges = (d.tablePrivileges || []).map(r => ({ ...r, _tables: [], _loading: false }))
     form.value.routinePrivileges = (d.routinePrivileges || []).map(r => ({ database: r.database || '', kind: r.kind || 'PROCEDURE', routine: r.routine || '', privileges: r.privileges || [], _loading: false }))
     form.value.serverRoles = d.serverRoles || []
@@ -2314,7 +2773,7 @@ const seedFormFromEditData = (d) => {
     form.value.objectPrivileges = (d.objectPrivileges || []).map(r => ({ database: r.database || '', ...r }))
     form.value.grants = d.grants || []
   } else {
-    form.value = { name: '', password: '', host: '%', privileges: [], roles: [], dbPrivileges: [], tablePrivileges: [], routinePrivileges: [], serverRoles: [], schemaPrivileges: [], objectPrivileges: [], grants: [], attrs: {} }
+    form.value = { name: '', password: '', host: '%', privileges: [], roles: [], dbPrivileges: [], pgDbPrivileges: [], tablePrivileges: [], routinePrivileges: [], serverRoles: [], schemaPrivileges: [], objectPrivileges: [], grants: [], attrs: {} }
   }
   // 属性基准（可改项的"原值"）：与权限基准同一时刻存下，之后按差提交
   seedAttrs()
@@ -2323,6 +2782,7 @@ const seedFormFromEditData = (d) => {
   orig.value = JSON.parse(JSON.stringify({
     privileges: form.value.privileges,
     dbPrivileges: form.value.dbPrivileges,
+    pgDbPrivileges: form.value.pgDbPrivileges,
     tablePrivileges: form.value.tablePrivileges,
     routinePrivileges: form.value.routinePrivileges,
     serverRoles: form.value.serverRoles,
@@ -3020,4 +3480,16 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .og-cell { text-align: center; }
 .obj-grid :deep(.el-select) { width: 100%; }
 .obj-grid :deep(.el-checkbox) { margin-right: 0; height: auto; }
+/* 角色页签的管理条：左边一句说明、右边新建/删除（不挤占表格宽度） */
+.role-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 0 8px; padding: 0 2px;
+}
+.role-tip { color: var(--dc-text-dim); font-size: 12px; line-height: 1.5; }
+.role-actions { flex: none; display: inline-flex; gap: 8px; }
+/* 新建 / 删除角色对话框（与用户管理页的小表单同一口径） */
+.role-form { display: flex; flex-direction: column; gap: 10px; }
+.role-field { display: flex; align-items: center; gap: 10px; }
+.role-label { flex: none; width: 96px; color: var(--dc-text-mid); font-size: 12.5px; }
+.role-dlg-tip { color: var(--dc-text-dim); font-size: 12px; line-height: 1.6; }
 </style>

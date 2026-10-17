@@ -29,7 +29,9 @@
           <el-option v-for="c in g.options" :key="c.id" :label="connLabel(c)" :value="c.id" />
         </el-option-group>
       </el-select>
+      <!-- 没有库层的类型（Oracle / DM）不画库下拉：库就是连接里的服务名，永远一条 -->
       <el-select
+        v-if="!hideDb"
         v-model="database"
         size="small"
         class="gv-db"
@@ -276,7 +278,7 @@ defineEmits(['update:modelValue'])
 const {
   connId, dbs, database, schemas, schema, connGroups,
   tables, loadingTables, tableError,
-  activeConn, needSchema, isNoSqlConn, effectiveDatabase,
+  activeConn, needSchema, hideDb, isNoSqlConn, effectiveDatabase,
   loadingDbs, loadingSchemas, dbError, connLabel, loadTables
 } = useAiContext(props)
 

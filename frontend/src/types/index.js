@@ -49,4 +49,20 @@ export const schemaLevelOf = (code) => byType(code).schemaLevel
 /** 「库」这一层要不要画（Oracle 不画：它就是连接里的服务名 / PDB，永远只有一条） */
 export const hideDbLevelOf = (code) => Boolean(byType(code).hideDbLevel)
 
+/**
+ * 面向界面的「库.模式」串 —— **只用于显示，不要拿它去发请求**。
+ *
+ * 对没有「库」这一层的类型（Oracle / DM，见 hideDbLevelOf），库那一段就是连接里填的
+ * 服务名（如 FREE），把它写进页签标题、路径、历史上纯属噪音：用户眼里的"库"其实是模式。
+ * 所以这里只留模式：`FREE.SYS` → `SYS`；只有服务名没有模式（`FREE`）→ 空串。
+ *
+ * 其余类型原样返回（MySQL 的库名本身可以带点，不能乱切）。
+ */
+export const dbDisplayOf = (code, db) => {
+  const q = db == null ? '' : String(db)
+  if (!q || !hideDbLevelOf(code)) return q
+  const i = q.indexOf('.')
+  return i > 0 ? q.slice(i + 1) : ''
+}
+
 export { DB_TYPES }

@@ -372,30 +372,29 @@ const showOrderKey = computed(() => isClickHouse.value)
 // 自增列：Doris 的自增只能建表时指定、编辑器对它没有任何可操作项，同样不显示
 const showAutoIncrement = computed(() => has(props.features, 'supportsAutoIncrement') && !isDoris.value && !isClickHouse.value)
 const showComment = computed(() => has(props.features, 'supportsComment'))
-// 字段表总列数：固定列 #/字段名/类型/长度/精度/可空/默认值/删除 = 8；主键/排序键/自增/注释按能力追加
-const headSpan = computed(() => 8
-  + (showPkCol.value ? 1 : 0)
-  + (showOrderKey.value ? 1 : 0)
-  + (isDoris.value ? 1 : 0)
-  + (isClickHouse.value ? 1 : 0)
-  + (showAutoIncrement.value ? 1 : 0)
-  + (showComment.value ? 1 : 0))
-/* 列宽与「编辑表结构」同一套机制：写**相对权重**（与列宽本身无关、最终合计 100%），
-   按当前显示的列归一化成百分比 —— 于是窗口宽窄、少显示了哪几列，表格都精确铺满。
-   直接写死像素时，容器比列宽之和大右侧就留白、小了就溢出（真机反复出现过）。 */
-const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, dist: 7, part: 7, def: 12, auto: 5, comment: 30, ops: 5 }
-const colWidths = computed(() => {
+// 当前显示的列（顺序 = 模板里 colgroup / 表头的顺序），字段表列数的唯一事实来源：
+// 列宽（colWidths）与空行/占位行的 colspan（headSpan）都从它派生 —— 条件只在这里维护一份，
+// 以后增删列就不可能出现「改了列宽忘了 colspan」的错位。
+const visibleColKeys = computed(() => {
   const keys = ['idx', 'name', 'type', 'len', 'prec', 'nullable']
   if (showPkCol.value) keys.push('pk')
   if (showOrderKey.value) keys.push('sort')
-  // Doris 的「分桶列」：与基本信息里那个分桶列下拉是同一件事（见 distPicked / toggleDist）
   if (isDoris.value) keys.push('dist')
-  // ClickHouse 的「分区键」：与基本信息里那个分区键框是同一件事（见 partitionPicked）
   if (isClickHouse.value) keys.push('part')
   keys.push('def')
   if (showAutoIncrement.value) keys.push('auto')
   if (showComment.value) keys.push('comment')
   keys.push('ops')
+  return keys
+})
+// 字段表总列数 = 当前显示的列数（含无条件的 #/字段名/类型/长度/精度/可空/默认值/删除 8 列）
+const headSpan = computed(() => visibleColKeys.value.length)
+/* 列宽与「编辑表结构」同一套机制：写**相对权重**（与列宽本身无关、最终合计 100%），
+   按当前显示的列归一化成百分比 —— 于是窗口宽窄、少显示了哪几列，表格都精确铺满。
+   直接写死像素时，容器比列宽之和大右侧就留白、小了就溢出（真机反复出现过）。 */
+const COL_WEIGHTS = { idx: 3, name: 13, type: 11, len: 5, prec: 5, nullable: 7, pk: 6, sort: 7, dist: 7, part: 7, def: 12, auto: 5, comment: 30, ops: 5 }
+const colWidths = computed(() => {
+  const keys = visibleColKeys.value
   const total = keys.reduce((sum, k) => sum + COL_WEIGHTS[k], 0)
   const out = {}
   for (const k of keys) out[k] = ((COL_WEIGHTS[k] / total) * 100).toFixed(3) + '%'

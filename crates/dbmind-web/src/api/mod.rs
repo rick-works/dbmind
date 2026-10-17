@@ -222,6 +222,8 @@ fn relational_module(module: &str) -> Router<AppState> {
         .route(&p("/{id}/triggers"), get(meta::triggers))
         .route(&p("/{id}/events"), get(meta::events))
         .route(&p("/{id}/users"), get(meta::users))
+        // 角色清单：用户管理页的「角色管理」页签（supported=false = 该版本/该方言没有角色）
+        .route(&p("/{id}/roles"), get(meta::roles))
         .route(&p("/{id}/user-info"), get(meta::user_info))
         .route(&p("/{id}/user-action"), post(meta::user_action))
         .route(&p("/{id}/object-info"), get(meta::object_info))

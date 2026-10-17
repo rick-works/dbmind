@@ -29,7 +29,7 @@
           <el-option v-for="c in connections" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
         </el-select>
         <div class="cmp-pair">
-          <el-select v-model="src.database" size="small" @change="onSrcDbChange">
+          <el-select v-if="!srcHideDb" v-model="src.database" size="small" @change="onSrcDbChange">
             <el-option v-for="d in srcDbs" :key="d" :label="d" :value="d" />
           </el-select>
           <el-select v-if="srcNeedSchema" v-model="src.schema" size="small" @change="loadSrcTables">
@@ -51,7 +51,7 @@
           <el-option v-for="c in connections" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
         </el-select>
         <div class="cmp-pair">
-          <el-select v-model="tgt.database" size="small" @change="onTgtDbChange">
+          <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small" @change="onTgtDbChange">
             <el-option v-for="d in tgtDbs" :key="d" :label="d" :value="d" />
           </el-select>
           <el-select v-if="tgtNeedSchema" v-model="tgt.schema" size="small" @change="loadTgtTables">
@@ -354,6 +354,8 @@ import { ElMessage } from 'element-plus'
 import { Switch, Right, TopRight, BottomRight, RefreshRight, ScaleToOriginal, Check, CircleCheck, SetUp, VideoPause, Document, Clock, QuestionFilled } from '@element-plus/icons-vue'
 import { addBgTask, bgTasks } from '../sync/backgroundTasks'
 import { listConnections, listDatabases, listSchemas, listTables, listColumns, getFeatures, compareData, compareTaskStatus, compareCancel } from '../../api'
+// 「库」这一层要不要画（Oracle / DM 没有库层：它就是连接里填的服务名）
+import { hideDbLevelOf } from '../../types'
 import ConditionBuilder from '../../common/ConditionBuilder.vue'
 import { buildConditionSql } from '../../utils/cond'
 import { t } from '../../utils/i18n'
@@ -562,6 +564,12 @@ const tgtFeatures = ref({})
 // SQL Server / PG 的模式下拉就从不出现（数据传输修过同一个坑，这里漏了）
 const srcNeedSchema = computed(() => srcFeatures.value.supportsSchemas === true)
 const tgtNeedSchema = computed(() => tgtFeatures.value.supportsSchemas === true)
+/** 取连接对象（库里要读服务名、类型要判断有没有库层） */
+const connOf = (cid) => connections.value.find(c => String(c.id) === String(cid)) || null
+// 没有「库」这一层的类型（Oracle / DM）：库就是连接里的服务名，永远一条 ——
+// 下拉不画（否则就是把服务名摆给用户看），请求里照旧带它（见 loadSrcDbs / loadTgtDbs）
+const srcHideDb = computed(() => hideDbLevelOf(connOf(src.value.connectionId)?.type))
+const tgtHideDb = computed(() => hideDbLevelOf(connOf(tgt.value.connectionId)?.type))
 
 const tableCols = (rows) => {
   const r = rows && rows.length ? rows[0] : {}
@@ -647,6 +655,14 @@ const onSrcDbChange = async () => {
 }
 const loadSrcDbs = async () => {
   if (!src.value.connectionId) return
+  if (srcHideDb.value) {
+    // 没有库层：库值取连接自身的服务名（下拉不画），直接进「模式」那一步
+    srcDbs.value = []
+    src.value.database = String(connOf(src.value.connectionId)?.database || '')
+    try { srcFeatures.value = await getFeatures(src.value.connectionId) } catch (e) { srcFeatures.value = {} }
+    await onSrcDbChange()
+    return
+  }
   srcDbs.value = await listDatabases(src.value.connectionId)
   // 不自动预选（与数据传输同一口径）：库留空由用户自己挑，系统库排第一时
   // 自动选中它反而掩盖真实业务库
@@ -699,6 +715,14 @@ const onTgtDbChange = async () => {
 }
 const loadTgtDbs = async () => {
   if (!tgt.value.connectionId) return
+  if (tgtHideDb.value) {
+    // 同源：没有库层就取连接自身的服务名，下拉不画
+    tgtDbs.value = []
+    tgt.value.database = String(connOf(tgt.value.connectionId)?.database || '')
+    try { tgtFeatures.value = await getFeatures(tgt.value.connectionId) } catch (e) { tgtFeatures.value = {} }
+    await onTgtDbChange()
+    return
+  }
   tgtDbs.value = await listDatabases(tgt.value.connectionId)
   // 同源：不自动预选
   try { tgtFeatures.value = await getFeatures(tgt.value.connectionId) } catch (e) { tgtFeatures.value = {} }

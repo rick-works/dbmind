@@ -19,7 +19,7 @@
       <div v-if="!results.length && !loading" style="text-align:center;color:var(--dc-text-dim);padding:20px;">{{ $t('ds.empty') }}</div>
       <div v-for="r in results" :key="r.id" class="db-search-item" @click="openResult(r)">
         <div style="font-weight:600;font-size: 14px;">{{ r.label }}</div>
-        <div style="font-size: 12px;color:var(--dc-text-dim);margin-top:2px;">{{ r.type }} · {{ r.db }}</div>
+        <div style="font-size: 12px;color:var(--dc-text-dim);margin-top:2px;">{{ r.type }} · {{ dbDisplayOf(conn?.type, r.db) }}</div>
       </div>
     </div>
   </el-dialog>
@@ -32,6 +32,8 @@ import { ElMessage } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import { searchObjects } from '../../api'
 import { t } from '../../utils/i18n'
+// 结果行的「库」：没有库层的类型（Oracle / DM）只显示模式，不显示服务名
+import { dbDisplayOf } from '../../types'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },

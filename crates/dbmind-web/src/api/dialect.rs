@@ -125,6 +125,28 @@ pub fn exposed_type_codes() -> Vec<&'static str> {
     ]
 }
 
+/// H2 2.x 的表级权限：只有这五种，`ALL` 是前四项的简写（`GRANT ALL ON t TO u` 合法）。
+/// 名称会被拼进 SQL，所以必须过白名单 —— 和 MySQL/PG 那边同一套规矩。
+pub fn is_h2_table_priv(name: &str) -> bool {
+    matches!(
+        name.trim().to_ascii_uppercase().as_str(),
+        "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "ALL"
+    )
+}
+
+/// H2 的默认用户是**空用户名**：清单里显示成 H2 的空标识符 `""` —— 既不是一行点不动的
+/// 空白，又是能直接贴进 SQL 的真写法（`alter user "" set password …`）。用户要求名字
+/// 显示必须带引号，不要显示成 `(default)` 那种"没括号"的假名字。
+/// 查详情 / 改密 / 删除时再还原成空串（旧的 `(default)` 仍认，兼容老前端缓存的清单）。
+fn h2_user(name: &str) -> String {
+    let name = name.trim();
+    if name == "\"\"" || name == "(default)" {
+        String::new()
+    } else {
+        name.to_string()
+    }
+}
+
 /// `ConnectionKind` 是 `Copy`，所以方言本身也能按值传来传去 ——
 /// 导出/备份那几条链路上要把它带进写入器（生成字面量、拼分页），按引用传会牵出一堆生命周期。
 #[derive(Clone, Copy)]
@@ -175,6 +197,9 @@ pub struct UserAttrs {
     // SQL Server
     pub disabled: Option<bool>,
     pub default_schema: Option<String>,
+    /// 登录名的默认数据库（`alter login … with default_database = …`）。
+    /// 与 `default_schema` 是两件事：后者是库内用户的属性，登录名没有。
+    pub default_database: Option<String>,
     pub login_name: Option<String>,
     // PostgreSQL / Kingbase
     pub can_login: Option<bool>,
@@ -235,8 +260,19 @@ pub const PG_TABLE_PRIVS: [&str; 7] = [
     "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER",
 ];
 
+/// PG 的**库级**权限（`grant connect on database db to u`）。
+///
+/// 与模式级（USAGE/CREATE ON SCHEMA）是两层：库级决定"能不能连、能不能在里面建 schema"，
+/// 模式级决定"能不能用这个模式"。界面按各库自己的模型分两页，别混成一层。
+pub const PG_DATABASE_PRIVS: [&str; 3] = ["CONNECT", "CREATE", "TEMPORARY"];
+
 pub fn is_pg_schema_priv(name: &str) -> bool {
     in_list(&PG_SCHEMA_PRIVS, name)
+}
+
+pub fn is_pg_database_priv(name: &str) -> bool {
+    // TEMP 是 TEMPORARY 的旧别名，PG 两个都收；界面上只出 TEMPORARY 一列。
+    in_list(&PG_DATABASE_PRIVS, name) || name.trim().eq_ignore_ascii_case("TEMP")
 }
 
 pub fn is_pg_table_priv(name: &str) -> bool {
@@ -296,7 +332,11 @@ pub struct UserPrivileges {
     /// 全局：`grant <这些> on *.* to ...`
     pub global: Vec<String>,
     /// 库级：`grant <这些> on \`db\`.* to ...`
+    /// （PG 的「库级」不是这个：它的 database 层见 `pg_databases`，这字段被 PG 借去
+    /// 装**模式**级 USAGE/CREATE —— 历史上前端把它当"库权限"页，2026-10 才拆开。）
     pub databases: Vec<(String, Vec<String>)>,
+    /// PostgreSQL 专用 —— 真正的库级（库, 权限）：`grant connect on database db to u`。
+    pub pg_databases: Vec<(String, Vec<String>)>,
     /// 表级：`grant <这些> on \`db\`.\`tbl\` to ...`
     pub tables: Vec<(String, String, Vec<String>)>,
     /// SQL Server 专用 —— schema 级（库, schema, 权限）授权，**行级选库**。
@@ -680,6 +720,14 @@ impl Dialect {
             "oracle" => Meta::Sql(
                 "select username as name from all_users order by username".to_string(),
             ),
+            // H2：`INFORMATION_SCHEMA.SCHEMATA`（2.x）。H2 的「库」是 catalog（一个实例一个，
+            // 名字就是连接里的 database，如 MAIN），表和授权都挂在 schema 上 ——
+            // 用户管理的表级授权要选的就是这一层（PUBLIC / 业务 schema）。
+            "h2" => Meta::Sql(
+                "select schema_name as \"name\" from information_schema.schemata \
+                 where schema_name <> 'INFORMATION_SCHEMA' order by schema_name"
+                    .to_string(),
+            ),
             _ => Meta::Absent,
         }
     }
@@ -751,36 +799,51 @@ _ => Meta::Unwritten,
     pub fn user_info(&self, name: &str) -> Meta {
         let n = self.literal(name);
         match self.key() {
-            // SQL Server：`sys.database_principals` 是库内主体，权限在 `sys.database_permissions`
+            // SQL Server：**服务器登录名**（sys.server_principals）+ 服务器角色 + 服务器级权限。
+            // 与 users() 同一口径（连接级、不跟库）—— 见那边的注释。
+            // 别名必须是 `type_desc`（不是 `type`）：前端标签表按 `type_desc` 认「类型」。
             "sqlserver" => Meta::Sql(format!(
-                // 别名必须是 `type_desc`（不是 `type`）：前端标签表按 `type_desc` 认「类型」，
-                // 对不上就退回显示原始键名 —— 用户看到的是「TYPE  SQL_USER」这种半英文
-                "select dp.name as name, dp.type_desc as type_desc, \
-                 isnull(sp.name, '') as login_name, \
-                 convert(varchar(30), dp.create_date, 120) as create_date, \
-                 isnull(dp.default_schema_name, '') as default_schema, \
-                 cast(coalesce(sp.is_disabled, 0) as int) as disabled, \
-                 'create user ' + quotename(dp.name) + \
-                   case when sp.name is null then '' else ' for login ' + quotename(sp.name) end as create_user_sql, \
+                "select sp.name as name, sp.type_desc as type_desc, \
+                 convert(varchar(30), sp.create_date, 120) as create_date, \
+                 isnull(sp.default_database_name, '') as default_database, \
+                 cast(sp.is_disabled as int) as disabled, \
+                 'create login ' + quotename(sp.name) + ' with password = ''<password>''' as create_user_sql, \
                  isnull(stuff(( \
-                   select char(10) + 'grant ' + p.permission_name + ' on ' + \
-                     case when p.class_desc = 'DATABASE' then 'database::' + db_name() \
-                          else quotename(object_schema_name(p.major_id)) + '.' + quotename(object_name(p.major_id)) end + \
-                     ' to ' + quotename(dp2.name) + ';' \
-                   from sys.database_permissions p \
-                   join sys.database_principals dp2 on dp2.principal_id = p.grantee_principal_id \
-                   where p.grantee_principal_id = dp.principal_id \
+                   select char(10) + 'alter server role ' + quotename(r.name) + ' add member ' + quotename(sp2.name) + ';' \
+                   from sys.server_role_members m \
+                   join sys.server_principals r on r.principal_id = m.role_principal_id \
+                   join sys.server_principals sp2 on sp2.principal_id = m.member_principal_id \
+                   where m.member_principal_id = sp.principal_id \
                    for xml path(''), type).value('.', 'nvarchar(max)'), 1, 1, ''), '') + \
                  isnull(( \
-                   select char(10) + 'alter role ' + quotename(r.name) + ' add member ' + quotename(dp3.name) + ';' \
-                   from sys.database_role_members m \
-                   join sys.database_principals r on r.principal_id = m.role_principal_id \
-                   join sys.database_principals dp3 on dp3.principal_id = m.member_principal_id \
-                   where m.member_principal_id = dp.principal_id \
+                   select char(10) + 'grant ' + p.permission_name + ' to ' + quotename(sp2.name) + ';' \
+                   from sys.server_permissions p \
+                   join sys.server_principals sp2 on sp2.principal_id = p.grantee_principal_id \
+                   where p.grantee_principal_id = sp.principal_id and p.class = 100 \
                    for xml path(''), type).value('.', 'nvarchar(max)'), '') as grants_text \
-                 from sys.database_principals dp \
-                 left join sys.server_principals sp on sp.sid = dp.sid \
-                 where dp.name = {n} and dp.type in ('S', 'U', 'G')"
+                 from sys.server_principals sp \
+                 where sp.name = {n} and sp.type in ('S','U','G')"
+            )),
+            // H2：`INFORMATION_SCHEMA.USERS` + `TABLE_PRIVILEGES`（实测 2.3.232）。
+            // H2 没有"全局权限"这一层，只有 ADMIN 标志；细粒度授权就是表级 GRANT。
+            // 标识符一律双引号（H2 的标准引用符），内部 `"` 转义成 `""`。
+            "h2" => {
+                let who = self.literal(&h2_user(name));
+                Meta::Sql(format!(
+                    "select case when coalesce(user_name,'') = '' then '\"\"' else user_name end as \"name\", \
+                     case when is_admin then 'true' else 'false' end as \"is_admin\", \
+                     'create user \"' || replace(case when coalesce(user_name,'') = '' then 'new_user' else user_name end, '\"', '\"\"') || '\" password ''<password>''' as \"create_user_sql\", \
+                     coalesce((select listagg('grant ' || privilege_type || ' on \"' || replace(table_schema, '\"', '\"\"') || '\".\"' || replace(table_name, '\"', '\"\"') || '\" to \"' || replace(grantee, '\"', '\"\"') || '\"', char(10)) within group (order by table_schema, table_name, privilege_type) \
+                       from information_schema.table_privileges where grantee = user_name), '') as \"grants_text\" \
+                     from information_schema.users where user_name = {who}"
+                ))
+            }
+            // Derby / DB2：用户来自外部认证，只能看（清单见 users()），没有可执行的建/删语句
+            "derby" => Meta::Sql(format!(
+                "select username as \"name\" from sys.sysusers where username = {n}"
+            )),
+            "db2" => Meta::Sql(format!(
+                "select grantee as \"name\" from syscat.dbauth where grantee = {n}"
             )),
             // MySQL 的账号是**两列**（user + host），而树里显示与传进来的是拼好的
             // `user@host`（列表就是这么给的）—— 老写法拿 `demo1@%` 去比 `user` 列，
@@ -838,8 +901,11 @@ _ => Meta::Unwritten,
             // 只挑**版本稳定**的列：default_roles_* / grantees_* 在新版本改过名
             // （实测 26.8 报 Unknown identifier: grantees_all），别把它们摊进详情。
             "clickhouse" => Meta::Sql(format!(
+                // `auth_type` 是 **Enum8**（不是数组）：24.8 实测 arrayStringConcat 会抛
+                // Code 43 ILLEGAL_TYPE_OF_ARGUMENT。转成字符串即可；host_ip/host_names
+                // 才是 Array(String)，继续用 arrayStringConcat 拼成一行。
                 "select name, storage, \
-                 arrayStringConcat(auth_type, ', ') as auth_type, \
+                 toString(auth_type) as auth_type, \
                  arrayStringConcat(host_ip, ', ') as host_ip, \
                  arrayStringConcat(host_names, ', ') as host_names \
                  from system.users where name = {n}"
@@ -917,7 +983,8 @@ _ => Meta::Unwritten,
                 Meta::Sql(format!(
                     "select 'schema' as scope, privilege_type as privilege, object_name as db_name, '' as table_name from information_schema.usage_privileges where grantee = {who} and object_type = 'SCHEMA' and object_name not in ('information_schema','pg_catalog') \
                  union all select 'table', privilege_type, table_schema, table_name from information_schema.role_table_grants where grantee = {who} and table_schema not in ('information_schema','pg_catalog') \
-                 union all select case when p.prokind = 'p' then 'procedure' else 'function' end as scope, g.privilege_type as privilege, g.specific_schema as db_name, g.routine_name as table_name from information_schema.role_routine_grants g join pg_proc p on p.proname = g.routine_name join pg_namespace pn on pn.oid = p.pronamespace and pn.nspname = g.specific_schema where g.grantee = {who} and g.specific_schema not in ('information_schema','pg_catalog')"
+                 union all select case when p.prokind = 'p' then 'procedure' else 'function' end as scope, g.privilege_type as privilege, g.specific_schema as db_name, g.routine_name as table_name from information_schema.role_routine_grants g join pg_proc p on p.proname = g.routine_name join pg_namespace pn on pn.oid = p.pronamespace and pn.nspname = g.specific_schema where g.grantee = {who} and g.specific_schema not in ('information_schema','pg_catalog') \
+                 union all select 'database' as scope, a.privilege_type as privilege, d.datname as db_name, '' as table_name from pg_database d cross join lateral aclexplode(coalesce(d.datacl, acldefault('d', d.datdba))) a join pg_roles r on r.oid = a.grantee where r.rolname = {who} and not d.datistemplate"
                 ))
             }
             // ClickHouse：`show grants for` 每行就是一条可执行的 GRANT 语句，
@@ -936,6 +1003,191 @@ _ => Meta::Unwritten,
                 "select 'global' as scope, privilege as privilege, '' as owner, '' as object_name from dba_sys_privs where grantee = upper({}) union all select 'role', granted_role, '', '' from dba_role_privs where grantee = upper({}) union all select 'object', privilege, owner, table_name from dba_tab_privs where grantee = upper({})",
                 self.literal(user), self.literal(user), self.literal(user)
             )),
+            // H2：细粒度授权只有表级一层（H2 没有全局权限，只有 ADMIN 标志）
+            "h2" => Meta::Sql(format!(
+                "select 'table' as scope, privilege_type as privilege, table_schema as db_name, table_name as table_name from information_schema.table_privileges where grantee = {}",
+                self.literal(&h2_user(user))
+            )),
+            _ => Meta::Unwritten,
+        }
+    }
+
+    /// 已授予该账号的**角色**（MySQL 8 / MariaDB 的 RBAC）。
+    ///
+    /// 两家用的**不是同一张表**（这一点踩过）：MySQL 8.0.1+ 是 `mysql.role_edges`
+    /// （FROM_USER/FROM_HOST/TO_USER/TO_HOST），MariaDB 10.0.5+ 是 `mysql.roles_mapping`
+    /// （Host/User/Role/Admin_option，Host 是**被授人**的 host）。MariaDB 上读 role_edges
+    /// 会直接 1146 —— 那是「角色」页签一片空白、连已授的都看不见。
+    /// MariaDB 的角色**没有 host**（`grant 'r'@'%'` 是语法错，实测 1064），
+    /// 所以 role_host 一律回空串，界面按裸名字显示。
+    /// Doris 的 RBAC 没有这两张表（返回 Unwritten，界面就不出角色这一页）。
+    pub fn user_roles(&self, user: &str, host: &str) -> Meta {
+        match self.key() {
+            "mysql" => Meta::Sql(format!(
+                "select from_user as role_name, from_host as role_host from mysql.role_edges \
+                 where to_user = {} and to_host = {}",
+                self.literal(user),
+                self.literal(host)
+            )),
+            "mariadb" => Meta::Sql(format!(
+                "select Role as role_name, '' as role_host from mysql.roles_mapping \
+                 where User = {} and Host = {}",
+                self.literal(user),
+                self.literal(host)
+            )),
+            // ClickHouse：授权关系在 `system.role_grants`（granted_role_name 才是"被授角色"）
+            "clickhouse" => Meta::Sql(format!(
+                "select granted_role_name as role_name, '' as role_host from system.role_grants \
+                 where user_name = {}",
+                self.literal(user)
+            )),
+            // PostgreSQL/KingbaseES：成员关系在 `pg_auth_members`（member = 被授主体，
+            // roleid = 被授的角色）。**information_schema 里查不到这一层** ——
+            // `role_usage_grants` 只讲 USAGE 权限、`enabled_roles` 只看当前会话，
+            // 所以 PG 的「角色」页签原来一个勾都没有（授过的角色既看不见也撤不掉）。
+            // 与 MySQL 一样单独一条短查询：不塞进 user_grants 那条已经贴着 TCP 段上限的 UNION。
+            "postgresql" | "kingbase" => Meta::Sql(format!(
+                "select r.rolname as role_name, '' as role_host from pg_auth_members m \
+                 join pg_roles r on r.oid = m.roleid \
+                 join pg_roles u on u.oid = m.member where u.rolname = {} order by 1",
+                self.literal(user)
+            )),
+            _ => Meta::Unwritten,
+        }
+    }
+
+    /// 这台服务器上**出现过**的角色（界面要能列出「还没授的」，否则看不见也就授不了）。
+    ///
+    /// MySQL 8 没有独立的角色表（角色就是 `mysql.user` 里 `account_locked='Y'` 且
+    /// 认证串为空的账号）：只读 `role_edges` 的话，**没授予过任何人的角色在界面上
+    /// 看不见**，等于建了也用不了，所以两者取并集。
+    /// MariaDB 的 `CREATE ROLE` 会自己往 `roles_mapping` 写一行（实测），读它即可。
+    /// Oracle / ClickHouse 各自有字典：`dba_roles` / `system.roles`（都不带 host）。
+    /// Doris 只有 `SHOW ROLES` 这种命令式清单，列名是 `Name`（调用方按候选名取）。
+    /// 角色自己的「详情行」（界面复用用户表单来编辑**角色**的权限）。
+    ///
+    /// 角色和账号在有些方言里根本不在同一张目录（Oracle 的 `dba_roles`、
+    /// ClickHouse 的 `system.roles`、Doris 的 `SHOW ROLES`），所以不能拿
+    /// `user_info` 硬查 —— 查不到就是"没有找到用户"，角色页永远打不开。
+    pub fn role_info(&self, name: &str) -> Meta {
+        match self.key() {
+            // MySQL 的角色就是账号（host 维度存在）；MariaDB 的角色 Host 恒为空串
+            "mysql" | "mariadb" => Meta::Sql(format!(
+                "select user as `name`, host as `host` from mysql.user where user = {} order by host limit 1",
+                self.literal(name)
+            )),
+            "postgresql" | "kingbase" => Meta::Sql(format!(
+                "select rolname as name, '' as host from pg_roles where rolname = {}",
+                self.literal(name)
+            )),
+            "oracle" => Meta::Sql(format!(
+                "select role as name, '' as host from dba_roles where role = upper({})",
+                self.literal(name)
+            )),
+            "clickhouse" => Meta::Sql(format!(
+                "select name, '' as host from system.roles where name = {}",
+                self.literal(name)
+            )),
+            // Doris 这版不支持编辑角色权限（权限名是 SELECT_PRIV 那套，与 MySQL 不同名），
+            // 这里仍给一行，至少不会把表单卡在"没有找到"
+            "doris" => Meta::Sql(format!(
+                "select {} as name, '' as host",
+                self.literal(name)
+            )),
+            _ => Meta::Unwritten,
+        }
+    }
+
+    /// 角色**自身拥有**的权限（与 `user_grants` 同形状：scope/privilege/owner/db_name/table_name/grant_option）。
+    pub fn role_grants(&self, name: &str, host: &str) -> Meta {
+        match self.key() {
+            // MySQL：角色就是账号，权限视图里按 grantee 能查到，直接复用
+            "mysql" => self.user_grants(name, host),
+            // MariaDB：information_schema **不列角色**（实测 user_privileges 里查不到），
+            // 只能读 `show grants for '<role>'`。返回的是**单列文本**（每行一条 GRANT），
+            // 由 `grant_line` 原样带回 `grants`，界面（parseMySqlGrants）再分层回填 ——
+            // 与 ClickHouse 同一种交付形态（grantRows 为空，结构化列只给"有 4 列形状"的方言）。
+            "mariadb" => Meta::Sql(format!("show grants for {}", self.literal(name))),
+            // PG：information_schema 只显示「当前用户是授予者/被授予者」的那部分，
+            // 读别的角色的权限永远是空 —— 必须直接解 ACL 数组（aclexplode）。
+            // `coalesce(acl, acldefault(...))`：ACL 为 NULL = 从没单独授过，
+            // 此时按"只有属主有权限"的默认 ACL 展开（角色是属主时才会命中）。
+            // 注意：模式/表两级用的是**当前库**的目录（pg_namespace / pg_class），
+            // 其它库里的对象要在那个库上打开才看得到；库级（pg_database）是全局的。
+            "postgresql" | "kingbase" => Meta::Sql(format!(
+                "select 'schema' as scope, a.privilege_type as privilege, n.nspname as db_name, '' as table_name \
+                   from pg_namespace n cross join lateral aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a \
+                   join pg_roles r on r.oid = a.grantee \
+                  where r.rolname = {who} and n.nspname not in ('information_schema','pg_catalog') \
+                 union all \
+                 select 'table' as scope, a.privilege_type, n.nspname, c.relname \
+                   from pg_class c join pg_namespace n on n.oid = c.relnamespace \
+                   cross join lateral aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a \
+                   join pg_roles r on r.oid = a.grantee \
+                  where r.rolname = {who} and c.relkind in ('r','v','m','p','f') and n.nspname not in ('information_schema','pg_catalog') \
+                 union all \
+                 select 'database' as scope, a.privilege_type, d.datname, '' \
+                   from pg_database d cross join lateral aclexplode(coalesce(d.datacl, acldefault('d', d.datdba))) a \
+                   join pg_roles r on r.oid = a.grantee \
+                  where r.rolname = {who} and not d.datistemplate",
+                who = self.literal(name)
+            )),
+            // Oracle 有两本角色字典：系统权限与对象权限（角色套角色不在权限矩阵里）
+            "oracle" => Meta::Sql(format!(
+                "select 'global' as scope, '' as owner, '' as object, p.privilege as privilege, p.admin_option as grant_option \
+                   from role_sys_privs p where p.role = upper({lit}) \
+                 union all \
+                 select 'object' as scope, t.owner as owner, t.table_name as object, t.privilege as privilege, t.grantable as grant_option \
+                   from role_tab_privs t where t.role = upper({lit})",
+                lit = self.literal(name)
+            )),
+            // ClickHouse：system.grants 里 role_name 非空的就是"授给角色"的行
+            "clickhouse" => Meta::Sql(format!(
+                "select case when database = '' and table = '' then 'global' when table = '' then 'db' else 'table' end as scope, \
+                        access_type as privilege, database as db_name, table as table_name, \
+                        if(grant_option, 'YES', 'NO') as grant_option \
+                   from system.grants where role_name = {lit} and is_partial_revoke = 0",
+                lit = self.literal(name)
+            )),
+            // Doris 的权限名（SELECT_PRIV …）与界面这套列不同名，本版不给回显
+            _ => Meta::Unwritten,
+        }
+    }
+
+    pub fn role_inventory(&self) -> Meta {
+        match self.key() {
+            "mysql" => Meta::Sql(
+                "select role_name, role_host from ( \
+                   select from_user as role_name, from_host as role_host from mysql.role_edges \
+                   union \
+                   select user, host from mysql.user \
+                   where account_locked = 'Y' and coalesce(authentication_string, '') = '' \
+                 ) t"
+                .to_string(),
+            ),
+            "mariadb" => Meta::Sql(
+                "select distinct Role as role_name, '' as role_host from mysql.roles_mapping"
+                    .to_string(),
+            ),
+            // Oracle：`DBA_ROLES` 里有 100+ 个 Oracle 自带角色（DBA / CONNECT / DV_* …），
+            // 全灌进用户清单既吵又危险（删掉 DBA 是真事故）。`ORACLE_MAINTAINED='N'`
+            // 正好筛出**用户自己建的**角色（12c+ 才有这一列；11g 上这句会失败，
+            // 调用方按"拿不到就不补"处理，清单照常）。
+            "oracle" => Meta::Sql(
+                "select role as role_name, '' as role_host from dba_roles where oracle_maintained = 'N'"
+                    .to_string(),
+            ),
+            "clickhouse" => Meta::Sql(
+                "select name as role_name, '' as role_host from system.roles".to_string(),
+            ),
+            "doris" => Meta::Sql("show roles".to_string()),
+            // PG：纯角色 = 不能登录的那些；`pg_*` 是系统预置角色（pg_monitor / pg_read_all_data…），
+            // 它们在上面的「角色」页有专门一栏（pgRoles），不该混进"可删除的角色"清单。
+            "postgresql" | "kingbase" => Meta::Sql(
+                "select rolname as role_name, '' as role_host from pg_roles \
+                 where not rolcanlogin and left(rolname, 3) <> 'pg_'"
+                    .to_string(),
+            ),
             _ => Meta::Unwritten,
         }
     }
@@ -1012,23 +1264,40 @@ _ => Meta::Unwritten,
         let host = if host.trim().is_empty() { "%" } else { host };
         let h = self.literal(host);
         let role_parts: Vec<String> = roles.iter().map(|role| self.quote(role)).collect();
+        // **角色**的保存（`alter-role`）：只出差量授权，不出 `alter user`。
+        // 角色没有口令 / 锁定 / 配额这些属性，前端在角色模式也不会交它们，
+        // 所以把 action 归一成 alter 即可 —— 属性为空时各分支不会拼 alter 语句。
+        let as_role = action == "alter-role";
+        let action = if as_role { "alter" } else { action };
         match self.key() {
             "sqlserver" => Meta::Sql(match action {
-                // 不带口令 = 建「映射到登录名」的库用户；带口令 = 建包含数据库用户（contained）
+                // 登录名是**服务器级**主体：`create login` 必须带口令（SQL 登录）。
+                // 不带口令建不出来 —— Windows 登录（`from windows`）界面不提供，
+                // 与其悄悄建成一个空口令登录，不如明确拒绝（调用方会报"不支持"）。
                 "create" => {
-                    // 属性：默认架构（`create user x with password = p, default_schema = s`）
-                    let mut opts: Vec<String> = Vec::new();
-                    if !password.is_empty() {
-                        opts.push(format!("password = {pwd}"));
+                    if password.is_empty() {
+                        return Meta::Unwritten;
                     }
-                    if let Some(v) = attrs.default_schema.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                        opts.push(format!("default_schema = {}", self.quote(v)));
+                    let mut sql = format!("create login {u} with password = {pwd}");
+                    if let Some(db) = attrs
+                        .default_database
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                    {
+                        sql.push_str(&format!(", default_database = {}", self.quote(db)));
                     }
-                    let mut sql = if opts.is_empty() {
-                        format!("create user {u}")
-                    } else {
-                        format!("create user {u} with {}", opts.join(", "))
-                    };
+                    if attrs.disabled == Some(true) {
+                        sql.push_str(&format!(";\nalter login {u} disable"));
+                    }
+                    // 「全局」在 SQL Server 就是服务器角色（与 alter 分支同一口径）
+                    for role in &privileges.global {
+                        sql.push_str(&format!(
+                            ";\nalter server role {} add member {u}",
+                            self.quote(role)
+                        ));
+                    }
+                    // 数据库角色仍按原样追加（对已在该库映射过用户的登录名有效）
                     for role in &role_parts {
                         sql.push_str(&format!(";\nalter role {role} add member {u}"));
                     }
@@ -1037,31 +1306,26 @@ _ => Meta::Unwritten,
                 "alter" => {
                     let mut parts: Vec<String> = Vec::new();
                     if !password.is_empty() {
-                        parts.push(format!("alter user {u} with password = {pwd}"));
+                        parts.push(format!("alter login {u} with password = {pwd}"));
                     }
-                    // 属性：默认架构；「禁用」走 ALTER LOGIN（要有登录名 —— 包含数据库用户没有，
-                    // 那种用户禁不了，前端也不摆这个开关）
-                    if let Some(v) = attrs
-                        .default_schema
+                    // 禁用 / 启用是登录名属性（库用户没有这个开关）
+                    if let Some(v) = attrs.disabled {
+                        parts.push(format!(
+                            "alter login {u} {}",
+                            if v { "disable" } else { "enable" }
+                        ));
+                    }
+                    // 默认数据库同样是登录名属性（不是库里的 default_schema）
+                    if let Some(db) = attrs
+                        .default_database
                         .as_deref()
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                     {
-                        parts.push(format!("alter user {u} with default_schema = {}", self.quote(v)));
-                    }
-                    if let Some(v) = attrs.disabled {
-                        if let Some(login) = attrs
-                            .login_name
-                            .as_deref()
-                            .map(str::trim)
-                            .filter(|s| !s.is_empty())
-                        {
-                            parts.push(format!(
-                                "alter login {} {}",
-                                self.quote(login),
-                                if v { "disable" } else { "enable" }
-                            ));
-                        }
+                        parts.push(format!(
+                            "alter login {u} with default_database = {}",
+                            self.quote(db)
+                        ));
                     }
                     // 授权（SQL Server 的四层，与界面上的四张表一一对应）：
                     //   privileges.global   = **服务器角色**（服务器级就是它的"全局"）
@@ -1120,12 +1384,98 @@ _ => Meta::Unwritten,
                     }
                     parts.join(";\n")
                 }
-                "drop" => format!("drop user {u}"),
+                // 登录名口径：删的是服务器登录名（库用户删不掉这个账号）
+                "drop" => format!("drop login {u}"),
                 _ => return Meta::Unwritten,
             }),
+            // H2：`create user` 必须带口令；改密是 `alter user … set password`。
+            // 权限矩阵（表级 GRANT）还没接进来 —— 调用方收到权限入参会先明确拒绝。
+            "h2" => {
+                let name = h2_user(user);
+                // 空用户名（H2 的默认用户）必须写成空标识符 `""`：`quote("")` 返回空串，
+                // 拼出来是 `grant … to `（实测 42001 SyntaxError，缺 identifier），
+                // 连改密/删除也一样会拼坏。
+                let u = if name.is_empty() { "\"\"".to_string() } else { self.quote(&name) };
+                let pwd = self.literal(password);
+                let mut parts: Vec<String> = Vec::new();
+                match action {
+                    "create" => {
+                        if password.is_empty() {
+                            return Meta::Unwritten;
+                        }
+                        parts.push(format!("create user {u} password {pwd}"));
+                    }
+                    "alter" => {
+                        // 只改口令；其余属性（is_admin 等）不走这里
+                        if !password.is_empty() {
+                            parts.push(format!("alter user {u} set password {pwd}"));
+                        }
+                    }
+                    "drop" => return Meta::Sql(format!("drop user {u}")),
+                    _ => return Meta::Unwritten,
+                }
+                // 表级授权（H2 唯一的一层权限）：`grant select, update on "S"."T" to "u"`。
+                // 目标用 schema + 表名（前端的 database 字段在 H2 里就是 schema）。
+                for (schema, table, privs) in &privileges.tables {
+                    let (schema, table) = (schema.trim(), table.trim());
+                    if schema.is_empty() || table.is_empty() {
+                        continue;
+                    }
+                    let items: Vec<String> = privs
+                        .iter()
+                        .map(|p| p.trim().to_ascii_uppercase())
+                        .filter(|p| is_h2_table_priv(p))
+                        .collect();
+                    if items.is_empty() {
+                        continue;
+                    }
+                    parts.push(format!(
+                        "grant {} on {}.{} to {u}",
+                        items.join(", "),
+                        self.quote(schema),
+                        self.quote(table)
+                    ));
+                }
+                // 撤销：界面按"原来有、现在没有了"点名（scope=table）
+                for row in revokes {
+                    let priv_name = row.privilege.trim().to_ascii_uppercase();
+                    if !is_h2_table_priv(&priv_name) {
+                        continue;
+                    }
+                    let (schema, table) = (row.owner.trim(), row.object.trim());
+                    if schema.is_empty() || table.is_empty() {
+                        continue;
+                    }
+                    parts.push(format!(
+                        "revoke {priv_name} on {}.{} from {u}",
+                        self.quote(schema),
+                        self.quote(table)
+                    ));
+                }
+                if parts.is_empty() {
+                    return Meta::Unwritten;
+                }
+                Meta::Sql(parts.join(";\n"))
+            }
             // MySQL 的用户是 (user, host) 二元组 —— 少了 host 就会建错主体
             "mysql" | "mariadb" | "doris" => {
                 let full = format!("{u}@{h}");
+                // 授权语句（grant / revoke）的目标账号一律用**单引号字符串**写法
+                // `'user'@'host'`：`quote()` 对普通名字不加任何引号（`dbmind_probe_u@'%'`），
+                // 名字里带 `-` 之类的还会变成反引号 —— 那在账号位置是错的。
+                let full_lit = format!("{}@{}", self.literal(user), self.literal(host));
+                // 授权目标：编辑**角色**的权限时，主体是角色本身 —— MySQL 的角色与账号同形
+                // （`'r'@'%'`），MariaDB 的角色没有 host（`'r'`），Doris 必须写
+                // `TO ROLE 'r'`（它这版也不提供角色权限编辑，见 role_info 注释）。
+                let grantee = if as_role {
+                    match self.key() {
+                        "mysql" => full_lit.clone(),
+                        "doris" => format!("role {}", self.literal(user)),
+                        _ => self.literal(user),
+                    }
+                } else {
+                    full_lit.clone()
+                };
                 let mut parts: Vec<String> = Vec::new();
                 match action {
                     "create" => {
@@ -1147,6 +1497,34 @@ _ => Meta::Unwritten,
                         }
                     }
                     "drop" => return Meta::Sql(format!("drop user {full}")),
+                    // 新建 / 删除**角色**（MySQL 8 / MariaDB 10.0.5+ 的 RBAC）。
+                    // MySQL 的角色是账号形状（`'r'@'h'`）；MariaDB 的角色**没有 host**
+                    // （`create role 'r'@'%'` 是 1064 语法错，真机验证过）——
+                    // 所以按方言分开拼，不能共用 `full_lit`。
+                    // Doris 的角色也没有 host，且名字是字符串（`create role 'r'`）。
+                    "create-role" => {
+                        // Doris 的角色名是**标识符**（`create role 'r'` 直接 1064 语法错，
+                        // 实测它连 STRING 都不收），所以 Doris 走 quote()，MariaDB 走字符串。
+                        let who = match self.key() {
+                            "mysql" => full_lit.clone(),
+                            "doris" => self.quote(user),
+                            _ => self.literal(user),
+                        };
+                        return Meta::Sql(if password.is_empty() {
+                            format!("create role {who}")
+                        } else {
+                            // 带口令建角色只有 MySQL/MariaDB 支持（角色可登录，一般不需要）
+                            format!("create role {who} identified by {pwd}")
+                        });
+                    }
+                    "drop-role" => {
+                        let who = match self.key() {
+                            "mysql" => full_lit.clone(),
+                            "doris" => self.quote(user),
+                            _ => self.literal(user),
+                        };
+                        return Meta::Sql(format!("drop role {who}"));
+                    }
                     _ => return Meta::Unwritten,
                 }
                 // 授权**只出差量**：界面把"原来有、现在没有了"的算好传进来，逐条点名撤销；
@@ -1159,9 +1537,28 @@ _ => Meta::Unwritten,
                 // （只撤"原来确实有、现在取消了"的），撤不到没有的东西上，这个坑自然绕开了。
                 // `reset_privileges` 只在客户端没交差量清单（老调用方）时才为真。
                 if reset_privileges {
-                    parts.push(format!("revoke all privileges, grant option from {full}"));
+                    parts.push(format!("revoke all privileges, grant option from {grantee}"));
                 } else {
-                    parts.extend(self.mysql_revoke_parts(&full, revokes));
+                    parts.extend(self.mysql_revoke_parts(&grantee, revokes));
+                }
+                // 角色（MySQL 8 / MariaDB 的 RBAC）：MySQL 是 `grant 'r'@'h' to 'u'@'%'`
+                // （角色本身也是账号形状，名字与 host 分别转义再加 @ 拼起来）；
+                // MariaDB / Doris 的角色**没有 host** —— 多写 `@'%'` 在 MariaDB 上是
+                // 1064 语法错（真机验证过），只能 `grant 'r' to 'u'@'%'`。
+                for r in roles {
+                    let (rn, rh) = Self::split_role_ref(r);
+                    if rn.is_empty() {
+                        continue;
+                    }
+                    parts.push(if self.key() == "mysql" {
+                        format!(
+                            "grant {}@{} to {full_lit}",
+                            self.literal(&rn),
+                            self.literal(&rh)
+                        )
+                    } else {
+                        format!("grant {} to {full_lit}", self.literal(&rn))
+                    });
                 }
                 // `GRANT OPTION` 不是普通权限项，而是 `WITH GRANT OPTION` 子句 ——
                 // 拼成 `grant GRANT OPTION on ...` 是错的（MySQL 的 priv_type 里没有它）。
@@ -1183,7 +1580,7 @@ _ => Meta::Unwritten,
                         continue;
                     }
                     parts.push(format!(
-                        "grant {} on {}.* to {full}{}",
+                        "grant {} on {}.* to {grantee}{}",
                         items.join(", "),
                         self.quote(database),
                         tail(with_option)
@@ -1195,7 +1592,7 @@ _ => Meta::Unwritten,
                         continue;
                     }
                     parts.push(format!(
-                        "grant {} on {}.{} to {full}{}",
+                        "grant {} on {}.{} to {grantee}{}",
                         items.join(", "),
                         self.quote(database),
                         self.quote(table),
@@ -1211,7 +1608,7 @@ _ => Meta::Unwritten,
                     }
                     let routine_type = if kind.eq_ignore_ascii_case("function") { "function" } else { "procedure" };
                     parts.push(format!(
-                        "grant {} on {} {}.{} to {full}{}",
+                        "grant {} on {} {}.{} to {grantee}{}",
                         items.join(", "),
                         routine_type,
                         self.quote(database),
@@ -1222,7 +1619,7 @@ _ => Meta::Unwritten,
                 let (global_items, global_option) = split_grant_option(&privileges.global);
                 if !global_items.is_empty() {
                     parts.push(format!(
-                        "grant {} on *.* to {full}{}",
+                        "grant {} on *.* to {grantee}{}",
                         global_items.join(", "),
                         tail(global_option)
                     ));
@@ -1237,6 +1634,18 @@ _ => Meta::Unwritten,
             "postgresql" | "kingbase" => {
                 let mut pg_parts: Vec<String> = Vec::new();
                 if action == "create" || action == "alter" {
+                    // 库级：`grant connect on database "db" to "u"`（PG 真正的那一层，
+                    // 与下面被借用来装模式的 `databases` 不是一回事）
+                    for (db, items) in &privileges.pg_databases {
+                        if db.trim().is_empty() || items.is_empty() {
+                            continue;
+                        }
+                        pg_parts.push(format!(
+                            "grant {} on database {} to {u}",
+                            items.join(", ").to_lowercase(),
+                            self.quote(db)
+                        ));
+                    }
                     for (schema, items) in &privileges.databases {
                         if schema.trim().is_empty() || items.is_empty() {
                             continue;
@@ -1279,12 +1688,29 @@ _ => Meta::Unwritten,
                                     self.quote(&r.owner)
                                 ));
                             }
+                            // 库级撤销：`revoke connect on database "db" from "u"`
+                            "database" if !r.owner.trim().is_empty() => {
+                                pg_parts.push(format!(
+                                    "revoke {} on database {} from {u}",
+                                    r.privilege.to_lowercase(),
+                                    self.quote(&r.owner)
+                                ));
+                            }
                             "table" if !r.owner.trim().is_empty() && !r.object.trim().is_empty() => {
                                 pg_parts.push(format!(
                                     "revoke {} on table {}.{} from {u}",
                                     r.privilege.to_lowercase(),
                                     self.quote(&r.owner),
                                     self.quote(&r.object)
+                                ));
+                            }
+                            // 角色成员关系（「服务器权限」页里那些角色项）：`revoke "r" from "u"`。
+                            // 少了这条，取消勾选一个角色会**静默无效** —— 界面显示已取消、
+                            // 服务器上还在（角色那一层就永远撤不掉）。
+                            "role" if !r.privilege.trim().is_empty() => {
+                                pg_parts.push(format!(
+                                    "revoke {} from {u}",
+                                    self.quote(&r.privilege)
                                 ));
                             }
                             "routine" | "function"
@@ -1354,7 +1780,11 @@ _ => Meta::Unwritten,
                     }
                     parts.join(";\n")
                 }
+                // 新建**角色**（不可登录的主体）。PG 里角色与用户是同一张表，
+                // `create role` 默认 nologin —— 与"新建用户再取消可登录"等价，但一步到位。
+                "create-role" => format!("create role {u}"),
                 "drop" => format!("drop role {u}"),
+                "drop-role" => format!("drop role {u}"),
                 _ => return Meta::Unwritten,
             })
             }
@@ -1388,12 +1818,25 @@ _ => Meta::Unwritten,
                         }
                     }
                     "drop" => return Meta::Sql(format!("drop user {u}")),
+                    // CH 的角色是独立主体（`system.roles`）：`create role r` / `drop role r`。
+                    // 名字走 quote()（必要时反引号），与其它 CH 语句同一套转义。
+                    "create-role" => return Meta::Sql(format!("create role {u}")),
+                    "drop-role" => return Meta::Sql(format!("drop role {u}")),
                     _ => return Meta::Unwritten,
                 }
                 for role in &role_parts {
                     parts.push(format!("grant {role} to {u}"));
                 }
                 for r in revokes {
+                    // 角色是独立一层（`revoke role from user`，没有 `on …`）：
+                    // 别把它丢进下面按 scope 拼 target 的逻辑里（那里会返回 None 直接跳过）
+                    if r.scope.eq_ignore_ascii_case("role") {
+                        let role = r.privilege.trim();
+                        if !role.is_empty() && is_safe_name(role) {
+                            parts.push(format!("revoke {} from {u}", self.quote(role)));
+                        }
+                        continue;
+                    }
                     if !is_clickhouse_privilege(&r.privilege) {
                         continue;
                     }
@@ -1532,6 +1975,10 @@ _ => Meta::Unwritten,
                     parts.join(";\n")
                 }
                 "drop" => format!("drop user {u}"),
+                // Oracle 的角色是独立主体（`dba_roles`）：`create role "R"` / `drop role "R"`。
+                // `u` 走 quote()，与上面 create/alter/drop user 同一套标识符转义。
+                "create-role" => format!("create role {u}"),
+                "drop-role" => format!("drop role {u}"),
                 _ => return Meta::Unwritten,
             }),
             // DM（达梦）：语法与 Oracle 相近，但没真机验证过，先保持 Unwritten ——
@@ -2240,23 +2687,60 @@ _ => Meta::Unwritten,
             // Doris 也走 MySQL 协议，`mysql.user` 可读；这里原先漏了它 ——
             // 同文件的 user_info / user_grants / user_action_sql 都已包含 doris，
             // 只有用户清单少一个分支，于是「树的用户节点是空的、详情却能用」。
-            "mysql" | "mariadb" | "doris" => Meta::Sql(
-                "select user as `name`, host from mysql.user order by user, host".to_string(),
-            ),
-            "postgresql" | "kingbase" => Meta::Sql(
-                "select rolname as name, rolsuper as isSuper from pg_roles order by rolname"
+            //
+            // MySQL 8 把**角色**也放在 `mysql.user` 里（角色就是 locked account），
+            // 所以清单天然混着两者。区分靠「锁定 + 空认证串」：真被 ACCOUNT LOCK 的用户
+            // 仍有认证串（实测 mysql.sys/session/infoschema 都是 70 字节），角色则为空。
+            // MariaDB 有现成的 `is_role` 列（10.0.5+）；它的 collation 与字面量不一致，
+            // `is_role = 'Y'` 会报 1267，必须转 binary 再比。
+            // ⚠️ host 必须**显式起别名**：MariaDB 的驱动按底层列名回 `Host`（大写），
+            // 而前端读的是 `row.host` —— 不写别名时 MariaDB 的用户清单里「主机」一列
+            // 是空的（真机回归发现）。MySQL 与 MariaDB 在这一处行为不一致，别赌。
+            //
+            // **角色不进用户清单**（用户要求）：角色在「编辑 / 授权」的「角色」页签里管。
+            // MySQL 8 的角色就是 `account_locked='Y'` 且认证串为空的账号，这里排除掉
+            // （真被锁的用户仍有认证串，不会被误排除）；MariaDB 直接用 `is_role` 列
+            // （collation 与字面量不一致，必须转 binary 再比，否则 1267）。
+            "mysql" => Meta::Sql(
+                "select user as `name`, host as `host` from mysql.user \
+                 where not (account_locked = 'Y' and coalesce(authentication_string, '') = '') \
+                 order by user, host"
                     .to_string(),
             ),
+            "mariadb" => Meta::Sql(
+                "select user as `name`, host as `host` from mysql.user \
+                 where coalesce(cast(is_role as binary), 'N') <> 'Y' \
+                 order by user, host"
+                    .to_string(),
+            ),
+            "doris" => Meta::Sql(
+                "select user as `name`, host as `host` from mysql.user order by user, host"
+                    .to_string(),
+            ),
+            // PG 的角色与用户是同一张表：**不能登录**的就是纯角色（rolcanlogin = false），
+            // 它们同样只出现在「角色」页签里，不进用户清单。
+            // `isSuper` 必须加双引号：PG 会把未加引号的别名折成 `issuper`，
+            // 前端读 `row.isSuper` 就永远拿不到（超级用户标签不显示）。
+            "postgresql" | "kingbase" => Meta::Sql(
+                "select rolname as name, rolsuper as \"isSuper\" from pg_roles \
+                 where rolcanlogin order by rolname"
+                    .to_string(),
+            ),
+            // SQL Server：**服务器登录名**（不是库用户）。
+            //
+            // 账号体系是「服务器登录名 + 每个库里的映射用户」，而这页是**连接级**（不跟库）。
+            // 原来列的是库用户（sys.database_principals），于是打开 demo 这种只有
+            // dbo/guest 的库永远是一片空白 —— 用户的原话是「SQL Server 的用户也显示出来吧」。
+            // 登录名才是用户眼里的"用户"，也与增删改（create/alter/drop login）同一口径。
+            //
+            // 只过滤系统内置：`##…` 是证书/策略签名登录，`NT …` / `BUILTIN…` 是机器账号。
+            // `sa` 必须保留 —— 那正是用户要找的那个。
             "sqlserver" => Meta::Sql(
-                // 库级用户清单，但**过滤系统内置账号**：dbo / guest / sys / INFORMATION_SCHEMA
-                // 是每个库都有的固定用户，## 开头的（##MS_Policy… 等）是证书/服务签名映射用户
-                // —— 全都不是用户建的，列出来只会误导（用户反馈「SQL Server 展示的用户不对」）。
-                // 注意增删改链路（create user / alter user / drop user）都是库级口径，这里
-                // 不能换成 sys.server_principals（登录级），否则编辑/授权/删除全对不上。
-                "select name from sys.database_principals \
-                 where type in ('S','U') \
-                   and name not in ('dbo','guest','sys','INFORMATION_SCHEMA') \
-                   and name not like '#%' \
+                "select name from sys.server_principals \
+                 where type in ('S','U','G') \
+                   and name not like '##%' \
+                   and name not like 'NT %' \
+                   and name not like 'BUILTIN%' \
                  order by name"
                     .to_string(),
             ),
@@ -2266,11 +2750,28 @@ _ => Meta::Unwritten,
             "clickhouse" => {
                 Meta::Sql("select name from system.users order by name".to_string())
             }
+            // H2：`INFORMATION_SCHEMA.USERS`（2.x，实测 2.3.232）。默认用户的用户名是
+            // **空串**，直接显示会是一行点不动的空白 —— 显示成 H2 的空标识符 `""`
+            // （带引号，且能直接贴进 SQL），查详情 / 改 / 删时再还原（见 `h2_user`）。
+            "h2" => Meta::Sql(
+                "select case when coalesce(user_name,'') = '' then '\"\"' else user_name end as \"name\" \
+                 from information_schema.users order by 1"
+                    .to_string(),
+            ),
+            // Derby / DB2：用户由**外部认证**（操作系统 / LDAP）提供，这里只能看不能建 ——
+            // `user_action_sql` 保持 Absent，界面上的「新增用户」会自动置灰。
+            "derby" => Meta::Sql("select username as \"name\" from sys.sysusers order by username".to_string()),
+            // DB2 LUW 的用户/组授权目录是 SYSCAT.DBAUTH（SYSIBM.SYSUSERAUTH 是 z/OS 的）
+            "db2" => Meta::Sql(
+                "select grantee as \"name\" from syscat.dbauth \
+                 where grantee <> 'PUBLIC' and grantee not like 'SYS%' order by grantee"
+                    .to_string(),
+            ),
             _ => Meta::Absent,
         }
     }
 
-    /// Oracle 的**授予**部分：角色 + 系统权限 + 对象权限。
+/// Oracle 的**授予**部分：角色 + 系统权限 + 对象权限。
 ///
 /// 三类分别对应字典里的三层（角色 / 系统权限 / 对象权限），语句形态也各不同：
 /// `grant <角色> to u`、`grant <系统权限> to u`、`grant <权限> on <模式>.<对象> to u`。
@@ -2280,14 +2781,18 @@ fn oracle_grant_parts(u: &str, roles: &[String], privileges: &UserPrivileges) ->
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     // 角色（`roles` 与 `privileges.global` 都可能带角色名，去重后再发，免得同句两遍）
     for name in roles.iter().chain(privileges.global.iter()) {
-        let name = name.trim().to_ascii_uppercase();
+        let raw = name.trim();
+        let name = raw.to_ascii_uppercase();
         if name.is_empty() || !seen.insert("r:".to_string() + &name) {
             continue;
         }
-        if crate::api::dialect::is_oracle_role(&name) {
+        if crate::api::dialect::is_oracle_role(&name) || crate::api::dialect::is_oracle_system_priv(&name) {
             parts.push(format!("grant {name} to {u}"));
-        } else if crate::api::dialect::is_oracle_system_priv(&name) {
-            parts.push(format!("grant {name} to {u}"));
+        } else if crate::api::dialect::is_plain_ident(raw) {
+            // **自定义角色**（用户在「新建角色」里建的那些）：预置名单里当然没有。
+            // 写法要与建角色时一致 —— 普通名不加引号（Oracle 会折成大写），
+            // 带特殊字符的必须原样加双引号，折大写后找不到对象（ORA-01919）。
+            parts.push(format!("grant {} to {u}", Self::oracle_role_ident(raw)));
         }
     }
     // 对象权限：`database` 字段对 Oracle 就是**模式名**（树上的「库.模式」拆出来的那半）
@@ -2315,13 +2820,28 @@ fn oracle_grant_parts(u: &str, roles: &[String], privileges: &UserPrivileges) ->
     parts
 }
 
+/// 把界面传回来的角色引用拆成 (名字, host)。
+///
+/// 前端统一传 `名字@host`（来自 `mysql.role_edges` 的 from_user/from_host）；
+/// 只有裸名字时按 `%`（与 `grant 'r' to …` 的默认 host 一致）。
+fn split_role_ref(raw: &str) -> (String, String) {
+    let s = raw.trim();
+    match s.rsplit_once('@') {
+        Some((n, h)) if !n.trim().is_empty() && !h.trim().is_empty() => {
+            (n.trim().to_string(), h.trim().to_string())
+        }
+        _ => (s.to_string(), "%".to_string()),
+    }
+}
+
 /// MySQL 的**撤销**部分：界面按"原来有、现在没有了"算好传进来，这里只负责成句。
 /// 与 Oracle 那套同一机制，只是作用目标写法不同：
 ///   scope=global        → `revoke <priv> on *.* from <u>`
 ///   scope=db            → `revoke <priv> on \`<库>\`.* from <u>`
 ///   scope=table         → `revoke <priv> on \`<库>\`.\`<表>\` from <u>`
 /// `GRANT OPTION` 也走这一层（它是 `revoke ... grant option` 子句的一部分，MySQL 里合法）。
-fn mysql_revoke_parts(&self, full: &str, revokes: &[GrantRevoke]) -> Vec<String> {
+/// `grantee` 是**已转义好的单引号账号**形如 `'u'@'%'`（见上面的 `full_lit`），不是裸名。
+fn mysql_revoke_parts(&self, grantee: &str, revokes: &[GrantRevoke]) -> Vec<String> {
     let mut parts: Vec<String> = Vec::new();
     for row in revokes {
         let name = row.privilege.trim().to_ascii_uppercase();
@@ -2340,7 +2860,7 @@ fn mysql_revoke_parts(&self, full: &str, revokes: &[GrantRevoke]) -> Vec<String>
                 } else {
                     format!("{}.{}", self.quote(owner), self.quote(object))
                 };
-                parts.push(format!("revoke {name} on {target} from {full}"));
+                parts.push(format!("revoke {name} on {target} from {grantee}"));
             }
             // 例程级：`revoke execute on procedure `db`.`p` from u` —— 类型字是语法的一部分
             "routine" => {
@@ -2349,13 +2869,30 @@ fn mysql_revoke_parts(&self, full: &str, revokes: &[GrantRevoke]) -> Vec<String>
                 }
                 let routine_type = if row.kind.eq_ignore_ascii_case("function") { "function" } else { "procedure" };
                 parts.push(format!(
-                    "revoke {name} on {routine_type} {}.{} from {full}",
+                    "revoke {name} on {routine_type} {}.{} from {grantee}",
                     self.quote(owner),
                     self.quote(object)
                 ));
             }
+            // 角色：MySQL 是 `revoke 'role'@'host' from 'u'@'%'`（owner = 角色名，
+            // object = 角色 host）；MariaDB / Doris 的角色没有 host，只能 `revoke 'r' from …`。
+            "role" => {
+                if owner.is_empty() {
+                    continue;
+                }
+                if self.key() == "mysql" {
+                    let role_host = if object.is_empty() { "%" } else { object };
+                    parts.push(format!(
+                        "revoke {}@{} from {grantee}",
+                        self.literal(owner),
+                        self.literal(role_host)
+                    ));
+                } else {
+                    parts.push(format!("revoke {} from {grantee}", self.literal(owner)));
+                }
+            }
             // 全局（含 GRANT OPTION）
-            _ => parts.push(format!("revoke {name} on *.* from {full}")),
+            _ => parts.push(format!("revoke {name} on *.* from {grantee}")),
         }
     }
     parts
@@ -2383,8 +2920,10 @@ fn oracle_revoke_parts(u: &str, revokes: &[GrantRevoke]) -> Vec<String> {
                 ));
             }
             "role" => {
-                if crate::api::dialect::is_oracle_role(&name) {
-                    parts.push(format!("revoke {name} from {u}"));
+                let raw = row.privilege.trim();
+                // 预置角色 + 用户自定义角色（后端建的那些），同一套写法见 oracle_grant_parts
+                if crate::api::dialect::is_oracle_role(&name) || crate::api::dialect::is_plain_ident(raw) {
+                    parts.push(format!("revoke {} from {u}", Self::oracle_role_ident(raw)));
                 }
             }
             // 系统权限
@@ -2401,6 +2940,22 @@ fn oracle_revoke_parts(u: &str, revokes: &[GrantRevoke]) -> Vec<String> {
 /// Oracle 的双引号标识符（这里不能借 `Dialect::quote`：那两个函数在 impl 之外使用）。
 fn quote_oracle(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Oracle 主体的写法：**普通名不加引号**（Oracle 自动折成大写，与字典里的
+/// `DBA_ROLES.ROLE` 对得上），带特殊字符的才加双引号并原样保留大小写。
+///
+/// 为什么必须与建角色时同一套：`create role "my-role"` 建出来是小写带连字符，
+/// 后面 `grant MY-ROLE to …` 会被折成 `MY_ROLE`（不存在的对象，ORA-01919）。
+fn oracle_role_ident(raw: &str) -> String {
+    let s = raw.trim();
+    let plain = !s.is_empty()
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+    if plain {
+        s.to_ascii_uppercase()
+    } else {
+        Self::quote_oracle(s)
+    }
 }
 
 /// Oracle 的 `dbms_metadata.get_ddl(...)`：有 owner 就把 owner 也带上。

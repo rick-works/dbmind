@@ -85,7 +85,13 @@ const props = defineProps({
 const emit = defineEmits(['edit'])
 
 // 标题栏的路径：数据源名称在前 + `.` 连接
-const headPath = computed(() => [props.conn?.name, info.value.name || props.name].filter(Boolean).join('.'))
+// H2 的默认管理员用户名是空串（接口里是 `""`）：标题上写「默认用户 / default」
+const headPath = computed(() => {
+  const raw = info.value.name || props.name
+  const isH2 = String(props.conn?.type || '').toUpperCase() === 'H2'
+  const who = isH2 && String(raw ?? '').trim() === '""' ? t('um.blankUserName') : raw
+  return [props.conn?.name, who].filter(Boolean).join('.')
+})
 
 const info = ref({})
 const loading = ref(false)

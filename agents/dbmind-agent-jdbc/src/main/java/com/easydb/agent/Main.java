@@ -640,6 +640,15 @@ public final class Main {
      * 因为 H2 / PostgreSQL 的「取消」与「超时」都报 SQLSTATE 57014 —— 只看异常类型的话，
      * 用户点「取消」会看到「查询超时」（host 层那条取消测试抓到的就是这个）。
      */
+    /** 取一个可空字符串列：驱动不支持 / 这一格读不动就当没有，不因一个默认值毁掉整张表的列信息 */
+    private static String softString(ResultSet resultSet, String column) {
+        try {
+            return resultSet.getString(column);
+        } catch (SQLException e) {
+            return null;
+        }
+    }
+
     private static Protocol.AgentException queryFailure(Running running, SQLException e) {
         if (running != null && running.canceled.get()) {
             return new Protocol.AgentException("DBMIND-QUERY-0004", "查询已取消", describe(e));
@@ -759,6 +768,17 @@ public final class Main {
             }
         }
         return keys;
+    }
+
+    /**
+     * 这条会话是不是 Oracle 薄驱动（`jdbc:oracle:`）。
+     *
+     * <p>只认 URL：DM 用的是 oracle 方言，但驱动与前缀是 `jdbc:dm:`，它的元数据带 schema
+     * 是正常的，不能跟着 Oracle 一起改。
+     */
+    private static boolean isOracleThin(Session session) {
+        String url = session.url() == null ? "" : session.url();
+        return url.startsWith("jdbc:oracle:");
     }
 
     /**
@@ -922,7 +942,16 @@ public final class Main {
                 try {
                     previousSchema = session.connection().getSchema();
                     session.connection().setSchema(schema);
-                    scope = new String[] {scope[0], schema};
+                    // Oracle 的元数据 API **不能再带 schema 参数**（实测踩过两种坏法）：
+                    //   · `getColumns(null, "DBMIND", …)` 在有前置语句的会话上返回 **0 行** ——
+                    //     界面上就是"表能列出来、点开一张字段全空"；
+                    //   · 有时直接抛 `ORA-17027 流已被关闭`（列信息整条 500）。
+                    // 正确姿势：只把会话切到那一层，元数据一律传 `(null, null, 表名)`——
+                    // 实测同一会话连取 3 次稳定给 5 列 + 主键 ID。
+                    // ⚠️ 只对 jdbc:oracle: 生效；DM 走 oracle 方言但驱动是 jdbc:dm:，带 schema 是正常的。
+                    scope = isOracleThin(session)
+                            ? new String[] {null, null}
+                            : new String[] {scope[0], schema};
                     schemaSwitched = true;
                 } catch (Exception e) {
                     trace("按 schema 切会话失败（" + schema + "），改按默认 schema 读：" + e);
@@ -930,16 +959,24 @@ public final class Main {
             }
             try {
                 Set<String> primaryKeys = readPrimaryKeys(meta, scope, table);
+                boolean oracleThin = isOracleThin(session);
                 try (ResultSet resultSet = meta.getColumns(scope[0], scope[1], table, "%")) {
                     while (resultSet.next()) {
                         JsonObject column = new JsonObject();
+                        // Oracle 的 `COLUMN_DEF` 在驱动里是 **LONG**：同一行里**必须最先读**。
+                        // 先读 COLUMN_NAME / TYPE_NAME 再读它，ojdbc 100% 抛
+                        // `ORA-17027 流已被关闭`（实测同一张表：后读必炸、先读 5 行全对）——
+                        // 界面上的表现就是"点开一张表，字段一个都出不来"。其它驱动没这个顺序要求。
+                        String defaultValue = oracleThin ? softString(resultSet, "COLUMN_DEF") : null;
                         String name = resultSet.getString("COLUMN_NAME");
                         column.addProperty("name", name);
                         column.addProperty("typeName", resultSet.getString("TYPE_NAME"));
                         String nullable = resultSet.getString("IS_NULLABLE");
                         column.addProperty("nullable", nullable == null || !nullable.equalsIgnoreCase("NO"));
                         column.addProperty("primaryKey", primaryKeys.contains(name));
-                        String defaultValue = resultSet.getString("COLUMN_DEF");
+                        if (!oracleThin) {
+                            defaultValue = softString(resultSet, "COLUMN_DEF");
+                        }
                         if (defaultValue == null) {
                             column.add("defaultValue", null);
                         } else {

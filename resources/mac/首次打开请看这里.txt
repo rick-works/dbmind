@@ -31,10 +31,10 @@ xattr -dr com.apple.quarantine 再补一个空格，然后把 DBmind.app 从访�
 浏览器会给下载的文件打一个"从网上下载"的标记，系统见到这个标记才会去检查。
 下面两条路径不打这个标记，所以什么都不会弹（也不需要 sudo）：
 
-  1) 用 curl 下载（先在发布页看最新版本号，例如 1.2.32）：
+  1) 用 curl 下载（先在发布页看最新版本号，例如 1.2.33）：
 
-     curl -LO https://github.com/rick-works/dbmind/releases/download/v1.2.32/DBmind_1.2.32_aarch64.dmg
-     open DBmind_1.2.32_aarch64.dmg
+     curl -LO https://github.com/rick-works/dbmind/releases/download/v1.2.33/DBmind_1.2.33_aarch64.dmg
+     open DBmind_1.2.33_aarch64.dmg
 
      （Intel 机器把文件名里的 aarch64 换成 x64）
 
@@ -72,5 +72,5 @@ DBmind.app from Finder into the terminal window and press Return.
 To avoid that dialog entirely, fetch the file without a browser (a browser sets
 the "downloaded from the internet" flag; curl and Homebrew do not):
 
-     curl -LO https://github.com/rick-works/dbmind/releases/download/v1.2.32/DBmind_1.2.32_aarch64.dmg
+     curl -LO https://github.com/rick-works/dbmind/releases/download/v1.2.33/DBmind_1.2.33_aarch64.dmg
      brew install --cask --no-quarantine rick-works/tap/dbmind

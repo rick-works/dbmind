@@ -46,14 +46,17 @@ export const parseMySqlGrants = (grants) => {
     if (onPart === '*.*' || onPart === '*') {
       for (const p of privList) globalPrivs.add(p)
     } else {
-      const dbMatch = onPart.match(/^`?([^`]+)`?\.\*$/)
+      // 标识符可能是 `` `x` ``（MySQL）、`"x"`（H2 / Oracle 标准引用）、`[x]`（SQL Server）：
+      // 三种都要吃，否则 H2 的 `grant select on "PUBLIC"."T" to "u"` 会被整条丢掉，
+      // 界面就显示成"这个用户没有权限"（真机踩过）。
+      const dbMatch = onPart.match(/^[`"\[]?([^`"\]]+)[`"\]]?\.\*$/)
       if (dbMatch) {
         const db = stripCatalog(dbMatch[1])
         const existing = dbPrivMap.get(db) || new Set()
         for (const p of privList) existing.add(p)
         dbPrivMap.set(db, existing)
       } else {
-        const routineMatch = onPart.match(/^(PROCEDURE|FUNCTION)\s+`?([^`]+)`?\.`?([^`]+)`?$/i)
+        const routineMatch = onPart.match(/^(PROCEDURE|FUNCTION)\s+[`"\[]?([^`"\]]+)[`"\]]?\.[`"\[]?([^`"\]]+)[`"\]]?$/i)
         if (routineMatch) {
           const kind = routineMatch[1].toUpperCase()
           const db = stripCatalog(routineMatch[2])
@@ -63,7 +66,7 @@ export const parseMySqlGrants = (grants) => {
           for (const p of privList) existing.add(p)
           routinePrivMap.set(key, existing)
         } else {
-          const tableMatch = onPart.match(/^`?([^`]+)`?\.`?([^`]+)`?$/)
+          const tableMatch = onPart.match(/^[`"\[]?([^`"\]]+)[`"\]]?\.[`"\[]?([^`"\]]+)[`"\]]?$/)
           if (tableMatch) {
             const db = stripCatalog(tableMatch[1])
             const table = tableMatch[2]
@@ -100,38 +103,45 @@ export const parseSqlServerPerms = (info) => {
   if (info.roles && Array.isArray(info.roles)) {
     result.roles = info.roles.filter(r => r && !r.startsWith('--'))
   }
-  // Schema 权限按 schema 合并
+  // Schema 权限按 (库, schema) 合并 —— SQL Server 一个实例多库，同名 schema（dbo）
+  // 在不同库里是两件事，**库名必须带着**，否则回显会把它们挤成一行。
+  // 后端只回显显式 GRANT/WITH GRANT（不含 DENY），所以这里不再按 state 过滤；
+  // 老后端若仍带 state，遇到 DENY 就跳过（DENY 不是"拥有"）。
   if (info.schemaPrivileges && Array.isArray(info.schemaPrivileges)) {
     const schemaMap = new Map()
     for (const item of info.schemaPrivileges) {
+      const db = item.database || ''
       const sch = item.schema
       const perm = item.permission
       const state = item.state
-      if (!sch || !perm || !state || String(state).toUpperCase() !== 'GRANT') continue
-      const existing = schemaMap.get(sch) || new Set()
-      existing.add(perm)
-      schemaMap.set(sch, existing)
+      if (!sch || !perm) continue
+      if (state && String(state).toUpperCase() === 'DENY') continue
+      const key = db + '.' + sch
+      if (!schemaMap.has(key)) schemaMap.set(key, { database: db, schema: sch, privileges: [] })
+      const list = schemaMap.get(key).privileges
+      const name = String(perm).toUpperCase()
+      if (!list.includes(name)) list.push(name)
     }
-    result.schemaPrivileges = Array.from(schemaMap.entries()).map(([schema, set]) => ({ schema, privileges: Array.from(set) }))
+    result.schemaPrivileges = [...schemaMap.values()]
   }
-  // 对象权限按 schema+object 合并
+  // 对象权限按 (库, schema, object) 合并（同一个原因：库名是它的一部分）
   if (info.objectPrivileges && Array.isArray(info.objectPrivileges)) {
     const objMap = new Map()
     for (const item of info.objectPrivileges) {
+      const db = item.database || ''
       const sch = item.schema
       const obj = item.object
       const perm = item.permission
       const state = item.state
-      if (!sch || !obj || !perm || !state || String(state).toUpperCase() !== 'GRANT') continue
-      const key = `${sch}.${obj}`
-      const existing = objMap.get(key) || new Set()
-      existing.add(perm)
-      objMap.set(key, existing)
+      if (!sch || !obj || !perm) continue
+      if (state && String(state).toUpperCase() === 'DENY') continue
+      const key = db + '.' + sch + '.' + obj
+      if (!objMap.has(key)) objMap.set(key, { database: db, schema: sch, object: obj, privileges: [] })
+      const list = objMap.get(key).privileges
+      const name = String(perm).toUpperCase()
+      if (!list.includes(name)) list.push(name)
     }
-    result.objectPrivileges = Array.from(objMap.entries()).map(([key, set]) => {
-      const [schema, object] = key.split('.')
-      return { schema, object, privileges: Array.from(set) }
-    })
+    result.objectPrivileges = [...objMap.values()]
   }
   return result
 }
