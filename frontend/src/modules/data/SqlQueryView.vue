@@ -559,13 +559,23 @@
   <SqlProbeDialog v-model="probeVisible" :sql="probeSql" :conn-id="selectedConnId || props.conn?.id"
                   :database="props.database" :mode="probeMode" @insert="onProbeInsert" />
   <!-- 模板变量填参：SQL 里的 :name 占位符在执行前收值（值按名称记忆） -->
-  <el-dialog v-model="varDialog.visible" :title="$t('sqlq.varDialogTitle')" width="430" append-to-body
-             :close-on-click-modal="false" @keyup.enter="onVarConfirm">
+  <el-dialog v-model="varDialog.visible" :title="$t('sqlq.varDialogTitle')" width="460" append-to-body
+             :close-on-click-modal="false" class="var-dialog" @keyup.enter="onVarConfirm">
+    <!-- 先一句"要填几个"，用户一眼知道还差多少；下面每行：占位符胶囊 + 输入框 -->
+    <div class="var-lead">{{ $t('sqlq.varLead', { n: varDialog.vars.length }) }}</div>
     <div class="var-row" v-for="v in varDialog.vars" :key="v">
-      <span class="var-name">:{{ v }}</span>
+      <span class="var-name" :title="':' + v">:{{ v }}</span>
       <el-input v-model="varDialog.values[v]" :placeholder="$t('sqlq.varValuePh')" clearable />
     </div>
-    <div class="var-hint">{{ $t('sqlq.varHint') }}</div>
+    <!-- 说明拆两行：一行说"值会被记住"，一行说"值怎么写进 SQL" —— 原来挤成一句长话，
+         还得在中途停下来自己断句 -->
+    <div class="var-hint">
+      <el-icon class="vh-ico"><InfoFilled /></el-icon>
+      <div class="vh-txt">
+        <div class="vh-main">{{ $t('sqlq.varHint') }}</div>
+        <div class="vh-sub">{{ $t('sqlq.varHintSub') }}</div>
+      </div>
+    </div>
     <template #footer>
       <el-button @click="onVarCancel">{{ $t('common.cancel') }}</el-button>
       <el-button type="primary" @click="onVarConfirm">{{ $t('sqlq.varRun') }}</el-button>
@@ -617,9 +627,10 @@ import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplay
 import DbLogo from '../../common/DbLogo.vue'
 // 占位库 `(default)` 的显示名（值仍是原值，见 utils/dbLabel）
 import { dbLabelOf } from '../../utils/dbLabel'
+import { rememberConnNames, connNameOf } from '../../utils/connNames'
 
-const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabDatabase: String, initialSql: String, autoRun: Boolean, sqlLoading: Boolean })
-const emit = defineEmits(['save', 'dirty-change', 'conn-change', 'db-change', 'sql-change'])
+const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabConnName: String, tabDatabase: String, initialSql: String, autoRun: Boolean, sqlLoading: Boolean })
+const emit = defineEmits(['save', 'dirty-change', 'conn-change', 'conn-rebind', 'db-change', 'sql-change'])
 
 const sqlLoading = computed(() => !!props.sqlLoading)
 const sql = ref(props.initialSql || '')
@@ -4164,14 +4175,6 @@ const requireSql = () => {
   return false
 }
 
-// 危险 SQL 判定：DELETE FROM / DROP / TRUNCATE（与设置页文案一致，忽略注释）
-const isDangerousSql = (s) => {
-  // 去掉块注释与行注释后，仅检测危险关键字语句（避免被注释内容触发）
-  const clean = (s || '').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(--|#)[^\n\r]*/g, ' ').toUpperCase()
-  // 关键字前必须紧跟语句边界（行首 / 分号 / 空白），防止匹配到字符串、标识符等
-  return /(?:^|;|\s)(?:DELETE\s+FROM\b|DROP\s+(?:TABLE|DATABASE|VIEW|INDEX|SCHEMA|SEQUENCE|PROCEDURE|FUNCTION|TRIGGER|EVENT|TYPE)\b|TRUNCATE\s+(?:TABLE\s+)?)/.test(clean)
-}
-
 const setResultCancelled = () => {
   resultItems.value = []
   activeResultIdx.value = 0
@@ -4288,14 +4291,42 @@ const writeCountSql = (stmt) => {
   }
   return null
 }
-const escHtmlLocal = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
-/** 返回 true=继续执行；false=用户取消。非 UPDATE/DELETE（如 INSERT）不预览直接过。 */
-const previewWriteRows = async (execSql, connId, db) => {
+/** 语句类型（摘要里用）：只取首关键字，白名单之外一律算「其它写操作」 */
+const writeKindOf = (stmt) => {
+  const m = String(stmt || '').trim().replace(/^\(\s*/, '')
+    .match(/^(update|delete|insert|replace|merge|truncate|drop|alter|create|rename|grant|revoke|call|exec|execute|load)\b/i)
+  return m ? m[1].toUpperCase() : 'OTHER'
+}
+
+/**
+ * 写操作确认（**只在「安全确认」开启时调用**，关系型）。
+ *
+ * 两个问题一起改掉了：
+ * 1. 原来这里对任何写 SQL **无条件**弹窗 —— 用户把「生产保护」「安全确认」都关掉也照弹，
+ *    设置看着像没生效（真机反馈）。现在由 `confirmDanger` 控制；它也是设置页那句话
+ *    「DELETE / DROP / TRUNCATE 等操作前二次确认」的唯一出口。
+ * 2. 原来弹窗里贴 SQL 原文（截断 90 字符）—— 一条 UPDATE 动辄几百字符，塞进对话框只看得到
+ *    半句，反而看不清重点。现在只讲**是什么操作、会动多少行、有没有不带条件的**。
+ *
+ * 返回 true=继续执行；false=用户取消。
+ */
+const confirmWriteBeforeRun = async (execSql, connId, db) => {
   const stmts = splitSqlStatements(execSql)
-  const rows = []
+  if (!stmts.length) return true
+  const kinds = new Map()
+  const previews = []
+  let noWhere = 0
+  let destructive = false
   for (const stmt of stmts) {
+    const kind = writeKindOf(stmt)
+    kinds.set(kind, (kinds.get(kind) || 0) + 1)
+    if (kind === 'DROP' || kind === 'TRUNCATE') destructive = true
     const countSql = writeCountSql(stmt)
     if (!countSql) continue
+    // 无筛选条件的 UPDATE / DELETE：全表受影响，必须单独提一句
+    const bare = (kind === 'DELETE' && !/\bwhere\b/i.test(stmt))
+      || (kind === 'UPDATE' && !/\bwhere\b/i.test(stmt))
+    if (bare) noWhere += 1
     let count = null
     try {
       const r = await executeSql(connId, countSql, db, null, null, 1, 10, true)
@@ -4303,22 +4334,40 @@ const previewWriteRows = async (execSql, connId, db) => {
       if (typeof v === 'number') count = v
       else if (v != null && !isNaN(Number(v))) count = Number(v)
     } catch { /* 预估失败按未知处理 */ }
-    rows.push({ stmt: stmt.replace(/\s+/g, ' ').trim().slice(0, 90), count })
+    previews.push({ kind, count })
   }
-  if (!rows.length) return true
-  const html = rows.map((r, i) => {
-    const n = r.count == null
-      ? '<b>无法预估</b>'
-      : (r.count === 0 ? '<b>0</b> 行' : `<b>${r.count.toLocaleString()}</b> 行`)
-    const noWhere = /delete\s+from\s+[^\s]+\s*;?\s*$/i.test(r.stmt) || /update\s+[^\s]+\s+set\b(?![\s\S]*\bwhere\b)/i.test(r.stmt)
-    return `${i + 1}. <code>${escHtmlLocal(r.stmt)}</code><br>&nbsp;&nbsp;&nbsp;预估影响：${n}${noWhere ? ' —— <b style="color:#e34d4d">⚠ 无 WHERE 条件，将影响全表！</b>' : ''}`
-  }).join('<br><br>')
+
+  const summary = [...kinds.entries()]
+    .map(([kind, n]) => t('sqlq.writePreviewKind', { n, kind: kind === 'OTHER' ? t('sqlq.writePreviewOther') : kind }))
+    .join(t('sqlq.writePreviewSep'))
+
+  const lines = previews.map(({ kind, count }) => (count == null
+    ? t('sqlq.writePreviewRowUnknown', { kind })
+    : t('sqlq.writePreviewRow', { kind, count: count.toLocaleString() })))
+
+  const warns = []
+  if (noWhere) warns.push(t('sqlq.writePreviewNoWhere', { n: noWhere }))
+  if (destructive) warns.push(t('sqlq.writePreviewDestructive'))
+
+  const block = (text, bg, color) => `<div style="margin-top:10px;padding:8px 10px;border-radius:6px;background:${bg};color:${color};line-height:1.7">${text}</div>`
+  const html = [
+    '<div style="text-align:left;line-height:1.75">',
+    `<div>${t('sqlq.writePreviewLead', { n: stmts.length, summary })}</div>`,
+    lines.length ? block(lines.join('<br>'), '#f5f7fa', '#606266') : '',
+    ...warns.map((w) => block(`⚠ ${w}`, '#fef0f0', '#e34d4d')),
+    `<div style="margin-top:12px;font-size:12px;color:#909399">${t('sqlq.writePreviewNote')}</div>`,
+    '</div>'
+  ].join('')
+
   try {
-    await ElMessageBox.confirm(
-      `<div style="text-align:left">以下写语句执行前的<b>预估影响行数</b>（基于当前数据）：${''}<br><br>${html}</div>`,
-      t('sqlq.writePreviewTitle'),
-      { type: 'warning', dangerouslyUseHTMLString: true, confirmButtonText: t('sqlq.writePreviewRun'), cancelButtonText: t('common.cancel'), closeOnClickModal: false, closeOnPressEscape: false }
-    )
+    await ElMessageBox.confirm(html, t('sqlq.writePreviewTitle'), {
+      type: 'warning',
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: t('sqlq.writePreviewRun'),
+      cancelButtonText: t('common.cancel'),
+      closeOnClickModal: false,
+      closeOnPressEscape: false
+    })
     return true
   } catch { return false }
 }
@@ -4420,19 +4469,8 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
     await loadProtectProd()
     if (!guardConnWrite(selectedConn.value || props.conn || {}, t('sqlq.writeAct'))) return
   }
-  // 查询设置t('settings.query.confirmDanger')：危险 SQL 二次确认（仅关系型数据库）。
-  // 每次执行时实时读取，确保设置页保存后立即生效（querySettings 为 setup 时快照）
-  if (!isNoSql.value && getQuerySettings().confirmDanger && isDangerousSql(execSql)) {
-    try {
-      await ElMessageBox.confirm(t('sqlq.dangerBody'), t('sqlq.dangerTitle'), {
-        type: 'warning',
-        confirmButtonText: t('sqlq.dangerConfirm'),
-        cancelButtonText: t('tree.multiCancel'),
-        closeOnClickModal: false,
-        closeOnPressEscape: false
-      })
-    } catch { return }
-  }
+  // 危险 SQL 的二次确认原来在这里单弹一次（DELETE/DROP/TRUNCATE）；已并入上面的
+  // 「写操作确认」—— 同一个开关下弹两个框没有意义，用户点两次"继续"才执行。
   running.value = true
   loading.value = true
   resultVisible.value = true
@@ -4462,9 +4500,11 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
       const db = selectedSchema.value
         ? `${selectedDatabase.value}.${selectedSchema.value}`
         : selectedDatabase.value || undefined
-      // 写操作影响行预览：UPDATE/DELETE 执行前先确认将影响多少行（取消则不执行）
-      if (isWriteSql(execSql)) {
-        const go = await previewWriteRows(execSql, connId, db)
+      // 写操作确认：**跟随「设置 → 安全与会话 → 安全确认」**（`confirmDanger`）。
+      // 以前这里无条件弹，两个安全开关全关也照弹 —— 用户看到的就是"设置没生效"。
+      // 危险语句（DELETE/DROP/TRUNCATE）原来还会再弹一次，现在合并进这一个确认里。
+      if (getQuerySettings().confirmDanger && isWriteSql(execSql)) {
+        const go = await confirmWriteBeforeRun(execSql, connId, db)
         if (!go) return
       }
       // 多段 SQL：批量执行（同连接顺序执行），每段结果以 tab 展示；
@@ -4809,6 +4849,7 @@ const onRunSql = (e) => {
 const loadAllConnections = async () => {
   try {
     allConnections.value = await listConnections()
+    rememberConnNames(allConnections.value)
   } catch (e) {
     allConnections.value = []
   }
@@ -4825,6 +4866,8 @@ const onConnChange = async (connId) => {
   schemas.value = []
   tableNames.value = []
   if (connId) {
+    // 告知父级：页签的连接变了，要写回页签（否则刷新后仍按旧连接还原）
+    emit('conn-change', String(connId))
     await loadDatabases()
   }
 }
@@ -5125,10 +5168,19 @@ const applyContext = async (rawConnId, rawDb) => {
   // 页签带来的连接 id 可能已经失效（首页「最近查询」里存的历史连接、刷新后还原的页签快照，
   // 它们引用的连接被删掉重建过就会换 id）：**列表非空却查不到**时不要拿它去请求 ——
   // 那会一路报「连接不存在或类型未知」，连接下拉还会显示一串原始 id。
-  // 退回 props.conn（父级已用 connFor 兜过底），兜不到就留空，让用户自己选。
-  const stale = !!wanted && allConnections.value.length > 0
-    && !allConnections.value.some(c => String(c.id) === wanted)
-  const targetConnId = stale ? String(props.conn?.id || '') : wanted
+  //
+  // 但「id 失效」≠「连接不在」：删除后重新导入（或换机器导入同一套连接）会生成新 id，
+  // 名字却一模一样。用户看到连接明明在树里，却被提示"已不存在"—— 所以先按名字找回，
+  // 找不回再退回 props.conn，最后才提示重选。
+  const known = !!wanted && allConnections.value.some(c => String(c.id) === wanted)
+  const wantName = props.tabConnName || connNameOf(wanted)
+  const byName = (!known && wanted && wantName)
+    ? allConnections.value.find(c => c.name === wantName)
+    : null
+  const stale = !!wanted && allConnections.value.length > 0 && !known && !byName
+  const targetConnId = known ? wanted : (byName ? String(byName.id) : String(props.conn?.id || ''))
+  // 按名字接回成功：通知父级把页签里的旧 id 换成新的（下次刷新就不必再靠名字兜底）
+  if (byName) emit('conn-rebind', String(byName.id))
   if (stale) ElMessage.warning(t('sqlq.staleConn'))
   const { db, schema } = splitDbSchema(rawDb, connTypeOfId(targetConnId))
 
@@ -5797,10 +5849,26 @@ onBeforeUnmount(() => {
 }
 .stmt-chip:hover .stmt-run { display: inline-flex; }
 .stmt-run:hover { opacity: .8; }
-/* 模板变量填参弹窗 */
-.var-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.var-name { font-family: monospace; font-size: 13px; color: var(--dc-primary); width: 110px; text-align: right; flex-shrink: 0; }
-.var-hint { font-size: 12px; color: var(--dc-text-dim); line-height: 1.6; }
+/* 模板变量填参弹窗：参数名做成"占位符胶囊"（一眼看出它是 SQL 里的 :name），
+   输入框吃掉剩余宽度；说明放一条浅底提示条，两行分开说"记住"与"转义"。 */
+.var-lead { font-size: 12.5px; color: var(--dc-text-dim); margin: -2px 0 12px; }
+.var-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.var-row:last-of-type { margin-bottom: 0; }
+.var-name {
+  flex-shrink: 0; min-width: 76px; max-width: 42%; padding: 3px 9px; border-radius: 6px;
+  text-align: center; font-family: 'SF Mono', ui-monospace, Consolas, monospace; font-size: 12.5px;
+  color: var(--dc-primary); background: var(--dc-primary-wash); border: 1px solid var(--dc-primary-light);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.var-row .el-input { flex: 1; }
+.var-hint {
+  display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; padding: 8px 10px;
+  border-radius: 8px; background: var(--dc-bg-soft); border: 1px solid var(--dc-border);
+  font-size: 12px; line-height: 1.6; color: var(--dc-text-dim);
+}
+.var-hint .vh-ico { margin-top: 2px; font-size: 13px; color: var(--dc-primary); flex-shrink: 0; }
+.var-hint .vh-main { color: var(--dc-text-mid); }
+.var-hint .vh-sub { opacity: .85; }
 /* 单元格编辑缓冲条：贴在底栏上方，弱底色提醒还有改动没落地。
    底色用主题令牌 --dc-warning-wash，**别用 Element 的 --el-color-warning-light-9** ——
    那是 Element 浅色主题的色阶，而本项目的深色是默认主题、并没有引入 Element 的深色变量表，

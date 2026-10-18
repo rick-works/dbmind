@@ -91,15 +91,10 @@ pub fn config_from_body(body: &Value, existing: Option<&Value>) -> XResult<Conne
     }
 
     let host = text(body, "host");
-    let jdbc_url = text(body, "jdbcUrl");
-    // 连接弹窗会**自动**从 host/port 生成一条 JDBC URL 放进表单，那种 URL 只是展示用，
-    // 真实信息都在 host/port 里，丢掉没有损失。所以只拒绝「和 host 对不上的自定义 URL」。
-    if !jdbc_url.is_empty() && !host.is_empty() && !jdbc_url.contains(&host) {
-        return Err(XError::bad_request(
-            "自定义 JDBC URL 尚未接入：内核按「类型 + 主机 + 端口 + 库名」自行拼 URL。\
-             请改填主机与端口（URL 会随之变化），或为本项目贡献 URL 模板",
-        ));
-    }
+    // 连接弹窗默认**自动**拼 JDBC URL，只在用户手改过时才把那条 URL 带上来。
+    // 手改过 ⇒ 整条存起来、连接时原样使用（见 dbmind_core::agent::render_jdbc_url）；
+    // 没手改 ⇒ 空串，仍然按模板实时拼 —— 以后补参数 / 修模板能直接作用到所有老连接上。
+    let url_override = text(body, "jdbcUrl").trim().to_string();
 
     // ---- 界面偏好 + 驱动参数一并装进 extra ----
     // extra.params 会一路透传到 JDBC 宿主的 Properties（自签证书的 SQL Server 靠它：
@@ -123,6 +118,31 @@ pub fn config_from_body(body: &Value, existing: Option<&Value>) -> XResult<Conne
     }
     if !params.is_empty() {
         extra.insert("params".to_string(), Value::Object(params));
+    }
+    // 结构化连接选项：只影响 URL 形状的那几项（Oracle 服务名/SID、
+    // ClickHouse http/https、H2 的 `;MODE=…`）。
+    // 放 `extra.options` 而不是 `extra.params`：它们**不是驱动属性**，塞进 params 只会
+    // 给驱动传一堆它不认识的键（`extra` 的约定是「驱动只读 params，其余键无人过问」，
+    // 与 group/env/note 同一条规矩，见 shape 模块顶部说明）。拼 URL 时由内核读取，
+    // 见 dbmind_core::agent::render_jdbc_url。
+    let mut options_clean = Map::new();
+    if let Some(options) = body.get("options").and_then(Value::as_object) {
+        for (key, value) in options {
+            let key = key.trim();
+            let value = value.as_str().unwrap_or_default().trim();
+            // 这两个上限只是防呆：正常选项是 `oracleConnect` / `chScheme` 这种短键值
+            if key.is_empty() || key.len() > 64 || value.is_empty() || value.len() > 200 {
+                continue;
+            }
+            options_clean.insert(key.to_string(), Value::String(value.to_string()));
+        }
+    }
+    // 手改过的 URL 与结构化选项放同一个抽屉（都是「只改 URL」的元数据）
+    if !url_override.is_empty() && url_override.len() <= 2048 {
+        options_clean.insert("urlOverride".to_string(), Value::String(url_override));
+    }
+    if !options_clean.is_empty() {
+        extra.insert("options".to_string(), Value::Object(options_clean));
     }
     // 分组：新字段名 `group`（兼容旧客户端/旧数据的 `environment`），落库写新键
     let group = text(body, "group");

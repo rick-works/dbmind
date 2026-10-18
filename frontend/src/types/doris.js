@@ -1,10 +1,16 @@
-import { formParts } from './base'
+import { mysqlFamilyOptions } from './presets.js'
 
-/** Apache Doris 类型定义（MySQL 语法家族） */
+/**
+ * Apache Doris 类型定义（MySQL 协议，走 MySQL 驱动）
+ *
+ * 与 MySQL 的区别只在服务端：Doris 内部固定 UTF-8、不支持 CHARACTER SET/COLLATE，
+ * 也不认 MySQL 的 prepare/游标那套，所以选项里给的是两边都有的公共项。
+ */
 export default {
   code: 'DORIS',
   label: 'Apache Doris',
-  category: 'RELATIONAL',
+  // 列存分析引擎（MySQL 协议只是兼容层）：归 OLAP，不跟 MySQL 一起算关系型
+  category: 'OLAP',
   noSql: false,
   schemaLevel: 'none',
   defaultSchema: '',
@@ -12,12 +18,13 @@ export default {
   logo: 'Doris.svg',
   fileType: false,
   defaultPort: 9030,
-  buildJdbcUrl(f) {
-    const { host, port, db, charset, ct, st } = formParts(f)
-    if (!host) return ''
-    const p = port || 9030
-    return `jdbc:mysql://${host}:${p}/${db}?useUnicode=true&characterEncoding=${charset}&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=${ct}&socketTimeout=${st}&rewriteBatchedStatements=true&useCursorFetch=true`
-  },
+  databasePh: 'cd.dbPhOptional',
+  // 与 MySQL 同一条模板（同一个驱动）：默认值见 mysql.js 的注释
+  urlTemplate: 'jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true',
+  options: mysqlFamilyOptions(),
+  // 表单里已删掉的选项：老连接里的残留值在回显时丢掉（默认值已在模板里）
+  dropParams: ['useSSL', 'characterEncoding', 'serverTimezone', 'allowPublicKeyRetrieval',
+    'rewriteBatchedStatements', 'zeroDateTimeBehavior', 'allowMultiQueries'],
   createDatabaseSql(name) {
     // Doris 不支持 CHARACTER SET / COLLATE 子句（内部固定 UTF-8）
     const n = String(name ?? '').trim().replace(/`/g, '``')

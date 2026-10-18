@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.34": [
+        "The new/edit connection form is now consistent: required fields carry an asterisk, optional ones say \"Optional\" right inside the input",
+        "Connection timeout defaults to 10s and read timeout to unlimited on every database, with shorter, unified field hints",
+        "Oracle: \"Connect type\" now sits above the service field, defaults to service name, and the field title follows the choice (Service name / SID); the noisy required placeholder is gone",
+        "SQL Server: the instance-name field is removed — use host plus the port the named instance actually listens on",
+        "Cleaner JDBC URLs when the database is empty: no trailing slash for MySQL / Doris / ClickHouse, kept for PostgreSQL / Kingbase (required by the driver)"
+    ],
     "v1.2.33": [
         "User management rebuilt as two tabs: Users and Roles. Roles can be created and dropped, and granted privileges directly as the subject; databases without roles (or versions that predate them, such as SQL Server, SQLite or MySQL 5.7) show only the Users tab",
         "Role privileges now read back for real: MariaDB roles are read via SHOW GRANTS (the information_schema views do not list roles), PostgreSQL / KingbaseES privilege and role-membership data is decoded from the ACLs and pg_auth_members (visible and revocable), and opening a MySQL role as name@host no longer fails with \"user not found\"",

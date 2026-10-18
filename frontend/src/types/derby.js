@@ -1,6 +1,9 @@
-import { formParts } from './base'
-
-/** Apache Derby 类型定义（本地文件型） */
+/**
+ * Apache Derby 类型定义（本地文件型）
+ *
+ * 与 plugins/connection-types/derby.yaml 一致：`jdbc:derby:{filePath};create=true`
+ * （Derby 的 filePath 是**数据库目录**，不是单个文件；连接时 create=true 自动建库）
+ */
 export default {
   code: 'DERBY',
   label: 'Apache Derby',
@@ -13,10 +16,8 @@ export default {
   fileType: true,
   defaultPort: 1527,
   fileHint: 'tdef.derbyFileHint',
-  buildJdbcUrl(f) {
-    const { file } = formParts(f)
-    return file ? `jdbc:derby:${file};create=true` : 'jdbc:derby:memory:上游;create=true'
-  },
+  urlTemplate: 'jdbc:derby:{filePath};create=true',
+  propStyle: 'semicolon',
   // Derby 连接时自动建库（;create=true），无需 SQL 层 CREATE DATABASE
   createDatabaseSql() {
     return ''

@@ -267,6 +267,8 @@ fn nosql_module(module: &str) -> Router<AppState> {
     // NoSQL 类型没有 catalog 层级：返回空清单（前端展开连接时统一会请求一次，
     // 404 会被当成异常打进控制台 —— 空数组才是「没有这一层」的正确表达）
     .route(&p("/{id}/catalogs"), get(|| async { Json(json!([])) }))
+        // 前端展开连接时统一请求 features；缺这条就是每次一条 404
+        .route(&p("/{id}/features"), get(nosql::features))
         .route(&p("/{id}/databases"), get(nosql::databases))
         .route(&p("/{id}/collections"), get(nosql::collections))
         .route(&p("/{id}/documents"), get(nosql::documents))

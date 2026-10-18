@@ -42,7 +42,7 @@ use crate::api::dialect::{Dialect, Meta};
 use crate::api::meta::pick_ddl;
 use crate::api::error::{XError, XResult};
 use crate::api::export::{ddl_of, sql_literal};
-use crate::api::meta::{run_sql_in, run_sql_in_background};
+use crate::api::meta::{rows_of, run_sql_in, run_sql_in_background};
 use crate::api::tasks::{self, Artifact, Task};
 use crate::api::{blocking, require_record, Params};
 use crate::AppState;
@@ -1260,16 +1260,45 @@ async fn builtin_backup(
     crate::api::driver::ensure_for_connection(state, &target).await?;
     let engine = state.engine();
     let found = blocking(move || engine.list_tables_fresh(&target)).await?;
-    let all_tables: Vec<String> = found
+    let mut all_tables: Vec<String> = found
         .iter()
         .filter(|table| table.kind == TableKind::Table)
         .map(|table| table.name.clone())
         .collect();
-    let all_views: Vec<String> = found
+    let mut all_views: Vec<String> = found
         .iter()
         .filter(|table| table.kind == TableKind::View)
         .map(|table| table.name.clone())
         .collect();
+    // Oracle / DM 特例：内核的 `getTables` 不按 schema 过滤，会把 SYS 的字典表/视图
+    // （AQ$_INTERNET_AGENTS、MVIEW_EVALUATIONS …）一起带出来；而建表/建视图语句是按
+    // **当前 schema** 取的，于是备份碰到第一个这种对象就 ORA-31603 整体失败（真机实测）。
+    // 按当前用户的清单收窄 —— 备份的本来就该是当前用户的对象。
+    if matches!(record.kind().key(), "oracle" | "dm") {
+        let mut dropped = 0usize;
+        // 别名加双引号：Oracle 默认把列名报成大写 TABLE_NAME，用小写键取会拿不到 ⇒ 过滤失效
+        for (sql, key, list) in [
+            ("select table_name as \"table_name\" from user_tables", "table_name", &mut all_tables),
+            ("select view_name as \"view_name\" from user_views", "view_name", &mut all_views),
+        ] {
+            if let Ok(result) = run_sql_in(state, conn, database, sql.to_string(), 100_000).await {
+                // 注意：**空清单也要照样过滤**（当前用户一个视图都没有是正常的，
+                // 此时 all_views 里剩下的全是别家的，必须清空）。只有查询失败才不动。
+                let owned: std::collections::HashSet<String> = rows_of(&result)
+                    .iter()
+                    .filter_map(|row| row.get(key).and_then(Value::as_str).map(str::to_string))
+                    .collect();
+                let before = list.len();
+                list.retain(|name| owned.contains(name));
+                dropped += before - list.len();
+            }
+        }
+        if dropped > 0 {
+            notices.push(format!(
+                "已跳过 {dropped} 个不属于当前用户的对象（Oracle 的 SYS 字典表/视图）"
+            ));
+        }
+    }
     let tables: Vec<String> = if body.tables.is_empty() { all_tables } else { body.tables.clone() };
     let views: Vec<String> = if body.views.is_empty() { all_views } else { body.views.clone() };
 

@@ -126,7 +126,7 @@
           "org.postgresql:postgresql:42.7.4"
         ],
         "driverClass": "org.postgresql.Driver",
-        "urlTemplate": "jdbc:postgresql://{host}:{port}/{database}"
+        "urlTemplate": "jdbc:postgresql://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
       },
       "key": "postgresql",
       "label": "PostgreSQL",
@@ -176,7 +176,7 @@
           "com.mysql:mysql-connector-j:9.1.0"
         ],
         "driverClass": "com.mysql.cj.jdbc.Driver",
-        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true"
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
       },
       "key": "mysql",
       "label": "MySQL",
@@ -226,7 +226,7 @@
           "org.mariadb.jdbc:mariadb-java-client:3.5.1"
         ],
         "driverClass": "org.mariadb.jdbc.Driver",
-        "urlTemplate": "jdbc:mariadb://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true"
+        "urlTemplate": "jdbc:mariadb://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
       },
       "key": "mariadb",
       "label": "MariaDB",
@@ -276,7 +276,7 @@
           "com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11"
         ],
         "driverClass": "com.microsoft.sqlserver.jdbc.SQLServerDriver",
-        "urlTemplate": "jdbc:sqlserver://{host}:{port};databaseName={database};encrypt=false;trustServerCertificate=true;loginTimeout=10"
+        "urlTemplate": "jdbc:sqlserver://{host}:{port};databaseName={database};encrypt=false;trustServerCertificate=true;loginTimeout=10;allowMultiQueries=true"
       },
       "key": "sqlserver",
       "label": "SQL Server",
@@ -427,7 +427,7 @@
           "com.ibm.db2:jcc:12.1.2.0"
         ],
         "driverClass": "com.ibm.db2.jcc.DB2Driver",
-        "urlTemplate": "jdbc:db2://{host}:{port}/{database}"
+        "urlTemplate": "jdbc:db2://{host}:{port}/{database}:retrieveMessagesFromServerOnGetMessage=true;"
       },
       "key": "db2",
       "label": "IBM Db2",
@@ -527,7 +527,7 @@
           "cn.com.kingbase:kingbase8:9.0.0"
         ],
         "driverClass": "com.kingbase8.Driver",
-        "urlTemplate": "jdbc:kingbase8://{host}:{port}/{database}"
+        "urlTemplate": "jdbc:kingbase8://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
       },
       "key": "kingbase",
       "label": "人大金仓 KingbaseES",
@@ -577,7 +577,7 @@
           "mysql:mysql-connector-java:8.0.28"
         ],
         "driverClass": "com.mysql.cj.jdbc.Driver",
-        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true"
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
       },
       "key": "doris",
       "label": "Apache Doris",

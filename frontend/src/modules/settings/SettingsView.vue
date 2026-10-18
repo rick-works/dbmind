@@ -186,12 +186,14 @@
               <el-switch v-model="safetyForm.aiWriteEnabled" />
               <div class="form-tip">{{ $t('settings.safety.aiWriteTip') }}</div>
             </el-form-item>
-            <!-- 安全确认（DELETE/DROP/TRUNCATE 前二次确认）：从「查询」页签迁来 —— 它是安全属性。
-                 状态仍在 queryForm（localStorage dbmind_query），改动即时持久化 -->
+            <!-- 安全确认（写语句执行前二次确认）：从「查询」页签迁来 —— 它是安全属性。
+                 状态仍在 queryForm（localStorage dbmind_query），改动即时持久化。
+                 文案要点名**全部写语句**（不只是 DELETE/DROP），并说清弹窗内容口径 -->
             <el-form-item :label="$t('settings.query.confirmDanger')">
               <el-checkbox v-model="queryForm.confirmDanger">
                 {{ $t('settings.query.confirmDangerLabel') }}
               </el-checkbox>
+              <div class="form-tip">{{ $t('settings.query.confirmDangerTip') }}</div>
             </el-form-item>
             <el-form-item :label="$t('settings.safety.maxSessions')">
               <!-- 数字输入不进词典：任何语言下都是同一个数字 -->
@@ -1923,6 +1925,7 @@ const driverGroups = computed(() => {
   const bucket = (name, cat) => ({ name, items: driverRows.value.filter((r) => r.category === cat) })
   return [
     bucket(t('settings.driver.catRelational'), 'RELATIONAL'),
+    bucket(t('settings.driver.catOlap'), 'OLAP'),
     bucket(t('settings.driver.catFile'), 'RELATIONAL_FILE'),
     bucket(t('settings.driver.catNoSql'), 'NOSQL')
   ].filter((g) => g.items.length)

@@ -13,21 +13,6 @@
       <el-input v-model="keyword" clearable
                 :prefix-icon="Search" class="ds-search" />
 
-      <!-- 最近使用：连接成功过的才进这个列表，最多 5 条；
-           点一条直接打开它的编辑表单。id 失效的（连接被删）自动跳过。 -->
-      <div v-if="recents.length" class="ds-recent">
-        <div class="ds-recent-title">{{ $t('dsp.recent') }}</div>
-        <div class="ds-recent-list">
-          <div v-for="c in recents" :key="c.id" class="ds-recent-item"
-               :title="c.note || c.name" @click="openRecent(c)">
-            <DbLogo :type="c.type" :size="18" />
-            <span class="ds-recent-name">{{ c.name }}</span>
-            <span v-if="c.note" class="ds-recent-note">{{ c.note }}</span>
-            <span v-else class="ds-recent-note">{{ c.host }}{{ c.port ? ':' + c.port : '' }}</span>
-          </div>
-        </div>
-      </div>
-
       <div v-for="group in filteredGroups" :key="group.name" class="ds-group">
         <div class="ds-group-title">
           <el-icon :size="15"><component :is="group.icon" /></el-icon>
@@ -93,17 +78,16 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { saveBlobAs } from '../utils/useExportTask'
-import { Search, Coin, Document, Box, CirclePlus, Upload, Download } from '@element-plus/icons-vue'
+import { Search, Coin, Document, Box, CirclePlus, Upload, Download, DataAnalysis } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { getDriverTypes, getDriverStatus, listConnections, saveConnection, deleteConnection, testConnectionById } from '../api'
 import DbLogo from './DbLogo.vue'
-import { rankRecentConnections } from '../utils/recentConnections'
 import { t } from '../utils/i18n'
 
 const props = defineProps({
   modelValue: Boolean
 })
-const emit = defineEmits(['update:modelValue', 'selected', 'imported', 'open-conn'])
+const emit = defineEmits(['update:modelValue', 'selected', 'imported'])
 
 const types = ref([])
 const status = ref({})
@@ -122,8 +106,15 @@ onMounted(async () => {
 
 const isReady = (code) => status.value[code]?.ready === true
 
+// OLAP（ClickHouse / Doris）单独成组：它们也走 JDBC、也用 SQL，但是列存分析引擎
+// （无事务、无外键、无二级索引），跟 MySQL 那类关系型库不是一回事。
+// 旧内核不给 category='OLAP'，就按 code 兜底认出来。
+const OLAP_CODES = ['CLICKHOUSE', 'DORIS']
+const isOlap = (x) => x.category === 'OLAP' || OLAP_CODES.includes(String(x.code || '').toUpperCase())
+
 const groups = computed(() => [
-  { name: t('settings.driver.catRelational'), icon: Coin, items: types.value.filter(t => t.category === 'RELATIONAL') },
+  { name: t('settings.driver.catRelational'), icon: Coin, items: types.value.filter(t => t.category === 'RELATIONAL' && !isOlap(t)) },
+  { name: t('settings.driver.catOlap'), icon: DataAnalysis, items: types.value.filter(isOlap) },
   { name: t('settings.driver.catFile'), icon: Document, items: types.value.filter(t => t.category === 'RELATIONAL_FILE') },
   { name: t('settings.driver.catNoSql'), icon: Box, items: types.value.filter(t => t.category === 'NOSQL') }
 ].filter(g => g.items.length))
@@ -276,15 +267,6 @@ const onFilePicked = async (e) => {
   }
 }
 
-// ========== 最近使用（选择器顶部置顶） ==========
-// 只记 id 顺序（见 utils/recentConnections）：连接改名/改地址后不会显示过期信息，
-// 被删掉的 id 自动跳过。
-const recents = computed(() => rankRecentConnections(allConns.value))
-const openRecent = (c) => {
-  emit('open-conn', c.id)
-  emit('update:modelValue', false)
-}
-
 // ========== 批量管理：测试 / 导出 / 删除 ==========
 const batchTesting = ref(false)
 const batchDeleting = ref(false)
@@ -364,22 +346,6 @@ const deleteSelected = async () => {
   margin-top: 10px; padding: 8px 10px; border-radius: 8px; max-height: 22vh; overflow: auto;
   background: var(--dc-bg-deep); color: var(--dc-text-dim);
   font-size: 12px; line-height: 1.6; white-space: pre-wrap;
-}
-/* 最近使用 */
-.ds-recent { margin-bottom: 16px; }
-.ds-recent-title { font-size: 13px; color: var(--dc-text-dim); margin-bottom: 6px; }
-.ds-recent-list { display: flex; flex-wrap: wrap; gap: 8px; }
-.ds-recent-item {
-  display: flex; align-items: center; gap: 6px; max-width: 280px;
-  padding: 5px 10px; border-radius: 8px; cursor: pointer;
-  background: var(--dc-bg-deep); border: 1px solid var(--dc-bg-hover);
-  transition: border-color .15s;
-}
-.ds-recent-item:hover { border-color: var(--el-color-primary); }
-.ds-recent-name { font-size: 13px; color: var(--dc-text); white-space: nowrap; }
-.ds-recent-note {
-  font-size: 12px; color: var(--dc-text-dim);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .dlg-title { display: flex; align-items: center; gap: 8px; }
 .dlg-title-ic {

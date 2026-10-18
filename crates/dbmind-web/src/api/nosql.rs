@@ -23,6 +23,25 @@ use crate::AppState;
 /// 测试连接：与关系型共用同一套实现（上游的 NoSQL 模块也有 `/test`）。
 pub use crate::api::meta::test;
 
+/// `GET /api/{module}/{id}/features` —— NoSQL 的能力描述。
+///
+/// 前端展开连接时会**统一**请求一次 features（关系型那边返回完整能力矩阵），
+/// 而 NoSQL 原先没有这个路由 ⇒ 每次点开连接都在控制台留一条 404。
+/// 这里只补两个**确定的结论**：有「库」这一层、没有 schema 层；
+/// 其余字段一律不给 —— 前端 `featureOf` 对缺失字段按「支持」处理，
+/// 与补路由之前的行为完全一致，不会误藏已有功能。
+pub async fn features(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> XResult<Json<Value>> {
+    let record = require_record(&state, &id).await?;
+    Ok(Json(json!({
+        "type": record.kind().key().to_ascii_uppercase(),
+        "supportsDatabases": true,
+        "supportsSchemas": false,
+    })))
+}
+
 const DEFAULT_PAGE_SIZE: usize = 100;
 
 /// 「库」清单。

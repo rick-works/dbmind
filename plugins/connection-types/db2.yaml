@@ -17,7 +17,8 @@ localFile: false
 defaultPort: 50000
 jdbc:
   driverClass: com.ibm.db2.jcc.DB2Driver
-  urlTemplate: "jdbc:db2://{host}:{port}/{database}"
+  # 服务端原文报错（含 SQLCODE 说明）固定打开，排查快很多；表单不再暴露这一项
+  urlTemplate: "jdbc:db2://{host}:{port}/{database}:retrieveMessagesFromServerOnGetMessage=true;"
   artifact: com.ibm.db2:jcc:12.1.2.0
 traits:
   singleDatabase: false

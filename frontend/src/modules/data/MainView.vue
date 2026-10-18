@@ -63,15 +63,16 @@
               </div>
             </div>
           </span>
-          <!-- 刷新整站：location.reload()。界面上偶尔有"该刷新的地方没刷新"的漏网之鱼
-               （连接改了只读、设置改了……），用户不必去按 F5，右上角点一下整站重来 -->
+          <!-- 刷新：location.reload()。界面上偶尔有"该刷新的地方没刷新"的漏网之鱼
+               （连接改了只读、设置改了……），用户不必去按 F5，右上角点一下重来。
+               提示文案就是「刷新」两个字（用户要求去掉"整站"这类解释性说法）。 -->
           <el-tooltip :content="$t('nav.reloadApp')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="reloadApp"><el-icon><Refresh /></el-icon></span></el-tooltip>
 
           <el-tooltip :content="themeTip" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': themeMode !== 'system' }" @click="cycleTheme"><el-icon><component :is="themeIcon" /></el-icon></span></el-tooltip>
           <el-tooltip :content="langTip" placement="bottom"><span class="top-nav-item top-icon-btn top-lang-btn" @click="toggleLocale">{{ localeShort }}</span></el-tooltip>
 
           <!-- 检查更新：比对 GitHub 最新 Release，有新版可在线下载安装。
-               图标用 Upload（向上箭头 = 升级）——Refresh 让给左侧的「刷新整站」了 -->
+               图标用 Upload（向上箭头 = 升级）——Refresh 让给左侧的「刷新」了 -->
           <el-tooltip :content="dlStatus === 'running' ? $t('update.dlShowProgress') : $t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn"
                      data-act="check-update"
                      :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon><Upload /></el-icon></span></el-tooltip>
@@ -388,7 +389,6 @@
             <div class="empty-block">
               <div class="empty-dss-head">
                 <span>{{ $t('empty.mcpTitle') }}</span>
-                <span class="mcp-inline">{{ $t('empty.mcpHint') }}</span>
                 <button class="mcp-go" @click="openSettings('mcp')">{{ $t('empty.mcpGoSettings') }} →</button>
               </div>
               <div class="mcp-code">
@@ -473,7 +473,7 @@
               </span>
             </template>
             <TableDataView v-if="tab.type === 'table'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :table="tab.table" :readOnly="tab.readOnly" @update-table-rows="onUpdateTableRows" @open-query="onOpenQueryFromTable" />
-            <SqlQueryView v-else-if="tab.type === 'sql'" :ref="el => setSqlRef(tab.id, el)" :conn="conn" :database="currentDb" :script-name="tab.scriptName" :tab-conn-id="tab.connId" :tab-database="tab.database" :initial-sql="tab.initialSql" :auto-run="tab.autoRun" :sql-loading="!!tab.sqlLoading" @save="onScriptSave(tab.id, $event)" @dirty-change="onScriptDirty(tab.id, $event)" @sql-change="onScriptSqlChange(tab.id, $event)" @conn-change="onEditorConnChange" @db-change="onEditorDbChange" />
+            <SqlQueryView v-else-if="tab.type === 'sql'" :ref="el => setSqlRef(tab.id, el)" :conn="conn" :database="currentDb" :script-name="tab.scriptName" :tab-conn-id="tab.connId" :tab-conn-name="tab.connName" :tab-database="tab.database" :initial-sql="tab.initialSql" :auto-run="tab.autoRun" :sql-loading="!!tab.sqlLoading" @save="onScriptSave(tab.id, $event)" @dirty-change="onScriptDirty(tab.id, $event)" @sql-change="onScriptSqlChange(tab.id, $event)" @conn-change="onEditorConnChange(tab.id, $event)" @conn-rebind="onScriptConnRebind(tab.id, $event)" @db-change="onEditorDbChange" />
             <ErDiagramView v-else-if="tab.type === 'er'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :conn-id="tab.connId" />
 
             <TableDetailView v-else-if="tab.type === 'detail'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :table="tab.table" @deleted="onDetailDeleted" />
@@ -747,8 +747,7 @@
 
     <!-- 新建数据源：类型选择器（顶部还有「导入/导出连接配置」入口；
          导入完成后走 onConnSaved 同一条刷新链路：重载连接 + 重建左侧树） -->
-    <DataSourcePicker v-model="dsPickerVisible" @selected="onDsSelected" @imported="onConnSaved"
-                      @open-conn="onRecentConn" />
+    <DataSourcePicker v-model="dsPickerVisible" @selected="onDsSelected" @imported="onConnSaved" />
 
     <!-- 新建/编辑连接 -->
     <ConnectionDialog v-model="connDialogVisible" :conn="editingConn" :custom-folders="customFolders" :initial-group="connDialogInitialEnv" :focus="connDialogFocus" :initial-type="connDialogInitialType" @saved="onConnSaved" @folder-added="refreshFolders" />
@@ -879,6 +878,11 @@
         </li>
         <li class="ctx-item" @click="dbCtxNewQuery()">
           <el-icon><Document /></el-icon>{{ $t('tree.menu.newQuery') }}
+        </li>
+        <!-- 模式根目录（PG / SQL Server / Kingbase 的库节点）：在这里「新建」= 新建模式。
+             其它类型没有独立的模式层（MySQL 的库就是模式、Oracle 的模式就是用户），一律不摆。 -->
+        <li v-if="canNewSchema" class="ctx-item" @click="dbCtxNewSchema()">
+          <el-icon><Plus /></el-icon>{{ $t('tree.menu.newSchema') }}
         </li>
         <li class="divider" />
         <template v-if="!isNoSqlConn(treeCtxMenu.data?.connId)">
@@ -1177,6 +1181,14 @@ import { errMsg } from '../../utils/errMsg'
 import { PREDEF_ENVS, ENV_ORDER_BASE, envLabel, envColor, envShort, envTitle } from '../../utils/envs'
 import { desktopShell } from '../../utils/desktopShell'
 import { readSchemaCache, writeSchemaCache, removeSchemaCache, invalidateSchemaCache } from '../../utils/schemaCache'
+import { rememberConnNames, connNameOf } from '../../utils/connNames'
+import { connErrorRaw } from '../../utils/connErrors'
+/**
+ * 模式清单的持久缓存键（与 `dbs:` / `tables:` 同一套 stale-while-revalidate 机制）。
+ * 定义在顶部：预热（`prewarmRecentConnections` / `warmUpBeforeFirstClick`）与
+ * 展开连接（`dbOrSchemaNodes`）都写这份键，**键的构成必须只有这一处**，改了两边就对不上。
+ */
+const schemaCacheKeyOf = (connId, database) => 'schemas:' + connId + ':' + database
 import { parseMySqlGrants, parseSqlServerPerms } from '../../utils/grants'
 import { getEditorSettings } from '../../utils/settings'
 import { topMenuVisible } from '../../utils/topMenu'
@@ -1580,7 +1592,7 @@ const showReadyDialog = (p) => {
   dlError.value = ''
 }
 
-// 刷新整站：location.reload()（右上角第一个图标）—— 界面有"该刷新没刷新"的漏网之鱼时的兜底
+// 刷新：location.reload()（右上角第一个图标）—— 界面有"该刷新没刷新"的漏网之鱼时的兜底
 const reloadApp = () => location.reload()
 
 const checkUpdate = async () => {
@@ -1765,6 +1777,17 @@ const dsPickerEnv = ref('')
 // 当前选中的连接 ID（与 conn.value.id 保持一致，独立出来便于树构建）
 const currentConnId = ref(null)
 const currentDb = ref('')
+/**
+ * 同时打开的库 / 模式（可以有多个）。
+ *
+ * 原先「打开」只由 `currentDb` 这一个值表达 —— 打开 B 就等于把 A 关掉：A 的图标变暗、
+ * 名字不再高亮，树上一眼看去就像被关上了（其实它下面还展开着）。
+ * 用户要的是「库 / 模式可以并开」：开一个不影响之前开的那些，只有明确关闭才关。
+ *
+ * 与 `currentDb` 的分工：`currentDb` 仍然只表示「最近一次点开的那一个」
+ * （SQL 上下文、表名补全、行数回填认的仍是它），这里只负责树上的「已打开」状态。
+ */
+const openedDbs = ref(new Set())
 const treeData = ref([])
 const treeRef = ref(null)
 const treeLoading = ref(false)
@@ -1780,6 +1803,10 @@ const openTab = (tab) => {
   // 页签自带连接：没显式给就跟上「打开时的当前连接」，
   // 这样之后切到别的连接，这个页签依旧指向自己的数据源
   if (tab.connId == null && currentConnId.value) tab.connId = String(currentConnId.value)
+  // 页签同时记下连接名：连接被删除后重新导入会换 id，靠名字还能把页签接回去
+  if (tab.connId != null && !tab.connName) {
+    tab.connName = (allConnections.value.find(x => String(x.id) === String(tab.connId)) || {}).name || ''
+  }
   if (!tabs.value.find(t => t.id === tab.id)) tabs.value.push(tab)
   activeTab.value = tab.id
   // 常驻页签（AI 助手 / 知识库）：记住「处于打开状态」与位置
@@ -2525,6 +2552,37 @@ const nodeOwnDb = (data) => {
   if (data.kind === 'schema' && data.schema) return String(data.realDb || '') + '.' + String(data.schema)
   return String(data.db || '')
 }
+// 「已打开」名单的 key：连接 + 节点自己的库名 —— 跨连接的同名库互不影响
+const dbOpenKey = (connId, db) => String(connId || '') + '\u0000' + String(db || '')
+/** 把一个库 / 模式标成"已打开"：只加自己，**不动别的库，也不动 currentDb**。 */
+const markDbOpen = (data) => {
+  const db = nodeOwnDb(data)
+  if (!db) return
+  const key = dbOpenKey(data.connId || currentConnId.value, db)
+  if (openedDbs.value.has(key)) return
+  const next = new Set(openedDbs.value)
+  next.add(key)
+  openedDbs.value = next
+}
+/**
+ * 关掉一个库 / 模式。
+ * 关**库**时连它下面的模式（`库.模式`）一起清掉：否则下次展开这个库，
+ * 里面的模式会自己亮着 —— 看着就像"关了没关干净"。
+ */
+const markDbClosed = (data) => {
+  const db = nodeOwnDb(data)
+  if (!db) return
+  const key = dbOpenKey(data.connId || currentConnId.value, db)
+  const next = new Set()
+  let changed = false
+  openedDbs.value.forEach((k) => {
+    const isSelf = k === key
+    const isChild = data.kind === 'db' && k.startsWith(key + '.')
+    if (isSelf || isChild) { changed = true; return }
+    next.add(k)
+  })
+  if (changed) openedDbs.value = next
+}
 
 // 表右键菜单状态（subKey: 'sql-tpl' | 'export' | null，控制二级子菜单）
 const ctxMenu = ref({ show: false, x: 0, y: 0, subKey: null, data: null })
@@ -2680,6 +2738,8 @@ const loadAllConnections = async () => {
   treeLoading.value = true
   try {
     allConnections.value = await listConnections()
+    // id→名字 留档：连接重新导入后 id 会变，页签快照靠这份记录按名字找回原连接
+    rememberConnNames(allConnections.value)
     // 连接列表一到手就在后台预热（见 prewarmRecentConnections）。稍等一下再开始，
     // 让首屏那一波请求先过去，别和启动抢资源。
     setTimeout(() => { prewarmRecentConnections() }, 500)
@@ -2725,7 +2785,12 @@ const prewarmRecentConnections = async () => {
         // 这种类型树上没有「库」这一层（见 types 里的 hideDbLevel）：只热身模式清单。
         // 少建一条会话很重要 —— 每条会话都要真连一次库（实测 Oracle 建连 2.4 秒），
         // 而多出来的那条「库会话」界面根本用不到，却会跟用户点开时抢同一条链路。
-        await listSchemas(cid, conn.database || '')
+        const dbName = String(conn.database || '')
+        const schemas = await listSchemas(cid, dbName)
+        // 顺手进持久缓存（键的构成与 dbOrSchemaNodes 里必须一致）
+        if (dbName && Array.isArray(schemas) && schemas.length) {
+          writeSchemaCache(schemaCacheKeyOf(cid, dbName), schemas)
+        }
       } else {
         await listDatabases(cid)
         if (schemaLevelOf(conn.type) === 'schema') await listSchemas(cid, conn.database || '')
@@ -2792,6 +2857,24 @@ const warmUpBeforeFirstClick = async () => {
     if (!target) return
     if (isNoSqlType(target.type)) {
       await noSqlDatabases(target.id)
+      return
+    }
+    // Oracle / DM：树上的「库」层是**隐含前缀**，而它们的 `/databases` 根本不建连
+    //（服务名是连接配置里推导出来的，实测 6ms 返回 —— 哪怕库已经连不上）。
+    // 所以对这类类型，预热必须直接打它展开时真正要打的那个接口：**模式清单**。
+    // 不这么改的话，启动时的预热对 Oracle 完全是空转，用户第一次点开仍然要付
+    // 「Java 宿主冷启 + Oracle 建连 ~2.4 秒」，这就是"只有 Oracle 慢"的由来。
+    if (hideDbLevelOf(target.type)) {
+      const dbs = await listDatabases(target.id)
+      const arr = (Array.isArray(dbs) ? dbs : []).filter((d) => String(d) !== NO_DEFAULT_DB)
+      const db = arr[0] || String(target.database || '')
+      if (db) {
+        try {
+          const schemas = await listSchemas(target.id, db)
+          // 顺手进持久缓存：下次（含重启桌面版）展开就是现成的
+          if (Array.isArray(schemas) && schemas.length) writeSchemaCache(schemaCacheKeyOf(target.id, db), schemas)
+        } catch { /* 预热失败无所谓：用户点开时照常按真实路径加载 */ }
+      }
       return
     }
     // 用**本次返回**的库列表挑目标，而不是 dbsByConn：那是 lazyLoad 才会写的缓存，
@@ -3009,18 +3092,6 @@ const onDsSelected = (type) => {
   dsPickerVisible.value = false
   openConnDialog(null, dsPickerEnv.value, type)
 }
-// 选择器顶部「最近使用」点一条：直接打开它的编辑表单（省得去树里翻）
-const onRecentConn = async (id) => {
-  dsPickerVisible.value = false
-  const target = allConnections.value.find(c => String(c.id) === String(id))
-  if (!target) {
-    ElMessage.warning(t('mv.connGone'))
-    await loadAllConnections()
-    return
-  }
-  openConnDialog(target, dsPickerEnv.value, target.type)
-}
-
 // ====== 树右键菜单操作 ======
 const treeCtxNewConn = (env) => { closeTreeCtxMenu(); openNewConn(env || customFolders.value[0] || '') }
 
@@ -3373,6 +3444,11 @@ const closeConnection = (connId) => {
   // 删除 dbsByConn 是必须的：否则 isConnOpen 仍为 true，图标不会变暗
   delete dbsByConn.value[sid]
   delete currentDbByConn.value[sid]
+  // 「已打开」名单里属于这个连接的库/模式一并清掉：连接关了，就没有"打开着的库"可言
+  const connPrefix = dbOpenKey(sid, '')
+  const keptDbs = new Set()
+  openedDbs.value.forEach((k) => { if (!k.startsWith(connPrefix)) keptDbs.add(k) })
+  if (keptDbs.size !== openedDbs.value.size) openedDbs.value = keptDbs
   // 清理错误标记，允许下次重新打开时正常提示
   connErrorSet.value.delete(sid)
   // 折叠树并清除子节点数据（下次展开会重新连接加载）
@@ -3526,6 +3602,8 @@ const openOneNode = async (data) => {
     if (connChanged) ensureDbConn(data)
     const dbChanged = data.db !== currentDb.value
     if (dbChanged) setCurrentDb(data.db)
+    // 多选「打开」= 真正展开这几个库（展开即登记为已打开，互不顶掉）
+    expandNode(data.id)
     if (connChanged || dbChanged) await refreshAllTables()
   } else if (data.kind === 'script') openScript(data)
   else if (['function', 'procedure', 'trigger', 'event'].includes(data.kind)) openObject(data, data.kind, data.label)
@@ -3782,15 +3860,31 @@ const selectConn = async (id) => {
 const onConnSaved = async (savedConn) => {
   connDialogVisible.value = false
   await loadAllConnections()
+  const editedId = editingConn.value ? String(editingConn.value.id) : ''
+  if (editedId) {
+    // 编辑可能改了主机/端口/账号/默认库 ⇒ 前端这份结构缓存和已展开的节点描述的都是**旧目标**。
+    // 不清掉的话，保存后看到的还是原来那套库和表，用户会以为"改了没生效"；
+    // 更糟的是他继续点开库/表，界面拿旧清单画出来，看起来"配置改错了也能连"（其实是谁都没去连）。
+    // 内核那边已经断掉旧会话，这里把节点置为"未加载"，下次展开就会按新配置真连一次。
+    invalidateSchemaCache(editedId)
+    delete dbsByConn.value[editedId]
+    const node = treeRef.value?.getNode('conn:' + editedId)
+    if (node) {
+      node.loaded = false
+      node.childNodes = []
+      if (node.expanded) node.collapse()
+    }
+  }
   // 立即重建左侧树，保证新建/编辑后的数据源无需刷新页面即可显示在树中
   await buildTree()
   // 广播给**自己拉连接列表**的页签（用户管理等）：它们不在 MainView 的 connFor 响应式链上，
   // 不广播的话「改只读/改分组」后那些页签还是旧对象 —— 横幅、拦截判定全是旧值（用户实测）
   try { window.dispatchEvent(new CustomEvent('dbmind-conns-changed')) } catch { /* 非浏览器环境忽略 */ }
   if (editingConn.value) {
-    // 编辑：若修改了当前连接，重新加载
-    if (conn.value && editingConn.value.id === conn.value.id) {
-      await selectConn(editingConn.value.id)
+    // 编辑：当前连接改过就重新校验一次 —— 配置填错现在会**当场报错**，
+    // 而不是继续用缓存会话"看起来还能用"（内核已在保存时丢弃旧会话）
+    if (conn.value && editedId === String(conn.value.id)) {
+      await selectConn(editedId)
     }
   } else {
     // 新建：展开新连接所在分组并自动选中，确保用户无需手动刷新/展开即可看到
@@ -3824,7 +3918,9 @@ const getDbScripts = (connId, db) => {
 // 连接失败统一弹窗（selectConn 校验失败 / 树连接节点懒加载失败共用，避免 selectConn 已弹过后重复打扰）
 // 与「无法加载」保持同一套关闭方式：右上角 X + 「知道了」
 const showConnFail = (msg) => {
-  ElMessageBox.alert(String(msg || t('mv.connFailedCheck')), t('mv.connFailedTitle'), {
+  // 与「测试连接」同一套口径：只留数据库原话（剥掉 `连接失败：`、错误码等包装）
+  const text = connErrorRaw(msg) || String(msg || t('mv.connFailedCheck'))
+  ElMessageBox.alert(text, t('mv.connFailedTitle'), {
     type: 'error',
     showClose: true,
     showConfirmButton: true,
@@ -3838,8 +3934,8 @@ const showConnFail = (msg) => {
 // 屏幕居中的错误弹窗（树节点懒加载的权限/连接错误等）
 // 必须留出关闭方式：右上角 X + 「知道了」按钮，点遮罩 / 按 ESC 也能关，
 // 否则弹出来就只能卡在那里（曾经是 showClose + showConfirmButton 都为 false）
-const showErrorModal = (msg) => {
-  ElMessageBox.alert(String(msg || t('mv.actionFailed')), t('mv.loadFailedTitle'), {
+const showErrorModal = (msg, title) => {
+  ElMessageBox.alert(String(msg || t('mv.actionFailed')), title || t('mv.loadFailedTitle'), {
     type: 'error',
     showClose: true,
     showConfirmButton: true,
@@ -4451,7 +4547,7 @@ const dbListToDbNodes = (connId, connType, dbList, catalog) => {
  * 下游请求与"展开了库层"时完全一致。
  *
  * **读不到模式清单时不退回库层**（连不上 / 权限不足）：那一层的节点就是服务名，
- * 画出来像"库在这儿、只是没展开"，点开却是空的。改为一行说明（`mv.noSchemaList`）。
+ * 画出来像"库在这儿、只是没展开"，点开却是空的。改为弹窗说明原因（树里不留提示行）。
  */
 /** 模式节点（Oracle / DM 的「库」层就是这一排） */
 const schemaNodesOf = (connId, connType, database, schemas) => schemas.map((s) => ({
@@ -4469,40 +4565,66 @@ const schemaNodesOf = (connId, connType, database, schemas) => schemas.map((s) =
 /** 树里"没内容"的一行说明（**绝不返回 `[]`**，理由见 dbListToDbNodes 的空清单分支） */
 const metaHintNode = (id, connId, connType, label) => ({ id, kind: 'placeholder', connId, connType, label })
 
-/**
- * 模式清单**最多干等多久**（毫秒）。
- *
- * 为什么要有一条线：这类类型（Oracle / DM）的连接节点展开后，那一排模式就是用户眼里
- * 的「库」，所以要真建一次连才拿得到 —— 可达时 2~5 秒（宿主冷启动时更久），
- * 不可达时要等满一次建连超时（真机实测 >20 秒，期间节点只是一个转圈的箭头）。
- * 等不到就先给一行说明让节点**立刻展开**，请求继续在后台飞，回来了再回填
- * （`updateKeyChildren`，与 calibrateDatabases 同一套做法）。
- *
- * 取 2.5 秒：可达的库在这里**基本都能等完**（热态 200~400ms、冷态 2~5 秒），
- * 也就是说正常情况下用户看不到这行占位；只有真的慢/连不上才会露出来。
- */
-const SCHEMA_PATIENT_MS = 2500
 /** 后台那条请求的兜底超时：内核自己 30 秒会回 504，这里只防"永远不回来" */
 const SCHEMA_CALL_TIMEOUT_MS = 60000
 
-/** 慢路径的后台收尾：请求回来了就把连接节点的子节点换掉（成功换模式、失败换说明） */
-const fillSchemasLater = (connId, database, settled) => {
+/**
+ * 懒加载失败后的**节点复位**：收起 + 恢复成"未加载"。
+ *
+ * 为什么必须 `setTimeout(0)`：lazyLoad 拿到我们返回的 `[]` 之后才去调 el-tree 的
+ * `resolve()`，而 `resolve()` 会把节点置成「已展开 + 叶子」。复位动作要排在它后面，
+ * 否则就是用户截图里的那一幕 —— **打不开，箭头还亮着已展开、里面空空的**。
+ * 复位成「未加载」还顺带允许再点一次箭头重试（右键「刷新」也行）。
+ */
+const resetFailedNode = (nodeId) => {
+  setTimeout(() => {
+    const tree = treeRef.value
+    const node = tree && tree.getNode(nodeId)
+    if (!node) return
+    node.isLeaf = false
+    node.loaded = false
+    if (node.expanded) node.collapse()
+  }, 0)
+}
+
+/**
+ * 树里节点加载失败：**弹窗说原因，树里一行字都不留**（用户要求）。
+ * 同一个连接一次会话只弹一次（`connErrorSet`），免得重试时被同一个错误糊满屏。
+ */
+const reportTreeFail = (connId, err, fallback) => {
+  const sid = String(connId)
+  if (connErrorSet.value.has(sid)) return
+  connErrorSet.value.add(sid)
+  let msg = errMsg(err, fallback)
+  // 标题说实话：连接类（ORA-1x / 0800x / 连接失败…）报「连接失败」，其余报「无法加载」
+  const connLike = /连接失败|连接已断开|连不上|ORA-1[2-7]|08\d{3}|Communications link|Connection (refused|reset)|timed out|超时/i.test(msg)
+  const title = connLike ? t('mv.connFailedTitle') : t('mv.loadFailedTitle')
+  // 后端文案自己就以「连接失败：」开头（见 error.rs 的结论句）：标题已经写了，正文别再说一遍
+  const dup = /^(连接失败|Connection failed)\s*[：:]\s*/i.exec(msg)
+  if (connLike && dup) msg = msg.slice(dup[0].length)
+  showErrorModal(msg, title)
+}
+
+/**
+ * 模式清单的后台**校准**（只给"已经有缓存垫底"的那条路径用）：
+ * 成功就把树上的清单换成新的，失败**什么都不做** —— 屏上那份缓存清单还能用，
+ * 用户也没在等它（再弹一个窗只会打扰）。这是 dbs / tables 一致的 stale-while-revalidate。
+ */
+const calibrateSchemas = (connId, database, settled) => {
   settled.then((res) => {
+    if (!res.ok) return
     const tree = treeRef.value
     const node = tree && tree.getNode('conn:' + connId)
     // 节点没了 / 整棵树重建过（另一个对象）：没有可回填的地方，直接作罢
     if (!node || !node.data) return
-    const connType = node.data.connType
-    if (res.ok && Array.isArray(res.v) && res.v.length) {
-      clearUnreachable(connId)   // 连上了：撤掉预热那边的失败记录
-      const kids = schemaNodesOf(connId, connType, database, res.v)
-      node.data.children = kids
-      tree.updateKeyChildren(node.data.id, kids)
-      return
-    }
-    const hint = [metaHintNode('ph:' + connId + ':noschema', connId, connType, t('mv.noSchemaList'))]
-    node.data.children = hint
-    tree.updateKeyChildren(node.data.id, hint)
+    clearUnreachable(connId)   // 连上了：撤掉预热那边的失败记录
+    const kids = schemaNodesOf(connId, node.data.connType, database, res.v)
+    // 清单没变就不动树：整排节点重建会让展开状态/选中项闪一下
+    const cur = (node.data.children || []).map((c) => String(c.label))
+    if (cur.length === kids.length && cur.every((v, i) => v === kids[i].label)) return
+    node.data.children = kids
+    node.isLeaf = false
+    tree.updateKeyChildren(node.data.id, kids)
   })
 }
 
@@ -4511,31 +4633,36 @@ const dbOrSchemaNodes = async (connId, connType, dbList, catalog) => {
     const list = (Array.isArray(dbList) ? dbList : []).filter((db) => String(db) !== NO_DEFAULT_DB)
     if (list.length === 1) {
       const database = list[0]
-      // 请求照发，但**不干等**（见 SCHEMA_PATIENT_MS）：先 races 一下，超时就先占位。
-      // 用 settled 包住成败，慢路径上的 rejected 才不会被当成 unhandled rejection。
+      const key = schemaCacheKeyOf(connId, database)
+      // 请求照发（无论有没有缓存）：回来就落缓存（+ 校准树）
       const settled = listSchemas(connId, database, { timeout: SCHEMA_CALL_TIMEOUT_MS }).then(
-        (v) => ({ ok: true, v }),
-        () => ({ ok: false })
+        (v) => {
+          const arr = Array.isArray(v) ? v : []
+          if (arr.length) writeSchemaCache(key, arr)
+          return { ok: arr.length > 0, v: arr }
+        },
+        (e) => ({ ok: false, err: e })
       )
-      const first = await Promise.race([
-        settled,
-        new Promise((done) => setTimeout(() => done({ slow: true }), SCHEMA_PATIENT_MS))
-      ])
-      if (first.slow) {
-        fillSchemasLater(connId, database, settled)
-        return [metaHintNode('ph:' + connId + ':schemaloading', connId, connType, t('mv.schemaLoading'))]
+      // ① 持久缓存命中：**立刻**出模式清单。
+      //    这类类型（Oracle / DM）的「库」层是隐含前缀，连接节点展开后那一排模式就是要建
+      //    一次连才拿得到（Oracle 实测建连 2.4 秒、连不上要等满超时）—— 缓存让"点开"
+      //    不再每一次都付这笔钱（库/表清单早就这么做了，只有模式清单漏了）。
+      const hit = readSchemaCache(key)
+      if (hit && Array.isArray(hit.value) && hit.value.length) {
+        calibrateSchemas(connId, database, settled)
+        return schemaNodesOf(connId, connType, database, hit.value)
       }
+      // ② 没缓存：**照实等**（箭头转圈就是"正在读"，与展开连接等库清单一致）。
+      //    这一步以前也等，但失败时会在树里写一行「未取到模式清单…」—— 用户不要那行字，
+      //    现在改成：失败 → 弹窗 + 节点收起（见 resetFailedNode），树里保持干净。
+      const first = await settled
       if (first.ok && Array.isArray(first.v) && first.v.length) {
         clearUnreachable(connId)
         return schemaNodesOf(connId, connType, database, first.v)
       }
-      // 读不到模式清单时**不再退回「库」层**。
-      //
-      // 库层对这类类型是"隐含前缀"，画出来的那个节点就是服务名（FREE）—— 而它下面
-      // 什么也加载不出来（列模式刚失败过）。用户的判断很直接：网络不通时树上还挂着一个
-      // 服务名节点，看着像"库在这儿、只是没展开"，点开又是空的（真机反馈）。
-      // 同一件事的正确说法只有一句：没连上，取不到模式清单。
-      return [metaHintNode('ph:' + connId + ':noschema', connId, connType, t('mv.noSchemaList'))]
+      reportTreeFail(connId, first.err, t('mv.schemaListFailed'))
+      resetFailedNode('conn:' + connId)
+      return []
     }
   }
   return await dbListToDbNodes(connId, connType, dbList, catalog)
@@ -4812,16 +4939,9 @@ const lazyLoadRaw = async (node, resolve) => {
         const alreadyReported = connErrorSet.value.has(sid)
         connErrorSet.value.add(sid)
         if (!alreadyReported) showConnFail(errMsg(e, t('mv.connFailedCheck')))
-        // 失败时不再"先收起、再 resolve([])"：`resolve` 本身会让 el-tree 展开这个节点，
-        // 于是先 collapse 再 resolve 的结果是**一个展开着的空节点** ——
-        // 用户说的"显示展开了但没东西，其实有东西"就是这么来的（服务器上明明有库）。
-        // 改成直接 resolve 一行**说明**：节点该展开就展开，但里面写清为什么没有内容。
-        const hint = {
-          id: 'ph:' + data.id + ':failload', kind: 'placeholder',
-          connId: data.connId, connType: data.connType,
-          label: t('mv.noDbListRetry')
-        }
-        resolve(finishLazyChildren(data, [hint]))
+        // 树里**不留说明行**（用户要求：提示一律走弹窗 + 节点收起，见 resetFailedNode）。
+        resolve(finishLazyChildren(data, []))
+        resetFailedNode(data.id)
       }
     } else if (data.kind === 'catalog') {
       // catalog 展开：列这个 catalog 下的库（`?catalog=xxx`）。
@@ -4976,6 +5096,10 @@ const expandNode = async (key) => {
   const doExpand = () => {
     if (!node.expanded) node.expand()
     if (!defaultExpanded.value.includes(key)) defaultExpanded.value.push(key)
+    // 展开 = 打开。挂在**唯一的展开出口**上：树重建后恢复展开、搜索定位展开等路径
+    // 都从这里过，逐处手写标记迟早漏掉一处（漏的那次就是"展开了却变暗"）。
+    const d = node.data
+    if (d && (d.kind === 'db' || d.kind === 'schema')) markDbOpen(d)
   }
   if (node.loaded) {
     doExpand()
@@ -4988,6 +5112,9 @@ const expandNode = async (key) => {
 const collapseNode = (key) => {
   const node = treeRef.value?.getNode(key)
   if (node && node.expanded) node.collapse()
+  // 收起 = 关闭**这一个**：其它已打开的库/模式留在名单里，谁也不受影响
+  const d = node && node.data
+  if (d && (d.kind === 'db' || d.kind === 'schema')) markDbClosed(d)
   const idx = defaultExpanded.value.indexOf(key)
   if (idx > -1) defaultExpanded.value.splice(idx, 1)
 }
@@ -5018,8 +5145,14 @@ const isNodeLoading = (node, data) => {
   return data.kind === 'conn' && connLoadingSet.value.has(String(data.connId))
 }
 /**
- * 库是不是"已打开"：当前库就是打开的（树上一次只展开一个库的表）。
- * 它同时决定两件事：库图标满色还是变暗、行尾要不要那个绿点。
+ * 库是不是"已打开"。它同时决定两件事：库图标满色还是变暗、行尾要不要那个绿点。
+ *
+ * **可以同时打开多个**（见 `openedDbs`）：开一个不会把之前开的顶掉。
+ * 判定只认两条：① 在「已打开」名单里（展开即登记、收起即移除）；
+ * ② 开着这个库/模式的页签（Redis 那种"点库开页签、不进树"的类型只有这条路）。
+ *
+ * 刻意**不再看 `currentDb`**：那是"最近点过的那一个"（SQL 上下文 / 表名补全用），
+ * 单值；用它判"打开"会让 A 开着 B 也亮、收起之后还亮着。亮不亮只看树上是否真的展开。
  *
  * 也认 `kind === 'schema'`：Oracle / DM 没有「库」这一层（见 hideDbLevelOf），
  * 模式节点顶替的就是"库"的位置，图标自然也该跟着亮/暗 —— 同一套口径，
@@ -5030,15 +5163,8 @@ const isDbOpened = (data) => {
   // ⚠️ 一律走 `nodeOwnDb`，别直接读 `data.db`（菜单那份是改写过的副本，见 helper 的说明）
   const db = nodeOwnDb(data)
   if (!db) return false
-  // **模式**（Oracle / DM 这类没有库层的类型）必须**精确相等**才算打开：
-  // 不能走 inCurrentDb 的前缀规则 —— 当前库是连接级的 `FREE` 时，`FREE.ANONYMOUS`
-  // 会被 `startsWith('FREE.')` 判成"已打开"，于是下面**所有模式一齐变亮**
-  // （真机上就是这样：默认该全灰，结果全亮，颜色看着也不对）。
-  if (data.kind === 'schema') {
-    if (db === String(currentDb.value || '')) return true
-  } else if (inCurrentDb(db)) {
-    return true
-  }
+  // 并开的库 / 模式：只要还在这份名单里就算打开（可以同时有多个）
+  if (openedDbs.value.has(dbOpenKey(data.connId || currentConnId.value, db))) return true
   // 开着同一个库（模式）的**页签**，同样算"已打开"。
   // 为什么需要：Redis 的库不进树（点它是开一个「该库全部键」页签，见 `openRedisDb`），
   // 它也不会被设成 currentDb —— 只认 currentDb 的话，点了库图标永远是暗的
@@ -5059,8 +5185,9 @@ const onArrowClick = (data, node) => {
     selectConn(data.connId)
     return
   }
-  // 库/模式节点：**箭头展开也算"打开"** —— 图标点亮（isDbOpened）认的是 currentDb，
-  // 只点箭头不落 currentDb 的话，用户看着就是"展开了却没亮"（SQL Server 的 BI 实测反馈）
+  // 库/模式节点：**箭头展开也算"打开"** —— 只点箭头不落 currentDb 的话，
+  // 用户看着就是"展开了却没亮"（SQL Server 的 BI 实测反馈）。
+  // 「已打开」名单由 expandNode / collapseNode 统一维护，这里不再各写一份。
   if ((data.kind === 'db' || data.kind === 'schema') && data.db && data.db !== currentDb.value) {
     setCurrentDb(data.db)
   }
@@ -5121,6 +5248,8 @@ const onNodeClick = async (data, node, _component, event) => {
     // 数秒之后才出现，看着就像"点了没反应，过一会儿才转"。
     // 表清单的语义动作放后台，不挡展开、不挡转圈。
     if (canExpandNode(data)) {
+      // 单击 = 打开 / 收起**这一个**。别的库/模式保持原样（见 openedDbs）——
+      // 这正是"开 B 不再把 A 顶掉"的语义，但点自己仍应能合上。
       if (node?.expanded) collapseNode(data.id)
       else expandNode(data.id)
       if (connChanged || dbChanged) {
@@ -5548,12 +5677,27 @@ const onScriptDirty = (tabId, dirty) => {
 }
 
 // 编辑器内切换连接
-const onEditorConnChange = async (connId) => {
+// 只把新连接写回该脚本页签（不切全局连接：编辑器换连接不该清掉别人的页签）。
+// 不写回的话，刷新后页签仍按旧连接还原 —— 表现为「换过连接又变回去 / 报原连接不可用」。
+const onEditorConnChange = (tabId, connId) => {
   if (!connId) return
-  await selectConn(connId)
+  const tab = tabs.value.find(x => x.id === tabId)
+  if (!tab) return
+  tab.connId = String(connId)
+  tab.connName = (allConnections.value.find(x => String(x.id) === String(connId)) || {}).name || connNameOf(connId)
+  scheduleSaveSession()
 }
 
 // 编辑器内切换数据库
+/** 编辑器按名字把失效的连接接回后，把新 id 写进页签 —— 快照从此不再引用旧 id */
+const onScriptConnRebind = (tabId, connId) => {
+  const tab = tabs.value.find(x => x.id === tabId)
+  if (!tab || !connId) return
+  tab.connId = String(connId)
+  tab.connName = (allConnections.value.find(x => String(x.id) === String(connId)) || {}).name || tab.connName || ''
+  scheduleSaveSession()
+}
+
 const onEditorDbChange = (db) => {
   if (db && db !== currentDb.value) {
     setCurrentDb(db)
@@ -7538,7 +7682,9 @@ const dbCtxToggleOpen = () => {
   const sid = String(d.connId || currentConnId.value || '')
   if (!db) return
   if (isOpen) {
-    // 关闭数据库：真正断开会话 → 清当前库 → 关该库的页签 → 收起节点。
+    // 关闭数据库：从「已打开」名单移除 → 真正断开会话 → 清当前库 → 关该库的页签 → 收起节点。
+    // **只关这一个**：其它已打开的库/模式原样保留（这正是并开的语义）。
+    markDbClosed(d)
     // **真正断开会话**：该库的语句跑在它的影子连接上，调后端按库断掉 ——
     // 只清前端状态的话，内核池里那条会话还挂数据库上（用户要求真正关闭）。
     if (sid) disconnectDatabase(sid, db).catch(() => {})
@@ -7568,6 +7714,7 @@ const dbCtxToggleOpen = () => {
     // 打开数据库：先切换到目标连接（若不同），再设为当前库，展开节点
     ensureDbConn(d)
     setCurrentDb(db)
+    markDbOpen(d)
     refreshAllTables()
     nextTick(() => {
       expandNode(d.id)
@@ -7620,6 +7767,55 @@ const dbCtxNewQuery = () => {
   const db = nodeOwnDb(d)
   setCurrentDb(db)
   newQueryTab({ connId: String(d.connId), database: db })
+}
+
+/**
+ * 哪些类型的「库」下面是**真正的模式层**，可以在库节点（模式根目录）上右键新建模式。
+ *
+ * 只认这三家：PG / Kingbase 的 schema 是独立命名空间；SQL Server 的 schema 也独立于用户。
+ * Oracle / DM 的"模式"就是用户（先建用户才有模式，见 hideDbLevelOf），
+ * MySQL 系 / SQLite / H2 的库本身就是命名空间 —— 都没有独立的 CREATE SCHEMA。
+ */
+const SCHEMA_CREATE_TYPES = ['POSTGRESQL', 'SQLSERVER', 'KINGBASE']
+const canNewSchema = computed(() => {
+  const d = treeCtxMenu.value.data
+  if (treeCtxMenu.value.kind !== 'db' || !d) return false
+  return SCHEMA_CREATE_TYPES.includes(String(d.connType || '').toUpperCase())
+})
+
+/** 库节点右键「新建模式」：输入名字 → `CREATE SCHEMA` → 重拉这个库的模式清单。 */
+const dbCtxNewSchema = async () => {
+  const d = treeCtxMenu.value.data
+  if (!d) return
+  closeTreeCtxMenu()
+  const connId = String(d.connId || currentConnId.value || '')
+  const db = String(d.realDb || d.db || d.label || '')
+  const type = String(d.connType || '').toUpperCase()
+  if (!connId || !db) return
+  // 与其它写操作同一道闸门（只读连接 / 生产环境保护）
+  if (!guardWrite(connId, t('tree.menu.newSchema'))) return
+  let name = ''
+  try {
+    const r = await ElMessageBox.prompt(t('mv.newSchemaBody', { db }), t('tree.menu.newSchema'), {
+      confirmButtonText: t('mv.newSchemaOk'),
+      cancelButtonText: t('common.cancel'),
+      inputPlaceholder: t('mv.newSchemaPlaceholder'),
+      // 先在前端挡一道形状：空名 / 空格 / 引号拼进 SQL 只会换来一句语法错
+      inputValidator: (v) => /^[A-Za-z_][A-Za-z0-9_$]{0,127}$/.test(String(v || '').trim()) || t('mv.newSchemaInvalid')
+    })
+    name = String((r && r.value) || '').trim()
+  } catch {
+    return // 用户取消
+  }
+  if (!name) return
+  try {
+    await alterTable(connId, db, `CREATE SCHEMA ${quoteIdent(name, type)}`)
+    ElMessage.success(t('mv.newSchemaDone', { name }))
+    // 重新拉模式清单（refreshDbNode 会把节点置为未加载并重新展开，新模式随即出现）
+    refreshDbNode(db, connId)
+  } catch (e) {
+    showErrorModal(errMsg(e, t('mv.newSchemaFailed')))
+  }
 }
 
 const dbCtxShowDdl = async () => {
@@ -8471,8 +8667,6 @@ const connTypeSummary = computed(() =>
 }
 .empty-act:hover { background: var(--dc-bg-hover); color: var(--dc-primary); }
 
-/* 说明文字并入标题行（省一行高度，也不再有"孤零零一句提示"） */
-.mcp-inline { font-size: calc(var(--dc-home-fs, 13px) - 1.5px); color: var(--dc-text-dim); letter-spacing: 0; }
 .mcp-code {
   position: relative; padding: 8px 10px; border-radius: 8px;
   background: var(--dc-bg-soft); border: 1px solid var(--dc-border);

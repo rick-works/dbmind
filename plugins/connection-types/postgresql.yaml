@@ -17,7 +17,10 @@ localFile: false
 defaultPort: 5432
 jdbc:
   driverClass: org.postgresql.Driver
-  urlTemplate: "jdbc:postgresql://{host}:{port}/{database}"
+  # sslmode=prefer：能加密就加密、服务器不支持则退回明文；stringtype=unspecified
+  # 让未知类型按字符串读而不是抛错；tcpKeepAlive 防长连接被 NAT 静默掐断；
+  # reWriteBatchedInserts 把批量 INSERT 合并成多值形式。表单不再暴露这几项。
+  urlTemplate: "jdbc:postgresql://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
   artifact: org.postgresql:postgresql:42.7.4
 traits:
   singleDatabase: false

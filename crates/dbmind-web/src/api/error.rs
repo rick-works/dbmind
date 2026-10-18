@@ -17,6 +17,16 @@ use serde_json::json;
 pub struct XError {
     pub status: StatusCode,
     pub message: String,
+    /// 「该怎么做」的那句话。与 `detail` 成对出现时，界面把 `detail` 放上面、这句放下面。
+    pub hint: Option<String>,
+    /// 数据库 / 驱动返回的**原话**（例如 `SELECT command denied to user 'x' for table 'user'`）。
+    /// 单独给出来是为了让界面能把它按等宽字体放在最上面：用户可以复制去搜，也不会
+    /// 被"我们后来加的解释"盖住 —— 排错时第一眼看的就是这句。
+    pub detail: Option<String>,
+    /// 内核错误码（`DBMIND-CONN-0003`）。不发给前端（响应体保持 `{success,message}`），
+    /// 只用来让中间层**分得清错因类别** —— 例如「库清单查询失败」要不要退回单库模式，
+    /// 取决于那是"连不上"还是"连上了但这条查询不行"（见 `meta::databases`）。
+    pub code: Option<String>,
 }
 
 impl XError {
@@ -24,6 +34,28 @@ impl XError {
         Self {
             status,
             message: message.into(),
+            hint: None,
+            detail: None,
+            code: None,
+        }
+    }
+
+    /// 「原始错误在前、说明在后」的两段式错误。
+    ///
+    /// `message` 仍然是两者拼好的整句（老调用方、右上角通知、日志都靠它），
+    /// `hint` / `detail` 只是把同一条信息拆开给界面排版用。
+    pub fn with_detail(
+        status: StatusCode,
+        message: impl Into<String>,
+        hint: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self {
+            status,
+            message: message.into(),
+            hint: Some(hint.into()),
+            detail: Some(detail.into()),
+            code: None,
         }
     }
 
@@ -53,13 +85,81 @@ impl From<DbMindError> for XError {
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut message = with_hint(&err.message);
         if let Some(detail) = &err.detail {
-            if !detail.is_empty() {
+            let kept = human_detail(detail);
+            // 剔掉的部分只进日志：排查时那条 `SQLRecoverableException, SQLState=08006…`
+            // 仍然是唯一的线索，只是它不该出现在用户面前。
+            if kept.trim() != detail.trim() {
+                tracing::debug!(code = err.code_str(), detail = %detail, "错误详情（技术尾巴，仅日志）");
+            }
+            if !kept.trim().is_empty() {
                 message.push('\n');
-                message.push_str(detail);
+                message.push_str(kept.trim());
             }
         }
-        Self { status, message }
+        Self {
+            status,
+            message,
+            hint: None,
+            detail: None,
+            code: Some(err.code_str().to_string()),
+        }
     }
+}
+
+impl XError {
+    /// 是不是「连接本身不可用」（找不到 / 配置不合法 / 连不上 / 类型未知）。
+    ///
+    /// 用来区分两类失败：连接类错误必须**如实抛给界面**；而"连上了，但这条元数据查询
+    /// 不被支持 / 没权限"才允许调用方做降级（例如库清单退回单库模式）。
+    /// 不区分的话，改错主机/端口保存后，界面会拿到"200 + 退回来的库名"，一切看起来正常。
+    pub fn is_conn_failure(&self) -> bool {
+        matches!(
+            self.code.as_deref(),
+            Some("DBMIND-CONN-0001" | "DBMIND-CONN-0002" | "DBMIND-CONN-0003" | "DBMIND-CONN-0004")
+        )
+    }
+}
+
+/// `detail` 里的**技术尾巴**不该弹给用户（用户反馈：Oracle 连不上时弹窗最后一行是
+/// `SQLRecoverableException, SQLState=08006, errorCode=17002`，纯噪音）。
+///
+/// `detail` 有两种来源：
+/// 1. 我们自己写的操作指引（"把驱动 jar 放到 …，或执行 dbmind driver fetch"）——
+///    有信息量，必须留着；
+/// 2. JDBC 宿主用 `describe(SQLException)` 拼的异常类名 + SQLState + errorCode，
+///    那是给排查用的。
+///
+/// 这里只按**行**筛掉第 2 类（外加 Java 栈帧与 `next:` 次生异常），其余一律保留；
+/// 一行都不剩就把整段丢掉 —— 结论那句话本身已经说清了发生了什么。
+fn human_detail(detail: &str) -> String {
+    let all: Vec<&str> = detail.lines().filter(|l| !l.trim().is_empty()).collect();
+    let kept: Vec<&str> = all.iter().copied().filter(|l| !is_technical_line(l)).collect();
+    if kept.len() == all.len() {
+        return detail.to_string(); // 没有技术行：原样（保留原有排版）
+    }
+    kept.join("\n")
+}
+
+/// 这一行是不是纯给开发看的（异常类名 / SQLState / 栈帧 / 次生异常）
+fn is_technical_line(line: &str) -> bool {
+    let s = line.trim();
+    if s.starts_with("next: ") {
+        return true;
+    }
+    // `at com.mysql.cj.jdbc.ConnectionImpl.createNewIO(ConnectionImpl.java:1234)`
+    if s.starts_with("at ") && s.ends_with(')') && s.contains('(') {
+        return true;
+    }
+    let has_state = s.contains("SQLState=");
+    if has_state && s.contains("errorCode=") {
+        return true;
+    }
+    // `SQLRecoverableException, SQLState=08006`（老代理只拼到 SQLState）
+    let head = s
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .next()
+        .unwrap_or_default();
+    has_state && head.ends_with("Exception")
 }
 
 /// 给内核里几条「字面上正确、但用户不知道该做什么」的错误补一句可操作的提示。
@@ -122,10 +222,19 @@ impl From<ErrorCode> for XError {
 
 impl IntoResponse for XError {
     fn into_response(self) -> Response {
-        if self.status.is_server_error() {
-            tracing::error!(status = %self.status, message = %self.message, "上游兼容层请求失败");
+        let XError { status, message, hint, detail, code: _ } = self;
+        if status.is_server_error() {
+            tracing::error!(status = %status, message = %message, "上游兼容层请求失败");
         }
-        (self.status, Json(json!({ "success": false, "message": self.message }))).into_response()
+        let mut body = json!({ "success": false, "message": message });
+        // 只在真有拆段内容时多给两个字段：形状保持向后兼容（老前端只读 message）
+        if let Some(hint) = hint {
+            body["hint"] = json!(hint);
+        }
+        if let Some(detail) = detail {
+            body["detail"] = json!(detail);
+        }
+        (status, Json(body)).into_response()
     }
 }
 

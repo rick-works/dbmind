@@ -13,6 +13,7 @@
 //! 没有「给这张表分页」这种概念。
 
 use axum::extract::{Path, RawQuery, State};
+use axum::http::StatusCode;
 use axum::Json;
 use dbmind_core::{
     AccessContext, CellValue, ColumnDetail, ConnectionKind, ConnectionRecord, DbMindError,
@@ -595,7 +596,13 @@ fn edit_capabilities(kind: &str) -> Value {
         // `ADD COLUMN`、`DROP COLUMN` 逐条验过可用（前端 `derby` 这一套生成器就是照它写的）。
         // 列注释 Derby 没有（comment=false）；表选项/自增/索引重建也没对应语法，如实给 false。
         "derby" => ("derby", "DOUBLE", true, false, false, false, false),
-        // db2 与非关系型：界面按「不支持在线改结构」处理（没实测过就不声明 ——
+        // DB2 LUW：列属性可以改 —— `ALTER COLUMN … SET DATA TYPE` / `SET|DROP NOT NULL` /
+        // `SET|DROP DEFAULT`、`RENAME COLUMN`、`ADD|DROP COLUMN`、`COMMENT ON COLUMN` 都有。
+        // 原先 DB2 落到 generic、supportsColumnModify=false，整个字段表灰成只读
+        //（用户看到的就是「DB2 的表结构什么都点不动」）。
+        // 表选项 / 自增列 / 索引重建：DB2 没有引擎字符集这套，IDENTITY 的在线增删也没实测，如实 false。
+        "db2" => ("db2", "DOUBLE", true, true, false, false, false),
+        // 非关系型：界面按「不支持在线改结构」处理（没实测过就不声明 ——
         // 声明得比实现靠前，等于让用户去撞数据库的报错）
         _ => ("generic", "DOUBLE", false, false, false, false, false),
     };
@@ -710,8 +717,11 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
     let trigger_ok = has(dialect.triggers(None));
     let event_ok = has(dialect.events());
     let user_ok = has(dialect.users());
-    // 能力探测只关心"有没有 SQL"，不关心哪个模式
-    let ddl_ok = has(dialect.ddl("__probe__", None));
+    // `supportsDdl` 的语义是「能不能**取回**建表语句」，不等于「方言写了 show create」：
+    // 没写的那两款（DB2 / Derby）`/ddl` 会走第 2 档「按列元数据自拼」（见 build_table_ddl），
+    // 脚本可用、只是少索引/外键/注释。原先这里只认 `Sql` ⇒ 这两类的「查看 DDL」菜单
+    // 被整个藏掉，用户以为功能缺失。`Absent`（根本没这个概念）仍然算不支持。
+    let ddl_ok = !matches!(dialect.ddl("__probe__", None), Meta::Absent);
     // 「能列出用户」和「能看详情 / 能改」是两档能力：
     // Oracle / DM / ClickHouse 有用户列表，但 user_info / user_action_sql 未实现 ——
     // 树里有用户节点、右键「查看 / 编辑 / 删除」却必然 501。
@@ -867,19 +877,30 @@ pub async fn test(State(state): State<AppState>, Json(mut body): Json<Value>) ->
     }
 
     let engine = state.engine();
-    let tested = blocking(move || engine.test_config(&config, read_only)).await;
+    // 这里**不走** `crate::api::blocking`：那一层会把 message / detail 拼成一句、还带上
+    // 错误码前缀（`[DBMIND-CONN-0003] 连接失败：…`）。连接测试要的是「数据库原话」，
+    // 说明由前端按关键字补一句 —— 两段分开给，界面才好排版。
+    let tested = tokio::task::spawn_blocking(move || engine.test_config(&config, read_only)).await;
 
     Ok(Json(match tested {
-        Ok(report) => json!({
+        Ok(Ok(report)) => json!({
             "success": true,
             "latencyMs": report.latency_ms,
             "serverVersion": report.server_version.unwrap_or_default(),
             "runtimeMode": report.runtime_mode.as_str(),
             "message": report.message,
         }),
-        // 注意别在这里再 with_hint 一次：`blocking` 出来的错误已经过 `XError::from`，
-        // 提示会重复追加两遍（实测出现过）。
-        Err(err) => json!({ "success": false, "message": err.message }),
+        Ok(Err(err)) => json!({
+            "success": false,
+            "code": err.code.as_str(),
+            // 配置类错误（缺 {database} 之类的占位符）仍补一句「去填哪个框」
+            "message": crate::api::error::with_hint(&err.message),
+            "detail": err.detail,
+        }),
+        Err(join) => json!({
+            "success": false,
+            "message": format!("连接测试线程异常：{join}"),
+        }),
     }))
 }
 
@@ -963,8 +984,16 @@ pub async fn databases(
                 tracing::warn!(connection = %id, "库清单查询返回空，退回单库模式");
             }
             Err(err) => {
-                // 列不出来（权限不足 / 方言差异）不该让整棵树空掉：退回「连接绑定的那个库」，
-                // 并把原因写进日志 —— 界面至少还能用。
+                // **连不上 ≠ 列不出来**：连接类错误必须原样抛给界面。
+                //
+                // 「退回单库模式」只适用于"连上了、但这条查询拿不到库清单"（权限不足、方言差异），
+                // 那种情况下退回配置里的库名，界面至少还能用。
+                // 但如果连都连不上还退回，界面就会拿到一个 200 + `["demo"]`，把失败当成成功
+                // —— 用户改错主机/端口保存后，树照常展开、还能点开来看，误以为改动没生效
+                //（真机上就是这么被问到的）。
+                if err.is_conn_failure() {
+                    return Err(err);
+                }
                 tracing::warn!(connection = %id, error = %err.message, "库清单查询失败，退回单库模式");
             }
         }
@@ -1006,6 +1035,35 @@ pub async fn schemas(
                 .collect();
             Ok(Json(json!(names)))
         }
+    }
+}
+
+/// 方言「属主 + 显式授权」清单 → 允许出现在界面上的表名集合（小写）。
+///
+/// `None` = 这个方言不需要过滤，或者清单取不到 / 为空。**空集合按「目录没覆盖到」处理**：
+/// DB2 的组与角色授权不一定落在 `SYSCAT.TABAUTH` 里，H2 的属主表也不出现在授权目录中；
+/// 若据此把整棵树清空，用户会以为"表都没了" —— 宁可少过滤，不可少给表。
+async fn visible_table_set(
+    state: &AppState,
+    id: &str,
+    database: &str,
+    dialect: Dialect,
+) -> Option<std::collections::HashSet<String>> {
+    let Meta::Sql(sql) = dialect.visible_tables() else {
+        return None;
+    };
+    let result = run_sql_in(state, id, database, sql, META_MAX_ROWS)
+        .await
+        .ok()?;
+    let set: std::collections::HashSet<String> = rows_of(&result)
+        .iter()
+        .map(|row| text_ci(row, "name").to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect();
+    if set.is_empty() {
+        None
+    } else {
+        Some(set)
     }
 }
 
@@ -1113,6 +1171,11 @@ pub async fn tables(
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
     let engine = state.engine();
     let mut tables = blocking(move || engine.list_tables_fresh(&target)).await?;
+    // 内核走 `getTables` 的方言（H2 / DB2 / Derby）目录不看权限，这里再与「属主 + 显式授权」
+    // 求交一次 —— 否则低权限账号会看到一张都读不了的表（实测 H2：未授权表照列，执行即报错）。
+    if let Some(allowed) = visible_table_set(&state, &id, &database, dialect).await {
+        tables.retain(|table| allowed.contains(&table.name.to_ascii_lowercase()));
+    }
     // 行数：先给**估算值**（一次查询拿全库，不扫表），精确值由前端按需回填（`/table-count`）。
     // 内核的 `TableInfo.row_estimate` 各驱动都没填，所以这里按方言补一次；
     // 拿不到就保持 null —— 树上不显示数字，而不是显示一个 0 冒充「空表」。
@@ -1472,25 +1535,81 @@ pub async fn search_objects(
     }
 
     let database = params.get("database").unwrap_or_default();
+    let (_, dialect) = ctx_of(&state, &id).await?;
+    let schema = split_db_schema(&database, &dialect).1;
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
-    let engine = state.engine();
-    let connection = target.clone();
-    let tables = blocking(move || engine.list_tables_fresh(&connection)).await?;
-    let hit_tables: Vec<String> = tables
+
+    // 表/视图清单：schema 层级的类型**必须**与树用同一个来源（`dialect.tables_in_schema`）。
+    // 走内核 `getTables` 的话，PG 会把当前账号一张都读不了的表也返回 —— 结果是
+    // 「树上被权限收掉的对象，全局搜索里还能搜到」，正是权限过滤的反面。
+    // 拿不到方言 SQL / 方言执行失败时才回退内核（回退是少了过滤，不是少了表）。
+    let mut table_names: Vec<String> = Vec::new();
+    let mut from_dialect = false;
+    if dialect.is_schema_aware() {
+        // 给了模式就查那一个；没给（树上的「库」节点，PG/SQL Server/Oracle 都可能是这种情况）
+        // 就**枚举当前账号能用的模式**逐个查 —— 直接交给内核会在 PG 上列出全库所有 schema，
+        // 等于绕过权限过滤。模式数量有上限（见 SCHEMA_CAP），避免极端库把一次搜索放大成几百条 SQL。
+        const SCHEMA_CAP: usize = 40;
+        let scopes: Vec<String> = match schema.as_deref() {
+            Some(one) => vec![one.to_string()],
+            None => match dialect.schemas() {
+                Meta::Sql(sql) => match run_meta_sql(&state, &id, &database, sql, META_MAX_ROWS).await {
+                    Ok(result) => rows_of(&result)
+                        .iter()
+                        .map(|row| first_column_text(row))
+                        .filter(|name| !name.trim().is_empty())
+                        .take(SCHEMA_CAP)
+                        .collect(),
+                    Err(_) => Vec::new(),
+                },
+                _ => Vec::new(),
+            },
+        };
+        for scope in scopes {
+            let Meta::Sql(sql) = dialect.tables_in_schema(&scope) else {
+                continue;
+            };
+            let Ok(result) = run_meta_sql(&state, &id, &database, sql, META_MAX_ROWS).await else {
+                continue;
+            };
+            for row in rows_of(&result) {
+                let name = text_ci(&row, "name");
+                if !name.trim().is_empty() {
+                    table_names.push(name);
+                }
+            }
+            from_dialect = true;
+        }
+    }
+    if !from_dialect {
+        let engine = state.engine();
+        let connection = target.clone();
+        table_names = blocking(move || engine.list_tables_fresh(&connection))
+            .await?
+            .into_iter()
+            .map(|table| table.name)
+            .collect();
+        // 同 `/tables`：H2 / DB2 / Derby 的 `getTables` 不看权限，搜索也必须求交，
+        // 否则「树上没有的表，搜索结果里能点进去」。
+        if let Some(allowed) = visible_table_set(&state, &id, &database, dialect).await {
+            table_names.retain(|name| allowed.contains(&name.to_ascii_lowercase()));
+        }
+    }
+    let hit_tables: Vec<String> = table_names
         .iter()
-        .filter(|t| t.name.to_lowercase().contains(&keyword))
-        .map(|t| t.name.clone())
+        .filter(|name| name.to_lowercase().contains(&keyword))
+        .cloned()
         .collect();
 
     let mut columns: Vec<Value> = Vec::new();
-    for table in tables.iter().take(MAX_TABLES) {
+    for name in table_names.iter().take(MAX_TABLES) {
         if columns.len() >= MAX_COLUMNS {
             break;
         }
         let engine = state.engine();
-        let name = table.name.clone();
+        let table = name.clone();
         let connection = target.clone();
-        let cols = match blocking(move || engine.list_columns(&connection, &name)).await {
+        let cols = match blocking(move || engine.list_columns(&connection, &table)).await {
             Ok(cols) => cols,
             // 单张表拉列失败（权限/视图）不该让整次搜索失败
             Err(_) => continue,
@@ -1498,7 +1617,7 @@ pub async fn search_objects(
         for column in cols {
             if column.name.to_lowercase().contains(&keyword) {
                 columns.push(json!({
-                    "table": table.name,
+                    "table": name,
                     "column": column.name,
                     "type": column.type_name.unwrap_or_default(),
                     "comment": Value::Null,
@@ -2003,7 +2122,16 @@ pub(crate) async fn build_table_ddl(
             return Ok((format!("{notice}{ddl}"), true));
         }
     };
-    let result = run_sql_in(state, id, database, sql, 100).await?;
+    let result = match run_sql_in(state, id, database, sql, 100).await {
+        Ok(result) => result,
+        // Oracle 内置视图会以「未找到」的姿势失败，见 oracle_builtin_view_error
+        Err(err) => {
+            return Err(
+                oracle_builtin_view_error(state, id, database, table, schema.as_deref(), dialect, err)
+                    .await,
+            )
+        }
+    };
     let mut ddl_text = if dialect.kind.key() == "h2" {
         // H2 的 `script nodata` 返回**整库**语句（它是一条命令，不接受 WHERE，
         // `table <名>` 过滤实测也被忽略），所以在这里按表名筛出属于这张表的那几条
@@ -2040,6 +2168,59 @@ pub(crate) async fn build_table_ddl(
         return Err(XError::internal(format!("没有取到 {table} 的建表语句")));
     }
     Ok((ddl_text, false))
+}
+
+/// Oracle 的 `dbms_metadata.get_ddl` 对 **Oracle 自己维护的对象**（`all_objects.oracle_maintained='Y'`，
+/// 典型是 SYSTEM 模式里那批 `MVIEW_EVALUATIONS` / `SCHEDULER_JOB_ARGS` 一类内置视图）会报
+/// 「ORA-31603 对象 … 在方案 … 中未找到」—— 对象明明就在那儿，只是 Oracle 没给它留定义
+/// （真机实测这些视图的 `all_views.text` / `user_views.text` 同样是 NULL，即服务端根本没有这份 SQL）。
+///
+/// 原样抛出去，用户看到的是「在方案 SYSTEM 中未找到」，只会以为 DBmind 找错了对象或模式；
+/// 这里换成一句能解释清楚的话，并说明**换任何工具都取不到**。
+/// 其它错误（包括确实不存在的对象）原样返回，不动判定。
+async fn oracle_builtin_view_error(
+    state: &AppState,
+    id: &str,
+    database: &str,
+    name: &str,
+    schema: Option<&str>,
+    dialect: Dialect,
+    err: XError,
+) -> XError {
+    if dialect.kind.key() != "oracle" || !err.message.contains("ORA-31603") {
+        return err;
+    }
+    let owner = schema.map(str::trim).filter(|s| !s.is_empty());
+    let mut sql = format!(
+        "select oracle_maintained as \"maintained\" from all_objects \
+         where object_name = upper({}) and object_type = 'VIEW'",
+        dialect.literal(name)
+    );
+    if let Some(owner) = owner {
+        sql.push_str(&format!(" and owner = upper({})", dialect.literal(owner)));
+    }
+    // 判定查询本身失败就按原错误返回：解释不清时不要用一个新错误盖住真因
+    let Ok(result) = run_sql_in(state, id, database, sql, 5).await else {
+        return err;
+    };
+    let builtin = rows_of(&result)
+        .iter()
+        .any(|row| text_ci(row, "maintained").eq_ignore_ascii_case("Y"));
+    if !builtin {
+        return err;
+    }
+    let full = match owner {
+        Some(owner) => format!("{owner}.{name}"),
+        None => name.to_string(),
+    };
+    XError::new(
+        StatusCode::NOT_IMPLEMENTED,
+        format!(
+            "取不到 {full} 的视图定义：它是 Oracle 内置视图（all_objects.oracle_maintained='Y'），\
+             Oracle 没有保存它的 SQL 文本，dbms_metadata.get_ddl 也会报 ORA-31603 —— \
+             换任何工具同样取不到，不是 DBmind 找错了对象。"
+        ),
+    )
 }
 
 /// 按列元数据自拼建表语句（DB2 / Derby 这类"没有一条语句拿到 DDL"的类型走这里）。
@@ -2234,7 +2415,16 @@ pub async fn object_info(
             )))
         }
     };
-    let result = run_sql_in(&state, &id, &database, sql, 10).await?;
+    // Oracle 内置视图（ORACLE_MAINTAINED='Y'）取定义必失败，换成可读解释，见 oracle_builtin_view_error
+    let result = match run_sql_in(&state, &id, &database, sql, 10).await {
+        Ok(result) => result,
+        Err(err) => {
+            return Err(
+                oracle_builtin_view_error(&state, &id, &database, &name, schema.as_deref(), dialect, err)
+                    .await,
+            )
+        }
+    };
     // 必须按**列名**取，不能按位置取：`serde_json` 的 Map 默认按键名排序，
     // `show create view` 的四列（View / Create View / character_set_client / ...）
     // 排序后 `Create View` 反而在前，"取第二列"取到的是**视图名** ——
@@ -2397,7 +2587,9 @@ pub async fn users(
     // 直接报「Unknown database 'test'」（errCode 2 / 1049），整个清单都拉不出来。
     // （SQL Server 以前是唯一例外 —— 那时列的是库用户；现在改成登录名，见 dialect.users。）
     let database = String::new();
-    let value = meta_list(&state, &id, &database, dialect.users(), "用户清单").await?;
+    let value = meta_list(&state, &id, &database, dialect.users(), "用户清单")
+        .await
+        .map_err(|err| permission_hint(err, "用户清单"))?;
     // **角色不进用户列表**（用户要求）：角色在「编辑 / 授权」的「角色」页签里看与管理 ——
     // 那一页本来就要列出全部角色（能授才有意义），新建 / 删除也放在那里，同一处闭环。
     // 这里的清单只有账号：MySQL/MariaDB 的角色账号在 `dialect.users()` 的 SQL 里已排除，
@@ -2420,6 +2612,49 @@ pub async fn users(
 }
 
 // ------------------------------------------------------------------ 角色清单
+
+/// 「目录读不到」时给一句人话（**只改文案，不改判定**）。
+///
+/// 用户管理/角色管理读的都是**管理员目录**（`mysql.user` / `mysql.role_edges` /
+/// `dba_roles` / `system.users` …）。普通账号去查会拿到驱动原文，例如
+/// `SELECT command denied to user 'x'@'1.2.3.4' for table 'user'` —— 界面上看起来
+/// 像"这个功能坏了"，其实只是"这个账号没权限"。认得出的权限类错误改写成
+/// 「当前连接账号没有查看 X 的权限」，其余错误原样返回。
+fn permission_hint(err: XError, feature: &str) -> XError {
+    // 各家原文长这样（都实测过）：
+    //   MySQL   `SELECT command denied to user 'x'@'1.2.3.4' for table 'user'`
+    //   PG      `permission denied for table pg_authid`
+    //   Oracle  `ORA-00942: 表或视图 "SYS"."DBA_ROLES" 不存在`（无数据字典权限时就是这个）
+    //   ClickHouse `Not enough privileges. … SELECT(name) ON system.users`
+    //   DB2     `SQLCODE=-551 … does not have the privilege`
+    // 统一小写后比对，避免大小写差异把某家漏掉。
+    const DENIED: [&str; 11] = [
+        "denied to user",
+        "access denied",
+        "permission denied",
+        "not authorized",
+        "insufficient privilege",
+        "not enough privileges",
+        "access_denied",
+        "ora-00942",
+        "ora-01031",
+        "sqlcode=-551",
+        "sqlstate=42501",
+    ];
+    let lower = err.message.to_ascii_lowercase();
+    if !DENIED.iter().any(|needle| lower.contains(needle)) {
+        return err;
+    }
+    let hint = format!(
+        "当前连接账号没有查看「{feature}」的权限。请改用有该目录读权限的账号，或让 DBA 授权后重连。"
+    );
+    XError::with_detail(
+        StatusCode::FORBIDDEN,
+        format!("{hint}原始提示：{}", err.message),
+        hint,
+        err.message.clone(),
+    )
+}
 
 /// 角色清单（「用户管理」页的「角色管理」页签用）。
 ///
@@ -2452,7 +2687,7 @@ pub async fn roles(
             return Ok(Json(json!({
                 "supported": false,
                 "roles": [],
-                "message": e.message,
+                "message": permission_hint(e, "角色清单").message,
             })))
         }
     };

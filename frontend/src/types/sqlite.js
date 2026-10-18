@@ -1,6 +1,9 @@
-import { formParts } from './base'
-
-/** SQLite 类型定义（本地文件型） */
+/**
+ * SQLite 类型定义（本地文件型，内核原生实现）
+ *
+ * 内核走内置的 sqlite 引擎（不是 JDBC 宿主），所以这里没有驱动参数可给；
+ * 预览串按 SQLite 生态通用写法展示，便于用户核对文件路径对不对。
+ */
 export default {
   code: 'SQLITE',
   label: 'SQLite',
@@ -12,10 +15,8 @@ export default {
   logo: 'sqlite.svg',
   fileType: true,
   defaultPort: 0,
-  buildJdbcUrl(f) {
-    const { file } = formParts(f)
-    return `jdbc:sqlite:${file || ':memory:'}`
-  },
+  urlTemplate: 'jdbc:sqlite:{filePath}',
+  propStyle: 'none',
   // SQLite 数据库即文件，新建即新建文件，不在 SQL 层用 CREATE DATABASE
   createDatabaseSql() {
     return ''

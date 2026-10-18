@@ -38,7 +38,23 @@
       <div v-else-if="!conns.length" class="um-empty">{{ $t('um.noConn') }}</div>
       <div v-else-if="unsupported" class="um-empty">{{ $t('um.unsupported', { type: typeLabel(curConn?.type) }) }}</div>
       <div v-else-if="notImplemented" class="um-empty">{{ $t('um.notImplemented', { type: typeLabel(curConn?.type) }) }}</div>
-      <div v-else-if="error" class="um-empty um-err">{{ error }}</div>
+      <!-- 错误卡：**原始错误在最上面**（等宽、可选中、可滚动），说明在下面，底部给一个重试。
+           原来是一整段红字居中 —— 长 SQL 报错挤成一片，看不出"是没权限还是连不上"。 -->
+      <div v-else-if="error" class="um-err-wrap">
+        <div class="um-err-card">
+          <div class="um-err-head">
+            <span class="um-err-icon">!</span>
+            <span class="um-err-title">{{ error.title }}</span>
+          </div>
+          <pre v-if="error.detail" class="um-err-raw">{{ error.detail }}</pre>
+          <p v-if="error.hint" class="um-err-hint">{{ error.hint }}</p>
+          <div class="um-err-foot">
+            <el-button size="small" :icon="Refresh" :loading="loading" @click="reload">
+              {{ $t('common.retry') }}
+            </el-button>
+          </div>
+        </div>
+      </div>
       <!-- 一张卡：页签条 + 表格（与「编辑表结构」同一形态 —— 页签是这张卡的标题行，
            表格与按钮都不再各自套边框，否则看起来就是几块拼起来的）。 -->
       <div v-else v-loading="loading" class="um-card">
@@ -196,6 +212,8 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Plus } from '@element-plus/icons-vue'
 import { listConnections, listUsers, listRoles, getFeatures, userAction } from '../../api'
 import { t } from '../../utils/i18n'
+// 「原始错误 + 说明」两段式：后端 XError 的 hint / detail（见 api/error.rs）
+import { errParts } from '../../utils/errMsg'
 // NoSQL（Redis / MongoDB / Elasticsearch）没有「用户」概念，后端也没有 /features 与 /users 路由
 import { isNoSql as isNoSqlType } from '../../types'
 // 只读 / 生产保护的前置闸门（与 MainView 的 guardWrite 同一口径，见 utils/connGuard.js）
@@ -219,7 +237,8 @@ const rows = ref([])
 const features = ref({})
 const featLoaded = ref(false)
 const loading = ref(false)
-const error = ref('')
+// null = 没有错误；否则是 { title, detail, hint }（detail 在上、hint 在下，见模板里的错误卡）
+const error = ref(null)
 
 // 当前页签：'users' / 'roles'。角色页签只在 rolesSupported 时存在，
 // 换连接后如果新库没有角色，会自动退回 users（见 reload）。
@@ -288,7 +307,7 @@ const reload = async () => {
   prodProtect.value = await loadProtectProd()
   if (!selId.value) {
     rows.value = []; roleRows.value = []; rolesSupported.value = false
-    features.value = {}; error.value = ''
+    features.value = {}; error.value = null
     return
   }
   // NoSQL（Redis / MongoDB / Elasticsearch）一个请求都不发：后端连 `/features` 都没有
@@ -302,11 +321,11 @@ const reload = async () => {
     rolesSupported.value = false
     features.value = { supportsUsers: false }
     featLoaded.value = true
-    error.value = ''
+    error.value = null
     return
   }
   loading.value = true
-  error.value = ''
+  error.value = null
   try {
     features.value = await getFeatures(selId.value).catch(() => ({}))
     featLoaded.value = !!features.value && Object.keys(features.value).length > 0
@@ -338,8 +357,15 @@ const reload = async () => {
     rows.value = []
     roleRows.value = []
     rolesSupported.value = false
-    // 不静默：拿不到清单和"确实一个用户都没有"必须能区分
-    error.value = t('um.loadFailed', { detail: errMsg(e) })
+    // 不静默：拿不到清单和"确实一个用户都没有"必须能区分。
+    // 后端把「没有权限」这类错误拆成了 detail（数据库原话）+ hint（该怎么做），
+    // 卡片按「原话在上、说明在下」排；没拆段的普通错误，整条 message 就是原话。
+    const parts = errParts(e)
+    error.value = {
+      title: t('um.loadFailedTitle'),
+      detail: parts.detail || parts.message,
+      hint: parts.hint || ''
+    }
   } finally {
     loading.value = false
   }
@@ -685,7 +711,65 @@ const onConnsChanged = async () => {
   max-width: 560px;
   margin: 0 auto;
 }
-.um-err { color: var(--el-color-danger); }
+/* ===== 错误卡 =====
+   两段式：原始错误（等宽、浅红底、可选中/滚动）在上，说明在下，底部一个重试。
+   左边一条红色竖条承担"这是错误"的信号，正文不再整片染红（长报错染红后很难读）。 */
+.um-err-wrap {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 40px 24px;
+  min-height: 40vh;
+}
+.um-err-card {
+  width: 100%;
+  max-width: 620px;
+  background: var(--dc-bg-soft);
+  border: 1px solid var(--dc-border);
+  border-left: 3px solid var(--el-color-danger);
+  border-radius: 10px;
+  padding: 16px 18px 10px;
+  box-shadow: var(--dc-shadow-sm, 0 2px 10px rgba(0, 0, 0, 0.06));
+}
+.um-err-head { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.um-err-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--el-color-danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.um-err-title { font-size: 14px; font-weight: 600; color: var(--dc-text); }
+.um-err-raw {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  max-height: 200px;
+  overflow: auto;
+  background: var(--el-color-danger-light-9, #fef0f0);
+  border-radius: 6px;
+  font-family: ui-monospace, Menlo, Consolas, 'Courier New', monospace;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--dc-text-mid);
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+.um-err-hint { margin: 0; font-size: 13px; line-height: 1.75; color: var(--dc-text-mid); }
+.um-err-foot {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--dc-border);
+}
 .um-dash { color: var(--dc-text-dim); }
 
 /* ===== 新建角色对话框 ===== */

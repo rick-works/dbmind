@@ -1,5 +1,9 @@
 import axios from 'axios'
 import { t } from '../utils/i18n'
+// 错误文案统一"只留人话"：后端 message 里常带 JDBC 的异常类名 / SQLState / 栈帧，
+// 见 utils/errMsg.js。改写 error.message 时顺带清一遍，所有直接读 e.message 的旧调用点
+// 也一并受益（不必逐个改成 errMsg）。
+import { cleanErrText } from '../utils/errMsg'
 
 const http = axios.create({ baseURL: '', timeout: 300000 })
 
@@ -47,14 +51,14 @@ http.interceptors.response.use(
       const data = error.response.data
       if (data && typeof data === 'object') {
         if (data.message) {
-          error.message = data.message
+          error.message = cleanErrText(data.message)
         } else if (data.error) {
-          error.message = typeof data.error === 'string' ? data.error : JSON.stringify(data.error)
+          error.message = typeof data.error === 'string' ? cleanErrText(data.error) : JSON.stringify(data.error)
         } else {
           error.message = JSON.stringify(data)
         }
       } else if (data && typeof data === 'string') {
-        error.message = data
+        error.message = cleanErrText(data)
       } else {
         error.message = t('api.requestFailed', { status: error.response.status })
       }

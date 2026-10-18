@@ -693,9 +693,14 @@ impl Dialect {
     /// schema 清单（只有 schema 层级的类型需要）。
     pub fn schemas(&self) -> Meta {
         match self.key() {
+            // PG：`pg_namespace` 是**公开目录**，所有角色都能看到全部 schema 名 ——
+            // 不按权限收窄的话，树上会列出一堆点进去空、连建表都不允许的模式（实测：
+            // 给低权限账号建一个无 USAGE 的 schema，改造前它就出现在清单里）。
+            // 判据用 `USAGE`：没有它连按名字定位对象都不行，等价于「这个模式对它不可用」。
             "postgresql" | "kingbase" => Meta::Sql(
                 "select nspname as name from pg_namespace \
-                 where nspname not like 'pg\\_%' and nspname <> 'information_schema' order by nspname"
+                 where nspname not like 'pg\\_%' and nspname <> 'information_schema' \
+                   and has_schema_privilege(oid, 'USAGE') order by nspname"
                     .to_string(),
             ),
             // SQL Server：除了 guest / sys / INFORMATION_SCHEMA，还要滤掉**九个固定数据库角色的同名
@@ -717,8 +722,17 @@ impl Dialect {
             // 树里列 all_users，就是 Navicat 左侧那一列（SYS / SYSTEM / OUTLN / … 都在）。
             // 不开这层的话，表清单只能看到当前会话 schema 自己的表：连 system 时看不到
             // DBMIND.T_TEST 的字段。
+            // Oracle：`all_users` 也是**所有**用户（含 SYS / OUTLN 这些与当前账号毫无关系的），
+            // 逐个点进去恒空。收窄成「当前用户 + 至少有一个我能看见的对象」——
+            // `all_objects` 的语义正好是「当前账号有权限访问的对象」，所以这就是"有权限的 schema"。
+            // 当前用户必须无条件保留：刚建好、还没建对象的空 schema 也得能导航过去。
             "oracle" => Meta::Sql(
-                "select username as name from all_users order by username".to_string(),
+                "select username as name from all_users u \
+                 where username = sys_context('USERENV','CURRENT_SCHEMA') \
+                    or exists (select 1 from all_objects o \
+                               where o.owner = u.username and rownum = 1) \
+                 order by username"
+                    .to_string(),
             ),
             // H2：`INFORMATION_SCHEMA.SCHEMATA`（2.x）。H2 的「库」是 catalog（一个实例一个，
             // 名字就是连接里的 database，如 MAIN），表和授权都挂在 schema 上 ——
@@ -738,12 +752,20 @@ impl Dialect {
             // PostgreSQL / KingbaseES：`reltuples` 是**估算值**（未 ANALYZE 时是 -1），
             // 拿不到就给 null —— 界面上留空，不要用 0 冒充「空表」。
             // 精确行数由前端展开后的批量 COUNT(*) 回填（见 `/table-count`）。
+            // PG：`pg_class` 同样是公开目录 —— 不加权限判断就会把「这个账号一张都读不了」
+            // 的表/视图列出来（实测低权限账号看到了没授过任何权限的表与视图）。
+            // 判据是「七种表级权限里**任意一种**」：只授了 INSERT 的表也应当能看到，
+            // 只看 SELECT 会把它藏起来（那样更糟：用户明明能写，却在树里找不到）。
+            // 逗号列表是 `has_table_privilege` 支持的写法（实测），不必写七个 or。
             "postgresql" | "kingbase" => Meta::Sql(format!(
                 "select c.relname as name, \
                  case when c.relkind = 'v' then 'VIEW' else 'BASE TABLE' end as type, \
                  case when c.reltuples < 0 then null else c.reltuples::bigint end as rows \
                  from pg_class c join pg_namespace n on n.oid = c.relnamespace \
-                 where n.nspname = {} and c.relkind in ('r','p','v','f') order by c.relname",
+                 where n.nspname = {} and c.relkind in ('r','p','v','f') \
+                   and has_table_privilege(c.oid, \
+                     'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') \
+                 order by c.relname",
                 self.literal(schema)
             )),
             // SQL Server：`sys.partitions.rows` 是**实时维护的真实行数**（不是统计估算），
@@ -2267,6 +2289,65 @@ _ => Meta::Unwritten,
         ]
     }
 
+    /// 「当前账号能用的表」清单 —— 给**表清单走 JDBC `getTables`、而目录本身不按权限收窄**
+    /// 的方言用（H2 / DB2 / Derby）。
+    ///
+    /// 为什么需要：实测 H2 里给低权限账号只授了一张表的 SELECT，`DatabaseMetaData.getTables`
+    /// 仍然把同一模式里**一张都读不了**的表全列出来（对它执行 `select …` 直接报
+    /// `Not enough rights for object`）。DB2 同理（`SYSCAT` 是公开目录）。这两家的目录里
+    /// 没有「是否可见」标志，只能把「属主 + 显式授权（含 PUBLIC）」拼出来，再与 JDBC 结果求交。
+    ///
+    /// `Meta::Absent` = **不需要过滤**：MySQL/Oracle/PG/CH 的清单查询本身已经按权限收窄。
+    pub fn visible_tables(&self) -> Meta {
+        match self.key() {
+            // H2 2.x：`information_schema.tables` **没有属主列**，属主要从 `schemata.schema_owner`
+            // 取；`table_privileges` 只记显式授权（属主不会在里面出现，所以必须并上属主/管理员）。
+            // `is_admin` 在 2.3 是 BOOLEAN（写成 `= 1` 会报「BOOLEAN 与 INTEGER 不可比」——实测）。
+            "h2" => Meta::Sql(
+                "select t.table_name as name from information_schema.tables t \
+                 where t.table_schema = current_schema and ( \
+                   exists (select 1 from information_schema.users u \
+                           where u.user_name = current_user and u.is_admin) \
+                   or exists (select 1 from information_schema.schemata s \
+                              where s.schema_name = t.table_schema \
+                                and s.schema_owner = current_user) \
+                   or exists (select 1 from information_schema.table_privileges p \
+                              where p.table_catalog = t.table_catalog \
+                                and p.table_schema = t.table_schema \
+                                and p.table_name = t.table_name \
+                                and p.grantee in ('PUBLIC', current_user)) )"
+                    .to_string(),
+            ),
+            // DB2：`SYSCAT.TABAUTH` 只有显式授权；属主在 `SYSCAT.TABLES.OWNER`。
+            // 已知缺口：**组与角色的授权**不一定落在这张目录里（要枚举 `AUTH_LIST_GROUPS_FOR_AUTHID`），
+            // 所以调用方把「过滤结果为空」当作"目录没覆盖"、保持原样 —— 详见 meta 里的求交逻辑。
+            "db2" => Meta::Sql(
+                "select t.tabname as name from syscat.tables t \
+                 where t.tabschema = current schema and ( \
+                   t.owner = current user \
+                   or exists (select 1 from syscat.tabauth a \
+                              where a.tabschema = t.tabschema and a.tabname = t.tabname \
+                                and a.grantee in ('PUBLIC', current user)) )"
+                    .to_string(),
+            ),
+            // Derby：`sys.systableperms` 只在打开 `derby.database.sqlAuthorization` 后才有行，
+            // 属性为 NULL/FALSE 时**人人都有权**（默认安装就是这种），此时不能过滤。
+            // 属主是「模式属主」`sys.sysschemas.authorizationid`（Derby 的 schema 与用户绑定）。
+            "derby" => Meta::Sql(
+                "select t.tablename as name from sys.systables t \
+                 join sys.sysschemas s on s.schemaid = t.schemaid \
+                 where s.schemaname = current schema and ( \
+                   coalesce(syscs_util.syscs_get_database_property('derby.database.sqlAuthorization'), 'FALSE') <> 'TRUE' \
+                   or s.authorizationid = current_user \
+                   or exists (select 1 from sys.systableperms p \
+                              where p.tableid = t.tableid \
+                                and p.grantee in ('PUBLIC', current_user)) )"
+                    .to_string(),
+            ),
+            _ => Meta::Absent,
+        }
+    }
+
     /// 一张表的**估算行数**（一次查询拿到全库所有表），供树节点「先显示个数字」。
     ///
     /// 为什么需要它：精确值要 `count(*)` 扫表 —— 实测某张 20 万行的表在 MySQL 上
@@ -2461,16 +2542,19 @@ _ => Meta::Unwritten,
                  order by i.table_name, i.index_name"
                     .to_string(),
             ),
-            // DB2：同理，列在 syscat.indexcoluse（colseq 是列序）
+            // DB2：同理，列在 syscat.indexcoluse（colseq 是列序）。
+            // **索引名这列在 SYSCAT.INDEXES 里叫 INDNAME，不是 INDEXNAME** ——
+            // 写成 INDEXNAME 会整条查询 500（SQLCODE=-206 SQLSTATE=42703），
+            // 编辑表结构时「索引」页签跟着一片空白。
             "db2" => Meta::Sql(
-                "select i.indexname as \"name\", i.tabname as \"table\", \
+                "select i.indname as \"name\", i.tabname as \"table\", \
                  case when i.uniquerule = 'U' then 1 else 0 end as \"isUnique\", \
                  listagg(c.colname, ',') within group (order by c.colseq) as \"columns\" \
                  from syscat.indexes i \
                  join syscat.indexcoluse c on c.indschema = i.indschema and c.indname = i.indname \
                  where i.tabschema = current schema \
-                 group by i.indexname, i.tabname, i.uniquerule \
-                 order by i.tabname, i.indexname"
+                 group by i.indname, i.tabname, i.uniquerule \
+                 order by i.tabname, i.indname"
                     .to_string(),
             ),
             // Derby **没有 syscat schema**（那是 DB2 的）：老写法在这里报
@@ -2553,11 +2637,17 @@ _ => Meta::Unwritten,
                     }
                     _ => String::from("and n.nspname not in ('pg_catalog','information_schema')"),
                 };
+                // 权限：`pg_proc` 也是公开目录，`secret_fn` 这种把 EXECUTE 从 PUBLIC 收回的
+                // 例程照样会被列出来（实测低权限账号看到了它）。PG 默认把 EXECUTE 授给
+                // PUBLIC，所以这条过滤通常"不改变结果"，只在真收权时生效 —— 正是要的效果。
                 Meta::Sql(format!(
                     "select p.proname as name, \
                      case when p.prokind = 'f' then 'FUNCTION' else 'PROCEDURE' end as routineType \
                      from pg_proc p join pg_namespace n on n.oid = p.pronamespace \
-                     where true {filter} order by p.proname"
+                     where true {filter} \
+                       and has_function_privilege(p.oid, 'EXECUTE') \
+                       and has_schema_privilege(n.oid, 'USAGE') \
+                     order by p.proname"
                 ))
             }
             "sqlserver" => Meta::Sql(
@@ -2626,11 +2716,31 @@ _ => Meta::Unwritten,
                  where trigger_schema = database() order by trigger_name"
                     .to_string(),
             ),
-            "postgresql" | "kingbase" => Meta::Sql(
-                "select t.tgname as name, c.relname as \"table\" from pg_trigger t \
-                 join pg_class c on c.oid = t.tgrelid where not t.tgisinternal order by t.tgname"
-                    .to_string(),
-            ),
+            // PG 的触发器清单原先**既不看模式也不看权限**：`pg_trigger` 是全库公开目录，
+            // 一句话就把所有 schema（含别的库对象可见的部分）的触发器全列出来 —— 树上
+            // 「触发器」节点混着 pg_catalog 与别人 schema 的东西，而且包含当前账号
+            // 根本读不了的表的触发器。改成与 procedures 同口径：带 schema 就只看它，
+            // 不带就排除系统模式；再用「表级任意权限」把读不到的表上的触发器滤掉。
+            "postgresql" | "kingbase" => {
+                let filter = match schema {
+                    Some(s) if !s.trim().is_empty() => {
+                        format!("and n.nspname = '{}'", s.trim().replace('\'', "''"))
+                    }
+                    _ => String::from(
+                        "and n.nspname not in ('pg_catalog','information_schema') \
+                         and n.nspname not like 'pg\\_%'",
+                    ),
+                };
+                Meta::Sql(format!(
+                    "select t.tgname as name, c.relname as \"table\" from pg_trigger t \
+                     join pg_class c on c.oid = t.tgrelid \
+                     join pg_namespace n on n.oid = c.relnamespace \
+                     where not t.tgisinternal {filter} \
+                       and has_table_privilege(c.oid, \
+                         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') \
+                     order by t.tgname"
+                ))
+            }
             "sqlserver" => Meta::Sql(
                 "select t.name as name, o.name as \"table\" from sys.triggers t \
                  left join sys.objects o on o.object_id = t.parent_id order by t.name"
@@ -2659,8 +2769,14 @@ _ => Meta::Unwritten,
             // Derby 没有 syscat（DB2 的 schema）：触发器的系统表是 sys.systriggers。
             // 列名 `TRIGGERNAME` 实测存在；表名不在该表里（定义文本里才有所属表），
             // 所以这里只给名字 —— 少一列好过报 42X05 让整个清单打不开。
+            // Derby：与 procedures 同一口径 —— 不加 schema 过滤会把内核自带的触发器
+            // （SYS 下的那些）也列出来，而当前账号对它们没有任何权限。
+            // 列名仍是 TRIGGERNAME，只是多了到 sys.sysschemas 的一跳。
             "derby" => Meta::Sql(
-                "select triggername as \"name\" from sys.systriggers order by triggername".to_string(),
+                "select t.triggername as \"name\" from sys.systriggers t \
+                 join sys.sysschemas s on s.schemaid = t.schemaid \
+                 where s.schemaname = current schema order by t.triggername"
+                    .to_string(),
             ),
             // ClickHouse / H2 没有触发器
             _ => Meta::Absent,
@@ -3133,13 +3249,13 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                 }
             }
             // SQLite 没有 TRUNCATE，截断退化成 DELETE（一样会清空数据，这点必须说清）
-            "truncate" => {
-                if self.key() == "sqlite" {
-                    Meta::Sql(format!("delete from {t}"))
-                } else {
-                    Meta::Sql(format!("truncate table {t}"))
-                }
-            }
+            "truncate" => match self.key() {
+                "sqlite" => Meta::Sql(format!("delete from {t}")),
+                // DB2 的 TRUNCATE 必须显式写 IMMEDIATE：`truncate table t` 直接
+                // SQLCODE=-104 SQLSTATE=42601（真机实测，报错信息里就提示 END-OF-STATEMENT ...;IMMEDIATE）
+                "db2" => Meta::Sql(format!("truncate table {t} immediate")),
+                _ => Meta::Sql(format!("truncate table {t}")),
+            },
             "drop" => Meta::Sql(format!("drop table {t}")),
             "rename" => match new_name {
                 Some(new_name) => {
@@ -3162,7 +3278,10 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                             self.literal(table),
                             self.literal(new_name)
                         )),
-                        // PostgreSQL / SQLite / Oracle / H2 / Derby / Doris
+                        // Doris 的 `ALTER TABLE … RENAME` **不带 TO**：
+                        // 写成 `rename to` 直接 `Syntax error in line 1`（真机实测）。
+                        "doris" => Meta::Sql(format!("alter table {t} rename {n}")),
+                        // PostgreSQL / SQLite / Oracle / H2 / Derby
                         // 都是 `ALTER TABLE … RENAME TO`（ClickHouse 见上面单独一支）
                         _ => Meta::Sql(format!("alter table {t} rename to {n}")),
                     }
@@ -3626,7 +3745,12 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                     return None;
                 }
             }
-        } else if upper.contains("CURRENT_") {
+        } else if upper.contains("CURRENT_")
+            // DB2 的写法是 **`CURRENT TIMESTAMP`（空格，不是下划线）** —— 只认 `CURRENT_`
+            // 会把它当普通内容加引号，拼出 `default 'CURRENT TIMESTAMP'`：重建出来是个
+            // 写死的字符串，而不是随时间走的默认值。文本列除外（那的默认值就是内容）。
+            || (upper.starts_with("CURRENT ") && !Self::is_textual_type(type_name))
+        {
             // 同类型原样放行：MySQL 的 `CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP` 是复合写法，
             // 拆开反而丢语义，这种就必须整段照抄
             return Some(trimmed.to_string());
@@ -3929,10 +4053,14 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                  from system.tables where database = currentDatabase()"
                     .to_string(),
             ),
+            // Oracle / DM：`sum(bytes)` 是聚合，而 `(select count(*) ...)` 是标量子查询，
+            // 混在同一个 select 列表里又没 group by ⇒ ORA-00937「不是单组分组函数」（真机实测）。
+            // 改成两个互相独立的标量子查询 + from dual。
             "oracle" | "dm" => Meta::Sql(
                 "select (select count(*) from user_tables) as tables, \
-                 to_char(round(coalesce(sum(bytes), 0) / 1024 / 1024, 2)) || ' MB' as sizeText \
-                 from user_segments"
+                 (select to_char(round(coalesce(sum(bytes), 0) / 1024 / 1024, 2)) || ' MB' \
+                  from user_segments) as sizeText \
+                 from dual"
                     .to_string(),
             ),
             // H2：表数能拿到；占用空间不在 information_schema 里，如实给「—」
@@ -3941,10 +4069,13 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                  from information_schema.tables where table_schema = current_schema"
                     .to_string(),
             ),
-            // DB2：syscat.tables 的页数（4KB 页）换算成 MB（数据页 + 索引页）
+            // DB2：syscat.tables 只有 NPAGES（数据页）/ FPAGES（总页数，含索引与溢出）/
+            // CARD（行数）。原句用的 data_object_pages / index_object_pages 是 Oracle
+            // 或其它库的列名，DB2 上直接 SQLCODE=-206 SQLSTATE=42703（真机实测）。
+            // 4KB 页 ⇒ 页数 * 4 / 1024 = MB。
             "db2" => Meta::Sql(
                 "select count(*) as tables, \
-                 cast(sum(coalesce(data_object_pages, 0) + coalesce(index_object_pages, 0)) * 4 / 1024 as decimal(12,1)) || ' MB' as sizeText \
+                 cast(coalesce(sum(fpages), 0) * 4 / 1024 as decimal(12,1)) || ' MB' as sizeText \
                  from syscat.tables where tabschema = current schema and type = 'T'"
                     .to_string(),
             ),

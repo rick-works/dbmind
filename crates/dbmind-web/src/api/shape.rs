@@ -475,6 +475,22 @@ pub fn connection_json(record: &ConnectionRecord) -> Value {
                 .collect()
         })
         .unwrap_or_default();
+    // 结构化连接选项（只改 URL 形状的那几项）：编辑表单要能回显，否则重新打开就跑回默认值。
+    // `urlOverride` 单独走 `jdbcUrl` 字段（见下），不混在这里，免得前端把它当成一个普通选项。
+    let (options, url_override) = {
+        let mut map = config
+            .extra
+            .as_ref()
+            .and_then(|extra| extra.get("options"))
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default();
+        let url = map
+            .remove("urlOverride")
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        (Value::Object(map), url)
+    };
     // 分组：新键 `group`，旧数据回落到 `environment`（对上游只暴露 `group` 一个名字）
     let group = record
         .group()
@@ -519,8 +535,10 @@ pub fn connection_json(record: &ConnectionRecord) -> Value {
         "remark": "",
         "group": group,
         "env": env,
-        "jdbcUrl": "",
+        // 手改过的 URL 原样回显（编辑页据此进入「手改」状态）；没手改就是空串
+        "jdbcUrl": url_override,
         "params": params,
+        "options": options,
         "connectTimeout": 10,
         "socketTimeout": 600,
         "writeTimeout": 300,

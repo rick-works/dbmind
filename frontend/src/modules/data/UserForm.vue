@@ -115,17 +115,8 @@
           <!-- ===== 服务器权限 ===== -->
           <el-tab-pane v-if="hasServerTab" :label="serverTabLabel" name="server">
             <div class="tab-inner grant-tab">
-              <!-- PG 的"角色"就是这一页（pg_* 预置 + 自定义），角色的新建 / 删除也放这儿，
-                   与 MySQL 系把它放在「角色」页签是同一个道理：在看得见角色的地方管理。 -->
-              <div v-if="isPgsql && !readOnly" class="role-toolbar">
-                <span class="role-actions">
-                  <el-button size="small" :icon="Plus" @click="openRoleCreate">{{ $t('um.newRole') }}</el-button>
-                  <el-button size="small" :icon="Edit" :disabled="roleDeletable.length === 0"
-                             @click="openRoleEdit">{{ $t('um.editRolePriv') }}</el-button>
-                  <el-button size="small" type="danger" plain :icon="Delete" :disabled="roleDeletable.length === 0"
-                             @click="openRoleDelete">{{ $t('um.deleteRoleTitle') }}</el-button>
-                </span>
-              </div>
+              <!-- 角色本身的新建 / 编辑 / 删除统一在「用户管理 → 角色管理」页签里做，
+                   这里只负责"把这个角色授给当前用户"（勾选即授权）。 -->
               <!-- MySQL 系：全局权限 —— 「权限项当列」。
                    分组写在**表头第一行**（colspan 跨它自己的那几列，带计数与全选/清空），
                    第二行才是权限名；主体只有一行（就是这个用户）。
@@ -198,17 +189,9 @@
           <!-- ===== 角色 ===== -->
           <el-tab-pane v-if="hasRolesTab" :label="$t('upv.tabRoles')" name="roles">
             <div class="tab-inner grant-tab">
-              <!-- 角色的新建 / 删除就在这一页：用户列表只放账号，角色本来就该在
-                   「看得见全部角色」的地方管理（勾选=授给当前用户）。 -->
-              <div v-if="!readOnly" class="role-toolbar">
-                <span class="role-actions">
-                  <el-button size="small" :icon="Plus" @click="openRoleCreate">{{ $t('um.newRole') }}</el-button>
-                  <el-button v-if="rolePrivEditable" size="small" :icon="Edit" :disabled="roleDeletable.length === 0"
-                             @click="openRoleEdit">{{ $t('um.editRolePriv') }}</el-button>
-                  <el-button size="small" type="danger" plain :icon="Delete" :disabled="roleDeletable.length === 0"
-                             @click="openRoleDelete">{{ $t('um.deleteRoleTitle') }}</el-button>
-                </span>
-              </div>
+              <!-- 角色本身的增删改统一在「用户管理 → 角色管理」页签里做（那边看得见全部角色），
+                   这里只保留"勾选 = 授给当前用户"。 -->
+
               <table class="form-table mx-table mx-grouped">
                 <thead>
                   <tr>
@@ -802,62 +785,7 @@
       </div>
     </div>
 
-    <!-- 新建角色：只有名字（MySQL 还要主机）—— 角色没有口令与属性 -->
-    <el-dialog v-model="roleCreateDlg" :title="$t('um.newRole')" width="440px" append-to-body>
-      <div class="role-form">
-        <div class="role-field">
-          <span class="role-label">{{ $t('um.roleName') }}</span>
-          <el-input v-model="roleForm.name" size="small" clearable :placeholder="$t('um.roleNamePh')"
-                    @keyup.enter="submitRoleCreate" />
-        </div>
-        <div v-if="roleHostVisible" class="role-field">
-          <span class="role-label">{{ $t('um.colHost') }}</span>
-          <el-input v-model="roleForm.host" size="small" clearable placeholder="%" />
-        </div>
-      </div>
-      <template #footer>
-        <el-button size="small" @click="roleCreateDlg = false">{{ $t('common.cancel') }}</el-button>
-        <el-button size="small" type="primary" :loading="roleBusy" @click="submitRoleCreate">
-          {{ $t('um.newRole') }}
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 编辑角色权限：选中一个角色 → 以它为**主体**打开同一张授权表单 -->
-    <el-dialog v-model="roleEditDlg" :title="$t('um.editRolePriv')" width="440px" append-to-body>
-      <div class="role-form">
-        <div class="role-field">
-          <span class="role-label">{{ $t('um.roleName') }}</span>
-          <el-select v-model="roleToEdit" size="small" filterable style="flex: 1">
-            <el-option v-for="r in roleDeletable" :key="r" :label="r" :value="r" />
-          </el-select>
-        </div>
-      </div>
-      <template #footer>
-        <el-button size="small" @click="roleEditDlg = false">{{ $t('common.cancel') }}</el-button>
-        <el-button size="small" type="primary" :disabled="!roleToEdit" @click="submitRoleEdit">
-          {{ $t('um.openRolePriv') }}
-        </el-button>
-      </template>
-    </el-dialog>
-
-    <!-- 删除角色：从"服务器上真实存在的自定义角色"里选（预置角色如 DBA 不在清单里） -->
-    <el-dialog v-model="roleDeleteDlg" :title="$t('um.deleteRoleTitle')" width="440px" append-to-body>
-      <div class="role-form">
-        <div class="role-field">
-          <span class="role-label">{{ $t('um.roleName') }}</span>
-          <el-select v-model="roleToDelete" size="small" filterable style="flex: 1">
-            <el-option v-for="r in roleDeletable" :key="r" :label="r" :value="r" />
-          </el-select>
-        </div>
-        <div class="role-dlg-tip">{{ $t('um.deleteRoleBody', { name: roleToDelete || '…' }) }}</div>
-      </div>
-      <template #footer>
-        <el-button size="small" @click="roleDeleteDlg = false">{{ $t('common.cancel') }}</el-button>
-        <el-button size="small" type="danger" :loading="roleBusy" :disabled="!roleToDelete"
-                   @click="submitRoleDelete">{{ $t('um.deleteRoleTitle') }}</el-button>
-      </template>
-    </el-dialog>
+    <!-- 角色的新建 / 编辑 / 删除统一在「用户管理 → 角色管理」页签里，本表单不再重复 -->
   </div>
 </template>
 
@@ -1173,101 +1101,8 @@ const roleColumns = computed(() => {
   for (const r of form.value.roles || []) if (r && !dead.has(r) && !cols.includes(r)) cols.push(r)
   return cols
 })
-// ===== 角色的新建 / 删除（就在「角色」页签里，用户列表只放账号）=====
-const roleBusy = ref(false)
-const roleCreateDlg = ref(false)
-const roleDeleteDlg = ref(false)
-const roleForm = ref({ name: '', host: '%' })
-const roleToDelete = ref('')
-const roleEditDlg = ref(false)
-const roleToEdit = ref('')
-// 只有 MySQL 的角色是「名字@主机」；MariaDB / Doris / PG / Oracle / CH 都是裸名字
-const roleHostVisible = computed(() => String(props.conn?.type || '').toUpperCase() === 'MYSQL')
-// 可删除的 = 服务器上真实存在的**自定义**角色：Oracle 的预置角色（DBA / CONNECT …）
-// 是 Oracle 自带，删了是真事故，所以不在清单里；PG 的 pg_* 预置角色同理。
-const roleDeletable = computed(() => {
-  const preset = new Set(isOracle.value ? oracleRoles : [])
-  const dead = new Set(removedRoles.value)
-  return roleColumns.value.filter((label) => !preset.has(label) && !dead.has(label))
-})
-const roleHostOf = (label) => {
-  const at = label.lastIndexOf('@')
-  return at > 0 ? { name: label.slice(0, at), host: label.slice(at + 1) } : { name: label, host: '' }
-}
-const openRoleCreate = () => {
-  roleForm.value = { name: '', host: '%' }
-  roleCreateDlg.value = true
-}
-const submitRoleCreate = async () => {
-  if (roleBusy.value) return
-  const name = String(roleForm.value.name || '').trim()
-  if (!name) {
-    ElMessage.warning(t('um.roleNeedName'))
-    return
-  }
-  const host = roleHostVisible.value ? (String(roleForm.value.host || '').trim() || '%') : ''
-  if (!guardConnWrite(props.conn || {}, t('um.newRole'))) return
-  roleBusy.value = true
-  try {
-    const res = await userAction(props.conn.id, {
-      action: 'create-role', database: props.database, userName: name, host
-    })
-    if (res && res.success) {
-      const label = roleHostVisible.value ? `${name}@${host}` : name
-      localRoles.value = [...localRoles.value, label]
-      removedRoles.value = removedRoles.value.filter((x) => x !== label)
-      ElMessage.success(t('um.roleCreated', { name: label }))
-      roleCreateDlg.value = false
-    } else {
-      ElMessage.error(t('um.roleCreateFailed', { detail: (res && res.message) || t('common.unknownError') }))
-    }
-  } catch (e) {
-    ElMessage.error(t('um.roleCreateFailed', { detail: (e && (e.message || String(e))) || '' }))
-  } finally {
-    roleBusy.value = false
-  }
-}
-const openRoleDelete = () => {
-  roleToDelete.value = roleDeletable.value[0] || ''
-  roleDeleteDlg.value = true
-}
-// 编辑角色权限：交给 MainView 另开一张「角色」表单（主体换成角色本身）
-const openRoleEdit = () => {
-  roleToEdit.value = roleDeletable.value[0] || ''
-  roleEditDlg.value = true
-}
-const submitRoleEdit = () => {
-  const label = String(roleToEdit.value || '').trim()
-  if (!label) return
-  roleEditDlg.value = false
-  emit('edit-role', { label })
-}
-const submitRoleDelete = async () => {
-  const label = String(roleToDelete.value || '').trim()
-  if (!label || roleBusy.value) return
-  if (!guardConnWrite(props.conn || {}, t('um.deleteRoleTitle'))) return
-  const { name, host } = roleHostOf(label)
-  roleBusy.value = true
-  try {
-    const res = await userAction(props.conn.id, {
-      action: 'drop-role', database: props.database, userName: name, host
-    })
-    if (res && res.success) {
-      removedRoles.value = [...removedRoles.value, label]
-      // 角色都没了，勾选留着只会在保存时拼出一条必失败（对象不存在）的授权
-      form.value.roles = (form.value.roles || []).filter((x) => x !== label)
-      ElMessage.success(t('um.roleDeleted', { name: label }))
-      roleDeleteDlg.value = false
-      roleToDelete.value = ''
-    } else {
-      ElMessage.error(t('um.deleteFailed', { detail: (res && res.message) || t('common.unknownError') }))
-    }
-  } catch (e) {
-    ElMessage.error(t('um.deleteFailed', { detail: (e && (e.message || String(e))) || '' }))
-  } finally {
-    roleBusy.value = false
-  }
-}
+// 角色的新建 / 编辑 / 删除统一在「用户管理 → 角色管理」页签（那边看得见全部角色），
+// 本表单只负责"勾选 = 把这个角色授给当前用户"。
 // 表格的列 = 白名单里的权限 ∪ 现有授权里出现的其它名字（一个都不能隐身：
 // 服务器返回了哪个名字，界面就必须能看见、能取消，否则保存时会把它悄悄撤掉）
 const objectPrivColumns = computed(() => {
@@ -1307,8 +1142,6 @@ const hasGranularTab = computed(() => isMysql.value || isMssql.value || isOracle
 // （mysql.role_edges / roles_mapping / SHOW ROLES，后端单独查）；ClickHouse 走 system.roles。
 // PG 不单开这一页 —— 它的「服务器权限」页本来就是角色（pg_* 预置 + 自定义），见 serverColumns。
 const hasRolesTab = computed(() => !props.asRole && (isOracle.value || isMysql.value || isClickhouse.value))
-// Doris 的权限名是 SELECT_PRIV / LOAD_PRIV 那套，与这套列不同名 —— 本版不给"编辑角色权限"
-const rolePrivEditable = computed(() => String(props.conn?.type || '').toUpperCase() !== 'DORIS')
 // 页签标题按类型取：同一层在不同家的说法不一样（Oracle 的"服务器级"其实就是系统权限）
 // 同一层在不同家叫法不同，按数据库类型取**准确**的名字：
 //   MySQL/MariaDB/Doris → 全局权限（GLOBAL PRIVILEGES，它没有"服务器"这一层）
@@ -3480,16 +3313,4 @@ watch([hasServerTab, hasDbTab, hasGranularTab], () => {
 .og-cell { text-align: center; }
 .obj-grid :deep(.el-select) { width: 100%; }
 .obj-grid :deep(.el-checkbox) { margin-right: 0; height: auto; }
-/* 角色页签的管理条：左边一句说明、右边新建/删除（不挤占表格宽度） */
-.role-toolbar {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  margin: 0 0 8px; padding: 0 2px;
-}
-.role-tip { color: var(--dc-text-dim); font-size: 12px; line-height: 1.5; }
-.role-actions { flex: none; display: inline-flex; gap: 8px; }
-/* 新建 / 删除角色对话框（与用户管理页的小表单同一口径） */
-.role-form { display: flex; flex-direction: column; gap: 10px; }
-.role-field { display: flex; align-items: center; gap: 10px; }
-.role-label { flex: none; width: 96px; color: var(--dc-text-mid); font-size: 12.5px; }
-.role-dlg-tip { color: var(--dc-text-dim); font-size: 12px; line-height: 1.6; }
 </style>

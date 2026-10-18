@@ -1274,7 +1274,6 @@ html[data-theme="light"] .el-loading-mask {
 .empty-hint.empty-hint .empty-block:has(.mcp-code) { display: flex; flex-direction: column; }
 .empty-hint.empty-hint .mcp-code { flex: 1; padding: 10px 12px; overflow: auto; }
 .empty-hint.empty-hint .mcp-code code { font-size: var(--dc-home-fs, 13px); line-height: 1.65; }
-.empty-hint.empty-hint .mcp-inline { font-size: calc(var(--dc-home-fs, 13px) - 1px); }
 /* ============ 侧栏工具条（新建连接 / 新建目录 / 展开 / 收缩 / 刷新）============
    原来这些动作散落在右键菜单和欢迎页 —— 放到对象浏览器标题下一行，手边就有。
    尺寸与左侧树的密度对齐（26px 方钮、圆角 7px），悬停才上色，静态时不抢注意力。 */
@@ -1455,7 +1454,6 @@ html[data-theme="light"] .el-loading-mask {
 .empty-hint.empty-hint .empty-dss-head { font-weight: 400; }
 .empty-hint.empty-hint .ds-name { font-weight: 400; }
 .empty-hint.empty-hint .empty-head h3 { font-weight: 400; }
-.empty-hint.empty-hint .mcp-inline { font-weight: 400; }
 /* ============ 主页字重兜底：整块统一常规 400 ============
    前面的逐条覆盖治不到组件与 Element Plus 自带的 500（类型徽标、text 按钮、内建 span），
    结果就是"大部分不加粗、个别还粗"的割裂感。这里做最后一道兜底，把主页范围内的字重压平；

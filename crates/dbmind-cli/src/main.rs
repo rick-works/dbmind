@@ -386,7 +386,7 @@ fn run(cli: Cli) -> dbmind_core::Result<()> {
                 print_json(&report)?;
             } else {
                 println!(
-                    "{} 自检通过（{} 运行时，耗时 {} ms{}）",
+                    "{} 连接成功（{} 运行时，耗时 {} ms{}）",
                     report.kind.label(),
                     report.runtime_mode.as_str(),
                     report.latency_ms,

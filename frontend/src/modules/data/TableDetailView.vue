@@ -217,7 +217,8 @@
                       <td :colspan="headSpan" :style="{ height: padTop + 'px' }"></td>
                     </tr>
                     <tr v-for="(c, i) in windowedCols" :key="c._uid"
-                        :class="{ 'r-new': c._state === 'new', 'r-mod': c._state === 'loaded' && colChanged(c) }">
+                        :class="{ 'r-new': c._state === 'new', 'r-mod': c._state === 'loaded' && colChanged(c), 'r-active': activeColUid === c._uid }"
+                        @click="activeColUid = c._uid">
                       <td><span class="row-idx">{{ winStart + i + 1 }}</span></td>
                       <td>
                         <el-input v-model="c.name" size="small" clearable
@@ -234,13 +235,16 @@
                         <span v-else class="cell-text" :class="{ 'cell-off': typeDisabled(c) }"
                               :title="c.typeBase" @click="onTypeClick(c)">{{ c.typeBase }}</span>
                       </td>
-                      <td class="c-center">
+                      <!-- c-num：长度/精度这两列窄，格子里再减去 9px 左右内边距就只剩一条缝了 ——
+                           这个类把单元格与控件自身的内边距都收窄，输入框能宽出一大截（列宽不变）。
+                           也不再挂 title 提示（用户反馈：这两格的悬停提示多余）。 -->
+                      <td class="c-center c-num">
                         <el-input v-model="c.length" size="small" :disabled="lenDisabled(c)"
-                                  :placeholder="lenPlaceholder(c)" :title="lenPlaceholder(c)" />
+                                  :placeholder="lenPlaceholder(c)" />
                       </td>
-                      <td class="c-center">
+                      <td class="c-center c-num">
                         <el-input v-model="c.scale" size="small" :disabled="lenDisabled(c)"
-                                  :placeholder="needsLength(c.typeBase) ? $t('tdet.colPrecision') : ''" :title="needsLength(c.typeBase) ? $t('tdet.scaleTip') : ''" />
+                                  :placeholder="needsLength(c.typeBase) ? $t('tdet.colPrecision') : ''" />
                       </td>
                       <td class="c-center">
                         <!-- 是/否一律只用勾选框（勾=是、不勾=否），不再跟「是/否」文字 —— 全库统一（用户反馈）。
@@ -251,7 +255,7 @@
                       <td v-if="showPkCol" class="c-center">
                         <!-- 能改的给可点的勾选框，不能改的给禁用勾选框 —— 状态照样一眼看得出（原来用一个星标图标） -->
                         <el-checkbox v-model="c.primaryKey" :disabled="!canEditPkOf(c)"
-                                     @change="onPkChange(c)" :title="$t('tdet.setPk')" />
+                                     @change="onPkChange(c)" :title="pkTitle(c)" />
                       </td>
                       <!-- 这三列只读：勾选框禁用 —— 勾=是、不勾=否，不再用「是」标签与「—」 -->
                       <td v-if="showOrderKey" class="c-center">
@@ -534,17 +538,62 @@ const mssqlCommentSql = (kind, comment, columnName) => {
     `EXEC sp_updateextendedproperty 'MS_Description', N'${sq(comment)}', ${args} ` +
     `ELSE EXEC sp_addextendedproperty 'MS_Description', N'${sq(comment)}', ${args}`
 }
+/** 查询结果里的某一列（列名大小写各家不同：H2 回 `NAME`、PG 回 `name`） */
+const rowField = (row, key) => {
+  if (!row) return ''
+  const k = Object.keys(row).find(x => x.toLowerCase() === String(key).toLowerCase())
+  return k ? String(row[k] ?? '') : ''
+}
 const mssqlPkName = async () => {
   const { table } = mssqlParts()
   try {
     const res = await executeSql(props.conn.id,
       `SELECT kc.name AS name FROM sys.key_constraints kc JOIN sys.tables t ON kc.parent_object_id = t.object_id WHERE t.name = N'${sq(table)}' AND kc.type = 'PK'`,
       props.database, null, null, null, null, true)
-    const row = res && res.rows && res.rows[0]
-    return row && row.name ? String(row.name) : ''
+    return rowField(res && res.rows && res.rows[0], 'name')
   } catch (e) { return '' }
 }
-const mssqlPk = ref('')
+/**
+ * PG 系（PostgreSQL / KingbaseES）与 H2 的主键约束名。
+ *
+ * 它们**没有** MySQL 那种 `DROP PRIMARY KEY`：取消主键只能
+ * `ALTER TABLE … DROP CONSTRAINT <名字>`，名字必须现查。
+ * H2 的 ddlStyle 也是 `pg`（见后端 meta.rs 的 edit_capabilities），但系统表是另一套
+ * （它没有 pg_constraint，主键在 information_schema.table_constraints 里）。
+ */
+const pgSchemaOf = () => {
+  // schema 型库的 props.database 是「库.模式」（后端 split_db_schema 按第一个点拆）
+  const raw = String(props.database || '')
+  const i = raw.indexOf('.')
+  return i >= 0 ? raw.slice(i + 1) : ''
+}
+const pgPkName = async () => {
+  const table = String(props.table || '')
+  if (!table) return ''
+  const isH2 = String(props.conn?.type || '').toUpperCase() === 'H2'
+  const sql = isH2
+    ? `select constraint_name as name from information_schema.table_constraints ` +
+      `where constraint_type = 'PRIMARY KEY' and upper(table_name) = upper('${sq(table)}')`
+    : `select c.conname as name from pg_constraint c ` +
+      `join pg_class t on t.oid = c.conrelid ` +
+      `join pg_namespace n on n.oid = t.relnamespace ` +
+      `where c.contype = 'p' and t.relname = '${sq(table)}' and n.nspname = '${sq(pgSchemaOf() || 'public')}'`
+  try {
+    const res = await executeSql(props.conn.id, sql, props.database, null, null, null, null, true)
+    return rowField(res && res.rows && res.rows[0], 'name')
+  } catch (e) {
+    // 取不到名字不是"没有主键"：预览/校验会据此给出明确提示，别静默生成一条 DROP 不掉的脚本
+    console.warn('[pk] 主键约束名查询失败：', sql, e?.message || e)
+    return ''
+  }
+}
+// 需要「按名字 DROP CONSTRAINT」的方言，加载时先把约束名取回来（预览与校验都要用）
+const pkName = ref('')
+const loadPkName = async () => {
+  pkName.value = ''
+  if (ddlStyle.value === 'mssql') pkName.value = await mssqlPkName()
+  else if (ddlStyle.value === 'pg') pkName.value = await pgPkName()
+}
 
 /**
  * 这些类型**必须**带长度/精度。
@@ -559,10 +608,10 @@ const LEN_REQUIRED = {
   mssql: ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR', 'VARBINARY', 'BINARY', 'DECIMAL', 'NUMERIC'],
   oracle: ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'DECIMAL', 'NUMERIC', 'RAW'],
   // Derby 的 VARCHAR / CHAR / DECIMAL 必须带长度（无参语法错）。
-  // （原来的 DB2 那条**删掉了**：这里的键是 ddlStyle，而 db2 的 ddlStyle 是 `generic`
-  //   —— `LEN_REQUIRED['db2']` 永远命中不了，留着只会让人以为校验生效了。真要支持 DB2，
-  //   得先让 needsLength 认"方言 kind"而不是 ddlStyle。）
+  // DB2 同理：`VARCHAR` 不带长度是**语法错**（DB2 要求 VARCHAR(n)），DECIMAL 缺省 (5,0)
+  // 会把精度悄悄改掉。db2 现在有自己的 ddlStyle（不再是 generic），这项校验才真正生效。
   derby: ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC'],
+  db2: ['VARCHAR', 'CHAR', 'GRAPHIC', 'VARGRAPHIC', 'DECIMAL', 'NUMERIC'],
   // CH：Decimal 必须给 (精度, 标度)，FixedString 必须给定长；DateTime64 有缺省 3 可不填
   clickhouse: ['DECIMAL', 'FIXEDSTRING']
 }
@@ -657,7 +706,11 @@ const splitTypeText = (raw) => {
   // 类型名允许**含数字**：ClickHouse 的 `DateTime64(3)`、SQL Server 的 `datetime2(7)`、
   // `Decimal64(...)` 都带数字。原先只认纯字母，这类会落到下面"整体当 base、opaque=false"，
   // 于是①类型格被大写显示 ②"长度"输入框被错误地放开（填了也被 buildType 忽略）。
-  const m = s.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)(.*)$/)
+  // 类型名允许**多个单词**：PG / H2 的 `character varying(64)`、`double precision`、
+  // `timestamp(6) with time zone` 都是合法写法。原先只认单个单词，
+  // `character varying(64)` 落到下面「含空格 ⇒ opaque」，于是 H2 上这一列的
+  // 「长度/精度」两格被**禁用**、值也不显示（实测：DEMO_T.NAME 就是这样）。
+  const m = s.match(/^([A-Za-z_][A-Za-z0-9_]*(?:\s+[A-Za-z_][A-Za-z0-9_]*)*)\s*\(([^)]*)\)(.*)$/)
   if (m) {
     const base = m[1].toUpperCase()
     if (!/^\d+(,\d+)?$/.test(m[2].trim().replace(/\s+/g, ''))) {
@@ -705,9 +758,10 @@ const isLoadedRow = (r) => r._state === 'loaded'
 // 勾选框灰掉看着像纯文本、输入框全禁用，同一张表在 MySQL 上却是可编辑的，
 // 「不同数据库样式不一样」就是这么来的。
 const canEditLoaded = computed(() =>
-  // derby 也在内：后端 edit_capabilities 已声明 Derby 支持改列（实测过 10.16），
-  // 名单里漏了它的话，后端说"支持"而这里把整张字段表灰成只读 —— 两处口径不一致。
-  has('supportsColumnModify') && ['mysql', 'pg', 'oracle', 'mssql', 'clickhouse', 'doris', 'derby'].includes(ddlStyle.value))
+  // derby / db2 也在内：后端 edit_capabilities 已声明它们支持改列（见 meta.rs），
+  // 名单里漏了的话，后端说"支持"而这里把整张字段表灰成只读 —— 两处口径不一致
+  //（DB2 之前就是这样：supportsColumnModify=false + 落到 generic，整表只读）。
+  has('supportsColumnModify') && ['mysql', 'pg', 'oracle', 'mssql', 'clickhouse', 'doris', 'derby', 'db2'].includes(ddlStyle.value))
 // 新增行可内联主键的方言
 const canSetPkOnAdd = computed(() => ['mysql', 'oracle', 'mssql'].includes(ddlStyle.value))
 // 修改主键/自增权限（与旧实现保持一致）
@@ -716,7 +770,22 @@ const canEditPkOf = (row) => {
   // （会报 "Can not change aggregation type"），编辑态一律只读展示
   if (isDoris.value) return false
   if (row._state === 'new') return canSetPkOnAdd.value
-  return canEditLoaded.value && (ddlStyle.value === 'mysql' || ddlStyle.value === 'mssql')
+  // pg 系（PostgreSQL / KingbaseES / H2）也能改：加主键是标准的
+  // `ALTER TABLE … ADD PRIMARY KEY (…)`，取消则按约束名 `DROP CONSTRAINT`
+  //（名字由 pgPkName() 现查，见 colParts 的 pkDiff 分支）。
+  // 原先名单里只有 mysql / mssql，PG 上这个勾选框整列是灰的 —— 用户看到的就是「主键不能点」。
+  return canEditLoaded.value && ['mysql', 'mssql', 'pg'].includes(ddlStyle.value)
+}
+/**
+ * 主键勾选框禁用时的**原因**（与 autoTitle 同一套思路）。
+ * 只给一个灰掉的框、不给解释，用户只能读成「这个功能没做」。
+ */
+const pkTitle = (row) => {
+  if (isDoris.value) return t('tdet.pkDoris')
+  if (canEditPkOf(row)) return t('tdet.setPk')
+  if (row._state === 'new') return t('tdet.pkNewCol')
+  if (!canEditLoaded.value) return t('tdet.pkReadOnly')
+  return t('tdet.pkNoAlter')
 }
 const canEditAutoOf = (row) => {
   // Doris 不支持通过 ALTER 修改/新增列的自增属性（自增只能在建表时指定），编辑态一律禁用
@@ -772,7 +841,7 @@ const renameSupported = computed(() =>
   // doris：`ALTER TABLE … RENAME COLUMN 旧 新`（实测 2.x 可用，**连分桶/Key 列都能改**，
   // 语法是空格连接、没有 TO —— 生成器按这个写）；
   // sqlite（3.25+ RENAME COLUMN）/ generic（DB2 / DuckDB 的 ANSI 形式）：只放开改名一种。
-  ['mysql', 'doris', 'pg', 'oracle', 'mssql', 'derby', 'clickhouse', 'sqlite', 'generic'].includes(ddlStyle.value))
+  ['mysql', 'doris', 'pg', 'oracle', 'mssql', 'derby', 'db2', 'clickhouse', 'sqlite', 'generic'].includes(ddlStyle.value))
 
 const buildColRows = () => {
   const isCh = ddlStyle.value === 'clickhouse'
@@ -988,6 +1057,9 @@ const onTypeClick = (c) => {
   if (typeDisabled(c)) return
   activeType.value = c._uid
 }
+/* 当前行：点一下整行变主色底 + 左侧主色条（用户反馈「选中的样式没变蓝」——
+   原来只有 focus-within 的极淡 wash，焦点一离开表格就完全看不出选的是哪一行）。 */
+const activeColUid = ref('')
 const onTableScroll = () => {
   const el = scroller.value
   if (!el) return
@@ -1054,7 +1126,10 @@ const rowToForm = (r, isEdit) => ({
   primaryKey: !!r.primaryKey,
   autoIncrementStart: 1,
   comment: r.comment || '',
-  position: 'last', afterColumn: ''
+  position: 'last', afterColumn: '',
+  // 基线（数据库现状）也带上：DB2 这类「一个属性一条语句」的方言要知道
+  // 「原来有没有默认值」才能决定该不该发 DROP DEFAULT（见 buildColumnSql 的 db2 分支）
+  _orig: isEdit && r._orig ? r._orig : null
 })
 
 const buildMySqlColumnDef = (f, includePk = true) => {
@@ -1072,6 +1147,22 @@ const posPart = (f) => {
   if (f.position === 'first') return ' FIRST'
   if (f.position === 'after' && f.afterColumn) return ` AFTER ${qt(f.afterColumn)}`
   return ''
+}
+
+/**
+ * DB2 的 DEFAULT 子句。
+ *
+ * DB2 的「当前时间」写法是 `CURRENT TIMESTAMP`（**空格**，不是 `CURRENT_TIMESTAMP`），
+ * 而且它必须是关键字、不能加引号 —— 统一套 `'…'` 会变成写死的字符串（重建后不随时间走）。
+ * 与后端 `default_literal` 的规则保持一致：关键字/数字/已带引号的表达式原样放行，其余按文本加引号。
+ */
+const db2Default = (v) => {
+  const s = String(v ?? '').trim()
+  if (/^null$/i.test(s)) return ' NULL'
+  if (/^CURRENT[ _](DATE|TIME|TIMESTAMP)$/i.test(s)) return ' ' + s.toUpperCase()
+  if (/^'.*'$/.test(s)) return ' ' + s
+  if (/^-?\d+(\.\d+)?$/.test(s)) return ' ' + s
+  return ` '${sq(s)}'`
 }
 
 // 生成 新增/修改 字段 SQL；不可用返回 null（生成预览前已有 validate 拦截）
@@ -1247,6 +1338,56 @@ const buildColumnSql = (f, isEdit) => {
     }
     return stmts.join(';\n')
   }
+  if (ddlStyle.value === 'db2') {
+    /*
+     * DB2 LUW 没有 MySQL 的 `MODIFY COLUMN`：一个属性一条语句。
+     *   改类型  `ALTER TABLE t ALTER COLUMN c SET DATA TYPE VARCHAR(32)`
+     *   可空    `ALTER TABLE t ALTER COLUMN c SET NOT NULL | DROP NOT NULL`
+     *   默认值  `ALTER TABLE t ALTER COLUMN c SET DEFAULT … | DROP DEFAULT`
+     *   改名    `ALTER TABLE t RENAME COLUMN 旧 TO 新`
+     *   加列    `ALTER TABLE t ADD COLUMN c 类型 [NOT NULL] [DEFAULT …]`
+     *   注释    `COMMENT ON COLUMN t.c IS '…'`（DB2 有列注释，supportsComment=true）
+     *
+     * 不做的两件（后端能力位已如实给 false，界面上也不出勾选框）：
+     * 主键在线增删（要先知道约束名）与 IDENTITY 的增删。
+     * 改类型/加 NOT NULL 会被 DB2 按**已有数据**校验（转换不了、有 NULL 值就拒绝），
+     * 报错原样显示，不预先替它猜。
+     */
+    const n = f.name.trim()
+    const stmts = []
+    if (isEdit) {
+      if (n !== String(f.oldName || '').trim()) {
+        stmts.push(`ALTER TABLE ${t} RENAME COLUMN ${qt(f.oldName)} TO ${qt(n)}`)
+      }
+      stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DATA TYPE ${buildType(f.type, typeParam(f))}`)
+      // 可空只在**真的变了**时才发：DB2 的每条 ALTER COLUMN 都是独立 DDL，
+      // 多发一条就多一次失败机会（也只改长度时预览里就只剩改类型那一条）
+      const origNullable = f._orig ? !!f._orig.nullable : null
+      if (origNullable === null || origNullable !== !!f.nullable) {
+        stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} ${f.nullable ? 'DROP' : 'SET'} NOT NULL`)
+      }
+      if (dv !== '') {
+        stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DEFAULT${db2Default(dv)}`)
+      } else if (f._orig && !f._orig.defaultIsNull && String(f._orig.defaultValue ?? '') !== '') {
+        // **只在该列原本有默认值时才 DROP DEFAULT**：DB2 对「本来就没有默认值」的列
+        // 执行 DROP DEFAULT 会直接报 SQLCODE=-190 / SQLSTATE=42837（列不能按该方式变更），
+        // 于是「只改个长度」也会保存失败（实测）。
+        stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} DROP DEFAULT`)
+      }
+      if (f.comment && has('supportsComment')) {
+        stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(f.comment)}'`)
+      }
+    } else {
+      let add = `ALTER TABLE ${t} ADD COLUMN ${qt(n)} ${buildType(f.type, typeParam(f))}`
+      if (!f.nullable) add += ' NOT NULL'
+      if (dv !== '') add += ` DEFAULT${db2Default(dv)}`
+      stmts.push(add)
+      if (f.comment && has('supportsComment')) {
+        stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(f.comment)}'`)
+      }
+    }
+    return stmts.join(';\n')
+  }
   // SQLite / 通用方言：仅支持新增字段
   let add = `ALTER TABLE ${t} ADD COLUMN ${qt(f.name.trim())} ${buildType(f.type, typeParam(f))}`
   add += f.nullable ? '' : ' NOT NULL'
@@ -1266,9 +1407,9 @@ const validate = () => {
       if (ddlStyle.value === 'sqlite' && !r.nullable && !String(r.defaultValue ?? '').trim()) {
         issues.push(t('tdet.issueSqliteNotNull', { name: nm }))
       }
-      // Derby 同一条限制：往**非空表**里加 NOT NULL 列必须带 DEFAULT，否则数据库直接拒绝
-      if (ddlStyle.value === 'derby' && !r.nullable && !String(r.defaultValue ?? '').trim()) {
-        issues.push(t('tdet.issueDerbyNotNull', { name: nm }))
+      // Derby / DB2 同一条限制：往**非空表**里加 NOT NULL 列必须带 DEFAULT，否则数据库直接拒绝
+      if ((ddlStyle.value === 'derby' || ddlStyle.value === 'db2') && !r.nullable && !String(r.defaultValue ?? '').trim()) {
+        issues.push(t(ddlStyle.value === 'db2' ? 'tdet.issueDb2NotNull' : 'tdet.issueDerbyNotNull', { name: nm }))
       }
     } else if (r._state === 'loaded' && colChanged(r)) {
       // SQL Server：改已有列的默认值必须先删默认约束再建，当前生成器只出 ALTER COLUMN。
@@ -1290,6 +1431,11 @@ const validate = () => {
   if (ddlStyle.value === 'mysql') {
     const ais = colRows.value.filter(r => r.autoIncrement && (r._state === 'new' || colChanged(r)))
     if (ais.length > 1) issues.push(t('tdet.issueOneAutoInc'))
+  }
+  // PG 系换/取消主键必须先按名字 `DROP CONSTRAINT`。名字没取回来（系统表查询失败）时
+  // 不能假装能改：生成出来的只有 ADD PRIMARY KEY，必然撞「multiple primary keys」。
+  if (ddlStyle.value === 'pg' && pkDiff.value && origPkCols.value.length && !pkName.value) {
+    issues.push(t('tdet.issuePkNameUnknown'))
   }
   // 注：Doris 的分桶列（DISTRIBUTED BY）数据库不允许修改（实测
   // `Can not modify distribution column[…]`）。这里**不拦** —— 语句照常生成、
@@ -1320,6 +1466,47 @@ const issues = computed(() => validate())
 // ==================== 变更 SQL 汇总（实时预览） ====================
 
 const samePk = (a, b) => a.length === b.length && a.every((x, i) => x === b[i])
+
+/** 加载时的主键列（差异基线） */
+const origPkCols = computed(() => (columns.value || []).filter(c => c.primaryKey).map(c => String(c.name)))
+/** 界面上当前的主键列 */
+const curPkCols = computed(() => displayCols.value
+  .filter(r => r.primaryKey && String(r.name || '').trim())
+  .map(r => String(r.name).trim()))
+/**
+ * 主键集合有没有变。
+ *
+ * 单独拎出来是因为**只勾/取消勾「主键」这一格、不动任何列属性**时，
+ * 以前既不进预览也不计入 pendingCount：预览一片空白、点保存提示「没有改动」——
+ * 用户看到的就是「勾了没用」。主键语句由 colParts 生成，这里只负责判定"有没有变"。
+ */
+const pkDiff = computed(() => !samePk(origPkCols.value, curPkCols.value))
+/**
+ * 忽略「主键」这一格后的列属性变化（PG 增删主键不该连带重写列属性）。
+ *
+ * PG 的 `ADD PRIMARY KEY` 会**自己把列置为 NOT NULL**（实测：可空列加主键后
+ * attnotnull 从 0 变 1），所以「勾主键 ⇒ onPkChange 顺手取消可空」这一项不算属性变化；
+ * 否则会连带生成一句 `ALTER COLUMN … SET DEFAULT 'nextval(...)'`（函数默认值被加引号），
+ * 一句就把自增列的默认值写坏。
+ */
+const attrsChanged = (r) => {
+  if (!isLoadedRow(r) || !r._orig) return true
+  const o = r._orig
+  if (String(r.name || '').trim() !== String(o.name || '').trim()) return true
+  // `_orig` 里存的是**归一化后的整条类型串**（见 buildColRows），不是 typeBase ——
+  // 直接比 typeBase 会恒不相等（一边是 VARCHAR、一边是 varchar(10)），
+  // 于是「只勾了个主键」也被判成列属性变了。
+  if (normType(buildType(r.typeBase, typeParam(r))) !== o.type) return true
+  // 勾主键时 onPkChange 会顺手把「可为空」取消，这一项是主键的副产物，不算「改了列属性」。
+  // 只放行**刚勾上**这一个方向：取消主键时 PG 不会把列改回可空，那一格本来就没变。
+  const pkForcedNotNull = !!r.primaryKey && !o.primaryKey
+  if (!!r.nullable !== !!o.nullable && !pkForcedNotNull) return true
+  const curDv = r.defaultIsNull ? null : String(r.defaultValue ?? '')
+  if (curDv !== o.defaultValue) return true
+  if ((r.comment || '').trim() !== (o.comment || '').trim()) return true
+  if (!!r.autoIncrement !== !!o.autoIncrement) return true
+  return false
+}
 
 // 索引：先输出需要 DROP 的（供删除/重建），供列变更前清理。
 // **只改名字**的已存在索引不在这里删 —— 见下面 idxCreateParts 的改名分支：
@@ -1403,7 +1590,11 @@ const colParts = () => {
   const removed = colRows.value.filter(r => r._state === 'deleted')
   const added = colRows.value.filter(r => r._state === 'new' && String(r.name || '').trim() !== '')
   const modified = colRows.value.filter(r => isLoadedRow(r) && colChanged(r))
-  if (!removed.length && !added.length && !modified.length) return []
+  // 只勾/取消勾主键（列属性一个字没动）也要往下走：
+  // 以前的早退会让预览空着、pendingCount 恒为 0 ⇒「取消主键」永远保存不出去。
+  // 只有真能生成主键语句的方言才算（其余方言的勾选框是禁用的，不会出现这种差异）。
+  const pkDirty = ['mysql', 'doris', 'mssql', 'pg'].includes(ddlStyle.value) && pkDiff.value
+  if (!removed.length && !added.length && !modified.length && !pkDirty) return []
   const parts = []
   const t = qt(props.table)
   // Doris 与 MySQL 同一套：它走 MySQL 协议，DROP/ADD/MODIFY COLUMN 都一致。
@@ -1442,8 +1633,8 @@ const colParts = () => {
       if (sql) parts.push(sql)
     }
     // ③ 表级主键 diff（删除列后 MySQL 会自动摘除被删列上的主键，避免多余的 DROP PRIMARY KEY）
-    const oldPk = (columns.value || []).filter(c => c.primaryKey).map(c => String(c.name))
-    const newPk = displayCols.value.filter(r => r.primaryKey && String(r.name || '').trim()).map(r => String(r.name).trim())
+    const oldPk = origPkCols.value
+    const newPk = curPkCols.value
     const removedNames = new Set(removed.map(r => String(r._orig ? r._orig.name : r.name)))
     const remainPk = oldPk.filter(n => !removedNames.has(n))
     if (!samePk(oldPk, newPk) && !samePk(remainPk, newPk)) {
@@ -1458,17 +1649,27 @@ const colParts = () => {
     }
     return parts
   }
-  // 非 MySQL：删除 → 修改 → 新增（SQL Server 若改动主键列，须先摘除主键约束）
-  const oldPk = (columns.value || []).filter(c => c.primaryKey).map(c => String(c.name))
-  const newPk = displayCols.value.filter(r => r.primaryKey && String(r.name || '').trim()).map(r => String(r.name).trim())
+  // 非 MySQL：删除 → 修改 → 新增（主键约束的增删排在两侧，见下面说明）
+  const oldPk = origPkCols.value
+  const newPk = curPkCols.value
   const pkTouched = oldPk.some(n =>
     removed.some(r => String(r._orig ? r._orig.name : r.name) === n) ||
     modified.some(r => String(r._orig ? r._orig.name : r.name) === n))
-  if (ddlStyle.value === 'mssql' && pkTouched && oldPk.length && mssqlPk.value) {
-    parts.push(`ALTER TABLE ${t} DROP CONSTRAINT ${qt(mssqlPk.value)}`)
+  // 什么时候必须先摘掉旧主键约束：
+  // · SQL Server：改动/删除主键列之前必须先 DROP CONSTRAINT（否则 ALTER COLUMN 被拒）；
+  // · PG 系（PostgreSQL / KingbaseES / H2）：`ADD PRIMARY KEY` 与已有主键互斥，
+  //   主键列集合变了就先按约束名摘掉（PG 没有 `DROP PRIMARY KEY`，名字由 pgPkName() 现查）。
+  //   单纯改列属性**不动**主键 —— 摘一次主键要重建整条索引，大表上是白挨一次全表扫描。
+  const dropPk = (ddlStyle.value === 'mssql' && pkTouched) || (ddlStyle.value === 'pg' && pkDiff.value)
+  if (dropPk && oldPk.length && pkName.value) {
+    parts.push(`ALTER TABLE ${t} DROP CONSTRAINT ${qt(pkName.value)}`)
   }
   for (const r of removed) parts.push(`ALTER TABLE ${t} DROP COLUMN ${qt(r._orig ? r._orig.name : r.name)}`)
   for (const r of modified) {
+    // PG：只改了「主键」这一格（列属性没动）时不要走通用 ALTER COLUMN 分支 ——
+    // 那会连带生成 `ALTER COLUMN … SET DEFAULT 'nextval(...)'`（函数默认值被加引号），
+    // 把自增列的默认值写成字符串字面量。主键语句本身就在下面，足够了。
+    if (ddlStyle.value === 'pg' && !attrsChanged(r)) continue
     const sql = buildColumnSql(rowToForm(r, true), true)
     if (sql) parts.push(sql)
   }
@@ -1477,9 +1678,24 @@ const colParts = () => {
     if (sql) parts.push(sql)
   }
   if (ddlStyle.value === 'mssql') {
-    if ((pkTouched || !samePk(oldPk, newPk)) && newPk.length) {
-      const pkName = 'PK_' + String(props.table).replace(/[^\w]/g, '').slice(0, 90)
-      parts.push(`ALTER TABLE ${t} ADD CONSTRAINT ${qt(pkName)} PRIMARY KEY (${newPk.map(qt).join(', ')})`)
+    if ((pkTouched || pkDiff.value) && newPk.length) {
+      // 局部变量**不能**叫 pkName：那会遮住上面的约束名 ref
+      const newPkName = 'PK_' + String(props.table).replace(/[^\w]/g, '').slice(0, 90)
+      parts.push(`ALTER TABLE ${t} ADD CONSTRAINT ${qt(newPkName)} PRIMARY KEY (${newPk.map(qt).join(', ')})`)
+    }
+  } else if (ddlStyle.value === 'pg') {
+    if (pkDiff.value && newPk.length) {
+      // 新进主键的列如果原本可空：PG 的 ADD PRIMARY KEY 会自己把它置 NOT NULL，
+      // 但 **H2 会直接拒绝**（实测 `Column "C2" must not be nullable; SQLState 90023`），
+      // 所以先显式 SET NOT NULL —— 对 PG 是幂等的（本来就是 NOT NULL），对 H2 才是必需的。
+      for (const r of displayCols.value) {
+        if (!r.primaryKey || r._state === 'new') continue   // 新建列自己就带 NOT NULL
+        if (r._orig && r._orig.nullable) {
+          parts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(String(r.name || '').trim())} SET NOT NULL`)
+        }
+      }
+      // 不指定约束名：PG 会按 `<表>_pkey` 自动生成（H2 同理给自动名）
+      parts.push(`ALTER TABLE ${t} ADD PRIMARY KEY (${newPk.map(qt).join(', ')})`)
     }
   }
   return parts
@@ -1561,7 +1777,10 @@ const optParts = () => {
 const pendingCount = computed(() => {
   const c = colStat.value
   const i = idxStat.value
-  return c.added + c.modified + c.deleted + i.added + i.modified + i.deleted + (optsChanged.value ? 1 : 0)
+  // 主键勾选单独算一项：它可能不伴随任何列属性变化（取消勾选时尤其如此），
+  // 漏掉就等于「改了、预览也有 SQL、但保存按钮说没有改动」。
+  const pk = (pkDiff.value && ['mysql', 'doris', 'mssql', 'pg'].includes(ddlStyle.value)) ? 1 : 0
+  return c.added + c.modified + c.deleted + i.added + i.modified + i.deleted + (optsChanged.value ? 1 : 0) + pk
 })
 
 /* 能合并 ALTER 子句的方言：**一条 ALTER 里的多个子句是原子的**（MySQL 实测：只要有一句非法，
@@ -2128,7 +2347,8 @@ const load = async () => {
     optsBase.collation = f.collation
     optsBase.autoIncrement = ''
     optsBase.comment = f.comment
-    if (ddlStyle.value === 'mssql') mssqlPk.value = await mssqlPkName()
+    // 需要按名字 DROP CONSTRAINT 的方言：先把主键约束名取回来（mssql / pg 系）
+    await loadPkName()
   } catch (e) {
     if (seq === loadSeq) ElMessage.error(t('tdet.loadSchemaFailed', { detail: (e?.message || e) }))
   } finally {
@@ -2260,7 +2480,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   idxRows.value = []
   tableForm.value = { engine: '', charset: '', collation: '', autoIncrement: '', comment: '', dorisModel: '', dorisDistCol: '', dorisBuckets: '', dorisReplication: '' }
   optsBase.engine = optsBase.charset = optsBase.collation = optsBase.autoIncrement = optsBase.comment = ''
-  mssqlPk.value = ''
+  pkName.value = ''
   load()
 })
 </script>
@@ -2636,7 +2856,9 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0 4px;
+  /* 左内边距 7px：与输入框/下拉控件自身的内边距**同值**，这样"类型"这一列
+     纯文本态的文字与表头（补了 16px = 9 + 7）正好对齐（原来写 4px，比表头偏左 3px）。 */
+  padding: 0 7px;
   font-size: 12px;
   cursor: pointer;
 }
@@ -2715,6 +2937,11 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 /* 主键 / 可空 / 自增等开关列：表头与内容居中，其余列左对齐 */
 .field-table th.c-center,
 .field-table td.c-center { text-align: center; }
+/* 长度 / 精度（c-num）：这两列本来就窄，单元格 9px + 控件 7px 的左右内边距把输入框
+   挤成一条缝（实测 51px 的列里输入框只剩 18px 宽）。只收窄内边距、**不动列宽**：
+   输入框实测宽出一倍左右，能看清 3~4 位数字，也不影响两列居中的对齐关系。 */
+.field-table td.c-num { padding-left: 3px; padding-right: 3px; }
+.field-table td.c-num :deep(.el-input__wrapper) { padding-left: 3px; padding-right: 3px; }
 /* ===== 表头文字与内容格里的文字对齐 =====
    表头是纯文字、内容格里是控件（输入框 / 下拉），而控件**自带**左内边距 ——
    Element 的 .el-input__wrapper 留 7px、.el-select__wrapper 留 8px，表头只有 9px，
@@ -2735,6 +2962,18 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .field-table :deep(.el-checkbox__inner),
 .field-table :deep(.el-switch) { z-index: auto; }
 .field-table :deep(.el-checkbox__label) { display: none; }
+/* 禁用的勾选框（可为空=是的主键列、只读列、改不了主键的类型）：
+   Element 默认给它一块 #f5f7fa 的**接近纯白**的底，在深色表格里像贴了张白纸 ——
+   用户反馈"不能勾选就不要白色，鼠标移入给提示就好"。这里换成透明底 + 淡描边，
+   勾/未勾的状态照样看得出（勾号用弱化的文字色），原因由 title 提示承担。 */
+.field-table :deep(.el-checkbox.is-disabled .el-checkbox__inner) {
+  background-color: transparent !important;
+  border-color: var(--dc-border) !important;
+}
+.field-table :deep(.el-checkbox.is-disabled .el-checkbox__inner::after) {
+  border-color: var(--dc-text-dim) !important;
+}
+.field-table :deep(.el-checkbox.is-disabled) { cursor: not-allowed; }
 /* ↓↓↓ 行底色统一画在 td 上（悬停、新增/改动），按顺序覆盖：
    悬停 → 新增/改动 → 它们在悬停时的高亮。全部同优先级，靠顺序决定胜出。
    注：**不做斑马纹** —— 参考里的行全是同色，只靠分隔线 + 悬停/当前行高亮区分；
@@ -2779,7 +3018,11 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 /* 注释格：输入框 + 悬停浮出的「展开」按钮。
    按钮绝对定位 —— 出现/消失都不挤动输入框（否则鼠标一扫，文字就跳位置）；
    底色用 inherit，跟随所在行（斑马纹/悬停底色），所以压在文字尾部也不会露出一块白底。 */
-.cmt-cell { position: relative; display: flex; align-items: center; background: inherit; }
+/* 底色必须**透明**，不能 inherit：行底色（悬停 / 选中 / 改动）是半透明的
+   （--dc-primary-wash 实测 rgba(79,140,255,.12)），inherit 到这一格又被画了一遍，
+   叠在同一个 td 上就变成 0.12 over 0.12 ≈ 0.23 —— 用户看到的就是「选中行时注释格
+   比别的格子颜色深」。透明之后这一格由 td 自己的底色透上来，与整行一致。 */
+.cmt-cell { position: relative; display: flex; align-items: center; background: transparent; }
 .cmt-cell :deep(.el-input) { width: 100%; }
 .cmt-expand {
   position: absolute;
@@ -2808,6 +3051,15 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    位置必须在这几条斑马纹规则**之后**，同优先级下靠顺序取胜。 */
 .field-table tbody tr:focus-within td { background: var(--dc-primary-wash); }
 .field-table tbody tr:focus-within td:first-child { box-shadow: inset 3px 0 0 var(--dc-primary); }
+/* 当前选中行：点一下整行主色底 + 左侧主色条。
+   光靠 focus-within 不够 —— 焦点一离开表格（去点预览、改别的行）就看不出刚才选的是哪一行。
+   放在 hover / r-new / r-mod / focus-within 之后，同优先级靠顺序取胜。 */
+.field-table tbody tr.r-active td { background: var(--dc-primary-wash); }
+.field-table tbody tr.r-active td:first-child { box-shadow: inset 3px 0 0 var(--dc-primary); }
+/* 长度 / 精度是数字，居中读起来更整齐。
+   单元格上的 .c-center 只管 td 对齐，<el-input> 里的文字仍是左对齐（inner 自己带 text-align:start），
+   必须单独压一遍 inner。这两格是 c-center 列里唯一有输入框的，不会误伤勾选框列。 */
+.field-table td.c-center :deep(.el-input__inner) { text-align: center; }
 .dc-del { color: var(--dc-danger); }
 .dc-del:hover { color: var(--dc-danger); background: rgba(255, 97, 97, .1); }
 

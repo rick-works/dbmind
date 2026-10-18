@@ -15,6 +15,7 @@
 use crate::error::{DbMindError, ErrorCode, Result};
 use crate::paths;
 use crate::types::{ConnectionConfig, TableInfo, TableKind};
+use crate::ConnectionKind;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -1574,7 +1575,46 @@ pub fn map_tables(value: Value) -> Vec<TableInfo> {
 /// H2 之类的驱动拿到 `C:\a\b` 会解析失败甚至静默退化成内存库（实测踩过：
 /// 建表「成功」但那是个内存库，下一个连接当然是空的）。
 pub fn render_jdbc_url(template: &str, config: &ConnectionConfig) -> Result<String> {
-    let mut url = template.to_string();
+    // 用户手改过的 URL 直接用，不再套模板（`extra.options.urlOverride`，见 conn.rs）。
+    // 驱动参数仍以 Properties 传下去，所以手改 URL 不会让「附加参数」失效。
+    if let Some(url) = url_option(config, "urlOverride") {
+        return Ok(url.to_string());
+    }
+    // ---- 结构化选项（`extra.options`）：只改 URL 形状、不是驱动属性的那几项 ----
+    // 前端连接表单（frontend/src/types/jdbc.js 的 buildUrlFor）按同一套规则生成预览，
+    // 改这里必须同步改那边，否则用户看到的 URL 和实际连的不是一回事。
+    let mut template = template.to_string();
+    // Oracle 连接方式：service（默认，`@host:port/服务名`）| sid（`@host:port:SID`）
+    if config.kind == ConnectionKind::Oracle && url_option(config, "oracleConnect") == Some("sid") {
+        template = template.replace("/{database}", ":{database}");
+    }
+    // 注：SQL Server「命名实例」字段已从连接表单移除（用户不需要）：一律走 host:port，
+    // 命名实例请直接填实例监听端口（或走「附加参数」）。
+    // ClickHouse over TLS：驱动按 URL 前缀区分 http / https
+    if config.kind == ConnectionKind::Clickhouse && url_option(config, "chScheme") == Some("https") {
+        template = template.replacen("jdbc:clickhouse://", "jdbc:clickhouse:https://", 1);
+    }
+    // 库名留空时不保留尾部的 `/`（`jdbc:mysql://h:3306/` → `jdbc:mysql://h:3306`）：
+    // MySQL / ClickHouse 这些驱动允许「不指定默认库」，裸主机就是合法写法，拖着个斜杠
+    // 反而像少写了库名。**例外是 pgjdbc 系（PG / Kingbase）**：它的 URL 语法要求必须
+    // 有路径段，`jdbc:postgresql://h:5432?x=y` 会直接报 Unable to parse URL，
+    // 只能保留 `/`（`...:5432/?x=y` 合法）。前端 jdbc.js 按同一规则出预览。
+    let keep_db_slash = matches!(
+        config.kind,
+        ConnectionKind::Postgresql | ConnectionKind::Kingbase
+    );
+    if !keep_db_slash
+        && config
+            .database
+            .as_deref()
+            .map(str::trim)
+            .map(str::is_empty)
+            .unwrap_or(true)
+    {
+        template = template.replace("/{database}", "");
+    }
+
+    let mut url = template;
     let replacements: [(&str, Option<String>); 5] = [
         ("{host}", config.host.clone()),
         ("{port}", config.resolved_port().map(|p| p.to_string())),
@@ -1628,7 +1668,41 @@ pub fn render_jdbc_url(template: &str, config: &ConnectionConfig) -> Result<Stri
         url.push(separator);
         url.push_str("allowMultiQueries=true");
     }
+    // 只能写进 URL 的引擎设置（H2 的 `MODE=MySQL` / `AUTO_SERVER=TRUE` 之类）：
+    // 前端把整段拼好放在 `options.urlSuffix`，内核只负责按分隔符接上去 ——
+    // 以后新增这类设置不用再改内核（它们不是连接属性，只能出现在 URL 上）。
+    if let Some(suffix) = url_option(config, "urlSuffix") {
+        let separator = if suffix.starts_with(';') || suffix.starts_with('?') || suffix.starts_with('&') {
+            ""
+        } else if url.contains('?') {
+            "&"
+        } else if url.starts_with("jdbc:sqlserver:")
+            || url.starts_with("jdbc:derby:")
+            || url.starts_with("jdbc:h2:")
+        {
+            ";"
+        } else {
+            "?"
+        };
+        url.push_str(separator);
+        url.push_str(suffix);
+    }
     Ok(url)
+}
+
+/// 读一条结构化连接选项（`extra.options.<key>`）。
+///
+/// 这些选项**不是**驱动属性（驱动只读 `extra.params`），只影响 URL 形状，
+/// 由连接表单写入；空串一律当作没设置。
+fn url_option<'a>(config: &'a ConnectionConfig, key: &str) -> Option<&'a str> {
+    config
+        .extra
+        .as_ref()
+        .and_then(|extra| extra.get("options"))
+        .and_then(|options| options.get(key))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 /// 这条连接是否选了「Windows 集成认证」。
@@ -1720,7 +1794,9 @@ mod tests {
             .with_host("10.0.0.5")
             .with_database("app");
         let url = render_jdbc_url(ConnectionKind::Postgresql.jdbc_url_template().unwrap(), &config).unwrap();
-        assert_eq!(url, "jdbc:postgresql://10.0.0.5:5432/app");
+        // PG 模板本身就带 sslmode / 批量改写等参数（见 plugins/connection-types/postgresql.yaml），
+        // 这里只断言「主机 + 端口 + 库名」这一段的形状
+        assert!(url.starts_with("jdbc:postgresql://10.0.0.5:5432/app?"), "{url}");
     }
 
     #[test]
@@ -1802,6 +1878,59 @@ mod tests {
         let url = render_jdbc_url(ConnectionKind::H2.jdbc_url_template().unwrap(), &config).unwrap();
         assert_eq!(url, "jdbc:h2:file:C:/Users/me/.dbmind/data/demo");
         assert!(!url.contains('\\'), "JDBC URL 里不应出现反斜杠：{url}");
+    }
+
+    /// 手改过的 URL（`extra.options.urlOverride`）原样使用：不再套模板、不追加任何参数，
+    /// 但驱动参数仍会以 Properties 传下去（见 connect_params），两者互不干扰。
+    #[test]
+    fn 手改的_url_原样使用() {
+        let mut config = ConnectionConfig::new("m", ConnectionKind::Mysql).with_host("real-host");
+        config.port = Some(3306);
+        config.database = Some("demo".to_string());
+        config.extra = Some(serde_json::json!({
+            "options": { "urlOverride": "jdbc:mysql://10.0.0.1:3307/other?useSSL=false" }
+        }));
+        let url =
+            render_jdbc_url(ConnectionKind::Mysql.jdbc_url_template().unwrap(), &config).unwrap();
+        assert_eq!(url, "jdbc:mysql://10.0.0.1:3307/other?useSSL=false");
+    }
+
+    /// 结构化选项（`extra.options`）只改 URL 形状：前端表单的预览按同一套规则拼，
+    /// 这里把四种形状钉住 —— 任何一边改了另一边没跟上，都会从这条用例暴露。
+    #[test]
+    fn 结构化选项按类型改写_url_形状() {
+        // Oracle：默认服务名（`/`），选了 SID 变 `:`
+        let mut oracle = ConnectionConfig::new("o", ConnectionKind::Oracle).with_host("10.0.0.9");
+        oracle.port = Some(1521);
+        oracle.database = Some("ORCL".to_string());
+        let tpl = ConnectionKind::Oracle.jdbc_url_template().unwrap();
+        assert_eq!(render_jdbc_url(tpl, &oracle).unwrap(), "jdbc:oracle:thin:@10.0.0.9:1521/ORCL");
+        oracle.extra = Some(serde_json::json!({ "options": { "oracleConnect": "sid" } }));
+        assert_eq!(render_jdbc_url(tpl, &oracle).unwrap(), "jdbc:oracle:thin:@10.0.0.9:1521:ORCL");
+
+        // SQL Server：命名实例字段已移除，端口就是端口（不再被实例名顶掉）
+        let mut mssql = ConnectionConfig::new("m", ConnectionKind::Sqlserver).with_host("db1");
+        mssql.port = Some(1433);
+        mssql.database = Some("master".to_string());
+        let url =
+            render_jdbc_url(ConnectionKind::Sqlserver.jdbc_url_template().unwrap(), &mssql).unwrap();
+        assert!(url.starts_with("jdbc:sqlserver://db1:1433;"), "{url}");
+        assert!(!url.contains("instanceName="), "{url}");
+
+        // H2：urlSuffix 原样接上（MODE / AUTO_SERVER 只能写在 URL 上）
+        let mut h2 = ConnectionConfig::new("h", ConnectionKind::H2).with_file("./data/app");
+        h2.extra = Some(serde_json::json!({ "options": { "urlSuffix": "MODE=MySQL;AUTO_SERVER=TRUE" } }));
+        let url = render_jdbc_url(ConnectionKind::H2.jdbc_url_template().unwrap(), &h2).unwrap();
+        assert_eq!(url, "jdbc:h2:file:./data/app;MODE=MySQL;AUTO_SERVER=TRUE");
+
+        // ClickHouse：https 换前缀（端口通常 8443）
+        let mut ch = ConnectionConfig::new("c", ConnectionKind::Clickhouse).with_host("ch");
+        ch.port = Some(8443);
+        ch.database = Some("default".to_string());
+        ch.extra = Some(serde_json::json!({ "options": { "chScheme": "https" } }));
+        let url =
+            render_jdbc_url(ConnectionKind::Clickhouse.jdbc_url_template().unwrap(), &ch).unwrap();
+        assert!(url.starts_with("jdbc:clickhouse:https://ch:8443/default"), "{url}");
     }
 
     #[test]

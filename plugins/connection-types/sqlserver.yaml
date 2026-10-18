@@ -19,7 +19,9 @@ jdbc:
   # encrypt=false + trustServerCertificate=true：兼容纯 JDBC 自签环境。
   # 少了这两个参数，mssql-jdbc 12.x 的默认是 encrypt=true / trustServerCertificate=false，
   # 连自签证书的库会直接报 PKIX path building failed —— 界面上却看不出来是参数问题。
-  urlTemplate: "jdbc:sqlserver://{host}:{port};databaseName={database};encrypt=false;trustServerCertificate=true;loginTimeout=10"
+  # allowMultiQueries=true：一条请求里可能带多条语句（脚本执行 / 批量 DDL），
+  # 缺了它 mssql-jdbc 会拒掉「一次多发」的语句。表单预览按这条模板逐字展示。
+  urlTemplate: "jdbc:sqlserver://{host}:{port};databaseName={database};encrypt=false;trustServerCertificate=true;loginTimeout=10;allowMultiQueries=true"
   artifact: com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11
 traits:
   singleDatabase: false

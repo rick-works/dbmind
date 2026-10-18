@@ -329,7 +329,10 @@ fn jdbc_类型传驱动类与_url() {
         .expect("应能组装参数");
 
     assert_eq!(params["driverClass"], "org.postgresql.Driver");
-    assert_eq!(params["url"], "jdbc:postgresql://10.0.0.5:5432/app");
+    // PG 模板自带 sslmode / 批量改写等参数（见 plugins/connection-types/postgresql.yaml），
+    // 这里只钉住「主机 + 端口 + 库名」这一段
+    let url = params["url"].as_str().unwrap_or_default();
+    assert!(url.starts_with("jdbc:postgresql://10.0.0.5:5432/app?"), "{url}");
     assert_eq!(params["protocol"], "sql");
     assert_eq!(params["agentKey"], "postgresql");
     // JDBC 的驱动由驱动商店提供 ⇒ 必须带 jar 列表字段

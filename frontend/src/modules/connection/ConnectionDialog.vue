@@ -1,5 +1,5 @@
 <template>
-  <el-dialog :model-value="modelValue" width="680px"
+  <el-dialog :model-value="modelValue" width="min(820px, 94vw)"
              :close-on-click-modal="false"
              @update:model-value="$emit('update:modelValue', $event)"
              @open="initForm" destroy-on-close
@@ -24,19 +24,13 @@
     <el-tabs v-model="activeTab" class="conn-tabs">
       <!-- ============ 基本配置 ============ -->
       <el-tab-pane :label="$t('cd.tabBasic')" name="basic">
-        <el-form :model="form" label-width="90px" label-position="left">
+        <el-form :model="form" :label-width="labelWidth" label-position="left">
           <el-form-item :label="$t('cd.name')" required>
             <el-input v-model="form.name" />
           </el-form-item>
 
-          <!-- 备注：存在连接的 extra.note 里（后端 config_from_body 写入、connection_json 回传）。
-               用途是「这条连接是干嘛的」—— 库名看不出来，人能一句话说清。 -->
-          <el-form-item :label="$t('cd.note')">
-            <el-input v-model="form.note" type="textarea" :rows="2" maxlength="200" show-word-limit />
-          </el-form-item>
-
           <div class="form-row">
-            <el-form-item :label="$t('cd.env')" required style="flex:1">
+            <el-form-item :label="$t('cd.env')" required>
               <el-select v-model="form.env" style="width: 100%">
                 <el-option value="DEV" :label="$t('env.dev')">
                   <span class="env-dot env-dev"></span>{{ $t('env.dev') }}
@@ -49,8 +43,8 @@
                 </el-option>
               </el-select>
             </el-form-item>
-            <el-form-item :label="$t('cd.group')" required style="flex:1">
-              <div style="display: flex; gap: 8px; width: 100%">
+            <el-form-item :label="$t('cd.group')" required class="row-side" label-width="88px">
+              <div class="group-line">
                 <el-select v-model="form.group" style="flex:1" allow-create filterable
                            :empty-values="[null, undefined]" default-first-option
                            @change="onEnvChange">
@@ -63,7 +57,12 @@
                     <span style="color: var(--el-text-color-secondary)">{{ $t('cd.noGroup') }}</span>
                   </el-option>
                 </el-select>
-                <el-button type="primary" plain :icon="Plus" @click="createFolder">{{ $t('common.new') }}</el-button>
+                <!-- 只放图标：右列宽度有限，按钮带文字会把分组下拉挤成一条缝。
+                     再用 small（24px）：跟 32px 的下拉框等高反而喧宾夺主 -->
+                <el-tooltip :content="$t('cd.newGroup')" placement="top" :show-after="200">
+                  <el-button type="primary" plain :icon="Plus" circle size="small" class="group-add"
+                             @click="createFolder" />
+                </el-tooltip>
               </div>
             </el-form-item>
           </div>
@@ -77,10 +76,6 @@
                 <el-button :icon="DocumentAdd" @click="form.filePath = ''">{{ $t('common.new') }}</el-button>
               </div>
             </el-form-item>
-            <el-form-item label="JDBC URL">
-              <el-input v-model="form.jdbcUrl" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }"
-                        @input="jdbcUrlManuallyEdited = true" />
-            </el-form-item>
             <el-alert v-if="typeDef.fileHint" type="info" :closable="false" show-icon
                       :title="$t(typeDef.fileHint)" style="margin-bottom:12px" />
           </template>
@@ -88,32 +83,32 @@
           <!-- 网络型 -->
           <template v-else>
             <div class="form-row">
-              <el-form-item :label="$t('cd.host')" required style="flex:1">
+              <el-form-item :label="$t('cd.host')" required>
                 <el-input v-model="form.host" />
               </el-form-item>
-              <el-form-item :label="$t('cd.port')" label-width="55px" required style="flex: 0 0 170px">
+              <el-form-item :label="$t('cd.port')" required class="row-side" label-width="88px">
                 <el-input v-model.number="form.port" />
               </el-form-item>
             </div>
 
+            <!-- 影响下面「库名」字段含义的选项（Oracle 连接方式）必须排在它前面：
+                 选服务名 / SID 会直接改这一格的标题与 URL 语法 -->
+            <ConnOptionField v-for="o in preDbOptions" :key="o.key" :o="o"
+                             :model-value="optValue(o)" @update:model-value="(v) => setOpt(o, v)" />
+
             <div class="form-row">
-              <el-form-item :label="$t(typeDef.databaseLabel)" style="flex:1">
-                <el-input v-model="form.database" />
+              <el-form-item :label="dbLabel" :required="dbRequired">
+                <el-input v-model="form.database" :placeholder="dbPlaceholder" clearable />
               </el-form-item>
-              <el-form-item v-if="typeDef.protocols.length" :label="$t('cd.protocol')" label-width="55px" style="flex: 0 0 170px">
+              <el-form-item v-if="typeDef.protocols.length" :label="$t('cd.protocol')" class="row-side" label-width="88px" required>
                 <el-select v-model="form.esProtocol" style="width: 100%">
                   <el-option v-for="protocol in typeDef.protocols" :key="protocol" :value="protocol" :label="protocol" />
                 </el-select>
               </el-form-item>
             </div>
 
-            <el-form-item label="JDBC URL">
-              <el-input v-model="form.jdbcUrl" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }"
-                        @input="jdbcUrlManuallyEdited = true" />
-            </el-form-item>
-
             <!-- 认证方式：仅类型声明了 authTypes 时显示（如 SQL Server） -->
-            <el-form-item v-if="showAuthSelect" :label="$t('udv.fAuthType')">
+            <el-form-item v-if="showAuthSelect" :label="$t('udv.fAuthType')" required>
               <el-select v-model="form.authType" style="width: 100%">
                 <el-option v-for="a in typeDef.authTypes" :key="a.value" :value="a.value" :label="a.labelKey ? $t(a.labelKey) : a.label" />
               </el-select>
@@ -123,43 +118,62 @@
                       :title="windowsAuthHint" />
 
             <div v-if="!hideCredentials && !nativeWindowsAuth" class="form-row">
-              <el-form-item :label="$t('udv.fUser')" :required="!isWindowsAuth" style="flex:1">
+              <el-form-item :label="$t('udv.fUser')" :required="!isWindowsAuth">
                 <el-input v-model="form.username" :placeholder="isWindowsAuth ? $t('cd.userPlaceholder') : ''" />
               </el-form-item>
-              <el-form-item v-if="!isWindowsAuth" :label="$t('cd.password')" :required="!hasSavedPassword" style="flex:1">
+              <!-- 口令框恒带必填星号：编辑时留空表示「沿用已保存的口令」，但这依旧是一条必填信息
+                   （新建时必须填），星号缺一个反而让人以为是选填 -->
+              <el-form-item v-if="!isWindowsAuth" :label="$t('cd.password')" class="row-side" label-width="88px" required>
                 <el-input v-model="form.password" type="password" show-password
                           :placeholder="hasSavedPassword ? $t('cd.pwdSaved') : ''" />
               </el-form-item>
             </div>
           </template>
 
-          <!-- 下载进行中：优先于「未就绪」提示 —— 否则用户只看到一句"会自动下载"，
-               不知道到底在不在动、还要多久 -->
-          <div v-if="driverDownloading" class="driver-hint driver-hint-dl">
-            <el-icon :size="14" class="dh-spin"><Loading /></el-icon>
-            <div class="dh-col">
-              <div class="dh-line">
-                {{ $t('cd.driverDling', { label: dl.label, percent: dlPercent }) }}
-                <template v-if="dl.files > 1"> · {{ $t('cd.driverDlFile', { i: dl.index, n: dl.files }) }}</template>
+          <!-- 类型专属连接选项（基本配置部分）：字段来自 src/types/<type>.js 的 options。
+               带 param 的会真实写进驱动参数（后端以 JDBC Properties 交给驱动），
+               不带 param 的只改 URL 形状（如 Oracle 的 SID / ClickHouse 的 https）。
+               不加分组小标题：字段名本身就说明了是什么，多一行标题只会让版面更挤。 -->
+          <ConnOptionField v-for="o in basicOptions" :key="o.key" :o="o"
+                           :model-value="optValue(o)" @update:model-value="(v) => setOpt(o, v)" />
+
+          <!-- 连接串：默认按「模板 + 选项 + 参数」自动生成；也可以直接改 ——
+               改过之后原样保存（后端存 extra.options.urlOverride，连接时整条用它），
+               想回自动值点「恢复自动」。 -->
+          <el-form-item class="jdbc-item" required>
+            <template #label>
+              <span class="opt-label">JDBC URL</span>
+              <el-tooltip :content="urlTip" placement="top" :show-after="120" popper-class="opt-tip-pop">
+                <el-icon class="opt-q"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </template>
+            <div class="jdbc-box">
+              <!-- spellcheck 必须关：JDBC URL 全是 useUnicode / rewriteBatchedStatements
+                   这类标识符，浏览器会把它们全标成"拼写错误"的红波浪线，
+                   用户以为是 URL 写错了（截图反馈过）。真正的格式问题用下面一行文字提示。 -->
+              <el-input v-model="form.jdbcUrl" type="textarea"
+                        :autosize="{ minRows: 2, maxRows: 5 }" class="jdbc-pre"
+                        spellcheck="false" autocapitalize="off" autocorrect="off"
+                        @input="onUrlInput" />
+              <div v-if="urlWarn" class="jdbc-warn">{{ urlWarn }}</div>
+              <div v-if="urlCustom" class="jdbc-foot">
+                <el-button link type="primary" size="small" @click="resetUrl">{{ $t('cd.urlReset') }}</el-button>
               </div>
-              <el-progress :percentage="dlPercent" :stroke-width="5" :show-text="false" />
-              <div class="dh-sub">{{ fmtBytes(dl.received) }}<template v-if="dl.total"> / {{ fmtBytes(dl.total) }}</template></div>
             </div>
-          </div>
-          <div v-else-if="isDriverReady" class="driver-hint driver-hint-ok">
-            <el-icon :size="14"><CircleCheckFilled /></el-icon>
-            {{ $t('cd.driverReady') }}
-          </div>
-          <div v-else class="driver-hint">
-            <el-icon :size="14"><WarningFilled /></el-icon>
-            {{ $t('cd.driverDownload') }}<template v-if="driverSize"> ({{ driverSize }})</template>{{ $t('cd.driverKeepNetwork') }}
-          </div>
+          </el-form-item>
+
+          <!-- 备注放最下面：它是「这条连接是干嘛的」的补充说明，不是连接必填项。
+               原来紧跟「连接名称」，把环境/主机这些真正要填的字段一路往下推。 -->
+          <el-form-item :label="$t('cd.note')">
+            <el-input v-model="form.note" type="textarea" :rows="2" maxlength="200" show-word-limit
+                      :placeholder="$t('cd.optional')" />
+          </el-form-item>
         </el-form>
       </el-tab-pane>
 
       <!-- ============ SSH 隧道 ============ -->
       <el-tab-pane :label="$t('cd.tabSsh')" name="ssh">
-        <el-form :model="form" label-width="110px" label-position="left">
+        <el-form :model="form" :label-width="labelWidth" label-position="left">
           <el-form-item :label="$t('cd.useSsh')">
             <el-switch v-model="form.sshEnabled" />
             <span class="form-tip">{{ $t('cd.sshTip') }}</span>
@@ -167,35 +181,36 @@
 
           <template v-if="form.sshEnabled">
             <div class="form-row">
-              <el-form-item :label="$t('cd.sshHost')" required style="flex:1">
+              <el-form-item :label="$t('cd.sshHost')" required>
                 <el-input v-model="form.sshHost" />
               </el-form-item>
-              <el-form-item :label="$t('cd.port')" label-width="55px" style="flex: 0 0 170px">
+              <!-- 隧道端口有默认 22，不需要星号；但列宽与其它行一致，右边控件才对得齐 -->
+              <el-form-item :label="$t('cd.port')" class="row-side" label-width="88px" required>
                 <el-input v-model.number="form.sshPort" />
               </el-form-item>
             </div>
             <div class="form-row">
-              <el-form-item :label="$t('cd.sshUser')" required style="flex:1">
+              <el-form-item :label="$t('cd.sshUser')" required>
                 <el-input v-model="form.sshUser" />
               </el-form-item>
-              <el-form-item :label="$t('udv.fAuthType')" label-width="80px" style="flex: 0 0 170px">
+              <el-form-item :label="$t('cd.sshAuth')" class="row-side" label-width="88px" required>
                 <el-select v-model="form.sshAuthType" style="width: 100%">
                   <el-option value="password" :label="$t('cd.password')" />
                   <el-option value="key" :label="$t('cd.privateKey')" />
                 </el-select>
               </el-form-item>
             </div>
-            <el-form-item v-if="form.sshAuthType === 'password'" :label="$t('cd.sshPassword')">
+            <el-form-item v-if="form.sshAuthType === 'password'" :label="$t('cd.sshPassword')" required>
               <el-input v-model="form.sshPassword" type="password" show-password
                         :placeholder="hasSavedSshPassword ? $t('cd.pwdSaved') : ''" />
             </el-form-item>
             <template v-else>
-              <el-form-item :label="$t('cd.keyPath')">
+              <el-form-item :label="$t('cd.keyPath')" required>
                 <el-input v-model="form.sshKeyPath" />
               </el-form-item>
               <el-form-item :label="$t('cd.keyPassphrase')">
                 <el-input v-model="form.sshKeyPassphrase" type="password" show-password
-                          :placeholder="hasSavedSshPassword ? $t('cd.pwdSaved') : ''" />
+                          :placeholder="hasSavedSshPassword ? $t('cd.pwdSaved') : $t('cd.optional')" />
               </el-form-item>
             </template>
           </template>
@@ -204,30 +219,23 @@
 
       <!-- ============ 高级选项 ============ -->
       <el-tab-pane :label="$t('cd.tabAdvanced')" name="advanced">
-        <el-form :model="form" label-width="110px" label-position="left">
-          <div class="form-row">
-            <el-form-item :label="$t('cd.connectTimeout')" style="flex:1">
-              <el-input v-model.number="form.connectTimeout" type="number" :min="1" :max="3600" />
-            </el-form-item>
-            <el-form-item :label="$t('cd.readTimeout')" style="flex:1">
-              <el-input v-model.number="form.socketTimeout" type="number" :min="1" :max="86400" />
-            </el-form-item>
-            <el-form-item :label="$t('cd.writeTimeout')" style="flex:1">
-              <el-input v-model.number="form.writeTimeout" type="number" :min="1" :max="86400" />
-            </el-form-item>
-          </div>
-
-          <el-form-item :label="$t('ndb.charset')">
-            <el-select v-model="form.charset" style="width: 100%" allow-create filterable>
-              <el-option v-for="c in charsets" :key="c" :value="c" :label="c" />
-            </el-select>
-          </el-form-item>
+        <el-form :model="form" :label-width="labelWidth" label-position="left">
+          <!-- 驱动参数（按类型给）：这里每一项都**真会生效** —— 后端把它们作为 JDBC
+               Properties 交给驱动。通用超时 / 字符集输入框已删掉：那些字段以前只影响
+               URL 预览、后端根本不读，属于「看着能调、其实没用」。 -->
+          <ConnOptionField v-for="o in advOptions" :key="o.key" :o="o"
+                           :model-value="optValue(o)" @update:model-value="(v) => setOpt(o, v)" />
 
           <!-- 只读连接：连接记录上的标记，后端走内核 set_read_only（同时更新存储与内存策略）。
                开启后这个连接上的**写操作会被内核拦下**（报「安全拦截」），不是界面上的软提示。 -->
-          <el-form-item :label="$t('cd.readOnly')" class="conn-readonly-item">
+          <el-form-item class="conn-readonly-item">
+            <template #label>
+              <span class="opt-label">{{ $t('cd.readOnly') }}</span>
+              <el-tooltip :content="$t('cd.readOnlyTip')" placement="top" :show-after="120" popper-class="opt-tip-pop">
+                <el-icon class="opt-q"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </template>
             <el-switch v-model="form.readOnly" />
-            <span class="form-tip">{{ $t('cd.readOnlyTip') }}</span>
           </el-form-item>
 
           <el-form-item :label="$t('cd.extraParams')">
@@ -271,12 +279,34 @@
       </el-tab-pane>
     </el-tabs>
 
+    <!-- 底部：左边驱动状态、右边按钮 —— 提示原来埋在表单最底下，字段一多就要滚到底才看得见，
+         而「驱动没就绪」恰恰是点保存失败的原因，必须在做决定的地方就能看到 -->
     <template #footer>
-      <el-button :loading="testing" @click="doTest">
-        <el-icon style="margin-right:4px"><Connection /></el-icon>{{ $t('cd.test') }}
-      </el-button>
-      <el-button @click="$emit('update:modelValue', false)">{{ $t('common.cancel') }}</el-button>
-      <el-button type="primary" :loading="saving" @click="doSave">{{ $t('common.save') }}</el-button>
+      <div class="dlg-foot">
+        <div class="foot-drv" :class="{ 'is-ok': isDriverReady && !driverDownloading, 'is-dl': driverDownloading }">
+          <template v-if="driverDownloading">
+            <el-icon :size="14" class="dh-spin"><Loading /></el-icon>
+            <span class="fd-txt" :title="dlSubText">{{ $t('cd.driverDling', { label: dl.label, percent: dlPercent })
+              }}<template v-if="dl.files > 1"> · {{ $t('cd.driverDlFile', { i: dl.index, n: dl.files }) }}</template></span>
+            <el-progress class="fd-bar" :percentage="dlPercent" :stroke-width="5" :show-text="false" />
+          </template>
+          <template v-else-if="isDriverReady">
+            <el-icon :size="14"><CircleCheckFilled /></el-icon>
+            <span class="fd-txt">{{ $t('cd.driverReady') }}</span>
+          </template>
+          <template v-else>
+            <el-icon :size="14"><WarningFilled /></el-icon>
+            <span class="fd-txt" :title="driverHintText">{{ driverHintText }}</span>
+          </template>
+        </div>
+        <div class="foot-btns">
+          <el-button :loading="testing" @click="doTest">
+            <el-icon style="margin-right:4px"><Connection /></el-icon>{{ $t('cd.test') }}
+          </el-button>
+          <el-button @click="$emit('update:modelValue', false)">{{ $t('common.cancel') }}</el-button>
+          <el-button type="primary" :loading="saving" @click="doSave">{{ $t('common.save') }}</el-button>
+        </div>
+      </div>
     </template>
 
     <!-- 数据源选择器（更换类型时使用） -->
@@ -312,14 +342,16 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { FolderOpened, DocumentAdd, Connection, WarningFilled, CircleCheckFilled, Plus, Delete, Refresh, Link, ArrowUp, Folder, Document, Loading } from '@element-plus/icons-vue'
+import { FolderOpened, DocumentAdd, Connection, WarningFilled, CircleCheckFilled, Plus, Delete, Refresh, Link, ArrowUp, Folder, Document, Loading, QuestionFilled } from '@element-plus/icons-vue'
 import { saveConnection, testConnection, getConnectionById, getDriverTypes, getDriverStatus, getDriverProgress, browseBackupDirs } from '../../api'
-import { connErrorHintText } from '../../utils/connErrors'
+import { connErrorRaw } from '../../utils/connErrors'
 import { addPureFolder } from '../../utils/folders'
-import { t } from '../../utils/i18n'
+import { t, locale } from '../../utils/i18n'
 import { byType, labelOf } from '../../types'
+import { urlSuffixOf, paramValueOf, optionValueFromParam } from '../../types/jdbc'
 import DbLogo from '../../common/DbLogo.vue'
 import DataSourcePicker from '../../common/DataSourcePicker.vue'
+import ConnOptionField from './ConnOptionField.vue'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -339,9 +371,21 @@ const saving = ref(false)
 const types = ref([])
 const driverStatus = ref({})
 const pickerVisible = ref(false)
-const jdbcUrlManuallyEdited = ref(false)
-
-const charsets = ['UTF-8', 'GBK', 'GB2312', 'GB18030', 'Latin1', 'ISO-8859-1']
+// URL 是否被用户手改过：改过就不再自动重算，保存时整条带给后端
+// （后端存 extra.options.urlOverride，连接时原样使用）。
+const urlCustom = ref(false)
+/**
+ * 手改过的 URL 只校验「一眼就知道写错」的两种：没以 `jdbc:` 开头、夹了空格/换行。
+ * 不做语法解析 —— 各驱动的 URL 形状差别太大，猜错了比不提示更糟。
+ * （原来那满屏红波浪线是浏览器拼写检查，不是格式校验，已在 textarea 上关掉。）
+ */
+const urlWarn = computed(() => {
+  if (!urlCustom.value) return ''
+  const u = String(form.value?.jdbcUrl || '').trim()
+  if (!u) return ''
+  if (!/^jdbc:/i.test(u)) return t('cd.urlWarnPrefix')
+  return /\s/.test(u) ? t('cd.urlWarnSpace') : ''
+})
 
 onMounted(async () => {
   try {
@@ -350,15 +394,16 @@ onMounted(async () => {
   } catch (e) { /* 兼容旧后端 */ }
 })
 
-const relationalTypes = computed(() => types.value.filter(t => t.category === 'RELATIONAL'))
-const fileTypes = computed(() => types.value.filter(t => t.category === 'RELATIONAL_FILE'))
-const nosqlTypes = computed(() => types.value.filter(t => t.category === 'NOSQL'))
-
 const currentType = computed(() => types.value.find(t => t.code === form.value.type))
 const defaultPort = computed(() => currentType.value?.defaultPort || '')
 const isFileType = computed(() => currentType.value?.category === 'RELATIONAL_FILE')
 const driverSize = computed(() => driverStatus.value[form.value.type]?.size || '')
 const isDriverReady = computed(() => driverStatus.value[form.value.type]?.ready === true)
+
+/* 标签列宽：中文标签最长 5 字（「数据库名称」），132px 有一半是空白，
+   白白吃掉右侧控件的位置（端口/密码框窄到显示不下占位文案）。
+   英文的单词更长（Database file / Connect timeout (s)），保持宽一点。 */
+const labelWidth = computed(() => (locale.value === 'zh-CN' ? '104px' : '132px'))
 
 // ---------- 驱动下载进度 ----------
 // 首次连新类型时后端会自动去 Maven 拉驱动（测试连接 / 打开连接都会触发）。
@@ -395,10 +440,38 @@ const fmtBytes = (v) => {
   if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB'
   return (n / 1024 / 1024).toFixed(1) + ' MB'
 }
+/* footer 只有一行：文案放不下时省略号收尾，完整内容挂 title 悬浮看 */
+const driverHintText = computed(() =>
+  t('cd.driverDownload') + (driverSize.value ? ` (${driverSize.value})` : '') + t('cd.driverKeepNetwork'))
+const dlSubText = computed(() => {
+  const got = fmtBytes(dl.value?.received)
+  return dl.value?.total ? `${got} / ${fmtBytes(dl.value.total)}` : got
+})
 // 类型能力一律来自前端注册表（src/types），连接表单不再写死类型清单
 const typeDef = computed(() => byType(form.value?.type || 'MYSQL'))
 // 是否显示用户名/密码：由类型定义声明（NoSQL 默认不需要）
 const hideCredentials = computed(() => !typeDef.value.credentials)
+// 「库名」是否必填：默认**可留空**（MySQL / PG / SQL Server / ClickHouse 都能先连上、
+// 再在树里选库），只有语义上必须给的类型在 src/types/<type>.js 里置 databaseRequired
+// （Oracle 的服务名 / SID、DB2 的库名）。原先按"模板里有 {database} 就必须填"，
+// 结果 MySQL 也被星号逼着填 —— 用户反馈过。
+const dbRequired = computed(() => typeDef.value?.databaseRequired === true)
+// 「库名」这一格的标题：Oracle 由上面的「连接方式」决定（服务名 / SID），其余类型固定
+const dbLabel = computed(() => {
+  const def = typeDef.value
+  if (def?.code === 'ORACLE') {
+    const mode = String(form.value?.opts?.oracleConnect || 'service')
+    return mode === 'sid' ? t('cd.o.sid') : t('cd.o.service')
+  }
+  return t(def?.databaseLabel || 'tdef.dbName')
+})
+// 占位提示按类型各写各的：MySQL 不该看到"服务名 / SID"这种 Oracle 的话
+const dbPlaceholder = computed(() => {
+  const key = typeDef.value?.databasePh
+  return key ? t(key) : ''
+})
+// 必填未填时的提示也按类型取：没有专属文案就退回通用那句
+const dbRequiredMsg = computed(() => t(typeDef.value?.databaseRequiredMsg || 'cd.needDatabase'))
 // 认证方式：仅类型声明 authTypes 时显示（如 SQL Server 的 SQL Server 身份验证 / Windows 身份验证）
 const showAuthSelect = computed(() => Array.isArray(typeDef.value.authTypes) && typeDef.value.authTypes.length > 0)
 const isWindowsAuth = computed(() => showAuthSelect.value && form.value?.authType === 'windows')
@@ -407,14 +480,94 @@ const isWindowsClient = /windows/i.test(navigator.userAgent || '')
 const nativeWindowsAuth = computed(() => isWindowsAuth.value && isWindowsClient)
 const windowsAuthHint = computed(() => t('cd.windowsAuthHint'))
 
+/* OLAP（ClickHouse / Doris）在旧内核里仍报 category=RELATIONAL，按 code 兜底 */
+const OLAP_CODES = ['CLICKHOUSE', 'DORIS']
 const categoryLabel = computed(() => {
-  if (!currentType.value) return ''
-  const c = currentType.value.category
+  const cur = currentType.value
+  if (!cur) return ''
+  const c = cur.category
+  if (c === 'OLAP' || OLAP_CODES.includes(String(cur.code || '').toUpperCase())) return t('cd.catOlap')
   if (c === 'RELATIONAL') return t('settings.driver.catRelational')
   if (c === 'RELATIONAL_FILE') return t('settings.driver.catFile')
   if (c === 'NOSQL') return t('cd.catNosql')
   return ''
 })
+
+// ---------- 类型专属连接选项（src/types/<type>.js 的 options） ----------
+// 值存在 form.opts 里，与「手填附加参数」（form.params）分开：
+//   * 保存时按字段声明分别落到 extra.params（有 param，会真实生效）与 extra.options（只改 URL 形状）；
+//   * 回显时各归各位，不会让下拉框管着的键又出现在附加参数列表里（否则一模一样的两处值，谁生效说不清）。
+// 基本配置里排在「库名」之前的选项（如 Oracle 连接方式：它决定这一格的标题与服务名/SID 语法）
+const preDbOptions = computed(() => (typeDef.value.options || []).filter(o => !o.adv && o.beforeDatabase))
+const basicOptions = computed(() =>
+  (typeDef.value.options || []).filter(o => !o.adv && !o.beforeDatabase))
+const advOptions = computed(() => (typeDef.value.options || []).filter(o => o.adv))
+const declaredParamNames = computed(() =>
+  new Set((typeDef.value.options || []).filter(o => o.param).map(o => o.param)))
+
+/** 某类型的选项默认值（与后端模板里已经写死的值对齐，见 presets.js 的说明） */
+const seedOpts = (typeOrDef) => {
+  const def = typeof typeOrDef === 'string' ? byType(typeOrDef) : (typeOrDef || typeDef.value)
+  const out = {}
+  for (const o of def?.options || []) out[o.key] = o.default ?? ''
+  return out
+}
+const optValue = (o) => {
+  const v = form.value?.opts?.[o.key]
+  return v == null ? '' : String(v)
+}
+const setOpt = (o, v) => {
+  if (!form.value) return
+  if (!form.value.opts) form.value.opts = {}
+  form.value.opts[o.key] = v == null ? '' : String(v)
+}
+
+/**
+ * 已存连接回显：把 params 里「属于类型选项」的键搬进 opts，其余留在 params。
+ * 老连接没有 opts，靠这一步补齐；新连接走 seedOpts 的默认值。
+ */
+const splitLoadedParams = (list, def) => {
+  // param → 选项定义（换算要用到 scale，所以留整个对象，不只留 key）
+  const byParam = new Map((def?.options || []).filter(o => o.param).map(o => [o.param, o]))
+  // 表单里已经删掉的选项（`dropParams`）：历史连接里还存着的老值直接丢掉。
+  // 不丢的话它们会落到下面的 rest → 在「附加参数」里冒出来，看着像用户自己配的。
+  const drop = new Set((def?.dropParams || []).map(String))
+  const opts = {}
+  const rest = []
+  for (const p of Array.isArray(list) ? list : []) {
+    const name = String(p?.name ?? '').trim()
+    if (!name || drop.has(name)) continue
+    const opt = byParam.get(name)
+    // 存的是驱动单位（PG/SQL Server/DB2 的超时是秒），表单统一按毫秒显示
+    if (opt) opts[opt.key] = optionValueFromParam(opt, p.value)
+    else rest.push({ name, value: p.value == null ? '' : String(p.value) })
+  }
+  return { opts, rest }
+}
+
+/** 保存时把选项分两路：驱动参数 → params；结构化选项 → options（后端存进 extra.options） */
+const collectOptions = () => {
+  const params = (form.value.params || []).slice()
+  const options = {}
+  for (const o of typeDef.value.options || []) {
+    const raw = form.value.opts?.[o.key]
+    // 带 param 的按驱动单位换算（秒级的 PG / SQL Server / DB2 超时），结构化选项原样
+    const v = o.param ? paramValueOf(o, form.value) : (raw == null ? '' : String(raw).trim())
+    if (o.param) {
+      if (!v) continue
+      const hit = params.find(p => String(p?.name ?? '').trim() === o.param)
+      if (hit) hit.value = v
+      else params.push({ name: o.param, value: v })
+    } else if (v && v !== (o.default ?? '')) {
+      // 结构化选项只存「与默认不同」的：等于默认时后端本来就是这个行为，存了只会让数据变脏
+      options[o.key] = v
+    }
+  }
+  // 只能写进 URL 的设置（H2 的 MODE / AUTO_SERVER）：与预览共用同一个拼法
+  const suffix = urlSuffixOf(typeDef.value, form.value)
+  if (suffix) options.urlSuffix = suffix
+  return { params, options }
+}
 
 // 各数据源类型的默认配置：端口来自后端 types 元数据，缺失时回退到前端类型注册表
 const typesByCode = computed(() => {
@@ -437,34 +590,40 @@ const typeDefaults = (type) => {
   const port = def.fileType ? 0
     : (meta?.defaultPort != null && meta.defaultPort > 0 ? meta.defaultPort : (def?.defaultPort || 0))
   const authType = (def.authTypes && def.authTypes[0]?.value) || ''
-  return { ...common, type, port, authType }
+  return { ...common, type, port, authType, opts: seedOpts(type) }
 }
 
 const defaults = () => typeDefaults(props.initialType || 'MYSQL')
 
-// 根据当前配置自动生成 URL（只读展示）：URL 模板已收敛到各数据库类型模块（src/types/*.js）
+/**
+ * 自动生成连接串（只读预览）。
+ *
+ * 输入 = 后端模板（src/types/<type>.js 与 plugins/connection-types/*.yaml 同源）
+ *      + form.opts（结构化选项与驱动参数）+ form.params（手填附加参数）。
+ * 用户一旦手改（urlCustom），就不再覆盖他的写法；点了「恢复自动」才回到这里。
+ */
 const buildJdbcUrl = () => {
   const f = form.value
-  if (!f) return ''
+  if (!f || !f.type) return ''
   return typeDef.value.buildJdbcUrl?.(f) || ''
 }
 
-// 监听关键字段变化，自动更新 jdbcUrl（仅用户未手动编辑过时回填，避免覆盖用户自定义 URL）
+// 所有类型的说明用同一句（用户要求：同名字段的说明必须逐字一致）
+const urlTip = computed(() => t('cd.urlAuto'))
+
+const onUrlInput = () => { urlCustom.value = true }
+const resetUrl = () => {
+  urlCustom.value = false
+  form.value.jdbcUrl = buildJdbcUrl()
+}
+
 watch(() => [form.value?.type, form.value?.host, form.value?.port, form.value?.database, form.value?.filePath,
-  form.value?.charset, form.value?.connectTimeout, form.value?.socketTimeout, form.value?.esProtocol], () => {
-  if (!form.value || jdbcUrlManuallyEdited.value) return
-  // 用户输入主机/文件等信息后自动生成；清空关键字段时也同步清空自动生成的 URL
+  form.value?.authType, form.value?.esProtocol, form.value?.opts, form.value?.params], () => {
+  if (!form.value || !form.value.type || urlCustom.value) return
   form.value.jdbcUrl = buildJdbcUrl()
 }, { deep: true })
 
-// 认证方式切换会改变 URL 结构（如 SQL Server 的 integratedSecurity），必须强制重写，不受手动编辑保护
-watch(() => form.value?.authType, () => {
-  if (!form.value) return
-  form.value.jdbcUrl = buildJdbcUrl()
-})
-
 const initForm = async () => {
-  jdbcUrlManuallyEdited.value = false
   if (props.conn && props.conn.id) {
     // 编辑：异步拉取真实密码（列表中的 password 是 enc:xxx 密文）
     try {
@@ -474,18 +633,19 @@ const initForm = async () => {
       // 拉取失败时回退到列表数据
       form.value = { ...props.conn }
     }
-    // 编辑已有连接时，若已保存了自定义 JDBC URL，视为用户已手动编辑
-    if (form.value.jdbcUrl) {
-      jdbcUrlManuallyEdited.value = true
-    }
   } else {
     form.value = defaults()
     // 父组件指定的初始分组（右键新建连接时传入）
     if (props.initialGroup) form.value.group = props.initialGroup
   }
   // 兼容旧数据：缺失字段时归一化
-  if (!form.value.jdbcUrl) form.value.jdbcUrl = ''
   if (!Array.isArray(form.value.params)) form.value.params = []
+  // 类型选项回显：默认值 → 已存的结构化选项（extra.options）→ params 里同名的驱动参数。
+  // 老连接没有后两者也没关系，默认值就是后端模板里已经生效的那套。
+  const split = splitLoadedParams(form.value.params, typeDef.value)
+  form.value.params = split.rest
+  form.value.opts = { ...seedOpts(typeDef.value), ...(form.value.options || {}), ...split.opts }
+  delete form.value.options
   if (!form.value.group) form.value.group = props.customFolders[0] || ''
   if (!form.value.env) form.value.env = 'DEV'
   if (!form.value.charset) form.value.charset = 'UTF-8'
@@ -498,6 +658,9 @@ const initForm = async () => {
   if (authDefs.length && !authDefs.some(a => a.value === form.value.authType)) {
     form.value.authType = authDefs[0].value
   }
+  // 每次打开都回到「基本配置」：页签状态是组件级的，上一次停在「高级选项」的话，
+  // 新建/编辑连接一打开就是高级页（实测：连着切几个类型会一直留在高级）。
+  if (props.focus !== 'readOnly') activeTab.value = 'basic'
   // 「直达只读开关」：从安全拦截通知的按钮点过来时，用户就是来改这一项的 ——
   // 自动切到「高级」页签 + 把它滚到视野中央 + 闪一下，省掉"自己找在哪一页/翻半天"。
   if (props.focus === 'readOnly') {
@@ -529,6 +692,11 @@ const initForm = async () => {
   // 编辑时后端对未配置的端口返回 null，这里也补成 22）。
   const sshPort = Number(form.value.sshPort)
   form.value.sshPort = Number.isFinite(sshPort) && sshPort > 0 && sshPort <= 65535 ? sshPort : 22
+  // 连接串：手改过的原样回显（后端存在 extra.options.urlOverride），否则按当前字段重算。
+  // 注意不能无条件重算 —— 那会把用户手写的 URL 冲掉。
+  const savedUrl = String(form.value.jdbcUrl || '').trim()
+  urlCustom.value = savedUrl.length > 0
+  form.value.jdbcUrl = urlCustom.value ? savedUrl : buildJdbcUrl()
 }
 
 // 分组变更：如果输入了新的分组名，自动存为后端纯分组
@@ -571,13 +739,15 @@ const onTypePicked = (code) => {
   // 于是这里必抛 ReferenceError：表单不重置 → **换类型完全无效**（旧的主机/端口/库残留，
   // 很容易把 A 类库的配置存成 B 类）。guard 只查「调用了没声明的函数」，查不到裸标识符，所以没拦住。
   const prevGroup = form.value?.group || props.customFolders[0] || ''
-  jdbcUrlManuallyEdited.value = false
   form.value = {
     ...typeDefaults(code),
     name: prevName,
     env: prevEnv,
     group: prevGroup
   }
+  // 换了类型，手改的 URL 已经没有意义（模板不同），回到自动生成
+  urlCustom.value = false
+  form.value.jdbcUrl = buildJdbcUrl()
   activeTab.value = 'basic'
 }
 
@@ -590,9 +760,11 @@ const doTest = async () => {
   // 首次连新类型：后端会先去 Maven 拉驱动，这里把进度显示出来
   startDlPoll(form.value.type)
   try {
-    const res = await testConnection(form.value)
+    // 与保存同一套归并：类型选项必须一起送过去，否则「测出来的」和「存下来的」不是一回事
+    const customUrl = urlCustom.value ? String(form.jdbcUrl || '').trim() : ''
+    const res = await testConnection({ ...form.value, jdbcUrl: customUrl, ...collectOptions() })
     if (res.success) ElMessage.success(t('mv.connectOk', { version: (res.serverVersion || '') }))
-    else showTestFailure(res.message)
+    else showTestFailure(res.message, res.detail)
   } catch (e) { showTestFailure(e.message) }
   testing.value = false
   // 测试后刷新驱动状态（可能刚触发了驱动下载）
@@ -601,20 +773,19 @@ const doTest = async () => {
 }
 
 /**
- * 测试失败：错误原文 + **可操作的排查建议**。
+ * 测试失败：**只给数据库原话**。
  *
- * 为什么不用 toast：原文（`Communications link failure` / `PKIX path building failed`）一句就过去了，
- * 用户既看不全也记不住。这里用弹窗把原文和建议一起列出，建议由 `utils/connErrors.js` 按关键字给。
+ * 不再追加「可以这样排查」清单，也不再按关键字猜一句说明 —— 原话已经说清错因
+ * （`Connection refused` / `Access denied for user …`），任何补充都可能误导。
+ * 我们只负责把错误码、"自检失败"之类的包装剥干净。
  */
-const showTestFailure = (message) => {
-  const raw = String(message || t('common.unknownError'))
-  const tips = connErrorHintText(raw, form.value)
-  ElMessageBox.alert(
-    (raw ? t('cd.errRaw') + '\n' + raw + '\n\n' : '')
-      + (tips ? t('cd.tipsHead') + '\n' + tips : ''),
-    t('mv.connFailedTitle'),
-    { confirmButtonText: t('common.gotIt'), customClass: 'conn-fail-box', customStyle: { whiteSpace: 'pre-line', maxWidth: '560px' } }
-  ).catch(() => {})
+const showTestFailure = (message, detail) => {
+  const raw = connErrorRaw(message, detail) || t('common.unknownError')
+  ElMessageBox.alert(raw, t('mv.connFailedTitle'), {
+    confirmButtonText: t('common.gotIt'),
+    customClass: 'conn-fail-box',
+    customStyle: { whiteSpace: 'pre-line', maxWidth: '560px' }
+  }).catch(() => {})
 }
 
 const addParam = () => form.value.params.push({ name: '', value: '' })
@@ -631,6 +802,28 @@ const doSave = async () => {
   if (isFileType.value && !String(form.value.filePath || '').trim()) {
     return ElMessage.warning(t('cd.needFilePath'))
   }
+  // JDBC URL 打了必填星号：空着就不能存（存进去也是一条连不上的连接）。
+  // 正常情况下它由模板自动生成，只有用户手改清空后才会为空。
+  if (!String(form.value.jdbcUrl || '').trim()) {
+    return ElMessage.warning(t('cd.needJdbcUrl'))
+  }
+  // 库名/服务名：表单上带了必填星号，这里就得真校验（星号与校验必须一致，
+  // 否则「打了星号却能存空」比不打星号更让人困惑）。提示按类型取 —— Oracle 说
+  // 服务名/SID、DB2 说库名，其余类型这一项本来就不打星号（可留空）。
+  if (dbRequired.value && !String(form.value.database || '').trim()) {
+    return ElMessage.warning(dbRequiredMsg.value)
+  }
+  // SSH 隧道开着时，星号标了的几项也得拦住
+  if (form.value.sshEnabled) {
+    if (!String(form.value.sshHost || '').trim()) return ElMessage.warning(t('cd.needSshHost'))
+    if (!String(form.value.sshUser || '').trim()) return ElMessage.warning(t('cd.needSshUser'))
+    if (form.value.sshAuthType === 'password' && !form.value.sshPassword && !hasSavedSshPassword.value) {
+      return ElMessage.warning(t('cd.needSshPassword'))
+    }
+    if (form.value.sshAuthType === 'key' && !String(form.value.sshKeyPath || '').trim()) {
+      return ElMessage.warning(t('cd.needKeyPath'))
+    }
+  }
   // Windows 集成认证使用系统 / Kerberos 身份，不强制账号密码；
   // 文件型（SQLite / H2 / Derby …）根本没有账号密码 —— 这里以前漏了 isFileType，
   // 于是 QLite 也会弹「请输入用户名」（用户看到的就是一句牛头不对马嘴的提示）。
@@ -641,10 +834,15 @@ const doSave = async () => {
   }
   // 过滤空参数行
   form.value.params = (form.value.params || []).filter(p => p.name && String(p.name).trim())
+  // 类型选项分两路落库（见 collectOptions）：驱动参数并进 params，结构化选项交 options。
+  // jdbcUrl 只在「手改过」时才带值：没改过就留空，后端继续按模板实时拼
+  // （这样以后补模板/改默认值能作用到这条连接上）。
+  const customUrl = urlCustom.value ? String(form.jdbcUrl || '').trim() : ''
+  const payload = { ...form.value, jdbcUrl: customUrl, ...collectOptions() }
   saving.value = true
   startDlPoll(form.value.type)
   try {
-    const saved = await saveConnection(form.value)
+    const saved = await saveConnection(payload)
     ElMessage.success(t('common.saved'))
     emit('update:modelValue', false)
     emit('saved', saved)
@@ -711,44 +909,18 @@ const chooseFile = (name) => {
 
 // ========== 常用参数预设 / 批量粘贴 ==========
 
-// 常用参数：**参数名必须与驱动一致**（会原样进 JDBC Properties），所以按类型分开给。
-// 每条都附一句"什么情况下需要它"，避免用户照着猜。
-// 用函数而不是模块级常量：常量只在加载时求值一次，切换语言后这些提示语不会跟着变
-const paramPresetsOf = () => ({
-  mysql: [
-    { name: 'useSSL', value: 'false', tip: t('cd.tipUseSsl') },
-    { name: 'allowPublicKeyRetrieval', value: 'true', tip: t('cd.tipAllowPublicKey') },
-    { name: 'serverTimezone', value: 'Asia/Shanghai', tip: t('cd.tipTimezone') },
-    { name: 'characterEncoding', value: 'UTF-8', tip: t('cd.tipEncoding') },
-    { name: 'rewriteBatchedStatements', value: 'true', tip: t('cd.tipRewriteBatched') },
-    { name: 'zeroDateTimeBehavior', value: 'convertToNull', tip: t('cd.tipZeroDate') }
-  ],
-  mariadb: [
-    { name: 'useSSL', value: 'false', tip: t('cd.tipUseSslShort') },
-    { name: 'serverTimezone', value: 'Asia/Shanghai', tip: t('cd.tipTimezoneShort') },
-    { name: 'characterEncoding', value: 'UTF-8', tip: t('cd.tipEncoding') }
-  ],
-  postgresql: [
-    { name: 'sslmode', value: 'disable', tip: t('cd.tipSslmode') },
-    { name: 'ApplicationName', value: 'DBmind', tip: t('cd.tipAppName') },
-    { name: 'stringtype', value: 'unspecified', tip: t('cd.tipStringtype') }
-  ],
-  kingbase: [{ name: 'sslmode', value: 'disable', tip: t('cd.tipSslmode') }],
-  sqlserver: [
-    { name: 'encrypt', value: 'false', tip: t('cd.tipServerEncrypt') },
-    { name: 'trustServerCertificate', value: 'true', tip: t('cd.tipTrustServer') },
-    { name: 'loginTimeout', value: '15', tip: t('cd.tipLoginTimeout') }
-  ],
-  clickhouse: [{ name: 'socket_timeout', value: '300000', tip: t('cd.tipSocketTimeout') }],
-  doris: [{ name: 'connectTimeout', value: '15000', tip: t('cd.tipConnectTimeout') }],
-  oracle: [{ name: 'oracle.jdbc.ReadTimeout', value: '300000', tip: t('cd.tipReadTimeout') }]
-})
+// 常用参数预设：**已经不摆了**。
+// 表单收敛后，SSL / 字符集 / 时区 / 公钥检索 / 批量改写 / 零日期这些默认值都写进了
+// 各类型的 urlTemplate，再在这里摆一排 chip 等于把用户看不懂的词又请回来。
+// 真要改某一项，走旁边的「批量粘贴」自己写（那是用户自己负责的逃生口）。
+const paramPresetsOf = () => ({})
 const paramPresets = computed(() => {
   const all = paramPresetsOf()
   const code = String(typeDef.value?.code || form.value.type || form.value.kind || '').toLowerCase()
-  if (all[code]) return all[code]
-  // 兜底：MySQL 系（含各类兼容分支）给最常见的那组
-  return code.includes('mysql') ? all.mysql : []
+  const list = all[code] || all.mysql || []
+  // 已经是类型专属字段（上方下拉框/输入框）的参数不再进「常用」：
+  // 同一项出现两处，用户改了其中一处、另一处还是旧值，最后谁生效说不清。
+  return list.filter(p => !declaredParamNames.value.has(p.name))
 })
 const hasParam = (name) => (form.value.params || []).some(p => String(p.name || '').trim() === name)
 const applyPreset = (p) => {
@@ -841,6 +1013,10 @@ const importPastedParams = () => {
 }
 
 .conn-tabs :deep(.el-tabs__header) { margin-bottom: 14px; }
+/* 内容区自己滚：类型选项一多，弹窗不能长到把「测试连接 / 保存」挤出屏幕 */
+.conn-tabs :deep(.el-tabs__content) {
+  max-height: 56vh; overflow-y: auto; padding-right: 6px;
+}
 /* 「直达只读」时的高亮：进来先亮一下再淡出（不用一直亮，亮完就恢复正常） */
 .conn-readonly-item.flash-hl { animation: hl-flash 1.7s ease-out; border-radius: 8px; }
 @keyframes hl-flash {
@@ -848,9 +1024,18 @@ const importPastedParams = () => {
   100% { background: transparent; }
 }
 
-.form-row { display: flex; gap: 12px; }
-.form-row .el-form-item { margin-right: 0; margin-bottom: 18px; }
-.form-row .el-form-item__label { padding-bottom: 6px; }
+/* 分组行：下拉 + 「新建分组」小按钮。按钮 24px 并垂直居中，
+   与 32px 的下拉框错开半个头，看着更轻 */
+.group-line { display: flex; gap: 8px; width: 100%; align-items: center; }
+.group-line .group-add { flex: none; }
+.group-line .group-add :deep(.el-icon) { font-size: 12px; }
+
+/* 两列行：左列自适应、右列定宽 —— 所有行的右列控件都从同一条竖线开始，
+   不会出现「端口」比「密码」靠左半格的情况 */
+.form-row { display: flex; gap: 12px; align-items: flex-start; }
+.form-row > .el-form-item { flex: 1 1 0; min-width: 0; margin-right: 0; margin-bottom: 12px; }
+/* 右列定宽 296：240 时右侧控件只剩 152px，密码框的占位文案和分组下拉都被截断 */
+.form-row > .row-side { flex: 0 0 296px; }
 .file-picker { display: flex; gap: 8px; width: 100%; }
 /* 数据库文件选择弹窗：与「备份还原」的目录浏览同风格，列表固定高度自己滚 */
 .path-picker { display: flex; flex-direction: column; gap: 8px; }
@@ -864,23 +1049,61 @@ const importPastedParams = () => {
 .pp-item.file { color: var(--el-text-color-regular); }
 .pp-empty { padding: 12px; text-align: center; color: var(--el-text-color-secondary); font-size: 13px; }
 .form-tip { margin-left: 10px; font-size: 13px; color: var(--el-text-color-secondary); }
+/* 标签统一单行、与控件首行对齐 —— 有灰色说明时不再垂直居中到两块中间，
+   标签一换行整行就对不齐（所以文案也压到 6 字以内，单位写进说明里） */
+/* 注意：el-dialog 的根节点在 Teleport 里，拿不到本组件的 data-v 属性，
+   所以 `.conn-dialog :deep(...)` 这种写法**匹配不到**，必须用 :global 全局选（前缀足够唯一） */
+:global(.conn-dialog .el-form-item) { align-items: flex-start; }
+:global(.conn-dialog .el-form-item__label) {
+  position: relative;
+  /* 统一留出星号的位置：有没有星号，文字都从同一条竖线开始（否则必填行整体右移一格） */
+  padding-left: 9px; padding-right: 12px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  height: 32px; line-height: 32px;
+  display: flex; align-items: center; justify-content: flex-start;
+}
+/* 星号绝对定位进左边那 9px，不再把标签文字顶右 */
+:global(.conn-dialog .el-form-item.is-required:not(.is-no-asterisk).asterisk-left > .el-form-item__label::before) {
+  position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  margin: 0; content: '*';
+}
+/* 类型连接选项：字段 + 标签问号（说明只在悬浮时出现） */
+.opt-item { margin-bottom: 12px; }
+.opt-label { white-space: nowrap; }
+.opt-q {
+  margin-left: 3px; font-size: 13px; color: var(--el-text-color-placeholder);
+  cursor: help; vertical-align: -1px;
+}
+.opt-q:hover { color: var(--el-color-primary); }
+.jdbc-box { width: 100%; display: flex; flex-direction: column; }
+.jdbc-foot { display: flex; justify-content: flex-end; margin-top: 2px; }
+/* 只在真的写错时冒出来的一行（不再靠浏览器的满屏红波浪线） */
+.jdbc-warn { margin-top: 4px; font-size: 12px; color: var(--dc-danger); }
+.jdbc-pre :deep(.el-textarea__inner) {
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Courier New', monospace;
+  font-size: 12px; line-height: 1.5;
+}
 .auth-hint { margin-bottom: 18px; }
 .env-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
 .env-dev { background: var(--dc-accent); box-shadow: 0 0 6px rgba(61, 220, 151, .6); }
 .env-test { background: var(--dc-warning); box-shadow: 0 0 6px rgba(245, 158, 11, .6); }
 .env-prod { background: var(--dc-danger); box-shadow: 0 0 6px rgba(239, 68, 68, .6); }
-.driver-hint {
-  margin-top: 6px; font-size: 13px; color: var(--dc-warning);
-  display: flex; align-items: center; gap: 4px;
+/* 底部一行：左驱动状态、右按钮 —— 提示贴在「保存」旁边，不用滚到底才看得见 */
+.dlg-foot { display: flex; align-items: center; gap: 12px; width: 100%; }
+.foot-drv {
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--dc-warning);
 }
-.driver-hint-ok { color: var(--dc-accent); }
+.foot-drv.is-ok { color: var(--dc-accent); }
 /* 下载中：图标转起来 + 一条细进度条，用户能判断"在动 / 卡住了" */
-.driver-hint-dl { align-items: flex-start; color: var(--dc-primary); }
-.driver-hint-dl .dh-spin { animation: dh-rotate 1.1s linear infinite; margin-top: 1px; }
+.foot-drv.is-dl { color: var(--dc-primary); }
+.foot-drv .fd-txt { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.foot-drv .fd-bar { flex: none; width: 110px; }
+.foot-drv .dh-spin { flex: none; animation: dh-rotate 1.1s linear infinite; }
 @keyframes dh-rotate { to { transform: rotate(360deg); } }
-.dh-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
-.dh-line { color: var(--dc-text-mid); font-size: 12.5px; }
-.dh-sub { color: var(--dc-text-dim); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.foot-btns { display: flex; align-items: center; gap: 8px; flex: none; margin-left: auto; }
+/* Element 默认给相邻按钮加 12px margin-left，和 gap 叠加就会变得很散 */
+.foot-btns :deep(.el-button + .el-button) { margin-left: 0; }
 /* 附加参数 */
 .param-box { width: 100%; display: flex; flex-direction: column; gap: 8px; }
 .param-row { display: flex; gap: 8px; align-items: center; }

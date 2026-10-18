@@ -3080,7 +3080,14 @@ useShortcutScope(rootRef, {
 .grid-loading-text { font-size: 14px; color: var(--dc-text-mid); }
 .pager { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; }
 .load-time { font-size: 13px; color: var(--dc-text-dim); font-weight: 500; }
-.change-tip { color: var(--el-color-warning); margin-left: 8px; }
+/* 「205ms | 有未保存的修改」：文案里不带括号，改由这条竖线分隔，读起来更清爽 */
+.change-tip {
+  color: var(--el-color-warning);
+  margin-left: 10px;
+  padding-left: 10px;
+  border-left: 1px solid var(--dc-border);
+  line-height: 1.2;
+}
 /* 当前页排序状态胶囊：可发现性 + 一键取消 */
 .sort-chip { margin-left: 8px; font-size: 12px; color: var(--dc-primary); cursor: pointer; }
 .sort-chip:hover { text-decoration: underline; }

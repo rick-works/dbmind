@@ -297,6 +297,7 @@ impl DbMindEngine {
     /// 想**真正清掉**口令：给空串（`Some("")`）。
     pub fn update_connection(&self, id: &str, mut config: ConnectionConfig) -> Result<ConnectionRecord> {
         let existing = self.store.require_connection(id)?;
+        let old_name = existing.config.name.clone();
         if config.password.is_none() {
             config.password = existing.config.password.clone();
         }
@@ -307,12 +308,74 @@ impl DbMindEngine {
         let record = self.store.update_connection(id, &config)?;
         // 配置可能改了目标库/主机 ⇒ 旧结构缓存描述的是**另一个库**，必须作废
         let _ = self.store.invalidate_schema(&record.id, None);
+
+        // ---- 配置改了就**必须换连接**：旧会话按旧配置建好，留着就等于「保存没生效」 ----
+        //
+        // 会话键只看「类型|名字|主机|端口|库|文件|只读|隧道」，**不含账号与口令**：
+        // 只改口令时旧会话会被继续复用（旧会话本来就已经通过了认证）；改主机时
+        // 主连接虽然会新建会话，跨库浏览却走**影子连接**那条记录 —— 它存的是旧配置的副本。
+        // 两种情况下用户都会看到「改了配置、保存后不刷新，照样能打开」，拿一条连不上的
+        // 配置也测不出来（真机上就是这么被问到的）。
+        let shadow_names = self.sync_shadow_configs(&record);
+        let mut dropped = self.drivers.disconnect_connection(record.kind(), old_name.as_str());
+        if record.config.name != old_name {
+            dropped += self.drivers.disconnect_connection(record.kind(), record.config.name.as_str());
+        }
+        for name in &shadow_names {
+            dropped += self.drivers.disconnect_connection(record.kind(), name.as_str());
+        }
+        if dropped > 0 {
+            tracing::info!(
+                target: "dbmind::engine",
+                connection = %record.config.name,
+                dropped,
+                "连接配置已变更，旧会话已断开（下次调用按新配置重连）"
+            );
+        }
+
         // 主机可能改了：不刷新的话，新主机第一次反解仍要白等约 4.6 秒
         self.refresh_agent_hosts();
         Ok(record)
     }
 
+    /// 把主连接的新配置同步到它的**影子连接**，返回影子的泳道名（用于断旧会话）。
+    ///
+    /// 影子是跨库浏览时按需生成的记录（`shadowFor` 指向主连接，`database` 指向那个库），
+    /// 出生时复制了主连接的 host/port/账号/口令/隧道。不跟着改的话：
+    /// 用户把主机改错、从库节点里一查仍然能连上 —— 走的是影子身上那份旧配置。
+    /// 影子的 `database`、`shadowFor`、分组/环境角标保留自己的值。
+    fn sync_shadow_configs(&self, base: &ConnectionRecord) -> Vec<String> {
+        let Ok(records) = self.store.list_connections() else { return Vec::new() };
+        let mut names = Vec::new();
+        for shadow in records.iter().filter(|item| item.shadow_of() == Some(base.id.as_str())) {
+            let mut config = base.config.clone();
+            config.name = shadow.config.name.clone();
+            config.database = shadow.config.database.clone();
+            config.extra = Some(merge_shadow_extra(shadow.config.extra.as_ref(), base.config.extra.as_ref()));
+            if config.password.is_none() {
+                config.password = shadow.config.password.clone();
+            }
+            match self.store.update_connection(&shadow.id, &config) {
+                Ok(_) => {
+                    let _ = self.store.invalidate_schema(&shadow.id, None);
+                    names.push(shadow.config.name.clone());
+                }
+                Err(err) => tracing::warn!(
+                    target: "dbmind::engine",
+                    shadow = %shadow.config.name,
+                    error = %err.message,
+                    "影子连接跟随主连接更新失败（下次浏览仍可能用到旧配置）"
+                ),
+            }
+        }
+        names
+    }
+
     pub fn remove_connection(&self, id_or_name: &str) -> Result<bool> {
+        // 删之前先断会话：记录没了，池里那条连接就成了没人认领的孤儿（还会占着宿主的配额）
+        if let Ok(Some(record)) = self.store.find_connection(id_or_name) {
+            let _ = self.disconnect_sessions(&record.id);
+        }
         let removed = self.store.delete_connection(id_or_name)?;
         self.refresh_agent_hosts();
         Ok(removed)
@@ -394,15 +457,17 @@ impl DbMindEngine {
         let driver = self.drivers.resolve(record.kind())?;
         let read_only = self.policy().is_read_only(&record);
         let mut report = driver.test(&record.config, read_only).map_err(|e| {
-            // 自检阶段的失败统一归到「连接失败」，前端据此走「检查配置」引导
+            // 只改错误码，**不动文案**：界面上要看到的是数据库 / 驱动自己的原话
+            // （`Connection refused: getsockopt`、`Access denied for user …`）。
+            // 以前这里包装成「连接「x」自检失败」，用户既读不到真正的错因，
+            // 也多出一层"自检"黑话（前端还要再剥一次）。
             if e.code == ErrorCode::ConnInvalid {
                 e
             } else {
-                DbMindError::new(
-                    ErrorCode::ConnConnectFailed,
-                    format!("连接「{}」自检失败", record.name()),
-                )
-                .with_detail(e.to_string())
+                DbMindError {
+                    code: ErrorCode::ConnConnectFailed,
+                    ..e
+                }
             }
         })?;
         report.connection_id = record.id;
@@ -424,16 +489,14 @@ impl DbMindEngine {
     pub fn test_config(&self, config: &ConnectionConfig, read_only: bool) -> Result<ConnectReport> {
         let driver = self.drivers.resolve(config.kind)?;
         let mut report = driver.test(config, read_only).map_err(|e| {
-            // 与 `test_connection` 同样的归类：配置本身不合法就原样报，
-            // 其余一律归到「连接失败」，前端据此走「检查配置」引导
+            // 与 `test_connection` 一致：只归类错误码，文案保留数据库 / 驱动的原话
             if e.code == ErrorCode::ConnInvalid {
                 e
             } else {
-                DbMindError::new(
-                    ErrorCode::ConnConnectFailed,
-                    format!("连接「{}」自检失败", config.name),
-                )
-                .with_detail(e.to_string())
+                DbMindError {
+                    code: ErrorCode::ConnConnectFailed,
+                    ..e
+                }
             }
         })?;
         // 没有记录可言：明确留空，避免调用方以为测的是某个已存连接
@@ -3750,4 +3813,28 @@ mod tests {
         );
         println!("断链之后会话自愈 ✓");
     }
+}
+
+/// 影子连接的 `extra`：以主连接那份为准，影子自己的键只在主连接没有时补上。
+///
+/// 必须保住 `shadowFor` —— 它是影子的身份标记，丢了这条记录就会以"用户可见连接"
+/// 的身份出现在连接列表里（用户从没建过它）；其余键（环境角标、分组、并发上限、
+/// SSH 隧道配置）都应当跟随主连接。
+fn merge_shadow_extra(
+    shadow: Option<&serde_json::Value>,
+    base: Option<&serde_json::Value>,
+) -> serde_json::Value {
+    let mut out = match base {
+        Some(serde_json::Value::Object(map)) => map.clone(),
+        _ => serde_json::Map::new(),
+    };
+    if let Some(serde_json::Value::Object(old)) = shadow {
+        for (key, value) in old {
+            out.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+        if let Some(flag) = old.get(crate::types::EXTRA_SHADOW_FOR) {
+            out.insert(crate::types::EXTRA_SHADOW_FOR.to_string(), flag.clone());
+        }
+    }
+    serde_json::Value::Object(out)
 }

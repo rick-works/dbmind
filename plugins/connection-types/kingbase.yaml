@@ -17,7 +17,8 @@ localFile: false
 defaultPort: 54321
 jdbc:
   driverClass: com.kingbase8.Driver
-  urlTemplate: "jdbc:kingbase8://{host}:{port}/{database}"
+  # 与 PostgreSQL 同源，默认参数见 postgresql.yaml
+  urlTemplate: "jdbc:kingbase8://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
   artifact: cn.com.kingbase:kingbase8:9.0.0
 traits:
   singleDatabase: false
