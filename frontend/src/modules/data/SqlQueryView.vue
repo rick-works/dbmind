@@ -331,9 +331,7 @@
                   <span class="th-sort" :class="{ 'is-sorted': resultSortColumn === c.name }"
                         :title="resultSortColumn === c.name ? (resultSortDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
                         @mousedown.stop @click.stop="onResultHeaderClick(c.name)">
-                    <el-icon v-if="resultSortColumn !== c.name"><Sort /></el-icon>
-                    <el-icon v-else-if="resultSortDir === 'ASC'"><SortUp /></el-icon>
-                    <el-icon v-else><SortDown /></el-icon>
+                    <SortGlyph :state="resultSortColumn !== c.name ? '' : (resultSortDir === 'ASC' ? 'asc' : 'desc')" />
                   </span>
                 </th>
               </tr>
@@ -627,6 +625,7 @@ import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
 import { useExcelSelection } from '../../utils/excelSelection'
 import { columnAlignClasses } from '../../utils/cellAlign'
+import SortGlyph from '../../common/SortGlyph.vue'
 import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
@@ -634,7 +633,7 @@ import {
   Close, CircleCloseFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
-  Sort, SortUp, SortDown, Collection, RefreshLeft, DArrowRight
+  Collection, RefreshLeft, DArrowRight
 } from '@element-plus/icons-vue'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf, quoteStyleOf } from '../../types'
@@ -5645,9 +5644,9 @@ onBeforeUnmount(() => {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center;
   font-size: var(--grid-fs, 13px); color: var(--dc-text-dim); z-index: 3;
-  opacity: .35; cursor: pointer; transition: opacity .12s, color .12s;
+  opacity: 0; cursor: pointer; transition: opacity .16s ease, color .16s ease;
 }
-.data-table th:hover .th-sort { opacity: .9; }
+.data-table th:hover .th-sort { opacity: .7; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
 .data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
 /* 已排序列：文字主色 + 底部 2px 主色条（与表预览/NoSQL 同款） */

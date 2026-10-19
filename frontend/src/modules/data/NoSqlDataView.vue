@@ -101,9 +101,7 @@
                 <span class="th-sort" :class="{ 'is-sorted': orderColumn === col }"
                       :title="orderColumn === col ? (orderDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
                       @mousedown.stop @click.stop="toggleSort(col)">
-                  <el-icon v-if="orderColumn !== col"><Sort /></el-icon>
-                  <el-icon v-else-if="orderDir === 'ASC'"><SortUp /></el-icon>
-                  <el-icon v-else><SortDown /></el-icon>
+                  <SortGlyph :state="orderColumn !== col ? '' : (orderDir === 'ASC' ? 'asc' : 'desc')" />
                 </span>
                 <span class="col-resizer" :title="$t('tdv.colResizeTip')"
                       @mousedown.stop.prevent="startColResize(ci, $event)"
@@ -216,7 +214,7 @@
 <script setup>
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
-import { ArrowUp, ArrowDown, Refresh, Download, Operation, Sort, SortUp, SortDown, Loading,
+import { ArrowUp, ArrowDown, Refresh, Download, Operation, Loading,
          Histogram, Calendar, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { getQuerySettings, querySettingsLive, editorSettingsLive } from '../../utils/settings'
@@ -225,6 +223,7 @@ import { noSqlDocuments, cancelNoSql } from '../../api'
 import { t } from '../../utils/i18n'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import { columnAlignClasses } from '../../utils/cellAlign'
+import SortGlyph from '../../common/SortGlyph.vue'
 import { rowWindow } from '../../utils/rowWindow'
 import { useExcelSelection } from '../../utils/excelSelection'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
@@ -1850,9 +1849,9 @@ onBeforeUnmount(() => {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center;
   font-size: 13px; color: var(--dc-text-dim); z-index: 3;
-  opacity: .35; cursor: pointer; transition: opacity .12s, color .12s;
+  opacity: 0; cursor: pointer; transition: opacity .16s ease, color .16s ease;
 }
-.data-table th:hover .th-sort { opacity: .9; }
+.data-table th:hover .th-sort { opacity: .7; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
 .data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
 /* 表头文字块：类型徽章 + 字段名横排（与表预览同款徽章语言） */

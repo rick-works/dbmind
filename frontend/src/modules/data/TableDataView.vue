@@ -150,9 +150,7 @@
                   <span class="th-sort" :class="{ 'is-sorted': orderColumn === col }"
                         :title="orderColumn === col ? (orderDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
                         @mousedown.stop @click.stop="toggleSort(col)">
-                    <el-icon v-if="orderColumn !== col"><Sort /></el-icon>
-                    <el-icon v-else-if="orderDir === 'ASC'"><SortUp /></el-icon>
-                    <el-icon v-else><SortDown /></el-icon>
+                    <SortGlyph :state="orderColumn !== col ? '' : (orderDir === 'ASC' ? 'asc' : 'desc')" />
                   </span>
                   <span class="col-resizer" :title="$t('tdv.colResizeTip')"
                         @mousedown.stop.prevent="onColResizeStart(col, $event)"
@@ -307,7 +305,7 @@ import { querySettingsLive, editorSettingsLive } from '../../utils/settings'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { numericTypeHint, isNumericLiteral } from '../../utils/dbType'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp, ArrowDown, Delete, Sort, SortUp, SortDown, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
+import { ArrowUp, ArrowDown, Delete, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { getTableData, listColumns, saveTableData, aiFilter, exportData } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
@@ -316,6 +314,7 @@ import { getQuerySettings } from '../../utils/settings'
 import { useShortcutScope } from '../../utils/useShortcuts'
 import { useExcelSelection } from '../../utils/excelSelection'
 import { columnAlignClasses } from '../../utils/cellAlign'
+import SortGlyph from '../../common/SortGlyph.vue'
 import { rowWindow } from '../../utils/rowWindow'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import { quoteStyleOf } from '../../types'
@@ -3180,9 +3179,9 @@ useShortcutScope(rootRef, {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center;
   font-size: 13px; color: var(--dc-text-dim); z-index: 3;
-  opacity: .35; cursor: pointer; transition: opacity .12s, color .12s;
+  opacity: 0; cursor: pointer; transition: opacity .16s ease, color .16s ease;
 }
-.data-table th:hover .th-sort { opacity: .9; }
+.data-table th:hover .th-sort { opacity: .7; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
 .data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
 /* 表头文字块：竖排两行 —— 第一行「类型徽章 + 字段名（+🔑）」，第二行注释顶格。
