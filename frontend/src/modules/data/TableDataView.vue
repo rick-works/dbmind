@@ -3158,8 +3158,8 @@ useShortcutScope(rootRef, {
   position: relative;
   background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
   /* 表头可能是两行（字段名 + 注释），高度交给内容 —— 原来写死 34px 会把第二行切掉 */
-  /* 上下内边距刻意不对称（上 4 / 下 6）：底部压着 2px 表头分隔线，按"到分隔线"而不是"到单元格底边"算，文字才在视觉上居中 */
-  padding: 4px 10px 6px; height: auto; line-height: 1.3; vertical-align: middle;
+  /* 上下内边距刻意不对称（上 2 / 下 8）：底部压着 2px 表头分隔线，按"到分隔线"而不是"到单元格底边"算，文字才在视觉上居中 */
+  padding: 2px 10px 8px; height: auto; line-height: 1.3; vertical-align: middle;
   border: 1px solid var(--dc-border); white-space: nowrap;
   overflow: hidden;
   /* 与数据区之间的 2px 压边线：表头底的对比靠主题变量（浅色 #e4ebf8 / 深色 #2b3242，

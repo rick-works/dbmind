@@ -5613,7 +5613,7 @@ onBeforeUnmount(() => {
    用 inset 阴影而不是 border-bottom：表是 border-collapse: collapse，折叠后的下边框由 table 画，
    不跟着吸顶走（同上面 thead 那段注释说的"上边缝"是一个道理）。
    注意排序态会用自己的主色 2px 条覆盖它（见下面 .sort-asc/.sort-desc），那是对的。 */
-.data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 4px 26px 6px 10px; height: auto; line-height: 1.3; vertical-align: middle; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; box-shadow: inset 0 -2px 0 var(--dc-table-head-line); }
+.data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 2px 26px 8px 10px; height: auto; line-height: 1.3; vertical-align: middle; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; box-shadow: inset 0 -2px 0 var(--dc-table-head-line); }
 /* 表头文字块：竖排两行 —— 第一行「类型图标 + 字段名」，第二行注释顶格 */
 .data-table th .th-text {
   display: inline-flex; flex-direction: column; justify-content: center;
