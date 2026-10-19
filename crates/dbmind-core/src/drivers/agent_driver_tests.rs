@@ -1,7 +1,7 @@
 //! agent 驱动的单元测试（**不启动真实 agent 进程**的部分）。
 //!
 //! 需要真实宿主与真实数据库的验证放在端到端脚本里：
-//! - `scripts/smoke.ps1` 的 agent 段落（H2 / DuckDB，真 JVM + 真驱动）
+//! - `scripts/test/smoke-cli.ps1` 的 agent 段落（H2 / DuckDB，真 JVM + 真驱动）
 //! - 库本身的行为（连接形状、协议分派、目录补齐）在这里用纯逻辑覆盖。
 
 use super::agent_driver::*;

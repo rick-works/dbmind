@@ -19,10 +19,10 @@ rem chcp 65001 makes that come out right.
 rem ---------------------------------------------------------------------------
 chcp 65001 >nul
 setlocal
-set "SCRIPT=%~dp0release.ps1"
+set "SCRIPT=%~dp0release\release.ps1"
 if not exist "%SCRIPT%" (
     echo [ERROR] not found: %SCRIPT%
-    echo         release.bat must sit next to release.ps1 ^(in scripts\^).
+    echo         release.bat must sit next to release.ps1 ^(in scripts\release\).
     echo.
     pause
     exit /b 1

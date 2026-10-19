@@ -13,12 +13,12 @@
 
   Runs entirely under a temporary DBMIND_HOME, so your real ~/.dbmind is untouched.
 
-  Usage: powershell -ExecutionPolicy Bypass -File .\scripts\smoke.ps1
+  Usage: powershell -ExecutionPolicy Bypass -File .\scripts\test\smoke-cli.ps1
 #>
 
 $ErrorActionPreference = 'Continue'
 
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $stamp = Get-Date -Format 'yyyyMMddHHmmss'
 $work = Join-Path $env:TEMP "dbmind-smoke-$stamp"
 $homeDir = Join-Path $work 'home'

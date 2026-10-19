@@ -27,7 +27,7 @@
 //! DBMIND_TEST_SSH_TARGET_PORT=22            可选，默认跳板机自己的 SSH 端口
 //! ```
 //!
-//! 或者直接用 `scripts/real-ssh-check.ps1`。没开这个开关时只打印一句说明就返回，
+//! 或者直接用 `scripts/test/real-ssh.ps1`。没开这个开关时只打印一句说明就返回，
 //! 所以它夹在 `cargo test -- --ignored` 里也是安全的。
 //!
 //! ## 一个刻意的特性：**这条验证不需要 JDK、不需要驱动宿主**
@@ -78,14 +78,14 @@ fn tunneled(ssh: Value, target_host: &str, target_port: u16) -> ConnectionConfig
 
 /// 打开隧道 → 读一段 banner → 复用同一条隧道 → 错口令要明确说「认证失败」。
 #[test]
-#[ignore = "真机验证：要连一台**真实的** SSH 跳板机（用 scripts/real-ssh-check.ps1）"]
+#[ignore = "真机验证：要连一台**真实的** SSH 跳板机（用 scripts/test/real-ssh.ps1）"]
 fn 真机_ssh_隧道转发可用() {
     if !enabled() {
         // 与 real_redis.rs 同一条约定：ASCII 的 `[SKIP]` 给脚本判定，
         // 免得「被环境开关悄悄跳过」被当成通过。
         println!(
             "[SKIP] DBMIND_TEST_SSH is not set -- 这一条要连**真实的** SSH 跳板机，\
-             用 scripts/real-ssh-check.ps1，或自己设这个变量"
+             用 scripts/test/real-ssh.ps1，或自己设这个变量"
         );
         return;
     }

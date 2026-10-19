@@ -25,7 +25,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 # Version comes from the workspace so it can never drift from the binaries.
 $cargoToml = Get-Content (Join-Path $root 'Cargo.toml') -Raw -Encoding UTF8
@@ -107,7 +107,7 @@ if (Test-Path $webSource) {
 }
 
 # Launcher: double-clicking start.bat is the whole "install" story for the portable build.
-$launcher = Join-Path $PSScriptRoot 'start.bat'
+$launcher = Join-Path $PSScriptRoot '..\start.bat'
 if (Test-Path $launcher) { Copy-Item $launcher $outDir }
 
 foreach ($extra in @('README.md', 'LICENSE')) {

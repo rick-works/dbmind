@@ -11,7 +11,7 @@
   [8/8] 汇总        产物清单 + SHA256 校验文件
 
 用法（双击 scripts\release.bat 效果一样）：
-  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release.ps1
+  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\release\release.ps1
   ... -SkipPortable    只出安装包
   ... -SkipBundle      只出绿色版（不需要 WiX / 网络）
   ... -SkipBuild       复用已有 target\release（改过 Rust 代码就别加）
@@ -52,7 +52,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $root
 
 $STEP_TOTAL = 8
@@ -225,8 +225,8 @@ if ($missingJars.Count -eq 0) {
     if ($javaText -match 'version "(\d+)') { if ([int]$Matches[1] -ge 17) { $javaOk = $true } }
     $mvnOk = [bool](Get-Command mvn -ErrorAction SilentlyContinue)
     if ($javaOk -and $mvnOk) {
-        Note '调用 scripts\build-agents.ps1'
-        & (Join-Path $PSScriptRoot 'build-agents.ps1') -Quiet
+        Note '调用 scripts\build\build-agents.ps1'
+        & (Join-Path $PSScriptRoot '..\build\build-agents.ps1') -Quiet
     } else {
         Warn ('JDK17+ = ' + $javaOk + '    Maven = ' + $mvnOk)
         Warn '  -> 装齐后重跑本脚本；或先只出绿色版（加 -SkipBundle），SQLite 仍然可用'
@@ -238,7 +238,7 @@ if ($agentReady -lt 4) {
     # 桌面版的内核在**壳进程内**，它按「exe 旁的 agents/」找 jar，而安装包靠
     # tauri.conf.json 的 bundle.resources 把这 4 个 jar 一起装进去。缺了它们，
     # 用户机器上只有 SQLite 能用，其它类型一律 DBMIND-DRV-0002。
-    if (-not $SkipBundle) { Fail '要出安装包就必须 4 个 jar 齐全（先跑 scripts\build-agents.ps1）' }
+    if (-not $SkipBundle) { Fail '要出安装包就必须 4 个 jar 齐全（先跑 scripts\build\build-agents.ps1）' }
     Warn '继续只出绿色版：SQLite 可用，其它类型会报「驱动未就绪」'
 }
 EndStep
@@ -350,7 +350,7 @@ if ($SkipPortable) {
     Note '已跳过（-SkipPortable）'
 } else {
     # 组装本身是 package.ps1 的职责，这里复用（编译/前端/agents 都已做完并检查过，全部跳过）
-    & (Join-Path $PSScriptRoot 'package.ps1') -SkipCargo -SkipAgents -SkipFrontend -Out $portableDir
+    & (Join-Path $PSScriptRoot '..\build\package.ps1') -SkipCargo -SkipAgents -SkipFrontend -Out $portableDir
     if (-not (Test-Path $portableDir)) { Fail 'package.ps1 没有产出目录' }
     Good ('目录 ' + $portableDir)
     Get-ChildItem $portableDir -Recurse -File | Sort-Object FullName | ForEach-Object {

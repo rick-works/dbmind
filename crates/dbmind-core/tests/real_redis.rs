@@ -18,7 +18,7 @@
 //! - 除此之外**不写任何键**：测试自己比对 `DBSIZE` 的前后值来证明这一点。
 //!
 //! 开法：`DBMIND_TEST_REAL_REDIS=1`（端口用 `DBMIND_TEST_REAL_REDIS_PORT`，默认 6379），
-//! 或者直接用 `scripts/real-redis-check.ps1`。没开时只打印一句说明就返回，
+//! 或者直接用 `scripts/test/real-redis.ps1`。没开时只打印一句说明就返回，
 //! 所以它夹在 `cargo test -- --ignored` 里也是安全的。
 
 use std::time::{Duration, Instant};
@@ -59,14 +59,14 @@ impl Drop for TempDir {
 /// 标 `#[ignore]`：默认跑里它连门都不出（那句 env 开关是第二道闸，防的是
 /// 「有人只删了 `#[ignore]` 就以为它会在默认跑里验真机」）。
 #[test]
-#[ignore = "真机验证：要连一台**真实的** Redis（用 scripts/real-redis-check.ps1；替身见宿主层 ⑨）"]
+#[ignore = "真机验证：要连一台**真实的** Redis（用 scripts/test/real-redis.ps1；替身见宿主层 ⑨）"]
 fn 真机_redis_排队中被取消() {
     if !enabled() {
-        // ASCII 的 `[SKIP]` 那句是给脚本用的：脚本是 ASCII-only（见 scripts/smoke.ps1 的约定），
+        // ASCII 的 `[SKIP]` 那句是给脚本用的：脚本是 ASCII-only（见 scripts/test/smoke-cli.ps1 的约定），
         // 它靠这个标记确认「测试真的跑了」，而不是被环境开关悄悄跳过还报成功。
         println!(
             "[SKIP] DBMIND_TEST_REAL_REDIS is not set -- 这一条要连**真实**的 Redis，\
-             用 scripts/real-redis-check.ps1，或自己设这个变量"
+             用 scripts/test/real-redis.ps1，或自己设这个变量"
         );
         return;
     }

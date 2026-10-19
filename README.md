@@ -100,7 +100,7 @@ Most tools bolt on a chat window; DBmind bakes AI into **every step of database 
 ├── frontend/            Vue 3 frontend
 ├── plugins/             database type declarations (JDBC URL templates, driver manifest)
 ├── resources/           native deps (SQL Server auth dll)
-├── scripts/             start / package / release / smoke tests
+├── scripts/             dev entries (start/stop) + build/ release/ test/ tools/
 ├── deploy/              real servers for integration tests (redis / es / mongo)
 └── website/             product website (single-file static page)
 ```
@@ -137,14 +137,14 @@ cargo build --release -p dbmind-desktop   # desktop
 cargo build --release -p dbmind-web       # web shell
 cargo build --release -p dbmind-cli       # CLI
 cargo build --release -p dbmind-mcp       # MCP
-powershell -File scripts\build-agents.ps1 # Java hosts (4 bridges)
+powershell -File scripts\build\build-agents.ps1 # Java hosts (4 bridges)
 ```
 
 ## Packaging & release
 
 ```powershell
 # Full pipeline (portable + zip + MSI/NSIS installers); same as double-clicking scripts\release.bat
-powershell -File scripts\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
+powershell -File scripts\release\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
 
 # Common switches:
 release.ps1 -SkipBundle        # portable only
@@ -273,8 +273,8 @@ Each signed platform runs an explicit verification step (`codesign --verify` + `
 
 ```powershell
 cargo test --workspace                      # unit tests (no external deps)
-powershell -File scripts\smoke-dbmind.ps1   # end-to-end smoke (69 checks)
-powershell -File scripts\host-tests.ps1     # real-JVM agent regression
+powershell -File scripts\test\smoke-api.ps1   # end-to-end smoke (68 checks)
+powershell -File scripts\test\host-tests.ps1     # real-JVM agent regression
 ```
 
 > In-depth docs (architecture / storage / build / troubleshooting / db-lab) are in [docs/](docs/) — written in Chinese.

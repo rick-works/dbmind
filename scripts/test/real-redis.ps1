@@ -2,7 +2,7 @@
   DBmind real-Redis check: runs the one #[ignore]d test that talks to a REAL Redis
   (crates/dbmind-core/tests/real_redis.rs) -- not the stub the host layer uses.
 
-  Why it is separate from scripts/host-tests.ps1:
+  Why it is separate from scripts/test/host-tests.ps1:
     The host layer is deterministic and self-contained (it starts its own stubs).
     This one touches a service that does NOT belong to us, so it is opt-in and
     never runs as part of another layer.
@@ -14,10 +14,10 @@
     Do not point this at a shared instance.
 
   Usage:
-    powershell -ExecutionPolicy Bypass -File .\scripts\real-redis-check.ps1
-    powershell -ExecutionPolicy Bypass -File .\scripts\real-redis-check.ps1 -Port 6380
+    powershell -ExecutionPolicy Bypass -File .\scripts\test\real-redis.ps1
+    powershell -ExecutionPolicy Bypass -File .\scripts\test\real-redis.ps1 -Port 6380
 
-  NOTE: this file is intentionally ASCII-only (see scripts/smoke.ps1) -- which is
+  NOTE: this file is intentionally ASCII-only (see scripts/test/smoke-cli.ps1) -- which is
   also why the target is a separate integration test target: the whole selection
   stays ASCII (`--test real_redis`), no Chinese filter word on the command line.
 #>
@@ -29,7 +29,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 $script:passed = 0
 $script:failed = 0
@@ -79,7 +79,7 @@ if ($java -and (Test-Path $java)) {
 
 $agents = @(Get-ChildItem (Join-Path $root 'agents') -Recurse -File -Filter 'dbmind-agent-*.jar' -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -notlike 'original-*' })
-Check 'agent hosts are built' ($agents.Count -gt 0) "no agents/*.jar -- run 'powershell -File .\scripts\build-agents.ps1' first"
+Check 'agent hosts are built' ($agents.Count -gt 0) "no agents/*.jar -- run 'powershell -File .\scripts\build\build-agents.ps1' first"
 
 if ($script:failed -gt 0) {
     Write-Host ""

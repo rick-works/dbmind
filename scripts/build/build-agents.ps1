@@ -16,7 +16,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 # Maven selection. Version matters: the shade plugin used by every agent needs
 # Maven >= 3.6.3, and a too-old maven on PATH fails deep inside the plugin with a

@@ -7,8 +7,8 @@
 改动就有 diff、能被 review；release.mjs 里还会检查"新版本的条目加了没"。
 
 用法：
-  powershell -ExecutionPolicy Bypass -File scripts\publish-site.ps1
-  powershell -ExecutionPolicy Bypass -File scripts\publish-site.ps1 -Message "官网：..."
+  powershell -ExecutionPolicy Bypass -File scripts\release\publish-site.ps1
+  powershell -ExecutionPolicy Bypass -File scripts\release\publish-site.ps1 -Message "官网：..."
 
 凭据：优先 $env:GH_TOKEN，其次 `gh auth token`。
 #>
@@ -19,10 +19,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $root
 # 系统代理助手（Windows 的代理在注册表里，git 默认不读 —— 开代理时直连会一直超时）
-. (Join-Path $PSScriptRoot 'git-proxy.ps1')
+. (Join-Path $PSScriptRoot '..\tools\git-proxy.ps1')
 
 $src = Join-Path $root 'website\index.html'
 if (-not (Test-Path $src)) { throw "没找到官网源文件：$src" }

@@ -2,7 +2,7 @@
   DBmind real-SSH check: runs the one #[ignore]d test that talks to a REAL SSH
   jump host (crates/dbmind-core/tests/real_ssh.rs).
 
-  Why it is separate from scripts/host-tests.ps1:
+  Why it is separate from scripts/test/host-tests.ps1:
     The host layer starts its own stubs and needs a JDK. This one talks to a
     machine that does NOT belong to us, and the tunnel is pure Rust -- no JDK,
     no driver jars, no agent host. A failure here points at SSH only.
@@ -18,16 +18,16 @@
     $env:DBMIND_TEST_SSH_HOST = 'jump.example.com'
     $env:DBMIND_TEST_SSH_USER = 'deploy'
     $env:DBMIND_TEST_SSH_PASSWORD = '...'
-    powershell -ExecutionPolicy Bypass -File .\scripts\real-ssh-check.ps1
+    powershell -ExecutionPolicy Bypass -File .\scripts\test\real-ssh.ps1
 
   Usage (key auth, all in one line):
-    powershell -ExecutionPolicy Bypass -File .\scripts\real-ssh-check.ps1 `
+    powershell -ExecutionPolicy Bypass -File .\scripts\test\real-ssh.ps1 `
       -SshHost jump.example.com -SshUser deploy -KeyPath "$HOME\.ssh\id_rsa"
 
   Forward to something other than the jump host itself (e.g. the database):
     ... -TargetHost 10.1.2.3 -TargetPort 3306
 
-  NOTE: this file is intentionally ASCII-only (see scripts/smoke.ps1) -- which is
+  NOTE: this file is intentionally ASCII-only (see scripts/test/smoke-cli.ps1) -- which is
   also why the target is a separate integration test target: the whole selection
   stays ASCII (`--test real_ssh`), no Chinese filter word on the command line.
 #>
@@ -45,7 +45,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 
 $script:passed = 0
 $script:failed = 0

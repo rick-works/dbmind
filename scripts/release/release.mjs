@@ -3,9 +3,9 @@
  * 发布新版本：一键改版本号 + 追加版本说明骨架。
  *
  * 用法：
- *   node scripts/release.mjs 1.1.0 minor 2026-11-01
- *   node scripts/release.mjs 1.0.2 patch            # 日期默认今天
- *   node scripts/release.mjs 1.1.0 minor --dry-run  # 只看会改什么，不落盘
+ *   node scripts/release/release.mjs 1.1.0 minor 2026-11-01
+ *   node scripts/release/release.mjs 1.0.2 patch            # 日期默认今天
+ *   node scripts/release/release.mjs 1.1.0 minor --dry-run  # 只看会改什么，不落盘
  *
  * 参数：
  *   version  目标版本号（不带 v），如 1.1.0
@@ -32,8 +32,8 @@ const dryRun = process.argv.includes('--dry-run')
 
 const [rawVersion, rawLevel = 'patch', rawDate] = argv
 if (!rawVersion || !/^\d+\.\d+\.\d+$/.test(rawVersion)) {
-  console.error('用法: node scripts/release.mjs <version> [patch|minor|major] [YYYY-MM-DD] [--dry-run]')
-  console.error('示例: node scripts/release.mjs 1.1.0 minor 2026-11-01')
+  console.error('用法: node scripts/release/release.mjs <version> [patch|minor|major] [YYYY-MM-DD] [--dry-run]')
+  console.error('示例: node scripts/release/release.mjs 1.1.0 minor 2026-11-01')
   process.exit(1)
 }
 if (!['patch', 'minor', 'major'].includes(rawLevel)) {
@@ -126,7 +126,7 @@ for (const [file, noteLines] of Object.entries(notes)) {
   })
 }
 
-// 3) 官网：版本区要跟着加条目（源在主仓 website/index.html，发布用 scripts/publish-site.ps1）
+// 3) 官网：版本区要跟着加条目（源在主仓 website/index.html，发布用 scripts/release/publish-site.ps1）
 //    这一步曾经整段被漏掉 —— 官网一连落后 8 个版本（用户反馈"官网版本内容都没更新"），
 //    所以这里做一次检查并明确提示，而不是只在文档里写一句。
 const site = path.join(ROOT, 'website/index.html')
@@ -153,6 +153,6 @@ console.log(`\n注意：Release 标题只写版本号（v${version}）`)
 console.log('      手动 gh release edit 时不要传 --title 描述；' +
   `要改就 --title v${version}。`)
 console.log('      正文照 release-notes/TEMPLATE.md 写：只写「更新了什么」的要点（- 一句 一行），')
-console.log('      然后跑 node scripts/sync-release-notes.mjs <版本> —— 它一次同步三处：')
+console.log('      然后跑 node scripts/release/sync-release-notes.mjs <版本> —— 它一次同步三处：')
 console.log('      Release 正文、官网版本区、应用「关于」页要点（标题与安装包表格都由它生成）。')
 if (dryRun) console.log('\n（dry-run 未写入任何文件）')

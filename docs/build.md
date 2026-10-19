@@ -32,14 +32,14 @@ cd frontend; npm run dev
 | 桌面壳 | `cargo build -p dbmind-desktop` | `target\debug\dbmind-desktop.exe` |
 | CLI | `cargo build -p dbmind-cli` | `target\debug\dbmind.exe` |
 | MCP | `cargo build -p dbmind-mcp` | `target\debug\dbmind-mcp.exe` |
-| Java 宿主 | `scripts\build-agents.ps1` | `agents\*\target\*.jar`（4 个） |
+| Java 宿主 | `scripts\build\build-agents.ps1` | `agents\*\target\*.jar`（4 个） |
 
 ## 打包发布
 
 双击 `scripts\release.bat`（默认 `-WithJre -Jdk <项目 JDK>`），或：
 
 ```powershell
-powershell -File scripts\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
+powershell -File scripts\release\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
 ```
 
 流程 8 步：环境检查 → 前端 → 宿主 jar → cargo release → 绿色版组装 → zip → Tauri 安装包（MSI+NSIS）→ 汇总与 SHA256。
@@ -94,7 +94,7 @@ dist\
 
 | 需要什么 | 说明 |
 |---|---|
-| 系统代理 | 本机代理写在注册表里，git 默认不读。用 `scripts/git-proxy.ps1` 的 `Get-GitProxyArgs`（无代理返回空数组） |
+| 系统代理 | 本机代理写在注册表里，git 默认不读。用 `scripts/tools/git-proxy.ps1` 的 `Get-GitProxyArgs`（无代理返回空数组） |
 | GitHub 令牌 | `~/.dbmind/github-token`（classic，repo 权限）。`git push` 用 remote 内嵌令牌；`gh` / 官网 / cask 脚本用 `$env:GH_TOKEN` |
 | CI secrets | 签名证书与公证凭据（可选，未配也能发）。设置方式见 README「CI」一节 |
 
@@ -109,7 +109,7 @@ dist\
 ### 1. 改版本号（一条命令，别手改）
 
 ```powershell
-node scripts/release.mjs 1.2.31 patch 2026-10-16
+node scripts/release/release.mjs 1.2.31 patch 2026-10-16
 ```
 
 它一次改 6 处，手改必漏：
@@ -140,7 +140,7 @@ cd frontend; npm run guard
 然后由脚本落进仓库里另外三处（Release 正文 / 官网源 / 关于页中英）：
 
 ```powershell
-node scripts/sync-release-notes.mjs v1.2.31 --no-push
+node scripts/release/sync-release-notes.mjs v1.2.31 --no-push
 cd frontend; npm run guard
 ```
 
@@ -152,7 +152,7 @@ cd frontend; npm run guard
 ```powershell
 git add -A; git commit -m "v1.2.31 发布：版本号、发布说明与关于页要点"
 
-. .\scripts\git-proxy.ps1
+. .\scripts\tools\git-proxy.ps1
 $p = Get-GitProxyArgs
 $tok = (Get-Content "$env:USERPROFILE\.dbmind\github-token" -Raw -Encoding UTF8).Trim()
 $url = "https://rick-works:$tok@github.com/rick-works/dbmind.git"
@@ -171,7 +171,7 @@ CI（`windows-latest` / `macos-latest` / `macos-15-intel` / `ubuntu-22.04`，约
 ### 4. 回填说明并发布官网（CI 完成后，同一条命令去掉 `--no-push`）
 
 ```powershell
-node scripts/sync-release-notes.mjs v1.2.31
+node scripts/release/sync-release-notes.mjs v1.2.31
 ```
 
 一条命令做完四件事（**幂等，重复跑不会叠加**）：
@@ -181,7 +181,7 @@ node scripts/sync-release-notes.mjs v1.2.31
 | ① Release 正文 | 用 Release 里实际的资产重排「安装包」表格（体积取自 API，不下载）+ 要点 |
 | ② 官网 `website/index.html` | 版本区条目（要点 + 类型标签 + 日期），「最新」标挪到新版本 |
 | ③④ 应用「关于」页 | `settings.about.relN.noteX` 中文（md）+ 英文（`en-notes.json`） |
-| ⑥ 发布官网 | 自动调用 `scripts/publish-site.ps1`：worktree 里换掉 `gh-pages` 的 `index.html` → commit → push |
+| ⑥ 发布官网 | 自动调用 `scripts/release/publish-site.ps1`：worktree 里换掉 `gh-pages` 的 `index.html` → commit → push |
 
 - 只处理指定版本：带 `v1.2.31`；不带参数会遍历所有版本。
 - 推送 `gh-pages` 会自动触发 `pages-build-deployment`（约 35 秒生效），**不需要手动重建 Pages**。
@@ -190,7 +190,7 @@ node scripts/sync-release-notes.mjs v1.2.31
 ### 5. 同步 Homebrew cask（最后一步）
 
 ```powershell
-powershell -File scripts\update-homebrew-cask.ps1        # 默认取最新 Release；也可 -Version 1.2.31
+powershell -File scripts\release\update-homebrew-cask.ps1        # 默认取最新 Release；也可 -Version 1.2.31
 ```
 
 cask 在**另一个仓库** `rick-works/homebrew-tap`；脚本从 GitHub API 读两个 `.dmg` 的 `sha256`
@@ -213,10 +213,10 @@ gh release view v1.2.31 --repo rick-works/dbmind --json assets --jq '.assets[].n
 
 ## 本机出包（离线/备用）
 
-CI 不可用（断网、actions 排不上）时，`scripts\release.ps1` 等价于 CI 的 Windows 部分，产物进 `dist\`：
+CI 不可用（断网、actions 排不上）时，`scripts\release\release.ps1` 等价于 CI 的 Windows 部分，产物进 `dist\`：
 
 ```powershell
-powershell -File scripts\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
+powershell -File scripts\release\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
 ```
 
 产物：`dist\dbmind-<版本>\`（绿色版目录）、`dist\dbmind-<版本>-portable.zip`、`dist\installer\*.msi / *-setup.exe`、`dist\SHA256SUMS.txt`。

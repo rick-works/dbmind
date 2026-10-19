@@ -2018,13 +2018,13 @@ mod tests {
     /// **要求宿主真的可用** —— 环境不合就失败并说清怎么补，绝不静默降级
     /// （这一层是被显式点名运行的，含含糊糊地过去等于没跑）。
     ///
-    /// 跑法见 `scripts/host-tests.ps1`。
+    /// 跑法见 `scripts/test/host-tests.ps1`。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM（scripts/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
+    #[ignore = "宿主层：需要真实 JVM（scripts/test/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
     fn 宿主层_四个宿主都能起来并握手() {
         assert!(
             agent_hosts_visible(),
-            "这一层要求真实宿主：请设 {AGENTS_TEST_ENV}=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 {AGENTS_TEST_ENV}=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         for spec in AgentHostSpec::all() {
             let id = spec.id.to_string();
@@ -2033,7 +2033,7 @@ mod tests {
             let availability = availability_for(&spec);
             assert!(
                 availability.ready,
-                "宿主 {id} 应当可用，否则这一层没在验证任何东西：{:?} —— 先跑 scripts/build-agents.ps1",
+                "宿主 {id} 应当可用，否则这一层没在验证任何东西：{:?} —— 先跑 scripts/build/build-agents.ps1",
                 availability.reason
             );
 
@@ -2074,7 +2074,7 @@ mod tests {
                 AgentHostSpec::all()
                     .iter()
                     .any(|spec| resolve_agent_jar(spec).is_some()),
-                "设了 {AGENTS_TEST_ENV} 却一个宿主包都解析不出来：开关没生效，或宿主未构建（先跑 scripts/build-agents.ps1）"
+                "设了 {AGENTS_TEST_ENV} 却一个宿主包都解析不出来：开关没生效，或宿主未构建（先跑 scripts/build/build-agents.ps1）"
             );
             return;
         }

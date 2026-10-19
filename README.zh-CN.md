@@ -101,7 +101,7 @@
 ├── frontend/            Vue 3 前端
 ├── plugins/             数据库类型声明（JDBC URL 模板、驱动清单）
 ├── resources/           原生依赖（SQL Server 集成认证 dll）
-├── scripts/             启动 / 打包 / 发布 / 冒烟测试
+├── scripts/             日常入口（start/stop）+ build / release / test / tools 四类脚本
 ├── deploy/              集成测试用真实服务端（redis / es / mongo）
 └── website/             产品官网（单文件静态页）
 ```
@@ -147,14 +147,14 @@ cargo build --release -p dbmind-cli
 cargo build --release -p dbmind-mcp
 
 # Java 宿主（4 个协议桥）
-powershell -File scripts\build-agents.ps1
+powershell -File scripts\build\build-agents.ps1
 ```
 
 ## 打包发布
 
 ```powershell
 # 一键全流程（绿色版 + zip + MSI/NSIS 安装包），双击 scripts\release.bat 效果相同
-powershell -File scripts\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
+powershell -File scripts\release\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
 
 # 常用组合：
 release.ps1 -SkipBundle        # 只出绿色版（不需要 WiX）
@@ -278,8 +278,8 @@ gh secret list --repo $repo
 
 ```powershell
 cargo test --workspace                      # 单元测试（不依赖任何外部环境）
-powershell -File scripts\smoke-dbmind.ps1   # 端到端冒烟（69 项，需要对各数据源的连接）
-powershell -File scripts\host-tests.ps1     # Java 宿主真机回归（起真实 JVM）
+powershell -File scripts\test\smoke-api.ps1   # 端到端冒烟（68 项，SQLite 真库，无需外部服务）
+powershell -File scripts\test\host-tests.ps1     # Java 宿主真机回归（起真实 JVM）
 ```
 
 ## 文档

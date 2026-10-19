@@ -2412,11 +2412,11 @@ mod tests {
     /// 覆盖：建表 → 写入（含中文）→ 读回 → 结构浏览（元数据必须搭同一条物理会话）→
     /// 失败路径也要是被翻译过的结构化错误，而不是 panic。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM（scripts/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
+    #[ignore = "宿主层：需要真实 JVM（scripts/test/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
     fn 宿主层_h2_文件库走一次完整往返() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let (dir, engine, _conn) = fixture("host-layer-h2");
         let h2 = engine
@@ -2478,11 +2478,11 @@ mod tests {
     /// 登记后立刻取消 —— 于是**返回得快**本身就是证据。默认 30 秒超时是兜底：取消要是失灵，
     /// 测试会以「超时」而不是「取消」失败 —— 有界，且结论不含糊。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM（scripts/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
+    #[ignore = "宿主层：需要真实 JVM（scripts/test/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
     fn 宿主层_取消能真的打断正在执行的语句() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let (dir, engine, _conn) = fixture("host-layer-cancel");
         let h2 = engine
@@ -2591,11 +2591,11 @@ mod tests {
     /// 断言刻意不靠时序猜测 —— 慢查询先占住会话，1.5 秒后**两条都还活着**（第二条在排队）
     /// 才算数：要是池坏了（真给单连接类型开了第二条），第二条早就返回了。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM（scripts/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
+    #[ignore = "宿主层：需要真实 JVM（scripts/test/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
     fn 宿主层_单连接类型的并发请求会排队() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let (dir, engine, _conn) = fixture("host-layer-serial");
         let h2 = engine
@@ -2671,11 +2671,11 @@ mod tests {
     /// （那要等前一条长查询跑完，或等满 30 秒的等待预算）。
     /// 少了这条，用户点了「取消」看到的就是「没反应」。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM（scripts/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
+    #[ignore = "宿主层：需要真实 JVM（scripts/test/host-tests.ps1，或 DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core -- --ignored）"]
     fn 宿主层_排队等待会话时也能取消() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let (dir, engine, _conn) = fixture("host-layer-queued-cancel");
         let h2 = engine
@@ -2756,14 +2756,14 @@ mod tests {
 
     /// **宿主层**（默认不跑）：可多连接类型上，并发请求**各占一条物理会话**。
     ///
-    /// 需要库测试场（`deploy/mongo-test-server`，`scripts/host-tests.ps1` 会起在 27117）；
+    /// 需要库测试场（`deploy/mongo-test-server`，`scripts/test/host-tests.ps1` 会起在 27117）；
     /// 端口可用 `DBMIND_TEST_MONGO_PORT` 覆盖。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM + MongoDB 测试场（用 scripts/host-tests.ps1）"]
+    #[ignore = "宿主层：需要真实 JVM + MongoDB 测试场（用 scripts/test/host-tests.ps1）"]
     fn 宿主层_可多连接类型的并发请求各占一条会话() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let port: u16 = std::env::var("DBMIND_TEST_MONGO_PORT")
             .ok()
@@ -2784,7 +2784,7 @@ mod tests {
         // 先确认真连得上：连不上就该在这里失败，而不是让并发的结论落在「全都连不上」上
         run("db.pings.findOne({})").unwrap_or_else(|e| {
             panic!(
-                "连不上库测试场（127.0.0.1:{port}）：{} —— 先跑 scripts/host-tests.ps1",
+                "连不上库测试场（127.0.0.1:{port}）：{} —— 先跑 scripts/test/host-tests.ps1",
                 e.message
             )
         });
@@ -2841,14 +2841,14 @@ mod tests {
     /// `maxConnections` 是内核侧共用机制，但**会话管理与协议实现各宿主独立**
     /// （ES 是 REST 直转宿主，Mongo 是专属协议宿主）。这条把另一半也钉住。
     ///
-    /// 需要 ES 替身（`deploy/es-test-server`，`scripts/host-tests.ps1` 会起在 9212）；
+    /// 需要 ES 替身（`deploy/es-test-server`，`scripts/test/host-tests.ps1` 会起在 9212）；
     /// 端口可用 `DBMIND_TEST_ES_PORT` 覆盖。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM + Elasticsearch 测试替身（用 scripts/host-tests.ps1）"]
+    #[ignore = "宿主层：需要真实 JVM + Elasticsearch 测试替身（用 scripts/test/host-tests.ps1）"]
     fn 宿主层_可多连接类型的并发请求各占一条会话_es() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let port: u16 = std::env::var("DBMIND_TEST_ES_PORT")
             .ok()
@@ -2867,7 +2867,7 @@ mod tests {
         // 先确认真连得上：替身没起来就该在这里失败并说清怎么办
         run("GET /logs/_search").unwrap_or_else(|e| {
             panic!(
-                "连不上 ES 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/host-tests.ps1",
+                "连不上 ES 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/test/host-tests.ps1",
                 e.message
             )
         });
@@ -2925,14 +2925,14 @@ mod tests {
     ///
     /// 断言方式与多连接那两条**同形、结论相反**：8 条并发请求**全部**落在同一条会话
     /// （槽位只能是 `#0`）—— 单连接类型下池里只有一把锁，这就是它的直接可观察后果。
-    /// 需要 Redis 替身（`deploy/redis-test-server`，`scripts/host-tests.ps1` 会起在 6319）；
+    /// 需要 Redis 替身（`deploy/redis-test-server`，`scripts/test/host-tests.ps1` 会起在 6319）；
     /// 端口可用 `DBMIND_TEST_REDIS_PORT` 覆盖。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM + Redis 测试替身（用 scripts/host-tests.ps1）"]
+    #[ignore = "宿主层：需要真实 JVM + Redis 测试替身（用 scripts/test/host-tests.ps1）"]
     fn 宿主层_专属单连接类型的并发共用同一条会话_redis() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let port: u16 = std::env::var("DBMIND_TEST_REDIS_PORT")
             .ok()
@@ -2952,7 +2952,7 @@ mod tests {
         // 先确认真连得上：替身没起来就该在这里失败并说清怎么办
         run("PING").unwrap_or_else(|e| {
             panic!(
-                "连不上 Redis 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/host-tests.ps1",
+                "连不上 Redis 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/test/host-tests.ps1",
                 e.message
             )
         });
@@ -3022,11 +3022,11 @@ mod tests {
     /// 它的结果在渲染阶段被检查令牌、以「已取消」返回 —— 也就是说**服务端可能已经执行过**。
     /// 这是宿主设计上的取舍（阻断类命令被明确拒绝，见其源码注释），不是漏做。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM + Redis 测试替身（用 scripts/host-tests.ps1）"]
+    #[ignore = "宿主层：需要真实 JVM + Redis 测试替身（用 scripts/test/host-tests.ps1）"]
     fn 宿主层_专属宿主的排队等待也能被取消_redis() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let port: u16 = std::env::var("DBMIND_TEST_REDIS_PORT")
             .ok()
@@ -3044,7 +3044,7 @@ mod tests {
             |sql: &str| engine.execute(QueryRequest::new(redis.id.as_str(), sql), AccessContext::Desktop);
         run("PING").unwrap_or_else(|e| {
             panic!(
-                "连不上 Redis 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/host-tests.ps1",
+                "连不上 Redis 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/test/host-tests.ps1",
                 e.message
             )
         });
@@ -3125,11 +3125,11 @@ mod tests {
     /// 顺带钉住 ES 侧的取消边界（宿主源码里写着「已在途的 HTTP 请求无法中断；
     /// 取消影响后续步骤」）：正在跑的请求**不会被打断**，但结果以「已取消」返回。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM + Elasticsearch 测试替身（用 scripts/host-tests.ps1）"]
+    #[ignore = "宿主层：需要真实 JVM + Elasticsearch 测试替身（用 scripts/test/host-tests.ps1）"]
     fn 宿主层_可多连接类型_es_的排队等待也能被取消() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let port: u16 = std::env::var("DBMIND_TEST_ES_PORT")
             .ok()
@@ -3146,7 +3146,7 @@ mod tests {
         let run = |sql: &str| engine.execute(QueryRequest::new(es.id.as_str(), sql), AccessContext::Desktop);
         run("GET /logs/_search").unwrap_or_else(|e| {
             panic!(
-                "连不上 ES 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/host-tests.ps1",
+                "连不上 ES 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/test/host-tests.ps1",
                 e.message
             )
         });
@@ -3253,11 +3253,11 @@ mod tests {
     /// || batch.size() > limit`，两者都是「恰好等于上限 ⇒ 不算截断」，与内核同义。
     /// 这条测试把那句「我读过代码，应该没问题」变成可执行的断言。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM + ES / Mongo 替身（用 scripts/host-tests.ps1）"]
+    #[ignore = "宿主层：需要真实 JVM + ES / Mongo 替身（用 scripts/test/host-tests.ps1）"]
     fn 宿主层_截断标记_es_与_mongo_都如实() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let es_port: u16 = std::env::var("DBMIND_TEST_ES_PORT")
             .ok()
@@ -3750,11 +3750,11 @@ mod tests {
     /// ① 紧接着那条命令如实报「连接已断开」（**这是预期的**，不是缺陷）；
     /// ② **再下一条必须自己好起来**（符合任意一层的修复：宿主丢会话，或内核清缓存）。
     #[test]
-    #[ignore = "宿主层：需要真实 JVM + Redis 测试替身（用 scripts/host-tests.ps1）"]
+    #[ignore = "宿主层：需要真实 JVM + Redis 测试替身（用 scripts/test/host-tests.ps1）"]
     fn 宿主层_断链之后仍能自愈() {
         assert!(
             crate::agent::agent_hosts_visible(),
-            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/host-tests.ps1）"
+            "这一层要求真实宿主：请设 DBMIND_TEST_AGENTS=1 后重跑（或直接用 scripts/test/host-tests.ps1）"
         );
         let port: u16 = std::env::var("DBMIND_TEST_REDIS_PORT")
             .ok()
@@ -3773,7 +3773,7 @@ mod tests {
 
         run("PING").unwrap_or_else(|e| {
             panic!(
-                "连不上 Redis 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/host-tests.ps1",
+                "连不上 Redis 替身（127.0.0.1:{port}）：{} —— 先跑 scripts/test/host-tests.ps1",
                 e.message
             )
         });

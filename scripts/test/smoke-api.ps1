@@ -5,8 +5,8 @@
 # 只有真的发一遍请求、看一眼返回体才能发现（历史上就有「每行都显示 NULL」这种静默错）。
 #
 # 用法：
-#   powershell -ExecutionPolicy Bypass -File scripts/smoke-dbmind.ps1
-#   powershell -ExecutionPolicy Bypass -File scripts/smoke-dbmind.ps1 -Port 20361 -KeepAlive
+#   powershell -ExecutionPolicy Bypass -File scripts/test/smoke-api.ps1
+#   powershell -ExecutionPolicy Bypass -File scripts/test/smoke-api.ps1 -Port 20361 -KeepAlive
 #
 # 前提：已构建后端（cargo build -p dbmind-web）。脚本自己起服务、用临时数据目录，
 # 跑完关掉进程并清理临时目录，不碰你 `~/.dbmind` 里的真实配置。
@@ -23,7 +23,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $script:Base = "http://127.0.0.1:$Port"
 $script:Passed = 0
 $script:Failed = 0
@@ -141,7 +141,8 @@ try {
     Write-Host '契约与系统端点' -ForegroundColor White
     Check '内核原生契约仍在（/api/dbmind/health）' ((Api-Get '/api/dbmind/health').ok -eq $true)
     Check '前端产物已托管（GET / => 200）' ((Api-Raw '/') -eq 200)
-    Check '授权状态恒为已授权' ((Api-Get '/api/license/status').licensed -eq $true)
+    # 原来还有一项「/api/license/status 恒为已授权」：后端早已没有这个接口（crates 里搜不到
+    # license），它会在冒烟开头就抛 Invoke-RestMethod 异常、整轮中止，所以删除。
 
     $types = @(Api-List '/api/drivers/types')
     Check '驱动类型 16 个（前端注册表覆盖的集合）' ($types.Count -eq 16) "实际 $($types.Count)"

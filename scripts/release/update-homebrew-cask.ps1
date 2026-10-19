@@ -8,8 +8,8 @@
    存成主仓库的 secret，然后把下面这几步搬进 workflow 的最后一个 job。）
 
 用法：
-  powershell -File scripts\update-homebrew-cask.ps1                 # 取最新 Release
-  powershell -File scripts\update-homebrew-cask.ps1 -Version 1.2.7  # 指定版本
+  powershell -File scripts\release\update-homebrew-cask.ps1                 # 取最新 Release
+  powershell -File scripts\release\update-homebrew-cask.ps1 -Version 1.2.7  # 指定版本
 
 它做四件事：
   1. 从 GitHub API 读该 Release 里两个 .dmg 的 sha256（assets[].digest —— **不用下载** 100+MB）；
@@ -26,10 +26,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Set-Location $root
 # 系统代理助手（Windows 的代理在注册表里，git 默认不读 —— 开代理时直连会一直超时）
-. (Join-Path $PSScriptRoot 'git-proxy.ps1')
+. (Join-Path $PSScriptRoot '..\tools\git-proxy.ps1')
 $proxy = Get-GitProxyArgs   # fetch / clone / push 都用它：有代理就走，没开就是空数组（直连）
 
 $repo = 'rick-works/dbmind'

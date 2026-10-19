@@ -1,10 +1,10 @@
 # 发版说明模板（只说更新了什么 + 安装包表格）
 
-> 用法：跑完 `node scripts/release.mjs <版本> <级别> <日期>` 之后，照这个骨架写
+> 用法：跑完 `node scripts/release/release.mjs <版本> <级别> <日期>` 之后，照这个骨架写
 > `release-notes/v<版本>.md` 的**要点**；然后一条命令同步**四处**：
 >
 > ```
-> node scripts/sync-release-notes.mjs v<版本>
+> node scripts/release/sync-release-notes.mjs v<版本>
 > ```
 >
 > 它会同步：① Release 正文（**仓库里这份文件就是正文**）；② 官网版本区；
@@ -22,7 +22,7 @@
 
 ## 更新说明
 
-> 这个标题由 `node scripts/sync-release-notes.mjs <版本>` 补上（和下面的表格一起），
+> 这个标题由 `node scripts/release/sync-release-notes.mjs <版本>` 补上（和下面的表格一起），
 > 手写时**只写要点**即可。要点用无序列表（`-`），不加序号。
 
 - 一句话说清第一件事
@@ -31,7 +31,7 @@
 
 ## 安装包
 
-> 这一段由 `node scripts/sync-release-notes.mjs <版本>` 一并生成（顺序固定：Windows → macOS → Linux，
+> 这一段由 `node scripts/release/sync-release-notes.mjs <版本>` 一并生成（顺序固定：Windows → macOS → Linux，
 > 只列该版本实际发出来的文件，体积取自 Release API 的 assets）。手别改，改了下次跑脚本会被覆盖。
 > 注意：只有 CI 出完包（或本机 release.ps1 出完包、Release 已挂上资产）之后跑，表格才有体积；
 > 打标签前那次同步会提示「读不到 Release 资产，保留原有表格」，属正常。

@@ -9,9 +9,9 @@
  * 唯一来源是仓库里的 `release-notes/<版本>.md`：你只写要点（`- 一句` 一行），其余由本脚本生成。
  *
  * 用法（需要 GH_TOKEN；在哪个目录下跑都行）：
- *   node scripts/sync-release-notes.mjs                 # 全部版本：写文件 + 推 Release
- *   node scripts/sync-release-notes.mjs v1.2.12         # 只处理指定版本
- *   node scripts/sync-release-notes.mjs --no-push       # 只改本地文件，不动 GitHub
+ *   node scripts/release/sync-release-notes.mjs                 # 全部版本：写文件 + 推 Release
+ *   node scripts/release/sync-release-notes.mjs v1.2.12         # 只处理指定版本
+ *   node scripts/release/sync-release-notes.mjs --no-push       # 只改本地文件，不动 GitHub
  *
  * 关于「关于」页的**英文**要点：中文从 `release-notes/<版本>.md` 自动取；英文另有一份
  * 翻译 `release-notes/en-notes.json`（键是版本号、值是该版本的英文要点数组），它会被同步进
@@ -362,7 +362,7 @@ for (const [tag, bullets] of bulletsByTag) {
 // ---------- ⑥ 把官网推到 gh-pages ----------
 //
 // **改好源文件 ≠ 线上更新**：官网线上是 `gh-pages` 分支，必须跑一次
-// `scripts/publish-site.ps1`（在 worktree 里换掉 index.html → commit → push）。
+// `scripts/release/publish-site.ps1`（在 worktree 里换掉 index.html → commit → push）。
 // 这一步被整段漏掉过两次：官网一连落后 8 个版本（publish-site.ps1 的注释里就记着用户那句
 // "官网版本内容都没更新"），v1.2.20 又是只改了源、没推分支，用户在官网版本页又看出来了。
 // 所以不再"只提醒"——直接在这里执行：本脚本跑完，Release / 官网 / 关于页三处就该都到位。
@@ -371,7 +371,7 @@ if (noPush) {
 } else {
   const ps1 = path.join(ROOT, 'scripts', 'publish-site.ps1')
   if (!fs.existsSync(ps1)) {
-    console.log('⚠ 没找到 scripts/publish-site.ps1 —— 官网需要手动发布到 gh-pages')
+    console.log('⚠ 没找到 scripts/release/publish-site.ps1 —— 官网需要手动发布到 gh-pages')
   } else {
     // PowerShell 的可执行名按平台不同：Windows 是 `powershell`，mac/Linux 是 `pwsh`。
     // 写死 `powershell` 的话在 mac/Linux 上发版会 ENOENT → 被下面 catch 吞掉 → **官网永远不更新

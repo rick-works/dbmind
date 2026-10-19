@@ -12,14 +12,14 @@
   jars not built, H2 JDBC driver missing), it FAILS and says what to do.
   A layer that quietly skips itself is worse than no layer.
 
-  NOTE: this file is intentionally ASCII-only (see scripts/smoke.ps1).
+  NOTE: this file is intentionally ASCII-only (see scripts/test/smoke-cli.ps1).
 
-  Usage: powershell -ExecutionPolicy Bypass -File .\scripts\host-tests.ps1
+  Usage: powershell -ExecutionPolicy Bypass -File .\scripts\test\host-tests.ps1
 #>
 
 $ErrorActionPreference = 'Continue'
 
-$root = Split-Path -Parent $PSScriptRoot
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $stamp = Get-Date -Format 'yyyyMMddHHmmss'
 $work = Join-Path $env:TEMP "dbmind-host-tests-$stamp"
 $homeDir = Join-Path $work 'home'
@@ -58,7 +58,7 @@ if (-not (Test-Path $cli)) {
 
 $agents = @(Get-ChildItem (Join-Path $root 'agents') -Recurse -File -Filter 'dbmind-agent-*.jar' -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -notlike 'original-*' })
-Check "agent hosts are built (found $($agents.Count))" ($agents.Count -ge 4) 'run scripts/build-agents.ps1'
+Check "agent hosts are built (found $($agents.Count))" ($agents.Count -ge 4) 'run scripts/build/build-agents.ps1'
 
 $java = $null
 if ($env:DBMIND_JAVA) { $java = $env:DBMIND_JAVA }
@@ -104,7 +104,7 @@ foreach ($stub in $stubs) {
     Set-Item -Path ("Env:" + $stub.Env) -Value "$($stub.Port)"
     $jar = Join-Path $root $stub.Jar
     if (-not (Test-Path $jar)) {
-        Check ($stub.Name + ' test server jar exists') $false "missing $jar -- run scripts/build-agents.ps1 -WithTestServers"
+        Check ($stub.Name + ' test server jar exists') $false "missing $jar -- run scripts/build/build-agents.ps1 -WithTestServers"
         continue
     }
     $log = Join-Path $work ($stub.Name + '-stub.log')
@@ -133,7 +133,7 @@ $before = @(Get-Process java -ErrorAction SilentlyContinue | Select-Object -Expa
 Push-Location $root
 # `--lib` on purpose: this layer is exactly the lib's `#[ignore]`d tests. It also
 # keeps `tests/real_redis.rs` out -- that one talks to a REAL Redis (not a stub)
-# and is opt-in via scripts/real-redis-check.ps1; it prints [SKIP] when its env
+# and is opt-in via scripts/test/real-redis.ps1; it prints [SKIP] when its env
 # gate is off, so letting it run here would quietly inflate this layer's count.
 $output = (& cargo test -p dbmind-core --lib -- --ignored --nocapture 2>&1 | Out-String)
 $exit = $LASTEXITCODE

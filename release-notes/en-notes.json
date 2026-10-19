@@ -1,5 +1,5 @@
 {
-  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
     "v1.2.35": [
         "SQL editor: statements are recognized without semicolons, the one under the cursor is outlined and runs on its own, and complex SQL (procedures, triggers, CTEs, dollar-quoted functions) is no longer split wrongly",
         "SQL formatting: blank lines between statements follow the setting with or without semicolons; multi-statement scripts are formatted one by one and comments/semicolons are kept",
