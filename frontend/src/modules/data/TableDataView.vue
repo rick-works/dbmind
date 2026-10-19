@@ -3133,11 +3133,13 @@ useShortcutScope(rootRef, {
   color: var(--dc-text-weak, var(--dc-text-dim));
   font-style: italic;
 }
-/* 对齐只认表头字段类型：数值右对齐、其余（文本 / 日期 / 布尔 / 二进制）左对齐，不居中
+/* 对齐按 Excel 标准、只认表头字段类型：数字 / 日期右对齐、布尔居中、其余（文本 / 二进制）左对齐
    （判定见 utils/cellAlign.js）；NULL 与同列其它单元格共用同一个列级结论。
    编辑框跟随单元格对齐，改数字时也是右对齐 */
 .data-table td.al-r { text-align: right; }
+.data-table td.al-c { text-align: center; }
 .data-table td.al-r .cell-input { text-align: right; }
+.data-table td.al-c .cell-input { text-align: center; }
 
 .data-table-wrap { height: 100%; overflow: auto; contain: layout paint; overflow-anchor: none; }
 .data-table-wrap:focus { outline: none; }

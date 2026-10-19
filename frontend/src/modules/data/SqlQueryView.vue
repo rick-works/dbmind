@@ -5739,11 +5739,13 @@ onBeforeUnmount(() => {
   color: var(--dc-text-weak, var(--dc-text-dim));
   font-style: italic;
 }
-/* 对齐只认表头字段类型：数值右对齐、其余（文本 / 日期 / 布尔 / 二进制）左对齐，不居中
+/* 对齐按 Excel 标准、只认表头字段类型：数字 / 日期右对齐、布尔居中、其余（文本 / 二进制）左对齐
    （判定见 utils/cellAlign.js）；NULL 与同列其它单元格共用同一个列级结论。
    就地编辑用的是原生 input（不继承 text-align），这里显式跟上，编辑框才和单元格同一侧 */
 .data-table td.al-r { text-align: right; }
+.data-table td.al-c { text-align: center; }
 .data-table td.al-r .cell-input { text-align: right; }
+.data-table td.al-c .cell-input { text-align: center; }
 /* 结果表首列复选框列：提高选择器优先级覆盖 .data-table th/td 的 padding 与 line-height，
    否则复选框会停在 34px 行高的基线上，看起来偏上（没居中） */
 .row-sel-col { width: 40px; }

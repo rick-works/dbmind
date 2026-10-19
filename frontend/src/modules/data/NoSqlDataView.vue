@@ -1897,9 +1897,10 @@ onBeforeUnmount(() => {
   color: var(--dc-text-weak, var(--dc-text-dim));
   font-style: italic;
 }
-/* 对齐只认表头字段类型：数值右对齐、其余（文本 / 日期 / 布尔 / 二进制）左对齐，不居中
+/* 对齐按 Excel 标准、只认表头字段类型：数字 / 日期右对齐、布尔居中、其余左对齐
    （判定见 utils/cellAlign.js）；NoSQL 没有字段类型，按列值多数派定，整列一个结论 */
 .data-table td.al-r { text-align: right; }
+.data-table td.al-c { text-align: center; }
 .data-table tbody tr { cursor: pointer; }
 /* 斑马纹按真实行号而非 DOM 奇偶：窗口化渲染会插占位行，nth-child 会错位 */
 .data-table tbody tr.row-alt td { background-color: var(--dc-bg-soft); }
