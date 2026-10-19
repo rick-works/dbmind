@@ -13,14 +13,22 @@ Runs locally, your data never leaves your network. Rust core + Vue 3 frontend + 
 | Module | Description |
 |---|---|
 | **🤖 Deep AI integration** | Explain / optimize / rewrite / fix / diagnose / chat — six one-click actions. AI-generated SQL can be verified with EXPLAIN and a dry run. An MCP server exposes the whole workbench to any AI client (see [AI, more than a chat box](#ai-more-than-a-chat-box)) |
-| Multi-datasource | MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / MariaDB / DM / Kingbase / SQLite / H2 / Derby / DuckDB / Redis / MongoDB / Elasticsearch |
+| Multi-datasource | **17 engines, one client** — relational (MySQL, MariaDB, PostgreSQL, KingbaseES, Oracle, SQL Server, DB2, Derby, H2, DM), analytical (ClickHouse, Doris), embedded / file (SQLite, DuckDB) and NoSQL (Redis, MongoDB, Elasticsearch). JDBC drivers download on demand |
 | SQL editor | Monaco-based: completion, formatting, multi-statement batch runs with per-statement timing, history, snippets, template variables (`:name` prompts on run) |
 | Transaction mode | Writes are not auto-committed: edit → verify → commit or roll back. Transactions are bound to the editor's session, on every JDBC datasource |
 | In-grid editing | Double-click a cell → buffered changes → batched UPDATE (inside the transaction if enabled); snapshot guards prevent stale writes after re-paging |
 | Huge result sets | Virtual scrolling + server-side paging + response compression (4.2MB → 233KB measured); total counts computed async without blocking rows |
+| Table & object designer | Change columns, types, defaults, comments and indexes in a grid — the exact `ALTER` script is previewed before anything runs; views, procedures, functions, triggers and events open their DDL and can be edited as `ALTER` |
+| Users & privileges | Users and roles per engine, with a privilege matrix by scope (global / server / database / schema / table / routine). Every tick previews the precise `GRANT` / `REVOKE` diff; only the changed privileges are submitted |
+| Monitoring | Sessions, locks and per-database metrics, with in-place session kill. Engines without a monitoring API say so instead of showing empty charts |
+| ER diagram | Relations inferred from naming conventions plus real foreign keys; drag to rearrange, wheel to zoom, export to PNG / SVG |
+| Compare & transfer | Schema and data diff between two connections, then a Navicat-style wizard that transfers the chosen objects to the target |
 | Data transfer | Export to CSV / Excel / JSON / INSERT; long tasks run in background with notifications |
+| Backup & test data | Native dump / restore per engine, plus generated test data for scratch tables |
+| Object search | Find tables, views and procedures across the whole connection without expanding the tree |
 | Production guard | Mark a connection as PROD: badge everywhere, write confirmation, full audit trail |
 | Data pivot | Frame-select to aggregate (count / sum / avg / min / max), group and drill down |
+| Driver manager | Download, update and repair drivers from Maven with live progress; point it at a private mirror for air-gapped networks |
 
 ## Screenshots
 
@@ -269,7 +277,7 @@ powershell -File scripts\smoke-dbmind.ps1   # end-to-end smoke (69 checks)
 powershell -File scripts\host-tests.ps1     # real-JVM agent regression
 ```
 
-> In-depth docs (architecture / storage / build / troubleshooting) are in [docs/](docs/) — written in Chinese.
+> In-depth docs (architecture / storage / build / troubleshooting / db-lab) are in [docs/](docs/) — written in Chinese.
 
 ## Tech stack
 

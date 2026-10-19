@@ -14,14 +14,22 @@
 | 模块 | 说明 |
 |---|---|
 | **🤖 AI 深度集成** | 解释 / 优化 / 改写 / 修错 / 诊断 / 对话六大动作；AI 的 SQL 先看执行计划、试跑验证；MCP 服务器把整个工作台接进任意 AI 客户端（详见 [AI 能力](#ai-不只是聊天)） |
-| 多数据源 | MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / MariaDB / 达梦 / 人大金仓 / SQLite / H2 / Derby / DuckDB / Redis / MongoDB / Elasticsearch |
+| 多数据源 | **17 种引擎，一个客户端** —— 关系型（MySQL、MariaDB、PostgreSQL、人大金仓、Oracle、SQL Server、DB2、Derby、H2、达梦）、分析型（ClickHouse、Doris）、嵌入式 / 文件（SQLite、DuckDB）与 NoSQL（Redis、MongoDB、Elasticsearch）；JDBC 驱动按需下载 |
 | SQL 编辑器 | Monaco 内核：补全、格式化、多语句分块执行、逐段计时、执行历史、SQL 片段库、模板变量（`:name` 执行时填参） |
 | 事务模式 | 写语句不自动提交：改完自查 → 回滚或提交；事务精确绑定编辑器会话，全 JDBC 数据源通用 |
 | 结果集直接编辑 | 双击单元格改值 → 缓冲 → 批量 UPDATE（可落在事务里）；快照守卫防止翻页后误提交 |
 | 大结果集 | 虚拟滚动 + 服务端分页 + 响应压缩（实测 4.2MB→233KB）；总数异步统计不阻塞回显 |
+| 表结构与对象 | 字段类型、默认值、注释、索引在表格里直接改，执行前先看到完整 `ALTER` 预览；视图、存储过程、函数、触发器、事件可查看 DDL，并转成 `ALTER` 继续编辑 |
+| 用户与权限 | 各引擎的用户 / 角色管理，按作用域（全局 / 服务器 / 库 / 模式 / 表 / 例程）勾选权限；每一次勾选都预览精确的 `GRANT` / `REVOKE` 差量，提交时只发变化的部分 |
+| 服务监控 | 会话、锁与库级指标，可就地终止会话；没有监控接口的引擎如实说明，不画空图 |
+| ER 关系图 | 命名约定 + 真实外键推断表间关系；拖拽布局、滚轮缩放、导出 PNG / SVG |
+| 数据对比与传输 | 两个连接之间比对结构与数据差异，再用向导把选中的对象传输到目标库 |
 | 数据传输 | 导出 CSV / Excel / JSON / INSERT；后台任务 + 完成通知 |
+| 备份与造数 | 各引擎原生 dump / restore，按模板生成测试数据 |
+| 对象搜索 | 不用展开树，直接在整个连接里搜表 / 视图 / 存储过程 |
 | 生产库保护 | 连接标记 PROD 后：标记全程外显、写操作二次确认、执行审计留痕 |
 | 数据透视 | 框选即汇总（计数 / 求和 / 均值 / 最值）、分组下钻 |
+| 驱动管理 | 从 Maven 下载 / 更新 / 修复驱动，带实时进度；内网可指向私有镜像 |
 
 ## 界面截图
 
@@ -282,6 +290,7 @@ powershell -File scripts\host-tests.ps1     # Java 宿主真机回归（起真�
 | [docs/storage.md](docs/storage.md) | 元数据库：存储设计、WAL、数据目录迁移 |
 | [docs/build.md](docs/build.md) | 构建与发布：各端构建、打包参数、环境变量、发行版上传 |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | 常见问题与踩坑记录（构建 / 运行 / 打包 / 数据） |
+| [docs/db-lab.md](docs/db-lab.md) | 测试实验室：Docker 里拉起全部数据源的连接信息与演示数据 |
 
 ## 技术栈
 
