@@ -77,8 +77,14 @@
                         {{ form.attrs[d.key] ? $t('udv.yes') : $t('udv.no') }}
                       </el-checkbox>
                       <span v-else-if="d.kind === 'num'" class="attr-num">
-                        <el-input-number v-model="form.attrs[d.key]" size="small" :min="0" :step="1" :disabled="readOnly" controls-position="right" />
-                        <span v-if="!form.attrs[d.key]" class="attr-hint">{{ $t('udv.unlimited') }}</span>
+                        <!-- 配额的 0 在 MySQL 里就是"不限制"。原来 0 与右侧那句「不限制」
+                             并排显示，读起来是"一个都不许 不限制"。值为 0 时传 null 给
+                             el-input-number，框里就空着、由 placeholder 写「不限制」；
+                             清空/删光同样回落成 0（WITH MAX_* x 只认数字）。 -->
+                        <el-input-number :model-value="numModel(d.key)" size="small" :min="0" :step="1"
+                                         :disabled="readOnly" controls-position="right"
+                                         :placeholder="$t('udv.unlimited')"
+                                         @update:model-value="(v) => setNumAttr(d.key, v)" />
                       </span>
                       <span v-else-if="d.kind === 'plugin'" class="attr-num">
                         <!-- 只读连接：disabled 的 el-select 文字呈灰占位样式，看着像"没显示值"
@@ -928,6 +934,14 @@ const seedAttrs = () => {
   }
   form.value.attrs = o
   attrsBase.value = { ...o }
+}
+
+// 配额类数字（MAX_QUESTIONS_PER_HOUR …）：0 = 不限制，但界面上不该把 0 摊出来
+// —— 传 null 给 el-input-number 才会显示空 + placeholder（「不限制」），
+// 清空时统一回落成 0：后端 WITH MAX_* x 只认数字，null/undefined 会让子句非法。
+const numModel = (k) => (Number(form.value.attrs[k]) > 0 ? Number(form.value.attrs[k]) : null)
+const setNumAttr = (k, v) => {
+  form.value.attrs[k] = v === null || v === undefined || v === '' ? 0 : Number(v)
 }
 
 // 可改项清单。**新建时同样摆出来** —— 用户口径"新建用户的信息也加全"：

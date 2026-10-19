@@ -3475,6 +3475,8 @@ export default {
   'udv.fPwdReuseTime': '密码重用时间',
   'udv.fPwdRequireCurrent': '修改需当前密码',
   'udv.fUserAttributes': '用户属性',
+  // 基本信息里后端回的是 serverVersion 这个原始键名（驼峰），没登记就原样摊出来
+  'udv.fServerVersion': '服务器版本',
   'mon.noConnId': '未获取到连接标识',
   'mon.fetchFailed': '监控数据获取失败',
   'mon.fetchFailedShort': '获取失败',

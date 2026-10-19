@@ -3456,6 +3456,7 @@ export default {
   'udv.fPwdReuseTime': 'Password reuse time',
   'udv.fPwdRequireCurrent': 'Requires current password',
   'udv.fUserAttributes': 'User attributes',
+  'udv.fServerVersion': 'Server version',
   'mon.noConnId': 'No connection id was provided',
   'mon.fetchFailed': 'Failed to load the monitoring data',
   'mon.fetchFailedShort': 'Failed',

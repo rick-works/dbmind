@@ -38,6 +38,9 @@ export const userFieldLabelMap = () => ({
   profile: t('udv.fProfile'), PROFILE: t('udv.fProfile'),
   authentication_type_desc: t('udv.fAuthType'), create_date: t('udv.fCreateDate'),
   modify_date: t('udv.fModifyDate'), comment: t('udv.fComment'), plugin: t('udv.fPlugin'),
+  // MySQL 系 user_info 额外带回的版本号（键是驼峰 serverVersion，驱动/方言也可能给下划线或全大写）
+  serverVersion: t('udv.fServerVersion'), SERVER_VERSION: t('udv.fServerVersion'),
+  SERVERVERSION: t('udv.fServerVersion'),
   password_expired: t('udv.fPwdExpired'), max_questions: t('udv.fMaxQuestions'),
   max_updates: t('udv.fMaxUpdates'), max_connections: t('udv.fMaxConnections'),
   max_user_connections: t('udv.fMaxUserConnections'), account_locked: t('udv.fAccountLocked'),
