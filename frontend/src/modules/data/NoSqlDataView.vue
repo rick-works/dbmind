@@ -1849,7 +1849,7 @@ onBeforeUnmount(() => {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center;
   font-size: 13px; color: var(--dc-text-dim); z-index: 3;
-  opacity: 0; cursor: pointer; transition: opacity .16s ease, color .16s ease;
+  opacity: .32; cursor: pointer; transition: opacity .16s ease, color .16s ease;
 }
 .data-table th:hover .th-sort { opacity: .7; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
