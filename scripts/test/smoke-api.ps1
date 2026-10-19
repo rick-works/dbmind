@@ -161,13 +161,14 @@ try {
     Write-Host '连接管理' -ForegroundColor White
     $created = Api-Post '/api/connections' @{
         name = '冒烟-本地文件'; type = 'SQLITE'; filePath = $sqliteFile
-        environment = 'TEST'; env = 'TEST'
+        group = 'TEST'; env = 'TEST'
     }
     $cid = $created.id
     Check '新建连接返回 id' (-not [string]::IsNullOrEmpty($cid))
     Check '连接类型回显为大写 SQLITE' ($created.type -eq 'SQLITE')
-    Check '目录 / 环境角标已保存（树按它分组）' ($created.environment -eq 'TEST' -and $created.env -eq 'TEST')
-    Check '默认目录不为空串（空串会让连接在树上不显示）' ((Api-Post '/api/connections' @{ name = '冒烟-无目录'; type = 'SQLITE'; filePath = (Join-Path $workHome 'b.db') }).environment.Length -gt 0)
+    # 字段是 group（分组，树按它渲染）+ env（角标）；早先用的 environment 已不存在，传了会被忽略
+    Check '分组 / 环境角标已保存（树按 group 分组）' ($created.group -eq 'TEST' -and $created.env -eq 'TEST')
+    Check '默认分组不为空串（后端补「数据源」，空串会让连接在树上不显示）' ((Api-Post '/api/connections' @{ name = '冒烟-无目录'; type = 'SQLITE'; filePath = (Join-Path $workHome 'b.db') }).group.Length -gt 0)
 
     $list = @(Api-List '/api/connections')
     Check '连接列表含新连接' (@($list | Where-Object { $_.id -eq $cid }).Count -eq 1) "列表 $($list.Count) 条"
@@ -231,7 +232,8 @@ try {
     Check 'SQLite 的事件是「确实没有」→ 200 + []' ((Api-Raw "/api/sqlite/$cid/events?database=main") -eq 200)
 
     $monitor = Api-Get "/api/sqlite/$cid/monitor?database=main"
-    Check '监控未接入时 supported=false（界面据此隐藏，而不是显示一堆 0）' ($monitor.supported -eq $false)
+    # SQLite 现在有监控了：supported=true 且给出 database 名；未接入的引擎才该是 false 并带 message
+    Check '监控已接入时 supported=true（SQLite 有实时监控）' ($monitor.supported -eq $true -and $monitor.database -eq 'main') ($monitor | ConvertTo-Json -Compress)
 
     # ------------------------------------------------------------ 就地编辑与表操作
     Write-Host '就地编辑与表操作' -ForegroundColor White
@@ -290,24 +292,15 @@ try {
     Check '任务跑完（逐句执行 + 进度）' ($snapshot.status -eq 'success') ($snapshot | ConvertTo-Json -Compress)
     Check '任务带逐句日志' (@($snapshot.logs).Count -ge 1)
 
-    # ------------------------------------------------------------ 未接入能力：必须显式报错
-    Write-Host '未接入能力（必须显式 501，不能 404 或静默）' -ForegroundColor White
-    Check 'AI 对话 ⇒ 501' ((Api-Raw '/api/ai/chat' 'POST' @{ prompt = 'hi' }) -eq 501)
-    Check 'AI 流式 ⇒ 501' ((Api-Raw '/api/ai/chat/stream' 'POST' @{ prompt = 'hi' }) -eq 501)
-    Check 'AI 知识库 ⇒ 501' ((Api-Raw '/api/ai/kb/list' 'POST' @{}) -eq 501)
-    Check '导出任务 ⇒ 501' ((Api-Raw "/api/sqlite/export/task/$cid" 'POST' @{}) -eq 501)
-    Check '数据同步 ⇒ 501' ((Api-Raw '/api/sync/db' 'POST' @{}) -eq 501)
-    Check '数据对比 ⇒ 501' ((Api-Raw '/api/compare' 'POST' @{}) -eq 501)
-    Check '备份 ⇒ 501' ((Api-Raw '/api/backup/start' 'POST' @{}) -eq 501)
-    Check '生成测试数据 ⇒ 501' ((Api-Raw '/api/datagen/start' 'POST' @{}) -eq 501)
+    # ------------------------------------------------------------ 路由与错误体形状
+    Write-Host '路由与错误体形状' -ForegroundColor White
+    # 这里原本有 9 项「未接入 ⇒ 501」断言（AI 对话/流式/知识库、导出任务、同步、对比、备份、
+    # 造数、Derby 的 DDL）。这些能力现在都已实现，断言与产品相反、只会让冒烟整片飘红，
+    # 所以删除；只保留路由本身与错误体形状的检查。
     # 断言「错误体里有人能读懂的话」，而不是匹配某一句话：措辞会改，形状不该改
-    $aiBody = Api-ErrorBody '/api/ai/chat' @{ prompt = 'hi' }
-    Check '未接入的响应体是 JSON 且 message 非空' (($aiBody -match '"success"\s*:\s*false') -and ($aiBody -match '"message"\s*:\s*".{8,}"')) ("body=" + $aiBody)
+    $errBody = Api-ErrorBody '/api/notamodule/x/tables' @{}
+    Check '未知模块的错误体是 JSON 且 message 非空' (($errBody -match '"success"\s*:\s*false') -and ($errBody -match '"message"\s*:\s*".{8,}"')) ("body=" + $errBody)
     Check '未知模块前缀 ⇒ 404（不被静默当成别的东西）' ((Api-Raw '/api/notamodule/x/tables') -eq 404)
-    # 「这个概念存在、但我们还没写」必须报错，不能返回空 —— 空会被读成「这个库没有」
-    $derby = Api-Post '/api/connections' @{ name = '冒烟-derby'; type = 'DERBY'; database = 'smoke' }
-    Check '未写方言的 DDL ⇒ 501（不编一个不完整的建表语句骗人）' ((Api-Raw "/api/derby/$($derby.id)/ddl?database=smoke&table=t") -eq 501)
-    Api-Raw "/api/connections/$($derby.id)" 'DELETE' | Out-Null
 
     # ------------------------------------------------------------ 收尾
     Check '删除连接' ((Api-Raw "/api/connections/$cid" 'DELETE') -eq 200)

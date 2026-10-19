@@ -137,24 +137,25 @@ cargo build --release -p dbmind-desktop   # desktop
 cargo build --release -p dbmind-web       # web shell
 cargo build --release -p dbmind-cli       # CLI
 cargo build --release -p dbmind-mcp       # MCP
-powershell -File scripts\build\build-agents.ps1 # Java hosts (4 bridges)
+mvn -B -q -DskipTests package -f agents\dbmind-agent-jdbc\pom.xml  # Java hosts (4 modules)
 ```
 
 ## Packaging & release
 
-```powershell
-# Full pipeline (portable + zip + MSI/NSIS installers); same as double-clicking scripts\release.bat
-powershell -File scripts\release\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
+**Release artifacts are built by CI.** Pushing a `v*` tag runs `.github/workflows/release.yml`, which produces every platform's packages (portable zip, MSI, NSIS, dmg, deb, rpm, AppImage) and attaches them to one Release.
 
-# Common switches:
-release.ps1 -SkipBundle        # portable only
-release.ps1 -SkipPortable      # installers only
-release.ps1 -SkipBuild         # reuse compiled artifacts
+The local one-shot scripts (`release.ps1` / `release.bat`) have been removed. To assemble a bundle on your own machine, run the same steps CI runs:
+
+```powershell
+cargo build --release
+cd frontend; npm install; npm run build; cd ..
+foreach ($m in 'jdbc','mongodb','redis','elasticsearch') { mvn -B -q -DskipTests package -f "agents\dbmind-agent-$m\pom.xml" }
+powershell -File scripts\build\package.ps1 -SkipCargo -SkipAgents -SkipFrontend
 ```
 
-Artifacts land in `dist\`: `dbmind-<version>\` (portable dir), `*-portable.zip`, `installer\*.msi / *-setup.exe`, `SHA256SUMS.txt`.
+`scripts\build\package.ps1` assembles the distribution directory (CI uses the same script); `scripts\build\dmg-settings.py` is the macOS DMG appearance config.
 
-> **Releases go through CI** (recommended). The complete checklist — how to pick the version level, what `release.mjs` rewrites, why the highlights must be committed *before* tagging, backfilling the Release body and website after CI, syncing the Homebrew cask, and what to verify — lives in [`docs/build.md`](docs/build.md) (Chinese). Local `release.ps1` is only the offline fallback.
+> The complete release checklist — version level, what `release.mjs` rewrites, why highlights must be committed *before* tagging, backfilling the Release body and website after CI, syncing the Homebrew cask, and what to verify — lives in [`docs/build.md`](docs/build.md) (Chinese).
 
 ### CI: all platforms, every variant
 

@@ -58,7 +58,7 @@ if ($missing.Count -gt 0) {
     }
     if ($built.Count -eq 0) {
         Write-Host '宿主 jar 尚未构建：SQLite 可用，其它数据库连接会失败（DBMIND-DRV-0002）。' -ForegroundColor Yellow
-        Write-Host '  → powershell -ExecutionPolicy Bypass -File scripts\build\build-agents.ps1   （需要 JDK 17+ 与 Maven 3.6.3+）' -ForegroundColor Yellow
+        Write-Host '  → mvn -B -q -DskipTests package -f agents\dbmind-agent-jdbc\pom.xml   （四个宿主各跑一次，需要 JDK 17+ 与 Maven 3.6.3+）' -ForegroundColor Yellow
     } else {
         New-Item -ItemType Directory -Force -Path $sidecar | Out-Null
         foreach ($item in $built) { Copy-Item $item.Path (Join-Path $sidecar $item.Name) -Force }

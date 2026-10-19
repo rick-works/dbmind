@@ -146,25 +146,26 @@ cargo build --release -p dbmind-cli
 # MCP 服务器
 cargo build --release -p dbmind-mcp
 
-# Java 宿主（4 个协议桥）
-powershell -File scripts\build\build-agents.ps1
+# Java 宿主（4 个模块各跑一次）
+mvn -B -q -DskipTests package -f agents\dbmind-agent-jdbc\pom.xml
 ```
 
 ## 打包发布
 
-```powershell
-# 一键全流程（绿色版 + zip + MSI/NSIS 安装包），双击 scripts\release.bat 效果相同
-powershell -File scripts\release\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
+**发行包由 CI 产出**：推 `v*` 标签触发 `.github/workflows/release.yml`，一次跑出全平台产物（portable zip、MSI、NSIS、dmg、deb、rpm、AppImage）并挂到同一个 Release。
 
-# 常用组合：
-release.ps1 -SkipBundle        # 只出绿色版（不需要 WiX）
-release.ps1 -SkipPortable      # 只出安装包
-release.ps1 -SkipBuild         # 复用已有编译产物
+本地一键打包脚本（`release.ps1` / `release.bat`）已移除。要在本机拼一个发行目录，按 CI 的步骤来：
+
+```powershell
+cargo build --release
+cd frontend; npm install; npm run build; cd ..
+foreach ($m in 'jdbc','mongodb','redis','elasticsearch') { mvn -B -q -DskipTests package -f "agents\dbmind-agent-$m\pom.xml" }
+powershell -File scripts\build\package.ps1 -SkipCargo -SkipAgents -SkipFrontend
 ```
 
-产物集中在 `dist\`：`dbmind-<版本>\`（绿色版目录）、`*-portable.zip`（绿色版整包）、`installer\*.msi / *-setup.exe`（安装包）、`SHA256SUMS.txt`。
+`scripts\build\package.ps1` 负责组装发行目录（CI 用的也是它），`scripts\build\dmg-settings.py` 是 macOS DMG 的外观配置。
 
-> **发版走 CI**（推荐）：完整流程 —— 版本级别怎么选、`release.mjs` 改哪 6 处、要点为什么必须在打标签前落进代码、CI 完成后回填 Release 正文与官网、同步 Homebrew cask、验证清单 —— 见 [`docs/build.md` 的发版流程一节](docs/build.md#发版流程一步不落)。本机 `release.ps1` 只是断网/CI 不可用时的备用出包。
+> 完整发版流程 —— 版本级别怎么选、`release.mjs` 改哪 6 处、要点为什么必须在打标签前落进代码、CI 完成后回填 Release 正文与官网、同步 Homebrew cask、验证清单 —— 见 [`docs/build.md` 的发版流程一节](docs/build.md#发版流程一步不落)。
 
 ### CI：全平台、各版本形态齐全
 

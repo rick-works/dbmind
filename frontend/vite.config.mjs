@@ -4,7 +4,7 @@ import { fileURLToPath, URL } from 'node:url'
 import { readFileSync } from 'node:fs'
 
 // 版本号唯一来源：仓库根 Cargo.toml 的 [workspace.package].version
-// （tauri.conf.json 的 version 与它一致，release.ps1 打包前会校验那两处）。
+// （tauri.conf.json 的 version 与它一致，CI 打包前会校验那两处）。
 // 前端不再自己维护版本常量：src/version.js 原先手写死 '1.0.0'，而真实版本是 0.1.0，
 // 于是「关于」页显示的版本和安装包的实际版本长期对不上。
 const cargoVersion = (() => {

@@ -58,7 +58,7 @@ if (-not (Test-Path $cli)) {
 
 $agents = @(Get-ChildItem (Join-Path $root 'agents') -Recurse -File -Filter 'dbmind-agent-*.jar' -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -notlike 'original-*' })
-Check "agent hosts are built (found $($agents.Count))" ($agents.Count -ge 4) 'run scripts/build/build-agents.ps1'
+Check "agent hosts are built (found $($agents.Count))" ($agents.Count -ge 4) 'run: mvn -B -q -DskipTests package -f agents/dbmind-agent-<module>/pom.xml (4 modules)'
 
 $java = $null
 if ($env:DBMIND_JAVA) { $java = $env:DBMIND_JAVA }
@@ -89,7 +89,7 @@ Check "H2 JDBC driver installed ($($h2jars.Count) jar)" ($h2jars.Count -ge 1) ($
 
 # The concurrency tests need real protocol peers -- one per protocol host that the
 # matrix covers (multi-connection: Mongo + ES; single-connection: Redis). All three
-# are in-repo stubs (built by `build-agents.ps1 -WithTestServers`) and run on their
+# are in-repo stubs (built with `mvn package -f deploy/<name>/pom.xml`) and run on their
 # own ports, so they cannot collide with a real install or with the CI smoke job
 # (which already runs its own on 27017 / 9202 / 6399).
 Write-Host ""
@@ -104,7 +104,7 @@ foreach ($stub in $stubs) {
     Set-Item -Path ("Env:" + $stub.Env) -Value "$($stub.Port)"
     $jar = Join-Path $root $stub.Jar
     if (-not (Test-Path $jar)) {
-        Check ($stub.Name + ' test server jar exists') $false "missing $jar -- run scripts/build/build-agents.ps1 -WithTestServers"
+        Check ($stub.Name + ' test server jar exists') $false "missing $jar -- run: mvn -B -q -DskipTests package -f deploy/$(($stub.Jar -split '\\')[1])/pom.xml"
         continue
     }
     $log = Join-Path $work ($stub.Name + '-stub.log')

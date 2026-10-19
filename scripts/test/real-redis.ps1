@@ -79,7 +79,7 @@ if ($java -and (Test-Path $java)) {
 
 $agents = @(Get-ChildItem (Join-Path $root 'agents') -Recurse -File -Filter 'dbmind-agent-*.jar' -ErrorAction SilentlyContinue |
     Where-Object { $_.Name -notlike 'original-*' })
-Check 'agent hosts are built' ($agents.Count -gt 0) "no agents/*.jar -- run 'powershell -File .\scripts\build\build-agents.ps1' first"
+Check 'agent hosts are built' ($agents.Count -gt 0) "no agents/*.jar -- build them first: mvn -B -q -DskipTests package -f agents/dbmind-agent-redis/pom.xml"
 
 if ($script:failed -gt 0) {
     Write-Host ""

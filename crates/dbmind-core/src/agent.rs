@@ -2033,7 +2033,7 @@ mod tests {
             let availability = availability_for(&spec);
             assert!(
                 availability.ready,
-                "宿主 {id} 应当可用，否则这一层没在验证任何东西：{:?} —— 先跑 scripts/build/build-agents.ps1",
+                "宿主 {id} 应当可用，否则这一层没在验证任何东西：{:?} —— 先构建宿主 jar（mvn -B -q -DskipTests package -f agents/dbmind-agent-<module>/pom.xml）",
                 availability.reason
             );
 
@@ -2074,7 +2074,7 @@ mod tests {
                 AgentHostSpec::all()
                     .iter()
                     .any(|spec| resolve_agent_jar(spec).is_some()),
-                "设了 {AGENTS_TEST_ENV} 却一个宿主包都解析不出来：开关没生效，或宿主未构建（先跑 scripts/build/build-agents.ps1）"
+                "设了 {AGENTS_TEST_ENV} 却一个宿主包都解析不出来：开关没生效，或宿主未构建（mvn -B -q -DskipTests package -f agents/dbmind-agent-<module>/pom.xml）"
             );
             return;
         }

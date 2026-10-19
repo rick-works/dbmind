@@ -51,9 +51,11 @@ else {
 }
 
 # ---------------------------------------------------------------- agent hosts
+# Host jars are built by CI (.github/workflows/release.yml, mvn step) and dropped into
+# agents/ before this script runs. The local build-agents.ps1 helper is gone; -SkipAgents
+# is kept only so the existing CI command line keeps working unchanged.
 if (-not $SkipAgents) {
-    Write-Host '  [2/4] agent hosts'
-    & (Join-Path $PSScriptRoot 'build-agents.ps1') -Quiet
+    Write-Host '  [2/4] agent hosts: expecting prebuilt jars under agents/*/target (CI builds them)'
 }
 else {
     Write-Host '  [2/4] agent hosts (skipped)'

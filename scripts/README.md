@@ -11,24 +11,23 @@
 | `start.ps1` | 起本地后端（可选同时开浏览器），开发时最常用 | `powershell -File scripts\start.ps1 -Port 20362 -NoBrowser` |
 | `start.bat` | 便携包里的启动器，由 `build/package.ps1` 复制进发行目录 | 双击 |
 | `stop.ps1` | 停掉本地后端 | `powershell -File scripts\stop.ps1` |
-| `release.bat` | 双击打全量包，转发 `release/release.ps1` | 双击 |
 
 `start.ps1` 的参数：`-Port` 指定端口、`-NoBrowser` 不开浏览器、`-Log` 保留日志、`-Release` 用 release 产物、`-Java` 指定 JRE 路径。
 
-## build/ 构建产物
+## build/ 组装产物
 
 | 脚本 | 用途 |
 |---|---|
-| `build-agents.ps1` | 构建 4 个 Java 宿主 jar（jdbc / mongodb / redis / elasticsearch）；缺 JDK 17+ 或 Maven 3.6.3+ 会直接失败，不静默跳过 |
-| `package.ps1` | 组装绿色包目录（exe + `agents/` + `web/` + `start.bat` + README），可 `-SkipCargo/-SkipAgents/-SkipFrontend/-Out` |
+| `package.ps1` | 组装发行目录（exe ×4 + `agents/` + `web/` + `start.bat` + README），CI 也用它；可 `-SkipCargo/-SkipAgents/-SkipFrontend/-Out` |
 | `dmg-settings.py` | macOS DMG 外观配置，CI 打包时作为 `dmgbuild -s` 的配置传入 |
+
+> 构建本身由 CI 负责（`.github/workflows/release.yml`）：`cargo build --release` + 四个 `mvn ... package`。本地不再有 `build-agents.ps1` / `release.ps1` / `release.bat`。
 
 ## release/ 发版
 
 | 脚本 | 用途 |
 |---|---|
-| `release.ps1` | 全流程一键打包：前端 → 宿主 jar → 后端 → 绿色版 → zip → MSI/NSIS → 校验清单。`-WithJre -Jdk <JDK>` 带精简 JRE；`-SkipFrontend/-SkipAgents/-SkipBuild/-SkipPortable/-SkipBundle/-SkipZip/-Quality` 按需跳过 |
-| `release.mjs` | 改版本号（Cargo.toml / package.json / tauri.conf.json 三处）并追加版本说明骨架：`node scripts/release/release.mjs 1.2.36 patch 2026-10-20`。**不幂等，只能跑一次** |
+| `release.mjs` | 改版本号（Cargo.toml / package.json / tauri.conf.json 等 6 处）并追加版本说明骨架：`node scripts/release/release.mjs 1.2.36 patch 2026-10-20`。**不幂等，只能跑一次** |
 | `sync-release-notes.mjs` | 把发布说明同步到 GitHub Release、官网与词典：`node scripts/release/sync-release-notes.mjs v1.2.36 --no-push` |
 | `publish-site.ps1` | 把 `website/` 内容推进 `gh-pages` 并触发 Pages 重建（依赖 `tools/git-proxy.ps1`） |
 | `update-homebrew-cask.ps1` | 同步另一个仓库的 Homebrew cask：`-Version 1.2.36`，默认取最新 Release |

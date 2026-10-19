@@ -41,7 +41,7 @@
 #   - 推 v* 标签（推荐）：产物自动挂到该标签的 Release
 #   - 手动 workflow_dispatch：可指定 tag 输入，给已发布的版本补包（不必重打标签）
 #
-# 本机 scripts\release\release.ps1 保留作离线/无网环境下的 Windows 出包（内容与本文件同构）。
+# 出包统一走本文件；本机一键脚本（原 scripts\release\release.ps1）已移除，离线时按 docs/build.md 手动执行同样步骤。
 name: release
 
 on:
@@ -204,7 +204,7 @@ jobs:
           done
 
       # [3] 自带 JRE（jlink 精简运行时）—— 目标机器不装 Java 也能连库。
-      #     模块集与 scripts/release/release.ps1 一致：jdk.charsets 少了会让 Doris 连不上
+      #     模块集必须含 jdk.charsets：少了会让 Doris 连不上
       #     （MySQL Connector/J 要把 collation 映射成 Java 字符集）。
       - name: 生成自带 JRE
         shell: bash
@@ -589,7 +589,7 @@ jobs:
       # [4b] Windows 免安装（绿色）版：解压即用，不写注册表、不需要安装。
       #      复用本机 scripts\build\package.ps1 的组装逻辑（同一份清单，避免两处漂移）：
       #      exe ×4 + agents/ + web/ + start.bat + README/LICENSE。
-      #      它**不含** jre/，所以这里按 release.ps1 的做法补上 dist\jre —— 否则目标机器
+      #      它**不含** jre/，所以这里补上 dist\jre —— 否则目标机器
       #      没装 Java 17+ 时，SQL Server / Mongo / Redis / ES / JDBC 一律「驱动未就绪」。
       #      压缩用 tar.exe -a（bsdtar 自带 zip 支持），比 Compress-Archive 快一个量级。
       - name: 组装免安装版并压缩（Windows）

@@ -6,7 +6,7 @@
 
 ### PowerShell 5.1 读无 BOM 的 .ps1 会按 ANSI 解码
 中文脚本文件必须存为 **UTF-8 with BOM**，否则中文被截成半个字符后引号配对被破坏，
-脚本在**解析期**整体失败（一行都不执行）。`scripts\release\release.ps1` 等含中文的 .ps1 都要带 BOM。
+脚本在**解析期**整体失败（一行都不执行）。`scripts\test\smoke-api.ps1` 等含中文的 .ps1 都要带 BOM。
 
 ### IDE 终端给 Node 套了「安全删除」shim
 在 IDE 内置终端里跑构建，`vite build` 清空 `dist\assets`（约 600 个文件）会被

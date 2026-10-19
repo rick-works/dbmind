@@ -32,44 +32,29 @@ cd frontend; npm run dev
 | 桌面壳 | `cargo build -p dbmind-desktop` | `target\debug\dbmind-desktop.exe` |
 | CLI | `cargo build -p dbmind-cli` | `target\debug\dbmind.exe` |
 | MCP | `cargo build -p dbmind-mcp` | `target\debug\dbmind-mcp.exe` |
-| Java 宿主 | `scripts\build\build-agents.ps1` | `agents\*\target\*.jar`（4 个） |
+| Java 宿主 | `mvn -B -q -DskipTests package -f agents\dbmind-agent-<m>\pom.xml`（4 个模块各跑一次） | `agents\*\target\*.jar` |
 
 ## 打包发布
 
-双击 `scripts\release.bat`（默认 `-WithJre -Jdk <项目 JDK>`），或：
+**发行包统一由 CI 产出**：打标签触发 `.github/workflows/release.yml`，一次跑出 Windows portable zip / MSI / NSIS、macOS dmg、Linux deb / rpm / AppImage。
+
+本地不再保留一键打包脚本（原 `scripts\release\release.ps1` 与 `scripts\release.bat` 已移除）。只在本机拼一个发行目录时，按 CI 的顺序走：
 
 ```powershell
-powershell -File scripts\release\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
+cargo build --release
+cd frontend; npm install; npm run build
+# 四个 Java 宿主各跑一次
+mvn -B -q -DskipTests package -f agents/dbmind-agent-jdbc/pom.xml
+powershell -File scripts\build\package.ps1 -SkipCargo -SkipAgents -SkipFrontend
 ```
 
-流程 8 步：环境检查 → 前端 → 宿主 jar → cargo release → 绿色版组装 → zip → Tauri 安装包（MSI+NSIS）→ 汇总与 SHA256。
-
-**提速机制**（已内置）：
-
-- JRE 缓存：jlink 产物确定性，`dist\jre\.jlink-cache` 记录 key，同 JDK+模块集直接复用
-- zip 用系统 `tar.exe` 多线程压缩（比 Compress-Archive 快 3~5 倍）
-- 前端指纹：`frontend\dist\.buildhash` 记录源码指纹，未变化则复用产物
-
-**跳过参数**：
-
-| 参数 | 跳过 |
+| 文件 | 作用 |
 |---|---|
-| `-SkipFrontend` | 前端构建 |
-| `-SkipAgents` | 宿主 jar 检查与构建 |
-| `-SkipBuild` | cargo release（复用已有产物） |
-| `-SkipPortable` / `-SkipZip` | 绿色版 / zip |
-| `-SkipBundle` | Tauri 安装包（不需要 WiX/网络） |
-| `-Quality` | 额外跑 fmt --check 与 clippy -D warnings |
+| `scripts\build\package.ps1` | 组装发行目录（exe ×4 + `agents/` + `web/` + `start.bat` + README），CI 也用它 |
+| `scripts\build\dmg-settings.py` | macOS DMG 外观配置，CI 里作为 `dmgbuild -s` 的配置文件 |
 
-产物集中在 `dist\`：
+CI 里的精简 JRE 用 jlink 生成，模块集必须含 `jdk.charsets`（少了 Doris 连不上，见 troubleshooting）。
 
-```
-dist\
-├── dbmind-<版本>\            绿色版目录（exe + agents + web + jre + start.bat）
-├── dbmind-<版本>-portable.zip 整包
-├── installer\*.msi / *-setup.exe
-└── SHA256SUMS.txt
-```
 
 ## 环境变量
 
@@ -211,13 +196,28 @@ gh release view v1.2.31 --repo rick-works/dbmind --json assets --jq '.assets[].n
 | 官网 | <https://rick-works.github.io/dbmind/> 版本页出现 v1.2.31，「最新」标只有它一个 |
 | 应用内 | 设置 → 关于：当前版本 v1.2.31，要点不是占位文本 |
 
-## 本机出包（离线/备用）
+## 本机出包（CI 不可用时手动来一遍）
 
-CI 不可用（断网、actions 排不上）时，`scripts\release\release.ps1` 等价于 CI 的 Windows 部分，产物进 `dist\`：
+本地一键脚本已移除，只能按 CI 的顺序手动执行（版本号与要点仍要先提交）：
 
 ```powershell
-powershell -File scripts\release\release.ps1 -WithJre -Jdk D:\develop\tools\jdk-25.0.4.1+1
+# 1) 版本号 + 词典（与 CI 同一脚本；不幂等，只跑一次）
+node scripts\release\release.mjs 1.2.31 patch 2026-10-16
+
+# 2) 三部分分别构建
+cargo build --release
+cd frontend; npm install; npm run build; cd ..
+foreach ($m in 'jdbc','mongodb','redis','elasticsearch') {
+    mvn -B -q -DskipTests package -f "agents\dbmind-agent-$m\pom.xml"
+}
+
+# 3) 组装发行目录（CI 用的同一份脚本）
+powershell -File scripts\build\package.ps1 -SkipCargo -SkipAgents -SkipFrontend
+
+# 4) 桌面安装包（本地不需要 CI 的签名覆盖，直接用 tauri.conf.json）
+cd crates\dbmind-desktop; npx --yes '@tauri-apps/cli@^2' build --bundles msi,nsis
 ```
 
-产物：`dist\dbmind-<版本>\`（绿色版目录）、`dist\dbmind-<版本>-portable.zip`、`dist\installer\*.msi / *-setup.exe`、`dist\SHA256SUMS.txt`。
-用完仍需自己做上面第 4、5 步 —— 别忘 `gh release create` 手动挂包（CI 那条路是自动的）。
+产物：`dist\dbmind-<版本>\` 与 `crates\dbmind-desktop\target\release\bundle\`。
+精简 JRE 自己 jlink：`--add-modules java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets`（少 `jdk.charsets` 会让 Doris 连不上），或直接取 Release 里的现成包。
+挂 Release、回填正文与官网、同步 cask 照上面第 4、5 步手工做（CI 那条路是自动的）。
