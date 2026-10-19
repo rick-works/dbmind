@@ -40,6 +40,9 @@ Thumbs.db
 # 发版流程见 scripts/publish-site.ps1，release.mjs 里还会检查"新版本的条目加了没"。
 /website/*
 !/website/index.html
+# 文档区配图：GitHub Pages 现在由 Actions 直接部署 website/ 目录（见 .github/workflows/pages.yml），
+# 图片必须在主仓里，否则部署出来的页面全是 404。
+!/website/images/
 
 # 本机构建加速配置：.cargo/config.toml 里的 rust-lld 链接器路径是**每台机器各不相同**的
 # 绝对路径（写死的本机路径会让 CI / 别人机器直接构建失败：linker not found）。
