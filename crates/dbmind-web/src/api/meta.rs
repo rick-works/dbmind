@@ -414,7 +414,7 @@ fn text_of(row: &Map<String, Value>, key: &str) -> String {
 }
 
 /// 大小写不敏感地取一个字段（各家元数据视图的列名大小写不一致）。
-fn text_ci(row: &Map<String, Value>, key: &str) -> String {
+pub(crate) fn text_ci(row: &Map<String, Value>, key: &str) -> String {
     if row.contains_key(key) {
         return text_of(row, key);
     }
@@ -998,6 +998,23 @@ pub async fn databases(
             }
         }
     }
+    // 走到这里说明这个方言没有「列库 SQL」（DB2 / Derby / H2 …），下面返回的单库名只是**占位**。
+    // 以前直接 200 返回它 = 把「连不上」包装成「连接成功」：网络断了树照样展开、还能点开来看，
+    // 用户完全看不出问题（真机反馈：「不管什么原因，连接失败就不应该打开」）。
+    // 所以先真连一次（最便宜的探针语句，走引擎会话池），连不上就把错误原样抛给界面。
+    // 本地文件库（SQLite）没有「网络不通」这回事，跳过 —— 免得为探针凭空创建一个空文件。
+    if !record.kind().local_file() {
+        if let Err(err) = run_meta_sql(&state, &id, "", "values 1".to_string(), 1).await {
+            if err.is_conn_failure() {
+                return Err(err);
+            }
+            tracing::warn!(
+                connection = %id,
+                error = %err.message,
+                "连通性探针失败（非连接类错误），仍退回单库模式"
+            );
+        }
+    }
     let name = record
         .config
         .database
@@ -1536,7 +1553,12 @@ pub async fn search_objects(
 
     let database = params.get("database").unwrap_or_default();
     let (_, dialect) = ctx_of(&state, &id).await?;
-    let schema = split_db_schema(&database, &dialect).1;
+    let (db_only, mut schema) = split_db_schema(&database, &dialect);
+    // Oracle / DM 的「库」层就是模式：不把它当模式用，就会落到下面「枚举全部模式」的分支，
+    // 一次搜索 60 秒起（真机）而且结果跨模式。
+    if schema.is_none() && dialect.db_is_schema() && !db_only.trim().is_empty() {
+        schema = Some(db_only);
+    }
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
 
     // 表/视图清单：schema 层级的类型**必须**与树用同一个来源（`dialect.tables_in_schema`）。

@@ -84,26 +84,63 @@ impl GovReq {
 }
 
 /// 要扫描的表：请求显式给了就用它，否则按上限取库里的表。
+///
+/// 返回里的 `schema` 必须一路带到取列（`columns_batch`）：Oracle / PG / SQL Server 的
+/// JDBC `getTables` 是**整实例**视角，不看"当前模式"。只按 `database` 取表会出现
+/// 「在 SYSTEM 模式点 ER 图，画出来的是 SYS + 其它模式的表」（真机：Oracle 一次 4000+ 表、
+/// 54 秒）。这里统一走方言的「模式内表清单」，与树上看到的完全一致。
 async fn scan_tables(
     state: &AppState,
     req: &GovReq,
-) -> XResult<(String, String, Vec<String>, usize)> {
+) -> XResult<(String, String, Option<String>, Vec<String>, usize)> {
     let conn = req.conn()?;
     let database = req.db();
-    let all = tables_of(state, &conn, &database).await?;
+    let (_, dialect) = crate::api::meta::ctx_of(state, &conn).await?;
+    let (db_only, mut schema) = crate::api::meta::split_db_schema(&database, &dialect);
+    if schema.is_none() && dialect.db_is_schema() && !db_only.trim().is_empty() {
+        schema = Some(db_only);
+    }
+
+    let mut all: Vec<String> = Vec::new();
+    let mut from_dialect = false;
+    if dialect.is_schema_aware() {
+        if let Some(scope) = schema.as_deref() {
+            if let crate::api::dialect::Meta::Sql(sql) = dialect.tables_in_schema(scope) {
+                if let Ok(result) =
+                    run_sql_in_background(state, &conn, &database, sql, MAX_TABLES_HARD).await
+                {
+                    for row in rows_of(&result) {
+                        // Oracle 的方言清单把视图也算进来（type='VIEW'）；ER 只画表
+                        if crate::api::meta::text_ci(&row, "type").eq_ignore_ascii_case("view") {
+                            continue;
+                        }
+                        let name = crate::api::meta::text_ci(&row, "name");
+                        if !name.trim().is_empty() {
+                            all.push(name);
+                        }
+                    }
+                    from_dialect = true;
+                }
+            }
+        }
+    }
+    if !from_dialect {
+        all = tables_of(state, &conn, &database)
+            .await?
+            .into_iter()
+            .map(|table| table.name)
+            .collect();
+    }
+
     let names: Vec<String> = match &req.tables {
         Some(list) if !list.is_empty() => list
             .iter()
-            .filter(|name| all.iter().any(|table| &table.name == *name))
+            .filter(|name| all.iter().any(|table| table == *name))
             .cloned()
             .collect(),
-        _ => all
-            .iter()
-            .take(req.limit())
-            .map(|table| table.name.clone())
-            .collect(),
+        _ => all.iter().take(req.limit()).cloned().collect(),
     };
-    Ok((conn, database, names, all.len()))
+    Ok((conn, database, schema, names, all.len()))
 }
 
 // ------------------------------------------------------------------ 敏感数据
@@ -177,7 +214,7 @@ pub async fn scan_sensitive(
     axum::extract::State(state): axum::extract::State<AppState>,
     Json(req): Json<GovReq>,
 ) -> XResult<Json<Value>> {
-    let (conn, database, names, scanned_all) = scan_tables(&state, &req).await?;
+    let (conn, database, _schema, names, scanned_all) = scan_tables(&state, &req).await?;
     let mut findings: Vec<Value> = Vec::new();
     let mut scanned = 0usize;
     for table in &names {
@@ -359,7 +396,7 @@ pub async fn capacity(
     axum::extract::State(state): axum::extract::State<AppState>,
     Json(req): Json<GovReq>,
 ) -> XResult<Json<Value>> {
-    let (conn, database, names, _) = scan_tables(&state, &req).await?;
+    let (conn, database, _schema, names, _) = scan_tables(&state, &req).await?;
     let dialect = Dialect::new(require_record(&state, &conn).await?.kind());
     let mut stats: Vec<Value> = Vec::new();
     let mut size_supported = false;
@@ -596,11 +633,24 @@ async fn columns_batch(
     state: &AppState,
     conn: &str,
     database: &str,
+    schema: Option<&str>,
     names: &[String],
 ) -> XResult<Vec<(String, Vec<ColumnDetail>)>> {
+    let target = crate::api::scope::resolve(state, conn, database).await?;
     let mut out = Vec::new();
     for name in names {
-        let columns = columns_of(state, conn, database, name).await?;
+        let connection = target.clone();
+        let table = name.clone();
+        let scope = schema.map(str::to_string);
+        let engine = state.engine();
+        // 单张表拉列失败（权限 / 视图 / 已删）不能让整张 ER 图崩掉
+        let Ok(columns) = crate::api::blocking(move || {
+            engine.list_columns_fresh_in(&connection, &table, scope.as_deref())
+        })
+        .await
+        else {
+            continue;
+        };
         if !columns.is_empty() {
             out.push((name.clone(), columns));
         }
@@ -613,8 +663,8 @@ pub async fn relations(
     axum::extract::State(state): axum::extract::State<AppState>,
     Json(req): Json<GovReq>,
 ) -> XResult<Json<Value>> {
-    let (conn, database, names, _) = scan_tables(&state, &req).await?;
-    let columns = columns_batch(&state, &conn, &database, &names).await?;
+    let (conn, database, schema, names, _) = scan_tables(&state, &req).await?;
+    let columns = columns_batch(&state, &conn, &database, schema.as_deref(), &names).await?;
     let list = infer_relations(&names, &columns);
     Ok(Json(json!({
         "success": true,
@@ -644,8 +694,8 @@ pub async fn er_graph(
     axum::extract::State(state): axum::extract::State<AppState>,
     Json(req): Json<GovReq>,
 ) -> XResult<Json<Value>> {
-    let (conn, database, names, _) = scan_tables(&state, &req).await?;
-    let columns = columns_batch(&state, &conn, &database, &names).await?;
+    let (conn, database, schema, names, _) = scan_tables(&state, &req).await?;
+    let columns = columns_batch(&state, &conn, &database, schema.as_deref(), &names).await?;
     let list = infer_relations(&names, &columns);
     let tables: Vec<Value> = columns
         .iter()
@@ -693,8 +743,8 @@ pub async fn impact(
         .clone()
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| XError::bad_request("请指定要分析的表（table）"))?;
-    let (conn, database, names, _) = scan_tables(&state, &req).await?;
-    let columns = columns_batch(&state, &conn, &database, &names).await?;
+    let (conn, database, schema, names, _) = scan_tables(&state, &req).await?;
+    let columns = columns_batch(&state, &conn, &database, schema.as_deref(), &names).await?;
     let list = infer_relations(&names, &columns);
 
     // 直接依赖：谁的列指向我这

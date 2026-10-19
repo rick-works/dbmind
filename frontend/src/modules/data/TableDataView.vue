@@ -187,7 +187,7 @@
                 <!-- 横向窗口的左占位：不渲染的列也要占住宽度，否则后面的列会左移串位 -->
               <td v-if="colLead > 0" class="col-gap" :colspan="colLead" />
               <td v-for="(col, ci) in visibleColsSlice" :key="col" :data-gkey="(rowIndex(row) + 1) + ':' + (colLead + ci)"
-                    :class="[cellAlignOf(row[col], col), { 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col), 'col-sel-l': selEdges.colLeft.has(col), 'col-sel-r': selEdges.colRight.has(col), 'active-cell': activeCell && activeCell.row === row && activeCell.col === col && noBulkSelection, 'editing': editingCell && editingCell.row === row && editingCell.col === col }]"
+                    :class="[cellAlignOf(row[col], col), { 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col), 'col-sel-l': selEdges.colLeft.has(col), 'col-sel-r': selEdges.colRight.has(col), 'active-cell': activeCell && activeCell.row === row && activeCell.col === col && noBulkSelection, 'editing': editingCell && editingCell.row === row && editingCell.col === col, 'cell-edited': isCellEdited(row, col) }]"
                     :title="formatCell(row[col])"
                     @dblclick="startEdit(row, col, $event)"
                     @contextmenu.prevent.stop="onCellContextMenu($event, row, col)"
@@ -227,7 +227,9 @@
       <div class="pager">
         <span class="load-time">
           {{ loading ? formatElapsed(elapsedTime) + $t('tdv.queryingSuffix') : (elapsedTime > 0 ? formatElapsed(elapsedTime) : '') }}
-          <span v-if="hasChanges" class="change-tip">{{ $t('tdv.unsavedChanges') }}</span>
+          <span v-if="hasChanges" class="change-tip">
+            {{ pendingChangeStats.cells ? $t('tdv.unsavedChangesN', pendingChangeStats) : $t('tdv.unsavedChanges') }}
+          </span>
           <!-- 当前页排序状态：可发现性 + 一键取消（客户端排序不进 SQL，翻页/重查即还原） -->
           <span v-if="orderColumn" class="sort-chip" title="点击取消排序"
                 @click="orderColumn = ''; orderDir = ''; applySort()">已按 {{ orderColumn }} {{ orderDir === 'ASC' ? '↑' : '↓' }} 排序（当前页）· 取消</span>
@@ -441,9 +443,14 @@ const total = ref(0)
 const page = ref(1)
 const size = ref(qs.pageSize > 0 ? qs.pageSize : 1000)
 const pageSizes = computed(() => {
+  const cur = querySettingsLive.value.pageSize
   const base = [...PAGE_SIZE_OPTIONS]
-  if (qs.pageSize > 0 && !base.includes(qs.pageSize)) base.unshift(qs.pageSize)
+  if (cur > 0 && !base.includes(cur)) base.unshift(cur)
   return base.sort((a, b) => a - b)
+})
+// 设置页改了「每页条数」：还停在旧默认值就跟随（手动改过档位的不打扰）
+watch(() => querySettingsLive.value.pageSize, (nv, ov) => {
+  if (nv > 0 && size.value === ov) size.value = nv
 })
 const orderColumn = ref('')
 const orderDir = ref('')
@@ -489,6 +496,31 @@ const syncRowState = (row) => {
   if (!row || row._editState === 'new' || row._editState === 'deleted') return
   row._editState = rowEqualsOriginal(row) ? 'original' : 'modified'
 }
+// 单格是否改过：与载入时的 `_original` 逐列比。
+// 以前"改过"是整行铺黄底（row-modified），看不出到底改了哪几格；改成**逐格**标记
+// （黄底 + 右上角小三角），与 SQL 查询结果页签的编辑样式一致。
+// 新增行整行已经是绿色（row-new），不再叠格子标记。
+const isCellEdited = (row, col) => {
+  if (!row || row._editState === 'new' || row._editState === 'deleted') return false
+  const o = row._original
+  if (!o || !(col in o)) return false
+  return row[col] !== o[col]
+}
+// 待保存的规模：N 行 / M 处（与 SQL 结果页签底栏同一口径）
+const pendingChangeStats = computed(() => {
+  let rowsN = 0
+  let cells = 0
+  for (const r of rows.value) {
+    if (r._editState === 'new') { rowsN++; continue }
+    if (r._editState === 'deleted') continue
+    const o = r._original
+    if (!o) continue
+    let hit = 0
+    for (const k in o) if (r[k] !== o[k]) hit++
+    if (hit) { rowsN++; cells += hit }
+  }
+  return { rows: rowsN, cells }
+})
 const hasChanges = computed(() => rows.value.some(r =>
   r._editState === 'new' || r._editState === 'deleted' || !rowEqualsOriginal(r)
 ))
@@ -3187,6 +3219,8 @@ useShortcutScope(rootRef, {
   padding: 0 10px; height: var(--grid-row-h, 26px); line-height: var(--grid-row-h, 26px);
   border: 1px solid var(--dc-border); color: var(--dc-text);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  /* 逐格「已修改」角标（::after）要相对单元格定位 */
+  position: relative;
   /* 数据格 = 手型：单元格可单击选中、双击快捷编辑、按住拖框选，手型是诚实的暗示；
      且表头同为手型，鼠标在整张表上不再来回变（三个网格统一口径）。
      例外：列宽把手（贴列缘 ±5px）仍是 col-resize —— 那是有意的（Excel/DataGrip 同款）。 */
@@ -3205,7 +3239,14 @@ useShortcutScope(rootRef, {
   cursor: col-resize; z-index: 6; user-select: none;
 }
 .data-table.col-resizing { cursor: col-resize; user-select: none; }
-.data-table td.editing { padding: 2px 4px; line-height: normal; }
+/* 就地编辑：输入框铺满整个格子（与 SQL 结果页签同一观感），不再是个带边框的小框 */
+.data-table td.editing { padding: 0; line-height: normal; }
+.data-table td.cell-edited { background-color: var(--dc-warning-wash, rgba(230,162,60,.14)); }
+.data-table td.cell-edited::after {
+  content: ''; position: absolute; top: 0; right: 0; width: 0; height: 0;
+  border-top: 7px solid var(--dc-warning, #e6a23c); border-left: 7px solid transparent;
+  pointer-events: none;
+}
 .data-table tbody tr { cursor: pointer; }
 /* 斑马纹按真实行号（row-alt）而非 DOM 奇偶：窗口化渲染会插入占位行，用 nth-child 会整列错位 */
 .data-table tbody tr.row-alt td { background-color: var(--dc-bg-soft); }
@@ -3291,7 +3332,7 @@ useShortcutScope(rootRef, {
 .data-table tbody tr.vp-pad-row:hover td { background: transparent !important; }
 /* 行选中的填充与边线见上方「行 / 列选中」样式块 */
 .data-table tbody tr.row-new td { background-color: var(--dc-success-wash) !important; }
-.data-table tbody tr.row-modified td { background-color: var(--dc-warning-wash) !important; }
+/* 「改过」不再整行铺色：逐格标记见 td.cell-edited（哪几格改了一眼可见，与 SQL 结果页签一致） */
 .data-table tbody tr.row-deleted { display: none; }
 /* 横向占位格：只负责撑住"没渲染的那些列"的宽度，不能有边框/内边距/背景 */
 .data-table tbody td.col-gap { padding: 0; border: none; background: transparent; }
@@ -3348,14 +3389,16 @@ useShortcutScope(rootRef, {
 /* 活动单元格（键盘导航锚点） */
 .data-table td.active-cell { outline: 2px solid var(--dc-primary); outline-offset: -2px; }
 
+/* 编辑框：铺满单元格、无边框（与 SQL 结果页签一致）。
+   以前是带主色边框 + 圆角的小框，看起来像"弹了个输入框"；现在就是"在格子里打字"。 */
 .cell-input {
-  width: 100%; min-width: 60px;
+  width: 100%; height: 100%; min-width: 0;
   background: var(--dc-bg);
-  border: 1px solid var(--dc-primary);
-  border-radius: 3px;
-  padding: 3px 6px;
+  border: none;
+  border-radius: 0;
+  padding: 0 9px;
   color: var(--dc-text);
-  font-size: 13px;
+  font: inherit;
   outline: none;
   box-sizing: border-box;
 }

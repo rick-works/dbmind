@@ -1143,7 +1143,14 @@ const loadAiModels = async () => {
   } catch (e) { /* ignore */ }
 }
 
-onMounted(() => { loadAiModels() })
+// 设置页保存了 AI 配置（模型/Key/启用开关）会广播 dbmind-ai-changed：
+// 面板是常驻组件，只在挂载时读过一次配置 —— 不重读的话「刚配好却仍提示未配置、
+// 新建的模型也不在下拉里」，用户得关掉面板再打开才行。
+const onAiChanged = () => { loadAiModels() }
+onMounted(() => {
+  loadAiModels()
+  window.addEventListener('dbmind-ai-changed', onAiChanged)
+})
 
 // ===== 面板宽度拖拽 =====
 const MIN_W = 300, MAX_W = 800
@@ -1172,6 +1179,7 @@ const startResize = (e) => {
 }
 onBeforeUnmount(() => {
   if (resizeCleanup) resizeCleanup()
+  window.removeEventListener('dbmind-ai-changed', onAiChanged)
   stopStream() // 卸载时中断进行中的流式请求，别让它在后台继续读
 })
 

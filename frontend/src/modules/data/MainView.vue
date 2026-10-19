@@ -128,7 +128,7 @@
             <button class="multi-act danger" :disabled="batchBusy" @click="batchDelete">{{ $t('tree.multiDelete') }}</button>
             <button class="multi-act" :disabled="batchBusy" @click="clearMultiSelect">{{ $t('tree.multiCancel') }}</button>
           </div>
-          <div v-loading="treeLoading" class="tree-loading">
+          <div v-loading="treeLoading" class="tree-loading" @click.capture="onTreeArrowClick">
           <el-tree
             ref="treeRef"
             :data="treeData"
@@ -147,6 +147,7 @@
             @node-drag-end="onTreeDragEnd"
             @node-drop="onTreeNodeDrop"
             @node-click="onNodeClick"
+            @node-expand="onNodeExpand"
             @node-contextmenu="onTreeNodeContextMenu"
             @dblclick="onTreeDoubleClick"
             class="dc-tree"
@@ -173,7 +174,7 @@
                   <FolderOpened v-if="node.expanded" /><Folder v-else />
                 </el-icon>
                 <!-- 数据源节点：DB Logo + 连接名 + 环境角标 -->
-                <span v-else-if="data.kind === 'conn'" class="conn-row"
+                <span v-else-if="data.kind === 'conn'" class="conn-row" :data-conn-id="data.connId"
                       @mouseenter="onConnEnter($event, data)" @mouseleave="onConnLeave($event, data)">
                   <span class="logo-wrap">
                     <DbLogo :type="data.connType" :size="14" :connected="isConnOpen(data.connId) && !connErrorSet.has(String(data.connId))" class="tree-logo" />
@@ -3449,8 +3450,9 @@ const closeConnection = (connId) => {
   const keptDbs = new Set()
   openedDbs.value.forEach((k) => { if (!k.startsWith(connPrefix)) keptDbs.add(k) })
   if (keptDbs.size !== openedDbs.value.size) openedDbs.value = keptDbs
-  // 清理错误标记，允许下次重新打开时正常提示
+  // 清理错误标记与"刚确认过"的时间，允许下次重新打开时正常提示与校验
   connErrorSet.value.delete(sid)
+  connAliveAt.delete(sid)
   // 折叠树并清除子节点数据（下次展开会重新连接加载）
   const node = treeRef.value?.getNode('conn:' + connId)
   if (node) {
@@ -3759,6 +3761,68 @@ const treeCtxRefreshConn = async (connId) => {
   ElMessage.success(t('mv.refreshed'))
 }
 
+// 「上次确认这条连接真的能用」的时间戳。TTL 只用来覆盖「刚连上 → 紧接着展开」这一瞬间
+// （selectConn 成功后自己就会调 expandNode，没必要再问一次）；除此之外**每次展开都校验**，
+// 网络断了就不能再展开 —— 「不管什么原因，连不上就不该打开」。
+const connAliveAt = new Map()
+const CONN_ALIVE_TTL = 3000
+
+/** 连接确认不可用：收回「已打开」的派生状态（图标变暗、树收起），页签一律不动 */
+const dropConnOpenState = (sid) => {
+  connErrorSet.value.add(sid)
+  delete dbsByConn.value[sid]
+  delete currentDbByConn.value[sid]
+  const prefix = dbOpenKey(sid, '')
+  const kept = new Set()
+  openedDbs.value.forEach((k) => { if (!k.startsWith(prefix)) kept.add(k) })
+  if (kept.size !== openedDbs.value.size) openedDbs.value = kept
+  connAliveAt.delete(sid)
+  collapseNode('conn:' + sid)
+}
+
+/**
+ * 已经打开过的连接再点开时，先确认它**现在**还连得上。
+ *
+ * 为什么必须有：`isConnOpen` 只表示「这次会话里成功打开过」（dbsByConn 里还留着库列表），
+ * 网络断了它照样是 true —— 图标是亮的、点开直接走缓存展开、不发任何请求也不报错，
+ * 用户看到的就是「明明连不上，界面还说开着，点了也没反应」。
+ * 口径与 selectConn 一致：列库成功即连接可用（顺带把库列表换成最新的）。
+ */
+const recheckConn = async (sid) => {
+  const key = String(sid)
+  const c = allConnections.value.find(x => String(x.id) === key)
+  if (!c || connLoadingSet.value.has(key)) return false
+  connLoadingSet.value.add(key)
+  try {
+    const dbList = await (isNoSqlType(c.type) ? noSqlDatabases(key) : listDatabases(key))
+    const list = Array.isArray(dbList) ? dbList : []
+    // 与 selectConn 同一套「软失败」识别：后端列不出库时 200 返回占位名，不能当成功
+    const usable = list.filter(db => isNoSqlType(c.type) || String(db) !== NO_DEFAULT_DB)
+    if (!usable.length) {
+      let why = ''
+      try {
+        const probe = await testConnectionById(c.id)
+        why = probe?.message || ''
+      } catch (e2) {
+        why = errMsg(e2, '')
+      }
+      dropConnOpenState(key)
+      showConnFail(why || t('mv.noDatabases'))
+      return false
+    }
+    dbsByConn.value[key] = list
+    connErrorSet.value.delete(key)
+    connAliveAt.set(key, Date.now())
+    return true
+  } catch (e) {
+    dropConnOpenState(key)
+    showConnFail(errMsg(e, t('mv.connFailedCheck')))
+    return false
+  } finally {
+    connLoadingSet.value.delete(key)
+  }
+}
+
 // 打开指定连接：切换上下文并展开树（多连接并开，各自状态互不干扰）
 const selectConn = async (id) => {
   if (!id) { conn.value = null; currentConnId.value = null; return }
@@ -3844,6 +3908,7 @@ const selectConn = async (id) => {
     }
     // 连接可用：清除之前的错误标记，展开该节点（列库的子节点走 lazyLoad 的缓存分支）
     connErrorSet.value.delete(connId)
+    connAliveAt.set(connId, Date.now())
     // 连接成功才记「最近使用」——失败的不记，免得最近列表里全是连不上的
     recordRecentConnection(connId)
     await nextTick()
@@ -5075,6 +5140,15 @@ const findTreeParentKey = (key, nodes) => {
 // 可靠地展开 el-tree 节点（lazy 模式下直接 node.expand() 对未加载节点可能不生效）
 // 若节点尚未创建（父级目录收起时其下子节点未渲染/未懒加载），先展开父级目录并轮询等待节点就绪
 const expandNode = async (key) => {
+  // 展开连接前确认它**现在**还连得上：已打开过的连接会直接命中 dbsByConn 缓存，
+  // 网络断了也照样展开、界面一直显示已连接 —— 用户点了却看不到任何错误。
+  // TTL 内刚确认过的跳过（selectConn 刚连上就属于这种），正常使用不会多一次往返。
+  if (key.startsWith('conn:')) {
+    const sid = key.slice(5)
+    if (Date.now() - (connAliveAt.get(sid) || 0) > CONN_ALIVE_TTL) {
+      if (!(await recheckConn(sid))) return
+    }
+  }
   let node = treeRef.value?.getNode(key)
   if (!node) {
     const parentKey = findTreeParentKey(key)
@@ -5196,6 +5270,40 @@ const onArrowClick = (data, node) => {
 }
 
 /**
+ * 连接节点展开后确认一次真连通（点箭头、点节点、程序展开都走这里）。
+ *
+ * 为什么在这里：展开一个「这次会话里打开过」的连接会直接命中 dbsByConn 缓存，
+ * 不发任何请求 —— 网络早就断了也照样展开，界面一直显示已连接、也没有任何错误。
+ * TTL 内刚确认过的跳过，避免正常使用时每点一次都多一次往返。
+ */
+const onNodeExpand = async (data) => {
+  if (!data || data.kind !== 'conn') return
+  const sid = String(data.connId)
+  if (Date.now() - (connAliveAt.get(sid) || 0) <= CONN_ALIVE_TTL) return
+  await recheckConn(sid)
+}
+
+/**
+ * 点「箭头」展开连接时自己接管（el-tree 的 node-expand 事件在懒加载模式下实测不触发，
+ * 光靠事件接不住这条路径）：TTL 过期就先验一次连通，验不过就不让展开。
+ * 收起不校验 —— 关掉一个连不上的连接是安全操作。
+ */
+const onTreeArrowClick = (e) => {
+  const arrow = e.target?.closest?.('.tree-arrow')
+  if (!arrow) return
+  const nodeEl = arrow.closest('.el-tree-node')
+  if (!nodeEl || nodeEl.classList.contains('is-expanded')) return
+  const row = nodeEl.querySelector('.conn-row[data-conn-id]')
+  if (!row) return
+  const sid = String(row.dataset.connId)
+  if (Date.now() - (connAliveAt.get(sid) || 0) <= CONN_ALIVE_TTL) return
+  // 接管这次展开：先确认连得上，成功后再真正展开（失败时 recheckConn 已经弹错误 + 收起）
+  e.stopPropagation()
+  e.preventDefault()
+  recheckConn(sid).then((ok) => { if (ok) expandNode('conn:' + sid) })
+}
+
+/**
  * 单击树节点：先执行该类型的语义动作，最后**切一次**展开/收起。
  */
 const onNodeClick = async (data, node, _component, event) => {
@@ -5211,11 +5319,14 @@ const onNodeClick = async (data, node, _component, event) => {
   // 连接节点：未连接 → 单击即连接（连上后由 selectConn 展开）；
   // 已连接 → 单击展开/收起。**单击不会断开连接**，断开在右键菜单里。
   if (data.kind === 'conn') {
-    if (!isConnOpen(data.connId) || connErrorSet.value.has(String(data.connId))) {
+    const sid = String(data.connId)
+    if (connLoadingSet.value.has(sid)) return
+    if (!isConnOpen(data.connId) || connErrorSet.value.has(sid)) {
       await selectConn(data.connId)
     } else if (node?.expanded) {
       collapseNode(data.id)
     } else {
+      // 展开触发的连通性校验统一放在 node-expand 里（箭头展开也走同一条路）
       expandNode(data.id)
     }
     return

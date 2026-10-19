@@ -39,6 +39,9 @@ enum State {
     SingleQuote,
     DoubleQuote,
     Backtick,
+    /// PostgreSQL 美元引号（`$$` / `$tag$`）：体内的 `;` 不是分隔符。
+    /// PG 的函数体（`AS $$ … $$`）靠它才不会被切碎。
+    Dollar,
     LineComment,
     BlockComment,
 }
@@ -65,10 +68,112 @@ fn next_word(chars: &[char], from: usize) -> String {
     word.to_ascii_uppercase()
 }
 
+/// 能**开启一条新语句**的关键字。
+///
+/// 只在「行首 + 上一条看起来已经写完」时才真的切（见 `implicit_break`），
+/// 所以把它们列全一点是安全的；真正决定切不切的是上下文判定。
+const IMPLICIT_HEADS: &[&str] = &[
+    "SELECT", "WITH", "INSERT", "REPLACE", "UPDATE", "DELETE", "MERGE", "CREATE", "ALTER", "DROP",
+    "TRUNCATE", "RENAME", "COMMENT", "GRANT", "REVOKE", "CALL", "EXEC", "EXECUTE", "SHOW", "DESC",
+    "DESCRIBE", "EXPLAIN", "ANALYZE", "VACUUM", "OPTIMIZE", "USE", "SET", "COMMIT", "ROLLBACK",
+    "START", "SAVEPOINT", "RELEASE", "PREPARE", "DEALLOCATE",
+];
+
+/// 行首出现这些词时，它们其实是**上一条语句的延续**（`UNION SELECT`、`AND x`、`FROM t`…），
+/// 见到就绝不切 —— 误切会把一条完整语句拆成两条，比不切危险得多。
+const IMPLICIT_CONTINUE: &[&str] = &[
+    "UNION", "ALL", "INTERSECT", "EXCEPT", "MINUS", "AS", "INTO", "VALUES", "FROM", "JOIN", "ON",
+    "USING", "WHERE", "AND", "OR", "NOT", "IN", "EXISTS", "BETWEEN", "LIKE", "IS", "THEN", "ELSE",
+    "WHEN", "CASE", "HAVING", "GROUP", "ORDER", "BY", "LIMIT", "OFFSET", "RETURNING", "DO", "WITH",
+];
+
+/// 「没写分号也分段」的判定：`word` 是行首刚读完的词，其余是当前语句的上下文。
+///
+/// 保守原则：**拿不准就不切**。宁可把两条并成一条报语法错（用户加个分号就好），
+/// 也不要把一条拆成两条分开执行 —— 后者会执行半个语句，甚至删掉一半数据。
+fn implicit_break(
+    word: &str,
+    cur: &str,
+    paren: i32,
+    depth: i32,
+    last_code: Option<char>,
+    last_word: &str,
+    head_word: &str,
+    saw_select: bool,
+    routine: bool,
+    main_started: bool,
+    attach_select: bool,
+) -> bool {
+    if cur.trim().is_empty() || paren != 0 || depth != 0 {
+        return false;
+    }
+    // 例程/触发器 DDL：`CREATE TRIGGER … BEFORE INSERT`、`CREATE PROCEDURE …` 里的
+    // INSERT / SET / SELECT 都是语法的一部分，绝不能当成新语句开头。
+    if routine {
+        return false;
+    }
+    if !IMPLICIT_HEADS.contains(&word) {
+        return false;
+    }
+    // 上一条语句的最后一个字符必须「像个结尾」：字/数字/右括号/闭合引号。
+    // 逗号、运算符、左括号、点号结尾说明话没说完（`SELECT a,` 后面接 `FROM` 之类）。
+    let tail_ok = match last_code {
+        Some(c) => {
+            c.is_alphanumeric() || c == '_' || c == '$' || c == ')' || c == ']' || c == '\'' || c == '"' || c == '`'
+        }
+        None => false,
+    };
+    if !tail_ok {
+        return false;
+    }
+    let prev = last_word.to_ascii_uppercase();
+    if IMPLICIT_CONTINUE.contains(&prev.as_str()) {
+        return false;
+    }
+    let head = head_word.to_ascii_uppercase();
+    // 匿名块（BEGIN … END）里不猜，交给分号
+    if head == "BEGIN" {
+        return false;
+    }
+    // `INSERT … SELECT` / `CREATE TABLE … AS SELECT` 是**一条**语句：
+    // 主查询还没开始时那个 SELECT 不算新语句；已经出现过顶层 SELECT 后再顶格起 SELECT 就是新语句。
+    if word == "SELECT"
+        && !saw_select
+        && matches!(head.as_str(), "INSERT" | "REPLACE" | "MERGE" | "CREATE" | "EXPLAIN")
+    {
+        return false;
+    }
+    // CTE：`WITH cte AS (…)` 之后的主语句可以是 SELECT / INSERT / UPDATE / DELETE …
+    //   - 主语句还没开始时，顶格出现的 DML/SELECT 都属于这条 WITH 语句；
+    //   - 主语句是 INSERT/REPLACE/MERGE 时，紧跟的那个 SELECT 也属于它（INSERT … SELECT）；
+    //   - 其余情况再顶格 SELECT = 新语句。
+    if head == "WITH" {
+        if !main_started && matches!(word, "INSERT" | "REPLACE" | "MERGE" | "UPDATE" | "DELETE") {
+            return false;
+        }
+        if !main_started && word == "SELECT" {
+            return false;
+        }
+        if main_started && attach_select && word == "SELECT" {
+            return false;
+        }
+    }
+    // `UPDATE t SET …` / `INSERT … SET …` / `CREATE TRIGGER … SET …` 里的 SET 属于上一条
+    if word == "SET" && matches!(head.as_str(), "UPDATE" | "INSERT" | "CREATE") {
+        return false;
+    }
+    true
+}
+
 /// 按 `;` 拆分语句，**正确处理引号、注释与语句块**。
 ///
 /// 三类 `;` 不算分隔符：`';'`（引号内）、`-- ;` / `/* ; */`（注释内）、
 /// 以及 `BEGIN ... END` / `CASE ... END` **块内部**的（见下）。
+///
+/// 另外支持**不写分号也分段**：行首出现 `SELECT` / `INSERT` / `CREATE` … 这类语句起始关键字、
+/// 且上一条在语法上已经收尾（括号与块都闭合、末尾不是逗号/运算符）时，自动在那里断开。
+/// 判定见 [`implicit_break`]，前端 `utils/sqlSplit.js` 必须与本函数**同一套规则**，
+/// 否则编辑器显示「2 条语句」而执行时后端只按分号切成 1 条。
 ///
 /// 注释内容会被替换成空白（保持字符位置大致不变，便于后续定位报错）。
 pub fn split_statements(sql: &str) -> Vec<String> {
@@ -83,28 +188,102 @@ pub fn split_statements(sql: &str) -> Vec<String> {
     // 「编辑函数」生成的脚本会被切成 `DROP ...` / `CREATE ... BEGIN ...` / `END` 三段 ——
     // 第一段执行成功把对象删掉，第二段断在半截必然语法错误 ⇒ **对象被删且建不回来**。
     let mut depth: i32 = 0;
+    // ---- 无分号分段用的上下文 ----
+    let mut paren: i32 = 0;           // 括号深度：子查询里的 SELECT 不能切
+    let mut line_start = true;        // 当前是否在「行首」（只见过空白）
+    let mut last_word = String::new(); // 上一条语句的最后一个词（判 UNION/AND 等续接词）
+    let mut head_word = String::new(); // 当前语句的第一个词（判 INSERT…SELECT 等）
+    let mut last_code: Option<char> = None; // 最后一个非空白字符（判语句是否收尾）
+    let mut word_at_line_start = false;     // 正在读的这个词是否位于行首
+    // ---- 例程 / 触发器 DDL 与 CTE 的进度（前端 sqlSplit.js 同名变量一一对应）----
+    let mut routine = false;      // CREATE PROCEDURE/FUNCTION/TRIGGER/PACKAGE：整条是一条语句
+    let mut decl = false;         // Oracle 声明段（AS/IS 之后、BEGIN 之前）：段里的 `;` 不是边界
+    let mut begin_seen = false;   // 例程体已经开始
+    let mut dollar_body = false;  // 体是美元引号字面量（`AS $$ … $$`）
+    let mut saw_select = false;   // 当前语句已出现过顶层 SELECT
+    let mut main_started = false; // WITH 的主语句已开始
+    let mut attach_select = false;// 主语句是 INSERT/REPLACE/MERGE，紧跟的 SELECT 仍属于它
     // 当前正在读的单词：识别 BEGIN / END / CASE 用
     let mut word = String::new();
+    // 美元引号的结束标记（`$$` / `$tag$`）
+    let mut dollar_tag = String::new();
     let mut i = 0usize;
 
     while i < chars.len() {
         let c = chars[i];
         match state {
             State::Normal => {
+                // 美元引号 `$$` / `$tag$`：必须排在「词」之前 —— `$` 也是词字符，
+                // 放到后面会被当成普通单词吃掉，函数体里的分号就全都暴露出来把函数切碎。
+                if c == '$' && word.is_empty() {
+                    let mut j = i + 1;
+                    while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_') {
+                        j += 1;
+                    }
+                    if j < chars.len() && chars[j] == '$' {
+                        dollar_tag = chars[i..=j].iter().collect();
+                        cur.push_str(&dollar_tag);
+                        last_code = Some('$');
+                        last_word.clear();
+                        state = State::Dollar;
+                        i = j + 1;
+                        continue;
+                    }
+                }
                 if is_word_char(c) {
+                    if word.is_empty() {
+                        word_at_line_start = line_start;
+                    }
                     word.push(c);
-                    cur.push(c);
+                    line_start = false;
                     i += 1;
                     continue;
                 }
                 if !word.is_empty() {
-                    match word.to_ascii_uppercase().as_str() {
+                    let upper = word.to_ascii_uppercase();
+                    // 先判「这里能不能断」：此时 cur 里还没有这个词，正好干净
+                    if word_at_line_start
+                        && implicit_break(
+                            &upper, &cur, paren, depth, last_code, &last_word, &head_word,
+                            saw_select, routine, main_started, attach_select,
+                        )
+                    {
+                        let trimmed = cur.trim();
+                        if !trimmed.is_empty() {
+                            out.push(trimmed.to_string());
+                        }
+                        cur.clear();
+                        depth = 0;
+                        paren = 0;
+                        head_word.clear();
+                        last_word.clear();
+                        saw_select = false;
+                        routine = false;
+                        decl = false;
+                        begin_seen = false;
+                        dollar_body = false;
+                        main_started = false;
+                        attach_select = false;
+                        // last_code 不用清：紧接着就会被这个词的末字符覆盖
+                    }
+                    // CREATE [OR REPLACE] PROCEDURE / FUNCTION / TRIGGER / PACKAGE：整条是一条语句
+                    if matches!(upper.as_str(), "PROCEDURE" | "FUNCTION" | "TRIGGER" | "PACKAGE")
+                        && matches!(head_word.as_str(), "CREATE" | "ALTER")
+                    {
+                        routine = true;
+                    }
+                    // Oracle 的声明段：AS/IS 之后、BEGIN 之前（`v NUMBER := 0;` 这些分号不是语句边界）
+                    if routine && depth == 0 && matches!(upper.as_str(), "AS" | "IS") {
+                        decl = true;
+                    }
+                    match upper.as_str() {
                         // `BEGIN` 既可能开语句块，也可能是事务起点（`BEGIN;` / `BEGIN WORK` /
                         // `BEGIN TRANSACTION`）。后者没有配对的 END，误判会把后面所有语句吞成一条。
                         "BEGIN" => {
                             if !matches!(next_word(&chars, i).as_str(), "" | "WORK" | "TRANSACTION")
                             {
                                 depth += 1;
+                                begin_seen = true;
                             }
                         }
                         // `CASE` 与 `END` 成对（表达式与语句都成对）：算进来才配平。
@@ -122,17 +301,47 @@ pub fn split_statements(sql: &str) -> Vec<String> {
                         }
                         _ => {}
                     }
+                    // 顶层 SELECT 出现即为「主查询已开始」：此后顶格的 SELECT 就是新语句
+                    if upper == "SELECT" && paren == 0 {
+                        saw_select = true;
+                    }
+                    // CTE 主语句的进度（只认顶层词，CTE 体内的 SELECT 不算）
+                    if paren == 0 && depth == 0 && head_word == "WITH" {
+                        if !main_started {
+                            if matches!(upper.as_str(), "INSERT" | "REPLACE" | "MERGE") {
+                                main_started = true;
+                                attach_select = true;
+                            } else if matches!(upper.as_str(), "SELECT" | "UPDATE" | "DELETE") {
+                                main_started = true;
+                            }
+                        } else if attach_select && upper == "SELECT" {
+                            attach_select = false;
+                        }
+                    }
+                    if head_word.is_empty() {
+                        head_word = upper.clone();
+                    }
+                    last_word = upper;
+                    last_code = word.chars().last();
+                    word_at_line_start = false;
+                    cur.push_str(&word);
                     word.clear();
                 }
                 if c == '\'' {
                     state = State::SingleQuote;
                     cur.push(c);
+                    last_code = Some(c);
+                    line_start = false;
                 } else if c == '"' {
                     state = State::DoubleQuote;
                     cur.push(c);
+                    last_code = Some(c);
+                    line_start = false;
                 } else if c == '`' {
                     state = State::Backtick;
                     cur.push(c);
+                    last_code = Some(c);
+                    line_start = false;
                 } else if c == '-' && chars.get(i + 1) == Some(&'-') {
                     state = State::LineComment;
                     cur.push(' ');
@@ -144,18 +353,50 @@ pub fn split_statements(sql: &str) -> Vec<String> {
                     cur.push(' ');
                     i += 1;
                 } else if c == ';' {
-                    if depth == 0 {
+                    // 例程声明段里的分号（Oracle：`v NUMBER := 0;` 在 BEGIN 之前）不是语句结束符
+                    let in_decl = routine && decl && !begin_seen && !dollar_body;
+                    if depth == 0 && !in_decl {
                         let trimmed = cur.trim();
                         if !trimmed.is_empty() {
                             out.push(trimmed.to_string());
                         }
                         cur.clear();
+                        paren = 0;
+                        depth = 0;
+                        head_word.clear();
+                        last_word.clear();
+                        last_code = None;
+                        saw_select = false;
+                        routine = false;
+                        decl = false;
+                        begin_seen = false;
+                        dollar_body = false;
+                        main_started = false;
+                        attach_select = false;
                     } else {
-                        // 块内：分号属于体内语句，原样留着
+                        // 块内/声明段：分号属于体内语句，原样留着
                         cur.push(c);
+                        last_code = Some(c);
                     }
+                } else if c == '(' {
+                    paren += 1;
+                    cur.push(c);
+                    last_code = Some(c);
+                    line_start = false;
+                } else if c == ')' {
+                    paren = (paren - 1).max(0);
+                    cur.push(c);
+                    last_code = Some(c);
+                    line_start = false;
+                } else if c == '\n' {
+                    cur.push(c);
+                    line_start = true;
                 } else {
                     cur.push(c);
+                    if !c.is_whitespace() {
+                        last_code = Some(c);
+                        line_start = false;
+                    }
                 }
             }
             State::SingleQuote => {
@@ -167,25 +408,64 @@ pub fn split_statements(sql: &str) -> Vec<String> {
                         i += 1;
                     } else {
                         state = State::Normal;
+                        last_code = Some('\'');
+                        // 字符串本身也是一个「词」：清掉 last_word，否则
+                        // `... WHERE name LIKE 'a%'` 的下一条无分号语句会被 LIKE
+                        // （续接词白名单）挡住，永远切不开。前端同一处理。
+                        last_word.clear();
                     }
                 }
             }
             State::DoubleQuote => {
                 cur.push(c);
                 if c == '"' {
-                    state = State::Normal;
+                    // "" 是转义的双引号（PG/标准 SQL 的标识符写法），不结束
+                    if chars.get(i + 1) == Some(&'"') {
+                        cur.push('"');
+                        i += 1;
+                    } else {
+                        state = State::Normal;
+                        last_code = Some('"');
+                        last_word.clear();
+                    }
                 }
             }
             State::Backtick => {
                 cur.push(c);
                 if c == '`' {
+                    // `` 是转义的反引号（MySQL 标识符），不结束
+                    if chars.get(i + 1) == Some(&'`') {
+                        cur.push('`');
+                        i += 1;
+                    } else {
+                        state = State::Normal;
+                        last_code = Some('`');
+                        last_word.clear();
+                    }
+                }
+            }
+            State::Dollar => {
+                let tag: Vec<char> = dollar_tag.chars().collect();
+                if chars.len() >= i + tag.len() && chars[i..i + tag.len()] == tag[..] {
+                    cur.push_str(&dollar_tag);
+                    i += tag.len() - 1;
                     state = State::Normal;
+                    last_code = Some('$');
+                    last_word.clear(); // 字面量本身就是一个「词」
+                    // 例程体就是这段字面量 ⇒ 声明段结束，后面的 `;`（如 `LANGUAGE plpgsql;`）才是终止符
+                    if routine {
+                        decl = false;
+                        dollar_body = true;
+                    }
+                } else {
+                    cur.push(c);
                 }
             }
             State::LineComment => {
                 if c == '\n' {
                     state = State::Normal;
                     cur.push('\n');
+                    line_start = true;
                 }
             }
             State::BlockComment => {
@@ -198,6 +478,10 @@ pub fn split_statements(sql: &str) -> Vec<String> {
         i += 1;
     }
 
+    // 末尾还没落地的词（文件以单词结尾，后面没有分隔符）
+    if !word.is_empty() {
+        cur.push_str(&word);
+    }
     let trimmed = cur.trim();
     if !trimmed.is_empty() {
         out.push(trimmed.to_string());
@@ -941,11 +1225,142 @@ mod tests {
         );
     }
 
+    /// 没写分号：两条 SELECT 连着写也要能各自成段
+    #[test]
+    fn implicit_split_selects_without_semicolon() {
+        let sql = "SELECT id, name\nFROM users\nSELECT id, name\nFROM users";
+        let parts = split_statements(sql);
+        assert_eq!(parts.len(), 2, "{parts:#?}");
+        assert!(parts[0].starts_with("SELECT id"));
+        assert!(parts[1].starts_with("SELECT id"));
+    }
+
+    /// INSERT … SELECT / CREATE TABLE AS SELECT 是**一条**语句，不能被行首的 SELECT 切开
+    #[test]
+    fn implicit_split_keeps_insert_select() {
+        assert_eq!(split_statements("INSERT INTO t (a)\nSELECT a FROM s").len(), 1);
+        assert_eq!(split_statements("CREATE TABLE t AS\nSELECT 1 AS a").len(), 1);
+    }
+
+    /// UNION 跨行：行首 SELECT 是续接，不是新语句
+    #[test]
+    fn implicit_split_keeps_union() {
+        assert_eq!(
+            split_statements("SELECT a FROM t\nUNION ALL\nSELECT a FROM u").len(),
+            1
+        );
+    }
+
+    /// 括号里的 SELECT（子查询）不切
+    #[test]
+    fn implicit_split_ignores_subquery() {
+        assert_eq!(split_statements("SELECT *\nFROM (\nSELECT a FROM t\n) x").len(), 1);
+    }
+
+    /// DDL 连着写（无分号）也要分段
+    #[test]
+    fn implicit_split_ddl_without_semicolon() {
+        assert_eq!(
+            split_statements("DROP TABLE IF EXISTS t\nCREATE TABLE t (a INT)\nINSERT INTO t VALUES (1)")
+                .len(),
+            3
+        );
+    }
+
+    /// 上一行以逗号/运算符结尾 = 话没说完，不切
+    #[test]
+    fn implicit_split_requires_complete_tail() {
+        assert_eq!(split_statements("SELECT a,\nSELECT b FROM t").len(), 1);
+    }
+
+    /// 例程体（BEGIN … END）里即使不写分号也不切
+    #[test]
+    fn implicit_split_skips_begin_block() {
+        assert_eq!(
+            split_statements("CREATE PROCEDURE p() BEGIN\nSELECT 1\nEND").len(),
+            1
+        );
+    }
+
+    /// 上一条以**标识符/字符串字面量**结尾时也要能切。
+    ///
+    /// `FROM \`users\`` 的上一个「词」还停在 FROM 上，而 FROM 是续接词白名单里的 ——
+    /// 不在引号闭合时清掉 last_word，两条无分号的 SELECT 就永远粘成一条
+    /// （真机：编辑器里两条 SELECT 只隔一个空行，执行报 near 'SELECT ...' 语法错）。
+    #[test]
+    fn implicit_split_after_quoted_tail() {
+        let sql = "SELECT\n  `id`,\n  `name`\nFROM `users`\n\n\
+                   SELECT\n  `id`,\n  `name`\nFROM `users`;";
+        let parts = split_statements(sql);
+        assert_eq!(parts.len(), 2, "{parts:#?}");
+        assert!(parts[1].starts_with("SELECT"));
+        assert_eq!(split_statements("SELECT * FROM `users`\nSELECT 1").len(), 2);
+        assert_eq!(split_statements("SELECT * FROM \"users\"\nSELECT 1").len(), 2);
+        assert_eq!(
+            split_statements("SELECT * FROM t WHERE name LIKE 'a%'\nSELECT 1").len(),
+            2
+        );
+    }
+
     /// 老行为不能退化：引号/注释里的分号照旧不算分隔符。
     #[test]
     fn quotes_and_comments_still_do_not_split() {
         assert_eq!(split_statements("INSERT INTO t VALUES ('a;b');").len(), 1);
         assert_eq!(split_statements("SELECT 1; -- ;\nSELECT 2;").len(), 2);
         assert_eq!(split_statements("SELECT /* ; */ 1;").len(), 1);
+        // 转义的双引号/反引号（"" / ``）不结束标识符，里面的分号也就不算分隔符
+        assert_eq!(split_statements("SELECT \"a\"\"b;c\"; SELECT 1;").len(), 2);
+        assert_eq!(split_statements("SELECT `a``b;c`; SELECT 1;").len(), 2);
+    }
+
+    /// `#` **不是**行注释：SQL Server 的临时表就叫 `#temp`，当注释会把整行吞掉。
+    ///
+    /// 前端 `utils/sqlSplit.js` 必须给出同样的段数（它此前把 `#` 当注释，
+    /// `SELECT * FROM #temp; SELECT 1;` 被算成 1 条 → 界面显示 1 条、实际执行 2 条）。
+    #[test]
+    fn hash_is_not_a_line_comment() {
+        assert_eq!(split_statements("SELECT * FROM #temp; SELECT 1;").len(), 2);
+        assert_eq!(split_statements("SELECT * FROM #temp\nSELECT 1").len(), 2);
+        assert_eq!(split_statements("# DROP TABLE x;\nSELECT 1;").len(), 2);
+        assert_eq!(split_statements("#foo;").len(), 1);
+    }
+
+    /// 复杂 SQL 不能被切碎（前端 `sqlcomplex-check.mjs` 是同一批用例）。
+    #[test]
+    fn complex_statements_stay_together() {
+        // MySQL 触发器：格式化会把 INSERT 顶到行首 —— 不能被当成新语句
+        let trigger = "CREATE TRIGGER trg1 BEFORE\nINSERT\n  ON t1 FOR EACH ROW BEGIN\n  \
+                       SET NEW.kind = CASE WHEN NEW.v > 0 THEN 'pos' ELSE 'neg' END;\n  \
+                       INSERT INTO audit VALUES (NEW.id);\nEND";
+        assert_eq!(split_statements(trigger).len(), 1);
+
+        // Oracle 存储过程：AS 之后、BEGIN 之前的声明语句分号不是语句边界
+        let procedure = "CREATE OR REPLACE PROCEDURE p2(p_id IN NUMBER) AS\n  v NUMBER := 0;\n\
+                         BEGIN\n  SELECT count(*) INTO v FROM t WHERE id = p_id;\n  \
+                         DELETE FROM t WHERE id = p_id;\nEND;";
+        assert_eq!(split_statements(procedure).len(), 1);
+
+        // PG 美元引号：壳里不带 BEGIN 的 SQL 函数体，分号也不算
+        let pg = "CREATE FUNCTION f2() RETURNS int AS $$ SELECT 1; SELECT 2; $$ LANGUAGE sql;";
+        assert_eq!(split_statements(pg).len(), 1);
+        let pg_pl = "CREATE OR REPLACE FUNCTION f1() RETURNS void AS $$\nBEGIN\n  PERFORM 1;\n  \
+                      DELETE FROM t WHERE a = 0;\nEND\n$$ LANGUAGE plpgsql;";
+        assert_eq!(split_statements(pg_pl).len(), 1);
+
+        // WITH 的查询体写完后，无分号的下一条 SELECT 要能切出来
+        let cte = "WITH RECURSIVE tree AS (\n  SELECT id FROM nodes\n  UNION ALL\n  \
+                   SELECT n.id FROM nodes n JOIN tree t ON n.parent_id = t.id\n)\n\
+                   SELECT * FROM tree\n\nSELECT count(*) FROM tree";
+        assert_eq!(split_statements(cte).len(), 2);
+
+        // WITH + INSERT 是一条语句，后面顶格的 SELECT 才是新语句
+        let with_insert = "WITH t AS (SELECT 1 AS a)\nINSERT INTO log SELECT a FROM t\n\nSELECT * FROM log";
+        assert_eq!(split_statements(with_insert).len(), 2);
+
+        // 三条无分号（SELECT / DDL / DML）
+        assert_eq!(
+            split_statements("SELECT * FROM t1\n\nTRUNCATE TABLE t2\n\nINSERT INTO t2 VALUES (1)").len(),
+            3
+        );
     }
 }

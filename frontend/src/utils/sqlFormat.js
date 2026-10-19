@@ -6,6 +6,7 @@ import {
   plsql, postgresql, redshift, spark, sqlite, sql, trino, transactsql,
   singlestoredb, snowflake
 } from 'sql-formatter'
+import { splitSqlStatementRanges } from './sqlSplit.js'
 
 // 方言名 → sql-formatter 方言对象（与设置面板下拉保持一致）
 const dialectMap = {
@@ -26,6 +27,14 @@ export const connDialectOf = (typeCode) => ({
 
 const norm = (v, fallback) => (v === undefined || v === null || v === '' ? fallback : v)
 
+// 「查询之间空行 N 行」——设置里这个值数的是**空行**，而 sql-formatter 的
+// linesBetweenQueries 数的是**换行**：N 个空行 = N+1 个换行（0 空行时两条语句紧挨着各占一行）。
+// 以前直接把设置值丢给引擎，导致选「1 行」反而一个空行都没有（真机反馈：格式化后空行没了）。
+const blankLinesOf = (s) => {
+  const n = Number(s && s.sqlLinesBetweenQueries)
+  return Number.isFinite(n) ? Math.max(0, Math.min(9, Math.round(n))) : 1
+}
+
 // 由应用设置项构建 sql-formatter 的通用 FormatOptions
 export const buildSqlFormatOptions = (s) => ({
   keywordCase: norm(s.sqlKeywordCase, 'upper'),
@@ -36,7 +45,7 @@ export const buildSqlFormatOptions = (s) => ({
   tabWidth: norm(s.sqlTabWidth, 2),
   useTabs: !!s.sqlUseTabs,
   expressionWidth: norm(s.sqlExpressionWidth, 50),
-  linesBetweenQueries: typeof s.sqlLinesBetweenQueries === 'number' ? s.sqlLinesBetweenQueries : 2,
+  linesBetweenQueries: blankLinesOf(s) + 1,
   logicalOperatorNewline: norm(s.sqlLogicalOperatorNewline, 'before'),
   newlineBeforeSemicolon: !!s.sqlNewlineBeforeSemicolon,
   denseOperators: !!s.sqlDenseOperators
@@ -399,46 +408,72 @@ const collapseBlankAfterLineComment = (sql) => {
   return out.join('\n')
 }
 
+// 按**语句**切开脚本（用的是编辑器/后端同一套拆分器：没写分号也切）。
+//
+// 为什么必须自己切：sql-formatter 只认 `;` 断句。两条没写分号的 SELECT 会被它当成
+// 一条查询 ⇒ 既不换行也不加空行，「查询之间空行」这个设置对无分号脚本完全失效。
+// 切片时把两条语句之间的 `;`、空白、纯注释段都留在前一片里（不丢用户内容）。
+const statementChunks = (text) => {
+  const src = String(text || '')
+  const ranges = splitSqlStatementRanges(src)
+  if (ranges.length <= 1) return [src]
+  return ranges.map((r, i) => {
+    const end = i + 1 < ranges.length ? ranges[i + 1].start : src.length
+    return src.slice(r.start, end)
+  })
+}
+
 export const formatSql = (text, s, language) => {
   const primary = norm(language, 'sql')
   const options = buildSqlFormatOptions(s)
   const rules = rulesOf(s)
-  const run = (language) => {
+  const run = (input, language) => {
     const base = dialectMap[language] || sql
     if (rules.length) {
-      return formatDialect(text, { ...options, dialect: { ...base, tokenizerOptions: applyRuleKeywords(base, rules) } })
+      return formatDialect(input, { ...options, dialect: { ...base, tokenizerOptions: applyRuleKeywords(base, rules) } })
     }
-    return format(text, { ...options, language })
+    return format(input, { ...options, language })
   }
   // 主方言失败时按优先级尝试其余方言（方括号等特殊语法提升容错）；
   // 全部失败则降级为轻量格式化（至少完成关键字大小写与空白规范化）。
   const candidates = [primary, ...DIALECT_FALLBACKS.filter((l) => l !== primary)]
-  let out
-  let firstErr
-  for (const language of candidates) {
-    try { out = run(language); break } catch (e) { if (!firstErr) firstErr = e }
+  const formatOne = (input) => {
+    let out
+    let firstErr
+    for (const language of candidates) {
+      try { out = run(input, language); break } catch (e) { if (!firstErr) firstErr = e }
+    }
+    if (out === undefined && firstErr) out = formatSqlLite(input, s)
+    const keepRules = rules.filter((r) => r.cs === 'keep' && LY_LAYOUT[r.ly])
+    if (keepRules.length) out = applyKeepCase(out, input, keepRules)
+    const lowerRules = rules.filter((r) => r.cs === 'lower')
+    if (lowerRules.length) out = applyLowerCase(out, lowerRules)
+    const upperRules = rules.filter((r) => r.cs === 'upper')
+    if (upperRules.length) out = applyUpperCase(out, upperRules)
+    if (rules.some((r) => r.ly === 'clause')) {
+      out = applyBreakBeforeOnly(out, rules)
+    }
+    if (rules.some((r) => r.ly === 'join' && Number.isFinite(r.iw))) {
+      out = applyJoinIndent(out, rules, options.tabWidth)
+    }
+    if (rules.some((r) => r.ly === 'afterBreak' || r.ly === 'afterBreakIndent')) {
+      out = applyBreakAfter(out, rules, options.tabWidth)
+    }
+    // 全局后处理（与关键字规则无关，只看设置项）。放在最后：它按行搬动逗号，
+    // 让上面那些按关键字搬行的规则先落定，避免互相干扰。
+    out = applyCommaPosition(out, norm(s.sqlCommaPosition, 'after'))
+    out = collapseBlankAfterLineComment(out)
+    return out
   }
-  if (out === undefined && firstErr) out = formatSqlLite(text, s)
-  const keepRules = rules.filter((r) => r.cs === 'keep' && LY_LAYOUT[r.ly])
-  if (keepRules.length) out = applyKeepCase(out, text, keepRules)
-  const lowerRules = rules.filter((r) => r.cs === 'lower')
-  if (lowerRules.length) out = applyLowerCase(out, lowerRules)
-  const upperRules = rules.filter((r) => r.cs === 'upper')
-  if (upperRules.length) out = applyUpperCase(out, upperRules)
-  if (rules.some((r) => r.ly === 'clause')) {
-    out = applyBreakBeforeOnly(out, rules)
-  }
-  if (rules.some((r) => r.ly === 'join' && Number.isFinite(r.iw))) {
-    out = applyJoinIndent(out, rules, options.tabWidth)
-  }
-  if (rules.some((r) => r.ly === 'afterBreak' || r.ly === 'afterBreakIndent')) {
-    out = applyBreakAfter(out, rules, options.tabWidth)
-  }
-  // 全局后处理（与关键字规则无关，只看设置项）。放在最后：它按行搬动逗号，
-  // 让上面那些按关键字搬行的规则先落定，避免互相干扰。
-  out = applyCommaPosition(out, norm(s.sqlCommaPosition, 'after'))
-  out = collapseBlankAfterLineComment(out)
-  return out
+  // 单条语句：整段交给引擎（与以前完全一致）。
+  const chunks = statementChunks(text)
+  if (chunks.length <= 1) return formatOne(text)
+  // 多条：逐条格式化，再用设置里的**空行数**拼回去（有无分号都一样）。
+  const gap = '\n'.repeat(blankLinesOf(s) + 1)
+  return chunks
+    .map((chunk) => formatOne(chunk).trim())
+    .filter((chunk) => chunk)
+    .join(gap)
 }
 
 // 常用关键字（放在候选表最前面）

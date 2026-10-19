@@ -25,7 +25,7 @@ export const editorDefaults = {
   sqlTabWidth: 2,                   // 缩进宽度（空格个数）
   sqlUseTabs: false,                // 是否用 Tab 缩进（开启后忽略缩进宽度）
   sqlExpressionWidth: 50,           // 表达式超过该宽度自动折行
-  sqlLinesBetweenQueries: 2,        // 多条语句之间的空行数
+  sqlLinesBetweenQueries: 1,        // 多条语句之间的空行数（0=不空行；这里是「空行」不是「换行」，默认一行空行）
   sqlLogicalOperatorNewline: 'before', // 逻辑运算符 AND/OR 换行位置：before=前换行 | after=后换行
   sqlNewlineBeforeSemicolon: false, // 分号是否独占一行
   sqlDenseOperators: false,         // 运算符两侧是否不加空格（a=b+1）

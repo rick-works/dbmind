@@ -219,7 +219,7 @@ import { saveBlobAs } from '../../utils/useExportTask'
 import { ArrowUp, ArrowDown, Refresh, Download, Operation, Sort, SortUp, SortDown, Loading,
          Histogram, Calendar, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { getQuerySettings, editorSettingsLive } from '../../utils/settings'
+import { getQuerySettings, querySettingsLive, editorSettingsLive } from '../../utils/settings'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { noSqlDocuments, cancelNoSql } from '../../api'
 import { t } from '../../utils/i18n'
@@ -243,6 +243,10 @@ const onExportCmd = (cmd) => { if (cmd === 'csv') exportCsv() }
 
 const page = ref(1)
 const size = ref(querySettings.pageSize || 200)
+// 设置页改了「每页条数」：还停在旧默认值就跟随（手动改过档位的不打扰）
+watch(() => querySettingsLive.value.pageSize, (nv, ov) => {
+  if (nv > 0 && size.value === ov) size.value = nv
+})
 const loading = ref(false)
 const result = ref({ rows: [], columns: [], message: '', notices: [], executeTime: 0 })
 const total = ref(0)
@@ -258,8 +262,9 @@ const formatElapsed = (ms) => {
 }
 
 const pageSizes = computed(() => {
+  const cur = querySettingsLive.value.pageSize
   const base = [...PAGE_SIZE_OPTIONS]
-  if (querySettings.pageSize > 0 && !base.includes(querySettings.pageSize)) base.unshift(querySettings.pageSize)
+  if (cur > 0 && !base.includes(cur)) base.unshift(cur)
   return base.sort((a, b) => a - b)
 })
 

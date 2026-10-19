@@ -1508,6 +1508,7 @@ async fn export_objects(
     };
 
     let mut exported = 0u64;
+    let mut skipped = 0u64;
     let mut unsupported: Option<&'static str> = None;
     for name in &names {
         task.check_canceled().map_err(XError::internal)?;
@@ -1538,9 +1539,25 @@ async fn export_objects(
         let schema = crate::api::meta::split_db_schema(database, dialect).1;
         match dialect.object_source(kind, name, schema.as_deref()) {
             Meta::Sql(sql) => {
-                let result = run_sql_in(state, conn, database, sql, 10).await?;
+                // 单个对象取不到定义**不能整份备份失败**：Oracle FREE 的 SYSTEM 里就有
+                // 几个出现在 user_views、但 dbms_metadata.get_ddl 明确报 ORA-31603 的对象
+                // （MVIEW_EVALUATIONS 等，真机实测），一遇到它整个备份就 0 字节收场，
+                // 用户拿不到任何东西。跳过并计入 notices —— 备份「少了什么」必须说清。
+                let result = match run_sql_in(state, conn, database, sql, 10).await {
+                    Ok(result) => result,
+                    Err(err) => {
+                        skipped += 1;
+                        notices.push(format!(
+                            "{label} {name} 的定义取不到（{}），已跳过",
+                            err.message.lines().next().unwrap_or_default()
+                        ));
+                        task.log(format!("{label} {name} 跳过：{}", err.message));
+                        continue;
+                    }
+                };
                 let definition = pick_ddl(&result);
                 if definition.trim().is_empty() {
+                    skipped += 1;
                     notices.push(format!("{label} {name} 的定义没取到，未导出"));
                     continue;
                 }
@@ -1552,6 +1569,11 @@ async fn export_objects(
             Meta::Absent => unsupported = Some("本类型没有这个概念"),
             Meta::Unwritten => unsupported = Some("本类型还没有实现定义导出"),
         }
+    }
+    if skipped > 0 {
+        notices.push(format!(
+            "{label}：{skipped} 个对象的定义取不到，已跳过（备份内容不完整）"
+        ));
     }
     if let Some(reason) = unsupported {
         notices.push(format!(

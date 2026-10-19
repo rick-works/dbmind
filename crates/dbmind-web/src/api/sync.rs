@@ -1977,6 +1977,11 @@ async fn sync_table_inner(
                 .and_then(|row| row.first())
                 .and_then(|cell| match cell {
                     CellValue::Integer(value) => Some(*value),
+                    // ClickHouse 的 count(*) 回来是**浮点**（Real）：只认 Integer 会把
+                    // 「空表」误判成「已有数据」，于是对一个空目标表报「无法按主键 upsert」
+                    // （真机：CH 同步到空表却被拒）。Text 兜住把计数渲染成字符串的驱动。
+                    CellValue::Real(value) => Some(*value as i64),
+                    CellValue::Text(text) => text.trim().parse::<i64>().ok(),
                     _ => None,
                 })
                 .unwrap_or(-1)

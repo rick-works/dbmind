@@ -24,6 +24,8 @@
 //! `.xls`（2003 的二进制 BIFF 格式）**不在支持范围**：它与 `.xlsx` 是两套东西，
 //! 解析它要另写一套记录级解析。收到时会明确说清并给出「另存为 .xlsx 或 CSV」的指引。
 
+use std::collections::HashMap;
+
 use axum::extract::{Multipart, Path, RawQuery, State};
 use axum::Json;
 use dbmind_core::{AccessContext, QueryOptions, QueryRequest};
@@ -151,6 +153,13 @@ pub async fn start(
                     .map_err(|err| err.message)?;
             }
 
+            // 按目标列类型给字面量：数值列不能加引号（Derby 直接拒），见 target_column_types
+            let type_map = target_column_types(&state, &id, &database, &table).await;
+            let types: Vec<Option<String>> = columns
+                .iter()
+                .map(|name| type_map.get(&name.to_ascii_lowercase()).cloned())
+                .collect();
+
             let multi_row = supports_multi_row(dialect);
             let batch = if multi_row { BATCH_ROWS } else { 1 };
             let mut written = 0u64;
@@ -160,7 +169,7 @@ pub async fn start(
                 task.check_canceled()?;
                 let end = (index + batch).min(rows.len());
                 let chunk = &rows[index..end];
-                let sql = build_insert(&target_name, &column_list, chunk, dialect, multi_row);
+                let sql = build_insert(&target_name, &column_list, &types, chunk, dialect, multi_row);
                 run_sql(&state, &id, &database, &sql).await.map_err(|err| {
                     // 报错要能定位到「哪一批」：几十万行的导入里，
                     // 只说「插入失败」等于什么也没说
@@ -283,6 +292,7 @@ fn supports_multi_row(dialect: Dialect) -> bool {
 fn build_insert(
     table: &str,
     column_list: &str,
+    types: &[Option<String>],
     rows: &[Vec<Option<String>>],
     dialect: Dialect,
     multi_row: bool,
@@ -290,9 +300,13 @@ fn build_insert(
     let tuple = |cells: &Vec<Option<String>>| {
         let values: Vec<String> = cells
             .iter()
-            .map(|cell| match cell {
+            .enumerate()
+            .map(|(index, cell)| match cell {
                 None => "null".to_string(),
-                Some(text) => dialect.literal(text),
+                Some(text) => {
+                    let target_type = types.get(index).and_then(|ty| ty.as_deref());
+                    literal_for_text(text, target_type, dialect)
+                }
             })
             .collect();
         format!("({})", values.join(", "))
@@ -308,6 +322,76 @@ fn build_insert(
             .unwrap_or_else(|| "(null)".to_string());
         format!("{head}{first}")
     }
+}
+
+/// 目标表的列类型（小写列名 → 类型名）。
+///
+/// 导入文件里的值天然都是文本，不能一律加引号：Derby 不做隐式转换
+/// （`Columns of type 'INTEGER' cannot hold values of type 'CHAR'`，真机 3 行全失败）。
+/// 取列元数据只为「按类型给字面量」，取不到就退回原来的全字符串写法（对多数库仍然可用）。
+async fn target_column_types(
+    state: &AppState,
+    id: &str,
+    database: &str,
+    table: &str,
+) -> HashMap<String, String> {
+    // 方言按连接自身类型定（import 的 URL 前缀是模块名，Doris 走的是 mysql 前缀，不能按前缀猜）
+    let Ok((_, dialect)) = crate::api::meta::ctx_of(state, id).await else {
+        return HashMap::new();
+    };
+    let Ok(target) = crate::api::scope::resolve(state, id, database).await else {
+        return HashMap::new();
+    };
+    let (_, schema) = crate::api::meta::split_db_schema(database, &dialect);
+    let engine = state.engine();
+    let table_owned = table.to_string();
+    let columns =
+        blocking(move || engine.list_columns_fresh_in(&target, &table_owned, schema.as_deref()))
+            .await;
+    match columns {
+        Ok(list) => list
+            .into_iter()
+            .filter_map(|column| {
+                column
+                    .type_name
+                    .map(|ty| (column.name.to_ascii_lowercase(), ty))
+            })
+            .collect(),
+        // 元数据拿不到不该让导入直接失败（有的类型对当前账号隐藏系统视图）——
+        // 退回文本字面量，让数据库自己判断能不能转换
+        Err(_) => HashMap::new(),
+    }
+}
+
+/// 一个**文本**值该写成什么字面量：数值列给裸数字，布尔列给方言认的布尔写法，其余加引号。
+fn literal_for_text(text: &str, target_type: Option<&str>, dialect: Dialect) -> String {
+    let Some(type_name) = target_type else {
+        return dialect.literal(text);
+    };
+    let trimmed = text.trim();
+    if Dialect::is_numeric_type(type_name) && is_numeric_literal(trimmed) {
+        return trimmed.to_string();
+    }
+    if Dialect::is_boolean_type(type_name) {
+        let truth = match trimmed.to_ascii_lowercase().as_str() {
+            "1" | "t" | "true" | "y" | "yes" => Some(true),
+            "0" | "f" | "false" | "n" | "no" => Some(false),
+            _ => None,
+        };
+        if let Some(truth) = truth {
+            return dialect.bool_literal(truth).to_string();
+        }
+    }
+    dialect.literal(text)
+}
+
+/// 严格一点的「这是个数字」判断：`parse::<f64>` 会接受 `NaN` / `inf`，那是**字符串**而不是
+/// SQL 数字字面量；也不收 `1,234`（CSV 里带千分位是文本，硬转成 1234 等于悄悄改数据）。
+fn is_numeric_literal(text: &str) -> bool {
+    if text.is_empty() {
+        return false;
+    }
+    text.parse::<f64>().map(|value| value.is_finite()).unwrap_or(false)
 }
 
 fn truncate(text: &str, limit: usize) -> String {

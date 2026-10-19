@@ -1344,6 +1344,9 @@ const save = async () => {
   saving.value = true
   try {
     await saveAiConfig(payload())
+    // 已经开着的 AI 面板只在 onMounted 拉过一次配置（aiReady / 模型列表）：
+    // 本地存完不广播，它就会一直按「未配置」不发请求，用户得关掉重开面板才生效
+    try { window.dispatchEvent(new CustomEvent('dbmind-ai-changed')) } catch { /* 非浏览器环境忽略 */ }
     ElMessage.success(t('settings.ai.msgSaved'))
   } catch (e) {
     console.error('保存配置异常:', e)
@@ -1360,6 +1363,7 @@ const testActiveModel = async () => {
   testingId.value = modelId
   try {
     await saveAiConfig(payload())
+    try { window.dispatchEvent(new CustomEvent('dbmind-ai-changed')) } catch { /* 忽略 */ }
     const res = await aiChat({ system: t('settings.ai.testPrompt'), prompt: 'ping', modelId })
     if (res && res.success) {
       // 模型会把它收到的测试提示原样回一句，所以这条提示本身也要跟着语言走 ——

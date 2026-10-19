@@ -292,6 +292,7 @@
         </div>
         <!-- 数据表格（模板里 ref 自动解包：editorSettings 已是设置对象，.value 反而是 undefined —— 真机崩过） -->
         <div v-if="result?.success && result?.rows?.length" class="data-table-wrap" ref="resultTableWrapRef" tabindex="0"
+             @paste="onResPaste"
              @scroll.passive="onResultTableScroll"
              @mousemove="onResultTableMove" @mousedown="onResultTableDown" @mouseleave="onResultTableLeave"
              @contextmenu.prevent="onResultGridContextMenu">
@@ -360,16 +361,22 @@
                      否则鼠标停在这里会被当成"某一格"（选框会以它为锚点）。 -->
                 <td v-if="resultColLead > 0" class="col-gap" :colspan="resultColLead"></td>
                 <td v-for="c in resultColsSlice" :key="'d' + (vtStart + idx) + '_' + c.idx"
-                    :class="[resultCellAlign(row[c.name], c.idx, c.name), { 'null-cell': row[c.name] == null, 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name), 'active-cell': resultActiveCell && resultActiveCell.rowIdx === (vtStart + idx) && resultActiveCell.col === c.name && noResultBulkSelection }]"
+                    :class="[resultCellAlign(row[c.name], c.idx, c.name), { 'null-cell': row[c.name] == null, 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name), 'active-cell': resultActiveCell && resultActiveCell.rowIdx === (vtStart + idx) && resultActiveCell.col === c.name && noResultBulkSelection, 'cell-editing': resEditing && resEditing.rowIdx === (vtStart + idx) && resEditing.col === c.name, 'cell-edited': isResCellEdited(vtStart + idx, c.name) }]"
                     :title="row[c.name] == null ? nullDisplay() : String(row[c.name])" :data-gkey="(vtStart + idx + 1) + ':' + c.idx"
                     @click="onResultCellClick(vtStart + idx, c.name)"
-                    @dblclick.stop="onCellQuickEdit(vtStart + idx, c.name, row)"
+                    @dblclick.stop="startResEdit(vtStart + idx, c.name, $event)"
                     @contextmenu.prevent.stop="onResultContextMenu($event, vtStart + idx, c.name)">
-                  <!-- v-memo：内容没变就跳过该格的 vnode 创建与 diff；memo key 用原始值，值变必重渲染
-                       （NULL 样式也在 key 里：设置页改样式能直接重渲染，不必重跑查询）。
-                       展示走 formatDbValue（ISO 时间戳的 T 换空格），原始值不动（复制/编辑仍拿原文） -->
+                  <!-- 双击 = 就地编辑（不弹窗），与「查看数据」页签的表格编辑同一套手感；
+                       Ctrl+V 的多行多列粘贴由容器上的 @paste 接管（见 onResPaste） -->
+                  <input v-if="resEditing && resEditing.rowIdx === (vtStart + idx) && resEditing.col === c.name"
+                         v-model="resEditing.value" class="cell-input"
+                         @keydown.enter.prevent="confirmResEdit({ dr: 1, dc: 0 })"
+                         @keydown.tab.prevent="confirmResEdit({ dr: 0, dc: $event.shiftKey ? -1 : 1 })"
+                         @keydown.esc.prevent.stop="cancelResEdit"
+                         @blur="confirmResEdit()" />
+                  <!-- 展示走 formatDbValue（ISO 时间戳的 T 换空格），原始值不动（复制/编辑仍拿原文） -->
                   <!-- ⚠️ 同 TableDataView：不要在这里加 v-memo（与分支切换冲突会让补丁抛 insertBefore 而失效） -->
-<span>{{ row[c.name] == null ? nullDisplay() : formatDbValue(row[c.name]) }}</span>
+<span v-else>{{ row[c.name] == null ? nullDisplay() : formatDbValue(row[c.name]) }}</span>
                 </td>
                 <!-- 右侧被回收的列：同上，占位撑宽 -->
                 <td v-if="resultColEnd < resultVisibleCols.length" class="col-gap"
@@ -397,7 +404,14 @@
              （事务模式开着就落在事务里；快照守卫保证翻页/重跑后的过期缓冲不会误提交） -->
         <div v-if="pendingEdits.length" class="edit-bar">
           <el-icon :size="14" color="var(--el-color-warning)"><EditPen /></el-icon>
-          <span class="edit-bar-text">{{ $t('sqlq.editsN', { n: pendingEdits.length }) }}</span>
+          <!-- 多表（JOIN）查询：改的是哪张表由用户定，放在底栏选，不再弹窗打断 -->
+          <template v-if="resEditTables.length > 1">
+            <span class="edit-bar-text">{{ $t('sqlq.editTarget') }}</span>
+            <el-select v-model="resEditTablePick" size="small" style="width:170px" filterable>
+              <el-option v-for="tb in resEditTables" :key="tb" :label="tb" :value="tb" />
+            </el-select>
+          </template>
+          <span class="edit-bar-text">{{ $t('sqlq.editsRowsN', { rows: pendingEdits.length, cells: pendingEditCells }) }}</span>
           <el-button size="small" type="primary" :loading="editsBusy" @click="commitEdits">{{ $t('sqlq.commitEdits') }}</el-button>
           <el-button size="small" :disabled="editsBusy" @click="discardEdits">{{ $t('sqlq.discardEdits') }}</el-button>
         </div>
@@ -588,7 +602,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, h } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { t, tMsg } from '../../utils/i18n'
 import VueMonacoEditor from '@guolao/vue-monaco-editor'
 import { ensureMonaco } from '../../utils/monaco'
@@ -598,7 +612,7 @@ import CellDetailDialog from '../../common/CellDetailDialog.vue'
 import DataPivotDialog from './DataPivotDialog.vue'
 import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
 import { exportData } from '../../api'
-import { ElMessage, ElMessageBox, ElSelect, ElOption } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { editorSettingsLive, getEditorSettings, getQuerySettings, querySettingsLive } from '../../utils/settings'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { getResolvedTheme, monacoTheme, onResolvedThemeChange } from '../../utils/theme'
@@ -751,14 +765,21 @@ const querySettings = getQuerySettings()
 const editorTheme = ref(monacoTheme())
 let offEditorTheme = null
 
-// 分页（默认每页行数取设置项t('settings.query.pageSize')）
-const pageSize = ref(querySettings.pageSize)
+// 分页（默认每页行数取设置项 t('settings.query.pageSize')）
+const pageSize = ref(querySettings.pageSize || 200)
 const currentPage = ref(1)
-// 分页选项：保证当前默认值始终可选，其余保留大数据量浏览档位
+// 分页选项：保证当前默认值始终可选，其余保留大数据量浏览档位。
+// 读**响应式**快照：设置页改完「每页条数」，下拉档位当场跟着变。
 const queryPageSizes = computed(() => {
+  const cur = querySettingsLive.value.pageSize
   const base = [...PAGE_SIZE_OPTIONS]
-  if (querySettings.pageSize > 0 && !base.includes(querySettings.pageSize)) base.unshift(querySettings.pageSize)
+  if (cur > 0 && !base.includes(cur)) base.unshift(cur)
   return base.sort((a, b) => a - b)
+})
+// 设置页改了「每页条数」：本页还停在**旧默认值**（没手动换过）就跟着换；
+// 用户已经在底栏手动选过档位的，保持他的选择不打断。
+watch(() => querySettingsLive.value.pageSize, (nv, ov) => {
+  if (nv > 0 && pageSize.value === ov) pageSize.value = nv
 })
 const elapsedTime = ref(0)
 let queryTimer = null
@@ -2005,97 +2026,149 @@ const quickEditTablesOf = () => {
   }
   return tables
 }
-const pickUpdateTable = (tables) => new Promise((resolve) => {
-  let sel = tables[0]
-  ElMessageBox({
-    title: t('sqlq.cellEditPickTitle'),
-    message: h('div', null, [
-      h('p', { style: 'margin:0 0 10px;font-size:12px;color:var(--dc-text-dim);line-height:1.6' }, t('sqlq.cellEditPickTip')),
-      h(ElSelect, {
-        modelValue: sel,
-        'onUpdate:modelValue': (v) => { sel = v },
-        style: 'width:100%', filterable: true
-      }, () => tables.map((tb) => h(ElOption, { key: tb, value: tb, label: tb })))
-    ]),
-    confirmButtonText: t('common.confirm'),
-    cancelButtonText: t('common.cancel'),
-    showCancelButton: true,
-    closeOnClickModal: false
-  }).then(() => resolve(sel)).catch(() => resolve(null))
+// 内联编辑态：{ rowIdx, col, value, initial }
+const resEditing = ref(null)
+// 多表（JOIN）时「这次改的是哪张表」：底栏下拉里选，默认第一张 —— 不再弹窗打断输入
+const resEditTablePick = ref('')
+const resEditTables = computed(() => {
+  void result.value // 结果换了要重算（SQL 是普通变量，靠 result 触发）
+  return quickEditTablesOf()
 })
-const sqlLiteralOf = (v) => {
-  if (v === null || v === undefined) return 'NULL'
-  if (typeof v === 'number') return String(v)
-  const s = String(v)
-  if (/^-?\d+(\.\d+)?$/.test(s)) return s
-  return `'${s.replace(/'/g, "''")}'`
+const resEditTable = computed(() => resEditTablePick.value || resEditTables.value[0] || '')
+// ⚠️ 这里**不能** watch(resEditTables)：watch 即使不 immediate，创建时也会跑一次 getter
+// （Vue 内部 oldValue = effect.run()），而 getter 会读 `lastExecSql` —— 那个变量在文件后面
+// 才声明，setup 期间读它就是 TDZ ReferenceError，整个查询页签直接挂掉（连 Monaco 都不出来）。
+// 改为「第一次真的要编辑时再落默认值」：见 ensureResEditTable()。
+const ensureResEditTable = () => {
+  const list = resEditTables.value
+  if (!resEditTablePick.value || !list.includes(resEditTablePick.value)) resEditTablePick.value = list[0] || ''
+  return resEditTablePick.value
 }
-const onCellQuickEdit = async (rowIdx, colName, row) => {
-  const tables = quickEditTablesOf()
-  if (!tables.length) { ElMessage.warning(t('sqlq.cellEditNoTable')); return }
-  let table = tables[0]
-  if (tables.length > 1) {
-    const picked = await pickUpdateTable(tables)
-    if (!picked) return
-    table = picked
+// 编辑框里的文本 → 提交值。空串 = NULL；"null" 也当 NULL（与旧弹窗一致）；
+// 其余保持**字符串原样**（不按列类型强转：结果集没有类型信息，且字符串在各方言里
+// 由数据库自己隐式转换 —— 强转反而会把 '00123' 这种前导零吃掉）
+const parseResCellValue = (raw) => {
+  const s = String(raw == null ? '' : raw)
+  if (s === '') return null
+  if (/^\s*null\s*$/i.test(s)) return null
+  return s
+}
+const resGroupOf = (rowIdx) => pendingEdits.value.find(g => g.rowIdx === rowIdx)
+// 该格是否已改（用于给单元格加底色，和「查看数据」页签的已修改标记一致）
+const isResCellEdited = (rowIdx, col) => {
+  const g = resGroupOf(rowIdx)
+  return !!(g && g.changes && col in g.changes)
+}
+// 改一个格：值写回行数据（立即看到），同时记进该行的改动组（提交时一条 UPDATE）
+const setResCellChange = (rowIdx, col, raw) => {
+  const row = result.value?.rows?.[rowIdx]
+  const table = resEditTable.value
+  if (!row || !table) return false
+  const v = parseResCellValue(raw)
+  const before = row[col] === undefined ? null : row[col]
+  let g = resGroupOf(rowIdx)
+  if (!g) {
+    if (v === before) return false
+    // original 必须在动 row 之前拍快照：WHERE 要用「改之前的原值」定位
+    g = { rowIdx, table, changes: {}, original: { ...row }, snapshot: result.value, rowsRef: result.value?.rows }
+    pendingEdits.value.push(g)
   }
-  const oldRaw = row[colName]
-  const oldShown = oldRaw == null ? nullDisplay() : String(formatDbValue(oldRaw))
-  let newVal = ''
-  try {
-    const r = await ElMessageBox.prompt(
-      `${table}.${colName} = ${oldRaw === null || oldRaw === undefined ? 'NULL' : oldShown}`,
-      t('sqlq.cellEditTitle'),
-      {
-        inputValue: oldRaw == null ? '' : String(formatDbValue(oldRaw)),
-        inputPlaceholder: t('sqlq.cellEditPh'),
-        confirmButtonText: t('sqlq.cellEditGen'),
-        cancelButtonText: t('common.cancel'),
-        closeOnClickModal: false
-      }
-    )
-    newVal = String(r.value ?? '').trim()
-  } catch { return }
-  if (newVal === oldShown) { ElMessage.info(t('sqlq.cellEditNoChange')); return }
-  const setLit = /^null$/i.test(newVal) ? 'NULL' : sqlLiteralOf(newVal)
-  const keys = Object.keys(row)
-  const whereParts = []
-  const pk = keys.find((k) => k.toLowerCase() === 'id')
-  if (pk) {
-    whereParts.push(`${pk} = ${sqlLiteralOf(row[pk])}`)
-  } else {
-    keys.forEach((k) => {
-      if (k === colName) return
-      const v = row[k]
-      if (v === null || v === undefined) whereParts.push(`${k} IS NULL`)
-      else whereParts.push(`${k} = ${sqlLiteralOf(v)}`)
-    })
-  }
-  if (!whereParts.length) { ElMessage.warning(t('sqlq.cellEditNoWhere')); return }
-  // 记入**编辑缓冲**：不立即执行，底栏出现「提交修改 / 放弃」。提交时批量执行
-  // （事务模式开着就落在事务里，由用户手动 COMMIT）。
-  const parsed = /^null$/i.test(newVal) ? null : (/^-?\d+(\.\d+)?$/.test(newVal) ? Number(newVal) : newVal)
-  pendingEdits.value.push({
-    rowIdx, colName, table,
-    setSql: `${colName} = ${setLit}`,
-    whereSql: whereParts.join('\n  AND '),
-    newParsed: parsed,
-    snapshot: result.value,
-    rowsRef: result.value?.rows
+  row[col] = v
+  if (v === g.original[col]) delete g.changes[col]
+  else g.changes[col] = v
+  if (!Object.keys(g.changes).length) pendingEdits.value = pendingEdits.value.filter(x => x !== g)
+  return true
+}
+// 双击（或右键「编辑此单元格」）：就在格子里编辑，不再弹窗
+const startResEdit = (rowIdx, col, event) => {
+  const row = result.value?.rows?.[rowIdx]
+  if (!row) return
+  if (!ensureResEditTable()) { ElMessage.warning(t('sqlq.cellEditNoTable')); return }
+  resultActiveCell.value = { rowIdx, col }
+  const raw = row[col]
+  resEditing.value = { rowIdx, col, value: raw == null ? '' : String(raw), initial: raw == null ? '' : String(raw) }
+  nextTick(() => {
+    // 取输入框走当前格子里那个（ref 在 v-for 里只会记最后一个，不能用来聚焦）
+    const fromCell = event && event.target && event.target.querySelector ? event.target.querySelector('.cell-input') : null
+    const input = fromCell || (resultTableWrapRef.value ? resultTableWrapRef.value.querySelector('input.cell-input') : null)
+    if (input) { input.focus(); input.select() }
   })
+}
+// move: Enter/Tab 提交后顺带移动活动格（Excel 习惯）；点别处（blur）只提交不移动
+const confirmResEdit = (move) => {
+  const e = resEditing.value
+  if (!e) return
+  resEditing.value = null
+  if (e.value !== e.initial) setResCellChange(e.rowIdx, e.col, e.value)
+  if (move) moveResultActive(move.dr, move.dc)
+}
+const cancelResEdit = () => { resEditing.value = null }
+// 从 Excel 粘贴：TSV，多行多列从当前活动格开始铺开；每格都记进缓冲，最后一次性提交。
+// 焦点在编辑框里时不接管（让浏览器把单格文本粘进输入框）。
+const onResPaste = (e) => {
+  if (resEditing.value) return
+  const text = e.clipboardData ? e.clipboardData.getData('text/plain') : ''
+  if (!text) return
+  const rows = result.value?.rows || []
+  const vis0 = resultVisibleCols.value
+  // 还没点过格子就粘贴：默认从第一行第一列开始，不要求先点一下
+  const a = resultActiveCell.value || (vis0.length ? { rowIdx: 0, col: vis0[0].name } : null)
+  if (!rows.length || !a) return
+  if (!ensureResEditTable()) { ElMessage.warning(t('sqlq.cellEditNoTable')); return }
+  e.preventDefault()
+  const block = String(text).replace(/\r\n?/g, '\n').replace(/\n+$/, '').split('\n').map(line => line.split('\t'))
+  const vis = resultVisibleCols.value
+  const c0 = resVisibleIdxOf(a.col)
+  if (c0 < 0) return
+  let n = 0
+  for (let ri = 0; ri < block.length; ri++) {
+    const row = rows[a.rowIdx + ri]
+    if (!row) break
+    for (let ci = 0; ci < block[ri].length; ci++) {
+      const vc = vis[c0 + ci]
+      if (!vc) break
+      if (setResCellChange(a.rowIdx + ri, vc.name, block[ri][ci])) n++
+    }
+  }
+  ElMessage.success(n ? t('sqlq.pastedCells', { n }) : t('sqlq.pastedSame'))
 }
 
 // ===== 编辑缓冲与提交（结果集直接编辑）=====
 // 快照守卫：编辑期间翻页/新查询/重排过（rows 数组被换掉）⇒ 行号不可信，提交直接拒绝。
 const pendingEdits = ref([])
 const editsBusy = ref(false)
-const discardEdits = () => { pendingEdits.value = [] }
+// 底栏显示「N 行 / M 处」
+const pendingEditCells = computed(() =>
+  pendingEdits.value.reduce((n, g) => n + Object.keys(g.changes || {}).length, 0))
+// 放弃：把行数据恢复成 original（只清缓冲会让界面留着"没提交的假值"）
+const discardEdits = () => {
+  for (const g of pendingEdits.value) {
+    const row = result.value?.rows?.[g.rowIdx]
+    if (!row) continue
+    for (const [col, v] of Object.entries(g.original || {})) row[col] = v
+  }
+  pendingEdits.value = []
+  resEditing.value = null
+}
+// 一行的 WHERE：有 id 列就按 id；否则用「本次没改动的列」原值拼 AND（NULL → IS NULL），
+// 保证只命中这一行（改过的列不能进 WHERE，否则用新值去匹配旧数据）
+const resWhereOf = (g) => {
+  const keys = Object.keys(g.original || {})
+  const idKey = keys.find(k => k.toLowerCase() === 'id')
+  if (idKey) return `${idKey} = ${resSqlVal(g.original[idKey])}`
+  const pick = (list) => list
+    .map(k => g.original[k] == null ? `${k} IS NULL` : `${k} = ${resSqlVal(g.original[k])}`)
+    .join('\n  AND ')
+  const rest = keys.filter(k => !(k in (g.changes || {})))
+  const parts = rest.length ? pick(rest) : pick(keys)
+  return parts
+}
 const commitEdits = async () => {
   if (editsBusy.value || !pendingEdits.value.length) return
   // 只读连接 / 生产保护：点击那一刻就拦下并弹右上角通知（与用户管理、表单同一闸门），
   // 不然只读数据源上点「提交修改」毫无反应 —— 后端拦了但这里把失败吞得无声无息
   await loadProtectProd()
-  if (!guardConnWrite(selectedConn.value || props.conn || {}, t('sqlq.commitEdits'))) return
+  if (!guardConnWrite(connForGuard.value, t('sqlq.commitEdits'))) return
   const first = pendingEdits.value[0]
   if (!first || result.value !== first.snapshot || result.value?.rows !== first.rowsRef) {
     ElMessage.warning(t('sqlq.editsStale'))
@@ -2106,9 +2179,17 @@ const commitEdits = async () => {
   const db = selectedSchema.value
     ? `${selectedDatabase.value}.${selectedSchema.value}`
     : selectedDatabase.value || undefined
+  // 每行一条 UPDATE（同一行的多列合成一条 SET），一次批量下发 ⇒ 一次提交多条
   const sqlText = pendingEdits.value
-    .map(e => `UPDATE ${e.table}\nSET ${e.setSql}\nWHERE ${e.whereSql};`)
+    .map(g => {
+      const sets = Object.entries(g.changes || {}).map(([col, v]) => `${col} = ${resSqlVal(v)}`).join(', ')
+      const where = resWhereOf(g)
+      if (!sets || !where) return ''
+      return `UPDATE ${g.table}\nSET ${sets}\nWHERE ${where};`
+    })
+    .filter(Boolean)
     .join('\n')
+  if (!sqlText) { ElMessage.warning(t('sqlq.cellEditNoWhere')); return }
   editsBusy.value = true
   try {
     execId.value = 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
@@ -2116,11 +2197,7 @@ const commitEdits = async () => {
     const results = (b && Array.isArray(b.results)) ? b.results : []
     const failed = results.find(r => !r.success)
     if (failed) { ElMessageBoxWithFix(failed.message || t('ai.runFailed')); return }
-    // 成功：新值写回行数据（界面立即更新），清空缓冲
-    for (const e of pendingEdits.value) {
-      const row = result.value?.rows?.[e.rowIdx]
-      if (row) row[e.colName] = e.newParsed
-    }
+    // 成功：新值早已写回行数据（编辑时就地更新），这里只清空缓冲
     pendingEdits.value = []
     ElMessage.success(t('sqlq.editsCommitted', { n: results.reduce((m, r) => m + (r.affectedRows || 0), 0) })
       + (txMode.value ? ' ' + t('sqlq.rememberCommit') : ''))
@@ -2718,7 +2795,7 @@ const onResultCtxItem = (item) => {
   switch (item.command) {
     case 'row-detail': if (rowIdx >= 0) openRowDetail(rowIdx); break
     case 'copy-cell': if (row) writeClipboard(val(row, col), t('sqlq.copyCell')); break
-    case 'cell-edit': if (row) onCellQuickEdit(rowIdx, col, row); break
+    case 'cell-edit': if (row) startResEdit(rowIdx, col, { target: resultTableWrapRef.value }); break
     case 'copy-sel': copyLikeCtrlC(); break
     case 'copy-col-header': copyColHeader(); break
     case 'copy-csv': copyResCtx('csv'); break
@@ -2825,6 +2902,14 @@ const loadingSchemas = ref(false)
 const tableNames = ref([]) // 当前库的表名缓存（用于编辑器补全）
 
 const selectedConn = computed(() => allConnections.value.find(c => String(c.id) === String(selectedConnId.value)))
+// 写操作闸门（只读 / 生产保护）用的连接对象：优先用**列表里最新的那条**。
+// props.conn 是页签创建时的快照 —— 用户在连接弹窗里把「只读」关掉后它不会变，
+// guardConnWrite 就会一直按 readOnly=true 拦人（真机反馈）。列表在收到
+// dbmind-conns-changed 时会重拉（见 onMounted），这里按 id 取到的就是新对象。
+const connForGuard = computed(() => selectedConn.value
+  || allConnections.value.find(c => String(c.id) === String(props.conn?.id))
+  || props.conn
+  || {})
 const connType = computed(() => selectedConn.value?.type || '')
 const isNoSql = computed(() => isNoSqlType(connType.value))
 // SQL 格式化方言：跟随当前连接类型自动识别（未知类型回退标准 SQL）
@@ -4467,7 +4552,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   // 在「生产库保护」开启时拦（保护关掉就放行 —— 开关在 设置 → 安全与会话）。
   if (isNoSql.value ? isWriteNoSql(execSql) : isWriteSql(execSql)) {
     await loadProtectProd()
-    if (!guardConnWrite(selectedConn.value || props.conn || {}, t('sqlq.writeAct'))) return
+    if (!guardConnWrite(connForGuard.value, t('sqlq.writeAct'))) return
   }
   // 危险 SQL 的二次确认原来在这里单弹一次（DELETE/DROP/TRUNCATE）；已并入上面的
   // 「写操作确认」—— 同一个开关下弹两个框没有意义，用户点两次"继续"才执行。
@@ -4854,6 +4939,8 @@ const loadAllConnections = async () => {
     allConnections.value = []
   }
 }
+// 连接被改过（只读/分组/主机…）：MainView 保存后会广播，这里重拉自己那份清单
+const onConnsChanged = () => { loadAllConnections() }
 
 // 切换连接（仅改编辑器自身上下文，不触发全局连接切换，避免 tab 被清空）
 const onConnChange = async (connId) => {
@@ -5214,6 +5301,9 @@ onMounted(() => {
   lastSavedSql.value = sql.value
   window.addEventListener('dc-insert-sql', onInsert)
   window.addEventListener('dc-run-sql', onRunSql)
+  // 连接被修改（只读/分组/主机…）：重拉本页签自己那份连接清单，
+  // 否则下拉里的连接对象一直是旧的（只读已关掉，这里还留着 true）
+  window.addEventListener('dbmind-conns-changed', onConnsChanged)
   loadAllConnections().then(() => {
     initSelectors().then(() => {
       // 新建脚本并要求自动执行（AI 结果里点「插入并执行」）：等筛选器就绪后再跑
@@ -5270,6 +5360,7 @@ onBeforeUnmount(() => {
   if (sqlChangeTimer) { clearTimeout(sqlChangeTimer); sqlChangeTimer = null }
   window.removeEventListener('dc-insert-sql', onInsert)
   window.removeEventListener('dc-run-sql', onRunSql)
+  window.removeEventListener('dbmind-conns-changed', onConnsChanged)
   window.removeEventListener('keydown', onResultKeyDown)
   window.removeEventListener('keydown', onEdCtxKeyDown, true)
   document.removeEventListener('mousedown', onDocResCtxClose)
@@ -5674,6 +5765,18 @@ onBeforeUnmount(() => {
 .data-table th.col-dragging { opacity: 0.5; }
 /* 行选中的填充与边线见上方「行 / 列选中」样式块（这里不能再写 background 简写，会清掉外沿线） */
 .data-table td.active-cell { outline: 2px solid var(--dc-primary); outline-offset: -2px; }
+/* 就地编辑（双击进入）：输入框铺满格子，与「查看数据」页签一致 */
+.data-table td.cell-editing { padding: 0; }
+.data-table td.cell-editing .cell-input {
+  width: 100%; height: 100%; box-sizing: border-box; border: none; outline: none;
+  padding: 0 9px; font: inherit; color: var(--dc-text); background: var(--dc-bg);
+}
+.data-table td.cell-edited { background: var(--dc-warning-wash, rgba(230,162,60,.14)); }
+.data-table td.cell-edited::after {
+  content: ''; position: absolute; top: 0; right: 0; width: 0; height: 0;
+  border-top: 7px solid var(--dc-warning, #e6a23c); border-left: 7px solid transparent;
+}
+.data-table td { position: relative; }
 .data-table-wrap:focus { outline: none; }
 .error-block { margin: 14px; padding: 14px 16px; background: var(--dc-danger-wash); border: 1px solid var(--dc-danger); border-radius: 8px; color: var(--dc-danger); font-size: 13px; line-height: 1.7; }
 .error-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }

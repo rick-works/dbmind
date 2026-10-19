@@ -693,6 +693,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.35（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.35</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-19</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>SQL 编辑器</b>：不写分号也能正确识别多条语句，光标所在语句有框线、点「执行」只执行这一段；存储过程、触发器、CTE、PG 美元引号函数等复杂 SQL 不再被切错</li>
+            <li><b>SQL 格式化</b>：语句之间的空行严格按设置生效（有没有分号都一样），多条语句逐条格式化，注释与分号不丢</li>
+            <li><b>连接与导入</b>：重新展开已打开的连接前会先校验，连不上立即提示并收起；文件导入按目标列类型写值（Derby 数值列不再失败），Derby 表可重命名；Oracle / DM 的搜索与 ER 图按模式查询，不再枚举全部模式</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.35" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.35" target="_blank" rel="noopener">下载 v1.2.35</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.34（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -700,7 +721,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.34</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-19</span>
           </div>
           <ul class="rel-notes">

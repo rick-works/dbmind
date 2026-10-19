@@ -553,6 +553,15 @@ impl Dialect {
         matches!(self.key(), "postgresql" | "kingbase" | "sqlserver" | "oracle")
     }
 
+    /// 树里「库」这一层装的其实就是**模式**（Oracle / DM：连接下直接列模式，没有服务名层）。
+    ///
+    /// 用途：接口只收到 `database=SYSTEM` 这种值、拆不出「库.模式」时，把它当模式用 ——
+    /// 否则搜索 / ER 图会退化成「枚举当前账号能看到的**所有**模式」，一行输入等 60 秒，
+    /// 结果还会混进别的模式的表（真机：Oracle SYSTEM 下搜一个表名要 63 秒）。
+    pub fn db_is_schema(&self) -> bool {
+        matches!(self.key(), "oracle")
+    }
+
     /// 这个类型的元数据 SQL 是「库内限定」的，执行前要补一句 `use [库];` 兜底
     /// （SQL Server 专属：影子连接负责落库，USE 是第二道保险 —— 防止执行落回主连接
     /// 时把默认库的表当成目标库的，两个库节点显示同一份清单，用户实测过）。
@@ -3263,6 +3272,10 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                     match self.key() {
                         // MySQL 系与 DB2 有各自的 RENAME TABLE
                         "mysql" | "mariadb" | "db2" => Meta::Sql(format!("rename table {t} to {n}")),
+                        // Derby **没有** `ALTER TABLE … RENAME TO`（真机：`Syntax error:
+                        // Encountered "rename" at line 1, column 26`），路由与 MySQL 一样是
+                        // 独立的 `RENAME TABLE old TO new`（真机验过：改名后新表可查、旧表消失）
+                        "derby" => Meta::Sql(format!("rename table {t} to {n}")),
                         // ClickHouse **没有** `ALTER TABLE … RENAME TO`：它会报
                         // `Code: 62 … Syntax error: failed at position N (to): to xxx. Expected COLUMN`
                         // （它的 ALTER TABLE RENAME 只认 `RENAME COLUMN old TO new`）。
@@ -3668,6 +3681,18 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// 而不是传一列 NULL 过去（那是静默的数据丢失）。
     pub fn is_binary_type(type_name: &str) -> bool {
         matches!(TypeFamily::parse(type_name), TypeFamily::Binary)
+    }
+
+    /// 该类型名是不是数值类（整型 / 定点 / 浮点）。
+    ///
+    /// 用途：文件导入（CSV/Excel）里的值天然都是**文本**。统一加引号在多数库上能被
+    /// 隐式转换，但 Derby 明确拒绝（`Columns of type 'INTEGER' cannot hold values of
+    /// type 'CHAR'`，真机导入 3 行全失败）—— 所以按目标列类型判断，数值列给裸数字。
+    pub fn is_numeric_type(type_name: &str) -> bool {
+        matches!(
+            TypeFamily::parse(type_name),
+            TypeFamily::Int { .. } | TypeFamily::Decimal { .. } | TypeFamily::Real
+        )
     }
 
     /// 该类型名是不是「真布尔」。

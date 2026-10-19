@@ -547,15 +547,25 @@ public final class Main {
             JsonObject result = new JsonObject();
             result.addProperty("autoCommit", session.connection().getAutoCommit());
             // 探针：JDBC 层状态之外，再到**同一条连接**上问一次服务端的 @@autocommit。
-            // 两者不一致 = 驱动只更新了本地状态（useLocalSessionState 类行为），事务模式就靠不住
-            try (java.sql.Statement st = session.connection().createStatement();
-                 java.sql.ResultSet rs = st.executeQuery("select @@autocommit, connection_id()")) {
-                if (rs.next()) {
-                    result.addProperty("serverAutocommit", rs.getInt(1));
-                    result.addProperty("probeConnId", rs.getString(2));
+            // 两者不一致 = 驱动只更新了本地状态（useLocalSessionState 类行为），事务模式就靠不住。
+            //
+            // 但 `select @@autocommit, connection_id()` 是 **MySQL 系专有语法**：在 PG 上它是
+            // 语法错，而 PG 里「事务里的语句出错」会立刻把整个事务标成 aborted —— 结果是
+            // 「开始事务」之后每条 SQL 都报 `current transaction is aborted`（真机复现）。
+            // 探针只是为了诊断，绝不能让它把用户的事务搞坏，所以只对 MySQL / MariaDB 执行。
+            String sessionUrl = session.url() == null ? "" : session.url();
+            boolean mysqlFamily = sessionUrl.startsWith("jdbc:mysql:")
+                    || sessionUrl.startsWith("jdbc:mariadb:");
+            if (mysqlFamily) {
+                try (java.sql.Statement st = session.connection().createStatement();
+                     java.sql.ResultSet rs = st.executeQuery("select @@autocommit, connection_id()")) {
+                    if (rs.next()) {
+                        result.addProperty("serverAutocommit", rs.getInt(1));
+                        result.addProperty("probeConnId", rs.getString(2));
+                    }
+                } catch (SQLException ignored) {
+                    // 探针失败不影响主流程（个别库没有这个变量）
                 }
-            } catch (SQLException ignored) {
-                // 探针失败不影响主流程（个别库没有这个变量）
             }
             return result;
         } catch (SQLException e) {

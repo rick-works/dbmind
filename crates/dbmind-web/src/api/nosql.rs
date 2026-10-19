@@ -93,6 +93,14 @@ pub async fn databases(
             keyspace
         })));
     }
+    // Mongo / Elasticsearch：没有「列库 SQL」，下面返回的单库名只是**占位**。
+    // 以前直接 200 返回 = 把「连不上」当成「连上了」：网络断了树照样展开、还能点开来看，
+    // 用户完全看不出问题（真机反馈：「不管什么原因，连接失败就不应该打开」）。
+    // 这里用内核的连接测试真连一次（各类型自实现，最轻的那条路），失败原样抛给界面。
+    let engine = state.engine();
+    let cfg = record.config.clone();
+    let read_only = record.read_only;
+    blocking(move || engine.test_config(&cfg, read_only)).await?;
     let name = record
         .config
         .database

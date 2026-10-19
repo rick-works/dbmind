@@ -11,9 +11,36 @@
  * 它只是**体验层**：真正的判定仍在后端 `SafetyPolicy::check`（设置可能刚被别处改过、
  * 脚本与 CLI 也能绕过界面），所以后端那道闸永远保留。
  */
-import { getSettings } from '../api'
+import { getSettings, listConnections } from '../api'
 import { t } from './i18n'
 import { showSafetyNotice, requestEditConn } from './safetyNotice'
+
+// ------------------------------------------------------------------ 连接最新快照
+// 页签 / 弹窗手里的 `conn` 往往是**打开那一刻**的快照（`props.conn`），连接弹窗改完
+// 「只读」不会让它们自动更新 —— 于是拦截判定还按旧值拦人：用户把只读关掉、回到已经开着的
+// 查询页签点「提交修改」，仍然弹「被只读连接拦下」（真机反馈）。
+// 这里维护一份按 id 索引的最新清单：MainView 保存连接后广播 dbmind-conns-changed，
+// 收到就重拉一次，拦截判定统一取最新对象（所有页签一起生效，不必每个组件各写一遍）。
+const liveConns = new Map()
+let liveLoading = null
+export const refreshLiveConns = () => {
+  if (liveLoading) return liveLoading
+  liveLoading = listConnections()
+    .then((list) => {
+      liveConns.clear()
+      for (const c of (Array.isArray(list) ? list : [])) liveConns.set(String(c.id), c)
+    })
+    .catch(() => { /* 取不到就维持旧快照：宁可多拦一次，也不放过只读库的写操作 */ })
+    .finally(() => { liveLoading = null })
+  return liveLoading
+}
+/** 这条连接的最新快照（不认识就原样退回）。 */
+export const connLatest = (conn) => (
+  conn && liveConns.has(String(conn.id)) ? liveConns.get(String(conn.id)) : conn
+)
+window.addEventListener('dbmind-conns-changed', () => { refreshLiveConns() })
+// 启动时先拉一次：页面打开期间连接可能已被其它窗口/页签改过
+refreshLiveConns()
 
 // 生产保护开关：与 MainView / 设置页同一套解析 —— 只有明确的 'false'/'0' 才算关
 // （缺省 = 开，与后端 storage.rs 的 seed_settings 一致）。
@@ -59,7 +86,9 @@ export const isProdConn = (conn) => {
  * 顺序：**先判生产保护、再判只读**。一个连接可能两者都占了 —— 只提示只读的话，
  * 用户照着通知关掉「只读」后下一次还是被拦（生产保护仍在），等于给了一条走不通的路。
  */
-export const guardConnWrite = (conn, act) => {
+export const guardConnWrite = (rawConn, act) => {
+  // 用最新快照判定：`rawConn` 可能是页签打开时的旧对象（只读已关掉，这里还留着 true）
+  const conn = connLatest(rawConn)
   const name = (conn && (conn.name || conn.label)) || ''
   if (protectProd && isProdConn(conn)) {
     showSafetyNotice(t('mv.blockProdDetail', { name, act }))
