@@ -419,6 +419,23 @@
     padding: 1px 7px; font-size: 13px; color: var(--accent);
     font-family: "SF Mono", ui-monospace, Consolas, monospace;
   }
+  /* 文档配图：卡片式，点开看原图 */
+  .doc-shot {
+    margin: 16px 0 20px; border: 1px solid var(--border); border-radius: 12px;
+    overflow: hidden; background: var(--bg-soft);
+    box-shadow: 0 12px 30px -20px rgba(0, 0, 0, .95);
+    transition: border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+  }
+  .doc-shot:hover {
+    border-color: rgba(79, 140, 255, .45); transform: translateY(-1px);
+    box-shadow: 0 16px 36px -20px rgba(0, 0, 0, .95);
+  }
+  .doc-shot a { display: block; line-height: 0; }
+  .doc-shot img { width: 100%; height: auto; display: block; }
+  .doc-shot figcaption {
+    padding: 9px 14px; font-size: 12.5px; line-height: 1.6; color: var(--dim);
+    border-top: 1px solid var(--border); background: rgba(148, 163, 184, .04);
+  }
   .doc-main pre {
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 16px 20px; overflow-x: auto; margin: 14px 0 18px; font-size: 13.5px; line-height: 1.8;
@@ -1706,6 +1723,7 @@
 
       <main class="doc-main">
         <h2 id="d-what">什么是 DBmind？</h2>
+        <figure class="doc-shot"><a href="images/home-dark.png" target="_blank" rel="noopener"><img src="images/home-dark.png" alt="首页：左侧连接树、右侧脚本页签，一个窗口管完所有库" loading="lazy" decoding="async"></a><figcaption>首页：左侧连接树、右侧脚本页签，一个窗口管完所有库</figcaption></figure>
         <p><b>DBmind = Database + Mind</b>：给数据库装上「大脑」的统一管理工作台。它把连接管理、SQL 编辑、数据表格、AI 助手、事务与安全护栏放进同一个客户端，开箱即用。</p>
         <p>DBmind 不绑定某一种数据库：MySQL、PostgreSQL、Oracle、SQL Server、ClickHouse、Redis、MongoDB、达梦、人大金仓等 17+ 种数据源共用一套操作习惯 —— 学一次，到处用。</p>
         <div class="tip"><b>提示</b>：一切数据都留在你自己的网络里，AI 调用只发送你显式选中的内容。</div>
@@ -1747,6 +1765,7 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
         </ul>
 
         <h2 id="d-editor">SQL 编辑器</h2>
+        <figure class="doc-shot"><a href="images/sql-editor-dark.png" target="_blank" rel="noopener"><img src="images/sql-editor-dark.png" alt="SQL 编辑器：补全、格式化、分块执行，结果与消息分栏" loading="lazy" decoding="async"></a><figcaption>SQL 编辑器：补全、格式化、分块执行，结果与消息分栏</figcaption></figure>
         <ul>
           <li><b>上下文补全</b>：按光标位置提示表 / 列 / 关键字，库结构变更实时刷新</li>
           <li><b>分块执行</b>：光标语句或选中片段单独跑；「执行全部」跑整篇脚本</li>
@@ -1755,6 +1774,7 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
         </ul>
 
         <h2 id="d-ai">AI 助手</h2>
+        <figure class="doc-shot"><a href="images/ai-assistant-dark.png" target="_blank" rel="noopener"><img src="images/ai-assistant-dark.png" alt="AI 助手：解释 / 优化 / 修错 / 诊断，给出的 SQL 可先看执行计划" loading="lazy" decoding="async"></a><figcaption>AI 助手：解释 / 优化 / 修错 / 诊断，给出的 SQL 可先看执行计划</figcaption></figure>
         <ul>
           <li><b>解释</b>：选中 SQL，让 AI 逐段讲清在做什么、影响哪些表</li>
           <li><b>优化</b>：给出改写建议与索引建议，可先看执行计划对比</li>
@@ -1787,6 +1807,7 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
         </ul>
 
         <h2 id="d-designer">表结构与对象</h2>
+        <figure class="doc-shot"><a href="images/table-designer-dark.png" target="_blank" rel="noopener"><img src="images/table-designer-dark.png" alt="表结构编辑：字段、索引、注释在表格里改，下方实时生成 ALTER" loading="lazy" decoding="async"></a><figcaption>表结构编辑：字段、索引、注释在表格里改，下方实时生成 ALTER</figcaption></figure>
         <ul>
           <li><b>字段表直接改</b>：字段名、类型、长度 / 精度、可空、默认值、注释、索引，改完在下方实时生成 <code>ALTER</code> 语句</li>
           <li><b>先预览再执行</b>：生成的是完整脚本（改类型 / 加列 / 删列 / 改默认值 / 改注释 / 重建索引），确认无误才落库</li>
@@ -1796,6 +1817,7 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
         </ul>
 
         <h2 id="d-users">用户与权限</h2>
+        <figure class="doc-shot"><a href="images/users-dark.png" target="_blank" rel="noopener"><img src="images/users-dark.png" alt="用户管理：用户 / 角色清单与分层权限矩阵，勾选即预览 GRANT / REVOKE" loading="lazy" decoding="async"></a><figcaption>用户管理：用户 / 角色清单与分层权限矩阵，勾选即预览 GRANT / REVOKE</figcaption></figure>
         <ul>
           <li><b>按引擎适配</b>：MySQL / PostgreSQL / SQL Server / Oracle / ClickHouse / H2 等给出各自的用户与角色清单；外部认证的引擎如实提示不可在这里管理</li>
           <li><b>分层权限矩阵</b>：全局、服务器、数据库、Schema、表、例程按引擎实际层级出现，一格一个权限</li>
@@ -1804,6 +1826,7 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
         </ul>
 
         <h2 id="d-monitor">监控与运维</h2>
+        <figure class="doc-shot"><a href="images/monitor-dark.png" target="_blank" rel="noopener"><img src="images/monitor-dark.png" alt="服务监控：会话、锁与库级指标，可疑会话就地终止" loading="lazy" decoding="async"></a><figcaption>服务监控：会话、锁与库级指标，可疑会话就地终止</figcaption></figure>
         <ul>
           <li><b>服务监控</b>：当前会话、锁等待与库级指标集中显示，可疑会话可就地终止；无监控接口的引擎直接说明</li>
           <li><b>备份 / 还原</b>：按引擎原生工具导出与恢复，进度与日志在任务中心</li>
@@ -1812,6 +1835,7 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
         </ul>
 
         <h2 id="d-er">ER 关系图</h2>
+        <figure class="doc-shot"><a href="images/er-diagram-dark.png" target="_blank" rel="noopener"><img src="images/er-diagram-dark.png" alt="ER 关系图：命名约定 + 外键推断，可拖拽布局并导出 PNG / SVG" loading="lazy" decoding="async"></a><figcaption>ER 关系图：命名约定 + 外键推断，可拖拽布局并导出 PNG / SVG</figcaption></figure>
         <ul>
           <li>库节点右键「查看 ER 图」：按命名约定（<code>_id</code> / <code>_no</code> / <code>_code</code> 等）与真实外键推断表间关系，没有外键的库也能画出骨架</li>
           <li>自动布局后可拖拽表卡片、滚轮缩放、空白处平移、按表 / 列搜索高亮</li>
@@ -1829,6 +1853,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-snippets">SQL 片段库</h2>
+        <figure class="doc-shot"><a href="images/scripts-dark.png" target="_blank" rel="noopener"><img src="images/scripts-dark.png" alt="脚本管理：常用 SQL 存成片段，随时调出" loading="lazy" decoding="async"></a><figcaption>脚本管理：常用 SQL 存成片段，随时调出</figcaption></figure>
         <ul>
           <li>选中 SQL → 工具栏「片段 → 存为片段」，命名保存（未选中存全文）</li>
           <li>跨会话保留在本地；点击插入：有选区替换选区，否则插到光标处</li>
@@ -1841,6 +1866,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-export">导出与传输</h2>
+        <figure class="doc-shot"><a href="images/data-transfer-dark.png" target="_blank" rel="noopener"><img src="images/data-transfer-dark.png" alt="导出与传输：格式和目标一次配好，长任务转后台" loading="lazy" decoding="async"></a><figcaption>导出与传输：格式和目标一次配好，长任务转后台</figcaption></figure>
         <ul>
           <li><b>导出格式</b>：CSV / Excel / JSON / INSERT 语句</li>
           <li><b>导入</b>：CSV / Excel 按目标列类型写值，日期、数值、空值各自转换</li>
@@ -1855,6 +1881,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-security">安全护栏</h2>
+        <figure class="doc-shot"><a href="images/settings-dark.png" target="_blank" rel="noopener"><img src="images/settings-dark.png" alt="设置中心：生产库保护、返回行数上限、AI 与外观" loading="lazy" decoding="async"></a><figcaption>设置中心：生产库保护、返回行数上限、AI 与外观</figcaption></figure>
         <ul>
           <li><b>PROD 标记</b>：生产连接显式标识，误操作前多看一眼</li>
           <li><b>写操作确认</b>：UPDATE / DELETE 执行前二次确认</li>
@@ -1868,6 +1895,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-audit">执行审计</h2>
+        <figure class="doc-shot"><a href="images/governance-dark.png" target="_blank" rel="noopener"><img src="images/governance-dark.png" alt="执行审计与数据治理：谁在什么时候执行了什么" loading="lazy" decoding="async"></a><figcaption>执行审计与数据治理：谁在什么时候执行了什么</figcaption></figure>
         <ul>
           <li>每条执行过的语句自动留痕：语句、目标库、耗时、成功与否</li>
           <li>事务的开启 / 提交 / 回滚同样留痕，可追溯</li>
