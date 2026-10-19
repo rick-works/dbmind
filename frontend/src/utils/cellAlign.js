@@ -1,98 +1,89 @@
 /**
- * 单元格对齐（按 Excel 规则）：
- *   - 数字（含「看起来是数字」的值）→ 右对齐
- *   - 日期 / 时间 → 右对齐（Excel 对日期同样右对齐）
- *   - 布尔（true/false）→ 居中
- *   - 文本、空值 → 左对齐（返回空串，走默认样式）
- *   - **NULL → 跟同列的真实值对齐**（见 [`columnAlignClasses`]）：值本身没有类型可判，
- *     只按字段类型判会与同列的值错位（用户反馈"null 和数字对齐呀"）
+ * 单元格对齐：**由列的数据类型（表头）决定靠左还是靠右**。
  *
- * 用法：`:class="[cellAlignClass(row[col]), { ...其它类 }]"`，配合
- *      `.data-table td.al-r { text-align: right }` / `.al-c { text-align: center }`。
+ *   - 数值类型（int / bigint / decimal / numeric / float / double / number / money / bit…）→ 右对齐
+ *   - 其余类型（字符、文本、JSON、二进制、布尔、日期时间…）→ 左对齐（返回空串，走默认样式）
+ *
+ * 两条明确的产品约定：
+ *   1. **不居中**：以前布尔值居中、`VARCHAR` 列里存成 `8888` 这种"看着像数字"的值也靠右，
+ *      结果同一列里 `user1` 靠左、`8888` 靠右，很乱；现在只认列类型，文本列一律靠左。
+ *   2. **同一列所有单元格（含 NULL）必须对齐一致**：所以网格里不要按单个单元格的值判，
+ *      统一用 [`columnAlignClasses`] 按列算一次、缓存住。
+ *
+ * 列类型拿不到时（SQL 结果集的查询端点经常不带 `columnTypes`）才退回"按值兜底"：
+ * 这一列的非空值多数像数字 → 右对齐，否则左对齐 —— 仍然是**整列**一个结论。
  */
+import { numericTypeHint } from './dbType'
 
 const NUM_RE = /^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/
-const DATE_RE = /^\d{4}[-/.]\d{1,2}([-/.]\d{1,2})?([ T]\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?)?$/
-const TIME_RE = /^\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?$/
 
 /**
- * 字段类型 → 对齐。值本身没有类型信息时用它（目前就是 NULL 单元格）：
- * 传入的是各库的原始类型串（INT / VARCHAR(50) / Nullable(Int32) / decimal(18,4)…），
- * 统一小写并剥掉括号后按关键字判断：
- *   - 布尔 → 居中；数字 / 日期时间 → 靠右；其余（字符、大对象、JSON…）→ 靠左（返回空串走默认值）
- * 边界判断用 (^|[^a-z]) 避免「point / varbit / char」里的 int、bit 被误命中。
+ * 字段类型 → 对齐类。
+ *
+ * 传入各库的原始类型串（`INT` / `VARCHAR(50)` / `Nullable(Int32)` / `LowCardinality(String)`…），
+ * 判定复用 `utils/dbType.js` 的 `numericTypeHint`（数值家族 → `true`，文本 / 时间 / 布尔 / 二进制 → `false`，
+ * 认不出来 → `null`）。认不出来的按左对齐处理，与「类型说不清就当文本」的直觉一致。
+ *
+ * @param {string} colType 原始类型串（可为空）
+ * @returns {''|'al-r'} `al-r` = 右对齐；`''` = 左对齐（默认样式）
  */
-export const alignByType = (colType) => {
-  const t = String(colType || '').toLowerCase().replace(/[()]/g, ' ')
-  if (!t.trim()) return ''
-  if (/bool|boolean/.test(t)) return 'al-c'
-  if (/(^|[^a-z])(u?int\d*|tinyint|smallint|mediumint|bigint|integer|serial\d*|bigserial|decimal|numeric|number|float\d*|double|real|money|smallmoney|year|bit)([^a-z]|$)/.test(t)) return 'al-r'
-  if (/date|time|interval/.test(t)) return 'al-r'
-  return ''
-}
+export const alignByType = (colType) => (numericTypeHint(colType) === true ? 'al-r' : '')
 
 /**
+ * 单个值的对齐（**优先看列类型**，只有类型认不出来时才按值兜底）。
+ *
+ * 网格里一般都改用 `columnAlignClasses` 的列级结论；这个函数留给"手里只有值"的场景
+ * （以及 `columnAlignClasses` 内部判定一列值的多数派）。
+ *
  * @param {*} v 单元格原始值
- * @param {string} [colType] 字段类型（原始类型串），值取不到时按它对齐
- * @returns {''|'al-r'|'al-c'} 对齐用的 class（'' = 左对齐，默认）
+ * @param {string} [colType] 字段类型（原始类型串）
+ * @returns {''|'al-r'}
  */
 export const cellAlignClass = (v, colType) => {
-  // NULL 没有值可判断，只好跟着字段类型走（数字 / 日期列的 NULL 同样靠右，与 Excel 一致），
-  // 不再一律居中 —— 一列里右对齐的数字中间夹几个居中的 NULL，看着很乱。
-  // ⚠️ 但只有字段类型**拿得到且认得**时这条才准：SQL 结果集常常没有列类型，
-  //    CHAR 列里还可能是 `02301` 这种"类型说文本、值像数字"的编码 —— 那两种情况下
-  //    这里会返回空串（左对齐），而同一列的值按值判成右对齐，于是同列里数字靠右、NULL 靠左。
-  //    所以**网格里 NULL 一律不要直接调本函数**，改用 columnAlignClasses（按列算一次、缓存住）。
-  if (v == null) return alignByType(colType)
-  if (typeof v === 'number' || typeof v === 'bigint') {
-    // NaN / Infinity 也归到数字一侧，与 Excel 一致
-    return 'al-r'
-  }
-  if (typeof v === 'boolean') return 'al-c'
+  const hint = numericTypeHint(colType)
+  // 类型说了算：文本列里的 `8888` 也必须靠左，数字列里的字符串 `'12'` 也必须靠右
+  if (hint !== null) return hint ? 'al-r' : ''
+  // 类型拿不到 / 认不出来：只能看值本身（布尔、空串、NULL 一律靠左）
+  if (v == null || typeof v === 'boolean') return ''
+  if (typeof v === 'number' || typeof v === 'bigint') return 'al-r'
   const s = String(v).trim()
   if (!s) return ''
-  // 数字 / 日期 / 时间一定以数字（或正负号、小数点）开头 ——
-  // 先用首字符挡掉绝大多数文本，省掉每格 3 次正则匹配
-  // （大表每次重绘上千个单元格，文本列占多数，这里是纯浪费）
+  // 数字一定以数字 / 正负号 / 小数点开头 —— 先用首字符挡掉绝大多数文本，
+  // 省掉每格一次正则（大表每次重绘上千个单元格）
   const c0 = s.charCodeAt(0)
   const numericHead = (c0 >= 48 && c0 <= 57) || c0 === 43 || c0 === 45 || c0 === 46
   if (!numericHead) return ''
-  if (NUM_RE.test(s)) return 'al-r'
-  if (DATE_RE.test(s) || TIME_RE.test(s)) return 'al-r'
-  return ''
+  return NUM_RE.test(s) ? 'al-r' : ''
 }
 
 /** 一列最多看多少个非空值来定调：够判断"这列整体怎么排"就行，不必扫完整列 */
 const SAMPLE_LIMIT = 200
 
 /**
- * 按列算 NULL 单元格该用的对齐（值本身仍走 [`cellAlignClass`]）。
+ * 按列算对齐类：**表头类型说了算**，类型拿不到时看这一列值的多数派。
  *
- * 为什么要按列算：NULL 没有值可判断，只按字段类型走会与同列的真值错位 ——
- *   · SQL 结果集的列类型经常拿不到（查询端点不带 columnTypes）→ 返回空串（左对齐），
- *     而同一列的值 `'02301'` 按"看着像数字"判成右对齐；
- *   · 表预览里 CHAR / VARCHAR 存的是 `02301` 这类编码，类型说"文本"（左）、值却像数字（右）。
- * 两种情况的观感都是"同一列里数字靠右、NULL 靠左"（用户反馈"null 和数字对齐呀"）。
+ * 为什么要按列算：
+ *   · 同一列里不能出现"值靠右、NULL 靠左"（用户反馈"null 和数字对齐呀"）；
+ *   · SQL 结果集经常没有 `columnTypes`，只能从值上推断，而且必须**整列**一个结论。
  *
- * 规则：列类型明确是数字 / 日期 → 靠右、布尔 → 居中（类型说了算）；
- * 类型拿不到或不认识时，看这一列**非空值**的多数派 —— 多数像数字 → 靠右，否则靠左。
+ * 规则：
+ *   1. 类型明确是数值 → `al-r`；类型明确不是数值（文本 / 日期 / 布尔 / 二进制…）→ `''` 左对齐；
+ *   2. 类型认不出来 → 数一下这一列非空值里"像数字"的占比，过半（严格大于一半）→ `al-r`，否则左对齐。
  *
  * **按列算一次、由调用方缓存在 computed 里**：表里 NULL 可能有上千个，
  * 每个格子现扫一遍自己那一列是 O(行数²)。
  *
  * @param {Array<object>} rows 已加载的行（桌面端是当前页，最多几百行）
  * @param {Array<{name: string, type?: string}>} cols 列（名字 + 原始类型串）
- * @returns {Object} 列名 → 对齐类（'' 表示左对齐，走默认样式）
+ * @returns {Object} 列名 → 对齐类（`''` 表示左对齐，走默认样式）
  */
 export const columnAlignClasses = (rows, cols) => {
   const map = Object.create(null)
   for (const c of cols || []) {
     const name = c && c.name
     if (!name) continue
-    // 类型说了算（数字 / 日期 / 布尔）
-    const byType = alignByType(c.type)
-    if (byType) { map[name] = byType; continue }
-    // 类型没有或不认识 → 看这一列的值怎么排
+    const hint = numericTypeHint(c.type)
+    if (hint !== null) { map[name] = hint ? 'al-r' : ''; continue }
     let seen = 0
     let numeric = 0
     for (const r of rows || []) {

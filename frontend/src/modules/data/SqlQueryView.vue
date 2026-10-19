@@ -626,7 +626,7 @@ import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
 import { useExcelSelection } from '../../utils/excelSelection'
-import { cellAlignClass, columnAlignClasses } from '../../utils/cellAlign'
+import { columnAlignClasses } from '../../utils/cellAlign'
 import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
@@ -737,11 +737,15 @@ const resultNullAlign = computed(() =>
   )
 )
 /**
- * 单元格对齐：值按值判（Excel 规则）；NULL 没有值可判 → 跟着这一列的值整体怎么排。
- * @param v 原始值；ci 列下标（取后端列类型用）；name 列名（查上面的缓存）
+ * 单元格对齐：**整列一个结论**（表头字段类型说了算：数值靠右、其余靠左，不再居中）。
+ *
+ * 不再按单个值判 —— 以前 `VARCHAR` 列里存成 `8888` 这种"看着像数字"的值会单独靠右，
+ * 同一列里 `user1` 靠左、`8888` 靠右，很乱；NULL 也跟这一列走，不会一半左一半右。
+ * @param _v 原始值（未使用，保留形参以匹配模板里的调用）
+ * @param _ci 列下标（未使用，列级结论已经算好）
+ * @param name 列名（查上面的列级缓存）
  */
-const resultCellAlign = (v, ci, name) =>
-  v == null ? (resultNullAlign.value[name] || '') : cellAlignClass(v, resultTypeOf(ci))
+const resultCellAlign = (_v, _ci, name) => resultNullAlign.value[name] || ''
 // 多段 SQL 结果：一次执行返回多条结果集时，以「结果1/结果2…」tab 逐条展示
 const resultItems = ref([]) // [{ label, res }]
 const activeResultIdx = ref(0)
@@ -5730,15 +5734,16 @@ onBeforeUnmount(() => {
 .data-table tbody tr:hover td { background-color: var(--dc-primary-wash); }
 /* NULL：灰 + 斜体，明显区别于真实数据。
    对齐不在这里定死 —— 跟着字段类型走（见 utils/cellAlign.js 的 alignByType），
-   所以下面的 .al-r / .al-c 必须写在本条之后，靠后者压住它 */
+   所以下面的 .al-r 必须写在本条之后，靠后者压住它 */
 .data-table td.null-cell {
   color: var(--dc-text-weak, var(--dc-text-dim));
   font-style: italic;
 }
-/* Excel 对齐规则：数字 / 日期右对齐、布尔居中（判定见 utils/cellAlign.js）；
-   NULL 单元格按字段类型拿到同样的类，于是和同列的真实值对齐一致 */
+/* 对齐只认表头字段类型：数值右对齐、其余（文本 / 日期 / 布尔 / 二进制）左对齐，不居中
+   （判定见 utils/cellAlign.js）；NULL 与同列其它单元格共用同一个列级结论。
+   就地编辑用的是原生 input（不继承 text-align），这里显式跟上，编辑框才和单元格同一侧 */
 .data-table td.al-r { text-align: right; }
-.data-table td.al-c { text-align: center; }
+.data-table td.al-r .cell-input { text-align: right; }
 /* 结果表首列复选框列：提高选择器优先级覆盖 .data-table th/td 的 padding 与 line-height，
    否则复选框会停在 34px 行高的基线上，看起来偏上（没居中） */
 .row-sel-col { width: 40px; }

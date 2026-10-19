@@ -315,7 +315,7 @@ import { useExportTask, saveExportBlob } from '../../utils/useExportTask'
 import { getQuerySettings } from '../../utils/settings'
 import { useShortcutScope } from '../../utils/useShortcuts'
 import { useExcelSelection } from '../../utils/excelSelection'
-import { cellAlignClass, columnAlignClasses } from '../../utils/cellAlign'
+import { columnAlignClasses } from '../../utils/cellAlign'
 import { rowWindow } from '../../utils/rowWindow'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import { quoteStyleOf } from '../../types'
@@ -539,9 +539,11 @@ const displayRows = computed(() => rows.value.filter(r => !deletedRids.value.has
 const nullAlignMap = computed(() =>
   columnAlignClasses(displayRows.value, visibleColumns.value.map((name) => ({ name, type: colTypeMap.value[name] })))
 )
-/** 单元格对齐：值按值判（Excel 规则）；NULL 跟这一列的值整体怎么排 */
-const cellAlignOf = (v, col) =>
-  v == null ? (nullAlignMap.value[col] || '') : cellAlignClass(v, colTypeMap.value[col])
+/**
+ * 单元格对齐：**整列一个结论**（表头字段类型说了算：数值靠右、其余靠左，不再居中）。
+ * 不再按单个值判 —— 文本列里 `8888` 这种"看着像数字"的值不再单独靠右，NULL 也跟着整列走。
+ */
+const cellAlignOf = (_v, col) => nullAlignMap.value[col] || ''
 
 // _rid → displayRows 下标，供拖选时由 DOM 行反查（O(1)）。
 // 以前每次 mousemove 都 findIndex 扫全表，上万行时一次拖选就是几十万次比较
@@ -3125,19 +3127,17 @@ useShortcutScope(rootRef, {
 .sort-chip:hover { text-decoration: underline; }
 /* NULL：灰 + 斜体，明显区别于真实数据。
    对齐不在这里定死 —— 跟着字段类型走（见 utils/cellAlign.js 的 alignByType），
-   所以下面的 .al-r / .al-c 必须写在本条之后，靠后者压住它。
+   所以下面的 .al-r 必须写在本条之后，靠后者压住它。
    注意选择器要写成 .data-table td.null-cell，否则被 .data-table td 的 color 压住不生效 */
 .data-table td.null-cell {
   color: var(--dc-text-weak, var(--dc-text-dim));
   font-style: italic;
 }
-/* Excel 对齐规则：数字 / 日期右对齐、布尔居中（判定见 utils/cellAlign.js）；
-   NULL 单元格按字段类型拿到同样的类，于是和同列的真实值对齐一致。
+/* 对齐只认表头字段类型：数值右对齐、其余（文本 / 日期 / 布尔 / 二进制）左对齐，不居中
+   （判定见 utils/cellAlign.js）；NULL 与同列其它单元格共用同一个列级结论。
    编辑框跟随单元格对齐，改数字时也是右对齐 */
 .data-table td.al-r { text-align: right; }
-.data-table td.al-c { text-align: center; }
-.data-table td.al-r .cell-input,
-.data-table td.al-c .cell-input { text-align: inherit; }
+.data-table td.al-r .cell-input { text-align: right; }
 
 .data-table-wrap { height: 100%; overflow: auto; contain: layout paint; overflow-anchor: none; }
 .data-table-wrap:focus { outline: none; }

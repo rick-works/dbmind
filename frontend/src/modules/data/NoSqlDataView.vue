@@ -224,7 +224,7 @@ import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { noSqlDocuments, cancelNoSql } from '../../api'
 import { t } from '../../utils/i18n'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
-import { cellAlignClass, columnAlignClasses } from '../../utils/cellAlign'
+import { columnAlignClasses } from '../../utils/cellAlign'
 import { rowWindow } from '../../utils/rowWindow'
 import { useExcelSelection } from '../../utils/excelSelection'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
@@ -286,20 +286,17 @@ const rows = ref([]) // 当前行数据（带身份）；展示层是 displayRow
 const hiddenRows = ref(new Set())
 const displayRows = computed(() => rows.value.filter(r => !hiddenRows.value.has(r._rid)))
 /**
- * 单元格对齐：与结果表格 / 表预览同一套口径（Excel：数字/日期靠右、布尔居中、文本靠左）。
+ * 单元格对齐：与结果表格 / 表预览同一套口径（表头字段类型：数值靠右、其余靠左，不居中）。
  *
- * 本视图原先没有任何对齐类 —— 一律左对齐。同屏对比另外两个网格（数字都靠右）就显出不一致了，
- * 用户要求一并统一。NoSQL 的列没有字段类型（文档结构是动态的），所以列类型一律留空，
- * 完全按**这一列的值**判：这正是 columnAlignClasses 在类型拿不到时的那条分支。
- *
- * NULL 也一样：没有值可判，就跟这一列的多数派对齐（见 utils/cellAlign.columnAlignClasses），
- * 不然一列里数字靠右、NULL 靠左的错位会重演一遍。
+ * NoSQL 的列没有字段类型（文档结构是动态的），所以列类型一律留空 —— 走
+ * `columnAlignClasses` 里"类型拿不到就看这一列值多数派"那条分支，仍然是**整列一个结论**：
+ * 不会再出现同一列里值靠右、NULL 靠左的错位。
  */
 const nullAlignMap = computed(() =>
   columnAlignClasses(displayRows.value, visibleColumns.value.map((name) => ({ name })))
 )
-/** 单元格对齐：值按值判；NULL 跟这一列的值整体怎么排 */
-const cellAlignOf = (v, col) => (v == null ? (nullAlignMap.value[col] || '') : cellAlignClass(v, ''))
+/** 单元格对齐：整列一个结论（数值靠右、其余靠左） */
+const cellAlignOf = (_v, col) => nullAlignMap.value[col] || ''
 let ridSeq = 0
 const nextRid = () => 'r' + (++ridSeq)
 const rowIndex = (row) => row._idx
@@ -1900,10 +1897,9 @@ onBeforeUnmount(() => {
   color: var(--dc-text-weak, var(--dc-text-dim));
   font-style: italic;
 }
-/* Excel 对齐规则：数字 / 日期右对齐、布尔居中（判定见 utils/cellAlign.js）；
-   NULL 单元格按列拿到同一套类，于是和同列的真实值对齐一致 */
+/* 对齐只认表头字段类型：数值右对齐、其余（文本 / 日期 / 布尔 / 二进制）左对齐，不居中
+   （判定见 utils/cellAlign.js）；NoSQL 没有字段类型，按列值多数派定，整列一个结论 */
 .data-table td.al-r { text-align: right; }
-.data-table td.al-c { text-align: center; }
 .data-table tbody tr { cursor: pointer; }
 /* 斑马纹按真实行号而非 DOM 奇偶：窗口化渲染会插占位行，nth-child 会错位 */
 .data-table tbody tr.row-alt td { background-color: var(--dc-bg-soft); }
