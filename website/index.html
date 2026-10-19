@@ -520,12 +520,12 @@
 <div class="sources reveal">
   <div class="sources-label">— 开箱即用的数据源 —</div>
   <div class="source-chips">
-    <span class="chip">MySQL</span><span class="chip">PostgreSQL</span><span class="chip">Oracle</span>
-    <span class="chip">SQL Server</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
-    <span class="chip">MariaDB</span><span class="chip">达梦 DM</span><span class="chip">人大金仓</span>
-    <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
-    <span class="chip">DB2</span><span class="chip">Derby</span><span class="chip">Doris</span>
-    <span class="chip">SQLite</span><span class="chip">H2</span><span class="chip">DuckDB</span>
+    <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">PostgreSQL</span>
+    <span class="chip">人大金仓</span><span class="chip">Oracle</span><span class="chip">SQL Server</span>
+    <span class="chip">DB2</span><span class="chip">Derby</span><span class="chip">H2</span>
+    <span class="chip">达梦 DM</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
+    <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">Redis</span>
+    <span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
     <span class="chip">更多接入中…</span>
   </div>
 </div>
@@ -577,9 +577,45 @@
         <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
+        <div class="icon">🧱</div>
+        <h3>表结构与对象编辑</h3>
+        <p>字段类型、默认值、注释、索引在表格里直接改，<b>执行前先看到完整的 ALTER</b>；视图、存储过程、函数、触发器、事件可查看 DDL 并转成 ALTER 继续编辑。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">🧑‍💼</div>
+        <h3>用户与权限管理</h3>
+        <p>用户 / 角色清单按引擎适配，权限按「全局 / 服务器 / 库 / 模式 / 表 / 例程」分层勾选；每一次勾选都预览精确的 <code>GRANT</code> / <code>REVOKE</code> 差量，提交时只发变化的部分。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">📈</div>
+        <h3>服务监控</h3>
+        <p>会话、锁与库级指标集中看，可疑会话就地终止；不提供监控接口的引擎会如实说明，不给你画一张空图。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">🗺️</div>
+        <h3>ER 关系图</h3>
+        <p>用命名约定 + 真实外键推断表间关系，自动布局后可拖拽调整、滚轮缩放，一键导出 PNG / SVG 贴进设计文档。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">🔀</div>
+        <h3>数据对比与传输</h3>
+        <p>两个连接之间先比对结构与数据差异，再按向导把选中的表 / 对象传到目标库；跨环境搬数据不用再拼脚本。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
         <div class="icon">📊</div>
-        <h3>数据透视与传输</h3>
+        <h3>数据透视与导出</h3>
         <p>框选即汇总（计数/求和/均值/最值）、分组下钻透视；导出 CSV / Excel / JSON / INSERT，长任务后台跑、完成系统通知。</p>
+        <a class="doc-link" href="#docs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon">🔌</div>
+        <h3>驱动与运维工具</h3>
+        <p>驱动按需从 Maven 下载并显示实时进度，内网可指向私有镜像；备份还原、生成测试数据、全局对象搜索都在同一个工作台里。</p>
         <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
     </div>
@@ -714,7 +750,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.34（最新） -->
+      <!-- v1.2.34 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -736,7 +772,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.33（最新） -->
+      <!-- v1.2.33 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -758,7 +794,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.32（最新） -->
+      <!-- v1.2.32 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -780,7 +816,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.31（最新） -->
+      <!-- v1.2.31 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -802,7 +838,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.30（最新） -->
+      <!-- v1.2.30 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -824,7 +860,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.29（最新） -->
+      <!-- v1.2.29 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -844,7 +880,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.28（最新） -->
+      <!-- v1.2.28 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -864,7 +900,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.27（最新） -->
+      <!-- v1.2.27 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -886,7 +922,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.26（最新） -->
+      <!-- v1.2.26 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -906,7 +942,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.25（最新） -->
+      <!-- v1.2.25 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -926,7 +962,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.24（最新） -->
+      <!-- v1.2.24 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -946,7 +982,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.23（最新） -->
+      <!-- v1.2.23 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -966,7 +1002,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.22（最新） -->
+      <!-- v1.2.22 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -989,7 +1025,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.21（最新） -->
+      <!-- v1.2.21 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -1010,7 +1046,7 @@
           </div>
         </div>
       </article>
-      <!-- v1.2.20（最新） -->
+      <!-- v1.2.20 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
@@ -1637,6 +1673,10 @@
           <a href="#d-grid">结果表格与数据编辑</a>
           <a href="#d-tx">事务模式</a>
           <a href="#d-browser">对象浏览器</a>
+          <a href="#d-designer">表结构与对象</a>
+          <a href="#d-users">用户与权限</a>
+          <a href="#d-monitor">监控与运维</a>
+          <a href="#d-er">ER 关系图</a>
         </div>
         <div class="group">
           <div class="gt">效率工具</div>
@@ -1644,6 +1684,7 @@
           <a href="#d-snippets">SQL 片段库</a>
           <a href="#d-pivot">数据透视</a>
           <a href="#d-export">导出与传输</a>
+          <a href="#d-compare">数据对比与传输</a>
         </div>
         <div class="group">
           <div class="gt">安全与运维</div>
@@ -1677,6 +1718,10 @@
           <div class="fcard"><b>✏️ 结果集直接编辑</b><span>双击改值、缓冲提交，快照守卫绝不改错行。</span></div>
           <div class="fcard"><b>⚡ 千万级结果集</b><span>虚拟滚动 + 服务端分页 + 18× 压缩，首屏 &lt;1s。</span></div>
           <div class="fcard"><b>📊 透视与导出</b><span>框选即汇总、分组下钻；CSV / Excel / JSON / INSERT 导出。</span></div>
+          <div class="fcard"><b>🧱 表结构与对象</b><span>字段 / 索引 / 注释直接改，执行前先看完整 ALTER；视图、过程、触发器可转 ALTER 编辑。</span></div>
+          <div class="fcard"><b>🧑‍💼 用户与权限</b><span>用户 / 角色按引擎适配，权限分层勾选，勾一次即预览 GRANT / REVOKE 差量。</span></div>
+          <div class="fcard"><b>🗺️ ER 关系图</b><span>命名约定 + 真外键推断关系，拖拽缩放，导出 PNG / SVG。</span></div>
+          <div class="fcard"><b>📈 监控与运维</b><span>会话 / 锁 / 指标，终止会话；备份还原、生成测试数据、全局对象搜索。</span></div>
         </div>
 
         <h2 id="d-install">下载与安装</h2>
@@ -1736,8 +1781,41 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
 
         <h2 id="d-browser">对象浏览器</h2>
         <ul>
-          <li>左侧树按「连接 → 数据库 → Schema → 表 / 视图」展开</li>
+          <li>左侧树按「连接 → 数据库 → Schema → 表 / 视图 / 存储过程」展开，懒加载不卡顿</li>
           <li>表结构、索引、DDL 一键查看；双击表名插入编辑器</li>
+          <li>右键菜单按对象给动作：查看数据 / 查看 DDL / 编辑结构 / 重命名 / 删除 / 查看 ER 图</li>
+        </ul>
+
+        <h2 id="d-designer">表结构与对象</h2>
+        <ul>
+          <li><b>字段表直接改</b>：字段名、类型、长度 / 精度、可空、默认值、注释、索引，改完在下方实时生成 <code>ALTER</code> 语句</li>
+          <li><b>先预览再执行</b>：生成的是完整脚本（改类型 / 加列 / 删列 / 改默认值 / 改注释 / 重建索引），确认无误才落库</li>
+          <li><b>改动有标记</b>：修改行、新增行各自高亮，选中行整行染蓝，长表也不会改错行</li>
+          <li><b>对象编辑</b>：视图、存储过程、函数、触发器、事件右键「编辑」，取回定义转成 <code>ALTER</code> 送进编辑器（按连接方言自动格式化）</li>
+          <li>不支持的能力（如部分引擎的字段改名、表选项）会置灰并说明原因，不让人填完才报错</li>
+        </ul>
+
+        <h2 id="d-users">用户与权限</h2>
+        <ul>
+          <li><b>按引擎适配</b>：MySQL / PostgreSQL / SQL Server / Oracle / ClickHouse / H2 等给出各自的用户与角色清单；外部认证的引擎如实提示不可在这里管理</li>
+          <li><b>分层权限矩阵</b>：全局、服务器、数据库、Schema、表、例程按引擎实际层级出现，一格一个权限</li>
+          <li><b>勾选即预览差量</b>：底部 SQL 预览只显示「这一次改动」的 <code>GRANT</code> / <code>REVOKE</code>，取消勾选立刻变成对应撤销语句</li>
+          <li><b>只提交变化</b>：点「保存修改」只发差异部分，没动过的授权不受影响</li>
+        </ul>
+
+        <h2 id="d-monitor">监控与运维</h2>
+        <ul>
+          <li><b>服务监控</b>：当前会话、锁等待与库级指标集中显示，可疑会话可就地终止；无监控接口的引擎直接说明</li>
+          <li><b>备份 / 还原</b>：按引擎原生工具导出与恢复，进度与日志在任务中心</li>
+          <li><b>生成测试数据</b>：按列类型批量造数，写进临时表或指定表，调性能不用等业务造数</li>
+          <li><b>对象搜索</b>：不用一层层展开，直接在整个连接里搜表 / 视图 / 存储过程</li>
+        </ul>
+
+        <h2 id="d-er">ER 关系图</h2>
+        <ul>
+          <li>库节点右键「查看 ER 图」：按命名约定（<code>_id</code> / <code>_no</code> / <code>_code</code> 等）与真实外键推断表间关系，没有外键的库也能画出骨架</li>
+          <li>自动布局后可拖拽表卡片、滚轮缩放、空白处平移、按表 / 列搜索高亮</li>
+          <li>一键导出 PNG / SVG，直接贴进设计文档</li>
         </ul>
 
         <h2 id="d-vars">模板变量</h2>
@@ -1765,8 +1843,15 @@ WHERE dt = :dt AND org = :org;</code></pre>
         <h2 id="d-export">导出与传输</h2>
         <ul>
           <li><b>导出格式</b>：CSV / Excel / JSON / INSERT 语句</li>
+          <li><b>导入</b>：CSV / Excel 按目标列类型写值，日期、数值、空值各自转换</li>
           <li><b>长任务后台跑</b>：大数据量导出不占界面，完成系统通知</li>
-          <li><b>结构 / 数据传输与对比</b>：跨库搬表、差异比对</li>
+        </ul>
+
+        <h2 id="d-compare">数据对比与传输</h2>
+        <ul>
+          <li><b>数据对比</b>：选源表与目标表，先看结构差异（列 / 类型 / 索引），再看数据差异，逐行确认</li>
+          <li><b>数据传输</b>：向导式把选中的表与对象传到目标库，先出计划再执行，长任务进任务中心</li>
+          <li>跨环境同步（开发 → 测试 → 生产）不用再手工拼脚本，生产连接上的写入仍受 PROD 保护</li>
         </ul>
 
         <h2 id="d-security">安全护栏</h2>
@@ -1817,10 +1902,15 @@ WHERE dt = :dt AND org = :org;</code></pre>
         <a href="#d-grid">结果表格与数据编辑</a>
         <a href="#d-tx">事务模式</a>
         <a href="#d-browser">对象浏览器</a>
+        <a href="#d-designer">表结构与对象</a>
+        <a href="#d-users">用户与权限</a>
+        <a href="#d-monitor">监控与运维</a>
+        <a href="#d-er">ER 关系图</a>
         <a href="#d-vars">模板变量</a>
         <a href="#d-snippets">SQL 片段库</a>
         <a href="#d-pivot">数据透视</a>
         <a href="#d-export">导出与传输</a>
+        <a href="#d-compare">数据对比与传输</a>
         <a href="#d-security">安全护栏</a>
         <a href="#d-drivers">驱动管理</a>
         <a href="#d-audit">执行审计</a>
