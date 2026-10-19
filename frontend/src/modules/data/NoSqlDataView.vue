@@ -1828,7 +1828,9 @@ onBeforeUnmount(() => {
   position: relative;
   background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
   /* 右侧多留 26px 给绝对定位的排序图标，字段名省略号在图标前收住（窄列不重叠） */
-  padding: 5px 26px 5px 10px; height: auto; line-height: 1.3; vertical-align: middle;
+  /* 上下内边距刻意不对称（上 4 / 下 6）：底部压着 2px 表头分隔线，
+     按"到分隔线"而不是"到单元格底边"算，文字才在视觉上居中 */
+  padding: 4px 26px 6px 10px; height: auto; line-height: 1.3; vertical-align: middle;
   border: 1px solid var(--dc-border); white-space: nowrap;
   overflow: hidden;
   /* 与数据区之间的 2px 压边线：表头底的对比靠主题变量（浅色 #e4ebf8 / 深色 #2b3242，
