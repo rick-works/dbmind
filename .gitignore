@@ -56,3 +56,6 @@ Thumbs.db
 *.cer
 *.key
 *.b64
+
+# Screenshots: only web-sized versions are committed; originals (Retina 2x) stay local
+docs/images/originals/

@@ -23,6 +23,25 @@
 | 生产库保护 | 连接标记 PROD 后：标记全程外显、写操作二次确认、执行审计留痕 |
 | 数据透视 | 框选即汇总（计数 / 求和 / 均值 / 最值）、分组下钻 |
 
+## 界面截图
+
+每个页面都有浅色 / 深色两套主题。截图为 2880 px 宽（Retina）原片等比缩小，点击任意图片可看原尺寸。
+
+| 界面 | 浅色 | 深色 |
+|:--|:-:|:-:|
+| **首页**<br>所有连接 | <img src="docs/images/home-light.png" width="330" alt="首页（浅色）"> | <img src="docs/images/home-dark.png" width="330" alt="首页（深色）"> |
+| **数据查询**<br>补全与逐段计时 | <img src="docs/images/sql-editor-light.png" width="330" alt="数据查询（浅色）"> | <img src="docs/images/sql-editor-dark.png" width="330" alt="数据查询（深色）"> |
+| **表结构编辑**<br>先预览 ALTER | <img src="docs/images/table-designer-light.png" width="330" alt="表结构编辑（浅色）"> | <img src="docs/images/table-designer-dark.png" width="330" alt="表结构编辑（深色）"> |
+| **AI 助手**<br>计划与试跑 | <img src="docs/images/ai-assistant-light.png" width="330" alt="AI 助手（浅色）"> | <img src="docs/images/ai-assistant-dark.png" width="330" alt="AI 助手（深色）"> |
+| **数据治理**<br>推断表间关系 | <img src="docs/images/governance-light.png" width="330" alt="数据治理（浅色）"> | <img src="docs/images/governance-dark.png" width="330" alt="数据治理（深色）"> |
+| **数据传输**<br>导出与导入 | <img src="docs/images/data-transfer-light.png" width="330" alt="数据传输（浅色）"> | <img src="docs/images/data-transfer-dark.png" width="330" alt="数据传输（深色）"> |
+| **脚本管理**<br>片段与变量 | <img src="docs/images/scripts-light.png" width="330" alt="脚本管理（浅色）"> | <img src="docs/images/scripts-dark.png" width="330" alt="脚本管理（深色）"> |
+| **任务中心**<br>进度与日志 | <img src="docs/images/tasks-light.png" width="330" alt="任务中心（浅色）"> | <img src="docs/images/tasks-dark.png" width="330" alt="任务中心（深色）"> |
+| **用户管理**<br>角色与权限 | <img src="docs/images/users-light.png" width="330" alt="用户管理（浅色）"> | <img src="docs/images/users-dark.png" width="330" alt="用户管理（深色）"> |
+| **服务监控**<br>会话与锁 | <img src="docs/images/monitor-light.png" width="330" alt="服务监控（浅色）"> | <img src="docs/images/monitor-dark.png" width="330" alt="服务监控（深色）"> |
+| **ER 关系图**<br>拖拽与导出 | <img src="docs/images/er-diagram-light.png" width="330" alt="ER 关系图（浅色）"> | <img src="docs/images/er-diagram-dark.png" width="330" alt="ER 关系图（深色）"> |
+| **设置**<br>驱动与主题 | <img src="docs/images/settings-light.png" width="330" alt="设置（浅色）"> | <img src="docs/images/settings-dark.png" width="330" alt="设置（深色）"> |
+
 ## AI，不只是聊天
 
 大多数工具的「AI 助手」是个聊天框；DBmind 把 AI 做进了**每一步数据库操作**：
