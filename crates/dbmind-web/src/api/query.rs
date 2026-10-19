@@ -11,7 +11,7 @@
 //! 3. **执行 SQL 文件是有进度的后台任务**，不是一次长请求：文件可能几百条语句，
 //!    需要实时日志、可取消。任务存在本进程内（重启即失效，界面会提示任务不存在）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, OnceLock};
 
 use axum::extract::{Path, State};
@@ -88,6 +88,54 @@ fn tasks() -> &'static Mutex<HashMap<String, Task>> {
     TASKS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// 正在执行的多段批次（用批次 executionId 作键）。
+fn active_batches() -> &'static Mutex<HashSet<String>> {
+    static BATCHES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    BATCHES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 已收到取消请求、但可能正处在两条语句之间的批次。
+fn canceled_batches() -> &'static Mutex<HashSet<String>> {
+    static CANCELED: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    CANCELED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 批次登记守卫：`execute_batch` 无论怎么返回（正常结束、提前 `return`、panic 展开）
+/// 都会把 id 从 active/canceled 里摘掉。手写在函数尾部做不到这一点 —— 中间任何一个
+/// 提前返回或 panic 都会让 id 永远留在集合里。
+struct BatchRegistration(Option<String>);
+
+impl BatchRegistration {
+    fn new(id: Option<String>) -> Self {
+        if let Some(id) = &id {
+            active_batches()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(id.clone());
+            canceled_batches()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id);
+        }
+        Self(id)
+    }
+}
+
+impl Drop for BatchRegistration {
+    fn drop(&mut self) {
+        if let Some(id) = &self.0 {
+            active_batches()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id);
+            canceled_batches()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(id);
+        }
+    }
+}
+
 fn task_snapshot(task_id: &str) -> XResult<Value> {
     let guard = tasks().lock().unwrap_or_else(|e| e.into_inner());
     let task = guard
@@ -138,6 +186,11 @@ pub async fn execute(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
+    // 「库.模式」里的模式层：用户在选择器里选了 schema，手写 SQL 也应该在那一层执行
+    // （PG 的 search_path / SQL Server 的默认 schema / Oracle 的 current schema）。
+    let record = require_record(&state, &id).await?;
+    let dialect = crate::api::dialect::Dialect::new(record.kind());
+    let (_, schema) = crate::api::meta::split_db_schema(&database, &dialect);
 
     // 先切库（跨库浏览靠影子连接，见 `scope`），再确保驱动在位。
     // 两条失败都把原因放进结果面板（与 SQL 出错同一处显示），而不是抛 503 让前端只说「请求失败」。
@@ -156,8 +209,6 @@ pub async fn execute(
     let base_sql = sql.clone();
     let bare = base_sql.trim().trim_end_matches(';').trim().to_string();
     let effective = if page > 1 && looks_like_query(&bare) {
-        let record = require_record(&state, &id).await?;
-        let dialect = crate::api::dialect::Dialect::new(record.kind());
         // page/size 来自请求体没有上限，saturating 防乘法溢出（与 export.rs 同一纪律）
         crate::api::export::paging_sql(
             &bare,
@@ -174,7 +225,7 @@ pub async fn execute(
     // 全局默认上限再夹一层：分页大小是「想要多少」，设置里的 maxRows 是「最多给多少」
     let max_rows = size.min(max_rows_cap(&state).await);
     let request = QueryRequest {
-        schema: None,
+        schema,
         read_only: None,
         connection: target,
         sql: effective,
@@ -353,6 +404,8 @@ pub async fn execute_batch(
         .get("database")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    let dialect = crate::api::dialect::Dialect::new(record.kind());
+    let (_, schema) = crate::api::meta::split_db_schema(database, &dialect);
     let target = match crate::api::scope::resolve(&state, &id, database).await {
         Ok(target) => target,
         Err(err) => {
@@ -386,17 +439,29 @@ pub async fn execute_batch(
     // 上限 = min(每段页大小, 设置里的「最多返回行数」)：设置只是天花板，不是每段的取数量
     let max_rows = size.min(max_rows_cap(&state).await);
 
+    let _batch = BatchRegistration::new(execution_id.clone());
     for (index, statement) in statements.iter().enumerate() {
         let engine = state.engine();
         let target = target.clone();
-        // 只有一个 executionId：交给第一段，这样「取消」至少能中断当前那条
-        let exec = if index == 0 { execution_id.clone() } else { None };
+        if execution_id.as_ref().is_some_and(|id| {
+            canceled_batches()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(id)
+        }) {
+            success = false;
+            failed_at = Some(index);
+            results.push(shape::query_failure_json("已取消", 0));
+            break;
+        }
+        let exec = execution_id.clone();
         let statement = statement.clone();
+        let schema = schema.clone();
         let bare = statement.trim().trim_end_matches(';').trim().to_string();
         let outcome = blocking(move || {
             engine.execute(
                 QueryRequest {
-                    schema: None,
+                    schema: schema.clone(),
                     read_only: None,
                     connection: target,
                     sql: statement,
@@ -434,7 +499,6 @@ pub async fn execute_batch(
             }
         }
     }
-
     let message = match failed_at {
         Some(index) => format!("第 {} 条语句执行失败", index + 1),
         None => format!("共执行 {} 条语句", results.len()),
@@ -452,12 +516,22 @@ pub async fn cancel(
     State(state): State<AppState>,
     Path(execution_id): Path<String>,
 ) -> XResult<Json<Value>> {
+    let is_batch = active_batches()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&execution_id);
+    if is_batch {
+        canceled_batches()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(execution_id.clone());
+    }
     let cancelled = state.engine().cancel(&execution_id);
     Ok(Json(json!({
         "success": true,
-        "cancelled": cancelled,
+        "cancelled": cancelled || is_batch,
         // 已经跑完（或压根没有）的 id 会返回 false —— 界面据此区分「取消了」与「已经结束了」
-        "message": if cancelled { "已发送取消" } else { "该执行已结束或不存在" },
+        "message": if cancelled || is_batch { "已发送取消" } else { "该执行已结束或不存在" },
     })))
 }
 
@@ -490,6 +564,8 @@ pub async fn run_file_start(
         .unwrap_or_default()
         .to_string();
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
+    let dialect = crate::api::dialect::Dialect::new(record.kind());
+    let (_, schema) = crate::api::meta::split_db_schema(&database, &dialect);
     let statements = dbmind_core::split_statements(record.kind().protocol(), &sql);
     let task_id = format!(
         "sqlfile_{}_{}",
@@ -520,7 +596,7 @@ pub async fn run_file_start(
         .name("上游-run-sql-file".to_string())
         .spawn(move || {
             // 注意传的是 target 而不是 id：切库之后要在目标库上跑
-            run_statements(engine, background_id, target, statements, stop_on_error);
+            run_statements(engine, background_id, target, schema, statements, stop_on_error);
         })
         .map_err(|e| XError::internal(format!("启动执行线程失败：{e}")))?;
 
@@ -539,10 +615,12 @@ fn run_statements(
     engine: std::sync::Arc<DbMindEngine>,
     task_id: String,
     connection: String,
+    schema: Option<String>,
     statements: Vec<String>,
     stop_on_error: bool,
 ) {
     let total = statements.len();
+    let mut failures = 0usize;
     for (index, statement) in statements.iter().enumerate() {
         // 每一次加锁都在自己的作用域里**取完就放**。
         //
@@ -569,7 +647,7 @@ fn run_statements(
         // 执行期间**不持锁**：这条语句可能跑几分钟，持锁会让状态查询全部排队
         let outcome = engine.execute(
             QueryRequest {
-                schema: None,
+                schema: schema.clone(),
                 read_only: None,
                 connection: connection.clone(),
                 sql: statement.clone(),
@@ -598,6 +676,7 @@ fn run_statements(
                         None
                     }
                     Err(err) => {
+                        failures += 1;
                         task.logs
                             .push(format!("[{}/{total}] 失败：{}", index + 1, err.message));
                         task.done = index;
@@ -620,7 +699,15 @@ fn run_statements(
             }
         }
     }
-    finish_task(&task_id, "success", &format!("全部完成：{total} 条"));
+    if failures > 0 {
+        finish_task(
+            &task_id,
+            "error",
+            &format!("执行结束：{total} 条中 {failures} 条失败"),
+        );
+    } else {
+        finish_task(&task_id, "success", &format!("全部完成：{total} 条"));
+    }
 }
 
 fn finish_task(task_id: &str, status: &str, message: &str) {

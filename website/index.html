@@ -746,6 +746,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.36（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.36</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-20</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>SQL 编辑器</b>：BEGIN TRAN / BEGIN IMMEDIATE 不再把后面的语句吞成一条，MySQL 行首 # 注释 正确识别（里面的分号不切语句），中文表名也能进「编辑目标表」下拉</li>
+            <li><b>只读连接</b>：CTE 里用换行或 Tab 藏着的写语句、SELECT ... INTO、nextval / setval 这类会改序列的 SELECT 现在一律拦下</li>
+            <li><b>事务</b>：带着未提交修改的连接不再被后台空闲回收，连接失联时直接报错而不是静默重连（以前会连带把事务丢掉）</li>
+            <li><b>取消</b>：多语句批次在语句之间就响应，长脚本点「取消」不用等当前语句跑完</li>
+            <li><b>结果集就地编辑</b>：标识符按各库规范加引号（中文列名、保留字不再报错），字符串按方言转义（MySQL / ClickHouse 里的反斜杠不再被吃掉）</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.36" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.36" target="_blank" rel="noopener">下载 v1.2.36</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.35（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +776,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.35</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-19</span>
           </div>
           <ul class="rel-notes">

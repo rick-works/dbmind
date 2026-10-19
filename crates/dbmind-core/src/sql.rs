@@ -165,6 +165,83 @@ fn implicit_break(
     true
 }
 
+/// 跳过一个从 `start` 开始的括号组，返回右括号之后的 token 下标。
+fn skip_paren_group(toks: &[Tok], start: usize) -> Option<usize> {
+    if !matches!(toks.get(start), Some(Tok::LParen)) {
+        return None;
+    }
+    let mut depth = 0i32;
+    for (index, token) in toks.iter().enumerate().skip(start) {
+        match token {
+            Tok::LParen => depth += 1,
+            Tok::RParen => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(index + 1);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 找 `WITH ...` 的主语句关键字。
+///
+/// CTE 定义里的 `SELECT` / `INSERT` 都包在括号里，不能拿它们当主语句；
+/// 这里只跳过顶层括号组，返回 CTE 列表之后的第一个词法关键字。
+///
+/// 解析不出来返回 `None`，两个调用方的处理**方向不同**，别混：
+/// - `classify` 落到 `StatementKind::Unknown` ⇒ 只读连接上照样被拦（保守）；
+/// - `danger_reason` 直接返回 `None` ⇒ 只是不做「无 WHERE 全表更新」这类提醒，
+///   真正的只读闸门仍由 `classify` 把着。
+fn with_main_keyword(sql: &str) -> Option<String> {
+    let toks = tokenize(sql);
+    if !matches!(toks.first(), Some(Tok::Word(word)) if eq_word(word, "with")) {
+        return None;
+    }
+
+    let mut i = 1usize;
+    if matches!(toks.get(i), Some(Tok::Word(word)) if eq_word(word, "recursive")) {
+        i += 1;
+    }
+
+    loop {
+        match toks.get(i) {
+            Some(Tok::Word(_)) | Some(Tok::Quoted(_)) => i += 1,
+            _ => return None,
+        }
+        if matches!(toks.get(i), Some(Tok::LParen)) {
+            i = skip_paren_group(&toks, i)?;
+        }
+        if !matches!(toks.get(i), Some(Tok::Word(word)) if eq_word(word, "as")) {
+            return None;
+        }
+        i += 1;
+        if matches!(toks.get(i), Some(Tok::Word(word)) if eq_word(word, "not")) {
+            i += 1;
+        }
+        if matches!(toks.get(i), Some(Tok::Word(word)) if eq_word(word, "materialized")) {
+            i += 1;
+        }
+        i = skip_paren_group(&toks, i)?;
+
+        if matches!(toks.get(i), Some(Tok::Comma)) {
+            i += 1;
+            continue;
+        }
+        return match toks.get(i) {
+            Some(Tok::Word(word)) => Some(word.to_ascii_uppercase()),
+            _ => None,
+        };
+    }
+}
+
+/// `WITH` 的 CTE 前缀之后，主语句从哪个字节开始。
+fn main_statement_start(sql: &str, main_keyword: &str) -> Option<usize> {
+    top_level_keyword_pos(sql, main_keyword)
+}
+
 /// 按 `;` 拆分语句，**正确处理引号、注释与语句块**。
 ///
 /// 三类 `;` 不算分隔符：`';'`（引号内）、`-- ;` / `/* ; */`（注释内）、
@@ -278,9 +355,14 @@ pub fn split_statements(sql: &str) -> Vec<String> {
                     }
                     match upper.as_str() {
                         // `BEGIN` 既可能开语句块，也可能是事务起点（`BEGIN;` / `BEGIN WORK` /
-                        // `BEGIN TRANSACTION`）。后者没有配对的 END，误判会把后面所有语句吞成一条。
+                        // `BEGIN TRANSACTION` / SQL Server 的 `BEGIN TRAN` / SQLite 的
+                        // `BEGIN IMMEDIATE`）。后者没有配对的 END，误判会把后面所有语句吞成一条。
                         "BEGIN" => {
-                            if !matches!(next_word(&chars, i).as_str(), "" | "WORK" | "TRANSACTION")
+                            if !matches!(
+                                next_word(&chars, i).as_str(),
+                                "" | "WORK" | "TRAN" | "TRANSACTION" | "DEFERRED" | "IMMEDIATE"
+                                    | "EXCLUSIVE" | "DISTRIBUTED"
+                            )
                             {
                                 depth += 1;
                                 begin_seen = true;
@@ -332,6 +414,14 @@ pub fn split_statements(sql: &str) -> Vec<String> {
                     cur.push(c);
                     last_code = Some(c);
                     line_start = false;
+                } else if c == '#'
+                    && line_start
+                    && chars.get(i + 1).is_some_and(|next| next.is_whitespace())
+                {
+                    // 行首的 `# 注释`（MySQL/MariaDB）。`#temp` 后面是字母，
+                    // 不能误吞；行中间的 `#` 也不处理，避免影响 PostgreSQL 位运算。
+                    state = State::LineComment;
+                    cur.push(' ');
                 } else if c == '"' {
                     state = State::DoubleQuote;
                     cur.push(c);
@@ -538,7 +628,9 @@ fn top_level_keyword_pos(sql: &str, word: &str) -> Option<usize> {
             b')' => depth -= 1,
             _ => {
                 let word_start = i == 0 || !is_word_char(b[i - 1] as char);
-                if depth == 0 && word_start && l[i..].starts_with(&w) {
+                // `i` 是字节下标：中文/日文等非 ASCII 标识符会让它落在字符
+                // 中间。先在字符边界上再切，否则 `l[i..]` 会直接 panic。
+                if depth == 0 && word_start && l.is_char_boundary(i) && l[i..].starts_with(&w) {
                     let end = i + w.len();
                     if end >= b.len() || !is_word_char(b[end] as char) {
                         return Some(i);
@@ -558,11 +650,19 @@ fn top_level_keyword_pos(sql: &str, word: &str) -> Option<usize> {
 /// —— 方向是宁可放过交给其它闸门，不把正常语句错拦。
 pub fn danger_reason(sql: &str) -> Option<&'static str> {
     let cleaned = strip_comments(sql);
-    match first_keyword(&cleaned)?.as_str() {
+    let first = first_keyword(&cleaned)?;
+    let (keyword, body) = if first == "WITH" {
+        let main = with_main_keyword(&cleaned)?;
+        let start = main_statement_start(&cleaned, &main)?;
+        (main, cleaned.get(start..)?)
+    } else {
+        (first, cleaned.as_str())
+    };
+    match keyword.as_str() {
         "TRUNCATE" => Some("这个操作会一次性清空整张表的数据"),
         "DROP" => Some("这个操作会删除整张表（连同里面的数据）"),
         "UPDATE" | "DELETE" => {
-            if top_level_keyword_pos(&cleaned, "where").is_none() {
+            if top_level_keyword_pos(body, "where").is_none() {
                 Some("没有指定筛选范围，会作用于表中所有数据")
             } else {
                 None
@@ -587,9 +687,19 @@ pub struct WriteTarget {
 pub fn write_target(sql: &str) -> Option<WriteTarget> {
     let cleaned = strip_comments(sql);
     let cleaned = cleaned.trim().trim_end_matches(';').trim();
-    let kw = first_keyword(cleaned)?;
+    let first = first_keyword(cleaned)?;
+    let (kw, body_start) = if first == "WITH" {
+        let main = with_main_keyword(cleaned)?;
+        let start = main_statement_start(cleaned, &main)?;
+        let end = start + main.len();
+        (main, end)
+    } else {
+        let start = main_statement_start(cleaned, &first)?;
+        let end = start + first.len();
+        (first, end)
+    };
     let body = cleaned
-        .get(kw.len()..)
+        .get(body_start..)
         .map(str::trim_start)
         .unwrap_or_default();
     match kw.as_str() {
@@ -645,7 +755,15 @@ fn has_table_join_keyword(table: &str) -> bool {
 /// 界面上的「终止会话」就是 `select pg_terminate_backend(pid)`。不拦的话，
 /// 只读连接上照样能把别人的会话杀掉；而 MySQL / SQL Server 用的是 `KILL N`
 /// （首关键字 `KILL` ⇒ Unknown ⇒ 只读连接上被拦住），两边行为必须一致。
-const SIDE_EFFECT_CALLS: &[&str] = &["PG_TERMINATE_BACKEND", "PG_CANCEL_BACKEND"];
+const SIDE_EFFECT_CALLS: &[&str] = &[
+    "PG_TERMINATE_BACKEND",
+    "PG_CANCEL_BACKEND",
+    "NEXTVAL",
+    "SETVAL",
+    "LO_IMPORT",
+    "LO_EXPORT",
+    "DBLINK_EXEC",
+];
 
 /// 不带等号时**确实只读取**的 pragma（`PRAGMA x;` 是查它当前的值）。
 const READ_ONLY_PRAGMAS: &[&str] = &[
@@ -677,20 +795,16 @@ const READ_ONLY_PRAGMAS: &[&str] = &[
 
 /// 判断单条语句的类型。
 pub fn classify(sql: &str) -> StatementKind {
-    let upper = strip_comments(sql).to_ascii_uppercase();
+    let cleaned = strip_comments(sql);
+    let upper = cleaned.to_ascii_uppercase();
     let kw = match first_keyword(sql) {
         Some(k) => k,
         None => return StatementKind::Unknown,
     };
 
     match kw.as_str() {
-        "SELECT" | "VALUES" | "TABLE" | "SHOW" | "DESC" | "DESCRIBE" => {
-            if SIDE_EFFECT_CALLS.iter().any(|call| upper.contains(call)) {
-                StatementKind::Write
-            } else {
-                StatementKind::Read
-            }
-        }
+        "SELECT" => select_kind(&upper, &cleaned),
+        "VALUES" | "TABLE" | "SHOW" | "DESC" | "DESCRIBE" => StatementKind::Read,
         "EXPLAIN" => {
             // EXPLAIN ANALYZE 会真的执行语句 → 按非只读处理
             if upper.contains("ANALYZE") {
@@ -713,14 +827,15 @@ pub fn classify(sql: &str) -> StatementKind {
                 StatementKind::Unknown
             }
         }
-        "WITH" => {
-            // CTE 后面仍可能是写语句：WITH t AS (...) INSERT/UPDATE/DELETE ...
-            if contains_write_verb(&upper) {
-                StatementKind::Write
-            } else {
-                StatementKind::Read
-            }
-        }
+        "WITH" => match with_main_keyword(sql).as_deref() {
+            Some("SELECT") | Some("VALUES") | Some("TABLE") => select_kind(&upper, &cleaned),
+            Some("INSERT") | Some("UPDATE") | Some("DELETE") | Some("MERGE")
+            | Some("REPLACE") | Some("UPSERT") => StatementKind::Write,
+            Some("CREATE") | Some("ALTER") | Some("DROP") | Some("RENAME") | Some("COMMENT")
+            | Some("GRANT") | Some("REVOKE") => StatementKind::Ddl,
+            // 解析不出来时保守按非只读处理，避免 CTE 写语句从只读闸门漏过去。
+            _ => StatementKind::Unknown,
+        },
         "INSERT" | "UPDATE" | "DELETE" | "MERGE" | "REPLACE" | "UPSERT" | "COPY" | "LOAD" | "REFRESH"
         | "TRUNCATE" => StatementKind::Write,
         "CREATE" | "ALTER" | "DROP" | "RENAME" | "COMMENT" => StatementKind::Ddl,
@@ -729,9 +844,17 @@ pub fn classify(sql: &str) -> StatementKind {
     }
 }
 
-fn contains_write_verb(upper_sql: &str) -> bool {
-    const VERBS: [&str; 6] = [" INSERT", " UPDATE", " DELETE", " MERGE", " REPLACE", " UPSERT"];
-    VERBS.iter().any(|v| upper_sql.contains(v))
+/// `SELECT` 本身也会产生写副作用：`SELECT ... INTO` 会建表/写文件，
+/// `nextval` / `setval` 会改序列，大对象函数会写服务端状态。
+/// 这些在只读连接上必须按非只读处理。
+fn select_kind(upper: &str, sql: &str) -> StatementKind {
+    if top_level_keyword_pos(sql, "into").is_some()
+        || SIDE_EFFECT_CALLS.iter().any(|call| upper.contains(call))
+    {
+        StatementKind::Write
+    } else {
+        StatementKind::Read
+    }
 }
 
 /// 整段 SQL 是否只读：**必须**是单条、且该条为 Read。
@@ -1313,7 +1436,7 @@ mod tests {
         assert_eq!(split_statements("SELECT `a``b;c`; SELECT 1;").len(), 2);
     }
 
-    /// `#` **不是**行注释：SQL Server 的临时表就叫 `#temp`，当注释会把整行吞掉。
+    /// `#temp` 不是行注释：SQL Server 的临时表就叫 `#temp`，当注释会把整行吞掉。
     ///
     /// 前端 `utils/sqlSplit.js` 必须给出同样的段数（它此前把 `#` 当注释，
     /// `SELECT * FROM #temp; SELECT 1;` 被算成 1 条 → 界面显示 1 条、实际执行 2 条）。
@@ -1321,8 +1444,10 @@ mod tests {
     fn hash_is_not_a_line_comment() {
         assert_eq!(split_statements("SELECT * FROM #temp; SELECT 1;").len(), 2);
         assert_eq!(split_statements("SELECT * FROM #temp\nSELECT 1").len(), 2);
-        assert_eq!(split_statements("# DROP TABLE x;\nSELECT 1;").len(), 2);
+        // 行首 `# ` 是 MySQL/MariaDB 注释；里面的分号不切。
+        assert_eq!(split_statements("# DROP TABLE x;\nSELECT 1;").len(), 1);
         assert_eq!(split_statements("#foo;").len(), 1);
+        assert_eq!(classify("# note\nSELECT 1"), StatementKind::Read);
     }
 
     /// 复杂 SQL 不能被切碎（前端 `sqlcomplex-check.mjs` 是同一批用例）。
@@ -1362,5 +1487,75 @@ mod tests {
             split_statements("SELECT * FROM t1\n\nTRUNCATE TABLE t2\n\nINSERT INTO t2 VALUES (1)").len(),
             3
         );
+    }
+
+    /// CTE 的主语句必须按词法判读：换行、Tab 都不能让写语句变成 Read。
+    #[test]
+    fn with_main_statement_is_classified_by_lexing_not_spacing() {
+        for sql in [
+            "WITH x AS (SELECT 1) DELETE FROM t",
+            "WITH x AS (SELECT 1)\nDELETE FROM t",
+            "WITH x AS (SELECT 1)\tDELETE FROM t",
+            "WITH x AS (SELECT 1)\nINSERT INTO t SELECT * FROM x",
+            "WITH x AS (SELECT 1)\r\nUPDATE t SET a = 1",
+        ] {
+            assert_eq!(classify(sql), StatementKind::Write, "{sql:?}");
+            assert!(!is_read_only(sql), "{sql:?}");
+        }
+        assert_eq!(
+            classify("WITH x AS (SELECT 1)\nSELECT * FROM x"),
+            StatementKind::Read
+        );
+        assert_eq!(
+            classify("WITH x AS (SELECT ' DELETE ' AS s) SELECT * FROM x"),
+            StatementKind::Read
+        );
+        let recursive = "with recursive c(x) as (select 1 union all select x+1 from c where x < 10) select x from c";
+        assert_eq!(classify(recursive), StatementKind::Read);
+
+        assert!(danger_reason("WITH x AS (SELECT 1)\nDELETE FROM t").is_some());
+        let target = write_target("WITH x AS (SELECT 1)\nUPDATE t SET a = 1 WHERE id = 2")
+            .expect("CTE UPDATE 应能解析目标");
+        assert_eq!(target.table, "t");
+        assert_eq!(target.where_clause.as_deref(), Some("id = 2"));
+    }
+
+    /// `SELECT ... INTO` / 序列函数会写状态，只读连接不能当作 Read 放行。
+    #[test]
+    fn select_side_effects_are_not_read_only() {
+        for sql in [
+            "SELECT * INTO new_table FROM t",
+            "SELECT nextval('seq')",
+            "SELECT setval('seq', 1)",
+            "WITH x AS (SELECT 1) SELECT * INTO new_table FROM x",
+        ] {
+            assert_eq!(classify(sql), StatementKind::Write, "{sql:?}");
+            assert!(!is_read_only(sql), "{sql:?}");
+        }
+        assert_eq!(classify("SELECT * FROM t WHERE name = 'INTO'"), StatementKind::Read);
+    }
+
+    /// 非 ASCII 标识符不能让 `top_level_keyword_pos` 在字符中间切字符串。
+    #[test]
+    fn non_ascii_identifiers_do_not_panic_in_safety_parser() {
+        let sql = "UPDATE 表 SET a = 1 WHERE id = 1";
+        let target = write_target(sql).expect("应能解析中文表名");
+        assert_eq!(target.table, "表");
+        assert_eq!(danger_reason(sql), None);
+        assert!(danger_reason("DELETE FROM 用户").is_some());
+        assert_eq!(classify(sql), StatementKind::Write);
+    }
+
+    /// `BEGIN TRAN` / `BEGIN IMMEDIATE` 是事务起点，不是 `BEGIN ... END` 代码块。
+    #[test]
+    fn begin_transaction_spellings_do_not_swallow_following_statements() {
+        for sql in [
+            "BEGIN TRAN;\nUPDATE t SET a = 1;\nCOMMIT;",
+            "BEGIN IMMEDIATE;\nUPDATE t SET a = 1;\nCOMMIT;",
+            "BEGIN DEFERRED;\nUPDATE t SET a = 1;\nCOMMIT;",
+            "BEGIN EXCLUSIVE;\nUPDATE t SET a = 1;\nCOMMIT;",
+        ] {
+            assert_eq!(split_statements(sql).len(), 3, "{sql:?}");
+        }
     }
 }

@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.36": [
+        "SQL editor: `BEGIN TRAN` / `BEGIN IMMEDIATE` no longer swallow the statements that follow, MySQL `#` line comments are recognized (semicolons inside them do not split), and non-ASCII table names now show up in the quick-edit target list",
+        "Read-only connections: writes hidden behind a CTE (even across line breaks or tabs), `SELECT ... INTO` and sequence functions such as `nextval` / `setval` are now blocked",
+        "Transactions: a connection holding uncommitted changes is no longer recycled by the idle sweeper, and a lost session reports an error instead of silently reconnecting (which used to drop the transaction)",
+        "Cancel now takes effect between statements of a multi-statement batch, so stopping a long script no longer waits for the current statement to finish",
+        "In-place result editing: identifiers are quoted per dialect (Chinese column names, reserved words) and string literals are escaped per dialect (backslashes are kept on MySQL / ClickHouse)"
+    ],
     "v1.2.35": [
         "SQL editor: statements are recognized without semicolons, the one under the cursor is outlined and runs on its own, and complex SQL (procedures, triggers, CTEs, dollar-quoted functions) is no longer split wrongly",
         "SQL formatting: blank lines between statements follow the setting with or without semicolons; multi-statement scripts are formatted one by one and comments/semicolons are kept",

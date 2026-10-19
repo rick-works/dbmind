@@ -637,7 +637,7 @@ import {
   Sort, SortUp, SortDown, Collection, RefreshLeft, DArrowRight
 } from '@element-plus/icons-vue'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
-import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf } from '../../types'
+import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf, quoteStyleOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
 // 占位库 `(default)` 的显示名（值仍是原值，见 utils/dbLabel）
 import { dbLabelOf } from '../../utils/dbLabel'
@@ -2019,7 +2019,8 @@ const quickEditTablesOf = () => {
   const text = lastExecSql || sql.value || ''
   if (!text) return []
   const tables = []
-  const re = /\b(?:from|join)\s+[`"']?([a-z_][\w$]*(?:\.[a-z_][\w$]*)?)/gi
+  // 允许中文/日文等非 ASCII 标识符，否则中文表名进不了「编辑目标表」下拉。
+  const re = /\b(?:from|join)\s+[`"']?([\p{L}_][\p{L}\p{N}_$]*(?:\.[\p{L}_][\p{L}\p{N}_$]*)?)/giu
   let m
   while ((m = re.exec(text))) {
     if (!tables.includes(m[1])) tables.push(m[1])
@@ -2155,9 +2156,9 @@ const discardEdits = () => {
 const resWhereOf = (g) => {
   const keys = Object.keys(g.original || {})
   const idKey = keys.find(k => k.toLowerCase() === 'id')
-  if (idKey) return `${idKey} = ${resSqlVal(g.original[idKey])}`
+  if (idKey) return `${resIdent(idKey)} = ${resSqlVal(g.original[idKey])}`
   const pick = (list) => list
-    .map(k => g.original[k] == null ? `${k} IS NULL` : `${k} = ${resSqlVal(g.original[k])}`)
+    .map(k => g.original[k] == null ? `${resIdent(k)} IS NULL` : `${resIdent(k)} = ${resSqlVal(g.original[k])}`)
     .join('\n  AND ')
   const rest = keys.filter(k => !(k in (g.changes || {})))
   const parts = rest.length ? pick(rest) : pick(keys)
@@ -2182,10 +2183,10 @@ const commitEdits = async () => {
   // 每行一条 UPDATE（同一行的多列合成一条 SET），一次批量下发 ⇒ 一次提交多条
   const sqlText = pendingEdits.value
     .map(g => {
-      const sets = Object.entries(g.changes || {}).map(([col, v]) => `${col} = ${resSqlVal(v)}`).join(', ')
+      const sets = Object.entries(g.changes || {}).map(([col, v]) => `${resIdent(col)} = ${resSqlVal(v)}`).join(', ')
       const where = resWhereOf(g)
       if (!sets || !where) return ''
-      return `UPDATE ${g.table}\nSET ${sets}\nWHERE ${where};`
+      return `UPDATE ${resIdent(g.table)}\nSET ${sets}\nWHERE ${where};`
     })
     .filter(Boolean)
     .join('\n')
@@ -2369,8 +2370,38 @@ const resSqlVal = (v) => {
   if (v === null || v === undefined) return 'NULL'
   if (typeof v === 'number') return String(v)
   if (typeof v === 'boolean') return v ? '1' : '0'
-  return `'${String(v).replace(/'/g, "''")}'`
+  let text = String(v)
+  // MySQL / ClickHouse 默认把反斜杠当转义符；只翻倍单引号会把值悄悄改掉。
+  if (['mysql', 'mariadb', 'clickhouse'].includes(fmtDialect.value)) {
+    text = text.replace(/\\/g, '\\\\')
+  }
+  return `'${text.replace(/'/g, "''")}'`
 }
+
+// 结果集就地编辑会自己拼 UPDATE/DELETE，标识符也必须按目标方言加引号。
+const RESERVED_IDENTIFIERS = new Set([
+  'ADD', 'ALL', 'ALTER', 'AND', 'AS', 'ASC', 'BETWEEN', 'BY', 'CASE', 'CHECK', 'COLUMN',
+  'CREATE', 'CROSS', 'CURRENT', 'DATABASE', 'DEFAULT', 'DELETE', 'DESC', 'DISTINCT', 'DROP',
+  'ELSE', 'END', 'EXISTS', 'FALSE', 'FOR', 'FOREIGN', 'FROM', 'FULL', 'GROUP', 'HAVING',
+  'IN', 'INDEX', 'INNER', 'INSERT', 'INTO', 'IS', 'JOIN', 'KEY', 'LEFT', 'LIKE', 'LIMIT',
+  'NOT', 'NULL', 'OFFSET', 'ON', 'OR', 'ORDER', 'OUTER', 'PRIMARY', 'REFERENCES', 'RIGHT',
+  'SELECT', 'SET', 'TABLE', 'THEN', 'TRUE', 'UNION', 'UNIQUE', 'UPDATE', 'VALUES', 'WHEN',
+  'WHERE', 'WITH', 'USER', 'CURRENT_USER', 'SESSION_USER', 'PROCEDURE', 'FUNCTION',
+  'TRIGGER', 'VIEW', 'EXEC', 'EXECUTE', 'USE', 'SHOW', 'DESCRIBE', 'EXPLAIN', 'BEGIN',
+  'LOOP', 'WHILE', 'RETURNING', 'FETCH', 'ONLY'
+])
+const resIdentPart = (part) => {
+  if (!part) return part
+  // 只放过「小写、纯 ASCII、非保留字」：Oracle / PostgreSQL 会把不带引号的大写名
+  // 折叠成小写，引号才能保持原样；中文、空格、保留字一律加引号。
+  const simple = /^[a-z_][a-z0-9_$]*$/.test(part)
+  if (simple && !RESERVED_IDENTIFIERS.has(part.toUpperCase())) return part
+  const style = quoteStyleOf(connType.value)
+  if (style === 'BACKTICK') return `\`${part.replace(/`/g, '``')}\``
+  if (style === 'BRACKET') return '[' + part.replace(/]/g, ']]') + ']'
+  return `"${part.replace(/"/g, '""')}"`
+}
+const resIdent = (name) => String(name || '').split('.').map(resIdentPart).join('.')
 // 从编辑器 SQL 中尽力猜出表名，猜不到用占位符（查询结果可能来自多表 JOIN）
 const guessTableName = () => {
   const s = String(sql.value || '').replace(/\s+/g, ' ')
@@ -2642,16 +2673,16 @@ const copyResCtx = (mode) => {
     return
   }
   if (mode === 'insert') {
-    const text = rows.map(r => `INSERT INTO ${table} (${cols.join(', ')}) VALUES (${cols.map(c => resSqlVal(r[c])).join(', ')});`).join('\n')
+    const text = rows.map(r => `INSERT INTO ${resIdent(table)} (${cols.map(resIdent).join(', ')}) VALUES (${cols.map(c => resSqlVal(r[c])).join(', ')});`).join('\n')
     writeClipboard(text, t('sqlq.copyInsert', { n: rows.length, table: table }))
     return
   }
   if (mode === 'update') {
     // 结果集没有主键信息，用选中列做 WHERE（请自行核对）
     const text = rows.map(r => {
-      const setClause = cols.map(c => `${c} = ${resSqlVal(r[c])}`).join(', ')
-      const whereClause = cols.map(c => `${c} = ${resSqlVal(r[c])}`).join(' AND ')
-      return `UPDATE ${table} SET ${setClause} WHERE ${whereClause};`
+      const setClause = cols.map(c => `${resIdent(c)} = ${resSqlVal(r[c])}`).join(', ')
+      const whereClause = cols.map(c => `${resIdent(c)} = ${resSqlVal(r[c])}`).join(' AND ')
+      return `UPDATE ${resIdent(table)} SET ${setClause} WHERE ${whereClause};`
     }).join('\n')
     writeClipboard(text, t('sqlq.copyUpdate', { n: rows.length, table: table }))
   }
@@ -2670,7 +2701,7 @@ const copyResDelete = () => {
   const { rows, cols } = resCtxSelection()
   if (!rows.length || !cols.length) return
   const table = guessTableName()
-  const sql = rows.map(r => `DELETE FROM ${table} WHERE ${cols.map(c => `${c} = ${resSqlVal(r[c])}`).join(' AND ')};`).join('\n')
+  const sql = rows.map(r => `DELETE FROM ${resIdent(table)} WHERE ${cols.map(c => `${resIdent(c)} = ${resSqlVal(r[c])}`).join(' AND ')};`).join('\n')
   writeClipboard(sql, t('sqlq.copyDelete', { n: rows.length, table: table }))
 }
 // 复制表头（列名）：有选中的列就复制选中的，否则复制右键那一列。

@@ -277,6 +277,21 @@ mod tests {
         assert_eq!(err.code, ErrorCode::QueryInvalid);
     }
 
+    /// CTE 换行/`SELECT INTO` 不能从只读闸门漏过去。
+    #[test]
+    fn cte_写语句与_select_into_都受只读闸门约束() {
+        let policy = SafetyPolicy::new();
+        for sql in [
+            "WITH x AS (SELECT 1)\nDELETE FROM t",
+            "SELECT * INTO new_table FROM t",
+        ] {
+            let err = policy
+                .check(&conn(true), sql, AccessContext::Desktop, false)
+                .unwrap_err();
+            assert_eq!(err.code, ErrorCode::SafetyReadOnly, "{sql:?}");
+        }
+    }
+
     fn mongo_conn(read_only: bool) -> ConnectionRecord {
         ConnectionRecord {
             id: "m1".into(),

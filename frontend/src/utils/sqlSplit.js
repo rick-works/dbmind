@@ -13,9 +13,8 @@
  * 2. **没写分号也分段**：行首出现语句起始关键字、且上一条看起来已经写完时自动断开
  *    （见 `implicitBreak`）。规则刻意保守 —— 拿不准就不切。
  *
- * 刻意**不**把 `#` 当行注释：SQL Server 的临时表就叫 `#temp`（`SELECT * FROM #temp;`），
- * 当成注释会把整行连同后面的语句一起吞掉。后端 `split_statements` 同样不认 `#`，
- * 两边必须一致，否则前端算出 1 条、后端切出 2 条。
+ * `#` 只在**行首且后面跟空白**时按 MySQL/MariaDB 注释处理；SQL Server 的
+ * 临时表 `#temp` 后面是字母，不会被吞掉。后端 `split_statements` 用同一规则。
  */
 
 /** 能开启一条新语句的关键字（还要通过上下文判定才真的切） */
@@ -215,7 +214,10 @@ export function splitSqlStatementRanges(sql) {
       // Oracle 的声明段：AS/IS 之后、BEGIN 之前（`v NUMBER := 0;` 这些分号不是语句边界）
       if (routine && depth === 0 && (upper === 'AS' || upper === 'IS')) decl = true
       if (upper === 'BEGIN') {
-        if (!['', 'WORK', 'TRANSACTION'].includes(nextWordAt(s, i))) { depth++; beginSeen = true }
+        // SQL Server 的 BEGIN TRAN、SQLite 的 BEGIN IMMEDIATE 都是事务起点，
+        // 后面没有配对的 END；漏掉它们会把整个脚本吞成一条语句。
+        if (!['', 'WORK', 'TRAN', 'TRANSACTION', 'DEFERRED', 'IMMEDIATE', 'EXCLUSIVE', 'DISTRIBUTED']
+          .includes(nextWordAt(s, i))) { depth++; beginSeen = true }
       } else if (upper === 'CASE') {
         depth++
       } else if (upper === 'END') {
@@ -239,9 +241,15 @@ export function splitSqlStatementRanges(sql) {
       wordAtLineStart = false
     }
 
+    if (ch === '#' && lineStart && next && /\s/.test(next)) {
+      // 行首的 `# 注释`（MySQL/MariaDB）；`#temp` 后面是字母，不在此列。
+      line = true
+      i++
+      continue
+    }
     if (ch === '\'' || ch === '"' || ch === '`') { quote = ch; lastCode = ch; lineStart = false; i++; continue }
     if (ch === '-' && next === '-') { line = true; i += 2; continue }
-    // 注意：`#` **不算**行注释（SQL Server 的 `#temp` 临时表、以及与后端一致）
+    // 其余位置的 `#` 不算注释（SQL Server 的 `#temp` 临时表、以及与后端一致）
     if (ch === '/' && next === '*') { block = true; i += 2; continue }
     if (ch === ';') {
       // 例程声明段里的分号（Oracle：`v NUMBER := 0;` 在 BEGIN 之前）不是语句结束符
@@ -288,7 +296,8 @@ export function splitSqlStatementRanges(sql) {
 function stripLeadingComments(text) {
   let t = String(text || '').trimStart()
   for (;;) {
-    if (t.startsWith('--')) {
+    if (t.startsWith('--')
+      || (t.startsWith('#') && (t.length === 1 || /\s/.test(t[1])))) {
       const nl = t.indexOf('\n')
       if (nl < 0) return ''
       t = t.slice(nl + 1).trimStart()

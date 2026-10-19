@@ -67,12 +67,31 @@ impl AgentDriver {
     /// 断开本类型当前所有**空闲**会话（权限/密码在数据库侧变更后调用，
     /// 旧会话还带着旧的全局权限快照；见 `session_pool::SessionPool::close_all_idle`）。
     pub fn disconnect_all(&self) -> usize {
+        if let Ok(mut lanes) = self.tx_lanes.lock() {
+            lanes.clear();
+        }
+        self.pool.clear_pins();
         self.pool.close_all_idle()
     }
 
     /// 只断**指定连接**的空闲会话：泳道 key 的第二段是连接名（`kind|name|host|...`），
     /// 按它过滤就不会误伤同类型其它连接（它们共用一个驱动池）。
     pub fn disconnect_connection(&self, name: &str) -> usize {
+        let dropped: Vec<String> = {
+            let mut lanes = self.tx_lanes.lock().unwrap_or_else(|e| e.into_inner());
+            let dropped = lanes
+                .iter()
+                .filter(|lane| lane.split('|').nth(1) == Some(name))
+                .cloned()
+                .collect();
+            for lane in &dropped {
+                lanes.remove(lane);
+            }
+            dropped
+        };
+        for lane in dropped {
+            self.pool.unpin_lane(&lane);
+        }
         self.pool
             .close_idle_where(|lane| lane.split('|').nth(1) == Some(name))
     }
@@ -422,10 +441,28 @@ impl AgentDriver {
         // 槽位守卫活到闭包结束：这条物理会话在调用期间**只属于我们**
         let slot = self.pool.acquire_cancellable(lane, limit, wait, call.cancel)?;
         let session_id = slot.session_id().to_string();
+        // 事务泳道不能「悄悄重连」：旧连接上的未提交修改已经随断开回滚了，
+        // 在新连接上重新 autocommit=false 只会让用户以为事务还在。
+        let tx_open = self
+            .tx_lanes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(lane);
+        if tx_open && self.host.cached_session(&session_id).is_none() {
+            if let Ok(mut lanes) = self.tx_lanes.lock() {
+                lanes.remove(lane);
+            }
+            self.pool.unpin_lane(lane);
+            return Err(DbMindError::new(
+                ErrorCode::QueryFailed,
+                "事务连接已断开，未提交的修改已回滚；请重新开启事务",
+            )
+            .with_detail("事务所在物理连接已不在（被回收、连接断开或宿主重启）。"));
+        }
         self.ensure_session(config, call.read_only, &session_id, false)?;
-        // 事务模式对齐：这条泳道若挂着未提交事务，而会话可能刚被重建（连接断开/配额回收），
-        // 新连接是 autocommit=true —— 必须马上关掉，否则后续语句逐条自动提交，
-        // 用户以为还在事务里。失败不致命（下一次调用还会再对齐）。
+        // 事务模式对齐：正常复用同一会话时它本来就是 autocommit=false。
+        // 若上面的缓存检查没发现失联、但宿主侧连接确实换了，这里仍按原逻辑
+        // 重新关一次 autocommit；真正失联的情况已在上面直接报错，不再静默继续。
         if self.tx_lanes.lock().expect("tx_lanes").contains(lane) {
             let mut params = Map::new();
             params.insert("sessionId".to_string(), json!(session_id));
@@ -516,7 +553,7 @@ impl Driver for AgentDriver {
     ) -> Result<serde_json::Value> {
         let lane = self.lane_key(config, read_only, Some(session));
         let wait = Duration::from_secs(15);
-        self.with_lane(
+        let outcome = self.with_lane(
             config,
             &lane,
             1,
@@ -546,7 +583,14 @@ impl Driver for AgentDriver {
                 }
                 Ok(value)
             },
-        )
+        );
+        if outcome.is_ok() {
+            match action {
+                TxAction::Begin => self.pool.pin_lane(&lane),
+                TxAction::Commit | TxAction::Rollback => self.pool.unpin_lane(&lane),
+            }
+        }
+        outcome
     }
 
     fn test(&self, config: &ConnectionConfig, read_only: bool) -> Result<ConnectReport> {

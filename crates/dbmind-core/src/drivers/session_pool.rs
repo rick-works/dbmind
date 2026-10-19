@@ -26,7 +26,7 @@
 
 use crate::error::{DbMindError, ErrorCode, Result};
 use crate::CancelToken;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
@@ -62,6 +62,12 @@ struct PoolState {
     lanes: HashMap<String, Vec<Option<Slot>>>,
     /// 泳道 → 上次用过的槽位下标（粘性复用靠它）
     last: HashMap<String, usize>,
+    /// 挂着未提交事务的泳道：**自动回收绝不碰它们**。
+    ///
+    /// 事务槽位在两条语句之间也是 `busy = false`，只按「空闲」挑会把它当成
+    /// 可以关闭的会话；一旦关掉，JDBC 连接上的未提交修改就丢了。显式断开连接
+    /// （用户点“关闭连接”）仍然可以关，见 `close_*` 的调用方。
+    pinned: HashSet<String>,
 }
 
 impl PoolState {
@@ -108,6 +114,9 @@ impl PoolState {
     fn oldest_idle(&self) -> Option<(String, Instant)> {
         let mut best: Option<(String, Instant)> = None;
         for (lane, slots) in self.lanes.iter() {
+            if self.pinned.contains(lane) {
+                continue;
+            }
             for (index, slot) in slots.iter().enumerate() {
                 let Some(slot) = slot else { continue };
                 if slot.busy {
@@ -128,6 +137,9 @@ impl PoolState {
     /// 摘掉某个会话的槽位（**仍空闲才摘**）。摘不到说明它刚被用起来了。
     fn remove_idle(&mut self, target: &str) -> bool {
         for (lane, slots) in self.lanes.iter_mut() {
+            if self.pinned.contains(lane) {
+                continue;
+            }
             for (index, slot) in slots.iter_mut().enumerate() {
                 if session_id(lane, index) != target {
                     continue;
@@ -542,6 +554,21 @@ impl SessionPool {
     /// [`SessionPool::acquire_cancellable`]。
     pub fn acquire(&self, lane: &str, limit: usize, wait: Duration) -> Result<SlotGuard<'_>> {
         self.acquire_cancellable(lane, limit, wait, None)
+    }
+
+    /// 把一条泳道标记为「事务中」，自动回收/空闲清扫不会关闭它。
+    pub fn pin_lane(&self, lane: &str) {
+        self.lock().pinned.insert(lane.to_string());
+    }
+
+    /// 事务结束（commit / rollback）后解除保护。
+    pub fn unpin_lane(&self, lane: &str) {
+        self.lock().pinned.remove(lane);
+    }
+
+    /// 连接被显式断开时清掉全部事务保护标记。
+    pub fn clear_pins(&self) {
+        self.lock().pinned.clear();
     }
 
     /// 取一个槽位，并且**在等待期间也认取消令牌**。
@@ -1065,6 +1092,47 @@ mod tests {
             closed.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
             [id.as_str()]
         );
+    }
+
+    /// 事务泳道虽然 `busy=false`，但它在两条语句之间仍然不能被自动回收：
+    /// 关掉物理连接会丢掉未提交事务。显式断开走 `close_*`，不受这个保护影响。
+    #[test]
+    fn 自动回收不碰挂着事务的泳道() {
+        let (closed, closer) = recorder();
+        let budget = Arc::new(SessionBudget::new(2));
+        let pool = SessionPool::new(budget.clone(), closer);
+
+        let tx = pool.acquire("tx-lane", 1, Duration::from_secs(1)).unwrap();
+        let tx_id = tx.session_id().to_string();
+        drop(tx);
+        pool.pin_lane("tx-lane");
+
+        assert_eq!(budget.sweep_older_than(Instant::now() + Duration::from_secs(10)), 0);
+        assert_eq!(budget.live(), 1);
+        assert!(
+            closed.lock().unwrap_or_else(|e| e.into_inner()).is_empty(),
+            "事务泳道不能被自动关掉"
+        );
+
+        let other = pool.acquire("other", 1, Duration::from_secs(1)).unwrap();
+        let other_id = other.session_id().to_string();
+        drop(other);
+        assert!(budget.reclaim_idle());
+        assert_eq!(
+            closed.lock().unwrap_or_else(|e| e.into_inner()).as_slice(),
+            [other_id.as_str()]
+        );
+        assert!(!closed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&tx_id));
+
+        pool.unpin_lane("tx-lane");
+        assert!(budget.reclaim_idle());
+        assert!(closed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&tx_id));
     }
 
     /// 空闲回收**只碰空闲的**：正在跑语句的会话即使「很老」也不会被收走。

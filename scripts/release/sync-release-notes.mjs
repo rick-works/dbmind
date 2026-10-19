@@ -24,7 +24,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 本脚本在 scripts/release/ 下：往上两级才是仓库根（分目录后曾写成 `..` ⇒ ROOT=scripts/）。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const REPO = 'rick-works/dbmind'
 const NOTES_DIR = path.join(ROOT, 'release-notes')
 const SITE = path.join(ROOT, 'website', 'index.html')
@@ -369,7 +370,7 @@ for (const [tag, bullets] of bulletsByTag) {
 if (noPush) {
   console.log('（--no-push：跳过官网发布）')
 } else {
-  const ps1 = path.join(ROOT, 'scripts', 'publish-site.ps1')
+  const ps1 = path.join(ROOT, 'scripts', 'release', 'publish-site.ps1')
   if (!fs.existsSync(ps1)) {
     console.log('⚠ 没找到 scripts/release/publish-site.ps1 —— 官网需要手动发布到 gh-pages')
   } else {
@@ -388,7 +389,7 @@ if (noPush) {
       // 但必须**大声**说清楚"线上还没更新"，并给出可重复执行的补救命令与真实原因。
       console.error(`\n⚠⚠ 官网没有发布成功：${err && err.message ? err.message : err}`)
       console.error('   线上仍是旧内容。请手动执行（可重复跑，不会叠加）：')
-      console.error('   powershell -ExecutionPolicy Bypass -File scripts\\publish-site.ps1\n')
+      console.error('   powershell -ExecutionPolicy Bypass -File scripts\\release\\publish-site.ps1\n')
     }
   }
 }

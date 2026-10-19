@@ -26,7 +26,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+// 本脚本在 scripts/release/ 下：往上两级才是仓库根（脚本按用途分目录后曾是 `..`，
+// 结果 ROOT 指向 scripts/，跑起来第一件事就 ENOENT: scripts\Cargo.toml）。
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const argv = process.argv.slice(2).filter((a) => a !== '--dry-run')
 const dryRun = process.argv.includes('--dry-run')
 

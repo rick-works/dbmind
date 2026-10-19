@@ -16,8 +16,9 @@
 //! 之所以拆成 lib + 薄 bin：路由可被集成测试直接构造，命令行只是启动参数解析。
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{DefaultBodyLimit, Path, Query, Request, State};
+use axum::http::{header, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -27,7 +28,6 @@ use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tower_http::cors::CorsLayer;
 
 pub mod api;
 
@@ -761,8 +761,9 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
             let dist = fallback_dist.clone();
             async move { spa_fallback(dist, uri).await }
         })
-        // 开发期前端由 vite 提供（不同端口），故放开 CORS
-        .layer(CorsLayer::permissive())
+        // 只允许同源请求与本机前端开发端口（vite 代理会保留 localhost Origin）。
+        // 本地 API 没有鉴权，不能像以前那样对任何来源放开。
+        .layer(middleware::from_fn(enforce_local_origin))
         // 响应压缩：结果集动辄几 MB 的 JSON（2000 行 × 几十列很平常），gzip/br 后
         // 传输量缩到 1/5 ~ 1/10，对所有数据源的查询回显、元数据浏览都生效。
         // 只压 JSON 与静态资源 —— AI 流式响应（text/event-stream）不压，
@@ -775,6 +776,70 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
                 .compress_when(JsonOrStatic),
         )
         .with_state(state)
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::origin_allowed;
+
+    #[test]
+    fn same_origin_and_local_dev_are_allowed() {
+        assert!(origin_allowed("http://127.0.0.1:20361", Some("127.0.0.1:20361")));
+        assert!(origin_allowed("http://localhost:5173", Some("localhost:20361")));
+        assert!(origin_allowed("http://[::1]:5173", Some("[::1]:20361")));
+    }
+
+    #[test]
+    fn external_origins_are_rejected() {
+        assert!(!origin_allowed("https://evil.example", Some("127.0.0.1:20361")));
+        assert!(!origin_allowed("http://127.0.0.1.evil.example", Some("127.0.0.1:20361")));
+        assert!(!origin_allowed("null", Some("127.0.0.1:20361")));
+        assert!(origin_allowed("tauri://localhost", Some("127.0.0.1:20361")));
+    }
+}
+
+/// `Origin` 是否属于当前服务本身，或本机开发服务器。
+fn origin_allowed(origin: &str, host: Option<&str>) -> bool {
+    let Some((scheme, rest)) = origin.split_once("://") else {
+        return false;
+    };
+    let scheme = scheme.to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https" | "tauri") {
+        return false;
+    }
+    let authority = rest.split('/').next().unwrap_or("").to_ascii_lowercase();
+    if scheme == "tauri" && authority == "localhost" {
+        return true;
+    }
+    if let Some(host) = host {
+        if !host.is_empty() && authority == host.to_ascii_lowercase() {
+            return true;
+        }
+    }
+    let host_only = if let Some(rest) = authority.strip_prefix('[') {
+        rest.split(']').next().map(|v| format!("[{v}]")).unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or("").to_string()
+    };
+    matches!(host_only.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "tauri.localhost")
+}
+
+/// 拒绝浏览器跨源请求。无 `Origin` 的请求（CLI、同源 GET、测试）照常放行。
+async fn enforce_local_origin(request: Request, next: Next) -> Response {
+    if let Some(origin) = request
+        .headers()
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        let host = request
+            .headers()
+            .get(header::HOST)
+            .and_then(|value| value.to_str().ok());
+        if !origin_allowed(origin, host) {
+            return (StatusCode::FORBIDDEN, "拒绝跨源请求").into_response();
+        }
+    }
+    next.run(request).await
 }
 
 /// 只压缩 JSON API 响应与静态资源；其余（尤其 SSE 流）原样透传。
