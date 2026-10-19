@@ -38,9 +38,10 @@ const stateClass = computed(() => (props.state === 'asc' ? 'is-asc' : props.stat
 .sort-glyph .g-down {
   transition: opacity .14s ease, stroke-width .14s ease;
 }
-/* 未排序：两枚箭头都很淡，只是提示"这列能排" */
-.sort-glyph .g-up { opacity: .5; }
-.sort-glyph .g-down { opacity: .5; }
+/* 未排序：两枚箭头并重提亮 —— 用户口径「颜色亮一点、看得清楚些」，
+   容器那边再用 --dc-text-weak + opacity 控制整体轻重 */
+.sort-glyph .g-up { opacity: .85; }
+.sort-glyph .g-down { opacity: .85; }
 /* 排序列：只留当前方向（另一侧完全隐去），一眼看出是升还是降，不留"幽灵箭头" */
 .sort-glyph.is-asc .g-up { opacity: 1; stroke-width: 2.1; }
 .sort-glyph.is-asc .g-down { opacity: 0; }

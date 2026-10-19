@@ -5643,10 +5643,10 @@ onBeforeUnmount(() => {
 .data-table th .th-sort {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center;
-  font-size: var(--grid-fs, 13px); color: var(--dc-text-dim); z-index: 3;
-  opacity: .32; cursor: pointer; transition: opacity .16s ease, color .16s ease;
+  font-size: var(--grid-fs, 13px); color: var(--dc-text-weak); z-index: 3;
+  opacity: .75; cursor: pointer; transition: opacity .16s ease, color .16s ease;
 }
-.data-table th:hover .th-sort { opacity: .7; }
+.data-table th:hover .th-sort { opacity: 1; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
 .data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
 /* 已排序列：文字主色 + 底部 2px 主色条（与表预览/NoSQL 同款） */
