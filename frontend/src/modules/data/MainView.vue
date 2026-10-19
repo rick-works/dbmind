@@ -193,22 +193,26 @@
                 <!-- 库图标：**未打开=变暗**。
                      原先用"当前库=蓝、其它=黄"来区分 —— 那是拿**颜色**说**状态**，
                      而同一行的颜色还兼着"类型"的含义，用户没法一眼分清谁在说状态。
-                     现在：颜色恒为琥珀（类型），明暗说状态，行尾绿点再说一次"它开着"。 -->
+                     现在：颜色恒为琥珀（类型），明暗说状态，行尾绿点再说一次"它开着"。
+                     形状说层级：**库里有模式**（PG / SQL Server / DB2…）时库是文件夹，
+                     模式才是数据库形状的 Coin；库里没有下一层（MySQL / SQLite / ClickHouse…）
+                     时库自己就是那个 Coin，用户眼里它就是"库本身"。 -->
                 <el-icon v-else-if="data.kind === 'db'" class="tree-icon"
-                         :class="{ 'tree-icon-dim': !isDbOpened(data) }" color="#f5b34d"><Coin /></el-icon>
-                <!-- 模式图标：**没有「库」这一层的类型**（Oracle / DM，见 hideDbLevelOf）
-                     把模式顶在"库"的位置上 —— 用户眼里它就是那个库，图标必须与其它类型的
-                     「库」一致（数据库形状的 Coin），不能是文件夹；否则同一个位置、
-                     同一件事，两种类型两个样子。有库层的（PG / SQL Server）仍然是文件夹：
-                     那里形状在说层级（库 / 模式）。 -->
-                <el-icon v-else-if="data.kind === 'schema'" class="tree-icon"
                          :class="{ 'tree-icon-dim': !isDbOpened(data) }" color="#f5b34d">
-                  <Coin v-if="hideDbLevelOf(data.connType)" />
-                  <FolderOpened v-else-if="node.expanded" /><Folder v-else />
+                  <template v-if="schemaLevelOf(data.connType) === 'schema'">
+                    <FolderOpened v-if="node.expanded" /><Folder v-else />
+                  </template>
+                  <Coin v-else />
                 </el-icon>
+                <!-- 模式图标：一律用数据库形状的 Coin（与库里没有下层时的「库」一致）。
+                     没有「库」这一层的类型（Oracle / DM）把模式顶在"库"的位置上，
+                     有库层的（PG / SQL Server）它是库里的一层 —— 两种情况用户打交道的
+                     都是"这一组表"，形状不该随层级变来变去。 -->
+                <el-icon v-else-if="data.kind === 'schema'" class="tree-icon"
+                         :class="{ 'tree-icon-dim': !isDbOpened(data) }" color="#f5b34d"><Coin /></el-icon>
                 <!-- catalog（Doris 的 internal / 外部 catalog）：比"库"更高一层的命名空间。
-                     颜色沿用"容器"族的琥珀，只换形状 —— 与「库=Coin / 有库层的 schema=Folder」同一套规则
-                     （颜色说类型族、形状说层级）。不给它图标的话会落到末尾的兜底分支，
+                     颜色沿用"容器"族的琥珀，只换形状 —— 与「库/模式=Coin 或 Folder、catalog=Collection」
+                     同一套规则（颜色说类型族、形状说层级）。不给它图标的话会落到末尾的兜底分支，
                      和「库」长得一模一样，树上分不出来。 -->
                 <el-icon v-else-if="data.kind === 'catalog'" class="tree-icon"
                          color="#f5b34d"><Collection /></el-icon>
