@@ -1063,7 +1063,8 @@
             <div class="about-dbs-title">{{ $t('settings.about.licenseTitle') }}</div>
             <div class="about-block-body">
               <div class="about-license">{{ $t('settings.about.licenseBody') }}</div>
-              <a class="about-link" href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">github.com/rick-works/dbmind</a>
+              <!-- 显示文本也写全 https:// —— 只写 github.com/… 时用户没法直接复制当链接用 -->
+              <a class="about-link" href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">https://github.com/rick-works/dbmind</a>
             </div>
           </div>
         </div>
