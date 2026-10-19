@@ -323,7 +323,8 @@
             </el-table-column>
             <el-table-column :label="$t('tf.idxColumns')" min-width="200">
               <template #default="{ row }">
-                <el-select v-model="row.columns" size="small" multiple filterable collapse-tags :multiple-limit="0">
+                <el-select v-model="row.columns" size="small" multiple filterable collapse-tags :multiple-limit="0"
+                           @change="onIdxColumnsChange(row)">
                   <el-option v-for="c in cols.filter(x => x.name.trim())" :key="c.uid" :label="c.name" :value="c.name.trim()" />
                 </el-select>
               </template>
@@ -349,6 +350,8 @@ import { editorSettingsLive } from '../../utils/settings'
 import { Plus, Delete, Top, Bottom, Grid, DocumentCopy, EditPen } from '@element-plus/icons-vue'
 import { has, qt, sq, buildType, ddlStyleOf, uid } from './objectFormUtils'
 import { t } from '../../utils/i18n'
+// 自动生成的索引名：与结构编辑器共用同一约定 <表名>_<字段名>_idx
+import { autoIndexName } from '../../utils/indexName'
 
 const props = defineProps({
   features: { type: Object, default: () => ({}) },
@@ -633,7 +636,16 @@ const move = (dir) => {
 
 const addIndex = () => {
   if (!cols.some(c => c.name.trim())) return ElMessage.warning(t('tf.addColumnFirst'))
-  idxs.push({ name: 'idx_' + (cols.find(c => c.name.trim())?.name.trim() || 'col'), unique: false, indexType: '', columns: [] })
+  // 默认索引名与结构编辑器同一约定：<表名>_<字段名>_idx（见 utils/indexName.js）
+  idxs.push({ name: autoIndexName(form.name, cols.find(c => c.name.trim())?.name), unique: false, indexType: '', columns: [] })
+}
+/** 选好「包含字段」后让默认索引名跟着走（只改还长着自动名样子的行，不覆盖用户手写的名字） */
+const onIdxColumnsChange = (row) => {
+  const first = (row.columns || []).map(c => String(c || '').trim()).filter(Boolean)[0]
+  if (!first) return
+  const cur = String(row.name || '').trim()
+  const tPrefix = String(form.name || '').trim() + '_'
+  if (!cur || (cur.startsWith(tPrefix) && /_idx$/.test(cur))) row.name = autoIndexName(form.name, first)
 }
 
 // 组合「长度」和「精度」为类型参数，如 DECIMAL(10,2)

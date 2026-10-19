@@ -475,6 +475,27 @@ html[data-theme="dark"] .el-button:not(.el-button--primary):not(.el-button--succ
 .el-radio-button__inner { background: var(--dc-bg-soft); border-color: var(--dc-border); color: var(--dc-text); }
 .el-radio-button__original-radio:checked + .el-radio-button__inner { background: var(--dc-primary); border-color: var(--dc-primary); box-shadow: -1px 0 0 0 var(--dc-primary); }
 .el-checkbox__input.is-checked .el-checkbox__inner { background-color: var(--dc-primary); border-color: var(--dc-primary); }
+/* 「选中 = 主色蓝」对**禁用**的勾选框同样成立：
+   Element 默认把「禁用 + 已勾选」换成一块灰底 + 灰勾（--el-checkbox-disabled-checked-*），
+   于是同一个界面里"我明明勾上了"的框却看不出是选中（主键列被锁死时就长这样，用户当成 bug 反馈）。
+   颜色统一由主色表达，能不能改交给光标 + title 说明。 */
+.el-checkbox__input.is-disabled.is-checked .el-checkbox__inner {
+  background-color: var(--dc-primary);
+  border-color: var(--dc-primary);
+}
+.el-checkbox__input.is-disabled.is-checked .el-checkbox__inner::after { border-color: #fff; }
+.el-checkbox__input.is-disabled.is-checked + .el-checkbox__label { color: inherit; }
+/* 同一条口径也适用于单选控件（圆点 / 分段按钮）：选中就蓝，禁用/只读只体现在光标与 title 上 */
+.el-radio__input.is-disabled.is-checked .el-radio__inner {
+  background-color: var(--dc-primary);
+  border-color: var(--dc-primary);
+}
+.el-radio__input.is-disabled.is-checked .el-radio__inner::after { background-color: #fff; }
+.el-radio-button__original-radio:disabled:checked + .el-radio-button__inner {
+  background: var(--dc-primary);
+  border-color: var(--dc-primary);
+  color: #fff;
+}
 
 /* ==================== Select / Dropdown / Popper 暗色统一 ==================== */
 html[data-theme="dark"] .el-select__wrapper,

@@ -1,5 +1,11 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.37": [
+        "Table designer: fixes \"Save changes\" failing with error 1054 when you only edit an AUTO_INCREMENT column (for example adding a comment to `id`) or rebuild the primary key — the same column was modified twice in a single ALTER and now appears once; the primary-key checkbox of an AUTO_INCREMENT column is locked with a tooltip explaining why",
+        "Auto-generated index names now follow the <table>_<column>_idx pattern everywhere (table designer and new-table dialog), and the name follows the column you pick under \"Included columns\"",
+        "Checked checkboxes always use the theme blue, including read-only or locked cells (such as the primary key box of an AUTO_INCREMENT column) — no more \"looks unchecked although it is checked\"",
+        "Result grids align by column type (numbers and dates right, booleans centered, text left); sort arrows are always visible and brighter, and header labels are optically centered against the divider"
+    ],
     "v1.2.36": [
         "SQL editor: `BEGIN TRAN` / `BEGIN IMMEDIATE` no longer swallow the statements that follow, MySQL `#` line comments are recognized (semicolons inside them do not split), and non-ASCII table names now show up in the quick-edit target list",
         "Read-only connections: writes hidden behind a CTE (even across line breaks or tabs), `SELECT ... INTO` and sequence functions such as `nextval` / `setval` are now blocked",

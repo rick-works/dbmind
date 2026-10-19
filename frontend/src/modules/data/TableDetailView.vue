@@ -346,7 +346,8 @@
                   </el-table-column>
                   <el-table-column :label="$t('tdet.indexCols')" min-width="200">
                     <template #default="{ row }">
-                      <el-select v-model="row.columns" size="small" multiple filterable collapse-tags>
+                      <el-select v-model="row.columns" size="small" multiple filterable collapse-tags
+                                 @change="onIdxColumnsChange(row)">
                         <el-option v-for="c in displayCols.filter(x => String(x.name || '').trim())" :key="c._uid" :label="c.name" :value="String(c.name).trim()" />
                       </el-select>
                     </template>
@@ -450,6 +451,8 @@ import { Plus, Delete, Refresh, CopyDocument, CaretRight, Grid, DocumentCopy, St
 import { listColumns, listIndexes, listTables, alterTable, getFeatures, executeSql, getTableDdl, getTableCounts } from '../../api'
 import { mergeAlterRuns } from './alterMerge'
 import { canonTypeBase } from './typeName'
+// 自动生成的索引名：全库统一 <表名>_<字段名>_idx（与新建表对话框共用同一份实现）
+import { autoIndexName } from '../../utils/indexName'
 // 只读 / 生产保护的口径（与用户管理页、MainView 同一份，见 utils/connGuard.js）
 import { isProdConn, loadProtectProd, guardConnWrite } from '../../utils/connGuard'
 
@@ -765,10 +768,18 @@ const canEditLoaded = computed(() =>
 // 新增行可内联主键的方言
 const canSetPkOnAdd = computed(() => ['mysql', 'oracle', 'mssql'].includes(ddlStyle.value))
 // 修改主键/自增权限（与旧实现保持一致）
+/**
+ * MySQL 的自增列**必须**是键（否则 1075 `Incorrect table definition; there can be only one auto
+ * column and it must be defined as a key`）—— 所以它的主键勾选框锁死：
+ * 取消勾选会生成 `DROP PRIMARY KEY, MODIFY id … AUTO_INCREMENT` 这种必然被拒的语句。
+ * 要把主键挪到别的列：先取消这列的「自增」（那个勾选框是可点的），再取消主键。
+ */
+const pkLockedByAuto = (row) => ddlStyle.value === 'mysql' && !!row.autoIncrement
 const canEditPkOf = (row) => {
   // Doris 的主键即建表时确定的 Key 列（DUPLICATE/UNIQUE KEY），不支持通过 ALTER 新增/修改
   // （会报 "Can not change aggregation type"），编辑态一律只读展示
   if (isDoris.value) return false
+  if (pkLockedByAuto(row)) return false
   if (row._state === 'new') return canSetPkOnAdd.value
   // pg 系（PostgreSQL / KingbaseES / H2）也能改：加主键是标准的
   // `ALTER TABLE … ADD PRIMARY KEY (…)`，取消则按约束名 `DROP CONSTRAINT`
@@ -782,6 +793,7 @@ const canEditPkOf = (row) => {
  */
 const pkTitle = (row) => {
   if (isDoris.value) return t('tdet.pkDoris')
+  if (pkLockedByAuto(row)) return t('tdet.pkAutoCol')
   if (canEditPkOf(row)) return t('tdet.setPk')
   if (row._state === 'new') return t('tdet.pkNewCol')
   if (!canEditLoaded.value) return t('tdet.pkReadOnly')
@@ -1601,7 +1613,21 @@ const colParts = () => {
   // （分支里的自增相关处理对 Doris 是空转 —— Doris 没有 auto_increment，能力位也是 false。）
   if (ddlStyle.value === 'mysql' || ddlStyle.value === 'doris') {
     for (const r of removed) parts.push(`ALTER TABLE ${t} DROP COLUMN ${qt(r._orig ? r._orig.name : r.name)}`)
-    // ① 修改：先不带 AUTO_INCREMENT（避免 DROP PRIMARY KEY 被自增列阻断，最后统一恢复）
+    // 表级主键 diff（删除列后 MySQL 会自动摘除被删列上的主键，避免多余的 DROP PRIMARY KEY）
+    const oldPk = origPkCols.value
+    const newPk = curPkCols.value
+    const removedNames = new Set(removed.map(r => String(r._orig ? r._orig.name : r.name)))
+    const remainPk = oldPk.filter(n => !removedNames.has(n))
+    const pkChanged = !samePk(oldPk, newPk) && !samePk(remainPk, newPk)
+    // ① 修改：**列定义照实写，不要在这里摘 AUTO_INCREMENT**。
+    // 旧实现"重建主键时先摘自增、末尾再补一条 MODIFY 恢复"，结果是**同一条 ALTER 里同一列被 MODIFY 两次**：
+    //   ALTER TABLE `users` MODIFY COLUMN `id` int NOT NULL COMMENT '主键ID',
+    //                       MODIFY COLUMN `id` int NOT NULL AUTO_INCREMENT COMMENT '主键ID'
+    // MySQL 8.0.46 实测直接报 1054 `Unknown column 'id' in 'users'`（真机反馈的"保存失败"）——
+    // 一条 ALTER 内第二次引用刚被 MODIFY 过的列，MySQL 认不出来。
+    // 而那次摘除本来就不必要：MySQL 对一条 ALTER 里的子句是**按内部顺序**执行的（先删索引 → 改列 → 加索引），
+    // 实测 `MODIFY id … AUTO_INCREMENT, DROP PRIMARY KEY, ADD PRIMARY KEY (id,name)` 完全成功；
+    // 只有"自增列被移出主键"才会报 1075，那种改法本身就是非法的（前端已把自增列的主键勾选框锁死，见 canEditPkOf）。
     // Doris 分桶列（DISTRIBUTED BY）：数据库**一律拒绝** `MODIFY COLUMN` ——
     // 改类型、改注释、什么都改不了（实测 `Can not modify distribution column[id]`）。
     // 不让它拖垮整批变更：该列的 ALTER 不生成，脚本里留一行注释说明原因，
@@ -1614,7 +1640,7 @@ const colParts = () => {
         parts.push(`-- ${tr('tdet.dorisDistSkip', { col: String(r.name || '').trim() })}`)
         continue
       }
-      const f = rowToForm(r, true); f.autoIncrement = false
+      const f = rowToForm(r, true)
       // Doris：把 `DESC … ALL` 取回的**聚合类型 / key 标记带进 form**。
       // `rowToForm()` 是「行对象 → 普通表单对象」的转换，只搬固定字段 ——
       // 不补这一步，生成器读到的 f.aggKey 永远是 undefined，
@@ -1628,24 +1654,14 @@ const colParts = () => {
     }
     // ② 新增
     for (const r of added) {
-      const f = rowToForm(r, false); f.autoIncrement = false
+      const f = rowToForm(r, false)
       const sql = buildColumnSql(f, false)
       if (sql) parts.push(sql)
     }
-    // ③ 表级主键 diff（删除列后 MySQL 会自动摘除被删列上的主键，避免多余的 DROP PRIMARY KEY）
-    const oldPk = origPkCols.value
-    const newPk = curPkCols.value
-    const removedNames = new Set(removed.map(r => String(r._orig ? r._orig.name : r.name)))
-    const remainPk = oldPk.filter(n => !removedNames.has(n))
-    if (!samePk(oldPk, newPk) && !samePk(remainPk, newPk)) {
+    // ③ 表级主键 diff
+    if (pkChanged) {
       if (remainPk.length) parts.push(`ALTER TABLE ${t} DROP PRIMARY KEY`)
       if (newPk.length) parts.push(`ALTER TABLE ${t} ADD PRIMARY KEY (${newPk.map(qt).join(', ')})`)
-    }
-    // ④ 恢复自增
-    for (const r of [...modified, ...added]) {
-      if (r.autoIncrement) {
-        parts.push(`ALTER TABLE ${t} MODIFY COLUMN ${buildMySqlColumnDef(rowToForm(r, true), false)}`)
-      }
     }
     return parts
   }
@@ -1913,16 +1929,21 @@ const buildIdxRows = () => {
 }
 const newIdxRow = () => ({
   _uid: 'ixn' + (++idxUid), _state: 'new',
-  // 默认名按约定用 <字段名>_idx（原来是 idx_<字段名>）；没有可用字段时退回 col_idx
-  name: ((displayCols.value.find(c => c.name && c.name.trim()) || {}).name || 'col').trim() + '_idx',
+  // 默认名走全库统一约定 <表名>_<字段名>_idx（见 utils/indexName.js）
+  name: autoIndexName(props.table, (displayCols.value.find(c => c.name && c.name.trim()) || {}).name),
   unique: false, indexType: indexTypes.value[0] || '', columns: [], _orig: null
 })
 // 选好「包含字段」后，把默认索引名跟着改（只在名字还是空/自动生成时改，不覆盖用户手写的）
+// 注意：这里**只动新建行** —— 已存在的索引是用户库里真实的名字，
+// 改一下它的字段就顺手改名，等于擅自改了数据库对象。
 const onIdxColumnsChange = (r) => {
+  if (r._state !== 'new') return
   const first = (r.columns || []).map(c => String(c || '').trim()).filter(Boolean)[0]
   if (!first) return
   const cur = String(r.name || '').trim()
-  if (!cur || /_idx$/.test(cur)) r.name = first + '_idx'
+  const tPrefix = String(props.table || '').trim() + '_'
+  const autoShape = !cur || (cur.startsWith(tPrefix) && /_idx$/.test(cur))
+  if (autoShape) r.name = autoIndexName(props.table, first)
 }
 const addIdxRow = () => { idxRows.value.push(newIdxRow()) }
 const removeIdxRow = (r) => {
@@ -2026,7 +2047,7 @@ const createIndexSql = (f) => {
  * 方言有没有「改索引名」的原生语句。有就走 RENAME，没有才退回「先删再建」。
  *
  * 为什么在意「只改名字」这一种：MySQL 上「先删再建」有个硬伤 —— 索引若正撑着
- * AUTO_INCREMENT 列（本应用自己加的 `_上游_auto_<列>` 就是这种），DROP 的那一瞬间
+ * AUTO_INCREMENT 列（本应用自己加的 `<表名>_<列>_idx` 兜底索引就是这种），DROP 的那一瞬间
  * 自增列就没有键了，MySQL 拒绝整条语句：
  *   「Incorrect table definition. there can be only one auto column and it must be defined as a key」
  * （errorCode=1075）—— 于是「改个索引名」变成永远保存失败。
@@ -2069,7 +2090,15 @@ const mySqlDropPrimaryKeySql = () => {
   )
   if (hasOtherIdx) return `ALTER TABLE ${qt(props.table)} DROP PRIMARY KEY`
 
-  const fallback = qt('_上游_auto_' + String(autoCol.name).replace(/[^a-zA-Z0-9_]/g, '').slice(0, 50))
+  // 兜底索引名走全库统一约定 <表名>_<字段名>_idx（见 utils/indexName.js）；
+  // 万一这个名字已经被占用（同表里已有同名索引），依次加 _2/_3 后缀 —— 重名会让整条语句失败
+  const used = new Set(idxRows.value
+    .filter(r => r._state !== 'deleted')
+    .map(r => String(r.name || '').trim().toLowerCase()))
+  const base = autoIndexName(props.table, autoCol.name)
+  let fallbackName = base
+  for (let i = 2; used.has(fallbackName.toLowerCase()) && i < 100; i++) fallbackName = `${base}_${i}`
+  const fallback = qt(fallbackName)
   const colName = qt(autoCol.name)
   return `ALTER TABLE ${qt(props.table)} ADD INDEX ${fallback} (${colName});\n` +
     `ALTER TABLE ${qt(props.table)} DROP PRIMARY KEY`
@@ -2963,15 +2992,23 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .field-table :deep(.el-switch) { z-index: auto; }
 .field-table :deep(.el-checkbox__label) { display: none; }
 /* 禁用的勾选框（可为空=是的主键列、只读列、改不了主键的类型）：
-   Element 默认给它一块 #f5f7fa 的**接近纯白**的底，在深色表格里像贴了张白纸 ——
-   用户反馈"不能勾选就不要白色，鼠标移入给提示就好"。这里换成透明底 + 淡描边，
-   勾/未勾的状态照样看得出（勾号用弱化的文字色），原因由 title 提示承担。 */
+   **未勾选**：Element 默认给一块 #f5f7fa 的**接近纯白**的底，在深色表格里像贴了张白纸 ——
+   用户反馈"不能勾选就不要白色，鼠标移入给提示就好"。这里换成透明底 + 淡描边。
+   **已勾选**：必须是主色蓝，与其它所有勾选框一模一样（原来连选中态也一并透明化，于是
+   被锁死的「主键」那一格看起来"根本没选中"，用户拿截图当 bug 反馈）。 */
 .field-table :deep(.el-checkbox.is-disabled .el-checkbox__inner) {
   background-color: transparent !important;
   border-color: var(--dc-border) !important;
 }
 .field-table :deep(.el-checkbox.is-disabled .el-checkbox__inner::after) {
   border-color: var(--dc-text-dim) !important;
+}
+.field-table :deep(.el-checkbox.is-disabled.is-checked .el-checkbox__inner) {
+  background-color: var(--dc-primary) !important;
+  border-color: var(--dc-primary) !important;
+}
+.field-table :deep(.el-checkbox.is-disabled.is-checked .el-checkbox__inner::after) {
+  border-color: #fff !important;
 }
 .field-table :deep(.el-checkbox.is-disabled) { cursor: not-allowed; }
 /* ↓↓↓ 行底色统一画在 td 上（悬停、新增/改动），按顺序覆盖：
