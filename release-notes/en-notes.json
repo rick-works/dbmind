@@ -1,9 +1,9 @@
 {
-  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
     "v1.2.37": [
         "Table designer: fixes \"Save changes\" failing with error 1054 when you only edit an AUTO_INCREMENT column (for example adding a comment to `id`) or rebuild the primary key — the same column was modified twice in a single ALTER and now appears once; the primary-key checkbox of an AUTO_INCREMENT column is locked with a tooltip explaining why",
-        "Auto-generated index names now follow the <table>_<column>_idx pattern everywhere (table designer and new-table dialog), and the name follows the column you pick under \"Included columns\"",
-        "Checked checkboxes always use the theme blue, including read-only or locked cells (such as the primary key box of an AUTO_INCREMENT column) — no more \"looks unchecked although it is checked\"",
+        "Index names: auto-generated indexes follow the <table>_<column>_idx pattern everywhere (table designer and new-table dialog), and the name follows the column you pick under \"Included columns\"",
+        "Checkboxes: a checked box always uses the theme blue, read-only or locked cells included (e.g. the primary key box of an AUTO_INCREMENT column)",
         "Result grids align by column type (numbers and dates right, booleans centered, text left); sort arrows are always visible and brighter, and header labels are optically centered against the divider"
     ],
     "v1.2.36": [
@@ -90,177 +90,177 @@
         "Settings: Restore defaults now sits next to the settings it affects (page-level ones share the row with Save, shortcuts in the card header, log level right under the level cards), and is a bordered button everywhere",
         "Trimmed a batch of hints: closing the window now just asks whether to quit or minimize to the tray, and the update prompt button reads Do not show this version again"
     ],
-  "v1.2.22": [
-      "Writes on read-only or production connections are now blocked the moment you click: import data, generate data, truncate table, clear table, drop table/object and rename. If the connection is read-only, or is marked Production with production protection on, the action is refused right away and the dialog never opens - previously you had to walk through the whole flow and only got rejected on submit",
-      "Blocked-by-safety notices now appear in one place (top right) and can take you straight to the fix: the duplicate message in the middle is gone, the read-only notice carries an 'Edit data source ->' button that opens that data source's editor on the Advanced tab with the Read-only switch highlighted, and the production-protection notice opens Settings -> Security & session. Same behaviour in the structure page, data editing, SQL editor and rename dialogs",
-      "Hover a table or view in the tree to read its comment. The card sits outside the tree on the right of the row (so the tree container cannot clip it), sizes itself to the content, and matches the connection hover card (small arrow included)",
-      "Connection badges are unified and follow the theme: environment badges (Development / Test / Production / Staging / UAT) and the Read-only badge used to have different sizes, font weights and intensities; they now share one set of metrics and colours that adapt to the theme - on the light theme every one of them is a readable, deeper shade (the Test amber was nearly invisible on white), while the dark theme keeps the original vivid colours",
-      "A batch of home page and tree fixes: the query trend is aggregated per day (no more several bars for the same day); empty tables show 0 instead of a blank row-count cell, and large databases no longer stall on counting everything at once (row counts fill in batches, so a few hundred tables show their first batches quickly); delete icons are consistently red across the app; the two structure-preview hints are merged into one",
-      "A round of frontend/backend health checks: fixed one broken feature, two cases of silently reporting success while doing nothing or losing data, four cases of state leaking between tables/databases, and a mis-ordered release script"
-  ],
-  "v1.2.21": [
-      "macOS: fixed the blank window when the app reopens itself after an online update. The relaunched instance reused whatever answered on the port - without comparing versions and without checking it was still alive - while the installer closed that very kernel at the same moment, so the window pointed at a port nobody was listening on. (macOS paints nothing when a WebView navigation fails; Windows paints an error page - which is why only mac showed a blank window.) Reuse now requires a matching version plus a live check, and otherwise we start our own kernel. Also fixed: leftover kernels could not be killed on mac/Linux (the process name was hard-coded to .exe), and a startup readiness timeout used to leave no trace (new ~/.dbmind/logs/shell.log)",
-      "macOS updates are more reliable: when the app runs straight from the mounted disk image (not dragged into Applications) we no longer try to overwrite it in place - that writes to a read-only volume and would be pointless anyway; after copying we verify the frontend assets really landed before restarting; and the 'the update made the app disappear' case is fixed (the fallback used to open an installer image that had already been deleted)",
-      "About page: the current version in the header now follows the release (it kept showing the previous one); release notes past the 12th bullet no longer stay hidden (v1.2.20 has 14 of them); and 99 duplicate dictionary keys - two sets of notes for the same version - were cleaned up",
-      "Website release page and About page text: the sync script now publishes the website itself instead of merely reminding you ('source updated' is not 'site updated' - this was missed twice); it aligns with the remote branch first, so a stale local branch can no longer block the push; and literal ** or backticks (leaked markdown) no longer show up on the website or on the About page"
-  ],
-  "v1.2.20": [
-      "Edit Structure now finds columns in a non-default schema: for PostgreSQL / SQL Server / KingbaseES the tree addresses objects as database.schema, but the columns path only ever looked at the connection's default schema (public on PG, dbo on SQL Server) - so a table in another schema listed fine yet showed no fields. The whole chain (columns, DDL, indexes, comments, column-type enrichment) now uses the schema you clicked",
-      "A missing column list is no longer reported as silence: on Doris it used to come back as an empty list, which reads as a broken table; it now states the reason (wrong database, table does not exist, or no read access to information_schema)",
-      "The object tree no longer stutters: opening a database with thousands of tables renders the first 200 rows and grows the rest in the background (the list stays flat - no Show more row), and hovering a connection no longer re-renders the whole tree",
-      "Data transfer: fixed Row size too large (8126) when creating tables on MySQL targets (two over-wide type mappings, explicit DYNAMIC row format, and the error now reports the column sizes), plus faster writes through more parallelism and batched transactions",
-      "Data transfer - Select objects: the type chips became filters - clicking Tables shows only tables, clicking Views shows only views, and clicking again returns to all; switching types no longer drops the objects you already ticked",
-      "Data compare / Data transfer: fixed the database not being preselected; the database context menu gained Data compare and Data transfer and preselects the database you right-clicked",
-      "Column type spellings are unified: the same type no longer looks different in the picker and in the grid (MySQL returns VARCHAR, Doris STRING, PostgreSQL varchar ...) - the echo now follows each source's own metadata",
-      "New table / Edit Structure: fixed an error when opening the Fields tab, fixed deleting the wrong row once a table has more than 80 columns, and the type cell font now matches its neighbours",
-      "Tree context menus close when you click a menu item or anywhere else (they used to stay open and block the view)",
-      "SQL editor: clicking a result tab selects the matching statement (same behaviour as the statement tabs on top); the statement breadcrumb and locating now use the editor's own text, fixing wrong numbering after commenting out the first statement and jumping to the wrong statement",
-      "Connection hover card: no longer covers the list or blocks clicks, vertically centred, with a small arrow pointing at the connection and a font size matching the rest of the app",
-      "Folders can be pinned: Pin folder in the folder context menu, and the order is persisted",
-      "Settings: more UI-size options (home cards, dialog title and body, data grid, toasts, tab bar text), and the SQL formatting and UI size pages were re-laid out",
-      "A batch of stability fixes: the settings dialog aborted the rest of its loading because of a function that no longer exists (driver list, notifications, knowledge base and shortcuts showed up empty), missing and duplicated dictionary keys, timers stacking up after the view remounts, columns of one table leaking into another while switching tabs, row state mixing up in editable lists, and background reader coroutines no longer report success when they die"
+    "v1.2.22": [
+        "Writes on read-only or production connections are now blocked the moment you click: import data, generate data, truncate table, clear table, drop table/object and rename. If the connection is read-only, or is marked Production with production protection on, the action is refused right away and the dialog never opens - previously you had to walk through the whole flow and only got rejected on submit",
+        "Blocked-by-safety notices now appear in one place (top right) and can take you straight to the fix: the duplicate message in the middle is gone, the read-only notice carries an 'Edit data source ->' button that opens that data source's editor on the Advanced tab with the Read-only switch highlighted, and the production-protection notice opens Settings -> Security & session. Same behaviour in the structure page, data editing, SQL editor and rename dialogs",
+        "Hover a table or view in the tree to read its comment. The card sits outside the tree on the right of the row (so the tree container cannot clip it), sizes itself to the content, and matches the connection hover card (small arrow included)",
+        "Connection badges are unified and follow the theme: environment badges (Development / Test / Production / Staging / UAT) and the Read-only badge used to have different sizes, font weights and intensities; they now share one set of metrics and colours that adapt to the theme - on the light theme every one of them is a readable, deeper shade (the Test amber was nearly invisible on white), while the dark theme keeps the original vivid colours",
+        "A batch of home page and tree fixes: the query trend is aggregated per day (no more several bars for the same day); empty tables show 0 instead of a blank row-count cell, and large databases no longer stall on counting everything at once (row counts fill in batches, so a few hundred tables show their first batches quickly); delete icons are consistently red across the app; the two structure-preview hints are merged into one",
+        "A round of frontend/backend health checks: fixed one broken feature, two cases of silently reporting success while doing nothing or losing data, four cases of state leaking between tables/databases, and a mis-ordered release script"
+    ],
+    "v1.2.21": [
+        "macOS: fixed the blank window when the app reopens itself after an online update. The relaunched instance reused whatever answered on the port - without comparing versions and without checking it was still alive - while the installer closed that very kernel at the same moment, so the window pointed at a port nobody was listening on. (macOS paints nothing when a WebView navigation fails; Windows paints an error page - which is why only mac showed a blank window.) Reuse now requires a matching version plus a live check, and otherwise we start our own kernel. Also fixed: leftover kernels could not be killed on mac/Linux (the process name was hard-coded to .exe), and a startup readiness timeout used to leave no trace (new ~/.dbmind/logs/shell.log)",
+        "macOS updates are more reliable: when the app runs straight from the mounted disk image (not dragged into Applications) we no longer try to overwrite it in place - that writes to a read-only volume and would be pointless anyway; after copying we verify the frontend assets really landed before restarting; and the 'the update made the app disappear' case is fixed (the fallback used to open an installer image that had already been deleted)",
+        "About page: the current version in the header now follows the release (it kept showing the previous one); release notes past the 12th bullet no longer stay hidden (v1.2.20 has 14 of them); and 99 duplicate dictionary keys - two sets of notes for the same version - were cleaned up",
+        "Website release page and About page text: the sync script now publishes the website itself instead of merely reminding you ('source updated' is not 'site updated' - this was missed twice); it aligns with the remote branch first, so a stale local branch can no longer block the push; and literal ** or backticks (leaked markdown) no longer show up on the website or on the About page"
+    ],
+    "v1.2.20": [
+        "Edit Structure now finds columns in a non-default schema: for PostgreSQL / SQL Server / KingbaseES the tree addresses objects as database.schema, but the columns path only ever looked at the connection's default schema (public on PG, dbo on SQL Server) - so a table in another schema listed fine yet showed no fields. The whole chain (columns, DDL, indexes, comments, column-type enrichment) now uses the schema you clicked",
+        "A missing column list is no longer reported as silence: on Doris it used to come back as an empty list, which reads as a broken table; it now states the reason (wrong database, table does not exist, or no read access to information_schema)",
+        "The object tree no longer stutters: opening a database with thousands of tables renders the first 200 rows and grows the rest in the background (the list stays flat - no Show more row), and hovering a connection no longer re-renders the whole tree",
+        "Data transfer: fixed Row size too large (8126) when creating tables on MySQL targets (two over-wide type mappings, explicit DYNAMIC row format, and the error now reports the column sizes), plus faster writes through more parallelism and batched transactions",
+        "Data transfer - Select objects: the type chips became filters - clicking Tables shows only tables, clicking Views shows only views, and clicking again returns to all; switching types no longer drops the objects you already ticked",
+        "Data compare / Data transfer: fixed the database not being preselected; the database context menu gained Data compare and Data transfer and preselects the database you right-clicked",
+        "Column type spellings are unified: the same type no longer looks different in the picker and in the grid (MySQL returns VARCHAR, Doris STRING, PostgreSQL varchar ...) - the echo now follows each source's own metadata",
+        "New table / Edit Structure: fixed an error when opening the Fields tab, fixed deleting the wrong row once a table has more than 80 columns, and the type cell font now matches its neighbours",
+        "Tree context menus close when you click a menu item or anywhere else (they used to stay open and block the view)",
+        "SQL editor: clicking a result tab selects the matching statement (same behaviour as the statement tabs on top); the statement breadcrumb and locating now use the editor's own text, fixing wrong numbering after commenting out the first statement and jumping to the wrong statement",
+        "Connection hover card: no longer covers the list or blocks clicks, vertically centred, with a small arrow pointing at the connection and a font size matching the rest of the app",
+        "Folders can be pinned: Pin folder in the folder context menu, and the order is persisted",
+        "Settings: more UI-size options (home cards, dialog title and body, data grid, toasts, tab bar text), and the SQL formatting and UI size pages were re-laid out",
+        "A batch of stability fixes: the settings dialog aborted the rest of its loading because of a function that no longer exists (driver list, notifications, knowledge base and shortcuts showed up empty), missing and duplicated dictionary keys, timers stacking up after the view remounts, columns of one table leaking into another while switching tabs, row state mixing up in editable lists, and background reader coroutines no longer report success when they die"
     ],
     "v1.2.19": [
-      "The table preview row total is fixed - ClickHouse returns count(*) as a floating point number, which we could not read, so the footer showed only 200 rows and paging was stuck; it now shows the real total and pages properly, and all data sources were checked",
-      "Data governance - capacity statistics read the row count the same tolerant way, so on ClickHouse it no longer shows 0 or unknown",
-      "Settings - General - UI size gains a Tab bar text option: the font size of the workspace tab strip (for example the script tab) now follows it, taking effect immediately without a restart"
+        "The table preview row total is fixed - ClickHouse returns count(*) as a floating point number, which we could not read, so the footer showed only 200 rows and paging was stuck; it now shows the real total and pages properly, and all data sources were checked",
+        "Data governance - capacity statistics read the row count the same tolerant way, so on ClickHouse it no longer shows 0 or unknown",
+        "Settings - General - UI size gains a Tab bar text option: the font size of the workspace tab strip (for example the script tab) now follows it, taking effect immediately without a restart"
     ],
     "v1.2.18": [
-      "Edit Structure: the loading indicator finally shows while it loads (the v-loading directive was never registered, so it silently did nothing), and the spinner no longer stutters",
-      "The field tables in Edit Structure and New Table now render only the rows you can see - wide tables with hundreds of columns scroll smoothly with no blank patches, and the type cell stays plain text until you click it to open the dropdown",
-      "Small fixes along the way: a single selection style in the field table (the first row no longer looks selected), the comment cell input matches its neighbours, no more SQL keywords in the field-table headers, and the update confirmation now reads statement first / question last with the Open folder button removed"
+        "Edit Structure: the loading indicator finally shows while it loads (the v-loading directive was never registered, so it silently did nothing), and the spinner no longer stutters",
+        "The field tables in Edit Structure and New Table now render only the rows you can see - wide tables with hundreds of columns scroll smoothly with no blank patches, and the type cell stays plain text until you click it to open the dropdown",
+        "Small fixes along the way: a single selection style in the field table (the first row no longer looks selected), the comment cell input matches its neighbours, no more SQL keywords in the field-table headers, and the update confirmation now reads statement first / question last with the Open folder button removed"
     ],
     "v1.2.17": [
-      "Table editor: New Table and Edit Structure show only the columns that really apply per data source; on Doris the field table can tick Bucketing columns and shares the same data as the distribution list in Basic info (tick either side and the other follows, and CREATE TABLE reads the same source); ClickHouse gains a Partition key column and the Primary key column is no longer hidden - every column-level setting that feeds a table-level one can now be ticked right in the field table",
-      "Edit Structure: fixed the Sort key / Partition key read-back (they showed a dash no matter how the table was set up); added read-only Bucketing columns and Partition key columns; yes/no is now always a single checkbox (Nullable, Primary key, Sort key, Bucketing, Partition key) - identical across data sources, with no more yes tags or dashes",
-      "New Table: a field comment can be edited in a multi-line dialog (double-click or the expand button), matching Edit Structure; data source fixes - column comments were never read on DM (Dameng) and H2 (the comment cell stayed empty), DM no longer shows an auto-increment checkbox that can never be ticked, and MySQL DEFAULT NULL now reads back as default NULL; also removed the SQL keywords leaking into the field-table headers (Bucketing / Sort key / Partition key) and dropped the Open folder button from the updater"
+        "Table editor: New Table and Edit Structure show only the columns that really apply per data source; on Doris the field table can tick Bucketing columns and shares the same data as the distribution list in Basic info (tick either side and the other follows, and CREATE TABLE reads the same source); ClickHouse gains a Partition key column and the Primary key column is no longer hidden - every column-level setting that feeds a table-level one can now be ticked right in the field table",
+        "Edit Structure: fixed the Sort key / Partition key read-back (they showed a dash no matter how the table was set up); added read-only Bucketing columns and Partition key columns; yes/no is now always a single checkbox (Nullable, Primary key, Sort key, Bucketing, Partition key) - identical across data sources, with no more yes tags or dashes",
+        "New Table: a field comment can be edited in a multi-line dialog (double-click or the expand button), matching Edit Structure; data source fixes - column comments were never read on DM (Dameng) and H2 (the comment cell stayed empty), DM no longer shows an auto-increment checkbox that can never be ticked, and MySQL DEFAULT NULL now reads back as default NULL; also removed the SQL keywords leaking into the field-table headers (Bucketing / Sort key / Partition key) and dropped the Open folder button from the updater"
     ],
     "v1.2.16": [
-    "Online update: when the package is already downloaded, the toolbar icon (and the startup check) goes straight to Update now instead of showing the release notes first — and a complete installer already on disk is reused instead of being downloaded twice, even after a restart",
-    "Online update: all in-progress chatter under the progress bar is gone (retry counters, resume notices, source selection) — only progress and speed remain",
-    "Online update: switch to a faster source really switches now (cancel, re-rank, resume from the breakpoint); failures can be retried in place, finishing in the background or failing pops a dialog, and the installer is removed after a successful update",
-    "The two update dialogs now match the rest of the app (badge in the title, same button sizing), and the confirmation reads statement first, question last",
-    "Home dashboard: the connection-name font in Quick start now matches the actions column on the right"
-  ],
-  "v1.2.15": [
-    "Online update: a one-line heads-up before it starts — the app will close automatically and reopen as the new version once installed, instead of vanishing",
-    "Fixed macOS not reopening the app after an update: if the in-place install cannot be done it no longer stops silently — it opens the DMG so you can drag the app in, and reopening now retries by itself",
-    "The check-for-updates dialog now shows only what changed — the release asset table is no longer rendered there",
-    "The download progress bar is slimmer",
-    "The top-bar language button (中 / EN) is no longer bold — it matches the weight of the icons beside it"
-  ],
-  "v1.2.14": [
-    "Result grid font size now scales the whole result area: column headers, the footer (elapsed time / totals / selection summary) and the pager all follow it",
-    "The pager's rows-per-page text and the page-jump input follow as well — no more large grid text sitting next to tiny chrome"
-  ],
-  "v1.2.13": [
-    "Two new formatting options: comma position (after / before the field) and indent style (standard / tabular left / tabular right)",
-    "Keyword layout rules gained an indent-width column: set it per keyword, leave empty to follow the global value, or 0 for no indent",
-    "The editor context menu now has “Editor settings” / “Format settings” entries that jump straight to the right page",
-    "Settings panel polish: rules render as a bordered table, with control alignment and font sizes matching the other pages",
-    "General settings gained interface sizes: adjust the top menu text (including its icons), the top bar right icons and the left tree text, applied immediately",
-    "Settings reorganised: the Theme and Notifications pages moved into General, so the settings menu is shorter",
-    "Fixed the occasional blank script tab: a failed Monaco load is no longer cached forever, and now says what to do"
-  ],
-  "v1.2.12": [
-    "Fixed the dead close dialog: “Quit” and “Minimize to tray” now work",
-    "Updates are one click and silent: download, install and restart all happen by themselves",
-    "No more manual “allow” step after updating on macOS"
-  ],
-  "v1.2.11": [
-    "Fixed in-app update: Windows no longer reports “file not found”, macOS opens the image properly",
-    "The dialog shows where the installer was saved, so you can install it by hand",
-    "If the package fails to land, you get a clear reason"
-  ],
-  "v1.2.10": [
-    "Closing the window asks first: quit, or minimize to tray",
-    "New tray icon: click to bring the window back, right-click to quit",
-    "Faster build pipeline (future releases come out sooner)"
-  ],
-  "v1.2.9": [
-    "Update no longer asks where to save: the package always goes to your Downloads folder",
-    "Windows updates no longer stop at the “already installed” page — they overwrite in place and reopen the app",
-    "Tabs show only the table or object name; connection and database live in the tooltip"
-  ],
-  "v1.2.8": [
-    "Updates pick the right package for your OS: dmg on macOS, deb on Linux, setup.exe on Windows",
-    "Alignment is unified across the grids; NULL follows the column’s values",
-    "The dark-mode “unsaved changes” bar is no longer too bright",
-    "The macOS install window is centered, and the readme line is no longer cut off"
-  ],
-  "v1.2.7": [
-    "The macOS image now includes a “first launch” guide with the three steps",
-    "Two ways to avoid the prompt entirely: curl download, or Homebrew --no-quarantine"
-  ],
-  "v1.2.6": [
-    "macOS window finalised: traffic lights share the menu’s line",
-    "No more empty gap in the top-left corner when full screen"
-  ],
-  "v1.2.5": [
-    "The macOS window is back under system control; traffic lights are where they belong",
-    "No more blank strip in full screen"
-  ],
-  "v1.2.4": [
-    "The macOS image now uses two big icons — just drag them",
-    "System traffic lights restored; fixed the “no title bar and cannot close” case"
-  ],
-  "v1.2.3": [
-    "Rebuilt the macOS install screen: a proper “drag into Applications”"
-  ],
-  "v1.2.2": [
-    "Fixed the black screen on macOS: packaged resources were not found",
-    "Rebuilt the macOS install screen"
-  ],
-  "v1.2.1": [
-    "Fixed macOS apps not opening on double click: no more dependency on a library that is not there",
-    "macOS icon redone to Apple’s grid"
-  ],
-  "v1.2.0": [
-    "Driver downloads no longer need a mirror choice: it tries several domestic sources by itself",
-    "Wide tables scroll more smoothly (only visible columns are rendered)",
-    "Clearer table headers; pointers unified to a hand cursor"
-  ],
-  "v1.1.1": [
-    "Fixed three cell-editing issues (blank turned into NULL, cursor jumping after double click, “unsaved” shown after reverting)",
-    "Fixed a crash that could freeze the whole UI",
-    "Smoother scrolling on large tables; default row height 22 → 26"
-  ],
-  "v1.1.0": [
-    "Updates work without a proxy: falls back to domestic mirrors and verifies integrity with the official checksum",
-    "Resumes after network changes; failed downloads can be retried",
-    "Driver Manager entry: what is installed, what is missing, mirror switch, manual upload",
-    "Production protection on by default: data-changing actions are blocked (queries unaffected)",
-    "Download source is speed-tested automatically and shows speed and remaining time",
-    "Sum / average / min / max restored for numeric selections; external links open in the system browser",
-    "No more white flicker while scrolling results"
-  ],
-  "v1.0.4": [
-    "Stuck transfers no longer hang silently: they time out and say where they stopped",
-    "Backstop: auto-finish after 30 minutes, with the stopping point logged"
-  ],
-  "v1.0.3": [
-    "Fixed ClickHouse “execution failed” and “failed to read boolean” on large tables",
-    "Total count no longer shows -1",
-    "“Format” on a SQL selection no longer errors",
-    "“Newline before keyword” no longer adds an extra break"
-  ],
-  "v1.0.2": [
-    "Updates download behind a proxy (system proxy is detected automatically)",
-    "Downloads can run in the background; the top-bar icon shows progress",
-    "Release notes render properly; the About page version matches the package",
-    "Fixed Doris failing to connect and black console flashes on start/connect",
-    "Home KPI panel restored (total/connected connections, types); driver downloads show live progress"
-  ],
-  "v1.0.1": [
-    "Audit log: filter by category, one-click SQL copy, accurate counts and pages",
-    "Logs are no longer cleared automatically — only via “Clear logs”",
-    "Settings UI fixes (dialog height, inner scrolling, always-visible pager)",
-    "The About page now lists directories"
-  ],
-  "v1.0.0": [
-    "AI assistance: SQL explanation / optimisation / error fixing / performance diagnosis / Q&A",
-    "One workbench for 17+ data sources (MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / DMDB / Kingbase …)",
-    "Transaction mode and direct result editing: review and roll back before committing",
-    "Smart SQL editor and huge result sets: millions of rows in a blink"
-  ]
+        "Online update: when the package is already downloaded, the toolbar icon (and the startup check) goes straight to Update now instead of showing the release notes first — and a complete installer already on disk is reused instead of being downloaded twice, even after a restart",
+        "Online update: all in-progress chatter under the progress bar is gone (retry counters, resume notices, source selection) — only progress and speed remain",
+        "Online update: switch to a faster source really switches now (cancel, re-rank, resume from the breakpoint); failures can be retried in place, finishing in the background or failing pops a dialog, and the installer is removed after a successful update",
+        "The two update dialogs now match the rest of the app (badge in the title, same button sizing), and the confirmation reads statement first, question last",
+        "Home dashboard: the connection-name font in Quick start now matches the actions column on the right"
+    ],
+    "v1.2.15": [
+        "Online update: a one-line heads-up before it starts — the app will close automatically and reopen as the new version once installed, instead of vanishing",
+        "Fixed macOS not reopening the app after an update: if the in-place install cannot be done it no longer stops silently — it opens the DMG so you can drag the app in, and reopening now retries by itself",
+        "The check-for-updates dialog now shows only what changed — the release asset table is no longer rendered there",
+        "The download progress bar is slimmer",
+        "The top-bar language button (中 / EN) is no longer bold — it matches the weight of the icons beside it"
+    ],
+    "v1.2.14": [
+        "Result grid font size now scales the whole result area: column headers, the footer (elapsed time / totals / selection summary) and the pager all follow it",
+        "The pager's rows-per-page text and the page-jump input follow as well — no more large grid text sitting next to tiny chrome"
+    ],
+    "v1.2.13": [
+        "Two new formatting options: comma position (after / before the field) and indent style (standard / tabular left / tabular right)",
+        "Keyword layout rules gained an indent-width column: set it per keyword, leave empty to follow the global value, or 0 for no indent",
+        "The editor context menu now has “Editor settings” / “Format settings” entries that jump straight to the right page",
+        "Settings panel polish: rules render as a bordered table, with control alignment and font sizes matching the other pages",
+        "General settings gained interface sizes: adjust the top menu text (including its icons), the top bar right icons and the left tree text, applied immediately",
+        "Settings reorganised: the Theme and Notifications pages moved into General, so the settings menu is shorter",
+        "Fixed the occasional blank script tab: a failed Monaco load is no longer cached forever, and now says what to do"
+    ],
+    "v1.2.12": [
+        "Fixed the dead close dialog: “Quit” and “Minimize to tray” now work",
+        "Updates are one click and silent: download, install and restart all happen by themselves",
+        "No more manual “allow” step after updating on macOS"
+    ],
+    "v1.2.11": [
+        "Fixed in-app update: Windows no longer reports “file not found”, macOS opens the image properly",
+        "The dialog shows where the installer was saved, so you can install it by hand",
+        "If the package fails to land, you get a clear reason"
+    ],
+    "v1.2.10": [
+        "Closing the window asks first: quit, or minimize to tray",
+        "New tray icon: click to bring the window back, right-click to quit",
+        "Faster build pipeline (future releases come out sooner)"
+    ],
+    "v1.2.9": [
+        "Update no longer asks where to save: the package always goes to your Downloads folder",
+        "Windows updates no longer stop at the “already installed” page — they overwrite in place and reopen the app",
+        "Tabs show only the table or object name; connection and database live in the tooltip"
+    ],
+    "v1.2.8": [
+        "Updates pick the right package for your OS: dmg on macOS, deb on Linux, setup.exe on Windows",
+        "Alignment is unified across the grids; NULL follows the column’s values",
+        "The dark-mode “unsaved changes” bar is no longer too bright",
+        "The macOS install window is centered, and the readme line is no longer cut off"
+    ],
+    "v1.2.7": [
+        "The macOS image now includes a “first launch” guide with the three steps",
+        "Two ways to avoid the prompt entirely: curl download, or Homebrew --no-quarantine"
+    ],
+    "v1.2.6": [
+        "macOS window finalised: traffic lights share the menu’s line",
+        "No more empty gap in the top-left corner when full screen"
+    ],
+    "v1.2.5": [
+        "The macOS window is back under system control; traffic lights are where they belong",
+        "No more blank strip in full screen"
+    ],
+    "v1.2.4": [
+        "The macOS image now uses two big icons — just drag them",
+        "System traffic lights restored; fixed the “no title bar and cannot close” case"
+    ],
+    "v1.2.3": [
+        "Rebuilt the macOS install screen: a proper “drag into Applications”"
+    ],
+    "v1.2.2": [
+        "Fixed the black screen on macOS: packaged resources were not found",
+        "Rebuilt the macOS install screen"
+    ],
+    "v1.2.1": [
+        "Fixed macOS apps not opening on double click: no more dependency on a library that is not there",
+        "macOS icon redone to Apple’s grid"
+    ],
+    "v1.2.0": [
+        "Driver downloads no longer need a mirror choice: it tries several domestic sources by itself",
+        "Wide tables scroll more smoothly (only visible columns are rendered)",
+        "Clearer table headers; pointers unified to a hand cursor"
+    ],
+    "v1.1.1": [
+        "Fixed three cell-editing issues (blank turned into NULL, cursor jumping after double click, “unsaved” shown after reverting)",
+        "Fixed a crash that could freeze the whole UI",
+        "Smoother scrolling on large tables; default row height 22 → 26"
+    ],
+    "v1.1.0": [
+        "Updates work without a proxy: falls back to domestic mirrors and verifies integrity with the official checksum",
+        "Resumes after network changes; failed downloads can be retried",
+        "Driver Manager entry: what is installed, what is missing, mirror switch, manual upload",
+        "Production protection on by default: data-changing actions are blocked (queries unaffected)",
+        "Download source is speed-tested automatically and shows speed and remaining time",
+        "Sum / average / min / max restored for numeric selections; external links open in the system browser",
+        "No more white flicker while scrolling results"
+    ],
+    "v1.0.4": [
+        "Stuck transfers no longer hang silently: they time out and say where they stopped",
+        "Backstop: auto-finish after 30 minutes, with the stopping point logged"
+    ],
+    "v1.0.3": [
+        "Fixed ClickHouse “execution failed” and “failed to read boolean” on large tables",
+        "Total count no longer shows -1",
+        "“Format” on a SQL selection no longer errors",
+        "“Newline before keyword” no longer adds an extra break"
+    ],
+    "v1.0.2": [
+        "Updates download behind a proxy (system proxy is detected automatically)",
+        "Downloads can run in the background; the top-bar icon shows progress",
+        "Release notes render properly; the About page version matches the package",
+        "Fixed Doris failing to connect and black console flashes on start/connect",
+        "Home KPI panel restored (total/connected connections, types); driver downloads show live progress"
+    ],
+    "v1.0.1": [
+        "Audit log: filter by category, one-click SQL copy, accurate counts and pages",
+        "Logs are no longer cleared automatically — only via “Clear logs”",
+        "Settings UI fixes (dialog height, inner scrolling, always-visible pager)",
+        "The About page now lists directories"
+    ],
+    "v1.0.0": [
+        "AI assistance: SQL explanation / optimisation / error fixing / performance diagnosis / Q&A",
+        "One workbench for 17+ data sources (MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / DMDB / Kingbase …)",
+        "Transaction mode and direct result editing: review and roll back before committing",
+        "Smart SQL editor and huge result sets: millions of rows in a blink"
+    ]
 }
