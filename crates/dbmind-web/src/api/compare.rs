@@ -410,10 +410,12 @@ async fn count_rows(
     condition: Option<&str>,
     dialect: Dialect,
 ) -> u64 {
+    // 用户条件**必须整体加括号**：`where a = 1 or b = 2` 再跟 `and` 条件时，
+    // and 的优先级高于 or，语义会被悄悄改掉（对比结果对不上，却查不出原因）。
     let where_part = condition
         .map(str::trim)
         .filter(|c| !c.is_empty())
-        .map(|c| format!(" where {c}"))
+        .map(|c| format!(" where ({c})"))
         .unwrap_or_default();
     let schema_owned = schema.map(|s| s.to_string());
     let sql = format!("select count(*) from {}{where_part}", qualified(table, &schema_owned, dialect));
@@ -482,9 +484,16 @@ fn spawn_side_stream(
             .collect::<Vec<_>>()
             .join(", ");
         let mut sql = format!("select {list} from {}", qualified(&table, &schema, dialect));
-        if let Some(condition) = condition.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-            sql.push_str(&format!(" where {condition}"));
+        // 条件整体加括号（见 count_rows 的注释），并且记住「有没有条件」——
+        // 不要再靠 `sql.contains(" where ")` 猜：条件里出现字符串 ' where ' 就猜错了
+        let condition = condition
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty());
+        if let Some(condition) = condition {
+            sql.push_str(&format!(" where ({condition})"));
         }
+        let has_condition = condition.is_some();
         // 排序列（同时也是 keyset 游标的列），**保留成 Vec** 供下面展开成逐列条件
         let order_list: Vec<String> = if key_cols.is_empty() {
             columns.iter().map(|name| dialect.quote(name)).collect()
@@ -504,7 +513,10 @@ fn spawn_side_stream(
             }
             // keyset 条件：上一页最后一行的键之后（首页不带，取从头开始的前 N 行）
             let page_sql = match &last_key {
-                None => format!("{sql} order by {order_cols} limit {page_size}"),
+                // 分页语法按**方言**：Oracle/DB2 不认 `limit`，SQL Server 要 `offset … fetch`，
+                // 硬写 `limit` 的结果是「5 万行以内（首页）看着都对，一翻页就报错」，
+                // 更糟的是首页直接语法错（Oracle 上整表对比根本跑不起来）。
+                None => format!("{sql} order by {order_cols} {}", dialect.limit_clause(0, page_size as u64)),
                 Some(key) => {
                     let lits: Vec<String> = key.iter().map(keyset_literal).collect();
                     // **必须展开成逐列 or 链，不能写 SQL 行值比较 `(a,b) > (x,y)`**：
@@ -526,8 +538,11 @@ fn spawn_side_stream(
                         alts.push(format!("({})", parts.join(" and ")));
                     }
                     let keyset = alts.join(" or ");
-                    let glue = if sql.to_lowercase().contains(" where ") { " and" } else { " where" };
-                    format!("{sql}{glue} ({keyset}) order by {order_cols} limit {page_size}")
+                    let glue = if has_condition { " and" } else { " where" };
+                    format!(
+                        "{sql}{glue} ({keyset}) order by {order_cols} {}",
+                        dialect.limit_clause(0, page_size as u64)
+                    )
                 }
             };
             // 对比的对账拉数（一页页翻）是长任务：走独立会话键，不占元数据那条连接
@@ -980,16 +995,20 @@ pub async fn start(
                 task.step(format!("读取源表 {}", body.source_table));
                 // **先 count 两侧行数做分母**：进度条按真实百分比增长（与数据传输一致）。
                 // count 失败/为 0 → 分母未知，保持流动动画兜底。
-                let src_count = count_rows(
-                    &state, &source_conn, &source_scope, &body.source_table,
-                    body.source_schema.as_deref(), body.source_condition.as_deref(),
-        source_dialect,
-                ).await;
-                let tgt_count = count_rows(
-                    &state, &target_conn, &target_scope, &target_table,
-                    body.target_schema.as_deref(), body.target_condition.as_deref(),
-        target_dialect,
-                ).await;
+                // 两侧 count 并发执行：它们是独立连接上的两条独立查询，串行只是白等
+                // 一个 RTT × 2（跨网时每个 count 可能就是几百毫秒）。
+                let (src_count, tgt_count) = tokio::join!(
+                    count_rows(
+                        &state, &source_conn, &source_scope, &body.source_table,
+                        body.source_schema.as_deref(), body.source_condition.as_deref(),
+                        source_dialect,
+                    ),
+                    count_rows(
+                        &state, &target_conn, &target_scope, &target_table,
+                        body.target_schema.as_deref(), body.target_condition.as_deref(),
+                        target_dialect,
+                    )
+                );
                 let mut est_total = src_count + tgt_count;
                 task.set_total(if est_total > 0 { est_total as i64 } else { -1 });
                 task.log(format!(

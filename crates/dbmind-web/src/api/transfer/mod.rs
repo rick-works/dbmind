@@ -72,6 +72,15 @@ pub struct StreamCfg {
 pub struct TablePlan {
     pub state: AppState,
     pub task: Option<Arc<Task>>,
+    /// 本表的**会话后缀**（会话亲和键的一部分）。
+    ///
+    /// 为什么必须有：内核会话池按「连接 + 亲和键」分泳道，**亲和键相同的请求落到同一条
+    /// 物理连接**。以前所有表都用 `internal:sync-w0`、`internal:sync-r0`，于是整库并发
+    /// （4 张表同时跑）时 4 张表的 0 号 writer 其实挤在同一根连接上：
+    /// A 表 `begin` 之后 B 表在同一会话里接着写，A 表 `commit` 把 B 表的数据一起提交，
+    /// 两边的 `rollback`/`恢复 autocommit` 也会互相踩。数据看着「同步成功」，
+    /// 事务语义已经错乱 —— 并发越高越容易踩，且完全无声。
+    pub sid: String,
 
     // ---- 源 ----
     pub src_conn: String,
@@ -89,8 +98,24 @@ pub struct TablePlan {
     /// 已解析出的目标连接 id（见 `scope::resolve`）
     pub tgt_target: String,
     pub target_kind: Dialect,
-    /// 已 quote 的目标表名
+    /// 已 quote 的目标表名（显式选了模式时带模式前缀）
     pub target_name: String,
+    /// **本表最多几路写会话**（0 = 用方言默认值）。
+    ///
+    /// 整库同步的总连接数 = 对象并发 × 每表 writer 数。4 张表 × 4 路 = 16 条目标连接，
+    /// 而方言声明的并发（`write_parallelism`，MySQL/PG = 4）本意是**整个任务**的上限。
+    /// 所以任务启动时按「并发对象数」把预算切给每张表：4 张表各 1 路，单表独享 4 路。
+    ///
+    /// 为什么不用共享信号量按会话持有：会话是粘性的，writer 在「等下一批数据」时会一直
+    /// 攥着许可，而它自己的 reader 又在等另一张表释放读许可 —— 两者会互锁成死环。
+    /// 按对象并发数静态切分既守住总连接数，又不存在任何等待环。
+    pub workers_cap: usize,
+    /// **本表最多几片并发读**（0 = 用方言默认值），切分逻辑同 `workers_cap`
+    pub slices_cap: usize,
+    /// 与 `columns` 一一对应的**目标侧真实列名**：源列 `order_no` 在目标上可能叫
+    /// `ORDER_NO`（Oracle 折大写）或 `OrderNo`（历史表）。写语句必须用目标的名字，
+    /// 否则「目标表已存在」这条路上会报列不存在 —— 而结构是好的、只是名字对不上。
+    pub target_columns: Vec<String>,
     /// 与 `columns` 一一对应的目标列类型（用于字面量规范化，如日期补 `:00`）
     pub target_types: Vec<Option<String>>,
 
@@ -103,13 +128,33 @@ pub struct TablePlan {
     pub row_limit: u64,
 
     // ---- 写入行为 ----
-    pub upsert: bool,
-    /// upsert 预读出来的目标已有键（`key_of` 的产物）
+    pub upsert: UpsertMode,
+    /// **仅 [`UpsertMode::TwoPhase`] 用**：预读出来的目标已有键（`key_of` 的产物）。
+    /// 原生 upsert 不需要它 —— 那正是原来最贵的一步（把目标整表主键拉进内存）。
     pub existing: Arc<std::collections::HashSet<String>>,
     /// 单条 INSERT 的目标行数（方言差异很大，见 sync 里的注释）
     pub per_statement: u64,
     pub identity_on: bool,
     pub stream: Option<StreamCfg>,
+}
+
+/// upsert 怎么落库。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum UpsertMode {
+    /// 不是 upsert（仅插入 / 清空后导入）—— 全走 INSERT
+    Off,
+    /// **原生 upsert**：一条语句里带 `on duplicate key update` / `on conflict … do update` /
+    /// `merge into … when matched`。不需要预读目标主键，也没有逐行 UPDATE。
+    Native,
+    /// 旧的两阶段：先读目标全部主键 → 命中的走 UPDATE、其余走 INSERT。
+    /// 只留给没有原生语法的方言（ClickHouse / Doris / Derby），行为与以前完全一致。
+    TwoPhase,
+}
+
+impl UpsertMode {
+    pub fn is_upsert(self) -> bool {
+        self != UpsertMode::Off
+    }
 }
 
 /// 一次表传输的结果。

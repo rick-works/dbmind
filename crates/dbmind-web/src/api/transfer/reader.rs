@@ -25,7 +25,7 @@ pub const PAGE_WIDE: usize = 50_000;
 /// 反而比单流慢（真机实测 4 片 5 千行/页 11s vs 单流 5s）。
 pub const PAGE_SPLIT: usize = 20_000;
 
-/// 读页的会话键前缀（分片时后面拼片号）
+/// 读页的会话键前缀（分片时后面拼片号，整表唯一后缀拼 `sid`）
 const SESSION_READ: &str = "internal:sync-r";
 
 /// **每片至少要有的行数**（5 页），低于这个量级就不分片。
@@ -97,6 +97,11 @@ pub struct SqlReader {
     where_clause: String,
     row_limit: u64,
     page_rows: AtomicUsize,
+    /// 本表的会话后缀（见 `TablePlan::sid`）：并发整库同步时，不同表的同号分片
+    /// 若用同一个会话键就会落到同一条物理连接上，分片退化成排队
+    sid: String,
+    /// 本表最多几片并发读（0 = 方言默认），见 `TablePlan::slices_cap`
+    slices_cap: usize,
 }
 
 impl SqlReader {
@@ -119,6 +124,8 @@ impl SqlReader {
             where_clause: plan.where_clause.clone(),
             row_limit: plan.row_limit,
             page_rows: AtomicUsize::new(PAGE_WIDE),
+            sid: plan.sid.clone(),
+            slices_cap: plan.slices_cap,
         })
     }
 
@@ -233,17 +240,28 @@ impl Reader for SqlReader {
         }
         // 源端能不能并行取数，取决于**源库**声明的连接数：单连接池的库（SQLite/H2/
         // Derby/SQL Server）多开只会在池子里排队，反而多一层上下文切换。
-        write_parallelism(self.dialect.kind)
+        let base = write_parallelism(self.dialect.kind);
+        // 任务级预算（见 `TablePlan::slices_cap`）：并发同步多张表时每张表少开几片，
+        // 整次任务的源端读连接数也不会超。
+        if self.slices_cap > 0 {
+            base.min(self.slices_cap).max(1)
+        } else {
+            base
+        }
     }
 
     fn split<'a>(&'a mut self, want: usize) -> BF<'a, Result<Vec<RowRange>, String>> {
         Box::pin(async move {
             let whole = vec![RowRange::default()];
-            // 不分片的三种情况，理由各不相同：
+            // 不分片的两种情况，理由各不相同：
             // - 无键：只能 OFFSET 翻页，切了也是每片从头扫；
-            // - 多列键：值域不能等分，采样边界要按字典序比较（方言差异太大，不做）；
             // - 有行数上限：全局配额要按顺序消费，切了就不知道谁先谁后。
-            if want <= 1 || self.paging_keys.len() != 1 || self.row_limit > 0 {
+            //
+            // **复合主键照切**：分片只按**首列**取值域区间 `k1 >= lo and k1 < hi`（区间互不
+            // 重叠、合起来覆盖全表），页内游标仍然用**完整键**做 keyset —— 两者 AND 在一起，
+            // 一条行只会落在一个分片里。以前这里要求「恰好一列键」，于是复合主键的大表
+            // 永远单流读（几十万行的表只有一条连接在拉）。
+            if want <= 1 || self.paging_keys.is_empty() || self.row_limit > 0 {
                 self.page_rows.store(PAGE_WIDE, Ordering::SeqCst);
                 return Ok(whole);
             }
@@ -296,10 +314,11 @@ impl Reader for SqlReader {
             let page_rows = self.page_rows_now();
             // 每片一条独立会话键：同一把键会被会话池归到同一条泳道（=同一条物理连接），
             // 四片并发就变成排队 —— 这是分片「看起来开了、实际没并发」的经典坑。
+            // `sid` 同样必须带上：只按片号分键的话，**两张表**的同号分片会共用一条连接。
             let session = if range.is_whole() {
-                SESSION_READ.to_string()
+                format!("{SESSION_READ}-{}", self.sid)
             } else {
-                format!("{SESSION_READ}-{}", range.index)
+                format!("{SESSION_READ}-{}-{}", self.sid, range.index)
             };
             let rows = fetch_page(
                 &self.state,

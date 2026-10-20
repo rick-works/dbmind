@@ -20,7 +20,7 @@ use std::time::Duration;
 use dbmind_core::CellValue;
 use tokio::sync::mpsc;
 
-use super::{reader_for, writer_for, Page, Stats, TablePlan};
+use super::{reader_for, writer_for, Page, Stats, TablePlan, UpsertMode};
 use crate::api::sync::key_of;
 
 /// 单页失败后的重试次数（退避 150ms / 300ms / 600ms）。
@@ -84,7 +84,14 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                     }
                 }
             }
-            writer.finish(worker).await;
+            // 提交/恢复 autocommit 失败必须上抛：以前这里返回值被丢掉，commit 报错
+            // 也当成功，界面显示「同步成功」而数据没落盘。
+            if let Err(msg) = writer.finish(worker).await {
+                let mut slot = err.lock().await;
+                if slot.is_none() {
+                    *slot = Some(msg);
+                }
+            }
         }));
     }
 
@@ -193,8 +200,9 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         }
         consumed += rows.len() as u64;
 
-        if plan.upsert && !plan.key_indexes.is_empty() {
-            // upsert：已有键 → 更新（攒批、串行），其余 → 插入池（并发）
+        if plan.upsert == UpsertMode::TwoPhase && !plan.key_indexes.is_empty() {
+            // 两阶段 upsert：已有键 → 更新（攒批、串行），其余 → 插入池（并发）。
+            // 原生 upsert 不走这里 —— 目标端一条语句自己判插入还是更新，行直接进写池。
             let (existing, fresh): (Vec<_>, Vec<_>) = rows
                 .into_iter()
                 .partition(|row| plan.existing.contains(&key_of(row, &plan.key_indexes)));
@@ -231,7 +239,21 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     }
     drop(write_tx);
     for handle in writer_handles {
-        let _ = tokio::time::timeout(PIPE_WAIT, handle).await;
+        // 写协程 panic（驱动异常/OOM）或超时未结束，都不能当成「写完了」：
+        // 以前 `let _ = timeout(...)` 把这两种情况一起吞掉，少写的行毫无痕迹。
+        match tokio::time::timeout(PIPE_WAIT, handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                if failure.is_none() && !canceled {
+                    failure = Some("写入侧协程异常终止（驱动异常或内存不足），本次同步数据不完整".to_string());
+                }
+            }
+            Err(_) => {
+                if failure.is_none() && !canceled {
+                    failure = Some("写入协程超时未结束，本次同步数据不完整".to_string());
+                }
+            }
+        }
     }
     // 读协程 panic（驱动异常/OOM）不能被当成「读完了」：补一条失败
     for handle in reader_handles {
@@ -249,6 +271,10 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     }
     if canceled {
         note.push_str("（已取消：已写入的部分保留，不回滚）");
+    }
+    if plan.upsert == UpsertMode::Native && inserted > 0 {
+        // 原生 upsert 由服务端判插入还是更新，SQL 层面拿不到「新增/更新」的拆分
+        note.push_str("（原生 upsert：新增/更新未区分）");
     }
     Ok(Stats {
         inserted,

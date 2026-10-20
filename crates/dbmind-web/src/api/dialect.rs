@@ -487,6 +487,187 @@ impl Dialect {
         self.kind.key()
     }
 
+    /// 这条方言能不能用**一条语句**完成 upsert（原生 upsert）。
+    ///
+    /// 能的话就不必「先把目标全部主键读进内存 → 命中的逐行 UPDATE」——那是 upsert 最贵的
+    /// 两步；不能的方言（ClickHouse / Doris / Derby）继续走两阶段，行为不变。
+    pub fn supports_native_upsert(&self) -> bool {
+        matches!(
+            self.key(),
+            "mysql" | "mariadb" | "postgresql" | "kingbase" | "sqlite" | "h2" | "oracle" | "dm"
+                | "db2" | "sqlserver"
+        )
+    }
+
+    /// 原生 upsert 单条语句最多带多少行（调用方按它拆分）。
+    pub fn upsert_row_limit(&self) -> usize {
+        match self.key() {
+            // T-SQL 的行值构造器单语句上限 1000 行（解析器硬限制，与 INSERT 同一条规矩）
+            "sqlserver" => 1000,
+            _ => usize::MAX,
+        }
+    }
+
+    /// 生成一条原生 upsert 语句。
+    ///
+    /// - `table`：已加引号（必要时带模式前缀）的目标表名
+    /// - `columns`：**目标侧**列名（未加引号），顺序与 `rows` 里的值一致
+    /// - `key_indexes`：主键/唯一键在 `columns` 里的下标
+    /// - `rows`：已经按本方言渲染好的字面量
+    ///
+    /// 各方言形态（都是「一条语句、服务端自己判插入还是更新」）：
+    /// - MySQL/MariaDB：`insert … on duplicate key update c = values(c)`
+    /// - PG/Kingbase/SQLite：`insert … on conflict (keys) do update set c = excluded.c`
+    /// - H2：`merge into t (cols) key (keys) values …`
+    /// - Oracle/DM：`merge into t tgt using (select … from dual union all …) src on (…)`
+    /// - DB2/SQL Server：`merge into t as tgt using (values …) as src (cols) on (…)`
+    ///
+    /// 不支持的方言返回 `None`（调用方回退到两阶段）。
+    pub fn upsert_sql(
+        &self,
+        table: &str,
+        columns: &[String],
+        key_indexes: &[usize],
+        rows: &[Vec<String>],
+    ) -> Option<String> {
+        if rows.is_empty() || columns.is_empty() || key_indexes.is_empty() {
+            return None;
+        }
+        let q = |name: &str| self.quote(name);
+        let col_list = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
+        let keys = key_indexes.iter().map(|i| q(&columns[*i])).collect::<Vec<_>>();
+        let key_set: std::collections::HashSet<usize> = key_indexes.iter().copied().collect();
+        // 需要被更新的列 = 除键以外的列（全是键时语句退化成「插入或忽略」）
+        let payload: Vec<usize> = (0..columns.len()).filter(|i| !key_set.contains(i)).collect();
+        let tuples = rows
+            .iter()
+            .map(|row| format!("({})", row.join(", ")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let insert_from_src = |sql: &mut String| {
+            let src_cols = (0..columns.len())
+                .map(|i| format!("src.{}", q(&columns[i])))
+                .collect::<Vec<_>>()
+                .join(", ");
+            sql.push_str(&format!(
+                " when not matched then insert ({col_list}) values ({src_cols})"
+            ));
+        };
+        match self.key() {
+            "mysql" | "mariadb" => {
+                if payload.is_empty() {
+                    let first = keys.first()?;
+                    return Some(format!(
+                        "insert into {table} ({col_list}) values {tuples} on duplicate key update {first} = {first}"
+                    ));
+                }
+                let sets = payload
+                    .iter()
+                    .map(|i| {
+                        let c = q(&columns[*i]);
+                        format!("{c} = values({c})")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Some(format!(
+                    "insert into {table} ({col_list}) values {tuples} on duplicate key update {sets}"
+                ))
+            }
+            "postgresql" | "kingbase" | "sqlite" => {
+                let target = keys.join(", ");
+                if payload.is_empty() {
+                    return Some(format!(
+                        "insert into {table} ({col_list}) values {tuples} on conflict ({target}) do nothing"
+                    ));
+                }
+                let sets = payload
+                    .iter()
+                    .map(|i| {
+                        let c = q(&columns[*i]);
+                        format!("{c} = excluded.{c}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Some(format!(
+                    "insert into {table} ({col_list}) values {tuples} on conflict ({target}) do update set {sets}"
+                ))
+            }
+            "h2" => Some(format!(
+                "merge into {table} ({col_list}) key ({}) values {tuples}",
+                keys.join(", ")
+            )),
+            "oracle" | "dm" => {
+                // Oracle 的 MERGE 源用 `select … from dual union all`；表别名不能带 AS
+                let branches = rows
+                    .iter()
+                    .map(|row| {
+                        let exprs = columns
+                            .iter()
+                            .enumerate()
+                            .map(|(i, c)| format!("{} as {}", row[i], q(c)))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        format!("select {exprs} from dual")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" union all ");
+                let on = key_indexes
+                    .iter()
+                    .map(|i| {
+                        let c = q(&columns[*i]);
+                        format!("tgt.{c} = src.{c}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                let mut sql = format!("merge into {table} tgt using ({branches}) src on ({on})");
+                if !payload.is_empty() {
+                    let sets = payload
+                        .iter()
+                        .map(|i| {
+                            let c = q(&columns[*i]);
+                            format!("{c} = src.{c}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    sql.push_str(&format!(" when matched then update set {sets}"));
+                }
+                insert_from_src(&mut sql);
+                Some(sql)
+            }
+            "db2" | "sqlserver" => {
+                let on = key_indexes
+                    .iter()
+                    .map(|i| {
+                        let c = q(&columns[*i]);
+                        format!("tgt.{c} = src.{c}")
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" and ");
+                let mut sql = format!(
+                    "merge into {table} as tgt using (values {tuples}) as src ({col_list}) on ({on})"
+                );
+                if !payload.is_empty() {
+                    let sets = payload
+                        .iter()
+                        .map(|i| {
+                            let c = q(&columns[*i]);
+                            format!("{c} = src.{c}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    sql.push_str(&format!(" when matched then update set {sets}"));
+                }
+                insert_from_src(&mut sql);
+                // T-SQL 要求 MERGE 语句以分号结束（老版本解析器硬要求）
+                if self.key() == "sqlserver" {
+                    sql.push(';');
+                }
+                Some(sql)
+            }
+            _ => None,
+        }
+    }
+
     /// 标识符加引号：简单名不加，避免把 MySQL 的大小写敏感表名改写掉。
     /// 带 `.` 或 `-` 之类的名字才逐段加引号。
     ///
@@ -502,7 +683,13 @@ impl Dialect {
             let plain = s
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
-            if plain && !is_reserved(s) {
+            // **下折方言**（PG / Kingbase / SQLite）里未加引号的名字会被折成小写：
+            // 目标表上叫 `Name` 的列，裸写 `Name` 会被解析成 `name` —— 真机报
+            // `column "name" of relation "t" does not exist`，而表结构明明是好的。
+            // 这类「含大写字母」的普通名必须逐字加引号；全小写的普通名照旧裸写（行为不变）。
+            let needs_case_quote =
+                plain && self.folds_ident_lower() && s.chars().any(|c| c.is_ascii_uppercase());
+            if plain && !is_reserved(s) && !needs_case_quote {
                 return s.to_string();
             }
             // 上折方言（Oracle / DM / DB2 / H2 / Derby）里，未加引号的名字会被折成大写；
@@ -522,6 +709,14 @@ impl Dialect {
             }
         };
         name.split('.').map(wrap).collect::<Vec<_>>().join(".")
+    }
+
+    /// 未加引号的标识符是否会被折成**小写**（PG 系）。
+    ///
+    /// 与 [`Self::folds_ident_upper`] 相对：这些库里含大写字母的名字必须加引号，
+    /// 否则会被悄悄折成小写、指向另一个（或不存在的）列。
+    fn folds_ident_lower(&self) -> bool {
+        matches!(self.key(), "postgresql" | "kingbase" | "sqlite")
     }
 
     /// 未加引号的标识符是否会被折成大写（决定加引号前要不要先上折）。
@@ -4910,5 +5105,110 @@ mod tests {
         // 这里是对的：PG 里 schema 就是小写 public，加引号后依然指向它
         assert_eq!(q(ConnectionKind::Postgresql, "public.user"), "\"public\".\"user\"");
         assert_eq!(q(ConnectionKind::Postgresql, "public.sales"), "\"public\".sales");
+    }
+
+    /// 下折方言（PG / SQLite）里含大写字母的名字必须加引号，否则会被折成小写。
+    ///
+    /// 守着一次真机故障：目标 PG 表上有一列叫 `Name`，同步写进去报
+    /// `column "name" of relation "t" does not exist` —— 结构明明是好的，
+    /// 只是 `quote()` 把普通名裸写了，PG 把它折成了 `name`。
+    #[test]
+    fn 下折方言的大小写不敏感名要加引号() {
+        assert_eq!(q(ConnectionKind::Postgresql, "Name"), "\"Name\"");
+        assert_eq!(q(ConnectionKind::Postgresql, "name"), "name");
+        assert_eq!(q(ConnectionKind::Sqlite, "Amount"), "\"Amount\"");
+        // 上折方言保持原样：全大写照旧裸写，小写普通名照旧裸写（由库自己上折）
+        assert_eq!(q(ConnectionKind::Oracle, "NAME"), "NAME");
+        assert_eq!(q(ConnectionKind::Oracle, "name"), "name");
+        // 不折的方言完全不受影响
+        assert_eq!(q(ConnectionKind::Mysql, "Name"), "Name");
+    }
+
+    // ==================== 原生 upsert 语句 ====================
+    //
+    // 这几条是「一条语句搞定插入或更新」的**生成规则**：拼错一个关键字，整张表的
+    // upsert 会在真机上直接语法错；而少写 `when matched` / `on conflict` 则更坏 ——
+    // 语句仍然成功，只是把「更新」变成了「插入」，行数悄悄翻倍。
+
+    fn upsert(kind: ConnectionKind) -> Option<String> {
+        Dialect::new(kind).upsert_sql(
+            "t",
+            &["id".to_string(), "name".to_string(), "amount".to_string()],
+            &[0],
+            &[
+                vec!["1".to_string(), "'a'".to_string(), "10".to_string()],
+                vec!["2".to_string(), "'b'".to_string(), "20".to_string()],
+            ],
+        )
+    }
+
+    #[test]
+    fn mysql_用_on_duplicate_key_update() {
+        let sql = upsert(ConnectionKind::Mysql).expect("mysql 必须支持原生 upsert");
+        assert_eq!(
+            sql,
+            "insert into t (id, name, amount) values (1, 'a', 10), (2, 'b', 20) \
+             on duplicate key update name = values(name), amount = values(amount)"
+        );
+    }
+
+    #[test]
+    fn pg_用_on_conflict_do_update_且键列原样_匹配() {
+        let sql = upsert(ConnectionKind::Postgresql).expect("pg 必须支持原生 upsert");
+        assert_eq!(
+            sql,
+            "insert into t (id, name, amount) values (1, 'a', 10), (2, 'b', 20) \
+             on conflict (id) do update set name = excluded.name, amount = excluded.amount"
+        );
+    }
+
+    #[test]
+    fn oracle_用_merge_union_all_源() {
+        let sql = upsert(ConnectionKind::Oracle).expect("oracle 必须支持原生 upsert");
+        assert!(sql.starts_with("merge into t tgt using (select 1 as id, 'a' as name, 10 as amount from dual union all "));
+        assert!(sql.contains("on (tgt.id = src.id)"));
+        assert!(sql.contains("when matched then update set name = src.name, amount = src.amount"));
+        assert!(sql.ends_with("when not matched then insert (id, name, amount) values (src.id, src.name, src.amount)"));
+    }
+
+    #[test]
+    fn sqlserver_与_db2_用_values_派生表并给别名() {
+        let sql = upsert(ConnectionKind::Sqlserver).expect("sqlserver 必须支持原生 upsert");
+        assert!(sql.starts_with("merge into t as tgt using (values (1, 'a', 10), (2, 'b', 20)) as src (id, name, amount) on (tgt.id = src.id)"));
+        assert!(sql.contains("when matched then update set name = src.name, amount = src.amount"));
+        // T-SQL 要求 MERGE 以分号结束（老解析器硬要求，缺了就报语法错）
+        assert!(sql.ends_with(';'));
+
+        let db2 = upsert(ConnectionKind::Db2).expect("db2 必须支持原生 upsert");
+        assert!(db2.starts_with("merge into t as tgt using (values "));
+        assert!(!db2.ends_with(';'), "DB2 不该拼分号（它不接受语句尾分号）");
+    }
+
+    #[test]
+    fn 没有原生语法的方言返回_None() {
+        // ClickHouse / Doris / Derby 继续走两阶段（预读主键 + 逐行 UPDATE）
+        assert!(upsert(ConnectionKind::Clickhouse).is_none());
+        assert!(upsert(ConnectionKind::Doris).is_none());
+        assert!(upsert(ConnectionKind::Derby).is_none());
+        assert!(!Dialect::new(ConnectionKind::Clickhouse).supports_native_upsert());
+    }
+
+    #[test]
+    fn 全是主键列时退化成_插入或忽略() {
+        let sql = Dialect::new(ConnectionKind::Postgresql)
+            .upsert_sql(
+                "t",
+                &["id".to_string(), "code".to_string()],
+                &[0, 1],
+                &[vec!["1".to_string(), "'x'".to_string()]],
+            )
+            .expect("pg 必须支持");
+        assert_eq!(sql, "insert into t (id, code) values (1, 'x') on conflict (id, code) do nothing");
+        // Oracle 全键时没有 when matched 子句，但插入分支仍然在
+        let ora = Dialect::new(ConnectionKind::Oracle)
+            .upsert_sql("t", &["id".to_string()], &[0], &[vec!["1".to_string()]])
+            .expect("oracle 必须支持");
+        assert!(!ora.contains("when matched"));
+        assert!(ora.contains("when not matched then insert (id) values (src.id)"));
     }
 }

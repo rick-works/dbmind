@@ -198,6 +198,11 @@ struct Opts {
     where_by_table: std::collections::HashMap<String, String>,
     /// 全局行过滤（旧客户端 / 单表接口），界面已不再产生
     where_clause: String,
+    /// 本表最多几路**写**会话（0 = 方言默认值）。由整库接口按「对象并发数」切分预算，
+    /// 见 `TablePlan::workers_cap`
+    tgt_workers: usize,
+    /// 本表最多几片**读**会话（0 = 方言默认值），同上
+    src_slices: usize,
 }
 
 impl Opts {
@@ -216,6 +221,13 @@ impl Opts {
             }
         }
         self.where_clause.clone()
+    }
+
+    /// 设定本表的会话预算（整库同步按并发对象数切分，见 `db()`）。
+    fn with_session_caps(mut self, tgt_workers: usize, src_slices: usize) -> Self {
+        self.tgt_workers = tgt_workers;
+        self.src_slices = src_slices;
+        self
     }
 }
 
@@ -273,6 +285,8 @@ impl SyncRequest {
                 })
                 .collect(),
             where_clause: normalize_where(self.where_clause.as_deref().unwrap_or("")),
+            tgt_workers: 0,
+            src_slices: 0,
         }
     }
 }
@@ -1615,6 +1629,157 @@ pub(crate) async fn write_insert_rows(
     Ok(ok_rows)
 }
 
+/// 生成一批**原生 upsert** 语句（(行数, SQL)）。拆分约束与 INSERT 完全一致：
+/// 行数（SQL Server 单语句 1000 行）+ 字节（目标方言的 packet 上限，宽行不能靠行数兜住）。
+fn build_upsert_batch(
+    table: &str,
+    columns: &[String],
+    types: &[Option<String>],
+    key_indexes: &[usize],
+    rows: &[Vec<CellValue>],
+    dialect: Dialect,
+) -> Vec<(usize, String)> {
+    let row_limit = dialect.upsert_row_limit();
+    let byte_cap = insert_stmt_cap(dialect.kind.key());
+    let render = |slice: &[Vec<CellValue>]| -> Option<String> {
+        let rendered: Vec<Vec<String>> = slice
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .enumerate()
+                    .map(|(i, cell)| {
+                        literal_for(cell, dialect, types.get(i).and_then(|t| t.as_deref()))
+                    })
+                    .collect()
+            })
+            .collect();
+        dialect.upsert_sql(table, columns, key_indexes, &rendered)
+    };
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut start = 0usize;
+    let mut acc_bytes = 0usize;
+    let mut acc_rows = 0usize;
+    for (i, row) in rows.iter().enumerate() {
+        let row_bytes = estimate_row_bytes(row);
+        if acc_rows >= row_limit || (acc_rows > 0 && acc_bytes + row_bytes > byte_cap) {
+            if let Some(sql) = render(&rows[start..i]) {
+                out.push((i - start, sql));
+            }
+            start = i;
+            acc_bytes = 0;
+            acc_rows = 0;
+        }
+        acc_bytes += row_bytes;
+        acc_rows += 1;
+    }
+    if start < rows.len() {
+        if let Some(sql) = render(&rows[start..]) {
+            out.push((rows.len() - start, sql));
+        }
+    }
+    out
+}
+
+/// 把一批行用**原生 upsert** 写进目标（一条语句里 `on duplicate key update` /
+/// `on conflict … do update` / `merge into`），返回写入行数。
+///
+/// 与 `write_insert_rows` 共用同一套「脏数据降级」策略：整块失败就逐行重试，
+/// 好行照常落库、坏行单独计失败；过半失败判定为系统性问题直接上抛。
+/// 差别只有一处：语句本身就能处理「已存在的行」，所以不需要事先知道目标主键。
+pub(crate) async fn write_upsert_rows(
+    state: &AppState,
+    tgt_target: &str,
+    session: &str,
+    target_name: &str,
+    columns: &[String],
+    target_types: &[Option<String>],
+    key_indexes: &[usize],
+    target_kind: Dialect,
+    rows: &[Vec<CellValue>],
+    identity_on: bool,
+    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
+    table: &str,
+) -> Result<u64, String> {
+    let stmts = build_upsert_batch(target_name, columns, target_types, key_indexes, rows, target_kind);
+    if stmts.is_empty() {
+        return Err(format!(
+            "{} 不支持原生 upsert，且没有可回退的两阶段写入",
+            target_kind.kind.key()
+        ));
+    }
+    let mut ok_rows = 0u64;
+    let mut failed_rows = 0u64;
+    let mut sample_err: Option<String> = None;
+    let mut start_row = 0usize;
+    for (n_rows, stmt) in &stmts {
+        match run_target_in(state, tgt_target, &with_identity(stmt.clone(), identity_on, target_name), session).await {
+            Ok(_) => ok_rows += *n_rows as u64,
+            Err(batch_err) => {
+                // 先把**批次本身的错误**记下来：降级逐行重试之后，行的错误往往是
+                // 「事务已被中止」这类二次错误，真正的原因（语法/类型/约束）只有这里能看到。
+                if let Some(task) = task {
+                    task.log(format!(
+                        "表 {table}：upsert 批次失败，改为逐行重试。批次错误：{}",
+                        batch_err.message.chars().take(400).collect::<String>()
+                    ));
+                }
+                let chunk = &rows[start_row..start_row + *n_rows as usize];
+                let mut chunk_failed = 0u64;
+                for row in chunk {
+                    let single = build_upsert_batch(
+                        target_name,
+                        columns,
+                        target_types,
+                        key_indexes,
+                        std::slice::from_ref(row),
+                        target_kind,
+                    );
+                    let sql = match single.first() {
+                        Some((_, sql)) => sql.clone(),
+                        None => {
+                            chunk_failed += 1;
+                            continue;
+                        }
+                    };
+                    match run_target_in(state, tgt_target, &with_identity(sql, identity_on, target_name), session).await {
+                        Ok(_) => ok_rows += 1,
+                        Err(row_err) => {
+                            chunk_failed += 1;
+                            if sample_err.is_none() {
+                                sample_err = Some(row_err.message.chars().take(200).collect());
+                            }
+                        }
+                    }
+                }
+                failed_rows += chunk_failed;
+                if chunk_failed * 2 > *n_rows as u64 {
+                    if let Some(task) = task {
+                        task.add_rows_failed(rows.len() as u64 - ok_rows);
+                    }
+                    return Err(sample_err.unwrap_or_else(|| batch_err.message));
+                }
+            }
+        }
+        start_row += *n_rows as usize;
+    }
+    if failed_rows > 0 {
+        if let Some(task) = task {
+            task.add_rows_failed(failed_rows);
+            task.log(format!(
+                "表 {table}：upsert 有 {} 行失败（脏数据，已逐行重试），样例错误：{}",
+                failed_rows,
+                sample_err.unwrap_or_default()
+            ));
+        }
+    }
+    if ok_rows > 0 {
+        if let Some(task) = task {
+            task.add_rows_written(ok_rows);
+        }
+    }
+    Ok(ok_rows)
+}
+
 /// upsert 更新批的大小：**一条 RPC 里连发多少条 UPDATE**。
 ///
 /// 逐行 UPDATE 是「第二次同步特别慢」的根因：每行一次内核→宿主调用，本地库约 1ms、
@@ -1874,7 +2039,13 @@ async fn sync_table_inner(
     } else {
         Some(source_kind.kind)
     };
-    let target_name = target_kind.quote(target_table);
+    // 目标表名带**用户选定的模式**（PG 的 sales / SQL Server 的非 dbo / Doris 的 catalog.库）。
+    //
+    // 以前这里是裸 `quote(target_table)`：写语句在目标连接上执行，裸名会落到连接的默认
+    // search_path/schema 上 —— 结构建到了 `sales`，数据却写进 `public` 里那张同名表，
+    // 或者直接报「表不存在」。模式越不默认，错得越彻底（而且目标端可能真有同名表，
+    // 于是「同步成功」但数据进了另一张表，比报错更难发现）。
+    let target_name = tgt.scoped(target_table, target_kind);
     // 目标连接只解析一次，循环里的每条语句复用（见 run_target 的注释）
     let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
         Ok(target) => target,
@@ -1967,9 +2138,16 @@ async fn sync_table_inner(
         // schema 只有 SQL Server 那条路要用（扩展属性必须点名 schema）；PG / Oracle / DM / DB2
         // 的 `comment on table <名>` 不带 schema 也会落到当前 search_path 的表上 ——
         // 之前这里硬写 "dbo"，那些库拼出来的语句必然报错，而失败是静默的（注释全丢）。
-        let comment_schema = if target_kind.kind.key() == "sqlserver" { "dbo" } else { "" };
+        // 表名一律传**未加引号的裸名 + 模式**：`post_create_comments` 内部按方言自己加引号
+        // （传 `"sales"."tbl"` 进去会被当成一个完整的标识符再用尖引号包一遍）。
+        let comment_schema = tgt
+            .schema
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(if target_kind.kind.key() == "sqlserver" { "dbo" } else { "" });
         let post_comments = target_kind.post_create_comments(
-            target_name.trim_matches(|c| c == '"' || c == '`' || c == ']'),
+            target_table,
             &src_column_comments,
             src_table_comment.as_deref(),
             comment_schema,
@@ -2097,6 +2275,25 @@ async fn sync_table_inner(
         })
         .collect();
 
+    // 与 `columns` 一一对应的**目标侧真实列名**：源 `order_no` 在目标上可能叫 `ORDER_NO`
+    // （Oracle 折大写）或 `OrderNo`（历史表）。写语句必须用目标那个名字 —— 以前直接用源名
+    // 加引号，目标表已存在时 INSERT/UPDATE 会报「列不存在」，而结构明明是好的。
+    let target_column_names: Vec<String> = columns
+        .iter()
+        .map(|name| {
+            if created {
+                // 刚由本工具建的表：建表 DDL 用的就是源列名（已按目标方言 quote 过）
+                name.clone()
+            } else {
+                target_columns
+                    .iter()
+                    .find(|other| other.name.eq_ignore_ascii_case(name))
+                    .map(|other| other.name.clone())
+                    .unwrap_or_else(|| name.clone())
+            }
+        })
+        .collect();
+
     if let Some(task) = task {
         task.check_canceled().ok();
         task.set_phase(format!("读取源表 {table} 数据"));
@@ -2106,7 +2303,27 @@ async fn sync_table_inner(
     if !missing.is_empty() {
         note.push_str(&format!("（目标缺少 {} 列，未同步）", missing.join("/")));
     }
-    // 源侧 select 前缀：下面按页反复用它（见 fetch_page / select_base）
+    // 二进制列：**每一张表都要说清楚**，不能只在「整表没法同步」时才提一句 ——
+    // 以前一张 20 列的表里漏掉 1 个 BLOB 列，结果里只有别的说明，用户以为全同步了。
+    if !binary_columns.is_empty() {
+        note.push_str(&format!(
+            "（{} 是二进制列，内核结果集只传长度不传字节，未同步）",
+            binary_columns.join("/")
+        ));
+    }
+
+    // 本表的会话后缀：并发整库同步时，不同表的读/写会话必须落在不同物理连接上
+    // （详见 `TablePlan::sid`）。序号取自进程内自增值，名字里的非字母数字统一压成 `_`。
+    let sid = {
+        static SID_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let seq = SID_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let safe: String = table
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .take(24)
+            .collect();
+        format!("{seq}-{safe}")
+    };
 
     // 源与目标**是同一张表**（自同步）时，清空会把待读的数据删掉；那种"清空"本身也没有意义。
     // 旧实现是「先把整表读进内存、再清目标」，顺序上不怕；现在改成边读边写，必须显式区分。
@@ -2136,7 +2353,9 @@ async fn sync_table_inner(
         // 这里**不能**悄悄退化成「仅插入」：那样第二次同步会把整表再插一遍（行长翻倍），
         // 而界面上显示的却是「同步成功」——静默的数据翻倍比直接报错坏得多。
         // 唯一能安全放行的情况是目标表本来就是空的（首次同步），那时插入与 upsert 等价。
-        let target_rows = target_kind.count_sql(&target_name);
+        // 这里直接拼（不再走 `count_sql`）：`count_sql` 内部会再 quote 一次，
+        // 传已带引号/模式前缀的 `target_name` 进去会变成 `"""sales"""."tbl"`。
+        let target_rows = format!("select count(*) as cnt from {target_name}");
         let empty = match run_sql_in(state, &tgt.conn, &tgt.scope, target_rows, 1).await {
             Ok(result) => result
                 .rows
@@ -2171,11 +2390,23 @@ async fn sync_table_inner(
         opts.data_mode
     };
 
-    // upsert：先把目标已有关键值读进来，源行分成「新增」与「更新」两拨。
-    // 这里**逐页读、不设上限**：旧实现用 MAX_ROWS 截断，大表下会把「已有行」误判成「新增」，
-    // 于是重复插入 —— 那是静默的数据错误，比慢一点糟得多。
+    // upsert 怎么落库：
+    // - **Native**：MySQL `on duplicate key update`、PG/SQLite/H2 `on conflict … do update`、
+    //   Oracle/DM/DB2/SQL Server `merge into`。目标端自己判「插入还是更新」，本进程既不读
+    //   目标主键、也不逐行发 UPDATE —— 大表 upsert 的最大一笔开销就此消失；
+    // - **TwoPhase**：没有原生语法的方言（ClickHouse / Doris / Derby）保留老路：先把目标
+    //   关键值读进来（逐页、不设上限 —— 截断会把「已有行」误判成「新增」而重复插入，
+    //   那是静默的数据错误），再分「新增 INSERT / 命中 UPDATE」两拨。
+    let upsert_mode = if effective_mode != DataMode::Upsert {
+        crate::api::transfer::UpsertMode::Off
+    } else if target_kind.supports_native_upsert() {
+        crate::api::transfer::UpsertMode::Native
+    } else {
+        crate::api::transfer::UpsertMode::TwoPhase
+    };
+
     let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if effective_mode == DataMode::Upsert {
+    if upsert_mode == crate::api::transfer::UpsertMode::TwoPhase {
         let key_positions: Vec<usize> = (0..key_indexes.len()).collect();
         let key_list = key_columns
             .iter()
@@ -2194,7 +2425,18 @@ async fn sync_table_inner(
                 _ => None,
             };
             let page =
-                match fetch_page(state, &tgt.conn, &tgt.scope, &base, target_kind, key_offset, cursor, "", PAGE, "internal:rowcount")
+                match fetch_page(
+                    state,
+                    &tgt.conn,
+                    &tgt.scope,
+                    &base,
+                    target_kind,
+                    key_offset,
+                    cursor,
+                    "",
+                    PAGE,
+                    &format!("internal:rowcount-{sid}"),
+                )
                     .await
                 {
                     Ok(rows) => rows,
@@ -2244,9 +2486,11 @@ async fn sync_table_inner(
     // - 预查失败（权限等）按"没有"处理 —— 走纯 INSERT，有 identity 的表会报行级错误，
     //   不静默丢数据。
     let identity_on = target_kind.kind.key() == "sqlserver" && {
+        // `object_id()` 要的是**未加引号**的 `schema.table`：把带引号的 `"dbo"."tbl"` 塞进
+        // 字符串里查不到对象 ⇒ identity_on 恒 false ⇒ 显式键值插 identity 列必然报错。
         let probe = format!(
             "select count(*) as n from sys.identity_columns where object_id = object_id('{}')",
-            target_name.replace('\'', "''")
+            tgt.scoped_meta(target_table).replace('\'', "''")
         );
         match run_target(state, &tgt_target, &probe).await {
             Ok(result) => result
@@ -2381,7 +2625,7 @@ async fn sync_table_inner(
                 .map(|name| source_kind.quote(name))
                 .collect::<Vec<_>>()
                 .join(", ");
-            let col_list_tgt = columns
+            let col_list_tgt = target_column_names
                 .iter()
                 .map(|name| target_kind.quote(name))
                 .collect::<Vec<_>>()
@@ -2486,6 +2730,7 @@ async fn sync_table_inner(
     let plan = crate::api::transfer::TablePlan {
         state: state.clone(),
         task: task.cloned(),
+        sid: sid.clone(),
         src_conn: src.conn.clone(),
         src_scope: src.scope.clone(),
         source_kind,
@@ -2497,13 +2742,16 @@ async fn sync_table_inner(
         tgt_target: tgt_target.clone(),
         target_kind,
         target_name: target_name.clone(),
+        target_columns: target_column_names.clone(),
+        workers_cap: opts.tgt_workers,
+        slices_cap: opts.src_slices,
         target_types,
         key_columns,
         key_indexes,
         paging_keys,
         where_clause: table_where.clone(),
         row_limit: opts.row_limit,
-        upsert: effective_mode == DataMode::Upsert,
+        upsert: upsert_mode,
         existing: std::sync::Arc::new(existing),
         per_statement,
         identity_on,
@@ -2872,6 +3120,18 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     };
     let total = objects.len();
 
+    // ---- 任务级会话预算：整次任务的目标连接数 ≤ 方言声明的并发数 ----
+    // 原来整库同步是「对象并发 × 每表 writer 数」：4 张表 × 4 路 = 16 条目标连接，
+    // 而 4 本来就是**整个任务**的上限。这里按并发对象数把预算切给每张表：
+    // 并发 4 张 → 每表 1 路；只有 1 张表 → 独享 4 路。（读侧同理。）
+    let target_kind = Dialect::new(require_record(&state, &tgt.conn).await?.kind());
+    let source_kind = Dialect::new(require_record(&state, &src.conn).await?.kind());
+    let target_kind_key = target_kind.kind.key().to_string();
+    let sync_concurrency = adaptive_concurrency(&target_kind_key, total);
+    let tgt_workers = (write_parallelism(target_kind.kind).max(1) / sync_concurrency).max(1);
+    let src_slices = (write_parallelism(source_kind.kind).max(1) / sync_concurrency).max(1);
+    let opts = opts.with_session_caps(tgt_workers, src_slices);
+
     let registry = state.tasks.clone();
     let task = registry.spawn("sync", "sync_", move |task| {
         let state = state.clone();
@@ -2880,6 +3140,13 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         let opts = opts.clone();
         async move {
             task.set_total(total as i64);
+            // 会话预算写进日志：用户能直接看出「这次会开几条连接」，出问题也好对照
+            task.log(format!(
+                "会话预算：并发 {sync_concurrency} 张表，每表最多 {} 路写 / {} 片读（整任务上限 = 方言声明值 {}）",
+                opts.tgt_workers,
+                opts.src_slices,
+                write_parallelism(target_kind.kind)
+            ));
             // 目标库不存在时自动创建（默认开，见 ensure_target_db）
             if let Some(msg) = ensure_target_db(&state, &tgt, &opts).await {
                 task.log(msg);
@@ -2889,11 +3156,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             // 并行度**自适应**（见 adaptive_concurrency）：按目标库类型与对象数动态定，
             // 不写死。计数与日志都走 Task 的锁内计数器，并发安全；结果按**提交顺序**
             // 回填槽位，界面上的结果表顺序稳定。
-            let target_kind_key = require_record(&state, &tgt.conn)
-                .await
-                .map(|record| record.kind().key().to_string())
-                .unwrap_or_default();
-            let sync_concurrency = adaptive_concurrency(&target_kind_key, total);
+            // `sync_concurrency` 与每表会话预算都在 spawn 前算好（见上），这里直接用。
             let slots: Vec<std::sync::Arc<std::sync::Mutex<Option<Value>>>> = objects
                 .iter()
                 .map(|_| std::sync::Arc::new(std::sync::Mutex::new(None)))

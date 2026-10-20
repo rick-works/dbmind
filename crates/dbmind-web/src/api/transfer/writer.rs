@@ -1,4 +1,4 @@
-//! Writer 插件：吃行批次、批量落库、脏行降级、事务提交。
+﻿//! Writer 插件：吃行批次、批量落库、脏行降级、事务提交。
 //!
 //! `SqlWriter` 覆盖所有走 JDBC 的目标（批量 INSERT），并且把 Doris 的
 //! **Stream Load** 快通道收进同一个插件：`stream` 有配置时优先 HTTP 直推 BE，
@@ -17,12 +17,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use dbmind_core::CellValue;
 
-use super::{BF, StreamCfg, TablePlan};
+use super::{BF, StreamCfg, TablePlan, UpsertMode};
 use crate::api::dialect::Dialect;
 use crate::api::sync::{
     build_update, doris_stream_load, estimate_row_bytes, json_row_bytes, rows_need_json_fallback,
     run_target_in, supports_multi_statement, txn_batch, write_insert_rows, write_update_batch,
-    write_parallelism, SESSION_SYNC, STREAM_LOAD_MAX_BYTES, UPDATE_BATCH,
+    write_upsert_rows, write_parallelism, STREAM_LOAD_MAX_BYTES, UPDATE_BATCH,
 };
 use crate::api::tasks::Task;
 use crate::AppState;
@@ -40,8 +40,11 @@ pub trait Writer: Send + Sync {
     fn update<'a>(&'a self, rows: &'a [Vec<CellValue>]) -> BF<'a, Result<u64, String>>;
     /// 收尾：把攒着的更新发出去（返回真正写掉的行数）
     fn flush<'a>(&'a self) -> BF<'a, Result<u64, String>>;
-    /// 第 `worker` 路结束（提交/复位）
-    fn finish<'a>(&'a self, worker: usize) -> BF<'a, ()>;
+    /// 第 `worker` 路结束（提交/复位）。
+    ///
+    /// **提交失败必须报错**：以前返回 `()` 且把 `commit` 的 Err 丢掉 —— 事务提交失败
+    /// 时界面照样显示「同步成功」，实际一行都没落盘（或只落了一半）。
+    fn finish<'a>(&'a self, worker: usize) -> BF<'a, Result<(), String>>;
 }
 
 pub struct SqlWriter {
@@ -51,13 +54,16 @@ pub struct SqlWriter {
     scope: String,
     target_name: String,
     table: String,
-    columns: Vec<String>,
+    /// 目标侧列名（写入只用这个；源列名留给 reader）
+    target_columns: Vec<String>,
     target_types: Vec<Option<String>>,
     kind: Dialect,
     identity_on: bool,
     /// upsert 才需要：主键列下标 + 是否支持一条语句多条 UPDATE
-    upsert: bool,
+    upsert: UpsertMode,
     key_indexes: Vec<usize>,
+    /// 本表的会话后缀（见 `TablePlan::sid`）—— 并发多表不能共用同一条物理连接
+    sid: String,
     multi_statement: bool,
     pending_updates: tokio::sync::Mutex<Vec<String>>,
     /// upsert 的更新走一条串行会话，它自己的事务（攒 500 条一提交 → 一次 fsync，
@@ -73,12 +79,15 @@ pub struct SqlWriter {
 impl SqlWriter {
     pub fn new(plan: &TablePlan) -> Self {
         let kind_key = plan.target_kind.kind.key();
-        let workers = if plan.stream.is_some() {
+        let base = if plan.stream.is_some() {
             // Stream Load 的收益来自「在途并发」：下一个请求的上传与上一个 BE publish 重叠
             3
         } else {
             write_parallelism(plan.target_kind.kind)
         };
+        // 任务级会话预算（见 `TablePlan::workers_cap`）：并发多表时每张表少开几路，
+        // 整次任务的目标连接数不超过方言声明的并发数。
+        let workers = if plan.workers_cap > 0 { base.min(plan.workers_cap) } else { base };
         Self {
             state: plan.state.clone(),
             task: plan.task.clone(),
@@ -86,12 +95,13 @@ impl SqlWriter {
             scope: plan.tgt_scope.clone(),
             target_name: plan.target_name.clone(),
             table: plan.table.clone(),
-            columns: plan.columns.clone(),
+            target_columns: plan.target_columns.clone(),
             target_types: plan.target_types.clone(),
             kind: plan.target_kind,
             identity_on: plan.identity_on,
             upsert: plan.upsert,
             key_indexes: plan.key_indexes.clone(),
+            sid: plan.sid.clone(),
             multi_statement: supports_multi_statement(kind_key),
             pending_updates: tokio::sync::Mutex::new(Vec::new()),
             update_txn_open: AtomicBool::new(false),
@@ -105,8 +115,16 @@ impl SqlWriter {
 
     /// 每路 writer 一条**独立会话**：会话池里「亲和键不同」才会给不同物理连接，
     /// 全用同一个键的话 N 路并发会挤在一条连接上排队（改造前的真实瓶颈）。
+    ///
+    /// `sid` 必须带上（见 `TablePlan::sid`）：只按 worker 编号分键时，**不同表**的
+    /// 同名 worker 会落到同一条连接上，多个表的 begin/commit 互相串。
     fn session(&self, worker: usize) -> String {
-        format!("internal:sync-w{worker}")
+        format!("internal:sync-w{}-{worker}", self.sid)
+    }
+
+    /// upsert 的更新批走一条**本表专属**的串行会话（同 `sid` 隔离理由）。
+    fn update_session(&self) -> String {
+        format!("internal:sync-u{}", self.sid)
     }
 }
 
@@ -147,6 +165,26 @@ impl Writer for SqlWriter {
 
     fn write<'a>(&'a self, worker: usize, rows: &'a [Vec<CellValue>]) -> BF<'a, Result<u64, String>> {
         Box::pin(async move {
+            // ---- 原生 upsert：一条语句搞定「插入或更新」----
+            // 不再需要「先把目标全表主键拉进内存 → 命中的逐行 UPDATE」那两步：
+            // 那两步在大表上是纯开销（目标主键全量跨网 + 每行一次更新）。
+            if self.upsert == UpsertMode::Native {
+                return write_upsert_rows(
+                    &self.state,
+                    &self.tgt_target,
+                    &self.session(worker),
+                    &self.target_name,
+                    &self.target_columns,
+                    &self.target_types,
+                    &self.key_indexes,
+                    self.kind,
+                    rows,
+                    self.identity_on,
+                    self.task.as_ref(),
+                    &self.table,
+                )
+                .await;
+            }
             if let Some(stream) = self.stream.as_ref() {
                 if !self.stream_failed.load(Ordering::SeqCst) && !rows.is_empty() {
                     // **按字节切块**：行数管不住行宽（宽行表一页能拼出 85MB，BE 的 publish
@@ -180,7 +218,7 @@ impl Writer for SqlWriter {
                             &stream.pass,
                             &self.scope,
                             &self.table,
-                            &self.columns,
+                            &self.target_columns,
                             &rows[start..end],
                         )
                         .await
@@ -225,7 +263,7 @@ impl Writer for SqlWriter {
                         &self.tgt_target,
                         &self.session(worker),
                         &self.target_name,
-                        &self.columns,
+                        &self.target_columns,
                         &self.target_types,
                         self.kind,
                         &rows[start..],
@@ -242,7 +280,7 @@ impl Writer for SqlWriter {
                 &self.tgt_target,
                 &self.session(worker),
                 &self.target_name,
-                &self.columns,
+                &self.target_columns,
                 &self.target_types,
                 self.kind,
                 rows,
@@ -256,13 +294,14 @@ impl Writer for SqlWriter {
 
     fn update<'a>(&'a self, rows: &'a [Vec<CellValue>]) -> BF<'a, Result<u64, String>> {
         Box::pin(async move {
-            if !self.upsert || rows.is_empty() {
+            if self.upsert != UpsertMode::TwoPhase || rows.is_empty() {
                 return Ok(0);
             }
-            // 更新走一条串行会话：先把它的事务开起来（一次 fsync 覆盖整表的更新）
+            // 更新走一条本表专属的串行会话：先把它的事务开起来（一次 fsync 覆盖整表的更新）
+            let usid = self.update_session();
             if let Some((begin, _, _)) = self.txn {
                 if !self.update_txn_open.load(Ordering::SeqCst) {
-                    if run_target_in(&self.state, &self.tgt_target, begin, SESSION_SYNC).await.is_ok() {
+                    if run_target_in(&self.state, &self.tgt_target, begin, &usid).await.is_ok() {
                         self.update_txn_open.store(true, Ordering::SeqCst);
                     }
                 }
@@ -273,7 +312,7 @@ impl Writer for SqlWriter {
                 for row in rows {
                     pending.push(build_update(
                         &self.target_name,
-                        &self.columns,
+                        &self.target_columns,
                         &self.target_types,
                         row,
                         &self.key_indexes,
@@ -288,7 +327,7 @@ impl Writer for SqlWriter {
                 return write_update_batch(
                     &self.state,
                     &self.tgt_target,
-                    SESSION_SYNC,
+                    &usid,
                     &mut batch,
                     self.task.as_ref(),
                     &self.table,
@@ -302,7 +341,7 @@ impl Writer for SqlWriter {
             for row in rows {
                 let sql = build_update(
                     &self.target_name,
-                    &self.columns,
+                    &self.target_columns,
                     &self.target_types,
                     row,
                     &self.key_indexes,
@@ -339,6 +378,7 @@ impl Writer for SqlWriter {
         Box::pin(async move {
             let mut written = 0u64;
             let mut failure: Option<String> = None;
+            let usid = self.update_session();
             let mut pending = self.pending_updates.lock().await;
             if !pending.is_empty() {
                 let mut batch = std::mem::take(&mut *pending);
@@ -346,7 +386,7 @@ impl Writer for SqlWriter {
                 match write_update_batch(
                     &self.state,
                     &self.tgt_target,
-                    SESSION_SYNC,
+                    &usid,
                     &mut batch,
                     self.task.as_ref(),
                     &self.table,
@@ -360,9 +400,17 @@ impl Writer for SqlWriter {
             // 关掉更新事务：无论成功失败都提交 —— 与「已写入的部分保留」的既有语义一致
             if self.update_txn_open.swap(false, Ordering::SeqCst) {
                 if let Some((_, end, restore)) = self.txn {
-                    let _ = run_target_in(&self.state, &self.tgt_target, end, SESSION_SYNC).await;
+                    if let Err(err) = run_target_in(&self.state, &self.tgt_target, end, &usid).await {
+                        if failure.is_none() {
+                            failure = Some(format!("提交事务失败：{}", err.message));
+                        }
+                    }
                     if !restore.is_empty() {
-                        let _ = run_target_in(&self.state, &self.tgt_target, restore, SESSION_SYNC).await;
+                        if let Err(err) = run_target_in(&self.state, &self.tgt_target, restore, &usid).await {
+                            if failure.is_none() {
+                                failure = Some(format!("恢复 autocommit 失败：{}", err.message));
+                            }
+                        }
                     }
                 }
             }
@@ -373,18 +421,32 @@ impl Writer for SqlWriter {
         })
     }
 
-    fn finish<'a>(&'a self, worker: usize) -> BF<'a, ()> {
+    fn finish<'a>(&'a self, worker: usize) -> BF<'a, Result<(), String>> {
         Box::pin(async move {
             let Some((_, end, restore)) = self.txn else {
-                return;
+                return Ok(());
             };
             if !self.txn_open.get(worker).map(|open| open.load(Ordering::SeqCst)).unwrap_or(false) {
-                return;
+                return Ok(());
             }
             let session = self.session(worker);
-            let _ = run_target_in(&self.state, &self.tgt_target, end, &session).await;
+            // 提交失败**不能咽掉**：以前这里 `let _ =`，commit 报错也当成功，
+            // 界面显示「同步成功」而目标端要么没数据、要么只落了一半。
+            let mut failure: Option<String> = None;
+            if let Err(err) = run_target_in(&self.state, &self.tgt_target, end, &session).await {
+                failure = Some(format!("提交事务失败：{}", err.message));
+            }
+            // 恢复 autocommit 失败同样要报（否则连接池里留着一个开着事务的脏会话）
             if !restore.is_empty() {
-                let _ = run_target_in(&self.state, &self.tgt_target, restore, &session).await;
+                if let Err(err) = run_target_in(&self.state, &self.tgt_target, restore, &session).await {
+                    if failure.is_none() {
+                        failure = Some(format!("恢复 autocommit 失败：{}", err.message));
+                    }
+                }
+            }
+            match failure {
+                Some(msg) => Err(msg),
+                None => Ok(()),
             }
         })
     }
