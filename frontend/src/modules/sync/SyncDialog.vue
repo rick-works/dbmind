@@ -1,5 +1,5 @@
 <template>
-  <el-dialog :model-value="modelValue" width="1020px" top="3vh" class="sync-dialog"
+  <el-dialog :model-value="modelValue" width="920px" top="5vh" class="sync-dialog"
              :close-on-click-modal="false" :close-on-press-escape="!taskRunning"
              :before-close="onBeforeClose"
              append-to-body @update:model-value="$emit('update:modelValue', $event)">
@@ -96,31 +96,40 @@
       </div>
 
       <div v-if="!availableCount" class="obj-empty-all">{{ $t('sync.noObjects') }}</div>
-      <div v-else class="obj-groups">
-        <div v-for="g in visibleGroups" :key="g.key" class="og"
-             :class="{ open: g.open, empty: !objState[g.key].list.length }">
-          <!-- 头部整行可点：展开/收起；勾选框单独 stop，避免「点一下既勾选又收起」 -->
-          <div class="og-head" @click="toggleGroupOpen(g)">
-            <el-checkbox class="og-check" :model-value="groupChecked(g.key)"
+      <template v-else>
+        <!-- 一类对象一个页签（原先是手风琴卡片）。徽标是「已选/总数」；
+             页签前的勾选框 = 本类全选/取消（顶部两个按钮才是全部类别）。
+             点勾选框不切页签，所以单独 stop。 -->
+        <div class="obj-tabs" role="tablist">
+          <button v-for="g in visibleGroups" :key="g.key" type="button" role="tab"
+                  class="obj-tab"
+                  :class="{ on: activeGroup && activeGroup.key === g.key, empty: !objState[g.key].list.length }"
+                  :aria-selected="activeGroup && activeGroup.key === g.key"
+                  @click="activeTab = g.key">
+            <el-checkbox class="ot-check" :model-value="groupChecked(g.key)"
                          :indeterminate="groupIndeterminate(g.key)"
                          :disabled="taskRunning || !objState[g.key].list.length"
                          @click.stop @change="v => setGroup(g.key, v)" />
-            <span class="og-ic" :class="'ty-' + g.key"><el-icon :size="12"><component :is="TYPE_ICON[g.key]" /></el-icon></span>
-            <span class="og-name">{{ typeLabel(g.key) }}</span>
-            <span class="og-count">{{ objState[g.key].selected.length }}/{{ objState[g.key].list.length }}</span>
-            <el-icon class="og-caret"><ArrowDown /></el-icon>
+            <span class="ot-ic" :class="'ty-' + g.key"><el-icon :size="12"><component :is="TYPE_ICON[g.key]" /></el-icon></span>
+            <span class="ot-name">{{ typeLabel(g.key) }}</span>
+            <span class="ot-count">{{ objState[g.key].selected.length }}/{{ objState[g.key].list.length }}</span>
+          </button>
+        </div>
+
+        <div class="obj-list" v-if="activeGroup">
+          <div v-if="!groupItems(activeGroup.key).length" class="obj-none">
+            <span class="nc-ic"><el-icon :size="22"><FolderOpened /></el-icon></span>
+            <span class="nc-txt">{{ keyword ? $t('sync.noMatch') : $t('sync.emptyGroup') }}</span>
           </div>
-          <div v-if="g.open" class="og-body">
-            <div v-if="!groupItems(g.key).length" class="og-none">{{ keyword ? $t('sync.noMatch') : $t('sync.none') }}</div>
-            <div v-for="name in groupItems(g.key)" :key="name" class="og-item"
-                 :class="{ on: isSelected({ type: g.key, name }) }" @click="toggleObj({ type: g.key, name }, !isSelected({ type: g.key, name }))">
-              <el-checkbox :model-value="isSelected({ type: g.key, name })" :disabled="taskRunning"
-                           @click.stop @change="v => toggleObj({ type: g.key, name }, v)" />
-              <span class="og-item-name" :title="name">{{ name }}</span>
-            </div>
+          <div v-for="name in groupItems(activeGroup.key)" :key="name" class="og-item"
+               :class="{ on: isSelected({ type: activeGroup.key, name }) }"
+               @click="toggleObj({ type: activeGroup.key, name }, !isSelected({ type: activeGroup.key, name }))">
+            <el-checkbox :model-value="isSelected({ type: activeGroup.key, name })" :disabled="taskRunning"
+                         @click.stop @change="v => toggleObj({ type: activeGroup.key, name }, v)" />
+            <span class="og-item-name" :title="name">{{ name }}</span>
           </div>
         </div>
-      </div>
+      </template>
     </div>
 
     <!-- ==================== 步骤 3：传输选项 ==================== -->
@@ -162,18 +171,36 @@
           </div>
           <!-- 「写入批次」输入已删：每种库的甜点批大差一个数量级（CH 落 part / Oracle 有
                单语句上限 / MySQL 看 max_allowed_packet），由后端按目标方言自动决定 -->
-          <div class="settings-row">
-            <span class="row-label">{{ $t('sync.rowLimit') }}</span>
-            <el-input-number v-model="opts.rowLimit" :min="0" :step="1000" size="small"
-                             style="width: 110px" :disabled="taskRunning" />
-            <span class="row-unit">{{ $t('sync.rowLimitUnit') }}</span>
-          </div>
-          <div class="settings-row">
-            <span class="row-label">{{ $t('sync.whereLabel') }}</span>
-            <el-input v-model="opts.whereClause" size="small" :disabled="taskRunning"
-                      :placeholder="$t('sync.whereHint')" maxlength="500" />
-          </div>
+          <!-- 「行数上限」也删了（用户口径：同步就是不限，抽样不是同步的事）；
+               原先那个全局 WHERE 输入框挪到下面**按表设置** —— 一个条件拼到几十张表上
+               语义说不清，见 .settings-where -->
         </div>
+      </div>
+
+      <!-- ==================== 行过滤（按表设置） ====================
+           一份全局 WHERE 在多表同步里没有意义：`amount > 100` 拼到没有 amount 列的表上，
+           整张表直接报错。所以改成「表 → 条件」，留空的表全量同步。 -->
+      <div class="settings-where">
+        <div class="sw-head">
+          <div class="sw-title">
+            <el-icon :size="13"><Filter /></el-icon>
+            <span>{{ $t('sync.wherePerTable') }}</span>
+            <span v-if="whereCount" class="sw-count">{{ $t('sync.whereSetCount', { n: whereCount }) }}</span>
+          </div>
+          <el-input v-if="selTables.length > 5" v-model="whereSearch" size="small" clearable
+                    :placeholder="$t('sync.whereSearch')" class="sw-search" />
+        </div>
+        <p class="sw-hint">{{ $t('sync.wherePerTableHint') }}</p>
+        <div v-if="selTables.length" class="sw-list">
+          <div v-for="name in whereTableList" :key="name" class="sw-item"
+               :class="{ on: !!(whereByTable[name] || '').trim() }">
+            <span class="sw-name" :title="name">{{ name }}</span>
+            <el-input v-model="whereByTable[name]" size="small" :disabled="taskRunning"
+                      :placeholder="$t('sync.wherePh')" maxlength="500" />
+          </div>
+          <div v-if="!whereTableList.length" class="sw-none">{{ $t('sync.whereNoMatch') }}</div>
+        </div>
+        <div v-else class="sw-none">{{ $t('sync.whereNoTable') }}</div>
       </div>
     </div>
 
@@ -181,8 +208,9 @@
     <div class="summary-card" v-if="step === 4">
       <div class="summary-title">{{ $t('sync.stepSummary') }}</div>
       <el-table :data="summaryRows" size="small" border class="data-table summary-table">
-        <el-table-column prop="label" width="150" />
-        <el-table-column prop="value" />
+        <!-- 行过滤按表展开，标签是「WHERE · 表名」，表名长了要能悬停看全 -->
+        <el-table-column prop="label" width="180" show-overflow-tooltip />
+        <el-table-column prop="value" show-overflow-tooltip />
       </el-table>
       <div class="summary-opts">
         <span>{{ $t('sync.autoCreate') }}: <b>{{ opts.syncStructure ? $t('sync.yes') : $t('sync.no') }}</b></span>
@@ -288,7 +316,7 @@ import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } 
 import { ElMessage } from 'element-plus'
 import {
   Promotion, Right, VideoPause, Search, FolderOpened, Files, DataLine, Operation, Document,
-  Grid, View, FirstAidKit, SetUp, Lightning, Calendar, Clock, ArrowDown
+  Grid, View, FirstAidKit, SetUp, Lightning, Calendar, Clock, Filter
 } from '@element-plus/icons-vue'
 import { listConnections, listDatabases, listSchemas, listTables, listProcedures, listTriggers, listEvents, getFeatures, syncDb, syncTaskStatus, syncCancel } from '../../api'
 // 「库」这一层要不要画（Oracle / DM 没有库层：它就是连接里填的服务名）
@@ -355,8 +383,12 @@ const summaryRows = computed(() => [
   { label: t('sync.target'), value: (tgtConnName.value || '--') + ' ▸ ' + tgt.value.database + (tgt.value.schema ? '.' + tgt.value.schema : '') },
   { label: t('sync.pickObjects'), value: String(totalSelected.value) },
   ...(opts.value.stopOnError ? [{ label: t('sync.stopOnError'), value: t('common.yes') }] : []),
-  ...(opts.value.rowLimit ? [{ label: t('sync.rowLimit'), value: String(opts.value.rowLimit) }] : []),
-  ...(opts.value.whereClause ? [{ label: 'WHERE', value: opts.value.whereClause }] : []),
+  // 行过滤按表逐条列出（只在摘要里出现真正设置了条件的表；表名带上，免得「WHERE」一条
+  // 不知道管的是谁 —— 这正是旧界面的毛病）
+  ...selTables.value
+    .map(name => ({ name, clause: (whereByTable[name] || '').trim() }))
+    .filter(x => x.clause)
+    .map(x => ({ label: 'WHERE · ' + x.name, value: x.clause })),
 ])
 
 // ==================== 执行统计（Navicat 式：对象数 / 已处理 / 已传输 / 错误 / 耗时） ====================
@@ -399,18 +431,44 @@ const typeMeta = () => ({
   trigger:   { label: t('mv.catTrigger'), abbr: t('sync.abbrTrigger') },
   event:     { label: t('mv.catEvent'), abbr: t('sync.abbrEvent') },
 })
+// 页签顺序就是这里的顺序；「有没有内容」只看 objState 的 list
 const objTypes = reactive([
-  { key: 'table', open: true },
-  { key: 'view', open: false },
-  { key: 'function', open: false },
-  { key: 'procedure', open: false },
-  { key: 'trigger', open: false },
-  { key: 'event', open: false },
+  { key: 'table' },
+  { key: 'view' },
+  { key: 'function' },
+  { key: 'procedure' },
+  { key: 'trigger' },
+  { key: 'event' },
 ])
+/** 当前页签（对象列表只画这一类） */
+const activeTab = ref('table')
 const objState = reactive({})
 for (const t of objTypes) objState[t.key] = { list: [], selected: [] }
 
-const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, rowLimit: 0, whereClause: '' })
+// rowLimit / whereClause 已移除：同步就是不限行数；行过滤改按表设置（见 whereByTable）
+const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false })
+
+// ==================== 行过滤（按表设置） ====================
+// 为什么不是全局一个 WHERE：一次同步几十上百张表时，`amount > 100` 拼到没有 amount 列的
+// 表上就是整张表报错。这里用「表名 → 条件」的映射，只有填了的表才带 where，其余全量。
+const whereByTable = reactive({})
+/** 本次勾选的表（行过滤只对表有意义：视图/例程/触发器同步的是 DDL） */
+const selTables = computed(() => (objState.table ? objState.table.selected : []))
+/** 表很多时给个搜索框，省得从上拉到下找那一张 */
+const whereSearch = ref('')
+const whereTableList = computed(() => {
+  const kw = whereSearch.value.trim().toLowerCase()
+  if (!kw) return selTables.value
+  return selTables.value.filter(name => name.toLowerCase().includes(kw))
+})
+/** 已设置条件的表数（标题上的徽标） */
+const whereCount = computed(() => selTables.value.filter(name => (whereByTable[name] || '').trim()).length)
+// 换了源连接 / 源库，表清单就是另一批了：旧条件按表名留着只会在**同名表**上误伤
+// （上一次给 orders 设了 `amount > 100`，这次换个库里的 orders 没有 amount 列 —— 一开跑就报错）
+watch([() => src.value.connectionId, () => src.value.database], () => {
+  for (const name of Object.keys(whereByTable)) delete whereByTable[name]
+  whereSearch.value = ''
+})
 
 // 任务状态
 let pollTimer = null
@@ -591,12 +649,11 @@ const groupItems = (key) => {
   const list = objState[key].list
   return kw ? list.filter(n => n.toLowerCase().includes(kw)) : list
 }
-/** 搜索时自动展开命中的分组，免得用户以为「搜不到」 */
+/** 搜索时自动切到**第一个有命中的页签**，免得用户以为「搜不到」 */
 watch(keyword, (kw) => {
   if (!kw.trim()) return
-  for (const g of objTypes) {
-    if (groupItems(g.key).length) g.open = true
-  }
+  const hit = objTypes.find(g => groupItems(g.key).length)
+  if (hit) activeTab.value = hit.key
 })
 
 const isTaskDone = computed(() => taskStatus.value === 'success')
@@ -674,6 +731,10 @@ const visibleGroups = computed(() => objTypes.filter(g =>
   objState[g.key].list.length > 0
   || (kindSupported(srcFeatures.value, g.key) && kindSupported(tgtFeatures.value, g.key))
 ))
+/** 当前页签对应的那一类（页签被能力过滤/切库重建时兜底到第一个可见页签） */
+const activeGroup = computed(() =>
+  visibleGroups.value.find(g => g.key === activeTab.value) || visibleGroups.value[0] || null
+)
 /** 组头勾选框三态：按**当前搜索过滤后的可见项**判断（搜「ods_」时勾一下就是勾这些） */
 const groupChecked = (key) => {
   const items = groupItems(key)
@@ -689,10 +750,6 @@ const setGroup = (key, val) => {
   const sel = new Set(objState[key].selected)
   for (const n of items) { if (val) sel.add(n); else sel.delete(n) }
   objState[key].selected = [...sel]
-}
-const toggleGroupOpen = (g) => {
-  if (!objState[g.key].list.length) return
-  g.open = !g.open
 }
 const isSelected = (o) => objState[o.type].selected.includes(o.name)
 const toggleObj = (o, v) => {
@@ -837,14 +894,12 @@ const loadSrcObjects = async () => {
   // **默认全选**（用户口径「有的都显示出来也都支持同步」）：进来就能直接下一步，
   // 不想同步的某一类在组头一次取消即可 —— 以前是全都不选 + 类型徽标当筛选器，
   // 界面停在「已选 0 / 339、列表空白」，看着像坏了。
-  let openedOnce = false
   for (const t of objTypes) {
     objState[t.key].selected = [...objState[t.key].list]
-    const has = objState[t.key].list.length > 0
-    // 只有第一个有内容的分组默认展开，其余收起（339 张表全展开会把页面撑爆）
-    t.open = has && !openedOnce
-    if (has) openedOnce = true
   }
+  // 默认停在第一个有内容的页签（表通常就是第一个；只有视图的库也不会停在空页签）
+  const first = objTypes.find(t => objState[t.key].list.length > 0)
+  if (first) activeTab.value = first.key
 }
 
 // ==================== 同步执行 ====================
@@ -874,8 +929,10 @@ const run = async () => {
     includeIndexes: opts.value.includeIndexes,
     autoCreateDb: opts.value.autoCreateDb,
     stopOnError: opts.value.stopOnError,
-    rowLimit: opts.value.rowLimit || undefined,
-    whereClause: opts.value.whereClause || undefined,
+    // 行过滤按表提交：只带真正填了条件的表（没勾选的表就算残留了旧条件也不传）
+    whereClauses: Object.fromEntries(selTables.value
+      .map(name => [name, (whereByTable[name] || '').trim()])
+      .filter(([, clause]) => clause)),
     tables: objState.table.selected,
     views: objState.view.selected,
     functions: objState.function.selected,
@@ -1161,14 +1218,16 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 
 <style scoped>
 /* ==================== 对话框高度：默认给足，内容多时**内部滚动** ====================
-   高度定死（min(780px, 88vh)）而不是随内容长：切步骤时底栏不会上下跳，对象页
-   6 张分组卡片也一次看全（原先 max-height:320px 会硬挤出一条外层滚动条）。
-   右下角还能拖大/拖小 —— 见 utils/dialogResize.js（所有功能性弹窗都有）。
+   高度定死而不是随内容长：切步骤时底栏不会上下跳。
+   默认 min(660px, 90vh)：比最初的 780px 收了一圈（用户反馈默认太大、挡视野），
+   `90vh` 是给矮窗口兜底的 —— 高度只给 84vh 时，可视区 700 上下的小窗只剩 590，
+   对象页展开一张卡片就挤成一团；嫌小仍可拖右下角放大，
+   双击手柄恢复这个默认值 —— 见 utils/dialogResize.js（所有功能性弹窗都有）。
 
    ⚠ 必须用 `:global()`：弹窗根节点（.el-dialog）是 el-dialog 组件 teleport 出去的，
    身上**没有本组件的 data-v 属性**，`.sync-dialog { … }` 这种写法在这里命中不了任何元素
    （本文件里其余的 `.sync-dialog :deep(...)` 一类的规则同病，先不动）。 */
-:global(.el-dialog.sync-dialog) { height: min(780px, 88vh); }
+:global(.el-dialog.sync-dialog) { height: min(660px, 90vh); }
 :global(.el-dialog.sync-dialog .el-dialog__body) {
   display: flex;
   flex-direction: column;
@@ -1199,6 +1258,8 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   background: var(--dc-bg-soft);
   border: 1px solid var(--dc-border); border-radius: 10px;
   padding: 14px;
+  /* 同 .settings-card：不做 flex 收缩，窗口矮时由正文滚动，别把表格/告警裁掉 */
+  flex: none;
 }
 .summary-title { font-size: 13px; font-weight: 600; color: var(--dc-primary); margin-bottom: 10px; }
 .summary-table { margin-bottom: 12px; }
@@ -1293,80 +1354,104 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   padding: 26px 0; text-align: center;
   font-size: 13px; color: var(--dc-text-dim);
 }
-/* 对象页撑满剩余高度：卡片列表不再限高 320px（那会硬挤出一条滚动条）。
-   6 张卡片 + 展开的那一张刚好铺满 —— 展开的组吃掉剩余高度、对象在**组内**滚动，
-   所以默认状态外层不出现滚动条；只有用户把多组同时展开时外层才滚动。 */
+/* 对象页 = 一行页签 + 占满剩余高度的列表。
+   原先是手风琴（一类一张卡、展开的那张吃剩余高度）：窗口一矮，折叠的卡片会被 flex
+   压成 2px（`overflow:hidden` 让 `min-height:auto` 解析成 0），看着像样式炸了。
+   改成页签后 6 类固定只占一行（约 32px），列表独占剩余高度，任何窗口高度都稳。 */
 .obj-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.obj-groups {
-  flex: 1 1 auto; min-height: 0; padding-right: 2px;
-  display: flex; flex-direction: column; gap: 8px;
-  overflow-y: auto;
-}
-.og {
-  border: 1px solid var(--dc-border);
-  border-radius: 10px;
-  background: var(--dc-bg-card);
-  overflow: hidden;
-  transition: border-color .16s ease, box-shadow .16s ease;
-}
-/* 只有展开的卡片参与弹性分配（吃掉剩余高度），收起的卡片就是一行高 */
-.og.open {
-  border-color: var(--dc-primary-soft, var(--dc-border));
-  box-shadow: var(--dc-shadow-sm);
-  flex: 1 1 0;
-  min-height: 140px;
-  display: flex; flex-direction: column;
-}
-.og.empty { opacity: .72; }
-.og-head {
+.obj-tabs {
   flex: none;
-  display: flex; align-items: center; gap: 8px;
-  padding: 7px 10px;
-  cursor: pointer;
-  user-select: none;
+  display: flex; align-items: flex-end; gap: 2px;
+  border-bottom: 1px solid var(--dc-border);
+  margin-bottom: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
 }
-.og-head:hover { background: var(--dc-bg-hover); }
-.og.open .og-head { background: var(--dc-bg-soft); }
-.og-check { margin-right: 2px; }
-.og-check :deep(.el-checkbox__label) { display: none; }
-.og-ic {
-  width: 22px; height: 20px;
+.obj-tabs::-webkit-scrollbar { height: 0; }
+.obj-tab {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  /* 显式定高：不让 el-checkbox 的 32px 行盒把页签顶高（否则一行页签要 41px） */
+  height: 30px;
+  padding: 0 8px;
+  border: none; background: transparent;
+  border-bottom: 2px solid transparent;
+  border-radius: 7px 7px 0 0;
+  font: inherit;
+  color: var(--dc-text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .15s, color .15s, border-color .15s;
+}
+.obj-tab:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
+.obj-tab.on {
+  color: var(--dc-primary);
+  font-weight: 600;
+  background: var(--dc-primary-wash);
+  border-bottom-color: var(--dc-primary);
+}
+.obj-tab.empty { opacity: .62; }
+/* 页签里的小勾选框（= 本类全选）：默认 32px 高会把页签顶高一圈，压到 16px */
+/* ⚠ 只压**行高**，不要动 `.el-checkbox__inner` / `::after` 的尺寸：
+   对号是 `::after` 上用 3×7 的边框画的，跟着框缩小就对不齐（真机反馈「勾上了看不见对号」）。
+   框本身默认就是 14×14，够小；把容器 32px 的行高收掉即可。 */
+.ot-check { margin-right: -2px; display: inline-flex; }
+.ot-check :deep(.el-checkbox) { height: 18px; margin-right: 0; }
+.ot-check :deep(.el-checkbox__label) { display: none; }
+.ot-ic {
+  width: 18px; height: 16px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 5px;
+  border-radius: 4px;
   color: #0f1522;
   flex: none;
+  margin-left: 1px;
 }
-.og-name { font-size: 13.5px; font-weight: 600; color: var(--dc-text); }
-.og-count {
-  margin-left: auto;
-  font-size: 12px; color: var(--dc-text-dim);
+.ot-name { font-size: 13px; }
+.ot-count {
+  font-size: 11.5px; line-height: 15px;
+  padding: 0 5px; border-radius: 8px;
+  background: var(--dc-bg-soft); color: var(--dc-text-dim);
   font-variant-numeric: tabular-nums;
 }
-.og-caret {
-  color: var(--dc-text-dim);
-  transition: transform .18s ease;
-  font-size: 13px;
-}
-.og.open .og-caret { transform: rotate(180deg); }
-.og-body {
-  border-top: 1px solid var(--dc-border);
-  padding: 6px 10px 8px;
-  /* 高度由展开的卡片决定（flex 吃掉剩余空间），对象多了在这一层滚动 */
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
-  overflow-y: auto;
-  overflow-x: hidden;
-  /* 对象名可能很长（ods_xxx_yyy_zzz）：多列排布省纵向空间，窄屏自动退回一列。
-     列宽用 minmax(0, 1fr) 的固定份数而不是 auto-fill：否则最后一份会被滚动条挤出卡片。 */
+.obj-tab.on .ot-count { background: var(--dc-primary); color: #fff; }
+/* 列表：多列铺排，对象多了在这一层滚动（高度 = 面板剩余空间）
+   列宽用 minmax 的固定份数而不是 auto-fill：否则最后一份会被滚动条挤出行外 */
+.obj-list {
+  flex: 1 1 auto; min-height: 0;
+  overflow-y: auto; overflow-x: hidden;
+  padding-right: 2px;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr));
   gap: 0 10px;
+  align-content: start;
 }
-.og-none { grid-column: 1 / -1; padding: 8px 4px; font-size: 13px; color: var(--dc-text-dim); }
+/* 空页签 / 无匹配：一个柔和的小空状态（虚线圈 + 图标 + 一行说明），居中在列表区中间，
+   而不是左上角一句小灰字。min-height 让它落在视觉中心（列表区高约 280~320px）。 */
+.obj-none {
+  grid-column: 1 / -1;
+  min-height: 200px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px;
+  padding: 32px 12px;
+  color: var(--dc-text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+.obj-none .nc-ic {
+  width: 48px; height: 48px; border-radius: 15px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--dc-bg-soft);
+  border: 1px dashed var(--dc-border);
+  color: var(--dc-text-dim);
+  opacity: .85;
+}
+.obj-none .nc-txt { line-height: 1.6; }
+/* 列表项里的勾选框只收行高（32→20px，一行从 38px 降到 22px）；
+   **不动 inner/::after** —— 对号是 ::after 上用 3×7 边框画的，缩框就对不齐、看不见勾。 */
+.obj-list :deep(.el-checkbox) { height: 20px; margin-right: 2px; }
 .og-item {
   display: flex; align-items: center; gap: 6px;
-  padding: 3px 6px;
+  padding: 2px 6px;
   border-radius: 6px;
   cursor: pointer;
   min-width: 0;
@@ -1397,6 +1482,11 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   margin-bottom: 14px;
   box-shadow: var(--dc-shadow-sm);
   overflow: hidden;
+  /* 弹窗正文是 flex 列（见 :global(.el-dialog.sync-dialog .el-dialog__body)），
+     卡片作为 flex 项默认 `flex-shrink: 1` —— 窗口一矮它就被压扁，配合上面的
+     `overflow: hidden` 直接把「行过滤」列表**拦腰裁断**（真机截图：最后一行只露半个）。
+     让它保持自然高度，放不下由正文滚动（dc-resizable 的正文本就是 overflow: auto）。 */
+  flex: none;
 }
 .settings-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -1446,19 +1536,66 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .settings-col :deep(.el-checkbox-group) { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .settings-col :deep(.el-radio),
 .settings-col :deep(.el-checkbox) { margin-right: 0; height: auto; }
+/* 勾选项一律**允许换行**：这里的中文标签很长（「建表包含索引（把源表的索引一起建到目标）」），
+   Element 默认 `white-space: nowrap` 会把它硬裁掉半句（真机截图：执行选项三行全被切） */
+.settings-col :deep(.el-checkbox) { white-space: normal; align-items: flex-start; }
+.settings-col :deep(.el-checkbox__input) { margin-top: 1px; }
 .settings-col :deep(.el-radio__label),
-.settings-col :deep(.el-checkbox__label) { font-size: 13px; color: var(--dc-text); }
+.settings-col :deep(.el-checkbox__label) {
+  font-size: 13px; color: var(--dc-text);
+  white-space: normal; line-height: 1.45;
+}
 .settings-hint {
   font-size: 11.5px; line-height: 1.5;
   color: var(--dc-text-weak);
   margin: 0;
 }
 .settings-checks { display: flex; flex-direction: column; gap: 6px; }
-/* 高级选项里的「行数上限」行 + WHERE 输入 */
-.settings-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dc-text-dim); margin-top: 6px; }
-.settings-row .row-label { flex-shrink: 0; }
-.settings-row .row-unit { font-size: 12px; color: var(--dc-text-weak); }
-.settings-row .el-input { flex: 1; }
+
+/* ==================== 行过滤（按表设置） ====================
+   横跨三列的一整块：一行一张表，左侧表名定宽、右侧条件吃掉剩余宽度。
+   表多时列表内部滚动（不把弹窗撑高），配一个搜索框。 */
+.settings-where {
+  margin: 0 16px 14px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--dc-bg-soft);
+  border: 1px solid var(--dc-border);
+}
+.sw-head { display: flex; align-items: center; gap: 10px; }
+.sw-title {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 700; color: var(--dc-text);
+  flex: 1; min-width: 0;
+}
+.sw-title .el-icon { color: var(--dc-accent); }
+.sw-count {
+  font-size: 11px; font-weight: 600;
+  padding: 1px 7px; border-radius: 9px;
+  color: var(--dc-primary);
+  background: var(--dc-primary-wash);
+  border: 1px solid var(--dc-border);
+}
+.sw-search { width: 180px; flex: none; }
+.sw-hint {
+  font-size: 11.5px; line-height: 1.5;
+  color: var(--dc-text-weak);
+  margin: 4px 0 8px;
+}
+/* 表多（几十上百张）时这一段必须自己滚动，否则整步被顶成一条长龙；
+   168px 只够 5 行半，第 6 行会被拦腰切开（真机截图），提到 260px ≈ 8 行整 */
+.sw-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-right: 4px; }
+.sw-list::-webkit-scrollbar { width: 6px; }
+.sw-list::-webkit-scrollbar-thumb { background: var(--dc-border); border-radius: 3px; }
+.sw-item { display: flex; align-items: center; gap: 8px; }
+.sw-item.on .sw-name { color: var(--dc-primary); font-weight: 600; }
+.sw-name {
+  flex: none; width: 190px;
+  font-size: 12px; color: var(--dc-text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sw-item .el-input { flex: 1; }
+.sw-none { font-size: 12px; color: var(--dc-text-weak); padding: 4px 0; }
 
 /* ==================== 实时日志 ==================== */
 .log-card {

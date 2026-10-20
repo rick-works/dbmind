@@ -126,10 +126,21 @@ pub struct SyncRequest {
     /// 目标库不存在时自动创建（默认开）
     #[serde(default)]
     auto_create_db: Option<bool>,
-    /// 行数上限：>0 时每张表只搬前 N 行（抽样/试跑用）；0 或缺省 = 不限
+    /// 行数上限：>0 时每张表只搬前 N 行；0 或缺省 = 不限。
+    /// **界面已不再提供**（用户口径：同步就是不限，抽样不是同步的事），保留字段只是
+    /// 为了老客户端 / 脚本调用仍能编译 —— 新调用方不要传。
     #[serde(default)]
     row_limit: Option<u64>,
-    /// 行过滤条件：直接拼进源侧 SELECT 的 WHERE（用户自己保证语义，`;` 会被剥掉防多语句）
+    /// 行过滤：**按表设置**，键是表名（与 `tables` 里的一致），值是拼到该表源侧 SELECT
+    /// 的 WHERE 后面的条件。没列到的表 = 全量同步。
+    ///
+    /// 为什么必须按表：一份全局条件在多表同步里语义不成立 —— `amount > 100` 拼到
+    /// 没有 amount 列的表上，整张表直接报错（真机：一次 339 张表同步，除了几张订单表
+    /// 全挂）。所以界面上是一张表一个输入框。
+    #[serde(default)]
+    where_clauses: Option<std::collections::HashMap<String, String>>,
+    /// 旧的**全局**行过滤：拼到所有表的 SELECT 上。界面已移除（见 `where_clauses`），
+    /// 保留只为兼容老客户端与单表接口。
     #[serde(default)]
     where_clause: Option<String>,
     // batch_size 已删除：写入批次由后端按目标方言自动决定（见 sync_table 的 per_statement），
@@ -183,7 +194,35 @@ struct Opts {
     include_indexes: bool,
     auto_create_db: bool,
     row_limit: u64,
+    /// 按表设置的行过滤（表名 → WHERE）；缺省的表走 `where_clause`
+    where_by_table: std::collections::HashMap<String, String>,
+    /// 全局行过滤（旧客户端 / 单表接口），界面已不再产生
     where_clause: String,
+}
+
+impl Opts {
+    /// 这张表该用哪条行过滤：**先按表精确匹配**（界面就是按表设置的），
+    /// 没有再回退到全局条件（旧客户端 / 单表接口），都没有就是不过滤。
+    fn where_for(&self, table: &str) -> String {
+        if let Some(clause) = self.where_by_table.get(table) {
+            return clause.clone();
+        }
+        // 表名可能带库/模式前缀（`库.表`、`库.模式.表`）：末段再匹配一次
+        if let Some(last) = table.rsplit('.').next() {
+            if last != table {
+                if let Some(clause) = self.where_by_table.get(last) {
+                    return clause.clone();
+                }
+            }
+        }
+        self.where_clause.clone()
+    }
+}
+
+/// 用户手写的 WHERE 归一：去首尾空白、剥掉尾部分号（防多语句）；空白条件 = 未设置。
+/// 注解（`--` / `/* */`）不在这里处理，由执行器按方言各自处理。
+fn normalize_where(raw: &str) -> String {
+    raw.trim().trim_end_matches(';').trim().to_string()
 }
 
 impl SyncRequest {
@@ -219,16 +258,21 @@ impl SyncRequest {
             include_indexes: self.include_indexes.unwrap_or(true),
             auto_create_db: self.auto_create_db.unwrap_or(true),
             row_limit: self.row_limit.unwrap_or(0),
-            // WHERE 由用户手写：剥掉分号防多语句（注解 -- 与 /* */ 由执行器按方言处理，
-            // 这里只做最小防护）；空白条件视为未设置
-            where_clause: self
-                .where_clause
-                .as_deref()
-                .unwrap_or("")
-                .trim()
-                .trim_end_matches(';')
-                .trim()
-                .to_string(),
+            // 按表过滤：空白/只剩分号的条件直接丢掉（等于该表不设过滤）
+            where_by_table: self
+                .where_clauses
+                .iter()
+                .flat_map(|map| map.iter())
+                .filter_map(|(table, clause)| {
+                    let cleaned = normalize_where(clause);
+                    if cleaned.is_empty() {
+                        None
+                    } else {
+                        Some((table.trim().to_string(), cleaned))
+                    }
+                })
+                .collect(),
+            where_clause: normalize_where(self.where_clause.as_deref().unwrap_or("")),
         }
     }
 }
@@ -1790,6 +1834,10 @@ async fn sync_table_inner(
     opts: &Opts,
 ) -> ObjResult {
     let ty = "table";
+    // 行过滤**按表取**：界面上一张表一个条件（见 `SyncRequest::where_clauses`）。
+    // 这里一次算好，同实例直拷与 transfer 引擎共用同一个值 —— 两条路各自去读
+    // `opts` 很容易分叉（曾经直拷路径漏掉过滤，抽样的表整表搬过去了）。
+    let table_where = opts.where_for(table);
     // Navicat 式阶段日志：每张表的「读结构 → 建表 → 拉数据 → 完成」都进任务日志，
     // 界面上能看出 339 张表各自进行到哪一步（此前只有完成时一条，中途日志是空的）
     if let Some(task) = task {
@@ -2348,10 +2396,10 @@ async fn sync_table_inner(
             } else {
                 format!("{}.{table}", src.scope.trim())
             };
-            let where_sql = if opts.where_clause.is_empty() {
+            let where_sql = if table_where.is_empty() {
                 src_qualified
             } else {
-                format!("{} where {}", src_qualified, opts.where_clause)
+                format!("{} where {}", src_qualified, table_where)
             };
             let insert_sql = format!(
                 "insert into {target_name} ({col_list_tgt}) select {col_list_src} from {where_sql}"
@@ -2453,7 +2501,7 @@ async fn sync_table_inner(
         key_columns,
         key_indexes,
         paging_keys,
-        where_clause: opts.where_clause.clone(),
+        where_clause: table_where.clone(),
         row_limit: opts.row_limit,
         upsert: effective_mode == DataMode::Upsert,
         existing: std::sync::Arc::new(existing),
