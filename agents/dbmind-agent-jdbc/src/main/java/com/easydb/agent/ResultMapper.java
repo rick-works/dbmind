@@ -92,7 +92,8 @@ public final class ResultMapper {
     /**
      * 紧凑格式的单元格：能裸表达就裸表达，实在不行（blob）退回带标签对象。
      *
-     * <p>与 {@link #cell} 的值语义一一对应 —— 布尔仍归 0/1、BigDecimal 整数化、时间戳按
+     * <p>与 {@link #cell} 的值语义一一对应 —— 布尔仍归 0/1、高精度 BigDecimal 用 decimal、
+     * 可放入 long 的 BigDecimal 整数化、时间戳按
      * 本地时间文本，避免两种格式出现细微差异。
      */
     /**
@@ -175,9 +176,18 @@ public final class ResultMapper {
         }
         if (value instanceof BigDecimal decimal) {
             if (decimal.scale() <= 0) {
-                buf.append(decimal.longValueExact());
+                try {
+                    buf.append(decimal.longValueExact());
+                } catch (ArithmeticException overflow) {
+                    buf.append("{\"t\":\"decimal\",\"v\":");
+                    appendEscaped(buf, decimal.toPlainString());
+                    buf.append('}');
+                }
             } else {
-                buf.append(decimal.toPlainString());
+                // 裸数字进入 Rust 的 f64 会丢尾数；高精度小数必须保留十进制文本。
+                buf.append("{\"t\":\"decimal\",\"v\":");
+                appendEscaped(buf, decimal.toPlainString());
+                buf.append('}');
             }
             return;
         }
@@ -276,9 +286,13 @@ public final class ResultMapper {
         }
         if (value instanceof BigDecimal decimal) {
             if (decimal.scale() <= 0) {
-                return new com.google.gson.JsonPrimitive(decimal.longValueExact());
+                try {
+                    return new com.google.gson.JsonPrimitive(decimal.longValueExact());
+                } catch (ArithmeticException overflow) {
+                    return decimal(decimal.toPlainString());
+                }
             }
-            return new com.google.gson.JsonPrimitive(decimal.doubleValue());
+            return decimal(decimal.toPlainString());
         }
         if (value instanceof Number number) {
             return new com.google.gson.JsonPrimitive(number.doubleValue());
@@ -316,9 +330,13 @@ public final class ResultMapper {
         }
         if (value instanceof BigDecimal decimal) {
             if (decimal.scale() <= 0) {
-                return integer(decimal.longValueExact());
+                try {
+                    return integer(decimal.longValueExact());
+                } catch (ArithmeticException overflow) {
+                    return decimal(decimal.toPlainString());
+                }
             }
-            return real(decimal.doubleValue());
+            return decimal(decimal.toPlainString());
         }
         if (value instanceof Number number) {
             return real(number.doubleValue());
@@ -356,6 +374,12 @@ public final class ResultMapper {
 
     private static JsonObject real(double value) {
         JsonObject cell = tagged("real");
+        cell.addProperty("v", value);
+        return cell;
+    }
+
+    private static JsonObject decimal(String value) {
+        JsonObject cell = tagged("decimal");
         cell.addProperty("v", value);
         return cell;
     }

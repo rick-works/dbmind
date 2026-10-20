@@ -208,11 +208,40 @@ pub async fn run_write_sql_in(
 ) -> XResult<QueryResult> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
+    let started = std::time::Instant::now();
+    let outcome = run_write_sql_target(state, &target, sql.clone(), max_rows).await;
+    // 界面功能驱动的写库动作补记审计（internal 不进执行历史，但改库必须留痕）
+    if audit {
+        let engine = state.engine();
+        let (ok, err_code) = match &outcome {
+            Ok(_) => (true, None),
+            Err(err) => (false, Some(err.message.clone())),
+        };
+        engine.audit_external(conn, &sql, ok, started.elapsed().as_millis() as u64, err_code);
+    }
+    outcome
+}
+
+/// 与 [`run_write_sql_in`] 同一条执行路径，区别是**目标作用域已经解析好**。
+///
+/// 解析一次 `scope::resolve` 要查连接记录、按方言拼出影子连接；驱动就绪检查还要
+/// 读一遍驱动目录。对「一条语句一次调用」的场景（表结构编辑、终止会话）这点开销
+/// 无所谓，但**还原是几万到几十万条语句**：每条都重来一遍，光这些固定开销就能把
+/// 还原拖成几十分钟（实测 20 万条语句的备份文件，大头压根不在数据库上）。
+/// 调用方解析一次、把 `target` 传进来复用即可 —— 执行语义与 `run_write_sql_in`
+/// 完全一致（同样跟随连接策略、同样 `internal: true`），只是不做审计
+/// （还原的审计由调用方按「整次一条」记录，见 `backup::spawn_restore`）。
+pub(crate) async fn run_write_sql_target(
+    state: &AppState,
+    target: &str,
+    sql: String,
+    max_rows: usize,
+) -> XResult<QueryResult> {
     let engine = state.engine();
     let request = QueryRequest {
         schema: None,
-        connection: target,
-        sql: sql.clone(),
+        connection: target.to_string(),
+        sql,
         options: QueryOptions {
             max_rows,
             timeout_ms: 120_000,
@@ -224,18 +253,7 @@ pub async fn run_write_sql_in(
         read_only: None,
         internal: true,
     };
-    let started = std::time::Instant::now();
-    let outcome = blocking(move || engine.execute(request, AccessContext::Web)).await;
-    // 界面功能驱动的写库动作补记审计（internal 不进执行历史，但改库必须留痕）
-    if audit {
-        let engine = state.engine();
-        let (ok, err_code) = match &outcome {
-            Ok(_) => (true, None),
-            Err(err) => (false, Some(err.message.clone())),
-        };
-        engine.audit_external(conn, &sql, ok, started.elapsed().as_millis() as u64, err_code);
-    }
-    outcome
+    blocking(move || engine.execute(request, AccessContext::Web)).await
 }
 
 /// 与 `crate::api::blocking` 干同一件事，唯一区别是**保留内核错误码**。

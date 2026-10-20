@@ -34,7 +34,7 @@ use axum::extract::{Multipart, Path, RawQuery, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use dbmind_core::{ConnectionKind, TableKind};
+use dbmind_core::{CellValue, ConnectionKind, TableKind};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -1236,6 +1236,276 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
+/// 一条 INSERT 里最多塞多少行。
+///
+/// SQL Server 的多行 `VALUES` 有 **1000 行的解析器硬限制**（sync 那边真机踩过），
+/// 备份文件要能被**任何环境**还原，所以统一按最严的那档来 —— 1000 行一条已经
+/// 1000 倍的摊薄，再多省下的往返次数可忽略。
+const INSERT_ROWS_CAP: usize = 1000;
+
+/// 一条 INSERT 的字节上限（1 MB）。
+///
+/// 按最保守的环境取：MySQL 的 `max_allowed_packet` 很多发行版默认只有 1 MB / 4 MB，
+/// 单条语句超过它就整批失败。备份文件不该背上「还原到哪都要先调参数」的脾气。
+const INSERT_BYTES_CAP: usize = 1024 * 1024;
+
+/// 该方言是否支持多行 `VALUES`（`insert into t values (..),(..)`）。
+///
+/// Oracle / 达梦不认这个形状（要 `insert all`），只能逐行写一条。
+fn supports_multi_row_insert(kind_key: &str) -> bool {
+    !matches!(kind_key, "oracle" | "dm")
+}
+
+/// 把一批行写成 INSERT 语句。
+///
+/// **以前是「一行一条 INSERT」**：20 万行的表写出 20 万条语句（13.8 MB 的文件里
+/// 20 万条 `insert into`），还原时就得一条一条走内核 —— 每条都要解析作用域、
+/// 过闸门、跨进程调宿主，实测要跑十几分钟。多值 INSERT 把这几笔固定开销摊到
+/// 1000 行上，语句数少三个数量级，文件也跟着小了。
+fn write_insert_rows<W: Write>(
+    out: &mut W,
+    table: &str,
+    column_list: &str,
+    rows: &[Vec<CellValue>],
+    dialect: Dialect,
+    batch: usize,
+) -> std::io::Result<()> {
+    let multi = supports_multi_row_insert(dialect.kind.key());
+    // 不支持多值的方言每行一条；支持的按 batch 行合并（再受硬上限约束）
+    let per_stmt = if multi { batch.clamp(1, INSERT_ROWS_CAP) } else { 1 };
+    let prefix = format!(
+        "insert into {} ({}) values ",
+        dialect.quote(table),
+        column_list
+    );
+    let mut tuples: Vec<String> = Vec::new();
+    let mut bytes = 0usize;
+    for row in rows {
+        let values: Vec<String> = row.iter().map(|cell| sql_literal(cell, dialect)).collect();
+        let tuple = format!("({})", values.join(", "));
+        // 单行就超上限的宽行照样写（拆不开）：只在**已有内容**时才提前收口
+        let too_many = tuples.len() >= per_stmt;
+        let too_big = !tuples.is_empty() && bytes + tuple.len() + 2 > INSERT_BYTES_CAP;
+        if too_many || too_big {
+            writeln!(out, "{prefix}{};", tuples.join(", "))?;
+            tuples.clear();
+            bytes = 0;
+        }
+        bytes += tuple.len() + 2;
+        tuples.push(tuple);
+    }
+    if !tuples.is_empty() {
+        writeln!(out, "{prefix}{};", tuples.join(", "))?;
+    }
+    Ok(())
+}
+
+/// 找出 `values` 关键字的位置（跳过字符串/引号标识符里的同名文本）。
+///
+/// 逐字符扫而不是 `find(" values ")`：字面量里出现 `' values '` 会把切点算错，
+/// 而切错位置意味着把一条 INSERT 改坏 —— 还原路径上不能靠运气。
+fn find_values_keyword(text: &str) -> Option<usize> {
+    let mut quote: Option<char> = None;
+    let mut iter = text.char_indices().peekable();
+    while let Some((index, c)) = iter.next() {
+        if let Some(q) = quote {
+            if c == '\\' {
+                // MySQL 的转义：反斜杠后的字符一律不算引号
+                iter.next();
+                continue;
+            }
+            if c == q {
+                // `''` 双写表示一个引号，不是结束
+                if matches!(iter.peek(), Some((_, next)) if *next == q) {
+                    iter.next();
+                    continue;
+                }
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => quote = Some(c),
+            _ if c.is_ascii_alphabetic() => {
+                let mut end = index + c.len_utf8();
+                while let Some((i, ch)) = iter.peek().copied() {
+                    if ch.is_ascii_alphanumeric() || ch == '_' {
+                        end = i + ch.len_utf8();
+                        iter.next();
+                    } else {
+                        break;
+                    }
+                }
+                let word = &text[index..end];
+                // 前面必须是空白：`insert into t values (…)`；`t.values` 这种不是关键字
+                let spaced = text[..index]
+                    .chars()
+                    .last()
+                    .map(|prev| prev.is_whitespace())
+                    .unwrap_or(false);
+                if spaced && word.eq_ignore_ascii_case("values") {
+                    return Some(index);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 校验 `values` 之后是「一串 `(...)` 元组、逗号分隔、别无他物」，并数出元组个数。
+///
+/// 这是合并单行 INSERT 的**安全闸门**：`on duplicate key update …`、`returning …`、
+/// `values (…) , (…) on conflict …` 这些带后缀的形状一概不认（返回 None），
+/// 调用方原样执行。返回 (元组数, 字节数)。
+fn parse_tuple_list(text: &str) -> Option<(usize, usize)> {
+    let mut depth = 0i32;
+    let mut tuples = 0usize;
+    let mut quote: Option<char> = None;
+    let mut last_significant: Option<char> = None;
+    let mut iter = text.chars().peekable();
+    while let Some(c) = iter.next() {
+        if let Some(q) = quote {
+            if c == '\\' {
+                iter.next();
+                continue;
+            }
+            if c == q {
+                if matches!(iter.peek(), Some(next) if *next == q) {
+                    iter.next();
+                    continue;
+                }
+                quote = None;
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' | '`' => quote = Some(c),
+            '(' => {
+                // `(…)(…)` 不是合法的元组列表：两个元组之间必须有逗号
+                if depth == 0 && last_significant == Some(')') {
+                    return None;
+                }
+                depth += 1;
+                if depth == 1 {
+                    tuples += 1;
+                }
+            }
+            ')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return None;
+                }
+            }
+            ',' => {
+                if depth == 0 && last_significant != Some(')') {
+                    return None; // 空元组 / 开头就是逗号
+                }
+            }
+            _ if c.is_whitespace() => {}
+            _ => {
+                if depth == 0 {
+                    return None; // 元组外出现别的字符 ⇒ 有后缀，不能合并
+                }
+            }
+        }
+        if !c.is_whitespace() {
+            last_significant = Some(c);
+        }
+    }
+    if quote.is_some() || depth != 0 || tuples == 0 {
+        return None;
+    }
+    Some((tuples, text.len()))
+}
+
+/// 把一条「简单 INSERT」拆成 (前缀, 元组列表文本)。
+fn split_simple_insert(sql: &str) -> Option<(String, String)> {
+    let text = sql.trim();
+    if text.len() < 12 || !text[..11].eq_ignore_ascii_case("insert into") {
+        return None;
+    }
+    let keyword = find_values_keyword(text)?;
+    let prefix = format!("{} ", &text[..keyword + "values".len()]);
+    let tuples = text[keyword + "values".len()..].trim().to_string();
+    parse_tuple_list(&tuples)?;
+    Some((prefix, tuples))
+}
+
+/// 把相邻的**同前缀**单行 INSERT 合并成多值语句（还原旧文件用）。
+///
+/// 旧版本的内置备份一行写一条 `insert`（mysqldump 加 `--skip-extended-insert`、
+/// 不少第三方导出工具也一样）。这类文件在还原时是**灾难**：20 万行 = 20 万条语句，
+/// 每条都要一次内核→宿主→数据库的往返，实测只有 33 条/秒，跑完要一个半小时。
+/// 这里在**执行前**把连续的 `insert into 同一张表(同一列) values (…)` 攒成多值语句
+/// （同样受 1000 行 / 1MB 约束），语句数少三个数量级，文件本身不用动。
+///
+/// 只合并严格可识别的形状：带 `on duplicate key update` 之类的原样放过；
+/// `insert … select` 没有 `values`，自然不会命中。Oracle / 达梦不支持多行 values，
+/// 直接原样返回。
+///
+/// 返回值里的第二个数组与语句一一对应：`true` 表示这条是**合并出来的批**
+/// （失败时整批不落，错误信息要说明这一点）。
+fn merge_single_row_inserts(statements: Vec<String>, kind_key: &str) -> (Vec<String>, Vec<bool>) {
+    if !supports_multi_row_insert(kind_key) {
+        let flags = vec![false; statements.len()];
+        return (statements, flags);
+    }
+    let mut out: Vec<String> = Vec::with_capacity(statements.len());
+    let mut flags: Vec<bool> = Vec::with_capacity(statements.len());
+    let mut prefix: Option<String> = None;
+    let mut tuples: Vec<String> = Vec::new();
+    let mut rows = 0usize;
+    let mut bytes = 0usize;
+    // 当前这条语句由几条源语句拼成（>1 就是合并出来的批）
+    let mut parts = 0usize;
+    // 收口：把攒下的元组写成一条语句
+    fn flush(
+        out: &mut Vec<String>,
+        flags: &mut Vec<bool>,
+        prefix: &mut Option<String>,
+        tuples: &mut Vec<String>,
+        rows: &mut usize,
+        bytes: &mut usize,
+        parts: &mut usize,
+    ) {
+        if let Some(head) = prefix.take() {
+            out.push(format!("{head}{}", tuples.join(", ")));
+            flags.push(*parts > 1);
+        }
+        tuples.clear();
+        *rows = 0;
+        *bytes = 0;
+        *parts = 0;
+    }
+    for sql in statements {
+        match split_simple_insert(&sql) {
+            Some((head, list)) => {
+                let (count, size) = parse_tuple_list(&list).unwrap_or((1, list.len()));
+                let same = prefix.as_deref() == Some(head.as_str());
+                // 单条就超限的语句自己一条，不拖累邻居
+                let too_many = rows + count > INSERT_ROWS_CAP;
+                let too_big = !tuples.is_empty() && bytes + size + 2 > INSERT_BYTES_CAP;
+                if !same || too_many || too_big {
+                    flush(&mut out, &mut flags, &mut prefix, &mut tuples, &mut rows, &mut bytes, &mut parts);
+                    prefix = Some(head);
+                }
+                rows += count;
+                bytes += size + 2;
+                parts += 1;
+                tuples.push(list);
+            }
+            None => {
+                flush(&mut out, &mut flags, &mut prefix, &mut tuples, &mut rows, &mut bytes, &mut parts);
+                out.push(sql);
+                flags.push(false);
+            }
+        }
+    }
+    flush(&mut out, &mut flags, &mut prefix, &mut tuples, &mut rows, &mut bytes, &mut parts);
+    (out, flags)
+}
+
 /// 内置引擎备份：结构（+ 可选 DROP）+ 数据 + 视图。
 #[allow(clippy::too_many_arguments)]
 async fn builtin_backup(
@@ -1390,20 +1660,8 @@ async fn builtin_backup(
                     //（否则备份期间的结构浏览/表编辑全部排队，见 run_sql_in_background 注释）。
                     let result = run_sql_in_background(state, conn, database, sql, batch).await?;
                     let got = result.rows.len();
-                    for row in &result.rows {
-                        let values: Vec<String> = row
-                            .iter()
-                            .map(|cell| sql_literal(cell, dialect))
-                            .collect();
-                        writeln!(
-                            out,
-                            "insert into {} ({}) values ({});",
-                            dialect.quote(table),
-                            column_list,
-                            values.join(", ")
-                        )
+                    write_insert_rows(&mut out, table, &column_list, &result.rows, dialect, batch)
                         .map_err(|e| XError::internal(e.to_string()))?;
-                    }
                     rows_table += got as u64;
                     if got < batch {
                         break;
@@ -1900,30 +2158,81 @@ async fn spawn_restore(
             if usable.is_empty() {
                 return Err("备份文件里没有可执行的语句".to_string());
             }
+            // 作用域与驱动**只解析一次**：还原动辄几万条语句，每条都重新
+            // `scope::resolve`（查连接记录、按方言拼影子连接）+ 驱动就绪检查，
+            // 光这些固定开销就能把还原拖成几十分钟。
+            let target = crate::api::scope::resolve(&state, &connection_id, &database)
+                .await
+                .map_err(|err| err.message)?;
+            crate::api::driver::ensure_for_connection(&state, &target)
+                .await
+                .map_err(|err| err.message)?;
+            // 旧备份文件（以及 mysqldump --skip-extended-insert）是「一行一条 INSERT」：
+            // 20 万行 = 20 万次往返，实测只有 33 条/秒。执行前把连续的同类 INSERT
+            // 合并成多值语句，文件不用动，语句数直接少三个数量级。
+            let kind = require_record(&state, &connection_id)
+                .await
+                .map_err(|err| err.message)?
+                .kind();
+            let before = usable.len();
+            let (usable, merged_flags) = merge_single_row_inserts(usable, kind.key());
+            if usable.len() < before {
+                task.log(format!(
+                    "已把 {} 条单行 INSERT 合并成多值语句（{before} 条 ⇒ {} 条）",
+                    before - usable.len(),
+                    usable.len()
+                ));
+            }
             task.set_total(usable.len() as i64);
             task.step(format!("共 {} 条语句", usable.len()));
+            let started = std::time::Instant::now();
             let mut executed = 0u64;
             for (index, sql) in usable.iter().enumerate() {
                 task.check_canceled()?;
-                // 还原是**写库**：必须走「跟随连接策略」的执行入口 ——
-        // 结构浏览那条只读会话会让 MySQL 驱动直接拒绝
-        // （连接没开只读开关、还原却报 Connection is read-only，实机撞到过）
-        crate::api::meta::run_write_sql_in(&state, &connection_id, &database, sql.clone(), 1, true)
-                    .await
-                    .map_err(|err| {
-                        format!(
-                            "第 {} 条语句执行失败：{}\n语句（截断）：{}",
+                // 还原是**写库**：走「跟随连接策略」的执行入口 ——
+                // 结构浏览那条只读会话会让 MySQL 驱动直接拒绝
+                // （连接没开只读开关、还原却报 Connection is read-only，实机撞到过）。
+                match crate::api::meta::run_write_sql_target(&state, &target, sql.clone(), 1).await {
+                    Ok(_) => {}
+                    Err(err) => {
+                        // 审计按「整次还原一条」记：以前是每条语句写一行审计，
+                        // 20 万条语句就是 20 万行垃圾，既淹掉审计表又拖慢还原。
+                        state.engine().audit_external(
+                            &connection_id,
+                            &format!("还原 {file_name}（第 {} 条失败）", index + 1),
+                            false,
+                            started.elapsed().as_millis() as u64,
+                            Some(err.message.clone()),
+                        );
+                        // 合并过的批次是**一条语句一个事务**：坏数据会让整批不落
+                        // （以前是逐行独立，前面几行已经进去了）。这句说明必须给出，
+                        // 否则用户看到「第 3 条失败」却不知道 3 号里其实有 1000 行。
+                        let batch_note = if merged_flags.get(index).copied().unwrap_or(false) {
+                            "\n（该条是由多条单行 INSERT 合并的多值语句，整批一起失败）"
+                        } else {
+                            ""
+                        };
+                        return Err(format!(
+                            "第 {} 条语句执行失败：{}\n语句（截断）：{}{batch_note}",
                             index + 1,
                             err.message,
                             sql.chars().take(300).collect::<String>()
-                        )
-                    })?;
+                        ));
+                    }
+                }
                 executed += 1;
                 task.set_done(executed);
                 if executed % 50 == 0 {
                     task.log(format!("已执行 {executed}/{} 条语句", usable.len()));
                 }
             }
+            state.engine().audit_external(
+                &connection_id,
+                &format!("还原 {file_name}（{executed} 条语句）"),
+                true,
+                started.elapsed().as_millis() as u64,
+                None,
+            );
             let detail = format!(
                 "还原完成：执行 {executed} 条语句（{}）",
                 path.display()
@@ -2076,4 +2385,101 @@ pub async fn download(State(state): State<AppState>, Path(task_id): Path<String>
         axum::body::Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn merge(stmts: &[&str], kind: &str) -> Vec<String> {
+        merge_single_row_inserts(stmts.iter().map(|s| s.to_string()).collect(), kind).0
+    }
+
+    #[test]
+    fn 同前缀的单行insert会合并成一条多值语句() {
+        let out = merge(
+            &[
+                "drop table if exists t",
+                "insert into t (a, b) values (1, 2)",
+                "insert into t (a, b) values (3, 4)",
+                "insert into t (a, b) values (5, 6)",
+                "create index i on t (a)",
+            ],
+            "mysql",
+        );
+        assert_eq!(out.len(), 3, "三条 INSERT 应合成一条：{out:?}");
+        assert_eq!(out[1], "insert into t (a, b) values (1, 2), (3, 4), (5, 6)");
+        assert_eq!(out[2], "create index i on t (a)");
+    }
+
+    #[test]
+    fn 不同表或不同列不合并() {
+        let out = merge(
+            &[
+                "insert into t (a) values (1)",
+                "insert into u (a) values (2)",
+                "insert into t (b) values (3)",
+            ],
+            "mysql",
+        );
+        assert_eq!(out.len(), 3, "{out:?}");
+    }
+
+    #[test]
+    fn 带后缀的insert原样执行() {
+        let out = merge(
+            &[
+                "insert into t (a) values (1) on duplicate key update a = 2",
+                "insert into t (a) values (3) on duplicate key update a = 4",
+            ],
+            "mysql",
+        );
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(out[0].contains("on duplicate key update"));
+    }
+
+    #[test]
+    fn insert_select与字面量里的values都不合并() {
+        let out = merge(
+            &[
+                "insert into t (a) select a from s",
+                "insert into t (a) values ('x values (1) y')",
+                "insert into t (a) values ('it''s (2)')",
+            ],
+            "mysql",
+        );
+        // 第三条形状干净，但它前面那条也是可合并形状 ⇒ 两条会合并，select 那条独立
+        assert_eq!(out[0], "insert into t (a) select a from s");
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert_eq!(
+            out[1],
+            "insert into t (a) values ('x values (1) y'), ('it''s (2)')"
+        );
+    }
+
+    #[test]
+    fn 单条超过一千行会分条() {
+        let stmts: Vec<String> = (0..1200)
+            .map(|i| format!("insert into t (a) values ({i})"))
+            .collect();
+        let (out, flags) = merge_single_row_inserts(stmts, "mysql");
+        assert_eq!(out.len(), 2, "1200 行应拆成 1000 + 200：{}", out.len());
+        assert!(flags.iter().all(|flag| *flag), "两条都是合并出来的批");
+        assert!(out[0].ends_with("(999)"), "{}", &out[0][out[0].len() - 20..]);
+        assert!(out[1].ends_with("(1199)"));
+    }
+
+    #[test]
+    fn oracle与达梦不合并() {
+        for kind in ["oracle", "dm"] {
+            let out = merge(
+                &[
+                    "insert into t (a) values (1)",
+                    "insert into t (a) values (2)",
+                ],
+                kind,
+            );
+            assert_eq!(out.len(), 2, "{kind} 不支持多行 values");
+        }
+    }
 }

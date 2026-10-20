@@ -26,7 +26,7 @@
 //!    单连接池的库（SQLite/H2/Derby/SQL Server）自动退回 1，不做无意义的排队。
 //! 2. **有界通道 + 背压**：读快了会阻塞在通道上，内存峰值只与「在途页数 × 页大小」有关，
 //!    与表大小无关。分片时页大小自动降到 5000 行（多片同时在途，避免几十页堆内存）。
-//! 3. **单语句行数按目标方言定**（`sync::per_statement` 那套），引擎不掺和。
+//! 3. **单语句行数按目标方言定**（`sync::insert_batch_ranges` 那套），引擎不掺和。
 //!
 //! ## 容错
 //!
@@ -132,8 +132,6 @@ pub struct TablePlan {
 
     // ---- 写入行为 ----
     pub upsert: UpsertMode,
-    /// 单条 INSERT 的目标行数（方言差异很大，见 sync 里的注释）
-    pub per_statement: u64,
     pub identity_on: bool,
     pub stream: Option<StreamCfg>,
 }

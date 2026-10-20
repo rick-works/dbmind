@@ -15,15 +15,18 @@ use dbmind_core::CellValue;
 use super::{BF, TablePlan};
 use crate::api::dialect::Dialect;
 use crate::api::meta::run_sql_in;
-use crate::api::sync::{fetch_page, literal_for, write_parallelism};
+use crate::api::sync::{estimate_row_bytes, fetch_page, literal_for, write_parallelism};
 use crate::AppState;
 
-/// 单流时一页 5 万行：往返次数最少（keyset 分页每页只扫本页，页大不吃亏）。
-pub const PAGE_WIDE: usize = 50_000;
-/// 分片并发时一页 2 万行：多片同时在途，页要小一些控制内存，但**不能太小** ——
+/// 单流初始页 2 万行；拿到第一页后会按实际行宽自动升到最多 10 万行。
+pub const PAGE_WIDE: usize = 20_000;
+/// 分片并发初始页 1 万行：多片同时在途，先控制内存，再按实际行宽自适应 ——
 /// 页码是「一次往返」的成本，5 千行/页会让 20 万行变成 40 次往返，在延迟高的链路上
 /// 反而比单流慢（真机实测 4 片 5 千行/页 11s vs 单流 5s）。
-pub const PAGE_SPLIT: usize = 20_000;
+pub const PAGE_SPLIT: usize = 10_000;
+const PAGE_BYTES_TARGET: usize = 32 * 1024 * 1024;
+const PAGE_ROWS_MIN: usize = 1_000;
+const PAGE_ROWS_MAX: usize = 100_000;
 
 /// 读页的会话键前缀（分片时后面拼片号，整表唯一后缀拼 `sid`）
 const SESSION_READ: &str = "internal:sync-r";
@@ -334,6 +337,19 @@ impl Reader for SqlReader {
             )
             .await
             .map_err(|err| err.message)?;
+
+            // 行数不能代表内存/网络页大小。先按实际页估算字节数，再为下一页
+            // 调整行数：窄表逐步升到 10 万行，宽表自动降到至少 1 千行。
+            let estimated_bytes = rows.iter().map(|row| estimate_row_bytes(row)).sum::<usize>();
+            if estimated_bytes > 0 {
+                let next_rows = ((page_rows as u128 * PAGE_BYTES_TARGET as u128)
+                    / estimated_bytes as u128)
+                    .clamp(PAGE_ROWS_MIN as u128, PAGE_ROWS_MAX as u128) as usize;
+                // 小变化不折腾分页；只有明显更宽/更窄时才换档。
+                if next_rows * 2 < page_rows || next_rows > page_rows * 2 {
+                    self.page_rows.store(next_rows, Ordering::SeqCst);
+                }
+            }
 
             let done = rows.len() < page_rows;
             let next = if done {

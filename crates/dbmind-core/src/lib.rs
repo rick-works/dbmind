@@ -43,7 +43,8 @@ pub use agent::{
 };
 pub use cancel::{CancelRegistry, CancelToken};
 pub use drivers::{
-    builtin_kinds, unimplemented_driver, Driver, DriverRegistry, QueryCall, TxAction,
+    builtin_kinds, unimplemented_driver, Driver, DriverRegistry, PreparedBatchCall, QueryCall,
+    TxAction,
 };
 pub use engine::{DriverEntry, DriverReport, DbMindEngine, RuntimeSummary};
 pub use error::{query_error, DbMindError, ErrorCode, ErrorPayload, Result};

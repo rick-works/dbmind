@@ -646,6 +646,7 @@ pub(crate) fn sql_literal(cell: &CellValue, dialect: Dialect) -> String {
                 value.to_string()
             }
         }
+        CellValue::Decimal(value) => value.clone(),
         CellValue::Text(text) => dialect.literal(text),
         // 二进制不塞进 SQL 文本：几 MB 的 hex 会把文件撑爆，且各家字面量语法不一。
         // 留一句注释，别让「这一列怎么是空的」成为下一个问题。

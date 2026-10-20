@@ -16,11 +16,13 @@
 //! - **查询**不是幂等的 ⇒ 进程/响应异常一律不重试，交由上层决定。
 
 use super::session_pool::{SessionBudget, SessionPool};
-use super::{Driver, MetaCall, QueryCall, TxAction};
+use super::{Driver, MetaCall, PreparedBatchCall, QueryCall, TxAction};
 use crate::agent::{self, AgentHost, AgentQueryResult};
 use crate::error::{DbMindError, ErrorCode, Result};
 use crate::statement::classify;
-use crate::types::{ColumnDetail, ConnectReport, ConnectionConfig, QueryResult, TableInfo};
+use crate::types::{
+    CellValue, ColumnDetail, ConnectReport, ConnectionConfig, QueryResult, TableInfo,
+};
 use crate::{CancelToken, ConnectionKind, RuntimeMode};
 use serde_json::{json, Map};
 use std::sync::mpsc::RecvTimeoutError;
@@ -711,7 +713,19 @@ impl Driver for AgentDriver {
                     let _ = handle.join();
                 }
 
-                let value = outcome?;
+                let value = match outcome {
+                    Ok(value) => value,
+                    Err(err) if err.message.contains("未知方法：preparedBatch") => {
+                        // 升级内核但尚未替换宿主 jar 的兼容路径：老宿主不认识这个
+                        // 专用方法时，按“不支持预编译批”回退，不让同步直接失败。
+                        return Err(DbMindError::new(
+                            ErrorCode::DriverNotImplemented,
+                            "当前 JDBC 宿主版本不支持预编译批量写入",
+                        )
+                        .with_detail(err.detail.unwrap_or_default()));
+                    }
+                    Err(err) => return Err(err),
+                };
                 let agent_result: AgentQueryResult = serde_json::from_value(value)?;
                 Ok(QueryResult {
                     execution_id: request_id,
@@ -734,6 +748,108 @@ impl Driver for AgentDriver {
                     // 也让「每个标签页一条会话」在界面上是**看得见**的事实
                     session_id: Some(key.to_string()),
                 })
+            },
+        )
+    }
+
+    fn prepared_insert_batch(&self, call: PreparedBatchCall<'_>) -> Result<usize> {
+        let lane = self.lane_key(call.config, call.read_only, call.session);
+        let limit = self.lane_limit(call.config, call.session);
+        let wait = Duration::from_millis(call.options.timeout_ms.saturating_add(2_000));
+        self.with_lane(
+            call.config,
+            &lane,
+            limit,
+            wait,
+            LaneCall {
+                read_only: call.read_only,
+                retry_on_stale: false,
+                cancel: Some(call.cancel),
+            },
+            |key| {
+                let request_id = call.execution_id.to_string();
+                let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+                let watcher = {
+                    let host = self.host.clone();
+                    let cancel = call.cancel.clone();
+                    let request_id = request_id.clone();
+                    std::thread::Builder::new()
+                        .name("dbmind-agent-batch-cancel".to_string())
+                        .spawn(move || loop {
+                            match done_rx.recv_timeout(Duration::from_millis(80)) {
+                                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                                Err(RecvTimeoutError::Timeout) => {
+                                    if cancel.is_cancelled() {
+                                        match host.cancel(&request_id) {
+                                            Ok(false) => {}
+                                            _ => break,
+                                        }
+                                    }
+                                }
+                            }
+                        })
+                        .ok()
+                };
+
+                let rows: Vec<serde_json::Value> = call
+                    .rows
+                    .iter()
+                    .map(|row| {
+                        serde_json::Value::Array(
+                            row.iter()
+                                .map(|cell| match cell {
+                                    CellValue::Null | CellValue::Blob { .. } => {
+                                        serde_json::Value::Null
+                                    }
+                                    CellValue::Integer(value) => json!(value),
+                                    CellValue::Real(value) => json!(value),
+                                    CellValue::Decimal(value) => json!(value),
+                                    CellValue::Text(value) => json!(value),
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect();
+                let mut params = Map::new();
+                params.insert("sessionId".to_string(), json!(key));
+                params.insert("sql".to_string(), json!(call.sql));
+                params.insert(
+                    "types".to_string(),
+                    serde_json::to_value(call.target_types)?,
+                );
+                params.insert("rows".to_string(), serde_json::Value::Array(rows));
+                params.insert("timeoutMs".to_string(), json!(call.options.timeout_ms));
+                // 调用方已开事务：宿主只能用保存点划批，不能自己 commit（见
+                // `PreparedBatchCall::in_transaction`）。
+                if call.in_transaction {
+                    params.insert("inTransaction".to_string(), json!(true));
+                }
+
+                let outcome = self
+                    .host
+                    .call(Some(&request_id), "preparedBatch", params, Some(wait));
+                let _ = done_tx.send(());
+                if let Some(handle) = watcher {
+                    let _ = handle.join();
+                }
+                let value = outcome?;
+                if value.get("supported").and_then(|v| v.as_bool()) == Some(false) {
+                    return Err(DbMindError::new(
+                        ErrorCode::DriverNotImplemented,
+                        "目标 JDBC 驱动不支持可回滚的预编译批量写入",
+                    ));
+                }
+                if value.get("sessionReset").and_then(|v| v.as_bool()) == Some(false) {
+                    // 数据已经提交，但会话无法恢复 autocommit。丢掉宿主与内核两侧的
+                    // 缓存，让下一次调用重建一条干净连接；本次不能报失败，否则调用方
+                    // 会把已经提交的数据再写一遍。
+                    self.host.forget_session(key);
+                }
+                let affected = value
+                    .get("affectedRows")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0) as usize;
+                Ok(affected)
             },
         )
     }

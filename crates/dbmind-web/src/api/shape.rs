@@ -82,6 +82,7 @@ pub fn cell_to_value(cell: &CellValue) -> Value {
         CellValue::Null => Value::Null,
         CellValue::Integer(v) => json!(v),
         CellValue::Real(v) => json!(v),
+        CellValue::Decimal(v) => json!(v),
         CellValue::Text(v) => json!(v),
         CellValue::Blob { len } => json!(format!("[blob {len} B]")),
     }
@@ -108,16 +109,64 @@ pub fn cell_to_value(cell: &CellValue) -> Value {
 /// 注意 f64 的精度边界：超出 2^53 的整数无法精确表示，两侧都超界时仍可能不等 —— 属已知边界。
 pub fn number_key(cell: &CellValue) -> Option<String> {
     match cell {
-        CellValue::Integer(value) => Some(value.to_string()),
-        CellValue::Real(value) => {
-            if value.is_finite() && value.fract() == 0.0 && value.abs() < 9.007_199_254_740_992e15 {
-                Some((*value as i64).to_string())
-            } else {
-                Some(format!("{value}"))
-            }
-        }
+        CellValue::Integer(value) => canonical_decimal(&value.to_string()),
+        CellValue::Real(value) => canonical_decimal(&value.to_string()),
+        CellValue::Decimal(value) => canonical_decimal(value),
         _ => None,
     }
+}
+
+/// 十进制文本的规范形式：去符号零、去尾随零，指数表示刻度。
+///
+/// 例如 `12.3400`、`12.34`、`1234e-2` 都归一到同一键。这里只做字符串运算，
+/// 不经过 f64，因此 38 位 DECIMAL 不会在比较或建键时丢尾数。
+fn canonical_decimal(input: &str) -> Option<String> {
+    let text = input.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let (negative, body) = match text.as_bytes()[0] {
+        b'-' => (true, &text[1..]),
+        b'+' => (false, &text[1..]),
+        _ => (false, text),
+    };
+    let (mantissa, exponent) = match body.find(['e', 'E']) {
+        Some(index) => {
+            let exp = body[index + 1..].parse::<i64>().ok()?;
+            (&body[..index], exp)
+        }
+        None => (body, 0),
+    };
+    let mut parts = mantissa.split('.');
+    let whole = parts.next()?;
+    let fraction = parts.next().unwrap_or("");
+    if parts.next().is_some()
+        || whole.is_empty() && fraction.is_empty()
+        || !whole.bytes().chain(fraction.bytes()).all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    let mut digits = format!("{whole}{fraction}");
+    let first_nonzero = digits.find(|c: char| c != '0');
+    let Some(first_nonzero) = first_nonzero else {
+        return Some("0".to_string());
+    };
+    digits.drain(..first_nonzero);
+    let mut scale = exponent.checked_sub(fraction.len() as i64)?;
+    while digits.ends_with('0') {
+        digits.pop();
+        scale = scale.checked_add(1)?;
+    }
+    let mut out = String::with_capacity(digits.len() + 16);
+    if negative {
+        out.push('-');
+    }
+    out.push_str(&digits);
+    if scale != 0 {
+        out.push('e');
+        out.push_str(&scale.to_string());
+    }
+    Some(out)
 }
 
 /// **可排序的归一键**（流式对比的双指针用）。
@@ -129,23 +178,124 @@ pub fn number_key(cell: &CellValue) -> Option<String> {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SortPart {
     Null,
-    Num(OrdF64),
+    Num(DecimalKey),
     Time(String),
     Text(String),
 }
 
-/// f64 的全序包装（total_cmp 给出确定序，NaN 也不 panic）。
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct OrdF64(pub f64);
-impl Eq for OrdF64 {}
-impl PartialOrd for OrdF64 {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
+/// 精确十进制排序键，避免高精度主键在 f64 下折叠成同一个顺序。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecimalKey {
+    negative: bool,
+    digits: String,
+    scale: i64,
+}
+
+impl DecimalKey {
+    fn from_number_key(key: String) -> Option<Self> {
+        let (negative, body) = match key.as_bytes().first() {
+            Some(b'-') => (true, &key[1..]),
+            _ => (false, key.as_str()),
+        };
+        let (digits, scale) = match body.split_once('e') {
+            Some((digits, scale)) => (digits.to_string(), scale.parse::<i64>().ok()?),
+            None => (body.to_string(), 0),
+        };
+        Some(Self {
+            negative: negative && digits != "0",
+            digits,
+            scale,
+        })
+    }
+
+    fn is_zero(&self) -> bool {
+        self.digits == "0"
+    }
+
+    fn magnitude_cmp(&self, other: &Self) -> std::cmp::Ordering {
+        let self_order = self.digits.len() as i64 + self.scale;
+        let other_order = other.digits.len() as i64 + other.scale;
+        match self_order.cmp(&other_order) {
+            std::cmp::Ordering::Equal => {
+                let width = self.digits.len().max(other.digits.len());
+                let left = self.digits.bytes().chain(std::iter::repeat_n(b'0', width - self.digits.len()));
+                let right = other.digits.bytes().chain(std::iter::repeat_n(b'0', width - other.digits.len()));
+                left.cmp(right)
+            }
+            order => order,
+        }
+    }
+
+    /// SQL 数值字面量：展开成普通十进制，不用指数形式，避免数据库按浮点字面量解析。
+    pub fn to_sql_literal(&self) -> String {
+        if self.is_zero() {
+            return "0".to_string();
+        }
+        let integer_digits = self.digits.len() as i64 + self.scale;
+        let mut out = String::new();
+        if self.negative {
+            out.push('-');
+        }
+        if integer_digits <= 0 {
+            out.push_str("0.");
+            out.extend(std::iter::repeat_n('0', (-integer_digits) as usize));
+            out.push_str(&self.digits);
+        } else if integer_digits as usize >= self.digits.len() {
+            out.push_str(&self.digits);
+            out.extend(std::iter::repeat_n(
+                '0',
+                integer_digits as usize - self.digits.len(),
+            ));
+        } else {
+            let split = integer_digits as usize;
+            out.push_str(&self.digits[..split]);
+            out.push('.');
+            out.push_str(&self.digits[split..]);
+        }
+        out
     }
 }
-impl Ord for OrdF64 {
+
+impl Ord for DecimalKey {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.total_cmp(&other.0)
+        match (self.is_zero(), other.is_zero()) {
+            (true, true) => std::cmp::Ordering::Equal,
+            (true, false) => {
+                if other.negative {
+                    std::cmp::Ordering::Greater
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            }
+            (false, true) => {
+                if self.negative {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            }
+            (false, false) if self.negative != other.negative => {
+                if self.negative {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            }
+            (false, false) => {
+                let magnitude = self.magnitude_cmp(other);
+                if self.negative {
+                    magnitude.reverse()
+                } else {
+                    magnitude
+                }
+            }
+        }
+    }
+}
+
+impl PartialOrd for DecimalKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -160,8 +310,8 @@ pub fn row_sort_key(row: &[CellValue], indexes: &[usize]) -> Vec<SortPart> {
                 None => SortPart::Text(text.clone()),
             },
             Some(CellValue::Blob { len }) => SortPart::Text(format!("b:{len}")),
-            Some(other) => match number_key(other) {
-                Some(number) => SortPart::Num(OrdF64(number.parse::<f64>().unwrap_or(f64::NAN))),
+            Some(other) => match number_key(other).and_then(DecimalKey::from_number_key) {
+                Some(number) => SortPart::Num(number),
                 None => SortPart::Null,
             },
         })
@@ -301,6 +451,31 @@ mod value_tests {
             row_key(&[CellValue::Integer(3), CellValue::Text("a".into())], &[0, 1]),
             row_key(&[CellValue::Real(3.0), CellValue::Text("a".into())], &[0, 1])
         );
+    }
+
+    #[test]
+    fn 高精度小数归一时不丢尾数() {
+        let exact = CellValue::Decimal("12345678901234567890.1234567890".to_string());
+        let trailing = CellValue::Decimal("12345678901234567890.123456789000".to_string());
+        let changed = CellValue::Decimal("12345678901234567890.1234567891".to_string());
+        assert!(cells_equal(Some(&exact), Some(&trailing)));
+        assert!(!cells_equal(Some(&exact), Some(&changed)));
+        assert!(!cells_equal(
+            Some(&exact),
+            Some(&CellValue::Real(
+                "12345678901234567000".parse().unwrap()
+            ))
+        ));
+        assert_ne!(
+            cell_key(&exact),
+            cell_key(&CellValue::Text("12345678901234567890.1234567890".to_string()))
+        );
+        let low = row_sort_key(&[exact.clone()], &[0]);
+        let high = row_sort_key(&[changed.clone()], &[0]);
+        assert!(low < high, "高精度小数排序不能经过 f64");
+        let negative = row_sort_key(&[CellValue::Decimal("-99999999999999999999".into())], &[0]);
+        let positive = row_sort_key(&[exact], &[0]);
+        assert!(negative < positive);
     }
 
     /// 日期时间跨表示：`2024-01-01` / `2024-01-01T00:00` / `...T00:00:00` / `... 00:00:00` 是同一个值。

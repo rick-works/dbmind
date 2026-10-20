@@ -254,6 +254,8 @@ fn cell_xml(column: usize, row: usize, cell: &CellValue) -> String {
                 text_cell(&reference, &value.to_string())
             }
         }
+        // Excel 的数字精度只有 15 位；高精度十进制必须按文本写，避免导出时悄悄舍入。
+        CellValue::Decimal(value) => text_cell(&reference, value),
         CellValue::Text(text) => text_cell(&reference, text),
         // 二进制不塞进单元格（Excel 存不了任意字节）：给一个可读占位，
         // 而不是让整张表导不出来

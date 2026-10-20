@@ -1724,6 +1724,24 @@ mod tests {
     use super::*;
     use crate::ConnectionKind;
 
+    #[test]
+    fn 紧凑行保留高精度_decimal() {
+        let value = serde_json::json!({
+            "rows": [[
+                {"t": "decimal", "v": "12345678901234567890.1234567890"},
+                "普通文本"
+            ]]
+        });
+        let result: AgentQueryResult = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            result.rows,
+            vec![vec![
+                crate::CellValue::Decimal("12345678901234567890.1234567890".to_string()),
+                crate::CellValue::Text("普通文本".to_string()),
+            ]]
+        );
+    }
+
     /// 驱动镜像：**只替换仓库根**，路径部分与 Maven Central 那份逐字节一致。
     ///
     /// 这条性质就是「设置里的驱动镜像真的生效」的全部内容 —— 内网 Nexus / 阿里云镜像

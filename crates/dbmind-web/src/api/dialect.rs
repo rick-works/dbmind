@@ -3939,7 +3939,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// 按 SQL 家族的通用词根判，取「基础名」再匹配：`varchar(100)` → `varchar`、
     /// `character varying` → `character`，所以 `contains("char")` 能一并覆盖
     /// char / varchar / nvarchar / nvarchar2 / character varying 这些变体。
-    fn is_textual_type(type_name: &str) -> bool {
+    pub(crate) fn is_textual_type(type_name: &str) -> bool {
         let lower = type_name.trim().to_ascii_lowercase();
         let base = lower.split(['(', ' ']).next().unwrap_or("").trim();
         base.contains("char")      // char / varchar / nvarchar / nvarchar2 / character varying

@@ -3,6 +3,7 @@ package com.dbmind.agent;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonParser;
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
@@ -14,9 +15,11 @@ import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
 import java.sql.Driver;
 import java.sql.ResultSet;
+import java.sql.Savepoint;
 import java.sql.SQLException;
 import java.sql.SQLTimeoutException;
 import java.sql.Statement;
+import java.sql.Types;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -117,7 +120,8 @@ public final class Main {
      */
     private static boolean needsSessionLock(String method) {
         return switch (method) {
-            case "tables", "columns", "setautocommit", "commit", "rollback" -> true;
+            case "query", "preparedBatch", "tables", "columns", "setautocommit", "commit",
+                    "rollback", "disconnect" -> true;
             default -> false;
         };
     }
@@ -150,6 +154,7 @@ public final class Main {
                 case "ping" -> ping();
                 case "connect" -> connect(request);
                 case "query" -> query(id, request);
+                case "preparedBatch" -> preparedBatch(id, request);
                 case "tables" -> tables(request);
                 case "columns" -> columns(request);
                 case "cancel" -> cancel(request);
@@ -521,6 +526,481 @@ public final class Main {
                 }
             }
         }
+    }
+
+    /**
+     * 内部 INSERT 的预编译批处理。
+     *
+     * <p>只有单条 INSERT 能进来，普通 {@code query} 不会因为出现 {@code ?}
+     * 自动切到这条路径。整批放在一个短事务里执行：成功才提交，失败先回滚，
+     * 再由内核安全地降级为多行/逐行 SQL。回滚确认不了时如实报告“状态未知”，
+     * 调用方绝不能重试整批。
+     */
+    private static JsonElement preparedBatch(String requestId, JsonObject request) {
+        Session session = session(request);
+        String sql = required(request, "sql").trim();
+        if (!"insert".equals(leadingKeyword(sql)) || hasTopLevelSemicolon(sql)) {
+            throw new Protocol.AgentException(
+                    "DBMIND-QUERY-0001",
+                    "预编译批量写入只接受不含分号的单条 INSERT");
+        }
+        if (!request.has("types") || !request.get("types").isJsonArray()
+                || !request.has("rows") || !request.get("rows").isJsonArray()) {
+            throw new Protocol.AgentException(
+                    "DBMIND-QUERY-0001",
+                    "预编译批量写入缺少 types 或 rows 数组");
+        }
+
+        JsonArray types = request.getAsJsonArray("types");
+        JsonArray rows = request.getAsJsonArray("rows");
+        if (rows.size() == 0) {
+            JsonObject empty = new JsonObject();
+            empty.addProperty("supported", true);
+            empty.addProperty("affectedRows", 0);
+            empty.addProperty("sessionReset", true);
+            return empty;
+        }
+        for (JsonElement row : rows) {
+            if (!row.isJsonArray() || row.getAsJsonArray().size() != types.size()) {
+                throw new Protocol.AgentException(
+                        "DBMIND-QUERY-0001",
+                        "预编译批量写入的每行列数必须与 types 一致");
+            }
+        }
+
+        Connection connection = session.connection();
+        // 调用方（同步的写入插件）已经在这个会话上发过 `begin transaction`。
+        // 此时**绝不能**接管事务：一旦这里 commit，调用方收尾的 commit 就会报
+        // `The COMMIT TRANSACTION request has no corresponding BEGIN TRANSACTION`
+        // （真机：数据其实已经写进去，同步却报失败）。改用保存点划批。
+        boolean callerInTransaction = request.has("inTransaction")
+                && !request.get("inTransaction").isJsonNull()
+                && request.get("inTransaction").getAsBoolean();
+        boolean manageTransaction;
+        boolean supported;
+        try {
+            DatabaseMetaData metadata = connection.getMetaData();
+            manageTransaction = connection.getAutoCommit() && !callerInTransaction;
+            supported = metadata.supportsBatchUpdates()
+                    && metadata.supportsTransactions()
+                    && (manageTransaction || metadata.supportsSavepoints());
+        } catch (SQLException e) {
+            manageTransaction = false;
+            supported = false;
+        }
+        if (!supported) {
+            JsonObject unsupported = new JsonObject();
+            unsupported.addProperty("supported", false);
+            unsupported.addProperty(
+                    "reason",
+                    "目标驱动不支持可回滚的批量写入，或当前事务不支持保存点");
+            return unsupported;
+        }
+
+        session.touch();
+        PreparedStatement statement = null;
+        Running running = null;
+        Savepoint savepoint = null;
+        boolean commitAttempted = false;
+        try {
+            statement = connection.prepareStatement(sql);
+            int timeoutMs = request.has("timeoutMs") ? request.get("timeoutMs").getAsInt() : 30_000;
+            if (timeoutMs > 0) {
+                statement.setQueryTimeout(Math.max(1, timeoutMs / 1000));
+            }
+            if (manageTransaction) {
+                connection.setAutoCommit(false);
+            } else {
+                try {
+                    String savepointName = "DBMIND_BATCH_"
+                            + requestId.replaceAll("[^A-Za-z0-9_]", "_");
+                    // Oracle 旧版本标识符上限 30；前缀占 13，留 28 足够且跨版本安全。
+                    if (savepointName.length() > 28) {
+                        savepointName = savepointName.substring(0, 28);
+                    }
+                    savepoint = connection.setSavepoint(savepointName);
+                } catch (SQLException e) {
+                    JsonObject unsupported = new JsonObject();
+                    unsupported.addProperty("supported", false);
+                    unsupported.addProperty("reason", "当前事务无法创建保存点：" + e.getMessage());
+                    return unsupported;
+                }
+            }
+
+            try {
+                for (int rowIndex = 0; rowIndex < rows.size(); rowIndex++) {
+                    JsonArray row = rows.get(rowIndex).getAsJsonArray();
+                    for (int column = 0; column < row.size(); column++) {
+                        String type = types.get(column).isJsonNull()
+                                ? null
+                                : types.get(column).getAsString();
+                        bindPreparedValue(statement, column + 1, row.get(column), type);
+                    }
+                    statement.addBatch();
+                }
+            } catch (SQLException | RuntimeException e) {
+                rollbackPreparedWork(session, savepoint, manageTransaction, e);
+                throw new Protocol.AgentException(
+                        "DBMIND-QUERY-0002",
+                        "PREPARED_BATCH_ROLLED_BACK：绑定批量参数失败，整批已回滚：" + e.getMessage(),
+                        e.toString());
+            }
+
+            running = new Running(statement);
+            RUNNING.put(requestId, running);
+            try {
+                statement.executeBatch();
+            } catch (SQLException e) {
+                Protocol.AgentException failure = queryFailure(running, e);
+                rollbackPreparedWork(session, savepoint, manageTransaction, e);
+                if ("DBMIND-QUERY-0004".equals(failure.code())
+                        || "DBMIND-QUERY-0003".equals(failure.code())
+                        || "DBMIND-CONN-0003".equals(failure.code())) {
+                    // 取消、超时和连接丢失都不是“脏数据”：保留原错误，调用方不得重试。
+                    throw failure;
+                }
+                throw new Protocol.AgentException(
+                        failure.code(),
+                        "PREPARED_BATCH_ROLLED_BACK：预编译批量写入失败，整批已回滚："
+                                + failure.getMessage(),
+                        failure.detail());
+            }
+
+            boolean sessionReset = true;
+            if (manageTransaction) {
+                commitAttempted = true;
+                try {
+                    connection.commit();
+                } catch (SQLException e) {
+                    dropSession(session);
+                    throw new Protocol.AgentException(
+                            "DBMIND-CONN-0003",
+                            "PREPARED_BATCH_COMMIT_UNKNOWN：批量写入提交结果未知，请先核对目标数据："
+                                    + e.getMessage(),
+                            describe(e));
+                }
+                try {
+                    connection.setAutoCommit(true);
+                } catch (SQLException e) {
+                    // 数据已经提交，不能因为恢复会话状态失败而让调用方重写整批。
+                    sessionReset = false;
+                    dropSession(session);
+                }
+            } else {
+                try {
+                    connection.releaseSavepoint(savepoint);
+                } catch (SQLException e) {
+                    // SQL Server 只有 SAVE TRANSACTION / ROLLBACK TRANSACTION sp，
+                    // mssql-jdbc 的 releaseSavepoint 会报“不支持此操作”。本批已经执行
+                    // 成功，释放失败不属于数据失败；保存点会随外层 commit/rollback 清理。
+                    trace("释放批量保存点失败（数据已写入，继续）：" + e);
+                }
+            }
+            JsonObject result = new JsonObject();
+            result.addProperty("supported", true);
+            result.addProperty("affectedRows", rows.size());
+            result.addProperty("sessionReset", sessionReset);
+            return result;
+        } catch (SQLException e) {
+            Protocol.AgentException failure = queryFailure(running, e);
+            if (!commitAttempted) {
+                rollbackPreparedWork(session, savepoint, manageTransaction, e);
+                throw new Protocol.AgentException(
+                        failure.code(),
+                        "PREPARED_BATCH_ROLLED_BACK：预编译批量写入准备失败，整批已回滚："
+                                + failure.getMessage(),
+                        failure.detail());
+            }
+            dropSession(session);
+            throw new Protocol.AgentException(
+                    "DBMIND-CONN-0003",
+                    "PREPARED_BATCH_COMMIT_UNKNOWN：批量写入提交结果未知，请先核对目标数据："
+                            + e.getMessage(),
+                    describe(e));
+        } finally {
+            if (running != null) {
+                RUNNING.remove(requestId);
+            }
+            if (statement != null) {
+                try {
+                    statement.close();
+                } catch (SQLException ignored) {
+                    // 主错误已经说明问题；关闭失败不再覆盖它
+                }
+            }
+        }
+    }
+
+    /**
+     * 只拒绝引号外的分号：合法标识符本身可能含分号（例如 "a;b"），而
+     * 引号外的分号才可能把单条 INSERT 变成多条语句。
+     */
+    private static boolean hasTopLevelSemicolon(String sql) {
+        char quote = 0;
+        for (int i = 0; i < sql.length(); i++) {
+            char c = sql.charAt(i);
+            if (quote == 0) {
+                if (c == ';') {
+                    return true;
+                }
+                if (c == '\'' || c == '"' || c == '`') {
+                    quote = c;
+                } else if (c == '[') {
+                    quote = ']';
+                }
+                continue;
+            }
+            if (c == quote) {
+                // SQL 的成对引号是转义：'' / "" / `` / ]] 仍处于同一个标识符内。
+                if (i + 1 < sql.length() && sql.charAt(i + 1) == quote) {
+                    i++;
+                } else {
+                    quote = 0;
+                }
+            } else if (quote == ']' && c == '[') {
+                // H2 / SQL Server 的方括号标识符里也可能出现左括号，无需切换状态。
+                continue;
+            }
+        }
+        return false;
+    }
+
+    /** 整批回滚并恢复 autocommit；任一步失败都销毁会话，绝不让调用方猜是否可重试。 */
+    private static void rollbackPreparedBatch(Session session, Throwable cause) {
+        try {
+            session.connection().rollback();
+            session.connection().setAutoCommit(true);
+        } catch (SQLException rollbackError) {
+            dropSession(session);
+            throw new Protocol.AgentException(
+                    "DBMIND-CONN-0003",
+                    "PREPARED_BATCH_ROLLBACK_FAILED：批量写入失败后无法确认回滚，禁止重试："
+                            + rollbackError.getMessage(),
+                    describe(rollbackError) + "\n原错误：" + cause);
+        }
+    }
+
+    /** 自管事务走整批 rollback；外层事务内只回滚到本批保存点，不能动别人的事务。 */
+    private static void rollbackPreparedWork(
+            Session session, Savepoint savepoint, boolean manageTransaction, Throwable cause) {
+        if (manageTransaction) {
+            rollbackPreparedBatch(session, cause);
+            return;
+        }
+        try {
+            session.connection().rollback(savepoint);
+        } catch (SQLException rollbackError) {
+            dropSession(session);
+            throw new Protocol.AgentException(
+                    "DBMIND-CONN-0003",
+                    "PREPARED_BATCH_ROLLBACK_FAILED：批量写入失败后无法回滚到保存点，禁止重试："
+                            + rollbackError.getMessage(),
+                    describe(rollbackError) + "\n原错误：" + cause);
+        }
+        // 回滚已经确认成功；释放只是回收保存点。个别 SQL Server/驱动组合
+        // 会在这里报“不支持此操作”，不能把它误判成数据未回滚。
+        try {
+            session.connection().releaseSavepoint(savepoint);
+        } catch (SQLException ignored) {
+            // 保留余下的保存点不改变数据正确性
+        }
+    }
+
+    /** 按目标列类型绑定参数。数值仍走 JDBC 数值接口，避免把所有值都转成字符串。 */
+    private static void bindPreparedValue(
+            PreparedStatement statement, int index, JsonElement value, String targetType)
+            throws SQLException {
+        if (value == null || value.isJsonNull()) {
+            statement.setNull(index, sqlTypeFor(targetType));
+            return;
+        }
+        if (!value.isJsonPrimitive()) {
+            throw new SQLException("批量参数必须是标量或 null");
+        }
+        JsonPrimitive primitive = value.getAsJsonPrimitive();
+        if (primitive.isBoolean()) {
+            statement.setBoolean(index, primitive.getAsBoolean());
+            return;
+        }
+        if (primitive.isNumber()) {
+            if (isBooleanType(targetType)) {
+                statement.setBoolean(index, primitive.getAsLong() != 0);
+            } else if (isTextualType(targetType)) {
+                statement.setString(index, primitive.getAsString());
+            } else if (isDecimalType(targetType)) {
+                // DECIMAL/NUMERIC 必须走 BigDecimal；setDouble 会在 18 位级别
+                // 改变尾数，SQL Server 实测可因此报 Arithmetic overflow。
+                statement.setBigDecimal(index, primitive.getAsBigDecimal());
+            } else if (primitive.getAsNumber().toString().indexOf('.') >= 0
+                    || primitive.getAsNumber().toString().indexOf('e') >= 0
+                    || primitive.getAsNumber().toString().indexOf('E') >= 0) {
+                statement.setDouble(index, primitive.getAsDouble());
+            } else {
+                statement.setLong(index, primitive.getAsLong());
+            }
+            return;
+        }
+        String text = primitive.getAsString();
+        if (isDecimalType(targetType)) {
+            try {
+                statement.setBigDecimal(index, new java.math.BigDecimal(text.trim()));
+                return;
+            } catch (NumberFormatException ignored) {
+                // 不是合法十进制就交给目标库按原字符串处理，失败后仍可安全降级
+            }
+        }
+        statement.setString(index, normalizeTemporal(text, targetType));
+    }
+
+    private static boolean isBooleanType(String targetType) {
+        if (targetType == null) {
+            return false;
+        }
+        String base = targetType.split("\\(", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        return base.equals("bool") || base.equals("boolean") || base.equals("bit");
+    }
+
+    private static boolean isDecimalType(String targetType) {
+        if (targetType == null) {
+            return false;
+        }
+        String base = targetType.split("\\(", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        return base.equals("decimal") || base.equals("numeric") || base.equals("number")
+                || base.equals("money") || base.equals("smallmoney");
+    }
+
+    private static boolean isTextualType(String targetType) {
+        if (targetType == null) {
+            return false;
+        }
+        String base = targetType.split("\\(", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        return base.contains("char") || base.contains("text") || base.equals("clob")
+                || base.equals("json") || base.equals("xml") || base.equals("uuid")
+                || base.equals("uniqueidentifier");
+    }
+
+    /**
+     * NULL 要带目标 SQL 类型：Oracle 等驱动对 {@code Types.NULL(0)} 并不接受。
+     * 类型映射不到时给 VARCHAR；真正的类型转换错误仍会由整批回滚后的 SQL
+     * 逐行降级如实报出来。
+     */
+    private static int sqlTypeFor(String targetType) {
+        if (targetType == null) {
+            return Types.VARCHAR;
+        }
+        String base = targetType.split("\\(", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        if (base.startsWith("timestamp") || base.startsWith("datetime")) {
+            return base.contains("zone") || base.contains("offset")
+                    ? Types.TIMESTAMP_WITH_TIMEZONE
+                    : Types.TIMESTAMP;
+        }
+        if (base.equals("date")) {
+            return Types.DATE;
+        }
+        if (base.startsWith("time")) {
+            return Types.TIME;
+        }
+        if (isBooleanType(base)) {
+            return base.equals("bit") ? Types.BIT : Types.BOOLEAN;
+        }
+        if (base.equals("tinyint") || base.equals("smallint") || base.equals("int2")) {
+            return Types.SMALLINT;
+        }
+        if (base.equals("int") || base.equals("integer") || base.equals("int4")) {
+            return Types.INTEGER;
+        }
+        if (base.equals("bigint") || base.equals("int8")) {
+            return Types.BIGINT;
+        }
+        if (base.equals("real") || base.equals("float4")) {
+            return Types.REAL;
+        }
+        if (base.equals("float") || base.equals("double") || base.equals("double precision")
+                || base.equals("float8")) {
+            return Types.DOUBLE;
+        }
+        if (base.equals("decimal") || base.equals("numeric") || base.equals("number")
+                || base.equals("money") || base.equals("smallmoney")) {
+            return Types.NUMERIC;
+        }
+        if (base.contains("blob") || base.contains("binary") || base.equals("bytea")
+                || base.equals("image")) {
+            return Types.VARBINARY;
+        }
+        if (base.contains("clob") || base.contains("text")) {
+            return Types.CLOB;
+        }
+        return Types.VARCHAR;
+    }
+
+    /**
+     * 日期时间文本的轻量规范化：SQL Server datetime2 不接受省略秒的 ISO 文本。
+     * 非日期时间列原样返回，不做任何猜测。
+     */
+    private static String normalizeTemporal(String text, String targetType) {
+        if (targetType == null || text == null) {
+            return text;
+        }
+        String base = targetType.split("\\(", 2)[0].trim().toLowerCase(java.util.Locale.ROOT);
+        boolean date = "date".equals(base);
+        boolean time = "time".equals(base);
+        boolean dateTime = switch (base) {
+            case "datetime", "datetime2", "smalldatetime", "timestamp", "timestamptz",
+                    "datetimeoffset", "datetime64" -> true;
+            default -> false;
+        };
+        if (!date && !time && !dateTime) {
+            return text;
+        }
+        String value = text.trim();
+        if (value.length() < 8 || value.charAt(4) != '-' || value.charAt(7) != '-') {
+            return text;
+        }
+        value = value.replaceFirst("[Tt]", " ");
+        if (date) {
+            int space = value.indexOf(' ');
+            return space < 0 ? value : value.substring(0, space);
+        }
+        String timePart;
+        if (time) {
+            int space = value.indexOf(' ');
+            timePart = space < 0 ? value : value.substring(space + 1);
+            return truncateFraction(padTime(timePart));
+        } else {
+            int space = value.indexOf(' ');
+            String day = space < 0 ? value : value.substring(0, space);
+            timePart = space < 0 ? "00:00:00" : value.substring(space + 1);
+            if (timePart.isEmpty()) {
+                timePart = "00:00:00";
+            }
+            return truncateFraction(day + " " + padTime(timePart));
+        }
+    }
+
+    private static String padTime(String value) {
+        int dot = value.indexOf('.');
+        String clock = dot < 0 ? value : value.substring(0, dot);
+        String fraction = dot < 0 ? "" : value.substring(dot);
+        String[] fields = clock.split(":");
+        if (fields.length == 2) {
+            return fields[0] + ":" + fields[1] + ":00" + fraction;
+        }
+        return value;
+    }
+
+    private static String truncateFraction(String value) {
+        int dot = value.indexOf('.');
+        if (dot < 0) {
+            return value;
+        }
+        int end = dot + 1;
+        while (end < value.length() && Character.isDigit(value.charAt(end))) {
+            end++;
+        }
+        if (end - dot - 1 <= 6) {
+            return value;
+        }
+        return value.substring(0, dot + 7) + value.substring(end);
     }
 
     /** 丢掉一条会话：从表里摘掉并关掉连接。内核下一次调用会重新 connect。 */

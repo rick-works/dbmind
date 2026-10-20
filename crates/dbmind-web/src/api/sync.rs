@@ -56,16 +56,9 @@ use crate::AppState;
 /// 页大小只影响内存峰值与往返次数：主键 keyset 分页每页只扫本页，
 /// 调大不会引入深分页退化。5 万 ≈ 每页往返次数降到原来的 1/5，
 /// 千万级大表的同步吞吐明显提升；内存峰值（单页行数据）在典型行宽下几十 MB，可控。
-/// 写侧另有 MAX_TUPLES_PER_STATEMENT = 2000 独立控制单语句大小，两者互不影响。
+/// 写侧由 `insert_batch_ranges` 按目标方言的行数、表达式数与字节数独立切分。
 #[cfg(test)]
 const PAGE: u64 = 50_000;
-/// 一条语句最多拼多少个值元组。
-///
-/// 500 → 2000 → 5000 的演进依据：每条语句有 ~174ms 的固定链路开销
-///（权限/审计/agent RPC，见 run_sql），批越小这条税交得越勤。
-/// 5000 行 ≈ 500KB 一条，仍在 MySQL `max_allowed_packet` 默认值内
-///（旧版 4MB、新版 64MB）；再往上单语句解析/回滚成本开始吃掉收益，先停在这。
-const MAX_TUPLES_PER_STATEMENT: u64 = 5000;
 /// Stream Load 单请求的**字节**上限：行数上限（5 万）管不住行宽，宽行表一批能拼出
 /// 85MB+ 的请求体。实测这台单 BE（HDD）每次 Stream Load 有 **~10 秒固定开销**
 ///（事务/publish 延迟），但 48MB 大批的 publish 代价陡增（实测反而比 16MB 慢近一倍）
@@ -144,7 +137,7 @@ pub struct SyncRequest {
     /// 保留只为兼容老客户端与单表接口。
     #[serde(default)]
     where_clause: Option<String>,
-    // batch_size 已删除：写入批次由后端按目标方言自动决定（见 sync_table 的 per_statement），
+    // batch_size 已删除：写入批次由后端按目标方言自动决定（见 insert_batch_ranges），
     // 每种库的甜点值差一个数量级，界面让用户猜没有意义。旧客户端传了也被 serde 忽略。
     #[serde(default)]
     tables: Vec<String>,
@@ -548,6 +541,52 @@ pub(crate) async fn run_target_in_rows(
     Ok(result)
 }
 
+/// 目标端专用的预编译 INSERT。数据与目标列类型一起下发给 JDBC 宿主，
+/// 由 `PreparedStatement` 绑定后整批执行；只有能确认回滚的失败才会返回给调用方
+/// 作为可安全降级的错误。
+async fn run_target_prepared_insert(
+    state: &AppState,
+    target: &str,
+    session: &str,
+    target_name: &str,
+    columns: &[String],
+    target_types: &[Option<String>],
+    target_kind: Dialect,
+    rows: &[Vec<CellValue>],
+    in_transaction: bool,
+) -> XResult<usize> {
+    let engine = state.engine();
+    let sql = build_prepared_insert(target_name, columns, target_kind);
+    let request = dbmind_core::QueryRequest {
+        schema: None,
+        read_only: None,
+        connection: target.to_string(),
+        sql,
+        options: dbmind_core::QueryOptions {
+            max_rows: 1,
+            timeout_ms: 600_000,
+        },
+        execution_id: None,
+        session: Some(session.to_string()),
+        internal: true,
+    };
+    let types = target_types.to_vec();
+    let values = rows.to_vec();
+    let result = blocking(move || {
+        // `in_transaction`：写入插件已经在目标会话上发过 `begin transaction`，
+        // 宿主不能替它 commit（否则收尾的 commit 会报「没有对应的 BEGIN」）。
+        engine.execute_prepared_insert_batch_in(
+            request,
+            types,
+            values,
+            in_transaction,
+            dbmind_core::AccessContext::Web,
+        )
+    })
+    .await?;
+    Ok(result.affected_rows.unwrap_or(0))
+}
+
 /// 拉**一页**数据（`offset` 起，最多 `PAGE` 行）。
 ///
 /// 调用方自己循环翻页 —— 同步是"读一页写一页"（见 `sync_table`），
@@ -939,6 +978,7 @@ fn encode_stream_csv(rows: &[Vec<dbmind_core::CellValue>]) -> Vec<u8> {
                 dbmind_core::CellValue::Null => out.extend_from_slice(b"\\N"),
                 dbmind_core::CellValue::Integer(n) => out.extend_from_slice(n.to_string().as_bytes()),
                 dbmind_core::CellValue::Real(x) => out.extend_from_slice(x.to_string().as_bytes()),
+            dbmind_core::CellValue::Decimal(s) => out.extend_from_slice(s.as_bytes()),
                 dbmind_core::CellValue::Text(s) => out.extend_from_slice(s.as_bytes()),
                 dbmind_core::CellValue::Blob { len } => {
                     out.extend_from_slice(format!("b:{len}").as_bytes())
@@ -964,6 +1004,7 @@ fn encode_stream_json(
                 None | Some(dbmind_core::CellValue::Null) => Value::Null,
                 Some(dbmind_core::CellValue::Integer(n)) => Value::from(*n),
                 Some(dbmind_core::CellValue::Real(x)) => Value::from(*x),
+                Some(dbmind_core::CellValue::Decimal(s)) => Value::from(s.as_str()),
                 Some(dbmind_core::CellValue::Text(s)) => Value::from(s.as_str()),
                 Some(dbmind_core::CellValue::Blob { len }) => Value::from(format!("b:{len}")),
             };
@@ -1187,13 +1228,15 @@ mod stream_load_tests {
         let rows = vec![
             vec![CellValue::Integer(1), CellValue::Text("张三,说\"你好\"".into()), CellValue::Null],
             vec![CellValue::Real(1.5), CellValue::Text("多行\n文本".into()), CellValue::Blob { len: 7 }],
+            vec![CellValue::Decimal("12345678901234567890.1234567890".into())],
         ];
         let out = encode_stream_csv(&rows);
         let s = String::from_utf8(out).unwrap();
         // 列分隔 0x01、行分隔 0x02；NULL → \N；文本原样（含逗号/引号/换行都无需转义）
         assert_eq!(
             s,
-            "1\u{1}张三,说\"你好\"\u{1}\\N\u{2}1.5\u{1}多行\n文本\u{1}b:7\u{2}"
+            "1\u{1}张三,说\"你好\"\u{1}\\N\u{2}1.5\u{1}多行\n文本\u{1}b:7\u{2}\
+             12345678901234567890.1234567890\u{2}"
         );
     }
 
@@ -1232,6 +1275,14 @@ mod stream_load_tests {
         assert_eq!(
             normalize_datetime_text("2024-06-15T12:30:45.123456789", "datetime2"),
             Some("2024-06-15 12:30:45.123456".to_string())
+        );
+        // 截小数不能吞掉尾随时区
+        assert_eq!(
+            normalize_datetime_text(
+                "2024-06-15T12:30:45.123456789+08:00",
+                "datetimeoffset"
+            ),
+            Some("2024-06-15 12:30:45.123456+08:00".to_string())
         );
         // 纯 DATE 目标只留日期段
         assert_eq!(
@@ -1412,14 +1463,6 @@ impl ObjResult {
     }
 }
 
-fn multi_row(dialect: Dialect) -> bool {
-    matches!(
-        dialect.kind.key(),
-        "mysql" | "mariadb" | "doris" | "postgresql" | "kingbase" | "sqlite" | "sqlserver"
-            | "h2" | "clickhouse"
-    )
-}
-
 /// 单格 → SQL 字面量：目标列是**真布尔**时走布尔字面量；日期时间列先做**文本规范化**。
 ///
 /// 布尔：内核把布尔表示为 0/1 整数，而 PG / Oracle 的 boolean 列不接受整数 `0`
@@ -1432,9 +1475,38 @@ fn multi_row(dialect: Dialect) -> bool {
 /// 表（网闸通行记录这类）整表全炸。这里按目标列类型把值统一成方言最稳的形态：
 /// `T` → 空格、缺秒补 `:00`、小数超 6 位截断（datetime2 上限 7 位，9 位的 DateTime64 也炸）。
 pub(crate) fn literal_for(cell: &CellValue, dialect: Dialect, target_type: Option<&str>) -> String {
-    if let (CellValue::Integer(value), Some(type_name)) = (cell, target_type) {
+    if let Some(type_name) = target_type {
         if Dialect::is_boolean_type(type_name) {
-            return dialect.bool_literal(*value != 0).to_string();
+            let boolean = match cell {
+                CellValue::Integer(value) => Some(*value != 0),
+                CellValue::Real(value) => Some(*value != 0.0),
+                CellValue::Decimal(value) | CellValue::Text(value) => match value.trim() {
+                    "0" | "false" | "FALSE" => Some(false),
+                    "1" | "true" | "TRUE" => Some(true),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(boolean) = boolean {
+                return dialect.bool_literal(boolean).to_string();
+            }
+        }
+        if Dialect::is_numeric_type(type_name) {
+            if let CellValue::Decimal(value) | CellValue::Text(value) = cell {
+                if let Some(value) = plain_decimal(value) {
+                    // 数值目标列必须写裸数字；加引号时 PostgreSQL 等会拒绝 text→numeric。
+                    return value.to_string();
+                }
+            }
+        }
+        if Dialect::is_textual_type(type_name) {
+            if matches!(
+                cell,
+                CellValue::Integer(_) | CellValue::Real(_) | CellValue::Decimal(_)
+            ) {
+                // 数值 → 文本列：先转十进制文本再加字符串引号，避免 PG 把裸数字视为类型不匹配。
+                return dialect.literal(&cell.to_display());
+            }
         }
     }
     if let (CellValue::Text(text), Some(type_name)) = (cell, target_type) {
@@ -1443,6 +1515,54 @@ pub(crate) fn literal_for(cell: &CellValue, dialect: Dialect, target_type: Optio
         }
     }
     sql_literal(cell, dialect)
+}
+
+/// 合法的普通十进制字面量（可带符号/小数点/指数）。只用于目标列已是数值类型的场景，
+/// 返回去掉首尾空白的原文本，确保不经过 f64。
+fn plain_decimal(text: &str) -> Option<&str> {
+    let value = text.trim();
+    if value.is_empty() {
+        return None;
+    }
+    let mut chars = value.chars().peekable();
+    if matches!(chars.peek(), Some('+' | '-')) {
+        chars.next();
+    }
+    let mut digits = 0usize;
+    let mut dot = false;
+    while let Some(c) = chars.peek().copied() {
+        if c.is_ascii_digit() {
+            digits += 1;
+            chars.next();
+        } else if c == '.' && !dot {
+            dot = true;
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    if digits == 0 {
+        return None;
+    }
+    if matches!(chars.peek(), Some('e' | 'E')) {
+        chars.next();
+        if matches!(chars.peek(), Some('+' | '-')) {
+            chars.next();
+        }
+        let mut exp_digits = 0usize;
+        while let Some(c) = chars.next() {
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            exp_digits += 1;
+        }
+        if exp_digits == 0 {
+            return None;
+        }
+    } else if chars.next().is_some() {
+        return None;
+    }
+    Some(value)
 }
 
 /// 日期时间目标列的值规范化。返回 `Some(规范文本)` 表示按文本字面量写入（已转义），
@@ -1493,11 +1613,18 @@ fn normalize_datetime_text(text: &str, target_type: &str) -> Option<String> {
     } else {
         s = format!("{date_part} {}", pad_time(&time_part));
     }
-    // 小数超 6 位截断（datetime2 上限 7 位，9 位的 DateTime64(9) 直接 241）
+    // 小数超 6 位截断（datetime2 上限 7 位，9 位的 DateTime64(9) 直接 241）。
+    // 只截小数数字本身，尾随的时区偏移要保留。
     if let Some(dot) = s.find('.') {
-        let digits = s[dot + 1..].chars().filter(|c| c.is_ascii_digit()).count();
-        if digits > 6 {
-            s = format!("{}{}", &s[..dot], &s[dot..dot + 7]);
+        let digit_start = dot + 1;
+        let digit_end = s[digit_start..]
+            .find(|c: char| !c.is_ascii_digit())
+            .map(|offset| digit_start + offset)
+            .unwrap_or(s.len());
+        if digit_end.saturating_sub(digit_start) > 6 {
+            let mut clipped = s[..digit_start + 6].to_string();
+            clipped.push_str(&s[digit_end..]);
+            s = clipped;
         }
     }
     Some(s)
@@ -1557,6 +1684,7 @@ fn insert_stmt_cap(kind_key: &str) -> usize {
 pub(crate) fn estimate_row_bytes(row: &[CellValue]) -> usize {
     row.iter()
         .map(|c| match c {
+            CellValue::Decimal(s) => s.len() * 2 + 8,
             CellValue::Text(s) => s.len() * 2 + 8,
             CellValue::Blob { len } => *len * 2 + 8,
             _ => 40,
@@ -1570,6 +1698,7 @@ pub(crate) fn estimate_row_bytes(row: &[CellValue]) -> usize {
 pub(crate) fn json_row_bytes(row: &[CellValue]) -> usize {
     row.iter()
         .map(|c| match c {
+            CellValue::Decimal(s) => s.len() + 24,
             CellValue::Text(s) => s.len() + 24,
             CellValue::Blob { len } => *len + 24,
             _ => 24,
@@ -1578,32 +1707,38 @@ pub(crate) fn json_row_bytes(row: &[CellValue]) -> usize {
         + 8
 }
 
-/// 生成一批 INSERT **语句列表**（(行数, SQL)，调用方逐条发送）。
+/// 把一批行切成 INSERT 子批（起点, 行数）。只算范围，不提前拼 SQL：
+/// 预编译路径成功时就不需要付出字符串字面量渲染的成本，失败回退时也只渲染
+/// 当前子批。
 ///
 /// 拆分是**双重约束**，谁先到谁触发：
 /// - 行数：SQL Server 多行 VALUES 单条语句限 1000 行（解析器硬限制，真机踩过）；
+/// - 表达式：Oracle / DM / DB2 的 `(值1, 值2, …)` 派生表有 65,535 个表达式上限，
+///   行数必须随列数收窄（130 列时每批约 504 行）；
 /// - 字节：单条语句估出来的体积不许超过目标方言的 packet 上限（见 insert_stmt_cap）——
 ///   行数上限对宽行（JSON 列等）无能为力，2000 行也能拼出 7MB。
-/// 拆出来的每条语句各自独立发送，单条失败不影响之前已落盘的语句（部分成功语义）。
-fn build_insert_batch(
-    table: &str,
-    columns: &[String],
-    types: &[Option<String>],
+fn insert_batch_ranges(
     rows: &[Vec<CellValue>],
-    dialect: Dialect,
     kind_key: &str,
-) -> Vec<(usize, String)> {
+) -> Vec<(usize, usize)> {
     const SQLSERVER_VALUES_LIMIT: usize = 1000;
-    let row_limit = if kind_key == "sqlserver" { SQLSERVER_VALUES_LIMIT } else { usize::MAX };
+    let columns = rows.first().map(Vec::len).unwrap_or(1).max(1);
+    let row_limit = match kind_key {
+        "sqlserver" => SQLSERVER_VALUES_LIMIT,
+        // 这些方言的单条多行 INSERT 用派生表展开，表达式总数是硬限制。
+        // 10 的下限只防止极端宽表算出 0；真正写不进去时照常逐行降级并报错。
+        "oracle" | "dm" | "db2" => (65_535 / columns).clamp(10, 10_000),
+        _ => usize::MAX,
+    };
     let byte_cap = insert_stmt_cap(kind_key);
-    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut out: Vec<(usize, usize)> = Vec::new();
     let mut start = 0usize;
     let mut acc_bytes = 0usize;
     let mut acc_rows = 0usize;
     for (i, row) in rows.iter().enumerate() {
         let row_bytes = estimate_row_bytes(row);
         if acc_rows >= row_limit || (acc_rows > 0 && acc_bytes + row_bytes > byte_cap) {
-            out.push((i - start, build_insert(table, columns, types, &rows[start..i], dialect)));
+            out.push((start, i - start));
             start = i;
             acc_bytes = 0;
             acc_rows = 0;
@@ -1612,10 +1747,27 @@ fn build_insert_batch(
         acc_rows += 1;
     }
     if start < rows.len() {
-        out.push((rows.len() - start, build_insert(table, columns, types, &rows[start..], dialect)));
+        out.push((start, rows.len() - start));
     }
     out
 }
+
+/// 预编译批处理只用于“提交/回滚边界由驱动可靠提供”的 JDBC 方言。
+///
+/// MySQL 系的多行 INSERT 本来就能在一个 packet 内完成，ClickHouse/Doris 也各有
+/// 更快的原生批量通道；把它们塞进 executeBatch 反而多一层绑定开销。其余类型
+/// 继续走已验证的字面量批处理，功能上仍是任意源/目标。
+///
+/// **DB2 不在名单里**（2026-10 真机实测）：jcc 的 `executeBatch` 一次 200 行时整批
+/// 通信中断（`[jcc][103][10843] 不可恢复的通信断开`，SQLState 08001），且失败后连接
+/// 已关闭、`rollback` 报 08003 ⇒ 宿主只能判「无法确认回滚，禁止重试」，整张表同步失败。
+/// 同样的行数拆成字面量 INSERT 逐条发送完全正常（每条报文小）。预编译批省下的那点
+/// 绑定开销，远不值得把一条 VPN / 长肥管道上的链路变成「整表必失败」。
+fn prepared_insert_candidate(kind_key: &str) -> bool {
+    matches!(kind_key, "sqlserver" | "oracle" | "dm" | "h2")
+}
+
+const PREPARED_BATCH_ROLLED_BACK: &str = "PREPARED_BATCH_ROLLED_BACK";
 
 /// 事务内做“批量失败 → 逐行重试”时需要的保存点。
 ///
@@ -1661,13 +1813,64 @@ pub(crate) async fn write_insert_rows(
     table: &str,
     in_transaction: bool,
 ) -> Result<u64, String> {
-    let stmts = build_insert_batch(target_name, columns, target_types, rows, target_kind, target_kind.kind.key());
+    let ranges = insert_batch_ranges(rows, target_kind.kind.key());
     let mut ok_rows = 0u64;
     let mut failed_rows = 0u64;
     let mut sample_err: Option<String> = None;
-    let mut start_row = 0usize;
     let mut savepoint_seq = 0u64;
-    for (n_rows, stmt) in &stmts {
+    let mut use_prepared =
+        !identity_on && prepared_insert_candidate(target_kind.kind.key());
+    for (start_row, n_rows) in ranges {
+        let chunk = &rows[start_row..start_row + n_rows];
+        if use_prepared {
+            match run_target_prepared_insert(
+                state,
+                tgt_target,
+                session,
+                target_name,
+                columns,
+                target_types,
+                target_kind,
+                chunk,
+                in_transaction,
+            )
+            .await
+            {
+                Ok(written) => {
+                    ok_rows += written as u64;
+                    continue;
+                }
+                Err(err) if err.code.as_deref() == Some("DBMIND-DRV-0001") => {
+                    // 驱动声明不支持：后面的子批不必再逐个试探。
+                    use_prepared = false;
+                    if let Some(task) = task {
+                        task.log(format!(
+                            "表 {table}：目标驱动不支持预编译批量写入，使用 SQL 批处理"
+                        ));
+                    }
+                }
+                Err(err) if err.message.contains(PREPARED_BATCH_ROLLED_BACK) => {
+                    // 宿主确认整批已回滚，才允许走原来的字面量/逐行降级；否则
+                    // 部分成功后再重试会产生重复数据。
+                    if let Some(task) = task {
+                        task.log(format!(
+                            "表 {table}：预编译子批失败（已回滚），本批改用 SQL 逐行降级"
+                        ));
+                    }
+                }
+                Err(err) => {
+                    return Err(format!("预编译批量写入失败（未自动重试）：{}", err.message));
+                }
+            }
+        }
+
+        let stmt = build_insert(
+            target_name,
+            columns,
+            target_types,
+            chunk,
+            target_kind,
+        );
         let sp = if in_transaction {
             let name = format!("dbmind_insert_{savepoint_seq}");
             savepoint_seq += 1;
@@ -1680,9 +1883,9 @@ pub(crate) async fn write_insert_rows(
                 return Err(format!("创建批处理保存点失败：{}", err.message));
             }
         }
-        match run_target_in(state, tgt_target, &with_identity(stmt.clone(), identity_on, target_name), session).await {
+        match run_target_in(state, tgt_target, &with_identity(stmt, identity_on, target_name), session).await {
             Ok(_) => {
-                ok_rows += *n_rows as u64;
+                ok_rows += n_rows as u64;
                 if let Some((_, _, Some(release))) = sp.as_ref() {
                     // 释放失败**不能**判整表失败：这批数据已经写进去了，
                     // 这里只是回收保存点。以前直接 return Err，界面显示「失败」
@@ -1709,7 +1912,6 @@ pub(crate) async fn write_insert_rows(
                     }
                 }
                 // 降级：这一语句块的行逐行重试
-                let chunk = &rows[start_row..start_row + *n_rows as usize];
                 let mut chunk_failed = 0u64;
                 for row in chunk {
                     let row_sp = if in_transaction {
@@ -1760,7 +1962,7 @@ pub(crate) async fn write_insert_rows(
                 }
                 failed_rows += chunk_failed;
                 // 过半失败 ⇒ 系统性问题（连接断/权限/表没了），逐行磨完没有意义
-                if chunk_failed * 2 > *n_rows as u64 {
+                if chunk_failed * 2 > n_rows as u64 {
                     if let Some(task) = task {
                         task.add_rows_failed(rows.len() as u64 - ok_rows);
                     }
@@ -1768,7 +1970,6 @@ pub(crate) async fn write_insert_rows(
                 }
             }
         }
-        start_row += *n_rows as usize;
     }
     if failed_rows > 0 {
         if let Some(task) = task {
@@ -2199,6 +2400,20 @@ fn build_insert(
     )
 }
 
+fn build_prepared_insert(table: &str, columns: &[String], dialect: Dialect) -> String {
+    format!(
+        "insert into {table} ({}) values ({})",
+        columns
+            .iter()
+            .map(|name| dialect.quote(name))
+            .collect::<Vec<_>>()
+            .join(", "),
+        std::iter::repeat_n("?", columns.len())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
 pub(crate) fn build_update(
     table: &str,
     columns: &[String],
@@ -2259,7 +2474,16 @@ pub(crate) async fn lookup_existing_keys(
     if rows.is_empty() || plan.key_indexes.is_empty() {
         return Ok(std::collections::HashSet::new());
     }
-    const LOOKUP_ROWS: usize = 500;
+    // 单列 IN 列表在 MySQL/ClickHouse 可以更大；复合键的 OR 链仍保守限 500。
+    let lookup_rows = if plan.key_indexes.len() == 1 {
+        match plan.target_kind.kind.key() {
+            "clickhouse" => 2_000,
+            "mysql" | "mariadb" | "doris" => 1_000,
+            _ => 500,
+        }
+    } else {
+        500
+    };
     let key_columns = plan
         .key_indexes
         .iter()
@@ -2268,7 +2492,7 @@ pub(crate) async fn lookup_existing_keys(
     let key_positions: Vec<usize> = (0..plan.key_indexes.len()).collect();
     let session = format!("internal:sync-u{}", plan.sid);
     let mut found = std::collections::HashSet::new();
-    for chunk in rows.chunks(LOOKUP_ROWS) {
+    for chunk in rows.chunks(lookup_rows) {
         let lits: Vec<Vec<String>> = chunk
             .iter()
             .map(|row| {
@@ -2783,34 +3007,30 @@ async fn sync_table_inner(
     let mut updated = 0u64;
     // 计时只为在结果里给出吞吐（行/秒）：优化前后快了多少，界面上能直接看出来
     let started = std::time::Instant::now();
-    let effective_mode = if opts.data_mode == DataMode::Upsert && key_indexes.is_empty() {
-        // 没有主键 ⇒ 判断不了「这一行是谁」，upsert 无从下手。
-        //
-        // 这里**不能**悄悄退化成「仅插入」：那样第二次同步会把整表再插一遍（行长翻倍），
-        // 而界面上显示的却是「同步成功」——静默的数据翻倍比直接报错坏得多。
-        // 唯一能安全放行的情况是目标表本来就是空的（首次同步），那时插入与 upsert 等价。
-        // 这里直接拼（不再走 `count_sql`）：`count_sql` 内部会再 quote 一次，
-        // 传已带引号/模式前缀的 `target_name` 进去会变成 `"""sales"""."tbl"`。
-        let target_rows = format!("select count(*) as cnt from {target_name}");
-        let empty = match run_sql_in(state, &tgt.conn, &tgt.scope, target_rows, 1).await {
-            Ok(result) => result
-                .rows
-                .first()
-                .and_then(|row| row.first())
-                .and_then(|cell| match cell {
-                    CellValue::Integer(value) => Some(*value),
-                    // ClickHouse 的 count(*) 回来是**浮点**（Real）：只认 Integer 会把
-                    // 「空表」误判成「已有数据」，于是对一个空目标表报「无法按主键 upsert」
-                    // （真机：CH 同步到空表却被拒）。Text 兜住把计数渲染成字符串的驱动。
-                    CellValue::Real(value) => Some(*value as i64),
-                    CellValue::Text(text) => text.trim().parse::<i64>().ok(),
-                    _ => None,
-                })
-                .unwrap_or(-1)
-                == 0,
+    let mut effective_mode = opts.data_mode;
+    if opts.data_mode == DataMode::Upsert && !target_key_ready {
+        // 目标端没有可用且完整的唯一键时，先确认是否为空。空目标是首次全量导入，
+        // 可以直接走 INSERT：ClickHouse/Doris 能少掉整页键查询，Doris 还能走
+        // Stream Load；非空时才尝试按源主键两阶段匹配（lookup 会拒绝重复键）。
+        let target_probe = if target_kind.needs_order_by_for_paging() {
+            format!(
+                "select 1 as one from {target_name} order by (select null) {}",
+                target_kind.limit_clause(0, 1)
+            )
+        } else {
+            format!(
+                "select 1 as one from {target_name} {}",
+                target_kind.limit_clause(0, 1)
+            )
+        };
+        let empty = match run_sql_in(state, &tgt.conn, &tgt.scope, target_probe, 1).await {
+            Ok(result) => result.rows.is_empty(),
             Err(_) => false,
         };
-        if !empty {
+        if empty {
+            effective_mode = DataMode::Insert;
+            note.push_str("（目标表当前为空：upsert 已走仅插入快路径）");
+        } else if key_indexes.is_empty() {
             return ObjResult::failed(
                 ty,
                 table,
@@ -2821,13 +3041,7 @@ async fn sync_table_inner(
                 ),
             );
         }
-        // 与上面的报错保持同一口径：原因可能是「没有主键」也可能是「主键列没全同步」，
-        // 写成"没有主键"会让用户去加一个本来就有（或加了也没用）的主键。
-        note.push_str("（目标表没有可用且完整的 upsert 主键，且当前为空：已按仅插入处理）");
-        DataMode::Insert
-    } else {
-        opts.data_mode
-    };
+    }
 
     // upsert 怎么落库：
     // - **Native**：MySQL `on duplicate key update`、PG/SQLite/H2 `on conflict … do update`、
@@ -2897,33 +3111,6 @@ async fn sync_table_inner(
         }
     };
 
-    // 单条 INSERT 的行数按**目标方言**决定（这是传输吞吐的最大杠杆）。
-    // 界面不再让用户填批次 —— 每种库的甜点值差着一个数量级（CH 落 part、Oracle 有
-    // 单语句表达式上限、MySQL 看 max_allowed_packet），让用户猜毫无意义，由这里统一拍板：
-    // - ClickHouse：每次 INSERT 落一个 part，小批次是 CH 写入的头号杀手 —— 固定 5 万行/条；
-    // - MySQL / MariaDB / PG 系：max_allowed_packet 默认 4MB，1 万行（约 1MB）封顶；
-    // - Doris：FE 的 max_allowed_packet 默认**只有 1MB**（真机实测 1.48MB 直接被拒），
-    //   按典型行宽 ~300B 压到 2000 行/条（≈600KB）；
-    // - Oracle / DM / DB2：上限是**单语句表达式总数**（列数 × 行数 ≤ 65535）——
-    //   固定 500 行在宽表（130 列 × 500 = 65000）直接爆，窄表又太保守 ——
-    //   按「500 与 65535/列数 取小」动态定，下限 10 防极端宽表算出 0；
-    // - SQL Server：多行 VALUES 单条语句的**行值表达式上限是 1000**（T-SQL 解析器硬限制，
-    //   超了直接报「行值表达式的数目超过了允许的最大行数 1000」—— 真机踩过）——
-    //   但**一批里可以放多条 INSERT**（连接已开 allowMultiQueries、安全闸门已放行
-    //   INSERT 批，见 build_insert_batch），所以批目标仍取 1 万行，由它拆成 10 条/批；
-    // - 其它：维持通用上限。
-    let per_statement = if multi_row(target_kind) {
-    match target_kind.kind.key() {
-    "clickhouse" => 50_000,
-    "doris" => 2_000,
-    "sqlserver" => 10_000,
-    "mysql" | "mariadb" | "postgresql" | "kingbase" => 10_000,
-    "oracle" | "dm" | "db2" => 500.min((65_535 / (columns.len() as u64).max(1)).max(10)),
-    _ => MAX_TUPLES_PER_STATEMENT,
-    }
-    } else {
-    1
-    };
     // **Doris Stream Load 快速通道**：纯插入/清空重建时启用 —— 数据以 JSON 走 HTTP
     // 直推 FE，绕过 MySQL 协议 1000~2000 行/批的吞吐瓶颈；失败自动回退 INSERT 管道。
     let use_stream = target_kind.kind.key() == "doris"
@@ -3156,7 +3343,6 @@ async fn sync_table_inner(
         where_clause: table_where.clone(),
         row_limit: opts.row_limit,
         upsert: upsert_mode,
-        per_statement,
         identity_on,
         stream: if use_stream {
             Some(crate::api::transfer::StreamCfg {
@@ -3771,5 +3957,85 @@ mod savepoint_tests {
 
         assert!(savepoint_sql("mysql", "sp3").is_none());
         assert!(savepoint_sql("oracle", "sp4").is_none());
+    }
+}
+
+#[cfg(test)]
+mod prepared_batch_tests {
+    use super::*;
+    use dbmind_core::ConnectionKind;
+
+    #[test]
+    fn 预编译只启用能可靠回滚的方言() {
+        for kind in ["sqlserver", "oracle", "dm", "h2"] {
+            assert!(prepared_insert_candidate(kind), "{kind} 应启用预编译批");
+        }
+        // db2 的 executeBatch 大批量会让连接被掐断（实测 08001，回滚也失败），
+        // 保持字面量路径 —— 见 `prepared_insert_candidate` 的注释。
+        for kind in ["mysql", "mariadb", "postgresql", "clickhouse", "doris", "sqlite", "db2"] {
+            assert!(!prepared_insert_candidate(kind), "{kind} 应继续走已验证的批量路径");
+        }
+    }
+
+    #[test]
+    fn 子批范围按行数切分且不丢行() {
+        let rows = vec![vec![CellValue::Integer(1)]; 2_001];
+        let ranges = insert_batch_ranges(&rows, "sqlserver");
+        assert_eq!(ranges, vec![(0, 1_000), (1_000, 1_000), (2_000, 1)]);
+    }
+
+    #[test]
+    fn 子批范围按字节切分宽行() {
+        let wide = vec![CellValue::Text("x".repeat(9 * 1024 * 1024))];
+        let rows = vec![wide.clone(), wide];
+        let ranges = insert_batch_ranges(&rows, "oracle");
+        assert_eq!(ranges, vec![(0, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn oracle_宽表按表达式总数切分子批() {
+        let rows = vec![vec![CellValue::Integer(1); 130]; 1_000];
+        let ranges = insert_batch_ranges(&rows, "oracle");
+        assert_eq!(ranges, vec![(0, 504), (504, 496)]);
+        assert!(ranges.iter().all(|(_, rows)| rows * 130 <= 65_535));
+    }
+
+    #[test]
+    fn 预编译_insert_使用目标方言列名和占位符() {
+        let columns = vec!["id".to_string(), "select".to_string()];
+        let sql = build_prepared_insert(
+            "[dbo].[t]",
+            &columns,
+            Dialect::new(ConnectionKind::Sqlserver),
+        );
+        assert_eq!(
+            sql,
+            "insert into [dbo].[t] (id, [select]) values (?, ?)"
+        );
+    }
+
+    #[test]
+    fn 跨类型字面量按目标列语义转换() {
+        let pg = Dialect::new(ConnectionKind::Postgresql);
+        assert_eq!(
+            literal_for(&CellValue::Integer(3), pg, Some("character varying")),
+            "'3'"
+        );
+        assert_eq!(
+            literal_for(
+                &CellValue::Decimal("12345678901234567890.1234567890".into()),
+                pg,
+                Some("numeric(38,10)")
+            ),
+            "12345678901234567890.1234567890"
+        );
+        assert_eq!(
+            literal_for(&CellValue::Text("not-a-number".into()), pg, Some("numeric")),
+            "'not-a-number'"
+        );
+        assert_eq!(
+            literal_for(&CellValue::Decimal("0".into()), pg, Some("boolean")),
+            "false"
+        );
     }
 }

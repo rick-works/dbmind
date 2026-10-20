@@ -29,7 +29,7 @@ use axum::Json;
 use dbmind_core::CellValue;
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader, BufWriter};
 
 use crate::api::dialect::{Dialect, Meta};
 use crate::api::error::{XError, XResult};
@@ -832,7 +832,7 @@ async fn count_rows(
 fn keyset_literal(part: &shape::SortPart) -> String {
     match part {
         shape::SortPart::Null => "null".to_string(),
-        shape::SortPart::Num(v) => format!("{}", v.0),
+        shape::SortPart::Num(v) => v.to_sql_literal(),
         shape::SortPart::Time(t) => format!("'{}'", keyset_time_literal(t)),
         shape::SortPart::Text(t) => format!("'{}'", t.replace('\'', "''")),
     }
@@ -1041,6 +1041,8 @@ fn cell_equal(left: Option<&CellValue>, right: Option<&CellValue>) -> bool {
 /// 文本/UUID 等键不依赖数据库排序，而是按内存中的归一键做哈希分区。
 /// 每次只把一个桶装进内存，既避免 collation 错配，也避免整表 HashMap 的 OOM。
 const COMPARE_HASH_BUCKETS: usize = 64;
+/// 两侧合计不超过该行数时直接用内存 HashMap，省掉 JSONL 写盘与重读。
+const COMPARE_HASH_MEMORY_ROWS: u64 = 100_000;
 
 struct CompareTempDir(PathBuf);
 
@@ -1062,7 +1064,7 @@ async fn open_compare_buckets(
 ) -> Result<Vec<BufWriter<tokio::fs::File>>, String> {
     let mut writers = Vec::with_capacity(COMPARE_HASH_BUCKETS);
     for bucket in 0..COMPARE_HASH_BUCKETS {
-        let path = dir.join(format!("{prefix}-{bucket}.jsonl"));
+        let path = dir.join(format!("{prefix}-{bucket}.bin"));
         let file = tokio::fs::File::create(&path)
             .await
             .map_err(|e| format!("创建对比临时文件失败：{e}"))?;
@@ -1071,11 +1073,121 @@ async fn open_compare_buckets(
     Ok(writers)
 }
 
+fn encode_spooled_row(row: &[CellValue]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(row.len() * 16 + 4);
+    out.extend_from_slice(&(row.len() as u32).to_le_bytes());
+    for cell in row {
+        match cell {
+            CellValue::Null => out.push(0),
+            CellValue::Integer(value) => {
+                out.push(1);
+                out.extend_from_slice(&value.to_le_bytes());
+            }
+            CellValue::Real(value) => {
+                out.push(2);
+                out.extend_from_slice(&value.to_bits().to_le_bytes());
+            }
+            CellValue::Decimal(text) => {
+                out.push(5);
+                out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                out.extend_from_slice(text.as_bytes());
+            }
+            CellValue::Text(text) => {
+                out.push(3);
+                out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                out.extend_from_slice(text.as_bytes());
+            }
+            CellValue::Blob { len } => {
+                out.push(4);
+                out.extend_from_slice(&(*len as u64).to_le_bytes());
+            }
+        }
+    }
+    out
+}
+
+fn decode_spooled_row(bytes: &[u8]) -> Result<Vec<CellValue>, String> {
+    let mut pos = 0usize;
+    let take = |pos: &mut usize, len: usize| -> Result<&[u8], String> {
+        let end = pos
+            .checked_add(len)
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| "对比临时行被截断".to_string())?;
+        let slice = &bytes[*pos..end];
+        *pos = end;
+        Ok(slice)
+    };
+    let count = u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;
+    if count > 1_000_000 {
+        return Err(format!("对比临时行的列数异常（{count}）"));
+    }
+    let mut row = Vec::with_capacity(count);
+    for _ in 0..count {
+        match take(&mut pos, 1)?[0] {
+            0 => row.push(CellValue::Null),
+            1 => row.push(CellValue::Integer(i64::from_le_bytes(
+                take(&mut pos, 8)?.try_into().unwrap(),
+            ))),
+            2 => row.push(CellValue::Real(f64::from_bits(u64::from_le_bytes(
+                take(&mut pos, 8)?.try_into().unwrap(),
+            )))),
+            3 => {
+                let len =
+                    u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;
+                let text = std::str::from_utf8(take(&mut pos, len)?)
+                    .map_err(|e| format!("对比文本不是有效 UTF-8：{e}"))?;
+                row.push(CellValue::Text(text.to_string()));
+            }
+            4 => row.push(CellValue::Blob {
+                len: u64::from_le_bytes(take(&mut pos, 8)?.try_into().unwrap()) as usize,
+            }),
+            5 => {
+                let len =
+                    u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;
+                let text = std::str::from_utf8(take(&mut pos, len)?)
+                    .map_err(|e| format!("对比小数不是有效 UTF-8：{e}"))?;
+                row.push(CellValue::Decimal(text.to_string()));
+            }
+            tag => return Err(format!("未知的对比单元格类型 {tag}")),
+        }
+    }
+    Ok(row)
+}
+
+async fn read_spooled_row<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+) -> Result<Option<Vec<CellValue>>, String> {
+    let mut len_bytes = [0u8; 4];
+    if reader
+        .read(&mut len_bytes[..1])
+        .await
+        .map_err(|e| format!("读取对比临时文件失败：{e}"))?
+        == 0
+    {
+        return Ok(None);
+    }
+    reader
+        .read_exact(&mut len_bytes[1..])
+        .await
+        .map_err(|e| format!("读取对比临时行长度失败：{e}"))?;
+    let len = u32::from_le_bytes(len_bytes) as usize;
+    let mut bytes = vec![0u8; len];
+    reader
+        .read_exact(&mut bytes)
+        .await
+        .map_err(|e| format!("读取对比临时行失败：{e}"))?;
+    decode_spooled_row(&bytes).map(Some)
+}
+
 async fn spool_row(
     writer: &mut BufWriter<tokio::fs::File>,
     row: &[CellValue],
 ) -> Result<(), String> {
-    let bytes = serde_json::to_vec(row).map_err(|e| format!("序列化对比行失败：{e}"))?;
+    let bytes = encode_spooled_row(row);
+    writer
+        .write_all(&(bytes.len() as u32).to_le_bytes())
+        .await
+        .map_err(|e| format!("写入对比临时行长度失败：{e}"))?;
     writer
         .write_all(&bytes)
         .await
@@ -1084,6 +1196,172 @@ async fn spool_row(
         .write_all(b"\n")
         .await
         .map_err(|e| format!("写入对比临时文件失败：{e}"))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn compare_hashed_memory(
+    mut source: SideStream,
+    mut target: SideStream,
+    mut s_row: Option<Vec<CellValue>>,
+    mut t_row: Option<Vec<CellValue>>,
+    src_cols: Vec<String>,
+    tgt_cols: Vec<String>,
+    src_key_idx: Vec<usize>,
+    tgt_key_idx: Vec<usize>,
+    source_keys: &[String],
+    excluded: &[String],
+    limit: usize,
+    task: &std::sync::Arc<crate::api::tasks::Task>,
+) -> XResult<(Value, u64, u64)> {
+    task.step("内存哈希对比");
+    let find = |cols: &[String], name: &str| {
+        cols.iter().position(|column| column.eq_ignore_ascii_case(name))
+    };
+    let mut compare_pairs: Vec<(usize, usize, String)> = Vec::new();
+    let mut excluded_columns: Vec<String> = excluded.to_vec();
+    let mut excluded_set: BTreeSet<String> =
+        excluded.iter().map(|name| name.to_ascii_lowercase()).collect();
+    for (index, name) in src_cols.iter().enumerate() {
+        if src_key_idx.contains(&index) {
+            continue;
+        }
+        match find(&tgt_cols, name) {
+            Some(t_index) => compare_pairs.push((index, t_index, name.clone())),
+            None => {
+                if !excluded_set.contains(&name.to_ascii_lowercase()) {
+                    excluded_set.insert(name.to_ascii_lowercase());
+                    excluded_columns.push(name.clone());
+                }
+            }
+        }
+    }
+
+    let mut target_map: HashMap<String, Vec<CellValue>> = HashMap::new();
+    let mut reported = 0u64;
+    while let Some(row) = t_row.take() {
+        task.check_canceled()?;
+        let key = shape::row_key(&row, &tgt_key_idx);
+        if target_map.insert(key.clone(), row).is_some() {
+            return Err(XError::bad_request(format!(
+                "目标表比对键不唯一（归一键 {key}）。请检查主键元数据或改用唯一键"
+            )));
+        }
+        t_row = target.next_row().await;
+        let seen = target.rows_seen;
+        if seen.saturating_sub(reported) >= 256 {
+            task.add_done(seen - reported);
+            reported = seen;
+        }
+    }
+    if let Some(err) = target.error.clone() {
+        return Err(XError::bad_request(format!("读取目标数据失败：{err}")));
+    }
+
+    let mut only_in_source = 0u64;
+    let mut only_in_target = 0u64;
+    let mut different = 0u64;
+    let mut same = 0u64;
+    let mut different_columns: BTreeSet<String> = BTreeSet::new();
+    let mut only_source_samples: Vec<Value> = Vec::new();
+    let mut only_target_samples: Vec<Value> = Vec::new();
+    let mut diff_samples: Vec<Value> = Vec::new();
+    let mut source_seen: HashSet<String> = HashSet::new();
+    while let Some(row) = s_row.take() {
+        task.check_canceled()?;
+        let key = shape::row_key(&row, &src_key_idx);
+        if !source_seen.insert(key.clone()) {
+            return Err(XError::bad_request(format!(
+                "源表比对键不唯一（归一键 {key}）。请检查主键元数据或改用唯一键"
+            )));
+        }
+        let Some(other) = target_map.remove(&key) else {
+            only_in_source += 1;
+            if only_source_samples.len() < limit {
+                only_source_samples.push(row_object(&src_cols, &row, None));
+            }
+            s_row = source.next_row().await;
+            continue;
+        };
+        let mut changed = BTreeSet::new();
+        for (s_index, t_index, name) in &compare_pairs {
+            if !cell_equal(row.get(*s_index), other.get(*t_index)) {
+                changed.insert(*s_index);
+                different_columns.insert(name.clone());
+            }
+        }
+        if changed.is_empty() {
+            same += 1;
+        } else {
+            different += 1;
+            if diff_samples.len() < limit {
+                let mut object = Map::new();
+                for index in &src_key_idx {
+                    object.insert(
+                        src_cols[*index].clone(),
+                        row.get(*index)
+                            .map(shape::cell_to_value)
+                            .unwrap_or(Value::Null),
+                    );
+                }
+                for (s_index, t_index, name) in &compare_pairs {
+                    if !changed.contains(s_index) {
+                        continue;
+                    }
+                    object.insert(
+                        format!("{name}（源）"),
+                        row.get(*s_index)
+                            .map(shape::cell_to_value)
+                            .unwrap_or(Value::Null),
+                    );
+                    object.insert(
+                        format!("{name}（目标）"),
+                        other
+                            .get(*t_index)
+                            .map(shape::cell_to_value)
+                            .unwrap_or(Value::Null),
+                    );
+                }
+                diff_samples.push(Value::Object(object));
+            }
+        }
+        s_row = source.next_row().await;
+        let seen = target.rows_seen + source.rows_seen;
+        if seen.saturating_sub(reported) >= 256 {
+            task.add_done(seen - reported);
+            reported = seen;
+        }
+    }
+    if let Some(err) = source.error.clone() {
+        return Err(XError::bad_request(format!("读取源数据失败：{err}")));
+    }
+    for row in target_map.into_values() {
+        only_in_target += 1;
+        if only_target_samples.len() < limit {
+            only_target_samples.push(row_object(&tgt_cols, &row, None));
+        }
+    }
+    let total_seen = source.rows_seen + target.rows_seen;
+    if reported < total_seen {
+        task.add_done(total_seen - reported);
+    }
+    let data = json!({
+        "keyColumns": source_keys,
+        "sourceRows": source.rows_seen,
+        "targetRows": target.rows_seen,
+        "onlyInSource": only_in_source,
+        "onlyInTarget": only_in_target,
+        "different": different,
+        "same": same,
+        "differentColumns": different_columns.into_iter().collect::<Vec<_>>(),
+        "excludedColumns": excluded_columns,
+        "onlyInSourceSamples": only_source_samples,
+        "onlyInTargetSamples": only_target_samples,
+        "diffSamples": diff_samples,
+        "onlyInSourceTruncated": only_in_source > limit as u64,
+        "onlyInTargetTruncated": only_in_target > limit as u64,
+        "diffTruncated": different > limit as u64,
+    });
+    Ok((data, source.rows_seen, target.rows_seen))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1167,6 +1445,23 @@ async fn compare_hashed(
                 .ok_or_else(|| XError::bad_request(format!("目标表结果里没有关键列 {key}")))
         })
         .collect::<XResult<_>>()?;
+    if est_total > 0 && est_total <= COMPARE_HASH_MEMORY_ROWS {
+        return compare_hashed_memory(
+            source,
+            target,
+            s_row,
+            t_row,
+            src_cols,
+            tgt_cols,
+            src_key_idx,
+            tgt_key_idx,
+            source_keys,
+            excluded,
+            limit,
+            task,
+        )
+        .await;
+    }
 
     let root = std::env::temp_dir().join(format!("dbmind-compare-{}", task.id));
     tokio::fs::create_dir_all(&root)
@@ -1248,22 +1543,13 @@ async fn compare_hashed(
     for bucket in 0..COMPARE_HASH_BUCKETS {
         task.check_canceled()?;
         task.step(format!("比对哈希分片 {}/{}", bucket + 1, COMPARE_HASH_BUCKETS));
-        let target_path = root.join(format!("target-{bucket}.jsonl"));
+        let target_path = root.join(format!("target-{bucket}.bin"));
         let target_file = tokio::fs::File::open(&target_path)
             .await
             .map_err(|e| format!("打开目标对比分片失败：{e}"))?;
-        let mut target_lines = BufReader::new(target_file).lines();
+        let mut target_reader = BufReader::new(target_file);
         let mut target_map: HashMap<String, Vec<CellValue>> = HashMap::new();
-        while let Some(line) = target_lines
-            .next_line()
-            .await
-            .map_err(|e| format!("读取目标对比分片失败：{e}"))?
-        {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let row: Vec<CellValue> = serde_json::from_str(&line)
-                .map_err(|e| format!("解析目标对比分片失败：{e}"))?;
+        while let Some(row) = read_spooled_row(&mut target_reader).await? {
             let key = shape::row_key(&row, &tgt_key_idx);
             if target_map.insert(key.clone(), row).is_some() {
                 return Err(XError::bad_request(format!(
@@ -1272,22 +1558,13 @@ async fn compare_hashed(
             }
         }
 
-        let source_path = root.join(format!("source-{bucket}.jsonl"));
+        let source_path = root.join(format!("source-{bucket}.bin"));
         let source_file = tokio::fs::File::open(&source_path)
             .await
             .map_err(|e| format!("打开源对比分片失败：{e}"))?;
-        let mut source_lines = BufReader::new(source_file).lines();
+        let mut source_reader = BufReader::new(source_file);
         let mut source_seen: HashSet<String> = HashSet::new();
-        while let Some(line) = source_lines
-            .next_line()
-            .await
-            .map_err(|e| format!("读取源对比分片失败：{e}"))?
-        {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let row: Vec<CellValue> = serde_json::from_str(&line)
-                .map_err(|e| format!("解析源对比分片失败：{e}"))?;
+        while let Some(row) = read_spooled_row(&mut source_reader).await? {
             let key = shape::row_key(&row, &src_key_idx);
             if !source_seen.insert(key.clone()) {
                 return Err(XError::bad_request(format!(
@@ -2082,6 +2359,7 @@ mod key_validation_tests {
         let row = vec![
             CellValue::Text("用户\\N\n第二行".to_string()),
             CellValue::Integer(7),
+            CellValue::Decimal("12345678901234567890.1234567890".to_string()),
         ];
         let bucket = compare_bucket("text-key");
         let mut writers = open_compare_buckets(&dir, "source").await.expect("创建分片");
@@ -2089,13 +2367,70 @@ mod key_validation_tests {
         writers[bucket].flush().await.expect("刷新分片");
         drop(writers);
 
-        let file = tokio::fs::File::open(dir.join(format!("source-{bucket}.jsonl")))
+        let file = tokio::fs::File::open(dir.join(format!("source-{bucket}.bin")))
             .await
             .expect("打开分片");
-        let mut lines = BufReader::new(file).lines();
-        let line = lines.next_line().await.expect("读取行").expect("非空行");
-        let restored: Vec<CellValue> = serde_json::from_str(&line).expect("解析行");
+        let mut reader = BufReader::new(file);
+        let restored = read_spooled_row(&mut reader)
+            .await
+            .expect("读取行")
+            .expect("非空行");
         assert_eq!(restored, row);
+    }
+
+    #[tokio::test]
+    async fn 小表哈希对比优先走内存并识别差异() {
+        let registry = crate::api::tasks::TaskRegistry::new();
+        let task = registry.spawn("compare-test", "cmp_mem_", |_| async move { Ok(None) });
+        let columns = vec!["code".to_string(), "val".to_string()];
+        let (src_tx, src_rx) = tokio::sync::mpsc::channel(2);
+        src_tx
+            .send(Ok(SidePage {
+                columns: columns.clone(),
+                rows: vec![
+                    vec![CellValue::Text("a".into()), CellValue::Integer(1)],
+                    vec![CellValue::Text("b".into()), CellValue::Integer(2)],
+                ],
+            }))
+            .await
+            .unwrap();
+        drop(src_tx);
+        let (tgt_tx, tgt_rx) = tokio::sync::mpsc::channel(2);
+        tgt_tx
+            .send(Ok(SidePage {
+                columns: columns.clone(),
+                rows: vec![
+                    vec![CellValue::Text("a".into()), CellValue::Integer(1)],
+                    vec![CellValue::Text("b".into()), CellValue::Integer(9)],
+                ],
+            }))
+            .await
+            .unwrap();
+        drop(tgt_tx);
+        let mut source = SideStream::new(src_rx);
+        let mut target = SideStream::new(tgt_rx);
+        let s_row = source.next_row().await;
+        let t_row = target.next_row().await;
+        let (data, _, _) = compare_hashed_memory(
+            source,
+            target,
+            s_row,
+            t_row,
+            columns.clone(),
+            columns,
+            vec![0],
+            vec![0],
+            &["code".to_string()],
+            &[],
+            10,
+            &task,
+        )
+        .await
+        .expect("内存哈希对比");
+        assert_eq!(data["same"].as_u64(), Some(1));
+        assert_eq!(data["different"].as_u64(), Some(1));
+        assert_eq!(data["onlyInSource"].as_u64(), Some(0));
+        assert_eq!(data["onlyInTarget"].as_u64(), Some(0));
     }
 
     #[test]

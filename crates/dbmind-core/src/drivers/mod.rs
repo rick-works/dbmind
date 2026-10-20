@@ -13,7 +13,9 @@ pub use session_pool::SessionBudget;
 mod agent_driver_tests;
 
 use crate::error::{DbMindError, ErrorCode, Result};
-use crate::types::{ColumnDetail, ConnectReport, ConnectionConfig, QueryOptions, QueryResult, TableInfo};
+use crate::types::{
+    CellValue, ColumnDetail, ConnectReport, ConnectionConfig, QueryOptions, QueryResult, TableInfo,
+};
 use crate::{CancelToken, ConnectionKind, RuntimeMode};
 use std::sync::Arc;
 
@@ -37,6 +39,32 @@ pub struct QueryCall<'a> {
     /// 用的 `current_schema()` / `::regclass` / `object_id()` 只看连接自己的 schema。
     /// `None` = 不动它，行为与以前完全一致（用户自己的查询永远走这一支）。
     pub schema: Option<&'a str>,
+}
+
+/// 一次内部 INSERT 预编译批处理的上下文。
+///
+/// 这不是普通 SQL 查询的替身：宿主只接受单条 INSERT、逐行绑定参数，并为整批
+/// 提供可回滚的成功/失败边界。放在专用 trait 方法里，公开 SQL 入口就不会因为
+/// 出现 `?` 占位符而意外切到另一套执行语义。
+pub struct PreparedBatchCall<'a> {
+    pub config: &'a ConnectionConfig,
+    pub sql: &'a str,
+    /// 与 INSERT 的列一一对应的目标列类型。
+    pub target_types: &'a [Option<String>],
+    /// 每行的单元格，列数必须与 `target_types` 一致。
+    pub rows: &'a [Vec<CellValue>],
+    pub options: &'a QueryOptions,
+    pub execution_id: &'a str,
+    pub cancel: &'a CancelToken,
+    pub read_only: bool,
+    pub session: Option<&'a str>,
+    /// 调用方**已经在这个会话上开了事务**（同步的写入插件会先发 `begin transaction`）。
+    ///
+    /// 宿主据此改用「保存点」划批，而不是自己 `setAutoCommit(false)` + `commit`：
+    /// 后者会把调用方的事务就地提交掉，等调用方收尾再发 `commit` 时 SQL Server 直接报
+    /// `The COMMIT TRANSACTION request has no corresponding BEGIN TRANSACTION`
+    /// （真机踩到：数据其实已经进去了，结果却报失败）。
+    pub in_transaction: bool,
 }
 
 /// 一次元数据调用的上下文。
@@ -69,6 +97,17 @@ pub trait Driver: Send + Sync {
     fn test(&self, config: &ConnectionConfig, read_only: bool) -> Result<ConnectReport>;
 
     fn query(&self, call: QueryCall<'_>) -> Result<QueryResult>;
+
+    /// 内部 INSERT 的预编译批处理。默认不支持，调用方必须回退到普通 SQL。
+    ///
+    /// 只允许数据传输这类内核内部链路调用；实现方还必须自行校验 SQL 为单条
+    /// INSERT。返回值是整批成功写入的行数。
+    fn prepared_insert_batch(&self, _call: PreparedBatchCall<'_>) -> Result<usize> {
+        Err(DbMindError::new(
+            ErrorCode::DriverNotImplemented,
+            "当前数据库驱动不支持预编译批量写入",
+        ))
+    }
 
     fn list_tables(&self, call: MetaCall<'_>) -> Result<Vec<TableInfo>>;
 

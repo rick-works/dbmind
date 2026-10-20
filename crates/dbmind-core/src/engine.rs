@@ -6,7 +6,7 @@
 //! - 测试只需针对这一层，覆盖即可代表全部入口。
 
 use crate::cancel::CancelRegistry;
-use crate::drivers::{DriverRegistry, QueryCall};
+use crate::drivers::{DriverRegistry, PreparedBatchCall, QueryCall};
 use crate::error::{DbMindError, ErrorCode, Result};
 use crate::paths;
 use crate::safety::SafetyPolicy;
@@ -962,6 +962,120 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
                 Err(err)
             }
         }
+    }
+
+    /// 内部 INSERT 的预编译批处理入口。
+    ///
+    /// 与 [`Self::execute`] 共享连接解析、只读策略和取消登记，但**刻意不接收
+    /// 任意 SQL 参数模板**：调用方只能传一条 INSERT、目标列类型和整批值。宿主
+    /// 还会再次校验 INSERT 并在失败时回滚整批，避免部分成功后被调用方重复写入。
+    ///
+    /// 这条路径不写查询历史。请求必须显式标记 `internal`，防止变成公开的
+    /// “任意占位符 SQL”入口。
+    pub fn execute_prepared_insert_batch(
+        &self,
+        request: QueryRequest,
+        target_types: Vec<Option<String>>,
+        rows: Vec<Vec<CellValue>>,
+        ctx: AccessContext,
+    ) -> Result<QueryResult> {
+        self.execute_prepared_insert_batch_in(request, target_types, rows, false, ctx)
+    }
+
+    /// 同 [`Self::execute_prepared_insert_batch`]，但**声明调用方已经开着事务**。
+    ///
+    /// 见 [`PreparedBatchCall::in_transaction`]：宿主不能再 `commit` 别人的事务，
+    /// 只能在自己的坑位上打保存点。
+    pub fn execute_prepared_insert_batch_in(
+        &self,
+        request: QueryRequest,
+        target_types: Vec<Option<String>>,
+        rows: Vec<Vec<CellValue>>,
+        in_transaction: bool,
+        ctx: AccessContext,
+    ) -> Result<QueryResult> {
+        if !request.internal {
+            return Err(DbMindError::new(
+                ErrorCode::QueryInvalid,
+                "预编译批量写入只允许内核内部链路调用",
+            ));
+        }
+        if !request
+            .sql
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("insert ")
+        {
+            return Err(DbMindError::new(
+                ErrorCode::QueryInvalid,
+                "预编译批量写入只接受单条 INSERT",
+            ));
+        }
+        if rows
+            .iter()
+            .any(|row| row.len() != target_types.len())
+        {
+            return Err(DbMindError::new(
+                ErrorCode::QueryInvalid,
+                "预编译批量写入的列数与目标类型数量不一致",
+            ));
+        }
+
+        let started = Instant::now();
+        let connection = self.store.require_connection(&request.connection)?;
+        let policy = self.policy();
+        policy.check(&connection, &request.sql, ctx, true)?;
+        let read_only = policy.is_read_only(&connection);
+        if read_only {
+            return Err(DbMindError::new(
+                ErrorCode::SafetyReadOnly,
+                "这条连接是只读的，不能执行批量写入",
+            ));
+        }
+
+        let session = request
+            .session
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty());
+        let options = request.options.clone().clamp();
+        let execution_id = request
+            .execution_id
+            .clone()
+            .unwrap_or_else(crate::new_execution_id);
+        let driver = self.drivers.resolve(connection.kind())?;
+        let cancel = self.cancels.register(&execution_id);
+        let outcome = driver.prepared_insert_batch(PreparedBatchCall {
+            config: &connection.config,
+            sql: &request.sql,
+            target_types: &target_types,
+            rows: &rows,
+            options: &options,
+            execution_id: &execution_id,
+            cancel: &cancel,
+            read_only,
+            session,
+            in_transaction,
+        });
+        self.cancels.finish(&execution_id);
+
+        let affected_rows = outcome?;
+        Ok(QueryResult {
+            execution_id,
+            connection_id: connection.id.clone(),
+            connection_name: connection.name().to_string(),
+            statement_kind: crate::StatementKind::Write,
+            columns: Vec::new(),
+            rows: Vec::new(),
+            row_count: 0,
+            affected_rows: Some(affected_rows),
+            truncated: false,
+            duration_ms: started.elapsed().as_millis() as u64,
+            notices: Vec::new(),
+            session_id: session.map(str::to_string),
+            source_object: None,
+            row_identity: None,
+        })
     }
 
     /// 请求取消某个执行；返回是否命中。
@@ -3812,6 +3926,31 @@ mod tests {
             after.rows
         );
         println!("断链之后会话自愈 ✓");
+    }
+
+    #[test]
+    fn 预编译批量写入门禁只接受内部单条_insert() {
+        let (_dir, engine, conn) = fixture("prepared-batch-guard");
+        let rows = vec![vec![crate::CellValue::Integer(1)]];
+        let types = vec![Some("bigint".to_string())];
+
+        let public = QueryRequest::new(conn.as_str(), "insert into t(id) values (?)");
+        let err = engine
+            .execute_prepared_insert_batch(
+                public,
+                types.clone(),
+                rows.clone(),
+                AccessContext::Web,
+            )
+            .expect_err("公开调用必须被拒绝");
+        assert_eq!(err.code, ErrorCode::QueryInvalid);
+
+        let non_insert =
+            QueryRequest::new(conn.as_str(), "update t set id = ?").with_internal(true);
+        let err = engine
+            .execute_prepared_insert_batch(non_insert, types, rows, AccessContext::Web)
+            .expect_err("非 INSERT 必须被拒绝");
+        assert_eq!(err.code, ErrorCode::QueryInvalid);
     }
 }
 

@@ -18,6 +18,8 @@ pub enum CellValue {
     Null,
     Integer(i64),
     Real(f64),
+    /// 高精度定点数（十进制文本原样保留）。f64 无法无损承载 DECIMAL/NUMERIC。
+    Decimal(String),
     Text(String),
     Blob { len: usize },
 }
@@ -28,6 +30,7 @@ impl CellValue {
             CellValue::Null => "null",
             CellValue::Integer(_) => "integer",
             CellValue::Real(_) => "real",
+            CellValue::Decimal(_) => "decimal",
             CellValue::Text(_) => "text",
             CellValue::Blob { .. } => "blob",
         }
@@ -43,6 +46,7 @@ impl CellValue {
             CellValue::Null => "NULL".to_string(),
             CellValue::Integer(v) => v.to_string(),
             CellValue::Real(v) => v.to_string(),
+            CellValue::Decimal(v) => v.clone(),
             CellValue::Text(v) => v.clone(),
             CellValue::Blob { len } => format!("<blob {len}B>"),
         }
