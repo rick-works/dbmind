@@ -277,7 +277,8 @@
                       </td>
                       <td>
                         <!-- 始终渲染输入框，默认值为 NULL 时以占位提示；输入即覆盖（原实现只显示 NULL 标签，导致无法编辑） -->
-                        <el-input v-model="c.defaultValue" size="small" :disabled="inputDisabled(c)"
+                        <el-input v-model="c.defaultValue" size="small" :disabled="defaultDisabled(c)"
+                                  :title="defaultDisabled(c) && !inputDisabled(c) ? $t('tdet.dorisDefaultTip') : (c.defaultIsNull ? 'NULL' : '')"
                                   :placeholder="c.defaultIsNull ? 'NULL' : ''" @input="c.defaultIsNull = false" />
                       </td>
                       <td v-if="showAutoIncrement" class="c-center">
@@ -553,6 +554,116 @@ const mssqlCommentSql = (kind, comment, columnName) => {
     `EXEC sp_updateextendedproperty 'MS_Description', N'${sq(comment)}', ${args} ` +
     `ELSE EXEC sp_addextendedproperty 'MS_Description', N'${sq(comment)}', ${args}`
 }
+
+// ==================== 默认值：读回来的是「原生表达式」 ====================
+/*
+ * 各家 `/columns` 回的 `defaultValue` 是**数据库自己的写法**（实测）：
+ *   MySQL / Doris     裸值          `5`      `abc`
+ *   MariaDB / Oracle / DB2 / H2 / Derby / ClickHouse / SQLite   带引号  `5`  `'abc'`
+ *   PostgreSQL        带引号 + 类型转换     `5`  `'abc'::character varying`
+ *   SQL Server        外面套括号           `((5))`  `('abc')`
+ *
+ * 直接把这种串塞进输入框有两个后果：① 用户看到 `'abc'::character varying`、`((5))` 这种
+ * 莫名其妙的东西；② 保存时被再包一层引号（`'abc'` → `'''abc'''`）或被当成表达式原样重发。
+ * 所以读进来先剥壳还原成「字面量」，写出去再按方言拼回去（见 defaultLiteral / db2Default）。
+ */
+
+/** 把整体被括号包住的外壳剥掉（`((5))` → `5`、`('abc')` → `'abc'`）；只剥**整体**包住的 */
+const stripOuterParens = (raw) => {
+  let v = String(raw ?? '').trim()
+  for (;;) {
+    if (!v.startsWith('(') || !v.endsWith(')')) return v
+    let depth = 0
+    let quoted = false
+    let whole = true
+    for (let i = 0; i < v.length; i++) {
+      const ch = v[i]
+      if (quoted) {
+        if (ch === "'") {
+          if (v[i + 1] === "'") i++
+          else quoted = false
+        }
+        continue
+      }
+      if (ch === "'") { quoted = true; continue }
+      if (ch === '(') depth++
+      else if (ch === ')') {
+        depth--
+        // 第一个 '(' 在中间就闭合了 ⇒ 不是整体包住（如 `(1)+(2)`），到此为止
+        if (depth === 0 && i !== v.length - 1) { whole = false; break }
+      }
+    }
+    if (!whole) return v
+    v = v.slice(1, -1).trim()
+  }
+}
+
+/** 数据库回的默认值 → 用户可编辑的字面量（去掉类型转换、外层括号与多余引号） */
+const unwrapDefault = (raw) => {
+  let s = String(raw ?? '').trim()
+  if (!s) return ''
+  if (/^null$/i.test(s)) return 'NULL'
+  s = stripOuterParens(s)
+  // PostgreSQL：`'abc'::character varying(20)` / `'x'::text`
+  s = s.replace(/^('(?:[^']|'')*')\s*::\s*[\w\s[\]().]+$/i, '$1')
+  // 最外层的单个字符串字面量：`'abc'` / `N'abc'` → abc（`''` 是 SQL 里的单引号转义）
+  const m = /^N?('(?:[^']|'')*')$/i.exec(s)
+  if (m) return m[1].slice(1, -1).replace(/''/g, "'")
+  return s
+}
+
+/**
+ * 默认值 → SQL 里的字面量（不含 `DEFAULT` 关键字）。
+ *
+ * 数字 / 布尔 / 函数调用 / 时间关键字原样给，其余按文本加引号 ——
+ * 只有这样才能保证「读回来 → 不改 → 再保存」不产生 `DEFAULT '''abc'''`，
+ * 也不会把 `5` 存成字符串默认值（ClickHouse 上会真的存成 `'5'`）。
+ */
+const defaultLiteral = (v) => {
+  const s = String(v ?? '').trim()
+  if (s === '') return 'NULL'
+  if (/^(null|true|false)$/i.test(s)) return s.toUpperCase()
+  if (/^-?\d+(\.\d+)?$/.test(s)) return s
+  // 用户自己写了引号就别再包一层
+  if (/^N?'(?:[^']|'')*'$/i.test(s)) return s
+  if (/^CURRENT[ _](DATE|TIME|TIMESTAMP)$/i.test(s)) return s.replace(' ', '_').toUpperCase()
+  // 函数/表达式：now() / getdate() / nextval('seq'::regclass) / uuid_generate_v4()
+  if (/^[A-Za-z_][\w.]*\s*\(.*\)$/.test(s)) return s
+  return `'${sq(s)}'`
+}
+
+/**
+ * SQL Server 的默认值 = **具名约束**（`sys.default_constraints`），没有
+ * `ALTER COLUMN c SET DEFAULT` 这种写法（T-SQL 直接报 `Incorrect syntax near 'SET'`）。
+ * 「改默认值」只能是：删掉旧约束 → 建一个新约束。约束名是建表时自动生成的，
+ * 前端拿不到，所以在库里用变量查一次。
+ *
+ * 整段必须包在 `BEGIN … END` 里：① `DECLARE` 的变量只在同一批次内可见，
+ * 拆成多条语句就是 `Must declare the scalar variable`；② 本项目的 SQL 分割器
+ * （crates/dbmind-core/src/sql.rs 的 split_statements）会在「行首 SELECT/ALTER… 且
+ * 上一句已收尾」处自动断句 —— 只有 BEGIN…END 块内不切（depth ≠ 0 且 head == BEGIN）。
+ * 旧约束不存在时变量是 NULL，`EXEC(NULL)` 是空操作，不会报错（实测）。
+ */
+const mssqlDefaultBlock = (columnName, literal) => {
+  const { schema, table } = mssqlParts()
+  const obj = `[${String(schema).replace(/]/g, ']]')}].[${String(table).replace(/]/g, ']]')}]`
+  const col = String(columnName).replace(/]/g, ']]')
+  const lines = [
+    'BEGIN',
+    'DECLARE @dbmindDf sysname',
+    'SELECT @dbmindDf = dc.name FROM sys.default_constraints dc',
+    'JOIN sys.columns c ON c.object_id = dc.parent_object_id AND c.column_id = dc.parent_column_id',
+    `WHERE dc.parent_object_id = OBJECT_ID(N'${sq(obj)}') AND c.name = N'${sq(col)}'`,
+    `IF @dbmindDf IS NOT NULL EXEC('ALTER TABLE ${obj} DROP CONSTRAINT [' + @dbmindDf + ']')`
+  ]
+  if (literal) {
+    // 约束名全库唯一即可；带上表名/列名方便人工辨认，超长截断到 128 字符以内
+    const name = ('DF_' + String(table) + '_' + String(columnName)).replace(/[^\w]/g, '_').slice(0, 110)
+    lines.push(`ALTER TABLE ${obj} ADD CONSTRAINT [${name}] DEFAULT ${literal} FOR [${col}]`)
+  }
+  lines.push('END')
+  return lines.join('\n')
+}
 /** 查询结果里的某一列（列名大小写各家不同：H2 回 `NAME`、PG 回 `name`） */
 const rowField = (row, key) => {
   if (!row) return ''
@@ -811,6 +922,15 @@ const inputDisabled = (r) => isLoadedRow(r) && !canEditLoaded.value
 const typeDisabled = (r) => inputDisabled(r)
 const lenDisabled = (r) => r.opaque || inputDisabled(r)
 /**
+ * 「默认值」这一格是否锁死。
+ *
+ * Doris 实测（2.x，真机）：`ALTER TABLE … MODIFY COLUMN c DECIMAL(10,2) DEFAULT '3'`
+ * 语法能过，但服务端直接拒 —— `Can not change default value`：它不支持在线改已有列的默认值
+ *（不带引号的 `DEFAULT 3` 更是语法错）。锁住这一格比让用户点了保存再吃一句
+ * 看不懂的服务端报错更诚实；新加的列仍然可以带默认值。
+ */
+const defaultDisabled = (r) => inputDisabled(r) || (isLoadedRow(r) && ddlStyle.value === 'doris')
+/**
  * 字段名能否编辑。
  *
  * 原来这里把 oracle / mssql 钉成「不支持在线重命名」——**这与事实不符**：
@@ -864,6 +984,9 @@ const buildColRows = () => {
     // 不认这一种，「默认值」那格就会把"默认 NULL"显示成字面量 NULL、还勾不回去。
     const dvNull = dv === null || dv === undefined
       || (dv === 'NULL' && ['mysql', 'mariadb', 'doris'].includes(ddlStyle.value))
+    // 读回来的默认值是数据库的原生表达式（`'abc'::character varying`、`((5))`、`'abc'`），
+    // 这里先剥成字面量再进输入框；行与基线用**同一个值**，未改动的行不会被判成「已修改」
+    const dvText = dvNull ? '' : unwrapDefault(dv)
     return {
       _uid: 'c' + (++colUid) + '_' + i,
       _state: 'loaded',
@@ -874,13 +997,13 @@ const buildColRows = () => {
       typeBase: sp.opaque ? sp.base : canonTypeBase(sp.base, typeOptions.value),
       length: lenVal, scale: scaleVal, opaque: sp.opaque,
       nullable: !!c.nullable,
-      defaultIsNull: dvNull, defaultValue: dvNull ? '' : String(dv),
+      defaultIsNull: dvNull, defaultValue: dvText,
       autoIncrement: !!c.autoIncrement, primaryKey: !!c.primaryKey,
       sortKey: !!c.sortKey,
       comment: c.comment || '', extra: c.extra || '',
       _orig: {
         name: c.name, type: normType(innerType ?? c.type), nullable: !!c.nullable,
-        defaultIsNull: dvNull, defaultValue: dvNull ? null : String(dv),
+        defaultIsNull: dvNull, defaultValue: dvNull ? null : dvText,
         comment: c.comment || '',
         primaryKey: !!c.primaryKey, autoIncrement: !!c.autoIncrement,
         length: lenVal, scale: scaleVal
@@ -1136,7 +1259,9 @@ const buildMySqlColumnDef = (f, includePk = true) => {
   s += (!f.primaryKey && f.nullable) ? '' : ' NOT NULL'
   if (f.autoIncrement) s += ' AUTO_INCREMENT'
   const dv = String(f.defaultValue ?? '').trim()
-  if (dv !== '') s += /^null$/i.test(dv) ? ' DEFAULT NULL' : ` DEFAULT '${sq(dv)}'`
+  // 默认值一律走 defaultLiteral：`5` 不能再被写成 `'5'`（会存成字符串默认值），
+  // `abc` 也不能只写裸值
+  if (dv !== '') s += ` DEFAULT ${defaultLiteral(dv)}`
   if (f.comment) s += ` COMMENT '${sq(f.comment)}'`
   return s
 }
@@ -1154,6 +1279,39 @@ const posPart = (f) => {
  * 而且它必须是关键字、不能加引号 —— 统一套 `'…'` 会变成写死的字符串（重建后不随时间走）。
  * 与后端 `default_literal` 的规则保持一致：关键字/数字/已带引号的表达式原样放行，其余按文本加引号。
  */
+/**
+ * Doris 的 DEFAULT 子句。
+ *
+ * Doris 的 `MODIFY COLUMN … DEFAULT 3`（不带引号）直接是语法错
+ * （`Encountered: INTEGER LITERAL Expected …`），必须写成 `DEFAULT '3'`。
+ * 已有列的默认值 Doris 本身不允许改（见 defaultDisabled），这里只服务于新列与
+ * 「改了别的属性、顺带把原默认值带上」的场景。
+ */
+const dorisDefault = (v) => {
+  const s = String(v ?? '').trim()
+  if (/^null$/i.test(s)) return ' NULL'
+  return ` '${sq(s)}'`
+}
+
+/**
+ * Derby 是否可以用 `SET DATA TYPE` 改这个类型。
+ *
+ * 真机（10.16）实测只有「变长字符列加长」这一种能过：其余一律被拒
+ * （`Only columns of type VARCHAR, CLOB, and BLOB may have their length altered.` /
+ *  `Length must be greater than the current column length.` /
+ *  `The type of a column may not be changed.`）。
+ * `orig` 是基线（`_orig`，type 已归一化），没有基线时按「可以」处理。
+ */
+const derbyCanGrowType = (typeBase, length, orig) => {
+  if (!orig) return true
+  const base = String(typeBase || '').trim().toUpperCase()
+  const origBase = String(orig.type || '').replace(/\(.*/, '').trim().toUpperCase()
+  if (base !== origBase) return false
+  if (!/^(VARCHAR|CHAR VARYING|LONG VARCHAR)$/.test(base)) return false
+  const next = Number(String(length ?? '').trim())
+  const prev = Number(String(orig.length ?? '').trim())
+  return Number.isFinite(next) && Number.isFinite(prev) && next > prev
+}
 const db2Default = (v) => {
   const s = String(v ?? '').trim()
   if (/^null$/i.test(s)) return ' NULL'
@@ -1184,7 +1342,7 @@ const buildColumnSql = (f, isEdit) => {
   }
   const t = qt(props.table)
   const dv = String(f.defaultValue ?? '').trim()
-  const defNull = (v) => (/^null$/i.test(v) ? ' NULL' : ` '${sq(v)}'`)
+  // 默认值统一走 defaultLiteral（见上方注释：各家读回来的原生表达式已由 unwrapDefault 剥壳）
   // Doris：`MODIFY COLUMN` **必须**带上列的聚合类型 —— key 列写 `KEY`，value 列写它自己的
   // 聚合（SUM / REPLACE / MAX…）。不带就被当成"改聚合类型"，Doris 直接报
   // `Can not change aggregation type`（实测：连只改注释也会撞上）。
@@ -1207,14 +1365,14 @@ const buildColumnSql = (f, isEdit) => {
         if (f.aggKey) def += ' KEY'
         else if (agg && !/^none$/i.test(agg)) def += ' ' + agg
         def += f.nullable ? ' NULL' : ' NOT NULL'
-        if (dv !== '') def += /^null$/i.test(dv) ? ' DEFAULT NULL' : ` DEFAULT '${sq(dv)}'`
+        if (dv !== '') def += ` DEFAULT${dorisDefault(dv)}`
         if (f.comment) def += ` COMMENT '${sq(f.comment)}'`
         stmts.push(`ALTER TABLE ${t} MODIFY COLUMN ${def}`)
       }
       return stmts.join(';\n')
     }
     let add = `ALTER TABLE ${t} ADD COLUMN ${typeText}`
-    if (dv !== '') add += /^null$/i.test(dv) ? ' DEFAULT NULL' : ` DEFAULT '${sq(dv)}'`
+    if (dv !== '') add += ` DEFAULT${dorisDefault(dv)}`
     if (f.comment) add += ` COMMENT '${sq(f.comment)}'`
     return add
   }
@@ -1233,17 +1391,34 @@ const buildColumnSql = (f, isEdit) => {
   if (ddlStyle.value === 'pg') {
     const stmts = []
     const n = f.name.trim()
+    const o = f._orig
     if (isEdit) {
       if (n !== f.oldName) stmts.push(`ALTER TABLE ${t} RENAME COLUMN ${qt(f.oldName)} TO ${qt(n)}`)
-      stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} TYPE ${buildType(f.type, typeParam(f))}`)
-      stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} ${f.nullable ? 'DROP' : 'SET'} NOT NULL`)
-      if (dv !== '') stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DEFAULT${defNull(dv)}`)
-      else stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} DROP DEFAULT`)
-      if (f.comment && has('supportsComment')) stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(f.comment)}'`)
+      // 属性**按差量发**：只改默认值时不该顺带 `ALTER COLUMN … TYPE`（那会重写整表，
+      // 而且类型文本对不上时直接报错），也不该发 `DROP NOT NULL` 这种看起来像改动的东西
+      const curType = normType(buildType(f.type, typeParam(f)))
+      if (!o || curType !== normType(o.type)) {
+        stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} TYPE ${buildType(f.type, typeParam(f))}`)
+      }
+      if (!o || !!f.nullable !== !!o.nullable) {
+        stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} ${f.nullable ? 'DROP' : 'SET'} NOT NULL`)
+      }
+      const curDv = dv === '' ? null : dv
+      const origDv = !o || o.defaultIsNull ? null : String(o.defaultValue ?? '')
+      if (curDv !== origDv) {
+        stmts.push(curDv === null
+          ? `ALTER TABLE ${t} ALTER COLUMN ${qt(n)} DROP DEFAULT`
+          : `ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DEFAULT ${defaultLiteral(curDv)}`)
+      }
+      const curCm = String(f.comment ?? '').trim()
+      const origCm = o ? String(o.comment ?? '').trim() : ''
+      if (has('supportsComment') && curCm !== origCm) {
+        stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(curCm)}'`)
+      }
     } else {
       let add = `ALTER TABLE ${t} ADD COLUMN ${qt(n)} ${buildType(f.type, typeParam(f))}`
       add += f.nullable ? '' : ' NOT NULL'
-      if (dv !== '') add += ` DEFAULT${defNull(dv)}`
+      if (dv !== '') add += ` DEFAULT ${defaultLiteral(dv)}`
       stmts.push(add)
       if (f.comment && has('supportsComment')) stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(f.comment)}'`)
     }
@@ -1252,22 +1427,45 @@ const buildColumnSql = (f, isEdit) => {
   if (ddlStyle.value === 'oracle') {
     const stmts = []
     const n = f.name.trim()
-    let def = `${qt(n)} ${buildType(f.type, typeParam(f))}`
-    if (f.primaryKey) def += ' PRIMARY KEY'
-    const ostart = Number(f.autoIncrementStart)
-    if (f.autoIncrement) {
-      def += ostart > 1 ? ` GENERATED BY DEFAULT AS IDENTITY (START WITH ${ostart})` : ' GENERATED BY DEFAULT AS IDENTITY'
+    const o = f._orig
+    const curDv = dv === '' ? null : dv
+    const origDv = !o || o.defaultIsNull ? null : String(o.defaultValue ?? '')
+    if (isEdit) {
+      const curType = normType(buildType(f.type, typeParam(f)))
+      const needModify = !o || curType !== normType(o.type)
+        || !!f.nullable !== !!o.nullable || curDv !== origDv
+      if (needModify) {
+        // `MODIFY` 里**不能带** PRIMARY KEY / IDENTITY（Oracle 只允许在 ADD 时给，
+        // 带上就是语法错误）—— 以前把整列定义原样塞进 MODIFY，改一个 PK 列的默认值
+        // 就会失败。这里只声明类型/可空/默认值这三样 MODIFY 支持的东西。
+        let def = `${qt(n)} ${buildType(f.type, typeParam(f))}`
+        def += f.nullable ? '' : ' NOT NULL'
+        if (curDv !== null) def += ` DEFAULT ${defaultLiteral(curDv)}`
+        stmts.push(`ALTER TABLE ${t} MODIFY (${def})`)
+      }
+    } else {
+      let def = `${qt(n)} ${buildType(f.type, typeParam(f))}`
+      if (f.primaryKey) def += ' PRIMARY KEY'
+      const ostart = Number(f.autoIncrementStart)
+      if (f.autoIncrement) {
+        def += ostart > 1 ? ` GENERATED BY DEFAULT AS IDENTITY (START WITH ${ostart})` : ' GENERATED BY DEFAULT AS IDENTITY'
+      }
+      def += f.nullable ? '' : ' NOT NULL'
+      if (curDv !== null) def += ` DEFAULT ${defaultLiteral(curDv)}`
+      stmts.push(`ALTER TABLE ${t} ADD (${def})`)
     }
-    def += f.nullable ? '' : ' NOT NULL'
-    if (dv !== '') def += ` DEFAULT${defNull(dv)}`
-    stmts.push(`ALTER TABLE ${t} ${isEdit ? 'MODIFY' : 'ADD'} (${def})`)
-    if (f.comment && has('supportsComment')) stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(f.comment)}'`)
+    const curCm = String(f.comment ?? '').trim()
+    const origCm = o ? String(o.comment ?? '').trim() : ''
+    if (has('supportsComment') && curCm !== origCm) {
+      stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(curCm)}'`)
+    }
     return stmts.join(';\n')
   }
   if (ddlStyle.value === 'mssql') {
     const n = f.name.trim()
     const def = `${qt(n)} ${buildType(f.type, typeParam(f))}`
     const stmts = []
+    const o = f._orig
     if (isEdit) {
       if (n !== f.oldName) {
         // SQL Server 改列名走 sp_rename，而不是 ALTER COLUMN（后者改不了名字）。
@@ -1278,19 +1476,37 @@ const buildColumnSql = (f, isEdit) => {
           tr('tdet.spRenameNote') + '\n' +
           `EXEC sp_rename N'${sq(schema)}.${sq(table)}.${sq(f.oldName)}', N'${sq(n)}', 'COLUMN'`)
       }
-      stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${def} ${f.nullable ? 'NULL' : 'NOT NULL'}`)
+      // 类型 / 可空：**只在与基线不同时**才发 ALTER COLUMN。
+      // 以前每次都给整列定义，改个默认值也会顺带 `ALTER COLUMN id INT NOT NULL` ——
+      // 而 IDENTITY 列上这条被 SQL Server 直接拒绝（`Cannot alter column ... IDENTITY`）。
+      const curType = normType(buildType(f.type, typeParam(f)))
+      const typeChanged = !o || curType !== normType(o.type)
+      const nullChanged = !o || !!f.nullable !== !!o.nullable
+      if (typeChanged || nullChanged) {
+        stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${def} ${f.nullable ? 'NULL' : 'NOT NULL'}`)
+      }
+      // 默认值：SQL Server 是具名约束，"改"= 删旧约束 + 建新约束（见 mssqlDefaultBlock）
+      const curDv = dv === '' ? null : dv
+      const origDv = !o || o.defaultIsNull ? null : String(o.defaultValue ?? '')
+      if (curDv !== origDv) {
+        stmts.push(mssqlDefaultBlock(n, curDv === null ? '' : defaultLiteral(curDv)))
+      }
     } else {
       let add = `ALTER TABLE ${t} ADD ${def}`
       if (f.autoIncrement) add += ' IDENTITY(1,1)'
       add += f.nullable ? ' NULL' : ' NOT NULL'
-      if (dv !== '' && !f.autoIncrement) add += ` DEFAULT${defNull(dv)}`
+      // 新列直接用 `DEFAULT (…)` 内联，不必建具名约束（SQL Server 会自动命名）
+      if (dv !== '' && !f.autoIncrement) add += ` DEFAULT ${defaultLiteral(dv)}`
       stmts.push(add)
       if (f.primaryKey) {
         const pkName = 'PK_' + String(props.table).replace(/[^\w]/g, '').slice(0, 90) + '_' + n.replace(/[^\w]/g, '').slice(0, 20)
         stmts.push(`ALTER TABLE ${t} ADD CONSTRAINT ${qt(pkName)} PRIMARY KEY (${qt(n)})`)
       }
     }
-    if (f.comment && has('supportsComment')) stmts.push(mssqlCommentSql('COLUMN', f.comment, n))
+    // 注释按差量发（清空时也要发，否则「删掉注释」保存后还是旧的）
+    const curCm = String(f.comment ?? '').trim()
+    const origCm = o ? String(o.comment ?? '').trim() : ''
+    if (has('supportsComment') && curCm !== origCm) stmts.push(mssqlCommentSql('COLUMN', curCm, n))
     return stmts.join(';\n')
   }
   if (ddlStyle.value === 'clickhouse') {
@@ -1298,7 +1514,9 @@ const buildColumnSql = (f, isEdit) => {
     const baseT = clickhouseType(f.type, typeParam(f))
     const defT = f.nullable && !/^Nullable\(/i.test(baseT) ? `Nullable(${baseT})` : baseT
     let def = `${qt(n)} ${defT}`
-    if (dv !== '') def += /^null$/i.test(dv) ? ' DEFAULT NULL' : ` DEFAULT '${sq(dv)}'`
+    // CH 的 `DEFAULT '5'` 会**真的**存成字符串默认值（读回来带着引号，整数列也如此），
+    // 所以这里也必须走 defaultLiteral 让数字保持裸值
+    if (dv !== '') def += ` DEFAULT ${defaultLiteral(dv)}`
     if (f.comment) def += ` COMMENT '${sq(f.comment)}'`
     if (isEdit) {
       return n !== f.oldName
@@ -1310,27 +1528,48 @@ const buildColumnSql = (f, isEdit) => {
   if (ddlStyle.value === 'derby') {
     /*
      * Derby 的列变更语法自成一派：`ALTER COLUMN c SET DATA TYPE …` / `SET DEFAULT …` /
-     * `NOT NULL | NULL`，改名是 `RENAME COLUMN`。**实测**（Derby 10.16）这几条都可用。
+     * `NOT NULL | NULL`，改名是 `RENAME COLUMN`。
      *
-     * 两处如实说明：
-     * - 列注释 Derby 没有 → `supportsComment=false`，界面上不会出现那个输入框；
-     * - Derby 改类型时会**校验已有数据**能否转换，且被索引/约束引用的列可能被拒绝 ——
-     *   报错交给数据库给（它说的比我们猜的准），这里不预先拦。
+     * **必须按差量发**，而且类型那句有硬限制（真机 10.16 实测）：
+     *   - 只有 VARCHAR / CHAR VARYING / LONG VARCHAR 能 `SET DATA TYPE`，且**只能加长**；
+     *     `SET DATA TYPE INTEGER`（哪怕是同类型）报
+     *     `Only columns of type VARCHAR, CLOB, and BLOB may have their length altered.`，
+     *     缩短报 `Length must be greater than the current column length.`，
+     *     换类型名报 `The type of a column may not be changed.` ——
+     *     以前每次改列都无条件发这一句，于是「只改个默认值」也整条失败（用户反馈的报错）。
+     *   - 可空 / 默认值都是独立的 `ALTER COLUMN`，没变就别发。
+     *
+     * 改不了的类型变更由 validate() 里的 issueDerbyType 提前拦住（不会生成半截 SQL）。
+     * 列注释 Derby 没有 → `supportsComment=false`，界面上不出现那个输入框。
      */
     const stmts = []
     const n = f.name.trim()
+    const o = f._orig
     if (isEdit) {
       // Derby 的改名**不是** `ALTER TABLE … RENAME COLUMN`（实测 10.16 直接报
       // `Syntax error: Encountered "RENAME"`），而是一条独立语句：`RENAME COLUMN 表.旧 TO 新`。
       if (n !== f.oldName) stmts.push(`RENAME COLUMN ${t}.${qt(f.oldName)} TO ${qt(n)}`)
-      stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DATA TYPE ${buildType(f.type, typeParam(f))}`)
-      stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} ${f.nullable ? 'NULL' : 'NOT NULL'}`)
-      if (dv !== '') stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DEFAULT${defNull(dv)}`)
-      else stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} DROP DEFAULT`)
+      const curType = normType(buildType(f.type, typeParam(f)))
+      if (!o || curType !== normType(o.type)) {
+        // 只有「加长变长字符列」Derby 接受；其余类型变更由 validate() 的 issueDerbyType 拦住
+        if (derbyCanGrowType(f.type, f.length, o)) {
+          stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DATA TYPE ${buildType(f.type, typeParam(f))}`)
+        }
+      }
+      if (!o || !!f.nullable !== !!o.nullable) {
+        stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} ${f.nullable ? 'NULL' : 'NOT NULL'}`)
+      }
+      const curDv = dv === '' ? null : dv
+      const origDv = !o || o.defaultIsNull ? null : String(o.defaultValue ?? '')
+      if (curDv !== origDv) {
+        stmts.push(curDv === null
+          ? `ALTER TABLE ${t} ALTER COLUMN ${qt(n)} DROP DEFAULT`
+          : `ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DEFAULT ${defaultLiteral(curDv)}`)
+      }
     } else {
       // 顺序照 Derby 的 columnDefinition：类型 → DEFAULT → NOT NULL
       let add = `ALTER TABLE ${t} ADD COLUMN ${qt(n)} ${buildType(f.type, typeParam(f))}`
-      if (dv !== '') add += ` DEFAULT${defNull(dv)}`
+      if (dv !== '') add += ` DEFAULT ${defaultLiteral(dv)}`
       add += f.nullable ? '' : ' NOT NULL'
       stmts.push(add)
     }
@@ -1353,43 +1592,49 @@ const buildColumnSql = (f, isEdit) => {
      */
     const n = f.name.trim()
     const stmts = []
+    const o = f._orig
     if (isEdit) {
       if (n !== String(f.oldName || '').trim()) {
         stmts.push(`ALTER TABLE ${t} RENAME COLUMN ${qt(f.oldName)} TO ${qt(n)}`)
       }
-      stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DATA TYPE ${buildType(f.type, typeParam(f))}`)
-      // 可空只在**真的变了**时才发：DB2 的每条 ALTER COLUMN 都是独立 DDL，
-      // 多发一条就多一次失败机会（也只改长度时预览里就只剩改类型那一条）
-      const origNullable = f._orig ? !!f._orig.nullable : null
+      // 类型只在真的变了时才发：每条 ALTER COLUMN 都是独立 DDL，多发一条多一次失败机会
+      const curType = normType(buildType(f.type, typeParam(f)))
+      if (!o || curType !== normType(o.type)) {
+        stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DATA TYPE ${buildType(f.type, typeParam(f))}`)
+      }
+      // 可空同理
+      const origNullable = o ? !!o.nullable : null
       if (origNullable === null || origNullable !== !!f.nullable) {
         stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} ${f.nullable ? 'DROP' : 'SET'} NOT NULL`)
       }
-      if (dv !== '') {
-        stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DEFAULT${db2Default(dv)}`)
-      } else if (f._orig && !f._orig.defaultIsNull && String(f._orig.defaultValue ?? '') !== '') {
+      const curDv = dv === '' ? null : dv
+      const origDv = !o || o.defaultIsNull ? null : String(o.defaultValue ?? '')
+      if (curDv !== null) {
+        if (curDv !== origDv) stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} SET DEFAULT${db2Default(curDv)}`)
+      } else if (origDv !== null) {
         // **只在该列原本有默认值时才 DROP DEFAULT**：DB2 对「本来就没有默认值」的列
         // 执行 DROP DEFAULT 会直接报 SQLCODE=-190 / SQLSTATE=42837（列不能按该方式变更），
         // 于是「只改个长度」也会保存失败（实测）。
         stmts.push(`ALTER TABLE ${t} ALTER COLUMN ${qt(n)} DROP DEFAULT`)
-      }
-      if (f.comment && has('supportsComment')) {
-        stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(f.comment)}'`)
       }
     } else {
       let add = `ALTER TABLE ${t} ADD COLUMN ${qt(n)} ${buildType(f.type, typeParam(f))}`
       if (!f.nullable) add += ' NOT NULL'
       if (dv !== '') add += ` DEFAULT${db2Default(dv)}`
       stmts.push(add)
-      if (f.comment && has('supportsComment')) {
-        stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(f.comment)}'`)
-      }
+    }
+    // 注释按差量发（清空注释时也要发，否则「删掉注释」保存后仍显示旧值）
+    const curCm = String(f.comment ?? '').trim()
+    const origCm = o ? String(o.comment ?? '').trim() : ''
+    if (has('supportsComment') && curCm !== origCm) {
+      stmts.push(`COMMENT ON COLUMN ${t}.${qt(n)} IS '${sq(curCm)}'`)
     }
     return stmts.join(';\n')
   }
   // SQLite / 通用方言：仅支持新增字段
   let add = `ALTER TABLE ${t} ADD COLUMN ${qt(f.name.trim())} ${buildType(f.type, typeParam(f))}`
   add += f.nullable ? '' : ' NOT NULL'
-  if (dv !== '') add += ` DEFAULT${defNull(dv)}`
+  if (dv !== '') add += ` DEFAULT ${defaultLiteral(dv)}`
   return add
 }
 
@@ -1410,13 +1655,20 @@ const validate = () => {
         issues.push(t(ddlStyle.value === 'db2' ? 'tdet.issueDb2NotNull' : 'tdet.issueDerbyNotNull', { name: nm }))
       }
     } else if (r._state === 'loaded' && colChanged(r)) {
-      // SQL Server：改已有列的默认值必须先删默认约束再建，当前生成器只出 ALTER COLUMN。
-      // 不拦的话会「预览有 SQL、保存成功、但默认值没变」—— 静默失效比报错更难查。
-      if (ddlStyle.value === 'mssql') {
+      // Derby：类型变更只有「加长变长字符列」能过，其它（改类型名/缩短/非字符列）
+      // 一律被数据库拒绝（`Only columns of type VARCHAR, CLOB, and BLOB …`）。
+      // 事先拦住，别让用户点了保存才看到那句看不懂的报错。
+      if (ddlStyle.value === 'derby' && r._orig
+        && normType(buildType(r.typeBase, typeParam(r))) !== normType(r._orig.type)
+        && !derbyCanGrowType(r.typeBase, r.length, r._orig)) {
+        issues.push(t('tdet.issueDerbyType', { name: nm }))
+      }
+      // SQL Server 的 IDENTITY 列不能带默认值（`Cannot add a default to an identity column`），
+      // 提前说清楚，别让用户保存后才看到这句
+      if (ddlStyle.value === 'mssql' && r._orig && r._orig.autoIncrement) {
         const cur = r.defaultIsNull ? null : String(r.defaultValue ?? '')
-        if (cur !== (r._orig.defaultValue ?? null)) {
-          issues.push(t('tdet.issueSqlServerDefault', { name: nm }))
-        }
+        const orig = r._orig.defaultIsNull ? null : String(r._orig.defaultValue ?? '')
+        if (cur !== orig) issues.push(t('tdet.issueMssqlIdentityDefault', { name: nm }))
       }
       if (r.autoIncrement && !r.primaryKey && !r._orig.primaryKey && !r._orig.autoIncrement) {
         issues.push(t('tdet.issueAutoIncNeedsPk', { name: nm }))
@@ -1871,6 +2123,9 @@ const previewSql = computed(() => scriptParts.value.length ? scriptParts.value.j
 const previewBody = computed(() => {
   if (ddlMode.value && ddlText.value) return ddlText.value
   if (previewSql.value) return previewSql.value
+  // 有校验问题但一条 SQL 都生成不出来时（如 Derby 缩短长度、Doris 不支持的操作），
+  // 必须把原因写在这里 —— 否则界面只剩「-- 暂无改动」，用户改了什么一点反馈都没有
+  if (issues.value.length) return issues.value.map((x) => `-- ${x}`).join('\n')
   return t('tdet.ddlEmpty')
 })
 const canCopy = computed(() => !!(ddlMode.value ? ddlText.value : previewSql.value))
@@ -1884,7 +2139,7 @@ const previewTag = computed(() => {
     两者可能不一致（如 Doris 表选项被计入待保存、但一条 ALTER 都生成不了），
     拿计数当依据会凭空挂个「可执行」（真机踩过）。正文「暂无改动」/ 空时不挂标签。 */
 const showStateTag = computed(() =>
-  ddlMode.value ? !!ddlText.value : !!previewSql.value
+  ddlMode.value ? !!ddlText.value : (!!previewSql.value || issues.value.length > 0)
 )
 
 // ==================== 索引操作 ====================
