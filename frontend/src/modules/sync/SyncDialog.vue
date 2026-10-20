@@ -765,7 +765,9 @@ const applyAll = (val) => {
 
 // ==================== 对象加载 ====================
 const loadConnections = async () => {
-  connections.value = await listConnections()
+  // 只展示真正有传输能力的连接。NoSQL 的连接模型不是二维表，后端没有
+  // 对应 Reader/Writer；让它们出现在这里只会把“暂不支持”伪装成配置错误。
+  connections.value = (await listConnections()).filter(c => c.dataTransfer !== false)
   // 只有从外部带着明确上下文进来（右键某连接传 props.conn）才预填；
   // 顶栏直接打开时**连连接也不预选**（用户要求）——库、连接全部「请选择」，
   // 让用户从头自己挑，避免默认就是上次随手选的东西

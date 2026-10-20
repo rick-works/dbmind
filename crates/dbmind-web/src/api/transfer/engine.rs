@@ -21,7 +21,7 @@ use dbmind_core::CellValue;
 use tokio::sync::mpsc;
 
 use super::{reader_for, writer_for, Page, Stats, TablePlan, UpsertMode};
-use crate::api::sync::key_of;
+use crate::api::sync::{key_of, lookup_existing_keys};
 
 /// 单页失败后的重试次数（退避 150ms / 300ms / 600ms）。
 ///
@@ -203,9 +203,16 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         if plan.upsert == UpsertMode::TwoPhase && !plan.key_indexes.is_empty() {
             // 两阶段 upsert：已有键 → 更新（攒批、串行），其余 → 插入池（并发）。
             // 原生 upsert 不走这里 —— 目标端一条语句自己判插入还是更新，行直接进写池。
+            let existing = match lookup_existing_keys(&plan, &rows).await {
+                Ok(keys) => keys,
+                Err(msg) => {
+                    failure = Some(msg);
+                    break;
+                }
+            };
             let (existing, fresh): (Vec<_>, Vec<_>) = rows
                 .into_iter()
-                .partition(|row| plan.existing.contains(&key_of(row, &plan.key_indexes)));
+                .partition(|row| existing.contains(&key_of(row, &plan.key_indexes)));
             if !existing.is_empty() {
                 match writer.update(&existing).await {
                     Ok(rows) => updated += rows,
@@ -276,9 +283,21 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         // 原生 upsert 由服务端判插入还是更新，SQL 层面拿不到「新增/更新」的拆分
         note.push_str("（原生 upsert：新增/更新未区分）");
     }
+    // 分发出去了却没算进 inserted/updated 的行 = 逐行降级后仍然失败的行（脏数据）。
+    // 取消时 consumed 里还夹着没来得及写的页，差值没有意义，故置 0。
+    let failed = if canceled {
+        0
+    } else {
+        consumed.saturating_sub(inserted + updated)
+    };
+    if failed > 0 {
+        // 必须写进结果消息：这些行**没有**落库，界面上的「成功」不能把这件事盖住。
+        note.push_str(&format!("（{failed} 行写入失败，详见任务日志）"));
+    }
     Ok(Stats {
         inserted,
         updated,
+        failed,
         canceled,
         note,
     })

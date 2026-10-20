@@ -57,6 +57,7 @@ use crate::AppState;
 /// 调大不会引入深分页退化。5 万 ≈ 每页往返次数降到原来的 1/5，
 /// 千万级大表的同步吞吐明显提升；内存峰值（单页行数据）在典型行宽下几十 MB，可控。
 /// 写侧另有 MAX_TUPLES_PER_STATEMENT = 2000 独立控制单语句大小，两者互不影响。
+#[cfg(test)]
 const PAGE: u64 = 50_000;
 /// 一条语句最多拼多少个值元组。
 ///
@@ -516,6 +517,18 @@ pub(crate) async fn run_target_in(
     sql: &str,
     session: &str,
 ) -> XResult<dbmind_core::QueryResult> {
+    run_target_in_rows(state, target, sql, session, 1).await
+}
+
+/// 同 [`run_target_in`]，但允许返回多行。仅用于按批查询目标已有键这类
+/// 内部读取，不能把写语句放进来拿多行。
+pub(crate) async fn run_target_in_rows(
+    state: &AppState,
+    target: &str,
+    sql: &str,
+    session: &str,
+    max_rows: usize,
+) -> XResult<dbmind_core::QueryResult> {
     let engine = state.engine();
     let request = dbmind_core::QueryRequest {
         schema: None,
@@ -523,7 +536,7 @@ pub(crate) async fn run_target_in(
         connection: target.to_string(),
         sql: sql.to_string(),
         options: dbmind_core::QueryOptions {
-            max_rows: 1,
+            max_rows,
             timeout_ms: 600_000,
         },
         execution_id: None,
@@ -784,6 +797,35 @@ async fn sync_indexes(
     created
 }
 
+/// MySQL 的 `ON DUPLICATE KEY UPDATE` 会命中**任意**唯一索引，而不是只命中
+/// 用户选中的主键。目标表若还有其它唯一索引，源行可能因为另一个唯一键冲突
+/// 而更新到另一行。探测失败同样保守回退：不能拿“不知道”换“可能更新错行”。
+async fn mysql_has_secondary_unique(
+    state: &AppState,
+    conn: &str,
+    scope: &str,
+    target_name: &str,
+) -> bool {
+    let sql = format!("show index from {target_name}");
+    let Ok(result) = run_sql_in(state, conn, scope, sql, 5000).await else {
+        return true;
+    };
+    for row in crate::api::meta::rows_of(&result) {
+        let cell = |key: &str| {
+            row.get(key)
+                .or_else(|| row.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, v)| v))
+        };
+        let key_name = cell("Key_name").and_then(Value::as_str).unwrap_or("");
+        let non_unique = cell("Non_unique")
+            .and_then(crate::api::shape::value_to_i64)
+            .unwrap_or(1);
+        if non_unique == 0 && !key_name.eq_ignore_ascii_case("PRIMARY") {
+            return true;
+        }
+    }
+    false
+}
+
 // ------------------------------------------------------------------ Doris Stream Load 快速通道
 
 /// Doris **Stream Load**：把一批行以 JSON 数组直接 HTTP PUT 给 FE，绕过 INSERT 的
@@ -863,16 +905,24 @@ const CSV_ROW_SEP: &str = "\\x02";
 const CSV_COL_SEP_BYTE: u8 = 0x01;
 const CSV_ROW_SEP_BYTE: u8 = 0x02;
 
-/// 数据里出现了与分隔符相同的字符吗？（极罕见：控制字符混进文本）—— 有则整批退回
-/// JSON 编码（JSON 对任意字符都安全），保证正确性优先于速度。
+/// 数据里出现了 CSV 特殊字符吗？控制分隔符、反斜杠（Doris 的转义符）以及
+/// `\N` 空值标记都可能改变原值，有则整批退回 JSON 编码。
 pub(crate) fn rows_need_json_fallback(rows: &[Vec<dbmind_core::CellValue>]) -> bool {
     rows.iter().any(|row| {
         row.iter().any(|cell| match cell {
             dbmind_core::CellValue::Text(s) => {
-                s.bytes().any(|b| b == CSV_COL_SEP_BYTE || b == CSV_ROW_SEP_BYTE)
+                s.contains('\\') || s.bytes().any(|b| b == CSV_COL_SEP_BYTE || b == CSV_ROW_SEP_BYTE)
             }
             _ => false,
         })
+    })
+}
+
+/// 列名含逗号、控制字符等时，CSV 的 `columns` 头无法无损表达，改走 JSON 键。
+fn columns_need_json_fallback(columns: &[String]) -> bool {
+    columns.iter().any(|name| {
+        name.chars()
+            .any(|c| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'))
     })
 }
 
@@ -950,8 +1000,10 @@ pub(crate) async fn doris_stream_load(
     if rows.is_empty() || host.is_empty() || http_port == 0 {
         return Ok(0);
     }
+    // Stream Load 的 URL 段是**裸库名**；catalog scope 可能是 `internal.ods`。
+    let database = database.rsplit('.').next().unwrap_or(database);
     // CSV 优先；文本里混入分隔符控制字符时整批退回 JSON（正确性优先）
-    let use_json = rows_need_json_fallback(rows);
+    let use_json = rows_need_json_fallback(rows) || columns_need_json_fallback(columns);
     let body = if use_json {
         encode_stream_json(columns, rows)?
     } else {
@@ -971,6 +1023,13 @@ pub(crate) async fn doris_stream_load(
     let host_owned = host.to_string();
     let db_owned = database.to_string();
     let tbl_owned = table.to_string();
+    // Stream Load 的 `columns` 头用**反引号**包列名：它是 SQL 片段而不是纯名字，列名撞上
+    // 保留字（order / desc / group / key…）时不加引号会被当成关键字解析。
+    let columns_header = columns
+        .iter()
+        .map(|name| format!("`{}`", name.replace('`', "``")))
+        .collect::<Vec<_>>()
+        .join(", ");
     crate::api::blocking(move || -> dbmind_core::Result<u64> {
         // **入口候选**：优先直连 BE（SHOW BACKENDS 的真实 http 端口）—— FE 会 307 重定向，
         // 而重定向链路有两个坑：body 要对着 FE 白发一遍（FE 不读 body 就 307）；且
@@ -1004,6 +1063,8 @@ pub(crate) async fn doris_stream_load(
                     req.set("format", "csv")
                         .set("column_separator", CSV_COL_SEP)
                         .set("line_delimiter", CSV_ROW_SEP)
+                        // CSV 按位置解释；目标表可能有额外列，必须显式给列清单。
+                        .set("columns", &columns_header)
                 };
                 let resp = match req.send_bytes(&body) {
                     Ok(resp) => resp,
@@ -1141,6 +1202,10 @@ mod stream_load_tests {
         assert!(!rows_need_json_fallback(&[vec![CellValue::Text("普通文本".into())]]));
         assert!(rows_need_json_fallback(&[vec![CellValue::Text("坏\u{1}文本".into())]]));
         assert!(rows_need_json_fallback(&[vec![CellValue::Text("坏\u{2}文本".into())]]));
+        assert!(rows_need_json_fallback(&[vec![CellValue::Text("\\N".into())]]));
+        assert!(rows_need_json_fallback(&[vec![CellValue::Text("C:\\temp".into())]]));
+        assert!(columns_need_json_fallback(&["a,b".to_string()]));
+        assert!(!columns_need_json_fallback(&["normal_name".to_string()]));
     }
 
     #[test]
@@ -1552,6 +1617,28 @@ fn build_insert_batch(
     out
 }
 
+/// 事务内做“批量失败 → 逐行重试”时需要的保存点。
+///
+/// PostgreSQL 在一个语句失败后会把整个事务标记为 aborted；没有保存点时，
+/// 后续逐行重试全部只会得到 `current transaction is aborted`。SQL Server
+/// 的部分错误也有同样效果。只在确实已经开了事务时使用；否则 SAVEPOINT
+/// 本身会在 PG 里开启一个没人负责提交的事务。
+fn savepoint_sql(kind: &str, name: &str) -> Option<(String, String, Option<String>)> {
+    match kind {
+        "postgresql" | "kingbase" => Some((
+            format!("savepoint {name}"),
+            format!("rollback to savepoint {name}"),
+            Some(format!("release savepoint {name}")),
+        )),
+        "sqlserver" => Some((
+            format!("save transaction {name}"),
+            format!("rollback transaction {name}"),
+            None,
+        )),
+        _ => None,
+    }
+}
+
 /// 把一批行按「行数+字节拆分」写成 INSERT 语句并逐条发送（**部分成功语义**）。
 ///
 /// **脏数据降级**（对齐 DataX）：某条语句失败时**降级为该语句块逐行重试** ——
@@ -1572,24 +1659,98 @@ pub(crate) async fn write_insert_rows(
     identity_on: bool,
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
     table: &str,
+    in_transaction: bool,
 ) -> Result<u64, String> {
     let stmts = build_insert_batch(target_name, columns, target_types, rows, target_kind, target_kind.kind.key());
     let mut ok_rows = 0u64;
     let mut failed_rows = 0u64;
     let mut sample_err: Option<String> = None;
     let mut start_row = 0usize;
+    let mut savepoint_seq = 0u64;
     for (n_rows, stmt) in &stmts {
+        let sp = if in_transaction {
+            let name = format!("dbmind_insert_{savepoint_seq}");
+            savepoint_seq += 1;
+            savepoint_sql(target_kind.kind.key(), &name)
+        } else {
+            None
+        };
+        if let Some((begin, _, _)) = sp.as_ref() {
+            if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
+                return Err(format!("创建批处理保存点失败：{}", err.message));
+            }
+        }
         match run_target_in(state, tgt_target, &with_identity(stmt.clone(), identity_on, target_name), session).await {
-            Ok(_) => ok_rows += *n_rows as u64,
+            Ok(_) => {
+                ok_rows += *n_rows as u64;
+                if let Some((_, _, Some(release))) = sp.as_ref() {
+                    // 释放失败**不能**判整表失败：这批数据已经写进去了，
+                    // 这里只是回收保存点。以前直接 return Err，界面显示「失败」
+                    // 而目标端其实有数据，用户会以为白跑一趟。
+                    if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                        if let Some(task) = task {
+                            task.log(format!(
+                                "表 {table}：释放保存点失败（数据已写入，继续）：{}",
+                                err.message
+                            ));
+                        }
+                    }
+                }
+            }
             Err(_batch_err) => {
+                if let Some((_, rollback, _)) = sp.as_ref() {
+                    if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
+                        return Err(format!("回滚批处理保存点失败：{}", err.message));
+                    }
+                }
+                if let Some((_, _, Some(release))) = sp.as_ref() {
+                    if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                        return Err(format!("回滚后释放批处理保存点失败：{}", err.message));
+                    }
+                }
                 // 降级：这一语句块的行逐行重试
                 let chunk = &rows[start_row..start_row + *n_rows as usize];
                 let mut chunk_failed = 0u64;
                 for row in chunk {
+                    let row_sp = if in_transaction {
+                        let name = format!("dbmind_insert_row_{savepoint_seq}");
+                        savepoint_seq += 1;
+                        savepoint_sql(target_kind.kind.key(), &name)
+                    } else {
+                        None
+                    };
+                    if let Some((begin, _, _)) = row_sp.as_ref() {
+                        if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
+                            return Err(format!("创建行处理保存点失败：{}", err.message));
+                        }
+                    }
                     let single = build_insert(target_name, columns, target_types, std::slice::from_ref(row), target_kind);
                     match run_target_in(state, tgt_target, &with_identity(single, identity_on, target_name), session).await {
-                        Ok(_) => ok_rows += 1,
+                        Ok(_) => {
+                            ok_rows += 1;
+                            if let Some((_, _, Some(release))) = row_sp.as_ref() {
+                                // 同上：行已经写成功，释放保存点失败不该把它改判成失败。
+                                if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                                    if let Some(task) = task {
+                                        task.log(format!(
+                                            "表 {table}：释放行保存点失败（数据已写入，继续）：{}",
+                                            err.message
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                         Err(row_err) => {
+                            if let Some((_, rollback, _)) = row_sp.as_ref() {
+                                if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
+                                    return Err(format!("回滚行处理保存点失败：{}", err.message));
+                                }
+                            }
+                            if let Some((_, _, Some(release))) = row_sp.as_ref() {
+                                if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                                    return Err(format!("回滚后释放行处理保存点失败：{}", err.message));
+                                }
+                            }
                             chunk_failed += 1;
                             if sample_err.is_none() {
                                 sample_err = Some(row_err.message.chars().take(200).collect());
@@ -1699,6 +1860,7 @@ pub(crate) async fn write_upsert_rows(
     identity_on: bool,
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
     table: &str,
+    in_transaction: bool,
 ) -> Result<u64, String> {
     let stmts = build_upsert_batch(target_name, columns, target_types, key_indexes, rows, target_kind);
     if stmts.is_empty() {
@@ -1711,10 +1873,46 @@ pub(crate) async fn write_upsert_rows(
     let mut failed_rows = 0u64;
     let mut sample_err: Option<String> = None;
     let mut start_row = 0usize;
+    let mut savepoint_seq = 0u64;
     for (n_rows, stmt) in &stmts {
+        let sp = if in_transaction {
+            let name = format!("dbmind_upsert_{savepoint_seq}");
+            savepoint_seq += 1;
+            savepoint_sql(target_kind.kind.key(), &name)
+        } else {
+            None
+        };
+        if let Some((begin, _, _)) = sp.as_ref() {
+            if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
+                return Err(format!("创建 upsert 保存点失败：{}", err.message));
+            }
+        }
         match run_target_in(state, tgt_target, &with_identity(stmt.clone(), identity_on, target_name), session).await {
-            Ok(_) => ok_rows += *n_rows as u64,
+            Ok(_) => {
+                ok_rows += *n_rows as u64;
+                if let Some((_, _, Some(release))) = sp.as_ref() {
+                    // 数据已写入，释放保存点失败只记日志（理由见 write_insert_rows）。
+                    if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                        if let Some(task) = task {
+                            task.log(format!(
+                                "表 {table}：释放 upsert 保存点失败（数据已写入，继续）：{}",
+                                err.message
+                            ));
+                        }
+                    }
+                }
+            }
             Err(batch_err) => {
+                if let Some((_, rollback, _)) = sp.as_ref() {
+                    if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
+                        return Err(format!("回滚 upsert 保存点失败：{}", err.message));
+                    }
+                }
+                if let Some((_, _, Some(release))) = sp.as_ref() {
+                    if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                        return Err(format!("回滚后释放 upsert 保存点失败：{}", err.message));
+                    }
+                }
                 // 先把**批次本身的错误**记下来：降级逐行重试之后，行的错误往往是
                 // 「事务已被中止」这类二次错误，真正的原因（语法/类型/约束）只有这里能看到。
                 if let Some(task) = task {
@@ -1726,6 +1924,18 @@ pub(crate) async fn write_upsert_rows(
                 let chunk = &rows[start_row..start_row + *n_rows as usize];
                 let mut chunk_failed = 0u64;
                 for row in chunk {
+                    let row_sp = if in_transaction {
+                        let name = format!("dbmind_upsert_row_{savepoint_seq}");
+                        savepoint_seq += 1;
+                        savepoint_sql(target_kind.kind.key(), &name)
+                    } else {
+                        None
+                    };
+                    if let Some((begin, _, _)) = row_sp.as_ref() {
+                        if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
+                            return Err(format!("创建 upsert 行保存点失败：{}", err.message));
+                        }
+                    }
                     let single = build_upsert_batch(
                         target_name,
                         columns,
@@ -1737,13 +1947,42 @@ pub(crate) async fn write_upsert_rows(
                     let sql = match single.first() {
                         Some((_, sql)) => sql.clone(),
                         None => {
+                            if let Some((_, rollback, _)) = row_sp.as_ref() {
+                                let _ = run_target_in(state, tgt_target, rollback, session).await;
+                            }
+                            if let Some((_, _, Some(release))) = row_sp.as_ref() {
+                                let _ = run_target_in(state, tgt_target, release, session).await;
+                            }
                             chunk_failed += 1;
                             continue;
                         }
                     };
                     match run_target_in(state, tgt_target, &with_identity(sql, identity_on, target_name), session).await {
-                        Ok(_) => ok_rows += 1,
+                        Ok(_) => {
+                            ok_rows += 1;
+                            if let Some((_, _, Some(release))) = row_sp.as_ref() {
+                                // 数据已写入，释放保存点失败只记日志。
+                                if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                                    if let Some(task) = task {
+                                        task.log(format!(
+                                            "表 {table}：释放 upsert 行保存点失败（数据已写入，继续）：{}",
+                                            err.message
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                         Err(row_err) => {
+                            if let Some((_, rollback, _)) = row_sp.as_ref() {
+                                if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
+                                    return Err(format!("回滚 upsert 行保存点失败：{}", err.message));
+                                }
+                            }
+                            if let Some((_, _, Some(release))) = row_sp.as_ref() {
+                                if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                                    return Err(format!("回滚后释放 upsert 行保存点失败：{}", err.message));
+                                }
+                            }
                             chunk_failed += 1;
                             if sample_err.is_none() {
                                 sample_err = Some(row_err.message.chars().take(200).collect());
@@ -1809,10 +2048,12 @@ pub(crate) fn supports_multi_statement(kind: &str) -> bool {
 pub(crate) async fn write_update_batch(
     state: &AppState,
     tgt_target: &str,
+    kind: &str,
     session: &str,
     stmts: &mut Vec<String>,
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
     table: &str,
+    in_transaction: bool,
 ) -> Result<u64, String> {
     if stmts.is_empty() {
         return Ok(0);
@@ -1820,15 +2061,86 @@ pub(crate) async fn write_update_batch(
     let total = stmts.len() as u64;
     let mut ok = 0u64;
     let joined = stmts.join(";\n");
+    let mut savepoint_seq = 0u64;
+    let sp = if in_transaction {
+        let name = format!("dbmind_update_{savepoint_seq}");
+        savepoint_seq += 1;
+        savepoint_sql(kind, &name)
+    } else {
+        None
+    };
+    if let Some((begin, _, _)) = sp.as_ref() {
+        if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
+            return Err(format!("创建更新保存点失败：{}", err.message));
+        }
+    }
     match run_target_in(state, tgt_target, &joined, session).await {
-        Ok(_) => ok = total,
+        Ok(_) => {
+            ok = total;
+            if let Some((_, _, Some(release))) = sp.as_ref() {
+                // 更新已经写进去了，释放保存点失败只记日志。
+                if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                    if let Some(task) = task {
+                        task.log(format!(
+                            "表 {table}：释放更新保存点失败（数据已写入，继续）：{}",
+                            err.message
+                        ));
+                    }
+                }
+            }
+        }
         Err(batch_err) => {
+            if let Some((_, rollback, _)) = sp.as_ref() {
+                if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
+                    return Err(format!("回滚更新保存点失败：{}", err.message));
+                }
+            }
+            if let Some((_, _, Some(release))) = sp.as_ref() {
+                if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                    return Err(format!("回滚后释放更新保存点失败：{}", err.message));
+                }
+            }
             let mut failed = 0u64;
             let mut sample: Option<String> = None;
             for sql in stmts.iter() {
+                let row_sp = if in_transaction {
+                    let name = format!("dbmind_update_row_{savepoint_seq}");
+                    savepoint_seq += 1;
+                    savepoint_sql(kind, &name)
+                } else {
+                    None
+                };
+                if let Some((begin, _, _)) = row_sp.as_ref() {
+                    if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
+                        return Err(format!("创建更新行保存点失败：{}", err.message));
+                    }
+                }
                 match run_target_in(state, tgt_target, sql, session).await {
-                    Ok(_) => ok += 1,
+                    Ok(_) => {
+                        ok += 1;
+                        if let Some((_, _, Some(release))) = row_sp.as_ref() {
+                            // 这一行已经更新成功，释放保存点失败只记日志。
+                            if let Err(err) = run_target_in(state, tgt_target, release, session).await {
+                                if let Some(task) = task {
+                                    task.log(format!(
+                                        "表 {table}：释放更新行保存点失败（数据已写入，继续）：{}",
+                                        err.message
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     Err(err) => {
+                        if let Some((_, rollback, _)) = row_sp.as_ref() {
+                            if let Err(rb_err) = run_target_in(state, tgt_target, rollback, session).await {
+                                return Err(format!("回滚更新行保存点失败：{}", rb_err.message));
+                            }
+                        }
+                        if let Some((_, _, Some(release))) = row_sp.as_ref() {
+                            if let Err(rb_err) = run_target_in(state, tgt_target, release, session).await {
+                                return Err(format!("回滚后释放更新行保存点失败：{}", rb_err.message));
+                            }
+                        }
                         failed += 1;
                         if sample.is_none() {
                             sample = Some(err.message.chars().take(200).collect());
@@ -1929,6 +2241,107 @@ pub(crate) fn build_update(
 /// 不归一会导致**每一行都被判成新增**（于是重复插入），而界面上仍显示同步成功。
 pub(crate) fn key_of(row: &[CellValue], indexes: &[usize]) -> String {
     crate::api::shape::row_key(row, indexes)
+}
+
+/// 两阶段 upsert 的**有界**目标键查询：只查当前源页里出现的键，
+/// 不再把目标整表主键拉进一个 HashSet。
+///
+/// 会话必须是 **`internal:sync-u{sid}`**（两阶段更新用的那条），不能借 0 号 writer：
+/// 宿主只对 tables/columns/事务语句按 sessionId 加锁，`query` 不加锁 —— 用 writer0 的会话
+/// 会让这条 SELECT 与正在进行的 INSERT 压在**同一条 JDBC Connection** 上（驱动不是线程安全的，
+/// Oracle 上就是这么把连接搅坏的）。而 update 会话与 lookup 都在派发线程里顺序执行
+/// （本函数返回后才调 `writer.update`）。它本身是每表一条常驻连接，`db()` 的会话
+/// 预算已经为两阶段 upsert 预留。
+pub(crate) async fn lookup_existing_keys(
+    plan: &crate::api::transfer::TablePlan,
+    rows: &[Vec<CellValue>],
+) -> Result<std::collections::HashSet<String>, String> {
+    if rows.is_empty() || plan.key_indexes.is_empty() {
+        return Ok(std::collections::HashSet::new());
+    }
+    const LOOKUP_ROWS: usize = 500;
+    let key_columns = plan
+        .key_indexes
+        .iter()
+        .map(|index| plan.target_kind.quote(&plan.target_columns[*index]))
+        .collect::<Vec<_>>();
+    let key_positions: Vec<usize> = (0..plan.key_indexes.len()).collect();
+    let session = format!("internal:sync-u{}", plan.sid);
+    let mut found = std::collections::HashSet::new();
+    for chunk in rows.chunks(LOOKUP_ROWS) {
+        let lits: Vec<Vec<String>> = chunk
+            .iter()
+            .map(|row| {
+                plan.key_indexes
+                    .iter()
+                    .map(|index| {
+                        literal_for(
+                            &row[*index],
+                            plan.target_kind,
+                            plan.target_types.get(*index).and_then(|ty| ty.as_deref()),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let predicate = if key_columns.len() == 1 {
+            format!(
+                "{} in ({})",
+                key_columns[0],
+                lits.iter().map(|vals| vals[0].clone()).collect::<Vec<_>>().join(", ")
+            )
+        } else {
+            lits.iter()
+                .map(|vals| {
+                    let eq = key_columns
+                        .iter()
+                        .zip(vals)
+                        .map(|(column, value)| format!("{column} = {value}"))
+                        .collect::<Vec<_>>()
+                        .join(" and ");
+                    format!("({eq})")
+                })
+                .collect::<Vec<_>>()
+                .join(" or ")
+        };
+        let sql = format!(
+            "select {}, count(*) as n from {} where {} group by {}",
+            key_columns.join(", "),
+            plan.target_name,
+            predicate,
+            key_columns.join(", ")
+        );
+        let result = run_target_in_rows(
+            &plan.state,
+            &plan.tgt_target,
+            &sql,
+            &session,
+            chunk.len(),
+        )
+        .await
+        .map_err(|e| format!("查询目标已有键失败：{}", e.message))?;
+        for row in &result.rows {
+            let key = key_of(row, &key_positions);
+            let count = row
+                .get(key_positions.len())
+                .and_then(|cell| match cell {
+                    CellValue::Integer(n) => Some(*n as u64),
+                    CellValue::Real(n) => Some(*n as u64),
+                    CellValue::Text(text) => text.trim().parse::<u64>().ok(),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            if count > 1 {
+                return Err(format!(
+                    "目标表同一个比对键对应 {count} 行（键 {key}）；两阶段 upsert 已中止，避免批量更新错行"
+                ));
+            }
+            if count == 1 {
+                found.insert(key);
+            }
+        }
+    }
+    Ok(found)
 }
 
 /// 同步一张表（外层：MySQL 系目标的事务包裹）。
@@ -2235,20 +2648,43 @@ async fn sync_table_inner(
         .map(|column| column.name.clone())
         .collect();
 
-    // 主键：优先用目标的（目标是写入方），没有再用源的
-    let mut key_columns: Vec<String> = target_columns
+    // upsert 只能按**目标端真实存在且完整的唯一键**匹配。源主键只说明两侧
+    // 逻辑上可能对应，不能证明目标表有唯一约束；用它 UPDATE 可能命中多行。
+    let target_primary: Vec<String> = target_columns
         .iter()
         .filter(|column| column.primary_key)
         .map(|column| column.name.clone())
-        .filter(|name| columns.iter().any(|column| column.eq_ignore_ascii_case(name)))
         .collect();
-    if key_columns.is_empty() {
-        key_columns = source_columns
+    let target_common: Vec<String> = target_primary
+        .iter()
+        .filter(|name| columns.iter().any(|column| column.eq_ignore_ascii_case(name)))
+        .cloned()
+        .collect();
+    // 原生 upsert 依赖目标端**完整**的主键约束：复合主键只同步到其中一部分列时，
+    // 目标端并没有这组部分键的唯一定义，不能拿它做 ON CONFLICT / MERGE。
+    let target_key_ready = !target_primary.is_empty() && target_common.len() == target_primary.len();
+    let mut key_columns: Vec<String> = if target_key_ready {
+        target_common
+    } else {
+        Vec::new()
+    };
+    // 两阶段 upsert 不依赖目标声明的唯一约束（ClickHouse/Doris 元数据通常不把
+    // 主键字段标成 primary_key）。此时可用完整的源主键按值查目标；lookup 会
+    // GROUP BY 键并拒绝重复目标行，因此不会把多行误当成一行更新。
+    if !target_key_ready {
+        let source_primary: Vec<String> = source_columns
             .iter()
             .filter(|column| column.primary_key)
             .map(|column| column.name.clone())
-            .filter(|name| columns.iter().any(|column| column.eq_ignore_ascii_case(name)))
             .collect();
+        let source_common: Vec<String> = source_primary
+            .iter()
+            .filter(|name| columns.iter().any(|column| column.eq_ignore_ascii_case(name)))
+            .cloned()
+            .collect();
+        if !source_primary.is_empty() && source_common.len() == source_primary.len() {
+            key_columns = source_common;
+        }
     }
     let key_indexes: Vec<usize> = key_columns
         .iter()
@@ -2379,12 +2815,15 @@ async fn sync_table_inner(
                 ty,
                 table,
                 format!(
-                    "目标表 {target_table} 没有主键，无法按主键 upsert（目标表里已有数据）。\
-                     请改用「仅插入」或「清空后导入」，或给目标表加上主键"
+                    "目标表 {target_table} 没有可用且完整的 upsert 主键（主键列可能未参与同步）。\
+                     目标表已有数据时不能安全 upsert；请改用「仅插入」或「清空后导入」，\
+                     或确保目标主键的全部列都参与同步"
                 ),
             );
         }
-        note.push_str("（目标表没有主键，且当前为空：已按仅插入处理）");
+        // 与上面的报错保持同一口径：原因可能是「没有主键」也可能是「主键列没全同步」，
+        // 写成"没有主键"会让用户去加一个本来就有（或加了也没用）的主键。
+        note.push_str("（目标表没有可用且完整的 upsert 主键，且当前为空：已按仅插入处理）");
         DataMode::Insert
     } else {
         opts.data_mode
@@ -2394,76 +2833,31 @@ async fn sync_table_inner(
     // - **Native**：MySQL `on duplicate key update`、PG/SQLite/H2 `on conflict … do update`、
     //   Oracle/DM/DB2/SQL Server `merge into`。目标端自己判「插入还是更新」，本进程既不读
     //   目标主键、也不逐行发 UPDATE —— 大表 upsert 的最大一笔开销就此消失；
-    // - **TwoPhase**：没有原生语法的方言（ClickHouse / Doris / Derby）保留老路：先把目标
-    //   关键值读进来（逐页、不设上限 —— 截断会把「已有行」误判成「新增」而重复插入，
-    //   那是静默的数据错误），再分「新增 INSERT / 命中 UPDATE」两拨。
+    // - **TwoPhase**：没有原生语法的方言（ClickHouse / Doris / Derby）只查询当前源页
+    //   出现的键（500 行一批），再分「新增 INSERT / 命中 UPDATE」两拨；不再把目标
+    //   整表主键装进内存。
+    // MySQL/MariaDB 的原生 upsert 还会被其它唯一索引截获；只有目标主键确实
+    // 可用、且没有额外唯一索引时才走它。
+    let mysql_secondary_unique = if effective_mode == DataMode::Upsert
+        && target_key_ready
+        && matches!(target_kind.kind.key(), "mysql" | "mariadb")
+    {
+        mysql_has_secondary_unique(state, &tgt.conn, &tgt.scope, &target_name).await
+    } else {
+        false
+    };
+    let native_upsert_safe = target_key_ready && !mysql_secondary_unique;
     let upsert_mode = if effective_mode != DataMode::Upsert {
         crate::api::transfer::UpsertMode::Off
-    } else if target_kind.supports_native_upsert() {
+    } else if target_kind.supports_native_upsert() && native_upsert_safe {
         crate::api::transfer::UpsertMode::Native
     } else {
         crate::api::transfer::UpsertMode::TwoPhase
     };
-
-    let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
-    if upsert_mode == crate::api::transfer::UpsertMode::TwoPhase {
-        let key_positions: Vec<usize> = (0..key_indexes.len()).collect();
-        let key_list = key_columns
-            .iter()
-            .map(|name| target_kind.quote(name))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let base = format!("select {key_list} from {target_name}");
-        let mut key_offset = 0u64;
-        // 目标键读取同样走 keyset（目标键列即主键，唯一有序）——千万级目标表不再深分页
-        let mut last_target_key: Option<Vec<CellValue>> = None;
-        loop {
-            let cursor = match last_target_key.as_ref() {
-                Some(values) if !key_columns.is_empty() => {
-                    Some((key_columns.as_slice(), values.as_slice()))
-                }
-                _ => None,
-            };
-            let page =
-                match fetch_page(
-                    state,
-                    &tgt.conn,
-                    &tgt.scope,
-                    &base,
-                    target_kind,
-                    key_offset,
-                    cursor,
-                    "",
-                    PAGE,
-                    &format!("internal:rowcount-{sid}"),
-                )
-                    .await
-                {
-                    Ok(rows) => rows,
-                    Err(err) => {
-                        return ObjResult::failed(
-                            ty,
-                            table,
-                            format!(
-                                "读取目标表主键失败（upsert 需要它来判断新增还是更新）：{}",
-                                err.message
-                            ),
-                        )
-                    }
-                };
-            let got = page.len();
-            for row in &page {
-                existing.insert(key_of(row, &key_positions));
-            }
-            if got < PAGE as usize {
-                break;
-            }
-            // 目标键查询只选了键列 ⇒ 整行就是键值序列（顺序与 key_columns 一致）
-            if !key_columns.is_empty() {
-                last_target_key = page.last().cloned();
-            }
-            key_offset += PAGE;
-        }
+    if effective_mode == DataMode::Upsert && mysql_secondary_unique {
+        note.push_str("（目标表存在其它唯一索引：为避免 MySQL 更新错行，已回退两阶段 upsert）");
+    } else if effective_mode == DataMode::Upsert && !target_key_ready {
+        note.push_str("（目标端未声明完整唯一键：按源主键两阶段匹配，目标重复键会中止）");
     }
 
     // SQL Server 的 identity 列**不接受显式插入**，而同步写过去的正是显式的键值
@@ -2636,9 +3030,9 @@ async fn sync_table_inner(
             // 裸名会被解析到目标库，`from 目标表` 读到刚建好的空表，直拷插进去 0 行
             //（真机：同实例双库同步 500 行 → 0 行，还报「直拷完成」）
             let src_qualified = if src.scope.trim().is_empty() || table.contains('.') {
-                table.to_string()
+                source_kind.quote(table)
             } else {
-                format!("{}.{table}", src.scope.trim())
+                source_kind.quote(&format!("{}.{table}", src.scope.trim()))
             };
             let where_sql = if table_where.is_empty() {
                 src_qualified
@@ -2659,9 +3053,18 @@ async fn sync_table_inner(
             // 同步若没走到 commit，autocommit=0 的旧事务会一直开着，REPEATABLE READ
             // 的快照停在很久以前（直拷/回查全部看到旧世界，真机抓到过 src_visible=0）
             let _ = run_target(state, &tgt_target, "commit").await;
-            // 诊断：直拷前在**目标会话**上确认源表可见性与行数
+            // 诊断 + 计数兜底：直拷前在**目标会话**上确认源表可见性。
+            // MySQL 驱动偶发把 INSERT…SELECT 的 affectedRows 回成 0；用这里已经
+            // 查出的源侧行数兜底，不能再去数目标表总行数（那会把历史行算进来）。
+            let mut expected_copy: Option<u64> = None;
             if let Ok(result) = run_target(state, &tgt_target, &format!("select count(*) as n from {where_sql}")).await {
                 tracing::info!(src_visible = ?result.rows.first().and_then(|r| r.first()), "直拷前源表回查");
+                expected_copy = result.rows.first().and_then(|row| row.first()).and_then(|cell| match cell {
+                    CellValue::Integer(n) => Some((*n).max(0) as u64),
+                    CellValue::Real(n) => Some((*n).max(0.0) as u64),
+                    CellValue::Text(t) => t.trim().parse::<u64>().ok(),
+                    _ => None,
+                });
             } else {
                 tracing::warn!("直拷前源表回查失败（目标会话看不到源表）");
             }
@@ -2674,24 +3077,8 @@ async fn sync_table_inner(
                 }
                 Err(err) => return ObjResult::failed(ty, table, format!("同实例直拷失败：{}", err.message)),
             };
-            // MySQL 驱动对 INSERT…SELECT 可能回 0（数据实际已写入，真机：目标 3 行、
-            // affected=0）—— 影响行数不可信时回查目标表行数兜底。
-            // 计数单元格可能是 Integer 也可能是 Text（驱动的 BIGINT 回传差异），两种都认。
             if copied == 0 {
-                if let Ok(result) = run_target(state, &tgt_target, &format!("select count(*) as n from {target_name}")).await {
-                    tracing::info!(count = ?result.rows.first().and_then(|r| r.first()), "直拷兜底回查");
-                    if let Some(cell) = result.rows.first().and_then(|row| row.first()) {
-                        match cell {
-                            dbmind_core::CellValue::Integer(n) => copied = *n as u64,
-                            dbmind_core::CellValue::Text(t) => {
-                                if let Ok(n) = t.trim().parse::<u64>() {
-                                    copied = n;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                copied = expected_copy.unwrap_or(0);
             }
             if let Some(task) = task {
                 task.add_rows_written(copied);
@@ -2716,7 +3103,23 @@ async fn sync_table_inner(
 
     // 主键游标（keyset）分页：有主键时替代 OFFSET —— 深分页每页只扫本页，
     // 千万级行不再 O(N²) 退化。无主键退回 OFFSET（cursor 传 None）。
-    let paging_keys: Vec<String> = key_indexes.iter().map(|i| columns[*i].clone()).collect();
+    // 读侧分页与 upsert 键解耦：即使目标没有可用主键、只能 Insert，仍可以用
+    // 完整的源主键做 keyset 分页，避免无键表的 OFFSET 深翻页退化。
+    let source_primary: Vec<String> = source_columns
+        .iter()
+        .filter(|column| column.primary_key)
+        .map(|column| column.name.clone())
+        .collect();
+    let source_common: Vec<String> = source_primary
+        .iter()
+        .filter(|name| columns.iter().any(|column| column.eq_ignore_ascii_case(name)))
+        .cloned()
+        .collect();
+    let paging_keys = if !source_primary.is_empty() && source_common.len() == source_primary.len() {
+        source_common
+    } else {
+        Vec::new()
+    };
     if paging_keys.is_empty() {
         // 没有可用的键：分页只能退回 OFFSET，第 N 页要让源库白扫前 N×5 万行（O(N²)）。
         // 这个代价用户看不见，只会觉得「越大越慢」，所以明说一句怎么解。
@@ -2742,6 +3145,7 @@ async fn sync_table_inner(
         tgt_target: tgt_target.clone(),
         target_kind,
         target_name: target_name.clone(),
+        target_table: target_table.to_string(),
         target_columns: target_column_names.clone(),
         workers_cap: opts.tgt_workers,
         slices_cap: opts.src_slices,
@@ -2752,7 +3156,6 @@ async fn sync_table_inner(
         where_clause: table_where.clone(),
         row_limit: opts.row_limit,
         upsert: upsert_mode,
-        existing: std::sync::Arc::new(existing),
         per_statement,
         identity_on,
         stream: if use_stream {
@@ -2993,8 +3396,10 @@ pub async fn table(
         schema: body.target_schema.clone(),
         catalog: false,
     };
-    require_record(&state, &src.conn).await?;
-    require_record(&state, &tgt.conn).await?;
+    let src_record = require_record(&state, &src.conn).await?;
+    let tgt_record = require_record(&state, &tgt.conn).await?;
+    crate::api::ensure_data_transfer(&src_record)?;
+    crate::api::ensure_data_transfer(&tgt_record)?;
     // catalog 方言（Doris）的表名要带 `catalog.库` 全限定（见 Side::scoped）
     let src = Side {
         catalog: Dialect::new(require_record(&state, &src.conn).await?.kind()).catalog_level(),
@@ -3031,9 +3436,11 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     if body.source_connection_id.trim().is_empty() {
         return Err(XError::bad_request("缺少 sourceConnectionId 参数"));
     }
-    require_record(&state, &body.source_connection_id).await?;
+    let source_record = require_record(&state, &body.source_connection_id).await?;
+    crate::api::ensure_data_transfer(&source_record)?;
     let target_conn = body.target_connection();
-    require_record(&state, &target_conn).await?;
+    let target_record = require_record(&state, &target_conn).await?;
+    crate::api::ensure_data_transfer(&target_record)?;
 
     // 对象清单：显式选中的；一个都没选就按「同步源库全部表」理解（界面允许直接点开始）
     let mut objects: Vec<(String, String)> = Vec::new();
@@ -3097,12 +3504,20 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     ///    - Oracle/DM/DB2：会话开销大、锁行为保守，2 路稳；
     ///    - MySQL/PG/SQL Server/ClickHouse 等网络型库：4 路能吃满带宽（再高压垮库反而慢）。
     /// 2. **对象数** —— 只有 2 张表时开 4 路毫无意义，并行度不超过对象数。
-    fn adaptive_concurrency(target_kind_key: &str, objects: usize) -> usize {
+    fn adaptive_concurrency(target_kind: dbmind_core::ConnectionKind, objects: usize) -> usize {
         if objects <= 1 {
             return 1;
         }
+        let target_kind_key = target_kind.key();
+        // 嵌入式/文件引擎：会话池只有一条连接，并行只会互相排队。
+        // **不能拿 single_connection_pool() 判这件事** —— 它标的是连接级语义，
+        // SQL Server 在 plugins/connection-types/sqlserver.yaml 里也标了 true，
+        // 照它早退会把网络型库的整库同步退化成一张一张跑（实测 4 表严格串行、
+        // 日志「并发 1 张表」，与上面注释里「SQL Server 属网络型库、跑 4 路」自相矛盾）。
+        if matches!(target_kind_key, "sqlite" | "h2" | "derby" | "duckdb") {
+            return 1;
+        }
         let by_kind = match target_kind_key {
-            "sqlite" | "derby" | "h2" => 1,
             "doris" => 3,
             "oracle" | "dm" | "db2" => 2,
             _ => 4,
@@ -3126,9 +3541,24 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     // 并发 4 张 → 每表 1 路；只有 1 张表 → 独享 4 路。（读侧同理。）
     let target_kind = Dialect::new(require_record(&state, &tgt.conn).await?.kind());
     let source_kind = Dialect::new(require_record(&state, &src.conn).await?.kind());
-    let target_kind_key = target_kind.kind.key().to_string();
-    let sync_concurrency = adaptive_concurrency(&target_kind_key, total);
-    let tgt_workers = (write_parallelism(target_kind.kind).max(1) / sync_concurrency).max(1);
+    let target_declared = write_parallelism(target_kind.kind).max(1);
+    // 两阶段 upsert 每张表还要一条专属会话做目标键查询/逐行更新。没有原生
+    // upsert 的目标要把它算进预算，否则对象并发 × (writer + lookup) 会翻倍。
+    let native_upsert = target_kind.supports_native_upsert();
+    let target_object_cap = if native_upsert {
+        target_declared
+    } else {
+        (target_declared / 2).max(1)
+    };
+    // 对象并发同时受源端和目标端约束。
+    let sync_concurrency = adaptive_concurrency(target_kind.kind, total)
+        .min(adaptive_concurrency(source_kind.kind, total))
+        .min(target_object_cap)
+        .max(1);
+    let reserved_sessions = usize::from(!native_upsert);
+    let tgt_workers = (target_declared / sync_concurrency)
+        .saturating_sub(reserved_sessions)
+        .max(1);
     let src_slices = (write_parallelism(source_kind.kind).max(1) / sync_concurrency).max(1);
     let opts = opts.with_session_caps(tgt_workers, src_slices);
 
@@ -3320,5 +3750,26 @@ pub async fn cancel(
             Ok(Json(json!({ "success": true, "message": "已请求取消，当前对象处理完后停止" })))
         }
         None => Ok(Json(json!({ "success": false, "message": "任务不存在或已过期" }))),
+    }
+}
+
+#[cfg(test)]
+mod savepoint_tests {
+    use super::*;
+
+    #[test]
+    fn 事务内脏行降级使用可回滚保存点() {
+        let pg = savepoint_sql("postgresql", "sp1").expect("PG 必须有保存点");
+        assert_eq!(pg.0, "savepoint sp1");
+        assert_eq!(pg.1, "rollback to savepoint sp1");
+        assert_eq!(pg.2.as_deref(), Some("release savepoint sp1"));
+
+        let mssql = savepoint_sql("sqlserver", "sp2").expect("SQL Server 必须有保存点");
+        assert_eq!(mssql.0, "save transaction sp2");
+        assert_eq!(mssql.1, "rollback transaction sp2");
+        assert!(mssql.2.is_none());
+
+        assert!(savepoint_sql("mysql", "sp3").is_none());
+        assert!(savepoint_sql("oracle", "sp4").is_none());
     }
 }

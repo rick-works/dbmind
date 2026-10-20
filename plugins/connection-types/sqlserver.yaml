@@ -9,7 +9,13 @@ mcpMode: bridge
 agentKey: sqlserver
 driverStoreVisible: true
 driverStoreOrder: 6
-singleConnectionPool: true
+# SQL Server 是网络型库：一个库正常运行几十条连接是常态，**没有**「连接池只有一条」这回事。
+# 这里原本是 true（初始化提交起就在，无注释说明原因），代价是 write_parallelism=1 →
+# 整库同步的对象并发被 `(write_parallelism/2).max(1)` 压成「一次只搬 1 张表」；
+# 4 表 × 400 行实测严格串行、12.9s（日志「并发 1 张表，每表最多 1 路写」）。
+# 改成 false 后：4 张表并发 × 每表 1 路写，4 表 × 5000 行 8.7s 全量落库；
+# 二次 upsert 也验过（改 10 行 + 新增 10 行：更新生效、无重复 id、零失败行）。
+singleConnectionPool: false
 metadataConnectionScoped: true
 skipTcpProbe: false
 localFile: false

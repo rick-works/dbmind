@@ -273,6 +273,31 @@
                     </div>
                   </div>
                 </div>
+                <div v-if="result.structure.primaryKeyDifferences?.length" class="sd-group">
+                  <div class="sd-title"><el-icon><CircleCheck /></el-icon>{{ $t('cmp.pkDiff', { n: result.structure.primaryKeyDifferences.length }) }}</div>
+                  <div class="sd-rows">
+                    <div v-for="d in result.structure.primaryKeyDifferences" :key="'pk' + d.column" class="sd-row">
+                      <b>{{ d.column }}</b>
+                      <span class="from">{{ d.source ? $t('cmp.isPk') : $t('cmp.notPk') }}</span>
+                      <el-icon><Right /></el-icon>
+                      <span class="to">{{ d.target ? $t('cmp.isPk') : $t('cmp.notPk') }}</span>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="result.structure.indexesCompared && (result.structure.indexDifferences?.onlyInSource?.length || result.structure.indexDifferences?.onlyInTarget?.length)" class="sd-group">
+                  <div class="sd-title"><el-icon><SetUp /></el-icon>{{ $t('cmp.indexDiff', { n: (result.structure.indexDifferences?.onlyInSource?.length || 0) + (result.structure.indexDifferences?.onlyInTarget?.length || 0) }) }}</div>
+                  <div class="sd-chips">
+                    <span v-for="c in (result.structure.indexDifferences?.onlyInSource || [])" :key="'is' + c" class="sd-chip src">{{ $t('cmp.onlySourceShort') }} {{ c }}</span>
+                    <span v-for="c in (result.structure.indexDifferences?.onlyInTarget || [])" :key="'it' + c" class="sd-chip tgt">{{ $t('cmp.onlyTargetShort') }} {{ c }}</span>
+                  </div>
+                </div>
+                <div v-if="result.structure.foreignKeysCompared && (result.structure.foreignKeyDifferences?.onlyInSource?.length || result.structure.foreignKeyDifferences?.onlyInTarget?.length)" class="sd-group">
+                  <div class="sd-title"><el-icon><SetUp /></el-icon>{{ $t('cmp.fkDiff', { n: (result.structure.foreignKeyDifferences?.onlyInSource?.length || 0) + (result.structure.foreignKeyDifferences?.onlyInTarget?.length || 0) }) }}</div>
+                  <div class="sd-chips">
+                    <span v-for="c in (result.structure.foreignKeyDifferences?.onlyInSource || [])" :key="'fs' + c" class="sd-chip src">{{ $t('cmp.onlySourceShort') }} {{ c }}</span>
+                    <span v-for="c in (result.structure.foreignKeyDifferences?.onlyInTarget || [])" :key="'ft' + c" class="sd-chip tgt">{{ $t('cmp.onlyTargetShort') }} {{ c }}</span>
+                  </div>
+                </div>
                 <div v-if="result.structure.nullableDifferences.length" class="sd-group">
                   <div class="sd-title"><el-icon><CircleCheck /></el-icon>{{ $t('cmp.nullableDiff', { n: result.structure.nullableDifferences.length }) }}</div>
                   <div class="sd-rows">
@@ -595,7 +620,7 @@ const genTarget = () => {
 }
 
 const loadConnections = async () => {
-  connections.value = await listConnections()
+  connections.value = (await listConnections()).filter(c => c.dataTransfer !== false)
   // 只有从外部带着明确上下文进来（首页快速开始等传 props.conn）才预填；
   // 顶栏直接打开时**连连接也不预选**（与数据传输同一口径）——
   // 之前这里会自动选中第一个连接并加载库列表，用户要求对齐改成全空自己挑
@@ -683,6 +708,11 @@ const loadSrcColumns = async () => {
     const cols = await listColumns(src.value.connectionId, src.value.database, src.value.table)
     if (wantTable !== src.value.table) return // 期间换了表：这次结果作废
     srcCols.value = cols
+    // 主键是唯一可靠的默认比对键。以前摘要显示“自动”，实际请求却要求用户
+    // 手选，空值时后端直接报错；这里选中主键，用户仍可手动调整。
+    opts.value.keyColumns = cols
+      .filter(c => c.primaryKey === true || c.key === 'PRI')
+      .map(c => c.name)
   } catch (e) {
     // 过期请求失败也不能动新表的数据（同上面的守卫）
     if (wantTable === src.value.table) srcCols.value = []

@@ -100,6 +100,9 @@ pub struct TablePlan {
     pub target_kind: Dialect,
     /// 已 quote 的目标表名（显式选了模式时带模式前缀）
     pub target_name: String,
+    /// 目标表**裸名**：给 Doris Stream Load 这类自己拼 URL 的写入器用。
+    /// 不能用 `target_name`（可能带引号/模式），也不能用 `table`（那是源表名）。
+    pub target_table: String,
     /// **本表最多几路写会话**（0 = 用方言默认值）。
     ///
     /// 整库同步的总连接数 = 对象并发 × 每表 writer 数。4 张表 × 4 路 = 16 条目标连接，
@@ -129,9 +132,6 @@ pub struct TablePlan {
 
     // ---- 写入行为 ----
     pub upsert: UpsertMode,
-    /// **仅 [`UpsertMode::TwoPhase`] 用**：预读出来的目标已有键（`key_of` 的产物）。
-    /// 原生 upsert 不需要它 —— 那正是原来最贵的一步（把目标整表主键拉进内存）。
-    pub existing: Arc<std::collections::HashSet<String>>,
     /// 单条 INSERT 的目标行数（方言差异很大，见 sync 里的注释）
     pub per_statement: u64,
     pub identity_on: bool,
@@ -162,6 +162,12 @@ impl UpsertMode {
 pub struct Stats {
     pub inserted: u64,
     pub updated: u64,
+    /// 写失败的行数（脏数据逐行重试后仍未落库）。
+    ///
+    /// 保存点让「一行坏数据拖死整批」不再发生，好行照常落库 —— 代价是
+    /// 「成功」不再是全有全无，**失败行数必须出现在结果消息里**，否则
+    /// 界面显示成功、errors=0，用户不会知道少了几行。
+    pub failed: u64,
     /// 用户取消（已写入的部分保留）
     pub canceled: bool,
     /// 收尾备注（追加到结果消息里）

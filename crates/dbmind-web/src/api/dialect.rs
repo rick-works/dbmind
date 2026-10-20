@@ -504,6 +504,10 @@ impl Dialect {
         match self.key() {
             // T-SQL 的行值构造器单语句上限 1000 行（解析器硬限制，与 INSERT 同一条规矩）
             "sqlserver" => 1000,
+            // Oracle/DM 的 MERGE 源会把每一行展开成 `select … from dual`，再拼成
+            // UNION ALL。页大小（5 万）直接作为分支数会让解析器/表达式上限先于
+            // 数据量爆炸；500 行与旧 INSERT 路径的保守批大小一致。
+            "oracle" | "dm" => 500,
             _ => usize::MAX,
         }
     }
@@ -2717,13 +2721,13 @@ _ => Meta::Unwritten,
                     .to_string(),
             ),
             "postgresql" | "kingbase" => Meta::Sql(
-                "select indexname as name, tablename as \"table\", indexdef \
+                "select schemaname as schema, indexname as name, tablename as \"table\", indexdef \
                  from pg_indexes where schemaname not in ('pg_catalog','information_schema') \
                  order by tablename, indexname"
                     .to_string(),
             ),
             "sqlserver" => Meta::Sql(
-                "select i.name as name, o.name as \"table\", i.is_unique as isUnique, \
+                "select schema_name(o.schema_id) as schema, i.name as name, o.name as \"table\", i.is_unique as isUnique, \
                  stuff((select ',' + c.name from sys.index_columns ic \
                   join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id \
                   where ic.object_id = i.object_id and ic.index_id = i.index_id and ic.key_ordinal > 0 \
@@ -5182,6 +5186,14 @@ mod tests {
         let db2 = upsert(ConnectionKind::Db2).expect("db2 必须支持原生 upsert");
         assert!(db2.starts_with("merge into t as tgt using (values "));
         assert!(!db2.ends_with(';'), "DB2 不该拼分号（它不接受语句尾分号）");
+    }
+
+    #[test]
+    fn oracle与dm原生upsert必须限制单语句行数() {
+        assert_eq!(Dialect::new(ConnectionKind::Oracle).upsert_row_limit(), 500);
+        assert_eq!(Dialect::new(ConnectionKind::Dm).upsert_row_limit(), 500);
+        assert_eq!(Dialect::new(ConnectionKind::Sqlserver).upsert_row_limit(), 1000);
+        assert_eq!(Dialect::new(ConnectionKind::Postgresql).upsert_row_limit(), usize::MAX);
     }
 
     #[test]

@@ -113,6 +113,23 @@ pub async fn require_record(state: &AppState, id: &str) -> XResult<ConnectionRec
     blocking(move || engine.require_connection(&id)).await
 }
 
+/// 数据传输/对比的连接能力闸门。
+///
+/// manifest 里的 `dataTransfer` 是产品能力声明，不是提示文案：SQL 引擎无法
+/// 直接搬运 MongoDB 文档、Redis 键值或 Elasticsearch 文档。界面会隐藏这些
+/// 连接，API 也必须拒绝，避免请求落到 SQL 拼装路径后报一个看似“语法错误”的错。
+pub(crate) fn ensure_data_transfer(record: &ConnectionRecord) -> XResult<()> {
+    if record.kind().capabilities().data_transfer {
+        Ok(())
+    } else {
+        Err(XError::bad_request(format!(
+            "连接「{}」的类型 {} 暂不支持数据传输/数据对比",
+            record.config.name,
+            record.kind().label()
+        )))
+    }
+}
+
 /// 查询串解析。
 ///
 /// 不用 `serde_urlencoded` 的理由：上游会在 `getTableCounts` 里发**数组参数**

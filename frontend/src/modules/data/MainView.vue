@@ -903,10 +903,13 @@
           <!-- 数据对比 / 数据传输：直接复用顶栏那两个入口 —— 它们吃的是「当前连接 + 当前库」，
                所以先把当前库切到这个库，源就自动是它（用户要的「从哪个库右击就选中哪个」）。
                文案沿用顶栏的 nav.compare / nav.sync，两处字一模一样。 -->
-          <li class="ctx-item" @click="dbCtxCompare()">
+          <!-- 只对「能当传输源/目标」的连接摆这两项：后端 capabilities.dataTransfer 为 false
+               的类型（SQLite / H2 / Derby / DuckDB）调 /api/sync、/api/compare 直接 400，
+               对话框里也会把这类连接过滤掉 —— 菜单留着只会点出一个空下拉。 -->
+          <li v-if="canTransferConn(treeCtxMenu.data?.connId)" class="ctx-item" @click="dbCtxCompare()">
             <el-icon><Operation /></el-icon>{{ $t('nav.compare') }}
           </li>
-          <li class="ctx-item" @click="dbCtxSync()">
+          <li v-if="canTransferConn(treeCtxMenu.data?.connId)" class="ctx-item" @click="dbCtxSync()">
             <el-icon><Switch /></el-icon>{{ $t('nav.sync') }}
           </li>
           <li class="ctx-item" @click="openBackupRestore('backup', treeCtxMenu.data?.connId, treeCtxMenu.data?.db || treeCtxMenu.data?.label)">
@@ -2369,6 +2372,17 @@ const isNoSql = computed(() => isNoSqlType(conn.value?.type))
 const isNoSqlConn = (connId) => {
   const c = allConnections.value.find(x => String(x.id) === String(connId))
   return c ? isNoSqlType(c.type) : false
+}
+
+// 「数据对比 / 数据传输」只对能当传输源或目标的连接开放。
+// 后端 capabilities.dataTransfer 为 false 的类型（SQLite / H2 / Derby / DuckDB）调
+// /api/sync、/api/compare 会被 400 挡下，两个对话框也会把它们过滤掉 ——
+// 右键菜单若照旧摆着这两项，点进去源/目标下拉都是空的，纯属误导。
+const canTransferConn = (connId) => {
+  const c = allConnections.value.find(x => String(x.id) === String(connId))
+  // 拿不到连接（列表还没回来）/ 旧内核没有这个字段：一律按「支持」处理，
+  // 保持改动前的行为 —— 这里只在明确声明 dataTransfer === false 时才收紧。
+  return !c || c.dataTransfer !== false
 }
 
 // ====== 多连接并开：连接各自维护「当前库 / 库列表」缓存 ======

@@ -525,6 +525,9 @@ pub fn connection_json(record: &ConnectionRecord) -> Value {
         "id": record.id,
         "name": config.name,
         "type": type_code(record.kind()),
+        // 同步/对比对话框直接用它过滤连接；NoSQL 尚未实现专用 Reader/Writer，
+        // 不能只是“看起来可选、点开始才失败”。
+        "dataTransfer": record.kind().capabilities().data_transfer,
         "host": config.host.clone().unwrap_or_default(),
         "port": config.port,
         "database": config.database.clone().unwrap_or_default(),

@@ -53,6 +53,7 @@ pub struct SqlWriter {
     tgt_target: String,
     scope: String,
     target_name: String,
+    target_table: String,
     table: String,
     /// 目标侧列名（写入只用这个；源列名留给 reader）
     target_columns: Vec<String>,
@@ -94,6 +95,7 @@ impl SqlWriter {
             tgt_target: plan.tgt_target.clone(),
             scope: plan.tgt_scope.clone(),
             target_name: plan.target_name.clone(),
+            target_table: plan.target_table.clone(),
             table: plan.table.clone(),
             target_columns: plan.target_columns.clone(),
             target_types: plan.target_types.clone(),
@@ -165,6 +167,11 @@ impl Writer for SqlWriter {
 
     fn write<'a>(&'a self, worker: usize, rows: &'a [Vec<CellValue>]) -> BF<'a, Result<u64, String>> {
         Box::pin(async move {
+            let in_transaction = self
+                .txn_open
+                .get(worker)
+                .map(|open| open.load(Ordering::SeqCst))
+                .unwrap_or(false);
             // ---- 原生 upsert：一条语句搞定「插入或更新」----
             // 不再需要「先把目标全表主键拉进内存 → 命中的逐行 UPDATE」那两步：
             // 那两步在大表上是纯开销（目标主键全量跨网 + 每行一次更新）。
@@ -182,6 +189,7 @@ impl Writer for SqlWriter {
                     self.identity_on,
                     self.task.as_ref(),
                     &self.table,
+                    in_transaction,
                 )
                 .await;
             }
@@ -217,7 +225,7 @@ impl Writer for SqlWriter {
                             &stream.user,
                             &stream.pass,
                             &self.scope,
-                            &self.table,
+                            &self.target_table,
                             &self.target_columns,
                             &rows[start..end],
                         )
@@ -270,6 +278,7 @@ impl Writer for SqlWriter {
                         self.identity_on,
                         self.task.as_ref(),
                         &self.table,
+                        in_transaction,
                     )
                     .await?;
                     return Ok(loaded_total + rest);
@@ -287,6 +296,7 @@ impl Writer for SqlWriter {
                 self.identity_on,
                 self.task.as_ref(),
                 &self.table,
+                in_transaction,
             )
             .await
         })
@@ -327,10 +337,12 @@ impl Writer for SqlWriter {
                 return write_update_batch(
                     &self.state,
                     &self.tgt_target,
+                    self.kind.kind.key(),
                     &usid,
                     &mut batch,
                     self.task.as_ref(),
                     &self.table,
+                    self.update_txn_open.load(Ordering::SeqCst),
                 )
                 .await;
             }
@@ -386,10 +398,12 @@ impl Writer for SqlWriter {
                 match write_update_batch(
                     &self.state,
                     &self.tgt_target,
+                    self.kind.kind.key(),
                     &usid,
                     &mut batch,
                     self.task.as_ref(),
                     &self.table,
+                    self.update_txn_open.load(Ordering::SeqCst),
                 )
                 .await
                 {
