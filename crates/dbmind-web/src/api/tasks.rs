@@ -353,6 +353,24 @@ impl Task {
     pub fn add_rows_read(&self, n: u64) { *lock(&self.rows_read) += n; }
     pub fn add_rows_written(&self, n: u64) { *lock(&self.rows_written) += n; }
     pub fn add_rows_failed(&self, n: u64) { *lock(&self.rows_failed) += n; }
+    /// 终态对账：把行数**拉回到结果表的真实合计**。
+    ///
+    /// 为什么需要：行数是各条写入路径自己累加的（直拷 / 多值批 / 逐行更新），
+    /// 任何一条路漏记（例如同实例直拷只记了写、没记读），进度卡就和结果表对不上 ——
+    /// 用户看到「17 张表同步完成，读取 0 / 传输 0，结果表里却有 +48 行」。
+    /// 这里只增不减，且终态调用一次，运行中的平滑递增不受影响。
+    pub fn set_rows_read_at_least(&self, n: u64) {
+        let mut value = lock(&self.rows_read);
+        if *value < n {
+            *value = n;
+        }
+    }
+    pub fn set_rows_written_at_least(&self, n: u64) {
+        let mut value = lock(&self.rows_written);
+        if *value < n {
+            *value = n;
+        }
+    }
     pub fn rows_read(&self) -> u64 { *lock(&self.rows_read) }
     /// 已写入行数（看门狗判「还有没有进展」用）。
     pub fn rows_written(&self) -> u64 { *lock(&self.rows_written) }

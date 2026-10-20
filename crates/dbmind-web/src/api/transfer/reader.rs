@@ -36,8 +36,9 @@ const SESSION_READ: &str = "internal:sync-r";
 /// 分片不是白给的：每片一条新连接（远端库的建连 + 认证在跨网链路上要几百毫秒到一两秒），
 /// 页小了还要多打几次往返。真机实测（远端 MySQL 20 万行 → 本地 H2）：
 /// 单流 4.8~6.8s，4 片 6.3~7.9s —— 链路是带宽瓶颈时，分片只摊到了「多建 3 条连接」的成本。
-/// 大表（每片 10 万行以上）才是分片的战场：那时建连成本被摊薄，服务端并行扫描才真正生效。
-const MIN_ROWS_PER_SLICE: i64 = 100_000;
+/// 大表才是分片的战场：那时建连成本被摊薄，服务端并行扫描才真正生效。
+/// 门槛从 10 万降到 5 万：50 万行的表原来只能单流，现在 4 片并行（每片 12.5 万行）。
+const MIN_ROWS_PER_SLICE: i64 = 50_000;
 
 /// 分页游标：上一页停在哪。
 #[derive(Clone, Debug, Default)]
@@ -348,6 +349,21 @@ impl Reader for SqlReader {
                 // 小变化不折腾分页；只有明显更宽/更窄时才换档。
                 if next_rows * 2 < page_rows || next_rows > page_rows * 2 {
                     self.page_rows.store(next_rows, Ordering::SeqCst);
+                }
+            }
+
+            // 无键表只能靠 OFFSET 翻页：`limit n offset m` 每次都要重扫前面 m 行，
+            // 固定页大小时总扫描量 ≈ N²/(2·page)（20 万行 2 万/页 = 10 次往返，
+            // 累计重扫 90 万行；百万行级直接变成分钟级）。让页**几何增长**（×2）后，
+            // offset 累计只到约 2N 就结束，总扫描量回到 O(N)，无主键大表从「越跑越慢」
+            // 变成匀速。宽表不翻倍：上面的字节目标已经把它压小了（now < page_rows）。
+            if self.paging_keys.is_empty() {
+                let now = self.page_rows_now();
+                if now >= page_rows {
+                    let grown = now.saturating_mul(2).min(PAGE_ROWS_MAX);
+                    if grown > now {
+                        self.page_rows.store(grown, Ordering::SeqCst);
+                    }
                 }
             }
 

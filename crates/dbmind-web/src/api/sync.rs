@@ -3268,6 +3268,9 @@ async fn sync_table_inner(
                 copied = expected_copy.unwrap_or(0);
             }
             if let Some(task) = task {
+                // 直拷也是「读了 N 行、写了 N 行」：只记写会让进度卡出现
+                // 「读取 0 / 传输 48」这种自相矛盾的画面（真机截图）
+                task.add_rows_read(copied);
                 task.add_rows_written(copied);
             }
             // 日志只报「执行到哪一步」—— 行数在进度卡上（rowsWritten 平滑递增），不进日志刷屏
@@ -3394,6 +3397,137 @@ async fn sync_table_inner(
     ObjResult::ok(ty, table, message, inserted, updated)
 }
 
+/// 一侧的「库/模式」名 —— DDL 里做限定前缀时用的那个：显式 schema 优先，
+/// 否则从 scope 拆（`库.模式` 取模式，单段就是库名）。
+fn side_schema_name(kind: &Dialect, scope: &str, schema: &Option<String>) -> Option<String> {
+    if let Some(value) = schema.as_ref().map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        return Some(value.to_string());
+    }
+    let (db, sch) = crate::api::meta::split_db_schema(scope, kind);
+    match sch.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+        Some(schema) => Some(schema),
+        None => Some(db.trim().to_string()).filter(|d| !d.is_empty()),
+    }
+}
+
+/// 只改写「代码段」，字符串字面量与注释原样保留。
+fn map_sql_code(text: &str, f: impl Fn(&str) -> String) -> String {
+    let bytes: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len() + 16);
+    let mut code = String::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let ch = bytes[i];
+        // 字符串字面量：只认 SQL 标准/MySQL 的单引号 `'…'`（`''` 是转义）。
+        // 双引号**不能**当字面量跳过 —— 它在 PG / SQL Server / Oracle 里是标识符，
+        // `"src_db"."t"` 这种库名限定正是要改写的对象（真机：视图定义里带双引号库名时漏改）。
+        if ch == '\'' {
+            out.push_str(&f(&code));
+            code.clear();
+            let quote = ch;
+            out.push(ch);
+            i += 1;
+            while i < bytes.len() {
+                let c = bytes[i];
+                out.push(c);
+                i += 1;
+                if c == quote {
+                    if i < bytes.len() && bytes[i] == quote {
+                        out.push(quote);
+                        i += 1;
+                        continue;
+                    }
+                    break;
+                }
+            }
+            continue;
+        }
+        // 行注释：-- 或 #
+        if ch == '#' || (ch == '-' && i + 1 < bytes.len() && bytes[i + 1] == '-') {
+            out.push_str(&f(&code));
+            code.clear();
+            while i < bytes.len() {
+                let c = bytes[i];
+                out.push(c);
+                i += 1;
+                if c == '\n' {
+                    break;
+                }
+            }
+            continue;
+        }
+        // 块注释
+        if ch == '/' && i + 1 < bytes.len() && bytes[i + 1] == '*' {
+            out.push_str(&f(&code));
+            code.clear();
+            while i < bytes.len() {
+                let c = bytes[i];
+                out.push(c);
+                i += 1;
+                if c == '*' && i < bytes.len() && bytes[i] == '/' {
+                    out.push('/');
+                    i += 1;
+                    break;
+                }
+            }
+            continue;
+        }
+        code.push(ch);
+        i += 1;
+    }
+    out.push_str(&f(&code));
+    out
+}
+
+/// 把源库里取到的 `CREATE VIEW / PROCEDURE / TRIGGER / EVENT` 定义改写到目标库。
+///
+/// 真机踩到的两个坑（整库同步时视图全挂，日志只留一句「建视图失败」）：
+/// 1. **顺序**：视图在表还没建出来的时候就执行了 —— 由调用方保证（见 `db()` 里的
+///    `tables_finished` 闸门）。
+/// 2. **库名限定**：定义里带着源库名（`dmx_hk_src`.`t_department`），目标库叫别的名字时
+///    直接 `Table 'dmx_hk_src.t_department' doesn't exist`；此外 MySQL 的定义带
+///    `DEFINER=`u`@`h``，换台机器那个账号往往不存在，会报 SUPER 权限不足。
+///    这里把库名换成目标库、并去掉 DEFINER 子句（换库/换实例时它没有任何意义）。
+fn rewrite_definition(
+    definition: &str,
+    src_db: Option<&str>,
+    tgt_db: Option<&str>,
+    strip_definer: bool,
+) -> String {
+    let mut text = definition.to_string();
+    if strip_definer {
+        // DEFINER=`user`@`host` —— **必须连 @host 一起吃掉**：只抹掉 `user` 会留下
+        // `@`%` SQL SECURITY DEFINER VIEW …` 这种残句，MySQL 直接语法错
+        //（真机：整库同步所有视图一起挂，报错还指在 `@`%`` 上，很难看出是这里）。
+        let ident = r#"(?:`(?:[^`]|``)*`|'(?:[^']|'')*'|"[^"]*"|[^\s@]+)"#;
+        let re = regex::Regex::new(&format!(r#"(?i)\bDEFINER\s*=\s*{ident}(?:\s*@\s*{ident})?\s*"#)).unwrap();
+        text = re.replace_all(&text, "").into_owned();
+    }
+    let (Some(from), Some(to)) = (src_db, tgt_db) else {
+        return text;
+    };
+    if from.eq_ignore_ascii_case(to) || from.is_empty() || to.is_empty() {
+        return text;
+    }
+    let from_q = format!("`{}`", from);
+    let to_q = format!("`{}`", to);
+    let from_dq = format!("\"{}\"", from);
+    let to_dq = format!("\"{}\"", to);
+    let from_br = format!("[{}]", from);
+    let to_br = format!("[{}]", to);
+    // 裸 `库名.`（前面不能紧贴标识符字符，避免改到 `my_dmx_hk_src.x` 这类名字里）
+    let bare = regex::Regex::new(&format!(
+        r#"(?i)(^|[^A-Za-z0-9_$`"\[\]]){}\."#,
+        regex::escape(from)
+    ))
+    .unwrap();
+    let bare_to = format!("${{1}}{}.", to);
+    map_sql_code(&text, |code| {
+        let code = code.replace(&from_q, &to_q).replace(&from_dq, &to_dq).replace(&from_br, &to_br);
+        bare.replace_all(&code, bare_to.as_str()).into_owned()
+    })
+}
+
 /// 视图：只有能拿到完整 `CREATE VIEW` 的类型才同步（见文件头决定 4）。
 async fn sync_view(
     state: &AppState,
@@ -3441,6 +3575,15 @@ async fn sync_view(
             Ok(record) => record.kind(),
             Err(err) => return ObjResult::failed("view", name, err.message),
         },
+    );
+    // 定义里带源库名 / DEFINER，原样拿到目标执行会失败（见 rewrite_definition 的注释）
+    let src_db = side_schema_name(&source_kind, &src.scope, &src.schema);
+    let tgt_db = side_schema_name(&target_kind, &tgt.scope, &tgt.schema);
+    let definition = rewrite_definition(
+        &definition,
+        src_db.as_deref(),
+        tgt_db.as_deref(),
+        matches!(source_kind.kind.key(), "mysql" | "mariadb"),
     );
     let target_name = target_kind.quote(name);
     let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
@@ -3520,6 +3663,12 @@ async fn sync_object_source(
         Ok(record) => Dialect::new(record.kind()),
         Err(err) => return ObjResult::failed(kind, name, err.message),
     };
+    let definition = rewrite_definition(
+        &definition,
+        side_schema_name(&source_kind, &src.scope, &src.schema).as_deref(),
+        side_schema_name(&target_kind, &tgt.scope, &tgt.schema).as_deref(),
+        matches!(source_kind.kind.key(), "mysql" | "mariadb"),
+    );
     let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
         Ok(target) => target,
         Err(err) => return ObjResult::failed(kind, name, format!("解析目标连接失败：{}", err.message)),
@@ -3705,10 +3854,22 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         }
         let by_kind = match target_kind_key {
             "doris" => 3,
-            "oracle" | "dm" | "db2" => 2,
-            _ => 4,
+            "oracle" | "dm" | "db2" => 3,
+            // 网络型库（MySQL/PG/SQL Server/ClickHouse…）：**对象级**并发拉到 8。
+            // 这里管的是「同时同步几张表」，不是「一张表开几条写连接」—— 跟表数据量无关。
+            // 真实场景几乎都是「几十张小表」（均值一两万行），4 张表串成 12 轮，
+            // 每轮都要重付建表/探测/建连的固定开销，吞吐被固定成本吃掉（真机：48 张表
+            // 80 万行 4 分钟 ≈ 3.2k 行/秒）。8 张同时跑，固定成本摊掉一半。
+            _ => 8,
         };
-        by_kind.min(objects).max(1)
+        // 逃生阀 / 调优开关：DBMIND_SYNC_OBJECTS=n 直接压过上面的自适应值。
+        // 大机器想再压一压、或者库里连接数吃紧想退回去，都不用改代码重编。
+        let wanted = std::env::var("DBMIND_SYNC_OBJECTS")
+            .ok()
+            .and_then(|text| text.trim().parse::<usize>().ok())
+            .filter(|n| *n >= 1)
+            .unwrap_or(by_kind);
+        wanted.min(objects).max(1)
     }
     // catalog 方言（Doris）的表名要带 `catalog.库` 全限定（见 Side::scoped）
     let src = Side {
@@ -3731,10 +3892,15 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     // 两阶段 upsert 每张表还要一条专属会话做目标键查询/逐行更新。没有原生
     // upsert 的目标要把它算进预算，否则对象并发 × (writer + lookup) 会翻倍。
     let native_upsert = target_kind.supports_native_upsert();
+    // 对象级预算 = 「同时几张表」的上限。方言声明的 4 是**每表**写并发的甜点值，
+    // 不是整任务的连接上限：几十张小表并行时 8 张同时跑（8 条写 + 8 条读）对
+    // MySQL/PG 这类网络库完全正常，比 4 张串 12 轮快得多（见 adaptive_concurrency）。
+    let object_budget = target_declared.max(8);
     let target_object_cap = if native_upsert {
-        target_declared
+        object_budget
     } else {
-        (target_declared / 2).max(1)
+        // 两阶段 upsert 每张表还要一条专属会话做键查询，预算对半分
+        (object_budget / 2).max(1)
     };
     // 对象并发同时受源端和目标端约束。
     let sync_concurrency = adaptive_concurrency(target_kind.kind, total)
@@ -3756,6 +3922,14 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         let opts = opts.clone();
         async move {
             task.set_total(total as i64);
+            // 表与依赖表对象的数量：决定要不要等闸门（见下面的 tables_done）
+            let table_count = objects.iter().filter(|(kind, _)| kind == "table").count();
+            if table_count > 0 && total > table_count {
+                task.log(format!(
+                    "表先跑：{table_count} 张表全部完成后，再同步 {} 个视图/例程/触发器/事件（它们依赖表）",
+                    total - table_count
+                ));
+            }
             // 会话预算写进日志：用户能直接看出「这次会开几条连接」，出问题也好对照
             task.log(format!(
                 "会话预算：并发 {sync_concurrency} 张表，每表最多 {} 路写 / {} 片读（整任务上限 = 方言声明值 {}）",
@@ -3781,6 +3955,14 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 0u64, 0u64, 0u64, 0u64, 0u64,
             )));
             let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(sync_concurrency));
+            // ---- 依赖表的对象要等**所有表**跑完再跑 ----
+            // 原来 48 张表和视图/存储过程混在一个并发池里，视图几乎总是抢在表前面：
+            // 定义里引用的表还没建出来，直接就 `Table 'dmx_hk_src.t_department' doesn't exist`
+            //（真机截图）。触发器更糟 —— 抢在灌数据之前建好，搬数据时会被真的触发，数据被二次加工。
+            // 所以：非表对象先等这个闸门（表全跑完 = 建完 + 数据搬完），再抢并发许可。
+            // 注意**不能**先拿许可再等 —— 那会让许可都堵在等闸门的视图手里，表反而开不了工。
+            let (tables_done_tx, tables_done_rx) = tokio::sync::watch::channel(table_count == 0);
+            let tables_left = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(table_count));
             let mut handles = Vec::new();
             for (index, (kind, name)) in objects.iter().enumerate() {
                 let state = state.clone();
@@ -3793,15 +3975,38 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 let slot = slots[index].clone();
                 let counters = counters.clone();
                 let sem = sem.clone();
+                let tables_done_rx = tables_done_rx.clone();
+                let tables_done_tx = tables_done_tx.clone();
+                let tables_left = tables_left.clone();
                 handles.push(tokio::spawn(async move {
+                    let is_table = kind == "table";
                     // 遇错停止 / 取消：还没开跑的对象不再执行（已开跑的照常跑完当前页）
                     let blocked = task.is_canceled()
                         || (opts.stop_on_error && {
                             let (_, _, errors, _, _) = *counters.lock().unwrap();
                             errors > 0
                         });
+                    // 非表对象：等所有表收尾（取消/遇错停止时不白等，下面 blocked 会直接返回）
+                    if !is_table && !blocked && !*tables_done_rx.borrow() {
+                        let mut rx = tables_done_rx.clone();
+                        let _ = tokio::time::timeout(
+                            std::time::Duration::from_secs(6 * 3600),
+                            rx.wait_for(|done| *done),
+                        )
+                        .await;
+                    }
+                    // 表跑完了（含失败/跳过）就给闸门放行 —— 两个出口都要记
+                    let release_gate = |left: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+                                        tx: &tokio::sync::watch::Sender<bool>| {
+                        if left.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+                            let _ = tx.send(true);
+                        }
+                    };
                     let permit = tokio::time::timeout(PIPE_WAIT, sem.acquire_owned()).await.ok().and_then(|r| r.ok());
                     if blocked {
+                        if is_table {
+                            release_gate(&tables_left, &tables_done_tx);
+                        }
                         if task.is_canceled() {
                             *slot.lock().unwrap() = Some(json!({
                                 "type": kind, "name": name, "status": "canceled",
@@ -3856,13 +4061,72 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     }
                     *slot.lock().unwrap() = Some(outcome.to_json());
                     task.add_done(1);
+                    if is_table {
+                        release_gate(&tables_left, &tables_done_tx);
+                    }
                     drop(permit);
                 }));
             }
             for handle in handles {
                 let _ = tokio::time::timeout(PIPE_WAIT, handle).await;
             }
+            // ---- 视图之间也可能互相引用：首轮没建成的，串行重试一轮 ----
+            // 表已经全部建好，剩下的依赖只可能来自**别的视图**（v2 建在 v1 上）。
+            // 并发首轮里 v1 可能还没建出来，v2 先执行就必然 `Table 'db.v1' doesn't exist`
+            //（真机必现，概率取决于谁先抢到连接）。串行重试让「被依赖的先成功」逐步收敛。
+            if !task.is_canceled() {
+                let failed_views: Vec<usize> = objects
+                    .iter()
+                    .enumerate()
+                    .filter(|(index, (kind, _))| {
+                        kind == "view"
+                            && slots[*index]
+                                .lock()
+                                .map(|slot| {
+                                    slot.as_ref()
+                                        .and_then(|value| value.get("status"))
+                                        .and_then(Value::as_str)
+                                        == Some("error")
+                                })
+                                .unwrap_or(false)
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                if !failed_views.is_empty() {
+                    task.log(format!(
+                        "视图依赖：{} 个视图首轮未建成，等其它视图建好后串行重试",
+                        failed_views.len()
+                    ));
+                    for index in failed_views {
+                        let name = objects[index].1.clone();
+                        let outcome = sync_view(&state, &src, &tgt, &name, &opts).await;
+                        if outcome.status == "error" {
+                            continue;
+                        }
+                        *slots[index].lock().unwrap() = Some(outcome.to_json());
+                        {
+                            let mut c = counters.lock().unwrap();
+                            if outcome.status == "skipped" {
+                                c.1 += 1;
+                            } else {
+                                c.0 += 1;
+                            }
+                            c.2 = c.2.saturating_sub(1);
+                        }
+                        task.log(format!("视图 {name}：重试成功（{}）", outcome.message));
+                    }
+                }
+            }
             let (ok, skipped, errors, inserted, updated) = *counters.lock().unwrap();
+            // 终态对账：进度卡的「读取 / 传输」必须 ≥ 结果表的新增+更新合计。
+            // 各条写入路径各行其是（同实例直拷、多值批、逐行 update），漏记一次就会出现
+            // 「读取 0 / 传输 0，结果表里却写着 +48 行」这种自相矛盾的收尾（真机截图）。
+            // 只增不减：运行中的平滑递增与真实速率不受影响，取消的任务也不改。
+            if !task.is_canceled() {
+                let rows = inserted + updated;
+                task.set_rows_written_at_least(rows);
+                task.set_rows_read_at_least(rows);
+            }
             let results: Vec<Value> = slots
                 .iter()
                 .filter_map(|slot| slot.lock().unwrap().take())
@@ -4037,5 +4301,46 @@ mod prepared_batch_tests {
             literal_for(&CellValue::Decimal("0".into()), pg, Some("boolean")),
             "false"
         );
+    }
+}
+
+#[cfg(test)]
+mod definition_tests {
+    use super::*;
+
+    /// MySQL 的 `SHOW CREATE VIEW` 一定带 `DEFINER=`u`@`h``，换机器同步时那个账号不存在。
+    /// 曾经只抹掉了 `u`，留下 `@`h` SQL SECURITY DEFINER VIEW …` —— 语法错（真机）。
+    #[test]
+    fn 去掉整套_definer() {
+        let src = "CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`%` SQL SECURITY DEFINER VIEW `v` AS select 1";
+        let out = rewrite_definition(src, None, None, true);
+        assert!(!out.contains("DEFINER="), "DEFINER 子句没抹掉: {out}");
+        assert!(!out.contains("@`%`"), "host 没被一起抹掉: {out}");
+        assert!(out.starts_with("CREATE ALGORITHM=UNDEFINED SQL SECURITY"), "{out}");
+    }
+
+    #[test]
+    fn 库名限定改写到目标库() {
+        let src = "CREATE VIEW `v` AS select `id` from `src_db`.`t` join \"src_db\".\"x\" on 1=1";
+        let out = rewrite_definition(src, Some("src_db"), Some("tgt_db"), true);
+        assert!(out.contains("`tgt_db`.`t`"), "{out}");
+        assert!(out.contains("\"tgt_db\".\"x\""), "{out}");
+        assert!(!out.contains("src_db"), "{out}");
+    }
+
+    #[test]
+    fn 裸库名前缀也改写但不动字面量() {
+        let src = "CREATE VIEW v AS select * from src_db.t where t.name = 'src_db.t'";
+        let out = rewrite_definition(src, Some("src_db"), Some("tgt_db"), true);
+        assert!(out.contains("from tgt_db.t"), "{out}");
+        // 字符串字面量里的内容不能被改
+        assert!(out.contains("'src_db.t'"), "字面量被误改: {out}");
+    }
+
+    /// 库名相同时一个字都不动（同库同名同步是绝大多数场景）
+    #[test]
+    fn 同名库不改写() {
+        let src = "CREATE VIEW v AS select * from demo.t";
+        assert_eq!(rewrite_definition(src, Some("demo"), Some("demo"), true), src);
     }
 }
