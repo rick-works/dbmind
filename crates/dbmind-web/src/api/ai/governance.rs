@@ -32,7 +32,7 @@ use serde_json::{json, Value};
 use crate::api::ai::tools::{columns_of, tables_of};
 use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
-use crate::api::meta::{rows_of, run_sql_in_background};
+use crate::api::meta::{rows_of, run_sql_in_background, text_ci};
 use crate::api::require_record;
 use crate::AppState;
 
@@ -311,17 +311,10 @@ async fn table_comments(
         return out;
     };
     for row in rows_of(&result) {
-        let name = row
-            .get("column_name")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        let comment = row
-            .get("comment")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim()
-            .to_string();
+        // 列名大小写不敏感：Oracle / DM 回来的是 `COLUMN_NAME` / `COMMENT`，
+        // 精确取键会让整份注释变成空表（敏感字段识别退化到只看字段名）。
+        let name = text_ci(&row, "column_name").trim().to_ascii_lowercase();
+        let comment = text_ci(&row, "comment").trim().to_string();
         if !name.is_empty() && !comment.is_empty() {
             out.insert(name, comment);
         }
@@ -369,13 +362,23 @@ fn capacity_sql(kind: &str) -> Option<&'static str> {
                     on ep.major_id = t.object_id and ep.minor_id = 0 and ep.name = 'MS_Description'",
         ),
         "oracle" | "dm" => Some(
+            // `as comment` 在 Oracle 里是关键字，必须加双引号（否则 ORA-00923，
+            // 整条容量查询失败 ⇒ 容量排行一张表都没有）
             "select table_name as t, coalesce(num_rows, 0) as num_rows, \
              coalesce((select sum(bytes) from user_segments s where s.segment_name = u.table_name), 0) as bytes, \
-             '' as comment from user_tables u",
+             '' as \"comment\" from user_tables u",
         ),
         // 文件型 / 嵌入式库没有「表占用空间」的口径：如实说没有，而不是编一个 0
         _ => None,
     }
+}
+
+/// 大小写不敏感地取一个数值字段（Oracle 回来的列名是全大写 `NUM_ROWS` / `BYTES`）。
+fn num_ci(row: &serde_json::Map<String, Value>, key: &str) -> i64 {
+    row.iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case(key))
+        .and_then(|(_, v)| crate::api::shape::value_to_i64(v))
+        .unwrap_or(0)
 }
 
 fn human_bytes(bytes: i64) -> String {
@@ -407,21 +410,15 @@ pub async fn capacity(
             Ok(result) => {
                 size_supported = true;
                 for row in rows_of(&result) {
-                    let table = row
-                        .get("t")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
+                    // 取键一律大小写不敏感：Oracle 回来的是 `T` / `NUM_ROWS` / `BYTES`，
+                    // 精确匹配会让容量排行整表变 0、注释全空。
+                    let table = text_ci(&row, "t").trim().to_string();
                     if table.is_empty() {
                         continue;
                     }
-                    let rows = row.get("num_rows").and_then(|v| crate::api::shape::value_to_i64(v)).unwrap_or(0);
-                    let bytes = row.get("bytes").and_then(|v| crate::api::shape::value_to_i64(v)).unwrap_or(0);
-                    let comment = row
-                        .get("comment")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
+                    let rows = num_ci(&row, "num_rows");
+                    let bytes = num_ci(&row, "bytes");
+                    let comment = text_ci(&row, "comment").trim().to_string();
                     stats.push(json!({
                         "table": table,
                         "rows": rows,

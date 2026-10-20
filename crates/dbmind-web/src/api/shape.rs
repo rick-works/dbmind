@@ -794,9 +794,14 @@ pub fn merge_table_options(payload: &mut Value, rows: &[serde_json::Map<String, 
     let mut options: std::collections::HashMap<String, serde_json::Map<String, Value>> =
         std::collections::HashMap::new();
     for row in rows {
+        // 配对的列名**必须大小写不敏感**：H2 / Oracle / DB2 的元数据视图回来的是
+        // `TABLE_NAME`（DB2 的 `tabname as table_name` 也被折成大写），原样 `get("table_name")`
+        // 只有小写列名的方言（MySQL / PG / ClickHouse）能命中 —— 其余方言整行被 continue 跳过，
+        // 症状正是「表注释改完保存成功、重开又是空的」（真机实测 H2 / Oracle / DB2 三条全中）。
         let name = row
-            .get("table_name")
-            .and_then(Value::as_str)
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case("table_name"))
+            .and_then(|(_, value)| value.as_str())
             .unwrap_or("")
             .trim()
             .to_ascii_lowercase();
@@ -864,6 +869,22 @@ mod table_option_tests {
         // 空串不写：界面据此留空，而不是被一个空字符串顶掉默认值
         assert!(list[1].get("comment").is_none());
         assert_eq!(list[1]["engine"], json!("InnoDB"));
+    }
+
+    /// H2 / Oracle / DB2 回来的列名是**大写**（`TABLE_NAME` / `COMMENT`）：
+    /// 大小写敏感的取值会让整行被跳过，表注释于是永远补不进去（保存成功、重开仍空）。
+    #[test]
+    fn 表选项并入认大写列名() {
+        let mut payload = json!([{ "name": "demo_t" }, { "name": "bench_src" }]);
+        let rows = vec![
+            row(&[("TABLE_NAME", "DEMO_T"), ("COMMENT", "1111111111111")]),
+            row(&[("TABLE_NAME", "BENCH_SRC"), ("REMARKS", "x")]),
+        ];
+        merge_table_options(&mut payload, &rows);
+        let list = payload.as_array().unwrap();
+        assert_eq!(list[0]["comment"], json!("1111111111111"));
+        // `REMARKS` 不是已知的表选项键 —— 不能因为大小写不敏感就漏进接口
+        assert!(list[1].get("REMARKS").is_none() && list[1].get("remarks").is_none());
     }
 
     /// 不是数组 / 行里没有 `table_name` 时都要**原样放过**，不能让清单本身挂掉。

@@ -2653,13 +2653,34 @@ _ => Meta::Unwritten,
                  from pg_class c join pg_namespace n on n.oid = c.relnamespace \
                  where n.nspname = {db} and c.relkind in ('r','p')"
             )),
-            // Oracle / DM：估算行数（num_rows，统计信息）、表空间、最近 ANALYZE 时间、注释。
-            // 注意：原句只查 user_tab_comments，注释里 join 一下 user_tables 才能带出这些列
-            "oracle" | "dm" => Meta::Sql(
-                "select t.table_name as table_name, to_char(t.num_rows) as rows, \
+            // Oracle：估算行数（num_rows，统计信息）、表空间、最近 ANALYZE 时间、注释。
+            //
+            // **别名 `rows` / `comment` 必须带双引号**：Oracle 里两者都是关键字，写 `as rows`
+            // 直接报 ORA-00923（未找到要求的 FROM 关键字）—— 整条查询失败，上层是
+            // `if let Ok(result)`，于是错误被静默吞掉，症状就是「表注释改完保存成功、重开还是空」
+            // （真机 SYSTEM 实测：`select 1 as rows from dual` 都过不去）。旁边的
+            // `tables_in_schema` 早就给 `"rows"` / `"comment"` 加了引号，这条漏了。
+            //
+            // 另外把 owner 从「当前用户」改成**调用方给的模式名**：这层是模式级清单，
+            // 用 user_tables 只看得见连接账号自己的表 —— 浏览别人的模式时注释永远空。
+            // 给的值在 all_users 里查不到（例如传的是服务名 FREEPDB1）时退回当前模式。
+            "oracle" => Meta::Sql(format!(
+                "select t.table_name as table_name, to_char(t.num_rows) as \"rows\", \
                  t.tablespace_name as tablespace, \
                  to_char(t.last_analyzed, 'yyyy-mm-dd hh24:mi:ss') as lastAnalyzed, \
-                 coalesce(c.comments, '') as comment \
+                 coalesce(c.comments, '') as \"comment\" \
+                 from all_tables t \
+                 left join all_tab_comments c on c.owner = t.owner and c.table_name = t.table_name \
+                 where t.owner = coalesce((select username from all_users where username = {db}), \
+                   sys_context('USERENV', 'CURRENT_SCHEMA'))"
+            )),
+            // DM：同一套数据字典（user_tables / user_tab_comments），别名同样加引号，
+            // 但 owner 维持「当前用户」—— 达梦没有可验证的实例，不动它的语义。
+            "dm" => Meta::Sql(
+                "select t.table_name as table_name, to_char(t.num_rows) as \"rows\", \
+                 t.tablespace_name as tablespace, \
+                 to_char(t.last_analyzed, 'yyyy-mm-dd hh24:mi:ss') as lastAnalyzed, \
+                 coalesce(c.comments, '') as \"comment\" \
                  from user_tables t \
                  left join user_tab_comments c on c.table_name = t.table_name"
                     .to_string(),
@@ -2726,8 +2747,11 @@ _ => Meta::Unwritten,
                  order by tablename, indexname"
                     .to_string(),
             ),
+            // 别名 `schema` 必须加双引号：SCHEMA 是 T-SQL 的保留字，写 `as schema` 直接
+            // `Incorrect syntax near the keyword 'schema'` —— 整条索引查询 500，
+            // 「索引」页签永远是空的（巡检实测）。
             "sqlserver" => Meta::Sql(
-                "select schema_name(o.schema_id) as schema, i.name as name, o.name as \"table\", i.is_unique as isUnique, \
+                "select schema_name(o.schema_id) as \"schema\", i.name as name, o.name as \"table\", i.is_unique as isUnique, \
                  stuff((select ',' + c.name from sys.index_columns ic \
                   join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id \
                   where ic.object_id = i.object_id and ic.index_id = i.index_id and ic.key_ordinal > 0 \
@@ -4039,23 +4063,31 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                  left join sys.extended_properties ep on ep.major_id = c.object_id and ep.minor_id = c.column_id \
                  where c.object_id = object_id({quoted})"
             )),
+            // `as comment` 在 Oracle 里是**关键字**，不加双引号直接 ORA-00923
+            // （整条查询失败 ⇒ 列注释永远为空，看着就是「改完注释没回显」）
             "oracle" | "dm" => Meta::Sql(format!(
-                "select column_name as column_name, coalesce(comments, '') as comment \
+                "select column_name as column_name, coalesce(comments, '') as \"comment\" \
                  from user_col_comments where table_name = upper({quoted})"
             )),
+            // 表名**双向折大写**再比：H2 把未加引号的标识符存成大写，而带引号建的表
+            // （`"my_table"`）就是小写 —— 只写 `table_name = upper(...)` 时后者一行都匹配不上。
             "h2" => Meta::Sql(format!(
                 "select column_name as column_name, coalesce(remarks, '') as comment \
                  from information_schema.columns \
-                 where table_name = upper({quoted})"
+                 where upper(table_name) = upper({quoted})"
             )),
             "clickhouse" => Meta::Sql(format!(
                 "select name as column_name, coalesce(comment, '') as comment \
                  from system.columns where database = currentDatabase() and table = {quoted}"
             )),
+            // 列注释在 **`syscat.columns.remarks`** 里，不是 `syscat.colcomments`
+            // —— 后者在本机 DB2 11.5 上直接 `SQLCODE=-204（未定义的对象名）`，
+            // 整条查询失败 ⇒ 列注释永远为空（真机实测）。
+            // 表名双向折大写：带引号建的小写表名也要能对上。
             "db2" => Meta::Sql(format!(
                 "select colname as column_name, coalesce(remarks, '') as comment \
-                 from syscat.colcomments \
-                 where tabschema = current schema and tabname = upper({quoted})"
+                 from syscat.columns \
+                 where tabschema = current schema and upper(tabname) = upper({quoted})"
             )),
             // SQLite / Derby 没有列注释这个概念：给 Absent（空数组）而不是报"未实现"，
             // 语句治理那边会退化成按字段名判断，这是事实，不是缺陷
@@ -4146,8 +4178,13 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             )),
             // Oracle：NUMBER 用 precision/scale，字符类型用 data_length（**字节**，
             // 字节语义下 VARCHAR2(50 CHAR) 会显示成 200 —— 如实反映存储宽度，不做猜测换算）。
-            // 自增三路取并：12c+ 的标识列在 `user_tab_identity_cols`，老写法是
-            // 序列 + 默认值 `.nextval`（触发器赋值那种**查不出来**，只能靠默认值）。
+            //
+            // 自增只看 12c+ 的标识列（`user_tab_identity_cols`）。**不能**用
+            // `c.data_default like '%.nextval%'` 认「序列 + 默认值」的老写法：
+            // `data_default` 是 LONG，Oracle 对 LONG 做 LIKE 直接
+            // `ORA-00932（数据类型为 LONG，与预期 CHAR 不兼容）`，整条查询连同
+            // 类型/注释一起失败 —— 症状就是「列注释改完保存成功、界面还是空」
+            // （真机 SYSTEM 实测）。少数用序列默认值的老库因此不显示自增，如实接受。
             "oracle" => Meta::Sql(format!(
                 "select c.column_name as column_name, \
                  case \
@@ -4158,9 +4195,8 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                    else lower(c.data_type) \
                  end as type_text, \
                  coalesce((select cc.comments from user_col_comments cc \
-                           where cc.table_name = c.table_name and cc.column_name = c.column_name), '') as comment, \
-                 case when c.data_default like '%.nextval%' then 1 \
-                      when exists (select 1 from user_tab_identity_cols i \
+                           where cc.table_name = c.table_name and cc.column_name = c.column_name), '') as \"comment\", \
+                 case when exists (select 1 from user_tab_identity_cols i \
                                    where i.table_name = c.table_name and i.column_name = c.column_name) then 1 \
                       else 0 end as is_auto, \
                  c.column_id as ordinal \
@@ -4186,7 +4222,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                  end as type_text, \
                  coalesce((select cc.comments from user_col_comments cc \
                            where cc.table_name = c.table_name \
-                             and cc.column_name = c.column_name), '') as comment \
+                             and cc.column_name = c.column_name), '') as \"comment\" \
                  from user_tab_columns c where c.table_name = upper({quoted})"
             )),
             // SQLite：声明类型原样读回（`varchar(50)` 就在表结构里）。
@@ -4225,9 +4261,11 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                    else lower(data_type) \
                  end as type_text, \
                  coalesce(remarks, '') as comment \
-                 from information_schema.columns where table_name = upper({quoted})"
+                 from information_schema.columns where upper(table_name) = upper({quoted})"
             )),
             // DB2：syscat.columns 的 typename/length/scale
+            // 列注释也要在这里带出来（`remarks`）：表结构页的「注释」列读的是 `/columns`，
+            // 只靠 `table_comments`（SQL 结果表头那条）补不上 —— 编辑表结构时注释格永远是空的。
             "db2" => Meta::Sql(format!(
                 "select colname as column_name, \
                  case \
@@ -4236,9 +4274,10 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                    when rtrim(typename) = 'DECIMAL' \
                      then lower(rtrim(typename)) || '(' || length || ',' || scale || ')' \
                    else lower(rtrim(typename)) \
-                 end as type_text \
+                 end as type_text, \
+                 coalesce(remarks, '') as comment \
                  from syscat.columns \
-                 where tabschema = current schema and tabname = upper({quoted})"
+                 where tabschema = current schema and upper(tabname) = upper({quoted})"
             )),
             // Derby：遗留目录 sys.syscolumns 里 COLUMNDATATYPE 本来就是完整类型文本。
             // （现代 Derby 更推荐 SYSCS_UTIL，但那条要存储过程，读元数据不值当。）
