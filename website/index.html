@@ -746,6 +746,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.42（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.42</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-21</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>整库同步不再把视图、存储过程排到表前面（以前会报 Table doesn't exist，视图整批建失败）</b></li>
+            <li><b>进度卡的「读取 / 传输」不再显示 0（同实例直拷也计入行数，收尾再按结果表对账）</b></li>
+            <li><b>多表同步更快</b>：小表多时最多 8 张表并行（原来 4 张），无主键大表的分页从 O(N²) 降到 O(N)</li>
+            <li><b>索引后置</b>：新建表先灌数据、再建二级索引，百万行级的新表能再省一截时间</li>
+            <li><b>源表的唯一索引在目标端不再被建成普通索引（唯一约束与原表保持一致）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.42" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.42" target="_blank" rel="noopener">下载 v1.2.42</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.41（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +776,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.41</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-21</span>
           </div>
           <ul class="rel-notes">

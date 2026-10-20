@@ -1,5 +1,12 @@
 {
     "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.42": [
+        "Whole-database sync no longer creates views and routines before tables (it used to fail with Table doesn't exist and lose every view)",
+        "The progress card's Read / Transferred counters no longer sit at 0 (same-instance direct copies are counted too, and the totals are reconciled at the end)",
+        "Multi-table sync is faster: up to 8 tables run in parallel when there are many small ones (was 4), and paging a large table without a primary key went from O(N²) to O(N)",
+        "Secondary indexes are now created after the data: a newly built table loads rows first and builds its indexes once at the end, which saves a noticeable chunk on million-row tables",
+        "A unique index on the source table is no longer created as a plain index on the target, so the unique constraints match the original"
+    ],
     "v1.2.41": [
         "Table and column comments no longer come back blank after saving: comment and table-option reads are fixed for H2 / Oracle / DB2 / SQL Server",
         "Changing a column default works on Derby again (only attributes that actually changed are emitted); defaults on Oracle primary-key columns and on SQL Server are supported now",
