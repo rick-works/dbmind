@@ -692,11 +692,25 @@ fn page_sql(
     }
 }
 
+/// 索引创建的时机（见 `sync_table_inner` 的「索引后置」）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IndexFilter {
+    /// 一次建完（不灌数据时用）。
+    All,
+    /// 只建唯一索引 —— 灌数据**之前**建：`replace` / `on duplicate key update` 的去重语义
+    /// 依赖目标端的唯一索引，推迟会让冲突行变成重复行。
+    UniqueOnly,
+    /// 只建非唯一（二级）索引 —— 灌数据**之后**建：批量写入期间不用逐行维护二级 B 树，
+    /// 建索引时也只全表扫一遍（百万行级新建表能省一截）。
+    NonUniqueOnly,
+}
+
 /// 建表后把**源表的非主键索引**搬到目标（「建表包含索引」选项）。
 ///
 /// 索引清单走方言的 `indexes()` 元数据查询（与树上「索引」节点同一份 SQL）。
 /// 宽容策略：查不到清单 / 解析不了列 / 目标方言拒绝某条 CREATE —— 都**静默跳过**
 /// 并计数，不让索引同步反过来挡住数据同步（数据才是主体）。
+#[allow(clippy::too_many_arguments)]
 async fn sync_indexes(
     state: &AppState,
     src: &Side,
@@ -706,6 +720,7 @@ async fn sync_indexes(
     target_name: &str,
     table: &str,
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
+    filter: IndexFilter,
 ) -> usize {
     // 源索引清单，统一成 (名称, 唯一, 列清单)。两条路：
     // - MySQL 系（含 Doris）：`SHOW INDEX FROM 表` —— **必须走这条**，Doris 的
@@ -717,16 +732,24 @@ async fn sync_indexes(
     if mysql_family {
         let show_sql = format!("show index from {}", src.scoped(table, Dialect::new(source_kind.kind.clone())));
         if let Ok(result) = run_sql_in(state, &src.conn, &src.scope, show_sql, 5000).await {
-            // 大小写不敏感取列（有的驱动把列名折成大写）
+            // 大小写不敏感取列（有的驱动把列名折成大写）。
+            // **不能只认 `as_str`**：Non_unique / Seq_in_index 是数字列，宿主把结果集回成
+            // JSON 数字，`as_str()` 直接 None ⇒ 落到下面的 `unwrap_or(1)` ⇒ 所有索引都被
+            // 当成非唯一（真机：源表唯一索引 uk_email 在目标端建成了普通索引，配上
+            // 索引后置还会落错时机）。数字/布尔一律转成字符串。
             let cell = |row: &serde_json::Map<String, Value>, key: &str| -> Option<String> {
-                row.get(key)
-                    .or_else(|| {
-                        row.iter()
-                            .find(|(name, _)| name.eq_ignore_ascii_case(key))
-                            .map(|(_, v)| v)
-                    })
-                    .and_then(Value::as_str)
-                    .map(str::to_string)
+                let value = row.get(key).or_else(|| {
+                    row.iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                        .map(|(_, v)| v)
+                })?;
+                match value {
+                    Value::String(text) => Some(text.clone()),
+                    Value::Number(number) => Some(number.to_string()),
+                    Value::Bool(flag) => Some(if *flag { "1" } else { "0" }.to_string()),
+                    Value::Null => None,
+                    other => Some(other.to_string()),
+                }
             };
             // 聚合：Key_name → (non_unique, [(seq, column)])
             let mut agg: Vec<(String, i64, Vec<(i64, String)>)> = Vec::new();
@@ -751,6 +774,11 @@ async fn sync_indexes(
                 }
             }
             for (name, non_unique, mut cols) in agg {
+                // PRIMARY 不搬：建表语句本来就带主键，再 `create index PRIMARY` 必然失败。
+                // 以前失败是静默的，现在失败会进日志（见下面 `failed`），必须先剔掉这个噪音。
+                if name.eq_ignore_ascii_case("PRIMARY") {
+                    continue;
+                }
                 cols.sort_by_key(|(seq, _)| *seq);
                 indexes.push((name, non_unique == 0, cols.into_iter().map(|(_, c)| c).collect()));
             }
@@ -801,7 +829,19 @@ async fn sync_indexes(
             }
         }
     }
+    // 索引后置：按阶段只建该建的那一半（见 `IndexFilter` 的注释）
+    if filter != IndexFilter::All {
+        let want_unique = filter == IndexFilter::UniqueOnly;
+        indexes.retain(|(_, unique, _)| *unique == want_unique);
+    }
+    if indexes.is_empty() {
+        return 0;
+    }
     let mut created = 0usize;
+    // 建失败的索引：索引后置之后，建索引发生在**灌完数据**之后，大表上这一步本身就要花时间
+    //（也可能撞上 10 分钟的单语句上限）—— 再像以前那样完全不吭声，用户只会看到
+    //「目标表没有索引」却毫无线索。这里汇总成一行日志，不逐条刷屏。
+    let mut failed: Vec<String> = Vec::new();
     for (name, unique, columns) in indexes {
             let idx_name = target_kind.quote(name.as_str());
             let col_list = columns
@@ -824,8 +864,12 @@ async fn sync_indexes(
                 }
                 _ => format!("create {}index {} on {} ({})", unique_kw, idx_name, target_name, col_list),
             };
-            if run_target(state, tgt_target, &idx_sql).await.is_ok() {
-                created += 1;
+            match run_target(state, tgt_target, &idx_sql).await {
+                Ok(_) => created += 1,
+                Err(err) => {
+                    tracing::warn!(table, index = %name, error = %err.message, "创建索引失败（已跳过）");
+                    failed.push(name.clone());
+                }
             }
         }
     if created > 0 {
@@ -833,7 +877,53 @@ async fn sync_indexes(
             task.log(format!("表 {table}：已创建 {created} 个索引"));
         }
     }
+    if !failed.is_empty() {
+        if let Some(task) = task {
+            let shown = failed.iter().take(5).cloned().collect::<Vec<_>>().join("、");
+            let more = if failed.len() > 5 { format!(" 等 {} 个", failed.len()) } else { String::new() };
+            task.log(format!(
+                "表 {table}：{} 个索引未能创建（{shown}{more}）—— 可在目标库手工补建，不影响已同步的数据",
+                failed.len()
+            ));
+        }
+    }
     created
+}
+
+/// 「索引后置」的收尾：数据已经落库（或确定一行都不搬），补建**非唯一**二级索引。
+///
+/// 建表时只先建了唯一索引（见 `IndexFilter`），这里是另一半。`deferred` 为 false 时
+/// 什么都不做 —— 仅结构同步 / 目标表本来就存在（没走建表、索引也不归这里管）都是这种。
+#[allow(clippy::too_many_arguments)]
+async fn create_deferred_indexes(
+    state: &AppState,
+    src: &Side,
+    source_kind: Dialect,
+    tgt_target: &str,
+    target_kind: Dialect,
+    target_name: &str,
+    table: &str,
+    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
+    deferred: bool,
+) {
+    if !deferred {
+        return;
+    }
+    if let Some(task) = task {
+        task.log(format!("表 {table}：数据已灌完，创建二级索引"));
+    }
+    sync_indexes(
+        state,
+        src,
+        source_kind,
+        tgt_target,
+        target_kind,
+        target_name,
+        table,
+        task,
+        IndexFilter::NonUniqueOnly,
+    )
+    .await;
 }
 
 /// MySQL 的 `ON DUPLICATE KEY UPDATE` 会命中**任意**唯一索引，而不是只命中
@@ -2798,7 +2888,19 @@ async fn sync_table_inner(
             }
         }
     // 建表（含删除重建）成功后：把源表的非主键索引搬过来（「建表包含索引」选项）
+    //
+    // **索引后置**：要灌数据时只先建唯一索引 —— `replace` / `on duplicate key update`
+    // 的去重语义靠目标端的唯一索引，推迟会把冲突行写成重复行；非唯一的二级索引推到
+    // 数据灌完之后再建（`deferred_indexes`），批量写入期间不必逐行维护二级 B 树，
+    // 建索引时也只全表扫一遍。小表收益小但没有额外代价（建索引本身就快）。
+    // 不灌数据（仅结构同步）时一次建完，行为与以前完全一致。
+    let mut deferred_indexes = false;
     if created && opts.include_indexes {
+        let filter = if opts.sync_data {
+            IndexFilter::UniqueOnly
+        } else {
+            IndexFilter::All
+        };
         sync_indexes(
             state,
             src,
@@ -2808,8 +2910,10 @@ async fn sync_table_inner(
             &target_name,
             table,
             task,
+            filter,
         )
         .await;
+        deferred_indexes = opts.sync_data;
     }
     // 目标表**已存在**（走不到建表，注释也就没机会带上）：把源侧的**表注释 + 列注释**
     // 差异补过去 —— 源有注释而目标没有/不一致的，逐条 ALTER 补齐。
@@ -2854,6 +2958,12 @@ async fn sync_table_inner(
         columns.push(column.name.clone());
     }
     if columns.is_empty() {
+        // 一行都不会搬：索引后置的那一半照样补齐，否则这张新表比「正常建表」少了二级索引
+        create_deferred_indexes(
+            state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
+            deferred_indexes,
+        )
+        .await;
         let why = if binary_columns.is_empty() {
             "源表与目标表没有同名列，无法同步数据"
         } else {
@@ -3273,6 +3383,12 @@ async fn sync_table_inner(
                 task.add_rows_read(copied);
                 task.add_rows_written(copied);
             }
+            // 索引后置的收尾：行已经落到目标，这时补建非唯一二级索引最省
+            create_deferred_indexes(
+                state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
+                deferred_indexes,
+            )
+            .await;
             // 日志只报「执行到哪一步」—— 行数在进度卡上（rowsWritten 平滑递增），不进日志刷屏
             let message = format!(
                 "直拷完成{}{}",
@@ -3386,6 +3502,13 @@ async fn sync_table_inner(
             }
         }
     }
+
+    // 索引后置的收尾：数据全部落库后，再补建非唯一二级索引（见上面建表后那一段）
+    create_deferred_indexes(
+        state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
+        deferred_indexes,
+    )
+    .await;
 
     // 日志只报步骤；行数走 rowsWritten/rowsRead 计数（进度卡平滑递增），不进文本
     let _ = started;
