@@ -34,15 +34,23 @@ Thumbs.db
 .DS_Store
 .playwright-cli/
 
-# 官网源文件：**只把 index.html 入库跟踪** —— 它原先只活在 gh-pages 分支里、主仓看不见，
+# 官网源文件：**index.html 入库跟踪** —— 它原先只活在 gh-pages 分支里、主仓看不见，
 # 于是每次发版都容易漏更新（一漏就是 8 个版本，用户反馈"官网版本内容都没更新"）。
-# 入库后有 diff、能被 review；图片 / sponsors.js / .nojekyll 变动极少，仍只留在 gh-pages 分支。
-# 发版流程见 scripts/publish-site.ps1，release.mjs 里还会检查"新版本的条目加了没"。
+# 入库后有 diff、能被 review。
+# 发版流程见 scripts/release/publish-site.ps1，release.mjs 里还会检查"新版本的条目加了没"。
 /website/*
 !/website/index.html
-# 文档区配图：GitHub Pages 现在由 Actions 直接部署 website/ 目录（见 .github/workflows/pages.yml），
-# 图片必须在主仓里，否则部署出来的页面全是 404。
+# 页面引用的静态资源同样必须入库：GitHub Pages 现在由 Actions 直接部署 website/ 目录
+#（见 .github/workflows/pages.yml），checkout 里没有的文件部署上去就是 404 ——
+# 之前只放行了 images/，于是 logo.png、favicon.png、赞赏码、sponsors.js 在线上全是坏的
+#（页面能打开、logo 变裂图）。
 !/website/images/
+!/website/logo.png
+!/website/favicon.png
+!/website/sponsor-wechat.png
+!/website/sponsor-alipay.png
+!/website/sponsors.js
+!/website/.nojekyll
 
 # 本机构建加速配置：.cargo/config.toml 里的 rust-lld 链接器路径是**每台机器各不相同**的
 # 绝对路径（写死的本机路径会让 CI / 别人机器直接构建失败：linker not found）。
