@@ -78,50 +78,53 @@
       </div>
     </div>
 
-    <!-- ==================== 步骤 3：选择对象 ==================== -->
-    <div class="panel" v-if="step === 3 && src.connectionId && src.database">
+    <!-- ==================== 步骤 2：选择对象 ====================
+         卡片式分组下拉：每一类对象是一张可展开的卡片（勾选框 + 图标 + 类型名 + 已选/总数 + 箭头），
+         展开后才列出该类对象。分组按**源库与目标库的能力**决定要不要画（见 visibleGroups）——
+         源库没有这个概念（PG 没有 EVENT）、或目标库建不出来（目标不支持该对象 DDL）就不摆空架子。 -->
+    <div class="panel obj-panel" v-if="step === 2 && src.connectionId && src.database" v-loading="objsLoading">
       <div class="panel-head">
         <span class="panel-title"><el-icon :size="14"><FolderOpened /></el-icon>{{ $t('sync.pickObjects') }}</span>
         <span class="panel-count">{{ $t('sync.selectedPrefix') }}<b>{{ totalSelected }}</b> / {{ $t('sync.selectedSuffix', { total: totalAvailable }) }}</span>
       </div>
 
-      <!-- 对象类型筛选 -->
-      <div class="type-chips">
-        <button v-for="t in objTypes" :key="t.key" type="button" class="type-chip"
-                :class="{ active: t.checked, empty: objState[t.key].list.length === 0 }"
-                :disabled="taskRunning || objState[t.key].list.length === 0"
-                :title="(objState[t.key].list.length ? $t('sync.hasN', { label: t.label, n: objState[t.key].list.length }) : $t('sync.noN', { label: t.label })) + ' · ' + $t('sync.chipTip')"
-                @click="toggleType(t)">
-          <span class="chip-ic"><el-icon :size="13"><component :is="TYPE_ICON[t.key]" /></el-icon></span>
-          <span class="chip-name">{{ t.label }}</span>
-          <b class="chip-num">{{ objState[t.key].list.length }}</b>
-          <i v-if="t.checked" class="chip-check"><el-icon :size="10"><Check /></el-icon></i>
-        </button>
-        <span v-if="!availableCount" class="no-obj-hint">{{ $t('sync.noObjects') }}</span>
+      <div class="obj-toolbar">
+        <el-input v-model="keyword" size="small" clearable :prefix-icon="Search"
+                  :placeholder="$t('sync.searchObj')" :disabled="taskRunning" />
+        <el-button size="small" text :disabled="taskRunning || !availableCount" @click="applyAll(true)">{{ $t('sync.selectAll') }}</el-button>
+        <el-button size="small" text :disabled="taskRunning || !totalSelected" @click="applyAll(false)">{{ $t('sync.unselectAll') }}</el-button>
       </div>
 
-      <!-- 对象列表 -->
-      <div class="obj-bar">
-        <el-input v-model="keyword" size="small" clearable :prefix-icon="Search" :disabled="taskRunning" />
-        <div class="obj-bar-actions">
-          <el-button size="small" text :disabled="taskRunning || !availableCount" @click="applyAll(true)">{{ $t('sync.selectAll') }}</el-button>
-          <el-button size="small" text :disabled="taskRunning || !totalSelected" @click="applyAll(false)">{{ $t('common.clear') }}</el-button>
-        </div>
-      </div>
-
-      <div class="obj-scroll">
-        <el-empty v-if="!filteredObjs.length" :description="keyword ? $t('sync.noMatch') : $t('sync.none')" :image-size="46" />
-        <div v-for="o in filteredObjs" :key="o.type + '|' + o.name" class="obj-item" :class="{ on: isSelected(o) }">
-          <span class="obj-type" :class="'ty-' + o.type">{{ typeAbbr(o.type) }}</span>
-          <el-checkbox :model-value="isSelected(o)" :disabled="taskRunning" @change="v => toggleObj(o, v)">
-            <span class="obj-name" :title="o.name">{{ o.name }}</span>
-          </el-checkbox>
+      <div v-if="!availableCount" class="obj-empty-all">{{ $t('sync.noObjects') }}</div>
+      <div v-else class="obj-groups">
+        <div v-for="g in visibleGroups" :key="g.key" class="og"
+             :class="{ open: g.open, empty: !objState[g.key].list.length }">
+          <!-- 头部整行可点：展开/收起；勾选框单独 stop，避免「点一下既勾选又收起」 -->
+          <div class="og-head" @click="toggleGroupOpen(g)">
+            <el-checkbox class="og-check" :model-value="groupChecked(g.key)"
+                         :indeterminate="groupIndeterminate(g.key)"
+                         :disabled="taskRunning || !objState[g.key].list.length"
+                         @click.stop @change="v => setGroup(g.key, v)" />
+            <span class="og-ic" :class="'ty-' + g.key"><el-icon :size="12"><component :is="TYPE_ICON[g.key]" /></el-icon></span>
+            <span class="og-name">{{ typeLabel(g.key) }}</span>
+            <span class="og-count">{{ objState[g.key].selected.length }}/{{ objState[g.key].list.length }}</span>
+            <el-icon class="og-caret"><ArrowDown /></el-icon>
+          </div>
+          <div v-if="g.open" class="og-body">
+            <div v-if="!groupItems(g.key).length" class="og-none">{{ keyword ? $t('sync.noMatch') : $t('sync.none') }}</div>
+            <div v-for="name in groupItems(g.key)" :key="name" class="og-item"
+                 :class="{ on: isSelected({ type: g.key, name }) }" @click="toggleObj({ type: g.key, name }, !isSelected({ type: g.key, name }))">
+              <el-checkbox :model-value="isSelected({ type: g.key, name })" :disabled="taskRunning"
+                           @click.stop @change="v => toggleObj({ type: g.key, name }, v)" />
+              <span class="og-item-name" :title="name">{{ name }}</span>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- ==================== 步骤 2：传输选项 ==================== -->
-    <div class="settings-card" v-if="step === 2">
+    <!-- ==================== 步骤 3：传输选项 ==================== -->
+    <div class="settings-card" v-if="step === 3">
       <div class="settings-head">
         <div class="settings-head-left">
           <el-icon :size="15"><Operation /></el-icon>
@@ -284,8 +287,8 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  Promotion, Right, Check, VideoPause, Search, FolderOpened, Files, DataLine, Operation, Document,
-  Grid, View, FirstAidKit, SetUp, Lightning, Calendar, Clock
+  Promotion, Right, VideoPause, Search, FolderOpened, Files, DataLine, Operation, Document,
+  Grid, View, FirstAidKit, SetUp, Lightning, Calendar, Clock, ArrowDown
 } from '@element-plus/icons-vue'
 import { listConnections, listDatabases, listSchemas, listTables, listProcedures, listTriggers, listEvents, getFeatures, syncDb, syncTaskStatus, syncCancel } from '../../api'
 // 「库」这一层要不要画（Oracle / DM 没有库层：它就是连接里填的服务名）
@@ -310,6 +313,8 @@ const srcSchemas = ref([])
 const tgtDbs = ref([])
 const tgtSchemas = ref([])
 const keyword = ref('')
+/** 对象清单加载中（339 张表要 4 个接口，加载期间给个转圈，别让人以为列表是空的） */
+const objsLoading = ref(false)
 
 // ==================== 连接信息摘要 ====================
 const connInfoOf = (id) => {
@@ -323,6 +328,7 @@ const srcConnName = computed(() => srcInfo.value ? srcInfo.value.name : '--')
 const tgtConnName = computed(() => tgtInfo.value ? tgtInfo.value.name : '--')
 
 // ==================== 向导导航 ====================
+// 步骤顺序与顶部步骤条一致：1 源/目标 → 2 对象 → 3 选项 → 4 摘要（曾经面板与标题错位过一格）
 const nextStep = async () => {
   if (step.value === 1) {
     if (!src.value.connectionId || !src.value.database) return ElMessage.warning(t('sync.pickSourceDb'))
@@ -330,9 +336,11 @@ const nextStep = async () => {
     if (src.value.connectionId === tgt.value.connectionId && src.value.database === tgt.value.database) {
       return ElMessage.warning(t('sync.sameDb'))
     }
-    // 进入步骤 3 前确保对象清单已加载（换连接/换库时 onXxxChange 已自动加载，这里兜底）
-    if (!objState.table.list.length && !objState.view.list.length) await loadSrcObjects()
+    // 进入对象页前确保清单已加载（换连接/换库时 onXxxChange 已自动加载，这里兜底）
+    if (!totalAvailable.value) await loadSrcObjects()
   }
+  // 对象页：一个都没选就拦下 —— 全选是默认值，空选基本是用户自己清空了
+  if (step.value === 2 && !totalSelected.value) return ElMessage.warning(t('sync.pickObjectsWarn'))
   step.value++
 }
 
@@ -392,12 +400,12 @@ const typeMeta = () => ({
   event:     { label: t('mv.catEvent'), abbr: t('sync.abbrEvent') },
 })
 const objTypes = reactive([
-  { key: 'table', checked: false },
-  { key: 'view', checked: false },
-  { key: 'function', checked: false },
-  { key: 'procedure', checked: false },
-  { key: 'trigger', checked: false },
-  { key: 'event', checked: false },
+  { key: 'table', open: true },
+  { key: 'view', open: false },
+  { key: 'function', open: false },
+  { key: 'procedure', open: false },
+  { key: 'trigger', open: false },
+  { key: 'event', open: false },
 ])
 const objState = reactive({})
 for (const t of objTypes) objState[t.key] = { list: [], selected: [] }
@@ -574,22 +582,21 @@ const logClass = (line) => {
 
 // ==================== 派生数据 ====================
 const totalSelected = computed(() => objTypes.reduce((s, t) => s + objState[t.key].selected.length, 0))
-// 分母是**已加载的全部对象**（不随类型筛选变）：类型徽标现在只是"看哪一类"的筛选器，
-// 切走时已勾选的对象仍然保留在 transferred 列表里 —— 分母跟着筛选变会让「已选 5 / 2」这种
-// 不可能的数字出现，用户会以为界面坏了。
+// 分母固定为**已加载的全部对象**（不随搜索/展开变）：跟着变会让「已选 5 / 2」这种不可能的数字出现
 const totalAvailable = computed(() => objTypes.reduce((s, t) => s + objState[t.key].list.length, 0))
 const availableCount = computed(() => objTypes.reduce((s, t) => s + (objState[t.key].list.length ? 1 : 0), 0))
-const filteredObjs = computed(() => {
+/** 某一类对象在当前搜索词下要显示哪些（搜索只过滤展示，不影响已选） */
+const groupItems = (key) => {
   const kw = keyword.value.trim().toLowerCase()
-  const arr = []
-  for (const t of objTypes) {
-    if (!t.checked) continue
-    for (const name of objState[t.key].list) {
-      if (kw && !name.toLowerCase().includes(kw)) continue
-      arr.push({ type: t.key, name })
-    }
+  const list = objState[key].list
+  return kw ? list.filter(n => n.toLowerCase().includes(kw)) : list
+}
+/** 搜索时自动展开命中的分组，免得用户以为「搜不到」 */
+watch(keyword, (kw) => {
+  if (!kw.trim()) return
+  for (const g of objTypes) {
+    if (groupItems(g.key).length) g.open = true
   }
-  return arr
 })
 
 const isTaskDone = computed(() => taskStatus.value === 'success')
@@ -639,29 +646,53 @@ const progressText = computed(() => {
 })
 
 const typeLabel = (t) => (typeMeta()[t]?.label) || t
-const typeAbbr = (t) => (typeMeta()[t]?.abbr) || t
 
-// ==================== 类型 / 对象操作 ====================
-const checkedTypes = computed(() => objTypes.filter(t => t.checked))
+// ==================== 分组 / 对象操作 ====================
 /**
- * 类型徽标是**筛选器**，不是"要不要同步这一类"的开关：
- * 点哪个类型就只看哪个（用户要求「表就显示表，视图就显示视图」）；
- * 再点一次当前这个 → 回到「全部」（所有有内容的类型都勾上，用来一次勾完表+视图）。
+ * 分组要不要显示：**由源库与目标库的能力决定**（用户要求「根据源数据库和目标数据库的特性展示」）。
  *
- * 与原实现的两点差别，都是刻意的：
- * 1. **独占**而不并集 —— 并集下点「视图」会变成表+视图，59 张表排在前，视图那两行在底部，
- *    用户看到的就是"点了没反应"。
- * 2. **切走不清空已选** —— 原实现在取消勾选时 `selected = []`，筛选语义下这等于
- *    「我挑了半天的表，只是看一眼视图就全没了」。已选对象与筛选互不影响，
- *    顶部「已选 N」始终统计全部类型。
+ * 判据优先用后端 features 的 `objectDdlKinds`（源库真能取出 DDL 的对象种类，
+ * 例如 PG 是 view/procedure/function/trigger，没有 event），拿不到再退回
+ * supportsProcedures / supportsTriggers / supportsEvents 这几个布尔。
+ * 两边都支持才画（目标建不出同类对象时，勾了也只会得到一排「跳过」）；
+ * 但**源库里确实有对象**的分组照旧显示 —— 宁可让用户看见再决定，也不能悄悄藏掉。
  */
-const toggleType = (t) => {
-  const backToAll = t.checked && checkedTypes.value.length === 1
-  for (const x of objTypes) {
-    if (x === t && backToAll) continue
-    x.checked = backToAll ? objState[x.key].list.length > 0 : x.key === t.key
-  }
-  if (backToAll) t.checked = true
+const KIND_FLAG = {
+  view: 'supportsDdl', procedure: 'supportsProcedures', function: 'supportsProcedures',
+  trigger: 'supportsTriggers', event: 'supportsEvents',
+}
+const kindSupported = (feats, key) => {
+  // 能力没取到（连接刚选好/接口失败）时一律按支持处理，不能因为拿不到就少摆一栏
+  if (!feats || !Object.keys(feats).length) return true
+  if (key === 'table') return true
+  const kinds = feats.objectDdlKinds
+  if (Array.isArray(kinds) && kinds.length) return kinds.includes(key)
+  const flag = KIND_FLAG[key]
+  return flag ? feats[flag] !== false : true
+}
+const visibleGroups = computed(() => objTypes.filter(g =>
+  objState[g.key].list.length > 0
+  || (kindSupported(srcFeatures.value, g.key) && kindSupported(tgtFeatures.value, g.key))
+))
+/** 组头勾选框三态：按**当前搜索过滤后的可见项**判断（搜「ods_」时勾一下就是勾这些） */
+const groupChecked = (key) => {
+  const items = groupItems(key)
+  return items.length > 0 && items.every(n => objState[key].selected.includes(n))
+}
+const groupIndeterminate = (key) => {
+  const items = groupItems(key)
+  const n = items.filter(x => objState[key].selected.includes(x)).length
+  return n > 0 && n < items.length
+}
+const setGroup = (key, val) => {
+  const items = groupItems(key)
+  const sel = new Set(objState[key].selected)
+  for (const n of items) { if (val) sel.add(n); else sel.delete(n) }
+  objState[key].selected = [...sel]
+}
+const toggleGroupOpen = (g) => {
+  if (!objState[g.key].list.length) return
+  g.open = !g.open
 }
 const isSelected = (o) => objState[o.type].selected.includes(o.name)
 const toggleObj = (o, v) => {
@@ -670,11 +701,9 @@ const toggleObj = (o, v) => {
   if (v && i < 0) sel.push(o.name)
   if (!v && i >= 0) sel.splice(i, 1)
 }
+/** 全部选择 / 取消全选：只作用于**显示出来的分组**（被能力过滤掉的不碰） */
 const applyAll = (val) => {
-  for (const t of objTypes) {
-    if (!t.checked) continue
-    objState[t.key].selected = val ? [...objState[t.key].list] : []
-  }
+  for (const g of visibleGroups.value) setGroup(g.key, val)
 }
 
 // ==================== 对象加载 ====================
@@ -776,30 +805,46 @@ const loadSrcObjects = async () => {
   }
   keyword.value = ''
   if (!connId || !db) return
+  objsLoading.value = true
   try {
-    const tables = await listTables(connId, db)
-    objState.table.list = tables.filter(t => (t.type || 'TABLE') === 'TABLE').map(t => t.name)
-    objState.view.list = tables.filter(t => t.type === 'VIEW').map(t => t.name)
-  } catch (e) { /* ignore */ }
-  try {
-    const procs = await listProcedures(connId, db)
-    // 判据用 isFunctionRoutine（唯一的定义处，与树上分类、数量同源）。
-    //
-    // 原来这里判的是 `p.comment || p.type` 里有没有 "FUNCTION" —— 而这条接口
-    // **根本不返回**这两个字段（后端给的是 routineType），所以条件恒为假：
-    // 结果是**所有函数都被塞进了「存储过程」一栏**，函数那一栏永远是空的。
-    // 与树上"函数混在 Procedures 里"是同一个病，一起治。
-    const funcs = procs.filter(isFunctionRoutine)
-    const procsOnly = procs.filter(p => !isFunctionRoutine(p))
-    objState.function.list = funcs.map(p => p.name)
-    objState.procedure.list = procsOnly.map(p => p.name)
-  } catch (e) { /* ignore */ }
-  try {
-    objState.trigger.list = (await listTriggers(connId, db)).map(p => p.name)
-  } catch (e) { /* ignore */ }
-  try {
-    objState.event.list = (await listEvents(connId, db)).map(p => p.name)
-  } catch (e) { /* ignore */ }
+    try {
+      const tables = await listTables(connId, db)
+      objState.table.list = tables.filter(t => (t.type || 'TABLE') === 'TABLE').map(t => t.name)
+      objState.view.list = tables.filter(t => t.type === 'VIEW').map(t => t.name)
+    } catch (e) { /* ignore */ }
+    try {
+      const procs = await listProcedures(connId, db)
+      // 判据用 isFunctionRoutine（唯一的定义处，与树上分类、数量同源）。
+      //
+      // 原来这里判的是 `p.comment || p.type` 里有没有 "FUNCTION" —— 而这条接口
+      // **根本不返回**这两个字段（后端给的是 routineType），所以条件恒为假：
+      // 结果是**所有函数都被塞进了「存储过程」一栏**，函数那一栏永远是空的。
+      // 与树上"函数混在 Procedures 里"是同一个病，一起治。
+      const funcs = procs.filter(isFunctionRoutine)
+      const procsOnly = procs.filter(p => !isFunctionRoutine(p))
+      objState.function.list = funcs.map(p => p.name)
+      objState.procedure.list = procsOnly.map(p => p.name)
+    } catch (e) { /* ignore */ }
+    try {
+      objState.trigger.list = (await listTriggers(connId, db)).map(p => p.name)
+    } catch (e) { /* ignore */ }
+    try {
+      objState.event.list = (await listEvents(connId, db)).map(p => p.name)
+    } catch (e) { /* ignore */ }
+  } finally {
+    objsLoading.value = false
+  }
+  // **默认全选**（用户口径「有的都显示出来也都支持同步」）：进来就能直接下一步，
+  // 不想同步的某一类在组头一次取消即可 —— 以前是全都不选 + 类型徽标当筛选器，
+  // 界面停在「已选 0 / 339、列表空白」，看着像坏了。
+  let openedOnce = false
+  for (const t of objTypes) {
+    objState[t.key].selected = [...objState[t.key].list]
+    const has = objState[t.key].list.length > 0
+    // 只有第一个有内容的分组默认展开，其余收起（339 张表全展开会把页面撑爆）
+    t.open = has && !openedOnce
+    if (has) openedOnce = true
+  }
 }
 
 // ==================== 同步执行 ====================
@@ -1115,11 +1160,23 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 </script>
 
 <style scoped>
-/* ==================== 对话框整体限高：内容多时内部滚动，不再把框撑得很高 ==================== */
-.sync-dialog :deep(.el-dialog__body) {
-  max-height: 74vh;
-  overflow-y: auto;
+/* ==================== 对话框高度：默认给足，内容多时**内部滚动** ====================
+   高度定死（min(780px, 88vh)）而不是随内容长：切步骤时底栏不会上下跳，对象页
+   6 张分组卡片也一次看全（原先 max-height:320px 会硬挤出一条外层滚动条）。
+   右下角还能拖大/拖小 —— 见 utils/dialogResize.js（所有功能性弹窗都有）。
+
+   ⚠ 必须用 `:global()`：弹窗根节点（.el-dialog）是 el-dialog 组件 teleport 出去的，
+   身上**没有本组件的 data-v 属性**，`.sync-dialog { … }` 这种写法在这里命中不了任何元素
+   （本文件里其余的 `.sync-dialog :deep(...)` 一类的规则同病，先不动）。 */
+:global(.el-dialog.sync-dialog) { height: min(780px, 88vh); }
+:global(.el-dialog.sync-dialog .el-dialog__body) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding-top: 4px;
 }
+/* 步骤条/底栏不参与弹性分配，剩下的高度全给当前步骤的内容 */
+.sync-steps { flex: none; }
 /* 执行页的日志与结果表各自限高滚动，避免叠加撑高 */
 .run-view .log-body { max-height: 240px; }
 .run-view .pg-result :deep(.el-table) { max-height: 260px; }
@@ -1224,104 +1281,112 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .panel-count { font-size: 13px; color: var(--dc-text-dim); }
 .panel-count b { color: var(--dc-primary); font-weight: 700; }
 
-/* 类型 chips */
-.type-chips {
-  display: flex; flex-wrap: wrap; gap: 10px;
-  margin-bottom: 12px;
-}
-.type-chip {
-  position: relative;
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 6px 14px 6px 10px;
-  border: 1px solid var(--dc-border);
-  border-radius: 999px;
-  background: var(--dc-bg-card);
-  color: var(--dc-text-dim);
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all .18s ease;
-  font-family: inherit;
-}
-.type-chip:hover:not(:disabled):not(.active) {
-  color: var(--dc-text);
-  border-color: var(--dc-primary);
-  background: var(--dc-bg-hover);
-}
-.type-chip.active {
-  color: var(--dc-on-primary);
-  border-color: transparent;
-  background: linear-gradient(135deg, var(--dc-primary), var(--dc-primary-deep));
-  box-shadow: 0 3px 12px var(--dc-primary-glow);
-}
-.type-chip.empty { opacity: .4; cursor: not-allowed; }
-.type-chip:disabled { cursor: not-allowed; }
-.chip-ic {
-  width: 22px; height: 22px; border-radius: 6px;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: var(--dc-bg-soft); color: var(--dc-text-weak);
-  transition: all .18s ease;
-}
-.type-chip:hover:not(:disabled):not(.active) .chip-ic {
-  background: var(--dc-bg-hover); color: var(--dc-text-dim);
-}
-.type-chip.active .chip-ic {
-  background: rgba(255,255,255,.18); color: var(--dc-on-primary);
-}
-.chip-name { white-space: nowrap; }
-.chip-num {
-  font-size: 13px; font-weight: 700;
-  background: var(--dc-bg-hover);
-  border-radius: 999px; padding: 2px 8px;
-  min-width: 22px; text-align: center;
-  color: var(--dc-text);
-}
-.type-chip:not(.active) .chip-num { background: var(--dc-bg-hover); color: var(--dc-text); }
-.type-chip.active .chip-num { background: rgba(255, 255, 255, .25); color: var(--dc-on-primary); }
-.chip-check { position: absolute; top: -4px; right: -3px; width: 16px; height: 16px; border-radius: 50%;
-  background: var(--dc-on-primary); color: var(--dc-primary); display: flex; align-items: center; justify-content: center;
-  box-shadow: var(--dc-shadow-sm); }
-.no-obj-hint { font-size: 13px; color: var(--dc-text-dim); align-self: center; }
-
-/* 对象工具条 + 列表 */
-.obj-bar { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-.obj-bar .el-input { width: 240px; }
-.obj-bar-actions { margin-left: auto; display: flex; }
-.obj-scroll {
-  max-height: 208px; overflow: auto;
-  border: 1px solid var(--dc-border);
-  border-radius: 8px;
-  background: var(--dc-bg-card);
-  padding: 4px 6px;
-}
-.obj-item {
+/* ==================== 对象选择：卡片式分组下拉 ====================
+   每一类对象是一张卡片（组头一行 + 可展开的对象网格），视觉上与「卡片」一致：
+   圆角、独立描边、悬停微亮、展开时组头高亮。 */
+.obj-toolbar {
   display: flex; align-items: center; gap: 8px;
-  padding: 2px 8px 2px 4px;
-  border-radius: 6px;
-  transition: background .15s;
+  margin-bottom: 10px;
 }
-.obj-item:hover { background: var(--dc-bg-hover); }
-.obj-type {
+.obj-toolbar .el-input { flex: 1; min-width: 0; }
+.obj-empty-all {
+  padding: 26px 0; text-align: center;
+  font-size: 13px; color: var(--dc-text-dim);
+}
+/* 对象页撑满剩余高度：卡片列表不再限高 320px（那会硬挤出一条滚动条）。
+   6 张卡片 + 展开的那一张刚好铺满 —— 展开的组吃掉剩余高度、对象在**组内**滚动，
+   所以默认状态外层不出现滚动条；只有用户把多组同时展开时外层才滚动。 */
+.obj-panel { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.obj-groups {
+  flex: 1 1 auto; min-height: 0; padding-right: 2px;
+  display: flex; flex-direction: column; gap: 8px;
+  overflow-y: auto;
+}
+.og {
+  border: 1px solid var(--dc-border);
+  border-radius: 10px;
+  background: var(--dc-bg-card);
+  overflow: hidden;
+  transition: border-color .16s ease, box-shadow .16s ease;
+}
+/* 只有展开的卡片参与弹性分配（吃掉剩余高度），收起的卡片就是一行高 */
+.og.open {
+  border-color: var(--dc-primary-soft, var(--dc-border));
+  box-shadow: var(--dc-shadow-sm);
+  flex: 1 1 0;
+  min-height: 140px;
+  display: flex; flex-direction: column;
+}
+.og.empty { opacity: .72; }
+.og-head {
   flex: none;
-  width: 22px; height: 18px; line-height: 18px;
-  text-align: center;
-  font-size: 12px; font-weight: 600;
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.og-head:hover { background: var(--dc-bg-hover); }
+.og.open .og-head { background: var(--dc-bg-soft); }
+.og-check { margin-right: 2px; }
+.og-check :deep(.el-checkbox__label) { display: none; }
+.og-ic {
+  width: 22px; height: 20px;
+  display: inline-flex; align-items: center; justify-content: center;
   border-radius: 5px;
   color: #0f1522;
-  opacity: .9;
+  flex: none;
 }
+.og-name { font-size: 13.5px; font-weight: 600; color: var(--dc-text); }
+.og-count {
+  margin-left: auto;
+  font-size: 12px; color: var(--dc-text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.og-caret {
+  color: var(--dc-text-dim);
+  transition: transform .18s ease;
+  font-size: 13px;
+}
+.og.open .og-caret { transform: rotate(180deg); }
+.og-body {
+  border-top: 1px solid var(--dc-border);
+  padding: 6px 10px 8px;
+  /* 高度由展开的卡片决定（flex 吃掉剩余空间），对象多了在这一层滚动 */
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 对象名可能很长（ods_xxx_yyy_zzz）：多列排布省纵向空间，窄屏自动退回一列。
+     列宽用 minmax(0, 1fr) 的固定份数而不是 auto-fill：否则最后一份会被滚动条挤出卡片。 */
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 210px), 1fr));
+  gap: 0 10px;
+}
+.og-none { grid-column: 1 / -1; padding: 8px 4px; font-size: 13px; color: var(--dc-text-dim); }
+.og-item {
+  display: flex; align-items: center; gap: 6px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  min-width: 0;
+  transition: background .15s;
+}
+.og-item:hover { background: var(--dc-bg-hover); }
+.og-item.on { background: var(--dc-primary-wash); }
+.og-item-name {
+  flex: 1; min-width: 0;
+  font-size: 13px; color: var(--dc-text);
+  font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 分组图标底色（沿用原对象类型配色，一眼能分清是哪一类） */
 .ty-table { background: var(--dc-accent); }
 .ty-view { background: #7cabff; }
 .ty-function { background: #c4b0ff; }
 .ty-procedure { background: #f8c878; }
 .ty-trigger { background: #ff9d9d; }
 .ty-event { background: #7fe3f5; }
-.obj-item .el-checkbox { margin-right: 0; }
-.obj-name {
-  font-size: 13px; color: var(--dc-text);
-  font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
 
 /* ==================== 同步设置 ==================== */
 .settings-card {

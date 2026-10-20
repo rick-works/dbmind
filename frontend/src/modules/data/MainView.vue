@@ -2118,9 +2118,13 @@ const bgDurationText = (t) => {
   if (m < 60) return m + 'm ' + (s % 60) + 's'
   return Math.floor(m / 60) + 'h ' + (m % 60) + 'm'
 }
-/** 正在执行的任务（右侧时钟图标的悬浮下拉用，与弹窗模式无关） */
+/**
+ * 正在执行的任务（右侧时钟图标的悬浮下拉用，与弹窗模式无关）。
+ * `stopping` 也算「占着位置」：用户点了停止但后端还在收尾，这时候从列表里消失
+ * 反而会让人以为已经停了、可以重新跑一遍（真机反馈「点了停止任务还在」）。
+ */
 const bgRunningList = computed(() =>
-  bgTasks.filter(t => (bgStatusMap.value[t.id] || t.status || 'running') === 'running')
+  bgTasks.filter(t => ['running', 'stopping'].includes(bgStatusMap.value[t.id] || t.status || 'running'))
 )
 /** 数据对比的后台任务恢复标记（对比点「后台运行」后从任务中心点开走这里） */
 const compareResumeId = ref('')
@@ -2197,17 +2201,31 @@ setBgTaskStatus(t.id, 'notfound')
 }
 }
 }
-/** 停止一个运行中的后台任务（任务中心/悬浮下拉都有入口）——
-    任务卡住时用户需要出口，停掉后状态落到 canceled，角标随之消失 */
-const stopBgTask = async (t) => {
+/**
+ * 停止一个运行中的后台任务（任务中心 / 悬浮下拉都有入口）。
+ *
+ * ⚠ 形参**不能叫 `t`**：那会把 i18n 的 `t()` 遮蔽掉，`t('cmp.stopRequested')`
+ * 就变成"把任务对象当函数调用"→ 弹 `e is not a function`（压缩后变量名是 e，
+ * 真机就是这个报错）。取消请求其实已经发出去了，用户却只看到一句莫名其妙的错。
+ *
+ * 取消是**协作式**的（后端写完当前这一页/批才停），所以点完先记一个 `stopping`
+ * 状态（列表里显示「正在停止…」），再连续追几次状态，一旦后端收尾就自然消失。
+ */
+const stopBgTask = async (task) => {
   try {
-    if (t.kind === 'compare') await compareCancel(t.id)
-    else await syncCancel(t.id)
-    ElMessage.success(t('cmp.stopRequested'))
+    if (task.kind === 'compare') await compareCancel(task.id)
+    else await syncCancel(task.id)
+    bgStatusMap.value[task.id] = 'stopping'
+    // 文案按任务类型分开：同步任务上弹一句「正在中断数据库查询」（对比的文案）会让人以为点错了功能
+    ElMessage.success(t(task.kind === 'compare' ? 'cmp.stopRequested' : 'sync.stopRequested'))
   } catch (e) {
     ElMessage.error(e?.message || t('common.unknownError'))
   }
   await refreshBgStatus()
+  // 追赶几次：正常几秒内后端就落到 canceled；不必等 5 秒那一轮轮询
+  for (const ms of [1200, 2500, 5000, 9000]) {
+    setTimeout(() => { refreshBgStatus() }, ms)
+  }
 }
 // 记录时间：**年月日 时分秒**（用户指定格式）。
 // mode='start' 显示开始（优先后端墙钟），否则显示结束（无结束时刻回退开始，不再是同刻假象）
@@ -2235,14 +2253,15 @@ onMounted(() => { refreshBgStatus() })
 // 同样具名保存：重挂组件时旧的 5 秒轮询必须停，否则每 5 秒重复打一次后台任务接口
 const bgRefreshTimer = setInterval(refreshBgStatus, 5000)
 const bgRunningCount = computed(() =>
-  bgTasks.filter(t => (bgStatusMap.value[t.id] || 'running') === 'running').length
+  bgTasks.filter(t => ['running', 'stopping'].includes(bgStatusMap.value[t.id] || 'running')).length
 )
 const bgStateText = (id) => {
 // **notfound = 任务已不存在**（服务重启后内存任务丢了/超过保留期）——
 // 必须显示「已中断」而不是落进 else 的「运行中」（真机踩过：重启后任务中心全是假"运行中"）
 const s = bgStatusMap.value[id] || 'running'
 return s === 'success' ? t('sync.statOk') : s === 'canceled' ? t('sync.statSkipped')
-: s === 'error' ? t('sync.statFailed') : s === 'notfound' ? t('sync.bgInterrupted') : t('sync.running')
+: s === 'error' ? t('sync.statFailed') : s === 'notfound' ? t('sync.bgInterrupted')
+: s === 'stopping' ? t('cmp.stopping') : t('sync.running')
 }
 /** 表格里的**短**状态文案：中断原因放悬浮（列窄，长文案会挤爆布局） */
 const bgStateShort = (id) => {
@@ -9252,6 +9271,9 @@ const connTypeSummary = computed(() =>
 .bg-dot.success { background: var(--dc-success); }
 .bg-dot.error { background: var(--dc-danger); }
 .bg-dot.canceled { background: var(--dc-warning); }
+/* 停止中：琥珀色呼吸 —— 请求已发出、后端还在收尾 */
+.bg-dot.stopping { background: var(--dc-warning); animation: bg-stop-pulse 1.1s ease-in-out infinite; }
+@keyframes bg-stop-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
 .bg-kind { font-size: 11px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; background: rgba(59, 130, 246, 0.14); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.4); }
 .bg-kind.is-cmp { color: #f59e0b; border-color: rgba(245, 158, 11, 0.45); }
 .bg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dc-text); }

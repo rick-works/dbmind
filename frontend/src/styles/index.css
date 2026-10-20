@@ -309,6 +309,42 @@ body {
    标题在基准上 +4px，与原来的 18px 一致；正文等于基准。 */
 .el-dialog__title { color: var(--dc-text-strong); font-weight: 600; font-size: calc(var(--dc-dlg-fs, 14px) + 4px); }
 .el-dialog__body { font-size: var(--dc-dlg-fs, 14px); }
+
+/* ==================== 功能性弹窗：拖动右下角改大小 ====================
+   手柄由 utils/dialogResize.js 动态插入（消息弹窗 ElMessage/ElMessageBox 不参与）。
+   这里只负责两件事：① 尺寸落到内联样式后，标题/正文/底栏按 flex 分配高度，
+   正文自己出滚动条（否则内容会溢出到圆角外）；② 手柄的样子与拖动时的光标。 */
+.el-dialog.dc-resizable {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.el-dialog.dc-resizable > .el-dialog__header,
+.el-dialog.dc-resizable > .el-dialog__footer { flex: none; }
+.el-dialog.dc-resizable > .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+.dc-resize-grip {
+  position: absolute; right: 1px; bottom: 1px;
+  width: 18px; height: 18px;
+  cursor: nwse-resize;
+  opacity: .38;
+  z-index: 5;
+  transition: opacity .15s;
+}
+.dc-resize-grip::before,
+.dc-resize-grip::after {
+  content: ''; position: absolute; right: 3px; bottom: 3px;
+  border-right: 2px solid var(--dc-text-dim);
+  border-bottom: 2px solid var(--dc-text-dim);
+}
+.dc-resize-grip::before { width: 9px; height: 9px; }
+.dc-resize-grip::after { width: 4px; height: 4px; }
+.el-dialog.dc-resizable:hover .dc-resize-grip { opacity: .85; }
+body.dc-resizing { cursor: nwse-resize; }
+body.dc-resizing * { user-select: none !important; }
 .el-input__wrapper, .el-select__wrapper, .el-textarea__inner {
   background-color: var(--dc-bg-input) !important;
   box-shadow: 0 0 0 1px var(--dc-border-soft) inset !important;

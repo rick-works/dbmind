@@ -155,7 +155,6 @@
       <el-tab-pane :label="$t('tf.tabColumns', { n: cols.filter(c => c.name).length })" name="columns">
         <div class="tab-inner col-tab">
           <div class="card-actions">
-            <span class="move-tip">{{ $t('tf.moveTip') }}</span>
             <el-button size="small" :icon="Top" :disabled="!cols.length" :title="$t('tf.moveUpTip')" @click="move(-1)">{{ $t('tf.moveUp') }}</el-button>
             <el-button size="small" :icon="Bottom" :disabled="!cols.length" :title="$t('tf.moveDownTip')" @click="move(1)">{{ $t('tf.moveDown') }}</el-button>
             <el-button size="small" type="primary" :icon="Plus" @click="addColumn">{{ $t('tf.addColumn') }}</el-button>
@@ -992,7 +991,6 @@ emit('sql', genSql())
 .tab-inner { height: 100%; padding: 10px 12px; display: flex; flex-direction: column; }
 .col-tab { padding-top: 6px; }
 .col-tab .card-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-start; margin-bottom: 8px; }
-.col-tab .card-actions .move-tip { margin-right: auto; font-size: 13px; color: var(--dc-text-dim); }
 .col-tab .field-table-wrap { flex: 1; overflow: auto; border: 1px solid var(--dc-border-soft); border-radius: 8px; }
 .idx-tab { padding-top: 6px; }
 .idx-tab .card-actions { display: flex; gap: 6px; justify-content: flex-end; margin-bottom: 8px; }
@@ -1300,10 +1298,6 @@ emit('sql', genSql())
   max-width: calc(100% - 286px);
   padding: 0; margin: 0; border-radius: 0; background: transparent;
   z-index: 4; flex-shrink: 0;
-}
-.col-tab .card-actions .move-tip {
-  margin-right: auto; font-size: 12.5px; color: var(--dc-text-dim);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
 /* ---- 字段表格本体 ---- */

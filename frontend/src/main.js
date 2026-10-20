@@ -92,6 +92,8 @@ import { applyAppearance } from './utils/appearance'
 import { t, initI18n, refreshLocaleFromStorage } from './utils/i18n'
 import { resetShortcutCache } from './utils/shortcuts'
 import { installExternalLinkHandler } from './utils/externalLinks'
+// 功能性弹窗（el-dialog）统一装"拖右下角改大小"手柄，消息弹窗不装
+import { installDialogResize } from './utils/dialogResize'
 
 // 清理历史遗留的浏览器存储键。
 //
@@ -245,6 +247,8 @@ installExternalLinkHandler()
 // 界面尺寸（顶部菜单文字/图标、左侧树文字）：上电即把偏好写到 :root 的 CSS 变量上，
 // 免得先按默认尺寸渲染一帧再跳一下
 applyAppearance()
+// 功能性弹窗统一支持"拖右下角改大小"（消息弹窗不参与）；挂载前装好，首个弹窗出现即可用
+installDialogResize()
 
 app.mount('#app')
 hydrateUIFromBackend()

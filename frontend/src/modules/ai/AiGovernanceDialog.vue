@@ -360,8 +360,9 @@ const barWidth = (t) => {
   return p <= 0 ? '0%' : Math.max(2, p) + '%'
 }
 
-const copy = async (t) => {
-  try { await navigator.clipboard.writeText(t); ElMessage.success(t('ai.copied')) } catch (e) { ElMessage.error(t('sqlq.copyFailed')) }
+// ⚠ 形参别叫 `t`：会遮蔽 i18n 的 t()，成功/失败提示那里就成了"拿文本当函数调"
+const copy = async (text) => {
+  try { await navigator.clipboard.writeText(text); ElMessage.success(t('ai.copied')) } catch (e) { ElMessage.error(t('sqlq.copyFailed')) }
 }
 
 

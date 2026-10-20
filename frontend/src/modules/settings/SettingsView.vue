@@ -1991,8 +1991,9 @@ const onDriverFilePicked = async (ev) => {
   }
 }
 
-const openDriverDir = async (t) => {
-  try { await openLocalDir(t.dir) } catch (e) { ElMessage.error(t('settings.driver.msgOpenDirFailed', { detail: (e?.message || e) })) }
+// ⚠ 形参别叫 `t`：会遮蔽 i18n 的 t()，出错分支里 t('...') 就变成"拿驱动对象当函数调"
+const openDriverDir = async (driver) => {
+  try { await openLocalDir(driver.dir) } catch (e) { ElMessage.error(t('settings.driver.msgOpenDirFailed', { detail: (e?.message || e) })) }
 }
 
 const notifyForm = ref({ ...notifyDefaults })
