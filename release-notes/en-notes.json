@@ -1,5 +1,11 @@
 {
     "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.40": [
+        "Backups now use multi-row INSERT: a 200k-row dump drops from 200,000 statements to 200, and the file is about half the size",
+        "Restore is much faster: the same 200k-row dump went from over an hour to 20 seconds; older one-row-per-INSERT dumps are merged automatically, no re-export needed",
+        "Sync writes go through JDBC prepared batches (SQL Server / Oracle / DM / H2), and decimals keep every digit instead of losing the tail to float conversion",
+        "Smaller sync/compare wins: small-table compares hash in memory (no temp files), upsert probes an empty target with limit 1, page size adapts to row width"
+    ],
     "v1.2.39": [
         "Table designer: the length / precision cells no longer show any placeholder hint (\"optional\", \"required\", \"precision\") — identical across every database and in both the new-table and edit-table pages; the item/value column and the header now share one font and size (header is only bolder), and the new-table page keeps Copy SQL / Create at the bottom of the preview",
         "ClickHouse engine dropdown now lists the exact SQL-ready values (`MergeTree()` with parentheses, `Log` without, Replicated family included); the new-table and edit-table pages share one list and the generated SQL no longer guesses where to add parentheses",
