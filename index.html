@@ -746,6 +746,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.41（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.41</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-21</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>表注释、列注释改完不再「保存成功但界面空白」：H2 / Oracle / DB2 / SQL Server 的注释与表选项读取一并修好</b></li>
+            <li><b>改字段默认值在 Derby 不再报错（只发真正变了的属性），Oracle 改主键列默认值、SQL Server 改默认值也能用了</b></li>
+            <li><b>各家默认值读写统一</b>：PostgreSQL 的 'x'::character varying、SQL Server 的 ((5)) 这类原生写法不再出现在输入框，保存时也不会被重复加引号</li>
+            <li><b>列注释支持清空；做不了的改动（Derby 缩短长度、Doris 改默认值）在预览区直接说明原因，不用等保存后才看到报错</b></li>
+            <li><b>打开 H2 表结构不再误报「改了 3 处」（INTEGER 不再被拼成 integer(32,0)）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.41" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.41" target="_blank" rel="noopener">下载 v1.2.41</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.40（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +776,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.40</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-20</span>
           </div>
           <ul class="rel-notes">
