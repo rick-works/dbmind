@@ -47,7 +47,7 @@ function nextWordAt(s, from) {
  * 「没写分号也分段」的判定：word 是行首刚读完的词，其余是当前语句的上下文。
  * 与后端 `implicit_break` 逐条对齐。
  */
-function implicitBreak({ word, prevText, paren, depth, lastCode, lastWord, headWord, sawSelect, routine, mainStarted, attachSelect }) {
+function implicitBreak({ word, prevText, paren, depth, lastCode, lastWord, headWord, sawSelect, routine, mainStarted, attachSelect, nextWord }) {
   if (!stripLeadingComments(prevText) || paren !== 0 || depth !== 0) return false
   // 例程/触发器 DDL：`CREATE TRIGGER … BEFORE INSERT`、`CREATE PROCEDURE …` 里的
   // INSERT / SET / SELECT 都是语法的一部分，绝不能当成新语句开头。
@@ -74,6 +74,11 @@ function implicitBreak({ word, prevText, paren, depth, lastCode, lastWord, headW
   }
   // UPDATE t SET … / INSERT … SET … / CREATE TRIGGER … SET … 里的 SET 属于上一条
   if (word === 'SET' && ['UPDATE', 'INSERT', 'CREATE'].includes(head)) return false
+  // COMMENT 只有后面跟 ON 时才是新语句（PG / Oracle 的 `COMMENT ON TABLE … IS …`）。
+  // ClickHouse 建表的表注释写在最后一行（`… \nCOMMENT '说明'`），MySQL 的表选项是
+  // `COMMENT='…'` —— 都属于上一条 CREATE TABLE；误切会把 `COMMENT '说明'` 单独发出去，
+  // ClickHouse 报 `failed at position 1 ('COMMENT')`（真机踩过）。
+  if (word === 'COMMENT' && String(nextWord || '').toUpperCase() !== 'ON') return false
   return true
 }
 
@@ -191,7 +196,8 @@ export function splitSqlStatementRanges(sql) {
       if (wordAtLineStart && implicitBreak({
         word: upper,
         prevText: s.slice(stmtStart, wordStart),
-        paren, depth, lastCode, lastWord, headWord, sawSelect, routine, mainStarted, attachSelect
+        paren, depth, lastCode, lastWord, headWord, sawSelect, routine, mainStarted, attachSelect,
+        nextWord: nextWordAt(s, i)
       })) {
         pushRange(stmtStart, wordStart)
         stmtStart = wordStart

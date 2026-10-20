@@ -9,10 +9,8 @@
           <!-- 路径：数据源名称在前，中间用 `.` 连接 -->
           <el-tag size="small" effect="plain" type="info">{{ [conn?.name, dbDisplayOf(conn?.type, database)].filter(Boolean).join('.') }}</el-tag>
         </div>
-        <div class="header-actions">
-          <el-button size="small" text :icon="CopyDocument" @click="copySql">{{ $t('oft.copySql') }}</el-button>
-          <el-button size="small" :icon="Close" @click="emit('close')">{{ $t('common.close') }}</el-button>
-        </div>
+        <!-- 动作按钮一律在底部 SQL 预览那一行（与「编辑表结构」同一排法）：
+             顶部只留标题与连接，右侧不再放「复制 SQL / 关闭」—— 关闭走页签上的 ×。 -->
       </div>
 
       <!-- 主体：**上编辑 + 下预览**（与「编辑表结构」一致；以前预览是右侧 380px 固定栏） -->
@@ -47,9 +45,13 @@
             {{ $t('oft.mysqlFnTip') }}
           </div>
           <div class="sql-foot">
-            <el-button type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk" size="small" @click="submit">
-              {{ mode === 'edit' ? $t('oft.saveEdit') : $t('oft.doCreate') }}
-            </el-button>
+            <div class="sql-foot-actions">
+              <!-- 「复制 SQL」从标题栏挪到这里：它本来就是围绕预览的动作 -->
+              <el-button size="small" text :icon="CopyDocument" :disabled="!previewSql" @click="copySql">{{ $t('oft.copySql') }}</el-button>
+              <el-button type="primary" :icon="CaretRight" :loading="saving" :disabled="!previewOk" size="small" @click="submit">
+                {{ mode === 'edit' ? $t('oft.saveEdit') : $t('oft.doCreate') }}
+              </el-button>
+            </div>
           </div>
         </div>
       </div>
@@ -60,7 +62,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CopyDocument, Close, DocumentCopy, CaretRight, Grid, View, Files, Operation, Cpu, Setting, BellFilled, Timer } from '@element-plus/icons-vue'
+import { CopyDocument, DocumentCopy, CaretRight, Grid, View, Files, Operation, Cpu, Setting, BellFilled, Timer } from '@element-plus/icons-vue'
 import { getFeatures, getObjectInfo, getTableDdl, alterTable } from '../../api'
 import { errMsg } from '../../utils/errMsg'
 import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
@@ -317,9 +319,12 @@ onMounted(async () => {
   padding: 8px 12px;
   border-top: 1px solid var(--dc-border-soft);
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   flex-shrink: 0;
 }
+/* 底部按钮组（复制 SQL ／ 执行创建·保存修改）：与「编辑表结构」的 .sql-foot-actions 同一排法 */
+.sql-foot-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
 .sql-hint {
   padding: 8px 12px;
   font-size: 12px;

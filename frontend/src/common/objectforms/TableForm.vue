@@ -45,7 +45,9 @@
                 <tr v-if="isClickHouse">
                   <td class="basic-label">{{ $t('tf.engine') }}</td>
                   <td>
-                    <!-- 常用引擎给下拉，清单外的（新版引擎 / 自建）照样能手输 —— 有下拉但不被下拉限制 -->
+                    <!-- 常用引擎给下拉，清单外的（新版引擎 / 自建）照样能手输 —— 有下拉但不被下拉限制。
+                         清单里给的**就是能落进 SQL 的完整写法**（MergeTree() 带括号、Log 不带），
+                         生成时原样拼、不再猜「是不是 MergeTree 族」补括号。 -->
                     <el-select v-model="form.engine" size="small" clearable filterable allow-create placeholder="MergeTree()">
                       <el-option v-for="e in CH_ENGINES" :key="e" :label="e" :value="e" />
                     </el-select>
@@ -352,6 +354,8 @@ import { has, qt, sq, buildType, ddlStyleOf, uid } from './objectFormUtils'
 import { t } from '../../utils/i18n'
 // 自动生成的索引名：与结构编辑器共用同一约定 <表名>_<字段名>_idx
 import { autoIndexName } from '../../utils/indexName'
+// ClickHouse 引擎清单：与「编辑表结构」共用同一份（带括号的完整写法，见文件里说明）
+import { CH_ENGINES } from './chEngines'
 
 const props = defineProps({
   features: { type: Object, default: () => ({}) },
@@ -406,6 +410,10 @@ const colWidths = computed(() => {
 
 const emptyCol = () => ({ uid: uid(), name: '', type: 'VARCHAR', length: '255', scale: '', nullable: true, defaultValue: '', autoIncrement: false, primaryKey: false, orderKey: false, comment: '', _sel: false })
 
+/* 长度 / 精度两格**不写任何占位提示**：所有数据库、新建表与编辑表结构统一为"不显示"
+   （用户要求：不要这个库有提示、另一个库没有 —— 提示本身还容易被当成必填项）。
+   必填与否仍由 lenRequired.js 在保存前校验。 */
+
 const form = reactive({
   name: '', comment: '', engine: '', charset: '', collation: '',
   // ClickHouse：分区键（表达式，建表必填，形如 toYYYYMM(ts)）；排序键不在这里 ——
@@ -428,12 +436,9 @@ const pkPreview = computed(() => {
 /* ===== 基本信息页里做成下拉的三项（ClickHouse）=====
    排序键 / 分区键 / 存储引擎都不是自由文本，而是"从已有列或已知引擎里挑" —— 做成下拉，
    不该让人靠记拼写（用户反馈）。清单外的值一律 allow-create 手输，不被清单限制。 */
-// ClickHouse 常用引擎：MergeTree 族 + 日志族 + 特殊表
-const CH_ENGINES = [
-  'MergeTree()', 'ReplacingMergeTree()', 'SummingMergeTree()', 'AggregatingMergeTree()',
-  'CollapsingMergeTree()', 'VersionedCollapsingMergeTree()', 'GraphiteMergeTree()',
-  'Log', 'TinyLog', 'StripeLog', 'Memory', 'Null',
-]
+// ClickHouse 常用引擎清单在 ./chEngines.js —— 「编辑表结构」也 import 同一份，
+// 免得两边各写一套（以前本文件是 `MergeTree()`、编辑页却只有文本框）。
+// 清单里的值就是能直接落进 SQL 的完整写法，生成时原样拼接，不做补括号猜测。
 // 已命名的列（下拉选项来源）
 const namedCols = computed(() => cols.filter(c => String(c.name || '').trim()))
 // 排序键 = 哪些列参与 ORDER BY（与「字段定义」里每行的「排序键」勾选框是同一件事）
@@ -545,7 +550,7 @@ const showAutoIncStart = computed(() => has(props.features, 'supportsTableOption
 
 
 /// 该有默认值的字段，一律给上默认值（**所有类型**共用这一处判断）：
-///   存储引擎：优先 InnoDB（MySQL 系），其次 MergeTree（ClickHouse），否则用后端的第一个；
+///   存储引擎：优先 InnoDB（MySQL 系），其次 MergeTree()（ClickHouse），否则用后端的第一个；
 ///   字符集  ：优先 utf8mb4，其次 utf8，否则第一个；排序规则取该字符集的 _general_ci（有才设）。
 /// 只在字段还是空的时候填 —— 用户改过的一律不碰（features 可能在重新取回时再次触发本 watch）。
 /// 为什么不把这些默认值写进 `form` 的初值：可取的值来自后端（features.engines / charsets），
@@ -560,7 +565,7 @@ const pickDefault = (list, preferred) => {
 }
 watch(() => props.features, (f) => {
   if (!f) return
-  if (!form.engine) form.engine = pickDefault(f.engines, ['InnoDB', 'MergeTree'])
+  if (!form.engine) form.engine = pickDefault(f.engines, ['InnoDB', 'MergeTree()', 'MergeTree'])
   if (!form.charset) form.charset = pickDefault(f.charsets, ['utf8mb4', 'utf8', 'UTF8'])
   if (!form.collation && form.charset) {
     const list = (f.collations || {})[form.charset] || []
@@ -809,10 +814,10 @@ const genClickhouseSql = (f, qn, cols) => {
     lines.push(`  INDEX ${qt(f, ix.name.trim())} (${qcols.join(', ')}) TYPE ${it} GRANULARITY 1`)
   }
   let sql = 'CREATE TABLE ' + qn + ' (\n' + lines.join(',\n') + '\n)'
-  const eng = String(form.engine || 'MergeTree').trim() || 'MergeTree'
-  // MergeTree 族带 ()；Log/TinyLog/Memory/Null 等无参引擎不加括号
-  if (/mergeTree/i.test(eng) && !eng.includes('(')) sql += '\nENGINE = ' + eng + '()'
-  else sql += '\nENGINE = ' + eng
+  // 引擎**原样拼接**：括号已经在下拉选项里（`MergeTree()` / `Log`），
+  // 手输的完整写法（如 `ReplicatedMergeTree('/p','r')`）同样原样保留 —— 这里不做任何补全/猜测。
+  const eng = String(form.engine || '').trim() || 'MergeTree()'
+  sql += '\nENGINE = ' + eng
   // PARTITION BY 必须排在 ENGINE 之后、ORDER BY 之前（ClickHouse 的语法顺序）。
   // 分区键是个**表达式**（toYYYYMM(ts) / toDate(ts) / 直接写列名都行），所以原样拼、不加引号。
   const part = String(form.partitionKey || '').trim()
@@ -862,20 +867,30 @@ const genSql = () => {
   }
 
   // 表内索引（MySQL，不含 Doris）
+  // 「索引类型」这一列真的会落进 SQL：FULLTEXT / SPATIAL 是关键字前缀，
+  // BTREE / HASH 是 `USING x` 后缀 —— 以前这一列选了等于没选（只有 PG 用了它）。
   if (style === 'mysql' && !isDoris.value) {
     for (const ix of idxs) {
       if (!ix.name.trim() || !ix.columns.length) continue
       const qcols = ix.columns.map(c => qt(f, c))
-      lines.push(`  ${ix.unique ? 'UNIQUE KEY' : 'KEY'} ${qt(f, ix.name.trim())} (${qcols.join(', ')})`)
+      const it = String(ix.indexType || '').trim().toUpperCase()
+      let kw = ix.unique ? 'UNIQUE KEY' : 'KEY'
+      let using = ''
+      if (it === 'FULLTEXT') kw = 'FULLTEXT KEY'
+      else if (it === 'SPATIAL') kw = 'SPATIAL KEY'
+      else if (it === 'BTREE' || it === 'HASH') using = ' USING ' + it
+      lines.push(`  ${kw} ${qt(f, ix.name.trim())} (${qcols.join(', ')})${using}`)
     }
   }
 
   // Doris：列定义括号内的非唯一 INDEX（唯一索引由表模型 Key 承担）
+  // 类型（INVERTED / BITMAP / BLOOMFILTER）用 `USING x` 跟在列清单后面
   if (isDoris.value) {
     for (const ix of idxs) {
       if (ix.unique || !ix.name.trim() || !ix.columns.length) continue
       const qcols = ix.columns.map(c => qt(f, c))
-      lines.push(`  INDEX ${qt(f, ix.name.trim())} (${qcols.join(', ')})`)
+      const it = String(ix.indexType || '').trim()
+      lines.push(`  INDEX ${qt(f, ix.name.trim())} (${qcols.join(', ')})${it ? ' USING ' + it : ''}`)
     }
   }
 
@@ -925,14 +940,36 @@ const genSql = () => {
     }
   }
 
-  // 独立索引语句（PG / Oracle / MSSQL / 通用）
+  // 独立索引语句（PG / Oracle / MSSQL / Doris / 通用）
+  // 每种方言「索引类型」的落点不同，不能一律当 USING：
+  //   PG     → `... USING btree`（后缀）
+  //   Doris  → `... USING INVERTED`（后缀）
+  //   Oracle → BITMAP / UNIQUE 是 CREATE 与 INDEX 之间的修饰词，NORMAL 就是普通索引
+  //   MSSQL  → CLUSTERED / NONCLUSTERED / COLUMNSTORE / UNIQUE 也是前置修饰词
   if (style !== 'mysql') {
     for (const ix of idxs) {
       if (!ix.name.trim() || !ix.columns.length) continue
       const qcols = ix.columns.map(c => qt(f, c))
-      let s = `CREATE ${ix.unique ? 'UNIQUE ' : ''}INDEX ${qt(f, ix.name.trim())} ON ${qn} (${qcols.join(', ')})`
-      if (ix.indexType && (style === 'pg')) s += ` USING ${ix.indexType}`
-      parts.push(s)
+      const it = String(ix.indexType || '').trim().toUpperCase()
+      let pre = ''
+      let post = ''
+      if (style === 'pg') {
+        if (ix.unique) pre += 'UNIQUE '
+        if (it && it !== 'UNIQUE') post = ` USING ${it.toLowerCase()}`
+      } else if (style === 'doris') {
+        if (it) post = ` USING ${it}`
+      } else if (style === 'oracle') {
+        if (it === 'BITMAP') pre += 'BITMAP '
+        if (ix.unique || it === 'UNIQUE') pre += 'UNIQUE '
+      } else if (style === 'mssql') {
+        if (it.includes('COLUMNSTORE')) pre += 'COLUMNSTORE '
+        if (it.includes('NONCLUSTERED')) pre += 'NONCLUSTERED '
+        else if (it.includes('CLUSTERED')) pre += 'CLUSTERED '
+        if (ix.unique || it === 'UNIQUE') pre += 'UNIQUE '
+      } else if (ix.unique || it === 'UNIQUE') {
+        pre += 'UNIQUE '
+      }
+      parts.push(`CREATE ${pre}INDEX ${qt(f, ix.name.trim())} ON ${qn} (${qcols.join(', ')})${post}`)
     }
   }
 
@@ -1369,9 +1406,21 @@ emit('sql', genSql())
    padding 同理：字段表给首列设了 4px，这里必须 !important 才能压回 9px（与表头对齐）。 */
 .basic-table tbody td:first-child,
 .basic-table thead tr:last-child th:first-child { text-align: left; }
-.basic-table td.basic-label {
+/* 「项目 / 值」与表头**同一字体、同一字号**，表头只加粗（与编辑表结构页保持一致：
+   原来左列 12.5px、值列控件里 14px、表头 12px，一行三种字号）。 */
+.basic-table thead tr:last-child th,
+.basic-table td.basic-label,
+.basic-table :deep(.el-input__inner),
+.basic-table :deep(.el-select__selected-item),
+.basic-table :deep(.el-select__placeholder) {
+  font-family: inherit;
   font-size: 12.5px;
-  color: var(--dc-text-mid);
+  letter-spacing: 0;
+}
+.basic-table thead tr:last-child th { color: var(--dc-text-strong); font-weight: 600; }
+.basic-table td.basic-label {
+  font-weight: 400;
+  color: var(--dc-text);
   padding-left: 9px !important;
   white-space: nowrap;
 }

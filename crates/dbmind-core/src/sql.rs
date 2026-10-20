@@ -103,6 +103,7 @@ fn implicit_break(
     routine: bool,
     main_started: bool,
     attach_select: bool,
+    next_word: &str,
 ) -> bool {
     if cur.trim().is_empty() || paren != 0 || depth != 0 {
         return false;
@@ -160,6 +161,13 @@ fn implicit_break(
     }
     // `UPDATE t SET …` / `INSERT … SET …` / `CREATE TRIGGER … SET …` 里的 SET 属于上一条
     if word == "SET" && matches!(head.as_str(), "UPDATE" | "INSERT" | "CREATE") {
+        return false;
+    }
+    // `COMMENT` 只有后面跟 `ON` 时才是**新语句**（PG / Oracle 的 `COMMENT ON TABLE … IS …`）。
+    // ClickHouse 建表把表注释写在最后一行（`… \nCOMMENT '说明'`），MySQL 的表选项是
+    // `COMMENT='…'` —— 这两处都属于上一条 CREATE TABLE，误切会把 `COMMENT '说明'`
+    // 单独发出去，ClickHouse 报 `failed at position 1 ('COMMENT')`（真机踩过）。
+    if word == "COMMENT" && next_word != "ON" {
         return false;
     }
     true
@@ -322,7 +330,7 @@ pub fn split_statements(sql: &str) -> Vec<String> {
                     if word_at_line_start
                         && implicit_break(
                             &upper, &cur, paren, depth, last_code, &last_word, &head_word,
-                            saw_select, routine, main_started, attach_select,
+                            saw_select, routine, main_started, attach_select, &next_word(&chars, i),
                         )
                     {
                         let trimmed = cur.trim();
@@ -1176,6 +1184,22 @@ mod tests {
         assert_eq!(split_statements("select ';'"), vec!["select ';'"]);
         assert_eq!(split_statements("select 1;"), vec!["select 1"]);
         assert!(split_statements("   \n  ; ;  ").is_empty());
+    }
+
+    #[test]
+    fn 无分号拆分_建表尾缀注释属于同一条() {
+        // ClickHouse：表注释写在最后一行，`COMMENT` 后面是字符串字面量（不是 ON）⇒ 不能切
+        let sql = "CREATE TABLE \"t\" (\n  \"id\" String COMMENT 'id'\n)\nENGINE = MergeTree()\nORDER BY (\"id\")\nCOMMENT '测试'";
+        assert_eq!(split_statements(sql), vec![sql]);
+        // MySQL 的表选项形态 `COMMENT='x'` 同理
+        let my = "CREATE TABLE t (id int)\nCOMMENT='x'";
+        assert_eq!(split_statements(my), vec![my]);
+        // PG / Oracle 的 `COMMENT ON …` 是真语句：没分号也要切开
+        let two = "CREATE TABLE t (id int)\nCOMMENT ON TABLE t IS 'x'";
+        assert_eq!(
+            split_statements(two),
+            vec!["CREATE TABLE t (id int)", "COMMENT ON TABLE t IS 'x'"]
+        );
     }
 
     #[test]

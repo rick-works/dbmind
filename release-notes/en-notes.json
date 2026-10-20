@@ -1,5 +1,11 @@
 {
     "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.39": [
+        "Table designer: the length / precision cells no longer show any placeholder hint (\"optional\", \"required\", \"precision\") — identical across every database and in both the new-table and edit-table pages; the item/value column and the header now share one font and size (header is only bolder), and the new-table page keeps Copy SQL / Create at the bottom of the preview",
+        "ClickHouse engine dropdown now lists the exact SQL-ready values (`MergeTree()` with parentheses, `Log` without, Replicated family included); the new-table and edit-table pages share one list and the generated SQL no longer guesses where to add parentheses",
+        "Index type now actually reaches the SQL: FULLTEXT / SPATIAL / USING HASH for MySQL, USING for Doris, BITMAP for Oracle, CLUSTERED for SQL Server; databases without index types (SQLite / H2 / Derby / DB2) no longer show that column",
+        "Fixed statement splitting without semicolons: a trailing COMMENT on a CREATE TABLE is no longer cut into its own statement (ClickHouse failed at position 1); MySQL's `COMMENT='…'` table option is covered too"
+    ],
     "v1.2.38": [
         "Multi-column sorting: just click the sort arrow in a column header (click again to cycle ascending → descending → off); priority 1/2/3 shows next to the icon and the footer lists the sort chain \"A ↑ → B ↓\" where a single key can be dropped or all cleared — no Shift required",
         "Table preview sends multi-column ORDER BY to the server (directions go through a whitelist, so dirty parameters never reach the SQL); SQL results and NoSQL documents sort in memory with the same comparator, so all three grids behave alike",

@@ -763,7 +763,10 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
             "oracle" | "dm" => vec!["NORMAL", "UNIQUE", "BITMAP", "FUNCTION-BASED NORMAL"],
             "sqlserver" => vec!["CLUSTERED", "NONCLUSTERED", "UNIQUE", "COLUMNSTORE"],
             "clickhouse" => vec!["minmax", "set", "bloom_filter", "ngrambf_v1", "tokenbf_v1"],
-            "sqlite" => vec!["INDEX", "UNIQUE"],
+            // SQLite 的 CREATE INDEX **没有**类型子句（只有 UNIQUE 前缀，而那是独立开关），
+            // 原先给了 ["INDEX","UNIQUE"] ⇒ 下拉里两个选项选了都不进 SQL，纯误导。如实给空，
+            // 前端 `v-if="indexTypes.length"` 就不会显示这一列。
+            // H2 / Derby / DB2 同理（没有索引类型概念），一并落到下面的空分支。
             _ => Vec::new(),
         },
         // 存储引擎：MySQL 系的标准引擎是服务端常量清单（InnoDB 等一直是这些名字）；
@@ -773,6 +776,20 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
         "engines": match kind.key() {
             "mysql" | "mariadb" | "doris" => vec![
                 "InnoDB", "MyISAM", "MEMORY", "CSV", "ARCHIVE", "BLACKHOLE", "MRG_MYISAM", "FEDERATED",
+            ],
+            // ClickHouse：清单给的是**能直接落进 SQL 的完整写法** —— MergeTree 族（含 Replicated*
+            // 副本版）必须带 `()`，Log/TinyLog/Memory/Null 这些无参引擎不能带。前端选中后原样拼
+            // `ENGINE = <值>`，不再按引擎名猜着补括号（那份猜测遇上带参引擎就会补错）。
+            // **Replicated 系列必须列全**：漏了的后果是编辑表结构里 `ReplicatedMergeTree` 在清单里
+            // 找不到同名项，原样显示成不带括号的样子（用户实测踩到过）。
+            // 这份清单与前端 `frontend/src/common/objectforms/chEngines.js` 保持一致。
+            "clickhouse" => vec![
+                "MergeTree()", "ReplacingMergeTree()", "SummingMergeTree()", "AggregatingMergeTree()",
+                "CollapsingMergeTree()", "VersionedCollapsingMergeTree()", "GraphiteMergeTree()",
+                "ReplicatedMergeTree()", "ReplicatedReplacingMergeTree()", "ReplicatedSummingMergeTree()",
+                "ReplicatedAggregatingMergeTree()", "ReplicatedCollapsingMergeTree()",
+                "ReplicatedVersionedCollapsingMergeTree()", "ReplicatedGraphiteMergeTree()",
+                "Log", "TinyLog", "StripeLog", "Set", "Join", "Memory", "Null",
             ],
             _ => Vec::new(),
         },

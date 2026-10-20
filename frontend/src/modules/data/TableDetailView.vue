@@ -72,7 +72,17 @@
                          只读展示当前值（数据来自 system.tables，见后端 table_options） -->
                     <tr v-if="isCH">
                       <td class="basic-label">{{ $t('tdet.engine') }}</td>
-                      <td><el-input :model-value="tableForm.engine" size="small" disabled placeholder="—" /></td>
+                      <td>
+                        <!-- 引擎清单与「新建表」是**同一份**（写的就是能落进 SQL 的完整写法：
+                             `MergeTree()` 带括号、`Log` 不带），下拉可点开看全清单。
+                             但建表后引擎改不了 ⇒ 选了立刻回弹并提示（onEnginePickLocked），
+                             值不进 tableForm、也不进任何生成的 SQL。 -->
+                        <el-select :model-value="engineShown" size="small" filterable allow-create placeholder="—"
+                                   :title="engineShown" :data-engine-count="chEngines.length"
+                                   @change="onEnginePickLocked">
+                          <el-option v-for="e in chEngines" :key="e" :label="e" :value="e" />
+                        </el-select>
+                      </td>
                     </tr>
                     <tr v-if="isCH">
                       <td class="basic-label">{{ $t('tdet.orderKey') }}</td>
@@ -239,12 +249,10 @@
                            这个类把单元格与控件自身的内边距都收窄，输入框能宽出一大截（列宽不变）。
                            也不再挂 title 提示（用户反馈：这两格的悬停提示多余）。 -->
                       <td class="c-center c-num">
-                        <el-input v-model="c.length" size="small" :disabled="lenDisabled(c)"
-                                  :placeholder="lenPlaceholder(c)" />
+                        <el-input v-model="c.length" size="small" :disabled="lenDisabled(c)" />
                       </td>
                       <td class="c-center c-num">
-                        <el-input v-model="c.scale" size="small" :disabled="lenDisabled(c)"
-                                  :placeholder="needsLength(c.typeBase) ? $t('tdet.colPrecision') : ''" />
+                        <el-input v-model="c.scale" size="small" :disabled="lenDisabled(c)" />
                       </td>
                       <td class="c-center">
                         <!-- 是/否一律只用勾选框（勾=是、不勾=否），不再跟「是/否」文字 —— 全库统一（用户反馈）。
@@ -435,7 +443,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, h } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, h, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 // 安全拦截的统一提示（右上角通知 + 「去设置」按钮）：与拦截器、其它页面共用同一套
 import { isSafetyBlock, showSafetyNotice } from '../../utils/safetyNotice'
@@ -453,6 +461,10 @@ import { mergeAlterRuns } from './alterMerge'
 import { canonTypeBase } from './typeName'
 // 自动生成的索引名：全库统一 <表名>_<字段名>_idx（与新建表对话框共用同一份实现）
 import { autoIndexName } from '../../utils/indexName'
+// ClickHouse 引擎清单：与「新建表」共用同一份（带括号的完整写法）
+import { CH_ENGINES } from '../../common/objectforms/chEngines'
+// 长度/精度是否必填：同样与「新建表」共用一份规则表
+import { needsLength as needsLengthOf } from '../../common/objectforms/lenRequired'
 // 只读 / 生产保护的口径（与用户管理页、MainView 同一份，见 utils/connGuard.js）
 import { isProdConn, loadProtectProd, guardConnWrite } from '../../utils/connGuard'
 
@@ -598,37 +610,11 @@ const loadPkName = async () => {
   else if (ddlStyle.value === 'pg') pkName.value = await pgPkName()
 }
 
-/**
- * 这些类型**必须**带长度/精度。
- *
- * 不填的后果不是「不写参数」这么轻：`nvarchar` 在 SQL Server 上会报错或退化成 1 字符宽，
- * `decimal` 在 MySQL 上默认 (10,0) —— 精度被悄悄改掉。所以按方言挡在保存之前。
- *
- * PG 不在此列：`varchar` / `numeric` 不带参数分别是「不限长」与「任意精度」，都是合法语义。
- */
-const LEN_REQUIRED = {
-  mysql: ['VARCHAR', 'CHAR', 'VARBINARY', 'BINARY', 'DECIMAL', 'NUMERIC'],
-  mssql: ['VARCHAR', 'NVARCHAR', 'CHAR', 'NCHAR', 'VARBINARY', 'BINARY', 'DECIMAL', 'NUMERIC'],
-  oracle: ['VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'DECIMAL', 'NUMERIC', 'RAW'],
-  // Derby 的 VARCHAR / CHAR / DECIMAL 必须带长度（无参语法错）。
-  // DB2 同理：`VARCHAR` 不带长度是**语法错**（DB2 要求 VARCHAR(n)），DECIMAL 缺省 (5,0)
-  // 会把精度悄悄改掉。db2 现在有自己的 ddlStyle（不再是 generic），这项校验才真正生效。
-  derby: ['VARCHAR', 'CHAR', 'DECIMAL', 'NUMERIC'],
-  db2: ['VARCHAR', 'CHAR', 'GRAPHIC', 'VARGRAPHIC', 'DECIMAL', 'NUMERIC'],
-  // CH：Decimal 必须给 (精度, 标度)，FixedString 必须给定长；DateTime64 有缺省 3 可不填
-  clickhouse: ['DECIMAL', 'FIXEDSTRING']
-}
-const needsLength = (typeBase) => {
-  const list = LEN_REQUIRED[ddlStyle.value]
-  if (!list) return false
-  const base = String(typeBase || '').trim().toUpperCase().replace(/\(.*/, '').trim()
-  return list.includes(base)
-}
-/** 长度输入框的占位：必填的给「必填」，可选的给「可选」，都不填也无妨的留空。 */
-const lenPlaceholder = (r) => {
-  if (r.opaque) return ''
-  return needsLength(r.typeBase) ? t('tdet.required') : t('tdet.optional')
-}
+// 长度/精度是否必填：规则表与「新建表」共用同一份（见 common/objectforms/lenRequired.js），
+// 这里只把当前方言接上去 —— 两个页面、所有数据库的判断因此完全一致。
+// 注意：它**只用于保存前校验**；长度/精度的格子里不写任何提示字样
+// （用户要求：所有数据库的提示必须一致 —— 统一为"不显示"，不要有的库有、有的库没有）。
+const needsLength = (typeBase) => needsLengthOf(ddlStyle.value, typeBase)
 
 const buildType = (t, len) => {
   const base = (t || '').trim() || 'VARCHAR'
@@ -2034,6 +2020,8 @@ const indexAddStatement = (f) => {
 const createIndexSql = (f) => {
   const cols = (f.columns || []).map(x => qt(x)).join(', ')
   const unique = f.unique ? 'UNIQUE ' : ''
+  const it = String(f.indexType || '').trim()
+  const up = it.toUpperCase()
   if (ddlStyle.value === 'mysql') {
     const ft = f.indexType === 'FULLTEXT' ? 'FULLTEXT ' : (f.indexType === 'SPATIAL' ? 'SPATIAL ' : '')
     const using = (f.indexType === 'BTREE' || f.indexType === 'HASH') ? ` USING ${f.indexType}` : ''
@@ -2041,6 +2029,24 @@ const createIndexSql = (f) => {
   }
   if (ddlStyle.value === 'pg') {
     return `CREATE ${unique}INDEX ${qt(f.name)} ON ${qt(props.table)} USING ${f.indexType || 'btree'} (${cols})`
+  }
+  // Doris：类型是 USING 后缀（INVERTED / BITMAP / BLOOMFILTER）
+  if (isDoris.value) {
+    return `CREATE ${unique}INDEX ${qt(f.name)} ON ${qt(props.table)} (${cols})${it ? ' USING ' + it : ''}`
+  }
+  // Oracle：BITMAP / UNIQUE 是 CREATE 与 INDEX 之间的修饰词（NORMAL 就是普通索引）
+  if (ddlStyle.value === 'oracle') {
+    const pre = (up === 'BITMAP' ? 'BITMAP ' : '') + (f.unique || up === 'UNIQUE' ? 'UNIQUE ' : '')
+    return `CREATE ${pre}INDEX ${qt(f.name)} ON ${qt(props.table)} (${cols})`
+  }
+  // SQL Server：CLUSTERED / NONCLUSTERED / COLUMNSTORE / UNIQUE 也是前置修饰词
+  if (ddlStyle.value === 'mssql') {
+    let pre = ''
+    if (up.includes('COLUMNSTORE')) pre += 'COLUMNSTORE '
+    if (up.includes('NONCLUSTERED')) pre += 'NONCLUSTERED '
+    else if (up.includes('CLUSTERED')) pre += 'CLUSTERED '
+    if (f.unique || up === 'UNIQUE') pre += 'UNIQUE '
+    return `CREATE ${pre}INDEX ${qt(f.name)} ON ${qt(props.table)} (${cols})`
   }
   return `CREATE ${unique}INDEX ${qt(f.name)} ON ${qt(props.table)} (${cols})`
 }
@@ -2186,6 +2192,35 @@ const rebuildIndex = async (row) => {
 // sortingKey / partitionKey 只有 ClickHouse 会填（来自后端 system.tables，只读展示）；
 // engine 对 ClickHouse 也由后端给出真实值（MergeTree 等），用于只读回显。
 const tableForm = ref({ engine: '', charset: '', collation: '', autoIncrement: '', comment: '', sortingKey: '', partitionKey: '', dorisModel: '', dorisDistCol: '', dorisBuckets: '', dorisReplication: '' })
+
+/** ClickHouse 引擎下拉的选项：优先用后端 features.engines（与「新建表」同一份），
+ *  内核没给清单时退回本地 CH_ENGINES —— 保证任何情况下都是带括号的完整写法，
+ *  不会退化成"只能手输、显示成不带括号的 MergeTree"。 */
+const chEngines = computed(() => (engines.value.length ? engines.value : CH_ENGINES))
+
+/** ClickHouse 引擎的**只读展示值**：库里是 `MergeTree`（DDL 原文就没括号），
+ *  清单给的是能落进 SQL 的完整写法 `MergeTree()`。清单里有同名项就显示那一项，
+ *  找不到（如带参数的 ReplicatedMergeTree('/p','r')）原样显示。
+ *  只影响这一格的显示文本 —— 不改 tableForm.engine，也不进任何生成的 SQL。 */
+const engineShown = computed(() => {
+  const v = String(tableForm.value.engine || '').trim()
+  if (!v) return ''
+  const head = v.replace(/\(.*$/, '')
+  const list = chEngines.value
+  const hit = list.find(e => String(e) === v) || list.find(e => String(e).replace(/\(.*$/, '') === head)
+  return hit || v
+})
+
+/** ClickHouse 改不了引擎（没有 ALTER TABLE … ENGINE）：下拉只用来**看清单**，
+ *  选了不落库、不进 SQL —— 立刻回弹到库里的真实值并提示一句。
+ *  为什么不禁用：禁用时下拉点不开，选项一个也看不见（用户要的就是"跟新建表一样能看到"）。 */
+const onEnginePickLocked = () => {
+  ElMessage.warning(t('tdet.engineLocked'))
+  const cur = tableForm.value.engine
+  // 清空再写回：el-select 没有 v-model，靠 modelValue 变化把内部选中态拉回来
+  tableForm.value.engine = ''
+  nextTick(() => { tableForm.value.engine = cur })
+}
 
 /** 解析 Doris 建表 DDL 中的只读属性：数据模型 / 分桶列 / 分桶数 / 副本数（均建于表创建时，不可改）。
  *  顺带把**表注释**也解析出来 —— Doris 的表清单接口不回 comment，表注释行要靠这里回显。 */
@@ -3321,9 +3356,23 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 /* padding-left 必须 !important：字段表那条"序号列"规则
    （.field-table tbody td:first-child { padding-left: 4px }）优先级更高（多一个 :first-child），
    会把这里的 9px 压成 4px —— 行标签因此比表头「项目」往左偏 5px，两列对不齐。 */
-.basic-table td.basic-label {
+/* 「项目 / 值」与表头**同一字体、同一字号**，表头只加粗（用户反馈：原来左列 12.5px、
+   值列的输入框 14px、表头 12px，一行里三种字号）。值列的文字在控件内部，必须用 :deep 压住，
+   否则 Element 的 --el-font-size-base（14px）会在输入框里冒出来。 */
+.basic-table thead tr:last-child th,
+.basic-table td.basic-label,
+.basic-table :deep(.el-input__inner),
+.basic-table :deep(.el-select__selected-item),
+.basic-table :deep(.el-select__placeholder) {
+  font-family: inherit;
   font-size: 12.5px;
-  color: var(--dc-text-mid);
+  letter-spacing: 0;
+}
+/* 表头：同字号同字体，只是**加黑**（更深的颜色 + 600） */
+.basic-table thead tr:last-child th { color: var(--dc-text-strong); font-weight: 600; }
+.basic-table td.basic-label {
+  font-weight: 400;
+  color: var(--dc-text);
   padding-left: 9px !important;
   white-space: nowrap;
 }
