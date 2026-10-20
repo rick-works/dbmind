@@ -82,8 +82,8 @@
               <th v-for="(col, ci) in visibleColumns" :key="'h' + col" :data-gkey="'0:' + ci"
                   :title="col + $t('nsql.colTitleSuffix')"
                   class="sortable"
-                  :class="{ 'sort-asc': orderColumn === col && orderDir === 'ASC',
-                            'sort-desc': orderColumn === col && orderDir === 'DESC',
+                  :class="{ 'sort-asc': sortDir(col) === 'ASC',
+                            'sort-desc': sortDir(col) === 'DESC',
                             'col-selected': selectedCols.has(col),
                             'col-sel-l': selEdges.colLeft.has(col),
                             'col-sel-r': selEdges.colRight.has(col) }"
@@ -97,11 +97,13 @@
                     <span class="th-label">{{ col }}</span>
                   </span>
                 </span>
-                <!-- 排序（当前页内排序：NoSQL 文档接口不支持 ORDER BY） -->
-                <span class="th-sort" :class="{ 'is-sorted': orderColumn === col }"
-                      :title="orderColumn === col ? (orderDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
-                      @mousedown.stop @click.stop="toggleSort(col)">
-                  <SortGlyph :state="orderColumn !== col ? '' : (orderDir === 'ASC' ? 'asc' : 'desc')" />
+                <!-- 排序（当前页内排序：NoSQL 文档接口不支持 ORDER BY）；
+                     直接点=追加为下一级排序（多列时图标旁标序号），已排过的列循环 升→降→移出 -->
+                <span class="th-sort" :class="{ 'is-sorted': !!sortDir(col) }"
+                      :title="sortTitle(col)"
+                      @mousedown.stop @click.stop="toggleSort(col, $event)">
+                  <SortGlyph :state="sortDir(col) === 'ASC' ? 'asc' : (sortDir(col) === 'DESC' ? 'desc' : '')" />
+                  <span v-if="orderKeys.length > 1 && sortNo(col)" class="sort-no">{{ sortNo(col) }}</span>
                 </span>
                 <span class="col-resizer" :title="$t('tdv.colResizeTip')"
                       @mousedown.stop.prevent="startColResize(ci, $event)"
@@ -162,8 +164,9 @@
       <div v-if="displayRows.length" class="pager">
         <span class="load-time">
           {{ loading ? formatElapsed(elapsedTime) + $t('tdv.queryingSuffix') : formatElapsed(result.executeTime || elapsedTime || 0) }}
-          <span v-if="orderColumn" class="sort-chip" title="点击取消排序"
-                @click="orderColumn = ''; orderDir = ''; applySort()">已按 {{ orderColumn }} {{ orderDir === 'ASC' ? '↑' : '↓' }} 排序（当前页）· 取消</span>
+          <!-- 排序链（当前页内排序）：点某一项只移除那一列、「取消」清空全部；
+               追加多列排序直接点各列表头的排序箭头 -->
+          <SortChip :keys="orderKeys" @remove="removeSortKey" @clear="clearSort" />
         </span>
         <span v-if="selectionSummary" class="sel-summary" :title="$t('sqlq.summaryTitle')">
           <span class="ss-item">选中 <b>{{ selectionSummary.cells }}</b> 格</span>
@@ -224,6 +227,9 @@ import { t } from '../../utils/i18n'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 import { columnAlignClasses } from '../../utils/cellAlign'
 import SortGlyph from '../../common/SortGlyph.vue'
+import SortChip from '../../common/SortChip.vue'
+// 多列排序（直接点表头箭头即追加）：与表预览 / SQL 结果共用同一套 keys 结构与比较器
+import { sortDirOf, sortIndexOf, toggleSortKey, makeRowComparator } from '../../utils/multiSort'
 import { rowWindow } from '../../utils/rowWindow'
 import { useExcelSelection } from '../../utils/excelSelection'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
@@ -399,39 +405,49 @@ watch(VP_ROW_H, () => { nextTick(syncViewport) })
 const onTableScroll = () => { nsqlScrolledSinceMove = true; syncViewport(); syncColWindow() }
 
 // ===== 排序（当前页内；NoSQL 文档接口不支持 ORDER BY）=====
-const orderColumn = ref('')
-const orderDir = ref('')
+// 多列：keys 与表预览 / SQL 结果同一套结构（A↑①、B↓②），比较器见 utils/multiSort.js
+const orderKeys = ref([])
 const rawRows = ref([]) // 载入时的原始行序快照：取消排序（第三击）时还原
+const sortDir = (col) => sortDirOf(orderKeys.value, col)
+const sortNo = (col) => sortIndexOf(orderKeys.value, col)
+const sortTitle = (col) => {
+  const dir = sortDir(col)
+  const base = dir === 'ASC' ? t('sqlq.sortAscTitle') : (dir === 'DESC' ? t('sqlq.sortDescTitle') : t('sqlq.sortNoneTitle'))
+  return base + ' · ' + t('sqlq.sortMultiTip')
+}
 const toggleSort = (col) => {
-  if (orderColumn.value !== col) {
-    orderColumn.value = col
-    orderDir.value = 'ASC'
-  } else if (orderDir.value === 'ASC') {
-    orderDir.value = 'DESC'
-  } else {
-    orderColumn.value = ''
-    orderDir.value = ''
-  }
+  // 直接点箭头就是多列排序（不需要 Shift）：没排过的列追加到末尾，已排过的列在自己位置上
+  // 循环 升→降→移出，其余列不动
+  orderKeys.value = toggleSortKey(orderKeys.value, col)
   applySort()
 }
 const applySort = () => {
-  if (!orderColumn.value) {
+  const cmp = makeRowComparator(orderKeys.value)
+  if (!cmp) {
     rows.value = rawRows.value.slice()
     rebuildRowIndex()
     return
   }
-  const col = orderColumn.value
-  const dir = orderDir.value === 'DESC' ? -1 : 1
-  const plain = (v) => (v === null || v === undefined) ? '' : (typeof v === 'object' ? JSON.stringify(v) : v)
-  rows.value.sort((a, b) => {
-    const va = a[col], vb = b[col]
-    if (va == null && vb == null) return 0
-    if (va == null) return -dir
-    if (vb == null) return dir
-    if (typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir
-    return String(plain(va)).localeCompare(String(plain(vb)), undefined, { numeric: true }) * dir
-  })
+  // 文档里的值是任意 JSON（对象/数组）——比较前统一拍平成字符串，否则 localeCompare 拿到 [object Object]
+  const plain = (r) => {
+    const o = {}
+    for (const k of orderKeys.value) {
+      const v = r[k.col]
+      o[k.col] = (v !== null && typeof v === 'object') ? JSON.stringify(v) : v
+    }
+    return o
+  }
+  rows.value.sort((a, b) => cmp(plain(a), plain(b)))
   rebuildRowIndex()
+}
+const removeSortKey = (col) => {
+  orderKeys.value = orderKeys.value.filter(k => k.col !== col)
+  applySort()
+}
+
+const clearSort = () => {
+  orderKeys.value = []
+  applySort()
 }
 
 // ===== 表头类型图标：NoSQL 无列元数据，按列名 + 首个非空值推断（与表预览同一套图标语言）=====
@@ -519,8 +535,7 @@ const load = async (p) => {
     rows.value = stampRows(res.rows || [])
     hiddenRows.value = new Set()
     rawRows.value = rows.value.slice()
-    orderColumn.value = ''
-    orderDir.value = ''
+    orderKeys.value = []
     clearAllSelections()
     if (typeof res.totalCount === 'number' && res.totalCount >= 0) {
       total.value = res.totalCount
@@ -1828,9 +1843,10 @@ onBeforeUnmount(() => {
   position: relative;
   background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left;
   /* 右侧多留 26px 给绝对定位的排序图标，字段名省略号在图标前收住（窄列不重叠） */
-  /* 上下内边距刻意不对称（上 2 / 下 8）：底部压着 2px 表头分隔线，
-     按"到分隔线"而不是"到单元格底边"算，文字才在视觉上居中 */
-  padding: 2px 26px 8px 10px; height: auto; line-height: 1.3; vertical-align: middle;
+  /* 上下内边距刻意不对称（上 3 / 下 7，和为 10）：底部压着 2px 表头分隔线，
+     按"到分隔线"而不是"到单元格底边"算，文字才在视觉上居中。
+     内容中心 = (H + 上 - 下) / 2，从 2-8 调到 3-7 即整体下移 1px（与表预览 / SQL 结果同一口径）。 */
+  padding: 3px 26px 7px 10px; height: auto; line-height: 1.3; vertical-align: middle;
   border: 1px solid var(--dc-border); white-space: nowrap;
   overflow: hidden;
   /* 与数据区之间的 2px 压边线：表头底的对比靠主题变量（浅色 #e4ebf8 / 深色 #2b3242，
@@ -1870,6 +1886,8 @@ onBeforeUnmount(() => {
   /* 不写 cursor：图标属于表头单元格，点它一样选列/排序 → 继承表头手型；
      写 default 会让表头里又出现一种箭头（用户反馈"表头符号不统一"） */
   margin-right: 5px;
+  /* 图标单独下移 1px（与表预览 / SQL 结果同一口径）；relative 不参与 flex 布局 */
+  position: relative; top: 1px;
 }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 /* 列宽拖拽把手 */
@@ -2015,9 +2033,9 @@ onBeforeUnmount(() => {
 .data-table td.active-cell { outline: 2px solid var(--dc-primary); outline-offset: -2px; }
 .pager { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; }
 .load-time { font-size: 13px; color: var(--dc-text-dim); font-weight: 500; }
-/* 当前页排序状态胶囊：可发现性 + 一键取消 */
-.sort-chip { margin-left: 8px; font-size: 12px; color: var(--dc-primary); cursor: pointer; }
-.sort-chip:hover { text-decoration: underline; }
+/* 排序链胶囊（样式在 common/SortChip.vue 里，三张网格共用） */
+/* 多列排序的优先级序号（1/2/3） */
+.data-table th .sort-no { font-size: 9px; line-height: 1; margin-left: 1px; color: inherit; }
 .json-cell { font-family: var(--dc-mono-font, monospace); font-size: 13px; color: #5aa0d8; }
 
 /* 「选择显示字段」下拉（popper 挂到 body，slot 内容仍带本组件 scoped 属性） */

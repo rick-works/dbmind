@@ -540,7 +540,8 @@ onBeforeUnmount(() => resizeObs?.disconnect())
 .data-table th:hover::after { border-right: 3px solid var(--dc-primary, var(--el-color-primary)); opacity: .5; }
 .data-table th .th-line1 { display: flex; align-items: center; justify-content: center; min-width: 0; }
 .data-table th .th-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; margin-right: 5px; }
+/* position/top：图标单独下移 1px（四张网格统一口径） */
+.data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; margin-right: 5px; position: relative; top: 1px; }
 .data-table th .th-type-ic .el-icon { font-size: 12px; }
 .data-table td {
   padding: 0 10px; height: var(--grid-row-h, 26px); line-height: var(--grid-row-h, 26px);

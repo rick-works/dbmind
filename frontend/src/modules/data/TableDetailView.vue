@@ -332,7 +332,7 @@
                 </div>
                 <el-table v-else :data="displayIdxRows" size="small" :row-class-name="idxRowClass" height="100%">
                   <el-table-column :label="$t('tdet.indexName')" min-width="140">
-                    <template #default="{ row }"><el-input v-model="row.name" size="small" :placeholder="$t('tdet.indexName')" /></template>
+                    <template #default="{ row }"><el-input v-model="row.name" size="small" :placeholder="$t('tdet.indexNamePh')" /></template>
                   </el-table-column>
                   <el-table-column :label="$t('tdet.unique')" width="64">
                     <template #default="{ row }"><el-switch v-model="row.unique" size="small" /></template>
@@ -1929,8 +1929,10 @@ const buildIdxRows = () => {
 }
 const newIdxRow = () => ({
   _uid: 'ixn' + (++idxUid), _state: 'new',
-  // 默认名走全库统一约定 <表名>_<字段名>_idx（见 utils/indexName.js）
-  name: autoIndexName(props.table, (displayCols.value.find(c => c.name && c.name.trim()) || {}).name),
+  // 名字**先留空**：一行索引最先确定的是"建在哪几列上"，选完字段再由
+  // onIdxColumnsChange 按 <表名>_<字段名>_idx 生成（用户反馈：一加就填个名字，
+  // 还得自己删掉重写）。空名不会静默丢 —— validate() 里 issueIndexName 会拦保存。
+  name: '',
   unique: false, indexType: indexTypes.value[0] || '', columns: [], _orig: null
 })
 // 选好「包含字段」后，把默认索引名跟着改（只在名字还是空/自动生成时改，不覆盖用户手写的）

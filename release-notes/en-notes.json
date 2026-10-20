@@ -1,5 +1,11 @@
 {
     "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.38": [
+        "Multi-column sorting: just click the sort arrow in a column header (click again to cycle ascending → descending → off); priority 1/2/3 shows next to the icon and the footer lists the sort chain \"A ↑ → B ↓\" where a single key can be dropped or all cleared — no Shift required",
+        "Table preview sends multi-column ORDER BY to the server (directions go through a whitelist, so dirty parameters never reach the SQL); SQL results and NoSQL documents sort in memory with the same comparator, so all three grids behave alike",
+        "New index names start empty and are generated as table_column_idx once you pick the included columns (matching the table designer), with a placeholder hint",
+        "Header type icons moved down 1px to sit on the field-name baseline"
+    ],
     "v1.2.37": [
         "Table designer: fixes \"Save changes\" failing with error 1054 when you only edit an AUTO_INCREMENT column (for example adding a comment to `id`) or rebuild the primary key — the same column was modified twice in a single ALTER and now appears once; the primary-key checkbox of an AUTO_INCREMENT column is locked with a tooltip explaining why",
         "Index names: auto-generated indexes follow the <table>_<column>_idx pattern everywhere (table designer and new-table dialog), and the name follows the column you pick under \"Included columns\"",

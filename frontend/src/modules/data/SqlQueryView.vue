@@ -312,8 +312,8 @@
                 <th v-for="c in resultVisibleCols" :key="'h' + c.idx" :data-gkey="'0:' + c.idx"
                     :title="c.name + $t('sqlq.colTitleSuffix')"
                     :class="{ 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name),
-                              'sort-asc': resultSortColumn === c.name && resultSortDir === 'ASC',
-                              'sort-desc': resultSortColumn === c.name && resultSortDir === 'DESC' }"
+                              'sort-asc': resultSortDirOf(c.name) === 'ASC',
+                              'sort-desc': resultSortDirOf(c.name) === 'DESC' }"
                     @mousedown="onResultColDragStart(c.idx, $event)"
                     @click="onResultHeaderClickOrSelect(c.name, $event)"
                     @contextmenu.prevent.stop="onResultHeaderContextMenu($event, c.name)"
@@ -328,10 +328,12 @@
                     <!-- 第二行：字段注释（单表 SELECT 时后端按方言取，JOIN/聚合不猜） -->
                     <span v-if="resComment(c.name)" class="th-comment" :title="resComment(c.name)">{{ resComment(c.name) }}</span>
                   </span>
-                  <span class="th-sort" :class="{ 'is-sorted': resultSortColumn === c.name }"
-                        :title="resultSortColumn === c.name ? (resultSortDir === 'ASC' ? $t('sqlq.sortAscTitle') : $t('sqlq.sortDescTitle')) : $t('sqlq.sortNoneTitle')"
-                        @mousedown.stop @click.stop="onResultHeaderClick(c.name)">
-                    <SortGlyph :state="resultSortColumn !== c.name ? '' : (resultSortDir === 'ASC' ? 'asc' : 'desc')" />
+                  <!-- 排序：直接点=追加为下一级排序（图标旁标序号）；已排过的列循环 ASC→DESC→移出 -->
+                  <span class="th-sort" :class="{ 'is-sorted': !!resultSortDirOf(c.name) }"
+                        :title="resultSortTitle(c.name)"
+                        @mousedown.stop @click.stop="onResultHeaderClick(c.name, $event)">
+                    <SortGlyph :state="resultSortDirOf(c.name) === 'ASC' ? 'asc' : (resultSortDirOf(c.name) === 'DESC' ? 'desc' : '')" />
+                    <span v-if="resultSortKeys.length > 1 && resultSortNo(c.name)" class="sort-no">{{ resultSortNo(c.name) }}</span>
                   </span>
                 </th>
               </tr>
@@ -419,6 +421,11 @@
                  不含网络往返/连接获取，真实耗时要远大于它（真机反馈 244ms 之谜） -->
             {{ running ? formatElapsed(elapsedTime) : formatElapsed(Math.max(elapsedTime || 0, result.executeTime || 0)) }}
           </span>
+          <!-- 排序链（当前结果在内存里排的）：与表预览/NoSQL 同一套胶囊，
+               按优先级从左到右列出（A ↑ → B ↓），与表头序号一一对应；
+               点某一项只移除那一列、「取消」清空全部并回到原始行序。
+               追加多列排序直接点各列表头的排序箭头（见 onResultHeaderClick）。 -->
+          <SortChip :keys="resultSortKeys" @remove="removeResultSortKey" @clear="clearResultSort" />
           <!-- 选中区汇总（底栏状态区）：框选单元格、选中整行或整列时给出
                格子数 / 求和 / 均值 / 最小 / 最大（只统计数值列），排查数据时不用自己算 -->
           <span v-if="resultSelectionSummary" class="result-summary" :title="$t('sqlq.summaryTitle')">
@@ -626,6 +633,9 @@ import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSpli
 import { useExcelSelection } from '../../utils/excelSelection'
 import { columnAlignClasses } from '../../utils/cellAlign'
 import SortGlyph from '../../common/SortGlyph.vue'
+import SortChip from '../../common/SortChip.vue'
+// 多列排序（直接点表头箭头即追加）：与表预览/NoSQL 共用同一套 keys 结构与比较器
+import { sortDirOf, sortIndexOf, toggleSortKey, normalizeSortKeys, makeRowComparator } from '../../utils/multiSort'
 import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
@@ -1246,8 +1256,7 @@ watch(() => (result.value?.rows || []).length, () => {
   vtGapBottom.value = (n - vtEnd.value) * VT_ROW_H.value
   clearResultRowSelection()
   resultActiveCell.value = null
-  resultSortColumn.value = ''
-  resultSortDir.value = 'ASC'
+  resultSortKeys.value = []
   // 快照原始行序：取消排序（第三次点击）时还原
   unsortedRows.value = (result.value?.rows || []).slice()
   nextTick(() => onResultTableScroll())
@@ -2411,33 +2420,32 @@ const guessTableName = () => {
   const m = /\bfrom\s+([`"[\].\w]+)/i.exec(s)
   return m ? m[1].replace(/[`"[\]]/g, '') : 'your_table'
 }
-// 结果集排序（对当前已加载的结果行做前端排序，不改动 SQL / 后端分页）
-const sortResultBy = (col, dir) => {
+// 结果集多列排序（对当前已加载的结果行做前端排序，不改动 SQL / 后端分页）
+// keys 结构与表预览完全一致（见 utils/multiSort.js）：A↑①、B↓② → 先比 A 再比 B
+const applyResultSort = () => {
   const rows = result.value?.rows
-  if (!col || !rows || !rows.length) return
-  const sorted = [...rows].sort((a, b) => {
-    const va = a[col]
-    const vb = b[col]
-    if (va == null && vb == null) return 0
-    if (va == null) return 1
-    if (vb == null) return -1
-    const na = Number(va)
-    const nb = Number(vb)
-    const bothNum = !isNaN(na) && !isNaN(nb) && String(va).trim() !== '' && String(vb).trim() !== ''
-    const c = bothNum ? na - nb : String(va).localeCompare(String(vb), 'zh')
-    return dir === 'DESC' ? -c : c
-  })
+  if (!rows) return
+  const keys = normalizeSortKeys(resultSortKeys.value)
+  const cmp = makeRowComparator(keys)
+  // 取消排序 = 回到载入时的原始行序（内存里留了快照）
+  const next = cmp ? [...rows].sort(cmp) : unsortedRows.value.slice()
   // 原地改 rows，不换对象：结果对象被异步计数引用着（fetchCountFor 回填 totalCount），
   // 整个替换会让在途的计数写进旧对象 —— 总数就再也不显示了
-  result.value.rows = sorted
+  result.value.rows = next
   // 行序变化后，按索引维护的选中/活动单元格已失效，清空避免错位
   resultSelectedSet.value = new Set()
   resultActiveCell.value = null
   resultLastAnchor.value = -1
 }
-// 结果表表头点击排序：升序 → 降序 → **取消（恢复原始行序）**，与表预览同一套三击循环
-const resultSortColumn = ref('')
-const resultSortDir = ref('ASC')
+// 结果表表头点击排序：直接点=追加为下一级排序（多列时标序号），已排过的列循环 升→降→移出
+const resultSortKeys = ref([])
+const resultSortDirOf = (name) => sortDirOf(resultSortKeys.value, name)
+const resultSortNo = (name) => sortIndexOf(resultSortKeys.value, name)
+const resultSortTitle = (name) => {
+  const dir = resultSortDirOf(name)
+  const base = dir === 'ASC' ? t('sqlq.sortAscTitle') : (dir === 'DESC' ? t('sqlq.sortDescTitle') : t('sqlq.sortNoneTitle'))
+  return base + ' · ' + t('sqlq.sortMultiTip')
+}
 // 载入时的原始行序快照：取消排序时还原
 const unsortedRows = ref([])
 // ===== 结果表头的**字段注释**：单表 SELECT 时后端按方言取（MySQL/Doris 走
@@ -2559,29 +2567,27 @@ onBeforeUnmount(() => {
   resColSelDrag = null
   document.removeEventListener('mousemove', onResColSelectMove)
 })
-const onResultHeaderClick = (name) => {
+const onResultHeaderClick = (name, e) => {
   if (!name) return
   if (Date.now() - resultLastResizeAt < 300) return // 拖列宽后的 click 不触发排序
   if (Date.now() - resultLastDragAt < 300) return   // 拖拽换列后的 click 不触发排序
-  if (resultSortColumn.value === name) {
-    if (resultSortDir.value === 'ASC') {
-      resultSortDir.value = 'DESC'
-    } else {
-      // 第三击 = 取消排序：恢复该结果集的原始行序（与表预览同一套三击循环）
-      resultSortColumn.value = ''
-      resultSortDir.value = 'ASC'
-      // 原地改 rows（同排序：保住对象身份，别把在途计数的回填落在旧对象上）
-      result.value.rows = unsortedRows.value.slice()
-      resultSelectedSet.value = new Set()
-      resultActiveCell.value = null
-      resultLastAnchor.value = -1
-      return
-    }
-  } else {
-    resultSortColumn.value = name
-    resultSortDir.value = 'ASC'
-  }
-  sortResultBy(name, resultSortDir.value)
+  // 直接点箭头就是多列排序（不需要 Shift）：没排过的列追加到末尾（默认升序），
+  // 已排过的列在自己位置上循环 升→降→移出，其余列不动。
+  // 「A 升序 + B 降序」= 点 A（A↑①）→ 点 B（B↑②）→ 再点 B（B↓②）。
+  resultSortKeys.value = toggleSortKey(resultSortKeys.value, name)
+  applyResultSort()
+}
+// 底栏排序链胶囊：点某一项只移除那一列（后面的列自动前移，序号不会出现空号），点「取消」清空全部
+const removeResultSortKey = (col) => {
+  const next = resultSortKeys.value.filter(k => k.col !== col)
+  if (next.length === resultSortKeys.value.length) return
+  resultSortKeys.value = next
+  applyResultSort()
+}
+const clearResultSort = () => {
+  if (!resultSortKeys.value.length) return
+  resultSortKeys.value = []
+  applyResultSort()
 }
 // 当前选区的 TSV 文本（Excel 可直接粘贴）：
 // 列选中 = 列名 + 该列全部已加载行；行选中 = 所选行的全部可见列；否则 = 当前单元格
@@ -4372,8 +4378,7 @@ const selectResultTab = (i) => {
   currentPage.value = item.page || 1
   clearResultRowSelection()
   resultActiveCell.value = null
-  resultSortColumn.value = ''
-  resultSortDir.value = 'ASC'
+  resultSortKeys.value = []
   unsortedRows.value = (result.value?.rows || []).slice()
   hiddenResultCols.value = new Set()
   clearColSelect()
@@ -5568,6 +5573,7 @@ onBeforeUnmount(() => {
 /* 底栏文字统一跟「结果表格字号」走（--grid-fs 由 .result-grid 提供）：
    与表格同字号，次要信息（统计 / 选中汇总）比它小 1px，层级关系保留 */
 .result-time { font-size: var(--grid-fs, 13px); color: var(--dc-text-dim); font-weight: 500; }
+/* 排序链胶囊（样式在 common/SortChip.vue 里，三张网格共用） */
 /* 分页器字号：**整个子树统一**，不再逐个列举内部件。
    原因：Element 把字号分别写在 wrapper / selected-item / placeholder / input__inner /
    pager / btn 等多个元素上（还按 size 分级），逐条列举漏过两次 ——
@@ -5613,7 +5619,10 @@ onBeforeUnmount(() => {
    用 inset 阴影而不是 border-bottom：表是 border-collapse: collapse，折叠后的下边框由 table 画，
    不跟着吸顶走（同上面 thead 那段注释说的"上边缝"是一个道理）。
    注意排序态会用自己的主色 2px 条覆盖它（见下面 .sort-asc/.sort-desc），那是对的。 */
-.data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 2px 26px 8px 10px; height: auto; line-height: 1.3; vertical-align: middle; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; box-shadow: inset 0 -2px 0 var(--dc-table-head-line); }
+/* 上下内边距刻意不对称（上 3 / 下 7，和为 10 与原来一致 —— 表头高度不变）：
+   底部压着 2px 表头分隔线，按"到分隔线"而不是"到单元格底边"算，文字才在视觉上居中；
+   内容中心 = (H + 上 - 下) / 2，所以把上下差从 2-8 改成 3-7，图标与文字整体再下移 1px（用户口径）。 */
+.data-table th { position: relative; background: var(--dc-bg-table-head); color: var(--dc-text-strong); font-weight: 600; text-align: left; padding: 3px 26px 7px 10px; height: auto; line-height: 1.3; vertical-align: middle; border: 1px solid var(--dc-border); white-space: nowrap; overflow: hidden; box-shadow: inset 0 -2px 0 var(--dc-table-head-line); }
 /* 表头文字块：竖排两行 —— 第一行「类型图标 + 字段名」，第二行注释顶格 */
 .data-table th .th-text {
   display: inline-flex; flex-direction: column; justify-content: center;
@@ -5637,7 +5646,9 @@ onBeforeUnmount(() => {
    颜色由全局 th-t-* 按类型族给，这里不写 color（scoped 优先级会压掉全局配色）。
    也不写 cursor：图标是**表头单元格的一部分**，点它同样会选中整列/切排序，
    所以让它继承表头的手型 —— 写 default 会让表头里又冒出一种箭头（用户反馈过"表头符号不统一"）。 */
-.data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; vertical-align: middle; margin-right: 5px; }
+/* position/top：图标单独下移 1px（用户口径）—— 12px 图标几何居中但字面重心偏上，
+   与字段名的视觉中线差一档；relative 偏移不参与 flex 布局，不影响行高列宽 */
+.data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; vertical-align: middle; margin-right: 5px; position: relative; top: 1px; }
 .data-table th .th-type-ic .el-icon { font-size: calc(var(--grid-fs, 13px) - 1px); }
 /* 表头排序按钮：固定在列头右缘垂直居中（右侧 26px 已预留，与表预览/NoSQL 同款） */
 .data-table th .th-sort {
@@ -5649,6 +5660,8 @@ onBeforeUnmount(() => {
 .data-table th:hover .th-sort { opacity: 1; }
 .data-table th .th-sort:hover { opacity: 1; color: var(--dc-primary); }
 .data-table th .th-sort.is-sorted { opacity: 1; color: var(--dc-primary); }
+/* 多列排序的优先级序号（1/2/3）：跟在排序图标右侧，9px 不额外占位 */
+.data-table th .sort-no { font-size: 9px; line-height: 1; margin-left: 1px; color: inherit; }
 /* 已排序列：文字主色 + 底部 2px 主色条（与表预览/NoSQL 同款） */
 .data-table th.sort-asc, .data-table th.sort-desc { color: var(--dc-primary); box-shadow: inset 0 -2px 0 var(--dc-primary); }
 .data-table tbody tr.vt-gap td { padding: 0; height: auto; line-height: 0; border: none; background: transparent !important; font-size: 0; }

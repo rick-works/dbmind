@@ -1756,6 +1756,52 @@ fn filter_clause(dialect: &Dialect, filters: &[Value]) -> Option<String> {
     combined
 }
 
+/// 排序键解析：多列 `orderColumns=age:ASC,name:DESC`（按**优先级**从左到右），
+/// 老前端只传单列 `orderColumn`/`orderDir` 也认（前者非空时优先）。
+///
+/// 为什么在这里解析而不是直接拼字符串：方向必须是白名单（`asc`/`desc`），
+/// 否则 `orderColumns=x:;drop table t` 这类就顺着 URL 进 SQL 了。
+/// 列名本身交给 `dialect.quote()` 兜住，这里的过滤只是防脏值。
+fn parse_order_specs(params: &Params) -> Vec<(String, String)> {
+    const MAX_KEYS: usize = 4;
+    let mut out: Vec<(String, String)> = Vec::new();
+    if let Some(raw) = params.get("orderColumns") {
+        for part in raw.split(',') {
+            let mut it = part.splitn(2, ':');
+            let col = it.next().unwrap_or_default().trim();
+            if col.is_empty() {
+                continue;
+            }
+            let dir = match it.next().unwrap_or("asc").trim() {
+                d if d.eq_ignore_ascii_case("desc") => "desc",
+                _ => "asc",
+            };
+            // 同列重复只留第一次：`a:ASC,a:DESC` 这种在前端不该出现，后端也别拼出两条
+            if out.iter().any(|(c, _)| c == col) {
+                continue;
+            }
+            out.push((col.to_string(), dir.to_string()));
+            if out.len() >= MAX_KEYS {
+                break;
+            }
+        }
+    }
+    if out.is_empty() {
+        // 先绑到变量再 trim：`unwrap_or_default()` 返回的是 owned String，
+        // 直接对临时值取 &str 会 E0716（temporary value dropped while borrowed）
+        let raw_col = params.get("orderColumn").unwrap_or_default();
+        let col = raw_col.trim();
+        if !col.is_empty() {
+            let desc = params
+                .get("orderDir")
+                .map(|d| d.eq_ignore_ascii_case("desc"))
+                .unwrap_or(false);
+            out.push((col.to_string(), if desc { "desc" } else { "asc" }.to_string()));
+        }
+    }
+    out
+}
+
 /// 分页浏览表数据（`/data`）。
 ///
 /// 界面语义（分页 / 关键字模糊 / 排序）在这里翻成 SQL —— 内核只认「一条语句」。
@@ -1781,8 +1827,8 @@ pub async fn data(
         .filter(|s| *s > 0 && *s <= 100_000)
         .unwrap_or(50);
     let keyword = params.get("keyword").unwrap_or_default();
-    let order_column = params.get("orderColumn").unwrap_or_default();
-    let order_dir = params.get("orderDir").unwrap_or_default();
+    // 排序键（多列，按优先级）；空表示不排序
+    let order_specs = parse_order_specs(&params);
     // 高级搜索的条件（界面「添加条件」那一排）：
     // `[{"join":"AND","col":"id","op":"eq","value":"548","colType":"number"}]`
     // 这个参数以前被整个丢掉 —— 界面点了「应用筛选」却还是整张表，就是这么来的。
@@ -1841,13 +1887,13 @@ pub async fn data(
     };
     let mut sql = format!("select * from {quoted}{where_suffix}");
 
-    if !order_column.trim().is_empty() {
-        let dir = if order_dir.eq_ignore_ascii_case("desc") {
-            "desc"
-        } else {
-            "asc"
-        };
-        sql.push_str(&format!(" order by {} {dir}", dialect.quote(&order_column)));
+    if !order_specs.is_empty() {
+        // 多列：`order by "age" asc, "name" desc` —— 顺序即优先级，列名走方言 quote，方向已白名单
+        let parts: Vec<String> = order_specs
+            .iter()
+            .map(|(col, dir)| format!("{} {dir}", dialect.quote(col)))
+            .collect();
+        sql.push_str(&format!(" order by {}", parts.join(", ")));
     } else if dialect.needs_order_by_for_paging() {
         // SQL Server 的 OFFSET/FETCH 必须有 ORDER BY
         sql.push_str(" order by (select null)");

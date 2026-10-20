@@ -309,7 +309,7 @@
           </div>
           <el-table v-else :data="idxs" size="small" height="100%" :empty-text="$t('tf.noIndexes')">
             <el-table-column :label="$t('tf.idxName')" min-width="140">
-              <template #default="{ row }"><el-input v-model="row.name" size="small" /></template>
+              <template #default="{ row }"><el-input v-model="row.name" size="small" :placeholder="$t('tf.idxNamePh')" /></template>
             </el-table-column>
             <el-table-column :label="$t('tf.idxUnique')" width="64">
               <template #default="{ row }"><el-switch v-model="row.unique" size="small" /></template>
@@ -636,8 +636,9 @@ const move = (dir) => {
 
 const addIndex = () => {
   if (!cols.some(c => c.name.trim())) return ElMessage.warning(t('tf.addColumnFirst'))
-  // 默认索引名与结构编辑器同一约定：<表名>_<字段名>_idx（见 utils/indexName.js）
-  idxs.push({ name: autoIndexName(form.name, cols.find(c => c.name.trim())?.name), unique: false, indexType: '', columns: [] })
+  // 名字先留空：选完「包含字段」后由 onIdxColumnsChange 按 <表名>_<字段名>_idx 生成
+  //（与结构编辑器一致 —— 那里也是"先选列、再出名字"）
+  idxs.push({ name: '', unique: false, indexType: '', columns: [] })
 }
 /** 选好「包含字段」后让默认索引名跟着走（只改还长着自动名样子的行，不覆盖用户手写的名字） */
 const onIdxColumnsChange = (row) => {
