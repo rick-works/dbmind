@@ -23,7 +23,7 @@ use crate::statement::classify;
 use crate::types::{ColumnDetail, ConnectReport, ConnectionConfig, QueryResult, TableInfo};
 use crate::{CancelToken, ConnectionKind, RuntimeMode};
 use serde_json::{json, Map};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -649,28 +649,38 @@ impl Driver for AgentDriver {
             |key| {
                 let request_id = call.execution_id.to_string();
                 // 取消 = 通知宿主中断语句，不是「等下一行结果再检查」
-                let finished = Arc::new(AtomicBool::new(false));
+                //
+                // **为什么用通道而不是「睡眠 + 轮询一个 AtomicBool」**：旧实现是
+                // `loop { if finished { break }; sleep(80ms) }`，而调用结束时又必须
+                // `join()` 这个线程 —— 于是**每条语句都白等 0~80ms**（平均 40ms）。
+                // 本地库实测一次 `select 1` 从 ~30ms 涨到 ~115ms，全是这个 join 的税；
+                // 写侧一条 INSERT 也交一次，是「批量写比 DataX 慢」里最隐蔽的一笔固定开销。
+                // 换成通道后：调用一结束就 `send`，watcher 的 `recv_timeout` **立刻**返回
+                // Disconnected/Ok，join 几乎零成本；取消的响应粒度仍是 80ms。
+                let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
                 let watcher = {
                     let host = self.host.clone();
                     let cancel = call.cancel.clone();
-                    let finished = finished.clone();
                     let request_id = request_id.clone();
                     std::thread::Builder::new()
                         .name("dbmind-agent-cancel".to_string())
-                        .spawn(move || {
-                            while !finished.load(Ordering::SeqCst) {
-                                if cancel.is_cancelled() {
-                                    // 只看「宿主有没有找到那条语句」决定要不要再试：
-                                    // - `Ok(false)`：宿主还没登记这条语句 ⇒ 这次取消可能先到了，
-                                    //   下一轮再发（否则用户点了取消会**什么都不发生**）；
-                                    // - `Ok(true)`：已经打断，收工；
-                                    // - `Err`：宿主不支持取消之类，别反复打扰。
-                                    match host.cancel(&request_id) {
-                                        Ok(false) => {}
-                                        _ => break,
+                        .spawn(move || loop {
+                            match done_rx.recv_timeout(Duration::from_millis(80)) {
+                                // 调用已结束（或发送端已丢弃）⇒ 收工
+                                Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                                Err(RecvTimeoutError::Timeout) => {
+                                    if cancel.is_cancelled() {
+                                        // 只看「宿主有没有找到那条语句」决定要不要再试：
+                                        // - `Ok(false)`：宿主还没登记这条语句 ⇒ 这次取消可能先到了，
+                                        //   下一轮再发（否则用户点了取消会**什么都不发生**）；
+                                        // - `Ok(true)`：已经打断，收工；
+                                        // - `Err`：宿主不支持取消之类，别反复打扰。
+                                        match host.cancel(&request_id) {
+                                            Ok(false) => {}
+                                            _ => break,
+                                        }
                                     }
                                 }
-                                std::thread::sleep(Duration::from_millis(80));
                             }
                         })
                         .ok()
@@ -695,7 +705,8 @@ impl Driver for AgentDriver {
                 // 内核等待比宿主自身超时略长：让宿主先给出结构化错误，而不是内核单方面判超时
                 let outcome = self.host.call(Some(&request_id), "query", params, Some(wait));
 
-                finished.store(true, Ordering::SeqCst);
+                // 叫醒 watcher（不 join 也能保证它不会再调 cancel：send 之后它立刻 break）
+                let _ = done_tx.send(());
                 if let Some(handle) = watcher {
                     let _ = handle.join();
                 }

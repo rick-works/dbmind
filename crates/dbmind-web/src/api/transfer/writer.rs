@@ -1,0 +1,391 @@
+//! Writer 插件：吃行批次、批量落库、脏行降级、事务提交。
+//!
+//! `SqlWriter` 覆盖所有走 JDBC 的目标（批量 INSERT），并且把 Doris 的
+//! **Stream Load** 快通道收进同一个插件：`stream` 有配置时优先 HTTP 直推 BE，
+//! 一失败就本表内回退 INSERT —— 这与改造前在 `sync_table_inner` 里写的
+//! `stream_fallback` 分支是同一套语义，只是不再和读写编排混在一起。
+//!
+//! 落库的三条底线（改造前后一致，don't regress）：
+//! - **批量**：一条语句按目标方言塞几千~几万行（`per_statement`），不是一行一条；
+//! - **部分成功**：一条语句失败 → 降级逐行重试，坏行单独计失败并记样例错误，
+//!   好行照常落库（对齐 DataX 的 errorLimit 思路：脏数据可见，不静默吞掉）；
+//! - **事务**：每路 writer 自己开/提交（`internal:sync-w{i}` 是一条独立连接），
+//!   不跨连接拼事务 —— 改造前那层「在 A 连接上 set autocommit=0、在 B 连接上写」
+//!   的事务等于没开（真机踩过）。
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use dbmind_core::CellValue;
+
+use super::{BF, StreamCfg, TablePlan};
+use crate::api::dialect::Dialect;
+use crate::api::sync::{
+    build_update, doris_stream_load, estimate_row_bytes, json_row_bytes, rows_need_json_fallback,
+    run_target_in, supports_multi_statement, txn_batch, write_insert_rows, write_update_batch,
+    write_parallelism, SESSION_SYNC, STREAM_LOAD_MAX_BYTES, UPDATE_BATCH,
+};
+use crate::api::tasks::Task;
+use crate::AppState;
+
+/// 落库插件。
+pub trait Writer: Send + Sync {
+    fn name(&self) -> &'static str;
+    /// 并发写连接数（单连接池的库会自动是 1）
+    fn workers(&self) -> usize;
+    /// 第 `worker` 路开始（开事务；不支持事务的方言是空操作）
+    fn begin<'a>(&'a self, worker: usize) -> BF<'a, ()>;
+    /// 写一批**新增**行，返回成功落库的行数
+    fn write<'a>(&'a self, worker: usize, rows: &'a [Vec<CellValue>]) -> BF<'a, Result<u64, String>>;
+    /// 写一批**已存在**的行（upsert 的更新；内部攒批，凑满一批才真发）
+    fn update<'a>(&'a self, rows: &'a [Vec<CellValue>]) -> BF<'a, Result<u64, String>>;
+    /// 收尾：把攒着的更新发出去（返回真正写掉的行数）
+    fn flush<'a>(&'a self) -> BF<'a, Result<u64, String>>;
+    /// 第 `worker` 路结束（提交/复位）
+    fn finish<'a>(&'a self, worker: usize) -> BF<'a, ()>;
+}
+
+pub struct SqlWriter {
+    state: AppState,
+    task: Option<std::sync::Arc<Task>>,
+    tgt_target: String,
+    scope: String,
+    target_name: String,
+    table: String,
+    columns: Vec<String>,
+    target_types: Vec<Option<String>>,
+    kind: Dialect,
+    identity_on: bool,
+    /// upsert 才需要：主键列下标 + 是否支持一条语句多条 UPDATE
+    upsert: bool,
+    key_indexes: Vec<usize>,
+    multi_statement: bool,
+    pending_updates: tokio::sync::Mutex<Vec<String>>,
+    /// upsert 的更新走一条串行会话，它自己的事务（攒 500 条一提交 → 一次 fsync，
+    /// 不包事务的话每批 500 条就 autocommit 一次，20 万行的更新会多出几百次提交）
+    update_txn_open: AtomicBool,
+    txn: Option<(&'static str, &'static str, &'static str)>,
+    txn_open: Vec<AtomicBool>,
+    stream: Option<StreamCfg>,
+    stream_failed: AtomicBool,
+    workers: usize,
+}
+
+impl SqlWriter {
+    pub fn new(plan: &TablePlan) -> Self {
+        let kind_key = plan.target_kind.kind.key();
+        let workers = if plan.stream.is_some() {
+            // Stream Load 的收益来自「在途并发」：下一个请求的上传与上一个 BE publish 重叠
+            3
+        } else {
+            write_parallelism(plan.target_kind.kind)
+        };
+        Self {
+            state: plan.state.clone(),
+            task: plan.task.clone(),
+            tgt_target: plan.tgt_target.clone(),
+            scope: plan.tgt_scope.clone(),
+            target_name: plan.target_name.clone(),
+            table: plan.table.clone(),
+            columns: plan.columns.clone(),
+            target_types: plan.target_types.clone(),
+            kind: plan.target_kind,
+            identity_on: plan.identity_on,
+            upsert: plan.upsert,
+            key_indexes: plan.key_indexes.clone(),
+            multi_statement: supports_multi_statement(kind_key),
+            pending_updates: tokio::sync::Mutex::new(Vec::new()),
+            update_txn_open: AtomicBool::new(false),
+            txn: txn_batch(kind_key),
+            txn_open: (0..workers.max(1)).map(|_| AtomicBool::new(false)).collect(),
+            stream: plan.stream.clone(),
+            stream_failed: AtomicBool::new(false),
+            workers: workers.max(1),
+        }
+    }
+
+    /// 每路 writer 一条**独立会话**：会话池里「亲和键不同」才会给不同物理连接，
+    /// 全用同一个键的话 N 路并发会挤在一条连接上排队（改造前的真实瓶颈）。
+    fn session(&self, worker: usize) -> String {
+        format!("internal:sync-w{worker}")
+    }
+}
+
+impl Writer for SqlWriter {
+    fn name(&self) -> &'static str {
+        if self.stream.is_some() {
+            "sql-writer+stream-load"
+        } else {
+            "sql-writer"
+        }
+    }
+
+    fn workers(&self) -> usize {
+        self.workers
+    }
+
+    fn begin<'a>(&'a self, worker: usize) -> BF<'a, ()> {
+        Box::pin(async move {
+            let Some((begin, _, _)) = self.txn else {
+                return;
+            };
+            let session = self.session(worker);
+            match run_target_in(&self.state, &self.tgt_target, begin, &session).await {
+                Ok(_) => {
+                    if let Some(open) = self.txn_open.get(worker) {
+                        open.store(true, Ordering::SeqCst);
+                    }
+                }
+                Err(_) => {
+                    // 开不了事务就退回 autocommit 逐条写 —— 慢，但功能不缺
+                    if let Some(task) = &self.task {
+                        task.log(format!("表 {}：开启事务失败，退回逐条提交", self.table));
+                    }
+                }
+            }
+        })
+    }
+
+    fn write<'a>(&'a self, worker: usize, rows: &'a [Vec<CellValue>]) -> BF<'a, Result<u64, String>> {
+        Box::pin(async move {
+            if let Some(stream) = self.stream.as_ref() {
+                if !self.stream_failed.load(Ordering::SeqCst) && !rows.is_empty() {
+                    // **按字节切块**：行数管不住行宽（宽行表一页能拼出 85MB，BE 的 publish
+                    // 代价陡增，实测反而更慢）。16MB/块是实测甜点。
+                    let mut start = 0usize;
+                    let mut loaded_total = 0u64;
+                    let mut stream_error: Option<String> = None;
+                    // 文本里含分隔控制字符的批会走 JSON（体积约等于 CSV 的 1.3 倍），
+                    // 字节上限按实际编码方式算，别让宽行表把单请求推到 20MB+
+                    let json_mode = rows_need_json_fallback(rows);
+                    while start < rows.len() {
+                        let mut end = start;
+                        let mut bytes = 0usize;
+                        while end < rows.len() {
+                            let row_bytes = if json_mode {
+                                json_row_bytes(&rows[end])
+                            } else {
+                                estimate_row_bytes(&rows[end])
+                            };
+                            if end > start && bytes + row_bytes > STREAM_LOAD_MAX_BYTES {
+                                break;
+                            }
+                            bytes += row_bytes;
+                            end += 1;
+                        }
+                        match doris_stream_load(
+                            stream.fe_http_port,
+                            stream.be_http_port,
+                            &stream.host,
+                            &stream.user,
+                            &stream.pass,
+                            &self.scope,
+                            &self.table,
+                            &self.columns,
+                            &rows[start..end],
+                        )
+                        .await
+                        {
+                            // **按 BE 实际载入行数记账**：类型不匹配等被过滤的行计入失败，不静默吞
+                            Ok(loaded) => {
+                                loaded_total += loaded;
+                                if let Some(task) = &self.task {
+                                    let filtered = (end - start) as u64 - loaded;
+                                    if filtered > 0 {
+                                        task.add_rows_failed(filtered);
+                                        task.log(format!(
+                                            "表 {}：Stream Load 本批 {filtered} 行被目标过滤（类型不匹配等），已计入失败数",
+                                            self.table
+                                        ));
+                                    }
+                                }
+                            }
+                            Err(err) => {
+                                stream_error = Some(err);
+                                break;
+                            }
+                        }
+                        start = end;
+                    }
+                    if stream_error.is_none() {
+                        return Ok(loaded_total);
+                    }
+                    // 首次失败（端口不通/权限/格式）：本表内回退 INSERT 管道，数据不丢。
+                    // 已经上成功的块不再重发，只把**剩下的行**走 INSERT。
+                    self.stream_failed.store(true, Ordering::SeqCst);
+                    if let Some(task) = &self.task {
+                        task.log(format!(
+                            "表 {}：Stream Load 失败（{}），剩余 {} 行回退 INSERT 管道",
+                            self.table,
+                            stream_error.unwrap_or_default(),
+                            rows.len() - start
+                        ));
+                    }
+                    let rest = write_insert_rows(
+                        &self.state,
+                        &self.tgt_target,
+                        &self.session(worker),
+                        &self.target_name,
+                        &self.columns,
+                        &self.target_types,
+                        self.kind,
+                        &rows[start..],
+                        self.identity_on,
+                        self.task.as_ref(),
+                        &self.table,
+                    )
+                    .await?;
+                    return Ok(loaded_total + rest);
+                }
+            }
+            write_insert_rows(
+                &self.state,
+                &self.tgt_target,
+                &self.session(worker),
+                &self.target_name,
+                &self.columns,
+                &self.target_types,
+                self.kind,
+                rows,
+                self.identity_on,
+                self.task.as_ref(),
+                &self.table,
+            )
+            .await
+        })
+    }
+
+    fn update<'a>(&'a self, rows: &'a [Vec<CellValue>]) -> BF<'a, Result<u64, String>> {
+        Box::pin(async move {
+            if !self.upsert || rows.is_empty() {
+                return Ok(0);
+            }
+            // 更新走一条串行会话：先把它的事务开起来（一次 fsync 覆盖整表的更新）
+            if let Some((begin, _, _)) = self.txn {
+                if !self.update_txn_open.load(Ordering::SeqCst) {
+                    if run_target_in(&self.state, &self.tgt_target, begin, SESSION_SYNC).await.is_ok() {
+                        self.update_txn_open.store(true, Ordering::SeqCst);
+                    }
+                }
+            }
+            if self.multi_statement {
+                // 支持多语句批的方言：攒够 UPDATE_BATCH 条一次发（一 RTT 打一批）
+                let mut pending = self.pending_updates.lock().await;
+                for row in rows {
+                    pending.push(build_update(
+                        &self.target_name,
+                        &self.columns,
+                        &self.target_types,
+                        row,
+                        &self.key_indexes,
+                        self.kind,
+                    ));
+                }
+                if pending.len() < UPDATE_BATCH {
+                    return Ok(0);
+                }
+                let mut batch = std::mem::take(&mut *pending);
+                drop(pending);
+                return write_update_batch(
+                    &self.state,
+                    &self.tgt_target,
+                    SESSION_SYNC,
+                    &mut batch,
+                    self.task.as_ref(),
+                    &self.table,
+                )
+                .await;
+            }
+            // 驱动不支持一次多条 SQL：保持逐行（慢，但功能不缺）
+            let mut ok = 0u64;
+            let mut failed = 0u64;
+            let mut sample: Option<String> = None;
+            for row in rows {
+                let sql = build_update(
+                    &self.target_name,
+                    &self.columns,
+                    &self.target_types,
+                    row,
+                    &self.key_indexes,
+                    self.kind,
+                );
+                match crate::api::sync::run_target(&self.state, &self.tgt_target, &sql).await {
+                    Ok(_) => ok += 1,
+                    Err(err) => {
+                        failed += 1;
+                        if sample.is_none() {
+                            sample = Some(err.message);
+                        }
+                    }
+                }
+            }
+            if let Some(task) = &self.task {
+                if failed > 0 {
+                    task.add_rows_failed(failed);
+                    task.log(format!(
+                        "表 {}：upsert 逐行更新失败 {failed} 行，样例错误：{}",
+                        self.table,
+                        sample.as_deref().unwrap_or_default()
+                    ));
+                }
+            }
+            if failed > 0 && failed * 2 > rows.len() as u64 {
+                return Err(sample.unwrap_or_else(|| "upsert 更新大量失败".to_string()));
+            }
+            Ok(ok)
+        })
+    }
+
+    fn flush<'a>(&'a self) -> BF<'a, Result<u64, String>> {
+        Box::pin(async move {
+            let mut written = 0u64;
+            let mut failure: Option<String> = None;
+            let mut pending = self.pending_updates.lock().await;
+            if !pending.is_empty() {
+                let mut batch = std::mem::take(&mut *pending);
+                drop(pending);
+                match write_update_batch(
+                    &self.state,
+                    &self.tgt_target,
+                    SESSION_SYNC,
+                    &mut batch,
+                    self.task.as_ref(),
+                    &self.table,
+                )
+                .await
+                {
+                    Ok(rows) => written = rows,
+                    Err(msg) => failure = Some(msg),
+                }
+            }
+            // 关掉更新事务：无论成功失败都提交 —— 与「已写入的部分保留」的既有语义一致
+            if self.update_txn_open.swap(false, Ordering::SeqCst) {
+                if let Some((_, end, restore)) = self.txn {
+                    let _ = run_target_in(&self.state, &self.tgt_target, end, SESSION_SYNC).await;
+                    if !restore.is_empty() {
+                        let _ = run_target_in(&self.state, &self.tgt_target, restore, SESSION_SYNC).await;
+                    }
+                }
+            }
+            match failure {
+                Some(msg) => Err(msg),
+                None => Ok(written),
+            }
+        })
+    }
+
+    fn finish<'a>(&'a self, worker: usize) -> BF<'a, ()> {
+        Box::pin(async move {
+            let Some((_, end, restore)) = self.txn else {
+                return;
+            };
+            if !self.txn_open.get(worker).map(|open| open.load(Ordering::SeqCst)).unwrap_or(false) {
+                return;
+            }
+            let session = self.session(worker);
+            let _ = run_target_in(&self.state, &self.tgt_target, end, &session).await;
+            if !restore.is_empty() {
+                let _ = run_target_in(&self.state, &self.tgt_target, restore, &session).await;
+            }
+        })
+    }
+}

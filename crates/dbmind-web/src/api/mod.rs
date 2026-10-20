@@ -25,6 +25,9 @@
 pub mod ai;
 pub mod backup;
 pub mod compare;
+/// 数据传输引擎（DataX 风格的 Reader/Writer 插件 + 多通道流水线）。
+/// 目录放在 `sync.rs` 旁边：它只负责「搬行」，建表/索引/注释这些 DDL 编排还在 sync 层。
+pub mod transfer;
 pub mod conn;
 pub mod datagen;
 pub mod dialect;

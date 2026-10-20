@@ -172,6 +172,21 @@ pub(crate) async fn run_sql_in_background(
     run_sql_in_inner(state, conn, database, sql, max_rows, Some("internal:rowcount")).await
 }
 
+/// 同 [`run_sql_in`]，但会话亲和键由调用方给 —— 用于「一个任务并发开几条读连接」的场景
+/// （数据传输的并行分片）。**每片必须给不同的键**，否则几片会挤在同一条物理连接上排队：
+/// 分片就退化成「多打几次往返」，比不分片还慢（真机实测 20 万行 4 片 11s vs 单流 5s，
+/// 就是因为四片共用 `internal:rowcount` 这个键）。
+pub(crate) async fn run_sql_in_keyed(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+    sql: String,
+    max_rows: usize,
+    session: &str,
+) -> XResult<QueryResult> {
+    run_sql_in_inner(state, conn, database, sql, max_rows, Some(session)).await
+}
+
 
 /// 同 [`run_sql_in`]，但**跟随连接的读写策略**（`read_only: None`）——
 /// 给界面功能里那些**会写库**的语句用：还原、表结构编辑、清空/删除表、终止会话、建用户。
@@ -2658,6 +2673,25 @@ pub async fn events(
     .map(Json)
 }
 
+/// 「是不是超级用户」这一列各家回来的**形状**不一样，统一折成布尔。
+///
+/// 实测：PG 的 `rolsuper`（真布尔）经驱动 → JSON 变成了**数字** `"isSuper":1`，
+/// SQL Server 的 `is_srvrolemember(...)` 本来就是 int（也是 1）。
+/// 原来这里只认 `Value::Bool(true)`，于是 postgres / sa 既不显示「超级用户」标签，
+/// 备注也是空的（真机回归发现）。反过来，字符串 `"0"` 在 JS 里是**真值**，
+/// 前端 `v-if="row.isSuper"` 会把假的也显示出来 —— 所以必须归一成布尔再出门。
+fn is_true_flag(value: &Value) -> bool {
+    match value {
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_i64().map(|v| v != 0).unwrap_or(false),
+        Value::String(s) => matches!(
+            s.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "t" | "y" | "yes"
+        ),
+        _ => false,
+    }
+}
+
 pub async fn users(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -2684,7 +2718,10 @@ pub async fn users(
             rows.into_iter()
                 .map(|row| {
                     let mut out = row.as_object().cloned().unwrap_or_default();
-                    let is_super = matches!(out.get("isSuper"), Some(Value::Bool(true)));
+                    // 归一成布尔（`is_true_flag` 里写了为什么：PG 回来的是数字 1，
+                    // 字符串 "0" 在前端又是真值）
+                    let is_super = out.get("isSuper").map(is_true_flag).unwrap_or(false);
+                    out.insert("isSuper".to_string(), Value::Bool(is_super));
                     out.entry("comment".to_string())
                         .or_insert_with(|| Value::String(if is_super { "超级用户".into() } else { String::new() }));
                     Value::Object(out)

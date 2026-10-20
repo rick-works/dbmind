@@ -485,19 +485,13 @@ fn spawn_side_stream(
         if let Some(condition) = condition.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
             sql.push_str(&format!(" where {condition}"));
         }
-        let order_cols = if key_cols.is_empty() {
-            columns
-                .iter()
-                .map(|name| dialect.quote(name))
-                .collect::<Vec<_>>()
-                .join(", ")
+        // 排序列（同时也是 keyset 游标的列），**保留成 Vec** 供下面展开成逐列条件
+        let order_list: Vec<String> = if key_cols.is_empty() {
+            columns.iter().map(|name| dialect.quote(name)).collect()
         } else {
-            key_cols
-                .iter()
-                .map(|name| dialect.quote(name))
-                .collect::<Vec<_>>()
-                .join(", ")
+            key_cols.iter().map(|name| dialect.quote(name)).collect()
         };
+        let order_cols = order_list.join(", ");
         // **sql 只拼到 where 为止（不含 order by）** —— keyset 分页条件必须插在
         // order by 之前：曾经把 order by 提前并进 sql，第二页变成
         // `... order by ... where ((keys) > (...))` → MySQL 语法错（真机踩过）。
@@ -513,11 +507,25 @@ fn spawn_side_stream(
                 None => format!("{sql} order by {order_cols} limit {page_size}"),
                 Some(key) => {
                     let lits: Vec<String> = key.iter().map(keyset_literal).collect();
-                    let keyset = format!(
-                        "({order_cols}) > ({lits})",
-                        order_cols = order_cols,
-                        lits = lits.join(", ")
-                    );
+                    // **必须展开成逐列 or 链，不能写 SQL 行值比较 `(a,b) > (x,y)`**：
+                    // 行值比较只有 MySQL/PG/SQLite 这类认；SQL Server / Oracle / DB2 /
+                    // 达梦 / Doris / ClickHouse 都会直接语法错 —— 那些库上超过 5 万行的
+                    // 对比会「第二页就报错」，而 5 万行以内看不出问题（首页不带游标）。
+                    // `(a,b) > (x,y)` 等价于 `a > x or (a = x and b > y)`，与同步侧
+                    // `fetch_page` 的写法保持一致。
+                    let mut alts: Vec<String> = Vec::with_capacity(lits.len());
+                    for depth in 0..lits.len() {
+                        let mut parts: Vec<String> = Vec::with_capacity(depth + 1);
+                        for i in 0..=depth {
+                            if i < depth {
+                                parts.push(format!("{} = {}", order_list[i], lits[i]));
+                            } else {
+                                parts.push(format!("{} > {}", order_list[i], lits[i]));
+                            }
+                        }
+                        alts.push(format!("({})", parts.join(" and ")));
+                    }
+                    let keyset = alts.join(" or ");
                     let glue = if sql.to_lowercase().contains(" where ") { " and" } else { " where" };
                     format!("{sql}{glue} ({keyset}) order by {order_cols} limit {page_size}")
                 }

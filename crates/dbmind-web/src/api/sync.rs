@@ -7,6 +7,14 @@
 //! | `POST /api/sync` | 单表同步 | 同步返回 `{inserted, updated, skipped, errors, …}` |
 //! | `POST /api/sync/db` | 多对象同步 | 异步任务（进度 + 逐对象结果 + 可取消） |
 //!
+//! ## 与 `transfer` 模块的分工
+//!
+//! 本文件只管**结构与编排**：解析请求、建表/索引/注释、同实例直拷、视图/例程同步、
+//! 逐对象结果。真正的**数据搬运**在 [`crate::api::transfer`]——那里是 DataX 风格的
+//! Reader/Writer 插件（按连接类型取实现）+ 多通道流水线（分片并发读 → 有界通道 →
+//! 多连接并发写）。想给某种库换取数或落库方式，只改 `transfer::reader_for` /
+//! `writer_for`，这个文件一行都不用动。
+//!
 //! ## 四个决定
 //!
 //! 1. **逐对象给结果，不吞错**。整库同步里某张表失败很正常（没权限、类型不支持、
@@ -30,13 +38,11 @@ use axum::Json;
 use dbmind_core::{CellValue, ColumnDetail, TableKind};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 
 use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
 use crate::api::export::sql_literal;
-use crate::api::meta::{run_sql_in, run_sql_in_background};
+use crate::api::meta::{run_sql_in, run_sql_in_keyed};
 use crate::api::{blocking, require_record};
 use crate::AppState;
 
@@ -63,10 +69,7 @@ const MAX_TUPLES_PER_STATEMENT: u64 = 5000;
 /// 85MB+ 的请求体。实测这台单 BE（HDD）每次 Stream Load 有 **~10 秒固定开销**
 ///（事务/publish 延迟），但 48MB 大批的 publish 代价陡增（实测反而比 16MB 慢近一倍）
 /// —— 16MB/批 ≈ 14s/批，是实测甜点：进度每十几秒跳一格，吞吐最优。
-const STREAM_LOAD_MAX_BYTES: usize = 16 * 1024 * 1024;
-/// 进度状态最短刷新间隔：写一页更新一次就够，**不必每行**都更新
-/// （20 万行就是 20 万次加锁 + 20 万次前端快照变化，纯属白烧 CPU）。
-const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(300);
+pub(crate) const STREAM_LOAD_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 /// 流水线**内部交接**的截止时间（读取侧发页 / 写入侧取批 / 等协程收尾 / 等并发槽位）。
 ///
@@ -79,46 +82,6 @@ const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// 取值：比单次数据库调用的上限（直拷路径 600s）再宽一点 —— 正常的慢只会慢在**调用**上，
 /// 不会慢在"没人来取我刚读到的这一页"上；这里等不到人就是真卡住了。
 const PIPE_WAIT: std::time::Duration = std::time::Duration::from_secs(660);
-
-/// 往流水线通道发一页/一批：带**真实截止时间**。
-///
-/// 对端超过 [`PIPE_WAIT`] 还没来取，就说明它已经停止（而不是"任务在慢慢跑"）——
-/// 返回 Err 让调用方按"下游已停止"收工，而不是无限期挂在 `send().await` 上。
-async fn send_with_deadline<T>(
-    tx: &tokio::sync::mpsc::Sender<T>,
-    value: T,
-    peer: &str,
-) -> Result<(), String> {
-    match tokio::time::timeout(PIPE_WAIT, tx.send(value)).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => Err("下游已关闭".to_string()),
-        Err(_) => Err(format!(
-            "{peer} {} 分钟没有取走数据，判定下游已停止（连接可能已断开）",
-            PIPE_WAIT.as_secs() / 60
-        )),
-    }
-}
-
-/// 从流水线通道取下一页：同样带**真实截止时间**。
-///
-/// 取不到（读取侧停止）时把原因写进 `read_error`，让上层如实报「读取侧已停止」，
-/// 而不是把它当成"读完了"悄悄成功。返回 `None` 表示这个对象的数据流结束。
-async fn recv_with_deadline<T>(
-    rx: &mut tokio::sync::mpsc::Receiver<T>,
-    read_error: &mut Option<String>,
-    peer: &str,
-) -> Option<T> {
-    match tokio::time::timeout(PIPE_WAIT, rx.recv()).await {
-        Ok(next) => next,
-        Err(_) => {
-            *read_error = Some(format!(
-                "{peer} {} 分钟没有给出下一页，判定其已停止（连接可能已断开）",
-                PIPE_WAIT.as_secs() / 60
-            ));
-            None
-        }
-    }
-}
 
 // ------------------------------------------------------------------ 请求
 
@@ -392,10 +355,8 @@ async fn columns_of(
     Ok(Vec::new())
 }
 
-async fn run_sql(state: &AppState, side: &Side, sql: &str) -> XResult<()> {
-    let target = crate::api::scope::resolve(state, &side.conn, &side.scope).await?;
-    run_target(state, &target, sql).await.map(|_| ())
-}
+/// 数据同步/对比的默认会话亲和键（读页、事务控制、串行写都落在这条泳道上）。
+pub(crate) const SESSION_SYNC: &str = "internal:browse";
 
 /// 「目标库不存在时自动创建」（默认开）：查目标连接的库清单，缺则按方言 CREATE。
 /// 返回一句话结果（给任务日志用）；失败**不阻断** —— 后面建表时数据库真缺会明确报错，
@@ -480,7 +441,23 @@ async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<S
 /// 直接对**已解析**的目标执行。`sync_table` 在开头解析一次，循环里的每条语句
 /// 复用结果 —— 原来每条 `run_sql` 都重新 `require_record`，单表几百条语句
 /// 就是几百次白查（每条语句固定链路开销里它占一份）。
-async fn run_target(state: &AppState, target: &str, sql: &str) -> XResult<dbmind_core::QueryResult> {
+pub(crate) async fn run_target(state: &AppState, target: &str, sql: &str) -> XResult<dbmind_core::QueryResult> {
+    run_target_in(state, target, sql, SESSION_SYNC).await
+}
+
+/// 同 [`run_target`]，但显式指定会话亲和键。
+///
+/// **为什么需要**：内核的会话池按「连接 + 亲和键」分泳道，而**带亲和键的泳道上限恒为 1**
+/// （`agent_driver::lane_limit`：亲和就是「这一个页签只许一条物理连接」的语义）。
+/// 于是并发写若都传同一个键，N 个 writer 会全部排在**同一条** JDBC 连接上 ——
+/// 并发池看着有 6 个 worker，实际吞吐等于单连接（真机复现：4 个并发请求各写 1 万行，
+/// 总耗时正好是单个的 4 倍）。给每个 writer 一个**不同的**键，才是 N 条真实连接。
+pub(crate) async fn run_target_in(
+    state: &AppState,
+    target: &str,
+    sql: &str,
+    session: &str,
+) -> XResult<dbmind_core::QueryResult> {
     let engine = state.engine();
     let request = dbmind_core::QueryRequest {
         schema: None,
@@ -492,7 +469,7 @@ async fn run_target(state: &AppState, target: &str, sql: &str) -> XResult<dbmind
             timeout_ms: 600_000,
         },
         execution_id: None,
-        session: Some("internal:browse".to_string()),
+        session: Some(session.to_string()),
         // 数据同步是界面功能驱动的批量读写：不进查询历史（一次同步会下发几百条语句）
         internal: true,
     };
@@ -509,7 +486,7 @@ async fn run_target(state: &AppState, target: &str, sql: &str) -> XResult<dbmind
 /// 千万级深分页不再 O(N²) 退化（OFFSET 越深扫得越多，是同步 1100 万行只有 1500 行/秒的主因）。
 /// 行值构造符 `(a,b) > (x,y)` 只有 MySQL/PG 认，SQL Server/Doris 不支持 ⇒ 展开成等价的逐列链。
 /// `None`（无主键的表）退回原 OFFSET 分页 —— 正确性不变，只是慢。
-async fn fetch_page(
+pub(crate) async fn fetch_page(
     state: &AppState,
     conn: &str,
     scope: &str,
@@ -518,29 +495,66 @@ async fn fetch_page(
     offset: u64,
     cursor: Option<(&[String], &[CellValue])>,
     extra_where: &str,
+    page_rows: u64,
+    session: &str,
 ) -> XResult<Vec<Vec<CellValue>>> {
-    // 用户的行过滤条件：拼进 SELECT 的 WHERE。与 keyset 游标共存时用 and 组合
-    //（keyset 分支自己要写 where，两者条件相与语义才对）。
-    let filtered = |base: &str, cond: &str| {
-        if extra_where.is_empty() {
-            base.to_string()
-        } else {
-            format!("{base} where ({extra_where}){}", if cond.is_empty() { String::new() } else { format!(" and ({cond})") })
+    // 游标值先渲染成 SQL 字面量（`page_sql` 只拼字符串，便于单测）
+    let cursor_lits: Option<(&[String], Vec<String>)> = match cursor {
+        Some((keys, last)) if !keys.is_empty() && last.len() == keys.len() => {
+            Some((keys, last.iter().map(|cell| literal_for(cell, dialect, None)).collect()))
         }
+        _ => None,
     };
-    let sql = match cursor {
+    let sql = page_sql(
+        select_base,
+        dialect,
+        offset,
+        cursor_lits.as_ref().map(|(keys, lits)| (*keys, lits.as_slice())),
+        extra_where,
+        page_rows,
+    );
+    // 传输的**源端拉数**（一页一页翻到完）是长任务：走独立会话键，不占元数据那条连接。
+    // 分片并发时每片给**不同的键**，否则几片会挤在同一条物理连接上排队。
+    let result = run_sql_in_keyed(state, conn, scope, sql, page_rows as usize, session).await?;
+    Ok(result.rows)
+}
+
+/// 拼「一页」的 SELECT（有键走 keyset 游标，无键退回 OFFSET）。
+///
+/// 单独抽成纯函数是为了**能被单测盯住**：这里曾漏掉一个分支 —— 用户没写过滤条件时，
+/// keyset 条件被整段丢掉，第二页把第一页又读一遍。表现是「传到第一页（5 万行）就开始
+/// 报主键冲突 / 整表被重复插入」，而日志里一句话都没有（真机复现：SQLite→H2 6 万行
+/// 只落了 5 万行且报主键冲突，20 万行跑 151 秒）。用户过滤条件与游标条件是**两回事**，
+/// 必须各自独立判断有没有。
+fn page_sql(
+    select_base: &str,
+    dialect: Dialect,
+    offset: u64,
+    cursor: Option<(&[String], &[String])>,
+    extra_where: &str,
+    page_rows: u64,
+) -> String {
+    let filtered = |base: &str, cond: &str| match (extra_where.trim().is_empty(), cond.is_empty()) {
+        (true, true) => base.to_string(),
+        (true, false) => format!("{base} where ({cond})"),
+        (false, true) => format!("{base} where ({extra_where})"),
+        (false, false) => format!("{base} where ({extra_where}) and ({cond})"),
+    };
+    match cursor {
         Some((keys, last)) if !keys.is_empty() && last.len() == keys.len() => {
             let order = keys
                 .iter()
                 .map(|key| dialect.quote(key))
                 .collect::<Vec<_>>()
                 .join(", ");
+            // 行值构造符 `(a,b) > (x,y)` 只有 MySQL/PG 认，SQL Server/Doris 不支持
+            // ⇒ 展开成等价的逐列 or 链：(a > x) or (a = x and b > y)
             let mut conditions: Vec<String> = Vec::new();
             for depth in 0..keys.len() {
                 let mut parts: Vec<String> = Vec::new();
                 for (position, key) in keys.iter().enumerate() {
                     let quoted = dialect.quote(key);
-                    let value = literal_for(&last[position], dialect, None);
+                    let value = &last[position];
                     if position < depth {
                         parts.push(format!("{quoted} = {value}"));
                     } else {
@@ -554,31 +568,18 @@ async fn fetch_page(
             format!(
                 "{} order by {order} {}",
                 filtered(select_base, &keyset),
-                dialect.limit_clause(0, PAGE)
+                dialect.limit_clause(0, page_rows)
             )
         }
         _ => {
-            let page = dialect.limit_clause(offset, PAGE);
+            let page = dialect.limit_clause(offset, page_rows);
             if dialect.needs_order_by_for_paging() {
                 format!("{} order by (select null) {page}", filtered(select_base, ""))
             } else {
                 format!("select * from ({}) dbmind_page {page}", filtered(select_base, ""))
             }
         }
-    };
-    // 传输的**源端拉数**（一页一页翻到完）是长任务：走独立会话键，不占元数据那条连接
-    let result = run_sql_in_background(state, conn, scope, sql, PAGE as usize).await?;
-    Ok(result.rows)
-}
-
-/// 拼「读取某张表某些列」的 select 前缀（翻页时反复用它）。
-fn select_base(side: &Side, table: &str, columns: &[String], dialect: Dialect) -> String {
-    let list = columns
-        .iter()
-        .map(|name| dialect.quote(name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("select {list} from {}", side.scoped(table, dialect))
+    }
 }
 
 /// 建表后把**源表的非主键索引**搬到目标（「建表包含索引」选项）。
@@ -806,7 +807,7 @@ const CSV_ROW_SEP_BYTE: u8 = 0x02;
 
 /// 数据里出现了与分隔符相同的字符吗？（极罕见：控制字符混进文本）—— 有则整批退回
 /// JSON 编码（JSON 对任意字符都安全），保证正确性优先于速度。
-fn rows_need_json_fallback(rows: &[Vec<dbmind_core::CellValue>]) -> bool {
+pub(crate) fn rows_need_json_fallback(rows: &[Vec<dbmind_core::CellValue>]) -> bool {
     rows.iter().any(|row| {
         row.iter().any(|cell| match cell {
             dbmind_core::CellValue::Text(s) => {
@@ -876,7 +877,7 @@ fn doris_number(v: Option<&serde_json::Value>) -> u64 {
 
 /// Doris Stream Load 推送一批行。返回**实际载入的行数**（`NumberLoadedRows`）——
 /// 类型不匹配等被 BE 过滤的行不计入，由调用方按脏数据记账（对齐 DataX 的 errorLimit 思路）。
-async fn doris_stream_load(
+pub(crate) async fn doris_stream_load(
     http_port: u16,
     be_port: u16,
     host: &str,
@@ -1000,6 +1001,62 @@ async fn doris_stream_load(
     })
     .await
     .map_err(|e| format!("工作线程异常：{:?}", e))
+}
+
+#[cfg(test)]
+mod paging_tests {
+    use super::*;
+    use dbmind_core::ConnectionKind;
+
+    fn cursor_page(kind: ConnectionKind, keys: &[&str], lits: &[&str], user_where: &str) -> String {
+        let keys: Vec<String> = keys.iter().map(|k| k.to_string()).collect();
+        let lits: Vec<String> = lits.iter().map(|v| v.to_string()).collect();
+        page_sql(
+            "select `id`, `name` from `t`",
+            Dialect::new(kind),
+            0,
+            Some((keys.as_slice(), lits.as_slice())),
+            user_where,
+            PAGE,
+        )
+    }
+
+    /// 回归：用户没写过滤条件时，游标条件**不能**被丢掉（否则第二页重复第一页）。
+    #[test]
+    fn 无用户过滤时第二页仍带游标条件() {
+        let sql = cursor_page(ConnectionKind::Mysql, &["id"], &["50000"], "");
+        assert!(sql.contains("id > 50000"), "第二页丢了游标条件：{sql}");
+        assert_eq!(sql.matches(" where ").count(), 1, "where 只该有一个：{sql}");
+        assert!(sql.contains("order by id"), "缺 order by：{sql}");
+    }
+
+    /// 用户过滤条件与游标条件要**同时**在，用 and 相连（顺序无关）。
+    #[test]
+    fn 用户过滤与游标条件并存() {
+        let sql = cursor_page(ConnectionKind::Mysql, &["id"], &["100"], "id <= 100000");
+        assert!(sql.contains("id <= 100000"), "丢了用户条件：{sql}");
+        assert!(sql.contains("id > 100"), "丢了游标条件：{sql}");
+        assert!(sql.contains(" and "), "两个条件应当 and 组合：{sql}");
+    }
+
+    /// 多列键展开成 or 链，不能出现行值比较 `(a, b) > (x, y)`（SQL Server/Oracle 不认）。
+    #[test]
+    fn 多列键展开成or链() {
+        let sql = cursor_page(ConnectionKind::Sqlserver, &["a", "b"], &["1", "2"], "");
+        assert!(sql.contains("(a > 1) or (a = 1 and b > 2)"), "多列游标展开不对：{sql}");
+        assert!(!sql.contains(") > ("), "不能出现行值比较：{sql}");
+    }
+
+    /// 无键（cursor = None）退回 OFFSET：不能带 where，且要包一层派生表。
+    #[test]
+    fn 无键退回offset分页() {
+        let sql = page_sql("select `id` from `t`", Dialect::new(ConnectionKind::Mysql), 100000, None, "", PAGE);
+        assert!(!sql.contains(" where"), "无键分页不该出现游标 where：{sql}");
+        assert!(sql.contains("dbmind_page"), "应包一层派生表：{sql}");
+        // 用户条件仍然要生效
+        let sql = page_sql("select `id` from `t`", Dialect::new(ConnectionKind::Mysql), 0, None, "`id` < 10", PAGE);
+        assert!(sql.contains("`id` < 10"), "无键分页丢了用户条件：{sql}");
+    }
 }
 
 #[cfg(test)]
@@ -1251,7 +1308,7 @@ fn multi_row(dialect: Dialect) -> bool {
 /// 的 datetime2 拒绝这个形态（「从字符串转换日期和/或时间时，转换失败」241），分钟粒度的
 /// 表（网闸通行记录这类）整表全炸。这里按目标列类型把值统一成方言最稳的形态：
 /// `T` → 空格、缺秒补 `:00`、小数超 6 位截断（datetime2 上限 7 位，9 位的 DateTime64 也炸）。
-fn literal_for(cell: &CellValue, dialect: Dialect, target_type: Option<&str>) -> String {
+pub(crate) fn literal_for(cell: &CellValue, dialect: Dialect, target_type: Option<&str>) -> String {
     if let (CellValue::Integer(value), Some(type_name)) = (cell, target_type) {
         if Dialect::is_boolean_type(type_name) {
             return dialect.bool_literal(*value != 0).to_string();
@@ -1374,7 +1431,7 @@ fn insert_stmt_cap(kind_key: &str) -> usize {
 
 /// 单行 tuple 在 SQL 里的体积**上界**粗估：Text 按字符数 ×2（转义/引号翻倍余量），
 /// 数值/时间列按 40 估；逐字符精算不值得，估大了只是多拆一条语句。
-fn estimate_row_bytes(row: &[CellValue]) -> usize {
+pub(crate) fn estimate_row_bytes(row: &[CellValue]) -> usize {
     row.iter()
         .map(|c| match c {
             CellValue::Text(s) => s.len() * 2 + 8,
@@ -1387,7 +1444,7 @@ fn estimate_row_bytes(row: &[CellValue]) -> usize {
 
 /// 单行在 Stream Load **JSON 体**里的体积粗估：字符串基本原样进 JSON（无需 ×2 转义），
 /// 加上键名与逗号/引号开销按每列 24 字节估。
-fn json_row_bytes(row: &[CellValue]) -> usize {
+pub(crate) fn json_row_bytes(row: &[CellValue]) -> usize {
     row.iter()
         .map(|c| match c {
             CellValue::Text(s) => s.len() + 24,
@@ -1445,9 +1502,10 @@ fn build_insert_batch(
 /// 逐行重试里若**过半仍失败**，判定为系统性问题（连接断/权限/表没了），立即中止并上抛
 /// —— 不值得把几千行逐行磨完。
 /// 返回成功写入的行数。串行管道与并发写池共用这一份实现，杜绝两处逻辑漂移。
-async fn write_insert_rows(
+pub(crate) async fn write_insert_rows(
     state: &AppState,
-    tgt: &Side,
+    tgt_target: &str,
+    session: &str,
     target_name: &str,
     columns: &[String],
     target_types: &[Option<String>],
@@ -1463,16 +1521,16 @@ async fn write_insert_rows(
     let mut sample_err: Option<String> = None;
     let mut start_row = 0usize;
     for (n_rows, stmt) in &stmts {
-        match run_sql(state, tgt, &with_identity(stmt.clone(), identity_on, target_name)).await {
-            Ok(()) => ok_rows += *n_rows as u64,
+        match run_target_in(state, tgt_target, &with_identity(stmt.clone(), identity_on, target_name), session).await {
+            Ok(_) => ok_rows += *n_rows as u64,
             Err(_batch_err) => {
                 // 降级：这一语句块的行逐行重试
                 let chunk = &rows[start_row..start_row + *n_rows as usize];
                 let mut chunk_failed = 0u64;
                 for row in chunk {
                     let single = build_insert(target_name, columns, target_types, std::slice::from_ref(row), target_kind);
-                    match run_sql(state, tgt, &with_identity(single, identity_on, target_name)).await {
-                        Ok(()) => ok_rows += 1,
+                    match run_target_in(state, tgt_target, &with_identity(single, identity_on, target_name), session).await {
+                        Ok(_) => ok_rows += 1,
                         Err(row_err) => {
                             chunk_failed += 1;
                             if sample_err.is_none() {
@@ -1513,6 +1571,82 @@ async fn write_insert_rows(
     Ok(ok_rows)
 }
 
+/// upsert 更新批的大小：**一条 RPC 里连发多少条 UPDATE**。
+///
+/// 逐行 UPDATE 是「第二次同步特别慢」的根因：每行一次内核→宿主调用，本地库约 1ms、
+/// 远端库 20~100ms，10 万行要更新的表就是几十分钟（DataX/Kettle 的更新是批量下发的）。
+/// 支持一条语句里带多条 SQL 的方言攒成一批发一次；其余方言保持逐行 —— 它们的驱动
+/// 不接受一次 execute 多条语句，硬拼只会整批语法错。
+/// 500 条/批 ≈ 40KB 的批文本：再大对 RTT 的摊薄收益已经很小，
+/// 而单批失败时的逐行降级代价会跟着变大。
+pub(crate) const UPDATE_BATCH: usize = 500;
+
+/// 目标方言能否在**一次 execute** 里执行多条 SQL（分号分隔的批）。
+///
+/// MySQL/MariaDB/Doris 的 JDBC URL 带 `allowMultiQueries=true`（见连接类型 YAML），
+/// SQL Server 的多语句批是 T-SQL 原生语义，PG/Kingbase 的 pgjdbc 允许一次发送多条。
+/// Oracle/DB2/DM 会报「无效字符」，H2/Derby 不认多语句，ClickHouse 的
+/// `ALTER TABLE … UPDATE` 也不是这个形状 —— 这些保持逐行。
+pub(crate) fn supports_multi_statement(kind: &str) -> bool {
+    matches!(
+        kind,
+        "mysql" | "mariadb" | "doris" | "sqlserver" | "postgresql" | "kingbase"
+    )
+}
+
+/// 把攒下的 UPDATE 语句**一次**发出去；整批失败时**降级逐行重试**（与 INSERT 同一套
+/// 脏数据策略：一行坏数据不该拖死一整批）。UPDATE 本身幂等，重试是安全的。
+/// 返回成功更新的行数。
+pub(crate) async fn write_update_batch(
+    state: &AppState,
+    tgt_target: &str,
+    session: &str,
+    stmts: &mut Vec<String>,
+    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
+    table: &str,
+) -> Result<u64, String> {
+    if stmts.is_empty() {
+        return Ok(0);
+    }
+    let total = stmts.len() as u64;
+    let mut ok = 0u64;
+    let joined = stmts.join(";\n");
+    match run_target_in(state, tgt_target, &joined, session).await {
+        Ok(_) => ok = total,
+        Err(batch_err) => {
+            let mut failed = 0u64;
+            let mut sample: Option<String> = None;
+            for sql in stmts.iter() {
+                match run_target_in(state, tgt_target, sql, session).await {
+                    Ok(_) => ok += 1,
+                    Err(err) => {
+                        failed += 1;
+                        if sample.is_none() {
+                            sample = Some(err.message.chars().take(200).collect());
+                        }
+                    }
+                }
+            }
+            // 过半失败 ⇒ 系统性问题（连接断/权限/表被删），别再逐行磨
+            if failed * 2 > total {
+                stmts.clear();
+                return Err(sample.unwrap_or_else(|| batch_err.message));
+            }
+            if failed > 0 {
+                if let Some(task) = task {
+                    task.add_rows_failed(failed);
+                    task.log(format!(
+                        "表 {table}：upsert 批量更新里 {failed} 行失败（脏数据，已逐行重试过），样例错误：{}",
+                        sample.unwrap_or_default()
+                    ));
+                }
+            }
+        }
+    }
+    stmts.clear();
+    Ok(ok)
+}
+
 fn build_insert(
     table: &str,
     columns: &[String],
@@ -1544,7 +1678,7 @@ fn build_insert(
     )
 }
 
-fn build_update(
+pub(crate) fn build_update(
     table: &str,
     columns: &[String],
     types: &[Option<String>],
@@ -1584,7 +1718,7 @@ fn build_update(
 /// 这里也必须归一：upsert 是"先读目标已有关键值、再拿源行的键来比"，
 /// 两侧的同一列完全可能是不同变体（目标 `NUMBER` 回 real、源 `int` 回 integer），
 /// 不归一会导致**每一行都被判成新增**（于是重复插入），而界面上仍显示同步成功。
-fn key_of(row: &[CellValue], indexes: &[usize]) -> String {
+pub(crate) fn key_of(row: &[CellValue], indexes: &[usize]) -> String {
     crate::api::shape::row_key(row, indexes)
 }
 
@@ -1607,48 +1741,35 @@ async fn sync_table(
     target_table: &str,
     opts: &Opts,
 ) -> ObjResult {
-    // 目标方言决定怎么开事务：MySQL 系用 autocommit 开关，PG/SQLite 用标准 begin/commit，
-    // SQL Server 用 begin transaction。Doris 的事务没有实际意义，ClickHouse/Oracle/达梦/DB2
-    // 也没有可用的 SQL 级 begin —— 这些照旧逐条提交（功能不缺，只是慢）。
-    let txn = match require_record(state, &tgt.conn).await {
-        Ok(record) => {
-            if opts.sync_data { txn_batch(Dialect::new(record.kind()).kind.key()) } else { None }
-        }
-        Err(err) => return ObjResult::failed("table", table, err.message),
-    };
-    let Some((txn_begin, txn_end, txn_restore)) = txn else {
-        return sync_table_inner(state, task, src, tgt, table, target_table, opts).await;
-    };
-    let Ok(tgt_target) = crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await else {
-        return ObjResult::failed("table", table, "解析目标连接失败");
-    };
-    if let Some(task) = task {
-        task.log(format!("表 {table}：开启事务（整表一次提交）"));
+    // 事务由**写入插件**自己管（`transfer::writer`）：每路 writer 在自己的物理会话上
+    // begin/commit。改造前这里在一条会话上 `set autocommit = 0` 再让 N 路 writer 往
+    // **别的**会话写 —— 那层外层事务根本管不到，等于没开（真机踩过）。
+    // 结构操作（建表/索引）也不该和数据写挤在一个事务里：DDL 会隐式提交。
+    sync_table_inner(state, task, src, tgt, table, target_table, opts).await
+}
+
+/// 目标端「表内写并发」的并行度（1 = 串行）。**依据类型声明，不靠猜**：
+///
+/// - `singleConnectionPool` 的类型（H2 / Derby / SQLite / SQL Server / Redis）声明了
+///   「只允许一条物理连接」—— 多开只会排队，反而多一次排队/调度开销，保持 1；
+/// - 其余（MySQL / MariaDB / PostgreSQL / Kingbase / Oracle / DB2 / ClickHouse …）取
+///   类型的 `maxConnections`（YAML 里 MySQL/PG 是 4），再夹到 6 —— 再多压不出吞吐，
+///   只会把目标库的行锁竞争放大成「互相等」。
+///
+/// 这个数直接决定写池的 worker 数：每个 worker 用**自己的会话键**（见 `run_target_in`），
+/// 才会真的落到不同连接上。
+pub(crate) fn write_parallelism(kind: dbmind_core::ConnectionKind) -> usize {
+    if kind.single_connection_pool() {
+        return 1;
     }
-    if let Err(err) = run_target(state, &tgt_target, txn_begin).await {
-        // 开不了事务就退回 autocommit 逐条写入 —— 慢，但功能不缺
-        if let Some(task) = task {
-            task.log(format!("表 {table}：开启事务失败，退回逐条提交（{}）", err.message));
-        }
-        return sync_table_inner(state, task, src, tgt, table, target_table, opts).await;
-    }
-    let result = sync_table_inner(state, task, src, tgt, table, target_table, opts).await;
-    // 无论成功/失败/取消都 commit：与「已写入的部分保留」的既有语义一致
-    let _ = run_target(state, &tgt_target, txn_end).await;
-    if !txn_restore.is_empty() {
-        let _ = run_target(state, &tgt_target, txn_restore).await;
-    }
-    if let Some(task) = task {
-        task.log(format!("表 {table}：提交事务"));
-    }
-    result
+    kind.max_connections().clamp(1, 6)
 }
 
 /// 目标方言的「开事务 / 提交 / 收尾复位」三条语句；`None` = 该方言不批事务（照旧逐条提交）。
 /// MySQL 系靠 autocommit 开关；PG/SQLite 用标准 begin/commit；SQL Server 用 begin transaction。
 /// Doris / ClickHouse / Oracle / 达梦 / DB2 故意不列 —— 它们没有可用的 SQL 级 begin，
 /// 硬上会直接把写入路径打挂。
-fn txn_batch(kind: &str) -> Option<(&'static str, &'static str, &'static str)> {
+pub(crate) fn txn_batch(kind: &str) -> Option<(&'static str, &'static str, &'static str)> {
     match kind {
         "mysql" | "mariadb" => Some(("set autocommit = 0", "commit", "set autocommit = 1")),
         "postgresql" | "kingbase" | "sqlite" => Some(("begin", "commit", "")),
@@ -1938,7 +2059,6 @@ async fn sync_table_inner(
         note.push_str(&format!("（目标缺少 {} 列，未同步）", missing.join("/")));
     }
     // 源侧 select 前缀：下面按页反复用它（见 fetch_page / select_base）
-    let base_select = select_base(src, table, &columns, source_kind);
 
     // 源与目标**是同一张表**（自同步）时，清空会把待读的数据删掉；那种"清空"本身也没有意义。
     // 旧实现是「先把整表读进内存、再清目标」，顺序上不怕；现在改成边读边写，必须显式区分。
@@ -1962,7 +2082,6 @@ async fn sync_table_inner(
     let mut updated = 0u64;
     // 计时只为在结果里给出吞吐（行/秒）：优化前后快了多少，界面上能直接看出来
     let started = std::time::Instant::now();
-    let mut last_report = started;
     let effective_mode = if opts.data_mode == DataMode::Upsert && key_indexes.is_empty() {
         // 没有主键 ⇒ 判断不了「这一行是谁」，upsert 无从下手。
         //
@@ -2027,7 +2146,7 @@ async fn sync_table_inner(
                 _ => None,
             };
             let page =
-                match fetch_page(state, &tgt.conn, &tgt.scope, &base, target_kind, key_offset, cursor, "")
+                match fetch_page(state, &tgt.conn, &tgt.scope, &base, target_kind, key_offset, cursor, "", PAGE, "internal:rowcount")
                     .await
                 {
                     Ok(rows) => rows,
@@ -2125,7 +2244,6 @@ async fn sync_table_inner(
         && effective_mode != DataMode::Upsert
         && tgt_record.is_some();
     // Stream Load 单请求 5 万行（JSON 体积 ≈ 15MB，FE 无语句大小限制）
-    let flush_at: u64 = if use_stream { 50_000 } else { per_statement };
     let (stream_host, stream_port, stream_user, stream_pass) = tgt_record
         .as_ref()
         .map(|r| {
@@ -2172,10 +2290,6 @@ async fn sync_table_inner(
             task.log(format!("表 {table}：Stream Load 直连 BE http 端口 {be_http_port}"));
         }
     }
-    // Stream Load 首次失败后回退标志（本表内不再尝试）
-    let mut stream_fallback = false;
-    // 攒批的字节量：Stream Load 的**第二重**上限（行数管不住行宽，见 STREAM_LOAD_MAX_BYTES）
-    let mut pending_bytes: usize = 0;
     // ===== 流式写入：读一页、写一页 =====
     // 旧实现是「整表读进内存 → 再写」，代价是三件事捆在一起：
     //   · 必须有 20 万行的上限，否则内存扛不住；
@@ -2299,545 +2413,71 @@ async fn sync_table_inner(
             return ObjResult::ok(ty, table, message, copied, 0);
         }
     }
-    let mut pending_insert: Vec<Vec<CellValue>> = Vec::new();
+    // ===== 数据搬运：交给 transfer 引擎（DataX 风格的 Reader/Writer 插件）=====
+    //
+    // 这一段原来是内联的「预取协程 + 主循环 + 写池」（1200 行，读写方言细节与并发/重试/
+    // 进度/取消全缠在一起）。现在职责切开：
+    //   · 本层（sync）只管**结构**：建表、索引、注释、序列回拨、对象级结果；
+    //   · transfer 引擎管**搬行**：按主键分片并发读 → 有界通道 → 多连接并发写。
+    // 想给某一种库换取数/落库方式（Doris 的 Stream Load、同实例的 INSERT…SELECT），
+    // 只需要在 `transfer::reader_for` / `transfer::writer_for` 里换实现，这里一行不用改。
 
     // 主键游标（keyset）分页：有主键时替代 OFFSET —— 深分页每页只扫本页，
-
     // 千万级行不再 O(N²) 退化。无主键退回 OFFSET（cursor 传 None）。
-
     let paging_keys: Vec<String> = key_indexes.iter().map(|i| columns[*i].clone()).collect();
-
-
-
-    // ===== 读取/写入流水线 =====
-
-    // 原来是「读一页 → 写一页」串行：总耗时 = 读取 + 写入。
-
-    // 预取协程提前拉页（最多在途 4 页），主循环边收边写 —— 总耗时 ≈ max(读取, 写入)。
-    // 在途 2 → 4：写入侧偶有慢批（大行宽/远端库），缓冲更深时读协程不会空转等待，
-    // 读写流水线咬合更紧；内存代价 ≈ 多缓存 2 页行数据（可控）。
-
-    // 取消：主循环退出（drop rx）后，预取协程的 send 失败而退出（最多多拉几页在途，无害）。
-
-    // ===== 表内写并发（参考 DataX 的多 channel 思路）=====
-    // 读侧保持**单流**（keyset 分页 + 预取协程已够快：实测 4 万宽行几秒读完），瓶颈在写侧
-    // —— 攒满一批丢给 W 个并行 writer：
-    // - JDBC 行协议目标：并行 INSERT（会话池给每路独立连接，绕开单连接的 fsync 串行）；
-    // - Doris：并行在途 Stream Load（下一个请求的上传与上一个的 BE publish 重叠，
-    //   把 ~10s 的固定 publish 开销藏进流水线）。
-    // 仅**纯插入/清空重建**启用 —— upsert 要「先读目标已有键 → 逐行比对更新」，并行会
-    // 乱序重复更新，维持串行。写批内存上界 = (W+1) × 16MB（字节上限对所有目标生效）。
-    let parallel_writes = effective_mode != DataMode::Upsert;
-    let write_workers = if use_stream { 3usize } else { 6usize };
-    let mut write_tx: Option<tokio::sync::mpsc::Sender<Vec<Vec<CellValue>>>> = None;
-    let mut writer_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-    let shared_inserted = Arc::new(AtomicU64::new(0));
-    let write_err: Arc<tokio::sync::Mutex<Option<String>>> = Arc::new(tokio::sync::Mutex::new(None));
-    let stream_fallback_flag = Arc::new(AtomicBool::new(false));
-    if parallel_writes {
-        let (tx, rx) = tokio::sync::mpsc::channel::<Vec<Vec<CellValue>>>(write_workers + 1);
-        let rx = Arc::new(tokio::sync::Mutex::new(rx));
-        for _ in 0..write_workers {
-            let rx = rx.clone();
-            let state_w = state.clone();
-            let tgt_w = tgt.clone();
-            let columns_w = columns.clone();
-            let types_w = target_types.clone();
-            let kind_w = target_kind;
-            let name_w = target_name.clone();
-            let task_w = task.cloned();
-            let table_w = table.to_string();
-            let identity_w = identity_on;
-            let use_stream_w = use_stream;
-            let sh_port = stream_port;
-            let be_port = be_http_port;
-            let shost = stream_host.clone();
-            let suser = stream_user.clone();
-            let spass = stream_pass.clone();
-            let scope_w = tgt.scope.clone();
-            let err_slot = write_err.clone();
-            let inserted_ctr = shared_inserted.clone();
-            let fallback = stream_fallback_flag.clone();
-            writer_handles.push(tokio::spawn(async move {
-                loop {
-                    // 锁只包 recv：不同 writer 排队领批，锁内不干活
-                    let batch = { rx.lock().await.recv().await };
-                    let Some(batch) = batch else { break }; // 通道关闭：全部写完，收工
-                    if err_slot.lock().await.is_some() {
-                        break; // 已有同伴失败：本表作废，剩余批次不再尝试
-                    }
-                    let batch_rows = batch.len() as u64;
-                    // 埋点：本批"写"的实际耗时（不含排队等待 —— 计时从领到批之后开始）。
-                    // 用途：回答"传输慢是卡在读还是卡在写" —— 若每批写都很快、整表却慢，
-                    // 瓶颈就在读侧分页（每页一次 RPC + 整页 JSON 解析）。
-                    let t_batch = std::time::Instant::now();
-                    // Stream Load 成功 → 直接记账后进下一批（continue）；
-                    // 失败 → 本批回退 INSERT 管道，与纯 INSERT 路径合流到同一个 outcome
-                    let outcome = if use_stream_w && !fallback.load(Ordering::SeqCst) {
-                        match doris_stream_load(sh_port, be_port, &shost, &suser, &spass, &scope_w, &table_w, &columns_w, &batch).await {
-                            Ok(loaded) => {
-                                if loaded > 0 {
-                                    inserted_ctr.fetch_add(loaded, Ordering::SeqCst);
-                                    if let Some(t) = &task_w { t.add_rows_written(loaded); }
-                                }
-                                let filtered = batch_rows.saturating_sub(loaded);
-                                if filtered > 0 {
-                                    if let Some(t) = &task_w {
-                                        t.add_rows_failed(filtered);
-                                        t.log(format!("表 {table_w}：Stream Load 本批 {filtered} 行被目标过滤（类型不匹配等），已计入失败数"));
-                                    }
-                                }
-                                continue; // 本批完成
-                            }
-                            Err(err) => {
-                                // 首次失败（端口不通/权限/格式）：本表内回退 INSERT 管道，数据不丢
-                                fallback.store(true, Ordering::SeqCst);
-                                if let Some(t) = &task_w {
-                                    t.log(format!("表 {table_w}：Stream Load 失败（{err}），回退 INSERT 管道"));
-                                }
-                                write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref(), &table_w).await
-                            }
-                        }
-                    } else {
-                        write_insert_rows(&state_w, &tgt_w, &name_w, &columns_w, &types_w, kind_w, &batch, identity_w, task_w.as_ref(), &table_w).await
-                    };
-                    // 埋点出口：只记超过 500ms 的慢批，长表不刷屏（阈值内属正常，不记）
-                    {
-                        let ms = t_batch.elapsed().as_millis();
-                        if ms > 500 {
-                            if let Some(t) = &task_w {
-                                t.log(format!("表 {table_w}：本批 {batch_rows} 行，写入耗时 {ms} ms"));
-                            }
-                        }
-                    }
-                    match outcome {
-                        Ok(ok_rows) => {
-                            inserted_ctr.fetch_add(ok_rows, Ordering::SeqCst);
-                        }
-                        Err(msg) => {
-                            let mut slot = err_slot.lock().await;
-                            if slot.is_none() {
-                                *slot = Some(format!("表 {table_w}：{msg}"));
-                            }
-                            break;
-                        }
-                    }
-                }
-            }));
-        }
-        write_tx = Some(tx);
-    }
-
-    enum PageMsg {
-
-    Page(Vec<Vec<CellValue>>),
-
-    Failed(String),
-
-    }
-
-    /// 「读取侧（预取）协程异常终止」必须**说出去**，不能被当成"读完了"。
-    ///
-    /// 预取协程 panic 时 `page_tx` 会随 unwind 被丢掉，而主循环的 `recv_with_deadline`
-    /// 把"通道关闭"当成正常读完（它只在**超时**时写 `read_error`）—— 于是**少读的那部分被当成
-    /// 读完了，任务报成功**：同步出来的表看着成功，其实缺数据。
-    ///
-    /// 守卫在 Drop 里补发一条 `PageMsg::Failed`，主循环的 `Failed` 分支会写 `read_error` 并收工。
-    /// 正常路径在任务体末尾 `disarm()`，所以正常结束不会被误报成失败。
-    /// 用 `try_send`：Drop 里不能 await，而且此刻下游可能已经走了。
-    struct PrefetchGuard(tokio::sync::mpsc::Sender<PageMsg>, bool);
-
-    impl PrefetchGuard {
-        fn new(tx: tokio::sync::mpsc::Sender<PageMsg>) -> Self {
-            Self(tx, true)
-        }
-
-        fn disarm(mut self) {
-            self.1 = false;
-        }
-    }
-
-    impl Drop for PrefetchGuard {
-        fn drop(&mut self) {
-            if self.1 {
-                let _ = self.0.try_send(PageMsg::Failed(
-                    "读取侧协程异常终止（驱动异常或内存不足），本次同步数据不完整".to_string(),
-                ));
-            }
-        }
-    }
-
-    let (page_tx, mut page_rx) = tokio::sync::mpsc::channel::<PageMsg>(4);
-
-    let prefetch_state = state.clone();
-
-    let prefetch_src = src.clone();
-
-    let prefetch_base = base_select.clone();
-
-    let prefetch_keys = paging_keys.clone();
-
-    let prefetch_key_positions = key_indexes.clone();
-
-    let prefetch_kind = source_kind;
-
-    let prefetch_where = opts.where_clause.clone();
-
-    let prefetch_task = tokio::spawn(async move {
-
-        // 异常展开时补发失败信号（见 PrefetchGuard 的注释）。正常路径在末尾 disarm()。
-        let guard = PrefetchGuard::new(page_tx.clone());
-
-        let mut offset = 0u64;
-
-        let mut last_key: Option<Vec<CellValue>> = None;
-
-        loop {
-
-            let cursor = match last_key.as_ref() {
-
-                Some(values) if !prefetch_keys.is_empty() => {
-
-                    Some((prefetch_keys.as_slice(), values.as_slice()))
-
-                }
-
-                _ => None,
-
-            };
-
-            match fetch_page(
-
-                &prefetch_state,
-
-                &prefetch_src.conn,
-
-                &prefetch_src.scope,
-
-                &prefetch_base,
-
-                prefetch_kind,
-
-                offset,
-
-                cursor,
-
-                &prefetch_where,
-
-            )
-
-            .await
-
-            {
-
-                Ok(rows) => {
-
-                    let got = rows.len();
-
-                    if !prefetch_keys.is_empty() {
-
-                        last_key = rows.last().map(|row| {
-
-                            prefetch_key_positions
-
-                                .iter()
-
-                                .filter_map(|i| row.get(*i).cloned())
-
-                                .collect::<Vec<CellValue>>()
-
-                        });
-
-                    }
-
-                    if send_with_deadline(&page_tx, PageMsg::Page(rows), "写入侧").await.is_err() {
-
-                        break;
-
-                    }
-
-                    if got < PAGE as usize {
-
-                        break;
-
-                    }
-
-                    offset += PAGE;
-
-                }
-
-                Err(err) => {
-
-                    let _ = send_with_deadline(&page_tx, PageMsg::Failed(err.message), "写入侧").await;
-
-                    break;
-
-                }
-
-            }
-
-        }
-
-        // 正常收尾（含所有 break）→ 解除守卫，别把"正常读完"报成失败
-        guard.disarm();
-
-    });
-
-
-
-    // 行数上限的消费计数（按真正进入写入处理的行数累计）+ 是否已命中上限
-    let mut consumed: u64 = 0;
-    let mut limit_hit = false;
-    let mut canceled = false;
-
-    let mut read_error: Option<String> = None;
-
-    'outer: while let Some(msg) = recv_with_deadline(&mut page_rx, &mut read_error, "读取侧").await {
-
-        match msg {
-
-            PageMsg::Failed(err) => {
-
-                read_error = Some(err);
-
-                break 'outer;
-
-            }
-
-            PageMsg::Page(page) => {
-
-                // 写池有失败：源表再读也是白读，立即收摊
-
-                if write_tx.is_some() && write_err.lock().await.is_some() {
-
-                    break 'outer;
-
-                }
-
-                // 取消是协作式的：**每页**检查一次（原来每张表只有开头一次机会）
-
-                if let Some(task) = task {
-
-                    if task.is_canceled() {
-
-                        canceled = true;
-
-                        break 'outer;
-
-                    }
-
-                }
-
-                let got = page.len();
-
-                if got == 0 {
-
-                    break;
-
-                }
-
-
-                if let Some(task) = task {
-
-                    // 每页一条日志太刷屏（大表几百条），读取量在进度卡上平滑递增就够
-
-                    task.add_rows_read(got as u64);
-
-                }
-
-                // 行数上限：本页按**剩余配额**截断 —— 预取协程可能整页拉回来，
-                // 多出来的行直接丢弃；截断即命中上限，处理完这页就收（不再拉下一页）。
-                // 消费计数（consumed）在下面的行循环里累加。
-                let mut page = page;
-
-                if opts.row_limit > 0 {
-
-                    let remaining = opts.row_limit.saturating_sub(consumed);
-
-                    if remaining == 0 {
-
-                        break 'outer;
-
-                    }
-
-                    if got as u64 > remaining {
-
-                        page.truncate(remaining as usize);
-
-                        note.push_str(&format!(
-
-                            "（已达行数上限 {}，仅同步了前 {} 行）",
-
-                            opts.row_limit, opts.row_limit
-
-                        ));
-
-                        limit_hit = true;
-
-                    }
-
-                }
-        for row in page {
-            consumed += 1;
-            // 只有 upsert 需要"这行在目标里已存在吗"。Insert / TruncateInsert 下 existing 必然为空，
-            // 原来那个 `!= Insert` 会把 TruncateInsert 也带进来 —— 每行白算一次 key_of（宽表 5 万行/页纯烧 CPU）。
-            let is_existing = effective_mode == DataMode::Upsert
-                && !key_indexes.is_empty()
-                && existing.contains(&key_of(&row, &key_indexes));
-            if is_existing {
-                // 更新逐行做：跨方言的批量 UPDATE 没有统一写法，硬拼会踩到方言差异
-                let sql =
-                    build_update(&target_name, &columns, &target_types, &row, &key_indexes, target_kind);
-                // 埋点：upsert 的"逐行 UPDATE"每行一次 RPC，是它最容易慢的地方。
-                // 只抽样记（每 500 行取一个采样 + 单次 >200ms），既能看到单行成本，也不会刷屏。
-                let t_upd = std::time::Instant::now();
-                match run_target(state, &tgt_target, &sql).await {
-                    Ok(_) => {
-                        updated += 1;
-                        if let Some(task) = task {
-                            task.add_rows_written(1);
-                            let ms = t_upd.elapsed().as_millis();
-                            if ms > 200 && updated % 500 == 1 {
-                                task.log(format!("表 {table}：upsert 单行更新耗时 {ms} ms（逐行 RPC 是 upsert 的固有开销，目标库索引越重越慢）"));
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        if let Some(task) = task { task.add_rows_failed(1); }
-                        return ObjResult::failed(ty, table, format!("更新失败：{}", err.message))
-                    }
-                }
-                continue;
-            }
-            // json_row_bytes 是每行一次 JSON 序列化（宽表 × 百万行是纯 CPU 开销），
-            // 它只用来判断"够不够一批"，所以每 8 行精确算一次、按 8 倍计入 —— 偏保守
-            // （宁可早一点刷批，也不会把内存上界估小），省掉 7/8 的序列化。
-            if pending_insert.len() % 8 == 0 {
-                pending_bytes += json_row_bytes(&row) * 8;
-            }
-            pending_insert.push(row);
-            // 触发条件**双重**：行数到 flush_at，或攒批字节到 STREAM_LOAD_MAX_BYTES
-            //（对所有目标生效 —— 并发模式下 (W+1) 批在途，字节上限就是内存上界）
-            if pending_insert.len() as u64 >= flush_at
-                || pending_bytes >= STREAM_LOAD_MAX_BYTES
-            {
-                let batch_rows = pending_insert.len() as u64;
-                // **并发写池**：整批移交给 writer，读循环继续攒下一批（读写完全解耦）
-                if let Some(tx) = &write_tx {
-                    if let Err(why) = send_with_deadline(tx, pending_insert, "写入侧").await {
-                        let msg = write_err
-                            .lock()
-                            .await
-                            .clone()
-                            .unwrap_or(why);
-                        return ObjResult::failed(ty, table, msg);
-                    }
-                    pending_insert = Vec::new();
-                    pending_bytes = 0;
-                } else if use_stream && !stream_fallback {
-                    let host = stream_host.clone();
-                    let user = stream_user.clone();
-                    let pass = stream_pass.clone();
-                    if let Some(task) = task {
-                        // 每批都报一次批大小：宽行表小批多，让用户看到在动而不是卡死
-                        task.set_phase(format!("表 {table}：Stream Load {} 行", batch_rows));
-                    }
-                    match doris_stream_load(stream_port, be_http_port, &host, &user, &pass, &tgt.scope, table, &columns, &pending_insert).await {
-                        Ok(loaded) => {
-                            // **按 BE 实际载入行数记账**：类型不匹配等被过滤的行计入失败
-                            //（对齐 DataX 的 errorLimit 思路 —— 脏数据可见，不静默吞掉）
-                            if loaded > 0 {
-                                inserted += loaded;
-                                if let Some(task) = task { task.add_rows_written(loaded); }
-                            }
-                            let filtered = batch_rows.saturating_sub(loaded);
-                            if filtered > 0 {
-                                if let Some(task) = task {
-                                    task.add_rows_failed(filtered);
-                                    task.log(format!("表 {table}：Stream Load 本批 {filtered} 行被目标过滤（类型不匹配等），已计入失败数"));
-                                }
-                            }
-                            pending_insert.clear();
-                            pending_bytes = 0;
-                        }
-                        Err(err) => {
-                            // 首次失败（端口不通/权限/格式）：本表内回退 INSERT 管道，数据不丢
-                            stream_fallback = true;
-                            pending_bytes = 0;
-                            if let Some(task) = task { task.log(format!("表 {}：Stream Load 失败（{}），回退 INSERT 管道", table, err)); }
-                        }
-                    }
-                } else {
-                // build_insert_batch 按行数+字节上限拆成多条语句：逐条发送（部分成功语义）
-                match write_insert_rows(state, tgt, &target_name, &columns, &target_types, target_kind, &pending_insert, identity_on, task, table).await {
-                    Ok(ok_rows) => {
-                        inserted += ok_rows;
-                        pending_insert.clear();
-                        pending_bytes = 0;
-                    }
-                    Err(msg) => return ObjResult::failed(ty, table, format!("插入失败：{msg}")),
-                }
-                }
-            }
-        }
-        // **跨页攒批**：残余批次不在这里落盘，攒满 per_statement 才发一条 ——
-        // 页尾 flush 会把 ClickHouse 的 5 万行大批次打碎成 1 万行/次（每次落一个 part），
-        // 那是 CH 目标慢的主因。攒批期间「已写行数」略滞后于真实落盘，无实际影响。
-        // 进度**按时间节流**：写一页更新一次足矣。旧实现每行都写一次 phase，
-        // 20 万行就是 20 万次加锁 + 20 万次前端快照变化 —— 那是纯白烧的 CPU。
+    if paging_keys.is_empty() {
+        // 没有可用的键：分页只能退回 OFFSET，第 N 页要让源库白扫前 N×5 万行（O(N²)）。
+        // 这个代价用户看不见，只会觉得「越大越慢」，所以明说一句怎么解。
         if let Some(task) = task {
-            if last_report.elapsed() >= PROGRESS_INTERVAL {
-                // 只报「执行到哪一步」，不报数字 —— 数字在进度卡上平滑递增
-                task.set_phase(format!("表 {table}：传输数据"));
-                last_report = std::time::Instant::now();
-            }
-        }
-                if got < PAGE as usize {
-                    break;
-                }
-                // 上限已命中（本页被截断）：处理完这页就收，不再继续拉
-                if limit_hit {
-                    break 'outer;
-                }
-            }
+            task.log(format!(
+                "表 {table}：源表没有主键/唯一键，分页只能用 OFFSET（每页都要重扫前面所有行），大表会越来越慢；建议在同步配置里指定主键列"
+            ));
         }
     }
-    // 流水线收尾：丢掉 rx 让预取协程退出，并等它结束
-    drop(page_rx);
-    let _ = tokio::time::timeout(PIPE_WAIT, prefetch_task).await;
-    if canceled {
-        note.push_str("（已取消：已写入的部分保留，不回滚）");
-    }
-    if let Some(err) = read_error {
-        return ObjResult::failed(ty, table, format!("读取源数据失败：{}", err));
-    }
-    // **并发写池收尾**：残余批次入队 → 关通道 → 等 writer 全部落账 → 合流行数
-    if let Some(tx) = write_tx.take() {
-        if !pending_insert.is_empty() {
-            let _ = send_with_deadline(&tx, pending_insert, "写入侧").await;
-            pending_insert = Vec::new();
-        }
-        drop(tx); // 关闭通道：writer 消费完剩余批次后自然退出
-        for handle in writer_handles.drain(..) {
-            let _ = tokio::time::timeout(PIPE_WAIT, handle).await;
-        }
-        inserted += shared_inserted.load(Ordering::SeqCst);
-        if let Some(msg) = write_err.lock().await.take() {
-            return ObjResult::failed(ty, table, msg);
-        }
-    }
-    // 因取消而中途退出时，手里可能还压着最后一批没落盘的插入（与主循环同款：拆语句逐条发）
-    if !pending_insert.is_empty() {
-        match write_insert_rows(state, tgt, &target_name, &columns, &target_types, target_kind, &pending_insert, identity_on, task, table).await {
-            Ok(ok_rows) => {
-                inserted += ok_rows;
-            }
-            Err(msg) => {
-                return ObjResult::failed(ty, table, format!("插入失败：{msg}"));
-            }
-        }
-    }
-    // identity 的 OFF 已随每批写入自带（见 with_identity），无需单独关闭
+
+    let plan = crate::api::transfer::TablePlan {
+        state: state.clone(),
+        task: task.cloned(),
+        src_conn: src.conn.clone(),
+        src_scope: src.scope.clone(),
+        source_kind,
+        src_from: src.scoped(table, source_kind),
+        table: table.to_string(),
+        columns: columns.clone(),
+        tgt_conn: tgt.conn.clone(),
+        tgt_scope: tgt.scope.clone(),
+        tgt_target: tgt_target.clone(),
+        target_kind,
+        target_name: target_name.clone(),
+        target_types,
+        key_columns,
+        key_indexes,
+        paging_keys,
+        where_clause: opts.where_clause.clone(),
+        row_limit: opts.row_limit,
+        upsert: effective_mode == DataMode::Upsert,
+        existing: std::sync::Arc::new(existing),
+        per_statement,
+        identity_on,
+        stream: if use_stream {
+            Some(crate::api::transfer::StreamCfg {
+                fe_http_port: stream_port,
+                be_http_port,
+                host: stream_host.clone(),
+                user: stream_user.clone(),
+                pass: stream_pass.clone(),
+            })
+        } else {
+            None
+        },
+    };
+    let stats = match crate::api::transfer::run(plan).await {
+        Ok(stats) => stats,
+        Err(msg) => return ObjResult::failed(ty, table, msg),
+    };
+    inserted += stats.inserted;
+    updated += stats.updated;
+    note.push_str(&stats.note);
 
     // **PG / KingBase 的序列回拨**：显式插入自增列的值后，目标库的序列还停在起点 ——
     // 之后业务插入新行时序列从 1 开始生成主键，**必然撞上刚同步进来的数据**（迁移工具的经典坑）。

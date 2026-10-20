@@ -2826,20 +2826,27 @@ _ => Meta::Unwritten,
             // MySQL 8 的角色就是 `account_locked='Y'` 且认证串为空的账号，这里排除掉
             // （真被锁的用户仍有认证串，不会被误排除）；MariaDB 直接用 `is_role` 列
             // （collation 与字面量不一致，必须转 binary 再比，否则 1267）。
+            // 「超级用户」标记：MySQL / MariaDB 直接取 `Super_priv`，**不要写成
+            // `super_priv = 'Y'`** —— MariaDB 的该列是 collation 不同的 CHAR，
+            // 与字面量比较会报 1267（实测 `Illegal mix of collations …
+            // utf8mb4_general_ci / utf8mb4_uca1400_ai_ci`），整张清单直接 500。
+            // 取原值（Y/N）出门，由 Rust 侧的 `is_true_flag` 折成布尔。
+            // Doris 没有 Super_priv，管理员是 `Admin_priv`（实测 root/admin 都是 Y）。
             "mysql" => Meta::Sql(
-                "select user as `name`, host as `host` from mysql.user \
+                "select user as `name`, host as `host`, super_priv as `isSuper` from mysql.user \
                  where not (account_locked = 'Y' and coalesce(authentication_string, '') = '') \
                  order by user, host"
                     .to_string(),
             ),
             "mariadb" => Meta::Sql(
-                "select user as `name`, host as `host` from mysql.user \
+                "select user as `name`, host as `host`, super_priv as `isSuper` from mysql.user \
                  where coalesce(cast(is_role as binary), 'N') <> 'Y' \
                  order by user, host"
                     .to_string(),
             ),
             "doris" => Meta::Sql(
-                "select user as `name`, host as `host` from mysql.user order by user, host"
+                "select user as `name`, host as `host`, admin_priv as `isSuper` from mysql.user \
+                 order by user, host"
                     .to_string(),
             ),
             // PG 的角色与用户是同一张表：**不能登录**的就是纯角色（rolcanlogin = false），
@@ -2860,8 +2867,13 @@ _ => Meta::Unwritten,
             //
             // 只过滤系统内置：`##…` 是证书/策略签名登录，`NT …` / `BUILTIN…` 是机器账号。
             // `sa` 必须保留 —— 那正是用户要找的那个。
+            //
+            // `isSuper` 用 `is_srvrolemember('sysadmin', name)` 现场算（实测 sa → 1），
+            // 这样「超级用户」标签在这一页才有意义；非 sysadmin 账号调用得到 NULL，
+            // 折成 false，不会把所有人都标成超级用户。
             "sqlserver" => Meta::Sql(
-                "select name from sys.server_principals \
+                "select name, is_srvrolemember('sysadmin', name) as \"isSuper\" \
+                 from sys.server_principals \
                  where type in ('S','U','G') \
                    and name not like '##%' \
                    and name not like 'NT %' \
