@@ -4206,15 +4206,22 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             // 长度大于 100 万的不当"长度"用（CLOB 一类会报 2^31-1，拼进类型文本没意义）
             // 列注释在 H2 的 information_schema.columns 里叫 `remarks`（老的 1.4 与 2.x 都有），
             // 同样**曾经漏取**：界面「注释」列可见却永远空着。
+            //
+            // **精度只对 numeric / decimal 拼**：H2 给**所有**数值类型都填了
+            // numeric_precision/numeric_scale（INTEGER=32,0、BIGINT=64,0、BOOLEAN=1,0…），
+            // 早先不看类型就拼，得到 `integer(32,0)` 这种根本执行不了的"类型"。
+            // 更麻烦的是它和界面的「现状基线」对不上：编辑器拆出 `INTEGER` + 长度 32，
+            // 再拼回去是 `integer(32)` ≠ `integer(32,0)` ⇒ **一打开表就被判成"改 3"**
+            // （用户反馈：什么都没改，预览里却有 3 条 ALTER）。
             "h2" => Meta::Sql(format!(
                 "select column_name as column_name, \
                  case \
                    when character_maximum_length is not null and character_maximum_length <= 1000000 \
                      then lower(data_type) || '(' || character_maximum_length || ')' \
-                   when numeric_precision is not null and numeric_scale is not null \
-                     then lower(data_type) || '(' || numeric_precision || ',' || numeric_scale || ')' \
-                   when numeric_precision is not null \
-                     then lower(data_type) || '(' || numeric_precision || ')' \
+                   when lower(data_type) in ('numeric','decimal','dec','number') \
+                        and numeric_precision is not null \
+                     then lower(data_type) || '(' || numeric_precision || ',' \
+                          || coalesce(numeric_scale, 0) || ')' \
                    else lower(data_type) \
                  end as type_text, \
                  coalesce(remarks, '') as comment \
