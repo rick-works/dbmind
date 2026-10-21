@@ -56,7 +56,7 @@
               <div v-if="!bgRunningList.length" class="bg-task-empty">{{ $t('sync.bgRunningEmpty') }}</div>
               <div v-for="t in bgRunningList" :key="t.id" class="bg-task-item" @click="resumeBgTask(t)">
                 <span class="bg-dot" :class="bgStatusOf(t.id)"></span>
-                <span class="bg-kind" :class="t.kind === 'compare' ? 'is-cmp' : ''">{{ t.kind === 'compare' ? $t('nav.compare') : $t('nav.sync') }}</span>
+                <span class="bg-kind" :class="bgKindClass(t.kind)">{{ bgKindLabel(t.kind) }}</span>
                 <span class="bg-title">{{ t.title }}</span>
                 <span class="bg-state">{{ bgStateText(t.id) }}</span>
                 <el-button size="small" text type="danger" @click.stop="stopBgTask(t)">{{ $t('common.stop') }}</el-button>
@@ -548,7 +548,7 @@
     </div>
     <el-table :data="bgPageRows" size="small" border class="data-table" @row-click="resumeBgTask" :row-class-name="() => 'bg-row-click'">
     <el-table-column :label="$t('ts.kind')" width="80" align="center" header-align="center">
-      <template #default="{ row }"><span class="bg-kind" :class="row.kind === 'compare' ? 'is-cmp' : ''">{{ row.kind === 'compare' ? $t('nav.compare') : $t('nav.sync') }}</span></template>
+      <template #default="{ row }"><span class="bg-kind" :class="bgKindClass(row.kind)">{{ bgKindLabel(row.kind) }}</span></template>
     </el-table-column>
     <el-table-column prop="title" :label="$t('ts.task')" min-width="170" show-overflow-tooltip align="center" header-align="center" />
     <el-table-column :label="$t('ts.status')" width="90" show-overflow-tooltip align="center" header-align="center">
@@ -579,7 +579,7 @@
     <div v-if="!bgRunningList.length" class="bg-task-empty">{{ $t('sync.bgRunningEmpty') }}</div>
     <div v-for="t in bgRunningList" :key="t.id" class="bg-task-item" @click="resumeBgTask(t)">
     <span class="bg-dot" :class="bgStatusOf(t.id)"></span>
-    <span class="bg-kind" :class="t.kind === 'compare' ? 'is-cmp' : ''">{{ t.kind === 'compare' ? $t('nav.compare') : $t('nav.sync') }}</span>
+    <span class="bg-kind" :class="bgKindClass(t.kind)">{{ bgKindLabel(t.kind) }}</span>
     <span class="bg-title">{{ t.title }}</span>
     <span class="bg-state">{{ bgStateText(t.id) }}</span>
     <el-button size="small" text type="danger" @click.stop="stopBgTask(t)">{{ $t('common.stop') }}</el-button>
@@ -1019,11 +1019,12 @@
 
   <BackupRestoreDialog
     v-if="backupRestore.connectionId"
-    :key="backupRestore.connectionId + '|' + backupRestore.mode + '|' + backupRestore.database"
+    :key="backupRestore.connectionId + '|' + backupRestore.mode + '|' + backupRestore.database + '|' + (backupRestore.resumeTaskId || '')"
     v-model="backupRestore.visible"
     :mode="backupRestore.mode"
     :connection-id="backupRestore.connectionId"
     :database="backupRestore.database"
+    :resume-task-id="backupRestore.resumeTaskId"
   />
 
   <SettingsView v-model="settingsOpen" :initial-tab="settingsTab" />
@@ -1218,7 +1219,9 @@ import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/ba
 import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch } from '@element-plus/icons-vue'
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
-import { compareTaskStatus, compareCancel, syncCancel, getSettings } from '../../api'
+import { compareTaskStatus, compareCancel, syncCancel, getSettings,
+  // 备份/还原也在任务中心里（与数据传输同一套记录），状态查询与「停止」各走自己的接口
+  backupTaskStatus, cancelBackup, restoreTaskStatus, cancelRestore } from '../../api'
 import { showSafetyNotice, setSafetyConnResolver } from '../../utils/safetyNotice'
 // 生产判定（角标 / 分组 / 旧分组键，与后端 is_prod_environment 同一口径）——
 // 与用户管理页 / 用户表单共用同一个判定，避免"这里认、那里不认"
@@ -2164,6 +2167,24 @@ const onSyncDialogVisible = (v) => {
   syncDialogOpen.value = v
   if (!v) bgResumeId.value = ''
 }
+/** 备份 / 还原在任务中心各算一类：状态查询、停止、恢复用的接口都不一样 */
+const isBackupKind = (kind) => kind === 'backup' || kind === 'restore'
+/** 任务类型 → 文案（任务中心类型列、顶栏悬浮列表共用） */
+const bgKindLabel = (kind) => {
+  if (kind === 'compare') return t('nav.compare')
+  if (kind === 'backup') return t('ts.kindBackup')
+  if (kind === 'restore') return t('ts.kindRestore')
+  return t('nav.sync')
+}
+/** 类型徽章配色：对比=橙、备份/还原=绿、数据传输=蓝 */
+const bgKindClass = (kind) => (kind === 'compare' ? 'is-cmp' : isBackupKind(kind) ? 'is-bkp' : '')
+/** 按任务类型查状态（四类接口形状一致：status / message / logs / logsSeq / elapsedMs …） */
+const bgTaskStatusOf = (task) => {
+  if (task.kind === 'compare') return compareTaskStatus(task.id)
+  if (task.kind === 'backup') return backupTaskStatus(task.id)
+  if (task.kind === 'restore') return restoreTaskStatus(task.id)
+  return syncTaskStatus(task.id)
+}
 const bgStatusMap = ref({})
 const refreshBgStatus = async () => {
 // 刷一次每个后台任务的实时状态（徽标、列表、关闭检查共用）
@@ -2171,9 +2192,7 @@ const refreshBgStatus = async () => {
 // 终态**写回记录**（持久化）—— 执行记录在页面刷新后仍显示完成/失败，而不是误标运行中
 for (const t of bgTasks) {
 try {
-const st = t.kind === 'compare'
-? await compareTaskStatus(t.id)
-: await syncTaskStatus(t.id)
+const st = await bgTaskStatusOf(t)
 // **后端说任务不存在（notfound）≠ 本地记录作废**：服务重启后内存任务丢了，
 // 但本地留底过的终态（成功/失败/取消）必须保留 —— 不能把「成功」覆盖成「已中断」（真机踩过）。
 // 优先用记录状态，记录被旧版本污染过就用快照里的终态救回
@@ -2217,10 +2236,14 @@ setBgTaskStatus(t.id, 'notfound')
 const stopBgTask = async (task) => {
   try {
     if (task.kind === 'compare') await compareCancel(task.id)
+    else if (task.kind === 'backup') await cancelBackup(task.id)
+    else if (task.kind === 'restore') await cancelRestore(task.id)
     else await syncCancel(task.id)
     bgStatusMap.value[task.id] = 'stopping'
     // 文案按任务类型分开：同步任务上弹一句「正在中断数据库查询」（对比的文案）会让人以为点错了功能
-    ElMessage.success(t(task.kind === 'compare' ? 'cmp.stopRequested' : 'sync.stopRequested'))
+    ElMessage.success(t(task.kind === 'compare'
+      ? 'cmp.stopRequested'
+      : isBackupKind(task.kind) ? 'bkp.stopRequested' : 'sync.stopRequested'))
   } catch (e) {
     ElMessage.error(e?.message || t('common.unknownError'))
   }
@@ -2275,7 +2298,23 @@ const bgStatusOf = (id) => (bgStatusMap.value[id] || 'running')
 const resumeBgTask = (t) => {
   bgCenterOpen.value = false
   // 按**任务类型**路由回对应对话框的进度窗：数据传输 → SyncDialog；
-  // 数据对比 → CompareDialog（各自带恢复标记，进度窗直接接着轮询）
+  // 数据对比 → CompareDialog；备份/还原 → BackupRestoreDialog（各自带恢复标记，进度窗直接接着轮询）
+  if (isBackupKind(t.kind)) {
+    // 老记录（加入任务中心之前登记的备份任务）没有连接 id —— 重新打开对话框必须有它，
+    // 否则只能空着；直接说明情况，别打开一个连不上的向导
+    if (!t.connId) {
+      ElMessage.warning(t('bkp.cannotResume'))
+      return
+    }
+    backupRestore.value = {
+      visible: true,
+      mode: t.mode || t.kind,
+      connectionId: String(t.connId),
+      database: t.database || '',
+      resumeTaskId: t.id
+    }
+    return
+  }
   if (t.kind === 'compare') {
     compareResumeId.value = t.id
     compareDialogOpen.value = true
@@ -2655,11 +2694,12 @@ const dbDdlText = ref('')
 const dbDumpVisible = ref(false)
 const dbSearchVisible = ref(false)
 const dbRunSqlVisible = ref(false)
-const backupRestore = ref({ visible: false, mode: 'backup', connectionId: '', database: '' })
+// resumeTaskId：任务中心「查看」带过来的任务 id（非空即"接回进度"而不是开新向导）
+const backupRestore = ref({ visible: false, mode: 'backup', connectionId: '', database: '', resumeTaskId: '' })
 const openBackupRestore = (mode, connId, db) => {
   // 还原是整库覆盖写，备份只是导出 —— 还原入口也走统一前置闸门（只读 / 生产保护）
   if (mode === 'restore' && !guardWrite(connId, t('tree.menu.restoreDb'))) return
-  backupRestore.value = { visible: true, mode, connectionId: String(connId || ''), database: db || '' }
+  backupRestore.value = { visible: true, mode, connectionId: String(connId || ''), database: db || '', resumeTaskId: '' }
 }
 // 点击外部自动关闭 —— **捕获阶段**，三个右键菜单共用。
 //
@@ -9290,6 +9330,8 @@ const connTypeSummary = computed(() =>
 @keyframes bg-stop-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
 .bg-kind { font-size: 11px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; background: rgba(59, 130, 246, 0.14); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.4); }
 .bg-kind.is-cmp { color: #f59e0b; border-color: rgba(245, 158, 11, 0.45); }
+/* 备份 / 还原：绿色，与「对比」的橙色、「数据传输」的蓝色区分开 */
+.bg-kind.is-bkp { color: #10b981; border-color: rgba(16, 185, 129, 0.45); }
 .bg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dc-text); }
 .bg-state { font-size: 12px; color: var(--dc-text-dim); flex-shrink: 0; }
 </style>

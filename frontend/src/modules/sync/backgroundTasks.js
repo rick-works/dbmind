@@ -20,12 +20,13 @@ const persist = () => {
   try { localStorage.setItem(KEY, JSON.stringify(bgTasks)) } catch { /* 隐私模式忽略 */ }
 }
 
-export const addBgTask = ({ id, title, kind }) => {
+export const addBgTask = ({ id, title, kind, mode, connId, database }) => {
   if (!id) return
   const i = bgTasks.findIndex(x => x.id === id)
   const prev = i >= 0 ? bgTasks[i] : null
-  // kind：任务属于哪个功能（sync=数据传输 / compare=数据对比）——
-  // 任务中心点「查看」时按它路由回对应对话框的进度窗
+  // kind：任务属于哪个功能（sync=数据传输 / compare=数据对比 /
+  // backup=数据库备份 / restore=数据库还原）—— 任务中心点「查看」时按它路由回对应对话框的进度窗，
+  // 状态查询与「停止」也要按它选接口
   //
   // **标题保底**：同 id 重复登记（从任务中心恢复进度窗后又点了一次「后台运行」）
   // 时，此时对话框里的源/目标可能已被清空，生成出来的是「. → .」这种空标题 ——
@@ -33,6 +34,13 @@ export const addBgTask = ({ id, title, kind }) => {
   const valid = (s) => s && /[\u4e00-\u9fa5A-Za-z0-9]/.test(s)
   const nextTitle = valid(title) ? title : (valid(prev?.title) ? prev.title : (title || id))
   const item = { id, title: nextTitle, kind: kind || prev?.kind || 'sync', addedAt: prev?.addedAt || Date.now() }
+  // 备份/还原要能「再次唤起」：重新打开对话框必须知道是备份还是还原、连的哪个连接哪个库。
+  // 这些字段只对本类任务有意义，**有值才写**（老记录没有它们，恢复时按缺失处理）。
+  const extra = { mode, connId, database }
+  for (const [k, v] of Object.entries(extra)) {
+    const value = v || prev?.[k]
+    if (value) item[k] = value
+  }
   if (i >= 0) bgTasks.splice(i, 1, item)
   else bgTasks.unshift(item)
   if (bgTasks.length > 50) bgTasks.splice(50)

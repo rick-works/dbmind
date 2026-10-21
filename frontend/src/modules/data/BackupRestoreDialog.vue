@@ -252,7 +252,11 @@
           @click="onStart"
         >{{ mode === 'backup' ? $t('bkp.startBackup') : $t('bkp.startRestore') }}</el-button>
       </template>
-      <el-button v-else-if="running && !finished" size="small" type="danger" :icon="CircleClose" @click="onCancel" :loading="cancelling">{{ $t('bkp.cancelTask') }}</el-button>
+      <!-- 运行中：可以「后台运行」收起窗口（任务在后端照跑，顶栏任务中心随时点回来） -->
+      <template v-else-if="running && !finished">
+        <el-button size="small" :icon="Clock" @click="runInBackground">{{ $t('sync.runBg') }}</el-button>
+        <el-button size="small" type="danger" :icon="CircleClose" @click="onCancel" :loading="cancelling">{{ $t('bkp.cancelTask') }}</el-button>
+      </template>
       <el-button v-else size="small" type="primary" @click="visible = false">{{ $t('common.close') }}</el-button>
     </template>
 
@@ -326,7 +330,7 @@ import { ElMessage } from 'element-plus'
 import { t, locale as uiLocale } from '../../utils/i18n'
 // 「库」这一层要不要画 / 显示什么（Oracle、DM 没有库层：它就是连接里填的服务名）
 import { hideDbLevelOf, dbDisplayOf } from '../../types'
-import { Download, FolderOpened, Folder, ArrowUp, Document, CircleClose, CircleCheck, Loading } from '@element-plus/icons-vue'
+import { Download, FolderOpened, Folder, ArrowUp, Document, CircleClose, CircleCheck, Clock, Loading } from '@element-plus/icons-vue'
 import {
   listDatabases,
   startBackup, backupTaskStatus, cancelBackup,
@@ -337,12 +341,16 @@ import {
   getBackupCliGuide,
   getBackupCliToolStatus, installBackupCliTool
 } from '../../api'
+// 提交即登记任务中心/右上角时钟（与数据传输同一套登记表，见 backgroundTasks.js）
+import { addBgTask } from '../sync/backgroundTasks'
 
 const props = defineProps({
   modelValue: Boolean,
   mode: { type: String, default: 'backup' }, // 'backup' | 'restore'
   connectionId: String,
-  database: { type: String, default: '' }
+  database: { type: String, default: '' },
+  // 任务中心「查看」带过来的任务 id：跳过向导，直接接回那条任务的进度与日志
+  resumeTaskId: { type: String, default: '' }
 })
 const emit = defineEmits(['update:modelValue', 'done'])
 
@@ -482,6 +490,8 @@ const message = ref('')
 const error = ref('')
 const logs = ref([])
 const logBoxRef = ref(null)
+/** 从任务中心「查看」接回来的（而不是刚提交的）：终态不再弹完成 toast —— 用户就是来看结果的 */
+const resumedView = ref(false)
 // 已消费到哪一条服务端日志（logsSeq 是**累计**行数，含被 200 行上限挤掉的旧行）
 const seenLogSeq = ref(0)
 
@@ -675,7 +685,35 @@ const progressStatus = computed(() => {
   return ''
 })
 
+/**
+ * 接回一条已经在跑（或已结束）的任务：任务中心「查看」与右上角时钟图标都走这里。
+ *
+ * 只恢复「看进度」需要的东西（taskId + 轮询 + 日志起点）。向导里的库/文件/引擎选择
+ * **不恢复**：任务已经在后端跑起来了，界面上再摆一遍选项只会让人以为还能改。
+ */
+const attachTask = (id) => {
+  taskId.value = id
+  running.value = true
+  finished.value = false
+  cancelling.value = false
+  resumedView.value = true
+  status.value = 'running'
+  progress.value = 0
+  message.value = ''
+  error.value = ''
+  logs.value = []
+  seenLogSeq.value = 0
+  pushLog(t('bkp.resumeAttach'))
+  poll()
+}
+
 const onOpen = async () => {
+  // 任务中心「查看」进来的：不走向导，也不去问命令行能力（那些已经定过了）
+  if (props.resumeTaskId) {
+    attachTask(props.resumeTaskId)
+    return
+  }
+  resumedView.value = false
   guide.value = null
   guideLoading.value = true
   guideError.value = ''
@@ -707,11 +745,17 @@ const onClose = () => {
   if (!running.value && !finished.value) reset()
 }
 
-/** 右上角 X 常驻显示，但备份/还原进行中不直接关：关掉任务照跑，会被误当成已停止 */
+/**
+ * 右上角 X / ESC：**运行中也允许关**。
+ *
+ * 任务在后端进程里跑，关窗只是收起进度窗；它已经登记在任务中心（顶栏时钟图标），
+ * 随时可以再点回来接着看 —— 与数据传输「后台运行」同一口径。
+ * 以前这里是拦着不让关（怕用户误以为已停止），现在有了任务中心的入口，拦着反而更烦。
+ */
 const onBeforeClose = (done) => {
   if (running.value) {
-    ElMessage.warning(t('bkp.taskBusy'))
-    return
+    stopPoll()
+    ElMessage.info(t('bkp.taskInBg'))
   }
   done()
 }
@@ -741,6 +785,7 @@ const reset = () => {
   cliStatusError.value = ''
   cliInstallBusy.value = false
   cliCheckSeq = 0
+  resumedView.value = false
 }
 
 const onStart = async () => {
@@ -755,6 +800,7 @@ const onStart = async () => {
   }
   running.value = true
   finished.value = false
+  resumedView.value = false
   progress.value = 0
   message.value = t('bkp.taskStarted')
   error.value = ''
@@ -782,6 +828,17 @@ const onStart = async () => {
     }
     taskId.value = res.taskId
     status.value = res.status || 'running'
+    // **提交即登记**任务中心 / 右上角时钟：不点任何"后台运行"按钮也要能在执行记录里找到，
+    // 关掉这个窗口后还能从任务中心点回来接着看进度（与数据传输同一口径）。
+    // mode/connId/database 是「再次唤起」需要的：恢复时要按同一个类型重新打开这条任务。
+    addBgTask({
+      id: res.taskId,
+      kind: props.mode,
+      mode: props.mode,
+      connId: props.connectionId,
+      database: db,
+      title: `${props.mode === 'backup' ? t('bkp.printBackupDb') : t('bkp.printRestoreDb')} · ${db}`
+    })
     poll()
   } catch (e) {
     running.value = false
@@ -830,7 +887,8 @@ const poll = () => {
         running.value = false
         finished.value = true
         emit('done', { mode: props.mode, status: status.value, taskId: taskId.value })
-        if (status.value === 'success') {
+        // 从任务中心「查看」接回来的不弹 toast：用户就是冲着结果界面来的
+        if (status.value === 'success' && !resumedView.value) {
           ElMessage.success(props.mode === 'backup' ? t('bkp.backupDone') : t('bkp.restoreDone'))
         }
       } else if (res.install && !installDismissed.value && !installPrompt.value) {
@@ -853,6 +911,18 @@ const stopPoll = () => {
 
 // 本组件由 v-if 挂载，任务进行中被关掉时会被真正卸载，这里兜底停轮询
 onBeforeUnmount(stopPoll)
+
+/**
+ * 「后台运行」：任务在后端独立跑，这里只停轮询并收起窗口。
+ *
+ * 登记发生在提交那一刻（见 onStart 的 addBgTask），所以这里不必再登记 ——
+ * 顶栏时钟图标与任务中心已经能看到它，点回来就是 `attachTask` 接回进度。
+ */
+const runInBackground = () => {
+  stopPoll()
+  ElMessage.success(t('sync.bgAdded'))
+  emit('update:modelValue', false)
+}
 
 const onCancel = async () => {
   cancelling.value = true

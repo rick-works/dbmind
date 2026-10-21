@@ -358,6 +358,12 @@ fn task_view(task: &Task, restore: bool) -> Value {
     // 每张表导了多少行、视图与例程有没有在内，全都无从对账（实机撞到过）。
     view.insert("logs".to_string(), json!(task.logs()));
     view.insert("logsSeq".to_string(), json!(task.logs_seq()));
+    // **耗时与墙钟**：任务中心（顶栏时钟图标）要显示开始/结束/耗时，字段口径与
+    // `tasks::Task::snapshot` 完全一致（elapsedMs 终态冻结、起止是后端的权威墙钟）。
+    // 不补这三个字段的话，备份/还原在任务中心里开始时间空、耗时恒为「—」。
+    for key in ["elapsedMs", "startedAtWall", "finishedAtWall"] {
+        view.insert(key.to_string(), snapshot[key].clone());
+    }
     if restore {
         view.insert("mode".to_string(), json!("restore"));
     }
