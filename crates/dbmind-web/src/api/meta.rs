@@ -4011,7 +4011,8 @@ pub async fn user_action(
             // 文案与 alter 那条同一口径（见上面那段注释）：只留数据库原话。
             // 已建好的用户不会被自动回滚 —— 但**只在真有语句生效时**才补这一句，
             // 「第 1/1 条执行失败」这种零信息前缀不再出现（前端自己会加"保存失败"这类动作前缀）。
-            let reason = err.message.strip_prefix("SQL 执行失败：").unwrap_or(&err.message);
+            let reason = grant_error_hint(err.message.strip_prefix("SQL 执行失败：").unwrap_or(&err.message));
+            let reason = reason.as_str();
             let tip = if done == 0 { String::new() } else { format!("（前 {done} 条已生效）") };
             return Ok(Json(json!({
                 "success": false,
@@ -4025,6 +4026,52 @@ pub async fn user_action(
         "message": format!("已执行 {done} 条语句"),
         "sql": sql,
     })))
+}
+
+/// 把「授权被数据库拒绝」（MySQL 的 1044 / 1045）翻译成能照着做的提示。
+///
+/// 真机反馈：给用户勾上 `mysql` 库的 ALL PRIVILEGES，弹
+/// `Access denied for user 'root'@'%' to database 'mysql'`，用户以为是工具把 SQL 写错了。
+/// 其实这是 MySQL 的规则：**GRANT 只能转授你自己已经有的权限**（还要带 GRANT OPTION），
+/// 当前连接账号对这个库没有权限时就报 1044。`mysql` 这类系统库尤其常见 —— 多数环境
+/// 只给 root@localhost 全权，远端 `root@'%'` 往往只拿到业务库。
+///
+/// 只改**文案**，不改行为：同一台库里给业务库授同样的权限是能成功的（实验室实测），
+/// 所以不能一刀切禁止对系统库授权。
+fn grant_error_hint(reason: &str) -> String {
+    let lower = reason.to_ascii_lowercase();
+    if !(lower.contains("access denied for user") && lower.contains(" to database ")) {
+        return reason.to_string();
+    }
+    let account = reason
+        .split("for user ")
+        .nth(1)
+        .and_then(|rest| rest.split(" to database ").next())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("当前连接账号");
+    let database = reason
+        .split(" to database ")
+        .nth(1)
+        .map(|rest| rest.trim().trim_matches('\'').trim().to_string())
+        .unwrap_or_default();
+    let system_note = if matches!(
+        database.as_str(),
+        "mysql" | "sys" | "performance_schema" | "information_schema"
+    ) {
+        format!("；`{database}` 是系统库，很多环境只给 root@localhost 全权，远端账号只拿到业务库")
+    } else {
+        String::new()
+    };
+    let what = if database.is_empty() {
+        "对目标库没有权限".to_string()
+    } else {
+        format!("对 `{database}` 库没有权限")
+    };
+    format!(
+        "{reason} —— 授权只能转授「你自己已经有的权限」：连接账号 {account} {what}{system_note}。\
+         请换用对该库有权限的账号连接后重试，或改为授权业务库"
+    )
 }
 
 /// `user_grants` 的结果 -> `[{scope, privilege, owner, object}]`。
@@ -4523,6 +4570,22 @@ mod tests {
         let names = ["whatever", "table_name"];
         let values = ["CREATE TABLE `t` (a int, b varchar(10))", "t"];
         assert_eq!(names[pick(&names, &values)], "whatever");
+    }
+
+    /// 授权被拒（MySQL 1044）要翻成人话：账号、库名、为什么、怎么办，四样都得有；
+    /// 别的错误原样返回，别乱加解释（真机：用户看着 `Access denied ... to database 'mysql'`
+    /// 以为是工具把 SQL 写错了）。
+    #[test]
+    fn 授权被拒的提示带出账号与库名() {
+        let raw = "Access denied for user 'root'@'%' to database 'mysql'";
+        let out = grant_error_hint(raw);
+        assert!(out.starts_with(raw), "{out}");
+        assert!(out.contains("'root'@'%'"), "{out}");
+        assert!(out.contains("`mysql` 库没有权限"), "{out}");
+        assert!(out.contains("系统库"), "{out}");
+        assert!(out.contains("只能转授"), "{out}");
+        // 无关错误原样透传
+        assert_eq!(grant_error_hint("Table 'x' doesn't exist"), "Table 'x' doesn't exist");
     }
 
     /// 测试用的白名单：涵盖 SELECT/INSERT/UPDATE/DELETE/ALL PRIVILEGES。
