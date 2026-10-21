@@ -1,319 +1,327 @@
 {
-    "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
-    "v1.2.45": [
-        "Transfer / sync connections no longer pile up: each table returns its sessions when it finishes and concurrent slots reuse them — the connection count is now “parallel tables × sessions per table”, so the global quota is never exhausted and in-use connections are never evicted (the root cause of “session does not exist (the agent may have restarted)” and “the write connection dropped”); a few hundred tables now need dozens of connects instead of thousands",
-        "If the target write connection really drops, the whole table is retried once (transactional targets only, and only when we never fell back to per-row commits; the table is cleared before the retry) — no more “retries stopped; 20,000 rows of this table were not written”",
-        "Rows per page are now capped by write parallelism (20,000 rows when a table has a single write lane): writing one page is back to a dozen seconds, the write queue no longer sits full, the “write pool has been waiting” notice backs off from 30 s to 90 s and now says it is back-pressure rather than an error, and in-flight memory per table drops to roughly one fifth",
-        "Steadier interactivity: a tab keeps its connection alive (switching back no longer re-handshakes), the session quota default goes from 32 to 128 (an existing value of exactly 32 is upgraded automatically), and the connect timeout goes from 25 s to 60 s with the elapsed time included in the error",
-        "Reading binary data (BLOB / BYTEA) now has a two-level budget — 8 MiB per value and 64 MiB per page — with oversized values degraded to “length + preview”, so a result such as “500 rows × 8 MiB” can no longer blow up the host and the core"
-    ],
-    "v1.2.44": [
-        "One bad row no longer stalls a whole table: failed writes now bisect the batch instead of retrying row by row — a single bad value in a 20,000-row batch costs about 30 round trips instead of 20,000, so the only write session is not pinned for minutes (and the reader no longer sits on “the write pool will not take another batch”)",
-        "The stall notice now backs off 30 / 60 / 120 / 300 seconds and adds a “target is accepting writes again” line when it recovers, instead of printing thousands of copies that bury the real error",
-        "The notice also carries context: batches in flight, rows and duration of the last batch, and the latest failure sample — lock waits, slow disks and bad-row bisection become distinguishable at a glance",
-        "Execution options gained “Parallel tables” (0 = automatic, capped at 32): lower it on a weak target or when source and target are the same instance to cut connection and IO contention",
-        "The session-budget log now states things correctly: the dialect value is the write lanes a table gets when it runs alone, not the connection cap of the whole task"
-    ],
-    "v1.2.43": [
-        "Backup / restore now live in the Task Center: a submitted job is registered immediately, can be sent to the background, and “View” brings the progress window back at any time; closing the window while it runs just collapses it",
-        "A stalled sync now speaks up: link-level errors such as a dropped connection fail fast instead of retrying thousands of rows one by one against a dead socket (48 hours of retries on a real case)",
-        "When the target stops accepting writes, a “read N rows / written M rows” line is logged every 30 seconds and the phase is updated, instead of reads climbing while writes and logs stay silent",
-        "The lock wait limit on MySQL / MariaDB targets is now 60 seconds (metadata locks default to a year), so a blocked table reports an error instead of showing “syncing” forever",
-        "The default read timeout for every connection type changed from “never” to 600 seconds: when the target half-closes the connection (an RDS idle kick, a device silently dropping packets) the query fails instead of hanging with no writes and no error"
-    ],
-    "v1.2.42": [
-        "Whole-database sync no longer creates views and routines before tables (it used to fail with Table doesn't exist and lose every view)",
-        "The progress card's Read / Transferred counters no longer sit at 0 (same-instance direct copies are counted too, and the totals are reconciled at the end)",
-        "Multi-table sync is faster: up to 8 tables run in parallel when there are many small ones (was 4), and paging a large table without a primary key went from O(N²) to O(N)",
-        "Secondary indexes are now created after the data: a newly built table loads rows first and builds its indexes once at the end, which saves a noticeable chunk on million-row tables",
-        "A unique index on the source table is no longer created as a plain index on the target, so the unique constraints match the original"
-    ],
-    "v1.2.41": [
-        "Table and column comments no longer come back blank after saving: comment and table-option reads are fixed for H2 / Oracle / DB2 / SQL Server",
-        "Changing a column default works on Derby again (only attributes that actually changed are emitted); defaults on Oracle primary-key columns and on SQL Server are supported now",
-        "Native default expressions such as PostgreSQL 'x'::character varying and SQL Server ((5)) no longer leak into the editor and are not double-quoted on save",
-        "Column comments can be cleared, and changes a database cannot do (shortening a Derby length, changing a Doris default) explain themselves in the SQL preview instead of failing on save",
-        "Opening an H2 table structure no longer reports 3 phantom changes (INTEGER is not rendered as integer(32,0) any more)"
-    ],
-    "v1.2.40": [
-        "Backups now use multi-row INSERT: a 200k-row dump drops from 200,000 statements to 200, and the file is about half the size",
-        "Restore is much faster: the same 200k-row dump went from over an hour to 20 seconds; older one-row-per-INSERT dumps are merged automatically, no re-export needed",
-        "Sync writes go through JDBC prepared batches (SQL Server / Oracle / DM / H2), and decimals keep every digit instead of losing the tail to float conversion",
-        "Smaller sync/compare wins: small-table compares hash in memory (no temp files), upsert probes an empty target with limit 1, page size adapts to row width"
-    ],
-    "v1.2.39": [
-        "Table designer: the length / precision cells no longer show any placeholder hint (\"optional\", \"required\", \"precision\") — identical across every database and in both the new-table and edit-table pages; the item/value column and the header now share one font and size (header is only bolder), and the new-table page keeps Copy SQL / Create at the bottom of the preview",
-        "ClickHouse engine dropdown now lists the exact SQL-ready values (`MergeTree()` with parentheses, `Log` without, Replicated family included); the new-table and edit-table pages share one list and the generated SQL no longer guesses where to add parentheses",
-        "Index type now actually reaches the SQL: FULLTEXT / SPATIAL / USING HASH for MySQL, USING for Doris, BITMAP for Oracle, CLUSTERED for SQL Server; databases without index types (SQLite / H2 / Derby / DB2) no longer show that column",
-        "Fixed statement splitting without semicolons: a trailing COMMENT on a CREATE TABLE is no longer cut into its own statement (ClickHouse failed at position 1); MySQL's `COMMENT='…'` table option is covered too"
-    ],
-    "v1.2.38": [
-        "Multi-column sorting: just click the sort arrow in a column header (click again to cycle ascending → descending → off); priority 1/2/3 shows next to the icon and the footer lists the sort chain \"A ↑ → B ↓\" where a single key can be dropped or all cleared — no Shift required",
-        "Table preview sends multi-column ORDER BY to the server (directions go through a whitelist, so dirty parameters never reach the SQL); SQL results and NoSQL documents sort in memory with the same comparator, so all three grids behave alike",
-        "New index names start empty and are generated as table_column_idx once you pick the included columns (matching the table designer), with a placeholder hint",
-        "Header type icons moved down 1px to sit on the field-name baseline"
-    ],
-    "v1.2.37": [
-        "Table designer: fixes \"Save changes\" failing with error 1054 when you only edit an AUTO_INCREMENT column (for example adding a comment to `id`) or rebuild the primary key — the same column was modified twice in a single ALTER and now appears once; the primary-key checkbox of an AUTO_INCREMENT column is locked with a tooltip explaining why",
-        "Index names: auto-generated indexes follow the <table>_<column>_idx pattern everywhere (table designer and new-table dialog), and the name follows the column you pick under \"Included columns\"",
-        "Checkboxes: a checked box always uses the theme blue, read-only or locked cells included (e.g. the primary key box of an AUTO_INCREMENT column)",
-        "Result grids align by column type (numbers and dates right, booleans centered, text left); sort arrows are always visible and brighter, and header labels are optically centered against the divider"
-    ],
-    "v1.2.36": [
-        "SQL editor: `BEGIN TRAN` / `BEGIN IMMEDIATE` no longer swallow the statements that follow, MySQL `#` line comments are recognized (semicolons inside them do not split), and non-ASCII table names now show up in the quick-edit target list",
-        "Read-only connections: writes hidden behind a CTE (even across line breaks or tabs), `SELECT ... INTO` and sequence functions such as `nextval` / `setval` are now blocked",
-        "Transactions: a connection holding uncommitted changes is no longer recycled by the idle sweeper, and a lost session reports an error instead of silently reconnecting (which used to drop the transaction)",
-        "Cancel now takes effect between statements of a multi-statement batch, so stopping a long script no longer waits for the current statement to finish",
-        "In-place result editing: identifiers are quoted per dialect (Chinese column names, reserved words) and string literals are escaped per dialect (backslashes are kept on MySQL / ClickHouse)"
-    ],
-    "v1.2.35": [
-        "SQL editor: statements are recognized without semicolons, the one under the cursor is outlined and runs on its own, and complex SQL (procedures, triggers, CTEs, dollar-quoted functions) is no longer split wrongly",
-        "SQL formatting: blank lines between statements follow the setting with or without semicolons; multi-statement scripts are formatted one by one and comments/semicolons are kept",
-        "Connections and import: reopening a connection re-verifies it and collapses with a reason when it is down; file import writes values by target column type (Derby numeric columns now work), Derby tables can be renamed, and Oracle/DM search plus the ER graph query by schema instead of scanning every schema"
-    ],
-    "v1.2.34": [
-        "The new/edit connection form is now consistent: required fields carry an asterisk, optional ones say \"Optional\" right inside the input",
-        "Connection timeout defaults to 10s and read timeout to unlimited on every database, with shorter, unified field hints",
-        "Oracle: \"Connect type\" now sits above the service field, defaults to service name, and the field title follows the choice (Service name / SID); the noisy required placeholder is gone",
-        "SQL Server: the instance-name field is removed — use host plus the port the named instance actually listens on",
-        "Cleaner JDBC URLs when the database is empty: no trailing slash for MySQL / Doris / ClickHouse, kept for PostgreSQL / Kingbase (required by the driver)"
-    ],
-    "v1.2.33": [
-        "User management rebuilt as two tabs: Users and Roles. Roles can be created and dropped, and granted privileges directly as the subject; databases without roles (or versions that predate them, such as SQL Server, SQLite or MySQL 5.7) show only the Users tab",
-        "Role privileges now read back for real: MariaDB roles are read via SHOW GRANTS (the information_schema views do not list roles), PostgreSQL / KingbaseES privilege and role-membership data is decoded from the ACLs and pg_auth_members (visible and revocable), and opening a MySQL role as name@host no longer fails with \"user not found\"",
-        "Oracle and DM no longer show a database level: the service name and database dropdown are gone from the object list, SQL editor, compare / sync / backup, ER diagram, monitoring and AI panels, leaving only the schema; the Oracle schema dropdown that was always empty is fixed too",
-        "Fixed Oracle tables opening with no columns (ORA-17027): column metadata is now read the way the driver requires after switching to the target schema (COLUMN_DEF first); DM is unaffected",
-        "The NoSQL placeholder database (default) is now shown as \"default\" in the SQL editor"
-    ],
-    "v1.2.32": [
-        "Multi-statement runs (Run all) are much faster: each statement now fetches just one page instead of pulling the whole table - two statements against a 520k-row table went from ~15s to under a second",
-        "New Ctrl+N opens a new script tab; rebindable in Settings -> Shortcuts -> General",
-        "The Run all button now carries a double-triangle icon, so \"run current\" and \"run all\" are easy to tell apart",
-        "The box around the statement at the caret is now a dashed outline with no fill: it marks the range without tinting the code, so long statements no longer look highlighted",
-        "Two box-detection fixes: the outline no longer disappears when the caret sits on the blank line after the last statement or on a leading blank line (the trailing semicolon used to be counted as part of the gap)"
-    ],
-    "v1.2.31": [
-        "New Object List page: double-click a category in the tree (tables / views / procedures / functions / triggers / events / scripts) to list every object of that kind in one screen, with per-row actions for data, structure, DDL and edit",
-        "Views, procedures, functions, triggers, events and scripts can now be deleted straight from the object list (same confirmation dialog and read-only / production guards as the tree context menu - it is just an extra entry point)",
-        "ClickHouse and Doris table lists fixed: in ClickHouse the engine, sorting key, partition key and comment used to come back empty (one metadata query asked for a column that does not exist, so the whole statement failed), and in Doris the create time was always empty",
-        "Object list columns are now chosen per data source, showing only what that source can actually provide (SQLite/Derby have no table comments, non-MySQL routines have no security mode, and the Doris engine/charset values were meaningless placeholders)",
-        "Object list layout aligned with the table data page: non-bold headers, matching padding, and the action column pinned to the right when columns overflow; two display bugs fixed along the way (MySQL view comment shown as VIEW, engine MergeTree shown as Merge ree)"
-    ],
-    "v1.2.30": [
-        "User management permission matrix overhaul: every column header across all databases now carries an inline Chinese description (including the full ClickHouse privilege set, external data sources and the SQL Server ANY family) - no more guessing English privilege names",
-        "ClickHouse users can now be granted table/view level privileges via a new Table Privileges tab (pick a database and a table, tick privileges, get GRANT … ON db.table); database-privilege group counters no longer show a zero denominator",
-        "Privilege column captions enlarged from 10px to 11px; dynamically returned privilege names now get a fallback description assembled from verb + noun rules",
-        "MySQL 5.7 compatibility: CREATE ROLE / DROP ROLE are hidden automatically when the server is 5.7 (they only exist in 8.0; ticking them caused error 1064 on save)",
-        "Fixed metadata calls (table editor, tree expansion) queuing forever after the first one and hitting the 30-second timeout (session lock leak in the embedded agent)"
-    ],
-    "v1.2.29": [
-        "In the dark theme the read-only / production standing notice is no longer a glaring bright-yellow band: its colors now come from per-theme variables (dark blends a low-opacity tint into the background with bright text; the light theme keeps the classic pale-yellow band). Applies to both the user page and the table editor",
-        "User management is now strictly connection-scoped: the list, forms and deletion no longer carry the database selected in the tree - this fixes a real-device failure where selecting a schema on Oracle and then switching the picker to MySQL sent that old name along and failed with Unknown database; selecting a data source (the connection node) in the tree is now enough, no need to drill down to a database level",
-        "Long-running tasks no longer share the metadata connection: export, backup, data transfer, compare, AI trial runs, quality scans, governance scans and row-count backfill now each use their own JDBC session, so expanding several databases or running a big job no longer makes the table editor and the tree wait behind dozens of heavy queries and hit the 30-second timeout"
-    ],
-    "v1.2.28": [
-        "Fixed a regression of my own making: the metadata warm-up added while fixing Oracle was applied to every data source, so every new session on every database paid for a cross-schema lookup of a table that does not exist - expanding a database opens dozens of sessions, which showed up as every database getting slower to expand and the table editor taking forever. The warm-up now only runs on Oracle",
-        "ClickHouse connections are back from 2.4 seconds to the 0.1-second range: the JDBC driver defaults to an Apache HttpClient code path that costs 2+ seconds per connection on Windows; switched to the driver built-in URLConnection path (fetching columns measured at 2.9s -> 0.2s)",
-        "The table editor now shows the same standing notice as the user page for read-only / production connections: on read-only connections or databases marked Production you learn up front that saving will be blocked, instead of being told after you hit Save"
-    ],
-    "v1.2.27": [
-        "Users and privileges reworked end to end: user management moved to the top bar (a connection-level page) and uses the same layout as Edit table structure (tabs on top, SQL preview below); privileges are shown as a matrix (privileges as columns, scrolled horizontally) and grants now emit only the difference - unticking a privilege sends just that one REVOKE instead of the whole set",
-        "Oracle users can be created, have their password changed and be dropped, with system privileges / roles / object privileges granted in three layers; on SQL Server all four layers (system privileges, server roles, database roles, object privileges) really land in the database",
-        "Writes are refused right when you click: on read-only or production-marked connections, create / delete / save no longer let you fill in the whole form first - they are blocked on the spot with a notice kept at the top of the page; for data sources that only support viewing users (such as DM) the form is read-only",
-        "A round of must-fix Oracle work: the schema layer is supported (no more extra database level), views are no longer always empty in the tree, routine and trigger counts are no longer always 0, and reading columns the first time went from 30 seconds to about 4; renames now follow each dialect (RENAME on Oracle, RENAME TABLE on ClickHouse), and fetching object definitions and editing table structure no longer fail",
-        "PostgreSQL / KingbaseES user details used to fail to open (the detail query's string concatenation and null handling were copied from SQL Server) and now work; the metadata list lost its artificial 5000-row cap (the tree shows 5000+ instead of pretending to be complete), and opening a database pre-warms recently used connections in the background"
-    ],
-    "v1.2.26": [
-        "Online update: only the newest installer is kept, older versions are cleaned up automatically (each upgrade used to leave one more behind in Downloads)",
-        "Backup and restore: large uploads are streamed to disk instead of buffered whole, a failed or cancelled restore no longer leaves a half-written file, and cancelling a command-line backup or restore really stops the process",
-        "Import and export: an oversized entry inside an xlsx now reports an error instead of silently blanking every text cell, and exported file names avoid Windows trailing dots or spaces and reserved names such as CON and NUL"
-    ],
-    "v1.2.25": [
-        "Data-view font sizes now really follow the settings: the home page card text (it used to ignore the setting) and whole-page sizes for table data / NoSQL / SQL results (grid, footer with elapsed time and row count, pager and toolbar together); the footer page-size text is dimmed to match its neighbours",
-        "Rows per page now uses one shared list in the settings page and all three data grids (up to 100000; it used to be four different lists, and the grids stopped at 10000)",
-        "A round of frontend/backend fixes: backup download is streamed, backup and restore child processes can be cancelled, SQL Server database names and sync/compare table names are quoted per dialect, closing a SQL tab mid-export leaves no task behind, column lists no longer get crossed when switching knowledge bases or compare tables, and a failed refresh no longer reports success"
-    ],
-    "v1.2.24": [
-        "Online update: installing now asks only once (it used to ask twice, so two taps of Enter could restart the app without warning) and says clearly that updating closes DBmind and reopens the new version; the startup check also removes installers in the Downloads folder that are not newer than the running version",
-        "Interface-size settings now really work: fixed the home page card font that never changed (hard-coded sizes in the stylesheet were overriding it), and the case where a change reverted after reopening the dialog",
-        "The Data view table size now covers table data, NoSQL and SQL results, and applies to the whole view: the grid, the footer with elapsed time and row count, the pager and the toolbar all follow it"
-    ],
-    "v1.2.23": [
-        "Online update: after you click it the dialog first says it is checking download sources (no longer sitting at 0 B / 0 B), and shows downloaded size, speed and time left only once the download really starts",
-        "Settings: Restore defaults now sits next to the settings it affects (page-level ones share the row with Save, shortcuts in the card header, log level right under the level cards), and is a bordered button everywhere",
-        "Trimmed a batch of hints: closing the window now just asks whether to quit or minimize to the tray, and the update prompt button reads Do not show this version again"
-    ],
-    "v1.2.22": [
-        "Writes on read-only or production connections are now blocked the moment you click: import data, generate data, truncate table, clear table, drop table/object and rename. If the connection is read-only, or is marked Production with production protection on, the action is refused right away and the dialog never opens - previously you had to walk through the whole flow and only got rejected on submit",
-        "Blocked-by-safety notices now appear in one place (top right) and can take you straight to the fix: the duplicate message in the middle is gone, the read-only notice carries an 'Edit data source ->' button that opens that data source's editor on the Advanced tab with the Read-only switch highlighted, and the production-protection notice opens Settings -> Security & session. Same behaviour in the structure page, data editing, SQL editor and rename dialogs",
-        "Hover a table or view in the tree to read its comment. The card sits outside the tree on the right of the row (so the tree container cannot clip it), sizes itself to the content, and matches the connection hover card (small arrow included)",
-        "Connection badges are unified and follow the theme: environment badges (Development / Test / Production / Staging / UAT) and the Read-only badge used to have different sizes, font weights and intensities; they now share one set of metrics and colours that adapt to the theme - on the light theme every one of them is a readable, deeper shade (the Test amber was nearly invisible on white), while the dark theme keeps the original vivid colours",
-        "A batch of home page and tree fixes: the query trend is aggregated per day (no more several bars for the same day); empty tables show 0 instead of a blank row-count cell, and large databases no longer stall on counting everything at once (row counts fill in batches, so a few hundred tables show their first batches quickly); delete icons are consistently red across the app; the two structure-preview hints are merged into one",
-        "A round of frontend/backend health checks: fixed one broken feature, two cases of silently reporting success while doing nothing or losing data, four cases of state leaking between tables/databases, and a mis-ordered release script"
-    ],
-    "v1.2.21": [
-        "macOS: fixed the blank window when the app reopens itself after an online update. The relaunched instance reused whatever answered on the port - without comparing versions and without checking it was still alive - while the installer closed that very kernel at the same moment, so the window pointed at a port nobody was listening on. (macOS paints nothing when a WebView navigation fails; Windows paints an error page - which is why only mac showed a blank window.) Reuse now requires a matching version plus a live check, and otherwise we start our own kernel. Also fixed: leftover kernels could not be killed on mac/Linux (the process name was hard-coded to .exe), and a startup readiness timeout used to leave no trace (new ~/.dbmind/logs/shell.log)",
-        "macOS updates are more reliable: when the app runs straight from the mounted disk image (not dragged into Applications) we no longer try to overwrite it in place - that writes to a read-only volume and would be pointless anyway; after copying we verify the frontend assets really landed before restarting; and the 'the update made the app disappear' case is fixed (the fallback used to open an installer image that had already been deleted)",
-        "About page: the current version in the header now follows the release (it kept showing the previous one); release notes past the 12th bullet no longer stay hidden (v1.2.20 has 14 of them); and 99 duplicate dictionary keys - two sets of notes for the same version - were cleaned up",
-        "Website release page and About page text: the sync script now publishes the website itself instead of merely reminding you ('source updated' is not 'site updated' - this was missed twice); it aligns with the remote branch first, so a stale local branch can no longer block the push; and literal ** or backticks (leaked markdown) no longer show up on the website or on the About page"
-    ],
-    "v1.2.20": [
-        "Edit Structure now finds columns in a non-default schema: for PostgreSQL / SQL Server / KingbaseES the tree addresses objects as database.schema, but the columns path only ever looked at the connection's default schema (public on PG, dbo on SQL Server) - so a table in another schema listed fine yet showed no fields. The whole chain (columns, DDL, indexes, comments, column-type enrichment) now uses the schema you clicked",
-        "A missing column list is no longer reported as silence: on Doris it used to come back as an empty list, which reads as a broken table; it now states the reason (wrong database, table does not exist, or no read access to information_schema)",
-        "The object tree no longer stutters: opening a database with thousands of tables renders the first 200 rows and grows the rest in the background (the list stays flat - no Show more row), and hovering a connection no longer re-renders the whole tree",
-        "Data transfer: fixed Row size too large (8126) when creating tables on MySQL targets (two over-wide type mappings, explicit DYNAMIC row format, and the error now reports the column sizes), plus faster writes through more parallelism and batched transactions",
-        "Data transfer - Select objects: the type chips became filters - clicking Tables shows only tables, clicking Views shows only views, and clicking again returns to all; switching types no longer drops the objects you already ticked",
-        "Data compare / Data transfer: fixed the database not being preselected; the database context menu gained Data compare and Data transfer and preselects the database you right-clicked",
-        "Column type spellings are unified: the same type no longer looks different in the picker and in the grid (MySQL returns VARCHAR, Doris STRING, PostgreSQL varchar ...) - the echo now follows each source's own metadata",
-        "New table / Edit Structure: fixed an error when opening the Fields tab, fixed deleting the wrong row once a table has more than 80 columns, and the type cell font now matches its neighbours",
-        "Tree context menus close when you click a menu item or anywhere else (they used to stay open and block the view)",
-        "SQL editor: clicking a result tab selects the matching statement (same behaviour as the statement tabs on top); the statement breadcrumb and locating now use the editor's own text, fixing wrong numbering after commenting out the first statement and jumping to the wrong statement",
-        "Connection hover card: no longer covers the list or blocks clicks, vertically centred, with a small arrow pointing at the connection and a font size matching the rest of the app",
-        "Folders can be pinned: Pin folder in the folder context menu, and the order is persisted",
-        "Settings: more UI-size options (home cards, dialog title and body, data grid, toasts, tab bar text), and the SQL formatting and UI size pages were re-laid out",
-        "A batch of stability fixes: the settings dialog aborted the rest of its loading because of a function that no longer exists (driver list, notifications, knowledge base and shortcuts showed up empty), missing and duplicated dictionary keys, timers stacking up after the view remounts, columns of one table leaking into another while switching tabs, row state mixing up in editable lists, and background reader coroutines no longer report success when they die"
-    ],
-    "v1.2.19": [
-        "The table preview row total is fixed - ClickHouse returns count(*) as a floating point number, which we could not read, so the footer showed only 200 rows and paging was stuck; it now shows the real total and pages properly, and all data sources were checked",
-        "Data governance - capacity statistics read the row count the same tolerant way, so on ClickHouse it no longer shows 0 or unknown",
-        "Settings - General - UI size gains a Tab bar text option: the font size of the workspace tab strip (for example the script tab) now follows it, taking effect immediately without a restart"
-    ],
-    "v1.2.18": [
-        "Edit Structure: the loading indicator finally shows while it loads (the v-loading directive was never registered, so it silently did nothing), and the spinner no longer stutters",
-        "The field tables in Edit Structure and New Table now render only the rows you can see - wide tables with hundreds of columns scroll smoothly with no blank patches, and the type cell stays plain text until you click it to open the dropdown",
-        "Small fixes along the way: a single selection style in the field table (the first row no longer looks selected), the comment cell input matches its neighbours, no more SQL keywords in the field-table headers, and the update confirmation now reads statement first / question last with the Open folder button removed"
-    ],
-    "v1.2.17": [
-        "Table editor: New Table and Edit Structure show only the columns that really apply per data source; on Doris the field table can tick Bucketing columns and shares the same data as the distribution list in Basic info (tick either side and the other follows, and CREATE TABLE reads the same source); ClickHouse gains a Partition key column and the Primary key column is no longer hidden - every column-level setting that feeds a table-level one can now be ticked right in the field table",
-        "Edit Structure: fixed the Sort key / Partition key read-back (they showed a dash no matter how the table was set up); added read-only Bucketing columns and Partition key columns; yes/no is now always a single checkbox (Nullable, Primary key, Sort key, Bucketing, Partition key) - identical across data sources, with no more yes tags or dashes",
-        "New Table: a field comment can be edited in a multi-line dialog (double-click or the expand button), matching Edit Structure; data source fixes - column comments were never read on DM (Dameng) and H2 (the comment cell stayed empty), DM no longer shows an auto-increment checkbox that can never be ticked, and MySQL DEFAULT NULL now reads back as default NULL; also removed the SQL keywords leaking into the field-table headers (Bucketing / Sort key / Partition key) and dropped the Open folder button from the updater"
-    ],
-    "v1.2.16": [
-        "Online update: when the package is already downloaded, the toolbar icon (and the startup check) goes straight to Update now instead of showing the release notes first — and a complete installer already on disk is reused instead of being downloaded twice, even after a restart",
-        "Online update: all in-progress chatter under the progress bar is gone (retry counters, resume notices, source selection) — only progress and speed remain",
-        "Online update: switch to a faster source really switches now (cancel, re-rank, resume from the breakpoint); failures can be retried in place, finishing in the background or failing pops a dialog, and the installer is removed after a successful update",
-        "The two update dialogs now match the rest of the app (badge in the title, same button sizing), and the confirmation reads statement first, question last",
-        "Home dashboard: the connection-name font in Quick start now matches the actions column on the right"
-    ],
-    "v1.2.15": [
-        "Online update: a one-line heads-up before it starts — the app will close automatically and reopen as the new version once installed, instead of vanishing",
-        "Fixed macOS not reopening the app after an update: if the in-place install cannot be done it no longer stops silently — it opens the DMG so you can drag the app in, and reopening now retries by itself",
-        "The check-for-updates dialog now shows only what changed — the release asset table is no longer rendered there",
-        "The download progress bar is slimmer",
-        "The top-bar language button (中 / EN) is no longer bold — it matches the weight of the icons beside it"
-    ],
-    "v1.2.14": [
-        "Result grid font size now scales the whole result area: column headers, the footer (elapsed time / totals / selection summary) and the pager all follow it",
-        "The pager's rows-per-page text and the page-jump input follow as well — no more large grid text sitting next to tiny chrome"
-    ],
-    "v1.2.13": [
-        "Two new formatting options: comma position (after / before the field) and indent style (standard / tabular left / tabular right)",
-        "Keyword layout rules gained an indent-width column: set it per keyword, leave empty to follow the global value, or 0 for no indent",
-        "The editor context menu now has “Editor settings” / “Format settings” entries that jump straight to the right page",
-        "Settings panel polish: rules render as a bordered table, with control alignment and font sizes matching the other pages",
-        "General settings gained interface sizes: adjust the top menu text (including its icons), the top bar right icons and the left tree text, applied immediately",
-        "Settings reorganised: the Theme and Notifications pages moved into General, so the settings menu is shorter",
-        "Fixed the occasional blank script tab: a failed Monaco load is no longer cached forever, and now says what to do"
-    ],
-    "v1.2.12": [
-        "Fixed the dead close dialog: “Quit” and “Minimize to tray” now work",
-        "Updates are one click and silent: download, install and restart all happen by themselves",
-        "No more manual “allow” step after updating on macOS"
-    ],
-    "v1.2.11": [
-        "Fixed in-app update: Windows no longer reports “file not found”, macOS opens the image properly",
-        "The dialog shows where the installer was saved, so you can install it by hand",
-        "If the package fails to land, you get a clear reason"
-    ],
-    "v1.2.10": [
-        "Closing the window asks first: quit, or minimize to tray",
-        "New tray icon: click to bring the window back, right-click to quit",
-        "Faster build pipeline (future releases come out sooner)"
-    ],
-    "v1.2.9": [
-        "Update no longer asks where to save: the package always goes to your Downloads folder",
-        "Windows updates no longer stop at the “already installed” page — they overwrite in place and reopen the app",
-        "Tabs show only the table or object name; connection and database live in the tooltip"
-    ],
-    "v1.2.8": [
-        "Updates pick the right package for your OS: dmg on macOS, deb on Linux, setup.exe on Windows",
-        "Alignment is unified across the grids; NULL follows the column’s values",
-        "The dark-mode “unsaved changes” bar is no longer too bright",
-        "The macOS install window is centered, and the readme line is no longer cut off"
-    ],
-    "v1.2.7": [
-        "The macOS image now includes a “first launch” guide with the three steps",
-        "Two ways to avoid the prompt entirely: curl download, or Homebrew --no-quarantine"
-    ],
-    "v1.2.6": [
-        "macOS window finalised: traffic lights share the menu’s line",
-        "No more empty gap in the top-left corner when full screen"
-    ],
-    "v1.2.5": [
-        "The macOS window is back under system control; traffic lights are where they belong",
-        "No more blank strip in full screen"
-    ],
-    "v1.2.4": [
-        "The macOS image now uses two big icons — just drag them",
-        "System traffic lights restored; fixed the “no title bar and cannot close” case"
-    ],
-    "v1.2.3": [
-        "Rebuilt the macOS install screen: a proper “drag into Applications”"
-    ],
-    "v1.2.2": [
-        "Fixed the black screen on macOS: packaged resources were not found",
-        "Rebuilt the macOS install screen"
-    ],
-    "v1.2.1": [
-        "Fixed macOS apps not opening on double click: no more dependency on a library that is not there",
-        "macOS icon redone to Apple’s grid"
-    ],
-    "v1.2.0": [
-        "Driver downloads no longer need a mirror choice: it tries several domestic sources by itself",
-        "Wide tables scroll more smoothly (only visible columns are rendered)",
-        "Clearer table headers; pointers unified to a hand cursor"
-    ],
-    "v1.1.1": [
-        "Fixed three cell-editing issues (blank turned into NULL, cursor jumping after double click, “unsaved” shown after reverting)",
-        "Fixed a crash that could freeze the whole UI",
-        "Smoother scrolling on large tables; default row height 22 → 26"
-    ],
-    "v1.1.0": [
-        "Updates work without a proxy: falls back to domestic mirrors and verifies integrity with the official checksum",
-        "Resumes after network changes; failed downloads can be retried",
-        "Driver Manager entry: what is installed, what is missing, mirror switch, manual upload",
-        "Production protection on by default: data-changing actions are blocked (queries unaffected)",
-        "Download source is speed-tested automatically and shows speed and remaining time",
-        "Sum / average / min / max restored for numeric selections; external links open in the system browser",
-        "No more white flicker while scrolling results"
-    ],
-    "v1.0.4": [
-        "Stuck transfers no longer hang silently: they time out and say where they stopped",
-        "Backstop: auto-finish after 30 minutes, with the stopping point logged"
-    ],
-    "v1.0.3": [
-        "Fixed ClickHouse “execution failed” and “failed to read boolean” on large tables",
-        "Total count no longer shows -1",
-        "“Format” on a SQL selection no longer errors",
-        "“Newline before keyword” no longer adds an extra break"
-    ],
-    "v1.0.2": [
-        "Updates download behind a proxy (system proxy is detected automatically)",
-        "Downloads can run in the background; the top-bar icon shows progress",
-        "Release notes render properly; the About page version matches the package",
-        "Fixed Doris failing to connect and black console flashes on start/connect",
-        "Home KPI panel restored (total/connected connections, types); driver downloads show live progress"
-    ],
-    "v1.0.1": [
-        "Audit log: filter by category, one-click SQL copy, accurate counts and pages",
-        "Logs are no longer cleared automatically — only via “Clear logs”",
-        "Settings UI fixes (dialog height, inner scrolling, always-visible pager)",
-        "The About page now lists directories"
-    ],
-    "v1.0.0": [
-        "AI assistance: SQL explanation / optimisation / error fixing / performance diagnosis / Q&A",
-        "One workbench for 17+ data sources (MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / DMDB / Kingbase …)",
-        "Transaction mode and direct result editing: review and roll back before committing",
-        "Smart SQL editor and huge result sets: millions of rows in a blink"
-    ]
+  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.45": [
+    "Transfer / sync connections no longer pile up: each table returns its sessions when it finishes and concurrent slots reuse them — the connection count is now “parallel tables × sessions per table”, so the global quota is never exhausted and in-use connections are never evicted (the root cause of “session does not exist (the agent may have restarted)” and “the write connection dropped”); a few hundred tables now need dozens of connects instead of thousands",
+    "If the target write connection really drops, the whole table is retried once (transactional targets only, and only when we never fell back to per-row commits; the table is cleared before the retry) — no more “retries stopped; 20,000 rows of this table were not written”",
+    "Rows per page are now capped by write parallelism (20,000 rows when a table has a single write lane): writing one page is back to a dozen seconds, the write queue no longer sits full, the “write pool has been waiting” notice backs off from 30 s to 90 s and now says it is back-pressure rather than an error, and in-flight memory per table drops to roughly one fifth",
+    "Steadier interactivity: a tab keeps its connection alive (switching back no longer re-handshakes), the session quota default goes from 32 to 128 (an existing value of exactly 32 is upgraded automatically), and the connect timeout goes from 25 s to 60 s with the elapsed time included in the error",
+    "Reading binary data (BLOB / BYTEA) now has a two-level budget — 8 MiB per value and 64 MiB per page — with oversized values degraded to “length + preview”, so a result such as “500 rows × 8 MiB” can no longer blow up the host and the core"
+  ],
+  "v1.2.44": [
+    "One bad row no longer stalls a whole table: failed writes now bisect the batch instead of retrying row by row — a single bad value in a 20,000-row batch costs about 30 round trips instead of 20,000, so the only write session is not pinned for minutes (and the reader no longer sits on “the write pool will not take another batch”)",
+    "The stall notice now backs off 30 / 60 / 120 / 300 seconds and adds a “target is accepting writes again” line when it recovers, instead of printing thousands of copies that bury the real error",
+    "The notice also carries context: batches in flight, rows and duration of the last batch, and the latest failure sample — lock waits, slow disks and bad-row bisection become distinguishable at a glance",
+    "Execution options gained “Parallel tables” (0 = automatic, capped at 32): lower it on a weak target or when source and target are the same instance to cut connection and IO contention",
+    "The session-budget log now states things correctly: the dialect value is the write lanes a table gets when it runs alone, not the connection cap of the whole task"
+  ],
+  "v1.2.43": [
+    "Backup / restore now live in the Task Center: a submitted job is registered immediately, can be sent to the background, and “View” brings the progress window back at any time; closing the window while it runs just collapses it",
+    "A stalled sync now speaks up: link-level errors such as a dropped connection fail fast instead of retrying thousands of rows one by one against a dead socket (48 hours of retries on a real case)",
+    "When the target stops accepting writes, a “read N rows / written M rows” line is logged every 30 seconds and the phase is updated, instead of reads climbing while writes and logs stay silent",
+    "The lock wait limit on MySQL / MariaDB targets is now 60 seconds (metadata locks default to a year), so a blocked table reports an error instead of showing “syncing” forever",
+    "The default read timeout for every connection type changed from “never” to 600 seconds: when the target half-closes the connection (an RDS idle kick, a device silently dropping packets) the query fails instead of hanging with no writes and no error"
+  ],
+  "v1.2.42": [
+    "Whole-database sync no longer creates views and routines before tables (it used to fail with Table doesn't exist and lose every view)",
+    "The progress card's Read / Transferred counters no longer sit at 0 (same-instance direct copies are counted too, and the totals are reconciled at the end)",
+    "Multi-table sync is faster: up to 8 tables run in parallel when there are many small ones (was 4), and paging a large table without a primary key went from O(N²) to O(N)",
+    "Secondary indexes are now created after the data: a newly built table loads rows first and builds its indexes once at the end, which saves a noticeable chunk on million-row tables",
+    "A unique index on the source table is no longer created as a plain index on the target, so the unique constraints match the original"
+  ],
+  "v1.2.41": [
+    "Table and column comments no longer come back blank after saving: comment and table-option reads are fixed for H2 / Oracle / DB2 / SQL Server",
+    "Changing a column default works on Derby again (only attributes that actually changed are emitted); defaults on Oracle primary-key columns and on SQL Server are supported now",
+    "Native default expressions such as PostgreSQL 'x'::character varying and SQL Server ((5)) no longer leak into the editor and are not double-quoted on save",
+    "Column comments can be cleared, and changes a database cannot do (shortening a Derby length, changing a Doris default) explain themselves in the SQL preview instead of failing on save",
+    "Opening an H2 table structure no longer reports 3 phantom changes (INTEGER is not rendered as integer(32,0) any more)"
+  ],
+  "v1.2.40": [
+    "Backups now use multi-row INSERT: a 200k-row dump drops from 200,000 statements to 200, and the file is about half the size",
+    "Restore is much faster: the same 200k-row dump went from over an hour to 20 seconds; older one-row-per-INSERT dumps are merged automatically, no re-export needed",
+    "Sync writes go through JDBC prepared batches (SQL Server / Oracle / DM / H2), and decimals keep every digit instead of losing the tail to float conversion",
+    "Smaller sync/compare wins: small-table compares hash in memory (no temp files), upsert probes an empty target with limit 1, page size adapts to row width"
+  ],
+  "v1.2.39": [
+    "Table designer: the length / precision cells no longer show any placeholder hint (\"optional\", \"required\", \"precision\") — identical across every database and in both the new-table and edit-table pages; the item/value column and the header now share one font and size (header is only bolder), and the new-table page keeps Copy SQL / Create at the bottom of the preview",
+    "ClickHouse engine dropdown now lists the exact SQL-ready values (`MergeTree()` with parentheses, `Log` without, Replicated family included); the new-table and edit-table pages share one list and the generated SQL no longer guesses where to add parentheses",
+    "Index type now actually reaches the SQL: FULLTEXT / SPATIAL / USING HASH for MySQL, USING for Doris, BITMAP for Oracle, CLUSTERED for SQL Server; databases without index types (SQLite / H2 / Derby / DB2) no longer show that column",
+    "Fixed statement splitting without semicolons: a trailing COMMENT on a CREATE TABLE is no longer cut into its own statement (ClickHouse failed at position 1); MySQL's `COMMENT='…'` table option is covered too"
+  ],
+  "v1.2.38": [
+    "Multi-column sorting: just click the sort arrow in a column header (click again to cycle ascending → descending → off); priority 1/2/3 shows next to the icon and the footer lists the sort chain \"A ↑ → B ↓\" where a single key can be dropped or all cleared — no Shift required",
+    "Table preview sends multi-column ORDER BY to the server (directions go through a whitelist, so dirty parameters never reach the SQL); SQL results and NoSQL documents sort in memory with the same comparator, so all three grids behave alike",
+    "New index names start empty and are generated as table_column_idx once you pick the included columns (matching the table designer), with a placeholder hint",
+    "Header type icons moved down 1px to sit on the field-name baseline"
+  ],
+  "v1.2.37": [
+    "Table designer: fixes \"Save changes\" failing with error 1054 when you only edit an AUTO_INCREMENT column (for example adding a comment to `id`) or rebuild the primary key — the same column was modified twice in a single ALTER and now appears once; the primary-key checkbox of an AUTO_INCREMENT column is locked with a tooltip explaining why",
+    "Index names: auto-generated indexes follow the <table>_<column>_idx pattern everywhere (table designer and new-table dialog), and the name follows the column you pick under \"Included columns\"",
+    "Checkboxes: a checked box always uses the theme blue, read-only or locked cells included (e.g. the primary key box of an AUTO_INCREMENT column)",
+    "Result grids align by column type (numbers and dates right, booleans centered, text left); sort arrows are always visible and brighter, and header labels are optically centered against the divider"
+  ],
+  "v1.2.36": [
+    "SQL editor: `BEGIN TRAN` / `BEGIN IMMEDIATE` no longer swallow the statements that follow, MySQL `#` line comments are recognized (semicolons inside them do not split), and non-ASCII table names now show up in the quick-edit target list",
+    "Read-only connections: writes hidden behind a CTE (even across line breaks or tabs), `SELECT ... INTO` and sequence functions such as `nextval` / `setval` are now blocked",
+    "Transactions: a connection holding uncommitted changes is no longer recycled by the idle sweeper, and a lost session reports an error instead of silently reconnecting (which used to drop the transaction)",
+    "Cancel now takes effect between statements of a multi-statement batch, so stopping a long script no longer waits for the current statement to finish",
+    "In-place result editing: identifiers are quoted per dialect (Chinese column names, reserved words) and string literals are escaped per dialect (backslashes are kept on MySQL / ClickHouse)"
+  ],
+  "v1.2.35": [
+    "SQL editor: statements are recognized without semicolons, the one under the cursor is outlined and runs on its own, and complex SQL (procedures, triggers, CTEs, dollar-quoted functions) is no longer split wrongly",
+    "SQL formatting: blank lines between statements follow the setting with or without semicolons; multi-statement scripts are formatted one by one and comments/semicolons are kept",
+    "Connections and import: reopening a connection re-verifies it and collapses with a reason when it is down; file import writes values by target column type (Derby numeric columns now work), Derby tables can be renamed, and Oracle/DM search plus the ER graph query by schema instead of scanning every schema"
+  ],
+  "v1.2.34": [
+    "The new/edit connection form is now consistent: required fields carry an asterisk, optional ones say \"Optional\" right inside the input",
+    "Connection timeout defaults to 10s and read timeout to unlimited on every database, with shorter, unified field hints",
+    "Oracle: \"Connect type\" now sits above the service field, defaults to service name, and the field title follows the choice (Service name / SID); the noisy required placeholder is gone",
+    "SQL Server: the instance-name field is removed — use host plus the port the named instance actually listens on",
+    "Cleaner JDBC URLs when the database is empty: no trailing slash for MySQL / Doris / ClickHouse, kept for PostgreSQL / Kingbase (required by the driver)"
+  ],
+  "v1.2.33": [
+    "User management rebuilt as two tabs: Users and Roles. Roles can be created and dropped, and granted privileges directly as the subject; databases without roles (or versions that predate them, such as SQL Server, SQLite or MySQL 5.7) show only the Users tab",
+    "Role privileges now read back for real: MariaDB roles are read via SHOW GRANTS (the information_schema views do not list roles), PostgreSQL / KingbaseES privilege and role-membership data is decoded from the ACLs and pg_auth_members (visible and revocable), and opening a MySQL role as name@host no longer fails with \"user not found\"",
+    "Oracle and DM no longer show a database level: the service name and database dropdown are gone from the object list, SQL editor, compare / sync / backup, ER diagram, monitoring and AI panels, leaving only the schema; the Oracle schema dropdown that was always empty is fixed too",
+    "Fixed Oracle tables opening with no columns (ORA-17027): column metadata is now read the way the driver requires after switching to the target schema (COLUMN_DEF first); DM is unaffected",
+    "The NoSQL placeholder database (default) is now shown as \"default\" in the SQL editor"
+  ],
+  "v1.2.32": [
+    "Multi-statement runs (Run all) are much faster: each statement now fetches just one page instead of pulling the whole table - two statements against a 520k-row table went from ~15s to under a second",
+    "New Ctrl+N opens a new script tab; rebindable in Settings -> Shortcuts -> General",
+    "The Run all button now carries a double-triangle icon, so \"run current\" and \"run all\" are easy to tell apart",
+    "The box around the statement at the caret is now a dashed outline with no fill: it marks the range without tinting the code, so long statements no longer look highlighted",
+    "Two box-detection fixes: the outline no longer disappears when the caret sits on the blank line after the last statement or on a leading blank line (the trailing semicolon used to be counted as part of the gap)"
+  ],
+  "v1.2.31": [
+    "New Object List page: double-click a category in the tree (tables / views / procedures / functions / triggers / events / scripts) to list every object of that kind in one screen, with per-row actions for data, structure, DDL and edit",
+    "Views, procedures, functions, triggers, events and scripts can now be deleted straight from the object list (same confirmation dialog and read-only / production guards as the tree context menu - it is just an extra entry point)",
+    "ClickHouse and Doris table lists fixed: in ClickHouse the engine, sorting key, partition key and comment used to come back empty (one metadata query asked for a column that does not exist, so the whole statement failed), and in Doris the create time was always empty",
+    "Object list columns are now chosen per data source, showing only what that source can actually provide (SQLite/Derby have no table comments, non-MySQL routines have no security mode, and the Doris engine/charset values were meaningless placeholders)",
+    "Object list layout aligned with the table data page: non-bold headers, matching padding, and the action column pinned to the right when columns overflow; two display bugs fixed along the way (MySQL view comment shown as VIEW, engine MergeTree shown as Merge ree)"
+  ],
+  "v1.2.30": [
+    "User management permission matrix overhaul: every column header across all databases now carries an inline Chinese description (including the full ClickHouse privilege set, external data sources and the SQL Server ANY family) - no more guessing English privilege names",
+    "ClickHouse users can now be granted table/view level privileges via a new Table Privileges tab (pick a database and a table, tick privileges, get GRANT … ON db.table); database-privilege group counters no longer show a zero denominator",
+    "Privilege column captions enlarged from 10px to 11px; dynamically returned privilege names now get a fallback description assembled from verb + noun rules",
+    "MySQL 5.7 compatibility: CREATE ROLE / DROP ROLE are hidden automatically when the server is 5.7 (they only exist in 8.0; ticking them caused error 1064 on save)",
+    "Fixed metadata calls (table editor, tree expansion) queuing forever after the first one and hitting the 30-second timeout (session lock leak in the embedded agent)"
+  ],
+  "v1.2.29": [
+    "In the dark theme the read-only / production standing notice is no longer a glaring bright-yellow band: its colors now come from per-theme variables (dark blends a low-opacity tint into the background with bright text; the light theme keeps the classic pale-yellow band). Applies to both the user page and the table editor",
+    "User management is now strictly connection-scoped: the list, forms and deletion no longer carry the database selected in the tree - this fixes a real-device failure where selecting a schema on Oracle and then switching the picker to MySQL sent that old name along and failed with Unknown database; selecting a data source (the connection node) in the tree is now enough, no need to drill down to a database level",
+    "Long-running tasks no longer share the metadata connection: export, backup, data transfer, compare, AI trial runs, quality scans, governance scans and row-count backfill now each use their own JDBC session, so expanding several databases or running a big job no longer makes the table editor and the tree wait behind dozens of heavy queries and hit the 30-second timeout"
+  ],
+  "v1.2.28": [
+    "Fixed a regression of my own making: the metadata warm-up added while fixing Oracle was applied to every data source, so every new session on every database paid for a cross-schema lookup of a table that does not exist - expanding a database opens dozens of sessions, which showed up as every database getting slower to expand and the table editor taking forever. The warm-up now only runs on Oracle",
+    "ClickHouse connections are back from 2.4 seconds to the 0.1-second range: the JDBC driver defaults to an Apache HttpClient code path that costs 2+ seconds per connection on Windows; switched to the driver built-in URLConnection path (fetching columns measured at 2.9s -> 0.2s)",
+    "The table editor now shows the same standing notice as the user page for read-only / production connections: on read-only connections or databases marked Production you learn up front that saving will be blocked, instead of being told after you hit Save"
+  ],
+  "v1.2.27": [
+    "Users and privileges reworked end to end: user management moved to the top bar (a connection-level page) and uses the same layout as Edit table structure (tabs on top, SQL preview below); privileges are shown as a matrix (privileges as columns, scrolled horizontally) and grants now emit only the difference - unticking a privilege sends just that one REVOKE instead of the whole set",
+    "Oracle users can be created, have their password changed and be dropped, with system privileges / roles / object privileges granted in three layers; on SQL Server all four layers (system privileges, server roles, database roles, object privileges) really land in the database",
+    "Writes are refused right when you click: on read-only or production-marked connections, create / delete / save no longer let you fill in the whole form first - they are blocked on the spot with a notice kept at the top of the page; for data sources that only support viewing users (such as DM) the form is read-only",
+    "A round of must-fix Oracle work: the schema layer is supported (no more extra database level), views are no longer always empty in the tree, routine and trigger counts are no longer always 0, and reading columns the first time went from 30 seconds to about 4; renames now follow each dialect (RENAME on Oracle, RENAME TABLE on ClickHouse), and fetching object definitions and editing table structure no longer fail",
+    "PostgreSQL / KingbaseES user details used to fail to open (the detail query's string concatenation and null handling were copied from SQL Server) and now work; the metadata list lost its artificial 5000-row cap (the tree shows 5000+ instead of pretending to be complete), and opening a database pre-warms recently used connections in the background"
+  ],
+  "v1.2.26": [
+    "Online update: only the newest installer is kept, older versions are cleaned up automatically (each upgrade used to leave one more behind in Downloads)",
+    "Backup and restore: large uploads are streamed to disk instead of buffered whole, a failed or cancelled restore no longer leaves a half-written file, and cancelling a command-line backup or restore really stops the process",
+    "Import and export: an oversized entry inside an xlsx now reports an error instead of silently blanking every text cell, and exported file names avoid Windows trailing dots or spaces and reserved names such as CON and NUL"
+  ],
+  "v1.2.25": [
+    "Data-view font sizes now really follow the settings: the home page card text (it used to ignore the setting) and whole-page sizes for table data / NoSQL / SQL results (grid, footer with elapsed time and row count, pager and toolbar together); the footer page-size text is dimmed to match its neighbours",
+    "Rows per page now uses one shared list in the settings page and all three data grids (up to 100000; it used to be four different lists, and the grids stopped at 10000)",
+    "A round of frontend/backend fixes: backup download is streamed, backup and restore child processes can be cancelled, SQL Server database names and sync/compare table names are quoted per dialect, closing a SQL tab mid-export leaves no task behind, column lists no longer get crossed when switching knowledge bases or compare tables, and a failed refresh no longer reports success"
+  ],
+  "v1.2.24": [
+    "Online update: installing now asks only once (it used to ask twice, so two taps of Enter could restart the app without warning) and says clearly that updating closes DBmind and reopens the new version; the startup check also removes installers in the Downloads folder that are not newer than the running version",
+    "Interface-size settings now really work: fixed the home page card font that never changed (hard-coded sizes in the stylesheet were overriding it), and the case where a change reverted after reopening the dialog",
+    "The Data view table size now covers table data, NoSQL and SQL results, and applies to the whole view: the grid, the footer with elapsed time and row count, the pager and the toolbar all follow it"
+  ],
+  "v1.2.23": [
+    "Online update: after you click it the dialog first says it is checking download sources (no longer sitting at 0 B / 0 B), and shows downloaded size, speed and time left only once the download really starts",
+    "Settings: Restore defaults now sits next to the settings it affects (page-level ones share the row with Save, shortcuts in the card header, log level right under the level cards), and is a bordered button everywhere",
+    "Trimmed a batch of hints: closing the window now just asks whether to quit or minimize to the tray, and the update prompt button reads Do not show this version again"
+  ],
+  "v1.2.22": [
+    "Writes on read-only or production connections are now blocked the moment you click: import data, generate data, truncate table, clear table, drop table/object and rename. If the connection is read-only, or is marked Production with production protection on, the action is refused right away and the dialog never opens - previously you had to walk through the whole flow and only got rejected on submit",
+    "Blocked-by-safety notices now appear in one place (top right) and can take you straight to the fix: the duplicate message in the middle is gone, the read-only notice carries an 'Edit data source ->' button that opens that data source's editor on the Advanced tab with the Read-only switch highlighted, and the production-protection notice opens Settings -> Security & session. Same behaviour in the structure page, data editing, SQL editor and rename dialogs",
+    "Hover a table or view in the tree to read its comment. The card sits outside the tree on the right of the row (so the tree container cannot clip it), sizes itself to the content, and matches the connection hover card (small arrow included)",
+    "Connection badges are unified and follow the theme: environment badges (Development / Test / Production / Staging / UAT) and the Read-only badge used to have different sizes, font weights and intensities; they now share one set of metrics and colours that adapt to the theme - on the light theme every one of them is a readable, deeper shade (the Test amber was nearly invisible on white), while the dark theme keeps the original vivid colours",
+    "A batch of home page and tree fixes: the query trend is aggregated per day (no more several bars for the same day); empty tables show 0 instead of a blank row-count cell, and large databases no longer stall on counting everything at once (row counts fill in batches, so a few hundred tables show their first batches quickly); delete icons are consistently red across the app; the two structure-preview hints are merged into one",
+    "A round of frontend/backend health checks: fixed one broken feature, two cases of silently reporting success while doing nothing or losing data, four cases of state leaking between tables/databases, and a mis-ordered release script"
+  ],
+  "v1.2.21": [
+    "macOS: fixed the blank window when the app reopens itself after an online update. The relaunched instance reused whatever answered on the port - without comparing versions and without checking it was still alive - while the installer closed that very kernel at the same moment, so the window pointed at a port nobody was listening on. (macOS paints nothing when a WebView navigation fails; Windows paints an error page - which is why only mac showed a blank window.) Reuse now requires a matching version plus a live check, and otherwise we start our own kernel. Also fixed: leftover kernels could not be killed on mac/Linux (the process name was hard-coded to .exe), and a startup readiness timeout used to leave no trace (new ~/.dbmind/logs/shell.log)",
+    "macOS updates are more reliable: when the app runs straight from the mounted disk image (not dragged into Applications) we no longer try to overwrite it in place - that writes to a read-only volume and would be pointless anyway; after copying we verify the frontend assets really landed before restarting; and the 'the update made the app disappear' case is fixed (the fallback used to open an installer image that had already been deleted)",
+    "About page: the current version in the header now follows the release (it kept showing the previous one); release notes past the 12th bullet no longer stay hidden (v1.2.20 has 14 of them); and 99 duplicate dictionary keys - two sets of notes for the same version - were cleaned up",
+    "Website release page and About page text: the sync script now publishes the website itself instead of merely reminding you ('source updated' is not 'site updated' - this was missed twice); it aligns with the remote branch first, so a stale local branch can no longer block the push; and literal ** or backticks (leaked markdown) no longer show up on the website or on the About page"
+  ],
+  "v1.2.20": [
+    "Edit Structure now finds columns in a non-default schema: for PostgreSQL / SQL Server / KingbaseES the tree addresses objects as database.schema, but the columns path only ever looked at the connection's default schema (public on PG, dbo on SQL Server) - so a table in another schema listed fine yet showed no fields. The whole chain (columns, DDL, indexes, comments, column-type enrichment) now uses the schema you clicked",
+    "A missing column list is no longer reported as silence: on Doris it used to come back as an empty list, which reads as a broken table; it now states the reason (wrong database, table does not exist, or no read access to information_schema)",
+    "The object tree no longer stutters: opening a database with thousands of tables renders the first 200 rows and grows the rest in the background (the list stays flat - no Show more row), and hovering a connection no longer re-renders the whole tree",
+    "Data transfer: fixed Row size too large (8126) when creating tables on MySQL targets (two over-wide type mappings, explicit DYNAMIC row format, and the error now reports the column sizes), plus faster writes through more parallelism and batched transactions",
+    "Data transfer - Select objects: the type chips became filters - clicking Tables shows only tables, clicking Views shows only views, and clicking again returns to all; switching types no longer drops the objects you already ticked",
+    "Data compare / Data transfer: fixed the database not being preselected; the database context menu gained Data compare and Data transfer and preselects the database you right-clicked",
+    "Column type spellings are unified: the same type no longer looks different in the picker and in the grid (MySQL returns VARCHAR, Doris STRING, PostgreSQL varchar ...) - the echo now follows each source's own metadata",
+    "New table / Edit Structure: fixed an error when opening the Fields tab, fixed deleting the wrong row once a table has more than 80 columns, and the type cell font now matches its neighbours",
+    "Tree context menus close when you click a menu item or anywhere else (they used to stay open and block the view)",
+    "SQL editor: clicking a result tab selects the matching statement (same behaviour as the statement tabs on top); the statement breadcrumb and locating now use the editor's own text, fixing wrong numbering after commenting out the first statement and jumping to the wrong statement",
+    "Connection hover card: no longer covers the list or blocks clicks, vertically centred, with a small arrow pointing at the connection and a font size matching the rest of the app",
+    "Folders can be pinned: Pin folder in the folder context menu, and the order is persisted",
+    "Settings: more UI-size options (home cards, dialog title and body, data grid, toasts, tab bar text), and the SQL formatting and UI size pages were re-laid out",
+    "A batch of stability fixes: the settings dialog aborted the rest of its loading because of a function that no longer exists (driver list, notifications, knowledge base and shortcuts showed up empty), missing and duplicated dictionary keys, timers stacking up after the view remounts, columns of one table leaking into another while switching tabs, row state mixing up in editable lists, and background reader coroutines no longer report success when they die"
+  ],
+  "v1.2.19": [
+    "The table preview row total is fixed - ClickHouse returns count(*) as a floating point number, which we could not read, so the footer showed only 200 rows and paging was stuck; it now shows the real total and pages properly, and all data sources were checked",
+    "Data governance - capacity statistics read the row count the same tolerant way, so on ClickHouse it no longer shows 0 or unknown",
+    "Settings - General - UI size gains a Tab bar text option: the font size of the workspace tab strip (for example the script tab) now follows it, taking effect immediately without a restart"
+  ],
+  "v1.2.18": [
+    "Edit Structure: the loading indicator finally shows while it loads (the v-loading directive was never registered, so it silently did nothing), and the spinner no longer stutters",
+    "The field tables in Edit Structure and New Table now render only the rows you can see - wide tables with hundreds of columns scroll smoothly with no blank patches, and the type cell stays plain text until you click it to open the dropdown",
+    "Small fixes along the way: a single selection style in the field table (the first row no longer looks selected), the comment cell input matches its neighbours, no more SQL keywords in the field-table headers, and the update confirmation now reads statement first / question last with the Open folder button removed"
+  ],
+  "v1.2.17": [
+    "Table editor: New Table and Edit Structure show only the columns that really apply per data source; on Doris the field table can tick Bucketing columns and shares the same data as the distribution list in Basic info (tick either side and the other follows, and CREATE TABLE reads the same source); ClickHouse gains a Partition key column and the Primary key column is no longer hidden - every column-level setting that feeds a table-level one can now be ticked right in the field table",
+    "Edit Structure: fixed the Sort key / Partition key read-back (they showed a dash no matter how the table was set up); added read-only Bucketing columns and Partition key columns; yes/no is now always a single checkbox (Nullable, Primary key, Sort key, Bucketing, Partition key) - identical across data sources, with no more yes tags or dashes",
+    "New Table: a field comment can be edited in a multi-line dialog (double-click or the expand button), matching Edit Structure; data source fixes - column comments were never read on DM (Dameng) and H2 (the comment cell stayed empty), DM no longer shows an auto-increment checkbox that can never be ticked, and MySQL DEFAULT NULL now reads back as default NULL; also removed the SQL keywords leaking into the field-table headers (Bucketing / Sort key / Partition key) and dropped the Open folder button from the updater"
+  ],
+  "v1.2.16": [
+    "Online update: when the package is already downloaded, the toolbar icon (and the startup check) goes straight to Update now instead of showing the release notes first — and a complete installer already on disk is reused instead of being downloaded twice, even after a restart",
+    "Online update: all in-progress chatter under the progress bar is gone (retry counters, resume notices, source selection) — only progress and speed remain",
+    "Online update: switch to a faster source really switches now (cancel, re-rank, resume from the breakpoint); failures can be retried in place, finishing in the background or failing pops a dialog, and the installer is removed after a successful update",
+    "The two update dialogs now match the rest of the app (badge in the title, same button sizing), and the confirmation reads statement first, question last",
+    "Home dashboard: the connection-name font in Quick start now matches the actions column on the right"
+  ],
+  "v1.2.15": [
+    "Online update: a one-line heads-up before it starts — the app will close automatically and reopen as the new version once installed, instead of vanishing",
+    "Fixed macOS not reopening the app after an update: if the in-place install cannot be done it no longer stops silently — it opens the DMG so you can drag the app in, and reopening now retries by itself",
+    "The check-for-updates dialog now shows only what changed — the release asset table is no longer rendered there",
+    "The download progress bar is slimmer",
+    "The top-bar language button (中 / EN) is no longer bold — it matches the weight of the icons beside it"
+  ],
+  "v1.2.14": [
+    "Result grid font size now scales the whole result area: column headers, the footer (elapsed time / totals / selection summary) and the pager all follow it",
+    "The pager's rows-per-page text and the page-jump input follow as well — no more large grid text sitting next to tiny chrome"
+  ],
+  "v1.2.13": [
+    "Two new formatting options: comma position (after / before the field) and indent style (standard / tabular left / tabular right)",
+    "Keyword layout rules gained an indent-width column: set it per keyword, leave empty to follow the global value, or 0 for no indent",
+    "The editor context menu now has “Editor settings” / “Format settings” entries that jump straight to the right page",
+    "Settings panel polish: rules render as a bordered table, with control alignment and font sizes matching the other pages",
+    "General settings gained interface sizes: adjust the top menu text (including its icons), the top bar right icons and the left tree text, applied immediately",
+    "Settings reorganised: the Theme and Notifications pages moved into General, so the settings menu is shorter",
+    "Fixed the occasional blank script tab: a failed Monaco load is no longer cached forever, and now says what to do"
+  ],
+  "v1.2.12": [
+    "Fixed the dead close dialog: “Quit” and “Minimize to tray” now work",
+    "Updates are one click and silent: download, install and restart all happen by themselves",
+    "No more manual “allow” step after updating on macOS"
+  ],
+  "v1.2.11": [
+    "Fixed in-app update: Windows no longer reports “file not found”, macOS opens the image properly",
+    "The dialog shows where the installer was saved, so you can install it by hand",
+    "If the package fails to land, you get a clear reason"
+  ],
+  "v1.2.10": [
+    "Closing the window asks first: quit, or minimize to tray",
+    "New tray icon: click to bring the window back, right-click to quit",
+    "Faster build pipeline (future releases come out sooner)"
+  ],
+  "v1.2.9": [
+    "Update no longer asks where to save: the package always goes to your Downloads folder",
+    "Windows updates no longer stop at the “already installed” page — they overwrite in place and reopen the app",
+    "Tabs show only the table or object name; connection and database live in the tooltip"
+  ],
+  "v1.2.8": [
+    "Updates pick the right package for your OS: dmg on macOS, deb on Linux, setup.exe on Windows",
+    "Alignment is unified across the grids; NULL follows the column’s values",
+    "The dark-mode “unsaved changes” bar is no longer too bright",
+    "The macOS install window is centered, and the readme line is no longer cut off"
+  ],
+  "v1.2.7": [
+    "The macOS image now includes a “first launch” guide with the three steps",
+    "Two ways to avoid the prompt entirely: curl download, or Homebrew --no-quarantine"
+  ],
+  "v1.2.6": [
+    "macOS window finalised: traffic lights share the menu’s line",
+    "No more empty gap in the top-left corner when full screen"
+  ],
+  "v1.2.5": [
+    "The macOS window is back under system control; traffic lights are where they belong",
+    "No more blank strip in full screen"
+  ],
+  "v1.2.4": [
+    "The macOS image now uses two big icons — just drag them",
+    "System traffic lights restored; fixed the “no title bar and cannot close” case"
+  ],
+  "v1.2.3": [
+    "Rebuilt the macOS install screen: a proper “drag into Applications”"
+  ],
+  "v1.2.2": [
+    "Fixed the black screen on macOS: packaged resources were not found",
+    "Rebuilt the macOS install screen"
+  ],
+  "v1.2.1": [
+    "Fixed macOS apps not opening on double click: no more dependency on a library that is not there",
+    "macOS icon redone to Apple’s grid"
+  ],
+  "v1.2.0": [
+    "Driver downloads no longer need a mirror choice: it tries several domestic sources by itself",
+    "Wide tables scroll more smoothly (only visible columns are rendered)",
+    "Clearer table headers; pointers unified to a hand cursor"
+  ],
+  "v1.1.1": [
+    "Fixed three cell-editing issues (blank turned into NULL, cursor jumping after double click, “unsaved” shown after reverting)",
+    "Fixed a crash that could freeze the whole UI",
+    "Smoother scrolling on large tables; default row height 22 → 26"
+  ],
+  "v1.1.0": [
+    "Updates work without a proxy: falls back to domestic mirrors and verifies integrity with the official checksum",
+    "Resumes after network changes; failed downloads can be retried",
+    "Driver Manager entry: what is installed, what is missing, mirror switch, manual upload",
+    "Production protection on by default: data-changing actions are blocked (queries unaffected)",
+    "Download source is speed-tested automatically and shows speed and remaining time",
+    "Sum / average / min / max restored for numeric selections; external links open in the system browser",
+    "No more white flicker while scrolling results"
+  ],
+  "v1.0.4": [
+    "Stuck transfers no longer hang silently: they time out and say where they stopped",
+    "Backstop: auto-finish after 30 minutes, with the stopping point logged"
+  ],
+  "v1.0.3": [
+    "Fixed ClickHouse “execution failed” and “failed to read boolean” on large tables",
+    "Total count no longer shows -1",
+    "“Format” on a SQL selection no longer errors",
+    "“Newline before keyword” no longer adds an extra break"
+  ],
+  "v1.0.2": [
+    "Updates download behind a proxy (system proxy is detected automatically)",
+    "Downloads can run in the background; the top-bar icon shows progress",
+    "Release notes render properly; the About page version matches the package",
+    "Fixed Doris failing to connect and black console flashes on start/connect",
+    "Home KPI panel restored (total/connected connections, types); driver downloads show live progress"
+  ],
+  "v1.0.1": [
+    "Audit log: filter by category, one-click SQL copy, accurate counts and pages",
+    "Logs are no longer cleared automatically — only via “Clear logs”",
+    "Settings UI fixes (dialog height, inner scrolling, always-visible pager)",
+    "The About page now lists directories"
+  ],
+  "v1.0.0": [
+    "AI assistance: SQL explanation / optimisation / error fixing / performance diagnosis / Q&A",
+    "One workbench for 17+ data sources (MySQL / PostgreSQL / Oracle / SQL Server / ClickHouse / Doris / Redis / MongoDB / ES / DMDB / Kingbase …)",
+    "Transaction mode and direct result editing: review and roll back before committing",
+    "Smart SQL editor and huge result sets: millions of rows in a blink"
+  ],
+  "v1.2.46": [
+    "Faster sync: page size is no longer fixed - it adapts to the measured write speed and page read time (bigger pages when writes are fast, smaller on lossy links); about 10k to 30k rows/s on a throttled link",
+    "On slow or lossy links (SSH tunnels, cross-network), add useCompression=true to the connection's extra parameters to enable protocol compression - roughly another 2x throughput",
+    "When a whole-database sync is down to its last big tables, freed write lanes are handed to them automatically (no more crawling the final stretch on a single lane); the parallel-tables hint now sits in a tooltip behind the label",
+    "High-concurrency syncs over SSH jump hosts no longer stall as a group: the client now limits concurrent handshakes (a stock sshd drops connections beyond 10 unauthenticated ones)",
+    "Fixed: pressing Stop mid-sync could misreport unwritten queued pages as rows failed to write (nothing was lost - the run was simply canceled)",
+    "Fixed: the task log kept only 200 lines, so the failure samples that 'see the task log' pointed to had already been trimmed away; the limit is now 2000 lines"
+  ]
 }

@@ -746,6 +746,30 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.46（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.46</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-21</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步提速</b>：一页的行数不再一刀切，按实测写速与读取耗时自动调（写得快页就放大、链路丢包就缩小），慢链路上实测约 1 万 → 3 万行/秒</li>
+            <li><b>走 SSH 隧道、跨网这类慢链路时，在连接的「附加参数」里加 useCompression=true 可开协议压缩，实测吞吐再翻约一倍</b></li>
+            <li><b>整库同步跑到只剩大表时，会自动把省下的写并发让给它们（不再单路爬完最后半小时）；「并发表数」的说明收进标题后的问号</b></li>
+            <li><b>走 SSH 跳板机的高并发同步不再整批卡死：客户端会限制同时握手的数量（跳板机 sshd 默认超过 10 条未认证连接就随机丢弃）</b></li>
+            <li><b>修复</b>：同步中点「停止」时，队列里没写完的页会被误报成「N 行写入失败」（其实没丢数据，只是取消）</li>
+            <li><b>修复</b>：任务日志只留 200 行，「详见任务日志」指向的失败原因早已挤出；上限提到 2000 行</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.46" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.46" target="_blank" rel="noopener">下载 v1.2.46</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.45（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +777,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.45</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-21</span>
           </div>
           <ul class="rel-notes">
