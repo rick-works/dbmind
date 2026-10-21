@@ -24,7 +24,10 @@
      所以浅色主题里换成更沉一点的绿（见 html[data-theme="light"] 那段）。 */
   --dc-env-dev: #3ddc97;
   --dc-env-dev-wash: rgba(61, 220, 151, .12);
-  --dc-env-test: #f59e0b;
+  /* 「测试」环境角标：**蓝色**。原来是琥珀 #f59e0b，深色主题下又被压成 #ea580c，
+     和生产红 #ef4444 挤在同一色相上 —— 树里两条连接并排时（原测试/原生产）两个 10px
+     小角标看着一模一样，用户反馈「跟生产重复，看不清」（真机截图）。改成蓝，色相拉开。 */
+  --dc-env-test: #60a5fa;
   /* 只读/生产的常驻提示条（用户管理 / 编辑表结构共用）：**分主题**取值。
      不能用 Element 的 light-9 浅黄底 —— 那是浅色主题的值，深色下一条亮带浮在
      暗页面上非常刺眼（用户实测反馈"这个提示太亮了"）。深色下底与描边用警告色的
@@ -32,7 +35,7 @@
   --dc-warn-wash: rgba(245, 179, 77, .10);
   --dc-warn-border: rgba(245, 179, 77, .32);
   --dc-warn-text: #f5b34d;
-  --dc-env-test-wash: rgba(245, 158, 11, .12);
+  --dc-env-test-wash: rgba(96, 165, 250, .14);
   --dc-env-prod: #ef4444;
   --dc-env-prod-wash: rgba(239, 68, 68, .12);
   --dc-env-staging: #a78bfa;
@@ -194,10 +197,10 @@ html[data-theme="light"] {
   /* 浅色主题的「开发」绿：从霓虹薄荷 #3ddc97 换成 #16a34a（沉一些、不刺眼，与浅色下的 --dc-warning 同一明度档） */
   --dc-env-dev: #16a34a;
   --dc-env-dev-wash: rgba(22, 163, 74, .12);
-  /* 浅色下这些鲜艳色都看不清（测试的 #f59e0b 在白底上只有约 2.1:1），统一换成同色系的深一档：
-     与浅色主题的 --dc-warning（#d97706）同一明度/对比度档，五个角标放一起观感一致、都看得清。 */
-  --dc-env-test: #ea580c;
-  --dc-env-test-wash: rgba(234, 88, 12, .12);
+  /* 浅色下这些鲜艳色都看不清，统一换成同色系的深一档，五个角标放一起观感一致、都看得清。
+     测试从橙 #ea580c 改成蓝 #2563eb：橙和生产红在 10px 角标上分不开（用户反馈看不清）。 */
+  --dc-env-test: #2563eb;
+  --dc-env-test-wash: rgba(37, 99, 235, .12);
   --dc-env-prod: #dc2626;
   --dc-env-prod-wash: rgba(220, 38, 38, .12);
   --dc-env-staging: #7c3aed;

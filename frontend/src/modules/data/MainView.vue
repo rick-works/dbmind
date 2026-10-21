@@ -8568,7 +8568,7 @@ const connTypeSummary = computed(() =>
 }
 /* 环境色调：只给两个变量，颜色公式在上一条里（改色只改这里） */
 .env-corner-DEV { --ec: var(--dc-env-dev, #3ddc97); --ec-bg: var(--dc-env-dev-wash, rgba(61,220,151,.12)); }
-.env-corner-TEST { --ec: var(--dc-env-test, #f59e0b); --ec-bg: var(--dc-env-test-wash, rgba(245,158,11,.12)); }
+.env-corner-TEST { --ec: var(--dc-env-test, #3b82f6); --ec-bg: var(--dc-env-test-wash, rgba(59,130,246,.14)); }
 .env-corner-PROD { --ec: var(--dc-env-prod, #ef4444); --ec-bg: var(--dc-env-prod-wash, rgba(239,68,68,.12)); }
 .env-corner-STAGING { --ec: var(--dc-env-staging, #a78bfa); --ec-bg: var(--dc-env-staging-wash, rgba(167,139,250,.12)); }
 .env-corner-UAT { --ec: var(--dc-env-uat, #06b6d4); --ec-bg: var(--dc-env-uat-wash, rgba(6,182,212,.12)); }
