@@ -176,7 +176,7 @@
           "com.mysql:mysql-connector-j:9.1.0"
         ],
         "driverClass": "com.mysql.cj.jdbc.Driver",
-        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
       },
       "key": "mysql",
       "label": "MySQL",
@@ -226,7 +226,7 @@
           "org.mariadb.jdbc:mariadb-java-client:3.5.1"
         ],
         "driverClass": "org.mariadb.jdbc.Driver",
-        "urlTemplate": "jdbc:mariadb://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+        "urlTemplate": "jdbc:mariadb://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
       },
       "key": "mariadb",
       "label": "MariaDB",
@@ -577,7 +577,7 @@
           "mysql:mysql-connector-java:8.0.28"
         ],
         "driverClass": "com.mysql.cj.jdbc.Driver",
-        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
       },
       "key": "doris",
       "label": "Apache Doris",

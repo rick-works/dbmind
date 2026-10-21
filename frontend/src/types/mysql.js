@@ -27,7 +27,7 @@ export default {
   fileType: false,
   defaultPort: 3306,
   databasePh: 'cd.dbPhOptional',
-  urlTemplate: 'jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true',
+  urlTemplate: 'jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true',
   options: mysqlFamilyOptions(),
   // 表单里已删掉的选项：老连接可能还存着（当年默认就写进了 params），
   // 回显时丢掉，免得它们在「附加参数」里冒充用户配置。值已写进上面的模板。

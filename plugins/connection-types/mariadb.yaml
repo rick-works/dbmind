@@ -19,7 +19,7 @@ jdbc:
   driverClass: org.mariadb.jdbc.Driver
   # MariaDB 驱动不吃 useSSL/serverTimezone 那套，
   # 它自己的参数是 useUnicode / characterEncoding / rewriteBatchedStatements / useCursorFetch。
-  urlTemplate: "jdbc:mariadb://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+  urlTemplate: "jdbc:mariadb://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
   artifact: org.mariadb.jdbc:mariadb-java-client:3.5.1
 traits:
   singleDatabase: false

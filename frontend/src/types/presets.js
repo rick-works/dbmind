@@ -42,13 +42,17 @@
  */
 export const mysqlFamilyOptions = () => [
   {
-    // 连接超时默认 10 秒（10000 ms）：主机不可达时不要一直转圈；读取超时默认 0 = 不限
+    // 连接超时默认 10 秒（10000 ms）：主机不可达时不要一直转圈
     key: 'connectTimeout', param: 'connectTimeout', kind: 'number', labelKey: 'cd.o.connectTimeoutMs',
     default: '10000', adv: true, tipKey: 'cd.o.tip.connectTimeoutMs'
   },
   {
+    // 读取超时默认 600 秒（600000 ms），**不再是 0（永不超时）**：
+    // 0 时驱动会无限等一个可能永远不来的响应 —— 目标端把连接半开（RDS 的 wait_timeout
+    // 踢连接、中间设备静默丢包）后，show processlist 什么都没有、也不报错，
+    // 表现就是同步/查询「卡住、不写也不失败」。10 分钟足够长查询，又能让卡死自己暴露出来。
     key: 'socketTimeout', param: 'socketTimeout', kind: 'number', labelKey: 'cd.o.readTimeoutMs',
-    default: '0', adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
+    default: '600000', adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
   }
 ]
 
@@ -69,8 +73,9 @@ export const pgFamilyOptions = () => [
     default: '10000', scale: 0.001, adv: true, tipKey: 'cd.o.tip.connectTimeoutMs'
   },
   {
+    // 600000 ms（表单口径）→ 存参换算成 600 秒。与其它类型同口径：默认不是「永不超时」
     key: 'socketTimeout', param: 'socketTimeout', kind: 'number', labelKey: 'cd.o.readTimeoutMs',
-    default: '0', scale: 0.001, adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
+    default: '600000', scale: 0.001, adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
   }
 ]
 
@@ -82,8 +87,9 @@ export const mssqlOptions = () => [
     default: '10000', scale: 0.001, adv: true, tipKey: 'cd.o.tip.connectTimeoutMs'
   },
   {
+    // mssql-jdbc 的 socketTimeout 是毫秒 → 600000 = 600 秒（同其它类型口径）
     key: 'socketTimeout', param: 'socketTimeout', kind: 'number', labelKey: 'cd.o.readTimeoutMs',
-    default: '0', adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
+    default: '600000', adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
   }
 ]
 
@@ -102,8 +108,9 @@ export const oracleOptions = () => [
     tipKey: 'cd.o.tip.connectTimeoutMs'
   },
   {
+    // ojdbc 的 ReadTimeout 是毫秒 → 600000 = 600 秒（同其它类型口径）
     key: 'oracle.jdbc.ReadTimeout', param: 'oracle.jdbc.ReadTimeout', kind: 'number',
-    labelKey: 'cd.o.readTimeoutMs', default: '0', adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
+    labelKey: 'cd.o.readTimeoutMs', default: '600000', adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
   }
 ]
 
@@ -119,8 +126,9 @@ export const clickhouseOptions = () => [
     default: '10000', adv: true, tipKey: 'cd.o.tip.connectTimeoutMs'
   },
   {
+    // clickhouse-jdbc 的 socket_timeout 是毫秒 → 600000 = 600 秒（同其它类型口径）
     key: 'socket_timeout', param: 'socket_timeout', kind: 'number', labelKey: 'cd.o.readTimeoutMs',
-    default: '0', adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
+    default: '600000', adv: true, tipKey: 'cd.o.tip.readTimeoutMs'
   }
 ]
 

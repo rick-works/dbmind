@@ -19,7 +19,7 @@ export default {
   defaultPort: 3306,
   databasePh: 'cd.dbPhOptional',
   // SSL 走驱动默认（sslMode=disable）；字符集/批量写/零日期/多语句都固定在模板里
-  urlTemplate: 'jdbc:mariadb://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&connectTimeout=10000&socketTimeout=0&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true',
+  urlTemplate: 'jdbc:mariadb://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true',
   options: mysqlFamilyOptions(),
   // 表单里已删掉的选项：老连接里的残留值在回显时丢掉（默认值已在模板里）
   dropParams: ['sslMode', 'characterEncoding', 'rewriteBatchedStatements',
