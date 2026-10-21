@@ -1,5 +1,12 @@
 {
     "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.45": [
+        "Transfer / sync connections no longer pile up: each table returns its sessions when it finishes and concurrent slots reuse them — the connection count is now “parallel tables × sessions per table”, so the global quota is never exhausted and in-use connections are never evicted (the root cause of “session does not exist (the agent may have restarted)” and “the write connection dropped”); a few hundred tables now need dozens of connects instead of thousands",
+        "If the target write connection really drops, the whole table is retried once (transactional targets only, and only when we never fell back to per-row commits; the table is cleared before the retry) — no more “retries stopped; 20,000 rows of this table were not written”",
+        "Rows per page are now capped by write parallelism (20,000 rows when a table has a single write lane): writing one page is back to a dozen seconds, the write queue no longer sits full, the “write pool has been waiting” notice backs off from 30 s to 90 s and now says it is back-pressure rather than an error, and in-flight memory per table drops to roughly one fifth",
+        "Steadier interactivity: a tab keeps its connection alive (switching back no longer re-handshakes), the session quota default goes from 32 to 128 (an existing value of exactly 32 is upgraded automatically), and the connect timeout goes from 25 s to 60 s with the elapsed time included in the error",
+        "Reading binary data (BLOB / BYTEA) now has a two-level budget — 8 MiB per value and 64 MiB per page — with oversized values degraded to “length + preview”, so a result such as “500 rows × 8 MiB” can no longer blow up the host and the core"
+    ],
     "v1.2.44": [
         "One bad row no longer stalls a whole table: failed writes now bisect the batch instead of retrying row by row — a single bad value in a 20,000-row batch costs about 30 round trips instead of 20,000, so the only write session is not pinned for minutes (and the reader no longer sits on “the write pool will not take another batch”)",
         "The stall notice now backs off 30 / 60 / 120 / 300 seconds and adds a “target is accepting writes again” line when it recovers, instead of printing thousands of copies that bury the real error",

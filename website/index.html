@@ -746,14 +746,36 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
-      <!-- v1.2.44（最新） -->
+      <!-- v1.2.45（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.45</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-21</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步的连接不再「越跑越多」</b>：每张表的会话跑完即还、按并发槽位复用 —— 连接数恒为「并发数 × 每表会话数」，不会再把配额顶满后互相挤掉正在用的连接（「会话不存在」「写入连接已断」的根因），几百张表的建连次数从上千次降到几十次</li>
+            <li><b>目标端写连接真断了会整表重跑一次</b>：只对事务型目标、且确认没退回逐条提交时执行，重跑前会清空该表，不再出现「本表剩余 20000 行未写入」</li>
+            <li><b>一页的行数改为按写并发封顶</b>（1 路写 2 万行）：写一页回到十几秒，写队列不再长期满；「写池已等待」提示阈值 30 → 90 秒并改成「这是背压不是错误」，单表在途内存降到约 1/5</li>
+            <li><b>交互更稳</b>：页签的连接常驻不回收（切回来不必重新握手），会话配额默认 32 → 128，建连超时 25 → 60 秒且报错带实际耗时</li>
+            <li><b>二进制读取加了双层预算</b>：单值 8 MiB、整页 64 MiB，超出的值降级为「长度 + 预览」，不会再被「500 行 × 8 MiB」这类结果撑爆</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.45" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.45" target="_blank" rel="noopener">下载 v1.2.45</a>
+          </div>
+        </div>
+      </article>
+      <!-- v1.2.44 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
         <div class="rel-body">
           <div class="rel-head">
             <span class="rel-ver">v1.2.44</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-21</span>
           </div>
           <ul class="rel-notes">
