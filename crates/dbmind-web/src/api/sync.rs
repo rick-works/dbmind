@@ -844,12 +844,28 @@ async fn sync_indexes(
     if indexes.is_empty() {
         return 0;
     }
+    // 索引后置阶段要在大表上建索引，本身就可能几分钟（ALTER/CREATE INDEX 期间
+    // 行数和传输数都不动）。逐条报一句，界面才不会看起来「卡住」。
+    let total = indexes.len();
+    if total > 1 {
+        if let Some(task) = task {
+            task.log(format!("表 {table}：开始创建 {total} 个索引（大表可能要几分钟）"));
+        }
+    }
     let mut created = 0usize;
     // 建失败的索引：索引后置之后，建索引发生在**灌完数据**之后，大表上这一步本身就要花时间
     //（也可能撞上 10 分钟的单语句上限）—— 再像以前那样完全不吭声，用户只会看到
     //「目标表没有索引」却毫无线索。这里汇总成一行日志，不逐条刷屏。
     let mut failed: Vec<String> = Vec::new();
     for (name, unique, columns) in indexes {
+            if total > 1 {
+                if let Some(task) = task {
+                    task.log(format!(
+                        "表 {table}：创建索引 {}/{total}：{name}",
+                        created + 1
+                    ));
+                }
+            }
             let idx_name = target_kind.quote(name.as_str());
             let col_list = columns
                 .iter()
@@ -1886,7 +1902,7 @@ fn with_identity(sql: String, identity_on: bool, target_name: &str) -> String {
 /// 超过目标的 `max_allowed_packet` 直接被拒（真机：Doris FE 默认只有 1MB，
 /// 宽行 2000 行能拼出 7.3MB → 「Packet for query is too large (7,334,180 > 1,048,576)」）。
 /// 行数上限管不住行宽（JSON/长文本列一行几 KB），必须字节 + 行数**双重约束**。
-fn insert_stmt_cap(kind_key: &str) -> usize {
+pub(crate) fn insert_stmt_cap(kind_key: &str) -> usize {
     match kind_key {
         // Doris FE 的 max_allowed_packet 默认 1MB → 512KB 留足语句头/转义余量
         "doris" => 512 * 1024,
@@ -1894,6 +1910,28 @@ fn insert_stmt_cap(kind_key: &str) -> usize {
         "mysql" | "mariadb" => 3 * 1024 * 1024,
         // 其余方言没有 1MB 级 packet 限制，这里只防单语句内存尖峰
         _ => 16 * 1024 * 1024,
+    }
+}
+
+/// 单条 INSERT 的字节**下限**：再拆分就只剩往返开销了（128KB 已足够走满一条千兆链路）。
+const STMT_CAP_MIN: usize = 128 * 1024;
+
+/// 按「平均每条语句的耗时」调整单条 INSERT 的字节上限。
+///
+/// 为什么需要：语句就是 MySQL 协议里的一个 packet，报文越大、丢一个包要重传的代价越高。
+/// 真机（走 SSH 隧道 + 云端 RDS，链路有 PMTU 黑洞）：20 万行的一页被压成 3MB 一条语句，
+/// 单条耗时 113 秒（176 行/秒）；而同一任务里别的表能跑到 1 万行/秒 —— 差的就是报文大小
+/// 撞上丢包后的重传退避。反过来在健康链路上小报文只是多几次往返。
+///
+/// 判据取「每条语句」而不是「每页」：一条语句慢就减半，快就翻倍，最终收敛到
+/// 「一条语句 1~5 秒」；上限仍是方言的 packet 上限，不会比原来更激进。
+fn adapt_stmt_cap(cap: usize, per_stmt_ms: u64, max_cap: usize) -> usize {
+    if per_stmt_ms > 5_000 {
+        (cap / 2).max(STMT_CAP_MIN)
+    } else if per_stmt_ms < 1_000 {
+        (cap.saturating_mul(2)).min(max_cap)
+    } else {
+        cap
     }
 }
 
@@ -1943,6 +1981,15 @@ fn insert_batch_ranges(
     rows: &[Vec<CellValue>],
     kind_key: &str,
 ) -> Vec<(usize, usize)> {
+    insert_batch_ranges_with_cap(rows, kind_key, insert_stmt_cap(kind_key))
+}
+
+/// 同 [`insert_batch_ranges`]，但字节上限由调用方给（写线程按实测耗时自适应，见 `adapt_stmt_cap`）。
+fn insert_batch_ranges_with_cap(
+    rows: &[Vec<CellValue>],
+    kind_key: &str,
+    byte_cap: usize,
+) -> Vec<(usize, usize)> {
     const SQLSERVER_VALUES_LIMIT: usize = 1000;
     let columns = rows.first().map(Vec::len).unwrap_or(1).max(1);
     let row_limit = match kind_key {
@@ -1952,7 +1999,6 @@ fn insert_batch_ranges(
         "oracle" | "dm" | "db2" => (65_535 / columns).clamp(10, 10_000),
         _ => usize::MAX,
     };
-    let byte_cap = insert_stmt_cap(kind_key);
     let mut out: Vec<(usize, usize)> = Vec::new();
     let mut start = 0usize;
     let mut acc_bytes = 0usize;
@@ -2073,8 +2119,17 @@ pub(crate) async fn write_insert_rows(
     table: &str,
     in_transaction: bool,
     diag: &crate::api::transfer::WriteDiag,
+    stmt_cap: &std::sync::atomic::AtomicUsize,
 ) -> Result<u64, String> {
-    let ranges = insert_batch_ranges(rows, target_kind.kind.key());
+    // 语句字节上限按**每路 writer** 记（同表不同写线程可能一快一慢），
+    // 这一批结束时按平均每条语句耗时调整，影响下一批（见 `adapt_stmt_cap`）。
+    let max_cap = insert_stmt_cap(target_kind.kind.key());
+    let byte_cap = stmt_cap
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .clamp(STMT_CAP_MIN, max_cap);
+    let ranges = insert_batch_ranges_with_cap(rows, target_kind.kind.key(), byte_cap);
+    let stmt_count = ranges.len().max(1);
+    let batch_started = std::time::Instant::now();
     let mut ok_rows = 0u64;
     let mut failed_rows = 0u64;
     let mut sample_err: Option<String> = None;
@@ -2324,6 +2379,20 @@ pub(crate) async fn write_insert_rows(
         if let Some(task) = task {
             task.add_rows_written(ok_rows);
         }
+    }
+    // 整批写完：按平均每条语句耗时把字节上限调一档（慢→减半，快→翻倍，见 `adapt_stmt_cap`）
+    let per_stmt_ms = batch_started.elapsed().as_millis() as u64 / stmt_count as u64;
+    let next_cap = adapt_stmt_cap(byte_cap, per_stmt_ms, max_cap);
+    if next_cap != byte_cap {
+        stmt_cap.store(next_cap, std::sync::atomic::Ordering::Relaxed);
+        tracing::debug!(
+            target: "dbmind::sync",
+            table,
+            per_stmt_ms,
+            from = byte_cap,
+            to = next_cap,
+            "调整单条 INSERT 的字节上限"
+        );
     }
     Ok(ok_rows)
 }
@@ -2998,6 +3067,23 @@ impl Drop for SlotLease {
         if let Ok(mut free) = self.pool.lock() {
             free.push(self.id);
         }
+    }
+}
+
+/// 「在跑的表」计数租约：`Drop` 时归还 —— 弹性会话预算（见 `db()` 里 active_tables 那段）
+/// 靠它统计当前并发张数，表 panic / 提前返回也不会漏减。
+struct ActiveGuard(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl ActiveGuard {
+    fn enter(pool: &std::sync::Arc<std::sync::atomic::AtomicUsize>) -> (Self, usize) {
+        let active = pool.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        (Self(pool.clone()), active)
+    }
+}
+
+impl Drop for ActiveGuard {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -4446,7 +4532,8 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     let tgt_workers = (target_declared / sync_concurrency)
         .saturating_sub(reserved_sessions)
         .max(1);
-    let src_slices = (write_parallelism(source_kind.kind).max(1) / sync_concurrency).max(1);
+    let source_declared = write_parallelism(source_kind.kind).max(1);
+    let src_slices = (source_declared / sync_concurrency).max(1);
     let opts = opts.with_session_caps(tgt_workers, src_slices);
 
     let registry = state.tasks.clone();
@@ -4459,18 +4546,18 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             task.set_total(total as i64);
             // 表与依赖表对象的数量：决定要不要等闸门（见下面的 tables_done）
             let table_count = objects.iter().filter(|(kind, _)| kind == "table").count();
-            if table_count > 0 && total > table_count {
-                task.log(format!(
-                    "表先跑：{table_count} 张表全部完成后，再同步 {} 个视图/例程/触发器/事件（它们依赖表）",
-                    total - table_count
-                ));
-            }
-            // 会话预算写进日志：用户能直接看出「这次会开几条连接」，出问题也好对照
-            task.log(format!(
-                "会话预算：并发 {sync_concurrency} 张表{concurrency_source}，每表最多 {} 路写 / {} 片读（单表独享时写路数 = 方言声明值 {target_declared}）",
-                opts.tgt_workers,
-                opts.src_slices,
-            ));
+            // 调度细节只进 tracing（debug）：它们是「内部怎么排兵布阵」，用户看不懂也不需要看
+            tracing::debug!(
+                target: "dbmind::sync",
+                table_count,
+                total,
+                sync_concurrency,
+                concurrency_source,
+                tgt_workers = opts.tgt_workers,
+                src_slices = opts.src_slices,
+                target_declared,
+                "整库同步开始（表先于视图/例程，会话预算如上）"
+            );
             // 目标库不存在时自动创建（默认开，见 ensure_target_db）
             if let Some(msg) = ensure_target_db(&state, &tgt, &opts).await {
                 task.log(msg);
@@ -4497,6 +4584,10 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 std::sync::Arc::new(std::sync::Mutex::new(
                     (0..sync_concurrency.max(1)).collect::<Vec<usize>>(),
                 ));
+            // 在跑的表数：弹性会话预算的分母。整库同步的**尾部**常常只剩一两张大表，
+            // 固定切分（并发 8 张时各 1 路写）会让它们单路爬完最后一大段 ——
+            // 每退一张表，省下的写路数就分给还在跑的（见下面 sync_table 调用处）。
+            let active_tables = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             // ---- 依赖表的对象要等**所有表**跑完再跑 ----
             // 原来 48 张表和视图/存储过程混在一个并发池里，视图几乎总是抢在表前面：
             // 定义里引用的表还没建出来，直接就 `Table 'dmx_hk_src.t_department' doesn't exist`
@@ -4521,6 +4612,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 let tables_done_rx = tables_done_rx.clone();
                 let tables_done_tx = tables_done_tx.clone();
                 let tables_left = tables_left.clone();
+                let active_tables = active_tables.clone();
                 handles.push(tokio::spawn(async move {
                     let is_table = kind == "table";
                     // 遇错停止 / 取消：还没开跑的对象不再执行（已开跑的照常跑完当前页）
@@ -4577,10 +4669,39 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     task.set_phase(name.to_string());
                     let outcome = match kind.as_str() {
                         "table" => {
-                            sync_table(
-                                &state, Some(&task), &src, &tgt, &name, &name, &opts, lease.id, true,
+                            // 弹性会话预算只在**收尾阶段**放宽（剩余表数 ≤ 并发上限）：
+                            // 任务前中段并发一直是满的，此时放宽只会放大建连风暴
+                            //（SSH 跳板机对瞬时连接数有限流，真机踩过整批卡死）；
+                            // 到尾部只剩一两张大表时，才把省下的写路数让给在跑的表。
+                            let (guard, active) = ActiveGuard::enter(&active_tables);
+                            let winding_down = tables_left
+                                .load(std::sync::atomic::Ordering::SeqCst)
+                                <= sync_concurrency;
+                            let workers =
+                                (target_declared / active).saturating_sub(reserved_sessions).max(1);
+                            let slices = (source_declared / active).max(1);
+                            let table_opts = if winding_down
+                                && (workers > opts.tgt_workers || slices > opts.src_slices)
+                            {
+                                tracing::debug!(
+                                    target: "dbmind::sync",
+                                    table = %name,
+                                    active,
+                                    workers,
+                                    slices,
+                                    "尾部放宽会话预算"
+                                );
+                                opts.clone().with_session_caps(workers, slices)
+                            } else {
+                                opts.clone()
+                            };
+                            let outcome = sync_table(
+                                &state, Some(&task), &src, &tgt, &name, &name, &table_opts,
+                                lease.id, true,
                             )
-                            .await
+                            .await;
+                            drop(guard);
+                            outcome
                         }
                         "view" => sync_view(&state, &src, &tgt, &name, &opts).await,
                         // 例程 / 触发器 / 事件：与视图同一条路（见 sync_object_source）
@@ -4830,6 +4951,19 @@ mod prepared_batch_tests {
         for kind in ["mysql", "mariadb", "postgresql", "clickhouse", "doris", "sqlite", "db2"] {
             assert!(!prepared_insert_candidate(kind), "{kind} 应继续走已验证的批量路径");
         }
+    }
+
+    #[test]
+    fn 单条语句的字节上限按实测耗时自适应() {
+        let max = insert_stmt_cap("mysql");
+        // 慢（>5 秒/条）⇒ 减半；到下限就停
+        assert_eq!(adapt_stmt_cap(max, 6_000, max), max / 2);
+        assert_eq!(adapt_stmt_cap(STMT_CAP_MIN, 60_000, max), STMT_CAP_MIN);
+        // 快（<1 秒/条）⇒ 翻倍；不超过方言 packet 上限
+        assert_eq!(adapt_stmt_cap(256 * 1024, 100, max), 512 * 1024);
+        assert_eq!(adapt_stmt_cap(max, 100, max), max);
+        // 1~5 秒：维持不变（已在甜点区间）
+        assert_eq!(adapt_stmt_cap(1024 * 1024, 3_000, max), 1024 * 1024);
     }
 
     #[test]

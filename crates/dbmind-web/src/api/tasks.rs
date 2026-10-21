@@ -33,7 +33,11 @@ use serde_json::{json, Value};
 pub const TASK_TTL: Duration = Duration::from_secs(30 * 60);
 
 /// 每个任务最多保留多少行日志（界面上就是个滚动文本框，攒太多只是占内存）。
-const MAX_LOGS: usize = 200;
+///
+/// 200 行的教训：整库同步 400 个对象 × 每对象 5~6 行 ≈ 两千多行，跑到中段时
+/// 前面的「写入失败样例错误」已被裁掉，界面只剩一句「详见任务日志」却看不到原因 ——
+/// 排查无门。2000 行 ≈ 几百 KB 内存，换「任何失败都能回看原因」，值。
+const MAX_LOGS: usize = 2000;
 
 /// 看门狗的**心跳间隔**（见 `TaskRegistry::spawn`）。
 ///

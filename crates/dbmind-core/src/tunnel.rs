@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -71,6 +71,41 @@ const IDLE_POLL: Duration = Duration::from_millis(1);
 
 /// 监听线程的 accept 轮询间隔（见 [`accept_loop`] 里为什么不用阻塞 accept）。
 const ACCEPT_POLL: Duration = Duration::from_millis(20);
+
+/// 同时进行的 SSH **握手**上限。
+///
+/// 为什么限：本设计每条转发连接一条独立 SSH 会话（见 [`accept_loop`]），高并发同步
+/// 瞬间要建几十条会话；而 sshd 的 `MaxStartups` 默认 `10:30:100` —— 超过 10 条未认证
+/// 连接后**随机丢弃**，被丢的那批要等超时重试，整批建连被拖成分钟级（真机：整库同步
+/// 并发表 16 时 32 条会话同时握手，全部卡死、任务 8 分钟一行没读）。限流排队依次握手
+/// 比被服务端丢弃再重试快得多，而且不依赖跳板机的配置。
+const HANDSHAKE_MAX: usize = 8;
+static HANDSHAKE_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// 握手名额租约：拿到才开始 `open_session`，`Drop` 归还（含 panic）。
+struct HandshakeLease;
+
+impl HandshakeLease {
+    fn acquire() -> Self {
+        loop {
+            let cur = HANDSHAKE_INFLIGHT.load(Ordering::SeqCst);
+            if cur < HANDSHAKE_MAX
+                && HANDSHAKE_INFLIGHT
+                    .compare_exchange(cur, cur + 1, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                return Self;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+}
+
+impl Drop for HandshakeLease {
+    fn drop(&mut self) {
+        HANDSHAKE_INFLIGHT.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 // ------------------------------------------------------------------ 配置
 
@@ -439,7 +474,10 @@ fn auth_err(spec: &SshConfig, address: &str, detail: &str) -> DbMindError {
 /// 只握手不试通道是不够的：认证成功但「跳板机到数据库」不通时，问题会拖到驱动那边才暴露，
 /// 用户看到的是一句「连接被拒绝」，看不出根因在跳板机的路由/白名单上。
 fn probe(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<()> {
-    let session = open_session(spec)?;
+    let session = {
+        let _lease = HandshakeLease::acquire();
+        open_session(spec)?
+    };
     let channel = session
         .channel_direct_tcpip(target_host, target_port, None)
         .map_err(|err| {
@@ -520,11 +558,17 @@ fn forward(
     target_host: &str,
     target_port: u16,
 ) -> std::io::Result<()> {
-    let session = open_session(spec).map_err(|err| {
-        // 建会话失败不该让整个隧道倒掉（跳板机抖一下、并发上限到了都可能发生）：
-        // 这条本地连接关掉，驱动那边会看到连接断开并自行重试。
-        std::io::Error::other(format!("SSH 会话建立失败：{}", err.message))
-    })?;
+    // 限流：别让建连风暴撞跳板机的 MaxStartups（见 HANDSHAKE_MAX）。
+    // 名额**只在握手期间持有**（块作用域）—— 曾写成贯穿整个 forward，结果租约跟着
+    // 连接一直活到会话关闭，8 条并发会话把名额占满后，所有新建连全部死等。
+    let session = {
+        let _lease = HandshakeLease::acquire();
+        open_session(spec).map_err(|err| {
+            // 建会话失败不该让整个隧道倒掉（跳板机抖一下、并发上限到了都可能发生）：
+            // 这条本地连接关掉，驱动那边会看到连接断开并自行重试。
+            std::io::Error::other(format!("SSH 会话建立失败：{}", err.message))
+        })?
+    };
     let mut channel = session
         .channel_direct_tcpip(target_host, target_port, None)
         .map_err(|err| std::io::Error::other(format!("SSH 转发通道打开失败：{err}")))?;

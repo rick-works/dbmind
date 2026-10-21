@@ -170,12 +170,17 @@
             <el-checkbox v-model="opts.stopOnError" :disabled="taskRunning">{{ $t('sync.stopOnError') }}</el-checkbox>
           </div>
           <!-- 并发表数：0 = 自适应（按源/目标类型与对象数定）。目标端弱、或源与目标同实例时
-               调小它，能直接减少双方连接数与会话/IO 争抢（见后端 sync::db 的「会话预算」） -->
+               调小它，能直接减少双方连接数与会话/IO 争抢（见后端 sync::db 的「会话预算」）。
+               说明文字收进标签后的问号（悬浮显示），不占版面。 -->
           <div class="settings-inline">
-            <span class="settings-inline-label">{{ $t('sync.maxConcurrency') }}</span>
+            <span class="settings-inline-label">
+              {{ $t('sync.maxConcurrency') }}
+              <el-tooltip :content="$t('sync.maxConcurrencyHint')" placement="top" :show-after="120">
+                <el-icon class="hint-q"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
             <el-input-number v-model="opts.maxConcurrency" :min="0" :max="32" :step="1" size="small"
                              controls-position="right" :disabled="taskRunning" class="settings-num" />
-            <span class="settings-inline-hint">{{ $t('sync.maxConcurrencyHint') }}</span>
           </div>
           <!-- 「写入批次」输入已删：每种库的甜点批大差一个数量级（CH 落 part / Oracle 有
                单语句上限 / MySQL 看 max_allowed_packet），由后端按目标方言自动决定 -->
@@ -324,7 +329,7 @@ import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } 
 import { ElMessage } from 'element-plus'
 import {
   Promotion, Right, VideoPause, Search, FolderOpened, Files, DataLine, Operation, Document,
-  Grid, View, FirstAidKit, SetUp, Lightning, Calendar, Clock, Filter
+  Grid, View, FirstAidKit, SetUp, Lightning, Calendar, Clock, Filter, QuestionFilled
 } from '@element-plus/icons-vue'
 import { listConnections, listDatabases, listSchemas, listTables, listProcedures, listTriggers, listEvents, getFeatures, syncDb, syncTaskStatus, syncCancel } from '../../api'
 // 「库」这一层要不要画（Oracle / DM 没有库层：它就是连接里填的服务名）
@@ -1563,10 +1568,11 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   margin: 0;
 }
 .settings-checks { display: flex; flex-direction: column; gap: 6px; }
-/* 「并发表数」：一行标签 + 数字框 + 说明，说明允许换行（同勾选项的理由） */
-.settings-inline { display: flex; align-items: flex-start; gap: 8px; margin-top: 4px; }
+/* 「并发表数」：一行标签 + 数字框；说明收进标签后的问号（悬浮显示） */
+.settings-inline { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .settings-inline-label { font-size: 13px; color: var(--dc-text); line-height: 24px; flex: none; }
-.settings-inline-hint { font-size: 11.5px; color: var(--dc-text-weak); line-height: 1.45; flex: 1; min-width: 0; }
+.hint-q { font-size: 12px; color: var(--dc-text-weak); cursor: help; vertical-align: -1px; margin-left: 2px; }
+.hint-q:hover { color: var(--el-color-primary); }
 .settings-num { width: 96px; flex: none; }
 
 /* ==================== 行过滤（按表设置） ====================

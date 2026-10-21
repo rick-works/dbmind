@@ -14,7 +14,7 @@
 //!   不跨连接拼事务 —— 改造前那层「在 A 连接上 set autocommit=0、在 B 连接上写」
 //!   的事务等于没开（真机踩过）。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use dbmind_core::CellValue;
@@ -77,6 +77,9 @@ pub struct SqlWriter {
     stream: Option<StreamCfg>,
     stream_failed: AtomicBool,
     workers: usize,
+    /// 每路 writer 的「单条 INSERT 字节上限」（按实测耗时自适应，见 `sync::adapt_stmt_cap`）：
+    /// 链路慢/丢包时把报文拆小，比死守方言的 packet 上限快一个数量级
+    stmt_caps: Vec<AtomicUsize>,
     /// 写池诊断（二分定位到的坏行样例写这里，卡顿日志会读）
     diag: Arc<WriteDiag>,
 }
@@ -93,6 +96,12 @@ impl SqlWriter {
         // 任务级会话预算（见 `TablePlan::workers_cap`）：并发多表时每张表少开几路，
         // 整次任务的目标连接数不超过方言声明的并发数。
         let workers = if plan.workers_cap > 0 { base.min(plan.workers_cap) } else { base };
+        // 调优/排查逃生阀：坏链路（丢包、PMTU 黑洞）单条流吞吐有上限，多开几路能堆总吞吐。
+        let workers = std::env::var("DBMIND_SYNC_WRITERS")
+            .ok()
+            .and_then(|text| text.trim().parse::<usize>().ok())
+            .filter(|n| *n >= 1)
+            .unwrap_or(workers);
         Self {
             state: plan.state.clone(),
             task: plan.task.clone(),
@@ -115,6 +124,9 @@ impl SqlWriter {
             txn_open: (0..workers.max(1)).map(|_| AtomicBool::new(false)).collect(),
             stream: plan.stream.clone(),
             stream_failed: AtomicBool::new(false),
+            stmt_caps: (0..workers.max(1))
+                .map(|_| AtomicUsize::new(crate::api::sync::insert_stmt_cap(kind_key)))
+                .collect(),
             workers: workers.max(1),
             diag: plan.diag.clone(),
         }
@@ -322,6 +334,7 @@ impl Writer for SqlWriter {
                         &self.table,
                         in_transaction,
                         &self.diag,
+                        &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)],
                     )
                     .await?;
                     return Ok(loaded_total + rest);
@@ -341,6 +354,7 @@ impl Writer for SqlWriter {
                 &self.table,
                 in_transaction,
                 &self.diag,
+                &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)],
             )
             .await
         })

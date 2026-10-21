@@ -3934,7 +3934,7 @@ export default {
   'sync.includeIndexes': '建表包含索引',
   'sync.autoCreateDb': '目标库不存在时自动创建',
   'sync.maxConcurrency': '并发表数',
-  'sync.maxConcurrencyHint': '0 = 自动；目标端较弱或源与目标是同一实例时调小（如 4）',
+  'sync.maxConcurrencyHint': '一次同时搬几张表。0 = 自动（推荐）；源和目标是同一个实例、或数据库连接数有限时调小，比如 4',
   'common.yes': '是',
   'sync.wherePerTable': '行过滤（按表设置）',
   'sync.wherePerTableHint': '一张表一个条件，只对填了条件的表生效；留空 = 该表全量同步。条件会拼到该表源端查询的 WHERE 后面，不要再写 WHERE。',

@@ -40,6 +40,8 @@ const CANCEL_POLL: Duration = Duration::from_millis(300);
 /// 写池多久没收下一批就报一次「写队列满、正在排队」。
 ///
 /// **这是背压，不是故障**：读侧比写侧快时，页会排在写队列里等，数据一行都不丢。
+/// 所以它**只写 tracing（debug）与状态栏**，不进「同步日志」—— 用户会把日志里的
+/// 「写队列已满」当成同步出错（真机反馈）。
 /// 阈值 90 秒（原 30 秒）是按**页大小**定的：单表 1 路写、页可达 10 万行，
 /// 真机一批 2 万行约 9 秒 ⇒ 一页 10 万行本身就要 45 秒左右；写队列容量是
 /// `workers + 1`，所以**排到第 2 个整页**才会等满 90 秒。原来的 30 秒比
@@ -112,6 +114,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                 let Some(batch) = batch else { break };
                 // 本批耗时/行数记进诊断：卡顿日志靠它区分「慢」与「死」
                 let write_started = std::time::Instant::now();
+                diag.note_batch_start(batch.len());
                 // 墙钟兜底：驱动层可能永不超时（socketTimeout=0），不能跟着一起等
                 let write_outcome = match tokio::time::timeout(WRITE_CALL_TIMEOUT, writer.write(worker, &batch)).await {
                     Ok(outcome) => outcome,
@@ -312,30 +315,48 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                     Err(_) => {
                         waited += warn_after;
                         reported = true;
-                        if let Some(task) = &plan.task {
-                            let inflight = plan.diag.inflight.load(Ordering::Relaxed);
-                            let last_ms = plan.diag.last_write_ms.load(Ordering::Relaxed);
-                            let last_rows = plan.diag.last_batch_rows.load(Ordering::Relaxed);
-                            let mut line = format!(
-                                "表 {}：读到 {} 行、已写 {} 行；写队列已满，这 {} 行的一批已排队 {} 秒\
-                                 （在途 {} 批，最近一批 {} 行用了 {:.1} 秒）。\
-                                 这是背压不是错误：读取比目标端写入快，系统在自动排队，数据不会丢，无需处理",
-                                plan.table,
-                                consumed,
-                                shared_inserted.load(Ordering::Relaxed),
-                                batch_rows,
-                                waited.as_secs(),
-                                inflight,
-                                last_rows,
-                                last_ms as f64 / 1000.0,
-                            );
-                            // 失败样例顺手带上：用户不必再去翻前面的日志猜「到底哪行坏了」
-                            if let Some(sample) = plan.diag.sample_err_text() {
-                                line.push_str(&format!("；最近失败样例：{sample}"));
+                        // **不写进任务日志**：这是背压（读比写快），不是错误。以前写在
+                        // 「同步日志」里，用户看到红字就以为同步坏了（真机反馈）。
+                        // 诊断信息只留在 tracing（INFO 以下），排查时看得到、界面不受扰。
+                        let writing_s = plan.diag.writing_seconds();
+                        let writing_rows = plan.diag.current_batch_rows.load(Ordering::Relaxed);
+                        // 这一条要进日志：它**不是**背压，而是「真的有批卡在目标端」。
+                        // 60 秒才报，且随上面的退避走，不会刷屏。
+                        if writing_s >= 60 {
+                            if let Some(task) = &plan.task {
+                                task.log(format!(
+                                    "表 {}：正在写入的一批 {} 行已执行 {} 秒仍未返回\
+                                     （目标端锁等待 / 慢盘 / 大报文在丢包链路上重传），\
+                                     超过 {} 秒将判该表失败",
+                                    plan.table,
+                                    writing_rows,
+                                    writing_s,
+                                    WRITE_CALL_TIMEOUT.as_secs()
+                                ));
                             }
-                            task.log(line);
+                        }
+                        let inflight = plan.diag.inflight.load(Ordering::Relaxed);
+                        let last_ms = plan.diag.last_write_ms.load(Ordering::Relaxed);
+                        let last_rows = plan.diag.last_batch_rows.load(Ordering::Relaxed);
+                        tracing::debug!(
+                            target: "dbmind::transfer",
+                            table = %plan.table,
+                            consumed,
+                            inserted = shared_inserted.load(Ordering::Relaxed),
+                            batch_rows,
+                            waited_s = waited.as_secs(),
+                            inflight,
+                            last_rows,
+                            last_batch_s = last_ms as f64 / 1000.0,
+                            page_rows = reader.page_rows(),
+                            write_per_sec = plan.diag.write_rate(),
+                            sample = plan.diag.sample_err_text().unwrap_or_default(),
+                            "写队列满（背压），读侧正在排队等待"
+                        );
+                        // 状态栏仍然显示当前在等谁 —— 那是「正在做什么」，不是告警
+                        if let Some(task) = &plan.task {
                             task.set_phase(format!(
-                                "表 {}：写入排队中（已等 {} 秒，自动继续）",
+                                "表 {}：写入排队中（已等 {} 秒）",
                                 plan.table,
                                 waited.as_secs()
                             ));
@@ -347,14 +368,15 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
             if !delivered {
                 break;
             }
-            // 之前报过卡顿：恢复时说明一声，否则用户只看到「等待」却不知道已经过去了
+            // 等过了：只把状态栏恢复，不再往日志里写「恢复接收写入」（同上，避免歧义）
             if reported {
+                tracing::debug!(
+                    target: "dbmind::transfer",
+                    table = %plan.table,
+                    waited_s = waited.as_secs(),
+                    "写队列恢复接收"
+                );
                 if let Some(task) = &plan.task {
-                    task.log(format!(
-                        "表 {}：目标端恢复接收写入（本批等待了 {} 秒）",
-                        plan.table,
-                        waited.as_secs()
-                    ));
                     task.set_phase(format!("表 {}：传输数据", plan.table));
                 }
             }
@@ -411,6 +433,14 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
             }
         }
     }
+
+    // 取消状态最后再查一次：写协程看到「停止」会**先**撤离（不再领批），分发侧这时
+    // 可能还堵在写队列上 —— 队列一关它以 `delivered=false` 跳出，跳过了开头那次取消
+    // 检查，`canceled` 仍是 false。于是取消时队列里没来得及写的页被算进
+    // `consumed - inserted`，报成「N 行写入失败」（真机：点停止后 5 张表挂出
+    // 失败红字，其实行没坏，只是取消）。以收尾这一刻为准。
+    let canceled = canceled
+        || plan.task.as_ref().map(|t| t.is_canceled()).unwrap_or(false);
 
     let inserted = shared_inserted.load(Ordering::SeqCst);
     if let Some(msg) = write_err.lock().await.take() {

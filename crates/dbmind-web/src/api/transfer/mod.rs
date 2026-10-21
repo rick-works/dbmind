@@ -58,6 +58,14 @@ use crate::AppState;
 /// 为什么放在 `TablePlan` 上而不是当函数参数传：记录方（写池 worker）与报告方
 /// （分发侧的卡顿日志）是两个独立协程，需要同一份共享状态；热路径上只有两次
 /// `AtomicU64` 读写，`Mutex` 只在记失败样例时碰一下，不参与每行处理。
+/// 当前 epoch 毫秒（只用于诊断计时）。
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis().min(u64::MAX as u128) as u64)
+        .unwrap_or(0)
+}
+
 #[derive(Default)]
 pub struct WriteDiag {
     /// 已发出、尚未写完的批数
@@ -66,6 +74,22 @@ pub struct WriteDiag {
     pub last_write_ms: AtomicU64,
     /// 最近一批的行数
     pub last_batch_rows: AtomicU64,
+    /// **正在写的那一批**的开始时刻（epoch 毫秒；0 = 当前没有在写的批）。
+    ///
+    /// 为什么要它：只报「最近一批用了多久」在写侧卡住时会误导 —— 真机上目标端
+    /// 卡了 4 分半，日志一直显示「最近一批 20000 行用了 15.2 秒」（那是上一批），
+    /// 用户看到的却是「读写数字三分钟一动不动」。有这一项才能说清「正在写的这一批
+    /// 已经跑了几秒」。
+    pub batch_started_ms: AtomicU64,
+    /// 正在写的那一批的行数
+    pub current_batch_rows: AtomicU64,
+    /// 目标端写速的滑动估计（行/秒；0 = 还没测出来）。
+    ///
+    /// 用途：读侧据此决定**一页多大** —— 一页应该「二十秒左右写得完」。写快就放大页
+    /// （少几次往返，吞吐才上得去），写慢就缩小页（否则只是把几十万行堆在队列里，
+    /// 还会撞上单批 300 秒的墙钟）。真机反例：一刀切按写路数把页压到 2 万行，
+    /// 快表被拖慢好几倍。
+    pub write_rows_per_sec: AtomicU64,
     /// 最近一条失败样例（二分定位到的坏行错误），卡顿日志里顺手带上
     pub sample_err: Mutex<Option<String>>,
     /// 有过**开事务失败**（writer 退回 autocommit 逐条提交）。
@@ -77,11 +101,43 @@ pub struct WriteDiag {
 }
 
 impl WriteDiag {
+    /// 一批交给写池开写：记下开始时刻，供「正在写的这一批已跑几秒」用。
+    pub fn note_batch_start(&self, rows: usize) {
+        self.current_batch_rows.store(rows as u64, Ordering::Relaxed);
+        self.batch_started_ms.store(now_ms(), Ordering::Relaxed);
+    }
+
     pub fn note_batch_done(&self, rows: usize, elapsed: std::time::Duration) {
         self.inflight.fetch_sub(1, Ordering::Relaxed);
         self.last_batch_rows.store(rows as u64, Ordering::Relaxed);
         self.last_write_ms
             .store(elapsed.as_millis().min(u64::MAX as u128) as u64, Ordering::Relaxed);
+        // 没有在写的批了：清掉开始时刻，避免报告方把它当成「还在写」
+        self.batch_started_ms.store(0, Ordering::Relaxed);
+        self.current_batch_rows.store(0, Ordering::Relaxed);
+        // 写速滑动估计：**变慢立刻认，变快慢慢信**。
+        // - 慢下来（sample < old）直接采用：页大小与写速成正比，晚一批认就会多囤一个
+        //   大页，真机上表现为「突然几十秒不动」（页大 → 单批撞上 300 秒墙钟）。
+        // - 快起来按 1/4 平滑：单批抖动（目标端刷盘、偶尔的锁等待）不该把页瞬间放大。
+        let ms = elapsed.as_millis().max(1) as u64;
+        let sample = (rows as u64).saturating_mul(1_000) / ms;
+        let old = self.write_rows_per_sec.load(Ordering::Relaxed);
+        let next = if old == 0 || sample < old { sample } else { (old * 3 + sample) / 4 };
+        self.write_rows_per_sec.store(next, Ordering::Relaxed);
+    }
+
+    /// 目标端写速估计（行/秒；0 = 还没有样本）。
+    pub fn write_rate(&self) -> u64 {
+        self.write_rows_per_sec.load(Ordering::Relaxed)
+    }
+
+    /// 正在写的那一批已经跑了多少秒（0 = 当前没有在写的批）。
+    pub fn writing_seconds(&self) -> u64 {
+        let started = self.batch_started_ms.load(Ordering::Relaxed);
+        if started == 0 {
+            return 0;
+        }
+        now_ms().saturating_sub(started) / 1000
     }
 
     pub fn note_sample_err(&self, msg: &str) {
