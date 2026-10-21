@@ -120,6 +120,13 @@ pub struct SyncRequest {
     /// 目标库不存在时自动创建（默认开）
     #[serde(default)]
     auto_create_db: Option<bool>,
+    /// 同时同步几个对象（并发表数）。
+    ///
+    /// 缺省 = 自适应（按目标/源类型与对象数定，见 `adaptive_concurrency`）；显式给了就
+    /// 以用户为准（夹到 1..=32）。为手机器弱/源目标同实例时，把它调小（如 4）能直接
+    /// 降低双方的连接与 IO 争抢。
+    #[serde(default)]
+    max_concurrency: Option<usize>,
     /// 行数上限：>0 时每张表只搬前 N 行；0 或缺省 = 不限。
     /// **界面已不再提供**（用户口径：同步就是不限，抽样不是同步的事），保留字段只是
     /// 为了老客户端 / 脚本调用仍能编译 —— 新调用方不要传。
@@ -2024,11 +2031,13 @@ fn is_link_level_error(err: &XError) -> bool {
 
 /// 把一批行按「行数+字节拆分」写成 INSERT 语句并逐条发送（**部分成功语义**）。
 ///
-/// **脏数据降级**（对齐 DataX）：某条语句失败时**降级为该语句块逐行重试** ——
+/// **脏数据降级**（对齐 DataX）：某条语句失败时**二分拆批**定位坏行 ——
 /// 坏行（日期转换失败、超长、类型不匹配…）单独计失败并记样例错误，好行照常落库，
 /// 不让一行烂数据拖死整批（真机：SQL Server 日期转换 241，一个坏值炸掉 11,574 行）。
-/// 逐行重试里若**过半仍失败**，判定为系统性问题（连接断/权限/表没了），立即中止并上抛
-/// —— 不值得把几千行逐行磨完。
+/// 二分而非逐行：2 万行的批里 1 个坏值，逐行要 2 万次往返（分钟级，期间写会话被独占），
+/// 二分只要 log₂N 层。二分中若**过半失败**，判定为系统性问题（连接断/权限/表没了），
+/// 立即中止并上抛 —— 不值得把几千行磨完。
+/// `diag` 用于把「最近批耗时 / 失败样例」回传给卡顿日志（见 `transfer::engine`）。
 /// 返回成功写入的行数。串行管道与并发写池共用这一份实现，杜绝两处逻辑漂移。
 pub(crate) async fn write_insert_rows(
     state: &AppState,
@@ -2043,6 +2052,7 @@ pub(crate) async fn write_insert_rows(
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
     table: &str,
     in_transaction: bool,
+    diag: &crate::api::transfer::WriteDiag,
 ) -> Result<u64, String> {
     let ranges = insert_batch_ranges(rows, target_kind.kind.key());
     let mut ok_rows = 0u64;
@@ -2085,7 +2095,7 @@ pub(crate) async fn write_insert_rows(
                     // 部分成功后再重试会产生重复数据。
                     if let Some(task) = task {
                         task.log(format!(
-                            "表 {table}：预编译子批失败（已回滚），本批改用 SQL 逐行降级"
+                            "表 {table}：预编译子批失败（已回滚），本批改用 SQL 批量并二分定位坏行"
                         ));
                     }
                 }
@@ -2160,70 +2170,114 @@ pub(crate) async fn write_insert_rows(
                         return Err(format!("回滚后释放批处理保存点失败：{}", err.message));
                     }
                 }
-                // 降级：这一语句块的行逐行重试
+                // 降级：**二分拆批**定位坏行（原来是逐行重试）。
+                //
+                // 为什么不再逐行：2 万行的批里只要有 1 个坏值，逐行就是 2 万次往返
+                //（每次一条 INSERT + 保存点），唯一的写会话被占住几十秒到几分钟，
+                // 读侧只能卡在「写池 30 秒没收下新的一批」上 —— 真机上一张 92 万行的表
+                // 就这样落后 40 万行、失败数缓慢爬到 12.7 万。
+                // 二分只需 log₂(2 万)≈15 层、约 2×15 次尝试就能把坏行逼出来。
+                let mut stack: Vec<(usize, usize)> = vec![(start_row, n_rows)];
                 let mut chunk_failed = 0u64;
-                for row in chunk {
-                    let row_sp = if in_transaction {
-                        let name = format!("dbmind_insert_row_{savepoint_seq}");
+                while let Some((sub_start, sub_len)) = stack.pop() {
+                    let sub = &rows[sub_start..sub_start + sub_len];
+                    let stmt = build_insert(target_name, columns, target_types, sub, target_kind);
+                    let sub_sp = if in_transaction {
+                        let name = format!("dbmind_insert_{savepoint_seq}");
                         savepoint_seq += 1;
                         savepoint_sql(target_kind.kind.key(), &name)
                     } else {
                         None
                     };
-                    if let Some((begin, _, _)) = row_sp.as_ref() {
+                    if let Some((begin, _, _)) = sub_sp.as_ref() {
                         if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
-                            return Err(format!("创建行处理保存点失败：{}", err.message));
+                            return Err(format!("创建二分保存点失败：{}", err.message));
                         }
                     }
-                    let single = build_insert(target_name, columns, target_types, std::slice::from_ref(row), target_kind);
-                    match run_target_in(state, tgt_target, &with_identity(single, identity_on, target_name), session).await {
+                    match run_target_in(state, tgt_target, &with_identity(stmt, identity_on, target_name), session).await {
                         Ok(_) => {
-                            ok_rows += 1;
-                            if let Some((_, _, Some(release))) = row_sp.as_ref() {
-                                // 同上：行已经写成功，释放保存点失败不该把它改判成失败。
+                            ok_rows += sub_len as u64;
+                            if let Some((_, _, Some(release))) = sub_sp.as_ref() {
+                                // 已经写成功，释放保存点失败不该把它改判成失败。
                                 if let Err(err) = run_target_in(state, tgt_target, release, session).await {
                                     if let Some(task) = task {
                                         task.log(format!(
-                                            "表 {table}：释放行保存点失败（数据已写入，继续）：{}",
+                                            "表 {table}：释放保存点失败（数据已写入，继续）：{}",
                                             err.message
                                         ));
                                     }
                                 }
                             }
                         }
-                        Err(row_err) => {
-                            // 逐行重试里同样是连接级错误就直接收摊：继续一行一行磨，
-                            // 只会把「一秒能报的错」变成几小时的「卡住」
-                            if is_link_level_error(&row_err) {
+                        Err(sub_err) => {
+                            // 连接级错误直接收摊：继续拆下去只会把「一秒能报的错」
+                            // 变成几小时的「卡住」（见 is_link_level_error）。
+                            if is_link_level_error(&sub_err) {
                                 if let Some(task) = task {
+                                    let left = rows.len() as u64 - ok_rows;
+                                    if left > 0 {
+                                        task.add_rows_failed(left);
+                                    }
                                     task.log(format!(
-                                        "表 {table}：逐行重试时连接已断（{}），停止本表",
-                                        row_err.message
+                                        "表 {table}：二分定位时连接已断（{}），停止本表；本表剩余 {left} 行未写入",
+                                        sub_err.message
                                     ));
                                 }
                                 return Err(format!(
-                                    "写入连接已断：{}（逐行重试中止）",
-                                    row_err.message
+                                    "写入连接已断：{}（二分定位中止）",
+                                    sub_err.message
                                 ));
                             }
-                            if let Some((_, rollback, _)) = row_sp.as_ref() {
+                            if let Some((_, rollback, _)) = sub_sp.as_ref() {
                                 if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
-                                    return Err(format!("回滚行处理保存点失败：{}", err.message));
+                                    return Err(format!("回滚二分保存点失败：{}", err.message));
                                 }
                             }
-                            if let Some((_, _, Some(release))) = row_sp.as_ref() {
+                            if let Some((_, _, Some(release))) = sub_sp.as_ref() {
                                 if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                                    return Err(format!("回滚后释放行处理保存点失败：{}", err.message));
+                                    return Err(format!("回滚后释放二分保存点失败：{}", err.message));
                                 }
                             }
-                            chunk_failed += 1;
-                            if sample_err.is_none() {
-                                sample_err = Some(row_err.message.chars().take(200).collect());
+                            if sub_len <= 1 {
+                                // 单行仍失败 = 真坏行：计失败、留样例，兄弟区间继续写
+                                chunk_failed += 1;
+                                let text: String = sub_err.message.chars().take(200).collect();
+                                if sample_err.is_none() {
+                                    sample_err = Some(text.clone());
+                                    // 同时喂给写池诊断：卡顿日志里能直接看到「坏在哪」
+                                    diag.note_sample_err(&text);
+                                }
+                                // 坏行过半就**提前收摊**：坏行占 45% 这类情况，
+                                // 二分树会展开到接近 2×行数 次尝试（与逐行同量级），
+                                // 越拆越慢。判成系统性问题（表结构不兼容/权限/连接语义变了）
+                                // 比磨完几万次更有用。
+                                if chunk_failed * 2 > n_rows as u64 {
+                                    if let Some(task) = task {
+                                        task.add_rows_failed(rows.len() as u64 - ok_rows);
+                                    }
+                                    return Err(format!(
+                                        "本批 {n_rows} 行里已确认 {chunk_failed} 行写入失败（过半），\
+                                         判定为系统性失败：{text}"
+                                    ));
+                                }
+                            } else {
+                                // 保序拆半：先压后半、再压前半，弹出时先处理前半，
+                                // 写入顺序与源表一致（定位日志也读得顺）。
+                                let half = sub_len / 2;
+                                stack.push((sub_start + half, sub_len - half));
+                                stack.push((sub_start, half));
                             }
                         }
                     }
                 }
                 failed_rows += chunk_failed;
+                if chunk_failed > 0 {
+                    if let Some(task) = task {
+                        task.log(format!(
+                            "表 {table}：本批 {n_rows} 行里有 {chunk_failed} 行写入失败（二分定位），其余已写入"
+                        ));
+                    }
+                }
                 // 过半失败 ⇒ 系统性问题（连接断/权限/表没了），逐行磨完没有意义
                 if chunk_failed * 2 > n_rows as u64 {
                     if let Some(task) = task {
@@ -3662,6 +3716,8 @@ async fn sync_table_inner(
         } else {
             None
         },
+        // 写池诊断（在途批数 / 最近批耗时 / 失败样例）：卡顿日志与二分定位共用一份
+        diag: std::sync::Arc::new(crate::api::transfer::WriteDiag::default()),
     };
     let stats = match crate::api::transfer::run(plan).await {
         Ok(stats) => stats,
@@ -4193,10 +4249,10 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     };
     let total = objects.len();
 
-    // ---- 任务级会话预算：整次任务的目标连接数 ≤ 方言声明的并发数 ----
-    // 原来整库同步是「对象并发 × 每表 writer 数」：4 张表 × 4 路 = 16 条目标连接，
-    // 而 4 本来就是**整个任务**的上限。这里按并发对象数把预算切给每张表：
-    // 并发 4 张 → 每表 1 路；只有 1 张表 → 独享 4 路。（读侧同理。）
+    // ---- 任务级会话预算：并发对象数 × 每表会话数 ----
+    // 每张表的会话数是**切分**出来的：单表同步时独享方言声明的写并发
+    //（`write_parallelism`，MySQL/PG = 4），同时跑 8 张表时每表 1 路 —— 这样
+    // 「几十张小表」能并行摊掉建连/建表/探测的固定开销，而单张大表仍吃得到多路写。
     let target_kind = Dialect::new(require_record(&state, &tgt.conn).await?.kind());
     let source_kind = Dialect::new(require_record(&state, &src.conn).await?.kind());
     let target_declared = write_parallelism(target_kind.kind).max(1);
@@ -4213,11 +4269,20 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         // 两阶段 upsert 每张表还要一条专属会话做键查询，预算对半分
         (object_budget / 2).max(1)
     };
-    // 对象并发同时受源端和目标端约束。
-    let sync_concurrency = adaptive_concurrency(target_kind.kind, total)
+    // 自适应值：同时受源端与目标端类型、对象总数约束。
+    let adaptive = adaptive_concurrency(target_kind.kind, total)
         .min(adaptive_concurrency(source_kind.kind, total))
         .min(target_object_cap)
         .max(1);
+    // 界面上的「并发表数」优先（夹到 1..=32，且不超过实际对象数）：
+    // 目标端是弱机、或源与目标是同一个实例时，调小它能直接减少双方的连接与 IO 争抢。
+    let requested = body.max_concurrency.unwrap_or(0).min(32);
+    let sync_concurrency = if requested > 0 {
+        requested.min(total.max(1))
+    } else {
+        adaptive
+    };
+    let concurrency_source = if requested > 0 { "（界面指定）" } else { "（自适应）" };
     let reserved_sessions = usize::from(!native_upsert);
     let tgt_workers = (target_declared / sync_concurrency)
         .saturating_sub(reserved_sessions)
@@ -4243,10 +4308,9 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             }
             // 会话预算写进日志：用户能直接看出「这次会开几条连接」，出问题也好对照
             task.log(format!(
-                "会话预算：并发 {sync_concurrency} 张表，每表最多 {} 路写 / {} 片读（整任务上限 = 方言声明值 {}）",
+                "会话预算：并发 {sync_concurrency} 张表{concurrency_source}，每表最多 {} 路写 / {} 片读（单表独享时写路数 = 方言声明值 {target_declared}）",
                 opts.tgt_workers,
                 opts.src_slices,
-                write_parallelism(target_kind.kind)
             ));
             // 目标库不存在时自动创建（默认开，见 ensure_target_db）
             if let Some(msg) = ensure_target_db(&state, &tgt, &opts).await {

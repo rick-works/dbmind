@@ -32,8 +32,10 @@
 //!
 //! - **读**：单页失败退避重试（3 次），仍失败才判该表失败，错误原样上抛；
 //!   读协程 panic 也会被兜成失败信号 —— 不允许把「少读了一部分」当成「读完了」。
-//! - **写**：一条语句失败 → 降级为该语句块逐行重试（坏行单独计失败 + 记样例错误），
+//! - **写**：一条语句失败 → **二分拆批**定位坏行（坏行单独计失败 + 记样例错误），
 //!   好行照常落库；一批里过半失败判系统性问题（连接断/权限/表没了）立即中止。
+//!   二分而不是逐行：2 万行的批里有 1 个坏值时，逐行要 2 万次往返（真机上是分钟级，
+//!   期间唯一的写会话被占住、读侧只能干等），二分只要 log₂(2 万)≈15 层次 ≈ 30 次尝试。
 //! - **取消**：每个页边界检查一次，已写入的部分保留（不回滚）。
 
 pub mod engine;
@@ -44,11 +46,55 @@ pub use engine::run;
 pub use reader::{Cursor, Page, Reader, RowRange};
 pub use writer::Writer;
 
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use crate::api::dialect::Dialect;
 use crate::api::tasks::Task;
 use crate::AppState;
+
+/// 写池的运行态诊断：卡顿日志要说清「谁占着写会话、最近一批多久」。
+///
+/// 为什么放在 `TablePlan` 上而不是当函数参数传：记录方（写池 worker）与报告方
+/// （分发侧的卡顿日志）是两个独立协程，需要同一份共享状态；热路径上只有两次
+/// `AtomicU64` 读写，`Mutex` 只在记失败样例时碰一下，不参与每行处理。
+#[derive(Default)]
+pub struct WriteDiag {
+    /// 已发出、尚未写完的批数
+    pub inflight: AtomicU64,
+    /// 最近一批写入的耗时（毫秒）
+    pub last_write_ms: AtomicU64,
+    /// 最近一批的行数
+    pub last_batch_rows: AtomicU64,
+    /// 最近一条失败样例（二分定位到的坏行错误），卡顿日志里顺手带上
+    pub sample_err: Mutex<Option<String>>,
+}
+
+impl WriteDiag {
+    pub fn note_batch_done(&self, rows: usize, elapsed: std::time::Duration) {
+        self.inflight.fetch_sub(1, Ordering::Relaxed);
+        self.last_batch_rows.store(rows as u64, Ordering::Relaxed);
+        self.last_write_ms
+            .store(elapsed.as_millis().min(u64::MAX as u128) as u64, Ordering::Relaxed);
+    }
+
+    pub fn note_sample_err(&self, msg: &str) {
+        let mut slot = match self.sample_err.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        if slot.is_none() {
+            *slot = Some(msg.chars().take(200).collect());
+        }
+    }
+
+    pub fn sample_err_text(&self) -> Option<String> {
+        match self.sample_err.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        }
+    }
+}
 
 /// trait 方法里用的装箱 Future（不想为一个 `async fn in trait` 引入 `async-trait` 依赖）。
 pub type BF<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
@@ -134,6 +180,8 @@ pub struct TablePlan {
     pub upsert: UpsertMode,
     pub identity_on: bool,
     pub stream: Option<StreamCfg>,
+    /// 写池运行态（在途批数 / 最近批耗时 / 失败样例）：卡顿日志读它
+    pub diag: Arc<WriteDiag>,
 }
 
 /// upsert 怎么落库。

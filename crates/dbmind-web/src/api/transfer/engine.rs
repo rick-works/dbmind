@@ -26,7 +26,7 @@ use crate::api::sync::{key_of, lookup_existing_keys};
 /// 单页失败后的重试次数（退避 150ms / 300ms / 600ms）。
 ///
 /// 只对**读**做重试：读是幂等的，重试没有副作用；写不做整批重试（一条语句可能已经
-/// 落了一半），而是交给写入层的「语句失败 → 逐行降级」兜住。
+/// 落了一半），而是交给写入层的「语句失败 → 二分拆批定位坏行」兜住。
 const READ_RETRY: usize = 3;
 /// 收尾等待上限（与 sync 层一致：给慢批留足时间，避免把还在写的数据判死）
 const PIPE_WAIT: Duration = Duration::from_secs(660);
@@ -42,6 +42,13 @@ const CANCEL_POLL: Duration = Duration::from_millis(300);
 /// 30 秒是经验值：正常批量写入单批远小于它；一旦超过，基本就是锁等待或目标端扛不住，
 /// 这时日志要说清是**哪张表**、读到多少、写到多少 —— 否则用户只能看着「同步中」干等。
 const STALL_WARN: Duration = Duration::from_secs(30);
+
+/// 卡顿日志的退避上限。
+///
+/// 为什么不是每 30 秒一条：8 张表并发、目标端持续跟不上时，每张表每 30 秒一条就是
+/// 每分钟十几条同样的字（真机一次任务 1985 条日志，绝大部分是它），把真正的失败
+/// 样例淹掉了。改为「30 → 60 → 120 → 300 秒」退避，恢复时补一条收尾。
+const STALL_WARN_MAX: Duration = Duration::from_secs(300);
 
 /// 单批写入的**墙钟**上限。
 ///
@@ -86,6 +93,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         let err = write_err.clone();
         let inserted = shared_inserted.clone();
         let task = plan.task.clone();
+        let diag = plan.diag.clone();
         writer_handles.push(tokio::spawn(async move {
             writer.begin(worker).await;
             loop {
@@ -97,6 +105,8 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                 // 锁只包 recv：不同 writer 排队领批，锁内不干活
                 let batch = { rx.lock().await.recv().await };
                 let Some(batch) = batch else { break };
+                // 本批耗时/行数记进诊断：卡顿日志靠它区分「慢」与「死」
+                let write_started = std::time::Instant::now();
                 // 墙钟兜底：驱动层可能永不超时（socketTimeout=0），不能跟着一起等
                 let write_outcome = match tokio::time::timeout(WRITE_CALL_TIMEOUT, writer.write(worker, &batch)).await {
                     Ok(outcome) => outcome,
@@ -108,6 +118,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                         WRITE_CALL_TIMEOUT.as_secs()
                     )),
                 };
+                diag.note_batch_done(batch.len(), write_started.elapsed());
                 match write_outcome {
                     Ok(rows) => {
                         inserted.fetch_add(rows, Ordering::SeqCst);
@@ -277,33 +288,70 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
             // 送进写池。**目标端写不动时这里会长时间阻塞**，期间必须说出来 ——
             // 否则界面只看到「读数据在涨、传输数不动」，日志还一片安静
             //（真机截图：498774 读 / 9 写 / 0 失败，用户只能判「卡住了」）。
-            let mut stuck_since = std::time::Instant::now();
+            //
+            // 报的频率**指数退避**（30→60→120→300 秒，见 STALL_WARN_MAX）：持续卡顿时
+            // 每 30 秒一条会把真正有用的失败样例淹掉；恢复后补一条收尾，不留悬念。
+            let batch_rows = rows.len();
+            let mut waited = Duration::ZERO;
+            let mut warn_after = STALL_WARN;
+            let mut reported = false;
             let delivered = loop {
-                match tokio::time::timeout(STALL_WARN, write_tx.reserve()).await {
+                match tokio::time::timeout(warn_after, write_tx.reserve()).await {
                     Ok(Ok(permit)) => {
+                        plan.diag.inflight.fetch_add(1, Ordering::Relaxed);
                         permit.send(rows);
                         break true;
                     }
                     // 写池已经全部退出（通道关闭）
                     Ok(Err(_)) => break false,
                     Err(_) => {
+                        waited += warn_after;
+                        reported = true;
                         if let Some(task) = &plan.task {
-                            task.log(format!(
-                                "表 {}：已读 {} 行、已写 {} 行，写池 {} 秒没收下新的一批 —— \
-                                 目标端写入被拖住（锁等待 / 慢盘 / 连接数打满），仍在重试",
+                            let inflight = plan.diag.inflight.load(Ordering::Relaxed);
+                            let last_ms = plan.diag.last_write_ms.load(Ordering::Relaxed);
+                            let last_rows = plan.diag.last_batch_rows.load(Ordering::Relaxed);
+                            let mut line = format!(
+                                "表 {}：已读 {} 行、已写 {} 行；写池已等待 {} 秒仍收不下这 {} 行的一批\
+                                 （在途 {} 批，最近一批 {} 行用了 {:.1} 秒）—— \
+                                 目标端写入被拖住（锁等待 / 慢盘 / 连接数打满 / 坏行二分定位），仍在等待",
                                 plan.table,
                                 consumed,
                                 shared_inserted.load(Ordering::Relaxed),
-                                stuck_since.elapsed().as_secs()
+                                waited.as_secs(),
+                                batch_rows,
+                                inflight,
+                                last_rows,
+                                last_ms as f64 / 1000.0,
+                            );
+                            // 失败样例顺手带上：用户不必再去翻前面的日志猜「到底哪行坏了」
+                            if let Some(sample) = plan.diag.sample_err_text() {
+                                line.push_str(&format!("；最近失败样例：{sample}"));
+                            }
+                            task.log(line);
+                            task.set_phase(format!(
+                                "表 {}：等待目标端写入（已等 {} 秒）",
+                                plan.table,
+                                waited.as_secs()
                             ));
-                            task.set_phase(format!("表 {}：等待目标端写入", plan.table));
                         }
-                        stuck_since = std::time::Instant::now();
+                        warn_after = (warn_after * 2).min(STALL_WARN_MAX);
                     }
                 }
             };
             if !delivered {
                 break;
+            }
+            // 之前报过卡顿：恢复时说明一声，否则用户只看到「等待」却不知道已经过去了
+            if reported {
+                if let Some(task) = &plan.task {
+                    task.log(format!(
+                        "表 {}：目标端恢复接收写入（本批等待了 {} 秒）",
+                        plan.table,
+                        waited.as_secs()
+                    ));
+                    task.set_phase(format!("表 {}：传输数据", plan.table));
+                }
             }
         }
         if limit_hit {

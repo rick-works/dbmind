@@ -7,17 +7,19 @@
 //!
 //! 落库的三条底线（改造前后一致，don't regress）：
 //! - **批量**：按目标方言的行数/表达式数/字节上限切成大子批，不是一行一条；
-//! - **部分成功**：一条语句失败 → 降级逐行重试，坏行单独计失败并记样例错误，
-//!   好行照常落库（对齐 DataX 的 errorLimit 思路：脏数据可见，不静默吞掉）；
+//! - **部分成功**：一条语句失败 → 二分拆批定位坏行（比逐行快 log₂N 倍：
+//!   2 万行的批里 1 个坏值，逐行要 2 万次往返，二分约 30 次），坏行单独计失败
+//!   并记样例错误，好行照常落库（对齐 DataX 的 errorLimit 思路：脏数据可见，不静默吞掉）；
 //! - **事务**：每路 writer 自己开/提交（`internal:sync-w{i}` 是一条独立连接），
 //!   不跨连接拼事务 —— 改造前那层「在 A 连接上 set autocommit=0、在 B 连接上写」
 //!   的事务等于没开（真机踩过）。
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use dbmind_core::CellValue;
 
-use super::{BF, StreamCfg, TablePlan, UpsertMode};
+use super::{BF, StreamCfg, TablePlan, UpsertMode, WriteDiag};
 use crate::api::dialect::Dialect;
 use crate::api::sync::{
     build_update, doris_stream_load, estimate_row_bytes, json_row_bytes, rows_need_json_fallback,
@@ -75,6 +77,8 @@ pub struct SqlWriter {
     stream: Option<StreamCfg>,
     stream_failed: AtomicBool,
     workers: usize,
+    /// 写池诊断（二分定位到的坏行样例写这里，卡顿日志会读）
+    diag: Arc<WriteDiag>,
 }
 
 impl SqlWriter {
@@ -112,6 +116,7 @@ impl SqlWriter {
             stream: plan.stream.clone(),
             stream_failed: AtomicBool::new(false),
             workers: workers.max(1),
+            diag: plan.diag.clone(),
         }
     }
 
@@ -312,6 +317,7 @@ impl Writer for SqlWriter {
                         self.task.as_ref(),
                         &self.table,
                         in_transaction,
+                        &self.diag,
                     )
                     .await?;
                     return Ok(loaded_total + rest);
@@ -330,6 +336,7 @@ impl Writer for SqlWriter {
                 self.task.as_ref(),
                 &self.table,
                 in_transaction,
+                &self.diag,
             )
             .await
         })
