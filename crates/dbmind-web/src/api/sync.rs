@@ -3178,7 +3178,12 @@ async fn sync_table_inner(
         .collect();
 
     if let Some(task) = task {
-        task.check_canceled().ok();
+        // 取消必须在**每张表开始搬数据之前**生效。以前这里是 `check_canceled().ok()` ——
+        // 结果被丢掉，点了「停止」之后所有已经拿到并发许可的表仍然会把整表搬完
+        //（真机：点了停止，进度还在涨，重启界面看它还在「同步中」）。
+        if let Err(reason) = task.check_canceled() {
+            return ObjResult::skipped(ty, table, reason);
+        }
         task.set_phase(format!("读取源表 {table} 数据"));
     }
 
@@ -3462,6 +3467,13 @@ async fn sync_table_inner(
                 target_kind.kind.key() == "sqlserver",
                 &target_name,
             );
+            // 直拷是一条 `insert … select` 大语句，发出去就**没法从中间打断**（只能等它
+            // 自己跑完或超时），所以发之前先看一眼取消标志：点了停止就别再开始了。
+            if let Some(task) = task {
+                if let Err(reason) = task.check_canceled() {
+                    return ObjResult::skipped(ty, table, reason);
+                }
+            }
             // 防御：先结束目标会话上可能残留的旧事务 —— 池化会话是粘性的，此前某次
             // 同步若没走到 commit，autocommit=0 的旧事务会一直开着，REPEATABLE READ
             // 的快照停在很久以前（直拷/回查全部看到旧世界，真机抓到过 src_visible=0）

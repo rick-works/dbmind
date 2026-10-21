@@ -35,8 +35,19 @@ pub const TASK_TTL: Duration = Duration::from_secs(30 * 60);
 /// 每个任务最多保留多少行日志（界面上就是个滚动文本框，攒太多只是占内存）。
 const MAX_LOGS: usize = 200;
 
-/// 卡死看门狗的**心跳间隔**（见 `TaskRegistry::spawn`）。
-const STALL_TICK: Duration = Duration::from_secs(30);
+/// 看门狗的**心跳间隔**（见 `TaskRegistry::spawn`）。
+///
+/// 2 秒一跳：既要判「30 分钟毫无进展」，也要判「点了停止、10 秒还没收尾」。
+/// 后者是按秒计的，心跳太粗（原来 30 秒）会让「停止」最多晚半分钟才生效。
+const WATCH_TICK: Duration = Duration::from_secs(2);
+
+/// 点「停止」之后给它多久自己收尾（见看门狗）。
+///
+/// 取消是**协作式**的：工作体在分页/分批之间查标志位，正常一两秒内就停。超过这个宽限
+/// 还在 running，说明它卡在某个 await 上（最典型：一次再也回不来的数据库调用）——
+/// 那就替它收口：落 canceled、写清原因、abort 工作体。否则界面会一直显示「同步中」，
+/// 顶栏角标挂着 1，连新任务都发不出去（真机反馈：「任务已经停止一遍了，还是停不掉」）。
+const CANCEL_GRACE: Duration = Duration::from_secs(10);
 
 /// 多久**毫无进展**才判定卡死 —— 这是**最后一道兜底**，不是主机制。
 ///
@@ -606,14 +617,36 @@ impl TaskRegistry {
             let stamp = |t: &Task| (t.done(), t.rows_read(), t.rows_written(), t.logs_seq());
             let mut last = stamp(&watch);
             let mut idle = Duration::ZERO;
+            // 取消信号落下之后又过了多久还没收尾（见 CANCEL_GRACE）
+            let mut cancel_idle = Duration::ZERO;
             loop {
-                tokio::time::sleep(STALL_TICK).await;
+                tokio::time::sleep(WATCH_TICK).await;
                 if watch.status() != TaskStatus::Running {
                     return;
                 }
+                // ---- ① 「停止」的宽限：协作式取消没能在 10 秒内收尾就强制收口 ----
+                // 只改状态不 abort 就是「假结束」（后台协程还挂着、连接可能还占着），
+                // 所以这里和下面的卡死兜底一样：落终态 + 中止工作体。
+                if watch.is_canceled() {
+                    cancel_idle += WATCH_TICK;
+                    if cancel_idle >= CANCEL_GRACE {
+                        let seconds = CANCEL_GRACE.as_secs();
+                        watch.log(format!(
+                            "已停止（点了停止后 {seconds} 秒仍未收尾：工作线程卡在某个数据库调用上，\
+                             已强制结束；已写入的部分保留、不回滚）"
+                        ));
+                        watch.set_status(TaskStatus::Canceled);
+                        watch.set_message("已停止（强制结束，已写入的部分保留）");
+                        persist_task(&watch);
+                        handle.abort();
+                        return;
+                    }
+                } else {
+                    cancel_idle = Duration::ZERO;
+                }
                 let now = stamp(&watch);
                 if now == last {
-                    idle += STALL_TICK;
+                    idle += WATCH_TICK;
                 } else {
                     last = now;
                     idle = Duration::ZERO;

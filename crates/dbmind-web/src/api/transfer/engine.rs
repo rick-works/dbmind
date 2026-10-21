@@ -33,6 +33,9 @@ const PIPE_WAIT: Duration = Duration::from_secs(660);
 /// 进度状态最短刷新间隔：写一页更新一次就够，**不必每行**都更新
 /// （20 万行就是 20 万次加锁 + 20 万次前端快照变化，纯属白烧 CPU）。
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(300);
+/// 分发循环多久回来看一次「是不是被取消了」（见下面的 `tokio::time::timeout`）。
+/// 太短是空转，太长则「停止」感知慢；300ms 与进度刷新同量级。
+const CANCEL_POLL: Duration = Duration::from_millis(300);
 
 /// 跑完一张表的数据搬运。`Err` = 该表失败（已写入的行保留）。
 pub async fn run(plan: TablePlan) -> Result<Stats, String> {
@@ -67,9 +70,15 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         let writer = writer.clone();
         let err = write_err.clone();
         let inserted = shared_inserted.clone();
+        let task = plan.task.clone();
         writer_handles.push(tokio::spawn(async move {
             writer.begin(worker).await;
             loop {
+                // 用户点了「停止」：不再领新批。已经发出去的那一批会写完（写一半停不了），
+                // 但不该再继续往下灌 —— 否则一次大表同步要把手上几十批写完才肯停。
+                if task.as_ref().map(|t| t.is_canceled()).unwrap_or(false) {
+                    break;
+                }
                 // 锁只包 recv：不同 writer 排队领批，锁内不干活
                 let batch = { rx.lock().await.recv().await };
                 let Some(batch) = batch else { break };
@@ -155,12 +164,20 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     let mut limit_hit = false;
     let mut last_report = std::time::Instant::now();
     let mut failure: Option<String> = None;
-    while let Some(message) = page_rx.recv().await {
-        if write_err.lock().await.is_some() {
-            break;
-        }
+    loop {
+        // 取消在这里也查：**不能只在收到页之后查**。读协程卡在网络上时页面永远不来，
+        // `recv()` 就一直挂着 —— 那样「停止」要等看门狗的宽限才生效（真机：
+        // 点了停止任务还挂在「同步中」，角标一直计 1）。
         if plan.task.as_ref().map(|t| t.is_canceled()).unwrap_or(false) {
             canceled = true;
+            break;
+        }
+        let message = match tokio::time::timeout(CANCEL_POLL, page_rx.recv()).await {
+            Ok(Some(message)) => message,
+            Ok(None) => break,   // 读协程全部结束（正常收尾）
+            Err(_) => continue,  // 这一小段没有新页：回去再查一次取消
+        };
+        if write_err.lock().await.is_some() {
             break;
         }
         let rows = match message {
@@ -262,10 +279,22 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
             }
         }
     }
-    // 读协程 panic（驱动异常/OOM）不能被当成「读完了」：补一条失败
+    // 读协程 panic（驱动异常/OOM）不能被当成「读完了」：补一条失败。
+    // 同样要有截止时间：读协程若卡在一次再也回不来的查询上，`await` 会永远等下去 ——
+    // 表不结束、任务就一直 running（真机「停不掉」的一个来源）。
     for handle in reader_handles {
-        if handle.await.is_err() && failure.is_none() && !canceled {
-            failure = Some("读取侧协程异常终止（驱动异常或内存不足），本次同步数据不完整".to_string());
+        match tokio::time::timeout(PIPE_WAIT, handle).await {
+            Ok(Ok(())) => {}
+            Ok(Err(_)) => {
+                if failure.is_none() && !canceled {
+                    failure = Some("读取侧协程异常终止（驱动异常或内存不足），本次同步数据不完整".to_string());
+                }
+            }
+            Err(_) => {
+                if failure.is_none() && !canceled {
+                    failure = Some("读取协程超时未结束（连接可能已断开），本次同步数据不完整".to_string());
+                }
+            }
         }
     }
 
