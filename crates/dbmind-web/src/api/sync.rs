@@ -1994,6 +1994,34 @@ fn savepoint_sql(kind: &str, name: &str) -> Option<(String, String, Option<Strin
     }
 }
 
+/// 错误是不是「这条连接已经不可用」这一类（区别于脏数据）。
+///
+/// 为什么必须单独判：写入失败后本模块会**退化成逐行重试**（对齐 DataX 的脏数据降级：
+/// 一行烂数据不该炸掉整批）。但连接断了的时候，每一行都要各自等一次驱动超时 ——
+/// 真机实测（SSH 隧道 + 链路 PMTU 黑洞）：每条 3MB 的 INSERT 在 19 秒后报
+/// `Communications link failure`，9 千行逐行重试就是 9 千 × 19 秒 ≈ 48 小时，
+/// 界面上只有「读取数一直在涨、传输数不动、失败数还是 0」——
+/// 也就是用户说的「卡住」。这类错误必须**立刻上抛**，让这张表失败、其它表继续。
+fn is_link_level_error(err: &XError) -> bool {
+    if err.code.as_deref() == Some("DBMIND-CONN-0003") {
+        return true;
+    }
+    let text = err.message.to_ascii_lowercase();
+    [
+        "communications link failure",
+        "连接已断开",
+        "connection reset",
+        "broken pipe",
+        "socket closed",
+        "connection is closed",
+        "no operations allowed after connection closed",
+        // 宿主确认「无法确认回滚」时连接已经废了，逐行重试没有意义
+        "无法确认回滚",
+    ]
+    .iter()
+    .any(|key| text.contains(key))
+}
+
 /// 把一批行按「行数+字节拆分」写成 INSERT 语句并逐条发送（**部分成功语义**）。
 ///
 /// **脏数据降级**（对齐 DataX）：某条语句失败时**降级为该语句块逐行重试** ——
@@ -2103,7 +2131,25 @@ pub(crate) async fn write_insert_rows(
                     }
                 }
             }
-            Err(_batch_err) => {
+            Err(batch_err) => {
+                // 连接级错误**不能**退化成逐行重试（见 is_link_level_error）：
+                // 断了的连接上每一行都要各等一次驱动超时，表现就是「一行不写也不报错」。
+                if is_link_level_error(&batch_err) {
+                    if let Some(task) = task {
+                        let left = rows.len() as u64 - ok_rows;
+                        if left > 0 {
+                            task.add_rows_failed(left);
+                        }
+                        task.log(format!(
+                            "表 {table}：写入连接已断（{}），已停止重试；本表剩余 {left} 行未写入",
+                            batch_err.message
+                        ));
+                    }
+                    return Err(format!(
+                        "写入连接已断：{}（本批 {n_rows} 行，未逐行重试）",
+                        batch_err.message
+                    ));
+                }
                 if let Some((_, rollback, _)) = sp.as_ref() {
                     if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
                         return Err(format!("回滚批处理保存点失败：{}", err.message));
@@ -2146,6 +2192,20 @@ pub(crate) async fn write_insert_rows(
                             }
                         }
                         Err(row_err) => {
+                            // 逐行重试里同样是连接级错误就直接收摊：继续一行一行磨，
+                            // 只会把「一秒能报的错」变成几小时的「卡住」
+                            if is_link_level_error(&row_err) {
+                                if let Some(task) = task {
+                                    task.log(format!(
+                                        "表 {table}：逐行重试时连接已断（{}），停止本表",
+                                        row_err.message
+                                    ));
+                                }
+                                return Err(format!(
+                                    "写入连接已断：{}（逐行重试中止）",
+                                    row_err.message
+                                ));
+                            }
                             if let Some((_, rollback, _)) = row_sp.as_ref() {
                                 if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
                                     return Err(format!("回滚行处理保存点失败：{}", err.message));
@@ -2169,7 +2229,7 @@ pub(crate) async fn write_insert_rows(
                     if let Some(task) = task {
                         task.add_rows_failed(rows.len() as u64 - ok_rows);
                     }
-                    return Err(sample_err.unwrap_or_else(|| _batch_err.message));
+                    return Err(sample_err.unwrap_or_else(|| batch_err.message));
                 }
             }
         }
@@ -3559,7 +3619,7 @@ async fn sync_table_inner(
         // 这个代价用户看不见，只会觉得「越大越慢」，所以明说一句怎么解。
         if let Some(task) = task {
             task.log(format!(
-                "表 {table}：源表没有主键/唯一键，分页只能用 OFFSET（每页都要重扫前面所有行），大表会越来越慢；建议在同步配置里指定主键列"
+                "表 {table}：无主键/唯一键，改用 OFFSET 分页（越往后越慢），建议指定主键列"
             ));
         }
     }

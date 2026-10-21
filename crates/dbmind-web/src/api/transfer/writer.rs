@@ -145,20 +145,39 @@ impl Writer for SqlWriter {
 
     fn begin<'a>(&'a self, worker: usize) -> BF<'a, ()> {
         Box::pin(async move {
+            let session = self.session(worker);
+            // 目标端写会话的**锁等待上限**：MySQL 的元数据锁（MDL）默认能等一年
+            //（`lock_wait_timeout` = 31536000），行锁默认 50 秒。真机上遇到「同步卡住、
+            // 一行都不写、也一个错误都没有」——就是 INSERT 排在某个没释放的锁后面，
+            // 而 MDL 那条路没有超时。压到 60 秒后同样场景会**报错退出**（Lock wait timeout），
+            // 界面至少能看到是哪张表被什么挡住了，而不是永远显示「同步中」。
+            if matches!(self.kind.kind.key(), "mysql" | "mariadb") {
+                let _ = run_target_in(
+                    &self.state,
+                    &self.tgt_target,
+                    "set session lock_wait_timeout = 60, session innodb_lock_wait_timeout = 60",
+                    &session,
+                )
+                .await;
+            }
             let Some((begin, _, _)) = self.txn else {
                 return;
             };
-            let session = self.session(worker);
             match run_target_in(&self.state, &self.tgt_target, begin, &session).await {
                 Ok(_) => {
                     if let Some(open) = self.txn_open.get(worker) {
                         open.store(true, Ordering::SeqCst);
                     }
                 }
-                Err(_) => {
-                    // 开不了事务就退回 autocommit 逐条写 —— 慢，但功能不缺
+                Err(err) => {
+                    // 开不了事务就退回 autocommit 逐条写 —— 慢，但功能不缺。
+                    // 错误要说出来：退回逐条提交会让每条 INSERT 各等一次提交
+                    // （目标端开了 semi-sync 时每条都要等 slave ACK），吞吐差一个量级。
                     if let Some(task) = &self.task {
-                        task.log(format!("表 {}：开启事务失败，退回逐条提交", self.table));
+                        task.log(format!(
+                            "表 {}：开启事务失败（{}），退回逐条提交（大表会明显变慢）",
+                            self.table, err.message
+                        ));
                     }
                 }
             }

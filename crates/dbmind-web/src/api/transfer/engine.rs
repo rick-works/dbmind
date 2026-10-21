@@ -37,6 +37,21 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(300);
 /// 太短是空转，太长则「停止」感知慢；300ms 与进度刷新同量级。
 const CANCEL_POLL: Duration = Duration::from_millis(300);
 
+/// 写池多久没收下一批就报一次「目标端被拖住」。
+///
+/// 30 秒是经验值：正常批量写入单批远小于它；一旦超过，基本就是锁等待或目标端扛不住，
+/// 这时日志要说清是**哪张表**、读到多少、写到多少 —— 否则用户只能看着「同步中」干等。
+const STALL_WARN: Duration = Duration::from_secs(30);
+
+/// 单批写入的**墙钟**上限。
+///
+/// 为什么必须有：连接的 `socketTimeout=0`（真机上好几条 RDS 连接的高级参数里就是这么写的）
+/// 是**永不超时** —— 目标端把连接半开（RDS 常见的 wait_timeout 踢连接 / 中间设备静默丢包）时，
+/// 驱动会一直等一个永远不来的响应：`show processlist` 里什么都看不到、也不报错，
+/// 只有整条同步「卡住、一行都不写、失败数还是 0」（真机 400 张表跑到 4/400，写出 1536 行）。
+/// 这里用墙钟兜底，把「永远等」变成「这张表失败、其它表继续」，并在错误里点名 socketTimeout。
+const WRITE_CALL_TIMEOUT: Duration = Duration::from_secs(300);
+
 /// 跑完一张表的数据搬运。`Err` = 该表失败（已写入的行保留）。
 pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     let mut reader = reader_for(&plan);
@@ -82,7 +97,18 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                 // 锁只包 recv：不同 writer 排队领批，锁内不干活
                 let batch = { rx.lock().await.recv().await };
                 let Some(batch) = batch else { break };
-                match writer.write(worker, &batch).await {
+                // 墙钟兜底：驱动层可能永不超时（socketTimeout=0），不能跟着一起等
+                let write_outcome = match tokio::time::timeout(WRITE_CALL_TIMEOUT, writer.write(worker, &batch)).await {
+                    Ok(outcome) => outcome,
+                    Err(_) => Err(format!(
+                        "单批 {} 行写入 {} 秒仍未返回：目标端连接可能已经半开（RDS 踢连接 / 链路静默丢包），\
+                         或该连接的 socketTimeout=0（永不超时）。请在「编辑数据源 → 高级参数」里把 \
+                         socketTimeout 设为 600、writeTimeout 设为 300 后重试",
+                        batch.len(),
+                        WRITE_CALL_TIMEOUT.as_secs()
+                    )),
+                };
+                match write_outcome {
                     Ok(rows) => {
                         inserted.fetch_add(rows, Ordering::SeqCst);
                     }
@@ -217,6 +243,8 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         }
         consumed += rows.len() as u64;
 
+        // 一批要送进写池
+        let mut pending: Option<Vec<Vec<CellValue>>> = None;
         if plan.upsert == UpsertMode::TwoPhase && !plan.key_indexes.is_empty() {
             // 两阶段 upsert：已有键 → 更新（攒批、串行），其余 → 插入池（并发）。
             // 原生 upsert 不走这里 —— 目标端一条语句自己判插入还是更新，行直接进写池。
@@ -239,11 +267,44 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                     }
                 }
             }
-            if !fresh.is_empty() && write_tx.send(fresh).await.is_err() {
+            if !fresh.is_empty() {
+                pending = Some(fresh);
+            }
+        } else {
+            pending = Some(rows);
+        }
+        if let Some(rows) = pending {
+            // 送进写池。**目标端写不动时这里会长时间阻塞**，期间必须说出来 ——
+            // 否则界面只看到「读数据在涨、传输数不动」，日志还一片安静
+            //（真机截图：498774 读 / 9 写 / 0 失败，用户只能判「卡住了」）。
+            let mut stuck_since = std::time::Instant::now();
+            let delivered = loop {
+                match tokio::time::timeout(STALL_WARN, write_tx.reserve()).await {
+                    Ok(Ok(permit)) => {
+                        permit.send(rows);
+                        break true;
+                    }
+                    // 写池已经全部退出（通道关闭）
+                    Ok(Err(_)) => break false,
+                    Err(_) => {
+                        if let Some(task) = &plan.task {
+                            task.log(format!(
+                                "表 {}：已读 {} 行、已写 {} 行，写池 {} 秒没收下新的一批 —— \
+                                 目标端写入被拖住（锁等待 / 慢盘 / 连接数打满），仍在重试",
+                                plan.table,
+                                consumed,
+                                shared_inserted.load(Ordering::Relaxed),
+                                stuck_since.elapsed().as_secs()
+                            ));
+                            task.set_phase(format!("表 {}：等待目标端写入", plan.table));
+                        }
+                        stuck_since = std::time::Instant::now();
+                    }
+                }
+            };
+            if !delivered {
                 break;
             }
-        } else if write_tx.send(rows).await.is_err() {
-            break;
         }
         if limit_hit {
             break;
