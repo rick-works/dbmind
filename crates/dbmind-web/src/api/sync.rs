@@ -1114,6 +1114,42 @@ fn doris_number(v: Option<&serde_json::Value>) -> u64 {
     }
 }
 
+/// URL 里的 `host:port` —— 日志里只报这一小段，不贴整条 URL（一条日志塞两个完整
+/// URL 会把真正的原因挤到屏幕外）。
+fn url_authority(url: &str) -> String {
+    let rest = url.strip_prefix("http://").unwrap_or(url);
+    match rest.find('/') {
+        Some(index) => rest[..index].to_string(),
+        None => rest.to_string(),
+    }
+}
+
+/// 把 Stream Load 的 URL 换成「FE 主机 + 原端口原路径」。
+///
+/// 为什么需要：BE 向 FE 注册的地址经常是**容器内网 IP**（`172.29.0.14`）或 `127.0.0.1`，
+/// 从客户端看这两个都到不了（一个不可路由、一个是自己）。同端口换到 FE 主机往往就能通
+/// （docker 把 8040 映射到宿主时），所以在传输层失败后值得再试一次。
+/// 已经指向 FE 主机、或 URL 解析不出 authority 时返回 None（不再重试，避免死循环）。
+fn same_port_on_fe_host(url: &str, fe_host: &str) -> Option<String> {
+    let rest = url.strip_prefix("http://")?;
+    let (authority, path) = match rest.find('/') {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, ""),
+    };
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, Some(port)),
+        None => (authority, None),
+    };
+    let fe_host = fe_host.trim();
+    if fe_host.is_empty() || host.eq_ignore_ascii_case(fe_host) {
+        return None;
+    }
+    Some(match port {
+        Some(port) => format!("http://{fe_host}:{port}{path}"),
+        None => format!("http://{fe_host}{path}"),
+    })
+}
+
 /// Doris Stream Load 推送一批行。返回**实际载入的行数**（`NumberLoadedRows`）——
 /// 类型不匹配等被 BE 过滤的行不计入，由调用方按脏数据记账（对齐 DataX 的 errorLimit 思路）。
 pub(crate) async fn doris_stream_load(
@@ -1172,13 +1208,31 @@ pub(crate) async fn doris_stream_load(
             .redirects(0)
             .timeout(std::time::Duration::from_secs(600))
             .build();
+        // 入口候选：**有 BE 端口就只打 BE**。
+        //
+        // 以前 BE 失败还会再打一次 FE，实际上帮不上忙：Doris 的 FE 只回 307 把客户端重定向到
+        // 同一个 BE（`enable_stream_load_redirect` 默认开），而 FE 还要求请求带
+        // `Expect: 100-continue`，不带就直接回 `{"status":"FAILED","msg":"There is no
+        // 100-continue header"}`；带上则 ureq 2.x 处理不了 1xx 中间响应（会把 `100 Continue`
+        // 当终站响应）。于是那一跳要么白等一个网络超时、要么只换来一句看不懂的报错。
+        // 只有在**拿不到 BE 端口**时才退回 FE（此时可能配了 FE 代理转发）。
         let mut starts: Vec<String> = Vec::new();
         if be_port > 0 {
             starts.push(format!("http://{}:{}/api/{}/{}/_stream_load", host_owned, be_port, db_owned, tbl_owned));
+        } else {
+            starts.push(fe_url.clone());
         }
-        starts.push(fe_url.clone());
+        // 传输层失败的具体原因（连接被拒 / 超时 / DNS）—— 最终错误里必须带上：只回一句
+        // 「不可达」用户既不知道连的哪个端口，也不知道为什么（真机反馈「报错」但无从下手）。
+        // 逐个入口记下失败原因（BE 直连 / FE 重定向），最后一起报 —— 只报「最后一个」
+        // 会把更有信息量的那条（例如 FE 的 JSON 报错）丢掉
+        let mut errors: Vec<String> = Vec::new();
         for start in starts {
             let mut url = start;
+            // 每个入口只换一次主机：BE 注册的地址常常是**容器内网 IP**（如 172.29.0.14），
+            // 客户端根本到不了 —— 这时用 FE 的主机名 + 同一端口再试一次（docker 把 8040
+            // 映射出来就能通）；仍然不通才认定这个入口不可用。
+            let mut host_swapped = false;
             for _hop in 0..5 {
                 let hop_t0 = std::time::Instant::now();
                 tracing::info!(url = %url, bytes = body.len(), "Stream Load 发起请求");
@@ -1204,6 +1258,27 @@ pub(crate) async fn doris_stream_load(
                     // 传输层失败（连不上/连接被断）：换下一个候选入口
                     Err(e) => {
                         tracing::warn!(url = %url, ms = hop_t0.elapsed().as_millis() as u64, error = %e, "Stream Load 传输失败");
+                        // ureq 的 Display 把完整 URL 也带上了（`http://…: Connection Failed: …`），
+                        // 这里只留原因本身，避免一条日志里贴两遍 URL
+                        let reason = {
+                            let text = e.to_string();
+                            text.strip_prefix(url.as_str())
+                                .map(|rest| rest.trim_start_matches([':', ' ']).to_string())
+                                .unwrap_or(text)
+                                .chars()
+                                .take(160)
+                                .collect::<String>()
+                        };
+                        errors.push(format!("{} 连接失败（{reason}）", url_authority(&url)));
+                        // BE 宣称的是内网/容器地址时，换 FE 主机 + 同一端口重试一次
+                        if !host_swapped {
+                            if let Some(alt) = same_port_on_fe_host(&url, &host_owned) {
+                                tracing::info!(from = %url, to = %alt, "Stream Load 换 FE 主机重试");
+                                host_swapped = true;
+                                url = alt;
+                                continue;
+                            }
+                        }
                         break;
                     }
                 };
@@ -1221,24 +1296,48 @@ pub(crate) async fn doris_stream_load(
                 // 用 chars 截前缀：直接按字节切片会把多字节中文切在中间（panic）
                 let head: String = text.chars().take(500).collect();
                 let v: Option<Value> = serde_json::from_str(&text).ok();
+                // **BE 与 FE 的 JSON 键大小写不同**：BE 回 `{"Status":"Success","Message":…}`，
+                // FE 回 `{"status":"FAILED","msg":"There is no 100-continue header"}`。
+                // 只认大写那套的话，FE 的错误会被当成「响应不是 JSON」整段贴进日志（真机就是
+                // 一大串 `{"status":"FAILED",...}`），用户看不出这是一句人能读懂的原因。
+                let field = |v: &Value, name: &str| -> Option<String> {
+                    v.get(name)
+                        .or_else(|| v.get(&name.to_ascii_lowercase()))
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                };
                 match v {
-                    Some(v) if v.get("Status").and_then(Value::as_str) == Some("Success") => {
+                    Some(v) if field(&v, "Status").as_deref() == Some("Success") => {
                         // 脏数据记账：类型不匹配等被 BE 过滤的行不算成功载入 ——
                         // 返回实际载入行数，调用方把差额计入失败（对齐 DataX 的 errorLimit 思路）
-                        let loaded = doris_number(v.get("NumberLoadedRows"));
+                        let loaded = doris_number(v.get("NumberLoadedRows").or_else(|| v.get("numberLoadedRows")));
                         return Ok(loaded);
                     }
                     Some(v) => {
-                        let msg_head: String = v.get("Message").and_then(Value::as_str).unwrap_or(&head).chars().take(500).collect();
+                        let msg_head: String = field(&v, "Message")
+                            .unwrap_or_else(|| head.clone())
+                            .chars()
+                            .take(300)
+                            .collect();
+                        // FE 的「There is no 100-continue header」= FE 只做 307 转发，且要求
+                        // 客户端带 Expect 头。翻译成人话，否则用户完全不知道这是什么。
+                        let msg_head = if msg_head.to_ascii_lowercase().contains("100-continue") {
+                            format!(
+                                "{msg_head}（FE 只做 307 转发、要求带 Expect 头；\
+                                 这条链路的瓶颈其实是 BE 的 HTTP 端口能不能直连，见下面的提示）"
+                            )
+                        } else {
+                            msg_head
+                        };
                         return Err(dbmind_core::DbMindError::new(
                             dbmind_core::ErrorCode::QueryFailed,
-                            format!("Stream Load 失败：{msg_head}"),
+                            format!("Stream Load 失败（{}）：{msg_head}", url_authority(&url)),
                         ))
                     }
                     None => {
                         return Err(dbmind_core::DbMindError::new(
                             dbmind_core::ErrorCode::QueryFailed,
-                            format!("Stream Load 响应不是 JSON（content-type={ctype}）：{head}"),
+                            format!("Stream Load 响应不是 JSON（{}，content-type={ctype}）：{head}", url_authority(&url)),
                         ))
                     }
                 }
@@ -1246,11 +1345,25 @@ pub(crate) async fn doris_stream_load(
         }
         Err(dbmind_core::DbMindError::new(
             dbmind_core::ErrorCode::QueryFailed,
-            "Stream Load 所有入口均不可达（BE 直连与 FE 重定向都失败）".to_string(),
+            format!(
+                "Stream Load 入口都不可用：{}。\
+                 常见原因：Doris 跑在 Docker / 防火墙后面，只映射了 MySQL 协议端口（如 9030），\
+                 BE 的 HTTP 端口（8040）没有映射 —— 这种部署下 Stream Load 用不了，\
+                 数据会自动改走 INSERT 管道（不影响正确性，只是导入慢一些）；\
+                 想让导入快起来，把 BE 的 http 端口（show backends 的 HttpPort）也映射出来即可",
+                if errors.is_empty() { "没有拿到具体错误".to_string() } else { errors.join("；") }
+            ),
         ))
     })
     .await
-    .map_err(|e| format!("工作线程异常：{:?}", e))
+    .map_err(|e| {
+        let detail = e.detail.clone().unwrap_or_default();
+        if detail.trim().is_empty() {
+            e.message
+        } else {
+            format!("{}（{detail}）", e.message)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -3225,7 +3338,10 @@ async fn sync_table_inner(
     // 直推 FE，绕过 MySQL 协议 1000~2000 行/批的吞吐瓶颈；失败自动回退 INSERT 管道。
     let use_stream = target_kind.kind.key() == "doris"
         && effective_mode != DataMode::Upsert
-        && tgt_record.is_some();
+        && tgt_record.is_some()
+        // 本任务里已经判定 Stream Load 不可用（见 Task::stream_unavailable）：后面的表
+        // 连 `show backends` 都不必再查，直接走 INSERT 管道
+        && !task.map(|task| task.stream_unavailable()).unwrap_or(false);
     // Stream Load 单请求 5 万行（JSON 体积 ≈ 15MB，FE 无语句大小限制）
     let (stream_host, stream_port, stream_user, stream_pass) = tgt_record
         .as_ref()

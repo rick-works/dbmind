@@ -170,6 +170,13 @@ pub struct Task {
     /// 不再由前端拿登记时刻 + 运行时长去推（推算链路任何一环偏差都会显示错，真机踩过）
     started_wall: u64,
     finished_wall: Mutex<Option<u64>>,
+    /// Doris Stream Load 快通道在**整条任务**内不可用（端口没映射 / BE 不通）。
+    ///
+    /// 为什么挂在任务上而不是每张表各自记：每个写会话一份状态的话，一张表有 4 路写就会
+    /// 各试一次、各写一条日志；几十张表累计就是几十条「Stream Load 失败」的红色噪音，
+    /// 而根因往往只有一个（Doris 只映射了 9030）。第一个失败就把整条任务关掉，后面
+    /// 的表直接走 INSERT 管道，不再碰 HTTP。
+    stream_unavailable: AtomicBool,
 }
 
 impl Task {
@@ -198,6 +205,7 @@ impl Task {
             started_wall: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| d.as_millis() as u64).unwrap_or(0),
             finished_wall: Mutex::new(None),
+            stream_unavailable: AtomicBool::new(false),
         }
     }
 
@@ -254,6 +262,7 @@ impl Task {
             finished_elapsed: Mutex::new(Some(num("elapsedMs"))),
             started_wall: num("startedAtWall"),
             finished_wall: Mutex::new(Some(num("finishedAtWall"))),
+            stream_unavailable: AtomicBool::new(false),
         })
     }
 
@@ -353,6 +362,19 @@ impl Task {
     pub fn add_rows_read(&self, n: u64) { *lock(&self.rows_read) += n; }
     pub fn add_rows_written(&self, n: u64) { *lock(&self.rows_written) += n; }
     pub fn add_rows_failed(&self, n: u64) { *lock(&self.rows_failed) += n; }
+
+    /// Stream Load 快通道在这条任务里已经判定不可用（见字段注释）。
+    pub fn stream_unavailable(&self) -> bool {
+        self.stream_unavailable.load(Ordering::Relaxed)
+    }
+
+    /// 标记 Stream Load 快通道不可用：后续所有表直接走 INSERT，不再发 HTTP 请求。
+    ///
+    /// 返回 true 表示**是这次调用把它关掉的**（即第一个失败的表）—— 只有它需要写日志，
+    /// 并发的其它表已经排在这一步后面，不再重复刷同一条「不可用」。
+    pub fn disable_stream_load(&self) -> bool {
+        !self.stream_unavailable.swap(true, Ordering::Relaxed)
+    }
     /// 终态对账：把行数**拉回到结果表的真实合计**。
     ///
     /// 为什么需要：行数是各条写入路径自己累加的（直拷 / 多值批 / 逐行更新），

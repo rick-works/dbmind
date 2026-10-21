@@ -193,8 +193,15 @@ impl Writer for SqlWriter {
                 )
                 .await;
             }
+            // 同一条任务里只要有一处判定 Stream Load 不可用（端口没映射 / BE 不通），
+            // 后面的表就别再试了 —— 否则几十张表各写一条「失败」日志，根因却只有一个
+            let stream_unavailable = self
+                .task
+                .as_ref()
+                .map(|task| task.stream_unavailable())
+                .unwrap_or(false);
             if let Some(stream) = self.stream.as_ref() {
-                if !self.stream_failed.load(Ordering::SeqCst) && !rows.is_empty() {
+                if !stream_unavailable && !self.stream_failed.load(Ordering::SeqCst) && !rows.is_empty() {
                     // **按字节切块**：行数管不住行宽（宽行表一页能拼出 85MB，BE 的 publish
                     // 代价陡增，实测反而更慢）。16MB/块是实测甜点。
                     let mut start = 0usize;
@@ -257,14 +264,21 @@ impl Writer for SqlWriter {
                     }
                     // 首次失败（端口不通/权限/格式）：本表内回退 INSERT 管道，数据不丢。
                     // 已经上成功的块不再重发，只把**剩下的行**走 INSERT。
+                    // 措辞用「改用」而不是「失败」：这属于快通道不可用后的降级，数据没丢
+                    //（真机反馈：日志里看到「失败」两个字就以为同步坏了）。
                     self.stream_failed.store(true, Ordering::SeqCst);
-                    if let Some(task) = &self.task {
-                        task.log(format!(
-                            "表 {}：Stream Load 失败（{}），剩余 {} 行回退 INSERT 管道",
-                            self.table,
-                            stream_error.unwrap_or_default(),
-                            rows.len() - start
-                        ));
+                    let message = format!(
+                        "表 {}：Stream Load 快通道不可用（{}），剩余 {} 行改用 INSERT 管道导入（数据不受影响）",
+                        self.table,
+                        stream_error.unwrap_or_default(),
+                        rows.len() - start
+                    );
+                    match &self.task {
+                        // 只让**第一个**失败的表写这条日志：并发的其它表都会走 INSERT，
+                        // 根因只有一个，重复几十条只会淹没真正的错误
+                        Some(task) if task.disable_stream_load() => task.log(message),
+                        Some(_) => {}
+                        None => tracing::warn!(%message, "Stream Load 快通道不可用"),
                     }
                     let rest = write_insert_rows(
                         &self.state,
