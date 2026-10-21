@@ -3898,6 +3898,8 @@ export default {
   'sync.stopOnError': 'Stop on error',
   'sync.includeIndexes': 'Include indexes',
   'sync.autoCreateDb': 'Create target database if missing',
+  'sync.maxConcurrency': 'Parallel tables',
+  'sync.maxConcurrencyHint': '0 = automatic; lower it (e.g. 4) on a weak target or when source and target share one instance',
   'common.yes': 'Yes',
   'sync.wherePerTable': 'Row filter (per table)',
   'sync.wherePerTableHint': 'One condition per table; only tables with a condition are filtered. Empty = sync the whole table. The condition is appended after the WHERE of that table\'s source query — do not type WHERE again.',

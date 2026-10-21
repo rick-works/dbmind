@@ -169,6 +169,14 @@
             <el-checkbox v-model="opts.includeIndexes" :disabled="taskRunning">{{ $t('sync.includeIndexes') }}</el-checkbox>
             <el-checkbox v-model="opts.stopOnError" :disabled="taskRunning">{{ $t('sync.stopOnError') }}</el-checkbox>
           </div>
+          <!-- 并发表数：0 = 自适应（按源/目标类型与对象数定）。目标端弱、或源与目标同实例时
+               调小它，能直接减少双方连接数与会话/IO 争抢（见后端 sync::db 的「会话预算」） -->
+          <div class="settings-inline">
+            <span class="settings-inline-label">{{ $t('sync.maxConcurrency') }}</span>
+            <el-input-number v-model="opts.maxConcurrency" :min="0" :max="32" :step="1" size="small"
+                             controls-position="right" :disabled="taskRunning" class="settings-num" />
+            <span class="settings-inline-hint">{{ $t('sync.maxConcurrencyHint') }}</span>
+          </div>
           <!-- 「写入批次」输入已删：每种库的甜点批大差一个数量级（CH 落 part / Oracle 有
                单语句上限 / MySQL 看 max_allowed_packet），由后端按目标方言自动决定 -->
           <!-- 「行数上限」也删了（用户口径：同步就是不限，抽样不是同步的事）；
@@ -446,7 +454,7 @@ const objState = reactive({})
 for (const t of objTypes) objState[t.key] = { list: [], selected: [] }
 
 // rowLimit / whereClause 已移除：同步就是不限行数；行过滤改按表设置（见 whereByTable）
-const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false })
+const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, maxConcurrency: 0 })
 
 // ==================== 行过滤（按表设置） ====================
 // 为什么不是全局一个 WHERE：一次同步几十上百张表时，`amount > 100` 拼到没有 amount 列的
@@ -931,6 +939,8 @@ const run = async () => {
     includeIndexes: opts.value.includeIndexes,
     autoCreateDb: opts.value.autoCreateDb,
     stopOnError: opts.value.stopOnError,
+    // 0 = 自适应（后端按源/目标类型与对象数定）；>0 以这里为准
+    maxConcurrency: opts.value.maxConcurrency || 0,
     // 行过滤按表提交：只带真正填了条件的表（没勾选的表就算残留了旧条件也不传）
     whereClauses: Object.fromEntries(selTables.value
       .map(name => [name, (whereByTable[name] || '').trim()])
@@ -1553,6 +1563,11 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   margin: 0;
 }
 .settings-checks { display: flex; flex-direction: column; gap: 6px; }
+/* 「并发表数」：一行标签 + 数字框 + 说明，说明允许换行（同勾选项的理由） */
+.settings-inline { display: flex; align-items: flex-start; gap: 8px; margin-top: 4px; }
+.settings-inline-label { font-size: 13px; color: var(--dc-text); line-height: 24px; flex: none; }
+.settings-inline-hint { font-size: 11.5px; color: var(--dc-text-weak); line-height: 1.45; flex: 1; min-width: 0; }
+.settings-num { width: 96px; flex: none; }
 
 /* ==================== 行过滤（按表设置） ====================
    横跨三列的一整块：一行一张表，左侧表名定宽、右侧条件吃掉剩余宽度。
