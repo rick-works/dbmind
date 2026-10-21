@@ -386,9 +386,26 @@ impl AgentDriver {
         }
 
         let params = self.connect_params(session_id, config, read_only)?;
+        // 建连超时 25 → 60 秒：走 SSH 隧道 + 云端 RDS 时，冷启动一条连接实测 1.5~6.4 秒，
+        // 链路抖一下（TAP/加速器链路会丢满 MSS 的包，重传退避 ~19 秒）就容易越过 25 秒 ——
+        // 用户看到「连接超时」，实际只是慢。失败时把**实际耗时**写进提示，便于分辨
+        // 「慢」还是「断」。
+        let started = std::time::Instant::now();
         let result = self
             .host
-            .call(None, "connect", params, Some(Duration::from_secs(25)))?;
+            .call(None, "connect", params, Some(Duration::from_secs(60)))
+            .map_err(|err| {
+                let mut out = DbMindError::new(
+                    err.code,
+                    format!(
+                        "{}（建连耗时 {:.1} 秒）",
+                        err.message,
+                        started.elapsed().as_secs_f64()
+                    ),
+                );
+                out.detail = err.detail;
+                out
+            })?;
         let version = result
             .get("serverVersion")
             .and_then(|v| v.as_str())
@@ -442,6 +459,14 @@ impl AgentDriver {
     ) -> Result<T> {
         // 槽位守卫活到闭包结束：这条物理会话在调用期间**只属于我们**
         let slot = self.pool.acquire_cancellable(lane, limit, wait, call.cancel)?;
+        // 交互式泳道**常驻**：编辑器页签/用户手点查询都用这套键（`s=<页签键>`），
+        // 批量与内部功能统一走 `s=internal:...`（见 `is_interactive_lane`）。
+        // 常驻 = 不参与配额回收、不参与空闲清扫 —— 用户切回来再查不必重新握手
+        //（走 SSH 隧道建一条连接实测 1.5~6.4 秒，正是「点一下就转圈」的来源）。
+        // 显式「关闭连接」仍断得掉（`close_idle_where` 不看 pin）；事务泳道另有自己的 pin。
+        if is_interactive_lane(lane) {
+            self.pool.pin_lane(lane);
+        }
         let session_id = slot.session_id().to_string();
         // 事务泳道不能「悄悄重连」：旧连接上的未提交修改已经随断开回滚了，
         // 在新连接上重新 autocommit=false 只会让用户以为事务还在。
@@ -527,6 +552,19 @@ impl AgentDriver {
     }
 }
 
+/// 这条泳道是不是**交互式**的（编辑器页签、用户手点查询）。
+///
+/// 约定：交互请求一定带亲和键（`session_key` 末尾拼 `|s=<键>`），而批量/内部功能
+/// 的键统一以 `internal` 开头（`internal:browse`、`internal:sync-w…`、`internal:rowcount`…）。
+/// 于是「有亲和键且不是 internal」就是交互式 —— 这类连接要**常驻**，不参与回收，
+/// 手感才对得上 Navicat（切回页签直接出结果，不重新握手）。
+fn is_interactive_lane(lane: &str) -> bool {
+    match lane.rsplit_once("|s=") {
+        Some((_, key)) => !key.starts_with("internal"),
+        None => false,
+    }
+}
+
 impl Driver for AgentDriver {
     fn kind(&self) -> ConnectionKind {
         self.kind
@@ -539,6 +577,29 @@ impl Driver for AgentDriver {
 
     fn disconnect_connection(&self, name: &str) -> usize {
         AgentDriver::disconnect_connection(self, name)
+    }
+
+    /// 按泳道名释放（传输任务收尾）：见 [`Driver::disconnect_lanes`]。
+    ///
+    /// 顺带把匹配到的**事务泳道**摘掉并解除 pin：这些泳道的所有者（传输任务）
+    /// 已经结束，留着 pin 只会让配额永远回收不出它们。
+    fn disconnect_lanes(&self, needle: &str) -> usize {
+        let dropped: Vec<String> = {
+            let mut lanes = self.tx_lanes.lock().unwrap_or_else(|e| e.into_inner());
+            let hit: Vec<String> = lanes
+                .iter()
+                .filter(|lane| lane.contains(needle))
+                .cloned()
+                .collect();
+            for lane in &hit {
+                lanes.remove(lane);
+            }
+            hit
+        };
+        for lane in dropped {
+            self.pool.unpin_lane(&lane);
+        }
+        self.pool.close_idle_where(|lane| lane.contains(needle))
     }
 
     /// 会话级事务控制（事务模式，全 agent 数据源通用）。
@@ -589,7 +650,13 @@ impl Driver for AgentDriver {
         if outcome.is_ok() {
             match action {
                 TxAction::Begin => self.pool.pin_lane(&lane),
-                TxAction::Commit | TxAction::Rollback => self.pool.unpin_lane(&lane),
+                // 交互页签提交完也要**继续常驻**（否则两次查询之间有一个被回收的窗口，
+                // 又来一次 1.5~6.4 秒的握手）；批量泳道照旧解除保护
+                TxAction::Commit | TxAction::Rollback => {
+                    if !is_interactive_lane(&lane) {
+                        self.pool.unpin_lane(&lane);
+                    }
+                }
             }
         }
         outcome
@@ -801,6 +868,12 @@ impl Driver for AgentDriver {
                                     CellValue::Null | CellValue::Blob { .. } => {
                                         serde_json::Value::Null
                                     }
+                                    // 预编译参数也要能带二进制：Java 宿主认这个带标签对象
+                                    // 并走 `setBytes`（见 bindPreparedValue）。写成 null 就是
+                                    // 静默丢数据 —— BLOB 列在 SQL Server/Oracle 上全是这样丢的。
+                                    CellValue::Bytes(data) => {
+                                        json!({ "t": "bytes", "v": data })
+                                    }
                                     CellValue::Integer(value) => json!(value),
                                     CellValue::Real(value) => json!(value),
                                     CellValue::Decimal(value) => json!(value),
@@ -922,4 +995,22 @@ pub(crate) fn ensure_file_parent(config: &ConnectionConfig) -> Result<()> {
         )
         .with_detail(err.to_string())
     })
+}
+
+#[cfg(test)]
+mod lane_tests {
+    use super::is_interactive_lane;
+
+    /// 交互泳道只认「有亲和键且不是 internal」—— 判错会把批量会话也 pin 死，
+    /// 配额再也回收不出来（正是「会话不存在」那类故障的翻版）。
+    #[test]
+    fn 交互泳道只认非_internal_的亲和键() {
+        let base = "mysql|本地|c.host|3306|u|db|false|-";
+        assert!(is_interactive_lane(&format!("{base}|s=ui:tab-1")));
+        assert!(is_interactive_lane(&format!("{base}|s=tab-abc")));
+        assert!(!is_interactive_lane(&format!("{base}|s=internal:sync-w0-0")));
+        assert!(!is_interactive_lane(&format!("{base}|s=internal:browse")));
+        // 没有亲和键（元数据浏览）不 pin
+        assert!(!is_interactive_lane(base));
+    }
 }

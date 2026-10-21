@@ -648,9 +648,37 @@ pub(crate) fn sql_literal(cell: &CellValue, dialect: Dialect) -> String {
         }
         CellValue::Decimal(value) => value.clone(),
         CellValue::Text(text) => dialect.literal(text),
-        // 二进制不塞进 SQL 文本：几 MB 的 hex 会把文件撑爆，且各家字面量语法不一。
-        // 留一句注释，别让「这一列怎么是空的」成为下一个问题。
+        // 二进制**真字节**：按方言拼十六进制字面量（各家的语法见 binary_literal）。
+        CellValue::Bytes(data) => binary_literal(data, dialect),
+        // 只有长度（超过内核 8 MB 上限的超大值）：导出时只能留注释，不能假装是 NULL。
         CellValue::Blob { len } => format!("/* blob {len} B 未导出 */ NULL"),
+    }
+}
+
+/// 二进制 → 各方言的字面量。
+///
+/// 为什么统一用十六进制：hex 是各家 SQL 都认的二进制载体，且不依赖目标端函数
+/// （`from_base64` / `decode` 的可用性、字符集、权限都不一样），跨类型同步最稳。
+/// 代价是字面量膨胀一倍 —— 单值上限 8 MB 时最大一条语句约 16 MB 文本，
+/// 与目标端 `max_allowed_packet` 同一量级（见 `insert_batch_ranges` 的字节约束）。
+pub(crate) fn binary_literal(data: &dbmind_core::BlobBytes, dialect: Dialect) -> String {
+    let hex = data.to_hex();
+    match dialect.engine_key() {
+        // PG 的 bytea 输入格式：`'\xDEADBEEF'`（standard_conforming_strings=on 时不转义反斜杠）
+        "postgresql" | "kingbase" => format!("'\\x{hex}'::bytea"),
+        // SQL Server 的二进制字面量就是 0x 前缀
+        "sqlserver" => format!("0x{hex}"),
+        // Oracle / DM 用 hextoraw()
+        "oracle" | "dm" => format!("hextoraw('{hex}')"),
+        // DB2 的 x'..' 是 FOR BIT DATA 字符串，插 BLOB 列要显式套 BLOB()
+        "db2" => format!("BLOB(X'{hex}')"),
+        // ClickHouse / DuckDB 用 unhex/from_hex
+        "clickhouse" => format!("unhex('{hex}')"),
+        "duckdb" => format!("from_hex('{hex}')"),
+        // Derby 的 x'..' 同样需要 CAST 到 BLOB
+        "derby" => format!("CAST(X'{hex}' AS BLOB)"),
+        // MySQL / MariaDB / Doris / SQLite / H2 及其它：标准 SQL 的 x'..'
+        _ => format!("X'{hex}'"),
     }
 }
 

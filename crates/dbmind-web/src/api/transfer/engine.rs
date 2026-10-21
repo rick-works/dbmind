@@ -37,11 +37,16 @@ const PROGRESS_INTERVAL: Duration = Duration::from_millis(300);
 /// 太短是空转，太长则「停止」感知慢；300ms 与进度刷新同量级。
 const CANCEL_POLL: Duration = Duration::from_millis(300);
 
-/// 写池多久没收下一批就报一次「目标端被拖住」。
+/// 写池多久没收下一批就报一次「写队列满、正在排队」。
 ///
-/// 30 秒是经验值：正常批量写入单批远小于它；一旦超过，基本就是锁等待或目标端扛不住，
-/// 这时日志要说清是**哪张表**、读到多少、写到多少 —— 否则用户只能看着「同步中」干等。
-const STALL_WARN: Duration = Duration::from_secs(30);
+/// **这是背压，不是故障**：读侧比写侧快时，页会排在写队列里等，数据一行都不丢。
+/// 阈值 90 秒（原 30 秒）是按**页大小**定的：单表 1 路写、页可达 10 万行，
+/// 真机一批 2 万行约 9 秒 ⇒ 一页 10 万行本身就要 45 秒左右；写队列容量是
+/// `workers + 1`，所以**排到第 2 个整页**才会等满 90 秒。原来的 30 秒比
+/// 「写一页的时间」还短，于是每张慢表都要报一次，用户看到的就是满屏红字
+///（真机截图：98% 进度、0 失败，却一直在报「写池已等待 30 秒」）。
+/// 真正的写死另有兜底：单批墙钟 [`WRITE_CALL_TIMEOUT`]（300 秒）会报明确错误。
+const STALL_WARN: Duration = Duration::from_secs(90);
 
 /// 卡顿日志的退避上限。
 ///
@@ -312,14 +317,14 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                             let last_ms = plan.diag.last_write_ms.load(Ordering::Relaxed);
                             let last_rows = plan.diag.last_batch_rows.load(Ordering::Relaxed);
                             let mut line = format!(
-                                "表 {}：已读 {} 行、已写 {} 行；写池已等待 {} 秒仍收不下这 {} 行的一批\
-                                 （在途 {} 批，最近一批 {} 行用了 {:.1} 秒）—— \
-                                 目标端写入被拖住（锁等待 / 慢盘 / 连接数打满 / 坏行二分定位），仍在等待",
+                                "表 {}：读到 {} 行、已写 {} 行；写队列已满，这 {} 行的一批已排队 {} 秒\
+                                 （在途 {} 批，最近一批 {} 行用了 {:.1} 秒）。\
+                                 这是背压不是错误：读取比目标端写入快，系统在自动排队，数据不会丢，无需处理",
                                 plan.table,
                                 consumed,
                                 shared_inserted.load(Ordering::Relaxed),
-                                waited.as_secs(),
                                 batch_rows,
+                                waited.as_secs(),
                                 inflight,
                                 last_rows,
                                 last_ms as f64 / 1000.0,
@@ -330,7 +335,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                             }
                             task.log(line);
                             task.set_phase(format!(
-                                "表 {}：等待目标端写入（已等 {} 秒）",
+                                "表 {}：写入排队中（已等 {} 秒，自动继续）",
                                 plan.table,
                                 waited.as_secs()
                             ));

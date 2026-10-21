@@ -814,6 +814,21 @@ public final class Main {
             statement.setNull(index, sqlTypeFor(targetType));
             return;
         }
+        if (value.isJsonObject()) {
+            // 二进制走带标签对象（与 ResultMapper 的输出形状一致）：
+            // {"t":"bytes","v":"<base64>"} → setBytes。预编译路径（SQL Server / Oracle /
+            // DB2 …）以前把 BLOB 参数写成 null，目标库收到的是"空值"而不是数据。
+            com.google.gson.JsonObject object = value.getAsJsonObject();
+            String tag = object.has("t") && object.get("t").isJsonPrimitive()
+                    ? object.get("t").getAsString()
+                    : "";
+            if ("bytes".equals(tag) && object.has("v") && object.get("v").isJsonPrimitive()) {
+                byte[] data = java.util.Base64.getDecoder().decode(object.get("v").getAsString());
+                statement.setBytes(index, data);
+                return;
+            }
+            throw new SQLException("批量参数不支持的形状：" + tag);
+        }
         if (!value.isJsonPrimitive()) {
             throw new SQLException("批量参数必须是标量或 null");
         }

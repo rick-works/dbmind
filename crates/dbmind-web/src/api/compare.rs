@@ -1097,6 +1097,13 @@ fn encode_spooled_row(row: &[CellValue]) -> Vec<u8> {
                 out.extend_from_slice(&(text.len() as u32).to_le_bytes());
                 out.extend_from_slice(text.as_bytes());
             }
+            CellValue::Bytes(data) => {
+                // tag 6：真字节（对比本身还不比二进制列，但这里必须能读写，
+                // 否则任何包含 BLOB 的中间结果都会在落盘时被写坏）
+                out.push(6);
+                out.extend_from_slice(&(data.len() as u32).to_le_bytes());
+                out.extend_from_slice(data.as_slice());
+            }
             CellValue::Blob { len } => {
                 out.push(4);
                 out.extend_from_slice(&(*len as u64).to_le_bytes());
@@ -1141,6 +1148,12 @@ fn decode_spooled_row(bytes: &[u8]) -> Result<Vec<CellValue>, String> {
             4 => row.push(CellValue::Blob {
                 len: u64::from_le_bytes(take(&mut pos, 8)?.try_into().unwrap()) as usize,
             }),
+            6 => {
+                let len = u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;
+                row.push(CellValue::Bytes(
+                    take(&mut pos, len)?.to_vec().into(),
+                ));
+            }
             5 => {
                 let len =
                     u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;

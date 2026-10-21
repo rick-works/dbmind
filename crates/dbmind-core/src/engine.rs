@@ -19,10 +19,18 @@ use std::time::Instant;
 
 /// 全局会话配额的默认值（每个宿主进程最多持有多少条物理会话）。
 ///
-/// 取 32 的理由：正常使用（几个连接 × 每个几条）离它很远，而它又确实拦得住
-/// 「连接数 × 并发上限」在数据库侧失控 —— 很多服务的 `max_connections` 只有几十。
+/// 取 **128** 的理由（原来是 32，真机踩过）：
+/// - 32 在多表并发同步时**很容易顶满**（并发 8 张表 × 每表读写各一条就 16 条以上，
+///   再加上连接池里常驻的交互会话、影子库会话）；顶满后每开一条新会话都要先回收一条
+///   空闲会话，被回收的往往是**事务已开、这一瞬没在跑语句**的连接 ⇒ 用户看到
+///   「会话不存在（agent 可能已重启）」「写入连接已断」，整表剩余行被放弃。
+/// - 128 足够容纳「十几个连接 × 每个几条」的正常规模，又仍然拦得住真正失控的泄漏
+///   （`max_connections` 只有几十的库，128 已经远超需要）。
+///
+/// 现在批量路径会**用完即还 + 按槽位复用**（见 `sync_table` 与 `disconnect_lanes`），
+/// 稳态连接数只与「同时跑几张表」有关，正常使用离 128 很远。
 /// 0 表示不限制（交给类型/连接级上限）。
-pub const DEFAULT_SESSION_MAX_PER_HOST: usize = 32;
+pub const DEFAULT_SESSION_MAX_PER_HOST: usize = 128;
 
 /// 空闲会话清理线程的扫描间隔。
 ///
@@ -401,6 +409,17 @@ impl DbMindEngine {
             }
         }
         Ok(n)
+    }
+
+    /// 按泳道名断开某连接上**空闲**的会话（传输任务收尾用）。
+    ///
+    /// 与 [`Self::disconnect_sessions`] 的区别：那条按「连接」断，这条按「泳道里的
+    /// 一段名字」断 —— 数据传输出每张表都有自己的 `sid`（`internal:sync-w<sid>-0` 等），
+    /// 表跑完只还自己那几条，**不会误伤**同时并发的其它表。
+    pub fn disconnect_lanes(&self, id_or_name: &str, needle: &str) -> Result<usize> {
+        let record = self.store.find_connection(id_or_name)?;
+        let Some(record) = record else { return Ok(0) };
+        Ok(self.drivers.disconnect_lanes(record.kind(), needle))
     }
 
     /// 只断**某个数据库**的会话（界面上「关闭数据库」用）。

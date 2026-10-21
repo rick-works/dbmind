@@ -46,7 +46,7 @@ pub use engine::run;
 pub use reader::{Cursor, Page, Reader, RowRange};
 pub use writer::Writer;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::api::dialect::Dialect;
@@ -68,6 +68,12 @@ pub struct WriteDiag {
     pub last_batch_rows: AtomicU64,
     /// 最近一条失败样例（二分定位到的坏行错误），卡顿日志里顺手带上
     pub sample_err: Mutex<Option<String>>,
+    /// 有过**开事务失败**（writer 退回 autocommit 逐条提交）。
+    ///
+    /// 用途：断连后能不能「整表重跑」取决于「已写的行是不是会随断连一起回滚」。
+    /// 事务真的开起来了 ⇒ 连接一断，服务端回滚，目标表里没有半截数据，重跑是安全的；
+    /// 退回 autocommit 过 ⇒ 已经逐条提交了，重跑会写重复，**绝不能重跑**。
+    pub begin_failed: AtomicBool,
 }
 
 impl WriteDiag {

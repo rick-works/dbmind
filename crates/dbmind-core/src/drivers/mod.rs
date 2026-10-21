@@ -131,6 +131,22 @@ pub trait Driver: Send + Sync {
         0
     }
 
+    /// 断开**泳道名包含 `needle`** 的空闲会话。默认 0 = 无会话池。
+    ///
+    /// 用途：数据传输给每张表一套**专属亲和键**（`internal:sync-w<表>-<n>`、
+    /// `internal:sync-r<表>-<n>`、`internal:sync-u<表>`），表与表之间因此不会串事务。
+    /// 但**跑完不还回去**的话，宿主连接数会随表数**单调增长**：几百张表的整库同步
+    /// 很快顶到 `session.maxPerHost`（默认 32），之后每开一条新会话都得先挤掉一条
+    /// 空闲会话 —— 被挤掉的常常是**正在用**的那条（事务已开、这一瞬恰好没在跑语句），
+    /// 用户看到的是「会话不存在（agent 可能已重启）」「写入连接已断」，整表剩余行被
+    /// 放弃；同时每次用到那条泳道都要重连（真机实测一条连接 1.5~6.4 秒）。
+    ///
+    /// 按 `sid`（每张表唯一）释放之后，连接数只与「同时跑几张表」有关，
+    /// 与「一共多少张表」无关，配额也就不会被占满。
+    fn disconnect_lanes(&self, _needle: &str) -> usize {
+        0
+    }
+
     /// 会话级事务控制（事务模式）：begin 关掉该会话的 autocommit，
     /// commit / rollback 提交或回滚。
     ///
@@ -248,6 +264,15 @@ impl DriverRegistry {
             .iter()
             .filter(|driver| driver.kind() == kind)
             .map(|driver| driver.disconnect_connection(name))
+            .sum()
+    }
+
+    /// 断开**泳道名含 `needle`** 的空闲会话（按类型分发，见 [`Driver::disconnect_lanes`]）。
+    pub fn disconnect_lanes(&self, kind: ConnectionKind, needle: &str) -> usize {
+        self.drivers
+            .iter()
+            .filter(|driver| driver.kind() == kind)
+            .map(|driver| driver.disconnect_lanes(needle))
             .sum()
     }
 

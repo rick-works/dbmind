@@ -84,8 +84,20 @@ pub fn cell_to_value(cell: &CellValue) -> Value {
         CellValue::Real(v) => json!(v),
         CellValue::Decimal(v) => json!(v),
         CellValue::Text(v) => json!(v),
+        CellValue::Bytes(data) => json!(format!("[blob {} B]", data.len())),
         CellValue::Blob { len } => json!(format!("[blob {len} B]")),
     }
+}
+
+/// 二进制内容的比较键：长度 + 内容哈希。
+///
+/// 为什么不是 hex/原文：8 MB 的值每次比较都拼 16 MB 字符串，排序与去重会直接卡死；
+/// 长度 + 64 位哈希足以区分（这里只服务比较/去重/展示，不用于还原数据）。
+fn blob_digest(data: &[u8]) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut hasher);
+    format!("{}:{:016x}", data.len(), hasher.finish())
 }
 
 // ==================== 值比较的规范化（跨类型对比 / 同步共用） ====================
@@ -309,6 +321,7 @@ pub fn row_sort_key(row: &[CellValue], indexes: &[usize]) -> Vec<SortPart> {
                 Some(normalized) => SortPart::Time(normalized),
                 None => SortPart::Text(text.clone()),
             },
+            Some(CellValue::Bytes(data)) => SortPart::Text(format!("b:{}", blob_digest(data.as_slice()))),
             Some(CellValue::Blob { len }) => SortPart::Text(format!("b:{len}")),
             Some(other) => match number_key(other).and_then(DecimalKey::from_number_key) {
                 Some(number) => SortPart::Num(number),
@@ -391,6 +404,7 @@ pub fn normalize_datetime(text: &str) -> Option<String> {
 pub fn cell_key(cell: &CellValue) -> String {
     match cell {
         CellValue::Null => "n:".to_string(),
+        CellValue::Bytes(data) => format!("b:{}", blob_digest(data.as_slice())),
         CellValue::Blob { len } => format!("b:{len}"),
         CellValue::Text(text) => match normalize_datetime(text) {
             Some(normalized) => format!("t:{normalized}"),
@@ -407,6 +421,8 @@ pub fn cell_key(cell: &CellValue) -> String {
 /// 其余仍按"类型严格"比（文本 `'3'` ≠ 数值 `3`）。
 pub fn cells_equal(left: Option<&CellValue>, right: Option<&CellValue>) -> bool {
     match (left, right) {
+        // 拿到真字节的一侧按字节比：等长不同内容的两个 BLOB 不能算相等
+        (Some(CellValue::Bytes(a)), Some(CellValue::Bytes(b))) => a.as_slice() == b.as_slice(),
         (Some(CellValue::Blob { len: a }), Some(CellValue::Blob { len: b })) => a == b,
         (Some(a), Some(b)) => cell_key(a) == cell_key(b),
         (None, None) => true,

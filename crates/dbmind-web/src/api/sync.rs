@@ -1077,6 +1077,11 @@ fn encode_stream_csv(rows: &[Vec<dbmind_core::CellValue>]) -> Vec<u8> {
                 dbmind_core::CellValue::Real(x) => out.extend_from_slice(x.to_string().as_bytes()),
             dbmind_core::CellValue::Decimal(s) => out.extend_from_slice(s.as_bytes()),
                 dbmind_core::CellValue::Text(s) => out.extend_from_slice(s.as_bytes()),
+                // 含二进制列的表**不会**走 Stream Load（见 use_stream 的判定），
+                // 这里只是兜底：真走到就是提示语，绝不是"把 b:len 当数据写进去"。
+                dbmind_core::CellValue::Bytes(data) => {
+                    out.extend_from_slice(format!("b:{}", data.len()).as_bytes())
+                }
                 dbmind_core::CellValue::Blob { len } => {
                     out.extend_from_slice(format!("b:{len}").as_bytes())
                 }
@@ -1103,6 +1108,9 @@ fn encode_stream_json(
                 Some(dbmind_core::CellValue::Real(x)) => Value::from(*x),
                 Some(dbmind_core::CellValue::Decimal(s)) => Value::from(s.as_str()),
                 Some(dbmind_core::CellValue::Text(s)) => Value::from(s.as_str()),
+                Some(dbmind_core::CellValue::Bytes(data)) => {
+                    Value::from(format!("b:{}", data.len()))
+                }
                 Some(dbmind_core::CellValue::Blob { len }) => Value::from(format!("b:{len}")),
             };
             obj.insert(col.clone(), v);
@@ -1896,6 +1904,8 @@ pub(crate) fn estimate_row_bytes(row: &[CellValue]) -> usize {
         .map(|c| match c {
             CellValue::Decimal(s) => s.len() * 2 + 8,
             CellValue::Text(s) => s.len() * 2 + 8,
+            // 二进制走十六进制字面量：1 字节 → 2 个字符
+            CellValue::Bytes(data) => data.len() * 2 + 8,
             CellValue::Blob { len } => *len * 2 + 8,
             _ => 40,
         })
@@ -1910,6 +1920,8 @@ pub(crate) fn json_row_bytes(row: &[CellValue]) -> usize {
         .map(|c| match c {
             CellValue::Decimal(s) => s.len() + 24,
             CellValue::Text(s) => s.len() + 24,
+            // JSON 体里二进制用 base64（4/3 膨胀）
+            CellValue::Bytes(data) => data.len() / 3 * 4 + 24,
             CellValue::Blob { len } => *len + 24,
             _ => 24,
         })
@@ -2013,7 +2025,15 @@ fn is_link_level_error(err: &XError) -> bool {
     if err.code.as_deref() == Some("DBMIND-CONN-0003") {
         return true;
     }
-    let text = err.message.to_ascii_lowercase();
+    is_link_level_message(&err.message)
+}
+
+/// 「这条连接已经不可用」类错误的特征串（大小写无关）。
+///
+/// 与 [`is_link_level_error`] 共用一份清单：那条判 `XError`，这条判
+/// `transfer::run` 上抛的字符串（写路径只往下传 message，不带错误码）。
+fn is_link_level_message(message: &str) -> bool {
+    let text = message.to_ascii_lowercase();
     [
         "communications link failure",
         "连接已断开",
@@ -2903,12 +2923,105 @@ async fn sync_table(
     table: &str,
     target_table: &str,
     opts: &Opts,
+    slot: usize,
+    reuse: bool,
 ) -> ObjResult {
     // 事务由**写入插件**自己管（`transfer::writer`）：每路 writer 在自己的物理会话上
     // begin/commit。改造前这里在一条会话上 `set autocommit = 0` 再让 N 路 writer 往
     // **别的**会话写 —— 那层外层事务根本管不到，等于没开（真机踩过）。
     // 结构操作（建表/索引）也不该和数据写挤在一个事务里：DDL 会隐式提交。
-    sync_table_inner(state, task, src, tgt, table, target_table, opts).await
+    let sid = sync_slot_sid(slot);
+    let result = sync_table_inner(state, task, src, tgt, table, target_table, opts, &sid).await;
+    // 会话怎么处置：
+    // - **成功 + 允许复用**（整库同步的并发槽位）⇒ 留着，给同一槽位的下一张表用。
+    //   每张表 1~3 条连接，经 SSH 隧道建一条要 1.5~6.4 秒 —— 几百张表光建连就吃掉
+    //   几十分钟，而槽位上的表是**串行**的，复用不会串事务。
+    // - **失败/取消，或不复用**（单表同步）⇒ 立刻释放。失败那条连接可能带着未提交
+    //   事务或半开状态，交给下一张表只会把脏状态传下去；顺带也避免连接数随表数
+    //   单调增长、顶满 `session.maxPerHost` 后开始「挤掉正在用的那条」。
+    if !(reuse && result.status == "ok") {
+        release_table_sessions(state, src, tgt, &sid).await;
+    }
+    result
+}
+
+/// 并发**槽位**的会话后缀（`slot00`、`slot01`…，**定宽两位**）。
+///
+/// 整库同步同时跑 N 张表，调度侧给每张表发一个 `0..N-1` 的槽位号；同一槽位上的表
+/// **串行**执行，所以用同一组会话键是安全的，而且能把物理连接**复用**起来（不必每张
+/// 表重建）。表与表之间仍然互不干扰：写侧在表结束时 commit 并把 autocommit 复位。
+///
+/// 为什么定宽：释放会话时是按「泳道名包含这个串」匹配的（`Driver::disconnect_lanes`），
+/// `slot3` 是 `slot30` 的前缀，不定宽会把 30 号槽位的连接一起关掉。
+fn sync_slot_sid(slot: usize) -> String {
+    format!("slot{slot:02}")
+}
+
+/// 表结束时释放它的**槽位**会话（源、目标两侧各一次）。
+///
+/// 失败只记日志：收尾是**优化与止血**，不该把一张已经同步完的表判成失败。
+async fn release_table_sessions(state: &AppState, src: &Side, tgt: &Side, sid: &str) {
+    let mut conns: Vec<String> = vec![src.conn.clone()];
+    if tgt.conn != src.conn {
+        conns.push(tgt.conn.clone());
+    }
+    for conn in conns {
+        let engine = state.engine();
+        let needle = sid.to_string();
+        let outcome = blocking(move || engine.disconnect_lanes(&conn, &needle)).await;
+        match outcome {
+            Ok(0) => {}
+            Ok(closed) => tracing::debug!(
+                target: "dbmind::sync",
+                sid = %sid,
+                closed,
+                "表已结束，释放其专属会话"
+            ),
+            Err(err) => tracing::warn!(
+                target: "dbmind::sync",
+                sid = %sid,
+                error = %err.message,
+                "释放表会话失败（已忽略）"
+            ),
+        }
+    }
+}
+
+/// 并发槽位的租约：`Drop` 时把号还回池子 —— 任务 panic / 提前 return 也不会漏号。
+struct SlotLease {
+    pool: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    id: usize,
+}
+
+impl Drop for SlotLease {
+    fn drop(&mut self) {
+        if let Ok(mut free) = self.pool.lock() {
+            free.push(self.id);
+        }
+    }
+}
+
+/// 断连后能不能**整表重跑一次**（前提见 `sync_table_inner` 里那段注释）。
+///
+/// 单独抽成纯函数是为了能被单测钉死：这里判错一次，要么把数据写重复、要么白跑一遍
+/// 大表。四个「不能重跑」的理由都是硬的 —— 见函数体。
+fn can_retry_after_link_break(
+    already_retried: bool,
+    txn_supported: bool,
+    begin_failed: bool,
+    canceled: bool,
+    message: &str,
+) -> bool {
+    // 只重跑一次：再断就是链路真的不行，重跑只会拖长任务
+    !already_retried
+        // 方言没有事务批（Doris / ClickHouse / Oracle / DB2…）⇒ 已写的行留在目标表里
+        && txn_supported
+        // 退回过逐条提交 ⇒ 行已经 commit，重跑就是重复
+        && !begin_failed
+        // 用户点了停止就别再跑
+        && !canceled
+        // 脏数据 / 类型不匹配重跑必然再失败
+        && is_link_level_message(message)
 }
 
 /// 目标端「表内写并发」的并行度（1 = 串行）。**依据类型声明，不靠猜**：
@@ -2951,6 +3064,7 @@ async fn sync_table_inner(
     table: &str,
     target_table: &str,
     opts: &Opts,
+    sid: &str,
 ) -> ObjResult {
     let ty = "table";
     // 行过滤**按表取**：界面上一张表一个条件（见 `SyncRequest::where_clauses`）。
@@ -3166,20 +3280,16 @@ async fn sync_table_inner(
         target_columns
     };
     // 只同步两边都有的列：目标多出来的列让它走自己的默认值/自增
+    //
+    // **二进制列也同步**：内核已回真字节（`CellValue::Bytes`，base64，单值上限 8 MB），
+    // 写入侧按方言拼十六进制字面量（见 `export::binary_literal`）。旧实现把 BLOB/BINARY
+    // 排除在数据同步之外 —— 一张 20 列的表里漏掉 1 个 BLOB，界面照样显示「同步成功」。
     let mut columns: Vec<String> = Vec::new();
-    // 二进制列：内核的结果集**只传长度、不传字节**（见 dbmind-core `CellValue` 的设计注释 ——
-    // 结果集要跨进程/HTTP 传输）。传过去只可能是一列 NULL，而旧实现正是静默这么干的：
-    // 数据丢了，界面上还是「同步成功」。这里明确把它排除在数据同步之外，并在结果里说清楚。
-    let mut binary_columns: Vec<String> = Vec::new();
     for column in &source_columns {
         if !target_columns
             .iter()
             .any(|other| other.name.eq_ignore_ascii_case(&column.name))
         {
-            continue;
-        }
-        if Dialect::is_binary_type(column.type_name.as_deref().unwrap_or("")) {
-            binary_columns.push(column.name.clone());
             continue;
         }
         columns.push(column.name.clone());
@@ -3191,21 +3301,11 @@ async fn sync_table_inner(
             deferred_indexes,
         )
         .await;
-        let why = if binary_columns.is_empty() {
-            "源表与目标表没有同名列，无法同步数据"
-        } else {
-            "需要同步的列全是二进制列：结果集只传长度不传字节，暂不支持同步二进制数据"
-        };
-        return ObjResult::skipped(ty, table, why);
+        return ObjResult::skipped(ty, table, "源表与目标表没有同名列，无法同步数据");
     }
     let missing: Vec<String> = source_columns
         .iter()
         .filter(|column| !columns.iter().any(|name| name.eq_ignore_ascii_case(&column.name)))
-        .filter(|column| {
-            !binary_columns
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case(&column.name))
-        })
         .map(|column| column.name.clone())
         .collect();
 
@@ -3305,27 +3405,9 @@ async fn sync_table_inner(
     if !missing.is_empty() {
         note.push_str(&format!("（目标缺少 {} 列，未同步）", missing.join("/")));
     }
-    // 二进制列：**每一张表都要说清楚**，不能只在「整表没法同步」时才提一句 ——
-    // 以前一张 20 列的表里漏掉 1 个 BLOB 列，结果里只有别的说明，用户以为全同步了。
-    if !binary_columns.is_empty() {
-        note.push_str(&format!(
-            "（{} 是二进制列，内核结果集只传长度不传字节，未同步）",
-            binary_columns.join("/")
-        ));
-    }
 
-    // 本表的会话后缀：并发整库同步时，不同表的读/写会话必须落在不同物理连接上
-    // （详见 `TablePlan::sid`）。序号取自进程内自增值，名字里的非字母数字统一压成 `_`。
-    let sid = {
-        static SID_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let seq = SID_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let safe: String = table
-            .chars()
-            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
-            .take(24)
-            .collect();
-        format!("{seq}-{safe}")
-    };
+
+    // 本表的会话后缀由 `sync_table` 生成并传进来（它还要按这个串做收尾释放）。
 
     // 源与目标**是同一张表**（自同步）时，清空会把待读的数据删掉；那种"清空"本身也没有意义。
     // 旧实现是「先把整表读进内存、再清目标」，顺序上不怕；现在改成边读边写，必须显式区分。
@@ -3458,6 +3540,20 @@ async fn sync_table_inner(
     let use_stream = target_kind.kind.key() == "doris"
         && effective_mode != DataMode::Upsert
         && tgt_record.is_some()
+        // 含二进制列的表**不走 Stream Load**：CSV/JSON 体里没法原样表达 BLOB
+        //（现在编码出来只是一个 `b:len` 占位），走了就是静默写坏数据；
+        // 退回 INSERT 管道后由 `export::binary_literal` 拼 hex 字面量，字节才真的过得去。
+        && !columns
+            .iter()
+            .any(|name| {
+                source_columns
+                    .iter()
+                    .find(|column| column.name.eq_ignore_ascii_case(name))
+                    .map(|column| {
+                        Dialect::is_binary_type(column.type_name.as_deref().unwrap_or(""))
+                    })
+                    .unwrap_or(false)
+            })
         // 本任务里已经判定 Stream Load 不可用（见 Task::stream_unavailable）：后面的表
         // 连 `show backends` 都不必再查，直接走 INSERT 管道
         && !task.map(|task| task.stream_unavailable()).unwrap_or(false);
@@ -3678,10 +3774,15 @@ async fn sync_table_inner(
         }
     }
 
-    let plan = crate::api::transfer::TablePlan {
+    // 写池诊断（在途批数 / 最近批耗时 / 失败样例 / 是否退回过逐条提交）：
+    // 卡顿日志、二分定位与「断连能不能整表重跑」共用这一份，所以放在重试循环**外面**。
+    let diag = std::sync::Arc::new(crate::api::transfer::WriteDiag::default());
+    // 一次尝试 = 一份新计划：reader / writer 都按计划重建，会话键（`sid`）不变 ——
+    // 连接断过的话内核已经忘了那条会话，下次用时会自动重连。
+    let make_plan = || crate::api::transfer::TablePlan {
         state: state.clone(),
         task: task.cloned(),
-        sid: sid.clone(),
+        sid: sid.to_string(),
         src_conn: src.conn.clone(),
         src_scope: src.scope.clone(),
         source_kind,
@@ -3697,10 +3798,10 @@ async fn sync_table_inner(
         target_columns: target_column_names.clone(),
         workers_cap: opts.tgt_workers,
         slices_cap: opts.src_slices,
-        target_types,
-        key_columns,
-        key_indexes,
-        paging_keys,
+        target_types: target_types.clone(),
+        key_columns: key_columns.clone(),
+        key_indexes: key_indexes.clone(),
+        paging_keys: paging_keys.clone(),
         where_clause: table_where.clone(),
         row_limit: opts.row_limit,
         upsert: upsert_mode,
@@ -3716,16 +3817,72 @@ async fn sync_table_inner(
         } else {
             None
         },
-        // 写池诊断（在途批数 / 最近批耗时 / 失败样例）：卡顿日志与二分定位共用一份
-        diag: std::sync::Arc::new(crate::api::transfer::WriteDiag::default()),
+        diag: diag.clone(),
     };
-    let stats = match crate::api::transfer::run(plan).await {
-        Ok(stats) => stats,
-        Err(msg) => return ObjResult::failed(ty, table, msg),
+    // 重跑前要用的快照/判据：行数快照用于回退进度（上一次的行随事务回滚，不能计两遍）
+    let counters_before = task.map(|t| (t.rows_read(), t.rows_written(), t.rows_failed()));
+    let mut retried = false;
+    let stats = loop {
+        match crate::api::transfer::run(make_plan()).await {
+            Ok(stats) => break stats,
+            Err(msg) => {
+                // ---- 断连 ⇒ **整表重跑一次** ----
+                // 为什么敢重跑：目标端是「整表一个事务」（`txn_batch` 有定义）且事务真的
+                // 开起来了（没退回过 autocommit）⇒ 连接一断，服务端把本次已写的行全部
+                // 回滚，目标表里没有半截数据，从头再写一遍不会重复、也不会缺。
+                // 反过来说，下面任何一条不成立就**绝不能重跑**（要么写重复，要么白跑）：
+                //   · 方言没有事务批（Doris / ClickHouse / Oracle / DB2…）⇒ 已写的行还在；
+                //   · 退回过逐条提交 ⇒ 行已 commit，重跑就是重复；
+                //   · 不是链路级错误（脏数据 / 类型不匹配）⇒ 重跑必然再失败；
+                //   · 已取消 / 已经重跑过一次。
+                let can_retry = can_retry_after_link_break(
+                    retried,
+                    txn_batch(target_kind.kind.key()).is_some(),
+                    diag.begin_failed
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    task.map(|t| t.is_canceled()).unwrap_or(false),
+                    &msg,
+                );
+                if !can_retry {
+                    return ObjResult::failed(ty, table, msg);
+                }
+                retried = true;
+                if let Some(task) = task {
+                    task.log(format!(
+                        "表 {table}：目标端写连接断开（{msg}）；已写入的行随事务一起回滚，\
+                         这张表整表重跑一次"
+                    ));
+                }
+                // 先把这组会话放掉：断掉的那条连接可能还没被内核标记失效（宿主报的是
+                // JDBC 层的 Communications link failure，不一定带连接级错误码），
+                // 不释放就会拿同一条死连接重跑一遍。释放后下一次调用必然重连。
+                release_table_sessions(state, src, tgt, sid).await;
+                // 清空重来：清空模式本来就要表是空的（上一次的清空已提交，这里再确认一次）；
+                // 追加 / upsert 模式**不能清空** —— 那会把目标表现有数据删掉，而事务回滚
+                // 已经保证了没有半截数据，重跑分别是「追加一遍」与「幂等重放」。
+                if opts.data_mode == DataMode::TruncateInsert && !same_table {
+                    let clear = target_kind.clear_table_sql(&target_name);
+                    if let Err(err) = run_target(state, &tgt_target, &clear).await {
+                        return ObjResult::failed(
+                            ty,
+                            table,
+                            format!("断连重跑前清空目标表失败：{}", err.message),
+                        );
+                    }
+                }
+                if let (Some(task), Some((read, written, failed))) = (task, counters_before) {
+                    task.reset_rows(read, written, failed);
+                }
+            }
+        }
     };
     inserted += stats.inserted;
     updated += stats.updated;
     note.push_str(&stats.note);
+    if retried {
+        // 结果表上要看得见：这张表比别的表多跑了一遍（耗时翻倍不是 bug）
+        note.push_str("（中途目标端连接断开，已整表重跑一次）");
+    }
 
     // **PG / KingBase 的序列回拨**：显式插入自增列的值后，目标库的序列还停在起点 ——
     // 之后业务插入新行时序列从 1 开始生成主键，**必然撞上刚同步进来的数据**（迁移工具的经典坑）。
@@ -4119,7 +4276,9 @@ pub async fn table(
 
     // 单表路径同样自动建库（无任务日志渠道，静默执行；失败由建表时的明确报错兜底）
     let _ = ensure_target_db(&state, &tgt, &opts).await;
-    let outcome = sync_table(&state, None, &src, &tgt, &source_table, &target_table, &opts).await;
+    // 单表同步没有并发槽位概念：固定 0 号，且用完就释放（`reuse = false`）
+    let outcome =
+        sync_table(&state, None, &src, &tgt, &source_table, &target_table, &opts, 0, false).await;
     let success = outcome.status == "ok";
     Ok(Json(json!({
         "success": success,
@@ -4330,6 +4489,14 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 0u64, 0u64, 0u64, 0u64, 0u64,
             )));
             let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(sync_concurrency));
+            // 并发**槽位**池：槽位号决定会话键（`sync_slot_sid`），表跑完把号还回去，
+            // 同一槽位的下一张表就**复用同一组物理连接**（省掉每表 1~3 次建连；
+            // 隧道下一次 1.5~6.4 秒，几百张表就是几十分钟）。数量 = 并发上限，
+            // 所以连接总数恒为「并发 × 每表会话数」，与表的总数无关。
+            let slots_free: std::sync::Arc<std::sync::Mutex<Vec<usize>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(
+                    (0..sync_concurrency.max(1)).collect::<Vec<usize>>(),
+                ));
             // ---- 依赖表的对象要等**所有表**跑完再跑 ----
             // 原来 48 张表和视图/存储过程混在一个并发池里，视图几乎总是抢在表前面：
             // 定义里引用的表还没建出来，直接就 `Table 'dmx_hk_src.t_department' doesn't exist`
@@ -4350,6 +4517,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 let slot = slots[index].clone();
                 let counters = counters.clone();
                 let sem = sem.clone();
+                let slots_free = slots_free.clone();
                 let tables_done_rx = tables_done_rx.clone();
                 let tables_done_tx = tables_done_tx.clone();
                 let tables_left = tables_left.clone();
@@ -4378,6 +4546,14 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         }
                     };
                     let permit = tokio::time::timeout(PIPE_WAIT, sem.acquire_owned()).await.ok().and_then(|r| r.ok());
+                    // 拿到许可 ⇒ 池里一定有空号；租约在本次对象结束（含 panic）时归还
+                    let lease = {
+                        let mut free = slots_free.lock().unwrap_or_else(|e| e.into_inner());
+                        SlotLease {
+                            id: free.pop().unwrap_or(0),
+                            pool: slots_free.clone(),
+                        }
+                    };
                     if blocked {
                         if is_table {
                             release_gate(&tables_left, &tables_done_tx);
@@ -4401,7 +4577,10 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     task.set_phase(name.to_string());
                     let outcome = match kind.as_str() {
                         "table" => {
-                            sync_table(&state, Some(&task), &src, &tgt, &name, &name, &opts).await
+                            sync_table(
+                                &state, Some(&task), &src, &tgt, &name, &name, &opts, lease.id, true,
+                            )
+                            .await
                         }
                         "view" => sync_view(&state, &src, &tgt, &name, &opts).await,
                         // 例程 / 触发器 / 事件：与视图同一条路（见 sync_object_source）
@@ -4596,6 +4775,43 @@ mod savepoint_tests {
 
         assert!(savepoint_sql("mysql", "sp3").is_none());
         assert!(savepoint_sql("oracle", "sp4").is_none());
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    /// 断连整表重跑的四个前提，一个都不能松。
+    #[test]
+    fn 断连整表重跑的前提() {
+        let link = "写入连接已断：连接失败：Communications link failure";
+        assert!(can_retry_after_link_break(false, true, false, false, link));
+
+        // ① 已经重跑过一次
+        assert!(!can_retry_after_link_break(true, true, false, false, link));
+        // ② 方言没有事务批（Doris / ClickHouse / Oracle / DB2…）：已写的行还在
+        assert!(!can_retry_after_link_break(false, false, false, false, link));
+        // ③ 退回过逐条提交：行已 commit，重跑就是重复
+        assert!(!can_retry_after_link_break(false, true, true, false, link));
+        // ④ 用户点了停止
+        assert!(!can_retry_after_link_break(false, true, false, true, link));
+        // ⑤ 脏数据 / 类型不匹配：重跑必然再失败
+        assert!(!can_retry_after_link_break(
+            false,
+            true,
+            false,
+            false,
+            "Incorrect integer value: 'abc' for column 'id' at row 1"
+        ));
+        // ⑥ 宿主/驱动报的其它链路错误也要认出来（不止 MySQL 那一条文案）
+        assert!(can_retry_after_link_break(
+            false,
+            true,
+            false,
+            false,
+            "connection reset by peer"
+        ));
     }
 }
 

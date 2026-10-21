@@ -259,6 +259,7 @@ fn cell_xml(column: usize, row: usize, cell: &CellValue) -> String {
         CellValue::Text(text) => text_cell(&reference, text),
         // 二进制不塞进单元格（Excel 存不了任意字节）：给一个可读占位，
         // 而不是让整张表导不出来
+        CellValue::Bytes(data) => text_cell(&reference, &format!("<blob {}B>", data.len())),
         CellValue::Blob { len } => text_cell(&reference, &format!("<blob {len}B>")),
     }
 }

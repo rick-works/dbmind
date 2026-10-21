@@ -10,8 +10,10 @@ use serde::{Deserialize, Serialize};
 
 /// 单元格值。
 ///
-/// Blob 只带长度不带内容：结果集要跨 HTTP/IPC 传输，带上原始二进制会把
-/// 响应体撑爆；需要内容时由上层按需再取（`objectSource` 能力）。
+/// **二进制有两种形状**，不要混用：
+/// - [`CellValue::Bytes`]：拿到了**真字节**（内核取数时读全量，超过 `BLOB_MAX_BYTES` 才降级）。
+/// - [`CellValue::Blob`]：只知道**长度**、没有内容（超大值/旧宿主）。它只用于展示与提示，
+///   绝不能被当成"这个值就是空"写回目标库 —— 那正是静默丢数据的由来。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "t", content = "v", rename_all = "snake_case")]
 pub enum CellValue {
@@ -21,7 +23,139 @@ pub enum CellValue {
     /// 高精度定点数（十进制文本原样保留）。f64 无法无损承载 DECIMAL/NUMERIC。
     Decimal(String),
     Text(String),
+    /// 二进制真字节（base64 上线，见 [`BlobBytes`]）
+    Bytes(BlobBytes),
+    /// 只带长度、不带内容（超过上限的超大值）
     Blob { len: usize },
+}
+
+/// 单个二进制值的传输上限：超过它只回长度，不把几百 MB 塞进一次 HTTP/IPC 响应。
+///
+/// 8 MiB 是「绝大多数业务 BLOB（证件、缩略图、签名、序列化快照）都装得下」与
+/// 「一次响应不能太大」之间的折中；它必须与 Java 宿主的 `BLOB_FULL_LIMIT` 保持一致。
+pub const BLOB_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// 二进制字节（结果集里的真值）。
+///
+/// 线格式是 base64 字符串（`{"t":"bytes","v":"AAECAw=="}`）：
+/// serde 默认把 `Vec<u8>` 写成 `[0,1,2,3]` 数字数组，体积膨胀 3~4 倍；base64 只涨 4/3。
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlobBytes(pub Vec<u8>);
+
+impl BlobBytes {
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// 小写十六进制：SQL 字面量用（MySQL `X'..'`、SQL Server `0x..`、PG `'\x..'`）。
+    pub fn to_hex(&self) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = String::with_capacity(self.0.len() * 2);
+        for byte in &self.0 {
+            out.push(HEX[(byte >> 4) as usize] as char);
+            out.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+        out
+    }
+}
+
+impl From<Vec<u8>> for BlobBytes {
+    fn from(data: Vec<u8>) -> Self {
+        Self(data)
+    }
+}
+
+impl AsRef<[u8]> for BlobBytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Serialize for BlobBytes {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&b64_encode(&self.0))
+    }
+}
+
+impl<'de> Deserialize<'de> for BlobBytes {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        b64_decode(&text)
+            .map(Self)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// 标准 base64（带 `=` 补位），与 Java 的 `Base64.getEncoder()` 一致。
+///
+/// 为什么自己写而不引 crate：这条链路要在离线/受限环境下也能编译，20 行编解码
+/// 比多一个第三方依赖更划算（下方有往返单测兜住）。
+const B64_TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+pub(crate) fn b64_encode(data: &[u8]) -> String {
+    let mut out = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(B64_TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(B64_TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 {
+            B64_TABLE[((n >> 6) & 63) as usize] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            B64_TABLE[(n & 63) as usize] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+pub(crate) fn b64_decode(text: &str) -> std::result::Result<Vec<u8>, String> {
+    let bytes = text.as_bytes();
+    if bytes.len() % 4 != 0 {
+        return Err(format!("base64 长度不是 4 的倍数（{}）", bytes.len()));
+    }
+    let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
+    for chunk in bytes.chunks(4) {
+        let mut n: u32 = 0;
+        let mut pad = 0u8;
+        for &c in chunk {
+            let value = match c {
+                b'A'..=b'Z' => c - b'A',
+                b'a'..=b'z' => c - b'a' + 26,
+                b'0'..=b'9' => c - b'0' + 52,
+                b'+' => 62,
+                b'/' => 63,
+                b'=' => {
+                    pad += 1;
+                    0
+                }
+                other => return Err(format!("非法 base64 字符：{}", other as char)),
+            };
+            n = (n << 6) | value as u32;
+        }
+        out.push((n >> 16) as u8);
+        if pad < 2 {
+            out.push((n >> 8) as u8);
+        }
+        if pad < 1 {
+            out.push(n as u8);
+        }
+    }
+    Ok(out)
 }
 
 impl CellValue {
@@ -32,6 +166,7 @@ impl CellValue {
             CellValue::Real(_) => "real",
             CellValue::Decimal(_) => "decimal",
             CellValue::Text(_) => "text",
+            CellValue::Bytes(_) => "bytes",
             CellValue::Blob { .. } => "blob",
         }
     }
@@ -48,6 +183,7 @@ impl CellValue {
             CellValue::Real(v) => v.to_string(),
             CellValue::Decimal(v) => v.clone(),
             CellValue::Text(v) => v.clone(),
+            CellValue::Bytes(data) => format!("<blob {}B>", data.len()),
             CellValue::Blob { len } => format!("<blob {len}B>"),
         }
     }
@@ -703,6 +839,43 @@ impl AccessContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 二进制字节走_base64_往返() {
+        // 已知向量（RFC 4648）：覆盖 0/1/2 个补位三种情况
+        for (raw, text) in [
+            (&b""[..], ""),
+            (&b"f"[..], "Zg=="),
+            (&b"fo"[..], "Zm8="),
+            (&b"foo"[..], "Zm9v"),
+            (&b"foob"[..], "Zm9vYg=="),
+            (&b"fooba"[..], "Zm9vYmE="),
+            (&b"foobar"[..], "Zm9vYmFy"),
+        ] {
+            assert_eq!(b64_encode(raw), text, "编码 {raw:?}");
+            assert_eq!(b64_decode(text).unwrap(), raw, "解码 {text}");
+        }
+        // 全字节域往返：0x00..0xFF 一个不落（BLOB 里什么字节都有）
+        let all: Vec<u8> = (0..=255u8).collect();
+        assert_eq!(b64_decode(&b64_encode(&all)).unwrap(), all);
+        assert!(b64_decode("abc").is_err(), "长度非 4 的倍数要报错");
+        assert!(b64_decode("ab$=").is_err(), "非法字符要报错");
+    }
+
+    #[test]
+    fn 二进制值_serde_形状与十六进制() {
+        let cell = CellValue::Bytes(BlobBytes::from(vec![0x00, 0x1f, 0xff]));
+        let json = serde_json::to_string(&cell).unwrap();
+        assert_eq!(json, r#"{"t":"bytes","v":"AB//"}"#);
+        let back: CellValue = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, cell);
+        assert_eq!(cell.to_display(), "<blob 3B>");
+        assert_eq!(cell.type_name(), "bytes");
+        match &cell {
+            CellValue::Bytes(data) => assert_eq!(data.to_hex(), "001fff"),
+            other => panic!("形状不对：{other:?}"),
+        }
+    }
 
     #[test]
     fn 文件型连接必须有路径() {

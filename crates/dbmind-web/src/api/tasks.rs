@@ -374,6 +374,18 @@ impl Task {
     pub fn add_rows_written(&self, n: u64) { *lock(&self.rows_written) += n; }
     pub fn add_rows_failed(&self, n: u64) { *lock(&self.rows_failed) += n; }
 
+    /// 把行级计数**拉回**重跑前的快照（同步断连整表重跑时用）。
+    ///
+    /// 为什么必须回退：上一次尝试读/写的行会随目标端事务回滚一起作废，
+    /// 不回退的话同一批行被计两遍 —— 进度卡「已传输」虚高甚至超过总行数。
+    pub fn reset_rows(&self, read: u64, written: u64, failed: u64) {
+        *lock(&self.rows_read) = read;
+        *lock(&self.rows_written) = written;
+        *lock(&self.rows_failed) = failed;
+    }
+
+    pub fn rows_failed(&self) -> u64 { *lock(&self.rows_failed) }
+
     /// Stream Load 快通道在这条任务里已经判定不可用（见字段注释）。
     pub fn stream_unavailable(&self) -> bool {
         self.stream_unavailable.load(Ordering::Relaxed)

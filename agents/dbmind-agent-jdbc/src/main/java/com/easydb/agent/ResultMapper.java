@@ -1,6 +1,7 @@
 package com.dbmind.agent;
 
-import com.google.gson.JsonArray;
+import com.google.gson.JsonArray;
+
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.stream.JsonWriter;
@@ -19,17 +20,51 @@ import java.util.Base64;
  *
  * <p>值的形状必须与内核的 `CellValue`（serde tag+content）严格一致：
  * {@code {"t":"null"}} / {@code {"t":"integer","v":1}} / {@code {"t":"real","v":1.5}}
- * / {@code {"t":"text","v":"s"}} / {@code {"t":"blob","v":{"len":12}}}。
- * 二进制只回长度：结果集要跨进程传输，塞原始字节会把响应体撑爆。
+ * / {@code {"t":"text","v":"s"}} / {@code {"t":"bytes","v":"<base64>"}}
+ * / {@code {"t":"blob","v":{"len":12}}}。
+ *
+ * <p><b>二进制回真字节</b>（base64，单值上限 {@link #BLOB_FULL_LIMIT}、整页上限
+ * {@link #BLOB_TOTAL_LIMIT}），超出预算的值才退回「长度 + 预览」：数据同步必须把
+ * BLOB/VARBINARY/IMAGE 原样搬到目标库，旧实现只回长度 —— 同步那一侧只能把这类列
+ * 跳过，等于静默丢数据。但只卡单值也不够：一页 500 行 × 8 MiB 会把宿主与内核一起撑爆，
+ * 所以另有一条整页总预算，超出后同样降级（内核看到 {@code blob} 而不是 {@code bytes}）。
  */
 public final class ResultMapper {
 
     /** CLOB 预览上限：够看内容，又不会把内存和协议撑爆。 */
     private static final int CLOB_PREVIEW_LIMIT = 64 * 1024;
-    /** 二进制预览上限（base64 前若干字节，便于用户判断内容类型）。 */
+    /** 二进制预览上限（超限时 base64 前若干字节，便于用户判断内容类型）。 */
     private static final int BLOB_PREVIEW_LIMIT = 256;
+    /**
+     * 二进制**全量**上限：必须与内核的 {@code BLOB_MAX_BYTES}（8 MiB）一致。
+     * 超过它只回长度与预览，并在结果里如实标注（内核看到的是 {@code blob}，不是 {@code bytes}）。
+     */
+    private static final int BLOB_FULL_LIMIT = 8 * 1024 * 1024;
+    /**
+     * 整个结果集的二进制**总**预算：单值 8 MiB 已经不小，但 500 行 × 8 MiB = 4 GB
+     * 会把宿主与内核一起撑死（一次普通查询就能拖垮应用）。超出总预算的其余二进制值
+     * 降级成「长度 + 预览」，内核看到的是 {@code blob}，不会误以为是数据。
+     */
+    private static final long BLOB_TOTAL_LIMIT = 64L * 1024 * 1024;
+
+    /** 每个结果集从 0 开始记字节数（ThreadLocal：宿主的请求是「一线程一次调用」）。 */
+    private static final ThreadLocal<long[]> BLOB_USED =
+            ThreadLocal.withInitial(() -> new long[] {0L});
 
     private ResultMapper() {
+    }
+
+    /** 这一格能不能给全量字节：单值不超上限，且整页总预算还够。 */
+    private static boolean allowFullBlob(long length) {
+        if (length < 0 || length > BLOB_FULL_LIMIT) {
+            return false;
+        }
+        long[] used = BLOB_USED.get();
+        if (used[0] + length > BLOB_TOTAL_LIMIT) {
+            return false;
+        }
+        used[0] += length;
+        return true;
     }
 
     public static JsonObject read(ResultSet resultSet, int maxRows) throws SQLException {
@@ -53,6 +88,7 @@ public final class ResultMapper {
      * 才用。这样内核与宿主可以各自独立升级、独立回退。
      */
     public static JsonObject read(ResultSet resultSet, int maxRows, boolean compact) throws SQLException {
+        BLOB_USED.get()[0] = 0L;
         ResultSetMetaData meta = resultSet.getMetaData();
         int columnCount = meta.getColumnCount();
 
@@ -106,6 +142,7 @@ public final class ResultMapper {
      */
     public static JsonObject readCompactInto(ResultSet resultSet, int maxRows, StringBuilder rowsOut)
             throws SQLException {
+        BLOB_USED.get()[0] = 0L;
         ResultSetMetaData meta = resultSet.getMetaData();
         int columnCount = meta.getColumnCount();
 
@@ -196,13 +233,15 @@ public final class ResultMapper {
             return;
         }
         if (value instanceof byte[] bytes) {
-            appendBlob(buf, bytes.length, bytes);
+            if (allowFullBlob(bytes.length)) {
+                appendBytes(buf, bytes);
+            } else {
+                appendBlob(buf, bytes.length, null);
+            }
             return;
         }
         if (value instanceof java.sql.Blob blob) {
-            long length = blob.length();
-            int take = (int) Math.min(length, BLOB_PREVIEW_LIMIT);
-            appendBlob(buf, (int) length, blob.getBytes(1, take));
+            appendBlobValue(buf, blob);
             return;
         }
         if (value instanceof Clob clob) {
@@ -262,6 +301,28 @@ public final class ResultMapper {
         buf.append('"');
     }
 
+    /** 二进制全量：{@code {"t":"bytes","v":"<base64>"}}（与内核 CellValue::Bytes 对应）。 */
+    private static void appendBytes(StringBuilder buf, byte[] data) {
+        buf.append("{\"t\":\"bytes\",\"v\":\"")
+                .append(Base64.getEncoder().encodeToString(data))
+                .append("\"}");
+    }
+
+    /**
+     * java.sql.Blob：装得下就读全量，装不下只回长度 + 预览。
+     *
+     * <p>为什么按 length 分流而不是先 getBytes 再看大小：几 MB 的 Blob 一旦
+     * 全读进堆，上百列同时在途就会 OOM；length() 是免费元数据。
+     */
+    private static void appendBlobValue(StringBuilder buf, java.sql.Blob blob) throws SQLException {
+        long length = blob.length();
+        if (allowFullBlob(length)) {
+            appendBytes(buf, blob.getBytes(1, (int) length));
+            return;
+        }
+        appendBlob(buf, (int) length, blob.getBytes(1, BLOB_PREVIEW_LIMIT));
+    }
+
     /** blob 仍用带标签的对象（要带长度与预览字节，裸值表达不了）。 */
     private static void appendBlob(StringBuilder buf, int length, byte[] preview) {
         buf.append("{\"t\":\"blob\",\"v\":{\"len\":").append(length);
@@ -298,12 +359,10 @@ public final class ResultMapper {
             return new com.google.gson.JsonPrimitive(number.doubleValue());
         }
         if (value instanceof byte[] bytes) {
-            return blob(bytes.length, bytes);
+            return allowFullBlob(bytes.length) ? bytesCell(bytes) : blob(bytes.length, null);
         }
         if (value instanceof java.sql.Blob blob) {
-            long length = blob.length();
-            int take = (int) Math.min(length, BLOB_PREVIEW_LIMIT);
-            return blob((int) length, blob.getBytes(1, take));
+            return blobCell(blob);
         }
         if (value instanceof Clob clob) {
             long length = clob.length();
@@ -342,12 +401,10 @@ public final class ResultMapper {
             return real(number.doubleValue());
         }
         if (value instanceof byte[] bytes) {
-            return blob(bytes.length, bytes);
+            return allowFullBlob(bytes.length) ? bytesCell(bytes) : blob(bytes.length, null);
         }
         if (value instanceof java.sql.Blob blob) {
-            long length = blob.length();
-            int take = (int) Math.min(length, BLOB_PREVIEW_LIMIT);
-            return blob((int) length, blob.getBytes(1, take));
+            return blobCell(blob);
         }
         if (value instanceof Clob clob) {
             long length = clob.length();
@@ -388,6 +445,22 @@ public final class ResultMapper {
         JsonObject cell = tagged("text");
         cell.addProperty("v", value);
         return cell;
+    }
+
+    /** 二进制全量（Gson 树路径）：{@code {"t":"bytes","v":"<base64>"}}。 */
+    private static JsonObject bytesCell(byte[] data) {
+        JsonObject cell = tagged("bytes");
+        cell.addProperty("v", Base64.getEncoder().encodeToString(data));
+        return cell;
+    }
+
+    /** java.sql.Blob 的 Gson 树版本：装得下给全量，装不下给长度 + 预览。 */
+    private static JsonObject blobCell(java.sql.Blob blob) throws SQLException {
+        long length = blob.length();
+        if (allowFullBlob(length)) {
+            return bytesCell(blob.getBytes(1, (int) length));
+        }
+        return blob((int) length, blob.getBytes(1, BLOB_PREVIEW_LIMIT));
     }
 
     private static JsonObject blob(int length, byte[] preview) {

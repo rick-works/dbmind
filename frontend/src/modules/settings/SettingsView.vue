@@ -1715,7 +1715,7 @@ const loadSafety = async () => {
     safetyForm.value.aiWriteEnabled = flag('safety.aiWriteEnabled', false)
     safetyForm.value.blockDangerous = flag('safety.blockDangerousStatements', false)
     safetyForm.value.maxWriteRows = num('safety.maxWriteRows', 0)
-    safetyForm.value.maxSessions = num('session.maxPerHost', 32)
+    safetyForm.value.maxSessions = num('session.maxPerHost', 128)
     // 内核按**秒**读；界面用分钟更好读（0 = 不按空闲回收）
     safetyForm.value.idleMinutes = Math.round(num('session.idleTimeoutSecs', 0) / 60)
     // SSH 隧道空闲回收同理（默认 30 分钟）

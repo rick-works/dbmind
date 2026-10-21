@@ -178,6 +178,10 @@ impl Writer for SqlWriter {
                     // 开不了事务就退回 autocommit 逐条写 —— 慢，但功能不缺。
                     // 错误要说出来：退回逐条提交会让每条 INSERT 各等一次提交
                     // （目标端开了 semi-sync 时每条都要等 slave ACK），吞吐差一个量级。
+                    //
+                    // 同时**记下这件事**：逐条提交意味着断连后已写的行留在目标表里，
+                    // 这张表就不能「整表重跑」（会写重复），见 `WriteDiag::begin_failed`。
+                    self.diag.begin_failed.store(true, Ordering::SeqCst);
                     if let Some(task) = &self.task {
                         task.log(format!(
                             "表 {}：开启事务失败（{}），退回逐条提交（大表会明显变慢）",

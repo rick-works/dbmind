@@ -61,9 +61,9 @@ pub use storage::{
     AiSettingsRow, AiUsageRow, KbDocRow, KbInfoRow, KbVectorRow, Store,
 };
 pub use types::{
-    AccessContext, CellValue, ColumnDetail, ColumnMeta, ConnectReport, ConnectionConfig, ConnectionRecord,
-    HistoryEntry, HistoryStatus, NewHistoryEntry, QueryOptions, QueryRequest, QueryResult, SchemaCacheInfo,
-    TableInfo, TableKind, EXTRA_SHADOW_FOR,
+    AccessContext, BlobBytes, CellValue, ColumnDetail, ColumnMeta, ConnectReport, ConnectionConfig,
+    ConnectionRecord, HistoryEntry, HistoryStatus, NewHistoryEntry, QueryOptions, QueryRequest,
+    QueryResult, SchemaCacheInfo, TableInfo, TableKind, BLOB_MAX_BYTES, EXTRA_SHADOW_FOR,
 };
 
 // `ConnectionKind` 及全部类型元数据由 build.rs 从 YAML 生成，直接展开到 crate 根。

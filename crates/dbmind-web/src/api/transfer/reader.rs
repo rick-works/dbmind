@@ -18,7 +18,8 @@ use crate::api::meta::run_sql_in;
 use crate::api::sync::{estimate_row_bytes, fetch_page, literal_for, write_parallelism};
 use crate::AppState;
 
-/// 单流初始页 2 万行；拿到第一页后会按实际行宽自动升到最多 10 万行。
+/// 单流初始页 2 万行；拿到第一页后会按实际行宽自适应，行数上限按本表写并发封顶
+///（见 `SqlReader::new` 的 `rows_cap`：1 路写 = 2 万行，4 路写 = 8 万行，最多 10 万行）。
 pub const PAGE_WIDE: usize = 20_000;
 /// 分片并发初始页 1 万行：多片同时在途，先控制内存，再按实际行宽自适应 ——
 /// 页码是「一次往返」的成本，5 千行/页会让 20 万行变成 40 次往返，在延迟高的链路上
@@ -101,6 +102,9 @@ pub struct SqlReader {
     where_clause: String,
     row_limit: u64,
     page_rows: AtomicUsize,
+    /// 一页的**行数上限**：按本表实际写并发定（见 `SqlReader::new`），
+    /// 目的是一页能在几十秒内写完，别让写队列长期满着
+    rows_cap: usize,
     /// 本表的会话后缀（见 `TablePlan::sid`）：并发整库同步时，不同表的同号分片
     /// 若用同一个会话键就会落到同一条物理连接上，分片退化成排队
     sid: String,
@@ -116,6 +120,16 @@ impl SqlReader {
             .map(|name| plan.source_kind.quote(name))
             .collect::<Vec<_>>()
             .join(", ");
+        // 一页的行数上限按**本表的写并发**定：一页要在几十秒内写得完。
+        // 真机（RDS + SSH 隧道，单表 1 路写）实测写速约 1.1k 行/秒，10 万行一页要 80 多秒，
+        // 而写队列只有 `workers + 1` 批 —— 于是读侧永远在等写、日志里一直报「写队列已满」，
+        // 内存还按「页数 × 32 MiB」囤着。按写路数封顶后，一页大约恒定在 18~20 秒：
+        // 写快时页大少往返，写慢时页小不堆积。写路数取自与 `SqlWriter::new` 同一个公式
+        //（`write_parallelism` 夹到 `workers_cap`），否则两边对不上。
+        let writers = write_parallelism(plan.target_kind.kind)
+            .min(if plan.workers_cap > 0 { plan.workers_cap } else { usize::MAX })
+            .max(1);
+        let rows_cap = PAGE_ROWS_MAX.min(PAGE_WIDE.saturating_mul(writers));
         Box::new(Self {
             state: plan.state.clone(),
             conn: plan.src_conn.clone(),
@@ -128,6 +142,7 @@ impl SqlReader {
             where_clause: plan.where_clause.clone(),
             row_limit: plan.row_limit,
             page_rows: AtomicUsize::new(PAGE_WIDE),
+            rows_cap,
             sid: plan.sid.clone(),
             slices_cap: plan.slices_cap,
         })
@@ -345,7 +360,7 @@ impl Reader for SqlReader {
             if estimated_bytes > 0 {
                 let next_rows = ((page_rows as u128 * PAGE_BYTES_TARGET as u128)
                     / estimated_bytes as u128)
-                    .clamp(PAGE_ROWS_MIN as u128, PAGE_ROWS_MAX as u128) as usize;
+                    .clamp(PAGE_ROWS_MIN as u128, self.rows_cap as u128) as usize;
                 // 小变化不折腾分页；只有明显更宽/更窄时才换档。
                 if next_rows * 2 < page_rows || next_rows > page_rows * 2 {
                     self.page_rows.store(next_rows, Ordering::SeqCst);
@@ -360,7 +375,7 @@ impl Reader for SqlReader {
             if self.paging_keys.is_empty() {
                 let now = self.page_rows_now();
                 if now >= page_rows {
-                    let grown = now.saturating_mul(2).min(PAGE_ROWS_MAX);
+                    let grown = now.saturating_mul(2).min(self.rows_cap);
                     if grown > now {
                         self.page_rows.store(grown, Ordering::SeqCst);
                     }

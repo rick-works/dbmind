@@ -325,8 +325,16 @@ impl SqliteDriver {
             ValueRef::Integer(v) => CellValue::Integer(v),
             ValueRef::Real(v) => CellValue::Real(v),
             ValueRef::Text(v) => CellValue::Text(String::from_utf8_lossy(v).into_owned()),
-            // 只回长度：结果集要跨进程/HTTP 传输，不能把二进制塞进去
-            ValueRef::Blob(v) => CellValue::Blob { len: v.len() },
+            // 回真字节（有上限）：SQLite 是唯一直连驱动，这里手上就有完整 `&[u8]`，
+            // 再"只回长度"就等于同步时被迫跳过 BLOB 列（静默丢数据）。
+            ValueRef::Blob(v) => {
+                if v.len() <= crate::types::BLOB_MAX_BYTES {
+                    CellValue::Bytes(crate::types::BlobBytes(v.to_vec()))
+                } else {
+                    // 超大值只回长度：一次查询把几百 MB 塞进内存没有意义
+                    CellValue::Blob { len: v.len() }
+                }
+            }
         }
     }
 }

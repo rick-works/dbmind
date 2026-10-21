@@ -487,6 +487,14 @@ impl Dialect {
         self.kind.key()
     }
 
+    /// 方言短名（`mysql` / `postgresql` / `sqlserver` …）。
+    ///
+    /// 给「按方言分支、但不属于方言能力表」的地方用（目前只有二进制字面量的语法差异：
+    /// `X'..'` / `0x..` / `hextoraw(..)` / `'\x..'::bytea` 各家都不一样）。
+    pub(crate) fn engine_key(&self) -> &'static str {
+        self.key()
+    }
+
     /// 这条方言能不能用**一条语句**完成 upsert（原生 upsert）。
     ///
     /// 能的话就不必「先把目标全部主键读进内存 → 命中的逐行 UPDATE」——那是 upsert 最贵的

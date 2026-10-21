@@ -33,6 +33,8 @@ const SETTINGS_SESSION_MAX_PER_HOST: &str = "session.maxPerHost";
 const SETTINGS_SESSION_IDLE_TIMEOUT: &str = "session.idleTimeoutSecs";
 /// 结构缓存的有效期（秒；设置页可改，配合「立即刷新」按钮两条路都能走）。
 const SETTINGS_SCHEMA_TTL: &str = "schema.ttlSecs";
+/// 会话相关默认值的一次性迁移标记（配额 32 → 128）。
+const SETTINGS_SESSION_DEFAULTS_MIGRATED: &str = "session.defaultsMigrated";
 /// SQL 编辑器执行的超时（秒；以前在 web 层写死 120 秒，跑大报表与误发大查询都不好受）。
 const SETTINGS_QUERY_TIMEOUT: &str = "query.timeoutSecs";
 /// 允许旧版 TLS（TLSv1/1.1）：web 层 `sys.rs` 也有一份同名常量（那里拿不到私有模块），
@@ -793,6 +795,20 @@ impl Store {
                 self.set_setting(SETTINGS_QUERY_MAX_ROWS, "0")?;
             }
             self.set_setting(SETTINGS_QUERY_DEFAULTS_MIGRATED, "1")?;
+        }
+        // 会话配额默认 32 → 128：32 在多表并发同步时会被「每表一套会话」顶满，
+        // 顶满后开始互相挤掉**正在用**的连接（「会话不存在」/「写入连接已断」）。
+        // 只把**恰好等于旧默认**的存量值升上去，用户填过的其它数字不碰。
+        if self.get_setting(SETTINGS_SESSION_DEFAULTS_MIGRATED)?.is_none() {
+            if self
+                .get_setting(SETTINGS_SESSION_MAX_PER_HOST)?
+                .as_deref()
+                .map(str::trim)
+                == Some("32")
+            {
+                self.set_setting(SETTINGS_SESSION_MAX_PER_HOST, "128")?;
+            }
+            self.set_setting(SETTINGS_SESSION_DEFAULTS_MIGRATED, "1")?;
         }
         if self.get_setting(SETTINGS_SAFETY_PRODUCTION_MIGRATED)?.is_some() {
             return Ok(());

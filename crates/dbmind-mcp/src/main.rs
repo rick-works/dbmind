@@ -623,6 +623,7 @@ fn cell_to_json(cell: &dbmind_core::CellValue) -> Value {
         CellValue::Real(v) => json!(v),
         CellValue::Decimal(v) => json!(v),
         CellValue::Text(v) => json!(v),
+        CellValue::Bytes(data) => json!(format!("<blob {}B>", data.len())),
         CellValue::Blob { len } => json!(format!("<blob {len}B>")),
     }
 }
