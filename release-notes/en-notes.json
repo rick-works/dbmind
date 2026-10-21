@@ -1,5 +1,12 @@
 {
     "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.43": [
+        "Backup / restore now live in the Task Center: a submitted job is registered immediately, can be sent to the background, and “View” brings the progress window back at any time; closing the window while it runs just collapses it",
+        "A stalled sync now speaks up: link-level errors such as a dropped connection fail fast instead of retrying thousands of rows one by one against a dead socket (48 hours of retries on a real case)",
+        "When the target stops accepting writes, a “read N rows / written M rows” line is logged every 30 seconds and the phase is updated, instead of reads climbing while writes and logs stay silent",
+        "The lock wait limit on MySQL / MariaDB targets is now 60 seconds (metadata locks default to a year), so a blocked table reports an error instead of showing “syncing” forever",
+        "The default read timeout for every connection type changed from “never” to 600 seconds: when the target half-closes the connection (an RDS idle kick, a device silently dropping packets) the query fails instead of hanging with no writes and no error"
+    ],
     "v1.2.42": [
         "Whole-database sync no longer creates views and routines before tables (it used to fail with Table doesn't exist and lose every view)",
         "The progress card's Read / Transferred counters no longer sit at 0 (same-instance direct copies are counted too, and the totals are reconciled at the end)",

@@ -746,6 +746,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.43（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.43</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-21</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>备份 / 还原接进任务中心</b>：提交就登记，可「后台运行」收起窗口，点「查看」随时接回进度；运行中关掉进度窗也不再拦着，任务照跑</li>
+            <li><b>同步卡住会说话了</b>：连接已断这类错误立刻报错并停止重试，不再让几千行逐行各等一次驱动超时（真机上曾磨了 48 小时）</li>
+            <li><b>目标端写不动时每 30 秒记一条「已读 N 行 / 已写 M 行」并更新阶段提示，不再是「读取数在涨、传输数不动、日志一片安静」</b></li>
+            <li><b>MySQL / MariaDB 目标端的锁等待上限压到 60 秒（元数据锁默认能等一年），被锁挡住会明确报错，不再永远显示「同步中」</b></li>
+            <li><b>各类型连接的默认读取超时从「永不超时」改成 600 秒：目标端把连接半开（RDS 踢连接、中间设备静默丢包）时会自己报错，不再不写也不失败</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.43" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.43" target="_blank" rel="noopener">下载 v1.2.43</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.42（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +776,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.42</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-21</span>
           </div>
           <ul class="rel-notes">
