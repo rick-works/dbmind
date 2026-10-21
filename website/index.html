@@ -746,6 +746,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.44（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.44</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-21</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>一行坏数据不再拖住整张表</b>：写入失败从「逐行重试」改成「二分拆批定位坏行」——2 万行的批里 1 个坏值，从 2 万次往返变成约 30 次尝试，唯一的写会话不再被占住几分钟（读侧也就不会一直卡在「写池收不下新的一批」）</li>
+            <li><b>「写池 30 秒没收下一批」这条提示改为按 30 / 60 / 120 / 300 秒退避，恢复时补一条「目标端恢复接收写入」，不再一次任务刷出上千条把真正的错误盖住</b></li>
+            <li><b>这条提示现在带上下文</b>：在途几批、最近一批多少行用了多少秒、最近一条失败样例 —— 锁等待、慢盘、坏行定位一眼能分开</li>
+            <li><b>执行选项新增「并发表数」（0 = 自适应，上限 32）：目标端是弱机、或源与目标就是同一个实例时调小它，能直接减少双方的连接与 IO 争抢</b></li>
+            <li><b>会话预算日志的措辞改准</b>：方言声明值是「单表独享时的写路数」，不是整个任务的连接上限</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.44" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.44" target="_blank" rel="noopener">下载 v1.2.44</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.43（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +776,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.43</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-21</span>
           </div>
           <ul class="rel-notes">

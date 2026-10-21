@@ -1,5 +1,12 @@
 {
     "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+    "v1.2.44": [
+        "One bad row no longer stalls a whole table: failed writes now bisect the batch instead of retrying row by row — a single bad value in a 20,000-row batch costs about 30 round trips instead of 20,000, so the only write session is not pinned for minutes (and the reader no longer sits on “the write pool will not take another batch”)",
+        "The stall notice now backs off 30 / 60 / 120 / 300 seconds and adds a “target is accepting writes again” line when it recovers, instead of printing thousands of copies that bury the real error",
+        "The notice also carries context: batches in flight, rows and duration of the last batch, and the latest failure sample — lock waits, slow disks and bad-row bisection become distinguishable at a glance",
+        "Execution options gained “Parallel tables” (0 = automatic, capped at 32): lower it on a weak target or when source and target are the same instance to cut connection and IO contention",
+        "The session-budget log now states things correctly: the dialect value is the write lanes a table gets when it runs alone, not the connection cap of the whole task"
+    ],
     "v1.2.43": [
         "Backup / restore now live in the Task Center: a submitted job is registered immediately, can be sent to the background, and “View” brings the progress window back at any time; closing the window while it runs just collapses it",
         "A stalled sync now speaks up: link-level errors such as a dropped connection fail fast instead of retrying thousands of rows one by one against a dead socket (48 hours of retries on a real case)",
