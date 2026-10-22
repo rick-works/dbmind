@@ -746,6 +746,30 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.47（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.47</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-22</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步提速</b>：读写不再串行——写上一页的同时并行读下一页。单表 500 万行实测 21,141 → 30,317 行/秒（+43%）</li>
+            <li><b>慢链路再快一截</b>：源端连接的高级参数里加 useCompression=true 开协议压缩，同一 500 万行 165s → 120s（约 4.2 万行/秒）</li>
+            <li><b>多表并发时自动关闭预取</b>：在途流翻倍会把丢包链路拖成整体退避（实测两表同开从 3 万掉到 7 千）；单表、或收尾只剩一张表时自动打开</li>
+            <li><b>每张表同步完打一条「耗时画像」：读/写/合计各多少秒、几路并发、页多大——瓶颈在读还是写一眼可见</b></li>
+            <li><b>新增目标端写入参数检查</b>：innodb_buffer_pool_size 过小、innodb_io_capacity 过低、flush_log_at_trx_commit=1 会在任务日志里点名，并给出建议值</li>
+            <li><b>新增两个调优逃生阀</b>：DBMIND_SYNC_NO_PREFETCH=1 关读预取，DBMIND_SYNC_STMT_CAP（字节）改单条 INSERT 上限</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.47" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.47" target="_blank" rel="noopener">下载 v1.2.47</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.46（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +777,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.46</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-21</span>
           </div>
           <ul class="rel-notes">

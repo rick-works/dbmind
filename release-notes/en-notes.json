@@ -323,5 +323,13 @@
     "High-concurrency syncs over SSH jump hosts no longer stall as a group: the client now limits concurrent handshakes (a stock sshd drops connections beyond 10 unauthenticated ones)",
     "Fixed: pressing Stop mid-sync could misreport unwritten queued pages as rows failed to write (nothing was lost - the run was simply canceled)",
     "Fixed: the task log kept only 200 lines, so the failure samples that 'see the task log' pointed to had already been trimmed away; the limit is now 2000 lines"
+  ],
+  "v1.2.47": [
+    "Faster sync: reads no longer wait behind writes - the next page is fetched while the current page is being written; 5M rows on one table went from 21,141 to 30,317 rows/s (+43%)",
+    "Another step on slow links: add useCompression=true to the source connection's extra parameters to enable protocol compression - the same 5M rows drop from 165s to 120s (about 42k rows/s)",
+    "Prefetch switches itself off when several tables run at once: doubling in-flight streams makes a lossy link back off as a whole (measured 30k down to 7k with two tables); it turns back on for a single table, or when only one table is left",
+    "Every table now logs a timing profile when it finishes: read / write / total seconds, lanes, page size - you can see at a glance which side is the bottleneck",
+    "New target-side write checks: an undersized innodb_buffer_pool_size, a low innodb_io_capacity or flush_log_at_trx_commit=1 are called out in the task log with suggested values",
+    "Two new tuning escape hatches: DBMIND_SYNC_NO_PREFETCH=1 disables read prefetch, DBMIND_SYNC_STMT_CAP (bytes) overrides the single-statement INSERT limit"
   ]
 }
