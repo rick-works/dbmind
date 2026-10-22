@@ -34,6 +34,13 @@ pub trait Writer: Send + Sync {
     fn name(&self) -> &'static str;
     /// 并发写连接数（单连接池的库会自动是 1）
     fn workers(&self) -> usize;
+    /// 并发写连接数的**上限**：尾部弹性扩路时最多能开到几路。
+    ///
+    /// 默认等于 [`Writer::workers`]（不扩容）；`SqlWriter` 返回方言声明的写并发，
+    /// 引擎据此判断「这一轮能不能再补令牌」。
+    fn workers_ceiling(&self) -> usize {
+        self.workers()
+    }
     /// 第 `worker` 路开始（开事务；不支持事务的方言是空操作）
     fn begin<'a>(&'a self, worker: usize) -> BF<'a, ()>;
     /// 写一批**新增**行，返回成功落库的行数
@@ -47,6 +54,16 @@ pub trait Writer: Send + Sync {
     /// **提交失败必须报错**：以前返回 `()` 且把 `commit` 的 Err 丢掉 —— 事务提交失败
     /// 时界面照样显示「同步成功」，实际一行都没落盘（或只落了一半）。
     fn finish<'a>(&'a self, worker: usize) -> BF<'a, Result<(), String>>;
+    /// 第 `worker` 路**放弃**：回滚本路未提交的行并复位 autocommit。
+    ///
+    /// 与 [`Writer::finish`] 的唯一差别是**不提交**。写侧出错（脏数据、连接断、超时）
+    /// 必须走这里：整表重跑的前提是「本次尝试写的行全部回滚」，否则追加模式重跑会写重复。
+    /// 以前这里走的也是 `finish`（即出错也提交），于是「断连整表重跑」在追加模式下
+    /// 真的可能写重复 —— 这是本轮修掉的一个正确性缺口。
+    ///
+    /// 不返回 `Result`：放弃路径已经在报错，回滚再失败也没有更好的处理
+    /// （连接多半已经断了，服务端会自行回滚未提交事务）。
+    fn abort<'a>(&'a self, worker: usize) -> BF<'a, ()>;
 }
 
 pub struct SqlWriter {
@@ -77,6 +94,9 @@ pub struct SqlWriter {
     stream: Option<StreamCfg>,
     stream_failed: AtomicBool,
     workers: usize,
+    /// 尾部弹性扩路的**上限**（方言声明的写并发）：`txn_open` / `stmt_caps` 按它预分配，
+    /// 运行时补发的 worker 编号才不会越界落到「没有事务标记」的默认分支。
+    workers_ceiling: usize,
     /// 每路 writer 的「单条 INSERT 字节上限」（按实测耗时自适应，见 `sync::adapt_stmt_cap`）：
     /// 链路慢/丢包时把报文拆小，比死守方言的 packet 上限快一个数量级
     stmt_caps: Vec<AtomicUsize>,
@@ -102,6 +122,9 @@ impl SqlWriter {
             .and_then(|text| text.trim().parse::<usize>().ok())
             .filter(|n| *n >= 1)
             .unwrap_or(workers);
+        // 尾部弹性的上限：方言声明的写并发（单连接池的库仍是 1）。运行时补发的 worker
+        // 编号一定 ≤ 它，所以数组按它预分配就够 —— 扩容只是「多给几路会话」，不改结构。
+        let workers_ceiling = workers.max(base).max(1);
         Self {
             state: plan.state.clone(),
             task: plan.task.clone(),
@@ -121,13 +144,14 @@ impl SqlWriter {
             pending_updates: tokio::sync::Mutex::new(Vec::new()),
             update_txn_open: AtomicBool::new(false),
             txn: txn_batch(kind_key),
-            txn_open: (0..workers.max(1)).map(|_| AtomicBool::new(false)).collect(),
+            txn_open: (0..workers_ceiling).map(|_| AtomicBool::new(false)).collect(),
             stream: plan.stream.clone(),
             stream_failed: AtomicBool::new(false),
-            stmt_caps: (0..workers.max(1))
+            stmt_caps: (0..workers_ceiling)
                 .map(|_| AtomicUsize::new(crate::api::sync::insert_stmt_cap(kind_key)))
                 .collect(),
             workers: workers.max(1),
+            workers_ceiling,
             diag: plan.diag.clone(),
         }
     }
@@ -160,6 +184,10 @@ impl Writer for SqlWriter {
         self.workers
     }
 
+    fn workers_ceiling(&self) -> usize {
+        self.workers_ceiling
+    }
+
     fn begin<'a>(&'a self, worker: usize) -> BF<'a, ()> {
         Box::pin(async move {
             let session = self.session(worker);
@@ -176,6 +204,27 @@ impl Writer for SqlWriter {
                     &session,
                 )
                 .await;
+                // 迁移期会话加速（DataX / Kettle 用户手工做的同一套，这里默认只做安全的那几条）：
+                // - `foreign_key_checks = 0`：跨表同步顺序不保证，外键校验只会制造失败；
+                // - `sql_log_bin = 0` 会断开目标端 binlog（省一半写放大），但它会**影响主从复制**，
+                //   所以只在用户显式开了 `DBMIND_SYNC_SKIP_BINLOG=1` 时才做，且权限不足就静默跳过；
+                // - `unique_checks = 0` 故意不做：唯一约束失效会静默写进重复数据，得不偿失。
+                let _ = run_target_in(
+                    &self.state,
+                    &self.tgt_target,
+                    "set session foreign_key_checks = 0",
+                    &session,
+                )
+                .await;
+                if std::env::var_os("DBMIND_SYNC_SKIP_BINLOG").is_some() {
+                    let _ = run_target_in(
+                        &self.state,
+                        &self.tgt_target,
+                        "set session sql_log_bin = 0",
+                        &session,
+                    )
+                    .await;
+                }
             }
             let Some((begin, _, _)) = self.txn else {
                 return;
@@ -505,6 +554,10 @@ impl Writer for SqlWriter {
             // 提交失败**不能咽掉**：以前这里 `let _ =`，commit 报错也当成功，
             // 界面显示「同步成功」而目标端要么没数据、要么只落了一半。
             let mut failure: Option<String> = None;
+            // 「提交过」要在**发起提交之后**立刻记，而不是等结果：commit 报错时这一片
+            // 是否已经落盘是未知的（服务端提交成功但响应丢了、或提交到一半断连）。
+            // 上层「能不能整表重跑」必须按最坏情况判断 —— 记下它，就不许再重跑。
+            self.diag.committed.fetch_add(1, Ordering::SeqCst);
             if let Err(err) = run_target_in(&self.state, &self.tgt_target, end, &session).await {
                 failure = Some(format!("提交事务失败：{}", err.message));
             }
@@ -519,6 +572,42 @@ impl Writer for SqlWriter {
             match failure {
                 Some(msg) => Err(msg),
                 None => Ok(()),
+            }
+        })
+    }
+
+    fn abort<'a>(&'a self, worker: usize) -> BF<'a, ()> {
+        Box::pin(async move {
+            let open = self
+                .txn_open
+                .get(worker)
+                .map(|flag| flag.load(Ordering::SeqCst))
+                .unwrap_or(false);
+            if !open {
+                return;
+            }
+            let session = self.session(worker);
+            // `rollback` 对这里列出的方言（MySQL / MariaDB / PG / Kingbase / SQLite /
+            // SQL Server）都是合法语句；不支持的方言 `txn` 本来就是 None，走不到这。
+            if let Err(err) =
+                run_target_in(&self.state, &self.tgt_target, "rollback", &session).await
+            {
+                // 连接已经断了的话回滚必然失败 —— 服务端会自行回滚未提交事务，
+                // 这不是错误，记一条 debug 就够
+                tracing::debug!(
+                    target: "dbmind::sync",
+                    table = %self.table,
+                    error = ?err,
+                    "回滚写事务失败（连接多半已断，服务端会自行回滚）"
+                );
+            }
+            if let Some((_, _, restore)) = self.txn {
+                if !restore.is_empty() {
+                    let _ = run_target_in(&self.state, &self.tgt_target, restore, &session).await;
+                }
+            }
+            if let Some(flag) = self.txn_open.get(worker) {
+                flag.store(false, Ordering::SeqCst);
             }
         })
     }

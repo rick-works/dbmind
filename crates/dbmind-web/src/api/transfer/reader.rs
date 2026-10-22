@@ -95,6 +95,13 @@ pub trait Reader: Send + Sync {
     fn page_rows(&self) -> usize;
     /// 这个源最多能并发开几片（由连接类型声明决定）
     fn max_parallel(&self) -> usize;
+    /// 并发片数的**上限**：尾部弹性扩片时最多能切/开到几片。
+    ///
+    /// 默认等于 [`Reader::max_parallel`]（不扩）；`SqlReader` 返回方言声明的读并发，
+    /// 引擎按它决定「细块要切多细」「令牌最多补到几片」。
+    fn parallel_ceiling(&self) -> usize {
+        self.max_parallel()
+    }
     /// 切分。返回 1 片 = 不分片（无键 / 有行数上限 / 单连接池的库）。
     fn split<'a>(&'a mut self, want: usize) -> BF<'a, Result<Vec<RowRange>, String>>;
     /// 拉一片的下一页
@@ -125,6 +132,8 @@ pub struct SqlReader {
     sid: String,
     /// 本表最多几片并发读（0 = 方言默认），见 `TablePlan::slices_cap`
     slices_cap: usize,
+    /// 尾部弹性扩片的**上限**（方言声明的读并发）：见 [`Reader::parallel_ceiling`]
+    parallel_ceiling: usize,
 }
 
 impl SqlReader {
@@ -139,6 +148,15 @@ impl SqlReader {
         // 往返次数抬了几倍，整体反而变慢。现在交给**实测写速**：`read_page` 里按
         // 「一页 ≈ PAGE_TARGET_SECS 秒的写入量」调，快则放大到 10 万行、慢则缩到几千行。
         let rows_cap = PAGE_ROWS_MAX;
+        // 尾部弹性扩片的上限：方言声明的读并发（单连接池的库 = 1，多开只会在池里排队）。
+        // 调优逃生阀优先；下限是本次分到的份额，避免「cap 比声明还大」时反而被压小。
+        let parallel_ceiling = std::env::var("DBMIND_SYNC_SLICES")
+            .ok()
+            .and_then(|text| text.trim().parse::<usize>().ok())
+            .filter(|n| *n >= 1)
+            .unwrap_or_else(|| write_parallelism(plan.source_kind.kind).max(1))
+            .max(plan.slices_cap)
+            .max(1);
         Box::new(Self {
             state: plan.state.clone(),
             conn: plan.src_conn.clone(),
@@ -155,6 +173,7 @@ impl SqlReader {
             diag: plan.diag.clone(),
             sid: plan.sid.clone(),
             slices_cap: plan.slices_cap,
+            parallel_ceiling,
         })
     }
 
@@ -285,6 +304,14 @@ impl Reader for SqlReader {
         } else {
             base
         }
+    }
+
+    fn parallel_ceiling(&self) -> usize {
+        // 逃生阀（不并发）在这里同样生效：DBMIND_SYNC_NO_SPLIT 时不扩容
+        if std::env::var_os("DBMIND_SYNC_NO_SPLIT").is_some() {
+            return 1;
+        }
+        self.parallel_ceiling.max(self.max_parallel())
     }
 
     fn split<'a>(&'a mut self, want: usize) -> BF<'a, Result<Vec<RowRange>, String>> {

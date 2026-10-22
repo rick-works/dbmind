@@ -46,7 +46,7 @@ pub use engine::run;
 pub use reader::{Cursor, Page, Reader, RowRange};
 pub use writer::Writer;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::api::dialect::Dialect;
@@ -98,6 +98,13 @@ pub struct WriteDiag {
     /// 事务真的开起来了 ⇒ 连接一断，服务端回滚，目标表里没有半截数据，重跑是安全的；
     /// 退回 autocommit 过 ⇒ 已经逐条提交了，重跑会写重复，**绝不能重跑**。
     pub begin_failed: AtomicBool,
+    /// 本表**已经提交成功**的写路数。
+    ///
+    /// 断连后能不能整表重跑，取决于它是不是 0：多路写时每路各是一个独立事务
+    /// （见 `writer` 模块文档），先写完的那路会先提交；只要提交过一路，目标表里
+    /// 就已经有本次任务的数据，**追加模式重跑会写重复** —— 回滚只能回滚未提交的。
+    /// 提交阶段中途断连正是这种情况，所以判据必须是「一路都没提交过」。
+    pub committed: AtomicUsize,
 }
 
 impl WriteDiag {
@@ -173,6 +180,55 @@ pub struct StreamCfg {
     pub pass: String,
 }
 
+/// 运行中可被「整库调度」**调高**的表内并发（尾部弹性）。
+///
+/// 为什么需要运行时可变：片数与写路数都是表**开始时**按「当时并排几张表」算死的。
+/// 尾部只剩一两张大表时，别的表退出的那份配额就白扔了 —— 真机实测 700 万行同步：
+/// 两表并行 30k 行/秒，前面那张小表一结束，剩下的大表往下掉到 18k 行/秒，
+/// 因为 5000 万/700 万行的大表当初只分到 2 片读 + 1 路写。
+///
+/// 调度侧（`sync::db`）每 500ms 按「在跑的表数 / 剩余表数」更新这两个数，表的引擎读到
+/// 更大的值就把读片与写路**就地扩容**（令牌池补发 + 细块队列还有余量），不必重切表。
+#[derive(Debug, Default)]
+pub struct GrowCaps {
+    /// 每张表可用的读片数（0 = 未启用弹性，按初始值）
+    pub src_slices: AtomicUsize,
+    /// 每张表可用的写路数（0 = 未启用）
+    pub tgt_workers: AtomicUsize,
+    /// 此刻**正在跑**的表数（调度侧每 500ms 刷一次）。
+    ///
+    /// 用途：表内读预取只在「这张表独占链路」时开。多表并发时每张表已经有 2~4 路，
+    /// 再翻倍的在途流会把丢包链路拖进整体退避 —— 实测两表同时开预取从 30.6k 掉到 7k。
+    pub active: AtomicUsize,
+}
+
+impl GrowCaps {
+    pub fn set(&self, slices: usize, workers: usize) {
+        self.src_slices.store(slices, Ordering::SeqCst);
+        self.tgt_workers.store(workers, Ordering::SeqCst);
+    }
+
+    /// 刷新「在跑的表数」（调度侧调用）。
+    pub fn set_active(&self, tables: usize) {
+        self.active.store(tables, Ordering::SeqCst);
+    }
+
+    /// 在跑的表数；0 = 还没刷过（按「独占」处理，允许预取）。
+    pub fn active(&self) -> usize {
+        self.active.load(Ordering::SeqCst)
+    }
+
+    /// 目标读片数（只升不降：中途缩容会把已开的事务白扔）
+    pub fn slots(&self, base: usize) -> usize {
+        self.src_slices.load(Ordering::SeqCst).max(base)
+    }
+
+    /// 目标写路数（同上）
+    pub fn want_workers(&self, base: usize) -> usize {
+        self.tgt_workers.load(Ordering::SeqCst).max(base)
+    }
+}
+
 /// 一张表的**传输计划**：DDL（建表/索引/注释）由 sync 层做完，这里只管搬行。
 ///
 /// 字段全是「已经解析好的值」——没有 `SyncRequest`、没有 `Opts`，插件不需要知道
@@ -244,6 +300,14 @@ pub struct TablePlan {
     pub stream: Option<StreamCfg>,
     /// 写池运行态（在途批数 / 最近批耗时 / 失败样例）：卡顿日志读它
     pub diag: Arc<WriteDiag>,
+    /// 尾部弹性并发（见 [`GrowCaps`]）：`None` = 单表同步，不参与整库调度
+    pub grow: Option<Arc<GrowCaps>>,
+    /// 本表**已读出的行数**（跨块累计，重试会扣回）。
+    ///
+    /// 用途：上层的「对象超时」判断改为**看有没有进展**而不是看总时长 —— 固定 11 分钟会把
+    /// 明明一直在搬数据的表判死：无主键 500 万行只有 7.2k 行/秒（OFFSET 翻页），要 11.4 分钟；
+    /// 有主键 5000 万行要 33 分钟。两者都踩过线，被当成「连接半开」整表放弃。
+    pub progress: Arc<AtomicU64>,
 }
 
 /// upsert 怎么落库。

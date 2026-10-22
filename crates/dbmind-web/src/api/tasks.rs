@@ -34,10 +34,14 @@ pub const TASK_TTL: Duration = Duration::from_secs(30 * 60);
 
 /// 每个任务最多保留多少行日志（界面上就是个滚动文本框，攒太多只是占内存）。
 ///
-/// 200 行的教训：整库同步 400 个对象 × 每对象 5~6 行 ≈ 两千多行，跑到中段时
+/// 200 → 2000 的教训：整库同步 400 个对象 × 每对象 5~6 行 ≈ 两千多行，跑到中段时
 /// 前面的「写入失败样例错误」已被裁掉，界面只剩一句「详见任务日志」却看不到原因 ——
-/// 排查无门。2000 行 ≈ 几百 KB 内存，换「任何失败都能回看原因」，值。
-const MAX_LOGS: usize = 2000;
+/// 排查无门。
+///
+/// 2000 → 4000：实测 401 个对象的整库同步正好压到 2000 行的边（每条表 5 行：
+/// 读结构/建表/搬数据/建索引/完成），一有重试或失败样例就超，最旧那几张表的记录
+/// 直接被挤掉。4000 行 ≈ 1MB 内存，覆盖「400 对象 + 每条都带重试说明」的极端情况。
+const MAX_LOGS: usize = 4000;
 
 /// 看门狗的**心跳间隔**（见 `TaskRegistry::spawn`）。
 ///
@@ -375,6 +379,15 @@ impl Task {
     }
     /// 行级实时计数（读取/写入/失败行数），同步等按行推进的任务用。
     pub fn add_rows_read(&self, n: u64) { *lock(&self.rows_read) += n; }
+
+    /// 扣回已读行数（片级重跑用）。
+    ///
+    /// 一片回滚后重跑会把同一片再读一遍；不扣回的话「已读」会随重跑次数虚高
+    /// （真机：100 万行的表杀了一次连接，界面显示已读 111 万）。
+    pub fn sub_rows_read(&self, n: u64) {
+        let mut guard = lock(&self.rows_read);
+        *guard = guard.saturating_sub(n);
+    }
     pub fn add_rows_written(&self, n: u64) { *lock(&self.rows_written) += n; }
     pub fn add_rows_failed(&self, n: u64) { *lock(&self.rows_failed) += n; }
 
