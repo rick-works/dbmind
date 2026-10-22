@@ -331,5 +331,18 @@
     "Every table now logs a timing profile when it finishes: read / write / total seconds, lanes, page size - you can see at a glance which side is the bottleneck",
     "New target-side write checks: an undersized innodb_buffer_pool_size, a low innodb_io_capacity or flush_log_at_trx_commit=1 are called out in the task log with suggested values",
     "Two new tuning escape hatches: DBMIND_SYNC_NO_PREFETCH=1 disables read prefetch, DBMIND_SYNC_STMT_CAP (bytes) overrides the single-statement INSERT limit"
+  ],
+  "v1.2.48": [
+    "Whole-database sync now reconciles at the end: it counts the source table, counts the target table, and rebuilds that table once when the numbers disagree - 'whatever the source has, the target must have' no longer depends on someone watching",
+    "Big tables start first: dispatch order follows source table size, so a whole-database run no longer ends with one big table left and 8 lanes degrading into a single stream",
+    "Tables without a primary key move fast too: when the source has a unique index it becomes the paging cursor, turning deep OFFSET paging from O(N squared) into 'each page only scans its own rows'",
+    "Tables with neither a primary key nor a unique index are split into row ranges and read in parallel (enable with DBMIND_SYNC_WINDOW=1) instead of paging through in a single stream",
+    "Overwrite mode rebuilds the target table from the source: charset, length and unique indexes all line up, so no more thousands of 'write failed' rows a day; if the rebuild fails it falls back to keeping the structure, truncating and reloading, and says why",
+    "Index creation is merged into a single ALTER on MySQL / MariaDB: six indexes on a 100M-row table mean one table scan instead of six, with a fallback to creating them one by one",
+    "When a connection drops, the single-statement INSERT cap halves itself (down to 32KB): that gets around links which drop any uplink packet over 60KB and reset the connection 19 seconds later, with no cost on healthy links",
+    "Idempotent writes: loading after a truncate uses an upsert, so a retry that overlaps the already-committed range no longer reports Duplicate entry and throws those rows away as dirty data",
+    "Derby targets now use native MERGE too: before this they could only do plain inserts, so a retry that hit an existing primary key threw the rows away as dirty data - the only JDBC relational database that lacked idempotency",
+    "socketTimeout=0 on old connections is now treated as 'not set': a half-open connection no longer waits out the 5-minute fallback timeout, and you do not have to re-save every connection",
+    "Progress counters only go up: 'transferred' can no longer exceed 'read', and neither number jumps backwards when a table is retried"
   ]
 }
