@@ -722,6 +722,215 @@ enum IndexFilter {
     NonUniqueOnly,
 }
 
+/// 单表**精确**行数（终态对账用）。对账要的是准数，所以直接 `count(*)`，
+/// 不用统计视图里的估算值。
+async fn count_table(state: &AppState, conn: &str, scope: &str, table_expr: &str) -> Option<u64> {
+    let sql = format!("select count(*) as n from {table_expr}");
+    let result = run_sql_in(state, conn, scope, sql, 600_000).await.ok()?;
+    let value = result.rows.first()?.first()?;
+    Some(match value {
+        CellValue::Integer(n) => (*n).max(0) as u64,
+        CellValue::Real(n) => n.max(0.0) as u64,
+        CellValue::Text(text) => text.trim().parse().ok()?,
+        _ => return None,
+    })
+}
+
+/// 源表体量（行数**估算**），给整库同步的调度排序用。
+///
+/// 只做估算：拿不到就返回空（排序退化成清单原序），绝不为了排序去 `count(*)` 全表扫 ——
+/// 那是把「为了快」变成了「先慢一次」。各方言的估算口径都是现成的统计视图：
+/// `information_schema.tables` / `system.tables` / `pg_class.reltuples`。
+async fn source_table_rows(
+    state: &AppState,
+    src: &Side,
+    kind: Dialect,
+) -> std::collections::HashMap<String, i64> {
+    let mut out = std::collections::HashMap::new();
+    let (database, schema) = match src.scope.split_once('.') {
+        Some((db, schema)) => (db.to_string(), schema.to_string()),
+        None => (src.scope.clone(), "public".to_string()),
+    };
+    let quote = |text: &str| text.replace('\'', "''");
+    let sql = match kind.kind.key() {
+        "mysql" | "mariadb" | "doris" => format!(
+            "select table_name as t, table_rows as n from information_schema.tables \
+             where table_schema = '{}'",
+            quote(&database)
+        ),
+        "clickhouse" => format!(
+            "select name as t, total_rows as n from system.tables where database = '{}'",
+            quote(&database)
+        ),
+        // Kingbase 与 PG 同构（系统目录一样），只是驱动不同
+        "postgresql" | "kingbase" => format!(
+            "select c.relname as t, coalesce(c.reltuples, 0)::bigint as n from pg_class c \
+             join pg_namespace ns on ns.oid = c.relnamespace \
+             where ns.nspname = '{}' and c.relkind = 'r'",
+            quote(&schema)
+        ),
+        // Oracle / DM：`num_rows` 是统计信息里的估算（可能为 NULL，按 0 处理）
+        "oracle" | "dm" => {
+            let owner = schema.to_uppercase();
+            format!(
+                "select table_name as t, num_rows as n from all_tables where owner = '{}'",
+                quote(&owner)
+            )
+        }
+        // DB2：`CARD` 是统计信息里的行数估算
+        "db2" => format!(
+            "select tabname as t, card as n from syscat.tables where tabschema = '{}'",
+            quote(&schema.to_uppercase())
+        ),
+        // SQL Server：分区统计里 index_id 0/1 分别是堆和聚集索引，加起来就是表行数
+        "sqlserver" => format!(
+            "select t.name as t, sum(p.rows) as n from sys.dm_db_partition_stats p \
+             join sys.tables t on t.object_id = p.object_id \
+             where p.index_id in (0, 1) and schema_name(t.schema_id) = '{}' group by t.name",
+            quote(&schema)
+        ),
+        _ => return out,
+    };
+    let Ok(result) = run_sql_in(state, &src.conn, &src.scope, sql, 5000).await else {
+        return out;
+    };
+    for row in crate::api::meta::rows_of(&result) {
+        let pick = |key: &str| {
+            row.iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                .map(|(_, value)| value)
+        };
+        let (Some(name), Some(count)) = (pick("t"), pick("n")) else {
+            continue;
+        };
+        let name = match name {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        };
+        if name.is_empty() {
+            continue;
+        }
+        out.insert(name.to_lowercase(), crate::api::shape::value_to_i64(count).unwrap_or(0));
+    }
+    out
+}
+
+/// 取源表的索引清单，统一成 `(名称, 是否唯一, 列清单)`。
+///
+/// 与 `sync_indexes` 里的取法是**同一套口径**（MySQL 系走 `SHOW INDEX`，因为 Doris 的
+/// information_schema.statistics 不反映 `CREATE INDEX` 建的二级索引；其它方言走
+/// `dialect.indexes()` 的整库元数据查询）。区别只在：这里只服务「分页键能不能用某个
+/// 唯一索引」，所以解析更窄，解析不出的行直接丢。
+async fn source_index_list(
+    state: &AppState,
+    src: &Side,
+    source_kind: Dialect,
+    table: &str,
+) -> Vec<(String, bool, Vec<String>)> {
+    let mut out: Vec<(String, bool, Vec<String>)> = Vec::new();
+    let cell = |row: &serde_json::Map<String, Value>, key: &str| -> Option<String> {
+        let value = row
+            .get(key)
+            .or_else(|| row.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, v)| v))?;
+        match value {
+            Value::String(text) => Some(text.clone()),
+            Value::Number(number) => Some(number.to_string()),
+            Value::Bool(flag) => Some(if *flag { "1" } else { "0" }.to_string()),
+            Value::Null => None,
+            other => Some(other.to_string()),
+        }
+    };
+    if matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris") {
+        let sql = format!("show index from {}", src.scoped(table, source_kind));
+        let Ok(result) = run_sql_in(state, &src.conn, &src.scope, sql, 5000).await else {
+            return out;
+        };
+        // Key_name → (non_unique, [(seq, column)])
+        let mut agg: Vec<(String, i64, Vec<(i64, String)>)> = Vec::new();
+        for row in crate::api::meta::rows_of(&result) {
+            let Some(name) = cell(&row, "Key_name").filter(|n| !n.is_empty()) else {
+                continue;
+            };
+            let Some(column) = cell(&row, "Column_name").filter(|c| !c.is_empty()) else {
+                continue;
+            };
+            let seq = cell(&row, "Seq_in_index").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1);
+            let non_unique = cell(&row, "Non_unique").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1);
+            match agg.iter_mut().find(|(n, _, _)| *n == name) {
+                Some((_, _, cols)) => cols.push((seq, column)),
+                None => agg.push((name, non_unique, vec![(seq, column)])),
+            }
+        }
+        for (name, non_unique, mut cols) in agg {
+            if name.eq_ignore_ascii_case("PRIMARY") {
+                continue;
+            }
+            cols.sort_by_key(|(seq, _)| *seq);
+            out.push((name, non_unique == 0, cols.into_iter().map(|(_, c)| c).collect()));
+        }
+        return out;
+    }
+    if let crate::api::dialect::Meta::Sql(sql) = source_kind.indexes() {
+        let Ok(result) = run_sql_in(state, &src.conn, &src.scope, sql, 5000).await else {
+            return out;
+        };
+        for row in crate::api::meta::rows_of(&result) {
+            let row_table = cell(&row, "table").unwrap_or_default();
+            if !row_table.eq_ignore_ascii_case(table) {
+                continue;
+            }
+            let name = cell(&row, "name").unwrap_or_default();
+            let unique = cell(&row, "non_unique").and_then(|v| v.parse::<i64>().ok()) == Some(0)
+                || cell(&row, "unique").map(|v| v == "1" || v.eq_ignore_ascii_case("true")) == Some(true)
+                || cell(&row, "isUnique").and_then(|v| v.parse::<i64>().ok()) == Some(1);
+            let columns: Vec<String> = cell(&row, "columns")
+                .unwrap_or_default()
+                .split(',')
+                .map(|c| c.trim().trim_matches(['"', '`', '[', ']']).to_string())
+                .filter(|c| !c.is_empty())
+                .collect();
+            if columns.is_empty() {
+                continue;
+            }
+            out.push((name, unique, columns));
+        }
+    }
+    out
+}
+
+/// 无主键表的分页键候补：源表上的**唯一索引**。
+///
+/// 整库同步里大量 ETL 表没有主键，但有唯一索引（业务单号 + 日期之类）。有它就能走
+/// keyset 翻页，把 OFFSET 的 O(N²) 退化成「每页只扫本页」；过去只认主键，这类表一律
+/// 掉进深翻页（真机：357 万行的 `project_lease_info_di` 单表跑了 40 分钟）。
+///
+/// 只接受**列全部落在同步列里、且都 NOT NULL** 的唯一索引：唯一索引允许多行 NULL，
+/// 拿它当游标会漏掉那些行（keyset 里 `null > x` 恒为假，整段被跳过）。
+async fn unique_paging_key(
+    state: &AppState,
+    src: &Side,
+    source_kind: Dialect,
+    table: &str,
+    columns: &[String],
+    nullable: &[String],
+) -> Option<Vec<String>> {
+    let mut candidates: Vec<Vec<String>> = Vec::new();
+    for (_, unique, cols) in source_index_list(state, src, source_kind, table).await {
+        if !unique || cols.is_empty() {
+            continue;
+        }
+        if cols.iter().any(|c| nullable.iter().any(|n| n.eq_ignore_ascii_case(c))) {
+            continue;
+        }
+        if cols.iter().any(|c| !columns.iter().any(|s| s.eq_ignore_ascii_case(c))) {
+            continue;
+        }
+        candidates.push(cols);
+    }
+    candidates.sort_by_key(|cols| cols.len());
+    candidates.into_iter().next()
+}
+
 /// 建表后把**源表的非主键索引**搬到目标（「建表包含索引」选项）。
 ///
 /// 索引清单走方言的 `indexes()` 元数据查询（与树上「索引」节点同一份 SQL）。
@@ -738,6 +947,7 @@ async fn sync_indexes(
     table: &str,
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
     filter: IndexFilter,
+    declared_primary: &[String],
 ) -> usize {
     // 源索引清单，统一成 (名称, 唯一, 列清单)。两条路：
     // - MySQL 系（含 Doris）：`SHOW INDEX FROM 表` —— **必须走这条**，Doris 的
@@ -846,6 +1056,27 @@ async fn sync_indexes(
             }
         }
     }
+    // 源表没有真正主键时，某个唯一索引已经被建表 DDL 当主键写进去了：这里不能再建一遍。
+    // 两套同名约束的代价不是"多一个索引"那么轻 —— 每次插入要维护两棵 B 树，而且
+    // `mysql_has_secondary_unique` 会把它当成"额外唯一索引"，让本可走原生 upsert 的
+    // 表降级成两阶段（真机：winneryun_huike_data_hour 目标端就是这样双份约束）。
+    // 比较列集合而不是列序：唯一约束与列序无关（源是 (SITE_KEY, DATA_TIME)、
+    // 建出来的主键是 (DATA_TIME, SITE_KEY)）。
+    if !declared_primary.is_empty() {
+        let mut declared: Vec<String> = declared_primary
+            .iter()
+            .map(|column| column.to_ascii_lowercase())
+            .collect();
+        declared.sort();
+        indexes.retain(|(_, unique, cols)| {
+            if !*unique || cols.len() != declared.len() {
+                return true;
+            }
+            let mut current: Vec<String> = cols.iter().map(|c| c.to_ascii_lowercase()).collect();
+            current.sort();
+            current != declared
+        });
+    }
     // 索引后置：按阶段只建该建的那一半（见 `IndexFilter` 的注释）
     if filter != IndexFilter::All {
         let want_unique = filter == IndexFilter::UniqueOnly;
@@ -867,7 +1098,49 @@ async fn sync_indexes(
     //（也可能撞上 10 分钟的单语句上限）—— 再像以前那样完全不吭声，用户只会看到
     //「目标表没有索引」却毫无线索。这里汇总成一行日志，不逐条刷屏。
     let mut failed: Vec<String> = Vec::new();
-    for (name, unique, columns) in indexes {
+
+    // MySQL / MariaDB：把这一批索引合并成**一条** ALTER（服务器只扫一遍表）。
+    //
+    // 为什么：逐条 `create index` 每条都要扫一遍全表（真机：1 亿行的表 6 个索引，
+    // 光建索引就多花好几倍时间，用户看到的是「跑到后面越来越慢」而不是数据量大）；
+    // 合并成一条 ALTER 只扫一次。失败再退回逐条建（隔离重名/不支持的索引）。
+    if total > 1 && matches!(target_kind.kind.key(), "mysql" | "mariadb") {
+        let mut parts: Vec<String> = Vec::with_capacity(total);
+        for (name, unique, columns) in &indexes {
+            let col_list = columns
+                .iter()
+                .map(|c| target_kind.quote(c))
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!(
+                "add {}index {} ({})",
+                if *unique { "unique " } else { "" },
+                target_kind.quote(name.as_str()),
+                col_list
+            ));
+        }
+        let sql = format!("alter table {target_name} {}", parts.join(", "));
+        if let Some(task) = task {
+            task.log(format!(
+                "表 {table}：一次创建 {total} 个索引（合并为单条 ALTER，只扫一遍表）"
+            ));
+        }
+        match run_target(state, tgt_target, &sql).await {
+            Ok(_) => created = total,
+            Err(err) => {
+                tracing::warn!(table, error = %err.message, "合并建索引失败，改为逐条创建");
+                if let Some(task) = task {
+                    task.log(format!(
+                        "表 {table}：合并建索引失败（{}），改为逐条创建",
+                        err.message
+                    ));
+                }
+            }
+        }
+    }
+
+    if created == 0 {
+        for (name, unique, columns) in indexes {
             if total > 1 {
                 if let Some(task) = task {
                     task.log(format!(
@@ -905,6 +1178,7 @@ async fn sync_indexes(
                 }
             }
         }
+    }
     if created > 0 {
         if let Some(task) = task {
             task.log(format!("表 {table}：已创建 {created} 个索引"));
@@ -938,6 +1212,7 @@ async fn create_deferred_indexes(
     table: &str,
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
     deferred: bool,
+    declared_primary: &[String],
 ) {
     if !deferred {
         return;
@@ -955,6 +1230,7 @@ async fn create_deferred_indexes(
         table,
         task,
         IndexFilter::NonUniqueOnly,
+        declared_primary,
     )
     .await;
 }
@@ -1933,8 +2209,14 @@ pub(crate) fn insert_stmt_cap(kind_key: &str) -> usize {
     }
 }
 
-/// 单条 INSERT 的字节**下限**：再拆分就只剩往返开销了（128KB 已足够走满一条千兆链路）。
-const STMT_CAP_MIN: usize = 128 * 1024;
+/// 单条 INSERT 的字节**下限**：再拆分就只剩往返开销了。
+///
+/// 曾取 128KB（"128KB 已足够走满一条千兆链路"），真机翻车：目标库在一条 TAP VPN 隧道后面，
+/// 上行报文 **60KB 稳过、121KB 必挂**（客户端发出后收不到任何 ACK，TCP 重传退避约 19 秒后
+/// 连接重置，驱动只报 `Communications link failure`，看日志像"服务端把我踢了"，实际是包丢了）。
+/// 128KB 的下限让 `DBMIND_SYNC_STMT_CAP` 想调小也调不动，只能改代码，所以下限降到 32KB：
+/// 链路健康时耗时会迅速把 cap 翻倍回方言上限（见 `adapt_stmt_cap`），代价只是开头几次往返。
+const STMT_CAP_MIN: usize = 32 * 1024;
 
 /// 按「平均每条语句的耗时」调整单条 INSERT 的字节上限。
 ///
@@ -2277,6 +2559,15 @@ pub(crate) async fn write_insert_rows(
                 // 连接级错误**不能**退化成逐行重试（见 is_link_level_error）：
                 // 断了的连接上每一行都要各等一次驱动超时，表现就是「一行不写也不报错」。
                 if is_link_level_error(&batch_err) {
+                    // 断连的常见真因不是"服务端把我踢了"，而是**上行报文太大**撞上链路的
+                    // 重传退避：真机实测同一条 TAP 隧道，60KB 的 INSERT 稳过、121KB 必挂，
+                    // 客户端发完收不到 ACK，19 秒后连接重置，驱动只报 Communications link
+                    // failure。这里把单条语句的字节上限减半，后面重跑该片就用更小的包探路；
+                    // 只在失败时下调，健康链路不会因此变慢。
+                    let shrunk = (byte_cap / 2).max(STMT_CAP_MIN);
+                    if shrunk < byte_cap {
+                        stmt_cap.store(shrunk, std::sync::atomic::Ordering::Relaxed);
+                    }
                     if let Some(task) = task {
                         let left = rows.len() as u64 - ok_rows;
                         // **不记失败行**：这一批所在的分片会被上层回滚并重跑（片级重试），
@@ -2285,8 +2576,9 @@ pub(crate) async fn write_insert_rows(
                         //（真机：目标表一行不缺、结果却报失败 10 万）。
                         task.log(format!(
                             "表 {table}：写入连接已断（{}），已停止重试；本批剩余 {left} 行未写入，\
-                             将回滚本片并重跑",
-                            batch_err.message
+                             将回滚本片并重跑（单条 INSERT 上限已调到 {} KB）",
+                            batch_err.message,
+                            shrunk / 1024
                         ));
                     }
                     return Err(format!(
@@ -3387,7 +3679,18 @@ async fn sync_table_inner(
             return ObjResult::failed(ty, table, msg);
         }
         created = true;
-    } else if opts.policy == Policy::Drop {
+    } else if opts.policy == Policy::Drop
+        || (opts.sync_structure && opts.data_mode == DataMode::TruncateInsert)
+    {
+        // 「覆盖式同步」：`truncate_insert` 的意图是「目标以源为准」。目标表若已存在，
+        // 它是**历史结构** —— 真机整库同步里 33 张表与源不一致（216 处字符集不同：
+        // 源 utf8mb4 / 目标 utf8；29 处长度不同：varchar(3000) → varchar(600)），
+        // truncate 只清数据不动列定义，写进去必然撞 `Data too long` /
+        // `Incorrect string value` / `Duplicate entry`（唯一索引也不同），
+        // 一天下来就攒出几千行「写入失败」。所以这里按源重建。
+        // 重建失败（例如目标表被外键引用）不阻断：退回「保留结构 + 清空灌数」，
+        // 数据至少能进去，日志里写明原因。
+        let forced = opts.policy != Policy::Drop;
         if !opts.sync_structure {
             return ObjResult::failed(
                 ty,
@@ -3396,26 +3699,43 @@ async fn sync_table_inner(
             );
         }
         if let Some(task) = task {
-            task.log(format!("表 {table}：删除表"));
+            task.log(if forced {
+                format!("表 {table}：目标已有历史结构，按源结构重建（对齐字符集/长度/索引）")
+            } else {
+                format!("表 {table}：删除表")
+            });
         }
+        let mut rebuilt = true;
         if let Err(err) = run_target(state, &tgt_target, &format!("drop table {target_name}")).await {
-            return ObjResult::failed(ty, table, format!("删除目标表失败：{}", err.message));
+            if !forced {
+                return ObjResult::failed(ty, table, format!("删除目标表失败：{}", err.message));
+            }
+            rebuilt = false;
+            if let Some(task) = task {
+                task.log(format!(
+                    "表 {table}：删除重建失败（{}），改为保留目标结构继续（若列定义与源不同，\
+                     后面可能报 Data too long / Incorrect string value）",
+                    err.message
+                ));
+            }
         }
-        if let Some(task) = task {
-            task.log(format!("表 {table}：创建表"));
+        if rebuilt {
+            if let Some(task) = task {
+                task.log(format!("表 {table}：创建表"));
+            }
+            // 带上源表的表注释与字段注释（见上面取注释那一段）
+            let ddl = target_kind.create_table_with_comments(
+                &target_name,
+                &source_columns,
+                cross_kind,
+                &src_column_comments,
+                src_table_comment.as_deref(),
+            );
+            if let Err(err) = run_target(state, &tgt_target, &ddl).await {
+                return ObjResult::failed(ty, table, format!("重建目标表失败：{}", err.message));
+            }
+            created = true;
         }
-        // 带上源表的表注释与字段注释（见上面取注释那一段）
-        let ddl = target_kind.create_table_with_comments(
-            &target_name,
-            &source_columns,
-            cross_kind,
-            &src_column_comments,
-            src_table_comment.as_deref(),
-        );
-        if let Err(err) = run_target(state, &tgt_target, &ddl).await {
-            return ObjResult::failed(ty, table, format!("重建目标表失败：{}", err.message));
-        }
-        created = true;
     }
         // 建表后才能补的注释（SQL Server 的扩展属性等）：create_table_with_comments
         // 写不进去的方言在这里逐条执行 —— 之前 SQL Server 目标的注释全空（真机反馈）。
@@ -3453,6 +3773,14 @@ async fn sync_table_inner(
     // 建索引时也只全表扫一遍。小表收益小但没有额外代价（建索引本身就快）。
     // 不灌数据（仅结构同步）时一次建完，行为与以前完全一致。
     let mut deferred_indexes = false;
+    // 源表「被当成主键的那几列」：源没有真正主键时，建表 DDL 会把某个唯一索引升格成
+    // 主键写进去（`create_table_with_comments` 只看列的 primary_key 标记）。建索引时
+    // 必须跳过同一组列的唯一索引，否则目标表会同时有 `PRIMARY` 和同名唯一索引两套约束。
+    let declared_primary: Vec<String> = source_columns
+        .iter()
+        .filter(|column| column.primary_key)
+        .map(|column| column.name.clone())
+        .collect();
     if created && opts.include_indexes {
         let filter = if opts.sync_data {
             IndexFilter::UniqueOnly
@@ -3469,6 +3797,7 @@ async fn sync_table_inner(
             table,
             task,
             filter,
+            &declared_primary,
         )
         .await;
         deferred_indexes = opts.sync_data;
@@ -3515,7 +3844,7 @@ async fn sync_table_inner(
         // 一行都不会搬：索引后置的那一半照样补齐，否则这张新表比「正常建表」少了二级索引
         create_deferred_indexes(
             state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
-            deferred_indexes,
+            deferred_indexes, &declared_primary,
         )
         .await;
         return ObjResult::skipped(ty, table, "源表与目标表没有同名列，无法同步数据");
@@ -3702,12 +4031,26 @@ async fn sync_table_inner(
         false
     };
     let native_upsert_safe = target_key_ready && !mysql_secondary_unique;
-    let upsert_mode = if effective_mode != DataMode::Upsert {
-        crate::api::transfer::UpsertMode::Off
-    } else if target_kind.supports_native_upsert() && native_upsert_safe {
+    let upsert_mode = if effective_mode == DataMode::Upsert {
+        if target_kind.supports_native_upsert() && native_upsert_safe {
+            crate::api::transfer::UpsertMode::Native
+        } else {
+            crate::api::transfer::UpsertMode::TwoPhase
+        }
+    } else if effective_mode == DataMode::TruncateInsert
+        && target_key_ready
+        && target_kind.supports_native_upsert()
+    {
+        // **幂等插入**：清空后导入时表本来就在等这批数据，正常路径下
+        // `on duplicate key update` 与纯 insert 等价（开销也一样，都要维护唯一索引）；
+        // 但链路上断一次再重跑时，"重跑区间"与"已提交区间"可能叠一小段，
+        // 同一行被读两遍 —— 纯 insert 会报 `Duplicate entry` 把它算成脏数据丢掉，
+        // 而 upsert 会把它改写成同样的值，行数是对的。
+        // 真机代价：`winneryun_huike_data_hour`（源无主键、只有唯一索引）连续断了三次，
+        // 341 行被判失败、整表最后 0 行，就是缺这一层幂等。
         crate::api::transfer::UpsertMode::Native
     } else {
-        crate::api::transfer::UpsertMode::TwoPhase
+        crate::api::transfer::UpsertMode::Off
     };
     if effective_mode == DataMode::Upsert && mysql_secondary_unique {
         note.push_str("（目标表存在其它唯一索引：为避免 MySQL 更新错行，已回退两阶段 upsert）");
@@ -3941,7 +4284,7 @@ async fn sync_table_inner(
             // 索引后置的收尾：行已经落到目标，这时补建非唯一二级索引最省
             create_deferred_indexes(
                 state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
-                deferred_indexes,
+                deferred_indexes, &declared_primary,
             )
             .await;
             // 日志只报「执行到哪一步」—— 行数在进度卡上（rowsWritten 平滑递增），不进日志刷屏
@@ -3979,14 +4322,24 @@ async fn sync_table_inner(
     let paging_keys = if !source_primary.is_empty() && source_common.len() == source_primary.len() {
         source_common
     } else {
-        Vec::new()
+        // 无主键：退而求其次，用源表的唯一索引当 keyset 游标（列必须全部在同步列里，
+        // 且都不能为 NULL —— 唯一索引允许多行 NULL，拿它翻页会漏行）
+        let nullable: Vec<String> = source_columns
+            .iter()
+            .filter(|column| column.nullable)
+            .map(|column| column.name.clone())
+            .collect();
+        unique_paging_key(state, src, source_kind, table, &columns, &nullable)
+            .await
+            .unwrap_or_default()
     };
     if paging_keys.is_empty() {
         // 没有可用的键：分页只能退回 OFFSET，第 N 页要让源库白扫前 N×5 万行（O(N²)）。
         // 这个代价用户看不见，只会觉得「越大越慢」，所以明说一句怎么解。
         if let Some(task) = task {
             task.log(format!(
-                "表 {table}：无主键/唯一键，改用 OFFSET 分页（越往后越慢），建议指定主键列"
+                "表 {table}：无主键且没有可用的唯一索引（列需全部纳入同步且非空），\
+                 改用 OFFSET 分页（越往后越慢）；建议给源表加主键/唯一索引"
             ));
         }
     }
@@ -4135,7 +4488,7 @@ async fn sync_table_inner(
     // 索引后置的收尾：数据全部落库后，再补建非唯一二级索引（见上面建表后那一段）
     create_deferred_indexes(
         state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
-        deferred_indexes,
+        deferred_indexes, &declared_primary,
     )
     .await;
 
@@ -4588,6 +4941,25 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         schema: body.target_schema.clone(),
         catalog: false,
     };
+    // 调度顺序：按源表体量**降序**（大表先跑）。
+    //
+    // 之前按清单原序（库里的字母序）跑：小表先扫完，大表全挤在末尾，8 路并发跑到最后
+    // 只剩一张大表 → 并发退化成单流，整库速度从 2 万行/s 掉到 3.8 千行/s（真机实测，
+    // 最后 12 张大表占全库 59% 体积）。让大表先起跑，它就能和别的表共享并发窗口。
+    // 非表对象（视图/例程）排最后；拿不到体量的方言保持原序。
+    let sizes = source_table_rows(&state, &src, Dialect::new(source_record.kind())).await;
+    if !sizes.is_empty() {
+        objects.sort_by(|a, b| {
+            let weight = |object: &(String, String)| -> i64 {
+                if object.0 != "table" {
+                    return -1;
+                }
+                sizes.get(&object.1.to_lowercase()).copied().unwrap_or(0).max(0)
+            };
+            weight(b).cmp(&weight(a))
+        });
+    }
+
     /// 对象级并发的**自适应并行度**（不写死）：
     ///
     /// 两个因素决定最优张数：
@@ -5050,6 +5422,93 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         }
                         task.log(format!("视图 {name}：重试成功（{}）", outcome.message));
                     }
+                }
+            }
+            // ---- 终态一致性对账：源有什么，目标就必须有什么 ----
+            //
+            // 为什么非要有这一步：链路断一次就会重跑一段，重跑区间与已提交区间叠一小段时，
+            // 目标会多出几行；而 ClickHouse 这种没有唯一约束的目标连报错都没有 ——
+            // 结果是「任务显示成功，两边的行数却对不上」。用户的要求是数据完全一致，
+            // 所以收尾时逐表数一遍，不一致的清空重传一次（只补一次，避免死循环）。
+            // 代价：每张表两条 count(*)（百万行级几十毫秒），整库约一分钟。
+            if !task.is_canceled() && opts.sync_data {
+                let mut mismatch = 0usize;
+                let mut fixed = 0usize;
+                for (index, (kind, name)) in objects.iter().enumerate() {
+                    if kind != "table" {
+                        continue;
+                    }
+                    let status = slots[index]
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(|value| value.get("status"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string);
+                    if status.as_deref() != Some("ok") {
+                        continue;
+                    }
+                    let src_table = src.scoped(name, source_kind);
+                    let tgt_table = tgt.scoped(name, target_kind);
+                    let (Some(want), Some(got)) = (
+                        count_table(&state, &src.conn, &src.scope, &src_table).await,
+                        count_table(&state, &tgt.conn, &tgt.scope, &tgt_table).await,
+                    ) else {
+                        continue;
+                    };
+                    if want == got {
+                        continue;
+                    }
+                    mismatch += 1;
+                    task.log(format!(
+                        "表 {name}：源 {want} 行 / 目标 {got} 行，行数不一致，清空重传一次"
+                    ));
+                    // SQLite 没有 truncate；其它方言 ATOMIC/隐式提交都一样快
+                    let clear = if target_kind.kind.key() == "sqlite" {
+                        format!("delete from {tgt_table}")
+                    } else {
+                        format!("truncate table {tgt_table}")
+                    };
+                    if let Err(err) = run_sql_in(&state, &tgt.conn, &tgt.scope, clear, 600_000).await {
+                        task.log(format!("表 {name}：清空失败（{}），跳过重传", err.message));
+                        continue;
+                    }
+                    // 重跑要走正常的对象流程（会话租约、进度、结果行都要有）
+                    let lease = {
+                        let mut free = slots_free.lock().unwrap_or_else(|e| e.into_inner());
+                        SlotLease {
+                            id: free.pop().unwrap_or(0),
+                            pool: slots_free.clone(),
+                        }
+                    };
+                    let outcome = sync_table(
+                        &state,
+                        Some(&task),
+                        &src,
+                        &tgt,
+                        name,
+                        name,
+                        &opts,
+                        lease.id,
+                        true,
+                        &progresses[index],
+                    )
+                    .await;
+                    let after = count_table(&state, &tgt.conn, &tgt.scope, &tgt_table).await;
+                    if after == Some(want) {
+                        fixed += 1;
+                        task.log(format!("表 {name}：重传后 {want} 行，已对齐"));
+                    } else {
+                        task.log(format!(
+                            "表 {name}：重传后 {after:?} 行（期望 {want} 行），仍然不一致，请检查该表"
+                        ));
+                    }
+                    *slots[index].lock().unwrap() = Some(outcome.to_json());
+                }
+                if mismatch > 0 {
+                    task.log(format!(
+                        "行数对账：{mismatch} 张表不一致，其中 {fixed} 张已通过重传对齐"
+                    ));
                 }
             }
             let (ok, skipped, errors, inserted, updated) = *counters.lock().unwrap();

@@ -503,7 +503,7 @@ impl Dialect {
         matches!(
             self.key(),
             "mysql" | "mariadb" | "postgresql" | "kingbase" | "sqlite" | "h2" | "oracle" | "dm"
-                | "db2" | "sqlserver"
+                | "db2" | "sqlserver" | "derby"
         )
     }
 
@@ -516,6 +516,9 @@ impl Dialect {
             // UNION ALL。页大小（5 万）直接作为分支数会让解析器/表达式上限先于
             // 数据量爆炸；500 行与旧 INSERT 路径的保守批大小一致。
             "oracle" | "dm" => 500,
+            // Derby 的 `values` 表构造器行数一多，解析与优化都比别的库贵；1000 行一条
+            // 与它自己的 `insert ... values` 批大小一致，不额外引入风险。
+            "derby" => 1000,
             _ => usize::MAX,
         }
     }
@@ -646,7 +649,10 @@ impl Dialect {
                 insert_from_src(&mut sql);
                 Some(sql)
             }
-            "db2" | "sqlserver" => {
+            // Derby 的 MERGE 与 DB2 同形（`using (values …) as src (列清单)`），
+            // 10.11 起支持 —— 以前这里没有它，Derby 目标只能纯 insert，
+            // 重跑撞主键就把行判成脏数据（唯一没有幂等的 JDBC 关系型库）。
+            "db2" | "sqlserver" | "derby" => {
                 let on = key_indexes
                     .iter()
                     .map(|i| {
@@ -5252,11 +5258,22 @@ mod tests {
 
     #[test]
     fn 没有原生语法的方言返回_None() {
-        // ClickHouse / Doris / Derby 继续走两阶段（预读主键 + 逐行 UPDATE）
+        // ClickHouse / Doris 继续走两阶段（预读主键 + 逐行 UPDATE）。
+        // Derby 10.11 起有 MERGE，已经纳入原生 upsert（见下面的专测）。
         assert!(upsert(ConnectionKind::Clickhouse).is_none());
         assert!(upsert(ConnectionKind::Doris).is_none());
-        assert!(upsert(ConnectionKind::Derby).is_none());
         assert!(!Dialect::new(ConnectionKind::Clickhouse).supports_native_upsert());
+    }
+
+    #[test]
+    fn derby走_merge形式的原生_upsert() {
+        let sql = upsert(ConnectionKind::Derby).expect("derby 必须支持原生 upsert");
+        assert!(sql.starts_with("merge into t as tgt using (values "), "实际：{sql}");
+        assert!(sql.contains("when matched then update set"), "实际：{sql}");
+        assert!(sql.contains("when not matched then insert"), "实际：{sql}");
+        assert!(!sql.ends_with(';'), "Derby 不该拼分号");
+        assert!(Dialect::new(ConnectionKind::Derby).supports_native_upsert());
+        assert_eq!(Dialect::new(ConnectionKind::Derby).upsert_row_limit(), 1000);
     }
 
     #[test]

@@ -528,8 +528,12 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
             index: range.index,
             low: low.clone(),
             high: range.high.clone(),
+            window: range.window,
         };
-        match run_segment(ctx.clone(), worker, segment, cursor.clone(), cap).await? {
+        // 窗口分片（无键表）没有「键」可以续跑：分段提交后拿不到下一段的游标（`last_key`
+        // 是空的），会从头重读本片。这种片一个事务跑完 —— 写入是流式的，事务大但内存不涨。
+        let segment_cap = if range.window.is_some() { u64::MAX } else { cap };
+        match run_segment(ctx.clone(), worker, segment, cursor.clone(), segment_cap).await? {
             SegmentOutcome::Finished => return Ok(()),
             SegmentOutcome::Paused(last_key) => {
                 // 区间左界用**首列**（`k1 >= 该值`），首屏游标用**完整键**（`(k1,k2) > 该键`）：
@@ -758,10 +762,9 @@ async fn run_segment(
             ctx.inserted.fetch_sub(try_inserted, Ordering::SeqCst);
             ctx.updated.fetch_sub(try_updated, Ordering::SeqCst);
             ctx.consumed.fetch_sub(try_consumed, Ordering::SeqCst);
-            // 进度上的「已读」也要扣回：同一个片会被再读一遍，不扣就虚高
-            if let Some(task) = &plan.task {
-                task.sub_rows_read(try_consumed);
-            }
+            // 进度上的「已读」**不扣回**：重跑同样要真读一遍，扣回会让数字往回跳
+            //（真机反馈「越跳越小」）；写侧当初也没扣，于是两边对不上，
+            // 界面出现「传输数 > 读取数」。现在两个计数都按累计工作量单调递增。
             attempt += 1;
             let retryable = attempt < SLICE_RETRY
                 && !canceled

@@ -79,11 +79,18 @@ pub struct RowRange {
     pub index: usize,
     pub low: Option<CellValue>,
     pub high: Option<CellValue>,
+    /// **无键表**的行窗口 `[起, 止)`（按 OFFSET 定位）。
+    ///
+    /// 无主键又没有可用唯一索引时，一列值都拿不到，过去只能整表单流 OFFSET 翻页：
+    /// 357 万行的一张表真机跑了 40 分钟，而整库最后 12 张大表占 59% 体积，全卡在这里。
+    /// 有总行数就能把表按行号切成 K 段并发拉，每段内 offset 从自己的起点开始 ——
+    /// 段的区间互不重叠，合起来覆盖全表，所以不重不漏（前提是同步期间源表不变）。
+    pub window: Option<(u64, u64)>,
 }
 
 impl RowRange {
     pub fn is_whole(&self) -> bool {
-        self.low.is_none() && self.high.is_none()
+        self.low.is_none() && self.high.is_none() && self.window.is_none()
     }
 }
 
@@ -136,6 +143,17 @@ pub struct SqlReader {
     parallel_ceiling: usize,
 }
 
+/// 分页键在**取数列**里的位置（按 `columns` 的顺序做大小写不敏感匹配）。
+///
+/// 任一键找不到就返回 `None`：调用方要退回 OFFSET 分页 —— 少一个位置的 keyset 游标
+/// 会变成「按 1 列比较 2 列键」，同样是静默丢行。
+fn paging_positions(columns: &[String], paging_keys: &[String]) -> Option<Vec<usize>> {
+    paging_keys
+        .iter()
+        .map(|key| columns.iter().position(|column| column.eq_ignore_ascii_case(key)))
+        .collect()
+}
+
 impl SqlReader {
     pub fn new(plan: &TablePlan) -> Box<dyn Reader> {
         let columns = plan
@@ -148,6 +166,22 @@ impl SqlReader {
         // 往返次数抬了几倍，整体反而变慢。现在交给**实测写速**：`read_page` 里按
         // 「一页 ≈ PAGE_TARGET_SECS 秒的写入量」调，快则放大到 10 万行、慢则缩到几千行。
         let rows_cap = PAGE_ROWS_MAX;
+        // 分页键的**行内位置**必须按 `paging_keys` 自己在取数列里找，不能借
+        // `plan.key_indexes` —— 那个是**目标端** upsert 键（写库用）的位置。
+        // 目标表已存在且主键与源主键不是同一组列时，两套位置会错位，代价不是报错而是
+        // **静默丢行**：（源主键 `id` 的值位置取自目标主键 `code`）⇒ keyset 拿 A 列的值
+        // 去比较 B 列，跳页跳得毫无察觉。
+        let (paging_keys, key_positions) = match paging_positions(&plan.columns, &plan.paging_keys) {
+            Some(positions) => (plan.paging_keys.clone(), positions),
+            // 分页键不在取数列里：宁可退回 OFFSET（慢但不错）也不能用错列比较
+            None => {
+                tracing::warn!(
+                    table = %plan.table,
+                    "分页键不在同步列里，退回 OFFSET 分页"
+                );
+                (Vec::new(), Vec::new())
+            }
+        };
         // 尾部弹性扩片的上限：方言声明的读并发（单连接池的库 = 1，多开只会在池里排队）。
         // 调优逃生阀优先；下限是本次分到的份额，避免「cap 比声明还大」时反而被压小。
         let parallel_ceiling = std::env::var("DBMIND_SYNC_SLICES")
@@ -164,8 +198,8 @@ impl SqlReader {
             base: format!("select {columns} from {}", plan.src_from),
             from: plan.src_from.clone(),
             dialect: plan.source_kind,
-            paging_keys: plan.paging_keys.clone(),
-            key_positions: plan.key_indexes.clone(),
+            paging_keys,
+            key_positions,
             where_clause: plan.where_clause.clone(),
             row_limit: plan.row_limit,
             page_rows: AtomicUsize::new(PAGE_WIDE),
@@ -265,7 +299,7 @@ impl SqlReader {
             } else {
                 Some(bounds[index].clone())
             };
-            out.push(RowRange { index, low, high });
+            out.push(RowRange { index, low, high, window: None });
         }
         Some(out)
     }
@@ -325,6 +359,20 @@ impl Reader for SqlReader {
             // 重叠、合起来覆盖全表），页内游标仍然用**完整键**做 keyset —— 两者 AND 在一起，
             // 一条行只会落在一个分片里。以前这里要求「恰好一列键」，于是复合主键的大表
             // 永远单流读（几十万行的表只有一条连接在拉）。
+            // 无键表（无主键、也没有可用唯一索引）：按行窗口切段并发拉。
+            // 由 `DBMIND_SYNC_WINDOW=1` 打开 —— 它改变的是分页语义（段间靠 OFFSET 边界
+            // 而不是键值边界隔离），先在整库同步上验证过再考虑默认开。
+            if want > 1
+                && self.paging_keys.is_empty()
+                && self.row_limit == 0
+                && self.where_clause.trim().is_empty()
+                && window_split_enabled()
+            {
+                if let Some(ranges) = window_ranges_of(self, want).await {
+                    self.page_rows.store(PAGE_SPLIT, Ordering::SeqCst);
+                    return Ok(ranges);
+                }
+            }
             if want <= 1 || self.paging_keys.is_empty() || self.row_limit > 0 {
                 self.page_rows.store(PAGE_WIDE, Ordering::SeqCst);
                 return Ok(whole);
@@ -349,9 +397,10 @@ impl Reader for SqlReader {
 
     fn page<'a>(&'a self, range: &'a RowRange, cursor: Option<Cursor>) -> BF<'a, Result<Page, String>> {
         Box::pin(async move {
+            // 窗口分片的段：首屏从本段起点开始（`cursor.offset` 后续由每页自己递进）
             let (key, offset) = match cursor {
                 Some(cursor) => (cursor.key, cursor.offset),
-                None => (None, 0),
+                None => (None, range.window.map(|(begin, _)| begin).unwrap_or(0)),
             };
             // 三件互不相干的条件，各自判断有没有：用户过滤 / 分片区间 / keyset 游标。
             // 曾经把「用户没写过滤」当成「没有条件」整个丢掉，连游标一起扔了 ——
@@ -376,6 +425,12 @@ impl Reader for SqlReader {
                 _ => None,
             };
             let page_rows = self.page_rows_now();
+            // 窗口分片：本页不能越过本段的行号上界（越界就是读到了下一段的数据）
+            let mut fetch_rows = page_rows;
+            if let Some((_, end)) = range.window {
+                let remaining = end.saturating_sub(offset).max(1) as usize;
+                fetch_rows = fetch_rows.min(remaining);
+            }
             // 每片一条独立会话键：同一把键会被会话池归到同一条泳道（=同一条物理连接），
             // 四片并发就变成排队 —— 这是分片「看起来开了、实际没并发」的经典坑。
             // `sid` 同样必须带上：只按片号分键的话，**两张表**的同号分片会共用一条连接。
@@ -394,7 +449,7 @@ impl Reader for SqlReader {
                 offset,
                 cursor_arg,
                 &extra,
-                page_rows as u64,
+                fetch_rows as u64,
                 &session,
             )
             .await
@@ -432,7 +487,12 @@ impl Reader for SqlReader {
                 }
             }
 
-            let done = rows.len() < page_rows;
+            // 窗口段读到自己上界就算这一片结束（末页可能刚好填满，不能用「行数不足」判）
+            let window_done = range
+                .window
+                .map(|(_, end)| offset + rows.len() as u64 >= end)
+                .unwrap_or(false);
+            let done = rows.len() < fetch_rows || window_done;
             let next = if done {
                 None
             } else {
@@ -444,6 +504,81 @@ impl Reader for SqlReader {
             Ok(Page { rows, next })
         })
     }
+}
+
+/// 无键表按「行窗口」切段并发读（`DBMIND_SYNC_WINDOW=1`）。
+///
+/// 段与段之间靠 OFFSET 边界隔离（不靠键值），所以要求：源表在同步期间不变、无 WHERE 过滤、
+/// 没有行数上限。它解决的是「没有主键也没有唯一索引」的表只能单流深翻页的问题 ——
+/// 真机上这部分表占整库一半以上体积，是整库「越跑越慢」的主因。
+fn window_split_enabled() -> bool {
+    std::env::var("DBMIND_SYNC_WINDOW")
+        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// 无键表的窗口切分：先 `count(*)` 拿总数，再按行号等分成 K 段。
+///
+/// 分片门槛沿用 [`MIN_ROWS_PER_SLICE`]（每片至少 5 万行），否则建连成本盖过并行收益。
+/// 拿不到总数（无权限/统计失败）就返回 `None`，退回整表单流。
+async fn window_ranges_of(reader: &SqlReader, want: usize) -> Option<Vec<RowRange>> {
+    let total = count_rows_of(reader).await?;
+    let slices = want.min(reader.parallel_ceiling()).max(1);
+    if total < (MIN_ROWS_PER_SLICE as u64).saturating_mul(slices as u64) {
+        return None;
+    }
+    let bounds = window_bounds(total, slices);
+    if bounds.len() <= 1 {
+        return None;
+    }
+    Some(
+        bounds
+            .into_iter()
+            .enumerate()
+            .map(|(index, (begin, end))| RowRange {
+                index,
+                low: None,
+                high: None,
+                window: Some((begin, end)),
+            })
+            .collect(),
+    )
+}
+
+/// 把 `[0, total)` 按行号等分成至多 `slices` 段，返回左闭右开的边界。
+///
+/// 单独拎出来是为了能被单测钉死：切错的表现是「某几段数据压根没搬」或「同一行搬两遍」，
+/// 在整库同步里几乎看不出来（行数只是对不上一点点）。
+fn window_bounds(total: u64, slices: usize) -> Vec<(u64, u64)> {
+    let slices = slices.max(1);
+    if total == 0 {
+        return Vec::new();
+    }
+    let per = total.div_ceil(slices as u64);
+    let mut out = Vec::new();
+    for index in 0..slices as u64 {
+        let begin = index * per;
+        if begin >= total {
+            break;
+        }
+        out.push((begin, ((index + 1) * per).min(total)));
+    }
+    out
+}
+
+/// 源表总行数（窗口切分用）。估算不够准 —— 段的边界必须精确，否则会漏行/重行。
+async fn count_rows_of(reader: &SqlReader) -> Option<u64> {
+    let sql = format!("select count(*) as n from {}", reader.from);
+    let result = run_sql_in(&reader.state, &reader.conn, &reader.scope, sql, 5000)
+        .await
+        .ok()?;
+    let value = result.rows.first().and_then(|row| row.first())?;
+    Some(match value {
+        CellValue::Integer(n) => (*n).max(0) as u64,
+        CellValue::Real(n) => n.max(0.0) as u64,
+        CellValue::Text(text) => text.trim().parse().ok()?,
+        _ => return None,
+    })
 }
 
 /// 下一页的行数：行宽、写速、读取耗时三个目标取**小者**。
@@ -507,7 +642,7 @@ fn split_integer(lo: i64, hi: i64, want: usize) -> Option<Vec<RowRange>> {
                 (lo as i128 + span * (index + 1) as i128 / want as i128) as i64,
             ))
         };
-        out.push(RowRange { index, low, high });
+        out.push(RowRange { index, low, high, window: None });
     }
     Some(out)
 }
@@ -533,7 +668,7 @@ fn split_real(lo: f64, hi: f64, want: usize) -> Option<Vec<RowRange>> {
         } else {
             Some(CellValue::Real(lo + span * (index + 1) as f64 / want as f64))
         };
-        out.push(RowRange { index, low, high });
+        out.push(RowRange { index, low, high, window: None });
     }
     Some(out)
 }
@@ -589,6 +724,41 @@ mod tests {
         assert_eq!(ranges.len(), 3);
         assert!(ranges[0].low.is_none());
         assert!(ranges[2].high.is_none());
+    }
+
+    /// 无键表的窗口切分：段与段首尾相接、合起来正好覆盖 `[0, total)`。
+    #[test]
+    fn 窗口切分不重不漏() {
+        for total in [1u64, 3, 100_001, 3_570_000] {
+            for slices in [1usize, 2, 3, 4, 8] {
+                let bounds = window_bounds(total, slices);
+                assert_eq!(bounds.first().unwrap().0, 0, "首段必须从 0 开始");
+                assert_eq!(bounds.last().unwrap().1, total, "末段必须到 total 结束");
+                for pair in bounds.windows(2) {
+                    assert_eq!(pair[0].1, pair[1].0, "相邻两段必须首尾相接");
+                }
+                assert!(bounds.iter().all(|(begin, end)| begin < end), "不能出现空段");
+                assert!(bounds.len() <= slices, "段数不能超过要求");
+            }
+        }
+        assert!(window_bounds(0, 4).is_empty());
+    }
+
+    /// 分页键位置按**取数列**取名，不是目标 upsert 键的位置。
+    ///
+    /// 目标表已存在且主键与源主键不同时，两套位置会错位 —— keyset 会拿错列的值去比较，
+    /// 表现是「静默丢行」，最难查的那种。
+    #[test]
+    fn 分页键位置按取数列取名() {
+        let columns = vec!["code".to_string(), "name".into(), "id".into()];
+        // 源主键 id 在第 3 列（目标主键 code 在第 1 列，plan.key_indexes 会是 [0]）
+        assert_eq!(paging_positions(&columns, &["ID".to_string()]), Some(vec![2]));
+        assert_eq!(
+            paging_positions(&columns, &["code".to_string(), "id".to_string()]),
+            Some(vec![0, 2])
+        );
+        // 键不在取数列里 ⇒ None（调用方退回 OFFSET），不能悄悄少一个位置
+        assert_eq!(paging_positions(&columns, &["missing".to_string()]), None);
     }
 
     /// 无键表的整片：不带任何边界条件（分页只能走 OFFSET）
