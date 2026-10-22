@@ -90,7 +90,23 @@ pub async fn run_sql_in(
     sql: String,
     max_rows: usize,
 ) -> XResult<QueryResult> {
-    run_sql_in_inner(state, conn, database, sql, max_rows, None).await
+    run_sql_in_inner(state, conn, database, sql, max_rows, None, false).await
+}
+
+/// 同 [`run_sql_in`]，但显式要求**可写会话**。
+///
+/// 只给「本来就是写」的语句用：清空目标表、对账不一致后的重传前置清空。
+/// 这些语句过去走 [`run_sql_in`]（`read_only: Some(true)`），在 MySQL 上直接被驱动拒绝
+/// （`Connection is read-only...`），表现为「行数不一致 → 清空重传 → 跳过重传」，
+/// 差异永远补不上。
+pub(crate) async fn run_sql_in_write(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+    sql: String,
+    max_rows: usize,
+) -> XResult<QueryResult> {
+    run_sql_in_inner(state, conn, database, sql, max_rows, None, true).await
 }
 
 async fn run_sql_in_inner(
@@ -100,6 +116,7 @@ async fn run_sql_in_inner(
     sql: String,
     max_rows: usize,
     session: Option<&str>,
+    write: bool,
 ) -> XResult<QueryResult> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     // 元数据也是「连上去查」：驱动没装就先下（离线时只失败一次，原因会被缓存）
@@ -145,8 +162,13 @@ async fn run_sql_in_inner(
         // 还要把只读标记对齐：结构浏览对这类库走的是**只读会话**
         // （`metadata_session_key` 里 `session_key(config, true)`），而 `execute` 缺省按
         // 连接策略算 —— 标记不一致的话，会话键的第 7 段不同，照样是两条连接。
-        // 这里的语句全是只读 SELECT，走只读会话既省一条连接，语义也更正确。
-        read_only: Some(true),
+        //
+        // 默认只读：这条入口绝大多数语句是只读 SELECT。但**清空表 / 断连重跑前清空**
+        // 这类写语句必须显式走 [`run_sql_in_write`]（`write = true`）—— 否则驱动会直接
+        // 拒绝：`Connection is read-only. Queries leading to data modification are not
+        // allowed.`（真机：收尾对账发现行数不一致、要清空重传时，truncate 就在这里失败，
+        // 于是差异永远补不上）。
+        read_only: if write { Some(false) } else { Some(true) },
         // **不进查询历史**：这条路上跑的全是元数据 / 结构浏览 / 表格预览，
         // 以及界面功能（表结构编辑、清空表、建用户、终止会话…）驱动的语句 ——
         // 都不是「用户在 SQL 编辑器里敲的 SQL」。标记在**这个共用入口**上，
@@ -169,7 +191,7 @@ pub(crate) async fn run_sql_in_background(
     sql: String,
     max_rows: usize,
 ) -> XResult<QueryResult> {
-    run_sql_in_inner(state, conn, database, sql, max_rows, Some("internal:rowcount")).await
+    run_sql_in_inner(state, conn, database, sql, max_rows, Some("internal:rowcount"), false).await
 }
 
 /// 同 [`run_sql_in`]，但会话亲和键由调用方给 —— 用于「一个任务并发开几条读连接」的场景
@@ -184,7 +206,7 @@ pub(crate) async fn run_sql_in_keyed(
     max_rows: usize,
     session: &str,
 ) -> XResult<QueryResult> {
-    run_sql_in_inner(state, conn, database, sql, max_rows, Some(session)).await
+    run_sql_in_inner(state, conn, database, sql, max_rows, Some(session), false).await
 }
 
 

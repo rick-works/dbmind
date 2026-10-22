@@ -42,7 +42,7 @@ use serde_json::{json, Value};
 use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
 use crate::api::export::sql_literal;
-use crate::api::meta::{run_sql_in, run_sql_in_keyed};
+use crate::api::meta::{run_sql_in, run_sql_in_keyed, run_sql_in_write};
 use crate::api::{blocking, require_record};
 use crate::AppState;
 
@@ -4471,7 +4471,7 @@ async fn sync_table_inner(
                 // 已经保证了没有半截数据，重跑分别是「追加一遍」与「幂等重放」。
                 if opts.data_mode == DataMode::TruncateInsert && !same_table {
                     let clear = target_kind.clear_table_sql(&target_name);
-                    if let Err(err) = run_target(state, &tgt_target, &clear).await {
+                    if let Err(err) = run_target_write(state, &tgt_target, &clear).await {
                         return ObjResult::failed(
                             ty,
                             table,
@@ -5500,7 +5500,12 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     } else {
                         format!("truncate table {tgt_table}")
                     };
-                    if let Err(err) = run_sql_in(&state, &tgt.conn, &tgt.scope, clear, 600_000).await {
+                    // 可写会话：`run_sql_in` 走只读会话（`read_only: Some(true)`），
+                    // truncate 会被驱动直接拒绝（`Connection is read-only...`），
+                    // 于是「发现不一致 → 清空重传」永远停在跳过重传这一步。
+                    if let Err(err) =
+                        run_sql_in_write(&state, &tgt.conn, &tgt.scope, clear, 600_000).await
+                    {
                         task.log(format!("表 {name}：清空失败（{}），跳过重传", err.message));
                         continue;
                     }
