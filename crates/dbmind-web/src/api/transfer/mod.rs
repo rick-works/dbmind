@@ -72,6 +72,13 @@ pub struct WriteDiag {
     pub inflight: AtomicU64,
     /// 最近一批写入的耗时（毫秒）
     pub last_write_ms: AtomicU64,
+    /// 最近的「慢批上界」（毫秒，会缓慢衰减）。
+    ///
+    /// 用途：给**单批墙钟**定一个跟得上现场的阈值 —— 一刀切 300 秒时，
+    /// 一条已经半开的连接要白等五分钟才被发现（真机：400 对象的任务跑到尾部，
+    /// 几乎每张表都撞一次，五分钟一次地「卡住」）。按「最近批最慢值的 8 倍」算，
+    /// 正常 1 秒一批的表 20 秒就能判定，真慢的批（十秒级）也不会被误杀。
+    pub recent_max_ms: AtomicU64,
     /// 最近一批的行数
     pub last_batch_rows: AtomicU64,
     /// **正在写的那一批**的开始时刻（epoch 毫秒；0 = 当前没有在写的批）。
@@ -117,8 +124,12 @@ impl WriteDiag {
     pub fn note_batch_done(&self, rows: usize, elapsed: std::time::Duration) {
         self.inflight.fetch_sub(1, Ordering::Relaxed);
         self.last_batch_rows.store(rows as u64, Ordering::Relaxed);
-        self.last_write_ms
-            .store(elapsed.as_millis().min(u64::MAX as u128) as u64, Ordering::Relaxed);
+        let ms = elapsed.as_millis().min(u64::MAX as u128) as u64;
+        self.last_write_ms.store(ms, Ordering::Relaxed);
+        // 慢批上界：取「本批」与「旧值 × 7/8」的较大者 —— 单批抖动会抬上去，
+        // 但很快就会衰减回来，不会因为历史上一次慢批而长期放宽看门狗
+        let prev = self.recent_max_ms.load(Ordering::Relaxed) * 7 / 8;
+        self.recent_max_ms.store(prev.max(ms), Ordering::Relaxed);
         // 没有在写的批了：清掉开始时刻，避免报告方把它当成「还在写」
         self.batch_started_ms.store(0, Ordering::Relaxed);
         self.current_batch_rows.store(0, Ordering::Relaxed);
@@ -136,6 +147,20 @@ impl WriteDiag {
     /// 目标端写速估计（行/秒；0 = 还没有样本）。
     pub fn write_rate(&self) -> u64 {
         self.write_rows_per_sec.load(Ordering::Relaxed)
+    }
+
+    /// 一整页写下去的墙钟上限（**兜底**，真正的「半开连接」判定在单条语句上，
+    /// 见 `sync::statement_watchdog`）。
+    ///
+    /// 取值 = max(最近批最慢值 × 8, 按 200 行/秒 估的悲观耗时)，夹在 [60s, 300s]：
+    /// - 历史都快（亚秒）⇒ 只看行数：1000 行的页 60 秒，5 万行的页 250 秒；
+    /// - 历史本来就慢（10 秒级）⇒ 放宽到 80 秒以上，不误杀。
+    pub fn batch_watchdog(&self, rows: usize) -> std::time::Duration {
+        let slow_ms = self.recent_max_ms.load(Ordering::Relaxed).saturating_mul(8);
+        // 200 行/秒 是很悲观的估计：真慢到这个程度，页本身也该被读侧缩小了
+        let pessimistic_ms = (rows as u64).saturating_mul(5);
+        let ms = slow_ms.max(pessimistic_ms).clamp(60_000, 300_000);
+        std::time::Duration::from_millis(ms)
     }
 
     /// 正在写的那一批已经跑了多少秒（0 = 当前没有在写的批）。
@@ -363,4 +388,55 @@ pub fn reader_for(plan: &TablePlan) -> Box<dyn Reader> {
 /// 在这里返回新实现即可。
 pub fn writer_for(plan: &TablePlan) -> Arc<dyn Writer> {
     Arc::new(writer::SqlWriter::new(plan))
+}
+
+#[cfg(test)]
+mod watchdog_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// 单批墙钟不能一刀切 300 秒：正常批是亚秒级，半开连接要 20 秒就判死；
+    /// 但真慢的批（十秒级）也不能被误杀。
+    #[test]
+    fn 单批看门狗按最近批与行数自适应() {
+        let diag = WriteDiag::default();
+        // 小页 + 没样本 ⇒ 下界 60 秒
+        assert_eq!(diag.batch_watchdog(1_000), Duration::from_secs(60));
+        // 大页 + 没样本 ⇒ 按 200 行/秒 估：52,351 行 ≈ 262 秒，不会被误杀
+        assert_eq!(diag.batch_watchdog(52_351), Duration::from_millis(261_755));
+
+        diag.note_batch_start(1_000);
+        diag.note_batch_done(1_000, Duration::from_millis(400));
+        // 400ms × 8 = 3.2s，仍被夹到下界
+        assert_eq!(diag.batch_watchdog(1_000), Duration::from_secs(60));
+
+        // 十秒级的慢批 ⇒ 80 秒（不会把它误判成「连接挂了」）
+        diag.note_batch_start(50_000);
+        diag.note_batch_done(50_000, Duration::from_secs(10));
+        assert_eq!(diag.batch_watchdog(1_000), Duration::from_secs(80));
+
+        // 接着来一批快的，阈值只按 7/8 衰减，不会立刻收紧
+        diag.note_batch_start(1_000);
+        diag.note_batch_done(1_000, Duration::from_millis(200));
+        assert!(diag.batch_watchdog(1_000) >= Duration::from_secs(70));
+
+        // 极端慢 ⇒ 夹到上界 300 秒
+        diag.note_batch_start(1_000);
+        diag.note_batch_done(1_000, Duration::from_secs(200));
+        assert_eq!(diag.batch_watchdog(1_000), Duration::from_secs(300));
+    }
+
+    /// 单条 INSERT 的墙钟：按报文大小给，20 秒起、120 秒封顶。
+    #[test]
+    fn 单条语句墙钟按字节算() {
+        assert_eq!(crate::api::sync::statement_watchdog(0), Duration::from_secs(20));
+        assert_eq!(
+            crate::api::sync::statement_watchdog(3 * 1024 * 1024),
+            Duration::from_secs(35)
+        );
+        assert_eq!(
+            crate::api::sync::statement_watchdog(64 * 1024 * 1024),
+            Duration::from_secs(120)
+        );
+    }
 }

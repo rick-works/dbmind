@@ -2098,6 +2098,35 @@ fn is_link_level_error(err: &XError) -> bool {
     is_link_level_message(&err.message)
 }
 
+/// 单条写语句的墙钟（半开连接的**唯一快速判定点**）。
+///
+/// 为什么按语句而不是按页：一页会被拆成十几条语句，按页设墙钟时，一条挂在半开
+/// 连接上的语句会把整页的额度（真机 300 秒）耗光，而且页越大判定越慢。
+/// 按条设：3MB 的语句 35 秒就判定，慢页（由多条语句组成）也不会被误杀。
+pub(crate) fn statement_watchdog(bytes: usize) -> std::time::Duration {
+    let mb = (bytes / (1024 * 1024)) as u64;
+    std::time::Duration::from_millis((20_000 + mb * 5_000).clamp(20_000, 120_000))
+}
+
+/// 目标端执行一条写语句，带墙钟；超时转成「链路级」失败 ——
+/// 上层据此回滚本片、**换一条新连接**重跑（见 `transfer::engine`）。
+async fn run_write_stmt(
+    state: &AppState,
+    target: &str,
+    sql: &str,
+    session: &str,
+) -> XResult<dbmind_core::QueryResult> {
+    let watchdog = statement_watchdog(sql.len());
+    match tokio::time::timeout(watchdog, run_target_in(state, target, sql, session)).await {
+        Ok(result) => result,
+        Err(_) => Err(XError::internal(format!(
+            "单条写语句（约 {} MB）{} 秒未返回：目标端连接可能已经半开（RDS 踢连接 / 链路静默丢包）",
+            sql.len() / (1024 * 1024),
+            watchdog.as_secs()
+        ))),
+    }
+}
+
 /// 「这条连接已经不可用」类错误的特征串（大小写无关）。
 ///
 /// 与 [`is_link_level_error`] 共用一份清单：那条判 `XError`，这条判
@@ -2114,6 +2143,9 @@ pub(crate) fn is_link_level_message(message: &str) -> bool {
         "no operations allowed after connection closed",
         // 宿主确认「无法确认回滚」时连接已经废了，逐行重试没有意义
         "无法确认回滚",
+        // 单批墙钟兜底（连接半开：响应永远不来）
+        "未返回",
+        "半开",
     ]
     .iter()
     .any(|key| text.contains(key))
@@ -2223,7 +2255,8 @@ pub(crate) async fn write_insert_rows(
                 return Err(format!("创建批处理保存点失败：{}", err.message));
             }
         }
-        match run_target_in(state, tgt_target, &with_identity(stmt, identity_on, target_name), session).await {
+        let insert_sql = with_identity(stmt, identity_on, target_name);
+        match run_write_stmt(state, tgt_target, &insert_sql, session).await {
             Ok(_) => {
                 ok_rows += n_rows as u64;
                 if let Some((_, _, Some(release))) = sp.as_ref() {
@@ -2295,7 +2328,8 @@ pub(crate) async fn write_insert_rows(
                             return Err(format!("创建二分保存点失败：{}", err.message));
                         }
                     }
-                    match run_target_in(state, tgt_target, &with_identity(stmt, identity_on, target_name), session).await {
+                    let sub_sql = with_identity(stmt, identity_on, target_name);
+                    match run_write_stmt(state, tgt_target, &sub_sql, session).await {
                         Ok(_) => {
                             ok_rows += sub_len as u64;
                             if let Some((_, _, Some(release))) = sub_sp.as_ref() {

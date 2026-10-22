@@ -79,14 +79,26 @@ fn prefetch_enabled() -> bool {
     std::env::var_os("DBMIND_SYNC_NO_PREFETCH").is_none()
 }
 
-/// 单批写入的**墙钟**上限。
+/// 单批写入的墙钟上限：由 [`WriteDiag::batch_watchdog`] 按现场自适应（60s ~ 300s）。
 ///
 /// 为什么必须有：连接的 `socketTimeout=0`（真机上好几条 RDS 连接的高级参数里就是这么写的）
 /// 是**永不超时** —— 目标端把连接半开（RDS 常见的 wait_timeout 踢连接 / 中间设备静默丢包）时，
 /// 驱动会一直等一个永远不来的响应：`show processlist` 里什么都看不到、也不报错，
-/// 只有整条同步「卡住、一行都不写、失败数还是 0」（真机 400 张表跑到 4/400，写出 1536 行）。
-/// 这里用墙钟兜底，把「永远等」变成「这一片失败、其它片继续」，并在错误里点名 socketTimeout。
-const WRITE_CALL_TIMEOUT: Duration = Duration::from_secs(300);
+/// 只有整条同步「卡住、一行都不写、失败数还是 0」。
+///
+/// 为什么不能一刀切 300 秒：真机一张 400 对象的任务跑到尾部，几乎每张表都撞一次，
+/// 于是「五分钟卡一次」地循环 —— 20 秒判定 + 弃用这条连接 + 重连重跑，代价小得多。
+const WRITE_CALL_TIMEOUT_MAX: Duration = Duration::from_secs(300);
+
+/// 回滚/收尾语句自己的墙钟：半开连接上连 `rollback` 都会挂住（真机整条同步就此卡死）。
+const ABORT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// 读一页的墙钟：正常页 <5 秒（32MiB 大页也就 5~6 秒），60 秒足够判定「这条读永远回不来」。
+const READ_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// 提交（commit）的墙钟：几十万行的事务提交慢是正常的，但不能无限等 ——
+/// 半开连接上 commit 会永远不返回，而「提交过没」是决定能不能重跑的关键。
+const COMMIT_CALL_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// 片任务共享的运行态。
 struct SliceCtx {
@@ -725,8 +737,24 @@ async fn run_segment(
 
         if let Some(msg) = failure {
             // 失败 ⇒ 回滚这一片（**绝不提交**），并把本次尝试的计数扣回，
-            // 这样「重跑一片」对总数与行数上限都是透明的一次
-            ctx.writer.abort(worker).await;
+            // 这样「重跑一片」对总数与行数上限都是透明的一次。
+            //
+            // 回滚也要有墙钟：半开连接上连 `rollback` 都能挂住，以前这里无限等，
+            // 整条同步就此卡死（写批超时反倒白设了）。
+            if tokio::time::timeout(ABORT_CALL_TIMEOUT, ctx.writer.abort(worker))
+                .await
+                .is_err()
+            {
+                if let Some(task) = &plan.task {
+                    task.log(format!(
+                        "表 {}：回滚 {} 秒未返回，连接已弃用（服务端会自行回滚未提交事务）",
+                        plan.table,
+                        ABORT_CALL_TIMEOUT.as_secs()
+                    ));
+                }
+            }
+            // 不管回滚成不成，这条连接都不可信了：下一次尝试换新连接
+            ctx.writer.renew().await;
             ctx.inserted.fetch_sub(try_inserted, Ordering::SeqCst);
             ctx.updated.fetch_sub(try_updated, Ordering::SeqCst);
             ctx.consumed.fetch_sub(try_consumed, Ordering::SeqCst);
@@ -756,24 +784,37 @@ async fn run_segment(
         }
 
         // 成功（或用户取消）⇒ 先把攒着的 upsert 更新发出去，再提交这一片
-        if let Err(msg) = ctx.writer.flush().await {
-            ctx.writer.abort(worker).await;
+        let flushed =
+            tokio::time::timeout(ctx.plan.diag.batch_watchdog(1024), ctx.writer.flush()).await;
+        let flush_err = match flushed {
+            Ok(Ok(_)) => None,
+            Ok(Err(msg)) => Some(msg),
+            Err(_) => Some("发送攒着的 upsert 更新超时（目标端连接可能已半开）".to_string()),
+        };
+        if let Some(msg) = flush_err {
+            let _ = tokio::time::timeout(ABORT_CALL_TIMEOUT, ctx.writer.abort(worker)).await;
+            ctx.writer.renew().await;
             ctx.inserted.fetch_sub(try_inserted, Ordering::SeqCst);
             ctx.updated.fetch_sub(try_updated, Ordering::SeqCst);
             ctx.consumed.fetch_sub(try_consumed, Ordering::SeqCst);
             return Err(msg);
         }
-        match ctx.writer.finish(worker).await {
-            Ok(()) => {
+        match tokio::time::timeout(COMMIT_CALL_TIMEOUT, ctx.writer.finish(worker)).await {
+            Ok(Ok(())) => {
                 return Ok(match paused {
                     Some(key) => SegmentOutcome::Paused(key),
                     None => SegmentOutcome::Finished,
                 });
             }
-            Err(msg) => {
-                // 提交阶段失败：这一段是否落盘已无法确定。**不能重跑**（可能已写入），
-                // 如实失败；`WriteDiag::committed` 已由 writer 记下，上层也不会整表重跑。
-                return Err(msg);
+            // 提交阶段失败：这一段是否落盘已无法确定。**不能重跑**（可能已写入），
+            // 如实失败；`WriteDiag::committed` 已由 writer 记下，上层也不会整表重跑。
+            Ok(Err(msg)) => return Err(msg),
+            Err(_) => {
+                return Err(format!(
+                    "提交事务 {} 秒未返回（目标端连接可能已半开）：本段是否落盘无法确定，\
+                     不会自动重跑；请核对该表行数后再决定是否重跑",
+                    COMMIT_CALL_TIMEOUT.as_secs()
+                ));
             }
         }
     }
@@ -790,7 +831,18 @@ async fn read_page(
         if attempt > 0 {
             tokio::time::sleep(Duration::from_millis(150 * (1 << (attempt - 1)))).await;
         }
-        match reader.page(range, cursor.clone()).await {
+        // 源端同样要有墙钟：连接的 socketTimeout=0 时，一条半开的读会一直等到内核
+        // 10 分钟的语句超时，界面上就是「读数字一动不动」。一页正常 5 秒内，60 秒足够。
+        match tokio::time::timeout(READ_CALL_TIMEOUT, reader.page(range, cursor.clone()))
+            .await
+            .map_err(|_| {
+                format!(
+                    "读取一页 {} 秒未返回（源端连接可能已半开 / socketTimeout=0）",
+                    READ_CALL_TIMEOUT.as_secs()
+                )
+            })
+            .and_then(|result| result)
+        {
             Ok(page) => return Ok(page),
             Err(msg) => last = msg,
         }
@@ -807,20 +859,25 @@ async fn write_rows(
     let started = std::time::Instant::now();
     ctx.plan.diag.note_batch_start(rows.len());
     ctx.plan.diag.inflight.fetch_add(1, Ordering::Relaxed);
-    let outcome = match tokio::time::timeout(
-        WRITE_CALL_TIMEOUT,
-        ctx.writer.write(worker, rows),
-    )
-    .await
-    {
+    // 阈值跟着这张表的现场走：正常 1 秒一批 ⇒ 20 秒就判定；真慢的批（十秒级）不会误杀
+    let watchdog = ctx.plan.diag.batch_watchdog(rows.len());
+    debug_assert!(watchdog <= WRITE_CALL_TIMEOUT_MAX);
+    let outcome = match tokio::time::timeout(watchdog, ctx.writer.write(worker, rows)).await {
         Ok(outcome) => outcome,
-        Err(_) => Err(format!(
-            "单批 {} 行写入 {} 秒仍未返回：目标端连接可能已经半开（RDS 踢连接 / 链路静默丢包），\
-             或该连接的 socketTimeout=0（永不超时）。请在「编辑数据源 → 高级参数」里把 \
-             socketTimeout 设为 600、writeTimeout 设为 300 后重试",
-            rows.len(),
-            WRITE_CALL_TIMEOUT.as_secs()
-        )),
+        Err(_) => {
+            // 半开连接上那条语句还挂在宿主里，**必须换新连接**再重试，
+            // 否则下一次调用复用它、再挂一次（真机表现为「每张表都卡一次」）
+            ctx.writer.renew().await;
+            Err(format!(
+                "单批 {} 行写入 {} 秒未返回（该表近期单批通常在 {} 秒内）：目标端连接已经半开\
+                 （RDS wait_timeout 踢连接 / 链路静默丢包），或该连接的 socketTimeout=0（永不超时）。\
+                 已弃用这条连接，重试会重新建连；若同一张表反复出现，把「编辑数据源 → 高级参数」\
+                 里的 socketTimeout 改成 120000（毫秒，注意不是 120）",
+                rows.len(),
+                watchdog.as_secs(),
+                (watchdog.as_secs() / 8).max(1),
+            ))
+        }
     };
     ctx.plan.diag.inflight.fetch_sub(1, Ordering::Relaxed);
     ctx.plan.diag.note_batch_done(rows.len(), started.elapsed());

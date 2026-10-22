@@ -14,7 +14,7 @@
 //!   不跨连接拼事务 —— 改造前那层「在 A 连接上 set autocommit=0、在 B 连接上写」
 //!   的事务等于没开（真机踩过）。
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use dbmind_core::CellValue;
@@ -64,7 +64,18 @@ pub trait Writer: Send + Sync {
     /// 不返回 `Result`：放弃路径已经在报错，回滚再失败也没有更好的处理
     /// （连接多半已经断了，服务端会自行回滚未提交事务）。
     fn abort<'a>(&'a self, worker: usize) -> BF<'a, ()>;
+
+    /// 换一条**全新物理连接**：链路级失败/单批超时后调用。
+    ///
+    /// 半开连接上那条语句还挂在宿主里，紧接着的重试若复用同一会话就会再卡一次；
+    /// 会话名带代数后缀 ⇒ 内核当新会话建连，旧的那条由服务端超时回收。
+    fn renew<'a>(&'a self) -> BF<'a, ()> {
+        Box::pin(async {})
+    }
 }
+
+/// 一张表最多换几次写连接（见 `Writer::renew`）。
+const MAX_RENEW: u64 = 2;
 
 pub struct SqlWriter {
     state: AppState,
@@ -102,6 +113,13 @@ pub struct SqlWriter {
     stmt_caps: Vec<AtomicUsize>,
     /// 写池诊断（二分定位到的坏行样例写这里，卡顿日志会读）
     diag: Arc<WriteDiag>,
+    /// 写会话**代数**：链路级失败/单批超时后 +1，下一次调用用的是全新会话名
+    /// ⇒ 内核/宿主新建物理连接。
+    ///
+    /// 为什么必须换名字：一条半开的连接（RDS 踢了 / 链路静默丢包）在宿主里
+    /// 那条语句还挂着，内核侧的会话缓存仍然是「活着」的，紧接着的重试会**复用
+    /// 同一条卡死的连接**，于是再挂一次看门狗 —— 真机上表现为「每张表都卡五分钟」。
+    generation: AtomicU64,
 }
 
 impl SqlWriter {
@@ -153,6 +171,7 @@ impl SqlWriter {
             workers: workers.max(1),
             workers_ceiling,
             diag: plan.diag.clone(),
+        generation: AtomicU64::new(0),
         }
     }
 
@@ -162,12 +181,23 @@ impl SqlWriter {
     /// `sid` 必须带上（见 `TablePlan::sid`）：只按 worker 编号分键时，**不同表**的
     /// 同名 worker 会落到同一条连接上，多个表的 begin/commit 互相串。
     fn session(&self, worker: usize) -> String {
-        format!("internal:sync-w{}-{worker}", self.sid)
+        let gen = self.generation.load(Ordering::SeqCst);
+        if gen == 0 {
+            format!("internal:sync-w{}-{worker}", self.sid)
+        } else {
+            // 代数后缀仍以 sid 开头：收尾时按 `contains(sid)` 清会话照样命中
+            format!("internal:sync-w{}-{worker}-g{gen}", self.sid)
+        }
     }
 
     /// upsert 的更新批走一条**本表专属**的串行会话（同 `sid` 隔离理由）。
     fn update_session(&self) -> String {
-        format!("internal:sync-u{}", self.sid)
+        let gen = self.generation.load(Ordering::SeqCst);
+        if gen == 0 {
+            format!("internal:sync-u{}", self.sid)
+        } else {
+            format!("internal:sync-u{}-g{gen}", self.sid)
+        }
     }
 }
 
@@ -609,6 +639,36 @@ impl Writer for SqlWriter {
             if let Some(flag) = self.txn_open.get(worker) {
                 flag.store(false, Ordering::SeqCst);
             }
+        })
+    }
+
+    fn renew<'a>(&'a self) -> BF<'a, ()> {
+        Box::pin(async move {
+            // 这一代的连接已经不可信：连「有没有开事务」都不再作数，
+            // 全部标记复位，攒着的 upsert 也丢掉（它们会随本段重跑一起重来）。
+            for flag in &self.txn_open {
+                flag.store(false, Ordering::SeqCst);
+            }
+            self.update_txn_open.store(false, Ordering::SeqCst);
+            self.pending_updates.lock().await.clear();
+            // 换连接不是免费的：半开的那条在宿主里还占着一条物理连接和会话预算
+            //（它自己不会退，只能等服务端/系统回收）。换两次还不行就认了，
+            // 免得把整条连接的会话预算耗光、连累同时并发的其它表。
+            if self.generation.load(Ordering::SeqCst) >= MAX_RENEW {
+                tracing::warn!(
+                    target: "dbmind::sync",
+                    table = %self.table,
+                    "已经换过 {MAX_RENEW} 次写连接，继续复用当前会话（避免耗光会话预算）"
+                );
+                return;
+            }
+            let next = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            tracing::warn!(
+                target: "dbmind::sync",
+                table = %self.table,
+                generation = next,
+                "写连接已弃用，后续重试改用全新会话（避免复用半开的连接）"
+            );
         })
     }
 }
