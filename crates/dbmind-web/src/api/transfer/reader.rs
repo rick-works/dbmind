@@ -28,6 +28,25 @@ pub const PAGE_SPLIT: usize = 10_000;
 const PAGE_BYTES_TARGET: usize = 32 * 1024 * 1024;
 const PAGE_ROWS_MIN: usize = 1_000;
 const PAGE_ROWS_MAX: usize = 100_000;
+/// 读一页**超时**后允许缩到的最小页。
+///
+/// 比 [`PAGE_ROWS_MIN`] 还低：那个下限是「自适应时别把页调得太碎」，而这里是
+/// 「链路真读不回来」的逃生档 —— 一页 3.8 万行 ≈ 6 MB 结果集，在丢包链路上
+/// 客户端等不到 ACK，60 秒后整表重跑（真机：`winneryun_huike_data_hour` 反复
+/// 「读取一页 60 秒未返回」）。500 行 ≈ 80 KB，小到能过任何黑洞。
+const PAGE_ROWS_FLOOR: usize = 500;
+
+/// 固定页行数的逃生阀（`DBMIND_SYNC_PAGE_ROWS`）：设了就**不再自适应**，
+/// 一页恒为这个行数（同时成为硬上限，不会几何放大回去）。
+///
+/// 用途：丢包/高延迟链路上，实测「多大页读得回来」比让算法猜更快。
+fn env_page_rows() -> Option<usize> {
+    std::env::var("DBMIND_SYNC_PAGE_ROWS")
+        .ok()
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .filter(|rows| *rows >= 1)
+        .map(|rows| rows.min(PAGE_ROWS_MAX))
+}
 /// 一页**应该写多久**（秒）：读侧按实测写速把页调到这个量级。
 ///
 /// 为什么不按「写路数」一刀切：那样的上限（1 路写只给 2 万行）在快表上把往返次数
@@ -113,6 +132,11 @@ pub trait Reader: Send + Sync {
     fn split<'a>(&'a mut self, want: usize) -> BF<'a, Result<Vec<RowRange>, String>>;
     /// 拉一片的下一页
     fn page<'a>(&'a self, range: &'a RowRange, cursor: Option<Cursor>) -> BF<'a, Result<Page, String>>;
+    /// 读一页失败后收缩页大小（默认什么都不做）。
+    ///
+    /// 引擎在读超时/链路报错时调用：页太大 ⇒ 结果集太大 ⇒ 丢包链路上读不回来。
+    /// 缩半页再试，比「按原页大重试三次、然后整表重跑」划算得多。
+    fn shrink_page(&self) {}
 }
 
 /// 通用 SQL 取数插件。
@@ -130,8 +154,11 @@ pub struct SqlReader {
     where_clause: String,
     row_limit: u64,
     page_rows: AtomicUsize,
-    /// 一页的行数上限（硬上限，见 [`PAGE_ROWS_MAX`]）
-    rows_cap: usize,
+    /// `DBMIND_SYNC_PAGE_ROWS` 给定的固定页；有值时分片切换不再改写页大小。
+    fixed_page: Option<usize>,
+    /// 一页的行数上限（硬上限，见 [`PAGE_ROWS_MAX`]）。读失败收缩时会一起压低，
+    /// 免得几何增长/写速自适应马上又把它放大回去（同一段链路反复超时就成了震荡）。
+    rows_cap: AtomicUsize,
     /// 写池诊断：读侧按**实测写速**决定一页多大（见 [`PAGE_TARGET_SECS`]）
     diag: std::sync::Arc<crate::api::transfer::WriteDiag>,
     /// 本表的会话后缀（见 `TablePlan::sid`）：并发整库同步时，不同表的同号分片
@@ -165,7 +192,10 @@ impl SqlReader {
         // 页大小不再按「写并发」一刀切：那个做法（1 路写就给 2 万行）在快表上把
         // 往返次数抬了几倍，整体反而变慢。现在交给**实测写速**：`read_page` 里按
         // 「一页 ≈ PAGE_TARGET_SECS 秒的写入量」调，快则放大到 10 万行、慢则缩到几千行。
-        let rows_cap = PAGE_ROWS_MAX;
+        // 逃生阀：`DBMIND_SYNC_PAGE_ROWS` 设了就固定页大小（丢包链路上直接给定值，
+        // 不必等算法在超时里摸索）。
+        let fixed_page = env_page_rows();
+        let rows_cap = fixed_page.unwrap_or(PAGE_ROWS_MAX);
         // 分页键的**行内位置**必须按 `paging_keys` 自己在取数列里找，不能借
         // `plan.key_indexes` —— 那个是**目标端** upsert 键（写库用）的位置。
         // 目标表已存在且主键与源主键不是同一组列时，两套位置会错位，代价不是报错而是
@@ -202,8 +232,9 @@ impl SqlReader {
             key_positions,
             where_clause: plan.where_clause.clone(),
             row_limit: plan.row_limit,
-            page_rows: AtomicUsize::new(PAGE_WIDE),
-            rows_cap,
+            page_rows: AtomicUsize::new(fixed_page.unwrap_or(PAGE_WIDE)),
+            fixed_page,
+            rows_cap: AtomicUsize::new(rows_cap),
             diag: plan.diag.clone(),
             sid: plan.sid.clone(),
             slices_cap: plan.slices_cap,
@@ -369,12 +400,14 @@ impl Reader for SqlReader {
                 && window_split_enabled()
             {
                 if let Some(ranges) = window_ranges_of(self, want).await {
-                    self.page_rows.store(PAGE_SPLIT, Ordering::SeqCst);
+                    self.page_rows
+                        .store(self.fixed_page.unwrap_or(PAGE_SPLIT), Ordering::SeqCst);
                     return Ok(ranges);
                 }
             }
             if want <= 1 || self.paging_keys.is_empty() || self.row_limit > 0 {
-                self.page_rows.store(PAGE_WIDE, Ordering::SeqCst);
+                self.page_rows
+                    .store(self.fixed_page.unwrap_or(PAGE_WIDE), Ordering::SeqCst);
                 return Ok(whole);
             }
             let ranges = match self.numeric_ranges(want).await {
@@ -410,7 +443,12 @@ impl Reader for SqlReader {
             if !user_where.is_empty() {
                 parts.push(format!("({user_where})"));
             }
-            if !range.is_whole() {
+            // `paging_keys` 为空 = 无键表（走 OFFSET）。它也可能不是整表：窗口分片给的是
+            // `window = Some(起点, 终点)`，`low`/`high` 都是 None。原来这里只看 `is_whole()`，
+            // 于是无键表 + 窗口分片会在 `paging_keys[0]` 上越界 panic
+            //（真机：`index out of bounds: the len is 0 but the index is 0`，
+            // 协程整个死掉，任务报「传输协程异常终止」）。没有键就没有列区间条件，跳过即可。
+            if !range.is_whole() && !self.paging_keys.is_empty() {
                 let column = self.dialect.quote(&self.paging_keys[0]);
                 if let Some(low) = range.low.as_ref() {
                     parts.push(format!("{column} >= {}", literal_for(low, self.dialect, None)));
@@ -463,12 +501,16 @@ impl Reader for SqlReader {
                 estimated_bytes,
                 read_ms,
                 self.diag.write_rate(),
-                self.rows_cap,
+                self.rows_cap.load(Ordering::SeqCst),
                 // 无键表只能 OFFSET 翻页，页小了重扫是 O(N²)，不按写速压
                 !self.paging_keys.is_empty(),
             );
             // 小变化不折腾分页；只有明显更宽/更窄/写速换档时才动。
-            if target_rows * 2 < page_rows || target_rows > page_rows * 2 {
+            // 固定页模式（`DBMIND_SYNC_PAGE_ROWS`）下不动：用户给的值就是最终值
+            //（否则逃生阀会被自适应悄悄改回去，等于没设）。
+            if self.fixed_page.is_none()
+                && (target_rows * 2 < page_rows || target_rows > page_rows * 2)
+            {
                 self.page_rows.store(target_rows, Ordering::SeqCst);
             }
 
@@ -477,10 +519,14 @@ impl Reader for SqlReader {
             // 累计重扫 90 万行；百万行级直接变成分钟级）。让页**几何增长**（×2）后，
             // offset 累计只到约 2N 就结束，总扫描量回到 O(N)，无主键大表从「越跑越慢」
             // 变成匀速。宽表不翻倍：上面的字节目标已经把它压小了（now < page_rows）。
-            if self.paging_keys.is_empty() {
+            // 固定页模式（`DBMIND_SYNC_PAGE_ROWS`）下不几何增长：用户明确要求这个大小。
+            if self.paging_keys.is_empty() && self.fixed_page.is_none() {
                 let now = self.page_rows_now();
                 if now >= page_rows {
-                    let grown = now.saturating_mul(2).min(self.rows_cap).min(target_rows.max(now));
+                    let grown = now
+                        .saturating_mul(2)
+                        .min(self.rows_cap.load(Ordering::SeqCst))
+                        .min(target_rows.max(now));
                     if grown > now {
                         self.page_rows.store(grown, Ordering::SeqCst);
                     }
@@ -493,6 +539,17 @@ impl Reader for SqlReader {
                 .map(|(_, end)| offset + rows.len() as u64 >= end)
                 .unwrap_or(false);
             let done = rows.len() < fetch_rows || window_done;
+            // 诊断：每页实际拿回多少行。`done` 靠「拿回的行数 < 请求行数」判断读完，
+            // 一旦服务端/内核在某一层少给，这里就会被误判成「块读完了」。
+            tracing::debug!(
+                table = %self.sid,
+                offset,
+                fetch_rows,
+                got = rows.len(),
+                window_done,
+                done,
+                "同步读页"
+            );
             let next = if done {
                 None
             } else {
@@ -503,6 +560,21 @@ impl Reader for SqlReader {
             };
             Ok(Page { rows, next })
         })
+    }
+
+    fn shrink_page(&self) {
+        // 读超时/链路报错后把页**减半**：页太大 ⇒ 结果集太大 ⇒ 丢包链路上客户端等不到 ACK，
+        // 60 秒后整表重跑。缩半页重试比「按原页大重试三次再重跑整表」划算得多。
+        //
+        // 硬上限一起压到 `shrunk × 4` 而不是直接钉死：链路恢复后还能靠几何增长/自适应
+        // 涨回来（最多两级翻倍），不至于因为一次抖动就整表单流小页跑到底。
+        let now = self.page_rows.load(Ordering::SeqCst);
+        let shrunk = (now / 2).max(PAGE_ROWS_FLOOR).min(now);
+        if shrunk < now {
+            self.page_rows.store(shrunk, Ordering::SeqCst);
+            self.rows_cap
+                .store((shrunk * 4).max(PAGE_ROWS_MIN), Ordering::SeqCst);
+        }
     }
 }
 

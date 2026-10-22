@@ -309,10 +309,20 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                     slots.release(worker);
                     return Ok(());
                 };
+                // 诊断：块号必须在被改成通道号**之前**记下来，否则日志里只剩 0..limit，
+                // 看不出「切成 8 块却只跑了 4 块」这类漏块。
+                tracing::info!(table = %ctx.plan.table, block = range.index, "同步块开始");
                 // 读会话按**通道号**而不是块号：块换一个就换一条连接的话，几十个块会把
                 // 会话池堆满（每个块号一条空闲连接）。通道号恒 ≤ limit，读连接就固定这几条。
+                let block_no = range.index;
                 range.index = worker;
                 let outcome = run_slice(ctx.clone(), worker, range).await;
+                tracing::info!(
+                    table = %ctx.plan.table,
+                    block = block_no,
+                    ok = outcome.is_ok(),
+                    "同步块结束"
+                );
                 // 还令牌：下一块（或同一块的下一轮重试）要用
                 slots.release(worker);
                 // 一块失败 ⇒ 这张表已经判失败，本任务不再领块；其它任务照旧把已领的块跑完
@@ -872,7 +882,13 @@ async fn read_page(
             .and_then(|result| result)
         {
             Ok(page) => return Ok(page),
-            Err(msg) => last = msg,
+            Err(msg) => {
+                // 失败先把页缩小：读超时/链路报错的真因多半是「结果集太大传不回来」
+                //（一页几万行 ≈ 几 MB，丢包链路上等不到 ACK）。缩半页再试，
+                // 不要拿同一个大页连撞三次，更不要让上层整表重跑。
+                reader.shrink_page();
+                last = msg;
+            }
         }
     }
     Err(last)

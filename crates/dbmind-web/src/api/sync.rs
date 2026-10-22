@@ -514,6 +514,37 @@ pub(crate) async fn run_target(state: &AppState, target: &str, sql: &str) -> XRe
     run_target_in(state, target, sql, SESSION_SYNC).await
 }
 
+/// 明确要求「可写会话」的目标端执行（清空/重建这类 DDL-DML）。
+///
+/// 为什么不能复用 [`run_target`]：它的 `read_only` 是 `None`，由内核按上下文决定。
+/// 目标连接若被标成只读（连接设置里的只读开关，或会话池里复用到一条只读会话），
+/// 驱动会在语句层直接拒绝：`Connection is read-only. Queries leading to data
+/// modification are not allowed.` —— 真机就报在收尾对账的「清空重传」上：
+/// 行数对不上、想重传，却在 truncate 这一步失败，只能放弃重传（数据就一直是少的）。
+pub(crate) async fn run_target_write(
+    state: &AppState,
+    target: &str,
+    sql: &str,
+) -> XResult<dbmind_core::QueryResult> {
+    let engine = state.engine();
+    let request = dbmind_core::QueryRequest {
+        schema: None,
+        // 写语句：显式要求可写会话（见函数注释）
+        read_only: Some(false),
+        connection: target.to_string(),
+        sql: sql.to_string(),
+        options: dbmind_core::QueryOptions {
+            max_rows: 1,
+            timeout_ms: 600_000,
+        },
+        execution_id: None,
+        session: Some(SESSION_SYNC.to_string()),
+        internal: true,
+    };
+    let result = blocking(move || engine.execute(request, dbmind_core::AccessContext::Web)).await?;
+    Ok(result)
+}
+
 /// 同 [`run_target`]，但显式指定会话亲和键。
 ///
 /// **为什么需要**：内核的会话池按「连接 + 亲和键」分泳道，而**带亲和键的泳道上限恒为 1**
@@ -3967,7 +3998,7 @@ async fn sync_table_inner(
             // 清空语句按**目标方言**选：ClickHouse 不吃裸 `delete from`（实测 position 26 语法错），
             // SQLite / Derby 又没有 `truncate` —— 见 `Dialect::clear_table_sql`
             let clear = target_kind.clear_table_sql(&target_name);
-            if let Err(err) = run_target(state, &tgt_target, &clear).await {
+            if let Err(err) = run_target_write(state, &tgt_target, &clear).await {
                 return ObjResult::failed(ty, table, format!("清空目标表失败：{}", err.message));
             }
         }
