@@ -380,10 +380,12 @@ impl Task {
     /// 行级实时计数（读取/写入/失败行数），同步等按行推进的任务用。
     pub fn add_rows_read(&self, n: u64) { *lock(&self.rows_read) += n; }
 
-    /// 扣回已读行数（片级重跑用）。
+    /// 扣回已读行数（历史接口，现在**不再使用**）。
     ///
-    /// 一片回滚后重跑会把同一片再读一遍；不扣回的话「已读」会随重跑次数虚高
-    /// （真机：100 万行的表杀了一次连接，界面显示已读 111 万）。
+    /// 原来片级重跑会扣回已读，于是「已读」在重试时**往回跳**（真机反馈：数字越跳越小，
+    /// 而且因为写侧没对称扣回，出现了「传输数 > 读取数」）。现在两个计数都按
+    /// 「累计做过的量」单调递增（重跑读过的行也是真读了），只有失败行数会回退。
+    #[allow(dead_code)]
     pub fn sub_rows_read(&self, n: u64) {
         let mut guard = lock(&self.rows_read);
         *guard = guard.saturating_sub(n);
@@ -391,13 +393,21 @@ impl Task {
     pub fn add_rows_written(&self, n: u64) { *lock(&self.rows_written) += n; }
     pub fn add_rows_failed(&self, n: u64) { *lock(&self.rows_failed) += n; }
 
-    /// 把行级计数**拉回**重跑前的快照（同步断连整表重跑时用）。
+    /// 整表断连重跑时的计数处理。
     ///
-    /// 为什么必须回退：上一次尝试读/写的行会随目标端事务回滚一起作废，
-    /// 不回退的话同一批行被计两遍 —— 进度卡「已传输」虚高甚至超过总行数。
+    /// **读取/传输只增不减**（取快照与当前值的较大者）：重跑时这两个数字往回掉，
+    /// 用户会当成故障（真机反馈「数字越跳越小」）。它们现在表示「累计做过的量」，
+    /// 重跑读过的行、写过的行都是真做过的工作。
+    /// 只有**失败行数**按重跑回退 —— 那些行会被重试，不能一直挂在失败里。
     pub fn reset_rows(&self, read: u64, written: u64, failed: u64) {
-        *lock(&self.rows_read) = read;
-        *lock(&self.rows_written) = written;
+        {
+            let mut guard = lock(&self.rows_read);
+            *guard = (*guard).max(read);
+        }
+        {
+            let mut guard = lock(&self.rows_written);
+            *guard = (*guard).max(written);
+        }
         *lock(&self.rows_failed) = failed;
     }
 
@@ -514,14 +524,19 @@ impl Task {
 
     /// 状态快照（上游的 `task.view()` 形状）。
     pub fn snapshot(&self) -> Value {
+        let read = *lock(&self.rows_read);
+        // 「传输数」永远不该超过「读取数」：写侧在宿主里按语句成功行累加，链路断掉时
+        // 已经发出去但被回滚的那部分也会算进去（真机：传输 3245 万 > 读取 3170 万）。
+        // 这里按读取数夹一刀，界面上的两个数字就始终自洽。
+        let written = (*lock(&self.rows_written)).min(read);
         json!({
             "taskId": self.id,
             "status": self.status().as_str(),
             "done": *lock(&self.done),
             "total": *lock(&self.total),
             // 行级实时计数：运行中就有（不等终态 summary），前端统计卡据此跳动
-            "rowsRead": *lock(&self.rows_read),
-            "rowsWritten": *lock(&self.rows_written),
+            "rowsRead": read,
+            "rowsWritten": written,
             "rowsFailed": *lock(&self.rows_failed),
             "phase": lock(&self.phase).clone(),
             "message": lock(&self.message).clone(),

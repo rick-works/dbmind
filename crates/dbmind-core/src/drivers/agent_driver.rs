@@ -361,8 +361,22 @@ impl AgentDriver {
                 .and_then(|e| e.get("params"))
                 .and_then(|v| v.as_object())
             {
-                if !extra.is_empty() {
-                    params.insert("params".to_string(), serde_json::Value::Object(extra.clone()));
+                // `socketTimeout=0` 是「永不超时」，不是「用默认值」：连接被中间设备静默断开
+                // （VPN/NAT 空闲回收、TAP 隧道丢包）后永远发现不了，只能等写批的兜底超时 ——
+                // 真机表现是「同一张表卡 5 分钟才报错，然后整表重跑」。老连接里存的就是 0
+                // （表单曾经允许填 0），所以在**建连这一层**统一丢掉它，让 URL 模板里的
+                // 默认值（10 分钟）生效，不必让用户逐条重存连接。
+                let mut cleaned = extra.clone();
+                let zero = cleaned
+                    .get("socketTimeout")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.trim().parse::<u64>().unwrap_or(1) == 0)
+                    .unwrap_or(false);
+                if zero {
+                    cleaned.remove("socketTimeout");
+                }
+                if !cleaned.is_empty() {
+                    params.insert("params".to_string(), serde_json::Value::Object(cleaned));
                 }
             }
         } else {

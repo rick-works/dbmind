@@ -113,6 +113,15 @@ pub fn config_from_body(body: &Value, existing: Option<&Value>) -> XResult<Conne
                 continue;
             }
             let value = item.get("value").and_then(Value::as_str).unwrap_or_default();
+            // socketTimeout=0 是「永不超时」，不是「用默认值」：连接被中间设备静默断开
+            // （VPN/NAT 空闲回收、半开连接）后永远发现不了，只能等写批的 300 秒兜底 ——
+            // 真机表现是「一张表卡五分钟才报错，然后整表重跑」。这里把它当成「没填」，
+            // 让 URL 模板里的 socketTimeout（10 分钟）生效。
+            if key.eq_ignore_ascii_case("socketTimeout")
+                && value.trim().parse::<u64>().unwrap_or(1) == 0
+            {
+                continue;
+            }
             params.insert(key, Value::String(value.to_string()));
         }
     }
