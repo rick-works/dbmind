@@ -26,7 +26,7 @@ use crate::types::{
 use crate::{CancelToken, ConnectionKind, RuntimeMode};
 use serde_json::{json, Map};
 use std::sync::mpsc::RecvTimeoutError;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 /// 结构浏览这类幂等调用等一条空闲会话的预算。
@@ -38,6 +38,51 @@ const METADATA_POOL_WAIT: Duration = Duration::from_secs(30);
 
 /// 连通性自检等一条空闲会话的预算（自检本身也该有兜底）。
 const SELF_CHECK_POOL_WAIT: Duration = Duration::from_secs(30);
+
+/// 会话闲置超过这么久，借出前先探一次活。
+///
+/// 为什么要这一步（真机现象，整库同步跑到 90% 时集中爆发）：日志里几张表接连报
+/// `Communications link failure`，驱动自带的诊断是「**收发都是 188 秒前**」——
+/// 那条连接在池里躺了 3 分钟没有流量，被云数据库的公网代理 / NAT 回收了会话表
+/// （MySQL 的 `wait_timeout` 通常远超 3 分钟，掐断发生在中间设备）。而内核这边只缓存
+/// sessionId、宿主只缓存 `Connection`，两边都不知道它已经死了 ⇒ 下一次借出时
+/// （最后阶段只剩大表，轮到谁谁才用它）第一条语句就撞上死连接。写路径非幂等，
+/// 于是整表回滚重跑 —— 用户看到的就是「前面都好好的，到 90% 开始报错」。
+///
+/// 探活只是最轻的一句 SQL（一次往返），代价远小于重跑一张大表；
+/// 探不通就作废这条会话，下一次 `ensure_session` 必然重连。
+const STALE_PROBE_AFTER: Duration = Duration::from_secs(60);
+
+/// 探活语句自身的超时：它只是为了排除「死连接」，不该在链路上再等半分钟。
+const STALE_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 后台保活的间隔。
+///
+/// 20 秒是「远小于任何链路/代理的空闲阈值」与「别把 ping 变成流量负担」的折中：
+/// 实测被掐的阈值是 180 秒左右，20 秒有 9 倍余量；一条 ping 在本地库约 1ms、
+/// 云库约 20ms，一个连接每分钟 3 次可以忽略。
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(20);
+
+/// 只保活「最近 10 分钟内用过」的会话：更久没用的交给空闲回收，不该为它们白花流量。
+const KEEPALIVE_WINDOW: Duration = Duration::from_secs(600);
+
+/// 一轮最多保活多少条。用户同时开几十个连接时不至于让一轮 ping 拖成长尾。
+const KEEPALIVE_MAX_SESSIONS: usize = 64;
+
+/// 逃生阀：`DBMIND_NO_KEEPALIVE=1` 关掉后台保活。
+///
+/// 排查「链路明明没问题、吞吐却异常」时用它把保活这层摘干净（它本身只该带来
+/// 每 20 秒一次往返）；也供不欢迎任何额外语句的受控环境使用。
+fn keepalive_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("DBMIND_NO_KEEPALIVE").is_ok_and(|v| v.trim() == "1"))
+}
+
+/// 逃生阀：`DBMIND_NO_LINK_PROBE=1` 关掉「借出前探活」（后台保活不受影响）。
+fn link_probe_disabled() -> bool {
+    static OFF: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *OFF.get_or_init(|| std::env::var("DBMIND_NO_LINK_PROBE").is_ok_and(|v| v.trim() == "1"))
+}
 
 /// 一次调用的泳道参数。
 ///
@@ -54,8 +99,10 @@ struct LaneCall<'a> {
 pub struct AgentDriver {
     kind: ConnectionKind,
     host: Arc<AgentHost>,
-    /// 会话池：把「一个连接」映射到「一到多条物理会话」（见 `session_pool` 模块文档）
-    pool: SessionPool,
+    /// 会话池：把「一个连接」映射到「一到多条物理会话」（见 `session_pool` 模块文档）。
+    ///
+    /// 用 `Arc` 是为了让后台保活线程能弱引用它（池随驱动释放，线程自然退出）。
+    pool: Arc<SessionPool>,
     /// 全局会话配额（跨连接、跨类型、跨宿主；由引擎在设置变更时更新）
     budget: Arc<SessionBudget>,
     /// 挂着**未提交事务**的泳道（事务模式：begin 加入，commit/rollback 移除）。
@@ -116,10 +163,13 @@ impl AgentDriver {
                 }
             })
         };
+        let pool = Arc::new(SessionPool::new(budget.clone(), closer));
+        // 保活线程只弱引用池：驱动释放后它自己退出，不会吊住内存（也不会泄漏一个线程去 ping 已关闭的连接）
+        spawn_keepalive(kind, host.clone(), Arc::downgrade(&pool));
         Self {
             kind,
             host,
-            pool: SessionPool::new(budget.clone(), closer),
+            pool,
             budget,
             tx_lanes: std::sync::Mutex::new(std::collections::HashSet::new()),
         }
@@ -486,6 +536,21 @@ impl AgentDriver {
             )
             .with_detail("事务所在物理连接已不在（被回收、连接断开或宿主重启）。"));
         }
+        // 躺太久的空闲会话先探一次活（原因见 `STALE_PROBE_AFTER`）。
+        //
+        // 必须放在 `ensure_session` **之前**：它只查内核这边的会话缓存，缓存命中就等于
+        // 「宿主那条连接还活着」，而真实情况可能早就被链路掐掉了。探不通就丢掉缓存，
+        // 下面那次 `ensure_session` 于是走真正的重连。
+        //
+        // 事务泳道不做：那条连接上有未提交的修改，探活失败只能如实报错（上面已经拦了），
+        // 「悄悄换一条重连」会让用户以为事务还在。
+        if !tx_open
+            && !link_probe_disabled()
+            && slot.idle_for() >= STALE_PROBE_AFTER
+            && !self.probe_idle_session(&session_id)
+        {
+            self.host.forget_session(&session_id);
+        }
         self.ensure_session(config, call.read_only, &session_id, false)?;
         // 事务模式对齐：正常复用同一会话时它本来就是 autocommit=false。
         // 若上面的缓存检查没发现失联、但宿主侧连接确实换了，这里仍按原逻辑
@@ -525,6 +590,11 @@ impl AgentDriver {
         }
     }
 
+    /// 用一句最轻的 SQL 验证「这条空闲会话还能不能用」（见 `probe_session`）。
+    fn probe_idle_session(&self, session_id: &str) -> bool {
+        probe_session(self.kind, &self.host, session_id)
+    }
+
     /// 幂等调用（结构浏览等）：会话失效时重建并重试一次。
     ///
     /// 用哪条会话由 `metadata_session_key` 决定（可能与数据会话同一条，也可能是独立只读会话）。
@@ -549,6 +619,117 @@ impl AgentDriver {
             },
             op,
         )
+    }
+}
+
+/// 最轻的探活/保活语句。按方言给：Oracle 必须带 `from dual`，DB2 / Derby 用
+/// `sysibm.sysdummy1`，其余（MySQL / PG / SQL Server / ClickHouse / Doris / H2 /
+/// SQLite / MongoDB 走宿主原生）都认裸 `select 1`。
+///
+/// 探活与保活共用同一句：它必须**无副作用**，且能在事务里安全执行
+/// （`select 1` 不改变事务状态，也不提交）。
+fn probe_sql(kind: ConnectionKind) -> &'static str {
+    match kind.key() {
+        "oracle" => "select 1 from dual",
+        "db2" | "derby" => "select 1 from sysibm.sysdummy1",
+        _ => "select 1",
+    }
+}
+
+/// 用一句最轻的 SQL 验证「这条会话还能不能用」。
+///
+/// 返回 false 只代表「该作废它」，**绝不把错误上抛**：探活是预防性检查，不是业务
+/// 语句。把「可能坏了」当「一定坏」判给用户（一次同步失败、一条查询报错）比
+/// 多花一次往返贵得多。
+fn probe_session(kind: ConnectionKind, host: &AgentHost, session_id: &str) -> bool {
+    let mut params = Map::new();
+    params.insert("sessionId".to_string(), json!(session_id));
+    params.insert("sql".to_string(), json!(probe_sql(kind)));
+    params.insert("maxRows".to_string(), json!(1));
+    match host.call(None, "query", params, Some(STALE_PROBE_TIMEOUT)) {
+        Ok(_) => {
+            tracing::debug!(
+                target: "dbmind::agent",
+                session = %session_id,
+                "空闲会话探活通过（链路仍然可用）"
+            );
+            true
+        }
+        Err(err) => {
+            tracing::debug!(
+                target: "dbmind::agent",
+                session = %session_id,
+                error = %err,
+                "空闲会话探活失败（多半已被链路掐断），作废后按需重连"
+            );
+            false
+        }
+    }
+}
+
+/// 后台保活：每隔 [`KEEPALIVE_INTERVAL`] 给「最近活跃、当前空闲」的会话发一句最轻的 SQL。
+///
+/// 为什么必须有它（真机现象，整库同步跑到 90% 时集中爆发）：尾部只剩大表时，池里的
+/// 连接会长时间没有流量；云数据库的公网代理 / NAT 把「3 分钟无流量」的会话表回收掉，
+/// 而内核与宿主都只会「记着」它 —— 下一次借出时第一条语句就撞死连接
+/// （`Communications link failure`，驱动诊断「收发都是 188 秒前」）。写路径非幂等，
+/// 一张大表就要整表回滚重跑。
+///
+/// 「借出前探活」只能事后发现；保活是**让它根本不失效**：20 秒一句 ping，远小于任何
+/// 链路/代理的空闲阈值（实测 180 秒）。
+///
+/// 三条边界（都很硬）：
+/// - 宿主没在跑就什么都不做 —— 这条路径绝不能为了 ping 拉起一个 JVM；
+/// - 只挑**空闲**会话 —— 绝不打断正在跑的语句；
+/// - 只挑**非常驻**会话（见 `SessionPool::idle_sessions_recent`）—— 用户事务里多一句
+///   `select 1` 本身安全，但探活误判会把事务当成「连接已断」丢掉，代价太大。
+fn spawn_keepalive(kind: ConnectionKind, host: Arc<AgentHost>, pool: Weak<SessionPool>) {
+    if keepalive_disabled() {
+        tracing::debug!(target: "dbmind::agent", "后台保活已按 DBMIND_NO_KEEPALIVE 关闭");
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("dbmind-keepalive".to_string())
+        .spawn(move || loop {
+            std::thread::sleep(KEEPALIVE_INTERVAL);
+            // 驱动（连同池）已经释放 ⇒ 线程退休
+            let Some(pool) = pool.upgrade() else { return };
+            if !host.is_running() {
+                // 宿主已经不在了 ⇒ 它上面所有会话必然失效。**绝不为了 ping 拉起 JVM**，
+                // 但必须清掉内核的会话缓存：不清的话下一次借出会先撞一次
+                // 「会话不存在」，用户看到一次失败；清掉之后下一次调用直接重连。
+                host.forget_all_sessions();
+                continue;
+            }
+            let sessions = pool.idle_sessions_recent(KEEPALIVE_WINDOW, KEEPALIVE_MAX_SESSIONS);
+            for session_id in sessions {
+                // 先占住再发 ping：JDBC 连接不是线程安全的，与业务语句同时用同一条
+                // 会把驱动内部状态搅坏。占不到（刚好被借走）就跳过，下一轮再说。
+                if !pool.take_idle_session(&session_id) {
+                    continue;
+                }
+                if probe_session(kind, &host, &session_id) {
+                    pool.release_heartbeat(&session_id);
+                    continue;
+                }
+                // 探不通 ⇒ 作废：宿主侧忘掉它，池里摘掉槽位（我们正占着，可以硬摘）。
+                // 这样下一次借用必然重连，而不是再撞一次同一条死连接。
+                host.forget_session(&session_id);
+                pool.remove_session(&session_id);
+                tracing::debug!(
+                    target: "dbmind::agent",
+                    session = %session_id,
+                    "保活发现会话已失效，已作废（下次借用会重连）"
+                );
+            }
+        });
+    if let Err(err) = spawned {
+        // 起不来只是少了这层保护（借出前探活与整表重跑仍在），不该让连接建不起来
+        tracing::warn!(
+            target: "dbmind::agent",
+            error = %err,
+            "后台保活线程启动失败（连接仍可用的，但空闲久了可能被链路掐断）"
+        );
     }
 }
 

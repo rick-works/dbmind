@@ -1099,6 +1099,19 @@ impl AgentHost {
         self.sessions.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
 
+    /// 宿主进程此刻是否还在跑。**不会**拉起它。
+    ///
+    /// 后台保活（见 `agent_driver::spawn_keepalive`）专用：那条路径每 20 秒跑一次，
+    /// 若走 `call` 就会先 `ensure_process()` —— 已经收掉的宿主会被重新拉一个 JVM 起来。
+    /// 保活只是「顺手维持已有连接」，没有连接可用时什么都不该做。
+    pub fn is_running(&self) -> bool {
+        let mut guard = self.process.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_mut() {
+            Some(process) => matches!(process.child.try_wait(), Ok(None)),
+            None => false,
+        }
+    }
+
     /// 关闭 agent 进程（内核退出或显式释放时调用）。
     ///
     /// 协议约定：`shutdown` 的**回执意味着会话已全部关闭并落盘**（agent 侧先落盘再回执）。

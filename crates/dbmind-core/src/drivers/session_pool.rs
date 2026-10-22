@@ -53,7 +53,7 @@ impl Slot {
 }
 
 #[derive(Debug, Default)]
-struct PoolState {
+pub(crate) struct PoolState {
     /// 泳道 → 槽位。泳道 = 「连接配置 + 只读性 + 会话亲和」（见驱动）。
     ///
     /// 槽位用 `Option` 而不是直接弹出：**下标是会话 id 的一部分**，
@@ -151,6 +151,50 @@ impl PoolState {
                     }
                     // 找到了但正忙：不摘（回收绝不能打断在跑的语句）
                     _ => return false,
+                }
+            }
+        }
+        false
+    }
+
+    /// 原子地占住一条**指定**的空闲会话（保活用）。拿不到（正忙 / 常驻 / 不存在）返回 false。
+    ///
+    /// 为什么要「占住」而不是「看一眼空闲就发语句」：JDBC 连接不是线程安全的，
+    /// 心跳与业务语句同时用同一条连接会把驱动内部状态搅坏（真机上表现为查询莫名卡住
+    /// 或 Unknown system variable 之类的怪错）。`busy` 是池里唯一的互斥标志，
+    /// 想用这条物理连接就必须先把它翻过来。
+    fn take_specific(&mut self, target: &str) -> bool {
+        let PoolState {
+            lanes,
+            pinned,
+            ..
+        } = self;
+        for (lane, slots) in lanes.iter_mut() {
+            if pinned.contains(lane) {
+                continue;
+            }
+            for (index, slot) in slots.iter_mut().enumerate() {
+                if session_id(lane, index) != target {
+                    continue;
+                }
+                return match slot {
+                    Some(current) if !current.busy => {
+                        current.busy = true;
+                        true
+                    }
+                    _ => false,
+                };
+            }
+        }
+        false
+    }
+
+    /// 摘掉指定会话（**无视 busy**）：只给「自己已经占住它」的调用方用（保活探不通）。
+    fn remove_taken(&mut self, target: &str) -> bool {
+        for (lane, slots) in self.lanes.iter_mut() {
+            for (index, slot) in slots.iter_mut().enumerate() {
+                if session_id(lane, index) == target {
+                    return slot.take().is_some();
                 }
             }
         }
@@ -545,6 +589,61 @@ impl SessionPool {
         closed
     }
 
+    /// 最近 `within` 内用过、当前**空闲**且**不常驻**（非事务 / 非交互页签）的会话。
+    ///
+    /// 后台保活专用（见 `agent_driver::spawn_keepalive`）。只挑这三类里能挑的，理由：
+    /// - 正忙的：保活会打断正在跑的语句；
+    /// - 常驻的（`pinned`）：那是用户事务或编辑器页签，里面多一句 `select 1` 本身不改变
+    ///   语义，但一旦探活误判（PG 事务 aborted 时任何语句都报错），就会把用户事务当成
+    ///   「连接已断」丢掉 —— 代价远大于收益，这类连接交给「借出前探活」兜底；
+    /// - 很久没用的（超过 `within`）：再保活只是白花流量，空闲回收会处理它们。
+    pub(crate) fn idle_sessions_recent(&self, within: Duration, max: usize) -> Vec<String> {
+        let state = self.lock();
+        let now = Instant::now();
+        let mut out = Vec::new();
+        for (lane, slots) in state.lanes.iter() {
+            if state.pinned.contains(lane) {
+                continue;
+            }
+            for (index, slot) in slots.iter().enumerate() {
+                let Some(slot) = slot else { continue };
+                if slot.busy || now.saturating_duration_since(slot.last_used) >= within {
+                    continue;
+                }
+                out.push(session_id(lane, index));
+                if out.len() >= max {
+                    return out;
+                }
+            }
+        }
+        out
+    }
+
+    /// 占住一条空闲会话（保活用）：拿不到（正忙 / 常驻 / 已不存在）返回 false。
+    ///
+    /// 保活必须先占住再发语句 —— 见 `PoolState::take_specific` 的说明（JDBC 连接非线程安全）。
+    pub(crate) fn take_idle_session(&self, session_id: &str) -> bool {
+        self.lock().take_specific(session_id)
+    }
+
+    /// 归还保活占住的会话（不算一次业务使用，但会刷新空闲时刻，避免被误判为「更久没用」）。
+    pub(crate) fn release_heartbeat(&self, session_id: &str) {
+        if let Some((lane, index)) = split_session_id(session_id) {
+            self.release(&lane, index);
+        }
+    }
+
+    /// 摘掉一条**已经自己占住**的会话（保活探不通时用）：不关连接 —— 让宿主忘掉由调用方做。
+    ///
+    /// 与 [`Self::remove_idle`] 的差别：那个要求 `busy == false`（保活流程此时正占着它）。
+    pub(crate) fn remove_session(&self, session_id: &str) -> bool {
+        let removed = self.lock().remove_taken(session_id);
+        if removed {
+            self.budget.release_one();
+        }
+        removed
+    }
+
     /// 取一个槽位；`wait` 之内拿不到就报错（而不是无限期挂着）。
     ///
     /// 顺序调用只会用到同一个槽位；只有并发才会长出第二个 —— 所以「连接被占满」
@@ -636,7 +735,11 @@ impl SessionPool {
         index: usize,
         limit: usize,
     ) -> SlotGuard<'a> {
+        // 借出前的空闲时长：驱动层据此判断「这条连接是不是躺太久、可能已被链路掐掉」
+        // （见 `agent_driver::STALE_PROBE_AFTER`）。新建槽位的 last_used 就是此刻 ⇒ 0。
+        let mut idle_for = Duration::ZERO;
         if let Some(slot) = state.get_mut(lane, index) {
+            idle_for = Instant::now().saturating_duration_since(slot.last_used);
             slot.busy = true;
         }
         state.last.insert(lane.to_string(), index);
@@ -658,6 +761,7 @@ impl SessionPool {
             lane: lane.to_string(),
             index,
             session_id,
+            idle_for,
         }
     }
 
@@ -710,12 +814,20 @@ pub struct SlotGuard<'a> {
     lane: String,
     index: usize,
     session_id: String,
+    /// 借出这一刻，这条物理会话已经闲置了多久（归还时归零）。
+    idle_for: Duration,
 }
 
 impl SlotGuard<'_> {
     /// 这条槽位对应的 sessionId —— 宿主侧正是它决定用哪条物理连接。
     pub fn session_id(&self) -> &str {
         &self.session_id
+    }
+
+    /// 借出前空闲了多久。驱动层用它在「躺太久的连接」上先探活，见
+    /// `agent_driver::STALE_PROBE_AFTER` 的说明。
+    pub fn idle_for(&self) -> Duration {
+        self.idle_for
     }
 }
 
@@ -731,6 +843,14 @@ impl Drop for SlotGuard<'_> {
 /// 带上序号是为了让日志/宿主状态里的「这是第几条连接」一眼可读。
 fn session_id(lane: &str, index: usize) -> String {
     format!("{lane}#{index}")
+}
+
+/// 从 `<泳道>#<槽位>` 反解回「泳道 + 下标」（保活归还用）。
+///
+/// 用 `rsplit_once`：连接名里可以出现 `#`，槽位号永远是最后一段。
+fn split_session_id(session_id: &str) -> Option<(String, usize)> {
+    let (lane, index) = session_id.rsplit_once('#')?;
+    Some((lane.to_string(), index.parse().ok()?))
 }
 
 #[cfg(test)]
@@ -773,6 +893,62 @@ mod tests {
     /// 带全局配额的池（0 = 不限制）。
     fn pool_with_quota(cap: usize) -> SessionPool {
         SessionPool::new(Arc::new(SessionBudget::new(cap)), noop())
+    }
+
+    /// 保活只能占「空闲且非常驻」的会话：占住之后再摘得掉，常驻的不能被碰。
+    ///
+    /// 这条是硬约束：JDBC 连接不是线程安全的，心跳若不先占位就发语句，
+    /// 会和业务语句同时用同一条连接（真机上会把驱动状态搅坏）。
+    #[test]
+    fn 保活占用与摘除() {
+        let pool = pool();
+        let session = {
+            let guard = pool
+                .acquire(lane(), 1, Duration::from_millis(50))
+                .expect("拿到槽位");
+            let id = guard.session_id().to_string();
+            drop(guard); // 归还 ⇒ 空闲
+            id
+        };
+
+        // 空闲 ⇒ 能占住；已占住 ⇒ 再占失败（不会两个线程同时用一条连接）
+        assert!(pool.take_idle_session(&session));
+        assert!(!pool.take_idle_session(&session));
+        // 占着也能硬摘（保活探不通的路径）
+        assert!(pool.remove_session(&session));
+        assert!(!pool.take_idle_session(&session));
+
+        // 最近活跃的空闲会话会出现在保活清单里
+        let again = {
+            let guard = pool
+                .acquire(lane(), 1, Duration::from_millis(50))
+                .expect("重连后拿到槽位");
+            let id = guard.session_id().to_string();
+            drop(guard);
+            id
+        };
+        assert!(pool
+            .idle_sessions_recent(Duration::from_secs(60), 8)
+            .contains(&again));
+
+        // 常驻（事务 / 页签）泳道不参与保活
+        pool.pin_lane(lane());
+        assert!(pool
+            .idle_sessions_recent(Duration::from_secs(60), 8)
+            .is_empty());
+        assert!(!pool.take_idle_session(&again));
+        // 未占住时归还也只是刷新空闲时刻，不该 panic
+        pool.release_heartbeat(&again);
+    }
+
+    /// 会话 id 反解：连接名里带 `#` 时也要落到最后一个 `#`（槽位号）上。
+    #[test]
+    fn 会话id反解() {
+        let (lane_part, index) =
+            split_session_id("mysql|a#b|h|3306|db|-|false#3").expect("应当能解析");
+        assert_eq!(lane_part, "mysql|a#b|h|3306|db|-|false");
+        assert_eq!(index, 3);
+        assert!(split_session_id("没有井号的会话").is_none());
     }
 
     /// 排队等会话时也要能被取消。
