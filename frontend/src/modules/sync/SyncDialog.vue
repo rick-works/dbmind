@@ -238,7 +238,18 @@
     <div v-if="step === 5" class="run-view">
       <div class="pg-summary">
         <!-- 状态色：失败=红；取消=黄（不是"完成"，但也不该报成错误）；完成=绿 -->
-        <el-progress :percentage="progressPct" :stroke-width="14" text-inside
+        <!-- 百分比挪到标题行右侧（大号等宽数字），进度条本身只当"刻度尺"：
+             `text-inside` 在细条里会挤成一团，10% 时更是被压在左端看不清 -->
+        <div class="pg-top">
+          <span class="pg-title">
+            <el-icon :size="14"><Loading v-if="taskRunning" /><CircleCheck v-else /></el-icon>
+            {{ $t('sync.progress') }}
+          </span>
+          <span class="pg-pct" :class="{ done: isTaskDone, err: taskStatus === 'error', warn: taskStatus === 'canceled' }">
+            {{ progressPct }}%
+          </span>
+        </div>
+        <el-progress :percentage="progressPct" :stroke-width="8" :show-text="false"
                      :status="taskStatus === 'error' ? 'exception'
                               : (isTaskDone ? 'success' : (taskStatus === 'canceled' ? 'warning' : ''))" />
         <!-- 「正在同步：表 xxx」提示行已按需求去掉 —— 表级阶段全在下面的日志里 -->
@@ -329,7 +340,8 @@ import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } 
 import { ElMessage } from 'element-plus'
 import {
   Promotion, Right, VideoPause, Search, FolderOpened, Files, DataLine, Operation, Document,
-  Grid, View, FirstAidKit, SetUp, Lightning, Calendar, Clock, Filter, QuestionFilled
+  Grid, View, FirstAidKit, SetUp, Lightning, Calendar, Clock, Filter, QuestionFilled,
+  Loading, CircleCheck
 } from '@element-plus/icons-vue'
 import { listConnections, listDatabases, listSchemas, listTables, listProcedures, listTriggers, listEvents, getFeatures, syncDb, syncTaskStatus, syncCancel } from '../../api'
 // 「库」这一层要不要画（Oracle / DM 没有库层：它就是连接里填的服务名）
@@ -1244,17 +1256,29 @@ onMounted(() => { if (props.modelValue) loadConnections() })
    ⚠ 必须用 `:global()`：弹窗根节点（.el-dialog）是 el-dialog 组件 teleport 出去的，
    身上**没有本组件的 data-v 属性**，`.sync-dialog { … }` 这种写法在这里命中不了任何元素
    （本文件里其余的 `.sync-dialog :deep(...)` 一类的规则同病，先不动）。 */
-:global(.el-dialog.sync-dialog) { height: min(660px, 90vh); }
+/* 头 / 身 / 脚三段式：高度定死，**身体弹性**，内容自己滚。
+   以前只有身体是 flex column，弹窗根节点仍是块级 —— 拖大以后多出来的高度落不到
+   任何元素上（日志卡还是那 320px，下面空一大片）。 */
+:global(.el-dialog.sync-dialog) {
+  height: min(660px, 90vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+:global(.el-dialog.sync-dialog .el-dialog__header),
+:global(.el-dialog.sync-dialog .el-dialog__footer) { flex: none; }
 :global(.el-dialog.sync-dialog .el-dialog__body) {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* auto 而不是 hidden：日志卡自己滚，但真挤到放不下时（矮窗口 + 结果表）
+     身体还能滚一下，不至于把内容裁掉 */
+  overflow: auto;
   padding-top: 4px;
 }
 /* 步骤条/底栏不参与弹性分配，剩下的高度全给当前步骤的内容 */
 .sync-steps { flex: none; }
-/* 执行页的日志与结果表各自限高滚动，避免叠加撑高 */
-.run-view .log-body { max-height: 240px; }
 .run-view .pg-result :deep(.el-table) { max-height: 260px; }
 
 /* ==================== 连接信息摘要（步骤 1） ==================== */
@@ -1284,18 +1308,50 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .summary-opts b { color: var(--dc-text); font-weight: 500; }
 
 /* ==================== 步骤 5 执行 ==================== */
+/* 执行页是「进度 + 统计 + 日志」三段，只有日志吃弹性高度：
+   拖大弹窗 ⇒ 日志变长；拖小 ⇒ 日志先缩（保底 96px）再让结果表出去。 */
+.run-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.run-view .pg-summary,
+.run-view .run-stats,
+.run-view .pg-result { flex: none; }
+.run-view .pg-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0;
+}
+.run-view .pg-log .log-head { flex: none; }
+.run-view .pg-log .log-body { flex: 1 1 auto; min-height: 0; }
+
 .run-stats {
   display: flex; gap: 10px; margin: 12px 0;
+  /* 拖窄以后 5 张卡会挤成一条缝，允许换行 */
+  flex-wrap: wrap;
 }
 .run-stats .stat {
-  flex: 1; text-align: center;
-  background: var(--dc-bg-soft);
+  flex: 1 1 108px; min-width: 96px; text-align: center;
+  background: linear-gradient(180deg, var(--dc-bg-card), var(--dc-bg-soft));
   border: 1px solid var(--dc-border); border-radius: 10px;
   padding: 10px 8px;
+  transition: border-color .15s, box-shadow .15s;
 }
-.run-stats .num { display: block; font-size: 18px; font-weight: 600; color: var(--dc-text); }
-.run-stats .label { font-size: 12px; color: var(--dc-text-dim); }
+.run-stats .stat:hover { border-color: var(--dc-border-hover); box-shadow: var(--dc-shadow-sm); }
+.run-stats .num {
+  display: block; font-size: 19px; font-weight: 700; color: var(--dc-text);
+  /* 等宽数字：计数每 2 秒跳一次，比例数字宽窄不一会让整排左右抖 */
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .2px;
+}
+.run-stats .label { display: block; margin-top: 2px; font-size: 12px; color: var(--dc-text-dim); }
+.run-stats .stat.ok { background: linear-gradient(180deg, var(--dc-success-wash), var(--dc-bg-soft)); }
 .run-stats .stat.ok .num { color: var(--dc-success); }
+.run-stats .stat.danger { background: linear-gradient(180deg, var(--dc-danger-wash), var(--dc-bg-soft)); }
 .run-stats .stat.danger .num { color: var(--dc-danger); }
 
 .dlg-title { display: flex; align-items: center; gap: 8px; }
@@ -1666,19 +1722,30 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .log-empty p { font-size: 11.5px; color: var(--dc-text-weak); margin: 0; }
 .log-line {
   display: flex; align-items: flex-start; gap: 10px;
-  padding: 3px 0;
+  padding: 2px 8px;
+  border-radius: 6px;
   font-size: 13px; line-height: 1.6;
   color: var(--dc-code-text);
   font-family: "Cascadia Code", Consolas, "JetBrains Mono", monospace;
 }
+/* 长日志一屏几十行，hover 高亮帮眼睛「不串行」；出问题的那几行整行带底色更醒目 */
+.log-line:hover { background: var(--dc-bg-hover); }
+.log-line.err { color: var(--dc-danger); background: var(--dc-danger-wash); }
+.log-line.warn { color: var(--dc-warning); }
+.log-line.ok { color: var(--dc-success); }
 .log-time {
   flex: none;
   color: var(--dc-text-weak);
   font-size: 12px;
+  /* 定宽让所有行的正文左边缘对齐（时间戳等长，不定宽会被等宽字体带歪） */
+  font-variant-numeric: tabular-nums;
 }
-.log-line.ok { color: var(--dc-success); }
-.log-line.warn { color: var(--dc-warning); }
-.log-line.err { color: var(--dc-danger); }
+/* 正文占满剩余宽度：长句子换行后仍与第一行左对齐，超长 token（URL、SQL 片段）也不顶破卡片 */
+.log-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 
 /* ==================== 进度 / 结果 ==================== */
 .progress-card { padding: 14px 16px; }
@@ -1687,12 +1754,33 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 
 /* ==================== 进度弹窗 ==================== */
 .progress-dialog :deep(.el-dialog__body) { padding: 16px 20px 10px; max-height: 74vh; overflow: auto; }
-/* 进度窗整体限高：结果表格 + 25 条日志会把弹窗顶到超出小屏（真机反馈） */
-.run-view .log-body { max-height: 200px; }
 .pg-summary { margin-bottom: 14px; }
 .pg-text { font-size: 13px; color: var(--dc-text-dim); margin-top: 8px; text-align: center; }
+
+/* 进度标题行：左边「同步进度」+ 运行态图标，右边大号百分比（替代挤在细条里的 text-inside） */
+.pg-top {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px;
+}
+.pg-title {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 13px; font-weight: 600; color: var(--dc-text);
+}
+.pg-title .el-icon { color: var(--dc-primary); }
+.pg-pct {
+  font-size: 16px; font-weight: 700; line-height: 1;
+  color: var(--dc-primary);
+  font-variant-numeric: tabular-nums;
+}
+.pg-pct.done { color: var(--dc-success); }
+.pg-pct.warn { color: var(--dc-warning); }
+.pg-pct.err { color: var(--dc-danger); }
+/* 进度条只当刻度尺：柔和轨道 + 圆角 + 宽度变化有过渡（百分比本身在上面） */
+.run-view :deep(.el-progress-bar__outer) { background: var(--dc-border); border-radius: 999px; }
+.run-view :deep(.el-progress-bar__inner) { border-radius: 999px; transition: width .45s ease; }
+/* 日志吃掉剩下的高度：拖动弹窗时跟着变（旧的 200/320px 固定值会让拉高后底下空一片） */
 .pg-log { margin-bottom: 0; }
-.pg-log .log-body { max-height: 320px; }
+.pg-log .log-body { max-height: none; min-height: 96px; }
 .pg-result { margin-top: 14px; }
 .stat-grid {
   display: grid;
