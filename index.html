@@ -746,6 +746,58 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.48（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.48</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-23</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>整库同步收尾逐表对账</b>：源表数一遍行数、目标表再数一遍，不一致就清空重传一次 —— 「源有什么、目标就得有什么」不用再靠人盯</li>
+            <li><b>大表先跑</b>：按源表体积从大到小调度，不再出现「最后只剩一张大表、8 路并发退化成单流」的整库拖尾</li>
+            <li><b>没主键的表也能快</b>：源表上有唯一索引就拿它当翻页游标，深翻页的 O(N²) 变成「每页只扫本页」</li>
+            <li><b>既没主键也没唯一索引的表</b>：按行号切成多段并发拉（DBMIND_SYNC_WINDOW=1 开启），不再单流翻到底</li>
+            <li><b>覆盖式同步按源重建目标表</b>：字符集、长度、唯一索引全部对齐，不再一天攒出几千行「写入失败」；重建失败时退回「保留结构 + 清空灌数」并写明原因</li>
+            <li><b>建索引合并成一条 ALTER（MySQL / MariaDB）：1 亿行的表 6 个索引只扫一遍，失败再退回逐条建</b></li>
+            <li><b>断连时单条 INSERT 上限自动减半（32KB 起）：绕过「上行报文过 60KB 就被丢、19 秒后连接重置」的链路黑洞，健康链路不受影响</b></li>
+            <li><b>幂等写入</b>：清空后导入用幂等插入，链路断开重跑与已提交区间重叠时不再报 Duplicate entry 把行判成脏数据</li>
+            <li><b>Derby 目标端也走原生 MERGE 了：以前只能纯 insert，重跑撞主键就把行判成脏数据，是所有 JDBC 关系型库里唯一没有幂等的</b></li>
+            <li><b>老连接里的 socketTimeout=0 当没填处理：半开连接不用再等 5 分钟兜底超时，也不必逐条重存连接</b></li>
+            <li><b>进度数字只增不减</b>：「传输数」不再超过「读取数」，断连重跑时也不会往回跳</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.48" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.48" target="_blank" rel="noopener">下载 v1.2.48</a>
+          </div>
+        </div>
+      </article>
+      <!-- v1.2.47（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.47</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-22</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步提速</b>：读写不再串行——写上一页的同时并行读下一页。单表 500 万行实测 21,141 → 30,317 行/秒（+43%）</li>
+            <li><b>慢链路再快一截</b>：源端连接的高级参数里加 useCompression=true 开协议压缩，同一 500 万行 165s → 120s（约 4.2 万行/秒）</li>
+            <li><b>多表并发时自动关闭预取</b>：在途流翻倍会把丢包链路拖成整体退避（实测两表同开从 3 万掉到 7 千）；单表、或收尾只剩一张表时自动打开</li>
+            <li><b>每张表同步完打一条「耗时画像」：读/写/合计各多少秒、几路并发、页多大——瓶颈在读还是写一眼可见</b></li>
+            <li><b>新增目标端写入参数检查</b>：innodb_buffer_pool_size 过小、innodb_io_capacity 过低、flush_log_at_trx_commit=1 会在任务日志里点名，并给出建议值</li>
+            <li><b>新增两个调优逃生阀</b>：DBMIND_SYNC_NO_PREFETCH=1 关读预取，DBMIND_SYNC_STMT_CAP（字节）改单条 INSERT 上限</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.47" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.47" target="_blank" rel="noopener">下载 v1.2.47</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.46（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +805,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.46</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-21</span>
           </div>
           <ul class="rel-notes">
