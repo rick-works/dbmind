@@ -106,7 +106,18 @@ pub(crate) async fn run_sql_in_write(
     sql: String,
     max_rows: usize,
 ) -> XResult<QueryResult> {
-    run_sql_in_inner(state, conn, database, sql, max_rows, None, true).await
+    // 与会话同步的 DDL 共用那一条写连接：不能传 `None`（那是元数据会话，`read_only=true`，
+    // 标记不同照样要另开连接），也不能每张表一条（会把目标连接的并发上限占满）。
+    run_sql_in_inner(
+        state,
+        conn,
+        database,
+        sql,
+        max_rows,
+        Some(crate::api::sync::SESSION_SYNC_DDL),
+        true,
+    )
+    .await
 }
 
 async fn run_sql_in_inner(

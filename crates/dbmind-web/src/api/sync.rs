@@ -427,6 +427,19 @@ async fn columns_of(
 /// 数据同步/对比的默认会话亲和键（读页、事务控制、串行写都落在这条泳道上）。
 pub(crate) const SESSION_SYNC: &str = "internal:browse";
 
+/// 目标端 DDL / 清空专用会话键 —— **整个任务共用一条物理连接**。
+///
+/// 为什么不能借用 [`SESSION_SYNC`]（`internal:browse`）：那条泳道的元数据会话是
+/// `read_only = true`，写语句要求 `read_only = false`，两者会话键不同 ⇒ 内核给**每张表**
+/// 再开一条新连接。整库 6 表并发时，DDL 连接 + 每表读写连接一起把目标连接配置的
+/// 并发上限占满，日志里出现 165 次「等待可用连接超时：这条连接的并发上限是 N」，
+/// 于是「删除重建失败 → 降级保留结构」，后续灌数据也连带失败（真机：整库跑完
+/// 112 张表行数对不上，其中不少目标 0 行）。
+///
+/// DDL 本来就不并行受益（同一张表的建表/清空/建索引必须串行），全任务一条连接
+/// 既够用又不会挤占读写连接。
+pub(crate) const SESSION_SYNC_DDL: &str = "internal:sync-ddl";
+
 /// 「目标库不存在时自动创建」（默认开）：查目标连接的库清单，缺则按方言 CREATE。
 /// 返回一句话结果（给任务日志用）；失败**不阻断** —— 后面建表时数据库真缺会明确报错，
 /// 比这里瞎猜原因强。库名从 tgt.scope 拆：schema 方言（`库.模式`）取库段；
@@ -538,7 +551,8 @@ pub(crate) async fn run_target_write(
             timeout_ms: 600_000,
         },
         execution_id: None,
-        session: Some(SESSION_SYNC.to_string()),
+        // **全任务共用一条 DDL 连接**（见 [`SESSION_SYNC_DDL`]）。
+        session: Some(SESSION_SYNC_DDL.to_string()),
         internal: true,
     };
     let result = blocking(move || engine.execute(request, dbmind_core::AccessContext::Web)).await?;
