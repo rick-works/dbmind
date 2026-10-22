@@ -506,15 +506,24 @@ impl Reader for SqlReader {
     }
 }
 
-/// 无键表按「行窗口」切段并发读（`DBMIND_SYNC_WINDOW=1`）。
+/// 无键表按「行窗口」切段并发读（默认开启，`DBMIND_SYNC_WINDOW=0` 关闭）。
 ///
 /// 段与段之间靠 OFFSET 边界隔离（不靠键值），所以要求：源表在同步期间不变、无 WHERE 过滤、
 /// 没有行数上限。它解决的是「没有主键也没有唯一索引」的表只能单流深翻页的问题 ——
 /// 真机上这部分表占整库一半以上体积，是整库「越跑越慢」的主因。
+///
+/// 为什么改成默认开：整库同步（351 张表，含十余张百万级无键表）实测跑通、失败 0；而且
+/// 段内现在能按事务续跑（`SegmentOutcome::PausedAt`），断连只重跑当前这一小段，不再是
+/// 「一片一个事务、断了整片重扫」。源表若在同步期间有写入，行序漂移可能漏行 —— 由收尾的
+/// 逐表 `count(*)` 对账兜底（不一致清空重传）。真要单一扫描顺序时用 `DBMIND_SYNC_WINDOW=0`。
 fn window_split_enabled() -> bool {
     std::env::var("DBMIND_SYNC_WINDOW")
-        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+        .map(|value| {
+            !(value.trim() == "0"
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off"))
+        })
+        .unwrap_or(true)
 }
 
 /// 无键表的窗口切分：先 `count(*)` 拿总数，再按行号等分成 K 段。

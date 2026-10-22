@@ -515,10 +515,21 @@ enum SegmentOutcome {
     Finished,
     /// 本段已提交，返回最后一行**完整键**（下一段从它之后开始）
     Paused(Vec<CellValue>),
+    /// 本段已提交，返回**下一行的绝对行号**（无键表按 OFFSET 续跑）。
+    ///
+    /// 无键表没有键值可以比较，但 `limit n offset m` 的 `m` 本身就是游标：本段提交后
+    /// 下一段从 `m` 继续即可。过去这里没有它，于是无键表被迫「一片一个事务跑到底」——
+    /// 中途断一次整片回滚重读（真机：384 万行、无主键无唯一索引的表，断一次就是几十分钟的
+    /// 白工）。现在按 [`TXN_ROWS_DEFAULT`] 正常拆段，断连只重跑当前这一小段。
+    ///
+    /// 精确性的前提是**源表在同步期间行序不变**（与窗口分片同一个前提）。若源表边写边搬，
+    /// OFFSET 会随行序漂移，可能漏行 —— 由收尾的逐表 `count(*)` 对账兜底（不一致清空重传）。
+    PausedAt(u64),
 }
 
 /// 搬运**一片**：片内按 [`TXN_ROWS_DEFAULT`] 分成多个事务，段与段之间不重不漏
-/// （下一段的区间左界 = 上一段最后一行的首列，首屏游标带上完整键走 keyset「严格大于」）。
+/// （下一段的区间左界 = 上一段最后一行的首列，首屏游标带上完整键走 keyset「严格大于」；
+/// 无键表则用 OFFSET 续跑，见 [`SegmentOutcome::PausedAt`]）。
 async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result<(), String> {
     let cap = txn_rows_cap();
     let mut low = range.low.clone();
@@ -530,10 +541,7 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
             high: range.high.clone(),
             window: range.window,
         };
-        // 窗口分片（无键表）没有「键」可以续跑：分段提交后拿不到下一段的游标（`last_key`
-        // 是空的），会从头重读本片。这种片一个事务跑完 —— 写入是流式的，事务大但内存不涨。
-        let segment_cap = if range.window.is_some() { u64::MAX } else { cap };
-        match run_segment(ctx.clone(), worker, segment, cursor.clone(), segment_cap).await? {
+        match run_segment(ctx.clone(), worker, segment, cursor.clone(), cap).await? {
             SegmentOutcome::Finished => return Ok(()),
             SegmentOutcome::Paused(last_key) => {
                 // 区间左界用**首列**（`k1 >= 该值`），首屏游标用**完整键**（`(k1,k2) > 该键`）：
@@ -542,6 +550,21 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
                 cursor = Some(Cursor {
                     key: Some(last_key),
                     offset: 0,
+                });
+            }
+            SegmentOutcome::PausedAt(next_offset) => {
+                // 无键表：`low` 一直是 None（没有键可以抬左界），位置全交给 OFFSET。
+                // 段的行号上界仍由 `range.window` 管着，续跑不会越界读到下一段。
+                if let Some(task) = &ctx.plan.task {
+                    // 每 [`TXN_ROWS_DEFAULT`] 行一条：既是进度，也是「断在这里不用从头重扫」的依据
+                    task.log(format!(
+                        "表 {}：本段已提交，从第 {next_offset} 行继续（OFFSET 续跑）",
+                        ctx.plan.table
+                    ));
+                }
+                cursor = Some(Cursor {
+                    key: None,
+                    offset: next_offset,
                 });
             }
         }
@@ -568,7 +591,7 @@ async fn run_segment(
         let mut cursor = start_cursor.clone();
         let mut failure: Option<String> = None;
         let mut last_report = std::time::Instant::now();
-        let mut paused: Option<Vec<CellValue>> = None;
+        let mut paused: Option<SegmentOutcome> = None;
 
         ctx.writer.begin(worker).await;
         // 读**预取**：写第 N 页的时候，第 N+1 页已经在取了。
@@ -720,11 +743,18 @@ async fn run_segment(
             }
             // 事务到量 ⇒ 提交这一段，剩下的交给下一段（别把一个事务堆到几百万行）
             if txn_cap > 0 && try_inserted + try_updated >= txn_cap {
-                // 只有**有键**的表才能「从这一行之后接着读」；无键表只有 OFFSET，
-                // 中途断开就要从头重扫，所以干脆不拆段（保持一个事务到底）。
-                if let Some(key) = next.as_ref().and_then(|cursor| cursor.key.clone()) {
-                    paused = Some(key);
-                    break;
+                // 两条续跑路径：有键的表走 keyset（从这一行**之后**），无键的表走 OFFSET
+                // （从下一行的行号）。都能「提交后接着读」，所以无键表也照常拆段 ——
+                // 过去它只能一个事务跑到底，断一次就整段重扫。
+                if let Some(next_cursor) = next.as_ref() {
+                    if let Some(key) = next_cursor.key.clone() {
+                        paused = Some(SegmentOutcome::Paused(key));
+                        break;
+                    }
+                    if next_cursor.offset > 0 {
+                        paused = Some(SegmentOutcome::PausedAt(next_cursor.offset));
+                        break;
+                    }
                 }
             }
             cursor = next;
@@ -803,12 +833,7 @@ async fn run_segment(
             return Err(msg);
         }
         match tokio::time::timeout(COMMIT_CALL_TIMEOUT, ctx.writer.finish(worker)).await {
-            Ok(Ok(())) => {
-                return Ok(match paused {
-                    Some(key) => SegmentOutcome::Paused(key),
-                    None => SegmentOutcome::Finished,
-                });
-            }
+            Ok(Ok(())) => return Ok(paused.unwrap_or(SegmentOutcome::Finished)),
             // 提交阶段失败：这一段是否落盘已无法确定。**不能重跑**（可能已写入），
             // 如实失败；`WriteDiag::committed` 已由 writer 记下，上层也不会整表重跑。
             Ok(Err(msg)) => return Err(msg),
