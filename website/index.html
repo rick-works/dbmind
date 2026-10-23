@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.57（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.57</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-24</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>「并发表数」不再显示 0</b>：输入框直接显示实际会用的张数，按源/目标库连接能力算好 —— 嵌入式库（SQLite / H2 / Derby）1 张、Doris / Oracle / 达梦 / DB2 3 张、MySQL / MariaDB / PG / SQL Server / ClickHouse 8 张，再与已选对象数取小；想调小直接改，改了就按改的走</li>
+            <li><b>「?」里的说明同步改成「已按源/目标库的连接能力填好默认值」</b></li>
+            <li><b>到这一步，同步选项里三个数字都是「显示实际生效值、可直接改」：并发表数、每批行数、超时时间</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.57" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.57" target="_blank" rel="noopener">下载 v1.2.57</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.56 -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -775,7 +796,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.55</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-24</span>
           </div>
           <ul class="rel-notes">

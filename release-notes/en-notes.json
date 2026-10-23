@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.57": [
+    "\"Parallel tables\" no longer shows 0: the field shows the number of tables that will actually run at once, prefilled from the source/target capabilities — embedded databases (SQLite / H2 / Derby) 1, Doris / Oracle / DM / DB2 3, MySQL / MariaDB / PG / SQL Server / ClickHouse 8, capped by the number of selected objects; edit it and your value is used",
+    "The hint in the \"?\" follows: \"Prefilled from the source/target connection capabilities\"",
+    "All three numbers in the sync options now show the value that will actually take effect and can be edited directly: parallel tables, rows per batch, timeout"
+  ],
   "v1.2.56": [
     "Sync options now expose just two numbers: \"rows per batch\" and the new \"timeout\" (aligned with DBX’s operation timeout). Timeout can be Inherit connection (default) / Unlimited / 30 / 60 / 120 / 300 / 600 s; the long paragraph under rows-per-batch is gone and the \"?\" is now a single line",
     "Every internal \"how long may one operation stay unresponsive\" now follows that knob: single write statements, whole-page writes and the upsert flush use it directly; reading a page is clamped to 30~180 s (big pages on slow links are no longer misjudged and re-read); commit is clamped to 60~600 s (a failed commit cannot be retried, so it is worth waiting)",
