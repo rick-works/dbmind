@@ -610,10 +610,14 @@ async fn eval_rules(
                         // ⚠️ 取不到违规数时**绝不能当成 0**：0 的含义是"一条违规都没有"（规则通过），
                         // 而"取不到"必须报出去。以前这里写 `as_i64().unwrap_or(0)`，
                         // 而 ClickHouse 的 count 回来是浮点 → 恒取不到 → **规则永远判通过**（假通过）。
-                        let count = rows_of(&result)
+                        // 同理不能按列名取：Oracle / DB2 把 `cnt` 返回成大写 `CNT`，按名字取
+                        // 在真机上让这两个库的逐行规则**全部报 error**（取列的位置即可）。
+                        let count = result
+                            .rows
                             .first()
-                            .and_then(|row| row.get("cnt"))
-                            .and_then(shape::value_to_i64);
+                            .and_then(|row| row.first())
+                            .map(shape::cell_to_value)
+                            .and_then(|value| shape::value_to_i64(&value));
                         match count {
                             Some(count) => EvalOutcome {
                                 status: if count == 0 { "passed" } else { "failed" },
@@ -1026,9 +1030,15 @@ pub async fn violations(
         .clamp(1, VIOLATION_MAX_LIMIT as u64);
     let offset = req.offset.unwrap_or(0);
 
-    let paged = format!(
-        "select * from ({union}) dbmind_violations {}",
-        dialect.limit_clause(offset, limit)
+    // 分页子句必须走 `export::paging_sql`：SQL Server 的 `OFFSET/FETCH` **只能跟在
+    // ORDER BY 后面**，而这里是 `select * from (union all …) dbmind_violations`，
+    // 派生表外面没有 ORDER BY ⇒ 直接报 `'offset' 附近有语法错误`（真机：SQL Server
+    // 数据治理「查看错误数据」点了就弹这条）。paging_sql 会补 `order by (select null)`。
+    let paged = crate::api::export::paging_sql(
+        &format!("select * from ({union}) dbmind_violations"),
+        offset,
+        limit,
+        dialect,
     );
     // 违规扫描的 union 分页查询可能很重：走独立会话键，不占元数据那条连接
     let result = run_sql_in_background(&state, &conn, &database, paged, limit as usize).await?;
@@ -1047,10 +1057,14 @@ pub async fn violations(
         match run_sql_in_background(&state, &conn, &database, count_sql, 1).await {
             // 与 Err 分支同一口径：取不到就是「未知」(-1)，不要写 0 ——
             // 0 表示"一条违规都没有"，而这里恰恰是不知道有几条。
-            Ok(result) => rows_of(&result)
+            // 按**列的位置**取计数，不按列名：Oracle / DB2 会把 `cnt` 返回成大写 `CNT`，
+            // 按名字取直接取空 → 分页上永远显示「未知」（-1），真机三种库都踩过。
+            Ok(result) => result
+                .rows
                 .first()
-                .and_then(|row| row.get("cnt"))
-                .and_then(shape::value_to_i64)
+                .and_then(|row| row.first())
+                .map(shape::cell_to_value)
+                .and_then(|value| shape::value_to_i64(&value))
                 .unwrap_or(-1),
             Err(_) => -1,
         }

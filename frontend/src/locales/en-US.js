@@ -1928,6 +1928,7 @@ export default {
   'settings.about.rel1.note5': 'After a VPN or link drop, the first statement no longer fails once with "Communications link failure": read-only statements reconnect and retry once, and tab sessions stay in the keep-alive probe',
   'settings.about.rel1.note6': 'Sync now runs at least 2 read streams per table in flight (a single stream gets only half the link), so slow tables are no longer squeezed to one stream and drag the whole database tail',
   'settings.about.rel1.note7': 'A page that does not return within 30 seconds is treated as lost and shrinks to a quarter of its size (was 60 seconds, halved) - no more watching one table burn half an hour on a half-open link',
+  'settings.about.rel1.note8': 'Data governance → View error rows no longer fails on SQL Server with a syntax error near \'offset\' (violation paging now adds order by (select null)); also fixes the violation total always showing unknown on Oracle/DB2 and every row-level rule reporting a count failure there because of uppercase column names',
   'settings.about.rel2.version': 'v1.2.49',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-10-23',
