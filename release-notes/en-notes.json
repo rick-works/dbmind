@@ -1,5 +1,14 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.51": [
+    "The sync log now speaks clearly: the opening line breaks the selection down by type (tables / views / stored procedures / functions / triggers / events) instead of the vague \"the rest are views/routines\"",
+    "View and routine syncs log every step: one line for dropping the target, one for creating it; the dependency retry says how many views are being retried, and a failed retry now reports why (previously the log stopped at \"create view\" while the summary said one failure)",
+    "When the whole link goes away, hundreds of tables no longer reconnect and re-run together: after a write timeout the target is probed on a separate session (5 s); a failed probe backs the entire task off for 15 seconds, and only a passing probe is treated as one half-open connection to retry",
+    "A statement-size limit learned from one table now applies to the whole task, so later tables start with smaller INSERTs instead of breaking the link again",
+    "Sync no longer takes five extra minutes to finish: timed-out or interrupted write batches stop inflating the watchdog (a real disconnect is detected right away), and the write-rate estimate drops accordingly so pages shrink with it",
+    "DDL such as index creation is now capped at 180 s instead of 600 s: a slow disk no longer stalls the whole task, and on timeout it reports \"N indexes not created (create them manually if needed)\" and moves on",
+    "UI details: the \"total objects\" counter no longer shows -1 before counting finishes, and the note after a forced stop is a single conclusion (the details go to the file log)"
+  ],
   "v1.2.45": [
     "Transfer / sync connections no longer pile up: each table returns its sessions when it finishes and concurrent slots reuse them — the connection count is now “parallel tables × sessions per table”, so the global quota is never exhausted and in-use connections are never evicted (the root cause of “session does not exist (the agent may have restarted)” and “the write connection dropped”); a few hundred tables now need dozens of connects instead of thousands",
     "If the target write connection really drops, the whole table is retried once (transactional targets only, and only when we never fell back to per-row commits; the table is cleared before the retry) — no more “retries stopped; 20,000 rows of this table were not written”",
