@@ -746,6 +746,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.56（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.56</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-24</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步选项里只剩两个数字</b>：「每批行数」和新增的「超时时间」—— 与 DBX 的「操作超时」对齐。超时时间可选 继承连接（默认）/ 不限制 / 30 / 60 / 120 / 300 / 600 秒；每批行数下面那段长说明已删掉，「?」缩成一句「一条 INSERT 写多少行。越小越稳，越大越快」</li>
+            <li><b>内部所有「多久没响应算超时」都由这个旋钮决定：单条写语句、整页写入、upsert flush 直接用它；读一页夹在 30~180 秒（慢链路上的大页不再被 30 秒误判后重读）；提交夹在 60~600 秒（提交失败无法自动重跑，宁可多等）</b></li>
+            <li><b>选「不限制」不会再被内核的 600 秒先切断：语句超时一并跟随旋钮</b></li>
+            <li><b>探活加固</b>：探活超时从 5 秒放宽到 10 秒，并且连续两次不通才判「链路已断」—— 偶发丢一个包不再触发「回滚一段 + 换连接重跑」</li>
+            <li><b>建索引这类 DDL 的上限从 180 秒放宽到 300 秒（千万行的表建二级索引，三分钟是常态；失败仍按「N 个索引未建」报出并可手工补）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.56" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.56" target="_blank" rel="noopener">下载 v1.2.56</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.55（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +776,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.55</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-24</span>
           </div>
           <ul class="rel-notes">

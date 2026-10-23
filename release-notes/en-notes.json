@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.56": [
+    "Sync options now expose just two numbers: \"rows per batch\" and the new \"timeout\" (aligned with DBX’s operation timeout). Timeout can be Inherit connection (default) / Unlimited / 30 / 60 / 120 / 300 / 600 s; the long paragraph under rows-per-batch is gone and the \"?\" is now a single line",
+    "Every internal \"how long may one operation stay unresponsive\" now follows that knob: single write statements, whole-page writes and the upsert flush use it directly; reading a page is clamped to 30~180 s (big pages on slow links are no longer misjudged and re-read); commit is clamped to 60~600 s (a failed commit cannot be retried, so it is worth waiting)",
+    "Choosing \"Unlimited\" is no longer cut short by the kernel’s 600-second statement timeout — the statement timeout follows the knob as well",
+    "Probing is more forgiving: the probe timeout goes from 5 s to 10 s and a link is only declared dead after **two consecutive** failed probes, so a single dropped packet no longer triggers a rollback-and-retry",
+    "DDL such as index creation is allowed 300 s instead of 180 s (a secondary index on tens of millions of rows routinely needs three minutes; failures are still reported as \"N indexes not created\" and can be built by hand)"
+  ],
   "v1.2.55": [
     "Rows per batch is now visible in the UI (Sync → Options), prefilled with the target default and editable: ClickHouse 10,000; PostgreSQL / Doris 2,000; MySQL / MariaDB / SQL Server / Oracle / DM / DB2 1,000; SQLite / H2 / Derby 5,000 rows per statement",
     "The per-statement byte cap is per dialect as well: 8 MB for ClickHouse and local databases, 1 MB for MySQL / MariaDB, 512 KB for Doris, 4 MB for the rest; statements still start at 512 KB and double when they keep finishing quickly",
