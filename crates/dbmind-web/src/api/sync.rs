@@ -575,6 +575,22 @@ pub(crate) async fn run_target_in(
     run_target_in_rows(state, target, sql, session, 1).await
 }
 
+/// 目标端判活（对象级流水的「无进展」判定用）：另开会话跑 `select 1`，5 秒不回算不通。
+///
+/// 全任务共用一个探活会话键：只判「链路是否还能通」，不需要按对象隔离；
+/// 共用一条物理连接也避免「几百个对象各开一条探活连接」把目标端连接数顶满。
+pub(crate) async fn probe_target_link(state: &AppState, target: &str) -> bool {
+    const PROBE_KEY: &str = "internal:sync-probe-obj";
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            run_target_in(state, target, "select 1", PROBE_KEY),
+        )
+        .await,
+        Ok(Ok(_))
+    )
+}
+
 /// 同 [`run_target_in`]，但允许返回多行。仅用于按批查询目标已有键这类
 /// 内部读取，不能把写语句放进来拿多行。
 pub(crate) async fn run_target_in_rows(
@@ -5484,6 +5500,16 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     }
                 })
             };
+            // 对象级「无进展」判死前先探活：链路还通就说明只是这一页/这一批慢
+            //（真机 400 对象的后段宽表，一页十几分钟 —— 按时间判死会把它们全报成中断）。
+            let probe_target_str = match crate::api::scope::resolve(&state, &tgt.conn, &tgt.scope).await
+            {
+                Ok(target) => target,
+                Err(err) => {
+                    tracing::warn!(error = %err.message, "解析目标连接失败，无进展判定不做探活");
+                    String::new()
+                }
+            };
             for (index, mut handle) in handles.into_iter().enumerate() {
                 // 超时 / 协程 panic **不能静默丢弃**：那个对象既没有结果行、也没有 add_done，
                 // 于是界面显示「完成 400/401」、errors=0、进度条永远差一格，用户只能怀疑
@@ -5505,6 +5531,25 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                                 seen = now;
                                 idle_since = std::time::Instant::now();
                             } else if idle_since.elapsed() >= PIPE_WAIT {
+                                // 先探活：目标端还连得上 ⇒ 只是这个对象慢，继续等。
+                                // 宽表/大字段一页在丢包链路上要十几分钟，按「无进展」直接判死
+                                // 就是用户看到的「大表前面都不报错，越到后面越报中断」。
+                                if !probe_target_str.is_empty()
+                                    && probe_target_link(&state, &probe_target_str).await
+                                {
+                                    idle_since = std::time::Instant::now();
+                                    let (kind, name) = (
+                                        objects[index].0.clone(),
+                                        objects[index].1.clone(),
+                                    );
+                                    task.log(format!(
+                                        "{} {name}：{} 分钟没有进度，但目标端探活正常（链路没断），继续等待",
+                                        kind_label(&kind),
+                                        PIPE_WAIT.as_secs() / 60
+                                    ));
+                                    continue;
+                                }
+                                // 探活也不通 ⇒ 真卡死了。
                                 // 必须真的掐掉：JoinHandle 被丢弃只是**脱离**协程，它稍后跑完
                                 // 还会再调一次 add_done，进度就会超过总数（完成 402/401）。
                                 handle.abort();
@@ -5515,7 +5560,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 };
                 let bad: Option<String> = match joined {
                     None => Some(format!(
-                        "对象 {} 分钟没有任何进展（连接可能已半开），本次同步数据不完整",
+                        "对象 {} 分钟没有任何进展，且目标端探活不通：链路已断，本次同步数据不完整",
                         PIPE_WAIT.as_secs() / 60
                     )),
                     Some(Ok(())) => None,

@@ -437,7 +437,25 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                         seen = now;
                         idle_since = std::time::Instant::now();
                     } else if idle_since.elapsed() >= PIPE_WAIT {
-                        // 真卡死了：掐掉协程，别让它挂着占连接
+                        // 11 分钟没有任何一页落库：先探活，分清「这一页就是慢」和「连接已断」。
+                        //
+                        // 为什么必须分（真机 400 对象任务的后段）：前面上百万行的大表一直在跑、
+                        // 每页分钟级落库；到后段宽表（大字段/JSON，一页报文上 MB）在丢包链路上
+                        // 一页就要十几分钟 —— 按「无进展」直接判死，用户看到的就是「大表前面
+                        // 都不报错，越到后面越报『传输协程 11 分钟没有任何进展』」。
+                        if probe_target(&plan).await {
+                            // 链路活着 ⇒ 只是这一页慢，继续等（与 Navicat / DBX 一致）
+                            idle_since = std::time::Instant::now();
+                            if let Some(task) = &plan.task {
+                                task.log(format!(
+                                    "表 {}：一页超过 {} 分钟没有落库，但目标端探活正常（链路没断），继续等待",
+                                    plan.table,
+                                    PIPE_WAIT.as_secs() / 60
+                                ));
+                            }
+                            continue;
+                        }
+                        // 探活也不通 ⇒ 真卡死了：掐掉协程，别让它挂着占连接
                         handle.abort();
                         break None;
                     }
@@ -448,7 +466,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
             None => {
                 if failure.is_none() {
                     failure = Some(format!(
-                        "传输协程 {} 分钟没有任何进展（连接可能已半开），本次同步数据不完整",
+                        "传输协程 {} 分钟没有任何进展，且目标端探活不通：链路已断，本次同步数据不完整",
                         PIPE_WAIT.as_secs() / 60
                     ));
                 }
