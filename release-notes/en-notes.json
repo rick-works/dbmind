@@ -1,5 +1,11 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.52": [
+    "Writes are no longer treated as \"broken\" just because they are slow: each write statement now probes with `select 1` on a separate session every 20 seconds and keeps waiting as long as the link is alive (the Navicat / DBX behaviour); only a failed probe declares the connection dead, rolls back the slice and retries on a new connection — real disconnects are still detected quickly (≤25 s) without killing a statement that is merely slow",
+    "Small statements first: every dialect starts at 512 KB and doubles automatically once statements finish within a second; the MySQL / MariaDB single-INSERT cap drops from 3 MB to 1 MB — a multi-megabyte statement on a public or VPN link costs tens of seconds per lost packet, which is what kept producing \"write interrupted\" lines",
+    "The task-wide convergence stays: after one real disconnect the remaining tables of the same task start with the smaller statement size instead of each one hitting the same wall",
+    "The log no longer shows \"write interrupted / reconnecting to retry\" while a statement is just slow; that path is only taken on a failed probe, and the reason says the probe failed instead of \"possibly half-open\""
+  ],
   "v1.2.51": [
     "The sync log now speaks clearly: the opening line breaks the selection down by type (tables / views / stored procedures / functions / triggers / events) instead of the vague \"the rest are views/routines\"",
     "View and routine syncs log every step: one line for dropping the target, one for creating it; the dependency retry says how many views are being retried, and a failed retry now reports why (previously the log stopped at \"create view\" while the summary said one failure)",
