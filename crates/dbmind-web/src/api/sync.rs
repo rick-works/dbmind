@@ -136,6 +136,15 @@ pub struct SyncRequest {
     insert_rows: Option<usize>,
     #[serde(default)]
     batch_size: Option<usize>,
+    /// 单次数据库操作的超时（秒），对齐 DBX 的「操作超时」：
+    /// - 缺省 / 0 = **继承连接**（沿用内核默认 600 秒，驱动自己的 socketTimeout 优先）
+    /// - 负数 = 不限制（内部按 24 小时兜底，防进程被无限挂住）
+    /// - 正数 = 该秒数
+    ///
+    /// 注意它只决定「多久没响应算超时」，**不决定「慢就中断」**：到点前每次探活通过都会
+    /// 继续等（见 `run_write_stmt` / `transfer::engine::wait_write`）。
+    #[serde(default)]
+    timeout_seconds: Option<i64>,
     /// 行数上限：>0 时每张表只搬前 N 行；0 或缺省 = 不限。
     /// **界面已不再提供**（用户口径：同步就是不限，抽样不是同步的事），保留字段只是
     /// 为了老客户端 / 脚本调用仍能编译 —— 新调用方不要传。
@@ -218,6 +227,23 @@ struct Opts {
     grow: Option<std::sync::Arc<crate::api::transfer::GrowCaps>>,
     /// 单条 INSERT 的行数上限（0 = 按目标方言默认，见 [`insert_rows_default`]）
     insert_rows: usize,
+    /// 单次数据库操作超时（秒）：0 = 继承连接，<0 = 不限制，>0 = 该秒数
+    op_timeout_secs: i64,
+}
+
+/// 操作超时（秒）换算成毫秒 —— 界面上只有一个「超时时间」旋钮（对齐 DBX），
+/// 内部所有「多久没响应算超时」都以它为准：
+/// - `0`（继承连接）：沿用内核默认 600 秒（驱动上的 socketTimeout 仍然优先，那个我们改不了）
+/// - `<0`（不限制）：按 24 小时兜底，只为防止进程被一条永远不回来的语句挂死
+/// - `>0`：就是用户填的秒数
+///
+/// **它是上限，不是「到点就中断」**：到点前每轮探活通过都会继续等（见 `run_write_stmt`）。
+pub(crate) fn op_timeout_ms(secs: i64) -> u64 {
+    match secs {
+        s if s > 0 => (s as u64).saturating_mul(1000).min(86_400_000),
+        s if s < 0 => 86_400_000,
+        _ => 600_000,
+    }
 }
 
 impl Opts {
@@ -316,6 +342,11 @@ impl SyncRequest {
                 .or(self.batch_size)
                 .unwrap_or(0)
                 .min(100_000),
+            // 夹到 [-1, 86400]：负数是「不限制」，0 是「继承连接」，正数最多一天
+            op_timeout_secs: self
+                .timeout_seconds
+                .unwrap_or(0)
+                .clamp(-1, 86_400),
         }
     }
 }
@@ -601,12 +632,21 @@ pub(crate) async fn probe_target_link(state: &AppState, target: &str) -> bool {
     const PROBE_KEY: &str = "internal:sync-probe-obj";
     matches!(
         tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(10),
             run_target_in(state, target, "select 1", PROBE_KEY),
         )
         .await,
         Ok(Ok(_))
     )
+}
+
+/// 对象级判活 + 一次复核（判定「断」会中止整张表，不能让偶发丢包触发）。
+pub(crate) async fn probe_target_link_confirmed(state: &AppState, target: &str) -> bool {
+    if probe_target_link(state, target).await {
+        return true;
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    probe_target_link(state, target).await
 }
 
 /// 同 [`run_target_in`]，但允许返回多行。仅用于按批查询目标已有键这类
@@ -628,9 +668,12 @@ pub(crate) async fn run_target_in_rows(
 /// —— 用户看到的是「同步一直不结束」（真机 21:05 数据搬完、21:15 还没收尾）。
 ///
 /// 索引没建成的后果只是「目标表少一个索引」，数据早就写好了，所以超时该放弃并继续，
-/// 界面会照常报一句「N 个索引未能创建（可在目标库手工补建）」。180 秒足够千万行级
-/// 大表正常建完，再慢就该让用户自己决定要不要等。
-const DDL_TIMEOUT_MS: u64 = 180_000;
+/// 界面会照常报一句「N 个索引未能创建（可在目标库手工补建）」。
+///
+/// 取 300 秒（原来 180）：千万行的表建一个二级索引，慢盘上三分钟是常态；
+/// 它**不跟界面的「超时时间」联动** —— 那个旋钮管的是「数据传不回来」，
+/// 而建索引失败是可以事后补的，两者的取舍不同。
+const DDL_TIMEOUT_MS: u64 = 300_000;
 
 /// 目标端执行 **DDL**：建索引这类可能很慢的语句，用 [`DDL_TIMEOUT_MS`] 而不是 600 秒。
 pub(crate) async fn run_target_ddl(
@@ -2577,13 +2620,15 @@ fn is_link_level_error(err: &XError) -> bool {
 const WRITE_PROBE_TICK: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// 探活本身的墙钟：`select 1` 都回不来，就是链路/目标不可用。
-const WRITE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// 单条写语句的**绝对**上限（探活每次都说「活着」也最多等这么久）。
 ///
-/// 取 15 分钟：内核对单条语句本身还有 10 分钟超时（`run_target_in_rows_timeout`），
-/// 这里只是兜底，防止「探活通、语句永远不返回」这种服务端死锁把任务挂死。
-const WRITE_STMT_HARD_LIMIT: std::time::Duration = std::time::Duration::from_secs(900);
+/// 取 10 秒：`select 1` 只有几百字节，但丢一个包就要走重传退避（RTO 0.2→0.4→0.8…），
+/// 5 秒会把「正在重传但最终会通」误判成断。配合下面的一次复核，偶发抖动不会触发回滚。
+const WRITE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+// 单条写语句的**绝对**上限不写死：由界面的「超时时间」决定（见 [`op_timeout_ms`]）——
+// 0 = 继承连接（内核默认 600 秒）、负 = 不限制、正 = 用户填的秒数。
+// 它与 DBX 的「操作超时（秒），丢弃连接」是同一个语义，只是我们到点**先探活**：
+// 探活通说明只是慢，继续等；探活不通才算断。
 
 /// 目标端判活：另开一条会话跑 `select 1`。
 ///
@@ -2602,6 +2647,16 @@ async fn probe_write_link(state: &AppState, target: &str, session: &str) -> bool
     )
 }
 
+/// 判活 + **一次复核**：判「断」要付代价（回滚该段、换连接重跑），
+/// 不能让链路抖一下（丢个包、RDS 抽一下）就触发。
+async fn probe_write_link_confirmed(state: &AppState, target: &str, session: &str) -> bool {
+    if probe_write_link(state, target, session).await {
+        return true;
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    probe_write_link(state, target, session).await
+}
+
 /// 目标端执行一条写语句：慢就等（探活确认链路还活着），只有探活不通才判「断」——
 /// 上层据此回滚本片、**换一条新连接**重跑（见 `transfer::engine`）。
 async fn run_write_stmt(
@@ -2609,29 +2664,35 @@ async fn run_write_stmt(
     target: &str,
     sql: &str,
     session: &str,
+    // 单条语句最多等多久（来自界面「超时时间」；探活通也到这个点为止）
+    hard_limit: std::time::Duration,
+    // 同一份超时换算成的毫秒数，一并交给内核/宿主：否则内核写死的 600 秒会先到，
+    // 界面选「不限制」或 600 秒以上就等于没生效。
+    timeout_ms: u64,
 ) -> XResult<dbmind_core::QueryResult> {
     let started = std::time::Instant::now();
     // 语句自己的 future 必须**原地 pin 住**：只有确认断链时才丢掉它（丢弃 = 取消该语句），
     // 探活通过时继续等同一个 future —— 这才是「等」而不是「重发」。
-    let pending = run_target_in(state, target, sql, session);
+    let pending = run_target_in_rows_timeout(state, target, sql, session, 1, timeout_ms);
     tokio::pin!(pending);
     loop {
         tokio::select! {
             result = &mut pending => return result,
             _ = tokio::time::sleep(WRITE_PROBE_TICK) => {
                 let elapsed = started.elapsed();
-                if !probe_write_link(state, target, session).await {
+                if !probe_write_link_confirmed(state, target, session).await {
                     return Err(XError::internal(format!(
-                        "单条写语句（约 {} KB）{} 秒未返回，且目标端探活不通：链路已断\
+                        "单条写语句（约 {} KB）{} 秒未返回，且目标端探活连续两次不通：链路已断\
                          （RDS 踢连接 / 链路静默丢包），已弃用该连接",
                         sql.len() / 1024,
                         elapsed.as_secs()
                     )));
                 }
-                if elapsed >= WRITE_STMT_HARD_LIMIT {
+                if elapsed >= hard_limit {
                     return Err(XError::internal(format!(
-                        "单条写语句（约 {} KB）{} 秒仍未返回：目标端探活通（链路没断），\
-                         但语句本身卡住了，已弃用该连接",
+                        "单条写语句（约 {} KB）{} 秒仍未返回（已达「超时时间」上限）：\
+                         目标端探活通（链路没断），但语句本身卡住了，已弃用该连接。\
+                         可在同步选项里把「超时时间」调大或不限制",
                         sql.len() / 1024,
                         elapsed.as_secs()
                     )));
@@ -2701,7 +2762,11 @@ pub(crate) async fn write_insert_rows(
     hint: Option<&crate::api::transfer::GrowCaps>,
     // 单条 INSERT 的行数上限（界面可改；0 = 按方言默认）
     rows_cap: usize,
+    // 界面「超时时间」（秒）：0 = 继承连接、<0 = 不限制、>0 = 该秒数
+    op_timeout_secs: i64,
 ) -> Result<u64, String> {
+    let stmt_timeout_ms = op_timeout_ms(op_timeout_secs);
+    let stmt_hard_limit = std::time::Duration::from_millis(stmt_timeout_ms);
     // 语句字节上限按**每路 writer** 记（同表不同写线程可能一快一慢），
     // 这一批结束时按平均每条语句耗时调整，影响下一批（见 `adapt_stmt_cap`）。
     // 任务级建议值（别的表撞出来的结论）在这里生效：上限只能更小，不会被放大回去。
@@ -2777,7 +2842,9 @@ pub(crate) async fn write_insert_rows(
             }
         }
         let insert_sql = with_identity(stmt, identity_on, target_name);
-        match run_write_stmt(state, tgt_target, &insert_sql, session).await {
+        match run_write_stmt(state, tgt_target, &insert_sql, session, stmt_hard_limit, stmt_timeout_ms)
+            .await
+        {
             Ok(_) => {
                 ok_rows += n_rows as u64;
                 if let Some((_, _, Some(release))) = sp.as_ref() {
@@ -2868,7 +2935,16 @@ pub(crate) async fn write_insert_rows(
                         }
                     }
                     let sub_sql = with_identity(stmt, identity_on, target_name);
-                    match run_write_stmt(state, tgt_target, &sub_sql, session).await {
+                    match run_write_stmt(
+                        state,
+                        tgt_target,
+                        &sub_sql,
+                        session,
+                        stmt_hard_limit,
+                        stmt_timeout_ms,
+                    )
+                    .await
+                    {
                         Ok(_) => {
                             ok_rows += sub_len as u64;
                             if let Some((_, _, Some(release))) = sub_sp.as_ref() {
@@ -4603,6 +4679,7 @@ async fn sync_table_inner(
         workers_cap: opts.tgt_workers,
         slices_cap: opts.src_slices,
         insert_rows: opts.insert_rows,
+        op_timeout_secs: opts.op_timeout_secs,
         grow: opts.grow.clone(),
         target_types: target_types.clone(),
         key_columns: key_columns.clone(),
@@ -5361,8 +5438,13 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             } else {
                 insert_rows_default(target_kind.kind.key())
             };
+            let timeout_note = match opts.op_timeout_secs {
+                s if s < 0 => "不限制".to_string(),
+                0 => "继承连接".to_string(),
+                s => format!("{s} 秒"),
+            };
             task.log(format!(
-                "开始同步：{total} 个对象{detail}；每批最多 {batch_rows} 行"
+                "开始同步：{total} 个对象{detail}；每批最多 {batch_rows} 行，超时 {timeout_note}"
             ));
             // 调度细节只进 tracing（debug）：它们是「内部怎么排兵布阵」，用户看不懂也不需要看
             tracing::debug!(
@@ -5644,7 +5726,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                                 // 宽表/大字段一页在丢包链路上要十几分钟，按「无进展」直接判死
                                 // 就是用户看到的「大表前面都不报错，越到后面越报中断」。
                                 if !probe_target_str.is_empty()
-                                    && probe_target_link(&state, &probe_target_str).await
+                                    && probe_target_link_confirmed(&state, &probe_target_str).await
                                 {
                                     idle_since = std::time::Instant::now();
                                     let (kind, name) = (

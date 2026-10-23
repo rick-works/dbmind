@@ -89,33 +89,40 @@ fn prefetch_enabled() -> bool {
 /// - 不通 ⇒ 真的断了，弃连接、回滚该段、换连接重跑。
 const BATCH_PROBE_TICK: Duration = Duration::from_secs(30);
 
-/// 一批写的**绝对**上限：探活每次都说「活着」也最多等这么久（防服务端死锁挂死任务）。
-///
-/// 取 15 分钟：内核对单条语句还有 10 分钟超时（`run_target_in_rows_timeout`），
-/// 这里只是兜底，正常永远走不到。
-const BATCH_HARD_LIMIT: Duration = Duration::from_secs(900);
+// 一批写的**绝对**上限不再写死：由界面的「超时时间」决定（见 `wait_write` 里的
+// `hard_limit` / `sync::op_timeout_ms`）—— 0 = 继承连接（内核默认 600 秒）、
+// 负 = 不限制、正 = 用户填的秒数。这样界面上只有一个旋钮，与 DBX 的「操作超时」对齐。
 
 /// 回滚/收尾语句自己的墙钟：半开连接上连 `rollback` 都会挂住（真机整条同步就此卡死）。
 const ABORT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 读一页的墙钟：正常页 <5 秒（32MiB 大页也就 5~6 秒），30 秒足够判定「这条读永远回不来」。
+/// 读一页的上限：跟随界面的「超时时间」，但夹在 **30~180 秒**之间。
 ///
-/// 为什么从 60 秒收到 30 秒：半开连接上这一次等待是**纯浪费** —— 真机整库任务里慢表
-/// 按 60 秒一撞、连撞两三次，单表就烧掉半小时（re_sale 读 2256 秒只前进几万行）。
-/// 而链路正常时一页的字节上限是 `PAGE_BYTES_TARGET`（32 MiB），按实测 4 MB/s 约 8 秒，
-/// 30 秒留了近 4 倍余量，不会误杀正常大页。
-const READ_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+/// 为什么不像写那样直接放到 600 秒：读是**幂等**的 —— 超时之后会缩页重试
+/// （`reader.shrink_page()`），等十分钟才重试反而更亏；而 30 秒对 32MiB 的大页
+/// 在慢链路上又确实偏紧（1 MB/s 要 32 秒，会被误判后整页重读）。180 秒是两头都顾到的上限。
+fn read_timeout(secs: i64) -> Duration {
+    Duration::from_millis(crate::api::sync::op_timeout_ms(secs).clamp(30_000, 180_000))
+}
 
-/// 提交（commit）的墙钟：几十万行的事务提交慢是正常的，但不能无限等 ——
-/// 半开连接上 commit 会永远不返回，而「提交过没」是决定能不能重跑的关键。
-const COMMIT_CALL_TIMEOUT: Duration = Duration::from_secs(180);
+/// 提交（commit）的上限：跟随「超时时间」，夹在 **60~600 秒**之间。
+///
+/// 为什么宁可多等：提交失败属于「这一段是否落盘无法确定」，**不能自动重跑**
+/// （可能已经写进去了，重跑会重复）。所以这里给足时间，别把慢盘上的正常提交判死。
+fn commit_timeout(secs: i64) -> Duration {
+    Duration::from_millis(crate::api::sync::op_timeout_ms(secs).clamp(60_000, 600_000))
+}
 
 /// 写超时后的**目标端探活**上限（另开一条会话跑 `select 1`）。
 ///
 /// 为什么要探：墙钟只能说明「这条语句没回来」，分不清两种完全不同的故障 ——
 /// 一条连接半开（换连接就行），还是整条链路/目标不可用（换连接只会再撞一次）。
 /// 探活失败 ⇒ 后者，此时该让**整个任务**停一会儿，而不是几百张表一起重连重跑。
-const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+///
+/// 取 10 秒（原来是 5 秒）：`select 1` 只有几百字节，但**丢一个包就要重传**
+/// （RTO 0.2→0.4→0.8…），链路抖一下 5 秒根本不够 —— 探活本身被误判成「断」，
+/// 就会白回滚一段再重跑。10 秒 + 下面的一次复核，足够把「偶发丢包」和「真断」分开。
+const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 探活失败后整个任务暂停多久（毫秒）。
 ///
@@ -443,7 +450,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                         // 每页分钟级落库；到后段宽表（大字段/JSON，一页报文上 MB）在丢包链路上
                         // 一页就要十几分钟 —— 按「无进展」直接判死，用户看到的就是「大表前面
                         // 都不报错，越到后面越报『传输协程 11 分钟没有任何进展』」。
-                        if probe_target(&plan).await {
+                        if probe_target_confirmed(&plan).await {
                             // 链路活着 ⇒ 只是这一页慢，继续等（与 Navicat / DBX 一致）
                             idle_since = std::time::Instant::now();
                             if let Some(task) = &plan.task {
@@ -721,7 +728,15 @@ async fn run_segment(
                     // 预读协程自己炸了（panic）：当作一次读失败，交给上面的重试逻辑
                     Err(err) => Err(format!("预读失败：{err}")),
                 },
-                None => read_page(&ctx.reader, &range, &cursor).await,
+                None => {
+                    read_page(
+                        &ctx.reader,
+                        &range,
+                        &cursor,
+                        read_timeout(ctx.plan.op_timeout_secs),
+                    )
+                    .await
+                }
             };
             ctx.read_ms
                 .fetch_add(read_started.elapsed().as_millis() as u64, Ordering::Relaxed);
@@ -739,8 +754,9 @@ async fn run_segment(
                 let reader = ctx.reader.clone();
                 let range_next = range.clone();
                 let cursor_next = next.clone();
+                let read_limit = read_timeout(ctx.plan.op_timeout_secs);
                 prefetch = Some(tokio::spawn(async move {
-                    read_page(&reader, &range_next, &cursor_next).await
+                    read_page(&reader, &range_next, &cursor_next, read_limit).await
                 }));
             }
 
@@ -955,16 +971,17 @@ async fn run_segment(
             ctx.consumed.fetch_sub(try_consumed, Ordering::SeqCst);
             return Err(msg);
         }
-        match tokio::time::timeout(COMMIT_CALL_TIMEOUT, ctx.writer.finish(worker)).await {
+        let commit_limit = commit_timeout(ctx.plan.op_timeout_secs);
+        match tokio::time::timeout(commit_limit, ctx.writer.finish(worker)).await {
             Ok(Ok(())) => return Ok(paused.unwrap_or(SegmentOutcome::Finished)),
             // 提交阶段失败：这一段是否落盘已无法确定。**不能重跑**（可能已写入），
             // 如实失败；`WriteDiag::committed` 已由 writer 记下，上层也不会整表重跑。
             Ok(Err(msg)) => return Err(msg),
             Err(_) => {
                 return Err(format!(
-                    "提交事务 {} 秒未返回（目标端连接可能已半开）：本段是否落盘无法确定，\
+                    "提交事务 {} 秒未返回（可能已半开）：本段是否落盘无法确定，\
                      不会自动重跑；请核对该表行数后再决定是否重跑",
-                    COMMIT_CALL_TIMEOUT.as_secs()
+                    commit_limit.as_secs()
                 ));
             }
         }
@@ -976,6 +993,8 @@ async fn read_page(
     reader: &Arc<dyn super::Reader>,
     range: &RowRange,
     cursor: &Option<Cursor>,
+    // 一页最多等多久（跟随界面「超时时间」，见 `read_timeout`）
+    hard_limit: Duration,
 ) -> Result<Page, String> {
     let mut last = String::new();
     for attempt in 0..=READ_RETRY {
@@ -984,12 +1003,12 @@ async fn read_page(
         }
         // 源端同样要有墙钟：连接的 socketTimeout=0 时，一条半开的读会一直等到内核
         // 10 分钟的语句超时，界面上就是「读数字一动不动」。一页正常 5 秒内，60 秒足够。
-        match tokio::time::timeout(READ_CALL_TIMEOUT, reader.page(range, cursor.clone()))
+        match tokio::time::timeout(hard_limit, reader.page(range, cursor.clone()))
             .await
             .map_err(|_| {
                 format!(
                     "读取一页 {} 秒未返回（源端连接可能已半开 / socketTimeout=0）",
-                    READ_CALL_TIMEOUT.as_secs()
+                    hard_limit.as_secs()
                 )
             })
             .and_then(|result| result)
@@ -1007,7 +1026,7 @@ async fn read_page(
     Err(last)
 }
 
-/// 等一次写动作完成：**慢就等**，只有探活不通（或超过 [`BATCH_HARD_LIMIT`]）才判死。
+/// 等一次写动作完成：**慢就等**，只有探活不通（或超过界面「超时时间」）才判死。
 ///
 /// 为什么不再给死线：用户口径是「Navicat / DBX 不中断，我们也不许」。一条语句卡在丢包
 /// 重传上要几十秒，这期间链路是好的 —— 按时间判死只会把「慢」变成「中断 + 整段重跑」。
@@ -1023,26 +1042,32 @@ async fn wait_write<F, T>(
 where
     F: std::future::Future<Output = T>,
 {
+    // 界面的「超时时间」（对齐 DBX）：0 = 继承连接（内核默认 600 秒），<0 = 不限制，
+    // >0 = 用户填的秒数。探活仍然每 30 秒做一次 —— 它决定「断没断」，这个上限只决定
+    // 「最多等多久」，两者不是一回事。
+    let hard_limit = Duration::from_millis(crate::api::sync::op_timeout_ms(plan.op_timeout_secs));
     tokio::pin!(pending);
     loop {
         tokio::select! {
             value = &mut pending => return Ok(value),
             _ = tokio::time::sleep(BATCH_PROBE_TICK) => {
                 let elapsed = started.elapsed();
-                if !probe_target(plan).await {
+                // 复核式探活：一次不通只算抖动，两次都不通才判「链路已断」
+                if !probe_target_confirmed(plan).await {
                     return Err((
                         format!(
-                            "{label} {} 秒未返回，且目标端探活不通：链路已断（RDS wait_timeout 踢连接 / \
+                            "{label} {} 秒未返回，且目标端探活连续两次不通：链路已断（RDS wait_timeout 踢连接 / \
                              链路静默丢包 / 中间设备丢包）",
                             elapsed.as_secs()
                         ),
                         true,
                     ));
                 }
-                if elapsed >= BATCH_HARD_LIMIT {
+                if elapsed >= hard_limit {
                     return Err((
                         format!(
-                            "{label} {} 秒仍未完成：目标端探活通（链路没断），但这个动作本身卡住了",
+                            "{label} {} 秒仍未完成（已达「超时时间」上限）：目标端探活通（链路没断），\
+                             但这个动作本身卡住了。可在同步选项里把「超时时间」调大或不限制",
                             elapsed.as_secs()
                         ),
                         false,
@@ -1151,6 +1176,19 @@ async fn probe_target(plan: &TablePlan) -> bool {
         .await,
         Ok(Ok(_))
     )
+}
+
+/// 判活 + **一次复核**：判「断」是要付代价的（回滚一段、换连接重跑），
+/// 不能让链路抖一下（丢个包、RDS 抽一下）就触发。
+///
+/// 第一次不通就隔 1 秒再探一次，两次都不通才算真断；
+/// 单次抖动最多多花 `PROBE_TIMEOUT + 1 秒`，换的是「不会白回滚」。
+async fn probe_target_confirmed(plan: &TablePlan) -> bool {
+    if probe_target(plan).await {
+        return true;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    probe_target(plan).await
 }
 
 /// 原子地领取行数上限配额：`consumed` 永远不会被推到 `limit` 之后。

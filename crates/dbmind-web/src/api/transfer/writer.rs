@@ -126,6 +126,9 @@ pub struct SqlWriter {
     /// 单条 INSERT 的**行数**上限（界面可改；0 时按目标方言默认）。
     /// 与 `stmt_caps` 是「双重约束」：谁先到谁触发切分。
     rows_cap: usize,
+    /// 界面「超时时间」（秒，对齐 DBX 的操作超时）：0 = 继承连接、<0 = 不限制、>0 = 秒。
+    /// 单条语句的硬上限用它（探活通也到这个点为止，见 `sync::run_write_stmt`）。
+    op_timeout_secs: i64,
     /// 写池诊断（二分定位到的坏行样例写这里，卡顿日志会读）
     diag: Arc<WriteDiag>,
     /// 任务级共享配额（整库同步才有）：这里只用来收敛**报文上限**与**链路暂停**，
@@ -181,6 +184,7 @@ impl SqlWriter {
         } else {
             crate::api::sync::insert_rows_default(kind_key)
         };
+        let op_timeout_secs = plan.op_timeout_secs;
         Self {
             state: plan.state.clone(),
             task: plan.task.clone(),
@@ -207,6 +211,7 @@ impl SqlWriter {
                 .map(|_| AtomicUsize::new(stmt_cap))
                 .collect(),
             rows_cap,
+            op_timeout_secs,
             grow: plan.grow.clone(),
             workers: workers.max(1),
             workers_ceiling,
@@ -457,6 +462,7 @@ impl Writer for SqlWriter {
                         &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)],
                         self.grow.as_deref(),
                         self.rows_cap,
+                        self.op_timeout_secs,
                     )
                     .await?;
                     return Ok(loaded_total + rest);
@@ -479,6 +485,7 @@ impl Writer for SqlWriter {
                 &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)],
                 self.grow.as_deref(),
                 self.rows_cap,
+                self.op_timeout_secs,
             )
             .await
         })

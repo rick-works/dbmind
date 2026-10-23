@@ -199,7 +199,22 @@
                              :min="1" :max="100000" :step="500" size="small"
                              controls-position="right" :disabled="taskRunning" class="settings-num" />
           </div>
-          <p class="settings-hint settings-batch-hint">{{ batchRowsHint }}</p>
+          <!-- 超时时间：对齐 DBX 的「操作超时（秒），丢弃连接」。默认「继承连接」= 用数据源上
+               自己的 socketTimeout；选具体秒数就是单次数据库操作的硬上限（探活通过仍会继续等）。 -->
+          <div class="settings-inline">
+            <span class="settings-inline-label">
+              {{ $t('sync.opTimeout') }}
+              <el-tooltip :content="$t('sync.opTimeoutHint')" placement="top" :show-after="120">
+                <el-icon class="hint-q"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+            <el-select v-model="opts.timeout" size="small" :disabled="taskRunning" class="settings-num">
+              <el-option :value="0" :label="$t('sync.opTimeoutInherit')" />
+              <el-option :value="-1" :label="$t('sync.opTimeoutUnlimited')" />
+              <el-option v-for="n in [30, 60, 120, 300, 600]" :key="n" :value="n"
+                         :label="$t('sync.opTimeoutSec', { n })" />
+            </el-select>
+          </div>
           <!-- 「行数上限」已删（用户口径：同步就是不限，抽样不是同步的事）；
                原先那个全局 WHERE 输入框挪到下面**按表设置** —— 一个条件拼到几十张表上
                语义说不清，见 .settings-where -->
@@ -419,10 +434,7 @@ const onInsertRowsInput = (value) => {
   const n = Number(value)
   opts.value.insertRows = Number.isFinite(n) && n > 0 ? Math.round(n) : 0
 }
-const batchRowsHint = computed(() => t('sync.insertRowsAuto', {
-  type: tgtInfo.value?.type || '--',
-  n: batchRowsDefault.value,
-}))
+
 const srcConnName = computed(() => srcInfo.value ? srcInfo.value.name : '--')
 const tgtConnName = computed(() => tgtInfo.value ? tgtInfo.value.name : '--')
 
@@ -517,7 +529,7 @@ const objState = reactive({})
 for (const t of objTypes) objState[t.key] = { list: [], selected: [] }
 
 // rowLimit / whereClause 已移除：同步就是不限行数；行过滤改按表设置（见 whereByTable）
-const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, maxConcurrency: 0, insertRows: 0 })
+const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, maxConcurrency: 0, insertRows: 0, timeout: 0 })
 
 // ==================== 行过滤（按表设置） ====================
 // 为什么不是全局一个 WHERE：一次同步几十上百张表时，`amount > 100` 拼到没有 amount 列的
@@ -1009,6 +1021,8 @@ const run = async () => {
     maxConcurrency: opts.value.maxConcurrency || 0,
     // 0 = 按生成方（目标库）默认；>0 以界面为准 —— 后端再和字节上限、方言硬限制取小
     insertRows: opts.value.insertRows || 0,
+    // 0 = 继承连接（用数据源上的 socketTimeout）；-1 = 不限制；>0 = 秒
+    timeoutSeconds: opts.value.timeout,
     // 行过滤按表提交：只带真正填了条件的表（没勾选的表就算残留了旧条件也不传）
     whereClauses: Object.fromEntries(selTables.value
       .map(name => [name, (whereByTable[name] || '').trim()])
@@ -1674,8 +1688,7 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   color: var(--dc-text-weak);
   margin: 0;
 }
-/* 「每批行数」的默认值说明：紧贴数字框下方，别和上面的勾选项挤在一起 */
-.settings-batch-hint { margin-top: 3px; max-width: 340px; }
+
 .settings-checks { display: flex; flex-direction: column; gap: 6px; }
 /* 「并发表数」：一行标签 + 数字框；说明收进标签后的问号（悬浮显示） */
 .settings-inline { display: flex; align-items: center; gap: 8px; margin-top: 4px; }

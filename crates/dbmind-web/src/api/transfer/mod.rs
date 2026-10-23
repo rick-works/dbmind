@@ -400,6 +400,9 @@ pub struct TablePlan {
     /// 单条 INSERT 的**行数**上限（0 = 按目标方言默认，见 `sync::insert_rows_default`）。
     /// 界面上按目标库填默认值、允许用户改；writer 用它切子批。
     pub insert_rows: usize,
+    /// 单次数据库操作超时（秒）：0 = 继承连接，<0 = 不限制，>0 = 该秒数。
+    /// 界面上的「超时时间」（对齐 DBX）；换算见 `sync::op_timeout_ms`。
+    pub op_timeout_secs: i64,
     /// 与 `columns` 一一对应的**目标侧真实列名**：源列 `order_no` 在目标上可能叫
     /// `ORDER_NO`（Oracle 折大写）或 `OrderNo`（历史表）。写语句必须用目标的名字，
     /// 否则「目标表已存在」这条路上会报列不存在 —— 而结构是好的、只是名字对不上。
