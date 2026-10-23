@@ -2267,12 +2267,23 @@ pub(crate) fn insert_stmt_cap(kind_key: &str) -> usize {
     match kind_key {
         // Doris FE 的 max_allowed_packet 默认 1MB → 512KB 留足语句头/转义余量
         "doris" => 512 * 1024,
-        // MySQL/MariaDB 旧版默认 4MB（8.0 起动态 64MB）→ 3MB
-        "mysql" | "mariadb" => 3 * 1024 * 1024,
+        // MySQL/MariaDB：旧版 packet 默认 4MB、8.0 起动态 64MB，但**上限不是越高越好** ——
+        // 用户口径是「Navicat 不断我们也不许断」。一条几 MB 的 INSERT 在公网 / VPN 链路上
+        // 一丢包就是整条语句重传，慢到被判定中断（真机日志里撞的是 8MB 一条）。收到 1MB：
+        // 报文小到不容易触发丢包，往返次数只多几倍，换来的是不再反复「写入中断 + 重跑」。
+        "mysql" | "mariadb" => 1024 * 1024,
         // 其余方言没有 1MB 级 packet 限制，这里只防单语句内存尖峰
         _ => 16 * 1024 * 1024,
     }
 }
+
+/// 起步时的单条 INSERT 上限（**先小后大**）：不管方言允许多大，头几批都从 512KB 开始。
+///
+/// 为什么：`insert_stmt_cap` 是「协议允许的上限」，不代表「这条链路吃得下」。一条语句
+/// 一旦撞上丢包，代价是几十秒白等 + 一段回滚 + 一次重跑；而小报文只要能跑通，几条语句
+/// 之后 `adapt_stmt_cap` 就会按实测耗时（<1 秒/条）翻倍上去 —— 健康链路只多开头几次往返，
+/// 劣化链路则停在真正安全的报文大小上，不会一上来就把链路撞断。
+pub(crate) const STMT_CAP_START: usize = 512 * 1024;
 
 /// 单条 INSERT 的字节**下限**：再拆分就只剩往返开销了。
 ///
@@ -2459,17 +2470,46 @@ fn is_link_level_error(err: &XError) -> bool {
     is_link_level_message(&err.message)
 }
 
-/// 单条写语句的墙钟（半开连接的**唯一快速判定点**）。
+/// 写语句「慢」与「连接已断」的分界：**定期探活**，而不是给一条按报文大小算的死线。
 ///
-/// 为什么按语句而不是按页：一页会被拆成十几条语句，按页设墙钟时，一条挂在半开
-/// 连接上的语句会把整页的额度（真机 300 秒）耗光，而且页越大判定越慢。
-/// 按条设：3MB 的语句 35 秒就判定，慢页（由多条语句组成）也不会被误杀。
-pub(crate) fn statement_watchdog(bytes: usize) -> std::time::Duration {
-    let mb = (bytes / (1024 * 1024)) as u64;
-    std::time::Duration::from_millis((20_000 + mb * 5_000).clamp(20_000, 120_000))
+/// 为什么改（用户口径：Navicat / DBX 不会中断，我们也不许）：
+/// 原来按报文大小给死线（20 秒 + 5 秒/MB，封顶 120 秒），到点就判「连接半开」⇒
+/// 回滚本段、换连接重跑。可慢不等于断：一条 3MB 的 INSERT 在丢包链路上正常也要
+/// 几十秒，被判定中断后又要整段重读重写，界面上就是「写入中断」反复刷。
+///
+/// 现在：每 [`WRITE_PROBE_TICK`] 秒另开一条会话跑一次 `select 1` ——
+/// - 探活**通** ⇒ 链路活着，这条语句只是慢，**继续等**（Navicat / DBX 的行为）；
+/// - 探活**不通** ⇒ 真的断了，立刻返回链路级错误，上层回滚本片换连接重跑。
+/// 这样「真断」的发现速度（≤ tick + 探活超时）比原来的死线还快，但又不会误杀慢语句。
+const WRITE_PROBE_TICK: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// 探活本身的墙钟：`select 1` 都回不来，就是链路/目标不可用。
+const WRITE_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 单条写语句的**绝对**上限（探活每次都说「活着」也最多等这么久）。
+///
+/// 取 15 分钟：内核对单条语句本身还有 10 分钟超时（`run_target_in_rows_timeout`），
+/// 这里只是兜底，防止「探活通、语句永远不返回」这种服务端死锁把任务挂死。
+const WRITE_STMT_HARD_LIMIT: std::time::Duration = std::time::Duration::from_secs(900);
+
+/// 目标端判活：另开一条会话跑 `select 1`。
+///
+/// 会话名由写会话名派生（`internal:sync-probe-<写会话>`）：内核的会话泳道是
+/// 「同键一条物理连接」，**不能**跟正在跑语句的那条共用键 —— 否则探活会排在
+/// 那条慢语句后面，永远探不出来。
+async fn probe_write_link(state: &AppState, target: &str, session: &str) -> bool {
+    let probe = format!("internal:sync-probe-{session}");
+    matches!(
+        tokio::time::timeout(
+            WRITE_PROBE_TIMEOUT,
+            run_target_in(state, target, "select 1", &probe),
+        )
+        .await,
+        Ok(Ok(_))
+    )
 }
 
-/// 目标端执行一条写语句，带墙钟；超时转成「链路级」失败 ——
+/// 目标端执行一条写语句：慢就等（探活确认链路还活着），只有探活不通才判「断」——
 /// 上层据此回滚本片、**换一条新连接**重跑（见 `transfer::engine`）。
 async fn run_write_stmt(
     state: &AppState,
@@ -2477,14 +2517,41 @@ async fn run_write_stmt(
     sql: &str,
     session: &str,
 ) -> XResult<dbmind_core::QueryResult> {
-    let watchdog = statement_watchdog(sql.len());
-    match tokio::time::timeout(watchdog, run_target_in(state, target, sql, session)).await {
-        Ok(result) => result,
-        Err(_) => Err(XError::internal(format!(
-            "单条写语句（约 {} MB）{} 秒未返回：目标端连接可能已经半开（RDS 踢连接 / 链路静默丢包）",
-            sql.len() / (1024 * 1024),
-            watchdog.as_secs()
-        ))),
+    let started = std::time::Instant::now();
+    // 语句自己的 future 必须**原地 pin 住**：只有确认断链时才丢掉它（丢弃 = 取消该语句），
+    // 探活通过时继续等同一个 future —— 这才是「等」而不是「重发」。
+    let pending = run_target_in(state, target, sql, session);
+    tokio::pin!(pending);
+    loop {
+        tokio::select! {
+            result = &mut pending => return result,
+            _ = tokio::time::sleep(WRITE_PROBE_TICK) => {
+                let elapsed = started.elapsed();
+                if !probe_write_link(state, target, session).await {
+                    return Err(XError::internal(format!(
+                        "单条写语句（约 {} KB）{} 秒未返回，且目标端探活不通：链路已断\
+                         （RDS 踢连接 / 链路静默丢包），已弃用该连接",
+                        sql.len() / 1024,
+                        elapsed.as_secs()
+                    )));
+                }
+                if elapsed >= WRITE_STMT_HARD_LIMIT {
+                    return Err(XError::internal(format!(
+                        "单条写语句（约 {} KB）{} 秒仍未返回：目标端探活通（链路没断），\
+                         但语句本身卡住了，已弃用该连接",
+                        sql.len() / 1024,
+                        elapsed.as_secs()
+                    )));
+                }
+                tracing::debug!(
+                    target: "dbmind::sync",
+                    session,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    bytes = sql.len(),
+                    "写语句仍在执行（探活通过），继续等待"
+                );
+            }
+        }
     }
 }
 
@@ -5828,10 +5895,10 @@ mod prepared_batch_tests {
     /// 且不会被压到 STMT_CAP_MIN 以下（小报文只是多几次往返，语法上必须有下限）。
     #[test]
     fn 报文上限取方言默认与任务级建议的较小值() {
-        assert_eq!(effective_stmt_cap("mysql", 0), 3 * 1024 * 1024);
+        assert_eq!(effective_stmt_cap("mysql", 0), 1024 * 1024);
         assert_eq!(effective_stmt_cap("mysql", 512 * 1024), 512 * 1024);
         // 建议值比方言默认值还大 ⇒ 仍然用方言上限（不会被放大）
-        assert_eq!(effective_stmt_cap("mysql", 8 * 1024 * 1024), 3 * 1024 * 1024);
+        assert_eq!(effective_stmt_cap("mysql", 8 * 1024 * 1024), 1024 * 1024);
         // 建议值小到不合理 ⇒ 夹到下限
         assert_eq!(effective_stmt_cap("mysql", 10), STMT_CAP_MIN);
         // 各方言默认值不同，Doris 的 FE packet 只有 1MB

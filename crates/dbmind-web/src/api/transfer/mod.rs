@@ -166,8 +166,8 @@ impl WriteDiag {
         self.write_rows_per_sec.load(Ordering::Relaxed)
     }
 
-    /// 一整页写下去的墙钟上限（**兜底**，真正的「半开连接」判定在单条语句上，
-    /// 见 `sync::statement_watchdog`）。
+    /// 一整页写下去的墙钟上限（**兜底**，真正的「半开连接」判定是单条语句的探活，
+    /// 见 `sync::run_write_stmt`：探活通就一直等，探活不通才判死）。
     ///
     /// 取值 = max(最近批最慢值 × 8, 按 200 行/秒 估的悲观耗时)，夹在 [60s, 300s]：
     /// - 历史都快（亚秒）⇒ 只看行数：1000 行的页 60 秒，5 万行的页 250 秒；
@@ -582,17 +582,21 @@ mod watchdog_tests {
         assert_eq!(caps.link_hold_left_ms(), 0);
     }
 
-    /// 单条 INSERT 的墙钟：按报文大小给，20 秒起、120 秒封顶。
+    /// 起步报文上限必须**不大于**任何方言的协议上限：先小后大，慢链路不该一上来
+    /// 就拿几 MB 的语句去撞丢包（用户口径：Navicat 不中断、我们也不许）。
     #[test]
-    fn 单条语句墙钟按字节算() {
-        assert_eq!(crate::api::sync::statement_watchdog(0), Duration::from_secs(20));
-        assert_eq!(
-            crate::api::sync::statement_watchdog(3 * 1024 * 1024),
-            Duration::from_secs(35)
-        );
-        assert_eq!(
-            crate::api::sync::statement_watchdog(64 * 1024 * 1024),
-            Duration::from_secs(120)
-        );
+    fn 起步报文上限小于各方言协议上限() {
+        for kind in [
+            "mysql", "mariadb", "doris", "postgresql", "sqlserver", "oracle", "db2",
+            "sqlite", "clickhouse", "h2", "derby",
+        ] {
+            let cap = crate::api::sync::insert_stmt_cap(kind);
+            assert!(
+                crate::api::sync::STMT_CAP_START <= cap,
+                "{kind} 的起步上限（{}）超过了协议上限（{}）",
+                crate::api::sync::STMT_CAP_START,
+                cap
+            );
+        }
     }
 }

@@ -158,16 +158,19 @@ impl SqlWriter {
         // 尾部弹性的上限：方言声明的写并发（单连接池的库仍是 1）。运行时补发的 worker
         // 编号一定 ≤ 它，所以数组按它预分配就够 —— 扩容只是「多给几路会话」，不改结构。
         let workers_ceiling = workers.max(base).max(1);
-        // 起始报文上限：方言默认值与**本任务已学到的建议值**取小。
+        // 起始报文上限：方言默认值、**本任务已学到的建议值**、起步值 512KB 三者取小。
         // 这一步是「一次踩坑、全任务收敛」的落地点：同一任务里某张表已经证明过大报文
         // 会卡住，之后开工的表直接从小的开始，不必各自再撞一次。
+        // 起步值同样重要：方言上限（MySQL 1MB）只是协议允许值，不是这条链路吃得下的值 ——
+        // 先用小报文探路，实测快了 `adapt_stmt_cap` 自己会翻倍上去（用户口径：不要中断）。
         let stmt_cap = crate::api::sync::effective_stmt_cap(
             kind_key,
             plan.grow
                 .as_ref()
                 .map(|grow| grow.stmt_cap_hint())
                 .unwrap_or(0),
-        );
+        )
+        .min(crate::api::sync::STMT_CAP_START);
         Self {
             state: plan.state.clone(),
             task: plan.task.clone(),
