@@ -26,7 +26,7 @@
 
 use crate::error::{DbMindError, ErrorCode, Result};
 use crate::CancelToken;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
@@ -62,12 +62,34 @@ pub(crate) struct PoolState {
     lanes: HashMap<String, Vec<Option<Slot>>>,
     /// 泳道 → 上次用过的槽位下标（粘性复用靠它）
     last: HashMap<String, usize>,
-    /// 挂着未提交事务的泳道：**自动回收绝不碰它们**。
+    /// 被保护（不自动回收）的泳道 → 保护的原因。
     ///
     /// 事务槽位在两条语句之间也是 `busy = false`，只按「空闲」挑会把它当成
     /// 可以关闭的会话；一旦关掉，JDBC 连接上的未提交修改就丢了。显式断开连接
     /// （用户点“关闭连接”）仍然可以关，见 `close_*` 的调用方。
-    pinned: HashSet<String>,
+    ///
+    /// **为什么要区分原因**（真机：VPN 断了再连，第一次执行必报一次
+    /// `Communications link failure`）：交互页签也是常驻的，但它跟事务不一样 ——
+    /// 里面没有「丢了就回滚」的状态。旧实现一个 `pinned` 把两者一起排除在保活之外，
+    /// 于是页签那条连接断链后没人探它，下次执行必然先撞一次死连接。
+    pinned: HashMap<String, Pin>,
+}
+
+/// 一条泳道被保护的原因（见 [`PoolState::pinned`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pin {
+    /// 交互页签：只是想留着（切回来不重新握手），**没有**未提交状态。
+    ///
+    /// 这类会话**可以**被保活探活：探不通说明链路断了，作废重连正是用户想要的。
+    /// 万一用户在这个页签里手敲了 `BEGIN` 而内核不知道，探活的那句 `select 1`
+    /// 可能报语句级错误 —— 那种情况**不算死连接**（见 `agent_driver::ProbeOutcome`），
+    /// 会话保持原样，不会被悄悄换掉。
+    Interactive,
+    /// 事务：里面可能有未提交修改，保活万一误判就会把事务丢成「连接已断开」。
+    ///
+    /// 这类会话**绝不**参与保活，只由「借出前探活」兜底（那条路径已经先拦了
+    /// 「事务连接已断」并如实报错，不会悄悄换连接）。
+    Transaction,
 }
 
 impl PoolState {
@@ -114,7 +136,8 @@ impl PoolState {
     fn oldest_idle(&self) -> Option<(String, Instant)> {
         let mut best: Option<(String, Instant)> = None;
         for (lane, slots) in self.lanes.iter() {
-            if self.pinned.contains(lane) {
+            // 两种保护都算「不许回收」：交互页签的常驻承诺也在这一层
+            if self.pinned.contains_key(lane) {
                 continue;
             }
             for (index, slot) in slots.iter().enumerate() {
@@ -137,7 +160,7 @@ impl PoolState {
     /// 摘掉某个会话的槽位（**仍空闲才摘**）。摘不到说明它刚被用起来了。
     fn remove_idle(&mut self, target: &str) -> bool {
         for (lane, slots) in self.lanes.iter_mut() {
-            if self.pinned.contains(lane) {
+            if self.pinned.contains_key(lane) {
                 continue;
             }
             for (index, slot) in slots.iter_mut().enumerate() {
@@ -170,7 +193,8 @@ impl PoolState {
             ..
         } = self;
         for (lane, slots) in lanes.iter_mut() {
-            if pinned.contains(lane) {
+            // 事务泳道不能被保活碰（原因见 `Pin`）；交互页签可以
+            if pinned.get(lane) == Some(&Pin::Transaction) {
                 continue;
             }
             for (index, slot) in slots.iter_mut().enumerate() {
@@ -589,20 +613,24 @@ impl SessionPool {
         closed
     }
 
-    /// 最近 `within` 内用过、当前**空闲**且**不常驻**（非事务 / 非交互页签）的会话。
+    /// 最近 `within` 内用过、当前**空闲**、且**不是事务**的会话（交互页签也算）。
     ///
-    /// 后台保活专用（见 `agent_driver::spawn_keepalive`）。只挑这三类里能挑的，理由：
+    /// 后台保活专用（见 `agent_driver::spawn_keepalive`）。只挑三类里能挑的，理由：
     /// - 正忙的：保活会打断正在跑的语句；
-    /// - 常驻的（`pinned`）：那是用户事务或编辑器页签，里面多一句 `select 1` 本身不改变
-    ///   语义，但一旦探活误判（PG 事务 aborted 时任何语句都报错），就会把用户事务当成
-    ///   「连接已断」丢掉 —— 代价远大于收益，这类连接交给「借出前探活」兜底；
+    /// - **事务泳道**（`Pin::Transaction`）：里面多一句 `select 1` 本身不改变语义，但一旦
+    ///   探活误判（PG 事务 aborted 时任何语句都报错），就会把用户事务当成「连接已断」丢掉
+    ///   —— 代价远大于收益，这类连接交给「借出前探活」兜底；
     /// - 很久没用的（超过 `within`）：再保活只是白花流量，空闲回收会处理它们。
+    ///
+    /// 交互页签（`Pin::Interactive`）**要**保活：它跟事务不一样，断了没有「回滚未提交修改」
+    /// 这层顾虑，而它恰恰是最容易被链路掐死的那种 —— 用户开着窗口不动，VPN/代理断了又连上，
+    /// 下一条语句撞死连接报一次 `Communications link failure`，第二次才成功。
     pub(crate) fn idle_sessions_recent(&self, within: Duration, max: usize) -> Vec<String> {
         let state = self.lock();
         let now = Instant::now();
         let mut out = Vec::new();
         for (lane, slots) in state.lanes.iter() {
-            if state.pinned.contains(lane) {
+            if state.pinned.get(lane) == Some(&Pin::Transaction) {
                 continue;
             }
             for (index, slot) in slots.iter().enumerate() {
@@ -655,9 +683,20 @@ impl SessionPool {
         self.acquire_cancellable(lane, limit, wait, None)
     }
 
-    /// 把一条泳道标记为「事务中」，自动回收/空闲清扫不会关闭它。
-    pub fn pin_lane(&self, lane: &str) {
-        self.lock().pinned.insert(lane.to_string());
+    /// 把一条泳道保护起来：自动回收 / 空闲清扫不会关闭它。
+    ///
+    /// 保护**只升级不降级**：事务的优先级高于交互页签。否则一次普通查询的
+    /// `Pin::Interactive` 就会把「事务中」抹掉，接着保活一句 `select 1` 探不通，
+    /// 用户的事务就被当成死连接丢掉了。
+    pub fn pin_lane(&self, lane: &str, pin: Pin) {
+        let mut state = self.lock();
+        let entry = state
+            .pinned
+            .entry(lane.to_string())
+            .or_insert(Pin::Interactive);
+        if pin == Pin::Transaction {
+            *entry = Pin::Transaction;
+        }
     }
 
     /// 事务结束（commit / rollback）后解除保护。
@@ -931,14 +970,49 @@ mod tests {
             .idle_sessions_recent(Duration::from_secs(60), 8)
             .contains(&again));
 
-        // 常驻（事务 / 页签）泳道不参与保活
-        pool.pin_lane(lane());
+        // 事务泳道不参与保活：里面有未提交修改，探活误判就把它丢了
+        pool.pin_lane(lane(), Pin::Transaction);
         assert!(pool
             .idle_sessions_recent(Duration::from_secs(60), 8)
             .is_empty());
         assert!(!pool.take_idle_session(&again));
+
+        // 交互页签**要**参与保活：它没有未提交状态，探不通正好作废重连。
+        // 旧实现把「事务」和「页签」一起排除在保活之外，于是页签那条连接断链后
+        // 没人探它 —— 真机表现就是「VPN 断了再连，第一条语句必报一次」。
+        pool.unpin_lane(lane());
+        pool.pin_lane(lane(), Pin::Interactive);
+        assert!(
+            pool.idle_sessions_recent(Duration::from_secs(60), 8)
+                .contains(&again),
+            "交互页签的空闲会话必须能被保活挑中"
+        );
+        assert!(pool.take_idle_session(&again));
+        pool.release_heartbeat(&again);
         // 未占住时归还也只是刷新空闲时刻，不该 panic
         pool.release_heartbeat(&again);
+    }
+
+    /// 保护**只升级不降级**：事务中再被 `Interactive` pin 一次，仍然按事务算。
+    ///
+    /// 这条不是洁癖：`with_lane` 每次调用都会给交互泳道 pin 一次 `Interactive`，
+    /// 若它能把事务覆盖回去，用户在事务里发一条普通查询就会把这条连接重新暴露给保活。
+    #[test]
+    fn 事务保护不会被页签保护降级() {
+        let pool = pool();
+        pool.pin_lane(lane(), Pin::Transaction);
+        pool.pin_lane(lane(), Pin::Interactive);
+
+        let guard = pool.acquire(lane(), 1, Duration::from_millis(50)).unwrap();
+        let id = guard.session_id().to_string();
+        drop(guard);
+
+        assert!(
+            pool.idle_sessions_recent(Duration::from_secs(60), 8)
+                .is_empty(),
+            "事务泳道不该出现在保活清单里"
+        );
+        assert!(!pool.take_idle_session(&id));
     }
 
     /// 会话 id 反解：连接名里带 `#` 时也要落到最后一个 `#`（槽位号）上。
@@ -1281,7 +1355,7 @@ mod tests {
         let tx = pool.acquire("tx-lane", 1, Duration::from_secs(1)).unwrap();
         let tx_id = tx.session_id().to_string();
         drop(tx);
-        pool.pin_lane("tx-lane");
+        pool.pin_lane("tx-lane", Pin::Transaction);
 
         assert_eq!(budget.sweep_older_than(Instant::now() + Duration::from_secs(10)), 0);
         assert_eq!(budget.live(), 1);

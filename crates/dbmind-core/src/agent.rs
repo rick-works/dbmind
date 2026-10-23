@@ -426,9 +426,13 @@ pub fn set_legacy_tls_enabled(enabled: bool) {
 /// （SQL Server 2008/2012 等）在 JDK 8u291+/11.0.11+ 上握手必败，其余弱算法照旧禁用。
 fn write_legacy_tls_override() -> Option<PathBuf> {
     let path = crate::paths::legacy_tls_properties_path();
+    // 清单 = JDK 默认那条**只删掉 TLSv1 / TLSv1.1**（含 `include jdk.disabled.namedCurves`
+    // 与 anon/NULL —— 少了它们等于顺手放行了匿名套件与弱曲线，超出「只为老库」的本意）。
     let body = "# 由 DBmind 生成：设置「允许旧版 TLS」开启时，把 TLSv1/TLSv1.1 从默认禁用清单放行。\n\
-                # 其余弱算法照旧禁用。删除本文件或关闭设置并重启应用即可恢复默认。\n\
-                jdk.tls.disabledAlgorithms=SSLv3, RC4, DES, MD5withRSA, 3DES_EDE_CBC, DH keySize < 1024, EC keySize < 224\n";
+                # 其余弱算法（SSLv3 / RC4 / DES / 3DES / anon / NULL / 弱曲线）照旧禁用。\n\
+                # 删除本文件或关闭设置并重启应用即可恢复默认。\n\
+                jdk.tls.disabledAlgorithms=SSLv3, RC4, DES, MD5withRSA, DH keySize < 1024, \
+                EC keySize < 224, 3DES_EDE_CBC, anon, NULL, include jdk.disabled.namedCurves\n";
     std::fs::write(&path, body).ok()?;
     Some(path)
 }
@@ -1262,6 +1266,13 @@ impl AgentHost {
         if LEGACY_TLS.load(Ordering::Relaxed) {
             if let Some(path) = write_legacy_tls_override() {
                 command.arg(format!("-Djava.security.properties={}", path.display()));
+                // 只把 TLSv1/1.1 从 disabledAlgorithms 里放行**还不够**：JDK 11+ 的客户端首选
+                // 协议列表默认是 [TLSv1.3, TLSv1.2]（`jdk.tls.client.protocols` 未设置时），
+                // 服务端只讲 TLS 1.0 时会在 SSLEngine 里直接拒掉，报的正是：
+                //   The server selected protocol version TLS10 is not accepted by
+                //   client preferences [TLS13, TLS12]
+                // 这个键是**系统属性**（不属于 java.security），必须用 -D 显式给出。
+                command.arg("-Djdk.tls.client.protocols=TLSv1,TLSv1.1,TLSv1.2,TLSv1.3");
                 tracing::info!(target: "dbmind::agent", path = %path.display(), "宿主 JVM 已放行旧版 TLS");
             }
         }

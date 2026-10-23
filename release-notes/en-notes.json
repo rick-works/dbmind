@@ -345,6 +345,15 @@
     "socketTimeout=0 on old connections is now treated as 'not set': a half-open connection no longer waits out the 5-minute fallback timeout, and you do not have to re-save every connection",
     "Progress counters only go up: 'transferred' can no longer exceed 'read', and neither number jumps backwards when a table is retried"
   ],
+  "v1.2.50": [
+    "Production protection no longer treats read-only statements as writes: opening databases and inspecting sessions (USE, session-level SET, sp_who2, sp_helpdb, DBCC SQLPERF) work again; sp_executesql, xp_cmdshell and DBCC FREEPROCCACHE are still blocked",
+    "Table / view / database context-menu actions now use the connection of the clicked node: View DDL no longer fails with a null error, and right-clicking an object on another server no longer sends the statement to the current connection",
+    "Old servers connect again: \"Allow legacy encryption\" now also raises the client protocol preference to TLS 1.0 (the SQL Server 2008/2012 era); it is on by default and existing installs are migrated",
+    "SSH tunnels now verify host keys (reading your ~/.ssh/known_hosts); one tunnel per jump host + target pair, authenticate once and reuse the session, handshakes capped at 8 so concurrent syncs no longer jam the jump host",
+    "After a VPN or link drop, the first statement no longer fails once with \"Communications link failure\": read-only statements reconnect and retry once, and tab sessions stay in the keep-alive probe",
+    "Sync now runs at least 2 read streams per table in flight (a single stream gets only half the link), so slow tables are no longer squeezed to one stream and drag the whole database tail",
+    "A page that does not return within 30 seconds is treated as lost and shrinks to a quarter of its size (was 60 seconds, halved) - no more watching one table burn half an hour on a half-open link"
+  ],
   "v1.2.49": [
     "Tables with neither a primary key nor a unique index can now commit as they go: a dropped connection only re-runs the segment in flight instead of rescanning the whole slice (on a 3.8M-row table that used to mean tens of minutes of wasted work)",
     "Window splitting for those tables is now on by default - no more setting DBMIND_SYNC_WINDOW=1; a 351-table whole-database run, including a dozen million-row keyless tables, finished with 0 failures",

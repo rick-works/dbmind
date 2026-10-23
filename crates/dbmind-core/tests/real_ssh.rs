@@ -76,7 +76,8 @@ fn tunneled(ssh: Value, target_host: &str, target_port: u16) -> ConnectionConfig
     config
 }
 
-/// 打开隧道 → 读一段 banner → 复用同一条隧道 → 错口令要明确说「认证失败」。
+/// 打开隧道 → 读一段 banner → 第二条连接**复用会话池**（握手计数不变）→ 复用同一条隧道
+/// → 错口令要明确说「认证失败」。
 #[test]
 #[ignore = "真机验证：要连一台**真实的** SSH 跳板机（用 scripts/test/real-ssh.ps1）"]
 fn 真机_ssh_隧道转发可用() {
@@ -159,6 +160,30 @@ fn 真机_ssh_隧道转发可用() {
         );
     }
     drop(stream);
+
+    // ①' 第二条连接必须**复用**池里的会话：握手计数不变
+    //
+    // 这一条是「打开连接为什么还是转几秒」的根因验证 —— 池化的全部收益就是这里。
+    // 只看连接快慢是主观感受（2.7 秒 vs 0.3 秒会被各种因素掩盖），看计数才是证据。
+    let before = tunnel::handshake_total();
+    let started = std::time::Instant::now();
+    let mut second = TcpStream::connect(("127.0.0.1", local_port)).expect("本地转发端口应可连接");
+    second
+        .set_read_timeout(Some(Duration::from_secs(15)))
+        .expect("设置读超时应成功");
+    let mut again = [0u8; 128];
+    let again_read = second.read(&mut again).expect("第二次连接也应当有数据回来");
+    assert!(again_read > 0, "第二次连隧道读到了 0 字节，等于没打通");
+    let after = tunnel::handshake_total();
+    println!(
+        "真机 SSH：第二条连接 {elapsed:?}，握手 {before} → {after}",
+        elapsed = started.elapsed()
+    );
+    assert_eq!(
+        after, before,
+        "第二条连接又握手了一次（{before} → {after}）：会话池没生效，用户就会一直等 2.7 秒"
+    );
+    drop(second);
 
     // ② 同一条配置再取一次：必须**复用**同一条隧道（否则浏览几个库就会开几条 SSH 连接）
     let again = tunnel::local_port_for(&config)

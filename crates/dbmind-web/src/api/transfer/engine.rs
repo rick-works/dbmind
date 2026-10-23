@@ -93,8 +93,13 @@ const WRITE_CALL_TIMEOUT_MAX: Duration = Duration::from_secs(300);
 /// 回滚/收尾语句自己的墙钟：半开连接上连 `rollback` 都会挂住（真机整条同步就此卡死）。
 const ABORT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 读一页的墙钟：正常页 <5 秒（32MiB 大页也就 5~6 秒），60 秒足够判定「这条读永远回不来」。
-const READ_CALL_TIMEOUT: Duration = Duration::from_secs(60);
+/// 读一页的墙钟：正常页 <5 秒（32MiB 大页也就 5~6 秒），30 秒足够判定「这条读永远回不来」。
+///
+/// 为什么从 60 秒收到 30 秒：半开连接上这一次等待是**纯浪费** —— 真机整库任务里慢表
+/// 按 60 秒一撞、连撞两三次，单表就烧掉半小时（re_sale 读 2256 秒只前进几万行）。
+/// 而链路正常时一页的字节上限是 `PAGE_BYTES_TARGET`（32 MiB），按实测 4 MB/s 约 8 秒，
+/// 30 秒留了近 4 倍余量，不会误杀正常大页。
+const READ_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 提交（commit）的墙钟：几十万行的事务提交慢是正常的，但不能无限等 ——
 /// 半开连接上 commit 会永远不返回，而「提交过没」是决定能不能重跑的关键。

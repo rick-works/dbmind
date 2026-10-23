@@ -20,16 +20,18 @@
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
-use ssh2::Session;
+use ssh2::{
+    CheckResult, HashType, HostKeyType, KeyboardInteractivePrompt, KnownHostFileKind, Session,
+};
 
 use crate::types::ConnectionConfig;
-use crate::{DbMindError, ErrorCode, Result};
+use crate::{paths, DbMindError, ErrorCode, Result};
 
 /// `ConnectionConfig.extra` 里存 SSH 配置的键。
 ///
@@ -74,13 +76,24 @@ const ACCEPT_POLL: Duration = Duration::from_millis(20);
 
 /// 同时进行的 SSH **握手**上限。
 ///
-/// 为什么限：本设计每条转发连接一条独立 SSH 会话（见 [`accept_loop`]），高并发同步
-/// 瞬间要建几十条会话；而 sshd 的 `MaxStartups` 默认 `10:30:100` —— 超过 10 条未认证
-/// 连接后**随机丢弃**，被丢的那批要等超时重试，整批建连被拖成分钟级（真机：整库同步
+/// 为什么限：每条转发连接要占一条独占 SSH 会话（见 [`accept_loop`] 与 [`SessionPool`]），
+/// 高并发同步瞬间要建几十条会话；而 sshd 的 `MaxStartups` 默认 `10:30:100` —— 超过 10 条
+/// 未认证连接后**随机丢弃**，被丢的那批要等超时重试，整批建连被拖成分钟级（真机：整库同步
 /// 并发表 16 时 32 条会话同时握手，全部卡死、任务 8 分钟一行没读）。限流排队依次握手
 /// 比被服务端丢弃再重试快得多，而且不依赖跳板机的配置。
 const HANDSHAKE_MAX: usize = 8;
 static HANDSHAKE_INFLIGHT: AtomicUsize = AtomicUsize::new(0);
+
+/// 累计**成功完成认证**的 SSH 会话数。
+///
+/// 只为一件事存在：证明「会话池真的省掉了握手」—— 真机一次握手 + 认证 2.7 秒，
+/// 光看连接快慢是主观感受，看这个数字变了没有才是证据（真机验证见 `tests/real_ssh.rs`）。
+static HANDSHAKE_TOTAL: AtomicUsize = AtomicUsize::new(0);
+
+/// 累计握手次数。第二次连库时若它没变，说明用的就是池里那条会话。
+pub fn handshake_total() -> usize {
+    HANDSHAKE_TOTAL.load(Ordering::Relaxed)
+}
 
 /// 握手名额租约：拿到才开始 `open_session`，`Drop` 归还（含 panic）。
 struct HandshakeLease;
@@ -254,6 +267,363 @@ pub fn with_local_endpoint(config: &ConnectionConfig, local_port: u16) -> Connec
     copy
 }
 
+// ------------------------------------------------------------------ 主机公钥
+
+/// 本应用自己的「主机公钥钉扎」文件（TOFU：第一次见就记住，之后变了就拦）。
+///
+/// 为什么不直接写 `~/.ssh/known_hosts`：那是用户和系统 ssh 共用的信任库，应用不该改它。
+/// 这里**只读**它（用户在别处已经信任过的指纹直接沿用），自己的学习结果单独存一份。
+///
+/// 格式刻意做成最简的一行一条，而不是 OpenSSH 格式：比对必须按「主机 + 端口 + 算法」
+/// 精确进行。OpenSSH 允许同一主机只记一种算法，拿它做变更判定会在「服务器换了算法」
+/// 时误报成「有人冒充」—— 所以那份文件只用来做「精确命中即信任」。
+///
+/// 行格式：`<host>:<port> <算法名> <base64 公钥>`（`#` 开头是注释）。
+pub fn known_hosts_path() -> PathBuf {
+    paths::home_dir().join("known_hosts")
+}
+
+/// 用户系统的 `~/.ssh/known_hosts`（不存在就是 `None`）。
+fn system_known_hosts_path() -> Option<PathBuf> {
+    let path = paths::user_home().join(".ssh").join("known_hosts");
+    path.is_file().then_some(path)
+}
+
+/// 主机公钥算法的标准名字（与 `known_hosts` 里的写法一致）。
+fn host_key_name(kind: HostKeyType) -> &'static str {
+    match kind {
+        HostKeyType::Rsa => "ssh-rsa",
+        HostKeyType::Dss => "ssh-dss",
+        HostKeyType::Ecdsa256 => "ecdsa-sha2-nistp256",
+        HostKeyType::Ecdsa384 => "ecdsa-sha2-nistp384",
+        HostKeyType::Ecdsa521 => "ecdsa-sha2-nistp521",
+        HostKeyType::Ed25519 => "ssh-ed25519",
+        HostKeyType::Unknown => "unknown",
+    }
+}
+
+/// 一条已知主机记录与这次握手的比对结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostKeyVerdict {
+    /// 同一主机、同一算法，公钥一致
+    Match,
+    /// 同一主机、同一算法，公钥不一致 —— 可能是重装换了密钥，也可能是中间人
+    Changed,
+    /// 没见过这个「主机 + 端口 + 算法」
+    Unknown,
+}
+
+/// 在 known_hosts 文本里比对一条记录（纯函数，便于单测）。
+///
+/// 认三种主机写法：本应用写的 `host:port`、OpenSSH 的 `[host]:port`，以及端口为 22 时的
+/// 裸 `host`。带通配符（`*` / `?`）和哈希过的条目（`|1|…`）一律跳过：宁可当成“没见过”
+/// 重新学一次，也不要靠猜去匹配 —— 猜错的代价是误报“有人在中间”。
+fn check_host_key_text(text: &str, host: &str, port: u16, key_type: &str, key: &str) -> HostKeyVerdict {
+    let bracketed = format!("[{host}]:{port}");
+    let plain = format!("{host}:{port}");
+    let mut changed = false;
+    for line in text.lines() {
+        // 顺手吃掉 BOM：Windows 上记事本/Set-Content 存的 UTF-8 带 BOM，不处理的话
+        // 第一行会变成「\u{feff}host:port …」，匹配不上 —— 就等于**默默跳过了一条钉扎记录**。
+        let line = line.trim().trim_start_matches('\u{feff}').trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('@') || line.starts_with("|1|")
+        {
+            continue;
+        }
+        let mut fields = line.split_whitespace();
+        let (Some(patterns), Some(stored_type), Some(stored_key)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            continue;
+        };
+        // 不同算法不算变更：换算法是服务器的正常策略调整
+        if stored_type != key_type {
+            continue;
+        }
+        let hit = patterns.split(',').any(|pattern| {
+            let pattern = pattern.trim();
+            !pattern.contains('*')
+                && !pattern.contains('?')
+                && (pattern.eq_ignore_ascii_case(&plain)
+                    || pattern.eq_ignore_ascii_case(&bracketed)
+                    || (port == 22 && pattern.eq_ignore_ascii_case(host)))
+        });
+        if !hit {
+            continue;
+        }
+        if stored_key == key {
+            return HostKeyVerdict::Match;
+        }
+        changed = true;
+    }
+    if changed {
+        HostKeyVerdict::Changed
+    } else {
+        HostKeyVerdict::Unknown
+    }
+}
+
+/// SHA256 指纹，形态与 `ssh-keygen -lf` 一致（`SHA256:…`，去掉尾随的 `=`）。
+fn host_key_fingerprint(session: &Session) -> Option<String> {
+    let hash = session.host_key_hash(HashType::Sha256)?;
+    Some(format!("SHA256:{}", base64(hash).trim_end_matches('=')))
+}
+
+/// 标准 base64（带 `=` 补齐）。只为公钥/指纹编码，不引依赖。
+fn base64(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let n = (chunk[0] as u32) << 16 | b1 << 8 | b2;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
+/// 校验跳板机的主机公钥。**必须在发出任何凭据之前**调用（见 `open_session`）。
+///
+/// 顺序：用户系统 `~/.ssh/known_hosts` 精确命中即信任 → 本应用钉扎文件
+/// （一致就通过，变了就拦，没见过就学下来）。
+fn verify_host_key(session: &Session, spec: &SshConfig) -> Result<()> {
+    let Some((raw, kind)) = session.host_key() else {
+        // 拿不到主机公钥时不该把用户挡在外面（libssh2 只在极端情况下返回空）
+        tracing::debug!(target: "dbmind::tunnel", "跳板机没有给出主机公钥，跳过校验");
+        return Ok(());
+    };
+    let key_type = host_key_name(kind);
+    let key = base64(raw);
+    let fingerprint = host_key_fingerprint(session).unwrap_or_default();
+
+    if let Some(system) = system_known_hosts_path() {
+        if let Ok(text) = std::fs::read_to_string(&system) {
+            if check_host_key_text(&text, &spec.host, spec.port, key_type, &key) == HostKeyVerdict::Match
+            {
+                return Ok(());
+            }
+        }
+        // 哈希过的条目（`|1|salt|hash`）我们自己解不了，交给 libssh2；它说命中就是真的同一把公钥。
+        // 它说 mismatch **不采信**：它的比对不看算法，同一台机器换了算法也会报 mismatch。
+        if let Ok(mut hosts) = session.known_hosts() {
+            if hosts.read_file(&system, KnownHostFileKind::OpenSSH).is_ok()
+                && matches!(
+                    hosts.check_port(&spec.host, spec.port, raw),
+                    CheckResult::Match
+                )
+            {
+                return Ok(());
+            }
+        }
+    }
+
+    let path = known_hosts_path();
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    match check_host_key_text(&text, &spec.host, spec.port, key_type, &key) {
+        HostKeyVerdict::Match => Ok(()),
+        HostKeyVerdict::Changed => Err(host_key_changed(spec, &path, &fingerprint)),
+        HostKeyVerdict::Unknown => {
+            learn_host_key(&path, spec, key_type, &key, &fingerprint);
+            Ok(())
+        }
+    }
+}
+
+/// 第一次连某台跳板机：把公钥记下来（TOFU）。
+///
+/// 写盘失败**不拦连接**：记不住只是下一次还要再学一遍，没有安全损失；
+/// 而因为一个目录权限问题连不上数据库，才是真的坑人。
+fn learn_host_key(path: &Path, spec: &SshConfig, key_type: &str, key: &str, fingerprint: &str) {
+    let line = format!("{}:{} {key_type} {key}\n", spec.host, spec.port);
+    let write = || -> std::io::Result<()> {
+        paths::ensure_parent(path).map_err(|err| std::io::Error::other(err.message))?;
+        if !path.exists() {
+            std::fs::write(
+                path,
+                "# DBMind 记住的 SSH 跳板机公钥（每行 <host>:<port> <算法> <公钥>）\n\
+                 # 跳板机换了密钥后，把对应那一行删掉，下次连接会重新记住。\n",
+            )?;
+        }
+        let mut file = std::fs::OpenOptions::new().append(true).create(true).open(path)?;
+        file.write_all(line.as_bytes())
+    };
+    match write() {
+        Ok(()) => tracing::info!(
+            target: "dbmind::tunnel",
+            path = %path.display(),
+            host = %spec.host,
+            port = spec.port,
+            fingerprint,
+            "首次连接该跳板机，已记住主机公钥"
+        ),
+        Err(err) => tracing::warn!(
+            target: "dbmind::tunnel",
+            path = %path.display(),
+            error = %err,
+            "记住跳板机主机公钥失败（不影响本次连接）"
+        ),
+    }
+}
+
+fn host_key_changed(spec: &SshConfig, path: &Path, fingerprint: &str) -> DbMindError {
+    conn_err(format!(
+        "跳板机 {}:{} 的主机公钥和上次记住的不一样",
+        spec.host, spec.port
+    ))
+    .with_detail(format!(
+        "跳板机重装系统、换了密钥时会这样；但如果没人动过它，就要当心有人冒充它。\n\
+         这次拿到的指纹：{fingerprint}\n\
+         核对方式：`ssh-keyscan -p {port} {host} | ssh-keygen -lf -`（与上面这串比对）。\n\
+         确认没问题后，把 {file} 里含 {host}:{port} 的那一行删掉，再连一次会重新记住。",
+        port = spec.port,
+        host = spec.host,
+        file = path.display()
+    ))
+}
+
+// ------------------------------------------------------------------ 会话池
+
+/// 池里最多留几条已认证的 SSH 会话。
+///
+/// 与 [`HANDSHAKE_MAX`] 对齐：池只解决「握手一次、之后复用」，留太多会白占跳板机的
+/// 会话配额（`MaxSessions`）。
+const SESSION_POOL_MAX: usize = 8;
+
+/// 在**池里借来的**会话上开第一条通道的超时。
+///
+/// 为什么比 `CONNECT_TIMEOUT` 短：池里的会话可能已经被跳板机回收（`ClientAliveInterval`
+/// 到点踢人）或者链路的 NAT 表项过期，这时「通道打开请求」写出去却永远等不到回复。
+/// 3 秒快速判死、重新握手（真机 2.7 秒），比在这儿干等 10 秒好。
+const POOLED_CHANNEL_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// 池空时最多等这么久再决定握手。
+///
+/// 为什么需要等：上一条连接断开后，它的会话要等转发线程收尾、关通道才归还。客户端
+/// （尤其是驱动重连）往往几毫秒内就发起下一条连接 —— 不等就会「明明池子里刚有一条
+/// 会话，却又付了 2.7 秒握手」。等一小会儿的代价上限是 250ms，而且是并行发生的。
+const POOL_WAIT: Duration = Duration::from_millis(250);
+
+/// 池里的会话「睡」了多久就当作不可信、直接握手。
+///
+/// 闲置的 SSH 会话会被跳板机 `ClientAliveInterval` 踢掉（企业里常见 60~300 秒），
+/// 链路设备的空闲表项也会过期。这类死会话发现不了（libssh2 的 keepalive 不主动发），
+/// 只能等开通道时超时 —— 那就成了「3 秒超时 + 2.7 秒握手」，比不池化还慢。
+/// 一分钟内用过的会话几乎一定还活着；更久的一律重新握手（与改造前同价，绝不更差）。
+const POOL_FRESH: Duration = Duration::from_secs(60);
+
+/// 池里的一条会话 + 它是什么时候归还的（见 [`POOL_FRESH`]）。
+struct PooledSession {
+    session: Session,
+    idle_since: Instant,
+}
+
+/// 已认证、当前**没有活跃通道**的 SSH 会话池。
+///
+/// 为什么要有它：原来每条本地连接都要重新握手 + 认证 —— 真机实测**每条 2.7 秒**，
+/// 而同一台 RDS 直连只要 0.5 秒。界面打开一条连接会并发发好几个元数据请求、
+/// 每次重连也要重新握手，用户看到的就是「打开连接转好几秒、有时候快有时候慢」。
+///
+/// 为什么不做「一条会话多通道」：libssh2 的阻塞读会持有会话锁，多通道必须改成
+/// select 事件循环（见 [`accept_loop`] 的注释），那是另一个量级的改动。这里只保证
+/// **握手成本只付一次**：池里的会话仍是独占的（用完还回来），下次直接接着用。
+struct SessionPool {
+    /// 空闲会话栈：**后进先出**，取到的一定是最近归还的那条（也就最新鲜）。
+    idle: Mutex<Vec<PooledSession>>,
+    /// 有会话归还时唤醒正在 [`SessionPool::take`] 里等的线程。
+    returned: Condvar,
+}
+
+impl SessionPool {
+    fn new() -> Self {
+        Self {
+            idle: Mutex::new(Vec::new()),
+            returned: Condvar::new(),
+        }
+    }
+
+    /// 借一条会话：池里有就直接用（**不握手**），池空才建新的。
+    ///
+    /// 这里只做**不联网**的检查 —— 真正的探活是「开一条通道」，交给 [`forward`]：
+    /// 它本来就要开通道，成功即证明会话可用，失败再换新会话重试一次。
+    /// 不在这里发 keepalive：libssh2 的 keepalive 要配了间隔才会真发（`keepalive_send`
+    /// 在间隔为 0 时是空操作），拿它当探活只会自欺欺人。
+    fn take(&self, spec: &SshConfig) -> Result<Session> {
+        let deadline = Instant::now() + POOL_WAIT;
+        let mut idle = self.idle.lock().unwrap_or_else(|err| err.into_inner());
+        loop {
+            if let Some(entry) = idle.pop() {
+                // 出锁再判断/返回：拿着锁做任何事都只是白挡住别的连接
+                drop(idle);
+                if entry.idle_since.elapsed() > POOL_FRESH {
+                    tracing::debug!(
+                        target: "dbmind::tunnel",
+                        idle_secs = entry.idle_since.elapsed().as_secs(),
+                        "池里的 SSH 会话闲置太久，改为重新握手"
+                    );
+                    // 栈是后进先出：最上面这条都过期了，下面只会更旧
+                    return connect(spec);
+                }
+                if entry.session.authenticated() {
+                    tracing::debug!(target: "dbmind::tunnel", "复用已认证的 SSH 会话");
+                    return Ok(entry.session);
+                }
+                tracing::debug!(target: "dbmind::tunnel", "池里的 SSH 会话已失效，丢弃");
+                idle = self.idle.lock().unwrap_or_else(|err| err.into_inner());
+                continue;
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            // poison 一样取回内部数据：池里只有「一堆会话」，没有会被 panic 写坏的不变量
+            let (guard, _) = self
+                .returned
+                .wait_timeout(idle, left)
+                .unwrap_or_else(|err| err.into_inner());
+            idle = guard;
+        }
+        drop(idle);
+        connect(spec)
+    }
+
+    /// 归还一条健康会话（调用方保证通道已关闭）。
+    fn put(&self, session: Session) {
+        {
+            let mut idle = self.idle.lock().unwrap_or_else(|err| err.into_inner());
+            if idle.len() < SESSION_POOL_MAX {
+                idle.push(PooledSession {
+                    session,
+                    idle_since: Instant::now(),
+                });
+            }
+            // 超出上限：session 在块尾 drop，等于关掉那条 SSH 连接
+        }
+        // 唤醒所有正在等会话的线程：它们会自己抢，抢不到就按超时走握手
+        self.returned.notify_all();
+    }
+
+    /// 丢掉池里所有会话（隧道回收时调用：不然这些连接会一直占着跳板机的会话配额）。
+    fn clear(&self) {
+        let drained = {
+            let mut idle = self.idle.lock().unwrap_or_else(|err| err.into_inner());
+            std::mem::take(&mut *idle)
+        };
+        // 出锁之后再 drop：关闭 SSH 连接要发报文，不该占着池子的锁
+        drop(drained);
+    }
+}
+
 // ------------------------------------------------------------------ 隧道管理
 
 /// 一条活着的隧道：本地端口 + 停止信号。
@@ -262,12 +632,16 @@ struct Tunnel {
     stop: Arc<AtomicBool>,
     /// 日志用：跳板机与目标地址，出问题时能一眼看出是哪条隧道。
     label: String,
+    /// 这条隧道共用的**已认证会话池**（隧道回收时跟着关闭）
+    pool: Arc<SessionPool>,
 }
 
 impl Drop for Tunnel {
     fn drop(&mut self) {
         // 只置个标记：监听线程下一轮轮询就会退出并关掉监听端口
         self.stop.store(true, Ordering::Relaxed);
+        // 池里空闲的会话立刻关掉：正转发中的那条连接自己有借用，配不到一起
+        self.pool.clear();
         tracing::debug!(
             target: "dbmind::tunnel",
             label = %self.label,
@@ -356,10 +730,14 @@ fn open_tunnel(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<
         .map_err(|err| conn_err("读取本地转发端口失败").with_detail(format!("{err}")))?
         .port();
 
+    // 会话池：这条隧道的所有转发连接共用，握手只付一次（见 [`SessionPool`]）
+    let pool = Arc::new(SessionPool::new());
+
     // 先探一次：认证不通、跳板机到数据库不可达，都要**在这里**说清楚 ——
     // 否则驱动只会连一个没人转发的本地端口，报出来的是「连接被拒绝」，
     // 排查方向会被带到"数据库挂了"上。
-    probe(spec, target_host, target_port)?;
+    // 探活的会话本身是好的，直接放进池子：第一条转发连接就省掉一次握手。
+    pool.put(probe(spec, target_host, target_port)?);
 
     // 用非阻塞 accept：线程要能被 Drop 的停止标记收掉，而阻塞 accept 只能靠
     // 再连一次自己才能唤醒（那会多出一条假连接）。20ms 的轮询对建连延迟无感。
@@ -378,9 +756,10 @@ fn open_tunnel(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<
         let spec = spec.clone();
         let target_host = target_host.to_string();
         let label = label.clone();
+        let pool = pool.clone();
         std::thread::Builder::new()
             .name(format!("ssh-tunnel-{local_port}"))
-            .spawn(move || accept_loop(listener, stop, spec, target_host, target_port, label))
+            .spawn(move || accept_loop(listener, stop, spec, target_host, target_port, label, pool))
             .map_err(|err| conn_err("SSH 隧道线程创建失败").with_detail(format!("{err}")))?;
     }
     tracing::info!(target: "dbmind::tunnel", label = %label, port = local_port, "SSH 隧道已建立");
@@ -388,7 +767,17 @@ fn open_tunnel(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<
         local_port,
         stop,
         label,
+        pool,
     }))
+}
+
+/// 建一条**新**会话（带握手限流）。
+///
+/// 限流名额**只在握手期间持有**（块作用域）—— 曾经把租约写进 `forward` 的整个作用域，
+/// 结果租约跟着连接一直活到会话关闭，8 条并发会话占满名额后所有新建连全部死等。
+fn connect(spec: &SshConfig) -> Result<Session> {
+    let _lease = HandshakeLease::acquire();
+    open_session(spec)
 }
 
 /// 建一条 SSH 会话（握手 + 认证）。
@@ -423,11 +812,12 @@ fn open_session(spec: &SshConfig) -> Result<Session> {
         ))
     })?;
 
+    // 主机公钥必须在**把任何凭据交出去之前**核验：等口令发完了再拦就没有意义了。
+    verify_host_key(&session, spec)?;
+
     match &spec.auth {
         SshAuth::Password(password) => {
-            session
-                .userauth_password(&spec.user, password)
-                .map_err(|err| auth_err(spec, &address, &err.to_string()))?;
+            password_auth(&session, spec, &address, password)?;
         }
         SshAuth::Key { path, passphrase } => {
             let key = Path::new(path);
@@ -456,8 +846,10 @@ fn open_session(spec: &SshConfig) -> Result<Session> {
              私钥是否已把公钥加到跳板机的 authorized_keys。",
         ));
     }
-    // 认证之后转非阻塞：转发线程要能交替推进两个方向（见 [`pump`]）
+    // 认证之后不设超时：空闲的长连接经常长时间没有字节往来，socket 超时会把它们误判成断开。
+    // 需要超时的地方（开通道、探活）由调用方临时设一个，用完恢复 0。
     session.set_timeout(0);
+    HANDSHAKE_TOTAL.fetch_add(1, Ordering::Relaxed);
     Ok(session)
 }
 
@@ -469,15 +861,77 @@ fn auth_err(spec: &SshConfig, address: &str, detail: &str) -> DbMindError {
     conn_err(format!("SSH {how}认证失败：{}@{}", spec.user, address)).with_detail(detail.to_string())
 }
 
+/// 口令认证；被拒时如果服务器只认 keyboard-interactive，就用同一份口令再试一次。
+///
+/// 为什么要这一手：加固过的 sshd 常见配置是 `PasswordAuthentication no` +
+/// `KbdInteractiveAuthentication yes`（堡垒机、等保环境尤其多）。libssh2 的
+/// `userauth_password` **不会**自动回退到 keyboard-interactive（读它的 userauth.c 确认过），
+/// 于是用户会遇到「口令明明是对的、命令行 ssh 也能登」，在我们这里却一条认证失败。
+fn password_auth(session: &Session, spec: &SshConfig, address: &str, password: &str) -> Result<()> {
+    let Err(err) = session.userauth_password(&spec.user, password) else {
+        return Ok(());
+    };
+    let first = err.to_string();
+    if !offers_keyboard_interactive(session, &spec.user) {
+        return Err(auth_err(spec, address, &first));
+    }
+    let mut prompt = SamePasswordPrompt { password };
+    match session.userauth_keyboard_interactive(&spec.user, &mut prompt) {
+        Ok(()) => {
+            tracing::debug!(
+                target: "dbmind::tunnel",
+                user = %spec.user,
+                "口令认证被拒，已用 keyboard-interactive 通过"
+            );
+            Ok(())
+        }
+        Err(kbi) => Err(auth_err(
+            spec,
+            address,
+            &format!("口令：{first}\nkeyboard-interactive：{kbi}"),
+        )),
+    }
+}
+
+/// 服务器是不是提供 keyboard-interactive（`auth_methods` 回来的是逗号分隔的名字）。
+fn offers_keyboard_interactive(session: &Session, user: &str) -> bool {
+    session
+        .auth_methods(user)
+        .map(|methods| {
+            methods
+                .split(',')
+                .any(|method| method.trim() == "keyboard-interactive")
+        })
+        .unwrap_or(false)
+}
+
+/// 键盘交互的应答器：每个提问都回同一个口令。
+///
+/// 只覆盖「服务器把口令认证伪装成 keyboard-interactive」这一种情况（最常见）。
+/// 真要求 OTP/动态令牌的提问这里给不出答案，填了也是认证失败 —— 不会假装成功。
+struct SamePasswordPrompt<'a> {
+    password: &'a str,
+}
+
+impl KeyboardInteractivePrompt for SamePasswordPrompt<'_> {
+    fn prompt<'a>(
+        &mut self,
+        _username: &str,
+        _instructions: &str,
+        prompts: &[ssh2::Prompt<'a>],
+    ) -> Vec<String> {
+        prompts.iter().map(|_| self.password.to_string()).collect()
+    }
+}
+
 /// 探一次：握手 + 认证 + **真的开一条转发通道**。
 ///
 /// 只握手不试通道是不够的：认证成功但「跳板机到数据库」不通时，问题会拖到驱动那边才暴露，
 /// 用户看到的是一句「连接被拒绝」，看不出根因在跳板机的路由/白名单上。
-fn probe(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<()> {
-    let session = {
-        let _lease = HandshakeLease::acquire();
-        open_session(spec)?
-    };
+///
+/// 返回探活的会话：调用方把它放进池子复用，省掉「建隧道」与「第一条连接」之间的第二次握手。
+fn probe(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<Session> {
+    let session = connect(spec)?;
     let channel = session
         .channel_direct_tcpip(target_host, target_port, None)
         .map_err(|err| {
@@ -490,7 +944,7 @@ fn probe(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<()> {
             ))
         })?;
     drop(channel);
-    Ok(())
+    Ok(session)
 }
 
 // ------------------------------------------------------------------ 转发
@@ -502,24 +956,25 @@ fn accept_loop(
     target_host: String,
     target_port: u16,
     label: String,
+    pool: Arc<SessionPool>,
 ) {
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _peer)) => {
-                // 每条转发连接一条线程、一条独立 SSH 会话。
+                // 每条转发连接一条线程、**独占**一条 SSH 会话（从池子里借，用完还回去）。
                 //
-                // 为什么不共用一条会话：libssh2 的**阻塞读会一直持有会话锁**，
-                // 两个方向各占一条线程时，若读线程正在等数据，写线程就拿不到锁，
-                // 「本地发往数据库」的字节会一直堆着发不出去（表现为连上后第一条语句
-                // 就没有响应）。所以这里每条连接自己一条会话，配合 [`pump`] 的单线程
-                // 双向轮询 —— 会话之间互不干扰。
+                // 为什么仍然独占：libssh2 的**阻塞读会一直持有会话锁**，两个方向各占一条
+                // 线程时，若读线程正在等数据，写线程就拿不到锁，「本地发往数据库」的字节
+                // 会一直堆着发不出去（表现为连上后第一条语句就没有响应）。真正的多路复用
+                // 要改成 select 事件循环，是另一个量级的改动；先拿到「握手只付一次」的收益。
                 let spec = spec.clone();
                 let target_host = target_host.clone();
                 let forward_label = label.clone();
+                let pool = pool.clone();
                 let spawned = std::thread::Builder::new()
                     .name("ssh-forward".to_string())
                     .spawn(move || {
-                        if let Err(err) = forward(stream, &spec, &target_host, target_port) {
+                        if let Err(err) = forward(stream, &pool, &spec, &target_host, target_port) {
                             tracing::warn!(
                                 target: "dbmind::tunnel",
                                 label = %forward_label,
@@ -554,30 +1009,67 @@ fn accept_loop(
 
 fn forward(
     mut local: TcpStream,
+    pool: &SessionPool,
     spec: &SshConfig,
     target_host: &str,
     target_port: u16,
 ) -> std::io::Result<()> {
-    // 限流：别让建连风暴撞跳板机的 MaxStartups（见 HANDSHAKE_MAX）。
-    // 名额**只在握手期间持有**（块作用域）—— 曾写成贯穿整个 forward，结果租约跟着
-    // 连接一直活到会话关闭，8 条并发会话把名额占满后，所有新建连全部死等。
-    let session = {
-        let _lease = HandshakeLease::acquire();
-        open_session(spec).map_err(|err| {
-            // 建会话失败不该让整个隧道倒掉（跳板机抖一下、并发上限到了都可能发生）：
-            // 这条本地连接关掉，驱动那边会看到连接断开并自行重试。
-            std::io::Error::other(format!("SSH 会话建立失败：{}", err.message))
-        })?
-    };
-    let mut channel = session
-        .channel_direct_tcpip(target_host, target_port, None)
-        .map_err(|err| std::io::Error::other(format!("SSH 转发通道打开失败：{err}")))?;
-    session.set_blocking(false);
+    // 借会话：池里有就直接接着用（不握手，这就是 2.7 秒 → 0 秒 的来源）。
+    // 建会话时的握手限流在 [`connect`] 里，名额只在握手期间持有。
+    let mut session = pool.take(spec).map_err(session_err)?;
     let _ = local.set_nonblocking(true);
     let _ = local.set_nodelay(true);
-    let result = pump(&mut local, &mut channel);
+
+    // 通道要能干净地关掉才能把会话放回池子，所以这里把「开通道 → 搬运 → 关通道」
+    // 收在一个作用域里：`Channel` 借用着 `Session`，出作用域才能还回去。
+    let (result, closed) = {
+        // 第一次开通道顺便当探活：池里的会话可能已经被跳板机回收（只给短超时）
+        session.set_blocking(true);
+        session.set_timeout(POOLED_CHANNEL_TIMEOUT.as_millis() as u32);
+        let mut channel = match session.channel_direct_tcpip(target_host, target_port, None) {
+            Ok(channel) => channel,
+            Err(err) => {
+                tracing::debug!(
+                    target: "dbmind::tunnel",
+                    error = %err,
+                    "池里借来的 SSH 会话开不了通道，重新握手"
+                );
+                drop(session);
+                session = connect(spec).map_err(session_err)?;
+                session.set_blocking(true);
+                session.set_timeout(CONNECT_TIMEOUT.as_millis() as u32);
+                session
+                    .channel_direct_tcpip(target_host, target_port, None)
+                    .map_err(|err| std::io::Error::other(format!("SSH 转发通道打开失败：{err}")))?
+            }
+        };
+        // 通道已建立：转非阻塞，交给 [`pump`] 在单线程里交替推进两个方向
+        session.set_blocking(false);
+        let result = pump(&mut local, &mut channel);
+        // 关之前转回阻塞：非阻塞下的 close 只是把消息塞进缓冲区就返回，通道会留在半开状态
+        session.set_blocking(true);
+        let closed = channel.send_eof().is_ok() && channel.close().is_ok();
+        (result, closed)
+    };
     let _ = local.shutdown(Shutdown::Both);
+
+    // 通道正常关闭、会话仍在认证态，才值得还回池子。
+    // `pump` 把通道读写错误都当「连接结束」（返回 Ok），所以看不了 result —— 用关闭结果兜底，
+    // 真还回去一条半死的会话，下一次连接开通道失败会重新握手，代价有界。
+    if closed && session.authenticated() {
+        pool.put(session);
+    } else {
+        tracing::debug!(target: "dbmind::tunnel", "转发结束后的 SSH 会话已丢弃");
+    }
     result
+}
+
+/// 把建会话失败转成本地连接层面的 IO 错误。
+///
+/// 建会话失败不该让整个隧道倒掉（跳板机抖一下、并发上限到了都可能发生）：
+/// 这条本地连接关掉，驱动那边会看到连接断开并自行重试。
+fn session_err(err: DbMindError) -> std::io::Error {
+    std::io::Error::other(format!("SSH 会话建立失败：{}", err.message))
 }
 
 /// 远端一侧（隧道对面）需要的能力：读写 + 主动告诉对方「我不再发了」。
@@ -851,6 +1343,93 @@ mod tests {
         let key = tunnel_key(&config).expect("开了隧道就该有指纹");
         assert!(key.contains("deploy@jump:2222"), "指纹要能读懂：{key}");
         assert!(!key.contains("s3cr3t"), "口令绝不能进指纹：{key}");
+    }
+
+    #[test]
+    fn base64_编码与标准一致() {
+        // RFC 4648 的测试向量
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64(b"foob"), "Zm9vYg==");
+        assert_eq!(base64(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64(b"foobar"), "Zm9vYmFy");
+    }
+
+    /// 已知主机比对：同一主机、同一算法、公钥不同才算「变了」。
+    #[test]
+    fn 已知主机比对按主机端口算法三条对齐() {
+        let key_a = "AAAAB3NzaC1yc2EAAAADAQAB-aaaa";
+        let key_b = "AAAAB3NzaC1yc2EAAAADAQAB-bbbb";
+        let text = format!(
+            "# 注释行\n\
+             @revoked * {}\n\
+             jump.example.com:2222 ssh-ed25519 {key_a}\n\
+             [other.example.com]:22 ssh-rsa {key_a}\n\
+             |1|abcd|efgh ssh-rsa {key_a}\n",
+            "AAAAB3NzaC1yc2E"
+        );
+
+        // 精确命中
+        assert_eq!(
+            check_host_key_text(&text, "jump.example.com", 2222, "ssh-ed25519", key_a),
+            HostKeyVerdict::Match
+        );
+        // OpenSSH 的 [host]:port 写法也认
+        assert_eq!(
+            check_host_key_text(&text, "other.example.com", 22, "ssh-rsa", key_a),
+            HostKeyVerdict::Match
+        );
+        // 同一主机同一算法、公钥不同 ⇒ 变了
+        assert_eq!(
+            check_host_key_text(&text, "jump.example.com", 2222, "ssh-ed25519", key_b),
+            HostKeyVerdict::Changed
+        );
+        // 同一主机**换了算法** ⇒ 不算变了（服务器正常调整策略）
+        assert_eq!(
+            check_host_key_text(&text, "jump.example.com", 2222, "ssh-rsa", key_a),
+            HostKeyVerdict::Unknown
+        );
+        // 端口不同 ⇒ 不同主机
+        assert_eq!(
+            check_host_key_text(&text, "jump.example.com", 22, "ssh-ed25519", key_a),
+            HostKeyVerdict::Unknown
+        );
+        // 哈希条目（|1|…）自己解不了，当没见过；@revoked 也不参与匹配
+        assert_eq!(
+            check_host_key_text(&text, "hashed.example.com", 22, "ssh-rsa", key_a),
+            HostKeyVerdict::Unknown
+        );
+    }
+
+    /// 带 BOM 的文件第一行也必须能被认出来（否则等于那条钉扎记录不存在，
+    /// 换了密钥也发现不了 —— 真机踩到过）。
+    #[test]
+    fn 带_bom_的第一行也参与比对() {
+        let text = "\u{feff}jump:2222 ssh-ed25519 AAAA-key\n";
+        assert_eq!(
+            check_host_key_text(text, "jump", 2222, "ssh-ed25519", "AAAA-key"),
+            HostKeyVerdict::Match
+        );
+        assert_eq!(
+            check_host_key_text(text, "jump", 2222, "ssh-ed25519", "BBBB-other"),
+            HostKeyVerdict::Changed
+        );
+    }
+
+    /// 端口 22 时允许裸 `host` 写法（OpenSSH 默认就是这种），其它端口不接受裸 host。
+    #[test]
+    fn 端口_22_接受裸主机名写法() {
+        let text = "jump ssh-ed25519 AAAAB3NzaC1lZDI1NTE5\n";
+        assert_eq!(
+            check_host_key_text(text, "jump", 22, "ssh-ed25519", "AAAAB3NzaC1lZDI1NTE5"),
+            HostKeyVerdict::Match
+        );
+        assert_eq!(
+            check_host_key_text(text, "jump", 2222, "ssh-ed25519", "AAAAB3NzaC1lZDI1NTE5"),
+            HostKeyVerdict::Unknown
+        );
     }
 
     /// 用私钥时，换一把私钥必须换一条隧道（否则改了配置还在用旧隧道）。

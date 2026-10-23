@@ -1656,7 +1656,7 @@ const onRefreshCache = async () => {
 // ===== 安全与会话（全部存后端 app_settings；安全开关与会话上限改动即时生效） =====
 // protectProduction 默认 true：与后端种子（storage.rs 的 seed_settings）保持一致，
 // 否则首次加载、或后端暂时读不到时，开关会显示成"关"，与内核实际策略不符。
-const safetyDefaults = { protectProduction: true, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: false, blockDangerous: false, maxWriteRows: 0 }
+const safetyDefaults = { protectProduction: true, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: true, blockDangerous: false, maxWriteRows: 0 }
 const safetyForm = ref({ ...safetyDefaults })
 
 // ---------- MCP 服务 ----------

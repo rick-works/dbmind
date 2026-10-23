@@ -4388,12 +4388,25 @@ const selectResultTab = (i) => {
 // 「写 SQL 拦截」看的是**语句**（见 WRITE_SQL_RE），执行前的拦截判定在 runSql 里走
 // guardConnWrite（只读连接一律拦；生产连接跟随「生产库保护」开关）。
 // 另有一条独立的「危险 SQL 确认」（DELETE/DROP/TRUNCATE…，设置里可关）仍在后面生效。
-const WRITE_SQL_RE = /^\s*(insert|update|delete|replace|merge|truncate|drop|alter|create|rename|grant|revoke|call|exec|execute|load\s+data|set\s+global)\b/i
+const WRITE_SQL_RE = /^\s*(insert|update|delete|replace|merge|truncate|drop|alter|create|rename|grant|revoke|load\s+data|set\s+(global|persist|password))\b/i
+// 过程调用（EXEC / CALL）单独判：生产库排障要跑 sp_who2 / sp_helpdb / sp_lock 这类
+// **只读**系统过程，一律按写拦掉的话，运维连"谁在锁表"都查不了（与后端 sql::classify 同一口径）。
+const PROC_CALL_RE = /^\s*(exec|execute|call)\b/i
+const READ_ONLY_PROC_RE = /\b(sp_who2?|sp_whoisactive|sp_lock|sp_help\w*|sp_columns|sp_tables|sp_spaceused|sp_databases|sp_server_info|sp_statistics|sp_pkeys|sp_fkeys|sp_stored_procedures)\b/i
+// DBCC 的只读子命令（查日志空间 / 统计信息 / 连接在跑什么）
+const READ_ONLY_DBCC_RE = /^\s*dbcc\s+(sqlperf|show_statistics|inputbuffer|outputbuffer|opentran|proccache|showcontig|checkdb|checktable|checkalloc|checkcatalog|checkfilegroup|checkident|dbinfo|useroptions|tracestatus|errlog|showfilestats)\b/i
+const BARE_PROC_RE = /^\s*sp_[a-z0-9_]+\s*(;|$)/i
 const isWriteSql = (text) => String(text || '')
   .split('\n')
   .map(line => line.replace(/--.*$/, '').trim())
   .filter(Boolean)
-  .some(line => WRITE_SQL_RE.test(line))
+  .some((line) => {
+    if (READ_ONLY_DBCC_RE.test(line)) return false
+    if (PROC_CALL_RE.test(line)) return !READ_ONLY_PROC_RE.test(line)
+    // SQL Server 允许省略 EXEC 直接写过程名（sp_who2）
+    if (BARE_PROC_RE.test(line)) return !READ_ONLY_PROC_RE.test(line)
+    return WRITE_SQL_RE.test(line)
+  })
 // NoSQL（Mongo/Redis）写命令识别：比 SQL 宽松 —— 方法名（insertOne/updateMany/drop…）
 // 与 Redis 写动词（SET/DEL/HSET/EXPIRE…）。只用于闸门判定：连接既非只读也未标生产时无感。
 const WRITE_NOSQL_RE = /\.(insert|insertone|insertmany|update|updateone|updatemany|replaceone|delete|deleteone|deletemany|remove|drop|renamecollection|createindex|createcollection|bulkwrite|findandmodify)\b|\b(set|setnx|setex|getset|getdel|del|unlink|hset|hsetnx|hmset|hdel|lpush|rpush|lpushx|rpushx|lset|linsert|ltrim|lpop|rpop|sadd|srem|spop|sinterstore|sunionstore|sdiffstore|zadd|zincrby|zrem|zremrangebyrank|zremrangebyscore|zinterstore|zunionstore|incr|incrby|incrbyfloat|decr|decrby|append|setrange|mset|msetnx|expire|pexpire|expireat|persist|rename|renamenx|flushdb|flushall|swapdb|move|migrate|restore|copy)\b/i

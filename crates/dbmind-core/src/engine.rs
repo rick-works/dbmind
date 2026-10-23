@@ -83,11 +83,8 @@ impl DbMindEngine {
         // 会话相关设置：开机就按设置生效（驱动持有共享原子量，实时读到）
         engine.apply_session_limits()?;
         // 旧版 TLS 开关同步给宿主 spawn 层（spawn 读静态原子量；设置变更时也会同步）
-        let legacy_tls = engine
-            .store
-            .get_setting(Store::KEY_ALLOW_LEGACY_TLS)?
-            .as_deref()
-            == Some("true");
+        // 缺键时默认**开启**（与 storage 的种子口径一致）：老库连不上是硬故障
+        let legacy_tls = engine.store.get_bool_setting(Store::KEY_ALLOW_LEGACY_TLS, true)?;
         crate::agent::set_legacy_tls_enabled(legacy_tls);
         // 隧道空闲回收时长：开机先对齐一遍
         engine.apply_tunnel_idle_timeout();

@@ -40,6 +40,8 @@ const SETTINGS_QUERY_TIMEOUT: &str = "query.timeoutSecs";
 /// 允许旧版 TLS（TLSv1/1.1）：web 层 `sys.rs` 也有一份同名常量（那里拿不到私有模块），
 /// 键名字符串必须保持一致 —— 引擎开机与设置变更时靠它同步给宿主 spawn 层。
 pub const SETTINGS_ALLOW_LEGACY_TLS: &str = "jdbc.allowLegacyTls";
+/// 旧版 TLS 默认值从「关」改成「开」的一次性迁移标记。
+const SETTINGS_LEGACY_TLS_MIGRATED: &str = "jdbc.allowLegacyTls.defaultOnMigrated";
 /// 查询历史保留条数（0 = 不按条数清理）。表此前只增不减，几年下来就是几十万行。
 const SETTINGS_HISTORY_MAX_ENTRIES: &str = "history.maxEntries";
 /// 查询历史保留天数（0 = 永不按时间清理）。
@@ -810,6 +812,16 @@ impl Store {
             }
             self.set_setting(SETTINGS_SESSION_DEFAULTS_MIGRATED, "1")?;
         }
+        // 旧版 TLS 兼容：老库里存量的 `false` 是**当初的种子值**，不是用户主动关的
+        // ——「默认开启」只改种子对已装用户完全无效（界面上仍是关的、老库照样连不上）。
+        // 这里一次性升成 `true` 并留标记：用户之后自己关掉，就不会再被打开。
+        // 必须放在下面那条「已迁移就直接 return」之前，否则老库永远走不到。
+        if self.get_setting(SETTINGS_LEGACY_TLS_MIGRATED)?.is_none() {
+            if self.get_setting(SETTINGS_ALLOW_LEGACY_TLS)?.as_deref() != Some("true") {
+                self.set_setting(SETTINGS_ALLOW_LEGACY_TLS, "true")?;
+            }
+            self.set_setting(SETTINGS_LEGACY_TLS_MIGRATED, "1")?;
+        }
         if self.get_setting(SETTINGS_SAFETY_PRODUCTION_MIGRATED)?.is_some() {
             return Ok(());
         }
@@ -839,6 +851,11 @@ impl Store {
             (SETTINGS_MCP_TOOLS_STRUCTURE, "true"),
             (SETTINGS_MCP_TOOLS_QUERY, "true"),
             (SETTINGS_MCP_TOOLS_HISTORY, "true"),
+            // 旧版 TLS 兼容：**默认开启**。只讲 TLS 1.0/1.1 的老库（SQL Server 2008/2012
+            // 那一代）在 JDK 11+ 上会直接握手失败，而失败信息是英文的 SSLEngine 原文，
+            // 用户完全看不出「去设置里开个开关」。默认开只放宽这两个已被弃用的协议版本，
+            // SSLv3 / RC4 / 3DES / anon 等照旧禁用。
+            (SETTINGS_ALLOW_LEGACY_TLS, "true"),
         ] {
             conn.execute(
                 "INSERT OR IGNORE INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3)",

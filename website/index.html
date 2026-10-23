@@ -746,6 +746,31 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.50（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.50</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-23</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>生产保护不再把只读语句当写拦下：打开数据库、看会话（USE、会话级 SET、sp_who2、sp_helpdb、DBCC SQLPERF）照常用，真机那句「打开数据库就报生产不允许」已消除；sp_executesql、xp_cmdshell、DBCC FREEPROCCACHE 这类照旧拦</b></li>
+            <li><b>表 / 视图 / 库的右键动作改用节点自己的连接：查看 DDL 不再报 Cannot read properties of null，也不会在右击别台服务器的表时把语句发到当前连接上</b></li>
+            <li><b>老库能连上了</b>：「允许旧版加密连接」补上 TLS 1.0 的客户端首选协议（SQL Server 2008/2012 那一代只讲 TLS 1.0），并且默认开启、已装库自动迁移</li>
+            <li><b>SSH 隧道新增主机公钥校验（直接读你 ~/.ssh/known_hosts）；同一跳板机 + 同一目标只开一条隧道，认证一次反复复用，握手总数限流 8 条，并发同步不再撞跳板机上限整批卡死</b></li>
+            <li><b>VPN／链路断开再连上后，第一条语句不再必报一次 Communications link failure：只读语句在连接级失败时重连重试一次，页签里的会话也纳入保活探活</b></li>
+            <li><b>同步时每张在跑的表至少 2 路读：单流只吃到链路的一半带宽，慢表不再被并发表数挤成单路拖住整库尾部</b></li>
+            <li><b>一页 30 秒没回来就判定这页回不来、并把页缩到四分之一（原来等 60 秒、只减半），半开连接上不再出现一张表烧掉半小时、几万行进不动</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.50" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.50" target="_blank" rel="noopener">下载 v1.2.50</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.49（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +778,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.49</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-23</span>
           </div>
           <ul class="rel-notes">

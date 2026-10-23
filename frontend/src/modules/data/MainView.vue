@@ -1778,6 +1778,15 @@ const connFor = (connId) => {
   const c = allConnections.value.find(x => String(x.id) === sid)
   return c || conn.value
 }
+/**
+ * 右键菜单 / 对象动作要用的连接 ID：**永远优先取节点自己的 connId**。
+ *
+ * 菜单可以作用于非当前连接的对象（右击另一个数据源里的表），而全局 `conn.value`
+ * 此时要么是别台服务器（取 DDL / 清空表会打到错误的目标上），要么还是 null
+ * （启动后直接右键 = `conn.value.id` 抛 TypeError，界面只弹一句
+ * 「Cannot read properties of null (reading 'id')」）。
+ */
+const ctxConnId = (d) => String(d?.connId || currentConnId.value || '')
 const connDialogVisible = ref(false)
 const editingConn = ref(null)
 const testing = ref(false)
@@ -6449,7 +6458,7 @@ const ctxShowDdl = async () => {
   const d = ctxMenu.value.data
   closeCtxMenu()
   try {
-    const res = await getTableDdl(conn.value.id, d.db || currentDb.value, d.table)
+    const res = await getTableDdl(ctxConnId(d), d.db || currentDb.value, d.table)
     ctxDdl.value = res.ddl || ''
     ctxDdlVisible.value = true
   } catch (e) { ElMessage.error(t('mv.ddlFailed', { detail: errMsg(e) })) }
@@ -6563,7 +6572,7 @@ const ctxIndexRows = ref([])
 const ctxShowIndexes = async () => {
   const d = ctxMenu.value.data
   if (!d) return
-  const cid = conn.value?.id || currentConnId.value
+  const cid = ctxConnId(d)
   const want = String(d.table || d.label || '')
   closeCtxMenu()
   ctxIndexTable.value = want
@@ -6607,7 +6616,7 @@ const ctxCopyDdl = async () => {
   const d = ctxMenu.value.data
   closeCtxMenu()
   try {
-    const res = await getTableDdl(conn.value.id, d.db || currentDb.value, d.table)
+    const res = await getTableDdl(ctxConnId(d), d.db || currentDb.value, d.table)
     copyText(res.ddl || '', t('mv.createTableCopied'))
   } catch (e) { ElMessage.error(t('mv.ddlFailed', { detail: errMsg(e) })) }
 }
@@ -6633,7 +6642,7 @@ const ctxCopyViewDdl = async () => {
   if (!d) return
   closeCtxMenu()
   try {
-    const res = await getTableDdl(conn.value.id, d.db || currentDb.value, d.table || d.label)
+    const res = await getTableDdl(ctxConnId(d), d.db || currentDb.value, d.table || d.label)
     copyText(res.ddl || '', t('mv.viewDefCopied'))
   } catch (e) { ElMessage.error(t('mv.loadViewDefFailed', { detail: errMsg(e) })) }
 }
@@ -6805,13 +6814,14 @@ const dangerCancel = () => {
 
 const doTableAction = async (action, label) => {
   const d = ctxMenu.value.data
-  if (!d || !conn.value) return
+  if (!d) return
+  const cid = ctxConnId(d)
   const target = ((d.db || currentDb.value) ? (d.db || currentDb.value) + '.' : '') + d.table
   dangerBegin(label + '：' + target, d.table, {
     message: t('mv.stmtSubmitted')
   })
   try {
-    const res = await tableAction(conn.value.id, d.db || currentDb.value, d.table, action)
+    const res = await tableAction(cid, d.db || currentDb.value, d.table, action)
     if (res.success) {
         ElMessage.success(tMsg(res.message) || t('mv.opSuccess', { label }))
       if (action === 'drop') {
@@ -6883,12 +6893,13 @@ const ctxRefreshCollection = () => {
 const ctxAiQuery = async () => {
   const d = ctxMenu.value.data
   closeCtxMenu()
-  if (!conn.value) { ElMessage.warning(t('mv.pickConn')); return }
+  const cid = ctxConnId(d)
+  if (!cid) { ElMessage.warning(t('mv.pickConn')); return }
   aiOpen.value = true
   const tableName = d?.label || d?.objectName || ''
   const prompt = t('mv.aiGenQuery', { table: tableName })
   try {
-    const res = await aiNl2sql({ prompt, connectionId: conn.value.id, database: d.db || currentDb.value })
+    const res = await aiNl2sql({ prompt, connectionId: cid, database: d.db || currentDb.value })
     if (res.success) {
       insertSqlToActive(res.sql)
       ElMessage.success(t('mv.aiGenerated'))
@@ -6913,17 +6924,19 @@ const saveKbSource = ref('')
 const ctxSaveTableToKb = async () => {
   const d = ctxMenu.value.data
   closeCtxMenu()
-  if (!conn.value) { ElMessage.warning(t('mv.pickConn')); return }
+  const cid = ctxConnId(d)
+  if (!cid) { ElMessage.warning(t('mv.pickConn')); return }
   const table = d?.name || d?.table || d?.label
   if (!table) { ElMessage.warning(t('mv.noTableIdentified')); return }
   const db = currentDb.value
   const loading = ElLoading.service({ lock: true, text: t('mv.generatingSchemaDoc'), background: 'rgba(0,0,0,0.5)' })
   try {
-    const res = await aiDataDict({ connectionId: conn.value.id, database: db, tables: [table] })
+    const res = await aiDataDict({ connectionId: cid, database: db, tables: [table] })
     if (!res?.success) throw new Error(res.message || t('mv.genFailed'))
     saveKbContent.value = res.content || ''
     saveKbTitle.value = t('mv.schemaDocTitle', { table })
-    saveKbSource.value = [conn.value.name || conn.value.type, db, table].filter(Boolean).join(' · ')
+    const c = connFor(cid)
+    saveKbSource.value = [c?.name || c?.type, db, table].filter(Boolean).join(' · ')
     saveKbOpen.value = true
   } catch (e) {
     ElMessage.error(t('mv.genFailedDetail', { detail: (e?.message || e) }))
@@ -6938,20 +6951,21 @@ const ctxSaveTableToKb = async () => {
 
 /** 「AI 解释这个对象」：取对象 DDL 交给 AI 逐段解释；表与视图共用同一套流程 */
 const aiExplainObject = async (d, kindLabel) => {
-  if (!conn.value) { ElMessage.warning(t('mv.pickConn')); return }
+  const cid = ctxConnId(d)
+  if (!cid) { ElMessage.warning(t('mv.pickConn')); return }
   const name = d?.label || d?.objectName || ''
   const db = d?.db || currentDb.value
   if (!name) return
   const loading = ElLoading.service({ lock: true, text: t('mv.loadingObjectDef'), background: 'rgba(0,0,0,0.5)' })
   try {
-    const ddlRes = await getTableDdl(conn.value.id, db, name)
+    const ddlRes = await getTableDdl(cid, db, name)
     const ddl = ddlRes?.ddl || ''
     if (!ddl || ddl.startsWith('-- 获取 DDL 失败')) {
       ElMessage.error(t('mv.loadObjectDefFailed'))
       return
     }
     loading.setText(t('mv.aiExplaining'))
-    const res = await aiExplain({ sql: ddl, connectionId: conn.value.id, database: db })
+    const res = await aiExplain({ sql: ddl, connectionId: cid, database: db })
     if (res?.success) {
       aiExplainTitle.value = t('mv.aiExplainTitle', { kind: kindLabel, name })
       aiExplainContent.value = renderMarkdown(res.content || '')
@@ -6990,14 +7004,15 @@ const ctxAiExplainView = () => {
 const ctxAiInsightTable = async () => {
   const d = ctxMenu.value.data
   closeCtxMenu()
-  if (!conn.value) { ElMessage.warning(t('mv.pickConn')); return }
+  const cid = ctxConnId(d)
+  if (!cid) { ElMessage.warning(t('mv.pickConn')); return }
   const table = d?.label || d?.objectName || ''
   const db = d?.db || currentDb.value
   if (!table) return
   const loading = ElLoading.service({ lock: true, text: t('mv.collectingProfile'), background: 'rgba(0,0,0,0.5)' })
   try {
     loading.setText(t('mv.aiAnalyzing'))
-    const res = await aiInsight({ connectionId: conn.value.id, database: db, table })
+    const res = await aiInsight({ connectionId: cid, database: db, table })
     if (res?.success) {
       aiExplainTitle.value = t('mv.aiInsightTitle', { table })
       aiExplainContent.value = renderMarkdown(res.content || '')
@@ -7766,12 +7781,18 @@ const objRefresh = () => {
   else refreshDbNode(db)
 }
 
+// 导出所用的连接：轮询 / 取消 / 收尾下载都发生在异步回调里，那时 conn 可能已被切走，
+// 必须记住「发起导出时那个连接」，否则会去问错误的数据源要任务进度。
+const exportConnId = ref('')
+
 const ctxExport = async (format) => {
   if (!ctxMenu.value.data) return
   const d = ctxMenu.value.data
+  const cid = ctxConnId(d)
   const db = d.db || currentDb.value
   const name = d.table || d.label
   closeCtxMenu()
+  exportConnId.value = cid
   exportTargetName.value = name
   exportStatus.value = 'running'
   exportDone.value = 0
@@ -7786,12 +7807,12 @@ const ctxExport = async (format) => {
     // SQL UPDATE/DELETE 导出：附带主键列用于生成精确 WHERE 条件（仅物理表）
     if (format === 'sql-update' || format === 'sql-delete') {
       try {
-        const cols = await listColumns(conn.value.id, db, name)
+        const cols = await listColumns(cid, db, name)
         const pks = cols.filter(c => c.primaryKey).map(c => c.name)
         if (pks.length) payload.pkColumns = pks.join(',')
       } catch { /* 主键获取失败则退化为整行条件 */ }
     }
-    const res = await exportStart(conn.value.id, payload)
+    const res = await exportStart(cid, payload)
     if (!res.success || !res.taskId) {
       throw new Error(res.message || t('mv.exportSubmitFailed'))
     }
@@ -7816,14 +7837,15 @@ const startExportPolling = (name, format) => {
   exportPollTimer = setInterval(async () => {
     if (!exportTaskId.value) return
     try {
-      const r = await exportTask(conn.value.id, exportTaskId.value)
+      const cid = exportConnId.value || String(conn.value?.id || '')
+      const r = await exportTask(cid, exportTaskId.value)
       // 与 useExportTask 共用同一套「应用快照」：日志按 logsSeq 增量追加（不再每轮重建时间戳）
       applyTaskSnapshot(exportState, r)
       if (exportStatus.value !== 'running') {
         clearInterval(exportPollTimer)
         exportPollTimer = null
         // 与 useExportTask 共用同一套收尾：下载 / 落盘提示 / 打开文件夹
-        await finishExport(exportState, conn.value.id, exportTaskId.value, name, format)
+        await finishExport(exportState, cid, exportTaskId.value, name, format)
       }
     } catch (e) {
       console.error('导出进度轮询失败', e)
@@ -7835,7 +7857,7 @@ const cancelExportTask = async () => {
   if (!exportTaskId.value) return
   exportCanceling.value = true
   try {
-    await exportCancel(conn.value.id, exportTaskId.value)
+    await exportCancel(exportConnId.value || String(conn.value?.id || ''), exportTaskId.value)
   } catch (e) {
     ElMessage.error(t('mv.cancelFailed', { detail: errMsg(e) }))
   } finally {
@@ -8012,7 +8034,10 @@ const dbCtxShowDdl = async () => {
   closeTreeCtxMenu()
   ensureDbConn(d)
   // 查看建库语句的查询 SQL 由各类型模块提供；返回 null 表示该类型无建库语句
-  const type = conn.value?.type || ''
+  // 类型取自节点自己的连接：全局 conn 为空（启动后直接右键库节点）时 type 会是 ''，
+  // 建库语句就整段拼错（byType('') 退回通用实现）
+  const dbConn = connFor(d.connId)
+  const type = dbConn?.type || ''
   const sql = byType(type).showDbDdlSql(d.realDb || d.db)
   if (sql === null) {
     dbDdlText.value = t('mv.noCreateDbComment', { kind: labelOf(type) })
@@ -8020,7 +8045,7 @@ const dbCtxShowDdl = async () => {
     return
   }
   try {
-    const res = await executeSql(conn.value.id, sql, d.db, null, null, null, null, true)
+    const res = await executeSql(ctxConnId(d), sql, d.db, null, null, null, null, true)
     if (res.success && res.rows && res.rows.length) {
       // 结果可能多列（MySQL SHOW CREATE DATABASE 第一列为库名），取含 CREATE 的列
       const row = res.rows[0]
@@ -8120,7 +8145,8 @@ const dropDbHint = (type) => {
 }
 
 const doDbDrop = async (d) => {
-  const type = String(conn.value?.type || '').toUpperCase()
+  const cid = ctxConnId(d)
+  const type = String(connFor(cid)?.type || '').toUpperCase()
   if (!DROP_DB_TYPES.includes(type)) {
     ElMessage.warning(`${labelOf(type)}：${dropDbHint(type)}`)
     return
@@ -8141,15 +8167,15 @@ const doDbDrop = async (d) => {
     // - PG / KingBase：terminate 该库上除自身外的所有后端 → 再 DROP
     // 均为内核内部链路（internal），多语句批已放行
     if (type === 'SQLSERVER') {
-      await alterTable(conn.value.id, '',
+      await alterTable(cid, '',
         `ALTER DATABASE ${quoteIdent(bare)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; ${dropSql}`)
     } else if (type === 'POSTGRESQL' || type === 'KINGBASE') {
-      await alterTable(conn.value.id, '',
+      await alterTable(cid, '',
         `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${bare.replace(/'/g, "''")}' AND pid <> pg_backend_pid()`)
-      await alterTable(conn.value.id, '', dropSql)
+      await alterTable(cid, '', dropSql)
     } else {
       // MySQL 系 / ClickHouse / Doris / DB2：删库不受连接占用限制，直接删
-      await alterTable(conn.value.id, '', dropSql)
+      await alterTable(cid, '', dropSql)
     }
     const res = { success: true }
     ElMessage.success(t('mv.dbDeleted', { name: d.db }))

@@ -568,12 +568,16 @@ impl Reader for SqlReader {
         //
         // 硬上限一起压到 `shrunk × 4` 而不是直接钉死：链路恢复后还能靠几何增长/自适应
         // 涨回来（最多两级翻倍），不至于因为一次抖动就整表单流小页跑到底。
+        // 除以 4 而不是减半：超时说明「这一页根本传不回来」，减半往往还在同一个量级上
+        // 继续撞墙（真机 re_sale：页 3711、每页等满 60 秒，连撞两次后整表 2346 秒只前进
+        // 几万行）。上限一起压到 2 倍以内，别让它几何增长又爬回超时区间；链路恢复后由
+        // `by_read` / `by_rate` 两条约束慢慢涨回去。
         let now = self.page_rows.load(Ordering::SeqCst);
-        let shrunk = (now / 2).max(PAGE_ROWS_FLOOR).min(now);
+        let shrunk = (now / 4).max(PAGE_ROWS_FLOOR).min(now);
         if shrunk < now {
             self.page_rows.store(shrunk, Ordering::SeqCst);
             self.rows_cap
-                .store((shrunk * 4).max(PAGE_ROWS_MIN), Ordering::SeqCst);
+                .store((shrunk * 2).max(PAGE_ROWS_FLOOR), Ordering::SeqCst);
         }
     }
 }

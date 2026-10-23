@@ -801,6 +801,51 @@ const READ_ONLY_PRAGMAS: &[&str] = &[
     "CACHE_SIZE",
 ];
 
+/// 已知**只读**的系统 / 诊断过程（`EXEC sp_who2`、`sp_helpdb`、`sp_lock` …）。
+///
+/// 只列「确定不会改数据」的：`xp_cmdshell`（跑系统命令）、`sp_configure`（改服务器配置）、
+/// `sp_executesql` / `sp_execute`（可执行任意动态 SQL）一律**不放行**，仍按「无法归类」处理。
+///
+/// 为什么需要这张表：生产保护 / 只读连接把「无法归类」当写拦，
+/// 于是生产库上连 `sp_who2` 看会话都会被拒 —— 排障就断了（真机反馈）。
+const READ_ONLY_PROCEDURES: &[&str] = &[
+    "SP_WHO", "SP_WHO2", "SP_WHOISACTIVE", "SP_LOCK", "SP_HELPDB", "SP_HELPTEXT",
+    "SP_HELPINDEX", "SP_HELPCONSTRAINT", "SP_HELPSERVER", "SP_HELPUSER", "SP_HELPGROUP",
+    "SP_HELPPROTECT", "SP_HELPDBACCESS", "SP_HELP", "SP_COLUMNS", "SP_TABLES",
+    "SP_SPACEUSED", "SP_DATABASES", "SP_SERVER_INFO", "SP_STATISTICS", "SP_PKEYS",
+    "SP_FKEYS", "SP_STORED_PROCEDURES", "SP_DESCRIBE_UNDECLARED_PARAMETERS",
+];
+
+/// 只读的 `DBCC` 子命令（查日志空间、看统计信息、看连接在跑什么…）。
+const READ_ONLY_DBCC: &[&str] = &[
+    "SQLPERF", "SHOW_STATISTICS", "INPUTBUFFER", "OUTPUTBUFFER", "OPENTRAN", "PROCCACHE",
+    "SHOWCONTIG", "CHECKDB", "CHECKTABLE", "CHECKALLOC", "CHECKCATALOG", "CHECKFILEGROUP",
+    "CHECKIDENT", "DBINFO", "USEROPTIONS", "TRACESTATUS", "ERRLOG", "SHOWFILESTATS",
+];
+
+/// `DBCC` 里**会动服务器状态 / 数据文件**的子命令：清计划缓存、收缩文件、写页 —— 必须继续拦。
+const WRITE_DBCC: &[&str] = &[
+    "FREEPROCCACHE", "DROPCLEANBUFFERS", "SHRINK", "WRITEPAGE", "UPDATEUSAGE",
+    "INDEXDEFRAG", "DBREINDEX", "REINDEX", "CLEARTABLE",
+];
+
+/// `EXEC <proc>` / `CALL <proc>` 是否落在只读的系统过程白名单里。
+fn read_only_procedure(upper: &str) -> bool {
+    READ_ONLY_PROCEDURES.iter().any(|name| upper.contains(name))
+}
+
+/// `DBCC <sub>` 归类：只读子命令 → 读；会动服务器状态 / 数据文件的 → 无法归类（照旧拦）。
+fn dbcc_kind(upper: &str) -> StatementKind {
+    if WRITE_DBCC.iter().any(|word| upper.contains(word)) {
+        return StatementKind::Unknown;
+    }
+    if READ_ONLY_DBCC.iter().any(|word| upper.contains(word)) {
+        StatementKind::Read
+    } else {
+        StatementKind::Unknown
+    }
+}
+
 /// 判断单条语句的类型。
 pub fn classify(sql: &str) -> StatementKind {
     let cleaned = strip_comments(sql);
@@ -848,7 +893,37 @@ pub fn classify(sql: &str) -> StatementKind {
         | "TRUNCATE" => StatementKind::Write,
         "CREATE" | "ALTER" | "DROP" | "RENAME" | "COMMENT" => StatementKind::Ddl,
         "GRANT" | "REVOKE" => StatementKind::Ddl,
-        _ => StatementKind::Unknown,
+        // 切库只改会话的默认库，不动任何数据。只读连接也必须放行 ——
+        // SQL Server 的元数据 SQL 是「库内限定」的，内核会给它前置 `use [库];`；
+        // 首条判成「无法归类」时，生产保护会把整条元数据查询拒掉，
+        // 界面上的表现就是「打开数据库就报生产不允许」（真机反馈，已验证）。
+        "USE" => StatementKind::Read,
+        // SET：会话级设置（NOCOUNT / search_path / autocommit …）不改数据；
+        // SET GLOBAL / SET PERSIST / SET @@GLOBAL 才是改服务器状态。
+        "SET" => {
+            // `SET PASSWORD`（MySQL）是改账号口令，别被会话级 SET 的宽松规则放过
+            if upper.contains("GLOBAL") || upper.contains("PERSIST") || upper.contains("PASSWORD") {
+                StatementKind::Write
+            } else {
+                StatementKind::Read
+            }
+        }
+        "EXEC" | "EXECUTE" | "CALL" => {
+            if read_only_procedure(&upper) {
+                StatementKind::Read
+            } else {
+                StatementKind::Unknown
+            }
+        }
+        "DBCC" => dbcc_kind(&upper),
+        _ => {
+            // SQL Server 允许省略 EXEC 直接写过程名（`sp_who2` / `sp_helpdb`）：白名单内按只读
+            if read_only_procedure(&kw) {
+                StatementKind::Read
+            } else {
+                StatementKind::Unknown
+            }
+        }
     }
 }
 
@@ -1261,7 +1336,37 @@ mod tests {
         assert!(!is_read_only("WITH x AS (SELECT 1) DELETE FROM t"));
         assert!(!is_read_only("update t set a = 1"));
         assert!(!is_read_only(""));
-        assert!(!is_read_only("SET search_path = public"));
+        // SET 是会话级设置（不改数据），只有 GLOBAL / PERSIST / PASSWORD 才算写
+        assert!(is_read_only("SET search_path = public"));
+    }
+
+    /// 生产库排障：切库、会话设置、只读的系统过程 / DBCC 不该被当成写操作拦下。
+    ///
+    /// 背景（真机）：SQL Server 的元数据 SQL 会被内核前置 `use [库];`，`USE` 判成
+    /// 「无法归类」后，生产保护把整条元数据查询拒掉 —— 用户看到的是
+    /// 「打开数据库就报生产不允许」。
+    #[test]
+    fn 切库与会话设置与只读诊断语句不算写() {
+        assert!(is_read_only("USE master"));
+        assert!(is_read_only("use [demo]"));
+        assert!(is_read_only("SET NOCOUNT ON"));
+        assert!(is_read_only("SET autocommit = 0"));
+        assert!(!is_read_only("SET GLOBAL max_connections = 500"));
+        assert!(!is_read_only("SET PERSIST max_connections = 500"));
+        assert!(!is_read_only("SET PASSWORD FOR u = 'x'"));
+        // 不带 EXEC 的过程调用（SQL Server 允许）
+        assert!(is_read_only("sp_who2"));
+        assert!(is_read_only("exec sp_who"));
+        assert!(is_read_only("EXEC sp_helpdb"));
+        assert!(is_read_only("DBCC SQLPERF(LOGSPACE)"));
+        assert!(is_read_only("dbcc show_statistics(t, idx)"));
+        // 会执行任意 SQL / 跑系统命令 / 改服务器状态的照旧拦下
+        assert!(!is_read_only("exec sp_executesql N'delete from t'"));
+        assert!(!is_read_only("exec xp_cmdshell 'dir'"));
+        assert!(!is_read_only("dbcc freeproccache"));
+        assert!(!is_read_only("dbcc shrinkfile(1)"));
+        assert!(!is_read_only("kill 53"));
+        assert!(!is_read_only("exec sp_configure 'show advanced options', 1"));
     }
 
     #[test]

@@ -5092,11 +5092,21 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     };
     let concurrency_source = if requested > 0 { "（界面指定）" } else { "（自适应）" };
     let reserved_sessions = usize::from(!native_upsert);
+    let source_declared = write_parallelism(source_kind.kind).max(1);
+    // 每张**在跑**的表至少 2 路读：实测单流只吃到链路的一半（4.0 MB/s ≈ 4,400 行/秒），
+    // 两路并发才接近打满（9.2 MB/s）。
+    //
+    // 原来的 `source_declared / sync_concurrency` 在 4 张表并发时把每表除成 1 路，
+    // 于是整库的读吞吐 = 4 × 单流，遇到「一页 60 秒超时」的慢表就彻底拖住尾部
+    // （真机：re_sale 单表 1 路、页 3711，读 2256 秒只前进几万行）。
+    // 现在宁可少开一张表，也不让在读的表退化成单流；读连接总数仍受 `source_declared`
+    // 约束，不会和源库的连接上限打架。单连接池的库（SQLite/H2/Derby/SQL Server）
+    // source_declared = 1，下面的 min/max 会把它还原成 1 表 1 路。
+    let sync_concurrency = sync_concurrency.min((source_declared / 2).max(1));
+    let src_slices = (source_declared / sync_concurrency).max(2).min(source_declared);
     let tgt_workers = (target_declared / sync_concurrency)
         .saturating_sub(reserved_sessions)
         .max(1);
-    let source_declared = write_parallelism(source_kind.kind).max(1);
-    let src_slices = (source_declared / sync_concurrency).max(1);
     let opts = opts.with_session_caps(tgt_workers, src_slices);
     // 尾部弹性配额：整库同步的所有表共用一份（见 `GrowCaps`）。初始值就是上面的份额，
     // 表任务里的监控协程会在**收尾阶段**按「在跑的表数」把它调高。

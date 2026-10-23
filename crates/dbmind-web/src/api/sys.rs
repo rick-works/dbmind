@@ -438,8 +438,17 @@ pub async fn mirror_put(
 
 pub async fn legacy_tls_get(State(state): State<AppState>) -> XResult<Json<Value>> {
     let engine = state.engine();
-    let value = blocking(move || engine.get_setting(dbmind_core::Store::KEY_ALLOW_LEGACY_TLS)).await?;
-    let allow = value.as_deref() == Some("true");
+    // 键缺失时按**开启**回报（与 storage 种子、engine 兜底同一口径），
+    // 否则新装用户界面显示「关」，实际宿主已放行，两边对不上。
+    let allow = blocking(move || {
+        engine
+            .get_setting(dbmind_core::Store::KEY_ALLOW_LEGACY_TLS)
+            .map(|v| match v.as_deref() {
+                None => true,
+                Some(s) => s == "true" || s == "1",
+            })
+    })
+    .await?;
     Ok(Json(json!({ "allowLegacyTls": allow, "relaxed": false })))
 }
 

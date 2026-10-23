@@ -13,9 +13,12 @@
 //!
 //! 重试策略（与上游那次踩坑的直接对应）：
 //! - **连接与元数据**是幂等的 ⇒ 会话失效可重建重试一次；
-//! - **查询**不是幂等的 ⇒ 进程/响应异常一律不重试，交由上层决定。
+//! - **写语句**不是幂等的 ⇒ 进程/响应异常一律不重试，交由上层决定；
+//! - **只读语句**（`sql::is_read_only`，已排除 `SELECT … INTO` / `nextval` 这类带副作用的）
+//!   在连接级失败时重连重试一次。理由：这种失败意味着语句压根没发到服务端，
+//!   重跑没有副作用 —— 而它正是「窗口不关、VPN 断了再连，第一条语句必报一次」的成因。
 
-use super::session_pool::{SessionBudget, SessionPool};
+use super::session_pool::{Pin, SessionBudget, SessionPool};
 use super::{Driver, MetaCall, PreparedBatchCall, QueryCall, TxAction};
 use crate::agent::{self, AgentHost, AgentQueryResult};
 use crate::error::{DbMindError, ErrorCode, Result};
@@ -92,6 +95,15 @@ struct LaneCall<'a> {
     read_only: bool,
     /// 幂等调用（结构浏览、自检）才重试；查询不重试（见模块文档）
     retry_on_stale: bool,
+    /// **只读语句**在连接级失败（`DBMIND-CONN-0003`）时可以重连后重试一次。
+    ///
+    /// 为什么只读可以破例：写语句不重试的唯一理由是「响应丢了，它可能已经在库里执行过」，
+    /// 这个担心对 `select` 不成立（`sql::is_read_only` 还会把
+    /// `SELECT … INTO`、`nextval()` 之类带副作用的语句排除掉）。
+    ///
+    /// 真机场景：窗口不关、VPN 断了再连上，池里那条连接已经死了，内核和宿主却都还“记着”它
+    /// —— 第一条语句必然撞死，用户看到一次 `Communications link failure`，第二次才成功。
+    retry_after_disconnect: bool,
     /// 只有查询带令牌：**排队等会话时也要能被取消**（见 `SessionPool::acquire_cancellable`）
     cancel: Option<&'a CancelToken>,
 }
@@ -529,7 +541,7 @@ impl AgentDriver {
         //（走 SSH 隧道建一条连接实测 1.5~6.4 秒，正是「点一下就转圈」的来源）。
         // 显式「关闭连接」仍断得掉（`close_idle_where` 不看 pin）；事务泳道另有自己的 pin。
         if is_interactive_lane(lane) {
-            self.pool.pin_lane(lane);
+            self.pool.pin_lane(lane, Pin::Interactive);
         }
         let session_id = slot.session_id().to_string();
         // 事务泳道不能「悄悄重连」：旧连接上的未提交修改已经随断开回滚了，
@@ -584,6 +596,24 @@ impl AgentDriver {
                 self.ensure_session(config, call.read_only, &session_id, true)?;
                 op(&session_id)
             }
+            // **只读**语句撞上死连接 ⇒ 重连后重试一次（用户不该为此看到一次失败）。
+            //
+            // 这条必须排在下一条前面：两者错误码相同，区别只在「重跑有没有副作用」。
+            // 事务泳道不参与（`!tx_open`）：事务里悄悄换一条连接，等于把未提交的修改丢掉。
+            Err(err)
+                if call.retry_after_disconnect
+                    && !tx_open
+                    && err.code == ErrorCode::ConnConnectFailed =>
+            {
+                tracing::warn!(
+                    target: "dbmind::agent",
+                    session = %session_id,
+                    "只读语句撞到已失效的连接，重连后重试一次"
+                );
+                self.host.forget_session(&session_id);
+                self.ensure_session(config, call.read_only, &session_id, true)?;
+                op(&session_id)
+            }
             // 连接级失败（宿主说这条会话/连接没了）⇒ **清掉内核这边的会话缓存，但不重试本次调用**。
             //
             // 为什么必须清：查询不是幂等的（上面那条 arm 只对幂等调用生效），所以「重试」不能做；
@@ -606,7 +636,7 @@ impl AgentDriver {
 
     /// 用一句最轻的 SQL 验证「这条空闲会话还能不能用」（见 `probe_session`）。
     fn probe_idle_session(&self, session_id: &str) -> bool {
-        probe_session(self.kind, &self.host, session_id)
+        probe_session(self.kind, &self.host, session_id) == ProbeOutcome::Dead
     }
 
     /// 幂等调用（结构浏览等）：会话失效时重建并重试一次。
@@ -629,6 +659,8 @@ impl AgentDriver {
             LaneCall {
                 read_only: lane_read_only,
                 retry_on_stale: true,
+                // 幂等调用已经由 `retry_on_stale` 覆盖，这里不再叠加
+                retry_after_disconnect: false,
                 cancel: None,
             },
             op,
@@ -650,12 +682,27 @@ fn probe_sql(kind: ConnectionKind) -> &'static str {
     }
 }
 
+/// 一次探活的结果。
+///
+/// 为什么不用 `bool`：**「探活失败」不等于「连接死了」**。会话里可能正处在一个
+/// 用户自己 `BEGIN` 起来、又被别的原因搞成 aborted 的事务里（PG 上任何语句都报
+/// 25P02），或者临时表/权限刚被改掉 —— 一句 `select 1` 失败就把会话作废，
+/// 会把用户**还在用**的连接悄悄换掉。所以只有「连接级失败」才判死。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeOutcome {
+    /// 还能用
+    Alive,
+    /// 连接确实没了（`DBMIND-CONN-0003`）：该作废
+    Dead,
+    /// 说不清（语句级错误）：**保持原样**，别动它
+    Unknown,
+}
+
 /// 用一句最轻的 SQL 验证「这条会话还能不能用」。
 ///
-/// 返回 false 只代表「该作废它」，**绝不把错误上抛**：探活是预防性检查，不是业务
-/// 语句。把「可能坏了」当「一定坏」判给用户（一次同步失败、一条查询报错）比
-/// 多花一次往返贵得多。
-fn probe_session(kind: ConnectionKind, host: &AgentHost, session_id: &str) -> bool {
+/// **绝不把错误上抛**：探活是预防性检查，不是业务语句。把「可能坏了」当「一定坏」
+/// 判给用户（一次同步失败、一条查询报错）比多花一次往返贵得多。
+fn probe_session(kind: ConnectionKind, host: &AgentHost, session_id: &str) -> ProbeOutcome {
     let mut params = Map::new();
     params.insert("sessionId".to_string(), json!(session_id));
     params.insert("sql".to_string(), json!(probe_sql(kind)));
@@ -667,16 +714,27 @@ fn probe_session(kind: ConnectionKind, host: &AgentHost, session_id: &str) -> bo
                 session = %session_id,
                 "空闲会话探活通过（链路仍然可用）"
             );
-            true
+            ProbeOutcome::Alive
         }
-        Err(err) => {
+        Err(err) if err.code == ErrorCode::ConnConnectFailed => {
             tracing::debug!(
                 target: "dbmind::agent",
                 session = %session_id,
                 error = %err,
-                "空闲会话探活失败（多半已被链路掐断），作废后按需重连"
+                "空闲会话探活失败（连接已断开），作废后按需重连"
             );
-            false
+            ProbeOutcome::Dead
+        }
+        Err(err) => {
+            // 语句级错误：连接是好的，只是这条会话的状态不适合跑 `select 1`
+            tracing::debug!(
+                target: "dbmind::agent",
+                session = %session_id,
+                code = %err.code_str(),
+                error = %err.message,
+                "空闲会话探活未通过但不是连接问题，保留会话"
+            );
+            ProbeOutcome::Unknown
         }
     }
 }
@@ -722,11 +780,13 @@ fn spawn_keepalive(kind: ConnectionKind, host: Arc<AgentHost>, pool: Weak<Sessio
                 if !pool.take_idle_session(&session_id) {
                     continue;
                 }
-                if probe_session(kind, &host, &session_id) {
+                // 只有「连接确实没了」才作废；语句级错误（比如会话正处在
+                // aborted 的事务里）不动它 —— 见 `ProbeOutcome`
+                if probe_session(kind, &host, &session_id) != ProbeOutcome::Dead {
                     pool.release_heartbeat(&session_id);
                     continue;
                 }
-                // 探不通 ⇒ 作废：宿主侧忘掉它，池里摘掉槽位（我们正占着，可以硬摘）。
+                // 连接没了 ⇒ 作废：宿主侧忘掉它，池里摘掉槽位（我们正占着，可以硬摘）。
                 // 这样下一次借用必然重连，而不是再撞一次同一条死连接。
                 host.forget_session(&session_id);
                 pool.remove_session(&session_id);
@@ -819,6 +879,8 @@ impl Driver for AgentDriver {
             LaneCall {
                 read_only,
                 retry_on_stale: false,
+                // 事务控制本身重试没有意义（旧连接上的事务已经随断开回滚了）
+                retry_after_disconnect: false,
                 cancel: None,
             },
             |key| {
@@ -844,11 +906,16 @@ impl Driver for AgentDriver {
         );
         if outcome.is_ok() {
             match action {
-                TxAction::Begin => self.pool.pin_lane(&lane),
+                TxAction::Begin => self.pool.pin_lane(&lane, Pin::Transaction),
                 // 交互页签提交完也要**继续常驻**（否则两次查询之间有一个被回收的窗口，
-                // 又来一次 1.5~6.4 秒的握手）；批量泳道照旧解除保护
+                // 又来一次 1.5~6.4 秒的握手）；批量泳道照旧解除保护。
+                // 注意这里要**降级**成 `Interactive` 而不是保持事务保护：事务已经结束，
+                // 这条会话可以重新参与保活（否则它又会变成「断了没人探」的那种）。
                 TxAction::Commit | TxAction::Rollback => {
-                    if !is_interactive_lane(&lane) {
+                    if is_interactive_lane(&lane) {
+                        self.pool.unpin_lane(&lane);
+                        self.pool.pin_lane(&lane, Pin::Interactive);
+                    } else {
                         self.pool.unpin_lane(&lane);
                     }
                 }
@@ -898,7 +965,9 @@ impl Driver for AgentDriver {
         let limit = self.lane_limit(call.config, call.session);
         // 等连接的预算与查询本身一致：多花的 2s 是留给宿主「先给出结构化错误」的余量
         let wait = Duration::from_millis(call.options.timeout_ms.saturating_add(2_000));
-        // 查询**不重试**（见模块文档）：会话失效时如实报错，由上层决定怎么办。
+        // 写语句**不重试**（见模块文档）：响应丢失时它可能已经在库里执行过。
+        // 只读语句例外：连接已经死了、语句根本没发出去，重跑一次既没副作用，
+        // 又正好把「VPN 断连后第一条必失败」抹掉（见 `LaneCall::retry_after_disconnect`）。
         // 带上取消令牌：排队等会话时也要能被取消（见 SessionPool::acquire_cancellable）。
         self.with_lane(
             call.config,
@@ -908,6 +977,10 @@ impl Driver for AgentDriver {
             LaneCall {
                 read_only: call.read_only,
                 retry_on_stale: false,
+                retry_after_disconnect: crate::statement::is_read_only(
+                    self.kind.protocol(),
+                    call.sql,
+                ),
                 cancel: Some(call.cancel),
             },
             |key| {
@@ -1026,6 +1099,8 @@ impl Driver for AgentDriver {
             LaneCall {
                 read_only: call.read_only,
                 retry_on_stale: false,
+                // 批处理里是写语句，重跑会重复写入
+                retry_after_disconnect: false,
                 cancel: Some(call.cancel),
             },
             |key| {

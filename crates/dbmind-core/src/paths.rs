@@ -5,14 +5,23 @@ use std::path::{Path, PathBuf};
 
 pub const HOME_ENV: &str = "DBMIND_HOME";
 
-/// 用户级基目录（放「数据目录指针文件」的地方）。
-fn base_dir() -> PathBuf {
+/// 用户主目录（Windows 走 `USERPROFILE`，其余走 `HOME`）。
+///
+/// 公开出来是因为还有别的东西要落在“用户本来就在用的位置”：SSH 的
+/// `~/.ssh/known_hosts` 必须按系统规范找，不能跟着 [`home_dir`] 的数据目录迁移走 ——
+/// 那份文件是用户和 ssh 命令共用的信任库，搬走就等于换了一套信任。
+pub fn user_home() -> PathBuf {
     let base = std::env::var("USERPROFILE")
         .ok()
         .filter(|s| !s.trim().is_empty())
         .or_else(|| std::env::var("HOME").ok().filter(|s| !s.trim().is_empty()))
         .unwrap_or_else(|| ".".to_string());
     PathBuf::from(base)
+}
+
+/// 用户级基目录（放「数据目录指针文件」的地方）。
+fn base_dir() -> PathBuf {
+    user_home()
 }
 
 /// 指针文件：内容是一个目录路径。设置页「迁移数据目录」写它，重启后 [`home_dir`] 按它落位。
