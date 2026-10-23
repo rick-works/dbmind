@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.55": [
+    "Rows per batch is now visible in the UI (Sync → Options), prefilled with the target default and editable: ClickHouse 10,000; PostgreSQL / Doris 2,000; MySQL / MariaDB / SQL Server / Oracle / DM / DB2 1,000; SQLite / H2 / Derby 5,000 rows per statement",
+    "The per-statement byte cap is per dialect as well: 8 MB for ClickHouse and local databases, 1 MB for MySQL / MariaDB, 512 KB for Doris, 4 MB for the rest; statements still start at 512 KB and double when they keep finishing quickly",
+    "Wide tables are cut by the byte cap first, and Oracle / DM / DB2 are additionally bound by the 65,535-expression limit of derived tables (about 504 rows per statement at 130 columns) — the numbers above are ceilings, not promises",
+    "The transaction segment drops from 500,000 to **100,000 rows**: commit overhead stays in the one-percent range, but a disconnect only has to roll back 100,000 rows, and large transactions no longer slow down as they grow",
+    "The first log line now reports \"at most N rows per batch\", so you can verify at a glance that the value from the UI took effect"
+  ],
   "v1.2.54": [
     "Fixed the \"big tables early on never fail, failures pile up later\" pattern: the \"transfer coroutine made no progress for 11 minutes\" check looks at whether a single page reached the database in 11 minutes, not at total runtime — narrow big tables land a page every minute, while wide tables (large text / JSON) need fifteen minutes per page on a lossy link and were declared \"possibly half-open\". A no-progress period now probes with `select 1` first and keeps waiting when the link is alive (logging \"no progress for N minutes, target probe OK, still waiting\")",
     "Both checks were changed: the object level (one coroutine per table) and the coroutine level (transfer inside a slice), so a table no longer suddenly fails mid-run",

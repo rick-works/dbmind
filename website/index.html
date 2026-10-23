@@ -746,6 +746,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.55（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.55</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-24</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>「每批行数」现在放到界面上（同步 → 选项），按目标库填好默认值，也可以自己改：ClickHouse 10000、PostgreSQL / Doris 2000、MySQL / MariaDB / SQL Server / Oracle / 达梦 / DB2 1000、SQLite / H2 / Derby 5000 行一条</b></li>
+            <li><b>单条语句的字节上限也按库分开</b>：ClickHouse 与本地库 8MB、MySQL / MariaDB 1MB、Doris 512KB、其余 4MB；起步仍是 512KB，实测每条语句够快就自动翻倍，慢就自动缩小</li>
+            <li><b>宽表先被字节上限切开，Oracle / 达梦 / DB2 另受「派生表表达式 65535 个」限制（130 列时约 504 行/条），所以上面的行数是上限、不是承诺</b></li>
+            <li><b>事务段从 50 万行降到 10 万行提交一次：提交开销仍是百分之一量级，但断开时要回滚的只有 10 万行，重跑快得多，也避免大事务「越写越慢」</b></li>
+            <li><b>任务第一行日志会写「每批最多 N 行」，界面填的值有没有生效一眼可验</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.55" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.55" target="_blank" rel="noopener">下载 v1.2.55</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.54（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +776,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.54</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-23</span>
           </div>
           <ul class="rel-notes">
