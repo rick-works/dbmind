@@ -121,15 +121,32 @@ impl WriteDiag {
         self.batch_started_ms.store(now_ms(), Ordering::Relaxed);
     }
 
+    /// 一批写成功收尾：喂给看门狗与写速估计的样本。
     pub fn note_batch_done(&self, rows: usize, elapsed: std::time::Duration) {
+        self.note_finish(rows, elapsed, true)
+    }
+
+    /// 一批**超时/被打断**收尾：与 [`WriteDiag::note_batch_done`] 的差别是
+    /// **不抬高** `recent_max_ms`。
+    ///
+    /// 为什么：超时那一批的墙钟（60~300 秒）是「连接卡住了」，不是「这批本来就这么慢」。
+    /// 拿它当慢批样本会把看门狗抬到 300 秒上限 —— 之后真断连要白等五分钟才判定，
+    /// 界面上就是「这张表卡了五分钟」。写速估计照实下调（页要缩小，别再往慢链路塞大页）。
+    pub fn note_batch_timeout(&self, rows: usize, elapsed: std::time::Duration) {
+        self.note_finish(rows, elapsed, false)
+    }
+
+    fn note_finish(&self, rows: usize, elapsed: std::time::Duration, slow_sample: bool) {
         self.inflight.fetch_sub(1, Ordering::Relaxed);
         self.last_batch_rows.store(rows as u64, Ordering::Relaxed);
         let ms = elapsed.as_millis().min(u64::MAX as u128) as u64;
         self.last_write_ms.store(ms, Ordering::Relaxed);
-        // 慢批上界：取「本批」与「旧值 × 7/8」的较大者 —— 单批抖动会抬上去，
-        // 但很快就会衰减回来，不会因为历史上一次慢批而长期放宽看门狗
-        let prev = self.recent_max_ms.load(Ordering::Relaxed) * 7 / 8;
-        self.recent_max_ms.store(prev.max(ms), Ordering::Relaxed);
+        if slow_sample {
+            // 慢批上界：取「本批」与「旧值 × 7/8」的较大者 —— 单批抖动会抬上去，
+            // 但很快就会衰减回来，不会因为历史上一次慢批而长期放宽看门狗
+            let prev = self.recent_max_ms.load(Ordering::Relaxed) * 7 / 8;
+            self.recent_max_ms.store(prev.max(ms), Ordering::Relaxed);
+        }
         // 没有在写的批了：清掉开始时刻，避免报告方把它当成「还在写」
         self.batch_started_ms.store(0, Ordering::Relaxed);
         self.current_batch_rows.store(0, Ordering::Relaxed);
@@ -225,6 +242,18 @@ pub struct GrowCaps {
     /// 用途：表内读预取只在「这张表独占链路」时开。多表并发时每张表已经有 2~4 路，
     /// 再翻倍的在途流会把丢包链路拖进整体退避 —— 实测两表同时开预取从 30.6k 掉到 7k。
     pub active: AtomicUsize,
+    /// 本任务学到的「单条写语句字节上限」（0 = 还没学到）。
+    ///
+    /// 为什么必须在**任务级**：写超时/断连的代价极高（一次就是几十秒白等 + 一段回滚 +
+    /// 一条吓人的日志），而报文该缩到多少这件事，一张表撞过就够了 ——
+    /// 存在表级的话，几百张表要各自把同样的坑踩一遍，界面上就是「几百条写入中断」。
+    pub stmt_cap_hint: AtomicUsize,
+    /// 链路整体不可达时**暂停到**的时刻（epoch 毫秒；0 = 没暂停）。
+    ///
+    /// 判定依据：某张表写超时后先探活（`select 1`），连探活都不通 ⇒ 这不是「这条连接
+    /// 半开」，而是整条链路/目标不可用。此时所有表都该停手等一会儿，而不是各自换连接
+    /// 重连重跑 —— 那会把一次短暂故障放大成一片重连、回滚和红字日志。
+    pub link_hold_until_ms: AtomicU64,
 }
 
 impl GrowCaps {
@@ -252,10 +281,74 @@ impl GrowCaps {
     pub fn want_workers(&self, base: usize) -> usize {
         self.tgt_workers.load(Ordering::SeqCst).max(base)
     }
+
+    /// 建议的单条写语句字节上限（0 = 还没学到）。
+    pub fn stmt_cap_hint(&self) -> usize {
+        self.stmt_cap_hint.load(Ordering::SeqCst)
+    }
+
+    /// 记下一个**更小**的语句上限建议；返回 `(旧, 新)` —— 没有变小就两边一样。
+    ///
+    /// 只降不升：一条链路证明过「大于 N 字节的报文会卡住」，这个结论在整个任务里都成立，
+    /// 后面的表不该因为一开始跑得顺就又放大回去（那只会再卡一次）。
+    pub fn note_stmt_cap(&self, bytes: usize) -> (usize, usize) {
+        let mut current = self.stmt_cap_hint.load(Ordering::SeqCst);
+        loop {
+            if current != 0 && current <= bytes {
+                return (current, current);
+            }
+            match self.stmt_cap_hint.compare_exchange(
+                current,
+                bytes,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return (current, bytes),
+                Err(seen) => current = seen,
+            }
+        }
+    }
+
+    /// 链路整体不可用：让本任务所有表暂停 `ms` 毫秒（返回暂停到的时刻）。
+    pub fn hold_link(&self, ms: u64) -> u64 {
+        let until = now_ms().saturating_add(ms);
+        self.link_hold_until_ms.fetch_max(until, Ordering::SeqCst);
+        until
+    }
+
+    /// 还要暂停多少毫秒（0 = 不需要暂停）。
+    pub fn link_hold_left_ms(&self) -> u64 {
+        self.link_hold_until_ms
+            .load(Ordering::SeqCst)
+            .saturating_sub(now_ms())
+    }
 }
 
 /// 一张表的**传输计划**：DDL（建表/索引/注释）由 sync 层做完，这里只管搬行。
 ///
+/// 行数的人话：按万 / 亿分档（`3,748,123 行` 需要数位数，`374.8 万行` 一眼就有量级）。
+pub(crate) fn 万行(n: u64) -> String {
+    if n >= 100_000_000 {
+        format!("{:.2} 亿行", n as f64 / 1e8)
+    } else if n >= 10_000 {
+        format!("{:.1} 万行", n as f64 / 1e4)
+    } else {
+        format!("{n} 行")
+    }
+}
+
+/// 时长的人话：`4 分 35 秒` / `1 小时 02 分`。
+pub(crate) fn 时长(ms: u64) -> String {
+    let secs = ms / 1000;
+    if secs >= 3600 {
+        format!("{} 小时 {:02} 分", secs / 3600, (secs % 3600) / 60)
+    } else if secs >= 60 {
+        format!("{} 分 {:02} 秒", secs / 60, secs % 60)
+    } else {
+        format!("{secs} 秒")
+    }
+}
+
 /// 字段全是「已经解析好的值」——没有 `SyncRequest`、没有 `Opts`，插件不需要知道
 /// 用户界面上勾了什么，只按这份计划执行。
 pub struct TablePlan {
@@ -316,6 +409,12 @@ pub struct TablePlan {
     pub key_indexes: Vec<usize>,
     /// 用于 keyset 游标的列（= 真实取到的键列；空 ⇒ 退回 OFFSET 分页）
     pub paging_keys: Vec<String>,
+    /// 源表的**主键列**（不论有没有勾进同步列）：只用来决定日志措辞。
+    ///
+    /// `paging_keys` 为空有两种成因，给用户的建议完全不同：源表本来就没主键（建议加主键），
+    /// 或者主键列没全勾上（加主键没用，要把主键列勾进同步）。没有这份信息就只能含糊成
+    /// 「无可用主键」，用户照着去加主键会发现「明明有主键」。
+    pub src_primary: Vec<String>,
     pub where_clause: String,
     pub row_limit: u64,
 
@@ -424,6 +523,63 @@ mod watchdog_tests {
         diag.note_batch_start(1_000);
         diag.note_batch_done(1_000, Duration::from_secs(200));
         assert_eq!(diag.batch_watchdog(1_000), Duration::from_secs(300));
+    }
+
+    /// 超时的那一批**不能**当「慢批样本」：它会被算进 `recent_max_ms`，把看门狗一路抬到
+    /// 300 秒上限 —— 之后真断连要白等五分钟才判定（界面上就是「这张表卡了五分钟」）。
+    /// 写速仍然要按它下调（页得缩小，别再往慢链路塞大页）。
+    #[test]
+    fn 超时批不抬高看门狗但下调写速() {
+        let diag = WriteDiag::default();
+        diag.note_batch_start(1_000);
+        diag.note_batch_done(1_000, Duration::from_millis(400));
+        let before = diag.batch_watchdog(1_000);
+        let rate_before = diag.write_rate();
+        assert!(rate_before > 0);
+
+        diag.note_batch_start(20_000);
+        diag.note_batch_timeout(20_000, Duration::from_secs(80));
+        assert_eq!(diag.batch_watchdog(1_000), before, "超时不该放宽单批看门狗");
+        assert!(
+            diag.write_rate() < rate_before,
+            "写速要按超时下调：{} → {}",
+            rate_before,
+            diag.write_rate()
+        );
+        // 收尾后不应残留「还在写」的状态
+        assert_eq!(diag.writing_seconds(), 0);
+    }
+
+    /// 任务级报文上限**只降不升**：一张表踩过的坑要立刻对同一任务里其它表生效
+    /// （否则几百张表各撞一次 = 几百条「写入中断」），健康链路的翻倍逻辑也不能把它放大回来。
+    #[test]
+    fn 报文上限任务级只降不升() {
+        let caps = GrowCaps::default();
+        assert_eq!(caps.stmt_cap_hint(), 0);
+        assert_eq!(caps.note_stmt_cap(3 * 1024 * 1024), (0, 3 * 1024 * 1024));
+        assert_eq!(
+            caps.note_stmt_cap(1024 * 1024),
+            (3 * 1024 * 1024, 1024 * 1024)
+        );
+        // 更大的值不能覆盖已有结论
+        assert_eq!(
+            caps.note_stmt_cap(4 * 1024 * 1024),
+            (1024 * 1024, 1024 * 1024)
+        );
+        assert_eq!(caps.stmt_cap_hint(), 1024 * 1024);
+    }
+
+    /// 链路暂停窗口：多次调用取「最晚」的那次，过窗口后自动归零。
+    #[test]
+    fn 链路暂停按最晚时刻生效() {
+        let caps = GrowCaps::default();
+        assert_eq!(caps.link_hold_left_ms(), 0);
+        caps.hold_link(60);
+        assert!(caps.link_hold_left_ms() > 0);
+        caps.hold_link(0); // 更早的时刻不能缩短已有暂停
+        assert!(caps.link_hold_left_ms() > 0);
+        std::thread::sleep(Duration::from_millis(120));
+        assert_eq!(caps.link_hold_left_ms(), 0);
     }
 
     /// 单条 INSERT 的墙钟：按报文大小给，20 秒起、120 秒封顶。

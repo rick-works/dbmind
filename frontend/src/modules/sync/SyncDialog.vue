@@ -259,7 +259,7 @@
         <!-- Navicat 式：对象数 + 三个按行实时跳动的计数（读取/传输/失败）+ 耗时。
              读取/传输运行中就有（后端按行累加、轮询带回），不等终态 summary ——
              终态后用 summary 的最终值兜底（含 upsert 的 updated 行）。 -->
-        <div class="stat"><span class="num">{{ fmtNum(taskTotal) }}</span><span class="label">{{ $t('sync.statTotal') }}</span></div>
+        <div class="stat"><span class="num">{{ fmtNum(totalShown) }}</span><span class="label">{{ $t('sync.statTotal') }}</span></div>
         <div class="stat"><span class="num">{{ fmtNum(readShown) }}</span><span class="label">{{ $t('sync.statRead') }}</span></div>
         <div class="stat ok"><span class="num">{{ fmtNum(writtenShown) }}</span><span class="label">{{ $t('sync.statTransferred') }}</span></div>
         <div class="stat danger"><span class="num">{{ fmtNum(failedShown) }}</span><span class="label">{{ $t('sync.statFailCount') }}</span></div>
@@ -522,6 +522,9 @@ const onProgressBeforeClose = (done) => {
 const taskStatus = ref('')
 const taskDone = ref(0)
 const taskTotal = ref(0)
+// 后端在「对象还没数完」时把 total 置为 -1（约定：总量未知）。界面不能把 -1 直接显示成
+// 「对象总数 -1」（真机截图反馈），负数一律按 0 显示 —— 数完后自然跳到真实值。
+const totalShown = computed(() => Math.max(0, Number(taskTotal.value) || 0))
 // 行级实时计数（Navicat 式三行数）：后端按行累加、0.8 秒轮询一次 ——
 // 界面上数字是平滑跳动递增的，不再「一万一的跳」
 const rowsRead = ref(0)

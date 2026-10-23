@@ -674,13 +674,16 @@ impl TaskRegistry {
                 if watch.is_canceled() {
                     cancel_idle += WATCH_TICK;
                     if cancel_idle >= CANCEL_GRACE {
-                        let seconds = CANCEL_GRACE.as_secs();
-                        watch.log(format!(
-                            "已停止（点了停止后 {seconds} 秒仍未收尾：工作线程卡在某个数据库调用上，\
-                             已强制结束；已写入的部分保留、不回滚）"
-                        ));
+                        // 用户口径：停止这件事只报结果 —— 「为什么收不干净」（哪个调用卡住、
+                        // 等了几秒）属于排障细节，进 tracing 文件日志，界面只留一句结论。
+                        tracing::warn!(
+                            task = %watch.id,
+                            grace = ?CANCEL_GRACE,
+                            "点了停止后宽限期用尽，工作体卡在数据库调用上，强制结束"
+                        );
+                        watch.log("已强制结束，已写入的部分保留、不回滚");
                         watch.set_status(TaskStatus::Canceled);
-                        watch.set_message("已停止（强制结束，已写入的部分保留）");
+                        watch.set_message("已强制结束，已写入的部分保留、不回滚");
                         persist_task(&watch);
                         handle.abort();
                         return;

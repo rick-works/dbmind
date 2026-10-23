@@ -105,6 +105,19 @@ const READ_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// 半开连接上 commit 会永远不返回，而「提交过没」是决定能不能重跑的关键。
 const COMMIT_CALL_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// 写超时后的**目标端探活**上限（另开一条会话跑 `select 1`）。
+///
+/// 为什么要探：墙钟只能说明「这条语句没回来」，分不清两种完全不同的故障 ——
+/// 一条连接半开（换连接就行），还是整条链路/目标不可用（换连接只会再撞一次）。
+/// 探活失败 ⇒ 后者，此时该让**整个任务**停一会儿，而不是几百张表一起重连重跑。
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// 探活失败后整个任务暂停多久（毫秒）。
+///
+/// 取 15 秒：RDS 抖动/网络瞬断通常在这个量级内恢复；比逐张表各自重连（每次至少
+/// 一个建连往返 + 一段回滚）便宜得多，也不会让用户觉得「卡住了」。
+const LINK_HOLD_MS: u64 = 15_000;
+
 /// 片任务共享的运行态。
 struct SliceCtx {
     plan: Arc<TablePlan>,
@@ -124,6 +137,8 @@ struct SliceCtx {
     /// 越加越慢还多开连接。表的收尾日志会把两个数打出来（见 `run`）。
     read_ms: Arc<AtomicU64>,
     write_ms: Arc<AtomicU64>,
+    /// 「传输数据到目标表」这条链路日志是否已经打过（多 worker 共享，只打一次）
+    transfer_told: Arc<AtomicBool>,
 }
 
 /// 细块数 = 读并发上限的倍数。
@@ -246,15 +261,37 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     let slices = ranges.len();
     // 块数才是并发的天花板：块少时补令牌没有任务能领（无键表恒 1 块 = 恒单流）
     let limit = limit.min(slices).max(start_parallel);
-    if slices > 1 {
-        if let Some(task) = &plan.task {
-            task.log(format!(
-                "表 {}：按主键切成 {slices} 块（{start_parallel} 路并发，尾部可扩到 {limit} 路；\
-                 每块独立游标 + 独立事务，页 {} 行）",
-                plan.table,
-                reader_plugin.page_rows()
-            ));
-        }
+    // 分片方式是内部策略，**不进界面日志**（界面只留「完成 · 行数 · 耗时」这种结果行）；
+    // 文件日志里要能一眼看出「按主键切的 / 按唯一索引切的 / 退回 OFFSET 了」——
+    // 无键表越往后越慢，排障第一眼就靠这句。成因也分开说：源表本来没主键 vs 主键列没勾全，
+    // 建议完全不同（后者还让用户「去加主键」就是错方向）。
+    if slices > 1 && tracing::enabled!(tracing::Level::DEBUG) {
+        // `plan.columns` 只有列名（没有 primary_key 标记）⇒ 判断「按主键切的」要拿
+        // `src_primary` 比：paging_keys 全部落在源主键列里才是主键分片。
+        let from_primary = !plan.paging_keys.is_empty()
+            && plan
+                .paging_keys
+                .iter()
+                .all(|key| plan.src_primary.iter().any(|primary| primary.eq_ignore_ascii_case(key)));
+        let missing_primary = !plan.src_primary.is_empty()
+            && plan
+                .src_primary
+                .iter()
+                .any(|key| !plan.columns.iter().any(|column| column.eq_ignore_ascii_case(key)));
+        let how = if plan.paging_keys.is_empty() {
+            if missing_primary {
+                format!("主键列没有全部纳入同步，按行号范围切成 {slices} 段（每段 OFFSET 定位）")
+            } else if plan.src_primary.is_empty() {
+                format!("源表没有主键，也没有可当游标的唯一索引，按行号范围切成 {slices} 段")
+            } else {
+                format!("没有可当游标的唯一索引，按行号范围切成 {slices} 段（每段 OFFSET 定位）")
+            }
+        } else if from_primary {
+            format!("按主键切成 {slices} 段并行搬运")
+        } else {
+            format!("按唯一索引切成 {slices} 段并行搬运")
+        };
+        tracing::debug!(table = %plan.table, how = %how, "分片方式");
     }
     let reader: Arc<dyn super::Reader> = Arc::from(reader_plugin);
 
@@ -284,12 +321,17 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         limited: limited.clone(),
         read_ms: read_ms.clone(),
         write_ms: write_ms.clone(),
+        transfer_told: Arc::new(AtomicBool::new(false)),
     });
 
     // ---- 3. 块队列 + 令牌池（读 → 写 → 提交；失败回滚重跑该块）-------------
     //
     // 任务数 = 块数（多于初始并发），实际同时跑几块由令牌池决定：这样尾部补发令牌时，
     // 早已就位、正在等令牌的任务立刻就能领块开跑，不需要再 spawn（也就不需要重切表）。
+    // 链路日志第 3 步：开始取数（前两步「删除目标表 / 创建目标表」在 sync 层打过）
+    if let Some(task) = &ctx.plan.task {
+        task.log(format!("表 {}：读取源数据", ctx.plan.table));
+    }
     let queue = Arc::new(std::sync::Mutex::new(ranges.into_iter()));
     let mut handles = Vec::with_capacity(slices);
     for _ in 0..slices.max(1) {
@@ -365,12 +407,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                     .min(limit);
                 if target > current && slots.grow_to(target) > 0 {
                     current = target;
-                    if let Some(task) = &plan.task {
-                        task.log(format!(
-                            "表 {}：其它对象已结束，并发扩到 {target} 路（读片与写连接同步增加）",
-                            plan.table
-                        ));
-                    }
+                    tracing::debug!(table = %plan.table, target, "其它对象已结束，并发扩容");
                 }
             }
         })
@@ -466,16 +503,24 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         if done_rows > 0 {
             let total_ms = started.elapsed().as_millis().max(1) as u64;
             let rate = done_rows.saturating_mul(1_000) / total_ms;
-            let lanes = slots.issued.load(Ordering::SeqCst).max(1);
+            // 链路日志第 5 步（终点）：这张表搬完，多少行、花了多久。
+            // 读/写分解、并发路数属于调参信息，进 tracing 就够了。
             task.log(format!(
-                "表 {}：耗时画像 —— 读 {:.1}s / 写 {:.1}s / 合计 {:.1}s，{rate} 行/秒\
-                 （{lanes} 路并发，页 {} 行）",
+                "表 {}：传输完成，共 {}，耗时 {}",
                 plan.table,
-                read_spent as f64 / 1_000.0,
-                write_spent as f64 / 1_000.0,
-                total_ms as f64 / 1_000.0,
-                ctx.reader.page_rows(),
+                super::万行(done_rows),
+                super::时长(total_ms),
             ));
+            tracing::debug!(
+                table = %plan.table,
+                read_s = read_spent as f64 / 1_000.0,
+                write_s = write_spent as f64 / 1_000.0,
+                total_s = total_ms as f64 / 1_000.0,
+                rate,
+                lanes = slots.issued.load(Ordering::SeqCst).max(1),
+                page_rows = ctx.reader.page_rows(),
+                "同步耗时画像"
+            );
         }
     }
 
@@ -549,6 +594,9 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
     let cap = txn_rows_cap();
     let mut low = range.low.clone();
     let mut cursor: Option<Cursor> = None;
+    // 无键表按事务提交后要续跑，每段一条日志会把「同步日志」刷成流水账：
+    // 只报第一次与之后每 10 次，进度本身由进度卡承担。
+    let mut pauses: u32 = 0;
     loop {
         let segment = RowRange {
             index: range.index,
@@ -570,13 +618,14 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
             SegmentOutcome::PausedAt(next_offset) => {
                 // 无键表：`low` 一直是 None（没有键可以抬左界），位置全交给 OFFSET。
                 // 段的行号上界仍由 `range.window` 管着，续跑不会越界读到下一段。
-                if let Some(task) = &ctx.plan.task {
-                    // 每 [`TXN_ROWS_DEFAULT`] 行一条：既是进度，也是「断在这里不用从头重扫」的依据
-                    task.log(format!(
-                        "表 {}：本段已提交，从第 {next_offset} 行继续（OFFSET 续跑）",
-                        ctx.plan.table
-                    ));
-                }
+                pauses += 1;
+                // 阶段进度（无键表每 10 次分段提交报一句）也不进界面：只留结果
+                tracing::debug!(
+                    table = %ctx.plan.table,
+                    next_offset,
+                    pauses,
+                    "已提交到该位置，继续"
+                );
                 cursor = Some(Cursor {
                     key: None,
                     offset: next_offset,
@@ -744,6 +793,14 @@ async fn run_segment(
                             let written = rows.min(sent);
                             try_inserted += written;
                             ctx.inserted.fetch_add(written, Ordering::SeqCst);
+                            // 链路日志第 4 步：第一页真正落库时打一次。
+                            // 读和写要各有起点 —— 大表上「读了几分钟」和「在读但没写进去」
+                            // 在界面上必须分得开。
+                            if written > 0 && !ctx.transfer_told.swap(true, Ordering::SeqCst) {
+                                if let Some(task) = &ctx.plan.task {
+                                    task.log(format!("表 {}：传输数据到目标表", ctx.plan.table));
+                                }
+                            }
                         }
                         Err(msg) => {
                             failure = Some(msg);
@@ -818,13 +875,32 @@ async fn run_segment(
             if !retryable {
                 return Err(msg);
             }
+            // 界面日志：第一次把原因说全，之后同类重试只说「又重试了一次」——
+            // 同一段连续重试时把那一长串半开解释重复三遍，会把真正重要的行淹掉
+            //（用户反馈「这种提示一直在刷」）。完整原因每次仍进文件日志。
+            tracing::warn!(
+                target: "dbmind::sync",
+                table = %plan.table,
+                slice = range.index + 1,
+                attempt,
+                reason = %msg,
+                "写段中断，自动重跑该段"
+            );
             if let Some(task) = &plan.task {
-                task.log(format!(
-                    "表 {}（片 {}）：写入中断（{msg}）；本段事务已回滚，自动重连重跑该段（第 {}/{SLICE_RETRY} 次）",
-                    plan.table,
-                    range.index + 1,
-                    attempt,
-                ));
+                if attempt == 1 {
+                    task.log(format!(
+                        "表 {}（片 {}）：写入中断（{msg}）；本段事务已回滚，自动换连接重跑该段\
+                         （第 {attempt}/{SLICE_RETRY} 次，数据会重新写入，无需处理）",
+                        plan.table,
+                        range.index + 1,
+                    ));
+                } else {
+                    task.log(format!(
+                        "表 {}（片 {}）：再次中断，已重跑该段（第 {attempt}/{SLICE_RETRY} 次，无需处理）",
+                        plan.table,
+                        range.index + 1,
+                    ));
+                }
             }
             // 退避 1s / 2s：链路真的不行时别把两次尝试挤在同一秒里再撞一次
             tokio::time::sleep(Duration::from_secs(1u64 << (attempt - 1))).await;
@@ -905,32 +981,92 @@ async fn write_rows(
     worker: usize,
     rows: &[Vec<CellValue>],
 ) -> Result<u64, String> {
+    // 任务里刚有别的表探活失败（链路整体不可用）⇒ 先按暂停窗口让一让。
+    // 不这么做的话，几百张表会在同一秒各自换连接、各自回滚一段再各自报错。
+    if let Some(grow) = &ctx.plan.grow {
+        let left = grow.link_hold_left_ms();
+        if left > 0 {
+            tokio::time::sleep(Duration::from_millis(left.min(LINK_HOLD_MS))).await;
+        }
+    }
     let started = std::time::Instant::now();
     ctx.plan.diag.note_batch_start(rows.len());
     ctx.plan.diag.inflight.fetch_add(1, Ordering::Relaxed);
     // 阈值跟着这张表的现场走：正常 1 秒一批 ⇒ 20 秒就判定；真慢的批（十秒级）不会误杀
     let watchdog = ctx.plan.diag.batch_watchdog(rows.len());
     debug_assert!(watchdog <= WRITE_CALL_TIMEOUT_MAX);
-    let outcome = match tokio::time::timeout(watchdog, ctx.writer.write(worker, rows)).await {
-        Ok(outcome) => outcome,
+    let (outcome, timed_out) = match tokio::time::timeout(watchdog, ctx.writer.write(worker, rows)).await {
+        Ok(outcome) => (outcome, false),
         Err(_) => {
             // 半开连接上那条语句还挂在宿主里，**必须换新连接**再重试，
-            // 否则下一次调用复用它、再挂一次（真机表现为「每张表都卡一次」）
+            // 否则下一次调用复用它、再挂一次（真机表现为「每张表都卡一次」）。
+            // 同时把**单条语句的字节上限**减半：劣化链路（PMTU 黑洞 / 静默丢包）上大报文
+            // 会一直撞重传退避 —— 报文不小下去，重试只是「再等一次同样的超时」，
+            // 界面上就成了同一张表反复「写入中断」。
+            let (old_cap, new_cap) = ctx.writer.shrink_stmt(worker);
+            // 探活：分清「这一条连接半开」和「整条链路/目标不可用」——
+            // 后者换连接只会在下一批再撞一次，该让整个任务一起停一会儿；
+            // 也顺手给日志一个证据（探不通 ≠ 用户数据有问题）。
+            let halt_note = if probe_target(&ctx.plan).await {
+                String::new()
+            } else {
+                match &ctx.plan.grow {
+                    Some(grow) => {
+                        grow.hold_link(LINK_HOLD_MS);
+                        format!(
+                            "；目标端探活也不通（链路整体不可用），本任务所有表先停 {} 秒",
+                            LINK_HOLD_MS / 1000
+                        )
+                    }
+                    None => "；目标端探活也不通（链路整体不可用）".to_string(),
+                }
+            };
             ctx.writer.renew().await;
-            Err(format!(
-                "单批 {} 行写入 {} 秒未返回（该表近期单批通常在 {} 秒内）：目标端连接已经半开\
-                 （RDS wait_timeout 踢连接 / 链路静默丢包），或该连接的 socketTimeout=0（永不超时）。\
-                 已弃用这条连接，重试会重新建连；若同一张表反复出现，把「编辑数据源 → 高级参数」\
-                 里的 socketTimeout 改成 120000（毫秒，注意不是 120）",
-                rows.len(),
-                watchdog.as_secs(),
-                (watchdog.as_secs() / 8).max(1),
-            ))
+            let shrink_note = if new_cap > 0 && new_cap < old_cap {
+                format!("，并把重试的单条语句上限降到 {} KB", new_cap / 1024)
+            } else {
+                String::new()
+            };
+            (
+                Err(format!(
+                    "单批 {} 行写入 {} 秒未返回（该表近期单批通常在 {} 秒内）：目标端连接可能已半开\
+                     （RDS wait_timeout 踢连接 / 链路静默丢包），或这条连接没设 socketTimeout。\
+                     已弃用该连接{shrink_note}{halt_note}；若同一张表反复出现，把「编辑数据源 → 高级参数」\
+                     里的 socketTimeout 改成 120000（毫秒，注意不是 120）",
+                    rows.len(),
+                    watchdog.as_secs(),
+                    (watchdog.as_secs() / 8).max(1),
+                )),
+                true,
+            )
         }
     };
-    ctx.plan.diag.inflight.fetch_sub(1, Ordering::Relaxed);
-    ctx.plan.diag.note_batch_done(rows.len(), started.elapsed());
+    // `inflight` 的加减由 diag 的收尾方法负责 —— 这里曾再减一次，减成负数（u64 回绕）
+    if timed_out {
+        ctx.plan.diag.note_batch_timeout(rows.len(), started.elapsed());
+    } else {
+        ctx.plan.diag.note_batch_done(rows.len(), started.elapsed());
+    }
     outcome
+}
+
+/// 目标端探活：**另开一条会话**跑 `select 1`，5 秒不回就算不通。
+///
+/// `false` = 连一条最简单的查询都回不来 ⇒ 这不是「某条连接半开」，而是链路/目标整体
+/// 不可用。调用方据此让整个任务退避（见 [`LINK_HOLD_MS`]），而不是几百张表各自重连。
+///
+/// 会话名按表隔离（`internal:sync-probe{sid}`）：内核的会话泳道是「同键一条物理连接」，
+/// 全任务共用一个键时所有探活会排队，链路真挂的时候反而互相拖住。
+async fn probe_target(plan: &TablePlan) -> bool {
+    let session = format!("internal:sync-probe{}", plan.sid);
+    matches!(
+        tokio::time::timeout(
+            PROBE_TIMEOUT,
+            crate::api::sync::run_target_in(&plan.state, &plan.tgt_target, "select 1", &session),
+        )
+        .await,
+        Ok(Ok(_))
+    )
 }
 
 /// 原子地领取行数上限配额：`consumed` 永远不会被推到 `limit` 之后。

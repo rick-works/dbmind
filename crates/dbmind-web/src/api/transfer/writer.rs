@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use dbmind_core::CellValue;
 
-use super::{BF, StreamCfg, TablePlan, UpsertMode, WriteDiag};
+use super::{BF, GrowCaps, StreamCfg, TablePlan, UpsertMode, WriteDiag};
 use crate::api::dialect::Dialect;
 use crate::api::sync::{
     build_update, doris_stream_load, estimate_row_bytes, json_row_bytes, rows_need_json_fallback,
@@ -72,6 +72,18 @@ pub trait Writer: Send + Sync {
     fn renew<'a>(&'a self) -> BF<'a, ()> {
         Box::pin(async {})
     }
+
+    /// 单批写超时后：把**单条语句的字节上限**减半，让紧接着的重试用更小的报文。
+    ///
+    /// 为什么必须减：劣化链路（PMTU 黑洞 / 静默丢包）上大报文会一直撞重传退避 ——
+    /// 报文不小下去，重试就是「再等一次同样的超时」，界面上表现为同一张表反复
+    /// 「写入中断」。真机口径：同一条 TAP 隧道 60KB 的 INSERT 稳过、121KB 必挂。
+    ///
+    /// 返回 `(旧, 新)` 字节上限，供界面日志说明重试已经拆小到什么程度。
+    /// 默认实现不调整（返回 `(0, 0)`）。
+    fn shrink_stmt(&self, _worker: usize) -> (usize, usize) {
+        (0, 0)
+    }
 }
 
 /// 一张表最多换几次写连接（见 `Writer::renew`）。
@@ -113,6 +125,9 @@ pub struct SqlWriter {
     stmt_caps: Vec<AtomicUsize>,
     /// 写池诊断（二分定位到的坏行样例写这里，卡顿日志会读）
     diag: Arc<WriteDiag>,
+    /// 任务级共享配额（整库同步才有）：这里只用来收敛**报文上限**与**链路暂停**，
+    /// 让一张表踩过的坑立刻对剩下几百张表生效（见 `GrowCaps::stmt_cap_hint`）。
+    grow: Option<Arc<GrowCaps>>,
     /// 写会话**代数**：链路级失败/单批超时后 +1，下一次调用用的是全新会话名
     /// ⇒ 内核/宿主新建物理连接。
     ///
@@ -143,6 +158,16 @@ impl SqlWriter {
         // 尾部弹性的上限：方言声明的写并发（单连接池的库仍是 1）。运行时补发的 worker
         // 编号一定 ≤ 它，所以数组按它预分配就够 —— 扩容只是「多给几路会话」，不改结构。
         let workers_ceiling = workers.max(base).max(1);
+        // 起始报文上限：方言默认值与**本任务已学到的建议值**取小。
+        // 这一步是「一次踩坑、全任务收敛」的落地点：同一任务里某张表已经证明过大报文
+        // 会卡住，之后开工的表直接从小的开始，不必各自再撞一次。
+        let stmt_cap = crate::api::sync::effective_stmt_cap(
+            kind_key,
+            plan.grow
+                .as_ref()
+                .map(|grow| grow.stmt_cap_hint())
+                .unwrap_or(0),
+        );
         Self {
             state: plan.state.clone(),
             task: plan.task.clone(),
@@ -166,8 +191,9 @@ impl SqlWriter {
             stream: plan.stream.clone(),
             stream_failed: AtomicBool::new(false),
             stmt_caps: (0..workers_ceiling)
-                .map(|_| AtomicUsize::new(crate::api::sync::insert_stmt_cap(kind_key)))
+                .map(|_| AtomicUsize::new(stmt_cap))
                 .collect(),
+            grow: plan.grow.clone(),
             workers: workers.max(1),
             workers_ceiling,
             diag: plan.diag.clone(),
@@ -414,6 +440,7 @@ impl Writer for SqlWriter {
                         in_transaction,
                         &self.diag,
                         &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)],
+                        self.grow.as_deref(),
                     )
                     .await?;
                     return Ok(loaded_total + rest);
@@ -434,6 +461,7 @@ impl Writer for SqlWriter {
                 in_transaction,
                 &self.diag,
                 &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)],
+                self.grow.as_deref(),
             )
             .await
         })
@@ -670,5 +698,25 @@ impl Writer for SqlWriter {
                 "写连接已弃用，后续重试改用全新会话（避免复用半开的连接）"
             );
         })
+    }
+
+    fn shrink_stmt(&self, worker: usize) -> (usize, usize) {
+        let slot = &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)];
+        let old = slot.load(Ordering::SeqCst);
+        // 与 `write_insert_rows` 的断连路径同一口径：减半、不低于 STMT_CAP_MIN。
+        // 只在超时/断连时收紧，健康链路上报文大小不受影响（耗时会把它翻倍回去）。
+        let mut new = (old / 2).max(crate::api::sync::STMT_CAP_MIN);
+        // 把结论写给**整个任务**：后面开工的表直接用这个上限，
+        // 不必各自再撞一次同样的超时（这才是「不再频繁刷中断」的关键）。
+        if let Some(grow) = &self.grow {
+            let (_, hint) = grow.note_stmt_cap(new);
+            if hint > 0 && hint < new {
+                new = hint;
+            }
+        }
+        if new < old {
+            slot.store(new, Ordering::SeqCst);
+        }
+        (old, new)
     }
 }

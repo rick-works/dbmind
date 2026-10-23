@@ -584,6 +584,37 @@ pub(crate) async fn run_target_in_rows(
     session: &str,
     max_rows: usize,
 ) -> XResult<dbmind_core::QueryResult> {
+    run_target_in_rows_timeout(state, target, sql, session, max_rows, 600_000).await
+}
+
+/// DDL（建索引 / 改表）的墙钟上限：**必须比搬数据短得多**。
+///
+/// 为什么不能沿用 600 秒：慢盘上给 214 万行建一个 `varchar(64)` 二级索引，实测
+/// **超过 5 分钟还没建完**（直接在同机 mariadb 客户端跑也一样），任务就整段卡在这里
+/// —— 用户看到的是「同步一直不结束」（真机 21:05 数据搬完、21:15 还没收尾）。
+///
+/// 索引没建成的后果只是「目标表少一个索引」，数据早就写好了，所以超时该放弃并继续，
+/// 界面会照常报一句「N 个索引未能创建（可在目标库手工补建）」。180 秒足够千万行级
+/// 大表正常建完，再慢就该让用户自己决定要不要等。
+const DDL_TIMEOUT_MS: u64 = 180_000;
+
+/// 目标端执行 **DDL**：建索引这类可能很慢的语句，用 [`DDL_TIMEOUT_MS`] 而不是 600 秒。
+pub(crate) async fn run_target_ddl(
+    state: &AppState,
+    target: &str,
+    sql: &str,
+) -> XResult<dbmind_core::QueryResult> {
+    run_target_in_rows_timeout(state, target, sql, "internal:sync-ddl", 1, DDL_TIMEOUT_MS).await
+}
+
+async fn run_target_in_rows_timeout(
+    state: &AppState,
+    target: &str,
+    sql: &str,
+    session: &str,
+    max_rows: usize,
+    timeout_ms: u64,
+) -> XResult<dbmind_core::QueryResult> {
     let engine = state.engine();
     let request = dbmind_core::QueryRequest {
         schema: None,
@@ -592,7 +623,7 @@ pub(crate) async fn run_target_in_rows(
         sql: sql.to_string(),
         options: dbmind_core::QueryOptions {
             max_rows,
-            timeout_ms: 600_000,
+            timeout_ms,
         },
         execution_id: None,
         session: Some(session.to_string()),
@@ -1130,14 +1161,10 @@ async fn sync_indexes(
     if indexes.is_empty() {
         return 0;
     }
-    // 索引后置阶段要在大表上建索引，本身就可能几分钟（ALTER/CREATE INDEX 期间
-    // 行数和传输数都不动）。逐条报一句，界面才不会看起来「卡住」。
+    // 建索引的过程**不进界面日志**（用户口径：日志只留结果，过程没用的不打）——
+    // 只在真有索引建不成时汇总成一行，见下面的 `failed`。
     let total = indexes.len();
-    if total > 1 {
-        if let Some(task) = task {
-            task.log(format!("表 {table}：开始创建 {total} 个索引（大表可能要几分钟）"));
-        }
-    }
+    tracing::debug!(table, total, "开始创建索引");
     let mut created = 0usize;
     // 建失败的索引：索引后置之后，建索引发生在**灌完数据**之后，大表上这一步本身就要花时间
     //（也可能撞上 10 分钟的单语句上限）—— 再像以前那样完全不吭声，用户只会看到
@@ -1165,35 +1192,18 @@ async fn sync_indexes(
             ));
         }
         let sql = format!("alter table {target_name} {}", parts.join(", "));
-        if let Some(task) = task {
-            task.log(format!(
-                "表 {table}：一次创建 {total} 个索引（合并为单条 ALTER，只扫一遍表）"
-            ));
-        }
-        match run_target(state, tgt_target, &sql).await {
+        // 建索引用 **DDL 短超时**：慢盘上这一步能拖到十分钟以上，任务会一直「不结束」
+        //（见 `DDL_TIMEOUT_MS` 的注释）。超时按「未建成」处理，不影响已同步的数据。
+        match run_target_ddl(state, tgt_target, &sql).await {
             Ok(_) => created = total,
             Err(err) => {
                 tracing::warn!(table, error = %err.message, "合并建索引失败，改为逐条创建");
-                if let Some(task) = task {
-                    task.log(format!(
-                        "表 {table}：合并建索引失败（{}），改为逐条创建",
-                        err.message
-                    ));
-                }
             }
         }
     }
 
     if created == 0 {
         for (name, unique, columns) in indexes {
-            if total > 1 {
-                if let Some(task) = task {
-                    task.log(format!(
-                        "表 {table}：创建索引 {}/{total}：{name}",
-                        created + 1
-                    ));
-                }
-            }
             let idx_name = target_kind.quote(name.as_str());
             let col_list = columns
                 .iter()
@@ -1208,14 +1218,13 @@ async fn sync_indexes(
                 // ClickHouse：二级索引必须带 TYPE 与 GRANULARITY，从 MySQL 索引推导不出类型 ——
                 // 硬建只会失败，明确跳过并留日志（数据同步不受影响）
                 "clickhouse" => {
-                    if let Some(task) = task {
-                        task.log(format!("表 {}：跳过索引 {}（ClickHouse 二级索引需要指定 TYPE，无法从源索引推导）", table, name));
-                    }
+                    // 数据同步不受影响，只是这个索引建不了 —— 过程细节进文件日志
+                    tracing::debug!(table, index = %name, "点击跳过：ClickHouse 二级索引需指定 TYPE，无法从源索引推导");
                     continue;
                 }
                 _ => format!("create {}index {} on {} ({})", unique_kw, idx_name, target_name, col_list),
             };
-            match run_target(state, tgt_target, &idx_sql).await {
+            match run_target_ddl(state, tgt_target, &idx_sql).await {
                 Ok(_) => created += 1,
                 Err(err) => {
                     tracing::warn!(table, index = %name, error = %err.message, "创建索引失败（已跳过）");
@@ -1225,9 +1234,7 @@ async fn sync_indexes(
         }
     }
     if created > 0 {
-        if let Some(task) = task {
-            task.log(format!("表 {table}：已创建 {created} 个索引"));
-        }
+        tracing::debug!(table, created, "二级索引已创建");
     }
     if !failed.is_empty() {
         if let Some(task) = task {
@@ -1262,9 +1269,11 @@ async fn create_deferred_indexes(
     if !deferred {
         return;
     }
+    // 链路里的一步：数据搬完后补建二级索引（大表上可能几分钟，期间行数不动）。
     if let Some(task) = task {
-        task.log(format!("表 {table}：数据已灌完，创建二级索引"));
+        task.log(format!("表 {table}：创建索引"));
     }
+    tracing::debug!(table, "数据已灌完，创建二级索引");
     sync_indexes(
         state,
         src,
@@ -1891,7 +1900,6 @@ async fn update_comments(
     target_name: &str,
     table: &str,
     source_columns: &[dbmind_core::ColumnDetail],
-    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
 ) {
     let key = target_kind.kind.key();
     // ---- 表注释 ----
@@ -1914,9 +1922,7 @@ async fn update_comments(
                 _ => String::new(),
             };
             if !sql.is_empty() && run_target(state, tgt_target, &sql).await.is_ok() {
-                if let Some(task) = task {
-                    task.log(format!("表 {table}：表注释已同步"));
-                }
+                tracing::debug!(table, "表注释已同步");
             }
         }
     }
@@ -1967,9 +1973,23 @@ async fn update_comments(
         }
     }
     if updated > 0 {
-        if let Some(task) = task {
-            task.log(format!("表 {table}：已同步 {updated} 个列注释"));
-        }
+        tracing::debug!(table, updated, "列注释已同步");
+    }
+}
+
+/// 对象类型的中文叫法（界面日志前缀用）。
+///
+/// 统一一处：开始行与结果行必须用同一个词，否则同一张表在日志里一会儿「表」一会儿
+/// 「table」，用户对不上。
+fn kind_label(ty: &str) -> &str {
+    match ty {
+        "table" => "表",
+        "view" => "视图",
+        "procedure" => "存储过程",
+        "function" => "函数",
+        "trigger" => "触发器",
+        "event" => "事件",
+        other => other,
     }
 }
 
@@ -2261,7 +2281,21 @@ pub(crate) fn insert_stmt_cap(kind_key: &str) -> usize {
 /// 连接重置，驱动只报 `Communications link failure`，看日志像"服务端把我踢了"，实际是包丢了）。
 /// 128KB 的下限让 `DBMIND_SYNC_STMT_CAP` 想调小也调不动，只能改代码，所以下限降到 32KB：
 /// 链路健康时耗时会迅速把 cap 翻倍回方言上限（见 `adapt_stmt_cap`），代价只是开头几次往返。
-const STMT_CAP_MIN: usize = 32 * 1024;
+pub(crate) const STMT_CAP_MIN: usize = 32 * 1024;
+
+/// 本任务**实际生效**的单条 INSERT 字节上限：方言默认值与任务级建议值取小。
+///
+/// `hint` 是同一任务里别的表撞出来的结论（见 `GrowCaps::stmt_cap_hint`）：
+/// 一条链路证明过「大于 N 字节的报文会卡住」，后面的表就不该再从方言默认值（MySQL 3MB）
+/// 开始重新试一遍。`hint == 0` = 还没学到任何结论。
+pub(crate) fn effective_stmt_cap(kind_key: &str, hint: usize) -> usize {
+    let kind_cap = insert_stmt_cap(kind_key);
+    if hint == 0 {
+        kind_cap
+    } else {
+        kind_cap.min(hint.max(STMT_CAP_MIN))
+    }
+}
 
 /// 按「平均每条语句的耗时」调整单条 INSERT 的字节上限。
 ///
@@ -2503,10 +2537,16 @@ pub(crate) async fn write_insert_rows(
     in_transaction: bool,
     diag: &crate::api::transfer::WriteDiag,
     stmt_cap: &std::sync::atomic::AtomicUsize,
+    // 任务级报文上限建议（整库同步才有；`None` = 单表同步，各写各的）
+    hint: Option<&crate::api::transfer::GrowCaps>,
 ) -> Result<u64, String> {
     // 语句字节上限按**每路 writer** 记（同表不同写线程可能一快一慢），
     // 这一批结束时按平均每条语句耗时调整，影响下一批（见 `adapt_stmt_cap`）。
-    let max_cap = insert_stmt_cap(target_kind.kind.key());
+    // 任务级建议值（别的表撞出来的结论）在这里生效：上限只能更小，不会被放大回去。
+    let max_cap = effective_stmt_cap(
+        target_kind.kind.key(),
+        hint.map(|grow| grow.stmt_cap_hint()).unwrap_or(0),
+    );
     let byte_cap = stmt_cap
         .load(std::sync::atomic::Ordering::Relaxed)
         .clamp(STMT_CAP_MIN, max_cap);
@@ -2542,20 +2582,12 @@ pub(crate) async fn write_insert_rows(
                 Err(err) if err.code.as_deref() == Some("DBMIND-DRV-0001") => {
                     // 驱动声明不支持：后面的子批不必再逐个试探。
                     use_prepared = false;
-                    if let Some(task) = task {
-                        task.log(format!(
-                            "表 {table}：目标驱动不支持预编译批量写入，使用 SQL 批处理"
-                        ));
-                    }
+                    tracing::debug!(table, "目标驱动不支持预编译批量写入，改用 SQL 批处理");
                 }
                 Err(err) if err.message.contains(PREPARED_BATCH_ROLLED_BACK) => {
                     // 宿主确认整批已回滚，才允许走原来的字面量/逐行降级；否则
                     // 部分成功后再重试会产生重复数据。
-                    if let Some(task) = task {
-                        task.log(format!(
-                            "表 {table}：预编译子批失败（已回滚），本批改用 SQL 批量并二分定位坏行"
-                        ));
-                    }
+                    tracing::warn!(table, "预编译子批失败（已回滚），本批改用 SQL 批量并二分定位坏行");
                 }
                 Err(err) => {
                     return Err(format!("预编译批量写入失败（未自动重试）：{}", err.message));
@@ -2591,12 +2623,7 @@ pub(crate) async fn write_insert_rows(
                     // 这里只是回收保存点。以前直接 return Err，界面显示「失败」
                     // 而目标端其实有数据，用户会以为白跑一趟。
                     if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                        if let Some(task) = task {
-                            task.log(format!(
-                                "表 {table}：释放保存点失败（数据已写入，继续）：{}",
-                                err.message
-                            ));
-                        }
+                        tracing::warn!(table, error = %err.message, "释放保存点失败（数据已写入，继续）");
                     }
                 }
             }
@@ -2609,9 +2636,21 @@ pub(crate) async fn write_insert_rows(
                     // 客户端发完收不到 ACK，19 秒后连接重置，驱动只报 Communications link
                     // failure。这里把单条语句的字节上限减半，后面重跑该片就用更小的包探路；
                     // 只在失败时下调，健康链路不会因此变慢。
-                    let shrunk = (byte_cap / 2).max(STMT_CAP_MIN);
+                    let mut shrunk = (byte_cap / 2).max(STMT_CAP_MIN);
                     if shrunk < byte_cap {
                         stmt_cap.store(shrunk, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    // 结论同步给**整个任务**：后面的表直接从更小的报文开工，
+                    // 不必各自再断一次（几百张表各撞一次 = 几百条吓人日志）。
+                    let mut shared = false;
+                    if let Some(grow) = hint {
+                        let (_, learned) = grow.note_stmt_cap(shrunk);
+                        if learned > 0 && learned < shrunk {
+                            shrunk = learned;
+                            shared = true;
+                        } else if learned == shrunk {
+                            shared = true;
+                        }
                     }
                     if let Some(task) = task {
                         let left = rows.len() as u64 - ok_rows;
@@ -2621,9 +2660,10 @@ pub(crate) async fn write_insert_rows(
                         //（真机：目标表一行不缺、结果却报失败 10 万）。
                         task.log(format!(
                             "表 {table}：写入连接已断（{}），已停止重试；本批剩余 {left} 行未写入，\
-                             将回滚本片并重跑（单条 INSERT 上限已调到 {} KB）",
+                             将回滚本片并重跑（单条 INSERT 上限已调到 {} KB{}）",
                             batch_err.message,
-                            shrunk / 1024
+                            shrunk / 1024,
+                            if shared { "，本任务后续表沿用" } else { "" }
                         ));
                     }
                     return Err(format!(
@@ -2672,12 +2712,7 @@ pub(crate) async fn write_insert_rows(
                             if let Some((_, _, Some(release))) = sub_sp.as_ref() {
                                 // 已经写成功，释放保存点失败不该把它改判成失败。
                                 if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                                    if let Some(task) = task {
-                                        task.log(format!(
-                                            "表 {table}：释放保存点失败（数据已写入，继续）：{}",
-                                            err.message
-                                        ));
-                                    }
+                                    tracing::warn!(table, error = %err.message, "释放保存点失败（数据已写入，继续）");
                                 }
                             }
                         }
@@ -2896,12 +2931,7 @@ pub(crate) async fn write_upsert_rows(
                 if let Some((_, _, Some(release))) = sp.as_ref() {
                     // 数据已写入，释放保存点失败只记日志（理由见 write_insert_rows）。
                     if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                        if let Some(task) = task {
-                            task.log(format!(
-                                "表 {table}：释放 upsert 保存点失败（数据已写入，继续）：{}",
-                                err.message
-                            ));
-                        }
+                        tracing::warn!(table, error = %err.message, "释放 upsert 保存点失败（数据已写入，继续）");
                     }
                 }
             }
@@ -2918,12 +2948,11 @@ pub(crate) async fn write_upsert_rows(
                 }
                 // 先把**批次本身的错误**记下来：降级逐行重试之后，行的错误往往是
                 // 「事务已被中止」这类二次错误，真正的原因（语法/类型/约束）只有这里能看到。
-                if let Some(task) = task {
-                    task.log(format!(
-                        "表 {table}：upsert 批次失败，改为逐行重试。批次错误：{}",
-                        batch_err.message.chars().take(400).collect::<String>()
-                    ));
-                }
+                tracing::warn!(
+                    table,
+                    error = %batch_err.message.chars().take(400).collect::<String>(),
+                    "upsert 批次失败，改为逐行重试"
+                );
                 let chunk = &rows[start_row..start_row + *n_rows as usize];
                 let mut chunk_failed = 0u64;
                 for row in chunk {
@@ -2966,12 +2995,7 @@ pub(crate) async fn write_upsert_rows(
                             if let Some((_, _, Some(release))) = row_sp.as_ref() {
                                 // 数据已写入，释放保存点失败只记日志。
                                 if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                                    if let Some(task) = task {
-                                        task.log(format!(
-                                            "表 {table}：释放 upsert 行保存点失败（数据已写入，继续）：{}",
-                                            err.message
-                                        ));
-                                    }
+                                    tracing::warn!(table, error = %err.message, "释放 upsert 行保存点失败（数据已写入，继续）");
                                 }
                             }
                         }
@@ -3083,12 +3107,7 @@ pub(crate) async fn write_update_batch(
             if let Some((_, _, Some(release))) = sp.as_ref() {
                 // 更新已经写进去了，释放保存点失败只记日志。
                 if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                    if let Some(task) = task {
-                        task.log(format!(
-                            "表 {table}：释放更新保存点失败（数据已写入，继续）：{}",
-                            err.message
-                        ));
-                    }
+                    tracing::warn!(table, error = %err.message, "释放更新保存点失败（数据已写入，继续）");
                 }
             }
         }
@@ -3124,12 +3143,7 @@ pub(crate) async fn write_update_batch(
                         if let Some((_, _, Some(release))) = row_sp.as_ref() {
                             // 这一行已经更新成功，释放保存点失败只记日志。
                             if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                                if let Some(task) = task {
-                                    task.log(format!(
-                                        "表 {table}：释放更新行保存点失败（数据已写入，继续）：{}",
-                                        err.message
-                                    ));
-                                }
+                                tracing::warn!(table, error = %err.message, "释放更新行保存点失败（数据已写入，继续）");
                             }
                         }
                     }
@@ -3429,11 +3443,7 @@ fn sync_slot_sid(slot: usize) -> String {
 /// `innodb_buffer_pool_size` 只有 128MB、`innodb_io_capacity` 只有 200 ——
 /// 这些参数同步工具改不了，但不点出来，用户只能反复怀疑工具。
 /// 实测：5000 万行同步到 128MB buffer pool 的 MariaDB，吞吐从 23.8k 行/秒掉到 18.6k。
-async fn warn_target_write_limits(
-    state: &AppState,
-    task: &std::sync::Arc<crate::api::tasks::Task>,
-    target: &str,
-) {
+async fn warn_target_write_limits(state: &AppState, target: &str) {
     let sql = "show variables where variable_name in \
                ('innodb_buffer_pool_size','innodb_io_capacity','innodb_flush_log_at_trx_commit')";
     let Ok(result) = run_target_in_rows(state, target, sql, "internal:sync-preflight", 16).await
@@ -3474,10 +3484,11 @@ async fn warn_target_write_limits(
         );
     }
     if !hints.is_empty() {
-        task.log(format!(
-            "目标端写入参数偏保守：{}。改成上面的值通常能把吞吐翻倍（这是目标库的配置，DBMind 不会去改）",
-            hints.join("；")
-        ));
+        // 这是**优化建议**，不是本次同步的结果 —— 只进文件日志，界面日志只留结果
+        tracing::info!(
+            hints = %hints.join("；"),
+            "目标端写入参数偏保守（改成建议值通常能把吞吐翻倍；DBMind 不会去改目标库配置）"
+        );
     }
 }
 
@@ -3625,11 +3636,16 @@ async fn sync_table_inner(
     // 这里一次算好，同实例直拷与 transfer 引擎共用同一个值 —— 两条路各自去读
     // `opts` 很容易分叉（曾经直拷路径漏掉过滤，抽样的表整表搬过去了）。
     let table_where = opts.where_for(table);
-    // Navicat 式阶段日志：每张表的「读结构 → 建表 → 拉数据 → 完成」都进任务日志，
-    // 界面上能看出 339 张表各自进行到哪一步（此前只有完成时一条，中途日志是空的）
-    if let Some(task) = task {
-        task.log(format!("表 {table}：读取结构"));
-    }
+    // 界面日志的粒度：**每一步的开始 + 最终结果**，中间的细枝末节（每条索引、每次保存点、
+    // 每 10 次分段提交）都不打。
+    //
+    // 为什么「开始」必须打：整库同步 400 个对象时，一张表从读到写完要几十秒，
+    // 只打「完成」的话界面上会有长达半分钟的空白（真机截图反馈：读计数在涨、
+    // 同步日志 0 条，用户以为卡死了）。开始行还带出「卡在哪一步」。
+    // 链路日志按「删除目标表 → 创建目标表 → 读取源数据 → 传输数据到目标表 → 传输完成」
+    // 走，每一步只打一条（详见 transfer/engine.rs 里后三步）。这里不先打「开始」——
+    // 它和下一步之间没有信息量，只会让每张表多一行。
+    tracing::debug!(table, "读取结构");
     let source_columns = match columns_of(state, src, table).await {
         Ok(columns) => columns,
         Err(err) => return ObjResult::failed(ty, table, format!("读取源表结构失败：{}", err.message)),
@@ -3687,9 +3703,7 @@ async fn sync_table_inner(
         if !opts.sync_structure {
             return ObjResult::skipped(ty, table, "目标表不存在，且未勾选「目标表不存在时自动建表」");
         }
-        if let Some(task) = task {
-            task.log(format!("表 {table}：创建表"));
-        }
+        tracing::debug!(table, "创建表");
         // 带上源表的表注释与字段注释（见上面取注释那一段）
         let ddl = target_kind.create_table_with_comments(
             &target_name,
@@ -3724,6 +3738,9 @@ async fn sync_table_inner(
             return ObjResult::failed(ty, table, msg);
         }
         created = true;
+        if let Some(task) = task {
+            task.log(format!("表 {table}：创建目标表"));
+        }
     } else if opts.policy == Policy::Drop
         || (opts.sync_structure && opts.data_mode == DataMode::TruncateInsert)
     {
@@ -3743,31 +3760,26 @@ async fn sync_table_inner(
                 "选择了「删除重建」，但没有勾选自动建表：那样会删掉目标表且建不回来",
             );
         }
+        // 链路日志第 1 步
         if let Some(task) = task {
-            task.log(if forced {
-                format!("表 {table}：目标已有历史结构，按源结构重建（对齐字符集/长度/索引）")
-            } else {
-                format!("表 {table}：删除表")
-            });
+            task.log(format!("表 {table}：删除目标表"));
         }
+        tracing::debug!(table, forced, "删除目标表（按源结构重建）");
         let mut rebuilt = true;
         if let Err(err) = run_target(state, &tgt_target, &format!("drop table {target_name}")).await {
             if !forced {
                 return ObjResult::failed(ty, table, format!("删除目标表失败：{}", err.message));
             }
             rebuilt = false;
-            if let Some(task) = task {
-                task.log(format!(
-                    "表 {table}：删除重建失败（{}），改为保留目标结构继续（若列定义与源不同，\
-                     后面可能报 Data too long / Incorrect string value）",
-                    err.message
-                ));
-            }
+            // 这是「降级继续」的过程细节：真要出问题，后面坏的行/表会以结果形式报出来
+            tracing::warn!(
+                table,
+                error = %err.message,
+                "删除重建失败，改为保留目标结构继续（列定义不一致时后续可能报 Data too long）"
+            );
         }
         if rebuilt {
-            if let Some(task) = task {
-                task.log(format!("表 {table}：创建表"));
-            }
+            tracing::debug!(table, "按源结构重建目标表");
             // 带上源表的表注释与字段注释（见上面取注释那一段）
             let ddl = target_kind.create_table_with_comments(
                 &target_name,
@@ -3780,6 +3792,10 @@ async fn sync_table_inner(
                 return ObjResult::failed(ty, table, format!("重建目标表失败：{}", err.message));
             }
             created = true;
+            // 链路日志第 2 步
+            if let Some(task) = task {
+                task.log(format!("表 {table}：创建目标表"));
+            }
         }
     }
         // 建表后才能补的注释（SQL Server 的扩展属性等）：create_table_with_comments
@@ -3806,9 +3822,7 @@ async fn sync_table_inner(
             let _ = run_target(state, &tgt_target, sql).await;
         }
         if !post_comments.is_empty() {
-            if let Some(task) = task {
-                task.log(format!("表 {}：已补充注释（{} 条）", table, post_comments.len()));
-            }
+            tracing::debug!(table, count = post_comments.len(), "已补充注释");
         }
     // 建表（含删除重建）成功后：把源表的非主键索引搬过来（「建表包含索引」选项）
     //
@@ -3852,7 +3866,7 @@ async fn sync_table_inner(
     if !created && opts.sync_structure {
         update_comments(
             state, src, source_kind, tgt, target_kind, &tgt_target, &target_name, table,
-            &source_columns, task,
+            &source_columns,
         )
         .await;
     }
@@ -3861,9 +3875,9 @@ async fn sync_table_inner(
         let message = if created { "已按源结构建表（未同步数据）" } else { "已跳过（未勾选同步数据）" };
         return ObjResult::ok(ty, table, message, 0, 0);
     }
-    if let Some(task) = task {
-        task.log(format!("表 {table}：拉取数据"));
-    }
+    // 「读取源数据」由 transfer 引擎在真正发第一页查询时打（单表同步、直拷两条路
+    // 都走它），这里不重复。
+    tracing::debug!(table, "开始搬运数据");
 
     let target_columns = if created {
         source_columns.clone()
@@ -4205,9 +4219,7 @@ async fn sync_table_inner(
         0
     };
     if use_stream && be_http_port > 0 {
-        if let Some(task) = task {
-            task.log(format!("表 {table}：Stream Load 直连 BE http 端口 {be_http_port}"));
-        }
+        tracing::debug!(table, be_http_port, "Stream Load 直连 BE http 端口");
     }
     // ===== 流式写入：读一页、写一页 =====
     // 旧实现是「整表读进内存 → 再写」，代价是三件事捆在一起：
@@ -4244,9 +4256,7 @@ async fn sync_table_inner(
         let src_uuid = read_uuid(state, &src.conn, &src.scope).await;
         let tgt_uuid = read_uuid(state, &tgt.conn, &tgt.scope).await;
         if !src_uuid.is_empty() && src_uuid == tgt_uuid {
-            if let Some(task) = task {
-                task.log(format!("表 {table}：同实例，直拷（insert … select）"));
-            }
+            tracing::debug!(table, "同实例，走 insert … select 直拷");
             let col_list_src = columns
                 .iter()
                 .map(|name| source_kind.quote(name))
@@ -4379,14 +4389,11 @@ async fn sync_table_inner(
             .unwrap_or_default()
     };
     if paging_keys.is_empty() {
-        // 没有可用的键：分页只能退回 OFFSET，第 N 页要让源库白扫前 N×5 万行（O(N²)）。
-        // 这个代价用户看不见，只会觉得「越大越慢」，所以明说一句怎么解。
-        if let Some(task) = task {
-            task.log(format!(
-                "表 {table}：无主键且没有可用的唯一索引（列需全部纳入同步且非空），\
-                 改用 OFFSET 分页（越往后越慢）；建议给源表加主键/唯一索引"
-            ));
-        }
+        // 没有可用的键 ⇒ 分页只能退回 OFFSET（第 N 页要让源库白扫前 N 页）。
+        // 这句**不再进界面日志**：紧接着 transfer 引擎会按实际分片方式打一句
+        // 「…按行号范围切成 N 段（每段 OFFSET 定位…）」，两条并列时用户看到的是
+        // 自相矛盾（先说不按主键、又说按主键切块）。细节留在文件日志里，够排障用。
+        tracing::debug!(table, "无主键且没有可用的唯一索引（列需全部纳入同步且非空），退回 OFFSET 分页");
     }
 
     // 写池诊断（在途批数 / 最近批耗时 / 失败样例 / 是否退回过逐条提交）：
@@ -4418,6 +4425,7 @@ async fn sync_table_inner(
         key_columns: key_columns.clone(),
         key_indexes: key_indexes.clone(),
         paging_keys: paging_keys.clone(),
+        src_primary: source_primary.clone(),
         where_clause: table_where.clone(),
         row_limit: opts.row_limit,
         upsert: upsert_mode,
@@ -4685,6 +4693,7 @@ async fn sync_view(
     tgt: &Side,
     name: &str,
     opts: &Opts,
+    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
 ) -> ObjResult {
     let source_kind = Dialect::new(
         match require_record(state, &src.conn).await {
@@ -4746,10 +4755,16 @@ async fn sync_view(
         return ObjResult::skipped("view", name, "目标已存在同名视图（保留结构策略下不动它）");
     }
     if opts.policy == Policy::Drop {
+        if let Some(task) = task {
+            task.log(format!("视图 {name}：删除目标视图"));
+        }
         let _ = run_target(state, &tgt_target, &format!("drop view if exists {target_name}")).await;
     }
+    if let Some(task) = task {
+        task.log(format!("视图 {name}：创建视图"));
+    }
     match run_target(state, &tgt_target, &definition).await {
-        Ok(_) => ObjResult::ok("view", name, "已按源定义建视图", 0, 0),
+        Ok(_) => ObjResult::ok("view", name, "同步完成", 0, 0),
         Err(err) => ObjResult::failed("view", name, format!("建视图失败：{}", err.message)),
     }
 }
@@ -4770,6 +4785,7 @@ async fn sync_object_source(
     kind: &str,
     name: &str,
     opts: &Opts,
+    task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
 ) -> ObjResult {
     let source_kind = match require_record(state, &src.conn).await {
         Ok(record) => Dialect::new(record.kind()),
@@ -4826,6 +4842,9 @@ async fn sync_object_source(
     if opts.policy == Policy::Drop {
         match target_kind.drop_object_sql(kind, name) {
             Some(drop_sql) => {
+                if let Some(task) = task {
+                    task.log(format!("{} {name}：删除目标{}", kind_label(kind), kind_label(kind)));
+                }
                 // 目标没有这个对象时 `if exists` 不会报错，所以不看结果
                 let _ = run_target(state, &tgt_target, &drop_sql).await;
             }
@@ -4842,8 +4861,11 @@ async fn sync_object_source(
             }
         }
     }
+    if let Some(task) = task {
+        task.log(format!("{} {name}：创建{}", kind_label(kind), kind_label(kind)));
+    }
     match run_target(state, &tgt_target, &definition).await {
-        Ok(_) => ObjResult::ok(kind, name, "已按源定义创建", 0, 0),
+        Ok(_) => ObjResult::ok(kind, name, "同步完成", 0, 0),
         Err(err) => ObjResult::failed(kind, name, format!("创建失败：{}", err.message)),
     }
 }
@@ -5125,12 +5147,31 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 if let Ok(preflight) =
                     crate::api::scope::resolve(&state, &tgt.conn, &tgt.scope).await
                 {
-                    warn_target_write_limits(&state, &task, &preflight).await;
+                    warn_target_write_limits(&state, &preflight).await;
                 }
             }
             task.set_total(total as i64);
             // 表与依赖表对象的数量：决定要不要等闸门（见下面的 tables_done）
             let table_count = objects.iter().filter(|(kind, _)| kind == "table").count();
+            // 任务级开始行：第一个对象真正启动前界面不该是空白
+            //（真机反馈：读计数已经在涨、日志区还停在「等待同步开始…」）。
+            //
+            // 明细按类型逐个列（表/视图/存储过程/函数/触发器/事件），只列非零项：
+            // 「其余为视图/例程」这种含糊说法在整库同步时等于没说 —— 用户看不出
+            // 到底要搬几张表、几个例程，也无从判断清单选得对不对。
+            let mut parts: Vec<String> = Vec::new();
+            for kind in ["table", "view", "procedure", "function", "trigger", "event"] {
+                let count = objects.iter().filter(|(ty, _)| ty == kind).count();
+                if count > 0 {
+                    parts.push(format!("{} {count} 个", kind_label(kind)));
+                }
+            }
+            let detail = if parts.is_empty() {
+                String::new()
+            } else {
+                format!("（{}）", parts.join("，"))
+            };
+            task.log(format!("开始同步：{total} 个对象{detail}"));
             // 调度细节只进 tracing（debug）：它们是「内部怎么排兵布阵」，用户看不懂也不需要看
             tracing::debug!(
                 target: "dbmind::sync",
@@ -5259,6 +5300,11 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         return;
                     }
                     task.set_phase(name.to_string());
+                    // 表的「开始」行由 `sync_table` 自己打（单表同步那条路也要有）；
+                    // 这里补非表对象 —— 视图/例程排在所有表之后，没这条就只剩「等待」。
+                    if kind != "table" {
+                        task.log(format!("{} {name}：开始", kind_label(&kind)));
+                    }
                     let outcome = match kind.as_str() {
                         "table" => {
                             // 弹性会话预算只在**收尾阶段**放宽（剩余表数 ≤ 并发上限）：
@@ -5295,10 +5341,21 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                             drop(guard);
                             outcome
                         }
-                        "view" => sync_view(&state, &src, &tgt, &name, &opts).await,
+                        "view" => {
+                            sync_view(&state, &src, &tgt, &name, &opts, Some(&task)).await
+                        }
                         // 例程 / 触发器 / 事件：与视图同一条路（见 sync_object_source）
                         "procedure" | "function" | "trigger" | "event" => {
-                            sync_object_source(&state, &src, &tgt, &kind, &name, &opts).await
+                            sync_object_source(
+                                &state,
+                                &src,
+                                &tgt,
+                                &kind,
+                                &name,
+                                &opts,
+                                Some(&task),
+                            )
+                            .await
                         }
                         other => ObjResult::skipped(other, &name, "该对象类型不支持同步（结构、数据都没动）"),
                     };
@@ -5312,19 +5369,14 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         c.3 += outcome.inserted;
                         c.4 += outcome.updated;
                     }
-                    if !outcome.message.is_empty() {
-                        // 日志带对象类型前缀（表/视图/存储过程…），与各步骤日志「表 xxx：…」一致；
-                        // 存储过程/函数/触发器/事件沿用中文叫法
-                        let kind_label = match outcome.ty.as_str() {
-                            "table" => "表",
-                            "view" => "视图",
-                            "procedure" => "存储过程",
-                            "function" => "函数",
-                            "trigger" => "触发器",
-                            "event" => "事件",
-                            other => other,
-                        };
-                        task.log(format!("{kind_label} {name}：{}", outcome.message));
+                    // 表的数据搬运结果已经由 transfer 引擎打过一行（含行数/耗时/速率），
+                    // 这里再打「传输完成（已建表）」就是纯重复 —— 400 张表就是 800 条。
+                    // 跳过 / 失败 / 只建表没搬数据 仍要打：那是用户真正要看的结果。
+                    let already_reported =
+                        outcome.ty == "table" && outcome.message.starts_with("传输完成");
+                    if !outcome.message.is_empty() && !already_reported {
+                        // 日志带对象类型前缀（表/视图/存储过程…），与「表 xxx：开始」一致
+                        task.log(format!("{} {name}：{}", kind_label(&outcome.ty), outcome.message));
                     }
                     *slot.lock().unwrap() = Some(outcome.to_json());
                     task.add_done(1);
@@ -5455,14 +5507,22 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     .map(|(index, _)| index)
                     .collect();
                 if !failed_views.is_empty() {
+                    tracing::info!(
+                        pending = failed_views.len(),
+                        "视图依赖：首轮未建成，等其它视图建好后串行重试"
+                    );
                     task.log(format!(
-                        "视图依赖：{} 个视图首轮未建成，等其它视图建好后串行重试",
+                        "视图依赖：{} 个视图首轮未建成，串行重试",
                         failed_views.len()
                     ));
                     for index in failed_views {
                         let name = objects[index].1.clone();
-                        let outcome = sync_view(&state, &src, &tgt, &name, &opts).await;
+                        let outcome =
+                            sync_view(&state, &src, &tgt, &name, &opts, Some(&task)).await;
                         if outcome.status == "error" {
+                            // 重试也失败：**必须把原因打出来**。否则日志最后停在
+                            // 「创建视图」一行，收尾却是「失败 1」，中间的原因全丢了。
+                            task.log(format!("视图 {name}：重试仍未建成：{}", outcome.message));
                             continue;
                         }
                         *slots[index].lock().unwrap() = Some(outcome.to_json());
@@ -5475,7 +5535,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                             }
                             c.2 = c.2.saturating_sub(1);
                         }
-                        task.log(format!("视图 {name}：重试成功（{}）", outcome.message));
+                        tracing::debug!(view = %name, "视图依赖重试成功");
                     }
                 }
             }
@@ -5515,9 +5575,8 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         continue;
                     }
                     mismatch += 1;
-                    task.log(format!(
-                        "表 {name}：源 {want} 行 / 目标 {got} 行，行数不一致，清空重传一次"
-                    ));
+                    // 过程细节：真的对齐不上会在下面以结果形式报出来，这里只留文件日志
+                    tracing::info!(table = %name, want, got, "行数不一致，清空重传一次");
                     // SQLite 没有 truncate；其它方言 ATOMIC/隐式提交都一样快
                     let clear = if target_kind.kind.key() == "sqlite" {
                         format!("delete from {tgt_table}")
@@ -5557,7 +5616,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     let after = count_table(&state, &tgt.conn, &tgt.scope, &tgt_table).await;
                     if after == Some(want) {
                         fixed += 1;
-                        task.log(format!("表 {name}：重传后 {want} 行，已对齐"));
+                        tracing::debug!(table = %name, want, "重传后已对齐");
                     } else {
                         task.log(format!(
                             "表 {name}：重传后 {after:?} 行（期望 {want} 行），仍然不一致，请检查该表"
@@ -5763,6 +5822,20 @@ mod prepared_batch_tests {
         assert_eq!(adapt_stmt_cap(max, 100, max), max);
         // 1~5 秒：维持不变（已在甜点区间）
         assert_eq!(adapt_stmt_cap(1024 * 1024, 3_000, max), 1024 * 1024);
+    }
+
+    /// 任务级建议值直接决定开工时的报文上限：一张表踩过的坑要被后面的表继承，
+    /// 且不会被压到 STMT_CAP_MIN 以下（小报文只是多几次往返，语法上必须有下限）。
+    #[test]
+    fn 报文上限取方言默认与任务级建议的较小值() {
+        assert_eq!(effective_stmt_cap("mysql", 0), 3 * 1024 * 1024);
+        assert_eq!(effective_stmt_cap("mysql", 512 * 1024), 512 * 1024);
+        // 建议值比方言默认值还大 ⇒ 仍然用方言上限（不会被放大）
+        assert_eq!(effective_stmt_cap("mysql", 8 * 1024 * 1024), 3 * 1024 * 1024);
+        // 建议值小到不合理 ⇒ 夹到下限
+        assert_eq!(effective_stmt_cap("mysql", 10), STMT_CAP_MIN);
+        // 各方言默认值不同，Doris 的 FE packet 只有 1MB
+        assert_eq!(effective_stmt_cap("doris", 0), 512 * 1024);
     }
 
     #[test]
