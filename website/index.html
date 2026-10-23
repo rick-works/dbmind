@@ -746,6 +746,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.49（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.49</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-23</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>没主键也没唯一索引的表，现在也能「传一段、落盘一段」：中途断连只重跑当前这一小段，不再整片从头重扫（380 万行的表断一次过去要白等几十分钟）</b></li>
+            <li><b>这类表的行窗口分片默认开启</b>：不用再手动设 DBMIND_SYNC_WINDOW=1，整库 351 张表（含十几张百万级无键表）实测一次跑通、失败 0</li>
+            <li><b>修掉无键表在分片边界越界读取导致的崩溃</b></li>
+            <li><b>一页读 60 秒没回来会自动把页缩小（最低 500 行，约 80 KB），丢包链路上不再整表重跑；想固定页大小用 DBMIND_SYNC_PAGE_ROWS</b></li>
+            <li><b>目标端的建表 / 清空改用一条专用连接：以前每张表各开一条，6 张表并发就把连接的并发上限占满，日志刷「等待可用连接超时」，删表重建失败后降级、灌数也跟着失败（真机整库 112 张表行数对不上）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.49" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.49" target="_blank" rel="noopener">下载 v1.2.49</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.48（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +776,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.48</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-23</span>
           </div>
           <ul class="rel-notes">

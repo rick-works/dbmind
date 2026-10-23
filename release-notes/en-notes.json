@@ -344,5 +344,12 @@
     "Derby targets now use native MERGE too: before this they could only do plain inserts, so a retry that hit an existing primary key threw the rows away as dirty data - the only JDBC relational database that lacked idempotency",
     "socketTimeout=0 on old connections is now treated as 'not set': a half-open connection no longer waits out the 5-minute fallback timeout, and you do not have to re-save every connection",
     "Progress counters only go up: 'transferred' can no longer exceed 'read', and neither number jumps backwards when a table is retried"
+  ],
+  "v1.2.49": [
+    "Tables with neither a primary key nor a unique index can now commit as they go: a dropped connection only re-runs the segment in flight instead of rescanning the whole slice (on a 3.8M-row table that used to mean tens of minutes of wasted work)",
+    "Window splitting for those tables is now on by default - no more setting DBMIND_SYNC_WINDOW=1; a 351-table whole-database run, including a dozen million-row keyless tables, finished with 0 failures",
+    "Fixed a crash from reading past the edge of a window split on keyless tables",
+    "A page that does not come back within 60 seconds now shrinks itself (down to 500 rows, about 80 KB) instead of failing the whole table on a lossy link; DBMIND_SYNC_PAGE_ROWS pins the page size if you prefer",
+    "Table creation and truncation on the target now share one dedicated connection: before this each table opened its own, six concurrent tables filled the connection's concurrency limit, the log filled with 'timed out waiting for a free connection', rebuilds fell back to a degraded path and the data load failed along with it (112 tables ended up with mismatched row counts)"
   ]
 }
