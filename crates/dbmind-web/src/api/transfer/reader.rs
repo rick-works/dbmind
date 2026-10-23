@@ -18,9 +18,14 @@ use crate::api::meta::run_sql_in;
 use crate::api::sync::{estimate_row_bytes, fetch_page, literal_for, write_parallelism};
 use crate::AppState;
 
-/// 单流初始页 2 万行；拿到第一页后按**实际行宽 + 实测写速 + 实测读耗时**自适应
-///（见 `page_target_rows`：一页 = 32 MiB / 20 秒写得完 / 5 秒读得完，三者取小）。
-pub const PAGE_WIDE: usize = 20_000;
+/// 单流初始页 **1 万行**（有键表的上限也是它）；拿到第一页后按**实际行宽 +
+/// 实测写速 + 实测读耗时**自适应，但不会超过 `rows_cap`（见 `page_target_rows`）。
+///
+/// 为什么不从 2 万起步：一页就是一次「读一页 → 写一页 → 等它返回」的判死单位。
+/// 真机上「后期每张表都卡 601 秒」的日志里，卡住的页从 2.8 万到 9.8 万行都有 ——
+/// 页越大，一条慢语句把整页拖死的时间越长、重试浪费越多。1 万行一页约 10 条
+/// INSERT 语句，健康链路上往返多不了几次（实测吞吐仍在 100 万行/分钟量级）。
+pub const PAGE_WIDE: usize = 10_000;
 /// 分片并发初始页 1 万行：多片同时在途，先控制内存，再按实际行宽自适应 ——
 /// 页码是「一次往返」的成本，5 千行/页会让 20 万行变成 40 次往返，在延迟高的链路上
 /// 反而比单流慢（真机实测 4 片 5 千行/页 11s vs 单流 5s）。
@@ -28,6 +33,13 @@ pub const PAGE_SPLIT: usize = 10_000;
 const PAGE_BYTES_TARGET: usize = 32 * 1024 * 1024;
 const PAGE_ROWS_MIN: usize = 1_000;
 const PAGE_ROWS_MAX: usize = 100_000;
+/// 有键表一页的硬上限：**1 万行**（一页 ≈ 10 条 INSERT 语句）。
+///
+/// 为什么不再允许长到 10 万：页大只在「目标端吃得下」时省往返，一旦目标端在后期
+/// 掉速，10 万行一页等于把 100 条语句和它所在的事务一起挂在一次判死上 —— 真机日志
+/// 里「单批 98545 / 89489 行写入 601 秒」就是这么来的。1 万行一页，中断重试的
+/// 代价小得多；实测吞吐仍在 100 万行/分钟量级（往返不是瓶颈，目标端才是）。
+const PAGE_ROWS_MAX_KEYED: usize = 10_000;
 /// 读一页**超时**后允许缩到的最小页。
 ///
 /// 比 [`PAGE_ROWS_MIN`] 还低：那个下限是「自适应时别把页调得太碎」，而这里是
@@ -119,6 +131,15 @@ pub trait Reader: Send + Sync {
     fn name(&self) -> &'static str;
     /// 当前一页的行数
     fn page_rows(&self) -> usize;
+    /// 一个事务最多写多少行（默认 = 当前页大小）。
+    ///
+    /// **一批 = 一页 = 一个事务**：引擎按这个值决定多久提交一次（`engine::txn_rows_cap`），
+    /// `SqlReader` 返回本表的页行数上限 —— 有键表是界面「每批条数」（0 = 目标方言默认），
+    /// 无键表是 OFFSET 翻页的大页。这样日志里「一页 N 条」「一条 INSERT」和用户在界面上
+    /// 填的「每批条数」是同一个数，不必再记第二套参数。
+    fn commit_rows(&self) -> u64 {
+        self.page_rows() as u64
+    }
     /// 这个源最多能并发开几片（由连接类型声明决定）
     fn max_parallel(&self) -> usize;
     /// 并发片数的**上限**：尾部弹性扩片时最多能切/开到几片。
@@ -195,7 +216,6 @@ impl SqlReader {
         // 逃生阀：`DBMIND_SYNC_PAGE_ROWS` 设了就固定页大小（丢包链路上直接给定值，
         // 不必等算法在超时里摸索）。
         let fixed_page = env_page_rows();
-        let rows_cap = fixed_page.unwrap_or(PAGE_ROWS_MAX);
         // 分页键的**行内位置**必须按 `paging_keys` 自己在取数列里找，不能借
         // `plan.key_indexes` —— 那个是**目标端** upsert 键（写库用）的位置。
         // 目标表已存在且主键与源主键不是同一组列时，两套位置会错位，代价不是报错而是
@@ -212,6 +232,34 @@ impl SqlReader {
                 (Vec::new(), Vec::new())
             }
         };
+        // 一页的**硬上限**：
+        // - 有键表 3 万行（见 [`PAGE_ROWS_MAX_KEYED`]）；
+        // - 无键表仍允许长到 10 万行 —— 它只能 OFFSET 翻页，页小了重扫是 O(N²)，
+        //   大页是它的性能保障。
+        // 任务级「踩坑即收敛」：本任务里已经出现过「目标端写入卡住」时，`grow`
+        // 会把 page_cap_hint 压到 1 万，后面开工的表**直接从小的起步**，不再各撞一次。
+        // 真机现象正是「后期几乎每张表都卡 601 秒」—— 每张表都在重新踩同一个坑。
+        // **有键表：一页 = 界面「每批条数」**（0 = 按目标方言默认：MySQL 1000 /
+        // ClickHouse 1 万 / 文件库 5000），夹在 [1000, 1 万]。
+        // 这样「一批」= 一页 = 一个事务（见 `engine::txn_rows_cap`），用户只需理解一个词：
+        // 日志里的「一页 N 条」「写入一条 INSERT」都对得上「每批条数」。
+        // 无键表例外：它只能 OFFSET 翻页，页小了重扫是 O(N²)，保持大页。
+        let batch_rows = if plan.insert_rows > 0 {
+            plan.insert_rows
+        } else {
+            crate::api::sync::insert_rows_default(plan.target_kind.kind.key())
+        };
+        let keyed_cap = if paging_keys.is_empty() {
+            PAGE_ROWS_MAX
+        } else {
+            batch_rows.clamp(PAGE_ROWS_MIN, PAGE_ROWS_MAX_KEYED)
+        };
+        let page_hint = plan.grow.as_ref().map(|grow| grow.page_cap_hint()).unwrap_or(0);
+        let rows_cap = fixed_page.unwrap_or(if page_hint > 0 {
+            keyed_cap.min(page_hint)
+        } else {
+            keyed_cap
+        });
         // 尾部弹性扩片的上限：方言声明的读并发（单连接池的库 = 1，多开只会在池里排队）。
         // 调优逃生阀优先；下限是本次分到的份额，避免「cap 比声明还大」时反而被压小。
         let parallel_ceiling = std::env::var("DBMIND_SYNC_SLICES")
@@ -232,7 +280,7 @@ impl SqlReader {
             key_positions,
             where_clause: plan.where_clause.clone(),
             row_limit: plan.row_limit,
-            page_rows: AtomicUsize::new(fixed_page.unwrap_or(PAGE_WIDE)),
+            page_rows: AtomicUsize::new(fixed_page.unwrap_or(PAGE_WIDE.min(rows_cap))),
             fixed_page,
             rows_cap: AtomicUsize::new(rows_cap),
             diag: plan.diag.clone(),
@@ -343,6 +391,12 @@ impl Reader for SqlReader {
 
     fn page_rows(&self) -> usize {
         self.page_rows_now()
+    }
+
+    fn commit_rows(&self) -> u64 {
+        // 用**硬上限**而不是「当前页」：页会按实测写速自适应放大，但事务粒度不该跟着抖；
+        // 上限本身已经等于「每批条数」（有键表）或大页（无键表），见 `SqlReader::new`。
+        self.rows_cap.load(Ordering::SeqCst) as u64
     }
 
     fn max_parallel(&self) -> usize {

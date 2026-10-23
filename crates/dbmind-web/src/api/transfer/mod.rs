@@ -112,6 +112,12 @@ pub struct WriteDiag {
     /// 就已经有本次任务的数据，**追加模式重跑会写重复** —— 回滚只能回滚未提交的。
     /// 提交阶段中途断连正是这种情况，所以判据必须是「一路都没提交过」。
     pub committed: AtomicUsize,
+    /// 本表**成功写完的页数**。
+    ///
+    /// 用途：`== 0` 表示「这张表还没写进去任何一页」—— 第一页就卡住是目标端/链路
+    /// 此刻有问题的强信号（真机日志里后期几乎每张表都是**第一页**卡满超时），
+    /// 这时用更短的自愈阈值（30 秒）快速换连接重试，别陪它等 60~180 秒。
+    pub batches_done: AtomicU64,
 }
 
 impl WriteDiag {
@@ -138,6 +144,10 @@ impl WriteDiag {
 
     fn note_finish(&self, rows: usize, elapsed: std::time::Duration, slow_sample: bool) {
         self.inflight.fetch_sub(1, Ordering::Relaxed);
+        if slow_sample {
+            // 只有**成功**的页才算「这张表已经能写进去」；超时的页不算（它没落库）
+            self.batches_done.fetch_add(1, Ordering::Relaxed);
+        }
         self.last_batch_rows.store(rows as u64, Ordering::Relaxed);
         let ms = elapsed.as_millis().min(u64::MAX as u128) as u64;
         self.last_write_ms.store(ms, Ordering::Relaxed);
@@ -177,6 +187,35 @@ impl WriteDiag {
         // 200 行/秒 是很悲观的估计：真慢到这个程度，页本身也该被读侧缩小了
         let pessimistic_ms = (rows as u64).saturating_mul(5);
         let ms = slow_ms.max(pessimistic_ms).clamp(60_000, 300_000);
+        std::time::Duration::from_millis(ms)
+    }
+
+    /// 一页写入能容忍的最长墙钟：超过它就算「目标端写入卡住」，**中断这一页**换连接重试。
+    ///
+    /// 与 [`WriteDiag::batch_watchdog`] 的区别是**语义**，不是数值：
+    /// - `batch_watchdog`（60~300 秒）当初用于「按时间判死链路」，被否决了（慢 ≠ 断）；
+    /// - 这里用于「慢批自愈」：探活一直是通的，但一页写了十分钟，继续等只是白等 ——
+    ///   真机上后期目标端被 IO 压垮时，一页能卡满界面的「超时时间」（继承连接 = 600 秒），
+    ///   几百张表各白等十分钟，还会把已经写了一半的事务一直挂着。
+    ///
+    /// 取值 = max(最近批最慢值 × 4, 按 200 行/秒 估的悲观耗时)，夹在 **[60s, 180s]**：
+    /// 页的设计目标是「20 秒写得完」，给 3~9 倍余量足够；上界 180 秒是为了
+    /// 「卡住最多浪费 3 分钟」而不是 10 分钟（中断后页会缩到 1/4，重试通常几十秒就过）。
+    pub fn slow_batch_limit(&self, rows: usize) -> std::time::Duration {
+        let from_history = self.recent_max_ms.load(Ordering::Relaxed).saturating_mul(4);
+        // 200 行/秒 是很悲观的估计：真慢到这个程度，页本身也该被读侧缩小了
+        let pessimistic_ms = (rows as u64).saturating_mul(5);
+        let ms = from_history.max(pessimistic_ms).clamp(60_000, 180_000);
+        // 逃生阀：排查/实验时强制一个值（0 = 关闭慢批自愈，回到「等满超时时间」的旧行为；
+        // 正数 = 换成这个秒数）。线上不需要动它。
+        if let Ok(raw) = std::env::var("DBMIND_SYNC_SLOW_BATCH_SECS") {
+            if let Ok(secs) = raw.trim().parse::<i64>() {
+                if secs <= 0 {
+                    return std::time::Duration::from_secs(86_400);
+                }
+                return std::time::Duration::from_secs(secs as u64);
+            }
+        }
         std::time::Duration::from_millis(ms)
     }
 
@@ -248,6 +287,14 @@ pub struct GrowCaps {
     /// 一条吓人的日志），而报文该缩到多少这件事，一张表撞过就够了 ——
     /// 存在表级的话，几百张表要各自把同样的坑踩一遍，界面上就是「几百条写入中断」。
     pub stmt_cap_hint: AtomicUsize,
+    /// 本任务学到的「一页最多多少行」（0 = 还没学到）。
+    ///
+    /// 和 `stmt_cap_hint` 同一个道理，只是针对**页**：真机日志里后期几乎每张表都
+    /// 「单批 7 万行写入 601 秒」，而每张表都是**第一次写就卡** —— 页上限只存在表内的话，
+    /// 后面几百张表会各自把同一个坑踩一遍。这里一旦有表卡住，就把任务级页上限压到
+    /// 1 万行，后续开工的表直接从小的起步（`SqlReader::new` 读它当硬上限）。
+    /// 只降不升：链路/目标端在任务内被证明吃力之后，不该因为某张表跑得顺又放大回去。
+    pub page_cap_hint: AtomicUsize,
     /// 链路整体不可达时**暂停到**的时刻（epoch 毫秒；0 = 没暂停）。
     ///
     /// 判定依据：某张表写超时后先探活（`select 1`），连探活都不通 ⇒ 这不是「这条连接
@@ -304,6 +351,33 @@ impl GrowCaps {
                 Ordering::SeqCst,
             ) {
                 Ok(_) => return (current, bytes),
+                Err(seen) => current = seen,
+            }
+        }
+    }
+
+    /// 任务级页上限建议（0 = 还没学到）。
+    pub fn page_cap_hint(&self) -> usize {
+        self.page_cap_hint.load(Ordering::SeqCst)
+    }
+
+    /// 记下一个**更小**的页上限建议；返回 `(旧, 新)` —— 没有变小就两边一样。
+    ///
+    /// 只降不升，理由同 [`GrowCaps::note_stmt_cap`]：这是「这条链路/这台目标端吃不下
+    /// 这么大一页」的结论，本任务里对剩下的表同样成立。
+    pub fn note_page_cap(&self, rows: usize) -> (usize, usize) {
+        let mut current = self.page_cap_hint.load(Ordering::SeqCst);
+        loop {
+            if current != 0 && current <= rows {
+                return (current, current);
+            }
+            match self.page_cap_hint.compare_exchange(
+                current,
+                rows,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return (current, rows),
                 Err(seen) => current = seen,
             }
         }
@@ -556,6 +630,25 @@ mod watchdog_tests {
         assert_eq!(diag.writing_seconds(), 0);
     }
 
+    /// 慢批自愈阈值：小页 60 秒下界、大页 180 秒上界、历史慢批会抬高它。
+    ///
+    /// 语义是「探活正常但就是写不完 ⇒ 中断重试」，所以要**比正常慢批宽**（不能误杀），
+    /// 又必须**明显小于界面的 600 秒**（否则后期每张表白等十分钟）。
+    #[test]
+    fn 慢批自愈阈值夹在六十到一百八十秒() {
+        let diag = WriteDiag::default();
+        // 小页：下界 60 秒
+        assert_eq!(diag.slow_batch_limit(1_000), Duration::from_secs(60));
+        // 大页：7 万行 × 5ms = 350 秒 ⇒ 夹到上界 180 秒
+        assert_eq!(diag.slow_batch_limit(70_000), Duration::from_secs(180));
+        // 中等页：2 万行 × 5ms = 100 秒（不动）
+        assert_eq!(diag.slow_batch_limit(20_000), Duration::from_secs(100));
+        // 历史慢批（20 秒）× 4 = 80 秒，比按行数估的更保守
+        diag.note_batch_start(20_000);
+        diag.note_batch_done(20_000, Duration::from_secs(20));
+        assert_eq!(diag.slow_batch_limit(5_000), Duration::from_secs(80));
+    }
+
     /// 任务级报文上限**只降不升**：一张表踩过的坑要立刻对同一任务里其它表生效
     /// （否则几百张表各撞一次 = 几百条「写入中断」），健康链路的翻倍逻辑也不能把它放大回来。
     #[test]
@@ -573,6 +666,19 @@ mod watchdog_tests {
             (1024 * 1024, 1024 * 1024)
         );
         assert_eq!(caps.stmt_cap_hint(), 1024 * 1024);
+    }
+
+    /// 页上限建议任务级**只降不升**：一张表的卡顿要立刻让后面的表用小页，
+    /// 否则后期几百张表各自踩一次（真机：几乎每张表都「单批 X 万行 601 秒」）。
+    #[test]
+    fn 页上限建议任务级只降不升() {
+        let caps = GrowCaps::default();
+        assert_eq!(caps.page_cap_hint(), 0);
+        assert_eq!(caps.note_page_cap(10_000), (0, 10_000));
+        assert_eq!(caps.note_page_cap(5_000), (10_000, 5_000));
+        // 更大的值不能覆盖已有结论
+        assert_eq!(caps.note_page_cap(50_000), (5_000, 5_000));
+        assert_eq!(caps.page_cap_hint(), 5_000);
     }
 
     /// 链路暂停窗口：多次调用取「最晚」的那次，过窗口后自动归零。

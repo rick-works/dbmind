@@ -2368,7 +2368,7 @@ pub(crate) fn insert_stmt_cap(kind_key: &str) -> usize {
 /// 劣化链路则停在真正安全的报文大小上，不会一上来就把链路撞断。
 pub(crate) const STMT_CAP_START: usize = 512 * 1024;
 
-/// 各方言默认的**单条 INSERT 行数**上限（`DBMIND_SYNC_INSERT_ROWS` 可统一覆盖）。
+/// 各方言默认的**每批条数**（一条 INSERT 里的条数）上限（`DBMIND_SYNC_INSERT_ROWS` 可统一覆盖）。
 ///
 /// 判据不是「协议最多能塞多少行」，而是「这条报文丢了要重传多久」：
 /// 一条远端语句丢一个包就要整条重传几十秒，行数砍一半，重传代价就砍一半。
@@ -2728,6 +2728,8 @@ pub(crate) fn is_link_level_message(message: &str) -> bool {
         // 单批墙钟兜底（连接半开：响应永远不来）
         "未返回",
         "半开",
+        // 慢批自愈（探活通但目标端写不动）：这一页的事务会被回滚，换连接 + 缩页重试是安全的
+        "写入卡住",
     ]
     .iter()
     .any(|key| text.contains(key))
@@ -5359,20 +5361,29 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         // 两阶段 upsert 每张表还要一条专属会话做键查询，预算对半分
         (object_budget / 2).max(1)
     };
-    // 自适应值：同时受源端与目标端类型、对象总数约束。
+    // 自适应值：同时受源端与目标端类型、对象总数约束（弱机自动算出 1）。
     let adaptive = adaptive_concurrency(target_kind.kind, total)
         .min(adaptive_concurrency(source_kind.kind, total))
         .min(target_object_cap)
         .max(1);
-    // 界面上的「并发表数」优先（夹到 1..=32，且不超过实际对象数）：
-    // 目标端是弱机、或源与目标是同一个实例时，调小它能直接减少双方的连接与 IO 争抢。
-    let requested = body.max_concurrency.unwrap_or(0).min(32);
-    let sync_concurrency = if requested > 0 {
-        requested.min(total.max(1))
-    } else {
-        adaptive
-    };
-    let concurrency_source = if requested > 0 { "（界面指定）" } else { "（自适应）" };
+    // ===== 表级并发：**固定最多 2 张**（用户口径：不允许设置）=====
+    //
+    // 单表内部本来就有「2 片读 + 2 路写」（见下面的 src_slices / tgt_workers），
+    // 同时 2 张表已经能把源端读和目标端写都喂饱；再往上加，目标端的连接数、
+    // 行锁与 IO 争抢成倍上升 —— 真机那次「后期几乎每张表都卡 601 秒」正是
+    // 手工把并发表数设成 8 的时候（8 表 ×（2 读 + 1 写）= 24 条会话压同一个库）。
+    //
+    // 界面传来的 max_concurrency 仍然接受（老客户端兼容），但**不再放大**；
+    // 弱机（SQLite/H2/Derby 等单连接池方言）自适应会给 1，这里取小。
+    // 逃生阀 DBMIND_SYNC_CONCURRENCY 只用于排查与基准对比，生产不要动。
+    let env_concurrency = std::env::var("DBMIND_SYNC_CONCURRENCY")
+        .ok()
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .filter(|n| *n >= 1)
+        .unwrap_or(2);
+    let _ = body.max_concurrency;
+    let sync_concurrency = env_concurrency.min(adaptive).min(total.max(1));
+    let concurrency_source = "（固定最多 2 张）";
     let reserved_sessions = usize::from(!native_upsert);
     let source_declared = write_parallelism(source_kind.kind).max(1);
     // 每张**在跑**的表至少 2 路读：实测单流只吃到链路的一半（4.0 MB/s ≈ 4,400 行/秒），
@@ -5684,10 +5695,13 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                             continue;
                         }
                         let slices = (source_declared / active_now).max(1);
-                        let workers = (target_declared / active_now)
-                            .saturating_sub(reserved_sessions)
-                            .max(1);
-                        grow.set(slices, workers);
+                        // **写路数不再按「剩几张表」放大**：尾部弹性原本会把每表的写路数
+                        // 从 target_declared/并发 提到 target_declared/active_now（只剩 1 张表时
+                        // 就是全部），真机上后期的表现是目标端被更多并发写压垮 —— 一页几万行
+                        // 同时开 N 个事务，磁盘 IOPS 打满、单页写入从几秒恶化到十几分钟。
+                        // 读片可以扩（读侧不压目标端，多读的页只是排在有界队列里），
+                        // 写路数保持开工时按并发切的份额（`tgt_workers`）。
+                        grow.set(slices, tgt_workers);
                     }
                 })
             };

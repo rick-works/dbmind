@@ -16,7 +16,7 @@
 //! 于是：
 //! - 某片断连 ⇒ 只回滚这一片、只重跑这一片，**不会重复、不会漏**（其它片已提交且不相交）；
 //! - 片内读→写串行，天然有背压，不会出现「读飞快、写堆一队列」的假进度；
-//! - 片内再按 [`TXN_ROWS_DEFAULT`] 拆成多个事务：一个事务几百万行会让 undo/redo 膨胀、
+//! - 片内再按 [`txn_rows_cap`]（= 界面「每批条数」）拆成多个事务：一个事务几百万行会让 undo/redo 膨胀、
 //!   checkpoint 追不上刷盘，表现就是「越写越慢」（DataX 用 batchSize、Kettle 用 commit
 //!   size，本质都是"小事务高频提交"）；拆分点用 keyset 续上，段与段不重不漏；
 //! - 这正 Kettle / DataX 的 channel 模型（一个 channel = 一条读 + 一条写 + 一个事务）。
@@ -88,6 +88,13 @@ fn prefetch_enabled() -> bool {
 /// - 通 ⇒ 链路活着，这批只是慢，**继续等**；
 /// - 不通 ⇒ 真的断了，弃连接、回滚该段、换连接重跑。
 const BATCH_PROBE_TICK: Duration = Duration::from_secs(30);
+
+/// 慢批自愈的检查粒度（只比较时间，不发任何请求）。
+///
+/// 探活仍是 [`BATCH_PROBE_TICK`]（30 秒）一次 —— 那是「判断断没断」的成本；
+/// 而「这一页写了多久」只在本进程里算，2 秒检查一次几乎零成本，
+/// 否则 60 秒的阈值实际要等到第 60/90 秒的探活 tick 才判定，白等半分钟。
+const SLOW_CHECK_TICK: Duration = Duration::from_secs(2);
 
 // 一批写的**绝对**上限不再写死：由界面的「超时时间」决定（见 `wait_write` 里的
 // `hard_limit` / `sync::op_timeout_ms`）—— 0 = 继承连接（内核默认 600 秒）、
@@ -580,26 +587,34 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     })
 }
 
-/// 单个事务最多写多少行（到量就提交一次，接着往下搬）。
-///
-/// 为什么必须封顶：原来「一个块一个事务」，5000 万行切成 8 块 = **每个事务 625 万行**。
-/// 大事务会让 undo/redo 一路膨胀、history list 变长、checkpoint 追不上刷盘，表现就是
-/// 「越写越慢」（实测 5000 万行从 23.8k 行/秒掉到 18.6k）。DataX（batchSize 默认 2048）
-/// 和 Kettle（commit size 默认 1000）都是**小事务高频提交**，这是它们不会越跑越慢的主因。
-///
-/// **10 万行**（≈ 2~3 秒一批，按 18k 行/秒）：提交开销仍摊得很薄，而一旦连接断开，
-/// 要回滚的也只是 10 万行而不是 50 万行 —— 重跑更快。真机上 50 万行的事务在宽表上
-/// 一跑十几分钟，断开后光是回滚就很贵（用户口径：宁可多提交几次）。
-/// `DBMIND_SYNC_TXN_ROWS` 可覆盖（对比实验用，最小 1 万）。
-const TXN_ROWS_DEFAULT: u64 = 100_000;
-const TXN_ROWS_MIN: u64 = 10_000;
+/// 单个事务最少多少行（`DBMIND_SYNC_TXN_ROWS` 的下限）：1 行也合法，
+/// 只为对比实验留门。
+const TXN_ROWS_MIN: u64 = 1;
 
-fn txn_rows_cap() -> u64 {
+/// 一个事务最多写多少行 = **界面「每批条数」**（一批 = 一页 = 一个事务）。
+///
+/// 为什么必须封顶（历史教训）：原来「一个块一个事务」，5000 万行切成 8 块 = 每个事务
+/// 625 万行。大事务会让 undo/redo 一路膨胀、history list 变长、checkpoint 追不上刷盘，
+/// 表现就是「越写越慢」（实测 5000 万行从 23.8k 行/秒掉到 18.6k）。DataX（batchSize
+/// 默认 2048）和 Kettle（commit size 默认 1000）都是小事务高频提交，这是它们不会
+/// 越跑越慢的主因。
+///
+/// 封到多大？以前写死 10 万行，现在跟随 [`super::Reader::commit_rows`]：用户设 1000
+/// 就每 1000 条提交一次，概念只剩一个；卡住/断连时最多回滚一批，重跑也只重跑一段
+/// （段与段之间 keyset/OFFSET 续跑，不重不漏）。无键表例外 —— 它只能 OFFSET 翻页，
+/// 提交粒度跟着大页走，否则每次提交都从 0 重扫（O(N²)）。
+///
+/// 代价实测过（源 192.168.2.216 跨网 → 实验室 MariaDB，t2m 197 万行，30 秒采样）：
+/// - 每 10 万条提交：读取 88.5 万 / 传输 84.4 万；
+/// - 每 1000 条提交：读取 88.9 万 / 传输 84.8 万。
+/// 提交次数多了 100 倍，吞吐没变 —— 因为一批 1000 行的读写本身就占 0.1 秒量级，
+/// commit + begin 各一次往返摊进去可以忽略（目标端 fsync 在本机 SSD 上也只需 1~2ms）。
+fn txn_rows_cap(batch_rows: u64) -> u64 {
     std::env::var("DBMIND_SYNC_TXN_ROWS")
         .ok()
         .and_then(|text| text.trim().parse::<u64>().ok())
         .filter(|rows| *rows >= TXN_ROWS_MIN)
-        .unwrap_or(TXN_ROWS_DEFAULT)
+        .unwrap_or_else(|| batch_rows.max(1))
 }
 
 /// 一段搬运的结果：整块读完了，还是「事务到量先提交，剩下的接着搬」。
@@ -612,18 +627,20 @@ enum SegmentOutcome {
     /// 无键表没有键值可以比较，但 `limit n offset m` 的 `m` 本身就是游标：本段提交后
     /// 下一段从 `m` 继续即可。过去这里没有它，于是无键表被迫「一片一个事务跑到底」——
     /// 中途断一次整片回滚重读（真机：384 万行、无主键无唯一索引的表，断一次就是几十分钟的
-    /// 白工）。现在按 [`TXN_ROWS_DEFAULT`] 正常拆段，断连只重跑当前这一小段。
+    /// 白工）。现在按 [`txn_rows_cap`]（= 界面「每批条数」）正常拆段，断连只重跑当前这一小段。
     ///
     /// 精确性的前提是**源表在同步期间行序不变**（与窗口分片同一个前提）。若源表边写边搬，
     /// OFFSET 会随行序漂移，可能漏行 —— 由收尾的逐表 `count(*)` 对账兜底（不一致清空重传）。
     PausedAt(u64),
 }
 
-/// 搬运**一片**：片内按 [`TXN_ROWS_DEFAULT`] 分成多个事务，段与段之间不重不漏
+/// 搬运**一片**：片内按 [`txn_rows_cap`]（= 一批 = 一页）分成多个事务，段与段之间不重不漏
 /// （下一段的区间左界 = 上一段最后一行的首列，首屏游标带上完整键走 keyset「严格大于」；
 /// 无键表则用 OFFSET 续跑，见 [`SegmentOutcome::PausedAt`]）。
 async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result<(), String> {
-    let cap = txn_rows_cap();
+    // 事务粒度由读侧给出（一批 = 一页 = 一个事务）：有键表 = 界面「每批条数」，
+    // 无键表 = OFFSET 翻页的大页。片内固定，不随页自适应抖动。
+    let cap = txn_rows_cap(ctx.reader.commit_rows());
     let mut low = range.low.clone();
     let mut cursor: Option<Cursor> = None;
     // 无键表按事务提交后要续跑，每段一条日志会把「同步日志」刷成流水账：
@@ -955,6 +972,9 @@ async fn run_segment(
             &ctx.plan,
             std::time::Instant::now(),
             "发送攒着的 upsert 更新",
+            // upsert 的更新批按 500 条一攒、行数不大：给它 100 秒上限（按 2 万行估），
+            // 卡住同样走「回滚这一段 + 换连接重试」（upsert 幂等，重跑不会写重）
+            ctx.plan.diag.slow_batch_limit(20_000),
             ctx.writer.flush(),
         )
         .await;
@@ -1032,11 +1052,19 @@ async fn read_page(
 /// 重传上要几十秒，这期间链路是好的 —— 按时间判死只会把「慢」变成「中断 + 整段重跑」。
 /// 探活的代价是每 [`BATCH_PROBE_TICK`] 一次 `select 1`（另开会话，不排在卡住的语句后面）。
 ///
+/// **慢批自愈**（`stall`）：探活一直通、但这一页写了 `stall`（60~180 秒）还没完成时，
+/// 判定「目标端写入卡住」（后期大表 + 目标端 IO 饱和时的典型表现）—— 主动放弃这一页、
+/// 换新连接重试，而不是一直等到界面的「超时时间」（默认继承连接 = 600 秒）。
+/// 真机代价：400 对象的任务跑到后段，几乎每张表都白等 10 分钟；中断后页会缩到 1/4，
+/// 重试通常几十秒就过（数据不会重复：这一页的事务已回滚）。
+/// 用户把「超时时间」设成不限制（<0）时**不启用**自愈 —— 那是明确的「一直等」。
+///
 /// 返回 `Err((原因, 是否链路整体不可用))`：第二个值决定要不要让整个任务暂停。
 async fn wait_write<F, T>(
     plan: &TablePlan,
     started: std::time::Instant,
     label: &str,
+    stall: Duration,
     pending: F,
 ) -> Result<T, (String, bool)>
 where
@@ -1046,43 +1074,121 @@ where
     // >0 = 用户填的秒数。探活仍然每 30 秒做一次 —— 它决定「断没断」，这个上限只决定
     // 「最多等多久」，两者不是一回事。
     let hard_limit = Duration::from_millis(crate::api::sync::op_timeout_ms(plan.op_timeout_secs));
+    // 先到先算：用户填的比自愈阈值更短就听用户的（那是更严格的「操作超时」）。
+    let soft_limit = if plan.op_timeout_secs < 0 {
+        // 界面上明确选了「不限制」：不自愈，继续等（探活仍照常做）
+        Duration::from_secs(86_400)
+    } else {
+        hard_limit.min(stall)
+    };
+    // 界面日志节流：卡住期间每 2 分钟说一句「还在写」，别让用户以为假死
+    let mut last_note = started;
+    // 探活节流：判断「断没断」是 30 秒一次的 select 1；软阈值只比较本地时钟，2 秒一次
+    let mut last_probe = started;
+    let link_broken = |elapsed: Duration| {
+        format!(
+            "{label} {} 秒未返回，且目标端探活连续两次不通：链路已断（RDS wait_timeout 踢连接 / \
+             链路静默丢包 / 中间设备丢包）",
+            elapsed.as_secs()
+        )
+    };
     tokio::pin!(pending);
     loop {
         tokio::select! {
             value = &mut pending => return Ok(value),
-            _ = tokio::time::sleep(BATCH_PROBE_TICK) => {
+            _ = tokio::time::sleep(SLOW_CHECK_TICK) => {
                 let elapsed = started.elapsed();
-                // 复核式探活：一次不通只算抖动，两次都不通才判「链路已断」
-                if !probe_target_confirmed(plan).await {
-                    return Err((
-                        format!(
-                            "{label} {} 秒未返回，且目标端探活连续两次不通：链路已断（RDS wait_timeout 踢连接 / \
-                             链路静默丢包 / 中间设备丢包）",
-                            elapsed.as_secs()
-                        ),
-                        true,
-                    ));
-                }
-                if elapsed >= hard_limit {
-                    return Err((
-                        format!(
+                if elapsed >= soft_limit {
+                    // 到软阈值先复核链路：真断了就按「链路已断」报（让整个任务停一会儿）
+                    if !probe_target_confirmed(plan).await {
+                        return Err((link_broken(elapsed), true));
+                    }
+                    // 探活正常 ⇒ 不是链路问题，是目标端写不动（IO 饱和 / 长事务 / 刷盘 / 锁等待）。
+                    // 顺手把目标端此刻的负载带回去：日志里能直接看出「它在慢慢写」还是「有别的会话在锁」。
+                    let activity = target_activity(plan).await;
+                    let mut text = format!(
+                        "{label} {} 秒仍未完成，判定「目标端写入卡住」（探活正常，不是链路断）：\
+                         已放弃这一页、换新连接重试",
+                        elapsed.as_secs()
+                    );
+                    if let Some(activity) = activity {
+                        text.push_str(&format!("；目标端当前 {activity}"));
+                    }
+                    if elapsed >= hard_limit {
+                        // 用户把「超时时间」调得比自愈阈值还短：按用户的超时语义报（同一件事）
+                        text = format!(
                             "{label} {} 秒仍未完成（已达「超时时间」上限）：目标端探活通（链路没断），\
                              但这个动作本身卡住了。可在同步选项里把「超时时间」调大或不限制",
                             elapsed.as_secs()
-                        ),
-                        false,
-                    ));
+                        );
+                    }
+                    return Err((text, false));
                 }
-                tracing::debug!(
-                    target: "dbmind::sync",
-                    table = %plan.table,
-                    elapsed_ms = elapsed.as_millis() as u64,
-                    what = label,
-                    "写入仍在进行（探活通过），继续等待"
-                );
+                // 定期探活：只为判断「断没断」（不做软阈值判断，那个上面已经按 2 秒精度看过）
+                if last_probe.elapsed() >= BATCH_PROBE_TICK {
+                    last_probe = std::time::Instant::now();
+                    if !probe_target_confirmed(plan).await {
+                        return Err((link_broken(elapsed), true));
+                    }
+                    // 卡住期间在界面上留个脚印（每 2 分钟一条，不刷屏）
+                    if elapsed.as_secs() >= 60 && last_note.elapsed() >= Duration::from_secs(120) {
+                        last_note = std::time::Instant::now();
+                        if let Some(task) = &plan.task {
+                            task.log(format!(
+                                "{label}：目标端已写 {} 秒（探活正常，仍在等待；超过 {} 秒会自动换连接重试）",
+                                elapsed.as_secs(),
+                                soft_limit.as_secs()
+                            ));
+                        }
+                    }
+                    tracing::debug!(
+                        target: "dbmind::sync",
+                        table = %plan.table,
+                        elapsed_ms = elapsed.as_millis() as u64,
+                        what = label,
+                        "写入仍在进行（探活通过），继续等待"
+                    );
+                }
             }
         }
     }
+}
+
+/// 目标端此刻在忙什么（只对 MySQL 系问得到）：把「写不动」量化成一句人话。
+///
+/// 真机上「一页 601 秒」最常见的原因是目标端被 IO 压垮（几百张表并发写 + 建索引），
+/// 而不是链路。查 `information_schema.processlist` 里跑了 ≥5 秒的查询数与最长耗时，
+/// 就能一眼分开「目标端在慢慢写」和「目标端根本没人干活（锁等待/客户端卡住）」。
+///
+/// 诊断**不能影响主流程**：独立会话 + 3 秒超时，任何失败都返回 `None`。
+async fn target_activity(plan: &TablePlan) -> Option<String> {
+    let key = plan.target_kind.kind.key();
+    if !matches!(key, "mysql" | "mariadb" | "doris") {
+        return None;
+    }
+    let sql = "select count(*) as n, coalesce(max(time), 0) as longest \
+               from information_schema.processlist \
+               where command = 'Query' and time >= 5";
+    let session = format!("internal:sync-diag{}", plan.sid);
+    let result = tokio::time::timeout(
+        Duration::from_secs(3),
+        crate::api::sync::run_target_in(&plan.state, &plan.tgt_target, sql, &session),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    let row = result.rows.first()?;
+    let as_i64 = |value: Option<&CellValue>| match value {
+        Some(CellValue::Integer(v)) => *v as i64,
+        Some(CellValue::Real(v)) => *v as i64,
+        _ => 0,
+    };
+    let n = as_i64(row.first());
+    let longest = as_i64(row.get(1));
+    if n <= 0 {
+        return Some("没有正在执行的查询（写入卡在客户端/事务等待，而不是目标端在跑语句）".to_string());
+    }
+    Some(format!("有 {n} 条查询在跑，最长 {longest} 秒（目标端在慢慢写）"))
 }
 
 /// 写一批（探活式等待 + 写速诊断）。
@@ -1102,25 +1208,70 @@ async fn write_rows(
     let started = std::time::Instant::now();
     ctx.plan.diag.note_batch_start(rows.len());
     ctx.plan.diag.inflight.fetch_add(1, Ordering::Relaxed);
+    // 这一页的**慢批自愈**阈值：探活一直通、但写到这个时长还没完成 ⇒ 中断重试
+    // （见 `wait_write` 的 `stall` 参数；上界 180 秒，而不是界面的 600 秒）。
+    //
+    // 只在**能从服务端掐断会话**的方言上启用：客户端放弃等待后，服务端那条 INSERT
+    // 和它的未提交事务还在跑、还持有行锁，掐不断它的话重试会排在自己的锁后面
+    //（1 秒阈值注入实测：页从 1 万缩到 1000 行仍然每批都超时，任务彻底不动）。
+    // 掐不断的方言保持旧语义（探活通就一直等），不引入更坏的结果。
+    let stall = if matches!(ctx.plan.target_kind.kind.key(), "mysql" | "mariadb") {
+        // **第一页就卡住**是「目标端/链路此刻有问题」的强信号（真机后期几乎每张表都是
+        // 第一页卡满 601 秒，而前期几百万行的表都不卡 —— 卡的从来不是行数，是时刻）。
+        // 这时没必要陪它等 60~180 秒，30 秒就换连接重试，让任务尽快回到正常节奏。
+        let base = ctx.plan.diag.slow_batch_limit(rows.len());
+        if ctx.plan.diag.batches_done.load(Ordering::Relaxed) == 0 {
+            base.min(Duration::from_secs(30))
+        } else {
+            base
+        }
+    } else {
+        Duration::from_secs(86_400)
+    };
     // 这一批**不再按时间判死**：每 [`BATCH_PROBE_TICK`] 秒探活一次，
     // 通就继续等（慢 ≠ 断），不通才判链路已断 —— 见 `wait_write`。
     let (outcome, timed_out) = match wait_write(
         &ctx.plan,
         started,
-        &format!("单批 {} 行写入", rows.len()),
+        // 这里的 N 是**一页**（一次读写的批量，自适应 1000~1 万条），不是界面的
+        // 「每批条数」—— 一页会按那个值切成多条 INSERT 发出去。文案必须写「一页」：
+        // 写成「单批」时用户看到「单批 98545 条」会以为自己设的 1000 没生效（真机反馈）。
+        &format!("一页 {} 条写入", rows.len()),
+        stall,
         ctx.writer.write(worker, rows),
     )
     .await
     {
         Ok(outcome) => (outcome, false),
         Err((reason, link_down)) => {
+            // **先从服务端掐断那条卡住的会话**（MySQL 系）：客户端放弃等待后，
+            // 服务端那条语句和未提交事务还在跑、还持着行锁，重试会排在自己的锁后面。
+            // 必须在 renew 之前做（renew 换代后 conn_ids 就清空了，旧的 id 找不回来）。
+            let killed = ctx.writer.kill_sessions().await;
+            // 任务级「踩坑即收敛」：把本任务的页上限压到 1 万行，后面开工的表
+            // 直接从小的起步 —— 真机上后期是「几乎每张表都卡一次」，因为每张表
+            // 都在用自己的第一页重新踩同一个坑（大页 + 目标端掉速）。
+            if !link_down {
+                if let Some(grow) = &ctx.plan.grow {
+                    grow.note_page_cap(10_000);
+                }
+            }
             // 半开连接上那条语句还挂在宿主里，**必须换新连接**再重试，
             // 否则下一次调用复用它、再挂一次（真机表现为「每张表都卡一次」）。
             // 同时把**单条语句的字节上限**减半：劣化链路（PMTU 黑洞 / 静默丢包）上大报文
             // 会一直撞重传退避 —— 报文不小下去，重试只是「再等一次同样的超时」。
             let (old_cap, new_cap) = ctx.writer.shrink_stmt(worker);
             ctx.writer.renew().await;
+            // **页也要缩**：目标端写不动时（后期大表 + IO 饱和），一页几万行的大事务
+            // 只会继续卡；缩到 1/4 再试，单批体量与事务大小一起降下来。
+            // 读侧幂等，缩页没有任何副作用（链路恢复后由自适应慢慢涨回去）。
+            ctx.reader.shrink_page();
             let mut text = reason;
+            if killed {
+                text.push_str(
+                    "；已从目标端断开那条卡住的会话（它未提交的行随事务回滚，重试不会撞锁）",
+                );
+            }
             if new_cap > 0 && new_cap < old_cap {
                 text.push_str(&format!(
                     "；已弃用该连接，重试的单条语句上限降到 {} KB",
@@ -1142,10 +1293,23 @@ async fn write_rows(
                     }
                     None => text.push_str("；目标端整体不可用"),
                 }
+                text.push_str(
+                    "；若同一张表反复出现，把「编辑数据源 → 高级参数」里的 socketTimeout \
+                     改成 120000（毫秒，注意不是 120）",
+                );
+            } else {
+                // 探活正常 ⇒ 目标端在慢慢写（不是链路问题），给的建议不同
+                text.push_str(&format!(
+                    "；下一批的页会缩到 1/4（{stall} 秒上限，链路正常时不必调大「超时时间」）；\
+                     若整个任务后段都在刷新这条，先把并发表数降到 2~3，并确认目标库磁盘/IO 没有打满",
+                    stall = stall.as_secs()
+                ));
             }
+            // 一页 ≠ 界面的「每批条数」：大页只是把多条语句放进同一个事务批次，
+            // 用户看到「一页 3 万条」时最容易误解的就是这一点，错误文案里直接讲清楚
             text.push_str(
-                "；若同一张表反复出现，把「编辑数据源 → 高级参数」里的 socketTimeout \
-                 改成 120000（毫秒，注意不是 120）",
+                "（一页 = 本次读写的批量，按行宽/写速自适应，1000~1 万条；界面\
+                 「每批条数」只限制其中每条 INSERT 的条数）",
             );
             (Err(text), true)
         }

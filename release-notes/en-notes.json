@@ -1,5 +1,11 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.58": [
+    "The \"concurrent tables\" setting is gone: sync now moves at most 2 tables at a time — each table already runs 2 read streams plus several write lanes, and more tables multiply connection count, row locks and IO contention on the target (the reported \"almost every table stalls for ten minutes late in a run\" came from setting it to 8)",
+    "\"Rows per batch\" is now \"batch size = one commit\": set 1000 and it commits every 1000 rows, so a stall or a dropped connection rolls back at most one batch and re-runs only that segment (100x more commits, throughput unchanged in measurements)",
+    "Slow-batch self healing: when a batch runs 60-180 seconds while liveness probes still pass, the segment is rolled back, the connection is replaced and a smaller page is retried instead of waiting out the 600 second timeout; a page cap learned by one table now applies to every other table in the same task",
+    "Fixed sync counters jumping backwards: status polling is now serial (one request in flight per task) and rows read / written can only grow while the task runs"
+  ],
   "v1.2.57": [
     "\"Parallel tables\" no longer shows 0: the field shows the number of tables that will actually run at once, prefilled from the source/target capabilities — embedded databases (SQLite / H2 / Derby) 1, Doris / Oracle / DM / DB2 3, MySQL / MariaDB / PG / SQL Server / ClickHouse 8, capped by the number of selected objects; edit it and your value is used",
     "The hint in the \"?\" follows: \"Prefilled from the source/target connection capabilities\"",

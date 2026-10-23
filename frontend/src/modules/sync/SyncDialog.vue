@@ -169,22 +169,11 @@
             <el-checkbox v-model="opts.includeIndexes" :disabled="taskRunning">{{ $t('sync.includeIndexes') }}</el-checkbox>
             <el-checkbox v-model="opts.stopOnError" :disabled="taskRunning">{{ $t('sync.stopOnError') }}</el-checkbox>
           </div>
-          <!-- 并发表数：0 = 自适应（按源/目标类型与对象数定）。目标端弱、或源与目标同实例时
-               调小它，能直接减少双方连接数与会话/IO 争抢（见后端 sync::db 的「会话预算」）。
-               说明文字收进标签后的问号（悬浮显示），不占版面。 -->
-          <div class="settings-inline">
-            <span class="settings-inline-label">
-              {{ $t('sync.maxConcurrency') }}
-              <el-tooltip :content="$t('sync.maxConcurrencyHint')" placement="top" :show-after="120">
-                <el-icon class="hint-q"><QuestionFilled /></el-icon>
-              </el-tooltip>
-            </span>
-            <!-- 显示的是实际会用的值：没手动改过就按源/目标库与已选对象数算出的默认值
-                 （用户口径：不要显示 0，要看到「到底几张表在同时跑」）。 -->
-            <el-input-number :model-value="maxConcurrencyShown" @update:model-value="onMaxConcurrencyInput"
-                             :min="1" :max="32" :step="1" size="small"
-                             controls-position="right" :disabled="taskRunning" class="settings-num" />
-          </div>
+          <!-- 并发表数**不再出现在界面上**（用户口径：连「固定 2 张」这一行也去掉）。
+               后端 `sync::db` 已硬性夹到「最多 2 张表同时搬」：单表内部本来就有
+               2 片读 + 2 路写，2 张表就够喂满源端读与目标端写；再往上加只会让目标端的
+               连接数、行锁与磁盘 IO 互相抢 —— 真机那次「后期几乎每张表都卡 601 秒」
+               就是手工设成 8 张并发时发生的。 -->
           <!-- 每批行数：**按目标库给默认值、用户可改**。0 = 自动（用默认值）。
                默认值差一个数量级（CH 写 part 要 1 万行、MySQL 在丢包链路上 1000 行、
                SQL Server 有多行 VALUES 的 1000 行硬限制），所以写在 compute 里按类型映射，
@@ -432,28 +421,9 @@ const tgtKindCode = computed(() => String(tgtInfo.value?.type || '').toUpperCase
 const srcKindCode = computed(() => String(srcInfo.value?.type || '').toUpperCase())
 const batchRowsDefault = computed(() => BATCH_ROWS_DEFAULT[tgtKindCode.value] || 1000)
 
-// 并发表数的**按库默认值**：与后端 `adaptive_concurrency` 同口径（改一边要改两边）。
-//   嵌入式/文件引擎：会话池只有一条连接，并发只会排队 → 1
-//   Doris / Oracle / 达梦 / DB2：每次导入落 part、会话开销大 → 3
-//   网络型库（MySQL / PG / SQL Server / ClickHouse…）→ 8（再被对象数截断）
-const CONCURRENCY_DEFAULT = {
-  SQLITE: 1, H2: 1, DERBY: 1, DUCKDB: 1,
-  DORIS: 3, ORACLE: 3, DM: 3, DB2: 3,
-}
-const concByKind = (code) => CONCURRENCY_DEFAULT[code] || 8
-const concurrencyDefault = computed(() => {
-  const objects = totalSelected.value || 0
-  if (objects <= 1) return 1
-  // 源端决定读连接、目标端决定写连接，取两者较小；再不超过实际对象数
-  return Math.max(1, Math.min(concByKind(srcKindCode.value), concByKind(tgtKindCode.value), objects))
-})
-/** 输入框里显示的值：用户没改过（0）就显示按库算出的默认值 */
-const maxConcurrencyShown = computed(() =>
-  (opts.value.maxConcurrency > 0 ? opts.value.maxConcurrency : concurrencyDefault.value))
-const onMaxConcurrencyInput = (value) => {
-  const n = Number(value)
-  opts.value.maxConcurrency = Number.isFinite(n) && n > 0 ? Math.round(n) : 0
-}
+// 并发表数已从界面上移除（用户口径）：后端 `sync::db` 硬性夹到「最多 2 张表」，
+// 所以这里既不算默认值、也不再提交该字段。
+
 /** 输入框里显示的值：用户没改过（0）就显示目标库默认值 —— 「显示出来」而不是藏成 0 */
 const batchRowsShown = computed(() => (opts.value.insertRows > 0 ? opts.value.insertRows : batchRowsDefault.value))
 const onInsertRowsInput = (value) => {
@@ -556,7 +526,8 @@ const objState = reactive({})
 for (const t of objTypes) objState[t.key] = { list: [], selected: [] }
 
 // rowLimit / whereClause 已移除：同步就是不限行数；行过滤改按表设置（见 whereByTable）
-const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, maxConcurrency: 0, insertRows: 0, timeout: 0 })
+// 并发表数不在选项里：后端固定「最多 2 张表」（界面上也没有对应的行）
+const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, insertRows: 0, timeout: 0 })
 
 // ==================== 行过滤（按表设置） ====================
 // 为什么不是全局一个 WHERE：一次同步几十上百张表时，`amount > 100` 拼到没有 amount 列的
@@ -671,11 +642,13 @@ tickTimer = setInterval(() => { if (taskRunning.value) runningTick.value++ }, 10
 const extrapolate = (base, rate) => {
   runningTick.value
   if (!taskRunning.value || !fetchAt.value) return base
-  // 外插打 9 折，且**时间窗钳制在 1.0s**：页面节流/轮询卡顿时 dt 会失控变大，
+  // 外插打 6 折，且**时间窗钳制在 0.8s**：页面节流/轮询卡顿时 dt 会失控变大，
   // 不钳制的话「速率 × 时间」能冲到远超真实值（真机：已读取 20.5 万显示成 22 万），
-  // Math.max 防倒退保护还会让它卡在虚高处不回落
-  const dt = Math.min(Math.max(0, (Date.now() - fetchAt.value) / 1000), 1.0)
-  return base + rate * 0.9 * dt
+  // Math.max 防倒退保护还会让它卡在虚高处不回落。
+  // 打折的理由同样是「不许回退」：外插只是让数字在两个轮询之间继续走，猜超的部分
+  // 只能等真实值追上来（显示值不回退），猜得越保守，停住等的时间越短。
+  const dt = Math.min(Math.max(0, (Date.now() - fetchAt.value) / 1000), 0.8)
+  return base + rate * 0.6 * dt
 }
 const targetRead = computed(() => Math.floor(extrapolate(rowsRead.value, rates.value.read)))
 // **传输数恒 ≤ 读取数**（写入行 ⊆ 读取行，语义不变式）—— 两个数各自外插时
@@ -1044,8 +1017,7 @@ const run = async () => {
     includeIndexes: opts.value.includeIndexes,
     autoCreateDb: opts.value.autoCreateDb,
     stopOnError: opts.value.stopOnError,
-    // 0 = 自适应（后端按源/目标类型与对象数定）；>0 以这里为准
-    maxConcurrency: opts.value.maxConcurrency || 0,
+    // 并发表数不再由界面提交（后端固定最多 2 张，见 sync::db）；字段留着给老后端兼容
     // 0 = 按生成方（目标库）默认；>0 以界面为准 —— 后端再和字节上限、方言硬限制取小
     insertRows: opts.value.insertRows || 0,
     // 0 = 继承连接（用数据源上的 socketTimeout）；-1 = 不限制；>0 = 秒
@@ -1179,24 +1151,45 @@ const mergeLogs = (serverLogs) => {
   }
 }
 
+// **轮询必须串行**：间隔只有 800ms，而 `/api/sync/task/{id}` 会把日志一并带回 ——
+// 任务跑久了日志上千行、弱链路上单个请求几百毫秒到数秒都有。setInterval 不管上一个
+// 请求有没有回来，于是同时挂着好几个，而它们**返回顺序无法保证**：先发出的旧快照
+// 后到，就会把已经涨上去的「读取数/传输数」写回旧值 —— 界面表现就是数字越蹦越小
+//（真机反馈，跑得越久日志越多、越容易叠）。这里同一时刻只允许一个请求在途。
+let polling = false
+let pollingTask = ''
 const pollTask = async () => {
+  // 同一任务只允许一个在途请求（见上）；换任务（任务中心恢复 / 重新开跑）时立刻放行，
+  // 否则上一个任务的在途请求会把新任务的恢复首刷也挡掉（界面停在「准备中」）。
+  if (polling && pollingTask === taskId.value) return
+  const myTask = taskId.value
+  polling = true
+  pollingTask = myTask
   tickNow.value = Date.now()
   try {
     // 局部变量改名：本函数后面要用 t() 翻译，同名会把它遮蔽掉
-    const st = await syncTaskStatus(taskId.value)
+    const st = await syncTaskStatus(myTask)
+    // 请求在途期间任务已经换了（旧任务的迟到响应）：数字/状态一概不能回写
+    if (myTask !== taskId.value) return
     taskStatus.value = st.status
     taskDone.value = st.done || 0
     taskTotal.value = st.total || taskTotal.value
-    rowsRead.value = st.rowsRead || 0
-    rowsWritten.value = st.rowsWritten || 0
+    // **运行中这两个计数只增不减**。后端本来就是累计工作量（重跑读/写过的行不再扣回），
+    // 再夹一道 max 兜住「快照乱序 / 迟到」这种前端时序问题 —— 任何情况下都不让已经
+    // 显示过的数字往回退（真机反馈：两个数都有越蹦越小的情况）。
+    // 终态（含取消）用快照的真实值落定，收尾数字与结果表一致。
+    const nextRead = Math.max(0, Number(st.rowsRead) || 0)
+    const nextWritten = Math.max(0, Number(st.rowsWritten) || 0)
+    if (taskRunning.value) {
+      rowsRead.value = Math.max(rowsRead.value, nextRead)
+      rowsWritten.value = Math.max(rowsWritten.value, nextWritten)
+    } else {
+      rowsRead.value = nextRead
+      rowsWritten.value = nextWritten
+    }
     rowsFailed.value = st.rowsFailed || 0
-    // **外插猜超了就回贴真实值**：显示值高于真实值超过「一个轮询周期的合理量」时，
-    // 说明外插跑飞了（页面节流/轮询卡顿）—— Math.max 防倒退保护是轮询间隔内的规则，
-    // 跨轮询必须信任后端真实值，否则虚高会一直挂着不回落（真机：20.5 万显示成 22 万）
-    if (readShown.value > rowsRead.value + rates.value.read * 1.2) readShown.value = rowsRead.value
-    if (writtenShown.value > rowsWritten.value + rates.value.written * 1.2) writtenShown.value = rowsWritten.value
-    // 采样行速率（供数字外插，见 rates/onRowsFetched）
-    onRowsFetched(st.rowsRead || 0, st.rowsWritten || 0, taskRunning.value)
+    // 采样行速率（供数字外插，见 rates/onRowsFetched）；用真实值采样，不用 max 后的显示基准
+    onRowsFetched(nextRead, nextWritten, taskRunning.value)
     // 接口把阶段文案放在 `current`（= 任务的 phase）；`phase` 兜底，免得字段名一变界面就空白
     taskCurrent.value = st.current || st.phase || ''
     // **耗时续算**：任务快照带 elapsedMs（后端任务的真实运行时长，终态后后端已冻结该值）——
@@ -1245,11 +1238,16 @@ const pollTask = async () => {
       }
     }
   } catch (e) {
+    // 旧任务的请求失败：界面已经切到别的任务了，不能拿它去停轮询/弹错
+    if (myTask !== taskId.value) return
     stopPolling()
     if (stopGuard) { clearTimeout(stopGuard); stopGuard = null }
     taskRunning.value = false
     stopping.value = false
     ElMessage.error(t('cmp.statusFailed', { detail: e.message }))
+  } finally {
+    // 只清自己那一份：换任务后新请求可能已经把标志指向新的 taskId
+    if (pollingTask === myTask) { polling = false; pollingTask = '' }
   }
 }
 
@@ -1717,7 +1715,8 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 }
 
 .settings-checks { display: flex; flex-direction: column; gap: 6px; }
-/* 「并发表数」：一行标签 + 数字框；说明收进标签后的问号（悬浮显示） */
+/* 设置行：左侧标签（+ 问号悬浮说明），右侧控件。并发表数那一行已移除，
+   现在只剩「每批条数」与「超时时间」 */
 .settings-inline { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .settings-inline-label { font-size: 13px; color: var(--dc-text); line-height: 24px; flex: none; }
 .hint-q { font-size: 12px; color: var(--dc-text-weak); cursor: help; vertical-align: -1px; margin-left: 2px; }

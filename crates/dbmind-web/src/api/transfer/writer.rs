@@ -73,6 +73,19 @@ pub trait Writer: Send + Sync {
         Box::pin(async {})
     }
 
+    /// 从**服务端**掐断本表所有写会话（慢批自愈用），返回是否真的掐断了至少一条。
+    ///
+    /// 为什么必须从服务端掐：客户端放弃等待（drop 掉那条语句的 future）之后，服务端
+    /// 那条 INSERT 和它所在的**未提交事务**照样在跑、照样持有行锁。紧接着的重试是一条
+    /// 新连接，写同一批主键 ⇒ 排队等那把锁，结果是「中断了还是写不动」——真机上
+    /// 1 秒阈值注入时，页从 1 万行缩到 1000 行仍然每批都超时。
+    ///
+    /// 默认返回 `false`（方言不支持/无法掐断）—— 引擎据此**不做**慢批自愈，
+    /// 保持「探活通就一直等」的旧语义，避免引入「中断后永远撞锁」的更坏结果。
+    fn kill_sessions<'a>(&'a self) -> BF<'a, bool> {
+        Box::pin(async { false })
+    }
+
     /// 单批写超时后：把**单条语句的字节上限**减半，让紧接着的重试用更小的报文。
     ///
     /// 为什么必须减：劣化链路（PMTU 黑洞 / 静默丢包）上大报文会一直撞重传退避 ——
@@ -141,6 +154,11 @@ pub struct SqlWriter {
     /// 那条语句还挂着，内核侧的会话缓存仍然是「活着」的，紧接着的重试会**复用
     /// 同一条卡死的连接**，于是再挂一次看门狗 —— 真机上表现为「每张表都卡五分钟」。
     generation: AtomicU64,
+    /// 每路写会话在目标端的 `connection_id()`（MySQL/MariaDB 才有）。
+    ///
+    /// 慢批自愈要从服务端掐断卡住的那条连接（`KILL <id>`），必须先知道它叫什么。
+    /// 每路在第一次写之前查一次就够（同一会话名 ⇒ 同一物理连接），`renew()` 换代后清空重查。
+    conn_ids: Vec<tokio::sync::Mutex<Option<u64>>>,
 }
 
 impl SqlWriter {
@@ -177,7 +195,7 @@ impl SqlWriter {
                 .unwrap_or(0),
         )
         .min(crate::api::sync::STMT_CAP_START);
-        // 单条 INSERT 行数：界面填了就用界面的，否则按**目标方言**默认
+        // 每批条数（一条 INSERT 里放多少条）：界面填了就用界面的，否则按**目标方言**默认
         //（ClickHouse 1 万行写 part、MySQL 1000 行抗丢包、SQL Server 1000 行硬限制…）。
         let rows_cap = if plan.insert_rows > 0 {
             plan.insert_rows
@@ -217,6 +235,37 @@ impl SqlWriter {
             workers_ceiling,
             diag: plan.diag.clone(),
         generation: AtomicU64::new(0),
+            conn_ids: (0..workers_ceiling).map(|_| tokio::sync::Mutex::new(None)).collect(),
+        }
+    }
+
+    /// 确保这一路写会话的 `connection_id()` 已记录（MySQL 系；其它方言直接跳过）。
+    ///
+    /// 只为「慢批自愈」服务：卡住时要能从另一条连接上 `KILL` 掉它。查询走**同一条会话**
+    /// （同一物理连接），所以拿到的就是这条写连接的真实 id；失败就留空，自愈会退化为不自愈。
+    async fn ensure_conn_id(&self, worker: usize) {
+        if !matches!(self.kind.kind.key(), "mysql" | "mariadb") {
+            return;
+        }
+        let Some(slot) = self.conn_ids.get(worker) else {
+            return;
+        };
+        let mut slot = slot.lock().await;
+        if slot.is_some() {
+            return;
+        }
+        let session = self.session(worker);
+        if let Ok(result) = run_target_in(
+            &self.state,
+            &self.tgt_target,
+            "select connection_id()",
+            &session,
+        )
+        .await
+        {
+            if let Some(CellValue::Integer(id)) = result.rows.first().and_then(|row| row.first()) {
+                *slot = Some(*id as u64);
+            }
         }
     }
 
@@ -304,8 +353,21 @@ impl Writer for SqlWriter {
             let Some((begin, _, _)) = self.txn else {
                 return;
             };
-            match run_target_in(&self.state, &self.tgt_target, begin, &session).await {
-                Ok(_) => {
+            // 开事务本身也要有墙钟：慢批自愈会频繁换连接，新连接若建不起来
+            //（半开 / 目标端 accept 排队），这里会静默等内核默认的 600 秒 ——
+            // 真机上表现为「中断重试之后再无动静」，日志里一行都没有。
+            let opened: Result<(), String> = match tokio::time::timeout(
+                std::time::Duration::from_secs(30),
+                run_target_in(&self.state, &self.tgt_target, begin, &session),
+            )
+            .await
+            {
+                Ok(Ok(_)) => Ok(()),
+                Ok(Err(err)) => Err(err.message),
+                Err(_) => Err("开事务 30 秒未返回（连接不可用）".to_string()),
+            };
+            match opened {
+                Ok(()) => {
                     if let Some(open) = self.txn_open.get(worker) {
                         open.store(true, Ordering::SeqCst);
                     }
@@ -321,7 +383,7 @@ impl Writer for SqlWriter {
                     if let Some(task) = &self.task {
                         task.log(format!(
                             "表 {}：开启事务失败（{}），退回逐条提交（大表会明显变慢）",
-                            self.table, err.message
+                            self.table, err
                         ));
                     }
                 }
@@ -331,6 +393,8 @@ impl Writer for SqlWriter {
 
     fn write<'a>(&'a self, worker: usize, rows: &'a [Vec<CellValue>]) -> BF<'a, Result<u64, String>> {
         Box::pin(async move {
+            // 每次写之前确保知道这条连接在目标端的 id（慢批自愈要 `KILL` 它；查过就不再查）
+            self.ensure_conn_id(worker).await;
             let in_transaction = self
                 .txn_open
                 .get(worker)
@@ -715,12 +779,59 @@ impl Writer for SqlWriter {
                 return;
             }
             let next = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            // 换代会换成新的物理连接：旧 id 失效，下一次写之前重新查
+            for slot in &self.conn_ids {
+                *slot.lock().await = None;
+            }
             tracing::warn!(
                 target: "dbmind::sync",
                 table = %self.table,
                 generation = next,
                 "写连接已弃用，后续重试改用全新会话（避免复用半开的连接）"
             );
+        })
+    }
+
+    /// 从服务端掐断本表的写会话：`KILL <connection_id>`（MySQL/MariaDB）。
+    ///
+    /// 用**独立诊断会话**发 KILL —— 要掐的那条正在跑语句，在它自己身上发任何命令
+    /// 都只会排在语句后面（等于没掐）。
+    /// 权限：MySQL 允许用户 kill 自己的线程，同步用的就是同一个账号，所以普通账号也够。
+    fn kill_sessions<'a>(&'a self) -> BF<'a, bool> {
+        Box::pin(async move {
+            if !matches!(self.kind.kind.key(), "mysql" | "mariadb") {
+                return false;
+            }
+            let session = format!("internal:sync-kill{}", self.sid);
+            let mut killed = false;
+            for slot in &self.conn_ids {
+                let id = *slot.lock().await;
+                let Some(id) = id else { continue };
+                // KILL 的语义是「终止这条连接上正在跑的语句并断开连接」⇒ 服务端立刻
+                // 回滚它未提交的事务、释放行锁，重试才不会撞在锁上。
+                let sql = format!("kill {id}");
+                match run_target_in(&self.state, &self.tgt_target, &sql, &session).await {
+                    Ok(_) => {
+                        killed = true;
+                        tracing::warn!(
+                            target: "dbmind::sync",
+                            table = %self.table,
+                            conn_id = id,
+                            "已从目标端掐断卡住的写会话（其未提交事务由服务端回滚）"
+                        );
+                    }
+                    Err(err) => {
+                        tracing::debug!(
+                            target: "dbmind::sync",
+                            table = %self.table,
+                            conn_id = id,
+                            error = ?err,
+                            "KILL 写会话失败（权限不足或连接已断）"
+                        );
+                    }
+                }
+            }
+            killed
         })
     }
 
