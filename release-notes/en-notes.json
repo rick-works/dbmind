@@ -1,5 +1,11 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.54": [
+    "Fixed the \"big tables early on never fail, failures pile up later\" pattern: the \"transfer coroutine made no progress for 11 minutes\" check looks at whether a single page reached the database in 11 minutes, not at total runtime — narrow big tables land a page every minute, while wide tables (large text / JSON) need fifteen minutes per page on a lossy link and were declared \"possibly half-open\". A no-progress period now probes with `select 1` first and keeps waiting when the link is alive (logging \"no progress for N minutes, target probe OK, still waiting\")",
+    "Both checks were changed: the object level (one coroutine per table) and the coroutine level (transfer inside a slice), so a table no longer suddenly fails mid-run",
+    "The error text for a real disconnect now says \"and the target probe failed\" instead of the vague \"possibly half-open\"; slice retry and the 15-second task-wide pause are unchanged",
+    "Works together with 1.2.53: single INSERTs, whole-page writes and the upsert flush all wait with probes, so slow no longer means broken"
+  ],
   "v1.2.53": [
     "Whole-page writes no longer time out into retries: a batch (20,000 rows per page in this task) used to be declared \"possibly half-open\" after 60~300 seconds and rolled back, which is exactly the \"single batch of 20,000 rows not returned in 100 s\" line that kept repeating. It now probes on a separate session every 30 seconds and keeps waiting while the link is alive; only a failed probe declares the connection dead",
     "A real disconnect is handled as before: drop the connection, roll back the slice and retry on a new connection (rows are rewritten, nothing is lost); a failed probe pauses the whole task for 15 seconds so hundreds of tables do not reconnect at the same moment",
