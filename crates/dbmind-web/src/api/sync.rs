@@ -127,6 +127,15 @@ pub struct SyncRequest {
     /// 降低双方的连接与 IO 争抢。
     #[serde(default)]
     max_concurrency: Option<usize>,
+    /// 单条 INSERT 的**行数**上限；0 / 缺省 = 按目标方言默认（见 `insert_rows_default`）。
+    ///
+    /// 界面上会按目标库把默认值填出来、允许用户改（每种库的甜点值差一个数量级：
+    /// ClickHouse 写 part 要 1 万行，MySQL 在丢包链路上 1000 行更稳）。
+    /// `batchSize` 是旧客户端的写法，一并认。
+    #[serde(default)]
+    insert_rows: Option<usize>,
+    #[serde(default)]
+    batch_size: Option<usize>,
     /// 行数上限：>0 时每张表只搬前 N 行；0 或缺省 = 不限。
     /// **界面已不再提供**（用户口径：同步就是不限，抽样不是同步的事），保留字段只是
     /// 为了老客户端 / 脚本调用仍能编译 —— 新调用方不要传。
@@ -207,6 +216,8 @@ struct Opts {
     /// 尾部弹性的并发配额（整库同步才有；单表同步为 `None`）：
     /// 别的对象结束后调度侧调高它，已在跑的表的引擎就地补令牌扩片
     grow: Option<std::sync::Arc<crate::api::transfer::GrowCaps>>,
+    /// 单条 INSERT 的行数上限（0 = 按目标方言默认，见 [`insert_rows_default`]）
+    insert_rows: usize,
 }
 
 impl Opts {
@@ -298,6 +309,13 @@ impl SyncRequest {
             tgt_workers: 0,
             src_slices: 0,
             grow: None,
+            // 0 = 让每张表按**目标方言**的默认值来（界面填了就以此为准）；
+            // 夹到 1..=100_000：太小只剩往返开销，太大等于把报文重新放大。
+            insert_rows: self
+                .insert_rows
+                .or(self.batch_size)
+                .unwrap_or(0)
+                .min(100_000),
         }
     }
 }
@@ -2283,13 +2301,19 @@ pub(crate) fn insert_stmt_cap(kind_key: &str) -> usize {
     match kind_key {
         // Doris FE 的 max_allowed_packet 默认 1MB → 512KB 留足语句头/转义余量
         "doris" => 512 * 1024,
+        // 列存按批写 part，批量大才有意义：字节上限放宽到 8MB，行数上限 1 万
+        "clickhouse" => 8 * 1024 * 1024,
+        // 本地文件/内存库：没有网络丢包，报文大一点省往返
+        "sqlite" | "h2" | "derby" => 8 * 1024 * 1024,
         // MySQL/MariaDB：旧版 packet 默认 4MB、8.0 起动态 64MB，但**上限不是越高越好** ——
         // 用户口径是「Navicat 不断我们也不许断」。一条几 MB 的 INSERT 在公网 / VPN 链路上
         // 一丢包就是整条语句重传，慢到被判定中断（真机日志里撞的是 8MB 一条）。收到 1MB：
         // 报文小到不容易触发丢包，往返次数只多几倍，换来的是不再反复「写入中断 + 重跑」。
         "mysql" | "mariadb" => 1024 * 1024,
-        // 其余方言没有 1MB 级 packet 限制，这里只防单语句内存尖峰
-        _ => 16 * 1024 * 1024,
+        // 其余方言没有 1MB 级 packet 限制，但仍然受链路限制：
+        // 一条几 MB 的语句在丢包链路上丢一个包就是整条重传（真机撞到过 8MB 一条），
+        // 16MB 的上限只防内存尖峰、防不了慢，收到 4MB 更稳。
+        _ => 4 * 1024 * 1024,
     }
 }
 
@@ -2300,6 +2324,45 @@ pub(crate) fn insert_stmt_cap(kind_key: &str) -> usize {
 /// 之后 `adapt_stmt_cap` 就会按实测耗时（<1 秒/条）翻倍上去 —— 健康链路只多开头几次往返，
 /// 劣化链路则停在真正安全的报文大小上，不会一上来就把链路撞断。
 pub(crate) const STMT_CAP_START: usize = 512 * 1024;
+
+/// 各方言默认的**单条 INSERT 行数**上限（`DBMIND_SYNC_INSERT_ROWS` 可统一覆盖）。
+///
+/// 判据不是「协议最多能塞多少行」，而是「这条报文丢了要重传多久」：
+/// 一条远端语句丢一个包就要整条重传几十秒，行数砍一半，重传代价就砍一半。
+/// 所以**远端库统一 1000 行**（与 DBX / Navicat / Kettle commit size 同量级），
+/// 本地文件/内存库没有丢包问题，给 5000 行省往返。
+///
+/// 注意叠加关系：宽表还会先被字节上限切开（见 [`insert_stmt_cap`]），
+/// Oracle / DM / DB2 另受「派生表表达式总数 65,535」限制（见 `insert_batch_ranges_with_cap`），
+/// 三者取小 —— 所以宽表上实际每行数会更少。
+pub(crate) fn insert_rows_default(kind_key: &str) -> usize {
+    match kind_key {
+        // 列存 / 分析型：一条 INSERT 就是一次 part 写入，批量越大越省（往返、part 合并都摊薄）
+        // 10000 行在窄表上约 1MB 报文，远低于它 8MB 的字节上限；宽表由字节上限先切。
+        "clickhouse" => 10_000,
+        // Doris：FE 的 max_allowed_packet 默认 1MB ⇒ 字节上限只有 512KB，
+        // 2000 行是「窄表刚好用满 512KB」的量级，再大写不进去也是白拆。
+        "doris" => 2_000,
+        // PG 多行 VALUES 效率好，且没有 packet 硬限制
+        "postgresql" => 2_000,
+        // SQL Server 多行 VALUES 有 1000 行解析器硬限制（真机踩过）
+        "sqlserver" => 1_000,
+        // Oracle / DM / DB2：派生表表达式上限 65535，宽表时实际更少（见 with_cap）
+        "oracle" | "dm" | "db2" => 1_000,
+        // 嵌入式 / 本地库：没有网络往返和丢包成本，报文大一点省调用
+        "sqlite" | "h2" | "derby" => 5_000,
+        // MySQL / MariaDB：1000 行（DBX 同量级）—— 丢包链路上报文小一半，重传代价就小一半
+        _ => 1_000,
+    }
+}
+
+fn insert_rows_cap(kind_key: &str) -> usize {
+    std::env::var("DBMIND_SYNC_INSERT_ROWS")
+        .ok()
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .filter(|rows| *rows >= 1)
+        .unwrap_or_else(|| insert_rows_default(kind_key))
+}
 
 /// 单条 INSERT 的字节**下限**：再拆分就只剩往返开销了。
 ///
@@ -2380,11 +2443,12 @@ pub(crate) fn json_row_bytes(row: &[CellValue]) -> usize {
 /// 当前子批。
 ///
 /// 拆分是**双重约束**，谁先到谁触发：
-/// - 行数：SQL Server 多行 VALUES 单条语句限 1000 行（解析器硬限制，真机踩过）；
+/// - 行数：按方言给（见 [`insert_rows_default`]）—— 远端库统一 1000 行一条
+///   （SQL Server 的多行 VALUES 本身就是 1000 行解析器硬限制），本地嵌入式 5000 行；
 /// - 表达式：Oracle / DM / DB2 的 `(值1, 值2, …)` 派生表有 65,535 个表达式上限，
 ///   行数必须随列数收窄（130 列时每批约 504 行）；
 /// - 字节：单条语句估出来的体积不许超过目标方言的 packet 上限（见 insert_stmt_cap）——
-///   行数上限对宽行（JSON 列等）无能为力，2000 行也能拼出 7MB。
+///   行数上限对宽行（JSON 列等）无能为力，宽行会先被字节上限切开。
 ///
 /// 写路径实际调用的是 [`insert_batch_ranges_with_cap`]（字节上限按实测耗时自适应），
 /// 这个包装只剩测试在用，故按测试构建裁剪，免得常驻 `never used` 警告。
@@ -2393,23 +2457,36 @@ fn insert_batch_ranges(
     rows: &[Vec<CellValue>],
     kind_key: &str,
 ) -> Vec<(usize, usize)> {
-    insert_batch_ranges_with_cap(rows, kind_key, insert_stmt_cap(kind_key))
+    insert_batch_ranges_with_cap(
+        rows,
+        kind_key,
+        insert_stmt_cap(kind_key),
+        insert_rows_cap(kind_key),
+    )
 }
 
-/// 同 [`insert_batch_ranges`]，但字节上限由调用方给（写线程按实测耗时自适应，见 `adapt_stmt_cap`）。
+/// 同 [`insert_batch_ranges`]，但字节上限与行数上限由调用方给：写线程的字节上限按实测耗时
+/// 自适应（见 `adapt_stmt_cap`），行数上限来自界面（0 = 方言默认，见 [`insert_rows_cap`]）。
 fn insert_batch_ranges_with_cap(
     rows: &[Vec<CellValue>],
     kind_key: &str,
     byte_cap: usize,
+    rows_cap: usize,
 ) -> Vec<(usize, usize)> {
     const SQLSERVER_VALUES_LIMIT: usize = 1000;
     let columns = rows.first().map(Vec::len).unwrap_or(1).max(1);
+    // 0 = 调用方没指定 ⇒ 按方言默认（界面把它显示出来只是「填好默认值」，不是必须传）
+    let rows_cap = if rows_cap > 0 {
+        rows_cap
+    } else {
+        insert_rows_cap(kind_key)
+    };
     let row_limit = match kind_key {
-        "sqlserver" => SQLSERVER_VALUES_LIMIT,
+        "sqlserver" => SQLSERVER_VALUES_LIMIT.min(rows_cap),
         // 这些方言的单条多行 INSERT 用派生表展开，表达式总数是硬限制。
         // 10 的下限只防止极端宽表算出 0；真正写不进去时照常逐行降级并报错。
-        "oracle" | "dm" | "db2" => (65_535 / columns).clamp(10, 10_000),
-        _ => usize::MAX,
+        "oracle" | "dm" | "db2" => (65_535 / columns).clamp(10, 10_000).min(rows_cap),
+        _ => rows_cap,
     };
     let mut out: Vec<(usize, usize)> = Vec::new();
     let mut start = 0usize;
@@ -2622,6 +2699,8 @@ pub(crate) async fn write_insert_rows(
     stmt_cap: &std::sync::atomic::AtomicUsize,
     // 任务级报文上限建议（整库同步才有；`None` = 单表同步，各写各的）
     hint: Option<&crate::api::transfer::GrowCaps>,
+    // 单条 INSERT 的行数上限（界面可改；0 = 按方言默认）
+    rows_cap: usize,
 ) -> Result<u64, String> {
     // 语句字节上限按**每路 writer** 记（同表不同写线程可能一快一慢），
     // 这一批结束时按平均每条语句耗时调整，影响下一批（见 `adapt_stmt_cap`）。
@@ -2633,7 +2712,7 @@ pub(crate) async fn write_insert_rows(
     let byte_cap = stmt_cap
         .load(std::sync::atomic::Ordering::Relaxed)
         .clamp(STMT_CAP_MIN, max_cap);
-    let ranges = insert_batch_ranges_with_cap(rows, target_kind.kind.key(), byte_cap);
+    let ranges = insert_batch_ranges_with_cap(rows, target_kind.kind.key(), byte_cap, rows_cap);
     let stmt_count = ranges.len().max(1);
     let batch_started = std::time::Instant::now();
     let mut ok_rows = 0u64;
@@ -2920,8 +2999,17 @@ fn build_upsert_batch(
     key_indexes: &[usize],
     rows: &[Vec<CellValue>],
     dialect: Dialect,
+    // 界面指定的单条行数上限（0 = 按方言默认）
+    rows_cap: usize,
 ) -> Vec<(usize, String)> {
-    let row_limit = dialect.upsert_row_limit();
+    // 原生 upsert 与 INSERT 同一粒度：方言上限（SQL Server 1000 行 / 其它）、
+    // 界面填的行数、方言默认三者取小。
+    let rows_cap = if rows_cap > 0 {
+        rows_cap
+    } else {
+        insert_rows_cap(dialect.kind.key())
+    };
+    let row_limit = dialect.upsert_row_limit().min(rows_cap);
     let byte_cap = insert_stmt_cap(dialect.kind.key());
     let render = |slice: &[Vec<CellValue>]| -> Option<String> {
         let rendered: Vec<Vec<String>> = slice
@@ -2982,8 +3070,18 @@ pub(crate) async fn write_upsert_rows(
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
     table: &str,
     in_transaction: bool,
+    // 单条 INSERT 的行数上限（界面可改；0 = 按方言默认）
+    rows_cap: usize,
 ) -> Result<u64, String> {
-    let stmts = build_upsert_batch(target_name, columns, target_types, key_indexes, rows, target_kind);
+    let stmts = build_upsert_batch(
+        target_name,
+        columns,
+        target_types,
+        key_indexes,
+        rows,
+        target_kind,
+        rows_cap,
+    );
     if stmts.is_empty() {
         return Err(format!(
             "{} 不支持原生 upsert，且没有可回退的两阶段写入",
@@ -3058,6 +3156,7 @@ pub(crate) async fn write_upsert_rows(
                         key_indexes,
                         std::slice::from_ref(row),
                         target_kind,
+                        rows_cap,
                     );
                     let sql = match single.first() {
                         Some((_, sql)) => sql.clone(),
@@ -4503,6 +4602,7 @@ async fn sync_table_inner(
         target_columns: target_column_names.clone(),
         workers_cap: opts.tgt_workers,
         slices_cap: opts.src_slices,
+        insert_rows: opts.insert_rows,
         grow: opts.grow.clone(),
         target_types: target_types.clone(),
         key_columns: key_columns.clone(),
@@ -5254,7 +5354,16 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             } else {
                 format!("（{}）", parts.join("，"))
             };
-            task.log(format!("开始同步：{total} 个对象{detail}"));
+            // 每批行数也写进来：界面填的值（或按目标库默认）到底生效了没有，
+            // 用户看第一行就能确认，不用猜。
+            let batch_rows = if opts.insert_rows > 0 {
+                opts.insert_rows
+            } else {
+                insert_rows_default(target_kind.kind.key())
+            };
+            task.log(format!(
+                "开始同步：{total} 个对象{detail}；每批最多 {batch_rows} 行"
+            ));
             // 调度细节只进 tracing（debug）：它们是「内部怎么排兵布阵」，用户看不懂也不需要看
             tracing::debug!(
                 target: "dbmind::sync",

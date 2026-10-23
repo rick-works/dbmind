@@ -580,9 +580,11 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
 /// 「越写越慢」（实测 5000 万行从 23.8k 行/秒掉到 18.6k）。DataX（batchSize 默认 2048）
 /// 和 Kettle（commit size 默认 1000）都是**小事务高频提交**，这是它们不会越跑越慢的主因。
 ///
-/// 50 万行 ≈ 6~8 秒一批（按 18k 行/秒）：足够摊薄提交开销，又不会把事务堆成灾难。
-/// `DBMIND_SYNC_TXN_ROWS` 可覆盖（对比实验用）。
-const TXN_ROWS_DEFAULT: u64 = 500_000;
+/// **10 万行**（≈ 2~3 秒一批，按 18k 行/秒）：提交开销仍摊得很薄，而一旦连接断开，
+/// 要回滚的也只是 10 万行而不是 50 万行 —— 重跑更快。真机上 50 万行的事务在宽表上
+/// 一跑十几分钟，断开后光是回滚就很贵（用户口径：宁可多提交几次）。
+/// `DBMIND_SYNC_TXN_ROWS` 可覆盖（对比实验用，最小 1 万）。
+const TXN_ROWS_DEFAULT: u64 = 100_000;
 const TXN_ROWS_MIN: u64 = 10_000;
 
 fn txn_rows_cap() -> u64 {

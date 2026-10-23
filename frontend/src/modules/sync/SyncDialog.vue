@@ -182,9 +182,25 @@
             <el-input-number v-model="opts.maxConcurrency" :min="0" :max="32" :step="1" size="small"
                              controls-position="right" :disabled="taskRunning" class="settings-num" />
           </div>
-          <!-- 「写入批次」输入已删：每种库的甜点批大差一个数量级（CH 落 part / Oracle 有
-               单语句上限 / MySQL 看 max_allowed_packet），由后端按目标方言自动决定 -->
-          <!-- 「行数上限」也删了（用户口径：同步就是不限，抽样不是同步的事）；
+          <!-- 每批行数：**按目标库给默认值、用户可改**。0 = 自动（用默认值）。
+               默认值差一个数量级（CH 写 part 要 1 万行、MySQL 在丢包链路上 1000 行、
+               SQL Server 有多行 VALUES 的 1000 行硬限制），所以写在 compute 里按类型映射，
+               后端的方言默认值与之保持一致（sync::insert_rows_default）。 -->
+          <div class="settings-inline">
+            <span class="settings-inline-label">
+              {{ $t('sync.insertRows') }}
+              <el-tooltip :content="$t('sync.insertRowsHint')" placement="top" :show-after="120">
+                <el-icon class="hint-q"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+            <!-- 显示的是**实际会用的行数**：没手动改过就是目标库默认值（用户要求「显示出来」），
+                 改了就按改的走（0 只在后端接口语义里表示自动，界面上不出现 0）。 -->
+            <el-input-number :model-value="batchRowsShown" @update:model-value="onInsertRowsInput"
+                             :min="1" :max="100000" :step="500" size="small"
+                             controls-position="right" :disabled="taskRunning" class="settings-num" />
+          </div>
+          <p class="settings-hint settings-batch-hint">{{ batchRowsHint }}</p>
+          <!-- 「行数上限」已删（用户口径：同步就是不限，抽样不是同步的事）；
                原先那个全局 WHERE 输入框挪到下面**按表设置** —— 一个条件拼到几十张表上
                语义说不清，见 .settings-where -->
         </div>
@@ -377,6 +393,36 @@ const connInfoOf = (id) => {
 }
 const srcInfo = computed(() => connInfoOf(src.value.connectionId))
 const tgtInfo = computed(() => connInfoOf(tgt.value.connectionId))
+
+// 每批行数的**按库默认值**：必须与后端 `sync::insert_rows_default` 一致（改一边要改两边）。
+// 判据不是「谁能塞最多」，而是「这条报文丢了要重传多久」+「驱动的硬限制」：
+//   ClickHouse 写 part，批量大才省；SQL Server 多行 VALUES 硬限 1000 行；
+//   Doris 的 FE packet 只有 1MB；MySQL 在丢包链路上 1000 行最稳；本地库没有往返成本。
+const BATCH_ROWS_DEFAULT = {
+  CLICKHOUSE: 10000,
+  DORIS: 2000,
+  POSTGRESQL: 2000,
+  SQLSERVER: 1000,
+  ORACLE: 1000,
+  DM: 1000,
+  DB2: 1000,
+  SQLITE: 5000,
+  H2: 5000,
+  DERBY: 5000,
+}
+const tgtKindCode = computed(() => String(tgtInfo.value?.type || '').toUpperCase())
+const batchRowsDefault = computed(() => BATCH_ROWS_DEFAULT[tgtKindCode.value] || 1000)
+/** 输入框里显示的值：用户没改过（0）就显示目标库默认值 —— 「显示出来」而不是藏成 0 */
+const batchRowsShown = computed(() => (opts.value.insertRows > 0 ? opts.value.insertRows : batchRowsDefault.value))
+const onInsertRowsInput = (value) => {
+  // 清空/非法输入回落到 0，提交给后端时由它按方言默认处理
+  const n = Number(value)
+  opts.value.insertRows = Number.isFinite(n) && n > 0 ? Math.round(n) : 0
+}
+const batchRowsHint = computed(() => t('sync.insertRowsAuto', {
+  type: tgtInfo.value?.type || '--',
+  n: batchRowsDefault.value,
+}))
 const srcConnName = computed(() => srcInfo.value ? srcInfo.value.name : '--')
 const tgtConnName = computed(() => tgtInfo.value ? tgtInfo.value.name : '--')
 
@@ -471,7 +517,7 @@ const objState = reactive({})
 for (const t of objTypes) objState[t.key] = { list: [], selected: [] }
 
 // rowLimit / whereClause 已移除：同步就是不限行数；行过滤改按表设置（见 whereByTable）
-const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, maxConcurrency: 0 })
+const opts = ref({ objectPolicy: 'drop', dataMode: 'truncate_insert', syncStructure: true, syncData: true, includeIndexes: true, autoCreateDb: true, stopOnError: false, maxConcurrency: 0, insertRows: 0 })
 
 // ==================== 行过滤（按表设置） ====================
 // 为什么不是全局一个 WHERE：一次同步几十上百张表时，`amount > 100` 拼到没有 amount 列的
@@ -961,6 +1007,8 @@ const run = async () => {
     stopOnError: opts.value.stopOnError,
     // 0 = 自适应（后端按源/目标类型与对象数定）；>0 以这里为准
     maxConcurrency: opts.value.maxConcurrency || 0,
+    // 0 = 按生成方（目标库）默认；>0 以界面为准 —— 后端再和字节上限、方言硬限制取小
+    insertRows: opts.value.insertRows || 0,
     // 行过滤按表提交：只带真正填了条件的表（没勾选的表就算残留了旧条件也不传）
     whereClauses: Object.fromEntries(selTables.value
       .map(name => [name, (whereByTable[name] || '').trim()])
@@ -1626,6 +1674,8 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   color: var(--dc-text-weak);
   margin: 0;
 }
+/* 「每批行数」的默认值说明：紧贴数字框下方，别和上面的勾选项挤在一起 */
+.settings-batch-hint { margin-top: 3px; max-width: 340px; }
 .settings-checks { display: flex; flex-direction: column; gap: 6px; }
 /* 「并发表数」：一行标签 + 数字框；说明收进标签后的问号（悬浮显示） */
 .settings-inline { display: flex; align-items: center; gap: 8px; margin-top: 4px; }

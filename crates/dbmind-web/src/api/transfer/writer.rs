@@ -123,6 +123,9 @@ pub struct SqlWriter {
     /// 每路 writer 的「单条 INSERT 字节上限」（按实测耗时自适应，见 `sync::adapt_stmt_cap`）：
     /// 链路慢/丢包时把报文拆小，比死守方言的 packet 上限快一个数量级
     stmt_caps: Vec<AtomicUsize>,
+    /// 单条 INSERT 的**行数**上限（界面可改；0 时按目标方言默认）。
+    /// 与 `stmt_caps` 是「双重约束」：谁先到谁触发切分。
+    rows_cap: usize,
     /// 写池诊断（二分定位到的坏行样例写这里，卡顿日志会读）
     diag: Arc<WriteDiag>,
     /// 任务级共享配额（整库同步才有）：这里只用来收敛**报文上限**与**链路暂停**，
@@ -171,6 +174,13 @@ impl SqlWriter {
                 .unwrap_or(0),
         )
         .min(crate::api::sync::STMT_CAP_START);
+        // 单条 INSERT 行数：界面填了就用界面的，否则按**目标方言**默认
+        //（ClickHouse 1 万行写 part、MySQL 1000 行抗丢包、SQL Server 1000 行硬限制…）。
+        let rows_cap = if plan.insert_rows > 0 {
+            plan.insert_rows
+        } else {
+            crate::api::sync::insert_rows_default(kind_key)
+        };
         Self {
             state: plan.state.clone(),
             task: plan.task.clone(),
@@ -196,6 +206,7 @@ impl SqlWriter {
             stmt_caps: (0..workers_ceiling)
                 .map(|_| AtomicUsize::new(stmt_cap))
                 .collect(),
+            rows_cap,
             grow: plan.grow.clone(),
             workers: workers.max(1),
             workers_ceiling,
@@ -338,6 +349,7 @@ impl Writer for SqlWriter {
                     self.task.as_ref(),
                     &self.table,
                     in_transaction,
+                    self.rows_cap,
                 )
                 .await;
             }
@@ -444,6 +456,7 @@ impl Writer for SqlWriter {
                         &self.diag,
                         &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)],
                         self.grow.as_deref(),
+                        self.rows_cap,
                     )
                     .await?;
                     return Ok(loaded_total + rest);
@@ -465,6 +478,7 @@ impl Writer for SqlWriter {
                 &self.diag,
                 &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)],
                 self.grow.as_deref(),
+                self.rows_cap,
             )
             .await
         })
