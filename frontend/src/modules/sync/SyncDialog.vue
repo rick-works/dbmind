@@ -179,7 +179,10 @@
                 <el-icon class="hint-q"><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
-            <el-input-number v-model="opts.maxConcurrency" :min="0" :max="32" :step="1" size="small"
+            <!-- 显示的是实际会用的值：没手动改过就按源/目标库与已选对象数算出的默认值
+                 （用户口径：不要显示 0，要看到「到底几张表在同时跑」）。 -->
+            <el-input-number :model-value="maxConcurrencyShown" @update:model-value="onMaxConcurrencyInput"
+                             :min="1" :max="32" :step="1" size="small"
                              controls-position="right" :disabled="taskRunning" class="settings-num" />
           </div>
           <!-- 每批行数：**按目标库给默认值、用户可改**。0 = 自动（用默认值）。
@@ -426,7 +429,31 @@ const BATCH_ROWS_DEFAULT = {
   DERBY: 5000,
 }
 const tgtKindCode = computed(() => String(tgtInfo.value?.type || '').toUpperCase())
+const srcKindCode = computed(() => String(srcInfo.value?.type || '').toUpperCase())
 const batchRowsDefault = computed(() => BATCH_ROWS_DEFAULT[tgtKindCode.value] || 1000)
+
+// 并发表数的**按库默认值**：与后端 `adaptive_concurrency` 同口径（改一边要改两边）。
+//   嵌入式/文件引擎：会话池只有一条连接，并发只会排队 → 1
+//   Doris / Oracle / 达梦 / DB2：每次导入落 part、会话开销大 → 3
+//   网络型库（MySQL / PG / SQL Server / ClickHouse…）→ 8（再被对象数截断）
+const CONCURRENCY_DEFAULT = {
+  SQLITE: 1, H2: 1, DERBY: 1, DUCKDB: 1,
+  DORIS: 3, ORACLE: 3, DM: 3, DB2: 3,
+}
+const concByKind = (code) => CONCURRENCY_DEFAULT[code] || 8
+const concurrencyDefault = computed(() => {
+  const objects = totalSelected.value || 0
+  if (objects <= 1) return 1
+  // 源端决定读连接、目标端决定写连接，取两者较小；再不超过实际对象数
+  return Math.max(1, Math.min(concByKind(srcKindCode.value), concByKind(tgtKindCode.value), objects))
+})
+/** 输入框里显示的值：用户没改过（0）就显示按库算出的默认值 */
+const maxConcurrencyShown = computed(() =>
+  (opts.value.maxConcurrency > 0 ? opts.value.maxConcurrency : concurrencyDefault.value))
+const onMaxConcurrencyInput = (value) => {
+  const n = Number(value)
+  opts.value.maxConcurrency = Number.isFinite(n) && n > 0 ? Math.round(n) : 0
+}
 /** 输入框里显示的值：用户没改过（0）就显示目标库默认值 —— 「显示出来」而不是藏成 0 */
 const batchRowsShown = computed(() => (opts.value.insertRows > 0 ? opts.value.insertRows : batchRowsDefault.value))
 const onInsertRowsInput = (value) => {

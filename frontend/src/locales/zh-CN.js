@@ -1918,7 +1918,7 @@ export default {
   // 折叠头的「当前版本」——**必须跟 rel1.version 一起改**（发版时最容易漏的就是这一行：
   // rel1..relN 挪位了、它没挪，于是页面顶部写 v1.2.20、红框里却还是 v1.2.19）。
   // 同步脚本 sync-release-notes.mjs 现在也会维护它（见脚本里那一步）。
-  'settings.about.releaseVersion': 'v1.2.56',
+  'settings.about.releaseVersion': 'v1.2.55',
   'settings.about.verLabel': '版本 v',
   'settings.about.verMajorTip': '大版本：不兼容的重大变更（数据格式、配置、接口重做）时 +1，并归零后两段',
   'settings.about.verMinorTip': '小版本：新增功能时 +1，并归零修订号',
@@ -4032,7 +4032,7 @@ export default {
   'sync.includeIndexes': '建表包含索引',
   'sync.autoCreateDb': '目标库不存在时自动创建',
   'sync.maxConcurrency': '并发表数',
-  'sync.maxConcurrencyHint': '一次同时搬几张表。0 = 自动（推荐）；源和目标是同一个实例、或数据库连接数有限时调小，比如 4',
+  'sync.maxConcurrencyHint': '一次同时搬几张表。已按源/目标库的连接能力填好默认值；源和目标是同一个实例、或数据库连接数有限时调小',
   'sync.insertRows': '每批行数',
   'sync.insertRowsHint': '一条 INSERT 写多少行。越小越稳，越大越快',
   'sync.opTimeout': '超时时间',

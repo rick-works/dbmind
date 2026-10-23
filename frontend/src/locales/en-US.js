@@ -1907,7 +1907,7 @@ export default {
   'settings.about.releaseTitle': 'Release notes',
   'settings.about.dirsTitle': 'Directories',
   // kept in sync with rel1.version by scripts/sync-release-notes.mjs (easy to miss when releasing)
-  'settings.about.releaseVersion': 'v1.2.56',
+  'settings.about.releaseVersion': 'v1.2.55',
   'settings.about.verLabel': 'Version v',
   'settings.about.verMajorTip': 'Major: bumped for breaking changes (data format, config, API)',
   'settings.about.verMinorTip': 'Minor: bumped for new features, patch resets to 0',
@@ -4013,7 +4013,7 @@ export default {
   'sync.includeIndexes': 'Include indexes',
   'sync.autoCreateDb': 'Create target database if missing',
   'sync.maxConcurrency': 'Parallel tables',
-  'sync.maxConcurrencyHint': 'How many tables are synced at once. 0 = auto (recommended); lower it (e.g. 4) when source and target are the same instance or the database connection limit is tight',
+  'sync.maxConcurrencyHint': 'How many tables are synced at once. Prefilled from the source/target connection capabilities; lower it when both are the same instance or the connection limit is tight',
   'sync.insertRows': 'Rows per batch',
   'sync.insertRowsHint': 'Rows per INSERT. Smaller is safer, larger is faster',
   'sync.opTimeout': 'Timeout',
