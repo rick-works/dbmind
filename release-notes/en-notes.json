@@ -1,5 +1,11 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.2.53": [
+    "Whole-page writes no longer time out into retries: a batch (20,000 rows per page in this task) used to be declared \"possibly half-open\" after 60~300 seconds and rolled back, which is exactly the \"single batch of 20,000 rows not returned in 100 s\" line that kept repeating. It now probes on a separate session every 30 seconds and keeps waiting while the link is alive; only a failed probe declares the connection dead",
+    "A real disconnect is handled as before: drop the connection, roll back the slice and retry on a new connection (rows are rewritten, nothing is lost); a failed probe pauses the whole task for 15 seconds so hundreds of tables do not reconnect at the same moment",
+    "Statement granularity is unchanged: a 20,000-row page is split into multiple INSERTs by a byte cap (MySQL / MariaDB 1 MB max, 512 KB start, doubling automatically on a healthy link) — multi-megabyte statements cost tens of seconds per lost packet on this path, which is the root cause of the interruptions",
+    "Upsert flush (sending buffered updates) also waits with probes instead of failing on a fixed timeout"
+  ],
   "v1.2.52": [
     "Writes are no longer treated as \"broken\" just because they are slow: each write statement now probes with `select 1` on a separate session every 20 seconds and keeps waiting as long as the link is alive (the Navicat / DBX behaviour); only a failed probe declares the connection dead, rolls back the slice and retries on a new connection — real disconnects are still detected quickly (≤25 s) without killing a statement that is merely slow",
     "Small statements first: every dialect starts at 512 KB and doubles automatically once statements finish within a second; the MySQL / MariaDB single-INSERT cap drops from 3 MB to 1 MB — a multi-megabyte statement on a public or VPN link costs tens of seconds per lost packet, which is what kept producing \"write interrupted\" lines",

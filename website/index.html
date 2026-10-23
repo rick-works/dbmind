@@ -746,6 +746,28 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.53（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.53</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-23</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>整页写入不再按时间判中断</b>：以前一批（本次任务常见 2 万行一页）写到 60~300 秒就判「连接可能已半开」，回滚这一段换连接重跑 —— 日志里反复刷的「单批 20000 行写入 100 秒未返回」就是它。现在改成每 30 秒另开会话探活一次：链路活着就继续等，只有探活不通才判链路已断</li>
+            <li><b>真断的处理不变</b>：弃用该连接、回滚这一段、换新连接重跑（数据会重新写入，不丢行）；探活不通时整个任务暂停 15 秒，避免几百张表在同一秒各自重连</li>
+            <li><b>语句粒度不变</b>：一页 2 万行会按字节上限切成多条 INSERT（MySQL / MariaDB 单条上限 1MB、起步 512KB，健康链路几条语句后自动翻倍），大报文在这条链路上丢一个包就要重传几十秒，这是中断的根源</li>
+            <li><b>upsert 的更新发送（flush）同样改成探活式等待，不再到点就判「发送超时」</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.53" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.53" target="_blank" rel="noopener">下载 v1.2.53</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.52（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +775,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.52</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-23</span>
           </div>
           <ul class="rel-notes">
