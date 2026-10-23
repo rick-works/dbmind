@@ -746,6 +746,28 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.58（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.58</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-24</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步设置里的「并发表数」移除</b>：现在固定最多 2 张表同时搬 —— 每张表内部本来就有 2 路读 + 多路写，表再往上加会把目标端的连接数、行锁与 IO 争抢成倍放大（真机上「同步后期几乎每张表都卡十分钟」就是手工设成 8 张表引起的）</li>
+            <li><b>「每批行数」改名「每批条数」，并且一批就是一次提交：填 1000 就是每 1000 条提交一次，卡住或断连最多回滚一批、重跑也只重跑这一段（实测提交次数多 100 倍，吞吐没变）</b></li>
+            <li><b>慢批自愈</b>：探活正常但一批写了 60~180 秒还没完，就回滚这一段、换连接、缩小页重试，不再干等界面上的 600 秒；一张表踩过的页上限立刻对同一任务的其它表生效，不必每张表各撞一次</li>
+            <li><b>修复同步进度「数字越蹦越小」</b>：状态轮询改成串行、同一任务只保留一个在途请求，运行中「读取数 / 传输数」只增不减</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.58" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.58" target="_blank" rel="noopener">下载 v1.2.58</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.57（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +775,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.57</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-24</span>
           </div>
           <ul class="rel-notes">
