@@ -746,6 +746,113 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.2.58（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.58</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-24</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步设置里的「并发表数」移除</b>：现在固定最多 2 张表同时搬 —— 每张表内部本来就有 2 路读 + 多路写，表再往上加会把目标端的连接数、行锁与 IO 争抢成倍放大（真机上「同步后期几乎每张表都卡十分钟」就是手工设成 8 张表引起的）</li>
+            <li><b>「每批行数」改名「每批条数」，并且一批就是一次提交：填 1000 就是每 1000 条提交一次，卡住或断连最多回滚一批、重跑也只重跑这一段（实测提交次数多 100 倍，吞吐没变）</b></li>
+            <li><b>慢批自愈</b>：探活正常但一批写了 60~180 秒还没完，就回滚这一段、换连接、缩小页重试，不再干等界面上的 600 秒；一张表踩过的页上限立刻对同一任务的其它表生效，不必每张表各撞一次</li>
+            <li><b>修复同步进度「数字越蹦越小」</b>：状态轮询改成串行、同一任务只保留一个在途请求，运行中「读取数 / 传输数」只增不减</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.58" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.58" target="_blank" rel="noopener">下载 v1.2.58</a>
+          </div>
+        </div>
+      </article>
+      <!-- v1.2.57（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.57</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-24</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>「并发表数」不再显示 0</b>：输入框直接显示实际会用的张数，按源/目标库连接能力算好 —— 嵌入式库（SQLite / H2 / Derby）1 张、Doris / Oracle / 达梦 / DB2 3 张、MySQL / MariaDB / PG / SQL Server / ClickHouse 8 张，再与已选对象数取小；想调小直接改，改了就按改的走</li>
+            <li><b>「?」里的说明同步改成「已按源/目标库的连接能力填好默认值」</b></li>
+            <li><b>到这一步，同步选项里三个数字都是「显示实际生效值、可直接改」：并发表数、每批行数、超时时间</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.57" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.57" target="_blank" rel="noopener">下载 v1.2.57</a>
+          </div>
+        </div>
+      </article>
+      <!-- v1.2.56 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.56</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-24</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步选项里只剩两个数字</b>：「每批行数」和新增的「超时时间」—— 与 DBX 的「操作超时」对齐。超时时间可选 继承连接（默认）/ 不限制 / 30 / 60 / 120 / 300 / 600 秒；每批行数下面那段长说明已删掉，「?」缩成一句「一条 INSERT 写多少行。越小越稳，越大越快」</li>
+            <li><b>内部所有「多久没响应算超时」都由这个旋钮决定：单条写语句、整页写入、upsert flush 直接用它；读一页夹在 30~180 秒（慢链路上的大页不再被 30 秒误判后重读）；提交夹在 60~600 秒（提交失败无法自动重跑，宁可多等）</b></li>
+            <li><b>选「不限制」不会再被内核的 600 秒先切断：语句超时一并跟随旋钮</b></li>
+            <li><b>探活加固</b>：探活超时从 5 秒放宽到 10 秒，并且连续两次不通才判「链路已断」—— 偶发丢一个包不再触发「回滚一段 + 换连接重跑」</li>
+            <li><b>建索引这类 DDL 的上限从 180 秒放宽到 300 秒（千万行的表建二级索引，三分钟是常态；失败仍按「N 个索引未建」报出并可手工补）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.56" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.56" target="_blank" rel="noopener">下载 v1.2.56</a>
+          </div>
+        </div>
+      </article>
+      <!-- v1.2.55（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.55</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-24</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>「每批行数」现在放到界面上（同步 → 选项），按目标库填好默认值，也可以自己改：ClickHouse 10000、PostgreSQL / Doris 2000、MySQL / MariaDB / SQL Server / Oracle / 达梦 / DB2 1000、SQLite / H2 / Derby 5000 行一条</b></li>
+            <li><b>单条语句的字节上限也按库分开</b>：ClickHouse 与本地库 8MB、MySQL / MariaDB 1MB、Doris 512KB、其余 4MB；起步仍是 512KB，实测每条语句够快就自动翻倍，慢就自动缩小</li>
+            <li><b>宽表先被字节上限切开，Oracle / 达梦 / DB2 另受「派生表表达式 65535 个」限制（130 列时约 504 行/条），所以上面的行数是上限、不是承诺</b></li>
+            <li><b>事务段从 50 万行降到 10 万行提交一次：提交开销仍是百分之一量级，但断开时要回滚的只有 10 万行，重跑快得多，也避免大事务「越写越慢」</b></li>
+            <li><b>任务第一行日志会写「每批最多 N 行」，界面填的值有没有生效一眼可验</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.55" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.55" target="_blank" rel="noopener">下载 v1.2.55</a>
+          </div>
+        </div>
+      </article>
+      <!-- v1.2.54（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.2.54</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-23</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>修掉「大表前面都不报错、越到后面越报中断」：那条「传输协程 11 分钟没有任何进展」的判据是11 分钟没有一页落库，而不是总时长 —— 前面行窄的大表每页分钟级就落库，后段宽表（大字段 / JSON）一页在丢包链路上要十几分钟，于是被当成「连接已半开」判死。现在无进展到 11 分钟会先跑一次 select 1 探活：链路还通就继续等（日志写一行「N 分钟没有进度，但目标端探活正常，继续等待」），探活不通才判链路已断</b></li>
+            <li><b>两处判定都改了</b>：对象级（每张表的协程）与协程级（片内传输），不会再出现「跑着跑着突然整表报失败」</li>
+            <li><b>真断时的文案明确写「且目标端探活不通」，不再是含糊的「连接可能已半开」；重跑该段、全任务暂停 15 秒等逻辑不变</b></li>
+            <li><b>与 1.2.53 配套</b>：单条 INSERT、整页写入、upsert flush 都已是探活式等待，慢不等于断</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.54" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.2.54" target="_blank" rel="noopener">下载 v1.2.54</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.53（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +860,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.53</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-23</span>
           </div>
           <ul class="rel-notes">
