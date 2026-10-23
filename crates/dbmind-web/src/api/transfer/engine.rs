@@ -79,16 +79,21 @@ fn prefetch_enabled() -> bool {
     std::env::var_os("DBMIND_SYNC_NO_PREFETCH").is_none()
 }
 
-/// 单批写入的墙钟上限：由 [`WriteDiag::batch_watchdog`] 按现场自适应（60s ~ 300s）。
+/// 写批次多久做一次判活（`select 1` 另开会话）。
 ///
-/// 为什么必须有：连接的 `socketTimeout=0`（真机上好几条 RDS 连接的高级参数里就是这么写的）
-/// 是**永不超时** —— 目标端把连接半开（RDS 常见的 wait_timeout 踢连接 / 中间设备静默丢包）时，
-/// 驱动会一直等一个永远不来的响应：`show processlist` 里什么都看不到、也不报错，
-/// 只有整条同步「卡住、一行都不写、失败数还是 0」。
+/// **不再按时间判死**（用户口径：Navicat / DBX 不会中断，我们也不许）：
+/// 原来一批写到 60~300 秒（`WriteDiag::batch_watchdog`）就判「连接半开」，
+/// 回滚整段换连接重跑 —— 可一条慢语句（丢包链路重传 / 目标端在刷盘）本来就要这么久，
+/// 判定的结果就是「写入中断」反复刷。现在改成探活：
+/// - 通 ⇒ 链路活着，这批只是慢，**继续等**；
+/// - 不通 ⇒ 真的断了，弃连接、回滚该段、换连接重跑。
+const BATCH_PROBE_TICK: Duration = Duration::from_secs(30);
+
+/// 一批写的**绝对**上限：探活每次都说「活着」也最多等这么久（防服务端死锁挂死任务）。
 ///
-/// 为什么不能一刀切 300 秒：真机一张 400 对象的任务跑到尾部，几乎每张表都撞一次，
-/// 于是「五分钟卡一次」地循环 —— 20 秒判定 + 弃用这条连接 + 重连重跑，代价小得多。
-const WRITE_CALL_TIMEOUT_MAX: Duration = Duration::from_secs(300);
+/// 取 15 分钟：内核对单条语句还有 10 分钟超时（`run_target_in_rows_timeout`），
+/// 这里只是兜底，正常永远走不到。
+const BATCH_HARD_LIMIT: Duration = Duration::from_secs(900);
 
 /// 回滚/收尾语句自己的墙钟：半开连接上连 `rollback` 都会挂住（真机整条同步就此卡死）。
 const ABORT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -908,12 +913,19 @@ async fn run_segment(
         }
 
         // 成功（或用户取消）⇒ 先把攒着的 upsert 更新发出去，再提交这一片
-        let flushed =
-            tokio::time::timeout(ctx.plan.diag.batch_watchdog(1024), ctx.writer.flush()).await;
+        // 同样是「慢就等、探活不通才判死」：upsert 的更新走另一条串行会话，
+        // 它在丢包链路上一样可能几十秒才回来。
+        let flushed = wait_write(
+            &ctx.plan,
+            std::time::Instant::now(),
+            "发送攒着的 upsert 更新",
+            ctx.writer.flush(),
+        )
+        .await;
         let flush_err = match flushed {
             Ok(Ok(_)) => None,
             Ok(Err(msg)) => Some(msg),
-            Err(_) => Some("发送攒着的 upsert 更新超时（目标端连接可能已半开）".to_string()),
+            Err((reason, _)) => Some(reason),
         };
         if let Some(msg) = flush_err {
             let _ = tokio::time::timeout(ABORT_CALL_TIMEOUT, ctx.writer.abort(worker)).await;
@@ -975,7 +987,60 @@ async fn read_page(
     Err(last)
 }
 
-/// 写一批（带墙钟兜底与写速诊断）。
+/// 等一次写动作完成：**慢就等**，只有探活不通（或超过 [`BATCH_HARD_LIMIT`]）才判死。
+///
+/// 为什么不再给死线：用户口径是「Navicat / DBX 不中断，我们也不许」。一条语句卡在丢包
+/// 重传上要几十秒，这期间链路是好的 —— 按时间判死只会把「慢」变成「中断 + 整段重跑」。
+/// 探活的代价是每 [`BATCH_PROBE_TICK`] 一次 `select 1`（另开会话，不排在卡住的语句后面）。
+///
+/// 返回 `Err((原因, 是否链路整体不可用))`：第二个值决定要不要让整个任务暂停。
+async fn wait_write<F, T>(
+    plan: &TablePlan,
+    started: std::time::Instant,
+    label: &str,
+    pending: F,
+) -> Result<T, (String, bool)>
+where
+    F: std::future::Future<Output = T>,
+{
+    tokio::pin!(pending);
+    loop {
+        tokio::select! {
+            value = &mut pending => return Ok(value),
+            _ = tokio::time::sleep(BATCH_PROBE_TICK) => {
+                let elapsed = started.elapsed();
+                if !probe_target(plan).await {
+                    return Err((
+                        format!(
+                            "{label} {} 秒未返回，且目标端探活不通：链路已断（RDS wait_timeout 踢连接 / \
+                             链路静默丢包 / 中间设备丢包）",
+                            elapsed.as_secs()
+                        ),
+                        true,
+                    ));
+                }
+                if elapsed >= BATCH_HARD_LIMIT {
+                    return Err((
+                        format!(
+                            "{label} {} 秒仍未完成：目标端探活通（链路没断），但这个动作本身卡住了",
+                            elapsed.as_secs()
+                        ),
+                        false,
+                    ));
+                }
+                tracing::debug!(
+                    target: "dbmind::sync",
+                    table = %plan.table,
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    what = label,
+                    "写入仍在进行（探活通过），继续等待"
+                );
+            }
+        }
+    }
+}
+
+/// 写一批（探活式等待 + 写速诊断）。
 async fn write_rows(
     ctx: &SliceCtx,
     worker: usize,
@@ -992,53 +1057,52 @@ async fn write_rows(
     let started = std::time::Instant::now();
     ctx.plan.diag.note_batch_start(rows.len());
     ctx.plan.diag.inflight.fetch_add(1, Ordering::Relaxed);
-    // 阈值跟着这张表的现场走：正常 1 秒一批 ⇒ 20 秒就判定；真慢的批（十秒级）不会误杀
-    let watchdog = ctx.plan.diag.batch_watchdog(rows.len());
-    debug_assert!(watchdog <= WRITE_CALL_TIMEOUT_MAX);
-    let (outcome, timed_out) = match tokio::time::timeout(watchdog, ctx.writer.write(worker, rows)).await {
+    // 这一批**不再按时间判死**：每 [`BATCH_PROBE_TICK`] 秒探活一次，
+    // 通就继续等（慢 ≠ 断），不通才判链路已断 —— 见 `wait_write`。
+    let (outcome, timed_out) = match wait_write(
+        &ctx.plan,
+        started,
+        &format!("单批 {} 行写入", rows.len()),
+        ctx.writer.write(worker, rows),
+    )
+    .await
+    {
         Ok(outcome) => (outcome, false),
-        Err(_) => {
+        Err((reason, link_down)) => {
             // 半开连接上那条语句还挂在宿主里，**必须换新连接**再重试，
             // 否则下一次调用复用它、再挂一次（真机表现为「每张表都卡一次」）。
             // 同时把**单条语句的字节上限**减半：劣化链路（PMTU 黑洞 / 静默丢包）上大报文
-            // 会一直撞重传退避 —— 报文不小下去，重试只是「再等一次同样的超时」，
-            // 界面上就成了同一张表反复「写入中断」。
+            // 会一直撞重传退避 —— 报文不小下去，重试只是「再等一次同样的超时」。
             let (old_cap, new_cap) = ctx.writer.shrink_stmt(worker);
-            // 探活：分清「这一条连接半开」和「整条链路/目标不可用」——
-            // 后者换连接只会在下一批再撞一次，该让整个任务一起停一会儿；
-            // 也顺手给日志一个证据（探不通 ≠ 用户数据有问题）。
-            let halt_note = if probe_target(&ctx.plan).await {
-                String::new()
+            ctx.writer.renew().await;
+            let mut text = reason;
+            if new_cap > 0 && new_cap < old_cap {
+                text.push_str(&format!(
+                    "；已弃用该连接，重试的单条语句上限降到 {} KB",
+                    new_cap / 1024
+                ));
             } else {
+                text.push_str("；已弃用该连接");
+            }
+            // 链路整体不可用（探活不通）⇒ 让整个任务一起停一会儿：
+            // 不这么做的话，几百张表会在同一秒各自换连接、各自回滚一段再各自报错。
+            if link_down {
                 match &ctx.plan.grow {
                     Some(grow) => {
                         grow.hold_link(LINK_HOLD_MS);
-                        format!(
-                            "；目标端探活也不通（链路整体不可用），本任务所有表先停 {} 秒",
+                        text.push_str(&format!(
+                            "；目标端整体不可用，本任务所有表先停 {} 秒",
                             LINK_HOLD_MS / 1000
-                        )
+                        ));
                     }
-                    None => "；目标端探活也不通（链路整体不可用）".to_string(),
+                    None => text.push_str("；目标端整体不可用"),
                 }
-            };
-            ctx.writer.renew().await;
-            let shrink_note = if new_cap > 0 && new_cap < old_cap {
-                format!("，并把重试的单条语句上限降到 {} KB", new_cap / 1024)
-            } else {
-                String::new()
-            };
-            (
-                Err(format!(
-                    "单批 {} 行写入 {} 秒未返回（该表近期单批通常在 {} 秒内）：目标端连接可能已半开\
-                     （RDS wait_timeout 踢连接 / 链路静默丢包），或这条连接没设 socketTimeout。\
-                     已弃用该连接{shrink_note}{halt_note}；若同一张表反复出现，把「编辑数据源 → 高级参数」\
-                     里的 socketTimeout 改成 120000（毫秒，注意不是 120）",
-                    rows.len(),
-                    watchdog.as_secs(),
-                    (watchdog.as_secs() / 8).max(1),
-                )),
-                true,
-            )
+            }
+            text.push_str(
+                "；若同一张表反复出现，把「编辑数据源 → 高级参数」里的 socketTimeout \
+                 改成 120000（毫秒，注意不是 120）",
+            );
+            (Err(text), true)
         }
     };
     // `inflight` 的加减由 diag 的收尾方法负责 —— 这里曾再减一次，减成负数（u64 回绕）
