@@ -1,5 +1,13 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.3.0": [
+    "Fixed sync skipping rows and reporting duplicate keys: the first page read from the source had no ORDER BY, so its last row was not the maximum key — later pages either never reached the rows below it (missing rows) or re-inserted rows already written (Duplicate entry on the target). A 58k-row table that used to move only half now finishes 58,686 rows with 0 failures",
+    "Sync dialog rebuilt: options now sit in four tabs (settings / table renaming / pre- and post-SQL / row filter), sync mode merges \"how to treat existing target objects\" with \"how data is written\", and target tables can be renamed one-to-one, filtered by a WHERE clause, or wrapped in pre/post SQL",
+    "New sync rate limits: rows per second and MB per second are set separately, 0 means unlimited, and the slower limit wins when both are filled in",
+    "Every functional dialog now has a maximise / restore button in the top-right corner; Esc restores instead of closing, resizing still works while maximised, and restoring returns to the previous size",
+    "Sync readers and writers are now per-database plugins (two files per source, registry generated at build time) so adding a source no longer touches the engine; column default values now match each dialect — Doris and SQL Server boolean columns only accept 0/1 (false is a syntax error) and MySQL rejects CURRENT_DATE",
+    "Fixed the progress card that always showed 0.0 MB/s (byte counts are now collected); a finished segment no longer discards the next page it had already fetched, so the same cursor is never read twice"
+  ],
   "v1.2.58": [
     "The \"concurrent tables\" setting is gone: sync now moves at most 2 tables at a time — each table already runs 2 read streams plus several write lanes, and more tables multiply connection count, row locks and IO contention on the target (the reported \"almost every table stalls for ten minutes late in a run\" came from setting it to 8)",
     "\"Rows per batch\" is now \"batch size = one commit\": set 1000 and it commits every 1000 rows, so a stall or a dropped connection rolls back at most one batch and re-runs only that segment (100x more commits, throughput unchanged in measurements)",

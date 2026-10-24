@@ -746,6 +746,30 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.3.0（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.3.0</span>
+            <span class="rel-tag tag-minor">小版本</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-25</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>修复同步「漏行 + 主键冲突」：分页读源表时第一页没带排序，取到的「最后一行」并不是最大值，后面的页要么读不到（漏行）、要么把读过的行再写一遍（目标端报 Duplicate entry）—— 实测 5.8 万行的表原来只搬过去一半，现在 58,686 行一次跑完、0 失败</b></li>
+            <li><b>同步对话框重做</b>：选项收成四个页签（同步设置 / 表名映射 / 前后置 SQL / 行过滤），「同步方式」把「目标已有对象怎么处理」和「数据怎么写」合成一个选择，并新增目标表名一对一映射、行过滤条件、前后置 SQL</li>
+            <li><b>新增同步限速</b>：行/秒与 MB/秒分开填，0 = 不限，两条都填时取更慢的那条（生产库白天迁移可以给目标库留余量）</li>
+            <li><b>全站功能性弹窗右上角加了「全屏 / 还原」：全屏态按 Esc 先还原不关弹窗，全屏下仍可拖右下角改尺寸，还原时回到原来的大小</b></li>
+            <li><b>同步的读与写按数据源拆成插件（一种数据源两个文件，注册表由构建生成），新建数据源不再动引擎；同时补齐建表默认值的方言差异 —— Doris / SQL Server 的布尔列只认 0/1（写 false 直接语法错），MySQL 不认 CURRENT_DATE</b></li>
+            <li><b>修复同步进度卡上 MB/s 恒为 0（补上读侧字节计数）；一段结束时不再丢弃已经读回的下一页，同一个游标不会被读两遍</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.3.0" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.3.0" target="_blank" rel="noopener">下载 v1.3.0</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.2.58（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +777,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.2.58</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-24</span>
           </div>
           <ul class="rel-notes">
