@@ -472,7 +472,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                             idle_since = std::time::Instant::now();
                             if let Some(task) = &plan.task {
                                 task.log(format!(
-                                    "表 {}：一页超过 {} 分钟没有落库，但目标端探活正常（链路没断），继续等待",
+                                    "表 {}：一页 {} 分钟没有落库，目标端探活正常，继续等待",
                                     plan.table,
                                     PIPE_WAIT.as_secs() / 60
                                 ));
@@ -498,7 +498,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                             PIPE_WAIT.as_secs() / 60
                         ),
                         None => format!(
-                            "传输协程 {} 分钟没有任何进展，且目标端探活不通：链路已断，本次同步数据不完整",
+                            "传输协程 {} 分钟没有任何进展，目标端探活不通",
                             PIPE_WAIT.as_secs() / 60
                         ),
                     });
@@ -539,7 +539,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         return Err(msg);
     }
     if canceled {
-        note.push_str("（已取消：已提交的片保留，未提交的片已回滚）");
+        note.push_str("（已取消）");
     }
     if limited.load(Ordering::SeqCst) && plan.row_limit > 0 {
         note.push_str(&format!(
@@ -580,10 +580,8 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         }
     }
 
-    if plan.upsert == UpsertMode::Native && inserted_rows > 0 {
-        // 原生 upsert 由服务端判插入还是更新，SQL 层面拿不到「新增/更新」的拆分
-        note.push_str("（原生 upsert：新增/更新未区分）");
-    }
+    // 原生 upsert 由服务端判插入还是更新 ⇒ 「新增/更新未区分」是内部实现细节，
+    // 不往结果消息里写（用户口径：日志只报事实与报错，不写实现说明）。
     // 读了却没算进 inserted/updated 的行 = 逐行降级后仍失败的行（脏数据）。
     // 取消时 consumed 里夹着没来得及写的页，差值没有意义，故置 0。
     let failed = if canceled {
@@ -1149,12 +1147,7 @@ where
                     if elapsed.as_secs() >= 60 && last_note.elapsed() >= Duration::from_secs(120) {
                         last_note = std::time::Instant::now();
                         if let Some(task) = &plan.task {
-                            // 只说事实：还在写、探活正常、界面配的阈值是多少
-                            task.log(format!(
-                                "{label}：目标端已写 {} 秒（探活正常，仍在等待；超过 {} 秒会判超时）",
-                                elapsed.as_secs(),
-                                hard_limit.as_secs()
-                            ));
+                            task.log(format!("{label}：已写 {} 秒，继续等待", elapsed.as_secs()));
                         }
                     }
                     tracing::debug!(

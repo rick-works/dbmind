@@ -1631,10 +1631,9 @@ public final class Main {
         Session session = SESSIONS.get(sessionId);
         if (session == null) {
             // 会话没了 ⇒ 对内核而言是**连接级失败**（0003）：它会清掉缓存、下一次重连。
-            throw new Protocol.AgentException(
-                    "DBMIND-CONN-0003",
-                    "会话不存在（agent 可能已重启）：" + sessionId,
-                    "内核会按需要重新连接");
+            // 报错只说事实（会话 id），不写「宿主可能重启了 / 内核会重连」这类推测与说明 ——
+            // 用户口径：日志里只留原始报错。
+            throw new Protocol.AgentException("DBMIND-CONN-0003", "会话不存在：" + sessionId);
         }
         return session;
     }

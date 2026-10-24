@@ -755,8 +755,7 @@ public final class Main {
         Session session = SESSIONS.get(sessionId);
         if (session == null) {
             // 会话没了 ⇒ 对内核而言是**连接级失败**（0003，不是「连接不存在」的 0001）。
-            throw new AgentException("DBMIND-CONN-0003", "会话不存在（宿主可能已重启）：" + sessionId,
-                    "内核会按需要重新连接");
+            throw new AgentException("DBMIND-CONN-0003", "会话不存在：" + sessionId);
         }
         return session;
     }

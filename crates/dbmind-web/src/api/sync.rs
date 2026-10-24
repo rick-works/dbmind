@@ -1528,7 +1528,7 @@ async fn sync_indexes(
                             tracing::warn!(table, index = %name, error = %err.message, "MATERIALIZE INDEX 失败");
                             if let Some(task) = task {
                                 task.log(format!(
-                                    "表 {table}：索引 {name} 已建，但历史数据回填失败（{}）—— 之后写入的数据照常生效",
+                                    "表 {table}：索引 {name} 历史数据回填失败：{}",
                                     err.message
                                 ));
                             }
@@ -1551,10 +1551,7 @@ async fn sync_indexes(
     }
     if !skipped.is_empty() {
         if let Some(task) = task {
-            task.log(format!(
-                "表 {table}：{} 个索引已跳过（ClickHouse 只支持跳数索引：与排序键重复的、或推不出表达式的跳过）",
-                skipped.len()
-            ));
+            task.log(format!("表 {table}：{} 个索引已跳过", skipped.len()));
         }
     }
     if !failed.is_empty() {
@@ -1562,7 +1559,7 @@ async fn sync_indexes(
             let shown = failed.iter().take(5).cloned().collect::<Vec<_>>().join("、");
             let more = if failed.len() > 5 { format!(" 等 {} 个", failed.len()) } else { String::new() };
             task.log(format!(
-                "表 {table}：{} 个索引未能创建（{shown}{more}）—— 可在目标库手工补建，不影响已同步的数据",
+                "表 {table}：{} 个索引未能创建（{shown}{more}）",
                 failed.len()
             ));
         }
@@ -3016,20 +3013,17 @@ async fn run_write_stmt(
             result = &mut pending => return result,
             _ = tokio::time::sleep(WRITE_PROBE_TICK) => {
                 let elapsed = started.elapsed();
+                // 报错只陈述事实：多久没返回、探活通不通。原因推断与调参建议属于内部判断，
+                // 进 tracing 或根本不写（用户口径：日志里只留数据库原话与可核对的事实）。
                 if !probe_write_link_confirmed(state, target, session).await {
                     return Err(XError::internal(format!(
-                        "单条写语句（约 {} KB）{} 秒未返回，且目标端探活连续两次不通：链路已断\
-                         （RDS 踢连接 / 链路静默丢包），已弃用该连接",
-                        sql.len() / 1024,
+                        "写语句 {} 秒未返回，探活不通",
                         elapsed.as_secs()
                     )));
                 }
                 if elapsed >= hard_limit {
                     return Err(XError::internal(format!(
-                        "单条写语句（约 {} KB）{} 秒仍未返回（已达「超时时间」上限）：\
-                         目标端探活通（链路没断），但语句本身卡住了，已弃用该连接。\
-                         可在同步选项里把「超时时间」调大或不限制",
-                        sql.len() / 1024,
+                        "写语句 {} 秒未返回（已达超时时间）",
                         elapsed.as_secs()
                     )));
                 }
@@ -4756,7 +4750,7 @@ async fn sync_table_inner(
         && table.eq_ignore_ascii_case(target_table);
     if opts.data_mode == DataMode::TruncateInsert {
         if same_table {
-            note.push_str("（源与目标是同一张表，已跳过清空）");
+            tracing::info!(table = %table, "源与目标是同一张表：跳过清空");
         } else {
             // 清空语句按**目标方言**选：ClickHouse 不吃裸 `delete from`（实测 position 26 语法错），
             // SQLite / Derby 又没有 `truncate` —— 见 `Dialect::clear_table_sql`
@@ -4793,16 +4787,11 @@ async fn sync_table_inner(
         };
         if empty {
             effective_mode = DataMode::Insert;
-            note.push_str("（目标表当前为空：upsert 已走仅插入快路径）");
         } else if key_indexes.is_empty() {
             return ObjResult::failed(
                 ty,
                 table,
-                format!(
-                    "目标表 {target_table} 没有可用且完整的 upsert 主键（主键列可能未参与同步）。\
-                     目标表已有数据时不能安全 upsert；请改用「仅插入」或「清空后导入」，\
-                     或确保目标主键的全部列都参与同步"
-                ),
+                format!("目标表 {target_table} 没有可用且完整的 upsert 主键"),
             );
         }
     }
@@ -4846,10 +4835,16 @@ async fn sync_table_inner(
     } else {
         crate::api::transfer::UpsertMode::Off
     };
-    if effective_mode == DataMode::Upsert && mysql_secondary_unique {
-        note.push_str("（目标表存在其它唯一索引：为避免 MySQL 更新错行，已回退两阶段 upsert）");
-    } else if effective_mode == DataMode::Upsert && !target_key_ready {
-        note.push_str("（目标端未声明完整唯一键：按源主键两阶段匹配，目标重复键会中止）");
+    // 「回退两阶段 upsert」是实现细节（用户口径：结果里只写数据事实，不写实现说明），
+    // 进 tracing 排查用即可。
+    if effective_mode == DataMode::Upsert && (mysql_secondary_unique || !target_key_ready) {
+        tracing::debug!(
+            target: "dbmind::sync",
+            table = %table,
+            secondary_unique = mysql_secondary_unique,
+            key_ready = target_key_ready,
+            "upsert 走两阶段匹配"
+        );
     }
 
     // SQL Server 的 identity 列**不接受显式插入**，而同步写过去的正是显式的键值
@@ -5216,11 +5211,16 @@ async fn sync_table_inner(
                 }
                 link_retries += 1;
                 if let Some(task) = task {
-                    task.log(format!(
-                        "表 {table}：目标端写连接断开（{msg}）；已写入的行随事务一起回滚，\
-                         自动重连并重跑（第 {link_retries}/{LINK_RETRY_MAX} 次）"
-                    ));
+                    // 只报数据库/驱动的原话（重试次数属于内部量，进 tracing 就够）
+                    task.log(format!("表 {table}：{msg}"));
                 }
+                tracing::warn!(
+                    target: "dbmind::sync",
+                    table = %table,
+                    attempt = link_retries,
+                    max = LINK_RETRY_MAX,
+                    "链接级失败：回滚后整表重跑"
+                );
                 // 退避 1s / 2s / 4s：链路真的不行时，别把三次尝试挤在同一秒里再撞三次
                 tokio::time::sleep(std::time::Duration::from_secs(1u64 << (link_retries - 1)))
                     .await;
@@ -5250,13 +5250,6 @@ async fn sync_table_inner(
     inserted += stats.inserted;
     updated += stats.updated;
     note.push_str(&stats.note);
-    if link_retries > 0 {
-        // 结果表上要看得见：这张表比别的表多跑了一遍（耗时翻倍不是 bug），
-        // 但**数据是完整的**（事务回滚后重写），所以不写成失败
-        note.push_str(&format!(
-            "（中途目标端连接断开，已自动重连重跑 {link_retries} 次，数据完整）"
-        ));
-    }
 
     // **PG / KingBase 的序列回拨**：显式插入自增列的值后，目标库的序列还停在起点 ——
     // 之后业务插入新行时序列从 1 开始生成主键，**必然撞上刚同步进来的数据**（迁移工具的经典坑）。
@@ -5272,8 +5265,7 @@ async fn sync_table_inner(
                 col_lit = lit(&column.name),
             );
             if let Err(err) = run_target(state, &tgt_target, &sql).await {
-                note.push_str(&format!("（序列回拨失败 {col}：{msg}）",
-                    col = column.name, msg = err.message));
+                note.push_str(&format!("（序列回拨失败 {}：{}）", column.name, err.message));
             }
         }
     }
@@ -6333,7 +6325,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                                         objects[index].1.clone(),
                                     );
                                     task.log(format!(
-                                        "{} {name}：{} 分钟没有进度，但目标端探活正常（链路没断），继续等待",
+                                        "{} {name}：{} 分钟没有进度，目标端探活正常，继续等待",
                                         kind_label(&kind),
                                         PIPE_WAIT.as_secs() / 60
                                     ));
@@ -6350,7 +6342,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 };
                 let bad: Option<String> = match joined {
                     None => Some(format!(
-                        "对象 {} 分钟没有任何进展，且目标端探活不通：链路已断，本次同步数据不完整",
+                        "对象 {} 分钟没有任何进展，目标端探活不通",
                         PIPE_WAIT.as_secs() / 60
                     )),
                     Some(Ok(())) => None,
@@ -6381,7 +6373,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         c.2 += 1; // errors
                     }
                     task.add_done(1);
-                    task.log(format!("{name}：{reason}，本次同步数据不完整"));
+                    task.log(format!("{name}：{reason}"));
                 }
             }
             // 所有表都已收尾：弹性监控到此为止（否则它会一直空转）
@@ -6413,10 +6405,6 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         pending = failed_views.len(),
                         "视图依赖：首轮未建成，等其它视图建好后串行重试"
                     );
-                    task.log(format!(
-                        "视图依赖：{} 个视图首轮未建成，串行重试",
-                        failed_views.len()
-                    ));
                     for index in failed_views {
                         let name = objects[index].1.clone();
                         let outcome =
@@ -6491,7 +6479,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     if let Err(err) =
                         run_sql_in_write(&state, &tgt.conn, &tgt.scope, clear, 600_000).await
                     {
-                        task.log(format!("表 {name}：清空失败（{}），跳过重传", err.message));
+                        task.log(format!("表 {name}：清空失败：{}", err.message));
                         continue;
                     }
                     // 重跑要走正常的对象流程（会话租约、进度、结果行都要有）
@@ -6521,7 +6509,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         tracing::debug!(table = %name, want, "重传后已对齐");
                     } else {
                         task.log(format!(
-                            "表 {name}：重传后 {after:?} 行（期望 {want} 行），仍然不一致，请检查该表"
+                            "表 {name}：重传后 {after:?} 行，期望 {want} 行"
                         ));
                     }
                     *slots[index].lock().unwrap() = Some(outcome.to_json());

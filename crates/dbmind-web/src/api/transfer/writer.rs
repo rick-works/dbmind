@@ -401,10 +401,7 @@ impl Writer for SqlWriter {
                     // 这张表就不能「整表重跑」（会写重复），见 `WriteDiag::begin_failed`。
                     self.diag.begin_failed.store(true, Ordering::SeqCst);
                     if let Some(task) = &self.task {
-                        task.log(format!(
-                            "表 {}：开启事务失败（{}），退回逐条提交（大表会明显变慢）",
-                            self.table, err
-                        ));
+                        task.log(format!("表 {}：开启事务失败：{}", self.table, err));
                     }
                 }
             }
@@ -495,7 +492,7 @@ impl Writer for SqlWriter {
                                     if filtered > 0 {
                                         task.add_rows_failed(filtered);
                                         task.log(format!(
-                                            "表 {}：Stream Load 本批 {filtered} 行被目标过滤（类型不匹配等），已计入失败数",
+                                            "表 {}：Stream Load 本批 {filtered} 行被目标过滤",
                                             self.table
                                         ));
                                     }
@@ -517,10 +514,9 @@ impl Writer for SqlWriter {
                     //（真机反馈：日志里看到「失败」两个字就以为同步坏了）。
                     self.stream_failed.store(true, Ordering::SeqCst);
                     let message = format!(
-                        "表 {}：Stream Load 快通道不可用（{}），剩余 {} 行改用 INSERT 管道导入（数据不受影响）",
+                        "表 {}：Stream Load 快通道不可用：{}，改用 INSERT 管道",
                         self.table,
-                        stream_error.unwrap_or_default(),
-                        rows.len() - start
+                        stream_error.unwrap_or_default()
                     );
                     match &self.task {
                         // 只让**第一个**失败的表写这条日志：并发的其它表都会走 INSERT，

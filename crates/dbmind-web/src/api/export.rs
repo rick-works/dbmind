@@ -1247,7 +1247,7 @@ async fn export_query(
     if let Some(task) = task {
         if total >= 0 && written != total as u64 {
             task.log(format!(
-                "注意：统计为 {total} 行，实际导出 {written} 行（差异通常来自表在导出期间被改动）"
+                "统计 {total} 行，实际导出 {written} 行"
             ));
         }
     }
