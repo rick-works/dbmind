@@ -186,48 +186,10 @@ impl WriteDiag {
         self.write_rows_per_sec.load(Ordering::Relaxed)
     }
 
-    /// 一整页写下去的墙钟上限（**兜底**，真正的「半开连接」判定是单条语句的探活，
-    /// 见 `sync::run_write_stmt`：探活通就一直等，探活不通才判死）。
-    ///
-    /// 取值 = max(最近批最慢值 × 8, 按 200 行/秒 估的悲观耗时)，夹在 [60s, 300s]：
-    /// - 历史都快（亚秒）⇒ 只看行数：1000 行的页 60 秒，5 万行的页 250 秒；
-    /// - 历史本来就慢（10 秒级）⇒ 放宽到 80 秒以上，不误杀。
-    pub fn batch_watchdog(&self, rows: usize) -> std::time::Duration {
-        let slow_ms = self.recent_max_ms.load(Ordering::Relaxed).saturating_mul(8);
-        // 200 行/秒 是很悲观的估计：真慢到这个程度，页本身也该被读侧缩小了
-        let pessimistic_ms = (rows as u64).saturating_mul(5);
-        let ms = slow_ms.max(pessimistic_ms).clamp(60_000, 300_000);
-        std::time::Duration::from_millis(ms)
-    }
-
-    /// 一页写入能容忍的最长墙钟：超过它就算「目标端写入卡住」，**中断这一页**换连接重试。
-    ///
-    /// 与 [`WriteDiag::batch_watchdog`] 的区别是**语义**，不是数值：
-    /// - `batch_watchdog`（60~300 秒）当初用于「按时间判死链路」，被否决了（慢 ≠ 断）；
-    /// - 这里用于「慢批自愈」：探活一直是通的，但一页写了十分钟，继续等只是白等 ——
-    ///   真机上后期目标端被 IO 压垮时，一页能卡满界面的「超时时间」（继承连接 = 600 秒），
-    ///   几百张表各白等十分钟，还会把已经写了一半的事务一直挂着。
-    ///
-    /// 取值 = max(最近批最慢值 × 4, 按 200 行/秒 估的悲观耗时)，夹在 **[60s, 180s]**：
-    /// 页的设计目标是「20 秒写得完」，给 3~9 倍余量足够；上界 180 秒是为了
-    /// 「卡住最多浪费 3 分钟」而不是 10 分钟（中断后页会缩到 1/4，重试通常几十秒就过）。
-    pub fn slow_batch_limit(&self, rows: usize) -> std::time::Duration {
-        let from_history = self.recent_max_ms.load(Ordering::Relaxed).saturating_mul(4);
-        // 200 行/秒 是很悲观的估计：真慢到这个程度，页本身也该被读侧缩小了
-        let pessimistic_ms = (rows as u64).saturating_mul(5);
-        let ms = from_history.max(pessimistic_ms).clamp(60_000, 180_000);
-        // 逃生阀：排查/实验时强制一个值（0 = 关闭慢批自愈，回到「等满超时时间」的旧行为；
-        // 正数 = 换成这个秒数）。线上不需要动它。
-        if let Ok(raw) = std::env::var("DBMIND_SYNC_SLOW_BATCH_SECS") {
-            if let Ok(secs) = raw.trim().parse::<i64>() {
-                if secs <= 0 {
-                    return std::time::Duration::from_secs(86_400);
-                }
-                return std::time::Duration::from_secs(secs as u64);
-            }
-        }
-        std::time::Duration::from_millis(ms)
-    }
+    // 「多久算写入超时」不再由本结构决定：唯一来源是界面「传输参数 → 超时时间」
+    // （0 = 继承连接 600 秒 / <0 = 不限制 / >0 = 用户填的秒数），见 `engine::wait_write`。
+    // 这里曾经有 `batch_watchdog`（60~300 秒）与 `slow_batch_limit`（60~180 秒，第一页 30 秒）
+    // 两套自算阈值，与界面配置互相矛盾 —— 已删除。`recent_max_ms` 仍保留：写速诊断要用。
 
     /// 正在写的那一批已经跑了多少秒（0 = 当前没有在写的批）。
     pub fn writing_seconds(&self) -> u64 {
@@ -621,52 +583,18 @@ mod watchdog_tests {
     use super::*;
     use std::time::Duration;
 
-    /// 单批墙钟不能一刀切 300 秒：正常批是亚秒级，半开连接要 20 秒就判死；
-    /// 但真慢的批（十秒级）也不能被误杀。
+    /// 超时的那一批要**下调写速**（页得缩小，别再往慢链路塞大页），并且收尾后不残留
+    /// 「还在写」的状态。（判超时不再用本结构自算的阈值，只有界面「超时时间」一个来源。）
     #[test]
-    fn 单批看门狗按最近批与行数自适应() {
-        let diag = WriteDiag::default();
-        // 小页 + 没样本 ⇒ 下界 60 秒
-        assert_eq!(diag.batch_watchdog(1_000), Duration::from_secs(60));
-        // 大页 + 没样本 ⇒ 按 200 行/秒 估：52,351 行 ≈ 262 秒，不会被误杀
-        assert_eq!(diag.batch_watchdog(52_351), Duration::from_millis(261_755));
-
-        diag.note_batch_start(1_000);
-        diag.note_batch_done(1_000, Duration::from_millis(400));
-        // 400ms × 8 = 3.2s，仍被夹到下界
-        assert_eq!(diag.batch_watchdog(1_000), Duration::from_secs(60));
-
-        // 十秒级的慢批 ⇒ 80 秒（不会把它误判成「连接挂了」）
-        diag.note_batch_start(50_000);
-        diag.note_batch_done(50_000, Duration::from_secs(10));
-        assert_eq!(diag.batch_watchdog(1_000), Duration::from_secs(80));
-
-        // 接着来一批快的，阈值只按 7/8 衰减，不会立刻收紧
-        diag.note_batch_start(1_000);
-        diag.note_batch_done(1_000, Duration::from_millis(200));
-        assert!(diag.batch_watchdog(1_000) >= Duration::from_secs(70));
-
-        // 极端慢 ⇒ 夹到上界 300 秒
-        diag.note_batch_start(1_000);
-        diag.note_batch_done(1_000, Duration::from_secs(200));
-        assert_eq!(diag.batch_watchdog(1_000), Duration::from_secs(300));
-    }
-
-    /// 超时的那一批**不能**当「慢批样本」：它会被算进 `recent_max_ms`，把看门狗一路抬到
-    /// 300 秒上限 —— 之后真断连要白等五分钟才判定（界面上就是「这张表卡了五分钟」）。
-    /// 写速仍然要按它下调（页得缩小，别再往慢链路塞大页）。
-    #[test]
-    fn 超时批不抬高看门狗但下调写速() {
+    fn 超时批下调写速且不残留状态() {
         let diag = WriteDiag::default();
         diag.note_batch_start(1_000);
         diag.note_batch_done(1_000, Duration::from_millis(400));
-        let before = diag.batch_watchdog(1_000);
         let rate_before = diag.write_rate();
         assert!(rate_before > 0);
 
         diag.note_batch_start(20_000);
         diag.note_batch_timeout(20_000, Duration::from_secs(80));
-        assert_eq!(diag.batch_watchdog(1_000), before, "超时不该放宽单批看门狗");
         assert!(
             diag.write_rate() < rate_before,
             "写速要按超时下调：{} → {}",
@@ -675,25 +603,6 @@ mod watchdog_tests {
         );
         // 收尾后不应残留「还在写」的状态
         assert_eq!(diag.writing_seconds(), 0);
-    }
-
-    /// 慢批自愈阈值：小页 60 秒下界、大页 180 秒上界、历史慢批会抬高它。
-    ///
-    /// 语义是「探活正常但就是写不完 ⇒ 中断重试」，所以要**比正常慢批宽**（不能误杀），
-    /// 又必须**明显小于界面的 600 秒**（否则后期每张表白等十分钟）。
-    #[test]
-    fn 慢批自愈阈值夹在六十到一百八十秒() {
-        let diag = WriteDiag::default();
-        // 小页：下界 60 秒
-        assert_eq!(diag.slow_batch_limit(1_000), Duration::from_secs(60));
-        // 大页：7 万行 × 5ms = 350 秒 ⇒ 夹到上界 180 秒
-        assert_eq!(diag.slow_batch_limit(70_000), Duration::from_secs(180));
-        // 中等页：2 万行 × 5ms = 100 秒（不动）
-        assert_eq!(diag.slow_batch_limit(20_000), Duration::from_secs(100));
-        // 历史慢批（20 秒）× 4 = 80 秒，比按行数估的更保守
-        diag.note_batch_start(20_000);
-        diag.note_batch_done(20_000, Duration::from_secs(20));
-        assert_eq!(diag.slow_batch_limit(5_000), Duration::from_secs(80));
     }
 
     /// 任务级报文上限**只降不升**：一张表踩过的坑要立刻对同一任务里其它表生效

@@ -329,11 +329,17 @@ impl Writer for SqlWriter {
             let Some((begin, _, _)) = self.txn else {
                 return;
             };
-            // 开事务本身也要有墙钟：慢批自愈会频繁换连接，新连接若建不起来
-            //（半开 / 目标端 accept 排队），这里会静默等内核默认的 600 秒 ——
-            // 真机上表现为「中断重试之后再无动静」，日志里一行都没有。
+            // 开事务本身也要有墙钟：换连接时新连接若建不起来（半开 / 目标端 accept 排队），
+            // 这里会静默等到内核默认的 600 秒 —— 真机上表现为「中断重试之后再无动静」，
+            // 日志里一行都没有。
+            //
+            // 上限**用界面「超时时间」**（0 = 继承连接 600 秒 / <0 = 不限制 / >0 = 用户填的），
+            // 不再自己写死 30 秒：界面上只配了一个超时，日志里就不该出现第二个数字。
+            let begin_limit = std::time::Duration::from_millis(
+                crate::api::sync::op_timeout_ms(self.op_timeout_secs),
+            );
             let opened: Result<(), String> = match tokio::time::timeout(
-                std::time::Duration::from_secs(30),
+                begin_limit,
                 run_target_in(&self.state, &self.tgt_target, begin, &session),
             )
             .await
@@ -342,7 +348,10 @@ impl Writer for SqlWriter {
                 Ok(Err(err)) => Err(err.message),
                 // 只说事实：本地等满了、库没回话。不写「连接不可用」这种自造结论 ——
                 // 真因可能是建连慢、目标端 accept 排队、或链路在重传，日志里让人自己去判断。
-                Err(_) => Err("开启事务超过 30 秒未返回".to_string()),
+                Err(_) => Err(format!(
+                    "开启事务超过 {} 秒未返回",
+                    begin_limit.as_secs()
+                )),
             };
             match opened {
                 Ok(()) => {

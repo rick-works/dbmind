@@ -110,21 +110,21 @@ const SLOW_CHECK_TICK: Duration = Duration::from_secs(2);
 /// 回滚/收尾语句自己的墙钟：半开连接上连 `rollback` 都会挂住（真机整条同步就此卡死）。
 const ABORT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// 读一页的上限：跟随界面的「超时时间」，但夹在 **30~180 秒**之间。
+/// 读一页的上限：**就是界面的「超时时间」**，不再另外夹一个区间。
 ///
-/// 为什么不像写那样直接放到 600 秒：读是**幂等**的 —— 超时之后会缩页重试
-/// （`reader.shrink_page()`），等十分钟才重试反而更亏；而 30 秒对 32MiB 的大页
-/// 在慢链路上又确实偏紧（1 MB/s 要 32 秒，会被误判后整页重读）。180 秒是两头都顾到的上限。
+/// 曾经夹在 30~180 秒（理由是「读幂等、等太久不如早点缩页重试」），结果是界面上选
+/// 「继承连接（600 秒）」实际只等 180 秒 —— 用户看到的是「读取超时 180 秒」，
+/// 跟他配的 600 秒对不上。用户口径：**一切以界面上那个旋钮为准，不要自己另立阈值**。
 fn read_timeout(secs: i64) -> Duration {
-    Duration::from_millis(crate::api::sync::op_timeout_ms(secs).clamp(30_000, 180_000))
+    Duration::from_millis(crate::api::sync::op_timeout_ms(secs))
 }
 
-/// 提交（commit）的上限：跟随「超时时间」，夹在 **60~600 秒**之间。
+/// 提交（commit）的上限：同样**只用界面的「超时时间」**。
 ///
-/// 为什么宁可多等：提交失败属于「这一段是否落盘无法确定」，**不能自动重跑**
-/// （可能已经写进去了，重跑会重复）。所以这里给足时间，别把慢盘上的正常提交判死。
+/// 提交失败属于「这一段是否落盘无法确定」，**不能自动重跑**（可能已经写进去了），
+/// 所以更不能被一个自己拍的阈值提前判死。
 fn commit_timeout(secs: i64) -> Duration {
-    Duration::from_millis(crate::api::sync::op_timeout_ms(secs).clamp(60_000, 600_000))
+    Duration::from_millis(crate::api::sync::op_timeout_ms(secs))
 }
 
 /// 写超时后的**目标端探活**上限（另开一条会话跑 `select 1`）。
@@ -1015,10 +1015,8 @@ async fn run_segment(
         let flushed = wait_write(
             &ctx.plan,
             std::time::Instant::now(),
+            // upsert 更新同样只看界面「超时时间」，不另设阈值
             "发送攒着的 upsert 更新",
-            // upsert 的更新批按 500 条一攒、行数不大：给它 100 秒上限（按 2 万行估），
-            // 卡住同样走「回滚这一段 + 换连接重试」（upsert 幂等，重跑不会写重）
-            ctx.plan.diag.slow_batch_limit(20_000),
             ctx.writer.flush(),
         )
         .await;
@@ -1089,39 +1087,30 @@ async fn read_page(
 
 /// 等一次写动作完成：**慢就等**，只有探活不通（或超过界面「超时时间」）才判死。
 ///
-/// 为什么不再给死线：用户口径是「Navicat / DBX 不中断，我们也不许」。一条语句卡在丢包
-/// 重传上要几十秒，这期间链路是好的 —— 按时间判死只会把「慢」变成「中断 + 整段重跑」。
-/// 探活的代价是每 [`BATCH_PROBE_TICK`] 一次 `select 1`（另开会话，不排在卡住的语句后面）。
+/// 判断「多久算超时」**只有一个来源**：界面「传输参数 → 超时时间」。
+/// - `0`（继承连接）= 600 秒；`<0` = 不限制；`>0` = 用户填的秒数。
 ///
-/// **慢批自愈**（`stall`）：探活一直通、但这一页写了 `stall`（60~180 秒）还没完成时，
-/// 判定「目标端写入卡住」（后期大表 + 目标端 IO 饱和时的典型表现）—— 主动放弃这一页、
-/// 换新连接重试，而不是一直等到界面的「超时时间」（默认继承连接 = 600 秒）。
-/// 真机代价：400 对象的任务跑到后段，几乎每张表都白等 10 分钟；中断后页会缩到 1/4，
-/// 重试通常几十秒就过（数据不会重复：这一页的事务已回滚）。
-/// 用户把「超时时间」设成不限制（<0）时**不启用**自愈 —— 那是明确的「一直等」。
+/// 这里曾经另有一套「慢批自愈」阈值（60~180 秒，第一页还额外压到 30 秒），跟界面上写的
+/// 600 秒对不上 —— 用户看到的日志是「写入超时 30 秒」而配置里明明写着继承连接，
+/// 谁也解释不清。用户口径：**不要自己另立阈值，一切按界面上配的来**。
+///
+/// 探活（每 [`BATCH_PROBE_TICK`] 一次 `select 1`，另开会话、不排在卡住的语句后面）
+/// 仍然保留，但它只回答「连接断没断」，不参与「慢不慢」的判断：断了就带着数据库原话
+/// 立刻失败（换连接重试也没用），没断就一直等到界面超时。
 ///
 /// 返回 `Err((原因, 是否链路整体不可用))`：第二个值决定要不要让整个任务暂停。
 async fn wait_write<F, T>(
     plan: &TablePlan,
     started: std::time::Instant,
     label: &str,
-    stall: Duration,
     pending: F,
 ) -> Result<T, (String, bool)>
 where
     F: std::future::Future<Output = T>,
 {
     // 界面的「超时时间」（对齐 DBX）：0 = 继承连接（内核默认 600 秒），<0 = 不限制，
-    // >0 = 用户填的秒数。探活仍然每 30 秒做一次 —— 它决定「断没断」，这个上限只决定
-    // 「最多等多久」，两者不是一回事。
+    // >0 = 用户填的秒数。
     let hard_limit = Duration::from_millis(crate::api::sync::op_timeout_ms(plan.op_timeout_secs));
-    // 先到先算：用户填的比自愈阈值更短就听用户的（那是更严格的「操作超时」）。
-    let soft_limit = if plan.op_timeout_secs < 0 {
-        // 界面上明确选了「不限制」：不自愈，继续等（探活仍照常做）
-        Duration::from_secs(86_400)
-    } else {
-        hard_limit.min(stall)
-    };
     // 界面日志节流：卡住期间每 2 分钟说一句「还在写」，别让用户以为假死
     let mut last_note = started;
     // 探活节流：判断「断没断」是 30 秒一次的 select 1；软阈值只比较本地时钟，2 秒一次
@@ -1136,9 +1125,9 @@ where
             value = &mut pending => return Ok(value),
             _ = tokio::time::sleep(SLOW_CHECK_TICK) => {
                 let elapsed = started.elapsed();
-                if elapsed >= soft_limit {
-                    // 到软阈值先复核链路：真断了就按「链路已断」报（让整个任务停一会儿），
-                    // 原因用探活的原始报错。
+                if elapsed >= hard_limit {
+                    // 等满了界面上配的「超时时间」才判死。先复核链路：真断了就按「链路已断」
+                    // 报（让整个任务停一会儿），原因用探活的原始报错。
                     if let Err(why) = probe_target_confirmed(plan).await {
                         return Err((link_broken(elapsed, &why), true));
                     }
@@ -1160,10 +1149,11 @@ where
                     if elapsed.as_secs() >= 60 && last_note.elapsed() >= Duration::from_secs(120) {
                         last_note = std::time::Instant::now();
                         if let Some(task) = &plan.task {
+                            // 只说事实：还在写、探活正常、界面配的阈值是多少
                             task.log(format!(
-                                "{label}：目标端已写 {} 秒（探活正常，仍在等待；超过 {} 秒会自动换连接重试）",
+                                "{label}：目标端已写 {} 秒（探活正常，仍在等待；超过 {} 秒会判超时）",
                                 elapsed.as_secs(),
-                                soft_limit.as_secs()
+                                hard_limit.as_secs()
                             ));
                         }
                     }
@@ -1197,26 +1187,11 @@ async fn write_rows(
     let started = std::time::Instant::now();
     ctx.plan.diag.note_batch_start(rows.len());
     ctx.plan.diag.inflight.fetch_add(1, Ordering::Relaxed);
-    // 这一页的**慢批自愈**阈值：探活一直通、但写到这个时长还没完成 ⇒ 中断重试
-    // （见 `wait_write` 的 `stall` 参数；上界 180 秒，而不是界面的 600 秒）。
+    // 这里**不再有「慢批自愈」阈值**：等多久只看界面「超时时间」那一个旋钮
+    // （0 = 继承连接 600 秒 / <0 = 不限制 / >0 = 用户填的秒数），见 `wait_write`。
+    // 曾经的 60~180 秒（第一页还压到 30 秒）与界面配置对不上，用户看到「写入超时 30 秒」
+    // 而配置里写着继承连接 —— 已删除。
     //
-    // 只在**能从服务端掐断会话**的方言上启用：客户端放弃等待后，服务端那条 INSERT
-    // 和它的未提交事务还在跑、还持有行锁，掐不断它的话重试会排在自己的锁后面
-    //（1 秒阈值注入实测：页从 1 万缩到 1000 行仍然每批都超时，任务彻底不动）。
-    // 掐不断的方言保持旧语义（探活通就一直等），不引入更坏的结果。
-    let target_spec = super::plugins::spec_data_for(ctx.plan.target_kind.kind.key());
-    let stall = if target_spec.has_kill() {
-        // 60~180 秒（按历史最慢值 × 4 与行数估的悲观耗时取大），见 `slow_batch_limit`。
-        //
-        // **曾经这里对「第一页」额外压到 30 秒**（理由是「第一页就卡住 = 目标端此刻有问题」），
-        // 真机上反而把「正常但慢的第一页」全判成了超时：目标端并发写时第一页（往往是最宽的
-        // 一页）30 秒根本写不完，界面上就是「几乎每张表都报写入超时 30 秒」。
-        // 而且用户看到的是 30 秒，跟界面「超时时间 = 继承连接（600 秒）」完全对不上 ——
-        // 同一个界面上有两个互相矛盾的"超时"，谁也解释不清。所以这个特例删掉。
-        ctx.plan.diag.slow_batch_limit(rows.len())
-    } else {
-        Duration::from_secs(86_400)
-    };
     // ---- 限速（界面「限速」：行/秒 + MB/秒，两条曲线取更慢的）----
     //
     // 放在**发语句之前**：事后补睡的话突发流量已经打到目标库了，限速就只是自欺欺人。
@@ -1232,10 +1207,8 @@ async fn write_rows(
     let (outcome, timed_out) = match wait_write(
         &ctx.plan,
         started,
-        // 文案只说「写入超时 N 秒」：行数/页大小/报文上限都是内部量，用户看了只会问
-        // 「为什么是 1 万不是我的 1000」，一个都不往日志里写。
+        // 文案里的「N 秒」就是界面「超时时间」换算出来的那个值
         "写入",
-        stall,
         ctx.writer.write(worker, rows),
     )
     .await
