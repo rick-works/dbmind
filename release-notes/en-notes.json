@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.3.2": [
+    "Sync logs now carry the real error only: the self-invented \"source table missing or has no column info\" line is gone, so a dropped network, a restarted host, a permission problem or a missing table all surface in the database / driver verbatim",
+    "The other self-made narration and tuning advice is gone too (\"connection discarded\", \"falling back to per-row commits (much slower on big tables)\", \"(link is fine)\"); retry counters and similar internals now stay in the file log",
+    "After a network drop, metadata and write failures are now treated as link-level: the table reconnects and runs again from the start instead of being failed outright (which also lost every row already written in that transaction)"
+  ],
   "v1.3.1": [
     "Sync no longer invents its own timeouts: a slow statement is judged only by the timeout you pick in the dialog, a passing liveness probe keeps waiting (what Navicat / DBX do), and the log quotes the database verbatim instead of our own \"write interrupted / half-open connection\" wording",
     "The two rate-limit boxes no longer show a literal 0: an unlimited rate reads \"Unlimited\" in the normal text colour instead of looking like an empty field",
