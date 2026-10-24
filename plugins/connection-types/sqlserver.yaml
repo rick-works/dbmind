@@ -16,6 +16,10 @@ driverStoreOrder: 6
 # 改成 false 后：4 张表并发 × 每表 1 路写，4 表 × 5000 行 8.7s 全量落库；
 # 二次 upsert 也验过（改 10 行 + 新增 10 行：更新生效、无重复 id、零失败行）。
 singleConnectionPool: false
+# 与其它关系型（MySQL/PG/Oracle/DB2/达梦/Kingbase）统一为 8：同步搬数据时，
+# 8 条里有 6 条被读写路数用掉，剩 2 条留给取表结构、监控轮询等元数据请求，
+# 否则它们会排满 30 秒报「等待可用连接超时」。
+maxConnections: 8
 metadataConnectionScoped: true
 skipTcpProbe: false
 localFile: false

@@ -764,8 +764,9 @@ pub fn connection_json(record: &ConnectionRecord) -> Value {
             .and_then(|extra| extra.get("note"))
             .and_then(Value::as_str)
             .unwrap_or(""),
-        // 并发会话上限只在设置里（`session.maxConnectionsPerConnection`，全局）统一配，
-        // 连接级不再对外暴露 —— 这里不回传，免得界面又把 extra 里的旧值带回去。
+        // 并发会话上限按连接类型声明（`plugins/connection-types/*.yaml` 的
+        // `maxConnections`），连接级不再对外暴露 —— 这里不回传，
+        // 免得界面又把 extra 里的旧值带回去。
         "readOnly": record.read_only,
         "color": config.color.clone().unwrap_or_default(),
         "createTime": record.created_at,

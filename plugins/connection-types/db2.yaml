@@ -11,7 +11,7 @@ driverStoreVisible: true
 driverStoreOrder: 9
 singleConnectionPool: false
 metadataConnectionScoped: false
-maxConnections: 4
+maxConnections: 8
 skipTcpProbe: false
 localFile: false
 defaultPort: 50000

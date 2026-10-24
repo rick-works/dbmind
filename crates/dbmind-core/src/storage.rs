@@ -31,12 +31,7 @@ const SETTINGS_SAFETY_MAX_WRITE_ROWS: &str = "safety.maxWriteRows";
 const SETTINGS_SESSION_MAX_PER_HOST: &str = "session.maxPerHost";
 /// 空闲会话回收时长（秒；0 = 不按空闲回收，只保留「配额满时回收」）。
 const SETTINGS_SESSION_IDLE_TIMEOUT: &str = "session.idleTimeoutSecs";
-/// 单条连接的并发会话上限（0 = 不覆盖，按类型声明；见 `ConnectionKind::max_connections`）。
-///
-/// 与 `session.maxPerHost` 是两个层级：那个是**所有连接合计**的总闸，这个是
-/// **单条连接**的天花板。存在的理由是池的天花板（MySQL 4）太保守时，同步取表结构、
-/// 监控轮询、表数据页签会互相排队 30 秒，报「等待可用连接超时」。
-const SETTINGS_SESSION_MAX_PER_CONN: &str = "session.maxConnectionsPerConnection";
+
 /// 结构缓存的有效期（秒；设置页可改，配合「立即刷新」按钮两条路都能走）。
 const SETTINGS_SCHEMA_TTL: &str = "schema.ttlSecs";
 /// 会话相关默认值的一次性迁移标记（配额 32 → 128）。
@@ -767,7 +762,6 @@ impl Store {
     pub const KEY_BLOCK_DANGEROUS: &'static str = SETTINGS_SAFETY_BLOCK_DANGEROUS;
     pub const KEY_MAX_WRITE_ROWS: &'static str = SETTINGS_SAFETY_MAX_WRITE_ROWS;
     pub const KEY_SESSION_MAX_PER_HOST: &'static str = SETTINGS_SESSION_MAX_PER_HOST;
-    pub const KEY_SESSION_MAX_PER_CONN: &'static str = SETTINGS_SESSION_MAX_PER_CONN;
     pub const KEY_SESSION_IDLE_TIMEOUT: &'static str = SETTINGS_SESSION_IDLE_TIMEOUT;
     pub const KEY_SCHEMA_TTL: &'static str = SETTINGS_SCHEMA_TTL;
     pub const KEY_QUERY_TIMEOUT: &'static str = SETTINGS_QUERY_TIMEOUT;

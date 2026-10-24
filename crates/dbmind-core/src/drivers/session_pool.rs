@@ -249,12 +249,6 @@ pub(crate) fn cancelled_while_waiting() -> DbMindError {
 /// 上限为 0 表示不限制，交给类型/连接级上限。
 pub struct SessionBudget {
     cap: AtomicUsize,
-    /// 单条连接的并发上限（0 = 不覆盖，按类型/连接级声明）。
-    ///
-    /// 设置项 `session.maxConnectionsPerConnection`：用户嫌类型声明太保守（MySQL 4）
-    /// 时统一放宽所有连接，不必逐条改。它是**帽子**，不是替代 ——
-    /// 连接级覆盖仍可在这之下调小（见 [`Self::lane`]）。
-    lane_cap: AtomicUsize,
     /// 空闲回收时长（秒；0 = 不按空闲回收）。见 `sweep_idle`。
     idle_timeout_secs: AtomicUsize,
     /// 当前活着的槽位数（= 物理会话数）。**由池在增删槽位时维护**，
@@ -319,7 +313,6 @@ impl SessionBudget {
     pub fn new(cap: usize) -> Self {
         Self {
             cap: AtomicUsize::new(cap),
-            lane_cap: AtomicUsize::new(0),
             idle_timeout_secs: AtomicUsize::new(0),
             live: AtomicUsize::new(0),
             pools: Mutex::new(Vec::new()),
@@ -444,37 +437,6 @@ impl SessionBudget {
         }
     }
 
-    /// 单条连接的并发上限（0 = 不覆盖，按类型/连接级声明）。
-    ///
-    /// 这是**每条连接**的帽子，与 [`Self::clamp`] 的「所有连接合计」是两层：
-    /// 一条连接既要 ≤ 自己的声明、≤ 全局总量，也要 ≤ 用户给的每条上限。
-    pub fn set_lane_cap(&self, lane_cap: usize) {
-        self.lane_cap.store(lane_cap, Ordering::Relaxed);
-    }
-
-    pub fn lane_cap(&self) -> usize {
-        self.lane_cap.load(Ordering::Relaxed)
-    }
-
-    /// 生效的单连接上限，优先级：**连接级覆盖 → 全局默认（每连接）→ 类型声明**，
-    /// 最后夹到全局总量。
-    ///
-    /// 为什么是「覆盖」而不是「只收窄」：类型声明里 MySQL 是 4，用户遇到的
-    /// 「同步搬数据时取表结构等 30 秒超时」恰恰需要把它**放宽**到 8；只收窄的话
-    /// 设 8 对 MySQL 等于没设。
-    ///
-    /// 热生效：`lane_limit` 每次取会话都会重新算，所以设置里改完不用重连
-    /// （已经在池里的槽位不受影响，只是不再新增到超过新上限）。
-    pub fn lane(&self, declared: usize, per_connection: Option<usize>) -> usize {
-        let chosen = per_connection
-            .filter(|n| *n >= 1)
-            .or_else(|| {
-                let global = self.lane_cap();
-                (global >= 1).then_some(global)
-            })
-            .unwrap_or(declared);
-        self.clamp(chosen)
-    }
 
     fn lock(&self) -> MutexGuard<'_, Vec<Registration>> {
         self.pools.lock().unwrap_or_else(|e| e.into_inner())
@@ -1611,24 +1573,4 @@ mod tests {
         assert_eq!(budget.clamp(8), 2);
     }
 
-    /// 单连接上限（`session.maxConnectionsPerConnection`）是**覆盖**语义：
-    /// 优先级 连接级覆盖 → 全局默认 → 类型声明，最后夹到全局总量。
-    /// 全局默认 8 要能把 MySQL 声明里的 4 放宽到 8（这正是它存在的理由）。
-    #[test]
-    fn 单连接上限按连接覆盖_全局默认_类型声明三级生效() {
-        let budget = SessionBudget::new(0);
-        assert_eq!(budget.lane(4, None), 4, "没设置时按类型声明");
-
-        budget.set_lane_cap(8);
-        assert_eq!(budget.lane(4, None), 8, "全局 8 要能放宽 MySQL 的 4");
-        assert_eq!(budget.lane(8, None), 8, "ClickHouse 本来就是 8，不变");
-        assert_eq!(budget.lane(4, Some(16)), 16, "连接级覆盖优先于全局默认");
-        assert_eq!(budget.lane(8, Some(1)), 1, "单连接也能调小");
-
-        // 与「合计配额」是两层：总量只有 2 时，单连接给 16 也只能 2
-        let tight = SessionBudget::new(2);
-        tight.set_lane_cap(8);
-        assert_eq!(tight.lane(8, None), 2, "总量优先于单连接上限");
-        assert_eq!(tight.lane(8, Some(16)), 2);
-    }
 }

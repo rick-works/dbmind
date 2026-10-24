@@ -32,17 +32,6 @@ use std::time::Instant;
 /// 0 表示不限制（交给类型/连接级上限）。
 pub const DEFAULT_SESSION_MAX_PER_HOST: usize = 128;
 
-/// 单条连接的并发会话上限默认值（`session.maxConnectionsPerConnection`）。
-///
-/// 8 的依据：类型声明里 MySQL/PG/Oracle/DB2/达梦/Kingbase 只给 4，同步搬数据时
-/// 这 4 个位置会被读片和界面请求抢，取表结构排满 30 秒就报
-/// 「等待可用连接超时」（真机：400 对象任务里红字满屏，数据搬运本身正常）。
-/// ClickHouse/Doris 声明就是 8，取 8 对它们无感；单连接池类型恒 1，不受影响。
-///
-/// 它**不影响同步吞吐**：读写路数走 `write_parallelism`（读类型声明、clamp 1~6），
-/// 这里只决定「元数据/界面请求还能不能再开一条」。
-pub const DEFAULT_SESSION_MAX_PER_CONN: usize = 8;
-
 /// 空闲会话清理线程的扫描间隔。
 ///
 /// 10 秒的取舍：比「分钟级」的空闲时长灵敏得多，又完全谈不上开销 ——
@@ -146,12 +135,6 @@ impl DbMindEngine {
             self.store
                 .get_usize_setting(Store::KEY_SESSION_MAX_PER_HOST, DEFAULT_SESSION_MAX_PER_HOST)?,
         );
-        // 单条连接的并发上限（默认 8；0 = 回落到类型声明）。与上面的总量是两层：
-        // 它决定「同步在搬数据时，取表结构/监控轮询还有没有位置」。
-        let per_conn = self
-            .store
-            .get_usize_setting(Store::KEY_SESSION_MAX_PER_CONN, DEFAULT_SESSION_MAX_PER_CONN)?;
-        budget.set_lane_cap(per_conn);
         let idle = self.store.get_usize_setting(Store::KEY_SESSION_IDLE_TIMEOUT, 0)?;
         budget.set_idle_timeout_secs(idle);
         if idle > 0 {
@@ -1452,12 +1435,8 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
     /// 写设置并把安全相关项**立刻**同步到运行中的策略。
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         self.store.set_setting(key, value)?;
-        // 改的是会话相关设置 ⇒ 立刻生效（不等重启）。单连接上限也算：
-        // 它每次取会话都会重新算，保存后下一次请求就按新值排队。
-        if key == Store::KEY_SESSION_MAX_PER_HOST
-            || key == Store::KEY_SESSION_MAX_PER_CONN
-            || key == Store::KEY_SESSION_IDLE_TIMEOUT
-        {
+        // 改的是会话相关设置 ⇒ 立刻生效（不等重启）
+        if key == Store::KEY_SESSION_MAX_PER_HOST || key == Store::KEY_SESSION_IDLE_TIMEOUT {
             self.apply_session_limits()?;
         }
         let flag = value == "true" || value == "1";
