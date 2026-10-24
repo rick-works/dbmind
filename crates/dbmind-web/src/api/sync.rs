@@ -793,6 +793,26 @@ pub(crate) async fn probe_target_link_confirmed(state: &AppState, target: &str) 
     probe_target_link(state, target).await
 }
 
+/// 标记 / 解除「这条写会话正开着事务」的保护（见 `DbMindEngine::hold_tx_lane`）。
+///
+/// 不加 `async`：只是会话池里的一次标记，不碰网络。失败**不算错误** ——
+/// 保护的作用是「少一次被回收的机会」，退化成旧行为远好过因此让整表失败。
+///
+/// 为什么必须有（真机故障）：写会话在批与批之间把槽位还回池里，那一刻它「空闲」，
+/// 但 `set autocommit=0` 打开的事务还压着一整页未提交的行。配额顶满时按「最久未用的
+/// 空闲会话」回收就会挑中它 —— 宿主关掉连接、服务端回滚这些行，写侧却以为写成功了。
+pub(crate) fn hold_target_tx(state: &AppState, target: &str, session: &str, hold: bool) {
+    if let Err(err) = state.engine().hold_tx_lane(target, session, hold) {
+        tracing::debug!(
+            target: "dbmind::sync",
+            session = %session,
+            hold,
+            error = %err.message,
+            "标记/解除写事务会话保护失败（已忽略）"
+        );
+    }
+}
+
 /// 同 [`run_target_in`]，但允许返回多行。仅用于按批查询目标已有键这类
 /// 内部读取，不能把写语句放进来拿多行。
 pub(crate) async fn run_target_in_rows(
@@ -3106,6 +3126,12 @@ pub(crate) fn is_link_level_message(message: &str) -> bool {
         // 单批墙钟兜底（连接半开：响应永远不来）
         "未返回",
         "半开",
+        // 宿主那边这条写会话已经不在了（被配额回收 / 宿主重启）。它不是脏数据：
+        // 会话没了 ⇒ 这条语句一定没执行、它所在的事务也已被服务端回滚，
+        // 「整表重跑」是安全的（而且必须重跑：那一整页的行都随事务一起没了）。
+        // 不认这条的话，用户看到的就是「写入连接已断：会话不存在（agent 可能已重启）」后
+        // 本表直接判失败 —— 前面写进事务的几万行全部消失，而任务计数里还算成功。
+        "会话不存在",
         // 慢批自愈（探活通但目标端写不动）：这一页的事务会被回滚，换连接 + 缩页重试是安全的
         "写入卡住",
     ]
@@ -6667,6 +6693,24 @@ mod retry_tests {
             false,
             "connection reset by peer"
         ));
+    }
+
+    /// 「会话不存在」必须算链路级错误（否则整表直接判失败，事务里几万行静默消失）。
+    ///
+    /// 真机文案（用户截图）：`写入连接已断：会话不存在（agent 可能已重启）：…|s=internal:sync-wslot00-0#0`。
+    /// 语义上它比 Communications link failure 更「干净」：会话都没了 ⇒ 这条语句一定没发出去，
+    /// 且它所在事务已被服务端回滚 ⇒ 整表重跑既不重复也不缺行。
+    #[test]
+    fn 会话不存在算链路级可整表重跑() {
+        let msg = "写入连接已断：会话不存在（agent 可能已重启）：\
+                   mysql|demo|127.0.0.1|3306|u|demo|false|-|s=internal:sync-wslot00-0#0";
+        assert!(is_link_level_message(msg));
+        assert!(can_retry_after_link_break(0, true, false, 0, false, msg));
+        // 没有事务批的方言照旧不许重跑（已写的行还留在目标表里）
+        assert!(!can_retry_after_link_break(0, false, false, 0, false, msg));
+        // 已经提交过一路 / 用户取消，同样不许
+        assert!(!can_retry_after_link_break(0, true, false, 1, false, msg));
+        assert!(!can_retry_after_link_break(0, true, false, 0, true, msg));
     }
 }
 

@@ -147,6 +147,21 @@ pub trait Driver: Send + Sync {
         0
     }
 
+    /// 把「**事务中**的批量会话」标成受保护 / 解除保护（按亲和键匹配泳道）。默认 0 = 无会话池。
+    ///
+    /// 为什么需要（真机故障）：批量写的每路 writer 自己开事务（`set autocommit=0`），
+    /// 但它在**批与批之间**会把槽位还回池里 —— 那一刻它是「空闲」的，而事务还开着、
+    /// 里面压着一整页未提交的行。配额顶满时回收按「最久未用的空闲会话」挑中它并关掉，
+    /// 服务端随即回滚这些行，写侧却以为写成功了，用户看到
+    /// 「写入连接已断：会话不存在（agent 可能已重启）：…|s=internal:sync-w…」。
+    /// 这类会话必须和交互式事务一样排除在回收 / 空闲清扫 / 保活之外。
+    ///
+    /// 配对规则：`begin` 成功后 hold，`commit` / `rollback` / 收尾置 false；
+    /// 任务收尾的 [`Driver::disconnect_lanes`] 再按 `sid` 兜底全解，避免异常路径漏掉。
+    fn hold_tx_lane(&self, _affinity: &str, _hold: bool) -> usize {
+        0
+    }
+
     /// 会话级事务控制（事务模式）：begin 关掉该会话的 autocommit，
     /// commit / rollback 提交或回滚。
     ///
@@ -273,6 +288,15 @@ impl DriverRegistry {
             .iter()
             .filter(|driver| driver.kind() == kind)
             .map(|driver| driver.disconnect_lanes(needle))
+            .sum()
+    }
+
+    /// 标记 / 解除「事务中的批量会话」保护（按类型分发，见 [`Driver::hold_tx_lane`]）。
+    pub fn hold_tx_lane(&self, kind: ConnectionKind, affinity: &str, hold: bool) -> usize {
+        self.drivers
+            .iter()
+            .filter(|driver| driver.kind() == kind)
+            .map(|driver| driver.hold_tx_lane(affinity, hold))
             .sum()
     }
 

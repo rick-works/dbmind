@@ -153,8 +153,16 @@ impl AgentDriver {
         for lane in dropped {
             self.pool.unpin_lane(&lane);
         }
+        // 批量写事务的保护也按连接名兜底解除（会话池只认「不回收」，不知道谁还在用）
+        self.pool
+            .unpin_matching(|lane| lane.split('|').nth(1) == Some(name));
         self.pool
             .close_idle_where(|lane| lane.split('|').nth(1) == Some(name))
+    }
+
+    /// 标记 / 解除「事务中的批量会话」保护：见 [`Driver::hold_tx_lane`]。
+    pub fn hold_tx_lane(&self, affinity: &str, hold: bool) -> usize {
+        self.pool.hold_tx_lane(affinity, hold)
     }
 
     pub fn new(kind: ConnectionKind, host: Arc<AgentHost>, budget: Arc<SessionBudget>) -> Self {
@@ -854,7 +862,15 @@ impl Driver for AgentDriver {
         for lane in dropped {
             self.pool.unpin_lane(&lane);
         }
+        // 批量写事务的保护同样按 `sid` 兜底全解：任务异常结束（panic / 取消 / 提前 return）
+        // 时若留着 pin，这几条泳道就永远回收不出去，配额会被慢慢吃光。
+        self.pool.unpin_matching(|lane| lane.contains(needle));
         self.pool.close_idle_where(|lane| lane.contains(needle))
+    }
+
+    /// 标记 / 解除「事务中的批量会话」保护：见 [`Driver::hold_tx_lane`]。
+    fn hold_tx_lane(&self, affinity: &str, hold: bool) -> usize {
+        AgentDriver::hold_tx_lane(self, affinity, hold)
     }
 
     /// 会话级事务控制（事务模式，全 agent 数据源通用）。

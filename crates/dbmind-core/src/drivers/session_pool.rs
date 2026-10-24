@@ -704,6 +704,66 @@ impl SessionPool {
         self.lock().pinned.remove(lane);
     }
 
+    /// 按**亲和键**把泳道标成「事务中」/解除（批量写：`set autocommit=0` 之后调用）。
+    ///
+    /// 为什么批量写也要保护（真机踩过，用户看到的是
+    /// 「写入连接已断：会话不存在（agent 可能已重启）：…|s=internal:sync-wslot00-0#0」）：
+    /// 写事务只在**批与批之间**才把槽位还回池里（`busy = false`），而事务本身还开着、
+    /// 里面压着这一页几千行未提交的数据。不保护的话，配额一旦顶满，回收挑「最久未用的
+    /// 空闲会话」就可能挑中它 —— 连接被宿主关掉，服务端把未提交的行全部回滚，
+    /// 而写侧还以为写成功了。这类会话**必须**按事务对待，和交互式事务一样排除在
+    /// 回收 / 空闲清扫 / 保活之外。
+    ///
+    /// `affinity` 是会话亲和键（如 `internal:sync-wslot00-0`），泳道键把它拼在
+    /// `|s=` 之后（见 `agent_driver::session_key`），按后缀匹配就只命中这条连接上的
+    /// 这一把写会话，不会误伤同表别的 writer 或别的表。
+    ///
+    /// 返回命中的泳道数（0 = 还没有建过连接 —— 没有会话可保护，不是错误）。
+    pub fn hold_tx_lane(&self, affinity: &str, hold: bool) -> usize {
+        let mut state = self.lock();
+        if hold {
+            // 只标**已经存在**的泳道：begin 成功后才调用，正常一定有；
+            // 万一没有（会话已被回收）也不新建条目，免得留下永不解除的脏 pin。
+            let lanes: Vec<String> = state
+                .lanes
+                .keys()
+                .filter(|lane| lane_matches_affinity(lane, affinity))
+                .cloned()
+                .collect();
+            for lane in &lanes {
+                state.pinned.insert(lane.clone(), Pin::Transaction);
+            }
+            if !lanes.is_empty() {
+                tracing::debug!(
+                    target: "dbmind::agent",
+                    affinity,
+                    lanes = lanes.len(),
+                    live = self.budget.live(),
+                    cap = self.budget.cap(),
+                    "写事务会话已受保护（回收 / 空闲清扫 / 保活都不碰它）"
+                );
+            }
+            lanes.len()
+        } else {
+            let before = state.pinned.len();
+            state
+                .pinned
+                .retain(|lane, _| !lane_matches_affinity(lane, affinity));
+            before - state.pinned.len()
+        }
+    }
+
+    /// 解除**所有泳道名匹配**的保护（任务收尾 / 连接断开时兜底，见 `disconnect_lanes`）。
+    ///
+    /// 存在的意义是「不许漏」：写事务的保护是按表成对加了又解的，万一某条路径提前
+    /// return（panic、取消），没解除的 pin 会让那几条泳道永远回收不出去。
+    pub fn unpin_matching(&self, pred: impl Fn(&str) -> bool) -> usize {
+        let mut state = self.lock();
+        let before = state.pinned.len();
+        state.pinned.retain(|lane, _| !pred(lane));
+        before - state.pinned.len()
+    }
+
     /// 连接被显式断开时清掉全部事务保护标记。
     pub fn clear_pins(&self) {
         self.lock().pinned.clear();
@@ -884,6 +944,21 @@ fn session_id(lane: &str, index: usize) -> String {
     format!("{lane}#{index}")
 }
 
+/// 泳道是否属于这个**亲和键**（`internal:sync-w<表>-<n>` 这类）。
+///
+/// 泳道键的形状是 `<类型>|<连接名>|…|s=<亲和键>`（见 `agent_driver::session_key`）；
+/// 没有亲和键的泳道（结构浏览）整串就等于连接键，不会匹配到 `|s=` 后缀。
+/// 同时接受「整串就是亲和键」的写法：原生驱动的泳道键可能直接用它。
+fn lane_matches_affinity(lane: &str, affinity: &str) -> bool {
+    if lane == affinity {
+        return true;
+    }
+    match lane.rsplit_once("|s=") {
+        Some((_, key)) => key == affinity,
+        None => false,
+    }
+}
+
 /// 从 `<泳道>#<槽位>` 反解回「泳道 + 下标」（保活归还用）。
 ///
 /// 用 `rsplit_once`：连接名里可以出现 `#`，槽位号永远是最后一段。
@@ -991,6 +1066,55 @@ mod tests {
         pool.release_heartbeat(&again);
         // 未占住时归还也只是刷新空闲时刻，不该 panic
         pool.release_heartbeat(&again);
+    }
+
+    /// 批量写的事务会话（`set autocommit=0` 之后）不许被回收 / 清扫 / 保活碰。
+    ///
+    /// 真机故障：`internal:sync-w…` 的写会话在**批与批之间**是「空闲」的（槽位已归还），
+    /// 可事务还开着、里面压着一整页未提交的行。配额顶满时回收按「最久未用的空闲会话」
+    /// 挑中它并关掉 ⇒ 服务端回滚这批数据，写侧却以为写成功了，报
+    /// 「写入连接已断：会话不存在（agent 可能已重启）」。
+    #[test]
+    fn 写事务会话不参与回收与保活() {
+        let (closed, closer) = recorder();
+        let budget = Arc::new(SessionBudget::new(1));
+        let pool = SessionPool::new(budget.clone(), closer);
+        let write_lane = "mysql|a|127.0.0.1|3306|app|-|false|s=internal:sync-wt9-0";
+        let session = {
+            let guard = pool
+                .acquire(write_lane, 1, Duration::from_millis(50))
+                .expect("拿到槽位");
+            let id = guard.session_id().to_string();
+            drop(guard);
+            id
+        };
+
+        // begin 成功 ⇒ 按亲和键保护这条泳道
+        assert_eq!(pool.hold_tx_lane("internal:sync-wt9-0", true), 1);
+        // 保护之后三种「会自动关连接」的路径都挑不到它
+        assert_eq!(
+            budget.sweep_older_than(Instant::now() + Duration::from_secs(10)),
+            0,
+            "空闲清扫不能回收事务中的写会话"
+        );
+        assert!(!budget.reclaim_idle(), "配额回收不能拿事务中的写会话开刀");
+        assert!(pool
+            .idle_sessions_recent(Duration::from_secs(60), 8)
+            .is_empty());
+        assert!(!pool.take_idle_session(&session));
+        assert!(closed.lock().unwrap_or_else(|e| e.into_inner()).is_empty());
+        assert_eq!(budget.live(), 1);
+
+        // 亲和键精确匹配：同表别的 writer 不该被这条键保护
+        assert_eq!(pool.hold_tx_lane("internal:sync-wt9-1", true), 0);
+
+        // 提交 / 回滚后解除 ⇒ 又能被回收（不能永久占着配额）
+        assert_eq!(pool.hold_tx_lane("internal:sync-wt9-0", false), 1);
+        assert!(budget.reclaim_idle());
+        assert!(closed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&session));
     }
 
     /// 保护**只升级不降级**：事务中再被 `Interactive` pin 一次，仍然按事务算。

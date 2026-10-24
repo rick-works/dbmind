@@ -419,6 +419,17 @@ impl DbMindEngine {
         Ok(self.drivers.disconnect_lanes(record.kind(), needle))
     }
 
+    /// 标记 / 解除「**事务中**的批量会话」保护（数据传输出每路 writer 开事务时调用）。
+    ///
+    /// 为什么要保护：写会话在批与批之间会把槽位还回池里，那一刻它「空闲」但事务还开着，
+    /// 配额顶满时的「回收最久未用空闲会话」就会把它关掉 —— 服务端回滚这一页未提交的行，
+    /// 写侧却以为写成功，用户看到「写入连接已断：会话不存在」。见 [`crate::Driver::hold_tx_lane`]。
+    pub fn hold_tx_lane(&self, id_or_name: &str, affinity: &str, hold: bool) -> Result<usize> {
+        let record = self.store.find_connection(id_or_name)?;
+        let Some(record) = record else { return Ok(0) };
+        Ok(self.drivers.hold_tx_lane(record.kind(), affinity, hold))
+    }
+
     /// 只断**某个数据库**的会话（界面上「关闭数据库」用）。
     ///
     /// 该库的语句跑在它的**影子连接**上（跨库浏览按需生成，database 指向这个库），

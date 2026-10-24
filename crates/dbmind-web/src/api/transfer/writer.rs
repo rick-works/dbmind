@@ -269,22 +269,52 @@ impl SqlWriter {
     /// `sid` 必须带上（见 `TablePlan::sid`）：只按 worker 编号分键时，**不同表**的
     /// 同名 worker 会落到同一条连接上，多个表的 begin/commit 互相串。
     fn session(&self, worker: usize) -> String {
-        let gen = self.generation.load(Ordering::SeqCst);
-        if gen == 0 {
+        self.session_at(worker, self.generation.load(Ordering::SeqCst))
+    }
+
+    /// 指定代数下的写会话名（换代后要回头解除**旧代**的事务保护，见 `release_all_holds`）。
+    fn session_at(&self, worker: usize, generation: u64) -> String {
+        if generation == 0 {
             format!("internal:sync-w{}-{worker}", self.sid)
         } else {
             // 代数后缀仍以 sid 开头：收尾时按 `contains(sid)` 清会话照样命中
-            format!("internal:sync-w{}-{worker}-g{gen}", self.sid)
+            format!("internal:sync-w{}-{worker}-g{generation}", self.sid)
         }
     }
 
     /// upsert 的更新批走一条**本表专属**的串行会话（同 `sid` 隔离理由）。
     fn update_session(&self) -> String {
-        let gen = self.generation.load(Ordering::SeqCst);
-        if gen == 0 {
+        self.update_session_at(self.generation.load(Ordering::SeqCst))
+    }
+
+    /// 指定代数下的 upsert 更新会话名。
+    fn update_session_at(&self, generation: u64) -> String {
+        if generation == 0 {
             format!("internal:sync-u{}", self.sid)
         } else {
-            format!("internal:sync-u{}-g{gen}", self.sid)
+            format!("internal:sync-u{}-g{generation}", self.sid)
+        }
+    }
+
+    /// 标记 / 解除「这条写会话正开着事务」（见 `sync::hold_target_tx`）。
+    ///
+    /// 事务一开就把这条会话从「可回收」名单里拿掉：它在批与批之间是空闲的，但里面压着
+    /// 一整页未提交的行，被配额回收掉就等于静默丢数据（真机故障：写入连接已断：会话不存在）。
+    fn hold_tx(&self, session: &str, hold: bool) {
+        crate::api::sync::hold_target_tx(&self.state, &self.tgt_target, session, hold);
+    }
+
+    /// 解除**本表所有代**的写会话保护（换代 / 收尾兜底）。
+    ///
+    /// 换代（`renew`）会把旧会话名整个换掉，旧代那几条 pin 若不解除就再也没人认领 ——
+    /// 它们会一直占着配额，几百张表跑下来就把会话预算吃光。
+    fn release_all_holds(&self) {
+        let current = self.generation.load(Ordering::SeqCst);
+        for generation in 0..=current {
+            self.hold_tx(&self.update_session_at(generation), false);
+            for worker in 0..self.workers_ceiling {
+                self.hold_tx(&self.session_at(worker, generation), false);
+            }
         }
     }
 }
@@ -358,6 +388,9 @@ impl Writer for SqlWriter {
                     if let Some(open) = self.txn_open.get(worker) {
                         open.store(true, Ordering::SeqCst);
                     }
+                    // 事务已开：这条会话在批与批之间会「空闲」，但里面有未提交的行，
+                    // 必须挡在配额回收 / 空闲清扫之外（见 `SqlWriter::hold_tx`）。
+                    self.hold_tx(&session, true);
                 }
                 Err(err) => {
                     // 开不了事务就退回 autocommit 逐条写 —— 慢，但功能不缺。
@@ -553,6 +586,8 @@ impl Writer for SqlWriter {
                 if !self.update_txn_open.load(Ordering::SeqCst) {
                     if run_target_in(&self.state, &self.tgt_target, begin, &usid).await.is_ok() {
                         self.update_txn_open.store(true, Ordering::SeqCst);
+                        // 更新会话也开着自己的事务（攒 500 条一提交），同样不许被回收
+                        self.hold_tx(&usid, true);
                     }
                 }
             }
@@ -667,6 +702,8 @@ impl Writer for SqlWriter {
                         }
                     }
                 }
+                // 更新事务已提交/复位 ⇒ 解除保护（配对关系见 `hold_tx`）
+                self.hold_tx(&usid, false);
             }
             match failure {
                 Some(msg) => Err(msg),
@@ -701,6 +738,12 @@ impl Writer for SqlWriter {
                         failure = Some(format!("恢复 autocommit 失败：{}", err.message));
                     }
                 }
+            }
+            // 事务结束（提交成功或失败）都要解除保护：失败时那条连接多半已废，
+            // 正该让回收去处理它，而不是继续把它当作「有未提交数据」供着。
+            self.hold_tx(&session, false);
+            if let Some(flag) = self.txn_open.get(worker) {
+                flag.store(false, Ordering::SeqCst);
             }
             match failure {
                 Some(msg) => Err(msg),
@@ -739,6 +782,8 @@ impl Writer for SqlWriter {
                     let _ = run_target_in(&self.state, &self.tgt_target, restore, &session).await;
                 }
             }
+            // 回滚完就解除保护：事务已经不在，这条会话该重新参与回收（不然配额只出不进）
+            self.hold_tx(&session, false);
             if let Some(flag) = self.txn_open.get(worker) {
                 flag.store(false, Ordering::SeqCst);
             }
@@ -770,6 +815,9 @@ impl Writer for SqlWriter {
             for slot in &self.conn_ids {
                 *slot.lock().await = None;
             }
+            // 旧代的事务保护要一起解除：上一代的事务已随连接断开被服务端回滚，
+            // 那些会话名再也不会有人认领（留着 pin 就是纯泄漏会话配额）。
+            self.release_all_holds();
             tracing::warn!(
                 target: "dbmind::sync",
                 table = %self.table,

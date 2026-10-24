@@ -234,9 +234,12 @@
                 <el-icon class="hint-q"><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
-            <el-input-number :model-value="opts.rateRows" @update:model-value="onRateRowsInput"
+            <!-- 0 = 不限：输入框留空 + 提示「不限制」，不把字面 0 摆给用户看 -->
+            <el-input-number :model-value="rateRowsShown" @update:model-value="onRateRowsInput"
                              :min="0" :max="2000000" :step="1000" size="small"
-                             controls-position="right" :disabled="taskRunning" class="settings-num" />
+                             :placeholder="$t('sync.opTimeoutUnlimited')"
+                             controls-position="right" :disabled="taskRunning"
+                             class="settings-num rate-num" />
           </div>
           <div class="settings-inline">
             <span class="settings-inline-label">
@@ -245,9 +248,11 @@
                 <el-icon class="hint-q"><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
-            <el-input-number :model-value="opts.rateMb" @update:model-value="onRateMbInput"
+            <el-input-number :model-value="rateMbShown" @update:model-value="onRateMbInput"
                              :min="0" :max="10240" :step="1" :precision="1" size="small"
-                             controls-position="right" :disabled="taskRunning" class="settings-num" />
+                             :placeholder="$t('sync.opTimeoutUnlimited')"
+                             controls-position="right" :disabled="taskRunning"
+                             class="settings-num rate-num" />
           </div>
           <!-- 「行数上限」已删（用户口径：同步就是不限，抽样不是同步的事）；
                原先那个全局 WHERE 输入框挪到「行过滤」页签**按表设置** —— 一个条件
@@ -574,7 +579,9 @@ const onInsertRowsInput = (value) => {
   const n = Number(value)
   opts.value.insertRows = Number.isFinite(n) && n > 0 ? Math.round(n) : 0
 }
-// 限速：0 = 不限（界面上就是一个 0，不再用「空」表示 —— 空值会让用户以为是坏了）
+// 限速：0 = 不限（界面上留空 + 占位符「不限」，不显示字面 0 —— 用户要求「不限制就显示不限制」）
+const rateRowsShown = computed(() => (opts.value.rateRows > 0 ? opts.value.rateRows : undefined))
+const rateMbShown = computed(() => (opts.value.rateMb > 0 ? opts.value.rateMb : undefined))
 const onRateRowsInput = (value) => {
   const n = Number(value)
   opts.value.rateRows = Number.isFinite(n) && n > 0 ? Math.round(n) : 0
@@ -2449,6 +2456,9 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .hint-q { font-size: 12px; color: var(--dc-text-weak); cursor: help; vertical-align: -1px; margin-left: 2px; }
 .hint-q:hover { color: var(--el-color-primary); }
 .settings-num { width: 96px; flex: none; }
+/* 限速空态写的是「不限制」，它表达的是**一个有效的取值**，不是「这里没填」——
+   所以颜色要用正常文字色（全局 placeholder 规则是压暗的，这里按用户口径提亮）。 */
+.rate-num :deep(input::placeholder) { color: var(--dc-text) !important; opacity: 1; }
 /* 执行选项里「搬什么」（结构/数据）与「怎么应对错误」之间的一条细线 */
 .checks-sep { height: 1px; background: var(--dc-border); margin: 4px 0; }
 /* 「搬什么」与「传输参数」之间的分隔（合并成一栏后靠这条线分段） */
