@@ -179,6 +179,10 @@ pub fn config_from_body(body: &Value, existing: Option<&Value>) -> XResult<Conne
     if !auth_type.is_empty() {
         extra.insert("authType".to_string(), Value::String(auth_type));
     }
+    // 并发会话上限**不在这条路上配**：它是「设置 → 安全与会话」里的全局项
+    //（`session.maxConnectionsPerConnection`），所有连接共用同一个天花板。
+    // 原先这里支持 `extra.maxConnections` 的连接级覆盖，界面上删掉了 ——
+    // 两处可调只会让人分不清「为什么这条连不上还是等不到会话」。
     // SSH 隧道：整体存进 `extra.ssh`（内核的隧道层按它建本地端口转发）。
     // 口令 / 私钥口令短语这一层处理「空 = 沿用已存的那份」，理由见
     // `dbmind_core::tunnel::ssh_extra_from_body`。

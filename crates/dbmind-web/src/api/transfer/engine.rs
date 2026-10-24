@@ -1147,7 +1147,14 @@ where
                     if elapsed.as_secs() >= 60 && last_note.elapsed() >= Duration::from_secs(120) {
                         last_note = std::time::Instant::now();
                         if let Some(task) = &plan.task {
-                            task.log(format!("{label}：已写 {} 秒，继续等待", elapsed.as_secs()));
+                            // **必须带表名**：整库同步是多表并行，几条心跳交错出现在
+                            // 同一屏里时，「写入：已写 244 秒」根本看不出是哪张表
+                            //（真机截图反馈：数字还在回退，因为那是另一张表的心跳）。
+                            task.log(format!(
+                                "表 {}：{label}：已写 {} 秒，继续等待",
+                                plan.table,
+                                elapsed.as_secs()
+                            ));
                         }
                     }
                     tracing::debug!(

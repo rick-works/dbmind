@@ -200,6 +200,12 @@
               <el-input-number v-model="safetyForm.maxSessions" :min="0" :max="128" style="width:160px" />
               <div class="form-tip">{{ $t('settings.safety.maxSessionsTip') }}</div>
             </el-form-item>
+            <!-- 单连接并发上限：与上面那个「合计」是两层。0 = 按类型默认，
+                 不硬套一个数（MySQL/PG 是 4，ClickHouse/Doris 是 8）。 -->
+            <el-form-item :label="$t('settings.safety.maxPerConn')">
+              <el-input-number v-model="safetyForm.maxSessionsPerConn" :min="0" :max="64" style="width:160px" />
+              <div class="form-tip">{{ $t('settings.safety.maxPerConnTip') }}</div>
+            </el-form-item>
             <el-form-item :label="$t('settings.safety.idleRecycle')">
               <el-input-number v-model="safetyForm.idleMinutes" :min="0" :max="1440" style="width:160px" />
               <div class="form-tip">{{ $t('settings.safety.idleRecycleTip') }}</div>
@@ -1656,7 +1662,7 @@ const onRefreshCache = async () => {
 // ===== 安全与会话（全部存后端 app_settings；安全开关与会话上限改动即时生效） =====
 // protectProduction 默认 true：与后端种子（storage.rs 的 seed_settings）保持一致，
 // 否则首次加载、或后端暂时读不到时，开关会显示成"关"，与内核实际策略不符。
-const safetyDefaults = { protectProduction: true, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: true, blockDangerous: false, maxWriteRows: 0 }
+const safetyDefaults = { protectProduction: true, aiWriteEnabled: false, maxSessions: 32, maxSessionsPerConn: 8, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: true, blockDangerous: false, maxWriteRows: 0 }
 const safetyForm = ref({ ...safetyDefaults })
 
 // ---------- MCP 服务 ----------
@@ -1716,6 +1722,8 @@ const loadSafety = async () => {
     safetyForm.value.blockDangerous = flag('safety.blockDangerousStatements', false)
     safetyForm.value.maxWriteRows = num('safety.maxWriteRows', 0)
     safetyForm.value.maxSessions = num('session.maxPerHost', 128)
+    // 单连接并发上限：默认 8；0 = 回落到类型声明（MySQL 4 / ClickHouse 8）
+    safetyForm.value.maxSessionsPerConn = num('session.maxConnectionsPerConnection', 8)
     // 内核按**秒**读；界面用分钟更好读（0 = 不按空闲回收）
     safetyForm.value.idleMinutes = Math.round(num('session.idleTimeoutSecs', 0) / 60)
     // SSH 隧道空闲回收同理（默认 30 分钟）
@@ -1735,6 +1743,8 @@ const saveSafety = async () => {
     await putSetting('safety.blockDangerousStatements', safetyForm.value.blockDangerous)
     await putSetting('safety.maxWriteRows', Math.round(safetyForm.value.maxWriteRows))
     await putSetting('session.maxPerHost', safetyForm.value.maxSessions)
+    // 0 = 不覆盖（按类型声明）。整数化后落库，后端按 usize 读
+    await putSetting('session.maxConnectionsPerConnection', Math.round(Number(safetyForm.value.maxSessionsPerConn) || 0))
     await putSetting('session.idleTimeoutSecs', Math.round(safetyForm.value.idleMinutes) * 60)
     await putSetting('tunnel.idleTimeoutSecs', Math.round(safetyForm.value.tunnelIdleMinutes) * 60)
     // 幂等接口，直接存，不为它维护「上次值」的状态

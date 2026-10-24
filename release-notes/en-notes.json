@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.3.3": [
+    "New \"Sessions per connection\" setting (default 8): while a sync is running, table-structure lookups and monitor polling no longer queue for 30 seconds and fail with \"timed out waiting for a free connection\"",
+    "Reading source table structures now retries on a session-pool queue timeout (after 1s and 3s) instead of failing a perfectly healthy table",
+    "The sync log line \"written for N seconds, still waiting\" now names the table, so you can tell which of several parallel tables is stuck"
+  ],
   "v1.3.2": [
     "Sync logs now carry the real error only: the self-invented \"source table missing or has no column info\" line is gone, so a dropped network, a restarted host, a permission problem or a missing table all surface in the database / driver verbatim",
     "The other self-made narration and tuning advice is gone too (\"connection discarded\", \"falling back to per-row commits (much slower on big tables)\", \"(link is fine)\"); retry counters and similar internals now stay in the file log",

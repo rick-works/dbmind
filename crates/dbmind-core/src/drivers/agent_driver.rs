@@ -195,8 +195,10 @@ impl AgentDriver {
         }
     }
 
-    /// 生效的并发上限，三层取最小：**类型声明**（YAML 的 `maxConnections`）→
-    /// **连接级覆盖**（`extra.maxConnections`）→ **全局配额**（设置里的每宿主上限）。
+    /// 生效的并发上限，四层取最小：**类型声明**（YAML 的 `maxConnections`）→
+    /// **连接级覆盖**（`extra.maxConnections`）→ **全局「每条连接」上限**
+    /// （设置 `session.maxConnectionsPerConnection`）→ **全局配额**
+    /// （设置里的每宿主上限）。
     ///
     /// 亲和泳道恒为 **1**：那条会话就是某个页面的会话，同一时刻只该有一个请求在它上面跑
     /// （否则「语句按顺序落在同一个会话上」这句话就不成立了）。
@@ -209,10 +211,11 @@ impl AgentDriver {
         if self.kind.single_connection_pool() {
             return 1;
         }
-        let declared = config
-            .max_connections_override()
-            .unwrap_or_else(|| self.kind.max_connections());
-        self.budget.clamp(declared)
+        // 优先级：连接级覆盖（`extra.maxConnections`）→ 全局默认（设置里每连接上限，
+        // 默认 8）→ 类型声明；最后由 budget 夹到全局总量。
+        let per_connection = config.max_connections_override();
+        let declared = per_connection.unwrap_or_else(|| self.kind.max_connections());
+        self.budget.lane(declared, per_connection)
     }
 
     fn agent_key(&self) -> Result<&'static str> {

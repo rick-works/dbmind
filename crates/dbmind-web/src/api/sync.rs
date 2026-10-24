@@ -634,6 +634,48 @@ async fn columns_of(
     }
 }
 
+/// 取**源表结构**，遇到「等会话槽位超时」时退避重试几次。
+///
+/// 为什么需要重试：读页走的是**独立亲和泳道**（`internal:sync-r-<slot>-<片>`，
+/// 每条泳道恒 1 条会话，见 `transfer/reader.rs`），但「取表结构」用的是连接默认泳道 ——
+/// 那条泳道的并发上限就是这条连接的会话上限（MySQL 声明 4）。同步跑到一半时，
+/// 监控面板轮询、表数据页签、展开库的行数回填会把那几条占住几十秒；结构读取排队
+/// 满 30 秒（`agent_driver::METADATA_POOL_WAIT`）就报「等待可用连接超时」，
+/// 于是一张**毫无问题**的表被判失败（真机截图：400 对象的任务里红字满屏，
+/// 而数据搬运本身一直是 36k 行/s 正常跑）。
+///
+/// 占位者通常只持续几秒，所以这里只对**这一种**错误重试（间隔 1s / 3s，共 3 轮）；
+/// 表不存在、没权限、链路断这些错误立刻原样上抛 —— 对它们重试只会拖慢任务、
+/// 还会把「真实报错」淹掉（那正是上一版要修的东西）。
+async fn columns_of_retry(
+    state: &AppState,
+    side: &Side,
+    table: &str,
+) -> XResult<Vec<ColumnDetail>> {
+    /// 每一轮重试前的等待（第一轮不等待）。最后一次失败就当真空闲不下来，如实报错。
+    const RETRY_WAIT_MS: [u64; 3] = [0, 1_000, 3_000];
+    let mut last: Option<XError> = None;
+    for (round, wait_ms) in RETRY_WAIT_MS.iter().enumerate() {
+        if *wait_ms > 0 {
+            tracing::debug!(
+                target: "dbmind::sync",
+                table,
+                round,
+                "取源表结构的会话槽位被占满，稍后重试"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(*wait_ms)).await;
+        }
+        match columns_of(state, side, table).await {
+            Ok(columns) => return Ok(columns),
+            // 「等待可用连接超时」是会话池自己的排队超时（不是数据库的错误），
+            // 换个时刻通常就能拿到位置；其余错误立刻结束，不做无意义的等待。
+            Err(err) if err.message.contains("等待可用连接超时") => last = Some(err),
+            Err(err) => return Err(err),
+        }
+    }
+    Err(last.unwrap_or_else(|| XError::internal("取源表结构失败：重试耗尽")))
+}
+
 /// 数据同步/对比的默认会话亲和键（读页、事务控制、串行写都落在这条泳道上）。
 pub(crate) const SESSION_SYNC: &str = "internal:browse";
 
@@ -4344,7 +4386,7 @@ async fn sync_table_inner(
     // 走，每一步只打一条（详见 transfer/engine.rs 里后三步）。这里不先打「开始」——
     // 它和下一步之间没有信息量，只会让每张表多一行。
     tracing::debug!(table, "读取结构");
-    let source_columns = match columns_of(state, src, table).await {
+    let source_columns = match columns_of_retry(state, src, table).await {
         Ok(columns) => columns,
         Err(err) => return ObjResult::failed(ty, table, format!("读取源表结构失败：{}", err.message)),
     };

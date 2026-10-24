@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.3.3（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.3.3</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-25</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>新增「并发会话上限」设置（默认 8）：同步搬数据时，取表结构、监控轮询不再排满 30 秒报「等待可用连接超时」</b></li>
+            <li><b>同步取源表结构遇到会话排队超时改为自动重试（1 秒 / 3 秒），不再把本来正常的表判为失败</b></li>
+            <li><b>同步日志的「已写 N 秒，继续等待」带上表名，多表并行时能分清是哪一张在等</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.3.3" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.3.3" target="_blank" rel="noopener">下载 v1.3.3</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.3.2（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.3.2</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-25</span>
           </div>
           <ul class="rel-notes">
