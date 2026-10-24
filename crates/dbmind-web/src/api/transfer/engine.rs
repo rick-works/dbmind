@@ -449,6 +449,8 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     for mut handle in handles {
         let mut seen = consumed.load(Ordering::SeqCst);
         let mut idle_since = std::time::Instant::now();
+        // 探活判死时记下**原始报错**（数据库/驱动的原话），组装失败原因时用
+        let mut probe_err: Option<String> = None;
         let joined = loop {
             match tokio::time::timeout(Duration::from_secs(30), &mut handle).await {
                 Ok(result) => break Some(result),
@@ -464,7 +466,8 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                         // 每页分钟级落库；到后段宽表（大字段/JSON，一页报文上 MB）在丢包链路上
                         // 一页就要十几分钟 —— 按「无进展」直接判死，用户看到的就是「大表前面
                         // 都不报错，越到后面越报『传输协程 11 分钟没有任何进展』」。
-                        if probe_target_confirmed(&plan).await {
+                        let probe = probe_target_confirmed(&plan).await;
+                        if probe.is_ok() {
                             // 链路活着 ⇒ 只是这一页慢，继续等（与 Navicat / DBX 一致）
                             idle_since = std::time::Instant::now();
                             if let Some(task) = &plan.task {
@@ -476,7 +479,9 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                             }
                             continue;
                         }
-                        // 探活也不通 ⇒ 真卡死了：掐掉协程，别让它挂着占连接
+                        // 探活也不通 ⇒ 真卡死了：掐掉协程，别让它挂着占连接。
+                        // 把探活的原始报错留下来（后面组装 failure 时用）。
+                        probe_err = probe.err();
                         handle.abort();
                         break None;
                     }
@@ -486,10 +491,17 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         match joined {
             None => {
                 if failure.is_none() {
-                    failure = Some(format!(
-                        "传输协程 {} 分钟没有任何进展，且目标端探活不通：链路已断，本次同步数据不完整",
-                        PIPE_WAIT.as_secs() / 60
-                    ));
+                    // 探活的原始报错优先（用户口径：要数据库/驱动的原话，不要自造短语）
+                    failure = Some(match probe_err.take() {
+                        Some(why) => format!(
+                            "传输协程 {} 分钟没有任何进展，且目标端探活失败：{why}",
+                            PIPE_WAIT.as_secs() / 60
+                        ),
+                        None => format!(
+                            "传输协程 {} 分钟没有任何进展，且目标端探活不通：链路已断，本次同步数据不完整",
+                            PIPE_WAIT.as_secs() / 60
+                        ),
+                    });
                 }
             }
             Some(Ok(Ok(()))) => {}
@@ -1057,12 +1069,9 @@ async fn read_page(
         // 10 分钟的语句超时，界面上就是「读数字一动不动」。一页正常 5 秒内，60 秒足够。
         match tokio::time::timeout(hard_limit, reader.page(range, cursor.clone()))
             .await
-            .map_err(|_| {
-                format!(
-                    "读取一页 {} 秒未返回（源端连接可能已半开 / socketTimeout=0）",
-                    hard_limit.as_secs()
-                )
-            })
+            // 只说事实：本地等满了，源端没回话。**不猜原因**（「可能半开」「socketTimeout=0」
+            // 这类猜测会把人带偏 —— 真机上更常见的是结果集太大、链路在重传）。
+            .map_err(|_| format!("读取一页超过 {} 秒未返回", hard_limit.as_secs()))
             .and_then(|result| result)
         {
             Ok(page) => return Ok(page),
@@ -1117,7 +1126,10 @@ where
     let mut last_note = started;
     // 探活节流：判断「断没断」是 30 秒一次的 select 1；软阈值只比较本地时钟，2 秒一次
     let mut last_probe = started;
-    let link_broken = |elapsed: Duration| format!("{label}超时 {} 秒", elapsed.as_secs());
+    // 链路已断：**把数据库/驱动的原话带出来**，不再写「连接不可用」这种自造短语。
+    let link_broken = |elapsed: Duration, why: &str| {
+        format!("{label}超过 {} 秒未返回：{why}", elapsed.as_secs())
+    };
     tokio::pin!(pending);
     loop {
         tokio::select! {
@@ -1125,21 +1137,24 @@ where
             _ = tokio::time::sleep(SLOW_CHECK_TICK) => {
                 let elapsed = started.elapsed();
                 if elapsed >= soft_limit {
-                    // 到软阈值先复核链路：真断了就按「链路已断」报（让整个任务停一会儿）
-                    if !probe_target_confirmed(plan).await {
-                        return Err((link_broken(elapsed), true));
+                    // 到软阈值先复核链路：真断了就按「链路已断」报（让整个任务停一会儿），
+                    // 原因用探活的原始报错。
+                    if let Err(why) = probe_target_confirmed(plan).await {
+                        return Err((link_broken(elapsed, &why), true));
                     }
-                    // 探活正常 ⇒ 不是链路问题，是目标端写不动（IO 饱和 / 长事务 / 刷盘 / 锁等待）。
-                    // 日志只报「超时多少秒」这一件事实：行数、页大小、上限、是否探活通过
-                    // 一律不写（用户口径：这些内部量他没法用，也不想知道）。
-                    let text = format!("{label}超时 {} 秒", elapsed.as_secs());
+                    // 探活正常 ⇒ 目标端确实还在跑、只是慢。这里**没有任何数据库报错可引用**，
+                    // 所以只说事实，不编原因（行数、页大小、报文上限都是内部量，一律不写）。
+                    let text = format!(
+                        "{label}超过 {} 秒未返回（目标端探活正常、未返回错误，语句可能仍在执行）",
+                        elapsed.as_secs()
+                    );
                     return Err((text, false));
                 }
                 // 定期探活：只为判断「断没断」（不做软阈值判断，那个上面已经按 2 秒精度看过）
                 if last_probe.elapsed() >= BATCH_PROBE_TICK {
                     last_probe = std::time::Instant::now();
-                    if !probe_target_confirmed(plan).await {
-                        return Err((link_broken(elapsed), true));
+                    if let Err(why) = probe_target_confirmed(plan).await {
+                        return Err((link_broken(elapsed, &why), true));
                     }
                     // 卡住期间在界面上留个脚印（每 2 分钟一条，不刷屏）
                     if elapsed.as_secs() >= 60 && last_note.elapsed() >= Duration::from_secs(120) {
@@ -1191,15 +1206,14 @@ async fn write_rows(
     // 掐不断的方言保持旧语义（探活通就一直等），不引入更坏的结果。
     let target_spec = super::plugins::spec_data_for(ctx.plan.target_kind.kind.key());
     let stall = if target_spec.has_kill() {
-        // **第一页就卡住**是「目标端/链路此刻有问题」的强信号（真机后期几乎每张表都是
-        // 第一页卡满 601 秒，而前期几百万行的表都不卡 —— 卡的从来不是行数，是时刻）。
-        // 这时没必要陪它等 60~180 秒，30 秒就换连接重试，让任务尽快回到正常节奏。
-        let base = ctx.plan.diag.slow_batch_limit(rows.len());
-        if ctx.plan.diag.batches_done.load(Ordering::Relaxed) == 0 {
-            base.min(Duration::from_secs(30))
-        } else {
-            base
-        }
+        // 60~180 秒（按历史最慢值 × 4 与行数估的悲观耗时取大），见 `slow_batch_limit`。
+        //
+        // **曾经这里对「第一页」额外压到 30 秒**（理由是「第一页就卡住 = 目标端此刻有问题」），
+        // 真机上反而把「正常但慢的第一页」全判成了超时：目标端并发写时第一页（往往是最宽的
+        // 一页）30 秒根本写不完，界面上就是「几乎每张表都报写入超时 30 秒」。
+        // 而且用户看到的是 30 秒，跟界面「超时时间 = 继承连接（600 秒）」完全对不上 ——
+        // 同一个界面上有两个互相矛盾的"超时"，谁也解释不清。所以这个特例删掉。
+        ctx.plan.diag.slow_batch_limit(rows.len())
     } else {
         Duration::from_secs(86_400)
     };
@@ -1276,21 +1290,28 @@ async fn write_rows(
 
 /// 目标端探活：**另开一条会话**跑 `select 1`，5 秒不回就算不通。
 ///
-/// `false` = 连一条最简单的查询都回不来 ⇒ 这不是「某条连接半开」，而是链路/目标整体
-/// 不可用。调用方据此让整个任务退避（见 [`LINK_HOLD_MS`]），而不是几百张表各自重连。
+/// 返回 `Err(原话)`：判「断」时日志里必须出现**数据库/驱动的原话**。以前只回 `bool`，
+/// 界面就只能写自己编的「写入超时 30 秒（连接不可用）」—— 用户口径：不要翻译过的错误，
+/// 要真实报错（`Communications link failure` / `Access denied` / 锁等待超时…）。
 ///
 /// 会话名按表隔离（`internal:sync-probe{sid}`）：内核的会话泳道是「同键一条物理连接」，
 /// 全任务共用一个键时所有探活会排队，链路真挂的时候反而互相拖住。
-async fn probe_target(plan: &TablePlan) -> bool {
+async fn probe_target(plan: &TablePlan) -> Result<(), String> {
     let session = format!("internal:sync-probe{}", plan.sid);
-    matches!(
-        tokio::time::timeout(
-            PROBE_TIMEOUT,
-            crate::api::sync::run_target_in(&plan.state, &plan.tgt_target, "select 1", &session),
-        )
-        .await,
-        Ok(Ok(_))
+    match tokio::time::timeout(
+        PROBE_TIMEOUT,
+        crate::api::sync::run_target_in(&plan.state, &plan.tgt_target, "select 1", &session),
     )
+    .await
+    {
+        Ok(Ok(_)) => Ok(()),
+        // 驱动/数据库的原话，原样上抛
+        Ok(Err(err)) => Err(err.message),
+        Err(_) => Err(format!(
+            "探活 select 1 超过 {} 秒未返回",
+            PROBE_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 /// 判活 + **一次复核**：判「断」是要付代价的（回滚一段、换连接重跑），
@@ -1298,12 +1319,20 @@ async fn probe_target(plan: &TablePlan) -> bool {
 ///
 /// 第一次不通就隔 1 秒再探一次，两次都不通才算真断；
 /// 单次抖动最多多花 `PROBE_TIMEOUT + 1 秒`，换的是「不会白回滚」。
-async fn probe_target_confirmed(plan: &TablePlan) -> bool {
-    if probe_target(plan).await {
-        return true;
-    }
+/// 两次的错误原文都带回给调用方（两次不同就都列出来，差异本身就是线索）。
+async fn probe_target_confirmed(plan: &TablePlan) -> Result<(), String> {
+    let first = match probe_target(plan).await {
+        Ok(()) => return Ok(()),
+        Err(why) => why,
+    };
     tokio::time::sleep(Duration::from_secs(1)).await;
-    probe_target(plan).await
+    probe_target(plan).await.map_err(|second| {
+        if first == second {
+            first
+        } else {
+            format!("{first}；复核：{second}")
+        }
+    })
 }
 
 /// 原子地领取行数上限配额：`consumed` 永远不会被推到 `limit` 之后。

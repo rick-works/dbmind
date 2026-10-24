@@ -340,7 +340,9 @@ impl Writer for SqlWriter {
             {
                 Ok(Ok(_)) => Ok(()),
                 Ok(Err(err)) => Err(err.message),
-                Err(_) => Err("开事务 30 秒未返回（连接不可用）".to_string()),
+                // 只说事实：本地等满了、库没回话。不写「连接不可用」这种自造结论 ——
+                // 真因可能是建连慢、目标端 accept 排队、或链路在重传，日志里让人自己去判断。
+                Err(_) => Err("开启事务超过 30 秒未返回".to_string()),
             };
             match opened {
                 Ok(()) => {
