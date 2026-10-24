@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.3.1（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.3.1</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-25</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步不再有自算的超时</b>：慢语句只按界面「超时时间」判定，探活通过就一直等（Navicat / DBX 的行为），日志里给的是数据库原话，不再出现我们自造的「写入中断」「连接半开」</li>
+            <li><b>「限速」两个输入框不再显示 0：不限制时显示「不限制」，颜色与正文一致，不再像没填</b></li>
+            <li><b>同步的写会话在事务中不再被会话配额回收（以前批与批的空档可能被关掉，几万行随事务回滚、任务却算成功）；万一撞上「会话不存在」，现在会自动重连并整表重跑，而不是把这张表判失败</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.3.1" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.3.1" target="_blank" rel="noopener">下载 v1.3.1</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.3.0（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.3.0</span>
             <span class="rel-tag tag-minor">小版本</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-25</span>
           </div>
           <ul class="rel-notes">

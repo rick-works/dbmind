@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.3.1": [
+    "Sync no longer invents its own timeouts: a slow statement is judged only by the timeout you pick in the dialog, a passing liveness probe keeps waiting (what Navicat / DBX do), and the log quotes the database verbatim instead of our own \"write interrupted / half-open connection\" wording",
+    "The two rate-limit boxes no longer show a literal 0: an unlimited rate reads \"Unlimited\" in the normal text colour instead of looking like an empty field",
+    "A write session holding an open transaction is no longer reclaimed by the session quota (between batches it looked idle, and being closed rolled back tens of thousands of rows while the task still counted them as written); if it ever hits \"session not found\", that table now reconnects and runs again from the start instead of being failed"
+  ],
   "v1.3.0": [
     "Fixed sync skipping rows and reporting duplicate keys: the first page read from the source had no ORDER BY, so its last row was not the maximum key — later pages either never reached the rows below it (missing rows) or re-inserted rows already written (Duplicate entry on the target). A 58k-row table that used to move only half now finishes 58,686 rows with 0 failures",
     "Sync dialog rebuilt: options now sit in four tabs (settings / table renaming / pre- and post-SQL / row filter), sync mode merges \"how to treat existing target objects\" with \"how data is written\", and target tables can be renamed one-to-one, filtered by a WHERE clause, or wrapped in pre/post SQL",
