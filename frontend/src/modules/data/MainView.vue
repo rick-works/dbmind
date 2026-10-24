@@ -550,7 +550,8 @@
     <el-table-column :label="$t('ts.kind')" width="80" align="center" header-align="center">
       <template #default="{ row }"><span class="bg-kind" :class="bgKindClass(row.kind)">{{ bgKindLabel(row.kind) }}</span></template>
     </el-table-column>
-    <el-table-column prop="title" :label="$t('ts.task')" min-width="170" show-overflow-tooltip align="center" header-align="center" />
+    <!-- 「任务」列带连接名（`源连接 / 库 → 目标连接 / 库`）：只写库名时同名库分不清是哪两个实例 -->
+    <el-table-column prop="title" :label="$t('ts.task')" min-width="260" show-overflow-tooltip align="center" header-align="center" />
     <el-table-column :label="$t('ts.status')" width="90" show-overflow-tooltip align="center" header-align="center">
       <template #default="{ row }"><span class="bg-dot bg-dot-inline" :class="bgStatusOf(row.id)"></span>{{ bgStateShort(row.id) }}</template>
     </el-table-column>

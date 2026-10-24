@@ -742,7 +742,10 @@ watch(() => props.modelValue, async (open) => {
 
 /* 向导 */
 .gen-steps { margin: 0 0 14px; flex-shrink: 0; }
-.gen-steps :deep(.el-step__title) { font-size: 14px; }
+/* 步骤条：未走到的小一档，当前/已完成加粗 —— 与其它弹窗同一套层级 */
+.gen-steps :deep(.el-step__title) { font-size: var(--dlg-sm, 12px); }
+.gen-steps :deep(.el-step__title.is-process),
+.gen-steps :deep(.el-step__title.is-success) { font-size: var(--dlg-body, 14px); font-weight: 700; }
 /* 弹窗外壳（宽度/高度上限/body 撑满）见文件末尾的非 scoped 样式块 */
 .gen-body {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 4px;
@@ -750,7 +753,7 @@ watch(() => props.modelValue, async (open) => {
 
 /* 通用块 */
 .step-subtitle {
-  font-size: 14px; font-weight: 600; color: var(--dc-text-strong);
+  font-size: var(--dlg-h2, 15px); font-weight: 700; color: var(--dc-text-strong);
   margin: 4px 0 8px; padding-left: 9px; border-left: 3px solid var(--dc-primary);
 }
 .step-card {
@@ -772,8 +775,8 @@ watch(() => props.modelValue, async (open) => {
 
 .section-head { display: flex; align-items: center; gap: 10px; margin: 4px 0 8px; }
 .section-head .section-title { flex-shrink: 0; }
-.section-title { font-size: 14px; font-weight: 600; color: var(--dc-text-strong); }
-.section-tip { font-size: 13px; color: var(--dc-text-weak); flex: 1; line-height: 1.5; }
+.section-title { font-size: var(--dlg-h2, 15px); font-weight: 700; color: var(--dc-text-strong); }
+.section-tip { font-size: var(--dlg-sm, 12px); color: var(--dc-text-weak); flex: 1; line-height: 1.5; }
 
 /* 字段规则表 */
 .rule-table :deep(.el-table__cell) { padding: 4px 0; }

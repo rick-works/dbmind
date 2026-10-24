@@ -232,33 +232,29 @@ impl SqlReader {
                 (Vec::new(), Vec::new())
             }
         };
-        // 一页的**硬上限**：
-        // - 有键表 3 万行（见 [`PAGE_ROWS_MAX_KEYED`]）；
-        // - 无键表仍允许长到 10 万行 —— 它只能 OFFSET 翻页，页小了重扫是 O(N²)，
-        //   大页是它的性能保障。
-        // 任务级「踩坑即收敛」：本任务里已经出现过「目标端写入卡住」时，`grow`
-        // 会把 page_cap_hint 压到 1 万，后面开工的表**直接从小的起步**，不再各撞一次。
-        // 真机现象正是「后期几乎每张表都卡 601 秒」—— 每张表都在重新踩同一个坑。
-        // **有键表：一页 = 界面「每批条数」**（0 = 按目标方言默认：MySQL 1000 /
+        // 一页的**硬上限**：统一等于界面「每批条数」（0 = 按目标方言默认：MySQL 1000 /
         // ClickHouse 1 万 / 文件库 5000），夹在 [1000, 1 万]。
         // 这样「一批」= 一页 = 一个事务（见 `engine::txn_rows_cap`），用户只需理解一个词：
-        // 日志里的「一页 N 条」「写入一条 INSERT」都对得上「每批条数」。
-        // 无键表例外：它只能 OFFSET 翻页，页小了重扫是 O(N²)，保持大页。
+        // 日志里「写入 N 行」的 N 就是他填的「每批条数」，不会再冒出个对不上的数。
+        //
+        // **无键表也用同一个上限**（以前给它开到 10 万）。理由：无键表本来就要按 OFFSET
+        // 逐页扫，页大省下的只是**往返次数**，扫描总量一样是 O(N²)；而大页换来的是
+        // 「一页 1 万行写 31 秒」这种与用户配置对不上的日志（用户口径：我配了每批 1000，
+        // 为什么日志说 1 万），以及一卡就白等整页。无键表的吞吐保障另有其人 ——
+        // 行窗口分片（见 `window` 那套）+ OFFSET 续跑（`SegmentOutcome::PausedAt`）。
+        // 任务级「踩坑即收敛」仍然生效：`grow` 会把 page_cap_hint 压到 1 万，后面开工的表
+        // 直接从更小的页起步，不再各撞一次。
         let batch_rows = if plan.insert_rows > 0 {
             plan.insert_rows
         } else {
             crate::api::sync::insert_rows_default(plan.target_kind.kind.key())
         };
-        let keyed_cap = if paging_keys.is_empty() {
-            PAGE_ROWS_MAX
-        } else {
-            batch_rows.clamp(PAGE_ROWS_MIN, PAGE_ROWS_MAX_KEYED)
-        };
+        let page_cap = batch_rows.clamp(PAGE_ROWS_MIN, PAGE_ROWS_MAX_KEYED);
         let page_hint = plan.grow.as_ref().map(|grow| grow.page_cap_hint()).unwrap_or(0);
         let rows_cap = fixed_page.unwrap_or(if page_hint > 0 {
-            keyed_cap.min(page_hint)
+            page_cap.min(page_hint)
         } else {
-            keyed_cap
+            page_cap
         });
         // 尾部弹性扩片的上限：方言声明的读并发（单连接池的库 = 1，多开只会在池里排队）。
         // 调优逃生阀优先；下限是本次分到的份额，避免「cap 比声明还大」时反而被压小。
@@ -540,6 +536,9 @@ impl Reader for SqlReader {
                 self.dialect,
                 offset,
                 cursor_arg,
+                // 首页没有游标，但**排序键必须在**：不排序 → 「最后一行」不是最大值 →
+                // 下一页的 keyset 从错误位置开始（漏行 + 主键冲突）。见 `page_sql`。
+                self.paging_keys.as_slice(),
                 &extra,
                 fetch_rows as u64,
                 &session,

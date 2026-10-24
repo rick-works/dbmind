@@ -247,7 +247,8 @@ const nowTime = () => {
 
 .import-body { padding: 8px 0 4px; }
 .import-section + .import-section { margin-top: 24px; }
-.import-label { font-size: 14px; font-weight: 600; color: var(--dc-text-strong); margin-bottom: 10px; }
+/* 区块标题走弹窗统一层级（15/700），说明文字小两档（12）—— 与数据传输/数据对比一致 */
+.import-label { font-size: var(--dlg-h2, 15px); font-weight: 700; color: var(--dc-text-strong); margin-bottom: 10px; }
 .import-required { color: var(--dc-danger); margin-right: 2px; }
 
 .import-uploader { width: 100%; }
@@ -260,8 +261,8 @@ const nowTime = () => {
   border-color: var(--dc-primary); background: var(--dc-primary-wash);
 }
 .import-uploader-icon { color: var(--dc-primary); }
-.import-uploader-title { font-size: 14px; color: var(--dc-text-strong); font-weight: 500; }
-.import-uploader-sub { font-size: 13px; color: var(--dc-text-weak); }
+.import-uploader-title { font-size: var(--dlg-h2, 15px); color: var(--dc-text-strong); font-weight: 600; }
+.import-uploader-sub { font-size: var(--dlg-sm, 12px); color: var(--dc-text-weak); }
 
 .import-file-card {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -271,7 +272,7 @@ const nowTime = () => {
 .import-file-info { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
 .import-file-meta { min-width: 0; }
 .import-file-name { font-size: 14px; color: var(--dc-text-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.import-file-size { font-size: 13px; color: var(--dc-text-weak); margin-top: 2px; }
+.import-file-size { font-size: var(--dlg-sm, 12px); color: var(--dc-text-weak); margin-top: 2px; }
 
 .import-mode-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .import-mode-item {

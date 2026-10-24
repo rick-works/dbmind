@@ -94,6 +94,8 @@ import { resetShortcutCache } from './utils/shortcuts'
 import { installExternalLinkHandler } from './utils/externalLinks'
 // 功能性弹窗（el-dialog）统一装"拖右下角改大小"手柄，消息弹窗不装
 import { installDialogResize } from './utils/dialogResize'
+// 功能性弹窗统一装「右上角全屏 / 还原」按钮，消息弹窗与窄弹窗不装
+import { installDialogMaximize } from './utils/dialogMaximize'
 
 // 清理历史遗留的浏览器存储键。
 //
@@ -249,6 +251,8 @@ installExternalLinkHandler()
 applyAppearance()
 // 功能性弹窗统一支持"拖右下角改大小"（消息弹窗不参与）；挂载前装好，首个弹窗出现即可用
 installDialogResize()
+// 功能性弹窗统一支持「右上角全屏 / 还原」（消息弹窗、窄弹窗不参与）
+installDialogMaximize()
 
 app.mount('#app')
 hydrateUIFromBackend()

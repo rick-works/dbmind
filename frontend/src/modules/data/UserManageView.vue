@@ -5,11 +5,15 @@
          （用户要求去掉）。页签名由下面的「用户管理 / 角色管理」两个页签承担。 -->
     <div class="um-head">
       <el-select v-model="selId" size="small" class="um-conn" filterable clearable
+                 popper-class="conn-opt-popper"
                  :placeholder="$t('um.pickConn')" @change="onConnChange">
-        <el-option v-for="c in conns" :key="c.id" :label="c.name" :value="String(c.id)">
-          <span class="um-opt-name">{{ c.name }}</span>
-          <span class="um-opt-type">{{ typeLabel(c.type) }}</span>
-        </el-option>
+        <!-- 连接按分组列出（分组名 = 左侧对象树的目录名），和数据传输 / 数据对比同一口径 -->
+        <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
+          <el-option v-for="c in g.options" :key="c.id" :label="c.name" :value="String(c.id)">
+            <span class="um-opt-name">{{ c.name }}</span>
+            <span class="um-opt-type">{{ typeLabel(c.type) }}</span>
+          </el-option>
+        </el-option-group>
       </el-select>
 
       <el-button size="small" :icon="Refresh" :loading="loading" @click="reload">{{ $t('common.refresh') }}</el-button>
@@ -218,6 +222,7 @@ import { errParts } from '../../utils/errMsg'
 import { isNoSql as isNoSqlType } from '../../types'
 // 只读 / 生产保护的前置闸门（与 MainView 的 guardWrite 同一口径，见 utils/connGuard.js）
 import { guardConnWrite, isProdConn, loadProtectProd } from '../../utils/connGuard'
+import { groupConnections } from '../../utils/connGroups'
 
 const props = defineProps({
   // 左侧当前选中的**连接**：跟随它（用户在左边选了连接，这里自动带出来）。
@@ -232,6 +237,8 @@ const emit = defineEmits(['open-form', 'open-role'])
 // 与 H2 / SQLite 这些关系型完全同一套空态 —— 不在下拉里做区分）
 const allConns = ref([])
 const conns = computed(() => allConns.value)
+/** 连接下拉按分组列出（分组名 = 左侧对象树的目录名，见 utils/connGroups） */
+const connGroups = computed(() => groupConnections(conns.value))
 const selId = ref('')
 const rows = ref([])
 const features = ref({})

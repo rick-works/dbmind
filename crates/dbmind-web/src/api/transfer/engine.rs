@@ -39,20 +39,13 @@ use dbmind_core::CellValue;
 
 use super::reader::Cursor;
 use super::{reader_for, writer_for, Page, RowRange, Stats, TablePlan, UpsertMode};
-use crate::api::sync::{is_link_level_message, key_of, lookup_existing_keys};
+use crate::api::sync::{estimate_row_bytes, key_of, lookup_existing_keys};
 
 /// 单页失败后的重试次数（退避 150ms / 300ms / 600ms）。
 ///
 /// 只对**读**做重试：读是幂等的，重试没有副作用；写不做整批重试（一条语句可能已经
 /// 落了一半），而是交给写入层的「语句失败 → 二分拆批定位坏行」兜住。
 const READ_RETRY: usize = 3;
-
-/// 一片最多重跑几次（片级回滚后重跑，不重复不丢）。
-///
-/// 片级重跑很便宜（一片 = 1/N 张表），所以给 3 次：链路在尾部常常「连断两次」——
-/// 代理会成批回收空闲会话，重连后第一条语句又撞上另一条死连接。3 次之后仍断，
-/// 才判定这一片真的搬不上去。
-const SLICE_RETRY: usize = 3;
 
 /// 收尾等待上限（与 sync 层一致：给慢批留足时间，避免把还在写的数据判死）
 const PIPE_WAIT: Duration = Duration::from_secs(660);
@@ -77,6 +70,20 @@ const PREFETCH_GRACE: Duration = Duration::from_secs(2);
 /// 不允许「读还在飞的时候又发下一条」。
 fn prefetch_enabled() -> bool {
     std::env::var_os("DBMIND_SYNC_NO_PREFETCH").is_none()
+}
+
+/// 段末预取页**交接**开关（`DBMIND_SYNC_CARRY=0` 关掉，见 [`CarriedPage`]）。
+///
+/// 与 [`prefetch_enabled`] 一样留个开关：A/B 对照时可以用同一份二进制分别跑
+/// 「交接 / 丢弃」两种行为。
+fn carry_enabled() -> bool {
+    std::env::var("DBMIND_SYNC_CARRY")
+        .map(|value| {
+            !(value.trim() == "0"
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off"))
+        })
+        .unwrap_or(true)
 }
 
 /// 写批次多久做一次判活（`select 1` 另开会话）。
@@ -545,7 +552,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
             task.log(format!(
                 "表 {}：传输完成，共 {}，耗时 {}",
                 plan.table,
-                super::万行(done_rows),
+                super::行数(done_rows),
                 super::时长(total_ms),
             ));
             tracing::debug!(
@@ -620,8 +627,12 @@ fn txn_rows_cap(batch_rows: u64) -> u64 {
 /// 一段搬运的结果：整块读完了，还是「事务到量先提交，剩下的接着搬」。
 enum SegmentOutcome {
     Finished,
-    /// 本段已提交，返回最后一行**完整键**（下一段从它之后开始）
-    Paused(Vec<CellValue>),
+    /// 本段已提交，返回最后一行**完整键**（下一段从它之后开始）；
+    /// `next_page` 是**已经飞出去**的下一页预取（见 [`CarriedPage`]）。
+    Paused {
+        last_key: Vec<CellValue>,
+        next_page: Option<tokio::task::JoinHandle<Result<Page, String>>>,
+    },
     /// 本段已提交，返回**下一行的绝对行号**（无键表按 OFFSET 续跑）。
     ///
     /// 无键表没有键值可以比较，但 `limit n offset m` 的 `m` 本身就是游标：本段提交后
@@ -631,7 +642,40 @@ enum SegmentOutcome {
     ///
     /// 精确性的前提是**源表在同步期间行序不变**（与窗口分片同一个前提）。若源表边写边搬，
     /// OFFSET 会随行序漂移，可能漏行 —— 由收尾的逐表 `count(*)` 对账兜底（不一致清空重传）。
-    PausedAt(u64),
+    PausedAt {
+        next_offset: u64,
+        next_page: Option<tokio::task::JoinHandle<Result<Page, String>>>,
+    },
+}
+
+/// 段末的预取页要**交给下一段**，不能丢。
+///
+/// 为什么（真机 `xingwei_sales_vice` 的日志）：事务粒度 = 一页（`txn_rows_cap` = 界面
+/// 「每批条数」= 1000，页大小也就被夹在 1000），于是**每页正好是一个段** —— 段末必然
+/// 命中 `txn_cap` 当场 `break`，那条已经飞出去（甚至已经读回）的下一页预取被直接丢弃，
+/// 下一段再从**同一个游标**重读一遍。132 条分页 SQL 里 66 条是白读的：
+/// 日志里成对出现「游标完全相同」的请求，一半的 offset 是上一段残留的 1000
+/// （续跑段首屏的 offset 恒为 0 —— 看到这个差值就是预取页被丢了）。
+///
+/// 代价不只是多一层往返：读侧流量直接翻倍，而预取**本来该省的**「读 N+1 与写 N 重叠」
+/// 一点没省下（写完 N 就丢 N+1）。把句柄交给下一段、在其首轮直接 await，等于连提交
+/// 那段时间也一起重叠掉，一次读只算一次。
+#[allow(clippy::type_complexity)]
+type CarriedPage = Option<tokio::task::JoinHandle<Result<Page, String>>>;
+
+/// 本段最终失败时，交接出去的预取已经没人接手：直接掐掉。
+///
+/// 等价于段末清理里的「读不完就 abort」—— 直接 drop 句柄等于把协程 detach 掉，
+/// 它会继续把结果集读完再丢弃，源端会话上挂着一个没人要的长结果集。
+fn abort_carried(paused: Option<SegmentOutcome>) {
+    let handle = match paused {
+        Some(SegmentOutcome::Paused { next_page, .. }) => next_page,
+        Some(SegmentOutcome::PausedAt { next_page, .. }) => next_page,
+        _ => None,
+    };
+    if let Some(handle) = handle {
+        handle.abort();
+    }
 }
 
 /// 搬运**一片**：片内按 [`txn_rows_cap`]（= 一批 = 一页）分成多个事务，段与段之间不重不漏
@@ -643,6 +687,9 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
     let cap = txn_rows_cap(ctx.reader.commit_rows());
     let mut low = range.low.clone();
     let mut cursor: Option<Cursor> = None;
+    // 上一段提交时**已经飞出去**的下一页预取（见 [`CarriedPage`]）：交给下一段当首屏，
+    // 丢一次就等于同一游标白读一遍。
+    let mut carried: CarriedPage = None;
     // 无键表按事务提交后要续跑，每段一条日志会把「同步日志」刷成流水账：
     // 只报第一次与之后每 10 次，进度本身由进度卡承担。
     let mut pauses: u32 = 0;
@@ -653,9 +700,9 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
             high: range.high.clone(),
             window: range.window,
         };
-        match run_segment(ctx.clone(), worker, segment, cursor.clone(), cap).await? {
+        match run_segment(ctx.clone(), worker, segment, cursor.clone(), carried.take(), cap).await? {
             SegmentOutcome::Finished => return Ok(()),
-            SegmentOutcome::Paused(last_key) => {
+            SegmentOutcome::Paused { last_key, next_page } => {
                 // 区间左界用**首列**（`k1 >= 该值`），首屏游标用**完整键**（`(k1,k2) > 该键`）：
                 // 两个条件 AND 在一起正好是「这一行之后」，边界行不会被搬两遍。
                 low = last_key.first().cloned();
@@ -663,8 +710,9 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
                     key: Some(last_key),
                     offset: 0,
                 });
+                carried = next_page;
             }
-            SegmentOutcome::PausedAt(next_offset) => {
+            SegmentOutcome::PausedAt { next_offset, next_page } => {
                 // 无键表：`low` 一直是 None（没有键可以抬左界），位置全交给 OFFSET。
                 // 段的行号上界仍由 `range.window` 管着，续跑不会越界读到下一段。
                 pauses += 1;
@@ -679,27 +727,31 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
                     key: None,
                     offset: next_offset,
                 });
+                carried = next_page;
             }
         }
     }
 }
 
 /// 搬运**一段**：段内串行读写、一个事务；链路级失败回滚并重跑该段。
+///
+/// `start_page` 是上一段（已提交）交接过来的**首屏预取**：有就直接用，不再重读一遍。
+/// 只在**第一次尝试**用得上 —— 失败重试必须从 `start_cursor` 老老实实重读（那一页的行
+/// 可能已经跟着回滚一起丢了）。
 async fn run_segment(
     ctx: Arc<SliceCtx>,
     worker: usize,
     range: RowRange,
     start_cursor: Option<Cursor>,
+    mut start_page: CarriedPage,
     txn_cap: u64,
 ) -> Result<SegmentOutcome, String> {
     let plan = ctx.plan.clone();
-    let mut attempt = 0usize;
     loop {
         // 本次尝试的计数：失败回滚时要从全局里扣回，否则 failed = 读 - 写 会虚高
         let mut try_inserted = 0u64;
         let mut try_updated = 0u64;
         let mut try_consumed = 0u64;
-        let mut canceled = false;
         // 重试要从这一段的**起点**重读（本段已回滚，不会重复）
         let mut cursor = start_cursor.clone();
         let mut failure: Option<String> = None;
@@ -727,7 +779,9 @@ async fn run_segment(
                 .as_ref()
                 .map(|caps| caps.active() <= 1)
                 .unwrap_or(true);
-        let mut prefetch: Option<tokio::task::JoinHandle<Result<Page, String>>> = None;
+        // 首屏：上一段交接过来的预取页（`start_page` 只在第一次尝试有值）。
+        // 它和本段的「下一页预取」是同一种东西 —— 首轮直接 await，不必再发一次读。
+        let mut prefetch: CarriedPage = start_page.take();
         loop {
             if plan
                 .task
@@ -735,7 +789,6 @@ async fn run_segment(
                 .map(|t| t.is_canceled())
                 .unwrap_or(false)
             {
-                canceled = true;
                 break;
             }
             let read_started = std::time::Instant::now();
@@ -799,6 +852,11 @@ async fn run_segment(
                 try_consumed += allowed;
 
                 if let Some(task) = &plan.task {
+                    // 字节数与行数同步累加：进度卡的「速度」是「行/秒 · MB/s」，
+                    // 只记行数那半截永远是 0.0 MB/s（真机截图）。口径与读侧分页的
+                    // `estimate_row_bytes` 完全一致，两个数字互相印证。
+                    let page_bytes: usize = rows.iter().map(|row| estimate_row_bytes(row)).sum();
+                    task.add_bytes_read(page_bytes as u64);
                     task.add_rows_read(allowed);
                     // 只报「执行到哪一步」，行数在进度卡上平滑递增 —— 每页都写会刷屏
                     if last_report.elapsed() >= PROGRESS_INTERVAL {
@@ -877,12 +935,21 @@ async fn run_segment(
                 // （从下一行的行号）。都能「提交后接着读」，所以无键表也照常拆段 ——
                 // 过去它只能一个事务跑到底，断一次就整段重扫。
                 if let Some(next_cursor) = next.as_ref() {
+                    // 下一页的读（`prefetch`）已经飞出去了、游标就是 `next`：连同句柄一起
+                    // 交给下一段，别丢（丢了下一段就从同一游标再读一遍，见 [`CarriedPage`]）。
+                    let carried = if carry_enabled() { prefetch.take() } else { None };
                     if let Some(key) = next_cursor.key.clone() {
-                        paused = Some(SegmentOutcome::Paused(key));
+                        paused = Some(SegmentOutcome::Paused {
+                            last_key: key,
+                            next_page: carried,
+                        });
                         break;
                     }
                     if next_cursor.offset > 0 {
-                        paused = Some(SegmentOutcome::PausedAt(next_cursor.offset));
+                        paused = Some(SegmentOutcome::PausedAt {
+                            next_offset: next_cursor.offset,
+                            next_page: carried,
+                        });
                         break;
                     }
                 }
@@ -900,23 +967,16 @@ async fn run_segment(
         }
 
         if let Some(msg) = failure {
+            // 这一片最终失败：交接出去的预取也不再有人接（下一段不会走），直接掐掉。
+            abort_carried(paused.take());
             // 失败 ⇒ 回滚这一片（**绝不提交**），并把本次尝试的计数扣回，
             // 这样「重跑一片」对总数与行数上限都是透明的一次。
             //
             // 回滚也要有墙钟：半开连接上连 `rollback` 都能挂住，以前这里无限等，
             // 整条同步就此卡死（写批超时反倒白设了）。
-            if tokio::time::timeout(ABORT_CALL_TIMEOUT, ctx.writer.abort(worker))
-                .await
-                .is_err()
-            {
-                if let Some(task) = &plan.task {
-                    task.log(format!(
-                        "表 {}：回滚 {} 秒未返回，连接已弃用（服务端会自行回滚未提交事务）",
-                        plan.table,
-                        ABORT_CALL_TIMEOUT.as_secs()
-                    ));
-                }
-            }
+            // 回滚超时不再单独进界面日志：连接已经不可信（下面 renew 换掉），
+            // 失败原因由对象级统一报一条，过程信息一律不写。
+            let _ = tokio::time::timeout(ABORT_CALL_TIMEOUT, ctx.writer.abort(worker)).await;
             // 不管回滚成不成，这条连接都不可信了：下一次尝试换新连接
             ctx.writer.renew().await;
             ctx.inserted.fetch_sub(try_inserted, Ordering::SeqCst);
@@ -925,44 +985,16 @@ async fn run_segment(
             // 进度上的「已读」**不扣回**：重跑同样要真读一遍，扣回会让数字往回跳
             //（真机反馈「越跳越小」）；写侧当初也没扣，于是两边对不上，
             // 界面出现「传输数 > 读取数」。现在两个计数都按累计工作量单调递增。
-            attempt += 1;
-            let retryable = attempt < SLICE_RETRY
-                && !canceled
-                && !plan.diag.begin_failed.load(Ordering::SeqCst)
-                && is_link_level_message(&msg);
-            if !retryable {
-                return Err(msg);
-            }
-            // 界面日志：第一次把原因说全，之后同类重试只说「又重试了一次」——
-            // 同一段连续重试时把那一长串半开解释重复三遍，会把真正重要的行淹掉
-            //（用户反馈「这种提示一直在刷」）。完整原因每次仍进文件日志。
+            // 段级重跑已关掉（`SLICE_RETRY = 1`）：失败直接上抛，由对象级记一条
+            // 「表 X 失败：<原因>」。完整原因进文件日志，界面不再刷「中断 → 回滚 → 重跑」。
             tracing::warn!(
                 target: "dbmind::sync",
                 table = %plan.table,
                 slice = range.index + 1,
-                attempt,
                 reason = %msg,
-                "写段中断，自动重跑该段"
+                "写段中断"
             );
-            if let Some(task) = &plan.task {
-                if attempt == 1 {
-                    task.log(format!(
-                        "表 {}（片 {}）：写入中断（{msg}）；本段事务已回滚，自动换连接重跑该段\
-                         （第 {attempt}/{SLICE_RETRY} 次，数据会重新写入，无需处理）",
-                        plan.table,
-                        range.index + 1,
-                    ));
-                } else {
-                    task.log(format!(
-                        "表 {}（片 {}）：再次中断，已重跑该段（第 {attempt}/{SLICE_RETRY} 次，无需处理）",
-                        plan.table,
-                        range.index + 1,
-                    ));
-                }
-            }
-            // 退避 1s / 2s：链路真的不行时别把两次尝试挤在同一秒里再撞一次
-            tokio::time::sleep(Duration::from_secs(1u64 << (attempt - 1))).await;
-            continue;
+            return Err(msg);
         }
 
         // 成功（或用户取消）⇒ 先把攒着的 upsert 更新发出去，再提交这一片
@@ -1085,13 +1117,7 @@ where
     let mut last_note = started;
     // 探活节流：判断「断没断」是 30 秒一次的 select 1；软阈值只比较本地时钟，2 秒一次
     let mut last_probe = started;
-    let link_broken = |elapsed: Duration| {
-        format!(
-            "{label} {} 秒未返回，且目标端探活连续两次不通：链路已断（RDS wait_timeout 踢连接 / \
-             链路静默丢包 / 中间设备丢包）",
-            elapsed.as_secs()
-        )
-    };
+    let link_broken = |elapsed: Duration| format!("{label}超时 {} 秒", elapsed.as_secs());
     tokio::pin!(pending);
     loop {
         tokio::select! {
@@ -1104,24 +1130,9 @@ where
                         return Err((link_broken(elapsed), true));
                     }
                     // 探活正常 ⇒ 不是链路问题，是目标端写不动（IO 饱和 / 长事务 / 刷盘 / 锁等待）。
-                    // 顺手把目标端此刻的负载带回去：日志里能直接看出「它在慢慢写」还是「有别的会话在锁」。
-                    let activity = target_activity(plan).await;
-                    let mut text = format!(
-                        "{label} {} 秒仍未完成，判定「目标端写入卡住」（探活正常，不是链路断）：\
-                         已放弃这一页、换新连接重试",
-                        elapsed.as_secs()
-                    );
-                    if let Some(activity) = activity {
-                        text.push_str(&format!("；目标端当前 {activity}"));
-                    }
-                    if elapsed >= hard_limit {
-                        // 用户把「超时时间」调得比自愈阈值还短：按用户的超时语义报（同一件事）
-                        text = format!(
-                            "{label} {} 秒仍未完成（已达「超时时间」上限）：目标端探活通（链路没断），\
-                             但这个动作本身卡住了。可在同步选项里把「超时时间」调大或不限制",
-                            elapsed.as_secs()
-                        );
-                    }
+                    // 日志只报「超时多少秒」这一件事实：行数、页大小、上限、是否探活通过
+                    // 一律不写（用户口径：这些内部量他没法用，也不想知道）。
+                    let text = format!("{label}超时 {} 秒", elapsed.as_secs());
                     return Err((text, false));
                 }
                 // 定期探活：只为判断「断没断」（不做软阈值判断，那个上面已经按 2 秒精度看过）
@@ -1154,43 +1165,6 @@ where
     }
 }
 
-/// 目标端此刻在忙什么（只对 MySQL 系问得到）：把「写不动」量化成一句人话。
-///
-/// 真机上「一页 601 秒」最常见的原因是目标端被 IO 压垮（几百张表并发写 + 建索引），
-/// 而不是链路。查 `information_schema.processlist` 里跑了 ≥5 秒的查询数与最长耗时，
-/// 就能一眼分开「目标端在慢慢写」和「目标端根本没人干活（锁等待/客户端卡住）」。
-///
-/// 诊断**不能影响主流程**：独立会话 + 3 秒超时，任何失败都返回 `None`。
-async fn target_activity(plan: &TablePlan) -> Option<String> {
-    let key = plan.target_kind.kind.key();
-    if !matches!(key, "mysql" | "mariadb" | "doris") {
-        return None;
-    }
-    let sql = "select count(*) as n, coalesce(max(time), 0) as longest \
-               from information_schema.processlist \
-               where command = 'Query' and time >= 5";
-    let session = format!("internal:sync-diag{}", plan.sid);
-    let result = tokio::time::timeout(
-        Duration::from_secs(3),
-        crate::api::sync::run_target_in(&plan.state, &plan.tgt_target, sql, &session),
-    )
-    .await
-    .ok()?
-    .ok()?;
-    let row = result.rows.first()?;
-    let as_i64 = |value: Option<&CellValue>| match value {
-        Some(CellValue::Integer(v)) => *v as i64,
-        Some(CellValue::Real(v)) => *v as i64,
-        _ => 0,
-    };
-    let n = as_i64(row.first());
-    let longest = as_i64(row.get(1));
-    if n <= 0 {
-        return Some("没有正在执行的查询（写入卡在客户端/事务等待，而不是目标端在跑语句）".to_string());
-    }
-    Some(format!("有 {n} 条查询在跑，最长 {longest} 秒（目标端在慢慢写）"))
-}
-
 /// 写一批（探活式等待 + 写速诊断）。
 async fn write_rows(
     ctx: &SliceCtx,
@@ -1215,7 +1189,8 @@ async fn write_rows(
     // 和它的未提交事务还在跑、还持有行锁，掐不断它的话重试会排在自己的锁后面
     //（1 秒阈值注入实测：页从 1 万缩到 1000 行仍然每批都超时，任务彻底不动）。
     // 掐不断的方言保持旧语义（探活通就一直等），不引入更坏的结果。
-    let stall = if matches!(ctx.plan.target_kind.kind.key(), "mysql" | "mariadb") {
+    let target_spec = super::plugins::spec_data_for(ctx.plan.target_kind.kind.key());
+    let stall = if target_spec.has_kill() {
         // **第一页就卡住**是「目标端/链路此刻有问题」的强信号（真机后期几乎每张表都是
         // 第一页卡满 601 秒，而前期几百万行的表都不卡 —— 卡的从来不是行数，是时刻）。
         // 这时没必要陪它等 60~180 秒，30 秒就换连接重试，让任务尽快回到正常节奏。
@@ -1228,15 +1203,24 @@ async fn write_rows(
     } else {
         Duration::from_secs(86_400)
     };
+    // ---- 限速（界面「限速」：行/秒 + MB/秒，两条曲线取更慢的）----
+    //
+    // 放在**发语句之前**：事后补睡的话突发流量已经打到目标库了，限速就只是自欺欺人。
+    // 时间表是全任务共享的（`pacer`），所以多路 writer / 多张表并发的**合计**速率等于
+    // 用户填的值；目标端本来就比限速慢时 `pace` 一行都不睡，不会把任务拖得更慢。
+    if let Some(pacer) = &ctx.plan.pacer {
+        pacer
+            .pace(rows.len() as u64, super::pacer::page_bytes(rows))
+            .await;
+    }
     // 这一批**不再按时间判死**：每 [`BATCH_PROBE_TICK`] 秒探活一次，
     // 通就继续等（慢 ≠ 断），不通才判链路已断 —— 见 `wait_write`。
     let (outcome, timed_out) = match wait_write(
         &ctx.plan,
         started,
-        // 这里的 N 是**一页**（一次读写的批量，自适应 1000~1 万条），不是界面的
-        // 「每批条数」—— 一页会按那个值切成多条 INSERT 发出去。文案必须写「一页」：
-        // 写成「单批」时用户看到「单批 98545 条」会以为自己设的 1000 没生效（真机反馈）。
-        &format!("一页 {} 条写入", rows.len()),
+        // 文案只说「写入超时 N 秒」：行数/页大小/报文上限都是内部量，用户看了只会问
+        // 「为什么是 1 万不是我的 1000」，一个都不往日志里写。
+        "写入",
         stall,
         ctx.writer.write(worker, rows),
     )
@@ -1266,52 +1250,19 @@ async fn write_rows(
             // 只会继续卡；缩到 1/4 再试，单批体量与事务大小一起降下来。
             // 读侧幂等，缩页没有任何副作用（链路恢复后由自适应慢慢涨回去）。
             ctx.reader.shrink_page();
-            let mut text = reason;
-            if killed {
-                text.push_str(
-                    "；已从目标端断开那条卡住的会话（它未提交的行随事务回滚，重试不会撞锁）",
-                );
-            }
-            if new_cap > 0 && new_cap < old_cap {
-                text.push_str(&format!(
-                    "；已弃用该连接，重试的单条语句上限降到 {} KB",
-                    new_cap / 1024
-                ));
-            } else {
-                text.push_str("；已弃用该连接");
-            }
+            // 上面这些动作（掐会话、缩页、换连接、报文上限收敛）照做，但**一个字都不写进日志**：
+            // 用户要的是失败原因本身（`reason` = 「写入超时 31 秒」或数据库原始报错），
+            // 「已断开卡住的会话 / 已换连接重试」这类过程信息只会把真正的原因埋掉。
+            let _ = killed;
+            let _ = (old_cap, new_cap);
             // 链路整体不可用（探活不通）⇒ 让整个任务一起停一会儿：
             // 不这么做的话，几百张表会在同一秒各自换连接、各自回滚一段再各自报错。
             if link_down {
-                match &ctx.plan.grow {
-                    Some(grow) => {
-                        grow.hold_link(LINK_HOLD_MS);
-                        text.push_str(&format!(
-                            "；目标端整体不可用，本任务所有表先停 {} 秒",
-                            LINK_HOLD_MS / 1000
-                        ));
-                    }
-                    None => text.push_str("；目标端整体不可用"),
+                if let Some(grow) = &ctx.plan.grow {
+                    grow.hold_link(LINK_HOLD_MS);
                 }
-                text.push_str(
-                    "；若同一张表反复出现，把「编辑数据源 → 高级参数」里的 socketTimeout \
-                     改成 120000（毫秒，注意不是 120）",
-                );
-            } else {
-                // 探活正常 ⇒ 目标端在慢慢写（不是链路问题），给的建议不同
-                text.push_str(&format!(
-                    "；下一批的页会缩到 1/4（{stall} 秒上限，链路正常时不必调大「超时时间」）；\
-                     若整个任务后段都在刷新这条，先把并发表数降到 2~3，并确认目标库磁盘/IO 没有打满",
-                    stall = stall.as_secs()
-                ));
             }
-            // 一页 ≠ 界面的「每批条数」：大页只是把多条语句放进同一个事务批次，
-            // 用户看到「一页 3 万条」时最容易误解的就是这一点，错误文案里直接讲清楚
-            text.push_str(
-                "（一页 = 本次读写的批量，按行宽/写速自适应，1000~1 万条；界面\
-                 「每批条数」只限制其中每条 INSERT 的条数）",
-            );
-            (Err(text), true)
+            (Err(reason), true)
         }
     };
     // `inflight` 的加减由 diag 的收尾方法负责 —— 这里曾再减一次，减成负数（u64 回绕）

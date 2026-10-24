@@ -157,6 +157,12 @@ pub struct Task {
     rows_read: Mutex<u64>,
     rows_written: Mutex<u64>,
     rows_failed: Mutex<u64>,
+    /// 读侧累计的**字节数**（估算，口径同 `sync::estimate_row_bytes`）。
+    ///
+    /// 进度卡上的「速度」是「行/秒 · MB/s」两段，行数只说明行宽之外的一半 ——
+    /// 以前没有这个计数，前端拿 `bytesRead` 恒为 0，于是 MB/s 永远是 `0.0 MB/s`
+    /// （真机截图）。只统计真正读出来的页，重试读过的也算（与行数口径一致）。
+    bytes_read: Mutex<u64>,
     /// -1 = 未知（见文件头约定 2）
     total: Mutex<i64>,
     phase: Mutex<String>,
@@ -209,6 +215,7 @@ impl Task {
             rows_read: Mutex::new(0),
             rows_written: Mutex::new(0),
             rows_failed: Mutex::new(0),
+            bytes_read: Mutex::new(0),
             total: Mutex::new(-1),
             phase: Mutex::new(String::new()),
             message: Mutex::new(String::new()),
@@ -266,6 +273,7 @@ impl Task {
             rows_read: Mutex::new(num("rowsRead")),
             rows_written: Mutex::new(num("rowsWritten")),
             rows_failed: Mutex::new(num("rowsFailed")),
+            bytes_read: Mutex::new(num("bytesRead")),
             total: Mutex::new(snap.get("total").and_then(Value::as_i64).unwrap_or(-1)),
             phase: Mutex::new(text("phase")),
             message: Mutex::new(text("message")),
@@ -391,6 +399,16 @@ impl Task {
         *guard = guard.saturating_sub(n);
     }
     pub fn add_rows_written(&self, n: u64) { *lock(&self.rows_written) += n; }
+    /// 读侧累计字节数（估算值，供进度卡的 MB/s）。
+    pub fn add_bytes_read(&self, n: u64) { *lock(&self.bytes_read) += n; }
+    pub fn bytes_read(&self) -> u64 { *lock(&self.bytes_read) }
+    /// 任务已运行毫秒数（终态后取冻结值，与快照的 elapsedMs 一致）。
+    ///
+    /// 收尾汇总日志要写「耗时多久」，取的就是它 —— 不能自己算墙钟差，
+    /// 恢复（从磁盘快照重建）的任务起点已经不在这个进程里了。
+    pub fn elapsed_ms(&self) -> u64 {
+        lock(&self.finished_elapsed).unwrap_or_else(|| self.created.elapsed().as_millis() as u64)
+    }
     pub fn add_rows_failed(&self, n: u64) { *lock(&self.rows_failed) += n; }
 
     /// 整表断连重跑时的计数处理。
@@ -538,6 +556,8 @@ impl Task {
             "rowsRead": read,
             "rowsWritten": written,
             "rowsFailed": *lock(&self.rows_failed),
+            // 累计字节数：进度卡的「MB/s」用它算（没有它那半截永远是 0.0 MB/s）
+            "bytesRead": *lock(&self.bytes_read),
             "phase": lock(&self.phase).clone(),
             "message": lock(&self.message).clone(),
             "canceled": self.is_canceled(),

@@ -1079,9 +1079,10 @@ watch(
 .wizard-body {
   min-height: 160px;
 }
+/* 区块标题走弹窗统一层级（--dlg-h2，默认 15/700） */
 .step-subtitle {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--dlg-h2, 15px);
+  font-weight: 700;
   color: var(--el-text-color-primary);
   margin-top: 18px;
   margin-bottom: 10px;

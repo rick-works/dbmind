@@ -5,8 +5,12 @@
       <div class="ols-toolbar">
         <!-- 数据源 / 数据库切换：与 SQL 编辑器顶栏同款交互 —— 默认自动带出打开清单时的
              连接与库，可自行切换，切换后整个清单重载 -->
-        <el-select v-model="curConnId" size="small" class="ols-conn" filterable @change="onConnSwitch">
-          <el-option v-for="c in connections" :key="c.id" :label="c.name" :value="String(c.id)" />
+        <el-select v-model="curConnId" size="small" class="ols-conn" filterable
+                   popper-class="conn-opt-popper" @change="onConnSwitch">
+          <!-- 连接按分组列出（分组名 = 左侧对象树的目录名），与数据传输同一口径 -->
+          <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
+            <el-option v-for="c in g.options" :key="c.id" :label="c.name" :value="String(c.id)" />
+          </el-option-group>
         </el-select>
         <!-- 库下拉：**没有「库」这一层的类型**（Oracle / DM）不画 —— 它就是连接里填的
              服务名，永远只有一条；这里显示的是模式（用户眼里的"库"就是这个）。
@@ -88,6 +92,7 @@ import { editorSettingsLive } from '../../utils/settings'
 import { formatDbValue } from '../../utils/cellValue'
 import { listTables, listProcedures, listTriggers, listEvents, getTableCounts, listDatabases } from '../../api'
 import { hideDbLevelOf, dbDisplayOf } from '../../types'
+import { groupConnections } from '../../utils/connGroups'
 
 const props = defineProps({
   conn: { type: Object, default: null },
@@ -107,6 +112,8 @@ const curDb = ref(props.database)
 const localDbs = ref({})
 const dbOptions = computed(() => props.dbsByConn?.[curConnId.value] || localDbs.value[curConnId.value] || [])
 const connName = computed(() => (props.connections.find(c => String(c.id) === curConnId.value) || {}).name || '')
+/** 连接下拉按分组列出（分组名 = 左侧对象树的目录名，见 utils/connGroups） */
+const connGroups = computed(() => groupConnections(props.connections))
 const onConnSwitch = async (cid) => {
   // 没有「库」这一层的类型（Oracle / DM）：库值固定取该连接自身的服务名 ——
   // 下拉不画了，但请求必须带（否则列出来的不是这个连接的表）

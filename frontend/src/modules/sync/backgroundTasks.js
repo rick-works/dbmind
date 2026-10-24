@@ -8,7 +8,12 @@ const KEY = 'dbmind.bgSyncTasks'
 const load = () => {
   try {
     const list = JSON.parse(localStorage.getItem(KEY) || '[]')
-    return Array.isArray(list) ? list : []
+    if (!Array.isArray(list)) return []
+    // 历史记录的标题是「连接 / 库 → 连接 / 库」的老格式，现在统一成「连接.库」：
+    // 读取时顺手归一，省得任务中心里新旧两种写法混着显示（用户对格式的要求）
+    return list.map(x => (x && typeof x.title === 'string'
+      ? { ...x, title: x.title.replace(/ \/ /g, '.') }
+      : x))
   } catch {
     return []
   }

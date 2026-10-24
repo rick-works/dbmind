@@ -11,12 +11,19 @@
 //!
 //! | 角色 | 职责 | 谁实现 |
 //! |---|---|---|
-//! | [`Reader`] | 把源表切成若干 **range**（DataX 的 split），每片按游标拉页 | `SqlReader`（按方言参数化） |
-//! | [`Writer`] | 吃行批次、批量落库、脏行降级、事务提交 | `SqlWriter`（按方言参数化，Doris 走 Stream Load） |
+//! | [`Reader`] | 把源表切成若干 **range**（DataX 的 split），每片按游标拉页 | `plugins/<kind>_reader.rs` |
+//! | [`Writer`] | 吃行批次、批量落库、脏行降级、事务提交 | `plugins/<kind>_writer.rs` |
+//! | [`spec::Spec`] | 该库的搬运规格：批量/报文上限/事务语句/保存点/自愈能力 | 写插件文件里的 `SPEC` |
 //! | [`engine::run`] | 编排：分片 → N 读 → 有界通道 → M 写 → 计数/取消 | 一份 |
 //!
 //! 编排层只认 trait，所以「源 MySQL → 目标 Oracle」「源 PG → 目标 ClickHouse」之类的
 //! 任意组合都是同一个引擎 + 两个不同的插件实例，不需要在引擎里出现任何数据库名字。
+//!
+//! ## 新增一种数据库类型
+//!
+//! **只加两个文件**：`plugins/<kind>_reader.rs` 与 `plugins/<kind>_writer.rs`。
+//! 注册表由 `crates/dbmind-web/build.rs` 扫目录自动生成（`OUT_DIR/transfer_plugins.rs`），
+//! 引擎、同步层、界面参数默认值都不用改 —— 详见 [`plugins`] 与 [`spec`] 的模块文档。
 //!
 //! ## 效率上的三个硬约束
 //!
@@ -39,7 +46,10 @@
 //! - **取消**：每个页边界检查一次，已写入的部分保留（不回滚）。
 
 pub mod engine;
+pub mod pacer;
+pub mod plugins;
 pub mod reader;
+pub mod spec;
 pub mod writer;
 
 pub use engine::run;
@@ -400,18 +410,28 @@ impl GrowCaps {
 
 /// 一张表的**传输计划**：DDL（建表/索引/注释）由 sync 层做完，这里只管搬行。
 ///
-/// 行数的人话：按万 / 亿分档（`3,748,123 行` 需要数位数，`374.8 万行` 一眼就有量级）。
-pub(crate) fn 万行(n: u64) -> String {
-    if n >= 100_000_000 {
-        format!("{:.2} 亿行", n as f64 / 1e8)
-    } else if n >= 10_000 {
-        format!("{:.1} 万行", n as f64 / 1e4)
-    } else {
-        format!("{n} 行")
-    }
+/// 行数：**精确到个位 + 千分位**（`13,472 行`）。
+///
+/// 以前按万/亿取整（`1.3 万行`），用户直接问「到底多少行」—— 同步结果的行数是要拿去
+/// 和源表/目标表核对的数字，取整等于把信息丢掉。
+pub(crate) fn 行数(n: u64) -> String {
+    format!("{} 行", 千分位(n))
 }
 
-/// 时长的人话：`4 分 35 秒` / `1 小时 02 分`。
+/// 整数加千分位：`13472` → `13,472`。
+pub(crate) fn 千分位(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, ch) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+/// 时长：`4 分 35 秒` / `1 小时 02 分`；不足一分钟给到 0.1 秒（`8.4 秒`）。
 pub(crate) fn 时长(ms: u64) -> String {
     let secs = ms / 1000;
     if secs >= 3600 {
@@ -419,7 +439,7 @@ pub(crate) fn 时长(ms: u64) -> String {
     } else if secs >= 60 {
         format!("{} 分 {:02} 秒", secs / 60, secs % 60)
     } else {
-        format!("{secs} 秒")
+        format!("{:.1} 秒", ms as f64 / 1000.0)
     }
 }
 
@@ -477,6 +497,11 @@ pub struct TablePlan {
     /// 单次数据库操作超时（秒）：0 = 继承连接，<0 = 不限制，>0 = 该秒数。
     /// 界面上的「超时时间」（对齐 DBX）；换算见 `sync::op_timeout_ms`。
     pub op_timeout_secs: i64,
+    /// 限速表（界面「限速」：行/秒 + MB/秒，取更慢的曲线）；`None` = 不限速。
+    ///
+    /// **整个任务共用一份**：每张表几路写、整库几张表同时跑，合计速率都要等于用户
+    /// 填的值 —— 所以它存在计划里由调度侧注入，而不是每个 writer 各自算。
+    pub pacer: Option<Arc<pacer::Pacer>>,
     /// 与 `columns` 一一对应的**目标侧真实列名**：源列 `order_no` 在目标上可能叫
     /// `ORDER_NO`（Oracle 折大写）或 `OrderNo`（历史表）。写语句必须用目标的名字，
     /// 否则「目标表已存在」这条路上会报列不存在 —— 而结构是好的、只是名字对不上。
@@ -550,23 +575,45 @@ pub struct Stats {
     pub note: String,
 }
 
-/// 按源连接类型取 Reader 插件。
+/// 按**源**连接类型取 Reader 插件。
 ///
-/// 现在所有关系型/列式库共用 `SqlReader`（分页语法与字面量由 `Dialect` 参数化）——
-/// 它们「怎么翻页」的差别真的只在这两件事上。将来某个源需要完全不同的取数方式
-/// （比如 MongoDB 的游标批量、Kafka 的分区消费），在这里按类型返回另一个实现即可，
-/// 引擎和 Writer 一行都不用改。
+/// 每种数据源在 `plugins/<kind>_reader.rs` 里有自己的读插件（见 `plugins` 模块文档）；
+/// 没登记的类型落到通用 `SqlReader`（能同步，只是用了最保守的参数）。
+/// 引擎只认 trait，所以「源 MySQL → 目标 Oracle」「源 PG → 目标 ClickHouse」都是
+/// 同一个引擎 + 两个插件实例，任意组合。
 pub fn reader_for(plan: &TablePlan) -> Box<dyn Reader> {
-    reader::SqlReader::new(plan)
+    (plugins::reader_factory(plan.source_kind.kind.key()))(plan)
 }
 
-/// 按目标连接类型取 Writer 插件。
+/// 按**目标**连接类型取 Writer 插件。
 ///
-/// Doris 仍是 `SqlWriter`，但它会把 `stream` 配置用起来（HTTP 直推 BE）；其余目标走
-/// JDBC 批量 INSERT。要加一种「完全不同的落库方式」（文件直写、对象存储、消息队列），
-/// 在这里返回新实现即可。
+/// 每种数据源在 `plugins/<kind>_writer.rs` 里有自己的写插件 + 搬运规格（批量/事务/自愈）；
+/// 落库方式特殊的（Doris 的 Stream Load）也只改它自己那个文件，引擎一行不动。
 pub fn writer_for(plan: &TablePlan) -> Arc<dyn Writer> {
-    Arc::new(writer::SqlWriter::new(plan))
+    (plugins::writer_factory(plan.target_kind.kind.key()))(plan)
+}
+
+/// 界面上「共 N 行」必须是**真实数字**（用户口径：`1.3 万行` 没法核对，他要的是原文）。
+#[cfg(test)]
+mod 数字格式 {
+    use super::*;
+
+    #[test]
+    fn 行数千分位且不取整() {
+        assert_eq!(千分位(0), "0");
+        assert_eq!(千分位(999), "999");
+        assert_eq!(千分位(1_000), "1,000");
+        assert_eq!(千分位(9_266), "9,266");
+        assert_eq!(千分位(13_472), "13,472");
+        assert_eq!(千分位(213_210), "213,210");
+        assert_eq!(行数(13_472), "13,472 行");
+    }
+
+    #[test]
+    fn 不足一分钟的耗时给到零点一秒() {
+        assert_eq!(时长(8_400), "8.4 秒");
+        assert_eq!(时长(65_000), "1 分 05 秒");
+    }
 }
 
 #[cfg(test)]
@@ -698,10 +745,8 @@ mod watchdog_tests {
     /// 就拿几 MB 的语句去撞丢包（用户口径：Navicat 不中断、我们也不许）。
     #[test]
     fn 起步报文上限小于各方言协议上限() {
-        for kind in [
-            "mysql", "mariadb", "doris", "postgresql", "sqlserver", "oracle", "db2",
-            "sqlite", "clickhouse", "h2", "derby",
-        ] {
+        // 遍历注册表而不是手写名单：新增一种库时这条测试自动覆盖到它
+        for &kind in plugins::KINDS {
             let cap = crate::api::sync::insert_stmt_cap(kind);
             assert!(
                 crate::api::sync::STMT_CAP_START <= cap,

@@ -25,8 +25,11 @@
         <div class="cmp-side-title">
           <span class="dot src"></span>{{ $t('cmp.source') }}
         </div>
-        <el-select v-model="src.connectionId" size="small" @change="onSrcConnChange">
-          <el-option v-for="c in connections" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
+        <!-- 连接按分组列出（分组名 = 左侧对象树的目录名），与「数据传输」同一口径 -->
+        <el-select v-model="src.connectionId" size="small" popper-class="conn-opt-popper" @change="onSrcConnChange">
+          <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
+            <el-option v-for="c in g.options" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
+          </el-option-group>
         </el-select>
         <div class="cmp-pair">
           <el-select v-if="!srcHideDb" v-model="src.database" size="small" @change="onSrcDbChange">
@@ -47,8 +50,10 @@
         <div class="cmp-side-title">
           <span class="dot tgt"></span>{{ $t('cmp.target') }}
         </div>
-        <el-select v-model="tgt.connectionId" size="small" @change="onTgtConnChange">
-          <el-option v-for="c in connections" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
+        <el-select v-model="tgt.connectionId" size="small" popper-class="conn-opt-popper" @change="onTgtConnChange">
+          <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
+            <el-option v-for="c in g.options" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
+          </el-option-group>
         </el-select>
         <div class="cmp-pair">
           <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small" @change="onTgtDbChange">
@@ -383,6 +388,7 @@ import { listConnections, listDatabases, listSchemas, listTables, listColumns, g
 import { hideDbLevelOf } from '../../types'
 import ConditionBuilder from '../../common/ConditionBuilder.vue'
 import { buildConditionSql } from '../../utils/cond'
+import { groupConnections } from '../../utils/connGroups'
 import { t } from '../../utils/i18n'
 
 const props = defineProps({ modelValue: Boolean, conn: Object, database: String, tables: Array, resumeId: String })
@@ -432,6 +438,8 @@ const summaryRows = computed(() => {
 })
 
 const connections = ref([])
+/** 连接下拉按分组列出（分组名 = 左侧对象树的目录名，见 utils/connGroups） */
+const connGroups = computed(() => groupConnections(connections.value))
 const src = ref({ connectionId: '', database: '', schema: '', table: '' })
 const tgt = ref({ connectionId: '', database: '', schema: '', table: '' })
 const srcDbs = ref([])
@@ -1055,7 +1063,10 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 <style scoped>
 /* 步骤条 + 摘要（对齐数据传输的向导式交互）—— 标题字号压小，少占高度也更精致 */
 .cmp-steps { margin-bottom: 16px; }
-.cmp-steps :deep(.el-step__title) { font-size: 12px; }
+.cmp-steps :deep(.el-step__title) { font-size: var(--dlg-sm, 12px); }
+/* 当前 / 已完成步骤加粗放大一档，让"进行到哪了"一眼可见 */
+.cmp-steps :deep(.el-step__title.is-process),
+.cmp-steps :deep(.el-step__title.is-success) { font-size: var(--dlg-body, 14px); font-weight: 700; }
 .cmp-steps :deep(.el-step__head.is-finish .el-step__line),
 .cmp-steps :deep(.el-step__main) { line-height: 1.4; }
 .cmp-summary { margin-bottom: 14px; }
@@ -1079,8 +1090,8 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--dlg-h2, 15px);
+  font-weight: 700;
   color: var(--dc-text);
   margin-bottom: 2px;
 }
@@ -1152,7 +1163,7 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 }
 .stat:hover { border-color: var(--dc-border-hover); }
 .stat .num { display: block; font-size: 22px; font-weight: 700; color: var(--dc-primary); }
-.stat .label { font-size: 11.5px; color: var(--dc-text-dim); margin-top: 4px; display: block; }
+.stat .label { font-size: var(--dlg-sm, 12px); color: var(--dc-text-dim); margin-top: 4px; display: block; }
 .stat.ok .num { color: var(--dc-success); }
 .stat.warn .num { color: var(--dc-warning); }
 .stat.danger .num { color: var(--dc-danger); }
@@ -1161,7 +1172,7 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 
 .struct-diff { max-height: 400px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 .sd-group { border: 1px solid var(--dc-border); border-radius: 8px; padding: 8px 10px; background: var(--dc-bg-soft); }
-.sd-title { display: flex; align-items: center; gap: 5px; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: var(--dc-text); }
+.sd-title { display: flex; align-items: center; gap: 5px; font-size: var(--dlg-body, 14px); font-weight: 700; margin-bottom: 6px; color: var(--dc-text); }
 .sd-title.danger { color: var(--dc-danger); }
 .sd-title.warn { color: var(--dc-warning); }
 .sd-chips { display: flex; flex-wrap: wrap; gap: 5px; }
@@ -1183,14 +1194,15 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .compare-dialog :deep(.el-dialog) { margin-bottom: 8vh; }
 .compare-dialog :deep(.el-dialog__body) { padding-top: 10px; padding-bottom: 6px; }
 
-.dlg-title { display: flex; align-items: center; gap: 8px; }
+.dlg-title { display: flex; align-items: center; gap: 8px; font-size: var(--dlg-h1, 18px); font-weight: 700; }
 .dlg-title-ic {
   width: 26px; height: 26px; border-radius: 7px; display: inline-flex;
   align-items: center; justify-content: center; color: var(--dc-on-primary);
   background: linear-gradient(135deg, var(--dc-primary), var(--dc-primary-deep));
   box-shadow: 0 2px 8px rgba(79, 140, 255, .35);
 }
-.dlg-title-sub { font-size: 13px; font-weight: 400; color: var(--dc-text-dim); margin-left: 4px; }
+/* 副标题比一级标题小两档，做对比 */
+.dlg-title-sub { font-size: var(--dlg-sm, 12px); font-weight: 400; color: var(--dc-text-dim); margin-left: 4px; }
 
 /* ==================== 进度弹窗 + 日志 ==================== */
 /* 明细摊开后内容会明显变长，给弹窗体设个上限并允许滚动，避免把窗口顶出屏幕 */
@@ -1220,7 +1232,7 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .log-head {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 18px;
-  font-size: 14px; font-weight: 700; color: var(--dc-text);
+  font-size: var(--dlg-h2, 15px); font-weight: 700; color: var(--dc-text);
   border-bottom: 1px solid var(--dc-border);
   background: linear-gradient(90deg, var(--dc-primary-wash), var(--dc-success-wash));
 }
@@ -1249,8 +1261,8 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   color: var(--dc-text-weak);
 }
 .log-empty .el-icon { color: var(--dc-text-weak); }
-.log-empty span { font-size: 14px; font-weight: 600; color: var(--dc-text-weak); }
-.log-empty p { font-size: 11.5px; color: var(--dc-text-weak); margin: 0; }
+.log-empty span { font-size: var(--dlg-h2, 15px); font-weight: 700; color: var(--dc-text-weak); }
+.log-empty p { font-size: var(--dlg-sm, 12px); color: var(--dc-text-weak); margin: 0; }
 .log-line {
   display: flex; align-items: flex-start; gap: 10px;
   padding: 3px 0;

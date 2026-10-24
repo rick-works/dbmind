@@ -244,9 +244,10 @@ impl SqlWriter {
     /// 只为「慢批自愈」服务：卡住时要能从另一条连接上 `KILL` 掉它。查询走**同一条会话**
     /// （同一物理连接），所以拿到的就是这条写连接的真实 id；失败就留空，自愈会退化为不自愈。
     async fn ensure_conn_id(&self, worker: usize) {
-        if !matches!(self.kind.kind.key(), "mysql" | "mariadb") {
+        // 没有这个能力位的库（除 MySQL 系之外的全部）直接跳过，不再按类型名判断
+        let Some(sql) = super::plugins::spec_data_for(self.kind.kind.key()).conn_id_sql() else {
             return;
-        }
+        };
         let Some(slot) = self.conn_ids.get(worker) else {
             return;
         };
@@ -255,14 +256,7 @@ impl SqlWriter {
             return;
         }
         let session = self.session(worker);
-        if let Ok(result) = run_target_in(
-            &self.state,
-            &self.tgt_target,
-            "select connection_id()",
-            &session,
-        )
-        .await
-        {
+        if let Ok(result) = run_target_in(&self.state, &self.tgt_target, sql, &session).await {
             if let Some(CellValue::Integer(id)) = result.rows.first().and_then(|row| row.first()) {
                 *slot = Some(*id as u64);
             }
@@ -315,39 +309,21 @@ impl Writer for SqlWriter {
     fn begin<'a>(&'a self, worker: usize) -> BF<'a, ()> {
         Box::pin(async move {
             let session = self.session(worker);
-            // 目标端写会话的**锁等待上限**：MySQL 的元数据锁（MDL）默认能等一年
-            //（`lock_wait_timeout` = 31536000），行锁默认 50 秒。真机上遇到「同步卡住、
-            // 一行都不写、也一个错误都没有」——就是 INSERT 排在某个没释放的锁后面，
-            // 而 MDL 那条路没有超时。压到 60 秒后同样场景会**报错退出**（Lock wait timeout），
-            // 界面至少能看到是哪张表被什么挡住了，而不是永远显示「同步中」。
-            if matches!(self.kind.kind.key(), "mysql" | "mariadb") {
-                let _ = run_target_in(
-                    &self.state,
-                    &self.tgt_target,
-                    "set session lock_wait_timeout = 60, session innodb_lock_wait_timeout = 60",
-                    &session,
-                )
-                .await;
-                // 迁移期会话加速（DataX / Kettle 用户手工做的同一套，这里默认只做安全的那几条）：
-                // - `foreign_key_checks = 0`：跨表同步顺序不保证，外键校验只会制造失败；
-                // - `sql_log_bin = 0` 会断开目标端 binlog（省一半写放大），但它会**影响主从复制**，
-                //   所以只在用户显式开了 `DBMIND_SYNC_SKIP_BINLOG=1` 时才做，且权限不足就静默跳过；
-                // - `unique_checks = 0` 故意不做：唯一约束失效会静默写进重复数据，得不偿失。
-                let _ = run_target_in(
-                    &self.state,
-                    &self.tgt_target,
-                    "set session foreign_key_checks = 0",
-                    &session,
-                )
-                .await;
-                if std::env::var_os("DBMIND_SYNC_SKIP_BINLOG").is_some() {
-                    let _ = run_target_in(
-                        &self.state,
-                        &self.tgt_target,
-                        "set session sql_log_bin = 0",
-                        &session,
-                    )
-                    .await;
+            // 开事务前要设的会话参数**由写插件声明**（`SPEC.session_setup`），这里只负责
+            // 按顺序发出去、失败忽略。目前只有 MySQL 系有：
+            // - `lock_wait_timeout = 60`：MDL 默认能等一年，卡住时永远不会报错，压到 60 秒后
+            //   会变成「锁等待超时」，界面至少能看到是哪张表被什么挡住了；
+            // - `foreign_key_checks = 0`：跨表同步顺序不保证，外键校验只会制造失败；
+            // - `unique_checks = 0` 故意不做：唯一约束失效会静默写进重复数据。
+            let spec = super::plugins::spec_data_for(self.kind.kind.key());
+            for sql in spec.session_setup() {
+                let _ = run_target_in(&self.state, &self.tgt_target, sql, &session).await;
+            }
+            // `sql_log_bin = 0` 会断开目标端 binlog（省一半写放大），但它**影响主从复制**，
+            // 所以单独一个能力位，只在用户显式开启时才执行。
+            if std::env::var_os("DBMIND_SYNC_SKIP_BINLOG").is_some() {
+                if let Some(sql) = spec.binlog_off() {
+                    let _ = run_target_in(&self.state, &self.tgt_target, sql, &session).await;
                 }
             }
             let Some((begin, _, _)) = self.txn else {
@@ -799,7 +775,10 @@ impl Writer for SqlWriter {
     /// 权限：MySQL 允许用户 kill 自己的线程，同步用的就是同一个账号，所以普通账号也够。
     fn kill_sessions<'a>(&'a self) -> BF<'a, bool> {
         Box::pin(async move {
-            if !matches!(self.kind.kind.key(), "mysql" | "mariadb") {
+            // 掐断语句由写插件声明（`SPEC.kill`）；没有这个能力位的库直接返回 false，
+            // 引擎据此不做慢批自愈（保持「探活通就一直等」的旧语义）。
+            let spec = super::plugins::spec_data_for(self.kind.kind.key());
+            if spec.conn_id_sql().is_none() || !spec.has_kill() {
                 return false;
             }
             let session = format!("internal:sync-kill{}", self.sid);
@@ -809,7 +788,9 @@ impl Writer for SqlWriter {
                 let Some(id) = id else { continue };
                 // KILL 的语义是「终止这条连接上正在跑的语句并断开连接」⇒ 服务端立刻
                 // 回滚它未提交的事务、释放行锁，重试才不会撞在锁上。
-                let sql = format!("kill {id}");
+                let Some(sql) = spec.kill_sql(id) else {
+                    return false;
+                };
                 match run_target_in(&self.state, &self.tgt_target, &sql, &session).await {
                     Ok(_) => {
                         killed = true;

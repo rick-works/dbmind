@@ -3316,6 +3316,7 @@ fn quote_oracle(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
 
+
 /// Oracle 主体的写法：**普通名不加引号**（Oracle 自动折成大写，与字典里的
 /// `DBA_ROLES.ROLE` 对得上），带特殊字符的才加双引号并原样保留大小写。
 ///
@@ -3671,6 +3672,10 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         // (是否主键列, 行文本)：Doris 要求键列排最前，所以要记得住哪几行是键
         let mut lines: Vec<(bool, String)> = Vec::new();
         let mut primaries: Vec<String> = Vec::new();
+        // 主键列**落成目标方言之后**的类型名：MySQL 建表要据此估算索引键长
+        //（见 `mysql_charset_for_key`）—— 跨类型同步时类型已经被翻译过，
+        // 用 `columns` 里的原始类型名会算错。
+        let mut primary_types: Vec<String> = Vec::new();
         for (col_index, column) in columns.iter().enumerate() {
             // 类型名单独取出来：默认值怎么渲染要按**类型**判（文本列一律加引号，见 default_literal）
             let raw_type = column
@@ -3724,23 +3729,73 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                 }
             }
             let mut line = format!("  {} {}", self.quote(&column.name), type_name);
-            if !column.nullable {
-                line.push_str(" not null");
-            }
-            if let Some(default) = &column.default_value {
-                if !default.trim().is_empty() {
-                    if let Some(literal) = self.default_literal(default, &type_name, cross) {
-                        line.push_str(" default ");
-                        line.push_str(&literal);
-                    }
-                }
-            }
-            // 自增：只在主键列上写（MySQL 的 auto_increment 就要求它是键，别的库写了也无害）
-            if column.auto_increment && column.primary_key {
-                if let Some(clause) = auto_increment_clause(self.kind, family) {
+            // 自增子句先算出来：**位置按方言定**，不能一律追加在列定义末尾（见下）。
+            let auto_clause = if column.auto_increment && column.primary_key {
+                auto_increment_clause(self.kind, family)
+            } else {
+                None
+            };
+            // Oracle 的列定义**顺序是硬性的**（真机实测，见 `_uitest/ddl-syntax-probe.py`）：
+            //   类型 → [generated … as identity] → [default] → not null
+            // 只要 `not null` 写在前面，后面跟 identity 或 default 都是
+            // ORA-03076「列定义或内部约束条件中存在意外项 GENERATED / DEFAULT」。
+            // DM 按 Oracle 兼容处理。其余方言两种顺序都收（PG / DB2 / H2 / Derby / SQL Server
+            // 逐个实测，见 `_uitest/ddl-ident-probe.py`），所以只对 Oracle 系调整，其它零回归。
+            let oracle_order = matches!(self.kind.key(), "oracle" | "dm");
+            if oracle_order {
+                if let Some(clause) = auto_clause {
                     line.push(' ');
                     line.push_str(clause);
                 }
+            }
+            if !oracle_order && !column.nullable {
+                line.push_str(" not null");
+            }
+            let mut has_default = false;
+            if let Some(default) = &column.default_value {
+                if !default.trim().is_empty() {
+                    // Oracle 的 identity 列**不允许再带 default**（ORA-02254「此处不允许
+                    // DEFAULT <expression>」）：两者同时在时保留 identity —— 自增是结构能力，
+                    // 而同步场景里主键值本来就是显式搬过去的，default 用不上。
+                    let identity_blocks_default = oracle_order && auto_clause.is_some();
+                    if !identity_blocks_default {
+                        if let Some(literal) = self.default_literal(default, &type_name, cross) {
+                            line.push_str(" default ");
+                            line.push_str(&literal);
+                            has_default = true;
+                        }
+                    }
+                }
+            }
+            // MySQL 的 TIMESTAMP 还有一条历史行为：`explicit_defaults_for_timestamp=OFF`
+            //（5.7 的默认值）时，**除第一个 timestamp 列外**，没写 DEFAULT 的 timestamp 列会被
+            // 隐式补成 `'0000-00-00 00:00:00'`；而 5.7/8.0 默认 sql_mode 含 NO_ZERO_DATE ⇒
+            // 建表直接 1067「Invalid default value for 'create_time'」。
+            // 真机就是这一条：源表 `create_time timestamp NULL DEFAULT NULL` 是表里第二个
+            // timestamp 列，元数据回的默认值是 NULL（等于没有），我们什么都没写 ⇒ 目标端隐式
+            // 零日期 ⇒ 整张表建不出来。
+            // 显式写 `null`（可空列，与源表语义一致）或 `current_timestamp`（非空列总得有个值）。
+            if matches!(self.kind.key(), "mysql" | "mariadb")
+                && !has_default
+                && is_timestamp_type(&type_name)
+            {
+                line.push_str(if column.nullable {
+                    " null"
+                } else {
+                    " default current_timestamp"
+                });
+            }
+            // 自增：只在主键列上写（MySQL 的 auto_increment 就要求它是键，别的库写了也无害）。
+            // Oracle 那份已在类型后面写过（见上），这里只补其余方言。
+            if !oracle_order {
+                if let Some(clause) = auto_clause {
+                    line.push(' ');
+                    line.push_str(clause);
+                }
+            }
+            // Oracle 的 `not null` 收尾（identity 与 default 都已写完，顺序见上）
+            if oracle_order && !column.nullable {
+                line.push_str(" not null");
             }
             // 字段注释：**内联**进列定义（只有这几个方言收这种写法）。
             // PG / Oracle / SQL Server 由 `post_create_comments` 另发 `comment on column …`；
@@ -3755,6 +3810,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             }
             if column.primary_key {
                 primaries.push(self.quote(&column.name));
+                primary_types.push(type_name.clone());
             }
             lines.push((column.primary_key, line));
         }
@@ -3832,7 +3888,8 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                 // COMPACT 行格式下，每个长文本列内联 768 字节前缀 —— 十几个 TEXT 列就撞上 8126 的
                 // 「Row size too large」；DYNAMIC 下只留 ~20 字节的指针。服务器若已是 DYNAMIC，
                 // 这句写了也无害（幂等），所以不判断版本、统一带上。
-                " row_format=dynamic default charset=utf8mb4".to_string() + &comment
+                let charset = mysql_charset_for_key(&primary_types);
+                format!(" row_format=dynamic default charset={charset}") + &comment
             }
             // Doris 的表级注释跟在 PROPERTIES 里（见上方 doris 分支自行拼接），这里不动
             _ => String::new(),
@@ -4008,12 +4065,49 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     fn default_literal(&self, default: &str, type_name: &str, cross: bool) -> Option<String> {
         let trimmed = default.trim();
         let upper = trimmed.to_ascii_uppercase();
+        // 零日期默认值（`0000-00-00` / `0000-00-00 00:00:00`）：MySQL 5.7/8.0 的默认 sql_mode
+        // 含 NO_ZERO_DATE，建表时直接报 1067「Invalid default value for 'x'」。
+        // 源库能建是因为它的 sql_mode 只有 STRICT_TRANS_TABLES（真机：5.7.37）。
+        // 处理办法是**省略**这个默认值 —— 这种默认本来就只是为了兼容老数据，
+        // 数据是显式搬过去的，不需要它兜底；留着只会让整张表建不出来。
+        // 只对时间类型生效：文本列的默认值是内容，`'0000-00-00'` 是合法字符串。
+        if !Self::is_textual_type(type_name) && trimmed.trim_matches('\'').trim().starts_with("0000-00-00") {
+            return None;
+        }
+        // 布尔列：跨类型时把 0/1 归一成目标库真认的写法（见 `boolean_literal`）。
+        // 必须放在"纯数字原样放行"之前，否则会拼出 `boolean default 0` 让 PG / Oracle 直接拒。
+        if cross && Self::is_boolean_type(type_name) {
+            // `b'0'` / `b'1'` 是 MySQL 的位字面量，剥引号会把它弄坏，先整体比一次
+            let raw = trimmed.trim_start_matches('(').trim_end_matches(')').trim();
+            let lowered = raw.to_ascii_lowercase();
+            let bare = raw.trim_matches('\'');
+            match (lowered.as_str(), bare.to_ascii_lowercase().as_str()) {
+                ("b'0'", _) | (_, "0") | (_, "false") => return Some(self.boolean_literal(false)),
+                ("b'1'", _) | (_, "1") | (_, "true") => return Some(self.boolean_literal(true)),
+                _ => {}
+            }
+        }
+        // ClickHouse **没有 current_timestamp 这个函数**：裸写的 `current_timestamp` 会被当成
+        // **列名** ⇒ `Code: 47 Missing columns: 'current_timestamp' … default expression and
+        // column type are incompatible`，整张表建不出来（真机：源表
+        // `createtime datetime DEFAULT CURRENT_TIMESTAMP` 同步到 CH 必挂）。
+        // CH 的写法是 now() / today()，所以跨类型翻译出来的标准写法要在这里再翻一手。
+        if self.key() == "clickhouse" && !Self::is_textual_type(type_name) {
+            if upper.contains("CURRENT_TIMESTAMP") || upper.starts_with("NOW(") {
+                return Some("now()".to_string());
+            }
+            if upper.contains("CURRENT_DATE") || upper.starts_with("TODAY(") {
+                return Some("today()".to_string());
+            }
+        }
         if cross {
             // 先看**类型**：文本列的默认值是"内容"，可能恰好是叫 `now()` 的字符串 —— 那种要加引号，
             // 不能当成时间函数翻译掉。
             if !Self::is_textual_type(type_name) {
                 if let Some(portable) = portable_time_default(&upper) {
-                    return Some(portable.to_string());
+                    // 标准写法也不是每个库都认（`current_date` 在 MySQL / SQL Server 上直接
+                    // 语法错，见 `portable_time_literal` 的注释与实测矩阵）
+                    return self.portable_time_literal(portable).map(|s| s.to_string());
                 }
                 if looks_like_call(&upper) {
                     return None;
@@ -4048,6 +4142,51 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             Some(trimmed.to_string())
         } else {
             Some(self.literal(trimmed))
+        }
+    }
+
+    /// 布尔默认值的写法：`false` / `true` **不是每个方言都认**。
+    ///
+    /// 真机实测（`_uitest/ddl-syntax-probe.py`，都按 `列类型 default <值>` 建表验的）：
+    /// - **Doris**：`boolean default false` 语法错（`errCode = 2, Syntax error in line 1`），
+    ///   只收 `default 0` / `default 1`（`default "false"` 也过，但要看 sql_mode 里双引号的含义，
+    ///   数字最稳）；
+    /// - **SQL Server**：`bit default false` 报 `The name "false" is not permitted in this
+    ///   context`，只收 `default 0` / `default 1`；
+    /// - 其余：MySQL / MariaDB（tinyint(1) 与 `false` 同义）、PG / H2 / Derby / DB2 的
+    ///   `boolean` 都收 `false` / `true`。
+    ///
+    /// 注意 Oracle 的布尔列落成 `number(1)`、ClickHouse 落成 `UInt8`、SQLite 落成 `integer`，
+    /// 都不会走到这里（`is_boolean_type` 判不出来，按数字原样放行本来就是对的）。
+    fn boolean_literal(&self, value: bool) -> String {
+        match self.key() {
+            "doris" | "sqlserver" => {
+                if value { "1" } else { "0" }.to_string()
+            }
+            _ => {
+                if value { "true" } else { "false" }.to_string()
+            }
+        }
+    }
+
+    /// 把「当前时间 / 当前日期」的标准写法翻成**目标方言真能接受的默认值表达式**。
+    /// 返回 `None` 表示这个方言压根表达不了 —— 只能省略默认值（列照样可空，
+    /// 数据是显式搬过去的，不靠默认值兜底）。
+    ///
+    /// 实测矩阵见 `_uitest/ddl-time-default-check.cjs`（11 类目标库全跑）：
+    /// - `current_timestamp`：MySQL / MariaDB / Doris / PG / SQL Server / Oracle / DB2 /
+    ///   H2 / Derby / SQLite 都认；**ClickHouse 不认**（当列名 ⇒ `Code 47 Missing columns`，
+    ///   那条在 `default_literal` 开头就翻成 `now()` 了，走不到这里）。
+    /// - `current_date`：PG / Oracle / DB2 / H2 / Derby / SQLite / MariaDB 认；
+    ///   **MySQL 不认**（`DEFAULT CURRENT_DATE` 语法错 —— MySQL 的列默认值只支持字面量与
+    ///   CURRENT_TIMESTAMP，表达式默认值要 8.0.13 起且得写成 `(curdate())`，老库没有），
+    ///   **SQL Server 不认**（T-SQL 没有 CURRENT_DATE），ClickHouse 用 `today()`。
+    fn portable_time_literal(&self, portable: &'static str) -> Option<&'static str> {
+        match (self.key(), portable) {
+            ("sqlserver", "current_date") => Some("cast(getdate() as date)"),
+            // 省略而不是硬塞一个不合法写法：否则整张表建不出来（真机实测语法错）
+            ("mysql", "current_date") => None,
+            (_, other) => Some(other),
         }
     }
 
@@ -4805,6 +4944,86 @@ fn is_unbounded_text_type(type_name: &str) -> bool {
         && !t.contains('('))
 }
 
+/// InnoDB（DYNAMIC 行格式）**单个索引**的字节上限。
+const MYSQL_MAX_KEY_BYTES: usize = 3072;
+
+/// 类型是不是 MySQL 的 `timestamp`（**不含** `datetime`：后者没有隐式零日期默认值那一套）。
+fn is_timestamp_type(type_name: &str) -> bool {
+    type_name
+        .trim()
+        .to_ascii_lowercase()
+        .split(['(', ' '])
+        .next()
+        .unwrap_or("")
+        .trim()
+        == "timestamp"
+}
+
+/// 主键表在 MySQL 上该用哪个字符集建 —— 唯一目的是**让主键装得进 3072 字节**。
+///
+/// 背景（真机）：源表主键 `varchar(10) + varchar(255) × 3` = 775 字符，
+/// 源库是 utf8（3 字节/字符）⇒ 2325 字节，合法；而建表语句一律写
+/// `default charset=utf8mb4`（4 字节/字符）⇒ 3100 字节 > 3072，目标端直接报
+/// `ERROR 1071 Specified key was too long; max key length is 3072 bytes`，
+/// 整张表连结构都建不出来（同步结果里是一行「建表失败」）。
+///
+/// 取舍：**只有 utf8mb4 装不下、utf8 装得下时才降级**（其余情况仍 utf8mb4，
+/// 与以前完全一致）。降级不丢数据 —— 能存进 3 字节字符集的键值本来就不含 4 字节
+/// 字符（emoji 等），否则源库自己也存不进去。
+/// 两个字符集都装不下（例如 latin1 源的 `varchar(1200)` 主键）时保持 utf8mb4：
+/// 这种表已经超过 MySQL 的索引上限，让数据库如实报错，比悄悄把主键改成前缀索引安全。
+fn mysql_charset_for_key(primary_types: &[String]) -> &'static str {
+    let bytes = |per_char: usize| {
+        primary_types
+            .iter()
+            .map(|ty| index_bytes(ty, per_char))
+            .sum::<usize>()
+    };
+    if bytes(4) <= MYSQL_MAX_KEY_BYTES {
+        "utf8mb4"
+    } else if bytes(3) <= MYSQL_MAX_KEY_BYTES {
+        "utf8"
+    } else {
+        "utf8mb4"
+    }
+}
+
+/// 一列在 MySQL 索引里占多少字节（`per_char` = 字符集的字节/字符）。
+///
+/// 只求「够判断有没有超过 3072」，数值/时间类按固定开销近似即可。
+fn index_bytes(type_name: &str, per_char: usize) -> usize {
+    let lower = type_name.trim().to_ascii_lowercase();
+    // `character varying(64)` 这种带空格的类型名取到 `character` 就够（文本族判据靠 contains）
+    let base = lower
+        .split(['(', ' '])
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let len = lower
+        .split_once('(')
+        .and_then(|(_, rest)| rest.split([')', ',']).next())
+        .and_then(|n| n.trim().parse::<usize>().ok());
+    // 文本族：字符长度 × 每个字符的字节数
+    if base.contains("char") || base.contains("text") || base.contains("clob") {
+        return len.unwrap_or(255) * per_char;
+    }
+    // 二进制族：长度就是字节数
+    if base.contains("blob") || base.contains("binary") {
+        return len.unwrap_or(255);
+    }
+    match base.as_str() {
+        "tinyint" => 1,
+        "smallint" => 2,
+        "mediumint" => 3,
+        "int" | "integer" | "float" => 4,
+        "date" => 3,
+        "year" => 1,
+        "bigint" | "double" | "real" | "datetime" | "timestamp" | "time" => 8,
+        _ => 8,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4892,6 +5111,161 @@ mod tests {
         assert!(!ddl.contains("(''abc'')"), "实际：{ddl}");
     }
 
+    /// 主键字符长度之和 × 4 字节超过 InnoDB 的 3072 时，建表要退到 utf8（3 字节/字符）。
+    ///
+    /// 守着一次真机故障：源表主键 `varchar(10)+varchar(255)×3` = 775 字符，
+    /// 源库 utf8（2325 字节，合法），建表一律 utf8mb4 ⇒ 3100 字节 ⇒
+    /// `ERROR 1071 Specified key was too long; max key length is 3072 bytes`，
+    /// 整张表连结构都建不出来。
+    #[test]
+    fn 主键太长时建表退到utf8() {
+        let mut cols = vec![
+            col("report_day", "varchar(10)", None),
+            col("project_number", "varchar(255)", None),
+            col("project_name", "varchar(255)", None),
+            col("xf_brandcat", "varchar(255)", None),
+            col("xf_description", "varchar(255)", None),
+        ];
+        for c in cols.iter_mut().filter(|c| c.name != "project_name") {
+            c.primary_key = true;
+        }
+        let ddl = Dialect::new(ConnectionKind::Mysql).create_table_from_columns("t", &cols, None);
+        assert!(ddl.contains("default charset=utf8"), "实际：{ddl}");
+        assert!(!ddl.contains("utf8mb4"), "实际：{ddl}");
+    }
+
+    /// 主键装得下时**不能**动字符集（99% 的表走这条，必须与以前完全一致）。
+    #[test]
+    fn 主键不长时仍是utf8mb4() {
+        let mut cols = vec![
+            col("id", "varchar(64)", None),
+            col("name", "varchar(255)", None),
+        ];
+        cols[0].primary_key = true;
+        let ddl = Dialect::new(ConnectionKind::Mysql).create_table_from_columns("t", &cols, None);
+        assert!(ddl.contains("default charset=utf8mb4"), "实际：{ddl}");
+    }
+
+    /// 可空的 timestamp 列**必须显式写 null**。
+    ///
+    /// MySQL 5.7（`explicit_defaults_for_timestamp=OFF`，默认值）会给「表里第二个及以后的
+    /// timestamp 列」隐式补 `'0000-00-00 00:00:00'`；默认 sql_mode 含 NO_ZERO_DATE ⇒
+    /// 建表直接 1067「Invalid default value for 'create_time'」（真机故障）。
+    #[test]
+    fn 可空timestamp列显式写null() {
+        let ddl = Dialect::new(ConnectionKind::Mysql).create_table_from_columns(
+            "t",
+            &[col("create_time", "TIMESTAMP", None)],
+            None,
+        );
+        assert!(ddl.contains("create_time TIMESTAMP null"), "实际：{ddl}");
+    }
+
+    /// 非空 timestamp 没有默认值时得给一个合法默认（否则同样隐式零日期 → 1067）。
+    #[test]
+    fn 非空timestamp列给current_timestamp() {
+        let mut column = col("create_time", "TIMESTAMP", None);
+        column.nullable = false;
+        let ddl = Dialect::new(ConnectionKind::Mysql).create_table_from_columns("t", &[column], None);
+        assert!(
+            ddl.contains("TIMESTAMP not null default current_timestamp"),
+            "实际：{ddl}"
+        );
+    }
+
+    /// 零日期默认值（源库 sql_mode 宽松才存得下）要省略，否则目标端 NO_ZERO_DATE 直接 1067。
+    #[test]
+    fn 零日期默认值被省略() {
+        let ddl = Dialect::new(ConnectionKind::Mysql).create_table_from_columns(
+            "t",
+            &[
+                col("XF_LASTMODTIME", "datetime", Some("0000-00-00 00:00:00")),
+                col("D2", "datetime", Some("'0000-00-00 00:00:00'")),
+            ],
+            None,
+        );
+        assert!(!ddl.contains("0000-00-00"), "实际：{ddl}");
+    }
+
+    /// 布尔列跨类型默认值：MySQL 的 `tinyint(1) default 0` 映射到 PG 是
+    /// `boolean default 0`，PG 直接拒 —— `column "status" is of type boolean but default
+    /// expression is of type integer`（真机：MySQL → PG 整库同步，`job_info` 建表失败）。
+    #[test]
+    fn 跨类型布尔默认值翻成_true_false() {
+        let pg = Dialect::new(ConnectionKind::Postgresql);
+        assert_eq!(pg.default_literal("0", "boolean", true).as_deref(), Some("false"));
+        assert_eq!(pg.default_literal("1", "boolean", true).as_deref(), Some("true"));
+        assert_eq!(pg.default_literal("b'0'", "boolean", true).as_deref(), Some("false"));
+        assert_eq!(pg.default_literal("'1'", "boolean", true).as_deref(), Some("true"));
+        // 同类型保持原样（MySQL 的 tinyint 语义，不能被翻成 false/true）
+        assert_eq!(pg.default_literal("0", "boolean", false).as_deref(), Some("0"));
+        // 非布尔列不受影响
+        assert_eq!(pg.default_literal("0", "integer", true).as_deref(), Some("0"));
+        // Doris / SQL Server 反过来**不认 false/true**（真机实测：`boolean default false`
+        // 在 Doris 上是语法错、`bit default false` 在 SQL Server 上被拒），只收 0/1
+        let doris = Dialect::new(ConnectionKind::Doris);
+        assert_eq!(doris.default_literal("false", "BOOLEAN", true).as_deref(), Some("0"));
+        assert_eq!(doris.default_literal("1", "BOOLEAN", true).as_deref(), Some("1"));
+        let mssql = Dialect::new(ConnectionKind::Sqlserver);
+        assert_eq!(mssql.default_literal("true", "bit", true).as_deref(), Some("1"));
+        assert_eq!(mssql.default_literal("'0'", "bit", true).as_deref(), Some("0"));
+    }
+
+    /// MySQL → ClickHouse：`DEFAULT CURRENT_TIMESTAMP` 要翻成 CH 的 `now()`。
+    ///
+    /// ClickHouse 没有 `current_timestamp` 函数，裸写会被当成列名：
+    /// `Code: 47 Missing columns: 'current_timestamp' … default expression and column
+    /// type are incompatible` —— 整张表建不出来（真机：源表
+    /// `createtime datetime DEFAULT CURRENT_TIMESTAMP`）。
+    #[test]
+    fn 同步到clickhouse时时间默认值翻成now() {
+        let ddl = Dialect::new(ConnectionKind::Clickhouse).create_table_from_columns(
+            "t",
+            &[
+                col("createtime", "datetime", Some("CURRENT_TIMESTAMP")),
+                col("updatetime", "datetime", Some("current_timestamp()")),
+                col("d", "date", Some("CURRENT_DATE")),
+            ],
+            Some(ConnectionKind::Mysql),
+        );
+        assert!(ddl.contains("createtime Nullable(DateTime) default now()"), "实际：{ddl}");
+        assert!(ddl.contains("updatetime Nullable(DateTime) default now()"), "实际：{ddl}");
+        assert!(ddl.contains("default today()"), "实际：{ddl}");
+        assert!(!ddl.to_ascii_lowercase().contains("current_"), "实际：{ddl}");
+    }
+
+    /// `current_date` 不是每个库都认（11 类目标库实测：见 `portable_time_literal`）：
+    /// SQL Server 要 `cast(getdate() as date)`，MySQL 干脆表达不了（省略）。
+    #[test]
+    fn 当前日期默认值按目标方言翻译() {
+        let cols = vec![col("d", "date", Some("CURRENT_DATE"))];
+
+        let sqlserver = Dialect::new(ConnectionKind::Sqlserver).create_table_from_columns(
+            "t",
+            &cols,
+            Some(ConnectionKind::Postgresql),
+        );
+        assert!(sqlserver.contains("default cast(getdate() as date)"), "实际：{sqlserver}");
+
+        // MySQL：列默认值只支持字面量与 CURRENT_TIMESTAMP，DATE 列的 current_date 表达不了
+        let mysql = Dialect::new(ConnectionKind::Mysql).create_table_from_columns(
+            "t",
+            &cols,
+            Some(ConnectionKind::Postgresql),
+        );
+        assert!(!mysql.to_ascii_lowercase().contains("current_date"), "实际：{mysql}");
+        // 列定义里不再有默认值（表尾的 `default charset=…` 不算）
+        assert!(!mysql.contains("d date default"), "实际：{mysql}");
+
+        // 其余方言保持标准写法
+        let pg = Dialect::new(ConnectionKind::Postgresql).create_table_from_columns(
+            "t",
+            &cols,
+            Some(ConnectionKind::Mysql),
+        );
+        assert!(pg.contains("default current_date"), "实际：{pg}");
+    }
+
     /// 跨类型映射：源类型 → 目标类型；**同类型一律原样照抄**（零回归）。
     #[test]
     fn 跨类型把源类型翻译到目标() {
@@ -4952,8 +5326,10 @@ mod tests {
             ],
             Some(ConnectionKind::Mysql),
         );
+        // Oracle 的 identity **必须紧跟类型**：写在 `not null` 之后报 ORA-03076
+        //（真机实测，见 `_uitest/ddl-syntax-probe.py`）
         assert!(
-            ddl.contains("ID number(19) not null generated by default as identity"),
+            ddl.contains("ID number(19) generated by default as identity not null"),
             "自增与类型都要翻译：{ddl}"
         );
         // 文本列的默认值是"内容"，`now()` 这种要加引号、不能当时间函数翻译掉

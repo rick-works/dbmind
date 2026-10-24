@@ -43,6 +43,7 @@ use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
 use crate::api::export::sql_literal;
 use crate::api::meta::{run_sql_in, run_sql_in_keyed, run_sql_in_write};
+use crate::api::transfer::spec::{ExprLimit, Savepoint};
 use crate::api::{blocking, require_record};
 use crate::AppState;
 
@@ -150,6 +151,25 @@ pub struct SyncRequest {
     /// 为了老客户端 / 脚本调用仍能编译 —— 新调用方不要传。
     #[serde(default)]
     row_limit: Option<u64>,
+    /// 限速：每秒最多搬多少**行**（0 = 不限）。与 `rate_limit_bytes` 取更慢的那条曲线。
+    #[serde(default)]
+    rate_limit_rows: Option<u64>,
+    /// 限速：每秒最多搬多少**字节**（0 = 不限）。界面按 MB/s 填，前端换算成字节再提交。
+    #[serde(default)]
+    rate_limit_bytes: Option<u64>,
+    /// 目标表名映射（**源表名 → 目标表名**）：没列到的表同名，留空也算同名。
+    ///
+    /// 目标表不存在时按新名建表，索引/注释/写入/日志全部跟着新名走 —— 换名是在
+    /// 计划生成前一次性替换的，不是到最后写库才换（那样建表会在旧名下多出一张表）。
+    #[serde(default)]
+    table_renames: Option<std::collections::HashMap<String, String>>,
+    /// 前置 SQL：**结构处理完、开始搬数据前**在目标连接上执行（DataX 的 preSql）。
+    /// 多条用「引号之外的分号或换行」分隔，见 [`split_user_sql`]。
+    #[serde(default)]
+    pre_sql: Option<String>,
+    /// 后置 SQL：本对象**数据搬完后**在目标连接上执行（DataX 的 postSql）。
+    #[serde(default)]
+    post_sql: Option<String>,
     /// 行过滤：**按表设置**，键是表名（与 `tables` 里的一致），值是拼到该表源侧 SELECT
     /// 的 WHERE 后面的条件。没列到的表 = 全量同步。
     ///
@@ -213,6 +233,16 @@ struct Opts {
     include_indexes: bool,
     auto_create_db: bool,
     row_limit: u64,
+    /// 限速表（行/秒 + 字节/秒，取更慢的曲线）；`None` = 不限速。
+    ///
+    /// 整库同步时**所有对象共用同一个** —— 限速是「整条链路」的意愿，不是每张表各一份
+    /// （否则 10 张表并发就是 10 倍速率）。
+    pacer: Option<std::sync::Arc<crate::api::transfer::pacer::Pacer>>,
+    /// 目标表名映射（源表名 → 目标表名）
+    table_renames: std::collections::HashMap<String, String>,
+    /// 前置 / 后置 SQL（目标连接上执行；空串 = 不执行）
+    pre_sql: String,
+    post_sql: String,
     /// 按表设置的行过滤（表名 → WHERE）；缺省的表走 `where_clause`
     where_by_table: std::collections::HashMap<String, String>,
     /// 全局行过滤（旧客户端 / 单表接口），界面已不再产生
@@ -264,6 +294,29 @@ impl Opts {
         self.where_clause.clone()
     }
 
+    /// 这张表要写到目标端的**哪个表名**（界面「表名映射」页签）。
+    ///
+    /// 键是**源表名**（界面按源表名列输入框），匹配不到就看 `fallback`（单表接口可以用
+    /// 显式传入的目标表名）；都没有 = 同名。改名在这里一次性定死，后面建表、建索引、
+    /// 写库、日志全部用新名 —— 否则会出现「结构建在新名下、数据写进旧表」这种半拉子结果。
+    fn target_table_for(&self, table: &str, fallback: &str) -> String {
+        let pick = |name: &str| -> Option<String> {
+            self.table_renames.get(name).map(|to| to.trim().to_string())
+        };
+        // 先按完整表名，再按末段（表名可能带 `库.` 前缀）
+        if let Some(to) = pick(table).filter(|to| !to.is_empty()) {
+            return to;
+        }
+        if let Some(last) = table.rsplit('.').next() {
+            if last != table {
+                if let Some(to) = pick(last).filter(|to| !to.is_empty()) {
+                    return to;
+                }
+            }
+        }
+        fallback.to_string()
+    }
+
     /// 设定本表的会话预算（整库同步按并发对象数切分，见 `db()`）。
     fn with_session_caps(mut self, tgt_workers: usize, src_slices: usize) -> Self {
         self.tgt_workers = tgt_workers;
@@ -282,6 +335,75 @@ impl Opts {
 /// 注解（`--` / `/* */`）不在这里处理，由执行器按方言各自处理。
 fn normalize_where(raw: &str) -> String {
     raw.trim().trim_end_matches(';').trim().to_string()
+}
+
+/// 把用户填的前置/后置 SQL 脚本切成一条条语句。
+///
+/// 分隔符是**引号之外**的分号或换行（界面提示「多条用分号/换行分隔」）；`--` 行注释整行
+/// 丢弃。为什么不能简单 `split(';')`：`insert into t values ('a;b')` 里的分号是数据，
+/// 切开会把一条正常语句切成两条语法错误 —— 用户写的脚本在我们这里被切坏，比不执行还糟。
+fn split_user_sql(script: &str) -> Vec<String> {
+    let mut statements: Vec<String> = Vec::new();
+    let mut current = String::new();
+    // 当前是否在引号里（'…' / "…" / `…`）；引号内的分号与换行都是内容
+    let mut quote: Option<char> = None;
+    let mut chars = script.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if quote.is_none() {
+            // 行注释：`--` 之后到行尾都不发送（用户常用来写备注）
+            if ch == '-' && chars.peek() == Some(&'-') {
+                while let Some(next) = chars.next() {
+                    if next == '\n' {
+                        break;
+                    }
+                }
+                push_user_stmt(&mut statements, &mut current);
+                continue;
+            }
+        }
+        match quote {
+            Some(open) => {
+                current.push(ch);
+                if ch == open {
+                    quote = None;
+                }
+            }
+            None => match ch {
+                '\'' | '"' | '`' => {
+                    quote = Some(ch);
+                    current.push(ch);
+                }
+                ';' | '\n' | '\r' => push_user_stmt(&mut statements, &mut current),
+                _ => current.push(ch),
+            },
+        }
+    }
+    push_user_stmt(&mut statements, &mut current);
+    statements
+}
+
+/// 收一条语句：去掉首尾空白，空语句（连续分号、纯空白行）直接丢。
+fn push_user_stmt(out: &mut Vec<String>, current: &mut String) {
+    let sql = current.trim().trim_end_matches(';').trim();
+    if !sql.is_empty() {
+        out.push(sql.to_string());
+    }
+    current.clear();
+}
+
+/// 在**目标连接**上按顺序执行用户 SQL（前置/后置），失败返回带序号的人话。
+///
+/// 为什么走「可写会话」（[`run_target_write`]）：用户脚本多数是清表、改约束、写打点，
+/// 目标连接若被标成只读，普通会话会被驱动直接拒绝执行。
+async fn run_user_sql(state: &AppState, target: &str, script: &str, label: &str) -> Result<(), String> {
+    let statements = split_user_sql(script);
+    for (index, sql) in statements.iter().enumerate() {
+        if let Err(err) = run_target_write(state, target, sql).await {
+            return Err(format!("{label}第 {} 条执行失败：{}", index + 1, err.message));
+        }
+        tracing::debug!(label, sql = %sql, "用户 SQL 执行成功");
+    }
+    Ok(())
 }
 
 impl SyncRequest {
@@ -347,6 +469,28 @@ impl SyncRequest {
                 .timeout_seconds
                 .unwrap_or(0)
                 .clamp(-1, 86_400),
+            // 两条限速曲线（0 = 该曲线不限），全任务共用一份时间表
+            pacer: crate::api::transfer::pacer::Pacer::new(
+                self.rate_limit_rows.unwrap_or(0),
+                self.rate_limit_bytes.unwrap_or(0),
+            ),
+            // 表名映射：只收「真的改成了别的名字」的条目（留空/改回原名都当没写）
+            table_renames: self
+                .table_renames
+                .iter()
+                .flat_map(|map| map.iter())
+                .filter_map(|(from, to)| {
+                    let from = from.trim().to_string();
+                    let to = to.trim().to_string();
+                    if from.is_empty() || to.is_empty() || from == to {
+                        None
+                    } else {
+                        Some((from, to))
+                    }
+                })
+                .collect(),
+            pre_sql: self.pre_sql.clone().unwrap_or_default().trim().to_string(),
+            post_sql: self.post_sql.clone().unwrap_or_default().trim().to_string(),
         }
     }
 }
@@ -774,6 +918,7 @@ pub(crate) async fn fetch_page(
     dialect: Dialect,
     offset: u64,
     cursor: Option<(&[String], &[CellValue])>,
+    order_keys: &[String],
     extra_where: &str,
     page_rows: u64,
     session: &str,
@@ -790,9 +935,20 @@ pub(crate) async fn fetch_page(
         dialect,
         offset,
         cursor_lits.as_ref().map(|(keys, lits)| (*keys, lits.as_slice())),
+        order_keys,
         extra_where,
         page_rows,
     );
+    // 排障开关：`DBMIND_SYNC_SQL_LOG=1` 时把源端**每一页的 SELECT 原文**写进日志。
+    // 「漏行 + 主键冲突」这种症状只看计数查不出来（真机：一张 5.8 万行的表每天只搬过去
+    // 一半、另一些行报 Duplicate entry），必须看见 keyset 条件与 order by 是否自洽。
+    // 默认关，零噪声。
+    if std::env::var("DBMIND_SYNC_SQL_LOG")
+        .map(|value| value != "0" && !value.is_empty())
+        .unwrap_or(false)
+    {
+        tracing::warn!(target: "dbmind::sql", "{}", sql);
+    }
     // 传输的**源端拉数**（一页一页翻到完）是长任务：走独立会话键，不占元数据那条连接。
     // 分片并发时每片给**不同的键**，否则几片会挤在同一条物理连接上排队。
     let result = run_sql_in_keyed(state, conn, scope, sql, page_rows as usize, session).await?;
@@ -811,6 +967,7 @@ fn page_sql(
     dialect: Dialect,
     offset: u64,
     cursor: Option<(&[String], &[String])>,
+    order_keys: &[String],
     extra_where: &str,
     page_rows: u64,
 ) -> String {
@@ -853,7 +1010,25 @@ fn page_sql(
         }
         _ => {
             let page = dialect.limit_clause(offset, page_rows);
-            if dialect.needs_order_by_for_paging() {
+            // **首页（cursor = None）同样必须按分页键排序！**
+            //
+            // 这是「漏行 + 主键冲突」的真凶：不排序时引擎按自己的物理顺序（InnoDB 就是
+            // 主键序）返回，`rows.last()` 取到的根本不是「最大值」，下一页的 keyset 就从
+            // 一个错误的位置往后读 —— 比它小的行永远读不到（漏行），比它大的行被再读一遍
+            // （目标端主键冲突）。真机 `xingwei_sales_vice`：首页 1 万行按主键序回来、
+            // 末行是 2017-01-14，而这一万行里最大已经到 2018-08，于是第二页与首页重叠
+            // 16 行、整表 5.8 万行只搬过去一半。日志里那句话一点都不明显 ——
+            // 只有把每页 SELECT 原文打出来才看得见缺陷（`DBMIND_SYNC_SQL_LOG=1`）：
+            //   `select * from (select …) dbmind_page limit 10000 offset 0`
+            let order = order_keys
+                .iter()
+                .map(|key| dialect.quote(key))
+                .collect::<Vec<_>>()
+                .join(", ");
+            if !order.is_empty() {
+                format!("{} order by {order} {page}", filtered(select_base, ""))
+            } else if dialect.needs_order_by_for_paging() {
+                // 无分页键（OFFSET 分页）且方言要求 order by 才能写 offset/fetch：占位排序
                 format!("{} order by (select null) {page}", filtered(select_base, ""))
             } else {
                 format!("select * from ({}) dbmind_page {page}", filtered(select_base, ""))
@@ -1101,6 +1276,7 @@ async fn sync_indexes(
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
     filter: IndexFilter,
     declared_primary: &[String],
+    source_columns: &[ColumnDetail],
 ) -> usize {
     // 源索引清单，统一成 (名称, 唯一, 列清单)。两条路：
     // - MySQL 系（含 Doris）：`SHOW INDEX FROM 表` —— **必须走这条**，Doris 的
@@ -1238,15 +1414,21 @@ async fn sync_indexes(
     if indexes.is_empty() {
         return 0;
     }
-    // 建索引的过程**不进界面日志**（用户口径：日志只留结果，过程没用的不打）——
-    // 只在真有索引建不成时汇总成一行，见下面的 `failed`。
+    // 建索引是链路里的一步，**开始与结果都进界面日志**：
+    // 索引后置之后这一步发生在数据灌完之后，大表上可能跑几分钟、期间行数不动，
+    // 以前只写文件日志，用户看到的是「数据都搬完了却不知道在干嘛」。
+    // 只打「N 个」的汇总，不逐条刷屏（400 张表的整库同步也扛得住）。
     let total = indexes.len();
+    if let Some(task) = task {
+        task.log(format!("表 {table}：创建索引（{total} 个）"));
+    }
     tracing::debug!(table, total, "开始创建索引");
     let mut created = 0usize;
-    // 建失败的索引：索引后置之后，建索引发生在**灌完数据**之后，大表上这一步本身就要花时间
-    //（也可能撞上 10 分钟的单语句上限）—— 再像以前那样完全不吭声，用户只会看到
-    //「目标表没有索引」却毫无线索。这里汇总成一行日志，不逐条刷屏。
+    // 建失败的索引：不逐条刷屏，最后汇总成一行（见下面的 `failed`）。
     let mut failed: Vec<String> = Vec::new();
+    // ClickHouse 这类「源索引推导不出目标索引」的跳过项，也要在日志里交代一句，
+    // 否则用户看到「创建索引（3 个）」之后就没有下文了。
+    let mut skipped: Vec<String> = Vec::new();
 
     // MySQL / MariaDB：把这一批索引合并成**一条** ALTER（服务器只扫一遍表）。
     //
@@ -1288,21 +1470,51 @@ async fn sync_indexes(
                 .collect::<Vec<_>>()
                 .join(", ");
             let unique_kw = if unique { "unique " } else { "" };
+            // ClickHouse 的 ORDER BY 就是源表主键 —— 与它完全重复的索引建了也用不上
+            //（CH 不会拿它剪枝），直接跳过并说明原因。
+            if target_kind.kind.key() == "clickhouse"
+                && same_key_columns(&columns, declared_primary)
+            {
+                tracing::debug!(table, index = %name, "跳过：与 ClickHouse 排序键（ORDER BY）完全重复");
+                skipped.push(name.clone());
+                continue;
+            }
             // **索引名保持源名**（用户口径：源叫什么目标就叫什么；重名/不支持时静默跳过）
             let idx_sql = match target_kind.kind.key() {
                 // Doris：二级索引用 BITMAP 写法（普通 create index 不带 USING 会失败）
-                "doris" => format!("create index {} on {} ({}) using bitmap", idx_name, target_name, col_list),
-                // ClickHouse：二级索引必须带 TYPE 与 GRANULARITY，从 MySQL 索引推导不出类型 ——
-                // 硬建只会失败，明确跳过并留日志（数据同步不受影响）
-                "clickhouse" => {
-                    // 数据同步不受影响，只是这个索引建不了 —— 过程细节进文件日志
-                    tracing::debug!(table, index = %name, "点击跳过：ClickHouse 二级索引需指定 TYPE，无法从源索引推导");
-                    continue;
-                }
-                _ => format!("create {}index {} on {} ({})", unique_kw, idx_name, target_name, col_list),
+                "doris" => Some(format!("create index {} on {} ({}) using bitmap", idx_name, target_name, col_list)),
+                // ClickHouse：没有 btree 索引，只有**跳数索引**（data skipping index），
+                // 必须带 TYPE 与 GRANULARITY —— 建法见 `clickhouse_skip_index`
+                "clickhouse" => clickhouse_skip_index(target_kind, target_name, &name, &columns, source_columns),
+                _ => Some(format!("create {}index {} on {} ({})", unique_kw, idx_name, target_name, col_list)),
+            };
+            let Some(idx_sql) = idx_sql else {
+                tracing::debug!(table, index = %name, "跳过：ClickHouse 跳数索引推不出可用表达式");
+                skipped.push(name.clone());
+                continue;
             };
             match run_target_ddl(state, tgt_target, &idx_sql).await {
-                Ok(_) => created += 1,
+                Ok(_) => {
+                    created += 1;
+                    // CH 的 ADD INDEX 只对**之后**写入的 part 生效，表里已有数据要
+                    // MATERIALIZE（按索引表达式扫一遍）才吃得到。回填失败不算索引建失败：
+                    // 索引已经挂上，只是历史数据没覆盖，日志里说清楚就行。
+                    if target_kind.kind.key() == "clickhouse" {
+                        let sql = format!(
+                            "alter table {} materialize index {}",
+                            target_name, idx_name
+                        );
+                        if let Err(err) = run_target_ddl(state, tgt_target, &sql).await {
+                            tracing::warn!(table, index = %name, error = %err.message, "MATERIALIZE INDEX 失败");
+                            if let Some(task) = task {
+                                task.log(format!(
+                                    "表 {table}：索引 {name} 已建，但历史数据回填失败（{}）—— 之后写入的数据照常生效",
+                                    err.message
+                                ));
+                            }
+                        }
+                    }
+                }
                 Err(err) => {
                     tracing::warn!(table, index = %name, error = %err.message, "创建索引失败（已跳过）");
                     failed.push(name.clone());
@@ -1311,7 +1523,19 @@ async fn sync_indexes(
         }
     }
     if created > 0 {
+        // 结果行：让「创建索引（N 个）」这一对有始有终，用户能确认这一步到底做完了没
+        if let Some(task) = task {
+            task.log(format!("表 {table}：索引创建完成（{created} 个）"));
+        }
         tracing::debug!(table, created, "二级索引已创建");
+    }
+    if !skipped.is_empty() {
+        if let Some(task) = task {
+            task.log(format!(
+                "表 {table}：{} 个索引已跳过（ClickHouse 只支持跳数索引：与排序键重复的、或推不出表达式的跳过）",
+                skipped.len()
+            ));
+        }
     }
     if !failed.is_empty() {
         if let Some(task) = task {
@@ -1324,6 +1548,71 @@ async fn sync_indexes(
         }
     }
     created
+}
+
+/// 两组列名是不是同一组（大小写不敏感、与列序无关）。
+fn same_key_columns(a: &[String], b: &[String]) -> bool {
+    if a.len() != b.len() || a.is_empty() {
+        return false;
+    }
+    let mut left: Vec<String> = a.iter().map(|c| c.to_ascii_lowercase()).collect();
+    let mut right: Vec<String> = b.iter().map(|c| c.to_ascii_lowercase()).collect();
+    left.sort();
+    right.sort();
+    left == right
+}
+
+/// ClickHouse 的「二级索引」不是 btree，而是**跳数索引**（data skipping index）：
+/// 只用于查询剪枝，不保证唯一性 —— MySQL 的唯一索引搬过去也只是「能加速查」的近似。
+///
+/// 建法与 MySQL 完全不同，必须带 TYPE 与 GRANULARITY：
+/// `alter table t add index idx expr type minmax granularity 4`（CH 24.8 真机实测通过）。
+/// 从源库 btree 索引能推出来的映射：
+/// - 文本列 → `bloom_filter`（等值 / IN 过滤，varchar 索引最常见的用法）
+/// - 数值、日期等 → `minmax`（范围过滤）
+/// - 多列 → `minmax` 作用在**元组**上（`(a, b)`，真机实测 CH 接受）
+/// 列名在源表里找不到（改名/不存在）时按 `minmax`：任何可比较类型都能建，最保守。
+fn clickhouse_skip_index(
+    target_kind: Dialect,
+    target_name: &str,
+    name: &str,
+    columns: &[String],
+    source_columns: &[ColumnDetail],
+) -> Option<String> {
+    if columns.is_empty() {
+        return None;
+    }
+    let is_text = |column: &str| {
+        source_columns
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(column))
+            .map(|c| Dialect::is_textual_type(c.type_name.as_deref().unwrap_or("")))
+            .unwrap_or(false)
+    };
+    let kind = if columns.len() == 1 && is_text(&columns[0]) {
+        "bloom_filter"
+    } else {
+        "minmax"
+    };
+    let expr = if columns.len() == 1 {
+        target_kind.quote(&columns[0])
+    } else {
+        format!(
+            "({})",
+            columns
+                .iter()
+                .map(|c| target_kind.quote(c))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    Some(format!(
+        "alter table {} add index {} {} type {} granularity 4",
+        target_name,
+        target_kind.quote(name),
+        expr,
+        kind
+    ))
 }
 
 /// 「索引后置」的收尾：数据已经落库（或确定一行都不搬），补建**非唯一**二级索引。
@@ -1342,14 +1631,14 @@ async fn create_deferred_indexes(
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
     deferred: bool,
     declared_primary: &[String],
+    source_columns: &[ColumnDetail],
 ) {
     if !deferred {
         return;
     }
     // 链路里的一步：数据搬完后补建二级索引（大表上可能几分钟，期间行数不动）。
-    if let Some(task) = task {
-        task.log(format!("表 {table}：创建索引"));
-    }
+    // 界面日志由 sync_indexes 统一打「创建索引（N 个）→ 索引创建完成（N 个）」，
+    // 这里不再重复喊一句 —— 而且没有非唯一索引时那句会变成空头支票。
     tracing::debug!(table, "数据已灌完，创建二级索引");
     sync_indexes(
         state,
@@ -1362,13 +1651,14 @@ async fn create_deferred_indexes(
         task,
         IndexFilter::NonUniqueOnly,
         declared_primary,
+        source_columns,
     )
     .await;
 }
 
 /// MySQL 的 `ON DUPLICATE KEY UPDATE` 会命中**任意**唯一索引，而不是只命中
 /// 用户选中的主键。目标表若还有其它唯一索引，源行可能因为另一个唯一键冲突
-/// 而更新到另一行。探测失败同样保守回退：不能拿“不知道”换“可能更新错行”。
+/// 而更新到另一行。探测失败同样保守回退：不能拿"不知道"换"可能更新错行"。
 async fn mysql_has_secondary_unique(
     state: &AppState,
     conn: &str,
@@ -1827,6 +2117,7 @@ mod paging_tests {
             Dialect::new(kind),
             0,
             Some((keys.as_slice(), lits.as_slice())),
+            keys.as_slice(),
             user_where,
             PAGE,
         )
@@ -1858,14 +2149,60 @@ mod paging_tests {
         assert!(!sql.contains(") > ("), "不能出现行值比较：{sql}");
     }
 
-    /// 无键（cursor = None）退回 OFFSET：不能带 where，且要包一层派生表。
+    /// 首页（无游标）也**必须**按分页键排序。不排序时 `rows.last()` 不是最大值，
+    /// 下一页的 keyset 从错误位置开始 —— 漏行 + 目标端主键冲突（真机 5.8 万行只搬一半）。
+    #[test]
+    fn 首页无游标也必须按分页键排序() {
+        let keys = vec!["XF_MALLORGID".to_string(), "XF_TXDATE".to_string()];
+        let sql = page_sql(
+            "select `a`, `b` from `t`",
+            Dialect::new(ConnectionKind::Mysql),
+            0,
+            None,
+            keys.as_slice(),
+            "",
+            PAGE,
+        );
+        assert!(sql.contains("order by XF_MALLORGID, XF_TXDATE"), "首页丢了 order by：{sql}");
+        assert!(sql.contains(&format!("limit {PAGE}")), "缺 limit：{sql}");
+        // 用户过滤条件与排序要同时在
+        let sql = page_sql(
+            "select `a` from `t`",
+            Dialect::new(ConnectionKind::Mysql),
+            0,
+            None,
+            keys.as_slice(),
+            "`a` > 1",
+            PAGE,
+        );
+        assert!(sql.contains("`a` > 1"), "首页丢了用户条件：{sql}");
+        assert!(sql.contains("order by"), "首页丢了 order by：{sql}");
+    }
+
+    /// 无键（cursor = None + 无分页键）退回 OFFSET：不能带 where，且要包一层派生表。
     #[test]
     fn 无键退回offset分页() {
-        let sql = page_sql("select `id` from `t`", Dialect::new(ConnectionKind::Mysql), 100000, None, "", PAGE);
+        let sql = page_sql(
+            "select `id` from `t`",
+            Dialect::new(ConnectionKind::Mysql),
+            100000,
+            None,
+            &[],
+            "",
+            PAGE,
+        );
         assert!(!sql.contains(" where"), "无键分页不该出现游标 where：{sql}");
         assert!(sql.contains("dbmind_page"), "应包一层派生表：{sql}");
         // 用户条件仍然要生效
-        let sql = page_sql("select `id` from `t`", Dialect::new(ConnectionKind::Mysql), 0, None, "`id` < 10", PAGE);
+        let sql = page_sql(
+            "select `id` from `t`",
+            Dialect::new(ConnectionKind::Mysql),
+            0,
+            None,
+            &[],
+            "`id` < 10",
+            PAGE,
+        );
         assert!(sql.contains("`id` < 10"), "无键分页丢了用户条件：{sql}");
     }
 }
@@ -2341,23 +2678,12 @@ pub(crate) fn insert_stmt_cap(kind_key: &str) -> usize {
     {
         return cap;
     }
-    match kind_key {
-        // Doris FE 的 max_allowed_packet 默认 1MB → 512KB 留足语句头/转义余量
-        "doris" => 512 * 1024,
-        // 列存按批写 part，批量大才有意义：字节上限放宽到 8MB，行数上限 1 万
-        "clickhouse" => 8 * 1024 * 1024,
-        // 本地文件/内存库：没有网络丢包，报文大一点省往返
-        "sqlite" | "h2" | "derby" => 8 * 1024 * 1024,
-        // MySQL/MariaDB：旧版 packet 默认 4MB、8.0 起动态 64MB，但**上限不是越高越好** ——
-        // 用户口径是「Navicat 不断我们也不许断」。一条几 MB 的 INSERT 在公网 / VPN 链路上
-        // 一丢包就是整条语句重传，慢到被判定中断（真机日志里撞的是 8MB 一条）。收到 1MB：
-        // 报文小到不容易触发丢包，往返次数只多几倍，换来的是不再反复「写入中断 + 重跑」。
-        "mysql" | "mariadb" => 1024 * 1024,
-        // 其余方言没有 1MB 级 packet 限制，但仍然受链路限制：
-        // 一条几 MB 的语句在丢包链路上丢一个包就是整条重传（真机撞到过 8MB 一条），
-        // 16MB 的上限只防内存尖峰、防不了慢，收到 4MB 更稳。
-        _ => 4 * 1024 * 1024,
-    }
+    // 数值由各数据源自己的写插件声明（`plugins/<kind>_writer.rs` 的 `SPEC`）：
+    // - Doris 512KB（FE 的 max_allowed_packet 默认 1MB，留足语句头/转义余量）；
+    // - ClickHouse / 本地嵌入式（SQLite/H2/Derby）8MB（列存按 part 写、本地没有丢包）；
+    // - MySQL 系 1MB（一条几 MB 的 INSERT 在公网/VPN 上一丢包就整条重传，真机撞的是 8MB 一条）；
+    // - 其余 4MB（没有 packet 硬限制，但仍受链路丢包约束）。
+    crate::api::transfer::plugins::spec_data_for(kind_key).stmt_cap()
 }
 
 /// 起步时的单条 INSERT 上限（**先小后大**）：不管方言允许多大，头几批都从 512KB 开始。
@@ -2379,24 +2705,11 @@ pub(crate) const STMT_CAP_START: usize = 512 * 1024;
 /// Oracle / DM / DB2 另受「派生表表达式总数 65,535」限制（见 `insert_batch_ranges_with_cap`），
 /// 三者取小 —— 所以宽表上实际每行数会更少。
 pub(crate) fn insert_rows_default(kind_key: &str) -> usize {
-    match kind_key {
-        // 列存 / 分析型：一条 INSERT 就是一次 part 写入，批量越大越省（往返、part 合并都摊薄）
-        // 10000 行在窄表上约 1MB 报文，远低于它 8MB 的字节上限；宽表由字节上限先切。
-        "clickhouse" => 10_000,
-        // Doris：FE 的 max_allowed_packet 默认 1MB ⇒ 字节上限只有 512KB，
-        // 2000 行是「窄表刚好用满 512KB」的量级，再大写不进去也是白拆。
-        "doris" => 2_000,
-        // PG 多行 VALUES 效率好，且没有 packet 硬限制
-        "postgresql" => 2_000,
-        // SQL Server 多行 VALUES 有 1000 行解析器硬限制（真机踩过）
-        "sqlserver" => 1_000,
-        // Oracle / DM / DB2：派生表表达式上限 65535，宽表时实际更少（见 with_cap）
-        "oracle" | "dm" | "db2" => 1_000,
-        // 嵌入式 / 本地库：没有网络往返和丢包成本，报文大一点省调用
-        "sqlite" | "h2" | "derby" => 5_000,
-        // MySQL / MariaDB：1000 行（DBX 同量级）—— 丢包链路上报文小一半，重传代价就小一半
-        _ => 1_000,
-    }
+    // 数值由各数据源的写插件声明（`plugins/<kind>_writer.rs` 的 `SPEC`）：
+    // ClickHouse 1 万行（一次 INSERT = 一次 part 写入）、Doris 2000 行（512KB 报文刚好用满）、
+    // PG 2000 行、SQL Server 1000 行（多行 VALUES 解析器硬限制）、
+    // 本地嵌入式 5000 行、其余（含 MySQL 系）1000 行。
+    crate::api::transfer::plugins::spec_data_for(kind_key).rows()
 }
 
 fn insert_rows_cap(kind_key: &str) -> usize {
@@ -2524,12 +2837,12 @@ fn insert_batch_ranges_with_cap(
     } else {
         insert_rows_cap(kind_key)
     };
-    let row_limit = match kind_key {
-        "sqlserver" => SQLSERVER_VALUES_LIMIT.min(rows_cap),
+    let row_limit = match crate::api::transfer::plugins::spec_data_for(kind_key).expr_limit() {
+        ExprLimit::SqlServer => SQLSERVER_VALUES_LIMIT.min(rows_cap),
         // 这些方言的单条多行 INSERT 用派生表展开，表达式总数是硬限制。
         // 10 的下限只防止极端宽表算出 0；真正写不进去时照常逐行降级并报错。
-        "oracle" | "dm" | "db2" => (65_535 / columns).clamp(10, 10_000).min(rows_cap),
-        _ => rows_cap,
+        ExprLimit::OracleLike => (65_535 / columns).clamp(10, 10_000).min(rows_cap),
+        ExprLimit::None => rows_cap,
     };
     let mut out: Vec<(usize, usize)> = Vec::new();
     let mut start = 0usize;
@@ -2552,7 +2865,7 @@ fn insert_batch_ranges_with_cap(
     out
 }
 
-/// 预编译批处理只用于“提交/回滚边界由驱动可靠提供”的 JDBC 方言。
+/// 预编译批处理只用于"提交/回滚边界由驱动可靠提供"的 JDBC 方言。
 ///
 /// MySQL 系的多行 INSERT 本来就能在一个 packet 内完成，ClickHouse/Doris 也各有
 /// 更快的原生批量通道；把它们塞进 executeBatch 反而多一层绑定开销。其余类型
@@ -2564,30 +2877,33 @@ fn insert_batch_ranges_with_cap(
 /// 同样的行数拆成字面量 INSERT 逐条发送完全正常（每条报文小）。预编译批省下的那点
 /// 绑定开销，远不值得把一条 VPN / 长肥管道上的链路变成「整表必失败」。
 fn prepared_insert_candidate(kind_key: &str) -> bool {
-    matches!(kind_key, "sqlserver" | "oracle" | "dm" | "h2")
+    // 名单由各数据源的写插件声明（`SPEC.prepared()`）：SQL Server / Oracle / DM / H2。
+    // **DB2 不在里面**（见上面那段真机结论），MySQL 系有自己的多行 INSERT 快路径。
+    crate::api::transfer::plugins::spec_data_for(kind_key).prepared_batch()
 }
 
 const PREPARED_BATCH_ROLLED_BACK: &str = "PREPARED_BATCH_ROLLED_BACK";
 
-/// 事务内做“批量失败 → 逐行重试”时需要的保存点。
+/// 事务内做"批量失败 → 逐行重试"时需要的保存点。
 ///
 /// PostgreSQL 在一个语句失败后会把整个事务标记为 aborted；没有保存点时，
 /// 后续逐行重试全部只会得到 `current transaction is aborted`。SQL Server
 /// 的部分错误也有同样效果。只在确实已经开了事务时使用；否则 SAVEPOINT
 /// 本身会在 PG 里开启一个没人负责提交的事务。
 fn savepoint_sql(kind: &str, name: &str) -> Option<(String, String, Option<String>)> {
-    match kind {
-        "postgresql" | "kingbase" => Some((
+    // 语法家族由写插件的 `SPEC.savepoint(...)` 声明：PG 系要 release，SQL Server 只有两条。
+    match crate::api::transfer::plugins::spec_data_for(kind).savepoint() {
+        Savepoint::Pg => Some((
             format!("savepoint {name}"),
             format!("rollback to savepoint {name}"),
             Some(format!("release savepoint {name}")),
         )),
-        "sqlserver" => Some((
+        Savepoint::MsSql => Some((
             format!("save transaction {name}"),
             format!("rollback transaction {name}"),
             None,
         )),
-        _ => None,
+        Savepoint::None => None,
     }
 }
 
@@ -2709,6 +3025,68 @@ async fn run_write_stmt(
     }
 }
 
+/// 去掉驱动塞进 message 的**连接号**记号：`…：(conn=1721) Duplicate entry …`
+///
+/// MariaDB / MySQL Connector/J 会把服务端连接号拼进报错正文（不一定在行首 ——
+/// 我们的 message 是 `SQL 执行失败：(conn=1721) Duplicate entry …`），这个号每建一次
+/// 连接就变（1662 / 1721 / 1733…），对用户没有任何意义 —— 用户口径是「这种多余的输出
+/// 都不要」。只剥这一层记号，数据库报错的正文一个字都不动。
+fn strip_conn_tag(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut rest = message;
+    loop {
+        let Some(start) = rest.find("(conn=") else {
+            out.push_str(rest);
+            break;
+        };
+        let after = &rest[start + 6..];
+        let Some(end) = after.find(')') else {
+            out.push_str(rest);
+            break;
+        };
+        if end == 0 || !after[..end].chars().all(|c| c.is_ascii_digit()) {
+            // 不是连接号：原样保留到这一处，继续往后找（rest 一定前进，不会空转）
+            out.push_str(&rest[..start + 6]);
+            rest = after;
+            continue;
+        }
+        out.push_str(&rest[..start]);
+        rest = after[end + 1..].trim_start();
+    }
+    out
+}
+
+/// 给用户看的错误正文：剥掉两层噪音，只留数据库原话。
+///
+/// ① 我们自己加的 `SQL 执行失败：` 标签 —— 日志外面已经有「写入失败：」在说这件事，
+///    再来一层就是套娃（用户口径：「这几个字也删掉」）；
+/// ② 驱动拼进去的 `(conn=1721)` 连接号 —— 每重连一次就变，对排查无用。
+///
+/// 两层可能交替出现（`SQL 执行失败：(conn=1) SQL 执行失败：…`），所以循环剥到没有为止。
+fn error_text(message: &str) -> String {
+    let mut text = message.to_string();
+    loop {
+        let clean = strip_conn_tag(&text);
+        let Some(rest) = clean.strip_prefix("SQL 执行失败：") else {
+            return clean;
+        };
+        text = rest.trim_start().to_string();
+    }
+}
+
+/// 日志里只放**原始报错的首行**（超长再截断）。
+///
+/// 驱动的 message 常带长尾巴（泳道键 `mysql|host|3306|db|...|s=internal:sync-wxxx-1#0`、
+/// 「内核将会按需重新连接」这类内部建议），原样铺到界面上既看不懂也读不完 ——
+/// 用户口径是「报错就给真实的报错信息」，那我们就把原文留着，只砍掉这些噪音。
+fn brief_error(message: &str) -> String {
+    let first = error_text(message.lines().next().unwrap_or(""));
+    match first.char_indices().nth(180) {
+        Some((cut, _)) => format!("{}…", &first[..cut]),
+        None => first,
+    }
+}
+
 /// 「这条连接已经不可用」类错误的特征串（大小写无关）。
 ///
 /// 与 [`is_link_level_error`] 共用一份清单：那条判 `XError`，这条判
@@ -2816,7 +3194,7 @@ pub(crate) async fn write_insert_rows(
                 Err(err) if err.message.contains(PREPARED_BATCH_ROLLED_BACK) => {
                     // 宿主确认整批已回滚，才允许走原来的字面量/逐行降级；否则
                     // 部分成功后再重试会产生重复数据。
-                    tracing::warn!(table, "预编译子批失败（已回滚），本批改用 SQL 批量并二分定位坏行");
+                    tracing::warn!(table, "预编译子批失败（已回滚），本批改用 SQL 批量并逐批拆分定位坏行");
                 }
                 Err(err) => {
                     return Err(format!("预编译批量写入失败（未自动重试）：{}", err.message));
@@ -2867,40 +3245,28 @@ pub(crate) async fn write_insert_rows(
                     // 客户端发完收不到 ACK，19 秒后连接重置，驱动只报 Communications link
                     // failure。这里把单条语句的字节上限减半，后面重跑该片就用更小的包探路；
                     // 只在失败时下调，健康链路不会因此变慢。
-                    let mut shrunk = (byte_cap / 2).max(STMT_CAP_MIN);
+                    let shrunk = (byte_cap / 2).max(STMT_CAP_MIN);
                     if shrunk < byte_cap {
                         stmt_cap.store(shrunk, std::sync::atomic::Ordering::Relaxed);
                     }
                     // 结论同步给**整个任务**：后面的表直接从更小的报文开工，
                     // 不必各自再断一次（几百张表各撞一次 = 几百条吓人日志）。
-                    let mut shared = false;
+                    // 返回值（本任务共享后的最终值）只服务日志，而日志不再报文上限，故忽略。
                     if let Some(grow) = hint {
-                        let (_, learned) = grow.note_stmt_cap(shrunk);
-                        if learned > 0 && learned < shrunk {
-                            shrunk = learned;
-                            shared = true;
-                        } else if learned == shrunk {
-                            shared = true;
-                        }
+                        let _ = grow.note_stmt_cap(shrunk);
                     }
                     if let Some(task) = task {
-                        let left = rows.len() as u64 - ok_rows;
                         // **不记失败行**：这一批所在的分片会被上层回滚并重跑（片级重试），
                         // 这些行随后会被重新写入。以前在这里 `add_rows_failed(left)`，
                         // 重跑成功后它们就成了永远抹不掉的「10 万行写入失败」
                         //（真机：目标表一行不缺、结果却报失败 10 万）。
+                        // 日志只报**原始报错**，行数 / 报文上限 / 是否沿用都属于内部量，不写。
                         task.log(format!(
-                            "表 {table}：写入连接已断（{}），已停止重试；本批剩余 {left} 行未写入，\
-                             将回滚本片并重跑（单条 INSERT 上限已调到 {} KB{}）",
-                            batch_err.message,
-                            shrunk / 1024,
-                            if shared { "，本任务后续表沿用" } else { "" }
+                            "表 {table}：写入连接已断：{}",
+                            brief_error(&batch_err.message)
                         ));
                     }
-                    return Err(format!(
-                        "写入连接已断：{}（本批 {n_rows} 行，未逐行重试）",
-                        batch_err.message
-                    ));
+                    return Err(format!("写入连接已断：{}", brief_error(&batch_err.message)));
                 }
                 if let Some((_, rollback, _)) = sp.as_ref() {
                     if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
@@ -2961,17 +3327,16 @@ pub(crate) async fn write_insert_rows(
                             // 变成几小时的「卡住」（见 is_link_level_error）。
                             if is_link_level_error(&sub_err) {
                                 if let Some(task) = task {
-                                    let left = rows.len() as u64 - ok_rows;
-                                    // 同上：不记失败行，交给上层「回滚本片并重跑」
+                                    // 同上：不记失败行，交给上层「回滚本片并重跑」；
+                                    // 也不报剩余行数（内部量，用户拿到没用）
                                     task.log(format!(
-                                        "表 {table}：二分定位时连接已断（{}），停止本批；\
-                                         剩余 {left} 行未写入，将回滚本片并重跑",
-                                        sub_err.message
+                                        "表 {table}：连接已断：{}",
+                                        brief_error(&sub_err.message)
                                     ));
                                 }
                                 return Err(format!(
-                                    "写入连接已断：{}（二分定位中止）",
-                                    sub_err.message
+                                    "写入连接已断：{}",
+                                    brief_error(&sub_err.message)
                                 ));
                             }
                             if let Some((_, rollback, _)) = sub_sp.as_ref() {
@@ -2987,7 +3352,11 @@ pub(crate) async fn write_insert_rows(
                             if sub_len <= 1 {
                                 // 单行仍失败 = 真坏行：计失败、留样例，兄弟区间继续写
                                 chunk_failed += 1;
-                                let text: String = sub_err.message.chars().take(200).collect();
+                                // 留**完整**的数据库原文：MySQL 的 `Duplicate entry '…' for
+                                // key '表.索引'` 带上长主键值就两百多字符，截在 200 恰好把
+                                // 索引名/后半截键值切掉，用户拿不到能对号的错误（真机反馈）。
+                                let text: String =
+                                    error_text(&sub_err.message).chars().take(500).collect();
                                 if sample_err.is_none() {
                                     sample_err = Some(text.clone());
                                     // 同时喂给写池诊断：卡顿日志里能直接看到「坏在哪」
@@ -3001,9 +3370,9 @@ pub(crate) async fn write_insert_rows(
                                     if let Some(task) = task {
                                         task.add_rows_failed(rows.len() as u64 - ok_rows);
                                     }
+                                    // 用户口径：括号里的解释一律不要，只留失败行数 + 数据库原文。
                                     return Err(format!(
-                                        "本批 {n_rows} 行里已确认 {chunk_failed} 行写入失败（过半），\
-                                         判定为系统性失败：{text}"
+                                        "本批 {n_rows} 行里有 {chunk_failed} 行写入失败：{text}"
                                     ));
                                 }
                             } else {
@@ -3019,8 +3388,13 @@ pub(crate) async fn write_insert_rows(
                 failed_rows += chunk_failed;
                 if chunk_failed > 0 {
                     if let Some(task) = task {
+                        // 用户口径：**只要程序/数据库报出的原始错误**。不要「二分定位」这类
+                        // 实现术语，也不要「其余已写入」这类自造的叙述 —— 失败了多少行 +
+                        // 数据库原文，两样就够：`Duplicate entry …` / `Data too long …` /
+                        // `Incorrect string value …` 各自对应完全不同的处理动作。
+                        let why = sample_err.as_deref().unwrap_or("（目标端没有返回错误文本）");
                         task.log(format!(
-                            "表 {table}：本批 {n_rows} 行里有 {chunk_failed} 行写入失败（二分定位），其余已写入"
+                            "表 {table}：本批 {n_rows} 行里有 {chunk_failed} 行写入失败：{why}"
                         ));
                     }
                 }
@@ -3029,19 +3403,16 @@ pub(crate) async fn write_insert_rows(
                     if let Some(task) = task {
                         task.add_rows_failed(rows.len() as u64 - ok_rows);
                     }
-                    return Err(sample_err.unwrap_or_else(|| batch_err.message));
+                    return Err(sample_err.unwrap_or_else(|| error_text(&batch_err.message)));
                 }
             }
         }
     }
     if failed_rows > 0 {
         if let Some(task) = task {
+            // 只累计计数：每条失败的原因与行数已经在各自的批日志里报过（数据库原文），
+            // 这里再打一条汇总就是重复输出（用户口径：多余的输出都不要）。
             task.add_rows_failed(failed_rows);
-            let head = sample_err.unwrap_or_default();
-            task.log(format!(
-                "表 {table}：{} 行写入失败（脏数据，已单独计失败），样例错误：{head}",
-                failed_rows
-            ));
         }
     }
     // 写入计数在这里统一报（串行管道与并发写池共用本函数 —— 之前并发写池的重构
@@ -3169,6 +3540,7 @@ pub(crate) async fn write_upsert_rows(
     let mut ok_rows = 0u64;
     let mut failed_rows = 0u64;
     let mut sample_err: Option<String> = None;
+    // 脏数据明细文件（第一次真坏行时创建，之后所有坏行追加进去）
     let mut start_row = 0usize;
     let mut savepoint_seq = 0u64;
     for (n_rows, stmt) in &stmts {
@@ -3272,7 +3644,8 @@ pub(crate) async fn write_upsert_rows(
                             }
                             chunk_failed += 1;
                             if sample_err.is_none() {
-                                sample_err = Some(row_err.message.chars().take(200).collect());
+                                sample_err =
+                                    Some(error_text(&row_err.message).chars().take(500).collect());
                             }
                         }
                     }
@@ -3282,7 +3655,7 @@ pub(crate) async fn write_upsert_rows(
                     if let Some(task) = task {
                         task.add_rows_failed(rows.len() as u64 - ok_rows);
                     }
-                    return Err(sample_err.unwrap_or_else(|| batch_err.message));
+                    return Err(sample_err.unwrap_or_else(|| error_text(&batch_err.message)));
                 }
             }
         }
@@ -3292,8 +3665,7 @@ pub(crate) async fn write_upsert_rows(
         if let Some(task) = task {
             task.add_rows_failed(failed_rows);
             task.log(format!(
-                "表 {table}：upsert 有 {} 行失败（脏数据，已逐行重试），样例错误：{}",
-                failed_rows,
+                "表 {table}：{failed_rows} 行写入失败：{}",
                 sample_err.unwrap_or_default()
             ));
         }
@@ -3323,10 +3695,9 @@ pub(crate) const UPDATE_BATCH: usize = 500;
 /// Oracle/DB2/DM 会报「无效字符」，H2/Derby 不认多语句，ClickHouse 的
 /// `ALTER TABLE … UPDATE` 也不是这个形状 —— 这些保持逐行。
 pub(crate) fn supports_multi_statement(kind: &str) -> bool {
-    matches!(
-        kind,
-        "mysql" | "mariadb" | "doris" | "sqlserver" | "postgresql" | "kingbase"
-    )
+    // 由写插件的 `SPEC.multi_statement()` 声明（MySQL 系带 allowMultiQueries、T-SQL 原生、
+    // pgjdbc 允许一次多条）。Oracle/DB2/DM 报「无效字符」，H2/Derby/ClickHouse 不认。
+    crate::api::transfer::plugins::spec_data_for(kind).multi_statement()
 }
 
 /// 把攒下的 UPDATE 语句**一次**发出去；整批失败时**降级逐行重试**（与 INSERT 同一套
@@ -3420,7 +3791,7 @@ pub(crate) async fn write_update_batch(
                         }
                         failed += 1;
                         if sample.is_none() {
-                            sample = Some(err.message.chars().take(200).collect());
+                            sample = Some(error_text(&err.message).chars().take(500).collect());
                         }
                     }
                 }
@@ -3671,7 +4042,33 @@ async fn sync_table(
     // **别的**会话写 —— 那层外层事务根本管不到，等于没开（真机踩过）。
     // 结构操作（建表/索引）也不该和数据写挤在一个事务里：DDL 会隐式提交。
     let sid = sync_slot_sid(slot);
-    let result = sync_table_inner(state, task, src, tgt, table, target_table, opts, &sid, progress).await;
+    let mut result =
+        sync_table_inner(state, task, src, tgt, table, target_table, opts, &sid, progress).await;
+    // 后置 SQL（DataX 的 postSql）：本对象**数据搬完后**在目标连接上执行。
+    //
+    // 放在这个收口函数而不是 `sync_table_inner` 的每个 return 里：直拷 / 引擎 / 只同步
+    // 结构三条路都从这里出去，不会漏；而 inner 里有十几个提前返回的分支，逐个加必然漏一个。
+    // 失败 ⇒ 这张表判失败：用户写了后置 SQL 就说明它是流程的一部分（改约束、补索引、写打点），
+    // 悄悄失败还报「同步成功」比直接报错糟得多。
+    if result.status == "ok" && !opts.post_sql.is_empty() {
+        let target_table = opts.target_table_for(table, target_table);
+        match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
+            Ok(target) => {
+                if let Err(msg) = run_user_sql(state, &target, &opts.post_sql, "后置 SQL").await {
+                    result = ObjResult::failed("table", table, msg);
+                } else if let Some(task) = task {
+                    task.log(format!("表 {target_table}：执行后置 SQL"));
+                }
+            }
+            Err(err) => {
+                result = ObjResult::failed(
+                    "table",
+                    table,
+                    format!("后置 SQL 无法解析目标连接：{}", err.message),
+                );
+            }
+        }
+    }
     // 会话怎么处置：
     // - **成功 + 允许复用**（整库同步的并发槽位）⇒ 留着，给同一槽位的下一张表用。
     //   每张表 1~3 条连接，经 SSH 隧道建一条要 1.5~6.4 秒 —— 几百张表光建连就吃掉
@@ -3870,12 +4267,11 @@ pub(crate) fn write_parallelism(kind: dbmind_core::ConnectionKind) -> usize {
 /// Doris / ClickHouse / Oracle / 达梦 / DB2 故意不列 —— 它们没有可用的 SQL 级 begin，
 /// 硬上会直接把写入路径打挂。
 pub(crate) fn txn_batch(kind: &str) -> Option<(&'static str, &'static str, &'static str)> {
-    match kind {
-        "mysql" | "mariadb" => Some(("set autocommit = 0", "commit", "set autocommit = 1")),
-        "postgresql" | "kingbase" | "sqlite" => Some(("begin", "commit", "")),
-        "sqlserver" => Some(("begin transaction", "commit", "")),
-        _ => None,
-    }
+    // 三条语句由写插件的 `SPEC.txn(...)` 声明；`None` = 该方言没有可用的 SQL 级 begin
+    //（Doris / ClickHouse / Oracle / 达梦 / DB2 / H2 / Derby），照旧逐条提交。
+    crate::api::transfer::plugins::spec_data_for(kind)
+        .txn()
+        .map(|txn| (txn.begin, txn.commit, txn.end))
 }
 
 /// 同步一张表（内层：实际传输逻辑）。
@@ -3892,6 +4288,11 @@ async fn sync_table_inner(
     progress: &std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) -> ObjResult {
     let ty = "table";
+    // 目标表名映射（界面「表名映射」）：在**最前面**一次换掉，后面「读目标表结构 / 建表 /
+    // 建索引 / 写数据 / 日志」全部用新名。放到最后再换的话，结构会建在旧名下、数据写进
+    // 新表，用户看到的是一张空表 + 一句「同步成功」。
+    let mapped_table = opts.target_table_for(table, target_table);
+    let target_table = mapped_table.as_str();
     // 行过滤**按表取**：界面上一张表一个条件（见 `SyncRequest::where_clauses`）。
     // 这里一次算好，同实例直拷与 transfer 引擎共用同一个值 —— 两条路各自去读
     // `opts` 很容易分叉（曾经直拷路径漏掉过滤，抽样的表整表搬过去了）。
@@ -3972,6 +4373,9 @@ async fn sync_table_inner(
             &src_column_comments,
             src_table_comment.as_deref(),
         );
+        // 建表语句进文件日志：目标方言拒绝时（1071 键太长 / 1067 默认值非法 / 1118 行太宽），
+        // 界面上只有一句数据库原文，靠着这一行才能还原「我们到底发了什么」。
+        tracing::debug!(table, %ddl, "目标表建表语句");
         if let Err(err) = run_target(state, &tgt_target, &ddl).await {
             let mut msg = format!("建表失败：{}", err.message);
             // 「Row size too large (> 8126)」（MySQL 1118）：目标表列太多/太宽，DDL 这边已经做到
@@ -3994,6 +4398,29 @@ async fn sync_table_inner(
                      ② 目标改用 Doris / PostgreSQL / ClickHouse（它们没有这个行宽限制）；\
                      ③ 若目标 MySQL 是 5.6/5.7，确认行格式为 DYNAMIC —— 本工具建表已显式指定。）"
                 ));
+            }
+            // 「Specified key was too long」（MySQL 1071）：InnoDB 单个索引上限 3072 字节。
+            // 建表语句已经把「主键在 utf8mb4 下装不下就退到 utf8」处理掉了
+            //（见 dialect.rs 的 mysql_charset_for_key），还报说明连 3 字节/字符都装不下 ——
+            // 只能靠缩短键列，这里把口径讲清楚，免得用户以为是工具把结构同步坏了。
+            if err.message.to_ascii_lowercase().contains("key was too long") {
+                msg.push_str(
+                    "（MySQL/InnoDB 单个索引最多 3072 字节：索引里文本列的长度之和 × 4（utf8mb4 每字符 \
+                     4 字节）超过它就会报这个错。本工具建表时若 utf8mb4 装不下会自动改建成 utf8（3 字节/\
+                     字符）；仍失败说明连 utf8 都装不下 —— 请在源表上缩短主键/唯一索引里的文本列，\
+                     或把索引改成前缀索引）",
+                );
+            }
+            // 「Invalid default value」（MySQL 1067）：目标端 sql_mode 比源库严格。
+            // 已知的两个成因（零日期默认值、没写默认值的 TIMESTAMP 列）在 dialect.rs 建表时已经
+            // 处理掉了（省略零日期 / 给可空 timestamp 显式写 null），还报说明是别的写法。
+            if err.message.to_ascii_lowercase().contains("invalid default value") {
+                msg.push_str(
+                    "（目标端 sql_mode 比源库严格：含 NO_ZERO_DATE 时 `0000-00-00` 这类零日期默认值、\
+                     以及没写默认值的 TIMESTAMP 列都会被拒绝。本工具已自动省略零日期默认值、并给可空 \
+                     TIMESTAMP 显式写 NULL；仍报错说明是另一种写法（例如 5.5 目标不接受 datetime 的 \
+                     CURRENT_TIMESTAMP），把该列的默认值在源表上改掉即可）",
+                );
             }
             return ObjResult::failed(ty, table, msg);
         }
@@ -4026,7 +4453,16 @@ async fn sync_table_inner(
         }
         tracing::debug!(table, forced, "删除目标表（按源结构重建）");
         let mut rebuilt = true;
-        if let Err(err) = run_target(state, &tgt_target, &format!("drop table {target_name}")).await {
+        // PG 的 `drop table` 遇到「有视图依赖它」会直接失败（真机：MySQL → PG 整库同步，
+        // 目标库已有视图引用该表 ⇒ `cannot drop table … because other objects depend on it`），
+        // 于是重建被降级成"保留旧结构"，列定义根本没更新。PG 支持 `cascade`，依赖的视图
+        // 会在后面的视图阶段重建成新版，正是「以源为准」想要的结果。
+        let drop_sql = if target_kind.kind.key() == "postgresql" {
+            format!("drop table if exists {target_name} cascade")
+        } else {
+            format!("drop table {target_name}")
+        };
+        if let Err(err) = run_target(state, &tgt_target, &drop_sql).await {
             if !forced {
                 return ObjResult::failed(ty, table, format!("删除目标表失败：{}", err.message));
             }
@@ -4048,6 +4484,7 @@ async fn sync_table_inner(
                 &src_column_comments,
                 src_table_comment.as_deref(),
             );
+            tracing::debug!(table, %ddl, "目标表建表语句（重建）");
             if let Err(err) = run_target(state, &tgt_target, &ddl).await {
                 return ObjResult::failed(ty, table, format!("重建目标表失败：{}", err.message));
             }
@@ -4117,6 +4554,7 @@ async fn sync_table_inner(
             task,
             filter,
             &declared_primary,
+            &source_columns,
         )
         .await;
         deferred_indexes = opts.sync_data;
@@ -4134,6 +4572,17 @@ async fn sync_table_inner(
     if !opts.sync_data {
         let message = if created { "已按源结构建表（未同步数据）" } else { "已跳过（未勾选同步数据）" };
         return ObjResult::ok(ty, table, message, 0, 0);
+    }
+    // 前置 SQL（DataX 的 preSql）：**结构已就绪、数据还没搬** —— 清空目标表、禁用触发器、
+    // 写批次打点这类操作只有放在这一档才有意义（放建表前会撞「表不存在」，放搬完后太晚）。
+    // 直拷与引擎两条路都在这个点之后，所以两条路都能覆盖。
+    if !opts.pre_sql.is_empty() {
+        if let Err(msg) = run_user_sql(state, &tgt_target, &opts.pre_sql, "前置 SQL").await {
+            return ObjResult::failed(ty, table, msg);
+        }
+        if let Some(task) = task {
+            task.log(format!("表 {target_table}：执行前置 SQL"));
+        }
     }
     // 「读取源数据」由 transfer 引擎在真正发第一页查询时打（单表同步、直拷两条路
     // 都走它），这里不重复。
@@ -4163,7 +4612,7 @@ async fn sync_table_inner(
         // 一行都不会搬：索引后置的那一半照样补齐，否则这张新表比「正常建表」少了二级索引
         create_deferred_indexes(
             state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
-            deferred_indexes, &declared_primary,
+            deferred_indexes, &declared_primary, &source_columns,
         )
         .await;
         return ObjResult::skipped(ty, table, "源表与目标表没有同名列，无法同步数据");
@@ -4416,7 +4865,9 @@ async fn sync_table_inner(
 
     // **Doris Stream Load 快速通道**：纯插入/清空重建时启用 —— 数据以 JSON 走 HTTP
     // 直推 FE，绕过 MySQL 协议 1000~2000 行/批的吞吐瓶颈；失败自动回退 INSERT 管道。
-    let use_stream = target_kind.kind.key() == "doris"
+    // 能力位由目标写插件声明（`SPEC.stream_load()`，目前只有 Doris）：同步层不认数据库名字。
+    let use_stream = crate::api::transfer::plugins::spec_data_for(target_kind.kind.key())
+        .stream_load()
         && effective_mode != DataMode::Upsert
         && tgt_record.is_some()
         // 含二进制列的表**不走 Stream Load**：CSV/JSON 体里没法原样表达 BLOB
@@ -4599,7 +5050,7 @@ async fn sync_table_inner(
             // 索引后置的收尾：行已经落到目标，这时补建非唯一二级索引最省
             create_deferred_indexes(
                 state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
-                deferred_indexes, &declared_primary,
+                deferred_indexes, &declared_primary, &source_columns,
             )
             .await;
             // 日志只报「执行到哪一步」—— 行数在进度卡上（rowsWritten 平滑递增），不进日志刷屏
@@ -4682,6 +5133,7 @@ async fn sync_table_inner(
         slices_cap: opts.src_slices,
         insert_rows: opts.insert_rows,
         op_timeout_secs: opts.op_timeout_secs,
+        pacer: opts.pacer.clone(),
         grow: opts.grow.clone(),
         target_types: target_types.clone(),
         key_columns: key_columns.clone(),
@@ -4803,7 +5255,7 @@ async fn sync_table_inner(
     // 索引后置的收尾：数据全部落库后，再补建非唯一二级索引（见上面建表后那一段）
     create_deferred_indexes(
         state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
-        deferred_indexes, &declared_primary,
+        deferred_indexes, &declared_primary, &source_columns,
     )
     .await;
 
@@ -4948,6 +5400,83 @@ fn rewrite_definition(
     })
 }
 
+/// 跨类型同步「对象定义」（视图 / 存储过程 / 函数 / 触发器 / 事件）时的两步适配：
+/// ① 摘掉 MySQL 专有子句；② 把反引号标识符换成目标方言的引号。
+///
+/// 真机踩到的两类错（MySQL → 目标库整库同步，视图/函数全失败）：
+/// - **ClickHouse**：`CREATE ALGORITHM=UNDEFINED DEFINER=… SQL SECURITY INVOKER VIEW …`
+///   报 `Code: 62. Syntax error: failed at position 8 ('ALGORITHM')`；
+/// - **PostgreSQL**：定义里的 `CREATE VIEW `v_x`` 里的反引号 PG 不认，报
+///   `ERROR: syntax error at or near "`" 位置 13`；函数则报 `syntax error at or near "" position: 17`。
+///
+/// ①只处理「头部」（到第一个 ` VIEW ` 关键字为止），视图体里同样出现的字样不会被误伤；
+/// 同类型同步（MySQL → MySQL）两步都不生效，一个字都不动。
+fn adapt_object_definition(definition: &str, source: &Dialect, target: &Dialect) -> String {
+    let stripped = strip_mysql_view_options(definition, source, target);
+    adapt_identifier_quoting(&stripped, source, target)
+}
+
+/// ① 摘掉 MySQL 视图头部专有的 `ALGORITHM=` / `SQL SECURITY …`（见 [`adapt_object_definition`]）。
+fn strip_mysql_view_options(definition: &str, source: &Dialect, target: &Dialect) -> String {
+    let mysql_like = |dialect: &Dialect| matches!(dialect.kind.key(), "mysql" | "mariadb");
+    if !mysql_like(source) || mysql_like(target) {
+        return definition.to_string();
+    }
+    // to_ascii_lowercase 不会改变字节长度，所以位置可以直接切原文
+    let Some(at) = definition.to_ascii_lowercase().find(" view ") else {
+        return definition.to_string();
+    };
+    let mut head = definition[..at].to_string();
+    // 长的先抹：否则只抹掉 `sql security` 会留下一个孤零零的 `invoker`
+    for clause in [
+        "algorithm=undefined",
+        "algorithm=merge",
+        "algorithm=temptable",
+        "sql security definer",
+        "sql security invoker",
+    ] {
+        while let Some(pos) = head.to_ascii_lowercase().find(clause) {
+            head.replace_range(pos..pos + clause.len(), "");
+        }
+    }
+    let head = head.split_whitespace().collect::<Vec<_>>().join(" ");
+    format!("{head}{}", &definition[at..])
+}
+
+/// 方言的标识符引号字符：MySQL 家族用反引号，SQL Server 用方括号，其余用双引号。
+///
+/// 不能拿 `Dialect::quote("_")` 反推 —— 它对"朴素名字"是不加引号的（`_` 正好是朴素名字），
+/// 首字符会取成 `_` 本身。
+fn quote_mark(dialect: &Dialect) -> char {
+    match dialect.kind.key() {
+        "mysql" | "mariadb" | "doris" | "clickhouse" => '`',
+        "sqlserver" => '[',
+        _ => '"',
+    }
+}
+
+/// ② 把源端的反引号标识符换成目标方言的引号（只改**代码段**，字符串字面量与注释原样保留）。
+///
+/// MySQL 用反引号，PG / Oracle / H2 / Derby / DB2 用双引号，SQL Server 习惯方括号。
+/// 同类型或目标本来就用反引号（MySQL / MariaDB / Doris / ClickHouse）时原样返回。
+fn adapt_identifier_quoting(definition: &str, source: &Dialect, target: &Dialect) -> String {
+    let (src_mark, tgt_mark) = (quote_mark(source), quote_mark(target));
+    if src_mark != '`' || tgt_mark == '`' {
+        return definition.to_string();
+    }
+    let re = regex::Regex::new(r"`((?:[^`]|``)*)`").unwrap();
+    map_sql_code(definition, |code| {
+        re.replace_all(code, |caps: &regex::Captures<'_>| {
+            let inner = caps[1].replace("``", "`");
+            match tgt_mark {
+                '[' => format!("[{}]", inner.replace(']', "]]")),
+                _ => format!("\"{}\"", inner.replace('"', "\"\"")),
+            }
+        })
+        .into_owned()
+    })
+}
+
 /// 视图：只有能拿到完整 `CREATE VIEW` 的类型才同步（见文件头决定 4）。
 async fn sync_view(
     state: &AppState,
@@ -5006,6 +5535,9 @@ async fn sync_view(
         tgt_db.as_deref(),
         matches!(source_kind.kind.key(), "mysql" | "mariadb"),
     );
+    // 跨类型：MySQL 专有的 `ALGORITHM=` / `SQL SECURITY …` 目标端不认。
+    // 真机：MySQL → ClickHouse 报 `Code: 62. Syntax error: failed at position 8 ('ALGORITHM')`。
+    let definition = adapt_object_definition(&definition, &source_kind, &target_kind);
     let target_name = target_kind.quote(name);
     let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
         Ok(target) => target,
@@ -5091,12 +5623,38 @@ async fn sync_object_source(
         Ok(record) => Dialect::new(record.kind()),
         Err(err) => return ObjResult::failed(kind, name, err.message),
     };
+    // 例程（过程 / 函数 / 触发器 / 事件）的**语法与运行时语言都是方言私有的**：
+    // 把 MySQL 的 `CREATE FUNCTION … BEGIN … END` 发给 PG，即使引号改对了也照样语法错
+    //（真机：MySQL → PG 整库同步，8 个函数、4 个存储过程全失败，日志只有一句 syntax error）。
+    // 这类对象跨类型只能跳过并说明原因，硬试只会留一堆看不懂的报错。
+    fn family(key: &str) -> &str {
+        if matches!(key, "mysql" | "mariadb") {
+            "mysql"
+        } else {
+            key
+        }
+    }
+    if family(source_kind.kind.key()) != family(target_kind.kind.key()) {
+        return ObjResult::skipped(
+            kind,
+            name,
+            format!(
+                "跨类型不搬{}：{} 与 {} 的{}语法与运行时语言不兼容（引号、流程控制、系统包都不同），需人工改写后再建",
+                kind_label(kind),
+                source_kind.kind.key().to_ascii_uppercase(),
+                target_kind.kind.key().to_ascii_uppercase(),
+                kind_label(kind),
+            ),
+        );
+    }
     let definition = rewrite_definition(
         &definition,
         side_schema_name(&source_kind, &src.scope, &src.schema).as_deref(),
         side_schema_name(&target_kind, &tgt.scope, &tgt.schema).as_deref(),
         matches!(source_kind.kind.key(), "mysql" | "mariadb"),
     );
+    // 跨类型：MySQL 专有的 `ALGORITHM=` / `SQL SECURITY …` 目标端不认（真机 ClickHouse 语法错）
+    let definition = adapt_object_definition(&definition, &source_kind, &target_kind);
     let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
         Ok(target) => target,
         Err(err) => return ObjResult::failed(kind, name, format!("解析目标连接失败：{}", err.message)),
@@ -5442,8 +6000,9 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             } else {
                 format!("（{}）", parts.join("，"))
             };
-            // 每批行数也写进来：界面填的值（或按目标库默认）到底生效了没有，
-            // 用户看第一行就能确认，不用猜。
+            // 每批行数 / 单语句超时**不进界面日志**：那是配置参数，不是「同步了什么」
+            //（用户口径：第一行只讲要搬哪些对象，别在后面念参数）。值仍然进 tracing，
+            // 排查「界面填的没生效」时照样查得到。
             let batch_rows = if opts.insert_rows > 0 {
                 opts.insert_rows
             } else {
@@ -5454,9 +6013,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 0 => "继承连接".to_string(),
                 s => format!("{s} 秒"),
             };
-            task.log(format!(
-                "开始同步：{total} 个对象{detail}；每批最多 {batch_rows} 行，超时 {timeout_note}"
-            ));
+            task.log(format!("开始同步：{total} 个对象{detail}"));
             // 调度细节只进 tracing（debug）：它们是「内部怎么排兵布阵」，用户看不懂也不需要看
             tracing::debug!(
                 target: "dbmind::sync",
@@ -5464,6 +6021,8 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 total,
                 sync_concurrency,
                 concurrency_source,
+                batch_rows,
+                timeout_note = %timeout_note,
                 tgt_workers = opts.tgt_workers,
                 src_slices = opts.src_slices,
                 target_declared,
@@ -6256,5 +6815,129 @@ mod definition_tests {
     fn 同名库不改写() {
         let src = "CREATE VIEW v AS select * from demo.t";
         assert_eq!(rewrite_definition(src, Some("demo"), Some("demo"), true), src);
+    }
+
+    /// 跨类型建视图：MySQL 的 `ALGORITHM=` / `SQL SECURITY …` 目标端不认
+    ///（真机 MySQL → ClickHouse 报 `Code: 62. Syntax error: failed at position 8 ('ALGORITHM')`）。
+    #[test]
+    fn 跨类型同步视图去掉_mysql_专有子句() {
+        let mysql = Dialect::new(dbmind_core::ConnectionKind::Mysql);
+        let clickhouse = Dialect::new(dbmind_core::ConnectionKind::Clickhouse);
+        let raw = "CREATE ALGORITHM=UNDEFINED DEFINER=`u`@`%` SQL SECURITY INVOKER VIEW `v` AS select 1";
+        let out = adapt_object_definition(&rewrite_definition(raw, None, None, true), &mysql, &clickhouse);
+        assert_eq!(out, "CREATE VIEW `v` AS select 1");
+        // 同类型（MySQL → MySQL）必须原样保留，别把 MySQL 自己也搞坏
+        assert!(adapt_object_definition(raw, &mysql, &mysql).contains("ALGORITHM="));
+        // 视图体里的同名字样不能被误伤（只在头部做替换）
+        let body = "CREATE ALGORITHM=MERGE SQL SECURITY DEFINER VIEW `v` AS \
+                    select 'sql security invoker' as note from t where x = 'algorithm=merge'";
+        let out = adapt_object_definition(body, &mysql, &clickhouse);
+        assert!(out.starts_with("CREATE VIEW `v`"), "{out}");
+        assert!(out.contains("'sql security invoker'"), "字面量被误改：{out}");
+        assert!(out.contains("'algorithm=merge'"), "字面量被误改：{out}");
+    }
+
+    /// 跨类型建视图/例程时，MySQL 的反引号要换成目标方言的引号。
+    /// 真机：MySQL → PostgreSQL 整库同步，视图报 `ERROR: syntax error at or near "`" 位置 13`，
+    /// 函数报 `syntax error at or near "" position: 17` —— 都是反引号惹的。
+    #[test]
+    fn 跨类型对象定义的标识符改用目标引号() {
+        let mysql = Dialect::new(dbmind_core::ConnectionKind::Mysql);
+        let pg = Dialect::new(dbmind_core::ConnectionKind::Postgresql);
+        let sqlserver = Dialect::new(dbmind_core::ConnectionKind::Sqlserver);
+        let raw = "CREATE VIEW `v_x` AS select `t`.`a` from `db1`.`t` where `t`.`b` = '`not_ident`'";
+        assert_eq!(
+            adapt_object_definition(raw, &mysql, &pg),
+            "CREATE VIEW \"v_x\" AS select \"t\".\"a\" from \"db1\".\"t\" where \"t\".\"b\" = '`not_ident`'",
+            "反引号要换双引号，且不能动字符串字面量"
+        );
+        // SQL Server 习惯方括号
+        assert_eq!(
+            adapt_object_definition("CREATE VIEW `v` AS select 1", &mysql, &sqlserver),
+            "CREATE VIEW [v] AS select 1"
+        );
+        // 同类型（MySQL → MySQL）一个字都不动
+        assert_eq!(adapt_object_definition(raw, &mysql, &mysql), raw);
+        // 目标本来就用反引号（Doris / ClickHouse）也不用动
+        let doris = Dialect::new(dbmind_core::ConnectionKind::Doris);
+        assert_eq!(adapt_object_definition(raw, &mysql, &doris), raw);
+    }
+}
+
+
+#[cfg(test)]
+mod 用户脚本与映射测试 {
+    use super::*;
+
+    /// 前后置 SQL 的分割必须尊重引号：`'a;b'` 里的分号是**数据**，不是分隔符。
+    /// 切坏的后果是「用户正常的脚本在我们这里变成语法错误」。
+    #[test]
+    fn 用户_sql_按引号之外的分隔符切分() {
+        let script = "delete from t;\n-- 备注整行丢掉\ninsert into t values ('a;b');\nselect 1";
+        let parts = split_user_sql(script);
+        assert_eq!(
+            parts,
+            vec![
+                "delete from t".to_string(),
+                "insert into t values ('a;b')".to_string(),
+                "select 1".to_string(),
+            ]
+        );
+        assert!(split_user_sql("  ;; \n").is_empty(), "空语句不该发出去");
+    }
+
+    /// 表名映射：按**源表名**匹配（也认带库前缀的末段），留空/没写等于同名。
+    #[test]
+    fn 表名映射按源表名生效() {
+        let body = SyncRequest {
+            table_renames: Some(std::collections::HashMap::from([
+                ("t_order".to_string(), "t_order_new".to_string()),
+                ("t_blank".to_string(), "   ".to_string()),
+            ])),
+            ..Default::default()
+        };
+        let opts = body.opts();
+        assert_eq!(opts.target_table_for("t_order", "t_order"), "t_order_new");
+        assert_eq!(opts.target_table_for("db1.t_order", "db1.t_order"), "t_order_new");
+        assert_eq!(opts.target_table_for("t_blank", "t_blank"), "t_blank");
+        // 没有映射时，单表接口显式给的目标表名说了算
+        assert_eq!(opts.target_table_for("t_keep", "explicit"), "explicit");
+    }
+
+    /// 前端提交的字段名必须与后端一一对上（`rename_all = "camelCase"`）。
+    /// 对不上的表现是「界面填了、后端静默忽略」，在界面上完全看不出来。
+    #[test]
+    fn 前端载荷字段名对得上() {
+        let payload = serde_json::json!({
+            "sourceConnectionId": "c1",
+            "targetConnectionId": "c2",
+            "rateLimitRows": 5000,
+            "rateLimitBytes": 2097152,
+            "tableRenames": { "t_order": "t_order_new" },
+            "preSql": "delete from t_order",
+            "postSql": "analyze table t_order"
+        });
+        let body: SyncRequest = serde_json::from_value(payload).expect("载荷应能解析");
+        let opts = body.opts();
+        assert!(opts.pacer.is_some(), "rateLimitRows/Bytes 没被认出来");
+        assert_eq!(
+            opts.table_renames.get("t_order").map(String::as_str),
+            Some("t_order_new"),
+            "tableRenames 没被认出来"
+        );
+        assert_eq!(opts.pre_sql, "delete from t_order");
+        assert_eq!(opts.post_sql, "analyze table t_order");
+    }
+
+    /// 限速：两条曲线都为 0 时**不建**限速表（热路径完全不介入）。
+    #[test]
+    fn 不限速时不建限速表() {
+        let body = SyncRequest::default();
+        assert!(body.opts().pacer.is_none());
+        let body = SyncRequest {
+            rate_limit_rows: Some(5_000),
+            ..Default::default()
+        };
+        assert!(body.opts().pacer.is_some());
     }
 }
