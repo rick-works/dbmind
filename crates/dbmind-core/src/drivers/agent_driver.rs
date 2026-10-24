@@ -472,21 +472,20 @@ impl AgentDriver {
         let params = self.connect_params(session_id, config, read_only)?;
         // 建连超时 25 → 60 秒：走 SSH 隧道 + 云端 RDS 时，冷启动一条连接实测 1.5~6.4 秒，
         // 链路抖一下（TAP/加速器链路会丢满 MSS 的包，重传退避 ~19 秒）就容易越过 25 秒 ——
-        // 用户看到「连接超时」，实际只是慢。失败时把**实际耗时**写进提示，便于分辨
-        // 「慢」还是「断」。
+        // 报错**原样透传**（用户口径：不要我们自造的说明与追加信息）。
+        // 建连耗时只进 tracing，排查「慢还是断」时去文件日志里看。
         let started = std::time::Instant::now();
         let result = self
             .host
             .call(None, "connect", params, Some(Duration::from_secs(60)))
             .map_err(|err| {
-                let mut out = DbMindError::new(
-                    err.code,
-                    format!(
-                        "{}（建连耗时 {:.1} 秒）",
-                        err.message,
-                        started.elapsed().as_secs_f64()
-                    ),
+                tracing::warn!(
+                    target: "dbmind::agent",
+                    elapsed_ms = started.elapsed().as_millis() as u64,
+                    code = %err.code,
+                    "建连失败"
                 );
+                let mut out = DbMindError::new(err.code, err.message.clone());
                 out.detail = err.detail;
                 out
             })?;

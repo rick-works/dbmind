@@ -574,8 +574,14 @@ fn scope_of(database: &Option<String>, schema: &Option<String>) -> String {
 
 // ------------------------------------------------------------------ 元数据
 
-/// 取表的列（先试「模式.表」，失败退回「表」；不存在时返回空而不是报错 ——
+/// 取表的列（先试「模式.表」，失败退回「表」；表真的不存在时返回空而不是报错 ——
 /// 「目标表不存在」是一个正常的同步前置条件，不是异常）。
+///
+/// **失败与「不存在」必须分开**（真机故障）：网络断掉之后，这里每次查询都会失败，
+/// 旧实现把 `Err` 吞成空 Vec，上层于是报「源表不存在或没有列信息」—— 那是**我们编的**
+/// 结论，用户看到的是一整屏「表不存在」，而真实报错（Communications link failure /
+/// 会话不存在）一行都没有，既没法排查也没法自动重试（链路级错误才允许整表重跑）。
+/// 现在：所有候选名都查失败 ⇒ 原样上抛第一条真实错误；只有**查询成功且确实是空**才返回空。
 async fn columns_of(
     state: &AppState,
     side: &Side,
@@ -591,30 +597,41 @@ async fn columns_of(
             vec![qualified, table.to_string()]
         }
     };
+    let mut first_err: Option<XError> = None;
     for name in names {
         let engine = state.engine();
         let target = target.clone();
         let found = blocking(move || engine.list_columns_fresh(&target, &name)).await;
-        if let Ok(mut columns) = found {
-            if !columns.is_empty() {
-                // **必须补类型长度**：内核给的是裸类型名（MySQL 的 JDBC metadata 里
-                // `name` 列就是 `varchar`，长度在另一列），直接拿去拼建表语句会得到
-                // `\`name\` varchar not null` —— MySQL 直接报语法错（实测：跨库同步
-                // 建表失败「You have an error in your SQL syntax」，而例程/视图那两条路是好的）。
-                // 与 `/columns` 接口共用同一套补全，口径一致。
-                crate::api::meta::enrich_column_types(
-                    state,
-                    &side.conn,
-                    &side.scope,
-                    table,
-                    &mut columns,
-                )
-                .await;
-                return Ok(columns);
+        let mut columns = match found {
+            Ok(columns) => columns,
+            Err(err) => {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+                continue;
             }
+        };
+        if !columns.is_empty() {
+            // **必须补类型长度**：内核给的是裸类型名（MySQL 的 JDBC metadata 里
+            // `name` 列就是 `varchar`，长度在另一列），直接拿去拼建表语句会得到
+            // `\`name\` varchar not null` —— MySQL 直接报语法错（实测：跨库同步
+            // 建表失败「You have an error in your SQL syntax」，而例程/视图那两条路是好的）。
+            // 与 `/columns` 接口共用同一套补全，口径一致。
+            crate::api::meta::enrich_column_types(
+                state,
+                &side.conn,
+                &side.scope,
+                table,
+                &mut columns,
+            )
+            .await;
+            return Ok(columns);
         }
     }
-    Ok(Vec::new())
+    match first_err {
+        Some(err) => Err(err),
+        None => Ok(Vec::new()),
+    }
 }
 
 /// 数据同步/对比的默认会话亲和键（读页、事务控制、串行写都落在这条泳道上）。
@@ -4332,7 +4349,13 @@ async fn sync_table_inner(
         Err(err) => return ObjResult::failed(ty, table, format!("读取源表结构失败：{}", err.message)),
     };
     if source_columns.is_empty() {
-        return ObjResult::failed(ty, table, "源表不存在或没有列信息");
+        // 查不到列：**让数据库自己说原因**（表不存在 / 没权限 / 视图失效都会带真实报错），
+        // 不要由我们编一句「源表不存在或没有列信息」—— 那句在现场只会误导。
+        let probe = format!("select 1 from {} where 1 = 0", src.scoped_meta(table));
+        return match run_sql_in(state, &src.conn, &src.scope, probe, 1).await {
+            Ok(_) => ObjResult::failed(ty, table, format!("源表 {table} 取不到列信息")),
+            Err(err) => ObjResult::failed(ty, table, err.message),
+        };
     }
     let target_columns = columns_of(state, tgt, target_table)
         .await
