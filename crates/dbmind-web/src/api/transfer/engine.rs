@@ -144,6 +144,15 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// 一个建连往返 + 一段回滚）便宜得多，也不会让用户觉得「卡住了」。
 const LINK_HOLD_MS: u64 = 15_000;
 
+/// 「这批报文小到不可能是丢包 / PMTU 问题」的界限（字节）。
+///
+/// 判死（超时或断连）后要不要缩页，取决于这一批到底多大：
+/// - 大的（MB 级）⇒ 报文本身可能就是元凶（PMTU 黑洞 / 静默丢包），拆小有用；
+/// - 小的（几十 KB 也写不进去）⇒ 报文不是原因，缩页只会让**批数变多**，
+///   把每批的固定开销（提交、刷盘、往返）多付几十次。真机：28.7 万行按 1000 行/批
+///   跑了 1 小时 36 分（每批 20 秒），再缩到 500 行就是把批数从 288 变成 576。
+const TINY_BATCH_BYTES: usize = 64 * 1024;
+
 /// 片任务共享的运行态。
 struct SliceCtx {
     plan: Arc<TablePlan>,
@@ -163,6 +172,11 @@ struct SliceCtx {
     /// 越加越慢还多开连接。表的收尾日志会把两个数打出来（见 `run`）。
     read_ms: Arc<AtomicU64>,
     write_ms: Arc<AtomicU64>,
+    /// 真正落库的批次数：结果行的「平均每批」靠它算。
+    ///
+    /// 用「成功的批」而不是「调用过几次 write_rows」—— 失败重跑的那一次没有落库，
+    /// 计进去会把平均批耗时算小，正好掩盖「每批固定开销很大」这个真问题。
+    batches: Arc<AtomicU64>,
     /// 「传输数据到目标表」这条链路日志是否已经打过（多 worker 共享，只打一次）
     transfer_told: Arc<AtomicBool>,
 }
@@ -336,6 +350,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     let limited = Arc::new(AtomicBool::new(false));
     let read_ms = Arc::new(AtomicU64::new(0));
     let write_ms = Arc::new(AtomicU64::new(0));
+    let batches = Arc::new(AtomicU64::new(0));
     let plan = Arc::new(plan);
     let ctx = Arc::new(SliceCtx {
         plan: plan.clone(),
@@ -347,6 +362,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         limited: limited.clone(),
         read_ms: read_ms.clone(),
         write_ms: write_ms.clone(),
+        batches: batches.clone(),
         transfer_told: Arc::new(AtomicBool::new(false)),
     });
 
@@ -468,15 +484,16 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
                         // 都不报错，越到后面越报『传输协程 11 分钟没有任何进展』」。
                         let probe = probe_target_confirmed(&plan).await;
                         if probe.is_ok() {
-                            // 链路活着 ⇒ 只是这一页慢，继续等（与 Navicat / DBX 一致）
+                            // 链路活着 ⇒ 只是这一页慢，继续等（与 Navicat / DBX 一致）。
+                            // 界面不写「一页 N 分钟没有落库，探活正常，继续等待」这类提示 ——
+                            // 用户口径：只有真正的报错才上日志。
                             idle_since = std::time::Instant::now();
-                            if let Some(task) = &plan.task {
-                                task.log(format!(
-                                    "表 {}：一页 {} 分钟没有落库，目标端探活正常，继续等待",
-                                    plan.table,
-                                    PIPE_WAIT.as_secs() / 60
-                                ));
-                            }
+                            tracing::debug!(
+                                target: "dbmind::sync",
+                                table = %plan.table,
+                                minutes = PIPE_WAIT.as_secs() / 60,
+                                "一页没有落库但目标端探活正常，继续等待"
+                            );
                             continue;
                         }
                         // 探活也不通 ⇒ 真卡死了：掐掉协程，别让它挂着占连接。
@@ -491,17 +508,10 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         match joined {
             None => {
                 if failure.is_none() {
-                    // 探活的原始报错优先（用户口径：要数据库/驱动的原话，不要自造短语）
-                    failure = Some(match probe_err.take() {
-                        Some(why) => format!(
-                            "传输协程 {} 分钟没有任何进展，且目标端探活失败：{why}",
-                            PIPE_WAIT.as_secs() / 60
-                        ),
-                        None => format!(
-                            "传输协程 {} 分钟没有任何进展，目标端探活不通",
-                            PIPE_WAIT.as_secs() / 60
-                        ),
-                    });
+                    // 探活的原始报错优先（用户口径：要数据库/驱动的原话，不要自造短语）。
+                    // 原话直接当失败原因，不再套「传输协程 N 分钟没有任何进展」这层前缀；
+                    // 探活连原话都没给（超时）⇒ 也是空原因，界面只记失败数。
+                    failure = Some(probe_err.take().unwrap_or_default());
                 }
             }
             Some(Ok(Ok(()))) => {}
@@ -557,22 +567,34 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     if let Some(task) = &plan.task {
         let done_rows = inserted_rows + updated_rows;
         if done_rows > 0 {
-            let total_ms = started.elapsed().as_millis().max(1) as u64;
+            // 整表重跑过的表：`started` 只从最后一轮算起，要把前几轮的墙钟加回来 ——
+            // 否则界面上的「耗时」会明显小于用户实际等待的时间（真机：28 万行写了
+            // 1 小时 36 分，前面还有两轮整表重跑根本没被算进去）。
+            let total_ms = plan
+                .elapsed_base_ms
+                .load(Ordering::SeqCst)
+                .saturating_add(started.elapsed().as_millis().max(1) as u64);
             let rate = done_rows.saturating_mul(1_000) / total_ms;
+            let wait_spent = plan.wait_ms.load(Ordering::SeqCst);
+            let batch_count = batches.load(Ordering::SeqCst);
             // 链路日志第 5 步（终点）：这张表搬完，多少行、花了多久。
-            // 读/写分解、并发路数属于调参信息，进 tracing 就够了。
+            // 括号里只放可核对的事实：批数与平均每批（判断慢在每批固定开销还是数据量）、
+            // 以及等待超时/重连占了多少（判断这一小时是搬数据还是干等）。
             task.log(format!(
-                "表 {}：传输完成，共 {}，耗时 {}",
+                "表 {}：传输完成，共 {}，耗时 {}{}",
                 plan.table,
                 super::行数(done_rows),
                 super::时长(total_ms),
+                super::完成附注(total_ms, wait_spent, batch_count, write_spent),
             ));
             tracing::debug!(
                 table = %plan.table,
                 read_s = read_spent as f64 / 1_000.0,
                 write_s = write_spent as f64 / 1_000.0,
+                wait_s = wait_spent as f64 / 1_000.0,
                 total_s = total_ms as f64 / 1_000.0,
                 rate,
+                batches = batch_count,
                 lanes = slots.issued.load(Ordering::SeqCst).max(1),
                 page_rows = ctx.reader.page_rows(),
                 "同步耗时画像"
@@ -691,6 +713,19 @@ fn abort_carried(paused: Option<SegmentOutcome>) {
 /// 搬运**一片**：片内按 [`txn_rows_cap`]（= 一批 = 一页）分成多个事务，段与段之间不重不漏
 /// （下一段的区间左界 = 上一段最后一行的首列，首屏游标带上完整键走 keyset「严格大于」；
 /// 无键表则用 OFFSET 续跑，见 [`SegmentOutcome::PausedAt`]）。
+/// 回滚本段 + 换一条干净连接。这两步都是**纯白等**（数据一行没进），
+/// 逐次累加进 `wait_ms`：否则「耗时 1 小时 36 分」里有多少是回滚/换连接耗掉的，
+/// 用户和我们都只能靠猜。
+async fn abort_and_renew(ctx: &SliceCtx, worker: usize) {
+    let started = std::time::Instant::now();
+    let _ = tokio::time::timeout(ABORT_CALL_TIMEOUT, ctx.writer.abort(worker)).await;
+    // 不管回滚成不成，这条连接都不可信了：下一次尝试换新连接
+    ctx.writer.renew().await;
+    ctx.plan
+        .wait_ms
+        .fetch_add(started.elapsed().as_millis() as u64, Ordering::Relaxed);
+}
+
 async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result<(), String> {
     // 事务粒度由读侧给出（一批 = 一页 = 一个事务）：有键表 = 界面「每批条数」，
     // 无键表 = OFFSET 翻页的大页。片内固定，不随页自适应抖动。
@@ -805,8 +840,12 @@ async fn run_segment(
             let page = match prefetch.take() {
                 Some(handle) => match handle.await {
                     Ok(result) => result,
-                    // 预读协程自己炸了（panic）：当作一次读失败，交给上面的重试逻辑
-                    Err(err) => Err(format!("预读失败：{err}")),
+                    // 预读协程自己炸了（panic）：当作一次读失败，交给上面的重试逻辑。
+                    // 只报异常本身的文字，不拼「预读失败：」前缀
+                    Err(err) => {
+                        tracing::warn!(target: "dbmind::sync", error = %err, "预读协程异常终止");
+                        Err(err.to_string())
+                    }
                 },
                 None => {
                     read_page(
@@ -896,7 +935,10 @@ async fn run_segment(
                                 ctx.updated.fetch_add(rows, Ordering::SeqCst);
                             }
                             Err(msg) => {
-                                failure = Some(format!("更新失败：{msg}"));
+                                // 原样用驱动/数据库的原话：不拼「更新失败：」这类前缀
+                                //（用户口径：不拼任何东西；空原因 = 只有本地超时、
+                                // 没有报错可引用，界面按空原因跳过）
+                                failure = Some(msg);
                                 break;
                             }
                         }
@@ -919,6 +961,11 @@ async fn run_segment(
                             let written = rows.min(sent);
                             try_inserted += written;
                             ctx.inserted.fetch_add(written, Ordering::SeqCst);
+                            // 只数**真落库**的批：结果行的「平均每批」靠它，
+                            // 失败重跑的批不该把平均数拉小
+                            if written > 0 {
+                                ctx.batches.fetch_add(1, Ordering::Relaxed);
+                            }
                             // 链路日志第 4 步：第一页真正落库时打一次。
                             // 读和写要各有起点 —— 大表上「读了几分钟」和「在读但没写进去」
                             // 在界面上必须分得开。
@@ -986,9 +1033,7 @@ async fn run_segment(
             // 整条同步就此卡死（写批超时反倒白设了）。
             // 回滚超时不再单独进界面日志：连接已经不可信（下面 renew 换掉），
             // 失败原因由对象级统一报一条，过程信息一律不写。
-            let _ = tokio::time::timeout(ABORT_CALL_TIMEOUT, ctx.writer.abort(worker)).await;
-            // 不管回滚成不成，这条连接都不可信了：下一次尝试换新连接
-            ctx.writer.renew().await;
+            abort_and_renew(&ctx, worker).await;
             ctx.inserted.fetch_sub(try_inserted, Ordering::SeqCst);
             ctx.updated.fetch_sub(try_updated, Ordering::SeqCst);
             ctx.consumed.fetch_sub(try_consumed, Ordering::SeqCst);
@@ -1016,6 +1061,8 @@ async fn run_segment(
             // upsert 更新同样只看界面「超时时间」，不另设阈值
             "发送攒着的 upsert 更新",
             ctx.writer.flush(),
+            // 超时且探活通过：用它掐断这条卡住的会话，让驱动把真错误（而非我们编的超时）回出来
+            ctx.writer.as_ref(),
         )
         .await;
         let flush_err = match flushed {
@@ -1024,8 +1071,7 @@ async fn run_segment(
             Err((reason, _)) => Some(reason),
         };
         if let Some(msg) = flush_err {
-            let _ = tokio::time::timeout(ABORT_CALL_TIMEOUT, ctx.writer.abort(worker)).await;
-            ctx.writer.renew().await;
+            abort_and_renew(&ctx, worker).await;
             ctx.inserted.fetch_sub(try_inserted, Ordering::SeqCst);
             ctx.updated.fetch_sub(try_updated, Ordering::SeqCst);
             ctx.consumed.fetch_sub(try_consumed, Ordering::SeqCst);
@@ -1038,11 +1084,19 @@ async fn run_segment(
             // 如实失败；`WriteDiag::committed` 已由 writer 记下，上层也不会整表重跑。
             Ok(Err(msg)) => return Err(msg),
             Err(_) => {
-                return Err(format!(
-                    "提交事务 {} 秒未返回（可能已半开）：本段是否落盘无法确定，\
-                     不会自动重跑；请核对该表行数后再决定是否重跑",
-                    commit_limit.as_secs()
-                ));
+                // 提交超时同样没有数据库报错可引用：返回空原因、界面不写这一行
+                //（这段是否落盘不确定，结论进 tracing 供排查）。
+                tracing::warn!(
+                    target: "dbmind::sync",
+                    table = %ctx.plan.table,
+                    secs = commit_limit.as_secs(),
+                    "提交事务超时（可能已半开）：本段是否落盘无法确定，不会自动重跑"
+                );
+                // 等满整个提交超时也是一行没进的白等，记进等待时间
+                ctx.plan
+                    .wait_ms
+                    .fetch_add(commit_limit.as_millis() as u64, Ordering::Relaxed);
+                return Err(String::new());
             }
         }
     }
@@ -1065,9 +1119,17 @@ async fn read_page(
         // 10 分钟的语句超时，界面上就是「读数字一动不动」。一页正常 5 秒内，60 秒足够。
         match tokio::time::timeout(hard_limit, reader.page(range, cursor.clone()))
             .await
-            // 只说事实：本地等满了，源端没回话。**不猜原因**（「可能半开」「socketTimeout=0」
-            // 这类猜测会把人带偏 —— 真机上更常见的是结果集太大、链路在重传）。
-            .map_err(|_| format!("读取一页超过 {} 秒未返回", hard_limit.as_secs()))
+            // 读超时**没有任何数据库/驱动的报错可引用**（源端没回话，不是它报错）。
+            // 用户口径：界面只报真正的报错 —— 这里返回空原因，上层按「空原因不写日志」
+            // 处理，只记失败数；「读取一页超过 N 秒未返回」这类自己编的结论不再上界面。
+            .map_err(|_| {
+                tracing::warn!(
+                    target: "dbmind::sync",
+                    secs = hard_limit.as_secs(),
+                    "读取一页超时（没有数据库报错可报，界面只记失败数）"
+                );
+                String::new()
+            })
             .and_then(|result| result)
         {
             Ok(page) => return Ok(page),
@@ -1102,6 +1164,7 @@ async fn wait_write<F, T>(
     started: std::time::Instant,
     label: &str,
     pending: F,
+    writer: &dyn super::Writer,
 ) -> Result<T, (String, bool)>
 where
     F: std::future::Future<Output = T>,
@@ -1113,9 +1176,21 @@ where
     let mut last_note = started;
     // 探活节流：判断「断没断」是 30 秒一次的 select 1；软阈值只比较本地时钟，2 秒一次
     let mut last_probe = started;
-    // 链路已断：**把数据库/驱动的原话带出来**，不再写「连接不可用」这种自造短语。
-    let link_broken = |elapsed: Duration, why: &str| {
-        format!("{label}超过 {} 秒未返回：{why}", elapsed.as_secs())
+    // 链路已断：**只报数据库/驱动的原话**，连「写入超过 N 秒未返回」这层前缀都不要 ——
+    // 用户口径：界面上只该有真正的报错。探活自己都没拿到原话（超时）⇒ 空原因、不写日志。
+    let link_broken = |elapsed: Duration, why: &str| -> String {
+        if why.trim().is_empty() {
+            tracing::warn!(
+                target: "dbmind::sync",
+                table = %plan.table,
+                what = label,
+                elapsed_ms = elapsed.as_millis() as u64,
+                "探活判死但探活本身没有报错原话（超时），界面只记失败数"
+            );
+            String::new()
+        } else {
+            why.to_string()
+        }
     };
     tokio::pin!(pending);
     loop {
@@ -1127,20 +1202,39 @@ where
                     // 等满了界面上配的「超时时间」才判死。先复核链路：真断了就按「链路已断」
                     // 报（让整个任务停一会儿），原因用探活的原始报错。
                     if let Err(why) = probe_target_confirmed(plan).await {
+                        // 这段墙钟全是白等（数据一行没进），收尾时要能从「耗时」里拆出来
+                        plan.wait_ms
+                            .fetch_add(elapsed.as_millis() as u64, Ordering::Relaxed);
                         return Err((link_broken(elapsed, &why), true));
                     }
-                    // 探活正常 ⇒ 目标端确实还在跑、只是慢。这里**没有任何数据库报错可引用**，
-                    // 所以只说事实，不编原因（行数、页大小、报文上限都是内部量，一律不写）。
-                    let text = format!(
-                        "{label}超过 {} 秒未返回（目标端探活正常、未返回错误，语句可能仍在执行）",
-                        elapsed.as_secs()
+                    // 探活正常 ⇒ 目标端还在跑、只是慢，**没有任何数据库报错可引用**。
+                    // 以前这里拼一句「写入超过 N 秒未返回（探活正常、语句可能仍在执行）」写进
+                    // 界面日志 —— 用户口径：界面只报真正的报错，这种自己编的结论不要。
+                    //
+                    // 那能不能掐断会话、把驱动回的原话当原因？**不能**：实测（_uitest/
+                    // KillProbe.java）`kill <id>` 之后客户端拿到的是
+                    // `CommunicationsException: Communications link failure …`——
+                    // 那是我们自己断连造成的假故障，比原来那句更误导。
+                    // 所以：掐断照做（它继续持锁会拖住后面的表和重试），但**返回空原因**，
+                    // 界面这一条不写日志（上层按空原因跳过），失败数照记。
+                    plan.wait_ms
+                        .fetch_add(elapsed.as_millis() as u64, Ordering::Relaxed);
+                    writer.kill_sessions().await;
+                    tracing::warn!(
+                        target: "dbmind::sync",
+                        table = %plan.table,
+                        what = label,
+                        elapsed_ms = elapsed.as_millis() as u64,
+                        "超时且探活通过：已从服务端掐断卡住的语句；没有数据库报错可报，界面只记失败数"
                     );
-                    return Err((text, false));
+                    return Err((String::new(), false));
                 }
                 // 定期探活：只为判断「断没断」（不做软阈值判断，那个上面已经按 2 秒精度看过）
                 if last_probe.elapsed() >= BATCH_PROBE_TICK {
                     last_probe = std::time::Instant::now();
                     if let Err(why) = probe_target_confirmed(plan).await {
+                        plan.wait_ms
+                            .fetch_add(elapsed.as_millis() as u64, Ordering::Relaxed);
                         return Err((link_broken(elapsed, &why), true));
                     }
                     // 卡住期间在界面上留个脚印（每 2 分钟一条，不刷屏）
@@ -1181,7 +1275,10 @@ async fn write_rows(
     if let Some(grow) = &ctx.plan.grow {
         let left = grow.link_hold_left_ms();
         if left > 0 {
-            tokio::time::sleep(Duration::from_millis(left.min(LINK_HOLD_MS))).await;
+            let nap = left.min(LINK_HOLD_MS);
+            tokio::time::sleep(Duration::from_millis(nap)).await;
+            // 任务级暂停同样是白等：算进「等待超时/重连」，别混进有效传输
+            ctx.plan.wait_ms.fetch_add(nap, Ordering::Relaxed);
         }
     }
     let started = std::time::Instant::now();
@@ -1210,15 +1307,17 @@ async fn write_rows(
         // 文案里的「N 秒」就是界面「超时时间」换算出来的那个值
         "写入",
         ctx.writer.write(worker, rows),
+        // 超时且探活通过：之前只是返回一句自编的「探活正常、语句可能仍在执行」。
+        // 现在改为掐断这条语句，把它自己被中断的真错误（1317 / 57014…）当失败原因。
+        ctx.writer.as_ref(),
     )
     .await
     {
         Ok(outcome) => (outcome, false),
         Err((reason, link_down)) => {
-            // **先从服务端掐断那条卡住的会话**（MySQL 系）：客户端放弃等待后，
-            // 服务端那条语句和未提交事务还在跑、还持着行锁，重试会排在自己的锁后面。
-            // 必须在 renew 之前做（renew 换代后 conn_ids 就清空了，旧的 id 找不回来）。
-            let killed = ctx.writer.kill_sessions().await;
+            // 卡住的会话已经在 `wait_write` 判死之前掐掉了（那里还要靠它把驱动的原话
+            // 等回来）；这里只做**换连接 + 收敛体量**，别重复 KILL —— 换代后 conn_ids
+            // 就清空了，旧的 id 也找不回来。
             // 任务级「踩坑即收敛」：把本任务的页上限压到 1 万行，后面开工的表
             // 直接从小的起步 —— 真机上后期是「几乎每张表都卡一次」，因为每张表
             // 都在用自己的第一页重新踩同一个坑（大页 + 目标端掉速）。
@@ -1229,19 +1328,31 @@ async fn write_rows(
             }
             // 半开连接上那条语句还挂在宿主里，**必须换新连接**再重试，
             // 否则下一次调用复用它、再挂一次（真机表现为「每张表都卡一次」）。
-            // 同时把**单条语句的字节上限**减半：劣化链路（PMTU 黑洞 / 静默丢包）上大报文
-            // 会一直撞重传退避 —— 报文不小下去，重试只是「再等一次同样的超时」。
-            let (old_cap, new_cap) = ctx.writer.shrink_stmt(worker);
-            ctx.writer.renew().await;
-            // **页也要缩**：目标端写不动时（后期大表 + IO 饱和），一页几万行的大事务
-            // 只会继续卡；缩到 1/4 再试，单批体量与事务大小一起降下来。
-            // 读侧幂等，缩页没有任何副作用（链路恢复后由自适应慢慢涨回去）。
-            ctx.reader.shrink_page();
+            // 这一批实际多大？「报文才几十 KB 也写不进去」时缩页 / 缩语句是**自伤**：
+            // 报文不是原因，批数变多只会把每批的固定开销多付几十次（见 [`TINY_BATCH_BYTES`]）。
+            let batch_bytes: usize = rows.iter().map(|row| estimate_row_bytes(row)).sum();
+            let tiny = batch_bytes <= TINY_BATCH_BYTES;
+            if tiny && !link_down {
+                // 半开连接必须换，但体量一点都不动
+                ctx.writer.renew().await;
+            } else {
+                // 把**单条语句的字节上限**减半：劣化链路（PMTU 黑洞 / 静默丢包）上大报文
+                // 会一直撞重传退避 —— 报文不小下去，重试只是「再等一次同样的超时」。
+                let (old_cap, new_cap) = ctx.writer.shrink_stmt(worker);
+                ctx.writer.renew().await;
+                // **页也要缩**：目标端写不动时（后期大表 + IO 饱和），一页几万行的大事务
+                // 只会继续卡；缩到 1/4 再试，单批体量与事务大小一起降下来。
+                // 读侧幂等，缩页没有任何副作用（链路恢复后由自适应慢慢涨回去）。
+                ctx.reader.shrink_page();
+                let _ = (old_cap, new_cap);
+            }
             // 上面这些动作（掐会话、缩页、换连接、报文上限收敛）照做，但**一个字都不写进日志**：
-            // 用户要的是失败原因本身（`reason` = 「写入超时 31 秒」或数据库原始报错），
+            // 用户要的是失败原因本身（`reason` = 数据库/驱动的原话），
             // 「已断开卡住的会话 / 已换连接重试」这类过程信息只会把真正的原因埋掉。
-            let _ = killed;
-            let _ = (old_cap, new_cap);
+            //
+            // `reason` 可能为空：超时且探活通过、掐断后驱动也没回原话（链路也完了）。
+            // 这种情况界面**不写日志**（上层按空原因跳过），失败数照记 —— 用户口径：
+            // 只报真正的报错，不拿自己编的「可能仍在执行」凑数。
             // 链路整体不可用（探活不通）⇒ 让整个任务一起停一会儿：
             // 不这么做的话，几百张表会在同一秒各自换连接、各自回滚一段再各自报错。
             if link_down {
@@ -1280,10 +1391,15 @@ async fn probe_target(plan: &TablePlan) -> Result<(), String> {
         Ok(Ok(_)) => Ok(()),
         // 驱动/数据库的原话，原样上抛
         Ok(Err(err)) => Err(err.message),
-        Err(_) => Err(format!(
-            "探活 select 1 超过 {} 秒未返回",
-            PROBE_TIMEOUT.as_secs()
-        )),
+        // 探活自己超时：没有数据库/驱动的原话可报 ⇒ 空原因（界面不写日志）
+        Err(_) => {
+            tracing::warn!(
+                target: "dbmind::sync",
+                secs = PROBE_TIMEOUT.as_secs(),
+                "探活 select 1 超时（没有报错原话，界面只记失败数）"
+            );
+            Err(String::new())
+        }
     }
 }
 
@@ -1300,8 +1416,11 @@ async fn probe_target_confirmed(plan: &TablePlan) -> Result<(), String> {
     };
     tokio::time::sleep(Duration::from_secs(1)).await;
     probe_target(plan).await.map_err(|second| {
-        if first == second {
+        // 两次都可能没有原话（探活自身超时）：别拼出「；复核：」这种残句
+        if first == second || second.is_empty() {
             first
+        } else if first.is_empty() {
+            second
         } else {
             format!("{first}；复核：{second}")
         }

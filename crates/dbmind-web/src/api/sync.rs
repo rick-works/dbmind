@@ -128,6 +128,15 @@ pub struct SyncRequest {
     /// 降低双方的连接与 IO 争抢。
     #[serde(default)]
     max_concurrency: Option<usize>,
+    /// 每表**读**并发（片数）：缺省 / 0 = 自动（按源库类型与并发表数切预算）。
+    ///
+    /// 显式给了就以用户为准（夹到 1..=64）：既决定开工时的片数，也**封死尾部弹性**
+    /// 的上限 —— 用户填 1 就该始终是一条读连接，不能被「别的表退出」偷偷扩成 6 片。
+    #[serde(default)]
+    src_slices: Option<usize>,
+    /// 每表**写**并发（路数）：缺省 / 0 = 自动（按目标库类型与并发表数切预算）。
+    #[serde(default)]
+    tgt_workers: Option<usize>,
     /// 单条 INSERT 的**行数**上限；0 / 缺省 = 按目标方言默认（见 `insert_rows_default`）。
     ///
     /// 界面上会按目标库把默认值填出来、允许用户改（每种库的甜点值差一个数量级：
@@ -399,7 +408,9 @@ async fn run_user_sql(state: &AppState, target: &str, script: &str, label: &str)
     let statements = split_user_sql(script);
     for (index, sql) in statements.iter().enumerate() {
         if let Err(err) = run_target_write(state, target, sql).await {
-            return Err(format!("{label}第 {} 条执行失败：{}", index + 1, err.message));
+            // 只报数据库/驱动的原话（哪一条、什么标签进 tracing）
+            tracing::warn!(label = label, index = index, sql = %sql, error = %err.message, "用户 SQL 执行失败");
+            return Err(err.message);
         }
         tracing::debug!(label, sql = %sql, "用户 SQL 执行成功");
     }
@@ -454,8 +465,10 @@ impl SyncRequest {
                 })
                 .collect(),
             where_clause: normalize_where(self.where_clause.as_deref().unwrap_or("")),
-            tgt_workers: 0,
-            src_slices: 0,
+            // 0 = 自动：由 `db()` 按「并发表数」切预算；单表接口直接用方言默认。
+            // 界面显式填了（1..=64）就以用户为准，见 `db()` 里的 `*_declared`。
+            tgt_workers: self.tgt_workers.map(|n| n.min(64)).unwrap_or(0),
+            src_slices: self.src_slices.map(|n| n.min(64)).unwrap_or(0),
             grow: None,
             // 0 = 让每张表按**目标方言**的默认值来（界面填了就以此为准）；
             // 夹到 1..=100_000：太小只剩往返开销，太大等于把报文重新放大。
@@ -768,7 +781,7 @@ async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<S
     //    是强制只读会话，ClickHouse 会直接拒绝建库（READONLY，真机踩过；Doris 宽容才没暴露）。
     match run_target(state, &tgt.conn, &create_db).await {
         Ok(_) => Some(format!("目标库 {db_name} 不存在，已自动创建")),
-        Err(err) => Some(format!("目标库 {db_name} 自动创建失败：{}", err.message)),
+        Err(err) => Some(err.message),
     }
 }
 
@@ -1586,10 +1599,9 @@ async fn sync_indexes(
                         if let Err(err) = run_target_ddl(state, tgt_target, &sql).await {
                             tracing::warn!(table, index = %name, error = %err.message, "MATERIALIZE INDEX 失败");
                             if let Some(task) = task {
-                                task.log(format!(
-                                    "表 {table}：索引 {name} 历史数据回填失败：{}",
-                                    brief_error(&err.message)
-                                ));
+                                // 只报原话（索引名进 tracing）
+                                tracing::warn!(table, index = %name, error = %err.message, "索引历史数据回填失败");
+                                task.log(format!("表 {table}：{}", brief_error(&err.message)));
                             }
                         }
                     }
@@ -2145,13 +2157,15 @@ pub(crate) async fn doris_stream_load(
                         };
                         return Err(dbmind_core::DbMindError::new(
                             dbmind_core::ErrorCode::QueryFailed,
-                            format!("Stream Load 失败（{}）：{msg_head}", url_authority(&url)),
+                            msg_head,
                         ))
                     }
                     None => {
+                        // 按用户口径只把响应体原样报出去；content-type 这类上下文进 tracing
+                        tracing::debug!(ctype = %ctype, body = %head, "Stream Load 响应不是 JSON");
                         return Err(dbmind_core::DbMindError::new(
                             dbmind_core::ErrorCode::QueryFailed,
-                            format!("Stream Load 响应不是 JSON（{}，content-type={ctype}）：{head}", url_authority(&url)),
+                            head,
                         ))
                     }
                 }
@@ -3297,7 +3311,7 @@ pub(crate) async fn write_insert_rows(
                     tracing::warn!(table, "预编译子批失败（已回滚），本批改用 SQL 批量并逐批拆分定位坏行");
                 }
                 Err(err) => {
-                    return Err(format!("预编译批量写入失败（未自动重试）：{}", err.message));
+                    return Err(err.message);
                 }
             }
         }
@@ -3318,7 +3332,7 @@ pub(crate) async fn write_insert_rows(
         };
         if let Some((begin, _, _)) = sp.as_ref() {
             if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
-                return Err(format!("创建批处理保存点失败：{}", err.message));
+                return Err(err.message);
             }
         }
         let insert_sql = with_identity(stmt, identity_on, target_name);
@@ -3360,22 +3374,20 @@ pub(crate) async fn write_insert_rows(
                         // 这些行随后会被重新写入。以前在这里 `add_rows_failed(left)`，
                         // 重跑成功后它们就成了永远抹不掉的「10 万行写入失败」
                         //（真机：目标表一行不缺、结果却报失败 10 万）。
-                        // 日志只报**原始报错**，行数 / 报文上限 / 是否沿用都属于内部量，不写。
-                        task.log(format!(
-                            "表 {table}：写入失败：{}",
-                            brief_error(&batch_err.message)
-                        ));
+                        // 日志只报**原始报错**，不拼「写入失败：」这类前缀；
+                        // 行数 / 报文上限 / 是否沿用都属于内部量，不写。
+                        task.log(format!("表 {table}：{}", brief_error(&batch_err.message)));
                     }
-                    return Err(format!("写入失败：{}", brief_error(&batch_err.message)));
+                    return Err(brief_error(&batch_err.message));
                 }
                 if let Some((_, rollback, _)) = sp.as_ref() {
                     if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
-                        return Err(format!("回滚批处理保存点失败：{}", err.message));
+                        return Err(err.message);
                     }
                 }
                 if let Some((_, _, Some(release))) = sp.as_ref() {
                     if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                        return Err(format!("回滚后释放批处理保存点失败：{}", err.message));
+                        return Err(err.message);
                     }
                 }
                 // 降级：**二分拆批**定位坏行（原来是逐行重试）。
@@ -3399,7 +3411,7 @@ pub(crate) async fn write_insert_rows(
                     };
                     if let Some((begin, _, _)) = sub_sp.as_ref() {
                         if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
-                            return Err(format!("创建二分保存点失败：{}", err.message));
+                            return Err(err.message);
                         }
                     }
                     let sub_sql = with_identity(stmt, identity_on, target_name);
@@ -3428,25 +3440,19 @@ pub(crate) async fn write_insert_rows(
                             if is_link_level_error(&sub_err) {
                                 if let Some(task) = task {
                                     // 同上：不记失败行，交给上层「回滚本片并重跑」；
-                                    // 也不报剩余行数（内部量，用户拿到没用）
-                                    task.log(format!(
-                                        "表 {table}：写入失败：{}",
-                                        brief_error(&sub_err.message)
-                                    ));
+                                    // 也不报剩余行数（内部量，用户拿到没用），不拼前缀
+                                    task.log(format!("表 {table}：{}", brief_error(&sub_err.message)));
                                 }
-                                return Err(format!(
-                                    "写入失败：{}",
-                                    brief_error(&sub_err.message)
-                                ));
+                                return Err(brief_error(&sub_err.message));
                             }
                             if let Some((_, rollback, _)) = sub_sp.as_ref() {
                                 if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
-                                    return Err(format!("回滚二分保存点失败：{}", err.message));
+                                    return Err(err.message);
                                 }
                             }
                             if let Some((_, _, Some(release))) = sub_sp.as_ref() {
                                 if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                                    return Err(format!("回滚后释放二分保存点失败：{}", err.message));
+                                    return Err(err.message);
                                 }
                             }
                             if sub_len <= 1 {
@@ -3492,10 +3498,21 @@ pub(crate) async fn write_insert_rows(
                         // 实现术语，也不要「其余已写入」这类自造的叙述 —— 失败了多少行 +
                         // 数据库原文，两样就够：`Duplicate entry …` / `Data too long …` /
                         // `Incorrect string value …` 各自对应完全不同的处理动作。
-                        let why = sample_err.as_deref().unwrap_or("（目标端没有返回错误文本）");
-                        task.log(format!(
-                            "表 {table}：本批 {n_rows} 行里有 {chunk_failed} 行写入失败：{why}"
-                        ));
+                        // 只有统计（多少行没写进去）+ 数据库原话；原话过一遍 brief_error，
+                        // 免得又冒出「SQL 执行失败：」「(conn=…)」这类套壳
+                        let why = sample_err
+                            .as_deref()
+                            .map(brief_error)
+                            .unwrap_or_default();
+                        if why.is_empty() {
+                            task.log(format!(
+                                "表 {table}：本批 {n_rows} 行里有 {chunk_failed} 行写入失败"
+                            ));
+                        } else {
+                            task.log(format!(
+                                "表 {table}：本批 {n_rows} 行里有 {chunk_failed} 行写入失败：{why}"
+                            ));
+                        }
                     }
                 }
                 // 过半失败 ⇒ 系统性问题（连接断/权限/表没了），逐行磨完没有意义
@@ -3653,7 +3670,7 @@ pub(crate) async fn write_upsert_rows(
         };
         if let Some((begin, _, _)) = sp.as_ref() {
             if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
-                return Err(format!("创建 upsert 保存点失败：{}", err.message));
+                return Err(err.message);
             }
         }
         match run_target_in(state, tgt_target, &with_identity(stmt.clone(), identity_on, target_name), session).await {
@@ -3669,12 +3686,12 @@ pub(crate) async fn write_upsert_rows(
             Err(batch_err) => {
                 if let Some((_, rollback, _)) = sp.as_ref() {
                     if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
-                        return Err(format!("回滚 upsert 保存点失败：{}", err.message));
+                        return Err(err.message);
                     }
                 }
                 if let Some((_, _, Some(release))) = sp.as_ref() {
                     if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                        return Err(format!("回滚后释放 upsert 保存点失败：{}", err.message));
+                        return Err(err.message);
                     }
                 }
                 // 先把**批次本身的错误**记下来：降级逐行重试之后，行的错误往往是
@@ -3696,7 +3713,7 @@ pub(crate) async fn write_upsert_rows(
                     };
                     if let Some((begin, _, _)) = row_sp.as_ref() {
                         if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
-                            return Err(format!("创建 upsert 行保存点失败：{}", err.message));
+                            return Err(err.message);
                         }
                     }
                     let single = build_upsert_batch(
@@ -3734,12 +3751,12 @@ pub(crate) async fn write_upsert_rows(
                         Err(row_err) => {
                             if let Some((_, rollback, _)) = row_sp.as_ref() {
                                 if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
-                                    return Err(format!("回滚 upsert 行保存点失败：{}", err.message));
+                                    return Err(err.message);
                                 }
                             }
                             if let Some((_, _, Some(release))) = row_sp.as_ref() {
                                 if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                                    return Err(format!("回滚后释放 upsert 行保存点失败：{}", err.message));
+                                    return Err(err.message);
                                 }
                             }
                             chunk_failed += 1;
@@ -3829,7 +3846,7 @@ pub(crate) async fn write_update_batch(
     };
     if let Some((begin, _, _)) = sp.as_ref() {
         if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
-            return Err(format!("创建更新保存点失败：{}", err.message));
+            return Err(err.message);
         }
     }
     match run_target_in(state, tgt_target, &joined, session).await {
@@ -3845,12 +3862,12 @@ pub(crate) async fn write_update_batch(
         Err(batch_err) => {
             if let Some((_, rollback, _)) = sp.as_ref() {
                 if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
-                    return Err(format!("回滚更新保存点失败：{}", err.message));
+                    return Err(err.message);
                 }
             }
             if let Some((_, _, Some(release))) = sp.as_ref() {
                 if let Err(err) = run_target_in(state, tgt_target, release, session).await {
-                    return Err(format!("回滚后释放更新保存点失败：{}", err.message));
+                    return Err(err.message);
                 }
             }
             let mut failed = 0u64;
@@ -3865,7 +3882,7 @@ pub(crate) async fn write_update_batch(
                 };
                 if let Some((begin, _, _)) = row_sp.as_ref() {
                     if let Err(err) = run_target_in(state, tgt_target, begin, session).await {
-                        return Err(format!("创建更新行保存点失败：{}", err.message));
+                        return Err(err.message);
                     }
                 }
                 match run_target_in(state, tgt_target, sql, session).await {
@@ -3881,12 +3898,12 @@ pub(crate) async fn write_update_batch(
                     Err(err) => {
                         if let Some((_, rollback, _)) = row_sp.as_ref() {
                             if let Err(rb_err) = run_target_in(state, tgt_target, rollback, session).await {
-                                return Err(format!("回滚更新行保存点失败：{}", rb_err.message));
+                                return Err(rb_err.message);
                             }
                         }
                         if let Some((_, _, Some(release))) = row_sp.as_ref() {
                             if let Err(rb_err) = run_target_in(state, tgt_target, release, session).await {
-                                return Err(format!("回滚后释放更新行保存点失败：{}", rb_err.message));
+                                return Err(rb_err.message);
                             }
                         }
                         failed += 1;
@@ -4090,7 +4107,7 @@ pub(crate) async fn lookup_existing_keys(
             chunk.len(),
         )
         .await
-        .map_err(|e| format!("查询目标已有键失败：{}", e.message))?;
+        .map_err(|e| e.message)?;
         for row in &result.rows {
             let key = key_of(row, &key_positions);
             let count = row
@@ -4164,7 +4181,7 @@ async fn sync_table(
                 result = ObjResult::failed(
                     "table",
                     table,
-                    format!("后置 SQL 无法解析目标连接：{}", err.message),
+                    err.message,
                 );
             }
         }
@@ -4409,7 +4426,7 @@ async fn sync_table_inner(
     tracing::debug!(table, "读取结构");
     let source_columns = match columns_of_retry(state, src, table).await {
         Ok(columns) => columns,
-        Err(err) => return ObjResult::failed(ty, table, format!("读取源表结构失败：{}", err.message)),
+        Err(err) => return ObjResult::failed(ty, table, err.message),
     };
     if source_columns.is_empty() {
         // 查不到列：**让数据库自己说原因**（表不存在 / 没权限 / 视图失效都会带真实报错），
@@ -4454,7 +4471,7 @@ async fn sync_table_inner(
     // 目标连接只解析一次，循环里的每条语句复用（见 run_target 的注释）
     let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
         Ok(target) => target,
-        Err(err) => return ObjResult::failed(ty, table, format!("解析目标连接失败：{}", err.message)),
+        Err(err) => return ObjResult::failed(ty, table, err.message),
     };
     let mut created = false;
 
@@ -4483,52 +4500,12 @@ async fn sync_table_inner(
         // 界面上只有一句数据库原文，靠着这一行才能还原「我们到底发了什么」。
         tracing::debug!(table, %ddl, "目标表建表语句");
         if let Err(err) = run_target(state, &tgt_target, &ddl).await {
-            let mut msg = format!("建表失败：{}", err.message);
-            // 「Row size too large (> 8126)」（MySQL 1118）：目标表列太多/太宽，DDL 这边已经做到
-            // 头了（长文本列早就是 longtext、行格式也显式 dynamic），剩下能帮上忙的是**报出规模** ——
-            // 多少列、其中多少列是长文本，用户才知道该精简列、还是该换个目标库。
-            if err.message.to_ascii_lowercase().contains("row size too large") {
-                let total = source_columns.len();
-                let wide = source_columns
-                    .iter()
-                    .filter(|c| {
-                        let t = c.type_name.clone().unwrap_or_default().to_ascii_lowercase();
-                        ["string", "text", "blob", "clob", "json"]
-                            .iter()
-                            .any(|key| t.contains(key))
-                    })
-                    .count();
-                msg.push_str(&format!(
-                    "（本表共 {total} 列，其中 {wide} 列是长文本。MySQL/InnoDB 单行上限 8126 字节，\
-                     列太多时无论怎么映射类型都建不出来：① 只同步真正需要的列；\
-                     ② 目标改用 Doris / PostgreSQL / ClickHouse（它们没有这个行宽限制）；\
-                     ③ 若目标 MySQL 是 5.6/5.7，确认行格式为 DYNAMIC —— 本工具建表已显式指定。）"
-                ));
-            }
-            // 「Specified key was too long」（MySQL 1071）：InnoDB 单个索引上限 3072 字节。
-            // 建表语句已经把「主键在 utf8mb4 下装不下就退到 utf8」处理掉了
-            //（见 dialect.rs 的 mysql_charset_for_key），还报说明连 3 字节/字符都装不下 ——
-            // 只能靠缩短键列，这里把口径讲清楚，免得用户以为是工具把结构同步坏了。
-            if err.message.to_ascii_lowercase().contains("key was too long") {
-                msg.push_str(
-                    "（MySQL/InnoDB 单个索引最多 3072 字节：索引里文本列的长度之和 × 4（utf8mb4 每字符 \
-                     4 字节）超过它就会报这个错。本工具建表时若 utf8mb4 装不下会自动改建成 utf8（3 字节/\
-                     字符）；仍失败说明连 utf8 都装不下 —— 请在源表上缩短主键/唯一索引里的文本列，\
-                     或把索引改成前缀索引）",
-                );
-            }
-            // 「Invalid default value」（MySQL 1067）：目标端 sql_mode 比源库严格。
-            // 已知的两个成因（零日期默认值、没写默认值的 TIMESTAMP 列）在 dialect.rs 建表时已经
-            // 处理掉了（省略零日期 / 给可空 timestamp 显式写 null），还报说明是别的写法。
-            if err.message.to_ascii_lowercase().contains("invalid default value") {
-                msg.push_str(
-                    "（目标端 sql_mode 比源库严格：含 NO_ZERO_DATE 时 `0000-00-00` 这类零日期默认值、\
-                     以及没写默认值的 TIMESTAMP 列都会被拒绝。本工具已自动省略零日期默认值、并给可空 \
-                     TIMESTAMP 显式写 NULL；仍报错说明是另一种写法（例如 5.5 目标不接受 datetime 的 \
-                     CURRENT_TIMESTAMP），把该列的默认值在源表上改掉即可）",
-                );
-            }
-            return ObjResult::failed(ty, table, msg);
+            // 建表失败**只报数据库/驱动的原话**（用户口径：不拼任何东西）。
+            // 以前这里按错误内容追加三段补救建议（Row size too large / key was too long /
+            // invalid default value），那些话长得像数据库报错，用户分不清哪句是 MySQL 说的；
+            // 成因与对策留在代码注释与 tracing 里，界面上只有方言原话。
+            tracing::debug!(table, error = %err.message, "建表失败（只报方言原话，不追加建议）");
+            return ObjResult::failed(ty, table, err.message);
         }
         created = true;
         if let Some(task) = task {
@@ -4570,7 +4547,7 @@ async fn sync_table_inner(
         };
         if let Err(err) = run_target(state, &tgt_target, &drop_sql).await {
             if !forced {
-                return ObjResult::failed(ty, table, format!("删除目标表失败：{}", err.message));
+                return ObjResult::failed(ty, table, err.message);
             }
             rebuilt = false;
             // 这是「降级继续」的过程细节：真要出问题，后面坏的行/表会以结果形式报出来
@@ -4592,7 +4569,7 @@ async fn sync_table_inner(
             );
             tracing::debug!(table, %ddl, "目标表建表语句（重建）");
             if let Err(err) = run_target(state, &tgt_target, &ddl).await {
-                return ObjResult::failed(ty, table, format!("重建目标表失败：{}", err.message));
+                return ObjResult::failed(ty, table, err.message);
             }
             created = true;
             // 链路日志第 2 步
@@ -4842,7 +4819,7 @@ async fn sync_table_inner(
             // SQLite / Derby 又没有 `truncate` —— 见 `Dialect::clear_table_sql`
             let clear = target_kind.clear_table_sql(&target_name);
             if let Err(err) = run_target_write(state, &tgt_target, &clear).await {
-                return ObjResult::failed(ty, table, format!("清空目标表失败：{}", err.message));
+                return ObjResult::failed(ty, table, err.message);
             }
         }
     }
@@ -5143,7 +5120,8 @@ async fn sync_table_inner(
                     tracing::info!(affected = ?result.affected_rows, rows = result.rows.len(), "直拷结果");
                     result.affected_rows.unwrap_or(0) as u64
                 }
-                Err(err) => return ObjResult::failed(ty, table, format!("同实例直拷失败：{}", err.message)),
+                // 直拷失败也只报方言原话（`copy_result` 是借用，这里要 clone）
+                Err(err) => return ObjResult::failed(ty, table, err.message.clone()),
             };
             if copied == 0 {
                 copied = expected_copy.unwrap_or(0);
@@ -5217,6 +5195,12 @@ async fn sync_table_inner(
     // 写池诊断（在途批数 / 最近批耗时 / 失败样例 / 是否退回过逐条提交）：
     // 卡顿日志、二分定位与「断连能不能整表重跑」共用这一份，所以放在重试循环**外面**。
     let diag = std::sync::Arc::new(crate::api::transfer::WriteDiag::default());
+    // 整表重跑时 `transfer::run` 的计时器会重新归零：这两份累计量跨轮共享，
+    // 保证界面上的「耗时」是用户真正等的时间，而不是只剩最后一轮。
+    // - `elapsed_base_ms`：前几轮已经耗掉的墙钟（不管成功失败）
+    // - `wait_ms`：其中判死 / 回滚 / 换连接 / 提交超时这些没在搬数据的部分
+    let elapsed_base_ms = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+    let wait_ms = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     // 一次尝试 = 一份新计划：reader / writer 都按计划重建，会话键（`sid`）不变 ——
     // 连接断过的话内核已经忘了那条会话，下次用时会自动重连。
     let make_plan = || crate::api::transfer::TablePlan {
@@ -5264,6 +5248,8 @@ async fn sync_table_inner(
         },
         diag: diag.clone(),
         progress: progress.clone(),
+        elapsed_base_ms: elapsed_base_ms.clone(),
+        wait_ms: wait_ms.clone(),
     };
     // 重跑前要用的快照/判据：行数快照用于回退进度（上一次的行随事务回滚，不能计两遍）
     let counters_before = task.map(|t| (t.rows_read(), t.rows_written(), t.rows_failed()));
@@ -5271,7 +5257,14 @@ async fn sync_table_inner(
     let stats = loop {
         // 整表重跑：上一次读出的行随事务回滚，进度从 0 重算（否则「无进展」会被历史值掩盖）
         progress.store(0, std::sync::atomic::Ordering::SeqCst);
-        match crate::api::transfer::run(make_plan()).await {
+        let attempt_started = std::time::Instant::now();
+        let outcome = crate::api::transfer::run(make_plan()).await;
+        // 这一轮不论成败都算进基准：失败那几轮同样占用了用户的墙钟（重跑 = 数据重读重写）
+        elapsed_base_ms.fetch_add(
+            attempt_started.elapsed().as_millis() as u64,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        match outcome {
             Ok(stats) => break stats,
             Err(msg) => {
                 // ---- 断连 ⇒ **自动重连重跑**（最多 `LINK_RETRY_MAX` 次） ----
@@ -5323,7 +5316,7 @@ async fn sync_table_inner(
                         return ObjResult::failed(
                             ty,
                             table,
-                            format!("断连重跑前清空目标表失败：{}", err.message),
+                            err.message,
                         );
                     }
                 }
@@ -5607,7 +5600,7 @@ async fn sync_view(
     };
     let result = match run_sql_in(state, &src.conn, &src.scope, ddl_sql, 5).await {
         Ok(result) => result,
-        Err(err) => return ObjResult::failed("view", name, format!("读取视图定义失败：{}", err.message)),
+        Err(err) => return ObjResult::failed("view", name, err.message),
     };
     let mut definition = None;
     for row in result.rows {
@@ -5645,7 +5638,7 @@ async fn sync_view(
     let target_name = target_kind.quote(name);
     let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
         Ok(target) => target,
-        Err(err) => return ObjResult::failed("view", name, format!("解析目标连接失败：{}", err.message)),
+        Err(err) => return ObjResult::failed("view", name, err.message),
     };
     if columns_of(state, tgt, name).await.map(|c| !c.is_empty()).unwrap_or(false)
         && opts.policy != Policy::Drop
@@ -5663,7 +5656,7 @@ async fn sync_view(
     }
     match run_target(state, &tgt_target, &definition).await {
         Ok(_) => ObjResult::ok("view", name, "同步完成", 0, 0),
-        Err(err) => ObjResult::failed("view", name, format!("建视图失败：{}", err.message)),
+        Err(err) => ObjResult::failed("view", name, err.message),
     }
 }
 
@@ -5703,7 +5696,7 @@ async fn sync_object_source(
     let result = match run_sql_in(state, &src.conn, &src.scope, sql, 5).await {
         Ok(result) => result,
         Err(err) => {
-            return ObjResult::failed(kind, name, format!("读取定义失败：{}", err.message))
+            return ObjResult::failed(kind, name, err.message)
         }
     };
     // 取"像 DDL"的那个值：各家的定义列名不一样（definition / sql / Create View …），
@@ -5761,7 +5754,7 @@ async fn sync_object_source(
     let definition = adapt_object_definition(&definition, &source_kind, &target_kind);
     let tgt_target = match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
         Ok(target) => target,
-        Err(err) => return ObjResult::failed(kind, name, format!("解析目标连接失败：{}", err.message)),
+        Err(err) => return ObjResult::failed(kind, name, err.message),
     };
     if opts.policy == Policy::Drop {
         match target_kind.drop_object_sql(kind, name) {
@@ -5790,7 +5783,7 @@ async fn sync_object_source(
     }
     match run_target(state, &tgt_target, &definition).await {
         Ok(_) => ObjResult::ok(kind, name, "同步完成", 0, 0),
-        Err(err) => ObjResult::failed(kind, name, format!("创建失败：{}", err.message)),
+        Err(err) => ObjResult::failed(kind, name, err.message),
     }
 }
 
@@ -6009,7 +6002,10 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     // 「几十张小表」能并行摊掉建连/建表/探测的固定开销，而单张大表仍吃得到多路写。
     let target_kind = Dialect::new(require_record(&state, &tgt.conn).await?.kind());
     let source_kind = Dialect::new(require_record(&state, &src.conn).await?.kind());
-    let target_declared = write_parallelism(target_kind.kind).max(1);
+    // 每表写并发：界面显式设了就用它（夹 1..=64），否则取目标方言声明值。
+    // 它同时是「整任务的写并发预算」，尾部弹性扩路也不会超过它（用户填 1 就该始终 1 路）。
+    let explicit_tgt = body.tgt_workers.filter(|n| *n >= 1).map(|n| n.min(64));
+    let target_declared = explicit_tgt.unwrap_or_else(|| write_parallelism(target_kind.kind).max(1));
     // 两阶段 upsert 每张表还要一条专属会话做目标键查询/逐行更新。没有原生
     // upsert 的目标要把它算进预算，否则对象并发 × (writer + lookup) 会翻倍。
     let native_upsert = target_kind.supports_native_upsert();
@@ -6028,40 +6024,58 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         .min(adaptive_concurrency(source_kind.kind, total))
         .min(target_object_cap)
         .max(1);
-    // ===== 表级并发：**固定最多 2 张**（用户口径：不允许设置）=====
+    // ===== 表级并发：界面可设，缺省 2 张 =====
     //
     // 单表内部本来就有「2 片读 + 2 路写」（见下面的 src_slices / tgt_workers），
     // 同时 2 张表已经能把源端读和目标端写都喂饱；再往上加，目标端的连接数、
     // 行锁与 IO 争抢成倍上升 —— 真机那次「后期几乎每张表都卡 601 秒」正是
     // 手工把并发表数设成 8 的时候（8 表 ×（2 读 + 1 写）= 24 条会话压同一个库）。
     //
-    // 界面传来的 max_concurrency 仍然接受（老客户端兼容），但**不再放大**；
-    // 弱机（SQLite/H2/Derby 等单连接池方言）自适应会给 1，这里取小。
-    // 逃生阀 DBMIND_SYNC_CONCURRENCY 只用于排查与基准对比，生产不要动。
+    // 所以界面上**允许调小，也允许调大**（用户要求「自己能设」），但缺省仍是 2；
+    // 弱机（SQLite/H2/Derby 等单连接池方言）自适应会给 1，缺省路径取小。
+    // 逃生阀 DBMIND_SYNC_CONCURRENCY 只在界面没填时生效。
     let env_concurrency = std::env::var("DBMIND_SYNC_CONCURRENCY")
         .ok()
         .and_then(|text| text.trim().parse::<usize>().ok())
         .filter(|n| *n >= 1)
         .unwrap_or(2);
-    let _ = body.max_concurrency;
-    let sync_concurrency = env_concurrency.min(adaptive).min(total.max(1));
-    let concurrency_source = "（固定最多 2 张）";
+    // 每表读并发：界面显式设了就把它当成**本次任务的读预算**（`source_declared`），
+    // 后面的份额切分与尾部弹性扩片都受它约束。
+    let explicit_src = body.src_slices.filter(|n| *n >= 1).map(|n| n.min(64));
+    let source_declared = explicit_src.unwrap_or_else(|| write_parallelism(source_kind.kind).max(1));
     let reserved_sessions = usize::from(!native_upsert);
-    let source_declared = write_parallelism(source_kind.kind).max(1);
-    // 每张**在跑**的表至少 2 路读：实测单流只吃到链路的一半（4.0 MB/s ≈ 4,400 行/秒），
-    // 两路并发才接近打满（9.2 MB/s）。
-    //
-    // 原来的 `source_declared / sync_concurrency` 在 4 张表并发时把每表除成 1 路，
-    // 于是整库的读吞吐 = 4 × 单流，遇到「一页 60 秒超时」的慢表就彻底拖住尾部
-    // （真机：re_sale 单表 1 路、页 3711，读 2256 秒只前进几万行）。
-    // 现在宁可少开一张表，也不让在读的表退化成单流；读连接总数仍受 `source_declared`
-    // 约束，不会和源库的连接上限打架。单连接池的库（SQLite/H2/Derby/SQL Server）
-    // source_declared = 1，下面的 min/max 会把它还原成 1 表 1 路。
-    let sync_concurrency = sync_concurrency.min((source_declared / 2).max(1));
-    let src_slices = (source_declared / sync_concurrency).max(2).min(source_declared);
-    let tgt_workers = (target_declared / sync_concurrency)
-        .saturating_sub(reserved_sessions)
-        .max(1);
+    // 表数：界面显式给了就以用户为准（不再被「固定 2 张」压回）
+    let explicit_objects = body.max_concurrency.filter(|n| *n >= 1).map(|n| n.min(64));
+    let sync_concurrency = match explicit_objects {
+        Some(n) => n.min(total.max(1)),
+        // 缺省路径：每张**在跑**的表至少 2 路读 —— 实测单流只吃到链路的一半
+        // （4.0 MB/s ≈ 4,400 行/秒），两路并发才接近打满（9.2 MB/s）。
+        // 宁可少开一张表，也不让在读的表退化成单流（真机：re_sale 单表 1 路、
+        // 页 3711，读 2256 秒只前进几万行）。单连接池的源（declared = 1）会被
+        // 这个 min 还原成 1 表 1 片。
+        None => env_concurrency
+            .min(adaptive)
+            .min(total.max(1))
+            .min((source_declared / 2).max(1)),
+    };
+    let concurrency_source = if explicit_objects.is_some() {
+        "（界面设置）"
+    } else {
+        "（缺省 2 张）"
+    };
+    // 每表读片：显式值原样当份额；缺省按「读预算 / 并发表数」切，且不低于 2 片
+    let src_slices = if explicit_src.is_some() {
+        source_declared
+    } else {
+        (source_declared / sync_concurrency).max(2).min(source_declared)
+    };
+    let tgt_workers = if explicit_tgt.is_some() {
+        target_declared
+    } else {
+        (target_declared / sync_concurrency)
+            .saturating_sub(reserved_sessions)
+            .max(1)
+    };
     let opts = opts.with_session_caps(tgt_workers, src_slices);
     // 尾部弹性配额：整库同步的所有表共用一份（见 `GrowCaps`）。初始值就是上面的份额，
     // 表任务里的监控协程会在**收尾阶段**按「在跑的表数」把它调高。
@@ -6323,8 +6337,14 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     let already_reported =
                         outcome.ty == "table" && outcome.message.starts_with("传输完成");
                     if !outcome.message.is_empty() && !already_reported {
-                        // 日志带对象类型前缀（表/视图/存储过程…），与「表 xxx：开始」一致
-                        task.log(format!("{} {name}：{}", kind_label(&outcome.ty), outcome.message));
+                        // 日志带对象类型前缀（表/视图/存储过程…），与「表 xxx：开始」一致；
+                        // 原因本身过 brief_error：只留数据库/驱动原话（剥「SQL 执行失败：」、
+                        // 「(conn=…)」、内部会话键，取首行）
+                        task.log(format!(
+                            "{} {name}：{}",
+                            kind_label(&outcome.ty),
+                            brief_error(&outcome.message)
+                        ));
                     }
                     *slot.lock().unwrap() = Some(outcome.to_json());
                     task.add_done(1);
@@ -6498,7 +6518,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         if outcome.status == "error" {
                             // 重试也失败：**必须把原因打出来**。否则日志最后停在
                             // 「创建视图」一行，收尾却是「失败 1」，中间的原因全丢了。
-                            task.log(format!("视图 {name}：重试仍未建成：{}", outcome.message));
+                            task.log(format!("视图 {name}：{}", outcome.message));
                             continue;
                         }
                         *slots[index].lock().unwrap() = Some(outcome.to_json());
@@ -6565,7 +6585,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     if let Err(err) =
                         run_sql_in_write(&state, &tgt.conn, &tgt.scope, clear, 600_000).await
                     {
-                        task.log(format!("表 {name}：清空失败：{}", err.message));
+                        task.log(format!("表 {name}：{}", err.message));
                         continue;
                     }
                     // 重跑要走正常的对象流程（会话租约、进度、结果行都要有）

@@ -1,5 +1,12 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.4.0": [
+    "Transfer options gain three adjustable concurrency knobs: concurrent tables, read lanes per table and write lanes per table — each can be \"Auto\" or 1~16, so a weak link or a loaded target can be dialed down to 1 while the defaults still size the budget from the database type and table count",
+    "The completion line now shows where the time went: \"N batches, X s per batch on average\" reveals per-batch fixed cost, and \"of which Y waiting on timeouts/reconnects\" reveals a dragging link; elapsed time now includes every whole-table rerun",
+    "Rows per batch and both rate limits are now dropdowns that can return to \"Auto / Unlimited\"; a write timeout on a batch of only tens of KB no longer shrinks the page — when payload size is not the cause, shrinking only multiplies batches and makes things slower",
+    "Sync errors now quote the database / driver verbatim: prefixes such as \"failed to begin transaction:\" and \"failed to commit:\" are gone; that context stays in the file log",
+    "Sync titles in the task centre collapse to \"A → C / db\" when both sides use the same database name, so two tasks no longer look identical"
+  ],
   "v1.3.4": [
     "Relational connections (MySQL/MariaDB/PostgreSQL/Oracle/DB2/DM/Kingbase/SQL Server) now allow 8 concurrent sessions instead of 4: while a sync is running, table-structure lookups and monitor polling no longer queue for 30 seconds and fail with \"timed out waiting for a free connection\" (the \"Sessions per connection\" setting from the previous version is gone; the value now lives in each type)",
     "Reading source table structures now retries on a session-pool queue timeout (after 1s and 3s) instead of failing a perfectly healthy table",

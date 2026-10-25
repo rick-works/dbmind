@@ -400,8 +400,16 @@ impl Writer for SqlWriter {
                     // 同时**记下这件事**：逐条提交意味着断连后已写的行留在目标表里，
                     // 这张表就不能「整表重跑」（会写重复），见 `WriteDiag::begin_failed`。
                     self.diag.begin_failed.store(true, Ordering::SeqCst);
+                    // 只报驱动/数据库的原话，不拼「开启事务失败：」这类前缀；
+                    // 「退回逐条 autocommit」这个上下文进 tracing
+                    tracing::warn!(
+                        target: "dbmind::sync",
+                        table = %self.table,
+                        error = %err,
+                        "开启事务失败，退回逐条 autocommit"
+                    );
                     if let Some(task) = &self.task {
-                        task.log(format!("表 {}：开启事务失败：{}", self.table, err));
+                        task.log(format!("表 {}：{err}", self.table));
                     }
                 }
             }
@@ -687,13 +695,13 @@ impl Writer for SqlWriter {
                 if let Some((_, end, restore)) = self.txn {
                     if let Err(err) = run_target_in(&self.state, &self.tgt_target, end, &usid).await {
                         if failure.is_none() {
-                            failure = Some(format!("提交事务失败：{}", err.message));
+                            failure = Some(err.message);
                         }
                     }
                     if !restore.is_empty() {
                         if let Err(err) = run_target_in(&self.state, &self.tgt_target, restore, &usid).await {
                             if failure.is_none() {
-                                failure = Some(format!("恢复 autocommit 失败：{}", err.message));
+                                failure = Some(err.message);
                             }
                         }
                     }
@@ -725,13 +733,13 @@ impl Writer for SqlWriter {
             // 上层「能不能整表重跑」必须按最坏情况判断 —— 记下它，就不许再重跑。
             self.diag.committed.fetch_add(1, Ordering::SeqCst);
             if let Err(err) = run_target_in(&self.state, &self.tgt_target, end, &session).await {
-                failure = Some(format!("提交事务失败：{}", err.message));
+                failure = Some(err.message);
             }
             // 恢复 autocommit 失败同样要报（否则连接池里留着一个开着事务的脏会话）
             if !restore.is_empty() {
                 if let Err(err) = run_target_in(&self.state, &self.tgt_target, restore, &session).await {
                     if failure.is_none() {
-                        failure = Some(format!("恢复 autocommit 失败：{}", err.message));
+                        failure = Some(err.message);
                     }
                 }
             }

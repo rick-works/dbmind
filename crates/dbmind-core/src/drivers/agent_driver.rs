@@ -457,13 +457,18 @@ impl AgentDriver {
         }
 
         if !self.host.supports(agent_key)? {
+            // 走到这里说明**声明本身**对不上（宿主声明里没有这个 key），不是进程暂时没起来 ——
+            // 启动/重启期间的询问已由 `AgentHost::supports` 的静态声明兜住。
+            // 文案也要照实说：以前这里写「该类型需要专属协议宿主」，于是 JDBC 类型偶尔
+            // 撞上启动窗口时，用户被指引去翻 plugins/connection-types（那里根本没有问题）。
             return Err(DbMindError::new(
                 ErrorCode::DriverNotImplemented,
-                format!("驱动宿主不支持 agentKey={agent_key}"),
+                format!("宿主 {} 未声明支持 agentKey={agent_key}", self.host.spec().id),
             )
             .with_detail(
-                "该类型需要专属协议宿主（如 Redis / Elasticsearch 各有自己的协议），\
-                 接入方式见 plugins/connection-types 中该类型的声明",
+                "这是类型声明与宿主不匹配（不是驱动缺失、也不是宿主没起来）：\
+                 核对 plugins/connection-types 里该类型的 agentKey，\
+                 与该宿主声明的 agent_keys 是否一致",
             ));
         }
 

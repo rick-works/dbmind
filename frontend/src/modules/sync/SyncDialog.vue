@@ -184,13 +184,8 @@
           </div>
           <div class="settings-sep"></div>
           <div class="settings-label"><el-icon :size="13"><Clock /></el-icon>{{ $t('sync.paramTitle') }}</div>
-          <!-- 参数两列（每行一个标签 + 控件）：四行压成两行，单栏里也不显得空 -->
+          <!-- 参数两列（按列流排，见 .param-grid）：左列 = 怎么搬，右列 = 开多少并发 -->
           <div class="param-grid">
-          <!-- 并发表数**不再出现在界面上**（用户口径：连「固定几张」这一行也去掉）。
-               后端 `sync::db` 现在硬性夹到「同时只搬 1 张表」：单表内部本来就有
-               2 片读 + 2 路写，多表并行只是把 N 份压力叠给同一个目标库，IO 一饱和就会
-               出现「一页几百条写 30 秒」的慢批自愈 —— 真机 400 对象整库同步后段
-               几十张表连环报这条，就是 2 张表同写时目标端磁盘被打满。 -->
           <!-- 每批行数：**按目标库给默认值、用户可改**。0 = 自动（用默认值）。
                默认值差一个数量级（CH 写 part 要 1 万行、MySQL 在丢包链路上 1000 行、
                SQL Server 有多行 VALUES 的 1000 行硬限制），所以写在 compute 里按类型映射，
@@ -202,11 +197,13 @@
                 <el-icon class="hint-q"><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
-            <!-- 显示的是**实际会用的行数**：没手动改过就是目标库默认值（用户要求「显示出来」），
-                 改了就按改的走（0 只在后端接口语义里表示自动，界面上不出现 0）。 -->
-            <el-input-number :model-value="batchRowsShown" @update:model-value="onInsertRowsInput"
-                             :min="1" :max="100000" :step="500" size="small"
-                             controls-position="right" :disabled="taskRunning" class="settings-num" />
+            <!-- 下拉而不是数字框（和右侧并发三项一致，用户口径「样式统一」）：
+                 第一项就是「自动」= 后端按目标库给默认值；后面的档位是显式指定。 -->
+            <el-select :model-value="opts.insertRows" @update:model-value="onInsertRowsInput"
+                       size="small" :disabled="taskRunning" class="settings-num">
+              <el-option v-for="n in batchRowsOptions" :key="n" :value="n"
+                         :label="n === 0 ? $t('sync.auto') : String(n)" />
+            </el-select>
           </div>
           <!-- 超时时间：对齐 DBX 的「操作超时（秒），丢弃连接」。默认「继承连接」= 用数据源上
                自己的 socketTimeout；选具体秒数就是单次数据库操作的硬上限（探活通过仍会继续等）。 -->
@@ -234,12 +231,12 @@
                 <el-icon class="hint-q"><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
-            <!-- 0 = 不限：输入框留空 + 提示「不限制」，不把字面 0 摆给用户看 -->
-            <el-input-number :model-value="rateRowsShown" @update:model-value="onRateRowsInput"
-                             :min="0" :max="2000000" :step="1000" size="small"
-                             :placeholder="$t('sync.opTimeoutUnlimited')"
-                             controls-position="right" :disabled="taskRunning"
-                             class="settings-num rate-num" />
+            <!-- 下拉（和并发三项统一）：0 的标签写「不限制」，不把字面 0 摆给用户看 -->
+            <el-select :model-value="opts.rateRows" @update:model-value="onRateRowsInput"
+                       size="small" :disabled="taskRunning" class="settings-num">
+              <el-option v-for="n in rateRowsOptions" :key="n" :value="n"
+                         :label="n === 0 ? $t('sync.opTimeoutUnlimited') : String(n)" />
+            </el-select>
           </div>
           <div class="settings-inline">
             <span class="settings-inline-label">
@@ -248,11 +245,58 @@
                 <el-icon class="hint-q"><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
-            <el-input-number :model-value="rateMbShown" @update:model-value="onRateMbInput"
-                             :min="0" :max="10240" :step="1" :precision="1" size="small"
-                             :placeholder="$t('sync.opTimeoutUnlimited')"
-                             controls-position="right" :disabled="taskRunning"
-                             class="settings-num rate-num" />
+            <el-select :model-value="opts.rateMb" @update:model-value="onRateMbInput"
+                       size="small" :disabled="taskRunning" class="settings-num">
+              <el-option v-for="n in rateMbOptions" :key="n" :value="n"
+                         :label="n === 0 ? $t('sync.opTimeoutUnlimited') : String(n)" />
+            </el-select>
+          </div>
+          <!-- 并发三项（自动 / 1..16）：放在**第二列**（`.param-grid` 按列流排，
+               前四个参数填满左列后，这三项自然落到右侧）。
+               为什么用下拉而不是数字框：数字框的 min=1 会把「清空」夹回 1，
+               用户永远回不到「自动」（真机反馈）；下拉里「自动」是一个明确选项。
+               显式选定后后端以用户为准，**尾部弹性也不会超过这个值**（填 1 就始终 1 条连接）。 -->
+          <div class="settings-inline">
+            <span class="settings-inline-label">
+              {{ $t('sync.objConcurrency') }}
+              <el-tooltip :content="$t('sync.objConcurrencyHint')" placement="top" :show-after="120">
+                <el-icon class="hint-q"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+            <el-select :model-value="opts.objConcurrency"
+                       @update:model-value="v => onConcurrency('objConcurrency', v)"
+                       size="small" :disabled="taskRunning" class="settings-num">
+              <el-option v-for="n in CONCURRENCY_OPTIONS" :key="n" :value="n"
+                         :label="n === 0 ? $t('sync.auto') : String(n)" />
+            </el-select>
+          </div>
+          <div class="settings-inline">
+            <span class="settings-inline-label">
+              {{ $t('sync.srcSlices') }}
+              <el-tooltip :content="$t('sync.srcSlicesHint')" placement="top" :show-after="120">
+                <el-icon class="hint-q"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+            <el-select :model-value="opts.srcSlices"
+                       @update:model-value="v => onConcurrency('srcSlices', v)"
+                       size="small" :disabled="taskRunning" class="settings-num">
+              <el-option v-for="n in CONCURRENCY_OPTIONS" :key="n" :value="n"
+                         :label="n === 0 ? $t('sync.auto') : String(n)" />
+            </el-select>
+          </div>
+          <div class="settings-inline">
+            <span class="settings-inline-label">
+              {{ $t('sync.tgtWorkers') }}
+              <el-tooltip :content="$t('sync.tgtWorkersHint')" placement="top" :show-after="120">
+                <el-icon class="hint-q"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+            <el-select :model-value="opts.tgtWorkers"
+                       @update:model-value="v => onConcurrency('tgtWorkers', v)"
+                       size="small" :disabled="taskRunning" class="settings-num">
+              <el-option v-for="n in CONCURRENCY_OPTIONS" :key="n" :value="n"
+                         :label="n === 0 ? $t('sync.auto') : String(n)" />
+            </el-select>
           </div>
           <!-- 「行数上限」已删（用户口径：同步就是不限，抽样不是同步的事）；
                原先那个全局 WHERE 输入框挪到「行过滤」页签**按表设置** —— 一个条件
@@ -569,19 +613,43 @@ const tgtKindCode = computed(() => String(tgtInfo.value?.type || '').toUpperCase
 const srcKindCode = computed(() => String(srcInfo.value?.type || '').toUpperCase())
 const batchRowsDefault = computed(() => BATCH_ROWS_DEFAULT[tgtKindCode.value] || 1000)
 
-// 并发表数已从界面上移除（用户口径）：后端 `sync::db` 硬性夹到「同时 1 张表」，
-// 所以这里既不算默认值、也不再提交该字段。
+// 并发三项（表数 / 每表读 / 每表写）的可选值：0 = 自动。
+// 用下拉而不是数字框：数字框的 min=1 会把「清空」夹回 1，用户改不回「自动」（真机反馈）；
+// 下拉里「自动」是一个明确的选项，选回去就是 0。上限 16 已经远超方言声明的 6。
+const CONCURRENCY_OPTIONS = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16]
+const concurrencyValue = (v) => {
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0
+}
+/** 三个下拉共用一个写入口：0 = 自动 */
+const onConcurrency = (key, value) => {
+  opts.value[key] = concurrencyValue(value)
+}
 
-/** 输入框里显示的值：用户没改过（0）就显示目标库默认值 —— 「显示出来」而不是藏成 0 */
+/** 摘要里显示的每批条数：没改过（0）就是目标库默认值 —— 「显示出来」而不是藏成 0 */
 const batchRowsShown = computed(() => (opts.value.insertRows > 0 ? opts.value.insertRows : batchRowsDefault.value))
+
+// ===== 每批条数 / 两条限速也改用下拉（与右侧并发三项统一样式）=====
+// 首项是「自动（目标库默认）」/「不限制」= 0；后面是常用档位。
+// 为什么不能继续用数字框：清空后会被 min 夹回、回不到「自动/不限制」（用户反馈）。
+const BATCH_ROWS_OPTIONS = [0, 500, 1000, 2000, 5000, 10000, 20000, 50000]
+const RATE_ROWS_OPTIONS = [0, 1000, 2000, 5000, 10000, 20000, 50000, 100000]
+const RATE_MB_OPTIONS = [0, 0.5, 1, 2, 5, 10, 20, 50, 100]
+/** 把「当前值」并进档位：老配置里可能是 333 / 17.5 这种自定义值，不能因为下拉里没有就丢掉 */
+const withCurrent = (options, current) => {
+  const set = new Set(options.map(Number))
+  const n = Number(current)
+  if (Number.isFinite(n) && n > 0) set.add(n)
+  return [...set].sort((a, b) => a - b)
+}
+const batchRowsOptions = computed(() => withCurrent(BATCH_ROWS_OPTIONS, opts.value.insertRows))
+const rateRowsOptions = computed(() => withCurrent(RATE_ROWS_OPTIONS, opts.value.rateRows))
+const rateMbOptions = computed(() => withCurrent(RATE_MB_OPTIONS, opts.value.rateMb))
 const onInsertRowsInput = (value) => {
-  // 清空/非法输入回落到 0，提交给后端时由它按方言默认处理
+  // 0 = 自动（后端按目标库方言默认处理）
   const n = Number(value)
   opts.value.insertRows = Number.isFinite(n) && n > 0 ? Math.round(n) : 0
 }
-// 限速：0 = 不限（界面上留空 + 占位符「不限」，不显示字面 0 —— 用户要求「不限制就显示不限制」）
-const rateRowsShown = computed(() => (opts.value.rateRows > 0 ? opts.value.rateRows : undefined))
-const rateMbShown = computed(() => (opts.value.rateMb > 0 ? opts.value.rateMb : undefined))
 const onRateRowsInput = (value) => {
   const n = Number(value)
   opts.value.rateRows = Number.isFinite(n) && n > 0 ? Math.round(n) : 0
@@ -624,6 +692,8 @@ const summaryRows = computed(() => {
   // 0 = 不限（行/秒、MB/s 两条曲线各自独立）
   const unlimited = t('sync.unlimited')
   const rate = (v) => (v > 0 ? String(v) : unlimited)
+  // 并发三项：0 = 自动，摘要里直接写「自动」而不是 0
+  const autoText = (v) => (v > 0 ? String(v) : t('sync.auto'))
   return [
     { label: t('sync.source'), value: (srcConnName.value || '--') + ' ▸ ' + src.value.database + (src.value.schema ? '.' + src.value.schema : '') },
     { label: t('sync.target'), value: (tgtConnName.value || '--') + ' ▸ ' + tgt.value.database + (tgt.value.schema ? '.' + tgt.value.schema : '') },
@@ -637,6 +707,10 @@ const summaryRows = computed(() => {
     { label: t('sync.sumSyncData'), value: yesNo(o.syncData) },
     { label: t('sync.sumStopOnError'), value: yesNo(o.stopOnError) },
     // ② 传输参数（显示的是**实际会用的值**：每批条数没改过就是目标库默认值）
+    // 并发三项：0 = 自动（后端按类型声明与并发表数切预算）
+    { label: t('sync.objConcurrency'), value: autoText(o.objConcurrency) },
+    { label: t('sync.srcSlices'), value: autoText(o.srcSlices) },
+    { label: t('sync.tgtWorkers'), value: autoText(o.tgtWorkers) },
     { label: t('sync.insertRows'), value: String(batchRowsShown.value) },
     { label: t('sync.opTimeout'), value: timeoutText },
     // 两条限速都没填时合成一行「限速：不限」—— 分开写就是两个「不限」，白占一行
@@ -863,6 +937,9 @@ const opts = ref({
   // 默认「删除重建」：重建出来的表是空的，dataMode 只能是 insert（见下面的 MODE_DEFS）
   objectPolicy: 'drop', dataMode: 'insert', syncStructure: true, syncData: true,
   includeIndexes: true, autoCreateDb: true, stopOnError: false, insertRows: 0, timeout: 0,
+  // 并发三项（0 = 自动，由后端按类型声明与并发表数切预算）：
+  // objConcurrency = 同时搬几张表；srcSlices = 每表读几片；tgtWorkers = 每表写几路
+  objConcurrency: 0, srcSlices: 0, tgtWorkers: 0,
   // 限速（0 = 不限）：行/秒 与 MB/s 各一条曲线，见后端 transfer::RateLimit
   rateRows: 0, rateMb: 0,
   // 前置 / 后置 SQL（整段脚本，分号或换行分隔；每个对象各执行一遍）
@@ -1453,7 +1530,11 @@ const buildPayload = (only = null) => {
     includeIndexes: opts.value.includeIndexes,
     autoCreateDb: opts.value.autoCreateDb,
     stopOnError: opts.value.stopOnError,
-    // 并发表数不再由界面提交（后端固定同时 1 张，见 sync::db）；字段留着给老后端兼容
+    // 并发三项：0 = 自动（后端按类型声明与并发表数切预算）；>0 以界面为准，
+    // 且尾部弹性（别的表退出后扩片）不会超过这里填的值
+    maxConcurrency: opts.value.objConcurrency || 0,
+    srcSlices: opts.value.srcSlices || 0,
+    tgtWorkers: opts.value.tgtWorkers || 0,
     // 0 = 按生成方（目标库）默认；>0 以界面为准 —— 后端再和字节上限、方言硬限制取小
     insertRows: opts.value.insertRows || 0,
     // 0 = 继承连接（用数据源上的 socketTimeout）；-1 = 不限制；>0 = 秒
@@ -1563,10 +1644,24 @@ const run = async (rawOverride = null) => {
     // 只写库名时，同样叫 xingwei_kechuan 的两个不同实例分不清是哪一趟（真机反馈：
     // 任务中心那一列只有一个库名，看不出连的是哪台机器）。
     // 连接名与库名之间用**点**而不是斜杠（用户口径：`conn.db` 像一个对象路径，斜杠看着像 URL 路径）。
-    const bgSide = (conn, db) => (db ? `${conn || '--'}.${db}` : (conn || '--'))
-    const bgTitle = computed(() =>
-      t('sync.bgTitle', { src: bgSide(srcConnName.value, src.value.database), tgt: bgSide(tgtConnName.value, tgt.value.database) })
-    )
+    const bgSide = (conn, db) => (db ? `${conn}.${db}` : conn)
+    const bgTitle = computed(() => {
+      const srcConn = srcConnName.value
+      const tgtConn = tgtConnName.value
+      // 连接名拿不到（从任务中心「查看」恢复时界面上的源/目标是空的）：**不给标题**。
+      // 用 `--` 拼出来的「-- → --」也含可读字符，会通过 addBgTask 的无效标题检查，
+      // 把记录里原本好好的标题冲成垃圾（同 id 再点一次「后台运行」就会发生）
+      if (!srcConn || srcConn === '--' || !tgtConn || tgtConn === '--') return ''
+      const srcDb = src.value.database || ''
+      const tgtDb = tgt.value.database || ''
+      // 两端库名相同（跨实例同步同名库，最常见）时，真正的差异点是**连接名**：
+      // 「连接.库 → 连接.库」两边都长，任务中心/顶栏一截断，两个不同的任务看着一模一样
+      // （用户真机反馈「2 个任务名字一样了」）。这种写法库名只出现一次，两个连接名都在最前面
+      if (srcDb && srcDb === tgtDb) {
+        return t('sync.bgTitleSameDb', { src: srcConn, tgt: tgtConn, db: srcDb })
+      }
+      return t('sync.bgTitle', { src: bgSide(srcConn, srcDb), tgt: bgSide(tgtConn, tgtDb) })
+    })
     // 任务中心点「查看」→ 父组件带 resumeTaskId 打开对话框：跳过向导直接进进度页接着轮询。
     // ⚠ 下面那个「打开即重置向导」的 watch（step=1）与本 watch 同帧触发，注册序在前先跑 ——
     // 这里必须等 nextTick 之后再跳到 5，否则刚设置的进度页被重置回第一步（真机踩过）。
@@ -2449,32 +2544,38 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .settings-checks :deep(.el-checkbox) { height: 20px; margin-right: 0; }
 .settings-checks :deep(.el-checkbox__input) { display: flex; align-items: center; height: 20px; }
 .settings-checks :deep(.el-checkbox__label) { line-height: 20px; padding-left: 6px; }
-/* 设置行：左侧标签（+ 问号悬浮说明），右侧控件。并发表数那一行已移除，
-   现在只剩「每批条数」与「超时时间」 */
+/* 设置行：左侧标签（+ 问号悬浮说明），右侧控件。
+   左列：每批条数 / 超时时间 / 两条限速；右列：并发三项（见 .param-grid 的按列流排） */
 .settings-inline { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
 .settings-inline-label { font-size: 13px; color: var(--dc-text); line-height: 24px; flex: none; }
 .hint-q { font-size: 12px; color: var(--dc-text-weak); cursor: help; vertical-align: -1px; margin-left: 2px; }
 .hint-q:hover { color: var(--el-color-primary); }
 .settings-num { width: 96px; flex: none; }
-/* 限速空态写的是「不限制」，它表达的是**一个有效的取值**，不是「这里没填」——
-   所以颜色要用正常文字色（全局 placeholder 规则是压暗的，这里按用户口径提亮）。 */
-.rate-num :deep(input::placeholder) { color: var(--dc-text) !important; opacity: 1; }
 /* 执行选项里「搬什么」（结构/数据）与「怎么应对错误」之间的一条细线 */
 .checks-sep { height: 1px; background: var(--dc-border); margin: 4px 0; }
 /* 「搬什么」与「传输参数」之间的分隔（合并成一栏后靠这条线分段） */
 .settings-sep { height: 1px; background: var(--dc-border); margin: 6px 0 3px; }
-/* 传输参数：两列（每格一行「标签 + 控件」），四行压成两行。
-   标签列**定宽**（min-width: 10em ≈ 130px）：四行标签长短不一（「每批条数」52px vs
-   「限速（MB/秒）」89px），不定宽时同一列上下两个输入框会左右错开 30 多像素。
+/* 传输参数：两列（每格一行「标签 + 控件」），按**列**填：左列怎么搬、右列并发。
+   标签列**定宽**（min-width: 10em ≈ 130px）：标签长短不一（「每批条数」52px vs
+   「限速（MB/秒）」89px），不定宽时同一列上下两个控件会左右错开 30 多像素。
    10em 按最长标签（含末尾的问号图标、含英文 "Rate limit (rows/s)"）取的，先按最长留够。 */
 .param-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* **按列**填充（不是按行）：左列 4 行放「怎么搬」（每批条数 / 超时 / 两条限速），
+     右列放并发三项。用户口径：并发要集中出现在右侧，扫一眼就知道在调什么。
+     行数固定 4 是为左列服务的 —— 右列只有 3 项，第四行留空不影响对齐。 */
+  grid-auto-flow: column;
+  grid-template-rows: repeat(4, auto);
   gap: 6px 18px;
 }
 .param-grid .settings-inline-label { min-width: 10em; }
 @media (max-width: 720px) {
-  .param-grid { grid-template-columns: minmax(0, 1fr); }
+  .param-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: none;
+    grid-auto-flow: row;
+  }
 }
 
 /* ==================== 按表设置的长列表（表名映射 / 行过滤） ====================

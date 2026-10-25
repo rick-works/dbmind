@@ -1166,11 +1166,15 @@ public final class Main {
      * 「下一次调用重新 connect」，坏会话还留在表里的话，下一次拿到的还是它。
      */
     private static Protocol.AgentException metadataFailure(Session session, SQLException e, String what) {
+        // message **只放驱动/数据库的原话**，不再拼「连接已断开：」「读取表清单失败：」这类
+        // 前缀：界面上要的是一句真实的报错，标签全由内核加（用户口径：不拼任何东西）。
+        // what 只进 detail/日志，用于内部定位。
         if (isConnectionLost(e)) {
             dropSession(session, e.getMessage());
-            return new Protocol.AgentException("DBMIND-CONN-0003", "连接已断开：" + e.getMessage(), describe(e));
+            return new Protocol.AgentException("DBMIND-CONN-0003", String.valueOf(e.getMessage()), describe(e));
         }
-        return new Protocol.AgentException("DBMIND-QUERY-0002", what + "：" + e.getMessage(), describe(e));
+        return new Protocol.AgentException(
+                "DBMIND-QUERY-0002", String.valueOf(e.getMessage()), what + "；" + describe(e));
     }
 
     /**
@@ -1205,9 +1209,10 @@ public final class Main {
             // 「连接不存在」、0003 才是「连接失败」，而**只有 0003 会让内核清掉会话缓存
             // 并重连**（见 agent_driver::with_lane 与 error.rs 的码表）。用错码的话，
             // 用户既看到错的故事，这条连接也永远不会自愈。
-            return new Protocol.AgentException("DBMIND-CONN-0003", "连接已断开：" + e.getMessage(), describe(e));
+            // 同 metadataFailure：message 只放原话（前缀由内核统一加，或干脆不加）
+            return new Protocol.AgentException("DBMIND-CONN-0003", String.valueOf(e.getMessage()), describe(e));
         }
-        return new Protocol.AgentException("DBMIND-QUERY-0002", "SQL 执行失败：" + e.getMessage(), describe(e));
+        return new Protocol.AgentException("DBMIND-QUERY-0002", String.valueOf(e.getMessage()), describe(e));
     }
 
     private static JsonElement tables(JsonObject request) {

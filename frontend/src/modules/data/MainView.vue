@@ -57,7 +57,9 @@
               <div v-for="t in bgRunningList" :key="t.id" class="bg-task-item" @click="resumeBgTask(t)">
                 <span class="bg-dot" :class="bgStatusOf(t.id)"></span>
                 <span class="bg-kind" :class="bgKindClass(t.kind)">{{ bgKindLabel(t.kind) }}</span>
-                <span class="bg-title">{{ t.title }}</span>
+                <!-- 浮层窄：任务名必然被截断，完整标题挂到 title 上（悬停可看全 ——
+                     只看被截断的前缀，两个不同任务会显得一模一样） -->
+                <span class="bg-title" :title="t.title">{{ t.title }}</span>
                 <span class="bg-state">{{ bgStateText(t.id) }}</span>
                 <el-button size="small" text type="danger" @click.stop="stopBgTask(t)">{{ $t('common.stop') }}</el-button>
               </div>
@@ -581,7 +583,8 @@
     <div v-for="t in bgRunningList" :key="t.id" class="bg-task-item" @click="resumeBgTask(t)">
     <span class="bg-dot" :class="bgStatusOf(t.id)"></span>
     <span class="bg-kind" :class="bgKindClass(t.kind)">{{ bgKindLabel(t.kind) }}</span>
-    <span class="bg-title">{{ t.title }}</span>
+    <!-- 同上：完整标题挂 title，悬停能看全 -->
+    <span class="bg-title" :title="t.title">{{ t.title }}</span>
     <span class="bg-state">{{ bgStateText(t.id) }}</span>
     <el-button size="small" text type="danger" @click.stop="stopBgTask(t)">{{ $t('common.stop') }}</el-button>
     </div>

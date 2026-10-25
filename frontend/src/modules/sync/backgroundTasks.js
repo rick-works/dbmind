@@ -5,14 +5,38 @@ import { reactive, watch } from 'vue'
 
 const KEY = 'dbmind.bgSyncTasks'
 
+/**
+ * `A.库 → C.库`（两端库名相同）→ `A → C / 库`。
+ *
+ * 两端库名一样时（跨实例同步同名库，最常见），`连接.库 → 连接.库` 的唯一差异点是
+ * **连接名**，但它被挤到第 20 多个字符之后 —— 任务中心的列宽一截，两个不同的任务
+ * 看着一模一样（用户真机反馈「2 个任务名字一样了」）。库名只写一次，两个连接名就都
+ * 回到开头。已经压过的标题不会再匹配（第一段没有点），所以重复调用是幂等的。
+ *
+ * 顺序有讲究：**先认新格式**再做「` / ` → `.`」的老格式归一。反过来的话，
+ * `A → C / 库` 会被那条老规则改写成 `A → C.库`（本次实测踩到）。
+ */
+const squeezeSameDb = (title) => {
+  // 已经是「连接 → 连接 / 库」（只剩一处 ` / `）：直接返回，别让老分隔符规则把它拆坏。
+  // 判据是**个数**而不是「结尾是不是 / 库」—— 老格式的右半段也长这样，会误判
+  if (title.split(' / ').length === 2) return title
+  // 更早的标题是「连接 / 库 → 连接 / 库」（分隔符用斜杠，两处），先统一成点
+  const normalized = title.replace(/ \/ /g, '.')
+  const m = /^(.+)\.([^.]+) → (.+)\.([^.]+)$/.exec(normalized)
+  if (!m) return normalized
+  const [, srcConn, srcDb, tgtConn, tgtDb] = m
+  return srcDb === tgtDb ? `${srcConn} → ${tgtConn} / ${srcDb}` : normalized
+}
+
 const load = () => {
   try {
     const list = JSON.parse(localStorage.getItem(KEY) || '[]')
     if (!Array.isArray(list)) return []
-    // 历史记录的标题是「连接 / 库 → 连接 / 库」的老格式，现在统一成「连接.库」：
-    // 读取时顺手归一，省得任务中心里新旧两种写法混着显示（用户对格式的要求）
+    // 历史记录归一两件事，省得任务中心里新旧几种写法混着显示（用户对格式的要求）：
+    // 1) 更早的标题是「连接 / 库 → 连接 / 库」，分隔符用点
+    // 2) 「连接.库 → 连接.库」压缩成「连接 → 连接 / 库」（见 squeezeSameDb）
     return list.map(x => (x && typeof x.title === 'string'
-      ? { ...x, title: x.title.replace(/ \/ /g, '.') }
+      ? { ...x, title: squeezeSameDb(x.title) }
       : x))
   } catch {
     return []

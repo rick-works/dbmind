@@ -322,7 +322,8 @@ public final class Main {
                                 + "（这条会话已自动重建，下一条命令不受影响）");
             }
             // CONN-0003（连接失败），不是 0001（连接不存在）：内核只对 0003 清会话缓存并重连。
-            throw new AgentException("DBMIND-CONN-0003", "连接已断开：" + e.getMessage(),
+            // message 只放驱动原话，不拼「连接已断开：」（界面只需要真实报错）
+            throw new AgentException("DBMIND-CONN-0003", String.valueOf(e.getMessage()),
                     "宿主会按需要重连；若持续失败请检查网络与超时配置");
         }
         finally {

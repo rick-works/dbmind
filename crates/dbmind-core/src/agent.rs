@@ -923,28 +923,47 @@ impl AgentHost {
         availability_for(&self.spec)
     }
 
-    /// agent 是否支持某个 agentKey（必要时启动进程并握手）。
+    /// agent 是否支持某个 agentKey（必要时启动进程）。
     ///
     /// 通用宿主（JDBC）声明 `generic`：它按内核给的 driverClass/urlTemplate 工作，
     /// 因此天然承载所有 JDBC 类型；专属宿主则声明自己支持的 key 列表。
+    ///
+    /// **静态声明优先**（这条是踩出来的）：spawn 到握手回来之间（长驻 JVM 起一身要几百
+    /// 毫秒），`process.generic` / `process.agent_keys` 还是初值（false / 空）。此时别的
+    /// 线程来问一句，就会得到「不支持」—— 真机现象：整库同步刚开始，个别表报
+    /// 「驱动宿主不支持 agentKey=mysql」，而宿主明明一直在跑（用户口径：没有重启、
+    /// 没有停服务）。通用宿主的支持性是**声明**出来的，不需要等握手就知道答案。
     pub fn supports(&self, agent_key: &str) -> Result<bool> {
         self.ensure_process()?;
+        if self.spec.generic || self.spec.declares(agent_key) {
+            return Ok(true);
+        }
+        // spec 没声明时才看进程自报（宿主可能比内核的声明更完整）
         let guard = self.process.lock().unwrap_or_else(|e| e.into_inner());
         Ok(match guard.as_ref() {
-            Some(process) => {
-                process.generic
-                    || process.agent_keys.iter().any(|k| k == agent_key)
-                    || self.spec.declares(agent_key)
-            }
+            Some(process) => process.generic || process.agent_keys.iter().any(|k| k == agent_key),
             None => false,
         })
     }
 
     /// 握手：返回 agent 支持的 agentKey 列表。
+    ///
+    /// 用 spec 的声明打底，再并上进程自报的：进程还没握手完时不该给出「一个都不支持」
+    /// 的空清单（调用方是界面上的宿主信息，空清单会被读成「这个宿主什么都没有」）。
     pub fn handshake(&self) -> Result<Vec<String>> {
         self.ensure_process()?;
-        let guard = self.process.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(guard.as_ref().map(|p| p.agent_keys.clone()).unwrap_or_default())
+        let mut keys: Vec<String> = self.spec.agent_keys.iter().map(|k| (*k).to_string()).collect();
+        {
+            let guard = self.process.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(process) = guard.as_ref() {
+                for key in &process.agent_keys {
+                    if !keys.contains(key) {
+                        keys.push(key.clone());
+                    }
+                }
+            }
+        }
+        Ok(keys)
     }
 
     /// 当前代际（每次拉起进程自增）。会话缓存据此判断有效性。
@@ -1349,8 +1368,12 @@ impl AgentHost {
             child,
             stdin,
             pending,
-            agent_keys: Vec::new(),
-            generic: false,
+            // 先按**静态声明**填：从这一行到下面握手的响应回来之间，别的线程已经在
+            // 拿 `supports()` / `handshake()` 问话了。填初值（空 / false）会让那几百
+            // 毫秒里所有询问都得到「宿主不支持」—— 真机上就是同步刚开始时个别表
+            // 报「驱动宿主不支持 agentKey=mysql」，而宿主其实好好地跑着。
+            agent_keys: self.spec.agent_keys.iter().map(|k| (*k).to_string()).collect(),
+            generic: self.spec.generic,
         });
         self.generation.fetch_add(1, Ordering::SeqCst);
         drop(guard);
@@ -1747,6 +1770,44 @@ pub fn is_windows_auth(config: &ConnectionConfig) -> bool {
 mod tests {
     use super::*;
     use crate::ConnectionKind;
+
+    /// 拉起宿主的**过程中**问一句「支持 mysql 吗」，必须按静态声明回答 true。
+    ///
+    /// 这不是理论问题：整库同步开始时第一批会话并发到达，一个线程在 spawn + 握手，
+    /// 另一个线程刚好在问 supports —— 旧实现读的是还没填的进程字段（generic=false、
+    /// agent_keys 空），于是把「正在启动」报成「驱动宿主不支持 agentKey=mysql」，
+    /// 那张表整张失败（真机日志：`自动关闭 autocommit 失败：驱动宿主不支持 agentKey=mysql`，
+    /// 而宿主一直在跑，没有重启、没有停服务）。
+    #[test]
+    fn 握手未完成时也按静态声明回答支持() {
+        // 默认测试环境看不到宿主包（见 agent_hosts_visible），这条要真起一个 JVM：
+        // DBMIND_TEST_AGENTS=1 cargo test -p dbmind-core 握手未完成时也按静态声明回答支持
+        if !agent_hosts_visible() {
+            return;
+        }
+        let host = std::sync::Arc::new(AgentHost::new(AgentHostSpec::jdbc()));
+        let availability = host.availability();
+        if !availability.ready {
+            // 本机没有满足 min_java 的运行时就跳过：这条要真起 JVM，不是纯逻辑测试
+            eprintln!(
+                "跳过：宿主不可用（{}）",
+                availability.reason.unwrap_or_else(|| "-".to_string())
+            );
+            return;
+        }
+        let spawner = host.clone();
+        let worker = std::thread::spawn(move || {
+            let _ = spawner.call(None, "handshake", Map::new(), Some(Duration::from_secs(20)));
+        });
+        // 尽量落在「已经 spawn、握手还没回来」的窗口里
+        std::thread::sleep(Duration::from_millis(30));
+        let during = host.supports("mysql").expect("拉起过程中问 supports 不该报错");
+        worker.join().unwrap();
+        let after = host.supports("mysql").expect("握手完成后问 supports 不该报错");
+        host.shutdown();
+        assert!(during, "拉起过程中问 supports 必须为 true（否则会被误报成宿主不支持）");
+        assert!(after, "握手完成后当然仍要支持");
+    }
 
     #[test]
     fn 紧凑行保留高精度_decimal() {
