@@ -933,6 +933,14 @@ async fn run_segment(
                             Ok(rows) => {
                                 try_updated += rows;
                                 ctx.updated.fetch_add(rows, Ordering::SeqCst);
+                                // 两阶段 upsert 的「更新」同样是搬过去的行，也要计进传输数
+                                // （否则目标表已有数据的场景传输数会明显偏低）
+                                let updated_rows = rows.min(existing.len() as u64);
+                                if updated_rows > 0 {
+                                    if let Some(task) = &ctx.plan.task {
+                                        task.add_rows_written(updated_rows);
+                                    }
+                                }
                             }
                             Err(msg) => {
                                 // 原样用驱动/数据库的原话：不拼「更新失败：」这类前缀
@@ -961,6 +969,14 @@ async fn run_segment(
                             let written = rows.min(sent);
                             try_inserted += written;
                             ctx.inserted.fetch_add(written, Ordering::SeqCst);
+                            // 进度卡的「传输数」：写成功多少行就加多少（读侧是页面读到时就加了）。
+                            // 这一条以前只在同实例直拷 / 旧写入路径上记，**引擎这条路全程不记** ——
+                            // 界面上读取数一路在涨、传输数恒为 0（真机截图）。按批累加，与读侧同口径。
+                            if written > 0 {
+                                if let Some(task) = &ctx.plan.task {
+                                    task.add_rows_written(written);
+                                }
+                            }
                             // 只数**真落库**的批：结果行的「平均每批」靠它，
                             // 失败重跑的批不该把平均数拉小
                             if written > 0 {
