@@ -1588,7 +1588,7 @@ async fn sync_indexes(
                             if let Some(task) = task {
                                 task.log(format!(
                                     "表 {table}：索引 {name} 历史数据回填失败：{}",
-                                    err.message
+                                    brief_error(&err.message)
                                 ));
                             }
                         }
@@ -3129,17 +3129,38 @@ fn strip_conn_tag(message: &str) -> String {
     out
 }
 
-/// 给用户看的错误正文：剥掉两层噪音，只留数据库原话。
+/// 砍掉宿主报错里跟在「会话不存在」后面的**内部会话键**。
+///
+/// 宿主原话是 `会话不存在：internal:sync-wslot00-0#0`，但走到界面上时尾巴会变成
+/// 整条会话键 `mysql|连接名|rm-xxx.rds.aliyuncs.com|3306|库|模式|false|ssh-user@host:22/password#3`
+/// —— 用户截图反馈：一屏都是这种串，主机名、库名、SSH 账号全摊在外面，还说不出到底哪里错了。
+///
+/// 处理方式：只保留宿主给的事实「会话不存在」，后面的会话键整段去掉（它是内部标识，
+/// 对我们排查也没有额外信息 —— 本轮同步的源/目标在界面上本来就看得见）。
+fn strip_session_key(message: &str) -> String {
+    const MARK: &str = "会话不存在";
+    if let Some(start) = message.find(MARK) {
+        let tail = &message[start + MARK.len()..];
+        // 只有后面真的跟了会话键（带 `|` 分段）才裁，避免误伤正常句子
+        if tail.contains('|') {
+            return message[..start + MARK.len()].to_string();
+        }
+    }
+    message.to_string()
+}
+
+/// 给用户看的错误正文：剥掉三层噪音，只留数据库原话。
 ///
 /// ① 我们自己加的 `SQL 执行失败：` 标签 —— 日志外面已经有「写入失败：」在说这件事，
 ///    再来一层就是套娃（用户口径：「这几个字也删掉」）；
-/// ② 驱动拼进去的 `(conn=1721)` 连接号 —— 每重连一次就变，对排查无用。
+/// ② 驱动拼进去的 `(conn=1721)` 连接号 —— 每重连一次就变，对排查无用；
+/// ③ 内部会话键（见 [`strip_session_key`]）—— 不是数据库给的信息，界面上一无是处。
 ///
-/// 两层可能交替出现（`SQL 执行失败：(conn=1) SQL 执行失败：…`），所以循环剥到没有为止。
+/// 三层可能交替出现（`SQL 执行失败：(conn=1) SQL 执行失败：…`），所以循环剥到没有为止。
 fn error_text(message: &str) -> String {
-    let mut text = message.to_string();
+    let mut text = strip_session_key(message);
     loop {
-        let clean = strip_conn_tag(&text);
+        let clean = strip_session_key(&strip_conn_tag(&text));
         let Some(rest) = clean.strip_prefix("SQL 执行失败：") else {
             return clean;
         };
@@ -3341,11 +3362,11 @@ pub(crate) async fn write_insert_rows(
                         //（真机：目标表一行不缺、结果却报失败 10 万）。
                         // 日志只报**原始报错**，行数 / 报文上限 / 是否沿用都属于内部量，不写。
                         task.log(format!(
-                            "表 {table}：写入连接已断：{}",
+                            "表 {table}：写入失败：{}",
                             brief_error(&batch_err.message)
                         ));
                     }
-                    return Err(format!("写入连接已断：{}", brief_error(&batch_err.message)));
+                    return Err(format!("写入失败：{}", brief_error(&batch_err.message)));
                 }
                 if let Some((_, rollback, _)) = sp.as_ref() {
                     if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
@@ -3409,12 +3430,12 @@ pub(crate) async fn write_insert_rows(
                                     // 同上：不记失败行，交给上层「回滚本片并重跑」；
                                     // 也不报剩余行数（内部量，用户拿到没用）
                                     task.log(format!(
-                                        "表 {table}：连接已断：{}",
+                                        "表 {table}：写入失败：{}",
                                         brief_error(&sub_err.message)
                                     ));
                                 }
                                 return Err(format!(
-                                    "写入连接已断：{}",
+                                    "写入失败：{}",
                                     brief_error(&sub_err.message)
                                 ));
                             }
@@ -6746,6 +6767,20 @@ mod retry_tests {
             false,
             "connection reset by peer"
         ));
+    }
+
+    /// 界面只留宿主的事实原话，内部会话键（含主机名 / 库名 / SSH 账号）必须剥掉。
+    #[test]
+    fn 会话不存在的内部会话键不上界面() {
+        let raw = "SQL 执行失败：(conn=1721) 会话不存在：\
+                   mysql|测试-xingwei_kechuan > xingwei_kechuan|\
+                   rm-uf68dg99o0c9yfdxpo mysql.cn-shanghai.rds.aliyuncs.com|3306|\
+                   xingwei_kechuan|xingwei_kechuan|false|ssh-rick@192.168.2.127:22/password#3";
+        assert_eq!(brief_error(raw), "会话不存在");
+
+        // 正常句子里恰好出现「会话不存在」但没有会话键时，一个字都不动
+        let plain = "表 foo 同步失败：会话不存在，请重新连接";
+        assert_eq!(brief_error(plain), plain);
     }
 
     /// 「会话不存在」必须算链路级错误（否则整表直接判失败，事务里几万行静默消失）。

@@ -21,6 +21,8 @@ import java.sql.SQLTimeoutException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -44,6 +46,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class Main {
 
     private static final Map<String, Session> SESSIONS = new ConcurrentHashMap<>();
+
+    /**
+     * 最近被丢弃的会话 id → 丢弃原因（**真实驱动原话**）。
+     *
+     * <p>为什么要有它：会话因为「连接级失败」被摘掉之后，内核手里那个槽位没变，下一次
+     * 还是拿同一个 sessionId 进来，宿主只能回「会话不存在」—— 用户看到的就是这句话，
+     * 而真正的原因（Communications link failure / 被 RDS 踢掉 / 链路 reset）在**第一次**
+     * 失败时就产生了，却随着会话一起被丢掉。记一条墓碑，下一次就能把真实原因一并报出来。
+     *
+     * <p>只用于诊断，不参与任何判断；有界 64 条，超了淘汰最旧的（避免长跑任务里无限增长）。
+     */
+    private static final Map<String, String> DROPPED = Collections.synchronizedMap(
+            new LinkedHashMap<String, String>() {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                    return size() > 64;
+                }
+            });
 
     /** 正在执行的一条语句：既要能硬中断，也要记住「这次取消是我们主动做的」。 */
     private static final class Running {
@@ -502,7 +522,7 @@ public final class Main {
                     // 连接级失败 ⇒ 这条会话**不能再留在宿主里**：内核收到 CONN-0001 会清掉
                     // 自己的缓存，下一次调用会重新 connect。留着它只会让每一次调用都失败
                     //（内核不会为非幂等查询重试，见 agent_driver::with_lane）。
-                    dropSession(session);
+                    dropSession(session, e.getMessage());
                 }
                 throw failure;
             } finally {
@@ -512,7 +532,7 @@ public final class Main {
             // 走到这里的是「建 statement / 关资源」阶段的失败：没有账本，只能按异常类型归类
             Protocol.AgentException failure = queryFailure(null, e);
             if (isConnectionLost(e)) {
-                dropSession(session);
+                dropSession(session, e.getMessage());
             }
             throw failure;
         } finally {
@@ -672,7 +692,7 @@ public final class Main {
                 try {
                     connection.commit();
                 } catch (SQLException e) {
-                    dropSession(session);
+                    dropSession(session, "提交失败：" + e.getMessage());
                     throw new Protocol.AgentException(
                             "DBMIND-CONN-0003",
                             "PREPARED_BATCH_COMMIT_UNKNOWN：批量写入提交结果未知，请先核对目标数据："
@@ -684,7 +704,7 @@ public final class Main {
                 } catch (SQLException e) {
                     // 数据已经提交，不能因为恢复会话状态失败而让调用方重写整批。
                     sessionReset = false;
-                    dropSession(session);
+                    dropSession(session, "恢复 autocommit 失败：" + e.getMessage());
                 }
             } else {
                 try {
@@ -711,7 +731,7 @@ public final class Main {
                                 + failure.getMessage(),
                         failure.detail());
             }
-            dropSession(session);
+            dropSession(session, failure.getMessage());
             throw new Protocol.AgentException(
                     "DBMIND-CONN-0003",
                     "PREPARED_BATCH_COMMIT_UNKNOWN：批量写入提交结果未知，请先核对目标数据："
@@ -771,7 +791,7 @@ public final class Main {
             session.connection().rollback();
             session.connection().setAutoCommit(true);
         } catch (SQLException rollbackError) {
-            dropSession(session);
+            dropSession(session, rollbackError.getMessage());
             throw new Protocol.AgentException(
                     "DBMIND-CONN-0003",
                     "PREPARED_BATCH_ROLLBACK_FAILED：批量写入失败后无法确认回滚，禁止重试："
@@ -790,7 +810,7 @@ public final class Main {
         try {
             session.connection().rollback(savepoint);
         } catch (SQLException rollbackError) {
-            dropSession(session);
+            dropSession(session, rollbackError.getMessage());
             throw new Protocol.AgentException(
                     "DBMIND-CONN-0003",
                     "PREPARED_BATCH_ROLLBACK_FAILED：批量写入失败后无法回滚到保存点，禁止重试："
@@ -1018,10 +1038,25 @@ public final class Main {
         return value.substring(0, dot + 7) + value.substring(end);
     }
 
-    /** 丢掉一条会话：从表里摘掉并关掉连接。内核下一次调用会重新 connect。 */
-    private static void dropSession(Session session) {
+    /**
+     * 丢掉一条会话：从表里摘掉并关掉连接。内核下一次调用会重新 connect。
+     *
+     * @param reason 为什么丢（驱动/数据库的原话）—— 内核下一次拿同一个 id 进来时
+     *               要把这句一并报给用户，否则界面上只剩「会话不存在」。
+     */
+    private static void dropSession(Session session, String reason) {
         SESSIONS.remove(session.id());
+        DROPPED.put(session.id(), briefReason(reason));
         session.close();
+    }
+
+    /** 丢弃原因只留第一行、限长：它是给用户看的，不是堆栈转储。 */
+    private static String briefReason(String reason) {
+        if (reason == null) {
+            return "";
+        }
+        String first = reason.split("\\R", 2)[0].trim();
+        return first.length() > 200 ? first.substring(0, 200) + "…" : first;
     }
 
     // ------------------------------------------------------------ 事务控制（事务模式）
@@ -1065,7 +1100,7 @@ public final class Main {
             return result;
         } catch (SQLException e) {
             if (isConnectionLost(e)) {
-                dropSession(session);
+                dropSession(session, e.getMessage());
             }
             throw new Protocol.AgentException("DBMIND-QUERY-0002",
                     "setAutoCommit(" + autoCommit + ") 失败：" + e.getMessage(), describe(e));
@@ -1091,7 +1126,7 @@ public final class Main {
             return ping();
         } catch (SQLException e) {
             if (isConnectionLost(e)) {
-                dropSession(session);
+                dropSession(session, e.getMessage());
             }
             throw new Protocol.AgentException("DBMIND-QUERY-0002",
                     (doCommit ? "commit" : "rollback") + " 失败：" + e.getMessage(), describe(e));
@@ -1132,7 +1167,7 @@ public final class Main {
      */
     private static Protocol.AgentException metadataFailure(Session session, SQLException e, String what) {
         if (isConnectionLost(e)) {
-            dropSession(session);
+            dropSession(session, e.getMessage());
             return new Protocol.AgentException("DBMIND-CONN-0003", "连接已断开：" + e.getMessage(), describe(e));
         }
         return new Protocol.AgentException("DBMIND-QUERY-0002", what + "：" + e.getMessage(), describe(e));
@@ -1631,9 +1666,15 @@ public final class Main {
         Session session = SESSIONS.get(sessionId);
         if (session == null) {
             // 会话没了 ⇒ 对内核而言是**连接级失败**（0003）：它会清掉缓存、下一次重连。
-            // 报错只说事实（会话 id），不写「宿主可能重启了 / 内核会重连」这类推测与说明 ——
-            // 用户口径：日志里只留原始报错。
-            throw new Protocol.AgentException("DBMIND-CONN-0003", "会话不存在：" + sessionId);
+            //
+            // 报错带上「它上次为什么被摘掉」：内核此刻手里只有这个 sessionId，真正让会话
+            // 消失的是那次连接级失败，用户要看的也是那条原话（用户口径：「把真实的错误报出来」）。
+            // sessionId 本身是内部标识（`internal:sync-wslot00-0#0`），不出现在界面上。
+            String reason = DROPPED.remove(sessionId);
+            String message = (reason == null || reason.isEmpty())
+                    ? "会话不存在"
+                    : "会话不存在（该会话上次失败：" + reason + "）";
+            throw new Protocol.AgentException("DBMIND-CONN-0003", message);
         }
         return session;
     }

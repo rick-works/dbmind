@@ -638,6 +638,19 @@ impl AgentDriver {
                     "会话连接已失效，已清掉内核缓存（下一次调用会重连；本次不重试）"
                 );
                 self.host.forget_session(&session_id);
+                // 顺手把连接重建一次。**不重试语句**（写语句不能重试），但这样能拿到真实错误：
+                // 宿主此刻可能只会说「会话不存在」，而它上一次失败的原因（Communications
+                // link failure / RDS 主动断开…）以及这次重建失败的原因，才是用户要看的。
+                // 重建失败就把它原样上抛 —— 比「会话不存在」这种二手结论有用得多。
+                if let Err(rebuild) = self.ensure_session(config, call.read_only, &session_id, true) {
+                    tracing::warn!(
+                        target: "dbmind::agent",
+                        session = %session_id,
+                        error = %rebuild.message,
+                        "会话失效后重建连接失败，按重建的错误上报"
+                    );
+                    return Err(rebuild);
+                }
                 Err(err)
             }
             other => other,
