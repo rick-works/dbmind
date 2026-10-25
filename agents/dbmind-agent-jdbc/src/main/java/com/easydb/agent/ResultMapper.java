@@ -228,6 +228,19 @@ public final class ResultMapper {
             }
             return;
         }
+        if (value instanceof java.math.BigInteger big) {
+            // 超 long 的整数（MySQL 的 `bigint unsigned` 顶到 2^64）不能走 double：
+            // double 只有 53 位有效数字，实测 18446744073709551 会被写成 …550。
+            // 装得下就按整数走（常见），装不下退回 decimal 文本（内核按十进制原样写入）。
+            if (big.bitLength() < 64) {
+                buf.append(big.longValue());
+            } else {
+                // v 必须是**字符串**（与 BigDecimal 的 decimal 单元一致）：裸数字会被
+                // 内核的严格解析丢掉，用户看到的就是「这一列全是 null」
+                buf.append("{\"t\":\"decimal\",\"v\":\"").append(big).append("\"}");
+            }
+            return;
+        }
         if (value instanceof Number number) {
             buf.append(number.doubleValue());
             return;
@@ -252,6 +265,13 @@ public final class ResultMapper {
         }
         if (value instanceof Timestamp timestamp) {
             appendEscaped(buf, timestamp.toLocalDateTime().toString());
+            return;
+        }
+        if (value instanceof java.sql.Time) {
+            // 时间列取**驱动给的原始文本**：`Time.toString()` 只有 HH:mm:ss
+            //（`time(3)` 的 `.456` 在读这一步就没了），而且会把超过 24 小时的 TIME
+            // 绕回一天 —— 这两件事都让同步出去的值与源端对不上。
+            appendEscaped(buf, resultSet.getString(index));
             return;
         }
         appendEscaped(buf, String.valueOf(value));
@@ -355,6 +375,12 @@ public final class ResultMapper {
             }
             return decimal(decimal.toPlainString());
         }
+        if (value instanceof java.math.BigInteger big) {
+            // 同 appendBare：超出 long 的无符号大整数只能按十进制文本送，double 会丢末位
+            return big.bitLength() < 64
+                    ? new com.google.gson.JsonPrimitive(big.longValue())
+                    : decimal(big.toString());
+        }
         if (value instanceof Number number) {
             return new com.google.gson.JsonPrimitive(number.doubleValue());
         }
@@ -371,6 +397,10 @@ public final class ResultMapper {
         }
         if (value instanceof Timestamp timestamp) {
             return new com.google.gson.JsonPrimitive(timestamp.toLocalDateTime().toString());
+        }
+        if (value instanceof java.sql.Time) {
+            // 同 appendBare：原始文本才保得住小数秒（以及 >24h 的 TIME）
+            return new com.google.gson.JsonPrimitive(resultSet.getString(index));
         }
         return new com.google.gson.JsonPrimitive(String.valueOf(value));
     }
@@ -397,6 +427,10 @@ public final class ResultMapper {
             }
             return decimal(decimal.toPlainString());
         }
+        if (value instanceof java.math.BigInteger big) {
+            // 同 appendBare：超出 long 的无符号大整数只能按十进制文本送，double 会丢末位
+            return big.bitLength() < 64 ? integer(big.longValue()) : decimal(big.toString());
+        }
         if (value instanceof Number number) {
             return real(number.doubleValue());
         }
@@ -413,6 +447,10 @@ public final class ResultMapper {
         }
         if (value instanceof Timestamp timestamp) {
             return text(timestamp.toLocalDateTime().toString());
+        }
+        if (value instanceof java.sql.Time) {
+            // 同 appendBare：原始文本才保得住小数秒（以及 >24h 的 TIME）
+            return text(resultSet.getString(index));
         }
         return text(String.valueOf(value));
     }

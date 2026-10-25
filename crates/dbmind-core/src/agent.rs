@@ -1526,9 +1526,13 @@ impl<'de> serde::Deserialize<'de> for Cell {
             }
 
             fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E> {
-                Ok(Cell(crate::types::CellValue::Integer(
-                    value.min(i64::MAX as u64) as i64,
-                )))
+                Ok(Cell(if value <= i64::MAX as u64 {
+                    crate::types::CellValue::Integer(value as i64)
+                } else {
+                    // 超 i64 的无符号整数**不能 clamp**：`18446744073709551615` 会悄悄变成
+                    // `9223372036854775807` 再写进目标库 —— 那是真丢数据，不是显示问题。
+                    crate::types::CellValue::Decimal(value.to_string())
+                }))
             }
 
             fn visit_f64<E>(self, value: f64) -> std::result::Result<Self::Value, E> {
@@ -1555,8 +1559,14 @@ impl<'de> serde::Deserialize<'de> for Cell {
                 let object = serde_json::Map::<String, Value>::deserialize(
                     serde::de::value::MapAccessDeserializer::new(map),
                 )?;
-                Ok(Cell(serde_json::from_value(Value::Object(object))
-                    .unwrap_or(crate::types::CellValue::Null)))
+                // **不能**解析失败就退化成 null：宿主与内核的单元格协议一旦对不上，
+                // 静默变 null 会让「整列都是 null」混进结果里，同步出去也是 null，
+                // 而且没有任何报错可查（真机踩过：decimal 的 v 少了引号，18446744073709551
+                // 这一列全变 null）。宁可让这次查询明确失败。
+                let cell = serde_json::from_value(Value::Object(object)).map_err(|err| {
+                    serde::de::Error::custom(format!("宿主返回了无法解析的单元格：{err}"))
+                })?;
+                Ok(Cell(cell))
             }
         }
 
@@ -1825,6 +1835,39 @@ mod tests {
                 crate::CellValue::Text("普通文本".to_string()),
             ]]
         );
+    }
+
+    /// 裸的无符号大整数不能被 clamp 成 i64::MAX。
+    ///
+    /// 宿主现在对超 i64 的值一律走 decimal 文本，但线格式允许多种写法（老宿主/dev 联调）：
+    /// 收到裸 u64 时同样要保真，而不是悄悄截成 `9223372036854775807` 写进目标库。
+    #[test]
+    fn 超_i64_的无符号整数不截断() {
+        let value = serde_json::json!({ "rows": [[18446744073709551615u64]] });
+        let result: AgentQueryResult = serde_json::from_value(value).unwrap();
+        assert_eq!(
+            result.rows,
+            vec![vec![crate::CellValue::Decimal(
+                "18446744073709551615".to_string()
+            )]]
+        );
+    }
+
+    /// 单元格协议对不上时要**明确失败**，不能静默退化成 null。
+    ///
+    /// 真机事故：宿主把 decimal 的 `v` 写成了裸数字（少了引号），内核这边
+    /// `unwrap_or(Null)` 把整列变成了 null —— 查询结果、同步出去的数据全是 null，
+    /// 而全程没有任何报错。
+    #[test]
+    fn 无法解析的单元格不能静默变_null() {
+        let value = serde_json::json!({
+            "rows": [[{"t": "decimal", "v": 18446744073709551u64}]]
+        });
+        let parsed: std::result::Result<AgentQueryResult, serde_json::Error> =
+            serde_json::from_value(value);
+        assert!(parsed.is_err(), "应当报错；实际：{parsed:?}");
+        let message = parsed.unwrap_err().to_string();
+        assert!(message.contains("单元格"), "报错信息要点明单元格：{message}");
     }
 
     /// 驱动镜像：**只替换仓库根**，路径部分与 Maven Central 那份逐字节一致。

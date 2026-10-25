@@ -4537,8 +4537,12 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
 /// 再由目标方言渲染一次，就只剩「解析」与「渲染」两张小表。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TypeFamily {
-    /// 整型，按字节数区分（1/2/4/8）
-    Int { bytes: u8 },
+    /// 整型，按字节数区分（1/2/4/8）。
+    ///
+    /// `unsigned` 只影响**上界**：MySQL 的 `bigint unsigned` 能到 2^64-1，i64 装不下。
+    /// 跨类型到不支持 unsigned 的方言时必须**按上界升档**（bigint unsigned → 16 字节档，
+    /// 落到 `numeric(20,0)` / `LARGEINT`），否则用户看到的是「Out of range value」。
+    Int { bytes: u8, unsigned: bool },
     /// 定点小数（precision/scale）
     Decimal { precision: u8, scale: u8 },
     /// 浮点
@@ -4548,9 +4552,14 @@ enum TypeFamily {
     Text { len: Option<u32>, long: bool },
     Binary,
     Date,
-    Time,
-    /// 日期时间（`tz` = 带时区）
-    DateTime { tz: bool },
+    /// 纯时间。`fsp` = 小数秒位数：`time(6)` 的 6。
+    Time { fsp: Option<u8> },
+    /// 日期时间。`tz` = 带时区，`fsp` = 小数秒位数：`datetime(6)` / `timestamp(3)` 的 6/3。
+    ///
+    /// 为什么非要把 `fsp` 带上：跨类型同步会走「解析成族 → 按目标渲染」，早先族里只有
+    /// `tz` 一个参数，于是 MariaDB `datetime(6)` → MySQL 被渲染成 `datetime`，
+    /// **微秒在建表那一刻就没了**（数据写得再准也存不下，用户看到的是「同步完时间少了微秒」）。
+    DateTime { tz: bool, fsp: Option<u8> },
     Json,
     Uuid,
     /// 认不出来的：跨类型时**降级为文本** —— 宁可能存下，也不要建表就语法错
@@ -4572,10 +4581,18 @@ impl TypeFamily {
             _ => raw.to_string(),
         };
         let lower = raw.trim().to_ascii_lowercase();
+        // MySQL 的 `column_type` 会带 `unsigned` 后缀（`bigint(20) unsigned`）：
+        // 它只抬上界，但抬到 2^64-1 就超出 i64 了，渲染时必须升档，不能当没看见
+        let unsigned = lower.contains("unsigned");
         let (head, args) = match lower.split_once('(') {
+            // 先按**第一个右括号**截断再切逗号：PG / Oracle 的
+            // `timestamp(6) with time zone` 里括号后面还跟着两三个词，
+            // 直接 trim_end_matches(')') 会把整串留下来、参数全部解析失败（fsp 就丢了）。
             Some((head, rest)) => (
                 head.trim().to_string(),
-                rest.trim_end_matches(')')
+                rest.split(')')
+                    .next()
+                    .unwrap_or(rest)
                     .split(',')
                     .filter_map(|part| part.trim().parse::<u32>().ok())
                     .collect::<Vec<_>>(),
@@ -4587,19 +4604,22 @@ impl TypeFamily {
         let base = head.split_whitespace().next().unwrap_or("").to_string();
         let first = args.first().copied();
         let second = args.get(1).copied();
+        // 小数秒位数（`datetime(6)` / `time(3)` / `DateTime64(3)`）。0 表示「不要括号」；
+        // 上限 9 只是先夹住离谱值，真正的上限按目标方言在 `with_fsp` 里再夹一次。
+        let fsp = first.filter(|n| *n > 0).map(|n| n.min(9) as u8);
         match base.as_str() {
             // MySQL 的 tinyint(1) 是"布尔"的通行约定，跨类型时按布尔走更贴合语义
             "tinyint" | "int1" => {
                 if first == Some(1) {
                     Self::Bool
                 } else {
-                    Self::Int { bytes: 1 }
+                    Self::Int { bytes: 1, unsigned }
                 }
             }
-            "smallint" | "int2" => Self::Int { bytes: 2 },
-            "mediumint" | "int3" => Self::Int { bytes: 4 },
-            "int" | "integer" | "int4" | "serial" => Self::Int { bytes: 4 },
-            "bigint" | "int8" | "bigserial" => Self::Int { bytes: 8 },
+            "smallint" | "int2" => Self::Int { bytes: 2, unsigned },
+            "mediumint" | "int3" => Self::Int { bytes: 4, unsigned },
+            "int" | "integer" | "int4" | "serial" => Self::Int { bytes: 4, unsigned },
+            "bigint" | "int8" | "bigserial" => Self::Int { bytes: 8, unsigned },
             "number" | "numeric" | "decimal" | "dec" => {
                 let precision = first.unwrap_or(38).clamp(1, 38) as u8;
                 let scale = second.unwrap_or(0).min(precision as u32) as u8;
@@ -4626,19 +4646,21 @@ impl TypeFamily {
             "binary" | "varbinary" | "blob" | "tinyblob" | "mediumblob" | "longblob" | "bytea"
             | "image" | "raw" => Self::Binary,
             "date" => Self::Date,
-            "time" => Self::Time,
-            "datetime" | "datetime2" | "smalldatetime" => Self::DateTime { tz: false },
+            "time" | "timetz" => Self::Time { fsp },
+            "datetime" | "datetime2" | "smalldatetime" => Self::DateTime { tz: false, fsp },
             "timestamp" | "timestamptz" | "datetimeoffset" => Self::DateTime {
                 tz: lower.contains("tz")
                     || lower.contains("offset")
                     || lower.contains("with time zone"),
+                fsp,
             },
             "json" | "jsonb" => Self::Json,
             "uuid" | "uniqueidentifier" => Self::Uuid,
             // ClickHouse 的大写族（`UInt64` / `String` / `DateTime64` / `FixedString(n)` / `Decimal64(s)`）
             "string" => Self::Text { len: None, long: true },
             "fixedstring" => Self::Text { len: first, long: false },
-            "datetime64" => Self::DateTime { tz: false },
+            // ClickHouse 的 `DateTime64(3)` / `DateTime64(3, 'UTC')`：括号里第一个数是小数秒位数
+            "datetime64" => Self::DateTime { tz: false, fsp },
             // ClickHouse 的 `Decimal32(S)` / `Decimal64(S)` / `Decimal128(S)` / `Decimal256(S)`：
             // 括号里是 **scale**，精度由位数定（9 / 18 / 38 / 76）。
             // 原先一律写 38 ⇒ `Decimal64(2)` 被渲染成 `decimal(38,2)`：语义没错，但 InnoDB 每列
@@ -4660,16 +4682,16 @@ impl TypeFamily {
                 precision: 76,
                 scale: first.unwrap_or(0).min(76) as u8,
             },
-            // 无符号整型：映射到有符号的"大一档"，超范围的一律落到定点，避免溢出
-            "uint8" => Self::Int { bytes: 2 },
-            "uint16" => Self::Int { bytes: 4 },
-            "uint32" => Self::Int { bytes: 8 },
-            "uint64" => Self::Decimal { precision: 20, scale: 0 },
+            // ClickHouse 的无符号整型：带上 unsigned 位，渲染时才有 UInt64 / numeric(20,0) 之分
+            "uint8" => Self::Int { bytes: 1, unsigned: true },
+            "uint16" => Self::Int { bytes: 2, unsigned: true },
+            "uint32" => Self::Int { bytes: 4, unsigned: true },
+            "uint64" => Self::Int { bytes: 8, unsigned: true },
             // ClickHouse 的整型/浮点族（Int32 / Float64 …）：之前没认，落到 Unknown，
             // 目标 Derby/H2 这类按 Unknown→CLOB 渲染的方言，整列全成 CLOB（真机踩过）
-            "int16" => Self::Int { bytes: 2 },
-            "int32" => Self::Int { bytes: 4 },
-            "int64" => Self::Int { bytes: 8 },
+            "int16" => Self::Int { bytes: 2, unsigned: false },
+            "int32" => Self::Int { bytes: 4, unsigned: false },
+            "int64" => Self::Int { bytes: 8, unsigned: false },
             "float32" => Self::Real,
             "float64" => Self::Real,
             _ => Self::Unknown,
@@ -4688,48 +4710,22 @@ impl TypeFamily {
                 Self::Uuid => "VARCHAR(36)".to_string(),
                 Self::Json => "STRING".to_string(),
                 Self::Binary => "STRING".to_string(),
-                Self::Time => "STRING".to_string(),
+                Self::Time { .. } => "STRING".to_string(),
                 Self::Unknown => "STRING".to_string(),
                 Self::Text { len, long } => match len {
                     Some(size) if !long => format!("VARCHAR({})", size.min(65533)),
                     _ => "STRING".to_string(),
                 },
+                // `DATETIME(p)` 只有 Doris 1.2+ 才认，老版本建表直接失败 —— 跨类型过来时
+                // 保守落成不带精度的 `datetime`（同类型同步照抄原文，不受影响）
+                Self::DateTime { .. } => "datetime".to_string(),
+                // Doris 没有 unsigned：按上界升档（8 字节无符号要 LARGEINT，128 位）
+                Self::Int { bytes, unsigned } => Self::int_type(bytes, unsigned, key),
                 other => other.render(ConnectionKind::Mysql),
             };
         }
         match self {
-            Self::Int { bytes } => match key {
-                "mysql" | "mariadb" | "doris" => match bytes {
-                    1 => "tinyint".to_string(),
-                    2 => "smallint".to_string(),
-                    4 => "int".to_string(),
-                    _ => "bigint".to_string(),
-                },
-                "oracle" | "dm" => match bytes {
-                    1 => "number(3)".to_string(),
-                    2 => "number(5)".to_string(),
-                    4 => "number(10)".to_string(),
-                    _ => "number(19)".to_string(),
-                },
-                "clickhouse" => match bytes {
-                    1 => "Int8".to_string(),
-                    2 => "Int16".to_string(),
-                    4 => "Int32".to_string(),
-                    _ => "Int64".to_string(),
-                },
-                "postgresql" | "kingbase" => match bytes {
-                    1 | 2 => "smallint".to_string(),
-                    4 => "integer".to_string(),
-                    _ => "bigint".to_string(),
-                },
-                "sqlite" => "integer".to_string(),
-                _ => match bytes {
-                    1 => "tinyint".to_string(),
-                    2 => "smallint".to_string(),
-                    4 => "int".to_string(),
-                    _ => "bigint".to_string(),
-                },
-            },
+            Self::Int { bytes, unsigned } => Self::int_type(bytes, unsigned, key),
             Self::Decimal { precision, scale } => {
                 let precision = precision.max(1);
                 match key {
@@ -4818,36 +4814,38 @@ impl TypeFamily {
                 _ => "blob".to_string(),
             },
             Self::Date => "date".to_string(),
-            Self::Time => match key {
+            Self::Time { fsp } => match key {
                 // Oracle 没有纯时间类型，用 date（它本身含时分秒）
                 "oracle" | "dm" => "date".to_string(),
                 "clickhouse" => "String".to_string(),
+                // 这几家的 `time(n)` 是标准写法；其余方言不带精度（宁可不带，也不要语法错）
+                "mysql" | "mariadb" | "doris" | "postgresql" | "kingbase" | "sqlserver" => {
+                    Self::with_fsp("time", fsp, key)
+                }
                 _ => "time".to_string(),
             },
-            Self::DateTime { tz } => match key {
-                "mysql" | "mariadb" | "doris" => "datetime".to_string(),
+            Self::DateTime { tz, fsp } => match key {
+                "mysql" | "mariadb" | "doris" => Self::with_fsp("datetime", fsp, key),
                 "postgresql" | "kingbase" => {
-                    if tz {
-                        "timestamptz".to_string()
-                    } else {
-                        "timestamp".to_string()
-                    }
+                    Self::with_fsp(if tz { "timestamptz" } else { "timestamp" }, fsp, key)
                 }
                 "oracle" | "dm" => {
+                    // Oracle 的精度写在 WITH TIME ZONE **前面**：`timestamp(6) with time zone`
+                    let base = Self::with_fsp("timestamp", fsp, key);
                     if tz {
-                        "timestamp with time zone".to_string()
+                        format!("{base} with time zone")
                     } else {
-                        "timestamp".to_string()
+                        base
                     }
                 }
                 "sqlserver" => {
-                    if tz {
-                        "datetimeoffset".to_string()
-                    } else {
-                        "datetime2".to_string()
-                    }
+                    Self::with_fsp(if tz { "datetimeoffset" } else { "datetime2" }, fsp, key)
                 }
-                "clickhouse" => "DateTime".to_string(),
+                // ClickHouse 的小数秒是另一个类型名；0 位（或没写）就是普通 DateTime
+                "clickhouse" => match fsp {
+                    Some(n) => format!("DateTime64({})", n.min(9)),
+                    None => "DateTime".to_string(),
+                },
                 "sqlite" => "datetime".to_string(),
                 _ => "timestamp".to_string(),
             },
@@ -4872,6 +4870,122 @@ impl TypeFamily {
                 _ => "clob".to_string(),
             },
         }
+    }
+
+    /// 整型按目标方言渲染。
+    ///
+    /// `unsigned` 只有 MySQL 系原生支持，其余方言按**上界**升档：
+    /// `tinyint unsigned`(255) → smallint、`smallint unsigned`(65535) → int、
+    /// `int unsigned`(4.29e9) → bigint、`bigint unsigned`(1.8e19) → 16 字节档
+    /// （`numeric(20,0)` / `decimal(20,0)` / Doris 的 `LARGEINT` / ClickHouse 的 `UInt64`）。
+    /// 不升档的后果不是「精度差一点」，而是目标端直接 `Out of range value`。
+    fn int_type(bytes: u8, unsigned: bool, target_key: &str) -> String {
+        // MySQL 系原样带 unsigned（同类型同步本来也照抄原文，这里只管跨类型）
+        if matches!(target_key, "mysql" | "mariadb") {
+            let base = match bytes {
+                1 => "tinyint",
+                2 => "smallint",
+                4 => "int",
+                _ => "bigint",
+            };
+            return if unsigned {
+                format!("{base} unsigned")
+            } else {
+                base.to_string()
+            };
+        }
+        // ClickHouse 本来就是 UIntN / IntN 两套名字，不用升档
+        if target_key == "clickhouse" {
+            return match (bytes, unsigned) {
+                (1, false) => "Int8",
+                (1, true) => "UInt8",
+                (2, false) => "Int16",
+                (2, true) => "UInt16",
+                (4, false) => "Int32",
+                (4, true) => "UInt32",
+                (_, false) => "Int64",
+                (_, true) => "UInt64",
+            }
+            .to_string();
+        }
+        // 其余方言：无符号按上界升一档，8 字节无符号升到 16 字节档
+        let effective = match (bytes, unsigned) {
+            (1, true) => 2,
+            (2, true) => 4,
+            (4, true) => 8,
+            (8, true) => 16,
+            _ => bytes,
+        };
+        match target_key {
+            "oracle" | "dm" => match effective {
+                1 => "number(3)",
+                2 => "number(5)",
+                4 => "number(10)",
+                8 => "number(19)",
+                _ => "number(20)",
+            }
+            .to_string(),
+            "doris" => match effective {
+                1 => "tinyint",
+                2 => "smallint",
+                4 => "int",
+                8 => "bigint",
+                // Doris 的 BIGINT 装不下 2^64-1；LARGEINT 是 128 位有符号
+                _ => "largeint",
+            }
+            .to_string(),
+            "postgresql" | "kingbase" => match effective {
+                1 | 2 => "smallint",
+                4 => "integer",
+                8 => "bigint",
+                _ => "numeric(20,0)",
+            }
+            .to_string(),
+            "sqlserver" => match effective {
+                1 => "tinyint",
+                2 => "smallint",
+                4 => "int",
+                8 => "bigint",
+                _ => "decimal(20,0)",
+            }
+            .to_string(),
+            // SQLite 只有 64 位整数：2^64-1 在这里没有精确表示，
+            // 保持 integer（不做“看起来像支持”的映射）
+            "sqlite" => "integer".to_string(),
+            // Derby / DB2 没有 TINYINT，1 字节一律落到 SMALLINT
+            "derby" | "db2" => match effective {
+                1 | 2 => "smallint",
+                4 => "int",
+                8 => "bigint",
+                _ => "decimal(20,0)",
+            }
+            .to_string(),
+            _ => match effective {
+                1 => "tinyint",
+                2 => "smallint",
+                4 => "int",
+                8 => "bigint",
+                _ => "decimal(20,0)",
+            }
+            .to_string(),
+        }
+    }
+
+    /// 拼带小数秒位数的类型名：`datetime(6)` / `time(3)` / `datetime2(7)`。
+    ///
+    /// 位数按**目标**方言夹上限：MySQL 最多 6、SQL Server 7、Oracle 9 —— 越界不是
+    /// 「精度更高」而是建表直接语法错。没有位数（或 0）就原样返回，与加这个参数之前一致。
+    fn with_fsp(base: &str, fsp: Option<u8>, target_key: &str) -> String {
+        let Some(fsp) = fsp else {
+            return base.to_string();
+        };
+        let cap = match target_key {
+            "mysql" | "mariadb" | "doris" | "postgresql" | "kingbase" => 6,
+            "sqlserver" => 7,
+            "oracle" | "dm" => 9,
+            _ => 6,
+        };
+        format!("{base}({})", fsp.min(cap))
     }
 }
 
@@ -5053,6 +5167,152 @@ mod tests {
             default_value: None,
             auto_increment: true,
         }
+    }
+
+    /// 跨类型建表必须**保留小数秒精度**。
+    ///
+    /// 守着一次真实故障：MariaDB 的 `datetime(6)` 同步到 MySQL（库类型名不同 ⇒ 走跨类型
+    /// 翻译）被渲染成 `datetime`，目标列只能存到秒 —— 同步「成功」，微秒全丢，而且是在
+    /// **建表那一刻**就丢了。族里必须带上 `fsp`，各目标还要按自己的上限夹。
+    #[test]
+    fn 跨类型保留小数秒精度() {
+        let mysql = Dialect::new(ConnectionKind::Mysql);
+        let ddl = mysql.create_table_from_columns(
+            "t",
+            &[col("ts", "datetime(6)", None), col("tm", "time(3)", None)],
+            Some(ConnectionKind::Mariadb),
+        );
+        assert!(ddl.contains("datetime(6)"), "实际：{ddl}");
+        assert!(ddl.contains("time(3)"), "实际：{ddl}");
+
+        // ClickHouse 是另一套写法：DateTime64(3) → datetime(3)
+        let ddl = mysql.create_table_from_columns(
+            "t",
+            &[col("ts", "DateTime64(3)", None)],
+            Some(ConnectionKind::Clickhouse),
+        );
+        assert!(ddl.contains("datetime(3)"), "实际：{ddl}");
+
+        // 目标上限要夹住：SQL Server 的 datetime2 只到 7 位、MySQL 只到 6 位
+        let mssql = Dialect::new(ConnectionKind::Sqlserver);
+        let ddl = mssql.create_table_from_columns(
+            "t",
+            &[col("ts", "timestamp(9)", None)],
+            Some(ConnectionKind::Postgresql),
+        );
+        assert!(ddl.contains("datetime2(7)"), "实际：{ddl}");
+        let ddl = mysql.create_table_from_columns(
+            "t",
+            &[col("ts", "timestamp(9)", None)],
+            Some(ConnectionKind::Postgresql),
+        );
+        assert!(ddl.contains("datetime(6)"), "实际：{ddl}");
+
+        // Doris 老版本不认 `datetime(6)`：跨类型过来保守落成 datetime（宁可不带精度，
+        // 也不要建表就失败）
+        let doris = Dialect::new(ConnectionKind::Doris);
+        let ddl = doris.create_table_from_columns(
+            "t",
+            &[col("ts", "datetime(6)", None)],
+            Some(ConnectionKind::Mariadb),
+        );
+        assert!(ddl.contains("ts datetime"), "实际：{ddl}");
+        assert!(!ddl.contains("datetime(6)"), "实际：{ddl}");
+
+        // Oracle 的精度写在 WITH TIME ZONE **前面**（写后面是语法错）
+        let oracle = Dialect::new(ConnectionKind::Oracle);
+        let ddl = oracle.create_table_from_columns(
+            "t",
+            &[col("ts", "timestamp(6) with time zone", None)],
+            Some(ConnectionKind::Postgresql),
+        );
+        assert!(ddl.contains("timestamp(6) with time zone"), "实际：{ddl}");
+    }
+
+    /// MySQL 的 `column_type` 经常带后缀（`decimal(10,2) unsigned` /
+    /// `timestamp(6) with time zone`）：括号里的参数不能被后缀带跑。
+    ///
+    /// 以前参数解析是 `trim_end_matches(')')` 之后再切逗号，后缀还在时整段解析失败 ——
+    /// `decimal(10,2) unsigned` 只认出精度 10、scale 丢成 0，跨类型同步变成 `numeric(10,0)`。
+    #[test]
+    fn 类型后缀不影响括号里的参数() {
+        let pg = Dialect::new(ConnectionKind::Postgresql);
+        let ddl = pg.create_table_from_columns(
+            "t",
+            &[col("amt", "decimal(10,2) unsigned", None)],
+            Some(ConnectionKind::Mysql),
+        );
+        assert!(ddl.contains("numeric(10,2)"), "实际：{ddl}");
+    }
+
+    /// 无符号整型跨方言要**按上界升档**。
+    ///
+    /// `bigint unsigned` 能到 2^64-1，i64 装不下：老实现渲染成 `bigint`，写入时目标端
+    /// 直接 `Out of range value`（MySQL→PG / Doris 都有用户踩过）。
+    #[test]
+    fn 无符号整型跨方言按上界升档() {
+        let one = |ty: &str| vec![col("v", ty, None)];
+        // 同是 MySQL 系：照写 unsigned
+        let ddl = Dialect::new(ConnectionKind::Mysql)
+            .create_table_from_columns("t", &one("bigint(20) unsigned"), Some(ConnectionKind::Mariadb));
+        assert!(ddl.contains("bigint unsigned"), "实际：{ddl}");
+
+        let pg = Dialect::new(ConnectionKind::Postgresql);
+        // 8 字节无符号 → 16 字节档
+        assert!(
+            pg.create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
+                .contains("numeric(20,0)")
+        );
+        // 4 字节无符号 → bigint（PG 的 integer 只到 2^31-1）
+        assert!(
+            pg.create_table_from_columns("t", &one("int unsigned"), Some(ConnectionKind::Mysql))
+                .contains("bigint")
+        );
+        // 2 字节无符号 → integer
+        assert!(
+            pg.create_table_from_columns("t", &one("smallint unsigned"), Some(ConnectionKind::Mysql))
+                .contains("integer")
+        );
+        // 1 字节无符号 → smallint
+        assert!(
+            pg.create_table_from_columns("t", &one("tinyint unsigned"), Some(ConnectionKind::Mysql))
+                .contains("smallint")
+        );
+
+        // ClickHouse 原生 UIntN，不用升档
+        let ch = Dialect::new(ConnectionKind::Clickhouse);
+        assert!(
+            ch.create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
+                .contains("UInt64")
+        );
+        // Doris 没有 unsigned，用 128 位的 LARGEINT 接住
+        let doris = Dialect::new(ConnectionKind::Doris);
+        assert!(
+            doris
+                .create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
+                .contains("largeint")
+        );
+        // SQL Server 的 8 字节无符号 → decimal(20,0)
+        let mssql = Dialect::new(ConnectionKind::Sqlserver);
+        assert!(
+            mssql
+                .create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
+                .contains("decimal(20,0)")
+        );
+    }
+
+    /// 同类型同步**照抄原文**：`datetime(6)` 进来还是 `datetime(6)`，一个字符都不动。
+    #[test]
+    fn 同类型建表不改写类型文本() {
+        let ddl = Dialect::new(ConnectionKind::Mysql).create_table_from_columns(
+            "t",
+            &[col("ts", "datetime(6)", None), col("d", "datetime", None)],
+            Some(ConnectionKind::Mysql),
+        );
+        assert!(ddl.contains("datetime(6)"), "实际：{ddl}");
+        // 没有小数秒的那列不能被「顺手补成 (6)」
+        assert!(ddl.contains("d datetime"), "实际：{ddl}");
+        assert!(!ddl.contains("d datetime(6)"), "实际：{ddl}");
     }
 
     /// 文本列的默认值**必须加引号**，哪怕它长得像表达式。
