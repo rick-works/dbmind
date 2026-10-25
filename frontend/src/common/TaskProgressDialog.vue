@@ -122,7 +122,11 @@ const displayTitle = computed(() => {
 const percentage = computed(() => {
   if (isSuccess.value) return 100
   if (!props.total || props.total <= 0) return 0
-  return Math.min(100, Math.round((props.done / props.total) * 100))
+  const pct = Math.min(100, Math.round((props.done / props.total) * 100))
+  // 运行中最多 99：同步/对比这类任务的 done 是**对象数**，对象跑完还有收尾
+  //（视图依赖重试、逐对象校验、不一致重传），done==total 不等于任务完成。
+  // 直接把原始值给出去就是「进度条 100%、日志还在重传」（真机截图）。
+  return isRunning.value ? Math.min(99, pct) : pct
 })
 // 总量未知（total<=0）时进不确定态（跑马灯）。
 // 原来这里写死 false —— 与文件头注释（total<=0 进 indeterminate）自相矛盾，

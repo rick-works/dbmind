@@ -1151,10 +1151,26 @@ enum IndexFilter {
     NonUniqueOnly,
 }
 
-/// 单表**精确**行数（终态对账用）。对账要的是准数，所以直接 `count(*)`，
+/// 单表**精确**行数（终态校验用）。校验要的是准数，所以直接 `count(*)`，
 /// 不用统计视图里的估算值。
-async fn count_table(state: &AppState, conn: &str, scope: &str, table_expr: &str) -> Option<u64> {
-    let sql = format!("select count(*) as n from {table_expr}");
+///
+/// `condition` 是拼在 `where` 后面的行过滤：**带过滤的同步必须带上同一份条件**，
+/// 否则拿「源表整表行数」去比「只搬了一部分的表」，必然判成不一致 —— 然后白白清空重传，
+/// 把用户刚同步过去的数据又删一遍重灌（真机：按表设了 `where` 的库每次收尾都白跑一轮）。
+async fn count_table(
+    state: &AppState,
+    conn: &str,
+    scope: &str,
+    table_expr: &str,
+    condition: &str,
+) -> Option<u64> {
+    let condition = condition.trim();
+    let where_sql = if condition.is_empty() {
+        String::new()
+    } else {
+        format!(" where {condition}")
+    };
+    let sql = format!("select count(*) as n from {table_expr}{where_sql}");
     let result = run_sql_in(state, conn, scope, sql, 600_000).await.ok()?;
     let value = result.rows.first()?.first()?;
     Some(match value {
@@ -6546,18 +6562,42 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     }
                 }
             }
-            // ---- 终态一致性对账：源有什么，目标就必须有什么 ----
+            // ---- 终态校验：对象都建出来了吗、行数都对得上吗 ----
             //
             // 为什么非要有这一步：链路断一次就会重跑一段，重跑区间与已提交区间叠一小段时，
-            // 目标会多出几行；而 ClickHouse 这种没有唯一约束的目标连报错都没有 ——
-            // 结果是「任务显示成功，两边的行数却对不上」。用户的要求是数据完全一致，
-            // 所以收尾时逐表数一遍，不一致的清空重传一次（只补一次，避免死循环）。
-            // 代价：每张表两条 count(*)（百万行级几十毫秒），整库约一分钟。
+            // 目标会多出几行；视图建了一半、目标表压根没建出来…… 这些都不会让任务本身变成
+            // 「失败」，只会体现在「两边的对象 / 行数对不上」。所以收尾时逐对象核对一遍，
+            // 并把**明细**写进日志（哪个对象不一致、差多少行），不一致的清空重传一次。
+            // 用户要的就是这一句答案：400 个对象、8100 万行，到底都到齐了没有。
+            // 代价：每张表两条 count(*)（百万行级几十毫秒）+ 一次元数据列举，整库约一分钟。
+            let mut verify_report = Value::Null;
             if !task.is_canceled() && opts.sync_data {
-                let mut mismatch = 0usize;
-                let mut fixed = 0usize;
+                task.set_phase("校验".to_string());
+                // 目标端现有对象清单（一次元数据调用）：用来判「表 / 视图到底建出来没有」。
+                // 拿不到就退化成只比行数 —— 不因为一次元数据失败就把整轮校验废掉。
+                let target_names: Option<std::collections::HashSet<String>> =
+                    match crate::api::scope::resolve(&state, &tgt.conn, &tgt.scope).await {
+                        Ok(resolved) => {
+                            let engine = state.engine();
+                            blocking(move || engine.list_tables_fresh(&resolved))
+                                .await
+                                .ok()
+                                .map(|list| {
+                                    list.into_iter()
+                                        .map(|table| table.name.to_ascii_lowercase())
+                                        .collect()
+                                })
+                        }
+                        Err(_) => None,
+                    };
+                let mut checked = 0usize;
+                // (槽位, 对象名, 原因)：先把明细收齐，日志才是「先列问题、再补」
+                let mut bad: Vec<(usize, String, String)> = Vec::new();
                 for (index, (kind, name)) in objects.iter().enumerate() {
-                    if kind != "table" {
+                    if task.is_canceled() {
+                        break;
+                    }
+                    if kind != "table" && kind != "view" {
                         continue;
                     }
                     let status = slots[index]
@@ -6567,37 +6607,112 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         .and_then(|value| value.get("status"))
                         .and_then(Value::as_str)
                         .map(str::to_string);
+                    // 失败 / 跳过的对象已经记在结果表里，不在这里重复报一遍
                     if status.as_deref() != Some("ok") {
                         continue;
                     }
-                    let src_table = src.scoped(name, source_kind);
-                    let tgt_table = tgt.scoped(name, target_kind);
-                    let (Some(want), Some(got)) = (
-                        count_table(&state, &src.conn, &src.scope, &src_table).await,
-                        count_table(&state, &tgt.conn, &tgt.scope, &tgt_table).await,
-                    ) else {
-                        continue;
-                    };
-                    if want == got {
+                    checked += 1;
+                    task.set_phase(format!("校验 {checked}/{total}"));
+                    // 目标名可能是映射出来的（界面的「表名映射」），核对必须按目标名来
+                    let target_name = opts.target_table_for(name, name);
+                    if let Some(names) = &target_names {
+                        if !names.contains(&target_name.to_ascii_lowercase()) {
+                            let reason = "目标端没有这个对象".to_string();
+                            task.log(format!(
+                                "{} {name}：{reason}",
+                                if kind == "view" { "视图" } else { "表" }
+                            ));
+                            bad.push((index, name.clone(), reason));
+                            continue;
+                        }
+                    }
+                    // 视图只有「在不在」可核对：行数取决于定义，比了没有意义
+                    if kind != "table" {
                         continue;
                     }
-                    mismatch += 1;
-                    // 过程细节：真的对齐不上会在下面以结果形式报出来，这里只留文件日志
-                    tracing::info!(table = %name, want, got, "行数不一致，清空重传一次");
-                    // SQLite 没有 truncate；其它方言 ATOMIC/隐式提交都一样快
-                    let clear = if target_kind.kind.key() == "sqlite" {
-                        format!("delete from {tgt_table}")
-                    } else {
-                        format!("truncate table {tgt_table}")
-                    };
-                    // 可写会话：`run_sql_in` 走只读会话（`read_only: Some(true)`），
-                    // truncate 会被驱动直接拒绝（`Connection is read-only...`），
-                    // 于是「发现不一致 → 清空重传」永远停在跳过重传这一步。
-                    if let Err(err) =
-                        run_sql_in_write(&state, &tgt.conn, &tgt.scope, clear, 600_000).await
-                    {
-                        task.log(format!("表 {name}：{}", err.message));
+                    let src_table = src.scoped(name, source_kind);
+                    let tgt_table = tgt.scoped(&target_name, target_kind);
+                    let (want, got) = (
+                        count_table(
+                            &state,
+                            &src.conn,
+                            &src.scope,
+                            &src_table,
+                            &opts.where_for(name),
+                        )
+                        .await,
+                        count_table(&state, &tgt.conn, &tgt.scope, &tgt_table, "").await,
+                    );
+                    match (want, got) {
+                        (Some(want), Some(got)) if want == got => {}
+                        (Some(want), Some(got)) => {
+                            let gap = if got < want {
+                                format!("少 {}", want - got)
+                            } else {
+                                format!("多 {}", got - want)
+                            };
+                            let reason = format!("源 {want} 行 / 目标 {got} 行（{gap}）");
+                            task.log(format!("表 {name}：不一致，{reason}"));
+                            bad.push((index, name.clone(), reason));
+                        }
+                        // 源端读不到行数：不是「一致」，但也不是能自动修的东西 —— 如实说一句
+                        (None, _) => {
+                            task.log(format!("表 {name}：读不到源端行数，本次无法核对"));
+                        }
+                        (_, None) => {
+                            let reason = "目标端读不到行数（表可能没建出来）".to_string();
+                            task.log(format!("表 {name}：{reason}"));
+                            bad.push((index, name.clone(), reason));
+                        }
+                    }
+                }
+                let mismatched = bad.len();
+                let mut fixed = 0usize;
+                if mismatched > 0 {
+                    task.log(format!("校验：{mismatched} 个对象不一致，开始重传"));
+                }
+                for (index, name, _reason) in &bad {
+                    if task.is_canceled() {
+                        break;
+                    }
+                    task.set_phase(format!("重传 {name}"));
+                    let kind = objects[*index].0.clone();
+                    let target_name = opts.target_table_for(name, name);
+                    if kind == "view" {
+                        let outcome =
+                            sync_view(&state, &src, &tgt, name, &opts, Some(&task)).await;
+                        let rebuilt = outcome.status != "error";
+                        if rebuilt {
+                            fixed += 1;
+                            task.log(format!("视图 {name}：已重建"));
+                        } else {
+                            task.log(format!("视图 {name}：{}", outcome.message));
+                        }
+                        *slots[*index].lock().unwrap() = Some(outcome.to_json());
                         continue;
+                    }
+                    let tgt_table = tgt.scoped(&target_name, target_kind);
+                    // 表不存在时没法 truncate（会报 Table doesn't exist）：直接让 sync_table 建
+                    let exists = target_names
+                        .as_ref()
+                        .map(|names| names.contains(&target_name.to_ascii_lowercase()))
+                        .unwrap_or(true);
+                    if exists {
+                        // SQLite 没有 truncate；其它方言 ATOMIC/隐式提交都一样快
+                        let clear = if target_kind.kind.key() == "sqlite" {
+                            format!("delete from {tgt_table}")
+                        } else {
+                            format!("truncate table {tgt_table}")
+                        };
+                        // 可写会话：`run_sql_in` 走只读会话（`read_only: Some(true)`），
+                        // truncate 会被驱动直接拒绝（`Connection is read-only...`），
+                        // 于是「发现不一致 → 清空重传」永远停在跳过重传这一步。
+                        if let Err(err) =
+                            run_sql_in_write(&state, &tgt.conn, &tgt.scope, clear, 600_000).await
+                        {
+                            task.log(format!("表 {name}：{}", err.message));
+                            continue;
+                        }
                     }
                     // 重跑要走正常的对象流程（会话租约、进度、结果行都要有）
                     let lease = {
@@ -6617,25 +6732,58 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         &opts,
                         lease.id,
                         true,
-                        &progresses[index],
+                        &progresses[*index],
                     )
                     .await;
-                    let after = count_table(&state, &tgt.conn, &tgt.scope, &tgt_table).await;
-                    if after == Some(want) {
-                        fixed += 1;
-                        tracing::debug!(table = %name, want, "重传后已对齐");
-                    } else {
-                        task.log(format!(
-                            "表 {name}：重传后 {after:?} 行，期望 {want} 行"
-                        ));
+                    *slots[*index].lock().unwrap() = Some(outcome.to_json());
+                    // 重传本身失败（建表/写入报错）：原因必须打出来。
+                    // 否则日志只剩「重传后仍不一致（源 X 行 / 目标 Y 行）」，用户只能看到差多少、
+                    // 看不到为什么 —— 真机上那几百万行的缺口就是被这句吞掉的。
+                    if outcome.status == "error" {
+                        task.log(format!("表 {name}：重传失败：{}", outcome.message));
                     }
-                    *slots[index].lock().unwrap() = Some(outcome.to_json());
+                    // 复检：重传后再数一遍，「补上了没有」也写进日志
+                    let src_table = src.scoped(name, source_kind);
+                    let want = count_table(
+                        &state,
+                        &src.conn,
+                        &src.scope,
+                        &src_table,
+                        &opts.where_for(name),
+                    )
+                    .await;
+                    let got = count_table(&state, &tgt.conn, &tgt.scope, &tgt_table, "").await;
+                    match (want, got) {
+                        (Some(want), Some(got)) if want == got => {
+                            fixed += 1;
+                            task.log(format!("表 {name}：已重传，行数对齐（{want} 行）"));
+                        }
+                        (Some(want), Some(got)) => {
+                            task.log(format!(
+                                "表 {name}：重传后仍不一致（源 {want} 行 / 目标 {got} 行）"
+                            ));
+                        }
+                        _ => {
+                            task.log(format!("表 {name}：重传后读不到行数，无法确认"));
+                        }
+                    }
                 }
-                if mismatch > 0 {
+                if checked == 0 {
+                    task.log("校验：没有需要核对的对象");
+                } else if mismatched == 0 {
                     task.log(format!(
-                        "行数对账：{mismatch} 张表不一致，其中 {fixed} 张已通过重传对齐"
+                        "校验完成：{checked} 个对象全部一致（都存在，行数相等）"
+                    ));
+                } else {
+                    task.log(format!(
+                        "校验完成：{checked} 个对象中 {mismatched} 个不一致，重传后 {fixed} 个已对齐"
                     ));
                 }
+                verify_report = json!({
+                    "checked": checked,
+                    "mismatch": mismatched,
+                    "fixed": fixed,
+                });
             }
             let (ok, skipped, errors, inserted, updated) = *counters.lock().unwrap();
             // 终态对账：进度卡的「读取 / 传输」必须 ≥ 结果表的新增+更新合计。
@@ -6660,6 +6808,8 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 "errors": errors,
                 "inserted": inserted,
                 "updated": updated,
+                // 收尾校验的结果（对象是否存在 + 行数是否相等）：界面可以据此加一行
+                "verify": verify_report,
             });
             // 取消也是有结果的结果：文案上要和「完成」分开，
             // 否则界面会拿一句"同步完成"去报一个被取消的任务。

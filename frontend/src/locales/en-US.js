@@ -4153,6 +4153,8 @@ export default {
   'sync.sumAutoCreate': 'Create tables',
   'sync.sumIndexes': 'Create indexes',
   'sync.sumSyncData': 'Sync data',
+  'sync.sumVerify': 'Verify after sync',
+  'sync.verifyValue': 'Object exists + row counts match (mismatches are cleared and re-sent once)',
   'sync.sumStopOnError': 'Stop on error',
   'sync.rateLimit': 'Rate limit',
   'sync.unlimited': 'Unlimited',

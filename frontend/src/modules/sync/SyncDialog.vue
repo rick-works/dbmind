@@ -720,6 +720,8 @@ const summaryRows = computed(() => {
     // 「建表包含索引」只在要建表时才有意义，没勾自动建表就不占一行
     ...(o.syncStructure ? [{ label: t('sync.sumIndexes'), value: yesNo(o.includeIndexes) }] : []),
     { label: t('sync.sumSyncData'), value: yesNo(o.syncData) },
+    // 同步后校验是**收尾必做**的一步（对象是否建出来 + 行数是否相等），不搬数据时没有意义
+    ...(o.syncData ? [{ label: t('sync.sumVerify'), value: t('sync.verifyValue') }] : []),
     // 「跳过目标端 binlog」只有 MySQL / MariaDB 目标才有这一行
     //（Doris / ClickHouse 没有 binlog 概念，界面上本来就不显示这个勾选项）
     ...(binlogSkippable.value ? [{ label: t('sync.skipBinlog'), value: yesNo(o.skipBinlog) }] : []),
@@ -1212,8 +1214,15 @@ tweenTo(failedShown, targetFailed.value, true)
 let liveRaf = 0
 const liveLoop = () => {
 if (!taskRunning.value) { liveRaf = 0; return }
-readShown.value = Math.max(readShown.value, Math.floor(extrapolate(rowsRead.value, rates.value.read)))
-writtenShown.value = Math.max(writtenShown.value, Math.floor(extrapolate(rowsWritten.value, rates.value.written)))
+const nextRead = Math.max(readShown.value, Math.floor(extrapolate(rowsRead.value, rates.value.read)))
+readShown.value = nextRead
+// 传输数**恒 ≤ 读取数**：这里也必须夹一次。`targetWritten` 那个夹子只在终态/轮询回调里生效，
+// 运行中走的是这条 raf 外插路径 —— 两路各自外插、领先量不同，就会画出「传输 8219.9 万 >
+// 读取 8219.9 万」的荒诞画面（真机截图）。
+writtenShown.value = Math.min(
+  nextRead,
+  Math.max(writtenShown.value, Math.floor(extrapolate(rowsWritten.value, rates.value.written))),
+)
 failedShown.value = Math.max(failedShown.value, targetFailed.value)
 liveRaf = requestAnimationFrame(liveLoop)
 }
@@ -1286,7 +1295,11 @@ const progressPct = computed(() => {
   if (isTaskDone.value) return 100
   // 取消时停在"实际写到哪"，不假装 100%
   if (!taskTotal.value || taskTotal.value < 0) return 0
-  return Math.min(100, Math.round(taskDone.value / taskTotal.value * 100))
+  const pct = Math.min(100, Math.round(taskDone.value / taskTotal.value * 100))
+  // 对象数跑完 ≠ 任务结束：收尾还有「视图依赖重试 / 逐对象校验 / 不一致重传」，
+  // 那些阶段 done 已经等于 total，直接把原始值显示出来就是「还没完成却 100%」
+  // （真机截图：进度条 100%，日志还在重传）。运行中最多给到 99，终态才给 100。
+  return taskRunning.value ? Math.min(99, pct) : pct
 })
 
 /**
