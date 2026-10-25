@@ -102,6 +102,19 @@ pub trait Writer: Send + Sync {
 /// 一张表最多换几次写连接（见 `Writer::renew`）。
 const MAX_RENEW: u64 = 2;
 
+/// `LOAD DATA` 快通道的一次失败。
+///
+/// 关键是 `retryable`：只有宿主明确回报「语句失败、这批行没进去」才允许改用 INSERT，
+/// 连接中断/超时的批次可能已经落了一半，再写一遍就是重复数据 —— 那种情况直接上报失败。
+struct LoadDataFailure {
+    /// 失败前已经成功装载的行数（不让已上的数据白跑）
+    loaded: u64,
+    /// 还没写的那批行在入参里的起点（回退 INSERT 从这里开始）
+    start: usize,
+    retryable: bool,
+    message: String,
+}
+
 pub struct SqlWriter {
     state: AppState,
     task: Option<std::sync::Arc<Task>>,
@@ -129,6 +142,12 @@ pub struct SqlWriter {
     txn_open: Vec<AtomicBool>,
     stream: Option<StreamCfg>,
     stream_failed: AtomicBool,
+    /// 本表能不能走 `LOAD DATA LOCAL INFILE` 快通道（写插件声明 + 只用于纯插入）
+    load_data: bool,
+    /// 每个目标列是不是二进制（`LOAD DATA` 里走 hex + `unhex`）
+    load_binary: Vec<bool>,
+    /// 本表已判定快通道不可用（服务端没开 local_infile / 语法不认 / 编码不了）
+    load_data_failed: AtomicBool,
     workers: usize,
     /// 尾部弹性扩路的**上限**（方言声明的写并发）：`txn_open` / `stmt_caps` 按它预分配，
     /// 运行时补发的 worker 编号才不会越界落到「没有事务标记」的默认分支。
@@ -142,6 +161,9 @@ pub struct SqlWriter {
     /// 界面「超时时间」（秒，对齐 DBX 的操作超时）：0 = 继承连接、<0 = 不限制、>0 = 秒。
     /// 单条语句的硬上限用它（探活通也到这个点为止，见 `sync::run_write_stmt`）。
     op_timeout_secs: i64,
+    /// 界面「跳过目标端 binlog」：开事务前对该会话执行 `set sql_log_bin = 0`
+    /// （方言提供才执行；用户勾了才为真，见 `TablePlan::skip_binlog`）
+    skip_binlog: bool,
     /// 写池诊断（二分定位到的坏行样例写这里，卡顿日志会读）
     diag: Arc<WriteDiag>,
     /// 任务级共享配额（整库同步才有）：这里只用来收敛**报文上限**与**链路暂停**，
@@ -225,11 +247,15 @@ impl SqlWriter {
             txn_open: (0..workers_ceiling).map(|_| AtomicBool::new(false)).collect(),
             stream: plan.stream.clone(),
             stream_failed: AtomicBool::new(false),
+            load_data: super::plugins::spec_data_for(kind_key).load_data(),
+            load_binary: super::loaddata::binary_columns(&plan.target_types),
+            load_data_failed: AtomicBool::new(false),
             stmt_caps: (0..workers_ceiling)
                 .map(|_| AtomicUsize::new(stmt_cap))
                 .collect(),
             rows_cap,
             op_timeout_secs,
+            skip_binlog: plan.skip_binlog,
             grow: plan.grow.clone(),
             workers: workers.max(1),
             workers_ceiling,
@@ -317,6 +343,75 @@ impl SqlWriter {
             }
         }
     }
+
+    /// 试一把 `LOAD DATA LOCAL INFILE`（纯插入场景）。
+    ///
+    /// 按 [`super::loaddata::LOAD_DATA_CHUNK_BYTES`] / `LOAD_DATA_CHUNK_ROWS` 切块：
+    /// 一块一条语句，已上成功的块不重发。失败时把「已装载行数 + 剩余起点」一起带回去，
+    /// 让调用方只把剩下的行走 INSERT —— 快通道半路不可用不该把已写的数据再写一遍。
+    async fn try_load_data(
+        &self,
+        worker: usize,
+        rows: &[Vec<CellValue>],
+    ) -> Result<u64, LoadDataFailure> {
+        let sql = super::loaddata::build_sql(
+            &self.target_name,
+            &self.target_columns,
+            &self.load_binary,
+            self.kind,
+        );
+        let session = self.session(worker);
+        let timeout = crate::api::sync::op_timeout_ms(self.op_timeout_secs);
+        let mut loaded = 0u64;
+        let mut start = 0usize;
+        while start < rows.len() {
+            let mut end = start;
+            let mut bytes = 0usize;
+            while end < rows.len() && end - start < super::loaddata::LOAD_DATA_CHUNK_ROWS {
+                let size = estimate_row_bytes(&rows[end]);
+                if end > start && bytes + size > super::loaddata::LOAD_DATA_CHUNK_BYTES {
+                    break;
+                }
+                bytes += size;
+                end += 1;
+            }
+            let tsv = match super::loaddata::encode_rows(&rows[start..end], &self.load_binary) {
+                Ok(tsv) => tsv,
+                // 编码不了（超大二进制没取回内容 / 文本列里混进二进制）：这批走 INSERT，
+                // 那里会给出用户看得懂的失败原因
+                Err(message) => {
+                    return Err(LoadDataFailure {
+                        loaded,
+                        start,
+                        retryable: true,
+                        message,
+                    })
+                }
+            };
+            match super::loaddata::load_data_local(
+                &self.state,
+                &self.tgt_target,
+                &session,
+                sql.clone(),
+                tsv,
+                timeout,
+            )
+            .await
+            {
+                Ok(written) => loaded += written,
+                Err(err) => {
+                    return Err(LoadDataFailure {
+                        retryable: super::loaddata::safe_to_fallback(&err),
+                        loaded,
+                        start,
+                        message: err.message,
+                    })
+                }
+            }
+            start = end;
+        }
+        Ok(loaded)
+    }
 }
 
 impl Writer for SqlWriter {
@@ -350,10 +445,19 @@ impl Writer for SqlWriter {
                 let _ = run_target_in(&self.state, &self.tgt_target, sql, &session).await;
             }
             // `sql_log_bin = 0` 会断开目标端 binlog（省一半写放大），但它**影响主从复制**，
-            // 所以单独一个能力位，只在用户显式开启时才执行。
-            if std::env::var_os("DBMIND_SYNC_SKIP_BINLOG").is_some() {
+            // 所以单独一个能力位，只在用户显式勾选（或设了环境变量）时才执行。
+            if self.skip_binlog {
                 if let Some(sql) = spec.binlog_off() {
-                    let _ = run_target_in(&self.state, &self.tgt_target, sql, &session).await;
+                    // 失败（权限不够 / 从库只读账号）不阻断同步：只是没变快，
+                    // 所以只留一条 tracing，界面上不制造「失败」两字
+                    if let Err(err) = run_target_in(&self.state, &self.tgt_target, sql, &session).await {
+                        tracing::debug!(
+                            target: "dbmind::sync",
+                            table = %self.table,
+                            error = %err.message,
+                            "跳过目标端 binlog 失败（权限不足？），继续同步"
+                        );
+                    }
                 }
             }
             let Some((begin, _, _)) = self.txn else {
@@ -446,6 +550,63 @@ impl Writer for SqlWriter {
                     self.rows_cap,
                 )
                 .await;
+            }
+            // ---- LOAD DATA LOCAL INFILE 快通道（MySQL / MariaDB，纯插入）----
+            // 为什么只认 `UpsertMode::Off`：`LOAD DATA` 不会更新已有行，upsert 必须走
+            // `INSERT … on duplicate key update`；「删除重建 / 清空后导入 / 仅插入」这三种
+            // 都是纯插入，落进去就是最终结果，语义完全等价、只是快好几倍。
+            let load_unavailable = self
+                .task
+                .as_ref()
+                .map(|task| task.load_data_unavailable())
+                .unwrap_or(false);
+            if self.load_data
+                && self.upsert == UpsertMode::Off
+                && !rows.is_empty()
+                && !load_unavailable
+                && !self.load_data_failed.load(Ordering::SeqCst)
+            {
+                match self.try_load_data(worker, rows).await {
+                    Ok(written) => return Ok(written),
+                    Err(failure) if failure.retryable => {
+                        // 服务端没开 local_infile / 语法不认 / 编码不了：本表剩余的行走 INSERT，
+                        // 整条任务也一并关掉（根因只有一个，几十张表不必各报一次）
+                        self.load_data_failed.store(true, Ordering::SeqCst);
+                        let message = format!(
+                            "表 {}：LOAD DATA 快通道不可用：{}，改用 INSERT 管道",
+                            self.table,
+                            super::loaddata::user_message(&failure.message)
+                        );
+                        match &self.task {
+                            Some(task) if task.disable_load_data() => task.log(message),
+                            Some(_) => {}
+                            None => tracing::warn!("{message}"),
+                        }
+                        let rest = write_insert_rows(
+                            &self.state,
+                            &self.tgt_target,
+                            &self.session(worker),
+                            &self.target_name,
+                            &self.target_columns,
+                            &self.target_types,
+                            self.kind,
+                            &rows[failure.start..],
+                            self.identity_on,
+                            self.task.as_ref(),
+                            &self.table,
+                            in_transaction,
+                            &self.diag,
+                            &self.stmt_caps[worker.min(self.stmt_caps.len() - 1)],
+                            self.grow.as_deref(),
+                            self.rows_cap,
+                            self.op_timeout_secs,
+                        )
+                        .await?;
+                        return Ok(failure.loaded + rest);
+                    }
+                    // 结果未知（连接中断 / 超时）：不能重写，如实上报
+                    Err(failure) => return Err(failure.message),
+                }
             }
             // 同一条任务里只要有一处判定 Stream Load 不可用（端口没映射 / BE 不通），
             // 后面的表就别再试了 —— 否则几十张表各写一条「失败」日志，根因却只有一个

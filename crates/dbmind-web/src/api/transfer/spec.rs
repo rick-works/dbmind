@@ -59,6 +59,8 @@ pub struct Spec {
     expr_limit: ExprLimit,
     multi_statement: bool,
     stream_load: bool,
+    /// 有没有 `LOAD DATA LOCAL INFILE` 快通道（MySQL 系；只在纯插入时启用）
+    load_data: bool,
     /// 取本连接的会话 id（目前只有 MySQL 系有 `connection_id()`）；`None` = 不支持慢批自愈
     conn_id_sql: Option<&'static str>,
     /// 从服务端掐断指定会话的语句
@@ -84,6 +86,7 @@ impl Spec {
             expr_limit: ExprLimit::None,
             multi_statement: false,
             stream_load: false,
+            load_data: false,
             conn_id_sql: None,
             kill: None,
             activity_sql: None,
@@ -131,6 +134,11 @@ impl Spec {
 
     pub(crate) const fn stream_load(&self) -> bool {
         self.stream_load
+    }
+
+    /// 有没有 `LOAD DATA LOCAL INFILE` 快通道（见 `transfer/loaddata.rs`）。
+    pub(crate) const fn load_data(&self) -> bool {
+        self.load_data
     }
 
     pub(crate) const fn conn_id_sql(&self) -> Option<&'static str> {
@@ -212,6 +220,11 @@ impl Spec {
 
     pub(crate) const fn with_stream_load(mut self) -> Self {
         self.stream_load = true;
+        self
+    }
+
+    pub(crate) const fn with_load_data(mut self) -> Self {
+        self.load_data = true;
         self
     }
 

@@ -4070,6 +4070,8 @@ export default {
   'sync.modeKeepStructure': 'Keep the existing object',
   'sync.smStructOnly': '"Sync table data" is off: this only decides what happens to existing objects, no rows are written',
   'sync.stopOnError': 'Stop on error (skip the remaining objects)',
+  'sync.skipBinlog': 'Skip target binlog',
+  'sync.skipBinlogHint': 'MySQL / MariaDB targets only: run SET sql_log_bin = 0 before writing, so the target no longer writes a binlog entry per row — halves write amplification and speeds up the sync. The downside: these writes never reach the target binlog, so do not enable it if the target has replicas or binlog-based sync/audit. A failure (e.g. insufficient privilege) does not break the sync, it just will not get faster',
   'sync.includeIndexes': 'Create indexes together with the table',
   'sync.autoCreateDb': 'Create missing database',
   'sync.objConcurrency': 'Concurrent tables',

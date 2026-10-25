@@ -46,6 +46,7 @@
 //! - **取消**：每个页边界检查一次，已写入的部分保留（不回滚）。
 
 pub mod engine;
+pub mod loaddata;
 pub mod pacer;
 pub mod plugins;
 pub mod reader;
@@ -532,6 +533,13 @@ pub struct TablePlan {
     /// 用途：结果行要能说清「耗时 1 小时 36 分里有 1 小时 30 分在等超时」——
     /// 否则用户只看到一个巨大的黑盒数字，分不清是「数据多」还是「链路坏」。
     pub wait_ms: Arc<AtomicU64>,
+    /// 写这条表的会话要不要 `SET sql_log_bin = 0`（界面「跳过目标端 binlog」）。
+    ///
+    /// 为什么能省一半写放大：MySQL/MariaDB 每行都要写一份 binlog（以及可能的
+    /// row image），关掉后目标端只剩数据页的 redo。代价是目标库若参与主从复制，
+    /// 从库会缺这批数据 —— 所以是**默认关、用户显式勾选**，并在界面上写清前提。
+    /// 逃生阀 `DBMIND_SYNC_SKIP_BINLOG` 仍然有效（见 `sync::make_plan`）。
+    pub skip_binlog: bool,
 }
 
 /// upsert 怎么落库。

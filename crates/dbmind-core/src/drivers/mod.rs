@@ -67,6 +67,23 @@ pub struct PreparedBatchCall<'a> {
     pub in_transaction: bool,
 }
 
+/// 一次 `LOAD DATA LOCAL INFILE` 快速装载的上下文（目前只有 MySQL / MariaDB 目标用）。
+///
+/// 为什么数据走 **base64** 而不是 JSON 字符串数组：TSV 里可能夹着任意字节
+/// （BLOB 列是原样写进去的），只有 base64 能无损过 JSON。体积比逐行 JSON 小一半以上，
+/// 传输上仍比「几千条 VALUES」划算得多。
+pub struct LoadDataCall<'a> {
+    pub config: &'a ConnectionConfig,
+    /// 完整语句，其中 `{file}` 由宿主替换成真实的临时文件路径
+    pub sql: &'a str,
+    /// TSV 文本的 base64（UTF-8 字节流，含任意二进制）
+    pub data: &'a str,
+    pub options: &'a QueryOptions,
+    pub execution_id: &'a str,
+    pub read_only: bool,
+    pub session: Option<&'a str>,
+}
+
 /// 一次元数据调用的上下文。
 ///
 /// 为什么元数据也要带上只读性：**元数据该用哪条物理连接，取决于连接的只读性
@@ -106,6 +123,17 @@ pub trait Driver: Send + Sync {
         Err(DbMindError::new(
             ErrorCode::DriverNotImplemented,
             "当前数据库驱动不支持预编译批量写入",
+        ))
+    }
+
+    /// `LOAD DATA LOCAL INFILE` 快速装载（MySQL / MariaDB）：返回写入行数。
+    ///
+    /// 默认不支持 —— 宿主只有在能力位声明过（`load_data`）的写插件里才会走到这里，
+    /// 失败也只是「快通道不可用」，调用方照旧回退多值 INSERT。
+    fn load_data_local(&self, _call: LoadDataCall<'_>) -> Result<u64> {
+        Err(DbMindError::new(
+            ErrorCode::DriverNotImplemented,
+            "当前数据库驱动不支持 LOAD DATA LOCAL INFILE",
         ))
     }
 

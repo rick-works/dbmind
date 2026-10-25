@@ -202,6 +202,12 @@ pub struct Task {
     /// 而根因往往只有一个（Doris 只映射了 9030）。第一个失败就把整条任务关掉，后面
     /// 的表直接走 INSERT 管道，不再碰 HTTP。
     stream_unavailable: AtomicBool,
+    /// `LOAD DATA LOCAL INFILE` 快通道在**整条任务**内不可用（服务端没开 local_infile /
+    /// 驱动不认本地装载 / 这批行编码不了）。
+    ///
+    /// 和 Stream Load 同一个道理：根因只有一个（多半是目标库的 `local_infile=OFF`），
+    /// 每张表各试一次就会刷出几十条同样的日志，把真正的错误淹掉。
+    load_data_unavailable: AtomicBool,
 }
 
 impl Task {
@@ -232,6 +238,7 @@ impl Task {
                 .map(|d| d.as_millis() as u64).unwrap_or(0),
             finished_wall: Mutex::new(None),
             stream_unavailable: AtomicBool::new(false),
+            load_data_unavailable: AtomicBool::new(false),
         }
     }
 
@@ -290,6 +297,7 @@ impl Task {
             started_wall: num("startedAtWall"),
             finished_wall: Mutex::new(Some(num("finishedAtWall"))),
             stream_unavailable: AtomicBool::new(false),
+            load_data_unavailable: AtomicBool::new(false),
         })
     }
 
@@ -442,6 +450,18 @@ impl Task {
     /// 并发的其它表已经排在这一步后面，不再重复刷同一条「不可用」。
     pub fn disable_stream_load(&self) -> bool {
         !self.stream_unavailable.swap(true, Ordering::Relaxed)
+    }
+
+    /// `LOAD DATA LOCAL INFILE` 快通道在这条任务里已经判定不可用。
+    pub fn load_data_unavailable(&self) -> bool {
+        self.load_data_unavailable.load(Ordering::Relaxed)
+    }
+
+    /// 标记 `LOAD DATA` 快通道不可用：之后的表直接走 INSERT。
+    ///
+    /// 返回 true 表示**是这次调用把它关掉的**（第一个失败的表），只有它需要写日志。
+    pub fn disable_load_data(&self) -> bool {
+        !self.load_data_unavailable.swap(true, Ordering::Relaxed)
     }
     /// 终态对账：把行数**拉回到结果表的真实合计**。
     ///

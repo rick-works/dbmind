@@ -19,7 +19,7 @@
 //!   重跑没有副作用 —— 而它正是「窗口不关、VPN 断了再连，第一条语句必报一次」的成因。
 
 use super::session_pool::{Pin, SessionBudget, SessionPool};
-use super::{Driver, MetaCall, PreparedBatchCall, QueryCall, TxAction};
+use super::{Driver, LoadDataCall, MetaCall, PreparedBatchCall, QueryCall, TxAction};
 use crate::agent::{self, AgentHost, AgentQueryResult};
 use crate::error::{DbMindError, ErrorCode, Result};
 use crate::statement::classify;
@@ -1229,6 +1229,49 @@ impl Driver for AgentDriver {
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0) as usize;
                 Ok(affected)
+            },
+        )
+    }
+
+    fn load_data_local(&self, call: LoadDataCall<'_>) -> Result<u64> {
+        let lane = self.lane_key(call.config, call.read_only, call.session);
+        let limit = self.lane_limit(call.config, call.session);
+        let wait = Duration::from_millis(call.options.timeout_ms.saturating_add(2_000));
+        self.with_lane(
+            call.config,
+            &lane,
+            limit,
+            wait,
+            LaneCall {
+                read_only: call.read_only,
+                // 装载是写语句：既不能换会话重试（重跑会重复写入），也不能在失败后
+                // 假设「没写进去」—— 由调用方按错误类型决定是否回退 INSERT。
+                retry_on_stale: false,
+                retry_after_disconnect: false,
+                cancel: None,
+            },
+            |key| {
+                let mut params = Map::new();
+                params.insert("sessionId".to_string(), json!(key));
+                params.insert("sql".to_string(), json!(call.sql));
+                params.insert("data".to_string(), json!(call.data));
+                params.insert("timeoutMs".to_string(), json!(call.options.timeout_ms));
+                let value = self.host.call(
+                    Some(call.execution_id),
+                    "loadDataLocal",
+                    params,
+                    Some(wait),
+                )?;
+                if value.get("supported").and_then(|v| v.as_bool()) == Some(false) {
+                    return Err(DbMindError::new(
+                        ErrorCode::DriverNotImplemented,
+                        "目标 JDBC 驱动不支持 LOAD DATA LOCAL INFILE",
+                    ));
+                }
+                Ok(value
+                    .get("affectedRows")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0))
             },
         )
     }

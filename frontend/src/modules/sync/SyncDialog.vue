@@ -178,6 +178,15 @@
               {{ $t('sync.includeIndexes') }}
             </el-checkbox>
             <el-checkbox v-model="opts.syncData" :disabled="taskRunning">{{ $t('sync.syncData') }}</el-checkbox>
+            <!-- 跳过目标端 binlog：写放大减半（目标端每行不再多写一份 binlog），
+                 但目标库若参与主从复制，从库会缺这批数据 ⇒ 默认不勾。
+                 只在真正有 binlog 概念的目标（MySQL / MariaDB）才出现。 -->
+            <el-checkbox v-if="binlogSkippable" v-model="opts.skipBinlog" :disabled="taskRunning">
+              {{ $t('sync.skipBinlog') }}
+              <el-tooltip :content="$t('sync.skipBinlogHint')" placement="top" :show-after="120">
+                <el-icon class="hint-q" @click.stop><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </el-checkbox>
             <span class="checks-sep"></span>
             <!-- 「遇错停止」是任务级行为，和上面四条的「同步内容」不是一类，单独隔开 -->
             <el-checkbox v-model="opts.stopOnError" :disabled="taskRunning">{{ $t('sync.stopOnError') }}</el-checkbox>
@@ -615,6 +624,9 @@ const BATCH_ROWS_DEFAULT = {
 const tgtKindCode = computed(() => String(tgtInfo.value?.type || '').toUpperCase())
 const srcKindCode = computed(() => String(srcInfo.value?.type || '').toUpperCase())
 const batchRowsDefault = computed(() => BATCH_ROWS_DEFAULT[tgtKindCode.value] || 1000)
+// 只有 MySQL / MariaDB 目标才有 binlog 可跳过（Doris / ClickHouse 的写入插件
+// 没有 `binlog_off`，勾了也不会执行 —— 所以干脆不显示这个选项）
+const binlogSkippable = computed(() => ['MYSQL', 'MARIADB'].includes(tgtKindCode.value))
 
 // 并发三项（表数 / 每表读 / 每表写）的可选值：0 = 自动。
 // 用下拉而不是数字框：数字框的 min=1 会把「清空」夹回 1，用户改不回「自动」（真机反馈）；
@@ -708,6 +720,9 @@ const summaryRows = computed(() => {
     // 「建表包含索引」只在要建表时才有意义，没勾自动建表就不占一行
     ...(o.syncStructure ? [{ label: t('sync.sumIndexes'), value: yesNo(o.includeIndexes) }] : []),
     { label: t('sync.sumSyncData'), value: yesNo(o.syncData) },
+    // 「跳过目标端 binlog」只有 MySQL / MariaDB 目标才有这一行
+    //（Doris / ClickHouse 没有 binlog 概念，界面上本来就不显示这个勾选项）
+    ...(binlogSkippable.value ? [{ label: t('sync.skipBinlog'), value: yesNo(o.skipBinlog) }] : []),
     { label: t('sync.sumStopOnError'), value: yesNo(o.stopOnError) },
     // ② 传输参数（显示的是**实际会用的值**：每批条数没改过就是目标库默认值）
     // 并发三项：0 = 自动（后端按类型声明与并发表数切预算）
@@ -943,6 +958,8 @@ const opts = ref({
   // 并发三项（0 = 自动，由后端按类型声明与并发表数切预算）：
   // objConcurrency = 同时搬几张表；srcSlices = 每表读几片；tgtWorkers = 每表写几路
   objConcurrency: 0, srcSlices: 0, tgtWorkers: 0,
+  // 跳过目标端 binlog（写放大减半；目标库参与主从复制时不要勾）
+  skipBinlog: false,
   // 限速（0 = 不限）：行/秒 与 MB/s 各一条曲线，见后端 transfer::RateLimit
   rateRows: 0, rateMb: 0,
   // 前置 / 后置 SQL（整段脚本，分号或换行分隔；每个对象各执行一遍）
@@ -1541,6 +1558,8 @@ const buildPayload = (only = null) => {
     maxConcurrency: opts.value.objConcurrency || 0,
     srcSlices: opts.value.srcSlices || 0,
     tgtWorkers: opts.value.tgtWorkers || 0,
+    // 跳过目标端 binlog（只对 MySQL / MariaDB 目标有意义）
+    skipBinlog: !!opts.value.skipBinlog,
     // 0 = 按生成方（目标库）默认；>0 以界面为准 —— 后端再和字节上限、方言硬限制取小
     insertRows: opts.value.insertRows || 0,
     // 0 = 继承连接（用数据源上的 socketTimeout）；-1 = 不限制；>0 = 秒

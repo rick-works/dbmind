@@ -6,7 +6,7 @@
 //! - 测试只需针对这一层，覆盖即可代表全部入口。
 
 use crate::cancel::CancelRegistry;
-use crate::drivers::{DriverRegistry, PreparedBatchCall, QueryCall};
+use crate::drivers::{DriverRegistry, LoadDataCall, PreparedBatchCall, QueryCall};
 use crate::error::{DbMindError, ErrorCode, Result};
 use crate::paths;
 use crate::safety::SafetyPolicy;
@@ -1096,6 +1096,108 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
             rows: Vec::new(),
             row_count: 0,
             affected_rows: Some(affected_rows),
+            truncated: false,
+            duration_ms: started.elapsed().as_millis() as u64,
+            notices: Vec::new(),
+            session_id: session.map(str::to_string),
+            source_object: None,
+            row_identity: None,
+        })
+    }
+
+    /// `LOAD DATA LOCAL INFILE` 快速装载（内核内部链路；MySQL / MariaDB 同步目标用）。
+    ///
+    /// 和 [`Self::execute_prepared_insert_batch_in`] 是同一层的「内部写通道」：
+    /// 请求必须 `internal`、语句必须以 `load data` 开头，防止变成公开的任意语句入口。
+    /// `data` 是整批 TSV 的 base64（见 [`LoadDataCall`]），宿主落临时文件后交给驱动上送。
+    pub fn execute_load_data_in(
+        &self,
+        request: QueryRequest,
+        data: String,
+        ctx: AccessContext,
+    ) -> Result<QueryResult> {
+        if !request.internal {
+            return Err(DbMindError::new(
+                ErrorCode::QueryInvalid,
+                "本地快速装载只允许内核内部链路调用",
+            ));
+        }
+        if !request
+            .sql
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("load data")
+        {
+            return Err(DbMindError::new(
+                ErrorCode::QueryInvalid,
+                "本地快速装载只接受单条 LOAD DATA 语句",
+            ));
+        }
+        if data.is_empty() {
+            return Ok(QueryResult {
+                execution_id: request
+                    .execution_id
+                    .clone()
+                    .unwrap_or_else(crate::new_execution_id),
+                connection_id: request.connection.clone(),
+                connection_name: request.connection.clone(),
+                statement_kind: crate::StatementKind::Write,
+                columns: Vec::new(),
+                rows: Vec::new(),
+                row_count: 0,
+                affected_rows: Some(0),
+                truncated: false,
+                duration_ms: 0,
+                notices: Vec::new(),
+                session_id: request.session.clone(),
+                source_object: None,
+                row_identity: None,
+            });
+        }
+
+        let started = Instant::now();
+        let connection = self.store.require_connection(&request.connection)?;
+        let policy = self.policy();
+        policy.check(&connection, &request.sql, ctx, true)?;
+        let read_only = policy.is_read_only(&connection);
+        if read_only {
+            return Err(DbMindError::new(
+                ErrorCode::SafetyReadOnly,
+                "这条连接是只读的，不能执行本地快速装载",
+            ));
+        }
+
+        let session = request
+            .session
+            .as_deref()
+            .map(str::trim)
+            .filter(|key| !key.is_empty());
+        let options = request.options.clone().clamp();
+        let execution_id = request
+            .execution_id
+            .clone()
+            .unwrap_or_else(crate::new_execution_id);
+        let driver = self.drivers.resolve(connection.kind())?;
+        let outcome = driver.load_data_local(LoadDataCall {
+            config: &connection.config,
+            sql: &request.sql,
+            data: &data,
+            options: &options,
+            execution_id: &execution_id,
+            read_only,
+            session,
+        });
+
+        let affected_rows = outcome?;
+        Ok(QueryResult {
+            execution_id,
+            connection_id: connection.id.clone(),
+            connection_name: connection.name().to_string(),
+            statement_kind: crate::StatementKind::Write,
+            columns: Vec::new(),
+            rows: Vec::new(),
+            row_count: 0,
+            affected_rows: Some(affected_rows as usize),
             truncated: false,
             duration_ms: started.elapsed().as_millis() as u64,
             notices: Vec::new(),

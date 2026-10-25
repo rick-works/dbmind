@@ -4089,6 +4089,8 @@ export default {
   'sync.modeKeepStructure': '保留已有对象',
   'sync.smStructOnly': '已关闭「同步表数据」：这里只决定目标已有对象怎么处理，不涉及数据',
   'sync.stopOnError': '遇错停止（后续对象不再执行）',
+  'sync.skipBinlog': '跳过目标端 binlog',
+  'sync.skipBinlogHint': '仅 MySQL / MariaDB 目标：写入前执行 SET sql_log_bin = 0，目标端不再为每行写一份 binlog，写放大减半、同步更快。代价是这批写入不会进目标库 binlog —— 目标库若有从库、或依赖 binlog 做同步/审计，请勿勾选。失败（权限不足等）不影响同步，只是不会变快',
   'sync.includeIndexes': '建表时一并创建索引',
   'sync.autoCreateDb': '自动建库（目标库不存在时）',
   // 并发表数已从界面移除（后端固定最多 2 张表），相关文案一并删掉

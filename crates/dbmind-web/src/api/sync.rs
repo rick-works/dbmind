@@ -137,6 +137,10 @@ pub struct SyncRequest {
     /// 每表**写**并发（路数）：缺省 / 0 = 自动（按目标库类型与并发表数切预算）。
     #[serde(default)]
     tgt_workers: Option<usize>,
+    /// 跳过目标端 binlog（`SET sql_log_bin = 0`）：写放大减半，但目标库若参与
+    /// 主从复制，从库会缺这批数据 —— 界面默认不勾。
+    #[serde(default)]
+    skip_binlog: Option<bool>,
     /// 单条 INSERT 的**行数**上限；0 / 缺省 = 按目标方言默认（见 `insert_rows_default`）。
     ///
     /// 界面上会按目标库把默认值填出来、允许用户改（每种库的甜点值差一个数量级：
@@ -268,6 +272,8 @@ struct Opts {
     insert_rows: usize,
     /// 单次数据库操作超时（秒）：0 = 继承连接，<0 = 不限制，>0 = 该秒数
     op_timeout_secs: i64,
+    /// 跳过目标端 binlog（界面勾选 / 环境变量 `DBMIND_SYNC_SKIP_BINLOG`）
+    skip_binlog: bool,
 }
 
 /// 操作超时（秒）换算成毫秒 —— 界面上只有一个「超时时间」旋钮（对齐 DBX），
@@ -482,6 +488,9 @@ impl SyncRequest {
                 .timeout_seconds
                 .unwrap_or(0)
                 .clamp(-1, 86_400),
+            // 界面勾选优先；环境变量是排查/批处理用的逃生阀（两者任一为真即开）
+            skip_binlog: self.skip_binlog.unwrap_or(false)
+                || std::env::var_os("DBMIND_SYNC_SKIP_BINLOG").is_some(),
             // 两条限速曲线（0 = 该曲线不限），全任务共用一份时间表
             pacer: crate::api::transfer::pacer::Pacer::new(
                 self.rate_limit_rows.unwrap_or(0),
@@ -5250,6 +5259,8 @@ async fn sync_table_inner(
         progress: progress.clone(),
         elapsed_base_ms: elapsed_base_ms.clone(),
         wait_ms: wait_ms.clone(),
+        // 界面「跳过目标端 binlog」+ 环境变量逃生阀，两者在 `opts()` 里已合并
+        skip_binlog: opts.skip_binlog,
     };
     // 重跑前要用的快照/判据：行数快照用于回退进度（上一次的行随事务回滚，不能计两遍）
     let counters_before = task.map(|t| (t.rows_read(), t.rows_written(), t.rows_failed()));

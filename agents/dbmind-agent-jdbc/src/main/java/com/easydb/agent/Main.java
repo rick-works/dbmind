@@ -10,6 +10,9 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.sql.Connection;
 import java.sql.DatabaseMetaData;
 import java.sql.PreparedStatement;
@@ -140,8 +143,8 @@ public final class Main {
      */
     private static boolean needsSessionLock(String method) {
         return switch (method) {
-            case "query", "preparedBatch", "tables", "columns", "setautocommit", "commit",
-                    "rollback", "disconnect" -> true;
+            case "query", "preparedBatch", "loadDataLocal", "tables", "columns", "setautocommit",
+                    "commit", "rollback", "disconnect" -> true;
             default -> false;
         };
     }
@@ -175,6 +178,7 @@ public final class Main {
                 case "connect" -> connect(request);
                 case "query" -> query(id, request);
                 case "preparedBatch" -> preparedBatch(id, request);
+                case "loadDataLocal" -> loadDataLocal(id, request);
                 case "tables" -> tables(request);
                 case "columns" -> columns(request);
                 case "cancel" -> cancel(request);
@@ -300,6 +304,24 @@ public final class Main {
                         value.isJsonPrimitive() ? value.getAsString() : value.toString());
             }
         }
+        // ---- 目标端 LOAD DATA LOCAL INFILE（数据同步的快通道）----
+        // 「客户端允许本地文件」这件事必须在**握手时**声明：驱动据此在 capability flags 里
+        // 带 CLIENT_LOCAL_FILES。运行时再改属性已经来不及（实测报 3948「必须客户端和
+        // 服务端都开启」，改完 RuntimeProperty 也没用），所以只能在建连时备好。
+        //
+        // 安全边界：MySQL 用 allowLoadLocalInfileInPath 把可读文件**限定在 DBMind 自己的
+        // 临时目录**（驱动会隐式打开 allowLoadLocalInfile，见官方文档）；恶意服务端即便
+        // 反过来要别的文件，也只能读到这个目录里的东西 —— 那里只有同步刚落盘的 TSV。
+        // 用户自己在「附加参数」里显式设过就不覆盖（显式优先）。
+        if (!properties.containsKey("allowLoadLocalInfile")
+                && !properties.containsKey("allowLoadLocalInfileInPath")
+                && url.startsWith("jdbc:mysql:")) {
+            properties.setProperty("allowLoadLocalInfileInPath", loadDataDirText());
+        } else if (!properties.containsKey("allowLocalInfile") && url.startsWith("jdbc:mariadb:")) {
+            // MariaDB 驱动只有这一个布尔开关（没有目录白名单）
+            properties.setProperty("allowLocalInfile", "true");
+        }
+
         // 刻意不把 readOnly 放进连接属性：它不是标准的 JDBC 连接属性，
         // H2 之类驱动会在 connect 阶段执行 SET READONLY 并直接抛错（实测）。
         // 只读由内核的安全闸门强制，驱动侧只做「尽力而为」的提示（见下方 setReadOnly）。
@@ -749,6 +771,152 @@ public final class Main {
                 }
             }
         }
+    }
+
+    /**
+     * 同步任务用到的本地临时目录（LOAD DATA LOCAL INFILE 的可读白名单）。
+     *
+     * <p>为什么放在用户目录而不是系统临时目录：系统临时目录可能被清理，而且
+     * `allowLoadLocalInfileInPath` 要求**目录必须存在**（驱动启动时 toRealPath 校验），
+     * 自己建一个固定的目录最省心。目录里只会出现同步刚落盘的 TSV，用完即删。
+     */
+    private static Path loadDataDir() {
+        Path dir = Paths.get(System.getProperty("user.home", "."), ".dbmind", "loaddata");
+        try {
+            Files.createDirectories(dir);
+        } catch (Exception e) {
+            throw new IllegalStateException("无法创建本地装载临时目录：" + dir + "：" + e.getMessage(), e);
+        }
+        return dir;
+    }
+
+    private static String loadDataDirText() {
+        return loadDataDir().toAbsolutePath().toString().replace('\\', '/');
+    }
+
+    /**
+     * **LOAD DATA LOCAL INFILE 快通道**（数据同步的 MySQL / MariaDB 目标用）。
+     *
+     * <p>为什么是「落到临时文件再让驱动回读」：驱动只提供「按文件名读本地文件」这一条路
+     * （`setLocalInfileInputStream` 在 9.x 已经从 Connection 上移除，只剩 NativeProtocol
+     * 的内部方法；而带 `allowLoadLocalInfileInPath` 时驱动根本不看注入的流）。所以内核把
+     * 一批行编码成 TSV → 传过来 → 这里写进白名单目录 → 语句里带上真实路径。
+     *
+     * <p>语义：单条语句、语句级原子（失败整批不生效）。调用方拿不到事务保证时（
+     * `inTransaction`）本方法**不接管事务**，只在当前会话上执行一条语句。
+     */
+    private static JsonElement loadDataLocal(String requestId, JsonObject request) {
+        Session session = session(request);
+        String sql = required(request, "sql").trim();
+        String lowered = sql.toLowerCase();
+        if (!lowered.startsWith("load data") || hasTopLevelSemicolon(sql)) {
+            throw new Protocol.AgentException(
+                    "DBMIND-QUERY-0001", "本地快速装载只接受单条 LOAD DATA 语句");
+        }
+        if (!sql.contains("{file}")) {
+            throw new Protocol.AgentException(
+                    "DBMIND-QUERY-0001", "本地快速装载语句缺少 {file} 占位符");
+        }
+        // 数据是**纯文本 TSV**（二进制列在内核侧已经转成十六进制），按 UTF-8 落文件即可：
+        // 不做 base64，省掉 33% 的体积与一次编解码。
+        byte[] bytes = required(request, "data").getBytes(StandardCharsets.UTF_8);
+
+        // 有的组合驱动做不了本地装载：这里提前判掉，别让服务端干等（实测会挂 30 秒才断）
+        String unsupported = loadDataUnsupported(session.connection());
+        if (unsupported != null) {
+            throw new Protocol.AgentException(
+                    "DBMIND-QUERY-0002", "LOAD_DATA_ROLLED_BACK：" + unsupported, null);
+        }
+
+        session.touch();
+        Path file = null;
+        Running running = null;
+        try {
+            file = Files.createTempFile(loadDataDir(), "load-", ".tsv");
+            Files.write(file, bytes);
+            // 驱动按「本地文件」读，Windows 上用正斜杠最稳（反斜杠在 SQL 里还是转义符）
+            String path = file.toAbsolutePath().toString().replace('\\', '/').replace("'", "''");
+            try (Statement statement = session.connection().createStatement()) {
+                int timeoutMs = request.has("timeoutMs") ? request.get("timeoutMs").getAsInt() : 120_000;
+                if (timeoutMs > 0) {
+                    statement.setQueryTimeout(Math.max(1, timeoutMs / 1000));
+                }
+                running = new Running(statement);
+                RUNNING.put(requestId, running);
+                int affected = statement.executeUpdate(sql.replace("{file}", path));
+                JsonObject result = new JsonObject();
+                result.addProperty("supported", true);
+                result.addProperty("affectedRows", affected);
+                return result;
+            }
+        } catch (SQLException e) {
+            trace("loaddata 失败 code=" + e.getErrorCode() + " " + e.getMessage());
+            Protocol.AgentException failure = queryFailure(running, e);
+            if (isConnectionLost(e)) {
+                // 连接断了：这批行到底进没进去只有服务端知道，调用方**不得**重试
+                dropSession(session, e.getMessage());
+                throw failure;
+            }
+            if ("DBMIND-QUERY-0003".equals(failure.code())
+                    || "DBMIND-QUERY-0004".equals(failure.code())) {
+                // 超时 / 取消：同样属于「结果未知」
+                throw failure;
+            }
+            // 服务端拒绝（`local_infile=OFF`、语法不认、数据不合法…）：单条语句原子失败，
+            // 整批没进去。打上标记，内核看到它才会安全地改用 INSERT 管道。
+            throw new Protocol.AgentException(
+                    failure.code(),
+                    "LOAD_DATA_ROLLED_BACK：" + failure.getMessage(),
+                    failure.detail());
+        } catch (Protocol.AgentException e) {
+            throw e;
+        } catch (Exception e) {
+            // 落盘失败之类：还没发给服务端，同样可以安全回退
+            throw new Protocol.AgentException(
+                    "DBMIND-QUERY-0002",
+                    "LOAD_DATA_ROLLED_BACK：本地快速装载失败：" + e.getMessage(),
+                    e.toString());
+        } finally {
+            if (running != null) {
+                RUNNING.remove(requestId);
+            }
+            if (file != null) {
+                try {
+                    Files.deleteIfExists(file);
+                } catch (Exception ignored) {
+                    // 临时文件删不掉不影响结果（下次启动前目录里最多留几个 TSV）
+                }
+            }
+        }
+    }
+
+    /**
+     * 当前连接**做不了**本地装载时返回原因，能做则返回 `null`。
+     *
+     * <p>目前只有一条：MariaDB 驱动开着协议压缩（`useCompression=true`）。实测
+     * `LOAD DATA LOCAL INFILE` 在压缩协议下客户端根本不发文件，服务端一直
+     * 「Reading from net」，直到 `net_read_timeout`（30 秒）把连接踢掉 ——
+     * 用户看到的就是同步莫名其妙失败。这种情况直接判掉，让内核走 INSERT。
+     *
+     * <p>MySQL 驱动（`mysql-connector-j`）压缩协议下正常，不在拦截范围内。
+     */
+    private static String loadDataUnsupported(Connection connection) {
+        try {
+            String driver = connection.getMetaData().getDriverName();
+            if (driver == null || !driver.contains("MariaDB")) {
+                return null;
+            }
+            Object context = connection.getClass().getMethod("getContext").invoke(connection);
+            Object conf = context.getClass().getMethod("getConf").invoke(context);
+            Object compression = conf.getClass().getMethod("useCompression").invoke(conf);
+            if (Boolean.TRUE.equals(compression)) {
+                return "MariaDB 驱动在协议压缩（useCompression=true）下不支持 LOAD DATA LOCAL INFILE；"
+                        + "这条连接继续用 INSERT，去掉压缩参数可提速";
+            }
+        } catch (Exception ignored) {
+            // 拿不到驱动内部配置就当作支持：真不支持会走「语句失败 → 回退 INSERT」那条路
+        }
+        return null;
     }
 
     /**

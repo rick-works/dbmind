@@ -26,7 +26,11 @@ pub(crate) static SPEC: Spec = Spec::new("mysql")
         "set session foreign_key_checks = 0",
     ])
     // 断开目标端 binlog（省一半写放大），但会影响主从复制 ⇒ 只在用户显式开启时才做。
-    .with_binlog_off("set session sql_log_bin = 0");
+    .with_binlog_off("set session sql_log_bin = 0")
+    // 纯插入时的 LOAD DATA LOCAL INFILE 快通道（见 transfer/loaddata.rs）：
+    // 服务端只要开着 local_infile，同机实测比多值 INSERT 快 3~8 倍。
+    // 连接侧开关由宿主建连时打开（MySQL 走 allowLoadLocalInfileInPath 白名单）。
+    .with_load_data();
 
 /// `KILL <id>`：终止该连接上正在跑的语句并断开，服务端随之回滚未提交事务、释放行锁。
 fn kill_session(id: u64) -> String {
