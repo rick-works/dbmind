@@ -1,5 +1,11 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.5.0": [
+    "Faster writes: sync into MySQL / MariaDB targets uses the LOAD DATA LOCAL INFILE fast path (auto for pure inserts), so the server no longer parses a SQL statement per row — 50~80k rows/s measured on the same host versus 20~30k for multi-row INSERT; if the server has local_infile off, that table falls back to INSERT with one log line and no rows written twice",
+    "Skip target binlog: with it on, each row no longer costs an extra binlog entry on the target, halving write amplification and speeding the sync up (MySQL / MariaDB targets only); leave it off when the target has replicas or relies on binlog for sync and auditing",
+    "Precision kept: structure sync no longer drops the fractional seconds of datetime(6) / time(3) or the scale of decimal (microseconds used to vanish after a sync), and values above 9223372036854775807 such as bigint unsigned are no longer clamped to the maximum",
+    "Clearer progress: the sync progress card gains \"Objects transferred\" next to \"Total objects\", so you can tell at a glance which of several hundred tables is running"
+  ],
   "v1.4.0": [
     "Transfer options gain three adjustable concurrency knobs: concurrent tables, read lanes per table and write lanes per table — each can be \"Auto\" or 1~16, so a weak link or a loaded target can be dialed down to 1 while the defaults still size the budget from the database type and table count",
     "The completion line now shows where the time went: \"N batches, X s per batch on average\" reveals per-batch fixed cost, and \"of which Y waiting on timeouts/reconnects\" reveals a dragging link; elapsed time now includes every whole-table rerun",
