@@ -4158,6 +4158,7 @@ export default {
   'sync.statFailed': 'Failed',
   'sync.statFailCount': 'Failed',
   'sync.statTotal': 'Total objects',
+  'sync.statObjectsDone': 'Objects done',
   'sync.objName': 'Object',
   'sync.colInsertedUpdated': 'Inserted / updated',
   'sync.stop': 'Stop the sync',

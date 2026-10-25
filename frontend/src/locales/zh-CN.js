@@ -4179,6 +4179,7 @@ export default {
   'sync.statFailed': '失败',
   'sync.statFailCount': '失败数',
   'sync.statTotal': '对象总数',
+  'sync.statObjectsDone': '已传输对象',
   'sync.objName': '对象名',
   'sync.colInsertedUpdated': '新增/更新',
   'sync.stop': '停止同步',

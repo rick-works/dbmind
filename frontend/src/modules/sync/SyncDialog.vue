@@ -438,6 +438,9 @@
              读取/传输运行中就有（后端按行累加、轮询带回），不等终态 summary ——
              终态后用 summary 的最终值兜底（含 upsert 的 updated 行）。 -->
         <div class="stat"><span class="num">{{ fmtNum(totalShown) }}</span><span class="label">{{ $t('sync.statTotal') }}</span></div>
+        <!-- 已完成的对象数：与左边的「对象总数」并排对照，一眼看出 400 张表搬到第几张。
+             后端 `done` 是对象级计数（不是行数），终态后即 summary 的对象数。 -->
+        <div class="stat"><span class="num">{{ fmtNum(objectsDoneShown) }}</span><span class="label">{{ $t('sync.statObjectsDone') }}</span></div>
         <div class="stat"><span class="num">{{ fmtNum(readShown) }}</span><span class="label">{{ $t('sync.statRead') }}</span></div>
         <div class="stat ok"><span class="num">{{ fmtNum(writtenShown) }}</span><span class="label">{{ $t('sync.statTransferred') }}</span></div>
         <div class="stat danger"><span class="num">{{ fmtNum(failedShown) }}</span><span class="label">{{ $t('sync.statFailCount') }}</span></div>
@@ -1074,6 +1077,9 @@ const taskTotal = ref(0)
 // 后端在「对象还没数完」时把 total 置为 -1（约定：总量未知）。界面不能把 -1 直接显示成
 // 「对象总数 -1」（真机截图反馈），负数一律按 0 显示 —— 数完后自然跳到真实值。
 const totalShown = computed(() => Math.max(0, Number(taskTotal.value) || 0))
+// 已完成对象数（表/视图/… 的个数，不是行数）：与「对象总数」并排显示。
+// 同样不允许出现负数（老内核在「还没数完」时会给 -1）。
+const objectsDoneShown = computed(() => Math.max(0, Number(taskDone.value) || 0))
 // 行级实时计数（Navicat 式三行数）：后端按行累加、0.8 秒轮询一次 ——
 // 界面上数字是平滑跳动递增的，不再「一万一的跳」
 const rowsRead = ref(0)
@@ -2080,11 +2086,13 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 
 .run-stats {
   display: flex; gap: 10px; margin: 12px 0;
-  /* 拖窄以后 5 张卡会挤成一条缝，允许换行 */
+  /* 拖窄以后这几张卡会挤成一条缝，允许换行 */
   flex-wrap: wrap;
 }
 .run-stats .stat {
-  flex: 1 1 108px; min-width: 96px; text-align: center;
+  /* 不写死 basis：8 张卡（对象总数/已传输对象/读取/传输/失败/耗时/速度/剩余）
+     按剩余宽度均分，宽屏一行放得下，窄屏才换行 */
+  flex: 1 1 0; min-width: 100px; text-align: center;
   background: linear-gradient(180deg, var(--dc-bg-card), var(--dc-bg-soft));
   border: 1px solid var(--dc-border); border-radius: 10px;
   padding: 10px 8px;
@@ -2096,6 +2104,8 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   /* 等宽数字：计数每 2 秒跳一次，比例数字宽窄不一会让整排左右抖 */
   font-variant-numeric: tabular-nums;
   letter-spacing: .2px;
+  /* 「04:23:09」「60,761,205」在窄卡里不许折成两行（高度一变整排就参差） */
+  white-space: nowrap;
 }
 .run-stats .label { display: block; margin-top: 2px; font-size: 12px; color: var(--dc-text-dim); }
 .run-stats .stat.ok { background: linear-gradient(180deg, var(--dc-success-wash), var(--dc-bg-soft)); }
