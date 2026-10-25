@@ -746,6 +746,28 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.5.1（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.5.1</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-26</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步后自检</b>：跑完逐对象核对「有没有建出来、行数对不对」，日志直接写清哪张表、差多少行（源 917,354 / 目标 917,300，少 54），不一致的自动清空重传一次，再复检给结论</li>
+            <li><b>不再误判</b>：带行过滤的同步以前每次收尾都拿整表行数去比，判成不一致又白清空重传一遍；现在按同一份过滤条件核对</li>
+            <li><b>进度不再骗人</b>：对象数跑完但还在校验 / 重传时最多显示 99%，任务中心同样；进度卡「传输数比读取数多」也修了</li>
+            <li><b>重传失败有原因</b>：重传本身报错时日志会写「表 X：重传失败：…」，不再只报一个差额</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.5.1" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.5.1" target="_blank" rel="noopener">下载 v1.5.1</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.5.0（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +775,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.5.0</span>
             <span class="rel-tag tag-minor">小版本</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-26</span>
           </div>
           <ul class="rel-notes">
