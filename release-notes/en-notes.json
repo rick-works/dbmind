@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.5.4": [
+    "No more \"session does not exist\": the idle-session probe test was inverted — when the probe said the connection was gone the dead session id was kept, so a sync reusing an idle connection late in the run failed on its first table; a failed probe now drops the cached session and the next call reconnects",
+    "If it still happens, the host answering \"session does not exist\" now triggers an automatic reconnect and one retry (such an error means the statement was never sent, so it is safe even for writes); a real link failure is still never retried",
+    "Clicking re-sync on failed objects resets rows read / transferred / failed instead of carrying the previous run's 86 million"
+  ],
   "v1.5.3": [
     "Easier to spot problems in the result table: failed rows are listed first (failed, then skipped, then succeeded), and the type / name / status headers can be clicked to re-sort",
     "The reason column now widens with its content (200 default, up to 560): it used to be squeezed into ~90px so \"session does not exist\" and \"Duplicate entry …\" were cut off",

@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.5.4（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.5.4</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-26</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>不再出现「会话不存在」</b>：根因是空闲会话探活的判断写反了 —— 探活说连接已断时反而留着死会话的 id，整库同步跑到后半程复用空闲连接时第一张表必失败；现在探不通就丢缓存、下一次直接重连</li>
+            <li><b>万一还是撞上</b>：宿主回「会话不存在」时自动重连并重试一次（这类错误说明语句一定没发出去，写语句也安全）；链路真正中断（Communications link failure）仍然不重试</li>
+            <li><b>点「重新同步失败对象」时读取数 / 传输数 / 失败数归零，不再挂着上一趟的 8637 万</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.5.4" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.5.4" target="_blank" rel="noopener">下载 v1.5.4</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.5.3（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.5.3</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-26</span>
           </div>
           <ul class="rel-notes">
