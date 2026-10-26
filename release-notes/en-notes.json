@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.5.3": [
+    "Easier to spot problems in the result table: failed rows are listed first (failed, then skipped, then succeeded), and the type / name / status headers can be clicked to re-sort",
+    "The reason column now widens with its content (200 default, up to 560): it used to be squeezed into ~90px so \"session does not exist\" and \"Duplicate entry …\" were cut off",
+    "A failed row with no reason shows \"No reason returned (see the sync log)\" instead of an empty cell"
+  ],
   "v1.5.2": [
     "Rows transferred no longer sit at 0: the counter was only filled in at the end of the run, so a sync looked like it was reading without writing; every batch that really lands now adds to it, including the updated rows of a two-phase upsert"
   ],
