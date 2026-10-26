@@ -136,6 +136,23 @@ impl Drop for BatchRegistration {
     }
 }
 
+/// 会话亲和键：编辑器**每个标签页**给一个（`ui:tab-xxxx`）⇒ 一个页面一条数据库会话。
+///
+/// 全部页面共用一把钥匙的后果（真机）：一条会话上同时只跑一条语句，于是任何一个页面上
+/// 的慢语句（加索引的 ALTER、大表 count）都会把**其它所有页面**的查询堵在后面 ——
+/// 表现为「前一分钟还很快，突然一直转圈」，而且换标签页也没用（实测 `select sleep(6)`
+/// 在跑时另一页的 `select 1` 等了 5.8 秒）。
+///
+/// 前端没传（老版本 / 非编辑器调用）时退回原来的共享键，行为不变。
+fn ui_session_key(body: &Value) -> String {
+    body.get("session")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty() && key.chars().count() <= 64)
+        .map(str::to_string)
+        .unwrap_or_else(|| "ui:上游".to_string())
+}
+
 fn task_snapshot(task_id: &str) -> XResult<Value> {
     let guard = tasks().lock().unwrap_or_else(|e| e.into_inner());
     let task = guard
@@ -234,7 +251,9 @@ pub async fn execute(
             timeout_ms,
         },
         execution_id,
-        session: Some("ui:上游".to_string()),
+        // 每个编辑器标签页一条会话（见 `ui_session_key`）：共用一条会话会让一个页面的
+        // 慢语句把别的页面全堵住
+        session: Some(ui_session_key(&body)),
         // **来源决定进不进历史**：SQL 编辑器（默认）进历史 —— 首页「最近查询」就是给它的；
         // 界面功能驱动的执行（建库/删目录/表属性探测等）带 internal=true，不混进用户的账本
         internal: body.get("internal").and_then(Value::as_bool).unwrap_or(false),
@@ -293,9 +312,10 @@ pub async fn tx(
     if let Err(err) = crate::api::driver::ensure_for_connection(&state, &target).await {
         return Ok(Json(json!({ "success": false, "message": err.message })));
     }
-    // 与 execute 的 `session: Some("ui:上游")` 保持同一把钥匙：事务绑定编辑器会话
+    // 必须与 execute 用**同一把钥匙**：事务绑定发起它的那个编辑器标签页的会话
+    //（否则 begin 落在 A 会话、后续语句落在 B 会话，autocommit 白设）
     let engine = state.engine();
-    let outcome = engine.tx_control(&target, "ui:上游", action);
+    let outcome = engine.tx_control(&target, &ui_session_key(&body), action);
     Ok(Json(match outcome {
         Ok(mut value) => {
             if let Some(object) = value.as_object_mut() {
@@ -439,6 +459,8 @@ pub async fn execute_batch(
     // 上限 = min(每段页大小, 设置里的「最多返回行数」)：设置只是天花板，不是每段的取数量
     let max_rows = size.min(max_rows_cap(&state).await);
 
+    // 整批落在同一个编辑器标签页的会话上（段与段之间要按顺序，不能各开一条会话）
+    let session_key = ui_session_key(&body);
     let _batch = BatchRegistration::new(execution_id.clone());
     for (index, statement) in statements.iter().enumerate() {
         let engine = state.engine();
@@ -457,6 +479,8 @@ pub async fn execute_batch(
         let exec = execution_id.clone();
         let statement = statement.clone();
         let schema = schema.clone();
+        // 每段都要一把钥匙（闭包 move 走，循环下一轮还得用）
+        let session = Some(session_key.clone());
         let bare = statement.trim().trim_end_matches(';').trim().to_string();
         let outcome = blocking(move || {
             engine.execute(
@@ -470,7 +494,7 @@ pub async fn execute_batch(
                         timeout_ms,
                     },
                     execution_id: exec,
-                    session: Some("ui:上游".to_string()),
+                    session,
                     // 编辑器里的多段执行：要进历史
                     internal: false,
                 },

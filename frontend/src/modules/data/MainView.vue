@@ -74,10 +74,12 @@
           <el-tooltip :content="langTip" placement="bottom"><span class="top-nav-item top-icon-btn top-lang-btn" @click="toggleLocale">{{ localeShort }}</span></el-tooltip>
 
           <!-- 检查更新：比对 GitHub 最新 Release，有新版可在线下载安装。
-               图标用 Upload（向上箭头 = 升级）——Refresh 让给左侧的「刷新」了 -->
+               图标用 Download（往下取新版）；Refresh 让给左侧的「刷新」了。
+               **不能用 Upload**（向上箭头）—— 用户会看成「上传文件」（真机反馈），
+               检查中 / 下载中换成 Loading 并转起来，点下去要有反应。 -->
           <el-tooltip :content="dlStatus === 'running' ? $t('update.dlShowProgress') : $t('nav.update')" placement="bottom"><span class="top-nav-item top-icon-btn"
                      data-act="check-update"
-                     :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon><Upload /></el-icon></span></el-tooltip>
+                     :class="{ 'top-updating': updateChecking || dlStatus === 'running' }" @click="checkUpdate"><el-icon :class="{ 'is-loading': updateChecking || dlStatus === 'running' }"><component :is="(updateChecking || dlStatus === 'running') ? Loading : Download" /></el-icon></span></el-tooltip>
 
           <el-tooltip :content="$t('nav.settings')" placement="bottom"><span class="top-nav-item top-icon-btn" @click="settingsOpen = true"><el-icon><Setting /></el-icon></span></el-tooltip>
         </span>

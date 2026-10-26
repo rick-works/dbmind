@@ -130,6 +130,35 @@ export function splitSqlStatementRanges(sql) {
     list.push({ start, end: start + text.length, text })
   }
 
+  /**
+   * 分号后面**同一行的注释**（`… LOCK=NONE;   -- 预估 +80MB`）是**上一条**的尾注，
+   * 不属于下一条语句。返回下一个「可能开始新语句」的位置。
+   *
+   * 不跳过它会怎样（真机截图）：下一段的 start 落在上一行（尾注那行），
+   * 于是编辑器里的语句虚线框把上一条的最后一行也圈进去（框跨两条语句）、
+   * 「语句 N」编号的首行显示成上一条的尾注；出错定位同样会偏到上面去。
+   *
+   * 只跳注释，不跳代码：`SELECT 1;SELECT 2` 里分号后面是真语句，保持原位不动。
+   */
+  const skipSameLineNote = (pos) => {
+    let j = pos
+    for (;;) {
+      while (j < n && (s[j] === ' ' || s[j] === '\t')) j++
+      if (j + 1 < n && s[j] === '-' && s[j + 1] === '-') {
+        while (j < n && s[j] !== '\n' && s[j] !== '\r') j++
+        return j
+      }
+      if (j + 1 < n && s[j] === '/' && s[j + 1] === '*') {
+        // 同行块注释：跳过后继续看（后面可能还有 -- 尾注，也可能就是下一条语句）
+        const close = s.indexOf('*/', j + 2)
+        if (close < 0) return j
+        j = close + 2
+        continue
+      }
+      return j
+    }
+  }
+
   while (i < n) {
     const ch = s[i]
     const next = i + 1 < n ? s[i + 1] : ''
@@ -262,7 +291,8 @@ export function splitSqlStatementRanges(sql) {
       const inDecl = routine && decl && !beginSeen && !dollarBody
       if (depth === 0 && !inDecl) {
         pushRange(stmtStart, i)
-        stmtStart = i + 1
+        // 跳过这一行剩下的尾注：下一段若从 `-- 预估 +80MB` 起算，框/编号就会多圈上一行
+        stmtStart = skipSameLineNote(i + 1)
         paren = 0
         depth = 0
         headWord = ''

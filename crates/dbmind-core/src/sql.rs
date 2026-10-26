@@ -1687,4 +1687,50 @@ mod tests {
             assert_eq!(split_statements(sql).len(), 3, "{sql:?}");
         }
     }
+
+    /// 真机：AI 生成的「建索引」脚本 —— 每条 `ALTER TABLE …` 后面跟
+    /// `ADD INDEX (…),` 换行 `ALGORITHM=INPLACE, LOCK=NONE;`，段间还有 `-- P0-x` 注释。
+    ///
+    /// 分号是唯一的分块点：`ADD INDEX` 那行**必须**留在同一条里
+    /// （断在那里等于把 `ALTER TABLE t` 半句单独发出去，后面那条 ALTER 也会被吞进同一条）。
+    #[test]
+    fn 多行_alter_加索引按分号切分() {
+        let sql = "-- P0-1 收小列表：把 DML 全表列改 ref 查找 + 覆盖索引聚合（当前 13.5s）
+ALTER TABLE wineryun_hubs.data_hour
+    ADD INDEX idx_site_time (SITE_SITE_ID, DATA_TIME, IN_NUM, OUT_NUM),
+    ALGORITHM=INPLACE, LOCK=NONE;
+-- P0-2 较小时列表：整条数据无索引，JOIN 键 mail_id 与聚合列一起做覆盖（当前 2.8s）
+ALTER TABLE sales.data_hour
+    ADD INDEX idx_join_mail_time (mail_id, data_time, in_num, out_num),
+    ALGORITHM=INPLACE, LOCK=NONE;
+-- P0-3 覆盖聚合索引
+ALTER TABLE sales.data_monthly_xf_surcharge
+    ADD INDEX idx_xf_surcharge (id, mail_id, contract_grp, xf_surcharge),
+    ALGORITHM=INPLACE, LOCK=NONE;
+-- P1 数据收录 月度汇总（当月/上月/去年同期），250ms×3
+ALTER TABLE etl_wide_income_exocbt
+    ADD INDEX idx_income_exocbt_month_type (XF_FINANCIALMONTH, XF_CURRENCY_TYPE, XF_MAILDID, XF_SETTLEAMT),
+    ALGORITHM=INPLACE, LOCK=NONE;
+";
+        let parts = split_statements(sql);
+        for (i, p) in parts.iter().enumerate() {
+            println!("--- [{i}] ---\n{p}");
+        }
+        assert_eq!(parts.len(), 4, "应按 4 个分号切成 4 条：{parts:#?}");
+        for p in &parts {
+            assert!(p.contains("ALTER TABLE"), "每段都得是完整 ALTER：{p:?}");
+        }
+
+        // 分号后面的**同行注释**（`… LOCK=NONE;   -- 预估 +80MB`）是上一条的尾注：
+        // 下一段不能把它顶到前面 —— 前端语句框就是因此多圈了上一行（真机截图）。
+        // 后端本来就把注释剥成空白，这里钉住这个事实，两端切出来的段落才一致。
+        let trail = "ALTER TABLE a.t1\n  ADD INDEX i1 (c1),\n  ALGORITHM=INPLACE, LOCK=NONE;   -- 预估 +80MB\n\n-- P1\nALTER TABLE a.t2\n  ADD INDEX i2 (c2),\n  ALGORITHM=INPLACE, LOCK=NONE;   -- 预估 +40MB\n";
+        let two = split_statements(trail);
+        assert_eq!(two.len(), 2);
+        assert!(
+            two[1].starts_with("ALTER TABLE a.t2"),
+            "第二段不能被上一条的尾注顶到前面：{:?}",
+            two[1]
+        );
+    }
 }

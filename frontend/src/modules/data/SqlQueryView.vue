@@ -656,6 +656,12 @@ const props = defineProps({ conn: Object, database: String, scriptName: String, 
 const emit = defineEmits(['save', 'dirty-change', 'conn-change', 'conn-rebind', 'db-change', 'sql-change'])
 
 const sqlLoading = computed(() => !!props.sqlLoading)
+// 本标签页的数据库会话键：同一条连接上「一个页面的慢语句把其它页面全堵住」的根源，
+// 是所有页面共用一把钥匙（后端默认 `ui:上游`）。这里给每个编辑器一个稳定键，
+// 事务（begin/commit）也用它 —— 事务必须落在发起它的那条会话上。
+// 异步补总数（count）单独一把钥匙：那是后台补数，不该占着编辑器的会话。
+const uiSession = `ui:tab-${Math.random().toString(36).slice(2, 10)}`
+const uiSessionCount = `${uiSession}:cnt`
 const sql = ref(props.initialSql || '')
 const lastSavedSql = ref(props.initialSql || '')
 const isDirty = ref(false)
@@ -980,7 +986,7 @@ const loadSegment = async (item, p, size) => {
     const db = selectedSchema.value
       ? `${selectedDatabase.value}.${selectedSchema.value}`
       : selectedDatabase.value || undefined
-    const res = await executeSql(connId, item.segmentSql, db, execId.value, cancelController.signal, p, size)
+    const res = await executeSql(connId, item.segmentSql, db, execId.value, cancelController.signal, p, size, false, uiSession)
     item.res = res
     item.page = p
     result.value = res
@@ -2206,7 +2212,7 @@ const commitEdits = async () => {
   editsBusy.value = true
   try {
     execId.value = 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
-    const b = await executeSqlBatch(connId, sqlText, db, execId.value, null)
+    const b = await executeSqlBatch(connId, sqlText, db, execId.value, null, undefined, uiSession)
     const results = (b && Array.isArray(b.results)) ? b.results : []
     const failed = results.find(r => !r.success)
     if (failed) { ElMessageBoxWithFix(failed.message || t('ai.runFailed')); return }
@@ -2242,7 +2248,7 @@ const txEnd = async (action) => {
   const connId = selectedConnId.value || props.conn.id
   txBusy.value = true
   try {
-    const r = await txControl(connId, action, txDatabaseOf())
+    const r = await txControl(connId, action, txDatabaseOf(), uiSession)
     if (r && r.success) {
       txMode.value = false
       txDirty.value = false
@@ -2266,13 +2272,13 @@ const toggleTxMode = async () => {
     if (txMode.value) {
       // 关闭事务模式：挂着未提交事务先回滚，不留一个悬着的事务占着连接
       if (txDirty.value) {
-        try { await txControl(connId, 'rollback', txDatabaseOf()) } catch { /* 连接可能已断 */ }
+        try { await txControl(connId, 'rollback', txDatabaseOf(), uiSession) } catch { /* 连接可能已断 */ }
       }
       txMode.value = false
       txDirty.value = false
       ElMessage.success(t('sqlq.txOff'))
     } else {
-      const r = await txControl(connId, 'begin', txDatabaseOf())
+      const r = await txControl(connId, 'begin', txDatabaseOf(), uiSession)
       if (r && r.success) {
         txMode.value = true
         ElMessage.success(t('sqlq.txOn'))
@@ -2883,7 +2889,7 @@ const selectedConnId = ref('')
 // 注意 watch 注册时立刻读 source 的 .value —— 必须放在声明之后，否则 setup 直接 TDZ 崩溃
 watch(selectedConnId, (nv, ov) => {
   if (txMode.value && ov) {
-    txControl(ov, 'rollback', txDatabaseOf()).catch(() => {})
+    txControl(ov, 'rollback', txDatabaseOf(), uiSession).catch(() => {})
     txMode.value = false
     txDirty.value = false
     ElMessage.info(t('sqlq.txReset'))
@@ -4466,7 +4472,7 @@ const confirmWriteBeforeRun = async (execSql, connId, db) => {
     if (bare) noWhere += 1
     let count = null
     try {
-      const r = await executeSql(connId, countSql, db, null, null, 1, 10, true)
+      const r = await executeSql(connId, countSql, db, null, null, 1, 10, true, uiSessionCount)
       const v = r && r.rows && r.rows[0] ? Object.values(r.rows[0])[0] : null
       if (typeof v === 'number') count = v
       else if (v != null && !isNaN(Number(v))) count = Number(v)
@@ -4649,7 +4655,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
       const statements = batchable ? splitSqlStatements(execSql) : []
       if (statements.length > 1) {
         // size 传分页大小：每段只取一页（见 executeSqlBatch 的注释），与单段执行同一口径
-        const b = await executeSqlBatch(connId, execSql, db, execId.value, cancelController.signal, size)
+        const b = await executeSqlBatch(connId, execSql, db, execId.value, cancelController.signal, size, uiSession)
         if (cancelRequested.value) { setResultCancelled(); return }
         showBatchResult(b)
         // 事务模式：批量里有写语句成功 ⇒ 有未提交变更
@@ -4660,7 +4666,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         const histCost = (b && Array.isArray(b.results)) ? b.results.reduce((m, r) => Math.max(m, (r.executeTime) || 0), 0) : 0
         recordHistory(execSql, db, histCost)
       } else {
-        const res = await executeSql(connId, execSql, db, execId.value, cancelController.signal, page, size)
+        const res = await executeSql(connId, execSql, db, execId.value, cancelController.signal, page, size, false, uiSession)
         if (cancelRequested.value) { setResultCancelled(); return }
         showSingleResult(res)
         // 事务模式：写语句成功 ⇒ 有未提交变更（提示条点亮，提醒 COMMIT/ROLLBACK）
@@ -5406,7 +5412,7 @@ onBeforeUnmount(() => {
   if (queryTimer) { clearInterval(queryTimer); queryTimer = null }
   if (running.value) stopSql() // 卸载时中止进行中的查询并清理计时器
   // 事务模式还开着：回滚收尾（fire-and-forget），别留一个悬着的事务占着会话
-  if (txMode.value) txControl(selectedConnId.value || props.conn.id, 'rollback', txDatabaseOf()).catch(() => {})
+  if (txMode.value) txControl(selectedConnId.value || props.conn.id, 'rollback', txDatabaseOf(), uiSession).catch(() => {})
   if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null }
   // sql-change 的防抖定时器也得摘：否则页签关掉后 600ms 内还会向父级 emit
   if (sqlChangeTimer) { clearTimeout(sqlChangeTimer); sqlChangeTimer = null }

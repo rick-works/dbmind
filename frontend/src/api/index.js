@@ -342,11 +342,13 @@ export const noSqlDeleteCollection = async (id, database, collection) => { const
 // SQL 执行（database 可选：目标库名，为空则不切库沿用连接默认库）
 // executionId 可选：本次执行的唯一标识，用于执行中取消；signal 为 AbortController 信号
 // page/size 可选：分页参数（从 1 开始），不传则保持原有截断行为
-export const executeSql = async (id, sql, database, executionId, signal, page, size, internal) => {
+// session 可选：会话亲和键（每个编辑器标签页一个）—— 同一条连接上不同页面的语句各走各的会话，
+// 否则一个页面的慢语句（加索引的 ALTER、大表 count）会把其它页面全堵在后面
+export const executeSql = async (id, sql, database, executionId, signal, page, size, internal, session) => {
   const b = await baseOf(id)
   const module = b.replace('/api/', '')
   rememberExecId(executionId, module)
-  return http.post(`${b}/query/${id}`, { sql, database, executionId, page, size, internal: !!internal }, { signal }).then(r => {
+  return http.post(`${b}/query/${id}`, { sql, database, executionId, page, size, internal: !!internal, session }, { signal }).then(r => {
     if (!r || !r.data) throw new Error(t('api.emptyResponse'))
     return r.data
   })
@@ -360,20 +362,20 @@ export const executeSqlCount = async (id, sql, database, ncols, signal) => {
 }
 // 会话级事务控制（事务模式）：begin 关掉编辑器会话的 autocommit，commit/rollback 收尾。
 // database 必须与执行查询时传的一致 —— 后端据此解析同一个目标（影子连接等），泳道才对得上。
-export const txControl = async (id, action, database = '') => {
+export const txControl = async (id, action, database = '', session) => {
   const b = await baseOf(id)
-  return http.post(`${b}/query/${id}/tx`, { action, database }, { timeout: 20000 }).then(r => r.data)
+  return http.post(`${b}/query/${id}/tx`, { action, database, session }, { timeout: 20000 }).then(r => r.data)
 }
 // 多段 SQL 批量执行：同一连接内按分号顺序执行每段，每段独立返回一个 QueryResult
 // （编辑器一次执行多条查询时，结果以「结果1/结果2…」tab 逐条展示）
 // size：**每段取多少行**（与分页大小同一个数）。必须传 —— 不传后端只能按设置里的
 // 「最多返回行数」算上限，而那个值的默认是 0（不限制）：于是每条语句都把整表拉回来
 // （实测 52 万行 × 2 段），前端实测十几秒。传了它就是「每段一页」，与单段执行等快。
-export const executeSqlBatch = async (id, sql, database, executionId, signal, size) => {
+export const executeSqlBatch = async (id, sql, database, executionId, signal, size, session) => {
   const b = await baseOf(id)
   const module = b.replace('/api/', '')
   rememberExecId(executionId, module)
-  return http.post(`${b}/query/${id}/batch`, { sql, database, executionId, size }, { signal }).then(r => {
+  return http.post(`${b}/query/${id}/batch`, { sql, database, executionId, size, session }, { signal }).then(r => {
     if (!r || !r.data) throw new Error(t('api.emptyResponse'))
     return r.data
   })
