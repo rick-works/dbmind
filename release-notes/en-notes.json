@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.5.5": [
+    "Sync verification for incremental / merge / row-limited runs no longer compares row counts and no longer truncates the target table — a mismatch verdict used to trigger a truncate-and-reload that wiped the target history",
+    "\"Transferred\" is now counted in exactly one place (insert / upsert / fast load each add once, the engine no longer adds again): it matches \"read\" instead of running high, and no longer reads 0 while the read counter climbs",
+    "Pages now advance by the rows actually returned (a short reply can no longer skip un-read rows), DBMIND_SYNC_PAGE_ROWS climbs back to its set value after a link-induced shrink, the run log states \"moving N tables at a time (auto / from settings)\", and the big numbers on the result cards no longer crowd each other"
+  ],
   "v1.5.4": [
     "No more \"session does not exist\": the idle-session probe test was inverted — when the probe said the connection was gone the dead session id was kept, so a sync reusing an idle connection late in the run failed on its first table; a failed probe now drops the cached session and the next call reconnects",
     "If it still happens, the host answering \"session does not exist\" now triggers an automatic reconnect and one retry (such an error means the statement was never sent, so it is safe even for writes); a real link failure is still never retried",
