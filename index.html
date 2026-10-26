@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.6.0（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.6.0</span>
+            <span class="rel-tag tag-minor">小版本</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-26</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>桌面版「选择文件」改用系统自带的文件管理器：还原数据库选备份文件、连接 SQLite / H2（文件）/ Derby（目录）都直接弹系统对话框，不必再在页面里的目录树里逐级点</b></li>
+            <li><b>系统对话框按类型过滤（.sql / .dump / .backup / .gz / .zip，.db / .sqlite / .mv.db 等）并记住上次打开的目录，选完立刻回填绝对路径</b></li>
+            <li><b>浏览器打开的 Web 版保持原来的「后端列目录」浏览方式（浏览器不提供本机绝对路径），桌面版不再需要它</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.0" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.0" target="_blank" rel="noopener">下载 v1.6.0</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.5.6（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.5.6</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-26</span>
           </div>
           <ul class="rel-notes">
