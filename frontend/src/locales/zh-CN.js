@@ -4187,6 +4187,7 @@ export default {
   'sync.sumSyncData': '同步数据',
   'sync.sumVerify': '同步后校验',
   'sync.verifyValue': '对象是否建出来 + 行数是否相等（不一致自动清空重传一次）',
+  'sync.msgNoDetail': '未返回原因（详见同步日志）',
   'sync.sumStopOnError': '遇错停止',
   'sync.rateLimit': '限速',
   'sync.unlimited': '不限',

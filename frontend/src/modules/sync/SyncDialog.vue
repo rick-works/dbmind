@@ -513,11 +513,11 @@
                撑满的实现见下方 .pg-result 那组 flex 规则。 -->
           <el-table :data="resultRows" size="small" border class="data-table">
             <el-table-column type="index" label="#" width="45" />
-            <el-table-column prop="type" :label="$t('udv.fType')" width="90">
+            <el-table-column prop="type" :label="$t('udv.fType')" width="90" sortable>
               <template #default="{ row }">{{ typeLabel(row.type) }}</template>
             </el-table-column>
-            <el-table-column prop="name" :label="$t('sync.objName')" min-width="150" show-overflow-tooltip />
-            <el-table-column prop="status" :label="$t('odv.fStatus')" width="80">
+            <el-table-column prop="name" :label="$t('sync.objName')" min-width="150" show-overflow-tooltip sortable />
+            <el-table-column prop="status" :label="$t('odv.fStatus')" width="80" sortable>
               <template #default="{ row }">
                 <el-tag :type="row.status === 'ok' ? 'success' : (row.status === 'skipped' ? 'info' : 'danger')" size="small" effect="dark">
                   {{ row.status === 'ok' ? $t('sync.statOk') : (row.status === 'skipped' ? $t('sync.statSkipped') : $t('sync.statFailed')) }}
@@ -530,7 +530,15 @@
                 <span v-if="row.updated" style="color: var(--dc-warning); margin-left: 4px;">~{{ row.updated }}</span>
               </template>
             </el-table-column>
-            <el-table-column prop="message" :label="$t('udv.fComment')" min-width="220" show-overflow-tooltip />
+            <!-- 说明列：默认 200，按当前行里最长的说明自适应加宽（上限 560）。
+                 以前固定 min-width=220 交给 el-table 自动分配，实际被压在 90px 左右，
+                 「会话不存在」「Duplicate entry …」这种关键信息全被省略号吃掉。 -->
+            <el-table-column prop="message" :label="$t('udv.fComment')" :width="messageWidth" show-overflow-tooltip>
+              <template #default="{ row }">
+                <span v-if="row.message">{{ row.message }}</span>
+                <span v-else-if="row.status === 'error'" class="msg-empty">{{ $t('sync.msgNoDetail') }}</span>
+              </template>
+            </el-table-column>
           </el-table>
       </div>
     </div>
@@ -903,9 +911,22 @@ const resultTypes = computed(() => {
   return [...map.values()].sort((a, b) =>
     a.type === 'table' ? -1 : (b.type === 'table' ? 1 : a.type.localeCompare(b.type)))
 })
+/** 结果排序权重：失败 → 跳过 → 成功。整库同步几百行，失败那几张散落在中间根本翻不到 */
+const STATUS_ORDER = { error: 0, skipped: 1, ok: 2 }
 const resultRows = computed(() => {
-  const rows = taskResult.value?.results || []
-  return resFilter.value ? rows.filter(r => (r.type || 'table') === resFilter.value) : rows
+  const all = taskResult.value?.results || []
+  const rows = resFilter.value ? all.filter(r => (r.type || 'table') === resFilter.value) : all
+  // 稳定排序：同状态保持后端返回顺序，表内对象次序不变
+  return [...rows].sort((a, b) => (STATUS_ORDER[a.status] ?? 9) - (STATUS_ORDER[b.status] ?? 9))
+})
+/**
+ * 说明列宽度：默认 200，按当前结果里最长的一条说明自适应加宽（上限 560）。
+ * 固定交给 el-table 的 min-width 分配时它只拿到 90px 左右，「会话不存在」
+ * 「Duplicate entry …」全被省略号吃掉，得挨个 hover 才看得到。
+ */
+const messageWidth = computed(() => {
+  const longest = resultRows.value.reduce((n, r) => Math.max(n, (r.message || '').length), 0)
+  return Math.min(560, Math.max(200, Math.round(longest * 7) + 36))
 })
 /** 失败的对象（「重跑失败对象」用）：只认 `error` —— `skipped` 多半是「本来就不该搬」 */
 const failedObjects = computed(() => (taskResult.value?.results || []).filter(r => r.status === 'error'))
@@ -2661,6 +2682,8 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .sql-grid.grow :deep(.el-textarea__inner) { flex: 1 1 auto; height: auto; }
 /* 结果区右上角「重跑失败对象」：靠右停靠，不挤占类型徽标 */
 .res-rerun { margin-left: auto; }
+/* 失败但后端没给原因时的占位，颜色弱化，避免看着像「这一格没渲染」 */
+.msg-empty { color: var(--dc-text-3); font-style: italic; }
 
 /* ==================== 实时日志 ==================== */
 .log-card {
