@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.6.2（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.6.2</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-26</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>每个 SQL 编辑器标签页各用一条数据库会话：一个页面上的慢语句（加索引的 ALTER、大表 count）不再把其它页面的查询堵住 —— 原来所有页面共用一条会话，实测一条 sleep(6) 在跑时另一页的 select 1 要排队 5.8 秒</b></li>
+            <li><b>语句分割修正</b>：分号后面同一行的注释（LOCK=NONE;  -- 预估 +80MB 这种尾注）算回上一条，编辑器里的语句框、语句编号和出错定位不再跨到上一行</li>
+            <li><b>右上角「检查更新」的图标从向上箭头（看着像上传文件）换成向下取新版，检查中 / 下载中会转圈提示</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.2" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.2" target="_blank" rel="noopener">下载 v1.6.2</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.6.1（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.6.1</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-26</span>
           </div>
           <ul class="rel-notes">
