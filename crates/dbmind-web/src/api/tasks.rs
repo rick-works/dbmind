@@ -557,7 +557,30 @@ impl Task {
     }
 
     pub fn expired(&self) -> bool {
-        self.created.elapsed() > TASK_TTL
+        // **运行中的任务永不过期**：TTL 只该回收「已经没人看的历史记录」。
+        //
+        // 原先只看 `created`，于是跑超 30 分钟的同步（常态：真机 1h37m）下一次
+        // 新建任意任务时（`create()` 里的 `gc()`）就被从注册表抹掉 —— 内存没了，
+        // 而 running 从不落盘，`/task/{id}` 从此恒返回 notfound：前端显示「已中断」、
+        // 停止按钮消失，可工作协程还持有 Arc 在往目标库写（孤儿任务），
+        // 用户会以为它断了，再开一个任务去写同一张表。
+        if matches!(self.status(), TaskStatus::Running) {
+            return false;
+        }
+        // 终态任务：**从结束时刻**起算，而不是创建时刻。
+        // 跑一小时的任务若按创建时刻算，收尾那一刻就已经"过期"，下次 gc 直接消失
+        //（真机：23:00 开、00:38 结束的同步，02:38 新开任务时记录就没了）。
+        let now = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        match *lock(&self.finished_wall) {
+            Some(finished) if finished > 0 => {
+                now.saturating_sub(finished) > TASK_TTL.as_millis() as u64
+            }
+            // 没记下结束时刻（极少数崩溃路径）：退回创建时刻，别让它永久驻留内存
+            _ => self.created.elapsed() > TASK_TTL,
+        }
     }
 
     /// 状态快照（上游的 `task.view()` 形状）。
@@ -877,4 +900,78 @@ fn ascii_fallback(filename: &str) -> String {
 /// 时间戳后缀（产物文件名用）。
 pub fn stamp() -> String {
     chrono::Local::now().format("%Y%m%d_%H%M%S").to_string()
+}
+
+#[cfg(test)]
+mod ttl_tests {
+    use super::*;
+    use std::time::{Duration, Instant, SystemTime};
+
+    /// 把创建时刻拨回到 `ago` 之前（同模块内可改私有字段）。
+    fn aged(task: &mut Task, ago: Duration) {
+        task.created = Instant::now().checked_sub(ago).expect("Instant 能往回拨");
+    }
+
+    fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+
+    /// 回归（真机 2026-10-27）：跑超 30 分钟的同步，在下一次新建任务（`create()` 里
+    /// 的 `gc()`）时被从注册表抹掉 —— 前端显示「已中断」、停止按钮消失，
+    /// 而工作协程还持有 Arc 在往目标库写（孤儿任务）。
+    #[test]
+    fn 运行中的任务不能被ttl回收() {
+        let mut task = Task::new("sync_running".into(), "sync".into());
+        aged(&mut task, Duration::from_secs(31 * 60));
+        assert!(
+            !task.expired(),
+            "running 的任务不该被 TTL 回收（否则前端 notfound、停不掉，任务还在写库）"
+        );
+    }
+
+    /// 终态按**结束时刻**起算 30 分钟：创建于两小时前、刚刚结束的任务不该立刻过期
+    /// （原实现按创建时刻算，跑一小时的任务一收尾就已经"过期"）。
+    #[test]
+    fn 刚结束的任务不该立刻过期() {
+        let mut task = Task::new("sync_just_done".into(), "sync".into());
+        aged(&mut task, Duration::from_secs(2 * 3600));
+        task.set_status(TaskStatus::Success);
+        assert!(!task.expired(), "创建于两小时前、刚结束的任务不该过期");
+    }
+
+    /// 终态确实结束超过 TTL 了才回收。
+    #[test]
+    fn 结束超时的任务要回收() {
+        let task = Task::new("sync_old".into(), "sync".into());
+        let now = now_ms();
+        task.set_status(TaskStatus::Error);
+        *lock(&task.finished_wall) = Some(now - 31 * 60 * 1000);
+        assert!(task.expired(), "结束已超 30 分钟，应当回收");
+    }
+
+    /// 端到端：新建任务触发 `gc()` 时，跑着的旧任务必须还在注册表里（前端还能查到）。
+    #[test]
+    fn 新建任务触发gc不吞掉在跑的任务() {
+        let registry = TaskRegistry::new();
+        let old = registry.create("sync", "sync_");
+        let id = old.id.clone();
+        // 先把条目摘出来，让 Arc 唯一，才能改 created，再放回去
+        lock(&registry.tasks).remove(&id);
+        let mut old = old;
+        let entry = Arc::get_mut(&mut old).expect("摘出注册表后 Arc 唯一");
+        entry.created = Instant::now()
+            .checked_sub(Duration::from_secs(31 * 60))
+            .expect("Instant 能往回拨");
+        lock(&registry.tasks).insert(id.clone(), old);
+
+        // 再建一个任务：`create()` 里会 `gc()`
+        let _new = registry.create("sync", "sync_");
+        assert!(
+            lock(&registry.tasks).contains_key(&id),
+            "跑着的旧任务被 gc 吞了：前端会显示「已中断」，且点不到停止"
+        );
+    }
 }
