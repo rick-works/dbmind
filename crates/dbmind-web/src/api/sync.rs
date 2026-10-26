@@ -1085,24 +1085,36 @@ fn page_sql(
                 .map(|key| dialect.quote(key))
                 .collect::<Vec<_>>()
                 .join(", ");
-            // 行值构造符 `(a,b) > (x,y)` 只有 MySQL/PG 认，SQL Server/Doris 不支持
-            // ⇒ 展开成等价的逐列 or 链：(a > x) or (a = x and b > y)
-            let mut conditions: Vec<String> = Vec::new();
-            for depth in 0..keys.len() {
-                let mut parts: Vec<String> = Vec::new();
-                for (position, key) in keys.iter().enumerate() {
-                    let quoted = dialect.quote(key);
-                    let value = &last[position];
-                    if position < depth {
-                        parts.push(format!("{quoted} = {value}"));
-                    } else {
-                        parts.push(format!("{quoted} > {value}"));
-                        break;
+            // 多列键优先用行值比较 `(a,b,c) > (x,y,z)`：语义与逐列 or 链相同，但优化器
+            // 只扫「本页那一段」。真机 EXPLAIN（6 列主键、81 万行、一页 652 行）：
+            // or 链 range 预估扫 **457,379** 行，行值比较 index 只扫 **652** 行 ——
+            // 那张表因此从「每页扫几十万行、68 分钟」变成每页只碰本页。
+            // 不认这个语法的方言（SQL Server / Oracle / Doris / Derby）仍展开成 or 链。
+            let keyset = if keys.len() > 1 && dialect.supports_row_value_compare() {
+                let left = keys
+                    .iter()
+                    .map(|key| dialect.quote(key))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({left}) > ({})", last.join(", "))
+            } else {
+                let mut conditions: Vec<String> = Vec::new();
+                for depth in 0..keys.len() {
+                    let mut parts: Vec<String> = Vec::new();
+                    for (position, key) in keys.iter().enumerate() {
+                        let quoted = dialect.quote(key);
+                        let value = &last[position];
+                        if position < depth {
+                            parts.push(format!("{quoted} = {value}"));
+                        } else {
+                            parts.push(format!("{quoted} > {value}"));
+                            break;
+                        }
                     }
+                    conditions.push(format!("({})", parts.join(" and ")));
                 }
-                conditions.push(format!("({})", parts.join(" and ")));
-            }
-            let keyset = conditions.join(" or ");
+                conditions.join(" or ")
+            };
             format!(
                 "{} order by {order} {}",
                 filtered(select_base, &keyset),
@@ -2319,6 +2331,34 @@ mod paging_tests {
             PAGE,
         );
         assert!(sql.contains("`id` < 10"), "无键分页丢了用户条件：{sql}");
+    }
+
+    /// 无键 + SQL Server：它写 offset/fetch **必须**带 order by，走占位排序而不是包派生表。
+    #[test]
+    fn 无键分页在sqlserver走占位排序() {
+        let sql = page_sql(
+            "select [id] from [t]",
+            Dialect::new(ConnectionKind::Sqlserver),
+            200,
+            None,
+            &[],
+            "",
+            PAGE,
+        );
+        assert!(sql.contains("order by (select null)"), "SQL Server 缺占位 order by：{sql}");
+        assert!(!sql.contains("dbmind_page"), "SQL Server 不该包派生表：{sql}");
+    }
+
+    /// 认行值比较的方言（MySQL/MariaDB/PG）必须用它 —— 优化器扫描范围差三个数量级。
+    /// 一旦有人把这里改回 or 链，性能会从「每页只碰本页」退化成「每页扫几十万行」。
+    #[test]
+    fn 多列键在支持的方言用行值比较() {
+        let sql = cursor_page(ConnectionKind::Mysql, &["a", "b"], &["1", "2"], "");
+        assert!(sql.contains("(a, b) > (1, 2)"), "MySQL 该用行值比较：{sql}");
+        assert!(!sql.contains(" or "), "行值比较不该再展开 or 链：{sql}");
+        // 方言不认时（SQL Server）同一条游标必须退回 or 链，见 `多列键展开成or链`。
+        let sql = cursor_page(ConnectionKind::Postgresql, &["a", "b"], &["1", "2"], "");
+        assert!(sql.contains("(a, b) > (1, 2)"), "PG 该用行值比较：{sql}");
     }
 }
 

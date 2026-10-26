@@ -3593,6 +3593,26 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         self.key() == "sqlserver"
     }
 
+    /// 是否支持**行值比较** `(a, b, c) > (x, y, z)`（keyset 分页靠它才能走索引 range）。
+    ///
+    /// 为什么必须用它而不是展开成 `(a > x) or (a = x and b > y) or …`：
+    /// 语义一样，但优化器能算出的扫描范围差**三个数量级**。真机 EXPLAIN（6 列主键、
+    /// 81 万行的 `xingwei_kechuan_mdadvancesettlememo_m`，取 652 行一页）：
+    ///
+    /// | 写法 | type | 预估扫描行数 |
+    /// |---|---|---|
+    /// | 逐列 or 链 | range | **457,379** |
+    /// | 行值比较 | index | **652** |
+    ///
+    /// or 链每页都要扫几十万行，那张 58 万行的表因此跑了 **68 分钟（896 批）**，
+    /// 而且读得慢还会触发缩页（1/4），批次越翻越多 —— 用户感觉就是「越到后面越慢」。
+    ///
+    /// 只对确定支持且能走索引的方言开启：SQL Server / Oracle / Doris / Derby 不认这个
+    /// 语法，ClickHouse 的 tuple 比较语义与 keyset 不是一回事，都继续用 or 链。
+    pub fn supports_row_value_compare(&self) -> bool {
+        matches!(self.key(), "mysql" | "mariadb" | "postgresql")
+    }
+
     /// 清空一张表的语句（"清空后导入"模式用）。
     ///
     /// 为什么不能统一写 `delete from`：**ClickHouse 不吃裸 DELETE** ——
