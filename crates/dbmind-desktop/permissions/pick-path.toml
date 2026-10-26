@@ -1,0 +1,10 @@
+# 桌面壳自己的命令 `pick_path` 的权限声明 —— 没有它，页面就调不动这条命令。
+#
+# 与 close-action.toml 同一套原因：前端是从 http://127.0.0.1:<port> 加载的（内核在本地起着
+# 一个 HTTP 服务），在 Tauri 眼里属于**远程来源**，于是每一条 app 命令都要有一条权限，
+# 再在 capabilities/default.json 里引用。漏了的表现同样是"点了没反应"：控制台里是
+# `Command pick_path not allowed by ACL`。
+[[permission]]
+identifier = "allow-pick-path"
+description = "允许页面弹出系统原生的「打开文件 / 选择目录」对话框（备份文件、SQLite/H2/Derby 数据库文件）"
+commands.allow = ["pick_path"]

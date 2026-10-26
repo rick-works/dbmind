@@ -261,7 +261,8 @@
       <el-button v-else size="small" type="primary" @click="visible = false">{{ $t('common.close') }}</el-button>
     </template>
 
-    <!-- 目录选择弹窗（点「浏览」打开） -->
+    <!-- 目录选择弹窗（**浏览器版的退路**）：桌面版点「浏览」直接弹系统自带的文件管理器
+         （desktopShell.pickPath），只有拿不到原生对话框时才用这棵后端列出来的目录树 -->
     <el-dialog v-model="dirBrowser.visible" :title="$t('bkp.chooseBackupFile')" width="520px" append-to-body>
       <div class="dir-browser">
         <div class="dir-current">
@@ -344,6 +345,7 @@ import {
 } from '../../api'
 // 提交即登记任务中心/右上角时钟（与数据传输同一套登记表，见 backgroundTasks.js）
 import { addBgTask } from '../sync/backgroundTasks'
+import { desktopShell } from '../../utils/desktopShell'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -406,6 +408,21 @@ const parentDirOf = (fill) => {
 }
 
 const openDirBrowser = async () => {
+  // 桌面版：直接弹**系统自带**的「打开文件」对话框 —— 与其它桌面软件一致，
+  // 不必先看着页面里那棵树逐级点进去（用户明确要求换成系统文件管理器）。
+  // 起始位置：输入框里已有的路径 → 上次浏览过的目录（系统对话框自己会记住上次位置）。
+  const picked = await desktopShell.pickPath({
+    title: t('bkp.chooseBackupFile'),
+    defaultPath: file.value || dirBrowser.value.path || '',
+    // 备份产物常见形态：纯 .sql、pg_dump 的 .dump/.backup、mysqldump 的 .sql.gz / .tar / .zip
+    filters: ['备份文件|sql,dump,backup,bak,gz,zip,tar,tgz', '所有文件|*']
+  })
+  // null = 这个环境没有原生对话框（浏览器版，或壳命令被拒）→ 退回下面「后端列目录 + 自绘浏览」
+  if (picked) {
+    // canceled 时什么都不改：不要顺手弹出那棵树，用户刚才是"算了"
+    if (picked.path) file.value = picked.path
+    return
+  }
   dirBrowser.value.fileMode = true
   dirBrowser.value.visible = true
   // 默认定位：上次浏览过的目录 → 当前备份文件所在目录 → 后端给的用户主目录。

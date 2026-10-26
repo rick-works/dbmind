@@ -32,6 +32,7 @@ use std::path::Path;
 
 use sysinfo::System;
 use tauri::{Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_dialog::DialogExt;
 
 /// 读 `java -version` 的主版本号（`17.0.20` → 17；`1.8.0_401` → 8）。
 fn java_major(exe: &Path) -> Option<u32> {
@@ -241,6 +242,19 @@ const DEFAULT_PORT: u16 = 20361;
 /// 默认端口被占用时，往后尝试的端口个数
 const PORT_SCAN: u16 = 20;
 
+/// 这次要用的「默认端口」：正常就是 20361，允许用 `DBMIND_SHELL_PORT` 覆盖。
+///
+/// 为什么要这个开关：正式实例常年占着 20361，而 20361 上的内核与本次构建**同版本**时
+/// 会被复用（见 resolve_port）—— 于是拿新构建的壳去验证新前端，窗口却挂在旧实例的
+/// 前端产物上，看到的一直是旧界面（实测踩过）。联调时换个端口起一套，互不打扰。
+fn base_port() -> u16 {
+    std::env::var("DBMIND_SHELL_PORT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u16>().ok())
+        .filter(|p| *p >= 1024)
+        .unwrap_or(DEFAULT_PORT)
+}
+
 /// 独立内核进程的文件名（退出清场按它匹配）。
 ///
 /// 原先这里写死 `dbmind-web.exe` —— 在 mac / Linux 上**永远匹配不到**（那边的可执行文件
@@ -314,28 +328,29 @@ fn port_free(port: u16) -> bool {
 /// **macOS 的 WKWebView 加载失败时什么都不画（纯白）**，而 Windows 的 WebView2 会画一张错误页。
 /// 这就是"同样更新，只有 mac 白屏"的来源。
 fn resolve_port(allow_reuse: bool) -> (u16, bool) {
+    let base = base_port();
     if allow_reuse {
-        if let Some(body) = dbmind_health(DEFAULT_PORT) {
+        if let Some(body) = dbmind_health(base) {
             let found = health_version(&body);
             // 没有 version 字段（很旧的内核）也**不复用**：宁可贵一点自己起一个，
             // 也不要把窗口挂在一个来路不明的内核上。
             if found.as_deref() == Some(env!("CARGO_PKG_VERSION")) {
-                return (DEFAULT_PORT, false);
+                return (base, false);
             }
             eprintln!(
-                "端口 {DEFAULT_PORT} 上的内核版本是 {}（本机 {}）→ 不复用，另起一个",
+                "端口 {base} 上的内核版本是 {}（本机 {}）→ 不复用，另起一个",
                 found.as_deref().unwrap_or("未知"),
                 env!("CARGO_PKG_VERSION")
             );
         }
     }
-    for port in DEFAULT_PORT..DEFAULT_PORT.saturating_add(PORT_SCAN) {
+    for port in base..base.saturating_add(PORT_SCAN) {
         if port_free(port) {
             return (port, true);
         }
     }
     // 全占满：仍把默认端口交给调用方，让 `spawn_embedded` 报出真实错误
-    (DEFAULT_PORT, true)
+    (base, true)
 }
 
 /// 等内嵌内核就绪。
@@ -437,6 +452,75 @@ fn close_action(window: tauri::WebviewWindow, action: String) {
     }
 }
 
+/// 系统原生的「打开文件 / 选择目录」对话框（桌面壳专用）。
+///
+/// 为什么要有这条命令：页面里那套自绘的目录浏览器**只是为了浏览器版** —— 浏览器不给本机
+/// 绝对路径（`<input type=file>` 只有文件名），而连库、还原都需要后端能直接打开的路径，
+/// 所以浏览器版只能让后端列目录、由页面画一棵树。桌面版与后端同机，弹系统文件管理器才是
+/// 用户的习惯（也有人明确要求"用系统自带的文件管理器去选"）。
+///
+/// 参数：
+///   kind         "file"（默认）/ "directory"
+///   title        对话框标题（可空）
+///   defaultPath  起始路径：文件 → 取其所在目录；目录 → 直接用（都要求真实存在）
+///   filters      `名称|ext1,ext2` 的紧凑写法（前端不必为此定义结构体）；`*` 表示所有文件
+///
+/// 返回：`Some(绝对路径)` = 选中；`None` = 用户取消或对话框打不开（调用方按取消处理）。
+#[tauri::command]
+async fn pick_path(
+    app: tauri::AppHandle,
+    kind: Option<String>,
+    title: Option<String>,
+    default_path: Option<String>,
+    filters: Option<Vec<String>>,
+) -> Option<String> {
+    let mut dlg = app.dialog().file();
+    if let Some(t) = title.as_deref().filter(|s| !s.is_empty()) {
+        dlg = dlg.set_title(t);
+    }
+    // 起始位置：传进来的可能是文件路径（还原时输入框里就是备份文件全路径），退到它的父目录。
+    // 只接受真实存在的目录 —— 不存在的路径在部分平台上会让对话框悄悄落到"文档"目录。
+    if let Some(p) = default_path.as_deref().filter(|s| !s.is_empty()) {
+        let path = Path::new(p);
+        let dir = if path.is_dir() {
+            path
+        } else {
+            path.parent().unwrap_or(path)
+        };
+        if dir.is_dir() {
+            dlg = dlg.set_directory(dir);
+        }
+    }
+    if let Some(list) = filters {
+        for f in list {
+            let (name, exts) = match f.split_once('|') {
+                Some(v) => v,
+                None => ("文件", f.as_str()),
+            };
+            let exts: Vec<&str> = exts
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect();
+            if exts.is_empty() {
+                continue;
+            }
+            // `*` = 所有文件：不加过滤器反而最贴近"所有文件"（各平台对 *.* 的处理不一致）
+            if exts.len() == 1 && exts[0] == "*" {
+                continue;
+            }
+            dlg = dlg.add_filter(name, &exts);
+        }
+    }
+    // blocking_pick_* 不能在主线程调用：async 命令跑在 tokio 线程池里，正好可用
+    let picked = if kind.as_deref() == Some("directory") {
+        dlg.blocking_pick_folder()
+    } else {
+        dlg.blocking_pick_file()
+    };
+    picked.map(|p| p.to_string())
+}
+
 fn main() {
     // 必须在起内核**之前**：这个选择是通过进程环境变量传给内核的
     ensure_java();
@@ -471,6 +555,8 @@ fn main() {
 
     let origin = format!("http://127.0.0.1:{port}");
     tauri::Builder::default()
+        // 系统原生文件/目录对话框（见 pick_path 的注释）
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
             // 在线更新要装新版时，安装器会覆盖正在运行的 exe —— 它会**强杀**本进程来腾出文件锁。
             // 强杀不走 RunEvent::Exit，退出清场（结束 java 宿主）就不会执行，那些 java 会变成孤儿
@@ -596,7 +682,7 @@ fn main() {
         // 用 build + run(回调) 而不是 run(context)：要在应用真正退出时清场。
         // 右上角 ×、Alt+F4、任务栏右键关闭……最终都会走到这里 —— 一处兜住全部关闭途径。
         // 页面回应「关闭窗口」的选择（关闭 / 最小化到托盘）走这个命令
-        .invoke_handler(tauri::generate_handler![close_action])
+        .invoke_handler(tauri::generate_handler![close_action, pick_path])
         .build(tauri::generate_context!())
         .expect("Tauri 初始化失败")
         .run(|_app, event| {

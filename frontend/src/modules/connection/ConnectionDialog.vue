@@ -312,9 +312,10 @@
     <!-- 数据源选择器（更换类型时使用） -->
     <DataSourcePicker v-model="pickerVisible" @selected="onTypePicked" />
 
-    <!-- 数据库文件选择：点「浏览」打开。由后端列目录（与「备份还原」用的是同一个接口），
-         逐级进入、点文件即选中 —— Web 壳拿不到系统文件对话框，这是唯一能拿到
-         **真实绝对路径**（也就能直接给 JDBC 用）的办法。 -->
+    <!-- 数据库文件选择（**浏览器版的退路**）：桌面版点「浏览」直接弹系统自带的文件管理器
+         （desktopShell.pickPath），这里是浏览器版用的 —— 浏览器不给本机绝对路径，
+         只能让后端列目录（与「备份还原」同一个接口），逐级进入、点文件即选中。 -->
+
     <el-dialog v-model="pickerOpen" :title="$t('cd.pickTitle')" width="540px" append-to-body>
       <div class="path-picker">
         <div class="pp-head">
@@ -346,6 +347,7 @@ import { FolderOpened, DocumentAdd, Connection, WarningFilled, CircleCheckFilled
 import { saveConnection, testConnection, getConnectionById, getDriverTypes, getDriverStatus, getDriverProgress, browseBackupDirs } from '../../api'
 import { connErrorRaw } from '../../utils/connErrors'
 import { addPureFolder } from '../../utils/folders'
+import { desktopShell } from '../../utils/desktopShell'
 import { t, locale } from '../../utils/i18n'
 import { byType, labelOf } from '../../types'
 import { urlSuffixOf, paramValueOf, optionValueFromParam } from '../../types/jdbc'
@@ -886,6 +888,20 @@ const browseInto = async (path) => {
 }
 
 const pickFile = async () => {
+  // 桌面版：直接弹**系统自带**的文件管理器（用户明确要求）。
+  // Derby 的 filePath 是「数据库目录」，其余（SQLite / H2）是单个数据库文件 —— 对话框模式不同。
+  const isDir = String(typeDef.value?.code || '').toUpperCase() === 'DERBY'
+  const picked = await desktopShell.pickPath({
+    title: t('cd.pickTitle'),
+    defaultPath: String(form.value.filePath || ''),
+    directory: isDir,
+    filters: isDir ? [] : ['数据库文件|db,sqlite,sqlite3,db3,mv,h2,script', '所有文件|*']
+  })
+  // null = 没有原生对话框（浏览器版，或壳命令被拒）→ 退回下面「后端列目录 + 自绘浏览」
+  if (picked) {
+    if (picked.path) form.value.filePath = picked.path
+    return
+  }
   pickerOpen.value = true
   // 起点：输入框里已经写着的目录 → 用户主目录 → 磁盘/根列表
   const current = String(form.value.filePath || '').trim()

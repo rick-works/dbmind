@@ -18,6 +18,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-set-title",
     "core:window:allow-is-fullscreen",
-    "allow-close-action"
+    "allow-close-action",
+    "allow-pick-path"
   ]
 }

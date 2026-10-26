@@ -22,6 +22,9 @@ dbmind-web = { path = "../dbmind-web" }
 dbmind-core = { path = "../dbmind-core" }
 # tray-icon：关闭窗口时给"最小化到托盘"用（没有托盘就没法把那扇窗叫回来）
 tauri = { version = "2", features = ["tray-icon"] }
+# 系统原生「打开文件 / 选择目录」对话框：桌面版选备份文件、SQLite/H2/Derby 数据库文件时弹系统文件管理器。
+# 页面里那套自绘目录浏览器只为**浏览器版**保留（浏览器拿不到本机绝对路径，只能让后端列目录）。
+tauri-plugin-dialog = "2"
 # 退出清场时枚举进程（拿可执行文件路径与命令行做严格匹配）。
 # 刻意不用 tasklist / wmic / PowerShell：打包后的便携版里没有脚本，
 # 而这些外部工具在新系统上有的已弃用、有的行为不一致。

@@ -215,5 +215,38 @@ export const desktopShell = {
     } catch (e) {
       reportFailure('回应关闭', e)
     }
+  },
+
+  /**
+   * 系统原生的「打开文件 / 选择目录」对话框（只有桌面壳有；壳命令见
+   * crates/dbmind-desktop/src/main.rs 的 pick_path）。
+   *
+   * 返回值刻意做成「三态」，因为调用方要区分两件完全不同的事：
+   *   { path: 'C:\\a\\b.sql' }  选中了（绝对路径，可直接给后端用）
+   *   { canceled: true }        用户点了取消 —— **不要**再弹自绘的目录浏览
+   *   null                      这个环境没有原生对话框（浏览器版 / 壳被 ACL 拒）——
+   *                             调用方回退到「后端列目录 + 自绘浏览」那条老路
+   *
+   * 浏览器版为什么必须留着老路：`<input type=file>` 只给文件名（还带 fake path），
+   * 而连库 / 还原要的是后端能直接打开的**绝对路径**，只有让后端列目录才拿得到。
+   */
+  async pickPath({ title = '', filters = [], defaultPath = '', directory = false } = {}) {
+    if (!hasTauri) return null
+    try {
+      const { invoke } = await import('@tauri-apps/api/core')
+      const picked = await invoke('pick_path', {
+        kind: directory ? 'directory' : 'file',
+        title: String(title || ''),
+        defaultPath: String(defaultPath || ''),
+        filters: Array.isArray(filters) ? filters.map(String) : []
+      })
+      if (!picked) return { canceled: true }
+      return { path: String(picked) }
+    } catch (e) {
+      // 失败就退回自绘浏览（至少还能用）。这里**不**走 reportFailure：它会把错误写进窗口
+      // 标题，而这条链路失败后仍有可用的退路，不该拿标题去打扰用户。
+      console.error('[desktopShell] 打开系统文件对话框失败：', e)
+      return null
+    }
   }
 }
