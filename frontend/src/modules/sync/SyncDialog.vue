@@ -1669,6 +1669,12 @@ const run = async (rawOverride = null) => {
     rowsRead.value = 0
     rowsWritten.value = 0
     rowsFailed.value = 0
+    // 展示用的平滑计数同样要归零：`readShown / writtenShown` 是**单调取大**的，
+    // 不清就会带着上一趟的数字继续跑 —— 真机现象：点「重新同步失败对象」，
+    // 对象总数变成 18 了，读取数/传输数还挂着上一趟的 8637 万。
+    readShown.value = 0
+    writtenShown.value = 0
+    failedShown.value = 0
     bytesRead.value = 0
     bytesRate.value = 0
     prevBytes.value = 0

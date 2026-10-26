@@ -87,6 +87,16 @@ fn link_probe_disabled() -> bool {
     *OFF.get_or_init(|| std::env::var("DBMIND_NO_LINK_PROBE").is_ok_and(|v| v.trim() == "1"))
 }
 
+/// 错误是不是「宿主那边没有这条会话」（宿主文案：`会话不存在` / `会话不存在：<id>`，
+/// 有时带后缀`（该会话上次失败：…）`）。
+///
+/// 语义上它比 `Communications link failure` **更干净**：会话都不在了 ⇒ 语句一定没发出去，
+/// 所以写语句也能安全重试（见 `with_lane` 里那条 arm）。两个错误码都是
+/// `DBMIND-CONN-0003`，只能靠文案区分。
+fn is_session_gone(message: &str) -> bool {
+    message.contains("会话不存在")
+}
+
 /// 一次调用的泳道参数。
 ///
 /// 收成一个结构是为了**别让参数一路加到签名读不懂**（也过不了 clippy 的 7 参数线）：
@@ -588,8 +598,18 @@ impl AgentDriver {
         if !tx_open
             && !link_probe_disabled()
             && slot.idle_for() >= STALE_PROBE_AFTER
-            && !self.probe_idle_session(&session_id)
+            && self.idle_session_is_dead(&session_id)
         {
+            // 探不通**才**丢缓存（下次 `ensure_session` 会真重连）。
+            //
+            // 这里以前写反了（`!probe_idle_session`）：探活说「连接已断」时反而**保留**死会话的
+            // id，探活通过时倒把好会话丢掉。后果就是整库同步跑到后半程、长时间没用的表被复用
+            // 时，第一条语句必撞「会话不存在（该会话上次失败：Communications link failure）」。
+            tracing::debug!(
+                target: "dbmind::agent",
+                session = %session_id,
+                "空闲会话本已断开，丢掉缓存（下次用到时重连）"
+            );
             self.host.forget_session(&session_id);
         }
         self.ensure_session(config, call.read_only, &session_id, false)?;
@@ -605,6 +625,25 @@ impl AgentDriver {
             }
         }
         match op(&session_id) {
+            // 「会话不存在」= 宿主那边连这条会话都没有 ⇒ 语句**压根没发出去**。
+            // 这与「连接中途断了」有本质区别（后者可能已经在库里执行过，写语句不能重试），
+            // 所以这一类**写语句也可以安全重试**，而且必须重试：内核这边还缓存着那条死会话的
+            // id，不重试同一个泳道会一直撞这句话。
+            //
+            // 真机现象（用户截图）：点「重新同步失败对象」，第一张表秒报
+            // 「会话不存在（该会话上次失败：Communications link failure）」，
+            // 而同一连接上后面几张表跑得好好的 —— 死的只是这一条泳道的会话。
+            Err(err) if !tx_open && is_session_gone(&err.message) => {
+                tracing::warn!(
+                    target: "dbmind::agent",
+                    session = %session_id,
+                    error = %err.message,
+                    "会话在宿主侧已不存在（语句没发出去），重连后重试一次"
+                );
+                self.host.forget_session(&session_id);
+                self.ensure_session(config, call.read_only, &session_id, true)?;
+                op(&session_id)
+            }
             Err(err) if call.retry_on_stale && err.code == ErrorCode::ConnConnectFailed => {
                 tracing::warn!(target: "dbmind::agent", "会话已失效，重连后重试一次幂等调用");
                 self.host.forget_session(&session_id);
@@ -662,10 +701,15 @@ impl AgentDriver {
         }
     }
 
-    /// 用一句最轻的 SQL 验证「这条空闲会话还能不能用」（见 `probe_session`）。
-    fn probe_idle_session(&self, session_id: &str) -> bool {
+    /// 这条空闲会话是不是**已经确定断了**（见 `probe_session`）。
+    ///
+    /// 只有 `Dead` 才算：`Unknown`（语句级报错，例如 PG 事务 aborted）说明连接本身没问题，
+    /// 丢掉缓存等于把用户还在用的连接悄悄换掉。
+    fn idle_session_is_dead(&self, session_id: &str) -> bool {
         probe_session(self.kind, &self.host, session_id) == ProbeOutcome::Dead
     }
+
+
 
     /// 幂等调用（结构浏览等）：会话失效时重建并重试一次。
     ///
@@ -1349,6 +1393,22 @@ pub(crate) fn ensure_file_parent(config: &ConnectionConfig) -> Result<()> {
 #[cfg(test)]
 mod lane_tests {
     use super::is_interactive_lane;
+
+    /// 「会话不存在」要能认出来（含宿主带后缀的写法），别的连接错误不能误判。
+    ///
+    /// 判错的后果不对称：把 `Communications link failure` 误判成「会话不存在」会给写语句
+    /// 重试一次（可能写两遍）；反过来漏判则这条泳道永久坏掉（真机：重传第一张表秒失败）。
+    #[test]
+    fn 会话不存在只认宿主原话() {
+        use super::is_session_gone;
+        assert!(is_session_gone("会话不存在"));
+        assert!(is_session_gone("会话不存在：sess-abc"));
+        assert!(is_session_gone(
+            "会话不存在（该会话上次失败：Communications link failure）"
+        ));
+        assert!(!is_session_gone("Communications link failure"));
+        assert!(!is_session_gone("写入连接已断：连接失败：Communications link failure"));
+    }
 
     /// 交互泳道只认「有亲和键且不是 internal」—— 判错会把批量会话也 pin 死，
     /// 配额再也回收不出来（正是「会话不存在」那类故障的翻版）。
