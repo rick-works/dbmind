@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.5.5（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.5.5</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-26</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>「增量 / 合并 / 设了每表行数上限」的同步收尾不再比较行数、也不再清空重传目标表 —— 过去一判「不一致」就先 truncate 再灌，等于替用户删掉目标端已有的历史数据</b></li>
+            <li><b>「传输数」改成只在一个地方记账（INSERT / upsert / 快速装载各记一次，引擎层不再重复累加）：与「读取数」同口径，不再偏高，也不再出现读取一路涨、传输恒为 0</b></li>
+            <li><b>同步读页按「实际拿回的行数」推进（读侧少给几行也不会跳过没读到的数据），DBMIND_SYNC_PAGE_ROWS 在链路抖动缩页后能自己爬回设定值；日志里写明「同时搬 N 张表（自动 / 界面设置）」，结果卡上的大数字也不再挤在一起</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.5.5" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.5.5" target="_blank" rel="noopener">下载 v1.5.5</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.5.4（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.5.4</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-26</span>
           </div>
           <ul class="rel-notes">
