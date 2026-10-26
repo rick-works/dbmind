@@ -6088,7 +6088,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
     let concurrency_source = if explicit_objects.is_some() {
         "（界面设置）"
     } else {
-        "（缺省 2 张）"
+        "（自动）"
     };
     // 每表读片：显式值原样当份额；缺省按「读预算 / 并发表数」切，且不低于 2 片
     let src_slices = if explicit_src.is_some() {
@@ -6159,6 +6159,10 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 s => format!("{s} 秒"),
             };
             task.log(format!("开始同步：{total} 个对象{detail}"));
+            // 生效的并发表数也写一行（只一行）：用户问过「默认不是 2 张吗，怎么这么多一起开工」，
+            // 而实际值可能来自界面的「并发表数」，也可能是重跑时沿用了旧任务的设置 ——
+            // 不写出来就只能靠猜（默认 2 张，显式设置以用户为准）。
+            task.log(format!("同时搬 {sync_concurrency} 张表{concurrency_source}"));
             // 调度细节只进 tracing（debug）：它们是「内部怎么排兵布阵」，用户看不懂也不需要看
             tracing::debug!(
                 target: "dbmind::sync",
@@ -6573,6 +6577,18 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             let mut verify_report = Value::Null;
             if !task.is_canceled() && opts.sync_data {
                 task.set_phase("校验".to_string());
+                // 只有「目标被整体重建」时两边行数才可比：
+                //   · 「删除后重建」「清空后导入」⇒ 目标就是源的一份副本；
+                //   · 「保留目标 / 追加 / 合并」⇒ 目标本来就可能多出历史行，比了必然"不一致"，
+                //     而"不一致"的动作是 truncate + 重传 —— 那是**删用户数据**，绝不能做；
+                //   · 设了「每表行数上限」时引擎只搬前 N 行，源端 count 是全表，同样不可比。
+                // 不可比时只核对「对象建出来没有」，不做行数判定。
+                let full_copy = (opts.policy == Policy::Drop
+                    || opts.data_mode == DataMode::TruncateInsert)
+                    && opts.row_limit == 0;
+                if !full_copy {
+                    task.log("校验：本次是增量/合并模式或设了行数上限，只核对对象是否建出来（不比较行数）");
+                }
                 // 目标端现有对象清单（一次元数据调用）：用来判「表 / 视图到底建出来没有」。
                 // 拿不到就退化成只比行数 —— 不因为一次元数据失败就把整轮校验废掉。
                 let target_names: Option<std::collections::HashSet<String>> =
@@ -6628,6 +6644,10 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     }
                     // 视图只有「在不在」可核对：行数取决于定义，比了没有意义
                     if kind != "table" {
+                        continue;
+                    }
+                    // 增量 / 合并 / 有行数上限：行数不可比（见 full_copy 的说明）
+                    if !full_copy {
                         continue;
                     }
                     let src_table = src.scoped(name, source_kind);
@@ -6697,7 +6717,9 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         .as_ref()
                         .map(|names| names.contains(&target_name.to_ascii_lowercase()))
                         .unwrap_or(true);
-                    if exists {
+                    // 只有「目标就是源的副本」时才允许清空重灌；增量/合并模式下这条表本来就
+                    // 该保留历史行，truncate 等于替用户删数据（不可比时也不会走到这里，双保险）
+                    if exists && full_copy {
                         // SQLite 没有 truncate；其它方言 ATOMIC/隐式提交都一样快
                         let clear = if target_kind.kind.key() == "sqlite" {
                             format!("delete from {tgt_table}")

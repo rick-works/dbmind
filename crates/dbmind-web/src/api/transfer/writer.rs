@@ -567,7 +567,17 @@ impl Writer for SqlWriter {
                 && !self.load_data_failed.load(Ordering::SeqCst)
             {
                 match self.try_load_data(worker, rows).await {
-                    Ok(written) => return Ok(written),
+                    Ok(written) => {
+                        // 「传输数」的唯一记账点是**真正落库的地方**（insert / upsert / 快通道）。
+                        // 引擎层不要再加一次：`write_insert_rows` 内部已经加过，两层都加就是 2×
+                        //（被快照的 min(written, read) 夹住看不出来，但收尾补数会失真）。
+                        if written > 0 {
+                            if let Some(task) = &self.task {
+                                task.add_rows_written(written);
+                            }
+                        }
+                        return Ok(written);
+                    }
                     Err(failure) if failure.retryable => {
                         // 服务端没开 local_infile / 语法不认 / 编码不了：本表剩余的行走 INSERT，
                         // 整条任务也一并关掉（根因只有一个，几十张表不必各报一次）
@@ -675,6 +685,13 @@ impl Writer for SqlWriter {
                         start = end;
                     }
                     if stream_error.is_none() {
+                        // Stream Load 也是一条「自己记账」的快通道（INSERT 路径记在
+                        // `write_insert_rows` 里，这里同样记一次，保证各路径口径一致）
+                        if loaded_total > 0 {
+                            if let Some(task) = &self.task {
+                                task.add_rows_written(loaded_total);
+                            }
+                        }
                         return Ok(loaded_total);
                     }
                     // 首次失败（端口不通/权限/格式）：本表内回退 INSERT 管道，数据不丢。

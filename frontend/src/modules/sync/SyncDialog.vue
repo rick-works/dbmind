@@ -960,7 +960,20 @@ const rerunFailed = async () => {
   // **参数原样复用提交时的那份请求**（后端挂在任务上下文里）：
   // 从任务中心「查看」进来的界面跳过了向导，连接/库/选项/行过滤/表名映射/前后置 SQL
   // 全是空的，只有这份请求能保证「参数完全一致」。
-  if (taskRequest.value) return run({ ...taskRequest.value, ...lists })
+  //
+  // **并发三项例外**：它们描述的是「这次跑多快」，不是「搬哪些数据」。
+  // 原样复用会让用户莫名其妙 —— 真机现象：原任务当初调优时设了 16 张，后来界面明明
+  // 是「自动」，点「重新同步失败对象」却还是 16 张一起开工（用户问「默认不是 2 吗」）。
+  // 所以按**当前界面**的三项重填（空壳界面就是默认「自动」= 后端按 2 张跑）。
+  if (taskRequest.value) {
+    return run({
+      ...taskRequest.value,
+      ...lists,
+      maxConcurrency: opts.value.objConcurrency || 0,
+      srcSlices: opts.value.srcSlices || 0,
+      tgtWorkers: opts.value.tgtWorkers || 0,
+    })
+  }
   // 同一次打开里的重跑：界面参数是活的，直接按界面组装
   if (src.value.connectionId && src.value.database && tgt.value.connectionId && tgt.value.database) {
     return run(buildPayload(new Set(failed.map(r => r.name))))
@@ -1987,6 +2000,13 @@ watch(() => props.modelValue, v => {
   // 每次打开都重置成全新向导（上一次任务的数字/日志/结果一概不留）；
   // 之前「任务还在跑就切回进度页」的分支已删 —— 回看进度走任务中心/时钟图标
   resetRunState()
+  // 并发三项复位成「自动」：这个对话框是**常驻挂载**的（父组件只切 `model-value`，
+  // 从不卸载），上一次会话里改过的「并发表数 16 / 读 4 片」会原样留到下一次打开 ——
+  // 界面上看着像默认，实际按 16 张表并发跑（真机：新开任务 17 张表几乎同时开工，
+  // 用户问「默认不是 2 个对象并发吗」）。自动 = 后端按 2 张跑（Auto 恒 ≤ 2）。
+  opts.value.objConcurrency = 0
+  opts.value.srcSlices = 0
+  opts.value.tgtWorkers = 0
   loadConnections()
 })
 onMounted(() => { if (props.modelValue) loadConnections() })
@@ -2149,21 +2169,23 @@ onMounted(() => { if (props.modelValue) loadConnections() })
   flex-wrap: wrap;
 }
 .run-stats .stat {
-  /* 不写死 basis：8 张卡（对象总数/已传输对象/读取/传输/失败/耗时/速度/剩余）
-     按剩余宽度均分，宽屏一行放得下，窄屏才换行 */
-  flex: 1 1 0; min-width: 100px; text-align: center;
+  /* **按内容自适应**：basis 取 max-content（数字与标签里更宽的那个），
+     富余宽度再按 flex-grow 均分下去。
+     原来写 `flex: 1 1 0` 是「8 张卡强行等分」——`13,820,698` 这种 9 位数在
+     ~100px 的卡里只能贴着边溢出，相邻两张卡的数字看着像连在一起（真机截图）。 */
+  flex: 1 1 max-content; min-width: 96px; text-align: center;
   background: linear-gradient(180deg, var(--dc-bg-card), var(--dc-bg-soft));
   border: 1px solid var(--dc-border); border-radius: 10px;
-  padding: 10px 8px;
+  padding: 10px 12px;
   transition: border-color .15s, box-shadow .15s;
 }
 .run-stats .stat:hover { border-color: var(--dc-border-hover); box-shadow: var(--dc-shadow-sm); }
 .run-stats .num {
-  display: block; font-size: 19px; font-weight: 700; color: var(--dc-text);
+  display: block; font-size: 18px; font-weight: 700; color: var(--dc-text);
   /* 等宽数字：计数每 2 秒跳一次，比例数字宽窄不一会让整排左右抖 */
   font-variant-numeric: tabular-nums;
-  letter-spacing: .2px;
-  /* 「04:23:09」「60,761,205」在窄卡里不许折成两行（高度一变整排就参差） */
+  letter-spacing: 0;
+  /* 「04:23:09」「60,761,205」不许折成两行（高度一变整排就参差） */
   white-space: nowrap;
 }
 .run-stats .label { display: block; margin-top: 2px; font-size: 12px; color: var(--dc-text-dim); }
@@ -2171,9 +2193,9 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .run-stats .stat.ok .num { color: var(--dc-success); }
 .run-stats .stat.danger { background: linear-gradient(180deg, var(--dc-danger-wash), var(--dc-bg-soft)); }
 .run-stats .stat.danger .num { color: var(--dc-danger); }
-/* 「1.2万/s · 3.4 MB/s」「12 分 30 秒」比纯数字长：给更宽的基数、字号降一档，
-   否则 19px 在 108px 的卡里会被挤成两行（高度跟着变，整排就参差不齐） */
-.run-stats .stat-wide { flex: 1 1 170px; }
+/* 「1.2万/s · 3.4 MB/s」「12 分 30 秒」比纯数字长：同样按内容自适应，字号降一档，
+   否则 19px 会被挤成两行（高度跟着变，整排就参差不齐） */
+.run-stats .stat-wide { flex: 1 1 max-content; }
 .run-stats .stat-wide .num { font-size: 15px; letter-spacing: 0; }
 
 /* 弹窗标题是整窗的「一级标题」：吃全局 --dlg-h1（默认 18），不跟着主题漂移 */

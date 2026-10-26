@@ -566,6 +566,18 @@ impl Reader for SqlReader {
             {
                 self.page_rows.store(target_rows, Ordering::SeqCst);
             }
+            // 固定页模式（`DBMIND_SYNC_PAGE_ROWS`）：用户给的值既是目标也是**恢复上限**。
+            // `shrink_page` 在读/写失败时会把它压到 1/4 保命，而上面这条自适应与本函数
+            // 后面的几何增长都被 `fixed_page` 挡住了 ⇒ 不主动爬回去的话，一次抖动就让
+            // 「固定页」永久变成 1/4，逃生阀等于失效。每次读成功回升一级（×2），两级到顶。
+            if let Some(fixed) = self.fixed_page {
+                let now = self.page_rows_now();
+                if now < fixed {
+                    self.page_rows.store(recover_target(now, fixed), Ordering::SeqCst);
+                    // 硬上限（= 事务/批次粒度）同步涨回用户给的值
+                    self.rows_cap.store(fixed, Ordering::SeqCst);
+                }
+            }
 
             // 无键表只能靠 OFFSET 翻页：`limit n offset m` 每次都要重扫前面 m 行，
             // 固定页大小时总扫描量 ≈ N²/(2·page)（20 万行 2 万/页 = 10 次往返，
@@ -608,7 +620,11 @@ impl Reader for SqlReader {
             } else {
                 Some(Cursor {
                     key: rows.last().and_then(|row| self.key_of(row)),
-                    offset: offset + page_rows as u64,
+                    // 推进量用**本页实际行数**，不是请求的 `page_rows`：读满一页时两者相等
+                    //（`done == false` 蕴含 `rows.len() == fetch_rows`），但读侧一旦多一层
+                    // 截断（驱动行上限、窗口再 clamp、内核少给一行），按请求值推进会直接
+                    // 跳过没读到的那些行 —— 症状是「行数少一点点」，几乎查不出来。
+                    offset: offset + rows.len() as u64,
                 })
             };
             Ok(Page { rows, next })
@@ -619,18 +635,22 @@ impl Reader for SqlReader {
         // 读超时/链路报错后把页**减半**：页太大 ⇒ 结果集太大 ⇒ 丢包链路上客户端等不到 ACK，
         // 60 秒后整表重跑。缩半页重试比「按原页大重试三次再重跑整表」划算得多。
         //
-        // 硬上限一起压到 `shrunk × 4` 而不是直接钉死：链路恢复后还能靠几何增长/自适应
+        // 硬上限一起压到 `shrunk × 2` 而不是直接钉死：链路恢复后还能靠几何增长/自适应
         // 涨回来（最多两级翻倍），不至于因为一次抖动就整表单流小页跑到底。
         // 除以 4 而不是减半：超时说明「这一页根本传不回来」，减半往往还在同一个量级上
         // 继续撞墙（真机 re_sale：页 3711、每页等满 60 秒，连撞两次后整表 2346 秒只前进
         // 几万行）。上限一起压到 2 倍以内，别让它几何增长又爬回超时区间；链路恢复后由
         // `by_read` / `by_rate` 两条约束慢慢涨回去。
+        //
+        // 固定页模式（`DBMIND_SYNC_PAGE_ROWS`）没有那两条约束（自适应与几何增长都被
+        // `fixed_page` 挡住），所以这里只许往下缩、并把用户给的值当**恢复上限**：
+        // 缩过之后由 `page()` 里的 `recover_target` 每读成功一页回升一级，涨到 `fixed_page` 为止。
+        // 过去不区分固定页，一次抖动就把「固定页」永久钉在 1/4 —— 逃生阀等于失效。
         let now = self.page_rows.load(Ordering::SeqCst);
-        let shrunk = (now / 4).max(PAGE_ROWS_FLOOR).min(now);
+        let (shrunk, cap) = shrink_target(now, self.fixed_page);
         if shrunk < now {
             self.page_rows.store(shrunk, Ordering::SeqCst);
-            self.rows_cap
-                .store((shrunk * 2).max(PAGE_ROWS_FLOOR), Ordering::SeqCst);
+            self.rows_cap.store(cap, Ordering::SeqCst);
         }
     }
 }
@@ -757,6 +777,28 @@ fn page_target_rows(
         target = target.min(by_rate);
     }
     target
+}
+
+/// 读/写失败后的「新页大小 + 新硬上限」。
+///
+/// 抽成纯函数是为了能被单测钉住：这里曾经不看 `fixed_page`，把用户
+/// `DBMIND_SYNC_PAGE_ROWS` 给的固定页一路压到 1/4 且**涨不回来**
+/// （固定页模式下自适应与几何增长都被挡住），逃生阀一次抖动就失效。
+///
+/// 固定页模式下 `fixed_page` 是**恢复上限**：本次缩到 `shrunk`，硬上限缩到
+/// `shrunk × 2`（不钉死，留给链路恢复后爬升），但永远不超过用户给的值。
+fn shrink_target(now: usize, fixed: Option<usize>) -> (usize, usize) {
+    let shrunk = (now / 4).max(PAGE_ROWS_FLOOR).min(now);
+    let grown = shrunk.saturating_mul(2).max(PAGE_ROWS_FLOOR);
+    (shrunk, fixed.map(|fixed| grown.min(fixed)).unwrap_or(grown))
+}
+
+/// 固定页模式下每读成功一页的回升量（×2，封顶在用户给的值）。
+///
+/// 只回升一级而不是直接跳到 `fixed_page`：刚撞过超时的链路往往还处在同一个量级上，
+/// 一步跳回去等于再撞一次；两级（1/4 → 1/2 → 1）就到顶，代价可以忽略。
+fn recover_target(now: usize, fixed: usize) -> usize {
+    now.saturating_mul(2).min(fixed)
 }
 
 /// 整数键按值域等分：切出来的区间**连续、不重不漏**（相邻两片的边界严格相接）。
@@ -960,5 +1002,36 @@ mod tests {
         assert_eq!(page_target_rows(20_000, 20_000 * 40, 20_000, 0, cap, true), 5_000);
         // 窄表 + 快链路（2 万行 0.3 秒）⇒ 不受读耗时约束，仍是上限
         assert_eq!(page_target_rows(20_000, 20_000 * 40, 300, 0, cap, true), cap);
+    }
+
+    /// 失败缩页：÷4、不低于逃生下限，硬上限跟着缩到 2 倍以内。
+    #[test]
+    fn 失败缩页到四分之一() {
+        assert_eq!(shrink_target(10_000, None), (2_500, 5_000));
+        // 已经很小就不再缩（下限 500 不能反过来把页撑大）
+        assert_eq!(shrink_target(400, None), (400, 800));
+    }
+
+    /// 固定页模式（`DBMIND_SYNC_PAGE_ROWS`）：失败缩页后必须能爬回用户给的值，
+    /// 且回升一步不超过 `fixed_page`。过去不区分固定页 ⇒ 一次抖动后永久 1/4。
+    #[test]
+    fn 固定页缩完能爬回去() {
+        let fixed = 10_000;
+        let (shrunk, cap) = shrink_target(fixed, Some(fixed));
+        assert_eq!((shrunk, cap), (2_500, 5_000), "硬上限不得超过用户给的值");
+        let mut now = shrunk;
+        let mut steps = 0;
+        while now < fixed {
+            let up = recover_target(now, fixed);
+            assert!(up > now, "每次成功读页都要前进");
+            assert!(up <= fixed, "回升不得超过固定页：{up}");
+            now = up;
+            steps += 1;
+            assert!(steps <= 4, "回升步数应有界");
+        }
+        assert_eq!(now, fixed);
+        // 固定页小于逃生下限时不越界
+        assert_eq!(shrink_target(600, Some(600)).1, 600);
+        assert_eq!(recover_target(400, 600), 600);
     }
 }
