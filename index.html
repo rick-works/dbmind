@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.6.1（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.6.1</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-26</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>同步跑到一半断网不再把表判红</b>：读页失败按 1/2/5/10/20/30 秒等网络回来（不再缩页空转），表级自动重连最多 5 次、退避 2/5/10/20/30 秒，网络恢复后接着跑完</li>
+            <li><b>「删除重建 / 清空重灌」模式下重跑前会重新清空目标表，已提交过的行不再拦着自动重连（旧逻辑第二次断连就直接判失败）；清表本身撞上还没恢复的链路也会继续等，而不是立刻结束</b></li>
+            <li><b>SSH 隧道的本地转发端口失效后自动重建（不再把没人监听的端口发给驱动，那会让「网络恢复了还是连不上」拖到 30 分钟）；写失败认出是连接级错误就立刻上抛，不再逐行磨（实测 25 秒断网曾磨了 659 秒）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.1" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.1" target="_blank" rel="noopener">下载 v1.6.1</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.6.0（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.6.0</span>
             <span class="rel-tag tag-minor">小版本</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-26</span>
           </div>
           <ul class="rel-notes">
