@@ -47,6 +47,17 @@ use crate::api::sync::{estimate_row_bytes, key_of, lookup_existing_keys};
 /// 落了一半），而是交给写入层的「语句失败 → 二分拆批定位坏行」兜住。
 const READ_RETRY: usize = 3;
 
+/// 链路类读失败（网络断了 / 隧道断了 / 源端一直不回话）额外等几轮、每轮等多久。
+///
+/// 和 [`READ_RETRY`] 分开算，因为两种失败的对策**相反**：
+/// - 结果集太大传不回来 ⇒ 缩页（150/300/600ms 连试三次）；
+/// - 网络断了 ⇒ 缩页毫无意义（缩到一行也传不回来），只能**等网络回来**。
+///   按 150/300/600ms 试三次必然全灭，于是整表被判失败、进表级重跑 ——
+///   真机上一张跑了两小时的表就因为链路抖了十几秒白跑。
+/// 阶梯累计约 68 秒，覆盖绝大多数「网线抖动 / 跳板机重连」。
+const READ_RETRY_LINK: usize = 6;
+const READ_LINK_BACKOFF_SECS: [u64; READ_RETRY_LINK] = [1, 2, 5, 10, 20, 30];
+
 /// 收尾等待上限（与 sync 层一致：给慢批留足时间，避免把还在写的数据判死）
 const PIPE_WAIT: Duration = Duration::from_secs(660);
 
@@ -1110,11 +1121,10 @@ async fn read_page(
     // 一页最多等多久（跟随界面「超时时间」，见 `read_timeout`）
     hard_limit: Duration,
 ) -> Result<Page, String> {
-    let mut last = String::new();
-    for attempt in 0..=READ_RETRY {
-        if attempt > 0 {
-            tokio::time::sleep(Duration::from_millis(150 * (1 << (attempt - 1)))).await;
-        }
+    // 缩页重试与「等网络」分开计数：见 READ_RETRY_LINK 的注释
+    let mut short = 0usize;
+    let mut long = 0usize;
+    loop {
         // 源端同样要有墙钟：连接的 socketTimeout=0 时，一条半开的读会一直等到内核
         // 10 分钟的语句超时，界面上就是「读数字一动不动」。一页正常 5 秒内，60 秒足够。
         match tokio::time::timeout(hard_limit, reader.page(range, cursor.clone()))
@@ -1134,15 +1144,35 @@ async fn read_page(
         {
             Ok(page) => return Ok(page),
             Err(msg) => {
-                // 失败先把页缩小：读超时/链路报错的真因多半是「结果集太大传不回来」
-                //（一页几万行 ≈ 几 MB，丢包链路上等不到 ACK）。缩半页再试，
-                // 不要拿同一个大页连撞三次，更不要让上层整表重跑。
-                reader.shrink_page();
-                last = msg;
+                // 驱动明确说是链路断了（连不上跳板机 / connection reset / 超时…）
+                let link = !msg.is_empty() && crate::api::sync::is_link_level_message(&msg);
+                if !link && short < READ_RETRY {
+                    // 普通失败：先把页缩小再试 —— 真因多半是「结果集太大传不回来」
+                    //（一页几万行 ≈ 几 MB，丢包链路上等不到 ACK）。不要拿同一个大页连撞。
+                    short += 1;
+                    tokio::time::sleep(Duration::from_millis(150 * (1 << (short - 1)))).await;
+                    reader.shrink_page();
+                    continue;
+                }
+                // 链路类失败（或已经缩到最小页仍失败）：等网络回来，别再缩页
+                if long >= READ_RETRY_LINK {
+                    return Err(msg);
+                }
+                let secs = READ_LINK_BACKOFF_SECS[long];
+                long += 1;
+                tracing::warn!(
+                    target: "dbmind::sync",
+                    attempt = long,
+                    max = READ_RETRY_LINK,
+                    wait_secs = secs,
+                    link,
+                    error = %msg,
+                    "读页失败：等网络恢复后重试（不缩页）"
+                );
+                tokio::time::sleep(Duration::from_secs(secs)).await;
             }
         }
     }
-    Err(last)
 }
 
 /// 等一次写动作完成：**慢就等**，只有探活不通（或超过界面「超时时间」）才判死。

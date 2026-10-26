@@ -3247,6 +3247,25 @@ pub(crate) fn is_link_level_message(message: &str) -> bool {
         "会话不存在",
         // 慢批自愈（探活通但目标端写不动）：这一页的事务会被回滚，换连接 + 缩页重试是安全的
         "写入卡住",
+        // ---- 网络本身断了（不是数据库报错）----
+        // 真机：任务跑到 85% 时链路抖了十几秒，隧道建连超时，这几张表直接被判失败，
+        // 前面 2.5 小时的进度白等。这类错误**重试一定安全**（读幂等、目标端事务回滚），
+        // 网络回来就该接着跑，而不是把表标红让人手工重跑。
+        "连不上 ssh 跳板机",
+        "跳板机地址无法解析",
+        "ssh 会话建立失败",
+        "ssh 转发通道打开失败",
+        "隧道监听已退出",
+        "本地转发端口已失效",
+        "connection timed out",
+        "connect timed out",
+        "connection refused",
+        "connection aborted",
+        "network is unreachable",
+        "no route to host",
+        "host is unreachable",
+        "i/o timeout",
+        "operation timed out",
     ]
     .iter()
     .any(|key| text.contains(key))
@@ -3774,6 +3793,16 @@ pub(crate) async fn write_upsert_rows(
                             }
                         }
                         Err(row_err) => {
+                            // 连接级错误不能当坏行：断网时每一行都会失败一次，逐行磨下去
+                            // 就是把「一秒能报的错」拖成十几分钟（真机实测：断开目标库 25 秒，
+                            // 这里磨了 659 秒、还留下 34 行「写入失败」，数据其实一行没少）。
+                            // 直接上抛，交给上层回滚本片 → 表级重跑。
+                            if is_link_level_error(&row_err) {
+                                if let Some(task) = task {
+                                    task.log(format!("表 {table}：{}", brief_error(&row_err.message)));
+                                }
+                                return Err(brief_error(&row_err.message));
+                            }
                             if let Some((_, rollback, _)) = row_sp.as_ref() {
                                 if let Err(err) = run_target_in(state, tgt_target, rollback, session).await {
                                     return Err(err.message);
@@ -4357,13 +4386,21 @@ impl Drop for ActiveGuard {
 /// 为什么不只给 1 次：尾部大表在云数据库公网 / 丢包链路上「连断两次」是常态
 /// （真机日志里 2 秒内连报两张表：代理回收会话表，重连后第一条语句又撞上另一条死连接）。
 /// 一次都不多给，等于把「链路抖一下」直接变成「这张表失败」，而重跑的成本只是时间。
-/// 3 次之后仍断，才判定链路真的不可用。
-const LINK_RETRY_MAX: usize = 3;
+/// 用满之后仍断，才判定链路真的不可用。
+const LINK_RETRY_MAX: usize = 5;
+
+/// 每次重连之前等多久（秒）。阶梯式：抖动十几秒能自愈，真断网也来得及恢复
+/// （累计约 67 秒；纯 1/2/4 秒的指数退避在「网线拔了两分钟」面前太短）。
+const LINK_RETRY_BACKOFF_SECS: [u64; LINK_RETRY_MAX] = [2, 5, 10, 20, 30];
 
 /// 断连后能不能**自动重连重跑**（前提见 `sync_table_inner` 里那段注释）。
 ///
 /// 单独抽成纯函数是为了能被单测钉死：这里判错一次，要么把数据写重复、要么白跑一遍
-/// 大表。四个「不能重跑」的理由都是硬的 —— 见函数体。
+/// 大表。
+///
+/// `overwrite_safe` = 本次重跑前**会把目标表清空**（见 [`can_clear_before_retry`]）：这种
+/// 模式下「已经提交过几路」「退回过逐条提交」都不再是障碍 —— 断网时把一张跑了两小时的大表
+/// 直接标红，比清空重来糟糕得多。合并 / 追加模式下重跑会写重复，仍然严格按下面四条硬条件来判。
 fn can_retry_after_link_break(
     attempts: usize,
     txn_supported: bool,
@@ -4371,20 +4408,36 @@ fn can_retry_after_link_break(
     committed: usize,
     canceled: bool,
     message: &str,
+    overwrite_safe: bool,
 ) -> bool {
     // 次数上限：再断就是链路真的不行，重跑只会拖长任务
     attempts < LINK_RETRY_MAX
-        // 方言没有事务批（Doris / ClickHouse / Oracle / DB2…）⇒ 已写的行留在目标表里
-        && txn_supported
-        // 退回过逐条提交 ⇒ 行已经 commit，重跑就是重复
-        && !begin_failed
-        // 已经有一路提交成功 ⇒ 目标表里已有本次任务的数据（多路写是多个独立事务），
-        // 回滚只能回滚未提交的，重跑必然重复。这条是「不丢数据」的反面：**不能写重**。
-        && committed == 0
         // 用户点了停止就别再跑
         && !canceled
         // 脏数据 / 类型不匹配重跑必然再失败
         && is_link_level_message(message)
+        && (overwrite_safe
+            || (
+                // 方言没有事务批（Doris / ClickHouse / Oracle / DB2…）⇒ 已写的行留在目标表里
+                txn_supported
+                // 退回过逐条提交 ⇒ 行已经 commit，重跑就是重复
+                && !begin_failed
+                // 已经有一路提交成功 ⇒ 目标表里已有本次任务的数据（多路写是多个独立事务），
+                // 回滚只能回滚未提交的，重跑必然重复。这条是「不丢数据」的反面：**不能写重**。
+                && committed == 0
+            ))
+}
+
+/// 重跑前能不能把目标表清空。
+///
+/// 「清空重灌」与「删除重建」两种模式的语义都是「目标以源为准」，清空后重跑不会写重复：
+/// - `truncate_insert`：本来就要先清空；
+/// - 删除重建（`Policy::Drop`）：第一轮已经删表重建过，重跑前清一次等价于从头再来
+///   （真机踩过：用户选「删除重建」跑到中途链路抖了 25 秒，第二轮没法清表 ⇒ 直接判死）。
+///
+/// 源与目标是同一张表时**不能清** —— 那会把待读的数据删掉。
+fn can_clear_before_retry(data_mode: DataMode, policy: Policy, same_table: bool) -> bool {
+    !same_table && (data_mode == DataMode::TruncateInsert || policy == Policy::Drop)
 }
 
 /// 目标端「表内写并发」的并行度（1 = 串行）。**依据类型声明，不靠猜**：
@@ -5280,6 +5333,9 @@ async fn sync_table_inner(
     };
     // 重跑前要用的快照/判据：行数快照用于回退进度（上一次的行随事务回滚，不能计两遍）
     let counters_before = task.map(|t| (t.rows_read(), t.rows_written(), t.rows_failed()));
+    // 重跑前会不会把目标表清空（「清空重灌」/「删除重建」两种模式都会，见函数注释）。
+    // 它同时决定「断连后能不能整表重跑」—— 清空过就不存在写重复的问题。
+    let overwrite_safe = can_clear_before_retry(opts.data_mode, opts.policy, same_table);
     let mut link_retries = 0usize;
     let stats = loop {
         // 整表重跑：上一次读出的行随事务回滚，进度从 0 重算（否则「无进展」会被历史值掩盖）
@@ -5303,6 +5359,10 @@ async fn sync_table_inner(
                 //   · 退回过逐条提交 ⇒ 行已 commit，重跑就是重复；
                 //   · 不是链路级错误（脏数据 / 类型不匹配）⇒ 重跑必然再失败；
                 //   · 已取消 / 已经用满重跑次数。
+                // **例外**：清空重灌（TruncateInsert）在重跑前会把目标表清掉，所以
+                // 「已提交过几路 / 逐条提交过」都不再是重复风险 —— 这三条由
+                // `can_retry_after_link_break` 的 `overwrite_safe` 参数放行。真机上
+                // 出现过跑到 85%、2.5 小时时链路抖十几秒，几张表直接判红（用户要求自动重连）。
                 let can_retry = can_retry_after_link_break(
                     link_retries,
                     txn_batch(target_kind.kind.key()).is_some(),
@@ -5311,14 +5371,27 @@ async fn sync_table_inner(
                     diag.committed.load(std::sync::atomic::Ordering::SeqCst),
                     task.map(|t| t.is_canceled()).unwrap_or(false),
                     &msg,
+                    // 「清空重灌 / 删除重建」在重跑前都会把目标表清掉（见下面清表那段），
+                    // 所以「已提交过几路 / 逐条提交过」都不再是重复风险。
+                    overwrite_safe,
                 );
                 if !can_retry {
                     return ObjResult::failed(ty, table, msg);
                 }
                 link_retries += 1;
+                // 退避阶梯 2/5/10/20/30 秒（见 LINK_RETRY_BACKOFF_SECS）
+                let backoff = LINK_RETRY_BACKOFF_SECS
+                    .get(link_retries - 1)
+                    .copied()
+                    .unwrap_or(30);
                 if let Some(task) = task {
-                    // 只报数据库/驱动的原话（重试次数属于内部量，进 tracing 就够）
+                    // 先报数据库/驱动的原话
                     task.log(format!("表 {table}：{msg}"));
+                    // 再明说「会自动重连」：不说的话用户看到报错就去点重新开始，
+                    // 这一整张表前面搬的行全白费
+                    task.log(format!(
+                        "表 {table}：链路中断，{backoff} 秒后自动重连（第 {link_retries}/{LINK_RETRY_MAX} 次）"
+                    ));
                 }
                 tracing::warn!(
                     target: "dbmind::sync",
@@ -5327,24 +5400,53 @@ async fn sync_table_inner(
                     max = LINK_RETRY_MAX,
                     "链接级失败：回滚后整表重跑"
                 );
-                // 退避 1s / 2s / 4s：链路真的不行时，别把三次尝试挤在同一秒里再撞三次
-                tokio::time::sleep(std::time::Duration::from_secs(1u64 << (link_retries - 1)))
-                    .await;
+                // 退避：链路真的不行时，别把几次尝试挤在同一秒里再撞几次
+                tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
                 // 先把这组会话放掉：断掉的那条连接可能还没被内核标记失效（宿主报的是
                 // JDBC 层的 Communications link failure，不一定带连接级错误码），
                 // 不释放就会拿同一条死连接重跑一遍。释放后下一次调用必然重连。
                 release_table_sessions(state, src, tgt, sid).await;
-                // 清空重来：清空模式本来就要表是空的（上一次的清空已提交，这里再确认一次）；
-                // 追加 / upsert 模式**不能清空** —— 那会把目标表现有数据删掉，而事务回滚
-                // 已经保证了没有半截数据，重跑分别是「追加一遍」与「幂等重放」。
-                if opts.data_mode == DataMode::TruncateInsert && !same_table {
+                // 清空重来：「清空重灌 / 删除重建」重跑前都要让目标表回到空表（上一次的清空
+                // 已提交，这里再确认一次）；追加 / upsert 模式**不能清空** —— 那会把目标表
+                // 现有数据删掉，而事务回滚已经保证了没有半截数据，重跑分别是「追加一遍」与
+                // 「幂等重放」。
+                if overwrite_safe {
                     let clear = target_kind.clear_table_sql(&target_name);
-                    if let Err(err) = run_target_write(state, &tgt_target, &clear).await {
-                        return ObjResult::failed(
-                            ty,
-                            table,
-                            err.message,
-                        );
+                    // 清表本身也可能撞在**还没恢复的链路上**：真机实测目标库停机 25 秒，
+                    // 第 1 次重连后 2 秒就来清表 ⇒ `Connection refused`，旧实现直接判失败，
+                    // 5 次重连预算形同虚设（清表是重跑的第一步，第一步就撞死在死链上）。
+                    // 这里按链路错误继续等，和整表重跑共用同一份重连预算（link_retries）。
+                    loop {
+                        match run_target_write(state, &tgt_target, &clear).await {
+                            Ok(_) => {
+                                // 表已清空 ⇒ 上一轮「已提交过 N 路 / 退回逐条提交」的重复
+                                // 风险一并消失，标记归零（否则判定会拿历史值误杀后续轮次）。
+                                diag.committed.store(0, std::sync::atomic::Ordering::SeqCst);
+                                diag.begin_failed.store(false, std::sync::atomic::Ordering::SeqCst);
+                                break;
+                            }
+                            Err(err) => {
+                                let may_wait = is_link_level_message(&err.message)
+                                    && link_retries < LINK_RETRY_MAX
+                                    && !task.map(|t| t.is_canceled()).unwrap_or(false);
+                                if !may_wait {
+                                    return ObjResult::failed(ty, table, err.message);
+                                }
+                                link_retries += 1;
+                                let wait = LINK_RETRY_BACKOFF_SECS
+                                    .get(link_retries - 1)
+                                    .copied()
+                                    .unwrap_or(30);
+                                if let Some(task) = task {
+                                    task.log(format!("表 {table}：{}", brief_error(&err.message)));
+                                    task.log(format!(
+                                        "表 {table}：目标端还没恢复，{wait} 秒后重试清空（第 {link_retries}/{LINK_RETRY_MAX} 次）"
+                                    ));
+                                }
+                                tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+                                release_table_sessions(state, src, tgt, sid).await;
+                            }
+                        }
                     }
                 }
                 if let (Some(task), Some((read, written, failed))) = (task, counters_before) {
@@ -6920,11 +7022,13 @@ mod savepoint_tests {
 mod retry_tests {
     use super::*;
 
-    /// 断连整表重跑的四个前提，一个都不能松。
+    /// 断连整表重跑的前提，一个都不能松（合并 / 追加模式）。
     #[test]
     fn 断连整表重跑的前提() {
         let link = "写入连接已断：连接失败：Communications link failure";
-        assert!(can_retry_after_link_break(0, true, false, 0, false, link));
+        assert!(can_retry_after_link_break(
+            0, true, false, 0, false, link, false
+        ));
         // 尾部偶尔连断两次是常态：前 LINK_RETRY_MAX 次都要给重跑机会
         assert!(can_retry_after_link_break(
             LINK_RETRY_MAX - 1,
@@ -6932,7 +7036,8 @@ mod retry_tests {
             false,
             0,
             false,
-            link
+            link,
+            false
         ));
 
         // ① 次数用满
@@ -6942,16 +7047,25 @@ mod retry_tests {
             false,
             0,
             false,
-            link
+            link,
+            false
         ));
         // ② 方言没有事务批（Doris / ClickHouse / Oracle / DB2…）：已写的行还在
-        assert!(!can_retry_after_link_break(0, false, false, 0, false, link));
+        assert!(!can_retry_after_link_break(
+            0, false, false, 0, false, link, false
+        ));
         // ③ 退回过逐条提交：行已 commit，重跑就是重复
-        assert!(!can_retry_after_link_break(0, true, true, 0, false, link));
+        assert!(!can_retry_after_link_break(
+            0, true, true, 0, false, link, false
+        ));
         // ④ 已经有一路提交成功（提交阶段断连）：目标表已有本次数据，重跑就是重复
-        assert!(!can_retry_after_link_break(0, true, false, 1, false, link));
+        assert!(!can_retry_after_link_break(
+            0, true, false, 1, false, link, false
+        ));
         // ⑤ 用户点了停止
-        assert!(!can_retry_after_link_break(0, true, false, 0, true, link));
+        assert!(!can_retry_after_link_break(
+            0, true, false, 0, true, link, false
+        ));
         // ⑥ 脏数据 / 类型不匹配：重跑必然再失败
         assert!(!can_retry_after_link_break(
             0,
@@ -6959,7 +7073,8 @@ mod retry_tests {
             false,
             0,
             false,
-            "Incorrect integer value: 'abc' for column 'id' at row 1"
+            "Incorrect integer value: 'abc' for column 'id' at row 1",
+            false
         ));
         // ⑦ 宿主/驱动报的其它链路错误也要认出来（不止 MySQL 那一条文案）
         assert!(can_retry_after_link_break(
@@ -6968,7 +7083,90 @@ mod retry_tests {
             false,
             0,
             false,
-            "connection reset by peer"
+            "connection reset by peer",
+            false
+        ));
+    }
+
+    /// 清空重灌（TruncateInsert）时，重跑前会先清表 ⇒ 已提交过几路不再是障碍。
+    ///
+    /// 真机背景：任务跑到 85%、2.5 小时，链路抖了十几秒，几张表被判失败。
+    /// 那种模式下标红毫无意义 —— 清空重来才是用户要的「自动重连」。
+    #[test]
+    fn 清空重灌模式允许断连后整表重跑() {
+        let link = "表 xingwen_hubs.data_hour：连不上 SSH 跳板机 192.168.2.127:22";
+        assert!(is_link_level_message(link), "跳板机建连失败必须算链路错误");
+        // 清空重灌：即便已经提交过几路、方言没有事务批，也能清表重来
+        assert!(can_retry_after_link_break(0, true, false, 3, false, link, true));
+        assert!(can_retry_after_link_break(1, false, true, 3, false, link, true));
+        // 但次数上限与取消仍然有效
+        assert!(!can_retry_after_link_break(
+            LINK_RETRY_MAX,
+            true,
+            false,
+            0,
+            false,
+            link,
+            true
+        ));
+        assert!(!can_retry_after_link_break(
+            0, true, false, 0, true, link, true
+        ));
+        // 脏数据重跑必然再失败：清空模式也不许无限重来
+        assert!(!can_retry_after_link_break(
+            0,
+            true,
+            false,
+            0,
+            false,
+            "Incorrect integer value: 'abc' for column 'id' at row 1",
+            true
+        ));
+        // 网络类错误的常见变体都要能认出来
+        for msg in [
+            "跳板机地址无法解析：bad.host:22",
+            "SSH 会话建立失败：Auth failed",
+            "Connection timed out: connect",
+            "java.net.ConnectException: Connection refused",
+            "No route to host",
+            "本地转发端口已失效（监听线程已退出），重建隧道",
+        ] {
+            assert!(is_link_level_message(msg), "应算链路错误：{msg}");
+        }
+    }
+
+    /// 重跑前能不能清空目标表：「清空重灌」与「删除重建」都可以，源目标同表 / 追加合并都不行。
+    ///
+    /// 真机背景：选「删除重建」跑到中途链路抖了 25 秒，第二轮因为「不能清表 ⇒ 不许重跑」
+    /// 直接判红，5 次重连预算一次都没用上。
+    #[test]
+    fn 清表模式决定能否整表重跑() {
+        assert!(can_clear_before_retry(
+            DataMode::TruncateInsert,
+            Policy::Merge,
+            false
+        ));
+        assert!(can_clear_before_retry(
+            DataMode::Upsert,
+            Policy::Drop,
+            false
+        ));
+        // 源与目标是同一张表：清空会把待读的数据删掉
+        assert!(!can_clear_before_retry(
+            DataMode::TruncateInsert,
+            Policy::Drop,
+            true
+        ));
+        // 合并 / 追加：不能清目标表现有数据
+        assert!(!can_clear_before_retry(
+            DataMode::Upsert,
+            Policy::Merge,
+            false
+        ));
+        assert!(!can_clear_before_retry(
+            DataMode::Insert,
+            Policy::Merge,
+            false
         ));
     }
 
@@ -6996,12 +7194,20 @@ mod retry_tests {
         let msg = "写入连接已断：会话不存在（agent 可能已重启）：\
                    mysql|demo|127.0.0.1|3306|u|demo|false|-|s=internal:sync-wslot00-0#0";
         assert!(is_link_level_message(msg));
-        assert!(can_retry_after_link_break(0, true, false, 0, false, msg));
+        assert!(can_retry_after_link_break(
+            0, true, false, 0, false, msg, false
+        ));
         // 没有事务批的方言照旧不许重跑（已写的行还留在目标表里）
-        assert!(!can_retry_after_link_break(0, false, false, 0, false, msg));
+        assert!(!can_retry_after_link_break(
+            0, false, false, 0, false, msg, false
+        ));
         // 已经提交过一路 / 用户取消，同样不许
-        assert!(!can_retry_after_link_break(0, true, false, 1, false, msg));
-        assert!(!can_retry_after_link_break(0, true, false, 0, true, msg));
+        assert!(!can_retry_after_link_break(
+            0, true, false, 1, false, msg, false
+        ));
+        assert!(!can_retry_after_link_break(
+            0, true, false, 0, true, msg, false
+        ));
     }
 }
 

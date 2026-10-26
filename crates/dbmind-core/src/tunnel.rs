@@ -19,7 +19,7 @@
 
 use std::collections::HashMap;
 use std::io::{ErrorKind, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
@@ -654,6 +654,40 @@ impl Drop for Tunnel {
 struct Entry {
     tunnel: Arc<Tunnel>,
     last_used: Instant,
+    /// 上次端口探活的时间（见 [`reuse`]）：探活要建一条本地 TCP，不能每次连库都探
+    last_probe: Instant,
+}
+
+/// 端口探活的上限：一条本地回环连接，正常是微秒级；连不上就说明没人 listen。
+const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
+/// 两次探活之间至少隔这么久（隧道是按连接复用的，连库频率很高）
+const PROBE_MIN_GAP: Duration = Duration::from_secs(5);
+
+/// 本地转发端口还有人在 listen 吗。
+///
+/// 为什么需要它：监听线程可能已经退出（`accept` 出错、被系统回收），但条目还留在缓存里，
+/// `reuse()` 会把那个**没人接的端口**发给驱动，直到空闲 TTL 到点（默认 30 分钟）——
+/// 用户看到的现象是「网络明明恢复了，还是一直连不上」，而且换一张表也一样。
+fn port_alive(port: u16) -> bool {
+    let addr = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    match TcpStream::connect_timeout(&addr, PROBE_TIMEOUT) {
+        Ok(stream) => {
+            // 探活连接立刻关掉：accept 那边会当一条正常转发连接处理，读到 EOF 就结束
+            let _ = stream.shutdown(Shutdown::Both);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+/// 监听线程退出时把缓存里的这一条摘掉（见 [`port_alive`] 的注释：不摘会一直返回死端口）。
+fn retire(key: &str, local_port: u16) {
+    let mut map = lock_tunnels();
+    // 只摘「同一个端口」的那条：并发重建时新隧道可能已经占了这个 key，别把好的删了
+    if map.get(key).map(|entry| entry.tunnel.local_port) == Some(local_port) {
+        map.remove(key);
+        tracing::warn!(target: "dbmind::tunnel", port = local_port, "隧道监听已退出，从缓存摘除");
+    }
 }
 
 fn tunnels() -> &'static Mutex<HashMap<String, Entry>> {
@@ -688,12 +722,13 @@ pub fn local_port_for(config: &ConnectionConfig) -> Result<Option<u16>> {
 
     // 建隧道要跑网络（最长 CONNECT_TIMEOUT），所以**不持锁**：
     // 持锁建隧道会让「另一条连接的握手」陪着一起等。
-    let tunnel = open_tunnel(&spec, &target_host, target_port)?;
+    let tunnel = open_tunnel(&spec, &target_host, target_port, &key)?;
     let mut map = lock_tunnels();
     // 并发下可能已经有人建好了：让先来的留下，自己这条会被 drop（Drop 会关掉监听）
     let entry = map.entry(key).or_insert(Entry {
         tunnel,
         last_used: now,
+        last_probe: now,
     });
     entry.last_used = now;
     Ok(Some(entry.tunnel.local_port))
@@ -707,21 +742,48 @@ fn lock_tunnels() -> std::sync::MutexGuard<'static, HashMap<String, Entry>> {
 
 /// 命中已有隧道就续期并返回本地端口；顺带回收长期没人用的隧道。
 fn reuse(key: &str, now: Instant) -> Option<u16> {
-    let mut map = lock_tunnels();
-    // 0 = 不按空闲回收（内网常驻跳板机可以这么配，隧道一直热着）
-    let ttl_secs = IDLE_TTL_SECS.load(Ordering::Relaxed);
-    if ttl_secs > 0 {
-        let ttl = Duration::from_secs(ttl_secs.min(u64::from(u32::MAX)));
-        map.retain(|_, entry| now.duration_since(entry.last_used) < ttl);
+    // 持锁只做查表/续期，**不在这里探活**：探活是一次网络动作，持锁会拖住别的连接的握手
+    let (port, need_probe) = {
+        let mut map = lock_tunnels();
+        // 0 = 不按空闲回收（内网常驻跳板机可以这么配，隧道一直热着）
+        let ttl_secs = IDLE_TTL_SECS.load(Ordering::Relaxed);
+        if ttl_secs > 0 {
+            let ttl = Duration::from_secs(ttl_secs.min(u64::from(u32::MAX)));
+            map.retain(|_, entry| now.duration_since(entry.last_used) < ttl);
+        }
+        let entry = map.get_mut(key)?;
+        entry.last_used = now;
+        let need = now.duration_since(entry.last_probe) >= PROBE_MIN_GAP;
+        if need {
+            entry.last_probe = now;
+        }
+        (entry.tunnel.local_port, need)
+    };
+    if !need_probe {
+        return Some(port);
     }
-    let entry = map.get_mut(key)?;
-    entry.last_used = now;
-    Some(entry.tunnel.local_port)
+    // 探活：监听线程已经退出的话，这个端口是个死端口 —— 摘掉让 caller 重建。
+    // 网络断了、但监听线程还活着的情况探不出来，那种情况靠 `forward` 里的重新握手兜住。
+    if port_alive(port) {
+        return Some(port);
+    }
+    retire(key, port);
+    tracing::warn!(
+        target: "dbmind::tunnel",
+        port,
+        "本地转发端口已失效（监听线程已退出），重建隧道"
+    );
+    None
 }
 
 // ------------------------------------------------------------------ 建隧道
 
-fn open_tunnel(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<Arc<Tunnel>> {
+fn open_tunnel(
+    spec: &SshConfig,
+    target_host: &str,
+    target_port: u16,
+    key: &str,
+) -> Result<Arc<Tunnel>> {
     let listener = TcpListener::bind((LOCAL_HOST, 0)).map_err(|err| {
         conn_err("本地端口分配失败，无法建立 SSH 隧道").with_detail(format!("{err}"))
     })?;
@@ -757,9 +819,12 @@ fn open_tunnel(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<
         let target_host = target_host.to_string();
         let label = label.clone();
         let pool = pool.clone();
+        let key = key.to_string();
         std::thread::Builder::new()
             .name(format!("ssh-tunnel-{local_port}"))
-            .spawn(move || accept_loop(listener, stop, spec, target_host, target_port, label, pool))
+            .spawn(move || {
+                accept_loop(listener, stop, spec, target_host, target_port, label, pool, key)
+            })
             .map_err(|err| conn_err("SSH 隧道线程创建失败").with_detail(format!("{err}")))?;
     }
     tracing::info!(target: "dbmind::tunnel", label = %label, port = local_port, "SSH 隧道已建立");
@@ -949,6 +1014,7 @@ fn probe(spec: &SshConfig, target_host: &str, target_port: u16) -> Result<Sessio
 
 // ------------------------------------------------------------------ 转发
 
+#[allow(clippy::too_many_arguments)]
 fn accept_loop(
     listener: TcpListener,
     stop: Arc<AtomicBool>,
@@ -957,6 +1023,7 @@ fn accept_loop(
     target_port: u16,
     label: String,
     pool: Arc<SessionPool>,
+    key: String,
 ) {
     while !stop.load(Ordering::Relaxed) {
         match listener.accept() {
@@ -1004,6 +1071,10 @@ fn accept_loop(
             }
         }
     }
+    // 退出前把自己从缓存里摘掉：否则 `reuse()` 会一直把这个**没人 listen 的端口**发给驱动，
+    // 网络恢复了也连不上（最长能拖到空闲 TTL，默认 30 分钟）。
+    let port = listener.local_addr().map(|addr| addr.port()).unwrap_or(0);
+    retire(&key, port);
     tracing::debug!(target: "dbmind::tunnel", label = %label, "SSH 隧道已关闭");
 }
 
