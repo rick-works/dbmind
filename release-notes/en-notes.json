@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.6.1": [
+    "A sync that loses the link halfway no longer marks the table as failed: read pages wait 1/2/5/10/20/30 seconds for the network instead of shrinking the page, a table reconnects up to 5 times with 2/5/10/20/30-second backoff, and the run picks up where it left off once the link is back",
+    "Delete-and-recreate / truncate-then-load runs clear the target table again before every retry, so rows already committed no longer block auto-reconnect (the old logic gave up on the second drop); clearing the table also keeps waiting when it hits a link that is still down, instead of ending the table right away",
+    "A stale SSH tunnel local port is now rebuilt automatically instead of being handed to the driver (which could leave you unable to connect for up to 30 minutes after the network came back); connection-level write failures abort at once instead of grinding row by row (a 25-second outage once burned 659 seconds)"
+  ],
   "v1.6.0": [
     "On desktop, picking files now uses the system file manager: restoring a database (backup file) and connecting SQLite / H2 (file) / Derby (directory) open the native dialog directly — no more clicking through the in-page directory tree",
     "The native dialog filters by type (.sql / .dump / .backup / .gz / .zip, .db / .sqlite / .mv.db …) and remembers the last folder you used; the absolute path is filled in as soon as you pick",
