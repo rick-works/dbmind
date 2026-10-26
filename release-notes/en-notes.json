@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.6.3": [
+    "Large-table sync is much faster: cursor paging on multi-column keys now uses row-value comparison, so each page only scans its own range instead of hundreds of thousands of rows (a 580k-row table went from 68 minutes back to minutes)",
+    "Fixed tasks running longer than 30 minutes showing as interrupted in the task center - they were still writing data in the background, only the record was garbage-collected; running tasks are no longer reclaimed and the stop button stays available",
+    "Task records now expire 30 minutes after they finish instead of after they start, so an hour-long job no longer becomes unviewable the moment it ends"
+  ],
   "v1.6.2": [
     "Each SQL editor tab now uses its own database session, so a slow statement on one page (an index-building ALTER, a big count) no longer holds up the other pages: all pages used to share one session, and with a sleep(6) running another page select 1 waited 5.8 seconds",
     "Statement splitting fixed: a same-line comment after the semicolon (LOCK=NONE;  -- about +80MB) now belongs to the statement it trails, so the editor statement box, numbering and error location no longer reach one line up",
