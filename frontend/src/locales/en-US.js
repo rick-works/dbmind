@@ -1930,7 +1930,7 @@ export default {
   'settings.about.rel1.level': 'patch',
   'settings.about.rel1.date': '2026-10-26',
   'settings.about.rel1.note1': 'A sync that loses the link halfway no longer marks the table as failed: read pages wait 1/2/5/10/20/30 seconds for the network instead of shrinking the page, a table reconnects up to 5 times with 2/5/10/20/30-second backoff, and the run picks up where it left off once the link is back',
-  'settings.about.rel1.note2': 'Delete-and-recreate / truncate-then-load runs clear the target table again before every retry, so rows already committed no longer block auto-reconnect (the old logic gave up on the second drop); clearing the table also keeps waiting when it hits a link that is still down',
+  'settings.about.rel1.note2': 'Delete-and-recreate / truncate-then-load runs clear the target table again before every retry, so rows already committed no longer block auto-reconnect (the old logic gave up on the second drop); clearing the table also keeps waiting when it hits a link that is still down, instead of ending the table right away',
   'settings.about.rel1.note3': 'A stale SSH tunnel local port is now rebuilt automatically instead of being handed to the driver (which could leave you unable to connect for up to 30 minutes after the network came back); connection-level write failures abort at once instead of grinding row by row (a 25-second outage once burned 659 seconds)',
   'settings.about.rel2.version': 'v1.6.0',
   'settings.about.rel2.level': 'minor',
