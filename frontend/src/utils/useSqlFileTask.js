@@ -1,4 +1,5 @@
-import { ref, reactive } from 'vue'
+import { ref, reactive } from 'vue'
+
 import { t } from './i18n'
 import { ElMessage } from 'element-plus'
 import { runSqlFileStart, runSqlFileStatus, runSqlFileCancel } from '../api'
@@ -14,7 +15,10 @@ export function useSqlFileTask() {
   const visible = ref(false)
   const taskId = ref('')
   const connId = ref('')
-  const status = ref('running')
+  /* 还没有任务时是 idle，**不是** running：运行 SQL 文件弹窗的「关闭 / 执行」按
+     `status === 'running'` 禁用，初始写成 running 会让弹窗一打开两个按钮就是灰的
+     （任务根本没发起，却像正在跑）。真正的 running 由 start() → reset() 设置。 */
+  const status = ref('idle')
   const done = ref(0)
   const total = ref(-1)
   const phase = ref(t('usf.preparing'))

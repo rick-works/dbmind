@@ -85,7 +85,9 @@ const run = async () => {
 const onClose = () => {
   sqlFileTask.close()
   visible.value = false
-  if (sqlFileTask.status.value === 'success') emit('done')
+  // useSqlFileTask 返回的是 reactive(...)，里面的 status ref 已被自动解包 ⇒ 这里就是字符串，
+  // 写成 sqlFileTask.status.value 恒为 undefined，「执行成功刷新库节点」从来没生效过
+  if (sqlFileTask.status === 'success') emit('done')
 }
 </script>
 

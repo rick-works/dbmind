@@ -8428,7 +8428,11 @@ const connTypeSummary = computed(() =>
 .main-view { height: 100%; display: flex; flex-direction: column; }
 .dlg-title { display: flex; align-items: center; gap: 8px; flex: 1; }
 .dlg-title > span:nth-child(2) { flex: 1; }
-.dlg-copy-btn { flex-shrink: 0; }
+/* 复制按钮右侧要让位给「全屏」图标：utils/dialogMaximize.js 把全屏按钮绝对定位在关闭 ✕
+   左边一格（right 48px + 宽 28px ⇒ 左边缘距弹窗右边 76px），而 header 右内边距只有 20px，
+   按钮原来一直排到那里，就被压在图标下面（用户反馈「全屏图标和复制重叠了」）。
+   48 + 20 = 68px，留 20px 间隙（实测 36px 偏空，20px 看着像同一组工具按钮）。 */
+.dlg-copy-btn { flex-shrink: 0; margin-right: 48px; }
 .dlg-title-ic {
   width: 26px; height: 26px; border-radius: 7px; display: inline-flex;
   align-items: center; justify-content: center; color: var(--dc-on-primary);
