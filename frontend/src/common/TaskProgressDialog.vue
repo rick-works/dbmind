@@ -247,6 +247,18 @@ watch(() => (props.showLogs ? props.logs.length : 0), () => {
 .tp-log-card {
   border: 1px solid var(--dc-border); border-radius: 8px; background: var(--dc-bg-soft);
   overflow: hidden;
+  /* 高度自适应：日志吃掉 body 的**剩余**高度（弹窗被拉高/最大化时不再下半截空着） */
+  display: flex; flex: 1 1 auto; min-height: 0;
+}
+/* 弹窗高度策略：上限 = 视口减去 top=8vh 的上下留白；body 变 flex 列，
+   把「多出来的高度」交给日志区。普通态没有剩余高度时，日志保持 200px 可读高度。 */
+:global(.el-dialog.task-progress-dialog) {
+  display: flex; flex-direction: column;
+  max-height: calc(100vh - 16vh);
+}
+:global(.el-dialog.task-progress-dialog .el-dialog__body) {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
 }
 .tp-log-head {
   display: flex; align-items: center; justify-content: space-between;
@@ -256,7 +268,10 @@ watch(() => (props.showLogs ? props.logs.length : 0), () => {
 .tp-log-head span { display: inline-flex; align-items: center; gap: 6px; }
 .tp-log-count { color: var(--dc-text-weak); }
 .tp-log-body {
-  height: 220px; overflow-y: auto; padding: 8px 12px; font-size: 13px; line-height: 1.7;
+  /* 原来写死 220px：弹窗被拉高/最大化后，日志区还是 220，下面一大片空白（真机截图）。
+     现在由外层 flex 分配高度，这里只保底 200px */
+  flex: 1 1 auto; min-height: 200px; max-height: none; height: auto;
+  overflow-y: auto; padding: 8px 12px; font-size: 13px; line-height: 1.7;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 .tp-log-empty {

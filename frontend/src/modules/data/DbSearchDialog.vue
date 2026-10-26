@@ -15,7 +15,8 @@
         </el-input>
       </el-form-item>
     </el-form>
-    <div v-loading="loading" style="max-height:300px;overflow:auto;margin-top:8px;">
+    <!-- 结果区高度跟视口走（原来写死 300px）：窗口高时多看几行，窗口矮时也不顶出屏幕 -->
+    <div v-loading="loading" style="max-height:min(52vh,calc(100vh - 240px));overflow:auto;margin-top:8px;">
       <div v-if="!results.length && !loading" style="text-align:center;color:var(--dc-text-dim);padding:20px;">{{ $t('ds.empty') }}</div>
       <div v-for="r in results" :key="r.id" class="db-search-item" @click="openResult(r)">
         <div style="font-weight:600;font-size: 14px;">{{ r.label }}</div>

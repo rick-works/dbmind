@@ -3,6 +3,7 @@
     v-model="visible"
     :title="title"
     width="640px"
+    class="bkp-dialog"
     :close-on-click-modal="false"
     :close-on-press-escape="!running"
     :before-close="onBeforeClose"
@@ -1386,9 +1387,18 @@ watch(
   color: var(--el-text-color-regular);
   word-break: break-all;
 }
+/* 运行区高度自适应：弹窗被拉大/全屏后，日志吃掉剩余高度（原来写死 180px，
+   弹窗下半截全空着）。没有剩余高度时保底 180px，与改造前一致。 */
+:global(.el-dialog.bkp-dialog > .el-dialog__body) {
+  display: flex; flex-direction: column; min-height: 0;
+}
+.progress-area {
+  display: flex; flex-direction: column;
+  flex: 1 1 auto; min-height: 0;
+}
 .log-box {
   margin-top: 10px;
-  height: 180px;
+  flex: 1 1 auto; min-height: 180px; height: auto; max-height: none;
   overflow: auto;
   background: #141821;
   color: #9fb3c8;

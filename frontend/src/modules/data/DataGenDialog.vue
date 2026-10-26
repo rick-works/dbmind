@@ -842,7 +842,8 @@ watch(() => props.modelValue, async (open) => {
 
 /* 实时日志控制台（跟随主题：深色 / 浅色均可读） */
 .log-box {
-  height: 190px; overflow: auto; padding: 8px 10px; border-radius: 8px;
+  /* 高度跟视口走（原来写死 190px）：小窗口不顶出屏幕、大屏能多看几行 */
+  height: clamp(150px, 22vh, 320px); overflow: auto; padding: 8px 10px; border-radius: 8px;
   background: var(--dc-bg-code); border: 1px solid var(--dc-border);
   color: var(--dc-code-text); font-family: var(--dc-mono-font);
   font-size: 13px; line-height: 1.7;

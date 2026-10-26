@@ -39,7 +39,7 @@
         <el-form-item :label="$t('dump.chooseObjects')">
           <el-tabs v-model="activeTab" type="border-card" size="small" style="width:100%;background:transparent;" class="dump-tabs">
             <el-tab-pane v-if="objTypes.includes('table')" :label="$t('dump.objTable')" name="table">
-              <div style="max-height:200px;overflow:auto;padding:4px;">
+              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allTable" @change="toggleAllByType('table', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedTable.length, total: tables.length }) }}</span>
@@ -51,7 +51,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('view')" :label="$t('dump.objView')" name="view">
-              <div style="max-height:200px;overflow:auto;padding:4px;">
+              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allView" @change="toggleAllByType('view', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedView.length, total: views.length }) }}</span>
@@ -63,7 +63,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('function')" :label="$t('dump.objFunction')" name="function">
-              <div style="max-height:200px;overflow:auto;padding:4px;">
+              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allFunc" @change="toggleAllByType('function', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedFunc.length, total: funcs.length }) }}</span>
@@ -75,7 +75,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('procedure')" :label="$t('dump.objProcedure')" name="procedure">
-              <div style="max-height:200px;overflow:auto;padding:4px;">
+              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allProc" @change="toggleAllByType('procedure', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedProc.length, total: procs.length }) }}</span>
@@ -87,7 +87,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('trigger')" :label="$t('dump.objTrigger')" name="trigger">
-              <div style="max-height:200px;overflow:auto;padding:4px;">
+              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allTrigger" @change="toggleAllByType('trigger', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedTrigger.length, total: triggers.length }) }}</span>
@@ -99,7 +99,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('event')" :label="$t('dump.objEvent')" name="event">
-              <div style="max-height:200px;overflow:auto;padding:4px;">
+              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allEvent" @change="toggleAllByType('event', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedEvent.length, total: events.length }) }}</span>

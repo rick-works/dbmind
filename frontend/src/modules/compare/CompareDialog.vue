@@ -1170,7 +1170,8 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 
 .cmp-tabs :deep(.el-tabs__header) { margin-bottom: 10px; }
 
-.struct-diff { max-height: 400px; overflow: auto; display: flex; flex-direction: column; gap: 12px; }
+/* 上限跟视口走（原来写死 400px）：小窗口不溢出、大窗口/全屏时能多用一截 */
+.struct-diff { max-height: clamp(240px, 42vh, 560px); overflow: auto; display: flex; flex-direction: column; gap: 12px; }
 .sd-group { border: 1px solid var(--dc-border); border-radius: 8px; padding: 8px 10px; background: var(--dc-bg-soft); }
 .sd-title { display: flex; align-items: center; gap: 5px; font-size: var(--dlg-body, 14px); font-weight: 700; margin-bottom: 6px; color: var(--dc-text); }
 .sd-title.danger { color: var(--dc-danger); }
@@ -1211,7 +1212,7 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .pg-text { font-size: 13px; color: var(--dc-text-dim); margin-top: 8px; text-align: center; }
 .pg-log { margin-bottom: 0; }
 /* 日志原来占 420px，明细加进来后要给它让位：日志是过程记录，明细才是用户要看的结论 */
-.pg-log .log-body { max-height: 150px; }
+.pg-log .log-body { max-height: clamp(120px, 18vh, 240px); }
 .pg-result { margin-top: 14px; }
 
 /* 统计卡兼作明细导航：可点击的给出手型与悬停反馈，不可点的就保持静态 */

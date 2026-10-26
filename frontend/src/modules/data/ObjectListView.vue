@@ -23,6 +23,14 @@
                   class="ols-search" :prefix-icon="Search" />
         <span class="ols-count">{{ $t('ols.count', { n: filtered.length }) }}</span>
         <span class="ols-flex" />
+        <!-- 多选删除：勾了行才出现。确认框由 MainView 弹**一次**（见 dropCatListRows），
+             不在这里逐行弹 —— 逐行弹一次就不叫批量了。 -->
+        <template v-if="canDrop && selCount">
+          <span class="ols-sel-count">{{ $t('ols.selected', { n: selCount }) }}</span>
+          <el-button size="small" type="danger" text :icon="Delete" class="ols-sel-drop" @click="dropSelected">
+            {{ $t('ols.dropSelected') }}
+          </el-button>
+        </template>
         <el-button size="small" :icon="Refresh" text @click="relayout">{{ $t('common.refresh') }}</el-button>
       </div>
       <div ref="bodyRef" class="ols-body" v-loading="loading">
@@ -34,12 +42,18 @@
                :style="gridStyle" @dblclick.self="relayout">
           <colgroup v-if="colW.length">
             <col style="width:46px" />
+            <col v-if="canDrop" style="width:36px" />
             <col v-for="(w, i) in colW" :key="i" :style="{ width: w + 'px' }" />
             <col style="width:230px" />
           </colgroup>
           <thead>
             <tr>
               <th class="leading-th row-num-th">#</th>
+              <!-- 全选：只作用于**当前筛选结果**（搜了关键字就选搜出来的那些） -->
+              <th v-if="canDrop" class="ols-sel-th" :title="$t('ols.selAll')">
+                <input type="checkbox" class="ols-cb" :checked="allChecked"
+                       :indeterminate.prop="someChecked" @change="toggleAll" />
+              </th>
               <th v-for="(c, i) in cols" :key="c.prop" :style="thStyle(c)"
                   @mousedown="onThMouseDown(i, $event)" @dblclick.stop="onThDblClick(i)">
                 <span class="th-line1" :class="c.align === 'left' ? 'is-left' : ''">
@@ -53,8 +67,12 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="(r, i) in filtered" :key="i" @dblclick="rowActivate(r)">
+            <tr v-for="(r, i) in filtered" :key="i" :class="{ 'is-selected': isSel(r) }"
+                @dblclick="rowActivate(r)">
               <td class="leading-td row-num">{{ i + 1 }}</td>
+              <td v-if="canDrop" class="ols-sel-td" @click.stop>
+                <input type="checkbox" class="ols-cb" :checked="isSel(r)" @change="toggleSel(r)" />
+              </td>
               <td v-for="c in cols" :key="c.prop"
                   :class="[c.prop === 'name' ? 'ols-name-td' : '', c.align === 'left' ? 'ols-td-left' : 'ols-td-center']"
                   :title="cellText(r, c)">
@@ -86,7 +104,7 @@
 // 列随**数据源类型**走：各家有什么就展示什么，没有的列不摆，不摆一排空列。
 import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search, Refresh, Document, Calendar, Histogram } from '@element-plus/icons-vue'
+import { Search, Refresh, Document, Calendar, Histogram, Delete } from '@element-plus/icons-vue'
 import { t } from '../../utils/i18n'
 import { editorSettingsLive } from '../../utils/settings'
 import { formatDbValue } from '../../utils/cellValue'
@@ -336,6 +354,36 @@ const ACTIONS = {
 }
 const actions = computed(() => ACTIONS[props.cat] || [])
 
+// ===== 多选删除 =====
+// 只有**有删除动作**的类别才画勾选列（表 / 视图 / 过程 / 函数 / 触发器 / 事件 / 脚本）。
+// 勾选状态存「行 key」而不是行对象：清单重载后行对象是新的，存对象会静默失效。
+const canDrop = computed(() => actions.value.some(a => a.action === 'drop'))
+const selected = ref([])
+const rowKeyOf = (r) => (props.cat === 'scripts' ? 'id:' + r.id : 'n:' + r.name)
+const isSel = (r) => selected.value.includes(rowKeyOf(r))
+const selCount = computed(() => selected.value.length)
+const toggleSel = (r) => {
+  const k = rowKeyOf(r)
+  const i = selected.value.indexOf(k)
+  if (i === -1) selected.value.push(k)
+  else selected.value.splice(i, 1)
+}
+// 全选只作用于**当前筛选结果**：搜了关键字之后点全选，删掉的就是搜出来的那些
+const allChecked = computed(() => filtered.value.length > 0 && filtered.value.every(isSel))
+const someChecked = computed(() => !allChecked.value && filtered.value.some(isSel))
+const toggleAll = () => {
+  selected.value = allChecked.value ? [] : filtered.value.map(rowKeyOf)
+}
+const selectedRows = computed(() => filtered.value.filter(isSel))
+const dropSelected = () => {
+  const rows = selectedRows.value.slice()
+  if (!rows.length) return
+  emit('act', {
+    action: 'dropSelected', rows,
+    connId: curConnId.value, database: curDb.value, cat: props.cat
+  })
+}
+
 const filtered = computed(() => {
   const k = keyword.value.trim().toLowerCase()
   if (!k) return rows.value
@@ -362,11 +410,13 @@ const measure = async () => {
   await nextTick()
   const tbl = tblRef.value
   if (!tbl || !filtered.value.length) return
-  const head = [...tbl.querySelectorAll('thead th')].slice(1, cols.value.length + 1)
+  // 前置列数：# 行号列 + 勾选列（有删除动作的类别才有勾选列）
+  const lead = canDrop.value ? 2 : 1
+  const head = [...tbl.querySelectorAll('thead th')].slice(lead, lead + cols.value.length)
   const widths = head.map((th, i) => {
     let w = th.scrollWidth
     for (const tr of tbl.querySelectorAll('tbody tr')) {
-      const td = tr.children[i + 1]
+      const td = tr.children[i + lead]
       if (td) w = Math.max(w, td.scrollWidth)
     }
     return Math.ceil(w) + 16
@@ -374,7 +424,7 @@ const measure = async () => {
   colW.value = widths
 }
 const relayout = () => { colW.value = []; measure() }
-const totalW = computed(() => 46 + colW.value.reduce((a, b) => a + b, 0) + 230)
+const totalW = computed(() => 46 + (canDrop.value ? 36 : 0) + colW.value.reduce((a, b) => a + b, 0) + 230)
 // **不铺满**：表格宽度 = 按内容测出的总宽，列宽自适应、总宽不足时右侧留白；
 // 内容超宽时保持内容宽横向滚动，列不被压缩
 const gridStyle = computed(() => {
@@ -477,6 +527,10 @@ watch(() => [props.connId, props.database, props.cat], () => {
   load()
 }, { immediate: true })
 watch(() => props.reloadTick, () => load())
+// 勾选按「名字」记：重载 / 换库 / 换类别后必须清空 —— 否则跨上下文残留的勾选
+// 会删掉另一个库里同名的那一行（删除是不可恢复的，宁可让用户重勾一次）。
+watch(() => [props.reloadTick, props.cat, props.connId, props.database, curConnId.value, curDb.value],
+  () => { selected.value = [] })
 watch(keyword, () => { colW.value = []; measure() })
 onMounted(() => {
   if (bodyRef.value && typeof ResizeObserver !== 'undefined') {
@@ -565,6 +619,21 @@ onBeforeUnmount(() => resizeObs?.disconnect())
   text-align: center; color: var(--dc-text-dim, #909399);
   background: var(--dc-bg-table-head, #f5f7fa); font-size: 12px;
 }
+/* 勾选列（有删除动作的类别才有）：与行号列同底色，窄而居中 */
+.data-table th.ols-sel-th { width: 36px; padding: 0; }
+.data-table th.ols-sel-th::after { display: none; }   /* 这一列不给拖宽热区 */
+.data-table td.ols-sel-td { width: 36px; padding: 0; text-align: center; }
+.ols-cb {
+  width: 13px; height: 13px; margin: 0; cursor: pointer;
+  accent-color: var(--dc-primary, var(--el-color-primary)); vertical-align: middle;
+}
+/* 已勾选的行：主色淡底 —— 勾完把鼠标移开也得看得出选了哪几行 */
+.data-table tbody tr.is-selected td { background: var(--dc-primary-wash, #eef4ff); }
+.data-table tbody tr.is-selected td.leading-td { color: var(--dc-primary, var(--el-color-primary)); font-weight: 600; }
+.data-table tbody tr.is-selected:hover td { background: var(--dc-bg-hover, #f0f4ff); }
+/* 工具条上的「已选 N 项 / 删除选中」 */
+.ols-sel-count { font-size: 12px; color: var(--dc-text-dim, #909399); }
+.ols-sel-drop { font-weight: 600; }
 /* 名称列：可点击的暗示 —— 手型 + 悬停变主色（双击开数据/详情） */
 .data-table td.ols-name-td { cursor: pointer; color: var(--dc-text-strong, #303133); }
 .data-table td.ols-name-td:hover {

@@ -5608,6 +5608,9 @@ const CAT_KIND = { tables: 'table', views: 'view', procs: 'procedure', functions
 const catListReloadTick = ref(0)
 const onCatListAct = async (tab, e) => {
   const { action, row } = e || {}
+  // 清单页「删除选中」：确认框只弹一次、循环在前端（见 dropCatListRows）。
+  // 必须在 `if (!row)` 之前拦下来 —— 批量事件只带 rows，没有 row。
+  if (action === 'dropSelected') { await dropCatListRows(tab, e); return }
   if (!row) return
   // 连接/库优先用**页内当前**值（组件顶部下拉可能已切换），回退到页签自身的
   const cid = String(e.connId || tab.connId || currentConnId.value || '')
@@ -5716,6 +5719,73 @@ const onCatListAct = async (tab, e) => {
       ctxIndexLoading.value = false
     }
   }
+}
+
+// 清单页「删除选中」：循环在**前端** + **确认框只弹一次**（与「批量删除连接」同一口径）。
+// 每条 DROP 独立提交 —— 一条失败不影响后面那些，最后汇总「成功 N / 失败 M」。
+// 单条删除复用各自的既有实现（表 → tableAction、其它对象 → doDropObject），
+// 传 quiet 让它们别逐条弹提示、也别逐条刷树：逐条弹的话整批结果会被几十条 toast 淹掉。
+const dropCatListRows = async (tab, e) => {
+  const list = (Array.isArray(e?.rows) ? e.rows : []).filter(r => r && (r.name || r.id))
+  if (!list.length) return
+  const cid = String(e.connId || tab.connId || currentConnId.value || '')
+  const db = e.database || tab.database || currentDb.value
+  const isScript = tab.cat === 'scripts'
+  const kindLabel = objCatLabel(tab.cat, connTypeOf(cid))
+  if (!isScript && !guardWrite(cid, t('mv.batchDropTitle'))) return
+  // 确认框只说「此操作不可恢复，确认执行？」：条数与名字在工具条（已选 N 项）和清单
+  // 里本来就看得见，再塞进弹窗只会把提示撑成三行（一次删 300 多个时尤其难读）。
+  try {
+    await ElMessageBox.confirm(
+      t('mv.batchDropBody'),
+      t('mv.batchDropTitle'),
+      { type: 'error', confirmButtonText: t('mv.dropConfirm'), cancelButtonText: t('common.cancel') }
+    )
+  } catch { return }
+  const done = []
+  const failed = []
+  for (const row of list) {
+    if (isScript) {
+      // 脚本在 localStorage：删的就是本地那条记录（与树右键「删除脚本」同一函数）
+      deleteScriptNode({ connId: cid, db, scriptId: row.id, label: row.name })
+      done.push(row.name)
+      continue
+    }
+    if (tab.cat === 'tables') {
+      try {
+        const res = await tableAction(cid, db, row.name, 'drop')
+        if (res && res.success) done.push(row.name)
+        else failed.push(row.name)
+      } catch { failed.push(row.name) }
+      continue
+    }
+    // 视图 / 过程 / 函数 / 触发器 / 事件：与右键「删除」同一套 DROP 生成（doDropObject）
+    const kind = CAT_KIND[tab.cat] || 'table'
+    const node = { kind, objectKind: kind, table: row.name, objectName: row.name, label: row.name, db, connId: cid }
+    const ok = await doDropObject(node, db, kindLabel, { quiet: true })
+    if (ok) done.push(row.name)
+    else failed.push(row.name)
+  }
+  if (done.length) {
+    // 被删对象的数据 / 结构 / 定义页签一并关掉（与单条删除同一处理，这里循环一遍）
+    const gone = new Set(done.map(n => String(n)))
+    tabs.value = tabs.value.filter(tb => {
+      if (!['table', 'detail', 'object'].includes(tb.type)) return true
+      if (String(tb.connId || '') !== cid) return true
+      return !gone.has(String(tb.table || tb.objectName || ''))
+    })
+    if (!tabs.value.find(tb => tb.id === activeTab.value)) {
+      activeTab.value = tabs.value[tabs.value.length - 1]?.id || ''
+    }
+    refreshCatNode(db, tab.cat, cid)   // 左侧树跟着刷新（quiet 路径里没逐条刷）
+    catListReloadTick.value++
+  }
+  // 失败项把名字带出来（最多 5 个）：quiet 路径里没弹逐条原因，
+  // 只说「N 个失败」用户不知道是哪个、也就没法单条重试。
+  const failNames = failed.slice(0, 5).join('、') + (failed.length > 5 ? '…' : '')
+  if (done.length && !failed.length) ElMessage.success(t('mv.batchDropOk', { n: done.length, kind: kindLabel }))
+  else if (done.length) ElMessage.warning(t('mv.batchDropPart', { ok: done.length, fail: failed.length, names: failNames }))
+  else ElMessage.error(t('mv.batchDropNone', { n: failed.length, kind: kindLabel, names: failNames }))
 }
 
 const openRedisDb = (data) => {
@@ -7729,7 +7799,7 @@ const objDrop = () => {
   confirmDropObject(d, db)
 }
 
-const doDropObject = async (d, db, label) => {
+const doDropObject = async (d, db, label, opts = {}) => {
   const name = objName(d)
   // 连接用**节点自己的**：右击的可能是非当前连接里的对象（原来是 conn.value.id，
   // 那种情况下会删到当前连接的同名对象上去）
@@ -7758,19 +7828,23 @@ const doDropObject = async (d, db, label) => {
   try {
     const res = await alterTable(cid || conn.value.id, db, sql)
     if (res.success) {
-      ElMessage.success(t('mv.kindDeleted', { kind: label, name: d.label }))
-      // 关闭该对象的详情页签
-      const tabId = (d.objectKind === 'view' ? 'object:view:' + name : d.objectKind + ':' + (d.objectName || name))
-      const idx = tabs.value.findIndex(x => x.id === tabId)
-      if (idx !== -1) tabs.value.splice(idx, 1)
-      const catMap = { view: 'views', function: 'procs', procedure: 'procs', trigger: 'triggers', event: 'events' }
-      const cat = catMap[d.objectKind]
-      if (cat) refreshCatNode(db, cat)
-      else refreshDbNode(db)
+      // quiet（批量删除用）：提示与刷树由调用方统一做一次，这里逐条弹/逐条刷
+      // 会把「成功 42 / 失败 1」这种汇总淹在几十条 toast 里。
+      if (!opts.quiet) {
+        ElMessage.success(t('mv.kindDeleted', { kind: label, name: d.label }))
+        // 关闭该对象的详情页签
+        const tabId = (d.objectKind === 'view' ? 'object:view:' + name : d.objectKind + ':' + (d.objectName || name))
+        const idx = tabs.value.findIndex(x => x.id === tabId)
+        if (idx !== -1) tabs.value.splice(idx, 1)
+        const catMap = { view: 'views', function: 'procs', procedure: 'procs', trigger: 'triggers', event: 'events' }
+        const cat = catMap[d.objectKind]
+        if (cat) refreshCatNode(db, cat)
+        else refreshDbNode(db)
+      }
       return true
     }
-    ElMessage.error(t('mv.deleteFailed', { detail: (res.message || t('common.unknownError')) }))
-  } catch (e) { ElMessage.error(t('mv.deleteFailed', { detail: errMsg(e) })) }
+    if (!opts.quiet) ElMessage.error(t('mv.deleteFailed', { detail: (res.message || t('common.unknownError')) }))
+  } catch (e) { if (!opts.quiet) ElMessage.error(t('mv.deleteFailed', { detail: errMsg(e) })) }
   return false
 }
 
