@@ -1943,6 +1943,8 @@ export default {
   'settings.about.rel1.note1': '表 / 视图 / 存储过程 / 函数 / 触发器 / 事件的清单页可以勾选多行一次删除：表头的全选只作用于当前筛选结果，删除前只确认一次，删完汇总「已删除 N 个」并关掉被删对象已经打开的页签',
   'settings.about.rel1.note2': '批量删除的确认框只说「此操作不可恢复，确认执行？」，不再把几百个对象名撑满一屏',
   'settings.about.rel1.note3': '弹窗里的日志 / 结果区改成跟着弹窗高度自适应：「备份数据库」等任务弹窗把窗口拉大或点全屏后，日志区会一起长高，不再下半截留一片空白',
+  'settings.about.rel1.note4': '「查看 DDL」「表索引」「建库语句」弹窗右上角的「复制」按钮不再压在全屏图标下面（标题栏按全屏按钮的位置让出了间隔）',
+  'settings.about.rel1.note5': '「转储 SQL 文件」「运行 SQL 文件」弹窗不再一打开按钮就是灰的：任务状态初值被写成了「运行中」，现在只有真正跑任务时才禁用；「运行 SQL 文件」执行成功后也会正常刷新左侧库节点',
   'settings.about.rel2.version': 'v1.5.5',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-10-26',

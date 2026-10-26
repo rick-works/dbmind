@@ -3,7 +3,9 @@
   "v1.5.6": [
     "Object lists (tables / views / procedures / functions / triggers / events) now let you tick several rows and drop them in one go: the header checkbox selects only the current filter, the confirmation is asked once up front, and the summary reports how many were dropped while closing the tabs of those objects",
     "The batch delete confirmation now just asks \"This cannot be undone. Continue?\" instead of filling the dialog with hundreds of object names",
-    "Log and result panes inside dialogs now grow with the dialog: after dragging a task dialog (such as Database backup) larger or going fullscreen, the log pane expands too instead of leaving the bottom half blank"
+    "Log and result panes inside dialogs now grow with the dialog: after dragging a task dialog (such as Database backup) larger or going fullscreen, the log pane expands too instead of leaving the bottom half blank",
+    "The Copy button in the View DDL / table indexes / database DDL dialogs is no longer covered by the fullscreen icon — the title bar now leaves room for the icon injected at its top-right corner",
+    "The Dump SQL file and Run SQL file dialogs no longer open with every button greyed out: the task state started as \"running\" even though nothing had been submitted, so the buttons are now disabled only while a task really runs; running a SQL file also refreshes the database node in the tree again"
   ],
   "v1.5.5": [
     "Sync verification for incremental / merge / row-limited runs no longer compares row counts and no longer truncates the target table — a mismatch verdict used to trigger a truncate-and-reload that wiped the target history",

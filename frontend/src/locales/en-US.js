@@ -1932,6 +1932,8 @@ export default {
   'settings.about.rel1.note1': 'Object lists (tables / views / procedures / functions / triggers / events) now let you tick several rows and drop them in one go: the header checkbox selects only the current filter, the confirmation is asked once up front, and the summary reports how many were dropped while closing the tabs of those objects',
   'settings.about.rel1.note2': 'The batch delete confirmation now just asks "This cannot be undone. Continue?" instead of filling the dialog with hundreds of object names',
   'settings.about.rel1.note3': 'Log and result panes inside dialogs now grow with the dialog: after dragging a task dialog (such as Database backup) larger or going fullscreen, the log pane expands too instead of leaving the bottom half blank',
+  'settings.about.rel1.note4': 'The Copy button in the View DDL / table indexes / database DDL dialogs is no longer covered by the fullscreen icon — the title bar now leaves room for the icon injected at its top-right corner',
+  'settings.about.rel1.note5': 'The Dump SQL file and Run SQL file dialogs no longer open with every button greyed out: the task state started as "running" even though nothing had been submitted, so the buttons are now disabled only while a task really runs; running a SQL file also refreshes the database node in the tree again',
   'settings.about.rel2.version': 'v1.5.5',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-10-26',
