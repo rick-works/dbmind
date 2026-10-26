@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.5.6": [
+    "Object lists (tables / views / procedures / functions / triggers / events) now let you tick several rows and drop them in one go: the header checkbox selects only the current filter, the confirmation is asked once up front, and the summary reports how many were dropped while closing the tabs of those objects",
+    "The batch delete confirmation now just asks \"This cannot be undone. Continue?\" instead of filling the dialog with hundreds of object names",
+    "Log and result panes inside dialogs now grow with the dialog: after dragging a task dialog (such as Database backup) larger or going fullscreen, the log pane expands too instead of leaving the bottom half blank"
+  ],
   "v1.5.5": [
     "Sync verification for incremental / merge / row-limited runs no longer compares row counts and no longer truncates the target table — a mismatch verdict used to trigger a truncate-and-reload that wiped the target history",
     "\"Transferred\" is now counted in exactly one place (insert / upsert / fast load each add once, the engine no longer adds again): it matches \"read\" instead of running high, and no longer reads 0 while the read counter climbs",
