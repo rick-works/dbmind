@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.6.2": [
+    "Each SQL editor tab now uses its own database session, so a slow statement on one page (an index-building ALTER, a big count) no longer holds up the other pages: all pages used to share one session, and with a sleep(6) running another page select 1 waited 5.8 seconds",
+    "Statement splitting fixed: a same-line comment after the semicolon (LOCK=NONE;  -- about +80MB) now belongs to the statement it trails, so the editor statement box, numbering and error location no longer reach one line up",
+    "The Check for updates icon in the top-right corner is a download arrow now instead of an upload arrow, and it spins while checking or downloading"
+  ],
   "v1.6.1": [
     "A sync that loses the link halfway no longer marks the table as failed: read pages wait 1/2/5/10/20/30 seconds for the network instead of shrinking the page, a table reconnects up to 5 times with 2/5/10/20/30-second backoff, and the run picks up where it left off once the link is back",
     "Delete-and-recreate / truncate-then-load runs clear the target table again before every retry, so rows already committed no longer block auto-reconnect (the old logic gave up on the second drop); clearing the table also keeps waiting when it hits a link that is still down, instead of ending the table right away",
