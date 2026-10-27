@@ -852,12 +852,16 @@ onBeforeUnmount(() => {
 .ft-empty { padding: 40px 0; text-align: center; color: var(--dc-text-dim, #909399); font-size: 13px; }
 
 /* ===== 自绘网格：与查询结果/表数据同一套（.data-table 类名对齐）===== */
-.data-table { border-collapse: collapse; font-size: inherit; }
+/* 字号跟「编辑表结构」的字段表同一档：比设置里的「数据视图表格」小 1px
+   （那边 .field-table th/td/.cell-text 全是 calc(var(--dc-data-fs) - 1px)，
+   两张表放一起才不会一个显大一个显小）。整页其它地方仍是 --dc-data-fs。 */
+.data-table { border-collapse: collapse; font-size: calc(var(--dc-data-fs, 13px) - 1px); }
 .data-table thead { position: sticky; top: 0; z-index: 2; }
 .data-table th {
   background: var(--dc-bg-table-head, #f5f7fa); padding: 5px 10px; height: calc(var(--grid-row-h, 26px) + 6px);
   border: 1px solid var(--dc-border, #dcdfe6); color: var(--dc-text-strong, #303133);
-  font-weight: normal; text-align: center; white-space: nowrap;
+  /* 与字段表表头一致：同一档字号（.data-table 已设）+ 600，两张表的标题行看起来是同一套 */
+  font-weight: 600; text-align: center; white-space: nowrap;
   position: relative; user-select: none;
   /* 表头/数据的 2px 压边线：与查询结果网格同一笔（inset 阴影才能跟着 sticky 表头走） */
   box-shadow: inset 0 -2px 0 var(--dc-table-head-line, #d8dee9);
@@ -959,6 +963,11 @@ onBeforeUnmount(() => {
 .ols-cmt-cell :deep(.el-input__inner) {
   height: calc(var(--grid-row-h, 26px) - 6px);
   line-height: calc(var(--grid-row-h, 26px) - 6px);
+  /* 字族/字号必须显式压：<input> 会落回浏览器 UA 的 Arial + Element small 的 12px，
+     于是同一个格子里别的列是 13px 前端字体、注释却是 12px Arial（两张表一对比更明显）。
+     这两行与「编辑表结构」字段表那格渲染出来的值完全一致。 */
+  font-family: inherit;
+  font-size: calc(var(--dc-data-fs, 13px) - 1px);
 }
 /* ↓↓↓ 跟字段表一模一样：单元格里的输入框默认**隐形**（透明底 + 无描边），
    整列读起来就是文字；鼠标移到该行才浮出输入框的样子，聚焦时给主色描边。
