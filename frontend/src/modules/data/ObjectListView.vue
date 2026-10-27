@@ -916,8 +916,11 @@ onBeforeUnmount(() => {
 /* 工具条上的「已选 N 项 / 删除选中」 */
 .ols-sel-count { font-size: 12px; color: var(--dc-text-dim, #909399); }
 .ols-sel-drop { font-weight: 600; }
-/* 名称列：可点击的暗示 —— 手型 + 悬停变主色（双击开数据/详情） */
-.data-table td.ols-name-td { cursor: pointer; color: var(--dc-text-strong, #303133); }
+/* 名称列：可点击的暗示 —— 手型 + 悬停变主色（双击开数据/详情）。
+   **文字色不另设**：以前这里用了 --dc-text-strong（比正文亮一档），整列看起来比
+   「编辑表结构」的字段名更粗更"大"（实测同一串文字的渲染宽度完全一致 163.13px，
+   差别只在色值 238,241,246 vs 217,220,227），所以跟正文用同一个 --dc-text。 */
+.data-table td.ols-name-td { cursor: pointer; }
 .data-table td.ols-name-td:hover {
   color: var(--dc-primary, var(--el-color-primary));
   text-decoration: underline; background: var(--dc-bg-hover, #f0f4ff);
