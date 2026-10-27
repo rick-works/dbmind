@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.6.7": [
+    "Table comments can be edited right in the object list: Enter or blur saves, Esc reverts, and double-clicking the cell (or the icon on the right) opens a multi-line editor - same feel as the field comment in Edit table structure",
+    "Comment SQL follows the data source: MySQL / Doris / ClickHouse use COMMENT / MODIFY COMMENT, SQL Server uses extended properties, PG / Oracle / DB2 / H2 use COMMENT ON TABLE - no more syntax the server rejects",
+    "Redis / MongoDB / Elasticsearch connections can now take a username and password (the fields used to be hidden, so authenticated instances could not be reached at all); leave them empty for no auth"
+  ],
   "v1.6.6": [
     "Resting the mouse on a connection now warms it up in the background (SSH tunnel + JDBC session), so opening it is nearly instant instead of a two or three second wait",
     "Two \"clicked and nothing happened\" tree bugs are fixed: opening a connection by its arrow could leave the previous connection active (SQL still ran there), and a connection that was already connecting was treated as unreachable so it neither expanded nor reported an error",

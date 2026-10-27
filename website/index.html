@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.6.7（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.6.7</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-27</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>表清单（对象列表）里可以直接改表注释：回车或失焦即保存、Esc 还原，双击注释格或点右侧放大图标打开多行编辑框 —— 与「编辑表结构」的字段注释同一套操作和观感</b></li>
+            <li><b>改注释按数据源自动选语法</b>：MySQL / Doris / ClickHouse 走 ALTER TABLE … COMMENT / MODIFY COMMENT，SQL Server 走扩展属性，PG / Oracle / DB2 / H2 走 COMMENT ON TABLE，不会再生成对方不认的 SQL</li>
+            <li><b>Redis / MongoDB / Elasticsearch 的连接对话框现在能填用户名和密码（以前这两个框是藏起来的，开了认证的实例根本连不上），留空即按无认证连接</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.7" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.7" target="_blank" rel="noopener">下载 v1.6.7</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.6.6（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.6.6</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-27</span>
           </div>
           <ul class="rel-notes">
