@@ -852,10 +852,10 @@ onBeforeUnmount(() => {
 .ft-empty { padding: 40px 0; text-align: center; color: var(--dc-text-dim, #909399); font-size: 13px; }
 
 /* ===== 自绘网格：与查询结果/表数据同一套（.data-table 类名对齐）===== */
-/* 字号跟「编辑表结构」的字段表同一档：比设置里的「数据视图表格」小 1px
-   （那边 .field-table th/td/.cell-text 全是 calc(var(--dc-data-fs) - 1px)，
+/* 字号跟「编辑表结构」的字段表同一档：比设置里的「数据视图表格」小 2px
+   （那边 .field-table th/td/.cell-text 也是 calc(var(--dc-data-fs) - 2px)，
    两张表放一起才不会一个显大一个显小）。整页其它地方仍是 --dc-data-fs。 */
-.data-table { border-collapse: collapse; font-size: calc(var(--dc-data-fs, 13px) - 1px); }
+.data-table { border-collapse: collapse; font-size: calc(var(--dc-data-fs, 13px) - 2px); }
 .data-table thead { position: sticky; top: 0; z-index: 2; }
 .data-table th {
   background: var(--dc-bg-table-head, #f5f7fa); padding: 5px 10px; height: calc(var(--grid-row-h, 26px) + 6px);
@@ -894,9 +894,9 @@ onBeforeUnmount(() => {
 .data-table td.leading-td {
   text-align: center; color: var(--dc-text-dim, #909399);
   background: var(--dc-bg-table-head, #f5f7fa);
-  /* 行号比数据小一号；跟着设置里的「数据视图表格」字号走（写死 12px 的话调大字号时
+  /* 行号跟着设置里的「数据视图表格」字号走，比数据再小半号（写死像素的话调大字号时
      只有这一列不动，一列小字夹在大字里很显眼） */
-  font-size: calc(var(--dc-data-fs, 13px) - 1px);
+  font-size: calc(var(--dc-data-fs, 13px) - 2.5px);
 }
 /* 勾选列（有删除动作的类别才有）：与行号列同底色，窄而居中 */
 .data-table th.ols-sel-th { width: 36px; padding: 0; }
@@ -966,11 +966,11 @@ onBeforeUnmount(() => {
 .ols-cmt-cell :deep(.el-input__inner) {
   height: calc(var(--grid-row-h, 26px) - 6px);
   line-height: calc(var(--grid-row-h, 26px) - 6px);
-  /* 字族/字号必须显式压：<input> 会落回浏览器 UA 的 Arial + Element small 的 12px，
-     于是同一个格子里别的列是 13px 前端字体、注释却是 12px Arial（两张表一对比更明显）。
+  /* 字族/字号必须显式压：<input> 会落回浏览器 UA 的 Arial + Element small 的 12px
+     （Arial 的中文 fallback 墨迹比应用字体栈矮 2px，两张表一对比就很明显）。
      这两行与「编辑表结构」字段表那格渲染出来的值完全一致。 */
   font-family: inherit;
-  font-size: calc(var(--dc-data-fs, 13px) - 1px);
+  font-size: calc(var(--dc-data-fs, 13px) - 2px);
 }
 /* ↓↓↓ 跟字段表一模一样：单元格里的输入框默认**隐形**（透明底 + 无描边），
    整列读起来就是文字；鼠标移到该行才浮出输入框的样子，聚焦时给主色描边。
