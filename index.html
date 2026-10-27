@@ -746,6 +746,67 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.6.8（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.6.8</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-27</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>新建表（基本信息 / 字段定义 / 索引）的字号现在跟着设置里的「数据视图表格」走 —— 以前它写死在 12~13px，索引页签还是 Element 默认的 14px，调了字号只有「编辑表结构」会变</b></li>
+            <li><b>「数据视图表格」的默认字号统一为 14px：它和编辑器设置里的「结果表格字号」本来就是同一个值，以前一边默认 13、一边默认 14，点「恢复默认」后两边会对不上</b></li>
+            <li><b>新建表的字段表不再一行三种字号（表头 13px / 纯文本 12px / 输入框 12px），输入框也补上字族继承 —— 不再落回浏览器的 Arial，同一字号下中文看着更小</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.8" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.8" target="_blank" rel="noopener">下载 v1.6.8</a>
+          </div>
+        </div>
+      </article>
+      <!-- v1.6.7 -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.6.7</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-27</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>表清单（对象列表）里可以直接改表注释：回车或失焦即保存、Esc 还原，双击注释格或点右侧放大图标打开多行编辑框 —— 与「编辑表结构」的字段注释同一套操作和观感</b></li>
+            <li><b>改注释按数据源自动选语法</b>：MySQL / Doris / ClickHouse 走 ALTER TABLE … COMMENT / MODIFY COMMENT，SQL Server 走扩展属性，PG / Oracle / DB2 / H2 走 COMMENT ON TABLE，不会再生成对方不认的 SQL</li>
+            <li><b>Redis / MongoDB / Elasticsearch 的连接对话框现在能填用户名和密码（以前这两个框是藏起来的，开了认证的实例根本连不上），留空即按无认证连接</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.7" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.7" target="_blank" rel="noopener">下载 v1.6.7</a>
+          </div>
+        </div>
+      </article>
+      <!-- v1.6.6（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.6.6</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-date">2026-10-27</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>鼠标在连接上稍作停留就会在后台把它连起来（SSH 隧道 + JDBC 会话），点开时几乎瞬间展开 —— 首次打开不用再等两三秒</b></li>
+            <li><b>修掉树上的两个「点了没反应」</b>：点箭头打开连接却不切换当前连接（SQL 还跑在上一条连接上）；同一条连接正在连接时被当成连不上，于是既不展开也不报错</li>
+            <li><b>更快也更省</b>：启动时重复的请求合并成一次，catalog 探测只对 Doris 发，树重建不再重复校验刚刚确认过的连接</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.6" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.6" target="_blank" rel="noopener">下载 v1.6.6</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.6.5（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +814,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.6.5</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-27</span>
           </div>
           <ul class="rel-notes">
