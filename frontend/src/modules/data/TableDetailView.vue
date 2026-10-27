@@ -3186,8 +3186,8 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
      纯文本态的文字与表头（补了 16px = 9 + 7）正好对齐（原来写 4px，比表头偏左 3px）。 */
   padding: 0 7px;
   /* 与表头同一档，并且**跟着设置里的「数据视图表格」字号走**（整页根是 var(--dc-data-fs)，
-     这里比它小 1px，保持字段表比数据网格紧凑一点的既有观感） */
-  font-size: calc(var(--dc-data-fs, 13px) - 2px);
+     不再做 ±1px 偏移，与整页同字号（跟着设置里的「数据视图表格」走） */
+  font-size: var(--dc-data-fs, 13px);
   cursor: pointer;
 }
 .field-table .cell-text.cell-off { opacity: .55; cursor: not-allowed; }
@@ -3219,8 +3219,8 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   background: var(--dc-bg-soft);
   color: var(--dc-text-strong);
   font-weight: 600;
-  /* 跟着设置里的「数据视图表格」字号走（比整页小 1px，与单元格文本同档） */
-  font-size: calc(var(--dc-data-fs, 13px) - 2px);
+  /* 跟着设置里的「数据视图表格」字号走（与单元格文本、输入框同档） */
+  font-size: var(--dc-data-fs, 13px);
   letter-spacing: .02em;
   text-align: left;
   /* 左右 9px：列与列的区分靠留白。上下 9px → 6px → 5px：标题行随数据行一起收
@@ -3239,9 +3239,9 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    左右 8px → 9px：与表头的 9px 对齐（差 1px 在高分屏上就能看出输入框比表头偏左）。
    首列例外，见下面 :first-child 的 4px（序号列居中，不需要 9px）。 */
 /* height 只是**下限**（多行内容仍可撑高）：真正的行高由行内控件的 --ctl-h 决定 */
-/* 字号：本页（字段定义 / 索引 / 基本信息）与「对象清单」统一取「设置里的表格字号 − 2px」
-   （用户觉得 −1px 那版仍偏大，要求再小一号；三处一起调才不会切页签就变一个字号）。 */
-.field-table td { padding: 1px 9px; height: var(--grid-row-h, 26px); font-size: calc(var(--dc-data-fs, 13px) - 2px); background: var(--dc-bg-card); border-bottom: 1px solid var(--dc-border); vertical-align: middle; }
+/* 字号：本页（字段定义 / 索引 / 基本信息）与「对象清单」一律用设置里的表格字号，
+   不做 ±1px/±2px 偏移 —— 表头与内容、三个页签、两张表全部等大。 */
+.field-table td { padding: 1px 9px; height: var(--grid-row-h, 26px); font-size: var(--dc-data-fs, 13px); background: var(--dc-bg-card); border-bottom: 1px solid var(--dc-border); vertical-align: middle; }
 /* 列竖线：标题行与数据行逐格画右边框（separate 边框模式各画各的，不会叠加变粗）。
    最后一列不画 —— 否则与容器外框并成两条线。
    表格的第一行（thead 里那个 35px 的"空行"）**不加竖线**：页签与工具栏就住在那一行，
@@ -3262,17 +3262,17 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    输入框/下拉/小按钮 Element 的 small 尺寸都是 24px，这里一并收到 --ctl-h，
    否则它们会成为新的"行高天花板"——行高不是 padding 决定的，是它们决定的。 */
 .field-table :deep(.el-input__inner) { height: var(--ctl-h, 20px); }
-/* 格子里的控件字号也统一到「表头那一档」：Element 的 small 默认 12px，比表头的
-   calc(--dc-data-fs - 1px) 小一档，于是同一行里表头/纯文本/输入框三种字号
-   （用户反馈「索引表格字体跟另两个 tab 不一样」，根因就是这一页里字号有四套）。 */
+/* 格子里的控件字号也统一到「表头那一档」：Element 的 small 默认 12px，比表头小一档，
+   于是同一行里表头/纯文本/输入框三种字号（用户反馈「索引表格字体跟另两个 tab 不一样」，
+   根因就是这一页里字号有四套）。现在一律取设置里的表格字号。 */
 .field-table :deep(.el-input__inner),
 .field-table :deep(.el-select__selected-item),
 .field-table :deep(.el-select__placeholder) {
-  font-size: calc(var(--dc-data-fs, 13px) - 2px);
+  font-size: var(--dc-data-fs, 13px);
   /* **字族必须继承**：<input> 没设 font-family 时会落回浏览器 UA 的 Arial，
-     同一个 13px 下 Arial 的中文 fallback 墨迹只有 12px、应用字体栈是 14px
-     —— 于是「字段定义」里的字段名/注释看着比对象清单里的字小一号（用户反馈
-     「两个表格字号不一样」）。basic-table 早就加了这条，这里和索引页签补上。 */
+     同一字号下 Arial 的中文 fallback 墨迹比应用字体栈矮 2px —— 于是「字段定义」里的
+     字段名/注释看着比对象清单里的字小一号（用户反馈「两个表格字号不一样」）。
+     basic-table 早就加了这条，这里和索引页签补上。 */
   font-family: inherit;
 }
 .field-table :deep(.el-input__wrapper) { min-height: var(--ctl-h, 20px); }
@@ -3336,7 +3336,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .field-table tbody tr.r-new:hover td { background: rgba(61, 220, 151, .12); }
 .field-table tbody tr.r-mod:hover td { background: rgba(245, 179, 77, .13); }
 .row-idx {
-  color: var(--dc-text-dim); font-size: calc(var(--dc-data-fs, 13px) - 1.5px);
+  color: var(--dc-text-dim); font-size: var(--dc-data-fs, 13px);
   font-variant-numeric: tabular-nums;
 }
 /* ↓↓↓ 让表格"像表格"的关键：单元格里的输入控件默认**隐形**（透明底 + 无描边），
@@ -3419,7 +3419,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .idx-tab :deep(.el-table) {
   /* 与「字段定义」「基本信息」同一档字号：Element 的 el-table 默认 14px，
      原来切到索引页签字会明显大一号（三个页签的注释一直写着"同一档"，这里补上） */
-  font-size: calc(var(--dc-data-fs, 13px) - 2px);
+  font-size: var(--dc-data-fs, 13px);
   --el-table-bg-color: transparent;
   --el-table-tr-bg-color: transparent;
   /* 表头与字段表格同色（原来是 --dc-bg-code，和字段页签不一致） */
@@ -3501,7 +3501,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .idx-tab :deep(.el-table .el-table__row.row-is-modified > td.el-table__cell) { background: rgba(245, 179, 77, .1) !important; }
 .idx-tab :deep(.el-table .el-input__wrapper) { padding: 0 6px; }
 .idx-tab :deep(.el-table .el-input__inner) {
-  font-size: calc(var(--dc-data-fs, 13px) - 2px); height: var(--ctl-h, 20px);
+  font-size: var(--dc-data-fs, 13px); height: var(--ctl-h, 20px);
   font-family: inherit;   /* 同字段表：不继承就会落回 UA 的 Arial，中文看着比别处小一号 */
 }
 /* 索引页签是 el-table：行高由单元格内容撑出来，里面的控件也得跟 --ctl-h 走 ——
@@ -3652,7 +3652,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   /* 与「字段定义」「索引」两个页签**同一档**，并且跟着设置里的「数据视图表格」字号走。
      原来这里写死 12.5px、字段表 12px、索引 el-table 13px —— 三个页签三种字号，
      切一下就看出"索引比另两个大一号"。 */
-  font-size: calc(var(--dc-data-fs, 13px) - 2px);
+  font-size: var(--dc-data-fs, 13px);
   letter-spacing: 0;
 }
 /* 表头：同字号同字体，只是**加黑**（更深的颜色 + 600） */
