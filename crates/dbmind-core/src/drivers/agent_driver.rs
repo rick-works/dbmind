@@ -682,6 +682,10 @@ impl AgentDriver {
                     "会话连接已失效，已清掉内核缓存（下一次调用会重连；本次不重试）"
                 );
                 self.host.forget_session(&session_id);
+                // **重建前先作废 SSH 隧道**：换网/断网后旧 TCP 是半开的，本地监听还活着、
+                // 池里的会话 `authenticated()` 也还是 true —— 不拆隧道的话，下面这次重建
+                // 又落进同一条死链路，用户只能去重启 VPN 客户端（真机 2026-10-27）。
+                invalidate_tunnel_throttled(config);
                 // 顺手把连接重建一次。**不重试语句**（写语句不能重试），但这样能拿到真实错误：
                 // 宿主此刻可能只会说「会话不存在」，而它上一次失败的原因（Communications
                 // link failure / RDS 主动断开…）以及这次重建失败的原因，才是用户要看的。
@@ -706,7 +710,9 @@ impl AgentDriver {
     /// 只有 `Dead` 才算：`Unknown`（语句级报错，例如 PG 事务 aborted）说明连接本身没问题，
     /// 丢掉缓存等于把用户还在用的连接悄悄换掉。
     fn idle_session_is_dead(&self, session_id: &str) -> bool {
-        probe_session(self.kind, &self.host, session_id) == ProbeOutcome::Dead
+        // true = 超时也算死：用户马上要用这条连接，宁可多花一次重连，
+        // 也不能把一条半开的死连接交出去（那正是「网络恢复了还是连不上」的成因）。
+        probe_session(self.kind, &self.host, session_id, true) == ProbeOutcome::Dead
     }
 
 
@@ -770,11 +776,48 @@ enum ProbeOutcome {
     Unknown,
 }
 
+/// 链路级失败后作废这条连接的 SSH 隧道（见 `crate::tunnel::invalidate`）。
+///
+/// 限频 60 秒：一批表连着失败时不能每次都拆隧道重建 —— 一次重建 1.5~6.4 秒，
+/// 还要额外吃跳板机的会话配额，撞上 `HANDSHAKE_MAX` 反而更糟。
+fn invalidate_tunnel_throttled(config: &ConnectionConfig) {
+    type LastMap = std::sync::Mutex<std::collections::HashMap<String, Instant>>;
+    static LAST: std::sync::OnceLock<LastMap> = std::sync::OnceLock::new();
+
+    // 没配 SSH 隧道就什么都不用做（`tunnel_key` 只在 enabled 时才返回 Some）
+    let Some(key) = crate::tunnel::tunnel_key(config) else {
+        return;
+    };
+    let map = LAST.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+    {
+        let mut guard = map.lock().unwrap_or_else(|err| err.into_inner());
+        if guard
+            .get(&key)
+            .is_some_and(|last| last.elapsed() < Duration::from_secs(60))
+        {
+            return;
+        }
+        guard.insert(key, Instant::now());
+    }
+    // 出锁再拆：拆隧道要关 SSH 会话（发报文），不该占着这张表
+    crate::tunnel::invalidate(config);
+}
+
 /// 用一句最轻的 SQL 验证「这条会话还能不能用」。
 ///
 /// **绝不把错误上抛**：探活是预防性检查，不是业务语句。把「可能坏了」当「一定坏」
 /// 判给用户（一次同步失败、一条查询报错）比多花一次往返贵得多。
-fn probe_session(kind: ConnectionKind, host: &AgentHost, session_id: &str) -> ProbeOutcome {
+///
+/// `timeout_is_dead`：超时算不算「连接已死」。**只有借出前探活传 true**。
+/// 半开链路（换 WiFi / 断 VPN 隧道）唯一的表现就是「`select 1` 迟迟不返回」，不判死
+/// 的话死连接会被无限复用 —— 用户必须重启 VPN 客户端才能恢复（真机 2026-10-27）。
+/// 后台保活传 false：它每 20 秒一发，高负载时排队超时不该把好会话摘掉（会变成连接抖动）。
+fn probe_session(
+    kind: ConnectionKind,
+    host: &AgentHost,
+    session_id: &str,
+    timeout_is_dead: bool,
+) -> ProbeOutcome {
     let mut params = Map::new();
     params.insert("sessionId".to_string(), json!(session_id));
     params.insert("sql".to_string(), json!(probe_sql(kind)));
@@ -787,6 +830,18 @@ fn probe_session(kind: ConnectionKind, host: &AgentHost, session_id: &str) -> Pr
                 "空闲会话探活通过（链路仍然可用）"
             );
             ProbeOutcome::Alive
+        }
+        // 超时：半开链路没有 RST/FIN，驱动不会报错，只会一直等 —— 这是它唯一的信号。
+        // 必须排在通用分支前面，否则会被当成「语句级错误」保留会话，死连接被无限复用。
+        Err(err) if timeout_is_dead && err.code == ErrorCode::QueryTimeout => {
+            tracing::warn!(
+                target: "dbmind::agent",
+                session = %session_id,
+                timeout_ms = STALE_PROBE_TIMEOUT.as_millis() as u64,
+                error = %err.message,
+                "空闲会话探活超时（链路多半已半开），作废后重连"
+            );
+            ProbeOutcome::Dead
         }
         Err(err) if err.code == ErrorCode::ConnConnectFailed => {
             tracing::debug!(
@@ -853,8 +908,10 @@ fn spawn_keepalive(kind: ConnectionKind, host: Arc<AgentHost>, pool: Weak<Sessio
                     continue;
                 }
                 // 只有「连接确实没了」才作废；语句级错误（比如会话正处在
-                // aborted 的事务里）不动它 —— 见 `ProbeOutcome`
-                if probe_session(kind, &host, &session_id) != ProbeOutcome::Dead {
+                // aborted 的事务里）不动它 —— 见 `ProbeOutcome`。
+                // 超时这里**不**判死（传 false）：保活每 20 秒一发，高负载时排队超时
+                // 会把好会话摘掉，变成连接抖动；半开链路留给「借出前探活」兜。
+                if probe_session(kind, &host, &session_id, false) != ProbeOutcome::Dead {
                     pool.release_heartbeat(&session_id);
                     continue;
                 }

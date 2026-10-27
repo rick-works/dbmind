@@ -27,9 +27,13 @@ rusqlite = { workspace = true }
 #   OpenSSL（`ssh2` 的另一个特性 openssl-on-win32 才是显式改成用它）。
 [target.'cfg(unix)'.dependencies]
 ssh2 = { version = "0.9", features = ["vendored-openssl"] }
+# 给 SSH 底层 TCP 开 keepalive：换 WiFi / 断网后半开连接不会自己报错，
+# 旧隧道会被一直复用（用户必须重启 VPN 客户端才能恢复）。见 tunnel::enable_keepalive。
+socket2 = "0.5"
 
 [target.'cfg(windows)'.dependencies]
 ssh2 = "0.9"
+socket2 = "0.5"
 
 [build-dependencies]
 serde = { workspace = true }

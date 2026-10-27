@@ -47,6 +47,22 @@ const LOCAL_HOST: &str = "127.0.0.1";
 /// 跳板机不通时宁可**当场报错**，也不让「测试连接」一直转圈转到用户以为程序卡死。
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// TCP keepalive：多久没有字节往来就开始探测。
+///
+/// 为什么必须开（真机 2026-10-27 用户反馈）：**换 WiFi / 断网后 TCP 是半开的** ——
+/// 没有 RST、没有 FIN，libssh2 的读写一直返回 `WouldBlock`，`pump` 那个转发线程
+/// 就一直空转不退出，它借走的 SSH 会话也被永久占用；而缓存里的隧道「端口还在 listen」
+/// 让 `reuse()` 继续把新连接送进这条死链路。用户看到的就是
+/// 「网络明明恢复了、数据库和 SSH 全连不上，必须把 VPN 客户端关掉重开」。
+///
+/// 开了 keepalive 之后，链路真断时探测包拿不到 ACK，内核在 time + interval×重试
+/// 之后把 socket 置为错误态，`pump` 的读写于是报错退出，会话归还/丢弃，下次连库
+/// 重新握手。空闲的正常数据库长连接不会因此被断开（对端会正常回 ACK）。
+const KEEPALIVE_TIME: Duration = Duration::from_secs(30);
+
+/// keepalive 探测的间隔（失败后每隔这么久重试一次）。
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+
 /// 空闲多久之后回收隧道（下次用到会重建）——**默认值**，实际以设置
 /// `tunnel.idleTimeoutSecs` 为准（0 = 不按空闲回收）。
 ///
@@ -845,6 +861,56 @@ fn connect(spec: &SshConfig) -> Result<Session> {
     open_session(spec)
 }
 
+/// 给 SSH 底层 TCP 打开 keepalive（原因见 [`KEEPALIVE_TIME`]）。
+///
+/// 用**内核级** keepalive 而不是 libssh2 的 `set_keepalive`：后者要有人在循环里调
+/// `keepalive_send()` 才会真发包，而我们的转发线程是「本地没数据就睡 1ms」的
+/// 非阻塞轮询，根本没有那个时机 —— 拿它当探活只会自欺欺人
+/// （`SessionPool::take` 里那条注释讲的就是这件事）。
+///
+/// 失败只记 debug：受控环境（企业安全软件接管 socket）可能不让设，
+/// 那样只是少一层自愈，连接本身照常能用。
+fn enable_keepalive(tcp: &TcpStream) {
+    let keepalive = socket2::TcpKeepalive::new()
+        .with_time(KEEPALIVE_TIME)
+        .with_interval(KEEPALIVE_INTERVAL);
+    if let Err(err) = socket2::SockRef::from(tcp).set_tcp_keepalive(&keepalive) {
+        tracing::debug!(
+            target: "dbmind::tunnel",
+            error = %err,
+            "设置 TCP keepalive 失败（连接可用，但换网后可能不会自愈）"
+        );
+    }
+}
+
+/// 把这条连接的隧道**主动作废**（下次连库重新握手）。
+///
+/// 什么时候调：链路级失败之后（连不上/会话全丢/探活判死）。换网后旧 TCP 是半开的，
+/// 本地监听照样 listen、`port_alive` 照样通过、池里的会话 `authenticated()` 也还是
+/// true —— 不主动拆，新连接会被继续送进死链路，用户只能重启 VPN 客户端。
+///
+/// 只作废**完全匹配**的那一条 key，不碰别的连接。返回是否真的拆了一条。
+pub fn invalidate(config: &ConnectionConfig) -> bool {
+    let Some(key) = tunnel_key(config) else {
+        return false;
+    };
+    let removed = { lock_tunnels().remove(&key) };
+    let Some(entry) = removed else {
+        return false;
+    };
+    // 必须**显式**置停止位并清池：监听线程自己拿着 Arc，只从 map 里摘掉不会触发
+    // `Tunnel::drop`，端口会继续 accept，新连接又被送进死链路。
+    entry.tunnel.stop.store(true, Ordering::Relaxed);
+    entry.tunnel.pool.clear();
+    tracing::warn!(
+        target: "dbmind::tunnel",
+        label = %entry.tunnel.label,
+        port = entry.tunnel.local_port,
+        "链路级失败：隧道已作废，下次连接会重新握手"
+    );
+    true
+}
+
 /// 建一条 SSH 会话（握手 + 认证）。
 fn open_session(spec: &SshConfig) -> Result<Session> {
     let address = format!("{}:{}", spec.host, spec.port);
@@ -863,6 +929,7 @@ fn open_session(spec: &SshConfig) -> Result<Session> {
         ))
     })?;
     tcp.set_nodelay(true).ok();
+    enable_keepalive(&tcp);
 
     let mut session = Session::new().map_err(|err| {
         DbMindError::new(ErrorCode::Internal, "SSH 会话初始化失败").with_detail(format!("{err}"))
@@ -1402,6 +1469,35 @@ mod tests {
         let off = with_ssh(json!({ "enabled": false, "host": "jump", "user": "root" }));
         assert_eq!(tunnel_key(&off), None);
         assert_eq!(local_port_for(&off).unwrap(), None);
+    }
+
+    /// 链路级失败要能**主动作废**隧道（换网后旧端口还在 listen，不作废的话新连接
+    /// 全被送进死链路，用户只能重启 VPN 客户端 —— 真机 2026-10-27）。
+    /// 没缓存过隧道时必须安全返回 false：这条路径是在「已经连不上」时调的，
+    /// 不能自己再 panic 一次。
+    #[test]
+    fn 作废隧道对没建过的连接是空操作() {
+        let config = with_ssh(json!({
+            "enabled": true, "host": "jump.invalid", "port": 2222,
+            "user": "deploy", "authType": "password", "password": "x"
+        }));
+        assert!(!invalidate(&config), "没建过隧道应返回 false");
+        // 没开 SSH 的连接更不能有任何动作
+        assert!(!invalidate(&base()));
+    }
+
+    /// keepalive 设不上也**不能影响建连**（企业安全软件接管 socket 时可能被拒）。
+    #[test]
+    fn keepalive_设置不影响已有连接() {
+        let listener = std::net::TcpListener::bind((LOCAL_HOST, 0)).expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let accepted = std::thread::spawn(move || {
+            let _ = listener.accept();
+        });
+        let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(2)).expect("connect");
+        enable_keepalive(&tcp);
+        drop(tcp);
+        accepted.join().expect("join");
     }
 
     /// 指纹里**不能有口令**：它要进会话键（会出现在日志与宿主协议里）。
