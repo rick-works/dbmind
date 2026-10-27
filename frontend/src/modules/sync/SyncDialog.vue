@@ -526,7 +526,11 @@
             </el-table-column>
             <el-table-column :label="$t('sync.colInsertedUpdated')" width="110">
               <template #default="{ row }">
-                <span v-if="row.inserted != null" style="color: var(--dc-success);">+{{ row.inserted }}</span>
+                <!-- 失败行也可能有「已写入」的行数（写到一半断的）：用普通色 + 悬停说明，
+                     绿色会给成"成功"的错觉 -->
+                <span v-if="row.inserted != null"
+                      :style="{ color: row.status === 'ok' ? 'var(--dc-success)' : 'inherit' }"
+                      :title="row.status === 'ok' ? '' : $t('sync.writtenBeforeFail')">+{{ row.inserted }}</span>
                 <span v-if="row.updated" style="color: var(--dc-warning); margin-left: 4px;">~{{ row.updated }}</span>
               </template>
             </el-table-column>

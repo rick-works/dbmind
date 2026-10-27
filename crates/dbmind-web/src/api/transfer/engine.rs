@@ -155,6 +155,47 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
 /// 一个建连往返 + 一段回滚）便宜得多，也不会让用户觉得「卡住了」。
 const LINK_HOLD_MS: u64 = 15_000;
 
+// ------------------------------------------------------------------ 超时失败的用户可读原因
+//
+// 这些分支**没有数据库/驱动的报错可以引用**（是「那边就是不回话」），过去一律返回空串，
+// 界面于是显示「未返回原因（详见同步日志）」—— 而日志里也因为「空原因不写」一个字都没有，
+// 真机 2026-10-27 整库同步 15 张表全红、说明列一模一样、翻遍日志查不出线索。
+//
+// 口径调整：**可以说「没有拿到数据库报错」，但不能什么都不说**。文案只陈述客观事实
+//（哪一步、等了多久、探活结论），不编造「语句可能仍在执行」这类猜测。
+//
+// ⚠ 措辞**不能含** `crate::api::sync::is_link_level_message` 的关键词
+//（`未返回` / `半开` / `connection timed out` / `连接已断开` …）：那是「链路已断」的判据，
+// 命中会触发整表重跑/等网络重试。这些超时原本是「非链路」，语义必须保持原样。
+// 见 `crate::api::transfer::engine::timeout_message_tests`。
+
+/// 写入超时（探活正常，语句已被从服务端掐断）。
+fn batch_timeout_message(label: &str, secs: u64) -> String {
+    format!(
+        "{label}超过 {secs} 秒仍未响应；等待期间探活正常（select 1 通），已从服务端掐断这条语句，驱动没有返回任何报错"
+    )
+}
+
+/// 探活判死、但探活自己也没拿到原话（探活超时）。
+fn probe_broken_message(label: &str, secs: u64) -> String {
+    format!("{label}判链路已断（探活超过 {secs} 秒仍未响应），没有拿到数据库报错")
+}
+
+/// 目标端探活（`select 1`）自己超时。
+fn probe_timeout_message(secs: u64) -> String {
+    format!("目标端探活（select 1）超过 {secs} 秒仍未响应（链路可能已断）")
+}
+
+/// 读一页超时（源端没有回话）。
+fn read_timeout_message(secs: u64) -> String {
+    format!("读取源表一页超过 {secs} 秒仍未响应（源端没有回话）")
+}
+
+/// 提交事务超时（这一段是否落盘无法确定）。
+fn commit_timeout_message(secs: u64) -> String {
+    format!("提交事务超过 {secs} 秒仍未响应；这一段是否已落盘无法确定（不会自动重跑）")
+}
+
 /// 「这批报文小到不可能是丢包 / PMTU 问题」的界限（字节）。
 ///
 /// 判死（超时或断连）后要不要缩页，取决于这一批到底多大：
@@ -1095,8 +1136,9 @@ async fn run_segment(
             // 如实失败；`WriteDiag::committed` 已由 writer 记下，上层也不会整表重跑。
             Ok(Err(msg)) => return Err(msg),
             Err(_) => {
-                // 提交超时同样没有数据库报错可引用：返回空原因、界面不写这一行
-                //（这段是否落盘不确定，结论进 tracing 供排查）。
+                // 提交超时同样没有数据库报错可引用。以前返回空原因（界面「未返回原因」），
+                // 现在把「提交这一步 + 等了多久 + 落盘状态不确定」写清楚。
+                // 措辞避开链路关键词：空串原来是「非链路」，判定不能因此变成整表重跑。
                 tracing::warn!(
                     target: "dbmind::sync",
                     table = %ctx.plan.table,
@@ -1107,7 +1149,7 @@ async fn run_segment(
                 ctx.plan
                     .wait_ms
                     .fetch_add(commit_limit.as_millis() as u64, Ordering::Relaxed);
-                return Err(String::new());
+                return Err(commit_timeout_message(commit_limit.as_secs()));
             }
         }
     }
@@ -1130,15 +1172,17 @@ async fn read_page(
         match tokio::time::timeout(hard_limit, reader.page(range, cursor.clone()))
             .await
             // 读超时**没有任何数据库/驱动的报错可引用**（源端没回话，不是它报错）。
-            // 用户口径：界面只报真正的报错 —— 这里返回空原因，上层按「空原因不写日志」
-            // 处理，只记失败数；「读取一页超过 N 秒未返回」这类自己编的结论不再上界面。
+            // 但空原因会让整张表在界面上只剩「未返回原因」—— 用户无从判断是链路、源库
+            // 还是页太大（真机 2026-10-27）。改成陈述事实：读哪一步、等了多久。
+            // 措辞刻意不含 `is_link_level_message` 的链路关键词，重试判定与原来一致
+            //（原来空串也是「非链路」⇒ 缩页重试）。
             .map_err(|_| {
                 tracing::warn!(
                     target: "dbmind::sync",
                     secs = hard_limit.as_secs(),
-                    "读取一页超时（没有数据库报错可报，界面只记失败数）"
+                    "读取一页超时（源端没有回话）"
                 );
-                String::new()
+                read_timeout_message(hard_limit.as_secs())
             })
             .and_then(|result| result)
         {
@@ -1215,9 +1259,12 @@ where
                 table = %plan.table,
                 what = label,
                 elapsed_ms = elapsed.as_millis() as u64,
-                "探活判死但探活本身没有报错原话（超时），界面只记失败数"
+                "探活判死但探活本身没有报错原话（探活自己超时）"
             );
-            String::new()
+            // 探活都超时了，本来就拿不到数据库原话；但**不能返回空串**（界面会显示
+            // 「未返回原因」，等于什么都没说）。把「哪一步 + 探了多久 + 结论」写清楚，
+            // 用户才知道该查链路还是查库。
+            probe_broken_message(label, PROBE_TIMEOUT.as_secs())
         } else {
             why.to_string()
         }
@@ -1257,7 +1304,12 @@ where
                         elapsed_ms = elapsed.as_millis() as u64,
                         "超时且探活通过：已从服务端掐断卡住的语句；没有数据库报错可报，界面只记失败数"
                     );
-                    return Err((String::new(), false));
+                    // **不再返回空原因**：空串在界面上只剩「未返回原因（详见同步日志）」，
+                    // 而日志里也因为「空原因不写」一个字都没有 —— 真机 2026-10-27 整库同步
+                    // 15 张表全红、说明列一模一样、翻遍日志查不出任何线索。
+                    // 这里只陈述**客观事实**（哪一步、等了多久、探活结论），不编造
+                    // 「语句可能仍在执行」那种猜测。
+                    return Err((batch_timeout_message(label, hard_limit.as_secs()), false));
                 }
                 // 定期探活：只为判断「断没断」（不做软阈值判断，那个上面已经按 2 秒精度看过）
                 if last_probe.elapsed() >= BATCH_PROBE_TICK {
@@ -1421,14 +1473,15 @@ async fn probe_target(plan: &TablePlan) -> Result<(), String> {
         Ok(Ok(_)) => Ok(()),
         // 驱动/数据库的原话，原样上抛
         Ok(Err(err)) => Err(err.message),
-        // 探活自己超时：没有数据库/驱动的原话可报 ⇒ 空原因（界面不写日志）
+        // 探活自己超时：没有数据库/驱动的原话可报 —— 但仍要给出**能定位的事实**，
+        // 空串只会让界面显示「未返回原因」。
         Err(_) => {
             tracing::warn!(
                 target: "dbmind::sync",
                 secs = PROBE_TIMEOUT.as_secs(),
-                "探活 select 1 超时（没有报错原话，界面只记失败数）"
+                "探活 select 1 超时（没有报错原话）"
             );
-            Err(String::new())
+            Err(probe_timeout_message(PROBE_TIMEOUT.as_secs()))
         }
     }
 }
@@ -1515,5 +1568,55 @@ mod tests {
         assert_eq!(slots.try_acquire(), Some(0));
         assert_eq!(slots.try_acquire(), None);
         assert_eq!(slots.grow_to(4), 0);
+    }
+}
+
+/// 超时类失败的文案：既要**说清是什么情况**，又不能被当成链路错误。
+///
+/// 两道门槛缺一不可：
+/// 1. 不能是空串 —— 空串在界面上是「未返回原因（详见同步日志）」，日志里也不写，
+///    用户对着 15 张红表无从下手（真机 2026-10-27）；
+/// 2. 不能命中 [`crate::api::sync::is_link_level_message`] 的关键词 —— 那是「链路已断」
+///    的判据，命中会触发整表重跑 / 等网络重试，这些超时原本是「非链路」，语义不能变。
+#[cfg(test)]
+mod timeout_message_tests {
+    use super::*;
+
+    fn all_messages() -> Vec<String> {
+        vec![
+            batch_timeout_message("写入", 600),
+            probe_broken_message("写入", 10),
+            probe_timeout_message(10),
+            read_timeout_message(60),
+            commit_timeout_message(600),
+        ]
+    }
+
+    #[test]
+    fn 超时原因不能是空串() {
+        for text in all_messages() {
+            assert!(!text.trim().is_empty(), "超时原因不能为空，否则界面只剩「未返回原因」");
+        }
+    }
+
+    #[test]
+    fn 超时原因不能被误判成链路错误() {
+        for text in all_messages() {
+            assert!(
+                !crate::api::sync::is_link_level_message(&text),
+                "这条文案被当成链路错误会触发整表重跑，语义与改动前不一致：{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn 超时原因带上秒数与阶段() {
+        assert!(read_timeout_message(60).contains("60"));
+        assert!(read_timeout_message(60).contains("读取"));
+        assert!(commit_timeout_message(600).contains("提交事务"));
+        assert!(probe_timeout_message(10).contains("探活"));
+        // 写入/链路判死两条要带上传入的阶段词（整库同步里「写入」是唯一的 label）
+        assert!(batch_timeout_message("写入", 600).contains("写入"));
+        assert!(probe_broken_message("写入", 10).contains("链路已断"));
     }
 }

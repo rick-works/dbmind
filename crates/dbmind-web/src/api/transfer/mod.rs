@@ -129,6 +129,13 @@ pub struct WriteDiag {
     /// 此刻有问题的强信号（真机日志里后期几乎每张表都是**第一页**卡满超时），
     /// 这时用更短的自愈阈值（30 秒）快速换连接重试，别陪它等 60~180 秒。
     pub batches_done: AtomicU64,
+    /// 本表**已成功交给目标端的行数**（写成功即累加，不等待提交）。
+    ///
+    /// 用途：表最终失败时界面上不能只剩「+0」—— 用户要的是「这张表到底过去多少行」
+    ///（真机 2026-10-27：15 张失败表全是 +0，看不出是压根没开始写、还是写到一半断的）。
+    /// 口径如实：这是**已发出且写成功的行**；若整表在一个事务里而连接断了，服务端会
+    /// 把它回滚，届时这个数字会高于目标表实际落库的行数（说明列里同时有错误原因）。
+    pub rows_written: AtomicU64,
 }
 
 impl WriteDiag {
@@ -158,6 +165,8 @@ impl WriteDiag {
         if slow_sample {
             // 只有**成功**的页才算「这张表已经能写进去」；超时的页不算（它没落库）
             self.batches_done.fetch_add(1, Ordering::Relaxed);
+            // 失败时界面要显示「已经过去多少行」（见字段注释）
+            self.rows_written.fetch_add(rows as u64, Ordering::Relaxed);
         }
         self.last_batch_rows.store(rows as u64, Ordering::Relaxed);
         let ms = elapsed.as_millis().min(u64::MAX as u128) as u64;
@@ -185,6 +194,11 @@ impl WriteDiag {
     /// 目标端写速估计（行/秒；0 = 还没有样本）。
     pub fn write_rate(&self) -> u64 {
         self.write_rows_per_sec.load(Ordering::Relaxed)
+    }
+
+    /// 已成功写给目标端的行数（表失败时界面用它显示「已经过去多少行」）。
+    pub fn rows_written(&self) -> u64 {
+        self.rows_written.load(Ordering::Relaxed)
     }
 
     // 「多久算写入超时」不再由本结构决定：唯一来源是界面「传输参数 → 超时时间」
@@ -659,6 +673,22 @@ mod watchdog_tests {
         );
         // 收尾后不应残留「还在写」的状态
         assert_eq!(diag.writing_seconds(), 0);
+    }
+
+    /// 表失败时界面要显示「已经过去多少行」：只有**写成功**的批才累加，
+    /// 超时/被打断的批不计（那些行没落库）。
+    #[test]
+    fn 已写入行数只统计成功的批() {
+        let diag = WriteDiag::default();
+        diag.note_batch_start(1_000);
+        diag.note_batch_done(1_000, Duration::from_millis(300));
+        assert_eq!(diag.rows_written(), 1_000);
+        diag.note_batch_start(2_000);
+        diag.note_batch_timeout(2_000, Duration::from_secs(90));
+        assert_eq!(diag.rows_written(), 1_000, "超时那批没落库，不能算进去");
+        diag.note_batch_start(500);
+        diag.note_batch_done(500, Duration::from_millis(100));
+        assert_eq!(diag.rows_written(), 1_500);
     }
 
     /// 任务级报文上限**只降不升**：一张表踩过的坑要立刻对同一任务里其它表生效

@@ -2363,6 +2363,42 @@ mod paging_tests {
 }
 
 #[cfg(test)]
+mod obj_result_tests {
+    use super::*;
+
+    /// 失败却留空原因时，界面只剩「未返回原因（详见同步日志）」，而日志里也不写 ——
+    /// 用户对着 15 张红表无从下手（真机 2026-10-27 整库同步）。
+    #[test]
+    fn 失败结果不能留空原因() {
+        let result = ObjResult::failed("table", "etl_wide_sales_tender", "");
+        assert!(!result.message.trim().is_empty(), "失败原因不能为空");
+        assert!(
+            result.message.contains("etl_wide_sales_tender"),
+            "兜底文案要带上对象名，否则一屏十几条分不清是谁：{}",
+            result.message
+        );
+    }
+
+    /// 有真实原因（数据库原话）时一个字都不能改。
+    #[test]
+    fn 有原因时原样保留() {
+        let result = ObjResult::failed("table", "t", "Duplicate entry '1' for key 'PRIMARY'");
+        assert_eq!(result.message, "Duplicate entry '1' for key 'PRIMARY'");
+    }
+
+    /// 写到一半失败：**已写入的行数要带出去**，界面不能只剩 +0
+    ///（真机 2026-10-27：15 张失败表全 +0，分不清是没开始写还是写了一半）。
+    #[test]
+    fn 失败时带出已写入行数() {
+        let result = ObjResult::failed_with("table", "t", "写入超过 600 秒仍未响应", 1_234, 0);
+        assert_eq!(result.status, "error");
+        assert_eq!(result.inserted, 1_234, "已写入的行数要显示出来");
+        // 完全没写过（建表/取列就失败）仍然是 0，不能凭空编
+        assert_eq!(ObjResult::failed("table", "t", "boom").inserted, 0);
+    }
+}
+
+#[cfg(test)]
 mod stream_load_tests {
     use super::*;
 
@@ -2595,13 +2631,38 @@ impl ObjResult {
     }
 
     fn failed(ty: &str, name: &str, message: impl Into<String>) -> Self {
+        Self::failed_with(ty, name, message, 0, 0)
+    }
+
+    /// 已经写进去一部分行才失败：把**实际已写入的行数**带出来。
+    ///
+    /// 过去失败行的「新增/更新」恒为 +0（构造函数写死 0），用户分不清「压根没开始写」
+    /// 和「写到一半断了」—— 真机 2026-10-27 那 15 张失败表全是 +0。
+    /// 口径见 `transfer::WriteDiag::rows_written`：已发出且写成功的行，断连时可能随事务回滚。
+    fn failed_with(
+        ty: &str,
+        name: &str,
+        message: impl Into<String>,
+        inserted: u64,
+        updated: u64,
+    ) -> Self {
+        let message = message.into();
+        // 失败却给不出原因 = 界面上只剩「未返回原因（详见同步日志）」，等于什么都没说
+        //（真机 2026-10-27：整库同步 15 张表全红，说明列一模一样，日志里也查不到）。
+        // 传输引擎里「没有数据库原话」的三处超时已各自给出具体原因
+        //（`transfer::engine` 的 `*_timeout_message`），这里兜住其余漏网的空串。
+        let message = if message.trim().is_empty() {
+            format!("{ty} {name} 同步失败，但没有拿到具体原因（详见任务日志与 tracing 日志）")
+        } else {
+            message
+        };
         Self {
             ty: ty.to_string(),
             name: name.to_string(),
             status: "error",
-            message: message.into(),
-            inserted: 0,
-            updated: 0,
+            message,
+            inserted,
+            updated,
         }
     }
 
@@ -4266,16 +4327,22 @@ async fn sync_table(
         match crate::api::scope::resolve(state, &tgt.conn, &tgt.scope).await {
             Ok(target) => {
                 if let Err(msg) = run_user_sql(state, &target, &opts.post_sql, "后置 SQL").await {
-                    result = ObjResult::failed("table", table, msg);
+                    // 数据其实已经搬完了，只是后置 SQL 失败 —— 行数照实带出去，
+                    // 别让「表写完了但后置 SQL 出错」显示成一行都没过去
+                    result = ObjResult::failed_with(
+                        "table", table, msg, result.inserted, result.updated,
+                    );
                 } else if let Some(task) = task {
                     task.log(format!("表 {target_table}：执行后置 SQL"));
                 }
             }
             Err(err) => {
-                result = ObjResult::failed(
+                result = ObjResult::failed_with(
                     "table",
                     table,
                     err.message,
+                    result.inserted,
+                    result.updated,
                 );
             }
         }
@@ -5380,6 +5447,9 @@ async fn sync_table_inner(
     let stats = loop {
         // 整表重跑：上一次读出的行随事务回滚，进度从 0 重算（否则「无进展」会被历史值掩盖）
         progress.store(0, std::sync::atomic::Ordering::SeqCst);
+        // 「已写入行数」同理：上一轮的行已随事务回滚，不清零的话失败时界面会虚高
+        //（这个数字现在会显示在失败行的「新增」列，见 `WriteDiag::rows_written`）
+        diag.rows_written.store(0, std::sync::atomic::Ordering::SeqCst);
         let attempt_started = std::time::Instant::now();
         let outcome = crate::api::transfer::run(make_plan()).await;
         // 这一轮不论成败都算进基准：失败那几轮同样占用了用户的墙钟（重跑 = 数据重读重写）
@@ -5416,7 +5486,8 @@ async fn sync_table_inner(
                     overwrite_safe,
                 );
                 if !can_retry {
-                    return ObjResult::failed(ty, table, msg);
+                    // 已经写进去的行要带出去：失败行过去恒显示 +0，用户看不出写到哪儿断的
+                    return ObjResult::failed_with(ty, table, msg, diag.rows_written(), 0);
                 }
                 link_retries += 1;
                 // 退避阶梯 2/5/10/20/30 秒（见 LINK_RETRY_BACKOFF_SECS）
@@ -5470,7 +5541,10 @@ async fn sync_table_inner(
                                     && link_retries < LINK_RETRY_MAX
                                     && !task.map(|t| t.is_canceled()).unwrap_or(false);
                                 if !may_wait {
-                                    return ObjResult::failed(ty, table, err.message);
+                                    // 清表这一步就失败：前几轮可能已经写进去过行，照实带出
+                                    return ObjResult::failed_with(
+                                        ty, table, err.message, diag.rows_written(), 0,
+                                    );
                                 }
                                 link_retries += 1;
                                 let wait = LINK_RETRY_BACKOFF_SECS
