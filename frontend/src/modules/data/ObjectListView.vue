@@ -1,5 +1,5 @@
 <template>
-  <div class="ols-wrap" :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px', fontSize: 'var(--dc-data-fs, 13px)' }">
+  <div class="ols-wrap" :style="{ '--grid-row-h': (editorSettingsLive.gridRowHeight || 26) + 'px', fontSize: 'var(--dc-data-fs, 14px)' }">
     <!-- 圆角卡片：工具条 + 表格一个容器（边距与圆角与其他页面同一口径） -->
     <div class="ols-card">
       <div class="ols-toolbar">
@@ -855,7 +855,7 @@ onBeforeUnmount(() => {
 /* 字号统一按设置里的「数据视图表格」字号来（--dc-data-fs），不再做 ±1px/±2px 偏移：
    「编辑表结构」的三个页签表头/内容也是同一个值，两张表放一起永远等大，
    用户调设置里的字号时一起变。 */
-.data-table { border-collapse: collapse; font-size: var(--dc-data-fs, 13px); }
+.data-table { border-collapse: collapse; font-size: var(--dc-data-fs, 14px); }
 .data-table thead { position: sticky; top: 0; z-index: 2; }
 .data-table th {
   background: var(--dc-bg-table-head, #f5f7fa); padding: 5px 10px; height: calc(var(--grid-row-h, 26px) + 6px);
@@ -896,7 +896,7 @@ onBeforeUnmount(() => {
   background: var(--dc-bg-table-head, #f5f7fa);
   /* 行号与其它列同字号：全部跟着设置里的「数据视图表格」字号走（写死像素的话
      调大字号时只有这一列不动，一列小字夹在大字里很显眼） */
-  font-size: var(--dc-data-fs, 13px);
+  font-size: var(--dc-data-fs, 14px);
 }
 /* 勾选列（有删除动作的类别才有）：与行号列同底色，窄而居中 */
 .data-table th.ols-sel-th { width: 36px; padding: 0; }
@@ -970,7 +970,7 @@ onBeforeUnmount(() => {
      （Arial 的中文 fallback 墨迹比应用字体栈矮 2px，看着就比同排其它字小一号）。
      字号与整张表一致，都取设置里的「数据视图表格」字号。 */
   font-family: inherit;
-  font-size: var(--dc-data-fs, 13px);
+  font-size: var(--dc-data-fs, 14px);
 }
 /* ↓↓↓ 跟字段表一模一样：单元格里的输入框默认**隐形**（透明底 + 无描边），
    整列读起来就是文字；鼠标移到该行才浮出输入框的样子，聚焦时给主色描边。

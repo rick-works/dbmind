@@ -1821,13 +1821,13 @@ html[data-theme="dark"] .el-alert--success.is-light {
 .nosql-view .load-time, .nosql-view .empty-tip, .nosql-view .sel-summary,
 .sql-query-view .result-footer, .sql-query-view .result-footer *,
 .sql-query-view .load-time, .sql-query-view .sel-summary {
-  font-size: var(--dc-data-fs, 13px) !important;
+  font-size: var(--dc-data-fs, 14px) !important;
 }
 /* 图标（分页箭头、工具按钮里的图标）不跟着放大字号，否则会撑歪控件 */
 .table-data-view .pager .el-icon, .table-data-view .pager svg,
 .nosql-view .pager .el-icon, .nosql-view .pager svg,
 .sql-query-view .result-footer .el-icon, .sql-query-view .result-footer svg {
-  font-size: var(--dc-data-fs, 13px) !important;
+  font-size: var(--dc-data-fs, 14px) !important;
   width: 1em; height: 1em;
 }
 /* ---- 数据视图底栏「N 条/页」下拉的文字色 ----

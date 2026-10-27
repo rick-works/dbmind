@@ -1836,7 +1836,7 @@ onBeforeUnmount(() => {
    必须压掉浏览器默认的黑色 focus 轮廓，否则整块滚动区外围出现两道黑线 */
 .data-table-wrap:focus { outline: none; }
 .data-table-wrap.col-resizing, .data-table-wrap.col-resizing * { cursor: col-resize !important; user-select: none; }
-.data-table { position: relative; width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--grid-fs, var(--dc-data-fs, 13px)); }
+.data-table { position: relative; width: 100%; table-layout: fixed; border-collapse: collapse; font-size: var(--grid-fs, var(--dc-data-fs, 14px)); }
 /* 吸顶表头：top: -1px 盖住滚动时折叠上边框留下的 1px 缝 */
 .data-table thead { position: sticky; top: -1px; z-index: 2; }
 .data-table th {

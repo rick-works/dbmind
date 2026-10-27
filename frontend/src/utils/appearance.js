@@ -8,7 +8,7 @@
  *   var(--dc-nav-fs, 14px) / var(--dc-nav-icon, 16px) / var(--dc-tree-fs, 14px) 去读。
  * 这样"改完立刻全局生效"，不用把值一层层传给组件，也不怕漏掉某个用到的地方。
  */
-import { persistUI } from './settings'
+import { persistUI, editorDefaults } from './settings'
 
 export const APPEARANCE_KEY = 'dbmind_appearance'
 
@@ -20,7 +20,10 @@ export const appearanceDefaults = {
   // 第二批：把硬编码得最多、最常看错的四处也交出去
   homeFontSize: 13,   // 欢迎页（首页卡片：标题/连接名/历史 SQL）
   dialogFontSize: 14, // 弹窗标题与正文
-  dataFontSize: 13,   // 数据视图（表数据、表结构的表格）
+  // 数据视图（表数据、表结构、SQL 结果的表格）——**与编辑器的「结果表格字号」是同一个值**，
+  // 所以这里从 editorDefaults 取，不再各写一个数（曾经写死 13，与编辑器默认 14 打架，
+  // settings.js 的迁移还专门把 13 当"旧默认"升回 14）。
+  dataFontSize: editorDefaults.gridFontSize,
   toastFontSize: 14   // 消息提示（toast / 通知）
 }
 

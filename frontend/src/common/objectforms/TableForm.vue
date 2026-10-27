@@ -999,12 +999,14 @@ emit('sql', genSql())
    **控件才是行高的天花板**（td 的 height 只是下限）—— 与编辑表结构页同一套算法。 */
 .obj-form { --ctl-h: max(18px, calc(var(--grid-row-h, 26px) - 2px)); }
 .field-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-.field-table th { position: sticky; top: 0; z-index: 1; background: var(--dc-bg-code); color: var(--dc-text-mid); font-weight: 600; font-size: 13px; text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--dc-border-soft); white-space: nowrap; }
-.field-table td { padding: 4px 4px; border-bottom: 1px solid var(--dc-border-soft); vertical-align: middle; }
+/* 字号一律取「设置 → 界面尺寸 → 数据视图表格」（--dc-data-fs）：新建表与编辑表结构
+   在用户眼里是同一个界面，两边的表头/单元格/控件必须同一个来源，否则调了字号只有一边变。 */
+.field-table th { position: sticky; top: 0; z-index: 1; background: var(--dc-bg-code); color: var(--dc-text-mid); font-weight: 600; font-size: var(--dc-data-fs, 14px); text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--dc-border-soft); white-space: nowrap; }
+.field-table td { padding: 4px 4px; border-bottom: 1px solid var(--dc-border-soft); vertical-align: middle; font-size: var(--dc-data-fs, 14px); }
 /* 主键 / 可空 / 自增等开关列：表头与内容居中，其余列左对齐 */
 .field-table th.c-center,
 .field-table td.c-center { text-align: center; }
-.row-idx { color: var(--dc-text-dim); font-size: 13px; }
+.row-idx { color: var(--dc-text-dim); font-size: var(--dc-data-fs, 14px); }
 .field-table tbody tr { cursor: pointer; }
 /* 与编辑表结构一致：屏幕外的行跳过布局与绘制（几十上百行时滚动明显更顺） */
 /* 这里**不要**给行加 content-visibility: auto —— 它按"估算高度"跳过绘制，滚快了会出现白块。
@@ -1013,16 +1015,15 @@ emit('sql', genSql())
 .field-table tbody tr.vpad td { padding: 0; border-bottom: none; }
 /* 类型格的"纯文本态"：点一下才换成下拉（与编辑表结构一致）。
    字号必须**显式**写：这一格是普通 span，不写就跟 body 的 14px 走 —— 而同排的
-   字段名/长度/精度/注释都是 12px 的输入框、表头也是 12px，于是单单那个类型字大一圈
-   （用户反馈："这个字体可以小点，跟别的一样"）。12px 是在应用里**量出来的**
-   （类型格 14px、同排输入框 12px、表头 12px）。 */
+   字段名/长度/精度/注释/表头都取设置里的表格字号，于是单单那个类型字大一圈
+   （用户反馈："这个字体可以小点，跟别的一样"）。 */
 .field-table .cell-text {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   padding: 0 4px;
-  font-size: 12px;
+  font-size: var(--dc-data-fs, 14px);
   cursor: pointer;
 }
 .field-table tbody tr:hover { background: var(--dc-bg-hover); }
@@ -1095,7 +1096,14 @@ emit('sql', genSql())
   --el-table-border-color: var(--dc-border-soft);
   --el-table-row-hover-bg-color: var(--dc-primary-wash);
   --el-table-border: 1px solid var(--dc-border-soft);
+  /* 与「字段定义」「基本信息」同一档字号：el-table 默认 14px，不跟设置走的话
+     切到索引页签字会明显大一号（编辑表结构的索引页签就是这么补的） */
+  font-size: var(--dc-data-fs, 14px);
 }
+/* 表头与单元格跟随（EP 的字号从 .el-table 继承下来，别让内部 cell 再写死） */
+.idx-tab :deep(.el-table .cell),
+.idx-tab :deep(.el-table .el-select__selected-item),
+.idx-tab :deep(.el-table .el-select__placeholder) { font-size: var(--dc-data-fs, 14px); }
 .idx-tab :deep(.el-table__inner-wrapper::before) { display: none; }
 .idx-tab :deep(.el-table th.el-table__cell) {
   background: var(--dc-bg-soft) !important;
@@ -1195,7 +1203,7 @@ emit('sql', genSql())
 .idx-tab :deep(.el-table td .el-select__wrapper .el-select__selection),
 .idx-tab :deep(.el-table td .el-select__wrapper .el-tag) { margin-left: 0 !important; }
 .idx-tab :deep(.el-table .el-input__wrapper) { padding: 0 6px; }
-.idx-tab :deep(.el-table .el-input__inner) { font-size: 13px; height: var(--ctl-h, 20px); }
+.idx-tab :deep(.el-table .el-input__inner) { font-size: var(--dc-data-fs, 14px); height: var(--ctl-h, 20px); }
 /* 行高由单元格内容撑出来，里面的控件也得跟 --ctl-h 走 —— 否则字段表跟着设置变、
    索引表不变，两个页签的行高会差一截 */
 .idx-tab :deep(.el-table .el-input__wrapper),
@@ -1318,7 +1326,7 @@ emit('sql', genSql())
      同级时后出现的 tbody 会盖住表头（滚动时勾选框透到表头上） */
   z-index: 3;
   background: var(--dc-bg-soft); color: var(--dc-text-strong);
-  font-weight: 600; font-size: 12px; letter-spacing: .02em; text-align: left;
+  font-weight: 600; font-size: var(--dc-data-fs, 14px); letter-spacing: .02em; text-align: left;
   padding: 5px 9px; border-bottom: 1px solid var(--dc-border); white-space: nowrap;
 }
 /* 行高收到约 22px（控件 20px + 上下各 1px 内边距）—— 行高由**行内控件高度**决定，
@@ -1327,6 +1335,7 @@ emit('sql', genSql())
 .field-table td {
   /* height 只是**下限**（多行内容仍可撑高）：真正的行高由行内控件的 --ctl-h 决定 */
   padding: 1px 9px; height: var(--grid-row-h, 26px); background: var(--dc-bg-card);
+  font-size: var(--dc-data-fs, 14px);
   border-bottom: 1px solid var(--dc-border); vertical-align: middle;
 }
 /* 表头是**两行**（35px 空行 + 标题行），滚动时两行都要固定 */
@@ -1353,6 +1362,15 @@ emit('sql', genSql())
 /* 行内控件高度 = --ctl-h（= 设置的行高 − 上下各 1px 内边距）：
    行高不是 padding 决定的，是它们决定的 —— 不跟着算就是个"行高天花板" */
 .field-table :deep(.el-input__inner) { height: var(--ctl-h, 20px); }
+/* 格子里的控件字号也取设置值：Element 的 small 默认 12px，比表头小一档，于是同一行里
+   表头/纯文本/输入框三种字号（编辑页有过同样的问题，用户反馈「跟另两个 tab 不一样」）。
+   font-family 必须继承 —— <input> 不设字族会落回 UA 的 Arial，同字号下中文墨迹更矮。 */
+.field-table :deep(.el-input__inner),
+.field-table :deep(.el-select__selected-item),
+.field-table :deep(.el-select__placeholder) {
+  font-size: var(--dc-data-fs, 14px);
+  font-family: inherit;
+}
 .field-table :deep(.el-input__wrapper) { min-height: var(--ctl-h, 20px); }
 /* ↓↓↓ 让表格"像表格"的关键：单元格里的输入控件默认**隐形**（透明底 + 无描边），
    整张表读起来是一列列文字；鼠标移到该行才浮出输入框的样子，聚焦时给主色描边。
@@ -1408,7 +1426,7 @@ emit('sql', genSql())
 .basic-table :deep(.el-select__selected-item),
 .basic-table :deep(.el-select__placeholder) {
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: var(--dc-data-fs, 14px);
   letter-spacing: 0;
 }
 .basic-table thead tr:last-child th { color: var(--dc-text-strong); font-weight: 600; }

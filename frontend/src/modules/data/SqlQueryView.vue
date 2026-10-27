@@ -5587,11 +5587,11 @@ onBeforeUnmount(() => {
 .data-table-wrap.col-resizing, .data-table-wrap.col-resizing * { cursor: col-resize !important; user-select: none; }
 /* 底栏布局与数据表一致：耗时 + 选中统计**同在左侧**，分页器 margin-left:auto 靠右
    （以前 space-between 把统计挤到正中间，两边看起来不是一个产品） */
-.result-footer { display: flex; align-items: center; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; font-size: var(--grid-fs, var(--dc-data-fs, 13px)); }
+.result-footer { display: flex; align-items: center; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; font-size: var(--grid-fs, var(--dc-data-fs, 14px)); }
 .result-footer > .el-pagination { margin-left: auto; }
 /* 底栏文字统一跟「结果表格字号」走（--grid-fs 由 .result-grid 提供）：
    与表格同字号，次要信息（统计 / 选中汇总）比它小 1px，层级关系保留 */
-.result-time { font-size: var(--grid-fs, 13px); color: var(--dc-text-dim); font-weight: 500; }
+.result-time { font-size: var(--grid-fs, 14px); color: var(--dc-text-dim); font-weight: 500; }
 /* 排序链胶囊（样式在 common/SortChip.vue 里，三张网格共用） */
 /* 分页器字号：**整个子树统一**，不再逐个列举内部件。
    原因：Element 把字号分别写在 wrapper / selected-item / placeholder / input__inner /
@@ -5600,25 +5600,25 @@ onBeforeUnmount(() => {
    这里直接对 .el-pagination 及其后代统一，一次到位；!important 用来压过 Element 的
    按尺寸分级样式（.el-pagination--small 等）。作用域只在结果区底栏，不影响别处分页器。 */
 .result-footer :deep(.el-pagination),
-.result-footer :deep(.el-pagination *) { font-size: var(--grid-fs, 13px) !important; }
+.result-footer :deep(.el-pagination *) { font-size: var(--grid-fs, 14px) !important; }
 /* 总数统计中：紧贴分页器左侧，弱化显示（计数是后台补的，别抢注意力） */
 .count-pending {
   margin-left: auto; display: inline-flex; align-items: center; gap: 4px;
-  font-size: calc(var(--grid-fs, 13px) - 1px); color: var(--dc-text-dim);
+  font-size: calc(var(--grid-fs, 14px) - 1px); color: var(--dc-text-dim);
 }
 .count-pending + .el-pagination { margin-left: 0; }
 /* 可点击的总数：悬停变主色 + 提示「点我重新统计」，点击强制重数一次。
    margin-left:auto 把自己推到右侧、紧贴分页器（分页器遇它就让出 auto 边距） */
 .total-refresh {
   margin-left: auto; display: inline-flex; align-items: center;
-  font-size: var(--grid-fs, 13px); color: var(--dc-text-dim); cursor: pointer;
+  font-size: var(--grid-fs, 14px); color: var(--dc-text-dim); cursor: pointer;
   user-select: none; border-radius: 4px; padding: 0 4px;
   transition: color .12s, background .12s;
 }
 .total-refresh:hover { color: var(--dc-primary); background: var(--dc-bg-hover); }
 .total-refresh + .el-pagination { margin-left: 0; }
 /* 选中区汇总：夹在耗时与分页之间，弱化显示、数字加粗，避免抢分页的注意力 */
-.result-summary { display: inline-flex; align-items: center; gap: 10px; font-size: calc(var(--grid-fs, 13px) - 1px); color: var(--dc-text-dim); flex-wrap: wrap; }
+.result-summary { display: inline-flex; align-items: center; gap: 10px; font-size: calc(var(--grid-fs, 14px) - 1px); color: var(--dc-text-dim); flex-wrap: wrap; }
 .result-summary .rs-item { white-space: nowrap; }
 .result-summary .rs-item b { color: var(--dc-text); font-weight: 600; font-variant-numeric: tabular-nums; }
 /* 表格宽度 = 首列 + 各列宽度之和，由模板上的内联 width（resultTableWidth）给出，不再 width:100%：
@@ -5627,7 +5627,7 @@ onBeforeUnmount(() => {
    注意：这里不能写 width: max-content —— 固定布局下浏览器按「内容」计算 max-content，
    多出的空间会摊回各列，列宽就永远拖不窄（详见 resultTableWidth 的注释） */
 /* 字号来自设置（编辑器页签的「结果表格字号」），变量挂在 .data-table-wrap 上 */
-.data-table { position: relative; table-layout: fixed; border-collapse: collapse; font-size: var(--grid-fs, var(--dc-data-fs, 13px)); }
+.data-table { position: relative; table-layout: fixed; border-collapse: collapse; font-size: var(--grid-fs, var(--dc-data-fs, 14px)); }
 /* 吸顶表头：`top: -1px` 盖住滚动时表头上方那道 1px 的缝 ——
    border-collapse: collapse 下上边框属于 table，不跟着吸顶走，那 1px 会露出下层底色。 */
 .data-table thead { position: sticky; top: -1px; z-index: 2; }
@@ -5651,7 +5651,7 @@ onBeforeUnmount(() => {
 .data-table th .th-label { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .data-table th .th-comment {
   /* 表头内部的字号都跟「结果表格字号」走（比正文小 2px，层级不变） */
-  font-size: calc(var(--grid-fs, 13px) - 2px); font-weight: 400; color: var(--dc-text-dim);
+  font-size: calc(var(--grid-fs, 14px) - 2px); font-weight: 400; color: var(--dc-text-dim);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0;
 }
 /* 行高来自设置（编辑器页签的「结果表格行高」，变量挂在 .data-table-wrap 上）；
@@ -5668,12 +5668,12 @@ onBeforeUnmount(() => {
 /* position/top：图标单独下移 1px（用户口径）—— 12px 图标几何居中但字面重心偏上，
    与字段名的视觉中线差一档；relative 偏移不参与 flex 布局，不影响行高列宽 */
 .data-table th .th-type-ic { display: inline-flex; align-items: center; flex: 0 0 auto; vertical-align: middle; margin-right: 5px; position: relative; top: 1px; }
-.data-table th .th-type-ic .el-icon { font-size: calc(var(--grid-fs, 13px) - 1px); }
+.data-table th .th-type-ic .el-icon { font-size: calc(var(--grid-fs, 14px) - 1px); }
 /* 表头排序按钮：固定在列头右缘垂直居中（右侧 26px 已预留，与表预览/NoSQL 同款） */
 .data-table th .th-sort {
   position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center;
-  font-size: var(--grid-fs, 13px); color: var(--dc-text); z-index: 3;
+  font-size: var(--grid-fs, 14px); color: var(--dc-text); z-index: 3;
   opacity: .92; cursor: pointer; transition: opacity .16s ease, color .16s ease;
 }
 .data-table th:hover .th-sort { opacity: 1; }
@@ -5808,7 +5808,7 @@ onBeforeUnmount(() => {
    表现就是序号列缺边线、看着没被选中 */
 .data-table td.row-sel-td {
   cursor: pointer; user-select: none;
-  color: var(--dc-text-dim); font-size: calc(var(--grid-fs, 13px) - 1px);
+  color: var(--dc-text-dim); font-size: calc(var(--grid-fs, 14px) - 1px);
 }
 .data-table td.row-sel-td:hover { background-color: var(--dc-primary-wash); color: var(--dc-text); }
 .data-table td.row-sel-td.row-num-on {

@@ -28,7 +28,7 @@ defineEmits(['remove', 'clear'])
 .sort-chip {
   display: inline-flex; align-items: center;
   margin-left: 8px; white-space: nowrap;
-  font-size: calc(var(--grid-fs, 13px) - 1px);
+  font-size: calc(var(--grid-fs, 14px) - 1px);
   color: var(--dc-primary);
 }
 /* 每一项单独可点（只移除那一列） */
