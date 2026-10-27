@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.6.5": [
+    "No more restarting the VPN client after switching Wi-Fi or losing the network: the SSH tunnel now detects the half-open state (roughly a minute) where the link is dead but neither side knows, then rebuilds itself and both SSH and database connections recover",
+    "The pre-borrow probe now treats a timeout as a dead connection (previously only hard failures like connection refused counted), so dead connections on a half-open link are no longer reused",
+    "On connection-level failures the whole SSH tunnel is invalidated before reconnecting (throttled to once per 60 seconds), so new connections are not pushed into the dead link again"
+  ],
   "v1.6.4": [
     "Failed objects always explain themselves now: read/write/probe/commit timeouts say which step stalled, for how long, and what the probe found - no more bare no-reason-returned",
     "Failed objects no longer show +0 in the written column: the rows already written before the failure are shown (grey, with a tooltip), so you can tell never-started from died-halfway",
