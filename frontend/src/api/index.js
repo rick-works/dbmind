@@ -24,6 +24,31 @@ if (localToken) {
 // 安全拦截（生产保护 / 只读连接 / AI 只读）的统一提示：见 utils/safetyNotice.js
 import { isSafetyBlock, showSafetyNotice } from '../utils/safetyNotice'
 
+/**
+ * **并发去重**：同一时刻发起的同一个 GET 只发一次，后来者等同一个结果。
+ *
+ * 为什么需要（2026-10-27 实测）：一次页面加载里 `/api/connections` 被打了 5 次、
+ * `/api/dbmind/settings` 4 次、`/api/drivers/types|status` 各 2 次 —— 全是不同组件
+ * 各自 mount 时各取一份，时间都挤在同一个 50ms 窗口里。树/首页/设置页各自实现一遍
+ * "只取一次"既散又容易漏，索性在这一层合并。
+ *
+ * 三条纪律：
+ * - **只合并同时进行中的**（请求一结束就从表里删掉），不做时间缓存 ——
+ *   缓存会引入"刚建的连接看不见"这种最难查的陈旧数据问题；
+ * - 失败也照常往每个调用方抛（共享同一个 Promise，不会有人拿不到错误）；
+ * - key 必须带全部影响结果的参数（如库清单要带 catalog），否则不同请求会被错误合并。
+ */
+const inflightGet = new Map()
+const once = (key, run) => {
+  const hit = inflightGet.get(key)
+  if (hit) return hit
+  const p = Promise.resolve().then(run)
+  const settle = () => inflightGet.delete(key)
+  p.then(settle, settle)
+  inflightGet.set(key, p)
+  return p
+}
+
 http.interceptors.response.use(
   (response) => {
     // 有些接口用 **200 + `success:false`** 表达失败（安全拦截就是这么回的），不走 error 分支 ——
@@ -165,7 +190,9 @@ function moduleOfExecId(execId) {
 }
 
 // 连接管理
-export const listConnections = () => http.get('/api/connections').then(r => r.data)
+// 启动时树、首页 KPI、数据源下拉、设置页会各取一份 → 本层合并成一次（见 once 的说明）
+export const listConnections = () =>
+  once('connections', () => http.get('/api/connections').then(r => r.data))
 export const saveConnection = async (conn) => {
   const r = await http.post('/api/connections', conn).then(r => r.data)
   refreshConnMap() // 新连接可能立刻被使用，后台刷新类型缓存
@@ -201,8 +228,9 @@ export const copyConnection = (id, name) =>
   http.post(`/api/connections/${id}/copy`, null, { params: name ? { name } : {} }).then(r => r.data)
 
 // 数据库类型与驱动
-export const getDriverTypes = () => http.get('/api/drivers/types').then(r => r.data)
-export const getDriverStatus = () => http.get('/api/drivers/status').then(r => r.data)
+// 类型清单是静态的、状态是全局的：启动时多处会同时要一份 → 本层合并（见 once 的说明）
+export const getDriverTypes = () => once('driver-types', () => http.get('/api/drivers/types').then(r => r.data))
+export const getDriverStatus = () => once('driver-status', () => http.get('/api/drivers/status').then(r => r.data))
 // 手动下载某个类型的驱动（后端按「镜像源」设置去拉；失败会把原因与手工办法一起带回来）
 export const installDriver = (code) => http.post(`/api/drivers/${code}/install`).then(r => r.data)
 // 驱动下载进度（首次连接 / 手动下载时后端会去 Maven 拉）：{ status, percent, received, total, index, files }
@@ -228,7 +256,8 @@ export const saveLegacyTls = (allowLegacyTls) => http.put('/api/settings/legacy-
 // 通用设置（后端 app_settings 表）。**接口后端早就有**（GET /api/dbmind/settings、
 // PUT /{key}，安全开关与改会话上限还会即时生效），只是前端从没接过 ——
 // 生产保护、AI 写开关、会话上限这些能力因此一直停在「有后端、没界面」的状态。
-export const getSettings = () => http.get('/api/dbmind/settings').then(r => r.data)
+// 启动时树/首页/AI 面板会同时各要一份 → 本层合并（见 once 的说明）
+export const getSettings = () => once('dbmind-settings', () => http.get('/api/dbmind/settings').then(r => r.data))
 // 在线更新：检查 Gitee 最新发行版 / 下载安装包并拉起安装器（桌面端覆盖安装）
 export const checkUpdate = () => http.get('/api/update/check', { timeout: 20000 }).then(r => r.data)
 // 下载安装包并由后端自动选源（源快慢由后端现场测速决定，界面不提供选择）
@@ -257,12 +286,20 @@ export const clearCaches = (keys) => http.post('/api/dbmind/cache', { keys }).th
 // 数据库元数据（关系型）——按连接类型路由到数据源模块 /api/{module}
 export const getFeatures = async (id) => { const b = await baseOf(id); return http.get(`${b}/${id}/features`).then(r => r.data) }
 // catalog 清单：只有 catalog 层级的类型（目前 Doris）会返回非空，其余类型返回 `[]`
-export const listCatalogs = async (id) => { const b = await baseOf(id); return http.get(`${b}/${id}/catalogs`).then(r => r.data) }
+export const listCatalogs = async (id) => {
+  const b = await baseOf(id)
+  return once(`catalogs:${b}:${id}`, () => http.get(`${b}/${id}/catalogs`).then(r => r.data))
+}
 // database 可选：catalog 层级用它指定「在哪个 catalog 下列库」
+//
+// **并发合并**很重要：同一条连接在「悬停预取 / 点开（selectConn 的连通性验证）/ 树重建校验」
+// 里可能几乎同时各要一次库清单 —— 每次都是一次真实建连（SSH 隧道 1.5 秒 + JDBC 1.4 秒），
+// 合并后只建一条会话。key 带上 catalog，两种参数不会被错误合并。
 export const listDatabases = async (id, catalog) => {
   const b = await baseOf(id)
   const params = catalog ? { catalog } : {}
-  return http.get(`${b}/${id}/databases`, { params }).then(r => r.data)
+  const key = `databases:${b}:${id}:${catalog || ''}`
+  return once(key, () => http.get(`${b}/${id}/databases`, { params }).then(r => r.data))
 }
 // opts：可传 `{ timeout }` 等 axios 配置。树上「展开连接」这条链路会传一个兜底超时 ——
 // 模式清单要真建一次连，连不上时默认的 5 分钟太久（见 MainView 的 SCHEMA_CALL_TIMEOUT_MS）。

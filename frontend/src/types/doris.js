@@ -13,6 +13,8 @@ export default {
   category: 'OLAP',
   noSql: false,
   schemaLevel: 'none',
+  // 连接下还有一层 catalog（树里多一层、列库要带 catalog 参数）—— 只有 Doris 是这样
+  catalogs: true,
   defaultSchema: '',
   quoteStyle: 'BACKTICK',
   logo: 'Doris.svg',

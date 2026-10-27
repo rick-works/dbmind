@@ -50,6 +50,14 @@ export const schemaLevelOf = (code) => byType(code).schemaLevel
 export const hideDbLevelOf = (code) => Boolean(byType(code).hideDbLevel)
 
 /**
+ * 连接下是否还有一层 catalog（目前只有 Doris）。
+ *
+ * 用途是**省掉一次往返**：`/catalogs` 对其余类型恒返回空数组，却排在列库之前串行执行，
+ * 等于每次展开连接都白付一次请求。默认 false，未知类型也按 false 处理。
+ */
+export const hasCatalogsOf = (code) => Boolean(byType(code).catalogs)
+
+/**
  * 面向界面的「库.模式」串 —— **只用于显示，不要拿它去发请求**。
  *
  * 对没有「库」这一层的类型（Oracle / DM，见 hideDbLevelOf），库那一段就是连接里填的

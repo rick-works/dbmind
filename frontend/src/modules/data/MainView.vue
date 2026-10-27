@@ -157,7 +157,8 @@
             class="dc-tree"
           >
             <template #default="{ node, data }">
-              <span class="tree-node" :class="{ 'multi-sel': isMultiSelected(data) }">
+              <span class="tree-node" :class="{ 'multi-sel': isMultiSelected(data) }"
+                    @mouseenter="prefetchConn(data)" @mouseleave="cancelPrefetch">
                 <!-- 展开箭头：只有"能展开"的节点才显示，未展开=右向、
                      展开=下向、懒加载中=转圈。点箭头**只**切换展开，不触发"打开对象"；
                      点行则由 onNodeClick 决定语义（打开连接 / 打开库 / 预览）。
@@ -1239,7 +1240,7 @@ import { readUnreachableIds, markUnreachable, clearUnreachable } from '../../uti
 import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
 import { pinnedFolders, loadPinnedFolders, pinFolder, unpinFolder } from '../../utils/folders'
 import { buildConnectionBundle, parseConnectionBundle, importPayloadOf, downloadJson } from '../../utils/connTransfer'
-import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType, hideDbLevelOf, dbDisplayOf } from '../../types'
+import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType, hideDbLevelOf, dbDisplayOf, hasCatalogsOf } from '../../types'
 // 占位库 `(default)` 的显示名：只在界面上换成「默认」，node.db 与请求参数仍用原值
 import { dbLabelOf } from '../../utils/dbLabel'
 import AiPanel from '../ai/AiPanel.vue'
@@ -2470,6 +2471,10 @@ const tabKey = (base, connId) => (connId ? base + '@' + connId : base)
 //      sessionStorage 可能仍留在磁盘上，靠这一层保证它一定被清掉。
 const SESSION_KEY = 'dbmind.session'
 let sessionTimer = null
+// 启动阶段的两个一次性定时器（静默预热 / 首点预热）：卸载时要撤掉，否则组件重挂后
+// 旧实例还会再发一轮 `/databases` + `/tables`（与新的那一份完全重复）。
+let prewarmTimer = 0
+let warmupTimer = 0
 
 /** 本次页面加载是不是「刷新」/前进后退 —— 只有这种才恢复会话快照 */
 const isReloadLoad = (() => {
@@ -2834,8 +2839,9 @@ const loadAllConnections = async () => {
     // id→名字 留档：连接重新导入后 id 会变，页签快照靠这份记录按名字找回原连接
     rememberConnNames(allConnections.value)
     // 连接列表一到手就在后台预热（见 prewarmRecentConnections）。稍等一下再开始，
-    // 让首屏那一波请求先过去，别和启动抢资源。
-    setTimeout(() => { prewarmRecentConnections() }, 500)
+    // 让首屏那一波请求先过去，别和启动抢资源。定时器记下来，卸载时能撤掉。
+    clearTimeout(prewarmTimer)
+    prewarmTimer = setTimeout(() => { prewarmRecentConnections() }, 500)
   } catch (e) {
     allConnections.value = []
     ElMessage.error(t('mv.loadConnsFailed', { detail: (e?.message || e) }))
@@ -2863,7 +2869,14 @@ const loadAllConnections = async () => {
  * ③ 失败一律静默：死连接、权限不足都不该在启动时弹窗（用户还没点它），
  *    真点开时该报的错照旧报。
  */
+let prewarmRan = false
 const prewarmRecentConnections = async () => {
+  // **只在启动时跑一次**：这段原先挂在 `loadAllConnections` 里，而那个函数在保存连接、
+  // 改名/删除分组、删连接之后都会再跑一遍 —— 于是用户"保存一条连接"就会顺手把最近
+  // 5 条全部重连一次，正好和紧随其后的树重建抢同一个 JDBC 宿主（宿主里多次建连是排队的，
+  // 实测并发预热会把首枪拖到 6~11 秒）。新连接由悬停预取（prefetchConn）负责热身。
+  if (prewarmRan) return
+  prewarmRan = true
   // 覆盖**全部**「最近用过」（最多 MAX_RECENT 条）：只预热前几条的话，后面的照样冷启动，
   // 而那几条恰恰是用户真会点开的（这份名单就是跨会话记录的「最近连接」）。
   const unreachable = new Set(readUnreachableIds().map(String))
@@ -3401,6 +3414,10 @@ const purgeConnCache = (connId) => {
   const sid = String(connId)
   delete dbsByConn.value[sid]
   delete currentDbByConn.value[sid]
+  // catalog 层与「刚预热过」的记账也一并丢掉：不清的话，删掉连接后这两份表只增不减，
+  // 而 id 被复用的新连接会读到上一条的 catalog 清单。
+  delete catalogsByConn.value[sid]
+  prefetchWarmAt.delete(sid)
   connErrorSet.value.delete(sid)
   closeTabsOfConn(sid)
 }
@@ -3545,6 +3562,9 @@ const closeConnection = (connId) => {
   // 清理错误标记与"刚确认过"的时间，允许下次重新打开时正常提示与校验
   connErrorSet.value.delete(sid)
   connAliveAt.delete(sid)
+  // catalog 层同理：关掉连接 = 下次重连时重新探测（用户可能刚 DROP/CREATE 过 CATALOG）
+  delete catalogsByConn.value[sid]
+  prefetchWarmAt.delete(sid)
   // 折叠树并清除子节点数据（下次展开会重新连接加载）
   const node = treeRef.value?.getNode('conn:' + connId)
   if (node) {
@@ -3858,12 +3878,21 @@ const treeCtxRefreshConn = async (connId) => {
 // 网络断了就不能再展开 —— 「不管什么原因，连不上就不该打开」。
 const connAliveAt = new Map()
 const CONN_ALIVE_TTL = 3000
+/**
+ * 持久缓存里的库清单"有多新就不用再校准一次"（毫秒）。
+ *
+ * 缓存命中时的后台校准是为了纠错（库被新建/删除），但悬停预取刚写进去的那份本身就是
+ * 后端刚回的 —— 紧接着再查一遍只会让"悬停 → 点开"这条主路径多一次建连级别的往返。
+ */
+const DB_CALIBRATE_MIN_AGE_MS = 10000
 
 /** 连接确认不可用：收回「已打开」的派生状态（图标变暗、树收起），页签一律不动 */
 const dropConnOpenState = (sid) => {
   connErrorSet.value.add(sid)
   delete dbsByConn.value[sid]
   delete currentDbByConn.value[sid]
+  // catalog 层也是"打开过程"的派生物：连接都不可用了，下次重连必须重新探测
+  delete catalogsByConn.value[sid]
   const prefix = dbOpenKey(sid, '')
   const kept = new Set()
   openedDbs.value.forEach((k) => { if (!k.startsWith(prefix)) kept.add(k) })
@@ -3879,11 +3908,19 @@ const dropConnOpenState = (sid) => {
  * 网络断了它照样是 true —— 图标是亮的、点开直接走缓存展开、不发任何请求也不报错，
  * 用户看到的就是「明明连不上，界面还说开着，点了也没反应」。
  * 口径与 selectConn 一致：列库成功即连接可用（顺带把库列表换成最新的）。
+ *
+ * 返回值：`true` 可用 / `false` 不可用（已弹错误、已收状态）/ `null` 不知道（同一连接
+ * 正在别处连接或校验中）—— 调用方对 `null` 应按"照常展开、错误由那一处负责报"处理。
  */
 const recheckConn = async (sid) => {
   const key = String(sid)
   const c = allConnections.value.find(x => String(x.id) === key)
-  if (!c || connLoadingSet.value.has(key)) return false
+  // 连接已经不在了：明确不可用
+  if (!c) return false
+  // **正在连/正在验**：返回 null（"不知道"），而不是 false（"不可用"）。
+  // 以前两者都返回 false，于是展开路径把"别处正在连"当成"连不上"直接放弃 ——
+  // 用户点了箭头既没展开也没提示，看着就是"点了没反应"。
+  if (connLoadingSet.value.has(key)) return null
   connLoadingSet.value.add(key)
   try {
     const dbList = await (isNoSqlType(c.type) ? noSqlDatabases(key) : listDatabases(key))
@@ -3964,7 +4001,16 @@ const selectConn = async (id) => {
     // 为什么：测试连接是一次独立往返，在有些服务器上要等 3~10 秒（本机实测 6.3 秒），
     // 紧接着还要第二次往返去列库 —— 两次等待叠在一起，就是"打开连接慢"的主因。
     // 列库本身就是一次真实的会话操作：成功即证明连接可用；失败就回滚并把错误如实说出来。
-    const dbList = await (isNoSqlType(c.type) ? noSqlDatabases(connId) : listDatabases(connId))
+    // **3 秒内刚预热成功过**：那次列库就是一次真实的连通性验证，直接用它，
+    // 不再叠第二次（悬停 → 点开是主路径，多一次就是多一次建连级别的等待）。
+    // 只认"预热时间戳 + 缓存时间戳都够新"的那份，别拿过期快照冒充验证。
+    const warmFresh = Date.now() - (prefetchWarmAt.get(connId) || 0) <= PREFETCH_TRUST_MS
+    const warmHit = warmFresh ? readSchemaCache('dbs:' + connId) : null
+    const trustWarm = warmHit && Array.isArray(warmHit.value)
+      && Date.now() - (warmHit.cachedAt || 0) <= DB_CALIBRATE_MIN_AGE_MS
+    const dbList = trustWarm
+      ? warmHit.value
+      : await (isNoSqlType(c.type) ? noSqlDatabases(connId) : listDatabases(connId))
     const list = Array.isArray(dbList) ? dbList : []
     // **必须自己识别"软失败"**：后端列不出库时**不报错**，而是 200 返回占位名
     // （`(default)` / 本地文件的 `main` 是真名，不能算失败）。不识别的话会把
@@ -4555,8 +4601,13 @@ const buildTree = async () => {
     await nextTick()
     // 恢复之前展开的节点（不存在的 key 会被自动忽略，如已删除的连接）
     // 对懒加载节点，default-expanded-keys 不会自动触发 load，需要手动展开
+    //
+    // 连接的校验窗口在这里放宽（30 秒，见 expandNode 的 opts.ttl）：树重建非常频繁
+    //（保存/改名/删除连接、改分组都会走），而每个已展开的连接都要为"恢复展开"付一次
+    // 真实列库（远端库上是建连）—— 同时打出去会互相拖慢，整棵树一起转圈。
+    // 库/分类节点命中的是内存/持久缓存，照旧并发即可。
     for (const key of expandedKeys) {
-      expandNode(key)
+      expandNode(key, key.startsWith('conn:') ? { ttl: 30000 } : undefined)
     }
   } finally {
     treeLoading.value = false
@@ -4889,6 +4940,10 @@ const calibrateDatabases = async (connId, data) => {
   try {
     const isNosql = isNoSqlType(data.connType)
     const list = await (isNosql ? noSqlDatabases(connId) : listDatabases(connId))
+    // 这期间树可能被整棵重建过（保存/删除连接、改分组都会）：那时 `data` 是**旧节点的对象**，
+    // 往它上面写 children / updateKeyChildren 等于把旧清单灌进新节点。只认同一个对象。
+    const live = treeRef.value?.getNode(data.id)
+    if (live && live.data !== data) return
     const prev = dbsByConn.value[connId]
     dbsByConn.value[connId] = list
     writeSchemaCache('dbs:' + connId, list)
@@ -4948,6 +5003,87 @@ const calibrateCategoryItems = async (connId, db, data, cat) => {
 // 不再需要「最小显示时长」—— 那是为了弥补展开被表清单请求挡住、转圈出现太晚的缺陷；
 // 展开先行修掉根因后，快层（预取命中）瞬间完成直接展开就是正确的体验，人为延迟反而拖沓。
 const nodeLoadingIds = ref([])
+
+// 悬停预取：连接节点上停留 300ms，就**在后台把连接建起来**（顺手拉一次库清单）。
+//
+// 为什么需要（真机 2026-10-27）：首次展开一条走 SSH 隧道的连接要 3 秒 ——
+// 隧道握手 1.58s（日志 `本次连接经 SSH 隧道`）+ JDBC 建连 1.4s，用户以为卡住。
+// 而"鼠标移到连接上"到"点开箭头"通常不止 300ms，正好把这段等待用掉。
+//
+// 三条约束（都很硬）：
+// - **绝不写 `dbsByConn`** —— `isConnOpen` 正是靠它判断"打开过"：误写会让图标在用户没点
+//   的情况下变亮，点箭头还会走"已打开"分支（不切当前连接），SQL 继续跑在旧连接上；
+// - 同一时刻只跑一个 —— 划过一列连接不能建出十条 SSH 隧道/十个 JDBC 连接；
+// - 失败**静默** —— 用户只是划过，没要求连接，弹窗会莫名其妙。
+//
+// 所以预取只做两件事：把会话/隧道建好（后续请求不再付握手钱）+ 把库清单写进**持久缓存**
+// （展开时 lazyLoad 命中它立刻出库名，再后台校准）。成功过的连接 30 秒内不重复预热。
+const prefetchBusy = ref('')
+const prefetchWarmAt = new Map()
+/** 同一连接多久之内不重复预热 */
+const PREFETCH_WARM_TTL = 30000
+/**
+ * 预热成功后多久之内，「打开连接」可以直接把那份库清单当成**连通性验证**的结果。
+ *
+ * 预取本身就是一次真实列库（成功才记账），而"鼠标划过 → 点开"通常只隔一两秒；
+ * 这段时间里再发一次列库纯属把等待叠一遍（远端库上就是一次建连）。窗口取短一点（3 秒），
+ * 超过就老老实实重验 —— 免得"刚连上又断了"被旧结果盖过去。
+ */
+const PREFETCH_TRUST_MS = 3000
+let prefetchTimer = 0
+
+const cancelPrefetch = () => {
+  clearTimeout(prefetchTimer)
+  prefetchTimer = 0
+}
+
+const prefetchConn = (data) => {
+  if (!data || data.kind !== 'conn') return
+  const connId = String(data.connId || '')
+  if (!connId || connId === prefetchBusy.value) return
+  // 正在打开（selectConn 在跑）就不再插一脚：同一个连接别同时发两次列库
+  if (connLoadingSet.value.has(connId)) return
+  // 会话内存里已经有库清单 = 展开本来就不等，不必再预热
+  if (connId in dbsByConn.value) return
+  if (Date.now() - (prefetchWarmAt.get(connId) || 0) <= PREFETCH_WARM_TTL) return
+  cancelPrefetch()
+  prefetchTimer = setTimeout(async () => {
+    prefetchTimer = 0
+    // **再查一遍**：这 300ms 里用户可能已经把这条连接点开了（selectConn 正在列库）——
+    // 只在悬停那一刻判一次的话，这里会再发一条 `/databases`，等于两次真实建连打架。
+    if (prefetchBusy.value || connId in dbsByConn.value) return
+    if (connLoadingSet.value.has(connId)) return
+    prefetchBusy.value = connId
+    try {
+      const list = await (isNoSqlType(data.connType)
+        ? noSqlDatabases(connId)
+        : listDatabases(connId))
+      const arr = Array.isArray(list) ? list : []
+      // 软失败（后端列不出库时 200 返回占位名）不写缓存：那会把"连不上"固化成快照
+      const usable = arr.filter(db => isNoSqlType(data.connType) || String(db) !== NO_DEFAULT_DB)
+      if (usable.length) {
+        prefetchWarmAt.set(connId, Date.now())
+        writeSchemaCache('dbs:' + connId, arr)
+        console.info('[预取] 连接已就绪，展开将秒开：' + (data.label || connId))
+      }
+    } catch (e) {
+      // 划过没连上很正常（库停了/VPN 没连），静默即可
+      console.debug('[预取] 连接未就绪（忽略）', e?.message || e)
+    } finally {
+      prefetchBusy.value = ''
+    }
+  }, 300)
+}
+
+// 网络恢复（切 WiFi / 断网重连）：清掉「这条连接报过错」的标记，
+// 让用户重新展开时是干净状态 —— 连接自身的自愈在 v1.6.5 已修（keepalive + 探活判死）。
+// **必须具名**：MainView 会整个卸载再挂回来，匿名回调摘不掉，重挂 N 次就叠 N 份。
+const onWindowOnline = () => {
+  connErrorSet.value.clear()
+  console.info('[网络] 已恢复，连接错误标记已清空')
+}
+if (typeof window !== 'undefined') window.addEventListener('online', onWindowOnline)
+
 // 懒加载：展开节点时才加载子节点（连接 → 数据库列表；数据库 → 表/视图/对象）
 const lazyLoad = async (node, resolve) => {
   const data = node?.data
@@ -4983,16 +5119,23 @@ const lazyLoadRaw = async (node, resolve) => {
       //
       // ⚠️ 这段必须放在**所有库缓存判断之前** —— 否则第二次展开会命中"库列表缓存"，
       // 直接画库，catalog 那一层凭空消失（第一次有、第二次没有，很难查）。
-      // 接口对没有 catalog 的类型返回 []，所以对另外 16 种类型是零影响。
-      if (!(connId in catalogsByConn.value)) {
-        try {
-          const list = await listCatalogs(connId)
-          catalogsByConn.value[connId] = Array.isArray(list) ? list : []
-        } catch {
-          catalogsByConn.value[connId] = []
-        }
-      }
-      const cats = catalogsByConn.value[connId] || []
+      //
+      // 但只有**真的有 catalog 层的类型**才发这次探测（hasCatalogsOf，目前只有 Doris）：
+      // 其余类型的 `/catalogs` 恒返回 `[]`，却排在列库之前串行执行 —— 等于每次展开连接
+      // 都白付一次往返（远端库上几十~几百毫秒）。失败也**不再缓存成 `[]`**：那会把一次
+      // 网络抖动固化成"这个连接没有 catalog"，之后怎么展开都看不到那一层。
+      const cats = hasCatalogsOf(data.connType)
+        ? (connId in catalogsByConn.value
+          ? (catalogsByConn.value[connId] || [])
+          : await listCatalogs(connId).then(
+            (list) => {
+              const arr = Array.isArray(list) ? list : []
+              catalogsByConn.value[connId] = arr
+              return arr
+            },
+            () => []        // 这次失败：本次按"没有 catalog"处理，但**不落缓存**，下次重试
+          ))
+        : []
       // 只有一个 catalog 时**不画这一层**：Doris 绝大多数实例就只有 `internal`，
       // 为了一个名字多出一层，每次都要多点一次才看得到库 —— 纯噪音。
       //
@@ -5047,7 +5190,10 @@ const lazyLoadRaw = async (node, resolve) => {
         if (hit && Array.isArray(hit.value)) {
           dbsByConn.value[connId] = hit.value
           resolve(finishLazyChildren(data, await dbOrSchemaNodes(connId, data.connType, hit.value)))
-          calibrateDatabases(connId, data)
+          // 刚刚才拉到的那份（悬停预取写的，或上一次展开写的）就不要再"校准"一次了：
+          // 那等于把最热的这条路径（悬停 → 点开）上的 `/databases` 白白翻倍，
+          // 而且紧随其后的第二次请求完全可能比第一次更慢。
+          if (Date.now() - (hit.cachedAt || 0) > DB_CALIBRATE_MIN_AGE_MS) calibrateDatabases(connId, data)
           return
         }
       }
@@ -5231,14 +5377,21 @@ const findTreeParentKey = (key, nodes) => {
 
 // 可靠地展开 el-tree 节点（lazy 模式下直接 node.expand() 对未加载节点可能不生效）
 // 若节点尚未创建（父级目录收起时其下子节点未渲染/未懒加载），先展开父级目录并轮询等待节点就绪
-const expandNode = async (key) => {
+const expandNode = async (key, opts) => {
   // 展开连接前确认它**现在**还连得上：已打开过的连接会直接命中 dbsByConn 缓存，
   // 网络断了也照样展开、界面一直显示已连接 —— 用户点了却看不到任何错误。
   // TTL 内刚确认过的跳过（selectConn 刚连上就属于这种），正常使用不会多一次往返。
+  //
+  // `opts.ttl` 只给"树重建后恢复展开状态"用（buildTree）：那条路径一次要恢复 N 个
+  // 已展开的连接，重建本身又很频繁（保存/改名/删除连接都会触发），按 3 秒窗口去验
+  // 等于每次都把 N 条 `/databases` 同时打出去 —— 宿主里多次建连是排队的，整棵树会一起转圈。
   if (key.startsWith('conn:')) {
     const sid = key.slice(5)
-    if (Date.now() - (connAliveAt.get(sid) || 0) > CONN_ALIVE_TTL) {
-      if (!(await recheckConn(sid))) return
+    const ttl = (opts && opts.ttl) || CONN_ALIVE_TTL
+    if (Date.now() - (connAliveAt.get(sid) || 0) > ttl) {
+      // null = 同一连接正在别处连接/校验中：照常展开（用的就是那份正在刷新的缓存，
+      // 失败由那一处负责弹错误），否则用户会看到"点了没反应"。
+      if ((await recheckConn(sid)) === false) return
     }
   }
   let node = treeRef.value?.getNode(key)
@@ -5388,11 +5541,16 @@ const onTreeArrowClick = (e) => {
   const row = nodeEl.querySelector('.conn-row[data-conn-id]')
   if (!row) return
   const sid = String(row.dataset.connId)
+  // **只接管「已经打开过」的连接**：没打开过的连接点箭头 = 打开它（走 selectConn 切上下文、
+  // 记最近使用）。这里若也接管，就变成只调 recheckConn 拉一份库列表然后原地展开 ——
+  // 当前连接没切过去，树亮了但 SQL 还在老连接上跑。
+  if (!isConnOpen(sid)) return
   if (Date.now() - (connAliveAt.get(sid) || 0) <= CONN_ALIVE_TTL) return
-  // 接管这次展开：先确认连得上，成功后再真正展开（失败时 recheckConn 已经弹错误 + 收起）
+  // 接管这次展开：先确认连得上，成功后再真正展开（失败时 recheckConn 已经弹错误 + 收起）。
+  // `ok === null`（同一连接正在别处连/校验）= 照常展开，别把"正在连"当成"连不上"。
   e.stopPropagation()
   e.preventDefault()
-  recheckConn(sid).then((ok) => { if (ok) expandNode('conn:' + sid) })
+  recheckConn(sid).then((ok) => { if (ok !== false) expandNode('conn:' + sid) })
 }
 
 /**
@@ -8328,6 +8486,11 @@ const catalogCtxDrop = () => {
       ElMessage.success(t('mv.catalogDropped', { name: d.catalog }))
       // 从树上摘掉该 catalog 节点（它下面的库/表节点随子树一起消失）
       treeRef.value?.remove(d.id)
+      // **内存里那份 catalog 清单也要作废**：只摘节点的话，收起再展开连接时
+      // lazyLoad 会拿旧清单把刚删掉的 catalog 又画回来（连上去才报错）。
+      // 库清单缓存同理 —— 2 个 catalog 掉到 1 个会改变"平铺裸库名"的那套取值。
+      delete catalogsByConn.value[String(d.connId)]
+      removeSchemaCache('dbs:' + String(d.connId))
     } catch (e) {
       ElMessage.error(t('mv.dropCatalogFailed', { detail: errMsg(e) }))
     }
@@ -8372,7 +8535,8 @@ onMounted(async () => {
   // 静默预热（不 await）：延迟 2.5 秒再发，避开首屏渲染最忙的那一下。
   // 这一步让"用户手动点开第一条连接"从 5~10 秒变成 ~250ms —— 上面那条自动展开
   // 走的是同一条路，所以它仍要等一次冷启动（那本来就是"第一次"，绕不过去）。
-  setTimeout(() => { warmUpBeforeFirstClick() }, 2500)
+  clearTimeout(warmupTimer)
+  warmupTimer = setTimeout(() => { warmUpBeforeFirstClick() }, 2500)
 })
 
 // 页签变化就落盘：关掉浏览器再打开（或刷新）时能原样回来
@@ -8392,6 +8556,12 @@ onBeforeUnmount(() => {
   window.removeEventListener('dc-scripts-changed', onScriptsChanged)
   window.removeEventListener('dbmind-safety-changed', loadSafetyFlags)
   window.removeEventListener('keydown', onGlobalKey)
+  // 网络恢复回调与启动定时器同样要收：MainView 会整个卸载再挂回来（见上面密钥一行），
+  // 留着的话每重挂一次就多一份 online 回调、多一轮静默预热请求。
+  window.removeEventListener('online', onWindowOnline)
+  cancelPrefetch()
+  if (prewarmTimer) { clearTimeout(prewarmTimer); prewarmTimer = 0 }
+  if (warmupTimer) { clearTimeout(warmupTimer); warmupTimer = 0 }
   if (exportPollTimer) { clearInterval(exportPollTimer); exportPollTimer = null }
   // 定时器也要停。这几个原本是"设了就不管"的：
   //  · bgTick 每秒 +1（重挂一次多一个心跳 → 后台任务的"已运行时长"会越走越快）

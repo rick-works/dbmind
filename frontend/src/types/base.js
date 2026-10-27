@@ -11,6 +11,9 @@ import { buildUrlFor } from './jdbc.js'
  *  - category      大类：RELATIONAL / OLAP / RELATIONAL_FILE / NOSQL（同后端）
  *  - noSql         是否 NoSQL（替代散落各处的白名单判断）
  *  - schemaLevel   导航/查询是否需要 schema 层级：'none' | 'schema'
+ *  - catalogs      连接下是否还有一层 catalog（目前只有 Doris）。**默认 false**：
+ *                  为它每次展开连接都要多打一次 `/catalogs`（还要排在列库之前），
+ *                  而其余类型的后端只会回一个空数组 —— 纯浪费一次往返。
  *  - defaultSchema schema 层级下默认选中的 schema（如 SQL Server 的 dbo）
  *  - quoteStyle    标识符引号风格：BACKTICK / BRACKET / DOUBLE_QUOTE（同后端 quoteStyle）
  *  - logo          图标 key（P3 由 DbLogo 映射到 assets/type-*.svg）
@@ -33,6 +36,7 @@ export default {
   category: 'RELATIONAL',
   noSql: false,
   schemaLevel: 'none',
+  catalogs: false,
   defaultSchema: '',
   quoteStyle: 'DOUBLE_QUOTE',
   logo: '',
