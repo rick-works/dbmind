@@ -1776,8 +1776,18 @@ html[data-theme="dark"] .el-alert--success.is-light {
    Element 的 .el-table 自带 font-size（走 --el-table-font-size），只在**容器**上设字号是管不到它的，
    所以这里按"数据视图"的容器显式覆盖表格根字号；用容器限定范围，设置页/关于页里的表格不受影响。 */
 .table-data-view .el-table,
-.sql-query-view .el-table,
-.table-edit-page .el-table { font-size: var(--dc-data-fs, 14px); }
+.sql-query-view .el-table { font-size: var(--dc-data-fs, 14px); }
+/* 「编辑表结构」的索引页签是 el-table，另外两个页签是自绘 .field-table（12px 档）。
+   同一页里两套字号会一眼看出「索引表比另两个 tab 大一号」，所以这里跟着字段表取同一档：
+   数据网格字号 - 1px，并且同样跟着设置里的「数据视图表格」字号变。 */
+.table-edit-page .el-table { font-size: calc(var(--dc-data-fs, 13px) - 1px); }
+/* 索引表里的输入框/下拉也是 Element 的 small（12px），与同一行的单元格文本差一档 ——
+   一并拉到同一字号，索引页签整页只有一个字号。 */
+.table-edit-page .el-table .el-input__inner,
+.table-edit-page .el-table .el-select__selected-item,
+.table-edit-page .el-table .el-select__placeholder {
+  font-size: calc(var(--dc-data-fs, 13px) - 1px);
+}
 /* 表头与单元格跟随（EP 用行高/字号各自的变量，但字号是从 .el-table 继承下来的） */
 .table-data-view .el-table .cell,
 .sql-query-view .el-table .cell,

@@ -14,7 +14,13 @@ export default {
   logo: 'redis.svg',
   fileType: false,
   defaultPort: 6379,
-  credentials: false,
+  // 宿主（agents/dbmind-agent-redis）本来就支持 AUTH：有用户名走 Redis 6 的 ACL
+  // （`AUTH user pass`），没有就走经典 `AUTH pass`。**密码框必须显示出来** ——
+  // 以前这里写 false，带密码的实例根本无法连接（实测报 NOAUTH Authentication required）。
+  credentials: true,
+  // 用户名可留空（= 服务端默认用户 default）；密码也可留空（本地无认证实例）
+  usernameRequired: false,
+  passwordRequired: false,
   databaseLabel: 'tdef.dbNo',
   databasePh: 'cd.dbPhOptional',
   buildJdbcUrl(f) {

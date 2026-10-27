@@ -118,14 +118,17 @@
                       :title="windowsAuthHint" />
 
             <div v-if="!hideCredentials && !nativeWindowsAuth" class="form-row">
-              <el-form-item :label="$t('udv.fUser')" :required="!isWindowsAuth">
-                <el-input v-model="form.username" :placeholder="isWindowsAuth ? $t('cd.userPlaceholder') : ''" />
+              <el-form-item :label="$t('udv.fUser')" :required="isWindowsAuth || userRequired">
+                <el-input v-model="form.username"
+                          :placeholder="isWindowsAuth ? $t('cd.userPlaceholder') : (userRequired ? '' : $t('cd.userOptional'))" />
               </el-form-item>
-              <!-- 口令框恒带必填星号：编辑时留空表示「沿用已保存的口令」，但这依旧是一条必填信息
-                   （新建时必须填），星号缺一个反而让人以为是选填 -->
-              <el-form-item v-if="!isWindowsAuth" :label="$t('cd.password')" class="row-side" label-width="88px" required>
+              <!-- 口令框的星号跟类型声明走：JDBC 关系型一律必填（编辑时留空表示「沿用已保存的口令」，
+                   但这条依旧算必填信息）；NoSQL（Redis / MongoDB / ES）允许留空 —— 那是
+                   「实例没开认证」，不是漏填 -->
+              <el-form-item v-if="!isWindowsAuth" :label="$t('cd.password')" class="row-side" label-width="88px"
+                            :required="pwdRequired">
                 <el-input v-model="form.password" type="password" show-password
-                          :placeholder="hasSavedPassword ? $t('cd.pwdSaved') : ''" />
+                          :placeholder="hasSavedPassword ? $t('cd.pwdSaved') : (pwdRequired ? '' : $t('cd.optional'))" />
               </el-form-item>
             </div>
           </template>
@@ -451,8 +454,14 @@ const dlSubText = computed(() => {
 })
 // 类型能力一律来自前端注册表（src/types），连接表单不再写死类型清单
 const typeDef = computed(() => byType(form.value?.type || 'MYSQL'))
-// 是否显示用户名/密码：由类型定义声明（NoSQL 默认不需要）
+// 是否显示用户名/密码：由类型定义声明。
+// ⚠️ NoSQL **不能一律不显示**：Redis（AUTH / ACL）、MongoDB、Elasticsearch（Basic）
+// 的宿主都实现了认证，藏起来等于带密码的实例没法连（用户实测 Redis 报 NOAUTH）。
 const hideCredentials = computed(() => !typeDef.value.credentials)
+// 两项是否**必填**同样由类型声明：NoSQL 允许留空（= 实例没开认证），
+// 关系型一律必填 —— 星号与提交校验都读这两个，别再各写一套。
+const userRequired = computed(() => typeDef.value.usernameRequired !== false)
+const pwdRequired = computed(() => typeDef.value.passwordRequired !== false)
 // 「库名」是否必填：默认**可留空**（MySQL / PG / SQL Server / ClickHouse 都能先连上、
 // 再在树里选库），只有语义上必须给的类型在 src/types/<type>.js 里置 databaseRequired
 // （Oracle 的服务名 / SID、DB2 的库名）。原先按"模板里有 {database} 就必须填"，
@@ -830,9 +839,12 @@ const doSave = async () => {
   // 文件型（SQLite / H2 / Derby …）根本没有账号密码 —— 这里以前漏了 isFileType，
   // 于是 QLite 也会弹「请输入用户名」（用户看到的就是一句牛头不对马嘴的提示）。
   if (!hideCredentials.value && !isWindowsAuth.value && !isFileType.value) {
-    if (!form.value.username) return ElMessage.warning(t('cd.needUser'))
+    // 必填与否跟类型声明走（NoSQL 允许留空 = 实例没开认证，见 types/*.js 的说明）
+    if (userRequired.value && !form.value.username) return ElMessage.warning(t('cd.needUser'))
     // 编辑已有连接时口令留空 = 沿用已保存的那份（详情接口不再回传明文，见后端 sanitize）
-    if (!form.value.password && !hasSavedPassword.value) return ElMessage.warning(t('cd.needPassword'))
+    if (pwdRequired.value && !form.value.password && !hasSavedPassword.value) {
+      return ElMessage.warning(t('cd.needPassword'))
+    }
   }
   // 过滤空参数行
   form.value.params = (form.value.params || []).filter(p => p.name && String(p.name).trim())

@@ -31,7 +31,9 @@
             {{ $t('ols.dropSelected') }}
           </el-button>
         </template>
-        <el-button size="small" :icon="Refresh" text @click="relayout">{{ $t('common.refresh') }}</el-button>
+        <!-- 「刷新」= 重新拉一遍清单。原来绑的是 relayout（只重算列宽，数据一动不动），
+             点下去看着就是"没反应"。 -->
+        <el-button size="small" :icon="Refresh" text @click="refreshList">{{ $t('common.refresh') }}</el-button>
       </div>
       <div ref="bodyRef" class="ols-body" v-loading="loading">
         <!-- 与查询结果/表数据同一套自绘网格（.data-table）：表头小图标着色（只有图标
@@ -68,15 +70,31 @@
           </thead>
           <tbody>
             <tr v-for="(r, i) in filtered" :key="i" :class="{ 'is-selected': isSel(r) }"
-                @dblclick="rowActivate(r)">
+                :data-idx="i" @mousedown="onRowDown(i, $event)" @dblclick="rowActivate(r)">
               <td class="leading-td row-num">{{ i + 1 }}</td>
-              <td v-if="canDrop" class="ols-sel-td" @click.stop>
+              <td v-if="canDrop" class="ols-sel-td" @click.stop @mousedown.stop="setAnchor(i)">
                 <input type="checkbox" class="ols-cb" :checked="isSel(r)" @change="toggleSel(r)" />
               </td>
               <td v-for="c in cols" :key="c.prop"
-                  :class="[c.prop === 'name' ? 'ols-name-td' : '', c.align === 'left' ? 'ols-td-left' : 'ols-td-center']"
-                  :title="cellText(r, c)">
-                <span class="ols-ellipsis">{{ cellText(r, c) }}</span>
+                  :class="[c.prop === 'name' ? 'ols-name-td' : '', c.align === 'left' ? 'ols-td-left' : 'ols-td-center',
+                           cmtEditable(c) ? 'ols-cmt-td' : '']"
+                  :title="cellTitle(r, c)">
+                <template v-if="cmtEditable(c)">
+                  <!-- 注释格：与「编辑表结构」字段表的注释格**完全一致** ——
+                       常态就是一个真 el-input（没有注释就空着，不摆占位文字）；
+                       悬停该行右侧浮出放大图标（绝对定位，不挤动输入框）；
+                       双击输入框或单击图标都打开多行大编辑框，点「确定」才写回。 -->
+                  <div class="ols-cmt-cell" @dblclick.stop="openCmtDlg(r)">
+                    <el-input v-model="r.comment" size="small" class="ols-cmt-input"
+                              @mousedown.stop @click.stop
+                              @focus="onCmtFocus(r)" @blur="saveCmt(r)"
+                              @keydown.enter.stop.prevent="saveCmt(r)"
+                              @keydown.esc.stop.prevent="revertCmt(r)" />
+                    <el-button text size="small" :icon="EditPen" class="ols-cmt-expand"
+                               :title="$t('tdet.zoomComment')" @click.stop="openCmtDlg(r)" @dblclick.stop />
+                  </div>
+                </template>
+                <span v-else class="ols-ellipsis">{{ cellText(r, c) }}</span>
               </td>
               <td class="ols-act-td">
                 <div class="ols-act-row">
@@ -91,6 +109,21 @@
         <div v-else-if="!loading" class="ft-empty">{{ $t('ols.empty') }}</div>
       </div>
     </div>
+
+    <!-- 注释的多行编辑：与「编辑表结构」字段注释的放大框同一套交互（点确定才写回） -->
+    <el-dialog v-model="cmtDlg.visible" :title="$t('ols.editComment')" width="520px" append-to-body>
+      <div class="ols-cmt-dlg-head">
+        <el-tag size="small" effect="plain" type="info">{{ cmtDlg.table }}</el-tag>
+        <span class="ols-cmt-dlg-tip">{{ $t('tdet.commentMultiLine') }}</span>
+        <span class="ols-cmt-dlg-count">{{ cmtDlg.text.length }}</span>
+      </div>
+      <el-input v-model="cmtDlg.text" type="textarea" :autosize="{ minRows: 4, maxRows: 10 }"
+                :placeholder="$t('ols.commentPh')" />
+      <template #footer>
+        <el-button size="small" @click="cmtDlg.visible = false">{{ $t('common.cancel') }}</el-button>
+        <el-button size="small" type="primary" :loading="cmtDlg.saving" @click="applyCmtDlg">{{ $t('common.confirm') }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -102,13 +135,15 @@
 // 网格复用查询结果/表数据那套自绘 .data-table 的结构与样式；列宽与结果网格同一机制：
 // 按内容测量初始宽（自适应）→ colgroup 固定 → 列缘拖拽 / 双击列缘重新自适应。
 // 列随**数据源类型**走：各家有什么就展示什么，没有的列不摆，不摆一排空列。
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Search, Refresh, Document, Calendar, Histogram, Delete } from '@element-plus/icons-vue'
+import { Search, Refresh, Document, Calendar, Histogram, Delete, EditPen } from '@element-plus/icons-vue'
 import { t } from '../../utils/i18n'
 import { editorSettingsLive } from '../../utils/settings'
 import { formatDbValue } from '../../utils/cellValue'
-import { listTables, listProcedures, listTriggers, listEvents, getTableCounts, listDatabases } from '../../api'
+import { listTables, listProcedures, listTriggers, listEvents, getTableCounts, listDatabases, alterTable } from '../../api'
+import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
+import { buildTableCommentSql } from '../../utils/tableComment'
 import { hideDbLevelOf, dbDisplayOf } from '../../types'
 import { groupConnections } from '../../utils/connGroups'
 
@@ -359,6 +394,7 @@ const actions = computed(() => ACTIONS[props.cat] || [])
 // 勾选状态存「行 key」而不是行对象：清单重载后行对象是新的，存对象会静默失效。
 const canDrop = computed(() => actions.value.some(a => a.action === 'drop'))
 const selected = ref([])
+const shiftAnchor = ref(-1)   // Shift 连选的锚点（上次单击的行号）
 const rowKeyOf = (r) => (props.cat === 'scripts' ? 'id:' + r.id : 'n:' + r.name)
 const isSel = (r) => selected.value.includes(rowKeyOf(r))
 const selCount = computed(() => selected.value.length)
@@ -382,6 +418,229 @@ const dropSelected = () => {
     action: 'dropSelected', rows,
     connId: curConnId.value, database: curDb.value, cat: props.cat
   })
+}
+
+// ===== 注释编辑 =====
+// 表清单里最常改的就是表注释（名字/行数/引擎/字符集都是只读元数据）。交互与观感跟
+//「编辑表结构」字段表的注释格一模一样：常态就是一个真 el-input，回车/失焦写库、Esc 还原；
+// 悬停该行右侧浮出放大图标（或用双击输入框）打开多行大编辑框，点「确定」才写回。
+// 只对「表」类别开放：视图 / 例程 / 触发器的注释是另一套语法（COMMENT ON VIEW /
+// ALTER PROCEDURE … COMMENT），这里不做，避免生成本库不认的 SQL。
+// 保存走 `/alter`（与「编辑表结构」同一个接口），并过同一道只读 / 生产保护闸门。
+const cmtDlg = reactive({ visible: false, text: '', table: '', row: null, saving: false })
+const cmtBusy = ref(false)   // 保存中（行内编辑与多行弹窗共用一把锁，防连点重复提交）
+// 行 key → 聚焦前的值：v-model 直接改 r.comment，靠这份快照算差量（也供 Esc 还原）
+const cmtOrig = reactive({})
+const curConn = computed(() => props.connections.find(c => String(c.id) === String(curConnId.value)) || props.conn || {})
+const cmtEditable = (c) => c.prop === 'comment' && props.cat === 'tables' && !!curConn.value.type
+/** 悬停提示：完整注释（会被列宽截断） + 「双击编辑」的说明 */
+const cellTitle = (r, c) => {
+  const v = cellText(r, c)
+  if (!cmtEditable(c)) return v
+  const tip = t('ols.editCommentTip')
+  return v ? v + '\n' + tip : tip
+}
+
+/** 这一行「库里当前值」：输入框已经改脏时，快照才是真值 */
+const cmtOrigOf = (r) => {
+  const k = rowKeyOf(r)
+  return cmtOrig[k] !== undefined ? cmtOrig[k] : String(r.comment ?? '')
+}
+/** 聚焦时快照一次（重复聚焦不覆盖，否则连改两次算不出差量） */
+const onCmtFocus = (r) => {
+  const k = rowKeyOf(r)
+  if (cmtOrig[k] === undefined) cmtOrig[k] = String(r.comment ?? '')
+}
+/** Esc：退回聚焦前的值，不写库 */
+const revertCmt = (r) => {
+  const k = rowKeyOf(r)
+  if (cmtOrig[k] === undefined) return
+  r.comment = cmtOrig[k]
+  delete cmtOrig[k]
+}
+
+/** 真正写库：行内输入与多行弹窗共用同一条路径（同一道只读/生产保护闸门） */
+const applyComment = async (r, val, oldRaw) => {
+  if (!r || cmtBusy.value) return false
+  const v = String(val ?? '').trim()
+  const old = String(oldRaw ?? '').trim()
+  if (v === old) return true
+  cmtBusy.value = true
+  try {
+    await loadProtectProd()
+    if (!guardConnWrite(curConn.value, t('ols.editComment'))) return false
+    const sql = buildTableCommentSql({
+      type: curConn.value.type, database: curDb.value, table: r.name, comment: v
+    })
+    await alterTable(curConnId.value, curDb.value, sql)
+    r.comment = v
+    ElMessage.success(t('ols.commentSaved'))
+    return true
+  } catch (e) {
+    // 失败保留输入的内容，用户改完可以直接再回车/失焦重试
+    ElMessage.error(t('ols.commentFailed', { detail: e?.response?.data?.message || e?.message || String(e) }))
+    return false
+  } finally {
+    cmtBusy.value = false
+  }
+}
+
+/** 回车 / 失焦：与快照比一下，真的变了才写库（没改就把空白归一回去） */
+const saveCmt = async (r) => {
+  if (cmtBusy.value) return
+  const k = rowKeyOf(r)
+  const old = cmtOrigOf(r)
+  if (String(r.comment ?? '').trim() === String(old).trim()) {
+    r.comment = old
+    delete cmtOrig[k]
+    return
+  }
+  const ok = await applyComment(r, r.comment, old)
+  if (ok) delete cmtOrig[k]
+}
+
+// 多行编辑（放大图标 / 双击输入框）：与「编辑表结构」的注释弹窗同一套交互，点「确定」才写回
+const openCmtDlg = (r) => {
+  if (cmtBusy.value) return
+  onCmtFocus(r)                 // 打开时就把「库里值」记下来，弹窗里改的差量以它为准
+  cmtDlg.row = r
+  cmtDlg.table = String(r.name || '')
+  cmtDlg.text = String(r.comment ?? '')
+  cmtDlg.visible = true
+}
+const applyCmtDlg = async () => {
+  if (cmtDlg.saving) return
+  cmtDlg.saving = true
+  const ok = await applyComment(cmtDlg.row, cmtDlg.text, cmtOrigOf(cmtDlg.row))
+  cmtDlg.saving = false
+  if (ok) {
+    delete cmtOrig[rowKeyOf(cmtDlg.row)]
+    cmtDlg.visible = false
+  }
+}
+
+// ===== 拖动 / Shift 连选 =====
+// 勾选列一格一格点太费劲（几十上百个对象时要人命），所以整行按下就能开始选：
+//   · 按下某行 = 只选这一行，按住往下拖 = 连续选中经过的行（拖到表格上下边缘会自动滚动）
+//   · Shift + 点击 = 从上次单击的行连选到当前行（与资源管理器 / Excel 一致）
+//   · Ctrl + 点击 = 追加 / 取消单行
+// 只改「选中集合」，不碰任何业务状态；双击打开（dblclick）不受影响。
+const setAnchor = (i) => { shiftAnchor.value = i }
+
+const drag = { active: false, anchor: -1, lastIdx: -1, additive: false, base: [], x: 0, y: 0 }
+let autoTimer = null
+let autoDy = 0
+
+/** 返回 [lo, hi] 区间内各行的勾选 key */
+const rowKeysBetween = (a, b) => {
+  const lo = Math.min(a, b)
+  const hi = Math.max(a, b)
+  return filtered.value.slice(lo, hi + 1).map(rowKeyOf)
+}
+
+/** 重新计算选区：additive 时保留按下前的选择（Ctrl 语义），否则整段替换 */
+const applyRange = (a, b, additive, base) => {
+  const keys = rowKeysBetween(a, b)
+  if (!keys.length) return
+  if (additive) {
+    const set = new Set(base || [])
+    keys.forEach(k => set.add(k))
+    selected.value = Array.from(set)
+  } else {
+    selected.value = keys
+  }
+}
+
+/** 鼠标坐标落在第几行（不在行上返回 -1，此时选区保持不变） */
+const rowIdxAt = (x, y) => {
+  const el = document.elementFromPoint(x, y)
+  if (!el || !el.closest) return -1
+  const tr = el.closest('tr[data-idx]')
+  if (!tr) return -1
+  const n = Number(tr.getAttribute('data-idx'))
+  return Number.isFinite(n) ? n : -1
+}
+
+const stopAutoScroll = () => {
+  if (autoTimer) { clearInterval(autoTimer); autoTimer = null }
+  autoDy = 0
+}
+
+/** 拖到表格上下边缘时自动滚动，滚动后继续扩展选区（否则长清单拖不到底） */
+const autoScrollNearEdge = (clientY) => {
+  const box = bodyRef.value
+  if (!box) { stopAutoScroll(); return }
+  const r = box.getBoundingClientRect()
+  const m = 22
+  let dy = 0
+  if (clientY < r.top + m) dy = -Math.max(6, Math.round((r.top + m - clientY) / 2))
+  else if (clientY > r.bottom - m) dy = Math.max(6, Math.round((clientY - (r.bottom - m)) / 2))
+  autoDy = dy
+  if (!dy) { stopAutoScroll(); return }
+  if (autoTimer) return
+  autoTimer = setInterval(() => {
+    if (!drag.active || !autoDy) { stopAutoScroll(); return }
+    const before = box.scrollTop
+    box.scrollTop = before + autoDy
+    if (box.scrollTop === before) return
+    const idx = rowIdxAt(drag.x, drag.y)
+    if (idx >= 0 && idx !== drag.lastIdx) {
+      drag.lastIdx = idx
+      applyRange(drag.anchor, idx, drag.additive, drag.base)
+    }
+  }, 40)
+}
+
+const onDragMove = (e) => {
+  if (!drag.active) return
+  drag.x = e.clientX
+  drag.y = e.clientY
+  const idx = rowIdxAt(e.clientX, e.clientY)
+  if (idx >= 0 && idx !== drag.lastIdx) {
+    drag.lastIdx = idx
+    applyRange(drag.anchor, idx, drag.additive, drag.base)
+  }
+  autoScrollNearEdge(e.clientY)
+}
+
+const endDrag = () => {
+  drag.active = false
+  stopAutoScroll()
+  document.body.classList.remove('ols-dragging')
+  window.removeEventListener('mousemove', onDragMove)
+  window.removeEventListener('mouseup', endDrag)
+}
+
+const onRowDown = (idx, e) => {
+  if (!canDrop.value || e.button !== 0) return
+  // 勾选格 / 操作列：交给它们自己的点击，不参与拖选
+  if (e.target.closest && e.target.closest('.ols-sel-td, .ols-act-td')) return
+  const row = filtered.value[idx]
+  if (!row) return
+
+  // Shift + 点击：从锚点连选到当前行（锚点无效时退化成普通单击）
+  if (e.shiftKey && shiftAnchor.value >= 0) {
+    e.preventDefault()
+    applyRange(shiftAnchor.value, idx, e.ctrlKey || e.metaKey, selected.value.slice())
+    return
+  }
+
+  e.preventDefault()                     // 按住拖动时不要顺带把整页文字刷蓝
+  shiftAnchor.value = idx
+  drag.active = true
+  drag.anchor = idx
+  drag.lastIdx = idx
+  drag.additive = !!(e.ctrlKey || e.metaKey)
+  drag.base = drag.additive ? selected.value.slice() : []
+  drag.x = e.clientX
+  drag.y = e.clientY
+
+  if (drag.additive) toggleSel(row)      // Ctrl + 点击 = 追加 / 取消
+  else selected.value = [rowKeyOf(row)]  // 普通单击 = 只选这一行，接着往下拖即连续选
+
+  document.body.classList.add('ols-dragging')
+  window.addEventListener('mousemove', onDragMove)
+  window.addEventListener('mouseup', endDrag)
 }
 
 const filtered = computed(() => {
@@ -469,6 +728,8 @@ async function load() {
   const id = curConnId.value
   const db = curDb.value
   if (!id) return
+  // 重载会换掉行对象：注释格按行 key 记的「库里值」快照必须跟着清（否则同名表会拿旧快照算差量）
+  Object.keys(cmtOrig).forEach((k) => { delete cmtOrig[k] })
   loading.value = true
   colW.value = []
   try {
@@ -519,6 +780,14 @@ async function load() {
   measure()
 }
 
+/** 工具条「刷新」：重新拉一遍清单（改完注释、或在别处建了表之后看最新）。
+ *  load() 末尾自带 measure()，不必再单独 relayout。 */
+const refreshList = async () => {
+  // 刷新会换掉行对象：注释格的「库里值」快照按行 key 记，一并丢掉（否则同名表会拿旧快照算差量）
+  Object.keys(cmtOrig).forEach((k) => { delete cmtOrig[k] })
+  await load()
+}
+
 // 数据加载由 immediate watch 驱动：setup 后立即拉一次（不依赖 mounted 生命周期时序），
 // 之后 connId / database / cat / reloadTick 任一变化都重拉（并同步页内下拉的当前值）
 watch(() => [props.connId, props.database, props.cat], () => {
@@ -530,7 +799,7 @@ watch(() => props.reloadTick, () => load())
 // 勾选按「名字」记：重载 / 换库 / 换类别后必须清空 —— 否则跨上下文残留的勾选
 // 会删掉另一个库里同名的那一行（删除是不可恢复的，宁可让用户重勾一次）。
 watch(() => [props.reloadTick, props.cat, props.connId, props.database, curConnId.value, curDb.value],
-  () => { selected.value = [] })
+  () => { selected.value = []; shiftAnchor.value = -1 })
 watch(keyword, () => { colW.value = []; measure() })
 onMounted(() => {
   if (bodyRef.value && typeof ResizeObserver !== 'undefined') {
@@ -538,7 +807,10 @@ onMounted(() => {
     resizeObs.observe(bodyRef.value)
   }
 })
-onBeforeUnmount(() => resizeObs?.disconnect())
+onBeforeUnmount(() => {
+  resizeObs?.disconnect()
+  endDrag()   // 卸载时把拖动期间的全局监听一并摘掉
+})
 </script>
 
 <style scoped>
@@ -617,7 +889,10 @@ onBeforeUnmount(() => resizeObs?.disconnect())
 .data-table th.leading-th { width: 46px; color: var(--dc-text-strong, #606266); }
 .data-table td.leading-td {
   text-align: center; color: var(--dc-text-dim, #909399);
-  background: var(--dc-bg-table-head, #f5f7fa); font-size: 12px;
+  background: var(--dc-bg-table-head, #f5f7fa);
+  /* 行号比数据小一号；跟着设置里的「数据视图表格」字号走（写死 12px 的话调大字号时
+     只有这一列不动，一列小字夹在大字里很显眼） */
+  font-size: calc(var(--dc-data-fs, 13px) - 1px);
 }
 /* 勾选列（有删除动作的类别才有）：与行号列同底色，窄而居中 */
 .data-table th.ols-sel-th { width: 36px; padding: 0; }
@@ -631,6 +906,9 @@ onBeforeUnmount(() => resizeObs?.disconnect())
 .data-table tbody tr.is-selected td { background: var(--dc-primary-wash, #eef4ff); }
 .data-table tbody tr.is-selected td.leading-td { color: var(--dc-primary, var(--el-color-primary)); font-weight: 600; }
 .data-table tbody tr.is-selected:hover td { background: var(--dc-bg-hover, #f0f4ff); }
+/* 按住拖动选择期间：整页禁掉文本选择（否则往下拖会把整片文字刷蓝） */
+:global(body.ols-dragging) { user-select: none; }
+:global(body.ols-dragging *) { user-select: none !important; }
 /* 工具条上的「已选 N 项 / 删除选中」 */
 .ols-sel-count { font-size: 12px; color: var(--dc-text-dim, #909399); }
 .ols-sel-drop { font-weight: 600; }
@@ -654,17 +932,64 @@ onBeforeUnmount(() => resizeObs?.disconnect())
 .data-table td.ols-act-td {
   position: sticky; right: 0; z-index: 1;
   background: var(--dc-bg-card, #fff);
-  /* border-collapse: collapse 下 sticky 单元格的**左/下边框会跟着表格一起被折叠掉**，
-     滚动时这两条线就没了 —— 用 inset 阴影补齐（位置与边框重合，画重了也看不出来）。
-     表头那条下边线必须是 2px 压边线的同色同宽（--dc-table-head-line），否则操作列
-     与左边各列的"压边"对不上（用户反馈：操作列的下边线不一样）。 */
-  box-shadow: inset 1px 0 0 var(--dc-border, #dcdfe6), inset 0 -1px 0 var(--dc-border, #dcdfe6);
+  /* 只补**左侧**一条线：collapse 下 sticky 单元格的左边框会被折叠掉，横向滚动时数据列
+     会贴着操作列滑过去，补一条挡住。
+     **不再补底部**：td 自身已有 border-bottom，再叠一条 inset 就是 2px ——
+     用户反馈「最后一列边框比别处粗」正是这个。
+     左侧改用**外侧** 1px 阴影（-1px），正好落在被折叠掉的那条边框的位置上，与其它列同宽。 */
+  box-shadow: -1px 0 0 var(--dc-border, #dcdfe6);
 }
 .data-table th.ols-act-th {
   background: var(--dc-bg-table-head, #f5f7fa);
   z-index: 3; /* 表头本身是 sticky top（z-index 2），操作列表头同时在右上角，要压住它 */
-  box-shadow: inset 1px 0 0 var(--dc-border, #dcdfe6), inset 0 -2px 0 var(--dc-table-head-line, #d8dee9);
+  /* 左侧同 td；下边线仍是 2px 压边线（与其它列表头一致），不是重复补的一条 */
+  box-shadow: -1px 0 0 var(--dc-border, #dcdfe6), inset 0 -2px 0 var(--dc-table-head-line, #d8dee9);
 }
+/* 注释列：与「编辑表结构」字段表的注释格同一套（真 el-input + 悬停浮出的放大图标）。
+   回车/失焦写库，Esc 还原；图标绝对定位，出现/消失都不挤动输入框。 */
+.data-table td.ols-cmt-td { cursor: text; padding: 0 4px; }
+.ols-cmt-cell { position: relative; display: flex; align-items: center; }
+.ols-cmt-cell :deep(.el-input) { width: 100%; }
+/* 输入框压到行高内：Element 的 small 是 24px，行高 26px 时上下只剩 1px，
+   不压就会把整行撑高（字段表那边是 --ctl-h，同一条思路）。 */
+.ols-cmt-cell :deep(.el-input__wrapper) {
+  min-height: calc(var(--grid-row-h, 26px) - 4px);
+  padding: 0 7px; border-radius: 4px;
+}
+.ols-cmt-cell :deep(.el-input__inner) {
+  height: calc(var(--grid-row-h, 26px) - 6px);
+  line-height: calc(var(--grid-row-h, 26px) - 6px);
+}
+/* ↓↓↓ 跟字段表一模一样：单元格里的输入框默认**隐形**（透明底 + 无描边），
+   整列读起来就是文字；鼠标移到该行才浮出输入框的样子，聚焦时给主色描边。
+   注：必须带 !important —— index.css 里有一套全局的 `.el-input__wrapper { background-color:
+   var(--dc-bg-input) !important; box-shadow: … !important }` 主题覆盖，不带就压不过它。 */
+.ols-cmt-cell :deep(.el-input__wrapper) {
+  background-color: transparent !important;
+  box-shadow: none !important;
+  transition: background .15s ease, box-shadow .15s ease;
+}
+.data-table tbody tr:hover .ols-cmt-cell :deep(.el-input__wrapper) {
+  background-color: var(--dc-bg-hover) !important;
+  box-shadow: 0 0 0 1px var(--dc-border) inset !important;
+}
+.ols-cmt-cell :deep(.el-input__wrapper.is-focus) {
+  background-color: var(--dc-bg-hover) !important;
+  box-shadow: 0 0 0 1px var(--dc-primary) inset !important;
+}
+/* 放大图标：与字段表一致 —— 平时隐身，悬停该行才浮出来（不挤动输入框） */
+.ols-cmt-expand {
+  position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+  padding: 2px; height: auto; border-radius: 4px;
+  background: transparent; color: var(--dc-text-dim, #909399);
+  opacity: 0; transition: opacity .15s ease, color .15s ease;
+}
+.data-table tbody tr:hover .ols-cmt-expand { opacity: 1; }
+.ols-cmt-expand:hover { color: var(--dc-primary, var(--el-color-primary)); }
+/* 多行编辑弹窗的头部：表名标签 + 说明 + 字数 */
+.ols-cmt-dlg-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.ols-cmt-dlg-tip { font-size: 12px; color: var(--dc-text-dim, #909399); }
+.ols-cmt-dlg-count { margin-left: auto; font-size: 12px; color: var(--dc-text-dim, #909399); }
 .data-table td.ols-act-td { text-align: center; }
 .ols-act-row { display: flex; align-items: center; justify-content: center; gap: 2px; white-space: nowrap; }
 .ols-act-row .el-button { padding: 4px 6px; }

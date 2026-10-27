@@ -15,7 +15,11 @@ export default {
   logo: 'mongodb.svg',
   fileType: false,
   defaultPort: 27017,
-  credentials: false,
+  // 宿主支持 SCRAM 认证（用户名/密码拼进连接串），所以必须能填 —— 以前藏起来时
+  // 开了认证的实例只能连失败。用户名/密码都可留空（本地无认证实例）
+  credentials: true,
+  usernameRequired: false,
+  passwordRequired: false,
   // 库名可留空（连接后仍能列库、选库）
   databasePh: 'cd.dbPhOptional',
   buildJdbcUrl(f) {

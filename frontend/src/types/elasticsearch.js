@@ -14,7 +14,11 @@ export default {
   logo: '',
   fileType: false,
   defaultPort: 9200,
-  credentials: false,
+  // 宿主支持 Basic 认证（用户名:密码 拼 Authorization 头）；ES 8.x 默认开启安全认证，
+  // 藏起来等于「装好的 ES 直接连不上」。两个都可留空（无认证 / 只读网关）
+  credentials: true,
+  usernameRequired: false,
+  passwordRequired: false,
   // 索引即顶层，库名可留空
   databasePh: 'cd.dbPhOptional',
   protocols: ['http', 'https'],

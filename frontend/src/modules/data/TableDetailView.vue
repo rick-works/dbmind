@@ -3185,7 +3185,9 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   /* 左内边距 7px：与输入框/下拉控件自身的内边距**同值**，这样"类型"这一列
      纯文本态的文字与表头（补了 16px = 9 + 7）正好对齐（原来写 4px，比表头偏左 3px）。 */
   padding: 0 7px;
-  font-size: 12px;
+  /* 与表头同一档，并且**跟着设置里的「数据视图表格」字号走**（整页根是 var(--dc-data-fs)，
+     这里比它小 1px，保持字段表比数据网格紧凑一点的既有观感） */
+  font-size: calc(var(--dc-data-fs, 13px) - 1px);
   cursor: pointer;
 }
 .field-table .cell-text.cell-off { opacity: .55; cursor: not-allowed; }
@@ -3217,7 +3219,8 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   background: var(--dc-bg-soft);
   color: var(--dc-text-strong);
   font-weight: 600;
-  font-size: 12px;
+  /* 跟着设置里的「数据视图表格」字号走（比整页小 1px，与单元格文本同档） */
+  font-size: calc(var(--dc-data-fs, 13px) - 1px);
   letter-spacing: .02em;
   text-align: left;
   /* 左右 9px：列与列的区分靠留白。上下 9px → 6px → 5px：标题行随数据行一起收
@@ -3236,7 +3239,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    左右 8px → 9px：与表头的 9px 对齐（差 1px 在高分屏上就能看出输入框比表头偏左）。
    首列例外，见下面 :first-child 的 4px（序号列居中，不需要 9px）。 */
 /* height 只是**下限**（多行内容仍可撑高）：真正的行高由行内控件的 --ctl-h 决定 */
-.field-table td { padding: 1px 9px; height: var(--grid-row-h, 26px); background: var(--dc-bg-card); border-bottom: 1px solid var(--dc-border); vertical-align: middle; }
+.field-table td { padding: 1px 9px; height: var(--grid-row-h, 26px); font-size: calc(var(--dc-data-fs, 13px) - 1px); background: var(--dc-bg-card); border-bottom: 1px solid var(--dc-border); vertical-align: middle; }
 /* 列竖线：标题行与数据行逐格画右边框（separate 边框模式各画各的，不会叠加变粗）。
    最后一列不画 —— 否则与容器外框并成两条线。
    表格的第一行（thead 里那个 35px 的"空行"）**不加竖线**：页签与工具栏就住在那一行，
@@ -3257,6 +3260,14 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    输入框/下拉/小按钮 Element 的 small 尺寸都是 24px，这里一并收到 --ctl-h，
    否则它们会成为新的"行高天花板"——行高不是 padding 决定的，是它们决定的。 */
 .field-table :deep(.el-input__inner) { height: var(--ctl-h, 20px); }
+/* 格子里的控件字号也统一到「表头那一档」：Element 的 small 默认 12px，比表头的
+   calc(--dc-data-fs - 1px) 小一档，于是同一行里表头/纯文本/输入框三种字号
+   （用户反馈「索引表格字体跟另两个 tab 不一样」，根因就是这一页里字号有四套）。 */
+.field-table :deep(.el-input__inner),
+.field-table :deep(.el-select__selected-item),
+.field-table :deep(.el-select__placeholder) {
+  font-size: calc(var(--dc-data-fs, 13px) - 1px);
+}
 .field-table :deep(.el-input__wrapper) { min-height: var(--ctl-h, 20px); }
 .field-table :deep(.el-select__wrapper) { min-height: var(--ctl-h, 20px); }
 .field-table :deep(.el-button--small) { height: var(--ctl-h, 20px); padding: 0 6px; }
@@ -3318,7 +3329,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .field-table tbody tr.r-new:hover td { background: rgba(61, 220, 151, .12); }
 .field-table tbody tr.r-mod:hover td { background: rgba(245, 179, 77, .13); }
 .row-idx {
-  color: var(--dc-text-dim); font-size: 12.5px;
+  color: var(--dc-text-dim); font-size: calc(var(--dc-data-fs, 13px) - 0.5px);
   font-variant-numeric: tabular-nums;
 }
 /* ↓↓↓ 让表格"像表格"的关键：单元格里的输入控件默认**隐形**（透明底 + 无描边），
@@ -3479,7 +3490,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .idx-tab :deep(.el-table .el-table__row.row-is-new > td.el-table__cell) { background: rgba(61, 220, 151, .08) !important; }
 .idx-tab :deep(.el-table .el-table__row.row-is-modified > td.el-table__cell) { background: rgba(245, 179, 77, .1) !important; }
 .idx-tab :deep(.el-table .el-input__wrapper) { padding: 0 6px; }
-.idx-tab :deep(.el-table .el-input__inner) { font-size: 13px; height: var(--ctl-h, 20px); }
+.idx-tab :deep(.el-table .el-input__inner) { font-size: calc(var(--dc-data-fs, 13px) - 1px); height: var(--ctl-h, 20px); }
 /* 索引页签是 el-table：行高由单元格内容撑出来，里面的控件也得跟 --ctl-h 走 ——
    否则字段表跟着设置变、索引表不变，两个页签的行高会差一截。 */
 .idx-tab :deep(.el-table .el-input__wrapper),
@@ -3625,7 +3636,10 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .basic-table :deep(.el-select__selected-item),
 .basic-table :deep(.el-select__placeholder) {
   font-family: inherit;
-  font-size: 12.5px;
+  /* 与「字段定义」「索引」两个页签**同一档**，并且跟着设置里的「数据视图表格」字号走。
+     原来这里写死 12.5px、字段表 12px、索引 el-table 13px —— 三个页签三种字号，
+     切一下就看出"索引比另两个大一号"。 */
+  font-size: calc(var(--dc-data-fs, 13px) - 1px);
   letter-spacing: 0;
 }
 /* 表头：同字号同字体，只是**加黑**（更深的颜色 + 600） */

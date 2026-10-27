@@ -19,7 +19,14 @@ import { buildUrlFor } from './jdbc.js'
  *  - logo          图标 key（P3 由 DbLogo 映射到 assets/type-*.svg）
  *  - fileType      是否本地文件型数据库（无 host/端口，连接表单据此隐藏主机配置）
  *  - defaultPort   默认端口（与后端 DatabaseType 一致；连接表单兜底用）
- *  - credentials   连接表单是否显示用户名/密码（NoSQL 默认 false）
+ *  - credentials   连接表单是否显示用户名/密码。
+ *                  ⚠️ **NoSQL 不能一律 false**：Redis（AUTH / Redis 6 ACL）、MongoDB、
+ *                  Elasticsearch（Basic）的宿主**都实现了认证**，把它们藏起来等于
+ *                  「带密码的实例根本没法连」（2026-10-27 用户实测：Redis 报 NOAUTH，
+ *                  而表单里没有密码框）。
+ *  - usernameRequired  用户名是否必填（默认 true）。NoSQL 的 ACL 用户可以留空 ——
+ *                      留空走服务端默认用户（Redis 的 default）。
+ *  - passwordRequired  密码是否必填（默认 true）。允许「无认证实例」的类型置 false。
  *  - authTypes     认证方式选项（[{ value, label }]）；非空时连接表单显示「认证方式」下拉，
  *                  如 SQL Server 的 SQL Server 身份验证 / Windows 集成身份验证
  *  - urlTemplate   JDBC URL 模板：**必须与 plugins/connection-types/<type>.yaml 的
@@ -43,6 +50,8 @@ export default {
   fileType: false,
   defaultPort: 0,
   credentials: true,
+  usernameRequired: true,
+  passwordRequired: true,
   authTypes: [],
   databaseLabel: 'tdef.dbName',
   // 库名默认**可留空**：MySQL / PG / SQL Server / ClickHouse 等都允许先连上、再在树里选库。
