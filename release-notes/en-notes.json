@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.7.0": [
+    "Every \"Select connection\" dropdown is now a two-level \"folder -> connection\" tree: group headers collapse, and the group holding the current connection auto-expands when you open it (SQL editor, data transfer, data compare, user management, object list, data governance and the AI command palette share one component and one set of styles)",
+    "Connection options show just the connection name - the MySQL / PostgreSQL type column on the right is gone, and all text is a uniform 13px (group headers used to be 12px bold, which made them look unrelated to their members)",
+    "The connection box now sizes itself to the selected name instead of a fixed 180 / 260px, so long names are no longer cut off and short ones leave no big gap; also fixes the washed-out placeholder on the Quality Rules tab and brings that toolbar down to 12px"
+  ],
   "v1.6.8": [
     "The new-table form (Basics / Columns / Indexes) now follows the \"Data grid\" font size from Settings; it used to be hard-coded at 12-13px with the index grid left at the Element Plus default of 14px, so only \"Edit table structure\" reacted to the setting",
     "The \"Data grid\" font size now defaults to 14px, matching the editor's \"Result grid font size\" (they are the same value; previously one defaulted to 13 and the other to 14, so Restore defaults left them out of sync)",
