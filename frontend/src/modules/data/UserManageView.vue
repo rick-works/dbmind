@@ -4,17 +4,9 @@
          **没有页内标题**：外层文档页签已经写着「用户管理」，里面再写一遍是重复的
          （用户要求去掉）。页签名由下面的「用户管理 / 角色管理」两个页签承担。 -->
     <div class="um-head">
-      <el-select v-model="selId" size="small" class="um-conn" filterable clearable
-                 popper-class="conn-opt-popper"
-                 :placeholder="$t('um.pickConn')" @change="onConnChange">
-        <!-- 连接按分组列出（分组名 = 左侧对象树的目录名），和数据传输 / 数据对比同一口径 -->
-        <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
-          <el-option v-for="c in g.options" :key="c.id" :label="c.name" :value="String(c.id)">
-            <span class="um-opt-name">{{ c.name }}</span>
-            <span class="um-opt-type">{{ typeLabel(c.type) }}</span>
-          </el-option>
-        </el-option-group>
-      </el-select>
+      <!-- 连接按分组列出（分组名 = 左侧对象树的目录名），和数据传输 / 数据对比同一口径 -->
+      <ConnectionSelect v-model="selId" class="um-conn" :connections="conns" string-value
+                        filterable clearable :placeholder="$t('um.pickConn')" @change="onConnChange" />
 
       <el-button size="small" :icon="Refresh" :loading="loading" @click="reload">{{ $t('common.refresh') }}</el-button>
       <!-- 只读类型（DB2 / Derby / 达梦）不摆新增按钮：禁用态的蓝色按钮仍然"看着能点"。
@@ -222,7 +214,8 @@ import { errParts } from '../../utils/errMsg'
 import { isNoSql as isNoSqlType } from '../../types'
 // 只读 / 生产保护的前置闸门（与 MainView 的 guardWrite 同一口径，见 utils/connGuard.js）
 import { guardConnWrite, isProdConn, loadProtectProd } from '../../utils/connGuard'
-import { groupConnections } from '../../utils/connGroups'
+// 连接下拉（分组 → 连接 两级，组头可展开/收起）全项目共用一个组件
+import ConnectionSelect from '../../common/ConnectionSelect.vue'
 
 const props = defineProps({
   // 左侧当前选中的**连接**：跟随它（用户在左边选了连接，这里自动带出来）。
@@ -237,8 +230,6 @@ const emit = defineEmits(['open-form', 'open-role'])
 // 与 H2 / SQLite 这些关系型完全同一套空态 —— 不在下拉里做区分）
 const allConns = ref([])
 const conns = computed(() => allConns.value)
-/** 连接下拉按分组列出（分组名 = 左侧对象树的目录名，见 utils/connGroups） */
-const connGroups = computed(() => groupConnections(conns.value))
 const selId = ref('')
 const rows = ref([])
 const features = ref({})
@@ -566,9 +557,7 @@ const onConnsChanged = async () => {
   background: var(--dc-bg-soft);
   box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
 }
-.um-conn { width: 260px; }
-.um-opt-name { float: left; }
-.um-opt-type { float: right; color: var(--dc-text-dim); font-size: 12px; margin-left: 12px; }
+/* .um-conn 不再写死宽度：由 ConnectionSelect 按选中连接名自适应（见组件 autoWidth） */
 /* 只读 / 生产 的常驻提示条：与工具条同一圈缝、同一圆角
    （不是红色：这不是"出错了"，是"这里的改动会被拦"）。
    配色用 --dc-warn-* 分主题变量：深色下低透明度融底 + 亮字，不再用 Element

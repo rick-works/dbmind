@@ -350,6 +350,18 @@ body {
 .el-dialog .el-checkbox__label,
 .el-dialog .el-form-item__label,
 .el-dialog .el-button { font-size: var(--dlg-body); }
+/* 弹窗内下拉的**占位文字**：「选择要配置规则的表」这类提示取的是 Element 的
+   --el-text-color-placeholder（深色主题下 #8b91a3），在深色底上几乎看不清 —— 提到 --dc-text-mid。
+   ⚠️ Element 是「没有值、显示占位」时才给 .el-select__placeholder 加 is-transparent，
+   所以这里不能写 :not(.is-transparent)（写反过一次，等于什么都没改）。
+   放在全局而不是各弹窗的 scoped 里：占位色是个通用观感问题，一处改完所有弹窗一致。 */
+.el-dialog .el-select__wrapper {
+  --el-text-color-placeholder: var(--dc-text-mid);
+  --el-disabled-text-color: var(--dc-text-mid);
+}
+.el-dialog .el-select__placeholder.is-transparent,
+.el-dialog .el-select.is-disabled .el-select__placeholder,
+.el-dialog .el-select__wrapper.is-disabled .el-select__placeholder { color: var(--dc-text-mid); }
 /* 弹窗里的表格：单元格跟正文同档，表头小一档但加粗（表头是"标签"，不该比内容更重） */
 .el-dialog .el-table { font-size: var(--dlg-body); }
 .el-dialog .el-table th.el-table__cell .cell { font-size: var(--dlg-sm); font-weight: 700; }
@@ -760,22 +772,62 @@ html[data-theme="dark"] .el-select-dropdown__empty { color: var(--dc-text-dim) !
 html[data-theme="dark"] .el-dropdown-menu__item.is-disabled { color: var(--dc-text-weak) !important; }
 html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; }
 
-/* ==================== 连接下拉的分组头（数据传输 / 数据对比） ====================
-   el-select 的分组头默认是 12px 常规字重灰字、缩进和选项一样，看着像一条普通选项。
-   这里只改**文字样式**（加粗 + 组间细线 + 选项右移），形成「组 → 成员」的层级。
-   **不要给组头加背景色**：暗色主题下那块底色看着就是一个黑条，用户明确要求去掉。 */
-.conn-opt-popper .el-select-group__title {
-  padding: 0 12px;
-  /* 没有底色托着，字号就不能再压到 11.5px —— 暗色下会糊成一片灰，看不清是组名 */
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: .3px;
-  line-height: 26px;
-  color: var(--dc-text-dim);
+/* ==================== 连接下拉：分组 → 连接 两级（可展开/收起） ====================
+   组件是 common/ConnectionSelect.vue（全项目「选择连接」都用它）。浮层 teleport 到 body，
+   所以这些样式必须放在全局。
+   **字号/字重全表统一 13px 常规**：组头和成员一样大、一样不加粗，层级只靠
+   「左边缩进 + 组头箭头 + 组头右侧条数」区分；曾经组头 12px 加粗、成员 14px，
+   两层不一致，用户明确要求统一。 */
+.conn-tree-popper { min-width: 240px; }
+.conn-tree-popper .el-select-dropdown__list { padding: 4px 0; }
+
+/* 组头：借 disabled 的 el-option 占一行，所以要把它自带的 34px 行高/内边距/禁用灰全部抹掉 */
+.conn-tree-popper .el-select-dropdown__item.ct-group-head,
+.conn-tree-popper .el-select-dropdown__item.ct-group-head.is-hovering {
+  height: auto;
+  padding: 0;
+  line-height: normal;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
-/* El Plus 自带的组间细线用的是亮色边框，暗色主题下几乎看不见 —— 换成主题边框色 */
-.conn-opt-popper .el-select-group__wrap:not(:last-of-type)::after { background: var(--dc-border); }
-.conn-opt-popper .el-select-dropdown__item { padding-left: 22px; }
+.ct-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px 5px;
+  font-size: 13px;
+  color: var(--dc-text);
+  user-select: none;
+}
+/* 收起态 ▸ / 展开态 ▾：同一个图标转 90° */
+.ct-caret { font-size: 11px; flex: none; transition: transform .15s ease; color: var(--dc-text-dim); }
+.ct-caret.is-open { transform: rotate(90deg); }
+.ct-group-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ct-group-num { font-size: 13px; font-weight: 400; color: var(--dc-text-weak); flex: none; }
+
+/* 成员项：左边缩进一级 + 行高收到 32px（组多了也能一屏看完） */
+.conn-tree-popper .el-select-dropdown__item:not(.ct-group-head) {
+  height: 32px;
+  line-height: 32px;
+  padding-left: 26px;
+}
+.conn-tree-popper .opt-row { display: flex; align-items: center; gap: 8px; }
+/* 选项里**只有连接名**（右侧不再跟类型：一列 MySQL/PostgreSQL 看着乱，用户要求全去掉） */
+.conn-tree-popper .opt-name { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+/* 选中项只换颜色（勾号本身已经标出来了），不加粗 —— 全表字重统一 */
+.conn-tree-popper .el-select-dropdown__item.is-selected .opt-name { color: var(--dc-primary); }
+.conn-tree-popper .ct-check { margin-left: 6px; font-size: 12px; color: var(--dc-primary); }
+/* 选择框前缀的连接图标（组件默认前缀槽） */
+.sel-logo { margin-right: 4px; }
 
 /* ==================== 结果表格：类 Excel 框选 ==================== */
 .data-table { user-select: none; -webkit-user-select: none; }

@@ -25,12 +25,9 @@
         <div class="cmp-side-title">
           <span class="dot src"></span>{{ $t('cmp.source') }}
         </div>
-        <!-- 连接按分组列出（分组名 = 左侧对象树的目录名），与「数据传输」同一口径 -->
-        <el-select v-model="src.connectionId" size="small" popper-class="conn-opt-popper" @change="onSrcConnChange">
-          <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
-            <el-option v-for="c in g.options" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
-          </el-option-group>
-        </el-select>
+        <!-- 连接按分组列出（分组名 = 左侧对象树的目录名），与「数据传输」同一口径（组头可展开/收起） -->
+        <ConnectionSelect v-model="src.connectionId" :connections="connections" :auto-width="false"
+                          @change="onSrcConnChange" />
         <div class="cmp-pair">
           <el-select v-if="!srcHideDb" v-model="src.database" size="small" @change="onSrcDbChange">
             <el-option v-for="d in srcDbs" :key="d" :label="d" :value="d" />
@@ -50,11 +47,8 @@
         <div class="cmp-side-title">
           <span class="dot tgt"></span>{{ $t('cmp.target') }}
         </div>
-        <el-select v-model="tgt.connectionId" size="small" popper-class="conn-opt-popper" @change="onTgtConnChange">
-          <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
-            <el-option v-for="c in g.options" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
-          </el-option-group>
-        </el-select>
+        <ConnectionSelect v-model="tgt.connectionId" :connections="connections" :auto-width="false"
+                          @change="onTgtConnChange" />
         <div class="cmp-pair">
           <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small" @change="onTgtDbChange">
             <el-option v-for="d in tgtDbs" :key="d" :label="d" :value="d" />
@@ -388,7 +382,8 @@ import { listConnections, listDatabases, listSchemas, listTables, listColumns, g
 import { hideDbLevelOf } from '../../types'
 import ConditionBuilder from '../../common/ConditionBuilder.vue'
 import { buildConditionSql } from '../../utils/cond'
-import { groupConnections } from '../../utils/connGroups'
+// 连接下拉（分组 → 连接 两级）全项目共用一个组件
+import ConnectionSelect from '../../common/ConnectionSelect.vue'
 import { t } from '../../utils/i18n'
 
 const props = defineProps({ modelValue: Boolean, conn: Object, database: String, tables: Array, resumeId: String })
@@ -438,8 +433,6 @@ const summaryRows = computed(() => {
 })
 
 const connections = ref([])
-/** 连接下拉按分组列出（分组名 = 左侧对象树的目录名，见 utils/connGroups） */
-const connGroups = computed(() => groupConnections(connections.value))
 const src = ref({ connectionId: '', database: '', schema: '', table: '' })
 const tgt = ref({ connectionId: '', database: '', schema: '', table: '' })
 const srcDbs = ref([])

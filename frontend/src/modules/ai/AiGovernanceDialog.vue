@@ -23,12 +23,9 @@
     <!-- 上下文选择：数据源 / 库 / 模式 -->
     <div class="gv-bar">
       <span class="gv-bar-label">{{ $t('gv.scope') }}</span>
-      <el-select v-model="connId" size="small" class="gv-conn" :placeholder="$t('ai.pickSource')" filterable>
-        <!-- 按「目录」分组，多级显示（与左侧对象树口径一致） -->
-        <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
-          <el-option v-for="c in g.options" :key="c.id" :label="connLabel(c)" :value="c.id" />
-        </el-option-group>
-      </el-select>
+      <!-- 按「目录」分组，多级显示（与左侧对象树口径一致；组头可展开/收起） -->
+      <ConnectionSelect v-model="connId" class="gv-conn" :connections="conns" filterable
+                        :placeholder="$t('ai.pickSource')" />
       <!-- 没有库层的类型（Oracle / DM）不画库下拉：库就是连接里的服务名，永远一条 -->
       <el-select
         v-if="!hideDb"
@@ -261,6 +258,8 @@ import {
 import { useAiContext, truncateError } from './useAiContext'
 import { t, te, locale } from '../../utils/i18n'
 import QualityRulePanel from './QualityRulePanel.vue'
+// 连接下拉（分组 → 连接 两级，组头可展开/收起）全项目共用一个组件
+import ConnectionSelect from '../../common/ConnectionSelect.vue'
 import QualityAnalysisPanel from './QualityAnalysisPanel.vue'
 
 const props = defineProps({
@@ -276,10 +275,10 @@ defineEmits(['update:modelValue'])
 
 // 连接 + 数据库 + 模式三级选择（未在对象树选中连接时，本面板仍可用）
 const {
-  connId, dbs, database, schemas, schema, connGroups,
+  conns, connId, dbs, database, schemas, schema,
   tables, loadingTables, tableError,
   activeConn, needSchema, hideDb, isNoSqlConn, effectiveDatabase,
-  loadingDbs, loadingSchemas, dbError, connLabel, loadTables
+  loadingDbs, loadingSchemas, dbError, loadTables
 } = useAiContext(props)
 
 // ⚠️ 必须是 computed：静态数组只在模块加载时求值一次，之后切语言不会跟着变
@@ -450,13 +449,22 @@ const run = async () => {
   padding-bottom: 10px; border-bottom: 1px solid var(--dc-border);
 }
 .gv-bar-label {
-  font-size: 13px; color: var(--dc-text-dim); flex-shrink: 0;
-  padding: 2px 8px; border-radius: 5px; background: var(--dc-bg-soft);
+  /* 与这一行的小号下拉（12px）同档 —— 原来 13px + --dc-text-dim，在深色底上又大又糊 */
+  font-size: 12px; color: var(--dc-text-mid); flex-shrink: 0;
+  padding: 1px 7px; border-radius: 5px; background: var(--dc-bg-soft);
 }
 .gv-spacer { flex: 1; min-width: 8px; }
-.gv-conn { width: 220px; }
-.gv-db { width: 170px; }
-.gv-schema { width: 128px; }
+/* 「范围」行的三个下拉：比弹窗内其它控件再小一档（宽度 160/130/100、字号 12px、高度 22px）。
+   弹窗全局把控件字号统一成 --dlg-body（14px），这一行放三个下拉 + 标签就显大，
+   用户要求"跟后面那行一样大"—— 这里单独压小，不影响弹窗其余部分。 */
+.gv-conn { width: 160px; }
+.gv-db { width: 130px; }
+.gv-schema { width: 100px; }
+.gv-bar :deep(.el-select__wrapper) { min-height: 22px; padding: 0 6px; }
+.gv-bar :deep(.el-select__placeholder),
+.gv-bar :deep(.el-select__selected-item),
+.gv-bar :deep(.el-input__inner) { font-size: 12px; }
+.gv-bar :deep(.el-select__suffix) { font-size: 11px; }
 .gv-ddl { flex: 1; min-width: 200px; }
 
 .gv-err {
@@ -480,10 +488,10 @@ const run = async () => {
 }
 .gv-loading {
   flex: 1; display: flex; align-items: center; justify-content: center;
-  text-align: center; color: var(--dc-text-dim); font-size: 13.5px;
+  text-align: center; color: var(--dc-text-mid); font-size: 12px;
 }
 .gv-empty {
-  flex: 1; padding: 34px 20px; text-align: center; color: var(--dc-text-dim); font-size: 14px;
+  flex: 1; padding: 34px 20px; text-align: center; color: var(--dc-text-mid); font-size: 12.5px;
   background: var(--dc-bg-soft); border: 1px dashed var(--dc-border); border-radius: 10px;
   line-height: 1.9;
   /* 内容在块内水平垂直居中（横向排列，含 <b> 的文案也能保持同一行） */

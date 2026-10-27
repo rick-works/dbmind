@@ -4,19 +4,14 @@
     <div class="ols-card">
       <div class="ols-toolbar">
         <!-- 数据源 / 数据库切换：与 SQL 编辑器顶栏同款交互 —— 默认自动带出打开清单时的
-             连接与库，可自行切换，切换后整个清单重载 -->
-        <el-select v-model="curConnId" size="small" class="ols-conn" filterable
-                   popper-class="conn-opt-popper" @change="onConnSwitch">
-          <!-- 连接按分组列出（分组名 = 左侧对象树的目录名），与数据传输同一口径 -->
-          <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
-            <el-option v-for="c in g.options" :key="c.id" :label="c.name" :value="String(c.id)" />
-          </el-option-group>
-        </el-select>
+             连接与库，可自行切换，切换后整个清单重载（连接下拉是分组 → 连接 两级，组头可收起） -->
+        <ConnectionSelect ref="connSelRef" v-model="curConnId" class="ols-conn" :connections="connections"
+                          :width-min="150" :width-max="300" filterable string-value @change="onConnSwitch" />
         <!-- 库下拉：**没有「库」这一层的类型**（Oracle / DM）不画 —— 它就是连接里填的
              服务名，永远只有一条；这里显示的是模式（用户眼里的"库"就是这个）。
              请求仍然带完整串（`服务名.模式`），只是不再把服务名摆到界面上。 -->
         <span v-if="hideDbLevel" class="ols-db-text" :title="dbShown">{{ dbShown || $t('upv.phPickDb') }}</span>
-        <el-select v-else v-model="curDb" size="small" class="ols-db" filterable :placeholder="$t('upv.phPickDb')" @change="load">
+        <el-select v-else ref="dbSelRef" v-model="curDb" size="small" class="ols-db" filterable :placeholder="$t('upv.phPickDb')" @change="load">
           <el-option v-for="d in dbOptions" :key="d" :label="d" :value="d" />
         </el-select>
         <el-input v-model="keyword" size="small" clearable :placeholder="$t('ols.search')"
@@ -58,7 +53,7 @@
               </th>
               <th v-for="(c, i) in cols" :key="c.prop" :style="thStyle(c)"
                   @mousedown="onThMouseDown(i, $event)" @dblclick.stop="onThDblClick(i)">
-                <span class="th-line1" :class="c.align === 'left' ? 'is-left' : ''">
+                <span class="th-line1" :class="NUM_PROPS.has(c.prop) ? 'is-right' : (c.align === 'left' ? 'is-left' : '')">
                   <span class="th-type-ic" :class="typeClassOf(c)">
                     <el-icon><component :is="typeIconOf(c)" /></el-icon>
                   </span>
@@ -76,7 +71,8 @@
                 <input type="checkbox" class="ols-cb" :checked="isSel(r)" @change="toggleSel(r)" />
               </td>
               <td v-for="c in cols" :key="c.prop"
-                  :class="[c.prop === 'name' ? 'ols-name-td' : '', c.align === 'left' ? 'ols-td-left' : 'ols-td-center',
+                  :class="[c.prop === 'name' ? 'ols-name-td' : '',
+                           NUM_PROPS.has(c.prop) ? 'ols-td-right' : (c.align === 'left' ? 'ols-td-left' : 'ols-td-center'),
                            cmtEditable(c) ? 'ols-cmt-td' : '']"
                   :title="cellTitle(r, c)">
                 <template v-if="cmtEditable(c)">
@@ -145,7 +141,9 @@ import { listTables, listProcedures, listTriggers, listEvents, getTableCounts, l
 import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { buildTableCommentSql } from '../../utils/tableComment'
 import { hideDbLevelOf, dbDisplayOf } from '../../types'
-import { groupConnections } from '../../utils/connGroups'
+import { fitSelectWidth } from '../../utils/selectAutoWidth'
+// 连接下拉（分组 → 连接 两级，组头可展开/收起）全项目共用一个组件
+import ConnectionSelect from '../../common/ConnectionSelect.vue'
 
 const props = defineProps({
   conn: { type: Object, default: null },
@@ -165,8 +163,6 @@ const curDb = ref(props.database)
 const localDbs = ref({})
 const dbOptions = computed(() => props.dbsByConn?.[curConnId.value] || localDbs.value[curConnId.value] || [])
 const connName = computed(() => (props.connections.find(c => String(c.id) === curConnId.value) || {}).name || '')
-/** 连接下拉按分组列出（分组名 = 左侧对象树的目录名，见 utils/connGroups） */
-const connGroups = computed(() => groupConnections(props.connections))
 const onConnSwitch = async (cid) => {
   // 没有「库」这一层的类型（Oracle / DM）：库值固定取该连接自身的服务名 ——
   // 下拉不画了，但请求必须带（否则列出来的不是这个连接的表）
@@ -194,6 +190,14 @@ let resizeObs = null
 // 时间列统一显示：'2026-10-03T16:06:23' → '2026-10-03 16:06:23'（T 是 ISO 格式的噪音）
 const TIME_PROPS = new Set(['createTime', 'created', 'lastAltered', 'lastExecuted', 'executeAt', 'ends', 'lastAnalyzed'])
 const NUM_PROPS = new Set(['rows'])
+/** 千分位：56519 → 56,519（只处理整串数字，'—' / '1.2万' 这类原样返回）。
+ *  **只作用于显示**（单元格文本与悬停提示）—— 排序、筛选、导出一律还看 row.rows 的原始值，
+ *  否则按字符串排会把 "9" 排到 "10,000" 后面。 */
+const withThousands = (s) => {
+  const m = /^(-?)(\d+)(\.\d+)?$/.exec(s)
+  if (!m) return s
+  return m[1] + m[2].replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (m[3] || '')
+}
 const cellText = (row, col) => {
   const v = row?.[col.prop]
   if (v == null) return ''
@@ -201,7 +205,8 @@ const cellText = (row, col) => {
   // 原来的 `String(v).replace('T', ' ')` 会把任何值的第一个 T 吃掉 ——
   // ClickHouse 的引擎 "MergeTree" 在界面上就显示成 "Merge ree"（真机踩过）。
   // 复用查询网格同一份判定（utils/cellValue 的 formatDbValue）。
-  return formatDbValue(String(v))
+  const text = formatDbValue(String(v))
+  return NUM_PROPS.has(col.prop) ? withThousands(text) : text
 }
 
 // 列头小图标：时间列 → 日历、数字列 → 柱状图、其余 → 文本（着色只给图标，文字保持正常色）
@@ -801,7 +806,18 @@ watch(() => props.reloadTick, () => load())
 watch(() => [props.reloadTick, props.cat, props.connId, props.database, curConnId.value, curDb.value],
   () => { selected.value = []; shiftAnchor.value = -1 })
 watch(keyword, () => { colW.value = []; measure() })
+// 工具条的连接 / 库下拉：宽度跟着选中值走（纯 CSS 做不到，见 utils/selectAutoWidth 的说明）。
+// 值、选项、字号任一变化都重量一次 —— 字号变大时文本也变宽。
+// 连接下拉的宽度由 ConnectionSelect 自己算（width-min / width-max），这里只管库下拉。
+const connSelRef = ref(null)
+const dbSelRef = ref(null)
+const fitDropdowns = () => nextTick(() => {
+  fitSelectWidth(dbSelRef.value?.$el, { min: 130, max: 300 })
+})
+watch(() => [curDb.value, dbOptions.value, editorSettingsLive.value.dataFontSize],
+  fitDropdowns, { deep: true })
 onMounted(() => {
+  fitDropdowns()
   if (bodyRef.value && typeof ResizeObserver !== 'undefined') {
     resizeObs = new ResizeObserver((es) => { containerW.value = Math.ceil(es[0].contentRect.width) })
     resizeObs.observe(bodyRef.value)
@@ -830,8 +846,11 @@ onBeforeUnmount(() => {
   box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
 }
 .ols-search { width: 200px; }
-.ols-conn { width: 170px; }
-.ols-db { width: 130px; }
+/* 连接 / 库下拉：这里的宽度只是**首帧兜底**，挂载后由 utils/selectAutoWidth 按选中值实测重写
+   （纯 CSS 的 width: max-content 在 Element 里算不出文本宽度，试过 —— 见那个文件的注释）。
+   flex: 0 0 auto 让量出来的宽度不被工具条的 flex 布局压回去。 */
+.ols-conn { width: 170px; flex: 0 0 auto; }
+.ols-db { width: 130px; flex: 0 0 auto; }
 /* 没有「库」这一层的类型（Oracle / DM）：这里显示的是模式名，做成与下拉同位同高的纯文字，
    读起来是"当前上下文"，而不是一个还能点开的下拉（点了没东西可选的控件比没有更糟） */
 .ols-db-text {
@@ -852,23 +871,24 @@ onBeforeUnmount(() => {
 .ft-empty { padding: 40px 0; text-align: center; color: var(--dc-text-dim, #909399); font-size: 13px; }
 
 /* ===== 自绘网格：与查询结果/表数据同一套（.data-table 类名对齐）===== */
-/* 字号统一按设置里的「数据视图表格」字号来（--dc-data-fs），不再做 ±1px/±2px 偏移：
-   「编辑表结构」的三个页签表头/内容也是同一个值，两张表放一起永远等大，
-   用户调设置里的字号时一起变。 */
+/* 数据字号统一按设置里的「数据视图表格」来（--dc-data-fs），表头比它大一号（见下面的 th） */
 .data-table { border-collapse: collapse; font-size: var(--dc-data-fs, 14px); }
 .data-table thead { position: sticky; top: 0; z-index: 2; }
 .data-table th {
   background: var(--dc-bg-table-head, #f5f7fa); padding: 5px 10px; height: calc(var(--grid-row-h, 26px) + 6px);
   border: 1px solid var(--dc-border, #dcdfe6); color: var(--dc-text-strong, #303133);
-  /* 与字段表表头一致：同一档字号（.data-table 已设）+ 600，两张表的标题行看起来是同一套 */
+  /* 表头比数据大一号：一行里只有「行数 / 引擎 / 字符集 / 创建时间 / 注释 / 操作」这几个短词，
+     和数据同档时整条标题行看着偏弱；+1px 后又不会撑高（行高由 --grid-row-h 决定）。 */
+  font-size: calc(var(--dc-data-fs, 14px) + 1px);
   font-weight: 600; text-align: center; white-space: nowrap;
   position: relative; user-select: none;
   /* 表头/数据的 2px 压边线：与查询结果网格同一笔（inset 阴影才能跟着 sticky 表头走） */
   box-shadow: inset 0 -2px 0 var(--dc-table-head-line, #d8dee9);
 }
-/* 列头对齐跟数据一致：文本列（名称/注释…）左对齐，短值列居中 —— 表头不比数据更"居中" */
+/* 列头对齐跟数据一致：文本列（名称/注释…）左对齐，数字列（行数）右对齐，其余短值列居中 */
 .data-table th .th-line1 { display: flex; width: 100%; justify-content: center; }
 .data-table th .th-line1.is-left { justify-content: flex-start; }
+.data-table th .th-line1.is-right { justify-content: flex-end; }
 /* 列缘拖拽热区：hover 时右侧 3px 亮条 + col-resize 光标（与结果网格同款交互暗示） */
 .data-table th::after {
   content: ''; position: absolute; top: 4px; right: 0; width: 6px; height: calc(100% - 8px);
@@ -886,6 +906,8 @@ onBeforeUnmount(() => {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
 }
 .data-table td.ols-td-left { text-align: left; }
+/* 数字列（行数）右对齐：加了千分位后数字位数不一，居中会让小数点/末位来回挪，读起来对不齐 */
+.data-table td.ols-td-right { text-align: right; }
 /* 斑马纹 + 行悬停：与结果网格同观感 */
 .data-table tbody tr:nth-child(even) td { background: var(--dc-bg-soft, #fafafa); }
 .data-table tbody tr:hover td { background: var(--dc-bg-hover, #f0f4ff); }

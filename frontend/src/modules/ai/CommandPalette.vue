@@ -35,12 +35,9 @@
 
         <div class="cp-ctx">
           <el-icon class="cp-ctx-ic"><Connection /></el-icon>
-          <el-select v-model="connId" size="small" class="cp-sel" popper-class="cp-select-popper" :placeholder="$t('ai.pickSource')" filterable>
-            <!-- 按「目录」分组，多级显示（与左侧对象树口径一致） -->
-            <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
-              <el-option v-for="c in g.options" :key="c.id" :label="connLabel(c)" :value="c.id" />
-            </el-option-group>
-          </el-select>
+          <!-- 按「目录」分组，多级显示（与左侧对象树口径一致；组头可展开/收起） -->
+          <ConnectionSelect v-model="connId" class="cp-sel" :connections="conns" filterable
+                            :placeholder="$t('ai.pickSource')" />
           <!-- 没有库层的类型（Oracle / DM）不画库下拉：库就是连接里的服务名，永远一条 -->
           <el-select
             v-if="!hideDb"
@@ -138,15 +135,17 @@ import { t, te } from '../../utils/i18n'
 import { Search, Loading, Connection, CircleCheck, Warning, User } from '@element-plus/icons-vue'
 import { aiPlan } from '../../api'
 import { useAiContext, truncateError } from './useAiContext'
+// 连接下拉（分组 → 连接 两级，组头可展开/收起）全项目共用一个组件
+import ConnectionSelect from '../../common/ConnectionSelect.vue'
 
 const props = defineProps({ modelValue: Boolean, conn: Object, database: String })
 const emit = defineEmits(['update:modelValue', 'run-plan'])
 
 // 连接 + 数据库 + 模式三级选择（未在对象树选中连接时，本面板仍可用）
 const {
-  connId, dbs, database, schemas, schema, connGroups,
+  conns, connId, dbs, database, schemas, schema,
   activeConn, needSchema, hideDb, isNoSqlConn, effectiveDatabase,
-  loadingDbs, loadingSchemas, dbError, connLabel
+  loadingDbs, loadingSchemas, dbError
 } = useAiContext(props)
 
 const inputRef = ref(null)

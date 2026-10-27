@@ -28,12 +28,9 @@
         <div class="side">
           <div class="side-head"><span class="dot src"></span>{{ $t('sync.source') }}</div>
           <!-- 连接按**分组**列：连接名长起来以后（「原生产-xxx_kechuan」这类）只按名字排是一锅粥，
-               分组头沿用左侧对象树的目录名，和树里看到的位置对得上。 -->
-          <el-select v-model="src.connectionId" size="small" :disabled="taskRunning" popper-class="conn-opt-popper" @change="onSrcConnChange">
-            <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
-              <el-option v-for="c in g.options" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
-            </el-option-group>
-          </el-select>
+               分组头沿用左侧对象树的目录名，和树里看到的位置对得上（组头可展开/收起）。 -->
+          <ConnectionSelect v-model="src.connectionId" :connections="connections" :auto-width="false"
+                            :disabled="taskRunning" @change="onSrcConnChange" />
           <div class="pair">
             <el-select v-if="!srcHideDb" v-model="src.database" size="small" :disabled="taskRunning" @change="onSrcDbChange">
               <el-option v-for="d in srcDbs" :key="d" :label="d" :value="d" />
@@ -50,11 +47,8 @@
 
         <div class="side">
           <div class="side-head"><span class="dot tgt"></span>{{ $t('sync.target') }}</div>
-          <el-select v-model="tgt.connectionId" size="small" :disabled="taskRunning" popper-class="conn-opt-popper" @change="onTgtConnChange">
-            <el-option-group v-for="g in connGroups" :key="g.label" :label="g.label">
-              <el-option v-for="c in g.options" :key="c.id" :label="c.name + ' (' + c.type + ')'" :value="c.id" />
-            </el-option-group>
-          </el-select>
+          <ConnectionSelect v-model="tgt.connectionId" :connections="connections" :auto-width="false"
+                            :disabled="taskRunning" @change="onTgtConnChange" />
           <div class="pair">
             <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small" :disabled="taskRunning" @change="onTgtDbChange">
               <el-option v-for="d in tgtDbs" :key="d" :label="d" :value="d" />
@@ -587,7 +581,8 @@ import { hideDbLevelOf } from '../../types'
 import { isFunctionRoutine } from '../data/treeNodes'
 import { t } from '../../utils/i18n'
 import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
-import { groupConnections } from '../../utils/connGroups'
+// 连接下拉（分组 → 连接 两级）全项目共用一个组件
+import ConnectionSelect from '../../common/ConnectionSelect.vue'
 import { addBgTask, bgTasks } from './backgroundTasks'
 
 const props = defineProps({ modelValue: Boolean, conn: Object, database: String, resumeTaskId: String })
@@ -596,8 +591,6 @@ const emit = defineEmits(['update:modelValue'])
 // 向导步骤：1 源/目标 → 2 选项 → 3 对象 → 4 摘要 → 5 执行（Navicat 数据传输式分步）
 const step = ref(1)
 const connections = ref([])
-/** 连接下拉按分组列出（分组名 = 左侧对象树的目录名，见 utils/connGroups） */
-const connGroups = computed(() => groupConnections(connections.value))
 const src = ref({ connectionId: '', database: '', schema: '' })
 const tgt = ref({ connectionId: '', database: '', schema: '' })
 const srcDbs = ref([])

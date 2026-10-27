@@ -116,11 +116,9 @@ export function useAiContext(props) {
     return database.value
   })
 
-  const connLabel = (c) => {
-    if (!c) return ''
-    const ty = c.type || c.dbType || ''
-    return ty ? `${c.name || t('kbs.untitled')} · ${ty}` : (c.name || t('kbs.untitled'))
-  }
+  // 连接下拉只显示连接名：原来还挂了个「· 类型」（127.0.0.1 · SQLSERVER），
+  // 一屏十几项全是类型后缀，看着乱；需要看类型时看左侧树的徽标或连接详情。
+  const connLabel = (c) => (c && (c.name || t('kbs.untitled'))) || ''
 
   /**
    * 解析父组件（左侧对象树）当前选中项为「库 + 模式」。

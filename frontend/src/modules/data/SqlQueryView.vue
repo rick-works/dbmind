@@ -5,24 +5,19 @@
       <div class="editor-head">
         <!-- 连接选择器 -->
         <div class="selector-group">
-          <el-select v-model="selectedConnId" size="small" class="conn-select"
-                     @change="onConnChange">
+          <!-- 连接选择：**分组 → 连接 两级**，组头可点开/收起（组件见 common/ConnectionSelect.vue，
+               全项目「选择连接」的地方共用同一份实现，分组口径与字号样式天然一致） -->
+          <ConnectionSelect ref="connSelRef" v-model="selectedConnId" class="conn-select"
+                            :connections="allConnections" :width-min="160" :width-max="280"
+                            @change="onConnChange">
             <template #prefix>
               <DbLogo v-if="selectedConn" :type="selectedConn.type" :size="16" class="sel-logo" />
               <el-icon v-else class="sel-icon"><Connection /></el-icon>
             </template>
-            <el-option-group v-for="g in connGroups" :key="g.folder" :label="g.folder">
-              <el-option v-for="c in g.items" :key="c.id" :label="c.name" :value="c.id">
-                <div class="opt-row">
-                  <DbLogo :type="c.type" :size="16" />
-                  <span class="opt-name">{{ c.name }}</span>
-                </div>
-              </el-option>
-            </el-option-group>
-          </el-select>
+          </ConnectionSelect>
 
           <!-- Catalog 选择器（仅 catalog 方言，如 Doris）：与库拆成两个下拉，和左侧树同一结构 -->
-          <el-select v-if="dbCatalogs.length" v-model="selectedCatalog" size="small"
+          <el-select v-if="dbCatalogs.length" ref="catalogSelRef" v-model="selectedCatalog" size="small"
                      class="db-catalog-select" @change="onCatalogChange">
             <template #prefix>
               <el-icon class="sel-icon"><Files /></el-icon>
@@ -31,7 +26,7 @@
           </el-select>
 
           <!-- 数据库选择器（catalog 方言下显示的是当前 catalog 内的裸库名） -->
-          <el-select v-if="!hideDbSelect" v-model="selectedDbShort" size="small" class="db-select"
+          <el-select v-if="!hideDbSelect" ref="dbSelRef" v-model="selectedDbShort" size="small" class="db-select"
                      :loading="loadingDbs" @change="onDbShortChange">
             <template #prefix>
               <el-icon class="sel-icon"><Coin /></el-icon>
@@ -41,7 +36,7 @@
           </el-select>
 
           <!-- Schema 选择器（仅 SQL Server / PostgreSQL） -->
-          <el-select v-if="showSchemaSelect" v-model="selectedSchema" size="small"
+          <el-select v-if="showSchemaSelect" ref="schemaSelRef" v-model="selectedSchema" size="small"
                      class="schema-select" :loading="loadingSchemas" :placeholder="$t('sqlq.schemaDefault')"
                      @change="onSchemaChange">
             <template #prefix>
@@ -648,8 +643,11 @@ import {
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf, quoteStyleOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
+// 连接下拉（分组 → 连接 两级，组头可展开/收起）：全项目共用这一个组件
+import ConnectionSelect from '../../common/ConnectionSelect.vue'
 // 占位库 `(default)` 的显示名（值仍是原值，见 utils/dbLabel）
 import { dbLabelOf } from '../../utils/dbLabel'
+import { fitSelectWidth } from '../../utils/selectAutoWidth'
 import { rememberConnNames, connNameOf } from '../../utils/connNames'
 
 const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabConnName: String, tabDatabase: String, initialSql: String, autoRun: Boolean, sqlLoading: Boolean })
@@ -2947,6 +2945,25 @@ const selectedSchema = ref('')
 const loadingSchemas = ref(false)
 const tableNames = ref([]) // 当前库的表名缓存（用于编辑器补全）
 
+// ---- 顶栏四个下拉（连接 / catalog / 库 / schema）的宽度自适应 ----
+// 名字很长时原来固定 180/130/160/140px 会把 `qj_x_dmp_yingxiao_be…` 截断，看不出选的是哪个。
+// 纯 CSS 的 width: max-content 在 Element 里算不出文本宽度，所以挂载后实测（见 utils/selectAutoWidth）。
+const connSelRef = ref(null)
+const catalogSelRef = ref(null)
+const dbSelRef = ref(null)
+const schemaSelRef = ref(null)
+const fitHeadSelects = () => nextTick(() => {
+  // 上限刻意压在 240~280：再长就会把右边的「执行 / 格式化」那一排按钮顶走
+  // 连接下拉的宽度由 ConnectionSelect 自己算（width-min / width-max），这里不再插手
+  fitSelectWidth(catalogSelRef.value?.$el, { min: 120, max: 200 })
+  fitSelectWidth(dbSelRef.value?.$el, { min: 140, max: 280 })
+  fitSelectWidth(schemaSelRef.value?.$el, { min: 120, max: 220 })
+})
+watch(() => [selectedConnId.value, selectedCatalog.value, selectedDbShort.value, selectedSchema.value,
+  dbOptions.value.length, dbCatalogs.value.length, schemas.value.length, editorSettings.value.fontSize],
+  fitHeadSelects)
+onMounted(fitHeadSelects)
+
 const selectedConn = computed(() => allConnections.value.find(c => String(c.id) === String(selectedConnId.value)))
 // 写操作闸门（只读 / 生产保护）用的连接对象：优先用**列表里最新的那条**。
 // props.conn 是页签创建时的快照 —— 用户在连接弹窗里把「只读」关掉后它不会变，
@@ -2964,25 +2981,7 @@ const showSchemaSelect = computed(() => schemaLevelOf(connType.value) === 'schem
 // 「库」下拉要不要画：Oracle 不画 —— 它的库就是连接里填的服务名 / PDB（换 PDB 得换连接），
 // 永远只有一条，多一个下拉纯属噪音。与左侧树同一口径（标记见 types/oracle.js 的 hideDbLevel）。
 const hideDbSelect = computed(() => hideDbLevelOf(connType.value))
-// 连接下拉：按目录（environment）分组（一级：目录名；二级：连接名）。
-// **未分组的连接归入「开发」**—— 用户要求：下拉里不该出现「未分组」这种分组，
-// 每个连接都应该落在 开发/测试/生产 之一（默认开发，后续可拖拽改）。
-const connGroups = computed(() => {
-const map = new Map()
-for (const c of allConnections.value) {
-const key = c.environment || 'DEV'
-if (!map.has(key)) map.set(key, [])
-map.get(key).push(c)
-}
-// 组顺序按预置环境：开发 → 测试 → 生产 → 自定义目录
-const order = ['DEV', 'TEST', 'PROD']
-return [...map.entries()]
-.sort((a, b) => {
-const ia = order.indexOf(a[0]), ib = order.indexOf(b[0])
-return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
-})
-.map(([folder, items]) => ({ folder, items }))
-})
+// 连接下拉的分组（按连接目录）由 common/ConnectionSelect 内部处理，与左侧对象树同一口径
 
 const mounted = ref(false)
 const editorRef = ref(null)
@@ -5480,12 +5479,8 @@ onBeforeUnmount(() => {
 
 .sel-logo { margin-right: 4px; }
 .sel-icon { font-size: 14px; color: var(--dc-primary); margin-right: 4px; }
-
-/* 下拉选项样式 */
-.opt-row { display: flex; align-items: center; gap: 8px; }
-.opt-name { flex: 1; font-size: 14px; }
-/* 分组标题：数据库类型名 */
-.conn-select :deep(.el-select-group__title) { font-size: 12px; letter-spacing: .5px; }
+/* 下拉浮层（分组头 / 成员行 / 字号）的样式统一在 styles/index.css 的 `.conn-tree-popper` 段，
+   组件见 common/ConnectionSelect.vue —— 这里不再重复定义。 */
 
 /* 覆盖 el-select 前缀样式 */
 .conn-select :deep(.el-input__prefix) { display: flex; align-items: center; margin-left: 6px; }
