@@ -3267,6 +3267,11 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .field-table :deep(.el-select__selected-item),
 .field-table :deep(.el-select__placeholder) {
   font-size: calc(var(--dc-data-fs, 13px) - 1px);
+  /* **字族必须继承**：<input> 没设 font-family 时会落回浏览器 UA 的 Arial，
+     同一个 13px 下 Arial 的中文 fallback 墨迹只有 12px、应用字体栈是 14px
+     —— 于是「字段定义」里的字段名/注释看着比对象清单里的字小一号（用户反馈
+     「两个表格字号不一样」）。basic-table 早就加了这条，这里和索引页签补上。 */
+  font-family: inherit;
 }
 .field-table :deep(.el-input__wrapper) { min-height: var(--ctl-h, 20px); }
 .field-table :deep(.el-select__wrapper) { min-height: var(--ctl-h, 20px); }
@@ -3490,7 +3495,10 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .idx-tab :deep(.el-table .el-table__row.row-is-new > td.el-table__cell) { background: rgba(61, 220, 151, .08) !important; }
 .idx-tab :deep(.el-table .el-table__row.row-is-modified > td.el-table__cell) { background: rgba(245, 179, 77, .1) !important; }
 .idx-tab :deep(.el-table .el-input__wrapper) { padding: 0 6px; }
-.idx-tab :deep(.el-table .el-input__inner) { font-size: calc(var(--dc-data-fs, 13px) - 1px); height: var(--ctl-h, 20px); }
+.idx-tab :deep(.el-table .el-input__inner) {
+  font-size: calc(var(--dc-data-fs, 13px) - 1px); height: var(--ctl-h, 20px);
+  font-family: inherit;   /* 同字段表：不继承就会落回 UA 的 Arial，中文看着比别处小一号 */
+}
 /* 索引页签是 el-table：行高由单元格内容撑出来，里面的控件也得跟 --ctl-h 走 ——
    否则字段表跟着设置变、索引表不变，两个页签的行高会差一截。 */
 .idx-tab :deep(.el-table .el-input__wrapper),
