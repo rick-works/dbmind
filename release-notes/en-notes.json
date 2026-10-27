@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.6.8": [
+    "The new-table form (Basics / Columns / Indexes) now follows the \"Data grid\" font size from Settings; it used to be hard-coded at 12-13px with the index grid left at the Element Plus default of 14px, so only \"Edit table structure\" reacted to the setting",
+    "The \"Data grid\" font size now defaults to 14px, matching the editor's \"Result grid font size\" (they are the same value; previously one defaulted to 13 and the other to 14, so Restore defaults left them out of sync)",
+    "The new-table column grid no longer mixes three sizes in one row (header 13px / plain text 12px / input 12px), and its inputs inherit the app font stack instead of falling back to Arial, which made Chinese text look smaller at the same size"
+  ],
   "v1.6.7": [
     "Table comments can be edited right in the object list: Enter or blur saves, Esc reverts, and double-clicking the cell (or the icon on the right) opens a multi-line editor - same feel as the field comment in Edit table structure",
     "Comment SQL follows the data source: MySQL / Doris / ClickHouse use COMMENT / MODIFY COMMENT, SQL Server uses extended properties, PG / Oracle / DB2 / H2 use COMMENT ON TABLE - no more syntax the server rejects",
