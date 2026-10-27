@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.6.6（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.6.6</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-27</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>鼠标在连接上稍作停留就会在后台把它连起来（SSH 隧道 + JDBC 会话），点开时几乎瞬间展开 —— 首次打开不用再等两三秒</b></li>
+            <li><b>修掉树上的两个「点了没反应」</b>：点箭头打开连接却不切换当前连接（SQL 还跑在上一条连接上）；同一条连接正在连接时被当成连不上，于是既不展开也不报错</li>
+            <li><b>更快也更省</b>：启动时重复的请求合并成一次，catalog 探测只对 Doris 发，树重建不再重复校验刚刚确认过的连接</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.6" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.6.6" target="_blank" rel="noopener">下载 v1.6.6</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.6.5（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.6.5</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-27</span>
           </div>
           <ul class="rel-notes">
