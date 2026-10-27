@@ -772,15 +772,29 @@ defineExpose({
 .qa { display: flex; flex-direction: column; }
 /* 与下方内容区（空状态 / 进度 / 结果）留出间距，避免下拉紧贴下面的面板 */
 .qa-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.qa-scope { width: 250px; }
+.qa-scope { width: 200px; }
+/* 与「范围」行、质量规则行同档：12px + 22px 高。这里原来跟着弹窗正文 14px 走，
+   一行里就它最大；「暂无可分析的表」这串占位文案尤其显眼。 */
+.qa-bar :deep(.el-select__wrapper) { min-height: 22px; padding: 0 6px; }
+.qa-bar :deep(.el-select__placeholder),
+.qa-bar :deep(.el-select__selected-item),
+.qa-bar :deep(.el-input__inner) { font-size: 12px; }
+/* 占位文字提亮一档（Element 默认 placeholder 灰在深色底上看不清）。
+   "没有值"时 Element 会给 .el-select__placeholder 加 is-transparent（淡化），
+   所以这里不能写 :not(.is-transparent)，否则正好漏掉占位态。 */
+.qa-bar :deep(.el-select__placeholder),
+.qa-bar :deep(.el-select__placeholder span) { color: var(--dc-text-mid); }
+/* 禁用态（还没配规则）也要能看清：只比正常占位淡一点点，别用 --dc-text-dim 糊掉 */
+.qa-bar :deep(.el-select.is-disabled .el-select__placeholder),
+.qa-bar :deep(.el-select__wrapper.is-disabled .el-select__placeholder) { color: var(--dc-text-mid); opacity: .9; }
 .qa-spacer { flex: 1; }
 .qa-btn-ic { margin-right: 3px; vertical-align: -2px; }
-.qa-meta { font-size: 11.5px; color: var(--dc-text-dim); }
+.qa-meta { font-size: 11.5px; color: var(--dc-text-mid); }
 .qa-meta b { color: var(--dc-primary); font-weight: 600; }
 /* 提示已并入 .qa-empty（与「质量规则」一致：单块、撑满、居中），不再需要独立的 .qa-hint */
 
 .qa-empty {
-  padding: 22px; text-align: center; color: var(--dc-text-dim); font-size: 13px;
+  padding: 22px; text-align: center; color: var(--dc-text-mid); font-size: 12px;
   /* 去掉虚线边框：与「质量规则」的提示块保持一致的无框观感 */
   background: var(--dc-bg-soft); border-radius: 10px;
   line-height: 1.8;

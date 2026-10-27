@@ -3,6 +3,7 @@
     <!-- 工具栏：选表 + 规则生成/编辑（保存等操作在弹窗底部） -->
     <div class="qr-bar">
       <el-select
+        ref="tblSelRef"
         v-model="table"
         size="small"
         class="qr-table-select"
@@ -129,11 +130,12 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { MagicStick, Plus } from '@element-plus/icons-vue'
 import { listColumns, aiQualityRules, aiQualityTypes, aiQualitySaved, aiQualitySave } from '../../api'
 import { t, te } from '../../utils/i18n'
+import { fitSelectWidth } from '../../utils/selectAutoWidth'
 
 const props = defineProps({
   conn: { type: Object, default: null },
@@ -149,6 +151,11 @@ const props = defineProps({
 const emit = defineEmits(['state', 'goto-analysis'])
 
 const table = ref('')
+// 选表下拉的宽度跟着选中值走（表名长短差很多），挂载 / 换库 / 选表后重算
+const tblSelRef = ref(null)
+const fitTblSelect = () => nextTick(() => fitSelectWidth(tblSelRef.value?.$el, { min: 170, max: 300 }))
+watch(() => [props.tables, table.value, props.database], fitTblSelect)
+onMounted(fitTblSelect)
 const rules = ref([])
 const columns = ref([])
 const types = ref([])
@@ -394,11 +401,41 @@ defineExpose({ save, generate, addRule })
 /* min-height: 0 让面板可被父容器限高，配合表格 flex:1 实现「表格内部滚动」而非整块滚动 */
 .qr { display: flex; flex-direction: column; min-height: 0; }
 .qr-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.qr-table-select { width: 220px; }
+/* 宽度只是首帧兜底，挂载后由 fitSelectWidth 按选中表名实测重写（表名长短差很多） */
+.qr-table-select { width: 170px; min-width: 170px; flex: 0 0 auto; }
+/* 占位文字（"选择要配置规则的表"）提亮一档：Element 默认的 placeholder 灰在深色底上几乎看不清。
+   **别加 :not(.is-transparent)** —— Element 恰好是在"没有值、显示占位"时给 .el-select__placeholder
+   加 is-transparent（表示把它淡化），上一版写反了，所以一直没生效。这里两种状态一起提亮。 */
+.qr-bar :deep(.el-select__placeholder) { color: var(--dc-text-mid); }
+.qr-bar :deep(.el-select__placeholder span) { color: inherit; }
+/* 同时改 Element 自己的令牌：它的 placeholder 颜色是从这个变量来的，
+   只改 color 在部分版本上会被 .el-select__placeholder.is-transparent 的变量取值盖掉 */
+.qr-bar :deep(.el-select__wrapper) {
+  --el-text-color-placeholder: var(--dc-text-mid);
+  --el-disabled-text-color: var(--dc-text-mid);
+}
+/* 禁用态 / 占位态必须带 !important：Element 自己的
+   `.el-select__wrapper.is-disabled .el-select__placeholder` 与本文件规则**同优先级**，
+   而 EP 的样式表后加载，普通声明抢不过它 —— 这就是"质量分析里生效、质量规则里还是灰的"
+   的真正原因（前者我写了 is-disabled 分支，特异性更高；后者没写）。 */
+.qr-bar :deep(.el-select__placeholder.is-transparent),
+.qr-bar :deep(.el-select__placeholder.is-transparent span),
+.qr-bar :deep(.el-select.is-disabled .el-select__placeholder),
+.qr-bar :deep(.el-select__wrapper.is-disabled .el-select__placeholder) {
+  color: var(--dc-text-mid) !important;
+}
+/* 这一行与弹窗顶部「范围」行同档：下拉 / 按钮 / 占位文字统一压到 12px（含高度 22px），
+   原来跟着弹窗正文的 14px 走，一行里比「范围」那排明显大一圈。 */
+.qr-bar :deep(.el-select__wrapper) { min-height: 22px; padding: 0 6px; }
+.qr-bar :deep(.el-select__placeholder),
+.qr-bar :deep(.el-select__selected-item),
+.qr-bar :deep(.el-input__inner),
+.qr-bar :deep(.el-button) { font-size: 12px; }
+.qr-bar :deep(.el-button) { height: 22px; padding: 0 9px; }
 .qr-divider { width: 1px; height: 16px; background: var(--dc-border); margin: 0 2px; flex-shrink: 0; }
 .qr-spacer { flex: 1; }
 .qr-btn-ic { margin-right: 3px; vertical-align: -2px; }
-.qr-count { font-size: 13px; color: var(--dc-text-dim); }
+.qr-count { font-size: 12px; color: var(--dc-text-mid); }
 .qr-count b { color: var(--dc-primary); font-weight: 600; }
 .qr-hint {
   /* 字号与「质量分析」等其它页签的提示文本保持一致（12.5px），文案居中。
@@ -406,7 +443,7 @@ defineExpose({ save, generate, addRule })
      该提示条位于 .qr（纵向 flex 容器）中，flex-basis 作用于主轴（高度），
      会被解释成「高度占满 100%」，把提示条撑成一大块空白并挤掉下方规则表格。
      横向占满由父容器默认的 align-items: stretch 保证。 */
-  font-size: 13px; color: var(--dc-text-dim); margin: 10px 0 12px;
+  font-size: 12px; color: var(--dc-text-mid); margin: 10px 0 12px;
   line-height: 1.7; background: var(--dc-bg-soft); border-radius: 8px; padding: 7px 11px;
   border: 1px solid var(--dc-border);
   text-align: center;
@@ -425,7 +462,7 @@ defineExpose({ save, generate, addRule })
 .qr-link:hover { opacity: .78; }
 
 .qr-empty {
-  padding: 18px; text-align: center; color: var(--dc-text-dim); font-size: 13px;
+  padding: 18px; text-align: center; color: var(--dc-text-mid); font-size: 12px;
   background: var(--dc-bg-soft); border: 1px dashed var(--dc-border); border-radius: 10px;
 }
 
