@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.6.4": [
+    "Failed objects always explain themselves now: read/write/probe/commit timeouts say which step stalled, for how long, and what the probe found - no more bare no-reason-returned",
+    "Failed objects no longer show +0 in the written column: the rows already written before the failure are shown (grey, with a tooltip), so you can tell never-started from died-halfway",
+    "The failure reason is now written to the task log too: an empty reason used to be skipped entirely, so see the sync log led to a blank page"
+  ],
   "v1.6.3": [
     "Large-table sync is much faster: cursor paging on multi-column keys now uses row-value comparison, so each page only scans its own range instead of hundreds of thousands of rows (a 580k-row table went from 68 minutes back to minutes)",
     "Fixed tasks running longer than 30 minutes showing as interrupted in the task center - they were still writing data in the background, only the record was garbage-collected; running tasks are no longer reclaimed and the stop button stays available",
