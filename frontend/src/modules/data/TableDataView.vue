@@ -3176,7 +3176,7 @@ useShortcutScope(rootRef, {
    —— 字段多时自然超出容器，由 .data-table-wrap 横向滚动
    注意：这里不能写 width: max-content —— 固定布局下浏览器按「内容」计算 max-content，
    多出的空间会摊回各列，列宽就永远拖不窄（详见 tableWidth 的注释） */
-.data-table { table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.data-table { table-layout: fixed; border-collapse: collapse; font-size: var(--grid-fs, var(--dc-data-fs, 13px)); }
 .data-table col.row-num-col { width: 40px; }
 .data-table th.fill-col, .data-table td.fill-col { padding: 0; border: none; background: transparent !important; min-width: 1px; }
 /* 吸顶表头：`top: -1px` 是为了盖住滚动时表头上方那道 1px 的缝。

@@ -5587,7 +5587,7 @@ onBeforeUnmount(() => {
 .data-table-wrap.col-resizing, .data-table-wrap.col-resizing * { cursor: col-resize !important; user-select: none; }
 /* 底栏布局与数据表一致：耗时 + 选中统计**同在左侧**，分页器 margin-left:auto 靠右
    （以前 space-between 把统计挤到正中间，两边看起来不是一个产品） */
-.result-footer { display: flex; align-items: center; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; font-size: var(--grid-fs, 13px); }
+.result-footer { display: flex; align-items: center; padding: 6px 12px; border-top: 1px solid var(--dc-border); background: var(--dc-bg-soft); flex-shrink: 0; gap: 12px; font-size: var(--grid-fs, var(--dc-data-fs, 13px)); }
 .result-footer > .el-pagination { margin-left: auto; }
 /* 底栏文字统一跟「结果表格字号」走（--grid-fs 由 .result-grid 提供）：
    与表格同字号，次要信息（统计 / 选中汇总）比它小 1px，层级关系保留 */
@@ -5627,7 +5627,7 @@ onBeforeUnmount(() => {
    注意：这里不能写 width: max-content —— 固定布局下浏览器按「内容」计算 max-content，
    多出的空间会摊回各列，列宽就永远拖不窄（详见 resultTableWidth 的注释） */
 /* 字号来自设置（编辑器页签的「结果表格字号」），变量挂在 .data-table-wrap 上 */
-.data-table { position: relative; table-layout: fixed; border-collapse: collapse; font-size: var(--grid-fs, 13px); }
+.data-table { position: relative; table-layout: fixed; border-collapse: collapse; font-size: var(--grid-fs, var(--dc-data-fs, 13px)); }
 /* 吸顶表头：`top: -1px` 盖住滚动时表头上方那道 1px 的缝 ——
    border-collapse: collapse 下上边框属于 table，不跟着吸顶走，那 1px 会露出下层底色。 */
 .data-table thead { position: sticky; top: -1px; z-index: 2; }
