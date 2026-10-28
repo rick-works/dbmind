@@ -170,6 +170,15 @@
                 <!-- 参考 Navicat：搜索框放在操作条右侧、紧挨新增按钮 -->
                 <el-input v-model="colSearch" size="small" clearable :prefix-icon="Search"
                           class="col-search" :placeholder="$t('tdet.searchCols')" />
+                <!-- 上移 / 下移：与「新建表」同一个操作方式 —— 工具栏按钮移动**当前选中行**
+                     （点行即选中、有蓝色高亮），不在每行塞两个小箭头（行内太挤、也不好点）。
+                     **不支持挪列的方言直接不显示**这两个按钮（见脚本 REORDER_DIALECTS）。 -->
+                <template v-if="canReorder">
+                  <el-button size="small" :icon="Top" :disabled="!canMoveSelected(-1)" :title="moveTip(-1)"
+                             @click="moveSelected(-1)">{{ $t('tf.moveUp') }}</el-button>
+                  <el-button size="small" :icon="Bottom" :disabled="!canMoveSelected(1)" :title="moveTip(1)"
+                             @click="moveSelected(1)">{{ $t('tf.moveDown') }}</el-button>
+                </template>
                 <el-button size="small" type="primary" :icon="Plus" @click="addColRow">{{ $t('tdet.addColumn') }}</el-button>
               </div>
               <!-- 几百行时整表全渲染会卡：只渲染看得见的那些行（见脚本 windowedCols 那段） -->
@@ -299,7 +308,7 @@
                         </div>
                       </td>
                       <td class="c-center">
-                        <el-button text size="small" :icon="Delete" class="dc-del" :title="c._state === 'new' ? $t('tdet.remove') : $t('tdet.deleteColumn')" @click="removeColRow(c)" />
+                        <el-button text size="small" :icon="Delete" class="dc-del" :title="c._state === 'new' ? $t('tdet.remove') : $t('tdet.deleteColumn')" @click.stop="removeColRow(c)" />
                       </td>
                     </tr>
                     <tr v-if="!visibleCols.length">
@@ -457,7 +466,7 @@ import { dbDisplayOf } from '../../types'
 // 说明：本文件多个 DDL 生成函数把局部变量起名为 t（带引号的表名），会遮蔽翻译函数 t()；
 // 这里另存一个引用 tr，专供那些函数内部使用（见 buildColumnSql 里的 sp_rename 注释）。
 const tr = t
-import { Plus, Delete, Refresh, CopyDocument, CaretRight, Grid, DocumentCopy, StarFilled, Document, EditPen, Search } from '@element-plus/icons-vue'
+import { Plus, Delete, Refresh, CopyDocument, CaretRight, Grid, DocumentCopy, StarFilled, Document, EditPen, Search, Top, Bottom } from '@element-plus/icons-vue'
 import { listColumns, listIndexes, listTables, alterTable, getFeatures, executeSql, getTableDdl, getTableCounts } from '../../api'
 import { mergeAlterRuns } from './alterMerge'
 import { canonTypeBase } from './typeName'
@@ -991,6 +1000,8 @@ const buildColRows = () => {
     return {
       _uid: 'c' + (++colUid) + '_' + i,
       _state: 'loaded',
+      // 原始序号：上移/下移之后要跟它比，才知道哪几列的**位置**变了（→ MODIFY … AFTER）
+      _oIdx: i,
       name: c.name,
       // 类型写法向**清单**对齐（见 typeName.js 的规则）：数据库报 `datetime`/`varchar(64)`、
       // 清单里是 `DATETIME`/`VARCHAR`，两边就统一成清单那个写法，不再"下拉一种、回显另一种"。
@@ -1013,6 +1024,82 @@ const buildColRows = () => {
   })
 }
 
+/* ==================== 调整字段顺序（上移 / 下移） ====================
+   能真正挪列的方言 = **MySQL 系（含 MariaDB，ddlStyle 都是 mysql）与 Doris**：
+   都支持 `ALTER TABLE … MODIFY COLUMN <定义> AFTER x` / `FIRST`
+   （两家都真机实测过：MySQL 8 / Doris 2.x 改完 SHOW CREATE TABLE 的列顺序确实变了）。
+   其它方言（H2 / Derby / PostgreSQL / Oracle / SQL Server / DB2 / ClickHouse）建表后列顺序
+   就是固定的 —— H2 实测连 `BEFORE/AFTER` 语法都没有，只能重建表。
+   所以这些方言**直接不显示**上移/下移按钮（不摆两个永远点不动的灰按钮占地方）。 */
+const REORDER_DIALECTS = ['mysql', 'doris']
+const canReorder = computed(() => REORDER_DIALECTS.includes(ddlStyle.value) && canEditLoaded.value)
+
+/** 已加载列（不含新增/删除）的当前顺序 vs 原始顺序：谁被挪过。
+ *  按"顺序比对"而不是"记谁点过按钮"：移过去再移回来会自动恢复成"没改动"，
+ *  不用额外维护一份易失的标记。 */
+const reorderInfo = computed(() => {
+  const loaded = colRows.value.filter(r => r._state === 'loaded')
+  const byOrig = [...loaded].sort((a, b) => (a._oIdx ?? 0) - (b._oIdx ?? 0))
+  const moved = new Set()
+  loaded.forEach((r, i) => { if (byOrig[i] !== r) moved.add(r._uid) })
+  return { loaded, moved }
+})
+const isMovedCol = (r) => reorderInfo.value.moved.has(r._uid)
+
+/** 该列在当前顺序里的前一位是谁 —— MODIFY … AFTER 用（第一位用 FIRST） */
+const movedPos = (r) => {
+  const seq = reorderInfo.value.loaded
+  const i = seq.indexOf(r)
+  if (i < 0) return null
+  if (i === 0) return { position: 'first', afterColumn: '' }
+  return { position: 'after', afterColumn: String(seq[i - 1].name || '').trim() }
+}
+
+/** 相邻的、没被删掉的那一行（跳过标记删除的行） */
+const neighborOf = (list, r, dir) => {
+  const idx = list.indexOf(r)
+  if (idx < 0) return -1
+  let j = idx + dir
+  while (j >= 0 && j < list.length && list[j]._state === 'deleted') j += dir
+  return (j < 0 || j >= list.length) ? -1 : j
+}
+const canMoveCol = (r, dir) => canReorder.value && neighborOf(colRows.value, r, dir) >= 0
+const moveTitle = (r, dir) => (canReorder.value
+  ? t(dir < 0 ? 'tdet.moveUp' : 'tdet.moveDown')
+  : t('tdet.moveNoSupport'))
+const moveCol = (r, dir) => {
+  if (!canReorder.value) return
+  const list = [...colRows.value]
+  const j = neighborOf(list, r, dir)
+  if (j < 0) return
+  const idx = list.indexOf(r)
+  const other = list[j]
+  list[j] = r
+  list[idx] = other
+  colRows.value = list // 换元素不是响应式的，整体换一份新数组
+  activeColUid.value = r._uid // 选中态跟着这一行走，连点几次不会"跳"
+}
+
+/* 工具栏按钮走"移动当前选中行"（与「新建表」完全同一套操作方式：先点行选中，再点上移/下移） */
+const selectedCol = computed(() => colRows.value.find(r => r._uid === activeColUid.value) || null)
+/** Doris 的分桶列连 MODIFY 都会被拒（Can not modify distribution column），挪不了 —— 置灰并说明 */
+const selectedIsDorisDist = computed(() => isDoris.value && !!selectedCol.value
+  && String(selectedCol.value.name || '').trim().toLowerCase() === dorisDistColName())
+const canMoveSelected = (dir) => !!selectedCol.value && !selectedIsDorisDist.value && canMoveCol(selectedCol.value, dir)
+const moveTip = (dir) => {
+  if (!canReorder.value) return t('tdet.moveNoSupport')
+  if (!selectedCol.value) return t('tf.pickRowFirst')
+  if (selectedIsDorisDist.value) return t('tdet.moveDorisDist')
+  return moveTitle(selectedCol.value, dir)
+}
+const moveSelected = (dir) => {
+  if (!canReorder.value) return ElMessage.warning(t('tdet.moveNoSupport'))
+  const r = selectedCol.value
+  if (!r) return ElMessage.warning(t('tf.pickRowFirst'))
+  if (selectedIsDorisDist.value) return ElMessage.warning(t('tdet.moveDorisDist'))
+  moveCol(r, dir)
+}
+
 const colChanged = (r) => {
   if (!isLoadedRow(r) || !r._orig) return false
   const o = r._orig
@@ -1024,6 +1111,8 @@ const colChanged = (r) => {
   if ((r.comment || '').trim() !== o.comment.trim()) return true
   if (!!r.primaryKey !== !!o.primaryKey) return true
   if (!!r.autoIncrement !== !!o.autoIncrement) return true
+  // 位置被上移/下移过也算改动（属性一个字没动，但同样要发一条 MODIFY … AFTER）
+  if (canReorder.value && isMovedCol(r)) return true
   return false
 }
 /** 除「字段名」外，其它属性（类型/可空/默认值/注释/主键/自增）有没有变。
@@ -1391,13 +1480,16 @@ const buildColumnSql = (f, isEdit) => {
         def += f.nullable ? ' NULL' : ' NOT NULL'
         if (dv !== '') def += ` DEFAULT${dorisDefault(dv)}`
         if (f.comment) def += ` COMMENT '${sq(f.comment)}'`
-        stmts.push(`ALTER TABLE ${t} MODIFY COLUMN ${def}`)
+        // 位置子句（AFTER x / FIRST）必须写在列定义**最后** —— Doris 实测
+        // `ALTER TABLE t MODIFY COLUMN c INT AFTER a` 生效，改完 SHOW CREATE 的顺序确实变了
+        stmts.push(`ALTER TABLE ${t} MODIFY COLUMN ${def}${posPart(f)}`)
       }
       return stmts.join(';\n')
     }
     let add = `ALTER TABLE ${t} ADD COLUMN ${typeText}`
     if (dv !== '') add += ` DEFAULT${dorisDefault(dv)}`
     if (f.comment) add += ` COMMENT '${sq(f.comment)}'`
+    add += posPart(f)
     return add
   }
   if (ddlStyle.value === 'mysql') {
@@ -1916,12 +2008,26 @@ const colParts = () => {
       f.aggType = r.aggType
       // Doris：只改名时不能发多余的 MODIFY（见 buildColumnSql 的 doris 分支）
       f._attrsChanged = colAttrsChanged(r)
+      // 上移/下移过才带 AFTER / FIRST（不动就保持原位，命令行里不会多出无谓的定位子句）
+      if (isMovedCol(r)) {
+        const p = movedPos(r)
+        if (p) { f.position = p.position; f.afterColumn = p.afterColumn }
+      }
       const sql = buildColumnSql(f, true)
       if (sql) parts.push(sql)
     }
     // ② 新增
+    // 新列默认追加到末尾；但若用户把它上移到了中间/最前，必须显式写 AFTER/FIRST ——
+    // 否则 MySQL 一律加在最后一列，界面顺序和库里对不上。
+    const seqAll = colRows.value.filter(x => x._state !== 'deleted')
     for (const r of added) {
       const f = rowToForm(r, false)
+      const i = seqAll.indexOf(r)
+      if (i === 0) f.position = 'first'
+      else if (i > 0 && i < seqAll.length - 1) {
+        f.position = 'after'
+        f.afterColumn = String(seqAll[i - 1].name || '').trim()
+      }
       const sql = buildColumnSql(f, false)
       if (sql) parts.push(sql)
     }
@@ -3439,6 +3545,7 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
 .dc-del { color: var(--dc-danger); }
 .dc-del:hover { color: var(--dc-danger); background: rgba(255, 97, 97, .1); }
 
+
 /* 索引表格主题 */
 .idx-tab :deep(.el-table) {
   /* 与「字段定义」「基本信息」同一档字号：Element 的 el-table 默认 14px，
@@ -3622,6 +3729,9 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   overflow: auto;
   padding: 10px 12px;
   min-height: 0;
+  /* 与「新建表」的预览**同一块代码底色**（见 ObjectFormTab 的 .sql-body）：
+     原来这里是卡片本色，同一个预览框在两个页面看着像两套东西。 */
+  background: var(--dc-bg-code);
 }
 .sql-body pre { margin: 0; }
 .sql-body code {
