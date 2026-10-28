@@ -29,16 +29,28 @@
           <EventForm v-else-if="cat === 'events'" ref="formRef" :features="features" :conn="conn" :edit-mode="mode === 'edit'" :edit-data="editData" @sql="onSqlChange" />
         </div>
 
-        <!-- 右侧 SQL 预览 -->
-        <div class="sql-area">
-          <div class="sql-head">
+        <!-- 分隔条：**它就是两块卡片之间那道缝**（6px；透明底 → 露出页面底色），
+             4px 细条在这 6px 里上下居中 → 正好落在缝中间。向上拖 = 预览变高，
+             双击在最大/最小之间来回切（与「编辑表结构」同一套手感，见 TableDetailView 的 .sql-resizer）。 -->
+        <div v-show="!sqlCollapsed" class="sql-resizer"
+             :title="$t('tdet.resizerTitle')"
+             @mousedown.prevent="onSqlResizeStart" @dblclick="onSqlResizeDblClick"></div>
+
+        <!-- SQL 预览：在编辑区**下方**，点标题行可展开/收起，高度由拖动 / 双击控制（默认 220px） -->
+        <div ref="sqlAreaRef" class="sql-area" :class="{ collapsed: sqlCollapsed }"
+             :style="sqlCollapsed ? null : { height: sqlHeight + 'px' }">
+          <div class="sql-head" @click="sqlCollapsed = !sqlCollapsed"
+               :title="sqlCollapsed ? $t('tdet.expandSql') : $t('tdet.collapseSql')">
+            <el-icon class="sql-fold" :class="{ folded: sqlCollapsed }"><CaretRight /></el-icon>
             <el-icon><DocumentCopy /></el-icon>
             <span>{{ $t('oft.preview') }}</span>
+            <!-- 「展开/收起」放最右：左侧留白由 .sql-state 的 margin-left:auto 撑开，状态标签落在它左边 -->
+            <span class="sql-fold-tx">{{ sqlCollapsed ? $t('tdet.expand') : $t('tdet.collapse') }}</span>
             <el-tag size="small" effect="plain" type="info" class="sql-state" :class="previewOk ? 'ok' : 'warn'">
               {{ previewOk ? $t('oft.runnable') : $t('oft.incomplete') }}
             </el-tag>
           </div>
-          <div class="sql-body">
+          <div v-show="!sqlCollapsed" class="sql-body">
             <pre><code>{{ previewSql || $t('oft.autoSqlHint') }}</code></pre>
           </div>
           <div v-if="conn?.type === 'MYSQL' && /CREATE\s+FUNCTION\b/i.test(previewSql)" class="sql-hint">
@@ -60,7 +72,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { CopyDocument, DocumentCopy, CaretRight, Grid, View, Files, Operation, Cpu, Setting, BellFilled, Timer } from '@element-plus/icons-vue'
 import { getFeatures, getObjectInfo, getTableDdl, alterTable } from '../../api'
@@ -132,6 +144,50 @@ const previewOk = computed(() => {
 })
 
 const onSqlChange = (sql) => { previewSql.value = sql }
+
+/* ==================== SQL 预览高度（拖动分隔条 / 双击） ====================
+   与「编辑表结构」(TableDetailView.vue) 同一套手感：向上拖变高，双击在最大 ↔ 最小之间切换。
+   默认 220px = 原来写死的固定高度，所以不拖的时候观感不变。
+   上限取**所在容器的实际可用高度**（编辑区能收成 0，拖到最上时预览可以占满整块主体），
+   下限 0 —— 允许把预览整个拖走，只留那条 6px 分隔条，往上拖一下就回来。 */
+const SQL_H_DEFAULT = 220
+const SQL_H_MIN = 0
+/** 预览是否收起（点标题行切换；收起后高度交给内容，只藏正文与分隔条） */
+const sqlCollapsed = ref(false)
+const sqlAreaRef = ref(null)
+const sqlHeight = ref(SQL_H_DEFAULT)
+const sqlMaxH = () => {
+  const parent = sqlAreaRef.value?.parentElement
+  const available = parent ? parent.clientHeight : Math.round(window.innerHeight * 0.7)
+  return Math.max(SQL_H_MIN, available)
+}
+let sqlDrag = null
+const onSqlResizeMove = (e) => {
+  if (!sqlDrag) return
+  // 向上拖 = 变高：起始高度 + 鼠标上移的距离
+  const next = sqlDrag.startH + (sqlDrag.startY - e.clientY)
+  sqlHeight.value = Math.min(sqlMaxH(), Math.max(SQL_H_MIN, Math.round(next)))
+}
+const onSqlResizeEnd = () => {
+  sqlDrag = null
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  window.removeEventListener('mousemove', onSqlResizeMove)
+  window.removeEventListener('mouseup', onSqlResizeEnd)
+}
+const onSqlResizeStart = (e) => {
+  sqlDrag = { startY: e.clientY, startH: sqlHeight.value }
+  document.body.style.cursor = 'row-resize'
+  document.body.style.userSelect = 'none'
+  window.addEventListener('mousemove', onSqlResizeMove)
+  window.addEventListener('mouseup', onSqlResizeEnd)
+}
+/** 双击：最大 ↔ 最小 */
+const onSqlResizeDblClick = () => {
+  const max = sqlMaxH()
+  sqlHeight.value = sqlHeight.value >= max - 8 ? SQL_H_MIN : max
+}
+onBeforeUnmount(onSqlResizeEnd)
 
 const loadFeatures = async () => {
   try { features.value = await getFeatures(props.conn.id) }
@@ -272,11 +328,10 @@ onMounted(async () => {
 }
 
 /* 右侧 SQL → 底部 SQL：同样是一张卡（边框/圆角/轻阴影与上面两张一致）。
-   这里给固定高度（编辑页那条可拖动的分隔条暂未移植）。 */
+   高度由拖动分隔条 / 双击控制（内联 style 给 height，默认 220px），这里不再写死；
+   **也不再留 margin-top** —— 那 6px 缝现在由 .sql-resizer 自己撑开。 */
 .sql-area {
   flex-shrink: 0;
-  height: 220px;
-  margin-top: 6px;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--dc-border);
@@ -284,7 +339,21 @@ onMounted(async () => {
   background: var(--dc-bg-card);
   box-shadow: 0 1px 3px rgba(16, 24, 40, .06), 0 1px 2px rgba(16, 24, 40, .04);
   overflow: hidden;
+  min-height: 0;
 }
+/* 收起：高度交给内容（标题行 + 底栏）；分隔条 v-show 隐藏，那条 6px 缝改由 margin-top 补上 */
+.sql-area.collapsed { height: auto; margin-top: 6px; }
+/* 分隔条：6px 高、透明底（露出页面底色 = 两块卡片之间那道缝），4px 细条上下居中；
+   悬停变主色，鼠标是上下箭头。与 TableDetailView.vue 的 .sql-resizer 完全一致。 */
+.sql-resizer { height: 6px; flex: 0 0 6px; cursor: row-resize; position: relative; z-index: 2; background: transparent; }
+.sql-resizer::before {
+  content: ''; position: absolute; left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px; height: 4px; border-radius: 3px;
+  background: var(--dc-text-dim); opacity: .45;
+  transition: background .15s ease, opacity .15s ease;
+}
+.sql-resizer:hover::before { background: var(--dc-primary); opacity: 1; }
 .sql-head {
   display: flex;
   align-items: center;
@@ -295,8 +364,16 @@ onMounted(async () => {
   background: var(--dc-bg-soft);
   border-bottom: 1px solid var(--dc-border-soft);
   flex-shrink: 0;
+  cursor: pointer;
+  user-select: none;
 }
-.sql-state { font-size: 12px; margin-left: auto; }
+.sql-head:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
+/* 折叠箭头：展开时朝下、收起时朝右 */
+.sql-fold { transition: transform .18s ease; transform: rotate(90deg); }
+.sql-fold.folded { transform: rotate(0deg); }
+/* 「展开/收起」贴最右：auto 外边距放在它身上，状态标签跟在它后面（与「编辑表结构」同一排法） */
+.sql-fold-tx { margin-left: auto; font-size: 12px; color: var(--dc-text-weak); }
+.sql-state { font-size: 12px; }
 .sql-state.ok { --el-tag-bg-color: rgba(61,220,151,.1); --el-tag-border-color: rgba(61,220,151,.4); --el-tag-text-color: var(--dc-accent); }
 .sql-state.warn { --el-tag-bg-color: var(--dc-warning-wash); --el-tag-border-color: rgba(245,179,77,.4); --el-tag-text-color: var(--dc-warning); }
 .sql-body {
