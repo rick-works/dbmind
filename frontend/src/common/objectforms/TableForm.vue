@@ -235,10 +235,15 @@
                   <td><span class="row-idx">{{ winStart + i + 1 }}</span></td>
                   <td><el-input v-model="c.name" size="small" clearable /></td>
                   <td>
-                    <span v-if="activeType !== c.uid" class="cell-text" :title="c.type" @click="activeType = c.uid">{{ c.type }}</span>
-                        <el-select v-else v-model="c.type" size="small" filterable allow-create automatic-dropdown class="type-select" @change="activeType = ''" @blur="activeType = ''">
-                      <el-option v-for="t in features.columnTypes || []" :key="t" :label="t" :value="t" />
-                    </el-select>
+                    <!-- 平时是纯文本，点一下变成「可输入 + 可选择」：
+                         直接把别的表/别的行的类型粘进来，比在下拉里翻快得多（用户要求）。
+                         用 el-autocomplete 而不是 el-select —— 输入即生效、不必按回车确认，
+                         点走/切到别的格子也不会把刚敲的字丢掉（el-select 的 allow-create 必须回车，
+                         否则失焦后那串字就没了，等于"不能输入"）。 -->
+                    <span v-if="activeType !== c.uid" class="cell-text" :title="c.type" @click="onTypeClick(c)">{{ c.type }}</span>
+                    <el-autocomplete v-else v-model="c.type" size="small" class="type-select"
+                                     :fetch-suggestions="typeSuggest" :debounce="100" trigger-on-focus
+                                     @blur="onTypeBlur(c)" @select="onTypeBlur(c)" />
                   </td>
                   <td class="c-center"><el-input v-model="c.length" size="small" /></td>
                   <td class="c-center"><el-input v-model="c.scale" size="small" /></td>
@@ -344,7 +349,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, watch, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 // 字段表 / 索引表的行高跟随设置页「结果表格行高」（--grid-row-h 由模板上的 style 注入）
 import { editorSettingsLive } from '../../utils/settings'
@@ -512,8 +517,37 @@ const windowedCols = computed(() => {
 const winEnd = computed(() => winStart.value + windowedCols.value.length)
 const padTop = computed(() => winStart.value * rowH.value)
 const padBottom = computed(() => Math.max(0, (cols.length - winEnd.value) * rowH.value))
-/* 类型下拉是每行最重的组件，平时只用来"看"：平时渲染成纯文本，点一下才换成下拉并自动展开 */
+/* 类型格是每行最重的组件、平时只用来"看"：默认渲染成纯文本，点一下才换成输入框（带下拉建议）。
+   点开后**输入即生效**（el-autocomplete 的 v-model 随敲随更新），不必按回车确认，
+   点走也不会丢；这比 el-select 的 allow-create（必须回车）好用 —— 用户要的就是"把上一行
+   的类型粘过来"，粘完点下一个格子即可。 */
 const activeType = ref('')
+/** 打开时记下原值：改成空还回去（类型清空会让 DDL 生成退回默认类型，容易踩坑） */
+let typeBackup = ''
+const onTypeClick = async (c) => {
+  typeBackup = c.type || ''
+  activeType.value = c.uid
+  await nextTick()
+  // 立刻聚焦并全选：接着敲字或 Ctrl+V 直接覆盖，不用再点一次
+  const inp = document.querySelector('.field-table .type-select input')
+  if (inp) { inp.focus(); inp.select() }
+}
+const onTypeBlur = (c) => {
+  if (!String(c.type ?? '').trim()) c.type = typeBackup
+  // 延时关掉编辑器：点下拉里的建议会先触发 blur，立刻卸载会吃掉那一次点击
+  setTimeout(() => { if (activeType.value === c.uid) activeType.value = '' }, 120)
+}
+/** 下拉建议：有关键字按包含匹配（大小写不敏感） */
+const typeSuggest = (q, cb) => {
+  const kw = String(q || '').trim().toLowerCase()
+  const list = props.features.columnTypes || []
+  const lower = list.map((t) => String(t).toLowerCase())
+  // 打开时输入框里放的是原值（和某个类型完全一致）→ 给**全量**列表，方便直接换个类型；
+  // 只在真正手敲（部分匹配 / 自定义写法）时才过滤 —— 敲自定义类型时列表是空的，
+  // 回车不会把建议里的第一项"抢"过去，粘进来的类型原样保留。
+  if (!kw || lower.includes(kw)) return cb(list.map((t) => ({ value: t })))
+  cb(list.filter((t) => String(t).toLowerCase().includes(kw)).map((t) => ({ value: t })))
+}
 
 /* ===== 注释格的长文本弹窗（与「编辑表结构」同一套：悬停浮出「展开」、双击输入框也行） ===== */
 const commentDlg = reactive({ visible: false, text: '', field: '', row: null })

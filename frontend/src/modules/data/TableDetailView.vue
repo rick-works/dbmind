@@ -236,12 +236,13 @@
                                   :placeholder="c._state === 'new' ? $t('tdet.newColName') : ''" />
                       </td>
                       <td>
-                        <!-- 平时是纯文本，点一下才变成下拉并自动展开（见 activeType 那段注释） -->
-                        <el-select v-if="activeType === c._uid" v-model="c.typeBase" size="small" filterable
-                                   allow-create automatic-dropdown :disabled="typeDisabled(c)" class="type-select"
-                                   @change="activeType = ''" @blur="activeType = ''">
-                          <el-option v-for="t in typeOptions" :key="t" :label="t" :value="t" />
-                        </el-select>
+                        <!-- 平时是纯文本，点一下变成「可输入 + 可选择」（见 activeType 那段注释）。
+                             用 el-autocomplete 而不是 el-select：输入即生效、不必回车确认，
+                             粘贴/点走都不会丢字 —— 一列几十行类型相同的时候，复制粘贴比翻下拉快。 -->
+                        <el-autocomplete v-if="activeType === c._uid" v-model="c.typeBase" size="small"
+                                         class="type-select" :fetch-suggestions="typeSuggest"
+                                         :debounce="100" trigger-on-focus :disabled="typeDisabled(c)"
+                                         @blur="onTypeBlur(c)" @select="onTypeBlur(c)" />
                         <span v-else class="cell-text" :class="{ 'cell-off': typeDisabled(c) }"
                               :title="c.typeBase" @click="onTypeClick(c)">{{ c.typeBase }}</span>
                       </td>
@@ -1174,9 +1175,32 @@ const WINDOW_MIN = 80
    而它平时只是用来"看"。这里平时渲染成纯文本（几乎零成本），点一下才换成下拉并自动展开 ——
    虚拟滚动每次换窗口都要挂载新行，行越轻越不卡。 */
 const activeType = ref('')
-const onTypeClick = (c) => {
+/** 打开时记下原值：改成空还回去（空类型会让 DDL 生成退回默认类型） */
+let typeBackup = ''
+const onTypeClick = async (c) => {
   if (typeDisabled(c)) return
+  typeBackup = c.typeBase || ''
   activeType.value = c._uid
+  await nextTick()
+  // 立刻聚焦并全选：接着敲字或 Ctrl+V 直接覆盖，不用再点一次
+  const inp = document.querySelector('.field-table .type-select input')
+  if (inp) { inp.focus(); inp.select() }
+}
+const onTypeBlur = (c) => {
+  if (!String(c.typeBase ?? '').trim()) c.typeBase = typeBackup
+  // 延时关掉编辑器：点下拉里的建议会先触发 blur，立刻卸载会吃掉那一次点击
+  setTimeout(() => { if (activeType.value === c._uid) activeType.value = '' }, 120)
+}
+/** 下拉建议：有关键字按包含匹配（大小写不敏感） */
+const typeSuggest = (q, cb) => {
+  const kw = String(q || '').trim().toLowerCase()
+  const list = typeOptions.value || []
+  const lower = list.map((t) => String(t).toLowerCase())
+  // 打开时输入框里放的是原值（和某个类型完全一致）→ 给**全量**列表，方便直接换个类型；
+  // 只在真正手敲（部分匹配 / 自定义写法）时才过滤 —— 敲自定义类型时列表是空的，
+  // 回车不会把建议里的第一项"抢"过去，粘进来的类型原样保留。
+  if (!kw || lower.includes(kw)) return cb(list.map((t) => ({ value: t })))
+  cb(list.filter((t) => String(t).toLowerCase().includes(kw)).map((t) => ({ value: t })))
 }
 /* 当前行：点一下整行变主色底 + 左侧主色条（用户反馈「选中的样式没变蓝」——
    原来只有 focus-within 的极淡 wash，焦点一离开表格就完全看不出选的是哪一行）。 */
