@@ -336,8 +336,7 @@ const parseParams = (raw) => {
 .sub-title { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--dc-text); margin-bottom: 8px; }
 .sub-title .el-button { margin-left: auto; }
 .card-tip { font-size: 12px; color: var(--dc-text-dim); font-weight: 400; }
-.dc-del { color: var(--dc-danger); }
-.dc-del:hover { color: var(--dc-danger); background: rgba(255,97,97,.1); }
+/* .dc-del（删除图标红色）统一定义在 styles/index.css，组件里不再各写一份 */
 .mb8 { margin-bottom: 8px; }
 .body-tip { display: flex; align-items: center; gap: 5px; margin-top: 8px; font-size: 12px; color: var(--dc-text-dim); }
 .body-tip .el-icon { color: var(--dc-primary); }

@@ -1014,6 +1014,28 @@ html[data-theme="light"] {
 .dc-btn-icon:hover { color: var(--dc-text); background: var(--dc-bg-hover); }
 .dc-btn-icon.danger:hover { color: var(--dc-danger); background: rgba(255, 97, 97, .12); }
 
+/* ==================== 删除类小图标（垃圾桶）统一危险色 ====================
+   项目里凡是「删掉这一行/这一项」的垃圾桶按钮，一律挂 .dc-del，颜色只由这里决定，
+   组件里不要再各写一份（改主题时只改一处）。
+   为什么要 html 前缀：Element 的 `.el-button.is-text` 自己也声明了 color
+   （特异性同为 0,2,0），打包产物里它常排在组件 scoped 样式之后，会把 .dc-del
+   的红色盖回灰色 —— 「编辑表结构」字段行末那个图标就是这么变灰的。
+   抬到 0,2,1 后不再依赖样式加载顺序。
+   图标本身继承 currentColor，所以给按钮设 color 就够（别用 type="danger"，
+   那会带上 Element 的底色/边框变体，图标按钮只要纯色）。 */
+/* 注意这里把 .is-text 写进选择器：上面 602 行的 `html .el-button.is-text:not(.is-circle)`
+   优先级是 (0,3,1)，只写 `html .el-button.dc-del`（0,2,1）压不过它，图标会靠 svg 继承
+   侥幸红、按钮文字色仍是 --dc-text。写到同优先级、靠"后出现"取胜。 */
+html .el-button.dc-del,
+html .el-button.is-text.dc-del,
+html .el-button.dc-del .el-icon,
+html .dc-del-icon { color: var(--dc-danger); }
+html .el-button.dc-del:not(.is-disabled):hover,
+html .el-button.is-text.dc-del:not(.is-disabled):hover,
+html .el-button.dc-del:not(.is-disabled):focus { color: var(--dc-danger); background: var(--dc-danger-wash); }
+html .el-button.dc-del.is-disabled,
+html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity: .55; }
+
 .dc-card {
   background: var(--dc-bg-card);
   border: 1px solid var(--dc-border);

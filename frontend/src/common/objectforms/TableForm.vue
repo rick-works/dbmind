@@ -1089,8 +1089,7 @@ emit('sql', genSql())
 .empty-card-text { font-size: 12.5px; color: var(--dc-text-dim); margin-bottom: 8px; }
 /* （原"每字段一个 el-form 的网格"那套规则已随标记一起去掉：
      基本信息现在是 .field-table.basic-table 两列表，规则见上面的 basic-table 段。） */
-.dc-del { color: var(--dc-danger); }
-.dc-del:hover { color: var(--dc-danger); background: rgba(255,97,97,.1); }
+/* .dc-del（删除图标红色）统一定义在 styles/index.css，组件里不再各写一份 */
 .type-select { width: 100%; }
 :deep(.el-table) { --el-table-header-bg-color: var(--dc-bg-code); }
 /* 索引表表头/内容左对齐 */

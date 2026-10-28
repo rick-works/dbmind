@@ -3542,8 +3542,8 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
    单元格上的 .c-center 只管 td 对齐，<el-input> 里的文字仍是左对齐（inner 自己带 text-align:start），
    必须单独压一遍 inner。这两格是 c-center 列里唯一有输入框的，不会误伤勾选框列。 */
 .field-table td.c-center :deep(.el-input__inner) { text-align: center; }
-.dc-del { color: var(--dc-danger); }
-.dc-del:hover { color: var(--dc-danger); background: rgba(255, 97, 97, .1); }
+/* .dc-del（删除图标红色）统一定义在 styles/index.css：组件里的 scoped 版本
+   特异性同为 0,2,0，压不过 Element 的 .el-button.is-text，图标会显示成灰色。 */
 
 
 /* 索引表格主题 */
