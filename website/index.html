@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.7.1（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.7.1</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-28</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>「编辑表结构」现在能调字段顺序：在字段表里选中一行，用工具栏的「上移 / 下移」移动，SQL 预览同步给出 ALTER 语句 —— MySQL / MariaDB / Doris 是真的改表（Doris 的分桶列会置灰并说明原因），建表后列顺序固定的库（ClickHouse / PostgreSQL / Oracle / SQL Server / DB2 / H2 / Derby）直接不显示这两个按钮，免得点了报错</b></li>
+            <li><b>「类型」那一格改成可输入 + 可选择：下拉里挑也行，直接敲 character varying(64)、decimal(10,2) 这类带参数的类型也行，粘贴进去就生效、不用回车（新建表与编辑表结构同一套）</b></li>
+            <li><b>新建表的 SQL 预览加了可拖动分隔条：上下拖动调高度、双击在最大与还原之间切换、点标题行收起；预览底色也和「编辑表结构」统一了</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.7.1" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.7.1" target="_blank" rel="noopener">下载 v1.7.1</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.7.0（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.7.0</span>
             <span class="rel-tag tag-minor">小版本</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-28</span>
           </div>
           <ul class="rel-notes">
