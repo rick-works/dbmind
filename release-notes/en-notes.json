@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v1.7.1": [
+    "Edit table structure can now reorder columns: select a row in the field grid and move it with Up / Down in the toolbar, and the SQL preview follows with the matching ALTER - MySQL / MariaDB / Doris really change the table (a Doris bucketing column is greyed out with the reason), while engines that fix column order after creation (ClickHouse / PostgreSQL / Oracle / SQL Server / DB2 / H2 / Derby) do not show the buttons at all instead of failing",
+    "The type cell is now both a picker and a free-text box: choose from the list, or type a parameterised type such as character varying(64) or decimal(10,2) - pasting applies it without pressing Enter (same control for new table and edit table structure)",
+    "The SQL preview in new table gets a draggable splitter: drag up and down to resize, double-click to maximise / restore, click the title row to collapse; its background now matches edit table structure"
+  ],
   "v1.7.0": [
     "Every \"Select connection\" dropdown is now a two-level \"folder -> connection\" tree: group headers collapse, and the group holding the current connection auto-expands when you open it (SQL editor, data transfer, data compare, user management, object list, data governance and the AI command palette share one component and one set of styles)",
     "Connection options show just the connection name - the MySQL / PostgreSQL type column on the right is gone, and all text is a uniform 13px (group headers used to be 12px bold, which made them look unrelated to their members)",
