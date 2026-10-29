@@ -290,6 +290,19 @@ impl SqlReader {
         self.page_rows.load(Ordering::SeqCst)
     }
 
+    /// 每片至少要摊到多少行才值得切。
+    ///
+    /// 分片的成本是「一条新物理连接 + 认证」（跨网几百毫秒到两秒），收益是**读和写都能
+    /// 并行**。原来固定 5 万行：真机 20 万行的表按 6 片切，每片 3.3 万行 < 5 万 ⇒
+    /// 干脆不分片 ⇒ 整表只剩一条写连接，而这条链路单连接上行 340 KB/s、8 条能到
+    /// 2.1 MB/s（同一张表 239 秒 vs 十几秒）。所以门槛改成「每片至少 5 页，且不少于
+    /// 5000 行」，上限仍是 5 万 —— 大表才值得切，几十张几千行的小表不该各开一堆连接。
+    fn min_rows_per_slice(&self) -> i64 {
+        (self.page_rows_now() as i64)
+            .saturating_mul(5)
+            .clamp(5_000, MIN_ROWS_PER_SLICE)
+    }
+
     fn filter_sql(&self) -> String {
         let trimmed = self.where_clause.trim();
         if trimmed.is_empty() {
@@ -327,8 +340,12 @@ impl SqlReader {
             return None;
         }
         match (&row[0], &row[1]) {
-            (CellValue::Integer(lo), CellValue::Integer(hi)) => split_integer(*lo, *hi, want),
-            (CellValue::Real(lo), CellValue::Real(hi)) => split_real(*lo, *hi, want),
+            (CellValue::Integer(lo), CellValue::Integer(hi)) => {
+                split_integer(*lo, *hi, want, self.min_rows_per_slice())
+            }
+            (CellValue::Real(lo), CellValue::Real(hi)) => {
+                split_real(*lo, *hi, want, self.min_rows_per_slice())
+            }
             _ => None,
         }
     }
@@ -347,7 +364,7 @@ impl SqlReader {
             CellValue::Text(text) => text.trim().parse::<i64>().ok()?,
             _ => return None,
         };
-        if total < (want as i64) * MIN_ROWS_PER_SLICE {
+        if total < (want as i64) * self.min_rows_per_slice() {
             return None;
         }
         let mut bounds: Vec<CellValue> = Vec::with_capacity(want - 1);
@@ -683,12 +700,12 @@ fn window_split_enabled() -> bool {
 
 /// 无键表的窗口切分：先 `count(*)` 拿总数，再按行号等分成 K 段。
 ///
-/// 分片门槛沿用 [`MIN_ROWS_PER_SLICE`]（每片至少 5 万行），否则建连成本盖过并行收益。
-/// 拿不到总数（无权限/统计失败）就返回 `None`，退回整表单流。
+/// 分片门槛与有键表同一口径（[`SqlReader::min_rows_per_slice`]），否则建连成本盖过
+/// 并行收益。拿不到总数（无权限/统计失败）就返回 `None`，退回整表单流。
 async fn window_ranges_of(reader: &SqlReader, want: usize) -> Option<Vec<RowRange>> {
     let total = count_rows_of(reader).await?;
     let slices = want.min(reader.parallel_ceiling()).max(1);
-    if total < (MIN_ROWS_PER_SLICE as u64).saturating_mul(slices as u64) {
+    if total < (reader.min_rows_per_slice() as u64).saturating_mul(slices as u64) {
         return None;
     }
     let bounds = window_bounds(total, slices);
@@ -805,13 +822,13 @@ fn recover_target(now: usize, fixed: usize) -> usize {
 ///
 /// 纯函数单独拎出来是为了能被单测钉死 —— 分片切错的表现是「某几段数据压根没搬」
 /// 或者「同一行搬了两遍」，而这两种在整库同步里都很难一眼看出来。
-fn split_integer(lo: i64, hi: i64, want: usize) -> Option<Vec<RowRange>> {
+fn split_integer(lo: i64, hi: i64, want: usize, min_rows: i64) -> Option<Vec<RowRange>> {
     if want < 2 || hi <= lo {
         return None;
     }
     let span = (hi as i128) - (lo as i128) + 1;
-    // 每片摊不到 MIN_ROWS_PER_SLICE 行就别切：建连成本会吃掉并行收益
-    if span < (want as i128) * (MIN_ROWS_PER_SLICE as i128) {
+    // 每片摊不到 `min_rows` 行就别切：建连成本会吃掉并行收益（见 `min_rows_per_slice`）
+    if span < (want as i128) * (min_rows as i128) {
         return None;
     }
     let mut out = Vec::with_capacity(want);
@@ -834,12 +851,12 @@ fn split_integer(lo: i64, hi: i64, want: usize) -> Option<Vec<RowRange>> {
 }
 
 /// 浮点/数值键同 `split_integer`，边界按比例落在值域上。
-fn split_real(lo: f64, hi: f64, want: usize) -> Option<Vec<RowRange>> {
+fn split_real(lo: f64, hi: f64, want: usize, min_rows: i64) -> Option<Vec<RowRange>> {
     if want < 2 || !(hi > lo) {
         return None;
     }
     let span = hi - lo;
-    if span < (want as f64) * (MIN_ROWS_PER_SLICE as f64) {
+    if span < (want as f64) * (min_rows as f64) {
         return None;
     }
     let mut out = Vec::with_capacity(want);
@@ -880,7 +897,8 @@ mod tests {
     /// 首片下界开放、末片上界开放。任何一处不接，就意味着一整段数据漏搬或重复搬。
     #[test]
     fn 整数分片连续且不重不漏() {
-        let ranges = split_integer(1, 1_000_000, 4).expect("100 万行应能切 4 片");
+        let ranges =
+            split_integer(1, 1_000_000, 4, MIN_ROWS_PER_SLICE).expect("100 万行应能切 4 片");
         assert_eq!(ranges.len(), 4);
         assert!(ranges[0].low.is_none(), "首片应取下界开放");
         assert!(ranges[3].high.is_none(), "末片应取上界开放");
@@ -899,14 +917,26 @@ mod tests {
     #[test]
     fn 行数太少或只有一片时不切() {
         // 1000 行切 4 片，每片 250 行 —— 建连成本比省下的时间还多
-        assert!(split_integer(1, 1_000, 4).is_none());
-        assert!(split_integer(1, 1, 4).is_none(), "单行表不能切");
-        assert!(split_integer(1, 1_000_000, 1).is_none(), "want=1 就是不切");
+        assert!(split_integer(1, 1_000, 4, MIN_ROWS_PER_SLICE).is_none());
+        assert!(split_integer(1, 1, 4, MIN_ROWS_PER_SLICE).is_none(), "单行表不能切");
+        assert!(split_integer(1, 1_000_000, 1, MIN_ROWS_PER_SLICE).is_none(), "want=1 就是不切");
+    }
+
+    /// 低速链路上的真实教训：20 万行按 6 片切，每片 3.3 万行 —— 旧的 5 万行门槛
+    /// 让整表退化成单流（单连接上行 340 KB/s），新门槛必须肯切。
+    #[test]
+    fn 中等表在低速链路上也要能分片() {
+        let adaptive = 5_000;
+        let ranges = split_integer(1, 200_000, 6, adaptive).expect("20 万行按 6 片应能切");
+        assert_eq!(ranges.len(), 6);
+        // 但同样的表用旧的固定门槛就不再切 —— 这就是当初单流的成因
+        assert!(split_integer(1, 200_000, 6, MIN_ROWS_PER_SLICE).is_none());
     }
 
     #[test]
     fn 浮点分片同样首尾开放() {
-        let ranges = split_real(0.0, 1_000_000.0, 3).expect("应能切 3 片");
+        let ranges =
+            split_real(0.0, 1_000_000.0, 3, MIN_ROWS_PER_SLICE).expect("应能切 3 片");
         assert_eq!(ranges.len(), 3);
         assert!(ranges[0].low.is_none());
         assert!(ranges[2].high.is_none());

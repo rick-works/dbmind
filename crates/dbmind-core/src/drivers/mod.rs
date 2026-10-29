@@ -65,6 +65,14 @@ pub struct PreparedBatchCall<'a> {
     /// `The COMMIT TRANSACTION request has no corresponding BEGIN TRANSACTION`
     /// （真机踩到：数据其实已经进去了，结果却报失败）。
     pub in_transaction: bool,
+    /// 方言自己的保存点语句 `(建立, 回滚)`，`{sp}` 是保存点名占位符。
+    ///
+    /// 只在「调用方已开事务、驱动又不认 JDBC 保存点」时用得上：有的驱动把
+    /// `begin transaction`（SQL 文本开的事务）与 JDBC 事务分开看，
+    /// `setSavepoint` 会直接抛「AutoCommit 模式设置为 true 时无法设置保存点」。
+    /// 此时改用方言的 `save transaction` / `rollback transaction`，语义等价
+    /// （只回滚到本批，不动调用方的事务），字面量插入路径本来就是这么做的。
+    pub savepoint_sql: Option<(&'a str, &'a str)>,
 }
 
 /// 一次 `LOAD DATA LOCAL INFILE` 快速装载的上下文（目前只有 MySQL / MariaDB 目标用）。

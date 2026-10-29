@@ -1304,6 +1304,12 @@ impl Driver for AgentDriver {
                 if call.in_transaction {
                     params.insert("inTransaction".to_string(), json!(true));
                 }
+                // 方言保存点语句：宿主在「JDBC 保存点建不出来」时改用它们划批
+                //（SQL Server 的真机组合：SQL 文本开的事务 + 驱动认为 autocommit=true）。
+                if let Some((save, undo)) = call.savepoint_sql {
+                    params.insert("savepointSave".to_string(), json!(save));
+                    params.insert("savepointRollback".to_string(), json!(undo));
+                }
 
                 let outcome = self
                     .host
@@ -1314,9 +1320,18 @@ impl Driver for AgentDriver {
                 }
                 let value = outcome?;
                 if value.get("supported").and_then(|v| v.as_bool()) == Some(false) {
+                    // 宿主会带 `reason`（究竟缺 batchUpdates / transactions / savepoints）。
+                    // 丢掉它，排障就只剩「不支持」这三个字 —— SQL Server 这一路正是这样
+                    // 被误判了很久（metadata 三个能力位其实都是 true）。
+                    let reason = value
+                        .get("reason")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|text| !text.is_empty())
+                        .unwrap_or("宿主未给出原因");
                     return Err(DbMindError::new(
                         ErrorCode::DriverNotImplemented,
-                        "目标 JDBC 驱动不支持可回滚的预编译批量写入",
+                        format!("目标 JDBC 驱动不支持可回滚的预编译批量写入：{reason}"),
                     ));
                 }
                 if value.get("sessionReset").and_then(|v| v.as_bool()) == Some(false) {

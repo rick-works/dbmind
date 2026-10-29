@@ -120,6 +120,22 @@ impl Spec {
         self.savepoint
     }
 
+    /// 方言自己的**保存点语句**（`{sp}` 为占位符），用于「调用方已开事务、JDBC 驱动
+    /// 又不认 JDBC 保存点」这一种组合。
+    ///
+    /// 真机：SQL Server + mssql-jdbc 12.8 —— 写入插件是用 `begin transaction` 这条
+    /// **SQL** 开的事务，JDBC 侧 `getAutoCommit()` 仍是 true，于是宿主
+    /// `connection.setSavepoint()` 直接抛「AutoCommit 模式设置为 true 时无法设置保存点」，
+    /// 整批预编译写入被判「驱动不支持」并降级成字面量 INSERT（实测单流 781 → 1684 行/秒
+    /// 的差距）。T-SQL 自己是有 `save transaction` 的，字面量路径一直在用。
+    pub(crate) const fn savepoint_sql(&self) -> Option<(&'static str, &'static str)> {
+        match self.savepoint {
+            Savepoint::None => None,
+            Savepoint::Pg => Some(("savepoint {sp}", "rollback to savepoint {sp}")),
+            Savepoint::MsSql => Some(("save transaction {sp}", "rollback transaction {sp}")),
+        }
+    }
+
     pub(crate) const fn prepared_batch(&self) -> bool {
         self.prepared_batch
     }

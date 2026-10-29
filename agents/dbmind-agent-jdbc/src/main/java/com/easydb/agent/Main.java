@@ -643,6 +643,8 @@ public final class Main {
         PreparedStatement statement = null;
         Running running = null;
         Savepoint savepoint = null;
+        // 驱动不认 JDBC 保存点时的退路：方言自己的回滚语句（见下面的 catch 分支）。
+        String sqlSavepointUndo = null;
         boolean commitAttempted = false;
         try {
             statement = connection.prepareStatement(sql);
@@ -653,19 +655,40 @@ public final class Main {
             if (manageTransaction) {
                 connection.setAutoCommit(false);
             } else {
+                String savepointName = "DBMIND_BATCH_"
+                        + requestId.replaceAll("[^A-Za-z0-9_]", "_");
+                // Oracle 旧版本标识符上限 30；前缀占 13，留 28 足够且跨版本安全。
+                if (savepointName.length() > 28) {
+                    savepointName = savepointName.substring(0, 28);
+                }
+                boolean opened = false;
                 try {
-                    String savepointName = "DBMIND_BATCH_"
-                            + requestId.replaceAll("[^A-Za-z0-9_]", "_");
-                    // Oracle 旧版本标识符上限 30；前缀占 13，留 28 足够且跨版本安全。
-                    if (savepointName.length() > 28) {
-                        savepointName = savepointName.substring(0, 28);
-                    }
                     savepoint = connection.setSavepoint(savepointName);
+                    opened = true;
                 } catch (SQLException e) {
-                    JsonObject unsupported = new JsonObject();
-                    unsupported.addProperty("supported", false);
-                    unsupported.addProperty("reason", "当前事务无法创建保存点：" + e.getMessage());
-                    return unsupported;
+                    // 调用方用 `begin transaction` 这条 **SQL 文本** 开的事务，驱动侧
+                    // `getAutoCommit()` 仍然是 true，于是 setSavepoint 直接抛
+                    // 「AutoCommit 模式设置为 true 时无法设置保存点」
+                    //（真机：SQL Server + mssql-jdbc 12.8）。此时改用**方言自己的**
+                    // 保存点语句 —— 语义同样是「只回滚到本批，不动调用方的事务」，
+                    // 字面量插入路径本来就靠 `save transaction` 划批。
+                    String save = renderSavepoint(request, "savepointSave", savepointName);
+                    String undo = renderSavepoint(request, "savepointRollback", savepointName);
+                    if (save == null || undo == null) {
+                        return unsupportedPreparedBatch("当前事务无法创建保存点：" + e.getMessage());
+                    }
+                    try (Statement s = connection.createStatement()) {
+                        s.execute(save);
+                        sqlSavepointUndo = undo;
+                        opened = true;
+                    } catch (SQLException fallbackError) {
+                        return unsupportedPreparedBatch(
+                                "当前事务无法创建保存点：" + e.getMessage()
+                                        + "；方言保存点同样失败：" + fallbackError.getMessage());
+                    }
+                }
+                if (!opened) {
+                    return unsupportedPreparedBatch("当前事务无法创建保存点");
                 }
             }
 
@@ -681,7 +704,7 @@ public final class Main {
                     statement.addBatch();
                 }
             } catch (SQLException | RuntimeException e) {
-                rollbackPreparedWork(session, savepoint, manageTransaction, e);
+                rollbackPreparedWork(session, savepoint, sqlSavepointUndo, manageTransaction, e);
                 throw new Protocol.AgentException(
                         "DBMIND-QUERY-0002",
                         "PREPARED_BATCH_ROLLED_BACK：绑定批量参数失败，整批已回滚：" + e.getMessage(),
@@ -694,7 +717,7 @@ public final class Main {
                 statement.executeBatch();
             } catch (SQLException e) {
                 Protocol.AgentException failure = queryFailure(running, e);
-                rollbackPreparedWork(session, savepoint, manageTransaction, e);
+                rollbackPreparedWork(session, savepoint, sqlSavepointUndo, manageTransaction, e);
                 if ("DBMIND-QUERY-0004".equals(failure.code())
                         || "DBMIND-QUERY-0003".equals(failure.code())
                         || "DBMIND-CONN-0003".equals(failure.code())) {
@@ -728,6 +751,9 @@ public final class Main {
                     sessionReset = false;
                     dropSession(session, "恢复 autocommit 失败：" + e.getMessage());
                 }
+            } else if (sqlSavepointUndo != null) {
+                // 方言保存点没有「释放」这个概念（T-SQL 的 SAVE TRANSACTION 只能靠
+                // 外层 commit/rollback 清理），本批已成功，这里什么都不做。
             } else {
                 try {
                     connection.releaseSavepoint(savepoint);
@@ -746,7 +772,7 @@ public final class Main {
         } catch (SQLException e) {
             Protocol.AgentException failure = queryFailure(running, e);
             if (!commitAttempted) {
-                rollbackPreparedWork(session, savepoint, manageTransaction, e);
+                rollbackPreparedWork(session, savepoint, sqlSavepointUndo, manageTransaction, e);
                 throw new Protocol.AgentException(
                         failure.code(),
                         "PREPARED_BATCH_ROLLED_BACK：预编译批量写入准备失败，整批已回滚："
@@ -970,9 +996,28 @@ public final class Main {
 
     /** 自管事务走整批 rollback；外层事务内只回滚到本批保存点，不能动别人的事务。 */
     private static void rollbackPreparedWork(
-            Session session, Savepoint savepoint, boolean manageTransaction, Throwable cause) {
+            Session session,
+            Savepoint savepoint,
+            String sqlSavepointUndo,
+            boolean manageTransaction,
+            Throwable cause) {
         if (manageTransaction) {
             rollbackPreparedBatch(session, cause);
+            return;
+        }
+        // 方言保存点：`rollback transaction xxx` 只把事务回退到该点，@@TRANCOUNT 不变，
+        // 调用方随后那条 `commit` 依旧对得上（T-SQL 语义）。
+        if (sqlSavepointUndo != null) {
+            try (Statement s = session.connection().createStatement()) {
+                s.execute(sqlSavepointUndo);
+            } catch (SQLException rollbackError) {
+                dropSession(session, rollbackError.getMessage());
+                throw new Protocol.AgentException(
+                        "DBMIND-CONN-0003",
+                        "PREPARED_BATCH_ROLLBACK_FAILED：批量写入失败后无法回滚到保存点，禁止重试："
+                                + rollbackError.getMessage(),
+                        describe(rollbackError) + "\n原错误：" + cause);
+            }
             return;
         }
         try {
@@ -992,6 +1037,26 @@ public final class Main {
         } catch (SQLException ignored) {
             // 保留余下的保存点不改变数据正确性
         }
+    }
+
+    /** 把协议里的保存点模板渲染成本次批次的语句；没给模板就是 `null`。 */
+    private static String renderSavepoint(JsonObject request, String key, String name) {
+        if (!request.has(key) || request.get(key).isJsonNull()) {
+            return null;
+        }
+        String template = request.get(key).getAsString();
+        if (template == null || template.trim().isEmpty()) {
+            return null;
+        }
+        return template.replace("{sp}", name);
+    }
+
+    /** 「本批不可回滚」的统一回执：内核收到 supported=false 会降级为字面量 INSERT。 */
+    private static JsonObject unsupportedPreparedBatch(String reason) {
+        JsonObject unsupported = new JsonObject();
+        unsupported.addProperty("supported", false);
+        unsupported.addProperty("reason", reason);
+        return unsupported;
     }
 
     /** 按目标列类型绑定参数。数值仍走 JDBC 数值接口，避免把所有值都转成字符串。 */

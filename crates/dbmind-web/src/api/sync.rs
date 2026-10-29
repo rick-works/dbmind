@@ -39,7 +39,7 @@ use dbmind_core::{CellValue, ColumnDetail, TableKind};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::api::dialect::Dialect;
+use crate::api::dialect::{Dialect, DirectRefDepth};
 use crate::api::error::{XError, XResult};
 use crate::api::export::sql_literal;
 use crate::api::meta::{run_sql_in, run_sql_in_keyed, run_sql_in_write};
@@ -987,6 +987,11 @@ async fn run_target_prepared_insert(
     };
     let types = target_types.to_vec();
     let values = rows.to_vec();
+    // 方言保存点语句：SQL Server 用 `save transaction` / `rollback transaction`，
+    // 因为写入插件是用 SQL 文本开的 `begin transaction`，驱动侧 autocommit 仍是 true，
+    // 宿主的 `connection.setSavepoint()` 必然抛错（见 `Spec::savepoint_sql`）。
+    let savepoint_sql = crate::api::transfer::plugins::spec_data_for(target_kind.kind.key())
+        .savepoint_sql();
     let result = blocking(move || {
         // `in_transaction`：写入插件已经在目标会话上发过 `begin transaction`，
         // 宿主不能替它 commit（否则收尾的 commit 会报「没有对应的 BEGIN」）。
@@ -995,6 +1000,7 @@ async fn run_target_prepared_insert(
             types,
             values,
             in_transaction,
+            savepoint_sql,
             dbmind_core::AccessContext::Web,
         )
     })
@@ -3448,7 +3454,11 @@ pub(crate) async fn write_insert_rows(
                 Err(err) if err.code.as_deref() == Some("DBMIND-DRV-0001") => {
                     // 驱动声明不支持：后面的子批不必再逐个试探。
                     use_prepared = false;
-                    tracing::debug!(table, "目标驱动不支持预编译批量写入，改用 SQL 批处理");
+                    tracing::debug!(
+                        table,
+                        error = %err.message,
+                        "目标驱动不支持预编译批量写入，改用 SQL 批处理"
+                    );
                 }
                 Err(err) if err.message.contains(PREPARED_BATCH_ROLLED_BACK) => {
                     // 宿主确认整批已回滚，才允许走原来的字面量/逐行降级；否则
@@ -4547,6 +4557,139 @@ fn can_clear_before_retry(data_mode: DataMode, policy: Policy, same_table: bool)
     !same_table && (data_mode == DataMode::TruncateInsert || policy == Policy::Drop)
 }
 
+/// 直拷逃生阀：个别库的 `insert … select` 会被触发器/审计/权限拦住时，用它整体退回管道。
+///
+/// 语义与其它 `DBMIND_SYNC_*` 开关一致：**设了就不直拷**（`0/false/off` 视为没设）。
+fn direct_copy_disabled() -> bool {
+    std::env::var("DBMIND_SYNC_NO_DIRECT_COPY")
+        .map(|value| {
+            let value = value.trim();
+            !(value == "0"
+                || value.eq_ignore_ascii_case("false")
+                || value.eq_ignore_ascii_case("off"))
+        })
+        .unwrap_or(false)
+}
+
+/// 读一个连接的「实例指纹」；查不到就是空串（调用方按「不同实例」处理）。
+async fn instance_fingerprint(state: &AppState, conn: &str, scope: &str, sql: &str) -> String {
+    let Ok(result) = run_sql_in(state, conn, scope, sql.to_string(), 1).await else {
+        return String::new();
+    };
+    result
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .and_then(|cell| match cell {
+            CellValue::Text(text) => Some(text.trim().to_string()),
+            CellValue::Integer(n) => Some(n.to_string()),
+            _ => None,
+        })
+        .unwrap_or_default()
+}
+
+/// 源表在**目标会话**上的限定引用；`None` = 这次不该直拷（不同实例 / 不同引擎）。
+///
+/// 这条 `insert … select` 在目标连接上执行，所以源表名必须是目标会话认得的全限定名：
+/// - SQL Server 要**三段** `库.模式.表`（两段会被解析成「模式.表」，于是在目标库里找源表）；
+/// - MySQL / ClickHouse / Doris 是 `库.表`；
+/// - PG / Oracle / DB2 / 达梦 / Kingbase 是 `模式.表`（跨库引用在这些库里不存在）；
+/// - 嵌入式（H2 / Derby / SQLite / DuckDB）只有一张库，裸表名。
+///
+/// 限定层级由源方言自己声明（[`Dialect::direct_ref_depth`]），这里不做库名分支。
+async fn direct_source_ref(
+    state: &AppState,
+    src: &Side,
+    tgt: &Side,
+    source_kind: Dialect,
+    target_kind: Dialect,
+    table: &str,
+) -> Option<String> {
+    tracing::debug!(
+        table,
+        src = %src.conn,
+        tgt = %tgt.conn,
+        source = source_kind.kind.key(),
+        target = target_kind.kind.key(),
+        scope = %src.scope,
+        schema = ?src.schema,
+        "直拷判定"
+    );
+    // 引擎要一致：MySQL ↔ MariaDB 的语句完全兼容，可以互相引用；其余不跨引擎。
+    let same_family = source_kind.kind == target_kind.kind
+        || matches!(
+            (source_kind.kind.key(), target_kind.kind.key()),
+            ("mysql", "mariadb") | ("mariadb", "mysql")
+        );
+    if !same_family {
+        return None;
+    }
+    // 同一条连接 = 同一个物理会话，肯定是同一个实例；不同连接才需要指纹。
+    if src.conn != tgt.conn {
+        let Some(fingerprint_sql) = source_kind.instance_fingerprint_sql() else {
+            return None;
+        };
+        let left = instance_fingerprint(state, &src.conn, &src.scope, fingerprint_sql).await;
+        let right = instance_fingerprint(state, &tgt.conn, &tgt.scope, fingerprint_sql).await;
+        if left.is_empty() || left != right {
+            tracing::debug!(table, %left, %right, "两个连接不是同一实例，走管道传输");
+            return None;
+        }
+    }
+    // 用户已经把全限定名写进表名（`库.模式.表`）时不再拼前缀
+    if table.contains('.') {
+        return Some(source_kind.quote(table));
+    }
+    let scope = src.scope.trim();
+    let explicit_schema = src.schema.as_deref().map(str::trim).unwrap_or("");
+    let (first, second) = match scope.split_once('.') {
+        Some((left, right)) => (left.trim(), right.trim()),
+        None => (scope, ""),
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    match source_kind.direct_ref_depth() {
+        DirectRefDepth::DatabaseSchema => {
+            if first.is_empty() {
+                // 没选库 ⇒ 目标会话的当前库就是源库，只剩模式这一层
+                let schema = if explicit_schema.is_empty() { second } else { explicit_schema };
+                if !schema.is_empty() {
+                    parts.push(schema);
+                }
+            } else {
+                parts.push(first);
+                // 两段名在 T-SQL 里是「模式.表」：跨库必须给模式，缺省按 dbo
+                let schema = if explicit_schema.is_empty() {
+                    if second.is_empty() { "dbo" } else { second }
+                } else {
+                    explicit_schema
+                };
+                parts.push(schema);
+            }
+        }
+        DirectRefDepth::Database => {
+            // Doris 的 scope 可能带 catalog（`internal.xms`），交给 quote 逐段加引号
+            if !scope.is_empty() {
+                parts.push(scope);
+            }
+        }
+        DirectRefDepth::Schema => {
+            // 只有**真的知道模式**时才限定。`scope` 在 PG / Oracle 上就是库名
+            //（schema 是另选的），拿它当模式会拼出 `"demo"."orders"` 这种不存在的
+            // 引用 —— 真机就因此白退了一次管道。不知道模式时写裸名：目标会话与源
+            // 同库同 search_path，解析结果和读元数据时完全一致。
+            let schema = if explicit_schema.is_empty() { second } else { explicit_schema };
+            if !schema.is_empty() {
+                parts.push(schema);
+            }
+        }
+        DirectRefDepth::None => {}
+    }
+    parts.push(table);
+    let reference = source_kind.quote(&parts.join("."));
+    tracing::debug!(table, %reference, "同实例，走 insert … select 直拷");
+    Some(reference)
+}
+
 /// 目标端「表内写并发」的并行度（1 = 串行）。**依据类型声明，不靠猜**：
 ///
 /// - `singleConnectionPool` 的类型（H2 / Derby / SQLite / SQL Server / Redis）声明了
@@ -5209,33 +5352,35 @@ async fn sync_table_inner(
     // 改成页循环之后这三件事一起消失。跨页不再拼接批次（那只会让"已写行数"与真正
     // 落盘的行数差出一页，没有别的好处）。
     //
-    // ===== 同实例快速通道（MySQL → MySQL）=====
-    // 源与目标落在**同一个 MySQL 实例**（server_uuid 相同）且是纯插入/清空后导入时，
-    // 直接 `insert into 目标(列) select 列 from 源` —— 数据不经过应用层，
-    // 20 万行从分钟级降到秒级。不同实例 / upsert 模式 / 非 MySQL 系走原管道。
+    // ===== 同实例快速通道（任意关系型源/目标）=====
+    // 源与目标落在**同一个实例**且是纯插入/清空后导入时，直接
+    //   insert into 目标(列) select 列 from 源
+    // —— 数据由服务端自己搬，一个字节都不经过应用层。
+    //
+    // 这不是「优化一点点」：真机口径（实验室 SQL Server 20 万行 6 列，客户端到库
+    // 23 ms、单条连接上行 340 KB/s）走管道 **239 秒**，直拷 **2 秒**；同一个数据源
+    // 走 MySQL 时 5 秒。上行被逐连接限速时，调批大小/并发都只能逼近那条链路的物理
+    // 上限，只有「不搬字节」才能跨过去。
+    //
+    // 判据两条：**同一个实例** + **语句在目标会话上引用得到源表**（见 `direct_source_ref`）。
+    // `row_limit`（每表行数上限）只由管道按页实现；直拷是一条 `insert … select`，
+    // 想截断就得给每家的方言各拼一次 LIMIT，拼错就是「用户设了上限却搬了全表」。
+    // 这个场景很少见，直接不走直拷，退回管道（那里一定尊重上限）。
     if opts.sync_data
         && effective_mode != DataMode::Upsert
-        && matches!(source_kind.kind.key(), "mysql" | "mariadb")
-        && matches!(target_kind.kind.key(), "mysql" | "mariadb")
+        && !same_table
+        && opts.row_limit == 0
+        && !direct_copy_disabled()
     {
-        async fn read_uuid(state: &AppState, conn: &str, scope: &str) -> String {
-            let Ok(result) = run_sql_in(state, conn, scope, "select @@server_uuid as u".to_string(), 1).await
+        // 带标签的块：源表在目标会话上引用不到时 `break 'direct` 静静退回管道，
+        // 不能让一条「试探性」的语句把整张表判失败。
+        'direct: {
+            let Some(src_qualified) =
+                direct_source_ref(state, src, tgt, source_kind, target_kind, table).await
             else {
-                return String::new()
+                break 'direct;
             };
-            result
-                .rows
-                .first()
-                .and_then(|row| row.first())
-                .and_then(|cell| match cell {
-                    CellValue::Text(text) => Some(text.clone()),
-                    _ => None,
-                })
-                .unwrap_or_default()
-        }
-        let src_uuid = read_uuid(state, &src.conn, &src.scope).await;
-        let tgt_uuid = read_uuid(state, &tgt.conn, &tgt.scope).await;
-        if !src_uuid.is_empty() && src_uuid == tgt_uuid {
+            tracing::debug!(table, %src_qualified, "同实例直拷：源表引用");
             tracing::debug!(table, "同实例，走 insert … select 直拷");
             let col_list_src = columns
                 .iter()
@@ -5248,15 +5393,8 @@ async fn sync_table_inner(
                 .collect::<Vec<_>>()
                 .join(", ");
             // 直拷也带上用户的行过滤条件（同实例 insert…select 同样只搬过滤后的行）
-            // ⚠ 源表引用**必须带源库名限定**：这条 SQL 在目标连接上执行（目标影子已切到
-            // 目标库），不能复用 src.scoped 的裸名口径（那是「在源连接上执行」的规则）——
-            // 裸名会被解析到目标库，`from 目标表` 读到刚建好的空表，直拷插进去 0 行
-            //（真机：同实例双库同步 500 行 → 0 行，还报「直拷完成」）
-            let src_qualified = if src.scope.trim().is_empty() || table.contains('.') {
-                source_kind.quote(table)
-            } else {
-                source_kind.quote(&format!("{}.{table}", src.scope.trim()))
-            };
+            // 源表引用由 `direct_source_ref` 按方言限定（SQL Server 必须三段名，
+            // 两段名会被当成「模式.表」⇒ 在目标库里找源表，读到空表）。
             let where_sql = if table_where.is_empty() {
                 src_qualified
             } else {
@@ -5266,12 +5404,10 @@ async fn sync_table_inner(
                 "insert into {target_name} ({col_list_tgt}) select {col_list_src} from {where_sql}"
             );
             tracing::info!(sql = %insert_sql, "同实例直拷 SQL");
-            // 直拷同样要过 identity：同批 SET 开/关（会话级开关必须与写入同一批）
-            let insert_sql = with_identity(
-                insert_sql,
-                target_kind.kind.key() == "sqlserver",
-                &target_name,
-            );
+            // 直拷同样要过 identity：同批 SET 开/关（会话级开关必须与写入同一批）。
+            // 用前面探出来的 `identity_on` 而不是「目标是 SQL Server」—— 目标表**没有**
+            // identity 列时 SET 本身就会失败，并把整批拖死（与管道路径同一口径）。
+            let insert_sql = with_identity(insert_sql, identity_on, &target_name);
             // 直拷是一条 `insert … select` 大语句，发出去就**没法从中间打断**（只能等它
             // 自己跑完或超时），所以发之前先看一眼取消标志：点了停止就别再开始了。
             if let Some(task) = task {
@@ -5283,20 +5419,25 @@ async fn sync_table_inner(
             // 同步若没走到 commit，autocommit=0 的旧事务会一直开着，REPEATABLE READ
             // 的快照停在很久以前（直拷/回查全部看到旧世界，真机抓到过 src_visible=0）
             let _ = run_target(state, &tgt_target, "commit").await;
-            // 诊断 + 计数兜底：直拷前在**目标会话**上确认源表可见性。
-            // MySQL 驱动偶发把 INSERT…SELECT 的 affectedRows 回成 0；用这里已经
-            // 查出的源侧行数兜底，不能再去数目标表总行数（那会把历史行算进来）。
-            let mut expected_copy: Option<u64> = None;
-            if let Ok(result) = run_target(state, &tgt_target, &format!("select count(*) as n from {where_sql}")).await {
-                tracing::info!(src_visible = ?result.rows.first().and_then(|r| r.first()), "直拷前源表回查");
-                expected_copy = result.rows.first().and_then(|row| row.first()).and_then(|cell| match cell {
-                    CellValue::Integer(n) => Some((*n).max(0) as u64),
-                    CellValue::Real(n) => Some((*n).max(0.0) as u64),
-                    CellValue::Text(t) => t.trim().parse::<u64>().ok(),
-                    _ => None,
-                });
+            // 直拷前先确认**目标会话看得见源表**（跨库权限不足、限定名拼错、源表刚被删）。
+            // 用 `limit 1` 而不是 `count(*)`：千万行的表上 count 是一次全扫，而直拷本身
+            // 才刚开始 —— 探测的代价必须远小于被探测的事。
+            let probe_sql = if target_kind.needs_order_by_for_paging() {
+                format!(
+                    "select 1 as one from {where_sql} order by (select null) {}",
+                    target_kind.limit_clause(0, 1)
+                )
             } else {
-                tracing::warn!("直拷前源表回查失败（目标会话看不到源表）");
+                format!(
+                    "select 1 as one from {where_sql} {}",
+                    target_kind.limit_clause(0, 1)
+                )
+            };
+            if let Err(err) = run_target(state, &tgt_target, &probe_sql).await {
+                // 这条 `insert … select` 必然失败。宁可按管道慢一遍，也不能把这张表
+                // 判成失败 —— 直拷是加速通道，不该成为新的失败来源。
+                tracing::warn!(table, error = %err.message, "直拷前源表探测失败，改用管道传输");
+                break 'direct;
             }
             let copy_result = run_target(state, &tgt_target, &insert_sql).await;
             let mut copied = match &copy_result {
@@ -5309,7 +5450,25 @@ async fn sync_table_inner(
                 Err(err) => return ObjResult::failed(ty, table, err.message.clone()),
             };
             if copied == 0 {
-                copied = expected_copy.unwrap_or(0);
+                // 个别驱动把 INSERT…SELECT 的 affectedRows 回成 0（MySQL 真机偶发），
+                // 这时补一条源侧 count 兜底 —— 数的是源表（同一 where），不是目标表，
+                // 所以不会把历史行算进来。
+                if let Ok(result) =
+                    run_target(state, &tgt_target, &format!("select count(*) as n from {where_sql}"))
+                        .await
+                {
+                    copied = result
+                        .rows
+                        .first()
+                        .and_then(|row| row.first())
+                        .and_then(|cell| match cell {
+                            CellValue::Integer(n) => Some((*n).max(0) as u64),
+                            CellValue::Real(n) => Some((*n).max(0.0) as u64),
+                            CellValue::Text(t) => t.trim().parse::<u64>().ok(),
+                            _ => None,
+                        })
+                        .unwrap_or(0);
+                }
             }
             if let Some(task) = task {
                 // 直拷也是「读了 N 行、写了 N 行」：只记写会让进度卡出现

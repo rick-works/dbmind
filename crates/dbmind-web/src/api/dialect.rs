@@ -154,6 +154,24 @@ pub struct Dialect {
     pub kind: ConnectionKind,
 }
 
+/// 同实例直拷时，源表引用要限定到几层。
+///
+/// 直拷的语句是 `insert into 目标(列) select 列 from 源`，**在目标会话上执行** ——
+/// 源表名不带库/模式限定就会被解析成目标库里的同名表（真机：同实例双库同步读到
+/// 刚建好的空表，回报「直拷完成」却只搬了 0 行）。各家的限定层级并不一样，所以
+/// 由方言说清楚，而不是在同步层里按库名分支。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectRefDepth {
+    /// 三段名 `库.模式.表`（SQL Server：两段名是「模式.表」，跨库必须写三段）
+    DatabaseSchema,
+    /// 两段名 `库.表`（MySQL 系 / ClickHouse / Doris）
+    Database,
+    /// 两段名 `模式.表`（PG / Oracle / DB2 / 达梦 / Kingbase —— 没有跨库引用这回事）
+    Schema,
+    /// 只有一张库，裸表名（嵌入式 H2 / Derby / SQLite / DuckDB）
+    None,
+}
+
 /// 用户表单提交的三层权限（MySQL 语境）。
 ///
 /// `databases` / `tables` 里的名字都是**授权目标**（要授给这个用户的库/表），
@@ -3613,6 +3631,35 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         matches!(self.key(), "mysql" | "mariadb" | "postgresql")
     }
 
+    /// 同实例直拷：源表在**目标会话**上的限定层级（见 [`DirectRefDepth`]）。
+    pub fn direct_ref_depth(&self) -> DirectRefDepth {
+        match self.key() {
+            // 三段名。注意 SQL Server 的两段名是「模式.表」，不是「库.表」——
+            // 少了库名就等于在目标库里找源表，跨库同步会读到空表。
+            "sqlserver" => DirectRefDepth::DatabaseSchema,
+            "mysql" | "mariadb" | "clickhouse" | "doris" => DirectRefDepth::Database,
+            "postgresql" | "kingbase" | "oracle" | "dm" | "db2" => DirectRefDepth::Schema,
+            _ => DirectRefDepth::None,
+        }
+    }
+
+    /// 「两个连接是不是同一个实例」的指纹 SQL：只有指纹真的唯一的方言才给。
+    ///
+    /// 同**一条连接**不需要指纹（本来就是同一个物理会话）；这条只服务「用户建了两个
+    /// 连接、其实指向同一个库」的情况 —— 那种场景下直拷同样是数量级的差别。
+    /// 拿不准的方言（Doris / Oracle / DB2 / 嵌入式）一律返回 `None`：宁可走管道，
+    /// 也不要把数据插到另一个实例的同名表里。
+    pub fn instance_fingerprint_sql(&self) -> Option<&'static str> {
+        match self.key() {
+            "mysql" | "mariadb" => Some("select @@server_uuid as v"),
+            "sqlserver" => Some("select convert(nvarchar(256), serverproperty('ServerName')) as v"),
+            "postgresql" | "kingbase" => {
+                Some("select system_identifier::text as v from pg_control_system()")
+            }
+            _ => None,
+        }
+    }
+
     /// 清空一张表的语句（"清空后导入"模式用）。
     ///
     /// 为什么不能统一写 `delete from`：**ClickHouse 不吃裸 DELETE** ——
@@ -3624,6 +3671,11 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         match self.key() {
             // 没有 TRUNCATE 的方言
             "sqlite" | "derby" => format!("delete from {table}"),
+            // DB2 的 TRUNCATE 要求显式写 IMMEDIATE：真空机实测裸 `truncate table x`
+            // 报 SQLCODE=-104 / SQLSTATE=42601「unexpected token END-OF-STATEMENT ...
+            // expected tokens may include: IMMEDIATE」—— 「清空后导入」在 DB2 上
+            // 之前是直接失败的。
+            "db2" => format!("truncate table {table} immediate"),
             _ => format!("truncate table {table}"),
         }
     }

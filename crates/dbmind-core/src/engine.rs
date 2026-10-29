@@ -1006,19 +1006,21 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         rows: Vec<Vec<CellValue>>,
         ctx: AccessContext,
     ) -> Result<QueryResult> {
-        self.execute_prepared_insert_batch_in(request, target_types, rows, false, ctx)
+        self.execute_prepared_insert_batch_in(request, target_types, rows, false, None, ctx)
     }
 
     /// 同 [`Self::execute_prepared_insert_batch`]，但**声明调用方已经开着事务**。
     ///
     /// 见 [`PreparedBatchCall::in_transaction`]：宿主不能再 `commit` 别人的事务，
-    /// 只能在自己的坑位上打保存点。
+    /// 只能在自己的坑位上打保存点。`savepoint_sql` 是该方言的保存点语句
+    /// （`{sp}` 占位），驱动不认 JDBC 保存点时宿主改用它。
     pub fn execute_prepared_insert_batch_in(
         &self,
         request: QueryRequest,
         target_types: Vec<Option<String>>,
         rows: Vec<Vec<CellValue>>,
         in_transaction: bool,
+        savepoint_sql: Option<(&str, &str)>,
         ctx: AccessContext,
     ) -> Result<QueryResult> {
         if !request.internal {
@@ -1083,6 +1085,7 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
             read_only,
             session,
             in_transaction,
+            savepoint_sql,
         });
         self.cancels.finish(&execution_id);
 
