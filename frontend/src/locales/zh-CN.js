@@ -2753,6 +2753,8 @@ export default {
   'sqlq.editsLoseWarn': '有 {n} 处单元格修改尚未提交，继续操作将放弃这些修改',
   'sqlq.editsCommitted': '已更新 {n} 行',
   'sqlq.editBusy': '上一次修改还在提交中，请等按钮上的转圈结束再点',
+  'sqlq.commitFailed': '提交修改失败：{msg}',
+  'sqlq.txActionFailed': '事务操作失败：{msg}',
   'sqlq.editsNoResult': '提交完成，但服务端没有返回执行结果 —— 这次修改可能没有生效，请查看任务日志或重试',
   'sqlq.editsNoRow': '语句已执行，但一行都没有被更新：这行可能已被别人改过，或用于定位的条件已不匹配',
   'sqlq.rememberCommit': '（事务模式：还需点「提交」才会真正落地）',

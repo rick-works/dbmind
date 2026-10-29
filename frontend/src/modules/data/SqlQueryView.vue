@@ -2218,9 +2218,9 @@ const commitEdits = async () => {
     const b = await executeSqlBatch(connId, sqlText, db, execId.value, null, undefined, uiSession)
     const results = (b && Array.isArray(b.results)) ? b.results : []
     // 「服务端没回结果」以前会被当成成功（results 空 ⇒ failed 找不到 ⇒ 弹「已更新 0 行」）
-    if (!results.length) { ElMessageBoxWithFix(t('sqlq.editsNoResult')); return }
+    if (!results.length) { notifyActionError(t('sqlq.editsNoResult')); return }
     const failed = results.find(r => !r.success)
-    if (failed) { ElMessageBoxWithFix(failed.message || t('ai.runFailed')); return }
+    if (failed) { notifyActionError(failed.message || t('ai.runFailed'), 'sqlq.commitFailed'); return }
     // 成功：新值早已写回行数据（编辑时就地更新），这里只清空缓冲
     pendingEdits.value = []
     const affected = results.reduce((m, r) => m + (r.affectedRows || 0), 0)
@@ -2232,7 +2232,7 @@ const commitEdits = async () => {
         + (txMode.value ? ' ' + t('sqlq.rememberCommit') : ''))
     }
   } catch (e) {
-    ElMessageBoxWithFix(e?.message || t('ai.runFailed'))
+    notifyActionError(e?.message || t('ai.runFailed'), 'sqlq.commitFailed')
   } finally {
     editsBusy.value = false
   }
@@ -2265,10 +2265,10 @@ const txEnd = async (action) => {
       txDirty.value = false
       ElMessage.success(action === 'commit' ? t('sqlq.txCommitted') : t('sqlq.txRolledBack'))
     } else {
-      ElMessageBoxWithFix((r && r.message) || t('sqlq.txFail'))
+      notifyActionError((r && r.message) || t('sqlq.txFail'), 'sqlq.txActionFailed')
     }
   } catch (e) {
-    ElMessageBoxWithFix(e?.message || t('sqlq.txFail'))
+    notifyActionError(e?.message || t('sqlq.txFail'), 'sqlq.txActionFailed')
   } finally {
     txBusy.value = false
   }
@@ -2294,11 +2294,11 @@ const toggleTxMode = async () => {
         txMode.value = true
         ElMessage.success(t('sqlq.txOn'))
       } else {
-        ElMessageBoxWithFix((r && r.message) || t('sqlq.txFail'))
+        notifyActionError((r && r.message) || t('sqlq.txFail'), 'sqlq.txActionFailed')
       }
     }
   } catch (e) {
-    ElMessageBoxWithFix(e?.message || t('sqlq.txFail'))
+    notifyActionError(e?.message || t('sqlq.txFail'), 'sqlq.txActionFailed')
   } finally {
     txBusy.value = false
   }
@@ -4838,6 +4838,22 @@ const onSaveClick = () => {
 
 const ElMessageBoxWithFix = (errMsg) => {
   lastError.value = errMsg
+}
+
+/**
+ * 「按钮触发的写操作」失败提示（提交修改 / 事务提交回滚）。
+ *
+ * 为什么不能再用 ElMessageBoxWithFix：它名字像弹框，实际只是把文案丢进 lastError，
+ * 靠结果区的「SQL 执行失败」面板渲染。而这几处按钮点下去时结果区仍是上一次成功的查询，
+ * 面板压根不显示 —— 错误就这么凭空消失了（真机就是这么「点提交没反应、也没报错」的，
+ * 后端其实已经返回 Code: 420 Cannot UPDATE key column）。
+ * 这里改成右上角 error toast（与「查看数据 → 保存修改」同一款），顺手也写 lastError，
+ * 结果区恰好处于失败态时仍能配合 AI 修复。
+ */
+const notifyActionError = (msg, prefixKey) => {
+  const text = String(msg || t('ai.runFailed'))
+  lastError.value = text
+  ElMessage({ type: 'error', message: prefixKey ? t(prefixKey, { msg: text }) : text, duration: 8000, showClose: true })
 }
 
 const lastError = ref('')

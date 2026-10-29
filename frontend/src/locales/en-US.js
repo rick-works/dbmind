@@ -2741,6 +2741,8 @@ export default {
   'sqlq.editsLoseWarn': '{n} cell edit(s) not applied yet — continuing will discard them',
   'sqlq.editsCommitted': '{n} row(s) updated',
   'sqlq.editBusy': 'The previous change is still being committed - wait for the spinner on the button to stop',
+  'sqlq.commitFailed': 'Commit failed: {msg}',
+  'sqlq.txActionFailed': 'Transaction failed: {msg}',
   'sqlq.editsNoResult': 'Commit finished but the server returned no execution result - the change may not have been applied; check the task log or retry',
   'sqlq.editsNoRow': 'The statement ran but no row was updated: the row may have been changed elsewhere, or the WHERE condition no longer matches',
   'sqlq.rememberCommit': '(Transaction mode: click Commit to persist)',
