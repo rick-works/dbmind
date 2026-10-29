@@ -3596,6 +3596,58 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         Some(format!("drop {kind} if exists {}", self.quote(name)))
     }
 
+    /// 视图 / 例程改名（同步要复刻源端「对象名与定义正文不一致」的状态时用）。
+    ///
+    /// 只有 SQL Server 与 PostgreSQL 有真正的改名语句：
+    /// - SQL Server 的 `sp_rename` 是唯一入口，它**只改目录**（`sys.objects.name`），
+    ///   不改 `sys.sql_modules.definition` 里的正文 —— 这正是源库里「树上 `test1111`、
+    ///   定义里 `CREATE PROCEDURE [test111]`」的来历，同步复刻它得靠同一句 `sp_rename`；
+    ///   参数是**字符串字面量**（不是标识符），且**必须带模式**，否则按调用者的默认模式解析。
+    /// - PostgreSQL 是 `alter <kind> <old> rename to <new>`；触发器要在所属表上改
+    ///   （`alter trigger … on <表>`），这里不支持。
+    ///
+    /// 其余方言（MySQL 系 / Oracle / DB2 / H2 / Derby / DM）没有改名语句，
+    /// 返回 `None` 让调用方改走「改写定义里的名字」这条路。
+    pub fn rename_object_sql(
+        &self,
+        kind: &str,
+        from: &str,
+        to: &str,
+        schema: Option<&str>,
+    ) -> Option<String> {
+        match self.key() {
+            "sqlserver" => {
+                if !matches!(kind, "view" | "procedure" | "function" | "trigger") {
+                    return None;
+                }
+                let schema = schema.map(str::trim).filter(|s| !s.is_empty());
+                let old = match schema {
+                    Some(schema) => format!("{schema}.{from}"),
+                    None => from.to_string(),
+                };
+                Some(format!(
+                    "exec sp_rename N'{}', N'{}'",
+                    old.replace('\'', "''"),
+                    to.replace('\'', "''")
+                ))
+            }
+            "postgresql" | "kingbase" => {
+                if !matches!(kind, "view" | "procedure" | "function") {
+                    return None;
+                }
+                let qualified = match schema.map(str::trim).filter(|s| !s.is_empty()) {
+                    Some(schema) => format!("{}.{}", self.quote(schema), self.quote(from)),
+                    None => self.quote(from),
+                };
+                Some(format!(
+                    "alter {kind} {qualified} rename to {}",
+                    self.quote(to)
+                ))
+            }
+            _ => None,
+        }
+    }
+
     /// 分页子句（`offset` 从 0 开始）。
     pub fn limit_clause(&self, offset: u64, size: u64) -> String {
         match self.key() {

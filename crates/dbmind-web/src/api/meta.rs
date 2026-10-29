@@ -2489,12 +2489,40 @@ async fn synthesize_ddl(
 /// 这样的文件**重新导入会直接报语法错**（导出能用、还原不能用是最坏的一种）。
 /// 要求"第一个有内容的行以 create 开头"，正好挡住这类"恰好含 create 的配置串"。
 pub(crate) fn looks_like_ddl(text: &str) -> bool {
-    for line in text.lines() {
-        let line = line.trim_start();
-        if line.is_empty() || line.starts_with("--") || line.starts_with("/*") {
+    // **块注释必须按「跨行状态」处理**，不能只看行首 `/*`：真机上有个函数定义是
+    //   /*\n\nSELECT * FROM [fn_save_rollover] (...)\n*/\ncreate function ...
+    // 老实现跳过 `/*` 那一行，第二行的 `SELECT` 就让它判定「不是建对象语句」，
+    // 于是整库同步把它当成「源库里没有取到该对象的定义」跳掉（而它明明有 4784 字符的定义）。
+    // 行注释 `--` 是逐行的，照旧跳过即可。
+    let mut in_block = false;
+    for raw in text.lines() {
+        let mut rest = raw.trim_start();
+        loop {
+            if in_block {
+                match rest.find("*/") {
+                    Some(i) => {
+                        in_block = false;
+                        rest = rest[i + 2..].trim_start();
+                    }
+                    None => {
+                        rest = "";
+                        break;
+                    }
+                }
+            } else if rest.starts_with("--") {
+                rest = "";
+                break;
+            } else if let Some(tail) = rest.strip_prefix("/*") {
+                in_block = true;
+                rest = tail.trim_start();
+            } else {
+                break;
+            }
+        }
+        if rest.is_empty() {
             continue;
         }
-        return line.to_ascii_lowercase().starts_with("create");
+        return rest.to_ascii_lowercase().starts_with("create");
     }
     false
 }

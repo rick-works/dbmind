@@ -6062,6 +6062,123 @@ async fn sync_view(
     }
 }
 
+/// 定义正文里写着的对象名，以及它在原文里的字节区间（见 [`defined_object_name`]）。
+struct DefinedName {
+    name: String,
+    start: usize,
+    end: usize,
+}
+
+/// 从 `create …` 定义里解析出**正文里写着的对象名**及它的字节区间。
+///
+/// 为什么非得解析：SQL Server 的 `sp_rename` 只改目录（`sys.objects.name`），**不改
+/// `sys.sql_modules.definition` 里的正文**。源库因此会出现「树上是 `test1111`、打开定义是
+/// `CREATE PROCEDURE [test111]`」的状态 —— 而同步是把定义原样拿到目标端执行的，建出来的
+/// 自然是正文里的名字，于是两边目录对不上（真机反馈：同步后目标端叫 `test111`、源端叫
+/// `test1111`）。解析出这个名字后，调用方才能在建完之后改回清单名（或直接改写正文）。
+fn defined_object_name(definition: &str, kind: &str) -> Option<DefinedName> {
+    let keyword = match kind {
+        "procedure" => "procedure|proc",
+        "function" => "function",
+        "view" => "view",
+        "trigger" => "trigger",
+        "event" => "event",
+        _ => return None,
+    };
+    // 标识符：`[...]`（SQL Server，`]]` 转义）/ `"..."` / `` `...` `` / 朴素名字
+    let ident = r#"(?:\[(?:[^\]]|\]\])*\]|"(?:[^"]|"")*"|`(?:[^`]|``)*`|[A-Za-z0-9_$#@]+)"#;
+    // 头部只有 `create [or alter|or replace] [definer=…]` 这一小段：`[^\n]{0,200}?` 既够跨过
+    // MySQL 的 definer 子句，又不会被正文里偶然出现的 `view` / `function` 字样带偏。
+    let re = regex::Regex::new(&format!(
+        r#"(?is)^[\s\u{{feff}}]*create\s+(?:or\s+(?:alter|replace)\s+)?[^\n]{{0,200}}?\b(?:{keyword})\b\s+({ident}(?:\s*\.\s*{ident})*)"#
+    ))
+    .ok()?;
+    let caps = re.captures(definition)?;
+    let chain = caps.get(1)?;
+    // 链里最后一段才是对象名（前面的 `[dbo].` / `"public".` 是模式限定）
+    let (start, end) = last_ident_span(definition, chain.start(), chain.end())?;
+    Some(DefinedName {
+        name: unquote_ident(&definition[start..end]),
+        start,
+        end,
+    })
+}
+
+/// 在 `a.b.[c]` 这样的标识符链里定位最后一段的区间（尊重引号：`[a.b]` 是一个整体）。
+fn last_ident_span(text: &str, start: usize, end: usize) -> Option<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut last = start;
+    let mut i = start;
+    while i < end {
+        match bytes[i] {
+            b'[' => {
+                while i < end && bytes[i] != b']' {
+                    i += 1;
+                }
+            }
+            mark @ (b'"' | b'`') => {
+                i += 1;
+                while i < end {
+                    if bytes[i] == mark {
+                        // 连写两个引号是转义，不是结束
+                        if i + 1 < end && bytes[i + 1] == mark {
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+            }
+            b'.' => last = i + 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    while last < end && bytes[last].is_ascii_whitespace() {
+        last += 1;
+    }
+    (last < end).then_some((last, end))
+}
+
+/// 去掉标识符外层的引号（`[a]` / `"a"` / `` `a` `` → `a`）；朴素名字原样返回。
+fn unquote_ident(text: &str) -> String {
+    let trimmed = text.trim();
+    let chars: Vec<char> = trimmed.chars().collect();
+    if chars.len() < 2 {
+        return trimmed.to_string();
+    }
+    let (first, last) = (chars[0], chars[chars.len() - 1]);
+    let inner: String = chars[1..chars.len() - 1].iter().collect();
+    match (first, last) {
+        ('[', ']') => inner.replace("]]", "]"),
+        ('"', '"') => inner.replace("\"\"", "\""),
+        ('`', '`') => inner.replace("``", "`"),
+        _ => trimmed.to_string(),
+    }
+}
+
+/// 目标端是否已经有这个对象（按「取定义」这条路判断，与「查看定义」同一套口径）。
+async fn object_defined_in(
+    state: &AppState,
+    target: &str,
+    dialect: &Dialect,
+    object_type: &str,
+    name: &str,
+    schema: Option<&str>,
+) -> bool {
+    let Some(sql) = dialect.object_source(object_type, name, schema).sql() else {
+        return false;
+    };
+    match run_target(state, target, &sql).await {
+        Ok(result) => result.rows.iter().flatten().any(|value| match value {
+            CellValue::Text(text) => crate::api::meta::looks_like_ddl(text),
+            _ => false,
+        }),
+        Err(_) => false,
+    }
+}
+
 /// 例程 / 触发器 / 事件：定义同样从 `object_source` 取 —— 与「查看定义」「导出」同一条路。
 ///
 /// 原先这四类在同步里是**一律跳过**的（`UNSUPPORTED_KINDS`），可它们跟视图没有本质区别：
@@ -6158,34 +6275,125 @@ async fn sync_object_source(
         Ok(target) => target,
         Err(err) => return ObjResult::failed(kind, name, err.message),
     };
+    // 这里要的是**模式**，不是「库」：SQL Server 的 `sp_rename` 收 `schema.object`，
+    // 写成 `库.object` 会报 `No item by the name of 'db.t' could be found in the current
+    // database`（真机踩过）。没有模式信息就给裸名 —— sp_rename 会按调用者的默认模式解析。
+    let tgt_mode = tgt
+        .schema
+        .as_ref()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .or_else(|| crate::api::meta::split_db_schema(&tgt.scope, &target_kind).1);
+    // 定义正文里的对象名可能跟清单里的名字不同（源库 `sp_rename` 过：目录名 `test1111`、
+    // 正文仍是 `CREATE PROCEDURE [test111]`）。两种收尾方式，优先「建完改名」—— 这样目标端
+    // 的正文与源库**完全一致**（连这种"名不副实"的状态都复刻）；方言没有改名语句时退化成
+    // 「改写正文里的名字」，名字优先，正文措辞只能让步（见 `Dialect::rename_object_sql`）。
+    let defined = defined_object_name(&definition, kind)
+        .filter(|found| !found.name.is_empty() && !found.name.eq_ignore_ascii_case(name));
+    let rename_sql = defined.as_ref().and_then(|found| {
+        target_kind.rename_object_sql(kind, &found.name, name, tgt_mode.as_deref())
+    });
+    let definition = match (defined.as_ref(), rename_sql.is_none()) {
+        (Some(found), true) => format!(
+            "{}{}{}",
+            &definition[..found.start],
+            target_kind.quote(name),
+            &definition[found.end..]
+        ),
+        _ => definition,
+    };
     if opts.policy == Policy::Drop {
-        match target_kind.drop_object_sql(kind, name) {
-            Some(drop_sql) => {
-                if let Some(task) = task {
-                    task.log(format!("{} {name}：删除目标{}", kind_label(kind), kind_label(kind)));
+        // 要删的不止清单名：上一轮若按正文名建过对象（见 `defined`），那个残留也得清掉，
+        // 否则重复同步会撞「对象已存在」。
+        let mut victims: Vec<&str> = vec![name];
+        if let Some(found) = defined.as_ref() {
+            victims.push(found.name.as_str());
+        }
+        for (index, victim) in victims.iter().enumerate() {
+            match target_kind.drop_object_sql(kind, victim) {
+                Some(drop_sql) => {
+                    if let Some(task) = task {
+                        task.log(format!("{} {name}：删除目标{}", kind_label(kind), kind_label(kind)));
+                    }
+                    // 目标没有这个对象时 `if exists` 不会报错，所以不看结果
+                    let _ = run_target(state, &tgt_target, &drop_sql).await;
                 }
-                // 目标没有这个对象时 `if exists` 不会报错，所以不看结果
-                let _ = run_target(state, &tgt_target, &drop_sql).await;
-            }
-            None => {
-                return ObjResult::skipped(
-                    kind,
-                    name,
-                    format!(
-                        "「删除重建」要先删目标对象，而 {} 不支持 `drop {kind} if exists` —— \
-                         请先在目标库删除后再同步",
-                        target_kind.kind.key().to_ascii_uppercase()
-                    ),
-                )
+                None if index == 0 => {
+                    return ObjResult::skipped(
+                        kind,
+                        name,
+                        format!(
+                            "「删除重建」要先删目标对象，而 {} 不支持 `drop {kind} if exists` —— \
+                             请先在目标库删除后再同步",
+                            target_kind.kind.key().to_ascii_uppercase()
+                        ),
+                    )
+                }
+                // 正文名那一条删不掉就算了：它只是上一轮留下的残留，下面建的时候数据库会说话
+                None => {}
             }
         }
+    }
+    // 非「删除重建」时目标已有同名对象就该原样保留。正常路径（正文名 == 清单名）由数据库
+    // 自己撞名报错；只有「要改名」这条分支得自己先探一下，否则会白建一个正文名的对象，
+    // 再改名时才发现目标早就有了，平白在目标端留个垃圾。
+    if defined.is_some()
+        && opts.policy != Policy::Drop
+        && object_defined_in(state, &tgt_target, &target_kind, kind, name, tgt_mode.as_deref())
+            .await
+    {
+        return ObjResult::skipped(kind, name, "目标已存在同名对象（保留结构策略下不动它）");
     }
     if let Some(task) = task {
         task.log(format!("{} {name}：创建{}", kind_label(kind), kind_label(kind)));
     }
-    match run_target(state, &tgt_target, &definition).await {
-        Ok(_) => ObjResult::ok(kind, name, "同步完成", 0, 0),
-        Err(err) => ObjResult::failed(kind, name, err.message),
+    // 定义按原样执行（库名已换成目标库、引号已按目标方言改写）。
+    if let Err(err) = run_target(state, &tgt_target, &definition).await {
+        return ObjResult::failed(kind, name, err.message);
+    }
+    // 正文名与清单名一致是常态：一个字都不用再动
+    let Some(found) = defined.as_ref() else {
+        return ObjResult::ok(kind, name, "同步完成", 0, 0);
+    };
+    // 走「改写正文」那条路时名字已经对了（`rename_sql` 为 None），不必再改
+    let Some(rename_sql) = rename_sql else {
+        return ObjResult::ok(
+            kind,
+            name,
+            format!(
+                "同步完成（定义里的名字是 {}，已按目标名 {name} 改写后创建）",
+                found.name
+            ),
+            0,
+            0,
+        );
+    };
+    if let Some(task) = task {
+        task.log(format!(
+            "{} {name}：定义里写的名字是 {}，改回 {name}",
+            kind_label(kind),
+            found.name
+        ));
+    }
+    match run_target(state, &tgt_target, &rename_sql).await {
+        Ok(_) => ObjResult::ok(
+            kind,
+            name,
+            format!(
+                "同步完成（定义里写的名字是 {}，已改名为 {name}，与源库保持一致）",
+                found.name
+            ),
+            0,
+            0,
+        ),
+        Err(err) => ObjResult::failed(
+            kind,
+            name,
+            format!(
+                "已按定义里的名字 {} 建好，但改名回 {name} 失败：{}",
+                found.name, err.message
+            ),
+        ),
     }
 }
 

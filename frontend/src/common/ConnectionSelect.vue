@@ -21,7 +21,11 @@
     @change="(v) => emit('change', v)"
     @visible-change="onVisibleChange"
   >
-    <template #prefix>
+    <!-- **未选中时不要渲染 prefix 容器**：Element Plus 只要看到 `#prefix` 插槽存在，
+         就会保留前缀位并给文本多让出 4px（实测 placeholder left 12px vs 普通 el-select 8px），
+         于是同一列里「连接」的「请选择」比下面「库 / 模式」的往右偏一格（真机反馈）。
+         选中时才需要那颗数据库类型图标，那时前缀位本来就该占。 -->
+    <template v-if="selected || $slots.prefix" #prefix>
       <slot name="prefix">
         <DbLogo v-if="selected" :type="selected.type" :size="16" class="sel-logo" />
       </slot>
