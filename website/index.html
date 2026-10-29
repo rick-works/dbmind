@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.7.2（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.7.2</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-29</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>弹窗「全屏 / 拖大后内容只占上面一截」的一批问题修掉了：任务中心、设置、数据库转储、数据生成、连接编辑、知识库设置、SQL 试跑与执行计划、AI 优化与解释 —— 正文现在铺满弹窗、列表自己滚，底部按钮也不会被挤出屏幕</b></li>
+            <li><b>设置弹窗的左右两栏改成各滚各的：以前整块一起滚，左侧菜单挤不下时也没有自己的滚动条；现在滚轮停在哪栏就只动哪栏</b></li>
+            <li><b>树上每张表的行数回填提速</b>：从「一张表一次往返」改成一批合成一条语句（95 张表 2.8 秒 → 1.8 秒），碰上大表会自动缩小批量，避免整批超时</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.7.2" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.7.2" target="_blank" rel="noopener">下载 v1.7.2</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.7.1（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.7.1</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-28</span>
           </div>
           <ul class="rel-notes">
