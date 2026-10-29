@@ -78,7 +78,13 @@ watch(() => props.modelValue, (v) => { visible.value = v })
 watch(visible, (v) => emit('update:modelValue', v))
 // 每次打开都重新枚举（编辑器里随时可能新增/修改了脚本）；顺手按当前视口重算表格高度
 // —— 弹窗可能在窗口被拖动/最大化之后才打开，onMounted 那一刻的视口不一定是现在的
-watch(visible, (v) => { if (v) { syncTableH(); load() } })
+watch(visible, (v) => {
+  if (!v) return
+  syncTableH()
+  load()
+  // 弹窗 DOM 要等这一帧之后才挂到 body 上，那时才能挂全屏/尺寸观察器
+  setTimeout(bindDialogObservers, 120)
+})
 
 const keyword = ref('')
 const rows = ref([])
@@ -89,15 +95,57 @@ const connMap = ref({})
    320~640 之间夹住：矮窗口不出屏（弹窗总高受全局 max-height: 100vh-24px 兜底），
    高窗口最多 640（再多也只是空白行，不如让弹窗紧凑些）。 */
 const tableH = ref(520)
+
+/** 全屏态（右上角 ⤢，见 utils/dialogMaximize.js）算表格高度：弹窗高度这时是「视口 - 24」
+ *  并且固定，表格直接吃掉「弹窗高 - 头部 - 内边距 - 工具条 - 间隙」剩下的全部高度。
+ *  不这么做的话，表格还按「视口 - 300」算，全屏后底部空出一大截（真机截图）。 */
+const syncMaxTableH = (dlg) => {
+  const body = dlg.querySelector('.el-dialog__body')
+  const bar = dlg.querySelector('.sm-toolbar')
+  if (!body) return
+  const cs = getComputedStyle(body)
+  const pad = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0)
+  // 全屏态下 .el-dialog__body 被全局 dc-resizable 规则设成 flex:1 + 固定高度（弹窗高 - 头部），
+  // 所以它的 clientHeight 就是可分配空间，不受表格内容影响（直接量它，别自己拿 dialog 高减头部，
+  // 头部/间距的口径差一点就会让表格溢出或空一条）
+  const avail = body.clientHeight - pad - (bar ? bar.offsetHeight : 0) - 8
+  if (avail > 120) tableH.value = Math.floor(avail)
+}
+
 const syncTableH = () => {
+  const dlg = document.querySelector('.el-dialog.script-mgr-dialog')
+  if (dlg && dlg.classList.contains('dc-max')) { syncMaxTableH(dlg); return }
   const vh = typeof window !== 'undefined' ? window.innerHeight : 900
   tableH.value = Math.max(320, Math.min(640, vh - 300))
 }
+
+// 弹窗是 teleport 到 body 的，得等它渲染出来再挂观察器：
+//  · MutationObserver 盯 class —— 点全屏/还原时重算
+//  · ResizeObserver 盯尺寸 —— 全屏态下拖窗口或拖边框时重算（非全屏不看，避免"表格改高→弹窗改高"的循环）
+let dlgObservers = null
+let boundDlg = null
+const bindDialogObservers = () => {
+  const dlg = document.querySelector('.el-dialog.script-mgr-dialog')
+  if (!dlg || dlg === boundDlg) return
+  dlgObservers?.disconnect()
+  const ro = new ResizeObserver(() => { if (dlg.classList.contains('dc-max')) syncMaxTableH(dlg) })
+  ro.observe(dlg)
+  const mo = new MutationObserver(() => syncTableH())
+  mo.observe(dlg, { attributes: true, attributeFilter: ['class'] })
+  dlgObservers = { disconnect: () => { ro.disconnect(); mo.disconnect() } }
+  boundDlg = dlg
+}
+
 onMounted(() => {
   syncTableH()
   window.addEventListener('resize', syncTableH)
 })
-onBeforeUnmount(() => window.removeEventListener('resize', syncTableH))
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', syncTableH)
+  dlgObservers?.disconnect()
+  dlgObservers = null
+  boundDlg = null
+})
 
 // ===== 数据枚举：遍历 localStorage 里 dc_scripts:<connId>:<db> 前缀的全部 key =====
 // value 结构与 SQL 编辑器的保存格式一致：[{ id, name, content, time }]
