@@ -4924,6 +4924,8 @@ const dbOrSchemaNodes = async (connId, connType, dbList, catalog) => {
       const next = all.slice(0, Math.min(shown + GROW_CHUNK, all.length))
       node.data.children = next
       shown = next.length
+      // 每补一批重新过滤：后台补页不动筛的话，搜「orders」也会把整库表一屏屏铺出来
+      reapplyTreeFilter()
       if (shown < all.length) setTimeout(step, 60)
     }
     // 先让"首屏那一页"这一帧画出来，再开始补
@@ -5282,6 +5284,8 @@ const lazyLoadRaw = async (node, resolve) => {
   } catch (e) {
     resolve([])
   }
+  // 懒加载长出来的新节点也要服从顶部搜索词（放到下一拍：节点在 resolve 之后才建出来）
+  if (filterText.value) setTimeout(reapplyTreeFilter, 0)
 }
 
 // 刷新按钮：重新拉取当前连接的 dbs，再重建树（懒加载缓存随之清除）
@@ -5315,6 +5319,9 @@ const refreshTree = async () => {
   }
   await refreshAllTables()
   await buildTree()
+  // 整棵树重建后，搜索词要继续生效（否则「刷新」= 把筛选结果冲掉）
+  await nextTick()
+  reapplyTreeFilter()
   treeLoading.value = false
 }
 
@@ -5338,6 +5345,19 @@ watch(filterText, (v) => {
   clearTimeout(filterTimer)
   filterTimer = setTimeout(() => treeRef.value?.filter(v), 150)
 })
+
+/**
+ * 重新应用一次左侧树的搜索过滤。
+ *
+ * 为什么需要：`filter()` 只处理**调用那一刻已存在**的节点。而树是懒加载的 ——
+ * 展开一个节点、右键「刷新」某个分类/库、点顶部刷新按钮，都会**事后**长出（或整批换掉）
+ * 子节点，这些新节点的 `visible` 默认是 true，于是「搜了关键词 → 刷新/展开 → 冒出一堆
+ * 没过滤的表」。凡是会改变树内容的地方，收尾都该调一次这里（filterText 为空时是空操作）。
+ */
+const reapplyTreeFilter = () => {
+  const v = filterText.value
+  if (v) treeRef.value?.filter(v)
+}
 
 // 数据源类型标签（单一来源：src/types 注册表，与后端 DatabaseType.label 一致）
 const typeLabel = (t) => labelOf(t)
@@ -7316,7 +7336,8 @@ const refreshDbNode = (db, connId) => {
   }
   resetLoaded(node)
   node.loaded = false
-  node.loadData(() => {})
+  // 重载完再过滤一次：新拉出来的分类/表节点同样要服从顶部的搜索词
+  node.loadData(() => { reapplyTreeFilter() })
 }
 
 const refreshCatNode = async (db, cat, connId) => {
@@ -7369,6 +7390,8 @@ const refreshCatNode = async (db, cat, connId) => {
     for (const child of children) {
       tree.append(child, key)
     }
+    // 换了一整批子节点：新节点默认可见，不重新过滤一遍就把搜索词「刷没了」
+    reapplyTreeFilter()
   } catch (e) {
     console.error('刷新分类节点失败:', e)
   }
@@ -8454,6 +8477,8 @@ const catalogCtxRefresh = async () => {
     const children = await dbOrSchemaNodes(String(d.connId), d.connType, list, d.catalog)
     d.children = children
     treeRef.value?.updateKeyChildren(d.id, children)
+    // 换了一整批库节点：同样要重新过一遍顶部搜索词
+    reapplyTreeFilter()
     ElMessage.success(t('mv.refreshed'))
   } catch (e) {
     ElMessage.error(t('mv.refreshFailed', { detail: errMsg(e) }))
