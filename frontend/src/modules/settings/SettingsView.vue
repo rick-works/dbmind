@@ -2879,6 +2879,20 @@ watch(visible, (v) => {
 .settings-dialog .el-dialog__body { scrollbar-width: none; -ms-overflow-style: none; }
 .settings-dialog .el-dialog__body::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .settings-dialog .el-dialog__headerbtn { top: 4px; right: 8px; }
+/* 全屏态（右上角 ⤢，见 utils/dialogMaximize.js）：弹窗高度被写成「视口 - 24」，
+   而 .settings-body 是按 calc(100vh - 190px) 定高的 —— 两个口径对不上，全屏后底部就空出
+   一截（1440×900 实测空 90px，视口越高空得越多）。全屏时改用 flex：正文区吃掉弹窗剩余
+   高度，.settings-body 再 100% 填进去，左右两栏自然铺到弹窗底边。
+   非全屏保持「高度由内容决定」，逻辑不变。 */
+.settings-dialog.dc-max { display: flex; flex-direction: column; }
+.settings-dialog.dc-max > .el-dialog__header { flex: none; }
+.settings-dialog.dc-max > .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  /* 左右两栏各自滚（页签栏 / 内容区都是 overflow-y:auto），外壳不再出第二条滚动条 */
+  overflow: hidden;
+}
+.settings-dialog.dc-max .settings-body { height: 100%; }
 .fmt-preview-note { color: var(--dc-text-dim); }
 .fmt-sql-kw { color: var(--dc-sql-kw); font-weight: 600; }
 .fmt-kw-hl { background: var(--dc-sql-hl-wash); color: var(--dc-sql-hl); font-weight: 700; text-decoration: underline; text-decoration-color: var(--dc-sql-hl); }
