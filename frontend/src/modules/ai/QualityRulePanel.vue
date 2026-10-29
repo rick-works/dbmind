@@ -99,7 +99,8 @@
           <span class="qr-form-hint">{{ typeHint(currentType) }}</span>
         </el-form-item>
         <el-form-item v-for="p in currentParams" :key="p.key" :label="paramLabel(form.type, p)">
-          <el-select v-if="p.kind === 'select'" v-model="form.params[p.key]" style="width:100%">
+          <el-select v-if="p.kind === 'select'" v-model="form.params[p.key]" style="width:100%"
+                     :placeholder="$t('common.pleaseSelect')">
             <el-option v-for="o in p.options" :key="o" :label="o" :value="o" />
           </el-select>
           <el-input-number

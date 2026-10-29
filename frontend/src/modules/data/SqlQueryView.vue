@@ -402,7 +402,8 @@
           <!-- 多表（JOIN）查询：改的是哪张表由用户定，放在底栏选，不再弹窗打断 -->
           <template v-if="resEditTables.length > 1">
             <span class="edit-bar-text">{{ $t('sqlq.editTarget') }}</span>
-            <el-select v-model="resEditTablePick" size="small" style="width:170px" filterable>
+            <el-select v-model="resEditTablePick" size="small" style="width:170px" filterable
+                       :placeholder="$t('common.pleaseSelect')">
               <el-option v-for="tb in resEditTables" :key="tb" :label="tb" :value="tb" />
             </el-select>
           </template>

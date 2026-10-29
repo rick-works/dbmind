@@ -14,7 +14,7 @@
     :clearable="clearable"
     :filterable="filterable"
     :filter-method="filterable ? onFilter : undefined"
-    :placeholder="placeholder"
+    :placeholder="placeholder || $t('common.pleaseSelect')"
     popper-class="conn-tree-popper"
     class="conn-tree-select"
     @update:model-value="(v) => emit('update:modelValue', v)"

@@ -120,7 +120,8 @@
                       <td>
                         <!-- allow-create：清单是常用值，不在名单里的（新版本引擎/自建字符集）
                              照样能手输 —— 有下拉但不被下拉限制 -->
-                        <el-select v-if="engines.length" v-model="tableForm.engine" size="small" :disabled="isCH" clearable filterable allow-create>
+                        <el-select v-if="engines.length" v-model="tableForm.engine" size="small" :disabled="isCH" clearable filterable allow-create
+                                   :placeholder="$t('common.pleaseSelect')">
                           <el-option v-for="e in engines" :key="e" :label="e" :value="e" />
                         </el-select>
                         <!-- 后端暂未提供引擎清单时退化为文本输入：**能改**，好过整行消失 -->
@@ -139,7 +140,8 @@
                     <tr v-if="showCharsetField">
                       <td class="basic-label">{{ $t('tdet.collation') }}</td>
                       <td>
-                        <el-select v-if="collations.length" v-model="tableForm.collation" size="small" clearable filterable allow-create>
+                        <el-select v-if="collations.length" v-model="tableForm.collation" size="small" clearable filterable allow-create
+                                   :placeholder="$t('common.pleaseSelect')">
                           <el-option v-for="c in collations" :key="c" :label="c" :value="c" />
                         </el-select>
                         <el-input v-else v-model="tableForm.collation" size="small" clearable :placeholder="$t('tdet.collationPlaceholder')" />
@@ -358,7 +360,8 @@
                   </el-table-column>
                   <el-table-column v-if="indexTypes.length" :label="$t('tdet.colType')" width="130">
                     <template #default="{ row }">
-                      <el-select v-model="row.indexType" size="small" clearable>
+                      <el-select v-model="row.indexType" size="small" clearable
+                                 :placeholder="$t('common.pleaseSelect')">
                         <el-option v-for="t in indexTypes" :key="t" :label="t" :value="t" />
                       </el-select>
                     </template>
@@ -366,7 +369,7 @@
                   <el-table-column :label="$t('tdet.indexCols')" min-width="200">
                     <template #default="{ row }">
                       <el-select v-model="row.columns" size="small" multiple filterable collapse-tags
-                                 @change="onIdxColumnsChange(row)">
+                                 :placeholder="$t('common.pleaseSelect')" @change="onIdxColumnsChange(row)">
                         <el-option v-for="c in displayCols.filter(x => String(x.name || '').trim())" :key="c._uid" :label="c.name" :value="String(c.name).trim()" />
                       </el-select>
                     </template>
@@ -822,14 +825,26 @@ const splitTypeText = (raw) => {
   // 「长度/精度」两格被**禁用**、值也不显示（实测：DEMO_T.NAME 就是这样）。
   const m = s.match(/^([A-Za-z_][A-Za-z0-9_]*(?:\s+[A-Za-z_][A-Za-z0-9_]*)*)\s*\(([^)]*)\)(.*)$/)
   if (m) {
-    const base = m[1].toUpperCase()
+    // 基名**不强转大写**：写法统一交给 `canonTypeBase` 按「该方言的类型清单」对齐
+    // （MySQL 清单大写 → 回显大写；PG / SQL Server 清单小写 → 回显小写）。
+    // 以前在这里先 toUpperCase，清单外类型（SQL Server 的 text / datetime / char）
+    // 就留成大写的 TEXT / DATETIME，与同表 varchar 小写混排（真机截图）。
+    const base = m[1]
     if (!/^\d+(,\d+)?$/.test(m[2].trim().replace(/\s+/g, ''))) {
       return { base: s, length: '', opaque: true }
+    }
+    // **无界长度哨兵**：JDBC / information_schema 对 `text` / `ntext` / `image` /
+    // `longtext` / `varchar(max)` 这类无长度类型报的是 2147483647（i32::MAX）或
+    // 4294967295。它不是真实长度：显示出来用户会以为数据坏了（「长度 2147483647」），
+    // 带进 ALTER 还会拼出 `text(2147483647)` ⇒ SQL Server 2715 建表/改列失败。
+    // 按「无长度」处理，类型名保留基名。
+    if (Number(m[2].trim().split(',')[0]) >= 65536) {
+      return { base, length: '', opaque: false }
     }
     if (!(m[3] || '').trim()) return { base, length: m[2].trim(), opaque: false }
     return { base: s, length: '', opaque: true }
   }
-  if (!/\s/.test(s)) return { base: s.toUpperCase(), length: '', opaque: false }
+  if (!/\s/.test(s)) return { base: s, length: '', opaque: false }
   return { base: s, length: '', opaque: true }
 }
 

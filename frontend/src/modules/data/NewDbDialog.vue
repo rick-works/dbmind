@@ -12,7 +12,7 @@
       </el-form-item>
       <template v-if="connType === 'MYSQL' || connType === 'MARIADB'">
         <el-form-item :label="$t('ndb.charset')">
-          <el-select v-model="form.charset" style="width: 100%">
+          <el-select v-model="form.charset" style="width: 100%" :placeholder="$t('common.pleaseSelect')">
             <el-option label="utf8mb4" value="utf8mb4" />
             <el-option label="utf8" value="utf8" />
             <el-option label="latin1" value="latin1" />
@@ -20,7 +20,7 @@
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('ndb.collation')">
-          <el-select v-model="form.collation" style="width: 100%">
+          <el-select v-model="form.collation" style="width: 100%" :placeholder="$t('common.pleaseSelect')">
             <el-option label="utf8mb4_general_ci" value="utf8mb4_general_ci" />
             <el-option label="utf8mb4_unicode_ci" value="utf8mb4_unicode_ci" />
             <el-option label="utf8_general_ci" value="utf8_general_ci" />

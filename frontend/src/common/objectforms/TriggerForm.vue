@@ -28,7 +28,8 @@
         </el-form>
         <el-form label-position="top" size="small" class="grid-item">
           <el-form-item :label="$t('tgf.table')" required>
-            <el-select v-model="form.table" filterable :disabled="editMode">
+            <el-select v-model="form.table" filterable :disabled="editMode"
+                       :placeholder="$t('common.pleaseSelect')">
               <el-option v-for="t in tables" :key="t" :label="t" :value="t" />
             </el-select>
           </el-form-item>

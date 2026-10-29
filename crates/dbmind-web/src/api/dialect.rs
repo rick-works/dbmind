@@ -3762,6 +3762,15 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             } else {
                 raw_type
             };
+            // 长度是「无界哨兵」（2147483647 / 4294967295）时**绝不能原样拼进 DDL**：
+            // 那是 JDBC / information_schema 对无界大文本的占位值，不是真实长度。
+            // 原样拼出去的后果按方言不同：SQL Server 2715（exceeds the maximum allowed
+            // for any data type (8000)）、MySQL「Display width out of range」、
+            // Oracle ORA-00907。真机上整库同步因此漏掉 3 张表（建表失败只在日志里）。
+            // 同类型照抄（cross=false）时走的就是这里，所以收敛必须放在类型名定稿之后。
+            if let Some(fixed) = unbounded_type_of(&type_name, self.kind.key()) {
+                type_name = fixed;
+            }
             // **Doris 键列不能是无界文本**：STRING/TEXT 做 UNIQUE/DUPLICATE KEY 建表直接报
             // 「String Type should not be used in key column」（真机：ClickHouse 的 String
             // 主键/排序键同步到 Doris 必炸）。键列统一落成有长度的 VARCHAR(65533)
@@ -4379,10 +4388,17 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             // SQL Server：character_maximum_length 按**字符**给（nvarchar(50) → 50），
             // `-1` 是 `max`；decimal 走 numeric_precision/scale。
             // 默认 schema 优先排序：同名表出现在多个 schema 时，取当前 schema 那条
+            // **`text` / `ntext` / `image` 的 `character_maximum_length` 是 2147483647，不是 -1**。
+            // 只按 -1 判「无界」时，这三个旧大对象类型会被拼成 `text(2147483647)`，
+            // SQL Server 建表直接报 2715「The size (2147483647) given to the column 'X'
+            // exceeds the maximum allowed for any data type (8000)」——真机整库同步里
+            // 3 张带 `text` 列的表因此整表漏搬，而界面「失败 0」（建表失败只在日志里）。
+            // 这几类本身就是无界的，正确写法就是裸类型名。
             "sqlserver" => Meta::Sql(format!(
                 "select column_name as column_name, \
                  case \
                    when character_maximum_length = -1 then data_type + '(max)' \
+                   when data_type in ('text', 'ntext', 'image') then data_type \
                    when character_maximum_length is not null \
                      then data_type + '(' + cast(character_maximum_length as varchar(10)) + ')' \
                    when data_type in ('decimal', 'numeric') and numeric_precision is not null \
@@ -5128,6 +5144,113 @@ fn is_unbounded_text_type(type_name: &str) -> bool {
             | "bytea"
     ) || ((base == "varchar" || base == "char" || base == "character varying" || base == "nvarchar")
         && !t.contains('('))
+}
+
+/// 把「无界长度哨兵」收敛成目标方言能接受的无界写法。
+///
+/// 长度 **2147483647**（i32::MAX）与 **4294967295**（u32::MAX）都不是真实长度，而是
+/// JDBC `ResultSetMetaData.getPrecision()` 与各库 `information_schema` 对
+/// `text / ntext / longtext / varchar(max)` 这类**无界**类型给的占位值。
+/// 原样拼进建表语句按方言报不同的语法错（SQL Server 2715、MySQL 1210、Oracle ORA-00907），
+/// 表现是「目标表建不出来 ⇒ 整表漏同步」，而进度卡的失败数还是 0。
+///
+/// 只收敛**确实是字符/二进制大对象**的类型：`decimal(2147483647,0)` 之类原样留给数据库报错，
+/// 猜错了比报错更难排查。
+fn unbounded_type_of(type_name: &str, kind: &str) -> Option<String> {
+    /// 真实长度不可能到 2^31 量级：任何超过它的长度都是哨兵值。
+    const SENTINEL_MIN: u64 = 2_147_483_647;
+    let lower = type_name.trim().to_ascii_lowercase();
+    let (raw_base, rest) = lower.split_once('(')?;
+    let len = rest
+        .split(')')
+        .next()
+        .unwrap_or("")
+        .split(',')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    if len < SENTINEL_MIN {
+        return None;
+    }
+    let base = raw_base.trim();
+    // SQL Server 的旧大对象类型：**裸类型名才是合法写法**（`text(2147483647)` 非法，
+    // 而 `nvarchar(max)` 会把非 Unicode 数据转一次码，能不改就不改）。
+    if matches!(base, "text" | "ntext" | "image") {
+        return Some(base.to_string());
+    }
+    let textual = matches!(
+        base,
+        "char"
+            | "character"
+            | "character varying"
+            | "varchar"
+            | "varchar2"
+            | "nvarchar"
+            | "nvarchar2"
+            | "nchar"
+            | "clob"
+            | "nclob"
+            | "string"
+    );
+    let binary = matches!(base, "binary" | "varbinary" | "blob" | "bytea" | "raw");
+    if !textual && !binary {
+        return None;
+    }
+    let wide = match kind {
+        "mysql" | "mariadb" | "doris" => {
+            if binary {
+                "longblob"
+            } else {
+                "longtext"
+            }
+        }
+        "postgresql" | "kingbase" => {
+            if binary {
+                "bytea"
+            } else {
+                "text"
+            }
+        }
+        "oracle" | "dm" => {
+            if binary {
+                "blob"
+            } else {
+                "clob"
+            }
+        }
+        "sqlserver" => {
+            if binary {
+                "varbinary(max)"
+            } else {
+                "nvarchar(max)"
+            }
+        }
+        "db2" | "h2" | "derby" => {
+            if binary {
+                "blob"
+            } else {
+                "clob"
+            }
+        }
+        "clickhouse" => "String",
+        "sqlite" => {
+            if binary {
+                "blob"
+            } else {
+                "text"
+            }
+        }
+        _ => {
+            if binary {
+                "blob"
+            } else {
+                "text"
+            }
+        }
+    };
+    Some(wide.to_string())
 }
 
 /// InnoDB（DYNAMIC 行格式）**单个索引**的字节上限。

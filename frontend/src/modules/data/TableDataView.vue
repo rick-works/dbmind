@@ -58,7 +58,7 @@
             <!-- 第一个条件没有「且/或」，用等宽占位保持各行列对齐 -->
             <span v-else class="join-placeholder" aria-hidden="true" />
             <el-select v-model="f.col" size="small" filterable style="width: 180px"
-                       @change="onColChange(f)">
+                       :placeholder="$t('common.pleaseSelect')" @change="onColChange(f)">
               <el-option v-for="c in columnMetas" :key="c.name"
                          :label="c.name" :value="c.name" />
             </el-select>

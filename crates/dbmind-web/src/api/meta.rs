@@ -597,10 +597,17 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
             "time", "jsonb", "uuid", "bytea",
             "int2", "int4", "int8", "float4", "float8", "varchar", "bool",
         ],
+        // 这份清单既是「类型下拉」的可选项，也是**回显写法的标准**（`canonTypeBase` 按它
+        // 归一大小写，见 typeName.js）。以前只列了 16 项，库里的 `text` / `datetime` /
+        // `char` 全部落在清单外 ⇒ 同一张表的字段表里出现「varchar 小写、TEXT / DATETIME
+        // 大写」的混排（真机截图）。把 SQL Server 常用的旧类型补齐，回显就统一成小写。
         "sqlserver" => vec![
-            "int", "bigint", "smallint", "tinyint", "decimal", "float", "real",
-            "nvarchar", "varchar", "nvarchar(max)", "bit", "date", "datetime2",
-            "datetimeoffset", "uniqueidentifier", "varbinary(max)",
+            "int", "bigint", "smallint", "tinyint", "decimal", "numeric", "float", "real",
+            "money", "smallmoney",
+            "nvarchar", "varchar", "char", "nchar", "nvarchar(max)", "varchar(max)",
+            "text", "ntext", "bit", "date", "time", "datetime", "datetime2",
+            "smalldatetime", "datetimeoffset", "uniqueidentifier",
+            "binary", "varbinary", "varbinary(max)", "image", "xml",
         ],
         "oracle" | "dm" => vec![
             "NUMBER", "FLOAT", "BINARY_FLOAT", "VARCHAR2",

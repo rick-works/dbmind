@@ -10,14 +10,16 @@
         </el-form>
         <el-form label-position="top" size="small" class="grid-item">
           <el-form-item :label="$t('tgf.table')" required>
-            <el-select v-model="form.table" filterable :disabled="editMode" @change="onTableChange">
+            <el-select v-model="form.table" filterable :disabled="editMode"
+                       :placeholder="$t('common.pleaseSelect')" @change="onTableChange">
               <el-option v-for="t in tables" :key="t" :label="t" :value="t" />
             </el-select>
           </el-form-item>
         </el-form>
         <el-form label-position="top" size="small" class="grid-item">
           <el-form-item :label="$t('ixf.type')">
-            <el-select v-model="form.indexType" clearable filterable>
+            <el-select v-model="form.indexType" clearable filterable
+                       :placeholder="$t('common.pleaseSelect')">
               <el-option v-for="t in features.indexTypes || []" :key="t" :label="t" :value="t" />
             </el-select>
           </el-form-item>
@@ -29,7 +31,8 @@
         </el-form>
         <el-form label-position="top" size="small" class="grid-item">
           <el-form-item :label="$t('ixf.columns')" required>
-            <el-select v-model="form.columns" multiple filterable style="width:100%">
+            <el-select v-model="form.columns" multiple filterable style="width:100%"
+                       :placeholder="$t('common.pleaseSelect')">
               <el-option v-for="c in cols" :key="c" :label="c" :value="c" />
             </el-select>
           </el-form-item>

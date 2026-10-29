@@ -6737,6 +6737,12 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         c.3 += outcome.inserted;
                         c.4 += outcome.updated;
                     }
+                    // 对象级失败**当场**上报进度卡：建表失败这类一行都没读到，行失败计数
+                    // 永远是 0 ⇒ 界面在运行中一直显示「失败 0」，要到终态结果表才跳
+                    //（真机：3 张表漏建、进度卡「失败 0」）。
+                    if !matches!(outcome.status.as_ref(), "ok" | "skipped") {
+                        task.add_objects_failed(1);
+                    }
                     // 表的数据搬运结果已经由 transfer 引擎打过一行（含行数/耗时/速率），
                     // 这里再打「传输完成（已建表）」就是纯重复 —— 400 张表就是 800 条。
                     // 跳过 / 失败 / 只建表没搬数据 仍要打：那是用户真正要看的结果。
@@ -6884,6 +6890,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         let mut c = counters.lock().unwrap();
                         c.2 += 1; // errors
                     }
+                    task.add_objects_failed(1);
                     task.add_done(1);
                     task.log(format!("{name}：{reason}"));
                 }
@@ -6937,6 +6944,8 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                             }
                             c.2 = c.2.saturating_sub(1);
                         }
+                        // 视图依赖重试成功：把首轮记在进度卡上的那一次失败撤掉
+                        task.sub_objects_failed(1);
                         tracing::debug!(view = %name, "视图依赖重试成功");
                     }
                 }

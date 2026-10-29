@@ -62,7 +62,7 @@
                   <td class="basic-label">{{ $t('tdet.orderKey') }}</td>
                   <td>
                     <el-select :model-value="orderKeyCols" multiple clearable filterable size="small"
-                               @change="onOrderKeyPick">
+                               :placeholder="$t('common.pleaseSelect')" @change="onOrderKeyPick">
                       <el-option v-for="c in namedCols" :key="c.uid" :label="c.name" :value="String(c.name).trim()" />
                     </el-select>
                   </td>
@@ -70,7 +70,8 @@
                 <tr v-if="isClickHouse">
                   <td class="basic-label">{{ $t('tdet.partitionKey') }}</td>
                   <td>
-                    <el-select v-model="form.partitionKey" size="small" clearable filterable allow-create>
+                    <el-select v-model="form.partitionKey" size="small" clearable filterable allow-create
+                               :placeholder="$t('common.pleaseSelect')">
                       <el-option v-for="c in namedCols" :key="c.uid" :label="c.name" :value="String(c.name).trim()" />
                     </el-select>
                   </td>
@@ -113,7 +114,8 @@
                 <tr v-if="has(features,'supportsTableOptions') && !isDoris">
                   <td class="basic-label">{{ $t('tf.engine') }}</td>
                   <td>
-                    <el-select v-if="(features.engines || []).length" v-model="form.engine" size="small" clearable filterable>
+                    <el-select v-if="(features.engines || []).length" v-model="form.engine" size="small" clearable filterable
+                               :placeholder="$t('common.pleaseSelect')">
                       <el-option v-for="e in features.engines" :key="e" :label="e" :value="e" />
                     </el-select>
                     <el-input v-else v-model="form.engine" size="small" clearable />
@@ -125,7 +127,8 @@
                 <tr v-if="has(features,'supportsTableOptions') && !isClickHouse && !isDoris">
                   <td class="basic-label">{{ $t('tf.charset') }}</td>
                   <td>
-                    <el-select v-if="(features.charsets || []).length" v-model="form.charset" size="small" clearable filterable @change="onCharsetChange">
+                    <el-select v-if="(features.charsets || []).length" v-model="form.charset" size="small" clearable filterable
+                               :placeholder="$t('common.pleaseSelect')" @change="onCharsetChange">
                       <el-option v-for="c in features.charsets" :key="c" :label="c" :value="c" />
                     </el-select>
                     <el-input v-else v-model="form.charset" size="small" clearable @change="onCharsetChange" />
@@ -134,7 +137,8 @@
                 <tr v-if="has(features,'supportsTableOptions') && !isClickHouse && !isDoris">
                   <td class="basic-label">{{ $t('tf.collation') }}</td>
                   <td>
-                    <el-select v-if="collations.length" v-model="form.collation" size="small" clearable filterable>
+                    <el-select v-if="collations.length" v-model="form.collation" size="small" clearable filterable
+                               :placeholder="$t('common.pleaseSelect')">
                       <el-option v-for="c in collations" :key="c" :label="c" :value="c" />
                     </el-select>
                     <el-input v-else v-model="form.collation" size="small" clearable />
@@ -322,7 +326,8 @@
             </el-table-column>
             <el-table-column v-if="(features.indexTypes || []).length" :label="$t('tf.colType')" width="130">
               <template #default="{ row }">
-                <el-select v-model="row.indexType" size="small" clearable>
+                <el-select v-model="row.indexType" size="small" clearable
+                           :placeholder="$t('common.pleaseSelect')">
                   <el-option v-for="t in features.indexTypes" :key="t" :label="t" :value="t" />
                 </el-select>
               </template>
@@ -330,7 +335,7 @@
             <el-table-column :label="$t('tf.idxColumns')" min-width="200">
               <template #default="{ row }">
                 <el-select v-model="row.columns" size="small" multiple filterable collapse-tags :multiple-limit="0"
-                           @change="onIdxColumnsChange(row)">
+                           :placeholder="$t('common.pleaseSelect')" @change="onIdxColumnsChange(row)">
                   <el-option v-for="c in cols.filter(x => x.name.trim())" :key="c.uid" :label="c.name" :value="c.name.trim()" />
                 </el-select>
               </template>

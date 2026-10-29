@@ -157,6 +157,12 @@ pub struct Task {
     rows_read: Mutex<u64>,
     rows_written: Mutex<u64>,
     rows_failed: Mutex<u64>,
+    /// **对象级**失败数（建表失败、视图建不出来、列信息取不到…）。
+    ///
+    /// 与 `rows_failed` 分开：那些对象一行都没读到就死了，行失败计数永远是 0，
+    /// 于是进度卡的「失败」在运行中一直显示 0，只有等任务结束、结果表出来才跳
+    /// （真机：3 张表漏建，界面上「失败 0」）。运行中实时上报，结束前就能看见。
+    objects_failed: Mutex<u64>,
     /// 读侧累计的**字节数**（估算，口径同 `sync::estimate_row_bytes`）。
     ///
     /// 进度卡上的「速度」是「行/秒 · MB/s」两段，行数只说明行宽之外的一半 ——
@@ -221,6 +227,7 @@ impl Task {
             rows_read: Mutex::new(0),
             rows_written: Mutex::new(0),
             rows_failed: Mutex::new(0),
+            objects_failed: Mutex::new(0),
             bytes_read: Mutex::new(0),
             total: Mutex::new(-1),
             phase: Mutex::new(String::new()),
@@ -280,6 +287,7 @@ impl Task {
             rows_read: Mutex::new(num("rowsRead")),
             rows_written: Mutex::new(num("rowsWritten")),
             rows_failed: Mutex::new(num("rowsFailed")),
+            objects_failed: Mutex::new(num("objectsFailed")),
             bytes_read: Mutex::new(num("bytesRead")),
             total: Mutex::new(snap.get("total").and_then(Value::as_i64).unwrap_or(-1)),
             phase: Mutex::new(text("phase")),
@@ -438,6 +446,20 @@ impl Task {
     }
 
     pub fn rows_failed(&self) -> u64 { *lock(&self.rows_failed) }
+
+    /// 对象级失败 +1（建表失败 / 视图建不出来 / 取不到列信息…）：**运行中就上报**，
+    /// 别等结果表。前端「失败」卡取 `max(行失败, 对象失败)`。
+    pub fn add_objects_failed(&self, n: u64) {
+        *lock(&self.objects_failed) += n;
+    }
+
+    /// 对象级失败回退（视图依赖重试成功时把先前记的那一次撤掉）。
+    pub fn sub_objects_failed(&self, n: u64) {
+        let mut guard = lock(&self.objects_failed);
+        *guard = guard.saturating_sub(n);
+    }
+
+    pub fn objects_failed(&self) -> u64 { *lock(&self.objects_failed) }
 
     /// Stream Load 快通道在这条任务里已经判定不可用（见字段注释）。
     pub fn stream_unavailable(&self) -> bool {
@@ -599,6 +621,8 @@ impl Task {
             "rowsRead": read,
             "rowsWritten": written,
             "rowsFailed": *lock(&self.rows_failed),
+            // 对象级失败（建表失败等，一行都没读到）：运行中实时给，进度卡的「失败」据此跳动
+            "objectsFailed": *lock(&self.objects_failed),
             // 累计字节数：进度卡的「MB/s」用它算（没有它那半截永远是 0.0 MB/s）
             "bytesRead": *lock(&self.bytes_read),
             "phase": lock(&self.phase).clone(),

@@ -40,6 +40,17 @@ const PAGE_ROWS_MAX: usize = 100_000;
 /// 里「单批 98545 / 89489 行写入 601 秒」就是这么来的。1 万行一页，中断重试的
 /// 代价小得多；实测吞吐仍在 100 万行/分钟量级（往返不是瓶颈，目标端才是）。
 const PAGE_ROWS_MAX_KEYED: usize = 10_000;
+/// **无键表**一页的硬上限：2 万行（受 [`PAGE_BYTES_TARGET`] 再压一次，宽表到不了）。
+///
+/// 无键表只能 `limit n offset m` 翻页，每页都要重扫前面 offset 行 ⇒
+/// 总扫描量 ≈ `N² / (2 × 页)`，**页就是吞吐本身**。曾经把它也钉在「每批条数」
+/// （SQL Server 1000）上，25 万行的视图于是要扫约 3100 万行、单表 936 秒
+/// （真机：VW_F_ICD_MONTHLY_ACTIVITY_REPORT_PEGASYS，269 行/秒，整库 75% 的时间
+/// 花在这种地方）。页放到 1~2 万，同一张表快一个数量级。
+///
+/// 上界不给到 10 万的理由同有键表：一页 = 一次判死单位，页太大时一条慢语句
+/// 拖死的时间与内存都成倍。
+const PAGE_ROWS_MAX_UNKEYED: usize = 20_000;
 /// 读一页**超时**后允许缩到的最小页。
 ///
 /// 比 [`PAGE_ROWS_MIN`] 还低：那个下限是「自适应时别把页调得太碎」，而这里是
@@ -180,6 +191,10 @@ pub struct SqlReader {
     /// 一页的行数上限（硬上限，见 [`PAGE_ROWS_MAX`]）。读失败收缩时会一起压低，
     /// 免得几何增长/写速自适应马上又把它放大回去（同一段链路反复超时就成了震荡）。
     rows_cap: AtomicUsize,
+    /// 一个事务最多写多少行（[`Reader::commit_rows`]）。
+    /// 无键表用它把「读页」和「事务粒度」解耦：页是 1~2 万行（省 OFFSET 重扫），
+    /// 事务仍是界面的「每批条数」（1000 行），不会变成大事务。
+    commit_rows: usize,
     /// 写池诊断：读侧按**实测写速**决定一页多大（见 [`PAGE_TARGET_SECS`]）
     diag: std::sync::Arc<crate::api::transfer::WriteDiag>,
     /// 本表的会话后缀（见 `TablePlan::sid`）：并发整库同步时，不同表的同号分片
@@ -232,30 +247,37 @@ impl SqlReader {
                 (Vec::new(), Vec::new())
             }
         };
-        // 一页的**硬上限**：统一等于界面「每批条数」（0 = 按目标方言默认：MySQL 1000 /
-        // ClickHouse 1 万 / 文件库 5000），夹在 [1000, 1 万]。
-        // 这样「一批」= 一页 = 一个事务（见 `engine::txn_rows_cap`），用户只需理解一个词：
-        // 日志里「写入 N 行」的 N 就是他填的「每批条数」，不会再冒出个对不上的数。
+        // **有键表**：一批 = 一页 = 一个事务，页的硬上限就是界面「每批条数」
+        // （0 = 按目标方言默认：MySQL 1000 / ClickHouse 1 万 / 文件库 5000），夹在 [1000, 1 万]。
+        // 用户只需理解一个词：日志里「写入 N 行」的 N 就是他填的「每批条数」。
         //
-        // **无键表也用同一个上限**（以前给它开到 10 万）。理由：无键表本来就要按 OFFSET
-        // 逐页扫，页大省下的只是**往返次数**，扫描总量一样是 O(N²)；而大页换来的是
-        // 「一页 1 万行写 31 秒」这种与用户配置对不上的日志（用户口径：我配了每批 1000，
-        // 为什么日志说 1 万），以及一卡就白等整页。无键表的吞吐保障另有其人 ——
-        // 行窗口分片（见 `window` 那套）+ OFFSET 续跑（`SegmentOutcome::PausedAt`）。
-        // 任务级「踩坑即收敛」仍然生效：`grow` 会把 page_cap_hint 压到 1 万，后面开工的表
-        // 直接从更小的页起步，不再各撞一次。
+        // **无键表必须和「每批条数」脱钩**：它只能 `limit n offset m` 翻页，每页重扫
+        // 前面 offset 行 ⇒ 总扫描量 ≈ N²/(2·页)，页就是吞吐本身。曾经按每批条数把它
+        // 压到 1000 行，25 万行的视图要扫约 3100 万行、单表 15 分钟（真机整库同步里
+        // 75% 的时间耗在这）。页放到 [`PAGE_ROWS_MAX_UNKEYED`]，事务粒度仍按每批条数，
+        // 见 `commit_rows` —— 不再有「一页 1 万行写 31 秒」那种与配置对不上的日志。
+        // 行窗口分片（`DBMIND_SYNC_WINDOW` / 见 `window` 那套）与 OFFSET 续跑仍然有效。
         let batch_rows = if plan.insert_rows > 0 {
             plan.insert_rows
         } else {
             crate::api::sync::insert_rows_default(plan.target_kind.kind.key())
         };
-        let page_cap = batch_rows.clamp(PAGE_ROWS_MIN, PAGE_ROWS_MAX_KEYED);
+        let keyless = paging_keys.is_empty();
+        let page_cap = if keyless {
+            batch_rows.clamp(PAGE_ROWS_MIN, PAGE_ROWS_MAX_UNKEYED)
+        } else {
+            batch_rows.clamp(PAGE_ROWS_MIN, PAGE_ROWS_MAX_KEYED)
+        };
         let page_hint = plan.grow.as_ref().map(|grow| grow.page_cap_hint()).unwrap_or(0);
-        let rows_cap = fixed_page.unwrap_or(if page_hint > 0 {
+        // 任务级「踩坑即收敛」只对有键表生效：把无键表的页压到 1 万以下，等于让
+        // OFFSET 重扫成倍放大 —— 那正是要修的病，宁可不收这个提示。
+        let rows_cap = fixed_page.unwrap_or(if page_hint > 0 && !keyless {
             page_cap.min(page_hint)
         } else {
             page_cap
         });
+        // 事务粒度：无键表 = 界面的「每批条数」（不会被大页带成大事务），有键表 = 页
+        let commit_rows = if keyless { batch_rows.max(1) } else { rows_cap };
         // 尾部弹性扩片的上限：方言声明的读并发（单连接池的库 = 1，多开只会在池里排队）。
         // 调优逃生阀优先；下限是本次分到的份额，避免「cap 比声明还大」时反而被压小。
         let parallel_ceiling = std::env::var("DBMIND_SYNC_SLICES")
@@ -279,6 +301,7 @@ impl SqlReader {
             page_rows: AtomicUsize::new(fixed_page.unwrap_or(PAGE_WIDE.min(rows_cap))),
             fixed_page,
             rows_cap: AtomicUsize::new(rows_cap),
+            commit_rows,
             diag: plan.diag.clone(),
             sid: plan.sid.clone(),
             slices_cap: plan.slices_cap,
@@ -407,9 +430,10 @@ impl Reader for SqlReader {
     }
 
     fn commit_rows(&self) -> u64 {
-        // 用**硬上限**而不是「当前页」：页会按实测写速自适应放大，但事务粒度不该跟着抖；
-        // 上限本身已经等于「每批条数」（有键表）或大页（无键表），见 `SqlReader::new`。
-        self.rows_cap.load(Ordering::SeqCst) as u64
+        // 用建表时定下的值而不是「当前页」：页会按实测写速自适应，但事务粒度不该跟着抖。
+        // 有键表 = 页硬上限（= 界面「每批条数」）；无键表 = 每批条数本身
+        //（页是大页，只用来省 OFFSET 重扫，见 `SqlReader::new`）。
+        self.commit_rows as u64
     }
 
     fn max_parallel(&self) -> usize {

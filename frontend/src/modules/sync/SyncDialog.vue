@@ -32,10 +32,12 @@
           <ConnectionSelect v-model="src.connectionId" :connections="connections" :auto-width="false"
                             :disabled="taskRunning" @change="onSrcConnChange" />
           <div class="pair">
-            <el-select v-if="!srcHideDb" v-model="src.database" size="small" :disabled="taskRunning" @change="onSrcDbChange">
+            <el-select v-if="!srcHideDb" v-model="src.database" size="small" :disabled="taskRunning"
+                       :placeholder="$t('common.pleaseSelect')" @change="onSrcDbChange">
               <el-option v-for="d in srcDbs" :key="d" :label="d" :value="d" />
             </el-select>
-            <el-select v-if="srcNeedSchema" v-model="src.schema" size="small" :disabled="taskRunning" @change="loadSrcObjects">
+            <el-select v-if="srcNeedSchema" v-model="src.schema" size="small" :disabled="taskRunning"
+                       :placeholder="$t('common.pleaseSelect')" @change="loadSrcObjects">
               <el-option v-for="s in srcSchemas" :key="s" :label="s" :value="s" />
             </el-select>
           </div>
@@ -50,10 +52,12 @@
           <ConnectionSelect v-model="tgt.connectionId" :connections="connections" :auto-width="false"
                             :disabled="taskRunning" @change="onTgtConnChange" />
           <div class="pair">
-            <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small" :disabled="taskRunning" @change="onTgtDbChange">
+            <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small" :disabled="taskRunning"
+                       :placeholder="$t('common.pleaseSelect')" @change="onTgtDbChange">
               <el-option v-for="d in tgtDbs" :key="d" :label="d" :value="d" />
             </el-select>
-            <el-select v-if="tgtNeedSchema" v-model="tgt.schema" size="small" :disabled="taskRunning">
+            <el-select v-if="tgtNeedSchema" v-model="tgt.schema" size="small" :disabled="taskRunning"
+                       :placeholder="$t('common.pleaseSelect')">
               <el-option v-for="s in tgtSchemas" :key="s" :label="s" :value="s" />
             </el-select>
           </div>
@@ -1135,6 +1139,10 @@ const objectsDoneShown = computed(() => Math.max(0, Number(taskDone.value) || 0)
 const rowsRead = ref(0)
 const rowsWritten = ref(0)
 const rowsFailed = ref(0)
+// 对象级失败（建表失败 / 取不到列信息…）：那些对象一行都没读到，行失败计数是 0，
+// 只在**终态结果表**里才出现 —— 运行中「失败」卡一直显示 0（真机踩过）。
+// 后端现按对象实时上报 `objectsFailed`，这里与行失败取较大者。
+const objectsFailed = ref(0)
 const taskCurrent = ref('')
 // 统计卡显示值：运行中用实时行计数；
 // 终态后 task 快照的计数定格，summary 与它一致，直接用实时值即可（兜 0）。
@@ -1227,7 +1235,9 @@ const showProgressDlg = ref(false)
 //（「Cannot access before initialization」，点数据传输整个弹窗打不开 —— 真机踩过）
 const failedBase = computed(() => {
   const objFails = (taskResult.value?.results || []).filter(r => r.status === 'error').length
-  return Math.max(rowsFailed.value, objFails)
+  // objectsFailed 是**运行中**就有的对象失败数（后端实时上报）；objFails 是终态结果表兜底。
+  // 两者取大：运行中失败卡就会立刻涨，不必等任务结束。
+  return Math.max(rowsFailed.value, objectsFailed.value, objFails)
 })
 watch([targetRead, targetWritten, targetFailed], () => {
 // 运行中禁止倒退（外插猜超了就等真实值追上）；终态 rates 归零，允许落定。
@@ -1679,6 +1689,7 @@ const run = async (rawOverride = null) => {
     rowsRead.value = 0
     rowsWritten.value = 0
     rowsFailed.value = 0
+    objectsFailed.value = 0
     // 展示用的平滑计数同样要归零：`readShown / writtenShown` 是**单调取大**的，
     // 不清就会带着上一趟的数字继续跑 —— 真机现象：点「重新同步失败对象」，
     // 对象总数变成 18 了，读取数/传输数还挂着上一趟的 8637 万。
@@ -1849,6 +1860,8 @@ const pollTask = async () => {
       rowsWritten.value = nextWritten
     }
     rowsFailed.value = st.rowsFailed || 0
+    // 对象级失败同样实时（建表失败这类对象一行都没读到）
+    objectsFailed.value = st.objectsFailed || 0
     // 字节吞吐（后端累计估算值）：宽表窄表都能给出同一尺度的速度
     const nextBytes = Math.max(0, Number(st.bytesRead) || 0)
     bytesRead.value = taskRunning.value ? Math.max(bytesRead.value, nextBytes) : nextBytes
@@ -1888,6 +1901,7 @@ const pollTask = async () => {
           rowsRead.value = snap.rowsRead || 0
           rowsWritten.value = snap.rowsWritten || 0
           rowsFailed.value = snap.rowsFailed || 0
+          objectsFailed.value = snap.objectsFailed || 0
           taskResult.value = snap.result || taskResult.value
           taskMessage.value = snap.message || ''
           taskStatus.value = snap.status
@@ -1976,6 +1990,7 @@ const resetRunState = () => {
   rowsRead.value = 0
   rowsWritten.value = 0
   rowsFailed.value = 0
+  objectsFailed.value = 0
   taskCurrent.value = ''
   taskMessage.value = ''
   taskResult.value = null

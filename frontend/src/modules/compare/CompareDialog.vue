@@ -29,14 +29,16 @@
         <ConnectionSelect v-model="src.connectionId" :connections="connections" :auto-width="false"
                           @change="onSrcConnChange" />
         <div class="cmp-pair">
-          <el-select v-if="!srcHideDb" v-model="src.database" size="small" @change="onSrcDbChange">
+          <el-select v-if="!srcHideDb" v-model="src.database" size="small"
+                     :placeholder="$t('common.pleaseSelect')" @change="onSrcDbChange">
             <el-option v-for="d in srcDbs" :key="d" :label="d" :value="d" />
           </el-select>
-          <el-select v-if="srcNeedSchema" v-model="src.schema" size="small" @change="loadSrcTables">
+          <el-select v-if="srcNeedSchema" v-model="src.schema" size="small"
+                     :placeholder="$t('common.pleaseSelect')" @change="loadSrcTables">
             <el-option v-for="s in srcSchemas" :key="s" :label="s" :value="s" />
           </el-select>
         </div>
-        <el-select v-model="src.table" size="small" filterable>
+        <el-select v-model="src.table" size="small" filterable :placeholder="$t('common.pleaseSelect')">
           <el-option v-for="t in srcTables" :key="t.name" :label="t.name + (t.type === 'VIEW' ? $t('cmp.viewSuffix') : '')" :value="t.name" />
         </el-select>
       </div>
@@ -50,14 +52,16 @@
         <ConnectionSelect v-model="tgt.connectionId" :connections="connections" :auto-width="false"
                           @change="onTgtConnChange" />
         <div class="cmp-pair">
-          <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small" @change="onTgtDbChange">
+          <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small"
+                     :placeholder="$t('common.pleaseSelect')" @change="onTgtDbChange">
             <el-option v-for="d in tgtDbs" :key="d" :label="d" :value="d" />
           </el-select>
-          <el-select v-if="tgtNeedSchema" v-model="tgt.schema" size="small" @change="loadTgtTables">
+          <el-select v-if="tgtNeedSchema" v-model="tgt.schema" size="small"
+                     :placeholder="$t('common.pleaseSelect')" @change="loadTgtTables">
             <el-option v-for="s in tgtSchemas" :key="s" :label="s" :value="s" />
           </el-select>
         </div>
-        <el-select v-model="tgt.table" size="small" filterable>
+        <el-select v-model="tgt.table" size="small" filterable :placeholder="$t('common.pleaseSelect')">
           <el-option v-for="t in tgtTables" :key="t.name" :label="t.name + (t.type === 'VIEW' ? $t('cmp.viewSuffix') : '')" :value="t.name" />
         </el-select>
       </div>
@@ -117,7 +121,7 @@
             </el-tooltip>
           </span>
           <el-select v-model="opts.keyColumns" multiple size="small" collapse-tags collapse-tags-tooltip
-                     filterable clearable style="width: 320px">
+                     filterable clearable style="width: 320px" :placeholder="$t('common.pleaseSelect')">
             <el-option v-for="c in srcCols" :key="c.name" :label="c.name" :value="c.name" />
             <!-- 全选/清空：字段多时一个个点太累（用户反馈）。__all__ 是哨兵值，不参与真实比对键 -->
             <el-option :label="$t('cmp.allColumns')" value="__all__">
