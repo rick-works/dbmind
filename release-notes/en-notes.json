@@ -558,5 +558,10 @@
   "Unbounded text types (text / longtext / clob / varchar(max)) are now mapped to a legal type per target dialect instead of carrying a 2147483647 length",
   "Structure editor: text columns no longer show a length of 2147483647 and type casing is consistent; SQL Server type list extended to 30 entries",
   "Empty pickers now show a placeholder across compare, object forms (index / trigger / create table), new database, SQL result editing, data filters and quality rules"
+ ],
+ "v1.7.5": [
+  "Fixed a misjudgement when syncing routines: a function/procedure whose definition starts with a block comment (/* ... */) was treated as 'no definition found in the source' and skipped - a 4.8 KB function never got created on a real run",
+  "Syncing no longer changes the object name: a routine renamed with sp_rename in the source (catalog test1111, definition body still CREATE PROCEDURE [test111]) used to arrive in the target as test111; it is now renamed back to test1111 right after creation, exactly as in the source, and 'drop and recreate' also clears the leftover created under the body name",
+  "The 'Select' placeholder is now aligned with the other pickers in the same column (the connection picker no longer reserves its prefix slot while empty, previously offset by 4px)"
  ]
 }
