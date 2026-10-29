@@ -2,7 +2,7 @@
   <el-dialog
     v-model="visible"
     :title="$t('nav.scripts')"
-    width="880px"
+    width="min(1080px, 92vw)"
     :close-on-click-modal="false"
     append-to-body
     class="script-mgr-dialog"
@@ -26,7 +26,7 @@
     <el-table
       :data="filtered"
       size="small"
-      height="440"
+      :height="tableH"
       :empty-text="$t('sm.empty')"
       class="sm-table"
     >
@@ -63,7 +63,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search, Plus, Tickets } from '@element-plus/icons-vue'
 import { listConnections } from '../../api'
@@ -76,12 +76,28 @@ const emit = defineEmits(['update:modelValue', 'open', 'create'])
 const visible = ref(false)
 watch(() => props.modelValue, (v) => { visible.value = v })
 watch(visible, (v) => emit('update:modelValue', v))
-// 每次打开都重新枚举（编辑器里随时可能新增/修改了脚本）
-watch(visible, (v) => { if (v) load() })
+// 每次打开都重新枚举（编辑器里随时可能新增/修改了脚本）；顺手按当前视口重算表格高度
+// —— 弹窗可能在窗口被拖动/最大化之后才打开，onMounted 那一刻的视口不一定是现在的
+watch(visible, (v) => { if (v) { syncTableH(); load() } })
 
 const keyword = ref('')
 const rows = ref([])
 const connMap = ref({})
+
+/* 表格高度跟着视口走：以前写死 440，弹窗只有 880×530 出头，大屏上也只露七八行。
+   现在默认 1080 宽，高度按「视口 - 弹窗头部/工具条/内边距」反推（300 是这些固定开销），
+   320~640 之间夹住：矮窗口不出屏（弹窗总高受全局 max-height: 100vh-24px 兜底），
+   高窗口最多 640（再多也只是空白行，不如让弹窗紧凑些）。 */
+const tableH = ref(520)
+const syncTableH = () => {
+  const vh = typeof window !== 'undefined' ? window.innerHeight : 900
+  tableH.value = Math.max(320, Math.min(640, vh - 300))
+}
+onMounted(() => {
+  syncTableH()
+  window.addEventListener('resize', syncTableH)
+})
+onBeforeUnmount(() => window.removeEventListener('resize', syncTableH))
 
 // ===== 数据枚举：遍历 localStorage 里 dc_scripts:<connId>:<db> 前缀的全部 key =====
 // value 结构与 SQL 编辑器的保存格式一致：[{ id, name, content, time }]
