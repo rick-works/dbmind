@@ -709,7 +709,7 @@
     </ul>
 
     <!-- DDL 弹窗 -->
-    <el-dialog v-model="ctxDdlVisible" width="720px" append-to-body class="main-dialog">
+    <el-dialog v-model="ctxDdlVisible" width="720px" append-to-body class="main-dialog ddl-dialog">
       <template #header>
         <div class="dlg-title">
           <span class="dlg-title-ic"><el-icon :size="16"><Document /></el-icon></span>
@@ -765,7 +765,7 @@
     <ConnectionDialog v-model="connDialogVisible" :conn="editingConn" :custom-folders="customFolders" :initial-group="connDialogInitialEnv" :focus="connDialogFocus" :initial-type="connDialogInitialType" @saved="onConnSaved" @folder-added="refreshFolders" />
 
     <!-- 数据库 DDL 弹窗 -->
-    <el-dialog v-model="dbDdlVisible" width="720px" append-to-body class="main-dialog">
+    <el-dialog v-model="dbDdlVisible" width="720px" append-to-body class="main-dialog ddl-dialog">
       <template #header>
         <div class="dlg-title">
           <span class="dlg-title-ic"><el-icon :size="16"><Coin /></el-icon></span>
@@ -9402,6 +9402,22 @@ const connTypeSummary = computed(() =>
   color: var(--dc-link); white-space: pre-wrap; word-break: break-all; margin: 0;
   user-select: text; cursor: text;
 }
+/* DDL 弹窗（表语句 / 建库语句）全屏态：正文要吃掉弹窗剩余高度。
+   非全屏时 .ctx-pre 封顶 480px（够看、不撑爆屏幕），但全屏（右上角 ⤢，见
+   utils/dialogMaximize.js）时弹窗高是「视口 - 24」，480 就只剩上面小半屏、下面一大片空 ——
+   真机反馈「DDL 全屏没有自适应高度」。这里把弹窗改成 flex 纵向：头部固定、正文撑满，
+   代码块再 flex 填满正文，长 DDL 在块内滚动。 */
+/* 注意必须用 :global() 包起来：el-dialog 是 teleport 渲染的，根节点和 .el-dialog__body
+   都不带本组件的 data-v（见下面 upd-dialog 那条同款注释），scoped 写法编译出来带
+   [data-v-xxx] 一个都匹配不上 —— 写了等于没写。 */
+:global(.el-dialog.ddl-dialog.dc-max) { display: flex; flex-direction: column; }
+:global(.el-dialog.ddl-dialog.dc-max > .el-dialog__header) { flex: none; }
+:global(.el-dialog.ddl-dialog.dc-max > .el-dialog__body) {
+  flex: 1 1 auto; min-height: 0;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+:global(.el-dialog.ddl-dialog.dc-max .ctx-pre) { flex: 1 1 auto; min-height: 0; max-height: none; }
 /* ===== AI 解释视图弹窗 ===== */
 /* ===== 检查更新弹窗 ===== */
 /* 注意：el-dialog 是 teleport 渲染的，内部元素不带 scoped 的 data-v，
