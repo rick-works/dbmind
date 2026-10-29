@@ -108,7 +108,9 @@ const syncMaxTableH = (dlg) => {
   // 全屏态下 .el-dialog__body 被全局 dc-resizable 规则设成 flex:1 + 固定高度（弹窗高 - 头部），
   // 所以它的 clientHeight 就是可分配空间，不受表格内容影响（直接量它，别自己拿 dialog 高减头部，
   // 头部/间距的口径差一点就会让表格溢出或空一条）
-  const avail = body.clientHeight - pad - (bar ? bar.offsetHeight : 0) - 8
+  // 再留 12px：只差 8 的时候实测表格底边会多出 2px（表格自带边框/行高取整），
+  // 而 body 是 overflow:auto，多这 2px 就足以让右侧冒出一条「内容没超也有」的滚动条
+  const avail = body.clientHeight - pad - (bar ? bar.offsetHeight : 0) - 12
   if (avail > 120) tableH.value = Math.floor(avail)
 }
 
@@ -252,4 +254,8 @@ defineExpose({ reload: load })
 }
 .sm-conn-cell { display: flex; align-items: center; gap: 6px; }
 .sm-time { font-size: 12px; color: var(--el-text-color-secondary); }
+/* 全屏态表格已经按正文空间算好高度，外壳不该再滚：全局 dc-resizable 规则给正文设了
+   overflow:auto，哪怕只差 1~2px 也会冒出一条「内容明明没超」的滚动条（真机截图）。
+   这里全屏时直接关掉；非全屏保持可滚（窗口很矮时还能滚到底）。 */
+:global(.el-dialog.script-mgr-dialog.dc-max > .el-dialog__body) { overflow: hidden; }
 </style>
