@@ -2181,43 +2181,56 @@ const resWhereOf = (g) => {
   return parts
 }
 const commitEdits = async () => {
-  if (editsBusy.value || !pendingEdits.value.length) return
-  // 只读连接 / 生产保护：点击那一刻就拦下并弹右上角通知（与用户管理、表单同一闸门），
-  // 不然只读数据源上点「提交修改」毫无反应 —— 后端拦了但这里把失败吞得无声无息
-  await loadProtectProd()
-  if (!guardConnWrite(connForGuard.value, t('sqlq.commitEdits'))) return
-  const first = pendingEdits.value[0]
-  if (!first || result.value !== first.snapshot || result.value?.rows !== first.rowsRef) {
-    ElMessage.warning(t('sqlq.editsStale'))
-    pendingEdits.value = []
-    return
-  }
-  const connId = selectedConnId.value || props.conn.id
-  const db = selectedSchema.value
-    ? `${selectedDatabase.value}.${selectedSchema.value}`
-    : selectedDatabase.value || undefined
-  // 每行一条 UPDATE（同一行的多列合成一条 SET），一次批量下发 ⇒ 一次提交多条
-  const sqlText = pendingEdits.value
-    .map(g => {
-      const sets = Object.entries(g.changes || {}).map(([col, v]) => `${resIdent(col)} = ${resSqlVal(v)}`).join(', ')
-      const where = resWhereOf(g)
-      if (!sets || !where) return ''
-      return `UPDATE ${resIdent(g.table)}\nSET ${sets}\nWHERE ${where};`
-    })
-    .filter(Boolean)
-    .join('\n')
-  if (!sqlText) { ElMessage.warning(t('sqlq.cellEditNoWhere')); return }
+  // 这里以前是 `if (editsBusy || !pendingEdits.length) return`：上一次提交还没回来（按钮在转圈）
+  // 时再点，界面上**什么都不发生、也没有任何提示** —— 真机反馈的「点提交没反应」就有这一种。
+  if (editsBusy.value) { ElMessage.info(t('sqlq.editBusy')); return }
+  if (!pendingEdits.value.length) return
+  // 整段都进 try：生成 UPDATE（resWhereOf / resIdent / resSqlVal）以前在 try 之外，
+  // 那里一旦抛错就是「未捕获的 Promise 异常」—— 控制台有红字，界面上一点提示都没有。
   editsBusy.value = true
   try {
+    // 只读连接 / 生产保护：点击那一刻就拦下并弹右上角通知（与用户管理、表单同一闸门），
+    // 不然只读数据源上点「提交修改」毫无反应 —— 后端拦了但这里把失败吞得无声无息
+    await loadProtectProd()
+    if (!guardConnWrite(connForGuard.value, t('sqlq.commitEdits'))) return
+    const first = pendingEdits.value[0]
+    if (!first || result.value !== first.snapshot || result.value?.rows !== first.rowsRef) {
+      ElMessage.warning(t('sqlq.editsStale'))
+      pendingEdits.value = []
+      return
+    }
+    const connId = selectedConnId.value || props.conn.id
+    const db = selectedSchema.value
+      ? `${selectedDatabase.value}.${selectedSchema.value}`
+      : selectedDatabase.value || undefined
+    // 每行一条 UPDATE（同一行的多列合成一条 SET），一次批量下发 ⇒ 一次提交多条
+    const sqlText = pendingEdits.value
+      .map(g => {
+        const sets = Object.entries(g.changes || {}).map(([col, v]) => `${resIdent(col)} = ${resSqlVal(v)}`).join(', ')
+        const where = resWhereOf(g)
+        if (!sets || !where) return ''
+        return `UPDATE ${resIdent(g.table)}\nSET ${sets}\nWHERE ${where};`
+      })
+      .filter(Boolean)
+      .join('\n')
+    if (!sqlText) { ElMessage.warning(t('sqlq.cellEditNoWhere')); return }
     execId.value = 'e_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
     const b = await executeSqlBatch(connId, sqlText, db, execId.value, null, undefined, uiSession)
     const results = (b && Array.isArray(b.results)) ? b.results : []
+    // 「服务端没回结果」以前会被当成成功（results 空 ⇒ failed 找不到 ⇒ 弹「已更新 0 行」）
+    if (!results.length) { ElMessageBoxWithFix(t('sqlq.editsNoResult')); return }
     const failed = results.find(r => !r.success)
     if (failed) { ElMessageBoxWithFix(failed.message || t('ai.runFailed')); return }
     // 成功：新值早已写回行数据（编辑时就地更新），这里只清空缓冲
     pendingEdits.value = []
-    ElMessage.success(t('sqlq.editsCommitted', { n: results.reduce((m, r) => m + (r.affectedRows || 0), 0) })
-      + (txMode.value ? ' ' + t('sqlq.rememberCommit') : ''))
+    const affected = results.reduce((m, r) => m + (r.affectedRows || 0), 0)
+    if (!affected) {
+      // 语句过了但一行没动（被别处改过 / WHERE 不匹配）：说清楚，别报「已更新 0 行」糊弄过去
+      ElMessage.warning(t('sqlq.editsNoRow'))
+    } else {
+      ElMessage.success(t('sqlq.editsCommitted', { n: affected })
+        + (txMode.value ? ' ' + t('sqlq.rememberCommit') : ''))
+    }
   } catch (e) {
     ElMessageBoxWithFix(e?.message || t('ai.runFailed'))
   } finally {
