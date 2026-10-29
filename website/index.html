@@ -746,6 +746,30 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.7.4（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.7.4</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-30</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>修掉 SQL Server 的 text / ntext / image 列导致目标表建不出来、整表静默漏同步的问题：这几类的长度是 2147483647 而不是 -1，此前被原样拼成 text(2147483647)，建表必然报「exceeds the maximum allowed for any data type (8000)」</b></li>
+            <li><b>数据传输的「失败」数改为对象级实时上报：建表失败、对象不存在这类一行都没搬的情况，任务运行中就会计数，不再等结束才跳</b></li>
+            <li><b>无主键的大对象（视图、无键表）分页重做：读取页不再被「每批条数」压住，25 万行的视图单表从 936 秒降到 514 秒，事务粒度仍按每批条数</b></li>
+            <li><b>超长文本类型的建表映射在各数据库间统一收敛：text / longtext / clob / varchar(max) 按目标库落成合法写法，不会再拼出带 2147483647 的长度</b></li>
+            <li><b>编辑表结构</b>：text 列不再显示长度 2147483647，类型大小写不再混排（此前同一张表里 TEXT 与 varchar 并存），SQL Server 可选类型补齐到 30 项</li>
+            <li><b>多表对比、对象表单（索引 / 触发器 / 建表）、新建数据库、SQL 结果编辑、数据筛选、质量规则等下拉框，未选中时统一显示「请选择」</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.7.4" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.7.4" target="_blank" rel="noopener">下载 v1.7.4</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.7.3（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +777,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.7.3</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-29</span>
           </div>
           <ul class="rel-notes">
