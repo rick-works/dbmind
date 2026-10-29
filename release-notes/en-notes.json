@@ -540,5 +540,10 @@
     "Fixed a crash from reading past the edge of a window split on keyless tables",
     "A page that does not come back within 60 seconds now shrinks itself (down to 500 rows, about 80 KB) instead of failing the whole table on a lossy link; DBMIND_SYNC_PAGE_ROWS pins the page size if you prefer",
     "Table creation and truncation on the target now share one dedicated connection: before this each table opened its own, six concurrent tables filled the connection's concurrency limit, the log filled with 'timed out waiting for a free connection', rebuilds fell back to a degraded path and the data load failed along with it (112 tables ended up with mismatched row counts)"
+  ],
+  "v1.7.2": [
+    "A whole batch of \"dialog only uses the top part after maximize / resize\" bugs is fixed: task center, settings, database dump, data generation, connection editor, knowledge-base settings, SQL dry-run / explain plan, and AI optimize / explain - the body now fills the dialog, lists scroll on their own, and footer buttons stay on screen",
+    "The settings dialog now scrolls its left menu and right pane independently: before, the whole block scrolled as one and the menu had no scrollbar even when it overflowed",
+    "Row-count backfill in the tree is faster: instead of one round trip per table, a batch of counts goes out as a single statement (95 tables: 2.8s to 1.8s), and the batch shrinks automatically on big tables so it cannot time out as a whole"
   ]
 }
