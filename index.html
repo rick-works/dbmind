@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.7.5（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.7.5</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-30</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>修掉例程同步的一个误判</b>：定义以块注释（/* … */）开头的函数/存储过程会被当成「源库里没有取到该对象的定义」直接跳过，真机上一个 4.8 KB 的函数因此整条没建</li>
+            <li><b>同步不再改掉对象名</b>：源库里用 sp_rename 改过名的例程（目录名 test1111、定义正文仍是 CREATE PROCEDURE [test111]），过去同步到目标端会变成 test111，现在建完会改回 test1111，与源库完全一致；「删除重建」也会把上一轮按正文名留下的残留一起清掉</li>
+            <li><b>数据传输第一步等位置的「请选择」占位与同列其他选择器对齐（连接选择器未选中时不再占用前缀位，此前偏右 4px）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.7.5" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.7.5" target="_blank" rel="noopener">下载 v1.7.5</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.7.4（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.7.4</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-30</span>
           </div>
           <ul class="rel-notes">
