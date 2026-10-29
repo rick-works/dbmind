@@ -48,7 +48,7 @@
           <el-button size="small" type="primary" plain :icon="Refresh" @click="resetRules">{{ $t('dgen.allAutoByType') }}</el-button>
         </div>
 
-        <el-table :data="colRules" size="small" border class="rule-table" :max-height="ruleTableMaxH">
+        <el-table :data="colRules" size="small" border class="rule-table" height="100%">
           <el-table-column :label="$t('dgen.colField')" min-width="150">
             <template #default="{ row }">
               <div class="cell-name">
@@ -134,7 +134,7 @@
           <span class="section-title">{{ $t('dgen.previewResult') }}</span>
           <span class="section-tip">{{ $t('dgen.previewTip', { n: previewRows.length }) }}</span>
         </div>
-        <el-table v-loading="previewing" :data="previewRows" size="small" border class="preview-table" :max-height="previewTableMaxH">
+        <el-table v-loading="previewing" :data="previewRows" size="small" border class="preview-table" height="100%">
           <el-table-column v-for="c in previewColumns" :key="c" :prop="c" :label="c" min-width="130" show-overflow-tooltip />
           <template #empty>
             <span class="empty-tip">{{ $t('dgen.previewEmpty') }}</span>
@@ -367,13 +367,9 @@ const jobStatus = computed(() => {
 })
 
 // ==================== 弹窗内表格可视高度 ====================
-// 弹窗高度固定（≤88vh），字段多时由表格自己滚动（表头固定），不再把弹窗越撑越高
-const winH = ref(window.innerHeight)
-const onWinResize = () => { winH.value = window.innerHeight }
-onMounted(() => window.addEventListener('resize', onWinResize))
-// 「字段规则」表上方还有步骤条、生成设置卡片与标题，预留空间比预览表更多
-const ruleTableMaxH = computed(() => Math.max(260, Math.round(winH.value * 0.88) - 400))
-const previewTableMaxH = computed(() => Math.max(220, Math.round(winH.value * 0.88) - 330))
+// 原来按 window.innerHeight 现算固定像素（min(88vh) - 400），只认视口不认弹窗：
+// 全屏或把弹窗拖大后表格纹丝不动、下方一片空白。现在交给布局 ——
+// .gen-body 是 flex 纵列，表格 flex:1 + height="100%" 直接吃掉剩余高度（与质量规则面板同一套写法）
 
 const footerTip = computed(() => {
   if (step.value === 'rules') return t('dgen.tipRules')
@@ -534,7 +530,6 @@ const onBeforeClose = (done) => {
 
 onBeforeUnmount(() => {
   stopPoll()
-  window.removeEventListener('resize', onWinResize)
 })
 
 // ==================== 字段加载 / 规则重置 ====================
@@ -748,8 +743,14 @@ watch(() => props.modelValue, async (open) => {
 .gen-steps :deep(.el-step__title.is-success) { font-size: var(--dlg-body, 14px); font-weight: 700; }
 /* 弹窗外壳（宽度/高度上限/body 撑满）见文件末尾的非 scoped 样式块 */
 .gen-body {
+  /* flex 纵列：步骤标题/设置卡片/工具条按内容，主表格 flex:1 吃掉剩下高度 ——
+     弹窗全屏或拖大时表格跟着长（原来是 JS 按视口算死像素，全屏后下面空一大片） */
+  display: flex; flex-direction: column;
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-right: 4px;
 }
+.gen-body > * { flex: none; }
+.gen-body > .rule-table,
+.gen-body > .preview-table { flex: 1 1 auto; min-height: 140px; }
 
 /* 通用块 */
 .step-subtitle {
@@ -842,8 +843,8 @@ watch(() => props.modelValue, async (open) => {
 
 /* 实时日志控制台（跟随主题：深色 / 浅色均可读） */
 .log-box {
-  /* 高度跟视口走（原来写死 190px）：小窗口不顶出屏幕、大屏能多看几行 */
-  height: clamp(150px, 22vh, 320px); overflow: auto; padding: 8px 10px; border-radius: 8px;
+  /* 吃掉执行页剩余高度（原来 clamp(150px,22vh,320px)：全屏后日志只占一小条） */
+  flex: 1 1 auto; min-height: 120px; overflow: auto; padding: 8px 10px; border-radius: 8px;
   background: var(--dc-bg-code); border: 1px solid var(--dc-border);
   color: var(--dc-code-text); font-family: var(--dc-mono-font);
   font-size: 13px; line-height: 1.7;

@@ -343,7 +343,7 @@
 
     <!-- 分段与索引设置：同样用弹窗，宽度留足给「左配置 / 右预览」 -->
     <el-dialog v-model="settingsOpen" :title="$t('ks.settingsTitle')" width="min(1120px, 94vw)" top="5vh"
-               :append-to-body="true">
+               class="kb-settings-dialog" :append-to-body="true">
       <KbSettingsForm :config="cfg" :models="models" :preview-text="previewText"
                       :kb-id="activeId" :docs="docs"
                       @dirty="dirty = true" />
@@ -1128,6 +1128,11 @@ onMounted(async () => {
 
 /* 设置弹窗底部操作条（在 dialog 的 footer 插槽里，分隔线由 dialog 自己画） */
 .kbs-drawer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+/* 设置弹窗（左配置 / 右预览）：正文变 flex 纵列，KbSettingsForm 撑满 ——
+   弹窗是 teleport 的，根节点没有本组件的 data-v，必须 :global。 */
+:global(.el-dialog.kb-settings-dialog > .el-dialog__body) {
+  display: flex; flex-direction: column; overflow: hidden;
+}
 
 .kbs-sum { display: flex; flex-direction: column; }
 .kbs-sum-item {

@@ -2252,14 +2252,20 @@ watch(visible, (v) => {
   box-shadow: 0 2px 8px var(--dc-primary-glow);
 }
 
-/* 高度 = 视口的 80%（640px 起步、900px 封顶）：矮屏不出屏，大屏多露内容 ——
-   以前定死 560px，内容多时（比如 MCP 页签）右侧滚动条一长条，看着憋屈 */
-/* 内容区高度跟随视口（不再用 clamp 的 640px 下限：矮视口下会把弹窗撑出屏幕）。
-   左侧页签栏自己内部滚动，右侧面板内容超高时也各自内部滚 */
-.settings-body { display: flex; height: calc(100vh - 190px); }
+/* 左右两栏各自滚：弹窗本身定高 → 正文吃掉剩余高度 → .settings-body 填满正文，
+   左栏（页签）与右栏（面板）都只在自己的盒子里滚，外壳永不滚动。
+   原来 .settings-body 写的是 height: calc(100vh - 190px)，那个 190 是「头部 + 内边距」的
+   估算值：一旦标题行变高（字号档位/缩放）、或弹窗被拉大，正文就会比这个高，于是
+   .el-dialog__body（overflow:auto 且滚动条被隐藏）接管滚动 —— 滚一下左右一起动，
+   左栏自己反而永远不出滚动条。改成按弹窗高度算就没有这个口径问题。
+   弹窗根节点（.el-dialog）不在这里写：本组件根节点是 .el-overlay，data-v 落不到
+   .el-dialog 上，相关规则统一放在下面那段非 scoped 的 <style> 里。 */
+.settings-body { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
 .settings-tabs {
   width: 150px; flex-shrink: 0; border-right: 1px solid var(--dc-border);
   padding: 14px 8px; overflow-y: auto;
+  /* 滚动条常驻留位（内容不够长时也不跳位），滚动到端点不再把滚轮传给外面 */
+  scrollbar-gutter: stable; overscroll-behavior: contain;
   background: var(--dc-bg-soft);
 }
 .settings-tab {
@@ -2280,7 +2286,11 @@ watch(visible, (v) => {
   background: var(--dc-primary); border-radius: 0 3px 3px 0;
 }
 .tab-icon { width: 18px; height: 18px; flex-shrink: 0; }
-.settings-content { flex: 1; overflow-y: auto; padding: 14px 24px 24px; }
+.settings-content {
+  flex: 1 1 auto; min-width: 0; min-height: 0;
+  overflow-y: auto; overscroll-behavior: contain;
+  padding: 14px 24px 24px;
+}
 .settings-panel { animation: dc-fade-in .2s ease; }
 .panel-title { font-weight: 700; font-size: 15px; margin-bottom: 6px; color: var(--dc-text-strong); }
 .panel-desc { font-size: 13px; color: var(--dc-text-dim); margin-bottom: 18px; line-height: 1.7; }
@@ -2872,26 +2882,25 @@ watch(visible, (v) => {
 
 /* 覆盖 el-dialog 在暗色主题下的样式 */
 .settings-dialog .el-dialog__header { margin-right: 0; padding: 16px 20px; border-bottom: 1px solid var(--dc-border); }
-/* 内容区不再写死高度、不再自己滚动：弹窗高度完全由内容决定（各页签不被统一拉高），
-   也没有弹窗级滚动条；日志页签的列表高度在 scoped 样式里按视口反推，超长只在列表内滚 */
-.settings-dialog .el-dialog__body { padding: 0; }
-/* 内容放不下时允许滚动，但滚动条不显示（浏览器缩放/小窗下也不出难看的竖条） */
-.settings-dialog .el-dialog__body { scrollbar-width: none; -ms-overflow-style: none; }
-.settings-dialog .el-dialog__body::-webkit-scrollbar { width: 0; height: 0; display: none; }
-.settings-dialog .el-dialog__headerbtn { top: 4px; right: 8px; }
-/* 全屏态（右上角 ⤢，见 utils/dialogMaximize.js）：弹窗高度被写成「视口 - 24」，
-   而 .settings-body 是按 calc(100vh - 190px) 定高的 —— 两个口径对不上，全屏后底部就空出
-   一截（1440×900 实测空 90px，视口越高空得越多）。全屏时改用 flex：正文区吃掉弹窗剩余
-   高度，.settings-body 再 100% 填进去，左右两栏自然铺到弹窗底边。
-   非全屏保持「高度由内容决定」，逻辑不变。 */
-.settings-dialog.dc-max { display: flex; flex-direction: column; }
-.settings-dialog.dc-max > .el-dialog__header { flex: none; }
-.settings-dialog.dc-max > .el-dialog__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  /* 左右两栏各自滚（页签栏 / 内容区都是 overflow-y:auto），外壳不再出第二条滚动条 */
-  overflow: hidden;
+/* 这一整段没有 scoped（.el-dialog 是本组件之外渲染的节点，带 data-v 的选择器根本命中不了），
+   所以这里是**全局**规则，一律用 .settings-dialog 前缀收窄范围。
+   弹窗自身定高：正文才有「剩余高度」可分；全屏时 dialogMaximize 会写内联高度覆盖它。 */
+.el-dialog.settings-dialog {
+  display: flex; flex-direction: column; overflow: hidden;
+  height: min(880px, calc(100vh - 48px));
 }
+/* 正文只负责把高度交给 .settings-body，自己绝不滚动：滚动分别发生在
+   左栏（.settings-tabs）和右栏（.settings-content）里。
+   多带 .el-overlay-dialog 一层，是为了在特异性上压过全局的
+   `.el-dialog.dc-resizable > .el-dialog__body { overflow: auto }`（同权重时靠加载顺序，不可靠）。 */
+.el-overlay-dialog .el-dialog.settings-dialog > .el-dialog__body {
+  padding: 0;
+  flex: 1 1 auto; min-height: 0;
+  display: flex; overflow: hidden;
+}
+.settings-dialog .el-dialog__headerbtn { top: 4px; right: 8px; }
+/* 全屏态：弹窗高度被写成「视口 - 24」，覆盖上面的定高；其余规则与非全屏完全一致，
+   左右两栏照样各自滚。 */
 .settings-dialog.dc-max .settings-body { height: 100%; }
 .fmt-preview-note { color: var(--dc-text-dim); }
 .fmt-sql-kw { color: var(--dc-sql-kw); font-weight: 600; }

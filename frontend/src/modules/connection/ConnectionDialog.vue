@@ -1041,9 +1041,15 @@ const importPastedParams = () => {
 }
 
 .conn-tabs :deep(.el-tabs__header) { margin-bottom: 14px; }
-/* 内容区自己滚：类型选项一多，弹窗不能长到把「测试连接 / 保存」挤出屏幕 */
+/* 内容区自己滚：类型选项一多，弹窗不能长到把「测试连接 / 保存」挤出屏幕。
+   上限不用写死 56vh —— 改成占满弹窗正文的剩余高度，全屏/拖大时内容区跟着长，
+   矮窗口仍由它自己滚（内容不会顶到按钮上）。 */
+:global(.el-dialog.conn-dialog > .el-dialog__body) {
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.conn-tabs { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
 .conn-tabs :deep(.el-tabs__content) {
-  max-height: 56vh; overflow-y: auto; padding-right: 6px;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 6px;
 }
 /* 「直达只读」时的高亮：进来先亮一下再淡出（不用一直亮，亮完就恢复正常） */
 .conn-readonly-item.flash-hl { animation: hl-flash 1.7s ease-out; border-radius: 8px; }

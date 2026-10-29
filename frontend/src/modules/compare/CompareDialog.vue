@@ -1199,8 +1199,10 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .dlg-title-sub { font-size: var(--dlg-sm, 12px); font-weight: 400; color: var(--dc-text-dim); margin-left: 4px; }
 
 /* ==================== 进度弹窗 + 日志 ==================== */
-/* 明细摊开后内容会明显变长，给弹窗体设个上限并允许滚动，避免把窗口顶出屏幕 */
-.progress-dialog :deep(.el-dialog__body) { padding: 16px 20px 10px; max-height: 62vh; overflow: auto; }
+/* 明细摊开后内容会明显变长：正文交给 dc-resizable 的 flex 撑满 + 自己滚。
+   原来这里是 :deep（teleport 的正文不带 data-v，压根没命中）且封顶 62vh，
+   全屏后只用到上面一截。 */
+:global(.el-dialog.progress-dialog .el-dialog__body) { padding: 16px 20px 10px; overflow: auto; }
 .pg-summary { margin-bottom: 14px; }
 .pg-text { font-size: 13px; color: var(--dc-text-dim); margin-top: 8px; text-align: center; }
 .pg-log { margin-bottom: 0; }

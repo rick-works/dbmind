@@ -546,12 +546,12 @@
     <!-- 任务中心两个视图共用一个弹窗：history = 全部执行记录（**表格 + 分页**，字段：
          类型/任务/状态/开始/结束/耗时/操作）；running = 正在执行（右侧时钟悬浮的轻列表）。
          状态在打开时实时刷新，终态写回记录（持久化），刷新页面后历史仍显示完成/失败。 -->
-    <el-dialog v-model="bgCenterOpen" :title="bgCenterMode === 'running' ? $t('sync.bgRunningTitle') : $t('sync.bgCenter')" width="1000px" append-to-body>
+    <el-dialog v-model="bgCenterOpen" :title="bgCenterMode === 'running' ? $t('sync.bgRunningTitle') : $t('sync.bgCenter')" width="1000px" append-to-body class="bg-center-dialog">
     <template v-if="bgCenterMode === 'history'">
     <div v-if="bgTasks.length" class="bg-toolbar">
       <el-button size="small" type="danger" plain :icon="ElDelete" @click="confirmClearBg">{{ $t('sync.bgClear') }}</el-button>
     </div>
-    <el-table :data="bgPageRows" size="small" border class="data-table" @row-click="resumeBgTask" :row-class-name="() => 'bg-row-click'">
+    <el-table :data="bgPageRows" size="small" border class="data-table" height="100%" @row-click="resumeBgTask" :row-class-name="() => 'bg-row-click'">
     <el-table-column :label="$t('ts.kind')" width="80" align="center" header-align="center">
       <template #default="{ row }"><span class="bg-kind" :class="bgKindClass(row.kind)">{{ bgKindLabel(row.kind) }}</span></template>
     </el-table-column>
@@ -721,7 +721,7 @@
     </el-dialog>
 
     <!-- 索引元数据弹窗：只读看一眼"这张表有哪些索引"（列名跟着各库返回走） -->
-    <el-dialog v-model="ctxIndexVisible" width="760px" append-to-body class="main-dialog">
+    <el-dialog v-model="ctxIndexVisible" width="760px" append-to-body class="main-dialog ctx-index-dialog">
       <template #header>
         <div class="dlg-title">
           <span class="dlg-title-ic"><el-icon :size="16"><Coin /></el-icon></span>
@@ -9302,8 +9302,12 @@ const connTypeSummary = computed(() =>
 .multi-act.danger:hover:not(:disabled) { border-color: #ef4444; color: #ef4444; }
 .multi-act:disabled { opacity: .55; cursor: default; }
 .tree-node.multi-sel { background: var(--dc-primary-wash); border-radius: 4px; }
-/* 索引元数据弹窗：内容区限高（索引多的表不至于把弹窗撑到天上去） */
-.ctx-index-wrap { max-height: 56vh; overflow: auto; }
+/* 索引元数据弹窗：内容区吃掉正文剩余高度（原来封顶 56vh，全屏后下面空一大块）。
+   正文变 flex 纵列 —— 弹窗是 teleport 的，内部元素没有 data-v，必须 :global。 */
+:global(.el-dialog.ctx-index-dialog > .el-dialog__body) {
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.ctx-index-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .ctx-index-empty { padding: 24px 4px; font-size: 13px; color: var(--dc-text-dim); text-align: center; }
 .tree-icon { font-size: var(--dc-tree-icon, 15px); }
 .node-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; font-size: var(--dc-tree-fs, 14px); line-height: 1.4; font-weight: 400; color: var(--dc-text); }
@@ -9420,11 +9424,13 @@ const connTypeSummary = computed(() =>
 :global(.el-dialog.ddl-dialog.dc-max .ctx-pre) { flex: 1 1 auto; min-height: 0; max-height: none; }
 /* ===== AI 解释视图弹窗 ===== */
 /* ===== 检查更新弹窗 ===== */
-/* 注意：el-dialog 是 teleport 渲染的，内部元素不带 scoped 的 data-v，
-   高度/滚动这类「影响内部盒子」的规则必须用 :deep() 穿透，否则写了不生效（弹窗会被内容撑满屏） */
-.upd-dialog :deep(.el-dialog__body) { max-height: 50vh; overflow-y: auto; padding: 4px 20px 8px; }
-.upd-dialog :deep(.el-dialog__header) { padding: 16px 20px 12px; }
-.upd-dialog :deep(.el-dialog__footer) { padding: 10px 20px 14px; }
+/* el-dialog 是 teleport 渲染的，内部元素不带 scoped 的 data-v —— 原来这里用 :deep() 其实
+   一条都没命中（正文高度全靠 1050 行那组内联样式）。这里改成 :global 让它真的生效，
+   同时去掉 max-height:50vh：正文已经由内联的 flex:1 + overflowY:auto 负责，再封 50vh
+   就等于「全屏后只用到上半屏」。 */
+:global(.el-dialog.upd-dialog .el-dialog__body) { padding: 4px 20px 8px; }
+:global(.el-dialog.upd-dialog .el-dialog__header) { padding: 16px 20px 12px; }
+:global(.el-dialog.upd-dialog .el-dialog__footer) { padding: 10px 20px 14px; }
 .upd-lead { margin: 0 0 10px; font-size: 13px; color: var(--dc-text-mid, #555); }
 .upd-notes { font-size: 12.5px; line-height: 1.7; color: var(--dc-text, #333); }
 .upd-notes :deep(h1), .upd-notes :deep(h2), .upd-notes :deep(h3),
@@ -9471,22 +9477,27 @@ const connTypeSummary = computed(() =>
   color: var(--dc-link, #409eff); text-decoration: none;
 }
 .upd-more:hover { text-decoration: underline; }
-.ai-explain-dialog :deep(.el-dialog) {
-  max-height: 640px;
+/* AI 解释弹窗：正文撑满、内容区自己滚（原来 :deep 命中不了 teleport 的 .el-dialog，
+   两条规则其实一直是死的；.ai-explain-body 又封顶 520px，全屏后下半屏全空） */
+:global(.el-dialog.ai-explain-dialog) {
   display: flex;
   flex-direction: column;
 }
-.ai-explain-dialog :deep(.el-dialog__body) {
+:global(.el-dialog.ai-explain-dialog > .el-dialog__body) {
   padding: 0;
   overflow: hidden;
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 .ai-explain-body {
   padding: 20px 24px;
   font-size: 14px;
   line-height: 1.8;
   color: var(--dc-text);
-  max-height: 520px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 .ai-explain-body :deep(h1),
@@ -9614,12 +9625,23 @@ const connTypeSummary = computed(() =>
 .bg-task-btn { position: relative; }
 .bg-count { position: absolute; top: -3px; right: -4px; min-width: 14px; height: 14px; line-height: 14px; border-radius: 7px; background: var(--dc-primary); color: #fff; font-size: 10px; text-align: center; padding: 0 3px; box-sizing: border-box; }
 .bg-toolbar { display: flex; justify-content: flex-start; margin-bottom: 10px; }
-.bg-task-list { max-height: 300px; overflow-y: auto; }
+/* 任务中心弹窗：正文 flex 纵列 —— 工具条/分页固定，表格与运行中列表吃掉剩余高度
+   （原来表格无高度、运行列表封顶 300px，全屏后下半屏全空） */
+/* 本段 <style> 没有 scoped，所以这里**不能写 :global()**（那是 scoped 专用伪类，
+   原样输出到 CSS 后浏览器按非法选择器整条丢弃，这几条一直是死的）。
+   .el-overlay-dialog 是为了在特异性上压过全局 `.el-dialog.dc-resizable > .el-dialog__body`。 */
+.el-overlay-dialog .el-dialog.bg-center-dialog > .el-dialog__body {
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.el-dialog.bg-center-dialog > .el-dialog__body > .bg-toolbar,
+.el-dialog.bg-center-dialog > .el-dialog__body > .bg-pager { flex: none; }
+.el-dialog.bg-center-dialog .el-dialog__body > .data-table { flex: 1 1 auto; min-height: 0; }
+.bg-task-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .bg-task-head { font-size: 13px; font-weight: 600; color: var(--dc-text); padding-bottom: 8px; border-bottom: 1px solid var(--dc-border-soft); margin-bottom: 6px; }
 .bg-task-empty { font-size: 12px; color: var(--dc-text-dim); padding: 14px 0; text-align: center; }
 /* 执行记录表格：状态点在单元格里内联；行可点（查看） */
 .bg-dot-inline { display: inline-block; margin-right: 6px; vertical-align: middle; }
-:deep(.bg-row-click) { cursor: pointer; }
+.bg-row-click { cursor: pointer; }
 .bg-pager { margin-top: 10px; justify-content: flex-end; }
 /* 时钟图标的悬浮下拉：正在执行的任务（纯 CSS hover，挂在图标正下方，不弹窗不飘位） */
 .bg-hover { position: relative; display: inline-flex; }

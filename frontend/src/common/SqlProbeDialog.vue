@@ -69,7 +69,8 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch } from 'vue'
+
 import { t } from '../utils/i18n'
 import { ElMessage } from 'element-plus'
 import { Refresh, DocumentCopy, CaretRight, Loading } from '@element-plus/icons-vue'
@@ -214,8 +215,14 @@ const copyAll = async () => {
   font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-size: 13px;
   line-height: 1.6; color: var(--dc-code-text); white-space: pre-wrap; word-break: break-word;
 }
+/* 全屏 / 拖大后：执行计划与试跑结果吃掉正文剩余高度（原来封顶 46vh，下面空一大片）。
+   正文变 flex 纵列，SQL 预览与提示行按内容、主内容区 flex:1。 */
+:global(.el-dialog.probe-dialog > .el-dialog__body) {
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.probe-head, .probe-stat, .probe-sql { flex: none; }
 .probe-plan {
-  margin: 0; padding: 12px; max-height: 46vh; overflow: auto;
+  margin: 0; padding: 12px; flex: 1 1 auto; min-height: 120px; overflow: auto;
   background: var(--dc-bg-code); border: 1px solid var(--dc-border-soft); border-radius: 8px;
   font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-size: 13px;
   line-height: 1.6; color: var(--dc-code-text); white-space: pre-wrap; word-break: break-word;
@@ -223,7 +230,7 @@ const copyAll = async () => {
 .probe-stat { font-size: 13px; color: var(--dc-text-dim); margin-bottom: 8px; }
 .probe-dot { margin: 0 6px; }
 .probe-table-wrap {
-  max-height: 46vh; overflow: auto;
+  flex: 1 1 auto; min-height: 120px; overflow: auto;
   border: 1px solid var(--dc-border-soft); border-radius: 8px;
 }
 .probe-table { border-collapse: collapse; width: 100%; font-size: 13px; }

@@ -461,7 +461,7 @@
     </div>
 
     <!-- top 与「执行计划 / 试跑」弹窗（SqlProbeDialog）对齐，保证上下级弹窗位置一致 -->
-    <el-dialog v-model="aiDialogVisible" width="640px" top="8vh" class="sqlq-dialog">
+    <el-dialog v-model="aiDialogVisible" width="640px" top="8vh" class="sqlq-dialog sqlq-ai-dialog">
       <template #header>
         <div class="dlg-title">
           <span class="dlg-title-ic"><el-icon :size="16"><MagicStick /></el-icon></span>
@@ -5879,7 +5879,11 @@ onBeforeUnmount(() => {
 .error-time { color: var(--dc-text-dim); font-size: 13px; margin-left: auto; }
 .error-message { font-family: "SF Mono", Consolas, monospace; white-space: pre-wrap; word-break: break-all; background: var(--dc-bg-soft); padding: 12px 14px; border-radius: 6px; color: var(--dc-danger); font-size: 14px; line-height: 1.8; max-height: 420px; overflow: auto; }
 .has-more-alert { margin: 6px 10px 0; flex-shrink: 0; }
-.ai-dialog-body { min-height: 200px; max-height: 440px; overflow: auto; }
+/* AI 优化/解释弹窗：正文撑满、内容区自己滚（原来封顶 440px，全屏后下半屏全空） */
+:global(.el-dialog.sqlq-ai-dialog > .el-dialog__body) {
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.ai-dialog-body { flex: 1 1 auto; min-height: 160px; overflow: auto; }
 .ai-loading { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 0; color: var(--dc-text-dim); }
 .ai-error-reason { background: var(--dc-warning-wash); border: 1px solid var(--dc-warning); border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; color: var(--dc-warning); line-height: 1.6; }
 .ai-reason-label { font-weight: 600; }

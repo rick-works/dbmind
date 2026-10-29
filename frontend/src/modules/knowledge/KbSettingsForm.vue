@@ -592,7 +592,9 @@ defineExpose({ runPreview })
 </script>
 
 <style scoped>
-.kbset { min-width: 0; height: 100%; }
+/* 弹窗正文是 flex 纵列（KnowledgeStudio 的 .kb-settings-dialog 规则），这里跟着撑满；
+   全屏/拖大后两栏一起长高（原来两栏按 calc(100vh-220px) 定高，全屏也不变） */
+.kbset { min-width: 0; flex: 1 1 auto; min-height: 0; }
 
 /* 预览素材选择：跟在标题右边，不额外占一整行高度 */
 .preview-src {
@@ -610,8 +612,10 @@ defineExpose({ runPreview })
   display: flex; flex-direction: column; gap: 18px; min-width: 0;
   border: 1px solid var(--dc-border); border-radius: 10px;
   background: var(--dc-bg-soft); padding: 16px 18px;
-  /* 两栏各自滚动：滚轮停在哪栏就滚哪栏 */
-  height: 100%; max-height: calc(100vh - 220px); min-height: 300px; overflow: auto;
+  /* 两栏各自滚动：滚轮停在哪栏就滚哪栏。
+     高度交给父级 grid（stretch），不再按视口拍脑袋算 —— calc(100vh-220px) 在弹窗全屏后
+     仍是老值，下面空一大块；min-height:300px 还会在矮窗口反向撑破。 */
+  min-height: 0; overflow: auto;
 }
 /* 右栏：标题固定，结果区吃满剩余高度（输入框已去掉，素材自动带出） */
 .kbset-preview { overflow: hidden; display: flex; flex-direction: column; }

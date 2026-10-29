@@ -2672,9 +2672,10 @@ onMounted(() => { if (props.modelValue) loadConnections() })
    （弹窗高度定死 + overflow:hidden，多出来的部分直接被裁掉，反而滚不到）。 */
 .sw-search { width: 180px; flex: none; }
 .sw-list {
+  /* 不再按视口封顶（min(46vh,400px)）：弹窗全屏/拖大后列表只长到 400px，下面空一大块。
+     父级 .opt-tabs 内容区已是 flex + 滚动容器，这里直接吃掉剩余高度即可。 */
   flex: 1 1 auto;
-  min-height: 90px;
-  max-height: min(46vh, 400px);
+  min-height: 0;
   overflow-y: auto;
   display: flex; flex-direction: column; gap: 6px;
   padding-right: 4px;
@@ -2787,7 +2788,9 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 .result-card { padding: 14px 16px; }
 
 /* ==================== 进度弹窗 ==================== */
-.progress-dialog :deep(.el-dialog__body) { padding: 16px 20px 10px; max-height: 74vh; overflow: auto; }
+/* 进度弹窗：正文交给 dc-resizable 的 flex 撑满（原来 :deep 命中不了 teleport 的正文，
+   还封顶 74vh —— 全屏后只用到上面一截） */
+:global(.el-dialog.progress-dialog .el-dialog__body) { padding: 16px 20px 10px; overflow: auto; }
 .pg-summary { margin-bottom: 14px; }
 .pg-text { font-size: 13px; color: var(--dc-text-dim); margin-top: 8px; text-align: center; }
 

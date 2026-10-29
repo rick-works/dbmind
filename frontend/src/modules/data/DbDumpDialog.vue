@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" width="720px" :close-on-click-modal="false" append-to-body class="main-dialog">
+  <el-dialog v-model="visible" width="720px" :close-on-click-modal="false" append-to-body class="main-dialog dump-dialog">
     <template #header>
       <div class="dlg-title">
         <span class="dlg-title-ic"><el-icon :size="16"><Download /></el-icon></span>
@@ -39,7 +39,7 @@
         <el-form-item :label="$t('dump.chooseObjects')">
           <el-tabs v-model="activeTab" type="border-card" size="small" style="width:100%;background:transparent;" class="dump-tabs">
             <el-tab-pane v-if="objTypes.includes('table')" :label="$t('dump.objTable')" name="table">
-              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
+              <div class="dump-obj-list">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allTable" @change="toggleAllByType('table', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedTable.length, total: tables.length }) }}</span>
@@ -51,7 +51,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('view')" :label="$t('dump.objView')" name="view">
-              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
+              <div class="dump-obj-list">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allView" @change="toggleAllByType('view', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedView.length, total: views.length }) }}</span>
@@ -63,7 +63,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('function')" :label="$t('dump.objFunction')" name="function">
-              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
+              <div class="dump-obj-list">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allFunc" @change="toggleAllByType('function', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedFunc.length, total: funcs.length }) }}</span>
@@ -75,7 +75,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('procedure')" :label="$t('dump.objProcedure')" name="procedure">
-              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
+              <div class="dump-obj-list">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allProc" @change="toggleAllByType('procedure', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedProc.length, total: procs.length }) }}</span>
@@ -87,7 +87,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('trigger')" :label="$t('dump.objTrigger')" name="trigger">
-              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
+              <div class="dump-obj-list">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allTrigger" @change="toggleAllByType('trigger', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedTrigger.length, total: triggers.length }) }}</span>
@@ -99,7 +99,7 @@
               </div>
             </el-tab-pane>
             <el-tab-pane v-if="objTypes.includes('event')" :label="$t('dump.objEvent')" name="event">
-              <div style="max-height:clamp(200px,34vh,420px);overflow:auto;padding:4px;">
+              <div class="dump-obj-list">
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
                   <el-checkbox v-model="allEvent" @change="toggleAllByType('event', $event)" style="margin-right:auto;">{{ $t('common.selectAll') }}</el-checkbox>
                   <span style="color:var(--dc-muted);font-size: 13px;">{{ $t('dmp.selected', { n: selectedEvent.length, total: events.length }) }}</span>
@@ -336,6 +336,47 @@ const onTaskClose = () => {
   background: linear-gradient(135deg, var(--dc-primary), var(--dc-primary-deep));
   box-shadow: 0 2px 8px var(--dc-primary-glow);
 }
+/* ===== 全屏 / 拖大后对象列表要吃掉剩余高度 =====
+   原来 6 个页签各自写死 max-height:clamp(200px,34vh,420px)，弹窗拉高后下面空一大块。
+   改成一条 flex 链：正文 → 表单 → 最后一个 form-item → tabs → tab-pane → .dump-obj-list。
+   弹窗根节点/内部元素是 teleport 出来的，不带 data-v，所以整条链必须写成 :global。 */
+:global(.el-dialog.dump-dialog > .el-dialog__body) {
+  display: flex; flex-direction: column; overflow: hidden;
+}
+:global(.el-dialog.dump-dialog > .el-dialog__body > .el-form) {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+}
+/* 前三个表单项（格式/选项/对象类型）按内容高度，剩下的全给最后一个（对象列表） */
+:global(.el-dialog.dump-dialog > .el-dialog__body > .el-form > .el-form-item) { flex: none; }
+/* 最后一个表单项保持 Element 默认的「标签在左、控件在右」行布局（别改成 column，
+   那样标签会跑到 tabs 上面，和上面三个表单项不一致），只让它吃掉剩余高度 */
+:global(.el-dialog.dump-dialog .el-form > .el-form-item:last-child) {
+  flex: 1 1 auto; min-height: 0;
+  /* Element 给表单项留了 18px 下边距；最后一个吃掉剩余高度后这段空白就变成
+     「列表底部到正文底部」的一条缝（实测 20px），去掉 */
+  margin-bottom: 0;
+}
+/* 关键两个属性缺一不可：
+   ① Element 给 __content 的是 align-items:center，交叉轴居中会让里面的 tabs
+      按自身内容高度（实测 2649px）撑出去、而不是被拉伸到本行可用高度 —— 必须 stretch；
+   ② Element 还给 __content 加了 flex-wrap:wrap，换行的 flex 行高取「行内最高子项」，
+      照样是 2649 —— 必须 nowrap，单行才会按容器高度拉伸。 */
+:global(.el-dialog.dump-dialog .el-form-item:last-child > .el-form-item__content) {
+  flex: 1 1 auto; min-height: 0; align-items: stretch; flex-wrap: nowrap;
+}
+:global(.el-dialog.dump-dialog .el-form-item:last-child .el-form-item__content > .el-tabs) {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column;
+}
+/* 再往下两层才是真正的「没接上」：el-tabs__content 默认是 block，flex 高度在这里断掉；
+   el-tab-pane 默认不参与拉伸。两层都补成纵向 flex + min-height:0 才能一路传到列表 */
+:global(.el-dialog.dump-dialog .dump-tabs > .el-tabs__content) {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+:global(.el-dialog.dump-dialog .dump-tabs .el-tab-pane) {
+  flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden;
+}
+/* 列表自己滚：min-height 必须是 0（原来写 160px，空间不够时会被它顶出去） */
+.dump-obj-list { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 4px; }
 /* 转储弹窗 tabs 深色适配 */
 .dump-tabs :deep(.el-tabs__header) { background: var(--dc-bg-input); border: 1px solid var(--dc-border); border-bottom: none; }
 .dump-tabs :deep(.el-tabs__nav-wrap::after) { background-color: var(--dc-border); }
