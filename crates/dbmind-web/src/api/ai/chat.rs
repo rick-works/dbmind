@@ -534,7 +534,10 @@ async fn context_text(state: &AppState, req: &AiRequest) -> String {
     } else {
         req.table.clone().map(|table| vec![table]).unwrap_or_default()
     };
-    match crate::api::ai::schema_context(state, &conn, &database, &focus).await {
+    // 预算版上下文（同 system_with_context 的理由）：默认 12k tokens，只展开"点名 +
+    // SQL 里认出来"的表，其余表名占位。全量版在真机上曾把一次修复顶到 28 万 tokens。
+    let hint = format!("{} {}", req.ask_text(), req.sql_text());
+    match crate::api::ai::context::build(state, &conn, &database, &focus, &hint).await {
         Ok(context) => context.text,
         Err(err) => format!("（未能读取数据库结构：{}）", err.message),
     }

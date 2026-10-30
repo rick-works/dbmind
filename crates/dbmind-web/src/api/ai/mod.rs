@@ -29,6 +29,7 @@
 pub mod agent;
 pub mod chat;
 pub mod config;
+pub mod context;
 pub mod doc;
 pub mod evidence;
 pub mod governance;
@@ -301,7 +302,12 @@ pub async fn system_with_context(state: &AppState, req: &AiRequest, base_system:
         } else {
             req.table.clone().map(|table| vec![table]).unwrap_or_default()
         };
-        match schema_context(state, &conn, &database, &focus).await {
+        // 模型侧走**预算版**上下文（见 ai/context.rs）：全量的 schema_context 会把整库
+        // 上千张表连列带样例全塞进 prompt —— 真机实测一次 AI 修复 promptTokens = 282224，
+        // 单次约 0.3 元、首字延迟十几秒，且无关表会稀释注意力。预算版只展开"点名 +
+        // SQL 里认出来 + 默认前几张"的表，其余只留表名。
+        let hint = format!("{} {}", req.ask_text(), req.sql_text());
+        match context::build(state, &conn, &database, &focus, &hint).await {
             Ok(context) if !context.text.is_empty() => {
                 system.push_str("\n\n");
                 system.push_str(&context.text);

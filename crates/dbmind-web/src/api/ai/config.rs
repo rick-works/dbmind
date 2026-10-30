@@ -262,9 +262,66 @@ fn usable(model: &ModelEntry) -> Option<&ModelEntry> {
     Some(model)
 }
 
+/// 「仅本地模型」模式下，这个地址算不算"自己人"。
+///
+/// 以前只认 `localhost` / `127.0.0.1` / `[::1]` 三个**字符串**，两个方向都错：
+///
+/// - **误杀**：用户在内网起的 Ollama / vLLM / Xinference 是 `http://192.168.1.20:11434`
+///   或 `http://llm.corp.local`，全被当成"外部模型"拒掉 —— 隐私模式等于不能用，
+///   用户只能把开关关掉，而关掉之后**真的**什么都往外发。
+/// - **碰巧拦住**：公网域名只是因为字符串没命中才被拦，属于"碰巧安全"。
+///
+/// 现在按 host 判：回环、IPv4 私有段（10/172.16-31/192.168/169.254）、IPv6 唯一本地
+/// （fc00::/7）、`.local/.internal/.lan/.corp/.intra` 后缀，以及 `DBMIND_AI_LOCAL_HOSTS`
+/// 里逗号分隔的自定义后缀（公司内网域名，如 `.corp.example.com`）。
 fn is_local(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    lower.contains("localhost") || lower.contains("127.0.0.1") || lower.contains("://[::1]")
+    host_of(url).is_some_and(|host| is_local_host(&host))
+}
+
+/// 从 URL 里取 host（去掉 scheme / user:pass@ / 端口 / 路径，IPv6 去方括号）。
+fn host_of(url: &str) -> Option<String> {
+    let rest = url.split("//").nth(1).unwrap_or(url);
+    let authority = rest.split('/').next().unwrap_or("");
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    if let Some(stripped) = authority.strip_prefix('[') {
+        return stripped.split(']').next().map(|host| host.to_ascii_lowercase());
+    }
+    let host = authority.split(':').next().unwrap_or("").to_ascii_lowercase();
+    Some(host).filter(|host| !host.is_empty())
+}
+
+fn is_local_host(host: &str) -> bool {
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if host == "host.docker.internal" || host == "0.0.0.0" {
+        return true;
+    }
+    for suffix in [".local", ".internal", ".lan", ".corp", ".intra"] {
+        if host.ends_with(suffix) {
+            return true;
+        }
+    }
+    // 公司内网域名千奇百怪（llm.a.b.com 这种），给一个显式白名单
+    if let Ok(extra) = std::env::var("DBMIND_AI_LOCAL_HOSTS") {
+        for item in extra.split(',') {
+            let item = item.trim().trim_start_matches('*').to_ascii_lowercase();
+            if item.is_empty() {
+                continue;
+            }
+            let bare = item.trim_start_matches('.');
+            if host == bare || host.ends_with(&format!(".{bare}")) {
+                return true;
+            }
+        }
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(ip)) => ip.is_loopback() || ip.is_private() || ip.is_link_local(),
+        Ok(std::net::IpAddr::V6(ip)) => {
+            ip.is_loopback() || (ip.segments()[0] & 0xfe00) == 0xfc00 // fc00::/7
+        }
+        Err(_) => false,
+    }
 }
 
 /// 选模型：给了 modelId 就用它，否则挑第一个可用的。
@@ -605,6 +662,14 @@ pub fn embed(model: &ModelEntry, texts: &[String]) -> XResult<Vec<Vec<f32>>> {
     if texts.is_empty() {
         return Ok(Vec::new());
     }
+    // 兜底：即使调用方绕过了 embedding_model() 的过滤，隐私模式下也不许把文档发出去。
+    // 知识库文档走 /embeddings 出门，性质与对话完全一样 —— 这条以前是缺的。
+    if load().privacy_mode == "localOnly" && !is_local(&model.base_url) {
+        return Err(XError::bad_request(format!(
+            "当前为「仅本地模型」隐私模式，已阻止把知识库文档发给外部向量服务：{}",
+            model.base_url
+        )));
+    }
     let url = endpoint(&model.base_url, "/embeddings");
     let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
     for chunk in texts.chunks(EMBED_BATCH) {
@@ -648,11 +713,15 @@ pub fn embed(model: &ModelEntry, texts: &[String]) -> XResult<Vec<Vec<f32>>> {
 /// 有没有能向量化的模型（知识库的「向量模式」要用）。
 pub fn embedding_model(preferred: Option<&str>) -> Option<ModelEntry> {
     let settings = load();
+    // 隐私模式对向量模型同样生效：知识库文档走 /embeddings 出去也是数据出境。
+    // 以前这里完全没看 privacy_mode —— 开着「仅本地模型」照样把文档发给云端。
+    let local_only = settings.privacy_mode == "localOnly";
+    let allowed = |model: &ModelEntry| !local_only || is_local(&model.base_url);
     if let Some(id) = preferred.filter(|id| !id.trim().is_empty()) {
         if let Some(model) = settings
             .models
             .iter()
-            .find(|model| model.id == id && usable(model).is_some())
+            .find(|model| model.id == id && usable(model).is_some() && allowed(model))
         {
             return Some(model.clone());
         }
@@ -660,7 +729,7 @@ pub fn embedding_model(preferred: Option<&str>) -> Option<ModelEntry> {
     settings
         .models
         .iter()
-        .find(|model| usable(model).is_some() && model.embedding)
+        .find(|model| usable(model).is_some() && model.embedding && allowed(model))
         .cloned()
 }
 
@@ -785,4 +854,48 @@ pub fn audit(kind: &str, prompt: &str) {
     }
     let text: String = prompt.chars().take(4000).collect();
     let _ = store.insert_ai_audit(kind, &text);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_hosts_cover_lan_not_just_loopback() {
+        // 自己内网起的模型必须放行 —— 以前只认 localhost/127.0.0.1，这些全被误杀
+        for url in [
+            "http://localhost:11434/v1",
+            "http://127.0.0.1:8000/v1",
+            "http://[::1]:8000/v1",
+            "http://192.168.1.20:11434",
+            "http://10.1.2.3:8000/v1",
+            "http://172.20.0.5:8000",
+            "http://llm.corp.local/v1",
+            "http://ai.internal",
+            "http://host.docker.internal:11434",
+        ] {
+            assert!(is_local(url), "{url} 应当算本地/内网");
+        }
+    }
+
+    #[test]
+    fn public_hosts_are_not_local() {
+        for url in [
+            "https://api.deepseek.com/v1",
+            "https://api.openai.com/v1",
+            "http://8.8.8.8:8000",
+            // 关键回归：以前写成 contains("127.0.0.1")，这种域名会被误判成本地
+            "https://evil.example.com/?u=127.0.0.1",
+        ] {
+            assert!(!is_local(url), "{url} 不该被当成内网");
+        }
+    }
+
+    #[test]
+    fn host_is_parsed_not_substring_matched() {
+        assert_eq!(host_of("http://user:pass@10.0.0.2:8080/v1").as_deref(), Some("10.0.0.2"));
+        assert_eq!(host_of("http://[::1]:9000").as_deref(), Some("::1"));
+        // 端口不能混进 host，否则 "127.0.0.1:80" 会解析失败
+        assert_eq!(host_of("127.0.0.1:8080").as_deref(), Some("127.0.0.1"));
+    }
 }
