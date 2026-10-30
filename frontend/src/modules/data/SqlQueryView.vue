@@ -481,6 +481,31 @@
           <!-- 结论一律按 Markdown 渲染；含 SQL 时代码块右上角自带「插入编辑器 / 复制」图标按钮 -->
           <div class="ai-markdown" v-html="renderMarkdown(aiResultMd, { sqlActions: true })"
                @click="onAiMdAction($event)"></div>
+          <!-- 证据链：AI 说「修好了」，这里给出它到底跑没跑、回来多少行 / 报什么错。
+               没验证就不渲染（宁可缺一块，也不替模型打勾）。 -->
+          <div v-if="aiEvidence" class="ai-evidence" :class="'ev-' + aiEvidenceTone">
+            <div class="ev-head">
+              <el-icon :size="14">
+                <CircleCheckFilled v-if="aiEvidenceTone !== 'bad'" />
+                <CircleCloseFilled v-else />
+              </el-icon>
+              <span class="ev-title">{{ aiEvidenceLabel }}</span>
+              <span class="ev-msg">{{ aiEvidence.message }}</span>
+              <span v-if="aiEvidence.elapsed_ms" class="ev-ms">{{ aiEvidence.elapsed_ms }}ms</span>
+            </div>
+            <div v-if="aiEvidence.rows && aiEvidence.rows.length" class="ev-table-wrap">
+              <table class="ev-table">
+                <thead>
+                  <tr><th v-for="c in aiEvidence.columns" :key="c">{{ c }}</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, i) in aiEvidence.rows" :key="i">
+                    <td v-for="c in aiEvidence.columns" :key="c">{{ row[c] == null ? '' : row[c] }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
         </template>
                 <div v-if="aiUsage" class="ai-usage">本次回答消耗：{{ Number(aiUsage.totalTokens || 0).toLocaleString() }} tokens<template v-if="aiUsage.promptTokens != null">（{{ Number(aiUsage.promptTokens).toLocaleString() }}）</template></div>
 
@@ -636,7 +661,7 @@ import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
   CaretRight, CaretLeft, Download, MagicStick, TrendCharts, Loading,
-  Close, CircleCloseFilled, Coin, Brush, Clock, Files,
+  Close, CircleCloseFilled, CircleCheckFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
   Collection, RefreshLeft, DArrowRight
@@ -3393,6 +3418,23 @@ const aiResult = ref('')
 const aiResultIsSql = ref(false)
 const aiErrorReason = ref('')
 const aiUsage = ref(null)
+/** 证据链：后端把 AI 修复结果真的跑了一遍（只读）或取了执行计划（写语句），
+ *  返回 { kind, ok, message, elapsed_ms, columns, rows }。没验证就是 null —— 界面
+ *  宁可显示「未验证」，也不能替模型打勾。 */
+const aiEvidence = ref(null)
+const aiEvidenceTone = computed(() => {
+  const ev = aiEvidence.value
+  if (!ev) return ''
+  if (ev.kind === 'skipped') return 'skip'
+  return ev.ok ? 'ok' : 'bad'
+})
+const aiEvidenceLabel = computed(() => {
+  const ev = aiEvidence.value
+  if (!ev) return ''
+  if (ev.kind === 'skipped') return t('sqlq.evSkipped')
+  if (!ev.ok) return t('sqlq.evFailed')
+  return ev.kind === 'plan' ? t('sqlq.evPlan') : t('sqlq.evRun')
+})
 
 const aiModels = ref([])
 const selectedAiModelId = ref('')
@@ -4885,6 +4927,7 @@ const askAi = async (mode) => {
   aiLoading.value = true
   aiResult.value = ''
   aiUsage.value = null
+  aiEvidence.value = null
 
   aiResultIsSql.value = false
   aiErrorReason.value = ''
@@ -4895,7 +4938,12 @@ const askAi = async (mode) => {
       : mode === 'diagnose' ? await aiDiagnose(payload)
       : await aiOptimize(payload)
     if (res && res.success) {
-      if (mode === 'fix') { aiErrorReason.value = res.errorReason || ''; aiResult.value = res.sql || res.content || '' }
+      if (mode === 'fix') {
+        aiErrorReason.value = res.errorReason || ''
+        aiResult.value = res.sql || res.content || ''
+        // 后端验证结果（只读真跑 / 写语句看执行计划）：有就展示，没有就不假装验证过
+        aiEvidence.value = res.evidence || null
+      }
 else { aiResult.value = res.content }
       aiResultIsSql.value = mode === 'fix'
           aiUsage.value = res.usage || null
@@ -5890,6 +5938,32 @@ onBeforeUnmount(() => {
 .ai-reason-label { font-weight: 600; }
 /* 结论统一走 .ai-markdown（全局样式），这里只补对话框内的滚动留白 */
 .ai-dialog-body .ai-markdown { font-size: 14px; }
+
+/* 证据链卡片：AI 修复结果到底跑没跑、回来多少行 / 报什么错。
+   三种色调：ok（真的跑通了）/ bad（说修好了但跑还是错）/ skip（没法验，别假装验过） */
+.ai-evidence {
+  margin-top: 12px; border: 1px solid var(--dc-border); border-radius: 8px;
+  background: var(--dc-bg-soft); overflow: hidden;
+}
+.ai-evidence.ev-ok { border-color: var(--dc-success); background: var(--dc-success-wash); }
+.ai-evidence.ev-bad { border-color: var(--dc-danger); background: var(--dc-danger-wash); }
+.ai-evidence.ev-skip { border-color: var(--dc-border); }
+.ev-head {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  font-size: 13px; line-height: 1.5; color: var(--dc-text-dim);
+}
+.ev-ok .ev-head { color: var(--dc-success); }
+.ev-bad .ev-head { color: var(--dc-danger); }
+.ev-title { font-weight: 600; flex: none; }
+.ev-msg { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-ms { flex: none; color: var(--dc-text-dim); font-variant-numeric: tabular-nums; }
+.ev-table-wrap { max-height: 180px; overflow: auto; border-top: 1px solid var(--dc-border); background: var(--dc-code-bg); }
+.ev-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.ev-table th, .ev-table td {
+  padding: 4px 10px; text-align: left; white-space: nowrap;
+  border-bottom: 1px solid var(--dc-border-soft);
+}
+.ev-table th { position: sticky; top: 0; background: var(--dc-bg-card); color: var(--dc-text-dim); font-weight: 600; }
 
 /* 脚本列表 */
 .script-list { max-height: 320px; overflow: auto; }

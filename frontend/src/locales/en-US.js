@@ -2843,6 +2843,11 @@ export default {
   'sqlq.max': 'Maximum',
   'sqlq.aiThinking': 'AI is analysing, please wait...',
   'sqlq.errorReason': 'Cause:',
+  // Evidence chain for AI fixes (really executed / only plan-checked / not verifiable)
+  'sqlq.evRun': 'Verified',
+  'sqlq.evPlan': 'Plan checked only',
+  'sqlq.evFailed': 'Verification failed',
+  'sqlq.evSkipped': 'Not verified',
   'sqlq.saveScript': 'Save script',
   'sqlq.executeFailed': 'Execution failed',
   'sqlq.prodWriteTitle': 'Confirm a write on production',

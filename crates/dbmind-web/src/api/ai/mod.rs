@@ -30,6 +30,7 @@ pub mod agent;
 pub mod chat;
 pub mod config;
 pub mod doc;
+pub mod evidence;
 pub mod governance;
 pub mod kb;
 pub mod knowledge;

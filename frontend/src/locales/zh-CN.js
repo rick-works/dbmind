@@ -2856,6 +2856,11 @@ export default {
   'sqlq.max': '最大',
   'sqlq.aiThinking': 'AI 分析中，请稍候...',
   'sqlq.errorReason': '错误原因：',
+  // AI 修复的证据链（后端真的跑过 / 只看过执行计划 / 没法验）
+  'sqlq.evRun': '已验证',
+  'sqlq.evPlan': '仅校验执行计划',
+  'sqlq.evFailed': '验证未通过',
+  'sqlq.evSkipped': '未验证',
   'sqlq.saveScript': '保存脚本',
   'sqlq.executeFailed': '执行失败',
   'sqlq.prodWriteTitle': '生产库写操作确认',

@@ -414,12 +414,23 @@ pub async fn fix(State(state): State<AppState>, Json(req): Json<AiRequest>) -> X
     )
     .await?;
     let (reason, fixed) = parse_fix(&raw);
+    // 证据链：模型说"修好了"，我们就真的验一次 —— 只读语句真跑（拿真实行列），
+    // 写语句只取执行计划（一行数据都不动）。失败也照原样返回，让用户看到
+    // 「AI 说修好了，其实还是这个错」，而不是把报错吞掉只给一句漂亮话。
+    let evidence = crate::api::ai::evidence::verify(
+        &state,
+        req.connection_id.as_deref().unwrap_or_default(),
+        req.database.as_deref().unwrap_or_default(),
+        &fixed,
+    )
+    .await;
     Ok(Json(json!({
         "success": true,
         "errorReason": reason,
         "sql": fixed,
         "content": raw,
         "usage": usage,
+        "evidence": evidence,
     })))
 }
 
