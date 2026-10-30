@@ -746,6 +746,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.8.1（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.8.1</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-30</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>弹窗里的 SQL / DDL 代码块统一成一套外观（1px 边框 + 8px 圆角 + 比弹窗底亮一档的底色），深色主题下不再是一块死黑；生成 SQL 那条 3px 主色左边条在圆角处的折角也一并去掉，两个弹窗并排看是同一个组件</b></li>
+            <li><b>代码块跟着弹窗高度走</b>：把它拉高、拖动窗口、或直接全屏，代码块都填满正文剩余高度、长语句在块内滚动（以前只有全屏才自适应，非全屏封顶 480px，拖高后下面空一大片）</li>
+            <li><b>「复制」统一挪到弹窗右下角；建表语句、建库语句、对象详情页新增「插入编辑器」——看完 DDL 想改一改，不必再手动复制粘贴（有 SQL 页签就插到光标处，没有就新开一个脚本页签）；数据视图工具栏「生成 SQL」与「重置」换位，空态提示由「点击右上」改成「点击上方」并接进中英双语</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.8.1" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.8.1" target="_blank" rel="noopener">下载 v1.8.1</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.8.0（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +774,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.8.0</span>
             <span class="rel-tag tag-minor">小版本</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-30</span>
           </div>
           <ul class="rel-notes">

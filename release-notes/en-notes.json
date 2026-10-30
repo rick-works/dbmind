@@ -570,4 +570,10 @@
   "Syncing no longer changes the object name: a routine renamed with sp_rename in the source (catalog test1111, definition body still CREATE PROCEDURE [test111]) used to arrive in the target as test111; it is now renamed back to test1111 right after creation, exactly as in the source, and 'drop and recreate' also clears the leftover created under the body name",
   "The 'Select' placeholder is now aligned with the other pickers in the same column (the connection picker no longer reserves its prefix slot while empty, previously offset by 4px)"
  ]
+,
+ "v1.8.1": [
+  "SQL / DDL blocks inside dialogs share one look now (1px border, 8px radius, a surface one step lighter than the dialog) - no more pitch-black panes in the dark theme, and the 3px primary accent bar that left a notch at the rounded corner is gone too",
+  "The block follows the dialog height: drag it taller, resize the window or go fullscreen and the block always fills the remaining body height, with long statements scrolling inside it (previously only fullscreen did that; otherwise it was capped at 480px and left a big empty area)",
+  "\"Copy\" sits in the bottom-right corner of every dialog, and CREATE TABLE / CREATE DATABASE / object detail gained \"Insert into editor\" - tweak a DDL without copy-pasting (inserts at the cursor when a SQL tab is open, otherwise opens a new script tab); in the data view toolbar \"Generate SQL\" and \"Reset\" swapped places and the empty hint now says \"click above\" instead of \"top right\" (zh / en)"
+ ]
 }
