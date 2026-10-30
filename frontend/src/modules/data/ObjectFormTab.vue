@@ -381,7 +381,7 @@ onMounted(async () => {
   overflow: auto;
   padding: 10px 12px;
   min-height: 0;
-  background: var(--dc-bg-code);
+  background: var(--dc-code-bg);
 }
 .sql-body pre { margin: 0; }
 .sql-body code {

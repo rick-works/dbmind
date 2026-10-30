@@ -2938,8 +2938,12 @@ export default {
   // toasts…), so those reuse the sqlq.* keys instead of duplicating them here.
   'tdv.addFilter': '+ Add condition',
   'tdv.revert': 'Revert',
-  'tdv.noFilters': 'No filters yet — click "Add condition" at the top right to set up an advanced search',
+  // 两侧空格由模板给（中英文都靠它和加粗的按钮名分开）
+  'tdv.noFiltersBefore': 'No filters yet — click',
+  'tdv.noFiltersAfter': 'above to set up an advanced search',
   'tdv.applyFilters': 'Apply filters',
+  'tdv.genSql': 'Generate SQL',
+  'tdv.insertToEditor': 'Insert into editor',
   'tdv.unsavedChanges': 'unsaved changes',
   'tdv.unsavedChangesN': '{rows} row(s) / {cells} cell(s) unsaved',
   'tdv.deleteRow': 'Delete row',

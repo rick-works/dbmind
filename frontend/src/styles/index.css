@@ -55,6 +55,13 @@
   --dc-bg-raised: #22262f;     /* 弹窗/浮层容器 */
   --dc-bg-soft: #1a1d24;       /* 卡片内嵌块 */
   --dc-bg-code: #12151b;       /* 代码/预览最深层 */
+  /* 弹窗/面板里的「语句块、代码预览块」（建表语句 DDL、生成 SQL、AI 筛选 SQL、
+     试跑 SQL、单元格全文、编辑表结构的 SQL 预览…）统一底色。
+     这些块以前各写各的：--dc-bg-deep(#14151b)、--dc-bg-code(#12151b)，
+     都比弹窗底 --dc-bg-raised(#22262f) 深一大截 —— 深色主题下像"挖了个黑坑"，
+     用户反馈「背景太黑了」。这里取比弹窗底**亮一档**的蓝灰（不是往上再压深），
+     靠 1px 边框分层：代码块不再发黑，又仍是"内嵌面板"而不是卡片。 */
+  --dc-code-bg: #2c3344;
   --dc-bg-input: #1c1f27;      /* 输入框底 */
   --dc-bg-pop: #2b3040;        /* 下拉/popper/message 底 */
   --dc-bg-hover: #2c3140;      /* hover */
@@ -153,6 +160,8 @@ html[data-theme="light"] {
   --dc-bg-raised: #ffffff;
   --dc-bg-soft: #f4f6fb;
   --dc-bg-code: #f7f9fd;
+  /* 语句/代码预览块（浅色主题）：浅底深字，和 --dc-bg-soft 同一档，不再单独压深 */
+  --dc-code-bg: #f4f6fb;
   --dc-bg-input: #ffffff;
   --dc-bg-pop: #ffffff;
   --dc-bg-hover: #e8edf6;
@@ -446,6 +455,52 @@ body.dc-resizing * { user-select: none !important; }
   max-height: none !important;
   overflow: hidden;
 }
+
+/* ==================== 代码块弹窗：统一外观 + 高度自适应 ====================
+   适用：生成 SQL / 建表语句(DDL) / 建库语句 / 试跑 SQL / 单元格详情。
+   两件事：
+   1) 代码块（.dc-code-block）的**观感只有这一处定义**：1px 边框 + 8px 圆角 +
+      --dc-code-bg 底 + 等宽字。以前每个弹窗各写一份，于是同一个"一条语句"的块
+      在生成 SQL 里带 3px 主色左边条、圆角 10px，在 DDL 里没有边条、圆角 6px，
+      并排看像两套东西（真机反馈「样式不一样」）。
+   2) 弹窗本体纵向 flex（.dc-code-dlg）：代码块吃掉正文的剩余高度。
+      以前只有全屏态（.dc-max）才有这套规则，于是把弹窗拖高 / 改窗口高度后，
+      代码块仍停在内容高度，下面空一大片（真机反馈「改变窗口高度没自适应」）。
+   注意：el-dialog 是 teleport 渲染的，组件内 scoped 命不中，必须写全局。
+   规则要放在 .dc-resizable 之后：两者特异性相同，靠顺序压过它的 body overflow:auto。 */
+.el-dialog.dc-code-dlg { display: flex; flex-direction: column; overflow: hidden; }
+.el-dialog.dc-code-dlg > .el-dialog__header,
+.el-dialog.dc-code-dlg > .el-dialog__footer { flex: none; }
+.el-dialog.dc-code-dlg > .el-dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* 正文本身不滚，交给代码块滚（两条滚动条并存是以前的老毛病） */
+  overflow: hidden;
+}
+.dc-code-block {
+  /* flex 只对 .dc-code-dlg 内的块生效；在不带该 class 的弹窗里这几条无副作用 */
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--dc-code-bg);
+  border: 1px solid var(--dc-border);
+  border-radius: 8px;
+  font-family: var(--dc-mono-font, "SF Mono", ui-monospace, Consolas, monospace);
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--dc-code-text);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  user-select: text;
+  cursor: text;
+}
+/* SQL 语句块用链接蓝，便于一眼和"纯文本块"（单元格内容、报错原文）区分 */
+.dc-code-block.sql { color: var(--dc-link); }
 .el-input__wrapper, .el-select__wrapper, .el-textarea__inner {
   background-color: var(--dc-bg-input) !important;
   box-shadow: 0 0 0 1px var(--dc-border-soft) inset !important;

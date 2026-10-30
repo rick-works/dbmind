@@ -3745,8 +3745,9 @@ watch(() => [props.conn?.id, props.database, props.table], () => {
   padding: 10px 12px;
   min-height: 0;
   /* 与「新建表」的预览**同一块代码底色**（见 ObjectFormTab 的 .sql-body）：
-     原来这里是卡片本色，同一个预览框在两个页面看着像两套东西。 */
-  background: var(--dc-bg-code);
+     原来这里是卡片本色，同一个预览框在两个页面看着像两套东西。
+     底色统一走 --dc-code-bg（比 --dc-bg-code 亮一档，深色主题下不再是一块黑）。 */
+  background: var(--dc-code-bg);
 }
 .sql-body pre { margin: 0; }
 .sql-body code {

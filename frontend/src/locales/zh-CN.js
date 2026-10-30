@@ -2951,8 +2951,15 @@ export default {
   // 所以那一批直接复用 sqlq.* 的键，不在这里重复造一份。
   'tdv.addFilter': '+ 添加条件',
   'tdv.revert': '撤销',
-  'tdv.noFilters': '暂无筛选条件，点击右上「添加条件」开始配置高级搜索',
+  // 空态提示：拆成前后两段，中间的「添加条件」在模板里加粗。
+  // 位置说法必须是「上方」—— 添加条件就在这一条工具栏里、紧挨「高级搜索」，
+  // 原来写「右上」是错的（用户按图指出来的）。
+  'tdv.noFiltersBefore': '暂无筛选条件，点击上方',
+  'tdv.noFiltersAfter': '开始配置高级搜索',
   'tdv.applyFilters': '应用筛选',
+  // 工具条「生成 SQL」：把当前筛选条件 + 排序摊成一条 SELECT
+  'tdv.genSql': '生成 SQL',
+  'tdv.insertToEditor': '插入编辑器',
   // 状态栏里跟在耗时后面（「205ms | 有未保存的修改」）：不加括号，分隔由 .change-tip 的竖线负责
   'tdv.unsavedChanges': '有未保存的修改',
   'tdv.unsavedChangesN': '{rows} 行 / {cells} 处修改未保存',

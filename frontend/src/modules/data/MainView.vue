@@ -482,7 +482,7 @@
                 {{ tab.dirty ? '* ' : '' }}{{ tabLabelShort(tab) }}
               </span>
             </template>
-            <TableDataView v-if="tab.type === 'table'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :table="tab.table" :readOnly="tab.readOnly" @update-table-rows="onUpdateTableRows" @open-query="onOpenQueryFromTable" />
+            <TableDataView v-if="tab.type === 'table'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :table="tab.table" :readOnly="tab.readOnly" @update-table-rows="onUpdateTableRows" @open-query="onOpenQueryFromTable" @insert-sql="insertSqlToActive" />
             <SqlQueryView v-else-if="tab.type === 'sql'" :ref="el => setSqlRef(tab.id, el)" :conn="conn" :database="currentDb" :script-name="tab.scriptName" :tab-conn-id="tab.connId" :tab-conn-name="tab.connName" :tab-database="tab.database" :initial-sql="tab.initialSql" :auto-run="tab.autoRun" :sql-loading="!!tab.sqlLoading" @save="onScriptSave(tab.id, $event)" @dirty-change="onScriptDirty(tab.id, $event)" @sql-change="onScriptSqlChange(tab.id, $event)" @conn-change="onEditorConnChange(tab.id, $event)" @conn-rebind="onScriptConnRebind(tab.id, $event)" @db-change="onEditorDbChange" />
             <ErDiagramView v-else-if="tab.type === 'er'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :conn-id="tab.connId" />
 
@@ -490,7 +490,8 @@
             <NoSqlDataView v-else-if="tab.type === 'nosql'" :conn="connFor(tab.connId)" :database="tab.database"
                            :collection="tab.collection" :kind="tab.kind" />
             <ObjectDetailView v-else-if="tab.type === 'object'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
-                              :type="tab.objectType" :name="tab.objectName" @edit="onObjDetailEdit" />
+                              :type="tab.objectType" :name="tab.objectName" @edit="onObjDetailEdit"
+                              @insert-sql="insertSqlToActive" />
             <UserDetailView v-else-if="tab.type === 'user'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                             :name="tab.userName" @edit="onUserDetailEdit" />
             <UserForm v-else-if="tab.type === 'user-form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
@@ -708,16 +709,22 @@
       </template>
     </ul>
 
-    <!-- DDL 弹窗 -->
-    <el-dialog v-model="ctxDdlVisible" width="720px" append-to-body class="main-dialog ddl-dialog">
+    <!-- DDL 弹窗：「复制」统一放右下角（与「生成 SQL」等代码块弹窗同一位置），
+         标题栏只留图标 + 标题，不再挤一个按钮（原来还要给它让位避开全屏图标） -->
+    <el-dialog v-model="ctxDdlVisible" width="720px" append-to-body
+               class="main-dialog ddl-dialog dc-code-dlg">
       <template #header>
         <div class="dlg-title">
           <span class="dlg-title-ic"><el-icon :size="16"><Document /></el-icon></span>
           <span>{{ $t('menu.ddlTitle') }}</span>
-          <el-button class="dlg-copy-btn" size="small" plain :icon="CopyDocument" @click="copyCtxDdl">{{ $t('common.copy') }}</el-button>
         </div>
       </template>
-      <pre class="ctx-pre">{{ ctxDdl }}</pre>
+      <pre class="ctx-pre dc-code-block sql">{{ ctxDdl }}</pre>
+      <template #footer>
+        <el-button size="small" :icon="CopyDocument" @click="copyCtxDdl">{{ $t('common.copy') }}</el-button>
+        <!-- 与「生成 SQL」同一套收尾动作：复制 + 插入编辑器（想看/想改这条 DDL 时不必手动复制粘贴） -->
+        <el-button size="small" type="primary" @click="insertCtxDdl">{{ $t('tdv.insertToEditor') }}</el-button>
+      </template>
     </el-dialog>
 
     <!-- 索引元数据弹窗：只读看一眼"这张表有哪些索引"（列名跟着各库返回走） -->
@@ -726,8 +733,6 @@
         <div class="dlg-title">
           <span class="dlg-title-ic"><el-icon :size="16"><Coin /></el-icon></span>
           <span>{{ $t('menu.indexTitle', { table: ctxIndexTable }) }}</span>
-          <el-button class="dlg-copy-btn" size="small" plain :icon="CopyDocument"
-                     :disabled="!ctxIndexRows.length" @click="copyCtxIndexes">{{ $t('common.copy') }}</el-button>
         </div>
       </template>
       <div v-loading="ctxIndexLoading" class="ctx-index-wrap">
@@ -738,6 +743,10 @@
           {{ $t('menu.indexEmpty') }}
         </div>
       </div>
+      <template #footer>
+        <el-button size="small" :icon="CopyDocument" :disabled="!ctxIndexRows.length"
+                   @click="copyCtxIndexes">{{ $t('common.copy') }}</el-button>
+      </template>
     </el-dialog>
 
     <!-- 导入数据弹窗（逻辑在 ImportDataDialog.vue，打开时快照目标表，成功后回调刷新树） -->
@@ -765,15 +774,19 @@
     <ConnectionDialog v-model="connDialogVisible" :conn="editingConn" :custom-folders="customFolders" :initial-group="connDialogInitialEnv" :focus="connDialogFocus" :initial-type="connDialogInitialType" @saved="onConnSaved" @folder-added="refreshFolders" />
 
     <!-- 数据库 DDL 弹窗 -->
-    <el-dialog v-model="dbDdlVisible" width="720px" append-to-body class="main-dialog ddl-dialog">
+    <el-dialog v-model="dbDdlVisible" width="720px" append-to-body
+               class="main-dialog ddl-dialog dc-code-dlg">
       <template #header>
         <div class="dlg-title">
           <span class="dlg-title-ic"><el-icon :size="16"><Coin /></el-icon></span>
           <span>{{ $t('menu.dbDdlTitle') }}</span>
-          <el-button class="dlg-copy-btn" size="small" plain :icon="CopyDocument" @click="copyDbDdl">{{ $t('common.copy') }}</el-button>
         </div>
       </template>
-      <pre class="ctx-pre">{{ dbDdlText }}</pre>
+      <pre class="ctx-pre dc-code-block sql">{{ dbDdlText }}</pre>
+      <template #footer>
+        <el-button size="small" :icon="CopyDocument" @click="copyDbDdl">{{ $t('common.copy') }}</el-button>
+        <el-button size="small" type="primary" @click="insertDbDdl">{{ $t('tdv.insertToEditor') }}</el-button>
+      </template>
     </el-dialog>
 
     <!-- 数据库转储弹窗（逻辑在 DbDumpDialog.vue，打开时自动拉取对象列表） -->
@@ -6838,6 +6851,20 @@ const copyCtxDdl = () => copyText(ctxDdl.value || '', t('mv.ddlCopied'))
 // 复制建库语句（弹窗内复制按钮）
 const copyDbDdl = () => copyText(dbDdlText.value || '', t('mv.createDbCopied'))
 
+/* 插入编辑器：DDL 弹窗里的主按钮，走与「生成 SQL」同一条通道（insertSqlToActive）——
+   当前页签是 SQL 编辑器就插到光标处，否则新开一个脚本页签。看完 DDL 想改一改、
+   或者在它基础上再写点东西时，不用先复制再粘。 */
+const insertCtxDdl = () => {
+  if (!ctxDdl.value) return
+  insertSqlToActive(ctxDdl.value)
+  ctxDdlVisible.value = false
+}
+const insertDbDdl = () => {
+  if (!dbDdlText.value) return
+  insertSqlToActive(dbDdlText.value)
+  dbDdlVisible.value = false
+}
+
 // 按数据库类型生成标识符引用（反引号 / 方括号 / 双引号），引号风格来自类型注册表
 // type 可选：不传时回退到当前连接类型（兼容原有调用方）；传了则按目标连接类型生成（如跨连接生成 SQL）
 const quoteIdent = (name, type) => {
@@ -8712,11 +8739,9 @@ const connTypeSummary = computed(() =>
 .main-view { height: 100%; display: flex; flex-direction: column; }
 .dlg-title { display: flex; align-items: center; gap: 8px; flex: 1; }
 .dlg-title > span:nth-child(2) { flex: 1; }
-/* 复制按钮右侧要让位给「全屏」图标：utils/dialogMaximize.js 把全屏按钮绝对定位在关闭 ✕
-   左边一格（right 48px + 宽 28px ⇒ 左边缘距弹窗右边 76px），而 header 右内边距只有 20px，
-   按钮原来一直排到那里，就被压在图标下面（用户反馈「全屏图标和复制重叠了」）。
-   48 + 20 = 68px，留 20px 间隙（实测 36px 偏空，20px 看着像同一组工具按钮）。 */
-.dlg-copy-btn { flex-shrink: 0; margin-right: 48px; }
+/* 注：标题栏里原来有个「复制」按钮（.dlg-copy-btn，还要 margin-right: 48px 给全屏图标让位）。
+   现在所有"代码块 + 复制"弹窗的复制按钮统一放在**右下角 footer**（与「生成 SQL」一致），
+   标题栏只留图标 + 标题，那条让位规则也就一并删掉了。 */
 .dlg-title-ic {
   width: 26px; height: 26px; border-radius: 7px; display: inline-flex;
   align-items: center; justify-content: center; color: var(--dc-on-primary);
@@ -9486,29 +9511,16 @@ const connTypeSummary = computed(() =>
   box-shadow: var(--dc-shadow-sm); list-style: none; margin: 0;
 }
 .ctx-submenu li { padding: 7px 12px; }
-.ctx-pre {
-  background: var(--dc-bg-soft); border: 1px solid var(--dc-border); border-radius: 6px;
-  padding: 14px; overflow: auto; max-height: 480px;
-  font-family: "SF Mono", Consolas, monospace; font-size: 13px; line-height: 1.6;
-  color: var(--dc-link); white-space: pre-wrap; word-break: break-all; margin: 0;
-  user-select: text; cursor: text;
-}
-/* DDL 弹窗（表语句 / 建库语句）全屏态：正文要吃掉弹窗剩余高度。
-   非全屏时 .ctx-pre 封顶 480px（够看、不撑爆屏幕），但全屏（右上角 ⤢，见
-   utils/dialogMaximize.js）时弹窗高是「视口 - 24」，480 就只剩上面小半屏、下面一大片空 ——
-   真机反馈「DDL 全屏没有自适应高度」。这里把弹窗改成 flex 纵向：头部固定、正文撑满，
-   代码块再 flex 填满正文，长 DDL 在块内滚动。 */
-/* 注意必须用 :global() 包起来：el-dialog 是 teleport 渲染的，根节点和 .el-dialog__body
-   都不带本组件的 data-v（见下面 upd-dialog 那条同款注释），scoped 写法编译出来带
-   [data-v-xxx] 一个都匹配不上 —— 写了等于没写。 */
-:global(.el-dialog.ddl-dialog.dc-max) { display: flex; flex-direction: column; }
-:global(.el-dialog.ddl-dialog.dc-max > .el-dialog__header) { flex: none; }
-:global(.el-dialog.ddl-dialog.dc-max > .el-dialog__body) {
-  flex: 1 1 auto; min-height: 0;
-  display: flex; flex-direction: column;
-  overflow: hidden;
-}
-:global(.el-dialog.ddl-dialog.dc-max .ctx-pre) { flex: 1 1 auto; min-height: 0; max-height: none; }
+/* DDL 代码块的外观与「高度自适应」统一在全局（styles/index.css 的 .dc-code-block /
+   .el-dialog.dc-code-dlg）：1px 边框 + 8px 圆角 + --dc-code-bg 底，代码块吃掉正文剩余高度。
+   —— 全屏、拖手柄改大小、改变窗口高度三种情况都跟着变；以前只有全屏态有这套规则，
+   非全屏时封顶 480px，把弹窗拖高后下面空一大片（真机反馈「没自适应」）。
+   另：原来这里是 3px 主色左边条 + 圆角 6px，与「生成 SQL」的 10px 圆角对不齐，
+   并排看像两套东西，现在两边共用同一个 class。 */
+:global(.el-dialog.ddl-dialog .el-dialog__body) { padding-top: 4px; }
+/* 旧的「只有全屏态（.dc-max）才 flex 撑满」那组规则已删除：现在由全局
+   .el-dialog.dc-code-dlg + .dc-code-block 统一负责（非全屏、拖手柄改大小、
+   改变窗口高度都自适应），继续留着会与全局规则打架。 */
 /* ===== AI 解释视图弹窗 ===== */
 /* ===== 检查更新弹窗 ===== */
 /* el-dialog 是 teleport 渲染的，内部元素不带 scoped 的 data-v —— 原来这里用 :deep() 其实

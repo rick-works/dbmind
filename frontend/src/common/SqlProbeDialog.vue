@@ -6,14 +6,14 @@
     <div class="probe-head">
       <span class="probe-badge" :class="mode">{{ mode === 'plan' ? $t('spd.plan') : $t('spd.trial', { n: limit }) }}</span>
       <span v-if="database" class="probe-meta">{{ database }}</span>
+      <!-- 顶部只留"对这个结果本身"的动作（重跑）；复制 + 插入编辑器是"收尾动作"，
+           统一放右下角 footer，与「生成 SQL」等弹窗同一位置 -->
       <div class="probe-acts">
         <el-button size="small" :icon="Refresh" :loading="loading" @click="load">{{ $t('spd.rerun') }}</el-button>
-        <el-button size="small" :icon="DocumentCopy" @click="copyAll">{{ $t('ofd.copy') }}</el-button>
-        <el-button size="small" type="primary" :icon="CaretRight" @click="$emit('insert', sql)">{{ $t('spd.insert') }}</el-button>
       </div>
     </div>
 
-    <pre class="probe-sql">{{ sql }}</pre>
+    <pre class="probe-sql dc-code-block sql">{{ sql }}</pre>
 
     <div v-if="loading" class="probe-state">
       <el-icon class="is-loading"><Loading /></el-icon>
@@ -64,6 +64,11 @@
         </table>
         <div v-if="!rows.length" class="probe-empty">{{ $t('spd.noRows') }}</div>
       </div>
+    </template>
+
+    <template #footer>
+      <el-button size="small" :icon="DocumentCopy" @click="copyAll">{{ $t('ofd.copy') }}</el-button>
+      <el-button size="small" type="primary" :icon="CaretRight" @click="$emit('insert', sql)">{{ $t('spd.insert') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -184,12 +189,9 @@ const copyAll = async () => {
 .probe-meta { font-size: 13px; color: var(--dc-text-dim); }
 .probe-acts { margin-left: auto; display: flex; gap: 6px; }
 
-.probe-sql {
-  margin: 0 0 12px; padding: 10px 12px; max-height: 160px; overflow: auto;
-  background: var(--dc-bg-code); border: 1px solid var(--dc-border-soft); border-radius: 8px;
-  font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-size: 13px;
-  line-height: 1.6; color: var(--dc-code-text); white-space: pre-wrap; word-break: break-word;
-}
+/* 外观（底/边框/圆角/字体/颜色）走全局 .dc-code-block，这里只留本弹窗特有的间距：
+   它在正文顶部、固定高度（滚动的结果区在下面，不该跟它抢高度） */
+.probe-sql { margin: 0 0 12px; max-height: 160px; }
 .probe-state {
   display: flex; align-items: center; gap: 8px;
   padding: 18px 0; font-size: 14px; color: var(--dc-text-dim);
@@ -211,7 +213,7 @@ const copyAll = async () => {
 .probe-raw summary { cursor: pointer; font-size: 13px; color: var(--dc-text-dim); user-select: none; }
 .probe-raw pre, .probe-raw-plain {
   margin: 8px 0 0; padding: 10px 12px; max-height: 32vh; overflow: auto;
-  background: var(--dc-bg-code); border: 1px solid var(--dc-border-soft); border-radius: 8px;
+  background: var(--dc-code-bg); border: 1px solid var(--dc-border-soft); border-radius: 8px;
   font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-size: 13px;
   line-height: 1.6; color: var(--dc-code-text); white-space: pre-wrap; word-break: break-word;
 }
@@ -223,7 +225,7 @@ const copyAll = async () => {
 .probe-head, .probe-stat, .probe-sql { flex: none; }
 .probe-plan {
   margin: 0; padding: 12px; flex: 1 1 auto; min-height: 120px; overflow: auto;
-  background: var(--dc-bg-code); border: 1px solid var(--dc-border-soft); border-radius: 8px;
+  background: var(--dc-code-bg); border: 1px solid var(--dc-border-soft); border-radius: 8px;
   font-family: "SF Mono", "JetBrains Mono", Consolas, monospace; font-size: 13px;
   line-height: 1.6; color: var(--dc-code-text); white-space: pre-wrap; word-break: break-word;
 }

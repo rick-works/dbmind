@@ -33,6 +33,8 @@
           <div class="ddl-actions">
             <el-button v-if="canVisualEdit" type="primary" plain size="small" :icon="EditPen" @click="onEditClick">{{ $t('odv.visualEdit') }}</el-button>
             <el-button type="primary" plain size="small" :icon="CopyDocument" @click="copyDdl">{{ $t('common.copy') }}</el-button>
+            <!-- 与各 DDL 弹窗一致：复制旁边给一个「插入编辑器」，想改这条 DDL 时不用手动粘 -->
+            <el-button type="primary" size="small" @click="insertDdl">{{ $t('tdv.insertToEditor') }}</el-button>
           </div>
         </div>
         <pre class="ddl-body"><code>{{ ddl }}</code></pre>
@@ -55,7 +57,7 @@ const props = defineProps({
   name: { type: String, required: true }   // 索引为 "idxName@@tableName" 形式
 })
 
-const emit = defineEmits(['edit'])
+const emit = defineEmits(['edit', 'insert-sql'])
 
 const info = ref({})
 const meta = ref({})
@@ -76,6 +78,13 @@ const onEditClick = () => {
     kind: props.type,
     table: info.value.table || ''
   })
+}
+
+/* 插入编辑器：把这段 DDL 交给 MainView 的 insertSqlToActive（有 SQL 页签就插到光标，
+   没有就新开一个脚本页签）—— 与「查看 DDL」弹窗、生成 SQL 弹窗同一条通道 */
+const insertDdl = () => {
+  if (!ddl.value) return
+  emit('insert-sql', ddl.value)
 }
 
 const typeLabel = computed(() => {
@@ -168,6 +177,6 @@ watch(() => [props.conn?.id, props.database, props.type, props.name], load, { im
 .ddl-header { display: flex; align-items: center; gap: 6px; color: var(--dc-text-dim); font-size: 13px; margin-bottom: 8px; }
 .ddl-header span { flex: 1; }
 .ddl-actions { display: flex; align-items: center; gap: 2px; }
-.ddl-body { background: var(--dc-bg-code); border: 1px solid var(--dc-border); border-radius: 6px; padding: 12px; overflow: auto; max-height: calc(100vh - 280px); }
+.ddl-body { background: var(--dc-code-bg); border: 1px solid var(--dc-border); border-radius: 8px; padding: 12px; overflow: auto; max-height: calc(100vh - 280px); }
 .ddl-body code { font-family: "SF Mono", Consolas, monospace; font-size: 13px; color: var(--dc-code-text); line-height: 1.6; white-space: pre; }
 </style>

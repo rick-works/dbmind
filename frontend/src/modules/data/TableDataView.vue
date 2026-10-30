@@ -6,6 +6,9 @@
                    @click="advancedOpen = !advancedOpen"> {{ $t('tdv.advancedSearch') }}{{ activeFilterCount ? `（${activeFilterCount}）` : '' }}
         </el-button>
         <el-button v-if="advancedOpen" size="small" text class="adv-tool-add" @click="addFilter">{{ $t('tdv.addFilter') }}</el-button>
+        <!-- 生成 SQL 放在「重置」左边：它是"看着当前条件做点什么"的动作，重置是清空，
+             清空放最右（离条件区最远），手滑点错也不会把刚配好的条件清掉 -->
+        <el-button v-if="advancedOpen" size="small" text :icon="DocumentCopy" @click="openGenSql">{{ $t('tdv.genSql') }}</el-button>
         <el-button v-if="advancedOpen" size="small" text @click="resetFilters">{{ $t('common.reset') }}</el-button>
       </div>
       <div class="right">
@@ -43,8 +46,10 @@
 
     <transition name="slide">
       <div v-show="advancedOpen" ref="advPanelRef" class="advanced-panel">
+        <!-- 空态提示：按钮就在正上方这条工具栏里（高级搜索 | + 添加条件 | 生成 SQL | 重置），
+             所以是「上方」不是「右上」；文案走字典，英文界面不再漏出中文 -->
         <div v-if="!totalRows" class="empty-tip">
-          暂无筛选条件，点击右上 <b>{{ $t('cb.addCondition') }}</b> 开始配置高级搜索
+          {{ $t('tdv.noFiltersBefore') }} <b>{{ $t('cb.addCondition') }}</b> {{ $t('tdv.noFiltersAfter') }}
         </div>
         <template v-else>
           <!-- 面板头：只有多组时才有一行「组间关系」。不再写字（组间两个字多余），
@@ -346,6 +351,17 @@
 
   <!-- 行详情：双击 / 右键行号查看整行字段明细 -->
   <CellDetailDialog v-model="rowDetail.visible" :title="rowDetail.title" :text="rowDetail.text" />
+
+  <!-- 生成 SQL：当前筛选 + 排序拼成一条 SELECT，可复制，也可直接插进编辑器 -->
+  <el-dialog v-model="sqlGenOpen" :title="$t('tdv.genSql')" width="min(720px, 92vw)"
+             append-to-body class="sql-gen-dlg dc-code-dlg">
+    <pre class="sql-gen-code dc-code-block sql">{{ sqlGenText }}</pre>
+    <!-- 动作一律在右下角（所有"代码块 + 复制"弹窗同一位置、同一套按钮：复制 + 主操作） -->
+    <template #footer>
+      <el-button size="small" :icon="DocumentCopy" @click="copyGenSql">{{ $t('common.copy') }}</el-button>
+      <el-button size="small" type="primary" @click="insertGenSql">{{ $t('tdv.insertToEditor') }}</el-button>
+    </template>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -356,7 +372,7 @@ import { querySettingsLive, editorSettingsLive } from '../../utils/settings'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { numericTypeHint, isNumericLiteral } from '../../utils/dbType'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp, ArrowDown, Delete, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key, Close } from '@element-plus/icons-vue'
+import { ArrowUp, ArrowDown, Delete, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, DocumentCopy, Tickets, Grid, Key, Close } from '@element-plus/icons-vue'
 import { getTableData, listColumns, saveTableData, aiFilter, exportData } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
@@ -377,7 +393,7 @@ import { quoteStyleOf } from '../../types'
 import { rowKey as stableRowKey } from '../../utils/rowKey'
 
 const props = defineProps({ conn: Object, database: String, table: String, readOnly: Boolean })
-const emit = defineEmits(['update-table-rows', 'open-query'])
+const emit = defineEmits(['update-table-rows', 'open-query', 'insert-sql'])
 
 // ========== AI 自然语言筛选 ==========
 const aiFilterOpen = ref(false)
@@ -3154,6 +3170,27 @@ const buildExportSql = () => {
     : ''
   return `SELECT * FROM ${tbl}${filtersToWhere()}${ord}`
 }
+
+// ========== 生成 SQL（把当前筛选 + 排序摊成一条 SELECT，给复制 / 插到编辑器） ==========
+const sqlGenOpen = ref(false)
+const sqlGenText = ref('')
+/* 口径直接用 buildExportSql：弹窗里看到的语句就是导出会跑的那条，
+   不再另拼一份 —— 两份拼法稍有出入就是"看到的不等于跑的"。 */
+const openGenSql = () => {
+  if (!props.conn?.id || !props.table) { ElMessage.warning(t('qa.pickTableFirst')); return }
+  sqlGenText.value = buildExportSql()
+  sqlGenOpen.value = true
+}
+const copyGenSql = async () => {
+  try { await navigator.clipboard.writeText(sqlGenText.value); ElMessage.success(t('common.copied')) }
+  catch (e) { ElMessage.error(t('sqlq.copyFailed')) }
+}
+/* 插入编辑器：当前页签是 SQL 编辑器就插到光标处，否则新开一个页签（MainView 的 insertSqlToActive 负责分流） */
+const insertGenSql = () => {
+  if (!sqlGenText.value) return
+  emit('insert-sql', sqlGenText.value)
+  sqlGenOpen.value = false
+}
 const onExport = async (cmd) => {
   const [scope, format] = String(cmd || '').split('-')
   if (!['csv', 'excel'].includes(format)) return
@@ -3724,13 +3761,19 @@ useShortcutScope(rootRef, {
 .ai-filter-loading { padding: 18px 0; text-align: center; color: var(--dc-text-dim); font-size: 13px; }
 .ai-filter-label { margin-bottom: 6px; font-size: 13px; font-weight: 600; color: var(--dc-text-mid); }
 .ai-filter-sql {
-  background: var(--dc-bg-deep); border: 1px solid var(--dc-border); border-left: 3px solid var(--dc-primary);
+  background: var(--dc-code-bg); border: 1px solid var(--dc-border);
   border-radius: 10px; padding: 12px 14px; margin: 0;
   font-family: "SF Mono", ui-monospace, Consolas, monospace;
   font-size: 13px; color: var(--dc-link); white-space: pre-wrap;
   max-height: 240px; overflow: auto; line-height: 1.65;
 }
 .ai-filter-notes { margin-top: 10px; font-size: 13px; color: var(--dc-warning, #e6a23c); line-height: 1.7; }
+
+/* 生成 SQL 弹窗（同样挂在 body 上，走全局块）：内容就是一条 SELECT。
+   外观与高度自适应走全局 .dc-code-block / .el-dialog.dc-code-dlg（与「建表语句 DDL」
+   同一个 class）—— 不再自带 3px 主色左边条和 10px 圆角：那会让同一类"一条语句"的块
+   在两个弹窗里看着像两套东西（真机反馈「样式不一样」）。
+   .sql-gen-code 留着只作选择器锚点（回归脚本按它取节点）。 */
 
 /* 表格右键上下文菜单（teleport 到 body，需全局样式） */
 .grid-ctx-menu {
