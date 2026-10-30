@@ -6742,10 +6742,8 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 s => format!("{s} 秒"),
             };
             task.log(format!("开始同步：{total} 个对象{detail}"));
-            // 生效的并发表数也写一行（只一行）：用户问过「默认不是 2 张吗，怎么这么多一起开工」，
-            // 而实际值可能来自界面的「并发表数」，也可能是重跑时沿用了旧任务的设置 ——
-            // 不写出来就只能靠猜（默认 2 张，显式设置以用户为准）。
-            task.log(format!("同时搬 {sync_concurrency} 张表{concurrency_source}"));
+            // 生效的并发表数**不进界面日志**（用户口径：这是内部排兵布阵，界面别念）。
+            // 值仍然进下面的 tracing（排查「界面填的并发表数没生效」时照样查得到）。
             // 调度细节只进 tracing（debug）：它们是「内部怎么排兵布阵」，用户看不懂也不需要看
             tracing::debug!(
                 target: "dbmind::sync",

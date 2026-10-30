@@ -5,7 +5,7 @@
         <el-button size="small" :icon="advancedOpen ? ArrowUp : ArrowDown" plain
                    @click="advancedOpen = !advancedOpen"> {{ $t('tdv.advancedSearch') }}{{ activeFilterCount ? `（${activeFilterCount}）` : '' }}
         </el-button>
-        <el-button v-if="advancedOpen" size="small" text @click="addFilter">{{ $t('tdv.addFilter') }}</el-button>
+        <el-button v-if="advancedOpen" size="small" text class="adv-tool-add" @click="addFilter">{{ $t('tdv.addFilter') }}</el-button>
         <el-button v-if="advancedOpen" size="small" text @click="resetFilters">{{ $t('common.reset') }}</el-button>
       </div>
       <div class="right">
@@ -42,51 +42,98 @@
     </div>
 
     <transition name="slide">
-      <div v-show="advancedOpen" class="advanced-panel">
-        <div v-if="!filters.length" class="empty-tip">
+      <div v-show="advancedOpen" ref="advPanelRef" class="advanced-panel">
+        <div v-if="!totalRows" class="empty-tip">
           暂无筛选条件，点击右上 <b>{{ $t('cb.addCondition') }}</b> 开始配置高级搜索
         </div>
-        <div v-else class="filter-rows">
-          <!-- 行 key 用对象身份：删掉中间一行时下标 key 会让后面几行复用组件实例，
-               行内下拉的过滤态会串位（同 ConditionBuilder / UserForm） -->
-          <div v-for="(f, idx) in filters" :key="stableRowKey(f)" class="filter-row">
-            <el-select v-if="idx > 0" v-model="f.join" size="small" style="width: 80px"
-                       @change="onFilterChange">
-              <el-option :label="$t('tdv.and')" value="AND" />
-              <el-option :label="$t('tdv.or')" value="OR" />
+        <template v-else>
+          <!-- 面板头：只有多组时才有一行「组间关系」。不再写字（组间两个字多余），
+               位置在最上面、紧挨组 1，本身就说明它管的是组与组之间的关系。 -->
+          <div v-if="groups.length > 1" class="adv-head">
+            <el-select v-model="betweenMode" size="small" class="adv-join-sel" @change="onJoinModeChange">
+              <el-option :label="$t('tdv.joinAll')" value="AND" />
+              <el-option :label="$t('tdv.joinAny')" value="OR" />
             </el-select>
-            <!-- 第一个条件没有「且/或」，用等宽占位保持各行列对齐 -->
-            <span v-else class="join-placeholder" aria-hidden="true" />
-            <el-select v-model="f.col" size="small" filterable style="width: 180px"
-                       :placeholder="$t('common.pleaseSelect')" @change="onColChange(f)">
-              <el-option v-for="c in columnMetas" :key="c.name"
-                         :label="c.name" :value="c.name" />
-            </el-select>
-            <el-select v-model="f.op" size="small" style="width: 150px"
-                       @change="onFilterChange">
-              <el-option v-for="o in opsOf(f.colType)" :key="o.value"
-                         :label="o.label" :value="o.value" />
-            </el-select>
-            <template v-if="needsTwoValues(f.op)">
-              <el-input v-model="f.value" size="small" style="width: 140px"
-                        @keyup.enter="load(1)" />
-              <span class="between-sep">~</span>
-              <el-input v-model="f.value2" size="small" style="width: 140px"
-                        @keyup.enter="load(1)" />
-            </template>
-            <template v-else-if="!isNullOp(f.op)">
-              <el-input v-if="f.colType === 'date'" v-model="f.value" size="small" type="date" style="width: 160px" value-format="YYYY-MM-DD"
-                        @change="onFilterChange" />
-              <el-input v-else v-model="f.value" size="small"
-                        style="width: 160px" @keyup.enter="load(1)" />
-            </template>
-            <el-button size="small" link type="danger" :icon="Delete" :title="$t('tdv.removeFilter')" @click="removeFilter(idx)" />
           </div>
-        </div>
-        <div v-if="filters.length" class="advanced-foot">
-          <el-button type="primary" size="small" @click="load(1)">{{ $t('tdv.applyFilters') }}</el-button>
-          <el-button size="small" @click="resetFilters">{{ $t('common.clear') }}</el-button>
-        </div>
+
+          <!-- 条件组：组内条件 + 组内关系；组与组之间只用一条虚线分隔 -->
+          <div v-for="(g, gi) in groups" :key="g.id" class="adv-group">
+            <!-- 组头一直在：只放一条条件时也把组内关系摆出来，免得「同样的组，有的有下拉有的没有」 -->
+            <div class="adv-group-head">
+              <span v-if="groups.length > 1" class="adv-group-idx">{{ $t('tdv.groupIdx', { n: gi + 1 }) }}</span>
+              <el-select :model-value="g.join" size="small" class="adv-join-sel"
+                         @change="(v) => setGroupJoin(g, v)">
+                <el-option :label="$t('tdv.joinAll')" value="AND" />
+                <el-option :label="$t('tdv.joinAny')" value="OR" />
+              </el-select>
+              <!-- 组内「添加条件」贴着组内关系下拉放（右侧原来只有删除组，操作分两处不顺手）。
+                   文案用 tdv.addFilter（「+ 添加条件」）但不再叠 :icon —— 工具条上那个按钮就是这个
+                   文本加号，两处保持一致；图标加号 + 文本加号会变成两个加号。 -->
+              <el-button link class="adv-add-btn" @click="addRowTo(g)">{{ $t('tdv.addFilter') }}</el-button>
+              <span class="adv-group-spacer" />
+              <el-button v-if="groups.length > 1" link class="adv-icon-btn" :icon="Close"
+                         :title="$t('tdv.removeGroup')" @click="removeGroup(g)" />
+            </div>
+
+            <!-- 每行一条条件、行宽一律 640（够放「列名 + 运算符 + 值 + 删除」）：
+                 值控件宽度固定，行与行左对齐、删除按钮同一竖列 —— 不管区间还是单值都一个样。
+                 面板够宽（≥1250）才排两列，否则一列到底，免得半格里塞不下区间导致错位。 -->
+            <div class="filter-rows" :style="advGridStyle(g)">
+              <!-- 行 key 用对象身份：删掉中间一行时下标 key 会让后面几行复用组件实例，
+                   行内下拉的过滤态会串位（同 ConditionBuilder / UserForm） -->
+              <div v-for="(f, idx) in g.rows" :key="stableRowKey(f)" class="filter-row">
+                <el-select v-model="f.col" size="small" filterable class="f-col"
+                           :placeholder="$t('common.pleaseSelect')" @change="onColChange(f)">
+                  <el-option v-for="c in columnMetas" :key="c.name"
+                             :label="c.name" :value="c.name" />
+                </el-select>
+                <el-select v-model="f.op" size="small" class="f-op" @change="onFilterChange">
+                  <el-option v-for="o in opsOf(f.colType)" :key="o.value"
+                             :label="o.label" :value="o.value" />
+                </el-select>
+                <template v-if="needsTwoValues(f.op)">
+                  <!-- 日期/时间列的区间用一个「范围」控件：面板里点起、点止就完事，
+                       不用先在左框选一次、再在右框选一次 -->
+                  <el-date-picker v-if="isDateCol(f.colType)" size="small"
+                                  :type="rangeTypeOf(f.colType)"
+                                  :model-value="rangeValueOf(f)"
+                                  :format="pickerFmtOf(f.colType)" :value-format="pickerFmtOf(f.colType)"
+                                  :start-placeholder="rangePhOf(f.colType).start"
+                                  :end-placeholder="rangePhOf(f.colType).end"
+                                  unlink-panels
+                                  class="f-val f-val-range"
+                                  @update:model-value="(v) => setRangeOf(f, v)" />
+                  <template v-else>
+                    <el-input v-model="f.value" size="small" class="f-val f-val-half"
+                              @keyup.enter="load(1)" />
+                    <span class="between-sep">~</span>
+                    <el-input v-model="f.value2" size="small" class="f-val f-val-half"
+                              @keyup.enter="load(1)" />
+                  </template>
+                </template>
+                <template v-else-if="!isNullOp(f.op)">
+                  <!-- 日期列用日期选择器；带时间部分的列（datetime/timestamp）选到秒，
+                       纯日期列只到天。占位符交给 Element 的语言包。 -->
+                  <el-date-picker v-if="isDateCol(f.colType)" v-model="f.value" size="small"
+                                  :type="pickerTypeOf(f.colType)"
+                                  :format="pickerFmtOf(f.colType)" :value-format="pickerFmtOf(f.colType)"
+                                  :placeholder="pickerPhOf(f.colType)" class="f-val f-val-date"
+                                  @change="onFilterChange" />
+                  <el-input v-else v-model="f.value" size="small" class="f-val"
+                            @keyup.enter="load(1)" />
+                </template>
+                <el-button link class="f-del" :icon="Delete"
+                           :title="$t('tdv.removeFilter')" @click="removeCondRow(g, idx)" />
+              </div>
+            </div>
+
+          </div>
+
+          <div class="advanced-foot">
+            <el-button type="primary" size="small" @click="load(1)">{{ $t('tdv.applyFilters') }}</el-button>
+            <el-button size="small" @click="resetFilters">{{ $t('common.clear') }}</el-button>
+          </div>
+        </template>
       </div>
     </transition>
 
@@ -309,7 +356,7 @@ import { querySettingsLive, editorSettingsLive } from '../../utils/settings'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { numericTypeHint, isNumericLiteral } from '../../utils/dbType'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ArrowUp, ArrowDown, Delete, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key } from '@element-plus/icons-vue'
+import { ArrowUp, ArrowDown, Delete, Plus, Minus, Check, Refresh, Download, Operation, Loading, VideoPause, Histogram, Calendar, Switch as SwitchIcon, Document, Tickets, Grid, Key, Close } from '@element-plus/icons-vue'
 import { getTableData, listColumns, saveTableData, aiFilter, exportData } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import CellDetailDialog from '../../common/CellDetailDialog.vue'
@@ -493,8 +540,111 @@ const formatElapsed = (ms) => {
 }
 
 const advancedOpen = ref(false)
-const filters = ref([])
-const activeFilterCount = computed(() => filters.value.length)
+
+/* 条件区列数：按面板**实际宽度**算，每列固定 640（不再均分拉伸）。
+   640 = 列名 130 + 运算符 100 + 值框 380 + 删除 18 + 行内间距 10 —— 行内每样都放得下，
+   区间（daterange）也在这个宽度里，不再需要"跨 2 列"或把值框压到 200。
+   早先按 300 起算能排 4 列，但半格宽 330 塞不下区间行，才出现「区间独占一行 / 内容溢出错行」。 */
+const advPanelRef = ref(null)
+const advCols = ref(1)
+const ADV_COL_W = 640
+const ADV_COL_GAP = 12
+const ADV_MAX_COLS = 4
+const calcAdvCols = () => {
+  const el = advPanelRef.value
+  if (!el) return
+  // 减去 面板左右 padding 12*2 与 组块左右 padding 8*2，才是条件区真正可用的宽度
+  const w = el.clientWidth - 24 - 16
+  if (w <= 0) return   // 面板收起（v-show=false）时量不到，等 ResizeObserver / 展开时再算
+  const n = Math.floor((w + ADV_COL_GAP) / (ADV_COL_W + ADV_COL_GAP))
+  advCols.value = Math.max(1, Math.min(ADV_MAX_COLS, n))
+}
+/** 列宽固定 640：面板再宽也不把行拉长（拉长只会让值框和行尾之间空一大截） */
+const advGridStyle = (g) => {
+  const n = Math.max(1, Math.min(advCols.value, g.rows.length))
+  return { gridTemplateColumns: `repeat(${n}, minmax(0, ${ADV_COL_W}px))` }
+}
+let advRo = null
+onMounted(() => {
+  calcAdvCols()
+  if (advPanelRef.value && typeof ResizeObserver !== 'undefined') {
+    advRo = new ResizeObserver(calcAdvCols)
+    advRo.observe(advPanelRef.value)
+  }
+})
+onBeforeUnmount(() => { if (advRo) { advRo.disconnect(); advRo = null } })
+watch(advancedOpen, (v) => { if (v) nextTick(calcAdvCols) })
+
+/* ===== 高级搜索：条件组（"多套条件"） =====
+   模型：groups = [{ id, join: 'AND'|'OR', rows: [ {col, op, value, value2, colType} ] }]
+   · join     —— 组**内**多条条件怎么连（同一组只能是同一种关系）
+   · betweenMode —— 组**间**怎么连（全局一个开关）
+   拼出来的 SQL：((组1 内) between (组2 内) …)，见后端 filter_clause（组内/组间各自加括号）。
+   界面历史：先是每行前面一个「且/或」下拉（白占一列、重复 N 遍），再收成整块开关，
+   现在这一版才支持"多套"——(a AND b) OR (c AND d) 这种真的拼得出来。 */
+let groupSeq = 0
+const groups = ref([])
+const betweenMode = ref('AND')
+const totalRows = computed(() => groups.value.reduce((n, g) => n + g.rows.length, 0))
+const activeFilterCount = computed(() => totalRows.value)
+
+const newGroup = () => ({ id: `g${++groupSeq}`, join: 'AND', rows: [] })
+/** 一行新条件的初始值：默认取第一列 + 该列类型的默认运算符（与以前一致） */
+const makeFilterRow = () => {
+  const meta = columnMetas.value[0]
+  return {
+    col: meta ? meta.name : '',
+    op: pickDefaultOp(meta ? meta.colType : 'string'),
+    value: '', value2: '',
+    colType: meta ? meta.colType : 'string'
+  }
+}
+const lastGroup = () => {
+  if (!groups.value.length) groups.value.push(newGroup())
+  return groups.value[groups.value.length - 1]
+}
+/** 组内「添加条件」：往**这个组**里再加一行（组内关系不变） */
+const addRowTo = (g) => { if (g) g.rows.push(makeFilterRow()) }
+/** 工具条「添加条件」：新加一**组**（组内再加条走组内那行「添加条件」）。
+ *  这样"加条件"与"加一组"不再两个入口，底部那个「新增条件组」按钮也就不需要了。 */
+const addGroupWithRow = () => {
+  const g = newGroup()
+  g.rows.push(makeFilterRow())
+  groups.value.push(g)
+  advancedOpen.value = true
+}
+const removeCondRow = (g, idx) => {
+  g.rows.splice(idx, 1)
+  // 组被清空就整组摘掉（多组时）；剩最后一组时留一个空组等用户点「添加条件」
+  if (!g.rows.length && groups.value.length > 1) removeGroup(g)
+}
+const removeGroup = (g) => { groups.value = groups.value.filter(x => x !== g) }
+/** 改组内关系：整组一起改，然后按新关系重查（有可执行条件时） */
+const setGroupJoin = (g, v) => {
+  g.join = v
+  onJoinModeChange()
+}
+const onJoinModeChange = () => {
+  const has = groups.value.some(g => g.rows.some(r => r.col && (isNullOp(r.op) || r.value !== '')))
+  if (has) load(1)
+}
+/** 条件组 → 请求里的扁平行：group=组序号、groupJoin=与上一组的关系、join=组内关系 */
+const buildFilterCond = () => {
+  const out = []
+  groups.value.forEach((g, gi) => {
+    const rows = g.rows.filter(r => r.col && r.op && (isNullOp(r.op) || r.value !== ''))
+    rows.forEach((r, ri) => {
+      out.push({
+        // 组内第一条前面的连接符没有意义（占位 AND），其余按本组的关系
+        join: ri === 0 ? 'AND' : g.join,
+        group: gi,
+        groupJoin: gi === 0 ? 'AND' : betweenMode.value,
+        col: r.col, op: r.op, value: r.value, value2: r.value2, colType: r.colType
+      })
+    })
+  })
+  return out
+}
 
 // ========== 编辑状态 ==========
 const selectedRowIndex = ref(-1)
@@ -1170,7 +1320,7 @@ const openCtxMenu = (x, y, row, col, from = 'cell') => {
     { label: t('tdv.filterNe'), command: 'filter-ne' }
   ]
   if (colType === 'string') filterOps.push({ label: t('tdv.filterContains'), command: 'filter-contains' })
-  if (colType === 'number' || colType === 'date') {
+  if (colType !== 'string') {
     filterOps.push({ label: t('tdv.filterGt'), command: 'filter-gt' })
     filterOps.push({ label: t('tdv.filterLt'), command: 'filter-lt' })
   }
@@ -1566,8 +1716,8 @@ const filterByValue = (col, op) => {
   const v = needsValue ? ctxCellValue(col) : null
   if (needsValue && (v === undefined || v === null)) { ElMessage.warning(t('tdv.cellEmpty')); return }
   const meta = columnMetas.value.find(m => m.name === col)
-  filters.value.push({
-    join: 'AND', col, op, value: needsValue ? String(v) : '', value2: '',
+  lastGroup().rows.push({
+    col, op, value: needsValue ? String(v) : '', value2: '',
     colType: meta ? classifyType(meta.type) : 'string'
   })
   advancedOpen.value = true
@@ -2642,21 +2792,23 @@ const OPS = {
     { value: 'eq',   label: t('tdv.opEq') },
     { value: 'ne',   label: t('tdv.opNe') },
     { value: 'gt',   label: t('tdv.opGt') },
-    { value: 'lt',   label: t('tdv.opLt') },
     { value: 'gte',  label: t('tdv.opGte') },
+    { value: 'lt',   label: t('tdv.opLt') },
     { value: 'lte',  label: t('tdv.opLte') },
     { value: 'between', label: t('tdv.opBetween') },
     { value: 'is_null',     label: t('cop.isnull') },
     { value: 'is_not_null', label: t('cop.isnotnull') }
   ],
+  // 日期与数字共用同一套说辞：以前日期用的是「晚于 / 早于 / 不早于 / 不晚于」，
+  // 双重否定读起来绕，而且和数字列的「大于 / 大于等于」对不上，等于同一件事两种叫法。
   date: [
     { value: 'eq',   label: t('tdv.opEq') },
     { value: 'ne',   label: t('tdv.opNe') },
-    { value: 'gt',   label: t('tdv.opAfter') },
-    { value: 'lt',   label: t('tdv.opBefore') },
-    { value: 'gte',  label: t('tdv.opNotBefore') },
-    { value: 'lte',  label: t('tdv.opNotAfter') },
-    { value: 'between', label: t('tdv.opDateRange') },
+    { value: 'gt',   label: t('tdv.opGt') },
+    { value: 'gte',  label: t('tdv.opGte') },
+    { value: 'lt',   label: t('tdv.opLt') },
+    { value: 'lte',  label: t('tdv.opLte') },
+    { value: 'between', label: t('tdv.opBetween') },
     { value: 'is_null',     label: t('cop.isnull') },
     { value: 'is_not_null', label: t('cop.isnotnull') }
   ]
@@ -2665,10 +2817,33 @@ const opsOf = (t) => OPS[t] || OPS.string
 const needsTwoValues = (op) => op === 'between'
 const isNullOp = (op) => op === 'is_null' || op === 'is_not_null'
 
+// 带时间部分的列用同一套运算符（等于 / 大于 / 区间…），只是选择器多选到秒
+OPS.datetime = OPS.date
+
+/* 带时间部分的列单独一类：选择器要多选到时分秒（datetime / timestamp / timestamptz /
+   smalldatetime / datetime2 / datetimeoffset，ClickHouse 的 DateTime 也走这里）。 */
+const isDateCol = (ct) => ct === 'date' || ct === 'datetime'
+const pickerTypeOf = (ct) => (ct === 'datetime' ? 'datetime' : 'date')
+const pickerFmtOf = (ct) => (ct === 'datetime' ? 'YYYY-MM-DD HH:mm:ss' : 'YYYY-MM-DD')
+const pickerPhOf = (ct) => (ct === 'datetime' ? t('tdv.phDateTime') : t('tdv.phDate'))
+
+/* 区间（between）：日期/时间列用 range 控件，一个框里点起止；值是 [起, 止] 数组 */
+const rangeTypeOf = (ct) => (ct === 'datetime' ? 'datetimerange' : 'daterange')
+const rangePhOf = (ct) => (ct === 'datetime'
+  ? { start: t('tdv.phTimeStart'), end: t('tdv.phTimeEnd') }
+  : { start: t('tdv.phDateStart'), end: t('tdv.phDateEnd') })
+const rangeValueOf = (f) => ((f.value || f.value2) ? [f.value || '', f.value2 || ''] : null)
+const setRangeOf = (f, v) => {
+  const arr = Array.isArray(v) ? v : []
+  f.value = arr[0] || ''
+  f.value2 = arr[1] || ''
+}
+
 const classifyType = (typeName) => {
   const t = (typeName || '').toLowerCase().split('(')[0].trim()
   if (/^(int|bigint|smallint|tinyint|mediumint|decimal|numeric|float|double|real|bit|number|bool)/.test(t)) return 'number'
-  if (/^(date|time|datetime|timestamp|year)/.test(t)) return 'date'
+  if (/^(datetime|timestamp|smalldatetime|datetime2|datetimeoffset)/.test(t)) return 'datetime'
+  if (/^(date|time|year)/.test(t)) return 'date'
   return 'string'
 }
 
@@ -2678,19 +2853,9 @@ const pickDefaultOp = (colType) => {
   const ops = opsOf(colType)
   return ops.some(o => o.value === DEFAULT_FILTER_OP) ? DEFAULT_FILTER_OP : ops[0].value
 }
-const addFilter = () => {
-  const firstMeta = columnMetas.value[0]
-  filters.value.push({
-    join: 'AND',
-    col: firstMeta ? firstMeta.name : '',
-    op: pickDefaultOp(firstMeta ? firstMeta.colType : 'string'),
-    value: '',
-    value2: '',
-    colType: firstMeta ? firstMeta.colType : 'string'
-  })
-}
-const removeFilter = (idx) => { filters.value.splice(idx, 1) }
-const resetFilters = () => { filters.value = [] }
+/** 工具条「添加条件」= 新加一组条件（组内再加条走组内按钮） */
+const addFilter = () => { addGroupWithRow() }
+const resetFilters = () => { groups.value = [] }
 
 const onColChange = (f) => {
   const meta = columnMetas.value.find(c => c.name === f.col)
@@ -2735,9 +2900,8 @@ const load = async (p = 1, opts = null) => {
   if (loadTimer) clearInterval(loadTimer)
   loadTimer = setInterval(() => { elapsedTime.value = Date.now() - start }, 100)
   try {
-    const cond = filters.value
-      .filter(f => f.col && f.op && (isNullOp(f.op) || f.value !== ''))
-      .map(f => ({ join: f.join, col: f.col, op: f.op, value: f.value, value2: f.value2, colType: f.colType }))
+    // 条件组 → 后端的扁平行：group 是组序号（组内按 join 连），groupJoin 是这一组与前一组的关系
+    const cond = buildFilterCond()
     const params = {
       database: props.database, table: props.table,
       page: page.value, size: size.value,
@@ -2966,14 +3130,21 @@ const opToSql = (f) => {
     default:              return null
   }
 }
+/** 条件组 → 导出/预览用 WHERE（口径与后端 filter_clause 一致：组内、组间都加括号） */
 const filtersToWhere = () => {
-  const cons = filters.value.filter(f => f.col && f.op && (isNullOp(f.op) || f.value !== ''))
-  if (!cons.length) return ''
-  const parts = cons.map(opToSql).filter(Boolean)
-  if (!parts.length) return ''
-  let sql = ' WHERE ' + parts[0]
-  for (let i = 1; i < parts.length; i++) sql += ` ${cons[i].join || 'AND'} ${parts[i]}`
-  return sql
+  const groupSql = []
+  for (const g of groups.value) {
+    const cons = g.rows.filter(r => r.col && r.op && (isNullOp(r.op) || r.value !== ''))
+    const parts = cons.map(opToSql).filter(Boolean)
+    if (!parts.length) continue
+    let one = parts[0]
+    for (let i = 1; i < parts.length; i++) one = `(${one} ${g.join || 'AND'} ${parts[i]})`
+    groupSql.push(`(${one})`)
+  }
+  if (!groupSql.length) return ''
+  let sql = groupSql[0]
+  for (let i = 1; i < groupSql.length; i++) sql = `(${sql} ${betweenMode.value} ${groupSql[i]})`
+  return ' WHERE ' + sql
 }
 const buildExportSql = () => {
   const tbl = quoteIdent(props.table)
@@ -3024,7 +3195,7 @@ onMounted(async () => {
 watch(() => [props.conn?.id, props.database, props.table], async () => {
   page.value = 1
   orderKeys.value = []
-  filters.value = []
+  groups.value = []
   selectedSet.value = new Set()
   activeCell.value = null
   editingCell.value = null
@@ -3113,16 +3284,115 @@ useShortcutScope(rootRef, {
   display: flex; flex-direction: column; gap: 8px;
 }
 .empty-tip { color: var(--dc-text-dim); font-size: 13px; padding: 8px 0; }
-.filter-rows { display: flex; flex-direction: column; gap: 6px; }
-.filter-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-/* 第一个条件没有「且/或」下拉，用同宽占位让各行的字段列对齐 */
-.join-placeholder { flex: 0 0 80px; width: 80px; }
-.between-sep { color: var(--dc-text-dim); padding: 0 2px; }
-.advanced-foot { display: flex; gap: 8px; padding-top: 4px; border-top: 1px dashed var(--dc-border); }
+
+/* 面板头：只有多组时才有一条组间关系下拉，贴左（不再写「组间」两个字，
+   它就在组 1 上方，位置已经说明管的是组与组之间） */
+.adv-head { display: flex; align-items: center; justify-content: flex-start; gap: 6px; }
+/* 关系下拉统一用 select：宽度随文案自适应（写死 108px 时中英文长短不一，
+   要么一大片留白、要么「全部满足」被挤）。
+   Element 内部 .el-select__selection 是 flex:1，宽度 auto 时它 basis 0 会塌成只剩箭头，
+   所以这里把它改成不伸缩，让文字宽度真的能撑开控件。 */
+.adv-join-sel { flex: none; width: max-content; }
+.adv-join-sel :deep(.el-select__selection) { flex: none; min-width: 0; }
+.adv-join-sel :deep(.el-select__selected-item) { flex-wrap: nowrap; white-space: nowrap; }
+/* 选中文字在 Element 里是绝对定位（position:absolute + width:100%）的，不参与宽度计算，
+   于是外层 width:auto 会塌成只剩箭头。这里把它放回文档流，文字多宽控件就多宽。 */
+.adv-join-sel :deep(.el-select__placeholder) {
+  position: static;
+  width: auto;
+  transform: none;
+  white-space: nowrap;
+  /* 关系值是要读的信息，比输入框占位符亮一档 */
+  color: var(--dc-text);
+}
+
+/* 条件组：一组一块（描边 + 内嵌块的底 + 内边距），组与组之间靠留白分开。
+   底色用 --dc-bg-soft 而不是最深那档 --dc-bg-deep：后者在深色主题下(#14151b)像一块黑洞，
+   和卡片(#242833)拉得太开；soft 比卡片深一档，靠描边就能分清组。 */
+.adv-group {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 6px 8px;
+  background: var(--dc-bg-soft);
+  border: 1px solid var(--dc-border-strong);
+  border-radius: 8px;
+}
+.adv-group + .adv-group { margin-top: 2px; }
+.adv-group-head { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+/* 组号做成主色小胶囊：多组时一眼能数清「这是第几组」，也不再是一行灰字 */
+.adv-group-idx {
+  flex: none; font-size: 12px; font-weight: 600; line-height: 19px;
+  padding: 0 7px; border-radius: 5px;
+  color: var(--dc-primary); background: var(--dc-primary-wash);
+}
+.adv-group-spacer { flex: 1; }
+/* 组内「添加条件」：普通的文字按钮（不再套虚线框），用主色蓝提示可点，
+   和工具条那个「+ 添加条件」同一个观感 */
+.adv-add-btn.el-button {
+  flex: none; height: 22px; padding: 0 7px; margin-left: 2px;
+  font-size: 12px; color: var(--dc-primary);
+  border: none; border-radius: 6px;
+}
+.adv-add-btn.el-button:hover {
+  color: var(--dc-primary);
+  background: var(--dc-primary-wash);
+}
+/* 工具条那个「+ 添加条件」也用主色，跟组内那个一致。
+   Element 的 .el-button.is-text 自带一层文字色，这里得把选择器写到同样"重"才盖得住。 */
+.toolbar .adv-tool-add.el-button.is-text { color: var(--dc-primary); }
+.adv-icon-btn { color: var(--dc-text-dim); }
+.adv-icon-btn:hover { color: var(--dc-danger); }
+
+/* 条件区：列宽由 JS 固定给 640（见 advGridStyle），这里只负责排布。
+   贴左排（justify-content: start），面板再宽也不再拉长每一行。 */
+.filter-rows {
+  display: grid;
+  gap: 5px 12px;
+  align-items: center;
+  justify-content: start;
+}
+.filter-row {
+  display: flex; align-items: center; gap: 5px;
+  min-width: 0;                 /* 允许子项收缩，否则长列名会把 grid 列撑破 */
+}
+/* 列名 130：640 的行宽里够放一个完整列名（之前 110 时 region_code 这类会被截成 regi…） */
+.filter-row .f-col { flex: 0 1 130px; min-width: 90px; max-width: 130px; }
+/* 运算符 100：「大于等于」这种最长文案 + 箭头 + 内边距刚好放得下 */
+.filter-row .f-op { flex: 0 0 100px; width: 100px; }
+/* 值框统一 380（输入框 / 单值日期 / 区间日期范围都用这个宽度）：
+   el-input / el-date-editor 是子组件的根，Vue 不会把父组件的 scoped 属性加到它身上
+   （实测 getAttributeNames 里没有 data-v），必须 :deep 穿透。
+   **宽度必须统一** —— 区间行和单值行如果各是各的宽度，行尾的删除按钮就会上下错开，
+   每行右侧留白也不同，看着就"不协调"。 */
+.filter-row :deep(.f-val),
+.filter-row :deep(.f-val-date),
+.filter-row :deep(.f-val-range) {
+  flex: 0 1 380px; width: 380px; min-width: 160px; max-width: 380px;
+}
+/* 非日期列的区间是两个值框（开始 ~ 结束）：各 185，加起来正好和单个值框同宽 */
+.filter-row :deep(.f-val-half) { flex: 0 1 185px; width: 185px; max-width: 185px; }
+/* 删除：一直红（灰的时候太容易漏看），悬停加深 */
+.filter-row .f-del { flex: none; color: var(--dc-danger); }
+.filter-row .f-del:hover { color: var(--dc-danger); filter: brightness(1.25); }
+.between-sep { color: var(--dc-text-mid); padding: 0 2px; flex: none; }
+.advanced-foot {
+  display: flex; align-items: center; gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--dc-border);
+}
+
+/* 控件内的文字统一居中：靠 flex 保证上下居中（Element 默认如此，改行高/内边距后会歪），
+   左右居中输入框看 text-align、下拉框看 .el-select__selection 的 justify-content。
+   下拉箭头是 flex 兄弟节点，选中文字在它左侧的剩余空间里居中，不会压到箭头上。 */
+.advanced-panel :deep(.el-input__wrapper),
+.advanced-panel :deep(.el-select__wrapper) { align-items: center; }
+.advanced-panel :deep(.el-input__inner) { text-align: center; }
+.advanced-panel :deep(.el-select__selection) { justify-content: center; }
+.advanced-panel :deep(.el-select__placeholder),
+.advanced-panel :deep(.el-select__selected-item) { text-align: center; }
 
 .slide-enter-active, .slide-leave-active { transition: max-height .25s ease, opacity .2s ease; overflow: hidden; }
 .slide-enter-from, .slide-leave-to { max-height: 0; opacity: 0; }
-.slide-enter-to, .slide-leave-from { max-height: 500px; opacity: 1; }
+.slide-enter-to, .slide-leave-from { max-height: 1000px; opacity: 1; }
 
 .grid-area { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: var(--dc-radius); overflow: hidden; }
 .table-scroll { flex: 1; min-height: 0; overflow: auto; contain: layout paint; overflow-anchor: none; }

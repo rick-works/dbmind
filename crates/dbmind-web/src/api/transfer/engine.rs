@@ -630,14 +630,13 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
             let wait_spent = plan.wait_ms.load(Ordering::SeqCst);
             let batch_count = batches.load(Ordering::SeqCst);
             // 链路日志第 5 步（终点）：这张表搬完，多少行、花了多久。
-            // 括号里只放可核对的事实：批数与平均每批（判断慢在每批固定开销还是数据量）、
-            // 以及等待超时/重连占了多少（判断这一小时是搬数据还是干等）。
+            // 批数 / 平均每批 / 等待超时这些**不进界面日志**（用户口径：一行看完就行，
+            // 括号里的数字没人看）。数仍然进下面的 tracing（排查慢表时照样查得到）。
             task.log(format!(
-                "表 {}：传输完成，共 {}，耗时 {}{}",
+                "表 {}：传输完成，共 {}，耗时 {}",
                 plan.table,
                 super::行数(done_rows),
                 super::时长(total_ms),
-                super::完成附注(total_ms, wait_spent, batch_count, write_spent),
             ));
             tracing::debug!(
                 table = %plan.table,

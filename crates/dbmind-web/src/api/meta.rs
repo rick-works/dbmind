@@ -1883,32 +1883,60 @@ fn scalar_of(dialect: &Dialect, kind: &str, raw: &str) -> Option<String> {
     Some(dialect.literal(raw))
 }
 
-/// 整组高级搜索条件 → 一个 SQL 条件（各组已按行里的 且/或 拼好）。
+/// 整组高级搜索条件 → 一个 SQL 条件。
 ///
-/// 逐条从左往右拼并**层层加括号**：与界面上一行一行读下来的意思一致。
-/// （SQL 里 AND 优先级高于 OR，不加括号时 `a AND b OR c` 会被读成 `(a AND b) OR c`，
-/// 而用户按界面那样理解可能是 `a AND (b OR c)` —— 这种"看起来一样、筛出来不一样"
-/// 的差异最难查，所以在源头就消掉。）
+/// 两级结构（前端「多套条件」）：`item.group` 是组序号、`item.join` 是**组内**连接符、
+/// `item.groupJoin` 是这一组与**上一组**的连接符，拼出来形如
+/// `((a AND b) OR (c AND d))`。没有 `group` 字段的老请求全部落到 0 号组，
+/// 与以前的"逐条从左往右"完全等价。
+///
+/// 之所以要显式加括号：SQL 里 AND 优先级高于 OR，不加括号时 `a AND b OR c` 会被读成
+/// `(a AND b) OR c`，而用户按界面那样理解可能是 `a AND (b OR c)` —— 这种"看起来一样、
+/// 筛出来不一样"的差异最难查，所以在源头就消掉。
 fn filter_clause(dialect: &Dialect, filters: &[Value]) -> Option<String> {
-    let mut combined: Option<String> = None;
+    struct Acc {
+        idx: u64,
+        between: &'static str,
+        joined: Option<String>,
+    }
+
+    let join_of = |item: &Value, key: &str| -> &'static str {
+        match item.get(key).and_then(Value::as_str) {
+            Some(v) if v.eq_ignore_ascii_case("or") => "or",
+            _ => "and",
+        }
+    };
+
+    let mut accs: Vec<Acc> = Vec::new();
     for item in filters {
         let Some(condition) = filter_condition(dialect, item) else {
             continue;
         };
-        combined = Some(match combined {
-            None => format!("({condition})"),
-            Some(previous) => {
-                let is_or = item
-                    .get("join")
-                    .and_then(Value::as_str)
-                    .map(|join| join.eq_ignore_ascii_case("or"))
-                    .unwrap_or(false);
-                let join = if is_or { "or" } else { "and" };
-                format!("({previous} {join} ({condition}))")
+        let idx = item.get("group").and_then(Value::as_u64).unwrap_or(0);
+        let join = join_of(item, "join");
+        let between = join_of(item, "groupJoin");
+
+        let slot = match accs.iter().position(|a| a.idx == idx) {
+            Some(pos) => &mut accs[pos],
+            None => {
+                accs.push(Acc { idx, between, joined: None });
+                accs.last_mut().expect("刚 push 过")
             }
+        };
+        slot.joined = Some(match slot.joined.take() {
+            None => format!("({condition})"),
+            Some(previous) => format!("({previous} {join} ({condition}))"),
         });
     }
-    combined
+
+    let mut accs = accs.into_iter();
+    let first = accs.next()?;
+    let mut combined = first.joined?;
+    for acc in accs {
+        let Some(group) = acc.joined else { continue };
+        combined = format!("({combined} {} ({group}))", acc.between);
+    }
+    Some(combined)
 }
 
 /// 排序键解析：多列 `orderColumns=age:ASC,name:DESC`（按**优先级**从左到右），

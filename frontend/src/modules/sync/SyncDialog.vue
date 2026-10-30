@@ -36,7 +36,9 @@
                        :placeholder="$t('common.pleaseSelect')" @change="onSrcDbChange">
               <el-option v-for="d in srcDbs" :key="d" :label="d" :value="d" />
             </el-select>
-            <el-select v-if="srcNeedSchema" v-model="src.schema" size="small" :disabled="taskRunning"
+            <!-- 模式下拉要等库选完才画：库还停在「请选择」时先摆一个模式框，等于让人在
+                 一个还不知道属于哪个库的清单里挑模式（真机反馈：库没选，模式里却列着 dbo） -->
+            <el-select v-if="srcNeedSchema && src.database" v-model="src.schema" size="small" :disabled="taskRunning"
                        :placeholder="$t('common.pleaseSelect')" @change="loadSrcObjects">
               <el-option v-for="s in srcSchemas" :key="s" :label="s" :value="s" />
             </el-select>
@@ -56,7 +58,7 @@
                        :placeholder="$t('common.pleaseSelect')" @change="onTgtDbChange">
               <el-option v-for="d in tgtDbs" :key="d" :label="d" :value="d" />
             </el-select>
-            <el-select v-if="tgtNeedSchema" v-model="tgt.schema" size="small" :disabled="taskRunning"
+            <el-select v-if="tgtNeedSchema && tgt.database" v-model="tgt.schema" size="small" :disabled="taskRunning"
                        :placeholder="$t('common.pleaseSelect')">
               <el-option v-for="s in tgtSchemas" :key="s" :label="s" :value="s" />
             </el-select>
@@ -579,7 +581,7 @@ import {
 } from '@element-plus/icons-vue'
 import { listConnections, listDatabases, listSchemas, listTables, listProcedures, listTriggers, listEvents, getFeatures, syncDb, syncTaskStatus, syncCancel } from '../../api'
 // 「库」这一层要不要画（Oracle / DM 没有库层：它就是连接里填的服务名）
-import { hideDbLevelOf } from '../../types'
+import { hideDbLevelOf, byType } from '../../types'
 // 函数 / 存储过程的判据必须与左侧对象树同源（见 treeNodes.js 的 isFunctionRoutine），
 // 否则会出现"树上算函数、同步时算存储过程"这种两边对不上的分叉
 import { isFunctionRoutine } from '../data/treeNodes'
@@ -1473,12 +1475,22 @@ const loadSrcDbs = async () => {
   try { srcFeatures.value = await getFeatures(src.value.connectionId) } catch (e) { srcFeatures.value = {} }
   await onSrcDbChange()
 }
+/// 选完库后预选哪个模式：按方言给默认值（SQL Server 是 dbo、PG / Kingbase 是 public，
+/// 见 types/*.js 的 defaultSchema）。列表里没有这个默认就退回第一项 —— 不能因为方言没登记
+/// 就留空，留空等于把「模式」这一层丢掉，请求里就成了「整个库」。
+const pickSchema = (list, connId) => {
+  if (!list.length) return ''
+  const want = String(byType(connInfoOf(connId)?.type).defaultSchema || '').toLowerCase()
+  const hit = want ? list.find(s => String(s).toLowerCase() === want) : null
+  return hit || list[0]
+}
 const onSrcDbChange = async () => {
   src.value.schema = ''
   srcSchemas.value = []
-  if (srcNeedSchema.value) {
+  // 库还没选就不查模式：下面那个下拉也是靠 `src.database` 才画的
+  if (srcNeedSchema.value && src.value.database) {
     try { srcSchemas.value = await listSchemas(src.value.connectionId, src.value.database) } catch (e) { srcSchemas.value = [] }
-    if (srcSchemas.value.length) src.value.schema = srcSchemas.value[0]
+    src.value.schema = pickSchema(srcSchemas.value, src.value.connectionId)
   }
   await loadSrcObjects()
 }
@@ -1509,9 +1521,12 @@ const loadTgtDbs = async () => {
 const onTgtDbChange = async () => {
   tgt.value.schema = ''
   tgtSchemas.value = []
+  // 库还没选就没有「模式」可言：不查、也不画（真机反馈：目标库停在「请选择」，
+  // 模式框里却已经列着 dbo）
+  if (!tgt.value.database) return
   if (tgtNeedSchema.value) {
     try { tgtSchemas.value = await listSchemas(tgt.value.connectionId, tgt.value.database) } catch (e) { tgtSchemas.value = [] }
-    if (tgtSchemas.value.length) tgt.value.schema = tgtSchemas.value[0]
+    tgt.value.schema = pickSchema(tgtSchemas.value, tgt.value.connectionId)
   }
 }
 
@@ -1731,7 +1746,7 @@ const run = async (rawOverride = null) => {
     // 任务中心那一列只有一个库名，看不出连的是哪台机器）。
     // 连接名与库名之间用**点**而不是斜杠（用户口径：`conn.db` 像一个对象路径，斜杠看着像 URL 路径）。
     const bgSide = (conn, db) => (db ? `${conn}.${db}` : conn)
-    const bgTitle = computed(() => {
+    const bgTitleBase = computed(() => {
       const srcConn = srcConnName.value
       const tgtConn = tgtConnName.value
       // 连接名拿不到（从任务中心「查看」恢复时界面上的源/目标是空的）：**不给标题**。
@@ -1747,6 +1762,26 @@ const run = async (rawOverride = null) => {
         return t('sync.bgTitleSameDb', { src: srcConn, tgt: tgtConn, db: srcDb })
       }
       return t('sync.bgTitle', { src: bgSide(srcConn, srcDb), tgt: bgSide(tgtConn, tgtDb) })
+    })
+    /**
+     * 标题尾巴上的对象规模（`· 31 表 2 视图`），按**已勾选**的对象算。
+     *
+     * 为什么要有：源/目标相同、只换了一批对象再跑一趟时（整库同步之后补跑几张表），
+     * 拼出来的标题一个字都不差，任务中心里两条记录只能看开始时间去猜 —— 真机反馈
+     * 「两个不同的任务名字串了，变成一样了」。摘要把「这一趟到底搬了什么」写进标题。
+     */
+    const bgObjectSummary = computed(() => {
+      const meta = typeMeta()
+      return objTypes
+        .filter(g => objState[g.key].selected.length)
+        .map(g => `${objState[g.key].selected.length} ${meta[g.key].abbr}`)
+        .join(' ')
+    })
+    const bgTitle = computed(() => {
+      const base = bgTitleBase.value
+      if (!base) return ''
+      const summary = bgObjectSummary.value
+      return summary ? `${base} · ${summary}` : base
     })
     // 任务中心点「查看」→ 父组件带 resumeTaskId 打开对话框：跳过向导直接进进度页接着轮询。
     // ⚠ 下面那个「打开即重置向导」的 watch（step=1）与本 watch 同帧触发，注册序在前先跑 ——

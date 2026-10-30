@@ -556,7 +556,7 @@
       <template #default="{ row }"><span class="bg-kind" :class="bgKindClass(row.kind)">{{ bgKindLabel(row.kind) }}</span></template>
     </el-table-column>
     <!-- 「任务」列带连接名（`源连接 / 库 → 目标连接 / 库`）：只写库名时同名库分不清是哪两个实例 -->
-    <el-table-column prop="title" :label="$t('ts.task')" min-width="260" show-overflow-tooltip align="center" header-align="center" />
+    <el-table-column prop="title" :label="$t('ts.task')" min-width="330" show-overflow-tooltip align="center" header-align="center" />
     <el-table-column :label="$t('ts.status')" width="90" show-overflow-tooltip align="center" header-align="center">
       <template #default="{ row }"><span class="bg-dot bg-dot-inline" :class="bgStatusOf(row.id)"></span>{{ bgStateShort(row.id) }}</template>
     </el-table-column>
@@ -985,6 +985,19 @@
           <el-icon><Refresh /></el-icon>{{ $t('common.refresh') }}
         </li>
       </template>
+      <!-- 脚本节点：查看（直接跳到 SQL 编辑器页签）/ 重命名 / 删除 -->
+      <template v-else-if="treeCtxMenu.kind === 'script'">
+        <li class="ctx-item" @click="scriptCtxView()">
+          <el-icon><View /></el-icon>{{ $t('tree.menu.viewScript') }}
+        </li>
+        <li class="ctx-item" @click="scriptCtxRename()">
+          <el-icon><EditPen /></el-icon>{{ $t('tree.menu.renameScript') }}
+        </li>
+        <li class="divider" />
+        <li class="ctx-item danger" @click="scriptCtxDelete()">
+          <el-icon><Delete /></el-icon>{{ $t('common.delete') }}
+        </li>
+      </template>
     </ul>
   </div>
 
@@ -1199,6 +1212,8 @@ import { desktopShell } from '../../utils/desktopShell'
 import { readSchemaCache, writeSchemaCache, removeSchemaCache, invalidateSchemaCache } from '../../utils/schemaCache'
 import { rememberConnNames, connNameOf } from '../../utils/connNames'
 import { connErrorRaw } from '../../utils/connErrors'
+// 脚本存储的读写口径（改名/删除与「脚本管理」弹窗共用，见 utils/sqlScripts.js）
+import { removeScript, renameScript, hasSameName } from '../../utils/sqlScripts'
 /**
  * 模式清单的持久缓存键（与 `dbs:` / `tables:` 同一套 stale-while-revalidate 机制）。
  * 定义在顶部：预热（`prewarmRecentConnections` / `warmUpBeforeFirstClick`）与
@@ -5705,17 +5720,76 @@ const openScript = (data) => {
 
 // 删除脚本节点（右键 → 删除脚本）
 const deleteScriptNode = (data) => {
-  try {
-    const key = `dc_scripts:${data.connId || currentConnId.value}:${data.db}`
-    const list = JSON.parse(localStorage.getItem(key) || '[]')
-    localStorage.setItem(key, JSON.stringify(list.filter(x => x.id !== data.scriptId)))
-  } catch { /* ignore */ }
+  removeScript(data.connId || currentConnId.value, data.db, data.scriptId)
   refreshScriptsNode(data.db, data.connId)
   ElMessage.success(t('mv.scriptDeleted', { name: data.label }))
 }
 
-// 只刷新某个库的 Scripts 目录（懒加载模式下：让该库节点重新加载，脚本分类随之更新）
-const refreshScriptsNode = (db, connId) => { refreshDbNode(db, connId) }
+// ====== 脚本节点右键菜单：查看 / 重命名 / 删除 ======
+const scriptCtxView = () => {
+  const data = treeCtxMenu.value.data
+  treeCtxMenu.value.show = false
+  if (data) openScript(data)
+}
+
+const scriptCtxRename = async () => {
+  const data = treeCtxMenu.value.data
+  treeCtxMenu.value.show = false
+  if (!data) return
+  const connId = data.connId || currentConnId.value
+  const oldName = data.label
+  let input
+  try {
+    const res = await ElMessageBox.prompt(t('sm.renameHint'), t('sm.renameTitle'), {
+      inputValue: oldName,
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
+      inputValidator: (v) => {
+        const next = String(v || '').trim()
+        if (!next) return t('sm.renameEmpty')
+        if (next === oldName) return true
+        return hasSameName(connId, data.db, next, data.scriptId) ? t('sm.renameDup') : true
+      }
+    })
+    input = res.value
+  } catch { return }
+  const result = renameScript(connId, data.db, data.scriptId, input)
+  if (result === 'dup') return ElMessage.warning(t('sm.renameDup'))
+  if (result === 'gone') return ElMessage.warning(t('mv.scriptGone'))
+  if (result !== 'ok') return
+  const nextName = String(input || '').trim()
+  // 编辑器里还开着这个脚本的页签：标题跟着改，否则树上新名、页签旧名，保存时还会按旧名新建一条
+  for (const tab of tabs.value) {
+    if (tab.type !== 'sql' || !tab.scriptName) continue
+    if (tab.scriptName !== oldName) continue
+    if (String(tab.connId || '') !== String(connId)) continue
+    if (String(tab.database || '') !== String(data.db)) continue
+    tab.scriptName = nextName
+    tab.label = nextName
+  }
+  refreshScriptsNode(data.db, connId)
+  ElMessage.success(t('sm.renamed'))
+}
+
+const scriptCtxDelete = async () => {
+  const data = treeCtxMenu.value.data
+  treeCtxMenu.value.show = false
+  if (!data) return
+  try {
+    await ElMessageBox.confirm(
+      t('mv.deleteScriptBody', { name: data.label }),
+      t('mv.deleteScriptTitle'),
+      { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') }
+    )
+  } catch { return }
+  deleteScriptNode(data)
+}
+
+// 只刷新某个库的 Scripts 目录：优先只刷这一个分类（整库重载会把该库下已展开的分类全收起，
+// 改名/删除一个脚本就像"整棵树塌了"）；分类节点还没建出来（没展开过）才退到整库刷新
+const refreshScriptsNode = async (db, connId) => {
+  if (!(await refreshCatNode(db, 'scripts', connId))) refreshDbNode(db, connId)
+}
 
 // 监听 SqlQueryView 保存/删除脚本后刷新对应库的 Scripts 目录
 const onScriptsChanged = (e) => {
@@ -6616,13 +6690,10 @@ const onTreeNodeContextMenu = (e, data) => {
     showTreeCtxMenu(e, 'category', '', data)
     ctxMenu.value.show = false
   } else if (data.kind === 'script') {
-    // 脚本节点：右键弹确认删除
+    // 脚本节点：右键给菜单（查看 / 重命名 / 删除）—— 以前右键直接弹删除确认，
+    // 想看一眼脚本内容还得双击，误触删除更没有退路
+    showTreeCtxMenu(e, 'script', '', data)
     ctxMenu.value.show = false
-    treeCtxMenu.value.show = false
-    e.preventDefault?.()
-    ElMessageBox.confirm(t('mv.deleteScriptBody', { name: data.label }), t('mv.deleteScriptTitle'), { type: 'warning', confirmButtonText: t('common.delete'), cancelButtonText: t('common.cancel') })
-      .then(() => deleteScriptNode(data))
-      .catch(() => {})
   } else {
     // db / placeholder 等不弹菜单
     e.preventDefault?.()
@@ -7321,8 +7392,15 @@ const refreshDbNode = (db, connId) => {
   // 整库重载等同于「库列表要重新看」：连库列表的持久缓存一起丢，
   // 否则重载出来的还是那份旧库列表（新建的库要等 15 分钟 TTL 才出现）
   removeSchemaCache('dbs:' + cid)
-  const key = 'db:' + cid + ':' + db
-  const node = tree.store?.nodesMap?.[key]
+  // 树里的库节点只有「库」这一层（模式是它的子节点），而调用方给的 db 可能是「库.模式」
+  // （脚本的存储键就是这种形状，见 refreshScriptsNode）—— 直接用 `demo.dbo` 拼 key 会
+  // 找不到节点，表现就是「改了名树上一动不动」。找不到就退回到库名再试一次。
+  const candidates = [db, String(db).split('.')[0]]
+  let node = null
+  for (const candidate of candidates) {
+    const node2 = tree.store?.nodesMap?.['db:' + cid + ':' + candidate]
+    if (node2) { node = node2; break }
+  }
   if (!node || !node.loaded) return
   // 递归重置所有子节点的 loaded 状态，确保 Tables / Views / Procedures 等分类重新拉取
   const resetLoaded = (n) => {
@@ -7340,13 +7418,20 @@ const refreshDbNode = (db, connId) => {
   node.loadData(() => { reapplyTreeFilter() })
 }
 
+/// 重载某分类目录；`db` 可以是「库.模式」（脚本的存储键就是这个形状，而树里分类节点的
+/// key 只到「库」这一层）。找到并刷新返回 true，节点还没建出来（没展开过）返回 false。
 const refreshCatNode = async (db, cat, connId) => {
   const tree = treeRef.value
   const cid = connId || currentConnId.value
-  if (!tree || !cid || !db || !cat) return
-  const key = 'cat-' + cid + '-' + db + ':' + cat
-  const node = tree.store?.nodesMap?.[key]
-  if (!node) return
+  if (!tree || !cid || !db || !cat) return false
+  let key = ''
+  let node = null
+  for (const candidate of [db, String(db).split('.')[0]]) {
+    const k = 'cat-' + cid + '-' + candidate + ':' + cat
+    const found = tree.store?.nodesMap?.[k]
+    if (found) { key = k; node = found; break }
+  }
+  if (!node) return false
   // 这份清单对应的持久缓存键（只有表/视图这一类用了持久缓存，键与 loadCategoryItems 一致）
   const catKey = (cat === 'tables' || cat === 'views') ? 'tables:' + cid + ':' + db : ''
   try {
@@ -7392,8 +7477,10 @@ const refreshCatNode = async (db, cat, connId) => {
     }
     // 换了一整批子节点：新节点默认可见，不重新过滤一遍就把搜索词「刷没了」
     reapplyTreeFilter()
+    return true
   } catch (e) {
     console.error('刷新分类节点失败:', e)
+    return false
   }
 }
 

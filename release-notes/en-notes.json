@@ -1,5 +1,11 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v1.8.0": [
+  "Advanced search supports multiple condition groups: inside a group you can require all or any conditions, and the groups themselves can be combined with all / any, producing real (a AND b) OR (c AND d) clauses; conditions are now one per row with aligned column name and value boxes, and a between condition picks both ends in a single range control",
+  "Script nodes in the tree now have a right-click menu: view / rename / delete - renaming also updates the title of any tab that is already open, refreshes only that database's script folder instead of rebuilding the whole tree, and rejects duplicate names within the same database",
+  "Data transfer preselects the default schema after you pick a database (dbo for SQL Server, public for PostgreSQL) and no longer shows a schema before a database is chosen; the task title also includes what it is moving (31 tables, 2 views), so reruns with identical names are easy to tell apart",
+  "The date / time picker panel is no longer a white block in the dark theme: the panel background, disabled dates, in-range highlight and the hour / minute / second columns are all dark now"
+ ],
  "v1.7.1": [
   "Edit table structure can now reorder columns: select a row in the field grid and move it with Up / Down in the toolbar, and the SQL preview follows with the matching ALTER - MySQL / MariaDB / Doris really change the table (a Doris bucketing column is greyed out with the reason), while engines that fix column order after creation (ClickHouse / PostgreSQL / Oracle / SQL Server / DB2 / H2 / Derby) do not show the buttons at all instead of failing",
   "The type cell is now both a picker and a free-text box: choose from the list, or type a parameterised type such as character varying(64) or decimal(10,2) - pasting applies it without pressing Enter (same control for new table and edit table structure)",
