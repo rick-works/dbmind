@@ -94,10 +94,15 @@ pub async fn sql_plan(
     let database = req.database.clone().unwrap_or_default();
     let plan = crate::api::ai::chat::explain_sql(&state, &conn, &database, &sql).await?;
     match plan {
-        Some(text) => Ok(Json(json!({
+        Some(explain) => Ok(Json(json!({
             "success": true,
-            "plan": text,
+            "plan": explain.text,
             "sql": sql,
+            // 结构化 + 人话：界面按列画表（只有原文就是一串天书），
+            // insights 再回答用户真正关心的「这条 SQL 慢在哪」
+            "columns": explain.columns,
+            "rows": explain.rows,
+            "insights": plan_insights(&explain.columns, &explain.rows),
         }))),
         None => Err(XError::bad_request(format!(
             "{} 不支持用一条 EXPLAIN 取执行计划（SQL Server 需要 SET SHOWPLAN，Oracle/DB2 需要 PLAN_TABLE）",
@@ -125,9 +130,39 @@ pub async fn sql_try_run(
     let limit = req.limit.unwrap_or(TRY_RUN_DEFAULT).clamp(1, TRY_RUN_MAX);
     // AI 试跑执行的是用户给的语句，可能很重：走独立会话键，不占元数据那条连接
     let result = run_sql_in_background(&state, &conn, &database, sql.clone(), limit as usize).await?;
+    let mut payload = shape::query_result_json(&result);
+
+    // 「没有默认库」会伪装成「没有数据」：会话里 `database()` 返回 NULL、裸表名也不解析，
+    // 于是 `... where table_schema = database()` 稳稳 0 行，界面只说「执行成功但没有返回数据」。
+    // 这不是没数据，是**没说清查哪个库** —— 必须在结果里说破，而不是让用户去猜。
+    let stored = crate::api::require_record(&state, &conn)
+        .await
+        .map(|record| record.config.database.clone().unwrap_or_default())
+        .unwrap_or_default();
+    if database.trim().is_empty() && stored.trim().is_empty() {
+        if let Some(list) = payload.get_mut("notices").and_then(Value::as_array_mut) {
+            list.push(json!(
+                "当前会话没有选定默认库：`database()` 与未加库名的表名都取不到东西，\
+                 返回空不代表没有数据。请先在顶部选择库，再点「重新执行」。"
+            ));
+        }
+    }
+
+    // **平铺 + 嵌套各留一份**。曾经只给嵌套的 `result`，而试跑弹窗按平铺字段
+    // （`columns` / `rows` / `hasMore` / `elapsedMs`，与 `/sql/plan` 同一形状）读，
+    // 于是查询明明返回 426 行，界面上却是「执行成功，但没有返回数据 · 0 行 · 0 ms」。
+    // 平铺字段与 `/sql/plan` 对齐（新代码统一用平铺），`result` 保留给需要
+    // message/notices/affectedRows 的调用方。
     Ok(Json(json!({
         "success": true,
-        "result": shape::query_result_json(&result),
+        "columns": payload.get("columns").cloned().unwrap_or_else(|| json!([])),
+        "rows": payload.get("rows").cloned().unwrap_or_else(|| json!([])),
+        "rowCount": payload.get("rowCount").cloned().unwrap_or(Value::Null),
+        "hasMore": payload.get("hasMore").cloned().unwrap_or_else(|| json!(false)),
+        "elapsedMs": payload.get("executeTime").cloned().unwrap_or_else(|| json!(0)),
+        "message": payload.get("message").cloned().unwrap_or(Value::Null),
+        "notices": payload.get("notices").cloned().unwrap_or_else(|| json!([])),
+        "result": payload,
         "limit": limit,
     })))
 }
@@ -286,19 +321,42 @@ fn extract_table_name(sql: &str) -> Option<String> {
 
 // ------------------------------------------------------------------ 巡检 / 索引建议
 
-/// `POST /api/ai/patrol` —— 表健康巡检。
-pub async fn patrol(
-    axum::extract::State(state): axum::extract::State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
-    let conn = need_conn(&req)?;
-    let database = req.database.clone().unwrap_or_default();
-    let tables = tables_of(&state, &conn, &database).await?;
+/// 规则巡检的**实现**（不调模型）。
+///
+/// 界面端点 [`patrol`] 与智能体的 `patrol_tables` 工具共用这一份：规则各写一遍，
+/// 迟早会出现「界面上说这库有问题、智能体说没问题」这种自相矛盾。
+pub async fn patrol_scan(state: &AppState, conn: &str, database: &str) -> XResult<Value> {
+    let tables = tables_of(state, conn, database).await?;
+    // 索引**一次查全库**，不逐表查：40 张表各查一次会把巡检从 1 秒拖成半分钟。
+    // 方言写不出索引查询（Unwritten）时整条规则跳过 —— 把「查不到」当成「没有索引」
+    // 就是每天都在误报，这种噪音比不巡检更糟。
+    let index_tables: Option<Vec<String>> = match crate::api::meta::meta_list(
+        state,
+        conn,
+        database,
+        Dialect::new(require_record(state, conn).await?.kind()).indexes(),
+        "索引清单",
+    )
+    .await
+    {
+        Ok(Value::Array(rows)) => Some(
+            rows.iter()
+                .filter_map(|row| row.get("table").and_then(Value::as_str))
+                .map(|name| name.to_ascii_lowercase())
+                .collect(),
+        ),
+        _ => None,
+    };
     let mut items: Vec<Value> = Vec::new();
     let mut high = 0;
     let mut medium = 0;
+    let mut skipped = 0;
     for table in tables.iter().take(MAX_TABLES) {
-        let columns = columns_of(&state, &conn, &database, &table.name).await?;
+        // 单张表取不到列（权限/方言差异）不该让整次巡检失败：跳过并记账
+        let Ok(columns) = columns_of(state, conn, database, &table.name).await else {
+            skipped += 1;
+            continue;
+        };
         if columns.is_empty() {
             continue;
         }
@@ -307,7 +365,13 @@ pub async fn patrol(
             issues.push("没有主键：无法按行定位，同步/对比/就地编辑都会失效".to_string());
         }
         let nullable = columns.iter().filter(|column| column.nullable).count();
-        if nullable * 2 > columns.len() {
+        // 主键列不算：SQLite 之类的方言会把 `integer primary key` 报成可空，
+        // 按「所有列」判定就会天天误报「全列可空」，而这张表其实有行标识。
+        let non_pk: Vec<_> = columns.iter().filter(|column| !column.primary_key).collect();
+        let nullable_non_pk = non_pk.iter().filter(|column| column.nullable).count();
+        if !non_pk.is_empty() && nullable_non_pk == non_pk.len() {
+            issues.push("除主键外所有列都可空：没有任何非空约束，脏数据没有兜底".to_string());
+        } else if nullable * 2 > columns.len() {
             issues.push(format!(
                 "{} / {} 列可空：过度可空往往意味着约束缺失，容易积累脏数据",
                 nullable,
@@ -319,6 +383,16 @@ pub async fn patrol(
                 && column.type_name.as_deref().unwrap_or("").to_ascii_lowercase().contains("max")
         }) {
             issues.push("存在超长文本类型（max/longtext）：检索与索引代价高".to_string());
+        }
+        // 「没有任何索引」只对大表说：小表全表扫本来就不疼，报了只会练成「忽略一切」
+        if let Some(indexed) = &index_tables {
+            let rows = table.row_estimate.unwrap_or(0);
+            let name = table.name.to_ascii_lowercase();
+            if rows >= 10_000 && !indexed.iter().any(|known| *known == name) {
+                issues.push(format!(
+                    "约 {rows} 行但没有任何索引：按非主键列过滤 / 关联都会全表扫描"
+                ));
+            }
         }
         if issues.is_empty() {
             continue;
@@ -338,31 +412,55 @@ pub async fn patrol(
             "issues": issues,
         }));
     }
-    Ok(Json(json!({
-        "success": true,
+    Ok(json!({
         "items": items,
         "summary": {
             "tables": tables.len(),
             "scanned": tables.len().min(MAX_TABLES),
+            "skipped": skipped,
             "high": high,
             "medium": medium,
         },
-    })))
+    }))
 }
 
-/// `POST /api/ai/index-advisor` —— 索引建议（规则式，说明依据）。
-pub async fn index_advisor(
+/// `POST /api/ai/patrol` —— 表健康巡检。
+pub async fn patrol(
     axum::extract::State(state): axum::extract::State<AppState>,
     Json(req): Json<AiRequest>,
 ) -> XResult<Json<Value>> {
     let conn = need_conn(&req)?;
     let database = req.database.clone().unwrap_or_default();
-    let dialect = Dialect::new(require_record(&state, &conn).await?.kind());
-    let tables = tables_of(&state, &conn, &database).await?;
+    let mut value = patrol_scan(&state, &conn, &database).await?;
+    value["success"] = json!(true);
+    Ok(Json(value))
+}
+
+/// 索引建议的**实现**（规则式）。同 [`patrol_scan`]，给端点和智能体工具共用。
+///
+/// `only` 非空时只看这一张表：整库扫描要把每张表的列都拉一遍，大库会慢到十几秒。
+pub async fn index_suggestions(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+    only: Option<&str>,
+) -> XResult<Value> {
+    let dialect = Dialect::new(require_record(state, conn).await?.kind());
+    let tables = tables_of(state, conn, database).await?;
+    let only = only
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty());
+    let scope: Vec<&TableInfo> = match &only {
+        Some(name) => tables
+            .iter()
+            .filter(|table| table.name.eq_ignore_ascii_case(name))
+            .collect(),
+        None => tables.iter().collect(),
+    };
     let mut items: Vec<Value> = Vec::new();
 
-    for table in tables.iter().take(MAX_TABLES) {
-        let columns = columns_of(&state, &conn, &database, &table.name).await?;
+    for table in scope.into_iter().take(MAX_TABLES) {
+        let columns = columns_of(state, conn, database, &table.name).await?;
         if columns.is_empty() {
             continue;
         }
@@ -427,15 +525,26 @@ pub async fn index_advisor(
         }
     }
 
-    Ok(Json(json!({
-        "success": true,
+    Ok(json!({
         "items": items,
         "summary": {
             "tables": tables.len(),
             "scanned": tables.len().min(MAX_TABLES),
             "suggestions": items.len(),
         },
-    })))
+    }))
+}
+
+/// `POST /api/ai/index-advisor` —— 索引建议（规则式，说明依据）。
+pub async fn index_advisor(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    Json(req): Json<AiRequest>,
+) -> XResult<Json<Value>> {
+    let conn = need_conn(&req)?;
+    let database = req.database.clone().unwrap_or_default();
+    let mut value = index_suggestions(&state, &conn, &database, req.table.as_deref()).await?;
+    value["success"] = json!(true);
+    Ok(Json(value))
 }
 
 // ------------------------------------------------------------------ 数据洞察
@@ -514,10 +623,10 @@ pub async fn insight(
     let mut content = String::new();
     let mut last_usage: Option<crate::api::ai::config::TokenUsage> = None;
     if let Ok(model) = crate::api::ai::config::resolve(req.model_id.as_deref()) {
-        let system = "你是一名数据分析师。请根据给出的表数据画像，用中文分点给出：数据分布特征、\
-                      质量问题（空值/重复/异常极值）、以及值得进一步排查的点。不要编造画像里没有的信息。";
+        let system = "你是数据分析师。根据表数据画像用中文分点给出：分布特征、\
+                      质量问题（空值/重复/异常极值）、值得进一步排查的点。不要编造画像里没有的信息。";
         let user = format!(
-            "### 表数据画像\n{stats}\n\n### 用户关注的问题\n{}",
+            "### 画像\n{stats}\n\n### 关注的问题\n{}",
             if question.is_empty() { "（未指定）" } else { &question }
         );
         let messages = vec![crate::api::ai::config::Msg {
@@ -546,4 +655,117 @@ pub async fn insight(
         "columns": columns.len(),
         "usage": last_usage,
     })))
+}
+
+// ------------------------------------------------------------------ 执行计划的人话解读
+
+/// 取某一列的值（列名大小写不敏感由调用方先解析好下标）
+fn plan_cell(row: &Value, columns: &[String], index: Option<usize>) -> String {
+    let Some(i) = index else {
+        return String::new();
+    };
+    match row.get(columns[i].as_str()) {
+        Some(Value::Null) | None => String::new(),
+        Some(Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// 把执行计划翻译成几句话（**规则式，不调模型**）。
+///
+/// 真机反馈：弹窗里只有一行 `Using where | 10.0 | 3 | ... | ALL`，用户不知道
+/// 这是干什么的、更看不出「这条 SQL 到底贵不贵」。这里只讲三件真正决定快慢的事：
+/// 走没走索引、要扫多少行、有没有额外排序 / 临时表。
+///
+/// 返回 `[]` 表示这份计划不是 MySQL 风格（PG 的 QUERY PLAN、SQLite 的 detail、
+/// ClickHouse 都只有一列自然语言）—— 那种情况不硬解释，界面只展示原文。
+fn plan_insights(columns: &[String], rows: &[Value]) -> Vec<Value> {
+    let find = |name: &str| columns.iter().position(|c| c.eq_ignore_ascii_case(name));
+    let (Some(type_idx), Some(rows_idx)) = (find("type"), find("rows")) else {
+        return Vec::new();
+    };
+    let key_idx = find("key");
+    let extra_idx = find("extra");
+    let table_idx = find("table");
+
+    let mut items: Vec<Value> = Vec::new();
+    for row in rows.iter().take(5) {
+        let table = plan_cell(row, columns, table_idx);
+        let access = plan_cell(row, columns, Some(type_idx)).to_ascii_uppercase();
+        let used_key = plan_cell(row, columns, key_idx);
+        let extra = plan_cell(row, columns, extra_idx);
+        let estimated: u64 = plan_cell(row, columns, Some(rows_idx))
+            .parse::<f64>()
+            .map(|value| value as u64)
+            .unwrap_or(0);
+        let who = if table.is_empty() {
+            String::new()
+        } else {
+            format!("表 {table}：")
+        };
+
+        match access.as_str() {
+            "ALL" => items.push(json!({
+                "level": "high",
+                "title": format!("{who}全表扫描"),
+                "detail": format!(
+                    "没有走索引，预计要扫 {estimated} 行 —— 表越大越慢。where / join 条件里用到的列值得建索引（右键这张表 →「索引建议」可以一键试建）。"
+                ),
+            })),
+            "INDEX" => items.push(json!({
+                "level": "medium",
+                "title": format!("{who}全索引扫描"),
+                "detail": "顺着索引把整棵树扫了一遍：如果确实要按顺序取全量，这是正常的；否则检查 where 条件有没有用上索引的最左列。",
+            })),
+            "" => {}
+            other => items.push(json!({
+                "level": "low",
+                "title": format!("{who}走索引（{other}）"),
+                "detail": format!(
+                    "访问方式是 {other}，预计扫 {estimated} 行{}。",
+                    if used_key.is_empty() { String::new() } else { format!("，用的是索引 {used_key}") }
+                ),
+            })),
+        }
+
+        if used_key.is_empty() && !access.is_empty() && access != "ALL" && access != "INDEX" {
+            items.push(json!({
+                "level": "medium",
+                "title": format!("{who}没命中索引"),
+                "detail": "计划里「实际用的索引」是空的：条件没走到任何索引上，条件越复杂、这次查询越像全表扫描。",
+            }));
+        }
+        let lower_extra = extra.to_ascii_lowercase();
+        if lower_extra.contains("using filesort") {
+            items.push(json!({
+                "level": "medium",
+                "title": format!("{who}需要额外排序"),
+                "detail": "ORDER BY / GROUP BY 用不上索引顺序，数据库要把结果集另排一遍（Extra 里的 Using filesort）。数据量大时这一项常常就是慢的主因。",
+            }));
+        }
+        if lower_extra.contains("using temporary") {
+            items.push(json!({
+                "level": "medium",
+                "title": format!("{who}用了临时表"),
+                "detail": "分组 / 去重 / 排序需要先落一张临时表（Using temporary），大结果集会写磁盘。",
+            }));
+        }
+        if lower_extra.contains("using index") && !lower_extra.contains("using index condition") {
+            items.push(json!({
+                "level": "low",
+                "title": format!("{who}覆盖索引"),
+                "detail": "要的列都在索引里，不用回表取数据，这是好情况。",
+            }));
+        }
+    }
+
+    // 高优先级的先说：用户只想看「哪里出了问题」
+    let weight = |item: &Value| match item.get("level").and_then(Value::as_str) {
+        Some("high") => 0,
+        Some("medium") => 1,
+        _ => 2,
+    };
+    items.sort_by_key(weight);
+    items.truncate(4);
+    items
 }

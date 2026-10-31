@@ -192,6 +192,8 @@ fn import_usage(store: &Store, home: &Path) -> usize {
                     prompt_tokens: number("promptTokens"),
                     completion_tokens: number("completionTokens"),
                     total_tokens: number("totalTokens"),
+                    // 逐日行没有「窗口内活跃天数」这个语义，汇总查询会自己算
+                    active_days: 0,
                 });
             }
         }

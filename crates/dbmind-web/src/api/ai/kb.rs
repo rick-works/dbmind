@@ -926,15 +926,27 @@ pub fn context_for(state_hits: &[Hit], parents: bool) -> String {
     if state_hits.is_empty() {
         return String::new();
     }
+    // 每个片段封顶 900 字符：父块模式下 `hit.text` 可能是整段章节，4 段就能吃掉两三千 token，
+    // 而这些字符对「这一问」的价值远低于表结构。超出部分截断并留标记，模型知道还有后文。
+    const HIT_CHARS: usize = 900;
     let mut text = String::from("<<<TEAM_DOCS_BEGIN>>>\n");
     for (number, hit) in state_hits.iter().enumerate() {
+        let body = if hit.text.chars().count() > HIT_CHARS {
+            format!(
+                "{}…（片段过长已截断，共 {} 字）",
+                hit.text.chars().take(HIT_CHARS).collect::<String>(),
+                hit.text.chars().count()
+            )
+        } else {
+            hit.text.clone()
+        };
         text.push_str(&format!(
             "【参考资料 {}｜来源：{}】\n{}（片段 {}）\n{}\n\n",
             number + 1,
             hit.doc_title,
             if parents { "（父块）" } else { "" },
             hit.index + 1,
-            hit.text
+            body
         ));
     }
     text.push_str("<<<TEAM_DOCS_END>>>");
@@ -1587,6 +1599,16 @@ fn extract_json(text: &str) -> String {
 pub async fn polish(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
     let text = req.text()?;
     let original_chars = text.chars().count();
+    // 单次润色的字数上限。**以前这里是整篇直接发**：资料可以入库到 200 万字，
+    // 一次润色就是几十万 token —— 既超出模型上下文（必然报错），又是最贵的一种失败。
+    // 这里不偷偷截断（润色是「改写内容」，截断等于吞掉后半篇），而是明确告诉用户分段。
+    const MAX_POLISH_CHARS: usize = 8_000;
+    if original_chars > MAX_POLISH_CHARS {
+        return Err(XError::bad_request(format!(
+            "单次润色最多 {MAX_POLISH_CHARS} 字（当前 {original_chars} 字），请分段处理：\
+             长文档一次润色既会超出模型上下文，也会把 token 花在重复的规则说明上"
+        )));
+    }
     let model = crate::api::ai::config::resolve(req.model_id.as_deref())?;
     let system = prompts::text_of("kb.polish.system").unwrap_or_default();
     let user = prompts::render("kb.polish.user", &[("text", &text)])?;
@@ -1734,13 +1756,20 @@ pub async fn outline(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
     if docs.is_empty() {
         return Err(XError::bad_request("这个库还没有资料，先入库再归纳"));
     }
-    // 取样：每份资料取前若干块，总量控制在上下文安全范围内
+    // 取样：每份资料取前若干块，**总量硬封顶**。
+    // 上限是「20 份 × 3 块 × 500 字」= 3 万字 ≈ 8~9k token —— 只为一句话的大纲，
+    // 这里没必要按体量付钱：大纲要的是覆盖面，不是把每份资料都念一遍。
+    const SAMPLE_CHARS: usize = 10_000;
     let mut sample = String::new();
-    for doc in docs.iter().take(20) {
+    'outer: for doc in docs.iter().take(20) {
         sample.push_str(&format!("### {}\n", doc.title));
         for chunk in doc.chunks.iter().take(3) {
             sample.push_str(&chunk.text.chars().take(500).collect::<String>());
             sample.push('\n');
+            if sample.chars().count() >= SAMPLE_CHARS {
+                sample.push_str("（资料较多，其余内容未展开）\n");
+                break 'outer;
+            }
         }
     }
     let model = crate::api::ai::config::resolve(req.model_id.as_deref())?;

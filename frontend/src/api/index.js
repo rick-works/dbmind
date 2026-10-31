@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { t } from '../utils/i18n'
+import { locale, t } from '../utils/i18n'
 // 错误文案统一"只留人话"：后端 message 里常带 JDBC 的异常类名 / SQLState / 栈帧，
 // 见 utils/errMsg.js。改写 error.message 时顺带清一遍，所有直接读 e.message 的旧调用点
 // 也一并受益（不必逐个改成 errMsg）。
@@ -20,6 +20,30 @@ if (localToken) {
     return cfg
   })
 }
+
+/**
+ * AI 请求统一带上**界面语言**：英文界面下，后端要在 system 末尾加一句
+ * 「用英文回答（SQL/标识符保持原样）」，否则界面全英文、回答还是中文。
+ *
+ * 放在拦截器里而不是每个封装都改一遍：`/api/ai/**` 的写接口有二十几个，
+ * 逐个加 `lang` 一定漏（以后新增的也会漏）。多余字段对只读 `Json<Value>` 的
+ * handler 无影响，真正读 `AiRequest` 的接口都声明了 `#[serde(default)]`。
+ */
+http.interceptors.request.use((cfg) => {
+  try {
+    const url = String(cfg.url || '')
+    const method = String(cfg.method || '').toLowerCase()
+    const body = cfg.data
+    if (url.startsWith('/api/ai/') && method === 'post' && body && typeof body === 'object'
+      && !(body instanceof FormData) && !(body instanceof Blob) && cfg.responseType !== 'blob') {
+      cfg.data = {
+        ...body,
+        lang: String(locale.value || '').toLowerCase().startsWith('en') ? 'en' : 'zh'
+      }
+    }
+  } catch { /* 注入失败也不能拦掉请求本身 */ }
+  return cfg
+})
 
 // 安全拦截（生产保护 / 只读连接 / AI 只读）的统一提示：见 utils/safetyNotice.js
 import { isSafetyBlock, showSafetyNotice } from '../utils/safetyNotice'
@@ -529,7 +553,11 @@ export const aiChatStream = async (payload, onDelta, opts = {}) => {
       headers: localToken
         ? { 'Content-Type': 'application/json', 'X-上游-Token': localToken }
         : { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      // 流式请求走原生 fetch（不经 axios 拦截器），语言要自己带上
+      body: JSON.stringify({
+        ...payload,
+        lang: String(locale.value || '').toLowerCase().startsWith('en') ? 'en' : 'zh'
+      }),
       signal: ctrl ? ctrl.signal : undefined
     })
   } catch (e) {
@@ -549,6 +577,12 @@ export const aiChatStream = async (payload, onDelta, opts = {}) => {
     throw new Error(detail)
   }
   if (!res.body) { clearTimeout(idleTimer); throw new Error(t('api.noStream')) }
+  // 会话 id：后端同时放在响应头与首帧里（双保险，代理吞掉自定义头时首帧还在）。
+  // 拿到就交给调用方记住，下一轮带上它 —— 「关掉面板再打开还能接着聊」靠的就是这个。
+  if (typeof opts.onThread === 'function') {
+    const th = res.headers.get('X-Dbmind-Thread')
+    if (th) opts.onThread(th)
+  }
   const reader = res.body.getReader()
   const decoder = new TextDecoder('utf-8')
   let buf = ''
@@ -580,6 +614,9 @@ export const aiChatStream = async (payload, onDelta, opts = {}) => {
             // 后端在 done 之前补发的用量帧（上游没给 usage 时**不会发这一帧**）：
             // 用回调交给调用方挂到这条回答下面 —— 不改本函数的返回值（返回值是文本，很稳）
             if (obj && obj.usage && typeof opts.onUsage === 'function') opts.onUsage(obj.usage)
+            if (obj && obj.thread && typeof opts.onThread === 'function') opts.onThread(obj.thread)
+            // 服务端提示（如「本月预算已超，本次已降级」）：不进正文，单独挂一条
+            if (obj && obj.notice && typeof opts.onNotice === 'function') opts.onNotice(obj.notice)
             if (obj && obj.error) errMsg = obj.error
           } catch (e) { /* 忽略非 JSON 分片 */ }
         }
@@ -607,6 +644,12 @@ export const aiFilter = (payload) => http.post('/api/ai/filter', payload).then(r
 export const getAiUsage = (days = 30) => http.get('/api/ai/usage', { params: { days } }).then(r => r.data)
 // 表健康巡检（纯规则扫描，不消耗 AI 调用）
 export const aiPatrol = (payload) => http.post('/api/ai/patrol', payload).then(r => r.data)
+// 索引建议（规则式，不调模型）；带 table 时只扫这一张表
+export const aiIndexAdvisor = (payload) => http.post('/api/ai/index-advisor', payload).then(r => r.data)
+// 动作层：预检（风险 + 撤销语句）→ 执行 → 撤销
+export const aiActionPlan = (payload) => http.post('/api/ai/action/plan', payload).then(r => r.data)
+export const aiActionApply = (payload) => http.post('/api/ai/action/apply', payload).then(r => r.data)
+export const aiActionUndo = (payload) => http.post('/api/ai/action/undo', payload).then(r => r.data)
 // 数据治理（规则引擎，几乎零 AI 成本）
 export const aiScanSensitive = (payload) => http.post('/api/ai/governance/sensitive', payload).then(r => r.data)
 export const aiQualityRules = (payload) => http.post('/api/ai/governance/quality/rules', payload).then(r => r.data)
@@ -630,6 +673,53 @@ export const aiDiagnose = (payload) => http.post('/api/ai/diagnose', payload).th
 // SQL 快捷验证（不消耗 AI 调用）：执行计划 / 试跑（只读，强制限行）
 export const aiSqlPlan = (payload) => http.post('/api/ai/sql/plan', payload).then(r => r.data)
 export const aiSqlTryRun = (payload) => http.post('/api/ai/sql/try-run', payload).then(r => r.data)
+
+// ---------------------------------------------------------------------------
+// AI 同事：智能体 / 会话 / 记忆 / 变更单 / 待办 / 值班 / 审计
+// ---------------------------------------------------------------------------
+
+// 智能体：会自己调工具看库，返回 { content, steps, changes, jobId, threadId }
+export const aiAgentRun = (payload) => http.post('/api/ai/agent', payload).then(r => r.data)
+
+// 会话：重开面板能接着聊
+export const aiThreadList = () => http.get('/api/ai/threads').then(r => r.data)
+export const aiThreadGet = (id) => http.get('/api/ai/threads/' + encodeURIComponent(id)).then(r => r.data)
+export const aiThreadDelete = (id) => http.delete('/api/ai/threads/' + encodeURIComponent(id)).then(r => r.data)
+// 重命名：后端 POST /threads 是 upsert（带 id 就更新标题），不需要单独的改名接口
+export const aiThreadRename = (id, title) => http.post('/api/ai/threads', { id, title }).then(r => r.data)
+
+// 记忆：注入 system 的长期事实（source=user 是用户说的，ai 是模型推断的）
+export const aiMemoryList = (params) => http.get('/api/ai/memory', { params }).then(r => r.data)
+export const aiMemoryAdd = (payload) => http.post('/api/ai/memory', payload).then(r => r.data)
+export const aiMemoryDelete = (id) => http.delete('/api/ai/memory/' + encodeURIComponent(id)).then(r => r.data)
+
+// 变更单：AI 只出单，执行必须人点（approver 用于审计流水里的「谁批的」）
+const changeAct = (id, act, approver) =>
+  http.post('/api/ai/changes/' + encodeURIComponent(id) + '/' + act, null, { params: { approver } }).then(r => r.data)
+export const aiChangeList = (params) => http.get('/api/ai/changes', { params }).then(r => r.data)
+export const aiChangeCreate = (payload) => http.post('/api/ai/changes', payload).then(r => r.data)
+export const aiChangeApprove = (id, approver) => changeAct(id, 'approve', approver)
+export const aiChangeConfirm = (id, approver) => changeAct(id, 'confirm', approver)
+export const aiChangeApply = (id, approver) => changeAct(id, 'apply', approver)
+export const aiChangeUndo = (id, approver) => changeAct(id, 'undo', approver)
+export const aiChangeReject = (id, approver) => changeAct(id, 'reject', approver)
+
+// 待办：值班任务跑出来的产物（alert 才算「有事」）
+export const aiJobList = (params) => http.get('/api/ai/jobs', { params }).then(r => r.data)
+export const aiJobGet = (id) => http.get('/api/ai/jobs/' + encodeURIComponent(id)).then(r => r.data)
+export const aiJobDismiss = (id) => http.post('/api/ai/jobs/' + encodeURIComponent(id) + '/dismiss').then(r => r.data)
+// 续跑：从已落库的步骤接着跑（不重复执行已完成的查询）
+export const aiJobResume = (id) => http.post('/api/ai/jobs/' + encodeURIComponent(id) + '/resume', {}).then(r => r.data)
+
+// 值班任务
+export const aiTaskList = () => http.get('/api/ai/tasks').then(r => r.data)
+export const aiTaskSave = (payload) => http.post('/api/ai/tasks', payload).then(r => r.data)
+export const aiTaskDelete = (id) => http.delete('/api/ai/tasks/' + encodeURIComponent(id)).then(r => r.data)
+export const aiTaskRun = (id) => http.post('/api/ai/tasks/' + encodeURIComponent(id) + '/run').then(r => r.data)
+
+// 审计流水（导出走浏览器下载，带 BOM，Excel 直接开）
+export const aiEventList = (limit = 200) => http.get('/api/ai/events', { params: { limit } }).then(r => r.data)
+export const aiEventExportUrl = '/api/ai/events/export'
 
 // ==================== 文档知识库（本地版 Dify 知识库） ====================
 // 必须用 POST：后端 `/api/ai/kb/list` 只注册了 POST（知识库那一组全是 POST + JSON body），

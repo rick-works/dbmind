@@ -30,6 +30,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub mod api;
+pub mod housekeeping;
 
 // ------------------------------------------------------------------ 日志热切换
 //
@@ -695,7 +696,10 @@ async fn cache_clear(State(state): State<AppState>, Json(body): Json<CacheClearB
         };
         results.push(json!({ "key": key, "files": clear_dir_files(&dir) }));
     }
-    Ok(Json(json!({ "results": results })))
+    // 清完之后立刻回收：删行只是把页挂回空闲链，用户看到的「占用」不会变小
+    let store = state.engine().store().clone();
+    let freed = blocking(move || store.reclaim(false)).await.unwrap_or(0);
+    Ok(Json(json!({ "results": results, "freedBytes": freed })))
 }
 
 // ------------------------------------------------------------------ 装配
@@ -1011,6 +1015,10 @@ pub async fn serve(options: Options) -> Result<(), String> {
         set_log_level(&level);
     }
 
+    // 开机清扫（后台线程，不阻塞启动）：回收元数据库空洞 + 清理过期快照/遗留临时文件。
+    // 这是数据目录「越用越大」的唯一解 —— 详见 housekeeping 模块头。
+    housekeeping::spawn(engine.store().clone());
+
     // *没有*在这里预置 SQL Server 的原生认证库：`java.library.path` 只在宿主 JVM 启动那一刻
     // 生效，而"启动宿主"这件事本来就归 `AgentHost::ensure_process` 管 —— 它每次 spawn 之前都会
     // 扫一遍驱动目录（见 `ensure_native_auth_library`）。在这里再做一遍是重复劳动，而且按 spec
@@ -1031,7 +1039,12 @@ pub async fn serve(options: Options) -> Result<(), String> {
         "DBmind 内核就绪"
     );
 
-    let router = build_router(AppState::new(engine), options.dist.clone());
+    let state = AppState::new(engine);
+    // AI 值班：每 60 秒看一眼有没有到点的任务（`ai/teammate.rs` 的 spawn_scheduler）。
+    // 以前这个函数只定义、没人调 —— 任务建好了、时间到了也永远不会跑，
+    // 界面上「每天自己巡检」只是一句话。
+    crate::api::ai::teammate::spawn_scheduler(state.clone());
+    let router = build_router(state, options.dist.clone());
     let addr: SocketAddr = format!("{}:{}", options.host, options.port)
         .parse()
         .map_err(|e| format!("非法监听地址: {e}"))?;

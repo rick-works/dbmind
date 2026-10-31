@@ -1,20 +1,26 @@
-//! 提示词模板：**内置 21 个，逐字取自上游**，用户可在 `<home>/prompts/` 里覆盖。
+//! 提示词模板：内置 21 个，用户可在 `<home>/prompts/` 里覆盖。
 //!
-//! ## 为什么模板要跟原版一模一样
+//! ## 文案：能省的字符都省，**输出契约一个字不动**
 //!
 //! 提示词就是这套 AI 功能的「业务逻辑」：`sql.fix` 约定输出「错误原因：/修复SQL：」两行、
 //! `command.parse` 要求严格 JSON、`kb.*` 系列要求特定 JSON 字段 —— 前端是**按这些约定解析**的。
-//! 自己重写一版措辞「差不多」的提示词，模型输出就会时不时不符合约定，
-//! 表现是「AI 偶尔不灵」，而根因在提示词 —— 那种问题最难查。所以这里直接沿用原文。
+//! 所以压缩的边界很清楚：
 //!
-//! ## 三件事
+//! - **能压**：客套话、复述、同一条规则在两处各写一遍、以及「第 1 条」这类排版开销；
+//! - **不能压**：输出格式、动作名清单、JSON 字段、方言差异（`IFNULL/LIMIT` vs `NVL/ROWNUM`）、
+//!   「不确定就说不知道、不编表名字段」这类防幻觉约束 —— 它们是效果的来源，删了就是另一种毛病。
 //!
-//! 1. **首次启动把内置模板落到用户目录**：用户能看到、能改（上游也是这么做的）。
-//!    改了之后以用户目录那份为准。
-//! 2. **`{{name}}` 变量严格校验**：缺变量或模板里残留占位符都直接报错。
+//! 每一条 token 都要付钱、而且 prompt 每次请求都重发：默认人格从 1549 B 压到 1069 B、
+//! `sql.fix` 的系统提示从 823 B 压到 579 B（规则一条没删）。
+//!
+//! ## 四件事
+//!
+//! 1. **首次启动把内置模板落到用户目录**：用户能看到、能改。
+//! 2. **升级只接管「用户没改过」的那份**（见 [`release_defaults`]）：靠内容指纹判断。
+//!    没有这一步，改好的内置文案永远到不了老用户机器上 —— 他们目录里躺着的还是旧版。
+//! 3. **`{{name}}` 变量严格校验**：缺变量或模板里残留占位符都直接报错。
 //!    悄悄渲染出一个带 `{{sql}}` 字样的提示词发给模型，等于让它对着占位符写答案。
-//! 3. **不做内存缓存**：模板文件很小，每次读盘换来的是「改完立刻生效」——
-//!    免得出现「改了提示词但没重启所以没生效」这种浪费半小时的排查。
+//! 4. **不做内存缓存**：模板文件很小，每次读盘换来的是「改完立刻生效」。
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -78,19 +84,116 @@ fn user_dir() -> PathBuf {
     dbmind_core::paths::home_dir().join("prompts")
 }
 
-/// 首次使用把内置模板写到用户目录（已存在的**不覆盖** —— 那可能是用户改过的）。
+/// 首次使用把内置模板写到用户目录；升级时只覆盖「用户没改过」的那些。
 pub(crate) fn release_defaults() -> XResult<PathBuf> {
     let dir = user_dir();
     dbmind_core::paths::ensure_dir(&dir)?;
+    let upgraded = release_into(&dir)?;
+    if upgraded > 0 {
+        tracing::info!(upgraded, "提示词模板已升级到内置新版（用户自定义的模板不动）");
+    }
+    Ok(dir)
+}
+
+/// 往 `dir` 释放内置模板，返回**这次升级掉的份数**（0 = 只补了缺失的 / 全都已是最新）。
+fn release_into(dir: &std::path::Path) -> XResult<usize> {
+    let mut manifest = read_manifest(dir);
+    let mut upgraded = 0usize;
     for (id, text) in BUILTIN {
         let file = dir.join(format!("{id}.md"));
-        if !file.exists() {
+        let shipped = fingerprint(text);
+        let existing = std::fs::read_to_string(&file).ok();
+        let write = match &existing {
+            None => true,
+            Some(old) => {
+                let old_fp = fingerprint(old);
+                if old_fp == shipped {
+                    // 已经是最新内置版：只补一条记录，不重写文件
+                    manifest.insert((*id).to_string(), shipped);
+                    continue;
+                }
+                // 用户没动过 ⇒ 可以升级；动过 ⇒ 从此不再接管
+                let ours = should_upgrade(old, shipped, manifest.get(*id).copied());
+                if !ours {
+                    manifest.remove(*id);
+                }
+                ours
+            }
+        };
+        if write {
             std::fs::write(&file, text).map_err(|e| {
                 XError::internal(format!("写入默认提示词 {} 失败：{e}", file.display()))
             })?;
+            manifest.insert((*id).to_string(), shipped);
+            if existing.is_some() {
+                upgraded += 1;
+            }
         }
     }
-    Ok(dir)
+    write_manifest(dir, &manifest);
+    Ok(upgraded)
+}
+
+/// 这份用户目录里的模板能不能被内置新版覆盖？
+///
+/// 判据只有一条：**它是否还是我们上次写进去的那份**（内容指纹对得上 manifest 记的那版，
+/// 或者是发行过的历史版本）。对不上就是用户自己改的 —— 一个字都不碰。
+fn should_upgrade(existing: &str, shipped: u64, known: Option<u64>) -> bool {
+    let current = fingerprint(existing);
+    if current == shipped {
+        return false;
+    }
+    known == Some(current) || LEGACY.contains(&current)
+}
+
+/// 模板指纹：**只看内容，不看行尾**（同一份模板在 Windows/Linux 上的 CRLF/LF 不该被当成两版）。
+///
+/// 为什么需要指纹：用户目录里的 `.md` 是首次启动时我们从内置释放的。此后每次改内置文案，
+/// 都必须区分「这份还是我们写的」和「用户自己改的」——前者该升级（否则压缩永远到不了老用户），
+/// 后者一个字都不能碰。用内容指纹而不是时间戳/版本号，是因为用户可能只改了时间戳。
+fn fingerprint(text: &str) -> u64 {
+    // FNV-1a 64：十行实现、不引依赖，只用来判等
+    const OFFSET: u64 = 0xCBF2_9CE4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01B3;
+    let mut hash = OFFSET;
+    for byte in text.replace("\r\n", "\n").trim_end().as_bytes() {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(PRIME);
+    }
+    hash
+}
+
+/// 历史版本（压缩前的官方文案）指纹。
+///
+/// 老用户目录里躺着的是这些内容、且当时还没有 manifest，无从判断「改没改过」——
+/// 于是把官方发行过的每一版都记在这里：命中即官方原文（可安全升级），不命中即用户自己写的。
+const LEGACY: &[u64] = &[
+    0xc06b_07c1_3076_9147, // command.parse.user
+    0x73f2_ce16_dea8_1c99, // common.default-system
+    0x4768_481d_1dd9_18b1, // sql.explain.user
+    0xa66a_b4dc_e289_96dc, // sql.fix.system
+    0xe18d_a3f5_2994_3801, // sql.fix.user
+    0xfff8_3147_266d_863a, // sql.optimize.system
+    0xda1d_9d05_1ff7_489c, // sql.optimize.user
+    0x1ec2_8ac0_8e15_5c96, // sql.rewrite.user
+];
+
+/// 「内置模板最后一次写到用户目录时的指纹」。下次再改内置文案，靠它判断要不要升级。
+fn manifest_path(dir: &std::path::Path) -> PathBuf {
+    dir.join(".builtin.json")
+}
+
+fn read_manifest(dir: &std::path::Path) -> BTreeMap<String, u64> {
+    std::fs::read_to_string(manifest_path(dir))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn write_manifest(dir: &std::path::Path, manifest: &BTreeMap<String, u64>) {
+    // 写不了就算了：下一次最多把「已是最新」那一支再跑一遍，不影响正确性
+    if let Ok(text) = serde_json::to_string_pretty(manifest) {
+        let _ = std::fs::write(manifest_path(dir), text);
+    }
 }
 
 /// 取模板原文：用户目录优先，其次内置。
@@ -171,4 +274,63 @@ pub async fn list() -> XResult<serde_json::Value> {
 /// （用户删掉某个文件后能一键恢复），并把最新清单回给界面。
 pub async fn reload() -> XResult<Value> {
     list().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "dbmind-prompts-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn fingerprint_ignores_line_endings() {
+        assert_eq!(fingerprint("a\r\nb\r\n"), fingerprint("a\nb\n"));
+        assert_eq!(fingerprint("a\nb\n\n"), fingerprint("a\nb"), "尾部空行不算改动");
+        assert_ne!(fingerprint("a\nb"), fingerprint("a\nc"));
+    }
+
+    #[test]
+    fn upgrade_only_touches_untouched_templates() {
+        let shipped = fingerprint("新版文案");
+        // 用户自己改的：不动
+        assert!(!should_upgrade("我自己写的", shipped, None));
+        // 上次就是我们写进去的那版（manifest 记着）：升级
+        assert!(should_upgrade("旧版文案", shipped, Some(fingerprint("旧版文案"))));
+        // 已经是新版：不用动
+        assert!(!should_upgrade("新版文案", shipped, None));
+    }
+
+    #[test]
+    fn release_fills_missing_but_never_overwrites_user_edits() {
+        let dir = temp_dir("release");
+        assert_eq!(release_into(&dir).unwrap(), 0, "首次释放不算升级");
+        let file = dir.join("common.default-system.md");
+        assert!(file.is_file());
+
+        std::fs::write(&file, "我的自定义人格").unwrap();
+        assert_eq!(release_into(&dir).unwrap(), 0);
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "我的自定义人格",
+            "用户改过的模板一个字都不能动"
+        );
+
+        // 把 manifest 删掉也不能变成「无脑覆盖」：没有指纹就无从判断，保守不动
+        let _ = std::fs::remove_file(manifest_path(&dir));
+        assert_eq!(release_into(&dir).unwrap(), 0);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "我的自定义人格");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

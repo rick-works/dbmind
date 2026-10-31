@@ -821,6 +821,8 @@ pub fn usage(days: u64) -> Value {
             json!({
                 "model": row.model_key,
                 "calls": row.calls,
+                // 前端「日均调用」= calls / activeDays（活跃天为 0 时由前端显示 —）
+                "activeDays": row.active_days,
                 "promptTokens": row.prompt_tokens,
                 "completionTokens": row.completion_tokens,
                 "totalTokens": row.total_tokens,
@@ -845,6 +847,88 @@ fn empty_usage(limit: u64) -> Value {
 }
 
 /// 追加一条审计记录（`auditEnabled` 打开时）。
+// ---------------------------------------------------------------- 月度预算
+
+/// 预算闸门的结论 —— 三种结果对应三种产品行为：照常 / 降级 / 拒绝。
+///
+/// 「看得见」和「管得住」是两件事：`/api/ai/usage` 一直在报数字，但调用链上
+/// 没有任何一处读它，于是超了预算照样全量跑（还带着表结构 + 记忆 + 知识库）。
+/// 这个闸门就是那个缺失的读取点。
+pub enum BudgetGate {
+    Ok,
+    /// 超了但允许降级：不注入上下文（可选换便宜模型）继续回答
+    Downgrade { used: u64, limit: u64 },
+    /// 超了且不允许降级：直接报错，把选择权交回用户
+    Blocked { used: u64, limit: u64 },
+}
+
+#[derive(Clone, Default)]
+pub struct BudgetInfo {
+    pub used: u64,
+    /// 0 = 不限
+    pub limit: u64,
+    pub downgrade: bool,
+    pub cheap_model: Option<String>,
+}
+
+/// 预算与本月用量（界面展示与闸门共用同一份口径，避免两处算法各说各话）。
+pub fn budget_info() -> BudgetInfo {
+    let Some(store) = dbmind_core::global_store() else {
+        return BudgetInfo::default();
+    };
+    BudgetInfo {
+        used: store.ai_usage_month_tokens().unwrap_or(0),
+        limit: store
+            .get_usize_setting(dbmind_core::Store::KEY_AI_BUDGET_MONTHLY, 0)
+            .unwrap_or(0) as u64,
+        // 默认允许降级：宁可回答得糙一点，也别在月中直接把人挡在门外
+        downgrade: store
+            .get_bool_setting(dbmind_core::Store::KEY_AI_BUDGET_DOWNGRADE, true)
+            .unwrap_or(true),
+        cheap_model: store
+            .get_setting(dbmind_core::Store::KEY_AI_BUDGET_CHEAP_MODEL)
+            .ok()
+            .flatten()
+            .filter(|value| !value.trim().is_empty()),
+    }
+}
+
+pub fn budget_gate() -> BudgetGate {
+    let info = budget_info();
+    if info.limit == 0 || info.used < info.limit {
+        return BudgetGate::Ok;
+    }
+    if info.downgrade {
+        BudgetGate::Downgrade { used: info.used, limit: info.limit }
+    } else {
+        BudgetGate::Blocked { used: info.used, limit: info.limit }
+    }
+}
+
+/// 预算闸门 + 模型选择：降级时优先用「便宜模型」，配错了就退回 auto。
+///
+/// 为什么不直接返回错误：`cheapModel` 是用户手填的 id，删掉那个模型之后
+/// 整个 AI 会突然不可用 —— 宁可退回 auto，也不让一个配置残渣造成全站故障。
+pub fn resolve_with_budget(wanted: Option<&str>, downgraded: bool) -> XResult<ModelEntry> {
+    if downgraded {
+        if let Some(cheap) = budget_info().cheap_model {
+            if let Ok(model) = resolve(Some(&cheap)) {
+                return Ok(model);
+            }
+        }
+        return resolve(None);
+    }
+    resolve(wanted)
+}
+
+/// 预算超限的拒绝文案（前端会原样展示，所以写清楚「去哪儿改」）。
+pub fn budget_block_message(used: u64, limit: u64) -> String {
+    format!(
+        "本月 AI 用量已达上限（{used} / {limit} tokens）。可在「设置 → 安全与会话 → \
+         AI 月度 token 上限」调高上限，或把「超限后怎么处理」改为降级回答。"
+    )
+}
+
 pub fn audit(kind: &str, prompt: &str) {
     let Some(store) = dbmind_core::global_store() else {
         return;

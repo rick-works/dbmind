@@ -506,9 +506,10 @@
               </table>
             </div>
           </div>
+          <!-- 用量脚注：与 AI 助手对话共用同一个组件（common/AiUsageNote.vue），
+               同一个数字不再有第二种长相；上游没回 usage 就整块不渲染 -->
+          <AiUsageNote :usage="aiUsage" />
         </template>
-                <div v-if="aiUsage" class="ai-usage">本次回答消耗：{{ Number(aiUsage.totalTokens || 0).toLocaleString() }} tokens<template v-if="aiUsage.promptTokens != null">（{{ Number(aiUsage.promptTokens).toLocaleString() }}）</template></div>
-
       </div>
     </el-dialog>
 
@@ -597,7 +598,7 @@
 
   <!-- SQL 快捷验证：AI 给的 SQL 先看执行计划 / 试跑一次（不消耗 AI 调用） -->
   <SqlProbeDialog v-model="probeVisible" :sql="probeSql" :conn-id="selectedConnId || props.conn?.id"
-                  :database="props.database" :mode="probeMode" @insert="onProbeInsert" />
+                  :database="dbScope" :mode="probeMode" @insert="onProbeInsert" />
   <!-- 模板变量填参：SQL 里的 :name 占位符在执行前收值（值按名称记忆） -->
   <el-dialog v-model="varDialog.visible" :title="$t('sqlq.varDialogTitle')" width="460" append-to-body
              :close-on-click-modal="false" class="var-dialog" @keyup.enter="onVarConfirm">
@@ -669,6 +670,8 @@ import {
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf, quoteStyleOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
+// AI 用量脚注：与右侧 AI 助手对话共用（同一个数字只有一种长相）
+import AiUsageNote from '../../common/AiUsageNote.vue'
 // 连接下拉（分组 → 连接 两级，组头可展开/收起）：全项目共用这一个组件
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
 // 占位库 `(default)` 的显示名（值仍是原值，见 utils/dbLabel）
@@ -676,7 +679,7 @@ import { dbLabelOf } from '../../utils/dbLabel'
 import { fitSelectWidth } from '../../utils/selectAutoWidth'
 import { rememberConnNames, connNameOf } from '../../utils/connNames'
 
-const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabConnName: String, tabDatabase: String, initialSql: String, autoRun: Boolean, sqlLoading: Boolean })
+const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabConnName: String, tabDatabase: String, initialSql: String, sqlLoading: Boolean })
 const emit = defineEmits(['save', 'dirty-change', 'conn-change', 'conn-rebind', 'db-change', 'sql-change'])
 
 const sqlLoading = computed(() => !!props.sqlLoading)
@@ -2982,6 +2985,15 @@ const loadingDbs = ref(false)
 const schemas = ref([])
 const selectedSchema = ref('')
 const loadingSchemas = ref(false)
+/** 当前作用域（`库` 或 `库.模式`）：执行、AI、试跑弹窗必须用**同一个**口径。
+ *  以前 AI 那几个入口写死 props.database —— 在「新建查询」这类没带库的页签里它是空串：
+ *  模型拿不到任何表结构（只能瞎猜字段），后端验证也在「没选库」的会话上执行，
+ *  直接回一句 `No database selected`，用户看到的就是「验证未通过，可库里明明有这张表」。 */
+const dbScope = computed(() => {
+  const db = selectedDatabase.value || props.database || ''
+  if (!db || !selectedSchema.value) return db
+  return `${db}.${selectedSchema.value}`
+})
 const tableNames = ref([]) // 当前库的表名缓存（用于编辑器补全）
 
 // ---- 顶栏四个下拉（连接 / catalog / 库 / schema）的宽度自适应 ----
@@ -3153,7 +3165,7 @@ const statementAtCursor = () => {
   if (hit) return hit
   // 首尾"贴边"宽容：只有**紧邻**语句的空白（允许整行空白，但不允许隔出空行）才算"还在这一段上"。
   //   - 末尾：写完 SQL 顺手回车，光标停在末尾那个空行上 —— 最常见，不能判成不在语句上；
-  //   - 开头：程序化插入 SQL 后光标停在 (1,1) 而脚本前面带空行（「插入并执行」链路）。
+  //   - 开头：程序化插入 SQL 后光标停在 (1,1) 而脚本前面带空行（AI 结果「插入编辑器」链路）。
   // 光标再往里走（中间隔了空行）就算不在语句上：框线消失 —— 用户要求"光标都移走了就别画框"。
   // 换行符三种都要认（\n / \r\n / 单独 \r）：CRLF 脚本（从文件导入、或外部带 CR 的内容）里
   // 模型的分隔符就是 \r\n，只认 \n 会让"贴边"判定失效 —— 末尾回车停在空行上反而没框。
@@ -3533,7 +3545,7 @@ const onAiMdAction = (e) => {
     return
   }
   if (act === 'copy') copySql(sqlText)
-  else replaceAndRun(sqlText) // 插入并执行：写入编辑器后直接跑
+  else replaceSql(sqlText) // 插入编辑器：只写入、不执行
 }
 
 const loadAiModels = async () => {
@@ -4932,7 +4944,8 @@ const askAi = async (mode) => {
   aiResultIsSql.value = false
   aiErrorReason.value = ''
   try {
-    const payload = { sql: sql.value, connectionId: selectedConnId.value || props.conn.id, database: props.database, modelId: selectedAiModelId.value }
+    // 库必须与「执行」同口径（dbScope）：空库会让模型看不到表结构、验证也在无库会话上跑
+    const payload = { sql: sql.value, connectionId: selectedConnId.value || props.conn.id, database: dbScope.value, modelId: selectedAiModelId.value }
     const res = mode === 'explain' ? await aiExplain(payload)
       : mode === 'fix' ? await aiFix({ ...payload, error: result.value.message })
       : mode === 'diagnose' ? await aiDiagnose(payload)
@@ -4983,11 +4996,10 @@ const askAiRewrite = async () => {
   aiResultIsSql.value = true
   try {
     const res = await aiChat({
-      system: '你是一名资深数据库工程师。请按用户要求改写 SQL，只输出改写后的完整 SQL 语句，'
-        + '不要任何解释、不要 Markdown 代码块标记。',
+      system: '你是资深数据库工程师：按用户要求改写 SQL，只输出完整 SQL（不解释、不用代码块）。',
       prompt: t('sqlq.aiRewriteAsk') + instruction + '\n\n### 原始 SQL\n' + target,
       connectionId: selectedConnId.value || props.conn.id,
-      database: props.database,
+      database: dbScope.value,
       modelId: selectedAiModelId.value
     })
 if (res && res.success) { aiResult.value = res.content; aiUsage.value = res.usage || null }
@@ -5043,10 +5055,11 @@ const copySql = async (text) => {
   try { await navigator.clipboard.writeText(text); ElMessage.success(t('common.copied')) } catch (e) { ElMessage.error(t('sqlq.copyFailed')) }
 }
 
-const replaceAndRun = (text) => {
+/** 只插入、不执行：AI 给的这段可能是改数据的语句，跑不跑由人点「执行」决定 */
+const replaceSql = (text) => {
   sql.value = text
   aiDialogVisible.value = false
-  runSql()
+  ElMessage.success(t('sqlq.inserted'))
 }
 
 const onInsert = (e) => {
@@ -5057,12 +5070,6 @@ const onInsert = (e) => {
   if (editorInstance) {
     editorInstance.setValue(e.detail)
   }
-}
-
-/** 「插入并执行」：AI 结果里点代码块右上角的插入按钮时，写入后直接跑 */
-const onRunSql = (e) => {
-  onInsert(e)
-  nextTick(() => runSql())
 }
 
 // 加载所有连接
@@ -5435,15 +5442,11 @@ onMounted(() => {
   mounted.value = true
   lastSavedSql.value = sql.value
   window.addEventListener('dc-insert-sql', onInsert)
-  window.addEventListener('dc-run-sql', onRunSql)
   // 连接被修改（只读/分组/主机…）：重拉本页签自己那份连接清单，
   // 否则下拉里的连接对象一直是旧的（只读已关掉，这里还留着 true）
   window.addEventListener('dbmind-conns-changed', onConnsChanged)
   loadAllConnections().then(() => {
-    initSelectors().then(() => {
-      // 新建脚本并要求自动执行（AI 结果里点「插入并执行」）：等筛选器就绪后再跑
-      if (props.autoRun && sql.value.trim()) nextTick(() => runSql())
-    })
+    initSelectors()
   })
   loadAiModels()
   window.addEventListener('keydown', onResultKeyDown)
@@ -5494,7 +5497,6 @@ onBeforeUnmount(() => {
   // sql-change 的防抖定时器也得摘：否则页签关掉后 600ms 内还会向父级 emit
   if (sqlChangeTimer) { clearTimeout(sqlChangeTimer); sqlChangeTimer = null }
   window.removeEventListener('dc-insert-sql', onInsert)
-  window.removeEventListener('dc-run-sql', onRunSql)
   window.removeEventListener('dbmind-conns-changed', onConnsChanged)
   window.removeEventListener('keydown', onResultKeyDown)
   window.removeEventListener('keydown', onEdCtxKeyDown, true)
@@ -5934,26 +5936,46 @@ onBeforeUnmount(() => {
 }
 .ai-dialog-body { flex: 1 1 auto; min-height: 160px; overflow: auto; }
 .ai-loading { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 0; color: var(--dc-text-dim); }
-.ai-error-reason { background: var(--dc-warning-wash); border: 1px solid var(--dc-warning); border-radius: 6px; padding: 10px 12px; margin-bottom: 12px; font-size: 14px; color: var(--dc-warning); line-height: 1.6; }
-.ai-reason-label { font-weight: 600; }
+/* 错误原因：不再整块刷成黄色。
+   深色主题下高饱和底色 + 同色边框 + 同色正文，一整块黄压在灰底上非常刺眼（真机反馈）。
+   改成中性卡片 + 左侧 3px 琥珀引导条：颜色只做「提示」，正文仍用正常文字色，读起来不累。 */
+.ai-error-reason {
+  position: relative; padding: 9px 12px 9px 15px; margin-bottom: 12px;
+  border: 1px solid var(--dc-border); border-radius: 8px;
+  background: var(--dc-bg-soft);
+  font-size: 13.5px; line-height: 1.7; color: var(--dc-text-mid);
+}
+.ai-error-reason::before {
+  content: ''; position: absolute; left: 0; top: 9px; bottom: 9px; width: 3px;
+  border-radius: 0 3px 3px 0; background: var(--dc-warning);
+}
+.ai-reason-label { font-weight: 600; color: var(--dc-warning); margin-right: 4px; }
 /* 结论统一走 .ai-markdown（全局样式），这里只补对话框内的滚动留白 */
 .ai-dialog-body .ai-markdown { font-size: 14px; }
 
 /* 证据链卡片：AI 修复结果到底跑没跑、回来多少行 / 报什么错。
-   三种色调：ok（真的跑通了）/ bad（说修好了但跑还是错）/ skip（没法验，别假装验过） */
+   三种色调：ok（真的跑通了）/ bad（说修好了但跑还是错）/ skip（没法验，别假装验过）。
+
+   配色只做点缀：底色一律用中性卡片色，成功/失败只体现在左侧 3px 引导条和标题文字上。
+   之前是「同色边框 + 同色底 + 整行同色文字」，深色主题里一块纯绿/纯红糊在弹窗中间，
+   比结论本身还抢眼 —— 这里要表达的是"验过了"，不是报警。 */
 .ai-evidence {
-  margin-top: 12px; border: 1px solid var(--dc-border); border-radius: 8px;
+  position: relative; margin-top: 12px;
+  border: 1px solid var(--dc-border); border-radius: 8px;
   background: var(--dc-bg-soft); overflow: hidden;
 }
-.ai-evidence.ev-ok { border-color: var(--dc-success); background: var(--dc-success-wash); }
-.ai-evidence.ev-bad { border-color: var(--dc-danger); background: var(--dc-danger-wash); }
-.ai-evidence.ev-skip { border-color: var(--dc-border); }
+.ai-evidence::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--dc-border);
+}
+.ai-evidence.ev-ok::before { background: var(--dc-success); }
+.ai-evidence.ev-bad::before { background: var(--dc-danger); }
 .ev-head {
-  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px 8px 15px;
   font-size: 13px; line-height: 1.5; color: var(--dc-text-dim);
 }
-.ev-ok .ev-head { color: var(--dc-success); }
-.ev-bad .ev-head { color: var(--dc-danger); }
+.ev-ok .ev-head :deep(.el-icon), .ev-ok .ev-title { color: var(--dc-success); }
+.ev-bad .ev-head :deep(.el-icon), .ev-bad .ev-title { color: var(--dc-danger); }
 .ev-title { font-weight: 600; flex: none; }
 .ev-msg { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ev-ms { flex: none; color: var(--dc-text-dim); font-variant-numeric: tabular-nums; }
@@ -5964,6 +5986,8 @@ onBeforeUnmount(() => {
   border-bottom: 1px solid var(--dc-border-soft);
 }
 .ev-table th { position: sticky; top: 0; background: var(--dc-bg-card); color: var(--dc-text-dim); font-weight: 600; }
+
+/* 用量脚注的样式统一在 common/AiUsageNote.vue（AI 助手对话用的是同一个组件） */
 
 /* 脚本列表 */
 .script-list { max-height: 320px; overflow: auto; }

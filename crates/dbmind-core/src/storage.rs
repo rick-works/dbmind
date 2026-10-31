@@ -24,6 +24,12 @@ const SETTINGS_SAFETY_AI_WRITE: &str = "safety.aiWriteEnabled";
 const SETTINGS_SAFETY_BLOCK_DANGEROUS: &str = "safety.blockDangerousStatements";
 /// 写操作影响行数上限：UPDATE/DELETE 预估影响行数超过该值时拒绝（0 = 不限制）。
 const SETTINGS_SAFETY_MAX_WRITE_ROWS: &str = "safety.maxWriteRows";
+/// AI 月度 token 预算（0 = 不限）。按自然月累计 `ai_usage_models.total_tokens`。
+const SETTINGS_AI_BUDGET_MONTHLY: &str = "ai.budget.monthlyTokens";
+/// 超额后是否降级（true = 压上下文 + 可选换便宜模型，false = 直接拒绝）。
+const SETTINGS_AI_BUDGET_DOWNGRADE: &str = "ai.budget.downgrade";
+/// 降级时改用的模型 id（空 = 只压上下文、不换模型）。
+const SETTINGS_AI_BUDGET_CHEAP_MODEL: &str = "ai.budget.cheapModel";
 // 注意：**没有** `ui.theme` 与 `query.defaultPageSize` —— 这两个键曾经在这里种过种子，
 // 但全仓没有任何读取点（主题在前端 localStorage `dbmind_theme`、页大小在 `dbmind_query`），
 // 纯属「看起来后端也管了一份」的误导，已删。要加后端设置键时，先想好谁消费它。
@@ -74,6 +80,43 @@ pub const SETTINGS_MCP_TOOLS_HISTORY: &str = "mcp.toolsHistory";
 const SELECT_CONNECTION: &str = "SELECT id, name, kind, host, port, database_name, username, password, \
      file_path, color, extra, read_only, created_at, updated_at FROM connections";
 
+/// 回收空洞的两个门槛：**空闲页超过 8 MB 且占比超过 20%** 才值得做一次 VACUUM。
+///
+/// 为什么要有门槛：VACUUM 要重写整个文件（临时空间 ≈ 库大小、803 MB 的库要几秒），
+/// 为了几十 KB 的碎片在每次开机做一遍是纯亏；而放任不管就是实测的 805 MB 里 750 MB 是空洞。
+const RECLAIM_MIN_BYTES: u64 = 8 * 1024 * 1024;
+const RECLAIM_MIN_PERCENT: u64 = 20;
+
+/// 元数据库体积快照（只算 `dbmind.db` 自身，不含 `-wal`）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DbStats {
+    pub page_size: u64,
+    pub pages: u64,
+    /// 空闲页：数据删掉之后文件仍然占着的部分（这就是「库越用越大」的来源）
+    pub free_pages: u64,
+    /// `PRAGMA auto_vacuum`：0=关闭、1=FULL、2=INCREMENTAL
+    pub auto_vacuum: u64,
+}
+
+impl DbStats {
+    pub fn bytes(&self) -> u64 {
+        self.pages * self.page_size
+    }
+
+    pub fn free_bytes(&self) -> u64 {
+        self.free_pages * self.page_size
+    }
+
+    /// 空闲页占比（0~100）。
+    pub fn free_percent(&self) -> u64 {
+        if self.pages == 0 {
+            0
+        } else {
+            self.free_pages * 100 / self.pages
+        }
+    }
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
     path: PathBuf,
@@ -110,6 +153,13 @@ impl Store {
     fn from_connection(conn: Connection, path: PathBuf) -> Result<Self> {
         // WAL 让读取不被写事务阻塞（多壳并发访问同一库时很关键）
         conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;")?;
+        // 增量自回收：打开后 `incremental_vacuum` 只搬动空隙，代价远小于整库 VACUUM。
+        // 对已有库这条 pragma 要等一次 VACUUM 才真正生效 —— 正好由 [`Self::reclaim`] 在
+        // 开机时补上（那时本来就要做一次整库回收）。只在**还没启用**时写，避免每次开机刷文件头。
+        let mode: i64 = conn.query_row("PRAGMA auto_vacuum", [], |row| row.get(0)).unwrap_or(0);
+        if mode == 0 {
+            let _ = conn.execute_batch("PRAGMA auto_vacuum = INCREMENTAL;");
+        }
         conn.execute_batch(SCHEMA)?;
         Self::migrate_columns(&conn)?;
         let store = Self {
@@ -414,8 +464,13 @@ impl Store {
     }
 
     pub fn clear_history(&self) -> Result<usize> {
-        let conn = self.lock();
-        Ok(conn.execute("DELETE FROM query_history", [])?)
+        let removed = {
+            let conn = self.lock();
+            conn.execute("DELETE FROM query_history", [])?
+        };
+        // 删行只是把页挂回空闲链，文件不会自己小下去 —— 见 [`Self::reclaim`]
+        let _ = self.reclaim(false);
+        Ok(removed)
     }
 
     /// 轻量列迁移：老库补 kind / source 两列，并按 SQL 首词回填 kind。
@@ -597,10 +652,15 @@ impl Store {
     /// 审计日志不做自动清理，也不做「保留 N 条」式的部分清理 ——
     /// 按用户要求：只有点「清空日志」才清，且一次清空全部记录。
     pub fn clear_logs(&self) -> Result<usize> {
-        let conn = self.lock();
-        let n1 = conn.execute("DELETE FROM query_history", [])?;
-        let n2 = conn.execute("DELETE FROM ai_audit", [])?;
-        Ok(n1 + n2)
+        let removed = {
+            let conn = self.lock();
+            let n1 = conn.execute("DELETE FROM query_history", [])?;
+            let n2 = conn.execute("DELETE FROM ai_audit", [])?;
+            n1 + n2
+        };
+        // 清日志是**用户主动**要腾空间的动作：不回收到文件上，用户会觉得按钮没生效
+        let _ = self.reclaim(false);
+        Ok(removed)
     }
 
     /// 表行数（白名单；表不存在按 0 —— 老库可能还没建这张表）。
@@ -643,6 +703,71 @@ impl Store {
         let conn = self.lock();
         // 同上：表名是白名单字面量
         Ok(conn.execute(&format!("DELETE FROM {table}"), [])?)
+    }
+
+    /// 当前体积快照（页数 / 空闲页 / auto_vacuum 模式）。
+    pub fn db_stats(&self) -> Result<DbStats> {
+        let conn = self.lock();
+        let read = |sql: &str| -> u64 {
+            conn.query_row(sql, [], |row| row.get::<_, i64>(0))
+                .unwrap_or(0)
+                .max(0) as u64
+        };
+        Ok(DbStats {
+            page_size: read("PRAGMA page_size"),
+            pages: read("PRAGMA page_count"),
+            free_pages: read("PRAGMA freelist_count"),
+            auto_vacuum: read("PRAGMA auto_vacuum"),
+        })
+    }
+
+    /// 回收空洞，返回**实际缩小的字节数**（不满足门槛返回 0）。
+    ///
+    /// 为什么需要它：`query_history` / `schema_cache` 都是删了又写的表，SQLite 只把页挂回
+    /// 空闲链、**文件不会自己变小** —— 实测用户库 805 MB、其中 750 MB 是空洞，真实数据
+    /// 只有 55 MB。以前没有任何回收路径，于是「库越来越大、越跑越慢」。
+    ///
+    /// 三种模式：
+    /// - 已启用增量自回收（我们在新建/首次回收后设的 `INCREMENTAL`）：`incremental_vacuum`
+    ///   只把空闲页搬到文件尾部再截断，几十毫秒，可以随意调；
+    /// - 否则到了门槛（或 `force`）：整库 `VACUUM`，顺便让 `auto_vacuum` 生效；
+    /// - 没到门槛：不做事（为了几百 KB 的碎片重写 800 MB 是纯亏）。
+    pub fn reclaim(&self, force: bool) -> Result<u64> {
+        // 内存库没有「文件大小」这回事
+        if self.path.as_os_str() == ":memory:" {
+            return Ok(0);
+        }
+        let before = self.db_stats()?;
+        if before.pages == 0 {
+            return Ok(0);
+        }
+        let worth = before.free_bytes() >= RECLAIM_MIN_BYTES
+            && before.free_percent() >= RECLAIM_MIN_PERCENT;
+        if !worth && !force {
+            // 增量模式下顺手抖一下便宜的：空闲页不多时也几乎零成本
+            if before.auto_vacuum == 2 && before.free_pages > 0 {
+                let conn = self.lock();
+                let _ = conn.execute_batch("PRAGMA incremental_vacuum;");
+            }
+            return Ok(0);
+        }
+
+        let conn = self.lock();
+        // WAL 先落盘，回收后再收一次：WAL 模式下 VACUUM 的写入也先落 WAL，
+        // 不 checkpoint 的话 `dbmind.db` 变小了、`-wal` 反而又长回来
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        let outcome = if before.auto_vacuum == 2 && !force {
+            conn.execute_batch("PRAGMA incremental_vacuum;")
+                .map_err(|e| DbMindError::new(ErrorCode::StorageFailed, format!("回收空间失败: {e}")))
+        } else {
+            conn.execute_batch("VACUUM")
+                .map_err(|e| DbMindError::new(ErrorCode::StorageFailed, format!("压缩元数据库失败: {e}")))
+        };
+        let _ = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);");
+        drop(conn);
+        outcome?;
+        let after = self.db_stats()?;
+        Ok(before.bytes().saturating_sub(after.bytes()))
     }
 
     /// 按设置清理历史：`max_entries` 之外的旧行 + `retention_days` 天之前的旧行
@@ -761,6 +886,9 @@ impl Store {
     pub const KEY_AI_WRITE_ENABLED: &'static str = SETTINGS_SAFETY_AI_WRITE;
     pub const KEY_BLOCK_DANGEROUS: &'static str = SETTINGS_SAFETY_BLOCK_DANGEROUS;
     pub const KEY_MAX_WRITE_ROWS: &'static str = SETTINGS_SAFETY_MAX_WRITE_ROWS;
+    pub const KEY_AI_BUDGET_MONTHLY: &'static str = SETTINGS_AI_BUDGET_MONTHLY;
+    pub const KEY_AI_BUDGET_DOWNGRADE: &'static str = SETTINGS_AI_BUDGET_DOWNGRADE;
+    pub const KEY_AI_BUDGET_CHEAP_MODEL: &'static str = SETTINGS_AI_BUDGET_CHEAP_MODEL;
     pub const KEY_SESSION_MAX_PER_HOST: &'static str = SETTINGS_SESSION_MAX_PER_HOST;
     pub const KEY_SESSION_IDLE_TIMEOUT: &'static str = SETTINGS_SESSION_IDLE_TIMEOUT;
     pub const KEY_SCHEMA_TTL: &'static str = SETTINGS_SCHEMA_TTL;
@@ -838,6 +966,11 @@ impl Store {
             // 未标注的开发测试库完全不受影响 —— 代价小、收益是"连错库也不会误改生产数据"。
             (SETTINGS_SAFETY_PRODUCTION, "true"),
             (SETTINGS_SAFETY_AI_WRITE, "false"),
+            // 预算：默认 0 = 不限（新装用户不该被一个数字挡住），
+            // 但两个降级开关先种下，用户在设置里改一个数就能生效
+            (SETTINGS_AI_BUDGET_MONTHLY, "0"),
+            (SETTINGS_AI_BUDGET_DOWNGRADE, "true"),
+            (SETTINGS_AI_BUDGET_CHEAP_MODEL, ""),
             (SETTINGS_SCHEMA_TTL, "300"),
             (SETTINGS_QUERY_TIMEOUT, "300"),
             (SETTINGS_HISTORY_MAX_ENTRIES, "0"),
@@ -990,6 +1123,11 @@ pub struct AiUsageRow {
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
     pub total_tokens: u64,
+    /// 这个模型在时间窗内有调用的天数（`SELECT` 里是 `COUNT(DISTINCT day)`）。
+    /// 「日均调用」要用它做分母：按窗口天数算的话，一个只用了两天的模型
+    /// 日均会被摊成 30 天，看起来像"几乎没在用"。
+    /// 逐日行（迁移、单日读写）没有这个语义，填 0 即可。
+    pub active_days: u64,
 }
 
 impl Store {
@@ -1130,11 +1268,14 @@ impl Store {
     ///
     /// 这些数字以前要在内存里把「模型 → 日期 → 计数」两层对象全遍历一遍才算得出来；
     /// 进了库一条 GROUP BY 就够了，也就是把文件搬进库最实在的那点收益。
+    ///
+    /// `COUNT(DISTINCT day)` 一起取回来：界面要按模型显示「活跃天数」和「日均」，
+    /// 而账本本来就一天一行，多算一遍不需要第二次查询。
     pub fn ai_usage_models(&self, from_day: &str) -> Result<Vec<AiUsageRow>> {
         let conn = self.lock();
         let mut stmt = conn.prepare(
             "SELECT model_key, SUM(calls), SUM(prompt_tokens), SUM(completion_tokens), \
-                    SUM(total_tokens) \
+                    SUM(total_tokens), COUNT(DISTINCT day) \
              FROM ai_usage_models WHERE day >= ?1 GROUP BY model_key \
              ORDER BY SUM(total_tokens) DESC, SUM(calls) DESC",
         )?;
@@ -1146,9 +1287,26 @@ impl Store {
                 prompt_tokens: row.get::<_, i64>(2)?.max(0) as u64,
                 completion_tokens: row.get::<_, i64>(3)?.max(0) as u64,
                 total_tokens: row.get::<_, i64>(4)?.max(0) as u64,
+                active_days: row.get::<_, i64>(5)?.max(0) as u64,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 本自然月累计消耗的 token（预算闸门唯一的数据来源）。
+    ///
+    /// 用 SQL 的 `date('now','localtime','start of month')` 算月初而不是在 Rust 里
+    /// 拼日期：账本里的 `day` 本来就是本地日期，两边口径必须完全一致，
+    /// 否则月初/月末会各差一天。
+    pub fn ai_usage_month_tokens(&self) -> Result<u64> {
+        let conn = self.lock();
+        let total: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(total_tokens), 0) FROM ai_usage_models \
+             WHERE day >= date('now', 'localtime', 'start of month')",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(total.max(0) as u64)
     }
 
     /// 导入旧账本（一次性迁移用）：整天与整模型的数字直接落下来，不做累加。
@@ -1648,6 +1806,584 @@ impl Store {
     }
 }
 
+// ---------------------------------------------------------------- AI 同事
+
+/// 一个会话（界面上的一串对话）。
+#[derive(Debug, Clone, Default)]
+pub struct AiThreadRow {
+    pub id: String,
+    pub title: String,
+    pub connection_id: String,
+    pub database_name: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 会话里的一条消息。
+#[derive(Debug, Clone, Default)]
+pub struct AiMessageRow {
+    pub id: i64,
+    pub role: String,
+    pub content: String,
+    /// 上游返回的 usage（JSON 原文，没有就是空串）
+    pub usage: String,
+    pub created_at: String,
+}
+
+/// 一条长期记忆。
+#[derive(Debug, Clone, Default)]
+pub struct AiMemoryRow {
+    pub id: String,
+    pub scope: String,
+    pub connection_id: String,
+    pub database_name: String,
+    pub fact: String,
+    /// `user` = 用户明确说过；`ai` = 从对话里推断的
+    pub source: String,
+    pub hits: u64,
+    pub created_at: String,
+}
+
+/// 一张变更单：AI 的产出，人工的开关。
+#[derive(Debug, Clone, Default)]
+pub struct AiChangeRow {
+    pub id: String,
+    pub job_id: String,
+    pub thread_id: String,
+    pub connection_id: String,
+    pub database_name: String,
+    pub title: String,
+    pub reason: String,
+    pub sql: String,
+    pub undo_sql: String,
+    pub risk: String,
+    pub status: String,
+    pub approved_by: String,
+    pub approved_at: Option<String>,
+    pub applied_at: Option<String>,
+    pub error: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 一条定时检查（"值班"任务）。
+#[derive(Debug, Clone, Default)]
+pub struct AiTaskRow {
+    pub id: String,
+    pub title: String,
+    pub prompt: String,
+    pub connection_id: String,
+    pub database_name: String,
+    pub every_minutes: u64,
+    pub enabled: bool,
+    pub last_run_at: Option<String>,
+    pub next_run_at: String,
+    pub last_status: String,
+    pub created_at: String,
+}
+
+/// 一次"干的活"：定时检查、单次问答、变更单生成都落在这里。
+#[derive(Debug, Clone, Default)]
+pub struct AiJobRow {
+    pub id: String,
+    pub title: String,
+    pub goal: String,
+    pub connection_id: String,
+    pub database_name: String,
+    /// chat / patrol / change / manual
+    pub kind: String,
+    /// running / waiting-confirm / done / failed
+    pub status: String,
+    /// JSON 数组：每一步做了什么
+    pub steps: String,
+    pub result: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 一条审计事件。
+#[derive(Debug, Clone, Default)]
+pub struct AiEventRow {
+    pub id: i64,
+    pub time: String,
+    pub thread_id: String,
+    pub change_id: String,
+    pub actor: String,
+    pub action: String,
+    pub detail: String,
+}
+
+impl Store {
+    /// 允许 AI 写库的总开关。**默认关闭**：产品红线是"A I 只出变更单，不直接执行"，
+    /// 开关打开也只是允许"批准后执行"，模型本身永远拿不到执行权限。
+    pub fn ai_write_allowed(&self) -> bool {
+        self.get_setting(SETTINGS_SAFETY_AI_WRITE)
+            .ok()
+            .flatten()
+            .as_deref()
+            == Some("true")
+    }
+
+    // ---- 会话
+
+    pub fn ai_thread_list(&self, limit: usize) -> Result<Vec<AiThreadRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, connection_id, database_name, created_at, updated_at \
+             FROM ai_threads ORDER BY updated_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(AiThreadRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                connection_id: row.get(2)?,
+                database_name: row.get(3)?,
+                created_at: row.get(4)?,
+                updated_at: row.get(5)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn ai_thread_get(&self, id: &str) -> Result<Option<AiThreadRow>> {
+        Ok(self
+            .ai_thread_list(10_000)?
+            .into_iter()
+            .find(|thread| thread.id == id))
+    }
+
+    /// 新建或更新会话（存在即刷新标题/连接与 updated_at）。
+    pub fn ai_thread_save(&self, thread: &AiThreadRow) -> Result<()> {
+        let now = now_iso();
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_threads (id, title, connection_id, database_name, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(id) DO UPDATE SET title = ?2, connection_id = ?3, \
+                database_name = ?4, updated_at = ?6",
+            params![
+                thread.id,
+                thread.title,
+                thread.connection_id,
+                thread.database_name,
+                if thread.created_at.is_empty() { now.clone() } else { thread.created_at.clone() },
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn ai_thread_touch(&self, id: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE ai_threads SET updated_at = ?2 WHERE id = ?1",
+            params![id, now_iso()],
+        )?;
+        Ok(())
+    }
+
+    pub fn ai_thread_delete(&self, id: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute("DELETE FROM ai_messages WHERE thread_id = ?1", params![id])?;
+        conn.execute("DELETE FROM ai_threads WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn ai_message_add(&self, thread_id: &str, role: &str, content: &str, usage: &str) -> Result<i64> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_messages (thread_id, role, content, usage, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![thread_id, role, content, usage, now_iso()],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn ai_message_list(&self, thread_id: &str, limit: usize) -> Result<Vec<AiMessageRow>> {
+        let conn = self.lock();
+        // 取**最近** N 条再翻回正序：一条长会话里用户更关心末尾在聊什么
+        let mut stmt = conn.prepare(
+            "SELECT id, role, content, usage, created_at FROM \
+             (SELECT id, role, content, usage, created_at FROM ai_messages \
+              WHERE thread_id = ?1 ORDER BY id DESC LIMIT ?2) ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![thread_id, limit as i64], |row| {
+            Ok(AiMessageRow {
+                id: row.get(0)?,
+                role: row.get(1)?,
+                content: row.get(2)?,
+                usage: row.get(3)?,
+                created_at: row.get(4)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    // ---- 记忆
+
+    pub fn ai_memory_list(&self, connection_id: Option<&str>, limit: usize) -> Result<Vec<AiMemoryRow>> {
+        let conn = self.lock();
+        let mut out = Vec::new();
+        match connection_id {
+            Some(id) if !id.is_empty() => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, scope, connection_id, database_name, fact, source, hits, created_at \
+                     FROM ai_memories WHERE connection_id = ?1 OR scope = 'global' \
+                     ORDER BY hits DESC, created_at DESC LIMIT ?2",
+                )?;
+                let rows = stmt.query_map(params![id, limit as i64], memory_of)?;
+                out.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+            }
+            _ => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, scope, connection_id, database_name, fact, source, hits, created_at \
+                     FROM ai_memories ORDER BY created_at DESC LIMIT ?1",
+                )?;
+                let rows = stmt.query_map(params![limit as i64], memory_of)?;
+                out.extend(rows.collect::<rusqlite::Result<Vec<_>>>()?);
+            }
+        }
+        Ok(out)
+    }
+
+    /// 写一条记忆。同一连接下**重复事实只累加 hits**（unique 索引兜底），
+    /// 避免同一句话被反复注入把上下文撑满。
+    pub fn ai_memory_add(&self, row: &AiMemoryRow) -> Result<String> {
+        let id = if row.id.is_empty() {
+            new_id("mem")
+        } else {
+            row.id.clone()
+        };
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_memories (id, scope, connection_id, database_name, fact, source, hits, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7) \
+             ON CONFLICT(connection_id, fact) DO UPDATE SET hits = hits + 1",
+            params![
+                id,
+                if row.scope.is_empty() { "connection" } else { &row.scope },
+                row.connection_id,
+                row.database_name,
+                row.fact,
+                if row.source.is_empty() { "ai" } else { &row.source },
+                now_iso()
+            ],
+        )?;
+        Ok(id)
+    }
+
+    pub fn ai_memory_delete(&self, id: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute("DELETE FROM ai_memories WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    // ---- 变更单
+
+    pub fn ai_change_add(&self, row: &AiChangeRow) -> Result<String> {
+        let id = if row.id.is_empty() {
+            new_id("chg")
+        } else {
+            row.id.clone()
+        };
+        let now = now_iso();
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_changes (id, job_id, thread_id, connection_id, database_name, title, reason, \
+                 sql, undo_sql, risk, status, approved_by, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, '', ?12, ?12)",
+            params![
+                id,
+                row.job_id,
+                row.thread_id,
+                row.connection_id,
+                row.database_name,
+                row.title,
+                row.reason,
+                row.sql,
+                row.undo_sql,
+                row.risk,
+                if row.status.is_empty() { "pending" } else { &row.status },
+                now
+            ],
+        )?;
+        Ok(id)
+    }
+
+    pub fn ai_change_list(&self, status: Option<&str>, limit: usize) -> Result<Vec<AiChangeRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, job_id, thread_id, connection_id, database_name, title, reason, sql, undo_sql, \
+                 risk, status, approved_by, approved_at, applied_at, error, created_at, updated_at \
+             FROM ai_changes WHERE (?1 = '' OR status = ?1) ORDER BY created_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![status.unwrap_or(""), limit as i64], change_of)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn ai_change_get(&self, id: &str) -> Result<Option<AiChangeRow>> {
+        Ok(self.ai_change_list(None, 10_000)?.into_iter().find(|row| row.id == id))
+    }
+
+    /// 改状态。时间戳按状态自动补：批准记 approved_*，执行记 applied_*，失败记 error。
+    pub fn ai_change_set_status(&self, id: &str, status: &str, actor: &str, error: &str) -> Result<()> {
+        let now = now_iso();
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE ai_changes SET status = ?2, updated_at = ?3, error = ?4, \
+                 approved_by = CASE WHEN ?2 = 'approved' THEN ?5 ELSE approved_by END, \
+                 approved_at = CASE WHEN ?2 = 'approved' THEN ?3 ELSE approved_at END, \
+                 applied_at = CASE WHEN ?2 = 'applied' THEN ?3 ELSE applied_at END \
+             WHERE id = ?1",
+            params![id, status, now, error, actor],
+        )?;
+        Ok(())
+    }
+
+    /// 把一批变更单挂到某个 job 上。
+    ///
+    /// 智能体的顺序是「先出单、最后才建 job」，所以只能在收尾时回填 ——
+    /// 不挂的话，待办卡片点进去看不到它产出的变更单，审计也串不起来。
+    pub fn ai_change_attach_job(&self, ids: &[String], job_id: &str) -> Result<()> {
+        if ids.is_empty() || job_id.is_empty() {
+            return Ok(());
+        }
+        let mut conn = self.lock();
+        let tx = conn.transaction()?;
+        for id in ids {
+            tx.execute(
+                "UPDATE ai_changes SET job_id = ?2, updated_at = ?3 WHERE id = ?1",
+                params![id, job_id, now_iso()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    // ---- 定时检查（值班）
+
+    pub fn ai_task_list(&self) -> Result<Vec<AiTaskRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, prompt, connection_id, database_name, every_minutes, enabled, \
+                 last_run_at, next_run_at, last_status, created_at \
+             FROM ai_tasks ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(AiTaskRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                prompt: row.get(2)?,
+                connection_id: row.get(3)?,
+                database_name: row.get(4)?,
+                every_minutes: row.get::<_, i64>(5)?.max(1) as u64,
+                enabled: row.get::<_, i64>(6)? != 0,
+                last_run_at: row.get(7)?,
+                next_run_at: row.get(8)?,
+                last_status: row.get(9)?,
+                created_at: row.get(10)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn ai_task_save(&self, row: &AiTaskRow) -> Result<String> {
+        let id = if row.id.is_empty() {
+            new_id("task")
+        } else {
+            row.id.clone()
+        };
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_tasks (id, title, prompt, connection_id, database_name, every_minutes, \
+                 enabled, next_run_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) \
+             ON CONFLICT(id) DO UPDATE SET title = ?2, prompt = ?3, connection_id = ?4, \
+                 database_name = ?5, every_minutes = ?6, enabled = ?7, next_run_at = ?8",
+            params![
+                id,
+                row.title,
+                row.prompt,
+                row.connection_id,
+                row.database_name,
+                row.every_minutes.max(1) as i64,
+                if row.enabled { 1 } else { 0 },
+                if row.next_run_at.is_empty() { now_iso() } else { row.next_run_at.clone() },
+                now_iso()
+            ],
+        )?;
+        Ok(id)
+    }
+
+    pub fn ai_task_delete(&self, id: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute("DELETE FROM ai_tasks WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// 到点该跑的（`now` 是 ISO 时间串，字符串比较即可：格式统一由 `now_iso` 保证）。
+    pub fn ai_task_due(&self, now: &str, limit: usize) -> Result<Vec<AiTaskRow>> {
+        Ok(self
+            .ai_task_list()?
+            .into_iter()
+            .filter(|task| task.enabled && task.next_run_at.as_str() <= now)
+            .take(limit)
+            .collect())
+    }
+
+    pub fn ai_task_mark_run(&self, id: &str, status: &str, next_run_at: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE ai_tasks SET last_run_at = ?2, last_status = ?3, next_run_at = ?4 WHERE id = ?1",
+            params![id, now_iso(), status, next_run_at],
+        )?;
+        Ok(())
+    }
+
+    // ---- 任务（干的活）
+
+    pub fn ai_job_add(&self, row: &AiJobRow) -> Result<String> {
+        let id = if row.id.is_empty() {
+            new_id("job")
+        } else {
+            row.id.clone()
+        };
+        let now = now_iso();
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_jobs (id, title, goal, connection_id, database_name, kind, status, steps, \
+                 result, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)",
+            params![
+                id,
+                row.title,
+                row.goal,
+                row.connection_id,
+                row.database_name,
+                if row.kind.is_empty() { "chat" } else { &row.kind },
+                if row.status.is_empty() { "done" } else { &row.status },
+                if row.steps.is_empty() { "[]" } else { &row.steps },
+                row.result,
+                now
+            ],
+        )?;
+        Ok(id)
+    }
+
+    pub fn ai_job_update(&self, id: &str, status: &str, steps: &str, result: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE ai_jobs SET status = ?2, steps = ?3, result = ?4, updated_at = ?5 WHERE id = ?1",
+            params![id, status, steps, result, now_iso()],
+        )?;
+        Ok(())
+    }
+
+    pub fn ai_job_list(&self, limit: usize) -> Result<Vec<AiJobRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, title, goal, connection_id, database_name, kind, status, steps, result, \
+                 created_at, updated_at FROM ai_jobs ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(AiJobRow {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                goal: row.get(2)?,
+                connection_id: row.get(3)?,
+                database_name: row.get(4)?,
+                kind: row.get(5)?,
+                status: row.get(6)?,
+                steps: row.get(7)?,
+                result: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn ai_job_get(&self, id: &str) -> Result<Option<AiJobRow>> {
+        Ok(self.ai_job_list(10_000)?.into_iter().find(|job| job.id == id))
+    }
+
+    // ---- 审计
+
+    pub fn ai_event_add(&self, thread_id: &str, change_id: &str, actor: &str, action: &str, detail: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "INSERT INTO ai_events (time, thread_id, change_id, actor, action, detail) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![now_iso(), thread_id, change_id, actor, action, detail],
+        )?;
+        Ok(())
+    }
+
+    pub fn ai_event_list(&self, limit: usize) -> Result<Vec<AiEventRow>> {
+        let conn = self.lock();
+        let mut stmt = conn.prepare(
+            "SELECT id, time, thread_id, change_id, actor, action, detail FROM ai_events \
+             ORDER BY id DESC LIMIT ?1",
+        )?;
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok(AiEventRow {
+                id: row.get(0)?,
+                time: row.get(1)?,
+                thread_id: row.get(2)?,
+                change_id: row.get(3)?,
+                actor: row.get(4)?,
+                action: row.get(5)?,
+                detail: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// 从某天起累计的 token（预算用；`since_day` 形如 `2026-10-01`）。
+    pub fn ai_tokens_since(&self, since_day: &str) -> Result<u64> {
+        let conn = self.lock();
+        let total: i64 = conn.query_row(
+            "SELECT COALESCE(SUM(total_tokens), 0) FROM ai_usage_models WHERE day >= ?1",
+            params![since_day],
+            |row| row.get(0),
+        )?;
+        Ok(total.max(0) as u64)
+    }
+}
+
+fn memory_of(row: &Row<'_>) -> rusqlite::Result<AiMemoryRow> {
+    Ok(AiMemoryRow {
+        id: row.get(0)?,
+        scope: row.get(1)?,
+        connection_id: row.get(2)?,
+        database_name: row.get(3)?,
+        fact: row.get(4)?,
+        source: row.get(5)?,
+        hits: row.get::<_, i64>(6)?.max(0) as u64,
+        created_at: row.get(7)?,
+    })
+}
+
+fn change_of(row: &Row<'_>) -> rusqlite::Result<AiChangeRow> {
+    Ok(AiChangeRow {
+        id: row.get(0)?,
+        job_id: row.get(1)?,
+        thread_id: row.get(2)?,
+        connection_id: row.get(3)?,
+        database_name: row.get(4)?,
+        title: row.get(5)?,
+        reason: row.get(6)?,
+        sql: row.get(7)?,
+        undo_sql: row.get(8)?,
+        risk: row.get(9)?,
+        status: row.get(10)?,
+        approved_by: row.get(11)?,
+        approved_at: row.get(12)?,
+        applied_at: row.get(13)?,
+        error: row.get(14)?,
+        created_at: row.get(15)?,
+        updated_at: row.get(16)?,
+    })
+}
+
 // ---------------------------------------------------------------- 全局句柄
 
 /// 进程内唯一的主库句柄。
@@ -1885,6 +2621,117 @@ CREATE TABLE IF NOT EXISTS kb_vectors (
     payload BLOB NOT NULL,
     PRIMARY KEY (kb_id, doc_id)
 );
+
+-- ================================================================ AI 同事
+-- 「助手」与「同事」的分界：同事有记忆、有待办、交付变更单、说的每句话都可审计。
+-- 下面七张表就是这四件事的落点。
+
+-- 会话：关掉面板再打开要能接着聊（以前消息只在内存里，重启即失忆）。
+CREATE TABLE IF NOT EXISTS ai_threads (
+    id            TEXT PRIMARY KEY,
+    title         TEXT NOT NULL DEFAULT '',
+    connection_id TEXT NOT NULL DEFAULT '',
+    database_name TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_threads_updated ON ai_threads(updated_at);
+
+CREATE TABLE IF NOT EXISTS ai_messages (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id  TEXT NOT NULL,
+    role       TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    usage      TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_messages_thread ON ai_messages(thread_id, id);
+
+-- 记忆：一条事实一行。
+-- scope=connection 只在该连接（含指定库）生效；scope=global 在任何连接都注入。
+-- unique 索引按 (connection_id, fact)：同一条事实反复说只累加 hits，不重复注入。
+CREATE TABLE IF NOT EXISTS ai_memories (
+    id            TEXT PRIMARY KEY,
+    scope         TEXT NOT NULL DEFAULT 'connection',
+    connection_id TEXT NOT NULL DEFAULT '',
+    database_name TEXT NOT NULL DEFAULT '',
+    fact          TEXT NOT NULL,
+    source        TEXT NOT NULL DEFAULT 'ai',
+    hits          INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_memories_fact ON ai_memories(connection_id, fact);
+CREATE INDEX IF NOT EXISTS idx_ai_memories_scope ON ai_memories(scope);
+
+-- 变更单：AI 唯一允许的"动手"方式是产出这个，执行永远要人点确认。
+-- status: pending → approved → applied → undone（rejected / failed 为侧枝）
+CREATE TABLE IF NOT EXISTS ai_changes (
+    id            TEXT PRIMARY KEY,
+    job_id        TEXT NOT NULL DEFAULT '',
+    thread_id     TEXT NOT NULL DEFAULT '',
+    connection_id TEXT NOT NULL DEFAULT '',
+    database_name TEXT NOT NULL DEFAULT '',
+    title         TEXT NOT NULL DEFAULT '',
+    reason        TEXT NOT NULL DEFAULT '',
+    sql           TEXT NOT NULL,
+    undo_sql      TEXT NOT NULL DEFAULT '',
+    risk          TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'pending',
+    approved_by   TEXT NOT NULL DEFAULT '',
+    approved_at   TEXT,
+    applied_at    TEXT,
+    error         TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_changes_status ON ai_changes(status, created_at);
+
+-- 定时检查（"值班"）：every_minutes 到点就跑一次，产物进 ai_jobs。
+CREATE TABLE IF NOT EXISTS ai_tasks (
+    id            TEXT PRIMARY KEY,
+    title         TEXT NOT NULL DEFAULT '',
+    prompt        TEXT NOT NULL DEFAULT '',
+    connection_id TEXT NOT NULL DEFAULT '',
+    database_name TEXT NOT NULL DEFAULT '',
+    every_minutes INTEGER NOT NULL DEFAULT 1440,
+    enabled       INTEGER NOT NULL DEFAULT 1,
+    last_run_at   TEXT,
+    next_run_at   TEXT NOT NULL DEFAULT '',
+    last_status   TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_tasks_next ON ai_tasks(enabled, next_run_at);
+
+-- 任务：一次"干的活"，可长可短。steps 是 JSON 数组（谁在第几步做了什么），
+-- 让用户隔天回来能看到"它当时是怎么想的"，而不是只有一个结果。
+CREATE TABLE IF NOT EXISTS ai_jobs (
+    id            TEXT PRIMARY KEY,
+    title         TEXT NOT NULL DEFAULT '',
+    goal          TEXT NOT NULL DEFAULT '',
+    connection_id TEXT NOT NULL DEFAULT '',
+    database_name TEXT NOT NULL DEFAULT '',
+    kind          TEXT NOT NULL DEFAULT 'chat',
+    status        TEXT NOT NULL DEFAULT 'done',
+    steps         TEXT NOT NULL DEFAULT '[]',
+    result        TEXT NOT NULL DEFAULT '',
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_jobs_created ON ai_jobs(created_at);
+
+-- 审计：AI 提案了什么、谁点了确认、实际执行了什么、有没有撤销。
+-- 与 ai_audit（记 prompt 原文）分工不同：那张表回答"发给模型什么"，
+-- 这张表回答"它对库做了什么、谁同意的"。
+CREATE TABLE IF NOT EXISTS ai_events (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    time       TEXT NOT NULL,
+    thread_id  TEXT NOT NULL DEFAULT '',
+    change_id  TEXT NOT NULL DEFAULT '',
+    actor      TEXT NOT NULL DEFAULT '',
+    action     TEXT NOT NULL DEFAULT '',
+    detail     TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_ai_events_time ON ai_events(time);
 "#;
 
 #[cfg(test)]
@@ -1897,6 +2744,53 @@ mod tests {
 
     fn sqlite_config(name: &str) -> ConnectionConfig {
         ConnectionConfig::new(name, ConnectionKind::Sqlite).with_file(format!("./{name}.db"))
+    }
+
+    /// 回收真的能把文件缩回去（真机 805 MB → 55 MB 的单测版）。
+    ///
+    /// 走磁盘库而不是内存库：要验的正是「文件大小」，内存库没有这个概念。
+    #[test]
+    fn reclaim_shrinks_file_after_mass_delete() {
+        let dir = std::env::temp_dir().join(format!(
+            "dbmind-reclaim-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("dbmind.db");
+        {
+            let store = Store::open(&path).unwrap();
+            let blob = "x".repeat(1000);
+            {
+                let conn = store.lock();
+                for index in 0..3000 {
+                    conn.execute(
+                        "INSERT INTO query_history (id, connection_id, connection_name, sql, status, \
+                         row_count, duration_ms, error_code, created_at, kind, source) \
+                         VALUES (?1, 'conn', 'conn', ?2, 'ok', 0, 0, '', ?3, 'query', 'ui')",
+                        params![format!("h{index}"), blob, now_iso()],
+                    )
+                    .unwrap();
+                }
+            }
+            let before = std::fs::metadata(&path).unwrap().len();
+            // clear_history 内部已经试过一次回收（数据量够大时当场就缩小），
+            // 这里再 force 一次兜底 —— 断言只盯「文件最终确实变小了」
+            store.clear_history().unwrap();
+            let _ = store.reclaim(true).unwrap();
+            let after = std::fs::metadata(&path).unwrap().len();
+            assert!(
+                after * 2 < before,
+                "回收后文件应明显变小：before={before} after={after}"
+            );
+            // 增量自回收已启用：之后再删小批数据也不该再长回去
+            assert_eq!(store.db_stats().unwrap().auto_vacuum, 2, "应转成 INCREMENTAL");
+            assert_eq!(store.table_row_count("query_history").unwrap(), 0);
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2101,6 +2995,51 @@ mod tests {
         assert_eq!(s.list_history(10, Some("other")).unwrap().len(), 0);
         assert_eq!(s.clear_history().unwrap(), 3);
         assert!(s.list_history(10, None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn 本月用量只统计自然月内的账() {
+        let s = store();
+        // 空库：0（预算闸门据此判断「不限」与「未超」）
+        assert_eq!(s.ai_usage_month_tokens().unwrap(), 0);
+        // 上个月的量不该算进来：预算按自然月归零，跨月不清零等于永久锁死
+        s.bump_ai_usage("m1", "2020-01-15", 10, 10, 20).unwrap();
+        assert_eq!(s.ai_usage_month_tokens().unwrap(), 0);
+        // 本月两笔要累加（同模型同日走 UPSERT，不同模型各占一行）
+        let today = now_iso()[..10].to_string();
+        s.bump_ai_usage("m1", &today, 100, 50, 150).unwrap();
+        s.bump_ai_usage("m2", &today, 30, 20, 50).unwrap();
+        assert_eq!(s.ai_usage_month_tokens().unwrap(), 200);
+    }
+
+    #[test]
+    fn 变更单可以回填所属任务() {
+        let s = store();
+        let row = AiChangeRow {
+            id: String::new(),
+            job_id: String::new(),
+            thread_id: String::new(),
+            connection_id: "c1".into(),
+            database_name: String::new(),
+            title: "t".into(),
+            reason: String::new(),
+            sql: "create index i on t (a)".into(),
+            undo_sql: String::new(),
+            risk: "medium".into(),
+            status: "pending".into(),
+            approved_by: String::new(),
+            approved_at: None,
+            applied_at: None,
+            error: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
+        let id = s.ai_change_add(&row).unwrap();
+        // 空 job_id 不写（智能体的顺序是先出单、最后才建 job）
+        s.ai_change_attach_job(&[id.clone()], "").unwrap();
+        assert_eq!(s.ai_change_get(&id).unwrap().unwrap().job_id, "");
+        s.ai_change_attach_job(&[id.clone()], "job_1").unwrap();
+        assert_eq!(s.ai_change_get(&id).unwrap().unwrap().job_id, "job_1");
     }
 
     #[test]

@@ -186,6 +186,27 @@
               <el-switch v-model="safetyForm.aiWriteEnabled" />
               <div class="form-tip">{{ $t('settings.safety.aiWriteTip') }}</div>
             </el-form-item>
+            <!-- AI 月度预算：这是「管得住」的那一半。以前只有 /api/ai/usage 报数字，
+                 调用链上没人读它，超了照样全量烧。0 = 不限。 -->
+            <el-form-item :label="$t('settings.safety.aiBudget')">
+              <el-input-number v-model="safetyForm.monthlyTokens" :min="0" :step="100000"
+                               controls-position="right" style="width:180px" />
+              <span style="margin-left:8px">{{ $t('settings.safety.aiBudgetUnit') }}</span>
+              <div class="form-tip">{{ $t('settings.safety.aiBudgetTip') }}</div>
+            </el-form-item>
+            <el-form-item :label="$t('settings.safety.aiBudgetOver')">
+              <el-switch v-model="safetyForm.budgetDowngrade"
+                         :active-text="$t('settings.safety.budgetDowngrade')"
+                         :inactive-text="$t('settings.safety.budgetBlock')" />
+              <div class="form-tip">{{ $t('settings.safety.aiBudgetOverTip') }}</div>
+            </el-form-item>
+            <el-form-item v-if="safetyForm.budgetDowngrade" :label="$t('settings.safety.cheapModel')">
+              <el-select v-model="safetyForm.cheapModel" clearable filterable allow-create default-first-option
+                         :placeholder="$t('settings.safety.cheapModelPh')" style="width:260px">
+                <el-option v-for="m in (form.models || [])" :key="m.id" :value="m.id" :label="m.name || m.model || m.id" />
+              </el-select>
+              <div class="form-tip">{{ $t('settings.safety.cheapModelTip') }}</div>
+            </el-form-item>
             <!-- 安全确认（写语句执行前二次确认）：从「查询」页签迁来 —— 它是安全属性。
                  状态仍在 queryForm（localStorage dbmind_query），改动即时持久化。
                  文案要点名**全部写语句**（不只是 DELETE/DROP），并说清弹窗内容口径 -->
@@ -269,28 +290,49 @@
         </div>
 
         <!-- 1. AI 服务 -->
-        <div v-show="activeTab === 'ai'" class="settings-panel">
+        <div v-show="activeTab === 'ai'" class="settings-panel ai-settings">
           <div class="panel-title">{{ $t('settings.ai.title') }}</div>
 
-          <el-form label-width="110px" label-position="left" class="ai-form">
-            <el-form-item :label="$t('settings.ai.enabled')">
-              <el-switch v-model="form.enabled" />
-            </el-form-item>
-            <el-form-item :label="$t('settings.ai.privacy')">
-              <el-select v-model="form.privacyMode" style="width:200px">
-                <el-option value="allow" :label="$t('settings.ai.privacyAllow')" />
-                <el-option value="localOnly" :label="$t('settings.ai.privacyLocal')" />
-              </el-select>
-              <div class="form-tip">{{ $t('settings.ai.privacyTip') }}</div>
-            </el-form-item>
-            <el-form-item :label="$t('settings.ai.audit')">
-              <el-switch v-model="form.auditEnabled" />
-              <!-- 说明统一换行到第二行（与隐私模式等各行对齐）；tip-inline 的旧偏移已废弃 -->
-              <div class="form-tip">{{ $t('settings.ai.auditTip') }}</div>
-            </el-form-item>
-          </el-form>
+          <!-- 页内拆成三个子页签（基础 / 模型服务 / 用量统计）。
+               原来三段一路向下堆叠，用量统计得滚到最底才看得见 -->
+          <div class="ai-subtabs" role="tablist">
+            <button
+              v-for="t in aiSubTabs"
+              :key="t.key"
+              type="button"
+              role="tab"
+              class="ai-subtab"
+              :class="{ active: aiSubTab === t.key }"
+              :aria-selected="aiSubTab === t.key"
+              @click="aiSubTab = t.key"
+            >{{ $t(t.i18nKey) }}</button>
+          </div>
 
-          <div class="model-tabs-wrap" style="margin-top:8px">
+          <!-- 基础：三个总开关 -->
+          <div v-show="aiSubTab === 'basic'" class="ai-subpane">
+            <el-form label-width="96px" label-position="left" class="set-form">
+              <el-form-item :label="$t('settings.ai.enabled')">
+                <el-switch v-model="form.enabled" />
+              </el-form-item>
+              <el-form-item :label="$t('settings.ai.privacy')">
+                <el-select v-model="form.privacyMode" style="width:220px">
+                  <el-option value="allow" :label="$t('settings.ai.privacyAllow')" />
+                  <el-option value="localOnly" :label="$t('settings.ai.privacyLocal')" />
+                </el-select>
+                <div class="form-tip">{{ $t('settings.ai.privacyTip') }}</div>
+              </el-form-item>
+              <el-form-item :label="$t('settings.ai.audit')">
+                <el-switch v-model="form.auditEnabled" />
+                <!-- 说明统一换行到第二行（与隐私模式等各行对齐）；tip-inline 的旧偏移已废弃 -->
+                <div class="form-tip">{{ $t('settings.ai.auditTip') }}</div>
+              </el-form-item>
+            </el-form>
+          </div>
+
+          <!-- 模型服务：一个模型一张「卡」，页签是卡头；字段两列排布，
+               省掉一半纵向滚动（原来六个字段一路竖排，1920 高的屏也要滚两屏） -->
+          <div v-show="aiSubTab === 'model'" class="ai-sub-hint">{{ $t('settings.ai.groupModelTip') }}</div>
+          <div v-show="aiSubTab === 'model'" class="model-tabs-wrap">
             <el-tabs v-model="activeModelId" type="card" closable @tab-remove="removeModelById">
               <el-tab-pane
                 v-for="(m, idx) in form.models"
@@ -299,100 +341,125 @@
                 :name="m.id"
                 closable
               >
-                <el-form label-width="110px" label-position="left" class="ai-form">
-                  <el-form-item :label="$t('settings.ai.name')">
-                    <el-input v-model="m.name" :placeholder="$t('settings.ai.namePlaceholder')" />
-                  </el-form-item>
+                <!-- 标签列 112px：「最大生成 Token」在 96px 下会折成两行，
+                     整行的基线就歪了 -->
+                <el-form label-width="112px" label-position="left" class="set-form model-form">
+                  <!-- 名称 + 模型名并排：两者都是短标识，各占半行正好 -->
+                  <div class="form-row">
+                    <el-form-item :label="$t('settings.ai.name')">
+                      <el-input v-model="m.name" :placeholder="$t('settings.ai.namePlaceholder')" />
+                    </el-form-item>
+                    <el-form-item :label="$t('settings.ai.model')">
+                      <el-input v-model="m.model" placeholder="deepseek-chat" />
+                    </el-form-item>
+                  </div>
                   <el-form-item :label="$t('settings.ai.baseUrl')">
                     <el-input v-model="m.baseUrl" placeholder="https://api.deepseek.com/v1" />
                     <div class="form-tip">{{ $t('settings.ai.baseUrlTip') }}</div>
                   </el-form-item>
                   <el-form-item label="API Key">
-                    <el-input v-model="m.apiKey" type="password" show-password autocomplete="new-password"
-                      :placeholder="m.hasKey ? $t('settings.ai.apiKeyPlaceholderSet') : $t('settings.ai.apiKeyPlaceholderNew')" />
-                  </el-form-item>
-                  <el-form-item :label="$t('settings.ai.model')">
-                    <el-input v-model="m.model" placeholder="deepseek-chat" />
-                  </el-form-item>
-                  <el-form-item :label="$t('settings.ai.embedding')">
-                    <el-switch v-model="m.embedding" />
-                    <div class="form-tip">
-                      {{ $t('settings.ai.embeddingTip') }}
+                    <!-- 「已配置」做成徽标：原先只写在 placeholder 里，输过一次之后
+                         就再也看不出这台机器到底存没存过 key -->
+                    <div class="key-row">
+                      <el-input v-model="m.apiKey" type="password" show-password autocomplete="new-password"
+                        :placeholder="m.hasKey ? $t('settings.ai.apiKeyPlaceholderSet') : $t('settings.ai.apiKeyPlaceholderNew')" />
+                      <span v-if="m.hasKey" class="key-badge">{{ $t('settings.ai.keySet') }}</span>
                     </div>
                   </el-form-item>
-                  <!-- 后端一直消费 maxTokens（进请求体），但表单里没有输入框 —— 用户改不了。
-                       留空/0 = 不限制，跟随服务端默认 -->
-                  <el-form-item :label="$t('settings.ai.maxTokens')">
-                    <el-input-number v-model="m.maxTokens" :min="0" :max="200000" :step="1024"
-                      controls-position="right" style="width:180px" />
-                    <div class="form-tip">{{ $t('settings.ai.maxTokensTip') }}</div>
-                  </el-form-item>
+                  <!-- 最大 Token + 向量化并排：两个都是「能力/限额」类配置 -->
+                  <div class="form-row">
+                    <!-- 后端一直消费 maxTokens（进请求体），留空/0 = 不限制，跟随服务端默认 -->
+                    <el-form-item :label="$t('settings.ai.maxTokens')">
+                      <el-input-number v-model="m.maxTokens" :min="0" :max="200000" :step="1024"
+                        controls-position="right" style="width:100%" />
+                      <div class="form-tip">{{ $t('settings.ai.maxTokensTip') }}</div>
+                    </el-form-item>
+                    <el-form-item :label="$t('settings.ai.embedding')">
+                      <el-switch v-model="m.embedding" />
+                      <div class="form-tip">{{ $t('settings.ai.embeddingTip') }}</div>
+                    </el-form-item>
+                  </div>
                 </el-form>
                 <div class="presets">
                   <div class="preset-label">{{ $t('settings.ai.presetLabel') }}</div>
                   <div class="preset-btns">
-                    <el-button size="small" v-for="p in presets" :key="p.name" :icon="Connection" @click="applyPreset(idx, p)">{{ p.name }}</el-button>
+                    <button v-for="p in presets" :key="p.name" type="button" class="preset-chip" @click="applyPreset(idx, p)">
+                      <el-icon><Connection /></el-icon>{{ p.name }}
+                    </button>
                   </div>
                 </div>
               </el-tab-pane>
             </el-tabs>
+            </div>
+
+          <!-- 用量统计：每个指标都按模型列出来（调用 / 活跃天数 / 日均 / 三类 token），
+               末尾一行合计。原来只有三个全局数字 + 一行"模型：次数 + token"，
+               多模型时根本看不出谁在烧 token。 -->
+          <div v-show="aiSubTab === 'usage'" class="usage-pane">
+            <div class="usage-head">
+              <span class="usage-title">{{ $t('settings.ai.byModel') }}</span>
+              <span class="usage-note">{{ $t('settings.ai.byModelNote') }}</span>
+              <span class="kb-count">{{ $t('settings.ai.usageRange', { n: usageRange }) }}</span>
+            </div>
+
+            <table v-if="usageRows.length" class="usage-table">
+              <thead>
+                <tr>
+                  <th class="ut-model">{{ $t('settings.ai.colModel') }}</th>
+                  <th>{{ $t('settings.ai.usageCalls') }}</th>
+                  <th>{{ $t('settings.ai.usageDays') }}</th>
+                  <th>{{ $t('settings.ai.usagePerDay') }}</th>
+                  <th>{{ $t('settings.ai.colPrompt') }}</th>
+                  <th>{{ $t('settings.ai.colCompletion') }}</th>
+                  <th>{{ $t('settings.ai.colTotal') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="m in usageRows" :key="m.model">
+                  <!-- 主名称用**用户自己配的名字**（账本里存的是 API 模型串），
+                       没改名/没配名字时两者相同，就只显示一行 -->
+                  <td class="ut-model" :title="m.displayName">
+                    <span class="ut-name">{{ m.displayName }}</span>
+                    <span v-if="m.apiModel && m.apiModel !== m.displayName" class="ut-id">{{ m.apiModel }}</span>
+                  </td>
+                  <td class="ut-num">{{ fmtTokens(m.calls) }}</td>
+                  <td class="ut-num">{{ m.activeDays || '—' }}</td>
+                  <td class="ut-num">{{ perDayOf(m) }}</td>
+                  <td class="ut-num">{{ fmtTok(m.promptTokens) }}</td>
+                  <td class="ut-num">{{ fmtTok(m.completionTokens) }}</td>
+                  <td class="ut-num ut-sum">{{ fmtTok(m.totalTokens) }}</td>
+                </tr>
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td class="ut-model">{{ $t('settings.ai.rowTotal') }}</td>
+                  <td class="ut-num">{{ fmtTokens(usageTotals.calls) }}</td>
+                  <td class="ut-num">{{ usageTotals.activeDays || '—' }}</td>
+                  <td class="ut-num">{{ perDayOf(usageTotals) }}</td>
+                  <td class="ut-num">{{ fmtTok(usageTotals.promptTokens) }}</td>
+                  <td class="ut-num">{{ fmtTok(usageTotals.completionTokens) }}</td>
+                  <td class="ut-num ut-sum">{{ fmtTok(usageTotals.totalTokens) }}</td>
+                </tr>
+              </tfoot>
+            </table>
+            <div v-else class="kb-model-empty">{{ $t('settings.ai.noModelRecords') }}</div>
+
+            <div class="usage-foot">{{ $t('settings.ai.perDayTip') }}</div>
           </div>
 
-          <div class="actions" style="margin-top:12px">
-            <el-button :icon="Plus" @click="addModel">{{ $t('settings.ai.addModel') }}</el-button>
-            <el-button :loading="!!testingId" @click="testActiveModel">
-              <el-icon style="margin-right:4px"><Connection /></el-icon>{{ $t('settings.ai.test') }}
-            </el-button>
+          <!-- 操作条：与其他设置页一致 —— 内容下方靠左一排，不加边框、不粘底。
+               「添加模型 / 测试连接」只在模型服务页出现，另两页留着就是两个死按钮 -->
+          <div class="actions">
+            <template v-if="aiSubTab === 'model'">
+              <el-button :icon="Plus" @click="addModel">{{ $t('settings.ai.addModel') }}</el-button>
+              <el-button :loading="!!testingId" @click="testActiveModel">
+                <el-icon style="margin-right:4px"><Connection /></el-icon>{{ $t('settings.ai.test') }}
+              </el-button>
+            </template>
             <el-button type="primary" :loading="saving" @click="save">
               <el-icon style="margin-right:4px"><Check /></el-icon>{{ $t('settings.ai.saveConfig') }}
             </el-button>
             <el-button @click="resetAi">{{ $t('settings.editor.reset') }}</el-button>
-          </div>
-
-          <!-- 用量统计：它属于「模型服务用了多少」，放在这里比放在知识库里合适 -->
-          <div class="kb-card" style="margin-top:18px">
-            <div class="kb-card-head">
-              <span class="kb-card-title">{{ $t('settings.ai.usageTitle') }}</span>
-              <span class="kb-count" style="margin-left:auto">{{ $t('settings.ai.usageRange', { n: usageRange }) }}</span>
-            </div>
-            <div class="kb-usage">
-              <div class="kb-stat">
-                <span class="kb-stat-n">{{ usageStats.calls }}</span>
-                <span class="kb-stat-l">{{ $t('settings.ai.usageCalls') }}</span>
-              </div>
-              <div class="kb-stat">
-                <span class="kb-stat-n">{{ usageStats.activeDays }}</span>
-                <span class="kb-stat-l">{{ $t('settings.ai.usageDays') }}</span>
-              </div>
-              <div class="kb-stat">
-                <span class="kb-stat-n">{{ usageStats.perDay }}</span>
-                <span class="kb-stat-l">{{ $t('settings.ai.usagePerDay') }}</span>
-              </div>
-            </div>
-
-            <!-- 按模型汇总（token）：模型商回 usage 才有 token 数，不回就只有次数 ——
-                 如实写"未统计 token"，**不补 0**（否则看起来像"这个模型不花钱"）。 -->
-            <div class="kb-models">
-              <div class="kb-models-head">
-                <span class="kb-models-title">{{ $t('settings.ai.byModel') }}</span>
-                <span class="kb-models-note">{{ $t('settings.ai.byModelNote') }}</span>
-              </div>
-              <div v-if="usageModels.length" class="kb-models-list">
-                <div v-for="m in usageModels" :key="m.model" class="kb-model">
-                  <span class="kb-model-name" :title="m.model">{{ m.model }}</span>
-                  <span class="kb-model-calls">{{ $t('settings.ai.callsCount', { n: m.calls }) }}</span>
-                  <span class="kb-model-tokens"
-                        :title="$t('settings.ai.tokenTitle', {
-                          input: fmtTokens(m.promptTokens),
-                          output: fmtTokens(m.completionTokens),
-                          total: fmtTokens(m.totalTokens)
-                        })">
-                    {{ m.totalTokens ? $t('settings.ai.tokens', { n: fmtTokens(m.totalTokens) }) : $t('settings.ai.noTokens') }}
-                  </span>
-                </div>
-              </div>
-              <div v-else class="kb-model-empty">{{ $t('settings.ai.noModelRecords') }}</div>
-            </div>
           </div>
 
         </div>
@@ -1217,30 +1284,70 @@ const usageRange = computed(() => {
 })
 
 /**
- * 用量卡片里的三个数 —— **只用账本真实有的数据**。
+ * 用量表末尾的合计行。
  *
- * 两个坑都是实测踩到的：
- * 1. `usage.total` **本身就是总数**（不是 `{calls,…}` 对象），早前读 `total.calls`
- *    永远是 `undefined` ⇒ 界面显示 0，而账本里明明有 12 次调用；
- * 2. 账本（主库 dbmind.db 的 ai_usage_days / ai_usage_models 两张表）只记「每天调用了几次」，
- *    「失败次数 / 平均耗时」根本没记 —— 那两张卡只能显示假的 0。
- *    要它们就得先在 `record_usage` 里带上 ok 与耗时（未做，故先换成能算出来的真指标）。
+ * 只合计**账本真实有的数据**：次数与 token 直接按模型求和；
+ * 「活跃天数」不能用各模型天数相加（同一天两个模型各调一次会算成 2 天），
+ * 统一取逐日明细里 calls>0 的天数 —— 与单个模型的口径一致。
  */
-const usageStats = computed(() => {
+const usageTotals = computed(() => {
+  const models = usageModels.value
   const days = Array.isArray(usage.value.days) ? usage.value.days : []
-  const total = typeof usage.value.total === 'number'
-    ? usage.value.total
-    : days.reduce((sum, day) => sum + (day.calls || 0), 0)
-  const window = usage.value.window || days.length || 30
-  const activeDays = days.filter((day) => (day.calls || 0) > 0).length
-  return { calls: total, activeDays, perDay: (total / window).toFixed(1) }
+  const sum = (key) => models.reduce((n, m) => n + (Number(m[key]) || 0), 0)
+  return {
+    calls: sum('calls'),
+    activeDays: days.filter((day) => (day.calls || 0) > 0).length,
+    promptTokens: sum('promptTokens'),
+    completionTokens: sum('completionTokens'),
+    totalTokens: sum('totalTokens')
+  }
 })
 
 /** 按模型的用量明细（后端已按总 token 降序排好）。老账本没有 models 字段 → 空数组，不报错。 */
 const usageModels = computed(() => (Array.isArray(usage.value.models) ? usage.value.models : []))
 
-/** token 数的千分位；缺字段显示 —，**不显示 0**（0 与"没统计到"是两回事）。 */
+/**
+ * 表格行：账本里存的是**发出去的 API 模型串**（`deepseek-chat`），
+ * 界面要显示用户自己在「模型服务」里起的名字（`DeepSeek 主力`）。
+ *
+ * 匹配顺序：先按配置里的 model 串，再按名字（配置里没填 model 时账本键就是名字）。
+ * 都对不上说明这个模型已经被删掉/改名了 —— 那就老实显示账本里的键，
+ * 不能因为找不到配置就把历史用量藏起来。
+ */
+const usageRows = computed(() => {
+  const configured = Array.isArray(form.value.models) ? form.value.models : []
+  return usageModels.value.map((row) => {
+    const key = String(row.model || '').trim()
+    const hit = configured.find((m) => {
+      const api = String(m.model || '').trim()
+      const name = String(m.name || '').trim()
+      return (api && api === key) || (name && name === key)
+    })
+    const named = String(hit?.name || '').trim()
+    return { ...row, apiModel: key, displayName: named || key }
+  })
+})
+
+/**
+ * 日均调用 = 调用次数 ÷ **该模型自己的**活跃天数。
+ *
+ * 不按窗口天数除：一个只在两天里用过的模型除以 30 天会显示成 6.7，
+ * 看着像"几乎没在用"，而它那两天其实一天几十次。
+ */
+const perDayOf = (row) => {
+  const days = Number(row?.activeDays) || 0
+  if (!days) return '—'
+  return ((Number(row.calls) || 0) / days).toFixed(1)
+}
+
+/** 次数的千分位；缺字段显示 —。 */
 const fmtTokens = (n) => (n === 0 || n) ? Number(n).toLocaleString() : '—'
+
+/**
+ * token 数：**0 显示 —**，不是 0。
+ * 模型商不回 usage 时账本里就是 0，写成 0 会被读成"这个模型不花钱"。
+ */
+const fmtTok = (n) => (Number(n) > 0 ? Number(n).toLocaleString() : '—')
 
 // ---------- 主题 ----------
 const themeForm = ref(getThemeSettings())
@@ -1276,6 +1383,15 @@ const saving = ref(false)
 const testingId = ref('')
 const activeModelId = ref('')
 
+// 页内子页签：基础 / 模型服务 / 用量统计。默认停在「基础」——
+// 启用开关是这页的总闸，先看见它才知道下面配的模型有没有生效
+const aiSubTabs = [
+  { key: 'basic', i18nKey: 'settings.ai.groupBasic' },
+  { key: 'model', i18nKey: 'settings.ai.groupModel' },
+  { key: 'usage', i18nKey: 'settings.ai.usageTitle' }
+]
+const aiSubTab = ref('basic')
+
 // 用 computed：模块级数组只在加载时求值一次，切换语言后预设名不会跟着变
 const presets = computed(() => [
   { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
@@ -1291,6 +1407,8 @@ const addModel = () => {
   const newModel = { id: genId(), name: '', baseUrl: '', apiKey: '', model: '', maxTokens: 0, embedding: false }
   form.value.models.push(newModel)
   activeModelId.value = newModel.id
+  // 新建完跟着切到「模型服务」，否则在基础页点进来会看不到刚加的空模型
+  aiSubTab.value = 'model'
 }
 
 const removeModel = (idx) => {
@@ -1656,7 +1774,7 @@ const onRefreshCache = async () => {
 // ===== 安全与会话（全部存后端 app_settings；安全开关与会话上限改动即时生效） =====
 // protectProduction 默认 true：与后端种子（storage.rs 的 seed_settings）保持一致，
 // 否则首次加载、或后端暂时读不到时，开关会显示成"关"，与内核实际策略不符。
-const safetyDefaults = { protectProduction: true, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: true, blockDangerous: false, maxWriteRows: 0 }
+const safetyDefaults = { protectProduction: true, aiWriteEnabled: false, maxSessions: 32, idleMinutes: 0, tunnelIdleMinutes: 30, allowLegacyTls: true, blockDangerous: false, maxWriteRows: 0, monthlyTokens: 0, budgetDowngrade: true, cheapModel: '' }
 const safetyForm = ref({ ...safetyDefaults })
 
 // ---------- MCP 服务 ----------
@@ -1721,6 +1839,10 @@ const loadSafety = async () => {
     // SSH 隧道空闲回收同理（默认 30 分钟）
     safetyForm.value.tunnelIdleMinutes = Math.round(num('tunnel.idleTimeoutSecs', 1800) / 60)
     safetyForm.value.allowLegacyTls = !!(tls && tls.allowLegacyTls)
+    // 预算：0 = 不限（后端种子也是 0）；默认允许降级，月中别把人直接挡在门外
+    safetyForm.value.monthlyTokens = num('ai.budget.monthlyTokens', 0)
+    safetyForm.value.budgetDowngrade = flag('ai.budget.downgrade', true)
+    safetyForm.value.cheapModel = s?.['ai.budget.cheapModel'] || ''
   } catch { /* 同上：降级到默认值 */ }
 }
 /** 恢复默认：打回安全与会话的出厂值并立即落盘（与「查询」页的做法一致：重置即生效） */
@@ -1734,6 +1856,10 @@ const saveSafety = async () => {
     await putSetting('safety.aiWriteEnabled', safetyForm.value.aiWriteEnabled)
     await putSetting('safety.blockDangerousStatements', safetyForm.value.blockDangerous)
     await putSetting('safety.maxWriteRows', Math.round(safetyForm.value.maxWriteRows))
+    // 预算：闸门每次调用现读设置，保存后下一次提问就生效（不用重启）
+    await putSetting('ai.budget.monthlyTokens', Math.round(safetyForm.value.monthlyTokens || 0))
+    await putSetting('ai.budget.downgrade', safetyForm.value.budgetDowngrade)
+    await putSetting('ai.budget.cheapModel', String(safetyForm.value.cheapModel || '').trim())
     await putSetting('session.maxPerHost', safetyForm.value.maxSessions)
     await putSetting('session.idleTimeoutSecs', Math.round(safetyForm.value.idleMinutes) * 60)
     await putSetting('tunnel.idleTimeoutSecs', Math.round(safetyForm.value.tunnelIdleMinutes) * 60)
@@ -2475,6 +2601,80 @@ watch(visible, (v) => {
 .model-tabs-wrap .el-tabs__item .is-icon-close { color: var(--dc-text-dim); }
 .model-tabs-wrap .el-tabs__item .is-icon-close:hover { color: var(--dc-danger); background: transparent; }
 
+/* ===== AI 服务页：页内分段 / 两列表单 / 粘底操作条 / 胶囊页签 ===== */
+.ai-settings .panel-title { margin-bottom: 16px; }
+/* 页内分段（基础 / 模型服务 / 用量统计）：连成一体的胶囊分段，
+   与下面「选哪个模型」的独立胶囊页签区分开 */
+.ai-settings .ai-subtabs {
+  display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 16px;
+  border: 1px solid var(--dc-border); border-radius: 999px; background: var(--dc-bg-soft);
+}
+.ai-settings .ai-subtab {
+  height: 28px; padding: 0 16px; border: none; border-radius: 999px;
+  background: transparent; color: var(--dc-text-dim);
+  font-size: 13px; cursor: pointer; transition: color .15s, background .15s;
+}
+.ai-settings .ai-subtab:hover { color: var(--dc-text); }
+.ai-settings .ai-subtab.active { background: var(--dc-bg-raised); color: var(--dc-primary); font-weight: 600; }
+.ai-settings .ai-subpane { margin-bottom: 20px; }
+.ai-settings .ai-sub-hint { font-size: 12px; color: var(--dc-text-weak); margin-bottom: 12px; }
+.ai-settings .set-form { max-width: 780px; }
+.ai-settings .set-form :deep(.el-form-item) { margin-bottom: 14px; }
+.ai-settings .set-form :deep(.el-form-item__label) { color: var(--dc-text-mid); }
+/* 单列字段收窄：输入框拉满整行时，标签和值隔得太远，扫读要横穿半屏 */
+.ai-settings .set-form :deep(.el-input),
+.ai-settings .set-form :deep(.el-select),
+.ai-settings .set-form :deep(.el-input-number) { max-width: 520px; }
+/* 两列行：两个短字段并排，纵向长度直接砍掉一半 */
+.ai-settings .form-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 18px;
+}
+.ai-settings .form-row :deep(.el-input),
+.ai-settings .form-row :deep(.el-select),
+.ai-settings .form-row :deep(.el-input-number) { max-width: none; }
+/* API Key：「已配置」徽标 + 输入框同一行，输入框自己撑满剩余宽度 */
+.ai-settings .key-row { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 520px; }
+.ai-settings .key-row :deep(.el-input) { flex: 1; min-width: 0; max-width: none; }
+.ai-settings .key-badge {
+  flex: none; font-size: 12px; line-height: 20px; padding: 0 8px; border-radius: 10px;
+  background: rgba(103, 194, 58, .16); color: var(--dc-success, #67c23a);
+}
+/* 服务商预设：方按钮改 chips，不再和主操作按钮抢注意力 */
+.ai-settings .preset-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 28px; padding: 0 12px; border-radius: 999px;
+  border: 1px solid var(--dc-border); background: var(--dc-bg-soft);
+  color: var(--dc-text-mid); font-size: 12px; cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.ai-settings .preset-chip:hover {
+  color: var(--dc-primary); border-color: var(--dc-primary); background: var(--dc-primary-wash);
+}
+/* 操作条：不加边框、不粘底，靠左 —— 与其他设置页同一套（.actions） */
+/* 模型页签：带方框的 card 样式改胶囊 —— 页签是「选哪个模型」，不是表单边框 */
+.ai-settings .model-tabs-wrap :deep(.el-tabs--card > .el-tabs__header) { border-bottom: none; margin-bottom: 12px; }
+.ai-settings .model-tabs-wrap :deep(.el-tabs--card > .el-tabs__header .el-tabs__nav) {
+  border: none; display: flex; gap: 8px; flex-wrap: wrap;
+}
+.ai-settings .model-tabs-wrap :deep(.el-tabs--card > .el-tabs__header .el-tabs__item) {
+  height: 30px; line-height: 28px; padding: 0 12px;
+  border: 1px solid var(--dc-border); border-radius: 999px;
+  background: transparent; color: var(--dc-text-dim); font-size: 13px;
+  /* Element 给页签加了 margin-top:-1px（让它压在 header 底线上），
+     换成胶囊后这 1px 会把上边线推到容器外被裁掉，圆角看着是断的 */
+  margin-top: 0;
+}
+.ai-settings .model-tabs-wrap :deep(.el-tabs--card > .el-tabs__header .el-tabs__item.is-active) {
+  border-color: var(--dc-primary); background: var(--dc-primary-wash); color: var(--dc-primary);
+}
+/* nav-wrap / nav-scroll 默认 overflow:hidden，胶囊描边有 1px 出了盒子就被裁；
+   这里的胶囊靠 flex-wrap 换行，不依赖横向滚动，放开裁剪是安全的 */
+.ai-settings .model-tabs-wrap :deep(.el-tabs__nav-wrap),
+.ai-settings .model-tabs-wrap :deep(.el-tabs__nav-scroll) { overflow: visible; }
+.ai-settings .model-tabs-wrap :deep(.el-tabs__nav-wrap) { margin-bottom: 0; }
+.ai-settings .model-tabs-wrap :deep(.el-tabs__nav-wrap::after) { display: none; }
+.ai-settings .model-tabs-wrap :deep(.el-tabs__content) { overflow: visible; }
+
 
 .checkbox-group { display: flex; flex-wrap: wrap; gap: 8px 20px; }
 .checkbox-group .el-checkbox { margin-right: 0; }
@@ -2666,36 +2866,54 @@ watch(visible, (v) => {
   font-size: 12px; line-height: 1.7; color: var(--dc-code-text); white-space: pre-wrap; word-break: break-word;
 }
 
-/* AI 知识库 */
-/* ---- AI 服务页签：用量统计卡片（知识库已移到顶部导航的独立工作台）---- */
-.kb-card {
-  border: 1px solid var(--dc-border); border-radius: var(--dc-radius);
-  background: var(--dc-bg-soft); padding: 12px 14px; margin-bottom: 12px;
-}
-.kb-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
-.kb-card-title { font-size: 14px; font-weight: 600; color: var(--dc-text-strong); }
+/* ---- AI 服务页签：用量统计（按模型逐指标列表）----
+   表格而不是卡片组：指标从 2 个涨到 6 个，卡片横排会挤成一团，
+   而表格天然能竖向比较同一个指标在不同模型上的差异。 */
+.usage-pane { max-width: 100%; }
+.usage-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.usage-title { font-size: 13px; font-weight: 600; color: var(--dc-text-strong); }
+.usage-note { font-size: 11px; color: var(--dc-text-weak); }
+.usage-head .kb-count { margin-left: auto; }
 .kb-count { font-size: 12px; color: var(--dc-text-weak); font-variant-numeric: tabular-nums; }
-.kb-usage { display: flex; gap: 10px; }
-.kb-stat {
-  flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 12px 8px; border-radius: 10px; border: 1px solid var(--dc-border); background: var(--dc-bg-soft);
+.usage-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+  border: 1px solid var(--dc-border); border-radius: 8px; overflow: hidden;
 }
-.kb-stat-n { font-size: 18px; font-weight: 700; color: var(--dc-text-strong); font-variant-numeric: tabular-nums; }
-.kb-stat-l { font-size: 12px; color: var(--dc-text-dim); }
-/* 按模型汇总：一行一个模型；名字可省略，次数 / token 用等宽数字便于竖向比较 */
-.kb-models { margin-top: 10px; border-top: 1px solid var(--dc-border); padding-top: 10px; }
-.kb-models-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
-.kb-models-title { font-size: 13px; font-weight: 600; color: var(--dc-text-strong); }
-.kb-models-note { font-size: 11px; color: var(--dc-text-weak); }
-.kb-models-list { display: flex; flex-direction: column; gap: 4px; }
-.kb-model {
-  display: flex; align-items: center; gap: 10px; font-size: 12px;
-  padding: 4px 8px; border-radius: 6px; background: var(--dc-bg-soft);
+.usage-table th,
+.usage-table td {
+  padding: 8px 10px; text-align: right; white-space: nowrap;
+  border-bottom: 1px solid var(--dc-border);
 }
-.kb-model-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dc-text); }
-.kb-model-calls { color: var(--dc-text-dim); font-variant-numeric: tabular-nums; }
-.kb-model-tokens { color: var(--dc-text-strong); font-variant-numeric: tabular-nums; }
-.kb-model-empty { font-size: 12px; color: var(--dc-text-weak); }
+.usage-table thead th {
+  font-weight: 600; font-size: 12px; color: var(--dc-text-dim);
+  background: var(--dc-bg-soft); text-align: right;
+}
+/* 第一列是名字，左对齐；名字太长就省略，鼠标悬停看全称 */
+.usage-table th.ut-model,
+.usage-table td.ut-model { text-align: left; }
+/* 名字一行、API 模型串一行（仅当两者不同时才有第二行）。
+   注意不能把 td 改成 flex/grid —— 那样这个单元格会脱离表格列宽算法，
+   后面的数字列会错位；改成让内部的 span 各占一行。 */
+.usage-table td.ut-model { max-width: 300px; color: var(--dc-text); white-space: normal; }
+.usage-table td.ut-model > span {
+  display: block; line-height: 1.5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.usage-table td.ut-model .ut-id {
+  font-size: 11px; color: var(--dc-text-weak); font-variant-numeric: tabular-nums;
+}
+.usage-table tbody tr:hover td { background: var(--dc-primary-wash); }
+/* 数字列等宽：不同位数的 1/7 上下对齐，扫一眼就能比大小 */
+.usage-table td.ut-num { font-variant-numeric: tabular-nums; color: var(--dc-text-mid); }
+.usage-table td.ut-sum { color: var(--dc-text-strong); font-weight: 600; }
+.usage-table tbody tr:last-child td { border-bottom: 1px solid var(--dc-border); }
+/* 合计行：与数据行同一套对齐，靠底色区分，不再加一条粗线 */
+.usage-table tfoot td {
+  background: var(--dc-bg-soft); font-weight: 600; border-bottom: none;
+  color: var(--dc-text-strong);
+}
+.usage-foot { margin-top: 8px; font-size: 11px; color: var(--dc-text-weak); }
+.kb-model-empty { font-size: 12px; color: var(--dc-text-weak); padding: 10px 0; }
 /* 「开关 + 说明」并排的行（如「调用审计」）：说明文字右移一点，别贴着开关。
    选择器带上 .ai-form 是为了**不受书写顺序影响**地压过 .form-tip 自己的边距 */
 .ai-form .form-tip.tip-inline { margin-left: 14px; }

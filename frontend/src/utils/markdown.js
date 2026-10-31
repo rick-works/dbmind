@@ -112,13 +112,14 @@ export const renderMarkdown = (md, opts = {}) => {
         '<pre><code' + (lang ? ` class="lang-${escapeHtml(lang)}"` : '') + '>' +
         escapeHtml(buf.join('\n')) + '</code></pre>'
       if (withSqlActions) {
-        // 所有代码块都给「复制」；SQL 类额外给「试跑 / 执行计划 / 插入并执行」——
-        // 索引按「全部代码块」递增，与 extractCodeBlocks 一一对应
+        // 所有代码块都给「复制」；SQL 类额外给「试跑 / 执行计划 / 插入编辑器」——
+        // 索引按「全部代码块」递增，与 extractCodeBlocks 一一对应。
+        // 「插入编辑器」只写入、不执行：执行与否由人在编辑器里决定。
         const acts =
           (isSqlLang(lang)
             ? `<button type="button" class="md-code-act" data-sql-act="run" data-sql-idx="${codeIdx}" title="${escapeHtml(t('mdk.runTip'))}" aria-label="${escapeHtml(t('mdk.run'))}">${ICON_RUN}</button>`
               + `<button type="button" class="md-code-act" data-sql-act="plan" data-sql-idx="${codeIdx}" title="${escapeHtml(t('mdk.planTip'))}" aria-label="${escapeHtml(t('mdk.planTip'))}">${ICON_PLAN}</button>`
-              + `<button type="button" class="md-code-act" data-sql-act="insert" data-sql-idx="${codeIdx}" title="${escapeHtml(t('mdk.insertRun'))}" aria-label="${escapeHtml(t('mdk.insertRun'))}">${ICON_INSERT}</button>`
+              + `<button type="button" class="md-code-act" data-sql-act="insert" data-sql-idx="${codeIdx}" title="${escapeHtml(t('mdk.insert'))}" aria-label="${escapeHtml(t('mdk.insert'))}">${ICON_INSERT}</button>`
             : '') +
           `<button type="button" class="md-code-act" data-sql-act="copy" data-sql-idx="${codeIdx}" title="${escapeHtml(t('mdk.copy'))}" aria-label="${escapeHtml(t('mdk.copy'))}">${ICON_COPY}</button>`
         out.push('<div class="md-code">' + code + '<div class="md-code-acts">' + acts + '</div></div>')

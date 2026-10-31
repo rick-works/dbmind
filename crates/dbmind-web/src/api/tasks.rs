@@ -709,6 +709,29 @@ impl TaskRegistry {
         lock(&self.tasks).retain(|_, task| !task.expired());
     }
 
+    /// 最近的任务（按开始墙钟倒序），给 AI 的「同步 / 备份状态」工具用。
+    ///
+    /// `kinds` 为空表示不限类别。**去掉 `logs`**：一条同步任务的日志能有上千行，
+    /// 原样塞给模型既费 token 又把真正的结论淹没（模型会去复述日志而不是回答状态）。
+    pub fn recent(&self, kinds: &[&str], limit: usize) -> Vec<Value> {
+        let mut all: Vec<(u64, Value)> = lock(&self.tasks)
+            .values()
+            .filter(|task| kinds.is_empty() || kinds.iter().any(|kind| task.kind == *kind))
+            .map(|task| {
+                let mut snap = task.snapshot();
+                if let Some(object) = snap.as_object_mut() {
+                    object.remove("logs");
+                    object.remove("logsSeq");
+                }
+                snap["kind"] = json!(task.kind);
+                snap["context"] = task.context().unwrap_or(Value::Null);
+                (task.started_wall, snap)
+            })
+            .collect();
+        all.sort_by(|a, b| b.0.cmp(&a.0));
+        all.into_iter().take(limit).map(|(_, snap)| snap).collect()
+    }
+
     /// 起一个后台任务。
     ///
     /// 工作体是 **async**（不是线程）：它要调用元数据/执行这些 async helper，

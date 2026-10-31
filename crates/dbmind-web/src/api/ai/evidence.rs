@@ -115,6 +115,7 @@ pub async fn verify(state: &AppState, conn: &str, database: &str, sql: &str) -> 
     match crate::api::ai::chat::explain_sql(state, conn, database, &sql).await {
         Ok(Some(plan)) => {
             let rows: Vec<Value> = plan
+                .text
                 .lines()
                 .take(40)
                 .map(|line| json!({ "plan": line }))

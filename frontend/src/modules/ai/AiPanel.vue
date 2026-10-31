@@ -23,6 +23,52 @@
     </div>
 
     <div class="ai-main">
+      <!-- 左栏「记录」：只有中央工作区（studio）摆得下 —— 侧边 420px 窄面板再切一栏就没对话区了。
+           一个会话一行：点开续聊、悬浮出删除；顶部 + 号新建。 -->
+      <aside v-if="isStudio" class="ai-hist" :class="{ 'is-collapsed': !histOpen }">
+        <!-- 展开态：标题 + 新建 + 收起 -->
+        <div v-if="histOpen" class="hist-top">
+          <span class="hist-title">{{ $t('ai.history') }}</span>
+          <button class="hist-new" type="button" :title="$t('ai.newThread')" @click="onHistoryNew">
+            <el-icon :size="13"><Plus /></el-icon>
+          </button>
+          <button class="hist-toggle" type="button" :title="$t('ai.historyCollapse')" @click="toggleHist">
+            <el-icon :size="13"><ArrowLeft /></el-icon>
+          </button>
+        </div>
+        <!-- 收起态：只剩竖排标题 + 两个图标，对话区因此变宽 -->
+        <div v-else class="hist-top is-col">
+          <button class="hist-toggle" type="button" :title="$t('ai.historyExpand')" @click="toggleHist">
+            <el-icon :size="13"><ArrowRight /></el-icon>
+          </button>
+          <button class="hist-new" type="button" :title="$t('ai.newThread')" @click="onHistoryNew">
+            <el-icon :size="13"><Plus /></el-icon>
+          </button>
+          <span class="hist-vlabel">{{ $t('ai.history') }}</span>
+        </div>
+        <div v-show="histOpen" v-loading="histLoading" class="hist-list">
+          <button
+            v-for="th in threads"
+            :key="th.id"
+            type="button"
+            class="hist-item"
+            :class="{ active: th.id === chatThreadId }"
+            :title="th.title || $t('ai.historyUntitled')"
+            @click="openThread(th)"
+          >
+            <span class="hist-item-tx">{{ th.title || $t('ai.historyUntitled') }}</span>
+            <span class="hist-item-day">{{ dayOf(th.updatedAt || th.createdAt) }}</span>
+            <span class="hist-ren" :title="$t('ai.historyRename')" @click.stop="renameThread(th)">
+              <el-icon :size="12"><Edit /></el-icon>
+            </span>
+            <span class="hist-del" :title="$t('ai.historyDelete')" @click.stop="deleteThread(th)">
+              <el-icon :size="12"><Delete /></el-icon>
+            </span>
+          </button>
+          <div v-if="!threads.length && !histLoading" class="hist-empty">{{ $t('ai.historyEmpty') }}</div>
+        </div>
+      </aside>
+
       <div class="ai-body">
         <!-- ===== 结果区：内容随当前 Skill 变化 ===== -->
         <div ref="chatBox" class="ai-view">
@@ -123,6 +169,8 @@
                   <span class="txt">{{ $t('ai.generating') }}</span>
                   <el-button size="small" text type="primary" class="stop-gen" @click="stopStream">{{ $t('ai.stopGen') }}</el-button>
                 </div>
+                <!-- 服务端提示（预算降级等）：挂在回答下面，不混进正文 -->
+                <div v-if="m.notice" class="msg-notice">{{ m.notice }}</div>
                 <!-- 智能分析会真的执行只读查询：把工具调用轨迹显式列出来，
                      让「它查了库」这件事一眼可见，而不是黑盒给个结论 -->
                 <div v-if="m.steps && m.steps.length" class="msg-steps">
@@ -133,6 +181,40 @@
                     <el-icon><Cpu /></el-icon>
                     <span class="step-tool">{{ toolLabel(s.tool) }}</span>
                     <span class="step-args">{{ s.args }}</span>
+                  </div>
+                </div>
+                <!-- 变更单：AI 能做的最后一件事是「出单」，执行必须人点。
+                     风险、SQL、撤销语句一次摆在卡片上 —— 看不清就不该点。 -->
+                <div v-if="m.changes && m.changes.length" class="msg-changes">
+                  <div v-for="c in m.changes" :key="c.id" class="chg-card" :class="'is-' + c.risk">
+                    <div class="chg-head">
+                      <span class="chg-risk">{{ riskLabel(c.risk) }}</span>
+                      <span class="chg-title">{{ c.title }}</span>
+                      <span class="chg-state">{{ c.status }}</span>
+                    </div>
+                    <pre class="chg-sql">{{ c.sql }}</pre>
+                    <div v-if="c.undoSql" class="chg-undo">↩ {{ c.undoSql }}</div>
+                    <div class="chg-acts">
+                      <el-button v-if="c.status === 'pending'" size="small" type="primary"
+                                 :loading="changeBusy === c.id" @click="runChange(c, 'approve')">
+                        {{ $t('ai.chgApprove') }}
+                      </el-button>
+                      <el-button v-if="c.status === 'approved' && c.risk === 'high'" size="small" type="warning"
+                                 :loading="changeBusy === c.id" @click="runChange(c, 'confirm')">
+                        {{ $t('ai.chgConfirm') }}
+                      </el-button>
+                      <el-button v-if="(c.status === 'approved' && c.risk !== 'high') || c.status === 'confirmed'"
+                                 size="small" type="primary" :loading="changeBusy === c.id" @click="runChange(c, 'apply')">
+                        {{ $t('ai.chgApply') }}
+                      </el-button>
+                      <el-button v-if="c.status === 'applied'" size="small" :loading="changeBusy === c.id"
+                                 @click="runChange(c, 'undo')">
+                        {{ $t('ai.chgUndo') }}
+                      </el-button>
+                      <el-button v-if="c.status === 'pending'" size="small" text @click="runChange(c, 'reject')">
+                        {{ $t('ai.chgReject') }}
+                      </el-button>
+                    </div>
                   </div>
                 </div>
                 <!-- 引用溯源：把「这次答话用了哪些团队资料」摊开。
@@ -159,12 +241,9 @@
                     </div>
                   </div>
                 </div>
-                <!-- 用量脚注：这条回答实际消耗的 token。上游没回 usage 就**整块不显示** ——
-                     宁可没有，也不要一个编出来的数字（那会让人误判成本）。 -->
-                <div v-if="m.usage" class="msg-usage">
-                  {{ $t('ai.usagePre') }}{{ fmtTokens(m.usage.totalTokens) }} tokens
-                  <span class="msg-usage-sub">{{ $t('ai.usageIn', { n: fmtTokens(m.usage.promptTokens) }) }}{{ $t('ai.usageOut', { n: fmtTokens(m.usage.completionTokens) }) }}</span>
-                </div>
+                <!-- 用量脚注：与 SQL 查询里 AI 弹窗共用同一个组件（common/AiUsageNote.vue），
+                     上游没回 usage 就整块不渲染；气泡里跟随正文左对齐 -->
+                <AiUsageNote :usage="m.usage" align="left" />
               </div>
             </div>
             <div v-if="chatLoading" class="msg assistant">
@@ -212,6 +291,20 @@
 
             <div class="composer-bar">
               <!-- 左侧：Skills / 专属参数 / 上下文 / 模型（除发送外全部靠左排布） -->
+              <!-- 自主排查（原「深挖」）：交给智能体自己查库、出变更单。
+                   title 里写清「会自己查」，否则用户看不出这跟普通问答差在哪 -->
+              <button class="composer-ctx mate-btn" :class="{ open: agentMode }" type="button"
+                      :title="$t('ai.agentModeTip')" @click="agentMode = !agentMode">
+                <el-icon :size="12"><Aim /></el-icon>
+                <span class="composer-ctx-tx">{{ $t('ai.agentMode') }}</span>
+              </button>
+              <!-- 记事（原「同事」）：待办 + 记忆。角标只统计 alert（值班真发现问题），
+                   不把「等你确认变更单」也标红 —— 那会变成天天有红点 -->
+              <button class="composer-ctx mate-btn" type="button" :title="$t('ai.mateTip')" @click="openMate('todo')">
+                <el-icon :size="12"><Bell /></el-icon>
+                <span class="composer-ctx-tx">{{ $t('ai.mate') }}</span>
+                <span v-if="alertCount" class="mate-badge">{{ alertCount }}</span>
+              </button>
               <!-- Skills：完全复用「模型」下拉的 el-dropdown，样式天然一致 -->
               <el-dropdown ref="skillDropRef" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
                            @command="pickSkill" @visible-change="onSkillVisible">
@@ -374,6 +467,64 @@
       </div>
     </div>
 
+    <!-- 记事抽屉：待办（值班产物）+ 记忆（长期事实）。
+         两件事放一起是有意的 —— 它们都是「它替你记着的东西」。 -->
+    <el-drawer v-model="mateOpen" size="460px" append-to-body class="mate-drawer">
+      <template #header>
+        <!-- 只留标题：开新对话已经收进左栏「记录」的 + 里，
+             抽屉里再放一个同名按钮，两处入口做同一件事 -->
+        <div class="mate-head">
+          <span>{{ $t('ai.mate') }}</span>
+        </div>
+      </template>
+      <div class="mate-body" v-loading="mateLoading">
+        <el-tabs v-model="mateTab">
+          <el-tab-pane :label="$t('ai.todo')" name="todo">
+            <div v-if="!todos.length" class="mate-empty">{{ $t('ai.todoEmpty') }}</div>
+            <div v-for="job in todos" :key="job.id" class="todo-card" :class="'is-' + job.status">
+              <div class="todo-head">
+                <span class="todo-status">{{ todoStatusLabel(job.status) }}</span>
+                <span class="todo-title">{{ job.title }}</span>
+              </div>
+              <div class="todo-result">{{ job.result }}</div>
+              <div class="todo-acts">
+                <!-- 中断的智能体任务可以接着跑：步骤已落库，续跑只补几轮模型调用 -->
+                <el-button v-if="job.kind === 'agent' && ['failed', 'running'].includes(job.status)"
+                           size="small" text type="primary" :loading="jobBusy === job.id" @click="resumeJob(job)">
+                  {{ $t('ai.todoResume') }}
+                </el-button>
+                <el-button v-if="job.status !== 'dismissed'" size="small" text @click="dismissJob(job)">
+                  {{ $t('ai.todoDismiss') }}
+                </el-button>
+              </div>
+            </div>
+          </el-tab-pane>
+          <el-tab-pane :label="$t('ai.memory')" name="memory">
+            <div class="mem-add">
+              <el-input v-model="memDraft" size="small" :placeholder="$t('ai.memoryPlaceholder')"
+                        @keyup.enter="addMemory" />
+              <el-button size="small" type="primary" @click="addMemory">{{ $t('ai.memoryAdd') }}</el-button>
+            </div>
+            <div v-if="!memories.length" class="mate-empty">{{ $t('ai.memoryEmpty') }}</div>
+            <div v-for="row in memories" :key="row.id" class="mem-card">
+              <div class="mem-fact">{{ row.fact }}</div>
+              <div class="mem-meta">
+                <!-- 只显示连接**名字**：库里存的是 conn_18e0… 这种内部 id，
+                     对用户是纯噪声（找不着、也点不动）。
+                     来源（你说过 / AI 推断）不再单独占字：一眼扫过反而更乱，
+                     真要分辨时看文案口气就够了 -->
+                <span v-if="connNameOf(row)" class="mem-conn" :title="connNameOf(row)">{{ connNameOf(row) }}</span>
+                <span v-if="row.createdAt" class="mem-date">{{ String(row.createdAt).slice(0, 10) }}</span>
+                <button class="mem-del" type="button" :title="$t('ai.memoryDelete')" @click="removeMemory(row)">
+                  <el-icon :size="13"><Delete /></el-icon>
+                </button>
+              </div>
+            </div>
+          </el-tab-pane>
+        </el-tabs>
+      </div>
+    </el-drawer>
+
     <!-- SQL 快捷验证：AI 给的 SQL 先看执行计划 / 试跑一次（不消耗 AI 调用） -->
     <SqlProbeDialog v-model="probeVisible" :sql="probeSql" :conn-id="ctxConnId"
                     :database="ctxEffectiveDatabase" :mode="probeMode" @insert="onProbeInsert" />
@@ -384,13 +535,18 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Star, Aim, DataAnalysis, Loading, ArrowDown, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone } from '@element-plus/icons-vue'
-import { aiChat, aiChatStream, aiDataDict, aiInsight, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, kbList, kbSearch } from '../../api'
+import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Star, Aim, DataAnalysis, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
+import { aiChat, aiChatStream, aiDataDict, aiInsight, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, kbList, kbSearch,
+  aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
+  aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
+  aiJobList, aiJobDismiss, aiJobResume } from '../../api'
 import KbIngestPanel from './KbIngestPanel.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { t, te } from '../../utils/i18n'
 import { schemaLevelOf, hideDbLevelOf } from '../../types'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
+// 用量脚注：与 SQL 查询里的 AI 弹窗共用同一个组件，保证「token 消耗」只有一种长相
+import AiUsageNote from '../../common/AiUsageNote.vue'
 
 const props = defineProps({
   conn: Object,
@@ -624,8 +780,25 @@ const useExample = (text) => {
 /** 除「自由对话」外的能力（空态面板的能力入口） */
 const advancedTabs = computed(() => tabs.value.filter(t => t.key !== 'chat'))
 
-// 不保留历史对话：面板每次打开均为干净对话
+// 对话历史以**服务端会话**为准：面板打开时恢复最近一次，「新对话」按钮清空。
+// 只有这个面板会把 persist 传给后端 —— 一次性接口（测试连接、知识库问答）不落库。
 const messages = ref([])
+/** 当前会话 id（空 = 还没开始，第一句会带着 persist 让后端建） */
+const chatThreadId = ref('')
+/** 深挖模式：走 /api/ai/agent，让它自己查库、出变更单 */
+const agentMode = ref(false)
+/** 同事抽屉：待办 + 记忆 */
+const mateOpen = ref(false)
+const mateTab = ref('todo')
+const todos = ref([])
+const memories = ref([])
+const mateLoading = ref(false)
+/** 审批流水里记的名字：桌面端没有登录，名字让用户自己填 */
+const approverName = ref(localStorage.getItem('dbmind.ai.approver') || 'user')
+/** 正在跑的变更单 id：按钮转圈用，避免连点两次执行 */
+const changeBusy = ref('')
+/** 正在续跑的待办 id */
+const jobBusy = ref('')
 
 const chatLoading = ref(false)
 /** 结果区滚动容器（新消息时滚到底） */
@@ -1250,25 +1423,32 @@ const runDictInChat = async (text) => {
 }
 
 /**
- * 聚焦表时给提问补一句范围约束 —— 「选中了表就基于表回答」（用户明确要求）。
+ * 范围约束**不再拼进提问**，改走结构化字段 `table`。
  *
- * <p>只在 `ctxTable` 有值时生效（右键表 →「发送到 AI」带进来的那一级）；
- * 没聚焦表时**一个字都不加**，普通对话保持原样。
- *
- * <p>加在 `prompt` 上、而不是拼进输入框：输入框里显示的始终是用户自己写的问题。
- * 拼进去的话，用户会看到一行自己没敲过的字，想删还得手动删。
- *
- * <p>**不做去重**：预置问题里的"请分析表 dify.orders：…"是**任务**，
- * 这句是**范围**，两句各司其职；去重反而会让右键进来的那次丢掉范围约束。
+ * <p>以前是把「（只基于表 x 回答，不要扩散到整库或其它表…）」这段直接拼在 prompt 后面，
+ * 造成两个问题：
+ * <ul>
+ *   <li>它会随消息一起落库，重开这条记录就在对话里明晃晃打出来一行用户没敲过的字；</li>
+ *   <li>它只带**一张**表（右键聚焦的那张），用户一次问两张表时等于被它限制住 ——
+ *       模型被明令「不要扩散」，于是只回答一张。</li>
+ * </ul>
+ * 现在聚焦表只作为 `table` 字段传给后端，由后端把它和「提问里点到的表」求并集去展开；
+ * 模型看到的上下文里有什么表就答什么表，不需要一句元指令来限制。
  */
-/** token 数的展示格式：千分位（1234 → 1,234）。缺字段显示 —，**不显示 0**（0 与"没给"是两回事）。 */
-const fmtTokens = (n) => (n === 0 || n) ? Number(n).toLocaleString() : '—'
+/* token 数的格式化统一在 common/AiUsageNote.vue 里（这里不再各写一份） */
 
-const withTableScope = (text) => {
-  const tbl = String(ctxTable.value || '').trim()
-  if (!tbl) return text
-  const full = ctxEffectiveDatabase.value ? ctxEffectiveDatabase.value + '.' + tbl : tbl
-  return text + t('ai.scopePrefix', { table: full }) + t('ai.scopeSuffix')
+/** 老版本拼进提问的范围约束：打开历史会话时把这段剥掉，别让用户看到自己没写过的话 */
+const SCOPE_HINT_RE = /\s*[（(][^（()）]*?(?:基于表|based only on the table)[^（()）]*?[)）]\s*$/i
+
+const stripScopeHint = (text) => {
+  let out = String(text || '')
+  // 一条消息尾部最多拼过一次；循环几次纯粹是兜底（万一历史里叠了两层）
+  for (let i = 0; i < 3; i += 1) {
+    const next = out.replace(SCOPE_HINT_RE, '')
+    if (next === out) break
+    out = next
+  }
+  return out
 }
 
 const sendChat = async () => {
@@ -1283,6 +1463,8 @@ const sendChat = async () => {
     return runInsightInChat(text)
   }
   if (!text) return
+  // 深挖模式：交给智能体（会自己查库、出变更单），与普通对话是两条实现
+  if (agentMode.value) return runAgentChat(text)
   // 多轮上下文：本次提问之前的对话轮次。
   // 只带最近 8 条（约 4 轮）——历史越长，请求体越大、模型首字越慢，收益却很低
   const history = messages.value
@@ -1297,16 +1479,21 @@ const sendChat = async () => {
   // 与回答并行跑一次检索拿来源：不阻塞、失败也不影响对话，只是把「用了什么资料」摆出来
   const srcPromise = recallSources(text)
   const payload = {
-    // 聚焦表时带上范围约束：Agent 与普通对话（流式 / 回退）都走这一个 payload，
-    // 在这里套一层即可全覆盖
-    prompt: withTableScope(text),
+    prompt: text,
+    // 聚焦表走结构化字段（不再拼成 prompt 尾巴）：后端会把它和「提问里点到的表」求并集，
+    // 用户一次问两张表时两张都会被展开，而不是被一句「不要扩散」按回一张
+    table: ctxTable.value || undefined,
     connectionId: ctxConnId.value,
     database: ctxEffectiveDatabase.value,
     modelId: selectedModelId.value,
     history,
     // 知识库范围：null=全部库，[]=本次不注入，[...]=只在这些库里找。
     // 必须随请求发给后端，只在界面上控制等于没控制。
-    kbIds: kbIdsForQuery()
+    kbIds: kbIdsForQuery(),
+    // 落库与续聊：只有本面板带这两个字段（一次性接口不带，否则每点一次按钮
+    // 就多一条空会话）。已有会话就续写，没有就让后端建一个并回传 id。
+    persist: !chatThreadId.value,
+    threadId: chatThreadId.value || undefined
   }
   try {
     // 流式优先：逐段追加；不可用时回退普通请求。
@@ -1336,7 +1523,13 @@ const sendChat = async () => {
           acc += d
           if (flushTimer !== null) return
           flushTimer = setTimeout(flush, 60)
-        }, { signal: streamCtrl.signal, onUsage: (u) => { msg.usage = u } })
+        }, {
+          signal: streamCtrl.signal,
+          onUsage: (u) => { msg.usage = u },
+          // 后端在建好会话后回传 id：顺带刷一次左栏，新的这段立刻出现在「记录」里
+          onThread: (id) => { chatThreadId.value = id; if (isStudio.value) loadThreads() },
+          onNotice: (text) => { msg.notice = text }
+        })
         finalFlush()
         if (!acc) throw new Error('empty-stream')
         msg.streaming = false
@@ -1357,6 +1550,7 @@ const sendChat = async () => {
           try {
             const res = await aiChat(payload)
             if (res && res.success) {
+              if (res.threadId) { chatThreadId.value = res.threadId; if (isStudio.value) loadThreads() }
               const m = reactive({ role: 'assistant', content: res.content, sources: [], usage: res.usage || null })
               messages.value.push(m)
               srcPromise.then(s => { m.sources = s })
@@ -1374,6 +1568,311 @@ const sendChat = async () => {
   chatLoading.value = false
   stopWait()
   scrollBottom()
+}
+
+// ---------------------------------------------------------------- AI 同事
+// 会话 / 待办 / 记忆 / 变更单。四块共享一个前提：**执行权在人手里** ——
+// 后台只出单，界面上每一次「执行」都是一次明确点击（并记进审批流水）。
+
+const safeParse = (text) => { try { return JSON.parse(text) } catch { return null } }
+
+/**
+ * 记忆挂在哪条连接上 —— 只回名字。
+ *
+ * 库里记的是 `conn_18e0261b38fae5c0008d` 这种内部 id，直接摆给用户没有意义
+ * （既认不出是哪条库，也点不动）；连接已被删掉时返回空串，这一格就不渲染。
+ */
+const connNameOf = (row) => {
+  const id = String(row?.connectionId || row?.connection_id || '')
+  if (!id) return ''
+  const hit = (connList.value || []).find(c => String(c.id) === id)
+  return hit?.name || hit?.type || ''
+}
+
+/** 记事抽屉：待办（值班产物）+ 记忆（长期事实）一起拉 */
+const refreshMate = async () => {
+  mateLoading.value = true
+  try {
+    const [jobsRes, memRes] = await Promise.all([
+      aiJobList().catch(() => ({})),
+      aiMemoryList({ limit: 200 }).catch(() => ({}))
+    ])
+    todos.value = jobsRes?.jobs || []
+    memories.value = memRes?.memories || []
+  } finally {
+    mateLoading.value = false
+  }
+}
+
+const openMate = async (tabKey) => {
+  mateTab.value = tabKey || 'todo'
+  mateOpen.value = true
+  await refreshMate()
+}
+
+/** alert = 值班发现问题；waiting = 有变更单等人确认；done = 没事（不打扰） */
+const todoStatusLabel = (status) => (te('ai.jobStatus.' + status) ? t('ai.jobStatus.' + status) : status)
+const riskLabel = (risk) => (te('ai.risk.' + risk) ? t('ai.risk.' + risk) : risk)
+const alertCount = computed(() => todos.value.filter(job => job.status === 'alert').length)
+
+/**
+ * 继续跑一张中断的待办。
+ *
+ * 只对智能体任务有效：普通问答没有「步骤」，续跑没有意义。
+ * 跑完就地刷新这张卡片（结论 + 步骤数），并把新产出的变更单提出来给人点。
+ */
+const resumeJob = async (job) => {
+  if (jobBusy.value) return
+  jobBusy.value = job.id
+  try {
+    const res = await aiJobResume(job.id)
+    if (!res || !res.success) throw new Error(res?.message || t('ai.requestFailed'))
+    job.status = 'done'
+    job.result = res.content || job.result
+    job.steps = res.steps || job.steps
+    ElMessage.success(t('ai.jobResumed', { n: res.rounds || 0 }))
+    await refreshMate()
+    if ((res.changes || []).length) {
+      messages.value.push(reactive({
+        role: 'assistant',
+        content: res.content || '',
+        steps: res.steps || [],
+        changes: res.changes || [],
+        usage: null
+      }))
+      scrollBottom()
+    }
+  } catch (e) {
+    ElMessage.error(e?.message || t('ai.requestFailed'))
+  } finally {
+    jobBusy.value = ''
+  }
+}
+
+const dismissJob = async (job) => {
+  try {
+    const res = await aiJobDismiss(job.id)
+    if (!res?.success) throw new Error(res?.message || t('ai.requestFailed'))
+    job.status = 'dismissed'
+    ElMessage.success(t('ai.chgDone'))
+  } catch (e) {
+    ElMessage.error(e?.message || t('ai.requestFailed'))
+  }
+}
+
+const memDraft = ref('')
+const addMemory = async () => {
+  const fact = String(memDraft.value || '').trim()
+  if (!fact) return
+  try {
+    const res = await aiMemoryAdd({ fact, connectionId: ctxConnId.value || '', source: 'user' })
+    if (!res?.success) throw new Error(res?.message || t('ai.requestFailed'))
+    memDraft.value = ''
+    await refreshMate()
+  } catch (e) {
+    ElMessage.error(e?.message || t('ai.requestFailed'))
+  }
+}
+
+const removeMemory = async (row) => {
+  try {
+    await aiMemoryDelete(row.id)
+    memories.value = memories.value.filter(item => item.id !== row.id)
+  } catch (e) {
+    ElMessage.error(e?.message || t('ai.requestFailed'))
+  }
+}
+
+/**
+ * 变更单动作。执行完就地改卡片状态（不重开面板），并把操作人记进流水 ——
+ * 「谁批的」比「有人批了」有用得多。
+ */
+const runChange = async (change, act) => {
+  if (changeBusy.value) return
+  changeBusy.value = change.id
+  try {
+    localStorage.setItem('dbmind.ai.approver', approverName.value || 'user')
+    const call = {
+      approve: aiChangeApprove,
+      confirm: aiChangeConfirm,
+      apply: aiChangeApply,
+      undo: aiChangeUndo,
+      reject: aiChangeReject
+    }[act]
+    const res = await call(change.id, approverName.value || 'user')
+    if (!res || !res.success) throw new Error(res?.message || t('ai.requestFailed'))
+    change.status = res.status || change.status
+    if (act === 'apply') ElMessage.success(t('ai.chgApplied', { n: res.affectedRows ?? -1 }))
+    else ElMessage.success(t('ai.chgDone'))
+    refreshMate()
+  } catch (e) {
+    // 后端会说明「为什么现在不能执行」（比如高危还差一次确认），原样展示
+    ElMessage.error(e?.message || t('ai.requestFailed'))
+  } finally {
+    changeBusy.value = ''
+  }
+}
+
+/**
+ * 深挖模式：走 `/api/ai/agent`。
+ *
+ * 和普通对话的区别是「它自己决定查什么」，所以必须把工具轨迹与产出的变更单
+ * 一起摆出来 —— 只给结论不给依据，用户没法判断该不该点执行。
+ */
+const runAgentChat = async (text) => {
+  // 多轮上下文：与普通对话同一份口径（最近 8 条，成对出现）
+  // 少了这一份，「继续 / 那就按这个改」智能体会答「上次的上下文我这边没有」，
+  // 然后重头再体检一遍 —— 既费 token 又不接话。
+  const history = messages.value
+    .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
+    .slice(-8)
+    .map(m => ({ role: m.role, content: m.content }))
+  messages.value.push({ role: 'user', content: text })
+  aiInput.value = ''
+  chatLoading.value = true
+  startWait()
+  scrollBottom()
+  try {
+    const res = await aiAgentRun({
+      prompt: text,
+      connectionId: ctxConnId.value,
+      database: ctxEffectiveDatabase.value,
+      modelId: selectedModelId.value,
+      threadId: chatThreadId.value || undefined,
+      history,
+      maxRounds: 6
+    })
+    if (!res || !res.success) throw new Error(res?.message || t('ai.requestFailed'))
+    if (res.threadId) chatThreadId.value = res.threadId
+    messages.value.push(reactive({
+      role: 'assistant',
+      content: res.content || '',
+      steps: res.steps || [],
+      changes: res.changes || [],
+      usage: null
+    }))
+    if ((res.changes || []).length) refreshMate()
+  } catch (e) {
+    messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || t('ai.requestFailed')) })
+  } finally {
+    chatLoading.value = false
+    stopWait()
+    scrollBottom()
+  }
+}
+
+// ---------------------------------------------------------------- 记录（会话列表）
+/**
+ * 左栏展开 / 收起。默认展开，选择记在 localStorage ——
+ * 收起来对话区会宽 216px（看长 SQL 时有用），但下次打开还要保持上次的样子，
+ * 否则每次进来都得重新收一次。
+ */
+const HIST_OPEN_KEY = 'dbmind_ai_hist_open'
+const histOpen = ref(localStorage.getItem(HIST_OPEN_KEY) !== '0')
+const toggleHist = () => {
+  histOpen.value = !histOpen.value
+  try { localStorage.setItem(HIST_OPEN_KEY, histOpen.value ? '1' : '0') } catch { /* 隐私模式写不了，忽略 */ }
+}
+
+// 列表数据只服务中央工作区的左栏；侧栏窄面板拿不到这个位置，也就不发这次请求。
+const threads = ref([])
+const histLoading = ref(false)
+/** 列表里只显示「月-日」，完整时间在 title 上；空值不渲染 */
+const dayOf = (iso) => {
+  const s = String(iso || '')
+  return s.length >= 10 ? s.slice(5, 10) : ''
+}
+
+const loadThreads = async () => {
+  histLoading.value = true
+  try {
+    const res = await aiThreadList()
+    threads.value = Array.isArray(res?.threads) ? res.threads : []
+  } catch { /* 列表拉不到不影响正在聊的这一段 */ } finally {
+    histLoading.value = false
+  }
+}
+
+/** 把某条会话的消息装进对话区：打开历史与「恢复上次」共用这一份 */
+const applyThread = async (id) => {
+  const detail = await aiThreadGet(id)
+  const rows = detail?.messages || []
+  chatThreadId.value = id
+  messages.value = rows.map(row => ({
+    role: row.role,
+    // 老会话里存着「（只基于表 … 回答…）」这段元指令：不剥掉的话，重开记录就看见
+    // 一行用户从没敲过的话（还会被当成历史再次发给模型，强化「不要扩散」）
+    content: stripScopeHint(row.content),
+    usage: row.usage ? safeParse(row.usage) : null
+  }))
+  scrollBottom()
+}
+
+/** 打开面板时接上次的会话：不恢复的话「关掉再打开」永远从零开始，记忆也显得没生效 */
+const restoreThread = async () => {
+  if (messages.value.length) return
+  await loadThreads()
+  const latest = threads.value[0]
+  if (!latest) return
+  try { await applyThread(latest.id) } catch { /* 恢复失败就当新对话，不打扰用户 */ }
+}
+
+/** 点左栏某条记录：续聊这一段 */
+const openThread = async (th) => {
+  if (!th?.id || th.id === chatThreadId.value) return
+  try { await applyThread(th.id) } catch { ElMessage.error(t('ai.requestFailed')) }
+}
+
+/** 重命名一条记录：后端 POST /threads 是 upsert，带 id 就是改标题 */
+const renameThread = async (th) => {
+  if (!th?.id) return
+  let title = ''
+  try {
+    const res = await ElMessageBox.prompt(t('ai.historyRenameHint'), t('ai.historyRename'), {
+      inputValue: th.title || '',
+      inputPlaceholder: t('ai.historyUntitled'),
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel'),
+      inputValidator: (v) => (String(v ?? '').trim() ? true : t('ai.historyRenameEmpty'))
+    })
+    title = String(res?.value ?? '').trim()
+  } catch { return /* 取消 */ }
+  if (!title) return
+  try {
+    await aiThreadRename(th.id, title)
+    th.title = title
+    await loadThreads()
+  } catch { ElMessage.error(t('ai.requestFailed')) }
+}
+
+/** 删除一条记录：删的正是当前这段时，对话区一起清空 */
+const deleteThread = async (th) => {
+  if (!th?.id) return
+  const title = th.title || t('ai.historyUntitled')
+  try {
+    await ElMessageBox.confirm(t('ai.historyDeleteConfirm', { title }), t('ai.historyDelete'), {
+      type: 'warning',
+      confirmButtonText: t('common.confirm'),
+      cancelButtonText: t('common.cancel')
+    })
+  } catch { return }
+  try {
+    await aiThreadDelete(th.id)
+    if (chatThreadId.value === th.id) { chatThreadId.value = ''; messages.value = [] }
+    await loadThreads()
+  } catch { ElMessage.error(t('ai.requestFailed')) }
+}
+
+const newThread = () => {
+  chatThreadId.value = ''
+  messages.value = []
+  ElMessage.success(t('ai.newThreadDone'))
+}
+
+/** 左栏「+」：开新对话。旧的那段已经落库，记录里还在 */
+const onHistoryNew = async () => {
+  newThread()
+  await loadThreads()
 }
 
 const scrollBottom = () => nextTick(() => {
@@ -1396,7 +1895,7 @@ const probeSql = ref('')
 /** 弹窗里点「插入编辑器」：只写入不自动执行，跑不跑由用户决定 */
 const onProbeInsert = (text) => {
   probeVisible.value = false
-  emit('insert-sql', text, false)
+  emit('insert-sql', text)
 }
 
 /**
@@ -1430,7 +1929,8 @@ const onMdSqlAction = (e, md) => {
     return
   }
   if (act === 'copy') copySql(text)
-  else emit('insert-sql', text, true) // 第二个参数 true：插入编辑器后直接执行
+  // 只插入、不执行：这段 SQL 可能是改数据的语句，跑不跑由人在编辑器里确认
+  else emit('insert-sql', text)
 }
 
 
@@ -1503,7 +2003,15 @@ const runSkill = async () => {
   }
 }
 
-onMounted(() => { scrollBottom(); loadConnList(); warmCtx(); loadKbMeta() })
+onMounted(() => {
+  scrollBottom()
+  loadConnList()
+  warmCtx()
+  loadKbMeta()
+  // 接上次会话 + 拿一次待办（角标要在用户打开抽屉前就显示出来）
+  restoreThread()
+  refreshMate()
+})
 </script>
 
 <style scoped>
@@ -1540,6 +2048,74 @@ onMounted(() => { scrollBottom(); loadConnList(); warmCtx(); loadKbMeta() })
   background: var(--dc-bg-deep);
 }
 .ai-main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* 中央工作区：左栏「记录」+ 右栏对话，横向两列。
+   侧栏（420px 窄面板）仍是单列 —— 再切一栏就没地方聊了。 */
+.ai-panel.is-studio .ai-main { flex-direction: row; }
+.ai-panel.is-studio .ai-body { flex: 1 1 auto; min-width: 0; }
+
+/* 左栏「记录」：一条会话一行，悬浮出删除；顶部 + 新建 */
+.ai-hist {
+  flex: none; width: 216px; min-height: 0;
+  display: flex; flex-direction: column;
+  border-right: 1px solid var(--dc-border);
+  background: var(--dc-bg-soft);
+  overflow: hidden;
+  transition: width .18s ease;
+}
+.hist-top { display: flex; align-items: center; gap: 8px; padding: 12px 8px 8px 12px; }
+.hist-title {
+  flex: 1; min-width: 0; font-size: 12px; font-weight: 600;
+  color: var(--dc-text-dim); letter-spacing: .4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hist-new,
+.hist-toggle {
+  flex: none; width: 24px; height: 24px; display: inline-flex;
+  align-items: center; justify-content: center;
+  border: 1px solid var(--dc-border); border-radius: 6px;
+  background: transparent; color: var(--dc-text-mid); cursor: pointer;
+  transition: color .15s ease, border-color .15s ease, background .15s ease;
+}
+.hist-new:hover,
+.hist-toggle:hover { color: var(--dc-primary); border-color: var(--dc-primary); background: var(--dc-primary-wash); }
+/* 收起：只留一条窄轨（竖排标题 + 两个图标），对话区吃掉剩下的宽度 */
+.ai-hist.is-collapsed { width: 44px; }
+.hist-top.is-col { flex-direction: column; align-items: center; gap: 8px; padding: 12px 0 8px; }
+.hist-vlabel {
+  writing-mode: vertical-rl; text-orientation: mixed;
+  font-size: 11px; letter-spacing: 2px; color: var(--dc-text-weak);
+  margin-top: 4px; user-select: none;
+}
+/* position:relative —— v-loading 的遮罩是绝对定位的，父级没定位会盖住整个面板 */
+.hist-list { position: relative; flex: 1; min-height: 0; overflow-y: auto; padding: 0 8px 10px; }
+.hist-item {
+  position: relative; display: flex; align-items: center; gap: 6px;
+  width: 100%; margin-bottom: 2px; padding: 7px 8px;
+  border: none; border-radius: 7px; background: transparent;
+  color: var(--dc-text-mid); font-size: 12.5px; font-family: inherit;
+  text-align: left; cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.hist-item:hover { background: var(--dc-bg-card); color: var(--dc-text); }
+.hist-item.active { background: var(--dc-primary-wash); color: var(--dc-primary); font-weight: 500; }
+.hist-item-tx { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hist-item-day { flex: none; font-size: 11px; color: var(--dc-text-weak); font-variant-numeric: tabular-nums; }
+/* 悬浮时日期让位给删除：同一行位置有限，平时看时间、要删时才出按钮 */
+.hist-item:hover .hist-item-day { display: none; }
+/* 重命名 / 删除：平时都不显示，悬浮这一行才一起出现 ——
+   列表默认只该有「标题 + 日期」，两个图标常驻会把标题挤成半截。 */
+.hist-ren,
+.hist-del {
+  flex: none; display: none; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 5px;
+}
+.hist-ren { color: var(--dc-text-weak); }
+.hist-del { color: var(--dc-danger); }
+.hist-item:hover .hist-ren,
+.hist-item:hover .hist-del { display: inline-flex; }
+.hist-ren:hover { color: var(--dc-primary); background: var(--dc-primary-wash); }
+.hist-del:hover { background: rgba(220, 60, 60, .14); }
+.hist-empty { padding: 22px 8px; text-align: center; font-size: 11.5px; line-height: 1.7; color: var(--dc-text-weak); }
 
 /* 当前 Skill 按钮：工具条内统一样式（描边框 + 无底，悬浮/展开时主色高亮） */
 .skill-btn {
@@ -1757,9 +2333,7 @@ onMounted(() => { scrollBottom(); loadConnList(); warmCtx(); loadKbMeta() })
 }
 .msg.user .msg-avatar { background: linear-gradient(135deg, var(--dc-primary), var(--dc-purple)); color: var(--dc-on-primary); box-shadow: 0 2px 8px var(--dc-primary-glow); }
 .msg.assistant .msg-avatar { background: var(--ai-bubble-bg); color: var(--dc-purple); border: 1px solid var(--dc-border); }
-/* 用量脚注：贴在回答末尾，字号小一档、颜色淡一档 —— 它是"备注"，不该抢正文的视线 */
-.msg-usage { margin-top: 8px; padding-top: 6px; border-top: 1px dashed var(--dc-border); font-size: 12px; color: var(--dc-text); opacity: .6; }
-.msg-usage-sub { opacity: .85; }
+/* 用量脚注的样式在 common/AiUsageNote.vue（与 SQL 查询的 AI 弹窗共用一套） */
 .msg-bubble {
   position: relative; min-width: 0;
   max-width: min(820px, calc(100% - 40px));
@@ -2070,4 +2644,151 @@ onMounted(() => { scrollBottom(); loadConnList(); warmCtx(); loadKbMeta() })
 /* 知识库下拉里每个库后面的块数 */
 .ctx-sub-count { margin-left: auto; font-size: 10.5px; color: var(--dc-text-dim); }
 
+/* ---------------- AI 同事：工具条入口 / 变更单卡片 / 待办与记忆抽屉 ---------------- */
+
+/* 「深挖 / 同事」两个入口：与「上下文」按钮同一副骨架，开启态用主色描边 */
+.mate-btn { gap: 4px; }
+.mate-btn.open {
+  border-color: var(--dc-primary);
+  color: var(--dc-primary);
+  background: var(--dc-primary-wash);
+}
+.mate-badge {
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--dc-danger);
+  color: #fff;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+/* 变更单卡片：风险色条 + 等宽 SQL + 撤销语句，一眼看清「点了会发生什么」 */
+.msg-changes { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.chg-card {
+  border: 1px solid var(--dc-border);
+  border-left: 3px solid var(--dc-primary);
+  border-radius: 6px;
+  background: var(--dc-bg-card);
+  padding: 8px 10px;
+}
+.chg-card.is-medium { border-left-color: #d19a00; }
+.chg-card.is-high { border-left-color: var(--dc-danger); }
+.chg-head { display: flex; align-items: center; gap: 8px; }
+.chg-risk {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 18px;
+  background: var(--dc-primary-soft);
+  color: var(--dc-primary);
+}
+.chg-card.is-medium .chg-risk { background: rgba(209, 154, 0, .14); color: #a87900; }
+.chg-card.is-high .chg-risk { background: rgba(220, 60, 60, .14); color: var(--dc-danger); }
+.chg-title { flex: 1; min-width: 0; font-size: 12px; color: var(--dc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chg-state { flex: none; font-size: 11px; color: var(--dc-text-weak); }
+.chg-sql {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--dc-bg-deep);
+  color: var(--dc-text-mid);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.chg-undo { margin-top: 6px; font-size: 11px; color: var(--dc-text-dim); word-break: break-all; }
+.chg-acts { margin-top: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* 服务端提示条（预算降级等）：比正文弱一档，但必须看得见 */
+.msg-notice {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(209, 154, 0, .12);
+  color: #a87900;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 抽屉内部（记事：待办 + 记忆）
+   两栏统一一套卡片观感：8px 圆角、hover 提亮、右侧动作只在悬浮时变清晰 ——
+   原来只有 1px 描边且卡片间距 8px，一堆待办堆起来边界发糊。 */
+.mate-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.mate-body { height: 100%; }
+.mate-empty { padding: 24px 4px; text-align: center; font-size: 12px; color: var(--dc-text-weak); }
+.todo-card {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--dc-border-soft);
+  border-left: 3px solid var(--dc-border);
+  border-radius: 8px;
+  background: var(--dc-bg-card);
+  transition: background .15s ease, border-color .15s ease;
+}
+.todo-card:hover { background: var(--dc-bg-soft); }
+.todo-card.is-alert { border-left-color: var(--dc-danger); }
+.todo-card.is-waiting { border-left-color: #d19a00; }
+.todo-card.is-done { border-left-color: var(--dc-success, #67c23a); }
+.todo-card.is-dismissed { opacity: .55; }
+.todo-head { display: flex; align-items: flex-start; gap: 8px; }
+/* 状态做成胶囊；颜色跟左边那条色条同一套语义 */
+.todo-status {
+  flex: none; margin-top: 1px; font-size: 11px; line-height: 18px;
+  padding: 0 7px; border-radius: 999px;
+  background: var(--dc-bg-soft); color: var(--dc-text-mid);
+}
+.todo-card.is-alert .todo-status { background: rgba(220, 60, 60, .14); color: var(--dc-danger); }
+.todo-card.is-waiting .todo-status { background: rgba(209, 154, 0, .16); color: #d19a00; }
+/* 标题最多两行：待办标题常常是一整句问题，单行省略后看不出问的是什么 */
+.todo-title {
+  flex: 1; min-width: 0; font-size: 12.5px; line-height: 1.6; color: var(--dc-text);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.todo-result {
+  margin-top: 6px;
+  max-height: 132px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--dc-text-mid);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.todo-acts { margin-top: 6px; display: flex; justify-content: flex-end; gap: 4px; }
+.todo-acts :deep(.el-button) { margin-left: 0; }
+.mem-add { display: flex; gap: 8px; margin-bottom: 12px; }
+.mem-add :deep(.el-input) { flex: 1; min-width: 0; }
+.mem-card {
+  margin-bottom: 10px; padding: 12px 14px 10px;
+  border: 1px solid var(--dc-border-soft); border-radius: 10px; background: var(--dc-bg-card);
+  transition: background .15s ease, border-color .15s ease;
+}
+.mem-card:hover { border-color: var(--dc-border); background: var(--dc-bg-soft); }
+.mem-fact { font-size: 13px; color: var(--dc-text); line-height: 1.7; word-break: break-word; }
+/* 元信息做成卡片的「页脚」：一条细线分开，连接名在左、日期在右、删除贴最右。
+   原来三者挤在一行 11px 灰字里，扫起来像一句跑马灯。 */
+.mem-meta {
+  margin-top: 10px; padding-top: 8px;
+  border-top: 1px solid var(--dc-border-soft);
+  display: flex; align-items: center; gap: 10px;
+  font-size: 11px; color: var(--dc-text-weak); min-height: 24px;
+}
+.mem-conn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-date { flex: none; font-variant-numeric: tabular-nums; letter-spacing: .2px; }
+/* 删除：红色垃圾桶。平时半透明，悬浮卡片才全亮 —— 记忆是「长期保留」的东西，
+   不该有个随时抢注意力的按钮；但危险语义必须一眼看出来，所以用红不用灰 */
+.mem-del {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; margin-left: 2px;
+  border: none; border-radius: 6px; background: transparent;
+  color: var(--dc-danger); cursor: pointer; opacity: .55;
+  transition: opacity .15s ease, background .15s ease;
+}
+.mem-card:hover .mem-del { opacity: 1; }
+.mem-del:hover { background: rgba(220, 60, 60, .14); }
+.mem-conn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

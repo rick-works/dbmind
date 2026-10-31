@@ -319,7 +319,7 @@ where
 /// ② 索引/过程/触发器等分类整体变空，用户读成「这个库没有索引」—— 又一个「看着像空、
 /// 其实断了」。宿主已经在连接失效时摘掉坏会话（见 `dbmind-agent-jdbc` 的
 /// `metadataFailure`），所以这里重试的这一次会**真的重连**。
-async fn run_meta_sql(
+pub(crate) async fn run_meta_sql(
     state: &AppState,
     conn: &str,
     database: &str,
@@ -498,7 +498,10 @@ pub(crate) fn text_ci(row: &Map<String, Value>, key: &str) -> String {
 }
 
 /// 按 `Meta` 三档取元数据列表（`database` 非空时切到目标库去查）。
-async fn meta_list(
+///
+/// `pub(crate)`：AI 巡检要一次拿到全库索引（见 `ai/tools.rs` 的 patrol_scan），
+/// 复用它才能保证「界面上看到的索引」和「巡检时的判断依据」是同一份数据。
+pub(crate) async fn meta_list(
     state: &AppState,
     id: &str,
     database: &str,
@@ -1562,6 +1565,41 @@ pub async fn table_comments_map(
     };
     for row in rows_of(&result) {
         let name = text_ci(&row, "column_name");
+        let comment = text_ci(&row, "comment");
+        if !name.is_empty() && !comment.is_empty() {
+            out.insert(name.to_ascii_lowercase(), comment);
+        }
+    }
+    out
+}
+
+/// **全库**表注释：`表名(小写) → 注释`，一次查询拿完。
+///
+/// 用途：AI 回答「这个库是干嘛的」这类**库级问题**时，表注释是唯一既便宜又有效的依据 ——
+/// 395 张表的列结构要几十万 token，而「表名 + 注释」几千 token 就能让模型说清业务。
+/// 取不到就返回空表（上层退化成只用表名），不编造、不报错。
+pub async fn table_comment_map(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let Ok(record) = require_record(state, conn).await else {
+        return out;
+    };
+    let dialect = Dialect::new(record.kind());
+    // 库名可能带模式（`db.schema`）：方言的表选项 SQL 要的是**模式名**
+    // （PG 是 `n.nspname`、SQL Server 是 schema），给整串只会查不到。
+    let (db_only, schema) = split_db_schema(database, &dialect);
+    let scope = schema.as_deref().unwrap_or(db_only.as_str());
+    let Meta::Sql(sql) = dialect.table_options(scope) else {
+        return out;
+    };
+    let Ok(result) = run_sql_in(state, conn, database, sql, META_MAX_ROWS).await else {
+        return out;
+    };
+    for row in rows_of(&result) {
+        let name = text_ci(&row, "table_name");
         let comment = text_ci(&row, "comment");
         if !name.is_empty() && !comment.is_empty() {
             out.insert(name.to_ascii_lowercase(), comment);

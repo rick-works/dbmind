@@ -3658,6 +3658,27 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         }
     }
 
+    /// 取服务器版本的一行 SQL（列别名 `v`）。该方言没有统一写法就返回 None。
+    ///
+    /// 为什么 AI 提示词里要有版本：**同一句 SQL 换个版本就是语法错**。
+    /// MySQL 5.7 没有窗口函数 / CTE（`PARTITION BY`、`WITH` 直接 1064），
+    /// SQL Server 2012 之前没有 `OFFSET FETCH`，MySQL 8 才支持 `CHECK` 约束。
+    /// 模型不知道版本时只会按"最新版"写，在 5.7 上必然报错 —— 这个坑真机踩过。
+    pub fn version_sql(&self) -> Option<&'static str> {
+        match self.key() {
+            "mysql" | "mariadb" | "doris" | "clickhouse" | "postgresql" | "kingbase" => {
+                Some("select version() as v")
+            }
+            "sqlserver" => Some("select @@version as v"),
+            "oracle" | "dm" => Some("select banner as v from v$version where rownum = 1"),
+            "db2" => Some("select service_level as v from sysibm.sysversions fetch first 1 rows only"),
+            "sqlite" => Some("select sqlite_version() as v"),
+            "h2" => Some("select h2version() as v"),
+            "derby" => Some("values syscs_util.syscs_get_database_property('derby.version')"),
+            _ => None,
+        }
+    }
+
     /// SQL Server 的 `OFFSET` 必须跟 `ORDER BY` 才能用。
     pub fn needs_order_by_for_paging(&self) -> bool {
         self.key() == "sqlserver"

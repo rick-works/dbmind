@@ -483,7 +483,7 @@
               </span>
             </template>
             <TableDataView v-if="tab.type === 'table'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :table="tab.table" :readOnly="tab.readOnly" @update-table-rows="onUpdateTableRows" @open-query="onOpenQueryFromTable" @insert-sql="insertSqlToActive" />
-            <SqlQueryView v-else-if="tab.type === 'sql'" :ref="el => setSqlRef(tab.id, el)" :conn="conn" :database="currentDb" :script-name="tab.scriptName" :tab-conn-id="tab.connId" :tab-conn-name="tab.connName" :tab-database="tab.database" :initial-sql="tab.initialSql" :auto-run="tab.autoRun" :sql-loading="!!tab.sqlLoading" @save="onScriptSave(tab.id, $event)" @dirty-change="onScriptDirty(tab.id, $event)" @sql-change="onScriptSqlChange(tab.id, $event)" @conn-change="onEditorConnChange(tab.id, $event)" @conn-rebind="onScriptConnRebind(tab.id, $event)" @db-change="onEditorDbChange" />
+            <SqlQueryView v-else-if="tab.type === 'sql'" :ref="el => setSqlRef(tab.id, el)" :conn="conn" :database="currentDb" :script-name="tab.scriptName" :tab-conn-id="tab.connId" :tab-conn-name="tab.connName" :tab-database="tab.database" :initial-sql="tab.initialSql" :sql-loading="!!tab.sqlLoading" @save="onScriptSave(tab.id, $event)" @dirty-change="onScriptDirty(tab.id, $event)" @sql-change="onScriptSqlChange(tab.id, $event)" @conn-change="onEditorConnChange(tab.id, $event)" @conn-rebind="onScriptConnRebind(tab.id, $event)" @db-change="onEditorDbChange" />
             <ErDiagramView v-else-if="tab.type === 'er'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :conn-id="tab.connId" />
 
             <TableDetailView v-else-if="tab.type === 'detail'" :conn="connFor(tab.connId)" :database="tab.database || currentDb" :table="tab.table" @deleted="onDetailDeleted" />
@@ -609,6 +609,8 @@
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" @click="ctxRenameTable"><el-icon><Edit /></el-icon><span>{{ $t('common.rename') }}</span></li>
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDdl')" @click="ctxShowDdl"><el-icon><DocumentCopy /></el-icon><span>{{ $t('menu.viewDdl') }}</span></li>
         <li @click="ctxShowIndexes"><el-icon><Coin /></el-icon><span>{{ $t('menu.viewIndexes') }}</span></li>
+        <!-- 索引建议：看这张表缺什么索引，并能「试建 → 撤销」一条龙（规则式，不调模型） -->
+        <li @click="ctxShowIndexAdvice"><el-icon><MagicStick /></el-icon><span>{{ $t('menu.indexAdvice') }}</span></li>
         <li class="divider" />
         <li @click="ctxCopyName"><el-icon><CopyDocument /></el-icon><span>{{ $t('menu.copyTableName') }}</span></li>
         <li class="divider" />
@@ -748,6 +750,10 @@
                    @click="copyCtxIndexes">{{ $t('common.copy') }}</el-button>
       </template>
     </el-dialog>
+
+    <!-- 索引建议（逻辑在 IndexAdvisorDialog.vue）：规则式分析 + 试建/撤销一条龙 -->
+    <IndexAdvisorDialog v-model="ctxIndexAdviceVisible" :conn-id="ctxIndexAdviceConn"
+                        :database="ctxIndexAdviceDb" :table="ctxIndexAdviceTable" />
 
     <!-- 导入数据弹窗（逻辑在 ImportDataDialog.vue，打开时快照目标表，成功后回调刷新树） -->
     <ImportDataDialog v-model="ctxImportVisible" :conn="conn" :target="ctxImportTarget" @done="onImportDone" />
@@ -1300,6 +1306,8 @@ const DbSearchDialog = defineAsyncComponent(() => import('./DbSearchDialog.vue')
 const RunSqlFileDialog = defineAsyncComponent(() => import('./RunSqlFileDialog.vue'))
 const ImportDataDialog = defineAsyncComponent(() => import('./ImportDataDialog.vue'))
 const DataGenDialog = defineAsyncComponent(() => import('./DataGenDialog.vue'))
+// 索引建议：规则式分析 + 试建/撤销（懒加载，不进首屏）
+const IndexAdvisorDialog = defineAsyncComponent(() => import('./IndexAdvisorDialog.vue'))
 const NewDbDialog = defineAsyncComponent(() => import('./NewDbDialog.vue'))
 const FolderDialogs = defineAsyncComponent(() => import('./FolderDialogs.vue'))
 const RenameTableDialog = defineAsyncComponent(() => import('./RenameTableDialog.vue'))
@@ -6094,8 +6102,6 @@ const newQueryTab = (opts = {}) => {
     connId: opts.connId || currentConnId.value,
     database: opts.database || currentDb.value,
     initialSql: opts.initialSql || '',
-    // 新建脚本时若要求自动执行（AI 结果里点「插入并执行」），由 SqlQueryView 挂载后自己跑
-    autoRun: !!opts.autoRun,
     // 「生成 SQL」的异步加载态：true = 列还没回来，编辑器置灰 + 显示「SQL 正在加载中…」，
     // 列到了由发起方回填 initialSql 并把本位翻回 false
     sqlLoading: !!opts.sqlLoading
@@ -6623,14 +6629,17 @@ const onAiPanelCommand = (key) => {
     else ElMessage.warning(t('mv.pickConnFirst'))
   }
 }
-const insertSqlToActive = (sql, autoRun = false) => {
+/* 插入编辑器：**只写入、不执行**。
+   以前 AI 结果里点「插入并执行」会直接跑 —— 那段 SQL 可能是 UPDATE/DELETE，
+   一句"帮我优化"就可能连跑一遍改数据；现在一律落到编辑器，执行与否由人点。 */
+const insertSqlToActive = (sql) => {
   const active = tabs.value.find(t => t.id === activeTab.value)
   if (active && active.type === 'sql') {
-    // 已有 SQL 标签页：通过事件广播；autoRun 时让编辑器写入后直接执行
-    window.dispatchEvent(new CustomEvent(autoRun ? 'dc-run-sql' : 'dc-insert-sql', { detail: sql }))
+    // 已有 SQL 标签页：通过事件广播，由编辑器插到光标处
+    window.dispatchEvent(new CustomEvent('dc-insert-sql', { detail: sql }))
   } else {
     // 新建标签页：通过 initialSql prop 传递，避免 Monaco 未初始化导致注入失败
-    newQueryTab({ initialSql: sql, autoRun })
+    newQueryTab({ initialSql: sql })
   }
 }
 
@@ -6920,6 +6929,22 @@ const ctxIndexLoading = ref(false)
 const ctxIndexTable = ref('')
 const ctxIndexCols = ref([])
 const ctxIndexRows = ref([])
+
+// ====== 右键「索引建议」（规则式分析 + 试建/撤销闭环）======
+const ctxIndexAdviceVisible = ref(false)
+const ctxIndexAdviceTable = ref('')
+const ctxIndexAdviceConn = ref('')
+const ctxIndexAdviceDb = ref('')
+
+const ctxShowIndexAdvice = () => {
+  const d = ctxMenu.value.data
+  if (!d) return
+  ctxIndexAdviceConn.value = ctxConnId(d)
+  ctxIndexAdviceDb.value = d.db || currentDb.value || ''
+  ctxIndexAdviceTable.value = String(d.table || d.label || '')
+  closeCtxMenu()
+  ctxIndexAdviceVisible.value = true
+}
 
 const ctxShowIndexes = async () => {
   const d = ctxMenu.value.data
