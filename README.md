@@ -64,6 +64,54 @@ Most tools bolt on a chat window; DBmind bakes AI into **every step of database 
 - **MCP server** — built-in `dbmind-mcp` (stdio): exposes queries, metadata and schema browsing as **tools** to any MCP-capable AI client (Claude Desktop, etc.)
 - **Bring your own model** — endpoint and key are yours to configure; conversations only pass through services you control
 
+## What the AI actually sends
+
+Worry about data usually means "I don't know what leaves the machine". Instead of a privacy slogan, here is one request, laid out. Judge for yourself whether an external model is acceptable.
+
+**There is no relay server.** Requests go from your machine straight to the endpoint you configured under Settings → AI (OpenAI-compatible). AI is off by default: with no model configured, not a single byte is sent.
+
+**What goes out (the complete content of one question)**
+
+| Content | Exactly what | When |
+|---|---|---|
+| Your question | The prompt, the current SQL, the error text, plus the last 6 messages (6000 characters combined, long ones trimmed in the middle) | Every request |
+| Table structure | Table name + column name / type / nullable / default / primary key (**column comments are not sent**) | Tables named or detected in the question, at most 40; otherwise the first 8 |
+| One sample row | **1 real row** per expanded table, first 20 columns, every value cut to 24 characters | Together with the structure |
+| Table catalogue | Table names + table comments (no column structure) | Library-level questions like "what is this database for" |
+| Team terms / examples | The glossary and accepted SQL examples you entered under AI Knowledge | If configured |
+| Long-term memory | Conventions you stated ("amounts are in cents") | If that connection / database has memories |
+| Knowledge base | Matching document snippets, ≤900 characters each, labelled with the source | If a knowledge base is configured and hits |
+| Built-in prompts | Persona and dialect rules (plain text, none of your data) | Every request |
+
+**What never goes out**
+
+- **Whole tables or result sets** — only that one sample row. The single exception: when you switch on Autonomous check, the read-only queries it runs return at most 100 rows, truncated to 3200 characters, into the conversation. It cannot "look at your data" for free; this is stated plainly rather than buried.
+- **Connection passwords / SSH secrets / API keys** — stored only in your local `~/.dbmind/dbmind.db`; the API returns "saved", never the value.
+- **Telemetry** — no usage statistics, no crash reporting, no calls to any DBmind server (the update check reads a version number and has nothing to do with AI).
+- **Other connections or databases** — context comes only from the connection and database used for this question.
+
+**If even the sample row is too much, tighten it**
+
+- **Local models only**: once enabled, any endpoint that is not internal/local is refused outright, naming the blocked host. Allowed: `localhost` / loopback, IPv4 private ranges (10 / 172.16–31 / 192.168 / 169.254), IPv6 ULA (fc00::/7), the `.local/.internal/.lan/.corp/.intra` suffixes, and whatever you add to `DBMIND_AI_LOCAL_HOSTS`. Both chat and knowledge-base embedding obey this — a self-hosted Ollama / vLLM works, a cloud model simply cannot be reached.
+- **Narrow the tables**: name tables in the question and only those are included; library-level questions get names + comments with no rows at all.
+- **Look before you send**: `POST /api/ai/preview` calls no model and reports the token cost and per-part breakdown — it is what "where did this request go" in the UI uses.
+- **Not configured, not used**: no knowledge base means no snippets, no memories means no memory block, no Autonomous check means no query is ever executed.
+
+**A real request, redacted**
+
+```
+【目标数据库】类型 MYSQL ｜ 版本 5.7.42 ｜ 标识符引用风格 反引号 ｜ 分页写法 `limit {offset}, {limit}`
+【表清单】共 42 张表，仅展开用到的那几张（需要其它表的字段请先说明表名）
+【表 orders】
+  id BIGINT not null 主键
+  status VARCHAR(16) not null default 'NEW'
+  amount BIGINT not null default 0
+  created_at DATETIME not null
+  样例：id=10231, status=PAID, amount=19900, created_at=2026-10-30 12:00:00
+```
+
+That sample row is **real data**, truncated to 24 characters: it is how the model knows the date format and that `status` holds `PAID` rather than `1`. If the first 20 columns include phone numbers or ID numbers, they go with it — in that case keep the endpoint inside your network (Local models only) and nothing leaves at all.
+
 ## Architecture
 
 ```

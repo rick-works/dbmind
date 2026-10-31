@@ -573,7 +573,7 @@
         <div class="icon">🤖</div>
         <h3>AI 全程加持</h3>
         <p>选段解释 / 优化 / 修错 / 诊断 / 自由对话，AI 给出的 SQL 先「看执行计划、试跑一次」再落地；「自主排查」还会自己巡检、给索引建议，把要改的东西做成变更单等你批准 —— 吃进去的数据不出你的网络。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-ai-data">AI 到底发了什么给模型 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🛡️</div>
@@ -702,6 +702,7 @@
       <div class="safe-item reveal"><span class="si">✋</span><div><h4>写操作二次确认</h4><p>PROD 连接上的 INSERT / UPDATE / DROP 先预览影响，确认才执行。</p></div></div>
       <div class="safe-item reveal"><span class="si">⏱️</span><div><h4>超时与行数预算</h4><p>单语句超时、返回行数上限，误点 SELECT * 也不会拖死客户端。</p></div></div>
       <div class="safe-item reveal"><span class="si">📜</span><div><h4>执行审计</h4><p>执行历史带耗时与状态，事务动作全留痕，事后可追溯。</p></div></div>
+      <div class="safe-item reveal"><span class="si">🧾</span><div><h4>AI 发了什么，写在明面上</h4><p>只发你的问题、用到的那几张表的表结构，以及每张表 <b>1 行</b>样例值（截到 24 字符）；整表数据、结果集、连接密码与 API Key 都不发。没有中转服务器，请求从本机直连你配的模型端点。<a href="#d-ai-data" style="color: var(--primary)">逐项看清单 →</a></p></div></div>
     </div>
   </div>
 </section>
@@ -2829,6 +2830,7 @@
           <div class="gt">核心工作流</div>
           <a href="#d-editor">SQL 编辑器</a>
           <a href="#d-ai">AI 助手</a>
+          <a href="#d-ai-data">AI 会把什么发给模型</a>
           <a href="#d-grid">结果表格与数据编辑</a>
           <a href="#d-tx">事务模式</a>
           <a href="#d-browser">对象浏览器</a>
@@ -2925,6 +2927,29 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
           <li><b>用量与预算</b>：每条回答脚注消耗的 token；大库上下文按预算裁剪，库级问题给全库清单（表名 + 注释）而不是整库列结构 —— 实测同一条修复从 2345 降到 956 prompt tokens</li>
         </ul>
         <div class="tip"><b>安全边界</b>：AI 给出的 SQL 会先「看执行计划、试跑一次」再由你决定是否执行；写操作默认阻断，结构 / 数据变更要批准变更单（高危二次确认），生产库连接还要再过一道写确认。</div>
+
+        <h2 id="d-ai-data">AI 会把什么发给模型</h2>
+        <p>担心数据，多半是「不知道到底发了什么」。这里不写「我们重视隐私」，直接把一次请求摊开 —— 你自己判断能不能接外部模型。<b>DBmind 没有任何中转服务器</b>：请求从本机直连你在设置里填的接口地址（OpenAI 兼容协议），AI 默认关闭，不配模型时一个字节都不会发。</p>
+        <ul>
+          <li><b>会发 · 你的问题</b>：提问原文、当前 SQL、报错文本，加最近 6 条对话（合计上限 6000 字符，超长的一条掐中间）</li>
+          <li><b>会发 · 表结构</b>：表名 + 列名 / 类型 / 是否可空 / 默认值 / 主键（<b>不含列注释</b>）；点名或命中的表最多 40 张，没点名默认前 8 张</li>
+          <li><b>会发 · 一行样例</b>：每张展开的表 <b>1 行真实数据</b>，最多前 20 列，每个值截到 24 字符 —— 模型靠它判断日期格式与状态枚举，才不会把 <code>PAID</code> 当成 <code>1</code></li>
+          <li><b>会发 · 全库清单</b>：只在你问「这个库是干嘛的」这类库级问题时，给表名 + 表注释，一行数据都不带</li>
+          <li><b>会发 · 你自己配过的</b>：团队术语与采纳示例、长期记忆（你说过的口径）、知识库命中片段（每段 ≤900 字符并标注来源）；没配就是空的</li>
+          <li><b>不发 · 整表数据与结果集</b>：只有上面那 1 行样例。唯一例外是「自主排查」——它执行的只读 SQL 最多返回 100 行、裁到 3200 字符进入对话，它要「自己看数据」就得付这个代价，这一点写在明面上</li>
+          <li><b>不发 · 密码与密钥</b>：连接密码、SSH 口令、API Key 只存本机 <code>~/.dbmind/dbmind.db</code>，接口只回「已保存」、不回显</li>
+          <li><b>不发 · 遥测</b>：没有使用统计、没有崩溃上报、不请求 DBmind 的任何服务器（「检查更新」只读版本号，与 AI 无关）</li>
+        </ul>
+        <div class="tip"><b>连样例也不想发？那就锁死端点</b>：设置里打开「仅本地模型」，只要接口地址不是内网 / 本机就直接拒绝，并报出被拦的 host。放行回环、IPv4 私有段（10 / 172.16–31 / 192.168 / 169.254）、IPv6 ULA、<code>.local / .internal / .lan / .corp / .intra</code> 后缀，以及 <code>DBMIND_AI_LOCAL_HOSTS</code> 里你自己加的域名 —— 内网起的 Ollama / vLLM 照样能用，云端模型彻底出不去。对话与知识库向量化<b>都</b>受这条约束，且是硬拦，不是只在文档里生效。</div>
+        <pre><code>【目标数据库】类型 MYSQL ｜ 版本 5.7.42 ｜ 标识符引用风格 反引号 ｜ 分页写法 `limit {offset}, {limit}`
+【表清单】共 42 张表，仅展开用到的那几张（需要其它表的字段请先说明表名）
+【表 orders】
+  id BIGINT not null 主键
+  status VARCHAR(16) not null default 'NEW'
+  amount BIGINT not null default 0
+  created_at DATETIME not null
+  样例：id=10231, status=PAID, amount=19900, created_at=2026-10-30 12:00:00</code></pre>
+        <p>一个真实请求大概就这么长：模型能看出类型、枚举与日期格式，看不出你还有哪些列、哪些行。若前 20 列里就有手机号、身份证号，它们会随之发出 —— 介意就把端点锁在内网。<b>开工前想先看规模</b>：界面上的「这次请求花在哪」用的正是一次模型都不调的预览接口，会告诉你这次要发多少 token、各段各占多少。</p>
 
         <h2 id="d-grid">结果表格与数据编辑</h2>
         <ul>
@@ -3070,6 +3095,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
         <a href="#d-sql">执行第一条 SQL</a>
         <a href="#d-editor">SQL 编辑器</a>
         <a href="#d-ai">AI 助手</a>
+        <a href="#d-ai-data">AI 会把什么发给模型</a>
         <a href="#d-grid">结果表格与数据编辑</a>
         <a href="#d-tx">事务模式</a>
         <a href="#d-browser">对象浏览器</a>
