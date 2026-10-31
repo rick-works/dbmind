@@ -516,7 +516,7 @@
     <p class="sub">
       <b>DBmind = Database + Mind</b>：给数据库装上「大脑」——
       MySQL、PostgreSQL、Oracle、ClickHouse、Redis…… 收进同一块屏幕，
-      AI 帮你解释、优化、修好每一条 SQL；事务级数据编辑、千万级结果集秒开。
+      AI 帮你解释、优化、修好每一条 SQL，还能自己巡检、把要改的做成变更单等你点头；事务级数据编辑、千万级结果集秒开。
     </p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener">免费下载</a>
@@ -572,7 +572,7 @@
       <div class="feature reveal">
         <div class="icon">🤖</div>
         <h3>AI 全程加持</h3>
-        <p>选段解释 / 优化 / 修错 / 诊断 / 自由对话，AI 给出的 SQL 先「看执行计划、试跑一次」再落地，吃进去的数据不出你的网络。</p>
+        <p>选段解释 / 优化 / 修错 / 诊断 / 自由对话，AI 给出的 SQL 先「看执行计划、试跑一次」再落地；「自主排查」还会自己巡检、给索引建议，把要改的东西做成变更单等你批准 —— 吃进去的数据不出你的网络。</p>
         <a class="doc-link" href="#docs">查看文档 →</a>
       </div>
       <div class="feature reveal">
@@ -746,6 +746,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.8.2（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.8.2</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-10-31</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>AI 支持多轮对话</b>：「自主排查」以前不带上下文，说「继续」只会回「上次的对话我这边没有」并重头体检一遍 —— 现在它会接着上一轮的结论往下做；一次问两张表也不再被范围提示按回一张（聚焦表和提问里点到的表取并集，问到几张展开几张）</li>
+            <li><b>AI 更省 token</b>：压缩内置提示词与工具说明、大库不再把 150 个表名塞进上下文、历史对话按条数与字数双预算裁剪 —— 实测同一问题修复 promptTokens 2345→956、对话 2404→1030；新增「这次请求花在哪」的零成本账本接口与日志</li>
+            <li><b>「试跑结果」弹窗终于能显示数据：原来字段形状对不上，查询返回几百行也恒显示「执行成功，但没有返回数据 · 0 行 · 0 ms」；会话没选定默认库时会明确说明，不再伪装成「没数据」</b></li>
+            <li><b>数据目录自动瘦身</b>：开机后台回收元数据库空洞、清理过期快照与遗留临时文件（实测 805 MB → 54 MB，整个数据目录 1.5 GB → 223 MB），清空日志/缓存后当场回收</li>
+            <li><b>问「这个库是干嘛的」不再只回一句「共 395 张表」：库级问题、以及大库里没认出具体表名的提问，改成把全库清单（表名 + 表注释）当最小上下文给模型（395 张表约 2.7k tokens，整库的列结构要几十万），能直接讲清业务；同时明确要求它「要写 SQL 先问表名」，不再照着陌生表名编字段。已经递了 SQL 的修复/解释请求仍保持精简，不塞这份清单</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.8.2" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.8.2" target="_blank" rel="noopener">下载 v1.8.2</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.8.1（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -753,7 +776,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.8.1</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-30</span>
           </div>
           <ul class="rel-notes">
@@ -2851,7 +2873,7 @@
         <h2 id="d-overview">核心特性一览</h2>
         <div class="feature-grid">
           <div class="fcard"><b>⌨️ 智能 SQL 编辑器</b><span>VS Code 同款内核：上下文补全、格式化、分块执行、执行历史。</span></div>
-          <div class="fcard"><b>🤖 AI 助手</b><span>解释 / 优化 / 修错 / 诊断 / 问答，给出的 SQL 可先看执行计划再落地。</span></div>
+          <div class="fcard"><b>🧠 AI 同事</b><span>解释 / 优化 / 修错 / 诊断 / 问答之外，还能自主排查：自己巡检、给索引建议、看同步备份状态，改动做成变更单等你批准。</span></div>
           <div class="fcard"><b>🛡️ 事务模式</b><span>写语句不再自动提交：先改、自查、回滚或提交，安全闭环。</span></div>
           <div class="fcard"><b>✏️ 结果集直接编辑</b><span>双击改值、缓冲提交，快照守卫绝不改错行。</span></div>
           <div class="fcard"><b>⚡ 千万级结果集</b><span>虚拟滚动 + 服务端分页 + 18× 压缩，首屏 &lt;1s。</span></div>
@@ -2896,12 +2918,13 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
         <h2 id="d-ai">AI 助手</h2>
         <figure class="doc-shot"><a href="images/ai-assistant-dark.png" target="_blank" rel="noopener"><img src="images/ai-assistant-dark.png" alt="AI 助手：解释 / 优化 / 修错 / 诊断，给出的 SQL 可先看执行计划" loading="lazy" decoding="async"></a><figcaption>AI 助手：解释 / 优化 / 修错 / 诊断，给出的 SQL 可先看执行计划</figcaption></figure>
         <ul>
-          <li><b>解释</b>：选中 SQL，让 AI 逐段讲清在做什么、影响哪些表</li>
-          <li><b>优化</b>：给出改写建议与索引建议，可先看执行计划对比</li>
-          <li><b>修错</b>：语句报错后一键让 AI 修复，结果直接回填编辑器</li>
-          <li><b>诊断 / 问答</b>：性能定位与自由对话，AI 结合库结构给出可执行答案</li>
+          <li><b>六大动作</b>：解释、优化、改写、修错、诊断、自由对话 —— 选中 SQL 就能一键让它动手，修错会自动带上完整错误上下文，结果直接回填编辑器</li>
+          <li><b>自主排查</b>：打开开关，它自己调工具查库 —— 巡检表结构、给出该加的索引、看同步与备份状态、只读试跑一遍；多轮能接着上一轮的结论往下做，问两张表就展开两张</li>
+          <li><b>变更单</b>：要动数据或结构的动作统一生成变更单，批准才执行、高危再确认一次、执行完还能撤销 —— 执行权始终在人手里</li>
+          <li><b>记忆与记录</b>：说一句「记住：本库金额单位是分」，下次在同一个库提问自动带上（区分「你说过 / AI 推断」，随时可删）；对话有记录，能续上一轮接着说</li>
+          <li><b>用量与预算</b>：每条回答脚注消耗的 token；大库上下文按预算裁剪，库级问题给全库清单（表名 + 注释）而不是整库列结构 —— 实测同一条修复从 2345 降到 956 prompt tokens</li>
         </ul>
-        <div class="tip"><b>安全边界</b>：AI 给出的 SQL 会先「看执行计划、试跑一次」再由你决定是否执行。</div>
+        <div class="tip"><b>安全边界</b>：AI 给出的 SQL 会先「看执行计划、试跑一次」再由你决定是否执行；写操作默认阻断，结构 / 数据变更要批准变更单（高危二次确认），生产库连接还要再过一道写确认。</div>
 
         <h2 id="d-grid">结果表格与数据编辑</h2>
         <ul>
