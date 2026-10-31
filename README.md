@@ -14,23 +14,42 @@ Runs locally, your data never leaves your network. Rust core + Vue 3 frontend + 
 |---|---|
 | **🤖 Deep AI integration** | Explain / optimize / rewrite / fix / diagnose / chat — six one-click actions. AI-generated SQL can be verified with EXPLAIN and a dry run. An MCP server exposes the whole workbench to any AI client (see [AI, more than a chat box](#ai-more-than-a-chat-box)) |
 | **🧠 AI teammate** | "Autonomous check" works the database itself: inspects table structures, suggests missing indexes, reads sync / backup status and dry-runs read-only queries — every change becomes a **change request** you approve (high-risk ones ask twice, and an applied one can be undone). Long-term memory keeps your conventions, conversations are saved and resumable, and each answer footnotes its token cost |
-| Multi-datasource | **17 engines, one client** — relational (MySQL, MariaDB, PostgreSQL, KingbaseES, Oracle, SQL Server, DB2, Derby, H2, DM), analytical (ClickHouse, Doris), embedded / file (SQLite, DuckDB) and NoSQL (Redis, MongoDB, Elasticsearch). JDBC drivers download on demand |
-| SQL editor | Monaco-based: completion, formatting, multi-statement batch runs with per-statement timing, history, snippets, template variables (`:name` prompts on run) |
-| Transaction mode | Writes are not auto-committed: edit → verify → commit or roll back. Transactions are bound to the editor's session, on every JDBC datasource |
-| In-grid editing | Double-click a cell → buffered changes → batched UPDATE (inside the transaction if enabled); snapshot guards prevent stale writes after re-paging |
+| Multi-datasource | **17 engines, one client** — relational (MySQL, MariaDB, PostgreSQL, KingbaseES, Oracle, SQL Server, DB2, Derby, H2, DM), analytical (ClickHouse, Doris), embedded / file (SQLite, DuckDB) and NoSQL (Redis, MongoDB, Elasticsearch). Drivers download on demand; the per-engine capability matrix is under [Supported engines](#supported-engines) |
+| SQL editor | Monaco-based: completion, formatting, multi-statement runs with per-statement timing, history, snippets, template variables (`:name` prompts on run), stop execution mid-flight. 13 command shortcuts (run `Ctrl+Enter`, format `Shift+Alt+F`, comment `Ctrl+/`, copy as `IN` list `Ctrl+Shift+X`…), all rebindable — see [Keyboard shortcuts](#keyboard-shortcuts) |
+| Transaction mode | Writes are not auto-committed: edit → verify → commit or roll back. Bound to the editor's session on every JDBC engine; switching the mode off rolls back first, and SQLite (no session transactions) hides the button instead of failing on click |
+| In-grid editing | Double-click a cell → buffered changes → batched UPDATE (inside the transaction if enabled); snapshot guards void stale buffers after re-paging rather than editing the wrong row. Row cap defaults to unlimited (settable 100–100000), statement timeout 300 s (1–600) |
 | Huge result sets | Virtual scrolling + server-side paging + response compression (4.2MB → 233KB measured); total counts computed async without blocking rows |
-| Table & object designer | Change columns, types, defaults, comments and indexes in a grid — the exact `ALTER` script is previewed before anything runs; views, procedures, functions, triggers and events open their DDL and can be edited as `ALTER` |
-| Users & privileges | Users and roles per engine, with a privilege matrix by scope (global / server / database / schema / table / routine). Every tick previews the precise `GRANT` / `REVOKE` diff; only the changed privileges are submitted |
-| Monitoring | Sessions, locks and per-database metrics, with in-place session kill. Engines without a monitoring API say so instead of showing empty charts |
-| ER diagram | Relations inferred from naming conventions plus real foreign keys; drag to rearrange, wheel to zoom, export to PNG / SVG |
-| Compare & transfer | Schema and data diff between two connections, then a Navicat-style wizard that transfers the chosen objects to the target |
-| Data transfer | Export to CSV / Excel / JSON / INSERT; long tasks run in background with notifications |
+| Table & object designer | Columns, types, defaults, comments and indexes edited in a grid with the exact `ALTER` previewed first; new table / index / view / trigger forms generate DDL before running; unsupported options are greyed out with the reason (SQLite only renames columns; ClickHouse / Doris table options are fixed after creation) |
+| Users & privileges | Users and roles per engine with a privilege matrix by scope (global / server / database / schema / table / routine). Every tick previews the precise `GRANT` / `REVOKE` diff and only the changed privileges are submitted; every privilege name read back is shown as a column, none hidden. Db2 / Derby users come from external authentication and the UI says so |
+| Monitoring | Sessions, locks and per-database metrics with in-place kill — MySQL, MariaDB, PostgreSQL, KingbaseES, SQL Server, ClickHouse, Doris. Other engines answer "not supported + why" instead of drawing empty charts |
+| ER diagram | Relations from real foreign keys plus naming conventions (inferred links carry a confidence), drag / zoom / search / export PNG + SVG. Pure rules — no model calls, zero tokens |
+| Compare & transfer | Structure diff (type / length / nullable / default / PK / index / FK) and key-based data diff (10–500 sample rows, ~2M rows per side, binary columns skipped), then a wizard that transfers tables, views, routines, triggers and events with `insert`, `truncate_insert` or `upsert`. Same-instance transfers run `insert … select` inside the database — 6 s for 200k rows × 6 columns versus 239 s through the client; cross-instance uses slicing, parallel streams and link compression (239 s → 35 s) |
+| Data transfer | Export CSV / Excel / JSON, plus INSERT / UPDATE / DELETE / DDL scripts; no row cap (paged out 50k at a time), multi-table exports packed as zip; import CSV / JSON / xlsx (256 MB per file, 200 rows per batch, legacy `.xls` refused) |
+| Task center | Export / import / dump / compare / sync / backup / restore / test-data all run in the background with live phase, rows and rate; 4000 log lines per task; cancel really stops both ends and is reported as cancelled, not as failed; artifacts land in a temp dir and are removed after download |
 | Backup & test data | Native dump / restore per engine, plus generated test data for scratch tables |
 | Object search | Find tables, views and procedures across the whole connection without expanding the tree |
-| Production guard | Mark a connection as PROD: badge everywhere, write confirmation, full audit trail |
-| Data pivot | Frame-select to aggregate (count / sum / avg / min / max), group and drill down |
-| Driver manager | Download, update and repair drivers from Maven with live progress; point it at a private mirror for air-gapped networks |
-| Self-maintenance | A background pass at startup reclaims holes in the metadata database and clears expired snapshots and leftover temp files (805 MB → 54 MB measured); clearing logs / cache reclaims space on the spot |
+| Production guard | Mark a connection as PROD: badge everywhere, every data- or structure-changing action (script, DDL, grid edit, import, sync, restore) blocked by default while queries stay untouched, write confirmation, full audit trail |
+| Data pivot | Frame-select to aggregate (count / sum / avg / min / max), group and drill down — computed in the browser from rows already fetched, so no extra query hits the database (2000 groups kept, TOP-N 10–100) |
+| Driver manager | Download, update and repair drivers from Maven with live progress; point it at a private mirror for air-gapped networks. Drivers load in a separate Java 17+ host, so a bad driver cannot take the client down |
+| Self-maintenance | A startup background pass reclaims metadata-database holes (only when ≥8 MB and >20% of pages are free), deletes load temp files older than 24 h and keeps the newest 500 task snapshots (805 MB → 54 MB measured); clearing logs / cache reclaims on the spot. Query history and audit rows are never touched |
+
+## Supported engines
+
+| Group | Engines |
+|---|---|
+| Relational · 10 | MySQL, MariaDB, PostgreSQL, KingbaseES, Oracle, SQL Server, IBM Db2, DM (Dameng), Derby, H2 |
+| Analytical · 2 | ClickHouse, Doris — grouped aside as OLAP in the connection picker |
+| Embedded / file · 2 | SQLite, DuckDB — local files; no server, no Java host |
+| NoSQL · 3 | Redis, MongoDB, Elasticsearch |
+
+Not every engine does everything, and the UI says so instead of pretending:
+
+- **Session transactions** — every JDBC engine; SQLite uses the native driver and hides the button.
+- **Users & privileges** — MySQL / MariaDB / PostgreSQL / KingbaseES / SQL Server / Oracle / ClickHouse / Doris / H2; Db2 and Derby authenticate users externally and say so.
+- **Monitoring** — MySQL / MariaDB / PostgreSQL / KingbaseES / SQL Server / ClickHouse / Doris; anything else answers "not supported + reason".
+- **Table structure editing** — negotiated per engine; unsupported items are greyed out with the reason (SQLite only renames columns; ClickHouse / Doris table options are fixed after creation).
+- **Data transfer** — relational and analytical engines; SQLite / DuckDB / H2 / Derby and the three NoSQL engines have no target write channel, so the entry point does not appear.
+- **DDL view** — native where the engine exposes it; Db2 / Derby synthesize it from column metadata rather than showing an empty box.
 
 ## Screenshots
 
@@ -111,6 +130,24 @@ Worry about data usually means "I don't know what leaves the machine". Instead o
 ```
 
 That sample row is **real data**, truncated to 24 characters: it is how the model knows the date format and that `status` holds `PAID` rather than `1`. If the first 20 columns include phone numbers or ID numbers, they go with it — in that case keep the endpoint inside your network (Local models only) and nothing leaves at all.
+
+## Keyboard shortcuts
+
+Every command is rebindable under Settings → Shortcuts (stored locally, not in a config file).
+
+| Action | Default |
+|---|---|
+| Run statement / Run all | `Ctrl+Enter` / `Ctrl+Shift+Enter` |
+| Stop execution | `Ctrl+F2` |
+| Format | `Shift+Alt+F` |
+| Comment / uncomment | `Ctrl+/` |
+| Save / New script | `Ctrl+S` / `Ctrl+N` |
+| Upper / lower case | `Ctrl+Shift+U` / `Ctrl+Shift+L` |
+| Collapse to one line | `Ctrl+Shift+M` |
+| Copy as `IN` list | `Ctrl+Shift+X` |
+| Copy current line / select statement | `Alt+Shift+L` / `Ctrl+Shift+Y` |
+| Grid: refresh / add row / delete row | `F5` / `Alt+Insert` / `Ctrl+Delete` |
+| Grid: fill down / clear cell / autofit | `Ctrl+D` / `Delete` / `Alt+Shift+A` |
 
 ## Architecture
 
@@ -320,7 +357,8 @@ Each signed platform runs an explicit verification step (`codesign --verify` + `
 | CLI | `dbmind conn list` / `dbmind driver list` / `dbmind setting get <key>` |
 | MCP | run `dbmind-mcp` and register it in any MCP-capable AI client |
 
-- **Data directory**: `~/.dbmind` by default (meta database, driver cache, logs). Override with `DBMIND_HOME` or migrate in Settings.
+- **Data directory**: `~/.dbmind` by default — meta database, driver cache, logs, task snapshots, export scratch. Override with `DBMIND_HOME` or migrate in Settings; copying this one folder is a full migration.
+- **Self-maintenance**: a background pass at startup reclaims meta-database holes (only when ≥8 MB and >20% of pages are free), deletes load temp files older than 24 h and keeps the newest 500 task snapshots — 805 MB → 54 MB measured, the whole folder 1.5 GB → 223 MB. It never deletes query history or audit rows: only the "clear logs" button and the retention settings (`history.maxEntries` / `history.retentionDays`, both `0` = keep) do.
 - **Common env vars**: `DBMIND_HOME`, `DBMIND_AGENT_JAR`, `DBMIND_JAVA`, `DBMIND_TOOL_DIR`.
 
 ## Testing
