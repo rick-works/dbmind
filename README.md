@@ -13,6 +13,7 @@ Runs locally, your data never leaves your network. Rust core + Vue 3 frontend + 
 | Module | Description |
 |---|---|
 | **🤖 Deep AI integration** | Explain / optimize / rewrite / fix / diagnose / chat — six one-click actions. AI-generated SQL can be verified with EXPLAIN and a dry run. An MCP server exposes the whole workbench to any AI client (see [AI, more than a chat box](#ai-more-than-a-chat-box)) |
+| **🧠 AI teammate** | "Autonomous check" works the database itself: inspects table structures, suggests missing indexes, reads sync / backup status and dry-runs read-only queries — every change becomes a **change request** you approve (high-risk ones ask twice, and an applied one can be undone). Long-term memory keeps your conventions, conversations are saved and resumable, and each answer footnotes its token cost |
 | Multi-datasource | **17 engines, one client** — relational (MySQL, MariaDB, PostgreSQL, KingbaseES, Oracle, SQL Server, DB2, Derby, H2, DM), analytical (ClickHouse, Doris), embedded / file (SQLite, DuckDB) and NoSQL (Redis, MongoDB, Elasticsearch). JDBC drivers download on demand |
 | SQL editor | Monaco-based: completion, formatting, multi-statement batch runs with per-statement timing, history, snippets, template variables (`:name` prompts on run) |
 | Transaction mode | Writes are not auto-committed: edit → verify → commit or roll back. Transactions are bound to the editor's session, on every JDBC datasource |
@@ -29,6 +30,7 @@ Runs locally, your data never leaves your network. Rust core + Vue 3 frontend + 
 | Production guard | Mark a connection as PROD: badge everywhere, write confirmation, full audit trail |
 | Data pivot | Frame-select to aggregate (count / sum / avg / min / max), group and drill down |
 | Driver manager | Download, update and repair drivers from Maven with live progress; point it at a private mirror for air-gapped networks |
+| Self-maintenance | A background pass at startup reclaims holes in the metadata database and clears expired snapshots and leftover temp files (805 MB → 54 MB measured); clearing logs / cache reclaims space on the spot |
 
 ## Screenshots
 
@@ -54,6 +56,9 @@ Every screen ships in both themes. Captured at 2880 px wide (Retina) and downsca
 Most tools bolt on a chat window; DBmind bakes AI into **every step of database work**:
 
 - **Six ready-to-use actions** — select SQL and hit explain / optimize / rewrite; on execution errors hit "AI fix" (full error context attached); "diagnose" for performance issues; free-form chat for everything else
+- **A teammate, not a chat box** — "Autonomous check" calls tools on its own: inspects table structures, suggests the indexes you are missing, reads sync / backup status, dry-runs read-only queries. Anything that touches data becomes a **change request** — approved by you, confirmed twice when high-risk, and undoable after it runs. Multi-turn picks up where the last answer ended, and naming two tables expands two tables
+- **It remembers your conventions** — say "remember: amounts in this database are stored in cents" once and it comes along next time; memories are tagged "you said" / "AI inferred" and can be deleted. Conversations are saved, so "continue" continues
+- **Context is budgeted, not the whole schema dumped in** — large databases no longer ship hundreds of table names; a library-level question ("what is this database for") now gets the full table list with comments (about 2.7k tokens for 395 tables, versus hundreds of thousands for every column). Measured on one fix: 2345 → 956 prompt tokens, chat 2404 → 1030. Every answer footnotes its token cost, and a zero-cost breakdown shows where the request went
 - **Verify AI answers before they land** — one click to view the **execution plan** or **dry-run** AI-generated SQL (costs no AI calls); hallucinations never reach your database
 - **AI channel is read-only by default** — writes via AI / MCP are blocked until explicitly allowed: the smartest model cannot bypass safety policy
 - **MCP server** — built-in `dbmind-mcp` (stdio): exposes queries, metadata and schema browsing as **tools** to any MCP-capable AI client (Claude Desktop, etc.)
