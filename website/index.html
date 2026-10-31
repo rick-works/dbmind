@@ -2956,7 +2956,7 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
           <li><b>执行当前语句</b>：<code>Ctrl+Enter</code>　<b>执行全部</b>：<code>Ctrl+Shift+Enter</code>　<b>停止执行</b>：<code>Ctrl+F2</code></li>
           <li><b>格式化</b>：<code>Shift+Alt+F</code>　<b>注释 / 取消注释</b>：<code>Ctrl+/</code>　<b>保存</b>：<code>Ctrl+S</code>　<b>新建脚本</b>：<code>Ctrl+N</code></li>
           <li><b>转大写 / 转小写</b>：<code>Ctrl+Shift+U</code> / <code>Ctrl+Shift+L</code>　<b>压成一行</b>：<code>Ctrl+Shift+M</code></li>
-          <li><b>复制为 IN 列表</b>：<code>Ctrl+Shift+X</code>　<b>复制单行</b>：<code>Alt+Shift+L</code>　<b>选中当前语句</b>：<code>Ctrl+Shift+Y</code></li>
+          <li><b>复制为 IN 列表</b>：<code>Ctrl+Shift+X</code>　<b>复制单行</b>：<code>Alt+Shift+L</code>　<b>选中当前语句</b>：<code>Ctrl+Shift+Y</code>　<b>保存片段 / 插入片段</b>：右键菜单（存本机，跨会话保留）</li>
           <li><b>结果表格</b>：刷新 <code>F5</code>、保存改动 <code>Ctrl+S</code>、加行 <code>Alt+Insert</code>、删行 <code>Ctrl+Delete</code>、回退 <code>Ctrl+Shift+Z</code>、向下填充 <code>Ctrl+D</code>、清空单元格 <code>Delete</code>、自适应列宽 <code>Alt+Shift+A</code></li>
         </ul>
 
@@ -2977,14 +2977,14 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
           <li><b>会发 · 你的问题</b>：提问原文、当前 SQL、报错文本，加最近 6 条对话（合计上限 6000 字符，超长的一条掐中间）</li>
           <li><b>会发 · 表结构</b>：表名 + 列名 / 类型 / 是否可空 / 默认值 / 主键（<b>不含列注释</b>）；点名或命中的表最多 40 张，没点名默认前 8 张</li>
           <li><b>会发 · 一行样例</b>：每张展开的表 <b>1 行真实数据</b>，最多前 20 列，每个值截到 24 字符 —— 模型靠它判断日期格式与状态枚举，才不会把 <code>PAID</code> 当成 <code>1</code></li>
-          <li><b>可关闭 · 字段脱敏</b>：设置 →「数据脱敏」里给指定表的指定列配规则（支持 <code>*_phone</code> 这类通配），AI 只会看到 <code>138****8000</code>、<code>a***@example.com</code>；覆盖上下文里的样例行与智能体的只读查询结果。<b>表名 / 列名 / 表注释不脱敏</b>（脱了模型就不知道该查哪张表），你在 SQL 里手写的字面量也不脱敏</li>
+          <li><b>可关闭 · 字段脱敏</b>：设置 →「数据脱敏」里给指定表的指定列配规则（支持 <code>*_phone</code> 这类通配），命中列换成 <b>MD5 / SHA-256 摘要</b>或 <b>AES-256 密文</b>（如 <code>f3a9c2…</code>）；一份规则、四个开关：发给 AI 的内容（样例行 + 智能体只读结果）、MCP 服务返回给外部客户端的数据、结果表格的显示（只影响显示）、导出的文件（CSV / Excel / JSON / SQL 里落盘的就是打码值）。<b>表名 / 列名 / 表注释不脱敏</b>（脱了模型就不知道该查哪张表），你在 SQL 里手写的字面量也不脱敏</li>
           <li><b>会发 · 全库清单</b>：只在你问「这个库是干嘛的」这类库级问题时，给表名 + 表注释，一行数据都不带</li>
           <li><b>会发 · 你自己配过的</b>：团队术语与采纳示例、长期记忆（你说过的口径）、知识库命中片段（每段 ≤900 字符并标注来源）；没配就是空的</li>
           <li><b>不发 · 整表数据与结果集</b>：只有上面那 1 行样例。唯一例外是「自主排查」——它执行的只读 SQL 最多返回 100 行、裁到 3200 字符进入对话，它要「自己看数据」就得付这个代价，这一点写在明面上</li>
           <li><b>不发 · 密码与密钥</b>：连接密码、SSH 口令、API Key 只存本机 <code>~/.dbmind/dbmind.db</code>，接口只回「已保存」、不回显</li>
           <li><b>不发 · 遥测</b>：没有使用统计、没有崩溃上报、不请求 DBmind 的任何服务器（「检查更新」只读版本号，与 AI 无关）</li>
         </ul>
-        <div class="tip"><b>连样例都不想发？先开字段脱敏</b>：设置 →「数据脱敏」按「表 + 列」配规则，手机号变 <code>138****8000</code>、邮箱变 <code>a***@example.com</code>，模型照样写得出对的 SQL，但永远拿不回明文。「加入常见敏感列」能一键补齐手机号 / 身份证 / 邮箱 / 密码 / Token / 银行卡这类列名，改完下一次提问立即生效。</div>
+        <div class="tip"><b>连样例都不想发？先开字段脱敏</b>：设置 →「数据脱敏」按「表 + 列」配规则，手机号变 <code>f3a9c2…</code>（MD5）、换成 AES 密文也一样，模型照样写得出对的 SQL，但永远拿不回明文；选了 AES 的话密钥就在本机，你想解回去随时能解。「加入常见敏感列」能一键补齐手机号 / 身份证 / 邮箱 / 密码 / Token / 银行卡这类列名，改完下一次提问立即生效。</div>
         <div class="tip"><b>再狠一点：把端点锁死在内网</b>：设置里打开「仅本地模型」，只要接口地址不是内网 / 本机就直接拒绝，并报出被拦的 host。放行回环、IPv4 私有段（10 / 172.16–31 / 192.168 / 169.254）、IPv6 ULA、<code>.local / .internal / .lan / .corp / .intra</code> 后缀，以及 <code>DBMIND_AI_LOCAL_HOSTS</code> 里你自己加的域名 —— 内网起的 Ollama / vLLM 照样能用，云端模型彻底出不去。对话与知识库向量化<b>都</b>受这条约束，且是硬拦，不是只在文档里生效。</div>
         <pre><code>【目标数据库】类型 MYSQL ｜ 版本 5.7.42 ｜ 标识符引用风格 反引号 ｜ 分页写法 `limit {offset}, {limit}`
 【表清单】共 42 张表，仅展开用到的那几张（需要其它表的字段请先说明表名）
@@ -3005,6 +3005,7 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
           <li><b>联表编辑</b>：JOIN 结果要改哪张表由你指定，工具不替猜列归属；带主键的表优先用主键定位，没有主键才全列匹配</li>
           <li><b>行数上限与超时</b>：默认不限制返回行数（<code>0</code> = 不限），可在设置里收到 100 ~ 100000 行；单语句超时默认 300 秒、可调 1 ~ 600 秒</li>
           <li><b>响应压缩</b>：大结果集压缩后传输（实测 4.2 MB → 233 KB），总数异步统计，不阻塞首屏</li>
+          <li><b>复制为</b>（选中后右键）：CSV / JSON / Markdown / <b>IN (...)</b> / INSERT / UPDATE / DELETE —— 选一列直接得到 <code>IN (\n  'a',\n  'b'\n)</code>，字符串按目标方言转义，不用再手工补引号</li>
         </ul>
 
         <h2 id="d-tx">事务模式</h2>
@@ -3103,8 +3104,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
         <h2 id="d-snippets">SQL 片段库</h2>
         <figure class="doc-shot"><a href="images/scripts-dark.png" target="_blank" rel="noopener"><img src="images/scripts-dark.png" alt="脚本管理：常用 SQL 存成片段，随时调出" loading="lazy" decoding="async"></a><figcaption>脚本管理：常用 SQL 存成片段，随时调出</figcaption></figure>
         <ul>
-          <li>选中 SQL → 工具栏「片段 → 存为片段」，命名保存（没选中就存全文）；不给名字时默认取首行前 30 字</li>
-          <li>跨会话保留，最多 100 条；点击 / 双击插入：有选区就替换选区，否则插到光标处</li>
+          <li>选中 SQL → 右键「保存片段」，命名保存（没选中就存全文）；不给名字时默认取首行前 30 字 —— 下拉里的「存为片段」按钮已去掉，同一个动作不留两个入口</li>
+          <li>跨会话保留，最多 100 条；点顶部「片段」看列表，或右键「插入片段 »」挑一条：有选区就替换选区，否则插到光标处；「清空片段」在同个子菜单里</li>
           <li>存在本机浏览器存储里，不跟随数据目录迁移 —— 换机器请用「导出」带走数据，或把常用 SQL 存成脚本页签</li>
         </ul>
 
@@ -3125,6 +3126,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
           <li><b>导入</b>：CSV / JSON / Excel，按目标列类型转换（日期、数值、空值各按类型处理），每批写 200 行；单文件上限 256 MB，老式 <code>.xls</code> 明确不支持并提示另存为 <code>.xlsx</code></li>
           <li><b>长任务后台跑</b>：导出 / 整库转储 / 导入各自是独立任务，关窗口不中断，进度与日志在任务中心，完成有系统通知</li>
           <li><b>产物不占盘</b>：导出文件落在系统临时目录，取回后即删</li>
+          <li><b>导出也能脱敏</b>：设置 →「数据脱敏」里打开「数据导出」后，命中规则的列写进文件时就是摘要 / 密文（生成 UPDATE / DELETE 脚本时主键列保持原文，否则语句定位不到行）</li>
         </ul>
 
         <h2 id="d-compare">数据对比与传输</h2>

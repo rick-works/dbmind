@@ -157,6 +157,69 @@ impl Server {
         self.flag(Self::category_of(name), true)
     }
 
+    /// 读一次脱敏配置。
+    ///
+    /// **每次现读**（与其它设置同口径）：壳是长驻进程，用户在设置页改完规则，
+    /// 下一次工具调用就该生效 —— 启动时快照一次会让「改了没反应」变成常态。
+    /// 解析失败按「未启用」处理：一条坏配置不该让查询直接失败。
+    fn mask_config(&self) -> dbmind_core::mask::MaskConfig {
+        let mut config = self
+            .setting(dbmind_core::mask::KEY)
+            .and_then(|text| serde_json::from_str::<dbmind_core::mask::MaskConfig>(&text).ok())
+            .unwrap_or_default();
+        config.normalize();
+        config
+    }
+
+    /// AES 密钥：规则真用到 AES 才取。
+    ///
+    /// 没有存储的密钥时**生成一把并落盘**，与 web 侧同口径 —— 两边谁先用到谁建，
+    /// 另一处直接读同一把；否则同一列在 MCP 与 AI 上下文里会是两份解不开的密文。
+    fn mask_key(&self, config: &dbmind_core::mask::MaskConfig) -> dbmind_core::mask::MaskKey {
+        if !config.uses_aes() {
+            return [0u8; 32];
+        }
+        if let Some(text) = self.setting(dbmind_core::mask::KEY_AES) {
+            if !text.trim().is_empty() {
+                return dbmind_core::mask::key_from_text(&text);
+            }
+        }
+        let text = dbmind_core::mask::random_key_text();
+        if let Err(err) = self.engine.set_setting(dbmind_core::mask::KEY_AES, &text) {
+            // 落盘失败仍用这一把：本次调用结果是可解的，只是重启后换成另一把
+            eprintln!("AES 密钥落盘失败（本次仍可用）: {err}");
+        }
+        dbmind_core::mask::key_from_text(&text)
+    }
+
+    /// 规则里的「连接」可能是 **id 也可能是名称**（界面存 id，MCP 客户端习惯传名称），
+    /// 所以两种写法都要试 —— 只比一种，就会出现「设置了规则、MCP 客户端照样拿到明文」。
+    fn mask_conn_keys(&self, connection: &str) -> Vec<String> {
+        let mut keys = vec![connection.to_string()];
+        if let Ok(Some(record)) = self.engine.find_connection(connection) {
+            if !record.id.trim().is_empty() {
+                keys.push(record.id);
+            }
+            if !record.config.name.trim().is_empty() {
+                keys.push(record.config.name);
+            }
+        }
+        keys
+    }
+
+    /// 对 `dbmind_execute_query` 的结果行应用 `Mcp` 通道的脱敏规则。
+    ///
+    /// 返回（脱敏后的行，被脱敏的列数）。列数只为让客户端知道「这是摘要不是原文」。
+    fn mask_mcp_rows(&self, connection: &str, rows: Vec<Value>) -> (Vec<Value>, usize) {
+        let config = self.mask_config();
+        if config.rules.is_empty() || !config.channel_on(dbmind_core::mask::MaskChannel::Mcp) {
+            return (rows, 0);
+        }
+        let key = self.mask_key(&config);
+        let conns = self.mask_conn_keys(connection);
+        mask_rows(rows, &config, &key, &conns)
+    }
+
     /// connection 参数：客户端没传时回落到「默认连接」设置（空 = 照旧报缺参）。
     fn connection_arg(&self, args: &Value) -> dbmind_core::Result<String> {
         match args.get("connection").and_then(|v| v.as_str()) {
@@ -440,7 +503,8 @@ impl Server {
                     Err(DbMindError::new(ErrorCode::QueryCanceled, "查询已被取消"))
                 } else {
                     self.engine.execute(
-                        QueryRequest::new(connection, sql)
+                        // 克隆一份：下面的脱敏还要按连接名/ id 去匹配规则
+                        QueryRequest::new(connection.clone(), sql)
                             .with_options(options)
                             .with_execution_id(execution_id.clone()),
                         AccessContext::Mcp,
@@ -448,6 +512,10 @@ impl Server {
                 };
                 self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
                 let result = outcome?;
+                // 字段脱敏（`Mcp` 通道）：这里返回的是真实数据行，一旦发出去就是出站流量 ——
+                // 与 AI 上下文用同一份规则与算法（`dbmind_core::mask`），否则「设置里配了、
+                // MCP 客户端却拿到明文」就是最糟的那种不一致。
+                let (rows, masked) = self.mask_mcp_rows(&connection, render_rows(&result));
                 Ok(json!({
                     "executionId": result.execution_id,
                     "statementKind": result.statement_kind.as_str(),
@@ -456,7 +524,9 @@ impl Server {
                     "truncated": result.truncated,
                     "durationMs": result.duration_ms,
                     "notices": result.notices,
-                    "rows": render_rows(&result),
+                    // 有多少列按规则被打了码：客户端据此知道「看到的是摘要，不是原文」
+                    "maskedColumns": masked,
+                    "rows": rows,
                 }))
             }
             "dbmind_cancel_query" => {
@@ -545,7 +615,7 @@ impl Server {
             }),
             json!({
                 "name": "dbmind_execute_query",
-                "description": "执行一条 SQL。默认只允许只读语句（SELECT/SHOW/EXPLAIN 等）；写语句需用户在 DBmind 中开启允许 AI 写入。行数与超时的上限由设置页约束。",
+                "description": "执行一条 SQL。默认只允许只读语句（SELECT/SHOW/EXPLAIN 等）；写语句需用户在 DBmind 中开启允许 AI 写入。行数与超时的上限由设置页约束。命中用户在 DBmind 里配置的「字段脱敏」规则时，相应列返回的是摘要/密文（maskedColumns 会写明列数）。",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -628,6 +698,66 @@ fn cell_to_json(cell: &dbmind_core::CellValue) -> Value {
     }
 }
 
+/// 结果行按 `Mcp` 通道打码（[`Server::mask_mcp_rows`] 的纯函数部分，便于单测）。
+///
+/// 边界与 AI 侧一致，照实说：**表名未知**（JOIN / 子查询别名都可能），所以只应用
+/// 「表为空 = 任意表」的规则；**库名也未知**，所以只靠「连接 + 列名」命中 ——
+/// 钉了表或库的规则在这里不参与，宁可不匹配，也不把无关列打成 `***` 让客户端失明。
+///
+/// `conns` 是同一个连接的几种写法（调用方传的名字 / id）：规则里存的是 id、客户端习惯传
+/// 名字，只比一种就会出现「设置了规则、客户端照样拿到明文」。
+fn mask_rows(
+    rows: Vec<Value>,
+    config: &dbmind_core::mask::MaskConfig,
+    key: &dbmind_core::mask::MaskKey,
+    conns: &[String],
+) -> (Vec<Value>, usize) {
+    let mut masked: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let out: Vec<Value> = rows
+        .into_iter()
+        .map(|row| {
+            let Value::Object(fields) = row else {
+                return row;
+            };
+            let mut object = serde_json::Map::with_capacity(fields.len());
+            for (column, value) in fields {
+                // 只处理「值本身就是原文」的类型：NULL 保持 NULL（没信息可泄露，
+                // 换成 *** 反而让客户端以为这列有值）；二进制早已是 `<blob nB>` 占位。
+                let plain = match &value {
+                    Value::String(text) => Some(text.clone()),
+                    Value::Number(number) => Some(number.to_string()),
+                    _ => None,
+                };
+                let method = plain.as_ref().and_then(|_| {
+                    conns.iter().find_map(|conn| {
+                        config.method_for(
+                            dbmind_core::mask::MaskChannel::Mcp,
+                            conn,
+                            "",
+                            None,
+                            &column,
+                        )
+                    })
+                });
+                match (method, plain) {
+                    (Some(method), Some(text)) => {
+                        masked.insert(column.clone());
+                        object.insert(
+                            column,
+                            Value::String(dbmind_core::mask::mask_value(&text, method, key)),
+                        );
+                    }
+                    _ => {
+                        object.insert(column, value);
+                    }
+                }
+            }
+            Value::Object(object)
+        })
+        .collect();
+    (out, masked.len())
+}
+
 fn required_str(args: &Value, key: &str) -> dbmind_core::Result<String> {
     args.get(key)
         .and_then(|v| v.as_str())
@@ -647,5 +777,94 @@ fn id_key(id: &Value) -> String {
     match id {
         Value::String(text) => text.clone(),
         other => other.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbmind_core::mask::{MaskConfig, MaskMethod, MaskRule};
+
+    fn config(mcp: bool, rules: Vec<MaskRule>) -> MaskConfig {
+        MaskConfig {
+            llm: false,
+            mcp,
+            grid: false,
+            export: false,
+            enabled: false,
+            rules,
+        }
+    }
+
+    fn rule(table: Option<&str>, column: &str, method: MaskMethod) -> MaskRule {
+        MaskRule {
+            connection_id: None,
+            database: None,
+            schema: None,
+            table: table.map(str::to_string),
+            column: column.to_string(),
+            method,
+            note: None,
+        }
+    }
+
+    #[test]
+    fn masks_values_by_column() {
+        let rows = vec![
+            json!({ "phone": "13812348000", "id": 7, "name": "张三", "note": null }),
+            json!({ "phone": "13812348001", "id": 8, "name": "李四", "note": "ok" }),
+        ];
+        let cfg = config(true, vec![rule(None, "*phone", MaskMethod::Md5)]);
+        let (out, masked) = mask_rows(rows, &cfg, &[0u8; 32], &["conn_a".to_string()]);
+        assert_eq!(masked, 1);
+        let first = out[0]["phone"].as_str().unwrap();
+        assert_eq!(first.len(), 32);
+        assert_ne!(first, "13812348000");
+        // 数字列、NULL、其它列一律不动
+        assert_eq!(out[0]["id"], json!(7));
+        assert!(out[0]["note"].is_null());
+        assert_eq!(out[0]["name"], json!("张三"));
+        // 摘要长度 32、且不含原文
+        let digest = out[1]["phone"].as_str().unwrap();
+        assert_eq!(digest.len(), 32);
+        assert!(!digest.contains("138"));
+    }
+
+    #[test]
+    fn mcp_switch_off_keeps_plaintext() {
+        let rows = vec![json!({ "phone": "13812348000" })];
+        let cfg = config(false, vec![rule(None, "phone", MaskMethod::Star)]);
+        let (out, masked) = mask_rows(rows, &cfg, &[0u8; 32], &["conn_a".to_string()]);
+        assert_eq!(masked, 0);
+        assert_eq!(out[0]["phone"], json!("13812348000"));
+    }
+
+    #[test]
+    fn table_pinned_rules_do_not_hit_unknown_tables() {
+        let rows = vec![json!({ "phone": "13812348000" })];
+        let cfg = config(true, vec![rule(Some("users"), "phone", MaskMethod::Star)]);
+        let (out, masked) = mask_rows(rows, &cfg, &[0u8; 32], &["conn_a".to_string()]);
+        // 工具结果不知道表名：钉表规则不参与，宁可不匹配也不乱打码
+        assert_eq!(masked, 0);
+        assert_eq!(out[0]["phone"], json!("13812348000"));
+    }
+
+    #[test]
+    fn connection_id_or_name_both_work() {
+        let rows = vec![json!({ "phone": "13812348000" })];
+        let mut pinned = rule(None, "phone", MaskMethod::Star);
+        pinned.connection_id = Some("conn_1".to_string());
+        let cfg = config(true, vec![pinned]);
+        // 客户端传的是名称，规则存的是 id：两种写法都要能命中
+        let (_, hit) = mask_rows(
+            rows.clone(),
+            &cfg,
+            &[0u8; 32],
+            &["生产库".to_string(), "conn_1".to_string()],
+        );
+        assert_eq!(hit, 1);
+        // 不在这个连接上：不命中
+        let (_, miss) = mask_rows(rows, &cfg, &[0u8; 32], &["别的库".to_string()]);
+        assert_eq!(miss, 0);
     }
 }

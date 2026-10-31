@@ -218,6 +218,7 @@ fn truncate(text: String) -> String {
 fn render_rows(
     result: &dbmind_core::QueryResult,
     masks: &crate::api::ai::mask::MaskConfig,
+    mask_key: &crate::api::ai::mask::MaskKey,
     conn: &str,
     database: &str,
 ) -> String {
@@ -238,11 +239,17 @@ fn render_rows(
                         Value::String(text) => text,
                         other => other.to_string(),
                     };
-                    match names.get(index) {
-                        Some(name) if masks.hits(conn, database, None, name) => {
-                            crate::api::ai::mask::mask_value(&text)
-                        }
-                        _ => text,
+                    match names.get(index).and_then(|name| {
+                        masks.method_for(
+                            crate::api::ai::mask::MaskChannel::Llm,
+                            conn,
+                            database,
+                            None,
+                            name,
+                        )
+                    }) {
+                        Some(method) => crate::api::ai::mask::mask_value(&text, method, mask_key),
+                        None => text,
                     }
                 })
                 .collect::<Vec<_>>()
@@ -399,7 +406,8 @@ async fn execute_tool(
                     // 每次工具调用读一次规则：本地元数据库的主键查询，代价远小于一次工具往返；
                     // 换来的好处是「用户刚在设置里改了规则，下一条工具结果立刻生效」。
                     let masks = crate::api::ai::mask::load(state).await;
-                    (true, render_rows(&result, &masks, conn, database))
+                    let mask_key = crate::api::ai::mask::load_key(state, &masks).await;
+                    (true, render_rows(&result, &masks, &mask_key, conn, database))
                 }
                 Err(err) => (false, err.message),
             }

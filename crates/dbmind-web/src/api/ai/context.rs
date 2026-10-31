@@ -260,6 +260,8 @@ pub async fn build(
     // 读失败按「未启用」处理 —— 一条坏配置不该让整段上下文构建不出来（宁可少脱敏一次，
     // 也不让 AI 面板整个打不开；真要兜底，用户会在设置里看到规则保存失败）。
     let masks = crate::api::ai::mask::load(state).await;
+    // AES 密钥：规则里没有 AES 时是零值，不会平白生成一把
+    let mask_key = crate::api::ai::mask::load_key(state, &masks).await;
     // 按 (表, 列) 去重：同一列被多条规则命中只算一次，界面上的数字才对得上人话
     let mut masked_columns: std::collections::HashSet<(String, String)> =
         std::collections::HashSet::new();
@@ -366,9 +368,18 @@ pub async fn build(
                     .map(|(key, value)| {
                         // 命中脱敏规则的列：**先掩码、再截断**。反过来会把掩码串自己截掉一截，
                         // 模型看到半个 `138****` 既没意义又白花 token。
-                        if masks.hits(conn, database, Some(table.as_str()), key) {
+                        if let Some(method) = masks.method_for(
+                            crate::api::ai::mask::MaskChannel::Llm,
+                            conn,
+                            database,
+                            Some(table.as_str()),
+                            key,
+                        ) {
                             masked_columns.insert((table.clone(), key.to_ascii_lowercase()));
-                            format!("{key}={}", crate::api::ai::mask::mask_value(&plain(value)))
+                            format!(
+                                "{key}={}",
+                                crate::api::ai::mask::mask_value(&plain(value), method, &mask_key)
+                            )
                         } else {
                             format!("{key}={}", short(value))
                         }

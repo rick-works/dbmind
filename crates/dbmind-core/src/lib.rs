@@ -21,6 +21,8 @@ mod bootstrap;
 mod error;
 mod es;
 mod kind;
+// 字段脱敏：大模型 / MCP / 表格三个出口共用一套规则与算法（见模块文档）
+pub mod mask;
 mod mongo;
 // 对外公开：壳层要往同一个应用目录里放自己的产物（导出文件、备份），
 // 而 `DBMIND_HOME` 的重定向规则只能有一份 —— 各自再实现一遍，迟早有一处漏了那个环境变量。

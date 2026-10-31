@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v1.9.0": [
+  "Field masking (new): replace sensitive values by table + column with an MD5 / SHA-256 digest or an AES-256 ciphertext (key stays on this machine and can decrypt back) - one rule set, four switches: what reaches the AI (context sample rows + agent read-only results), what the MCP server returns, how the result grid renders, and exported CSV / Excel / JSON / SQL files; your data is never modified, and table/column names, comments and SQL literals are left as-is",
+  "The result grid can now copy as IN (...): select a column and get the IN list directly (several columns produce one block per column, labelled with the column name) with quoting that matches the target dialect - no more hand-adding quotes to a hundred ids",
+  "The SQL editor context menu can save / insert / clear snippets: name the selected SQL and it is kept on this machine across sessions; the toolbar \"Snippets\" dropdown now only lists and inserts (the duplicate save button is gone), and a failed write says so instead of silently pretending"
+ ],
  "v1.8.0": [
   "Advanced search supports multiple condition groups: inside a group you can require all or any conditions, and the groups themselves can be combined with all / any, producing real (a AND b) OR (c AND d) clauses; conditions are now one per row with aligned column name and value boxes, and a between condition picks both ends in a single range control",
   "Script nodes in the tree now have a right-click menu: view / rename / delete - renaming also updates the title of any tab that is already open, refreshes only that database's script folder instead of rebuilding the whole tree, and rejects duplicate names within the same database",

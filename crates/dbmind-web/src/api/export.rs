@@ -48,6 +48,7 @@ use crate::api::tasks::{self, Artifact, Task};
 use crate::api::xlsx::{SheetSpec, Workbook};
 use crate::api::{blocking, require_record};
 use crate::AppState;
+use dbmind_core::mask::{MaskChannel, MaskConfig, MaskKey, MaskMethod};
 
 /// 「导出全部」每页取多少行。
 ///
@@ -1148,6 +1149,12 @@ async fn export_query(
         Format::Xlsx => make_xlsx_sink(file, sink_name),
         other => make_text_sink(other, BufWriter::new(file), sink_name, &req.pk, dialect)?,
     };
+    // 字段脱敏（导出出口）：命中列在写进文件之前换成摘要/密文。
+    // 表名未知（导出的是用户自己写的 SQL）时传空串 —— 这样只有「表留空」的规则参与，
+    // 不会因为拿 `export` 这个占位名去碰巧命中某条钉表规则。
+    let mask_table = if req.table.trim().is_empty() { "" } else { req.table.trim() };
+    let mut mask = ExportMask::prepare(state, id, req, mask_table).await;
+    let mut columns: Vec<String> = Vec::new();
 
     // 首页用小页：整页取数要 1 秒以上（宿主→内核的逐行管线 ≈0.23ms/行），第一屏就等一整页
     // 会让"开始导出"看起来没反应；前三页各给 1/5 页先把进度推起来，之后回到整页满速跑。
@@ -1186,13 +1193,16 @@ async fn export_query(
         }
         let got = result.rows.len() as u64;
         if page == 0 {
-            let columns: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
+            columns = result.columns.iter().map(|c| c.name.clone()).collect();
             sink.begin(&columns)?;
         }
         // 逐行写盘，并且**页内也上报**：以前只在整页写完后更新一次，界面上只能 5000 一跳。
         let t_write = std::time::Instant::now();
         for row in &result.rows {
-            sink.row(row)?;
+            match mask.as_mut().and_then(|mask| mask.apply(&columns, row)) {
+                Some(masked) => sink.row(&masked)?,
+                None => sink.row(row)?,
+            }
             written += 1;
             if let Some(task) = task {
                 if written >= next_report {
@@ -1457,6 +1467,103 @@ async fn export_dump(
     })
 }
 
+// ------------------------------------------------------------------ 字段脱敏（导出出口）
+
+/// 导出时的字段脱敏：命中的列在**写进文件之前**换成摘要 / 密文。
+///
+/// 为什么挂在 `pump_rows` 这一层：CSV / Excel / JSON / SQL 四条导出路径全都经过它，
+/// 「导出当页」「导出全部」「整库转储」一个口径全覆盖。放进各个 sink 要写四遍；
+/// 改写 `select` 语句去套 SQL 函数则要在内核里猜列的类型与方言，反而更容易错。
+struct ExportMask {
+    config: MaskConfig,
+    key: MaskKey,
+    /// 同一个连接的几种写法（id 与名称）：规则里存 id、客户端存名称时都要能命中
+    conns: Vec<String>,
+    database: String,
+    table: String,
+    /// 必须保持原文的列（生成 UPDATE/DELETE 时的定位列）
+    keep: Vec<String>,
+    /// 列名 → 处理方式（`Some(None)` = 明确不脱敏，省得每行都重新匹配一遍）
+    cache: std::collections::HashMap<String, Option<MaskMethod>>,
+}
+
+impl ExportMask {
+    /// 规则为空、或「数据导出」开关关着 → 返回 `None`（连密钥都不去取）。
+    async fn prepare(state: &AppState, id: &str, req: &ExportReq, table: &str) -> Option<Self> {
+        let config = crate::api::ai::mask::load(state).await;
+        if config.rules.is_empty() || !config.channel_on(MaskChannel::Export) {
+            return None;
+        }
+        let key = crate::api::ai::mask::load_key(state, &config).await;
+        let mut conns = vec![id.to_string()];
+        if let Ok(record) = require_record(state, id).await {
+            if !record.config.name.trim().is_empty() {
+                conns.push(record.config.name.clone());
+            }
+        }
+        // UPDATE/DELETE 靠主键定位：主键被打成摘要，语句就再也匹配不到真实的行
+        // （这类导出本来就是把「改库的脚本」交给 DBA，定位失败比漏脱敏更糟）
+        let keep = if matches!(req.format, Format::SqlUpdate | Format::SqlDelete) {
+            req.pk.clone()
+        } else {
+            Vec::new()
+        };
+        Some(Self {
+            config,
+            key,
+            conns,
+            database: req.database.clone(),
+            table: table.to_string(),
+            keep,
+            cache: std::collections::HashMap::new(),
+        })
+    }
+
+    fn method(&mut self, column: &str) -> Option<MaskMethod> {
+        if self.keep.iter().any(|pk| pk.eq_ignore_ascii_case(column)) {
+            return None;
+        }
+        if let Some(hit) = self.cache.get(column) {
+            return *hit;
+        }
+        let hit = {
+            let (conns, config, database, table) =
+                (&self.conns, &self.config, &self.database, &self.table);
+            conns.iter().find_map(|conn| {
+                config.method_for(MaskChannel::Export, conn, database, Some(table), column)
+            })
+        };
+        self.cache.insert(column.to_string(), hit);
+        hit
+    }
+
+    /// 改写一行；一个值都没命中时返回 `None`（调用方直接写原始行，省一次 Vec 分配）。
+    fn apply(&mut self, columns: &[String], row: &[CellValue]) -> Option<Vec<CellValue>> {
+        let mut out: Option<Vec<CellValue>> = None;
+        for (index, cell) in row.iter().enumerate() {
+            let Some(column) = columns.get(index) else {
+                continue;
+            };
+            let Some(method) = self.method(column) else {
+                continue;
+            };
+            // 只处理「值本身就是原文」的类型：NULL 保持 NULL（没信息可泄露），
+            // 二进制在上游已是 `<blob nB>` 占位，不必再打一遍
+            let text = match cell {
+                CellValue::Text(text) => text.clone(),
+                CellValue::Integer(value) => value.to_string(),
+                CellValue::Real(value) => value.to_string(),
+                CellValue::Decimal(value) => value.clone(),
+                _ => continue,
+            };
+            let masked = dbmind_core::mask::mask_value(&text, method, &self.key);
+            let target = out.get_or_insert_with(|| row.to_vec());
+            target[index] = CellValue::Text(masked);
+        }
+        out
+    }
+}
+
 /// 把一张表的数据灌进写入器（分页拉到取完为止）。
 #[allow(clippy::too_many_arguments)]
 async fn pump_rows<S>(
@@ -1476,6 +1583,8 @@ where
         "select * from {}",
         qualified(table, &req.database, dialect)
     );
+    // 字段脱敏（导出出口）：整条链路只在这里改写值，库里的数据一个字节都不动
+    let mut mask = ExportMask::prepare(state, id, req, table).await;
     let page_size = req.size.unwrap_or(PAGE_ROWS).max(1);
     // 与 export_query 同策略：每张表前三页用小页，快速把进度推起来
     let full_page = page_size;
@@ -1485,6 +1594,8 @@ where
     let mut pages = 0u64;
     let mut next_report = REPORT_ROWS;
     let mut next_log = LOG_ROWS;
+    // 列名在第一页拿到就够了：后续分页是同一张表，列序不会变
+    let mut columns: Vec<String> = Vec::new();
     loop {
         if let Some(task) = task {
             task.check_canceled().map_err(XError::internal)?;
@@ -1502,14 +1613,18 @@ where
             }
         };
         if offset == 0 {
-            let columns: Vec<String> = result.columns.iter().map(|c| c.name.clone()).collect();
+            columns = result.columns.iter().map(|c| c.name.clone()).collect();
             sink.begin(&columns).map_err(XError::internal)?;
         }
         // 与 export_query 同一套做法：页内按行上报，数字连续往上滚、取消也立刻响应。
         // 这里**不设 done**：整库转储的 total/done 以「表」为单位（外层按表推进），
         // 行数只体现在 phase 文案里，混进来会把百分比算坏。
         for row in &result.rows {
-            sink.row(row).map_err(XError::internal)?;
+            // 命中的列先换成摘要/密文再落盘；一个值都没命中时直接用原始行（零拷贝）
+            match mask.as_mut().and_then(|mask| mask.apply(&columns, row)) {
+                Some(masked) => sink.row(&masked).map_err(XError::internal)?,
+                None => sink.row(row).map_err(XError::internal)?,
+            }
             written += 1;
             if let Some(task) = task {
                 if written >= next_report {

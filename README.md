@@ -14,9 +14,9 @@ Runs locally, your data never leaves your network. Rust core + Vue 3 frontend + 
 |---|---|
 | **🤖 Deep AI integration** | Explain / optimize / rewrite / fix / diagnose / chat — six one-click actions. AI-generated SQL can be verified with EXPLAIN and a dry run. An MCP server exposes the whole workbench to any AI client (see [AI, more than a chat box](#ai-more-than-a-chat-box)) |
 | **🧠 AI teammate** | "Autonomous check" works the database itself: inspects table structures, suggests missing indexes, reads sync / backup status and dry-runs read-only queries — every change becomes a **change request** you approve (high-risk ones ask twice, and an applied one can be undone). Long-term memory keeps your conventions, conversations are saved and resumable, and each answer footnotes its token cost |
-| Field masking | Mask sensitive columns by table + column (`138****8000`, `a***@example.com`) — **only for what is sent to the model** (context sample rows and the agent's read-only results); wildcards like `*_phone` and a one-click "common sensitive columns" seed are included, while grids and exports keep the originals |
+| Field masking | Replace sensitive columns by table + column with an **MD5 / SHA-256 digest or an AES-256 ciphertext** (`f3a9c2…`) — one rule set, four switches: **what is sent to the model** (context sample rows and the agent's read-only results), **what the MCP server returns to external clients**, **how the result grid renders** (display only), and **exported files** (CSV / Excel / JSON / SQL carry the masked values); wildcards like `*_phone` and a one-click "common sensitive columns" seed are included, and your data is never modified |
 | Multi-datasource | **17 engines, one client** — relational (MySQL, MariaDB, PostgreSQL, KingbaseES, Oracle, SQL Server, DB2, Derby, H2, DM), analytical (ClickHouse, Doris), embedded / file (SQLite, DuckDB) and NoSQL (Redis, MongoDB, Elasticsearch). Drivers download on demand; the per-engine capability matrix is under [Supported engines](#supported-engines) |
-| SQL editor | Monaco-based: completion, formatting, multi-statement runs with per-statement timing, history, snippets, template variables (`:name` prompts on run), stop execution mid-flight. 13 command shortcuts (run `Ctrl+Enter`, format `Shift+Alt+F`, comment `Ctrl+/`, copy as `IN` list `Ctrl+Shift+X`…), all rebindable — see [Keyboard shortcuts](#keyboard-shortcuts) |
+| SQL editor | Monaco-based: completion, formatting, multi-statement runs with per-statement timing, history, snippets (right-click → Save / Insert, stored locally and kept across sessions), template variables (`:name` prompts on run), stop execution mid-flight. 13 command shortcuts (run `Ctrl+Enter`, format `Shift+Alt+F`, comment `Ctrl+/`, copy as `IN` list `Ctrl+Shift+X`…), all rebindable — see [Keyboard shortcuts](#keyboard-shortcuts) |
 | Transaction mode | Writes are not auto-committed: edit → verify → commit or roll back. Bound to the editor's session on every JDBC engine; switching the mode off rolls back first, and SQLite (no session transactions) hides the button instead of failing on click |
 | In-grid editing | Double-click a cell → buffered changes → batched UPDATE (inside the transaction if enabled); snapshot guards void stale buffers after re-paging rather than editing the wrong row. Row cap defaults to unlimited (settable 100–100000), statement timeout 300 s (1–600) |
 | Huge result sets | Virtual scrolling + server-side paging + response compression (4.2MB → 233KB measured); total counts computed async without blocking rows |
@@ -97,7 +97,7 @@ Worry about data usually means "I don't know what leaves the machine". Instead o
 | Your question | The prompt, the current SQL, the error text, plus the last 6 messages (6000 characters combined, long ones trimmed in the middle) | Every request |
 | Table structure | Table name + column name / type / nullable / default / primary key (**column comments are not sent**) | Tables named or detected in the question, at most 40; otherwise the first 8 |
 | One sample row | **1 real row** per expanded table, first 20 columns, every value cut to 24 characters | Together with the structure |
-| Field masking (opt-in) | Columns matched by a rule become `138****8000` / `a***@example.com` | When rules exist under Settings → Field masking and the switch is on |
+| Field masking (opt-in) | Columns matched by a rule leave as an MD5 / SHA-256 digest or AES-256 ciphertext (`f3a9c2…`) | When rules exist under Settings → Field masking and the AI switch is on |
 | Table catalogue | Table names + table comments (no column structure) | Library-level questions like "what is this database for" |
 | Team terms / examples | The glossary and accepted SQL examples you entered under AI Knowledge | If configured |
 | Long-term memory | Conventions you stated ("amounts are in cents") | If that connection / database has memories |
@@ -133,11 +133,13 @@ Worry about data usually means "I don't know what leaves the machine". Instead o
 
 That sample row is **real data**, truncated to 24 characters: it is how the model knows the date format and that `status` holds `PAID` rather than `1`. If the first 20 columns include phone numbers or ID numbers, they go with it.
 
-**Rather not send the sample at all?** Settings → Field masking: rules match on table + column (wildcards like `*_phone` work, and "Add common sensitive columns" seeds phone / ID card / email / password / token / bank card in one click). Matched columns leave as `138****8000` or `a***@example.com` — the model still writes correct SQL, it just never sees the plaintext. It covers both the sample rows **and** the agent's read-only query results; masking only one of them would be pointless, since the agent could simply `select` the value itself. Three limits, stated plainly:
+**Rather not send the sample at all?** Settings → Field masking: rules match on table + column (wildcards like `*_phone` work, and "Add common sensitive columns" seeds phone / ID card / email / password / token / bank card in one click). Matched columns leave as an MD5 / SHA-256 digest (`f3a9c2…`) or an AES-256 ciphertext — the model still writes correct SQL, it just never sees the plaintext (pick AES when you want to be able to decrypt it back with the key kept on this machine). One rule set, four switches decide where it applies: what reaches the model (context sample rows **and** the agent's read-only results), what the MCP server returns to external clients, how the result grid renders (display only), and exported files (CSV / Excel / JSON / SQL carry the masked values). Masking only one exit would be pointless, since the agent could simply `select` the value itself. Five limits, stated plainly:
 
 - table names, column names and table comments are **not** masked — without them the model cannot tell which table to query
 - literals you type in SQL (`where phone = '138…'`) are **not** masked, they are your own text
 - rules match on table + column, so renaming a table or moving databases means maintaining them; an empty table means any table, which is what covers the agent's results
+- the grid switch changes **display only**: in-cell editing and copy still carry the original values — it guards against onlookers; turn on **Data export** when the files themselves must be masked
+- with **Data export** on, UPDATE / DELETE scripts keep **primary-key columns in plaintext**: those values are the `where` conditions, and a digest would never match a real row (INSERT / CSV / Excel mask every row)
 
 If even a masked sample is too much, keep the endpoint inside your network ([Local models only](#what-the-ai-actually-sends)) and nothing leaves at all.
 
@@ -158,6 +160,7 @@ Every command is rebindable under Settings → Shortcuts (stored locally, not in
 | Copy current line / select statement | `Alt+Shift+L` / `Ctrl+Shift+Y` |
 | Grid: refresh / add row / delete row | `F5` / `Alt+Insert` / `Ctrl+Delete` |
 | Grid: fill down / clear cell / autofit | `Ctrl+D` / `Delete` / `Alt+Shift+A` |
+| Grid: copy as `IN (...)` (right-click → Copy as) | no shortcut — select a column, then right-click |
 
 ## Architecture
 

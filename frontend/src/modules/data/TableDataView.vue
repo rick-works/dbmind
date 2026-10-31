@@ -241,7 +241,7 @@
               <td v-if="colLead > 0" class="col-gap" :colspan="colLead" />
               <td v-for="(col, ci) in visibleColsSlice" :key="col" :data-gkey="(rowIndex(row) + 1) + ':' + (colLead + ci)"
                     :class="[cellAlignOf(row[col], col), { 'null-cell': row[col] == null, 'col-selected': selectedCols.has(col), 'col-sel-l': selEdges.colLeft.has(col), 'col-sel-r': selEdges.colRight.has(col), 'active-cell': activeCell && activeCell.row === row && activeCell.col === col && noBulkSelection, 'editing': editingCell && editingCell.row === row && editingCell.col === col, 'cell-edited': isCellEdited(row, col) }]"
-                    :title="formatCell(row[col])"
+                    :title="formatCell(row[col], col)"
                     @dblclick="startEdit(row, col, $event)"
                     @contextmenu.prevent.stop="onCellContextMenu($event, row, col)"
                     @click="onCellClick(row, col, $event)">
@@ -260,7 +260,7 @@
                     <!-- ⚠️ 这里**不要**加 v-memo：它与上面 v-if/v-else 的分支切换（编辑框 ↔ 文本）撞在一起时，
      Vue 的补丁会找不到锚点并抛 "insertBefore of undefined"，整条更新队列随之失效（界面像卡死）。
      多渲染一次文本的代价，远小于渲染器崩掉。 -->
-<span>{{ formatCell(row[col]) }}</span>
+<span>{{ formatCell(row[col], col) }}</span>
                   </template>
                 </td>
               <!-- 右占位：同样只为撑住宽度 -->
@@ -391,6 +391,8 @@ import { quoteStyleOf } from '../../types'
 // 这里本来就有一个 `const rowKey = (row) => row._rid`（数据行自带稳定 _rid），
 // 所以导入的通用版**改名**，只给筛选行用（筛选行是本地构造的，没有 _rid）。
 import { rowKey as stableRowKey } from '../../utils/rowKey'
+// 字段脱敏的「结果表格」出口：前端同算法打码，只改显示这一层
+import { ensureMaskConfig, peekMaskConfig, gridMethods, maskTextSync, maskTextAsync } from '../../utils/masking'
 
 const props = defineProps({ conn: Object, database: String, table: String, readOnly: Boolean })
 const emit = defineEmits(['update-table-rows', 'open-query', 'insert-sql'])
@@ -1292,8 +1294,9 @@ const openRowDetail = (row) => {
   const cols = visibleColumns.value
   const lines = cols.map(c => {
     const v = row[c]
-    // 与网格同口径：ISO 时间串的 `T` 换成空格
-    return c + '：' + (v == null ? 'NULL' : String(formatDbValue(v)))
+    // 与网格同口径：ISO 时间串的 `T` 换成空格；命中脱敏规则的列在详情里也是打码值
+    // （详情只是「换个地方看同一张表」，不该成为绕开打码的旁路）
+    return c + '：' + (v == null ? 'NULL' : String(formatCell(v, c)))
   })
   rowDetail.value = { visible: true, title: t('sqlq.rowDetailTitle', { n: rowIndex(row) + 1 }), text: lines.join('\n') }
 }
@@ -1348,6 +1351,7 @@ const openCtxMenu = (x, y, row, col, from = 'cell') => {
     { label: 'CSV', command: 'copy-csv' },
     { label: 'JSON', command: 'copy-json' },
     { label: 'MARKDOWN', command: 'copy-markdown' },
+    { label: 'IN (...)', command: 'copy-in-list' },
     { label: 'INSERT', command: 'copy-insert' },
     { label: 'UPDATE', command: 'copy-update' },
     { label: 'DELETE', command: 'copy-delete' }
@@ -1444,6 +1448,7 @@ const onCtxItem = (item) => {
     case 'copy-json': copyCtx('json'); break
     case 'copy-delete': copyDelete(); break
     case 'copy-markdown': copyMarkdown(); break
+    case 'copy-in-list': copyInList(); break
     case 'insert-above': if (row) insertRowAt(rowIndex(row)); break
     case 'insert-below': if (row) insertRowAt(rowIndex(row) + 1); break
     case 'filter-eq': filterByValue(col, 'eq'); break
@@ -1683,6 +1688,22 @@ const copyDelete = () => {
   const whereCols = pk.length ? pk : [...columns.value]
   const sql = rows.map(r => `DELETE FROM ${table} WHERE ${whereCols.map(c => `${c} = ${sqlVal(r[c])}`).join(' AND ')};`).join('\n')
   writeClipboard(sql, `已复制 ${rows.length} 条 DELETE${pk.length ? '' : '（无主键，按整行匹配）'}`)
+}
+// 复制为 IN (...) 列表：把选区的值拼成 SQL 的 IN 参数，直接贴进 where。
+// 原来只能「复制为 CSV」再自己补引号、逗号 —— 上百个 id 就是纯手工活，还容易漏一个引号。
+// 多列时每列各出一段、段前标列名（否则贴回去分不清哪个 IN 是哪一列）。
+const copyInList = () => {
+  const { rows, cols } = ctxSelection()
+  if (!rows.length || !cols.length) { ElMessage.warning(t('sqlq.nothingToCopy')); return }
+  const block = (c) => {
+    const items = rows.map(r => sqlVal(r[c]))
+    if (!items.length) return ''
+    const body = `IN (\n${items.map(v => `  ${v}`).join(',\n')}\n)`
+    return cols.length > 1 ? `-- ${c}\n${body}` : body
+  }
+  const text = cols.map(block).filter(Boolean).join('\n\n')
+  if (!text) return
+  writeClipboard(text, t('sqlq.copyInListDone', { n: rows.length }))
 }
 const hideColumn = (col) => {
   if (!col) return
@@ -3111,8 +3132,61 @@ onBeforeUnmount(() => {
   document.removeEventListener('mousemove', onColSelectMove)
 })
 
+// ========== 字段脱敏（结果表格出口） ==========
+// 只打「显示」这一层：复制、导出、就地编辑拿到的仍是原文（编辑框读的是 row[col]）。
+// 规则与算法都来自 utils/masking（与后端 dbmind_core::mask 同一套向量），
+// 命中哪几列由「连接 + 库 + 表 + 列名」决定 —— 表名这里是确定的，和「查看数据」的场景一致。
+const gridMaskCols = ref({}) // 列名 → 处理方式（没命中的列不出现）
+const gridMaskAes = ref({}) // AES 是异步的：`列\0原文` → 密文，算好后自动替换占位
+const gridMaskPending = new Set()
+
+const refreshGridMask = async () => {
+  // 取不到配置按「没配规则」处理：宁可这张表不打码，也不让表格打不开
+  const cfg = await ensureMaskConfig()
+  if (!cfg) {
+    gridMaskCols.value = {}
+    return
+  }
+  gridMaskCols.value = gridMethods({
+    connectionId: props.conn?.id,
+    database: props.database,
+    table: props.table,
+    columns: columns.value
+  }, cfg)
+}
+
+watch(
+  [() => props.conn?.id, () => props.database, () => props.table, columns],
+  () => { refreshGridMask() },
+  { immediate: true }
+)
+
+/** 命中规则时返回代换值；没命中（或值本身是 NULL）返回 null，交给原来的格式化 */
+const maskedCell = (value, column) => {
+  const method = column ? gridMaskCols.value[column] : ''
+  if (!method || value === null || value === undefined) return null
+  const text = String(value)
+  // MD5 / SHA-256 / *** / 后 4 位都是同步的，直接算 —— 表格渲染等不了异步
+  if (method !== 'aes') return maskTextSync(text, method)
+  const key = column + '\u0000' + text
+  if (gridMaskAes.value[key] !== undefined) return gridMaskAes.value[key]
+  if (!gridMaskPending.has(key)) {
+    gridMaskPending.add(key)
+    maskTextAsync(text, 'aes', peekMaskConfig()?.aesKey || '')
+      .then((masked) => { gridMaskAes.value[key] = masked })
+      .catch(() => { gridMaskAes.value[key] = '***' })
+      .finally(() => gridMaskPending.delete(key))
+  }
+  // 还没算完：先给占位（不显示原文）
+  return '***'
+}
+
 // 展示格式化：ISO 时间戳的 T 换成空格（编辑仍用原始值，见 editingCell 的取值）
-const formatCell = (v) => v === null || v === undefined ? nullDisplay() : formatDbValue(v)
+const formatCell = (v, column) => {
+  const masked = maskedCell(v, column)
+  if (masked !== null) return masked
+  return v === null || v === undefined ? nullDisplay() : formatDbValue(v)
+}
 
 // ========== 导出（当前页 / 全部）：按当前筛选+排序构造查询，落地为后端导出 ==========
 const quoteIdent = (s) => {

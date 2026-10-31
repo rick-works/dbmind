@@ -254,62 +254,155 @@
           <div class="panel-title">{{ $t('settings.mask.title') }}</div>
           <div class="panel-desc">{{ $t('settings.mask.desc') }}</div>
 
+          <!-- 四个出口各自开关：一处规则、分别决定发到哪儿才打码（库里的数据永远不动） -->
           <div class="mask-head">
-            <el-switch v-model="maskForm.enabled" />
-            <span class="mask-head-label">{{ $t('settings.mask.enabled') }}</span>
-            <span class="mask-head-scope">{{ $t('settings.mask.scopeHint') }}</span>
+            <div v-for="chan in MASK_CHANNELS" :key="chan.key" class="mask-chan">
+              <el-switch v-model="maskForm[chan.key]" />
+              <span class="mask-chan-label">{{ $t(chan.label) }}</span>
+              <span class="mask-chan-hint">{{ $t(chan.hint) }}</span>
+            </div>
           </div>
 
-          <div class="mask-grid">
-            <div class="mask-row mask-row-head">
-              <span>{{ $t('settings.mask.conn') }}</span>
-              <span>{{ $t('settings.mask.db') }}</span>
-              <span>{{ $t('settings.mask.table') }}</span>
-              <span>{{ $t('settings.mask.column') }}</span>
-              <span>{{ $t('settings.mask.note') }}</span>
-              <span></span>
-            </div>
-            <div v-for="(rule, idx) in maskForm.rules" :key="idx" class="mask-row">
-              <el-select
-                v-model="rule.connectionId"
+          <!-- AES 密钥：默认给一把，用户可改成自己的口令；同值同密文，拿它可解回原文 -->
+          <div class="mask-key">
+            <div class="mask-key-title">{{ $t('settings.mask.aesKey') }}</div>
+            <div class="mask-key-row">
+              <el-input
+                v-model="maskAesKey"
                 size="small"
                 clearable
-                filterable
-                :placeholder="$t('settings.mask.anyConn')"
-              >
-                <el-option v-for="c in maskConnections" :key="c.id" :label="c.name" :value="c.id" />
-              </el-select>
-              <el-input v-model="rule.database" size="small" clearable :placeholder="$t('settings.mask.anyDb')" />
-              <el-input v-model="rule.table" size="small" clearable :placeholder="$t('settings.mask.anyTable')" />
-              <el-input v-model="rule.column" size="small" :placeholder="$t('settings.mask.columnPh')" />
-              <el-input v-model="rule.note" size="small" clearable :placeholder="$t('settings.mask.notePh')" />
-              <el-button text type="danger" :icon="Delete" @click="maskForm.rules.splice(idx, 1)" />
+                class="mask-key-input"
+                :placeholder="$t('settings.mask.aesKeyPh')"
+              />
+              <el-button size="small" :icon="DocumentCopy" @click="copyAesKey">
+                {{ $t('settings.mask.aesKeyCopy') }}
+              </el-button>
+              <el-button size="small" :icon="Refresh" @click="randomAesKey">
+                {{ $t('settings.mask.aesKeyRandom') }}
+              </el-button>
             </div>
-            <div v-if="!maskForm.rules.length" class="mask-empty">{{ $t('settings.mask.empty') }}</div>
+          </div>
+
+          <!-- 规则按「连接 + 库」分组：同一个库的字段规则都在一组里，不用每条都重选一遍库 -->
+          <div class="mask-list">
+            <div v-for="(group, gi) in maskForm.groups" :key="group.uid" class="mask-group">
+              <div class="mask-group-head">
+                <!-- 连接用全项目统一的「分组 → 连接」选择器：跟 SQL 编辑器的连接下拉长得一模一样 -->
+                <ConnectionSelect
+                  v-model="group.connectionId"
+                  class="mask-group-conn"
+                  :connections="maskConnections"
+                  :clearable="true"
+                  :width-min="170"
+                  :width-max="280"
+                  :placeholder="$t('settings.mask.anyConn')"
+                  @change="() => onGroupConnChange(group)"
+                />
+                <el-select
+                  v-model="group.database"
+                  size="small"
+                  clearable
+                  filterable
+                  allow-create
+                  default-first-option
+                  class="mask-group-db"
+                  :disabled="!group.connectionId"
+                  :placeholder="$t('settings.mask.anyDb')"
+                  @change="onGroupDbChange(group)"
+                >
+                  <template #prefix>
+                    <el-icon class="mask-sel-icon"><Coin /></el-icon>
+                  </template>
+                  <el-option v-for="db in maskDbOptionsOf(group)" :key="db" :label="db" :value="db" />
+                </el-select>
+                <span class="mask-group-count">{{ $t('settings.mask.groupRules', { n: group.rules.length }) }}</span>
+                <div class="mask-group-ops">
+                  <el-button size="small" :icon="Plus" @click="addRuleToGroup(group)">
+                    {{ $t('settings.mask.addRuleInGroup') }}
+                  </el-button>
+                  <el-button text type="danger" size="small" @click="removeMaskGroup(gi)">
+                    {{ $t('settings.mask.removeGroup') }}
+                  </el-button>
+                </div>
+              </div>
+              <div class="mask-group-body">
+                <div v-for="(rule, ri) in group.rules" :key="rule.uid" class="mask-rule-row">
+                  <el-select
+                    v-if="maskNeedsSchema(group)"
+                    v-model="rule.schema"
+                    size="small"
+                    clearable
+                    filterable
+                    allow-create
+                    default-first-option
+                    class="c-schema"
+                    :placeholder="$t('settings.mask.anySchema')"
+                    @change="onMaskSchemaChange(group, rule)"
+                  >
+                    <template #prefix>
+                      <el-icon class="mask-sel-icon"><Folder /></el-icon>
+                    </template>
+                    <el-option v-for="sc in maskSchemaOptionsOf(group)" :key="sc" :label="sc" :value="sc" />
+                  </el-select>
+                  <el-select
+                    v-model="rule.table"
+                    size="small"
+                    clearable
+                    filterable
+                    allow-create
+                    default-first-option
+                    class="c-table"
+                    :disabled="!group.database"
+                    :placeholder="$t('settings.mask.anyTable')"
+                    @change="onMaskTableChange(group, rule)"
+                  >
+                    <el-option v-for="tb in maskTableOptionsOf(group, rule)" :key="tb" :label="tb" :value="tb" />
+                  </el-select>
+                  <el-select
+                    v-model="rule.column"
+                    size="small"
+                    filterable
+                    allow-create
+                    default-first-option
+                    class="c-column"
+                    :placeholder="$t('settings.mask.columnPh')"
+                  >
+                    <el-option v-for="col in maskColumnOptionsOf(group, rule)" :key="col" :label="col" :value="col" />
+                  </el-select>
+                  <el-select v-model="rule.method" size="small" class="c-method">
+                    <el-option
+                      v-for="m in MASK_METHODS"
+                      :key="m"
+                      :label="$t('settings.mask.method.' + m)"
+                      :value="m"
+                    />
+                  </el-select>
+                  <el-input
+                    v-model="rule.note"
+                    size="small"
+                    clearable
+                    class="c-note"
+                    :placeholder="$t('settings.mask.notePh')"
+                  />
+                  <el-button text type="danger" :icon="Delete" @click="removeMaskRule(group, ri)" />
+                </div>
+                <div v-if="!group.rules.length" class="mask-group-empty">
+                  <el-icon><Plus /></el-icon>
+                  <span>{{ $t('settings.mask.emptyGroup') }}</span>
+                </div>
+              </div>
+            </div>
+            <div v-if="!maskForm.groups.length" class="mask-empty">
+              <el-icon class="mask-empty-icon"><MagicStick /></el-icon>
+              <span>{{ $t('settings.mask.empty') }}</span>
+            </div>
           </div>
 
           <div class="actions mask-actions">
-            <el-button :icon="Plus" @click="addMaskRule">{{ $t('settings.mask.add') }}</el-button>
+            <el-button :icon="Plus" @click="addMaskGroup">{{ $t('settings.mask.addGroup') }}</el-button>
             <el-button :icon="MagicStick" @click="autoDetectMask">{{ $t('settings.mask.auto') }}</el-button>
             <el-button :icon="Refresh" @click="loadMaskRules">{{ $t('settings.mask.reload') }}</el-button>
           </div>
-
-          <div class="mask-preview">
-            <div class="mask-preview-title">{{ $t('settings.mask.preview') }}</div>
-            <div class="mask-preview-row">
-              <el-input
-                v-model="maskSample"
-                size="small"
-                :placeholder="$t('settings.mask.previewPh')"
-                class="mask-preview-in"
-              />
-              <span class="mask-preview-arrow">→</span>
-              <code class="mask-preview-out">{{ maskPreviewText || '—' }}</code>
-            </div>
-            <div class="form-tip">{{ $t('settings.mask.previewTip') }}</div>
-          </div>
-
-          <div class="mask-warn">{{ $t('settings.mask.warn') }}</div>
 
           <div class="actions">
             <el-button type="primary" :loading="maskSaving" @click="saveMask">{{ $t('settings.mask.save') }}</el-button>
@@ -1210,20 +1303,24 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, watch, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   MagicStick, Connection, Brush, Box,
   FolderOpened, EditPen, DataLine, Download, Operation, Monitor, Plus, Delete,
   CircleCheck, Timer, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
-  ArrowUp, ArrowDown, Document, DocumentCopy
+  ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder
 } from '@element-plus/icons-vue'
+// 连接下拉用全项目统一的那一个（分组 → 连接两级），与 SQL 编辑器 / 数据传输等页面同款样式
+import ConnectionSelect from '../../common/ConnectionSelect.vue'
 import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/topMenu'
 import { getAppearance, saveAppearance, appearanceDefaults } from '../../utils/appearance'
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern, ruleHasIndent } from '../../utils/sqlFormat'
-import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs, getMaskRules, saveMaskRules, previewMask } from '../../api'
+import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs, getMaskRules, saveMaskRules, listDatabases, listSchemas, listTables, listColumns, getFeatures } from '../../api'
+// 表格里的打码用同一份配置（前端同算法）：设置页保存后顺手同步给 utils/masking 的缓存
+import { setMaskConfig as applyMaskRules } from '../../utils/masking'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
 // 界面尺寸：当前值由 utils/appearance.js 从 localStorage 读；改动即写 :root 的 CSS 变量并落盘，
@@ -1597,16 +1694,30 @@ const load = async () => {
   } catch (e) { ElMessage.error(t('settings.ai.msgLoadFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) })) }
 }
 
-// ---------- 数据脱敏（只作用于发给 AI 的内容） ----------
-// 作用范围刻意收窄：上下文里的样例行 + 智能体的只读工具结果。
-// 库里的数据、结果表格、导出、复制一律不动 —— 那是用户自己的数据，不是出站流量。
-const maskForm = ref({ enabled: false, rules: [] })
+// ---------- 字段脱敏（一份规则，三个出口各自开关） ----------
+// 规则只有一份，出口分四种：发给大模型的内容（上下文样例行 + 智能体工具结果）、
+// MCP 服务返回给外部客户端的数据、DBMind 自己的结果表格、导出的文件。
+// 四处都靠同一份判定（后端 `dbmind_core::mask`，表格用前端同算法的 utils/masking.js），
+// 才不会出现「设置里配了、某一处没生效」。
+// 界面状态按「连接 + 库」分组：同一个库的字段规则放在一张卡片里，库/连接只选一次。
+// 存下去仍然是后端那份扁平 rules（不改接口），进出各做一次分组/展平。
+const maskForm = ref({ llm: false, mcp: false, grid: false, export: false, groups: [] })
 const maskSaving = ref(false)
 const maskSaved = ref(false)
-const maskSample = ref('')
-const maskPreviewText = ref('')
+
+/** 四个出口：key 与后端 `MaskConfig` 字段一一对应 */
+const MASK_CHANNELS = [
+  { key: 'llm', label: 'settings.mask.chLlm', hint: 'settings.mask.chLlmHint' },
+  { key: 'mcp', label: 'settings.mask.chMcp', hint: 'settings.mask.chMcpHint' },
+  { key: 'grid', label: 'settings.mask.chGrid', hint: 'settings.mask.chGridHint' },
+  { key: 'export', label: 'settings.mask.chExport', hint: 'settings.mask.chExportHint' }
+]
+// AES 可解回去，密钥得让用户看得到（存在本机设置里，没人用 AES 时为空、这一行不显示）
+const maskAesKey = ref('')
 const maskConnections = ref([])
-let maskPreviewTimer = null
+
+/** 内置处理方式：顺序即下拉顺序，默认第一项（都是常见做法，没有自造算法） */
+const MASK_METHODS = ['md5', 'sha256', 'aes', 'star', 'last4']
 
 /** 一键加入的常见敏感列：只收「列名足够特征化」的；`*name` 这类模糊模式加进去只会误伤正常字段 */
 const MASK_COLUMN_PRESETS = [
@@ -1615,56 +1726,262 @@ const MASK_COLUMN_PRESETS = [
   'bank_card', '*bank_account'
 ]
 
-const normalizeMaskRule = (rule) => ({
-  connectionId: rule.connectionId || '',
-  database: rule.database || '',
+// 选项缓存：连接 → 库 → 模式 → 表 → 列。键里逐层带上层名字，
+// 同一条连接被多条规则引用时只加载一次，换连接也不会串味。
+const maskFeatures = reactive({})
+const maskDbOptions = reactive({})
+const maskSchemaOptions = reactive({})
+const maskTableOptions = reactive({})
+const maskColumnOptions = reactive({})
+const maskKey = (...parts) => parts.map(part => part || '').join('|')
+
+/** 有 Schema 层的引擎（PG / 金仓 / SQL Server / Oracle）才多画一个「模式」下拉 —— 名单跟 dialect.is_schema_aware 对齐 */
+const maskNeedsSchema = (group) => maskFeatures[group.connectionId]?.supportsSchemas === true
+const maskDbOptionsOf = (group) => maskDbOptions[group.connectionId] || []
+const maskSchemaOptionsOf = (group) => maskSchemaOptions[maskKey(group.connectionId, group.database)] || []
+const maskTableOptionsOf = (group, rule) => maskTableOptions[maskKey(group.connectionId, group.database, rule.schema)] || []
+const maskColumnOptionsOf = (group, rule) => maskColumnOptions[maskKey(group.connectionId, group.database, rule.schema, rule.table)] || []
+
+// 组件上的 key 用自增 uid：库里同名同列的两条规则也得各自独立渲染，索引当 key 会在删除时串行
+let maskUid = 0
+const nextMaskUid = () => ++maskUid
+
+const newMaskRule = (patch = {}) => ({
+  uid: nextMaskUid(),
+  schema: '',
+  table: '',
+  column: '',
+  method: 'md5',
+  note: '',
+  ...patch
+})
+
+const newMaskGroup = (patch = {}) => ({
+  uid: nextMaskUid(),
+  connectionId: '',
+  database: '',
+  rules: [newMaskRule()],
+  ...patch
+})
+
+const normalizeMaskRule = (rule) => newMaskRule({
+  schema: rule.schema || '',
   table: rule.table || '',
   column: rule.column || '',
+  method: MASK_METHODS.includes(rule.method) ? rule.method : 'md5',
   note: rule.note || ''
 })
+
+/** 扁平规则 → 分组：按「连接 + 库」聚合，顺序按首次出现的先后，不重排用户的规则 */
+const buildMaskGroups = (rules) => {
+  const groups = []
+  const byKey = new Map()
+  for (const raw of rules || []) {
+    const connectionId = raw.connectionId || ''
+    const database = raw.database || ''
+    const key = maskKey(connectionId, database)
+    let group = byKey.get(key)
+    if (!group) {
+      group = newMaskGroup({ connectionId, database, rules: [] })
+      byKey.set(key, group)
+      groups.push(group)
+    }
+    group.rules.push(normalizeMaskRule(raw))
+  }
+  return groups
+}
+
+/** 分组 → 扁平规则（提交给后端的形状；空列名的行永远匹配不到东西，直接丢掉） */
+const flattenMaskGroups = () => {
+  const rules = []
+  for (const group of maskForm.value.groups) {
+    for (const rule of group.rules) {
+      const column = (rule.column || '').trim()
+      if (!column) continue
+      rules.push({
+        connectionId: group.connectionId,
+        database: group.database,
+        schema: rule.schema,
+        table: rule.table,
+        column,
+        method: rule.method,
+        note: rule.note
+      })
+    }
+  }
+  return rules
+}
 
 const loadMaskConnections = async () => {
   if (maskConnections.value.length) return
   try { maskConnections.value = (await listConnections()) || [] } catch { maskConnections.value = [] }
 }
 
+const loadMaskFeatures = async (connId) => {
+  if (!connId || maskFeatures[connId] !== undefined) return
+  try { maskFeatures[connId] = (await getFeatures(connId)) || {} } catch { maskFeatures[connId] = {} }
+}
+
+const loadMaskDbs = async (connId) => {
+  if (!connId || maskDbOptions[connId]) return
+  try { maskDbOptions[connId] = (await listDatabases(connId)) || [] } catch { maskDbOptions[connId] = [] }
+}
+
+const loadMaskSchemas = async (connId, database) => {
+  const key = maskKey(connId, database)
+  if (!connId || !database || maskSchemaOptions[key]) return
+  try { maskSchemaOptions[key] = (await listSchemas(connId, database)) || [] } catch { maskSchemaOptions[key] = [] }
+}
+
+/** 表清单：有模式层的引擎要把 `库.模式` 作为 database 传（后端 split_db_schema 的约定） */
+const loadMaskTables = async (connId, database, schema) => {
+  const key = maskKey(connId, database, schema)
+  if (!connId || !database || maskTableOptions[key]) return
+  try {
+    const list = await listTables(connId, schema ? `${database}.${schema}` : database)
+    maskTableOptions[key] = (Array.isArray(list) ? list : [])
+      .map(item => (typeof item === 'string' ? item : item.name))
+      .filter(Boolean)
+  } catch { maskTableOptions[key] = [] }
+}
+
+const loadMaskColumns = async (connId, database, schema, table) => {
+  const key = maskKey(connId, database, schema, table)
+  if (!connId || !database || !table || maskColumnOptions[key]) return
+  try {
+    const list = await listColumns(connId, schema ? `${database}.${schema}` : database, table)
+    maskColumnOptions[key] = (Array.isArray(list) ? list : [])
+      .map(item => (typeof item === 'string' ? item : item.name))
+      .filter(Boolean)
+  } catch { maskColumnOptions[key] = [] }
+}
+
+/** 已保存的规则：把这一组的库/模式/表/列都预取一遍，否则下拉里只有一个裸值、改不了 */
+const prefetchMaskGroup = async (group) => {
+  if (!group.connectionId) return
+  await loadMaskFeatures(group.connectionId)
+  loadMaskDbs(group.connectionId)
+  if (!group.database) return
+  if (maskNeedsSchema(group)) await loadMaskSchemas(group.connectionId, group.database)
+  for (const rule of group.rules) {
+    loadMaskTables(group.connectionId, group.database, rule.schema)
+    if (rule.table) loadMaskColumns(group.connectionId, group.database, rule.schema, rule.table)
+  }
+}
+
 const loadMaskRules = async () => {
   try {
     const data = await getMaskRules()
     maskForm.value = {
-      enabled: !!data.enabled,
-      rules: (Array.isArray(data.rules) ? data.rules : []).map(normalizeMaskRule)
+      llm: !!data.llm,
+      mcp: !!data.mcp,
+      grid: !!data.grid,
+      export: !!data.export,
+      groups: buildMaskGroups(data.rules)
     }
+    // 规则变了就要重算表格里的打码（表格用的是这份配置的本地副本）
+    applyMaskRules(data)
+    maskAesKey.value = data.aesKey || ''
+    maskForm.value.groups.forEach(prefetchMaskGroup)
   } catch (e) {
     ElMessage.error(t('settings.mask.msgLoadFailed', { detail: e?.message || String(e) }))
   }
 }
 
-const addMaskRule = () => {
-  maskForm.value.rules.push({ connectionId: '', database: '', table: '', column: '', note: '' })
+const addMaskGroup = () => {
+  maskForm.value.groups.push(newMaskGroup())
+}
+
+const addRuleToGroup = (group) => {
+  group.rules.push(newMaskRule())
+}
+
+const removeMaskGroup = (index) => {
+  maskForm.value.groups.splice(index, 1)
+}
+
+const removeMaskRule = (group, index) => {
+  group.rules.splice(index, 1)
 }
 
 const autoDetectMask = () => {
-  const existing = new Set(maskForm.value.rules.map(rule => (rule.column || '').trim().toLowerCase()))
+  // 预设列放到「全部连接 / 全部库」那一组里：它们本来就是通用列名，钉库只会在别处漏
+  let group = maskForm.value.groups.find(item => !item.connectionId && !item.database)
+  const existing = new Set(flattenMaskGroups().map(rule => (rule.column || '').trim().toLowerCase()))
   let added = 0
   for (const column of MASK_COLUMN_PRESETS) {
     if (existing.has(column)) continue
-    maskForm.value.rules.push({ connectionId: '', database: '', table: '', column, note: '' })
+    if (!group) {
+      group = newMaskGroup({ connectionId: '', database: '', rules: [] })
+      maskForm.value.groups.push(group)
+    }
+    group.rules.push(newMaskRule({ column }))
+    existing.add(column)
     added += 1
   }
   if (added) ElMessage.success(t('settings.mask.msgAutoAdded', { n: added }))
   else ElMessage.info(t('settings.mask.msgAutoNone'))
 }
 
+// 换连接：先取能力（决定要不要画「模式」），再拉库清单。等 features 回来再判断有没有模式层：
+// 不等的话 supportsSchemas 还是 undefined，会把 PG/SQL Server 的模式清成空。
+const onGroupConnChange = async (group) => {
+  // 上层的值一变，组内每条规则的下层字段都成了「指向不存在对象」，统一清掉
+  group.database = ''
+  group.rules.forEach(rule => {
+    rule.schema = ''
+    rule.table = ''
+    rule.column = ''
+  })
+  if (!group.connectionId) return
+  await loadMaskFeatures(group.connectionId)
+  loadMaskDbs(group.connectionId)
+}
+
+const onGroupDbChange = async (group) => {
+  group.rules.forEach(rule => {
+    rule.schema = ''
+    rule.table = ''
+    rule.column = ''
+  })
+  if (!group.database) return
+  if (maskNeedsSchema(group)) await loadMaskSchemas(group.connectionId, group.database)
+  // 组内所有规则的 schema 都刚被清空，表清单只需要拉一次（同一个 key）
+  loadMaskTables(group.connectionId, group.database, '')
+}
+
+const onMaskSchemaChange = (group, rule) => {
+  rule.table = ''
+  rule.column = ''
+  loadMaskTables(group.connectionId, group.database, rule.schema)
+}
+
+const onMaskTableChange = (group, rule) => {
+  rule.column = ''
+  loadMaskColumns(group.connectionId, group.database, rule.schema, rule.table)
+}
+
 const saveMask = async () => {
   maskSaving.value = true
   maskSaved.value = false
   try {
-    const rules = maskForm.value.rules
-      .map(rule => ({ ...rule, column: (rule.column || '').trim() }))
-      .filter(rule => rule.column)
-    const res = await saveMaskRules({ enabled: maskForm.value.enabled, rules })
-    maskForm.value.rules = rules
+    const rules = flattenMaskGroups()
+    // 密钥跟规则一起提交（后端原样存）；空值表示不改，后端会保留现有那把
+    const res = await saveMaskRules({
+      llm: maskForm.value.llm,
+      mcp: maskForm.value.mcp,
+      grid: maskForm.value.grid,
+      export: maskForm.value.export,
+      rules,
+      aesKey: maskAesKey.value
+    })
+    // 表格用的是这份配置的本地副本：保存后立刻覆盖，不用等下次进设置页
+    applyMaskRules({ ...res, rules, aesKey: res?.aesKey || maskAesKey.value })
+    // 保存后按后端真正收下的内容重建分组：空列名的行、空组都会被清掉，界面与库里保持一致
+    maskForm.value.groups = buildMaskGroups(rules)
+    maskForm.value.groups.forEach(prefetchMaskGroup)
+    // 有 AES 规则时后端会在保存时把密钥备好并带回，这里立刻显示出来
+    if (res?.aesKey) maskAesKey.value = res.aesKey
     maskSaved.value = true
     ElMessage.success(t('settings.mask.msgSaved', { n: res?.count ?? rules.length }))
   } catch (e) {
@@ -1674,20 +1991,23 @@ const saveMask = async () => {
   }
 }
 
-// 预览走 250ms 防抖：一边打字一边发请求既没必要，也容易让结果闪来闪去
-watch(maskSample, (value) => {
-  if (maskPreviewTimer) clearTimeout(maskPreviewTimer)
-  const text = (value || '').trim()
-  if (!text) { maskPreviewText.value = ''; return }
-  maskPreviewTimer = setTimeout(async () => {
-    try {
-      const res = await previewMask(text)
-      maskPreviewText.value = res?.result || ''
-    } catch { maskPreviewText.value = '' }
-  }, 250)
-})
+const copyAesKey = async () => {
+  if (!maskAesKey.value) return
+  try {
+    await navigator.clipboard.writeText(maskAesKey.value)
+    ElMessage.success(t('settings.mask.aesKeyCopied'))
+  } catch {
+    ElMessage.error(t('settings.mask.aesKeyCopyFailed'))
+  }
+}
 
-onBeforeUnmount(() => { if (maskPreviewTimer) clearTimeout(maskPreviewTimer) })
+/** 随机生成一把 32 字节密钥（base64）：想换掉默认值又不想自己起口令时用 */
+const randomAesKey = () => {
+  const bytes = new Uint8Array(32)
+  if (window.crypto?.getRandomValues) window.crypto.getRandomValues(bytes)
+  else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256)
+  maskAesKey.value = btoa(String.fromCharCode(...bytes))
+}
 
 // ---------- 存储路径 ----------
 /** 数据目录迁移已接入（后端：快照 + 复制 + 指针文件，热切换立即生效）；驱动跟着数据目录走，不单独设置 */
@@ -3204,30 +3524,62 @@ watch(visible, (v) => {
 .about-license { white-space: pre-line; margin-bottom: 8px; }
 .about-link { color: var(--dc-primary); text-decoration: none; font-size: 13px; }
 .about-link:hover { text-decoration: underline; }
-/* 数据脱敏：规则表固定列宽，输入框才排得齐；最后 34px 给删除按钮 */
-.mask-head { display: flex; align-items: center; gap: 10px; margin: 2px 0 14px; flex-wrap: wrap; }
-.mask-head-label { font-size: 13px; color: var(--dc-text); }
-.mask-head-scope { font-size: 12px; color: var(--dc-text-dim); }
-.mask-grid { border: 1px solid var(--dc-border); border-radius: 8px; overflow: hidden; }
-.mask-row {
-  display: grid; gap: 8px; align-items: center; padding: 6px 10px;
-  grid-template-columns: 1.4fr 1fr 1fr 1.2fr 1.6fr 34px;
+/* 数据脱敏：说明沿用全站统一的 .panel-desc 样式，不另做花样 */
+/* 四个出口竖排：一行一个开关，名称与作用范围说明跟在后面 —— 竖排比横排更好扫，
+   说明也不会被挤到第二行去（横排时四个挤在一行，最后一个的说明常常折行） */
+.mask-head { display: flex; flex-direction: column; gap: 8px; margin: 2px 0 14px; }
+.mask-chan { display: flex; align-items: center; gap: 8px; min-height: 24px; }
+.mask-chan-label { font-size: 13px; color: var(--dc-text); }
+.mask-chan-hint { font-size: 12px; color: var(--dc-text-dim); }
+/* 一张卡片 = 一个库（连接 + 库）。组头把库选一次，组内每行只填 模式/表/列/方式/备注。
+   「模式」只在有 Schema 层的引擎出现，所以行内用 flex 换行，不写死列数 */
+.mask-list { display: flex; flex-direction: column; gap: 12px; }
+.mask-group {
+  border: 1px solid var(--dc-border); border-radius: 8px;
+  background: var(--dc-bg-soft); overflow: hidden;
 }
-.mask-row + .mask-row { border-top: 1px solid var(--dc-border); }
-.mask-row-head { font-size: 12px; color: var(--dc-text-dim); background: var(--dc-bg-soft); }
-.mask-empty { padding: 18px 14px; text-align: center; font-size: 12px; color: var(--dc-text-dim); }
+.mask-group-head {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; border-bottom: 1px solid var(--dc-border);
+}
+/* 连接下拉由 ConnectionSelect 自己算宽度（inline width），所以这里不要给 flex-basis，否则量不出效果 */
+.mask-group-conn { flex: none; }
+.mask-group-db { flex: 0 0 190px; }
+.mask-sel-icon { color: var(--dc-text-dim); font-size: 13px; }
+.mask-group-count { font-size: 12px; color: var(--dc-text-dim); }
+.mask-group-ops { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.mask-group-body { padding: 6px 12px 10px; }
+.mask-rule-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 5px 0; }
+.mask-rule-row + .mask-rule-row { border-top: 1px dashed var(--dc-border); }
+/* 各列宽度：表/列是主要输入，给宽一点；备注吃剩余空间 */
+.mask-rule-row .c-schema { flex: 0 0 130px; }
+.mask-rule-row .c-table { flex: 0 0 176px; }
+.mask-rule-row .c-column { flex: 0 0 176px; }
+.mask-rule-row .c-method { flex: 0 0 158px; }
+.mask-rule-row .c-note { flex: 1 1 160px; min-width: 140px; }
+/* 空态：虚线框 + 图标，比一行小灰字更像「这里可以点」 */
+.mask-group-empty {
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  margin: 8px 0 2px; padding: 12px;
+  border: 1px dashed var(--dc-border); border-radius: 8px;
+  font-size: 12px; color: var(--dc-text-dim);
+}
+.mask-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px;
+  padding: 26px 16px; border: 1px dashed var(--dc-border); border-radius: 10px;
+  background: var(--dc-bg-soft);
+  text-align: center; font-size: 12.5px; line-height: 1.7; color: var(--dc-text-dim);
+}
+.mask-empty-icon { font-size: 22px; color: var(--dc-primary); opacity: .85; }
 .mask-actions { margin-top: 12px; }
-.mask-preview { margin-top: 18px; }
-.mask-preview-title { font-size: 13px; color: var(--dc-text); margin-bottom: 6px; }
-.mask-preview-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.mask-preview-in { max-width: 320px; }
-.mask-preview-arrow { color: var(--dc-text-dim); }
-.mask-preview-out {
-  font-family: var(--dc-mono, ui-monospace, Consolas, monospace); font-size: 13px;
-  padding: 2px 8px; border-radius: 4px; background: var(--dc-bg-soft);
-  color: var(--dc-text-strong); max-width: 360px; overflow: hidden; text-overflow: ellipsis;
-}
-.mask-warn { margin-top: 14px; font-size: 12px; line-height: 1.8; color: var(--dc-text-weak); }
+/* AES 密钥：小标题 + 一行「输入框 + 复制 + 随机生成」 */
+.mask-key { margin: 0 0 14px; }
+.mask-key-title { font-size: 13px; color: var(--dc-text); margin-bottom: 6px; }
+.mask-key-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mask-key-input { max-width: 420px; }
+/* 密钥是 base64/口令这种机器串，等宽字体更好辨认 */
+.mask-key-input :deep(.el-input__inner) { font-family: var(--dc-mono, ui-monospace, Consolas, monospace); font-size: 12px; }
+
 .mask-saved { margin-left: 10px; font-size: 12px; color: var(--dc-text-dim); }
 </style>
 

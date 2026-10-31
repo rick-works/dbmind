@@ -33,3 +33,10 @@ tower-http = { version = "0.6", features = ["cors", "fs", "trace", "compression-
 serde = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# AI 出站脱敏要的「常用加密方式」：MD5 / SHA-256 摘要 + AES-256-GCM 加密。
+# 三者都只用来把出站值换成不可读/可解的形式，不参与存储加密，所以不需要更多密码学设施。
+md-5 = "0.11"
+sha2 = "0.10"
+# ring 只用于 AES-256-GCM 与生成 32 字节密钥：ureq/rustls 已经把它带进来了，加直接依赖不再多编译一份
+ring = "0.17"
+base64 = "0.22"

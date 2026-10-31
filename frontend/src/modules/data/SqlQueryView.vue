@@ -72,13 +72,14 @@
             <el-button v-if="txMode" size="small" type="danger" plain :icon="RefreshLeft" :loading="txBusy"
                        @click="txRollback">{{ $t('sqlq.txRollback') }}</el-button>
           </template>
-          <!-- SQL 片段库：命名保存常用 SQL，点击插入；「+」把选区/全文存为片段 -->
+          <!-- SQL 片段库：点开查看 / 插入已存片段。
+               保存走编辑器右键「保存片段」（那里能直接对选中内容命名保存），
+               所以这里**不再放「存为片段」按钮** —— 同一个动作不留两个入口。 -->
           <el-dropdown v-if="!isNoSql" trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
             <el-button size="small" :icon="Collection" :title="$t('sqlq.snippets')">{{ $t('sqlq.snippets') }}</el-button>
             <template #dropdown>
               <div class="hist-head">
                 <span>{{ $t('sqlq.snippets') }}</span>
-                <el-button size="small" text type="primary" @click.stop="saveSnippet">{{ $t('sqlq.snipSave') }}</el-button>
               </div>
               <div class="hist-list" v-if="snippets.length">
                 <div class="hist-item" v-for="(s, i) in snippets" :key="s.id" @click="applySnippet(s)">
@@ -357,7 +358,7 @@
                 <td v-if="resultColLead > 0" class="col-gap" :colspan="resultColLead"></td>
                 <td v-for="c in resultColsSlice" :key="'d' + (vtStart + idx) + '_' + c.idx"
                     :class="[resultCellAlign(row[c.name], c.idx, c.name), { 'null-cell': row[c.name] == null, 'col-selected': selectedCols.has(c.name), 'col-sel-l': selEdges.colLeft.has(c.name), 'col-sel-r': selEdges.colRight.has(c.name), 'active-cell': resultActiveCell && resultActiveCell.rowIdx === (vtStart + idx) && resultActiveCell.col === c.name && noResultBulkSelection, 'cell-editing': resEditing && resEditing.rowIdx === (vtStart + idx) && resEditing.col === c.name, 'cell-edited': isResCellEdited(vtStart + idx, c.name) }]"
-                    :title="row[c.name] == null ? nullDisplay() : String(row[c.name])" :data-gkey="(vtStart + idx + 1) + ':' + c.idx"
+                    :title="formatResCell(row[c.name], c.name)" :data-gkey="(vtStart + idx + 1) + ':' + c.idx"
                     @click="onResultCellClick(vtStart + idx, c.name)"
                     @dblclick.stop="startResEdit(vtStart + idx, c.name, $event)"
                     @contextmenu.prevent.stop="onResultContextMenu($event, vtStart + idx, c.name)">
@@ -371,7 +372,7 @@
                          @blur="confirmResEdit()" />
                   <!-- 展示走 formatDbValue（ISO 时间戳的 T 换空格），原始值不动（复制/编辑仍拿原文） -->
                   <!-- ⚠️ 同 TableDataView：不要在这里加 v-memo（与分支切换冲突会让补丁抛 insertBefore 而失效） -->
-<span v-else>{{ row[c.name] == null ? nullDisplay() : formatDbValue(row[c.name]) }}</span>
+<span v-else>{{ formatResCell(row[c.name], c.name) }}</span>
                 </td>
                 <!-- 右侧被回收的列：同上，占位撑宽 -->
                 <td v-if="resultColEnd < resultVisibleCols.length" class="col-gap"
@@ -646,6 +647,8 @@ import { getResolvedTheme, monacoTheme, onResolvedThemeChange } from '../../util
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
 import { builtinFunctions, functionInsertText, smartCase } from '../../utils/sqlCompletions'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
+// 字段脱敏的「结果表格」出口：前端同算法打码，只改显示这一层
+import { ensureMaskConfig, peekMaskConfig, gridMethods, maskTextSync, maskTextAsync } from '../../utils/masking'
 import { useShortcutScope } from '../../utils/useShortcuts'
 import { loadShortcuts } from '../../utils/shortcuts'
 import { errMsg } from '../../utils/errMsg'
@@ -2345,6 +2348,9 @@ loadSnippets()
 const saveSnippet = async () => {
   const text = (selTextOf(editorInstance) || sql.value || '').trim()
   if (!text) { ElMessage.warning(t('sqlq.snipEmpty')); return }
+  // 命名弹窗的「取消」与写盘失败必须分开处理：放在同一个 try 里，写盘异常会被
+  // 当成「用户取消」静默吞掉 —— 用户以为存上了，重开就没了（持久化最怕这种假成功）
+  let name = ''
   try {
     const firstLine = text.split('\n').find(l => l.trim()) || ''
     const r = await ElMessageBox.prompt(firstLine.slice(0, 60), t('sqlq.snipSaveTitle'), {
@@ -2354,17 +2360,25 @@ const saveSnippet = async () => {
       cancelButtonText: t('common.cancel'),
       closeOnClickModal: false
     })
-    const name = String(r.value || '').trim()
-    if (!name) return
-    snippets.value.unshift({ id: 's_' + Date.now(), name, sql: text, ts: Date.now() })
-    if (snippets.value.length > 100) snippets.value.pop()
+    name = String(r.value || '').trim()
+  } catch {
+    return // 用户取消
+  }
+  if (!name) return
+  snippets.value.unshift({ id: 's_' + Date.now(), name, sql: text, ts: Date.now() })
+  if (snippets.value.length > 100) snippets.value.pop()
+  try {
     localStorage.setItem(SNIP_LS, JSON.stringify(snippets.value))
-    ElMessage.success(t('sqlq.snipSaved'))
-  } catch { /* 取消 */ }
+  } catch {
+    // 存储不可用 / 配额满：说清楚，别让人以为已经持久化
+    ElMessage.error(t('sqlq.snipSaveFailed'))
+    return
+  }
+  ElMessage.success(t('sqlq.snipSaved'))
 }
 const removeSnippet = (i) => {
   snippets.value.splice(i, 1)
-  localStorage.setItem(SNIP_LS, JSON.stringify(snippets.value))
+  try { localStorage.setItem(SNIP_LS, JSON.stringify(snippets.value)) } catch { /* 写盘失败不打扰：界面上已删 */ }
 }
 /** 插入片段：编辑器有选区就替换，否则插到光标处 */
 const applySnippet = (sn) => {
@@ -2387,8 +2401,9 @@ const openRowDetail = (rowIdx) => {
   if (!row) return
   const lines = cols.map(c => {
     const v = row[c]
-    // 与网格同口径：ISO 时间串的 `T` 换成空格（详情里全是原始值会看着割裂）
-    return c + '：' + (v == null ? nullDisplay() : String(formatDbValue(v)))
+    // 与网格同口径：ISO 时间串的 `T` 换成空格；命中脱敏规则的列在详情里也是打码值
+    // （详情只是「换个地方看同一张表」，不该成为绕开打码的旁路）
+    return c + '：' + (v == null ? nullDisplay() : String(formatResCell(v, c)))
   })
   rowDetail.value = { visible: true, title: t('sqlq.rowDetailTitle', { n: rowIdx + 1 }), text: lines.join('\n') }
 }
@@ -2751,6 +2766,22 @@ const copyResMarkdown = () => {
   const body = rows.map(r => `| ${cols.map(c => esc(r[c] == null ? '' : r[c])).join(' | ')} |`)
   writeClipboard([head, sep, ...body].join('\n'), t('sqlq.copyMarkdown', { n: rows.length }))
 }
+// 复制为 IN (...) 列表：把选区的值拼成 SQL 的 IN 参数，直接贴进 where。
+// 原来只能「复制为 CSV」再自己补引号、逗号 —— 上百个 id 就是纯手工活，还容易漏一个引号。
+// 多列时每列各出一段、段前标列名（否则贴回去分不清哪个 IN 是哪一列）。
+const copyResInList = () => {
+  const { rows, cols } = resCtxSelection()
+  if (!rows.length || !cols.length) { ElMessage.warning(t('sqlq.nothingToCopy')); return }
+  const block = (c) => {
+    const items = rows.map(r => resSqlVal(r[c]))
+    if (!items.length) return ''
+    const body = `IN (\n${items.map(v => `  ${v}`).join(',\n')}\n)`
+    return cols.length > 1 ? `-- ${c}\n${body}` : body
+  }
+  const text = cols.map(block).filter(Boolean).join('\n\n')
+  if (!text) return
+  writeClipboard(text, t('sqlq.copyInListDone', { n: rows.length }))
+}
 // 结果集没有主键信息，用选中列做 WHERE，复制后请自行核对
 const copyResDelete = () => {
   const { rows, cols } = resCtxSelection()
@@ -2811,6 +2842,7 @@ const openResCtx = (x, y, rowIdx, col, from = 'cell') => {
     { label: 'CSV', command: 'copy-csv' },
     { label: 'JSON', command: 'copy-json' },
     { label: 'MARKDOWN', command: 'copy-markdown' },
+    { label: 'IN (...)', command: 'copy-in-list' },
     { label: 'INSERT', command: 'copy-insert' },
     { label: 'UPDATE', command: 'copy-update' },
     { label: 'DELETE', command: 'copy-delete' }
@@ -2889,6 +2921,7 @@ const onResultCtxItem = (item) => {
     case 'copy-insert': copyResCtx('insert'); break
     case 'copy-update': copyResCtx('update'); break
     case 'copy-markdown': copyResMarkdown(); break
+    case 'copy-in-list': copyResInList(); break
     case 'show-all-cols': showAllResultCols(); break
     case 'copy-delete': copyResDelete(); break
     case 'col-fit': {
@@ -2995,6 +3028,59 @@ const dbScope = computed(() => {
   return `${db}.${selectedSchema.value}`
 })
 const tableNames = ref([]) // 当前库的表名缓存（用于编辑器补全）
+
+// ========== 字段脱敏（结果表格出口） ==========
+// 只打「显示」这一层：复制、导出、就地编辑拿到的仍是原文。
+// 规则的「表」在这里命中不了（SQL 结果的表名不可靠：JOIN / 别名 / 聚合都可能），
+// 所以只应用「表为空 = 任意表」的规则 —— 与后端智能体工具结果同一个口径。
+const resMaskCols = ref({}) // 列名 → 处理方式
+const resMaskAes = ref({}) // AES 异步：`列\0原文` → 密文
+const resMaskPending = new Set()
+
+const refreshResMask = async () => {
+  const cfg = await ensureMaskConfig()
+  if (!cfg) {
+    resMaskCols.value = {}
+    return
+  }
+  resMaskCols.value = gridMethods({
+    connectionId: selectedConnId.value || props.conn?.id,
+    database: dbScope.value,
+    table: '',
+    columns: result.value?.columns || []
+  }, cfg)
+}
+
+watch(
+  [() => selectedConnId.value, () => dbScope.value, () => result.value?.columns, () => result.value?.rows],
+  () => { refreshResMask() },
+  { immediate: true }
+)
+
+/** 命中规则时返回代换值；没命中（或 NULL）返回 null，交给原来的格式化 */
+const maskedResCell = (value, column) => {
+  const method = column ? resMaskCols.value[column] : ''
+  if (!method || value === null || value === undefined) return null
+  const text = String(value)
+  if (method !== 'aes') return maskTextSync(text, method)
+  const key = column + '\u0000' + text
+  if (resMaskAes.value[key] !== undefined) return resMaskAes.value[key]
+  if (!resMaskPending.has(key)) {
+    resMaskPending.add(key)
+    maskTextAsync(text, 'aes', peekMaskConfig()?.aesKey || '')
+      .then((masked) => { resMaskAes.value[key] = masked })
+      .catch(() => { resMaskAes.value[key] = '***' })
+      .finally(() => resMaskPending.delete(key))
+  }
+  return '***' // 还没算完：给占位，不显示原文
+}
+
+/** 单元格展示（含悬停 title）：打码看的是它，复制/编辑仍走 row[col] 的原文 */
+const formatResCell = (value, column) => {
+  const masked = maskedResCell(value, column)
+  if (masked !== null) return masked
+  return value === null || value === undefined ? nullDisplay() : formatDbValue(value)
+}
 
 // ---- 顶栏四个下拉（连接 / catalog / 库 / schema）的宽度自适应 ----
 // 名字很长时原来固定 180/130/160/140px 会把 `qj_x_dmp_yingxiao_be…` 截断，看不出选的是哪个。
@@ -4242,6 +4328,18 @@ const onEditorContextMenu = (e) => {
     { label: t('sqlq.ctxOneLine'), command: 'copy-one-line', shortcut: key('query.copyOneLine'), disabled: !hasSel }
   ] })
   items.push({ label: t('shortcut.query.selectStatement.label'), command: 'select-stmt', shortcut: key('query.selectStatement') })
+  // —— 片段库 ——
+  // 顶部那个「片段」下拉已经去掉（一键保存/插入都在这里，工具栏少一个按钮）：
+  // 选中一段 SQL 直接存成片段；存过的片段从「插入片段」里挑一个插进光标处。
+  items.push({ label: t('sqlq.snipSave'), command: 'save-snippet' })
+  const snipItems = snippets.value.slice(0, 12).map(s => ({ label: s.name, command: 'apply-snippet', snipId: s.id }))
+  if (snipItems.length) {
+    snipItems.push({ sep: true })
+    snipItems.push({ label: t('sqlq.snipClear'), command: 'clear-snippets' })
+  } else {
+    snipItems.push({ label: t('sqlq.snipNone'), command: 'noop', disabled: true })
+  }
+  items.push({ label: t('sqlq.snipInsert'), sub: snipItems })
   // —— 通用编辑（Monaco / 系统级键位，固定不可改，这里只做提示）——
   sep()
   items.push({ label: t('tdv.revert'), command: 'undo', shortcut: 'Ctrl+Z' })
@@ -4307,6 +4405,22 @@ const onEdCtxItem = (item) => {
       break
     }
     case 'select-stmt': selectCurrentStatement(); break
+    case 'save-snippet': saveSnippet(); break
+    case 'apply-snippet': {
+      const sn = snippets.value.find(s => s.id === item.snipId)
+      if (sn) applySnippet(sn)
+      break
+    }
+    case 'clear-snippets':
+      ElMessageBox.confirm(t('sqlq.snipClearConfirm'), t('sqlq.snipClear'), {
+        confirmButtonText: t('common.delete'),
+        cancelButtonText: t('common.cancel'),
+        type: 'warning'
+      }).then(() => {
+        snippets.value = []
+        try { localStorage.removeItem(SNIP_LS) } catch { /* 存储不可用：本次界面上已清空 */ }
+      }).catch(() => { /* 取消 */ })
+      break
     case 'undo': trigger('undo'); break
     case 'redo': trigger('redo'); break
     case 'cut': trigger('editor.action.clipboardCutAction'); break

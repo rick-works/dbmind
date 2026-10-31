@@ -9,6 +9,12 @@ build = "build.rs"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# 字段脱敏（mask 模块）：MD5 / SHA-256 摘要 + AES-256-GCM。三个出口（大模型、MCP、表格）
+# 共用同一份实现，所以放在 core，而不是塞进 web 再被各壳层复制一遍。
+md-5 = "0.11"
+sha2 = "0.10"
+ring = "0.17"
+base64 = "0.22"
 thiserror = { workspace = true }
 chrono = { workspace = true }
 tracing = { workspace = true }

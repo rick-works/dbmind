@@ -511,7 +511,7 @@ function checkDom() {
  */
 const JS_KEYWORDS = new Set(['if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default', 'break', 'continue', 'return', 'function', 'class', 'extends', 'super', 'new', 'delete', 'typeof', 'instanceof', 'in', 'of', 'void', 'this', 'yield', 'await', 'async', 'try', 'catch', 'finally', 'throw', 'const', 'let', 'var', 'import', 'export', 'from', 'as', 'static', 'get', 'set', 'true', 'false', 'null', 'undefined', 'debugger', 'with', 'enum'])
 
-const JS_GLOBALS = new Set(['window', 'document', 'console', 'navigator', 'location', 'history', 'localStorage', 'sessionStorage', 'performance', 'fetch', 'URL', 'Blob', 'File', 'FileReader', 'FormData', 'Headers', 'Request', 'Response', 'AbortController', 'Promise', 'JSON', 'Math', 'Date', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Symbol', 'BigInt', 'RegExp', 'Function', 'Error', 'TypeError', 'RangeError', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Proxy', 'Reflect', 'Intl', 'isNaN', 'isFinite', 'parseInt', 'parseFloat', 'encodeURI', 'encodeURIComponent', 'decodeURI', 'decodeURIComponent', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame', 'queueMicrotask', 'structuredClone', 'alert', 'confirm', 'prompt', 'atob', 'btoa', 'crypto', 'globalThis', 'arguments', 'defineProps', 'defineEmits', 'defineExpose', 'defineModel', 'defineOptions', 'defineSlots', 'withDefaults'])
+const JS_GLOBALS = new Set(['window', 'document', 'console', 'navigator', 'location', 'history', 'localStorage', 'sessionStorage', 'performance', 'fetch', 'URL', 'Blob', 'File', 'FileReader', 'FormData', 'Headers', 'Request', 'Response', 'AbortController', 'Promise', 'JSON', 'Math', 'Date', 'Object', 'Array', 'String', 'Number', 'Boolean', 'Symbol', 'BigInt', 'RegExp', 'Function', 'Error', 'TypeError', 'RangeError', 'Map', 'Set', 'WeakMap', 'WeakSet', 'Proxy', 'Reflect', 'Intl', 'ArrayBuffer', 'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array', 'Float32Array', 'Float64Array', 'TextEncoder', 'TextDecoder', 'isNaN', 'isFinite', 'parseInt', 'parseFloat', 'encodeURI', 'encodeURIComponent', 'decodeURI', 'decodeURIComponent', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame', 'queueMicrotask', 'structuredClone', 'alert', 'confirm', 'prompt', 'atob', 'btoa', 'crypto', 'globalThis', 'arguments', 'defineProps', 'defineEmits', 'defineExpose', 'defineModel', 'defineOptions', 'defineSlots', 'withDefaults'])
 
 /** 字符下标换算行号 */
 function lineAt(text, index) {
@@ -671,6 +671,8 @@ function checkCalls(files) {
     'async', 'if', 'for', 'while', 'switch', 'catch', 'return', 'typeof', 'function',
     'Array', 'Object', 'String', 'Number', 'Boolean', 'Math', 'JSON', 'Date', 'RegExp', 'Error',
     'Map', 'Set', 'WeakMap', 'WeakSet', 'Promise', 'Symbol', 'BigInt', 'Proxy', 'Reflect', 'Intl',
+    'ArrayBuffer', 'Uint8Array', 'Uint16Array', 'Uint32Array', 'Int8Array', 'Int16Array', 'Int32Array',
+    'Float32Array', 'Float64Array', 'TextEncoder', 'TextDecoder',
     'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURIComponent', 'decodeURIComponent',
     'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'requestAnimationFrame',
     'cancelAnimationFrame', 'queueMicrotask', 'structuredClone', 'console', 'fetch', 'URL',
