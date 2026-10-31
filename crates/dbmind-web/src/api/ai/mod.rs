@@ -36,6 +36,7 @@ pub mod evidence;
 pub mod governance;
 pub mod kb;
 pub mod knowledge;
+pub mod mask;
 pub mod migrate;
 pub mod prompts;
 pub mod quality;
@@ -730,6 +731,8 @@ pub async fn preview(
             "names": schema.expanded_names,
             // 这段上下文**实际**是不是全库清单（显式库级问题、或大库一张表都没认出来时自动切换）
             "catalog": schema.catalog,
+            // 这次请求里有多少列被字段脱敏规则打码了 —— 「设置到底生效没有」看这个数字
+            "masked": schema.masked,
         })),
         "notes": notes,
     })))
@@ -815,6 +818,12 @@ pub fn routes() -> Router<AppState> {
         .route("/api/ai/prompts/reload", post(reload_prompts))
         // 只算账、不调模型：回答「这次请求的 token 都花在哪」，零成本
         .route("/api/ai/preview", post(preview))
+        // 字段脱敏：规则 CRUD + 实时预览（预览也走同一份掩码实现，避免两套逻辑漂移）
+        .route(
+            "/api/ai/mask-rules",
+            get(mask::get_rules).put(mask::put_rules),
+        )
+        .route("/api/ai/mask/preview", post(mask::preview))
         // 对话与生成
         .route("/api/ai/chat", post(chat::chat))
         .route("/api/ai/chat/stream", post(chat::chat_stream))

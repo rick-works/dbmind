@@ -249,6 +249,74 @@
           </div>
         </div>
 
+        <!-- 0.6 数据脱敏：只作用于「发给 AI 的内容」（样例行 + 智能体工具结果），库里的数据一点都不动 -->
+        <div v-show="activeTab === 'mask'" class="settings-panel">
+          <div class="panel-title">{{ $t('settings.mask.title') }}</div>
+          <div class="panel-desc">{{ $t('settings.mask.desc') }}</div>
+
+          <div class="mask-head">
+            <el-switch v-model="maskForm.enabled" />
+            <span class="mask-head-label">{{ $t('settings.mask.enabled') }}</span>
+            <span class="mask-head-scope">{{ $t('settings.mask.scopeHint') }}</span>
+          </div>
+
+          <div class="mask-grid">
+            <div class="mask-row mask-row-head">
+              <span>{{ $t('settings.mask.conn') }}</span>
+              <span>{{ $t('settings.mask.db') }}</span>
+              <span>{{ $t('settings.mask.table') }}</span>
+              <span>{{ $t('settings.mask.column') }}</span>
+              <span>{{ $t('settings.mask.note') }}</span>
+              <span></span>
+            </div>
+            <div v-for="(rule, idx) in maskForm.rules" :key="idx" class="mask-row">
+              <el-select
+                v-model="rule.connectionId"
+                size="small"
+                clearable
+                filterable
+                :placeholder="$t('settings.mask.anyConn')"
+              >
+                <el-option v-for="c in maskConnections" :key="c.id" :label="c.name" :value="c.id" />
+              </el-select>
+              <el-input v-model="rule.database" size="small" clearable :placeholder="$t('settings.mask.anyDb')" />
+              <el-input v-model="rule.table" size="small" clearable :placeholder="$t('settings.mask.anyTable')" />
+              <el-input v-model="rule.column" size="small" :placeholder="$t('settings.mask.columnPh')" />
+              <el-input v-model="rule.note" size="small" clearable :placeholder="$t('settings.mask.notePh')" />
+              <el-button text type="danger" :icon="Delete" @click="maskForm.rules.splice(idx, 1)" />
+            </div>
+            <div v-if="!maskForm.rules.length" class="mask-empty">{{ $t('settings.mask.empty') }}</div>
+          </div>
+
+          <div class="actions mask-actions">
+            <el-button :icon="Plus" @click="addMaskRule">{{ $t('settings.mask.add') }}</el-button>
+            <el-button :icon="MagicStick" @click="autoDetectMask">{{ $t('settings.mask.auto') }}</el-button>
+            <el-button :icon="Refresh" @click="loadMaskRules">{{ $t('settings.mask.reload') }}</el-button>
+          </div>
+
+          <div class="mask-preview">
+            <div class="mask-preview-title">{{ $t('settings.mask.preview') }}</div>
+            <div class="mask-preview-row">
+              <el-input
+                v-model="maskSample"
+                size="small"
+                :placeholder="$t('settings.mask.previewPh')"
+                class="mask-preview-in"
+              />
+              <span class="mask-preview-arrow">→</span>
+              <code class="mask-preview-out">{{ maskPreviewText || '—' }}</code>
+            </div>
+            <div class="form-tip">{{ $t('settings.mask.previewTip') }}</div>
+          </div>
+
+          <div class="mask-warn">{{ $t('settings.mask.warn') }}</div>
+
+          <div class="actions">
+            <el-button type="primary" :loading="maskSaving" @click="saveMask">{{ $t('settings.mask.save') }}</el-button>
+            <span v-if="maskSaved" class="mask-saved">{{ $t('settings.mask.saved') }}</span>
+          </div>
+        </div>
+
         <!-- 1. MCP 服务 -->
         <div v-show="activeTab === 'mcp'" class="settings-panel">
           <div class="panel-title">{{ $t('settings.mcp.title') }}</div>
@@ -1155,7 +1223,7 @@ import { getAppearance, saveAppearance, appearanceDefaults } from '../../utils/a
 // `LOCALES` 直接当语言选项用：它里面每个选项的 label 都写着自己的语言，不需要再包一层
 import { LOCALES as localeOptions, locale, setLocale, t } from '../../utils/i18n'
 import { formatSql, keywordCandidates, sqlKeywordPattern, ruleHasIndent } from '../../utils/sqlFormat'
-import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs } from '../../api'
+import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, browseBackupDirs, getDriverMirror, saveDriverMirror, getDriverTypes, getDriverStatus, getDriverProgress, installDriver, uploadDriver, openLocalDir, getAiUsage, getSettings, putSetting, clearSchemaCache, clearHistory, getLegacyTls, saveLegacyTls, getCacheItems, clearCaches, listConnections, getLogs, clearLogs, getMaskRules, saveMaskRules, previewMask } from '../../api'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
 // 界面尺寸：当前值由 utils/appearance.js 从 localStorage 读；改动即写 :root 的 CSS 变量并落盘，
@@ -1214,6 +1282,8 @@ const tabs = [
   { key: 'shortcut', i18nKey: 'settings.tab.shortcut', icon: Pointer },
   { key: 'query', i18nKey: 'settings.tab.query', icon: DataLine },
   { key: 'ai', i18nKey: 'settings.tab.ai', icon: MagicStick },
+  // 数据脱敏紧挨着 AI：它管的就是「AI 能看见什么」，翻两页才找到会很反直觉
+  { key: 'mask', i18nKey: 'settings.tab.mask', icon: Key },
   { key: 'safety', i18nKey: 'settings.tab.safety', icon: Lock },
   { key: 'mcp', i18nKey: 'settings.tab.mcp', icon: Connection },
   // 图标与顶栏「驱动管理」入口用同一个（utils/topMenu.js 里的 Box）——
@@ -1526,6 +1596,98 @@ const load = async () => {
     activeModelId.value = models[0]?.id || ''
   } catch (e) { ElMessage.error(t('settings.ai.msgLoadFailed', { detail: (e?.message || e?.toString?.() || t('common.unknownError')) })) }
 }
+
+// ---------- 数据脱敏（只作用于发给 AI 的内容） ----------
+// 作用范围刻意收窄：上下文里的样例行 + 智能体的只读工具结果。
+// 库里的数据、结果表格、导出、复制一律不动 —— 那是用户自己的数据，不是出站流量。
+const maskForm = ref({ enabled: false, rules: [] })
+const maskSaving = ref(false)
+const maskSaved = ref(false)
+const maskSample = ref('')
+const maskPreviewText = ref('')
+const maskConnections = ref([])
+let maskPreviewTimer = null
+
+/** 一键加入的常见敏感列：只收「列名足够特征化」的；`*name` 这类模糊模式加进去只会误伤正常字段 */
+const MASK_COLUMN_PRESETS = [
+  '*phone', '*mobile', 'id_card', 'idcard', 'id_no', 'id_number',
+  '*email', '*password', '*passwd', '*token', '*secret',
+  'bank_card', '*bank_account'
+]
+
+const normalizeMaskRule = (rule) => ({
+  connectionId: rule.connectionId || '',
+  database: rule.database || '',
+  table: rule.table || '',
+  column: rule.column || '',
+  note: rule.note || ''
+})
+
+const loadMaskConnections = async () => {
+  if (maskConnections.value.length) return
+  try { maskConnections.value = (await listConnections()) || [] } catch { maskConnections.value = [] }
+}
+
+const loadMaskRules = async () => {
+  try {
+    const data = await getMaskRules()
+    maskForm.value = {
+      enabled: !!data.enabled,
+      rules: (Array.isArray(data.rules) ? data.rules : []).map(normalizeMaskRule)
+    }
+  } catch (e) {
+    ElMessage.error(t('settings.mask.msgLoadFailed', { detail: e?.message || String(e) }))
+  }
+}
+
+const addMaskRule = () => {
+  maskForm.value.rules.push({ connectionId: '', database: '', table: '', column: '', note: '' })
+}
+
+const autoDetectMask = () => {
+  const existing = new Set(maskForm.value.rules.map(rule => (rule.column || '').trim().toLowerCase()))
+  let added = 0
+  for (const column of MASK_COLUMN_PRESETS) {
+    if (existing.has(column)) continue
+    maskForm.value.rules.push({ connectionId: '', database: '', table: '', column, note: '' })
+    added += 1
+  }
+  if (added) ElMessage.success(t('settings.mask.msgAutoAdded', { n: added }))
+  else ElMessage.info(t('settings.mask.msgAutoNone'))
+}
+
+const saveMask = async () => {
+  maskSaving.value = true
+  maskSaved.value = false
+  try {
+    const rules = maskForm.value.rules
+      .map(rule => ({ ...rule, column: (rule.column || '').trim() }))
+      .filter(rule => rule.column)
+    const res = await saveMaskRules({ enabled: maskForm.value.enabled, rules })
+    maskForm.value.rules = rules
+    maskSaved.value = true
+    ElMessage.success(t('settings.mask.msgSaved', { n: res?.count ?? rules.length }))
+  } catch (e) {
+    ElMessage.error(t('settings.mask.msgSaveFailed', { detail: e?.message || String(e) }))
+  } finally {
+    maskSaving.value = false
+  }
+}
+
+// 预览走 250ms 防抖：一边打字一边发请求既没必要，也容易让结果闪来闪去
+watch(maskSample, (value) => {
+  if (maskPreviewTimer) clearTimeout(maskPreviewTimer)
+  const text = (value || '').trim()
+  if (!text) { maskPreviewText.value = ''; return }
+  maskPreviewTimer = setTimeout(async () => {
+    try {
+      const res = await previewMask(text)
+      maskPreviewText.value = res?.result || ''
+    } catch { maskPreviewText.value = '' }
+  }, 250)
+})
+
+onBeforeUnmount(() => { if (maskPreviewTimer) clearTimeout(maskPreviewTimer) })
 
 // ---------- 存储路径 ----------
 /** 数据目录迁移已接入（后端：快照 + 复制 + 指针文件，热切换立即生效）；驱动跟着数据目录走，不单独设置 */
@@ -2259,6 +2421,9 @@ const fmtLogTime = (raw) => {
 watch(activeTab, (tab) => {
   if (tab === 'logs') { loadLogs() }
   if (tab === 'driver') { nextTick(loadDriverList) }
+  // 脱敏页：规则与连接清单都到用时才拉 —— 大多数人打开设置不看这一页，
+  // 开机就多发两个请求没有意义
+  if (tab === 'mask') { loadMaskRules(); loadMaskConnections() }
 })
 
 // ---------- 快捷键自定义 ----------
@@ -3039,6 +3204,31 @@ watch(visible, (v) => {
 .about-license { white-space: pre-line; margin-bottom: 8px; }
 .about-link { color: var(--dc-primary); text-decoration: none; font-size: 13px; }
 .about-link:hover { text-decoration: underline; }
+/* 数据脱敏：规则表固定列宽，输入框才排得齐；最后 34px 给删除按钮 */
+.mask-head { display: flex; align-items: center; gap: 10px; margin: 2px 0 14px; flex-wrap: wrap; }
+.mask-head-label { font-size: 13px; color: var(--dc-text); }
+.mask-head-scope { font-size: 12px; color: var(--dc-text-dim); }
+.mask-grid { border: 1px solid var(--dc-border); border-radius: 8px; overflow: hidden; }
+.mask-row {
+  display: grid; gap: 8px; align-items: center; padding: 6px 10px;
+  grid-template-columns: 1.4fr 1fr 1fr 1.2fr 1.6fr 34px;
+}
+.mask-row + .mask-row { border-top: 1px solid var(--dc-border); }
+.mask-row-head { font-size: 12px; color: var(--dc-text-dim); background: var(--dc-bg-soft); }
+.mask-empty { padding: 18px 14px; text-align: center; font-size: 12px; color: var(--dc-text-dim); }
+.mask-actions { margin-top: 12px; }
+.mask-preview { margin-top: 18px; }
+.mask-preview-title { font-size: 13px; color: var(--dc-text); margin-bottom: 6px; }
+.mask-preview-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mask-preview-in { max-width: 320px; }
+.mask-preview-arrow { color: var(--dc-text-dim); }
+.mask-preview-out {
+  font-family: var(--dc-mono, ui-monospace, Consolas, monospace); font-size: 13px;
+  padding: 2px 8px; border-radius: 4px; background: var(--dc-bg-soft);
+  color: var(--dc-text-strong); max-width: 360px; overflow: hidden; text-overflow: ellipsis;
+}
+.mask-warn { margin-top: 14px; font-size: 12px; line-height: 1.8; color: var(--dc-text-weak); }
+.mask-saved { margin-left: 10px; font-size: 12px; color: var(--dc-text-dim); }
 </style>
 
 <style>

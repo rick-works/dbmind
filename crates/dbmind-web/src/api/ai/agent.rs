@@ -210,7 +210,17 @@ fn truncate(text: String) -> String {
 }
 
 /// 把查询结果渲染成模型读得懂的紧凑文本（TSV 比 JSON 省一半 token）。
-fn render_rows(result: &dbmind_core::QueryResult) -> String {
+///
+/// 命中「字段脱敏」规则的列在这里打码：智能体自己 `select` 一次就能拿到真实行，
+/// 光给上下文里的样例值脱敏等于没脱。工具结果拿不到可靠表名（JOIN / 子查询别名都可能），
+/// 所以只应用「表为空 = 任意表」的规则 —— 钉了表的规则在这里不参与，
+/// 免得分不清是哪张表时把无关列也打成 `***`，反而让模型失明。
+fn render_rows(
+    result: &dbmind_core::QueryResult,
+    masks: &crate::api::ai::mask::MaskConfig,
+    conn: &str,
+    database: &str,
+) -> String {
     let names: Vec<String> = result
         .columns
         .iter()
@@ -221,11 +231,19 @@ fn render_rows(result: &dbmind_core::QueryResult) -> String {
         out.push('\n');
         out.push_str(
             &row.iter()
-                .map(shape::cell_to_value)
-                .map(|value| match value {
-                    Value::Null => String::new(),
-                    Value::String(text) => text,
-                    other => other.to_string(),
+                .enumerate()
+                .map(|(index, cell)| {
+                    let text = match shape::cell_to_value(cell) {
+                        Value::Null => String::new(),
+                        Value::String(text) => text,
+                        other => other.to_string(),
+                    };
+                    match names.get(index) {
+                        Some(name) if masks.hits(conn, database, None, name) => {
+                            crate::api::ai::mask::mask_value(&text)
+                        }
+                        _ => text,
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\t"),
@@ -377,7 +395,12 @@ async fn execute_tool(
                 );
             }
             match run_ai_sql(state, conn, database, sql.to_string()).await {
-                Ok(result) => (true, render_rows(&result)),
+                Ok(result) => {
+                    // 每次工具调用读一次规则：本地元数据库的主键查询，代价远小于一次工具往返；
+                    // 换来的好处是「用户刚在设置里改了规则，下一条工具结果立刻生效」。
+                    let masks = crate::api::ai::mask::load(state).await;
+                    (true, render_rows(&result, &masks, conn, database))
+                }
                 Err(err) => (false, err.message),
             }
         }

@@ -67,6 +67,8 @@ pub struct Budgeted {
     pub estimated_tokens: usize,
     /// 这段上下文是不是「全库清单」（表名 + 注释，没有列结构）
     pub catalog: bool,
+    /// 这次请求里有多少列被字段脱敏规则打码（设置是否真的生效，看这个数）
+    pub masked: usize,
 }
 
 /// 估 token。按字符种类分开算，而不是「一律 0.4/字符」。
@@ -254,6 +256,14 @@ pub async fn build(
     let catalog =
         options.catalog || (with_names && expanded.is_empty() && !small_db && !names.is_empty());
 
+    // 字段脱敏规则：读一次，后面每张表的样例行都用它判定。
+    // 读失败按「未启用」处理 —— 一条坏配置不该让整段上下文构建不出来（宁可少脱敏一次，
+    // 也不让 AI 面板整个打不开；真要兜底，用户会在设置里看到规则保存失败）。
+    let masks = crate::api::ai::mask::load(state).await;
+    // 按 (表, 列) 去重：同一列被多条规则命中只算一次，界面上的数字才对得上人话
+    let mut masked_columns: std::collections::HashSet<(String, String)> =
+        std::collections::HashSet::new();
+
     let mut text = String::new();
     // 版本一定要写进来：模型靠它决定能不能用窗口函数 / CTE / JSON 函数 / OFFSET FETCH。
     // 取不到时不是留空，而是要求它避开新特性 —— 留空等于默许它按最新版写。
@@ -353,7 +363,16 @@ pub async fn build(
                 let mut pairs: Vec<String> = row
                     .iter()
                     .take(SAMPLE_MAX_COLS)
-                    .map(|(key, value)| format!("{key}={}", short(value)))
+                    .map(|(key, value)| {
+                        // 命中脱敏规则的列：**先掩码、再截断**。反过来会把掩码串自己截掉一截，
+                        // 模型看到半个 `138****` 既没意义又白花 token。
+                        if masks.hits(conn, database, Some(table.as_str()), key) {
+                            masked_columns.insert((table.clone(), key.to_ascii_lowercase()));
+                            format!("{key}={}", crate::api::ai::mask::mask_value(&plain(value)))
+                        } else {
+                            format!("{key}={}", short(value))
+                        }
+                    })
                     .collect();
                 if row.len() > SAMPLE_MAX_COLS {
                     pairs.push("…".to_string());
@@ -389,6 +408,7 @@ pub async fn build(
         expanded_names: expanded.iter().take(done).cloned().collect(),
         columns: columns_total,
         catalog,
+        masked: masked_columns.len(),
     })
 }
 
@@ -443,15 +463,22 @@ fn column_line(column: &ColumnDetail) -> String {
     line
 }
 
-/// 样例值截断。24 字符足够看出格式（`2026-10-30 12:00:00`、`SUCCESS`、`12345`），
-/// 再长基本是 JSON 串或备注文本，对写 SQL 没有帮助却照样按 token 计费。
-fn short(value: &Value) -> String {
-    let text = match value {
+/// 值的字符串形态（不截断）。
+///
+/// 脱敏必须拿**完整值**判断形态：先截到 24 字符再判「这是不是手机号」，
+/// 11 位号码会被截成 24 以内还好，但长卡号、带前缀的值一旦截断就认不出来了。
+fn plain(value: &Value) -> String {
+    match value {
         Value::Null => "NULL".to_string(),
         Value::String(text) => text.clone(),
         other => other.to_string(),
-    };
-    text.chars().take(24).collect()
+    }
+}
+
+/// 样例值截断。24 字符足够看出格式（`2026-10-30 12:00:00`、`SUCCESS`、`12345`），
+/// 再长基本是 JSON 串或备注文本，对写 SQL 没有帮助却照样按 token 计费。
+fn short(value: &Value) -> String {
+    plain(value).chars().take(24).collect()
 }
 
 /// 问题/SQL 里点到的表名（按首次出现位置排序，取前 `limit` 个）。

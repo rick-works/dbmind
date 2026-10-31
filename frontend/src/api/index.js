@@ -520,6 +520,10 @@ export const aiExplain = (payload) => http.post('/api/ai/explain', payload).then
 export const aiOptimize = (payload) => http.post('/api/ai/optimize', payload).then(r => r.data)
 export const aiFix = (payload) => http.post('/api/ai/fix', payload).then(r => r.data)
 export const aiChat = (payload) => http.post('/api/ai/chat', payload).then(r => r.data)
+// 字段脱敏：规则存取 + 实时预览（预览走后端同一份掩码实现，避免两套逻辑漂移）
+export const getMaskRules = () => http.get('/api/ai/mask-rules').then(r => r.data)
+export const saveMaskRules = (payload) => http.put('/api/ai/mask-rules', payload).then(r => r.data)
+export const previewMask = (value) => http.post('/api/ai/mask/preview', { value }).then(r => r.data)
 // 预热 AI 上下文（表结构元数据与样例缓存）：面板打开/切换数据源时后台调用，减少首条消息等待
 export const aiWarmup = (payload) => http.post('/api/ai/warmup', payload).then(r => r.data)
 // 流式对话：逐段回调 onDelta，返回完整文本；环境不支持/超时/上游中断时抛错。
