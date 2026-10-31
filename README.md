@@ -14,6 +14,7 @@ Runs locally, your data never leaves your network. Rust core + Vue 3 frontend + 
 |---|---|
 | **🤖 Deep AI integration** | Explain / optimize / rewrite / fix / diagnose / chat — six one-click actions. AI-generated SQL can be verified with EXPLAIN and a dry run. An MCP server exposes the whole workbench to any AI client (see [AI, more than a chat box](#ai-more-than-a-chat-box)) |
 | **🧠 AI teammate** | "Autonomous check" works the database itself: inspects table structures, suggests missing indexes, reads sync / backup status and dry-runs read-only queries — every change becomes a **change request** you approve (high-risk ones ask twice, and an applied one can be undone). Long-term memory keeps your conventions, conversations are saved and resumable, and each answer footnotes its token cost |
+| Field masking | Mask sensitive columns by table + column (`138****8000`, `a***@example.com`) — **only for what is sent to the model** (context sample rows and the agent's read-only results); wildcards like `*_phone` and a one-click "common sensitive columns" seed are included, while grids and exports keep the originals |
 | Multi-datasource | **17 engines, one client** — relational (MySQL, MariaDB, PostgreSQL, KingbaseES, Oracle, SQL Server, DB2, Derby, H2, DM), analytical (ClickHouse, Doris), embedded / file (SQLite, DuckDB) and NoSQL (Redis, MongoDB, Elasticsearch). Drivers download on demand; the per-engine capability matrix is under [Supported engines](#supported-engines) |
 | SQL editor | Monaco-based: completion, formatting, multi-statement runs with per-statement timing, history, snippets, template variables (`:name` prompts on run), stop execution mid-flight. 13 command shortcuts (run `Ctrl+Enter`, format `Shift+Alt+F`, comment `Ctrl+/`, copy as `IN` list `Ctrl+Shift+X`…), all rebindable — see [Keyboard shortcuts](#keyboard-shortcuts) |
 | Transaction mode | Writes are not auto-committed: edit → verify → commit or roll back. Bound to the editor's session on every JDBC engine; switching the mode off rolls back first, and SQLite (no session transactions) hides the button instead of failing on click |
@@ -96,6 +97,7 @@ Worry about data usually means "I don't know what leaves the machine". Instead o
 | Your question | The prompt, the current SQL, the error text, plus the last 6 messages (6000 characters combined, long ones trimmed in the middle) | Every request |
 | Table structure | Table name + column name / type / nullable / default / primary key (**column comments are not sent**) | Tables named or detected in the question, at most 40; otherwise the first 8 |
 | One sample row | **1 real row** per expanded table, first 20 columns, every value cut to 24 characters | Together with the structure |
+| Field masking (opt-in) | Columns matched by a rule become `138****8000` / `a***@example.com` | When rules exist under Settings → Field masking and the switch is on |
 | Table catalogue | Table names + table comments (no column structure) | Library-level questions like "what is this database for" |
 | Team terms / examples | The glossary and accepted SQL examples you entered under AI Knowledge | If configured |
 | Long-term memory | Conventions you stated ("amounts are in cents") | If that connection / database has memories |
@@ -129,7 +131,15 @@ Worry about data usually means "I don't know what leaves the machine". Instead o
   样例：id=10231, status=PAID, amount=19900, created_at=2026-10-30 12:00:00
 ```
 
-That sample row is **real data**, truncated to 24 characters: it is how the model knows the date format and that `status` holds `PAID` rather than `1`. If the first 20 columns include phone numbers or ID numbers, they go with it — in that case keep the endpoint inside your network (Local models only) and nothing leaves at all.
+That sample row is **real data**, truncated to 24 characters: it is how the model knows the date format and that `status` holds `PAID` rather than `1`. If the first 20 columns include phone numbers or ID numbers, they go with it.
+
+**Rather not send the sample at all?** Settings → Field masking: rules match on table + column (wildcards like `*_phone` work, and "Add common sensitive columns" seeds phone / ID card / email / password / token / bank card in one click). Matched columns leave as `138****8000` or `a***@example.com` — the model still writes correct SQL, it just never sees the plaintext. It covers both the sample rows **and** the agent's read-only query results; masking only one of them would be pointless, since the agent could simply `select` the value itself. Three limits, stated plainly:
+
+- table names, column names and table comments are **not** masked — without them the model cannot tell which table to query
+- literals you type in SQL (`where phone = '138…'`) are **not** masked, they are your own text
+- rules match on table + column, so renaming a table or moving databases means maintaining them; an empty table means any table, which is what covers the agent's results
+
+If even a masked sample is too much, keep the endpoint inside your network ([Local models only](#what-the-ai-actually-sends)) and nothing leaves at all.
 
 ## Keyboard shortcuts
 
