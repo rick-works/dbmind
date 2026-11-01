@@ -747,6 +747,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v1.9.0（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v1.9.0</span>
+            <span class="rel-tag tag-minor">小版本</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-01</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>字段脱敏（新）</b>：按「表 + 列」把敏感值换成 MD5 / SHA-256 摘要或 AES-256 密文（密钥存本机、可解回原文），一份规则四个开关 —— 发给 AI 的内容（上下文样例行 + 智能体只读结果）、MCP 客户端拿到的数据、结果表格的显示、导出的 CSV / Excel / JSON / SQL 文件；库里的数据一个字节都不改，表名列名注释与 SQL 里手写的字面量不脱敏</li>
+            <li><b>结果表格右键多了「复制为 IN (...)」：选中一列直接得到 IN 参数（多列按列分段、段前标列名），字符串按目标方言转义 —— 上百个 id 不用再手工补引号</b></li>
+            <li><b>SQL 编辑器右键可直接「保存片段 / 插入片段 / 清空片段」：选中 SQL 命名保存到本机、跨会话保留；顶部「片段」下拉只留查看与插入（去掉重复的「存为片段」按钮），存盘失败会明说而不是静默</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v1.9.0" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v1.9.0" target="_blank" rel="noopener">下载 v1.9.0</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.8.2（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -754,7 +775,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.8.2</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-10-31</span>
           </div>
           <ul class="rel-notes">
