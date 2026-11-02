@@ -2074,7 +2074,7 @@ export default {
   'settings.about.rel1.level': 'patch',
   'settings.about.rel1.date': '2026-11-02',
   'settings.about.rel1.note1': 'Fixed rename / delete in the script manager: the table row id was being passed down as the script id, so renaming said "script no longer exists" and deleting reported success while the script stayed in localStorage. Open, rename and delete now all use the real script id',
-  'settings.about.rel1.note2': 'MCP no longer hands SSH tunnel secrets to the model: ssh.password / keyPassphrase in the connection list are replaced with * (database passwords were already write-only), so the tool really is "without credentials" as advertised',
+  'settings.about.rel1.note2': 'MCP no longer hands SSH tunnel secrets to the model: ssh.password / keyPassphrase in the connection list are replaced with a three-asterisk mask (database passwords were already write-only), so the tool really is "without credentials" as advertised',
   'settings.about.rel1.note3': 'CLI / web / MCP no longer need a JDK: the kernel picks up the bundled jre next to the executable (same one the desktop app uses, only if >= 17), so DBMIND_JAVA is optional; the Windows installer now also ships dbmind (CLI), dbmind-web and dbmind-mcp alongside the desktop app, all sharing one jre and agents folder',
   'settings.about.rel2.version': 'v1.9.0',
   'settings.about.rel2.level': 'minor',
