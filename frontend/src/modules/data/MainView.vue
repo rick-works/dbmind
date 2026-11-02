@@ -1931,7 +1931,8 @@ const winClose = async () => {
   if (!winApi || !winApi.available) return
   // 后台任务检查（先于未保存脚本）：有同步任务在后台跑，直接关窗它们**不会中断**
   //（任务在后端进程里），但用户多半以为关窗=停止 —— 说清楚再走。
-  await refreshBgStatus()
+  // 最多等 1.2 秒：这只是"尽量提醒"，后端卡一下不能把关窗也一起卡住（实测点 × 要等好几秒）
+  await Promise.race([refreshBgStatus(), new Promise((r) => setTimeout(r, 1200))])
   const runningBg = bgTasks.filter(t => (bgStatusMap.value[t.id] || 'running') === 'running')
   if (runningBg.length) {
     const names = runningBg.map(bt => t('common.quoted', { name: bt.title })).join(t('common.listSep'))
@@ -2238,42 +2239,71 @@ const bgTaskStatusOf = (task) => {
   return syncTaskStatus(task.id)
 }
 const bgStatusMap = ref({})
-const refreshBgStatus = async () => {
-// 刷一次每个后台任务的实时状态（徽标、列表、关闭检查共用）
-// **按任务类型**查对应的状态接口：数据传输 → syncTaskStatus，数据对比 → compareTaskStatus
-// 终态**写回记录**（持久化）—— 执行记录在页面刷新后仍显示完成/失败，而不是误标运行中
-for (const t of bgTasks) {
-try {
-const st = await bgTaskStatusOf(t)
-// **后端说任务不存在（notfound）≠ 本地记录作废**：服务重启后内存任务丢了，
-// 但本地留底过的终态（成功/失败/取消）必须保留 —— 不能把「成功」覆盖成「已中断」（真机踩过）。
-// 优先用记录状态，记录被旧版本污染过就用快照里的终态救回
-if (st.status === 'notfound') {
-const local = (t.status && t.status !== 'running') ? t.status
-: (t.snapshot?.status && t.snapshot.status !== 'running' ? t.snapshot.status : null)
-if (local) { bgStatusMap.value[t.id] = local; t.status = local; continue }
+/** 终态：这些状态不会再变，没有必要每 5 秒再问一次后端 */
+const BG_TERMINAL = ['success', 'canceled', 'error', 'notfound']
+const bgIsTerminal = (s) => BG_TERMINAL.includes(s)
+/** 这条记录还需要问后端吗（终态的不问） */
+const bgNeedsRefresh = (t) => !bgIsTerminal(bgStatusMap.value[t.id] || t.status)
+
+/** 刷单条后台任务的实时状态，写回记录（终态连快照一起持久化） */
+const refreshOneBgTask = async (t) => {
+  try {
+    const st = await bgTaskStatusOf(t)
+    // **后端说任务不存在（notfound）≠ 本地记录作废**：服务重启后内存任务丢了，
+    // 但本地留底过的终态（成功/失败/取消）必须保留 —— 不能把「成功」覆盖成「已中断」（真机踩过）。
+    // 优先用记录状态，记录被旧版本污染过就用快照里的终态救回
+    if (st.status === 'notfound') {
+      const local = (t.status && t.status !== 'running') ? t.status
+        : (t.snapshot?.status && t.snapshot.status !== 'running' ? t.snapshot.status : null)
+      if (local) { bgStatusMap.value[t.id] = local; t.status = local; return }
+    }
+    bgStatusMap.value[t.id] = st.status || 'running'
+    setBgTaskStatus(t.id, st.status || 'running', st)
+    // 运行时长 + 取数时刻留在记录上：耗时列对运行中的任务按
+    // 「后端时长 + 距本次取数的本地推进」显示（1 秒心跳让它连续走）
+    t.elapsedMs = st.elapsedMs || 0
+    t.fetchedAt = Date.now()
+    // **后端的墙钟起止是开始/结束时间的权威值**：任务真实提交/结束的时刻由后端记录，
+    // 前端登记时刻可能晚于真实开始（恢复/补登记场景），推算链路任何偏差都会显示错
+    if (st.startedAtWall > 0) t.startedAt = st.startedAtWall
+    if (st.finishedAtWall > 0) t.finishedAt = st.finishedAtWall
+  } catch {
+    // 查询失败（典型：应用重启后任务已不在内存，接口 404）→ **视为已过期**，
+    // 不再兜成 running —— 否则时钟图标的角标永远挂着「1」（真机踩过）。
+    // 本地已有终态留底的（含快照救回）同样沿用，别降级成中断
+    const local = (t.status && t.status !== 'running') ? t.status
+      : (t.snapshot?.status && t.snapshot.status !== 'running' ? t.snapshot.status : null)
+    if (local) { bgStatusMap.value[t.id] = local; t.status = local; return }
+    bgStatusMap.value[t.id] = 'notfound'
+    setBgTaskStatus(t.id, 'notfound')
+  }
 }
-bgStatusMap.value[t.id] = st.status || 'running'
-setBgTaskStatus(t.id, st.status || 'running', st)
-// 运行时长 + 取数时刻留在记录上：耗时列对运行中的任务按
-// 「后端时长 + 距本次取数的本地推进」显示（1 秒心跳让它连续走）
-t.elapsedMs = st.elapsedMs || 0
-t.fetchedAt = Date.now()
-// **后端的墙钟起止是开始/结束时间的权威值**：任务真实提交/结束的时刻由后端记录，
-// 前端登记时刻可能晚于真实开始（恢复/补登记场景），推算链路任何偏差都会显示错
-if (st.startedAtWall > 0) t.startedAt = st.startedAtWall
-if (st.finishedAtWall > 0) t.finishedAt = st.finishedAtWall
-} catch {
-// 查询失败（典型：应用重启后任务已不在内存，接口 404）→ **视为已过期**，
-// 不再兜成 running —— 否则时钟图标的角标永远挂着「1」（真机踩过）。
-// 本地已有终态留底的（含快照救回）同样沿用，别降级成中断
-const local = (t.status && t.status !== 'running') ? t.status
-: (t.snapshot?.status && t.snapshot.status !== 'running' ? t.snapshot.status : null)
-if (local) { bgStatusMap.value[t.id] = local; t.status = local; continue }
-bgStatusMap.value[t.id] = 'notfound'
-setBgTaskStatus(t.id, 'notfound')
-}
-}
+
+/** 同一时刻只跑一轮刷新：5 秒心跳与「关闭窗口前的检查」撞车时共用这一轮，不重复打后端 */
+let bgRefreshInFlight = null
+/**
+ * 刷后台任务状态（徽标 / 任务中心 / 关闭检查共用）。
+ *
+ * **只问「可能还在跑」的那些**：执行记录最多留 50 条（见 sync/backgroundTasks.js），
+ * 连历史一起问的话每 5 秒就是 50 个请求；点右上角 × 时关闭检查还要把它们全部等完
+ * —— 用户反馈的「点 × 反应慢」就是这些历史记录一条一条串行查出来的（几十条 = 好几秒）。
+ * 终态记录不会再变，问一次之后就不会再进这个集合。
+ *
+ * `force: true` 连终态记录一起问（任务中心手动刷新时用）。
+ */
+const refreshBgStatus = async ({ force = false } = {}) => {
+  if (bgRefreshInFlight) return bgRefreshInFlight
+  const list = force ? bgTasks.slice() : bgTasks.filter(bgNeedsRefresh)
+  if (!list.length) return
+  bgRefreshInFlight = (async () => {
+    // 6 路并发：每次状态查询都很轻，串行纯粹是白等（关闭窗口时尤其明显）
+    let idx = 0
+    const worker = async () => {
+      while (idx < list.length) await refreshOneBgTask(list[idx++])
+    }
+    await Promise.all(Array.from({ length: Math.min(6, list.length) }, worker))
+  })()
+  try { await bgRefreshInFlight } finally { bgRefreshInFlight = null }
 }
 /**
  * 停止一个运行中的后台任务（任务中心 / 悬浮下拉都有入口）。

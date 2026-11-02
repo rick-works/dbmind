@@ -190,6 +190,8 @@ fn ensure_java() {
 ///   · `java` —— 要求命令行里出现 `dbmind-agent`（我们四个宿主 jar 的名字特征），
 ///     这样别人家的 JVM 不会被牵连。
 fn cleanup_child_processes() {
+    // 计时：这一步站在「用户点了关闭」到「窗口真的消失」之间，慢一点就会被感知成"点 × 反应慢"
+    let t0 = Instant::now();
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
@@ -236,6 +238,7 @@ fn cleanup_child_processes() {
     if killed == 0 {
         eprintln!("退出清场：没有需要结束的其它进程");
     }
+    eprintln!("退出清场：共结束 {killed} 个进程，用时 {:?}", t0.elapsed());
 }
 
 /// 与 Web 版一致的默认端口（前端 dev 代理也指这里，见 vite.config.mjs）。
@@ -443,7 +446,11 @@ fn close_action(window: tauri::WebviewWindow, action: String) {
             // 显式退出，而不是只 close 窗口：**有托盘时"关掉最后一个窗口"不会结束进程**
             // （托盘图标还在 → 应用继续活着，用户会以为没关掉）。走 app.exit 仍会触发
             // RunEvent::Exit，子进程清场逻辑不受影响。
+            //
+            // 先 hide 再 exit：退出要做子进程清场（枚举全量进程 + 杀 java 宿主），
+            // 这段时间窗口若还挂着，用户会觉得"点了 × 没反应"。先让窗口消失，感知上是即时的。
             ALLOW_CLOSE.store(true, Ordering::SeqCst);
+            let _ = window.hide();
             window.app_handle().exit(0);
         }
         "tray" => {
