@@ -204,7 +204,10 @@ gh release view v1.2.31 --repo rick-works/dbmind --json assets --jq '.assets[].n
 # 1) 版本号 + 词典（与 CI 同一脚本；不幂等，只跑一次）
 node scripts\release\release.mjs 1.2.31 patch 2026-10-16
 
-# 2) 三部分分别构建
+# 2) 三部分分别构建（注意第一行要**先**单编三个壳：desktop 的 build.rs 会校验
+#    安装包 resources 里的 dbmind.exe / dbmind-web.exe / dbmind-mcp.exe 是否存在，
+#    一次全编会在 desktop 先编时直接报 resource path ... doesn't exist）
+cargo build --release -p dbmind-cli -p dbmind-web -p dbmind-mcp
 cargo build --release
 cd frontend; npm install; npm run build; cd ..
 foreach ($m in 'jdbc','mongodb','redis','elasticsearch') {

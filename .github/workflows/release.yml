@@ -225,7 +225,15 @@ jobs:
       #      `linking with link.exe failed: exit code 1`（与下面 Tauri 步骤同一个坑，真踩过）。
       - name: 后端打包（release，供免安装版与安装包资源使用）
         if: runner.os == 'Windows'
-        run: cargo build --release
+        # **必须分两段**：tauri-build 在编译 desktop 时会校验 resources 是否真实存在，
+        # 而这三个 exe 正是本次构建的产物 —— 一次编完就会鸡生蛋：
+        #   resource path `..\..\target\release\dbmind-web.exe` doesn't exist
+        # （v1.9.1 真踩过，Windows 两个 job 全挂）。先单编三个壳（不触发 desktop 的
+        #  build.rs），再全量编，build.rs 那时才校验得到文件。
+        shell: pwsh
+        run: |
+          cargo build --release -p dbmind-cli -p dbmind-web -p dbmind-mcp
+          cargo build --release
 
       # [3c] 代码签名。证书放 Actions secrets，**没配就跳过并照常出未签名包** ——
       #      包能出才最重要，签名是"有证书时自动升格"。
