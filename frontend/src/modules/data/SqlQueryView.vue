@@ -3092,9 +3092,10 @@ const schemaSelRef = ref(null)
 const fitHeadSelects = () => nextTick(() => {
   // 上限刻意压在 240~280：再长就会把右边的「执行 / 格式化」那一排按钮顶走
   // 连接下拉的宽度由 ConnectionSelect 自己算（width-min / width-max），这里不再插手
-  fitSelectWidth(catalogSelRef.value?.$el, { min: 120, max: 200 })
-  fitSelectWidth(dbSelRef.value?.$el, { min: 140, max: 280 })
-  fitSelectWidth(schemaSelRef.value?.$el, { min: 120, max: 220 })
+  // 文字按当前值传（读 DOM 在首帧可能是空的，见 utils/selectAutoWidth）
+  fitSelectWidth(catalogSelRef.value?.$el, { min: 120, max: 200, text: selectedCatalog.value || '' })
+  fitSelectWidth(dbSelRef.value?.$el, { min: 140, max: 280, text: dbLabelOf(selectedDbShort.value) || '' })
+  fitSelectWidth(schemaSelRef.value?.$el, { min: 120, max: 220, text: selectedSchema.value || '' })
 })
 watch(() => [selectedConnId.value, selectedCatalog.value, selectedDbShort.value, selectedSchema.value,
   dbOptions.value.length, dbCatalogs.value.length, schemas.value.length, editorSettings.value.fontSize],

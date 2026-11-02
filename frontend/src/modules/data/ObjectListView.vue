@@ -812,7 +812,8 @@ watch(keyword, () => { colW.value = []; measure() })
 const connSelRef = ref(null)
 const dbSelRef = ref(null)
 const fitDropdowns = () => nextTick(() => {
-  fitSelectWidth(dbSelRef.value?.$el, { min: 130, max: 300 })
+  // 文字按当前库传（读 DOM 在首帧可能是空的，见 utils/selectAutoWidth）
+  fitSelectWidth(dbSelRef.value?.$el, { min: 130, max: 300, text: curDb.value || '' })
 })
 watch(() => [curDb.value, dbOptions.value, editorSettingsLive.value.dataFontSize],
   fitDropdowns, { deep: true })

@@ -96,10 +96,16 @@ const filterText = ref('')
 /* ---------- 宽度自适应：连接名长短差别很大，固定宽度不是截断就是留一大片空白 ----------
    量法见 utils/selectAutoWidth（Element 的 selected-item 是 overflow:hidden，
    CSS 的 width:max-content 量不出来）。弹窗/页签是挂载后才可见的，所以挂载时量一次、
-   再等过渡动画结束补量一次。 */
+   再等过渡动画结束补量一次。
+   **文字按选中连接的名字传进去**：挂载那一帧 Element 还没渲染出选中项，读 DOM 会读到空串，
+   只能兜到 widthMin，之后就再没事件触发重量（实测「默认连接」首帧固定 140px、名字永远截断）。 */
 const fit = () => {
   if (!props.autoWidth) return
-  nextTick(() => fitSelectWidth(selRef.value?.$el, { min: props.widthMin, max: props.widthMax }))
+  nextTick(() => fitSelectWidth(selRef.value?.$el, {
+    min: props.widthMin,
+    max: props.widthMax,
+    text: selected.value?.name || '',
+  }))
 }
 onMounted(() => { fit(); setTimeout(fit, 400) })
 watch(() => [props.modelValue, props.connections, props.autoWidth, props.widthMin, props.widthMax], fit, { deep: true })

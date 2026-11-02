@@ -146,7 +146,9 @@ impl Server {
     fn category_of(name: &str) -> &'static str {
         match name {
             "dbmind_list_connections" | "dbmind_list_types" | "dbmind_list_tables"
-            | "dbmind_search_tables" | "dbmind_describe_table" => Store::KEY_MCP_TOOLS_STRUCTURE,
+            | "dbmind_list_databases" | "dbmind_search_tables" | "dbmind_describe_table" => {
+                Store::KEY_MCP_TOOLS_STRUCTURE
+            }
             "dbmind_execute_query" | "dbmind_cancel_query" => Store::KEY_MCP_TOOLS_QUERY,
             _ => Store::KEY_MCP_TOOLS_HISTORY,
         }
@@ -229,6 +231,222 @@ impl Server {
                 _ => required_str(args, "connection"),
             },
         }
+    }
+
+    /// 设置页那个「默认库」：**只对默认连接生效**。
+    ///
+    /// 为什么不无条件套用：模型换了一条连接还硬塞这个库名，那个库在别的服务器上多半
+    /// 不存在 —— 报「库不存在」比让它自己列库更难懂。
+    ///
+    /// 判据放宽到「用的就是默认连接」，而不是「没传 connection」：模型有把 connection
+    /// 显式重复一遍的习惯（哪怕用的就是默认那条），按传参判会让用户觉得「默认库没生效」。
+    fn default_database_arg(
+        &self,
+        record: &dbmind_core::ConnectionRecord,
+    ) -> Option<String> {
+        let configured = self
+            .setting(Store::KEY_MCP_DEFAULT_DATABASE)
+            .unwrap_or_default();
+        let configured = configured.trim().to_string();
+        if configured.is_empty() {
+            return None;
+        }
+        let default_connection = self
+            .setting(Store::KEY_MCP_DEFAULT_CONNECTION)
+            .unwrap_or_default();
+        let default_connection = default_connection.trim();
+        if default_connection.is_empty() {
+            return None;
+        }
+        // 设置页存的是名字，客户端可能传 id：两种都认
+        let is_default = record.config.name.trim() == default_connection
+            || record.id.trim() == default_connection;
+        if is_default {
+            Some(configured)
+        } else {
+            None
+        }
+    }
+
+    /// `database` / `schema` 的最终取值：客户端传的优先，其次默认连接上的「默认库」。
+    fn scope_of(
+        &self,
+        args: &Value,
+        record: &dbmind_core::ConnectionRecord,
+    ) -> (Option<String>, Option<String>) {
+        let (database, schema) = scope_args(args, record);
+        if database.is_some() || schema.is_some() {
+            return (database, schema);
+        }
+        match self.default_database_arg(record) {
+            Some(filled) => split_scope(Some(filled), None, record.kind().traits().schema_aware),
+            None => (None, None),
+        }
+    }
+
+    /// 取连接记录（元数据工具要判断「这个连接有没有绑定库」）。
+    fn record_of(
+        &self,
+        connection: &str,
+    ) -> dbmind_core::Result<dbmind_core::ConnectionRecord> {
+        self.engine.find_connection(connection)?.ok_or_else(|| {
+            DbMindError::new(
+                ErrorCode::QueryInvalid,
+                format!(
+                    "连接不存在：{connection}。先调 dbmind_list_connections 看有哪些（名称或 id 都认）"
+                ),
+            )
+        })
+    }
+
+    /// 「这个连接没指定库」的守门：**报错，而不是给一个空清单**。
+    ///
+    /// 这是本轮最关键的一条。MySQL 在没选库时 `list_tables` 会**成功返回 0 张表**
+    /// （不是报错），模型据此认定「这个连接里没有表」，转头去几百条连接里瞎猜 ——
+    /// 实测就是这样烧掉 4 分钟、最后什么都没查成。
+    ///
+    /// 「空结果」和「我不知道」是两件事，必须分开。报错里直接带上可用库清单，
+    /// 模型下一步就能自己纠正，不需要用户介入。
+    fn require_database(
+        &self,
+        record: &dbmind_core::ConnectionRecord,
+        database: Option<&str>,
+    ) -> dbmind_core::Result<()> {
+        if database.is_some() || record.kind().traits().single_database {
+            return Ok(());
+        }
+        let bound = record.config.database.as_deref().unwrap_or("").trim();
+        if !bound.is_empty() {
+            return Ok(());
+        }
+        // 非 SQL 类型（Mongo / Redis / ES）没有「库」这一层，不该被这条规则牵连
+        if databases_sql(record.kind().key()).is_none() {
+            return Ok(());
+        }
+        let names = self.databases_of(record).unwrap_or_default();
+        let shown: Vec<&str> = names.iter().take(30).map(String::as_str).collect();
+        let more = names.len().saturating_sub(shown.len());
+        let list = match (shown.is_empty(), more) {
+            (true, _) => "（库清单取不到，先调 dbmind_list_databases）".to_string(),
+            (false, 0) => shown.join(", "),
+            (false, rest) => format!("{} …（另有 {rest} 个，见 dbmind_list_databases）", shown.join(", ")),
+        };
+        let example = shown.first().copied().unwrap_or("库名");
+        Err(DbMindError::new(
+            ErrorCode::QueryInvalid,
+            format!(
+                "连接「{}」没有指定库，按库取表只会得到一个空清单 —— 那**不代表**没有表。\n\
+                 可用库：{list}\n\
+                 二选一：① 传 database 参数（例如 database = \"{example}\"）；\
+                 ② 在 SQL 里写全限定名（例如 {example}.某表）。",
+                record.config.name
+            ),
+        ))
+    }
+
+    /// 跑一条只读元数据 SQL，取**第一列**当字符串清单（库 / 模式共用）。
+    fn scalar_column(
+        &self,
+        record: &dbmind_core::ConnectionRecord,
+        sql: &str,
+    ) -> dbmind_core::Result<Vec<String>> {
+        // internal：这类系统探测不该进用户的查询历史
+        let request = QueryRequest::new(record.id.clone(), sql.to_string()).with_internal(true);
+        let result = self.engine.execute(request, AccessContext::Mcp)?;
+        let mut names: Vec<String> = result
+            .rows
+            .iter()
+            .filter_map(|row| row.first())
+            .filter_map(|cell| match cell_to_json(cell) {
+                Value::String(text) => Some(text),
+                Value::Number(number) => Some(number.to_string()),
+                _ => None,
+            })
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            .collect();
+        names.sort();
+        names.dedup();
+        Ok(names)
+    }
+
+    /// 这个连接上有哪些库。
+    fn databases_of(
+        &self,
+        record: &dbmind_core::ConnectionRecord,
+    ) -> dbmind_core::Result<Vec<String>> {
+        match databases_sql(record.kind().key()) {
+            Some(sql) => self.scalar_column(record, sql),
+            // 没有「库」这一层的类型（SQLite 一个文件一个库 / NoSQL）：给空清单，不是错误
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// `dbmind_list_databases` 的载荷：库清单 + 当前绑定 + 怎么定位的提示。
+    fn describe_databases(
+        &self,
+        record: &dbmind_core::ConnectionRecord,
+    ) -> dbmind_core::Result<Value> {
+        let traits = record.kind().traits();
+        let bound = record.config.database.clone().unwrap_or_default();
+        let all = self.databases_of(record)?;
+        let (system, user): (Vec<String>, Vec<String>) =
+            all.into_iter().partition(|name| is_system_database(name));
+        let mut payload = json!({
+            "connection": record.config.name,
+            "kind": record.kind().key(),
+            "boundDatabase": bound,
+            // 设置页「默认库」：不传 connection / database 时会自动用它
+            "settingsDefaultDatabase": self.default_database_arg(record).unwrap_or_default(),
+            "schemaAware": traits.schema_aware,
+            "databases": user,
+            // 系统库单列出来：模型不必处理，但「它们存在」是事实
+            "systemDatabases": system,
+        });
+        // 模式是「库」下的一层：连接没绑库时查到的是登录默认库的模式，给了反而误导
+        if traits.schema_aware && !bound.trim().is_empty() {
+            if let Some(sql) = schemas_sql(record.kind().key()) {
+                if let Ok(schemas) = self.scalar_column(record, sql) {
+                    payload["schemas"] = json!(schemas);
+                }
+            }
+        }
+        payload["hint"] = json!(if traits.single_database {
+            "这个类型一个文件就是一个库，不需要按库定位"
+        } else if bound.trim().is_empty() {
+            "本连接没有指定库：元数据工具要传 database 参数（database = \"库名\"）；SQL 里也可以直接写 库.表"
+        } else if traits.schema_aware {
+            "本连接已绑定库；database 参数可切库，模式可以写成 database = \"库.模式\" 或单独传 schema"
+        } else {
+            "本连接已绑定库；database 参数可以切库，SQL 里也可以直接写 库.表"
+        });
+        Ok(payload)
+    }
+
+    /// 执行失败时，若这个连接压根没绑库，补一句「可能跟没选库有关」的提示。
+    ///
+    /// 只加一句**固定文案**，不额外查库清单：错误路径上再打一次数据库，
+    /// 遇上「驱动没就绪 / 主机不通」时会把 1 秒的报错拖成 30 秒的超时。
+    /// 需要库清单的模型自己会去调 `dbmind_list_databases`。
+    fn explain_unbound(&self, connection: &str, err: DbMindError) -> DbMindError {
+        let Ok(Some(record)) = self.engine.find_connection(connection) else {
+            return err;
+        };
+        let bound = record.config.database.as_deref().unwrap_or("").trim();
+        if !bound.is_empty() || record.kind().traits().single_database {
+            return err;
+        }
+        if databases_sql(record.kind().key()).is_none() {
+            return err;
+        }
+        DbMindError::new(
+            err.code,
+            format!(
+                "{}\n\n提示：连接「{}」没有指定库。若错误是「找不到表 / 没有选中库」，请把 SQL 写成\
+                 全限定名（库.表），或先调 dbmind_list_databases 挑库、再用 database 参数重试。",
+                err.message, record.config.name
+            ),
+        )
     }
 
     fn serve(&self) {
@@ -380,7 +598,12 @@ impl Server {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": { "tools": {} },
                 "serverInfo": { "name": "dbmind", "version": dbmind_core::VERSION },
-                "instructions": "DBmind 数据库工作台。默认只读；需要写入时请让用户在 DBmind 中开启「允许 AI 写入」。"
+                // 这段是模型读到的第一条提示：把「连接 → 库 → 表」的定位顺序写在这里，
+                // 比让它从工具报错里自己摸索快得多（实测它会在几百条连接里瞎猜）。
+                "instructions": "DBmind 数据库工作台，连接的是用户在 DBmind 里配好的数据连接（名称或 id 都认）。\
+定位顺序是「连接 → 库 → 表」：连接未必指定了库，若 list_tables 报「没有指定库」，先调 \
+dbmind_list_databases 拿库清单，再给 database 参数（PG / SQL Server / Kingbase 还可写「库.模式」或单独传 schema）。\
+默认只读；写语句需用户在 DBmind 中开启「允许 AI 写入」。"
             })),
             "ping" => Ok(json!({})),
             "tools/list" => Ok(json!({ "tools": self.tools() })),
@@ -438,25 +661,92 @@ impl Server {
         }
         match name {
             "dbmind_list_connections" => {
-                let mut list = serde_json::to_value(self.engine.list_connections()?)?;
-                // 口令类字段**一律不外发**：数据库口令在内核里已 `skip_serializing`，但 SSH 隧道的
-                // 口令 / 口令短语存在 `extra` 这个自由 JSON 里（键 `ssh.password` / `keyPassphrase`）。
-                // 不在这里抹掉，「列出连接（不含口令）」就是一句假话 —— 明文会随工具结果
-                // 进模型上下文（实测 355 条连接里带出了 SSH 口令）。
-                strip_secrets(&mut list);
-                Ok(list)
+                let records = self.engine.list_connections()?;
+                // 影子连接（跨库浏览时按需生成的「父 ▸ 库」记录）**不给模型看**：
+                // 界面上它们本来就是实现细节（web 的 `/api/connections` 也会滤掉），
+                // 而一条连接能展开出十几个影子 —— 361 条清单里 172 条是影子，
+                // 模型在这一堆里挑连接纯属浪费上下文，还容易挑到「某个库的副本」。
+                //
+                // 但影子携带的信息是有用的：它说明**这个库被展开过**。所以折成父连接上的
+                // `expandedDatabases`，既减噪又不丢线索。
+                let mut expanded: HashMap<String, Vec<String>> = HashMap::new();
+                for record in &records {
+                    let Some(base) = record.shadow_of() else {
+                        continue;
+                    };
+                    let database = record.config.database.clone().unwrap_or_default();
+                    let database = database.trim().to_string();
+                    // 系统库展开过也不值得占上下文：这条线索的用途是「业务表在哪」
+                    if database.is_empty() || is_system_database(&database) {
+                        continue;
+                    }
+                    expanded.entry(base.to_string()).or_default().push(database);
+                }
+
+                let mut list = Vec::new();
+                for record in &records {
+                    if record.is_shadow() {
+                        continue;
+                    }
+                    let mut value = serde_json::to_value(record)?;
+                    // 口令类字段**一律不外发**：数据库口令在内核里已 `skip_serializing`，但 SSH 隧道的
+                    // 口令 / 口令短语存在 `extra` 这个自由 JSON 里（键 `ssh.password` / `keyPassphrase`）。
+                    // 不在这里抹掉，「列出连接（不含口令）」就是一句假话 —— 明文会随工具结果
+                    // 进模型上下文（实测 355 条连接里带出了 SSH 口令）。
+                    strip_secrets(&mut value);
+                    if let Some(mut databases) = expanded.get(&record.id).cloned() {
+                        databases.sort();
+                        databases.dedup();
+                        value["expandedDatabases"] = json!(databases);
+                    }
+                    list.push(value);
+                }
+                Ok(json!({
+                    // 带上总数：模型据此判断「要不要先筛一遍」而不是把整份清单背下来
+                    "total": list.len(),
+                    "connections": list,
+                }))
             }
             "dbmind_list_types" => Ok(serde_json::to_value(self.engine.types())?),
             "dbmind_list_tables" => {
                 let connection = self.connection_arg(args)?;
-                // 结构**一律现读**：AI 拿到 5 分钟前的结构会写出不存在的表名，
-                // 而 AI 调元数据的频率本来就很低 —— 慢一点换准，值。
-                Ok(serde_json::to_value(self.engine.list_tables_fresh(&connection)?)?)
+                let record = self.record_of(&connection)?;
+                let (database, schema) = self.scope_of(args, &record);
+                // 没给库就按连接自身的库查（老行为），给了才走 scoped —— 两路都不写缓存键之外的东西
+                self.require_database(&record, database.as_deref())?;
+                let tables = if database.is_none() && schema.is_none() {
+                    // 结构**一律现读**：AI 拿到 5 分钟前的结构会写出不存在的表名，
+                    // 而 AI 调元数据的频率本来就很低 —— 慢一点换准，值。
+                    self.engine.list_tables_fresh(&connection)?
+                } else {
+                    self.engine.list_tables_scoped(
+                        &connection,
+                        database.as_deref(),
+                        schema.as_deref(),
+                    )?
+                };
+                Ok(json!({
+                    "connection": record.config.name,
+                    "database": database.unwrap_or_else(|| record.config.database.clone().unwrap_or_default()),
+                    "schema": schema,
+                    "tables": tables,
+                }))
             }
             "dbmind_search_tables" => {
                 let connection = self.connection_arg(args)?;
+                let record = self.record_of(&connection)?;
+                let (database, schema) = self.scope_of(args, &record);
+                self.require_database(&record, database.as_deref())?;
                 let keyword = required_str(args, "keyword")?.to_lowercase();
-                let all = self.engine.list_tables_fresh(&connection)?;
+                let all = if database.is_none() && schema.is_none() {
+                    self.engine.list_tables_fresh(&connection)?
+                } else {
+                    self.engine.list_tables_scoped(
+                        &connection,
+                        database.as_deref(),
+                        schema.as_deref(),
+                    )?
+                };
                 // 模型经常只知道「大概有张 order 表」：模糊过滤省它翻全量清单，
                 // 结果截到 50 条 —— 全量它也记不住。
                 let matched: Vec<_> = all
@@ -472,9 +762,26 @@ impl Server {
             }
             "dbmind_describe_table" => {
                 let connection = self.connection_arg(args)?;
+                let record = self.record_of(&connection)?;
+                let (database, schema) = self.scope_of(args, &record);
+                self.require_database(&record, database.as_deref())?;
                 let table = required_str(args, "table")?;
-                let columns = self.engine.list_columns_fresh(&connection, &table)?;
+                let columns = if database.is_none() && schema.is_none() {
+                    self.engine.list_columns_fresh(&connection, &table)?
+                } else {
+                    self.engine.list_columns_scoped(
+                        &connection,
+                        &table,
+                        database.as_deref(),
+                        schema.as_deref(),
+                    )?
+                };
                 Ok(json!({ "table": table, "columns": columns }))
+            }
+            "dbmind_list_databases" => {
+                let connection = self.connection_arg(args)?;
+                let record = self.record_of(&connection)?;
+                Ok(self.describe_databases(&record)?)
             }
             "dbmind_execute_query" => {
                 let connection = self.connection_arg(args)?;
@@ -519,7 +826,13 @@ impl Server {
                     )
                 };
                 self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(key);
-                let result = outcome?;
+                let result = match outcome {
+                    Ok(result) => result,
+                    // 失败也要看得懂：空库下 `select * from orders` 只会报
+                    // `No database selected`（MySQL）/ `Invalid object name`（SQL Server），
+                    // 模型看不出根因是「没选库」，于是换一条连接再试 —— 一换就是几分钟。
+                    Err(err) => return Err(self.explain_unbound(&connection, err)),
+                };
                 // 字段脱敏（`Mcp` 通道）：这里返回的是真实数据行，一旦发出去就是出站流量 ——
                 // 与 AI 上下文用同一份规则与算法（`dbmind_core::mask`），否则「设置里配了、
                 // MCP 客户端却拿到明文」就是最糟的那种不一致。
@@ -559,6 +872,7 @@ impl Server {
                     "blockDangerous": self.setting(Store::KEY_BLOCK_DANGEROUS).as_deref() == Some("true"),
                     "maxWriteRows": self.setting(Store::KEY_MAX_WRITE_ROWS).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0),
                     "defaultConnection": self.setting(Store::KEY_MCP_DEFAULT_CONNECTION).unwrap_or_default(),
+                    "defaultDatabase": self.setting(Store::KEY_MCP_DEFAULT_DATABASE).unwrap_or_default(),
                     "toolCategories": {
                         "structure": self.flag(Store::KEY_MCP_TOOLS_STRUCTURE, true),
                         "query": self.flag(Store::KEY_MCP_TOOLS_QUERY, true),
@@ -578,7 +892,7 @@ impl Server {
         let all: Vec<Value> = vec![
             json!({
                 "name": "dbmind_list_connections",
-                "description": "列出 DBmind 中已配置的数据连接（不含口令）。",
+                "description": "列出 DBmind 中已配置的数据连接（不含口令）。每条连接可能带 expandedDatabases（用户展开过的库，只是线索、不一定全，以 dbmind_list_databases 为准）。返回值里的 name 或 id 都能当其它工具的 connection 参数。",
                 "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false }
             }),
             json!({
@@ -588,10 +902,25 @@ impl Server {
             }),
             json!({
                 "name": "dbmind_list_tables",
-                "description": "列出指定连接下的表与视图。",
+                "description": "列出某个库下的表与视图。连接没绑定库时必须传 database —— 否则返回的是带可用库清单的**错误**，而不是空清单（空清单会被误读成「没有表」）。",
                 "inputSchema": {
                     "type": "object",
-                    "properties": { "connection": { "type": "string", "description": "连接名称或 id，省略时用设置里的默认连接" } },
+                    "properties": {
+                        "connection": { "type": "string", "description": "连接名称或 id，省略时用设置里的默认连接" },
+                        "database": { "type": "string", "description": "库名；schema 层级的类型可写「库.模式」。省略时用连接绑定的库" },
+                        "schema": { "type": "string", "description": "模式（PG / SQL Server / Kingbase），也可直接写进 database" }
+                    },
+                    "additionalProperties": false
+                }
+            }),
+            json!({
+                "name": "dbmind_list_databases",
+                "description": "列出连接上的库（connection 已绑定库时附带模式清单）。不确定该操作哪个库时先调它。",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "connection": { "type": "string", "description": "省略时用默认连接" }
+                    },
                     "additionalProperties": false
                 }
             }),
@@ -602,7 +931,9 @@ impl Server {
                     "type": "object",
                     "properties": {
                         "connection": { "type": "string", "description": "省略时用默认连接" },
-                        "keyword": { "type": "string", "description": "表名关键字，不区分大小写" }
+                        "keyword": { "type": "string", "description": "表名关键字，不区分大小写" },
+                        "database": { "type": "string", "description": "库名（schema 层级可写「库.模式」），省略时用连接绑定的库" },
+                        "schema": { "type": "string", "description": "模式名" }
                     },
                     "required": ["keyword"],
                     "additionalProperties": false
@@ -615,7 +946,9 @@ impl Server {
                     "type": "object",
                     "properties": {
                         "connection": { "type": "string", "description": "省略时用默认连接" },
-                        "table": { "type": "string" }
+                        "table": { "type": "string" },
+                        "database": { "type": "string", "description": "库名（schema 层级可写「库.模式」），省略时用连接绑定的库" },
+                        "schema": { "type": "string", "description": "模式名" }
                     },
                     "required": ["table"],
                     "additionalProperties": false
@@ -764,6 +1097,121 @@ fn mask_rows(
         })
         .collect();
     (out, masked.len())
+}
+
+/// 常见系统库：列出来但单独归类，模型不必去动它们。
+const SYSTEM_DATABASES: [&str; 20] = [
+    "information_schema",
+    "performance_schema",
+    "mysql",
+    "sys",
+    "master",
+    "tempdb",
+    "model",
+    "msdb",
+    "postgres",
+    "template0",
+    "template1",
+    "sysibm",
+    "syscat",
+    "sysstat",
+    "syspublic",
+    "sysproc",
+    "dbsnmp",
+    "outln",
+    "xdb",
+    "sysman",
+];
+
+fn is_system_database(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    SYSTEM_DATABASES.contains(&lower.as_str())
+}
+
+/// 「库」这一层的清单 SQL。
+///
+/// 与 web 的 `api::dialect.rs`（`Dialect::databases`）是**同一份口径** —— 那边给界面
+/// 的树用，这边给模型用。MCP 是独立 crate、不依赖 web，所以只能各存一份：改口径时
+/// 两边一起改。这里额外要求「没选库也能跑通」，因为它的使命正是帮模型挑一个库。
+fn databases_sql(kind: &str) -> Option<&'static str> {
+    match kind {
+        // show databases 不需要先选库，正好能在「未绑库」的连接上跑
+        "mysql" | "mariadb" | "doris" | "clickhouse" => Some("show databases"),
+        "sqlserver" => Some(
+            "select name from sys.databases where state = 0 and has_dbaccess(name) = 1 order by name",
+        ),
+        "postgresql" | "kingbase" => Some(
+            "select datname as name from pg_database where datistemplate = false order by datname",
+        ),
+        // DB2 没有「库」这一层：schema 就是它的库
+        "db2" => Some("select schemaname as name from syscat.schemata order by schemaname"),
+        "oracle" | "dm" => Some("select username as name from all_users order by username"),
+        "h2" => Some("select schema_name as name from information_schema.schemata order by schema_name"),
+        "derby" => Some("select schemaname as name from sys.sysschemas order by schemaname"),
+        // SQLite / 非 SQL 类型没有「库清单」这回事
+        _ => None,
+    }
+}
+
+/// 「模式」这一层的清单 SQL（只有 schema 层级的类型有）。
+///
+/// 模式是**库内**的一层，所以这些语句只能在连接已绑定库时执行。
+fn schemas_sql(kind: &str) -> Option<&'static str> {
+    match kind {
+        "sqlserver" => Some("select name from sys.schemas order by name"),
+        "postgresql" | "kingbase" => Some(
+            "select nspname as name from pg_namespace where nspname not like 'pg\\_%' order by nspname",
+        ),
+        "db2" => Some("select schemaname as name from syscat.schemata order by schemaname"),
+        "oracle" | "dm" => Some("select username as name from all_users order by username"),
+        "h2" => Some(
+            "select schema_name as name from information_schema.schemata order by schema_name",
+        ),
+        "derby" => Some("select schemaname as name from sys.sysschemas order by schemaname"),
+        _ => None,
+    }
+}
+
+/// `database` / `schema` 两个参数（MCP 侧新增的定位能力）。
+///
+/// `database` 允许写成 `库.模式`（与界面树、同步接口同一口径）：schema 层级的类型
+/// 直接拆成两层 —— 让模型记两套写法，它只会记错一套。
+fn scope_args(
+    args: &Value,
+    record: &dbmind_core::ConnectionRecord,
+) -> (Option<String>, Option<String>) {
+    let text = |key: &str| {
+        args.get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+    };
+    split_scope(
+        text("database"),
+        text("schema"),
+        record.kind().traits().schema_aware,
+    )
+}
+
+/// [`scope_args`] 的纯逻辑部分（可单测）。
+///
+/// 只在 schema 层级的类型上拆 `库.模式`：MySQL 的 `192.168.2.216 ▸ api_demo` 这种
+/// 名字里带点、库名本身也可能带点，一律拆会把库名拆坏。
+fn split_scope(
+    database: Option<String>,
+    schema: Option<String>,
+    schema_aware: bool,
+) -> (Option<String>, Option<String>) {
+    match (database, schema) {
+        (Some(database), None) if schema_aware => match database.split_once('.') {
+            Some((db, schema)) if !db.is_empty() && !schema.is_empty() => {
+                (Some(db.to_string()), Some(schema.to_string()))
+            }
+            _ => (Some(database), None),
+        },
+        (database, schema) => (database, schema),
+    }
 }
 
 fn required_str(args: &Value, key: &str) -> dbmind_core::Result<String> {
@@ -919,5 +1367,52 @@ mod tests {
         // 不在这个连接上：不命中
         let (_, miss) = mask_rows(rows, &cfg, &[0u8; 32], &["别的库".to_string()]);
         assert_eq!(miss, 0);
+    }
+
+    #[test]
+    fn database_and_schema_split_only_for_schema_types() {
+        // SQL Server / PG：`库.模式` 拆两层
+        let (db, schema) = split_scope(Some("pipeline.dbo".into()), None, true);
+        assert_eq!(db.as_deref(), Some("pipeline"));
+        assert_eq!(schema.as_deref(), Some("dbo"));
+
+        // MySQL：库名里的点不拆（库名确实可能带点，拆了就查不到）
+        let (db, schema) = split_scope(Some("api_demo".into()), None, false);
+        assert_eq!(db.as_deref(), Some("api_demo"));
+        assert_eq!(schema, None);
+
+        // 显式给了 schema 就以它为准，不再拆 database
+        let (db, schema) = split_scope(Some("a.b".into()), Some("public".into()), true);
+        assert_eq!(db.as_deref(), Some("a.b"));
+        assert_eq!(schema.as_deref(), Some("public"));
+
+        // 只有库名、没有点：原样
+        let (db, schema) = split_scope(Some("pipeline".into()), None, true);
+        assert_eq!(db.as_deref(), Some("pipeline"));
+        assert_eq!(schema, None);
+
+        // 首尾都是空：两个都没有
+        assert_eq!(split_scope(None, None, true), (None, None));
+    }
+
+    #[test]
+    fn databases_sql_covers_the_unbound_case() {
+        // 这些类型「没选库」也能跑，正是 require_database 报错时要用的那一步
+        assert_eq!(databases_sql("mysql"), Some("show databases"));
+        assert_eq!(databases_sql("clickhouse"), Some("show databases"));
+        assert!(databases_sql("sqlserver").unwrap().contains("sys.databases"));
+        assert!(databases_sql("postgresql").unwrap().contains("pg_database"));
+        // SQLite 一个文件一个库：没有库清单，也就不会被「未指定库」拦住
+        assert_eq!(databases_sql("sqlite"), None);
+        // 模式的语句只在 schema 层级存在
+        assert!(schemas_sql("sqlserver").is_some());
+        assert_eq!(schemas_sql("mysql"), None);
+    }
+
+    #[test]
+    fn system_databases_are_recognized_case_insensitively() {
+        assert!(is_system_database("INFORMATION_SCHEMA"));
+        assert!(is_system_database(" master "));
+        assert!(!is_system_database("api_demo"));
     }
 }

@@ -66,6 +66,12 @@ pub const SETTINGS_LOG_LEVEL: &str = "log.level";
 pub const SETTINGS_AUDIT_LEVEL: &str = "audit.level";
 /// MCP 壳的默认连接：客户端不传 connection 参数时兜底用它（空 = 不兜底，报缺参）。
 pub const SETTINGS_MCP_DEFAULT_CONNECTION: &str = "mcp.defaultConnection";
+/// MCP 的默认库：只作用于**默认连接**（客户端没传 connection 也没传 database 时兜底）。
+///
+/// 为什么单独存一份而不是让用户去选「库级影子连接」：影子连接名是 `父 ▸ 库`，
+/// 界面上根本看不到（web 的 `/api/connections` 会滤掉），用户没法选；而 SQL Server
+/// 那种「库.模式」两级的东西更没法塞进一个连接名里。设置页两级联选才是用户想的那件事。
+pub const SETTINGS_MCP_DEFAULT_DATABASE: &str = "mcp.defaultDatabase";
 /// MCP 单次查询最大行数（1..=HARD_MAX_ROWS；壳把客户端传的 max_rows 夹到这个值）。
 pub const SETTINGS_MCP_MAX_ROWS: &str = "mcp.maxRows";
 /// MCP 查询默认超时（秒；客户端没传 timeout_ms 时用它）。
@@ -901,6 +907,7 @@ impl Store {
     pub const KEY_LOG_LEVEL: &'static str = SETTINGS_LOG_LEVEL;
     pub const KEY_AUDIT_LEVEL: &'static str = SETTINGS_AUDIT_LEVEL;
     pub const KEY_MCP_DEFAULT_CONNECTION: &'static str = SETTINGS_MCP_DEFAULT_CONNECTION;
+    pub const KEY_MCP_DEFAULT_DATABASE: &'static str = SETTINGS_MCP_DEFAULT_DATABASE;
     pub const KEY_MCP_MAX_ROWS: &'static str = SETTINGS_MCP_MAX_ROWS;
     pub const KEY_MCP_TIMEOUT_SECS: &'static str = SETTINGS_MCP_TIMEOUT_SECS;
     pub const KEY_MCP_TOOLS_STRUCTURE: &'static str = SETTINGS_MCP_TOOLS_STRUCTURE;

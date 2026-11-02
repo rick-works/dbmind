@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v1.9.3": [
+  "MCP gained a \"database\" layer: table list / table search / table describe accept a database (plus a schema on SQL Server and PG), and a default connection can carry a default database in Settings - the AI no longer lists databases and guesses on every call; the switch happens in memory, so no shadow connections pile up in the connection list",
+  "When a connection has no database bound, MCP now says so: previously MySQL cheerfully returned zero tables, so the AI concluded \"this database has no tables\" and went guessing across hundreds of connections",
+  "The default connection / default database / schema dropdowns in Settings size themselves to their content, so they open at the right width and long database names are no longer cut to \"information_sch...\""
+ ],
  "v1.9.2": [
   "The script manager now opens collapsed: only groups and data sources are listed, instead of every script at once. A search still expands down to the matches so nothing hides behind a folded group",
   "Clicking anywhere on a group or data source row toggles it (previously only the tiny arrow worked), and the primary-colored bar on the row left edge is gone",

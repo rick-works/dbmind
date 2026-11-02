@@ -627,6 +627,57 @@ impl DbMindEngine {
         self.columns_in(id_or_name, table, schema, true)
     }
 
+    /// 在**指定库**下取对象清单（`database` 为空 = 沿用连接自身的库）。
+    ///
+    /// 为什么需要它：内核的连接模型是「一条连接绑定一个库」，而 MCP / 脚本这类壳
+    /// 手上常常只有「连接 + 库名」。web 层靠影子连接（`api::scope::resolve`）解决，
+    /// 但那会往用户的连接列表里**写记录** —— 对一次只读的元数据查询来说副作用太大
+    /// （MCP 每换一次库就多出一条连接，树里会冒出一堆）。
+    ///
+    /// 这里改成**内存里换掉 `database` 再问驱动**：连接记录一个字都不动。
+    /// 结构缓存也不写、不读 —— 换了库就是另一份目录，写进原来那个键会与主库互相
+    /// 顶掉（见 `columns_in` 的注释）。MCP 调元数据的频率本来就低，少一层缓存损失很小。
+    ///
+    /// `schema` 是 PG / SQL Server / Kingbase 那层「模式」，与 `database` 可以同时给。
+    pub fn list_tables_scoped(
+        &self,
+        id_or_name: &str,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) -> Result<Vec<TableInfo>> {
+        let record = self.store.require_connection(id_or_name)?;
+        let config = scoped_config(&record, database);
+        let read_only = self.policy().is_read_only(&record);
+        self.drivers
+            .resolve(record.kind())?
+            .list_tables(crate::drivers::MetaCall {
+                config: &config,
+                read_only,
+                schema: blank_to_none(schema),
+            })
+    }
+
+    /// 同 [`Self::list_tables_scoped`]，但要的是**单表列**。
+    pub fn list_columns_scoped(
+        &self,
+        id_or_name: &str,
+        table: &str,
+        database: Option<&str>,
+        schema: Option<&str>,
+    ) -> Result<Vec<ColumnDetail>> {
+        let record = self.store.require_connection(id_or_name)?;
+        let config = scoped_config(&record, database);
+        let read_only = self.policy().is_read_only(&record);
+        self.drivers.resolve(record.kind())?.list_columns(
+            crate::drivers::MetaCall {
+                config: &config,
+                read_only,
+                schema: blank_to_none(schema),
+            },
+            table,
+        )
+    }
+
     fn columns(&self, id_or_name: &str, table: &str, refresh: bool) -> Result<Vec<ColumnDetail>> {
         self.columns_in(id_or_name, table, None, refresh)
     }
@@ -4084,6 +4135,23 @@ mod tests {
             .expect_err("非 INSERT 必须被拒绝");
         assert_eq!(err.code, ErrorCode::QueryInvalid);
     }
+}
+
+/// 复制一份连接配置，只把 `database` 换掉（`None` / 空串 = 沿用连接自身的库）。
+///
+/// 见 [`DbMindEngine::list_tables_scoped`]：这是「在别的库下看一眼」的全部实现 ——
+/// 不落盘、不建影子，读完就当没发生过。
+fn scoped_config(record: &ConnectionRecord, database: Option<&str>) -> ConnectionConfig {
+    let mut config = record.config.clone();
+    if let Some(database) = blank_to_none(database) {
+        config.database = Some(database.to_string());
+    }
+    config
+}
+
+/// 去掉首尾空白；空串按「没给」处理（MCP 客户端常把可选参数写成 `""`）。
+fn blank_to_none(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|text| !text.is_empty())
 }
 
 /// 影子连接的 `extra`：以主连接那份为准，影子自己的键只在主连接没有时补上。

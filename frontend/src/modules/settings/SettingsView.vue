@@ -417,10 +417,42 @@
 
           <el-form label-width="150px" label-position="left" class="ai-form">
             <el-form-item :label="$t('settings.mcp.defaultConnection')">
-              <el-select v-model="mcpForm.defaultConnection" clearable style="width:240px">
-                <el-option v-for="c in connOptions" :key="c.id" :value="c.name" :label="c.name" />
-              </el-select>
+              <!-- 与 SQL 编辑器 / 数据传输同一款「分组 → 连接」两级下拉：
+                   连接多起来之后平铺在一个原生 el-select 里根本找不到（实测本机 34 条 +
+                   一堆同名 host），分组 + 可筛选是必须的 -->
+              <!-- size=default：组件默认是 small(24px)，本页其它控件是 32px，一行里会一大一小。
+                   宽度跟着选中值走（长连接名 / 长库名不该被截成 "data_admin_…"） -->
+              <ConnectionSelect
+                v-model="mcpConnId"
+                :connections="connOptions"
+                size="default"
+                :width-min="140"
+                :width-max="320"
+                :clearable="true"
+                :filterable="true"
+                :placeholder="$t('common.pleaseSelect')"
+              />
               <div class="form-tip">{{ $t('settings.mcp.defaultConnectionTip') }}</div>
+            </el-form-item>
+            <!-- 默认库：连接的下一级。没有它，AI 遇到「连接没绑库」就只能先问一次
+                 「你要哪个库」——MCP 壳那边虽然能自愈，但每次白跑一轮。
+                 SQL Server / PG / Kingbase 还有「模式」这一层，同样要能选 —— 存成 `库.模式`。 -->
+            <el-form-item :label="$t('settings.mcp.defaultDatabase')">
+              <div class="mcp-scope-row">
+                <el-select ref="mcpDbRef" v-model="mcpDbPick" class="mcp-db-sel"
+                           clearable filterable allow-create default-first-option
+                           :placeholder="$t('common.pleaseSelect')"
+                           :loading="mcpDbLoading" :disabled="!mcpForm.defaultConnection">
+                  <el-option v-for="d in mcpDbOptions" :key="d" :value="d" :label="d" />
+                </el-select>
+                <el-select ref="mcpSchemaRef" v-if="mcpNeedsSchema" v-model="mcpSchemaPick"
+                           class="mcp-schema-sel" clearable filterable allow-create default-first-option
+                           :placeholder="$t('common.pleaseSelect')"
+                           :loading="mcpSchemaLoading" :disabled="!mcpDbPick">
+                  <el-option v-for="s in mcpSchemaOptions" :key="s" :value="s" :label="s" />
+                </el-select>
+              </div>
+              <div class="form-tip">{{ $t('settings.mcp.defaultDatabaseTip') }}</div>
             </el-form-item>
             <el-form-item :label="$t('settings.mcp.maxRows')">
               <el-input-number v-model="mcpForm.maxRows" :min="1" :max="100000" :step="500" style="width:160px" />
@@ -1322,6 +1354,8 @@ import { getAiConfig, saveAiConfig, aiChat, getPathSettings, savePathSettings, b
 // 表格里的打码用同一份配置（前端同算法）：设置页保存后顺手同步给 utils/masking 的缓存
 import { setMaskConfig as applyMaskRules } from '../../utils/masking'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
+// 下拉宽度自适应（与 ConnectionSelect 内部同一套量法）
+import { fitSelectWidth } from '../../utils/selectAutoWidth'
 import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
 // 界面尺寸：当前值由 utils/appearance.js 从 localStorage 读；改动即写 :root 的 CSS 变量并落盘，
 // 所以顶栏/左侧树当场变化，不需要「保存」也不需要重启
@@ -2261,21 +2295,156 @@ const safetyForm = ref({ ...safetyDefaults })
 
 // ---------- MCP 服务 ----------
 // 配置存后端 app_settings：MCP 壳**每次工具调用都现读**，保存后下一次调用即生效，不用重启客户端
-const mcpDefaults = { defaultConnection: '', maxRows: 2000, timeoutSecs: 30, toolsStructure: true, toolsQuery: true, toolsHistory: true }
+const mcpDefaults = { defaultConnection: '', defaultDatabase: '', maxRows: 2000, timeoutSecs: 30, toolsStructure: true, toolsQuery: true, toolsHistory: true }
 const mcpForm = ref({ ...mcpDefaults })
 const connOptions = ref([])
+/** 设置里存的是连接**名字**（配置文件可读，老数据也是名字），而 ConnectionSelect 认的是 id ——
+    这里做一次双向映射，两边各自保持自己的口径 */
+const mcpConnId = computed({
+  get: () => {
+    const name = mcpForm.value.defaultConnection
+    if (!name) return ''
+    return connOptions.value.find(c => c.name === name)?.id || ''
+  },
+  set: (id) => {
+    mcpForm.value.defaultConnection = connOptions.value.find(c => c.id === id)?.name || ''
+  },
+})
+/** 「默认库 / 模式」的下拉项与联动。
+    SQL Server / PG / Kingbase 的库下面还有一层模式（存成 `库.模式`），其余类型只有库 ——
+    用 /features 的 supportsSchemas 判定，不硬编码类型名（与脱敏页签同一口径）。 */
+const mcpDbOptions = ref([])
+const mcpDbLoading = ref(false)
+const mcpSchemaOptions = ref([])
+const mcpSchemaLoading = ref(false)
+const mcpFeatures = ref({})
+/** 界面上拆成两个选择框，设置里仍然只存一个字符串（库 或 库.模式） */
+const mcpDbPick = ref('')
+const mcpSchemaPick = ref('')
+/** 两个下拉的宽度跟着选中值走（el-select 自己没有自适应，得按文本量 —— 见 utils/selectAutoWidth） */
+const mcpDbRef = ref(null)
+const mcpSchemaRef = ref(null)
+const fitMcpScopeWidths = () => {
+  nextTick(() => {
+    // 文字按选中值传（读 DOM 在首帧可能是空的，见 utils/selectAutoWidth）
+    fitSelectWidth(mcpDbRef.value?.$el, { min: 130, max: 300, text: mcpDbPick.value || '' })
+    if (mcpSchemaRef.value) fitSelectWidth(mcpSchemaRef.value.$el, { min: 92, max: 180, text: mcpSchemaPick.value || '' })
+  })
+}
+const mcpNeedsSchema = computed(() => mcpFeatures.value?.supportsSchemas === true)
+/** 回显期间屏蔽下面那些 watch：它们会清空选择并自动补一个默认模式，把回显的值覆盖掉 */
+let mcpHydrating = false
+
+/** `库.模式` → [库, 模式]；不分层的类型整串都是库名 */
+const splitDbSchema = (raw, needSchema) => {
+  const text = String(raw || '')
+  if (!needSchema) return [text, '']
+  const at = text.indexOf('.')
+  if (at <= 0 || at === text.length - 1) return [text, '']
+  return [text.slice(0, at), text.slice(at + 1)]
+}
+
+/** 两个下拉 → 设置值（MCP 壳那边按 `库.模式` 拆成 database + schema） */
+const syncMcpDatabase = () => {
+  if (mcpHydrating) return
+  const db = mcpDbPick.value
+  if (!db) { mcpForm.value.defaultDatabase = ''; return }
+  mcpForm.value.defaultDatabase = (mcpNeedsSchema.value && mcpSchemaPick.value)
+    ? `${db}.${mcpSchemaPick.value}`
+    : db
+}
+
+const loadMcpDatabases = async (connName) => {
+  mcpDbOptions.value = []
+  mcpSchemaOptions.value = []
+  mcpFeatures.value = {}
+  if (!connName) return
+  const conn = connOptions.value.find(c => c.name === connName)
+  if (!conn?.id) return
+  mcpDbLoading.value = true
+  try {
+    const [list, features] = await Promise.all([
+      listDatabases(conn.id).catch(() => []),
+      getFeatures(conn.id).catch(() => ({})),
+    ])
+    mcpDbOptions.value = (Array.isArray(list) ? list : [])
+      .map(d => (typeof d === 'string' ? d : (d?.name || '')))
+      .filter(Boolean)
+    mcpFeatures.value = features || {}
+  } catch {
+    // 库清单只是下拉的便利项：连不上不该让设置页报错，用户仍能手输
+    mcpDbOptions.value = []
+  } finally {
+    mcpDbLoading.value = false
+  }
+}
+
+const loadMcpSchemas = async (connName, database) => {
+  mcpSchemaOptions.value = []
+  if (!connName || !database) return
+  const conn = connOptions.value.find(c => c.name === connName)
+  if (!conn?.id) return
+  mcpSchemaLoading.value = true
+  try {
+    const list = await listSchemas(conn.id, database).catch(() => [])
+    mcpSchemaOptions.value = (Array.isArray(list) ? list : [])
+      .map(s => (typeof s === 'string' ? s : (s?.name || s?.schema || '')))
+      .filter(Boolean)
+  } finally {
+    mcpSchemaLoading.value = false
+  }
+}
+
+// 换默认连接：库与模式一起清空（否则会留一个属于旧连接的库名），再重拉清单
+watch(() => mcpForm.value.defaultConnection, async (name) => {
+  if (mcpHydrating) return
+  mcpDbPick.value = ''
+  mcpSchemaPick.value = ''
+  mcpForm.value.defaultDatabase = ''
+  await loadMcpDatabases(name)
+})
+
+// 换库：重拉模式并预选 dbo（没有就第一个）—— SQL Server 绝大多数对象在 dbo
+watch(mcpDbPick, async (db) => {
+  if (mcpHydrating) return
+  mcpSchemaPick.value = ''
+  if (mcpNeedsSchema.value && db) {
+    await loadMcpSchemas(mcpForm.value.defaultConnection, db)
+    if (mcpSchemaOptions.value.length) {
+      mcpSchemaPick.value = mcpSchemaOptions.value.includes('dbo') ? 'dbo' : mcpSchemaOptions.value[0]
+    }
+  }
+  syncMcpDatabase()
+})
+
+watch(mcpSchemaPick, syncMcpDatabase)
+
+// 选中值 / 模式层有无 一变就重量一次宽度（DOM 文本在 nextTick 后才更新）
+watch([mcpDbPick, mcpSchemaPick, mcpNeedsSchema], fitMcpScopeWidths)
 const loadMcp = async () => {
   try {
     const [s, conns] = await Promise.all([getSettings(), listConnections().catch(() => [])])
     connOptions.value = Array.isArray(conns) ? conns : []
     const str = (key, fallback) => (typeof s?.[key] === 'string' && s[key] !== '' ? s[key] : fallback)
     mcpForm.value.defaultConnection = str('mcp.defaultConnection', '')
+    mcpForm.value.defaultDatabase = str('mcp.defaultDatabase', '')
     mcpForm.value.maxRows = Number(s?.['mcp.maxRows']) > 0 ? Number(s['mcp.maxRows']) : 2000
     mcpForm.value.timeoutSecs = Number(s?.['mcp.timeoutSecs']) > 0 ? Number(s['mcp.timeoutSecs']) : 30
     const flag = (key, fallback) => (s?.[key] === 'true' || s?.[key] === '1' ? true : (s?.[key] === 'false' || s?.[key] === '0' ? false : fallback))
     mcpForm.value.toolsStructure = flag('mcp.toolsStructure', true)
     mcpForm.value.toolsQuery = flag('mcp.toolsQuery', true)
     mcpForm.value.toolsHistory = flag('mcp.toolsHistory', true)
+    // 回显「库 / 模式」：要等 features 回来才知道该不该按 `库.模式` 拆
+    mcpHydrating = true
+    await loadMcpDatabases(mcpForm.value.defaultConnection)
+    const [dbPick, schemaPick] = splitDbSchema(mcpForm.value.defaultDatabase, mcpNeedsSchema.value)
+    mcpDbPick.value = dbPick
+    mcpSchemaPick.value = schemaPick
+    if (mcpNeedsSchema.value && dbPick) await loadMcpSchemas(mcpForm.value.defaultConnection, dbPick)
+    await nextTick()
+    mcpHydrating = false
+    // 回显完再量一次：打开设置页时两个框就该按内容撑开，而不是等用户改一次才变
+    fitMcpScopeWidths()
   } catch (e) {
     ElMessage.error(t('settings.query.msgSaveFailed', { detail: (e?.message || t('common.unknownError')) }))
   }
@@ -2283,11 +2452,18 @@ const loadMcp = async () => {
 /** 恢复默认：打回 MCP 服务的出厂值并立即落盘 */
 const resetMcp = async () => {
   mcpForm.value = { ...mcpDefaults }
+  mcpDbPick.value = ''
+  mcpSchemaPick.value = ''
+  mcpDbOptions.value = []
+  mcpSchemaOptions.value = []
   await saveMcp()
 }
 const saveMcp = async () => {
   try {
+    // 两个下拉是「库 + 模式」，保存前合回一个字符串（`库.模式`）
+    syncMcpDatabase()
     await putSetting('mcp.defaultConnection', mcpForm.value.defaultConnection || '')
+    await putSetting('mcp.defaultDatabase', mcpForm.value.defaultDatabase || '')
     await putSetting('mcp.maxRows', Math.round(mcpForm.value.maxRows))
     await putSetting('mcp.timeoutSecs', Math.round(mcpForm.value.timeoutSecs))
     await putSetting('mcp.toolsStructure', mcpForm.value.toolsStructure)
@@ -3544,6 +3720,12 @@ watch(visible, (v) => {
 }
 /* 连接下拉由 ConnectionSelect 自己算宽度（inline width），所以这里不要给 flex-basis，否则量不出效果 */
 .mask-group-conn { flex: none; }
+/* MCP「默认库 + 模式」同一行：模式只在 schema 层级的类型上出现 */
+.mcp-scope-row { display: flex; align-items: center; gap: 8px; }
+/* 宽度由 JS 按选中值量（fitSelectWidth）后写 inline style，这里只是量之前的初始值：
+   取与 JS 同一个下限，首帧就从最窄开始、只在名字长时变宽，不会先宽后窄地闪一下 */
+.mcp-scope-row .mcp-db-sel { width: 130px; }
+.mcp-scope-row .mcp-schema-sel { width: 92px; }
 .mask-group-db { flex: 0 0 190px; }
 .mask-sel-icon { color: var(--dc-text-dim); font-size: 13px; }
 .mask-group-count { font-size: 12px; color: var(--dc-text-dim); }

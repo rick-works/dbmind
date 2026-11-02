@@ -154,7 +154,7 @@ const emit = defineEmits(['state', 'goto-analysis'])
 const table = ref('')
 // 选表下拉的宽度跟着选中值走（表名长短差很多），挂载 / 换库 / 选表后重算
 const tblSelRef = ref(null)
-const fitTblSelect = () => nextTick(() => fitSelectWidth(tblSelRef.value?.$el, { min: 170, max: 300 }))
+const fitTblSelect = () => nextTick(() => fitSelectWidth(tblSelRef.value?.$el, { min: 170, max: 300, text: table.value || '' }))
 watch(() => [props.tables, table.value, props.database], fitTblSelect)
 onMounted(fitTblSelect)
 const rules = ref([])
