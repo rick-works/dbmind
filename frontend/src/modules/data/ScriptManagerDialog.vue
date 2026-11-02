@@ -36,6 +36,7 @@
       :indent="16"
       :row-class-name="rowClass"
       class="sm-table"
+      @row-click="onRowClick"
     >
       <el-table-column :label="$t('sm.colName')" min-width="200">
         <template #default="{ row }">
@@ -229,6 +230,14 @@ const rowClass = ({ row }) =>
    自己控制：**只有搜索态才展开** —— 命中行折在分组里等于没搜到，那时候必须摊开。 */
 const tableRef = ref(null)
 
+/** 整行点击即展开 / 收起（用户要求：原来只有那个 12px 箭头能点，点行内空白处没反应）。
+    只认分组与数据源行 —— 脚本行的点击要留给行内按钮，不能被这里抢走。 */
+const onRowClick = (row) => {
+  if (!row || row.__kind === 'script') return
+  const table = tableRef.value
+  if (table) table.toggleRowExpansion(row)
+}
+
 /** 分组口径与左侧树 / 连接下拉完全一致：连接的 `group` 字段（后端已把空值补成「数据源」）。 */
 const groupLabelOf = (conn) => envLabel(String((conn && conn.group) || '').trim())
 
@@ -409,9 +418,10 @@ defineExpose({ reload: load })
   color: var(--dc-text-mid);
 }
 /* 分组行 / 数据源行**不铺底色、也不加左侧竖条**（用户要求：底色只留给表头那一行，
-   左边缘那条 3px 主色竖条也去掉，看着像选中/告警）。层级靠缩进 + 图标 + 字重表达。 */
+   左边缘那条 3px 主色竖条也去掉，看着像选中/告警）。层级靠缩进 + 图标 + 字重表达。
+   `cursor: pointer` 是配合「整行可点展开」—— 只有箭头能点的时候没人知道这行能点。 */
 .sm-table :deep(.sm-row-group > td.el-table__cell),
-.sm-table :deep(.sm-row-conn > td.el-table__cell) { background: transparent; }
+.sm-table :deep(.sm-row-conn > td.el-table__cell) { background: transparent; cursor: pointer; }
 .sm-table :deep(.sm-row-group:hover > td.el-table__cell),
 .sm-table :deep(.sm-row-conn:hover > td.el-table__cell) { background: var(--dc-hover-wash); }
 /* 展开箭头压小一点，避免在大行高里显得突兀 */
