@@ -375,9 +375,11 @@ gh secret list --repo $repo
 | CLI | `dbmind conn list` / `dbmind driver list` / `dbmind setting get <key>` |
 | MCP | `dbmind-mcp`（stdio），把命令配进支持 MCP 的 AI 客户端即可 |
 
+Windows 安装版（msi / nsis）与免安装 zip 都把上面四个壳装在同一目录，共用同一份 `jre/` 与 `agents/` —— 装完即可四端齐用；只有桌面版是双击启动，另外三个按上表在命令行里跑。
+
 - **数据目录**：默认 `~/.dbmind`（元数据库、驱动缓存、日志、任务快照、导出临时文件）。可用环境变量 `DBMIND_HOME` 整体重定向，或在设置页迁移 —— 搬这一个目录就是完整迁移。
 - **数据目录自愈**：开机后台回收元数据库空洞（空闲页 ≥8 MB 且占比 >20% 才动手）、清理 24 小时前的装载残留、任务快照只留最新 500 份 —— 实测元数据库 805 MB → 54 MB，整个目录 1.5 GB → 223 MB。后台清扫**不删**查询历史与审计：删不删只由「清空日志」按钮和保留策略（`history.maxEntries` / `history.retentionDays`，默认 `0` = 不删）决定。
-- **常用环境变量**：`DBMIND_HOME`（数据目录）、`DBMIND_AGENT_JAR`（覆盖宿主 jar 路径）、`DBMIND_JAVA`（指定 Java 运行时）。
+- **常用环境变量**：`DBMIND_HOME`（数据目录）、`DBMIND_AGENT_JAR`（覆盖宿主 jar 路径）、`DBMIND_JAVA`（指定 Java 运行时）。**安装包 / 便携包自带的 `jre/` 会被自动采用**（桌面、Web、CLI、MCP 四个端一致），用户不必另装 JDK；只有把 exe 挪出安装目录、或想指定别的运行时，才需要设 `DBMIND_JAVA`。
 
 ## 测试
 

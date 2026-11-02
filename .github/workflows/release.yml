@@ -214,13 +214,16 @@ jobs:
             --strip-debug --no-header-files --no-man-pages --compress=zip-6 --output dist/jre
           du -sh dist/jre
 
-      # [3b] 免安装（绿色）版要的是**全工作区**的 release 产物：dbmind.exe（CLI）、
-      #      dbmind-web.exe、dbmind-mcp.exe、dbmind-desktop.exe。tauri build 只编桌面壳
-      #      那一个，所以这一步单独跑（增量，tauri build 会复用同一批产物）。
+      # [3b] **全工作区**的 release 产物：dbmind.exe（CLI）、dbmind-web.exe、dbmind-mcp.exe、
+      #      dbmind-desktop.exe。tauri build 只编桌面壳那一个，所以这一步单独跑
+      #      （增量，tauri build 会复用同一批产物）。
+      #      两个用途：① 免安装 zip 的全套 exe；② **Windows 安装包的 resources** ——
+      #      tauri.windows.conf.json 把 CLI / Web / MCP 三个壳也映射进安装目录，装完四端齐用；
+      #      它引用的正是这里产出的 target/release/*.exe，所以这一步必须跑在 Tauri 打包之前。
       #      这里**绝不能用 `shell: bash`**：Windows 上 Git Bash 把 /usr/bin 放到 PATH 前面，
       #      rustc 找到的 link.exe 就变成 Git 自带的 coreutils `link`，报
       #      `linking with link.exe failed: exit code 1`（与下面 Tauri 步骤同一个坑，真踩过）。
-      - name: 后端打包（release，供免安装版使用）
+      - name: 后端打包（release，供免安装版与安装包资源使用）
         if: runner.os == 'Windows'
         run: cargo build --release
 

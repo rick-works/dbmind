@@ -219,7 +219,26 @@ pub fn hide_console(command: &mut Command) {
 #[cfg(not(windows))]
 pub fn hide_console(_command: &mut Command) {}
 
-/// 解析 Java 运行时：`DBMIND_JAVA` > `JAVA_HOME/bin/java` > PATH 上的 `java`。
+/// 宿主需要的最低 Java 主版本（四个 agent 包都按 17 编译，见各自 pom 的
+/// `maven.compiler.release`；[`AgentSpec::min_java`] 是同一个值）。
+const MIN_AGENT_JAVA: u32 = 17;
+
+/// 解析 Java 运行时，顺序即优先级：
+///
+/// 1. `DBMIND_JAVA`（显式覆盖：任何壳只要设了就能定死）；
+/// 2. **包自带**的 `jre/bin/java` 或 `jdk/bin/java` —— 与 `web/`、`agents/` 用同一套资源根
+///    （Windows 在 exe 旁、macOS 在 `Contents/Resources`、Linux 在 `usr/lib/<产品名>`）；
+/// 3. `JAVA_HOME/bin/java`；
+/// 4. PATH 上的 `java`。
+///
+/// 第 2 条是**四个端共享**的关键：桌面壳自己还会做一次更聪明的选择（比版本、把结果写进
+/// `DBMIND_JAVA`，见 `dbmind-desktop` 的 `ensure_java`），但 Web / CLI / MCP 三个壳没有那套
+/// 逻辑 —— 少了这一层，「安装包自带 jre」只对桌面端有效，用户在终端里用 CLI 或接 MCP 就必须
+/// 额外配 `DBMIND_JAVA`，与"装完即用、不必另装 JDK"直接矛盾（实测就撞上了）。
+///
+/// 自带运行时**低于 [`MIN_AGENT_JAVA`] 时不硬用**：机器上可能装着更新的 Java，硬选它会把
+/// "包里的 jre 是旧的"变成"所有数据源都连不上"。只有在找不到更好的时候才回落到它 ——
+/// 那时 `availability` 的报错里会写明是哪个 java、什么版本。
 pub fn resolve_java() -> Option<PathBuf> {
     if let Ok(custom) = std::env::var("DBMIND_JAVA") {
         let path = PathBuf::from(custom.trim());
@@ -227,12 +246,25 @@ pub fn resolve_java() -> Option<PathBuf> {
             return Some(path);
         }
     }
+    let bin = if cfg!(windows) { "java.exe" } else { "java" };
+    let bundled: Vec<PathBuf> = ["jre", "jdk"]
+        .iter()
+        .filter_map(|sub| crate::paths::find_resource_path(&format!("{sub}/bin/{bin}")))
+        .collect();
+    for candidate in &bundled {
+        if java_major_version(candidate).is_some_and(|v| v >= MIN_AGENT_JAVA) {
+            return Some(candidate.clone());
+        }
+    }
     if let Ok(home) = std::env::var("JAVA_HOME") {
-        let bin = if cfg!(windows) { "java.exe" } else { "java" };
         let candidate = Path::new(home.trim()).join("bin").join(bin);
         if candidate.is_file() {
             return Some(candidate);
         }
+    }
+    // 自带的版本过低，也总比"一个都找不到"强：真正的判定在 availability 里，会说明版本
+    if let Some(first) = bundled.into_iter().next() {
+        return Some(first);
     }
     // 交给 PATH 解析（只检查存在性无法判断，这里返回名字由 Command 去解析）
     Some(PathBuf::from("java"))

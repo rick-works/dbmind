@@ -437,7 +437,15 @@ impl Server {
             ));
         }
         match name {
-            "dbmind_list_connections" => Ok(serde_json::to_value(self.engine.list_connections()?)?),
+            "dbmind_list_connections" => {
+                let mut list = serde_json::to_value(self.engine.list_connections()?)?;
+                // 口令类字段**一律不外发**：数据库口令在内核里已 `skip_serializing`，但 SSH 隧道的
+                // 口令 / 口令短语存在 `extra` 这个自由 JSON 里（键 `ssh.password` / `keyPassphrase`）。
+                // 不在这里抹掉，「列出连接（不含口令）」就是一句假话 —— 明文会随工具结果
+                // 进模型上下文（实测 355 条连接里带出了 SSH 口令）。
+                strip_secrets(&mut list);
+                Ok(list)
+            }
             "dbmind_list_types" => Ok(serde_json::to_value(self.engine.types())?),
             "dbmind_list_tables" => {
                 let connection = self.connection_arg(args)?;
@@ -780,6 +788,29 @@ fn id_key(id: &Value) -> String {
     }
 }
 
+/// 递归抹掉连接 JSON 里的口令类字段。
+///
+/// 为什么需要它：`ConnectionRecord` 里数据库口令有 `skip_serializing` 兜着，但 `extra` 是
+/// **自由 JSON** —— SSH 隧道的 `password` / `keyPassphrase` 就原样躺在里面，序列化挡不住。
+/// 只看**键名**（不看值）：「`authType: "password"`」这种是普通取值，不该被误伤成 `***`。
+fn strip_secrets(value: &mut Value) {
+    const KEYS: [&str; 4] = ["password", "passphrase", "secret", "token"];
+    match value {
+        Value::Object(map) => {
+            for (key, item) in map.iter_mut() {
+                let lower = key.to_ascii_lowercase();
+                if KEYS.iter().any(|k| lower.contains(k)) && matches!(item, Value::String(_)) {
+                    *item = Value::String("***".to_string());
+                } else {
+                    strip_secrets(item);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_secrets),
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -847,6 +878,28 @@ mod tests {
         // 工具结果不知道表名：钉表规则不参与，宁可不匹配也不乱打码
         assert_eq!(masked, 0);
         assert_eq!(out[0]["phone"], json!("13812348000"));
+    }
+
+    #[test]
+    fn connection_list_hides_ssh_secrets() {
+        // 真实形状：SSH 口令存在 extra.ssh.password 里（自由 JSON，序列化挡不住）
+        let mut list = json!([{
+            "id": "conn_1",
+            "name": "生产库",
+            "username": "qa",
+            "extra": {
+                "authType": "password",
+                "ssh": { "enabled": true, "user": "rick", "password": "Datacvg123!", "keyPassphrase": "p@ss" }
+            }
+        }]);
+        strip_secrets(&mut list);
+        let conn = &list[0];
+        assert_eq!(conn["extra"]["ssh"]["password"], json!("***"));
+        assert_eq!(conn["extra"]["ssh"]["keyPassphrase"], json!("***"));
+        // 非机密的保持原样：`authType` 的值是 "password" 但键不是口令字段，不能误伤
+        assert_eq!(conn["extra"]["authType"], json!("password"));
+        assert_eq!(conn["extra"]["ssh"]["user"], json!("rick"));
+        assert_eq!(conn["name"], json!("生产库"));
     }
 
     #[test]

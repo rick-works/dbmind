@@ -52,7 +52,8 @@ fn java_major(exe: &Path) -> Option<u32> {
 
 /// 挑一个 Java 17+ 固定成 `DBMIND_JAVA`。
 ///
-/// 为什么壳要管这件事：内核按 `DBMIND_JAVA` > `JAVA_HOME` > `PATH` 解析 Java，而
+/// 为什么壳要管这件事：内核按 `DBMIND_JAVA` > 包自带 `jre`/`jdk` > `JAVA_HOME` > `PATH`
+/// 解析 Java（自带那一层是后来补的，四个壳共用），而
 /// **双击启动**的桌面壳不经过 `scripts/start.ps1`（那里会挑 17+ 并临时设好环境变量），
 /// 于是它用机器默认的 Java —— 很常见是 8 / 11，表现是「所有走 Java 宿主的数据源
 /// （SQL Server / Mongo / Redis / ES / JDBC）都报 DBMIND-DRV-0002 驱动宿主未就绪」，

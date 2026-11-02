@@ -370,9 +370,11 @@ Each signed platform runs an explicit verification step (`codesign --verify` + `
 | CLI | `dbmind conn list` / `dbmind driver list` / `dbmind setting get <key>` |
 | MCP | run `dbmind-mcp` and register it in any MCP-capable AI client |
 
+The Windows installers (msi / nsis) and the portable zip ship all four shells side by side, sharing one `jre/` and `agents/` — install once and every shell is ready; only the desktop one is a double-click, the rest run from a terminal as shown above.
+
 - **Data directory**: `~/.dbmind` by default — meta database, driver cache, logs, task snapshots, export scratch. Override with `DBMIND_HOME` or migrate in Settings; copying this one folder is a full migration.
 - **Self-maintenance**: a background pass at startup reclaims meta-database holes (only when ≥8 MB and >20% of pages are free), deletes load temp files older than 24 h and keeps the newest 500 task snapshots — 805 MB → 54 MB measured, the whole folder 1.5 GB → 223 MB. It never deletes query history or audit rows: only the "clear logs" button and the retention settings (`history.maxEntries` / `history.retentionDays`, both `0` = keep) do.
-- **Common env vars**: `DBMIND_HOME`, `DBMIND_AGENT_JAR`, `DBMIND_JAVA`, `DBMIND_TOOL_DIR`.
+- **Common env vars**: `DBMIND_HOME`, `DBMIND_AGENT_JAR`, `DBMIND_JAVA`, `DBMIND_TOOL_DIR`. The `jre/` bundled next to the executable is picked up automatically — desktop, web, CLI and MCP alike — so no separate JDK is required; set `DBMIND_JAVA` only to override it or when you move the binary out of the install folder.
 
 ## Testing
 

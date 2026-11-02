@@ -62,7 +62,7 @@ CI 里的精简 JRE 用 jlink 生成，模块集必须含 `jdk.charsets`（少�
 |---|---|
 | `DBMIND_HOME` | 数据目录整体重定向（默认 `~/.dbmind`） |
 | `DBMIND_AGENT_JAR` / `_MONGODB_JAR` / `_REDIS_JAR` / `_ELASTICSEARCH_JAR` | 覆盖宿主 jar 路径 |
-| `DBMIND_JAVA` | 指定 Java 运行时（优先于 JAVA_HOME） |
+| `DBMIND_JAVA` | 指定 Java 运行时（优先于包自带 jre 与 JAVA_HOME） |
 | `DBMIND_TOOL_DIR` | 驱动/工具安装目录 |
 
 ## 发版流程（一步不落）
@@ -215,6 +215,9 @@ foreach ($m in 'jdbc','mongodb','redis','elasticsearch') {
 powershell -File scripts\build\package.ps1 -SkipCargo -SkipAgents -SkipFrontend
 
 # 4) 桌面安装包（本地不需要 CI 的签名覆盖，直接用 tauri.conf.json）
+#    Windows 安装包会把 dbmind.exe / dbmind-web.exe / dbmind-mcp.exe 一并装进安装目录
+#    （见 tauri.windows.conf.json，四个端装完即用）—— 所以第 2 步的 `cargo build --release`
+#    必须先跑过：缺任何一个 exe，tauri build 会直接报资源不存在。
 cd crates\dbmind-desktop; npx --yes '@tauri-apps/cli@^2' build --bundles msi,nsis
 ```
 

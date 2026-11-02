@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": {
+      "../../target/release/dbmind.exe": "dbmind.exe",
+      "../../target/release/dbmind-web.exe": "dbmind-web.exe",
+      "../../target/release/dbmind-mcp.exe": "dbmind-mcp.exe"
+    }
+  }
+}

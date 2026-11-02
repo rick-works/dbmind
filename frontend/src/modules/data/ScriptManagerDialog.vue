@@ -284,6 +284,11 @@ const tree = computed(() => {
           children: node.scripts.map(s => ({
             ...s,
             __kind: 'script',
+            // 表格行 id 必须是全局唯一的（分组用 g:、数据源用 c:、脚本用 s:），所以这里换一个；
+            // **脚本自己的 id 另存到 `scriptId`**：改名 / 删除 / 打开都要拿它去 localStorage 里定位。
+            // 早期直接用 `row.id` 传给 renameScript/removeScript，等于拿 `s:xxx` 去匹配真实 id ——
+            // 结果就是「重命名报『脚本已不存在』、删除点了没反应（写回的是过滤不掉任何东西的新清单）」。
+            scriptId: s.id,
             id: `s:${node.connId}:${s.db}:${s.id}`
           }))
         }))
@@ -310,7 +315,7 @@ watch(tree, async () => {
   }
 })
 
-const openRow = (row) => emit('open', { connId: row.connId, db: row.db, scriptId: row.id })
+const openRow = (row) => emit('open', { connId: row.connId, db: row.db, scriptId: row.scriptId })
 
 const renameRow = async (row) => {
   let input
@@ -324,13 +329,13 @@ const renameRow = async (row) => {
         if (!next) return t('sm.renameEmpty')
         if (next === row.name) return true
         // 同一连接同一库下不允许重名，否则「打开」时会打开到另一条
-        const dup = rows.value.some(r => r.id !== row.id && r.connId === row.connId && r.db === row.db && r.name === next)
+        const dup = rows.value.some(r => r.id !== row.scriptId && r.connId === row.connId && r.db === row.db && r.name === next)
         return dup ? t('sm.renameDup') : true
       }
     })
     input = res.value
   } catch { return }
-  const result = renameScript(row.connId, row.db, row.id, input)
+  const result = renameScript(row.connId, row.db, row.scriptId, input)
   if (result === 'empty') return ElMessage.warning(t('sm.renameEmpty'))
   if (result === 'dup') return ElMessage.warning(t('sm.renameDup'))
   if (result === 'gone') return ElMessage.warning(t('sm.gone'))
@@ -347,7 +352,7 @@ const removeRow = async (row) => {
       cancelButtonText: t('common.cancel')
     })
   } catch { return }
-  removeScript(row.connId, row.db, row.id)
+  removeScript(row.connId, row.db, row.scriptId)
   // 通知树与编辑器刷新（MainView 监听该事件刷新 scripts 节点）
   notifyScriptsChanged(row.connId, row.db)
   ElMessage.success(t('sm.deleted'))
