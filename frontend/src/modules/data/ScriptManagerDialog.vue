@@ -32,12 +32,10 @@
       :height="tableH"
       :empty-text="$t('sm.empty')"
       row-key="id"
-      default-expand-all
       :tree-props="{ children: 'children' }"
       :indent="16"
       :row-class-name="rowClass"
       class="sm-table"
-      @expand-change="onExpandChange"
     >
       <el-table-column :label="$t('sm.colName')" min-width="200">
         <template #default="{ row }">
@@ -101,6 +99,9 @@ watch(visible, (v) => emit('update:modelValue', v))
 // —— 弹窗可能在窗口被拖动/最大化之后才打开，onMounted 那一刻的视口不一定是现在的
 watch(visible, (v) => {
   if (!v) return
+  // 每次打开都从干净状态开始：搜索词清空。否则上次搜的关键字会把列表过滤住，
+  // 也会让下面「搜索态才展开」的判断一进来就成立（明明没搜却全展开）。
+  keyword.value = ''
   syncTableH()
   load()
   // 弹窗 DOM 要等这一帧之后才挂到 body 上，那时才能挂全屏/尺寸观察器
@@ -222,17 +223,11 @@ const fmtTime = (ts) => {
 const rowClass = ({ row }) =>
   row.__kind === 'group' ? 'sm-row-group' : row.__kind === 'conn' ? 'sm-row-conn' : 'sm-row-script'
 
-/* 展开态：`default-expand-all` 只在**首次渲染**时起作用，而本弹窗的数据是异步 load 进来的
-   （先渲染空表、再填数据），于是打开时只剩一行分组、脚本全折在里面（真机截图「这是什么」）。
-   这里在数据变化后主动展开分组与数据源行；用户手动收起的（记在 userCollapsed 里）不再
-   自动展开，否则「收起这个分组」刷新一次就白做了。 */
+/* 展开态（用户要求：**默认合并** —— 打开只有分组/数据源行，脚本折在里面）。
+   el-table 的 `default-expand-all` 只在首次渲染时生效，而这里数据是异步 load 的
+   （先空表、再填数据），靠它做不到"默认折叠"也做不到"按需展开"；索性在数据变化后
+   自己控制：**只有搜索态才展开** —— 命中行折在分组里等于没搜到，那时候必须摊开。 */
 const tableRef = ref(null)
-const userCollapsed = ref(new Set())
-const onExpandChange = (row, isExpanded) => {
-  if (!row || !row.id) return
-  if (isExpanded) userCollapsed.value.delete(row.id)
-  else userCollapsed.value.add(row.id)
-}
 
 /** 分组口径与左侧树 / 连接下拉完全一致：连接的 `group` 字段（后端已把空值补成「数据源」）。 */
 const groupLabelOf = (conn) => envLabel(String((conn && conn.group) || '').trim())
@@ -300,14 +295,15 @@ const shownScripts = computed(() =>
   tree.value.reduce((n, g) => n + g.children.reduce((m, c) => m + c.children.length, 0), 0)
 )
 
-// 数据换了一批就重新展开（见 tableRef 那段注释）；用户收起的行由 userCollapsed 屏蔽
+// 数据换了一批就决定展开态：默认合并（不动），只有搜索命中时才摊开（见 tableRef 那段注释）
 watch(tree, async () => {
   await nextTick()
   const table = tableRef.value
   if (!table) return
+  const searching = !!keyword.value.trim()
   const expand = (row) => {
-    if (!row || row.__kind === 'script' || userCollapsed.value.has(row.id)) return
-    table.toggleRowExpansion(row, true)
+    if (!row || row.__kind === 'script') return
+    table.toggleRowExpansion(row, searching)
   }
   for (const group of tree.value) {
     expand(group)
@@ -412,13 +408,10 @@ defineExpose({ reload: load })
   letter-spacing: 0.2px;
   color: var(--dc-text-mid);
 }
-/* 分组行 / 数据源行**不铺底色**（用户要求：底色只留给表头那一行）。
-   层级靠左侧主色竖条 + 图标 + 字重表达，比一层层叠色块干净。 */
+/* 分组行 / 数据源行**不铺底色、也不加左侧竖条**（用户要求：底色只留给表头那一行，
+   左边缘那条 3px 主色竖条也去掉，看着像选中/告警）。层级靠缩进 + 图标 + 字重表达。 */
 .sm-table :deep(.sm-row-group > td.el-table__cell),
 .sm-table :deep(.sm-row-conn > td.el-table__cell) { background: transparent; }
-.sm-table :deep(.sm-row-group > td.el-table__cell:first-child) {
-  box-shadow: inset 3px 0 0 var(--el-color-primary);
-}
 .sm-table :deep(.sm-row-group:hover > td.el-table__cell),
 .sm-table :deep(.sm-row-conn:hover > td.el-table__cell) { background: var(--dc-hover-wash); }
 /* 展开箭头压小一点，避免在大行高里显得突兀 */
