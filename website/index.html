@@ -2886,6 +2886,7 @@
           <a href="#d-install">下载与安装</a>
           <a href="#d-conn">创建第一个连接</a>
           <a href="#d-sql">执行第一条 SQL</a>
+          <a href="#d-clients">四种用法：桌面 / Web / CLI / MCP</a>
         </div>
         <div class="group">
           <div class="gt">核心工作流</div>
@@ -2997,6 +2998,50 @@ SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
           <li>语句里有 <code>:name</code> 占位符时，执行前弹窗填参（见<a class="dlink" href="#d-vars">模板变量</a>）</li>
           <li>多语句脚本自动分块执行，每段独立计时</li>
         </ul>
+
+        <h2 id="d-clients">四种用法：桌面 / Web / CLI / MCP</h2>
+        <p>四个入口共用<b>同一个内核、同一份本地数据</b>（默认 <code>~/.dbmind</code>）：连接与设置改一处四端都看得见，可以同时开着跑。安装包把它们放在同一目录，共用一份 <code>jre/</code> 与 <code>agents/</code>。</p>
+        <pre><code>dbmind-desktop.exe   桌面版（双击）
+dbmind-web.exe       浏览器版
+dbmind.exe           命令行
+dbmind-mcp.exe       给 AI 客户端的 MCP 服务器</code></pre>
+
+        <p><b>桌面版</b>：双击 <code>dbmind-desktop.exe</code>，开始菜单里也有入口。内置内核，端口自动挑 20361 附近，不需要任何参数。</p>
+
+        <p><b>Web 版</b>：先进入安装目录再启动 —— <code>--dist</code> 是相对路径：</p>
+        <pre><code>cd D:\app\DBmind
+.\dbmind-web.exe --port 8787 --dist web</code></pre>
+        <ul>
+          <li>浏览器打开 <code>http://127.0.0.1:8787</code>；要让局域网访问再加 <code>--host 0.0.0.0</code></li>
+          <li><b>别用 20361</b>：那是桌面版的地盘，两边抢同一个端口只会互相添乱</li>
+          <li><code>--dist web</code> 必须带：默认值是 <code>./frontend/dist</code>（开发时的仓库路径），装好的目录里没有它，漏了就是整站 404</li>
+        </ul>
+
+        <p><b>CLI</b>：把安装目录加进 PATH（<code>setx PATH "$env:PATH;D:\app\DBmind"</code>），之后在任意位置可用。</p>
+        <pre><code>dbmind status                 # 环境、连接数、驱动、安全开关
+dbmind types                  # 支持的数据源类型
+dbmind conn list              # 连接清单
+dbmind test --conn 测试        # 自检（耗时 + 版本）
+dbmind tables --conn 测试      # 表 / 视图（--refresh 绕过缓存）
+dbmind columns --conn 测试 --table orders   # 表结构
+dbmind query --conn 测试 --sql "select 1"   # 执行 SQL
+dbmind query --conn 测试 --file q.sql --json  # 读文件、JSON 输出
+dbmind history --limit 20     # 查询历史
+dbmind setting list           # 读写设置</code></pre>
+        <ul>
+          <li><b>退出码固定</b>：0 成功、2 连接不存在、3 参数或 SQL 非法、4 被安全策略拦下、5 超时、130 取消 —— 脚本可以直接分支处理</li>
+          <li><code>--password</code> 会留在命令历史里，日常查询用已保存的连接名</li>
+        </ul>
+
+        <p><b>MCP</b>：走 stdio，本身不用手动启动，配给支持 MCP 的 AI 客户端即可。</p>
+        <pre><code>{ "mcpServers": { "dbmind": { "command": "D:\\app\\DBmind\\dbmind-mcp.exe" } } }</code></pre>
+        <ul>
+          <li>默认<b>只读</b>；要放开写入给命令加 <code>--allow-write</code>（仍受只读连接、生产保护与危险语句拦截约束）</li>
+          <li>工具清单：列连接、列类型、列表 / 视图、搜表、看表结构、执行查询、取消查询、查询历史、服务器信息</li>
+          <li>Codex 写进 <code>~/.codex/config.toml</code>：<code>[mcp_servers.dbmind]</code> 加一行 <code>command = 'D:\app\DBmind\dbmind-mcp.exe'</code></li>
+        </ul>
+
+        <div class="tip"><b>不用装 JDK</b>：自带的 <code>jre/</code> 会被四个端自动采用（版本 ≥17 才用）；只有把 exe 挪出安装目录、或想指定别的运行时，才需要设 <code>DBMIND_JAVA</code>。</div>
 
         <h2 id="d-editor">SQL 编辑器</h2>
         <figure class="doc-shot"><a href="images/sql-editor-dark.png" target="_blank" rel="noopener"><img src="images/sql-editor-dark.png" alt="SQL 编辑器：补全、格式化、分块执行，结果与消息分栏" loading="lazy" decoding="async"></a><figcaption>SQL 编辑器：补全、格式化、分块执行，结果与消息分栏</figcaption></figure>
@@ -3261,6 +3306,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
         <a href="#d-install">下载与安装</a>
         <a href="#d-conn">创建第一个连接</a>
         <a href="#d-sql">执行第一条 SQL</a>
+        <a href="#d-clients">四种用法</a>
         <a href="#d-editor">SQL 编辑器</a>
         <a href="#d-shortcuts">快捷键</a>
         <a href="#d-ai">AI 助手</a>

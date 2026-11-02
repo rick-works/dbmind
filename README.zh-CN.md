@@ -368,14 +368,73 @@ gh secret list --repo $repo
 
 ## 使用
 
-| 端 | 启动方式 |
-|---|---|
-| 桌面版 | 双击 `dbmind-desktop.exe`（内嵌内核，自动起浏览器内核窗口） |
-| 浏览器版 | `dbmind-web.exe --port 8787 --dist web`，访问 `http://127.0.0.1:8787` |
-| CLI | `dbmind conn list` / `dbmind driver list` / `dbmind setting get <key>` |
-| MCP | `dbmind-mcp`（stdio），把命令配进支持 MCP 的 AI 客户端即可 |
+四个端是**同一个内核的四个入口**：读写同一份本地数据（默认 `~/.dbmind`），连接与设置改一处四端都看得见，可以同时开着跑。Windows 安装版（msi / nsis）与免安装 zip 都把四个壳放在同一目录，共用一份 `jre/` 与 `agents/`：
 
-Windows 安装版（msi / nsis）与免安装 zip 都把上面四个壳装在同一目录，共用同一份 `jre/` 与 `agents/` —— 装完即可四端齐用；只有桌面版是双击启动，另外三个按上表在命令行里跑。
+```
+dbmind-desktop.exe   桌面版
+dbmind-web.exe       浏览器版
+dbmind.exe           命令行（CLI）
+dbmind-mcp.exe       给 AI 客户端用的 MCP 服务器
+jre/  agents/  web/  四端共用
+```
+
+### 桌面版
+
+双击 `dbmind-desktop.exe`（开始菜单也有入口）。内置内核，端口自动挑 20361 附近，不需要参数。
+
+### 浏览器版（Web）
+
+```powershell
+cd D:\app\DBmind                      # 先进入安装目录，--dist 是相对路径
+.\dbmind-web.exe --port 8787 --dist web
+```
+
+然后浏览器打开 `http://127.0.0.1:8787`。
+
+- `--port` 默认 20361 —— **别用它**，那是桌面版的地盘，两个抢同一端口只会互相添乱
+- `--dist web` 必须带：默认值是 `./frontend/dist`（开发时的仓库路径），安装目录里没有这个目录，不带会整站 404
+- 要让局域网访问，加 `--host 0.0.0.0`（默认只监听 `127.0.0.1`）
+
+### CLI
+
+把安装目录加进 PATH 后，在任意位置可用：
+
+```powershell
+setx PATH "$env:PATH;D:\app\DBmind"
+```
+
+```powershell
+dbmind status                                    # 存储位置、连接数、驱动进度、安全开关
+dbmind types                                     # 支持哪些类型（--kind 的取值）
+dbmind conn list                                 # 连接清单
+dbmind conn add --name 测试 --kind MYSQL --host 127.0.0.1 --port 3306 --database demo --user root --password **
+dbmind test --conn 测试                           # 自检，返回耗时与版本
+dbmind tables --conn 测试                         # 表 / 视图（加 --refresh 绕过结构缓存）
+dbmind columns --conn 测试 --table orders         # 表结构
+dbmind query --conn 测试 --sql "select 1"         # 执行 SQL（--max-rows 2000、--timeout-ms 30000）
+dbmind query --conn 测试 --file q.sql --json      # 从文件读 SQL，JSON 输出给脚本
+dbmind history --limit 20                         # 查询历史
+dbmind setting list                               # 读写设置（安全开关在这里）
+```
+
+退出码是约定好的：`0` 成功、`2` 连接不存在、`3` 参数或 SQL 非法、`4` 被安全策略拦下、`5` 超时、`130` 取消。`--password` 会留在命令历史里，日常查询用已保存的连接名即可。
+
+### MCP
+
+`dbmind-mcp.exe` 走 stdio，本身不用手动启动 —— 配给支持 MCP 的 AI 客户端即可。Codex（`~/.codex/config.toml`）：
+
+```toml
+[mcp_servers.dbmind]
+command = 'D:\app\DBmind\dbmind-mcp.exe'
+```
+
+JSON 形态（Claude Desktop / Cursor 等）：
+
+```json
+{ "mcpServers": { "dbmind": { "command": "D:\\app\\DBmind\\dbmind-mcp.exe" } } }
+```
+
+默认**只读**；要放开写入，给命令加 `--allow-write`（仍受只读连接、生产保护与危险语句拦截约束）。工具清单：列连接、列类型、列表 / 视图、搜表、看表结构、执行查询、取消查询、查询历史、服务器信息。
 
 - **数据目录**：默认 `~/.dbmind`（元数据库、驱动缓存、日志、任务快照、导出临时文件）。可用环境变量 `DBMIND_HOME` 整体重定向，或在设置页迁移 —— 搬这一个目录就是完整迁移。
 - **数据目录自愈**：开机后台回收元数据库空洞（空闲页 ≥8 MB 且占比 >20% 才动手）、清理 24 小时前的装载残留、任务快照只留最新 500 份 —— 实测元数据库 805 MB → 54 MB，整个目录 1.5 GB → 223 MB。后台清扫**不删**查询历史与审计：删不删只由「清空日志」按钮和保留策略（`history.maxEntries` / `history.retentionDays`，默认 `0` = 不删）决定。

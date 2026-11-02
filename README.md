@@ -363,14 +363,73 @@ Each signed platform runs an explicit verification step (`codesign --verify` + `
 
 ## Using it
 
-| Shell | How to run |
-|---|---|
-| Desktop | double-click `dbmind-desktop.exe` |
-| Web | `dbmind-web.exe --port 8787 --dist web`, open `http://127.0.0.1:8787` |
-| CLI | `dbmind conn list` / `dbmind driver list` / `dbmind setting get <key>` |
-| MCP | run `dbmind-mcp` and register it in any MCP-capable AI client |
+The four shells are **four entry points to one kernel**: they read and write the same local state (`~/.dbmind` by default), so a connection or setting changed in one shows up in all of them, and they can run side by side. The Windows installers (msi / nsis) and the portable zip put all four in one folder, sharing a single `jre/` and `agents/`:
 
-The Windows installers (msi / nsis) and the portable zip ship all four shells side by side, sharing one `jre/` and `agents/` — install once and every shell is ready; only the desktop one is a double-click, the rest run from a terminal as shown above.
+```
+dbmind-desktop.exe   desktop app
+dbmind-web.exe       browser version
+dbmind.exe           command line (CLI)
+dbmind-mcp.exe       MCP server for AI clients
+jre/  agents/  web/  shared by all four
+```
+
+### Desktop
+
+Double-click `dbmind-desktop.exe` (there is also a Start-menu entry). It starts its own kernel on an automatically chosen free port around 20361 — no arguments needed.
+
+### Web
+
+```powershell
+cd D:\app\DBmind                      # run from the install folder: --dist is relative
+.\dbmind-web.exe --port 8787 --dist web
+```
+
+Then open `http://127.0.0.1:8787`.
+
+- `--port` defaults to 20361 — **don't use it**, that's where the desktop app lives; two processes fighting for one port only gets in the way
+- `--dist web` is required: the default is `./frontend/dist` (the repo layout used in development), which doesn't exist in an installed build — without it every asset 404s
+- Add `--host 0.0.0.0` to expose it on the LAN (it only listens on `127.0.0.1` by default)
+
+### CLI
+
+Put the install folder on PATH, then run it from anywhere:
+
+```powershell
+setx PATH "$env:PATH;D:\app\DBmind"
+```
+
+```powershell
+dbmind status                                    # store location, connections, drivers, safety switches
+dbmind types                                     # supported types (the --kind values)
+dbmind conn list                                 # connection list
+dbmind conn add --name demo --kind MYSQL --host 127.0.0.1 --port 3306 --database app --user root --password **
+dbmind test --conn demo                          # self-check with latency and server version
+dbmind tables --conn demo                        # tables / views (--refresh bypasses the structure cache)
+dbmind columns --conn demo --table orders        # columns
+dbmind query --conn demo --sql "select 1"        # run SQL (--max-rows 2000, --timeout-ms 30000)
+dbmind query --conn demo --file q.sql --json     # SQL from a file, JSON for scripts
+dbmind history --limit 20                        # query history
+dbmind setting list                              # read/write settings (safety switches live here)
+```
+
+Exit codes are fixed: `0` success, `2` no such connection, `3` bad arguments / SQL, `4` blocked by a safety rule, `5` timeout, `130` cancelled. `--password` stays in your shell history — for day-to-day work use the saved connection name instead.
+
+### MCP
+
+`dbmind-mcp.exe` speaks stdio, so you don't start it yourself — hand it to an MCP-capable AI client. Codex (`~/.codex/config.toml`):
+
+```toml
+[mcp_servers.dbmind]
+command = 'D:\app\DBmind\dbmind-mcp.exe'
+```
+
+JSON flavour (Claude Desktop / Cursor and friends):
+
+```json
+{ "mcpServers": { "dbmind": { "command": "D:\\app\\DBmind\\dbmind-mcp.exe" } } }
+```
+
+Read-only by default; add `--allow-write` to let it modify data (read-only connections, production protection and dangerous-statement blocking still apply). Tools: list connections, list types, list tables/views, search tables, describe a table, execute a query, cancel a query, query history, server info.
 
 - **Data directory**: `~/.dbmind` by default — meta database, driver cache, logs, task snapshots, export scratch. Override with `DBMIND_HOME` or migrate in Settings; copying this one folder is a full migration.
 - **Self-maintenance**: a background pass at startup reclaims meta-database holes (only when ≥8 MB and >20% of pages are free), deletes load temp files older than 24 h and keeps the newest 500 task snapshots — 805 MB → 54 MB measured, the whole folder 1.5 GB → 223 MB. It never deletes query history or audit rows: only the "clear logs" button and the retention settings (`history.maxEntries` / `history.retentionDays`, both `0` = keep) do.
