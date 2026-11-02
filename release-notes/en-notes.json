@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v1.9.2": [
+  "The script manager now opens collapsed: only groups and data sources are listed, instead of every script at once. A search still expands down to the matches so nothing hides behind a folded group",
+  "Clicking anywhere on a group or data source row toggles it (previously only the tiny arrow worked), and the primary-colored bar on the row left edge is gone",
+  "The search box is cleared every time the dialog opens, so a keyword from last time no longer keeps filtering the list"
+ ],
  "v1.9.1": [
   "Fixed rename / delete in the script manager: the table row id was being passed down as the script id, so renaming said \"script no longer exists\" and deleting reported success while the script stayed in localStorage. Open, rename and delete now all use the real script id",
   "MCP no longer hands SSH tunnel secrets to the model: ssh.password / keyPassphrase in the connection list are replaced with a three-asterisk mask (database passwords were already write-only), so the tool really is \"without credentials\" as advertised",
