@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v1.9.1": [
+  "Fixed rename / delete in the script manager: the table row id was being passed down as the script id, so renaming said \"script no longer exists\" and deleting reported success while the script stayed in localStorage. Open, rename and delete now all use the real script id",
+  "MCP no longer hands SSH tunnel secrets to the model: ssh.password / keyPassphrase in the connection list are replaced with *** (database passwords were already write-only), so the tool really is \"without credentials\" as advertised",
+  "CLI / web / MCP no longer need a JDK: the kernel picks up the bundled jre next to the executable (same one the desktop app uses, only if >= 17), so DBMIND_JAVA is optional; the Windows installer now also ships dbmind (CLI), dbmind-web and dbmind-mcp alongside the desktop app, all sharing one jre and agents folder"
+ ],
  "v1.9.0": [
   "Field masking (new): replace sensitive values by table + column with an MD5 / SHA-256 digest or an AES-256 ciphertext (key stays on this machine and can decrypt back) - one rule set, four switches: what reaches the AI (context sample rows + agent read-only results), what the MCP server returns, how the result grid renders, and exported CSV / Excel / JSON / SQL files; your data is never modified, and table/column names, comments and SQL literals are left as-is",
   "The result grid can now copy as IN (...): select a column and get the IN list directly (several columns produce one block per column, labelled with the column name) with quoting that matches the target dialect - no more hand-adding quotes to a hundred ids",
