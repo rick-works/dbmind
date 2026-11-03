@@ -2944,6 +2944,11 @@ onMounted(() => {
 }
 .composer-run.is-stop:hover { background: #e05a5a !important; border-color: #e05a5a !important; }
 .composer-run.is-stop:active { background: #c23a3a !important; border-color: #c23a3a !important; }
+/* 点击后按钮处于 :focus：element-plus 的焦点光环（蓝色 box-shadow/outline）会套在
+   停止键外面 —— 看起来「大一圈还发蓝」。两个按钮本来都是 28x28，光环才是元凶 */
+.composer-run:focus-visible { outline: none; }
+.composer-run:focus { box-shadow: none !important; }
+.composer-run.is-stop:focus, .composer-run.is-stop:focus-visible { box-shadow: none !important; outline: none; }
 .composer-run .stop-sq {
   display: inline-block; width: 10px; height: 10px;
   border-radius: 2px; background: #fff;
