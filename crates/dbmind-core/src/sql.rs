@@ -159,8 +159,10 @@ fn implicit_break(
             return false;
         }
     }
-    // `UPDATE t SET …` / `INSERT … SET …` / `CREATE TRIGGER … SET …` 里的 SET 属于上一条
-    if word == "SET" && matches!(head.as_str(), "UPDATE" | "INSERT" | "CREATE") {
+    // `UPDATE t SET …` / `INSERT … SET …` / `CREATE TRIGGER … SET …` 里的 SET 属于上一条；
+    // ALTER 同理 —— 美化器会把 `ALTER DATABASE [x]\nSET RECOVERY FULL;` 排成行首 SET，
+    // 不加 ALTER 会被切成 `ALTER DATABASE [x]` + `SET …` 两条，单独执行都是语法错（真机踩过）。
+    if word == "SET" && matches!(head.as_str(), "UPDATE" | "INSERT" | "CREATE" | "ALTER") {
         return false;
     }
     // `COMMENT` 只有后面跟 `ON` 时才是**新语句**（PG / Oracle 的 `COMMENT ON TABLE … IS …`）。
