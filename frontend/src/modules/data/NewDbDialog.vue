@@ -47,6 +47,7 @@
         </el-form-item>
       </template>
       <template v-if="connType === 'SQLSERVER'">
+        <!-- 只放必要参数：排序规则。恢复模式/文件大小走服务器默认（createDatabaseSql 仍支持，表单不再放出） -->
         <el-form-item :label="$t('ndb.collation')">
           <el-select v-model="form.collation" style="width: 100%" clearable
             :placeholder="$t('ndb.followServer')">
@@ -55,18 +56,6 @@
             <el-option label="Latin1_General_CI_AS（拉丁，不区分大小写）" value="Latin1_General_CI_AS" />
             <el-option label="SQL_Latin1_General_CP1_CI_AS（SQL 兼容）" value="SQL_Latin1_General_CP1_CI_AS" />
           </el-select>
-        </el-form-item>
-        <el-form-item :label="$t('ndb.recovery')">
-          <el-select v-model="form.recovery" style="width: 100%" clearable :placeholder="$t('ndb.followServer')">
-            <el-option :label="$t('ndb.recoveryFull')" value="FULL" />
-            <el-option :label="$t('ndb.recoverySimple')" value="SIMPLE" />
-            <el-option :label="$t('ndb.recoveryBulk')" value="BULK_LOGGED" />
-          </el-select>
-        </el-form-item>
-        <el-form-item :label="$t('ndb.initialSize')">
-          <el-input-number v-model="form.initialSize" :min="0" :step="16" controls-position="right"
-            style="width: 100%" />
-          <div class="form-tip">{{ $t('ndb.initialSizeTip') }}</div>
         </el-form-item>
       </template>
     </el-form>
@@ -99,14 +88,16 @@ const visible = computed({
   set: (v) => emit('update:modelValue', v)
 })
 
-const blankForm = () => ({ name: '', charset: 'utf8mb4', collation: 'utf8mb4_general_ci', encoding: 'UTF8', owner: '', connLimit: null, recovery: '', initialSize: null })
+const blankForm = () => ({ name: '', charset: 'utf8mb4', collation: 'utf8mb4_general_ci', encoding: 'UTF8', owner: '', connLimit: null })
 const form = ref(blankForm())
 const loading = ref(false)
 
-// 打开弹窗时重置表单（MySQL 的字符集/排序规则给默认值，其余留空 = 跟随服务器默认）
+// 打开弹窗时重置表单：MySQL/MariaDB 给字符集/排序规则默认值；SQL Server 的排序规则
+// 不能沿用 MySQL 的默认值（utf8mb4_general_ci 不在选项里会原样显示成已选），清空走「跟随服务器默认」
 watch(() => props.modelValue, (open) => {
   if (!open) return
   form.value = blankForm()
+  if (props.connType === 'SQLSERVER') form.value.collation = ''
 })
 
 const submit = async () => {
