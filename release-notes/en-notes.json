@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v2.0.1": [
+  "Model settings now expose the sampling temperature (default 0.2, 0 = server default); models that reject the parameter (e.g. kimi-k3) are retried without it, so Test connection no longer fails with 400",
+  "While the AI is answering, the send button turns into a red stop button that aborts immediately (chat, data Q&A, deep-dive, data dictionary and data insight)",
+  "Model form polish: equal-width inputs, field explanations moved into question-mark tooltips for a cleaner layout"
+ ],
  "v2.0.0": [
   "New \"Ask your data\" (ChatBI): query with a sentence and watch a five-step process unfold live (understand the question, read the schema, plan SQL and charts, execute, then write the conclusion from real rows) - each step shows its analysis as it runs and folds itself away when done, and the number of steps follows the question instead of being fixed",
   "Read-only guardrails built in: generated SQL passes a kernel read-only check before it runs (writes, multi-statement and comments are refused), and chart fields must really exist in the result set - otherwise it degrades to a data table, so you never get a blank canvas",
