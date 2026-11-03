@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v2.0.2": [
+  "Smarter table picking for data Q&A: Chinese questions now match English table names via a built-in synonym map (sales→sale, foot-traffic→passenger, …) as well as database table comments; the candidate count adapts to the question — named tables only when focused, more when broad",
+  "Fixed the case where a Chinese question against English-named tables yielded a single alphabetical candidate, leaving the model to guess table/column names; common sales/traffic/member questions now answer directly",
+  "Table comments join the matching, ties prefer the largest tables, and the \"why these tables\" step now explains each pick"
+ ],
  "v2.0.1": [
   "Model settings now expose the sampling temperature (default 0.2, 0 = server default); models that reject the parameter (e.g. kimi-k3) are retried without it, so Test connection no longer fails with 400",
   "While the AI is answering, the send button turns into a red stop button that aborts immediately (chat, data Q&A, deep-dive, data dictionary and data insight)",
