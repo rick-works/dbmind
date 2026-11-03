@@ -2088,6 +2088,7 @@ export default {
   'settings.about.rel1.note3': 'Conclusions are written from the actual rows: the plan-stage summary is thrown away, and after execution the result set is fed back so the conclusion carries real numbers - every figure on screen can be verified cell by cell in the data table, and the data profile is computed locally in the frontend, never by the model',
   'settings.about.rel1.note4': 'Switch chart types instantly and locally (bar / line / area / pie / donut / scatter / heatmap / funnel / gauge / table) without asking the model again; export results to CSV with one click (UTF-8 BOM, Chinese opens cleanly in Excel) and insert the SQL into the editor to keep working on it',
   'settings.about.rel1.note5': 'Follow-up questions and clarification: when the time range or the metric is ambiguous it asks back instead of guessing, and every answer ends with 2-3 natural follow-ups you can click to keep querying',
+  'settings.about.rel1.note6': 'The close-window prompt no longer over-reports tasks: on startup it counted history records as "running" (up to 50); now only tasks actually running are counted, and the confirmation dialog lists them one per scrollable row instead of a wall of names',
   'settings.about.rel2.version': 'v1.9.3',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-11-02',

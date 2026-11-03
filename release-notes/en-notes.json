@@ -5,7 +5,8 @@
   "Read-only guardrails built in: generated SQL passes a kernel read-only check before it runs (writes, multi-statement and comments are refused), and chart fields must really exist in the result set - otherwise it degrades to a data table, so you never get a blank canvas",
   "Conclusions are written from the actual rows: the plan-stage summary is thrown away, and after execution the result set is fed back so the conclusion carries real numbers - every figure on screen can be verified cell by cell in the data table, and the data profile is computed locally in the frontend, never by the model",
   "Switch chart types instantly and locally (bar / line / area / pie / donut / scatter / heatmap / funnel / gauge / table) without asking the model again; export results to CSV with one click (UTF-8 BOM, Chinese opens cleanly in Excel) and insert the SQL into the editor to keep working on it",
-  "Follow-up questions and clarification: when the time range or the metric is ambiguous it asks back instead of guessing, and every answer ends with 2-3 natural follow-ups you can click to keep querying"
+  "Follow-up questions and clarification: when the time range or the metric is ambiguous it asks back instead of guessing, and every answer ends with 2-3 natural follow-ups you can click to keep querying",
+  "The close-window prompt no longer over-reports tasks: on startup it counted history records as \"running\" (up to 50); now only tasks actually running are counted, and the confirmation dialog lists them one per scrollable row instead of a wall of names"
  ],
  "v1.9.3": [
   "MCP gained a \"database\" layer: table list / table search / table describe accept a database (plus a schema on SQL Server and PG), and a default connection can carry a default database in Settings - the AI no longer lists databases and guesses on every call; the switch happens in memory, so no shadow connections pile up in the connection list",

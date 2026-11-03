@@ -2100,6 +2100,7 @@ export default {
   'settings.about.rel1.note3': '结论基于真实结果集撰写：计划阶段的空话不要，执行完把结果再喂一次模型写一句带数字的结论，界面上的每个数都能在明细表里逐格核对；数据概况由前端本地统计，不经过模型',
   'settings.about.rel1.note4': '图表本地即时切换（柱状 / 折线 / 面积 / 饼图 / 环形 / 散点 / 热力 / 漏斗 / 仪表盘 / 数据表），不重新问模型；结果一键导出 CSV（带 BOM，Excel 打开中文不乱码），SQL 可一键插入编辑器继续加工',
   'settings.about.rel1.note5': '支持追问与澄清：缺时间范围、口径不明时先反问不出图，回答尾部给 2~3 个自然的追问，点一下就接着查',
+  'settings.about.rel1.note6': '关窗确认不再虚报任务数：启动时把历史执行记录误当成"正在运行"（最多报 50 个），现在只统计真在跑的任务；确认弹窗也从一坨任务名改成一目一行的可滚动清单',
   'settings.about.rel2.version': 'v1.9.3',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-11-02',
