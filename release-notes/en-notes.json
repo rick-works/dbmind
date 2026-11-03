@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v2.0.3": [
+  "Data-Q&A history is now merged per conversation: follow-ups no longer spam the list, opening a record replays every round, and only \"New conversation\" starts a new one",
+  "AI chat now survives tab switches: hop to table data / SQL and back, and the conversation with its follow-up context is exactly where you left it; switching skills never clears it",
+  "Polish: the token-usage footnote on Q&A cards matches the chat style (right-aligned), and the stop button is a solid red square without the blue focus ring"
+ ],
  "v2.0.2": [
   "Smarter table picking for data Q&A: Chinese questions now match English table names via a built-in synonym map (sales→sale, foot-traffic→passenger, …) as well as database table comments; the candidate count adapts to the question — named tables only when focused, more when broad",
   "Fixed the case where a Chinese question against English-named tables yielded a single alphabetical candidate, leaving the model to guess table/column names; common sales/traffic/member questions now answer directly",
