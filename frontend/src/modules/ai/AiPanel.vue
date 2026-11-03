@@ -1997,6 +1997,7 @@ const runAgentChat = async (text) => {
   try {
     const res = await aiAgentRun({
       prompt: text,
+      tables: ctxTables.value.slice(),
       connectionId: ctxConnId.value,
       database: ctxEffectiveDatabase.value,
       modelId: selectedModelId.value,

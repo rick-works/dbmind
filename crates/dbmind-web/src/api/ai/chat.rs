@@ -385,7 +385,9 @@ pub async fn warmup(
         return Ok(Json(json!({ "success": true, "warmed": false, "reason": "未指定连接" })));
     };
     let database = req.database.clone().unwrap_or_default();
-    let context = crate::api::ai::schema_context(&state, &conn, &database, &req.tables).await?;
+    let context =
+        crate::api::ai::schema_context(&state, &conn, &database, &req.tables, !req.tables.is_empty())
+            .await?;
     Ok(Json(json!({
         "success": true,
         "warmed": true,

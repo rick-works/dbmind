@@ -166,16 +166,11 @@ fn score_table(name: &str, question_lower: &str) -> i32 {
     score
 }
 
-/// 挑候选表：**用户点名的表全部保留**（界面勾选/提问点名的显式意图，不该被上限截掉）
-/// → 关键词命中自动补位（受 FOCUS_TABLES 约束，含已点名的）→ 兜底给前几张（总比一张都不给强）。
+/// 挑候选表：
+/// - **用户点名了表（界面勾选的聚焦表）就只传点名的，别猜** —— 勾选就是显式限定候选范围；
+/// - 没点名才自动判断：关键词命中 → 兜底给前几张（受 FOCUS_TABLES 约束，总比一张都不给强）。
+/// - 点名的表一张都没对上（选错了库/表已删）时退回自动判断，别拿着空候选去问模型。
 fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String> {
-    let lower = question.to_ascii_lowercase();
-    let mut ranked: Vec<(i32, &String)> = tables
-        .iter()
-        .map(|name| (score_table(name, &lower), name))
-        .collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0));
-
     let mut picked: Vec<String> = Vec::new();
     for want in named {
         if let Some(hit) = tables.iter().find(|t| t.eq_ignore_ascii_case(want.trim())) {
@@ -185,6 +180,19 @@ fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String
             }
         }
     }
+    if !picked.is_empty() {
+        // 点名了且至少对上一张：就按点名的来（一张没对上才走下面的自动判断）
+        return picked;
+    }
+
+    // ---- 没点名（或点名全部没对上）：自动判断 ----
+    let lower = question.to_ascii_lowercase();
+    let mut ranked: Vec<(i32, &String)> = tables
+        .iter()
+        .map(|name| (score_table(name, &lower), name))
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+
     for (score, name) in ranked {
         if picked.len() >= FOCUS_TABLES {
             break;
@@ -884,7 +892,8 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
         &format!("已挑出 {} 张候选（{}），正在读取字段、类型与样例行…", focus.len(), focus.join("、")),
         None,
     );
-    let schema = schema_context(&state, &conn, &database, &focus).await?;
+    // 用户勾了聚焦表 = 限定候选：表清单只列点名的表、明确其余不猜（省 token 且防跑偏）
+    let schema = schema_context(&state, &conn, &database, &focus, !req.tables.is_empty()).await?;
     // 「凭什么挑这几张表」：表多的时候筛选逻辑才值得解释；就几张表时全量展开，一句带过。
     let schema_thinking = if names.len() > 30 {
         let named: Vec<String> = focus

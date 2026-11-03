@@ -248,8 +248,15 @@ pub async fn schema_context(
     conn: &str,
     database: &str,
     focus: &[String],
+    limited: bool,
 ) -> XResult<SchemaContext> {
     const MAX_TABLE_NAMES: usize = 120;
+    /// 单张表的样例字符预算：宽表（几十列 × 40 字符值）两行样例能写掉几千字符，
+    /// 超预算就停在完整一行上。列结构本身一行不少（那才是写 SQL 的依据）。
+    const SAMPLE_CHARS_PER_TABLE: usize = 600;
+    /// 整份上下文的总字符预算（≈9k token）：超过就停在最后一张**完整**的表上 ——
+    /// 切半张表的列结构会让模型编出不存在的字段，比不给还糟（与 context.rs 同一取舍）。
+    const TOTAL_CHARS_BUDGET: usize = 24_000;
 
     let record = require_record(state, conn).await?;
     let kind = record.kind();
@@ -290,21 +297,39 @@ pub async fn schema_context(
         dialect.limit_clause(0, 10)
     ));
     text.push_str("【表清单】");
-    text.push_str(
-        &names
-            .iter()
-            .take(MAX_TABLE_NAMES)
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(", "),
-    );
-    if names.len() > MAX_TABLE_NAMES {
-        text.push_str(&format!("（共 {} 张，此处列出前 {MAX_TABLE_NAMES} 张）", names.len()));
+    // **限定候选模式**（用户在界面勾了聚焦表）：全库表名清单有害无益 ——
+    // 一是每次请求白付几百 token，二是诱导模型去清单里挑别的表（用户明确要求
+    // 「选了就别猜」）。清单只列点名的表，并声明其余表不在本次上下文。
+    if limited && !focus.is_empty() {
+        text.push_str(&format!(
+            "{}（用户已把候选限定为以上表；其余表本轮不提供，也不要猜测它们）",
+            focus.join(", ")
+        ));
+        text.push('\n');
+    } else {
+        text.push_str(
+            &names
+                .iter()
+                .take(MAX_TABLE_NAMES)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        if names.len() > MAX_TABLE_NAMES {
+            text.push_str(&format!("（共 {} 张，此处列出前 {MAX_TABLE_NAMES} 张）", names.len()));
+        }
+        text.push('\n');
     }
-    text.push('\n');
 
     let mut columns_total = 0;
-    for table in &detail {
+    let mut omitted_tables = 0usize;
+    for (table_idx, table) in detail.iter().enumerate() {
+        // 总预算：装不下下一张**完整**的表就停 —— 切半张表的列结构会让模型
+        // 编出不存在的字段，比不给还糟（与 context.rs 同一取舍）。
+        if text.chars().count() > TOTAL_CHARS_BUDGET && columns_total > 0 {
+            omitted_tables = detail.len() - table_idx;
+            break;
+        }
         let engine = state.engine();
         // 注意别用 `let target = target.clone()`：那会**影子覆盖**外层变量，
         // 循环体后面（取样例数据那段）就再也拿不到原始 target 了
@@ -346,14 +371,26 @@ pub async fn schema_context(
             dialect.limit_clause(0, 2)
         );
         if let Ok(result) = crate::api::meta::run_sql_in(state, conn, database, sample_sql, 2).await {
+            // 样例也有单表预算：宽表一行样例就能几百字符，两行能写掉几千 —— 列结构不受影响
+            let mut sample_chars = 0usize;
             for row in crate::api::meta::rows_of(&result) {
                 let pairs: Vec<String> = row
                     .iter()
                     .map(|(key, value)| format!("{key}={}", short(value)))
                     .collect();
-                text.push_str(&format!("  样例：{}\n", pairs.join(", ")));
+                let line = format!("  样例：{}\n", pairs.join(", "));
+                if sample_chars > 0 && sample_chars + line.chars().count() > SAMPLE_CHARS_PER_TABLE {
+                    break;
+                }
+                sample_chars += line.chars().count();
+                text.push_str(&line);
             }
         }
+    }
+    if omitted_tables > 0 {
+        text.push_str(&format!(
+            "（另有 {omitted_tables} 张表因上下文预算未展开 —— 没列出来的表不要猜测）\n"
+        ));
     }
 
     Ok(SchemaContext {

@@ -28,8 +28,10 @@
 //!   `{model, messages, temperature, stream, max_tokens?}`；
 //! - 向量：`POST {baseUrl}/embeddings`，body `{model, input:[...]}`（**每批 10 条**）。
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -382,27 +384,95 @@ fn endpoint(base: &str, path: &str) -> String {
     }
 }
 
+fn status_error(code: u16, body: String) -> XError {
+    let detail = serde_json::from_str::<Value>(&body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+                .or_else(|| value.get("message").and_then(Value::as_str).map(str::to_string))
+        })
+        .unwrap_or_else(|| body.chars().take(300).collect());
+    XError::internal(format!("模型服务返回 {code}：{detail}"))
+}
+
 fn describe(err: ureq::Error) -> XError {
     match err {
         ureq::Error::Status(code, response) => {
             let body = response.into_string().unwrap_or_default();
-            let detail = serde_json::from_str::<Value>(&body)
-                .ok()
-                .and_then(|value| {
-                    value
-                        .get("error")
-                        .and_then(|error| error.get("message"))
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .or_else(|| value.get("message").and_then(Value::as_str).map(str::to_string))
-                })
-                .unwrap_or_else(|| body.chars().take(300).collect());
-            XError::internal(format!("模型服务返回 {code}：{detail}"))
+            status_error(code, body)
         }
         ureq::Error::Transport(err) => {
             XError::internal(format!("连不上模型服务：{err}（检查「设置」里的接口地址与网络）"))
         }
     }
+}
+
+/// 已确认不支持 `temperature` 参数的模型（`baseUrl|model`）。
+///
+/// 某些模型（如 DashScope 上的 kimi-k3）不接受 temperature，直接 400：
+/// `Parameter 'temperature'=0.2 is not supported for kimi-k3 model`。
+/// 记住这个事实之后，后续请求一开始就不带该参数 —— 免得每次都白失败一趟。
+static NO_TEMPERATURE: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn no_temperature_models() -> &'static Mutex<HashSet<String>> {
+    NO_TEMPERATURE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 上游错误是不是在说「temperature 参数不收」。判断放宽些：各家措辞不一
+/// （not supported / unsupported / does not support），但都会点名 temperature。
+fn temperature_rejected(message: &str) -> bool {
+    message.to_lowercase().contains("temperature")
+}
+
+/// 发送一次 chat/completions 请求，带 temperature 智能容错。
+///
+/// 第一次发仍带 temperature（大多数模型都认，压低温度对稳定输出有价值）；
+/// 若被上游 400 且错误提到 temperature，则去掉该参数**原地重试一次**，
+/// 并把该模型记进进程内黑名单，之后再发就直接省掉它。
+fn post_chat(url: &str, model: &ModelEntry, body: &mut Value, accept: &str) -> XResult<ureq::Response> {
+    let key = format!("{}|{}", model.base_url.trim_end_matches('/'), model.model);
+    let mut strip = no_temperature_models()
+        .lock()
+        .ok()
+        .map(|set| set.contains(&key))
+        .unwrap_or(false);
+    let mut last_error: Option<XError> = None;
+    for _ in 0..2 {
+        if strip {
+            if let Some(object) = body.as_object_mut() {
+                object.remove("temperature");
+            }
+        }
+        match ureq::post(url)
+            .timeout(TIMEOUT)
+            .set("Content-Type", "application/json")
+            .set("Accept", accept)
+            .set("Authorization", &format!("Bearer {}", model.api_key))
+            .send_string(&body.to_string())
+        {
+            Ok(response) => return Ok(response),
+            Err(ureq::Error::Status(code, response)) => {
+                let text = response.into_string().unwrap_or_default();
+                let err = status_error(code, text.clone());
+                if code == 400 && !strip && temperature_rejected(&text) {
+                    strip = true;
+                    if let Ok(mut set) = no_temperature_models().lock() {
+                        set.insert(key.clone());
+                    }
+                    last_error = Some(err);
+                    continue;
+                }
+                return Err(err);
+            }
+            Err(err) => return Err(describe(err)),
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| XError::internal("模型服务请求失败（重试后仍无响应）")))
 }
 
 /// 读响应体（`into_string` 给的是 `io::Error`，与 ureq 的错误不是一回事）。
@@ -485,14 +555,8 @@ pub fn chat_with_usage(
     messages: &[Msg],
 ) -> XResult<(String, Option<TokenUsage>)> {
     let url = endpoint(&model.base_url, "/chat/completions");
-    let body = request_body(model, messages_json(system, messages), false);
-    let response = ureq::post(&url)
-        .timeout(TIMEOUT)
-        .set("Content-Type", "application/json")
-        .set("Accept", "application/json")
-        .set("Authorization", &format!("Bearer {}", model.api_key))
-        .send_string(&body.to_string())
-        .map_err(describe)?;
+    let mut body = request_body(model, messages_json(system, messages), false);
+    let response = post_chat(&url, model, &mut body, "application/json")?;
     let text = read_body(response)?;
     let value: Value = serde_json::from_str(&text).map_err(|e| {
         XError::internal(format!("模型返回的不是 JSON：{e}（前 200 字：{}）", text.chars().take(200).collect::<String>()))
@@ -542,13 +606,7 @@ pub fn chat_tools(
         body["tools"] = tools.clone();
         body["tool_choice"] = json!("auto");
     }
-    let response = ureq::post(&url)
-        .timeout(TIMEOUT)
-        .set("Content-Type", "application/json")
-        .set("Accept", "application/json")
-        .set("Authorization", &format!("Bearer {}", model.api_key))
-        .send_string(&body.to_string())
-        .map_err(describe)?;
+    let response = post_chat(&url, model, &mut body, "application/json")?;
     let text = read_body(response)?;
     let value: Value = serde_json::from_str(&text).map_err(|e| {
         XError::internal(format!(
@@ -601,13 +659,7 @@ pub fn chat_stream(
     // 让上游在**流末尾**追加一个只含 usage 的分片（OpenAI 兼容协议）。
     // 不认这个字段的服务端会忽略它 —— 那时就只有调用次数、没有 token 数（如实显示"未提供"）。
     body["stream_options"] = json!({ "include_usage": true });
-    let response = ureq::post(&url)
-        .timeout(TIMEOUT)
-        .set("Content-Type", "application/json")
-        .set("Accept", "text/event-stream")
-        .set("Authorization", &format!("Bearer {}", model.api_key))
-        .send_string(&body.to_string())
-        .map_err(describe)?;
+    let response = post_chat(&url, model, &mut body, "text/event-stream")?;
 
     let reader = BufReader::new(response.into_reader());
     let mut produced = false;
