@@ -1741,7 +1741,7 @@ export default {
   'settings.ai.model': 'Model name',
   'settings.ai.embedding': 'Supports embeddings',
   'settings.ai.embeddingTip': 'Usually leave off; auto-detected from embed-style model names',
-  'settings.ai.maxTokens': 'Max output tokens',
+  'settings.ai.maxTokens': 'Max tokens',
   'settings.ai.maxTokensTip': 'Max length of one answer; 0 = unlimited',
   'settings.ai.temperature': 'Temperature',
   'settings.ai.temperatureTip': '0 = steadiest, higher = more creative; 0.2 recommended. Set 0 to use the server default',

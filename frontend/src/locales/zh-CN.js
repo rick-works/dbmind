@@ -1751,7 +1751,7 @@ export default {
   'settings.ai.model': '模型名称',
   'settings.ai.embedding': '支持向量化',
   'settings.ai.embeddingTip': '默认按模型名自动判断，必要时实调一次 /embeddings 探测，通常无需手动指定。只有自建模型（名字看不出、探测也被挡）才在这里选。',
-  'settings.ai.maxTokens': '最大生成 Token',
+  'settings.ai.maxTokens': '最大 Token',
   'settings.ai.maxTokensTip': '单次回答的长度上限，0 = 不限制',
   'settings.ai.temperature': '温度',
   'settings.ai.temperatureTip': '0 最稳，越大越发散；建议 0.2。填 0 = 跟随服务端默认',

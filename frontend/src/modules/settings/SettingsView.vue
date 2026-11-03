@@ -536,8 +536,8 @@
               >
                 <!-- 标签列 112px：「最大生成 Token」在 96px 下会折成两行，
                      整行的基线就歪了 -->
-                <!-- 统一两列网格：每行两个等宽字段，标签 96px，说明全收进问号气泡 -->
-                <el-form label-width="96px" label-position="left" class="set-form model-form">
+                <!-- 统一两列网格：每行两个等宽字段，标签列要装下「最大 Token + 问号」不裁切 -->
+                <el-form label-width="104px" label-position="left" class="set-form model-form">
                   <div class="form-row">
                     <el-form-item :label="$t('settings.ai.name')">
                       <el-input v-model="m.name" :placeholder="$t('settings.ai.namePlaceholder')" />
@@ -554,13 +554,9 @@
                       <el-input v-model="m.baseUrl" placeholder="https://api.deepseek.com/v1" />
                     </el-form-item>
                     <el-form-item label="API Key">
-                      <!-- 「已配置」做成徽标：原先只写在 placeholder 里，输过一次之后
-                           就再也看不出这台机器到底存没存过 key -->
-                      <div class="key-row">
-                        <el-input v-model="m.apiKey" type="password" show-password autocomplete="new-password"
-                          :placeholder="m.hasKey ? $t('settings.ai.apiKeyPlaceholderSet') : $t('settings.ai.apiKeyPlaceholderNew')" />
-                        <span v-if="m.hasKey" class="key-badge">{{ $t('settings.ai.keySet') }}</span>
-                      </div>
+                      <!-- 是否已配置由 placeholder 说明（「已配置，留空则不改」），不再占右侧宽度 -->
+                      <el-input v-model="m.apiKey" type="password" show-password autocomplete="new-password"
+                        :placeholder="m.hasKey ? $t('settings.ai.apiKeyPlaceholderSet') : $t('settings.ai.apiKeyPlaceholderNew')" />
                     </el-form-item>
                   </div>
                   <div class="form-row">
@@ -3321,19 +3317,15 @@ watch(visible, (v) => {
 .ai-settings .form-row {
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 18px;
 }
-/* 标签 + 问号：说明收进气泡，标签行保持单行不折 */
+/* 标签 + 问号：说明收进气泡，标签行保持单行不折。
+   问号用主色（标签本身是灰色，灰色问号会融进去看不见） */
 .ai-settings .lbl-q { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-.ai-settings .q-ic { font-size: 13px; color: var(--dc-text-dim, #8b93a7); cursor: help; }
+.ai-settings .q-ic { font-size: 14px; color: var(--dc-primary, #4c8dff); cursor: help; opacity: .9; }
+.ai-settings .lbl-q:hover .q-ic { opacity: 1; }
 .ai-settings .form-row :deep(.el-input),
 .ai-settings .form-row :deep(.el-select),
 .ai-settings .form-row :deep(.el-input-number) { max-width: none; }
 /* API Key：「已配置」徽标 + 输入框同一行，输入框自己撑满剩余宽度 */
-.ai-settings .key-row { display: flex; align-items: center; gap: 8px; width: 100%; max-width: 520px; }
-.ai-settings .key-row :deep(.el-input) { flex: 1; min-width: 0; max-width: none; }
-.ai-settings .key-badge {
-  flex: none; font-size: 12px; line-height: 20px; padding: 0 8px; border-radius: 10px;
-  background: rgba(103, 194, 58, .16); color: var(--dc-success, #67c23a);
-}
 /* 服务商预设：方按钮改 chips，不再和主操作按钮抢注意力 */
 .ai-settings .preset-chip {
   display: inline-flex; align-items: center; gap: 6px;
