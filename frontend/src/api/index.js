@@ -742,7 +742,7 @@ export const aiChatStream = async (payload, onDelta, opts = {}) => {
   return full
 }
 // AI 数据字典：返回 { content, tableCount }
-export const aiDataDict = (payload) => http.post('/api/ai/datadict', payload).then(r => r.data)
+export const aiDataDict = (payload, opts = {}) => http.post('/api/ai/datadict', payload, { signal: opts.signal }).then(r => r.data)
 // AI 结果导出为文件：payload = { title, markdown, format: md|docx|xlsx|pdf, fileName }，返回文件流（Blob）
 // 出错时后端返回 400 + JSON，axios 以 blob 接收，调用方需还原错误信息
 export const aiExportDoc = (payload) => http.post('/api/ai/export/doc', payload, { responseType: 'blob' }).then(r => r.data)
@@ -775,7 +775,7 @@ export const aiCapacity = (payload) => http.post('/api/ai/governance/capacity', 
 // 命令面板：自然语言 → 操作计划
 export const aiPlan = (payload) => http.post('/api/ai/plan', payload).then(r => r.data)
 // P1 能力：数据洞察 / 慢查询诊断
-export const aiInsight = (payload) => http.post('/api/ai/insight', payload).then(r => r.data)
+export const aiInsight = (payload, opts = {}) => http.post('/api/ai/insight', payload, { signal: opts.signal }).then(r => r.data)
 export const aiDiagnose = (payload) => http.post('/api/ai/diagnose', payload).then(r => r.data)
 
 // SQL 快捷验证（不消耗 AI 调用）：执行计划 / 试跑（只读，强制限行）
@@ -787,7 +787,7 @@ export const aiSqlTryRun = (payload) => http.post('/api/ai/sql/try-run', payload
 // ---------------------------------------------------------------------------
 
 // 智能体：会自己调工具看库，返回 { content, steps, changes, jobId, threadId }
-export const aiAgentRun = (payload) => http.post('/api/ai/agent', payload).then(r => r.data)
+export const aiAgentRun = (payload, opts = {}) => http.post('/api/ai/agent', payload, { signal: opts.signal }).then(r => r.data)
 
 // 会话：重开面板能接着聊
 export const aiThreadList = () => http.get('/api/ai/threads').then(r => r.data)

@@ -62,6 +62,15 @@ pub struct ModelEntry {
     /// 这个模型能不能用来做向量化（`/embeddings`）
     #[serde(default)]
     pub embedding: bool,
+    /// 采样温度（0 = 不发送该参数，跟随服务端默认）。
+    /// 数据库场景要的是「稳」，默认 0.2；个别模型（如 kimi-k3）不收该参数，
+    /// 遇到 400 会自动去掉重试（见 post_chat），这里配 0 可以一劳永逸。
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+}
+
+fn default_temperature() -> f64 {
+    0.2
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -119,6 +128,7 @@ pub fn from_row(row: dbmind_core::AiSettingsRow) -> AiSettings {
                 model: model.model,
                 max_tokens: model.max_tokens,
                 embedding: model.embedding,
+                temperature: model.temperature,
             })
             .collect(),
     }
@@ -141,6 +151,7 @@ pub fn to_row(settings: &AiSettings) -> dbmind_core::AiSettingsRow {
                 model: model.model.clone(),
                 max_tokens: model.max_tokens,
                 embedding: model.embedding,
+                temperature: model.temperature,
             })
             .collect(),
     }
@@ -183,6 +194,11 @@ pub fn view() -> Value {
                 "embedding": model.embedding,
                 "model": model.model,
                 "maxTokens": model.max_tokens,
+                "temperature": if model.temperature.is_finite() {
+                    model.temperature.clamp(0.0, 2.0)
+                } else {
+                    default_temperature()
+                },
             })
         })
         .collect();
@@ -231,6 +247,18 @@ pub fn apply(body: &Value) -> XResult<Value> {
             } else {
                 api_key
             };
+            // 温度先算出来（要用 id 查旧值），再构造结构体 —— id 马上要被 move 进去了
+            let temperature = item
+                .get("temperature")
+                .and_then(Value::as_f64)
+                // 没传 = 沿用旧值（老配置里没有这个字段，别把它抹成 0）
+                .unwrap_or_else(|| {
+                    old.iter()
+                        .find(|old_model| old_model.id == id)
+                        .map(|old_model| old_model.temperature)
+                        .unwrap_or_else(default_temperature)
+                })
+                .clamp(0.0, 2.0);
             next.push(ModelEntry {
                 id,
                 name: item.get("name").and_then(Value::as_str).unwrap_or("").to_string(),
@@ -248,6 +276,7 @@ pub fn apply(body: &Value) -> XResult<Value> {
                     .and_then(Value::as_bool)
                     .or_else(|| item.get("supportEmbedding").and_then(Value::as_bool))
                     .unwrap_or(false),
+                temperature,
             });
         }
         settings.models = next;
@@ -501,10 +530,19 @@ fn request_body(model: &ModelEntry, messages: Value, stream: bool) -> Value {
     let mut body = json!({
         "model": model.model,
         "messages": messages,
-        // 数据库场景要的是「稳」，不是「有创意」——温度压低是这类工具的通例
-        "temperature": 0.2,
         "stream": stream,
     });
+    // 数据库场景要的是「稳」，不是「有创意」——默认温度压到 0.2；
+    // 用户在设置里配了温度就用他的；配 0 = 不带该参数（跟随服务端默认，
+    // 也绕开个别模型「不支持 temperature」的 400）
+    let temperature = if model.temperature.is_finite() {
+        model.temperature.clamp(0.0, 2.0)
+    } else {
+        default_temperature()
+    };
+    if temperature > 0.0 {
+        body["temperature"] = json!(temperature);
+    }
     if model.max_tokens > 0 {
         body["max_tokens"] = json!(model.max_tokens);
     }

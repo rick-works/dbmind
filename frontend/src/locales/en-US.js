@@ -1743,6 +1743,8 @@ export default {
   'settings.ai.embeddingTip': 'Detected from the model name, with a real /embeddings probe when needed — normally nothing to do here. Set it manually only for self-hosted models that cannot be detected.',
   'settings.ai.maxTokens': 'Max output tokens',
   'settings.ai.maxTokensTip': 'Upper bound on the length of one answer (0 = unlimited, use the server default). Raise it if answers get cut off; lower it to save cost',
+  'settings.ai.temperature': 'Temperature',
+  'settings.ai.temperatureTip': 'Sampling temperature: lower is more deterministic (0.2 recommended for database work). 0 = omit the parameter entirely (use the server default; also avoids 400 on models that reject it)',
   'settings.ai.presetLabel': 'Quick provider presets',
   'settings.ai.addModel': 'Add model',
   'settings.ai.test': 'Test connection',

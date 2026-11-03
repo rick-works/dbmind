@@ -483,8 +483,8 @@ impl Store {
     /// 声明式建表管不了已存在的表 —— 这是仓库里第一个「改列」式迁移，保持极简：
     /// PRAGMA table_info 探测缺列才 ALTER，重复打开库零开销。
     fn migrate_columns(conn: &Connection) -> Result<()> {
-        let has_col = |name: &str| -> Result<bool> {
-            let mut stmt = conn.prepare("PRAGMA table_info(query_history)")?;
+        let has_col = |table: &str, name: &str| -> Result<bool> {
+            let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
             let mut hit = false;
             let mut rows = stmt.query([])?;
             while let Some(row) = rows.next()? {
@@ -495,7 +495,7 @@ impl Store {
             }
             Ok(hit)
         };
-        if !has_col("kind")? {
+        if !has_col("query_history", "kind")? {
             conn.execute_batch(
                 "ALTER TABLE query_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'query';
                  UPDATE query_history SET kind = CASE
@@ -511,8 +511,13 @@ impl Store {
                    ELSE 'exec' END;",
             )?;
         }
-        if !has_col("source")? {
+        if !has_col("query_history", "source")? {
             conn.execute_batch("ALTER TABLE query_history ADD COLUMN source TEXT NOT NULL DEFAULT 'ui';")?;
+        }
+        // ai_models 加 temperature（采样温度）：存量行补 0.2 —— 与旧版「固定发 0.2」
+        // 的行为一致，不会因为升级悄悄变成模型默认的 1.0。
+        if !has_col("ai_models", "temperature")? {
+            conn.execute_batch("ALTER TABLE ai_models ADD COLUMN temperature REAL NOT NULL DEFAULT 0.2;")?;
         }
         Ok(())
     }
@@ -1110,6 +1115,8 @@ pub struct AiModelRow {
     pub model: String,
     pub max_tokens: u64,
     pub embedding: bool,
+    /// 采样温度（0 = 请求里不带该参数，跟随服务端默认）。
+    pub temperature: f64,
 }
 
 /// 「ai_settings」单行 + 它带的一组模型。
@@ -1160,7 +1167,7 @@ impl Store {
         };
         let models = {
             let mut stmt = conn.prepare(
-                "SELECT id, name, base_url, api_key, model, max_tokens, embedding \
+                "SELECT id, name, base_url, api_key, model, max_tokens, embedding, temperature \
                  FROM ai_models ORDER BY ordinal",
             )?;
             let rows = stmt.query_map([], |row| {
@@ -1172,6 +1179,7 @@ impl Store {
                     model: row.get(4)?,
                     max_tokens: row.get::<_, i64>(5)?.max(0) as u64,
                     embedding: row.get::<_, i64>(6)? != 0,
+                    temperature: row.get(7)?,
                 })
             })?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
@@ -1205,8 +1213,8 @@ impl Store {
         tx.execute("DELETE FROM ai_models", [])?;
         {
             let mut stmt = tx.prepare(
-                "INSERT INTO ai_models (ordinal, id, name, base_url, api_key, model, max_tokens, embedding) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO ai_models (ordinal, id, name, base_url, api_key, model, max_tokens, embedding, temperature) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             )?;
             for (index, model) in settings.models.iter().enumerate() {
                 stmt.execute(params![
@@ -1217,7 +1225,8 @@ impl Store {
                     model.api_key,
                     model.model,
                     model.max_tokens as i64,
-                    model.embedding as i64
+                    model.embedding as i64,
+                    model.temperature
                 ])?;
             }
         }
@@ -2517,7 +2526,8 @@ CREATE TABLE IF NOT EXISTS ai_models (
     api_key    TEXT NOT NULL DEFAULT '',
     model      TEXT NOT NULL DEFAULT '',
     max_tokens INTEGER NOT NULL DEFAULT 0,
-    embedding  INTEGER NOT NULL DEFAULT 0
+    embedding  INTEGER NOT NULL DEFAULT 0,
+    temperature REAL NOT NULL DEFAULT 0.2
 );
 
 -- 用量账本两级：每天的总次数 / 每个模型每天的次数与 token。

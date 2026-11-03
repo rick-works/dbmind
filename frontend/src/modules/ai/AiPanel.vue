@@ -509,9 +509,12 @@
                         :title="listening ? $t('ai.voiceStop') : $t('ai.voiceStart')" @click="toggleVoice">
                   <el-icon :size="14"><Microphone /></el-icon>
                 </button>
-                <el-button type="primary" class="composer-run" :disabled="busy || !canRun"
-                           :title="runLabel" @click="runSkill">
-                  <el-icon><Promotion /></el-icon>
+                <!-- 生成中变「停止」键：点一下真掐断（流式/问数/深挖都挂在统一中断入口上） -->
+                <el-button type="primary" class="composer-run" :class="{ 'is-stop': generating }"
+                           :disabled="!generating && !canRun"
+                           :title="generating ? $t('ai.stopGen') : runLabel"
+                           @click="generating ? stopGenerating() : runSkill()">
+                  <el-icon><VideoPause v-if="generating" /><Promotion v-else /></el-icon>
                 </el-button>
               </div>
             </div>
@@ -588,7 +591,7 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
+import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete, VideoPause } from '@element-plus/icons-vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
   aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
@@ -955,6 +958,23 @@ const stopStream = () => {
   const c = streamCtrl
   streamCtrl = null
   try { c.abort() } catch { /* ignore */ }
+}
+/** 流式输出阶段：chatLoading 已撤（等待态结束）但流还在读，主按钮要保持「停止」态 */
+const streaming = ref(false)
+/** 非流式请求（问数/深挖/字典/洞察）的进行中控制器：点停止时一并掐断 */
+let stopCtrl = null
+/** axios 的中断错误：各 catch 里要识别成「用户主动停」而不是当失败弹 ❌ */
+const isCanceled = (e) => e && (e.code === 'ERR_CANCELED' || e.name === 'CanceledError')
+/** 生成中（等待或流式输出）：主按钮切换为停止键 */
+const generating = computed(() => chatLoading.value || streaming.value)
+/** 点停止：能掐的都掐 —— 流式对话、问数流、以及挂在 signal 上的普通请求 */
+const stopGenerating = () => {
+  stopStream()
+  if (stopCtrl) {
+    const c = stopCtrl
+    stopCtrl = null
+    try { c.abort() } catch { /* ignore */ }
+  }
 }
 
 const mdCache = new Map()
@@ -1563,11 +1583,13 @@ const runInsightInChat = async (table) => {
   messages.value.push({ role: 'user', content: table })
   aiInput.value = ''
   chatLoading.value = true; startWait(); scrollBottom()
+  stopCtrl = new AbortController()
+  const ctrl = stopCtrl
   try {
     const res = await aiInsight({
       connectionId: ctxConnId.value, database: ctxEffectiveDatabase.value,
       table, question: '', modelId: selectedModelId.value
-    })
+    }, { signal: ctrl.signal })
     if (res && res.success) {
       const md = (res.content || '') + (res.stats ? t('ai.statsSection', { stats: res.stats }) : '')
       messages.value.push({ role: 'assistant', content: md, exportMd: md, exportTitle: t('ai.tabInsight'), usage: res.usage || null })
@@ -1575,8 +1597,13 @@ const runInsightInChat = async (table) => {
       messages.value.push({ role: 'assistant', content: '❌ ' + (res?.message || t('ai.analyzeFailed')) })
     }
   } catch (e) {
-    messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || e?.toString?.() || t('ai.analyzeFailed')) })
+    if (isCanceled(e)) {
+      messages.value.push({ role: 'assistant', content: '> ⏱ ' + t('ai.interrupted', { detail: t('api.generationStopped') }) })
+    } else {
+      messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || e?.toString?.() || t('ai.analyzeFailed')) })
+    }
   }
+  if (stopCtrl === ctrl) stopCtrl = null
   chatLoading.value = false; stopWait(); scrollBottom()
 }
 
@@ -1614,6 +1641,9 @@ const runAskInChat = async (text) => {
     },
   })
   messages.value.push(msg)
+  // 停止按钮：问数流也挂在统一控制器上，点停止即掐断
+  stopCtrl = new AbortController()
+  const ctrl = stopCtrl
   try {
     const res = await aiAskStream(
       {
@@ -1628,6 +1658,7 @@ const runAskInChat = async (text) => {
         mergeStep(msg.askAnswer.steps, step)
         scrollBottom()
       },
+      { signal: ctrl.signal },
     )
     msg.askAnswer = res
     // 落一条本地历史：问数不进服务端会话，左栏「记录」靠它才能回看
@@ -1636,8 +1667,11 @@ const runAskInChat = async (text) => {
   } catch (e) {
     // 卡在流里的半截过程不留在界面上：换成一条明确的错误消息
     msg.askAnswer = null
-    msg.content = '❌ ' + (e?.message || t('ai.runFailed'))
+    msg.content = isCanceled(e)
+      ? '> ⏱ ' + t('ai.interrupted', { detail: t('api.generationStopped') })
+      : '❌ ' + (e?.message || t('ai.runFailed'))
   } finally {
+    if (stopCtrl === ctrl) stopCtrl = null
     chatLoading.value = false; stopWait(); scrollBottom()
   }
 }
@@ -1661,6 +1695,8 @@ const runDictInChat = async (text) => {
   messages.value.push({ role: 'user', content: text || t('ai.tabDictionary') })
   aiInput.value = ''
   chatLoading.value = true; startWait(); scrollBottom()
+  stopCtrl = new AbortController()
+  const ctrl = stopCtrl
   try {
     const tables = text.split(/[,，\s]+/).map(s => s.trim()).filter(Boolean)
     const res = await aiDataDict({
@@ -1668,7 +1704,7 @@ const runDictInChat = async (text) => {
       database: ctxEffectiveDatabase.value,
       tables,
       modelId: selectedModelId.value
-    })
+    }, { signal: ctrl.signal })
     if (res && res.success) {
       const md = res.content || ''
       messages.value.push({ role: 'assistant', content: trimDictPreview(md), exportMd: md, exportTitle: t('ai.tabDictionary'), usage: res.usage || null })
@@ -1676,8 +1712,13 @@ const runDictInChat = async (text) => {
       messages.value.push({ role: 'assistant', content: '❌ ' + (res?.message || t('ai.genFailed')) })
     }
   } catch (e) {
-    messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || e?.toString?.() || t('ai.genFailed')) })
+    if (isCanceled(e)) {
+      messages.value.push({ role: 'assistant', content: '> ⏱ ' + t('ai.interrupted', { detail: t('api.generationStopped') }) })
+    } else {
+      messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || e?.toString?.() || t('ai.genFailed')) })
+    }
   }
+  if (stopCtrl === ctrl) stopCtrl = null
   chatLoading.value = false; stopWait(); scrollBottom()
 }
 
@@ -1781,6 +1822,7 @@ const sendChat = async () => {
     }
     try {
       streamCtrl = new AbortController()
+      streaming.value = true
         await aiChatStream(payload, (d) => {
           acc += d
           if (flushTimer !== null) return
@@ -1796,15 +1838,22 @@ const sendChat = async () => {
         if (!acc) throw new Error('empty-stream')
         msg.streaming = false
         streamCtrl = null
+        streaming.value = false
         scrollBottom()
       } catch (e) {
         streamCtrl = null
+        streaming.value = false
         finalFlush()
         if (acc) {
           // 已收到部分内容：保留并标注中断，避免界面一直停在「生成中」
           msg.streaming = false
           msg.content = acc + '\n\n> ⏱ ' + t('ai.interrupted', { detail: (e?.message || t('ai.responseInterrupted')) })
           scrollBottom()
+        } else if (String(e?.message || '').includes(t('api.generationStopped'))) {
+          // 用户主动点停止且还没收到内容：就地标注，**不要**退回非流式重试
+          // （那等于「停了又发一次」，白花一次调用）
+          messages.value.pop()
+          messages.value.push({ role: 'assistant', content: '> ⏱ ' + t('ai.interrupted', { detail: t('api.generationStopped') }) })
         } else {
           messages.value.pop()
           chatLoading.value = true
@@ -1994,6 +2043,9 @@ const runAgentChat = async (text) => {
   chatLoading.value = true
   startWait()
   scrollBottom()
+  // 停止按钮：深挖是普通 POST，挂在 signal 上 —— 中断后界面立刻松开（服务端那轮模型调用会自然结束并丢弃）
+  stopCtrl = new AbortController()
+  const ctrl = stopCtrl
   try {
     const res = await aiAgentRun({
       prompt: text,
@@ -2004,7 +2056,7 @@ const runAgentChat = async (text) => {
       threadId: chatThreadId.value || undefined,
       history,
       maxRounds: 6
-    })
+    }, { signal: ctrl.signal })
     if (!res || !res.success) throw new Error(res?.message || t('ai.requestFailed'))
     if (res.threadId) chatThreadId.value = res.threadId
     messages.value.push(reactive({
@@ -2016,8 +2068,13 @@ const runAgentChat = async (text) => {
     }))
     if ((res.changes || []).length) refreshMate()
   } catch (e) {
-    messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || t('ai.requestFailed')) })
+    if (isCanceled(e)) {
+      messages.value.push({ role: 'assistant', content: '> ⏱ ' + t('ai.interrupted', { detail: t('api.generationStopped') }) })
+    } else {
+      messages.value.push({ role: 'assistant', content: '❌ ' + (e?.message || t('ai.requestFailed')) })
+    }
   } finally {
+    if (stopCtrl === ctrl) stopCtrl = null
     chatLoading.value = false
     stopWait()
     scrollBottom()
@@ -2855,6 +2912,13 @@ onMounted(() => {
 /* 固定发送图标按钮：与工具条其它控件同高（28px），圆形、图标居中 */
 .composer-run { margin-left: auto; flex-shrink: 0; border-radius: 8px; width: 28px; height: 28px; padding: 0; }
 .composer-run :deep(.el-icon) { font-size: 15px; }
+/* 生成中的停止态：红色底 + 不透明，与发送的蓝色区分开（一眼能看出「点这里停」） */
+.composer-run.is-stop {
+  background: var(--el-color-danger, #f56c6c); border-color: var(--el-color-danger, #f56c6c);
+}
+.composer-run.is-stop:hover {
+  background: var(--el-color-danger-light-3, #f78989); border-color: var(--el-color-danger-light-3, #f78989);
+}
 /* 右侧操作组：语音输入 + 发送整体靠右（margin-left:auto 收拢在一处） */
 .composer-right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .composer-right .composer-run { margin-left: 0; }

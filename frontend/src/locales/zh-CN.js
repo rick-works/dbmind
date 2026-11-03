@@ -1753,6 +1753,8 @@ export default {
   'settings.ai.embeddingTip': '默认按模型名自动判断，必要时实调一次 /embeddings 探测，通常无需手动指定。只有自建模型（名字看不出、探测也被挡）才在这里选。',
   'settings.ai.maxTokens': '最大生成 Token',
   'settings.ai.maxTokensTip': '单次回答的长度上限（0 = 不限制，跟随服务端默认）。回答总被截断就调大；费用敏感就调小',
+  'settings.ai.temperature': '温度（Temperature）',
+  'settings.ai.temperatureTip': '采样温度：越低回答越稳定、越发散，数据库场景建议 0.2。0 = 不发送该参数（跟随服务端默认，个别不认该参数的模型也不报错）',
   'settings.ai.presetLabel': '快速选择服务商',
   'settings.ai.addModel': '添加模型',
   'settings.ai.test': '测试连接',

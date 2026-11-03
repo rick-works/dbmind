@@ -572,6 +572,14 @@
                       <div class="form-tip">{{ $t('settings.ai.embeddingTip') }}</div>
                     </el-form-item>
                   </div>
+                  <!-- 采样温度：0 = 不发送该参数（跟随服务端默认），也绕开个别模型不认 temperature 的 400 -->
+                  <div class="form-row">
+                    <el-form-item :label="$t('settings.ai.temperature')">
+                      <el-input-number v-model="m.temperature" :min="0" :max="2" :step="0.1" :precision="2"
+                        controls-position="right" style="width:100%" />
+                      <div class="form-tip">{{ $t('settings.ai.temperatureTip') }}</div>
+                    </el-form-item>
+                  </div>
                 </el-form>
                 <div class="presets">
                   <div class="preset-label">{{ $t('settings.ai.presetLabel') }}</div>
@@ -1616,7 +1624,7 @@ const presets = computed(() => [
 const genId = () => Math.random().toString(36).slice(2, 10)
 
 const addModel = () => {
-  const newModel = { id: genId(), name: '', baseUrl: '', apiKey: '', model: '', maxTokens: 0, embedding: false }
+  const newModel = { id: genId(), name: '', baseUrl: '', apiKey: '', model: '', maxTokens: 0, embedding: false, temperature: 0.2 }
   form.value.models.push(newModel)
   activeModelId.value = newModel.id
   // 新建完跟着切到「模型服务」，否则在基础页点进来会看不到刚加的空模型
