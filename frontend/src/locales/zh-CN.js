@@ -4560,7 +4560,7 @@ export default {
   'sync.bgClear': '清空记录',
   'sync.bgEmpty': '没有后台任务',
   'sync.bgView': '查看',
-  'sync.bgCloseAsk': '{n} 个后台任务正在运行（{names}），关闭窗口会中断它们。建议先在任务中心停止或等其结束。仍要关闭？',
+  'sync.bgCloseAsk': '{n} 个后台任务正在运行，关闭窗口会中断它们。建议先在任务中心停止或等其结束。仍要关闭？',
   'sync.bgCloseOk': '仍要关闭',
   'sync.whereLabel': '行过滤',
   // 摘要表格里的短标签（界面上那几条带括号的长文案会被表格列宽截断）

@@ -73,6 +73,10 @@ export const addBgTask = ({ id, title, kind, mode, connId, database }) => {
   if (i >= 0) bgTasks.splice(i, 1, item)
   else bgTasks.unshift(item)
   if (bgTasks.length > 50) bgTasks.splice(50)
+  // **登记即运行**：状态查询没回来之前这条任务就是 running（主界面的徽标/运行列表
+  // 只认「明确已知的状态」，不再把未知兜成 running —— 那会让冷启动的 50 条历史
+  // 全部假报"正在运行"）。已终态的记录被重复登记时不降级，别把「成功」改回运行中
+  item.status = (prev?.status && prev.status !== 'running') ? prev.status : 'running'
 }
 
 export const removeBgTask = (id) => {

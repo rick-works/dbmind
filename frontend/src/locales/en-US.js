@@ -4533,7 +4533,7 @@ export default {
   'sync.bgClear': 'Clear all',
   'sync.bgEmpty': 'No background tasks',
   'sync.bgView': 'View',
-  'sync.bgCloseAsk': '{n} background tasks are running ({names}) and closing the window will interrupt them. Stop them in the task center first, or wait. Close anyway?',
+  'sync.bgCloseAsk': '{n} background tasks are running and closing the window will interrupt them. Stop them in the task center first, or wait. Close anyway?',
   'sync.bgCloseOk': 'Close anyway',
   'sync.whereLabel': 'Row filter',
   // Short labels for the summary table (the long in-form wording gets truncated)

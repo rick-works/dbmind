@@ -1220,7 +1220,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch, nextTick, defineAsyncComponent, h } from 'vue'
 
 import { applyTaskSnapshot, finishExport } from '../../utils/useExportTask'
 import { useRoute, useRouter } from 'vue-router'
@@ -1934,16 +1934,30 @@ const winClose = async () => {
   //（任务在后端进程里），但用户多半以为关窗=停止 —— 说清楚再走。
   // 最多等 1.2 秒：这只是"尽量提醒"，后端卡一下不能把关窗也一起卡住（实测点 × 要等好几秒）
   await Promise.race([refreshBgStatus(), new Promise((r) => setTimeout(r, 1200))])
-  const runningBg = bgTasks.filter(t => (bgStatusMap.value[t.id] || 'running') === 'running')
+  // **只算明确在跑的**（map 里的 running/stopping，或记录留底的 running）——
+  // 不能把「还没查到状态」兜成 running：执行记录最多留 50 条，冷启动后端还没应答时
+  // 50 条历史会全部被当成"正在运行"，弹「50 个后台任务」吓人（真机踩过）。
+  const runningBg = bgTasks.filter(t => ['running', 'stopping'].includes(bgStatusMap.value[t.id] || t.status))
   if (runningBg.length) {
-    const names = runningBg.map(bt => t('common.quoted', { name: bt.title })).join(t('common.listSep'))
+    // 50 条任务名糊成一段话根本读不了（用户反馈）：改成可滚动的清单，
+    // 一行一条（类型徽标 + 标题），超高的部分滚动。MessageBox 挂在 body 上，样式走全局块。
+    const rows = runningBg.map(bt => h('div', { key: bt.id, class: 'bg-close-row', title: bt.title }, [
+      h('span', { class: 'bg-close-dot' }),
+      h('span', { class: 'bg-close-kind' }, bgKindLabel(bt.kind)),
+      h('span', { class: 'bg-close-title' }, bt.title),
+    ]))
     try {
-      await ElMessageBox.confirm(t('sync.bgCloseAsk', { n: runningBg.length, names }), t('sync.bgCenter'), {
-        type: 'warning',
-        confirmButtonText: t('sync.bgCloseOk'),
-        cancelButtonText: t('common.cancel'),
-        closeOnClickModal: false
-      })
+      await ElMessageBox.confirm(
+        h('div', null, [
+          h('p', { class: 'bg-close-head' }, t('sync.bgCloseAsk', { n: runningBg.length })),
+          h('div', { class: 'bg-close-list' }, rows),
+        ]),
+        t('sync.bgCenter'), {
+          type: 'warning',
+          confirmButtonText: t('sync.bgCloseOk'),
+          cancelButtonText: t('common.cancel'),
+          closeOnClickModal: false
+        })
     } catch {
       return // 取消关闭 → 窗口留着，任务继续
     }
@@ -2184,7 +2198,8 @@ const bgDurationText = (t) => {
  * 反而会让人以为已经停了、可以重新跑一遍（真机反馈「点了停止任务还在」）。
  */
 const bgRunningList = computed(() =>
-  bgTasks.filter(t => ['running', 'stopping'].includes(bgStatusMap.value[t.id] || t.status || 'running'))
+  // 同 bgRunningCount：未知 ≠ running（新登记的任务在 addBgTask 里就标了 running，不受影响）
+  bgTasks.filter(t => ['running', 'stopping'].includes(bgStatusMap.value[t.id] || t.status))
 )
 /** 数据对比的后台任务恢复标记（对比点「后台运行」后从任务中心点开走这里） */
 const compareResumeId = ref('')
@@ -2358,11 +2373,18 @@ watch(() => bgTasks.length, (n) => {
   if (bgPage.value > maxPage) bgPage.value = maxPage
 })
 // 挂载后拉一次 + 每 5 秒刷新（任务少，几个请求的事），徽标才「活」
-onMounted(() => { refreshBgStatus() })
+onMounted(() => {
+  // 冷启动先把**留底的状态**搬进内存：上次退出前已终态的记录立刻显示终态，
+  // 不用等第一轮轮询 —— 关窗检查也据此不再把它们算成"正在运行"
+  for (const t of bgTasks) if (t.status) bgStatusMap.value[t.id] = t.status
+  refreshBgStatus()
+})
 // 同样具名保存：重挂组件时旧的 5 秒轮询必须停，否则每 5 秒重复打一次后台任务接口
 const bgRefreshTimer = setInterval(refreshBgStatus, 5000)
 const bgRunningCount = computed(() =>
-  bgTasks.filter(t => ['running', 'stopping'].includes(bgStatusMap.value[t.id] || 'running')).length
+  // 兜底只用**留底状态**，绝不兜成 running：否则冷启动时 50 条历史记录全被当成
+  // 运行中，时钟图标挂着「50」的假角标（真机踩过）
+  bgTasks.filter(t => ['running', 'stopping'].includes(bgStatusMap.value[t.id] || t.status)).length
 )
 const bgStateText = (id) => {
 // **notfound = 任务已不存在**（服务重启后内存任务丢了/超过保留期）——
@@ -9835,4 +9857,20 @@ const connTypeSummary = computed(() =>
 .bg-kind.is-bkp { color: #10b981; border-color: rgba(16, 185, 129, 0.45); }
 .bg-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dc-text); }
 .bg-state { font-size: 12px; color: var(--dc-text-dim); flex-shrink: 0; }
+
+/* ===== 关窗确认弹窗里的任务清单（MessageBox 挂在 body 上，必须是全局样式）===== */
+/* 50 条任务名糊成一段话读不了（用户反馈）：一行一条、超高滚动 */
+.bg-close-head { margin: 0 0 10px; font-size: 13px; line-height: 1.7; color: var(--dc-text); }
+.bg-close-list {
+  max-height: 260px; overflow: auto; border: 1px solid var(--dc-border);
+  border-radius: 8px; padding: 4px 0; background: var(--dc-bg-soft);
+}
+.bg-close-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; min-width: 0; }
+.bg-close-row + .bg-close-row { border-top: 1px solid var(--dc-border-soft); }
+.bg-close-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dc-primary); flex-shrink: 0; }
+.bg-close-kind {
+  font-size: 11px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0;
+  background: rgba(59, 130, 246, 0.14); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.4);
+}
+.bg-close-title { flex: 1; min-width: 0; font-size: 12px; color: var(--dc-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
