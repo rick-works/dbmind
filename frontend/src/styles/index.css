@@ -1259,6 +1259,24 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
 }
 .ai-model-dropdown .el-dropdown-menu__item.lv-2 .ctx-label { font-size: 13px; color: var(--dc-text-weak); }
 .ai-model-dropdown .ctx-empty { color: var(--dc-text-dim); justify-content: center; }
+/* 表行（多选聚焦）：普通 li 吃不到 .el-dropdown-menu__item 的基础样式，这里补齐；
+   点击只切换勾选（@click.stop），下拉保持打开 —— 连接/库仍是 el-dropdown-item 行为 */
+.ai-model-dropdown li.ctx-tb-row {
+  list-style: none; position: relative; box-sizing: border-box;
+  display: flex; align-items: center; gap: 8px;
+  min-height: 30px; padding-right: 10px;
+  font-size: 13px; line-height: 1.4;
+  color: var(--dc-text); cursor: pointer; border-radius: 6px;
+}
+.ai-model-dropdown li.ctx-tb-row:hover { background: var(--dc-fill-light, rgba(128, 128, 128, .12)); }
+.ai-model-dropdown li.ctx-tb-row.is-checked { color: var(--dc-primary); }
+.ai-model-dropdown li.ctx-tb-row.is-checked .ctx-label { font-weight: 500; }
+.ai-model-dropdown li.ctx-tb-row::after {
+  content: ''; position: absolute; top: 0; bottom: 0;
+  width: 1px; background: var(--dc-border);
+}
+.ai-model-dropdown li.ctx-tb-row.lv-2::after { left: 33px; }
+.ai-model-dropdown li.ctx-tb-row.lv-3::after { left: 49px; }
 /* el-select 形态的下拉弹层（AI 面板「跨库转换」的目标连接） */
 .ai-select-popper.el-popper {
   border-radius: 10px;

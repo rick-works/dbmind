@@ -357,7 +357,8 @@
                              { name: 'preventOverflow', options: { boundary: 'viewport', padding: 8 } },
                              { name: 'flip', options: { fallbackPlacements: ['top-end', 'bottom-start', 'bottom-end'] } }
                            ] }">
-                <button class="composer-ctx" :class="{ open: ctxOpen }" type="button">
+                <button class="composer-ctx" :class="{ open: ctxOpen }" type="button"
+                        :title="ctxTables.length ? ctxTables.join('、') : undefined">
                   <el-icon :size="12"><Coin /></el-icon>
                   <span class="composer-ctx-tx">{{ contextLabel || $t('ai.pickContext') }}</span>
                   <el-icon :size="12" class="composer-ctx-caret"><ArrowDown /></el-icon>
@@ -365,29 +366,42 @@
                 <template #dropdown>
                   <div class="ai-dd-head">{{ $t('ai.pickSource') }}</div>
                   <el-dropdown-menu class="ai-model-menu ctx-menu">
-                    <el-dropdown-item
-                      v-for="item in ctxFlatItems"
-                      :key="item.value"
-                      :command="item.value"
-                      :class="{
-                        'ctx-item': true,
-                        active: ctxSelectedValue === item.value,
-                        'is-parent': item.expandable,
-                        'is-expanded': item.expanded,
-                        ['lv-' + item.level]: true
-                      }"
-                      :style="{ paddingLeft: (10 + item.level * 16) + 'px' }"
-                    >
-                      <el-icon v-if="item.expandable" :size="10" class="ctx-caret" :class="{ expanded: item.expanded }">
-                        <ArrowRight />
-                      </el-icon>
-                      <span v-else class="ctx-caret-spacer"></span>
-                      <!-- 连接行用数据库类型 logo（与连接对话框/数据源弹窗同一套图标），分组/库/模式仍用线性图标 -->
-                      <DbLogo v-if="item.value.startsWith('conn:')" class="ctx-db-logo" :type="ctxConnType(item)" :size="14" />
-                      <el-icon v-else :size="13" class="ctx-level-ic"><component :is="ctxLevelIcon(item)" /></el-icon>
-                      <span class="ctx-label">{{ item.label }}</span>
-                      <el-icon v-if="ctxSelectedValue === item.value" class="skills-check"><Select /></el-icon>
-                    </el-dropdown-item>
+                    <template v-for="item in ctxFlatItems" :key="item.value">
+                      <!-- 表 = 多选聚焦：普通 li（点击只切换勾选，不触发 command、不关下拉、不换上下文） -->
+                      <li v-if="item.value.startsWith('tb:')"
+                          class="ctx-item ctx-tb-row"
+                          :class="{ 'is-checked': ctxTables.includes(item.label) }"
+                          :style="{ paddingLeft: (10 + item.level * 16) + 'px' }"
+                          @click.stop="toggleCtxTable(item)"
+                      >
+                        <span class="ctx-caret-spacer"></span>
+                        <el-icon :size="13" class="ctx-level-ic"><component :is="Tickets" /></el-icon>
+                        <span class="ctx-label">{{ item.label }}</span>
+                        <el-icon v-if="ctxTables.includes(item.label)" class="skills-check"><Select /></el-icon>
+                      </li>
+                      <el-dropdown-item
+                        v-else
+                        :command="item.value"
+                        :class="{
+                          'ctx-item': true,
+                          active: ctxSelectedValue === item.value,
+                          'is-parent': item.expandable,
+                          'is-expanded': item.expanded,
+                          ['lv-' + item.level]: true
+                        }"
+                        :style="{ paddingLeft: (10 + item.level * 16) + 'px' }"
+                      >
+                        <el-icon v-if="item.expandable" :size="10" class="ctx-caret" :class="{ expanded: item.expanded }">
+                          <ArrowRight />
+                        </el-icon>
+                        <span v-else class="ctx-caret-spacer"></span>
+                        <!-- 连接行用数据库类型 logo（与连接对话框/数据源弹窗同一套图标），分组/库/模式仍用线性图标 -->
+                        <DbLogo v-if="item.value.startsWith('conn:')" class="ctx-db-logo" :type="ctxConnType(item)" :size="14" />
+                        <el-icon v-else :size="13" class="ctx-level-ic"><component :is="ctxLevelIcon(item)" /></el-icon>
+                        <span class="ctx-label">{{ item.label }}</span>
+                        <el-icon v-if="ctxSelectedValue === item.value" class="skills-check"><Select /></el-icon>
+                      </el-dropdown-item>
+                    </template>
                     <el-dropdown-item v-if="!ctxFlatItems.length" disabled class="ctx-item ctx-empty">
                       {{ $t('ai.noConn') }}
                     </el-dropdown-item>
@@ -554,7 +568,7 @@ import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, d
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
-import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, kbList, kbSearch,
+import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
   aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
   aiJobList, aiJobDismiss, aiJobResume } from '../../api'
@@ -682,7 +696,10 @@ const contextLabel = computed(() => {
   // 把服务名（FREE）在这儿再拼一遍只是重复 —— 左侧树、SQL 编辑器工具条都已经不显示它了，
   // 同一个东西不该在三处有两种说法。
   const dbPart = hideDbLevelOf(conn?.type || props.conn?.type) ? '' : ctxDatabase.value
-  return [name, dbPart, ctxSchema.value, ctxTable.value].filter(Boolean).join(' · ')
+  // 聚焦表：一张就报名字，多张报数量（悬停工具条有完整名单，见 pill 的 title）
+  const tbPart = ctxTables.value.length === 1 ? ctxTables.value[0]
+    : ctxTables.value.length > 1 ? `${ctxTables.value.length} 张表` : ''
+  return [name, dbPart, ctxSchema.value, tbPart].filter(Boolean).join(' · ')
 })
 
 /** 输入框实例（点击示例后聚焦用） */
@@ -1064,7 +1081,7 @@ const applyPending = () => {
   if (!p?.seq || p.seq === handledPendingSeq) return
   handledPendingSeq = p.seq
   // 聚焦表跟着载荷走；载荷里没有就清掉，免得上一次的表名留在工具条上
-  ctxTable.value = p.table || ''
+  ctxTables.value = p.table ? [p.table] : []
   if (p.text) openWith(p.text)
 }
 watch(() => props.pending?.seq, applyPending, { immediate: true })
@@ -1102,13 +1119,15 @@ const ctxConnId = ref('')
 const ctxDatabase = ref('')
 const ctxSchema = ref('')
 /**
- * 右键「发送到 AI」带进来的**聚焦表**（只在上下文标签上多显示一级）。
- *
- * <p>为什么不并进 `ctxEffectiveDatabase`：后端所有 AI 接口认的都是「连接 + 库」，
- * 表不是查询参数 —— 表名本来就在提问文本里。这里多显示一级，是为了消除
- * 「问题里写 dify.orders、工具条却只到 dify」这种看着像选错了库的错觉。
+ * 聚焦表的来源有两条路：右键「发送到 AI」带进单张表（applyPending），
+ * 数据源下拉里勾选（toggleCtxTable，可多选）。最终随请求的 tables 字段发给后端，
+ * 与「提问里点到的表」求并集作为候选 —— 消除「问题里写 dify.orders、
+ * 工具条却只到 dify」这种看着像选错了库的错觉。
  */
-const ctxTable = ref('')
+/** **聚焦表（多选）**：数据源下拉里勾选的表，随请求发给后端（ask 的 tables 字段是数组，
+ *  后端会把「点名的表」和「提问里点到的表」求并集）。
+ *  注意后端从来没有单数的 table 字段 —— 之前发 table:xxx 是被 serde 静默丢掉的，聚焦从未生效过。 */
+const ctxTables = ref([])
 const ctxOpen = ref(false)
 /** 上下文下拉实例（与 Skills、模型下拉互斥） */
 const ctxFlatItems = ref([])
@@ -1328,21 +1347,42 @@ const loadCtxChildren = async (item) => {
         children = (raw || [])
           .map(s => (typeof s === 'string' ? s : (s.name || s.schema || '')))
           .filter(Boolean)
-          .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, false, item.value))
+          .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, true, item.value))
         ctxCache.value.set(item.value, children)
         return children
       }
       const dbs = await listDatabases(connId)
-      const needSchema = connNeedsSchema(connId)
-      children = (dbs || []).map(d => makeCtxItem('db:' + d, String(d), item.level + 1, needSchema, item.value))
+      // 库一律可展开：需要模式的类型下挂模式，其余直接下挂表（问数聚焦表要多选到表）
+      children = (dbs || []).map(d => makeCtxItem('db:' + d, String(d), item.level + 1, true, item.value))
     } else if (item.value.startsWith('db:')) {
       const connId = ctxUnwrap(item.parentValue)
       const db = ctxUnwrap(item.value)
-      const raw = await listSchemas(connId, db)
+      if (connNeedsSchema(connId)) {
+        const raw = await listSchemas(connId, db)
+        children = (raw || [])
+          .map(s => (typeof s === 'string' ? s : (s.name || s.schema || '')))
+          .filter(Boolean)
+          .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, true, item.value))
+      } else {
+        // 不需要模式的类型：库下面直接列表（问数聚焦表要多选到表）
+        const raw = await listTables(connId, db)
+        children = (raw || [])
+          .map(t => (typeof t === 'string' ? t : (t.name || t.table || '')))
+          .filter(Boolean)
+          .map(t => makeCtxItem('tb:' + t, String(t), item.level + 1, false, item.value))
+      }
+    } else if (item.value.startsWith('sc:')) {
+      // 模式下的表：database 走「库.模式」复合参数（与左侧树/表级接口同一口径）
+      const connId = ctxUnwrap(item.parentValue)
+      const schema = ctxUnwrap(item.value)
+      const parent = ctxFlatItems.value.find(i => i.value === item.parentValue)
+      const dbPart = parent?.value.startsWith('db:') ? ctxUnwrap(parent.value)
+        : ((connList.value || []).find(c => String(c.id) === String(connId))?.database || '')
+      const raw = await listTables(connId, dbPart ? `${dbPart}.${schema}` : schema)
       children = (raw || [])
-        .map(s => (typeof s === 'string' ? s : (s.name || s.schema || '')))
+        .map(t => (typeof t === 'string' ? t : (t.name || t.table || '')))
         .filter(Boolean)
-        .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, false, item.value))
+        .map(t => makeCtxItem('tb:' + t, String(t), item.level + 1, false, item.value))
     }
   } catch (e) { /* ignore */ }
   ctxCache.value.set(item.value, children)
@@ -1380,10 +1420,20 @@ const selectCtxByItem = (item) => {
     else if (node.value.startsWith('db:')) ctxDatabase.value = raw
     else if (node.value.startsWith('sc:')) ctxSchema.value = raw
   }
-  // 用户**主动**在工具条上换了上下文：之前那个"聚焦表"不再适用，清掉。
+  // 用户**主动**在工具条上换了上下文：之前那些"聚焦表"不再适用，清掉。
   // 不清的话会出现「已经切到别的库了，提问还被"只基于表 X 回答"绑着」。
-  // （右键「发送到 AI」那条路不走这里 —— 它直接设 ctxTable，见 applyPending）
-  ctxTable.value = ''
+  // （右键「发送到 AI」那条路不走这里 —— 它直接设 ctxTables，见 applyPending）
+  ctxTables.value = []
+}
+
+/** 表的**多选**聚焦：勾上/取消只动 ctxTables —— 不换连接/库上下文、不清别的勾选、不关下拉。
+ *  （表行是普通 li + @click.stop，不会触发 el-dropdown 的 command，天然不收起）
+ *  换连接/库时在 selectCtxByItem 里整组清空。 */
+const toggleCtxTable = (item) => {
+  const name = item.label
+  const i = ctxTables.value.indexOf(name)
+  if (i >= 0) ctxTables.value.splice(i, 1)
+  else ctxTables.value.push(name)
 }
 
 /** 处理上下文下拉命令：
@@ -1398,8 +1448,8 @@ const onCtxCommand = async (value) => {
   if (item.expandable) {
     if (item.expanded) { collapseCtxItem(idx); return }
     const hasChildren = await expandCtxItem(idx)
-    // 兜底：理论上模式层级类型必能取到模式，若无下级则直接收起
-    if (!hasChildren) closeCtxDrop()
+    // 展开类点击**不关下拉**：空库（没有表/模式）就让它空着，用户好接着点别的库 ——
+    // 原来这里兜底 closeCtxDrop()，点一个空库整个下拉突然收起，很莫名
     return
   }
   closeCtxDrop()
@@ -1651,8 +1701,9 @@ const sendChat = async () => {
   const payload = {
     prompt: text,
     // 聚焦表走结构化字段（不再拼成 prompt 尾巴）：后端会把它和「提问里点到的表」求并集，
-    // 用户一次问两张表时两张都会被展开，而不是被一句「不要扩散」按回一张
-    table: ctxTable.value || undefined,
+    // 用户一次问两张表时两张都会被展开，而不是被一句「不要扩散」按回一张。
+    // 字段名必须是 tables（数组）—— 之前发的 table 单数字段后端根本没有，一直被静默忽略
+    tables: ctxTables.value.slice(),
     connectionId: ctxConnId.value,
     database: ctxEffectiveDatabase.value,
     modelId: selectedModelId.value,
