@@ -4043,7 +4043,7 @@ export default {
   'ndb.owner': '所有者',
   'ndb.ownerTip': '留空 = 当前登录用户',
   'ndb.connLimit': '连接上限',
-  'ndb.connLimitTip': '该库允许的最大并发连接数；留空 = 不限制',
+  'ndb.connLimitTip': '留空 = 不限制',
   'ndb.create': '创建',
   'ndb.needName': '数据库名称不能为空',
   'ndb.unsupported': '该数据源类型不支持创建数据库',

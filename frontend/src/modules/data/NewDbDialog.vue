@@ -12,20 +12,13 @@
       </el-form-item>
       <template v-if="connType === 'MYSQL' || connType === 'MARIADB'">
         <el-form-item :label="$t('ndb.charset')">
-          <el-select v-model="form.charset" style="width: 100%" clearable :placeholder="$t('ndb.followServer')">
-            <el-option label="utf8mb4" value="utf8mb4" />
-            <el-option label="utf8" value="utf8" />
-            <el-option label="latin1" value="latin1" />
-            <el-option label="gbk" value="gbk" />
+          <el-select v-model="form.charset" style="width: 100%" clearable filterable :placeholder="$t('ndb.followServer')">
+            <el-option v-for="c in charsets" :key="c" :label="c" :value="c" />
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('ndb.collation')">
-          <el-select v-model="form.collation" style="width: 100%" clearable :placeholder="$t('ndb.followServer')">
-            <el-option label="utf8mb4_general_ci" value="utf8mb4_general_ci" />
-            <el-option label="utf8mb4_unicode_ci" value="utf8mb4_unicode_ci" />
-            <el-option label="utf8mb4_0900_ai_ci" value="utf8mb4_0900_ai_ci" />
-            <el-option label="utf8_general_ci" value="utf8_general_ci" />
-            <el-option label="latin1_swedish_ci" value="latin1_swedish_ci" />
+          <el-select v-model="form.collation" style="width: 100%" clearable filterable :placeholder="$t('ndb.followServer')">
+            <el-option v-for="c in collations" :key="c" :label="c" :value="c" />
           </el-select>
         </el-form-item>
       </template>
@@ -34,27 +27,21 @@
           <el-input v-model="form.owner" :placeholder="$t('ndb.ownerTip')" clearable />
         </el-form-item>
         <el-form-item :label="$t('ndb.encoding')">
-          <el-select v-model="form.encoding" style="width: 100%">
-            <el-option label="UTF8" value="UTF8" />
-            <el-option label="GBK" value="GBK" />
-            <el-option label="LATIN1" value="LATIN1" />
+          <el-select v-model="form.encoding" style="width: 100%" filterable>
+            <el-option v-for="e in pgEncodings" :key="e[0]" :label="e[0] + '（' + e[1] + '）'" :value="e[0]" />
           </el-select>
         </el-form-item>
         <el-form-item :label="$t('ndb.connLimit')">
           <el-input-number v-model="form.connLimit" :min="0" :step="10" controls-position="right"
             style="width: 100%" :placeholder="$t('ndb.connLimitTip')" />
-          <div class="form-tip">{{ $t('ndb.connLimitTip') }}</div>
         </el-form-item>
       </template>
       <template v-if="connType === 'SQLSERVER'">
         <!-- 只放必要参数：排序规则。恢复模式/文件大小走服务器默认（createDatabaseSql 仍支持，表单不再放出） -->
         <el-form-item :label="$t('ndb.collation')">
-          <el-select v-model="form.collation" style="width: 100%" clearable
+          <el-select v-model="form.collation" style="width: 100%" clearable filterable
             :placeholder="$t('ndb.followServer')">
-            <el-option label="Chinese_PRC_CI_AS（中文简体，不区分大小写）" value="Chinese_PRC_CI_AS" />
-            <el-option label="Chinese_PRC_CS_AS（中文简体，区分大小写）" value="Chinese_PRC_CS_AS" />
-            <el-option label="Latin1_General_CI_AS（拉丁，不区分大小写）" value="Latin1_General_CI_AS" />
-            <el-option label="SQL_Latin1_General_CP1_CI_AS（SQL 兼容）" value="SQL_Latin1_General_CP1_CI_AS" />
+            <el-option v-for="c in mssqlCollations" :key="c[0]" :label="c[0] + '（' + c[1] + '）'" :value="c[0]" />
           </el-select>
         </el-form-item>
       </template>
@@ -91,6 +78,34 @@ const visible = computed({
 const blankForm = () => ({ name: '', charset: 'utf8mb4', collation: 'utf8mb4_general_ci', encoding: 'UTF8', owner: '', connLimit: null })
 const form = ref(blankForm())
 const loading = ref(false)
+
+// ---- 下拉清单：放全常用项，select 支持 filterable 输入过滤 ----
+const charsets = ['utf8mb4', 'utf8', 'latin1', 'gbk', 'gb18030', 'big5', 'ascii', 'binary', 'utf16', 'utf32']
+// 0900 系是 MySQL 8 独有；MariaDB 用 uca1400（10.10+）
+const collations = computed(() => props.connType === 'MARIADB' ? [
+  'utf8mb4_general_ci', 'utf8mb4_unicode_ci', 'utf8mb4_uca1400_ai_ci', 'utf8mb4_bin',
+  'utf8_general_ci', 'utf8_unicode_ci', 'utf8_bin',
+  'latin1_swedish_ci', 'latin1_bin', 'gbk_chinese_ci', 'gbk_bin', 'big5_chinese_ci', 'binary'
+] : [
+  'utf8mb4_0900_ai_ci', 'utf8mb4_0900_bin', 'utf8mb4_general_ci', 'utf8mb4_unicode_ci', 'utf8mb4_bin',
+  'utf8_general_ci', 'utf8_unicode_ci', 'utf8_bin',
+  'latin1_swedish_ci', 'latin1_bin', 'gbk_chinese_ci', 'gbk_bin', 'gb18030_chinese_ci', 'big5_chinese_ci', 'binary', 'ascii_bin'
+])
+const pgEncodings = [
+  ['UTF8', 'Unicode'], ['GBK', '中文简体'], ['GB18030', '中文简体国标'], ['BIG5', '中文繁体'],
+  ['EUC_CN', '中文简体 EUC'], ['EUC_JP', '日语'], ['SJIS', '日语 Shift-JIS'],
+  ['LATIN1', '西欧'], ['LATIN9', '西欧 + 欧元'], ['WIN1252', '西欧 Windows'], ['SQL_ASCII', '不转码']
+]
+const mssqlCollations = [
+  ['Chinese_PRC_CI_AS', '中文简体，不区分大小写'], ['Chinese_PRC_CS_AS', '中文简体，区分大小写'],
+  ['Chinese_PRC_90_CI_AS', '中文简体 90，不区分大小写'], ['Chinese_Taiwan_Stroke_CI_AS', '中文繁体-台湾'],
+  ['Latin1_General_CI_AS', '拉丁，不区分大小写'], ['Latin1_General_CS_AS', '拉丁，区分大小写'],
+  ['Latin1_General_100_CI_AS', '拉丁 100，不区分大小写'], ['SQL_Latin1_General_CP1_CI_AS', 'SQL 兼容（代码页 1252）'],
+  ['Japanese_CI_AS', '日语'], ['Korean_Wansung_CI_AS', '韩语'], ['Thai_CI_AS', '泰语'],
+  ['Vietnamese_100_CI_AS', '越南语'], ['Cyrillic_General_CI_AS', '西里尔（俄语）'],
+  ['Arabic_CI_AS', '阿拉伯语'], ['Hebrew_CI_AS', '希伯来语'],
+  ['German_PhoneBook_CI_AS', '德语电话簿'], ['French_CI_AS', '法语'], ['Spanish_Modern_Sort_CI_AS', '西班牙语']
+]
 
 // 打开弹窗时重置表单：MySQL/MariaDB 给字符集/排序规则默认值；SQL Server 的排序规则
 // 不能沿用 MySQL 的默认值（utf8mb4_general_ci 不在选项里会原样显示成已选），清空走「跟随服务器默认」
@@ -137,7 +152,6 @@ const submit = async () => {
 </script>
 
 <style scoped>
-.form-tip { font-size: 12px; line-height: 1.5; color: var(--dc-text-2); margin-top: 2px; }
 .dlg-title { display: flex; align-items: center; gap: 8px; }
 .dlg-title-ic {
   width: 26px; height: 26px; border-radius: 7px; display: inline-flex;

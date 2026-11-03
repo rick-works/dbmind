@@ -4020,7 +4020,7 @@ export default {
   'ndb.owner': 'Owner',
   'ndb.ownerTip': 'Leave empty for the current login',
   'ndb.connLimit': 'Connection limit',
-  'ndb.connLimitTip': 'Max concurrent connections for this database; empty = unlimited',
+  'ndb.connLimitTip': 'Empty = unlimited',
   'ndb.create': 'Create',
   'ndb.needName': 'The database name cannot be empty',
   'ndb.unsupported': 'This data source type does not support creating databases',
