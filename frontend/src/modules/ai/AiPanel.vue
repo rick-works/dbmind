@@ -551,7 +551,7 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Star, Aim, DataAnalysis, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
+import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, kbList, kbSearch,
   aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
@@ -560,6 +560,7 @@ import KbIngestPanel from './KbIngestPanel.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { t, te, locale } from '../../utils/i18n'
 import { schemaLevelOf, hideDbLevelOf } from '../../types'
+import { envLabel, PREDEF_ENVS } from '../../utils/envs.js'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
 // 问数的流式步骤合并（running → done 原地升级）：与独立问数工作区共用同一份实现
 import { mergeStep } from '../chatbi/askSteps.js'
@@ -1137,8 +1138,12 @@ const ctxSelectedValue = computed(() => {
   if (ctxConnId.value) return 'conn:' + ctxConnId.value
   return ''
 })
-/** 层级图标：连接 / 数据库 / 模式 */
-const ctxLevelIcon = (item) => (item.level === 0 ? Connection : item.level === 1 ? Coin : Grid)
+/** 层级图标：分组 / 连接 / 数据库 / 模式（按前缀 —— 连接挂分组后不再固定在第 0 层） */
+const ctxLevelIcon = (item) =>
+  item.value.startsWith('grp:') ? Folder
+    : item.value.startsWith('conn:') ? Connection
+      : item.value.startsWith('db:') ? Coin
+        : Grid
 
 // 数据源变化时后台「预热」表结构上下文：
 // 冷缓存下首次构建要跑十几次元数据/样例查询（实测可达 18s），提前热好，
@@ -1173,9 +1178,14 @@ const expandCtxByValue = async (value) => {
   await expandCtxItem(idx)
 }
 
-/** 把当前选中的连接 / 库在下拉里逐级展开，便于看到并确认当前上下文 */
+/** 把当前选中的连接 / 库在下拉里逐级展开，便于看到并确认当前上下文。
+ *  连接挂在分组下：先把它的祖先分组逐级展开（grp:父 → grp:子），连接项才在列表里。 */
 const revealCtxSelection = async () => {
   if (!ctxConnId.value) return
+  const conn = (connList.value || []).find(c => String(c.id) === String(ctxConnId.value))
+  const path = String(conn?.group || '').trim()
+  const segs = path ? path.split('/') : []
+  for (let i = 1; i <= segs.length; i++) await expandCtxByValue('grp:' + segs.slice(0, i).join('/'))
   await expandCtxByValue('conn:' + ctxConnId.value)
   if (ctxDatabase.value) await expandCtxByValue('db:' + ctxDatabase.value)
 }
@@ -1211,10 +1221,52 @@ const makeCtxItem = (value, label, level, expandable, parentValue) => ({
   value, label, level, expandable, expanded: false, loading: false, parentValue
 })
 
-/** 加载顶层连接列表 */
+/** 分组的静态子节点（grp:<path> → 子分组/连接项）：分组结构不查后端，展开时直接取 */
+const ctxGrpChildren = new Map()
+
+/** 加载顶层连接列表
+ *  与左侧树同一套分组口径（见 MainView.buildTree / utils/envs.js）：
+ *  - connection.group 存的是**路径**（`公司资源/子组`，`/` 分隔），按段拆开嵌套；
+ *  - 预置环境（开发/测试/生产）各算一层目录，未分组（''）垫底；
+ *  - 只展示「真有连接」的分组 —— 纯目录（空分组）在数据源选择器里只是噪音。 */
 const loadCtxConnections = async () => {
   if (!connList.value.length) await loadConnList()
-  ctxFlatItems.value = (connList.value || []).map(c => makeCtxItem('conn:' + c.id, c.name || c.id, 0, true, null))
+  ctxGrpChildren.clear()
+  const groups = new Map() // 路径 -> 连接[]（保持 connList 原顺序）
+  for (const c of connList.value || []) {
+    const p = String(c.group || '').trim()
+    if (!groups.has(p)) groups.set(p, [])
+    groups.get(p).push(c)
+  }
+  const items = []
+  const folderIndex = new Map() // 路径 -> 分组项
+  const connItemOf = (c, level, parentValue) => makeCtxItem('conn:' + c.id, c.name || c.id, level, true, parentValue)
+  const ensureFolder = (path) => {
+    if (folderIndex.has(path)) return folderIndex.get(path)
+    const segs = path.split('/')
+    const name = segs[segs.length - 1]
+    const parentPath = segs.length > 1 ? segs.slice(0, -1).join('/') : null
+    const parent = parentPath ? ensureFolder(parentPath) : null
+    // 预置环境显示成开发/测试/生产（与树的角标文案一致），其余按尾段名
+    const label = PREDEF_ENVS.includes(path) ? envLabel(path) : name
+    const item = makeCtxItem('grp:' + path, label, parent ? parent.level + 1 : 0, true, parent ? parent.value : null)
+    folderIndex.set(path, item)
+    if (parent) ctxGrpChildren.get(parent.value).push(item)
+    else items.push(item)
+    ctxGrpChildren.set(item.value, [])
+    // 直属该层的连接挂在「深层路径段先建好父目录」之后
+    for (const c of groups.get(path) || []) ctxGrpChildren.get(item.value).push(connItemOf(c, item.level + 1, item.value))
+    return item
+  }
+  // 顺序：预置环境 → 自定义目录（首次出现顺序）→ 未分组垫底（左侧树同款）
+  const custom = [...groups.keys()].filter(p => p && !PREDEF_ENVS.includes(p))
+  for (const p of [...PREDEF_ENVS.filter(x => groups.has(x)), ...custom]) ensureFolder(p)
+  if (groups.has('')) {
+    const item = makeCtxItem('grp:', t('aictx.ungrouped'), 0, true, null)
+    items.push(item)
+    ctxGrpChildren.set(item.value, (groups.get('') || []).map(c => connItemOf(c, 1, item.value)))
+  }
+  ctxFlatItems.value = items
 }
 
 /** 指定连接是否还需要模式层级 */
@@ -1242,13 +1294,20 @@ const collapseCtxItem = (idx) => {
   item.expanded = false
 }
 
-/** 异步加载某一项的子节点：连接 → 数据库；数据库 → 模式（仅模式层级类型） */
+/** 异步加载某一项的子节点：分组 → 子分组/连接（静态）；连接 → 数据库；数据库 → 模式（仅模式层级类型）。
+ *  按 value 前缀分派而不是按层级 —— 连接挂在分组下之后不再固定在第 0 层。 */
 const loadCtxChildren = async (item) => {
   const cached = ctxCache.value.get(item.value)
   if (cached) return cached
   let children = []
   try {
-    if (item.level === 0) {
+    if (item.value.startsWith('grp:')) {
+      // 分组结构在 loadCtxConnections 里已建好（不查后端），直接取
+      children = ctxGrpChildren.get(item.value) || []
+      ctxCache.value.set(item.value, children)
+      return children
+    }
+    if (item.value.startsWith('conn:')) {
       const connId = ctxUnwrap(item.value)
       const conn = (connList.value || []).find(c => String(c.id) === String(connId))
       if (hideDbLevelOf(conn?.type)) {
@@ -1258,21 +1317,21 @@ const loadCtxChildren = async (item) => {
         children = (raw || [])
           .map(s => (typeof s === 'string' ? s : (s.name || s.schema || '')))
           .filter(Boolean)
-          .map(s => makeCtxItem('sc:' + s, String(s), 1, false, item.value))
+          .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, false, item.value))
         ctxCache.value.set(item.value, children)
         return children
       }
       const dbs = await listDatabases(connId)
       const needSchema = connNeedsSchema(connId)
-      children = (dbs || []).map(d => makeCtxItem('db:' + d, String(d), 1, needSchema, item.value))
-    } else if (item.level === 1) {
+      children = (dbs || []).map(d => makeCtxItem('db:' + d, String(d), item.level + 1, needSchema, item.value))
+    } else if (item.value.startsWith('db:')) {
       const connId = ctxUnwrap(item.parentValue)
       const db = ctxUnwrap(item.value)
       const raw = await listSchemas(connId, db)
       children = (raw || [])
         .map(s => (typeof s === 'string' ? s : (s.name || s.schema || '')))
         .filter(Boolean)
-        .map(s => makeCtxItem('sc:' + s, String(s), 2, false, item.value))
+        .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, false, item.value))
     }
   } catch (e) { /* ignore */ }
   ctxCache.value.set(item.value, children)
@@ -1323,7 +1382,8 @@ const onCtxCommand = async (value) => {
   const idx = findCtxIndex(value)
   if (idx < 0) return
   const item = ctxFlatItems.value[idx]
-  selectCtxByItem(item)
+  // 分组只是目录：点了不该动上下文，更不该清掉「聚焦表」（只有连接/库/模式才算换上下文）
+  if (!item.value.startsWith('grp:')) selectCtxByItem(item)
   if (item.expandable) {
     if (item.expanded) { collapseCtxItem(idx); return }
     const hasChildren = await expandCtxItem(idx)
