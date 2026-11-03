@@ -27,6 +27,7 @@
 //! 规则类的「护栏」如果自己再实现一遍，迟早会出现「AI 说只读、内核说不是」这种自相矛盾。
 
 pub mod agent;
+pub mod ask;
 pub mod chat;
 pub mod action;
 pub mod config;
@@ -825,6 +826,11 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/ai/mask/preview", post(mask::preview))
         // 对话与生成
+        // 智能问数：一次问答（选表 → 生成方案 → 只读校验 → 执行 → 图表规格）。
+        // `ask/stream` 是同一份流程的 SSE 版：过程实时推，界面不用盯着转圈等 8 秒
+        .route("/api/ai/ask", post(ask::ask))
+        .route("/api/ai/ask/stream", post(ask::ask_stream))
+        .route("/api/ai/ask/examples", get(ask::examples))
         .route("/api/ai/chat", post(chat::chat))
         .route("/api/ai/chat/stream", post(chat::chat_stream))
         .route("/api/ai/warmup", post(chat::warmup))

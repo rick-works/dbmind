@@ -520,6 +520,110 @@ export const aiExplain = (payload) => http.post('/api/ai/explain', payload).then
 export const aiOptimize = (payload) => http.post('/api/ai/optimize', payload).then(r => r.data)
 export const aiFix = (payload) => http.post('/api/ai/fix', payload).then(r => r.data)
 export const aiChat = (payload) => http.post('/api/ai/chat', payload).then(r => r.data)
+// 智能问数：一问一答（选表 → 出图 → 结论），后端一次性返回 SQL + 图表规格 + 结果集
+// 一次问数要跑「模型 + 查库」，客户端超时给足（后端自己还有模型超时与查询超时）
+export const aiAsk = (payload) => http.post('/api/ai/ask', payload, { timeout: 180000 }).then(r => r.data)
+// 问题示例（按真实表结构推，不调模型，零成本）
+export const aiAskExamples = (connectionId, database) =>
+  http.get('/api/ai/ask/examples', { params: { connectionId, database } }).then(r => r.data)
+// 流式问数：每一步（挑表 / 写方案 / 执行 / 写结论）一发生就回调 onStep，
+// 全程走完 resolve 成与 aiAsk **同形状**的完整回答 —— 调用方拿到后直接替换占位对象即可。
+// 帧约定与 aiChatStream 一致（data:{...}\n\n），区别只是 step 帧带 `type:"step"`。
+export const aiAskStream = async (payload, onStep, opts = {}) => {
+  const idleMs = opts.idleMs || 180000
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null
+  const external = opts.signal || null
+  let userAborted = false
+  const onExternalAbort = () => {
+    userAborted = true
+    if (ctrl) ctrl.abort()
+  }
+  if (external) {
+    if (external.aborted) onExternalAbort()
+    else external.addEventListener('abort', onExternalAbort, { once: true })
+  }
+  let idleTimer = null
+  let noStepYet = true
+  const arm = () => {
+    if (!ctrl) return
+    clearTimeout(idleTimer)
+    idleTimer = setTimeout(() => ctrl.abort(), idleMs)
+  }
+  arm()
+  let res
+  try {
+    res = await fetch('/api/ai/ask/stream', {
+      method: 'POST',
+      headers: localToken
+        ? { 'Content-Type': 'application/json', 'X-上游-Token': localToken }
+        : { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal: ctrl ? ctrl.signal : undefined
+    })
+  } catch (e) {
+    clearTimeout(idleTimer)
+    if (external) external.removeEventListener('abort', onExternalAbort)
+    throw new Error(userAborted ? t('api.generationStopped') : t('api.idleTimeout', { s: Math.round(idleMs / 1000) }))
+  }
+  if (!res.ok) {
+    clearTimeout(idleTimer)
+    if (external) external.removeEventListener('abort', onExternalAbort)
+    let detail = 'HTTP ' + res.status
+    try {
+      const body = await res.json()
+      if (body && body.message) detail = body.message
+    } catch { /* body 不是 JSON 就保留状态码 */ }
+    throw new Error(detail)
+  }
+  if (!res.body) { clearTimeout(idleTimer); throw new Error(t('api.noStream')) }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buf = ''
+  let answer = null
+  let errMsg = ''
+  try {
+    for (;;) {
+      let chunkRes
+      try {
+        chunkRes = await reader.read()
+      } catch (e) {
+        throw new Error(userAborted ? t('api.generationStopped') : t('api.idleTimeout', { s: Math.round(idleMs / 1000) }))
+      }
+      const { done, value } = chunkRes
+      if (done) break
+      arm()
+      buf += decoder.decode(value, { stream: true })
+      let idx
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const chunk = buf.slice(0, idx)
+        buf = buf.slice(idx + 2)
+        for (const line of chunk.split('\n')) {
+          if (!line.startsWith('data:')) continue
+          const raw = line.slice(5).trim()
+          if (!raw) continue
+          let obj
+          try { obj = JSON.parse(raw) } catch { continue }
+          if (obj && obj.type === 'step') {
+            noStepYet = false
+            if (typeof onStep === 'function') onStep(obj)
+          }
+          if (obj && obj.answer) answer = obj.answer
+          if (obj && obj.error) errMsg = obj.error
+        }
+      }
+    }
+  } finally {
+    clearTimeout(idleTimer)
+    if (external) external.removeEventListener('abort', onExternalAbort)
+  }
+  if (errMsg) throw new Error(errMsg)
+  if (!answer) {
+    throw new Error(noStepYet
+      ? t('api.idleTimeout', { s: Math.round(idleMs / 1000) })
+      : t('api.askStreamCut'))
+  }
+  return answer
+}
 // 字段脱敏：规则存取 + 实时预览（预览走后端同一份掩码实现，避免两套逻辑漂移）
 export const getMaskRules = () => http.get('/api/ai/mask-rules').then(r => r.data)
 export const saveMaskRules = (payload) => http.put('/api/ai/mask-rules', payload).then(r => r.data)

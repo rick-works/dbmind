@@ -33,6 +33,8 @@ export default {
   'nav.drivers': '驱动管理',
   'nav.monitor': '服务监控',
   'nav.userManage': '用户管理',
+  // 智能问数（ChatBI）：一句话问数据
+  'nav.chatbi': '智能问数',
   'um.pickConn': '选择连接',
   'um.pickConnHint': '在左侧选中一个连接，这里就会显示它的用户',
   'um.newUser': '新增用户',
@@ -747,6 +749,11 @@ export default {
   'ai.voiceStart': '语音输入',
   'ai.tabChat': '自由对话',
   'ai.tabChatDesc': '多轮问答，可直接使用生成的 SQL',
+  // 智能问数：和「数据字典 / 数据洞察」一样，结果直接进对话流（不开新页签、不占整块）
+  'ai.tabAsk': '智能问数',
+  'ai.tabAskDesc': '一句话 → 只读 SQL + 图表 + 带数字的结论',
+  'ai.phAsk': '问数据，比如：上个月各渠道的销售额和环比',
+  'ai.runAsk': '问一下',
   'ai.tabDictionary': '数据字典',
   'ai.tabDictionaryDesc': '表结构 + 字段说明，可导出 Word / Excel / PDF',
   'ai.tabPatrol': '健康巡检',
@@ -765,6 +772,7 @@ export default {
   'api.idleTimeout': '等待响应超时（超过 {s} 秒无数据）',
   'api.interruptedTimeout': '响应中断（超过 {s} 秒无数据）',
   'api.noStream': '当前环境不支持流式响应',
+  'api.askStreamCut': '分析过程结束了，但没拿到完整结果，请重试一次',
   'vf.title': '视图定义',
   'vf.nameEdit': '视图名（编辑时不可修改，右键可重命名）',
   'vf.name': '视图名',

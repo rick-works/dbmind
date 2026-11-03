@@ -14,6 +14,7 @@ export const TOP_MENU_ITEMS = [
   // 脚本管理：跨连接/跨库浏览、搜索、增删改查用户保存的脚本（增/改在 SQL 编辑器里进行）
   { id: 'scripts', icon: Tickets, label: () => t('nav.scripts') },
   { id: 'users', icon: User, label: () => t('nav.userManage') },
+  // 智能问数不在顶栏：它是 AI 助手里的一个技能（AiPanel 内部切 tab），入口只留那一处
   { id: 'sync', icon: Promotion, label: () => t('nav.sync') },
   { id: 'compare', icon: Switch, label: () => t('nav.compare') },
   // 驱动管理：直达「设置 → 驱动管理」页（看每种数据源的驱动装没装 / 缺哪些 / 换镜像源 / 手动上传）

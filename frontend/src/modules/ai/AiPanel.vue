@@ -47,25 +47,37 @@
           <span class="hist-vlabel">{{ $t('ai.history') }}</span>
         </div>
         <div v-show="histOpen" v-loading="histLoading" class="hist-list">
+          <!-- 问数（本地）与对话（服务端）合成一份列表：长得一样、按时间新的在前，
+               点哪条就把技能自动切到对应的类型（问数 → 智能问数，会话 → 自由对话） -->
           <button
-            v-for="th in threads"
-            :key="th.id"
+            v-for="it in histItems"
+            :key="it.kind + ':' + it.id"
             type="button"
             class="hist-item"
-            :class="{ active: th.id === chatThreadId }"
-            :title="th.title || $t('ai.historyUntitled')"
-            @click="openThread(th)"
+            :class="{ active: it.kind === 'thread' && it.raw.id === chatThreadId }"
+            :data-kind="it.kind"
+            :title="it.title"
+            @click="it.kind === 'ask' ? openAskHistory(it.raw) : openThread(it.raw)"
           >
-            <span class="hist-item-tx">{{ th.title || $t('ai.historyUntitled') }}</span>
-            <span class="hist-item-day">{{ dayOf(th.updatedAt || th.createdAt) }}</span>
-            <span class="hist-ren" :title="$t('ai.historyRename')" @click.stop="renameThread(th)">
+            <span class="hist-item-tx">{{ it.title }}</span>
+            <span class="hist-item-day">{{ it.day }}</span>
+            <span
+              v-if="it.kind === 'thread'"
+              class="hist-ren"
+              :title="$t('ai.historyRename')"
+              @click.stop="renameThread(it.raw)"
+            >
               <el-icon :size="12"><Edit /></el-icon>
             </span>
-            <span class="hist-del" :title="$t('ai.historyDelete')" @click.stop="deleteThread(th)">
+            <span
+              class="hist-del"
+              :title="it.kind === 'thread' ? $t('ai.historyDelete') : '删除'"
+              @click.stop="it.kind === 'ask' ? deleteAskHistory(it.raw) : deleteThread(it.raw)"
+            >
               <el-icon :size="12"><Delete /></el-icon>
             </span>
           </button>
-          <div v-if="!threads.length && !histLoading" class="hist-empty">{{ $t('ai.historyEmpty') }}</div>
+          <div v-if="!histItems.length && !histLoading" class="hist-empty">{{ $t('ai.historyEmpty') }}</div>
         </div>
       </aside>
 
@@ -134,6 +146,10 @@
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                   <span v-if="waitingSec >= 3" class="wait">{{ $t('ai.waited', { s: waitingSec }) }}</span>
                 </template>
+                <!-- 智能问数：一条回答 = 结论 + 图表 + 明细（与对话同一条消息流，不开新页签） -->
+                <div v-else-if="m.askAnswer" class="msg-ask">
+                  <AskAnswer :answer="m.askAnswer" @ask="runAskInChat" @insert-sql="emit('insert-sql', $event)" />
+                </div>
                 <!-- SQL 代码块的操作按钮由 markdown 渲染器生成（每段一个），这里做点击委托 -->
                 <div v-else class="ai-markdown" v-html="renderMd(m.content, !m.streaming)"
                      @click="onMdSqlAction($event, m.content)"></div>
@@ -246,7 +262,7 @@
                 <AiUsageNote :usage="m.usage" align="left" />
               </div>
             </div>
-            <div v-if="chatLoading" class="msg assistant">
+            <div v-if="showTyping" class="msg assistant">
               <div class="msg-avatar">AI</div>
               <div class="msg-bubble typing">
                 <span class="dot"></span><span class="dot"></span><span class="dot"></span>
@@ -532,21 +548,26 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Star, Aim, DataAnalysis, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
-import { aiChat, aiChatStream, aiDataDict, aiInsight, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, kbList, kbSearch,
+import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, kbList, kbSearch,
   aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
   aiJobList, aiJobDismiss, aiJobResume } from '../../api'
 import KbIngestPanel from './KbIngestPanel.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
-import { t, te } from '../../utils/i18n'
+import { t, te, locale } from '../../utils/i18n'
 import { schemaLevelOf, hideDbLevelOf } from '../../types'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
+// 问数的流式步骤合并（running → done 原地升级）：与独立问数工作区共用同一份实现
+import { mergeStep } from '../chatbi/askSteps.js'
+import { listAskHistory, saveAskHistory, removeAskHistory } from '../chatbi/askHistory.js'
 // 用量脚注：与 SQL 查询里的 AI 弹窗共用同一个组件，保证「token 消耗」只有一种长相
 import AiUsageNote from '../../common/AiUsageNote.vue'
+// 智能问数回答卡片：懒加载（它连着 echarts，不进 AI 助手的首屏 chunk；问到才拉）
+const AskAnswer = defineAsyncComponent(() => import('../chatbi/AskAnswer.vue'))
 
 const props = defineProps({
   conn: Object,
@@ -584,6 +605,9 @@ const tab = ref('chat')
 // ⚠️ 必须是 computed：写死成普通数组只会在模块加载时求值一次，之后切语言不会跟着变
 const tabs = computed(() => [
   { key: 'chat', label: t('ai.tabChat'), icon: ChatDotRound, desc: t('ai.tabChatDesc') },
+  // 智能问数：就是本面板里的一个技能页（模板里 v-if="isAsk" 渲染 ChatBiView）。
+  // 刻意**不**单开页签、也不上顶栏菜单 —— 入口只有这里一处。
+  { key: 'ask', label: t('ai.tabAsk'), icon: DataAnalysis, desc: t('ai.tabAskDesc') },
   { key: 'dictionary', label: t('ai.tabDictionary'), icon: Notebook, desc: t('ai.tabDictionaryDesc') },
   { key: 'insight', label: t('ai.tabInsight'), icon: Grid, desc: t('ai.tabInsightDesc') },
   { key: 'kbIngest', label: t('ai.tabKbIngest'), icon: Collection, desc: t('ai.tabKbIngestDesc') }
@@ -607,8 +631,12 @@ const onSkillVisible = (visible) => {
   ctxDropRef.value?.handleClose?.()
   closeModelDrop()
 }
-/** 选择 Skill：切换能力（下拉自动收起） */
-const pickSkill = (key) => { tab.value = key }
+/** 选择 Skill：切换能力（下拉自动收起）。返回是否真的切了（斜杠命令用它决定要不要提示） */
+const pickSkill = (key) => {
+  if (!tabs.value.some((x) => x.key === key)) return false
+  tab.value = key
+  return true
+}
 
 /** 技能运行的错误统一走这里：AI 服务未配置这类「去设置里弄一下」的引导性错误
  *  弹确认框（带「前往设置」直达），其余照常 toast —— 用户不用再自己找设置入口。 */
@@ -627,7 +655,7 @@ const aiError = (message) => {
 
 /** 对话类 Skill（走消息流，而不是一次性结果卡片） */
 const isChatSkill = computed(() =>
-  ['chat', 'dictionary', 'insight'].includes(tab.value))
+  ['chat', 'dictionary', 'insight', 'ask'].includes(tab.value))
 const isKbIngest = computed(() => tab.value === 'kbIngest')
 
 /** 统一输入框：所有 Skill 共用，行为由当前 Skill 决定 */
@@ -637,7 +665,8 @@ const aiInput = ref('')
 const PLACEHOLDERS = computed(() => ({
   chat: t('ai.phChat'),
   dictionary: t('ai.phDictionary'),
-  insight: t('ai.phInsight')
+  insight: t('ai.phInsight'),
+  ask: t('ai.phAsk')
 }))
 const composePlaceholder = computed(() => PLACEHOLDERS.value[tab.value] || t('ai.inputPlaceholder'))
 
@@ -803,6 +832,10 @@ const jobBusy = ref('')
 const chatLoading = ref(false)
 /** 结果区滚动容器（新消息时滚到底） */
 const chatBox = ref(null)
+/** 等待中的三点气泡：问数/对话一旦自己有了流式占位（卡片或正在逐字输出），就不该再挂第二个等待态 */
+const showTyping = computed(
+  () => chatLoading.value && !messages.value.some((m) => m.askAnswer?.streaming),
+)
 
 /**
  * Markdown 渲染结果缓存。
@@ -856,7 +889,8 @@ const renderMd = (text, sqlActions = false) => {
 const TAB_DESC = computed(() => ({
   insight: t('ai.hintInsight'),
   dictionary: t('ai.hintDictionary'),
-  kbIngest: t('ai.hintKbIngest')
+  kbIngest: t('ai.hintKbIngest'),
+  ask: t('ai.tabAskDesc')
 }))
 
 /**
@@ -966,8 +1000,9 @@ const pickSlash = (cmd) => {
   slashOpen.value = false
   aiInput.value = ''
   if (cmd.action === 'tab') {
-    tab.value = cmd.target
-    ElMessage.success(t('ai.switchedTo', { name: cmd.label }))
+    // 统一走 pickSkill：技能斜杠命令是自动从 tabs 派生的，「智能问数」也在里面 ——
+    // 这里直接赋 tab 会切到没有渲染分支的 key（空白页），必须由 pickSkill 拦下来开页签。
+    if (pickSkill(cmd.target)) ElMessage.success(t('ai.switchedTo', { name: cmd.label }))
   } else {
     emit('panel', cmd.target)
   }
@@ -1383,6 +1418,68 @@ const runInsightInChat = async (table) => {
   chatLoading.value = false; stopWait(); scrollBottom()
 }
 
+/**
+ * 智能问数：一句话 → 只读 SQL → 图表 + 带数字的结论。
+ *
+ * <p>形态与「数据字典 / 数据洞察」完全一致：问题进对话流，回答是同一气泡里的一张结果卡片
+ * （见模板里的 `m.askAnswer` 分支）。**不新开页签、不另起工作区** —— 入口就是技能下拉。
+ *
+ * <p>追问带最近几轮问数（问题 + 结论 + SQL）当上下文，否则模型不知道「它」指的是哪张表；
+ * 不带整段对话历史，那是自由对话的东西，塞进问数只会让选表跑偏。
+ */
+const runAskInChat = async (text) => {
+  const q = String(text ?? aiInput.value ?? '').trim()
+  if (!q || chatLoading.value) return
+  if (!ctxConnId.value) { ElMessage.warning(t('ai.needConn')); return }
+  if (!ctxEffectiveDatabase.value) { ElMessage.warning(t('ai.needDatabase')); return }
+  const history = []
+  for (const m of messages.value.slice(-6)) {
+    if (m.role === 'user' && m.content) history.push({ role: 'user', content: m.content })
+    else if (m.askAnswer?.sql) history.push({ role: 'assistant', content: `${m.askAnswer.summary || ''}\n${m.askAnswer.sql}` })
+  }
+  messages.value.push({ role: 'user', content: q })
+  aiInput.value = ''
+  chatLoading.value = true; startWait(); scrollBottom()
+  // 流式占位：立刻进对话流，让「读表结构 → 写方案 → 执行 → 写结论」一步步点亮；
+  // 收到完整回答后整体替换（streaming 标记消失 → 执行过程自动合并成一行）
+  const msg = reactive({
+    role: 'assistant',
+    content: '',
+    askAnswer: {
+      streaming: true, intent: 'query', question: q,
+      summary: '', sql: '', columns: [], columnTypes: [], rows: [], rowCount: 0,
+      charts: [], insights: [], followups: [], steps: [],
+    },
+  })
+  messages.value.push(msg)
+  try {
+    const res = await aiAskStream(
+      {
+        connectionId: ctxConnId.value,
+        database: ctxEffectiveDatabase.value,
+        question: q,
+        history: history.slice(-4),
+        modelId: selectedModelId.value,
+        lang: String(locale.value || '').startsWith('en') ? 'en' : 'zh',
+      },
+      (step) => {
+        mergeStep(msg.askAnswer.steps, step)
+        scrollBottom()
+      },
+    )
+    msg.askAnswer = res
+    // 落一条本地历史：问数不进服务端会话，左栏「记录」靠它才能回看
+    saveAskHistory(q, res)
+    askHist.value = listAskHistory()
+  } catch (e) {
+    // 卡在流里的半截过程不留在界面上：换成一条明确的错误消息
+    msg.askAnswer = null
+    msg.content = '❌ ' + (e?.message || t('ai.runFailed'))
+  } finally {
+    chatLoading.value = false; stopWait(); scrollBottom()
+  }
+}
+
 /** 数据字典：同上，进聊天流（表名可留空 = 整库） */
 /** 数据字典的聊天流预览：只展示前 5 张表的小节，其余以一句提示带过（全量在导出文件里） */
 const trimDictPreview = (md, maxTables = 5) => {
@@ -1463,6 +1560,8 @@ const sendChat = async () => {
     return runInsightInChat(text)
   }
   if (!text) return
+  // 智能问数：同一套对话流里出「结论 + 图表 + 明细」，只是后端接口不同
+  if (tab.value === 'ask') return runAskInChat(text)
   // 深挖模式：交给智能体（会自己查库、出变更单），与普通对话是两条实现
   if (agentMode.value) return runAgentChat(text)
   // 多轮上下文：本次提问之前的对话轮次。
@@ -1777,11 +1876,61 @@ const toggleHist = () => {
 // 列表数据只服务中央工作区的左栏；侧栏窄面板拿不到这个位置，也就不发这次请求。
 const threads = ref([])
 const histLoading = ref(false)
-/** 列表里只显示「月-日」，完整时间在 title 上；空值不渲染 */
-const dayOf = (iso) => {
-  const s = String(iso || '')
+/** 列表里只显示「月-日」，完整时间在 title 上；空值不渲染。
+ *  问数记录的时间是本地毫秒数、会话记录是 ISO 字符串，两种都要认。 */
+const dayOf = (value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const d = new Date(value)
+    if (Number.isNaN(d.getTime())) return ''
+    const p = (n) => String(n).padStart(2, '0')
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  }
+  const s = String(value || '')
   return s.length >= 10 ? s.slice(5, 10) : ''
 }
+
+/** 本地问数历史：问数走 /api/ai/ask 不落服务端会话，靠这份本地记录让左栏也能回看 */
+const askHist = ref(listAskHistory() || [])
+/** 点一条问数记录：把「问题 + 完整回答」原样铺回对话流，并把技能切到「智能问数」 */
+const openAskHistory = (h) => {
+  if (!h || !h.answer) return
+  tab.value = 'ask'
+  chatThreadId.value = ''
+  messages.value = [
+    { role: 'user', content: h.question },
+    { role: 'assistant', content: '', askAnswer: h.answer },
+  ]
+  scrollBottom()
+}
+const deleteAskHistory = (h) => {
+  if (!h?.id) return
+  removeAskHistory(h.id)
+  askHist.value = listAskHistory()
+}
+
+/**
+ * 左栏的统一列表：问数（本地）与对话（服务端）各取「标题 + 时间」摊平，
+ * 按时间新的在前 —— 用户不需要知道背后是两种存储，点开就能回到那一段。
+ */
+const histItems = computed(() => {
+  const asks = (askHist.value || []).map((h) => ({
+    kind: 'ask',
+    id: h.id,
+    title: h.question,
+    day: dayOf(h.ts),
+    ts: Number(h.ts) || 0,
+    raw: h,
+  }))
+  const ths = (threads.value || []).map((th) => ({
+    kind: 'thread',
+    id: th.id,
+    title: th.title || t('ai.historyUntitled'),
+    day: dayOf(th.updatedAt || th.createdAt),
+    ts: Date.parse(th.updatedAt || th.createdAt || '') || 0,
+    raw: th,
+  }))
+  return [...asks, ...ths].sort((a, b) => b.ts - a.ts)
+})
 
 const loadThreads = async () => {
   histLoading.value = true
@@ -1817,9 +1966,10 @@ const restoreThread = async () => {
   try { await applyThread(latest.id) } catch { /* 恢复失败就当新对话，不打扰用户 */ }
 }
 
-/** 点左栏某条记录：续聊这一段 */
+/** 点左栏某条记录：续聊这一段，并把技能切回「自由对话」（会话内容是对话技能的） */
 const openThread = async (th) => {
   if (!th?.id || th.id === chatThreadId.value) return
+  tab.value = 'chat'
   try { await applyThread(th.id) } catch { ElMessage.error(t('ai.requestFailed')) }
 }
 
@@ -1982,7 +2132,7 @@ const showWelcome = computed(() => !hasResult.value && !busy.value && !isKbInges
 
 /** 主按钮文案随 Skill 变化 */
 const RUN_LABEL = computed(() => ({
-  chat: t('ai.runChat'), dictionary: t('ai.runDictionary'), insight: t('ai.runInsight')
+  chat: t('ai.runChat'), dictionary: t('ai.runDictionary'), insight: t('ai.runInsight'), ask: t('ai.runAsk')
 }))
 const runLabel = computed(() => RUN_LABEL.value[tab.value] || t('ai.runChat'))
 
@@ -1999,7 +2149,8 @@ const runSkill = async () => {
   switch (tab.value) {
     case 'chat':
     case 'insight':
-    case 'dictionary': await sendChat(); break
+    case 'dictionary':
+    case 'ask': await sendChat(); break
   }
 }
 
@@ -2198,6 +2349,7 @@ onMounted(() => {
   border: 1px solid var(--dc-border);
   display: flex; flex-direction: column; gap: 14px;
 }
+
 
 /* ===== 空态默认面板 ===== */
 /* 内容整体限宽 + 垂直居中：宽屏下不再贴顶、下半屏大片留白 */
@@ -2459,6 +2611,8 @@ onMounted(() => {
   /* 与「新建脚本」界面保持一致的左右留白 */
   padding: 10px;
 }
+/* 问数回答：卡片内容有自己的排版，气泡内不再额外加边距 */
+.msg-ask { margin: -2px 0; }
 /* 斜杠命令浮层：贴在输入框上方，不遮挡正在输入的内容。
    命令已扩到 18 条，高度上限放开到视口的 70%（最高 620px），尽量一屏看全；
    但用 vh 兜底，窗口很矮时不会顶出可视区 */

@@ -511,7 +511,8 @@
             <AiPanel v-else-if="tab.type === 'ai'" mode="studio" :conn="conn" :database="currentDb"
                      :pending="pendingAi"
                      @insert-sql="insertSqlToActive" @panel="onAiPanelCommand" @run-plan="onRunPlan"
-                     @open-knowledge="openKnowledge" @close="closeTab(tab.id)" />
+                     @open-knowledge="openKnowledge"
+                     @close="closeTab(tab.id)" />
             <!-- 知识库工作台：左栏库列表 + 右栏「文档 / 召回测试 / 分段设置」 -->
             <KnowledgeStudio v-else-if="tab.type === 'knowledge'"
                              :focus-kb-id="pendingKbFocus" @focus-done="pendingKbFocus = ''" />
@@ -2477,6 +2478,9 @@ const openMonitor = () => {
 const aiExplainVisible = ref(false)
 const aiExplainTitle = ref('')
 const aiExplainContent = ref('')
+
+// 智能问数不再是独立页签：它是 AI 助手里的一个技能页（AiPanel 内部切 tab 渲染），
+// 因此这里不需要任何打开入口 —— 顶栏菜单项也已从 utils/topMenu.js 移除。
 // ===== 树 CRUD 弹窗（新建库 / 目录、重命名分组 / 表：逻辑已抽到 NewDbDialog.vue / FolderDialogs.vue / RenameTableDialog.vue，这里仅保留开关与上下文快照） =====
 const newDbVisible = ref(false)
 const newDbCtx = ref({ connId: null, connType: '' })

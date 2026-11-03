@@ -29,6 +29,8 @@ export default {
   'nav.drivers': 'Drivers',
   'nav.monitor': 'Monitoring',
   'nav.userManage': 'User Management',
+  // ChatBI: ask your data in plain language
+  'nav.chatbi': 'Ask Data',
   'um.pickConn': 'Select connection',
   'um.pickConnHint': 'Select a connection on the left — its users will show up here',
   'um.newUser': 'New user',
@@ -738,6 +740,11 @@ export default {
   'ai.voiceStart': 'Voice input',
   'ai.tabChat': 'Free chat',
   'ai.tabChatDesc': 'Multi-turn Q&A, with ready-to-use SQL',
+  // Ask Data answers land in the same chat stream as the other skills (no extra tab)
+  'ai.tabAsk': 'Ask Data',
+  'ai.tabAskDesc': 'One sentence → read-only SQL, chart and a numeric conclusion',
+  'ai.phAsk': 'Ask your data, e.g. revenue by channel last month, with MoM change',
+  'ai.runAsk': 'Ask',
   'ai.tabDictionary': 'Data dictionary',
   'ai.tabDictionaryDesc': 'Table structures plus column notes, exportable to Word / Excel / PDF',
   'ai.tabPatrol': 'Health inspection',
@@ -756,6 +763,7 @@ export default {
   'api.idleTimeout': 'Timed out waiting for a response (no data for over {s}s)',
   'api.interruptedTimeout': 'The response was interrupted (no data for over {s}s)',
   'api.noStream': 'This environment does not support streaming responses',
+  'api.askStreamCut': 'The analysis ended without a complete result. Please try again.',
   'vf.title': 'View definition',
   'vf.nameEdit': 'View name (cannot be changed while editing; right-click to rename)',
   'vf.name': 'View name',
