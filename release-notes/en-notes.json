@@ -1,6 +1,11 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
- "v2.0.3": [
+ "v2.0.4": [
+  "Create-database options completed: SQL Server gains a collation picker, PostgreSQL gains encoding/owner/connection limit, and the MySQL/MariaDB charset & collation dropdowns are expanded with filtering",
+  "Database DDL for SQL Server now includes collation, data & log files and the recovery model; it no longer comes back blank for non-sysadmin logins",
+  "Fixed a line-leading SET after SQL formatting splitting \"ALTER … SET …\" into two broken statements"
+],
+"v2.0.3": [
   "Data-Q&A history is now merged per conversation: follow-ups no longer spam the list, opening a record replays every round, and only \"New conversation\" starts a new one",
   "AI chat now survives tab switches: hop to table data / SQL and back, and the conversation with its follow-up context is exactly where you left it; switching skills never clears it",
   "Polish: the token-usage footnote on Q&A cards matches the chat style (right-aligned), and the stop button is a solid red square without the blue focus ring"
