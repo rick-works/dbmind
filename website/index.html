@@ -747,6 +747,29 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v2.0.0（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.0</span>
+            <span class="rel-tag tag-major">大版本</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-03</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>全新「智能问数」</b>：用一句话查数据，五步执行过程全程可视（理解问题 → 读取表结构 → 生成查询与图表方案 → 执行查询 → 阅读结果写结论），每步展开实时分析内容、跑完自动折叠，步骤多少跟着问题走，不凑数</li>
+            <li><b>问数自带只读护栏</b>：生成的 SQL 先过内核只读校验才执行，写语句、多语句、注释一律拒绝；图表字段必须真出现在结果列里，对不上自动降级成数据表，宁可给表不给空白</li>
+            <li><b>结论基于真实结果集撰写</b>：计划阶段的空话不要，执行完把结果再喂一次模型写一句带数字的结论，界面上的每个数都能在明细表里逐格核对；数据概况由前端本地统计，不经过模型</li>
+            <li><b>图表本地即时切换（柱状 / 折线 / 面积 / 饼图 / 环形 / 散点 / 热力 / 漏斗 / 仪表盘 / 数据表），不重新问模型；结果一键导出 CSV（带 BOM，Excel 打开中文不乱码），SQL 可一键插入编辑器继续加工</b></li>
+            <li><b>支持追问与澄清</b>：缺时间范围、口径不明时先反问不出图，回答尾部给 2~3 个自然的追问，点一下就接着查</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v2.0.0" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v2.0.0" target="_blank" rel="noopener">下载 v2.0.0</a>
+          </div>
+        </div>
+      </article>
       <!-- v1.9.3（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -754,7 +777,6 @@
           <div class="rel-head">
             <span class="rel-ver">v1.9.3</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-02</span>
           </div>
           <ul class="rel-notes">
