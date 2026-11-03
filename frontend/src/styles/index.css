@@ -1261,10 +1261,11 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
 .ai-model-dropdown .ctx-empty { color: var(--dc-text-dim); justify-content: center; }
 /* ===== 聚焦表选择器（工具条独立 pill + 搜索 + 多选列表）===== */
 .ai-model-dropdown .tb-search { padding: 2px 10px 8px; }
-/* 搜索框别那么黑：底色比弹层亮一档 + 描边 */
+/* 搜索框别那么黑：全局 .el-input__wrapper 用了 !important 的暗底（--dc-bg-input），
+   这里同样 !important 且特异性更高才能盖过去 —— 叠白明显提亮 */
 .ai-model-dropdown .tb-search .el-input__wrapper {
-  background-color: var(--dc-bg-raised, #22262f);
-  box-shadow: 0 0 0 1px var(--dc-border) inset;
+  background-color: rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 0 0 1px var(--dc-border) inset !important;
 }
 .ai-model-dropdown .tb-menu { max-height: min(58vh, 470px); overflow: auto; }
 /* 勾选数量小徽标：贴在 pill 文案右侧 */
