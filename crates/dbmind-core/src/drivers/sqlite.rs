@@ -469,6 +469,8 @@ impl Driver for SqliteDriver {
                         TableKind::Table
                     },
                     row_estimate: None,
+                    // SQLite 的 sqlite_master 不存注释，无从取
+                    comment: None,
                 })
             })
             .map_err(query_error)?;

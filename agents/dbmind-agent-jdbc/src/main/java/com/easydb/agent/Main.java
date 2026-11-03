@@ -1484,6 +1484,16 @@ public final class Main {
                     table.addProperty("name", resultSet.getString("TABLE_NAME"));
                     String type = resultSet.getString("TABLE_TYPE");
                     table.addProperty("kind", type != null && type.toUpperCase().contains("VIEW") ? "view" : "table");
+                    // JDBC 规范的 REMARKS 列在多数驱动里就是表注释（MySQL 的 information_schema 路径、
+                    // PG 的 pg_description 都有）；个别驱动没有这列时按缺省处理，别让整条清单失败
+                    try {
+                        String remarks = resultSet.getString("REMARKS");
+                        if (remarks != null && !remarks.isBlank()) {
+                            table.addProperty("comment", remarks);
+                        }
+                    } catch (SQLException ignored) {
+                        // 该驱动不给 REMARKS：跳过注释，其余字段照常
+                    }
                     tables.add(table);
                 }
             }
@@ -1597,13 +1607,18 @@ public final class Main {
             }
             JsonArray tables = new JsonArray();
             try (ResultSet resultSet = statement.executeQuery(
-                    "select TABLE_NAME, TABLE_TYPE from information_schema.TABLES"
+                    "select TABLE_NAME, TABLE_TYPE, TABLE_COMMENT from information_schema.TABLES"
                             + " where TABLE_SCHEMA = database()")) {
                 while (resultSet.next()) {
                     JsonObject table = new JsonObject();
                     table.addProperty("name", resultSet.getString("TABLE_NAME"));
                     String type = resultSet.getString("TABLE_TYPE");
                     table.addProperty("kind", type != null && type.toUpperCase().contains("VIEW") ? "view" : "table");
+                    // 表注释一并带回：问数选表要用它和中文问题做匹配（见内核 ask 的候选打分）
+                    String comment = resultSet.getString("TABLE_COMMENT");
+                    if (comment != null && !comment.isBlank()) {
+                        table.addProperty("comment", comment);
+                    }
                     tables.add(table);
                 }
             }

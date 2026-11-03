@@ -31,6 +31,7 @@ use serde_json::{json, Value};
 
 use crate::api::ai::config::{self, Msg};
 use crate::api::ai::tools::tables_of;
+use dbmind_core::{TableInfo, TableKind};
 use crate::api::ai::{bound_history, read_only, schema_context, with_language};
 use crate::api::error::{XError, XResult};
 use crate::api::require_record;
@@ -112,7 +113,7 @@ const SYSTEM: &str = r#"你是「智能问数」引擎：把业务问题变成**
 7. x 与 y[].field 必须是**结果集的列名**（用第 3 条起好的别名），不能是 SQL 表达式。
 8. summary / insights 这里可以留空 —— 结论由执行后另一步按真实结果写（你先写只会是空话）。
 9. 与数据无关、或缺少关键信息（没有时间范围、口径不明）时：intent=clarify，clarify 写清楚缺什么。
-   clarify 里举例提到的表名也**必须逐字来自【表清单】**——编一个不存在的表名（比如把 etl_wide_contractd 说成 etl_wide_sale）会把用户带进沟里。
+   clarify 里举例提到的表名也**必须逐字来自【表清单】**——编造一个不存在的表名会把用户带进沟里。
 10. thinking 必填且要具体（4 句左右，第一人称，像在心里自言自语）：①我怎么理解这个问题——指标是什么、按什么维度、什么时间范围，缺什么就明说；②为什么选这几张表和这些字段，排除了哪些相近的表；③SQL 的思路——怎么过滤、怎么分组、怎么排序、为什么这样控制行数；④为什么选这种图表类型而不是别的（时间序列为什么不用柱状、占比为什么不用条形）。不要复述 SQL 原文。
 "#;
 
@@ -208,18 +209,49 @@ fn synonym_score(name_lower: &str, question: &str) -> i32 {
     score
 }
 
+/// 注释层记分：表注释（中文）与中文问题的 **2-gram 重叠**。
+///
+/// 数据库里的表注释往往就是中文业务描述（「商场销售日汇总」「会员卡余额」），
+/// 它和问题共享的二字片段就是直接证据 —— 这层**不需要词典**，什么行业的库都能用。
+/// 单个 bigram 容易撞上「数据」「信息」这类万金油词，所以从第 2 个命中起才计分。
+fn comment_score(comment: Option<&str>, question: &str) -> i32 {
+    let Some(comment) = comment.map(str::trim).filter(|s| !s.is_empty()) else {
+        return 0;
+    };
+    let cjk: Vec<char> = question
+        .chars()
+        .filter(|c| ('\u{4E00}'..='\u{9FFF}').contains(c))
+        .collect();
+    if cjk.len() < 2 {
+        return 0;
+    }
+    let mut hits = 0usize;
+    let mut seen = std::collections::HashSet::new();
+    for pair in cjk.windows(2) {
+        let gram: String = pair.iter().collect();
+        if seen.insert(gram.clone()) && comment.contains(&gram) {
+            hits += 1;
+        }
+    }
+    if hits < 2 {
+        return 0;
+    }
+    6 * hits.min(6) as i32
+}
+
 /// 表名 / 问题的粗粒度相关度。
 ///
 /// 刻意**不引入分词库**：表名几乎都是 `order_detail`、`t_sale_2024` 这种，
 /// 按 `_` 与非字母数字切开后与问题做子串匹配，命中率已经够用，而且零依赖、可预测。
 /// 命中整表名给的权重最高（用户直接说了表名），命中词片段次之；
-/// 中文问题再叠一层 [`SYNONYMS`] 同义映射（见其文档，这是真机踩出来的洞）。
-fn score_table(name: &str, question_lower: &str, question: &str) -> i32 {
-    let full = name.to_ascii_lowercase();
+/// 中文问题再叠两层：[`SYNONYMS`] 同义映射（表名是英文时）与 [`comment_score`]
+/// 注释 2-gram（注释是中文时）—— 后者是各行业库通用的直接证据。
+fn score_table(table: &TableInfo, question_lower: &str, question: &str) -> i32 {
+    let full = table.name.to_ascii_lowercase();
     if full.len() >= 3 && question_lower.contains(&full) {
         return 100;
     }
-    let mut score = synonym_score(&full, question);
+    let mut score = synonym_score(&full, question) + comment_score(table.comment.as_deref(), question);
     for part in full.split(|c: char| !c.is_alphanumeric()) {
         // 太短的片段（t / v2 / id）匹配上也没有信息量，反而会把一堆表拉进来
         if part.len() < 3 || part.chars().all(|c| c.is_ascii_digit()) {
@@ -243,11 +275,11 @@ fn score_table(name: &str, question_lower: &str, question: &str) -> i32 {
 ///     横切面 —— 让模型看到「这个库里都有哪些家族的表」，而不是字母序第一张；
 ///     有了真实字段在手，它至少能说出「库里没有销售表」，而不是编一个。
 /// - 点名的表一张都没对上（选错了库/表已删）时退回自动判断，别拿着空候选去问模型。
-fn pick_focus(tables: &[String], question: &str, named: &[String]) -> (Vec<String>, &'static str) {
+fn pick_focus(tables: &[TableInfo], question: &str, named: &[String]) -> (Vec<String>, &'static str) {
     let mut picked: Vec<String> = Vec::new();
     for want in named {
-        if let Some(hit) = tables.iter().find(|t| t.eq_ignore_ascii_case(want.trim())) {
-            let hit = hit.clone();
+        if let Some(hit) = tables.iter().find(|t| t.name.eq_ignore_ascii_case(want.trim())) {
+            let hit = hit.name.clone();
             if !picked.contains(&hit) {
                 picked.push(hit);
             }
@@ -260,51 +292,58 @@ fn pick_focus(tables: &[String], question: &str, named: &[String]) -> (Vec<Strin
 
     // ---- 没点名（或点名全部没对上）：自动判断 ----
     let lower = question.to_ascii_lowercase();
-    let mut ranked: Vec<(i32, &String)> = tables
+    let mut ranked: Vec<(i32, &TableInfo)> = tables
         .iter()
-        .map(|name| (score_table(name, &lower, question), name))
+        .map(|table| (score_table(table, &lower, question), table))
         .collect();
-    ranked.sort_by(|a, b| b.0.cmp(&a.0));
+    // 同分时行数多的排前面：家族的「旗舰表」比空壳表更值得给模型看
+    ranked.sort_by(|a, b| {
+        b.0.cmp(&a.0)
+            .then_with(|| b.1.row_estimate.unwrap_or(0).cmp(&a.1.row_estimate.unwrap_or(0)))
+    });
     let best = ranked.first().map(|(s, _)| *s).unwrap_or(0);
 
-    let mut push = |name: &String, picked: &mut Vec<String>| {
-        if !picked.iter().any(|t| t.eq_ignore_ascii_case(name)) {
-            picked.push(name.clone());
+    let mut push = |table: &TableInfo, picked: &mut Vec<String>| {
+        if !picked.iter().any(|t| t.eq_ignore_ascii_case(&table.name)) {
+            picked.push(table.name.clone());
         }
     };
 
     if best > 0 {
         // 与最高分同档的全收（best=100 的整名命中 → 只收 100 分的；
         // best=30 时 20 分也算强档），不足 FOCUS_MIN 再向下一档补
-        for (score, name) in ranked.iter() {
+        for (score, table) in ranked.iter() {
             if picked.len() >= FOCUS_MAX || *score * 2 < best {
                 break;
             }
-            push(name, &mut picked);
+            push(table, &mut picked);
         }
-        for (score, name) in ranked.iter() {
+        for (score, table) in ranked.iter() {
             if picked.len() >= FOCUS_MIN || *score <= 0 {
                 break;
             }
-            push(name, &mut picked);
+            push(table, &mut picked);
         }
         return (picked, "hit");
     }
 
-    // 全部 0 分：按表名前缀分组轮转，取一份跨家族的横切面
+    // 全部 0 分：按表名前缀分组轮转，取一份跨家族的横切面（每组先给行数最多的旗舰表）
     let prefix_of = |name: &str| -> String {
         name.split(|c: char| !c.is_ascii_alphanumeric())
             .find(|s| !s.is_empty() && s.chars().any(|c| c.is_ascii_alphabetic()))
             .unwrap_or(name)
             .to_ascii_lowercase()
     };
-    let mut groups: Vec<(String, Vec<&String>)> = Vec::new();
-    for name in tables {
-        let p = prefix_of(name);
+    let mut groups: Vec<(String, Vec<&TableInfo>)> = Vec::new();
+    for table in tables {
+        let p = prefix_of(&table.name);
         match groups.iter_mut().find(|(g, _)| *g == p) {
-            Some((_, list)) => list.push(name),
-            None => groups.push((p, vec![name])),
+            Some((_, list)) => list.push(table),
+            None => groups.push((p, vec![table])),
         }
+    }
+    for (_, list) in groups.iter_mut() {
+        list.sort_by_key(|t| std::cmp::Reverse(t.row_estimate.unwrap_or(0)));
     }
     let mut round = 0;
     loop {
@@ -313,8 +352,8 @@ fn pick_focus(tables: &[String], question: &str, named: &[String]) -> (Vec<Strin
         }
         let mut progressed = false;
         for (_, list) in &groups {
-            if let Some(name) = list.get(round) {
-                push(name, &mut picked);
+            if let Some(table) = list.get(round) {
+                push(table, &mut picked);
                 progressed = true;
                 if picked.len() >= FOCUS_MAX {
                     break;
@@ -1006,7 +1045,7 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
             "这个库里没有可查询的表（或当前账号看不到任何表），换一个库再问",
         ));
     }
-    let (focus, focus_how) = pick_focus(&names, &question, &req.tables);
+    let (focus, focus_how) = pick_focus(&tables, &question, &req.tables);
     // 候选确定后刷新一次进行中内容：让「正在读哪些表」实时可见，而不是黑盒等结果
     tracer.begin_with(
         "schema",
@@ -1676,28 +1715,60 @@ fn is_category_column(column: &dbmind_core::ColumnDetail) -> bool {
 mod tests {
     use super::*;
 
+    fn ti(name: &str, comment: Option<&str>) -> TableInfo {
+        TableInfo {
+            name: name.to_string(),
+            kind: TableKind::Table,
+            row_estimate: None,
+            comment: comment.map(str::to_string),
+        }
+    }
+
     #[test]
     fn score_prefers_whole_table_name() {
         let question = "order_detail 里最近的销售额是多少";
-        assert!(score_table("order_detail", question, question) > score_table("order_head", question, question));
+        assert!(
+            score_table(&ti("order_detail", None), question, question)
+                > score_table(&ti("order_head", None), question, question)
+        );
     }
 
     #[test]
     fn pick_focus_keeps_named_tables_first() {
-        let tables = vec!["a".to_string(), "orders".to_string(), "users".to_string()];
+        let tables = vec![ti("a", None), ti("orders", None), ti("users", None)];
         let (picked, how) = pick_focus(&tables, "有多少订单", &["orders".to_string()]);
         assert_eq!(picked.first().map(String::as_str), Some("orders"));
         assert_eq!(how, "named");
+    }
+
+    /// 表注释是中文时，注释 2-gram 直接命中中文问题 —— 不依赖词典，各行业通用。
+    #[test]
+    fn chinese_comment_directly_matches_chinese_question() {
+        let tables = vec![
+            ti("t_daily_agg", Some("商场销售日汇总")),
+            ti("sys_log_2024", Some("系统运行日志")),
+            ti("aibee_data_day", None),
+        ];
+        let (picked, how) = pick_focus(&tables, "近三个月商场每天的销售额怎么样？", &[]);
+        assert_eq!(how, "hit");
+        assert!(
+            picked.contains(&"t_daily_agg".to_string()),
+            "注释命中的表应进候选，实际：{picked:?}"
+        );
+        assert!(
+            !picked.contains(&"sys_log_2024".to_string()),
+            "只共享万金油词的日志表不该被拉进来，实际：{picked:?}"
+        );
     }
 
     /// 问题里直接写了表名（整名命中 100 分）：候选就它一张 —— 问题越聚焦候选越少。
     #[test]
     fn whole_name_hit_gives_a_tight_candidate_set() {
         let tables = vec![
-            "orders".to_string(),
-            "orders_2024".to_string(),
-            "users".to_string(),
-            "goods".to_string(),
+            ti("orders", None),
+            ti("orders_2024", None),
+            ti("users", None),
+            ti("goods", None),
         ];
         let (picked, how) = pick_focus(&tables, "orders 表里最近一天有多少单", &[]);
         assert_eq!(how, "hit");
@@ -1709,11 +1780,11 @@ mod tests {
     #[test]
     fn chinese_question_hits_sales_tables_via_synonyms() {
         let tables = vec![
-            "aibee_data_day".to_string(),
-            "bi_shop_sale".to_string(),
-            "xingwei_kechuan_sales".to_string(),
-            "xingwei_kechuan_passenger".to_string(),
-            "etl_wide_contractd".to_string(),
+            ti("aibee_data_day", None),
+            ti("bi_shop_sale", None),
+            ti("xingwei_kechuan_sales", None),
+            ti("xingwei_kechuan_passenger", None),
+            ti("etl_wide_contractd", None),
         ];
         let (picked, how) = pick_focus(&tables, "近三个月商场每天的销售额怎么样？", &[]);
         assert_eq!(how, "hit");
@@ -1729,7 +1800,7 @@ mod tests {
     /// 而不是只给字母序第一张 —— 那正是「只看到 aibee_data_day」的根因。
     #[test]
     fn zero_score_fallback_fills_focus_max() {
-        let tables: Vec<String> = (0..20).map(|i| format!("tzz_{i:02}")).collect();
+        let tables: Vec<TableInfo> = (0..20).map(|i| ti(&format!("tzz_{i:02}"), None)).collect();
         let (picked, how) = pick_focus(&tables, "最近情况怎么样", &[]);
         assert_eq!(how, "fallback");
         assert_eq!(picked.len(), FOCUS_MAX.min(tables.len()));
@@ -1738,10 +1809,10 @@ mod tests {
     /// 前缀横切面：不同家族的表都要露脸，而不是被某一家族占满。
     #[test]
     fn zero_score_fallback_spans_prefixes() {
-        let mut tables: Vec<String> = Vec::new();
+        let mut tables: Vec<TableInfo> = Vec::new();
         for p in ["aaa", "bbb", "ccc", "ddd"] {
             for i in 0..10 {
-                tables.push(format!("{p}_table_{i}"));
+                tables.push(ti(&format!("{p}_table_{i}"), None));
             }
         }
         let (picked, how) = pick_focus(&tables, "最近情况怎么样", &[]);

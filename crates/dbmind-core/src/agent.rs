@@ -1645,10 +1645,17 @@ pub fn map_tables(value: Value) -> Vec<TableInfo> {
                         Some("view") => TableKind::View,
                         _ => TableKind::Table,
                     };
+                    let comment = item
+                        .get("comment")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string);
                     Some(TableInfo {
                         name,
                         kind,
                         row_estimate: None,
+                        comment,
                     })
                 })
                 .collect()

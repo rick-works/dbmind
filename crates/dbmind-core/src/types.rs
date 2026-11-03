@@ -477,6 +477,13 @@ pub struct TableInfo {
     pub name: String,
     pub kind: TableKind,
     pub row_estimate: Option<i64>,
+    /// 表注释（数据库里配的 COMMENT / REMARKS）。
+    ///
+    /// 问数选表用它和中文问题做匹配 —— 表名是英文而业务词是中文时，
+    /// 中文注释是唯一的直接证据（见 web 层 ask 的候选打分）。
+    /// `serde(default)` 兼容旧的结构缓存 JSON（里面没有这个字段）。
+    #[serde(default)]
+    pub comment: Option<String>,
 }
 
 /// 结构缓存的概览（界面据此显示「缓存于 N 秒前」）。
