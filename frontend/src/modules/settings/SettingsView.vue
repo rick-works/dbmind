@@ -536,8 +536,8 @@
               >
                 <!-- 标签列 112px：「最大生成 Token」在 96px 下会折成两行，
                      整行的基线就歪了 -->
-                <el-form label-width="112px" label-position="left" class="set-form model-form">
-                  <!-- 名称 + 模型名并排：两者都是短标识，各占半行正好 -->
+                <!-- 统一两列网格：每行两个等宽字段，标签 96px，说明全收进问号气泡 -->
+                <el-form label-width="96px" label-position="left" class="set-form model-form">
                   <div class="form-row">
                     <el-form-item :label="$t('settings.ai.name')">
                       <el-input v-model="m.name" :placeholder="$t('settings.ai.namePlaceholder')" />
@@ -546,38 +546,45 @@
                       <el-input v-model="m.model" placeholder="deepseek-chat" />
                     </el-form-item>
                   </div>
-                  <el-form-item :label="$t('settings.ai.baseUrl')">
-                    <el-input v-model="m.baseUrl" placeholder="https://api.deepseek.com/v1" />
-                    <div class="form-tip">{{ $t('settings.ai.baseUrlTip') }}</div>
-                  </el-form-item>
-                  <el-form-item label="API Key">
-                    <!-- 「已配置」做成徽标：原先只写在 placeholder 里，输过一次之后
-                         就再也看不出这台机器到底存没存过 key -->
-                    <div class="key-row">
-                      <el-input v-model="m.apiKey" type="password" show-password autocomplete="new-password"
-                        :placeholder="m.hasKey ? $t('settings.ai.apiKeyPlaceholderSet') : $t('settings.ai.apiKeyPlaceholderNew')" />
-                      <span v-if="m.hasKey" class="key-badge">{{ $t('settings.ai.keySet') }}</span>
-                    </div>
-                  </el-form-item>
-                  <!-- 最大 Token + 向量化并排：两个都是「能力/限额」类配置 -->
                   <div class="form-row">
-                    <!-- 后端一直消费 maxTokens（进请求体），留空/0 = 不限制，跟随服务端默认 -->
-                    <el-form-item :label="$t('settings.ai.maxTokens')">
-                      <el-input-number v-model="m.maxTokens" :min="0" :max="200000" :step="1024"
-                        controls-position="right" style="width:100%" />
-                      <div class="form-tip">{{ $t('settings.ai.maxTokensTip') }}</div>
+                    <el-form-item>
+                      <template #label>
+                        <span class="lbl-q">{{ $t('settings.ai.baseUrl') }}<q-hint :text="$t('settings.ai.baseUrlTip')" /></span>
+                      </template>
+                      <el-input v-model="m.baseUrl" placeholder="https://api.deepseek.com/v1" />
                     </el-form-item>
-                    <el-form-item :label="$t('settings.ai.embedding')">
-                      <el-switch v-model="m.embedding" />
-                      <div class="form-tip">{{ $t('settings.ai.embeddingTip') }}</div>
+                    <el-form-item label="API Key">
+                      <!-- 「已配置」做成徽标：原先只写在 placeholder 里，输过一次之后
+                           就再也看不出这台机器到底存没存过 key -->
+                      <div class="key-row">
+                        <el-input v-model="m.apiKey" type="password" show-password autocomplete="new-password"
+                          :placeholder="m.hasKey ? $t('settings.ai.apiKeyPlaceholderSet') : $t('settings.ai.apiKeyPlaceholderNew')" />
+                        <span v-if="m.hasKey" class="key-badge">{{ $t('settings.ai.keySet') }}</span>
+                      </div>
                     </el-form-item>
                   </div>
-                  <!-- 采样温度：0 = 不发送该参数（跟随服务端默认），也绕开个别模型不认 temperature 的 400 -->
                   <div class="form-row">
-                    <el-form-item :label="$t('settings.ai.temperature')">
-                      <el-input-number v-model="m.temperature" :min="0" :max="2" :step="0.1" :precision="2"
+                    <el-form-item>
+                      <template #label>
+                        <span class="lbl-q">{{ $t('settings.ai.maxTokens') }}<q-hint :text="$t('settings.ai.maxTokensTip')" /></span>
+                      </template>
+                      <el-input-number v-model="m.maxTokens" :min="0" :max="200000" :step="1024"
                         controls-position="right" style="width:100%" />
-                      <div class="form-tip">{{ $t('settings.ai.temperatureTip') }}</div>
+                    </el-form-item>
+                    <el-form-item>
+                      <template #label>
+                        <span class="lbl-q">{{ $t('settings.ai.temperature') }}<q-hint :text="$t('settings.ai.temperatureTip')" /></span>
+                      </template>
+                      <el-input-number v-model="m.temperature" :min="0" :max="2" :step="0.1"
+                        controls-position="right" style="width:100%" />
+                    </el-form-item>
+                  </div>
+                  <div class="form-row">
+                    <el-form-item>
+                      <template #label>
+                        <span class="lbl-q">{{ $t('settings.ai.embedding') }}<q-hint :text="$t('settings.ai.embeddingTip')" /></span>
+                      </template>
+                      <el-switch v-model="m.embedding" />
                     </el-form-item>
                   </div>
                 </el-form>
@@ -1343,14 +1350,19 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, reactive, onMounted, onBeforeUnmount, nextTick } from 'vue'
-import { ElMessage, ElMessageBox } from 'element-plus'
+import { ref, computed, watch, reactive, onMounted, onBeforeUnmount, nextTick, h } from 'vue'
+import { ElMessage, ElMessageBox, ElTooltip, ElIcon } from 'element-plus'
 import {
   MagicStick, Connection, Brush, Box,
   FolderOpened, EditPen, DataLine, Download, Operation, Monitor, Plus, Delete,
   CircleCheck, Timer, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
-  ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder
+  ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder, QuestionFilled
 } from '@element-plus/icons-vue'
+
+/** 表单标签旁的问号提示：hover 出说明。界面不再平铺大段小字（看着乱），细节收进气泡里 */
+const QHint = (props) => h(ElTooltip, { content: props.text, placement: 'top', showAfter: 120 },
+  () => h(ElIcon, { class: 'q-ic' }, () => h(QuestionFilled)))
+QHint.props = ['text']
 // 连接下拉用全项目统一的那一个（分组 → 连接两级），与 SQL 编辑器 / 数据传输等页面同款样式
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
 import { topMenuAll, topMenuCfg, toggleTopMenu, moveTopMenu } from '../../utils/topMenu'
@@ -3309,6 +3321,9 @@ watch(visible, (v) => {
 .ai-settings .form-row {
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 18px;
 }
+/* 标签 + 问号：说明收进气泡，标签行保持单行不折 */
+.ai-settings .lbl-q { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.ai-settings .q-ic { font-size: 13px; color: var(--dc-text-dim, #8b93a7); cursor: help; }
 .ai-settings .form-row :deep(.el-input),
 .ai-settings .form-row :deep(.el-select),
 .ai-settings .form-row :deep(.el-input-number) { max-width: none; }
