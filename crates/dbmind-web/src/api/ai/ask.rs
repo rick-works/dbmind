@@ -38,9 +38,14 @@ use crate::AppState;
 
 /// 结果行数上限：图表最多也就几百个点，明细表再多也看不完。
 const ASK_MAX_ROWS: usize = 2000;
-/// 自动补位的候选表数量上限（每张表还要跑一次 `LIMIT 2` 取样例，别贪多）。
+/// 候选表数量的**上限**（不定死具体张数 —— 按问题命中强度自适应，见 [`pick_focus`]）。
+/// 上限只约束取样成本：每张候选还要读字段 + `LIMIT 2` 样例；
+/// token 侧另有 schema_context 的总字符预算兜底，超了会停在完整表上。
 /// 用户在界面里**点名**的表不受这条约束 —— 显式意图不该被截掉。
-const FOCUS_TABLES: usize = 6;
+const FOCUS_MAX: usize = 12;
+/// 强命中太少时向下一档分数扩到的数量 —— 给模型留几张「相近的表」做对比与排除，
+/// 也免得唯一候选一错，模型就只能编表名。
+const FOCUS_MIN: usize = 3;
 
 #[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -227,12 +232,18 @@ fn score_table(name: &str, question_lower: &str, question: &str) -> i32 {
     score
 }
 
-/// 挑候选表：
-/// - **用户点名了表（界面勾选的聚焦表）就只传点名的，别猜** —— 勾选就是显式限定候选范围；
-/// - 没点名才自动判断：关键词/同义词命中 → 全部 0 分时兜底给满 [`FOCUS_TABLES`] 张
-///   （字母序任取，但给模型 6 份真实表结构远好过 1 份 —— 至少它知道库里有什么字段，不用瞎编）。
+/// 挑候选表。返回 (候选, 选法)，选法用于执行过程里向用户解释「凭什么挑这几张」。
+///
+/// - **用户点名了表（界面勾选的聚焦表）就只传点名的，不设上限** —— 勾选是显式限定；
+/// - 没点名才自动判断，数量**按命中强度自适应**：
+///   - 有命中：与最高分同档（`score*2 >= best`）的全部收下；不足 [`FOCUS_MIN`] 张
+///     再向下一档分数补到 [`FOCUS_MIN`]，总数封顶 [`FOCUS_MAX`]。
+///     问题越聚焦候选越少（点名整名 → 1 张），问得越宽泛候选面越大；
+///   - 全部 0 分（问题与表名/同义词典都沾不上）：按**表名前缀轮转**取满 [`FOCUS_MAX`] 张
+///     横切面 —— 让模型看到「这个库里都有哪些家族的表」，而不是字母序第一张；
+///     有了真实字段在手，它至少能说出「库里没有销售表」，而不是编一个。
 /// - 点名的表一张都没对上（选错了库/表已删）时退回自动判断，别拿着空候选去问模型。
-fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String> {
+fn pick_focus(tables: &[String], question: &str, named: &[String]) -> (Vec<String>, &'static str) {
     let mut picked: Vec<String> = Vec::new();
     for want in named {
         if let Some(hit) = tables.iter().find(|t| t.eq_ignore_ascii_case(want.trim())) {
@@ -244,7 +255,7 @@ fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String
     }
     if !picked.is_empty() {
         // 点名了且至少对上一张：就按点名的来（一张没对上才走下面的自动判断）
-        return picked;
+        return (picked, "named");
     }
 
     // ---- 没点名（或点名全部没对上）：自动判断 ----
@@ -256,19 +267,66 @@ fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String
     ranked.sort_by(|a, b| b.0.cmp(&a.0));
     let best = ranked.first().map(|(s, _)| *s).unwrap_or(0);
 
-    for (score, name) in ranked {
-        if picked.len() >= FOCUS_TABLES {
-            break;
-        }
-        // 有命中（最高分 >0）：取完命中的就收手；全部 0 分：不再提前停，兜底给满几张
-        if score <= 0 && best > 0 {
-            break;
-        }
+    let mut push = |name: &String, picked: &mut Vec<String>| {
         if !picked.iter().any(|t| t.eq_ignore_ascii_case(name)) {
             picked.push(name.clone());
         }
+    };
+
+    if best > 0 {
+        // 与最高分同档的全收（best=100 的整名命中 → 只收 100 分的；
+        // best=30 时 20 分也算强档），不足 FOCUS_MIN 再向下一档补
+        for (score, name) in ranked.iter() {
+            if picked.len() >= FOCUS_MAX || *score * 2 < best {
+                break;
+            }
+            push(name, &mut picked);
+        }
+        for (score, name) in ranked.iter() {
+            if picked.len() >= FOCUS_MIN || *score <= 0 {
+                break;
+            }
+            push(name, &mut picked);
+        }
+        return (picked, "hit");
     }
-    picked
+
+    // 全部 0 分：按表名前缀分组轮转，取一份跨家族的横切面
+    let prefix_of = |name: &str| -> String {
+        name.split(|c: char| !c.is_ascii_alphanumeric())
+            .find(|s| !s.is_empty() && s.chars().any(|c| c.is_ascii_alphabetic()))
+            .unwrap_or(name)
+            .to_ascii_lowercase()
+    };
+    let mut groups: Vec<(String, Vec<&String>)> = Vec::new();
+    for name in tables {
+        let p = prefix_of(name);
+        match groups.iter_mut().find(|(g, _)| *g == p) {
+            Some((_, list)) => list.push(name),
+            None => groups.push((p, vec![name])),
+        }
+    }
+    let mut round = 0;
+    loop {
+        if picked.len() >= FOCUS_MAX {
+            break;
+        }
+        let mut progressed = false;
+        for (_, list) in &groups {
+            if let Some(name) = list.get(round) {
+                push(name, &mut picked);
+                progressed = true;
+                if picked.len() >= FOCUS_MAX {
+                    break;
+                }
+            }
+        }
+        if !progressed {
+            break;
+        }
+        round += 1;
+    }
+    (picked, "fallback")
 }
 
 // ------------------------------------------------------------------ 计划解析
@@ -948,7 +1006,7 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
             "这个库里没有可查询的表（或当前账号看不到任何表），换一个库再问",
         ));
     }
-    let focus = pick_focus(&names, &question, &req.tables);
+    let (focus, focus_how) = pick_focus(&names, &question, &req.tables);
     // 候选确定后刷新一次进行中内容：让「正在读哪些表」实时可见，而不是黑盒等结果
     tracer.begin_with(
         "schema",
@@ -971,9 +1029,14 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
             .cloned()
             .collect();
         let why = if named.is_empty() {
+            let how = match focus_how {
+                "hit" => "命中的按强度自适应收下（强档全要、太少再向下一档补几张扬长的），不是定死张数",
+                _ => "问题与表名完全对不上，我按表名前缀轮转取了一批跨家族的表当横切面 —— 至少让下一步看到这个库里真实有什么字段，而不是凭空编",
+            };
             format!(
-                "问题里没有点名具体表，我把问题关键词与全部 {} 张表的表名逐个匹配打分（整表名命中权重最高；中文业务词按同义映射折算成英文片段再匹配，如 销售→sale、客流→passenger），取分数最高的 {} 张做候选（{}）",
+                "问题里没有点名具体表，我把问题关键词与全部 {} 张表的表名逐个匹配打分（整表名命中权重最高；中文业务词按同义映射折算成英文片段再匹配，如 销售→sale、客流→passenger）。{}，本次 {} 张（{}）",
                 names.len(),
+                how,
                 focus.len(),
                 focus.join("、")
             )
@@ -1622,9 +1685,23 @@ mod tests {
     #[test]
     fn pick_focus_keeps_named_tables_first() {
         let tables = vec!["a".to_string(), "orders".to_string(), "users".to_string()];
-        let picked = pick_focus(&tables, "有多少订单", &["orders".to_string()]);
+        let (picked, how) = pick_focus(&tables, "有多少订单", &["orders".to_string()]);
         assert_eq!(picked.first().map(String::as_str), Some("orders"));
-        assert!(picked.len() <= FOCUS_TABLES);
+        assert_eq!(how, "named");
+    }
+
+    /// 问题里直接写了表名（整名命中 100 分）：候选就它一张 —— 问题越聚焦候选越少。
+    #[test]
+    fn whole_name_hit_gives_a_tight_candidate_set() {
+        let tables = vec![
+            "orders".to_string(),
+            "orders_2024".to_string(),
+            "users".to_string(),
+            "goods".to_string(),
+        ];
+        let (picked, how) = pick_focus(&tables, "orders 表里最近一天有多少单", &[]);
+        assert_eq!(how, "hit");
+        assert!(picked.iter().all(|t| t.starts_with("orders")), "实际：{picked:?}");
     }
 
     /// 真机回归：426 张表、全英文表名、中文问题 —— 同义映射必须把销售类表拉进候选，
@@ -1638,20 +1715,41 @@ mod tests {
             "xingwei_kechuan_passenger".to_string(),
             "etl_wide_contractd".to_string(),
         ];
-        let picked = pick_focus(&tables, "近三个月商场每天的销售额怎么样？", &[]);
+        let (picked, how) = pick_focus(&tables, "近三个月商场每天的销售额怎么样？", &[]);
+        assert_eq!(how, "hit");
         assert!(
             picked.iter().any(|t| t.contains("sale") || t.contains("sales")),
             "销售表应进候选，实际：{picked:?}"
         );
+        // 「商场」→ shop/mall：bi_shop_sale 的分应高于纯 passenger 表
+        assert!(picked.first().map(|t| t.contains("shop") || t.contains("sale")).unwrap_or(false));
     }
 
-    /// 全部 0 分（问题与表名完全沾不上边）时兜底要给满 FOCUS_TABLES 张，
+    /// 全部 0 分（问题与表名完全沾不上边）时按前缀轮转兜底：同一前缀的家族给满上限，
     /// 而不是只给字母序第一张 —— 那正是「只看到 aibee_data_day」的根因。
     #[test]
-    fn zero_score_fallback_fills_focus_tables() {
+    fn zero_score_fallback_fills_focus_max() {
         let tables: Vec<String> = (0..20).map(|i| format!("tzz_{i:02}")).collect();
-        let picked = pick_focus(&tables, "最近情况怎么样", &[]);
-        assert_eq!(picked.len(), FOCUS_TABLES.min(tables.len()));
+        let (picked, how) = pick_focus(&tables, "最近情况怎么样", &[]);
+        assert_eq!(how, "fallback");
+        assert_eq!(picked.len(), FOCUS_MAX.min(tables.len()));
+    }
+
+    /// 前缀横切面：不同家族的表都要露脸，而不是被某一家族占满。
+    #[test]
+    fn zero_score_fallback_spans_prefixes() {
+        let mut tables: Vec<String> = Vec::new();
+        for p in ["aaa", "bbb", "ccc", "ddd"] {
+            for i in 0..10 {
+                tables.push(format!("{p}_table_{i}"));
+            }
+        }
+        let (picked, how) = pick_focus(&tables, "最近情况怎么样", &[]);
+        assert_eq!(how, "fallback");
+        let prefixes: Vec<&str> = picked.iter().map(|t| t.split('_').next().unwrap()).collect();
+        for p in ["aaa", "bbb", "ccc", "ddd"] {
+            assert!(prefixes.contains(&p), "前缀 {p} 应出现在横切面里，实际：{picked:?}");
+        }
     }
 
     #[test]
