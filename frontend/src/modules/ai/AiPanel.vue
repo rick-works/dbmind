@@ -909,6 +909,8 @@ const advancedTabs = computed(() => tabs.value.filter(t => t.key !== 'chat'))
 const messages = ref([])
 /** 当前会话 id（空 = 还没开始，第一句会带着 persist 让后端建） */
 const chatThreadId = ref('')
+/** 当前问数对话的本地记录 id：追问并进同一条「记录」，新对话才另起一条 */
+const askThreadId = ref('')
 /** 深挖模式：走 /api/ai/agent，让它自己查库、出变更单 */
 const agentMode = ref(false)
 /** 同事抽屉：待办 + 记忆 */
@@ -1661,8 +1663,10 @@ const runAskInChat = async (text) => {
       { signal: ctrl.signal },
     )
     msg.askAnswer = res
-    // 落一条本地历史：问数不进服务端会话，左栏「记录」靠它才能回看
-    saveAskHistory(q, res)
+    // 落本地历史：问数不进服务端会话，左栏「记录」靠它才能回看。
+    // 以对话为单位 —— 同一段对话里的追问并入同一条记录，只有「新对话」才另起一条
+    const rec = saveAskHistory(q, res, askThreadId.value)
+    if (rec?.id) askThreadId.value = rec.id
     askHist.value = listAskHistory()
   } catch (e) {
     // 卡在流里的半截过程不留在界面上：换成一条明确的错误消息
@@ -2112,20 +2116,29 @@ const dayOf = (value) => {
 
 /** 本地问数历史：问数走 /api/ai/ask 不落服务端会话，靠这份本地记录让左栏也能回看 */
 const askHist = ref(listAskHistory() || [])
-/** 点一条问数记录：把「问题 + 完整回答」原样铺回对话流，并把技能切到「智能问数」 */
+/**
+ * 点一条问数记录：把这段对话**整段**铺回对话流（每一轮问答，不只最后一轮），
+ * 并把技能切到「智能问数」；之后继续追问仍并回这条记录。
+ */
 const openAskHistory = (h) => {
   if (!h || !h.answer) return
   tab.value = 'ask'
   chatThreadId.value = ''
-  messages.value = [
-    { role: 'user', content: h.question },
-    { role: 'assistant', content: '', askAnswer: h.answer },
-  ]
+  askThreadId.value = h.id
+  // 新结构按 turns 回放；老版本条目（一条记录 = 一轮）走兜底
+  const turns = Array.isArray(h.turns) && h.turns.length
+    ? h.turns
+    : [{ q: h.question, answer: h.answer }]
+  messages.value = turns.flatMap((t) => [
+    { role: 'user', content: t.q },
+    { role: 'assistant', content: '', askAnswer: t.answer },
+  ])
   scrollBottom()
 }
 const deleteAskHistory = (h) => {
   if (!h?.id) return
   removeAskHistory(h.id)
+  if (askThreadId.value === h.id) askThreadId.value = ''
   askHist.value = listAskHistory()
 }
 
@@ -2168,6 +2181,9 @@ const applyThread = async (id) => {
   const detail = await aiThreadGet(id)
   const rows = detail?.messages || []
   chatThreadId.value = id
+  // 会话内容被对话线程整个换掉了：问数记录的「当前对话」也随之作废，
+  // 之后的追问该另起一条记录，而不是并进一条八竿子打不着的旧记录
+  askThreadId.value = ''
   messages.value = rows.map(row => ({
     role: row.role,
     // 老会话里存着「（只基于表 … 回答…）」这段元指令：不剥掉的话，重开记录就看见
@@ -2236,6 +2252,7 @@ const deleteThread = async (th) => {
 
 const newThread = () => {
   chatThreadId.value = ''
+  askThreadId.value = ''
   messages.value = []
   ElMessage.success(t('ai.newThreadDone'))
 }
