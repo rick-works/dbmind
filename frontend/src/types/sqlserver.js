@@ -57,6 +57,15 @@ export default {
     return out
   },
   showDbDdlSql(db) {
-    return `SELECT 'CREATE DATABASE [' + name + '];' AS ddl FROM sys.databases WHERE name = '${String(db ?? '')}'`
+    // 完整建库语句：库名 + 排序规则 + 数据/日志文件（逻辑名、物理路径、初始大小、上限、增长）+ 恢复模式。
+    // 文件行用 FOR XML PATH 聚合（兼容 2017 之前的版本，不用 STRING_AGG）；
+    // size/growth 是 8KB 页数，/128 = MB；max_size=-1 表示无限。
+    // 目录视图列（sys.databases/sys.master_files）是服务器排序规则，与当前库字面量拼接会报
+    // "Cannot resolve collation conflict"（实测 2022，库上下文是 SQL_Latin1_General_CP1_CI_AS）——
+    // 每个目录列统一 COLLATE DATABASE_DEFAULT 归到当前库排序规则。
+    const q = String(db ?? '').replace(/'/g, "''")
+    const fileRow = (type, sep, skip) => `STUFF((SELECT '${sep}' + CHAR(13) + CHAR(10) + '  (NAME = [' + f.name COLLATE DATABASE_DEFAULT + '], FILENAME = N''' + f.physical_name COLLATE DATABASE_DEFAULT + ''', SIZE = ' + CAST(f.size / 128 AS varchar(20)) + ' MB, MAXSIZE = ' + CASE WHEN f.max_size = -1 THEN 'UNLIMITED' ELSE CAST(f.max_size / 128 AS varchar(20)) + ' MB' END + ', FILEGROWTH = ' + CASE WHEN f.is_percent_growth = 1 THEN CAST(f.growth AS varchar(20)) + '%' ELSE CAST(f.growth / 128 AS varchar(20)) + ' MB' END + ')'` +
+      ` FROM sys.master_files f WHERE f.database_id = d.database_id AND f.type_desc = '${type}' FOR XML PATH(''), TYPE).value('.', 'nvarchar(max)'), 1, ${skip}, '')`
+    return `SELECT 'CREATE DATABASE [' + d.name COLLATE DATABASE_DEFAULT + '] COLLATE ' + d.collation_name COLLATE DATABASE_DEFAULT + CHAR(13) + CHAR(10) + 'ON PRIMARY' + ${fileRow('ROWS', '', 2)} + CHAR(13) + CHAR(10) + 'LOG ON' + ${fileRow('LOG', ',', 1)} + ';' + CHAR(13) + CHAR(10) + 'ALTER DATABASE [' + d.name COLLATE DATABASE_DEFAULT + '] SET RECOVERY ' + d.recovery_model_desc COLLATE DATABASE_DEFAULT + ';' AS ddl FROM sys.databases d WHERE d.name = N'${q}'`
   }
 }
