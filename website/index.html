@@ -747,6 +747,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v2.0.2（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.2</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-03</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>智能问数选表大幅增强</b>：中文问题自动匹配英文表名（销售→sale、客流→passenger 等同义映射）与数据库表注释，候选表数量随问题自适应——点名只给命中的，问得宽泛多给几张</li>
+            <li><b>修复中文问题在英文表名的库里只看到一张候选表、模型只能反问甚至编造表名的问题；现在常见销售/客流/会员类问题可以直接出答案</b></li>
+            <li><b>表清单带数据库注释参与匹配，同分时优先给数据量大的表；「选表思路」会如实解释这次为什么挑这几张</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v2.0.2" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v2.0.2" target="_blank" rel="noopener">下载 v2.0.2</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.1（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -754,7 +775,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.1</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-03</span>
           </div>
           <ul class="rel-notes">
