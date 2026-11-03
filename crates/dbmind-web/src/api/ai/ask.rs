@@ -38,7 +38,8 @@ use crate::AppState;
 
 /// 结果行数上限：图表最多也就几百个点，明细表再多也看不完。
 const ASK_MAX_ROWS: usize = 2000;
-/// 喂给模型的候选表数量上限（每张表还要跑一次 `LIMIT 2` 取样例，别贪多）。
+/// 自动补位的候选表数量上限（每张表还要跑一次 `LIMIT 2` 取样例，别贪多）。
+/// 用户在界面里**点名**的表不受这条约束 —— 显式意图不该被截掉。
 const FOCUS_TABLES: usize = 6;
 
 #[derive(Deserialize, Default)]
@@ -165,7 +166,8 @@ fn score_table(name: &str, question_lower: &str) -> i32 {
     score
 }
 
-/// 挑候选表：点名表优先 → 关键词命中 → 兜底给前几张（总比一张都不给强）。
+/// 挑候选表：**用户点名的表全部保留**（界面勾选/提问点名的显式意图，不该被上限截掉）
+/// → 关键词命中自动补位（受 FOCUS_TABLES 约束，含已点名的）→ 兜底给前几张（总比一张都不给强）。
 fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String> {
     let lower = question.to_ascii_lowercase();
     let mut ranked: Vec<(i32, &String)> = tables
@@ -177,7 +179,10 @@ fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String
     let mut picked: Vec<String> = Vec::new();
     for want in named {
         if let Some(hit) = tables.iter().find(|t| t.eq_ignore_ascii_case(want.trim())) {
-            picked.push(hit.clone());
+            let hit = hit.clone();
+            if !picked.contains(&hit) {
+                picked.push(hit);
+            }
         }
     }
     for (score, name) in ranked {
@@ -191,7 +196,6 @@ fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String
             picked.push(name.clone());
         }
     }
-    picked.truncate(FOCUS_TABLES);
     picked
 }
 

@@ -1593,12 +1593,23 @@ const aiSubTabs = [
 ]
 const aiSubTab = ref('basic')
 
-// 用 computed：模块级数组只在加载时求值一次，切换语言后预设名不会跟着变
+// 用 computed：模块级数组只在加载时求值一次，切换语言后预设名不会跟着变。
+// 全部是 OpenAI 兼容端点（后端按 /chat/completions 调用）；国内厂商在前，海外在后
 const presets = computed(() => [
   { name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
   { name: t('settings.ai.presetQwen'), baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
-  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  { name: t('settings.ai.presetZhipu'), baseUrl: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4-flash' },
   { name: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  { name: t('settings.ai.presetDoubao'), baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-pro-32k' },
+  { name: t('settings.ai.presetQianfan'), baseUrl: 'https://qianfan.baidubce.com/v2', model: 'ernie-4.0-turbo-8k' },
+  { name: t('settings.ai.presetSpark'), baseUrl: 'https://spark-api-open.xf-yun.com/v1', model: 'generalv3.5' },
+  { name: 'MiniMax', baseUrl: 'https://api.minimax.chat/v1', model: 'abab6.5s-chat' },
+  { name: t('settings.ai.presetSiliconFlow'), baseUrl: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen2.5-7B-Instruct' },
+  { name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  { name: 'Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', model: 'gemini-2.0-flash' },
+  { name: 'xAI', baseUrl: 'https://api.x.ai/v1', model: 'grok-3-mini' },
+  { name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1', model: 'llama-3.3-70b-versatile' },
+  { name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', model: 'openai/gpt-4o-mini' },
   { name: t('settings.ai.presetOllamaLocal'), baseUrl: 'http://localhost:11434/v1', model: 'qwen2.5' }
 ])
 

@@ -366,44 +366,65 @@
                 <template #dropdown>
                   <div class="ai-dd-head">{{ $t('ai.pickSource') }}</div>
                   <el-dropdown-menu class="ai-model-menu ctx-menu">
-                    <template v-for="item in ctxFlatItems" :key="item.value">
-                      <!-- 表 = 多选聚焦：普通 li（点击只切换勾选，不触发 command、不关下拉、不换上下文） -->
-                      <li v-if="item.value.startsWith('tb:')"
-                          class="ctx-item ctx-tb-row"
-                          :class="{ 'is-checked': ctxTables.includes(item.label) }"
-                          :style="{ paddingLeft: (10 + item.level * 16) + 'px' }"
-                          @click.stop="toggleCtxTable(item)"
-                      >
-                        <span class="ctx-caret-spacer"></span>
-                        <el-icon :size="13" class="ctx-level-ic"><component :is="Tickets" /></el-icon>
-                        <span class="ctx-label">{{ item.label }}</span>
-                        <el-icon v-if="ctxTables.includes(item.label)" class="skills-check"><Select /></el-icon>
-                      </li>
-                      <el-dropdown-item
-                        v-else
-                        :command="item.value"
-                        :class="{
-                          'ctx-item': true,
-                          active: ctxSelectedValue === item.value,
-                          'is-parent': item.expandable,
-                          'is-expanded': item.expanded,
-                          ['lv-' + item.level]: true
-                        }"
-                        :style="{ paddingLeft: (10 + item.level * 16) + 'px' }"
-                      >
-                        <el-icon v-if="item.expandable" :size="10" class="ctx-caret" :class="{ expanded: item.expanded }">
-                          <ArrowRight />
-                        </el-icon>
-                        <span v-else class="ctx-caret-spacer"></span>
-                        <!-- 连接行用数据库类型 logo（与连接对话框/数据源弹窗同一套图标），分组/库/模式仍用线性图标 -->
-                        <DbLogo v-if="item.value.startsWith('conn:')" class="ctx-db-logo" :type="ctxConnType(item)" :size="14" />
-                        <el-icon v-else :size="13" class="ctx-level-ic"><component :is="ctxLevelIcon(item)" /></el-icon>
-                        <span class="ctx-label">{{ item.label }}</span>
-                        <el-icon v-if="ctxSelectedValue === item.value" class="skills-check"><Select /></el-icon>
-                      </el-dropdown-item>
-                    </template>
+                    <el-dropdown-item
+                      v-for="item in ctxFlatItems"
+                      :key="item.value"
+                      :command="item.value"
+                      :class="{
+                        'ctx-item': true,
+                        active: ctxSelectedValue === item.value,
+                        'is-parent': item.expandable,
+                        'is-expanded': item.expanded,
+                        ['lv-' + item.level]: true
+                      }"
+                      :style="{ paddingLeft: (10 + item.level * 16) + 'px' }"
+                    >
+                      <el-icon v-if="item.expandable" :size="10" class="ctx-caret" :class="{ expanded: item.expanded }">
+                        <ArrowRight />
+                      </el-icon>
+                      <span v-else class="ctx-caret-spacer"></span>
+                      <!-- 连接行用数据库类型 logo（与连接对话框/数据源弹窗同一套图标），分组/库/模式仍用线性图标 -->
+                      <DbLogo v-if="item.value.startsWith('conn:')" class="ctx-db-logo" :type="ctxConnType(item)" :size="14" />
+                      <el-icon v-else :size="13" class="ctx-level-ic"><component :is="ctxLevelIcon(item)" /></el-icon>
+                      <span class="ctx-label">{{ item.label }}</span>
+                      <el-icon v-if="ctxSelectedValue === item.value" class="skills-check"><Select /></el-icon>
+                    </el-dropdown-item>
                     <el-dropdown-item v-if="!ctxFlatItems.length" disabled class="ctx-item ctx-empty">
                       {{ $t('ai.noConn') }}
+                    </el-dropdown-item>
+                  </el-dropdown-menu>
+                </template>
+              </el-dropdown>
+
+              <!-- 聚焦表（多选）：独立的表选择器 —— 深藏在数据源下拉的第三/四层里根本用不了
+                   （用户反馈「把表挪到外面来显示」）：顶层入口 + 搜索框 + 勾选列表。
+                   没选库时禁用；列表懒加载，键是 连接|库(库.模式)。 -->
+              <el-dropdown ref="tbDropRef" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
+                           :hide-on-click="false" @visible-change="onTbVisible">
+                <button class="composer-ctx" :class="{ open: tbOpen }" type="button"
+                        :disabled="!ctxEffectiveDatabase" :title="ctxTables.join('、')">
+                  <el-icon :size="12"><Tickets /></el-icon>
+                  <span class="composer-ctx-tx">{{ tbLabel }}</span>
+                  <span v-if="ctxTables.length" class="composer-tb-badge">{{ ctxTables.length }}</span>
+                  <el-icon :size="12" class="composer-ctx-caret"><ArrowDown /></el-icon>
+                </button>
+                <template #dropdown>
+                  <div class="ai-dd-head">{{ $t('ai.pickTables') }}</div>
+                  <div class="tb-search">
+                    <el-input v-model="tbKeyword" size="small" clearable :prefix-icon="Search"
+                              :placeholder="$t('ai.tbSearch')" />
+                  </div>
+                  <el-dropdown-menu class="ai-model-menu ctx-menu tb-menu">
+                    <li v-for="name in tbFiltered" :key="name"
+                        class="ctx-item ctx-tb-row"
+                        :class="{ 'is-checked': ctxTables.includes(name) }"
+                        @click.stop="toggleCtxTable(name)">
+                      <el-icon :size="13" class="ctx-level-ic"><component :is="Tickets" /></el-icon>
+                      <span class="ctx-label">{{ name }}</span>
+                      <el-icon v-if="ctxTables.includes(name)" class="skills-check"><Select /></el-icon>
+                    </li>
+                    <el-dropdown-item v-if="!tbFiltered.length" disabled class="ctx-item ctx-empty">
+                      {{ tbLoading ? $t('ai.tbLoading') : $t('ai.tbNone') }}
                     </el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
@@ -567,7 +588,7 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
+import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
   aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
@@ -642,12 +663,63 @@ const modelDropRef = ref(null)
 const closeSkillDrop = () => skillDropRef.value?.handleClose?.()
 const closeCtxDrop = () => ctxDropRef.value?.handleClose?.()
 const closeModelDrop = () => modelDropRef.value?.handleClose?.()
+const tbDropRef = ref(null)
+const closeTbDrop = () => tbDropRef.value?.handleClose?.()
+
+// ===== 聚焦表（多选）：工具条上独立的表选择器 =====
+const tbOpen = ref(false)
+const tbItems = ref([])          // 当前上下文的全部表名
+const tbLoading = ref(false)
+const tbKeyword = ref('')
+const tbKey = ref('')            // 连接|库(库.模式)：换上下文自动重拉
+const tbFiltered = computed(() => {
+  const kw = tbKeyword.value.trim().toLowerCase()
+  if (!kw) return tbItems.value
+  return tbItems.value.filter(n => n.toLowerCase().includes(kw))
+})
+const tbLabel = computed(() => ctxTables.value.length === 1 ? ctxTables.value[0]
+  : ctxTables.value.length ? t('ai.tbCount', { n: ctxTables.value.length })
+    : t('ai.pickTables'))
+/** 打开时懒加载表清单：键没变（还是同一个连接+库）就不重复请求 */
+const loadTbItems = async () => {
+  const key = `${ctxConnId.value || ''}|${ctxEffectiveDatabase.value || ''}`
+  if (!ctxEffectiveDatabase.value) { tbItems.value = []; tbKey.value = key; return }
+  if (tbKey.value === key) return
+  tbKey.value = key
+  tbItems.value = []
+  tbLoading.value = true
+  try {
+    const raw = await listTables(ctxConnId.value, ctxEffectiveDatabase.value)
+    tbItems.value = (raw || [])
+      .map(x => (typeof x === 'string' ? x : (x.name || x.table || '')))
+      .filter(Boolean)
+  } catch { tbItems.value = [] }
+  tbLoading.value = false
+}
+/** 表下拉展开/收起：关其它下拉 + 懒加载表清单（搜索词每次清空，重新找） */
+const onTbVisible = (visible) => {
+  tbOpen.value = visible
+  if (!visible) return
+  closeSkillDrop()
+  closeCtxDrop()
+  closeModelDrop()
+  kbDropRef.value?.handleClose?.()
+  tbKeyword.value = ''
+  loadTbItems()
+}
+/** 勾选/取消一张聚焦表：只动 ctxTables —— 不关下拉、不换连接/库上下文 */
+const toggleCtxTable = (name) => {
+  const i = ctxTables.value.indexOf(name)
+  if (i >= 0) ctxTables.value.splice(i, 1)
+  else ctxTables.value.push(name)
+}
 /** Skills 下拉展开/收起：同步状态并关闭其它下拉 */
 const onSkillVisible = (visible) => {
   skillsOpen.value = visible
   if (!visible) return
   ctxDropRef.value?.handleClose?.()
   closeModelDrop()
+  closeTbDrop()
 }
 /** 选择 Skill：切换能力（下拉自动收起）。返回是否真的切了（斜杠命令用它决定要不要提示） */
 const pickSkill = (key) => {
@@ -696,10 +768,8 @@ const contextLabel = computed(() => {
   // 把服务名（FREE）在这儿再拼一遍只是重复 —— 左侧树、SQL 编辑器工具条都已经不显示它了，
   // 同一个东西不该在三处有两种说法。
   const dbPart = hideDbLevelOf(conn?.type || props.conn?.type) ? '' : ctxDatabase.value
-  // 聚焦表：一张就报名字，多张报数量（悬停工具条有完整名单，见 pill 的 title）
-  const tbPart = ctxTables.value.length === 1 ? ctxTables.value[0]
-    : ctxTables.value.length > 1 ? `${ctxTables.value.length} 张表` : ''
-  return [name, dbPart, ctxSchema.value, tbPart].filter(Boolean).join(' · ')
+  // 聚焦表在**自己的 pill**上显示（「表」选择器），不再拼进数据源标签里
+  return [name, dbPart, ctxSchema.value].filter(Boolean).join(' · ')
 })
 
 /** 输入框实例（点击示例后聚焦用） */
@@ -769,6 +839,7 @@ const onKbVisible = (v) => {
   if (!v) return
   ctxDropRef.value?.handleClose?.()
   closeModelDrop()
+  closeTbDrop()
 }
 
 const toggleKbPick = (id) => {
@@ -1197,6 +1268,7 @@ const onCtxVisible = async (visible) => {
   if (!visible) return
   closeSkillDrop()
   closeModelDrop()
+  closeTbDrop()
   if (ctxFlatItems.value.length === 0) await loadCtxConnections()
   await revealCtxSelection()
 }
@@ -1347,42 +1419,21 @@ const loadCtxChildren = async (item) => {
         children = (raw || [])
           .map(s => (typeof s === 'string' ? s : (s.name || s.schema || '')))
           .filter(Boolean)
-          .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, true, item.value))
+          .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, false, item.value))
         ctxCache.value.set(item.value, children)
         return children
       }
       const dbs = await listDatabases(connId)
-      // 库一律可展开：需要模式的类型下挂模式，其余直接下挂表（问数聚焦表要多选到表）
-      children = (dbs || []).map(d => makeCtxItem('db:' + d, String(d), item.level + 1, true, item.value))
+      const needSchema = connNeedsSchema(connId)
+      children = (dbs || []).map(d => makeCtxItem('db:' + d, String(d), item.level + 1, needSchema, item.value))
     } else if (item.value.startsWith('db:')) {
       const connId = ctxUnwrap(item.parentValue)
       const db = ctxUnwrap(item.value)
-      if (connNeedsSchema(connId)) {
-        const raw = await listSchemas(connId, db)
-        children = (raw || [])
-          .map(s => (typeof s === 'string' ? s : (s.name || s.schema || '')))
-          .filter(Boolean)
-          .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, true, item.value))
-      } else {
-        // 不需要模式的类型：库下面直接列表（问数聚焦表要多选到表）
-        const raw = await listTables(connId, db)
-        children = (raw || [])
-          .map(t => (typeof t === 'string' ? t : (t.name || t.table || '')))
-          .filter(Boolean)
-          .map(t => makeCtxItem('tb:' + t, String(t), item.level + 1, false, item.value))
-      }
-    } else if (item.value.startsWith('sc:')) {
-      // 模式下的表：database 走「库.模式」复合参数（与左侧树/表级接口同一口径）
-      const connId = ctxUnwrap(item.parentValue)
-      const schema = ctxUnwrap(item.value)
-      const parent = ctxFlatItems.value.find(i => i.value === item.parentValue)
-      const dbPart = parent?.value.startsWith('db:') ? ctxUnwrap(parent.value)
-        : ((connList.value || []).find(c => String(c.id) === String(connId))?.database || '')
-      const raw = await listTables(connId, dbPart ? `${dbPart}.${schema}` : schema)
+      const raw = await listSchemas(connId, db)
       children = (raw || [])
-        .map(t => (typeof t === 'string' ? t : (t.name || t.table || '')))
+        .map(s => (typeof s === 'string' ? s : (s.name || s.schema || '')))
         .filter(Boolean)
-        .map(t => makeCtxItem('tb:' + t, String(t), item.level + 1, false, item.value))
+        .map(s => makeCtxItem('sc:' + s, String(s), item.level + 1, false, item.value))
     }
   } catch (e) { /* ignore */ }
   ctxCache.value.set(item.value, children)
@@ -1424,16 +1475,6 @@ const selectCtxByItem = (item) => {
   // 不清的话会出现「已经切到别的库了，提问还被"只基于表 X 回答"绑着」。
   // （右键「发送到 AI」那条路不走这里 —— 它直接设 ctxTables，见 applyPending）
   ctxTables.value = []
-}
-
-/** 表的**多选**聚焦：勾上/取消只动 ctxTables —— 不换连接/库上下文、不清别的勾选、不关下拉。
- *  （表行是普通 li + @click.stop，不会触发 el-dropdown 的 command，天然不收起）
- *  换连接/库时在 selectCtxByItem 里整组清空。 */
-const toggleCtxTable = (item) => {
-  const name = item.label
-  const i = ctxTables.value.indexOf(name)
-  if (i >= 0) ctxTables.value.splice(i, 1)
-  else ctxTables.value.push(name)
 }
 
 /** 处理上下文下拉命令：

@@ -1259,6 +1259,16 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
 }
 .ai-model-dropdown .el-dropdown-menu__item.lv-2 .ctx-label { font-size: 13px; color: var(--dc-text-weak); }
 .ai-model-dropdown .ctx-empty { color: var(--dc-text-dim); justify-content: center; }
+/* ===== 聚焦表选择器（工具条独立 pill + 搜索 + 多选列表）===== */
+.ai-model-dropdown .tb-search { padding: 2px 10px 8px; }
+.ai-model-dropdown .tb-menu { max-height: 300px; overflow: auto; }
+/* 勾选数量小徽标：贴在 pill 文案右侧 */
+.composer-tb-badge {
+  flex-shrink: 0; min-width: 14px; padding: 0 4px; border-radius: 8px;
+  background: var(--dc-primary); color: #fff;
+  font-size: 10px; line-height: 14px; text-align: center;
+}
+.composer-ctx:disabled { opacity: .45; cursor: not-allowed; }
 /* 表行（多选聚焦）：普通 li 吃不到 .el-dropdown-menu__item 的基础样式，这里补齐；
    点击只切换勾选（@click.stop），下拉保持打开 —— 连接/库仍是 el-dropdown-item 行为 */
 .ai-model-dropdown li.ctx-tb-row {
