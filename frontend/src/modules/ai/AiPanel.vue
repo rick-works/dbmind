@@ -257,9 +257,9 @@
                     </div>
                   </div>
                 </div>
-                <!-- 用量脚注：与 SQL 查询里 AI 弹窗共用同一个组件（common/AiUsageNote.vue），
-                     上游没回 usage 就整块不渲染；气泡里跟随正文左对齐 -->
-                <AiUsageNote :usage="m.usage" align="left" />
+                <!-- 用量脚注：与 SQL 查询里 AI 弹窗、问数卡片共用同一个组件（common/AiUsageNote.vue），
+                     上游没回 usage 就整块不渲染；全项目统一右对齐 -->
+                <AiUsageNote :usage="m.usage" align="right" />
               </div>
             </div>
             <div v-if="showTyping" class="msg assistant">
@@ -509,12 +509,14 @@
                         :title="listening ? $t('ai.voiceStop') : $t('ai.voiceStart')" @click="toggleVoice">
                   <el-icon :size="14"><Microphone /></el-icon>
                 </button>
-                <!-- 生成中变「停止」键：点一下真掐断（流式/问数/深挖都挂在统一中断入口上） -->
+                <!-- 生成中变「停止」键：点一下真掐断（流式/问数/深挖都挂在统一中断入口上）。
+                     停止态用实心红底 + 白色方块（停止的通用符号），与发送态的蓝色明显区分 -->
                 <el-button type="primary" class="composer-run" :class="{ 'is-stop': generating }"
                            :disabled="!generating && !canRun"
                            :title="generating ? $t('ai.stopGen') : runLabel"
                            @click="generating ? stopGenerating() : runSkill()">
-                  <el-icon><VideoPause v-if="generating" /><Promotion v-else /></el-icon>
+                  <span v-if="generating" class="stop-sq" />
+                  <el-icon v-else><Promotion /></el-icon>
                 </el-button>
               </div>
             </div>
@@ -588,10 +590,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent, toRef } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete, VideoPause } from '@element-plus/icons-vue'
+import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
   aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
@@ -635,7 +637,11 @@ const isStudio = computed(() => props.mode === 'studio')
  */
 const emit = defineEmits(['insert-sql', 'close', 'panel', 'run-plan', 'open-knowledge'])
 
-const tab = ref('chat')
+// 技能页签 / 对话 / 问数记录上下文都放在跨卸载的模块级 store（panelState.js）：
+// 中央工作区切走页签再切回来，对话原样还在 —— 只有「新对话」才清空
+import { panelState } from './panelState.js'
+const _ps = panelState[props.mode === 'studio' ? 'studio' : 'panel']
+const tab = toRef(_ps, 'tab')
 
 /**
  * Skills：把「能力」作为可切换的技能，由用户自己选择。
@@ -906,11 +912,12 @@ const advancedTabs = computed(() => tabs.value.filter(t => t.key !== 'chat'))
 
 // 对话历史以**服务端会话**为准：面板打开时恢复最近一次，「新对话」按钮清空。
 // 只有这个面板会把 persist 传给后端 —— 一次性接口（测试连接、知识库问答）不落库。
-const messages = ref([])
+// 三者都放跨卸载的模块级 store（panelState.js）：中央工作区切页签卸载也不丢
+const messages = toRef(_ps, 'messages')
 /** 当前会话 id（空 = 还没开始，第一句会带着 persist 让后端建） */
-const chatThreadId = ref('')
+const chatThreadId = toRef(_ps, 'chatThreadId')
 /** 当前问数对话的本地记录 id：追问并进同一条「记录」，新对话才另起一条 */
-const askThreadId = ref('')
+const askThreadId = toRef(_ps, 'askThreadId')
 /** 深挖模式：走 /api/ai/agent，让它自己查库、出变更单 */
 const agentMode = ref(false)
 /** 同事抽屉：待办 + 记忆 */
@@ -2929,12 +2936,17 @@ onMounted(() => {
 /* 固定发送图标按钮：与工具条其它控件同高（28px），圆形、图标居中 */
 .composer-run { margin-left: auto; flex-shrink: 0; border-radius: 8px; width: 28px; height: 28px; padding: 0; }
 .composer-run :deep(.el-icon) { font-size: 15px; }
-/* 生成中的停止态：红色底 + 不透明，与发送的蓝色区分开（一眼能看出「点这里停」） */
+/* 生成中的停止态：实心正红 + 白色方块（不是蓝色，也不依赖主题变量有没有定义）。
+   !important：element-plus 的 .el-button--primary 用 CSS 变量铺底色，主题里变量会被改写，
+   不加保险会被它按加载顺序盖回去（真机出现过计算值变透明） */
 .composer-run.is-stop {
-  background: var(--el-color-danger, #f56c6c); border-color: var(--el-color-danger, #f56c6c);
+  background: #d64545 !important; border-color: #d64545 !important;
 }
-.composer-run.is-stop:hover {
-  background: var(--el-color-danger-light-3, #f78989); border-color: var(--el-color-danger-light-3, #f78989);
+.composer-run.is-stop:hover { background: #e05a5a !important; border-color: #e05a5a !important; }
+.composer-run.is-stop:active { background: #c23a3a !important; border-color: #c23a3a !important; }
+.composer-run .stop-sq {
+  display: inline-block; width: 10px; height: 10px;
+  border-radius: 2px; background: #fff;
 }
 /* 右侧操作组：语音输入 + 发送整体靠右（margin-left:auto 收拢在一处） */
 .composer-right { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; flex-shrink: 0; }

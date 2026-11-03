@@ -163,8 +163,9 @@
         <button v-for="(f, i) in answer.followups" :key="i" class="chip" @click="emit('ask', f)">{{ f }}</button>
       </div>
 
-      <!-- 用量放最底部：这是「账单」信息，不该跟操作按钮抢同一行 -->
-      <div v-if="usageText" class="ask-foot">{{ usageText }}</div>
+      <!-- 用量放最底部：这是「账单」信息。与对话/SQL 弹窗共用同一个组件
+           （common/AiUsageNote.vue）—— 同一个数字全项目只有一种长相，统一右对齐 -->
+      <AiUsageNote :usage="answer.usage" align="right" />
     </template>
   </div>
 </template>
@@ -181,6 +182,7 @@
  */
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import AiUsageNote from '../../common/AiUsageNote.vue'
 import {
   Download, Switch, CaretRight, CircleCheck, CircleCheckFilled, CopyDocument, DataAnalysis, EditPen,
   InfoFilled, Loading, MagicStick, QuestionFilled,
@@ -289,20 +291,6 @@ const hasRows = computed(() => {
 
 /** 实际要渲染的图表：空结果时一张都不给 */
 const visibleCharts = computed(() => (hasRows.value ? props.answer?.charts || [] : []))
-
-/** 底部用量：只显示上游真的回了的字段，不估算 */
-const usageText = computed(() => {
-  const usage = props.answer?.usage
-  if (!usage) return ''
-  const total = Number(usage.totalTokens || 0)
-  if (!total) return ''
-  const parts = [`${total.toLocaleString('zh-CN')} tokens`]
-  const prompt = Number(usage.promptTokens || 0)
-  const completion = Number(usage.completionTokens || 0)
-  if (prompt) parts.push(`输入 ${prompt.toLocaleString('zh-CN')}`)
-  if (completion) parts.push(`输出 ${completion.toLocaleString('zh-CN')}`)
-  return parts.join(' · ')
-})
 
 /** 每一步的细节：后端给了 detail 就用（候选表 / 结果规模 / 结论来源），没给就按 key 兜底 */
 const stepDetail = (step) => {
@@ -553,11 +541,7 @@ const exportCsv = () => {
 /* 空结果：一句解释，不摆空图表 */
 .empty-hint { display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; font-size: 12px; color: var(--dc-text-2); }
 .empty-hint .el-icon { margin-top: 3px; flex-shrink: 0; }
-/* 底部用量：右对齐小字，弱到不影响读结论 */
-.ask-foot {
-  display: flex; justify-content: flex-end; margin-top: 10px;
-  font-size: 11px; color: var(--dc-text-2); opacity: .75; font-variant-numeric: tabular-nums;
-}
+/* 底部用量已统一到 common/AiUsageNote.vue（右对齐、带图标、文案全局一致） */
 .clarify-title { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--dc-warning, #f5a623); }
 .clarify-text { font-size: 13px; line-height: 1.7; margin: 8px 0; }
 

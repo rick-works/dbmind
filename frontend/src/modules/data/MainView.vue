@@ -507,7 +507,9 @@
             <ObjectFormTab v-else-if="tab.type === 'form'" :conn="connFor(tab.connId)" :database="tab.database || currentDb"
                            :cat="tab.cat" :mode="tab.mode" :object="tab.object" @saved="onObjFormSaved"
                            @kind="tab.formKind = $event" @close="closeTab(tab.id)" />
-            <!-- AI 助手：中央工作区形态（左侧能力导航 + 大内容区），与表数据/SQL 并列为一个 Tab -->
+            <!-- AI 助手：中央工作区形态（左侧能力导航 + 大内容区），与表数据/SQL 并列为一个 Tab。
+                 切走再切回对话不丢：对话状态在 ai/panelState.js（跨卸载的模块级 store），
+                 这里 v-else-if 卸载组件也没关系 —— restoreThread 见 messages 非空会跳过恢复 -->
             <AiPanel v-else-if="tab.type === 'ai'" mode="studio" :conn="conn" :database="currentDb"
                      :pending="pendingAi"
                      @insert-sql="insertSqlToActive" @panel="onAiPanelCommand" @run-plan="onRunPlan"
