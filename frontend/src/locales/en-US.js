@@ -946,7 +946,7 @@ export default {
   'ai.patrolFailed': 'Inspection failed',
   'ai.needTableName': 'Enter the table you want to analyse',
   'ai.needConn': 'Pick a database connection first',
-  'ai.needDatabase': 'Pick a database first (expand the connection selector below)',
+  'ai.needDatabase': 'Pick a data source and database first (open the connection selector below)',
   'ai.analyzeFailed': 'Analysis failed',
   'ai.statsSection': '\n\n### Statistical profile\n```\n{stats}\n```',
   'ai.runFailed': 'The action failed',

@@ -382,7 +382,9 @@
                         <ArrowRight />
                       </el-icon>
                       <span v-else class="ctx-caret-spacer"></span>
-                      <el-icon :size="13" class="ctx-level-ic"><component :is="ctxLevelIcon(item)" /></el-icon>
+                      <!-- 连接行用数据库类型 logo（与连接对话框/数据源弹窗同一套图标），分组/库/模式仍用线性图标 -->
+                      <DbLogo v-if="item.value.startsWith('conn:')" class="ctx-db-logo" :type="ctxConnType(item)" :size="14" />
+                      <el-icon v-else :size="13" class="ctx-level-ic"><component :is="ctxLevelIcon(item)" /></el-icon>
                       <span class="ctx-label">{{ item.label }}</span>
                       <el-icon v-if="ctxSelectedValue === item.value" class="skills-check"><Select /></el-icon>
                     </el-dropdown-item>
@@ -560,6 +562,7 @@ import KbIngestPanel from './KbIngestPanel.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { t, te, locale } from '../../utils/i18n'
 import { schemaLevelOf, hideDbLevelOf } from '../../types'
+import DbLogo from '../../common/DbLogo.vue'
 import { envLabel, PREDEF_ENVS } from '../../utils/envs.js'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
 // 问数的流式步骤合并（running → done 原地升级）：与独立问数工作区共用同一份实现
@@ -1138,12 +1141,20 @@ const ctxSelectedValue = computed(() => {
   if (ctxConnId.value) return 'conn:' + ctxConnId.value
   return ''
 })
-/** 层级图标：分组 / 连接 / 数据库 / 模式（按前缀 —— 连接挂分组后不再固定在第 0 层） */
+/** 层级图标：分组 / 连接 / 数据库 / 模式（按前缀 —— 连接挂分组后不再固定在第 0 层）。
+ *  连接行不走这里：模板里直接用 DbLogo 渲染数据库类型 logo。 */
 const ctxLevelIcon = (item) =>
   item.value.startsWith('grp:') ? Folder
     : item.value.startsWith('conn:') ? Connection
       : item.value.startsWith('db:') ? Coin
         : Grid
+
+/** 连接的类型 code（DbLogo 按它取 logo）；找不到就空串 → DbLogo 自兜底 */
+const ctxConnType = (item) => {
+  const id = ctxUnwrap(item.value)
+  const conn = (connList.value || []).find(c => String(c.id) === String(id))
+  return conn?.type || ''
+}
 
 // 数据源变化时后台「预热」表结构上下文：
 // 冷缓存下首次构建要跑十几次元数据/样例查询（实测可达 18s），提前热好，

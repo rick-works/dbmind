@@ -956,7 +956,7 @@ export default {
   'ai.patrolFailed': '巡检失败',
   'ai.needTableName': '请输入要分析的表名',
   'ai.needConn': '请先选择数据库连接',
-  'ai.needDatabase': '请先在下方选择要巡检的数据库（点开左侧连接选择器展开库列表）',
+  'ai.needDatabase': '请先在下方选择数据源和数据库（点下方的连接选择器展开列表）',
   'ai.analyzeFailed': '分析失败',
   'ai.statsSection': '\n\n### 统计画像\n```\n{stats}\n```',
   'ai.runFailed': '执行失败',

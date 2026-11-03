@@ -1241,6 +1241,8 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
 .ai-model-dropdown .ctx-caret.expanded { transform: rotate(90deg); }
 .ai-model-dropdown .ctx-caret-spacer { width: 10px; flex-shrink: 0; }
 .ai-model-dropdown .ctx-level-ic { flex-shrink: 0; color: var(--dc-text-dim); opacity: .85; }
+/* 连接行的数据库类型 logo（DbLogo）：与行内线性图标同框对齐 */
+.ai-model-dropdown .ctx-db-logo { flex-shrink: 0; display: inline-flex; align-items: center; border-radius: 3px; }
 .ai-model-dropdown .el-dropdown-menu__item.lv-0 .ctx-level-ic { color: var(--dc-primary); opacity: 1; }
 .ai-model-dropdown .el-dropdown-menu__item.lv-2 .ctx-level-ic { opacity: .7; }
 .ai-model-dropdown .el-dropdown-menu__item.lv-1::after,
