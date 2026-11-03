@@ -152,6 +152,8 @@ const submit = async () => {
 </script>
 
 <style scoped>
+/* el-input-number 默认居中，与其它输入框对齐（element-plus 内置规则优先级高，需 !important） */
+:deep(.el-input-number .el-input__inner) { text-align: left !important; }
 .dlg-title { display: flex; align-items: center; gap: 8px; }
 .dlg-title-ic {
   width: 26px; height: 26px; border-radius: 7px; display: inline-flex;
