@@ -26,7 +26,12 @@ export default {
     'zeroDateTimeBehavior', 'allowMultiQueries'],
   createDatabaseSql(name, f = {}) {
     const n = String(name ?? '').trim().replace(/`/g, '``')
-    return `CREATE DATABASE \`${n}\` CHARACTER SET ${f?.charset || 'utf8mb4'} COLLATE ${f?.collation || 'utf8mb4_general_ci'}`
+    // 不选 = 跟随服务器默认（同 MySQL：别把 utf8mb4_general_ci 写死成默认）
+    const charset = String(f?.charset || '').trim()
+    const collation = String(f?.collation || '').trim()
+    const suffix = collation ? ` CHARACTER SET ${charset || collation.split('_')[0]} COLLATE ${collation}`
+      : charset ? ` CHARACTER SET ${charset}` : ''
+    return `CREATE DATABASE \`${n}\`${suffix}`
   },
   showDbDdlSql(db) {
     return `SHOW CREATE DATABASE \`${String(db ?? '').replace(/`/g, '``')}\``

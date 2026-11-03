@@ -35,7 +35,12 @@ export default {
     'rewriteBatchedStatements', 'zeroDateTimeBehavior', 'allowMultiQueries'],
   createDatabaseSql(name, f = {}) {
     const n = String(name ?? '').trim().replace(/`/g, '``')
-    return `CREATE DATABASE \`${n}\` CHARACTER SET ${f?.charset || 'utf8mb4'} COLLATE ${f?.collation || 'utf8mb4_general_ci'}`
+    // 不选 = 跟随服务器默认（MySQL 8 默认是 utf8mb4_0900_ai_ci，写死 general_ci 反而改变了行为）
+    const charset = String(f?.charset || '').trim()
+    const collation = String(f?.collation || '').trim()
+    const suffix = collation ? ` CHARACTER SET ${charset || collation.split('_')[0]} COLLATE ${collation}`
+      : charset ? ` CHARACTER SET ${charset}` : ''
+    return `CREATE DATABASE \`${n}\`${suffix}`
   },
   showDbDdlSql(db) {
     return `SHOW CREATE DATABASE \`${String(db ?? '').replace(/`/g, '``')}\``

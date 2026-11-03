@@ -29,7 +29,13 @@ export default {
     'stringtype', 'tcpKeepAlive'],
   createDatabaseSql(name, f = {}) {
     const n = String(name ?? '').trim().replace(/"/g, '""')
-    return `CREATE DATABASE "${n}" WITH ENCODING = '${f?.encoding || 'UTF8'}'`
+    const parts = [`CREATE DATABASE "${n}"`]
+    // 所有者留空 = 当前登录用户（省一份授权）；连接上限留空 = 不限制
+    if (f?.owner) parts.push(`OWNER = "${String(f.owner).trim().replace(/"/g, '""')}"`)
+    parts.push(`ENCODING = '${f?.encoding || 'UTF8'}'`)
+    const limit = Number(f?.connLimit)
+    if (Number.isFinite(limit) && limit > 0) parts.push(`CONNECTION LIMIT = ${Math.floor(limit)}`)
+    return parts.join(' ')
   },
   showDbDdlSql(db) {
     return `SELECT 'CREATE DATABASE ' || quote_ident(datname) || ' WITH OWNER ' || quote_ident(pg_catalog.pg_get_userbyid(datdba)) || ' ENCODING ' || quote_literal(pg_encoding_to_char(encoding)) || ' LC_COLLATE ' || quote_literal(datcollate) || ' LC_CTYPE ' || quote_literal(datctype) || ';' AS ddl FROM pg_database WHERE datname = '${String(db ?? '')}'`
