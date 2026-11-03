@@ -270,7 +270,7 @@ html, body, #app { height: 100%; width: 100%; overflow: hidden; }
    上下文那一列带层级缩进、库名一长整块就很宽 —— 夹住宽度与高度：
    否则贴着窗口右边时会一路铺到屏幕外（实测），项多时还能长到顶天。 */
 .ai-model-dropdown { max-width: min(360px, calc(100vw - 24px)); }
-.ai-model-dropdown .ai-model-menu { max-height: min(60vh, 420px); overflow-y: auto; }
+.ai-model-dropdown .ai-model-menu { max-height: min(68vh, 560px); overflow-y: auto; }
 /* 库名/表名过长时省略，而不是把整块菜单撑宽（撑宽了就会撞到窗口右边） */
 .ai-model-dropdown .el-dropdown-menu__item { min-width: 0; }
 .ai-model-dropdown .ctx-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1244,7 +1244,7 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
 /* 连接行的数据库类型 logo（DbLogo）：与行内线性图标同框对齐 */
 .ai-model-dropdown .ctx-db-logo { flex-shrink: 0; display: inline-flex; align-items: center; border-radius: 3px; }
 .ai-model-dropdown .el-dropdown-menu__item.lv-0 .ctx-level-ic { color: var(--dc-primary); opacity: 1; }
-.ai-model-dropdown .el-dropdown-menu__item.lv-2 .ctx-level-ic { opacity: .7; }
+.ai-model-dropdown .el-dropdown-menu__item.lv-2 .ctx-level-ic { opacity: 1; }
 .ai-model-dropdown .el-dropdown-menu__item.lv-1::after,
 .ai-model-dropdown .el-dropdown-menu__item.lv-2::after {
   content: '';
@@ -1257,11 +1257,16 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
   flex: 1; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.ai-model-dropdown .el-dropdown-menu__item.lv-2 .ctx-label { font-size: 13px; color: var(--dc-text-weak); }
+.ai-model-dropdown .el-dropdown-menu__item.lv-2 .ctx-label { font-size: 13px; color: var(--dc-text); }
 .ai-model-dropdown .ctx-empty { color: var(--dc-text-dim); justify-content: center; }
 /* ===== 聚焦表选择器（工具条独立 pill + 搜索 + 多选列表）===== */
 .ai-model-dropdown .tb-search { padding: 2px 10px 8px; }
-.ai-model-dropdown .tb-menu { max-height: 300px; overflow: auto; }
+/* 搜索框别那么黑：底色比弹层亮一档 + 描边 */
+.ai-model-dropdown .tb-search .el-input__wrapper {
+  background-color: var(--dc-bg-raised, #22262f);
+  box-shadow: 0 0 0 1px var(--dc-border) inset;
+}
+.ai-model-dropdown .tb-menu { max-height: min(58vh, 470px); overflow: auto; }
 /* 勾选数量小徽标：贴在 pill 文案右侧 */
 .composer-tb-badge {
   flex-shrink: 0; min-width: 14px; padding: 0 4px; border-radius: 8px;
