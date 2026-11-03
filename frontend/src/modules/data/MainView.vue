@@ -8510,7 +8510,10 @@ const dbCtxShowDdl = async () => {
       const vals = Object.values(row)
       const ddlVal = vals.find(v => typeof v === 'string' && /CREATE\s+(DATABASE|SCHEMA)/i.test(v))
         || vals[vals.length - 1] || vals[0] || ''
-      dbDdlText.value = ddlVal
+      // 目录视图看不全时（如无 VIEW ANY DEFINITION）某些列会是 NULL，别把空白画进弹窗
+      dbDdlText.value = (typeof ddlVal === 'string' && ddlVal.trim())
+        ? ddlVal
+        : t('mv.fetchFailedComment', { detail: t('common.unknownError') }) + '\nCREATE DATABASE ' + quoteIdent(d.db) + ';'
     } else if (res.success) {
       dbDdlText.value = t('mv.createDbComment', { db: d.db }) + '\nCREATE DATABASE ' + quoteIdent(d.db) + ';'
     } else {
