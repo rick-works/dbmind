@@ -107,6 +107,7 @@ const SYSTEM: &str = r#"你是「智能问数」引擎：把业务问题变成**
 7. x 与 y[].field 必须是**结果集的列名**（用第 3 条起好的别名），不能是 SQL 表达式。
 8. summary / insights 这里可以留空 —— 结论由执行后另一步按真实结果写（你先写只会是空话）。
 9. 与数据无关、或缺少关键信息（没有时间范围、口径不明）时：intent=clarify，clarify 写清楚缺什么。
+   clarify 里举例提到的表名也**必须逐字来自【表清单】**——编一个不存在的表名（比如把 etl_wide_contractd 说成 etl_wide_sale）会把用户带进沟里。
 10. thinking 必填且要具体（4 句左右，第一人称，像在心里自言自语）：①我怎么理解这个问题——指标是什么、按什么维度、什么时间范围，缺什么就明说；②为什么选这几张表和这些字段，排除了哪些相近的表；③SQL 的思路——怎么过滤、怎么分组、怎么排序、为什么这样控制行数；④为什么选这种图表类型而不是别的（时间序列为什么不用柱状、占比为什么不用条形）。不要复述 SQL 原文。
 "#;
 
@@ -143,17 +144,77 @@ fn user_prompt(schema: &str, question: &str, hint: &str) -> String {
 
 // ------------------------------------------------------------------ 选表
 
+/// 中文业务词 → 英文表名片段的粗粒度同义映射。
+///
+/// 问数的问题几乎都是中文，而表名几乎都是英文（sale / passenger / vip …）——
+/// 没有这层映射，中文问题在英文表名上一个字都匹配不上，打分全 0，
+/// 候选就只剩「字母序兜底」那一张（真机就出现过：426 张表只给了 aibee_data_day，
+/// 销售类的 xingwei_kechuan_sales / bi_shop_sale 全都没进模型视野）。
+/// 每条按「问题含这个词 → 表名含这些片段之一」记分，宁滥勿缺：多给一张真实存在的表，
+/// 好过让模型对着唯一候选编出 etl_wide_sale 这种根本不存在的表名。
+const SYNONYMS: &[(&str, &[&str])] = &[
+    ("销售", &["sale"]),
+    ("销售额", &["sale"]),
+    ("营收", &["sale", "income", "revenue"]),
+    ("收入", &["income", "revenue", "receive"]),
+    ("营业额", &["sale", "income", "revenue"]),
+    ("客流", &["passenger", "flow", "traffic"]),
+    ("人流", &["passenger", "flow", "traffic"]),
+    ("进店", &["passenger", "flow", "traffic"]),
+    ("会员", &["vip", "member"]),
+    ("商场", &["mall", "market", "shop", "store"]),
+    ("门店", &["shop", "store"]),
+    ("店铺", &["shop", "store"]),
+    ("租户", &["tenant", "lease", "contract", "shop"]),
+    ("租赁", &["lease", "rent"]),
+    ("招商", &["lease", "contract", "investment"]),
+    ("合同", &["contract"]),
+    ("铺位", &["location", "unit", "shop"]),
+    ("库存", &["stock", "inventory"]),
+    ("订单", &["order"]),
+    ("商品", &["product", "goods", "item", "sku"]),
+    ("供应商", &["supplier", "vendor"]),
+    ("退款", &["refund"]),
+    ("结算", &["settle"]),
+    ("缴纳", &["receive", "deposit", "payment"]),
+    ("保证金", &["deposit"]),
+    ("用户", &["user"]),
+    ("员工", &["user", "staff", "employee"]),
+    ("组织", &["organization", "org", "department", "dept"]),
+    ("项目", &["project"]),
+    ("财务", &["finance"]),
+    ("预算", &["budget"]),
+    ("发票", &["invoice"]),
+    ("支付", &["pay", "payment"]),
+];
+
+/// 同义层记分：问题里每个命中的中文词，给「表名含其任一英文片段」的表 +10。
+/// 一个中文词最多记一次（避免 sale/sales 这类重复片段翻倍）。
+fn synonym_score(name_lower: &str, question: &str) -> i32 {
+    let mut score = 0;
+    for (word, fragments) in SYNONYMS {
+        if !question.contains(word) {
+            continue;
+        }
+        if fragments.iter().any(|f| name_lower.contains(f)) {
+            score += 10;
+        }
+    }
+    score
+}
+
 /// 表名 / 问题的粗粒度相关度。
 ///
 /// 刻意**不引入分词库**：表名几乎都是 `order_detail`、`t_sale_2024` 这种，
 /// 按 `_` 与非字母数字切开后与问题做子串匹配，命中率已经够用，而且零依赖、可预测。
-/// 命中整表名给的权重最高（用户直接说了表名），命中词片段次之。
-fn score_table(name: &str, question_lower: &str) -> i32 {
+/// 命中整表名给的权重最高（用户直接说了表名），命中词片段次之；
+/// 中文问题再叠一层 [`SYNONYMS`] 同义映射（见其文档，这是真机踩出来的洞）。
+fn score_table(name: &str, question_lower: &str, question: &str) -> i32 {
     let full = name.to_ascii_lowercase();
     if full.len() >= 3 && question_lower.contains(&full) {
         return 100;
     }
-    let mut score = 0;
+    let mut score = synonym_score(&full, question);
     for part in full.split(|c: char| !c.is_alphanumeric()) {
         // 太短的片段（t / v2 / id）匹配上也没有信息量，反而会把一堆表拉进来
         if part.len() < 3 || part.chars().all(|c| c.is_ascii_digit()) {
@@ -168,7 +229,8 @@ fn score_table(name: &str, question_lower: &str) -> i32 {
 
 /// 挑候选表：
 /// - **用户点名了表（界面勾选的聚焦表）就只传点名的，别猜** —— 勾选就是显式限定候选范围；
-/// - 没点名才自动判断：关键词命中 → 兜底给前几张（受 FOCUS_TABLES 约束，总比一张都不给强）。
+/// - 没点名才自动判断：关键词/同义词命中 → 全部 0 分时兜底给满 [`FOCUS_TABLES`] 张
+///   （字母序任取，但给模型 6 份真实表结构远好过 1 份 —— 至少它知道库里有什么字段，不用瞎编）。
 /// - 点名的表一张都没对上（选错了库/表已删）时退回自动判断，别拿着空候选去问模型。
 fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String> {
     let mut picked: Vec<String> = Vec::new();
@@ -189,15 +251,17 @@ fn pick_focus(tables: &[String], question: &str, named: &[String]) -> Vec<String
     let lower = question.to_ascii_lowercase();
     let mut ranked: Vec<(i32, &String)> = tables
         .iter()
-        .map(|name| (score_table(name, &lower), name))
+        .map(|name| (score_table(name, &lower, question), name))
         .collect();
     ranked.sort_by(|a, b| b.0.cmp(&a.0));
+    let best = ranked.first().map(|(s, _)| *s).unwrap_or(0);
 
     for (score, name) in ranked {
         if picked.len() >= FOCUS_TABLES {
             break;
         }
-        if score <= 0 && !picked.is_empty() {
+        // 有命中（最高分 >0）：取完命中的就收手；全部 0 分：不再提前停，兜底给满几张
+        if score <= 0 && best > 0 {
             break;
         }
         if !picked.iter().any(|t| t.eq_ignore_ascii_case(name)) {
@@ -908,7 +972,7 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
             .collect();
         let why = if named.is_empty() {
             format!(
-                "问题里没有点名具体表，我把问题关键词与全部 {} 张表的表名逐个匹配打分（整表名命中权重最高、词片段次之），取分数最高的 {} 张做候选（{}）",
+                "问题里没有点名具体表，我把问题关键词与全部 {} 张表的表名逐个匹配打分（整表名命中权重最高；中文业务词按同义映射折算成英文片段再匹配，如 销售→sale、客流→passenger），取分数最高的 {} 张做候选（{}）",
                 names.len(),
                 focus.len(),
                 focus.join("、")
@@ -1552,7 +1616,7 @@ mod tests {
     #[test]
     fn score_prefers_whole_table_name() {
         let question = "order_detail 里最近的销售额是多少";
-        assert!(score_table("order_detail", question) > score_table("order_head", question));
+        assert!(score_table("order_detail", question, question) > score_table("order_head", question, question));
     }
 
     #[test]
@@ -1561,6 +1625,33 @@ mod tests {
         let picked = pick_focus(&tables, "有多少订单", &["orders".to_string()]);
         assert_eq!(picked.first().map(String::as_str), Some("orders"));
         assert!(picked.len() <= FOCUS_TABLES);
+    }
+
+    /// 真机回归：426 张表、全英文表名、中文问题 —— 同义映射必须把销售类表拉进候选，
+    /// 而不是只给字母序第一的 aibee_data_day。
+    #[test]
+    fn chinese_question_hits_sales_tables_via_synonyms() {
+        let tables = vec![
+            "aibee_data_day".to_string(),
+            "bi_shop_sale".to_string(),
+            "xingwei_kechuan_sales".to_string(),
+            "xingwei_kechuan_passenger".to_string(),
+            "etl_wide_contractd".to_string(),
+        ];
+        let picked = pick_focus(&tables, "近三个月商场每天的销售额怎么样？", &[]);
+        assert!(
+            picked.iter().any(|t| t.contains("sale") || t.contains("sales")),
+            "销售表应进候选，实际：{picked:?}"
+        );
+    }
+
+    /// 全部 0 分（问题与表名完全沾不上边）时兜底要给满 FOCUS_TABLES 张，
+    /// 而不是只给字母序第一张 —— 那正是「只看到 aibee_data_day」的根因。
+    #[test]
+    fn zero_score_fallback_fills_focus_tables() {
+        let tables: Vec<String> = (0..20).map(|i| format!("tzz_{i:02}")).collect();
+        let picked = pick_focus(&tables, "最近情况怎么样", &[]);
+        assert_eq!(picked.len(), FOCUS_TABLES.min(tables.len()));
     }
 
     #[test]
