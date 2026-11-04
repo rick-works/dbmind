@@ -1,6 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
- "v2.0.4": [
+ "v2.0.5": [
+  "Data Q&A focus tables no longer vanish silently: they survive tab/skill switches, re-picking the same database in the source dropdown no longer clears them, and ask stops falling back to scanning 12 tables when a table was already chosen",
+  "The data Q&A context (connection/database/schema) now persists across tab switches too — no need to re-select it every time"
+],
+"v2.0.4": [
   "Create-database options completed: SQL Server gains a collation picker, PostgreSQL gains encoding/owner/connection limit, and the MySQL/MariaDB charset & collation dropdowns are expanded with filtering",
   "Database DDL for SQL Server now includes collation, data & log files and the recovery model; it no longer comes back blank for non-sysadmin logins",
   "Fixed a line-leading SET after SQL formatting splitting \"ALTER … SET …\" into two broken statements"
