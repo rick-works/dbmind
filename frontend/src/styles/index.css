@@ -286,6 +286,17 @@ body {
 
 ::selection { background: var(--dc-selection); }
 
+/* v-fast-tip 的悬浮提示气泡（utils/fastTip.js）：120ms 即出，深色小卡 */
+.fast-tip {
+  position: fixed; z-index: 4200;
+  max-width: 320px; padding: 5px 9px;
+  background: var(--dc-bg-soft, #22262e); color: var(--dc-text-strong, #e8ecf2);
+  border: 1px solid var(--dc-border, #3a4150); border-radius: 6px;
+  font-size: 12px; line-height: 1.5; white-space: nowrap;
+  pointer-events: none; opacity: 0; transition: opacity .12s ease;
+}
+.fast-tip.on { opacity: 1; }
+
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--dc-scrollbar); border-radius: 4px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--dc-scrollbar-hover); }

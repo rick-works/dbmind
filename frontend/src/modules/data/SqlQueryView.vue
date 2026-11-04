@@ -48,35 +48,34 @@
 
         <span class="flex-spacer"></span>
         <div class="head-actions">
-          <el-button v-if="running" size="small" type="danger" class="act-run" @click="stopSql">
+          <el-button v-if="running" size="small" type="danger" class="act-run" data-g="9" v-fast-tip="() => $t('sqlq.stop')" @click="stopSql">
             <el-icon class="run-ic"><VideoPause /></el-icon><span class="bt-tx">{{ $t('sqlq.stop') }}</span> </el-button>
           <!-- 无选区时执行的是**光标所在的那一段**（编辑器里框线标出的就是它），
-               文案与快捷键表里的「执行当前 SQL」对齐；跑整段脚本走「执行全部」。 -->
-          <el-button v-else size="small" type="primary" class="act-run" @click="() => runSql()"
-                     :title="hasEditorSelection ? $t('sqlq.runSelTitle', { n: selChars }) : $t('sqlq.runCurTitle')">
+               文案与快捷键表里的「执行当前 SQL」对齐；跑整段脚本走「执行全部」。
+               悬浮提示走 v-fast-tip（120ms、只在收成图标时出现），不用慢半拍的原生 title。 -->
+          <el-button v-else size="small" type="primary" class="act-run" data-g="9" v-fast-tip="() => hasEditorSelection ? $t('sqlq.runSelTitle', { n: selChars }) : $t('sqlq.runCurTitle')" @click="() => runSql()">
             <el-icon class="run-ic"><CaretRight /></el-icon><span class="bt-tx">{{ hasEditorSelection ? $t('sqlq.runSel') : $t('sqlq.run') }}</span>
           </el-button>
-          <el-button size="small" class="act-runall" data-g="8" @click="runSqlAll" :title="$t('sqlq.runAllTitle')">
+          <el-button size="small" class="act-runall" data-g="8" v-fast-tip="() => $t('sqlq.runAllTitle')" @click="runSqlAll">
             <el-icon class="run-ic"><DArrowRight /></el-icon><span class="bt-tx">{{ $t('sqlq.runAll') }}</span>
           </el-button>
-          <el-button v-if="!isNoSql" size="small" class="act-secondary" data-g="6" :icon="Brush" @click="formatSql"
-                     :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')"><span class="bt-tx">{{ hasEditorSelection ? $t('sqlq.fmtSel') : $t('sce.format') }}</span></el-button>
+          <el-button v-if="!isNoSql" size="small" class="act-secondary" data-g="6" :icon="Brush" v-fast-tip="() => hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')" @click="formatSql"><span class="bt-tx">{{ hasEditorSelection ? $t('sqlq.fmtSel') : $t('sce.format') }}</span></el-button>
           <!-- 事务模式：begin 关掉编辑器会话的 autocommit，之后的写语句都挂在事务里；
                提交/回滚收尾。只有 agent(JDBC 宿主)链路的类型支持（SQLite 走内核原生驱动，
                没有会话级事务能力 —— 按钮直接不显示，免得点了报「不支持」） -->
           <template v-if="supportsTx">
             <el-button size="small" class="act-secondary" data-g="7" :type="txMode ? 'warning' : 'default'" :icon="SwitchIcon" :loading="txBusy"
-                       @click="toggleTxMode" :title="$t('sqlq.txToggleTip')"><span class="bt-tx">{{ $t('sqlq.txMode') }}</span></el-button>
+                       v-fast-tip="() => $t('sqlq.txToggleTip')" @click="toggleTxMode"><span class="bt-tx">{{ $t('sqlq.txMode') }}</span></el-button>
             <el-button v-if="txMode" size="small" class="act-secondary" data-g="7" type="success" :icon="Select" :loading="txBusy"
-                       @click="txCommit" :title="$t('sqlq.txCommitTip')"><span class="bt-tx">{{ $t('sqlq.txCommit') }}</span></el-button>
+                       v-fast-tip="() => $t('sqlq.txCommitTip')" @click="txCommit"><span class="bt-tx">{{ $t('sqlq.txCommit') }}</span></el-button>
             <el-button v-if="txMode" size="small" class="act-secondary" data-g="7" type="danger" plain :icon="RefreshLeft" :loading="txBusy"
-                       @click="txRollback"><span class="bt-tx">{{ $t('sqlq.txRollback') }}</span></el-button>
+                       v-fast-tip="() => $t('sqlq.txRollback')" @click="txRollback"><span class="bt-tx">{{ $t('sqlq.txRollback') }}</span></el-button>
           </template>
           <!-- SQL 片段库：点开查看 / 插入已存片段。
                保存走编辑器右键「保存片段」（那里能直接对选中内容命名保存），
                所以这里**不再放「存为片段」按钮** —— 同一个动作不留两个入口。 -->
           <el-dropdown v-if="!isNoSql" trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
-            <el-button size="small" class="act-secondary" data-g="5" :icon="Collection" :title="$t('sqlq.snippets')"><span class="bt-tx">{{ $t('sqlq.snippets') }}</span></el-button>
+            <el-button size="small" class="act-secondary" data-g="5" :icon="Collection" v-fast-tip="() => $t('sqlq.snippets')"><span class="bt-tx">{{ $t('sqlq.snippets') }}</span></el-button>
             <template #dropdown>
               <div class="hist-head">
                 <span>{{ $t('sqlq.snippets') }}</span>
@@ -98,7 +97,7 @@
           </el-dropdown>
           <!-- SQL 执行历史：本地保存最近执行的 SQL，一键回填复用 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
-            <el-button size="small" class="act-secondary" data-g="4" :icon="Clock" :title="$t('sqlq.history')"><span class="bt-tx">{{ $t('sqlq.history') }}</span></el-button>
+            <el-button size="small" class="act-secondary" data-g="4" :icon="Clock" v-fast-tip="() => $t('sqlq.history')"><span class="bt-tx">{{ $t('sqlq.history') }}</span></el-button>
             <template #dropdown>
               <div class="hist-head">
                 <span>{{ $t('sqlq.history') }}</span>
@@ -123,7 +122,7 @@
           <!-- AI 模型：紧靠 AI 功能按钮（与 AI 面板「选择模型」同一套下拉，popper-class 复用全局样式） -->
           <el-dropdown v-if="aiModels.length > 0" trigger="click" placement="bottom-end" data-g="3"
                        popper-class="ai-model-dropdown" @command="onPickAiModel">
-            <button class="model-btn" type="button" :title="'AI 模型：' + currentAiModelLabel">
+            <button class="model-btn" type="button" v-fast-tip="() => 'AI 模型：' + currentAiModelLabel">
               <el-icon class="model-btn-ic"><Cpu /></el-icon>
               <span class="model-btn-tx">{{ currentAiModelLabel }}</span>
               <el-icon class="model-btn-caret"><ArrowDown /></el-icon>
@@ -146,7 +145,7 @@
           <!-- AI 助手：解释 / 优化 / 诊断 / 改写 整合成一个入口，避免工具栏按钮堆积 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="ai-model-dropdown" data-g="2"
                        @command="onAiAction">
-            <button class="ai-act-btn" type="button" :title="$t('nav.ai')">
+            <button class="ai-act-btn" type="button" v-fast-tip="() => $t('nav.ai')">
               <el-icon class="ai-act-btn-ic"><MagicStick /></el-icon>
               <span class="bt-tx">{{ $t('nav.ai') }}</span>
               <el-icon class="ai-act-btn-caret"><ArrowDown /></el-icon>
@@ -173,7 +172,7 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-button size="small" class="act-secondary" data-g="1" type="success" :icon="Document" @click="onSaveClick"><span class="bt-tx">{{ $t('common.save') }}</span></el-button>
+          <el-button size="small" class="act-secondary" data-g="1" type="success" :icon="Document" v-fast-tip="() => $t('common.save')" @click="onSaveClick"><span class="bt-tx">{{ $t('common.save') }}</span></el-button>
         </div>
       </div>
       <div class="editor-body" @contextmenu.prevent="onEditorContextMenu">
@@ -680,6 +679,9 @@ import ConnectionSelect from '../../common/ConnectionSelect.vue'
 // 占位库 `(default)` 的显示名（值仍是原值，见 utils/dbLabel）
 import { dbLabelOf } from '../../utils/dbLabel'
 import { fitSelectWidth } from '../../utils/selectAutoWidth'
+import fastTip from '../../utils/fastTip'
+// 模板里的 v-fast-tip（工具条收成图标后的快速悬浮提示，120ms）
+const vFastTip = fastTip
 import { rememberConnNames, connNameOf } from '../../utils/connNames'
 
 const props = defineProps({ conn: Object, database: String, scriptName: String, tabConnId: String, tabConnName: String, tabDatabase: String, initialSql: String, sqlLoading: Boolean })
@@ -5696,11 +5698,16 @@ onBeforeUnmount(() => {
 }
 .editor-area { min-height: 0; display: flex; flex-direction: column; background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: var(--dc-radius); overflow: hidden; box-shadow: var(--dc-shadow-sm); }
 /* ===== 工具条单行压缩（JS 按级标 .icon-only，见 fitHeadActions）=====
-   收成图标的按钮：文字隐藏、图标水平居中（对称 padding），悬停有 title 提示。
-   深级时选择器也收窄，把宽度让给按钮。 */
+   收成图标的按钮：文字（含 Element 自动包的外层 span）全隐藏、对称 padding 让图标居中，
+   悬浮提示走 v-fast-tip（120ms）。深级时选择器也收窄，把宽度让给按钮。 */
 .head-actions .run-ic { margin-right: 4px; }
 .editor-head .icon-only .bt-tx { display: none; }
-.editor-head .icon-only.el-button { padding: 5px 9px; }
+/* 关键：el-button 会把默认插槽再包一层自己的 <span>，且 `.el-icon + span` 有 6px 左边距 ——
+   只藏 .bt-tx 不够，外层 span 的 margin 还在，图标就偏左不居中（真机反馈）。两层一起藏。 */
+.editor-head .icon-only.el-button span,
+.editor-head .el-dropdown.icon-only .el-button span { display: none; }
+.editor-head .icon-only.el-button,
+.editor-head .el-dropdown.icon-only .el-button { padding: 5px 9px; }
 .editor-head .icon-only .run-ic { margin-right: 0; }
 .editor-head .el-dropdown.icon-only .model-btn-tx,
 .editor-head .el-dropdown.icon-only .ai-act-btn .bt-tx { display: none; }

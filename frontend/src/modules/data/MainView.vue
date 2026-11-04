@@ -14,7 +14,7 @@
       <!-- 品牌 logo：顶栏最左角，只放图形不带文字（顶栏本是导航区，加标题会把它挤窄）。
            它落在顶栏自带的三段式拖动区内：桌面端按住它拖窗口 = 系统标题栏的行为。 -->
       <img class="topbar-logo" :src="logoSmUrl" alt="DBmind" draggable="false" />
-      <nav class="top-nav">
+      <nav class="top-nav" ref="topNavEl">
         <!-- 左侧：数据 → 治理/运维 → 动作（文字 + 图标）；右侧：知识库 / AI / 设置（只留图标 + 悬停提示） -->
         <!-- 只在侧栏折叠时出现的「展开」入口：展开态由侧栏工具条里那枚钮负责收起，
              而收起态侧栏整块消失，才需要这里接住。只留图标（对齐右侧那排图标钮），
@@ -26,10 +26,12 @@
         <!-- 顶栏菜单项**可配置**：显示哪些、顺序如何，在「设置 → 通用 → 顶栏菜单」里
              设置并持久化（dbmind.db）。展示规则：启用的菜单最多直接显示 6 个，
              第 7 个起收进「更多」下拉；启用的不超过 6 个时不显示「更多」。 -->
-        <span v-for="mi in topMenuPrimary" :key="mi.id" class="top-nav-item"
+        <!-- 窗口窄放不下时逐项收成纯图标（fitTopNav，从右往左），悬浮 v-fast-tip 快速显示文字 -->
+        <span v-for="mi in topMenuPrimary" :key="mi.id" class="top-nav-item top-menu-item"
               :class="{ 'top-nav-action': mi.id === 'newScript' }"
+              v-fast-tip="() => mi.label()"
               @click="topMenuRun(mi.id)">
-          <el-icon><component :is="mi.icon" /></el-icon>{{ mi.label() }}
+          <el-icon><component :is="mi.icon" /></el-icon><span class="nav-tx">{{ mi.label() }}</span>
         </span>
         <el-dropdown v-if="topMenuOverflow.length" trigger="hover" placement="bottom" @command="topMenuRun">
           <span class="top-nav-item top-nav-more">{{ $t('nav.more') }}<el-icon class="more-caret"><ArrowDown /></el-icon></span>
@@ -1249,9 +1251,33 @@ import { topMenuVisible } from '../../utils/topMenu'
 const TOP_MENU_MAX = 6
 const topMenuPrimary = computed(() => topMenuVisible.value.slice(0, TOP_MENU_MAX))
 const topMenuOverflow = computed(() => topMenuVisible.value.slice(TOP_MENU_MAX))
+
+// ===== 顶栏菜单小屏压缩：永远单行，放不下从右往左逐项收成纯图标（v-fast-tip 快速显示文字） =====
+// 实测驱动（nav.scrollWidth > clientWidth 即溢出），与 SQL 工具条同一套交互口径。
+const topNavEl = ref(null)
+const fitTopNav = () => {
+  const nav = topNavEl.value
+  if (!nav || !nav.offsetParent) return
+  const items = [...nav.querySelectorAll('.top-menu-item')]
+  items.forEach(i => i.classList.remove('icon-only'))
+  let guard = 0
+  while (nav.scrollWidth > nav.clientWidth + 1 && guard++ <= items.length) {
+    const next = [...items].reverse().find(i => !i.classList.contains('icon-only'))
+    if (!next) break
+    next.classList.add('icon-only')
+  }
+}
+const onTopNavResize = () => fitTopNav()
+onMounted(() => window.addEventListener('resize', onTopNavResize))
+onBeforeUnmount(() => window.removeEventListener('resize', onTopNavResize))
+// 菜单配置 / 语言切换会改条目数量与文字宽度，重新量一次
+watch([topMenuPrimary, () => locale.value], () => nextTick(fitTopNav))
 import { Sunny, Moon, Clock, Reading, Delete as ElDelete } from '@element-plus/icons-vue'
 import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 import { locale, setLocale } from '../../utils/i18n'
+import fastTip from '../../utils/fastTip'
+// 模板里的 v-fast-tip（顶栏菜单收成图标后的快速悬浮提示，120ms）
+const vFastTip = fastTip
 import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
 import { buildCatChildren, buildObjectCategories, isFunctionRoutine, TREE_FIRST_PAGE } from './treeNodes'
 import { t, tMsg } from '../../utils/i18n'
@@ -8886,9 +8912,10 @@ const connTypeSummary = computed(() =>
   margin-right: 10px; border-radius: 6px;
   object-fit: contain; user-select: none; -webkit-user-drag: none;
 }
-.top-nav { display: flex; align-items: center; gap: 6px; }
+.top-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .top-nav-item {
   display: inline-flex; align-items: center; gap: 5px;
+  flex-shrink: 0;
   padding: 6px 11px; margin-right: 2px;
   /* 居中基准统一成"紧行盒"（min-height 保住原来的可点区域/悬停高度，约 6+21+6）：
      原来文字用的是继承来的行盒（≈1.5 倍字号），图标用的是紧盒（line-height:1），
@@ -8904,6 +8931,10 @@ const connTypeSummary = computed(() =>
 }
 .top-nav-item:hover { background: var(--dc-primary-wash); color: var(--dc-text-strong); }
 .top-nav-item.dc-top-active { color: var(--dc-primary); font-weight: 600; }
+/* 收成图标的菜单项（fitTopNav，窗口窄时从右往左逐项收）：文字藏掉、对称 padding 让图标居中，
+   文字提示走 v-fast-tip（120ms）。 */
+.top-nav-item.icon-only { padding: 6px 9px; }
+.top-nav-item.icon-only .nav-tx { display: none; }
 /* 「更多」下拉的触发项：与普通菜单项同款，仅补个收起的箭头 */
 .top-nav-more .more-caret { font-size: 12px; margin-left: 1px; transition: transform .15s; }
 .top-nav-more:hover .more-caret { transform: rotate(180deg); }
