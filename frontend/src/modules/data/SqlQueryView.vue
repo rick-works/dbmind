@@ -59,24 +59,24 @@
           <el-button size="small" @click="runSqlAll" :title="$t('sqlq.runAllTitle')">
             <el-icon style="margin-right:4px"><DArrowRight /></el-icon>{{ $t('sqlq.runAll') }}
           </el-button>
-          <el-button v-if="!isNoSql" size="small" :icon="Brush" @click="formatSql"
-                     :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')">{{ hasEditorSelection ? $t('sqlq.fmtSel') : $t('sce.format') }}</el-button>
+          <el-button v-if="!isNoSql" size="small" class="act-secondary" :icon="Brush" @click="formatSql"
+                     :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')"><span class="bt-tx">{{ hasEditorSelection ? $t('sqlq.fmtSel') : $t('sce.format') }}</span></el-button>
           <!-- 事务模式：begin 关掉编辑器会话的 autocommit，之后的写语句都挂在事务里；
                提交/回滚收尾。只有 agent(JDBC 宿主)链路的类型支持（SQLite 走内核原生驱动，
                没有会话级事务能力 —— 按钮直接不显示，免得点了报「不支持」） -->
           <template v-if="supportsTx">
-            <el-button size="small" :type="txMode ? 'warning' : 'default'" :icon="SwitchIcon" :loading="txBusy"
-                       @click="toggleTxMode" :title="$t('sqlq.txToggleTip')">{{ $t('sqlq.txMode') }}</el-button>
-            <el-button v-if="txMode" size="small" type="success" :icon="Select" :loading="txBusy"
-                       @click="txCommit" :title="$t('sqlq.txCommitTip')">{{ $t('sqlq.txCommit') }}</el-button>
-            <el-button v-if="txMode" size="small" type="danger" plain :icon="RefreshLeft" :loading="txBusy"
-                       @click="txRollback">{{ $t('sqlq.txRollback') }}</el-button>
+            <el-button size="small" class="act-secondary" :type="txMode ? 'warning' : 'default'" :icon="SwitchIcon" :loading="txBusy"
+                       @click="toggleTxMode" :title="$t('sqlq.txToggleTip')"><span class="bt-tx">{{ $t('sqlq.txMode') }}</span></el-button>
+            <el-button v-if="txMode" size="small" class="act-secondary" type="success" :icon="Select" :loading="txBusy"
+                       @click="txCommit" :title="$t('sqlq.txCommitTip')"><span class="bt-tx">{{ $t('sqlq.txCommit') }}</span></el-button>
+            <el-button v-if="txMode" size="small" class="act-secondary" type="danger" plain :icon="RefreshLeft" :loading="txBusy"
+                       @click="txRollback"><span class="bt-tx">{{ $t('sqlq.txRollback') }}</span></el-button>
           </template>
           <!-- SQL 片段库：点开查看 / 插入已存片段。
                保存走编辑器右键「保存片段」（那里能直接对选中内容命名保存），
                所以这里**不再放「存为片段」按钮** —— 同一个动作不留两个入口。 -->
           <el-dropdown v-if="!isNoSql" trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
-            <el-button size="small" :icon="Collection" :title="$t('sqlq.snippets')">{{ $t('sqlq.snippets') }}</el-button>
+            <el-button size="small" class="act-secondary" :icon="Collection" :title="$t('sqlq.snippets')"><span class="bt-tx">{{ $t('sqlq.snippets') }}</span></el-button>
             <template #dropdown>
               <div class="hist-head">
                 <span>{{ $t('sqlq.snippets') }}</span>
@@ -98,7 +98,7 @@
           </el-dropdown>
           <!-- SQL 执行历史：本地保存最近执行的 SQL，一键回填复用 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
-            <el-button size="small" :icon="Clock" :title="$t('sqlq.history')">历史</el-button>
+            <el-button size="small" class="act-secondary" :icon="Clock" :title="$t('sqlq.history')"><span class="bt-tx">{{ $t('sqlq.history') }}</span></el-button>
             <template #dropdown>
               <div class="hist-head">
                 <span>{{ $t('sqlq.history') }}</span>
@@ -148,7 +148,7 @@
                        @command="onAiAction">
             <button class="ai-act-btn" type="button" :title="$t('nav.ai')">
               <el-icon class="ai-act-btn-ic"><MagicStick /></el-icon>
-              <span>{{ $t('nav.ai') }}</span>
+              <span class="bt-tx">{{ $t('nav.ai') }}</span>
               <el-icon class="ai-act-btn-caret"><ArrowDown /></el-icon>
             </button>
             <template #dropdown>
@@ -173,7 +173,7 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-button size="small" type="success" :icon="Document" @click="onSaveClick">{{ $t('common.save') }}</el-button>
+          <el-button size="small" class="act-secondary" type="success" :icon="Document" @click="onSaveClick"><span class="bt-tx">{{ $t('common.save') }}</span></el-button>
         </div>
       </div>
       <div class="editor-body" @contextmenu.prevent="onEditorContextMenu">
@@ -5652,10 +5652,22 @@ onBeforeUnmount(() => {
     minmax(0, calc((1 - var(--editor-ratio, 0.6)) * (100% - 6px)));
 }
 .editor-area { min-height: 0; display: flex; flex-direction: column; background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: var(--dc-radius); overflow: hidden; box-shadow: var(--dc-shadow-sm); }
+/* 容器查询的基准：编辑器卡自身宽度（窗口/分栏/拖比例都实时生效），不用媒体查询猜窗口 */
+.editor-area { container-type: inline-size; }
+/* 窄屏二级压缩：编辑卡 ≤960px 时，次要按钮（格式化/事务/片段/历史/保存/AI）收成纯图标 ——
+   功能一个不少（图标 + 悬停提示），把宽度让给「执行 / 执行全部 / Auto」这些高频入口 */
+@container (max-width: 960px) {
+  .head-actions { gap: 4px; }
+  .act-secondary .bt-tx { display: none; }
+  .act-secondary.el-button { padding: 5px 9px; }
+  .ai-act-btn .bt-tx { display: none; }
+  .ai-act-btn { padding: 0 7px; }
+}
 /* 标题条与「编辑表结构」同一口径：**一档浅底**（原来是纯白 + 一条下边框，看着是"另一块"）。
    它住在编辑器卡（.editor-area，自身 8px 圆角 + overflow: hidden）里，所以上两角跟着卡圆即可。 */
 .editor-head {
   display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; row-gap: 6px;
   padding: 8px 12px;
   background: var(--dc-bg-soft);
   border-bottom: 1px solid var(--dc-border);
@@ -5682,7 +5694,14 @@ onBeforeUnmount(() => {
 .db-select :deep(.el-input__prefix) { display: flex; align-items: center; margin-left: 6px; }
 .schema-select :deep(.el-input__prefix) { display: flex; align-items: center; margin-left: 6px; }
 
-.head-actions { display: flex; align-items: center; gap: 6px; }
+.head-actions {
+  display: flex; align-items: center; gap: 6px;
+  flex-shrink: 0; margin-left: auto;
+}
+/* 子项不可收缩 —— 否则按钮各自被压扁、整组永远「放得下」，editor-head 的换行永远不触发 */
+.head-actions > * { flex-shrink: 0; }
+/* 小屏换行后操作组独占一行：右对齐（margin-left:auto 在第二行同样生效），
+   并把按钮间距略收紧，尽量一行放下全部动作 —— 任何按钮都不消失、不用二级菜单 */
 /* 间距只认 flex gap：Element Plus 会给相邻 el-button 追加 margin-left:12px，
    事务组三个按钮直接相邻时与「下拉触发器」们间距不一致 —— 统一清零 */
 .head-actions .el-button { margin-left: 0 !important; }
