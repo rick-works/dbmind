@@ -2,7 +2,7 @@
   <div class="sql-query-view" :class="{ 'with-result': resultVisible }" ref="rootRef"
        :style="resultVisible ? { '--editor-ratio': String(editorRatio) } : null">
     <div class="editor-area">
-      <div class="editor-head">
+      <div class="editor-head" ref="editorHeadEl">
         <!-- 连接选择器 -->
         <div class="selector-group">
           <!-- 连接选择：**分组 → 连接 两级**，组头可点开/收起（组件见 common/ConnectionSelect.vue，
@@ -48,35 +48,35 @@
 
         <span class="flex-spacer"></span>
         <div class="head-actions">
-          <el-button v-if="running" size="small" type="danger" @click="stopSql">
-            <el-icon style="margin-right:4px"><VideoPause /></el-icon>{{ $t('sqlq.stop') }} </el-button>
+          <el-button v-if="running" size="small" type="danger" class="act-run" @click="stopSql">
+            <el-icon class="run-ic"><VideoPause /></el-icon><span class="bt-tx">{{ $t('sqlq.stop') }}</span> </el-button>
           <!-- 无选区时执行的是**光标所在的那一段**（编辑器里框线标出的就是它），
                文案与快捷键表里的「执行当前 SQL」对齐；跑整段脚本走「执行全部」。 -->
-          <el-button v-else size="small" type="primary" @click="() => runSql()"
+          <el-button v-else size="small" type="primary" class="act-run" @click="() => runSql()"
                      :title="hasEditorSelection ? $t('sqlq.runSelTitle', { n: selChars }) : $t('sqlq.runCurTitle')">
-            <el-icon style="margin-right:4px"><CaretRight /></el-icon>{{ hasEditorSelection ? $t('sqlq.runSel') : $t('sqlq.run') }}
+            <el-icon class="run-ic"><CaretRight /></el-icon><span class="bt-tx">{{ hasEditorSelection ? $t('sqlq.runSel') : $t('sqlq.run') }}</span>
           </el-button>
-          <el-button size="small" @click="runSqlAll" :title="$t('sqlq.runAllTitle')">
-            <el-icon style="margin-right:4px"><DArrowRight /></el-icon>{{ $t('sqlq.runAll') }}
+          <el-button size="small" class="act-runall" data-g="8" @click="runSqlAll" :title="$t('sqlq.runAllTitle')">
+            <el-icon class="run-ic"><DArrowRight /></el-icon><span class="bt-tx">{{ $t('sqlq.runAll') }}</span>
           </el-button>
-          <el-button v-if="!isNoSql" size="small" class="act-secondary" :icon="Brush" @click="formatSql"
+          <el-button v-if="!isNoSql" size="small" class="act-secondary" data-g="6" :icon="Brush" @click="formatSql"
                      :title="hasEditorSelection ? $t('sqlq.fmtSelTitle') : $t('sqlq.fmtAllTitle')"><span class="bt-tx">{{ hasEditorSelection ? $t('sqlq.fmtSel') : $t('sce.format') }}</span></el-button>
           <!-- 事务模式：begin 关掉编辑器会话的 autocommit，之后的写语句都挂在事务里；
                提交/回滚收尾。只有 agent(JDBC 宿主)链路的类型支持（SQLite 走内核原生驱动，
                没有会话级事务能力 —— 按钮直接不显示，免得点了报「不支持」） -->
           <template v-if="supportsTx">
-            <el-button size="small" class="act-secondary" :type="txMode ? 'warning' : 'default'" :icon="SwitchIcon" :loading="txBusy"
+            <el-button size="small" class="act-secondary" data-g="7" :type="txMode ? 'warning' : 'default'" :icon="SwitchIcon" :loading="txBusy"
                        @click="toggleTxMode" :title="$t('sqlq.txToggleTip')"><span class="bt-tx">{{ $t('sqlq.txMode') }}</span></el-button>
-            <el-button v-if="txMode" size="small" class="act-secondary" type="success" :icon="Select" :loading="txBusy"
+            <el-button v-if="txMode" size="small" class="act-secondary" data-g="7" type="success" :icon="Select" :loading="txBusy"
                        @click="txCommit" :title="$t('sqlq.txCommitTip')"><span class="bt-tx">{{ $t('sqlq.txCommit') }}</span></el-button>
-            <el-button v-if="txMode" size="small" class="act-secondary" type="danger" plain :icon="RefreshLeft" :loading="txBusy"
+            <el-button v-if="txMode" size="small" class="act-secondary" data-g="7" type="danger" plain :icon="RefreshLeft" :loading="txBusy"
                        @click="txRollback"><span class="bt-tx">{{ $t('sqlq.txRollback') }}</span></el-button>
           </template>
           <!-- SQL 片段库：点开查看 / 插入已存片段。
                保存走编辑器右键「保存片段」（那里能直接对选中内容命名保存），
                所以这里**不再放「存为片段」按钮** —— 同一个动作不留两个入口。 -->
           <el-dropdown v-if="!isNoSql" trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
-            <el-button size="small" class="act-secondary" :icon="Collection" :title="$t('sqlq.snippets')"><span class="bt-tx">{{ $t('sqlq.snippets') }}</span></el-button>
+            <el-button size="small" class="act-secondary" data-g="5" :icon="Collection" :title="$t('sqlq.snippets')"><span class="bt-tx">{{ $t('sqlq.snippets') }}</span></el-button>
             <template #dropdown>
               <div class="hist-head">
                 <span>{{ $t('sqlq.snippets') }}</span>
@@ -98,7 +98,7 @@
           </el-dropdown>
           <!-- SQL 执行历史：本地保存最近执行的 SQL，一键回填复用 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
-            <el-button size="small" class="act-secondary" :icon="Clock" :title="$t('sqlq.history')"><span class="bt-tx">{{ $t('sqlq.history') }}</span></el-button>
+            <el-button size="small" class="act-secondary" data-g="4" :icon="Clock" :title="$t('sqlq.history')"><span class="bt-tx">{{ $t('sqlq.history') }}</span></el-button>
             <template #dropdown>
               <div class="hist-head">
                 <span>{{ $t('sqlq.history') }}</span>
@@ -121,7 +121,7 @@
             </template>
           </el-dropdown>
           <!-- AI 模型：紧靠 AI 功能按钮（与 AI 面板「选择模型」同一套下拉，popper-class 复用全局样式） -->
-          <el-dropdown v-if="aiModels.length > 0" trigger="click" placement="bottom-end"
+          <el-dropdown v-if="aiModels.length > 0" trigger="click" placement="bottom-end" data-g="3"
                        popper-class="ai-model-dropdown" @command="onPickAiModel">
             <button class="model-btn" type="button" :title="'AI 模型：' + currentAiModelLabel">
               <el-icon class="model-btn-ic"><Cpu /></el-icon>
@@ -144,7 +144,7 @@
             </template>
           </el-dropdown>
           <!-- AI 助手：解释 / 优化 / 诊断 / 改写 整合成一个入口，避免工具栏按钮堆积 -->
-          <el-dropdown trigger="click" placement="bottom-end" popper-class="ai-model-dropdown"
+          <el-dropdown trigger="click" placement="bottom-end" popper-class="ai-model-dropdown" data-g="2"
                        @command="onAiAction">
             <button class="ai-act-btn" type="button" :title="$t('nav.ai')">
               <el-icon class="ai-act-btn-ic"><MagicStick /></el-icon>
@@ -173,7 +173,7 @@
               </el-dropdown-menu>
             </template>
           </el-dropdown>
-          <el-button size="small" class="act-secondary" type="success" :icon="Document" @click="onSaveClick"><span class="bt-tx">{{ $t('common.save') }}</span></el-button>
+          <el-button size="small" class="act-secondary" data-g="1" type="success" :icon="Document" @click="onSaveClick"><span class="bt-tx">{{ $t('common.save') }}</span></el-button>
         </div>
       </div>
       <div class="editor-body" @contextmenu.prevent="onEditorContextMenu">
@@ -3102,6 +3102,46 @@ watch(() => [selectedConnId.value, selectedCatalog.value, selectedDbShort.value,
   fitHeadSelects)
 onMounted(fitHeadSelects)
 
+// ===== 工具条单行压缩：永远一行，放不下按级把按钮收成纯图标（悬停看 title 提示） =====
+// 收级次序（data-g 越小越先收）：1 保存 → 2 AI 助手 → 3 模型 → 4 历史 → 5 片段 →
+// 6 格式化 → 7 事务组 → 8 执行全部；「执行」永不收（最高频）。图标保持居中。
+// 用 ResizeObserver 实测，不猜断点 —— 字体、语言（中/英）、事务按钮是否在场的差异都自动适配。
+const editorHeadEl = ref(null)
+const HEAD_MAX_G = 10
+const applyHeadLv = (lv) => {
+  const head = editorHeadEl.value
+  if (!head) return
+  if (head.dataset.lv !== String(lv)) head.dataset.lv = String(lv)
+  head.querySelectorAll('[data-g]').forEach((el) => {
+    el.classList.toggle('icon-only', Number(el.dataset.g) <= lv)
+  })
+}
+const headOverflow = () => {
+  const head = editorHeadEl.value
+  if (!head) return false
+  const act = head.querySelector('.head-actions')
+  if (!act) return false
+  // 头部右内沿 = border box 右 - 右 padding(12)；操作组最右元素越沿即溢出
+  return act.getBoundingClientRect().right > head.getBoundingClientRect().right - 12 + 0.5
+}
+const fitHeadActions = () => {
+  const head = editorHeadEl.value
+  if (!head || !head.offsetParent) return
+  let lv = 0
+  applyHeadLv(0)
+  // 从全文字开始逐级收，直到放得下（每次 apply 都同步重排，量得准）
+  while (headOverflow() && lv < HEAD_MAX_G) { lv += 1; applyHeadLv(lv) }
+}
+let headRo = null
+onMounted(() => {
+  headRo = new ResizeObserver(() => fitHeadActions())
+  if (editorHeadEl.value) headRo.observe(editorHeadEl.value)
+  nextTick(fitHeadActions)
+})
+onBeforeUnmount(() => { if (headRo) { headRo.disconnect(); headRo = null } })
+// 按钮集合变化（开始/停止执行、事务模式开关、AI 模型列表）都要重新量一次；
+// aiModels 声明在后面（见 3578 附近），所以这条 watch 放在那边注册
+
 const selectedConn = computed(() => allConnections.value.find(c => String(c.id) === String(selectedConnId.value)))
 // 写操作闸门（只读 / 生产保护）用的连接对象：优先用**列表里最新的那条**。
 // props.conn 是页签创建时的快照 —— 用户在连接弹窗里把「只读」关掉后它不会变，
@@ -3537,6 +3577,9 @@ const aiEvidenceLabel = computed(() => {
 
 const aiModels = ref([])
 const selectedAiModelId = ref('')
+// 按钮集合变化（开始/停止执行、事务模式开关、AI 模型列表）都要重新量一次工具条；
+// 这里注册是因为 aiModels 声明在这附近，工具条压缩块（fitHeadActions）在它之前
+watch([running, supportsTx, txMode, () => aiModels.value.length], () => nextTick(fitHeadActions))
 
 /** 对话框内容：一律按 Markdown 渲染。
  *  改写 / 修复返回的是裸 SQL，包成 ```sql 围栏后才能复用「每段 SQL 各自插入 / 复制」的按钮 */
@@ -5652,22 +5695,45 @@ onBeforeUnmount(() => {
     minmax(0, calc((1 - var(--editor-ratio, 0.6)) * (100% - 6px)));
 }
 .editor-area { min-height: 0; display: flex; flex-direction: column; background: var(--dc-bg-card); border: 1px solid var(--dc-border); border-radius: var(--dc-radius); overflow: hidden; box-shadow: var(--dc-shadow-sm); }
-/* 容器查询的基准：编辑器卡自身宽度（窗口/分栏/拖比例都实时生效），不用媒体查询猜窗口 */
-.editor-area { container-type: inline-size; }
-/* 窄屏二级压缩：编辑卡 ≤960px 时，次要按钮（格式化/事务/片段/历史/保存/AI）收成纯图标 ——
-   功能一个不少（图标 + 悬停提示），把宽度让给「执行 / 执行全部 / Auto」这些高频入口 */
-@container (max-width: 960px) {
-  .head-actions { gap: 4px; }
-  .act-secondary .bt-tx { display: none; }
-  .act-secondary.el-button { padding: 5px 9px; }
-  .ai-act-btn .bt-tx { display: none; }
-  .ai-act-btn { padding: 0 7px; }
-}
+/* ===== 工具条单行压缩（JS 按级标 .icon-only，见 fitHeadActions）=====
+   收成图标的按钮：文字隐藏、图标水平居中（对称 padding），悬停有 title 提示。
+   深级时选择器也收窄，把宽度让给按钮。 */
+.head-actions .run-ic { margin-right: 4px; }
+.editor-head .icon-only .bt-tx { display: none; }
+.editor-head .icon-only.el-button { padding: 5px 9px; }
+.editor-head .icon-only .run-ic { margin-right: 0; }
+.editor-head .el-dropdown.icon-only .model-btn-tx,
+.editor-head .el-dropdown.icon-only .ai-act-btn .bt-tx { display: none; }
+.editor-head .el-dropdown.icon-only .model-btn,
+.editor-head .el-dropdown.icon-only .ai-act-btn { padding: 0 7px; }
+/* 深级：选择器也收窄（conn 是 ConnectionSelect 组件，宽度写在**内联 style** 里，
+   必须 !important 才压得住）；间距同步收紧。 */
+.editor-head[data-lv='7'] .conn-select { width: 150px !important; }
+.editor-head[data-lv='7'] .db-select, .editor-head[data-lv='7'] .schema-select { width: 130px !important; }
+.editor-head[data-lv='8'] .head-actions { gap: 4px; }
+.editor-head[data-lv='8'] .conn-select { width: 140px !important; }
+.editor-head[data-lv='8'] .db-select, .editor-head[data-lv='8'] .schema-select { width: 120px !important; }
+.editor-head[data-lv='9'] .conn-select { width: 130px !important; }
+.editor-head[data-lv='9'] .db-select, .editor-head[data-lv='9'] .schema-select { width: 110px !important; }
+.editor-head[data-lv='9'] .head-actions { gap: 3px; }
+/* lv9 连「执行」也收（最高频动作最后收） */
+.editor-head[data-lv='9'] .act-run .bt-tx { display: none; }
+.editor-head[data-lv='9'] .act-run.el-button { padding: 5px 9px; }
+.editor-head[data-lv='9'] .act-run .run-ic { margin-right: 0; }
+.editor-head[data-lv='9'] .el-dropdown.icon-only .model-btn,
+.editor-head[data-lv='9'] .el-dropdown.icon-only .ai-act-btn { padding: 0 5px; }
+/* lv10（极端窄，如 900px 窗口编辑卡只剩 ~520px）：选择器收到最小，操作区允许横向
+   滚动兜底 —— 图标已经到底了，宁可滚一下也不换行/丢按钮。正常宽度到不了这级。 */
+.editor-head[data-lv='10'] .conn-select { width: 110px !important; }
+.editor-head[data-lv='10'] .db-select, .editor-head[data-lv='10'] .schema-select { width: 96px !important; }
+.editor-head[data-lv='10'] .head-actions { overflow-x: auto; scrollbar-width: none; }
+.editor-head[data-lv='10'] .head-actions::-webkit-scrollbar { display: none; }
 /* 标题条与「编辑表结构」同一口径：**一档浅底**（原来是纯白 + 一条下边框，看着是"另一块"）。
    它住在编辑器卡（.editor-area，自身 8px 圆角 + overflow: hidden）里，所以上两角跟着卡圆即可。 */
 .editor-head {
   display: flex; justify-content: space-between; align-items: center;
-  flex-wrap: wrap; row-gap: 6px;
+  /* 不换行：放不下由 fitHeadActions 按级收图标解决，收满 8 级还放不下才会裁切（正常到不了） */
+  flex-wrap: nowrap;
   padding: 8px 12px;
   background: var(--dc-bg-soft);
   border-bottom: 1px solid var(--dc-border);
