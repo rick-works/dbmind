@@ -5702,10 +5702,16 @@ onBeforeUnmount(() => {
    悬浮提示走 v-fast-tip（120ms）。深级时选择器也收窄，把宽度让给按钮。 */
 .head-actions .run-ic { margin-right: 4px; }
 .editor-head .icon-only .bt-tx { display: none; }
-/* 关键：el-button 会把默认插槽再包一层自己的 <span>，且 `.el-icon + span` 有 6px 左边距 ——
-   只藏 .bt-tx 不够，外层 span 的 margin 还在，图标就偏左不居中（真机反馈）。两层一起藏。 */
-.editor-head .icon-only.el-button span,
-.editor-head .el-dropdown.icon-only .el-button span { display: none; }
+/* 两类按钮结构不同，不能一刀切：
+   · :icon 形式（格式化/事务/片段/历史/保存）：icon 是 button 的直接子 <i>，Element 的包装
+     span 在图标后面、带主题给的 4px 左 margin —— 收图标后把它清零（span 里只剩隐藏的
+     .bt-tx，宽度为 0），图标才居中。
+   · slot 形式（执行/执行全部/停止）：**图标就在包装 span 里面**，绝不能 display:none 整个
+     span —— 否则连图标一起藏掉、按钮变成 18px 空壳（真机踩过）；.bt-tx 已单独隐藏，
+     图标居中由对称 padding 保证。另外这些 span 是 Element 内部节点（无 data-v），
+   scoped 规则必须 :deep() 穿透才匹配得上。 */
+.editor-head .icon-only.el-button :deep(span:not(:has(.el-icon))),
+.editor-head .el-dropdown.icon-only .el-button :deep(span:not(:has(.el-icon))) { margin: 0 !important; }
 .editor-head .icon-only.el-button,
 .editor-head .el-dropdown.icon-only .el-button { padding: 5px 9px; }
 .editor-head .icon-only .run-ic { margin-right: 0; }
