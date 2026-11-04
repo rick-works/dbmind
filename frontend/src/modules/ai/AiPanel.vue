@@ -1214,10 +1214,12 @@ const loadConnList = async () => {
   try { connList.value = (await listConnections()) || [] } catch (e) { /* ignore */ }
 }
 
-// ===== 上下文（连接 / 数据库 / 模式）：工具条上可逐级选择 =====
-const ctxConnId = ref('')
-const ctxDatabase = ref('')
-const ctxSchema = ref('')
+// ===== 上下文（连接 / 数据库 / 模式 / 聚焦表）：工具条上可逐级选择 =====
+// 放跨卸载的模块级 store：切页签 / 切技能回来，选好的连接、库和聚焦表都还在 ——
+// 之前是局部 ref，卸载即清，问数拿不到聚焦表就走「12 张兜底」（用户：我明明选了表）。
+const ctxConnId = toRef(_ps, 'ctxConnId')
+const ctxDatabase = toRef(_ps, 'ctxDatabase')
+const ctxSchema = toRef(_ps, 'ctxSchema')
 /**
  * 聚焦表的来源有两条路：右键「发送到 AI」带进单张表（applyPending），
  * 数据源下拉里勾选（toggleCtxTable，可多选）。最终随请求的 tables 字段发给后端，
@@ -1227,7 +1229,7 @@ const ctxSchema = ref('')
 /** **聚焦表（多选）**：数据源下拉里勾选的表，随请求发给后端（ask 的 tables 字段是数组，
  *  后端会把「点名的表」和「提问里点到的表」求并集）。
  *  注意后端从来没有单数的 table 字段 —— 之前发 table:xxx 是被 serde 静默丢掉的，聚焦从未生效过。 */
-const ctxTables = ref([])
+const ctxTables = toRef(_ps, 'ctxTables')
 const ctxOpen = ref(false)
 /** 上下文下拉实例（与 Skills、模型下拉互斥） */
 const ctxFlatItems = ref([])
@@ -1493,17 +1495,22 @@ const selectCtxByItem = (item) => {
   }
   // 按**项的类型**（value 前缀）回填，而不是按链上下标 —— Oracle 不画库层，
   // 链是「连接 → 模式」，按下标会把模式名塞进「库」里、模式反而空着。
-  ctxDatabase.value = ''
+  let conn = '', db = '', sc = ''
   for (const node of chain) {
     const raw = ctxUnwrap(node.value)
-    if (node.value.startsWith('conn:')) ctxConnId.value = raw
-    else if (node.value.startsWith('db:')) ctxDatabase.value = raw
-    else if (node.value.startsWith('sc:')) ctxSchema.value = raw
+    if (node.value.startsWith('conn:')) conn = raw
+    else if (node.value.startsWith('db:')) db = raw
+    else if (node.value.startsWith('sc:')) sc = raw
   }
-  // 用户**主动**在工具条上换了上下文：之前那些"聚焦表"不再适用，清掉。
-  // 不清的话会出现「已经切到别的库了，提问还被"只基于表 X 回答"绑着」。
+  const changed = conn !== ctxConnId.value || db !== ctxDatabase.value || sc !== ctxSchema.value
+  ctxDatabase.value = db
+  ctxConnId.value = conn
+  ctxSchema.value = sc
+  // 用户**主动**换上下文（连接/库/模式真的变了）：聚焦表不再适用，清掉。
+  // 上下文没变就不清 —— 重选一下同一个库就把聚焦表抹掉，问数就悄悄退回
+  // 「12 张兜底」，用户看到的是「我明明选了表，怎么还去找 12 张」（真机踩过）。
   // （右键「发送到 AI」那条路不走这里 —— 它直接设 ctxTables，见 applyPending）
-  ctxTables.value = []
+  if (changed) ctxTables.value = []
 }
 
 /** 处理上下文下拉命令：

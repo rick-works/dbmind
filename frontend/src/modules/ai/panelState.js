@@ -21,6 +21,16 @@ const makeState = () => ({
   chatThreadId: '',
   /** 问数对话的本地记录 id（追问并进同一条「记录」） */
   askThreadId: '',
+  /**
+   * 问数上下文：连接 / 库 / 模式 / 聚焦表。同样跨卸载 ——
+   * 用户勾好的聚焦表如果只放组件 ref 里，切个页签回来就没了，
+   * 问数拿不到 tables 就走「12 张兜底」，用户看到的就是
+   * 「我明明选了表，怎么还去找 12 张」（真机踩过）。
+   */
+  ctxConnId: '',
+  ctxDatabase: '',
+  ctxSchema: '',
+  ctxTables: [],
 })
 
 export const panelState = reactive({
