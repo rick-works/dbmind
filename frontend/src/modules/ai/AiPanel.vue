@@ -305,24 +305,24 @@
                       :placeholder="composePlaceholder"
                       @keydown="onComposeKeydown" @input="onComposeInput" />
 
-            <div class="composer-bar">
+            <div class="composer-bar" ref="composerBarEl">
               <!-- 左侧：Skills / 专属参数 / 上下文 / 模型（除发送外全部靠左排布） -->
               <!-- 自主排查（原「深挖」）：交给智能体自己查库、出变更单。
                    title 里写清「会自己查」，否则用户看不出这跟普通问答差在哪 -->
-              <button class="composer-ctx mate-btn" :class="{ open: agentMode }" type="button"
-                      :title="$t('ai.agentModeTip')" @click="agentMode = !agentMode">
+              <button class="composer-ctx mate-btn" :class="{ open: agentMode }" type="button" data-g="7"
+                      v-fast-tip="() => $t('ai.agentModeTip')" @click="agentMode = !agentMode">
                 <el-icon :size="12"><Aim /></el-icon>
                 <span class="composer-ctx-tx">{{ $t('ai.agentMode') }}</span>
               </button>
               <!-- 记事（原「同事」）：待办 + 记忆。角标只统计 alert（值班真发现问题），
                    不把「等你确认变更单」也标红 —— 那会变成天天有红点 -->
-              <button class="composer-ctx mate-btn" type="button" :title="$t('ai.mateTip')" @click="openMate('todo')">
+              <button class="composer-ctx mate-btn" type="button" data-g="6" v-fast-tip="() => $t('ai.mateTip')" @click="openMate('todo')">
                 <el-icon :size="12"><Bell /></el-icon>
                 <span class="composer-ctx-tx">{{ $t('ai.mate') }}</span>
                 <span v-if="alertCount" class="mate-badge">{{ alertCount }}</span>
               </button>
               <!-- Skills：完全复用「模型」下拉的 el-dropdown，样式天然一致 -->
-              <el-dropdown ref="skillDropRef" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
+              <el-dropdown ref="skillDropRef" data-g="5" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
                            @command="pickSkill" @visible-change="onSkillVisible">
                 <button class="skill-btn" :class="{ open: skillsOpen }" type="button">
                   <el-icon class="skill-btn-ic"><component :is="currentSkill.icon" /></el-icon>
@@ -351,14 +351,14 @@
               <!-- placement 用 top-start，但**必须**让 popper 自己避让视口：
                    上下文列表带层级缩进、项多且库名一长整块就很宽，贴着窗口右边时会整块铺到屏幕外。
                    preventOverflow 让它在视口内平移，flip 兜底上下翻转。 -->
-              <el-dropdown ref="ctxDropRef" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
+              <el-dropdown ref="ctxDropRef" data-g="4" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
                            :hide-on-click="false" @command="onCtxCommand" @visible-change="onCtxVisible"
                            :popper-options="{ modifiers: [
                              { name: 'preventOverflow', options: { boundary: 'viewport', padding: 8 } },
                              { name: 'flip', options: { fallbackPlacements: ['top-end', 'bottom-start', 'bottom-end'] } }
                            ] }">
                 <button class="composer-ctx" :class="{ open: ctxOpen }" type="button"
-                        :title="ctxTables.length ? ctxTables.join('、') : undefined">
+                        v-fast-tip="() => contextLabel || $t('ai.pickContext')">
                   <el-icon :size="12"><Coin /></el-icon>
                   <span class="composer-ctx-tx">{{ contextLabel || $t('ai.pickContext') }}</span>
                   <el-icon :size="12" class="composer-ctx-caret"><ArrowDown /></el-icon>
@@ -399,10 +399,10 @@
               <!-- 聚焦表（多选）：独立的表选择器 —— 深藏在数据源下拉的第三/四层里根本用不了
                    （用户反馈「把表挪到外面来显示」）：顶层入口 + 搜索框 + 勾选列表。
                    没选库时禁用；列表懒加载，键是 连接|库(库.模式)。 -->
-              <el-dropdown ref="tbDropRef" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
+              <el-dropdown ref="tbDropRef" data-g="3" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
                            :hide-on-click="false" @visible-change="onTbVisible">
                 <button class="composer-ctx" :class="{ open: tbOpen }" type="button"
-                        :disabled="!ctxEffectiveDatabase" :title="ctxTables.join('、')">
+                        :disabled="!ctxEffectiveDatabase" v-fast-tip="() => ctxTables.length ? ctxTables.join('、') : (tbLabel || $t('ai.pickTables'))">
                   <el-icon :size="12"><Tickets /></el-icon>
                   <span class="composer-ctx-tx">{{ tbLabel }}</span>
                   <span v-if="ctxTables.length" class="composer-tb-badge">{{ ctxTables.length }}</span>
@@ -432,9 +432,9 @@
 
               <!-- 知识库范围：控制这次提问检索哪些资料库。
                    原先是否注入完全由知识库侧的全局开关决定，问 A 系统的表却召回 B 系统的资料也无法控制 -->
-              <el-dropdown ref="kbDropRef" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
+              <el-dropdown ref="kbDropRef" data-g="2" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
                            :hide-on-click="false" @command="onKbScopeCommand" @visible-change="onKbVisible">
-                <button class="composer-ctx" :class="{ open: kbOpen }" type="button">
+                <button class="composer-ctx" :class="{ open: kbOpen }" type="button" v-fast-tip="() => kbScopeLabel">
                   <el-icon :size="12"><component :is="kbScopeIcon" /></el-icon>
                   <span class="composer-ctx-tx">{{ kbScopeLabel }}</span>
                   <el-icon :size="12" class="composer-ctx-caret"><ArrowDown /></el-icon>
@@ -475,9 +475,9 @@
               <!-- 模型选择：自定义下拉按钮（与「上下文」按钮同一实现）。
                    这里刻意不用 el-select —— 它的内部 selection 在「按内容定宽」的 flex 容器里会塌成 0 宽，
                    表现为只剩一个空的小方框。自定义按钮由内容撑开，宽度天然自适应。 -->
-              <el-dropdown ref="modelDropRef" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
+              <el-dropdown ref="modelDropRef" data-g="1" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
                            @command="onPickModel" @visible-change="onModelVisible">
-                <button class="composer-pick" type="button">
+                <button class="composer-pick" type="button" v-fast-tip="() => currentModelLabel">
                   <el-icon :size="12"><Cpu /></el-icon>
                   <span class="composer-pick-tx">{{ currentModelLabel }}</span>
                   <el-icon :size="12" class="composer-pick-caret"><ArrowDown /></el-icon>
@@ -640,6 +640,9 @@ const emit = defineEmits(['insert-sql', 'close', 'panel', 'run-plan', 'open-know
 // 技能页签 / 对话 / 问数记录上下文都放在跨卸载的模块级 store（panelState.js）：
 // 中央工作区切走页签再切回来，对话原样还在 —— 只有「新对话」才清空
 import { panelState } from './panelState.js'
+import fastTip from '../../utils/fastTip'
+// 模板里的 v-fast-tip（底栏 chips 收成图标后的快速悬浮提示，120ms）
+const vFastTip = fastTip
 const _ps = panelState[props.mode === 'studio' ? 'studio' : 'panel']
 const tab = toRef(_ps, 'tab')
 
@@ -2415,6 +2418,40 @@ onMounted(() => {
   restoreThread()
   refreshMate()
 })
+
+// ===== 底栏上下文 chips 小屏压缩：永远单行，放不下按级收成纯图标（v-fast-tip 快速提示） =====
+// 收级次序（data-g 越小越先收）：1 模型 → 2 知识库 → 3 聚焦表 → 4 数据源；
+// 自主排查/记事/自由对话是模式入口，不收。与 SQL 工具条同一套交互口径。
+const composerBarEl = ref(null)
+const COMPOSER_MAX_G = 7
+const applyComposerLv = (lv) => {
+  const bar = composerBarEl.value
+  if (!bar) return
+  bar.querySelectorAll('[data-g]').forEach((el) => {
+    el.classList.toggle('icon-only', Number(el.dataset.g) <= lv)
+  })
+}
+const composerOverflow = () => {
+  const bar = composerBarEl.value
+  if (!bar) return false
+  return bar.scrollWidth > bar.clientWidth + 1
+}
+const fitComposerBar = () => {
+  const bar = composerBarEl.value
+  if (!bar || !bar.offsetParent) return
+  let lv = 0
+  applyComposerLv(0)
+  while (composerOverflow() && lv < COMPOSER_MAX_G) { lv += 1; applyComposerLv(lv) }
+}
+let composerRo = null
+onMounted(() => {
+  composerRo = new ResizeObserver(() => fitComposerBar())
+  if (composerBarEl.value) composerRo.observe(composerBarEl.value)
+  nextTick(fitComposerBar)
+})
+onBeforeUnmount(() => { if (composerRo) { composerRo.disconnect(); composerRo = null } })
+// 文案宽度变化（语言、选中的库/模型名）也要重新量
+watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => locale.value], () => nextTick(fitComposerBar))
 </script>
 
 <style scoped>
@@ -2581,6 +2618,20 @@ onMounted(() => {
 .composer-ctx-tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-ctx-caret { transition: transform .18s ease; }
 .composer-ctx.open .composer-ctx-caret { transform: rotate(180deg); }
+/* ===== 底栏 chips 小屏压缩（fitComposerBar 按级标 .icon-only）=====
+   收成图标：文字隐藏（Element 自动包装的外层 span 是内部节点，scoped 要 :deep 穿透）、
+   对称 padding 让图标居中；悬浮 v-fast-tip 快速提示。条目本身不可收缩，溢出才触发。 */
+.composer-bar > * { flex-shrink: 0; }
+.composer-bar .icon-only .composer-ctx-tx,
+.composer-bar .icon-only .composer-pick-tx,
+.composer-bar .icon-only .skill-btn-tx { display: none; }
+.composer-bar .icon-only .composer-ctx,
+.composer-bar .icon-only .composer-pick,
+.composer-bar .icon-only .skill-btn { padding: 0 8px; max-width: none; }
+.composer-bar .icon-only .composer-ctx :deep(span),
+.composer-bar .icon-only .composer-pick :deep(span) { display: none; }
+.composer-bar .icon-only .composer-ctx :deep(.el-icon:first-child),
+.composer-bar .icon-only .composer-pick :deep(.el-icon:first-child) { margin: 0; }
 
 
 
@@ -2933,7 +2984,10 @@ onMounted(() => {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 10px 8px;
   border-top: 1px solid var(--dc-border);
+  /* 极窄（如 AI 列只剩 ~300px）时全部收成图标也放不下：允许横向滚动兜底，不换行不丢入口 */
+  overflow-x: auto; scrollbar-width: none;
 }
+.composer-bar::-webkit-scrollbar { display: none; }
 .composer-param { flex-shrink: 0; width: 150px; }
 .composer-param :deep(.el-input__wrapper) {
   background: var(--dc-bg-deep); border-radius: 8px;
