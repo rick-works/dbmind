@@ -1268,7 +1268,11 @@ const fitTopNav = () => {
   }
 }
 const onTopNavResize = () => fitTopNav()
-onMounted(() => window.addEventListener('resize', onTopNavResize))
+onMounted(() => {
+  window.addEventListener('resize', onTopNavResize)
+  // 字体就绪后菜单文字宽度会变（首帧回退字体窄），重新量一次，否则溢出残留到手动刷新
+  if (document.fonts?.ready) document.fonts.ready.then(() => fitTopNav()).catch(() => {})
+})
 onBeforeUnmount(() => window.removeEventListener('resize', onTopNavResize))
 // 菜单配置 / 语言切换会改条目数量与文字宽度，重新量一次
 watch([topMenuPrimary, () => locale.value], () => nextTick(fitTopNav))

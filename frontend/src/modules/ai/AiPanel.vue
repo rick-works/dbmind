@@ -2448,6 +2448,8 @@ onMounted(() => {
   composerRo = new ResizeObserver(() => fitComposerBar())
   if (composerBarEl.value) composerRo.observe(composerBarEl.value)
   nextTick(fitComposerBar)
+  // 字体就绪后 chip 文字宽度会变（首帧回退字体窄），重新量一次
+  if (document.fonts?.ready) document.fonts.ready.then(() => fitComposerBar()).catch(() => {})
 })
 onBeforeUnmount(() => { if (composerRo) { composerRo.disconnect(); composerRo = null } })
 // 文案宽度变化（语言、选中的库/模型名）也要重新量

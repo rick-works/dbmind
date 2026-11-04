@@ -3137,10 +3137,23 @@ const fitHeadActions = () => {
 let headRo = null
 onMounted(() => {
   headRo = new ResizeObserver(() => fitHeadActions())
-  if (editorHeadEl.value) headRo.observe(editorHeadEl.value)
+  if (editorHeadEl.value) {
+    headRo.observe(editorHeadEl.value)
+    // 只观察 head 不够：新开页签/字体就绪时是**内容把宽度撑出溢出**，head 盒子宽度没变，
+    // RO 不触发 → 卡在旧级数，必须手动刷新才正常（真机反馈）。把操作组也纳入观察，
+    // 内容宽一变就重测。
+    const act = editorHeadEl.value.querySelector('.head-actions')
+    if (act) headRo.observe(act)
+  }
   nextTick(fitHeadActions)
+  // 字体就绪后文字宽度会变（首帧用的是回退字体），再量一次
+  if (document.fonts?.ready) document.fonts.ready.then(() => fitHeadActions()).catch(() => {})
 })
 onBeforeUnmount(() => { if (headRo) { headRo.disconnect(); headRo = null } })
+// 页签切换回来（display 从 none 到可见）也要重测：隐藏期间 offsetParent 为空会跳过量测
+window.addEventListener('dc-tab-change', onTabChangeFitHead)
+onBeforeUnmount(() => window.removeEventListener('dc-tab-change', onTabChangeFitHead))
+function onTabChangeFitHead() { nextTick(fitHeadActions) }
 // 按钮集合变化（开始/停止执行、事务模式开关、AI 模型列表）都要重新量一次；
 // aiModels 声明在后面（见 3578 附近），所以这条 watch 放在那边注册
 
