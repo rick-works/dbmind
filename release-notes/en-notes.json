@@ -1,6 +1,11 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
- "v2.0.5": [
+ "v2.0.6": [
+  "SQL editor toolbar adapts to narrow panes: always one row, buttons degrade to centered icons (hover shows the label instantly) when space runs out, and restore automatically",
+  "The top navigation menu gets the same icon-collapse treatment on narrow windows",
+  "Data Q&A focus tables no longer vanish silently: they survive tab/skill switches and re-picking the same database no longer clears them"
+],
+"v2.0.5": [
   "Data Q&A focus tables no longer vanish silently: they survive tab/skill switches, re-picking the same database in the source dropdown no longer clears them, and ask stops falling back to scanning 12 tables when a table was already chosen",
   "The data Q&A context (connection/database/schema) now persists across tab switches too — no need to re-select it every time"
 ],
