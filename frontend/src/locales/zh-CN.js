@@ -3051,6 +3051,7 @@ export default {
   'sqlq.tplVarNameBad': '变量名不合法：{name}（字母/下划线开头，可含数字、下划线）',
   'sqlq.tplVarDup': '变量名重复：{name}',
   'sqlq.tplVarSaved': '变量已保存',
+  'sqlq.tplVarSaveFailed': '变量保存失败：{detail}',
   'sqlq.tplVarDefault': '默认值',
   'sqlq.varHoverMissing': '未在变量库中，执行时会弹窗询问',
   'sqlq.varHoverEmpty': '未设默认值，执行时会弹窗询问',

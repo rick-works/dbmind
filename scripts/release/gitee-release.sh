@@ -40,7 +40,52 @@ PRERELEASE=$(jq -r '.isPrerelease // false' "$WORK/release.json")
 
 echo "==> 下载资产到 $WORK/assets"
 mkdir -p "$WORK/assets"
-gh_ release download "$TAG" --dir "$WORK/assets"
+# 不走 `gh release download`：它拼的是 github.com 上的 browser_download_url，而 github.com
+# 一旦被墙/抽风就很坑 —— 2026-11-06 实测 api.github.com 200、objects.githubusercontent.com 通，
+# 但 github.com 及其所有 IP 全部超时，结果 0 字节死等半小时也不报错。
+# 资产接口 api.github.com/repos/<repo>/releases/assets/<id> 会 302 到
+# objects.githubusercontent.com，正好绕开 github.com；只需 GH_TOKEN，与浏览器地址无关。
+API_TSV="$WORK/assets.tsv"
+# 注意：endpoint 不能带前导斜杠 —— Git Bash（MSYS）会把它当 POSIX 绝对路径改写成
+# D:/app/git/repos/...，gh 报 invalid API endpoint
+if gh api "repos/${GITHUB_REPO}/releases/tags/${TAG}" \
+     --jq '.assets[] | [.id,.name,(.size|tostring)] | @tsv' > "$API_TSV" 2>"$WORK/assets.err" \
+   && [ -s "$API_TSV" ]; then
+  export DL_BASE="https://api.github.com/repos/${GITHUB_REPO}/releases/assets"
+  export DL_DIR="$WORK/assets" DL_ERR="$WORK/dl.err"
+  : > "$DL_ERR"
+  cat > "$WORK/dl.sh" <<'EOS'
+#!/usr/bin/env bash
+set -u
+id="$1"; name="$2"
+curl -sSL --connect-timeout 20 --max-time 1800 --speed-limit 1024 --speed-time 120 \
+  -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/octet-stream" \
+  -o "${DL_DIR}/${name}" "${DL_BASE}/${id}" \
+  || echo "${name}" >> "${DL_ERR}"
+EOS
+  chmod +x "$WORK/dl.sh"
+  # 3 路并发：单连接实测只有 ~170KB/s，390MB 串行要半小时以上
+  awk -F'\t' '{print $1" "$2}' "$API_TSV" | xargs -P 3 -n 2 "$WORK/dl.sh"
+  if [ -s "$DL_ERR" ]; then
+    echo "错误：以下资产下载失败"
+    sed 's/^/      /' "$DL_ERR"
+    exit 1
+  fi
+  # 大小逐个校验：宁可这里失败，也不要把半截文件传上去 —— Gitee 附件按「同名同大小」判增量，
+  # 一旦传上残缺文件，后续重跑会一直跳过它
+  while IFS=$'\t' read -r _aid aname asize; do
+    [ -n "${asize:-}" ] || continue
+    got=$(stat -c%s "$DL_DIR/$aname" 2>/dev/null || echo 0)
+    if [ "$got" != "$asize" ]; then
+      echo "错误：${aname} 大小不符（期望 ${asize}，实际 ${got}）"
+      exit 1
+    fi
+  done < "$API_TSV"
+else
+  echo "    （资产列表读不到，回退 gh release download）"
+  sed 's/^/      /' "$WORK/assets.err" 2>/dev/null || true
+  gh_ release download "$TAG" --dir "$WORK/assets"
+fi
 ls -l "$WORK/assets" || true
 
 echo "==> 推送 tag ${TAG} 到 Gitee"

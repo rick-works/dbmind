@@ -623,7 +623,7 @@
       <el-button type="primary" @click="onVarConfirm">{{ $t('sqlq.varRun') }}</el-button>
     </template>
   </el-dialog>
-  <!-- 模板变量管理：变量名/默认值/备注，存 localStorage（编辑器 : 补全 + 执行弹窗预填都读它） -->
+  <!-- 模板变量管理：变量名/默认值/备注，存 dbmind.db（编辑器 : 补全 + 执行弹窗预填都读它） -->
   <TplVarDialog v-model="tplVarOpen" @saved="scheduleTplVarDecos" />
   <!-- 查询结果数据透视：复用当前结果网格做分组汇总 / 计数 / 下钻，纯前端不消耗后端 -->
   <DataPivotDialog v-model="pivotVisible" :columns="pivotColumns" :rows="pivotRows" />
@@ -673,7 +673,7 @@ import {
   Collection, RefreshLeft, DArrowRight, Key
 } from '@element-plus/icons-vue'
 import TplVarDialog from './TplVarDialog.vue'
-import { findTplVar, readTplVars, writeTplVars, isRawSqlValue } from '../../utils/sqlTplVars'
+import { findTplVar, readTplVars, saveTplVars, ensureSqlVarStore, readVarValues, saveVarValues, isRawSqlValue } from '../../utils/sqlTplVars'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf, quoteStyleOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
@@ -4881,10 +4881,8 @@ let varValuesOnce = null
 let pendingRunParams = null
 let pendingDefaults = null
 const varDialog = ref({ visible: false, vars: [], values: {}, defs: {} })
-// 变量管理弹窗（预定义变量库：变量名/默认值/备注）
+// 变量管理弹窗（预定义变量库：变量名/默认值/备注；存 dbmind.db，见 utils/sqlTplVars）
 const tplVarOpen = ref(false)
-const VARVALS_LS = 'dbmind_varvalues'
-const readVarVals = () => { try { return JSON.parse(localStorage.getItem(VARVALS_LS) || '{}') } catch { return {} } }
 const extractSqlVars = (text) => {
   const found = []
   const seen = new Set()
@@ -4911,7 +4909,7 @@ const substituteVars = (text, values) => mapOutsideQuotes(text, (seg) =>
 const openVarDialog = (vars, known = {}) => {
   // known = 变量库里已有默认值的那些变量（本轮执行直接用，不进弹窗）；弹窗只收缺失的
   pendingDefaults = known || {}
-  const remembered = readVarVals()
+  const remembered = readVarValues()
   const values = {}
   const defs = {}
   vars.forEach((v) => {
@@ -4924,23 +4922,20 @@ const onVarConfirm = () => {
   const d = varDialog.value
   const missing = d.vars.filter((v) => !(d.values[v] || '').trim())
   if (missing.length) { ElMessage.warning(t('sqlq.varMissing', { n: missing.length })); return }
-  try {
-    const m = readVarVals()
-    d.vars.forEach((v) => { m[v] = d.values[v] })
-    localStorage.setItem(VARVALS_LS, JSON.stringify(m))
-  } catch { /* 存储不可用就算了 */ }
-  // 填过的值自动存入变量库（默认值列）：下次执行同变量不再弹窗
-  try {
-    const list = readTplVars()
-    d.vars.forEach((v) => {
-      const val = String(d.values[v] || '').trim()
-      const hit = list.find((x) => String(x.name || '').toLowerCase() === v.toLowerCase())
-      if (hit) hit.value = val
-      else list.push({ name: v, value: val, note: '' })
-    })
-    writeTplVars(list)
-    scheduleTplVarDecos()
-  } catch { /* 存储不可用就算了 */ }
+  // 记住这次填的值（落 dbmind.db，按变量名），并把填过的值补进变量库的「默认值」列：
+  // 下次执行同变量不再弹窗。两条都是写库，失败只影响"下次还要再填"，不挡这次执行。
+  const vals = {}
+  d.vars.forEach((v) => { vals[v] = d.values[v] })
+  const list = readTplVars().map((x) => ({ name: x.name, value: x.value, note: x.note }))
+  d.vars.forEach((v) => {
+    const val = String(d.values[v] || '').trim()
+    const hit = list.find((x) => String(x.name || '').toLowerCase() === v.toLowerCase())
+    if (hit) hit.value = val
+    else list.push({ name: v, value: val, note: '' })
+  })
+  Promise.all([saveVarValues(vals), saveTplVars(list)])
+    .then(() => scheduleTplVarDecos())
+    .catch(() => { /* 写库失败：这次照常执行，值已在 varValuesOnce 里 */ })
   varValuesOnce = { ...(pendingDefaults || {}), ...d.values }
   pendingDefaults = null
   d.visible = false
@@ -5800,6 +5795,9 @@ onMounted(() => {
     initSelectors()
   })
   loadAiModels()
+  // 变量库 / 记住的执行值在 dbmind.db 里，进页面先拉一次（同步路径：补全、装饰、执行前预填）。
+  // 拉完补一遍装饰与补全清单，避免首屏那几秒里 :变量 既不高亮也不提示。
+  ensureSqlVarStore().then(() => { updateTplVarDecos(); scheduleTplVarDecos() })
   window.addEventListener('keydown', onResultKeyDown)
   window.addEventListener('keydown', onEdCtxKeyDown, true)
   document.addEventListener('mousedown', onDocResCtxClose)

@@ -3037,6 +3037,7 @@ export default {
   'sqlq.tplVarNameBad': 'Invalid variable name: {name} (letter / underscore first, then letters, digits, underscores)',
   'sqlq.tplVarDup': 'Duplicate variable name: {name}',
   'sqlq.tplVarSaved': 'Variables saved',
+  'sqlq.tplVarSaveFailed': 'Failed to save variables: {detail}',
   'sqlq.tplVarDefault': 'default value',
   'sqlq.varHoverMissing': 'not in the variable library — the run dialog will ask for it',
   'sqlq.varHoverEmpty': 'no default value — the run dialog will ask for it',

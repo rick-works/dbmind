@@ -41,7 +41,7 @@
     <template #footer>
       <el-button :icon="Plus" @click="addRow">{{ $t('sqlq.tplVarAdd') }}</el-button>
       <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
-      <el-button type="primary" :disabled="!rows.length" @click="save">{{ $t('common.save') }}</el-button>
+      <el-button type="primary" :disabled="!rows.length" :loading="saving" @click="save">{{ $t('common.save') }}</el-button>
     </template>
   </el-dialog>
 </template>
@@ -51,7 +51,7 @@ import { ref, computed, watch } from 'vue'
 import { t } from '../../utils/i18n'
 import { ElMessage } from 'element-plus'
 import { Delete, Plus, Key, QuestionFilled } from '@element-plus/icons-vue'
-import { readTplVars, writeTplVars, TPLVAR_NAME_RE } from '../../utils/sqlTplVars'
+import { readTplVars, saveTplVars, ensureSqlVarStore, TPLVAR_NAME_RE } from '../../utils/sqlTplVars'
 
 const props = defineProps({ modelValue: { type: Boolean, default: false } })
 const emit = defineEmits(['update:modelValue', 'saved'])
@@ -61,16 +61,18 @@ const visible = computed({
 })
 
 const rows = ref([])
-watch(visible, (v) => {
-  if (v) {
-    // 打开时拷一份现库，编辑期间不动真身（取消不产生副作用）
-    rows.value = readTplVars().map((r) => ({ name: r.name || '', value: r.value || '', note: r.note || '' }))
-  }
+const saving = ref(false)
+watch(visible, async (v) => {
+  if (!v) return
+  // 变量库在 dbmind.db 里（不是 localStorage）：打开时先确保拉过一次，再拷一份现库，
+  // 编辑期间不动真身（取消不产生副作用）
+  await ensureSqlVarStore()
+  rows.value = readTplVars().map((r) => ({ name: r.name || '', value: r.value || '', note: r.note || '' }))
 })
 
 const addRow = () => { rows.value.push({ name: '', value: '', note: '' }) }
 
-const save = () => {
+const save = async () => {
   const seen = new Set()
   const out = []
   for (const r of rows.value) {
@@ -82,7 +84,19 @@ const save = () => {
     seen.add(key)
     out.push({ name, value: String(r.value || '').trim(), note: String(r.note || '').trim() })
   }
-  writeTplVars(out)
+  if (saving.value) return
+  saving.value = true
+  try {
+    await saveTplVars(out)
+  } catch (e) {
+    // 写库失败要明说（后端没起来 / 磁盘只读），不能像以前那样吞掉——
+    // 用户以为存上了、下次打开又是空的
+    const detail = e?.response?.data?.message || e?.message || ''
+    ElMessage.error(t('sqlq.tplVarSaveFailed', { detail }))
+    return
+  } finally {
+    saving.value = false
+  }
   ElMessage.success(t('sqlq.tplVarSaved'))
   emit('saved')
   visible.value = false

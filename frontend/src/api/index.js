@@ -282,6 +282,9 @@ export const saveLegacyTls = (allowLegacyTls) => http.put('/api/settings/legacy-
 // 生产保护、AI 写开关、会话上限这些能力因此一直停在「有后端、没界面」的状态。
 // 启动时树/首页/AI 面板会同时各要一份 → 本层合并（见 once 的说明）
 export const getSettings = () => once('dbmind-settings', () => http.get('/api/dbmind/settings').then(r => r.data))
+// 写回单个设置项（值统一当字符串存，结构化数据自己 JSON.stringify）：
+// 模板变量库 / 记住的执行值就走这条路，落的是 dbmind.db 的 app_settings 表
+export const putAppSetting = (key, value) => http.put(`/api/dbmind/settings/${encodeURIComponent(key)}`, { value }).then(r => r.data)
 // 在线更新：检查 Gitee 最新发行版 / 下载安装包并拉起安装器（桌面端覆盖安装）
 export const checkUpdate = () => http.get('/api/update/check', { timeout: 20000 }).then(r => r.data)
 // 下载安装包并由后端自动选源（源快慢由后端现场测速决定，界面不提供选择）
