@@ -77,23 +77,34 @@ fi
 [ -n "$RID" ] || { echo "错误：拿不到 Gitee Release id"; exit 1; }
 
 echo "==> 清理同名旧附件"
-OLD_IDS=$(curl -sf "${GITEE_API}/releases/${RID}/attach_files?per_page=100" \
+# 所有 curl 都带超时：CI 实测过上传大文件时连接挂死、job 悬 2h44m 无输出 ——
+# 连接 20s 超时、单请求最多 30 分钟、速度低于 1KB/s 持续 90s 判定断流退出。
+CURL_TO=(--connect-timeout 20 --max-time 1800 --speed-limit 1024 --speed-time 90)
+OLD_IDS=$(curl -sf "${CURL_TO[@]}" "${GITEE_API}/releases/${RID}/attach_files?per_page=100" \
   -H "Authorization: Bearer ${GITEE_TOKEN}" \
   | jq -r '.[].id' || true)
 for oid in $OLD_IDS; do
-  curl -sf -X DELETE "${GITEE_API}/releases/${RID}/attach_files/${oid}" \
+  curl -sf "${CURL_TO[@]}" -X DELETE "${GITEE_API}/releases/${RID}/attach_files/${oid}" \
     -H "Authorization: Bearer ${GITEE_TOKEN}" >/dev/null \
     && echo "    已删旧附件 id=${oid}" || echo "    删旧附件失败 id=${oid}（继续）"
 done
 
 echo "==> 上传附件"
 FAILED=0
+SKIPPED=0
+GITEE_MAX=104857600   # Gitee 单附件上限 100MB（服务端明确返回超限拒绝，提前跳过不白传）
 for f in "$WORK"/assets/*; do
   [ -e "$f" ] || continue
   fname=$(basename "$f")
   size=$(du -h "$f" | cut -f1)
+  fsize=$(stat -c%s "$f" 2>/dev/null || wc -c < "$f")
   echo -n "    ${fname} (${size}) ... "
-  RESP=$(curl -s -X POST "${GITEE_API}/releases/${RID}/attach_files" \
+  if [ "${fsize:-0}" -gt "$GITEE_MAX" ]; then
+    echo "跳过（超过 Gitee 单附件 100MB 上限，只能从 GitHub Release 下载）"
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
+  RESP=$(curl -s "${CURL_TO[@]}" -X POST "${GITEE_API}/releases/${RID}/attach_files" \
     -H "Authorization: Bearer ${GITEE_TOKEN}" \
     -F "file=@${f}" 2>&1) || RESP="curl failed"
   if echo "$RESP" | grep -q '"id"'; then
@@ -105,6 +116,9 @@ for f in "$WORK"/assets/*; do
   fi
 done
 
+if [ "$SKIPPED" -gt 0 ]; then
+  echo "==> 提示：${SKIPPED} 个附件因超过 100MB 未上传到 Gitee"
+fi
 if [ "$FAILED" -gt 0 ]; then
   echo "==> 完成，但有 ${FAILED} 个附件上传失败（多为超过 Gitee 单附件大小限制）"
   exit 2
