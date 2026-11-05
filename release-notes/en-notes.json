@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v2.0.9": [
+   "Drag tree objects straight into the SQL editor: hold a table / view / procedure / function / trigger, drop it on the editor and the name lands at the cursor (replaces the selection if any) — no more mistyped names; double-click still opens the data preview",
+   "New \"Run\" on stored procedures: opens a script tab with the call statement pre-filled per dialect (CALL for MySQL, EXEC for SQL Server, an anonymous block for Oracle…), parameters become :variable placeholders resolved through the template-variable prompt on execution",
+   "README and docs now point to dbmind.top (the old GitHub Pages address is retired)"
+ ],
  "v2.0.8": [
    "New official-website shortcut in the top bar: a small logo left of the GitHub icon with light/dark vector variants, one click to dbmind.top; the GitHub icon now opens the repo page",
    "dbmind.top homepage fully refreshed: every feature now has its own docs section (adding data Q&A, snippet manager, backup & restore, test-data generator), a redrawn demo window, and feature-card \"Docs\" links jump straight to the right section",
