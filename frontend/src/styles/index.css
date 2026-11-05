@@ -1158,6 +1158,9 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
 /* Monaco 编辑器容器修正 */
 .monaco-editor-container { width: 100%; height: 100%; }
 .vue-monaco-editor { border-radius: 8px; overflow: hidden; }
+/* 树拖表名进编辑器的宿主：display:contents 不参与布局（事件监听挂在真实 DOM 上，
+   组件多根 fragment 透传不了 attrs —— 详见 SqlQueryView 模板注释） */
+.editor-drop-host { display: contents; }
 
 /* Monaco「pointer hover」气泡直接不显示：
    查找/替换工具条按钮（关闭 x、上一个/下一个等）的悬浮提示是 HoverStyle.Pointer，

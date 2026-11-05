@@ -200,21 +200,27 @@
             <el-icon :size="12"><CaretRight /></el-icon>
           </button>
         </div>
-        <VueMonacoEditor
-          v-if="monacoReady"
-          ref="editorRef"
-          v-model:value="sql"
-          :theme="editorTheme"
-          language="sql"
-          :options="editorOptions"
-          class="vue-monaco-editor"
-          @mount="onEditorMount"
-        />
-        <div v-else-if="monacoFailed" class="editor-loading">
-          <span>{{ $t('sce.loadFailed', { detail: monacoError }) }}</span>
-          <el-button text type="primary" size="small" @click="reloadUi">{{ $t('sce.reload') }}</el-button>
+        <!-- 拖放宿主：必须是**真实 DOM** —— @guolao/vue-monaco-editor 是多根 fragment 且不透传
+             attrs，直接写在组件标签上的 @drop 永远挂不上（真机踩过）。display:contents 不参与
+             布局，编辑器自身样式不动；树里拖对象名进来在 onIdentDrop 插到光标处。
+             注意 v-if/v-else-if 链要整体收在宿主里，拆断会让 rolldown 直接构建失败。 -->
+        <div class="editor-drop-host" @dragover.prevent @drop.capture="onIdentDrop">
+          <VueMonacoEditor
+            v-if="monacoReady"
+            ref="editorRef"
+            v-model:value="sql"
+            :theme="editorTheme"
+            language="sql"
+            :options="editorOptions"
+            class="vue-monaco-editor"
+            @mount="onEditorMount"
+          />
+          <div v-else-if="monacoFailed" class="editor-loading">
+            <span>{{ $t('sce.loadFailed', { detail: monacoError }) }}</span>
+            <el-button text type="primary" size="small" @click="reloadUi">{{ $t('sce.reload') }}</el-button>
+          </div>
+          <div v-else class="editor-loading">{{ $t('sce.loading') }}</div>
         </div>
-        <div v-else class="editor-loading">{{ $t('sce.loading') }}</div>
       </div>
       <!-- 底部状态栏：光标位置 / 选中信息 / 总行数 / 格式化方言 -->
       <div class="editor-status">
@@ -5391,6 +5397,30 @@ const onInsert = (e) => {
   if (editorInstance) {
     editorInstance.setValue(e.detail)
   }
+}
+
+/** 树里拖对象名进编辑器：**插到当前光标处**（有选区则替换选区，等价打字），不执行。
+ *  只认树侧拖拽带的私有类型 application/x-上游-sql-ident（MainView onTreeDragStart 写入）：
+ *  带别的 dataTransfer（编辑器内部拖字、外部文件）不拦，交回 Monaco/浏览器默认行为。
+ *  用捕获阶段拦：① 抢在 Monaco 自己的 dropIntoEditor 之前，保证「插光标处」这一口径
+ *  （而不是按鼠标落点插）；② preventDefault 掉浏览器默认（text/plain 落进 iframe 不会导航，但别赌）。 */
+const onIdentDrop = (e) => {
+  const dt = e?.dataTransfer
+  if (!dt || !editorInstance) return
+  let name = ''
+  try { name = dt.getData('application/x-上游-sql-ident') || '' } catch { /* 未授权类型读不到，忽略 */ }
+  if (!name) return
+  e.preventDefault()
+  e.stopPropagation()
+  const ed = editorInstance
+  // 选区非空 = 替换选区（与打字一致）；否则收成光标处的零长区间
+  const sel = ed.getSelection()
+  const p = ed.getPosition()
+  const range = (sel && !sel.isEmpty()) ? sel
+    : ed.getModel().getFullModelRange().setStartPosition(p.lineNumber, p.column).setEndPosition(p.lineNumber, p.column)
+  ed.executeEdits('dbmind-drag', [{ range, text: name, forceMoveMarkers: true }])
+  ed.pushUndoStop()
+  ed.focus()
 }
 
 // 加载所有连接
