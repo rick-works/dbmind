@@ -129,19 +129,33 @@
   .demo {
     background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
+    max-width: 880px; margin: 0 auto;   /* 不再整屏拉满，居中更像一张应用截图 */
   }
-  .demo-bar { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--border); background: #0d1420; }
+  .demo-bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); background: #0d1420; }
   .dot { width: 11px; height: 11px; border-radius: 50%; }
   .demo-title { margin-left: 10px; font-size: 13px; color: var(--dim); }
-  .demo-body { display: grid; grid-template-columns: 1fr 1fr; }
-  .demo-pane { padding: 20px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 13.5px; }
+  .prod-badge {
+    margin-left: 10px; padding: 2px 9px; border-radius: 999px;
+    font-size: 11px; letter-spacing: 1px;
+    color: #f5b356; background: rgba(245, 179, 77, .12); border: 1px solid rgba(245, 179, 77, .3);
+  }
+  .demo-body { display: grid; grid-template-columns: 1.15fr 1fr; }
+  .demo-pane { padding: 18px 20px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 13.5px; }
   .demo-pane + .demo-pane { border-left: 1px solid var(--border); }
   .pane-label { font-size: 12px; color: var(--dim); margin-bottom: 10px; letter-spacing: 1px; }
   .kw { color: #7c9bff; } .str { color: #7ee2a8; } .cm { color: #5b6b84; font-style: italic; } .num { color: #f0b26b; }
+  .ai-label { margin-top: 16px; }
+  .ai-line {
+    color: var(--dim); font-size: 12.5px; line-height: 1.7;
+    background: rgba(79, 140, 255, .07); border: 1px solid rgba(79, 140, 255, .16);
+    border-radius: 8px; padding: 8px 11px;
+  }
   .demo-result { color: var(--text); }
   .demo-result table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  .demo-result th, .demo-result td { border: 1px solid var(--border); padding: 5px 10px; text-align: left; }
+  .demo-result th, .demo-result td { padding: 6px 10px; text-align: left; border-bottom: 1px solid var(--border); }
+  .demo-result tr:last-child td { border-bottom: none; }
   .demo-result th { color: var(--dim); font-weight: 500; background: rgba(255,255,255,.02); }
+  .demo-result-note { margin-top: 10px; font-size: 12px; color: var(--dim); }
   .demo-foot { padding: 10px 20px; border-top: 1px solid var(--border); font-size: 13px; color: var(--dim); display: flex; gap: 18px; flex-wrap: wrap; }
   .demo-foot b { color: var(--accent); font-weight: 600; }
 
@@ -552,7 +566,7 @@
         <div class="icon">⌨️</div>
         <h3>智能 SQL 编辑器</h3>
         <p>基于 Monaco（VS Code 同款内核）：补全、格式化、多语句分块执行、逐段计时条、执行历史、SQL 片段库、模板变量 —— 大脚本也能条理清楚地跑。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-editor">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🤖</div>
@@ -569,61 +583,61 @@
         <div class="icon">🛡️</div>
         <h3>事务模式</h3>
         <p>一键开启：所有写语句不再自动提交。改完自查、不满意回滚、确认后提交 —— 配合其他会话的可见性规则，改数据不再心惊胆战。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-tx">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">✏️</div>
         <h3>结果集直接编辑</h3>
         <p>双击单元格改值、攒缓冲、一次提交。WHERE 条件自动生成（优先主键，否则全列定位）；翻页重跑后过期缓冲自动作废，绝不改错行。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-grid">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">⚡</div>
         <h3>千万级结果集秒开</h3>
         <p>虚拟滚动 + 服务端分页 + 响应压缩（实测 4.2MB → 233KB）。总数异步统计不阻塞数据回显，大 JOIN 也能 1 秒见数。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-grid">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🧱</div>
         <h3>表结构与对象编辑</h3>
         <p>字段类型、默认值、注释、索引在表格里直接改，<b>执行前先看到完整的 ALTER</b>；视图、存储过程、函数、触发器、事件可查看 DDL 并转成 ALTER 继续编辑。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-designer">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🧑‍💼</div>
         <h3>用户与权限管理</h3>
         <p>用户 / 角色清单按引擎适配，权限按「全局 / 服务器 / 库 / 模式 / 表 / 例程」分层勾选；每一次勾选都预览精确的 <code>GRANT</code> / <code>REVOKE</code> 差量，提交时只发变化的部分。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-users">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">📈</div>
         <h3>服务监控</h3>
         <p>会话、锁与库级指标集中看，可疑会话就地终止；不提供监控接口的引擎会如实说明，不给你画一张空图。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-monitor">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🗺️</div>
         <h3>ER 关系图</h3>
         <p>用命名约定 + 真实外键推断表间关系，自动布局后可拖拽调整、滚轮缩放，一键导出 PNG / SVG 贴进设计文档。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-er">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🔀</div>
         <h3>数据对比与传输</h3>
         <p>两个连接之间先比对结构与数据差异，再按向导把选中的表 / 对象传到目标库；跨环境搬数据不用再拼脚本。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-compare">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">📊</div>
         <h3>数据透视与导出</h3>
         <p>框选即汇总（计数/求和/均值/最值）、分组下钻透视；导出 CSV / Excel / JSON / INSERT，长任务后台跑、完成系统通知。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-pivot">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🔌</div>
         <h3>驱动与运维工具</h3>
         <p>驱动按需从 Maven 下载并显示实时进度，内网可指向私有镜像；备份还原、生成测试数据、全局对象搜索都在同一个工作台里。</p>
-        <a class="doc-link" href="#docs">查看文档 →</a>
+        <a class="doc-link" href="#d-drivers">查看文档 →</a>
       </div>
     </div>
   </div>
@@ -636,7 +650,8 @@
         <span class="dot" style="background:#f87171"></span>
         <span class="dot" style="background:#f59e0b"></span>
         <span class="dot" style="background:#34d399"></span>
-        <span class="demo-title">脚本 1 — mysql · 公司生产库 🔒PROD</span>
+        <span class="demo-title">脚本 1 — mysql · 公司生产库</span>
+        <span class="prod-badge">生产 PROD</span>
       </div>
       <div class="demo-body">
         <div class="demo-pane">
@@ -646,8 +661,8 @@
 <span class="kw">FROM</span> orders o
 <span class="kw">LEFT JOIN</span> customer c <span class="kw">ON</span> o.cid = c.id
 <span class="kw">WHERE</span> o.dt = <span class="str">:dt</span> <span class="kw">AND</span> o.org = <span class="str">:org</span>;</pre>
-          <div class="pane-label" style="margin-top:16px">AI · 一句话解释</div>
-          <div style="color:var(--dim); font-size:13px;">这条 JOIN 按 dt 过滤后走索引 → 关联列双方都有索引，预计扫描 1.2 万行 ✓</div>
+          <div class="pane-label ai-label">AI · 一句话解释</div>
+          <div class="ai-line">这条 JOIN 按 dt 过滤后走索引 → 关联列双方都有索引，预计扫描 1.2 万行 ✓</div>
         </div>
         <div class="demo-pane demo-result">
           <div class="pane-label">结果</div>
@@ -657,12 +672,12 @@
             <tr><td>1002</td><td>1,024.50</td><td>上海·李四</td></tr>
             <tr><td>1003</td><td>66.00</td><td>深圳·王五</td></tr>
           </table>
+          <div class="demo-result-note">双击单元格即可修改 → 事务提交</div>
         </div>
       </div>
       <div class="demo-foot">
         <span>耗时 <b>505 ms</b></span>
-        <span>共 <b>3,175,128</b> 条（异步统计，不阻塞回显）</span>
-        <span>双击单元格即可修改 → 事务提交</span>
+        <span>共 <b>3,175,128</b> 条 · 异步统计，不阻塞回显</span>
         <span>🔒 生产库：写操作二次确认</span>
       </div>
     </div>
