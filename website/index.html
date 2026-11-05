@@ -514,23 +514,14 @@
   <div class="wrap">
     <h1>给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的每一个数据库</h1>
     <p class="sub">
-      <b>DBmind = Database + Mind</b>：给数据库装上「大脑」——
-      MySQL、PostgreSQL、Oracle、ClickHouse、Redis…… 收进同一块屏幕，
-      AI 帮你解释、优化、修好每一条 SQL，还能自己巡检、把要改的做成变更单等你点头；事务级数据编辑、千万级结果集秒开。
+      <b>DBmind</b>：一个客户端，管好你的每一个数据库 ——
+      SQL 编辑、数据编辑、AI 助手、事务与安全护栏；
+      本地运行，数据不出你的网络。
     </p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/latest" target="_blank" rel="noopener">免费下载</a>
       <a class="btn btn-ghost" href="#features">看看能做什么 ↓</a>
     </div>
-    <!-- macOS 首次打开的说明放在下载按钮正下方：未公证的 App 一定会被系统拦一次，
-         用户在下载前就该知道怎么放行，不必去翻 Release 说明。
-         用内联样式：这一段只此一处，不值得为它去改站点样式表。 -->
-    <p style="margin: 16px auto 0; max-width: 820px; text-align: left; font-size: 13.5px; line-height: 1.85; opacity: .78;">
-      <b>macOS 首次打开</b>：未公证的 App 一定会被系统拦一次 —— 点「好」之后到
-      「系统设置 → 隐私与安全性」点「<b>仍要打开</b>」即可，<b>不用 sudo、不用敲命令</b>
-      （DMG 里也附了这份说明）。想一次都不弹：<code>brew install --cask --no-quarantine rick-works/tap/dbmind</code>，
-      或用 <code>curl</code> 下载 —— 那个"已下载"标记是浏览器打的，换个下载方式系统就不会检查。
-    </p>
   </div>
 </header>
 
@@ -3161,6 +3152,10 @@
           <li><b>不用注册、不用云端</b>：没有账号体系，不采集使用数据；首次连接某类型数据库时才下载对应驱动</li>
           <li><b>本地状态集中一处</b>：默认 <code>~/.dbmind</code>，换机器把目录搬过去就是完整迁移（详见<a class="dlink" href="#d-maintenance">数据目录与自愈</a>）</li>
         </ul>
+        <div class="tip"><b>macOS 首次打开</b>：未公证的 App 一定会被系统拦一次 —— 点「好」之后到
+          「系统设置 → 隐私与安全性」点「<b>仍要打开</b>」即可，<b>不用 sudo、不用敲命令</b>
+          （DMG 里也附了这份说明）。想一次都不弹：<code>brew install --cask --no-quarantine rick-works/tap/dbmind</code>，
+          或用 <code>curl</code> 下载 —— 那个「已下载」标记是浏览器打的，换个下载方式系统就不会检查。</div>
 
         <h2 id="d-conn">创建第一个连接</h2>
         <ul>
