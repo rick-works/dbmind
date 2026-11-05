@@ -3,9 +3,12 @@
              :close-on-click-modal="false" class="tplvar-dialog">
     <template #header>
       <div class="tv-title">
-        <span class="tv-title-badge">{{ '\u003A' }}</span>
+        <span class="tv-title-badge"><el-icon><Key /></el-icon></span>
         <span class="tv-title-tx">{{ $t('sqlq.tplVarTitle') }}</span>
-        <span class="tv-title-sub">{{ $t('sqlq.tplVarLead') }}</span>
+        <el-tooltip placement="bottom-start" effect="dark" popper-class="tv-tip">
+          <template #content>{{ $t('sqlq.tplVarLead') }}</template>
+          <el-icon class="tv-title-q"><QuestionFilled /></el-icon>
+        </el-tooltip>
       </div>
     </template>
     <div class="tv-card">
@@ -35,7 +38,6 @@
         <div class="tv-empty" v-if="!rows.length">{{ $t('sqlq.tplVarEmpty') }}</div>
       </div>
     </div>
-    <div class="tv-hint">{{ $t('sqlq.tplVarHint') }}</div>
     <template #footer>
       <el-button :icon="Plus" @click="addRow">{{ $t('sqlq.tplVarAdd') }}</el-button>
       <el-button @click="visible = false">{{ $t('common.cancel') }}</el-button>
@@ -48,7 +50,7 @@
 import { ref, computed, watch } from 'vue'
 import { t } from '../../utils/i18n'
 import { ElMessage } from 'element-plus'
-import { Delete, Plus } from '@element-plus/icons-vue'
+import { Delete, Plus, Key, QuestionFilled } from '@element-plus/icons-vue'
 import { readTplVars, writeTplVars, TPLVAR_NAME_RE } from '../../utils/sqlTplVars'
 
 const props = defineProps({ modelValue: { type: Boolean, default: false } })
@@ -88,15 +90,16 @@ const save = () => {
 </script>
 
 <style scoped>
-/* 标题：徽标 : + 主标题 + 一句话说明（说明弱化，替代原来占一整行的 lead 条） */
-.tv-title { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding-right: 24px; }
+/* 标题：徽标（与工具条「变量」按钮同款 Key 图标）+ 标题 + 问号（说明全收进气泡） */
+.tv-title { display: flex; align-items: center; gap: 8px; padding-right: 24px; }
 .tv-title-badge {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
-  width: 22px; height: 22px; border-radius: 6px; align-self: center;
-  background: var(--dc-primary, #4c6ef5); color: #fff; font-weight: 600; font-size: 14px; line-height: 1;
+  width: 22px; height: 22px; border-radius: 6px;
+  background: var(--dc-primary, #4c6ef5); color: #fff; font-size: 13px; line-height: 1;
 }
 .tv-title-tx { font-size: 15px; font-weight: 600; color: var(--dc-text); white-space: nowrap; }
-.tv-title-sub { flex: 1; min-width: 0; font-size: 12px; color: var(--dc-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-title-q { flex: 0 0 auto; font-size: 14px; color: var(--dc-text-dim); cursor: help; }
+.tv-title-q:hover { color: var(--dc-primary, #4c6ef5); }
 /* 卡片：圆角容器包住整张表，行间用分隔线而不是空隙 */
 .tv-card {
   border: 1px solid var(--dc-border, rgba(255,255,255,.08)); border-radius: 10px;
@@ -104,8 +107,9 @@ const save = () => {
 }
 .tv-head, .tv-row { display: flex; align-items: center; gap: 8px; }
 .tv-head { font-size: 12px; color: var(--dc-text-dim); padding: 0 2px 8px; border-bottom: 1px dashed var(--dc-border, rgba(255,255,255,.08)); margin-bottom: 2px; }
-/* 高度自适应：vh 基准，窗口变矮列表跟着缩、内部滚动 */
-.tv-rows { display: flex; flex-direction: column; max-height: min(46vh, 430px); overflow-y: auto; }
+/* 高度自适应：vh 基准，窗口变矮列表跟着缩、内部滚动；滚动条不显示（滚动仍可用） */
+.tv-rows { display: flex; flex-direction: column; max-height: min(46vh, 430px); overflow-y: auto; overflow-x: hidden; scrollbar-width: none; }
+.tv-rows::-webkit-scrollbar { display: none; }
 .tv-row { padding: 6px 0; border-bottom: 1px dashed var(--dc-border, rgba(255,255,255,.06)); }
 .tv-row:last-child { border-bottom: none; }
 .tv-c-name { width: 190px; flex: 0 0 auto; }
@@ -113,5 +117,9 @@ const save = () => {
 .tv-c-note { flex: 1; min-width: 0; }
 .tv-c-op { width: 32px; flex: 0 0 auto; text-align: right; }
 .tv-empty { color: var(--dc-text-dim); font-size: 12px; padding: 20px 0; text-align: center; line-height: 1.7; }
-.tv-hint { margin-top: 8px; font-size: 12px; color: var(--dc-text-dim); line-height: 1.6; }
+</style>
+
+<style>
+/* 问号气泡挂在 body 下（teleport），用全局样式给个合适的宽度 */
+.tv-tip { max-width: 360px; line-height: 1.7; }
 </style>
