@@ -401,6 +401,7 @@ export default {
   'mv.catObject': 'object',
   'mv.loadDefFailed': 'Failed to load the definition: {detail}',
   'mv.editLabel': 'Edit {kind} · {name}',
+  'mv.runLabel': 'Run · {name}',
   'mv.noDefComment': '-- could not load the definition of {name}',
   'mv.userConnUnknown': 'Could not tell which data source this user belongs to — select a connection on the left and try again',
   'mv.loadUserPrivFailed': 'Failed to read the user privileges: {detail}',

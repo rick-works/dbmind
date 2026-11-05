@@ -704,6 +704,7 @@
       </template>
       <!-- ===== 存储过程 / 函数 / 触发器 / 事件 ===== -->
       <template v-else-if="['procedure', 'function', 'trigger', 'event'].includes(ctxMenu.data?.objectKind)">
+        <li v-if="ctxMenu.data?.objectKind === 'procedure'" @click="objRunProcedure"><el-icon><VideoPlay /></el-icon><span>{{ $t('common.run') }}</span></li>
         <li v-if="objectDdlAllowed(ctxMenu.data?.connId, ctxMenu.data?.objectKind)" @click="objViewDetail"><el-icon><Document /></el-icon><span>{{ $t('common.view') }}</span></li>
         <li v-if="objectDdlAllowed(ctxMenu.data?.connId, ctxMenu.data?.objectKind)" @click="objEditScript"><el-icon><EditPen /></el-icon><span>{{ $t('common.edit') }}</span></li>
         <li @click="ctxCopyObjName"><el-icon><CopyDocument /></el-icon><span>{{ $t('common.copy') }}</span></li>
@@ -1302,7 +1303,7 @@ import { loadShortcuts, matchesShortcut, isShortcutSuppressed } from '../../util
 import { hasVisibleOverlay } from '../../utils/useShortcuts'
 import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
-import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch } from '@element-plus/icons-vue'
+import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch, VideoPlay } from '@element-plus/icons-vue'
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { compareTaskStatus, compareCancel, syncCancel, getSettings,
@@ -7888,6 +7889,107 @@ const objEditScript = async () => {
     scriptName: '', dirty: false,
     connId: cid, database: db,
     initialSql: editable ? autoFormatDdl(editable, ctype) : t('mv.noDefComment', { name })
+  })
+}
+
+// ===== 执行（存储过程）：右键 →「执行」，自动开脚本页签并填好调用语句 =====
+// 参数从定义（object-info 的 DDL）里解析，占位符一律写成**模板变量** :参数名 ——
+// 执行时走现有的变量弹窗（存过默认值的直接用、缺的补填），语句本身不用手改。
+// 取不到定义（DB2 等少数引擎）就给无参调用，用户自己补参数，不拦着。
+
+/** 从 DDL 里解析例程参数名（尽力而为）：
+ *  - 括号方言（MySQL/PG/Oracle/DB2…）：定位 CREATE … PROCEDURE 名字后的第一个 '('，
+ *    括号配对扫到闭合（decimal(10,2) 这类嵌套不碍事），顶层按逗号切开，
+ *    每段跳过 IN/OUT/INOUT 关键字取第一个标识符（剥掉 `backtick` / "quote" / [bracket]）。
+ *  - SQL Server：没有括号，参数跟在名字后面直到 AS —— 直接抓 @参数名（按出现顺序去重）。 */
+const parseRoutineParams = (ddl, ctype) => {
+  const fam = String(ctype || '').toUpperCase()
+  const text = String(ddl || '')
+  if (!text) return []
+  if (fam === 'SQLSERVER') {
+    const m = text.match(/\b(?:create\s+(?:or\s+alter\s+)?)?procedure\b[^\n]*?\b(as)\b/i)
+    const head = m ? text.slice(0, m.index + m[0].length) : text.split(/\bAS\b/i)[0]
+    const names = []
+    for (const tok of head.match(/@[\w$]+/g) || []) {
+      const n = tok.slice(1)
+      if (n && !names.includes(n)) names.push(n)
+    }
+    return names
+  }
+  const m = text.match(/\b(?:create\s+(?:or\s+replace\s+)?(?:definer\s*=\s*\S+\s+)?|^\s*)(procedure|function)\b/i)
+  if (!m) return []
+  const rest = text.slice(m.index + m[0].length)
+  const open = rest.indexOf('(')
+  if (open < 0) return []
+  let depth = 0, end = -1
+  for (let i = open; i < rest.length; i++) {
+    if (rest[i] === '(') depth++
+    else if (rest[i] === ')') { depth--; if (!depth) { end = i; break } }
+  }
+  if (end < 0) return []
+  const inner = rest.slice(open + 1, end)
+  if (!inner.trim()) return []
+  const names = []
+  for (const chunk of inner.split(',')) {
+    const toks = chunk.trim().split(/\s+/).filter(Boolean)
+    let nm = ''
+    for (const t of toks) {
+      if (/^(in|out|inout)$/i.test(t)) continue
+      nm = t.replace(/^[`"'\[]+/, '').replace(/[`"'\]]+$/, '')
+      break
+    }
+    if (/^[\w$#]+$/.test(nm) && !names.includes(nm)) names.push(nm)
+  }
+  return names
+}
+
+/** 按方言生成调用语句（占位符 = 模板变量 :参数名，统一小写）：
+ *  MySQL 系 CALL `db`.`p`(..)；SQL Server EXEC p @a = :a（命名参数，一眼对上哪个槽填哪个值）；
+ *  Oracle/DM 匿名块 BEGIN p(..); END;；PG/DB2/H2/Derby/Kingbase CALL p(..)。
+ *  库形如「库.schema」的（PG/Oracle 树节点）取末段当 schema 限定名。 */
+const buildRoutineCall = (ctype, db, name, params) => {
+  const fam = String(ctype || '').toUpperCase()
+  const ph = params.map(p => ':' + p.toLowerCase())
+  const schema = (db || '').includes('.') ? (db.split('.').pop() || '') : ''
+  const target = (schema && !String(name).includes('.') && !['MYSQL', 'MARIADB', 'DORIS'].includes(fam))
+    ? schema + '.' + name : name
+  if (['MYSQL', 'MARIADB', 'DORIS'].includes(fam)) {
+    const q = (s) => '`' + String(s).replace(/`/g, '') + '`'
+    const dbq = (db && !db.includes('.')) ? q(db) + '.' : ''
+    return `CALL ${dbq}${q(name)}(${ph.join(', ')});`
+  }
+  if (fam === 'SQLSERVER') {
+    const args = params.map(p => `@${p} = :${p.toLowerCase()}`).join(', ')
+    return `EXEC ${target}${args ? ' ' + args : ''};`
+  }
+  if (fam === 'ORACLE' || fam === 'DM') {
+    return `BEGIN ${target}(${ph.join(', ')}); END;`
+  }
+  return `CALL ${target}(${ph.join(', ')});`
+}
+
+const objRunProcedure = async () => {
+  const d = ctxMenu.value.data
+  if (!d || d.objectKind !== 'procedure') return
+  const name = objName(d)
+  const db = d.db || currentDb.value
+  const cid = d.connId || currentConnId.value
+  closeCtxMenu()
+  if (cid && currentConnId.value && String(cid) !== String(currentConnId.value)) await selectConn(String(cid))
+  if (db && db !== currentDb.value) setCurrentDb(db)
+  const ctype = connTypeOf(cid)
+  let ddl = ''
+  try {
+    const res = await getObjectInfo(cid, db, 'procedure', name)
+    ddl = (res && res.ddl) || ''
+  } catch (e) { /* 定义拿不到就按无参出 CALL，执行时报缺参再补 */ }
+  const params = parseRoutineParams(ddl, ctype)
+  openTab({
+    id: 'sql:run:procedure:' + name + ':' + (++tabSeq), type: 'sql',
+    label: t('mv.runLabel', { name }),
+    scriptName: '', dirty: false,
+    connId: cid, database: db,
+    initialSql: buildRoutineCall(ctype, db, name, params)
   })
 }
 

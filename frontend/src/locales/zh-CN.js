@@ -410,6 +410,7 @@ export default {
   'mv.catObject': '对象',
   'mv.loadDefFailed': '获取定义失败：{detail}',
   'mv.editLabel': '编辑{kind} · {name}',
+  'mv.runLabel': '执行 · {name}',
   'mv.noDefComment': '-- 未能获取 {name} 的定义',
   'mv.userConnUnknown': '未能确定该用户所属的数据源，请在左侧选中连接后重试',
   'mv.loadUserPrivFailed': '读取用户权限失败：{detail}',
