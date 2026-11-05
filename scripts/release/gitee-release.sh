@@ -76,42 +76,78 @@ else
 fi
 [ -n "$RID" ] || { echo "错误：拿不到 Gitee Release id"; exit 1; }
 
-echo "==> 清理同名旧附件"
+echo "==> 清理旧附件（只删与本次资产对不上的）"
 # 所有 curl 都带超时：CI 实测过上传大文件时连接挂死、job 悬 2h44m 无输出 ——
 # 连接 20s 超时、单请求最多 30 分钟、速度低于 1KB/s 持续 90s 判定断流退出。
 CURL_TO=(--connect-timeout 20 --max-time 1800 --speed-limit 1024 --speed-time 90)
-OLD_IDS=$(curl -sf "${CURL_TO[@]}" "${GITEE_API}/releases/${RID}/attach_files?per_page=100" \
-  -H "Authorization: Bearer ${GITEE_TOKEN}" \
-  | jq -r '.[].id' || true)
-for oid in $OLD_IDS; do
-  curl -sf "${CURL_TO[@]}" -X DELETE "${GITEE_API}/releases/${RID}/attach_files/${oid}" \
-    -H "Authorization: Bearer ${GITEE_TOKEN}" >/dev/null \
-    && echo "    已删旧附件 id=${oid}" || echo "    删旧附件失败 id=${oid}（继续）"
+
+# 本次 Release 的资产清单：名字 -> 字节数（用于「同名同大小就保留」的增量判断）
+declare -A WANT=()
+for f in "$WORK"/assets/*; do
+  [ -e "$f" ] || continue
+  WANT["$(basename "$f")"]=$(stat -c%s "$f" 2>/dev/null || wc -c < "$f")
 done
 
-echo "==> 上传附件"
+EXIST=$(curl -sf "${CURL_TO[@]}" "${GITEE_API}/releases/${RID}/attach_files?per_page=100" \
+  -H "Authorization: Bearer ${GITEE_TOKEN}" \
+  | jq -r '.[] | [.id, .name, (.size // 0)] | @tsv' || true)
+while IFS=$'\t' read -r aid aname asize; do
+  [ -n "${aid:-}" ] || continue
+  if [ "${WANT[$aname]:-x}" = "$asize" ]; then
+    echo "    保留 ${aname}（同名同大小，不重传）"
+  else
+    curl -sf "${CURL_TO[@]}" -X DELETE "${GITEE_API}/releases/${RID}/attach_files/${aid}" \
+      -H "Authorization: Bearer ${GITEE_TOKEN}" >/dev/null \
+      && echo "    已删旧附件 id=${aid} ${aname}" || echo "    删旧附件失败 id=${aid}（继续）"
+  fi
+done <<<"$EXIST"
+
+echo "==> 上传附件（3 路并发：CI 到 Gitee 单连接仅 ~430KB/s，串行 330MB 要 13 分钟）"
 FAILED=0
 SKIPPED=0
 GITEE_MAX=104857600   # Gitee 单附件上限 100MB（服务端明确返回超限拒绝，提前跳过不白传）
+PAR=3
+RES="$WORK/results"
+mkdir -p "$RES"
+i=0
 for f in "$WORK"/assets/*; do
   [ -e "$f" ] || continue
   fname=$(basename "$f")
   size=$(du -h "$f" | cut -f1)
-  fsize=$(stat -c%s "$f" 2>/dev/null || wc -c < "$f")
-  echo -n "    ${fname} (${size}) ... "
+  fsize="${WANT[$fname]:-0}"
   if [ "${fsize:-0}" -gt "$GITEE_MAX" ]; then
-    echo "跳过（超过 Gitee 单附件 100MB 上限，只能从 GitHub Release 下载）"
+    echo "    ${fname} (${size}) 跳过（超过 Gitee 单附件 100MB 上限，只能从 GitHub Release 下载）"
     SKIPPED=$((SKIPPED + 1))
     continue
   fi
-  RESP=$(curl -s "${CURL_TO[@]}" -X POST "${GITEE_API}/releases/${RID}/attach_files" \
-    -H "Authorization: Bearer ${GITEE_TOKEN}" \
-    -F "file=@${f}" 2>&1) || RESP="curl failed"
-  if echo "$RESP" | grep -q '"id"'; then
-    echo "OK"
+  if grep -Fq "$(printf '%s\t%s' "$fname" "$fsize")" <<<"$EXIST"; then
+    echo "    ${fname} (${size}) 已存在（同名同大小，跳过）"
+    continue
+  fi
+  echo "    ${fname} (${size}) 上传中 ..."
+  (
+    RESP=$(curl -s "${CURL_TO[@]}" -X POST "${GITEE_API}/releases/${RID}/attach_files" \
+      -H "Authorization: Bearer ${GITEE_TOKEN}" \
+      -F "file=@${f}" 2>&1) || RESP="curl failed"
+    if grep -q '"id"' <<<"$RESP"; then
+      echo "OK" > "$RES/$fname"
+    else
+      { echo "失败"; echo "      ${RESP}"; } > "$RES/$fname"
+    fi
+  ) &
+  i=$((i + 1))
+  if [ $((i % PAR)) -eq 0 ]; then wait; fi
+done
+wait
+for r in "$RES"/*; do
+  [ -e "$r" ] || continue
+  rname=$(basename "$r")
+  first=$(head -n1 "$r")
+  if [ "$first" = "OK" ]; then
+    echo "    ${rname} ... OK"
   else
-    echo "失败"
-    echo "      ${RESP}"
+    echo "    ${rname} ... $first"
+    tail -n +2 "$r" | sed 's/^/      /'
     FAILED=$((FAILED + 1))
   fi
 done
