@@ -51,6 +51,16 @@ export const buildSqlFormatOptions = (s) => ({
   denseOperators: !!s.sqlDenseOperators
 })
 
+// 模板变量（:name）参数化：不告诉格式化器「:name 是一个参数」的话，标准 SQL 方言会把
+// 冒号当运算符切开（`:user_name` → `: user`+`name`，真机反馈）。custom 正则带
+// 负向后行 `(?<![:@\w])`，`::int8` 这类 PostgreSQL 强转里的第二个冒号**不会**被当成参数。
+const TPV_PARAM_RE = '(?<![:@\\w]):[A-Za-z_][\\w$]*'
+// 在方言默认 paramTypes 的基础上叠加 custom（不动各方言原有的 @var / $1 / ? 等参数规则）
+const paramTypesOf = (base) => {
+  const pt = (base && base.tokenizerOptions && base.tokenizerOptions.paramTypes) || {}
+  return { ...pt, custom: { regex: TPV_PARAM_RE } }
+}
+
 // 排版规则数据模型：sqlKeywordRules = [{ kw: 关键字/短语, cs: upper=大写 | lower=小写 | keep=保持原样, ly: 排版方式 }]
 // ly 各值：
 //   none=内联（不换行）；clause/join/setop=对应 sql-formatter 内置关键字角色（前换行 / 前换行+缩进 / 前后各换行）；
@@ -429,10 +439,11 @@ export const formatSql = (text, s, language) => {
   const rules = rulesOf(s)
   const run = (input, language) => {
     const base = dialectMap[language] || sql
+    const paramTypes = paramTypesOf(base)
     if (rules.length) {
-      return formatDialect(input, { ...options, dialect: { ...base, tokenizerOptions: applyRuleKeywords(base, rules) } })
+      return formatDialect(input, { ...options, paramTypes, dialect: { ...base, tokenizerOptions: applyRuleKeywords(base, rules) } })
     }
-    return format(input, { ...options, language })
+    return format(input, { ...options, language, paramTypes })
   }
   // 主方言失败时按优先级尝试其余方言（方括号等特殊语法提升容错）；
   // 全部失败则降级为轻量格式化（至少完成关键字大小写与空白规范化）。
