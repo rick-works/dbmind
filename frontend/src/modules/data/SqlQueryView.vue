@@ -618,7 +618,7 @@
     </template>
   </el-dialog>
   <!-- 模板变量管理：变量名/默认值/备注，存 localStorage（编辑器 : 补全 + 执行弹窗预填都读它） -->
-  <TplVarDialog v-model="tplVarOpen" />
+  <TplVarDialog v-model="tplVarOpen" @saved="scheduleTplVarDecos" />
   <!-- 查询结果数据透视：复用当前结果网格做分组汇总 / 计数 / 下钻，纯前端不消耗后端 -->
   <DataPivotDialog v-model="pivotVisible" :columns="pivotColumns" :rows="pivotRows" />
   <!-- 行详情：双击 / 右键行号查看整行字段明细 -->
@@ -3258,6 +3258,38 @@ const updateStmtGlyphs = () => {
   })
   stmtGlyphDecos = ed.deltaDecorations(stmtGlyphDecos, decos)
 }
+// ===== 模板变量着色：青色 = 变量库里有（执行时直接用默认值不弹窗），橙色 = 库里没有（执行时会弹窗问） =====
+// 用行内装饰实现（不动 tokenizer）：内容变化 350ms 防抖重算，与语句 ▶ 同一节奏。
+// 变量库清单一次扫描只读一遍 localStorage，避免大脚本里逐变量重复 JSON.parse。
+let tplVarDecos = []
+let tplVarTimer = 0
+const TPLVAR_SCAN_RE = /(?<![:@\w]):([A-Za-z_][\w$]*)/g
+const updateTplVarDecos = () => {
+  const ed = editorInstance
+  const model = ed && ed.getModel ? ed.getModel() : null
+  if (!ed || !model) return
+  const text = model.getValue() || ''
+  const lib = new Set(readTplVars().map((v) => String(v.name || '').toLowerCase()))
+  const decos = []
+  let m
+  TPLVAR_SCAN_RE.lastIndex = 0
+  while ((m = TPLVAR_SCAN_RE.exec(text))) {
+    const p = model.getPositionAt(m.index)
+    const q = model.getPositionAt(m.index + m[0].length)
+    decos.push({
+      range: {
+        startLineNumber: p.lineNumber, startColumn: p.column,
+        endLineNumber: q.lineNumber, endColumn: q.column
+      },
+      options: { inlineClassName: lib.has(m[1].toLowerCase()) ? 'tv-var-hit' : 'tv-var-miss' }
+    })
+  }
+  tplVarDecos = ed.deltaDecorations(tplVarDecos, decos)
+}
+const scheduleTplVarDecos = () => {
+  if (tplVarTimer) clearTimeout(tplVarTimer)
+  tplVarTimer = setTimeout(updateTplVarDecos, 350)
+}
 // ===== 「执行」的目标段：四周画框（用户要求）=====
 // 目的：一眼看出「执行」会跑哪一段 —— 框线与 getExecutableSql **共用同一个判定**
 // （选区优先，其次 statementAtCursor），所以框住的永远就是真正会被执行的那段，
@@ -3419,6 +3451,7 @@ watch(() => props.sqlLoading, () => nextTick(() => { updateStmtGlyphs(); updateS
 onBeforeUnmount(() => {
   if (stmtGlyphTimer) clearTimeout(stmtGlyphTimer)
   if (stmtBoxTimer) clearTimeout(stmtBoxTimer)
+  if (tplVarTimer) clearTimeout(tplVarTimer)
 })
 // ===== 语句条的横向滚动：永远一行，放不下出 ‹ › 箭头（用户要求） =====
 const stmtStripEl = ref(null)
@@ -3917,9 +3950,11 @@ const onEditorMount = (editor) => {
   editor.onDidChangeModelContent(() => {
     clearTimeout(stmtGlyphTimer)
     stmtGlyphTimer = setTimeout(() => { updateStmtGlyphs(); updateStmtBox() }, 350)
+    scheduleTplVarDecos()
   })
   updateStmtGlyphs()
   updateStmtBox()
+  updateTplVarDecos()
   // 注册自定义补全/格式化 provider：**必须走 ensureMonaco()** —— @guolao 封装的 @mount
   // 回调在本项目配置下不传 monaco 参数（实测 undefined），旧写法 `if (monaco)` 恒假，
   // 补全与格式化 provider 从未注册过（静默失效）。ensureMonaco 是单例 Promise，直接拿现成的。
@@ -4196,20 +4231,33 @@ const onEditorMount = (editor) => {
     monacoProviders.push(monaco.languages.registerHoverProvider('sql', {
       provideHover: (model, position) => {
         const word = model.getWordAtPosition(position)
-        if (!word) return null
         const line = model.getLineContent(position.lineNumber)
-        // 词前面必须是变量冒号（:name 的名字部分或整段上悬浮都命中）
-        const m = /(?<![:@\w]):([A-Za-z_][\w$]*)$/.exec(line.slice(0, word.startColumn - 1))
-        if (!m) return null
-        const tv = findTplVar(m[1])
+        // 两种落点都命中：① 停在变量名上（必须把词本身截进来 —— 之前截到词首，
+        // 切片结尾是 ":"，:name$ 永远匹配不上 = 悬浮没反应的根因）；② 停在冒号上
+        // （冒号不是词字符，getWordAtPosition 返回 null，向后取标识符）。
+        let name = null
+        let startColumn = 0
+        let endColumn = 0
+        if (word) {
+          const m = /(?<![:@\w]):([A-Za-z_][\w$]*)$/.exec(line.slice(0, word.endColumn - 1))
+          if (!m) return null
+          name = m[1]; startColumn = word.startColumn - 1; endColumn = word.endColumn
+        } else {
+          const col = position.column
+          if (line.charAt(col - 1) !== ':') return null
+          const m = /^:([A-Za-z_][\w$]*)/.exec(line.slice(col - 1))
+          if (!m) return null
+          name = m[1]; startColumn = col; endColumn = col + m[0].length
+        }
+        const tv = findTplVar(name)
         const range = {
           startLineNumber: position.lineNumber,
           endLineNumber: position.lineNumber,
-          startColumn: word.startColumn - 1,
-          endColumn: word.endColumn
+          startColumn,
+          endColumn
         }
         if (!tv) {
-          return { range, contents: [{ value: `**:${word.word}** — ${t('sqlq.varHoverMissing')}` }] }
+          return { range, contents: [{ value: `**:${name}** — ${t('sqlq.varHoverMissing')}` }] }
         }
         const contents = [{ value: `**:${tv.name}**` }]
         if (String(tv.value || '') !== '') {
@@ -4880,6 +4928,7 @@ const onVarConfirm = () => {
       else list.push({ name: v, value: val, note: '' })
     })
     writeTplVars(list)
+    scheduleTplVarDecos()
   } catch { /* 存储不可用就算了 */ }
   varValuesOnce = { ...(pendingDefaults || {}), ...d.values }
   pendingDefaults = null
@@ -6427,6 +6476,11 @@ onBeforeUnmount(() => {
   text-decoration: underline wavy #e34d4d;
   text-underline-offset: 3px;
 }
+/* 模板变量行内着色（updateTplVarDecos 挂的装饰）：青 = 变量库里有（执行时直接用默认值，
+   不弹窗）；橙 = 库里没有（执行时会弹窗询问）。!important 压过 Monaco 的 .mtk token 色，
+   否则主题的语法高亮会把装饰色盖掉。 */
+.tv-var-hit { color: #35d0c5 !important; }
+.tv-var-miss { color: #ff9f5a !important; }
 .stmt-bar {
   display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;
   padding: 3px 8px; flex-shrink: 0;
