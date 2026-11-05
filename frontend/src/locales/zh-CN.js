@@ -3024,7 +3024,7 @@ export default {
   'sqlq.tplVarValuePh': '默认值，可空',
   'sqlq.tplVarNotePh': '备注，可空',
   'sqlq.tplVarAdd': '添加变量',
-  'sqlq.tplVarEmpty': '还没有变量。添加后，SQL 里写 :变量名，打 : 即可补全。',
+  'sqlq.tplVarEmpty': '还没有变量，点下方「添加变量」开始。',
   'sqlq.tplVarNameBad': '变量名不合法：{name}（字母/下划线开头，可含数字、下划线）',
   'sqlq.tplVarDup': '变量名重复：{name}',
   'sqlq.tplVarSaved': '变量已保存',

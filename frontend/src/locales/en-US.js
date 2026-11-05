@@ -3010,7 +3010,7 @@ export default {
   'sqlq.tplVarValuePh': 'default value, optional',
   'sqlq.tplVarNotePh': 'note, optional',
   'sqlq.tplVarAdd': 'Add variable',
-  'sqlq.tplVarEmpty': 'No variables yet. Add one, then use :name in SQL and type : to complete.',
+  'sqlq.tplVarEmpty': 'No variables yet — click "Add variable" below to start.',
   'sqlq.tplVarNameBad': 'Invalid variable name: {name} (letter / underscore first, then letters, digits, underscores)',
   'sqlq.tplVarDup': 'Duplicate variable name: {name}',
   'sqlq.tplVarSaved': 'Variables saved',
