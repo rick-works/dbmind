@@ -3708,5 +3708,33 @@ WHERE dt = :dt AND org = :org;</code></pre>
     group('感谢支持', rest)
   })()
 </script>
+<script>
+// ---------- 下载源智能分流 ----------
+// 探测：直连 GitHub 通 → 维持 GitHub 链接；GitHub 不通而 Gitee 通（典型国内网络）
+// → 把页面里所有 GitHub Release 链接换成 Gitee 的对应发行版页（两侧是同一批安装包）。
+// 探测用 no-cors fetch：成功（opaque 也算）= 连接通；reject / 超时 = 不通。
+// 浏览器自己配了代理的用户 fetch 会成功 → 维持 GitHub，与"能访问谁就用谁"一致。
+;(() => {
+  const probe = (url, ms) => new Promise((res) => {
+    const t = setTimeout(() => res(false), ms)
+    fetch(url, { mode: 'no-cors', cache: 'no-store' })
+      .then(() => { clearTimeout(t); res(true) }, () => { clearTimeout(t); res(false) })
+  })
+  window.addEventListener('load', () => {
+    Promise.all([probe('https://gitee.com/robots.txt', 2500), probe('https://github.com/robots.txt', 2500)])
+      .then(([gitee, github]) => {
+        if (!(gitee && !github)) return
+        let n = 0
+        document.querySelectorAll('a[href^="https://github.com/rick-works/dbmind/releases"]').forEach((a) => {
+          a.setAttribute('href', a.getAttribute('href').replace(
+            'https://github.com/rick-works/dbmind/releases',
+            'https://gitee.com/rick-works/dbmind/releases'))
+          n++
+        })
+        if (n) console.log('[dbmind] 已切换国内下载源（Gitee）：' + n + ' 个链接')
+      })
+  })
+})()
+</script>
 </body>
 </html>

@@ -492,6 +492,13 @@ pub async fn check() -> Json<Value> {
                     };
                 }
             }
+            // 「前往下载页」：国内（直连 Gitee 通、GitHub 不通）给 Gitee 的发行版页，
+            // 海外维持 GitHub —— 页面里的安装包两侧是同一批文件。
+            let rel_url = if domestic_network() && !latest.is_empty() {
+                format!("https://gitee.com/rick-works/dbmind/releases/tag/v{latest}")
+            } else {
+                v["html_url"].as_str().unwrap_or("").to_string()
+            };
             Json(json!({
                 "success": true,
                 "current": current,
@@ -507,7 +514,7 @@ pub async fn check() -> Json<Value> {
                 "assetName": inst.as_ref().map(|i| i.name.clone()).unwrap_or_default(),
                 "assetSize": inst.as_ref().map(|i| i.size).unwrap_or(0),
                 "assetSha256": inst.as_ref().and_then(|i| i.sha256.clone()),
-                "releaseUrl": v["html_url"].as_str().unwrap_or(""),
+                "releaseUrl": rel_url,
                 "proxy": super::sysproxy::resolve(),
                 "proxyCandidates": super::sysproxy::describe(),
             }))
@@ -579,7 +586,7 @@ pub async fn apply(Json(req): Json<ApplyReq>) -> Json<Value> {
             let mut p = lock(&cell);
             p.installer = Some(dest.to_string_lossy().to_string());
         }
-        match download_with_progress(&inst, &dest, &cell, start_index) {
+        match download_with_progress(&inst, &tag, &dest, &cell, start_index) {
             Ok(()) => {
                 let installer = dest.to_string_lossy().to_string();
                 // 拉起之前先确认文件真的落地了：改名、杀软、权限都可能让"下载成功却没到位"。
@@ -684,6 +691,43 @@ pub struct ApplyReq {
 /// 自动手段全失败后给用户的手动兜底地址
 const RELEASE_PAGE: &str = "https://github.com/rick-works/dbmind/releases";
 
+/// Gitee 镜像发行版的附件直链前缀：与 GitHub **同构**（releases/download/<tag>/<文件名>）。
+/// 附件由本地同步流程（scripts/release/sync-gitee.ps1）从 GitHub 资产原样上传，
+/// 字节一致，GitHub API 里的 sha256 在下载后照常校验 —— 走 Gitee 不降低完整性。
+const GITEE_DL: &str = "https://gitee.com/rick-works/dbmind/releases/download";
+
+/// 直连（不走代理）探测一个主机是否可达。HTTP 状态码（4xx/5xx）也算"通"——
+/// 那说明 TCP/TLS 握手和服务端响应都到了，只是路径不对；传输层失败才算不通。
+fn host_reachable_no_proxy(url: &str, secs: u64) -> bool {
+    match agent(false)
+        .head(url)
+        .set("User-Agent", "dbmind-updater")
+        .timeout(Duration::from_secs(secs))
+        .call()
+    {
+        Ok(_) => true,
+        Err(ureq::Error::Status(_, _)) => true,
+        Err(_) => false,
+    }
+}
+
+/// 国内网络判定（10 分钟缓存）：直连 Gitee 通、直连 GitHub 不通。
+/// 只用来给「前往下载页」挑页面；**下载字节流不靠它**——Gitee 直链作为候选源
+/// 一起参加下载前的现场测速（rank_sources），谁快用谁（见 build_sources）。
+fn domestic_network() -> bool {
+    static CACHE: std::sync::Mutex<Option<(Instant, bool)>> = std::sync::Mutex::new(None);
+    let mut c = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, v)) = *c {
+        if at.elapsed() < Duration::from_secs(600) {
+            return v;
+        }
+    }
+    let v = host_reachable_no_proxy("https://gitee.com", 3)
+        && !host_reachable_no_proxy("https://api.github.com", 3);
+    *c = Some((Instant::now(), v));
+    v
+}
+
 /// 默认镜像前缀，按实测速度排序（2026-10 国内直连、无代理）：
 ///
 /// | 源 | 结果 |
@@ -730,25 +774,30 @@ fn source_key(s: &Source) -> String {
     format!("{}|{}", s.url, s.use_proxy)
 }
 
-/// 源列表：直连（走代理）→ 各镜像（走代理）→ 直连（**不走代理**）。
+/// 源列表：直连（走代理）→ **Gitee 镜像直链（不走代理）** → 各镜像（走代理）→ 直连（**不走代理**）。
 ///
-/// 顺序即优先级：正常情况下第一条就成了；失败或过慢才依次往后。
-/// 最后那条"不走代理"只在代理这条路有问题时才有意义，所以放最后。
-fn build_sources(url: &str) -> Vec<Source> {
+/// 顺序只是兜底序：下载前有现场测速（rank_sources），探通的按速度排前面 ——
+/// 国内网络 Gitee 直链通常最快（直连可达、服务器在国内），海外则 GitHub 胜出，
+/// 所以**不需要写死"哪边是国内"**，候选放进去让测速裁决。
+fn build_sources(inst: &Installer, tag: &str) -> Vec<Source> {
     let mut out = vec![Source {
-        url: url.to_string(),
+        url: inst.url.clone(),
         use_proxy: true,
     }];
+    out.push(Source {
+        url: format!("{}/{}/{}", GITEE_DL, tag, inst.name),
+        use_proxy: false,
+    });
     for prefix in mirror_prefixes() {
         let u = if prefix.contains("{url}") {
-            prefix.replace("{url}", url)
+            prefix.replace("{url}", inst.url.as_str())
         } else {
-            format!("{prefix}{url}")
+            format!("{prefix}{}", inst.url)
         };
         out.push(Source { url: u, use_proxy: true });
     }
     out.push(Source {
-        url: url.to_string(),
+        url: inst.url.clone(),
         use_proxy: false,
     });
     out
@@ -943,11 +992,12 @@ fn rank_sources(sources: &[Source]) -> Vec<Source> {
 ///   5. 用户点「换个更快的源」时从下一个源开始（`start_index`），绕一圈轮换。
 fn download_with_progress(
     inst: &Installer,
+    tag: &str,
     dest: &std::path::Path,
     cell: &Arc<std::sync::Mutex<Progress>>,
     start_index: usize,
 ) -> dbmind_core::Result<()> {
-    let all = build_sources(&inst.url);
+    let all = build_sources(inst, tag);
     // start_index 现在只是"给排查留个入口"（选源由测速决定，不看它）
     let _ = start_index;
     // **自动选源**：现场并发测速，探通的排前面（最快的在最前），没探通的留在后面兜底。
