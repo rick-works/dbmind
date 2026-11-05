@@ -3157,7 +3157,7 @@
         <pre><code>-- 光标在这条语句内时，Ctrl+Enter 只执行这一条
 SELECT * FROM orders WHERE created_at &gt; :dt;</code></pre>
         <ul>
-          <li>语句里有 <code>:name</code> 占位符时，执行前弹窗填参（见<a class="dlink" href="#d-vars">模板变量</a>）</li>
+          <li>语句里的 <code>:name</code> 变量从变量库取值：有默认值直接执行，缺的才弹窗补填（见<a class="dlink" href="#d-vars">模板变量</a>）</li>
           <li>多语句脚本自动分块执行，每段独立计时</li>
         </ul>
 
@@ -3358,14 +3358,14 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-vars">模板变量</h2>
-        <p>把重复查询变成填空题：SQL 里写 <code>:name</code> 占位符，执行前弹窗填参。</p>
+        <p>把重复查询变成填空题：SQL 里写 <code>:name</code> 占位符，变量集中在工具条「变量」按钮里管理（名称 / 默认值 / 备注），编辑器里打 <code>:</code> 直接从变量库补全。</p>
         <pre><code>SELECT * FROM orders
 WHERE dt = :dt AND org = :org;</code></pre>
         <ul>
-          <li><b>怎么认变量</b>：<code>:name</code>（小写字母开头，可含数字 / 下划线）；字符串字面量里的冒号不误判（<code>'12:30'</code> 安全），PostgreSQL 的 <code>::type</code> 类型转换也不会被当成变量</li>
-          <li><b>怎么拼值</b>：纯数字直写、<code>null</code>（不分大小写）写成 <code>NULL</code>、其余按单引号字符串转义（内部的 <code>'</code> 变成 <code>''</code>）—— 不做字符串拼接式注入</li>
-          <li><b>空值不蒙混</b>：弹窗里留空的变量拒绝执行，不会悄悄塞一个空串进 SQL；同一个变量在语句里出现多次，用的是同一个值</li>
-          <li><b>值按名字记住</b>：上次填过的参数下一次自动带上（存本机），日常那几条过滤条件不用重复敲</li>
+          <li><b>有默认值不打扰</b>：执行时变量库里有默认值的变量自动套用，不弹窗；缺的才弹窗补填，填过的值<b>自动存入变量库</b>，下次同变量不再询问</li>
+          <li><b>怎么认变量</b>：<code>:name</code>（字母 / 下划线开头，大小写不限，可含数字 / 下划线，匹配不区分大小写）；字符串字面量里的冒号不误判（<code>'12:30'</code> 安全），PostgreSQL 的 <code>::type</code> 类型转换也不会被当成变量</li>
+          <li><b>怎么拼值</b>：函数（<code>NOW()</code>、<code>COALESCE(a,b)</code> 等）、纯数字、<code>null</code>（不分大小写）原样写入；其余按单引号字符串转义（内部的 <code>'</code> 变成 <code>''</code>）—— 不做字符串拼接式注入</li>
+          <li><b>全局生效</b>：变量库存本机，所有脚本页签共用；弹窗里留空的变量拒绝执行，不会悄悄塞一个空串进 SQL；同一个变量在语句里出现多次，用的是同一个值</li>
         </ul>
 
         <h2 id="d-snippets">SQL 片段库</h2>

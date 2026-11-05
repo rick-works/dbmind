@@ -603,23 +603,14 @@
   <!-- SQL 快捷验证：AI 给的 SQL 先看执行计划 / 试跑一次（不消耗 AI 调用） -->
   <SqlProbeDialog v-model="probeVisible" :sql="probeSql" :conn-id="selectedConnId || props.conn?.id"
                   :database="dbScope" :mode="probeMode" @insert="onProbeInsert" />
-  <!-- 模板变量填参：SQL 里的 :name 占位符在执行前收值（值按名称记忆） -->
+  <!-- 模板变量填参：只收「变量库里没有默认值」的变量；填过自动存入变量库（下次不再弹） -->
   <el-dialog v-model="varDialog.visible" :title="$t('sqlq.varDialogTitle')" width="460" append-to-body
              :close-on-click-modal="false" class="var-dialog" @keyup.enter="onVarConfirm">
     <!-- 先一句"要填几个"，用户一眼知道还差多少；下面每行：占位符胶囊 + 输入框 -->
     <div class="var-lead">{{ $t('sqlq.varLead', { n: varDialog.vars.length }) }}</div>
     <div class="var-row" v-for="v in varDialog.vars" :key="v">
       <span class="var-name" :title="':' + v">:{{ v }}</span>
-      <el-input v-model="varDialog.values[v]" :placeholder="varDialog.defs[v] || $t('sqlq.varValuePh')" clearable />
-    </div>
-    <!-- 说明拆两行：一行说"值会被记住"，一行说"值怎么写进 SQL" —— 原来挤成一句长话，
-         还得在中途停下来自己断句 -->
-    <div class="var-hint">
-      <el-icon class="vh-ico"><InfoFilled /></el-icon>
-      <div class="vh-txt">
-        <div class="vh-main">{{ $t('sqlq.varHint') }}</div>
-        <div class="vh-sub">{{ $t('sqlq.varHintSub') }}</div>
-      </div>
+      <el-input v-model="varDialog.values[v]" :placeholder="$t('sqlq.varValuePh')" clearable />
     </div>
     <template #footer>
       <el-button @click="onVarCancel">{{ $t('common.cancel') }}</el-button>
@@ -676,7 +667,7 @@ import {
   Collection, RefreshLeft, DArrowRight, Key
 } from '@element-plus/icons-vue'
 import TplVarDialog from './TplVarDialog.vue'
-import { findTplVar, readTplVars, isRawSqlValue } from '../../utils/sqlTplVars'
+import { findTplVar, readTplVars, writeTplVars, isRawSqlValue } from '../../utils/sqlTplVars'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf, quoteStyleOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
@@ -4795,6 +4786,7 @@ const confirmWriteBeforeRun = async (execSql, connId, db) => {
 // 值按名称记忆（localStorage），数字直写、null 置 NULL、其余按字符串字面量转义。
 let varValuesOnce = null
 let pendingRunParams = null
+let pendingDefaults = null
 const varDialog = ref({ visible: false, vars: [], values: {}, defs: {} })
 // 变量管理弹窗（预定义变量库：变量名/默认值/备注）
 const tplVarOpen = ref(false)
@@ -4823,15 +4815,15 @@ const substituteVars = (text, values) => mapOutsideQuotes(text, (seg) =>
     return `'${s.replace(/'/g, "''")}'`
   })
 )
-const openVarDialog = (vars) => {
+const openVarDialog = (vars, known = {}) => {
+  // known = 变量库里已有默认值的那些变量（本轮执行直接用，不进弹窗）；弹窗只收缺失的
+  pendingDefaults = known || {}
   const remembered = readVarVals()
   const values = {}
   const defs = {}
   vars.forEach((v) => {
-    // 预填优先级：上次执行记住的值 > 变量库里的默认值 > 空
-    const tv = findTplVar(v)
-    defs[v] = tv?.value || ''
-    values[v] = remembered[v] || defs[v]
+    values[v] = remembered[v] || ''
+    defs[v] = ''
   })
   varDialog.value = { visible: true, vars, values, defs }
 }
@@ -4844,7 +4836,19 @@ const onVarConfirm = () => {
     d.vars.forEach((v) => { m[v] = d.values[v] })
     localStorage.setItem(VARVALS_LS, JSON.stringify(m))
   } catch { /* 存储不可用就算了 */ }
-  varValuesOnce = { ...d.values }
+  // 填过的值自动存入变量库（默认值列）：下次执行同变量不再弹窗
+  try {
+    const list = readTplVars()
+    d.vars.forEach((v) => {
+      const val = String(d.values[v] || '').trim()
+      const hit = list.find((x) => String(x.name || '').toLowerCase() === v.toLowerCase())
+      if (hit) hit.value = val
+      else list.push({ name: v, value: val, note: '' })
+    })
+    writeTplVars(list)
+  } catch { /* 存储不可用就算了 */ }
+  varValuesOnce = { ...(pendingDefaults || {}), ...d.values }
+  pendingDefaults = null
   d.visible = false
   const p = pendingRunParams || {}
   pendingRunParams = null
@@ -4853,6 +4857,7 @@ const onVarConfirm = () => {
 const onVarCancel = () => {
   varDialog.value.visible = false
   pendingRunParams = null
+  pendingDefaults = null
 }
 
 const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
@@ -4875,16 +4880,28 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
   }
   let execSql = getExecutableSql(page !== 1)
   if (!execSql) return
-  // 模板变量：一次性值已在手（确认弹窗后重入）就替换；否则先弹窗收参
+  // 模板变量：一次性值已在手（确认弹窗后重入）就替换；否则变量库有默认值的直接套用，
+  // 缺的才弹窗收参（确认后自动存入变量库，下次同变量不再弹）
   if (varValuesOnce) {
     execSql = substituteVars(execSql, varValuesOnce)
     varValuesOnce = null
   } else {
     const vars = extractSqlVars(execSql)
     if (vars.length) {
-      pendingRunParams = { page, size, batchable }
-      openVarDialog(vars)
-      return
+      const defs = {}
+      const missing = []
+      vars.forEach((v) => {
+        const tv = findTplVar(v)
+        const dv = tv && String(tv.value || '').trim()
+        if (dv) defs[v] = dv
+        else missing.push(v)
+      })
+      if (missing.length) {
+        pendingRunParams = { page, size, batchable }
+        openVarDialog(missing, defs)
+        return
+      }
+      execSql = substituteVars(execSql, defs)
     }
   }
   lastExecSql = execSql
@@ -6429,14 +6446,6 @@ onBeforeUnmount(() => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .var-row .el-input { flex: 1; }
-.var-hint {
-  display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; padding: 8px 10px;
-  border-radius: 8px; background: var(--dc-bg-soft); border: 1px solid var(--dc-border);
-  font-size: 12px; line-height: 1.6; color: var(--dc-text-dim);
-}
-.var-hint .vh-ico { margin-top: 2px; font-size: 13px; color: var(--dc-primary); flex-shrink: 0; }
-.var-hint .vh-main { color: var(--dc-text-mid); }
-.var-hint .vh-sub { opacity: .85; }
 /* 单元格编辑缓冲条：贴在底栏上方，弱底色提醒还有改动没落地。
    底色用主题令牌 --dc-warning-wash，**别用 Element 的 --el-color-warning-light-9** ——
    那是 Element 浅色主题的色阶，而本项目的深色是默认主题、并没有引入 Element 的深色变量表，
