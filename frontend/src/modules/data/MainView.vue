@@ -8921,16 +8921,12 @@ const connTypeSummary = computed(() =>
 .win-act.is-close:hover { background: #e81123; color: #fff; }
 /* 顶栏右侧「产品官网」logo：18px 圆角小图，与旁边 GitHub octicon 同排同高。
    源图 64px（2 倍屏不糊，体积几 KB）；点击进 www.dbmind.top（模板里 openExternal）。
-   彩色 logo 在深色顶栏里太跳（用户反馈）——平时灰度+降透明度融入图标排，
-   悬停恢复彩色作为"这是可点的品牌入口"的反馈。 */
+   灰度方案试过被否（用户：更难看），保持彩色原样。 */
 .site-mark {
   width: 18px; height: 18px; display: block;
   border-radius: 4px;
   object-fit: contain; user-select: none; -webkit-user-drag: none;
-  filter: grayscale(1); opacity: .7;
-  transition: filter .15s, opacity .15s;
 }
-.top-nav-item:hover .site-mark { filter: none; opacity: 1; }
 .top-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .top-nav-item {
   display: inline-flex; align-items: center; gap: 5px;
