@@ -26,12 +26,12 @@ TAG="${1:-}"
 GITHUB_REPO="${GITHUB_REPOSITORY:-rick-works/dbmind}"
 GITEE_REPO="${GITEE_REPO:-rick-works/dbmind}"
 GITEE_API="https://gitee.com/api/v5/repos/${GITEE_REPO}"
-GH="gh --repo ${GITHUB_REPO}"
+gh_() { gh --repo "$GITHUB_REPO" "$@"; }
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "==> 读取 GitHub Release ${TAG}"
-"$GH" release view "$TAG" --json name,body,isPrerelease > "$WORK/release.json" \
+gh_ release view "$TAG" --json name,body,isPrerelease > "$WORK/release.json" \
   || { echo "错误：GitHub 上找不到 Release ${TAG}"; exit 1; }
 NAME=$(jq -r '.name // empty' "$WORK/release.json")
 [ -n "$NAME" ] || NAME="$TAG"
@@ -40,7 +40,7 @@ PRERELEASE=$(jq -r '.isPrerelease // false' "$WORK/release.json")
 
 echo "==> 下载资产到 $WORK/assets"
 mkdir -p "$WORK/assets"
-"$GH" release download "$TAG" --dir "$WORK/assets"
+gh_ release download "$TAG" --dir "$WORK/assets"
 ls -l "$WORK/assets" || true
 
 echo "==> 推送 tag ${TAG} 到 Gitee"
@@ -53,19 +53,24 @@ echo "==> 查找/创建 Gitee Release"
 EXIST=$(curl -sf -H "Authorization: Bearer ${GITEE_TOKEN}" \
   "${GITEE_API}/releases/tags/${TAG}" || true)
 RID=$(jq -r '.id // empty' <<<"$EXIST")
+# 注意：Gitee 的 WAF 会 400 掉「-d 行内 JSON + 中文」的请求，必须 --data-binary @文件
 if [ -n "$RID" ]; then
   echo "    Gitee Release 已存在（id=${RID}），更新标题/正文"
+  jq -n --arg tag "$TAG" --arg name "$NAME" --arg body "$BODY" \
+    '{tag_name:$tag, name:$name, body:$body}' > "$WORK/patch.json"
   curl -sf -X PATCH "${GITEE_API}/releases/${RID}" \
     -H "Authorization: Bearer ${GITEE_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "$(jq -n --arg name "$NAME" --arg body "$BODY" '{name:$name, body:$body}')" >/dev/null
+    --data-binary @"$WORK/patch.json" >/dev/null
 else
+  SHA=$(git rev-parse "refs/tags/${TAG}^{commit}")
+  jq -n --arg tag "$TAG" --arg name "$NAME" --arg body "$BODY" \
+    --arg sha "$SHA" --argjson pre "$PRERELEASE" \
+    '{tag_name:$tag, name:$name, body:$body, prerelease:$pre, target_commitish:$sha}' > "$WORK/create.json"
   RID=$(curl -sf -X POST "${GITEE_API}/releases" \
     -H "Authorization: Bearer ${GITEE_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d "$(jq -n --arg tag "$TAG" --arg name "$NAME" --arg body "$BODY" \
-          --argjson pre "$PRERELEASE" \
-          '{tag_name:$tag, name:$name, body:$body, prerelease:$pre}')" \
+    --data-binary @"$WORK/create.json" \
     | jq -r '.id')
   echo "    已创建 Gitee Release（id=${RID}）"
 fi
@@ -90,7 +95,7 @@ for f in "$WORK"/assets/*; do
   echo -n "    ${fname} (${size}) ... "
   RESP=$(curl -s -X POST "${GITEE_API}/releases/${RID}/attach_files" \
     -H "Authorization: Bearer ${GITEE_TOKEN}" \
-    -F "attachment=@${f}" 2>&1) || RESP="curl failed"
+    -F "file=@${f}" 2>&1) || RESP="curl failed"
   if echo "$RESP" | grep -q '"id"'; then
     echo "OK"
   else
