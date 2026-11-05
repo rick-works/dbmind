@@ -4262,11 +4262,12 @@ const onEditorMount = (editor) => {
         const contents = [{ value: `**:${tv.name}**` }]
         if (String(tv.value || '') !== '') {
           // 默认值展示：函数/数字/NULL 原样写入，写法与默认值一字不差，不再重复一遍
-          // （"NOW() → NOW()" 被用户指出重复）；只有文本值执行时会带引号，才补「写入形态」
+          // （"NOW() → NOW()" 被用户指出重复）；只有文本值执行时会带引号，才补「写入形态」。
+          // 值一律走纯文本：包反引号会被 Markdown 渲染成深底代码块（用户不要那个黑背景）
           const val = String(tv.value).trim()
-          let defLine = t('sqlq.tplVarDefault') + ': `' + tv.value + '`'
+          let defLine = t('sqlq.tplVarDefault') + ': ' + tv.value
           if (!isRawSqlValue(val)) {
-            defLine += ' → `' + "'" + val.replace(/'/g, "''") + "'" + '`'
+            defLine += ' → ' + "'" + val.replace(/'/g, "''") + "'"
           }
           contents.push({ value: defLine })
         } else {
