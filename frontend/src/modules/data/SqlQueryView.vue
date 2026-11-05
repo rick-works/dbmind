@@ -676,7 +676,7 @@ import {
   Collection, RefreshLeft, DArrowRight, Key
 } from '@element-plus/icons-vue'
 import TplVarDialog from './TplVarDialog.vue'
-import { findTplVar, readTplVars } from '../../utils/sqlTplVars'
+import { findTplVar, readTplVars, isRawSqlValue } from '../../utils/sqlTplVars'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf, quoteStyleOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
@@ -4818,8 +4818,8 @@ const substituteVars = (text, values) => mapOutsideQuotes(text, (seg) =>
     const v = values[name]
     if (v === undefined || String(v).trim() === '') return whole
     const s = String(v).trim()
-    if (/^null$/i.test(s)) return 'NULL'
-    if (/^-?\d+(\.\d+)?$/.test(s)) return s
+    // 函数（NOW()…）、CURRENT_* 类关键字、数字、NULL 原样写入（isRawSqlValue 与变量库同口径）
+    if (isRawSqlValue(s)) return /^null$/i.test(s) ? 'NULL' : s
     return `'${s.replace(/'/g, "''")}'`
   })
 )

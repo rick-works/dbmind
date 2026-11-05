@@ -4,9 +4,9 @@
 // 同风格，纯前端零后端）。执行弹窗里没记住过的变量用默认值预填；编辑器里打 : 也按这份
 // 名单弹补全。管理入口 = SQL 编辑器工具条「变量」按钮（TplVarDialog）。
 export const TPLVAR_LS = 'dbmind_tplvars'
-// 官网文档口径：小写字母/下划线开头，可含数字、下划线（与执行链路 extractSqlVars 的
-// 大小写不敏感提取一致 —— 这里统一落小写，避免 :Name 与 :name 存成两份）
-export const TPLVAR_NAME_RE = /^[a-z_][a-z0-9_$]*$/
+// 变量名：字母/下划线开头，可含数字、下划线、$（大小写都行；匹配本身大小写不敏感，
+// 提取/替换正则都带 i 标志，这里只管「长得像个标识符」）
+export const TPLVAR_NAME_RE = /^[A-Za-z_][\w$]*$/
 
 export function readTplVars () {
   try {
@@ -22,5 +22,21 @@ export function writeTplVars (list) {
 /** 按变量名找预定义（大小写不敏感）；没有返回 null */
 export function findTplVar (name) {
   const n = String(name || '').toLowerCase()
-  return readTplVars().find((v) => v.name === n) || null
+  return readTplVars().find((v) => String(v.name).toLowerCase() === n) || null
+}
+
+// —— 默认值的写入口径（substituteVars 同用）——
+// 不带引号原样写入的三类：数据库函数（NOW()、COALESCE(x,y) 这类「名(…)」形状）、
+// 常见无括号关键字（CURRENT_DATE / CURRENT_TIMESTAMP / SYSDATE…）、数字与 NULL。
+const TPL_RAW_KEYWORDS = /^(current_(date|time|timestamp|user|schema|catalog)|localtime|localtimestamp|sysdate|systimestamp|today|now)$/i
+
+/** 该值是否按「原样」写进 SQL（不加热引号）：函数、CURRENT_* 类关键字、数字、NULL */
+export function isRawSqlValue (v) {
+  const s = String(v == null ? '' : v).trim()
+  if (!s) return false
+  if (/^null$/i.test(s)) return true
+  if (/^-?\d+(\.\d+)?$/.test(s)) return true
+  if (TPL_RAW_KEYWORDS.test(s)) return true
+  // 函数形状：NOW()、length(x)、COALESCE(a, b) —— 括号必须配平到结尾
+  return /^[A-Za-z_][\w$]*\s*\(.*\)$/.test(s)
 }
