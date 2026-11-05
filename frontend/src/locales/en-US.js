@@ -2999,6 +2999,7 @@ export default {
   'nav.scripts': 'Scripts',
   'nav.more': 'More',
   'nav.reloadApp': 'Refresh',
+  'nav.githubSite': 'GitHub project page',
   'sm.searchPlaceholder': 'Search by name / content / connection / database',
   'sm.count': '{n} script(s)',
   'sm.colName': 'Script',

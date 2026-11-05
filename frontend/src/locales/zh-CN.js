@@ -3013,6 +3013,7 @@ export default {
   'nav.scripts': '脚本管理',
   'nav.more': '更多',
   'nav.reloadApp': '刷新',
+  'nav.githubSite': 'GitHub 项目主页',
   'sm.searchPlaceholder': '搜索脚本名 / 内容 / 连接 / 库',
   'sm.count': '共 {n} 个脚本',
   'sm.colName': '脚本名',

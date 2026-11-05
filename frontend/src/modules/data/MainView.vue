@@ -44,6 +44,15 @@
           </template>
         </el-dropdown>
         <span class="top-nav-right">
+          <!-- GitHub 项目主页（GitHub Pages 官网）：点击交系统浏览器打开
+               （壳里 window.open/_blank 都无效，统一走 utils/externalLinks）。
+               GitHub 的 octocat 标志 element-plus 没有，用官方 octicon mark 内联 SVG，
+               尺寸跟随「顶栏右侧图标」设置（--dc-nav-icon）。 -->
+          <el-tooltip :content="$t('nav.githubSite')" placement="bottom">
+            <span class="top-nav-item top-icon-btn" @click="openExternal('https://rick-works.github.io/dbmind/')">
+              <svg class="gh-mark" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+            </span>
+          </el-tooltip>
           <el-tooltip :content="$t('nav.knowledge')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': knowledgeOpen }" @click="openKnowledge"><el-icon><Reading /></el-icon></span></el-tooltip>
           <el-tooltip :content="$t('nav.ai')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': aiOpen }" @click="toggleAi"><el-icon><MagicStick /></el-icon></span></el-tooltip>
           <!-- 右侧时钟图标：**正在执行**的任务 —— 鼠标悬浮直接下拉展示（纯 CSS hover，
@@ -8964,6 +8973,8 @@ const connTypeSummary = computed(() =>
 }
 /* 右侧那组图标的尺寸由 index.css 的 `.top-icon-btn.top-icon-btn .el-icon` 决定
    （双类名权重更高，这里再写一条也不会生效，只会造成"两处真相"），故此处不重复声明。 */
+/* GitHub 标志不是 el-icon，尺寸/颜色手动对齐同排：跟 --dc-nav-icon 走，颜色继承按钮前景（悬浮变色一起变）。 */
+.gh-mark { width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); display: block; }
 .conn-label { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--dc-tree-fs, 14px); color: var(--dc-text); }
 .conn-label.t-mysql { }
 .conn-label.t-doris { }
