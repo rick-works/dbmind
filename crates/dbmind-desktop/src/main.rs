@@ -619,6 +619,12 @@ fn main() {
                 .hidden_title(true);
             #[cfg(not(target_os = "macos"))]
             let builder = builder.decorations(false);
+            // 关掉 Tauri 的原生拖放接管（wry/WebView2 默认开启，为它自己的文件拖放事件服务）：
+            // 接管期间**页面收不到任何 HTML5 拖拽事件** —— 树里拖表名进 SQL 编辑器在浏览器里
+            // 好好的、安装版里一动不动，根因就是它（2026-11-05 实测）。前端与 Rust 都没有
+            // 依赖 Tauri 的 onDragDrop / DragDropEvent（全库检索为空），关掉零副作用；
+            // 代价只是"往窗口里拖系统文件"不再有 Tauri 事件 —— 本来也没人用。
+            let builder = builder.disable_drag_drop_handler(true);
 
             let window = builder.build()?;
 
