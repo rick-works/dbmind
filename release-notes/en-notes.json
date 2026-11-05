@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v2.0.7": [
+   "SQL editor template variables: hover a :variable to see its default value and note; in-library variables render teal and unknown ones orange, so you can tell at a glance whether a run will prompt",
+   "Smart download-source routing for in-app updates and the website: domestic networks automatically get the Gitee mirror (much faster), overseas stays on GitHub — the fastest source wins a live speed test",
+   "Fixed the template-variable hover showing duplicated default values (NOW() → NOW()) and a dark code-block background"
+ ],
  "v2.0.6": [
   "SQL editor toolbar adapts to narrow panes: always one row, buttons degrade to centered icons (hover shows the label instantly) when space runs out, and restore automatically",
   "The top navigation menu gets the same icon-collapse treatment on narrow windows",
