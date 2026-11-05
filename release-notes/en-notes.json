@@ -1,5 +1,9 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v2.0.10": [
+   "Fixed dragging objects from the tree into the SQL editor doing nothing in the installed app: the desktop window took over system drag-and-drop wholesale, swallowing every drag event the page would have received (the browser / web build was never affected). That takeover is now off, so the installed build behaves like the web build",
+   "Dragging works for tables, views, procedures, functions and triggers: drop on the editor and the name lands at the cursor (replacing the selection if any); double-click still opens the data preview"
+ ],
  "v2.0.9": [
    "Drag tree objects straight into the SQL editor: hold a table / view / procedure / function / trigger, drop it on the editor and the name lands at the cursor (replaces the selection if any) — no more mistyped names; double-click still opens the data preview",
    "New \"Run\" on stored procedures: opens a script tab with the call statement pre-filled per dialect (CALL for MySQL, EXEC for SQL Server, an anonymous block for Oracle…), parameters become :variable placeholders resolved through the template-variable prompt on execution",
