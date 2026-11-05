@@ -1,5 +1,9 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v2.0.11": [
+   "Variables no longer disappear: template variables (name / default / note) and the values you enter at run time are now stored in the local database (dbmind.db), so they survive port changes, restarts and reinstalls. They used to live in browser storage, where a different window port meant an empty library; existing variables are migrated automatically on first launch after the upgrade",
+   "Saving in the variable manager now reports failures instead of failing silently (it used to look saved when it was not)"
+ ],
  "v2.0.10": [
    "Fixed dragging objects from the tree into the SQL editor doing nothing in the installed app: the desktop window took over system drag-and-drop wholesale, swallowing every drag event the page would have received (the browser / web build was never affected). That takeover is now off, so the installed build behaves like the web build",
    "Dragging works for tables, views, procedures, functions and triggers: drop on the editor and the name lands at the cursor (replacing the selection if any); double-click still opens the data preview"

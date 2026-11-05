@@ -752,6 +752,26 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v2.0.11（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.11</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-06</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>变量不再丢</b>：模板变量（变量名 / 默认值 / 备注）和执行时填过的值改存本地数据库（dbmind.db），桌面版换端口、重开、重装都还在 —— 以前存在浏览器存储里，窗口端口一变就「凭空消失」；升级后第一次打开会把老的变量自动迁移过来</li>
+            <li><b>变量管理里保存失败会明确报错，不再静默失败看着像已存上</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v2.0.11" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v2.0.11" target="_blank" rel="noopener">下载 v2.0.11</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.10（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -759,7 +779,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.10</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-05</span>
           </div>
           <ul class="rel-notes">
