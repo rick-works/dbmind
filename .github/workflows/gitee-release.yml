@@ -1,0 +1,35 @@
+name: Gitee Release 镜像
+
+# GitHub 发布 Release 时，自动在 Gitee 创建对应 Release 并上传全部附件。
+# 幂等：可重复跑（编辑 Release 会触发重跑，同名旧附件先删后传）。
+# 前提：仓库 Secret GITEE_TOKEN = Gitee 私人令牌（scopes 含 projects）。
+
+on:
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要同步的 GitHub Release tag（例：v2.0.6）'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 同步到 Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          if [ -z "$TAG" ]; then
+            TAG="${{ inputs.tag }}"
+            git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" --no-tags
+          fi
+          bash scripts/release/gitee-release.sh "$TAG"
