@@ -95,6 +95,10 @@
               <div class="hist-empty" v-else>{{ $t('sqlq.snipEmptyList') }}</div>
             </template>
           </el-dropdown>
+          <!-- 模板变量：预定义变量库（变量名/默认值/备注）。执行弹窗里没记住过的变量
+               用默认值预填；编辑器里打 : 也按这份名单弹补全。管理入口就这一个按钮。 -->
+          <el-button v-if="!isNoSql" size="small" class="act-secondary" data-g="5" :icon="Key"
+                     v-fast-tip="() => $t('sqlq.tplVars')" @click="tplVarOpen = true"><span class="bt-tx">{{ $t('sqlq.tplVars') }}</span></el-button>
           <!-- SQL 执行历史：本地保存最近执行的 SQL，一键回填复用 -->
           <el-dropdown trigger="click" placement="bottom-end" popper-class="hist-dropdown" :hide-on-click="false">
             <el-button size="small" class="act-secondary" data-g="4" :icon="Clock" v-fast-tip="() => $t('sqlq.history')"><span class="bt-tx">{{ $t('sqlq.history') }}</span></el-button>
@@ -606,7 +610,7 @@
     <div class="var-lead">{{ $t('sqlq.varLead', { n: varDialog.vars.length }) }}</div>
     <div class="var-row" v-for="v in varDialog.vars" :key="v">
       <span class="var-name" :title="':' + v">:{{ v }}</span>
-      <el-input v-model="varDialog.values[v]" :placeholder="$t('sqlq.varValuePh')" clearable />
+      <el-input v-model="varDialog.values[v]" :placeholder="varDialog.defs[v] || $t('sqlq.varValuePh')" clearable />
     </div>
     <!-- 说明拆两行：一行说"值会被记住"，一行说"值怎么写进 SQL" —— 原来挤成一句长话，
          还得在中途停下来自己断句 -->
@@ -622,6 +626,8 @@
       <el-button type="primary" @click="onVarConfirm">{{ $t('sqlq.varRun') }}</el-button>
     </template>
   </el-dialog>
+  <!-- 模板变量管理：变量名/默认值/备注，存 localStorage（编辑器 : 补全 + 执行弹窗预填都读它） -->
+  <TplVarDialog v-model="tplVarOpen" />
   <!-- 查询结果数据透视：复用当前结果网格做分组汇总 / 计数 / 下钻，纯前端不消耗后端 -->
   <DataPivotDialog v-model="pivotVisible" :columns="pivotColumns" :rows="pivotRows" />
   <!-- 行详情：双击 / 右键行号查看整行字段明细 -->
@@ -667,8 +673,10 @@ import {
   Close, CircleCloseFilled, CircleCheckFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
-  Collection, RefreshLeft, DArrowRight
+  Collection, RefreshLeft, DArrowRight, Key
 } from '@element-plus/icons-vue'
+import TplVarDialog from './TplVarDialog.vue'
+import { findTplVar, readTplVars } from '../../utils/sqlTplVars'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf, quoteStyleOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
@@ -3926,8 +3934,8 @@ const onEditorMount = (editor) => {
   // 补全与格式化 provider 从未注册过（静默失效）。ensureMonaco 是单例 Promise，直接拿现成的。
   ensureMonaco().then((monaco) => {
     monacoProviders.push(monaco.languages.registerCompletionItemProvider('sql', {
-      // 仅在点号处强制触发（库.schema.表 级联）；避免输入空格/换行时无谓弹出
-      triggerCharacters: ['.'],
+      // 仅在点号/冒号处强制触发（点号=库.schema.表 级联，冒号=模板变量）；避免输入空格/换行时无谓弹出
+      triggerCharacters: ['.', ':'],
       provideCompletionItems: (model, position) => {
         const word = model.getWordUntilPosition(position)
         const range = {
@@ -3948,6 +3956,33 @@ const onEditorMount = (editor) => {
           startLineNumber: position.lineNumber, startColumn: 1,
           endLineNumber: position.lineNumber, endColumn: position.column
         })
+        // 0-) 冒号变量：刚敲 : 或 :xxx 前缀 → 弹预定义变量库（模板变量）。
+        //    (?<![:@\w]) 与执行链路 extractSqlVars 同口径：`::` 强转（PostgreSQL）
+        //    天然不命中（: 前面还是 :）；冒号紧贴单词也不命中。没有变量库就回空，
+        //    不弹空框（执行链路提取变量才走 mapOutsideQuotes，这里只看行前缀，足够用）。
+        const varPrefix = lineText.match(/(?<![:@\w]):([a-z_][\w$]*)?$/i)
+        if (varPrefix) {
+          const tplVars = readTplVars()
+          if (!tplVars.length) return { suggestions: [] }
+          const vRange = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: position.column - varPrefix[0].length,
+            endColumn: position.column
+          }
+          return {
+            suggestions: tplVars.map((v) => ({
+              // label 带上冒号（一眼对上 SQL 里的写法）；range 从 : 起整段替换，
+              // 选了 `:na` 这种半截前缀也会被换成完整的 :name
+              label: ':' + v.name,
+              kind: monaco.languages.CompletionItemKind.Variable,
+              insertText: ':' + v.name,
+              range: vRange,
+              sortText: '0' + v.name,
+              detail: [v.note, v.value !== '' ? (t('sqlq.tplVarDefault') + ' ' + v.value) : ''].filter(Boolean).join(' · ')
+            }))
+          }
+        }
         // 别名映射：FROM t a / JOIN u AS b → 别名 → 表名。`别名.` 补该表的列
         //（排除保留字 —— `from x` 后跟换行 where 会被误当别名）
         const allText = model.getValue()
@@ -4760,7 +4795,9 @@ const confirmWriteBeforeRun = async (execSql, connId, db) => {
 // 值按名称记忆（localStorage），数字直写、null 置 NULL、其余按字符串字面量转义。
 let varValuesOnce = null
 let pendingRunParams = null
-const varDialog = ref({ visible: false, vars: [], values: {} })
+const varDialog = ref({ visible: false, vars: [], values: {}, defs: {} })
+// 变量管理弹窗（预定义变量库：变量名/默认值/备注）
+const tplVarOpen = ref(false)
 const VARVALS_LS = 'dbmind_varvalues'
 const readVarVals = () => { try { return JSON.parse(localStorage.getItem(VARVALS_LS) || '{}') } catch { return {} } }
 const extractSqlVars = (text) => {
@@ -4789,8 +4826,14 @@ const substituteVars = (text, values) => mapOutsideQuotes(text, (seg) =>
 const openVarDialog = (vars) => {
   const remembered = readVarVals()
   const values = {}
-  vars.forEach((v) => { values[v] = remembered[v] || '' })
-  varDialog.value = { visible: true, vars, values }
+  const defs = {}
+  vars.forEach((v) => {
+    // 预填优先级：上次执行记住的值 > 变量库里的默认值 > 空
+    const tv = findTplVar(v)
+    defs[v] = tv?.value || ''
+    values[v] = remembered[v] || defs[v]
+  })
+  varDialog.value = { visible: true, vars, values, defs }
 }
 const onVarConfirm = () => {
   const d = varDialog.value
