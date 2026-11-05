@@ -3661,6 +3661,18 @@ WHERE dt = :dt AND org = :org;</code></pre>
   document.querySelectorAll('a[href="#releases"]').forEach(a => {
     a.addEventListener('click', (ev) => { ev.preventDefault(); enterVersionMode() })
   })
+  // 功能卡「查看文档 →」：目标小节在 #docs 里，而 #docs 平时 display:none ——
+  // 纯锚点只会改 URL 不滚动（真机踩过）。先进文档模式，再把正文面板滚到对应 h2。
+  // 滚动容器是 .doc-main（doc-only 下 overflow-y:auto），window 本身不滚。
+  document.querySelectorAll('.doc-link[href^="#d-"]').forEach(a => {
+    a.addEventListener('click', (ev) => {
+      ev.preventDefault()
+      const h = document.getElementById(a.getAttribute('href').slice(1))
+      if (!h) return
+      enterDocMode()
+      h.scrollIntoView({ behavior: 'instant', block: 'start' })
+    })
+  })
   navItems[0].addEventListener('click', () => { exitDocMode(); leaveVersionMode() })
   document.querySelector('.logo').addEventListener('click', () => { exitDocMode(); leaveVersionMode() })
   // 独占视图下点「功能 / 工作流 / 安全 / 赞助」：先退出独占视图，让默认锚点跳转滚到对应区块
