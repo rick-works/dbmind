@@ -2,7 +2,7 @@
 
 **[简体中文](README.zh-CN.md) | English**
 
-🌐 **Official website**: <https://rick-works.github.io/dbmind/>
+🌐 **Official website**: <https://www.dbmind.top/>
 
 **Give your database a brain** — DBmind (Database + Mind) is an AI-native workbench for unified database management & development: one client for every database in your stack, with AI that explains, optimizes and fixes your SQL.
 

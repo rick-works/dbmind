@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-🌐 **官网**：<https://rick-works.github.io/dbmind/>
+🌐 **官网**：<https://www.dbmind.top/>
 
 **给数据库装上「大脑」** —— DBmind（Database + Mind）是 AI 原生的多数据库管理与开发平台：
 一个客户端管好你的每一个数据库，AI 帮你解释、优化、修好每一条 SQL。

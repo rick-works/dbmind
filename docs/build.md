@@ -193,7 +193,7 @@ gh release view v1.2.31 --repo rick-works/dbmind --json assets --jq '.assets[].n
 |---|---|
 | Release 资产 | Windows：`DBmind_1.2.31_x64_en-US.msi`、`DBmind_1.2.31_x64-setup.exe`、`dbmind-1.2.31-portable.zip`；macOS：`DBmind_1.2.31_aarch64.dmg`、`DBmind_1.2.31_x64.dmg`；Linux：`dbmind_1.2.31_amd64.deb`、`dbmind_1.2.31_amd64.AppImage` |
 | Release 正文 | 「更新说明」是要点、「安装包」表格 7 行且体积不为 0 |
-| 官网 | <https://rick-works.github.io/dbmind/> 版本页出现 v1.2.31，「最新」标只有它一个 |
+| 官网 | <https://www.dbmind.top/> 版本页出现对应新版本，「最新」标只有它一个 |
 | 应用内 | 设置 → 关于：当前版本 v1.2.31，要点不是占位文本 |
 
 ## 本机出包（CI 不可用时手动来一遍）
