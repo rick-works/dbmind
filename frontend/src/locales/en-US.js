@@ -3004,6 +3004,7 @@ export default {
   'nav.more': 'More',
   'nav.reloadApp': 'Refresh',
   'nav.githubSite': 'GitHub project page',
+  'nav.officialSite': 'Official website (dbmind.top)',
   'sqlq.tplVars': 'Variables',
   'sqlq.tplVarTitle': 'Template Variables',
   'sqlq.tplVarLead': 'Use :name in SQL — asked at run time with defaults prefilled. Functions like NOW(), numbers and NULL are written as-is. Variables are global across scripts.',

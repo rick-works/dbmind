@@ -3018,6 +3018,7 @@ export default {
   'nav.more': '更多',
   'nav.reloadApp': '刷新',
   'nav.githubSite': 'GitHub 项目主页',
+  'nav.officialSite': '官方网站（dbmind.top）',
   'sqlq.tplVars': '变量',
   'sqlq.tplVarTitle': '模板变量',
   'sqlq.tplVarLead': 'SQL 里写 :变量名，执行时填参（默认值预填）；NOW() 等函数、数字、NULL 原样写入；变量全局生效，所有脚本可用。',

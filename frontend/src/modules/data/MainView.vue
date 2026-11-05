@@ -11,9 +11,6 @@
             @mouseup="onTopbarMouseUp"
             @mouseleave="onTopbarMouseUp"
             @dblclick="onTopbarDblClick">
-      <!-- 品牌 logo：顶栏最左角，只放图形不带文字（顶栏本是导航区，加标题会把它挤窄）。
-           它落在顶栏自带的三段式拖动区内：桌面端按住它拖窗口 = 系统标题栏的行为。 -->
-      <img class="topbar-logo" :src="logoSmUrl" alt="DBmind" draggable="false" />
       <nav class="top-nav" ref="topNavEl">
         <!-- 左侧：数据 → 治理/运维 → 动作（文字 + 图标）；右侧：知识库 / AI / 设置（只留图标 + 悬停提示） -->
         <!-- 只在侧栏折叠时出现的「展开」入口：展开态由侧栏工具条里那枚钮负责收起，
@@ -44,12 +41,18 @@
           </template>
         </el-dropdown>
         <span class="top-nav-right">
-          <!-- GitHub 项目主页（GitHub Pages 官网）：点击交系统浏览器打开
+          <!-- 产品官网（www.dbmind.top）：Cloudflare Pages 托管，点击交系统浏览器打开
                （壳里 window.open/_blank 都无效，统一走 utils/externalLinks）。
-               GitHub 的 octocat 标志 element-plus 没有，用官方 octicon mark 内联 SVG，
+               图标沿用产品 logo（logo-sm.png），尺寸与旁边 GitHub 图标一致。 -->
+          <el-tooltip :content="$t('nav.officialSite')" placement="bottom">
+            <span class="top-nav-item top-icon-btn" @click="openExternal('https://www.dbmind.top/')">
+              <img class="site-mark" :src="logoSmUrl" alt="" draggable="false" />
+            </span>
+          </el-tooltip>
+          <!-- GitHub 仓库主页：element-plus 没有 octocat 标志，用官方 octicon mark 内联 SVG，
                尺寸跟随「顶栏右侧图标」设置（--dc-nav-icon）。 -->
           <el-tooltip :content="$t('nav.githubSite')" placement="bottom">
-            <span class="top-nav-item top-icon-btn" @click="openExternal('https://rick-works.github.io/dbmind/')">
+            <span class="top-nav-item top-icon-btn" @click="openExternal('https://github.com/rick-works/dbmind')">
               <svg class="gh-mark" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
             </span>
           </el-tooltip>
@@ -8902,9 +8905,7 @@ const connTypeSummary = computed(() =>
 .topbar.is-mac { height: 28px; padding-left: 84px; }
 .topbar.is-mac.is-mac-fs { padding-left: 10px; }
 /* 28px 的条带里，导航项原本 6px 的上下内边距会把行高撑到 ~29px，收紧一档才不挤 */
-.topbar.is-mac .top-nav-item { padding: 3px 10px; }
-.topbar.is-mac .topbar-logo { width: 20px; height: 20px; }
-.win-acts { margin-left: auto; align-self: stretch; display: flex; align-items: stretch; }
+.topbar.is-mac .top-nav-item { padding: 3px 10px; }.win-acts { margin-left: auto; align-self: stretch; display: flex; align-items: stretch; }
 /* 窗口按钮：图标 16px 与左侧图标组一致（真机反馈 14px 偏小不协调） */
 .win-act {
   width: 56px; height: 100%; flex-shrink: 0;
@@ -8918,11 +8919,11 @@ const connTypeSummary = computed(() =>
 .win-act svg { width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); fill: none; stroke: currentColor; stroke-width: 1.4; }
 .win-act:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
 .win-act.is-close:hover { background: #e81123; color: #fff; }
-/* 顶栏品牌 logo：显示 22px，源图 64px（2 倍屏不糊，体积几 KB）。
-   macOS 上顶栏左侧留了 84px 给系统红绿灯，logo 自然落在它右侧。 */
-.topbar-logo {
-  width: 22px; height: 22px; flex-shrink: 0;
-  margin-right: 10px; border-radius: 6px;
+/* 顶栏右侧「产品官网」logo：18px 圆角小图，与旁边 GitHub octicon 同排同高。
+   源图 64px（2 倍屏不糊，体积几 KB）；点击进 www.dbmind.top（模板里 openExternal）。 */
+.site-mark {
+  width: 18px; height: 18px; display: block;
+  border-radius: 4px;
   object-fit: contain; user-select: none; -webkit-user-drag: none;
 }
 .top-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
