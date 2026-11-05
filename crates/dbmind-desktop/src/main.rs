@@ -624,7 +624,7 @@ fn main() {
             // 好好的、安装版里一动不动，根因就是它（2026-11-05 实测）。前端与 Rust 都没有
             // 依赖 Tauri 的 onDragDrop / DragDropEvent（全库检索为空），关掉零副作用；
             // 代价只是"往窗口里拖系统文件"不再有 Tauri 事件 —— 本来也没人用。
-            let builder = builder.disable_drag_drop_handler(true);
+            let builder = builder.disable_drag_drop_handler();
 
             let window = builder.build()?;
 
