@@ -1,0 +1,13 @@
+// Cloudflare 部署配置：官网 website/ 目录作为纯静态站点发布（Workers Static Assets）。
+// Workers & Pages 的 Git 集成用 `npx wrangler deploy` 读这份配置 ——
+// 改 website/ 后 push master，Cloudflare 自动重新部署（无需本地命令）。
+// 自定义域名（dbmind.top）在 Cloudflare 后台项目 → Custom domains 里绑定。
+{
+  "name": "dbmind",
+  "compatibility_date": "2026-11-05",
+  "assets": {
+    "directory": "./website",
+    "html_handling": "auto-trailing-slash",
+    "not_found_handling": "single-page-application"
+  }
+}
