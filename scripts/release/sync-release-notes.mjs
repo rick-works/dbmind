@@ -360,38 +360,10 @@ for (const [tag, bullets] of bulletsByTag) {
   }
 }
 
-// ---------- ⑥ 把官网推到 gh-pages ----------
+// ---------- ⑥ 官网发布 ----------
 //
-// **改好源文件 ≠ 线上更新**：官网线上是 `gh-pages` 分支，必须跑一次
-// `scripts/release/publish-site.ps1`（在 worktree 里换掉 index.html → commit → push）。
-// 这一步被整段漏掉过两次：官网一连落后 8 个版本（publish-site.ps1 的注释里就记着用户那句
-// "官网版本内容都没更新"），v1.2.20 又是只改了源、没推分支，用户在官网版本页又看出来了。
-// 所以不再"只提醒"——直接在这里执行：本脚本跑完，Release / 官网 / 关于页三处就该都到位。
-if (noPush) {
-  console.log('（--no-push：跳过官网发布）')
-} else {
-  const ps1 = path.join(ROOT, 'scripts', 'release', 'publish-site.ps1')
-  if (!fs.existsSync(ps1)) {
-    console.log('⚠ 没找到 scripts/release/publish-site.ps1 —— 官网需要手动发布到 gh-pages')
-  } else {
-    // PowerShell 的可执行名按平台不同：Windows 是 `powershell`，mac/Linux 是 `pwsh`。
-    // 写死 `powershell` 的话在 mac/Linux 上发版会 ENOENT → 被下面 catch 吞掉 → **官网永远不更新
-    // 且没有任何醒目的提示**（正是"改好源≠线上更新"那类漏项）。
-    const shell = process.platform === 'win32' ? 'powershell' : 'pwsh'
-    try {
-      execFileSync(
-        shell,
-        ['-ExecutionPolicy', 'Bypass', '-File', ps1, '-Message', `官网：加 v${tags[0].replace(/^v/, '')} 版本条目`],
-        { cwd: ROOT, stdio: 'inherit' },
-      )
-    } catch (err) {
-      // 发布失败不该把同步脚本判为失败（本地文件与 Release 正文都已经好了），
-      // 但必须**大声**说清楚"线上还没更新"，并给出可重复执行的补救命令与真实原因。
-      console.error(`\n⚠⚠ 官网没有发布成功：${err && err.message ? err.message : err}`)
-      console.error('   线上仍是旧内容。请手动执行（可重复跑，不会叠加）：')
-      console.error('   powershell -ExecutionPolicy Bypass -File scripts\\release\\publish-site.ps1\n')
-    }
-  }
-}
+// 官网已迁到 **Cloudflare Pages**（Git 集成连着本仓库，website/ 有变动自动重新部署，
+// 自定义域名 dbmind.top），这里不再需要任何手动发布步骤 —— 旧 gh-pages 流水线已删除。
+// 本脚本只需把 website/index.html 与 release-notes/*.md 改好并提交，剩下的交给 Cloudflare。
 
 console.log(noPush ? '（--no-push：未改动 GitHub）' : `已推送 ${pushed} 个 Release 正文`)
