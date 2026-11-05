@@ -1,5 +1,10 @@
 {
  "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+ "v2.0.8": [
+   "New official-website shortcut in the top bar: a small logo left of the GitHub icon with light/dark vector variants, one click to dbmind.top; the GitHub icon now opens the repo page",
+   "dbmind.top homepage fully refreshed: every feature now has its own docs section (adding data Q&A, snippet manager, backup & restore, test-data generator), a redrawn demo window, and feature-card \"Docs\" links jump straight to the right section",
+   "Website infra upgrade: moved to Cloudflare Pages (dbmind.top) for faster, steadier access and download routing"
+ ],
  "v2.0.7": [
    "SQL editor template variables: hover a :variable to see its default value and note; in-library variables render teal and unknown ones orange, so you can tell at a glance whether a run will prompt",
    "Smart download-source routing for in-app updates and the website: domestic networks automatically get the Gitee mirror (much faster), overseas stays on GitHub — the fastest source wins a live speed test",
