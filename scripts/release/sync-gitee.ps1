@@ -1,4 +1,4 @@
-# ===== 一键同步 Gitee（本地发，不走 CI）=====
+﻿# ===== 一键同步 Gitee（本地发，不走 CI）=====
 # Gitee 侧三条内容全部由本脚本负责；CI 里不再跑任何 Gitee 同步。
 #
 # 用法（在仓库根目录）：
@@ -53,6 +53,8 @@ if ($Tag) {
   Write-Host "==> [3/3] Release $Tag 附件 -> Gitee（增量 + 3 路并发 + >100MB 预跳过）"
   $env:GITEE_TOKEN = $giteeTok
   $env:GH_TOKEN    = $githubTok
+  # 本机 bash 里没有 jq，gitee-release.sh 依赖它（~/.dbmind/bin 下装了一份）
+  $env:PATH = "$env:USERPROFILE\.dbmind\bin;$env:PATH"
   # gh 下载 GitHub 资产要走系统代理；NO_PROXY 让 gitee.com 的 curl/git 保持直连
   $set = Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings'
   if ($set.ProxyEnable -eq 1 -and $set.ProxyServer) {
