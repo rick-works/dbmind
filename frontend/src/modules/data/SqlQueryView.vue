@@ -4191,6 +4191,40 @@ const onEditorMount = (editor) => {
       }
     }))
 
+    // 模板变量悬浮提示：鼠标停在 :变量名 上，显示变量库里的默认值 / 备注 ——
+    // 不用开管理弹窗就能确认「这个变量执行时会填什么」。库里没有的变量提示执行时会弹窗询问。
+    monacoProviders.push(monaco.languages.registerHoverProvider('sql', {
+      provideHover: (model, position) => {
+        const word = model.getWordAtPosition(position)
+        if (!word) return null
+        const line = model.getLineContent(position.lineNumber)
+        // 词前面必须是变量冒号（:name 的名字部分或整段上悬浮都命中）
+        const m = /(?<![:@\w]):([A-Za-z_][\w$]*)$/.exec(line.slice(0, word.startColumn - 1))
+        if (!m) return null
+        const tv = findTplVar(m[1])
+        const range = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn - 1,
+          endColumn: word.endColumn
+        }
+        if (!tv) {
+          return { range, contents: [{ value: `**:${word.word}** — ${t('sqlq.varHoverMissing')}` }] }
+        }
+        const contents = [{ value: `**:${tv.name}**` }]
+        if (String(tv.value || '') !== '') {
+          // 展示「写入形态」：函数/数字/NULL 原样，其余带引号（与执行替换同口径）
+          const val = String(tv.value).trim()
+          const written = isRawSqlValue(val) ? '`' + val + '`' : "`'" + val.replace(/'/g, "''") + "'`"
+          contents.push({ value: t('sqlq.tplVarDefault') + ': `' + tv.value + '` → ' + written })
+        } else {
+          contents.push({ value: t('sqlq.varHoverEmpty') })
+        }
+        if (tv.note) contents.push({ value: tv.note })
+        return { range, contents }
+      }
+    }))
+
     // 注册格式化提供者
     monacoProviders.push(monaco.languages.registerDocumentFormattingEditProvider('sql', {
       provideDocumentFormattingEdits: (model) => {
