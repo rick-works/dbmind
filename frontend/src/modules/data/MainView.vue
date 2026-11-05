@@ -43,10 +43,10 @@
         <span class="top-nav-right">
           <!-- 产品官网（www.dbmind.top）：Cloudflare Pages 托管，点击交系统浏览器打开
                （壳里 window.open/_blank 都无效，统一走 utils/externalLinks）。
-               图标沿用产品 logo（logo-sm.png），尺寸与旁边 GitHub 图标一致。 -->
+               图标按主题取 logo-light/logo-dark（深色界面用深底版本），尺寸与旁边 GitHub 图标一致。 -->
           <el-tooltip :content="$t('nav.officialSite')" placement="bottom">
             <span class="top-nav-item top-icon-btn" @click="openExternal('https://www.dbmind.top/')">
-              <img class="site-mark" :src="logoSmUrl" alt="" draggable="false" />
+              <img class="site-mark" :src="siteMarkUrl" alt="" draggable="false" />
             </span>
           </el-tooltip>
           <!-- GitHub 仓库主页：element-plus 没有 octocat 标志，用官方 octicon mark 内联 SVG，
@@ -1324,6 +1324,8 @@ import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType, h
 import { dbLabelOf } from '../../utils/dbLabel'
 import AiPanel from '../ai/AiPanel.vue'
 import logoSmUrl from '../../assets/logo-sm.png'
+import logoDarkUrl from '../../assets/logo-dark.svg'
+import logoLightUrl from '../../assets/logo-light.svg'
 import SaveToKbDialog from '../knowledge/SaveToKbDialog.vue'
 import DbLogo from '../../common/DbLogo.vue'
 import ConnInfoCard from './ConnInfoCard.vue'
@@ -2511,6 +2513,8 @@ const themeMode = ref(getThemeSettings().mode)
 const resolvedTheme = ref(getResolvedTheme())
 onResolvedThemeChange((v) => { resolvedTheme.value = v })
 const themeIcon = computed(() => (resolvedTheme.value === 'dark' ? Moon : Sunny))
+/** 顶栏官网小 logo：随实际生效主题换图（深色主题用深底 logo-dark，浅色用 logo-light） */
+const siteMarkUrl = computed(() => (resolvedTheme.value === 'dark' ? logoDarkUrl : logoLightUrl))
 const themeTip = computed(() => t(themeMode.value === 'dark' ? 'nav.themeDark' : themeMode.value === 'light' ? 'nav.themeLight' : 'nav.themeSystem'))
 const cycleTheme = () => {
   const order = ['system', 'light', 'dark']
@@ -8920,8 +8924,8 @@ const connTypeSummary = computed(() =>
 .win-act:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
 .win-act.is-close:hover { background: #e81123; color: #fff; }
 /* 顶栏右侧「产品官网」logo：18px 圆角小图，与旁边 GitHub octicon 同排同高。
-   源图 64px（2 倍屏不糊，体积几 KB）；点击进 www.dbmind.top（模板里 openExternal）。
-   灰度方案试过被否（用户：更难看），保持彩色原样。 */
+   深浅主题各一张（logo-dark/logo-light，随 resolvedTheme 切换）；点击进 www.dbmind.top。
+   灰度方案试过被否（用户：更难看），保持彩色。 */
 .site-mark {
   width: 18px; height: 18px; display: block;
   border-radius: 4px;
