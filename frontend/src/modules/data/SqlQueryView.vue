@@ -2512,21 +2512,35 @@ const resultSortKeys = ref([])
 // ===== 排序下推：把 ORDER BY 交给数据库（这才是"全表排序"）=====
 // 只在能安全包一层派生表时才下推：单段、纯 SELECT、原 SQL 里没有 order by / limit / union。
 // 不满足就退回内存排序（只排已加载的这一页），并且**明确提示**一次 —— 静默给出"看着不对"的结果更糟。
-const SORT_PUSH_BLOCK_RE = /\border\s+by\b|\blimit\b|\bunion\b|;/i
+const SORT_PUSH_BLOCK_RE = /\border\s+by\b|\blimit\b|\bunion\b/i
 const SORT_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/
 const sortPageOnlyTipped = ref(false)
+// 去掉 SQL 末尾的分号/空白/尾部注释：`select … from t;`、`… from t -- 备注` 都是最常见的写法，
+// 不能被当成"多语句"，也不能让 `--` 注释把外面包的那层 `) t` 吞掉
+const stripTailSemicolon = (s) => {
+  let out = String(s || '').trim()
+  for (let i = 0; i < 5; i++) {
+    const before = out
+    out = out.replace(/[;\s]+$/, '')
+    out = out.replace(/(?:--[^\n]*|\/\*[\s\S]*?\*\/)\s*$/, '').trim()
+    if (out === before) break
+  }
+  return out
+}
 const canPushResultSort = () => {
-  const base = String(sortBaseSql || '').trim()
+  const base = stripTailSemicolon(sortBaseSql)
   if (!base || isNoSql.value) return false
   if (resultItems.value.length > 1) return false // 多段结果：每段各自的 SQL，别乱动
   if (!/^\s*(select|with)\b/i.test(base)) return false
+  // 剥掉尾分号后仍有分号 = 真·多语句，包派生表会坏
+  if (base.includes(';')) return false
   if (SORT_PUSH_BLOCK_RE.test(base)) return false
   if (!result.value || result.value.success === false) return false
   // 列名得能裸写进 ORDER BY（结果列名一般是合法标识符；带空格/中文的不下推）
   return normalizeSortKeys(resultSortKeys.value).every(k => SORT_IDENT_RE.test(k.col))
 }
 const buildSortedSql = () => {
-  const base = String(sortBaseSql || '').trim().replace(/;+\s*$/, '')
+  const base = stripTailSemicolon(sortBaseSql)
   const keys = normalizeSortKeys(resultSortKeys.value)
   if (!keys.length) return base
   // 包一层派生表：原 SQL 有 WHERE / JOIN / GROUP BY 都不受影响，ORDER BY 一定作用在最终结果上
