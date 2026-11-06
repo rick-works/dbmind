@@ -752,6 +752,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v2.0.14（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.14</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-07</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>结果表头排序改成真·全表排序</b>：把 ORDER BY 交给数据库重新查询，不再只排当前已加载的这一页 —— 几百万行的表终于能一眼看到最新 / 最早的那几条；SQL 里自带 order by、limit、union，或末尾带分号、行内注释都不影响</li>
+            <li><b>多段语句（分号分隔的多条 SQL）也对齐了：点排序只重跑你正在看的那一段，其它结果集原样保留，不会把写入语句再执行一遍</b></li>
+            <li><b>修一个排序方向的 bug</b>：有时点出 ↓ 却仍按升序查（箭头和结果对不上）</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://github.com/rick-works/dbmind/releases/tag/v2.0.14" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind/releases/tag/v2.0.14" target="_blank" rel="noopener">下载 v2.0.14</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.13（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -759,7 +780,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.13</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-07</span>
           </div>
           <ul class="rel-notes">

@@ -671,5 +671,10 @@
     "Hover hints are consistent now: nearly 300 native title tooltips used to appear after about a second with the system look - they now show in 50ms with one shared bubble colour, radius and max width; this also fixes the dark-theme table overflow hint that rendered as grey text on a light-grey bubble",
     "The \"go to page N\" box is properly centred: the number used to sit too high, with single digits squeezed to the left once the pager font was enlarged",
     "Numbers in data grids are tabular now: IDs, amounts and timestamps line up column by column and no longer jitter while more rows load"
+  ],
+  "v2.0.14": [
+    "Header sort on results is now a true whole-table sort: the ORDER BY goes to the database in a fresh query instead of reordering only the loaded page - on a multi-million row table you finally see the newest / oldest rows; ORDER BY / LIMIT / UNION already in your SQL, trailing semicolons and inline comments all still work",
+    "Multi-statement scripts line up too: sorting re-runs only the result set you are looking at, the other result sets stay untouched and write statements are never executed twice",
+    "Fixed a sort-direction bug where the header showed a descending arrow but the query still ran ascending"
   ]
 }
