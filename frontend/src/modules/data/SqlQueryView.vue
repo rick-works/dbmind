@@ -1001,7 +1001,7 @@ const resultSelectionSummary = computed(() => {
 })
 // 翻到批量结果某一段的第 N 页：**只重跑这一段**（executeSql 带页码走后端分页+统计），
 // 其余段的结果原样保留。整批重跑会把写入类语句再执行一遍，绝对不行。
-const loadSegment = async (item, p, size) => {
+const loadSegment = async (item, p, size, overrideSql = '') => {
   if (!item || !item.segmentSql) return
   // 有未提交的单元格修改：分段翻页同样使行号失效 —— 确认放弃才继续
   if (pendingEdits.value.length) {
@@ -1024,7 +1024,9 @@ const loadSegment = async (item, p, size) => {
     const db = selectedSchema.value
       ? `${selectedDatabase.value}.${selectedSchema.value}`
       : selectedDatabase.value || undefined
-    const res = await executeSql(connId, item.segmentSql, db, execId.value, cancelController.signal, p, size, false, uiSession)
+    // overrideSql：表头排序时这一段要带 ORDER BY 重跑（段原文仍留在 item.segmentSql 里，
+    // 取消排序/翻页时还能回到它）
+    const res = await executeSql(connId, overrideSql || item.segmentSql, db, execId.value, cancelController.signal, p, size, false, uiSession)
     item.res = res
     item.page = p
     result.value = res
@@ -1041,13 +1043,13 @@ const loadSegment = async (item, p, size) => {
 }
 const onPageChange = (p) => {
   const item = resultItems.value[activeResultIdx.value]
-  if (item && item.segmentSql) { loadSegment(item, p, pageSize.value); return }
   // 排序已下推：翻页要沿用同一条 ORDER BY（否则第 2 页又回到"没排序"的原始顺序）
+  if (item && item.segmentSql) { loadSegment(item, p, pageSize.value, sortPagingSql()); return }
   runSql(p, pageSize.value, false, sortPagingSql())
 }
 const onPageSizeChange = (s) => {
   const item = resultItems.value[activeResultIdx.value]
-  if (item && item.segmentSql) { loadSegment(item, 1, s); return }
+  if (item && item.segmentSql) { loadSegment(item, 1, s, sortPagingSql()); return }
   runSql(1, s, false, sortPagingSql())
 }
 
@@ -2511,32 +2513,44 @@ const applyResultSort = () => {
 // 结果表表头点击排序：直接点=追加为下一级排序（多列时标序号），已排过的列循环 升→降→移出
 const resultSortKeys = ref([])
 // ===== 排序下推：把 ORDER BY 交给数据库（这才是"全部结果排序"）=====
-// 规则很简单：**只要是单段 SELECT，就把用户那条 SQL 的顶层 ORDER BY 换成表头点出来的那组**
+// 规则很简单：**只要是单段 SELECT，就把这条 SQL 的顶层 ORDER BY 换成表头点出来的那组**
 // （原来没有就追加，有 limit/offset/fetch 就插在它们前面）。不再包派生表 —— 包一层在 Oracle
 // 这类方言上会因"子查询内 order by"报错，也会让执行历史/报错定位指向用户没写过的 SQL。
-// 用户原 SQL 里已经写了 order by 也没关系：点表头排序就是要覆盖它。
+// 原 SQL 里已经写了 order by 也没关系：点表头排序就是要覆盖它。
+// 多段语句（; 分隔）时，每个结果集本来就对应其中一条 SQL —— 排序作用于**当前显示的那一段**，
+// 只重跑这一段（其余段的结果原样保留，也不会把写入语句再执行一遍）。
 const SORT_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/
 const sortPageOnlyTipped = ref(false)
+// 排序基准 SQL：多段结果取当前段的原文，单段取上一次真正执行的那条
+const sortBaseText = () => {
+  const item = resultItems.value[activeResultIdx.value]
+  if (item && item.segmentSql) return item.segmentSql
+  return sortBaseSql
+}
 const canPushResultSort = () => {
-  const base = stripTailSemicolon(sortBaseSql)
+  const base = stripTailSemicolon(sortBaseText())
   if (!base || isNoSql.value) return false
-  if (resultItems.value.length > 1) return false // 多段结果：每段各自的 SQL，排序只作用于当前这一段
   if (!/^\s*(select|with)\b/i.test(base)) return false
-  // 剥掉尾分号后仍有分号 = 真·多语句，往里插 ORDER BY 会插错位置
+  // 剥掉尾分号后仍有分号 = 这条本身还是多语句，往里插 ORDER BY 会插错位置
   if (base.includes(';')) return false
   if (!result.value || result.value.success === false) return false
   // 列名得能裸写进 ORDER BY（结果列名一般是合法标识符；带空格/中文的不下推）
   return normalizeSortKeys(resultSortKeys.value).every(k => SORT_IDENT_RE.test(k.col))
 }
-const buildSortedSql = () => applyTableSort(sortBaseSql, normalizeSortKeys(resultSortKeys.value))
+const buildSortedSql = () => applyTableSort(sortBaseText(), normalizeSortKeys(resultSortKeys.value))
 // 翻页 / 改每页条数：排序已下推时必须继续带着同一条 ORDER BY 跑，否则翻过去又是没排的原始顺序
-const sortPagingSql = () => (canPushResultSort() ? buildSortedSql() : '')
+const sortPagingSql = () => (resultSortKeys.value.length && canPushResultSort() ? buildSortedSql() : '')
 const applySortChoice = () => {
   if (canPushResultSort()) {
     sortPushing = true
     // 排序变了就回第 1 页：否则还是同一页的行被重排，跟没排一样
-    Promise.resolve(runSql(1, pageSize.value, false, buildSortedSql()))
-      .finally(() => { sortPushing = false })
+    // 取消排序（keys 已空）就传空串，走各条链路原本的"执行原 SQL"分支
+    const sorted = resultSortKeys.value.length ? buildSortedSql() : ''
+    const item = resultItems.value[activeResultIdx.value]
+    const job = (item && item.segmentSql)
+      ? loadSegment(item, 1, pageSize.value, sorted)   // 多段：只重跑当前这一段
+      : runSql(1, pageSize.value, false, sorted)
+    Promise.resolve(job).finally(() => { sortPushing = false })
     return
   }
   applyResultSort()

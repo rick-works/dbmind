@@ -3121,7 +3121,7 @@ export default {
   'sqlq.sortDescTitle': 'Currently descending — click to clear the sort',
   'sqlq.sortNoneTitle': 'Click to sort by this column',
   'sqlq.sortMultiTip': 'Click the arrow on another column to append it as a secondary sort (1/2/3 shown next to the icon)',
-  'sqlq.sortPageOnly': 'This query cannot be sorted on the server (multiple statements, not a single SELECT, or the column name is not a plain identifier), so the header sort only applies to the {n} loaded rows',
+  'sqlq.sortPageOnly': 'This query cannot be sorted on the server (not a single SELECT, the column name is not a plain identifier, or it is a NoSQL result), so the header sort only applies to the {n} loaded rows',
   'sqlq.sortChipTitle': 'Listed by priority: click one item to drop just that column, click "Clear" to drop all',
   'sqlq.sortedBy': 'Sorted by: ',
   'sqlq.sortRemoveOne': 'Remove this sort key',
