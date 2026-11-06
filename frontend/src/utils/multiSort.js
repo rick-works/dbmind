@@ -8,10 +8,11 @@
  *   · 序号即优先级：A↑①、B↓② → `order by A asc, B desc`；
  *   · 只按某列排序：在底栏排序链里点掉其它列（或点「取消」全部清空）。
  *
- * 表数据预览走**服务端**排序（把 keys 拼给 /data 接口），SQL 结果也优先下推成
- * `select * from (原SQL) t order by …` 重新执行（见 SqlQueryView 的 applySortChoice）——
- * 内存排序 `makeRowComparator` 现在只剩两个用途：NoSQL 文档，以及那些没法下推的 SQL
- * （自带 order by / limit / union，或不是单段 SELECT）。三处共用同一份 keys 结构，切换视图不会"变味"。
+ * 表数据预览走**服务端**排序（把 keys 拼给 /data 接口），SQL 结果也优先下推 ——
+ * 把用户那条 SQL 的顶层 ORDER BY 换成点出来的这组（见 SqlQueryView 的 buildSortedSql），
+ * 于是表头排序作用于**全部结果**而不是当前页。内存排序 `makeRowComparator` 现在只剩两个
+ * 用途：NoSQL 文档，以及没法下推的 SQL（多段语句 / 非单段 SELECT / 列名不是普通标识符）。
+ * 三处共用同一份 keys 结构，切换视图不会"变味"。
  */
 
 /** 最多几级排序：再多用户自己也记不住，且后端 ORDER BY 会很长 */

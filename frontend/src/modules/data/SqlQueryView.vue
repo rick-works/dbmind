@@ -657,6 +657,7 @@ import { errMsg } from '../../utils/errMsg'
 import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { splitSqlStatements, splitSqlStatementRanges } from '../../utils/sqlSplit'
+import { applyTableSort, stripTailSemicolon } from '../../utils/sqlTopLevel'
 import { useExcelSelection } from '../../utils/excelSelection'
 import { columnAlignClasses } from '../../utils/cellAlign'
 import SortGlyph from '../../common/SortGlyph.vue'
@@ -2509,43 +2510,25 @@ const applyResultSort = () => {
 }
 // 结果表表头点击排序：直接点=追加为下一级排序（多列时标序号），已排过的列循环 升→降→移出
 const resultSortKeys = ref([])
-// ===== 排序下推：把 ORDER BY 交给数据库（这才是"全表排序"）=====
-// 只在能安全包一层派生表时才下推：单段、纯 SELECT、原 SQL 里没有 order by / limit / union。
-// 不满足就退回内存排序（只排已加载的这一页），并且**明确提示**一次 —— 静默给出"看着不对"的结果更糟。
-const SORT_PUSH_BLOCK_RE = /\border\s+by\b|\blimit\b|\bunion\b/i
+// ===== 排序下推：把 ORDER BY 交给数据库（这才是"全部结果排序"）=====
+// 规则很简单：**只要是单段 SELECT，就把用户那条 SQL 的顶层 ORDER BY 换成表头点出来的那组**
+// （原来没有就追加，有 limit/offset/fetch 就插在它们前面）。不再包派生表 —— 包一层在 Oracle
+// 这类方言上会因"子查询内 order by"报错，也会让执行历史/报错定位指向用户没写过的 SQL。
+// 用户原 SQL 里已经写了 order by 也没关系：点表头排序就是要覆盖它。
 const SORT_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/
 const sortPageOnlyTipped = ref(false)
-// 去掉 SQL 末尾的分号/空白/尾部注释：`select … from t;`、`… from t -- 备注` 都是最常见的写法，
-// 不能被当成"多语句"，也不能让 `--` 注释把外面包的那层 `) t` 吞掉
-const stripTailSemicolon = (s) => {
-  let out = String(s || '').trim()
-  for (let i = 0; i < 5; i++) {
-    const before = out
-    out = out.replace(/[;\s]+$/, '')
-    out = out.replace(/(?:--[^\n]*|\/\*[\s\S]*?\*\/)\s*$/, '').trim()
-    if (out === before) break
-  }
-  return out
-}
 const canPushResultSort = () => {
   const base = stripTailSemicolon(sortBaseSql)
   if (!base || isNoSql.value) return false
-  if (resultItems.value.length > 1) return false // 多段结果：每段各自的 SQL，别乱动
+  if (resultItems.value.length > 1) return false // 多段结果：每段各自的 SQL，排序只作用于当前这一段
   if (!/^\s*(select|with)\b/i.test(base)) return false
-  // 剥掉尾分号后仍有分号 = 真·多语句，包派生表会坏
+  // 剥掉尾分号后仍有分号 = 真·多语句，往里插 ORDER BY 会插错位置
   if (base.includes(';')) return false
-  if (SORT_PUSH_BLOCK_RE.test(base)) return false
   if (!result.value || result.value.success === false) return false
   // 列名得能裸写进 ORDER BY（结果列名一般是合法标识符；带空格/中文的不下推）
   return normalizeSortKeys(resultSortKeys.value).every(k => SORT_IDENT_RE.test(k.col))
 }
-const buildSortedSql = () => {
-  const base = stripTailSemicolon(sortBaseSql)
-  const keys = normalizeSortKeys(resultSortKeys.value)
-  if (!keys.length) return base
-  // 包一层派生表：原 SQL 有 WHERE / JOIN / GROUP BY 都不受影响，ORDER BY 一定作用在最终结果上
-  return `select * from (\n${base}\n) dbmind_sort_t order by ${keys.map(k => `${k.col} ${k.dir}`).join(', ')}`
-}
+const buildSortedSql = () => applyTableSort(sortBaseSql, normalizeSortKeys(resultSortKeys.value))
 // 翻页 / 改每页条数：排序已下推时必须继续带着同一条 ORDER BY 跑，否则翻过去又是没排的原始顺序
 const sortPagingSql = () => (canPushResultSort() ? buildSortedSql() : '')
 const applySortChoice = () => {
