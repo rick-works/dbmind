@@ -1853,6 +1853,18 @@ fn escape_like(value: &str) -> String {
     value.replace('%', "\\%").replace('_', "\\_")
 }
 
+/// `escape_like()` 产出的是 `\%` / `\_`，但**只有 MySQL/PG 族默认把 `\` 当 LIKE 转义符**；
+/// SQLite / SQL Server / Oracle / DM / DB2 / H2 / Derby 没有默认转义符，`\_` 会被理解成
+/// 「一个反斜杠 + 任意一个字符」⇒ 关键字里带 `_` 或 `%`（`user_name`、`50%`）时一条都搜不到，
+/// 界面显示「没有数据」，看起来像库里真没有。这些方言必须显式声明 escape。
+fn like_escape(dialect: &Dialect) -> &'static str {
+    match dialect.key() {
+        // 默认转义符就是 `\`，多写一句反而可能被某些版本判成重复声明
+        "mysql" | "mariadb" | "doris" | "clickhouse" | "postgresql" | "kingbase" => "",
+        _ => " escape '\\'",
+    }
+}
+
 /// 高级搜索里的一条条件 → SQL 片段。拼不出来（列名空、数值列填了非数字）就返回 None。
 ///
 /// 安全上有两条硬规矩：
@@ -1890,7 +1902,11 @@ fn filter_condition(dialect: &Dialect, item: &Value) -> Option<String> {
                 _ => format!("%{}%", escape_like(text)),
             };
             let keyword = if op == "not_contains" { "not like" } else { "like" };
-            Some(format!("{column} {keyword} {}", dialect.literal(&pattern)))
+            Some(format!(
+                "{column} {keyword} {}{}",
+                dialect.literal(&pattern),
+                like_escape(dialect)
+            ))
         }
         _ => {
             let value = scalar_of(dialect, kind, text)?;
@@ -2090,9 +2106,10 @@ pub async fn data(
             )));
         }
         let pattern = dialect.literal(&format!("%{}%", escape_like(&keyword)));
+        let esc = like_escape(&dialect);
         let conditions: Vec<String> = text_columns
             .iter()
-            .map(|c| format!("{} like {pattern}", dialect.quote(c)))
+            .map(|c| format!("{} like {pattern}{esc}", dialect.quote(c)))
             .collect();
         where_groups.push(format!("({})", conditions.join(" or ")));
     }
@@ -2150,19 +2167,38 @@ pub async fn data(
 }
 
 /// 一行数据 → 值字面量。
-fn sql_value(value: Option<&Value>) -> String {
+///
+/// 字符串必须走 [`Dialect::literal`]：MySQL/MariaDB/Doris/ClickHouse 默认把 `\` 当转义符，
+/// 这里若只做 `'` 翻倍，值 `C:\temp\` 会拼成 `'C:\temp\'` —— 收尾引号被吃掉，语句截断，
+/// 后面的 `where` 条件被并进字符串（轻则报错，重则改错行）。以前就地编辑走的就是那条路。
+fn sql_value(value: Option<&Value>, dialect: &crate::api::dialect::Dialect) -> String {
     match value {
         None | Some(Value::Null) => "NULL".to_string(),
         Some(Value::Bool(b)) => {
-            if *b {
+            // PG/Kingbase 的 boolean 列不接受整数：`column is of type boolean but expression
+            // is of type integer`。其余方言（MySQL/SQLServer bit/Oracle 无布尔）用 1/0。
+            if matches!(dialect.key(), "postgresql" | "kingbase") {
+                if *b { "true" } else { "false" }.to_string()
+            } else if *b {
                 "1".to_string()
             } else {
                 "0".to_string()
             }
         }
         Some(Value::Number(n)) => n.to_string(),
-        Some(Value::String(s)) => format!("'{}'", s.replace('\'', "''")),
-        Some(other) => format!("'{}'", other.to_string().replace('\'', "''")),
+        Some(Value::String(s)) => dialect.literal(s),
+        Some(other) => dialect.literal(&other.to_string()),
+    }
+}
+
+/// 定位条件的一列：`col = 值`，值是 NULL 时必须写 `col is null`。
+///
+/// `col = NULL` 在 SQL 里永远不成立 ⇒ 无主键表（用整行当定位条件）里只要有一列是 NULL，
+/// 更新/删除就影响 0 行，而接口照样回「已提交 N 条语句」—— 用户以为存上了，刷新后改动没了。
+fn match_condition(col: &str, value: Option<&Value>, dialect: &crate::api::dialect::Dialect) -> String {
+    match value {
+        None | Some(Value::Null) => format!("{} is null", dialect.quote(col)),
+        _ => format!("{} = {}", dialect.quote(col), sql_value(value, dialect)),
     }
 }
 
@@ -2221,7 +2257,7 @@ pub async fn data_save(
         let names: Vec<String> = columns.iter().map(|c| dialect.quote(c)).collect();
         let values: Vec<String> = columns
             .iter()
-            .map(|c| sql_value(obj.get(c)))
+            .map(|c| sql_value(obj.get(c), &dialect))
             .collect();
         statements.push(format!(
             "insert into {quoted} ({}) values ({})",
@@ -2244,7 +2280,7 @@ pub async fn data_save(
         }
         let assignments: Vec<String> = changed
             .iter()
-            .map(|c| format!("{} = {}", dialect.quote(c), sql_value(row.get(c))))
+            .map(|c| format!("{} = {}", dialect.quote(c), sql_value(row.get(c), &dialect)))
             .collect();
         let keys: Vec<String> = if pk_columns.is_empty() {
             keys_of(original)
@@ -2253,7 +2289,7 @@ pub async fn data_save(
         };
         let conditions: Vec<String> = keys
             .iter()
-            .map(|c| format!("{} = {}", dialect.quote(c), sql_value(original.get(c))))
+            .map(|c| match_condition(c, original.get(c), &dialect))
             .collect();
         statements.push(format!(
             "update {quoted} set {} where {}",
@@ -2272,13 +2308,16 @@ pub async fn data_save(
         };
         let conditions: Vec<String> = keys
             .iter()
-            .map(|c| format!("{} = {}", dialect.quote(c), sql_value(obj.get(c))))
+            .map(|c| match_condition(c, obj.get(c), &dialect))
             .collect();
         statements.push(format!(
             "delete from {quoted} where {}",
             conditions.join(" and ")
         ));
     }
+
+    // 有 update/delete 才有可能「语句执行成功但一行都没匹配上」
+    let has_row_ops = !updates.is_empty() || !deletes.is_empty();
 
     // 就地编辑要落到目标库上（跨库时就是那条影子连接）
     let database = body
@@ -2330,7 +2369,16 @@ pub async fn data_save(
     .await?;
 
     let (success, message) = match &error {
-        None => (true, format!("已提交 {executed} 条语句，影响 {affected} 行")),
+        None => (
+            true,
+            // 影响 0 行不能只说「已提交」：无主键表/行被他人改过时，定位条件一条也没命中，
+            // 网格里那行却已经本地改掉了 —— 用户以为存上了，刷新就回滚。
+            if has_row_ops && affected == 0 {
+                format!("已提交 {executed} 条语句，但未匹配到任何行（数据可能已被修改或删除，请刷新后重试）")
+            } else {
+                format!("已提交 {executed} 条语句，影响 {affected} 行")
+            },
+        ),
         // 同一口径：前端已经加了「保存失败：」这层动作前缀，这里再报「第几条失败（共几条…）」
         // 就是套娃（用户实测看到的原话是「保存失败：第 1 条失败（共 1 条，已成功 0 条）：…」）。
         // 只留原因；「已成功 N 条」只在真有语句生效时才补。

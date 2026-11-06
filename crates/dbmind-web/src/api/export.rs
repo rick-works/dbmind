@@ -727,19 +727,72 @@ fn base_sql(req: &ExportReq, dialect: Dialect) -> XResult<String> {
 /// 只有语句自己已带顶层分页子句（`LIMIT` / `FETCH`）时才退回包子查询 ——
 /// 直接追加会出现两个 LIMIT 的语法错误。
 pub(crate) fn paging_sql(base: &str, offset: u64, size: u64, dialect: Dialect) -> String {
+    // 语句可能以 `-- 说明` 结尾（编辑器里很常见）：用空格直接往后接，`limit … offset …`
+    // 会整段落进注释里（表现为「点下一页数据不变」），包派生表那支还会把收尾括号吃掉。
+    // 先剥掉顶层尾部注释，之后一律换行追加 —— 换行也是行注释的天然终点。
+    let stripped = strip_trailing_comment(base);
+    let base = stripped.trim_end();
     let page = dialect.limit_clause(offset, size);
     if dialect.needs_order_by_for_paging() {
         // SQL Server：OFFSET/FETCH 必须紧跟 ORDER BY，而子查询里又不许 ORDER BY
         if has_order_by(base) {
-            format!("{base} {page}")
+            format!("{base}\n{page}")
         } else {
-            format!("{base} order by (select null) {page}")
+            format!("{base}\norder by (select null)\n{page}")
         }
     } else if has_top_level_paging_clause(base) {
-        format!("select * from ({base}) dbmind_page {page}")
+        format!("select * from ({base}) dbmind_page\n{page}")
     } else {
-        format!("{base} {page}")
+        format!("{base}\n{page}")
     }
+}
+
+/// 去掉语句**末尾**的注释（`-- …` 行注释 / `/* … */` 块注释），只认字符串/标识符字面量之外的。
+/// 中间的注释原样保留（它们不影响后面追加分页子句）。
+fn strip_trailing_comment(sql: &str) -> String {
+    let b = sql.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut i = 0usize;
+    while i < b.len() {
+        let c = b[i];
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'\'' | b'"' | b'`' => {
+                quote = Some(c);
+                i += 1;
+            }
+            b'-' if i + 1 < b.len() && b[i + 1] == b'-' => {
+                let mut j = i;
+                while j < b.len() && b[j] != b'\n' {
+                    j += 1;
+                }
+                if j >= b.len() {
+                    // 一直注释到结尾 ⇒ 就是尾部注释
+                    return sql[..i].trim_end().to_string();
+                }
+                i = j + 1;
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                let mut j = i + 2;
+                while j + 1 < b.len() && !(b[j] == b'*' && b[j + 1] == b'/') {
+                    j += 1;
+                }
+                let end = (j + 2).min(b.len());
+                if end >= b.len() {
+                    return sql[..i].trim_end().to_string();
+                }
+                i = end;
+            }
+            _ => i += 1,
+        }
+    }
+    sql.to_string()
 }
 
 /// 语句的**顶层**（括号深度 0、字符串/标识符字面量之外）是否出现给定短语，

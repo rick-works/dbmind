@@ -291,7 +291,12 @@ pub async fn documents(
         dbmind_core::RuntimeProtocol::Redis => {
             redis_read_command(&state, &id, &database, &collection, size).await?
         }
-        _ => format!("select * from {collection} limit {size}"),
+        // SQL 类协议（走关系型驱动兜底的场景）：表名同样要 quote —— 保留字（`Order`）、
+        // 含空格/点的名字直接拼会语法错，含 `;` 更等于把用户输入当语句执行。
+        _ => {
+            let quoted = crate::api::dialect::Dialect::new(record.kind()).quote(&collection);
+            format!("select * from {quoted} limit {size}")
+        }
     };
 
     let engine = state.engine();

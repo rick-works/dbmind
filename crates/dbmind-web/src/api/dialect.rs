@@ -501,7 +501,9 @@ impl Dialect {
         Self { kind }
     }
 
-    fn key(&self) -> &'static str {
+    /// 方言键（`mysql` / `postgresql` / …）。`pub(crate)`：同 crate 的 meta.rs 要据此判断
+    /// 「布尔字面量怎么写」「LIKE 要不要显式 escape」这类差异。
+    pub(crate) fn key(&self) -> &'static str {
         self.kind.key()
     }
 
