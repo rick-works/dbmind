@@ -64,6 +64,13 @@
   --dc-code-bg: #2c3344;
   --dc-bg-input: #1c1f27;      /* 输入框底 */
   --dc-bg-pop: #2b3040;        /* 下拉/popper/message 底 */
+  /* 悬停提示（el-tooltip / 表格溢出提示 / utils/fastTooltip.js）统一配色。
+     为什么不直接沿用 Element 的暗色气泡：它拿 --el-text-color-primary 当**背景**，
+     而本项目把这个变量改成了浅灰文字色（--dc-text），于是深色主题下气泡会变成
+     "浅灰底 + 深字"——表格里的溢出提示就是这样，既丑又跟其它提示不是一套。 */
+  --dc-tip-bg: #2f3546;
+  --dc-tip-fg: #eef1f6;
+  --dc-tip-shadow: 0 8px 24px rgba(0, 0, 0, .32);
   --dc-bg-hover: #2c3140;      /* hover */
   /* 表头底：必须与**数据区**（含斑马纹 --dc-bg-soft）明显拉开一档，否则"看不出是表头"。
      深色主题下取比卡片略亮的一档（原来 #1e222c 与内嵌块 #1a1d24 太近）。 */
@@ -164,6 +171,10 @@ html[data-theme="light"] {
   --dc-code-bg: #f4f6fb;
   --dc-bg-input: #ffffff;
   --dc-bg-pop: #ffffff;
+  /* 悬停提示统一配色（浅色主题）：白底深字，投影更淡 */
+  --dc-tip-bg: #ffffff;
+  --dc-tip-fg: #12203a;
+  --dc-tip-shadow: 0 8px 24px rgba(15, 23, 42, .16);
   --dc-bg-hover: #e8edf6;
   /* 原来是 #f1f4f9 —— 与斑马纹 --dc-bg-soft(#f4f6fb) 几乎同色，表头看着就是"又一行数据"。
      换成明显更深、也更偏蓝的一档，读起来才像"表头"。 */
@@ -799,6 +810,24 @@ html .el-tree-node.is-current > .el-tree-node__content { background: var(--dc-pr
 }
 .el-pagination.is-background .btn-prev:disabled,
 .el-pagination.is-background .btn-next:disabled { opacity: .45; cursor: not-allowed; }
+/* 「前往 N 页」的输入框：数字要正中间。
+   EP 靠「行高 = 固定内高（small 下 22px）」居中，而各视图会把分页器字号统一放大到
+   表格字号（12 → 14/16px），行高没跟着变，数字看着偏上；而且 EP 的跳页框默认是
+   **左对齐**，一位数会挤在左边。这里统一改成行高 normal + 内容居中（水平也居中）。
+   放在全局：结果区、数据表、NoSQL、AI 面板的分页器都是同一套结构。 */
+.el-pagination__jump .el-input__wrapper {
+  /* 左右也收窄：EP 给跳页框的宽度只有 40px，默认 11px 的内边距吃掉一半，
+     三位数（248）会贴着边 */
+  padding: 0 3px;
+}
+.el-pagination__jump .el-input__inner {
+  /* 内高沿用 EP 的变量，别写 100% —— 百分比在 input 上会被内容高度顶掉，
+     输入框缩到 16px、点击区域跟着变小 */
+  height: var(--el-input-inner-height, 22px);
+  line-height: normal;
+  padding: 0 2px;
+  text-align: center;
+}
 .el-form-item__label { color: var(--dc-text-dim); }
 .el-switch.is-checked .el-switch__core { background-color: var(--dc-primary); border-color: var(--dc-primary); }
 .el-dropdown-menu { background: var(--dc-bg-pop) !important; border-color: var(--dc-border) !important; border-radius: 8px !important; box-shadow: var(--dc-shadow) !important; }
@@ -2028,6 +2057,9 @@ html[data-theme="dark"] .el-alert--success.is-light {
    作用域仅限 `.data-table-wrap` 里的表格，也就是这三个数据视图，不会波及别处。 */
 .data-table-wrap .data-table {
   font-size: var(--grid-fs, var(--dc-data-fs, 14px)) !important;
+  /* 数字等宽：数据表格里 ID / 金额 / 时间戳成列排布，比例数字（1 比 8 窄）会让
+     同一列的数字左右参差，滚动加载时还会轻微「跳」。中文与字母不受影响。 */
+  font-variant-numeric: tabular-nums;
 }
 /* 单元格跟表格走（组件里若有 th/td 的字号，一并让位） */
 .data-table-wrap .data-table th,
@@ -2080,4 +2112,41 @@ html[data-theme="dark"] .el-alert--success.is-light {
 .nosql-view .pager .el-pagination__total,
 .sql-query-view .result-footer .el-pagination__total {
   color: var(--dc-text-dim) !important;
+}
+/* ==================== 悬停提示：全项目统一观感 ==================== */
+/* 三套来源统一到同一组变量（--dc-tip-*）：
+   1) el-tooltip（暗色）：图标钮、表头说明等；
+   2) el-table 的 show-overflow-tooltip（本质也是 el-tooltip 暗色）；
+   3) utils/fastTooltip.js 接管的原生 title（表格单元格、树节点、页签…）。
+   背景/文字必须显式钉死：Element 的暗色气泡拿 --el-text-color-primary 当底色，
+   而本项目把它改成了浅灰文字色，不覆盖就是"浅灰底 + 深字"。 */
+.el-popper.is-dark {
+  background: var(--dc-tip-bg) !important;
+  color: var(--dc-tip-fg) !important;
+  border: none !important;
+  border-radius: 6px;
+  max-width: 420px;
+  padding: 7px 11px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  box-shadow: var(--dc-tip-shadow);
+}
+
+.el-popper.is-dark .el-popper__arrow::before {
+  background: var(--dc-tip-bg) !important;
+  border: none !important;
+  border-radius: 1px;
+}
+
+/* light 效果的提示（少数 el-tooltip / el-popover）用同一套圆角、字号与投影。
+   排除下拉框、日期面板、下拉菜单：它们有自己的圆角与层级，不属"悬停提示"。 */
+.el-popper.is-light:not(.el-select__popper):not(.el-picker__popper):not(.el-dropdown__popper) {
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  box-shadow: var(--dc-tip-shadow);
 }

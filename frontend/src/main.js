@@ -96,6 +96,8 @@ import { installExternalLinkHandler } from './utils/externalLinks'
 import { installDialogResize } from './utils/dialogResize'
 // 功能性弹窗统一装「右上角全屏 / 还原」按钮，消息弹窗与窄弹窗不装
 import { installDialogMaximize } from './utils/dialogMaximize'
+// 原生 title 的悬停提示要等约 1 秒，全项目 279 处都换掉不现实：运行时统一接管成快提示
+import { installFastTooltip } from './utils/fastTooltip'
 
 // 清理历史遗留的浏览器存储键。
 //
@@ -253,6 +255,7 @@ applyAppearance()
 installDialogResize()
 // 功能性弹窗统一支持「右上角全屏 / 还原」（消息弹窗、窄弹窗不参与）
 installDialogMaximize()
+installFastTooltip()
 
 app.mount('#app')
 hydrateUIFromBackend()
