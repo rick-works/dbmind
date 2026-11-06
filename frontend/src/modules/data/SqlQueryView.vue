@@ -1041,12 +1041,13 @@ const loadSegment = async (item, p, size) => {
 const onPageChange = (p) => {
   const item = resultItems.value[activeResultIdx.value]
   if (item && item.segmentSql) { loadSegment(item, p, pageSize.value); return }
-  runSql(p, pageSize.value, false)
+  // 排序已下推：翻页要沿用同一条 ORDER BY（否则第 2 页又回到"没排序"的原始顺序）
+  runSql(p, pageSize.value, false, sortPagingSql())
 }
 const onPageSizeChange = (s) => {
   const item = resultItems.value[activeResultIdx.value]
   if (item && item.segmentSql) { loadSegment(item, 1, s); return }
-  runSql(1, s, false)
+  runSql(1, s, false, sortPagingSql())
 }
 
 // ========== 结果表格列宽拖拽（任意竖线均可拖动） ==========
@@ -1299,7 +1300,8 @@ watch(() => (result.value?.rows || []).length, () => {
   vtGapBottom.value = (n - vtEnd.value) * VT_ROW_H.value
   clearResultRowSelection()
   resultActiveCell.value = null
-  resultSortKeys.value = []
+  // 排序下推：重跑出来的结果本身就是库排好的序，表头箭头要留着（sortPushing 期间不清）
+  if (!sortPushing) resultSortKeys.value = []
   // 快照原始行序：取消排序（第三次点击）时还原
   unsortedRows.value = (result.value?.rows || []).slice()
   nextTick(() => onResultTableScroll())
@@ -2507,6 +2509,45 @@ const applyResultSort = () => {
 }
 // 结果表表头点击排序：直接点=追加为下一级排序（多列时标序号），已排过的列循环 升→降→移出
 const resultSortKeys = ref([])
+// ===== 排序下推：把 ORDER BY 交给数据库（这才是"全表排序"）=====
+// 只在能安全包一层派生表时才下推：单段、纯 SELECT、原 SQL 里没有 order by / limit / union。
+// 不满足就退回内存排序（只排已加载的这一页），并且**明确提示**一次 —— 静默给出"看着不对"的结果更糟。
+const SORT_PUSH_BLOCK_RE = /\border\s+by\b|\blimit\b|\bunion\b|;/i
+const SORT_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_$]*$/
+const sortPageOnlyTipped = ref(false)
+const canPushResultSort = () => {
+  const base = String(sortBaseSql || '').trim()
+  if (!base || isNoSql.value) return false
+  if (resultItems.value.length > 1) return false // 多段结果：每段各自的 SQL，别乱动
+  if (!/^\s*(select|with)\b/i.test(base)) return false
+  if (SORT_PUSH_BLOCK_RE.test(base)) return false
+  if (!result.value || result.value.success === false) return false
+  // 列名得能裸写进 ORDER BY（结果列名一般是合法标识符；带空格/中文的不下推）
+  return normalizeSortKeys(resultSortKeys.value).every(k => SORT_IDENT_RE.test(k.col))
+}
+const buildSortedSql = () => {
+  const base = String(sortBaseSql || '').trim().replace(/;+\s*$/, '')
+  const keys = normalizeSortKeys(resultSortKeys.value)
+  if (!keys.length) return base
+  // 包一层派生表：原 SQL 有 WHERE / JOIN / GROUP BY 都不受影响，ORDER BY 一定作用在最终结果上
+  return `select * from (\n${base}\n) dbmind_sort_t order by ${keys.map(k => `${k.col} ${k.dir}`).join(', ')}`
+}
+// 翻页 / 改每页条数：排序已下推时必须继续带着同一条 ORDER BY 跑，否则翻过去又是没排的原始顺序
+const sortPagingSql = () => (canPushResultSort() ? buildSortedSql() : '')
+const applySortChoice = () => {
+  if (canPushResultSort()) {
+    sortPushing = true
+    // 排序变了就回第 1 页：否则还是同一页的行被重排，跟没排一样
+    Promise.resolve(runSql(1, pageSize.value, false, buildSortedSql()))
+      .finally(() => { sortPushing = false })
+    return
+  }
+  applyResultSort()
+  if (!sortPageOnlyTipped.value) {
+    sortPageOnlyTipped.value = true
+    ElMessage.info(t('sqlq.sortPageOnly', { n: (result.value?.rows || []).length }))
+  }
+}
 const resultSortDirOf = (name) => sortDirOf(resultSortKeys.value, name)
 const resultSortNo = (name) => sortIndexOf(resultSortKeys.value, name)
 const resultSortTitle = (name) => {
@@ -2654,19 +2695,19 @@ const onResultHeaderClick = (name, e) => {
   // 已排过的列在自己位置上循环 升→降→移出，其余列不动。
   // 「A 升序 + B 降序」= 点 A（A↑①）→ 点 B（B↑②）→ 再点 B（B↓②）。
   resultSortKeys.value = toggleSortKey(resultSortKeys.value, name)
-  applyResultSort()
+  applySortChoice()
 }
 // 底栏排序链胶囊：点某一项只移除那一列（后面的列自动前移，序号不会出现空号），点「取消」清空全部
 const removeResultSortKey = (col) => {
   const next = resultSortKeys.value.filter(k => k.col !== col)
   if (next.length === resultSortKeys.value.length) return
   resultSortKeys.value = next
-  applyResultSort()
+  applySortChoice()
 }
 const clearResultSort = () => {
   if (!resultSortKeys.value.length) return
   resultSortKeys.value = []
-  applyResultSort()
+  applySortChoice()
 }
 // 当前选区的 TSV 文本（Excel 可直接粘贴）：
 // 列选中 = 列名 + 该列全部已加载行；行选中 = 所选行的全部可见列；否则 = 当前单元格
@@ -4649,6 +4690,13 @@ const onEdCtxItem = (item) => {
 // reuseLast：翻页时沿用上次执行的 SQL。否则「执行全部 / 执行选中」之后翻页会再读一次
 // 编辑器选区，出现「明明跑的是全部，翻到第 2 页却只跑了选中片段」的错位。
 let lastExecSql = ''
+// 结果表头排序的**下推基准**：不含 ORDER BY 的那条执行 SQL。
+// 原来结果视图的排序只是对"已取回的这一页"做内存排序 —— 200 行里的最大值跟全表无关，
+// 于是用户点日期列降序，看到的却还是几年前的数据（实测 362 万行的表里最新是 2026-11-06，
+// 界面上停在 2022-09）。现在默认把 ORDER BY 交给数据库，翻页也沿用同一条。
+let sortBaseSql = ''
+// 正在用「带排序的 SQL」重跑：结果的 watch 别把表头排序状态清掉（否则箭头一闪就没）
+let sortPushing = false
 const getExecutableSql = (reuseLast = false) => {
   // 语句级 ▶ 的本次执行：最优先 —— 点击绿 ▶ 只跑那一条，且不动编辑器选区
   if (stmtRunSql) return stmtRunSql
@@ -4970,13 +5018,15 @@ const onVarCancel = () => {
   pendingDefaults = null
 }
 
-const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
+// overrideSql：本次要执行的 SQL（排序下推 / 翻页沿用排序时由外部给），不给就走编辑器
+const runSql = async (page = 1, size = pageSize.value, batchable = true, overrideSql = '') => {
   // 未选数据源：温和提示后直接返回 —— 别让 props.conn 的空指针异常跑进错误面板
   if (!(selectedConnId.value || props.conn?.id)) { ElMessage.info(t('sqlq.pickConnFirst')); return }
   if (running.value) return
-  if (!requireSql()) return
+  if (!overrideSql && !requireSql()) return
   // 首次执行先过一道「目标段」校验：多段脚本 + 无选区 + 光标不在任何语句上 ⇒ 拒绝
-  if (page === 1 && !ensureRunTarget()) return
+  // （排序重跑/翻页用的是外部给的 SQL，不参与这条校验）
+  if (page === 1 && !overrideSql && !ensureRunTarget()) return
   // 有未提交的单元格修改：翻页/重跑会使行号失效 —— 确认放弃才继续
   if (pendingEdits.value.length) {
     try {
@@ -4988,7 +5038,7 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
     } catch { return }
     discardEdits()
   }
-  let execSql = getExecutableSql(page !== 1)
+  let execSql = overrideSql || getExecutableSql(page !== 1)
   if (!execSql) return
   // 模板变量：一次性值已在手（确认弹窗后重入）就替换；否则变量库有默认值的直接套用，
   // 缺的才弹窗收参（确认后自动存入变量库，下次同变量不再弹）
@@ -5015,6 +5065,11 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
     }
   }
   lastExecSql = execSql
+  // 用户重新执行（不是翻页、也不是排序重跑）⇒ 换一条排序基准 SQL，旧的排序状态一起清掉
+  if (!overrideSql) {
+    sortBaseSql = execSql
+    if (resultSortKeys.value.length) resultSortKeys.value = []
+  }
   // 只读连接 / 生产库保护：写语句（含 NoSQL 的 Mongo/Redis 写命令）在**点击那一刻**就拦下
   // （与「提交修改」、用户管理同一个闸门、同一款右上角通知）。只读一律拦；标注生产的连接
   // 在「生产库保护」开启时拦（保护关掉就放行 —— 开关在 设置 → 安全与会话）。
@@ -5076,17 +5131,20 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true) => {
         const histCost = (b && Array.isArray(b.results)) ? b.results.reduce((m, r) => Math.max(m, (r.executeTime) || 0), 0) : 0
         recordHistory(execSql, db, histCost)
       } else {
+        // 排序下推时 execSql 是包了派生表的包装体：计数 / 执行历史 / 字段注释 / 报错定位
+        // 都要基于**用户那条原始 SQL** —— 包装体既不是用户写的语句，也不在编辑器里
+        const baseSql = sortBaseSql || execSql
         const res = await executeSql(connId, execSql, db, execId.value, cancelController.signal, page, size, false, uiSession)
         if (cancelRequested.value) { setResultCancelled(); return }
         showSingleResult(res)
         // 事务模式：写语句成功 ⇒ 有未提交变更（提示条点亮，提醒 COMMIT/ROLLBACK）
         if (txMode.value && res && res.success && (res.affectedRows || 0) > 0) txDirty.value = true
         // 总数未知时异步补齐（后端已不同步 COUNT，见 fetchCountFor）
-        fetchCountFor(result.value, execSql)
+        fetchCountFor(result.value, baseSql)
         // 失败 → 编辑器里把出错语句标红定位（execSql = 选中的那条或整段单条）
-        if (!res.success) markErrorStatement(res, undefined, execSql)
-        recordHistory(execSql, db, res.executeTime || 0)
-        loadResColumnComments(execSql, connId, db)
+        if (!res.success) markErrorStatement(res, undefined, baseSql)
+        recordHistory(baseSql, db, res.executeTime || 0)
+        loadResColumnComments(baseSql, connId, db)
       }
     }
   } catch (e) {

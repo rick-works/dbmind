@@ -3135,6 +3135,7 @@ export default {
   'sqlq.sortDescTitle': '当前降序，点击取消排序',
   'sqlq.sortNoneTitle': '点击按此列排序',
   'sqlq.sortMultiTip': '再点其它列的排序箭头可追加为次要排序（多列时图标旁标 1/2/3）',
+  'sqlq.sortPageOnly': '这条查询没法下推排序（已带 order by / limit / union，或不是单段 SELECT），表头排序只作用于已加载的 {n} 行；要看全表请直接在 SQL 里加 ORDER BY',
   'sqlq.sortChipTitle': '按优先级排列：点某一项只移除那一列，点「取消」清空全部',
   'sqlq.sortedBy': '已排序：',
   'sqlq.sortRemoveOne': '移除这一列排序',
