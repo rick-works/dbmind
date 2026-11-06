@@ -31,7 +31,7 @@ use serde_json::{json, Value};
 
 use crate::api::ai::config::{self, Msg};
 use crate::api::ai::tools::tables_of;
-use dbmind_core::{TableInfo, TableKind};
+use dbmind_core::TableInfo;
 use crate::api::ai::{bound_history, read_only, schema_context, with_language};
 use crate::api::error::{XError, XResult};
 use crate::api::require_record;
@@ -303,7 +303,7 @@ fn pick_focus(tables: &[TableInfo], question: &str, named: &[String]) -> (Vec<St
     });
     let best = ranked.first().map(|(s, _)| *s).unwrap_or(0);
 
-    let mut push = |table: &TableInfo, picked: &mut Vec<String>| {
+    let push = |table: &TableInfo, picked: &mut Vec<String>| {
         if !picked.iter().any(|t| t.eq_ignore_ascii_case(&table.name)) {
             picked.push(table.name.clone());
         }
@@ -923,6 +923,10 @@ impl Tracer {
     }
 
     /// 某一步开始：界面先看到「正在做什么」，跑完再被 [`push_step`] 换成真实结果。
+    ///
+    /// 目前所有调用点都用了带 detail 的 [`Self::begin_with`]，这个无 detail 的简写暂时没人调，
+    /// 但它是这条链路的正常入口之一（新步骤不需要「进行中内容」时用它更直接），故保留。
+    #[allow(dead_code)]
     fn begin(&self, key: &str, label: &str) {
         self.begin_with(key, label, "", None);
     }
@@ -1714,6 +1718,8 @@ fn is_category_column(column: &dbmind_core::ColumnDetail) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // 只有测试构造 TableInfo 时才需要 TableKind（生产代码用不到，放在这里才不会有 unused 警告）
+    use dbmind_core::TableKind;
 
     fn ti(name: &str, comment: Option<&str>) -> TableInfo {
         TableInfo {

@@ -346,6 +346,7 @@ import {
 // 提交即登记任务中心/右上角时钟（与数据传输同一套登记表，见 backgroundTasks.js）
 import { addBgTask } from '../sync/backgroundTasks'
 import { desktopShell } from '../../utils/desktopShell'
+import { createPollGuard } from '../../utils/pollGuard'
 
 const props = defineProps({
   modelValue: Boolean,
@@ -539,6 +540,8 @@ const cliInstallBusy = ref(false)
 let cliCheckSeq = 0
 
 let pollTimer = null
+/** 轮询失败计数：连续 3 次没响应才收摊（见 utils/pollGuard） */
+const pollFails = createPollGuard(3)
 
 const defaultPort = computed(() => {
   const t = guide.value && guide.value.connectionType
@@ -874,6 +877,7 @@ const poll = () => {
       const res = props.mode === 'backup'
         ? await backupTaskStatus(taskId.value)
         : await restoreTaskStatus(taskId.value)
+      pollFails.ok()
       status.value = res.status || 'running'
       progress.value = typeof res.progress === 'number' ? res.progress : 0
       message.value = res.message || ''
@@ -914,8 +918,21 @@ const poll = () => {
         installPrompt.value = res.install
       }
     } catch (e) {
-      // 轮询失败不中断
-      console.warn('poll failed', e)
+      // 偶发抖动不中断；连续 3 次没响应才是真断了 —— 一直重试下去界面永远「备份中」，
+      // 而 running 为真时用户连窗口都关不掉
+      if (!pollFails.fail()) {
+        console.warn('[bkp] 任务进度查询失败，重试中：', e?.message || e)
+        return
+      }
+      stopPoll()
+      const detail = e?.message || String(e || '')
+      status.value = 'error'
+      error.value = detail
+      running.value = false
+      finished.value = true
+      // pushLog 只收文本（时间前缀它自己加），不要多传 level 参数
+      pushLog(t('common.pollFailed', { n: pollFails.limit }))
+      ElMessage.error(t('common.pollFailed', { n: pollFails.limit }))
     }
   }, 800)
 }
@@ -925,6 +942,8 @@ const stopPoll = () => {
     clearInterval(pollTimer)
     pollTimer = null
   }
+  // 停轮询即清零：接回任务 / 重新发起时不该继承上一轮的失败计数
+  pollFails.reset()
 }
 
 // 本组件由 v-if 挂载，任务进行中被关掉时会被真正卸载，这里兜底停轮询

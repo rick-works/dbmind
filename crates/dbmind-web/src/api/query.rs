@@ -53,6 +53,32 @@ async fn editor_timeout_ms(state: &AppState) -> u64 {
 /// 以前各执行入口各写死一个数字（编辑器 2000、批量 2000、NoSQL 浏览另有自己的），
 /// 统一成一个键后：界面请求的 `size` 还会被它再夹一层 —— 分页大小是「想要多少」，
 /// 这里是「最多给多少」。
+/// 一次读完执行一条查询要用的两个设置：`(行数上限, 超时毫秒)`。
+///
+/// <p>以前这俩各走一次 `spawn_blocking` + 一次加锁 + 一次 SQLite 查询 —— 「select 1」
+/// 这种小查询光固定开销就背着两次线程切换和两次库读。设置一共几十条，一次全读回来的
+/// 成本比读两次单键还低。
+async fn query_limits(state: &AppState) -> (usize, u64) {
+    const UNLIMITED: usize = 1_000_000_000;
+    let engine = state.engine();
+    let all = blocking(move || engine.all_settings()).await.unwrap_or_default();
+    let get = |key: &str| all.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+    let cap = get(dbmind_core::Store::KEY_QUERY_MAX_ROWS)
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    // 0 = 不限制（与界面语义一致）；给一个大而安全的数而不是 MAX，见 max_rows_cap 的说明
+    let cap = if cap == 0 {
+        UNLIMITED
+    } else {
+        cap.clamp(100, 100_000)
+    };
+    let secs = get(dbmind_core::Store::KEY_QUERY_TIMEOUT)
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .map(|secs| secs.clamp(1, 600))
+        .unwrap_or(300);
+    (cap, secs * 1000)
+}
+
 pub(crate) async fn max_rows_cap(state: &AppState) -> usize {
     const UNLIMITED: usize = 1_000_000_000;
     let engine = state.engine();
@@ -219,28 +245,30 @@ pub async fn execute(
         return Ok(Json(shape::query_failure_json(&err.message, 0)));
     }
 
-    // 第 2 页起才追加分页子句（见 `paging_sql`：直接追加，不过派生表），且只对
-    // 「取数类」语句套。统计也要用「去掉末尾分号」的版本：带分号的原句进任何
-    // 子查询/CTE 都是语法错误 —— 用户输入的 SQL 十有八九带分号（前端也允许），
-    // 所以这一步不能省。执行本身不受影响，因此只在改写处用去尾分号的版本。
+    // **每一页**都追加分页子句（见 `can_append_paging` 的排除项，`paging_sql` 负责
+    // 追加形状：直接追加，不过派生表）。统计也要用「去掉末尾分号」的版本：带分号的
+    // 原句进任何子查询/CTE 都是语法错误 —— 用户输入的 SQL 十有八九带分号（前端也允许）。
+    //
+    // 第 1 页以前是原样执行的，看着没问题，实际很浪费：数据库不知道只要一页，会把
+    // 整个结果集一路往外发，客户端读够 `max_rows + 1` 行才 break —— 服务端的扫描/发送
+    // 和驱动侧的解析都已经做完了。宽表、大表、尤其走 SSH 隧道时这一段是纯浪费。
+    // 多要一行（`size + 1`）是为了保住 `truncated` 判定（见 shape::query_result_json
+    // 的 hasMore/totalCount）：正好取到 size+1 行才说明「还有下一页」。
     let base_sql = sql.clone();
     let bare = base_sql.trim().trim_end_matches(';').trim().to_string();
-    let effective = if page > 1 && looks_like_query(&bare) {
-        // page/size 来自请求体没有上限，saturating 防乘法溢出（与 export.rs 同一纪律）
-        crate::api::export::paging_sql(
-            &bare,
-            page.saturating_sub(1).saturating_mul(size as u64),
-            size as u64,
-            dialect,
-        )
+    // page/size 来自请求体没有上限，saturating 防乘法溢出（与 export.rs 同一纪律）
+    let offset = page.saturating_sub(1).saturating_mul(size as u64);
+    let effective = if can_append_paging(&bare, page, dialect) {
+        crate::api::export::paging_sql(&bare, offset, size as u64 + 1, dialect)
     } else {
         base_sql.clone()
     };
 
     let engine = state.engine();
-    let timeout_ms = editor_timeout_ms(&state).await;
+    // 两个设置一次读回来（见 query_limits）：原来这里要两次线程切换 + 两次库读
+    let (cap, timeout_ms) = query_limits(&state).await;
     // 全局默认上限再夹一层：分页大小是「想要多少」，设置里的 maxRows 是「最多给多少」
-    let max_rows = size.min(max_rows_cap(&state).await);
+    let max_rows = size.min(cap);
     let request = QueryRequest {
         schema,
         read_only: None,
@@ -368,20 +396,50 @@ pub async fn count(
     Ok(Json(json!({ "success": true, "totalCount": total })))
 }
 
-/// 看起来是不是「取数」语句 —— 只有这类才适合套分页壳。
+/// 这条语句能不能在**顶层**追加分页子句。
 ///
-/// 不解析 SQL，只看首个词：套壳是为了分页，DDL/DML 套进去只会报错，
-/// 而它们在「第几页」这个问题上没有意义。
-fn looks_like_query(sql: &str) -> bool {
-    // split_whitespace 本身跳过前导空白，不必先 trim_start
+/// 排除项都是"追加了就变成另一条语句 / 直接语法错"的情况：
+/// 1. `show` / `describe` / `explain` 是元命令，不是结果集表达式 —— `describe t limit 1`
+///    在 MySQL 就是 1064；`explain` 里的 limit 属于被解释的语句，追加只会改变语义。
+/// 2. `with` 后面接的是写语句（`with … insert/update/delete/merge`）：追加 limit 不合法。
+/// 3. 顶层已有 `limit` / `fetch`：再追加一个就是语法错，包派生表又会在「重复输出列」
+///    的语句上炸（见 `paging_sql` 的说明）—— 第 1 页原样执行最安全；第 2 页起沿用
+///    既有行为（由 `paging_sql` 决定包不包派生表）。
+/// 4. 尾部带 `for update` / `for share` / `into outfile`：分页子句必须紧跟在结果集定义
+///    之后，接在它们后面同样是语法错。
+/// 5. 第 1 页跳过 Oracle / DM / SQL Server：这三家靠 `OFFSET…FETCH` 分页，
+///    Oracle 11g 压根不支持该语法（第 1 页以前是能跑的，不能因为"优化"把它弄挂），
+///    SQL Server 的 `OFFSET…FETCH` 必须跟 ORDER BY（现拼 `order by (select null)`，
+///    对大表可能引入一次排序，反而是负优化）。
+fn can_append_paging(sql: &str, page: u64, dialect: crate::api::dialect::Dialect) -> bool {
+    if page == 1 && matches!(dialect.key(), "oracle" | "dm" | "sqlserver") {
+        return false;
+    }
     let head = sql
         .split_whitespace()
         .next()
         .unwrap_or_default()
         .to_ascii_lowercase();
-    matches!(
-        head.as_str(),
-        "select" | "with" | "show" | "describe" | "desc" | "explain"
+    if !matches!(head.as_str(), "select" | "with") {
+        return false;
+    }
+    if head == "with"
+        && crate::api::export::has_top_level_phrase(sql, &["insert", "update", "delete", "merge"])
+    {
+        return false;
+    }
+    if page == 1 && crate::api::export::has_top_level_paging_clause(sql) {
+        return false;
+    }
+    !crate::api::export::has_top_level_phrase(
+        sql,
+        &[
+            "for update",
+            "for share",
+            "lock in share mode",
+            "into outfile",
+            "into dumpfile",
+        ],
     )
 }
 
@@ -771,3 +829,63 @@ pub async fn run_file_cancel(
     Ok(Json(json!({ "success": true, "message": "已取消" })))
 }
 
+#[cfg(test)]
+mod paging_tests {
+    use super::*;
+    use crate::api::dialect::Dialect;
+    use dbmind_core::ConnectionKind;
+
+    fn d(kind: ConnectionKind) -> Dialect {
+        Dialect::new(kind)
+    }
+
+    /// 第 1 页也拼分页子句，并且**多要一行**（`size + 1`）—— 正好取到 size+1 行才说明
+    /// 还有下一页。少要这一行，`truncated` 永远是 false，分页器会以为只有一页。
+    #[test]
+    fn 第1页也追加分页并多要一行() {
+        let sql = crate::api::export::paging_sql("select * from t", 0, 201, d(ConnectionKind::Mysql));
+        assert_eq!(sql, "select * from t\nlimit 201 offset 0");
+    }
+
+    /// 元命令与写语句不能被追加分页子句（`describe t limit 1` 是语法错）。
+    #[test]
+    fn 元命令与写语句不追加分页() {
+        let m = d(ConnectionKind::Mysql);
+        assert!(!can_append_paging("show tables", 1, m));
+        assert!(!can_append_paging("describe t", 1, m));
+        assert!(!can_append_paging("explain select * from t", 1, m));
+        assert!(!can_append_paging("with x as (select 1) insert into t select * from x", 1, m));
+        // 正常的取数语句照样加
+        assert!(can_append_paging("select * from t", 1, m));
+        assert!(can_append_paging("with x as (select 1) select * from x", 1, m));
+    }
+
+    /// 语句自带 LIMIT：第 1 页原样执行（包派生表会撞「重复输出列」），第 2 页沿用既有行为。
+    #[test]
+    fn 自带limit时第1页不追加() {
+        let m = d(ConnectionKind::Mysql);
+        assert!(!can_append_paging("select * from t limit 10", 1, m));
+        assert!(can_append_paging("select * from t limit 10", 2, m));
+    }
+
+    /// 尾部带 FOR UPDATE / INTO OUTFILE 时不能追加（分页子句必须紧跟结果集定义）。
+    #[test]
+    fn 尾部特殊子句不追加分页() {
+        let m = d(ConnectionKind::Mysql);
+        assert!(!can_append_paging("select * from t for update", 1, m));
+        assert!(!can_append_paging("select * from t for share", 1, m));
+        assert!(!can_append_paging("select * into outfile '/tmp/x' from t", 1, m));
+        // 字符串字面量里的同名词不算（顶层短语检测会跳过引号内内容）
+        assert!(can_append_paging("select * from t where note = 'for update'", 1, m));
+    }
+
+    /// 第 1 页跳过 Oracle / DM / SQL Server：11g 没有 OFFSET/FETCH，SQL Server 会引入排序。
+    #[test]
+    fn 第1页跳过oracle_dm_sqlserver() {
+        for kind in [ConnectionKind::Oracle, ConnectionKind::Dm, ConnectionKind::Sqlserver] {
+            assert!(!can_append_paging("select * from t", 1, d(kind)), "{kind:?}");
+            // 第 2 页起是既有行为，保持不变
+            assert!(can_append_paging("select * from t", 2, d(kind)), "{kind:?}");
+        }
+    }
+}

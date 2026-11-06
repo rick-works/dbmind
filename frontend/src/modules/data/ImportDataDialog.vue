@@ -72,6 +72,7 @@ import { Upload, UploadFilled, Document, Bottom, RefreshRight, Plus } from '@ele
 import { importStart, importTask, importCancel } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { errMsg } from '../../utils/errMsg'
+import { createPollGuard } from '../../utils/pollGuard'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -89,6 +90,8 @@ const file = ref(null)
 const mode = ref('append')
 const importing = ref(false)
 let pollTimer = null
+/** 轮询失败计数：连续 3 次没响应才收摊（见 utils/pollGuard） */
+const pollFails = createPollGuard(3)
 
 const modes = [
   { value: 'append', label: t('imp.modeAppend'), desc: t('imp.modeAppendDesc'), icon: Bottom },
@@ -168,10 +171,12 @@ const doImport = async () => {
 
 const startPolling = () => {
   if (pollTimer) clearInterval(pollTimer)
+  pollFails.reset()
   pollTimer = setInterval(async () => {
     if (!taskId.value) return
     try {
       const r = await importTask(props.conn?.id, taskId.value)
+      pollFails.ok()
       taskStatus.value = r.status || 'running'
       taskDone.value = r.done ?? 0
       taskTotal.value = r.total ?? -1
@@ -200,8 +205,18 @@ const startPolling = () => {
         // 失败/错误只在日志框内展示，不再额外弹 ElMessage，避免与日志重复
       }
     } catch (e) {
-      // 轮询异常不弹窗，继续重试；连续失败由超时/取消处理
-      console.error('导入进度轮询失败', e)
+      // 偶发抖动继续重试；连续 3 次没响应才是真断了 —— 原来这里只 console 一句，
+      // 后端重启后会每 500ms 无限重试，界面永远停在「导入中」（注释里说的"超时处理"并不存在）
+      if (!pollFails.fail()) {
+        console.warn('[imp] 导入进度轮询失败，重试中：', e?.message || e)
+        return
+      }
+      clearInterval(pollTimer)
+      pollTimer = null
+      importing.value = false
+      taskStatus.value = 'error'
+      taskMessage.value = errMsg(e)
+      ElMessage.error(t('common.pollFailed', { n: pollFails.limit }))
     }
   }, 500)
 }

@@ -214,12 +214,17 @@ export function useExportTask() {
     if (timer) { clearInterval(timer); timer = null }
   }
 
+  // 连续失败计数：后端重启 / 网络断开时原来只 console.error，
+  // 于是 status 永远是 running、进度条永远转圈，用户只能去「后台任务」里猜。
+  let pollFails = 0
   const startPolling = (connId, name, format, handle) => {
     if (timer) clearInterval(timer)
+    pollFails = 0
     timer = setInterval(async () => {
       if (!taskId.value) return
       try {
         const r = await exportTask(connId, taskId.value)
+        pollFails = 0
         const finished = applyTaskSnapshot(state, r)
         if (finished) {
           clearInterval(timer)
@@ -227,7 +232,17 @@ export function useExportTask() {
           await finishExport(state, connId, taskId.value, name, format, handle)
         }
       } catch (e) {
-        console.error('导出进度轮询失败', e)
+        pollFails += 1
+        console.warn('[export] 进度轮询失败：', pollFails, e?.message || e)
+        // 容忍偶发抖动（一次失败就报错会吓人），连续 3 次才判定为真的断了
+        if (pollFails >= 3) {
+          clearInterval(timer)
+          timer = null
+          status.value = 'error'
+          phase.value = t('et.pollFailed')
+          message.value = errMsg(e)
+          ElMessage.error(t('et.pollFailedMsg', { detail: errMsg(e) }))
+        }
       }
     }, POLL_MS)
   }

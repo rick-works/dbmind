@@ -1588,6 +1588,15 @@ pub const INTERNAL_SESSION_PREFIX: &str = "internal:";
         self.store.get_setting(key)
     }
 
+    /// 一次读出全部设置（键值对）。
+    ///
+    /// <p>给「一条请求要读好几个设置」的入口用：每个键各走一次 `get_setting` 就是
+    /// 一次加锁 + 一次 SQLite 查询（在 web 层还各套一次 `spawn_blocking`）。高频点按的
+    /// 小查询上，这些固定开销是肉眼可见的（`select 1` 也要背）。
+    pub fn all_settings(&self) -> Result<Vec<(String, String)>> {
+        self.store.all_settings()
+    }
+
     /// 写设置并把安全相关项**立刻**同步到运行中的策略。
     pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
         self.store.set_setting(key, value)?;

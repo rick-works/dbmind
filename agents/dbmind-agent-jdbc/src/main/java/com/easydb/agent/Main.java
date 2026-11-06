@@ -231,6 +231,23 @@ public final class Main {
         if (e instanceof NoClassDefFoundError
                 || e instanceof ExceptionInInitializerError
                 || e instanceof ClassNotFoundException) {
+            // 缺的类是 **JDK 自己的**（最典型：jdk/net/ExtendedSocketOptions —— jlink 精简运行时
+            // 少了 jdk.net，DB2 驱动初始化即失败）：这种情况换驱动、重下 jar 全都没用，
+            // 只有换运行时能解决。两类混成一句「驱动包不完整」，用户会一直在驱动上打转。
+            // 判定看**缺失类的全限定名前缀**（别用 contains 猜整条消息，容易把第三方类误判成 JDK 模块）。
+            String missing = "";
+            int sep = cause.indexOf(": ");
+            if (sep >= 0) {
+                missing = cause.substring(sep + 2).trim();
+            }
+            boolean jdkModule = missing.startsWith("jdk/") || missing.startsWith("jdk.")
+                    || missing.startsWith("java/") || missing.startsWith("javax/")
+                    || missing.startsWith("com/sun/") || missing.startsWith("sun/");
+            if (jdkModule) {
+                return "驱动需要当前 Java 运行时里没有的 JDK 模块：" + cause
+                        + "。当前多半用的是精简版 JRE（常见缺 jdk.net / jdk.charsets），"
+                        + "请把 DBMIND_JAVA / JAVA_HOME 指向完整的 JDK 17 或更高版本后重启";
+            }
             return "驱动类无法装载：" + cause
                     + "。多半是驱动包不完整（缺传递依赖）—— 删掉 ~/.dbmind/drivers/<类型>/ 下的 jar 让它重新下载";
         }
@@ -509,6 +526,7 @@ public final class Main {
                 // 「Failed to read boolean value, expect 0 (false) or 1 (true) but we got: 105」
                 // 这类完全对不上号的报错（小结果集不会触发）。
                 statement.setMaxRows(maxRows + 1);
+                tuneFetchSize(statement, session, maxRows);
             }
             if (timeoutMs > 0) {
                 statement.setQueryTimeout(Math.max(1, timeoutMs / 1000));
@@ -1584,6 +1602,45 @@ public final class Main {
         }
         String key = session.agentKey();
         return "mysql".equals(key) || "mariadb".equals(key) || "doris".equals(key);
+    }
+
+    /**
+     * 给「默认批次很小」的驱动调大取数批次（fetchSize）。
+     *
+     * <p>Oracle / DM 的驱动默认只有 **10 行**一批：取 2 万行就是 2000 次往返。实测
+     * （实验室 Oracle，50 万行表取 2 万行）端到端 1893ms、宿主侧 1341ms，绝大部分花在
+     * 往返上，而数据量本身只有几 MB。
+     *
+     * <p>只对这几家设，理由分别是：
+     * <ul>
+     *   <li>MySQL 系：URL 带 {@code useCursorFetch=true}，设了会把**每条**查询变成服务端
+     *       游标，元数据类的固定开销被放大十倍（见 {@link #isMysqlFamily} 的说明）；
+     *   <li>PostgreSQL：驱动自己会按 maxRows 停（实测加不加 LIMIT 毫秒级同速），
+     *       而且 autocommit=true 时 setFetchSize 会被驱动直接忽略；
+     *   <li>SQL Server：驱动自适应缓冲；ClickHouse / Doris：行数上限已下推服务端。
+     * </ul>
+     *
+     * <p>上限 1000 行一批：再大只是多吃内存，往返次数已经不是瓶颈。失败一律忽略 ——
+     * 批次大小只影响快慢，绝不能因为它让整条查询失败。
+     */
+    private static void tuneFetchSize(Statement statement, Session session, int maxRows) {
+        String url = session.url() == null ? "" : session.url().toLowerCase();
+        boolean smallBatchDriver = url.startsWith("jdbc:oracle:")
+                || url.startsWith("jdbc:dm:")
+                || url.startsWith("jdbc:db2:")
+                || url.startsWith("jdbc:derby:");
+        if (!smallBatchDriver) {
+            return;
+        }
+        int batch = Math.min(maxRows + 1, 1000);
+        if (batch <= 0) {
+            return;
+        }
+        try {
+            statement.setFetchSize(batch);
+        } catch (Exception ignore) {
+            // 个别版本驱动对取值敏感/不支持：退回驱动默认，不影响正确性
+        }
     }
 
     /**

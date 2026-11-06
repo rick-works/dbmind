@@ -1128,7 +1128,11 @@ pub async fn delete(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
     save_index(&items)?;
     // 这个库的配置 / 文档 / 向量一起清掉（目录版是 remove_dir_all）
     if let Some(store) = dbmind_core::global_store() {
-        let _ = store.kb_delete(&kb_id);
+        // 索引已经删了，这里再失败也不会让「删除」失败（否则界面报错但库其实已经没了）——
+        // 但必须留痕：残留的文档/向量是实打实的磁盘垃圾，用户查不出原因就只会觉得「越用越大」。
+        if let Err(err) = store.kb_delete(&kb_id) {
+            tracing::warn!(kb = %kb_id, error = ?err, "知识库文档/向量清理失败（索引已删，数据可能残留）");
+        }
     }
     Ok(Json(json!({ "success": true })))
 }

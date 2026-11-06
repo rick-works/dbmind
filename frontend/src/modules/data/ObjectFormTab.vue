@@ -206,7 +206,12 @@ const loadEditData = async () => {
       try {
         const fallback = await getTableDdl(props.conn.id, props.database, props.object.name)
         if (fallback?.ddl && isValidDdl(fallback.ddl)) ddl = fallback.ddl
-      } catch {}
+      } catch (e) {
+        // 兜底也失败 = 编辑区会是空白：不提示的话用户以为「这个视图没有定义」，
+        // 甚至直接保存空内容。留一行警告 + 提示原因。
+        console.warn('[oft] 对象定义兜底获取失败：', props.object.name, e?.message || e)
+        ElMessage.warning(t('oft.loadDefFailed', { detail: e?.response?.data?.message || e?.message || e }))
+      }
     }
     editData.value = { name: props.object.name, ...(res || {}), ddl: ddl || '' }
   } catch (e) {

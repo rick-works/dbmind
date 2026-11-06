@@ -1044,20 +1044,29 @@ pub async fn databases(
     let catalog = params.get("catalog").unwrap_or_default();
     if !catalog.trim().is_empty() {
         if let Meta::Sql(sql) = dialect.databases_in_catalog(catalog.trim()) {
-            if let Ok(result) = run_meta_sql(&state, &id, "", sql, META_MAX_ROWS).await {
-                let names: Vec<String> = rows_of(&result)
-                    .iter()
-                    .map(first_column_text)
-                    .filter(|name| !name.trim().is_empty())
-                    // Doris 2.1 的库列表会把**内置目录名（internal）**混进来 —— 它不是库
-                    //（访问报 Unknown database），树里会多出一个空壳「internal」节点，剔除
-                    .filter(|name| !(dialect.catalog_level() && name.eq_ignore_ascii_case(catalog.trim())))
-                    .collect();
-                if !names.is_empty() {
-                    return Ok(Json(json!(names)));
+            match run_meta_sql(&state, &id, "", sql, META_MAX_ROWS).await {
+                Ok(result) => {
+                    let names: Vec<String> = rows_of(&result)
+                        .iter()
+                        .map(first_column_text)
+                        .filter(|name| !name.trim().is_empty())
+                        // Doris 2.1 的库列表会把**内置目录名（internal）**混进来 —— 它不是库
+                        //（访问报 Unknown database），树里会多出一个空壳「internal」节点，剔除
+                        .filter(|name| !(dialect.catalog_level() && name.eq_ignore_ascii_case(catalog.trim())))
+                        .collect();
+                    if !names.is_empty() {
+                        return Ok(Json(json!(names)));
+                    }
+                    tracing::warn!(connection = %id, catalog = %catalog, "该 catalog 下列不出任何库");
+                }
+                Err(err) => {
+                    // **别把失败说成"这个 catalog 里没有库"**：树上一个子节点都不出、没有任何提示，
+                    // 用户只会以为库被删了。与下面 databases() 同一口径：原样把原因交给界面。
+                    tracing::warn!(connection = %id, catalog = %catalog, error = %err.message, "catalog 库清单查询失败");
+                    return Err(err);
                 }
             }
-            // 列不出来就当这个 catalog 没有库（而不是退回"所有库"，那会串到别的 catalog）
+            // 查询成功但确实没有库（而不是退回"所有库"，那会串到别的 catalog）
             return Ok(Json(json!([])));
         }
     }
@@ -1537,7 +1546,9 @@ pub async fn column_comments(
         .get("table")
         .ok_or_else(|| XError::bad_request("缺少 table 参数"))?;
     let database = params.get("database").unwrap_or_default();
-    let map = table_comments_map(&state, &id, &database, &table).await;
+    // 查询失败要报出来：以前静默给空表，界面把「读不到注释」显示成「这张表没写注释」，
+    // 用户会去重新补一遍注释，其实是被权限/方言挡了。
+    let map = table_comments_result(&state, &id, &database, &table).await?;
     Ok(Json(json!(map)))
 }
 
@@ -1552,17 +1563,28 @@ pub async fn table_comments_map(
     database: &str,
     table: &str,
 ) -> std::collections::HashMap<String, String> {
+    // 同步建表这类「带带注释更好」的场景用宽松版：失败就当没有注释，不能因此让整次建表失败
+    table_comments_result(state, conn, database, table)
+        .await
+        .unwrap_or_default()
+}
+
+/// 同 [`table_comments_map`]，但**区分「方言不支持注释」与「查询失败」**：
+/// 前者返回空表（正常），后者把错误原样抛出，让 `/column-comments` 能告诉界面
+/// 「注释读取失败」而不是显示成「这张表没写注释」。
+pub async fn table_comments_result(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+    table: &str,
+) -> XResult<std::collections::HashMap<String, String>> {
     let mut out = std::collections::HashMap::new();
-    let Ok(record) = require_record(state, conn).await else {
-        return out;
-    };
+    let record = require_record(state, conn).await?;
     let dialect = Dialect::new(record.kind());
     let Some(sql) = dialect.table_comments(table).sql() else {
-        return out;
+        return Ok(out); // 方言没有注释概念：不是失败
     };
-    let Ok(result) = run_sql_in(state, conn, database, sql, META_MAX_ROWS).await else {
-        return out;
-    };
+    let result = run_sql_in(state, conn, database, sql, META_MAX_ROWS).await?;
     for row in rows_of(&result) {
         let name = text_ci(&row, "column_name");
         let comment = text_ci(&row, "comment");
@@ -1570,7 +1592,7 @@ pub async fn table_comments_map(
             out.insert(name.to_ascii_lowercase(), comment);
         }
     }
-    out
+    Ok(out)
 }
 
 /// **全库**表注释：`表名(小写) → 注释`，一次查询拿完。

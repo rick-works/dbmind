@@ -549,7 +549,9 @@
                       :default-title="saveKbTitle" :source="saveKbSource" />
 
       <!-- AI 面板 -->
-      <AiPanel ref="aiPanelRef" v-show="aiOpen" :conn="conn" :database="currentDb" class="ai-panel"
+      <!-- :active 只影响「何时去拉知识库清单/待办/记忆」这三笔隐藏时看不见的数据，
+           面板一露出来就会补上；对话恢复、模型清单等仍在挂载时就走，行为不变 -->
+      <AiPanel ref="aiPanelRef" v-show="aiOpen" :active="aiOpen" :conn="conn" :database="currentDb" class="ai-panel"
                @insert-sql="insertSqlToActive" @close="aiOpen = false"
                @open-knowledge="openKnowledge"
                @panel="onAiPanelCommand" @run-plan="onRunPlan" />
@@ -1258,7 +1260,7 @@ import { removeScript, renameScript, hasSameName } from '../../utils/sqlScripts'
  */
 const schemaCacheKeyOf = (connId, database) => 'schemas:' + connId + ':' + database
 import { parseMySqlGrants, parseSqlServerPerms } from '../../utils/grants'
-import { getEditorSettings } from '../../utils/settings'
+import { getEditorSettings, uiPersistError } from '../../utils/settings'
 import { topMenuVisible } from '../../utils/topMenu'
 // 顶栏直显上限：启用的菜单超过这个数时，第 N+1 个起收进「更多」下拉
 const TOP_MENU_MAX = 6
@@ -1281,12 +1283,29 @@ const fitTopNav = () => {
   }
 }
 const onTopNavResize = () => fitTopNav()
+// 「UI 设置没能写进后端」的统一提示（由 utils/settings.js 派发）。同一项 10 秒内只提示一次，
+// 免得连点开关时刷屏；本地缓存可能已生效，所以文案要说清「本次生效、重启可能回退」。
+const uiPersistWarnAt = new Map()
+const onUiPersistFailed = (ev) => {
+  const detail = String(ev?.detail || '')
+  const key = detail.split(':')[0]
+  const now = Date.now()
+  if (now - (uiPersistWarnAt.get(key) || 0) < 10000) return
+  uiPersistWarnAt.set(key, now)
+  ElMessage.warning(t('mv.uiPersistFailed', { detail }))
+}
 onMounted(() => {
   window.addEventListener('resize', onTopNavResize)
+  window.addEventListener('dbmind-ui-persist-failed', onUiPersistFailed)
+  // 启动阶段（本组件还没挂上）就已经失败的这一次补报出来：事件发得比监听早，不补就永久丢了
+  if (uiPersistError.value) onUiPersistFailed({ detail: uiPersistError.value })
   // 字体就绪后菜单文字宽度会变（首帧回退字体窄），重新量一次，否则溢出残留到手动刷新
   if (document.fonts?.ready) document.fonts.ready.then(() => fitTopNav()).catch(() => {})
 })
-onBeforeUnmount(() => window.removeEventListener('resize', onTopNavResize))
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', onTopNavResize)
+  window.removeEventListener('dbmind-ui-persist-failed', onUiPersistFailed)
+})
 // 菜单配置 / 语言切换会改条目数量与文字宽度，重新量一次
 watch([topMenuPrimary, () => locale.value], () => nextTick(fitTopNav))
 import { Sunny, Moon, Clock, Reading, Delete as ElDelete } from '@element-plus/icons-vue'
@@ -2221,7 +2240,10 @@ const bgPageRows = computed(() => {
 const bgTick = ref(0)
 // 具名保存：MainView 在某些页签场景下会整个卸载再挂回来（见 onBeforeUnmount 的注释），
 // 不摘掉的话每重挂一次就多一个 1 秒心跳（累加时钟会越跑越快）。
-const bgTickTimer = setInterval(() => { bgTick.value++ }, 1000)
+// 没有运行中的任务时不推进：任务表里每个耗时格子都读 bgTick，空转等于每秒重渲染一遍整表。
+const bgTickTimer = setInterval(() => {
+  if (bgRunningCount.value) bgTick.value++
+}, 1000)
 const bgDurationText = (t) => {
   bgTick.value
   if (bgStatusOf(t.id) !== 'running' && !t.finishedAt) return '—'
@@ -3157,17 +3179,25 @@ const warmUpBeforeFirstClick = async () => {
 const loadHistory = async () => {
   try {
     // 底部「近 7 天趋势 / 失败查询」：**优先用后端按天聚合**（`queryTrend`，数据来自持久化的
-    // query_history，不受条数截断影响）；多取一份 listHistory(200) 只是兜底（老内核没这个端点）。
-    const [rows, many, agg] = await Promise.all([
+    // query_history，不受条数截断影响）；listHistory(200) 只在新内核拿不到趋势时才当兜底。
+    //
+    // 以前这两条 listHistory 是**无条件**并发发出去的：每次首屏都白拉一份 12KB 的 200 条
+    // （而正常路径根本不用它），后端还要多跑一次全表倒序查询。现在按需补。
+    const [rows, agg] = await Promise.all([
       listHistory(8),
-      listHistory(200),
       queryTrend(7).catch(() => null)
     ])
     // 6 条（用户要求）：原先 4 条是怕首页出现滚动条，实测右侧「MCP 服务」卡片比它高，
     // 6 条正好把两栏拉齐，还多给两条历史 —— 取数已经拿了 8 条，不用改请求
     recentHistory.value = (Array.isArray(rows) ? rows : []).slice(0, 6)
-    trendHistory.value = Array.isArray(many) ? many : []
     trendAgg.value = Array.isArray(agg?.items) ? agg.items : []
+    if (trendAgg.value.length) {
+      trendHistory.value = [] // 有聚合就不需要那 200 条原始记录
+    } else {
+      // 老内核没有 /history/trend：退回「数最近 200 条」的原口径（这时才多付一次请求）
+      const many = await listHistory(200).catch(() => [])
+      trendHistory.value = Array.isArray(many) ? many : []
+    }
   } catch {
     // 拿不到历史不影响欢迎页的其它内容（新库本来就没有历史）
     recentHistory.value = []
@@ -3690,7 +3720,11 @@ const closeConnection = (connId) => {
   // 顺带断掉内核连接池里这个类型的缓存会话：数据库侧改过权限/密码后，
   // 旧会话还带着旧的全局权限快照（MySQL 的全局权限变更只对新建连接生效），
   // 断开重连即可拿到新权限 —— 不必重启应用。失败无害（静默，下次会话照样能用）
-  disconnectSessions(connId).catch(() => {})
+  // 失败要留痕：内核里那条会话还在的话，数据库侧看到的就是「关了却没释放」。
+  // 不弹窗（关连接是高频操作，后端重启时弹一次就够吵），但控制台必须有线索。
+  disconnectSessions(connId).catch((e) => {
+    console.warn('[conn] 内核会话断开失败（页签与树上状态已复位，数据库侧会话可能残留）：', connId, e?.message || e)
+  })
   const wasCurrent = currentConnId.value === sid
   // 删除 dbsByConn 是必须的：否则 isConnOpen 仍为 true，图标不会变暗
   delete dbsByConn.value[sid]
@@ -7176,19 +7210,26 @@ const ctxGenSql = (tpl) => {
   const db = d.db || currentDb.value
   const name = d.table || d.label
   closeCtxMenu()
-  const t = quoteIdent(name, connType)
+  // 变量名不能叫 t：这里会遮蔽 i18n 的 t()，失败分支里 t('mv.genSqlFailed') 会变成「字符串当函数调」
+  const tbl = quoteIdent(name, connType)
   const tab = newQueryTab({ connId: cid, database: db, initialSql: '', sqlLoading: true })
   const pending = ctxColsPromise || listColumns(cid, db, name)
   ctxColsPromise = null
   pending.then((list) => {
     const cols = (list || []).filter(c => c && c.name)
-    const sql = buildGenSql(tpl, t, cols, connType)
+    const sql = buildGenSql(tpl, tbl, cols, connType)
     // 生成后**自动格式化**（用户要求）：走与「查看 DDL」同一条 autoFormatDdl ——
     // 按当前连接的方言 + 「设置 → SQL 格式化」里的关键字大小写/缩进排版；
     // 格式化抛错、或分号/括号/BEGIN-END/引号数量发生变化（结构可能被改坏）时，
     // 自动退回未格式化的原文，保证编辑器里一定有可用内容。
     tab.initialSql = autoFormatDdl(sql, connType)
-  }).catch(() => {}).finally(() => { tab.sqlLoading = false })
+  }).catch((e) => {
+    // 取列失败（连接断了/表刚被删/没权限）时不能只留一个空页签：用户点了「生成 SELECT」
+    // 却什么都没有，只能猜。把原因写进编辑器，页签里至少能看见发生了什么。
+    const reason = e?.response?.data?.message || e?.message || String(e)
+    tab.initialSql = `-- 生成 SQL 失败：${reason}\n`
+    ElMessage.error(t('mv.genSqlFailed', { detail: reason }))
+  }).finally(() => { tab.sqlLoading = false })
 }
 
 // 危险操作：清空 / 截断 / 删除表
@@ -8506,7 +8547,11 @@ const dbCtxToggleOpen = () => {
     markDbClosed(d)
     // **真正断开会话**：该库的语句跑在它的影子连接上，调后端按库断掉 ——
     // 只清前端状态的话，内核池里那条会话还挂数据库上（用户要求真正关闭）。
-    if (sid) disconnectDatabase(sid, db).catch(() => {})
+    if (sid) {
+      disconnectDatabase(sid, db).catch((e) => {
+        console.warn('[conn] 按库断开会话失败（该库的语句连接可能仍挂在数据库侧）：', db, e?.message || e)
+      })
+    }
     // 清「当前库」：按**节点自己的连接**清（右击的可能是非当前连接里的库），
     // 当前连接才对得上时才动全局的 currentDb。
     if (String(currentDbByConn.value[sid] || '') === db) delete currentDbByConn.value[sid]

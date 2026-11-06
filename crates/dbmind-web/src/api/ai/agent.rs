@@ -510,7 +510,11 @@ fn checkpoint_job(job_id: &str, status: &str, steps: &[Value], result: &str) {
         return;
     };
     let text = serde_json::to_string(steps).unwrap_or_else(|_| "[]".to_string());
-    let _ = store.ai_job_update(job_id, status, &text, result);
+    // 写不进去就等于没有「续跑」的依据（界面照样显示已结束，点进去什么都没有）：
+    // 不让它影响主流程，但必须留痕，否则之后排查「为什么没有 checkpoint」无从下手。
+    if let Err(err) = store.ai_job_update(job_id, status, &text, result) {
+        tracing::warn!(job = %job_id, status = %status, error = ?err, "待办 checkpoint 写入失败");
+    }
 }
 
 /// 多轮循环本体：**首次运行与中断续跑共用这一份**。

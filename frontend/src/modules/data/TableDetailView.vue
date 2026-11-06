@@ -690,7 +690,12 @@ const mssqlPkName = async () => {
       `SELECT kc.name AS name FROM sys.key_constraints kc JOIN sys.tables t ON kc.parent_object_id = t.object_id WHERE t.name = N'${sq(table)}' AND kc.type = 'PK'`,
       props.database, null, null, null, null, true)
     return rowField(res && res.rows && res.rows[0], 'name')
-  } catch (e) { return '' }
+  } catch (e) {
+    // 与 pgPkName 同一口径：取不到名字不是"没有主键"。静默返回 '' 会让后面的
+    // 预览少生成 DROP CONSTRAINT，用户只收到数据库原话的报错，看不出根因。
+    console.warn('[pk] SQL Server 主键约束名查询失败：', props.object?.name, e?.message || e)
+    return ''
+  }
 }
 /**
  * PG 系（PostgreSQL / KingbaseES）与 H2 的主键约束名。

@@ -536,9 +536,14 @@
         </div>
       </template>
       <div class="mate-body" v-loading="mateLoading">
+        <!-- 拉不下来 ≠ 没有：失败单独说明是哪部分，并给重试，别让用户以为「本来就没东西」 -->
+        <div v-if="mateError" class="mate-error">
+          <span class="mate-error-txt">{{ mateError }}</span>
+          <el-button size="small" text type="primary" @click="refreshMate">{{ $t('common.retry') }}</el-button>
+        </div>
         <el-tabs v-model="mateTab">
           <el-tab-pane :label="$t('ai.todo')" name="todo">
-            <div v-if="!todos.length" class="mate-empty">{{ $t('ai.todoEmpty') }}</div>
+            <div v-if="!todos.length && !mateFailed.includes('todo')" class="mate-empty">{{ $t('ai.todoEmpty') }}</div>
             <div v-for="job in todos" :key="job.id" class="todo-card" :class="'is-' + job.status">
               <div class="todo-head">
                 <span class="todo-status">{{ todoStatusLabel(job.status) }}</span>
@@ -563,7 +568,7 @@
                         @keyup.enter="addMemory" />
               <el-button size="small" type="primary" @click="addMemory">{{ $t('ai.memoryAdd') }}</el-button>
             </div>
-            <div v-if="!memories.length" class="mate-empty">{{ $t('ai.memoryEmpty') }}</div>
+            <div v-if="!memories.length && !mateFailed.includes('memory')" class="mate-empty">{{ $t('ai.memoryEmpty') }}</div>
             <div v-for="row in memories" :key="row.id" class="mem-card">
               <div class="mem-fact">{{ row.fact }}</div>
               <div class="mem-meta">
@@ -627,7 +632,17 @@ const props = defineProps({
    * <p>只有**中央工作区**那个实例会拿到这个 prop（右侧窄面板不接），
    * 否则右侧面板会一起被填上内容，之后 Ctrl/⌘+K 打开时里面是一句莫名其妙的问题。
    */
-  pending: Object
+  pending: Object,
+  /**
+   * 面板是否**真的已经露出来**。
+   *
+   * <p>右侧窄面板用 `v-show` 常驻挂载（切页签/收起来都不销毁，对话与选中上下文才不会丢），
+   * 于是它的 `onMounted` 在首屏就跑了一遍 —— 可它此刻是隐藏的：知识库清单、待办、记忆
+   * 这些「只在面板里看得到」的数据白拉三笔（待办 11KB + 记忆 12KB 是大头）。
+   *
+   * <p>studio 形态（中央工作区页签）不传这个 prop，默认 `true`，行为与以前完全一致。
+   */
+  active: { type: Boolean, default: true }
 })
 /** 是否为「中央工作区」形态 */
 const isStudio = computed(() => props.mode === 'studio')
@@ -929,6 +944,10 @@ const mateTab = ref('todo')
 const todos = ref([])
 const memories = ref([])
 const mateLoading = ref(false)
+/** 记事抽屉的加载错误：失败不能显示成「暂无待办 / 暂无记忆」 */
+const mateError = ref('')
+/** 加载失败的部分：'todo' / 'memory'（空态只在对应部分**真的**拉下来后才显示） */
+const mateFailed = ref([])
 /** 审批流水里记的名字：桌面端没有登录，名字让用户自己填 */
 const approverName = ref(localStorage.getItem('dbmind.ai.approver') || 'user')
 /** 正在跑的变更单 id：按钮转圈用，避免连点两次执行 */
@@ -1924,13 +1943,32 @@ const connNameOf = (row) => {
 /** 记事抽屉：待办（值班产物）+ 记忆（长期事实）一起拉 */
 const refreshMate = async () => {
   mateLoading.value = true
+  mateError.value = ''
+  mateFailed.value = []
   try {
-    const [jobsRes, memRes] = await Promise.all([
-      aiJobList().catch(() => ({})),
-      aiMemoryList({ limit: 200 }).catch(() => ({}))
+    // allSettled：两边互不拖累，但要能分辨「真的空」和「没拉下来」
+    const [jobsRes, memRes] = await Promise.allSettled([
+      aiJobList(),
+      aiMemoryList({ limit: 200 })
     ])
-    todos.value = jobsRes?.jobs || []
-    memories.value = memRes?.memories || []
+    if (jobsRes.status === 'fulfilled') {
+      todos.value = jobsRes.value?.jobs || []
+    } else {
+      mateFailed.value.push('todo')
+      console.warn('[ai] 待办加载失败：', jobsRes.reason?.message || jobsRes.reason)
+    }
+    if (memRes.status === 'fulfilled') {
+      memories.value = memRes.value?.memories || []
+    } else {
+      mateFailed.value.push('memory')
+      console.warn('[ai] 记忆加载失败：', memRes.reason?.message || memRes.reason)
+    }
+    if (mateFailed.value.length) {
+      const parts = mateFailed.value.map((k) => t(k === 'todo' ? 'ai.todo' : 'ai.memory'))
+      // 顿号只适合中文；英文用逗号分隔，别混进中文标点
+      const sep = String(locale.value || '').startsWith('en') ? ', ' : '、'
+      mateError.value = t('ai.mateLoadFailed', { parts: parts.join(sep) })
+    }
   } finally {
     mateLoading.value = false
   }
@@ -2409,15 +2447,30 @@ const runSkill = async () => {
   }
 }
 
+/**
+ * 只有「面板真的可见」时才值得拉的几笔：知识库清单、待办、记忆。
+ *
+ * <p>面板隐藏时（右侧窄面板用 v-show 常驻）这些数据一个都看不到，却在首屏占了三笔请求。
+ * 打开面板时补上：`openMate` 本来就会再拉一次待办/记忆，知识库清单也是下拉展开才用。
+ */
+let inboxLoaded = false
+const loadInboxData = () => {
+  if (inboxLoaded) return
+  inboxLoaded = true
+  loadKbMeta()
+  refreshMate()
+}
+
 onMounted(() => {
   scrollBottom()
   loadConnList()
   warmCtx()
-  loadKbMeta()
-  // 接上次会话 + 拿一次待办（角标要在用户打开抽屉前就显示出来）
+  // 接上次会话**必须首屏就跑**：用户可能先点「发送到 AI」，那一刻对话得已经恢复在，
+  // 否则这条新消息会插进空对话里，历史看起来"被清空了"。
   restoreThread()
-  refreshMate()
+  if (props.active) loadInboxData()
 })
+watch(() => props.active, (v) => { if (v) loadInboxData() })
 
 // ===== 底栏上下文 chips 小屏压缩：永远单行，放不下按级收成纯图标（v-fast-tip 快速提示） =====
 // 收级次序（data-g 越小越先收）：1 模型 → 2 知识库 → 3 聚焦表 → 4 数据源；
@@ -3199,6 +3252,21 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .mate-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mate-body { height: 100%; }
 .mate-empty { padding: 24px 4px; text-align: center; font-size: 12px; color: var(--dc-text-weak); }
+/* 加载失败提示：与空态明显不同（左侧红条 + 可点重试），避免「失败」被读成「没有」 */
+.mate-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--dc-danger-soft, #f3c9c9);
+  border-left: 3px solid var(--dc-danger, #d64545);
+  border-radius: 6px;
+  background: var(--dc-danger-wash, rgba(214, 69, 69, .06));
+  font-size: 12px;
+  color: var(--dc-danger, #d64545);
+}
+.mate-error-txt { flex: 1; min-width: 0; }
 .todo-card {
   margin-bottom: 10px;
   padding: 10px 12px;

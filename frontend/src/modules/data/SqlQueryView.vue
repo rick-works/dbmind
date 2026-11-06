@@ -2521,6 +2521,9 @@ const unsortedRows = ref([])
 // Oracle/DM 走 all_col_comments、ClickHouse 走 system.columns……），表头第二行显示。
 // 只对「无 JOIN / 聚合 / 去重的单表查询」生效 —— 猜错表名的注释张冠李戴比没有更糟。
 const resultColComments = ref({})
+// 注释读取失败只提示一次（每个编辑器实例一次）：放在函数**之前**声明，
+// 免得后来有人在模块初始化阶段就调用 loadResColumnComments 时撞上 TDZ
+let colCommentWarned = false
 const resComment = (name) => (result.value?.columnComments || {})[String(name).toLowerCase()] || ''
 const loadResColumnComments = (execSql, connId, db) => {
   resultColComments.value = {}
@@ -2540,7 +2543,15 @@ const loadResColumnComments = (execSql, connId, db) => {
       // 总数永远显示不出来（小表计数快、碰巧先到才显得"正常"）
       result.value.columnComments = map
     })
-    .catch(() => {})
+    .catch((e) => {
+      // 注释读不到 ≠ 这张表没注释：不提示的话用户会去重新补一遍注释。
+      // 但每条查询都弹一次太吵 —— 一次会话只提示一次，细节留在控制台。
+      console.warn('[sqlq] 列注释读取失败：', tableName, e?.message || e)
+      if (!colCommentWarned) {
+        colCommentWarned = true
+        ElMessage.warning(t('sqlq.commentLoadFailed'))
+      }
+    })
 }
 // ========== 选中整列（Excel 式）：单击表头选中整列，Ctrl/Cmd 加减选，Shift 连选一段 ==========
 const selectedCols = ref(new Set())
@@ -3873,20 +3884,25 @@ const loadDbObjects = (cid, db) => {
   const entry = { tables: [], views: [], procs: [], fns: [], triggers: [] }
   dbObjectsCache[key] = entry
   const nameOf = (x) => (x && typeof x === 'object' ? (x.name || x.routineName || x.triggerName || x.table || '') : String(x || ''))
+  // 预热失败只影响补全候选（库里明明有表却补不出来，用户会以为工具坏了）——
+  // 界面不打扰，但控制台要留痕，否则这类"补全少了几个"永远查不出原因
+  const warmFailed = (what) => (e) => {
+    console.warn(`[sqlq] ${what}预热失败（只影响自动补全）：`, db, e?.message || e)
+  }
   listTables(cid, db).then((list) => {
     const arr = Array.isArray(list) ? list : []
     entry.tables = arr.filter((t) => (t.type || 'TABLE') === 'TABLE').map(nameOf).filter(Boolean)
     entry.views = arr.filter((t) => (t.type || '') === 'VIEW').map(nameOf).filter(Boolean)
     writeSchemaCache('tables:' + cid + ':' + db, arr) // 与对象树同一份缓存，展开树时直接复用
-  }).catch(() => {})
+  }).catch(warmFailed('表/视图'))
   listProcedures(cid, db).then((list) => {
     const arr = Array.isArray(list) ? list : []
     entry.procs = arr.filter((r) => (r.routineType || 'PROCEDURE') === 'PROCEDURE').map(nameOf).filter(Boolean)
     entry.fns = arr.filter((r) => (r.routineType || '') === 'FUNCTION').map(nameOf).filter(Boolean)
-  }).catch(() => {})
+  }).catch(warmFailed('存储过程/函数'))
   listTriggers(cid, db).then((list) => {
     entry.triggers = (Array.isArray(list) ? list : []).map(nameOf).filter(Boolean)
-  }).catch(() => {})
+  }).catch(warmFailed('触发器'))
   return entry
 }
 const loadColumns = (table) => {
@@ -3899,7 +3915,9 @@ const loadColumns = (table) => {
         .map((c) => (typeof c === 'string' ? c : c.name || c.columnName))
         .filter(Boolean)
     })
-    .catch(() => {})
+    .catch((e) => {
+      console.warn('[sqlq] 列名补全缓存预热失败（只影响自动补全）：', table, e?.message || e)
+    })
     .finally(() => columnsLoading.delete(key))
 }
 

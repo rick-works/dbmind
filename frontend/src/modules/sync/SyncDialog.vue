@@ -587,6 +587,7 @@ import { hideDbLevelOf, byType } from '../../types'
 import { isFunctionRoutine } from '../data/treeNodes'
 import { t } from '../../utils/i18n'
 import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
+import { createPollGuard } from '../../utils/pollGuard'
 // 连接下拉（分组 → 连接 两级）全项目共用一个组件
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
 import { addBgTask, bgTasks } from './backgroundTasks'
@@ -1862,6 +1863,12 @@ const mergeLogs = (serverLogs) => {
 //（真机反馈，跑得越久日志越多、越容易叠）。这里同一时刻只允许一个请求在途。
 let polling = false
 let pollingTask = ''
+/**
+ * 轮询失败计数：任务本来就在**后端**独立跑，前端这一侧只是「看进度」——
+ * 一次抖动（后端重启、SSH 隧道瞬断）把界面判死，用户会以为同步失败了。
+ * 连续 3 次没有响应（约 2.4 秒）才收摊，并且要说清「任务可能还在跑」。
+ */
+const pollFails = createPollGuard(3)
 const pollTask = async () => {
   // 同一任务只允许一个在途请求（见上）；换任务（任务中心恢复 / 重新开跑）时立刻放行，
   // 否则上一个任务的在途请求会把新任务的恢复首刷也挡掉（界面停在「准备中」）。
@@ -1875,6 +1882,7 @@ const pollTask = async () => {
     const st = await syncTaskStatus(myTask)
     // 请求在途期间任务已经换了（旧任务的迟到响应）：数字/状态一概不能回写
     if (myTask !== taskId.value) return
+    pollFails.ok()
     taskStatus.value = st.status
     taskDone.value = st.done || 0
     taskTotal.value = st.total || taskTotal.value
@@ -1953,11 +1961,15 @@ const pollTask = async () => {
   } catch (e) {
     // 旧任务的请求失败：界面已经切到别的任务了，不能拿它去停轮询/弹错
     if (myTask !== taskId.value) return
+    // 还没到上限：保留「同步中」继续下一轮（重传退避里后端常常几秒就恢复了）
+    if (!pollFails.fail()) return
     stopPolling()
     if (stopGuard) { clearTimeout(stopGuard); stopGuard = null }
     taskRunning.value = false
     stopping.value = false
     ElMessage.error(t('cmp.statusFailed', { detail: e.message }))
+    // 任务在后端独立跑，前端掉线≠任务失败 —— 不说明白用户会重新跑一遍
+    ElMessage.warning(t('common.pollFailedStillRunning'))
   } finally {
     // 只清自己那一份：换任务后新请求可能已经把标志指向新的 taskId
     if (pollingTask === myTask) { polling = false; pollingTask = '' }
@@ -1996,6 +2008,8 @@ const stopRun = async () => {
 
 const stopPolling = () => {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  // 停轮询即清零：换任务 / 后台运行后再接回来，不该继承上一轮的失败计数
+  pollFails.reset()
 }
 
 onBeforeUnmount(() => {

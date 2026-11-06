@@ -3654,8 +3654,13 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     pub fn limit_clause(&self, offset: u64, size: u64) -> String {
         match self.key() {
             "sqlserver" => format!("offset {offset} rows fetch next {size} rows only"),
-            // Derby 没有 LIMIT 语法（真机：Encountered "limit"），用 SQL 标准的 OFFSET/FETCH
-            "oracle" | "dm" | "derby" => format!("offset {offset} rows fetch next {size} rows only"),
+            // Derby 没有 LIMIT 语法（真机：Encountered "limit"），用 SQL 标准的 OFFSET/FETCH。
+            // DB2 同样不吃 `limit`（SQLCODE=-104 / SQLSTATE=42601，expected "IMMEDIATE" 或
+            // 语句结束）—— 之前漏在这里，表现是"第 1 页正常、点下一页就报语法错"：第 1 页
+            // 不拼分页子句，正好把这个错误藏住了。DB2 11.1 起支持标准 OFFSET/FETCH。
+            "oracle" | "dm" | "derby" | "db2" => {
+                format!("offset {offset} rows fetch next {size} rows only")
+            }
             _ => format!("limit {size} offset {offset}"),
         }
     }
@@ -6154,6 +6159,31 @@ mod tests {
         assert!(!db2.ends_with(';'), "DB2 不该拼分号（它不接受语句尾分号）");
     }
 
+    /// 分页子句：DB2 / Derby / Oracle / DM 不吃 `limit`，SQL Server 也只能 `offset…fetch`。
+    /// 这几个是"翻页才报错"的高发区 —— 第 1 页不拼分页子句，错误要到用户点下一页才暴露。
+    #[test]
+    fn 分页子句按方言区分_limit_与_offset_fetch() {
+        let db2 = Dialect::new(ConnectionKind::Db2).limit_clause(200, 200);
+        assert_eq!(db2, "offset 200 rows fetch next 200 rows only", "{db2}");
+        assert!(!db2.contains("limit"), "{db2}");
+        assert_eq!(
+            Dialect::new(ConnectionKind::Derby).limit_clause(0, 200),
+            "offset 0 rows fetch next 200 rows only"
+        );
+        assert_eq!(
+            Dialect::new(ConnectionKind::Sqlserver).limit_clause(0, 200),
+            "offset 0 rows fetch next 200 rows only"
+        );
+        assert_eq!(
+            Dialect::new(ConnectionKind::Mysql).limit_clause(200, 200),
+            "limit 200 offset 200"
+        );
+        assert_eq!(
+            Dialect::new(ConnectionKind::Clickhouse).limit_clause(0, 200),
+            "limit 200 offset 0"
+        );
+    }
+
     #[test]
     fn oracle与dm原生upsert必须限制单语句行数() {
         assert_eq!(Dialect::new(ConnectionKind::Oracle).upsert_row_limit(), 500);
@@ -6163,6 +6193,8 @@ mod tests {
     }
 
     #[test]
+    // 名字里的 `_None` 是为了让人一眼看出断言结果；中文测试名是项目惯例，这里只关掉大小写这一条
+    #[allow(non_snake_case)]
     fn 没有原生语法的方言返回_None() {
         // ClickHouse / Doris 继续走两阶段（预读主键 + 逐行 UPDATE）。
         // Derby 10.11 起有 MERGE，已经纳入原生 upsert（见下面的专测）。

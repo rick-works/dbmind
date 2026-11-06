@@ -389,6 +389,7 @@ import { buildConditionSql } from '../../utils/cond'
 // 连接下拉（分组 → 连接 两级）全项目共用一个组件
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
 import { t } from '../../utils/i18n'
+import { createPollGuard } from '../../utils/pollGuard'
 
 const props = defineProps({ modelValue: Boolean, conn: Object, database: String, tables: Array, resumeId: String })
 const emit = defineEmits(['update:modelValue'])
@@ -842,10 +843,13 @@ const run = async () => {
   }
 }
 
+/** 轮询失败计数：对比任务在后端独立跑，前端掉线不该把界面判死（同 SyncDialog 口径） */
+const pollFails = createPollGuard(3)
 const pollTask = async () => {
   try {
     // 局部变量改名：本函数后面要用 t() 翻译，同名会把它遮蔽掉
     const st = await compareTaskStatus(taskId.value)
+    pollFails.ok()
     taskStatus.value = st.status
     taskDone.value = st.done || 0
     // total=-1 = 分母未知（count 失败兜底）：不覆盖成 -1 —— 否则进度百分比算出负数
@@ -889,11 +893,15 @@ const pollTask = async () => {
       }
     }
   } catch (e) {
+    // 还没到上限：保留「对比中」继续下一轮（后端重启/链路抖动常常几秒就恢复）
+    if (!pollFails.fail()) return
     stopPolling()
     if (stopGuard) { clearTimeout(stopGuard); stopGuard = null }
     loading.value = false
     stopping.value = false
     ElMessage.error(t('cmp.statusFailed', { detail: e.message }))
+    // 与数据传输同一口径：任务在后端跑，前端掉线≠任务失败
+    ElMessage.warning(t('common.pollFailedStillRunning'))
   }
 }
 
@@ -927,6 +935,8 @@ const stopRun = async () => {
 
 const stopPolling = () => {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+  // 停轮询即清零：换任务 / 后台运行后再接回来，不该继承上一轮的失败计数
+  pollFails.reset()
 }
 
 // ===== 后台运行 / 恢复（与数据传输同一套机制）=====
@@ -1000,7 +1010,11 @@ watch(() => props.resumeId, async (id) => {
       if (st?.status && st.status !== 'notfound') taskStatus.value = st.status
       // 历史日志也从后端带回来（本地快照留底可能没有）—— 结果窗日志区有内容可看
       mergeLogs(st?.logs)
-    }).catch(() => {})
+    }).catch((e) => {
+      // 结果/日志补全失败：本地快照还在（只是可能被截过、或缺历史日志），
+      // 界面不必再弹一次错，但排障时要能看到原因
+      console.warn('[compare] 任务结果/日志补全失败：', e?.message || e)
+    })
     return
   }
   loading.value = true

@@ -4,6 +4,7 @@ import { t } from './i18n'
 import { ElMessage } from 'element-plus'
 import { runSqlFileStart, runSqlFileStatus, runSqlFileCancel } from '../api'
 import { errMsg } from './errMsg'
+import { createPollGuard } from './pollGuard'
 
 const fmtTime = () => new Date().toLocaleTimeString('zh-CN', { hour12: false })
 
@@ -27,6 +28,8 @@ export function useSqlFileTask() {
   const canceling = ref(false)
 
   let timer = null
+  /** 轮询失败计数：连续 3 次没响应才收摊（见 utils/pollGuard） */
+  const pollFails = createPollGuard(3)
 
   const reset = () => {
     status.value = 'running'
@@ -36,6 +39,7 @@ export function useSqlFileTask() {
     message.value = t('usf.submitting')
     logs.value = []
     canceling.value = false
+    pollFails.reset()
     if (timer) { clearInterval(timer); timer = null }
   }
 
@@ -45,6 +49,7 @@ export function useSqlFileTask() {
       if (!taskId.value) return
       try {
         const r = await runSqlFileStatus(connId.value, taskId.value)
+        pollFails.ok()
         status.value = r.status || 'running'
         done.value = r.done ?? 0
         total.value = r.total ?? -1
@@ -65,7 +70,17 @@ export function useSqlFileTask() {
           }
         }
       } catch (e) {
-        console.error('SQL 文件任务轮询失败', e)
+        // 偶发抖动不打扰；连续 3 次没响应才判定为真断了 —— 否则后端重启后这里会
+        // 每 500ms 无限重试，界面永远停在「执行中」
+        if (!pollFails.fail()) {
+          console.warn('[usf] 任务进度查询失败，重试中：', e?.message || e)
+          return
+        }
+        clearInterval(timer)
+        timer = null
+        status.value = 'error'
+        message.value = errMsg(e)
+        ElMessage.error(t('common.pollFailed', { n: pollFails.limit }))
       }
     }, 500)
   }

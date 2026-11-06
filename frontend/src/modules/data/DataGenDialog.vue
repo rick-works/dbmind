@@ -244,6 +244,7 @@ import { MagicStick, Refresh, CircleClose } from '@element-plus/icons-vue'
 import { listColumns, dataGenPreview, dataGenStart, dataGenTask, dataGenCancel } from '../../api'
 import { errMsg } from '../../utils/errMsg'
 import { t, tMsg } from '../../utils/i18n'
+import { createPollGuard } from '../../utils/pollGuard'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -341,6 +342,8 @@ const error = ref('')
 const logs = ref([])
 const logBoxRef = ref(null)
 let pollTimer = null
+/** 轮询失败计数：连续 3 次没响应才收摊（见 utils/pollGuard） */
+const pollFails = createPollGuard(3)
 // 日志去重/降噪：仅在阶段变化或进度跨过 10% 时补一条
 let lastLogStage = ''
 let lastLogBucket = -1
@@ -436,6 +439,8 @@ const stopPoll = () => {
     clearInterval(pollTimer)
     pollTimer = null
   }
+  // 停轮询即清零：重新发起生成时不该继承上一轮的失败计数
+  pollFails.reset()
 }
 
 // 任务结束时统一收尾：成功刷新树并提示，失败/取消给出明确原因
@@ -462,6 +467,7 @@ const pollJob = async () => {
   if (!id) return stopPoll()
   try {
     const res = await dataGenTask(id)
+    pollFails.ok()
     if (!res || !res.success) {
       // 任务不存在/已过期：结束轮询，避免无谓请求
       if (res && res.status === 'notfound') {
@@ -487,8 +493,17 @@ const pollJob = async () => {
       stopPoll()
       finishJob(res)
     }
-  } catch {
-    // 单次轮询失败不打断整体流程，下一次继续
+  } catch (e) {
+    // 单次失败下一次继续；连续 3 次没响应才是真断了 —— 不处理的话界面永远「生成中」，
+    // 而且 `running` 为真会挡住关闭弹窗，用户只能硬刷新
+    if (!pollFails.fail()) return
+    stopPoll()
+    const detail = errMsg(e)
+    // status 置 error：running 是 computed（读 job.status），不置就关不掉这个窗口
+    job.value = { ...(job.value || {}), status: 'error' }
+    error.value = detail
+    pushLog(t('common.pollFailed', { n: pollFails.limit }), 'error')
+    ElMessage.error(t('common.pollFailed', { n: pollFails.limit }))
   }
 }
 

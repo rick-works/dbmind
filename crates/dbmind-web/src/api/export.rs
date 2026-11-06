@@ -797,7 +797,7 @@ fn strip_trailing_comment(sql: &str) -> String {
 
 /// 语句的**顶层**（括号深度 0、字符串/标识符字面量之外）是否出现给定短语，
 /// 词边界判定（`limits` 不算 `limit`）。与 [`strip_top_level_order_by`] 同一标准。
-fn has_top_level_phrase(sql: &str, phrases: &[&str]) -> bool {
+pub(crate) fn has_top_level_phrase(sql: &str, phrases: &[&str]) -> bool {
     let b = sql.as_bytes();
     let lb = sql.to_ascii_lowercase().into_bytes();
     let mut depth = 0i32;
@@ -837,7 +837,7 @@ fn has_top_level_phrase(sql: &str, phrases: &[&str]) -> bool {
 }
 
 /// 语句的**顶层**有没有自己的分页子句（`limit` / `fetch`）。
-fn has_top_level_paging_clause(sql: &str) -> bool {
+pub(crate) fn has_top_level_paging_clause(sql: &str) -> bool {
     has_top_level_phrase(sql, &["limit", "fetch"])
 }
 

@@ -265,7 +265,9 @@ hydrateUIFromBackend()
     refreshLocaleFromStorage()
     applyTheme(getThemeSettings().mode)
   })
-  .catch(() => {})
+  // 水合失败不是致命的（下面那些 reload 读的是 localStorage 里的旧值，界面照常可用），
+  // 但它是「语言/主题/编辑器设置忽然回到默认」这类反馈的唯一线索，不能无声吞掉
+  .catch((e) => console.warn('[boot] 启动水合失败（沿用本地缓存）：', e?.message || e))
 // 「AI 服务未配置」这类请求错误：界面上已有正式引导（弹窗/消息里的「前往设置」链接），
 // 但个别自动预取请求的底层 promise 残堆仍会以 uncaught 打进控制台刷屏 ——
 // 这里把它降级成 debug；只匹配这一类已知错误，其它未捕获异常照常原样打印。

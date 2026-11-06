@@ -186,16 +186,36 @@ const UI_BACKEND_KEYS = {
   'ui.appearance': 'dbmind_appearance'
 }
 const pushTimers = {}
+/**
+ * 最近一次「UI 设置没能写进后端」的原因（空串 = 都写成功了）。
+ *
+ * 以前这里 `.catch(() => {})`，本地 localStorage 一份、后端一份，两边都没写成时界面照样
+ * 提示「已保存」—— 重启（或换机器）设置全部回默认，用户完全不知道为什么。
+ * 现在落库失败会置这个值并派发 `dbmind-ui-persist-failed`，由 MainView 统一提示。
+ */
+export const uiPersistError = ref('')
+const notePersistFailed = (key, err) => {
+  const detail = (err && (err.message || err.toString && err.toString())) || 'unknown'
+  uiPersistError.value = `${key}: ${detail}`
+  try {
+    window.dispatchEvent(new CustomEvent('dbmind-ui-persist-failed', { detail: uiPersistError.value }))
+  } catch { /* 非浏览器环境忽略 */ }
+}
 /** 落一层 UI 设置：`raw` 是**原样**写进 localStorage 的字符串（调用方自己序列化）。 */
 export const persistUI = (lsKey, raw) => {
-  try { localStorage.setItem(lsKey, raw) } catch { /* 隐私模式等写失败忽略 */ }
+  let localOk = true
+  try { localStorage.setItem(lsKey, raw) } catch { localOk = false }
+  // 本地写失败先说（放在 `if (!bk) return` 之前：没有后端键的 UI 缓存同样会丢）
+  if (!localOk) notePersistFailed(lsKey, new Error('localStorage write failed'))
   const bk = Object.keys(UI_BACKEND_KEYS).find((k) => UI_BACKEND_KEYS[k] === lsKey)
   if (!bk) return
   clearTimeout(pushTimers[bk])
   pushTimers[bk] = setTimeout(() => {
     import('../api')
-      .then(({ putSetting }) => putSetting(bk, raw).catch(() => {}))
-      .catch(() => {})
+      .then(({ putSetting }) => putSetting(bk, raw)
+        .then(() => { if (uiPersistError.value.startsWith(bk + ':')) uiPersistError.value = '' })
+        .catch((e) => { console.warn('[settings] UI 设置写后端失败：', bk, e?.message || e); notePersistFailed(bk, e) }))
+      .catch((e) => notePersistFailed(bk, e))
   }, 600)
 }
 /** 启动时调用：后端有值 → 覆盖本地缓存；后端没有 → 把本地值推上去（首次升级迁移）。 */
@@ -212,9 +232,12 @@ export const hydrateUIFromBackend = async () => {
     } else {
       const cur = localStorage.getItem(lsKey)
       if (cur) {
+        // 首次升级迁移同样会失败（后端 500 / 库被锁）：以前 `.catch(() => {})`，
+        // 用户下次启动发现设置回默认，却没有任何线索
         import('../api')
-          .then(({ putSetting }) => putSetting(bk, cur).catch(() => {}))
-          .catch(() => {})
+          .then(({ putSetting }) => putSetting(bk, cur)
+            .catch((e) => { console.warn('[settings] 迁移 UI 设置到后端失败：', bk, e?.message || e); notePersistFailed(bk, e) }))
+          .catch((e) => notePersistFailed(bk, e))
       }
     }
   }
