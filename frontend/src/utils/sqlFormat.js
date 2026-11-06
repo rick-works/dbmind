@@ -55,11 +55,22 @@ export const buildSqlFormatOptions = (s) => ({
 // 冒号当运算符切开（`:user_name` → `: user`+`name`，真机反馈）。custom 正则带
 // 负向后行 `(?<![:@\w])`，`::int8` 这类 PostgreSQL 强转里的第二个冒号**不会**被当成参数。
 const TPV_PARAM_RE = '(?<![:@\\w]):[A-Za-z_][\\w$]*'
-// 在方言默认 paramTypes 的基础上叠加 custom（不动各方言原有的 @var / $1 / ? 等参数规则）
+// 在方言默认 paramTypes 的基础上叠加 custom（不动各方言原有的 @var / $1 / ? 等参数规则）。
+//
+// ⚠️ custom 必须是**数组**（sql-formatter ≥15.6 的 ParamTypes.custom: Array<{ regex, key? }>）：
+// 写成对象 `{ regex }` 时引擎内部 `paramTypes.custom.map(...)` 直接抛
+// 「paramTypes.custom.map is not a function」—— 而且**与 SQL 里有没有 :变量无关**：规则是建
+// tokenizer 时无条件构建的，于是每一次格式化都抛错、全部方言逐个失败、最后静默降级到
+// formatSqlLite（只压空白 + 改大小写），界面还提示「格式化完成」（2026-11-06 用户实测：
+// 一行长 SELECT 点格式化毫无变化）。改回数组即可。
 const paramTypesOf = (base) => {
   const pt = (base && base.tokenizerOptions && base.tokenizerOptions.paramTypes) || {}
-  return { ...pt, custom: { regex: TPV_PARAM_RE } }
+  return { ...pt, custom: [{ regex: TPV_PARAM_RE }] }
 }
+
+// 所有方言都失败时（多半是 SQL 不完整，属预期）降级到轻量格式化 —— 但**第一次**要留个痕，
+// 否则引擎参数写错这类问题会一直静默：界面提示成功、内容却没变。
+let liteWarned = false
 
 // 排版规则数据模型：sqlKeywordRules = [{ kw: 关键字/短语, cs: upper=大写 | lower=小写 | keep=保持原样, ly: 排版方式 }]
 // ly 各值：
@@ -441,7 +452,13 @@ export const formatSql = (text, s, language) => {
     const base = dialectMap[language] || sql
     const paramTypes = paramTypesOf(base)
     if (rules.length) {
-      return formatDialect(input, { ...options, paramTypes, dialect: { ...base, tokenizerOptions: applyRuleKeywords(base, rules) } })
+      // paramTypes 同时给两处：formatDialect 走的是 dialect.tokenizerOptions，而顶层 options 那份
+      // 只在 format() 里生效 —— 只给一处会出现「带关键字规则时 :变量 又不认了」的半修状态。
+      return formatDialect(input, {
+        ...options,
+        paramTypes,
+        dialect: { ...base, tokenizerOptions: { ...applyRuleKeywords(base, rules), paramTypes } }
+      })
     }
     return format(input, { ...options, language, paramTypes })
   }
@@ -454,7 +471,13 @@ export const formatSql = (text, s, language) => {
     for (const language of candidates) {
       try { out = run(input, language); break } catch (e) { if (!firstErr) firstErr = e }
     }
-    if (out === undefined && firstErr) out = formatSqlLite(input, s)
+    if (out === undefined && firstErr) {
+      if (!liteWarned) {
+        liteWarned = true
+        console.warn('[sqlFormat] 所有方言都解析失败，本次降级为轻量格式化：', firstErr)
+      }
+      out = formatSqlLite(input, s)
+    }
     const keepRules = rules.filter((r) => r.cs === 'keep' && LY_LAYOUT[r.ly])
     if (keepRules.length) out = applyKeepCase(out, input, keepRules)
     const lowerRules = rules.filter((r) => r.cs === 'lower')
