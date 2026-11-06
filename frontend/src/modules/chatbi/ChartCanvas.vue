@@ -13,6 +13,9 @@ import {
 import {
   GridComponent, TooltipComponent, LegendComponent, DataZoomComponent,
   VisualMapComponent, MarkLineComponent, GraphicComponent,
+  // TitleComponent：空态文案（'没有可绘制的数据'）就是靠 title 画的。
+  // 按需引入漏了它 → 图区一片空白、连提示都没有（只在控制台留一条告警）。
+  TitleComponent,
 } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { onBeforeUnmount, onMounted, ref, shallowRef, watch, nextTick } from 'vue'
@@ -21,7 +24,7 @@ import { buildOption, chartTheme } from './chartSpec'
 echarts.use([
   BarChart, LineChart, PieChart, ScatterChart, FunnelChart, GaugeChart, HeatmapChart,
   GridComponent, TooltipComponent, LegendComponent, DataZoomComponent,
-  VisualMapComponent, MarkLineComponent, GraphicComponent, CanvasRenderer,
+  VisualMapComponent, MarkLineComponent, GraphicComponent, TitleComponent, CanvasRenderer,
 ])
 
 const props = defineProps({

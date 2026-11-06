@@ -46,16 +46,16 @@ export const renameScript = (connId, db, scriptId, nextName) => {
   if (hasSameName(connId, db, name, scriptId)) return 'dup'
   const list = readScripts(connId, db)
   if (!list.some(s => s.id === scriptId)) return 'gone'
-  writeScripts(connId, db, list.map(s => (s.id === scriptId ? { ...s, name } : s)))
+  // 'io' = 写本地存储失败（配额满/隐私模式）。以前这个返回值被丢弃，界面报「已改名」，
+  // 用户列表里还是旧名字（刷新更明显）。
+  if (!writeScripts(connId, db, list.map(s => (s.id === scriptId ? { ...s, name } : s)))) return 'io'
   return 'ok'
 }
 
-/// 删除；脚本已经不在了也返回 true（幂等，批量删除时不会因为一条没了就中断）
-export const removeScript = (connId, db, scriptId) => {
-  const list = readScripts(connId, db)
-  writeScripts(connId, db, list.filter(s => s.id !== scriptId))
-  return true
-}
+/// 删除。返回值：`true` 写盘成功；`false` 写盘失败（脚本其实还在，调用方不能报「已删除」）。
+/// 脚本本来就不在时也算成功（幂等，批量删除不会因为一条没了就中断）。
+export const removeScript = (connId, db, scriptId) =>
+  writeScripts(connId, db, readScripts(connId, db).filter(s => s.id !== scriptId))
 
 /// 通知树 / 编辑器刷新（MainView 与 SqlQueryView 都在监听）
 export const notifyScriptsChanged = (connId, db) => {

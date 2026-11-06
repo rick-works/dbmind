@@ -5846,7 +5846,9 @@ const openScript = (data) => {
 
 // 删除脚本节点（右键 → 删除脚本）
 const deleteScriptNode = (data) => {
-  removeScript(data.connId || currentConnId.value, data.db, data.scriptId)
+  if (!removeScript(data.connId || currentConnId.value, data.db, data.scriptId)) {
+    return ElMessage.error(t('sm.ioFailed'))
+  }
   refreshScriptsNode(data.db, data.connId)
   ElMessage.success(t('mv.scriptDeleted', { name: data.label }))
 }
@@ -5882,6 +5884,7 @@ const scriptCtxRename = async () => {
   const result = renameScript(connId, data.db, data.scriptId, input)
   if (result === 'dup') return ElMessage.warning(t('sm.renameDup'))
   if (result === 'gone') return ElMessage.warning(t('mv.scriptGone'))
+  if (result === 'io') return ElMessage.error(t('sm.ioFailed'))
   if (result !== 'ok') return
   const nextName = String(input || '').trim()
   // 编辑器里还开着这个脚本的页签：标题跟着改，否则树上新名、页签旧名，保存时还会按旧名新建一条

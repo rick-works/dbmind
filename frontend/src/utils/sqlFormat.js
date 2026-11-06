@@ -444,7 +444,9 @@ const statementChunks = (text) => {
   })
 }
 
-export const formatSql = (text, s, language) => {
+// flag.degraded：本次是否所有方言都解析失败、退成了轻量格式化（只压空白 + 改大小写）。
+// 界面必须据此提示「已降级」，否则用户看到的仍是「格式化完成」但内容几乎没变。
+const formatSqlCore = (text, s, language, flag) => {
   const primary = norm(language, 'sql')
   const options = buildSqlFormatOptions(s)
   const rules = rulesOf(s)
@@ -472,6 +474,7 @@ export const formatSql = (text, s, language) => {
       try { out = run(input, language); break } catch (e) { if (!firstErr) firstErr = e }
     }
     if (out === undefined && firstErr) {
+      if (flag) flag.degraded = true
       if (!liteWarned) {
         liteWarned = true
         console.warn('[sqlFormat] 所有方言都解析失败，本次降级为轻量格式化：', firstErr)
@@ -509,6 +512,17 @@ export const formatSql = (text, s, language) => {
     .filter((chunk) => chunk)
     .join(gap)
 }
+
+/// 带降级信息的格式化：`{ text, degraded }`。
+/// 调用方拿到 `degraded` 时应提示「已降级为轻量格式化」（SQL 可能不完整/方言不支持）。
+export const formatSqlEx = (text, s, language) => {
+  const flag = { degraded: false }
+  const out = formatSqlCore(text, s, language, flag)
+  return { text: out, degraded: flag.degraded }
+}
+
+/// 只要文本的老接口（大多数调用方不关心是否降级）。
+export const formatSql = (text, s, language) => formatSqlCore(text, s, language, { degraded: false })
 
 // 常用关键字（放在候选表最前面）
 const COMMON_KEYWORDS = [

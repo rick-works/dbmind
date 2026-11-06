@@ -344,6 +344,7 @@ const renameRow = async (row) => {
   if (result === 'empty') return ElMessage.warning(t('sm.renameEmpty'))
   if (result === 'dup') return ElMessage.warning(t('sm.renameDup'))
   if (result === 'gone') return ElMessage.warning(t('sm.gone'))
+  if (result === 'io') return ElMessage.error(t('sm.ioFailed'))
   notifyScriptsChanged(row.connId, row.db)
   ElMessage.success(t('sm.renamed'))
   load()
@@ -357,7 +358,8 @@ const removeRow = async (row) => {
       cancelButtonText: t('common.cancel')
     })
   } catch { return }
-  removeScript(row.connId, row.db, row.scriptId)
+  // 写盘失败就别报「已删除」—— 刷新后脚本会"又回来"
+  if (!removeScript(row.connId, row.db, row.scriptId)) return ElMessage.error(t('sm.ioFailed'))
   // 通知树与编辑器刷新（MainView 监听该事件刷新 scripts 节点）
   notifyScriptsChanged(row.connId, row.db)
   ElMessage.success(t('sm.deleted'))

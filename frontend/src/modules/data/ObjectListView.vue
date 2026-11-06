@@ -728,11 +728,17 @@ const localScripts = (connId, db) => {
   } catch { return [] }
 }
 
+// 代次：切库/切连接/连点刷新都会并发触发 load()，先发的请求可能后到 ——
+// 以前不校验代次，晚到的旧响应会把 rows 覆盖成**上一个库**的清单（下拉却已是新库），
+// 而右键删除用的是「当前库 + 该行名」的组合，属于危险组合。
+let loadSeq = 0
+
 async function load() {
   // 用**页内当前**的连接/库（顶部下拉可切换，不再固定于打开清单时的那组）
   const id = curConnId.value
   const db = curDb.value
   if (!id) return
+  const seq = ++loadSeq
   // 重载会换掉行对象：注释格按行 key 记的「库里值」快照必须跟着清（否则同名表会拿旧快照算差量）
   Object.keys(cmtOrig).forEach((k) => { delete cmtOrig[k] })
   loading.value = true
@@ -741,6 +747,7 @@ async function load() {
     if (props.cat === 'tables' || props.cat === 'views') {
       const want = props.cat === 'tables' ? 'TABLE' : 'VIEW'
       const all = await listTables(id, db)
+      if (seq !== loadSeq) return // 已被更晚的一次 load 取代，丢弃
       rows.value = (Array.isArray(all) ? all : []).filter(r => String(r.type || '').toUpperCase() === want)
       // 行数回填：information_schema 的 TABLE_ROWS 是估算值（Doris/CH 常为 0）——
       // 与树同一策略，真实 COUNT(*) 批量补（失败静默，估算值仍在）
@@ -748,13 +755,14 @@ async function load() {
         const names = rows.value.map(r => r.name).slice(0, 200)
         if (names.length) {
           getTableCounts(id, db, names).then((m) => {
-            if (!m) return
+            if (!m || seq !== loadSeq) return
             for (const r of rows.value) if (m[r.name] != null) r.rows = m[r.name]
           }).catch(() => {})
         }
       }
     } else if (props.cat === 'procs' || props.cat === 'functions') {
       const all = await listProcedures(id, db)
+      if (seq !== loadSeq) return
       const list = Array.isArray(all) ? all : []
       // ClickHouse 的 routines 就是「函数」（树上 procs 类别显示为函数）：
       // 两个类别都显示全量，不再按 routineType 拆（拆完一边恒空）
@@ -765,9 +773,11 @@ async function load() {
       }
     } else if (props.cat === 'triggers') {
       const list = await listTriggers(id, db)
+      if (seq !== loadSeq) return
       rows.value = Array.isArray(list) ? list : []
     } else if (props.cat === 'events') {
       const list = await listEvents(id, db)
+      if (seq !== loadSeq) return
       // 后端列名是 SQL 别名原样（interval_value / interval_field），归一成渲染要的形状
       rows.value = (Array.isArray(list) ? list : []).map(r => ({ ...r,
         interval: [r.interval_value ?? r.intervalValue, r.interval_field ?? r.intervalField]
@@ -776,9 +786,14 @@ async function load() {
       rows.value = (localScripts(id, db) || []).map(s => ({ name: s.name, id: s.id }))
     }
   } catch (e) {
-    ElMessage.error(t('ols.loadFailed', { detail: e?.response?.data?.message || e?.message || String(e) }))
+    if (seq === loadSeq) {
+      ElMessage.error(t('ols.loadFailed', { detail: e?.response?.data?.message || e?.message || String(e) }))
+    }
+    return
   } finally {
-    loading.value = false
+    // 只有最新一次 load 才有资格关 loading —— 旧请求先回来就把转圈关掉，
+    // 用户会以为新库已经加载完（其实还在等）
+    if (seq === loadSeq) loading.value = false
   }
   // 数据到位后按内容测列宽（行数回填是异步的，回填后这些列会 truncate —— 可接受，
   // 双击列缘随时回自适应）

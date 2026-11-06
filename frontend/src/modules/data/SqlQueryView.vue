@@ -646,7 +646,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { editorSettingsLive, getEditorSettings, getQuerySettings, querySettingsLive } from '../../utils/settings'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 import { getResolvedTheme, monacoTheme, onResolvedThemeChange } from '../../utils/theme'
-import { formatSql as smartFormatSql, connDialectOf } from '../../utils/sqlFormat'
+import { formatSql as smartFormatSql, formatSqlEx as smartFormatSqlEx, connDialectOf } from '../../utils/sqlFormat'
 import { builtinFunctions, functionInsertText, smartCase } from '../../utils/sqlCompletions'
 import { formatDbValue, nullDisplay } from '../../utils/cellValue'
 // 字段脱敏的「结果表格」出口：前端同算法打码，只改显示这一层
@@ -4394,8 +4394,11 @@ const formatSelectedSql = () => {
   const sel = selTextOf(ed)
   if (!sel.trim()) { ElMessage.warning(t('sqlq.pickSqlToFormat')); return }
   try {
-    replaceSelText(ed, smartFormatSql(sel, getEditorSettings(), fmtDialect.value))
-    ElMessage.success(t('sqlq.formattedSelection'))
+    const r = smartFormatSqlEx(sel, getEditorSettings(), fmtDialect.value)
+    replaceSelText(ed, r.text)
+    // 降级（所有方言都没解析成功）时不能报「已格式化」—— 用户会以为规则没生效
+    if (r.degraded) ElMessage.warning(t('sqlq.fmtDegraded'))
+    else ElMessage.success(t('sqlq.formattedSelection'))
   } catch (e) {
     ElMessage.error(t('sqlq.formatFailed', { detail: e?.message || e?.toString?.() || t('common.unknownError') }))
   }
@@ -5101,8 +5104,10 @@ const formatSql = () => {
   const sel = editorInstance ? selTextOf(editorInstance) : ''
   if (sel.trim()) { formatSelectedSql(); return }
   try {
-    sql.value = smartFormatSql(sql.value, getEditorSettings(), fmtDialect.value)
-    ElMessage.success(t('sce.formatDone'))
+    const r = smartFormatSqlEx(sql.value, getEditorSettings(), fmtDialect.value)
+    sql.value = r.text
+    if (r.degraded) ElMessage.warning(t('sqlq.fmtDegraded'))
+    else ElMessage.success(t('sce.formatDone'))
   } catch (e) {
     ElMessage.error(t('sqlq.msgFormatFailed') + (e?.message || e?.toString?.() || t('common.unknownError')))
   }
@@ -5150,7 +5155,15 @@ const doSaveScript = (nameOverride, silent = false) => {
   } else {
     savedScripts.value.unshift({ id: 'script_' + Date.now(), name, content: sql.value, time: Date.now() })
   }
-  localStorage.setItem(scriptKey(), JSON.stringify(savedScripts.value.slice(0, 50)))
+  try {
+    localStorage.setItem(scriptKey(), JSON.stringify(savedScripts.value.slice(0, 50)))
+  } catch (e) {
+    // 配额满 / 隐私模式：以前这里裸调 setItem，异常没人接 —— Ctrl+S 静默失败（isDirty 还是 true，
+    // 用户以为存上了），「关闭前保存」那条路的 Promise 更是永不 resolve，关闭流程直接卡住。
+    if (!silent) ElMessage.error(t('sqlq.scriptStoreFailed'))
+    else console.warn('[sqlq] 脚本写入本地存储失败：', e)
+    return false
+  }
   saveDialogVisible.value = false
   saveName.value = ''
   lastSavedSql.value = sql.value
