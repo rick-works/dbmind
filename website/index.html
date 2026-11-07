@@ -519,6 +519,7 @@
       <a href="#releases">版本</a>
       <a href="#docs">文档</a>
       <a href="https://gitee.com/rick-works/dbmind" target="_blank" rel="noopener">Gitee 仓库</a>
+      <a href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">GitHub</a>
       <a href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener" class="nav-cta">立即下载</a>
     </div>
   </div>
@@ -3697,7 +3698,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
     <p>免费使用 · Windows / macOS / Linux · 无需注册，下载即用</p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener">前往 Gitee 下载</a>
-      <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind" target="_blank" rel="noopener">查看源码仓库</a>
+      <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">GitHub 仓库</a>
+      <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind" target="_blank" rel="noopener">Gitee 仓库</a>
     </div>
   </div>
 </section>
@@ -3914,9 +3916,10 @@ WHERE dt = :dt AND org = :org;</code></pre>
   })()
 </script>
 <script>
-// ---------- 下载源智能分流 ----------
-// 默认走 Gitee（主下载渠道，服务器在国内）；只有 Gitee 不通而 GitHub 通（典型海外网络）
-// 才把页面里所有 Gitee Release 链接换成 GitHub 的对应发行版页（两侧是同一批安装包）。
+// ---------- 下载源智能分流（双向兜底） ----------
+// Gitee 是主下载渠道；页面上的 GitHub 链接（仓库/镜像）保留给海外与知道 GitHub 的用户。
+// 探测哪边通就往哪边收敛：Gitee 不通而 GitHub 通（典型海外）→ 页面里的 Gitee 链接换成
+// GitHub；反过来（典型国内，GitHub 打不开）→ GitHub 链接换成 Gitee，保证点了都能到。
 // 探测用 no-cors fetch：成功（opaque 也算）= 连接通；reject / 超时 = 不通。
 ;(() => {
   const probe = (url, ms) => new Promise((res) => {
@@ -3924,18 +3927,21 @@ WHERE dt = :dt AND org = :org;</code></pre>
     fetch(url, { mode: 'no-cors', cache: 'no-store' })
       .then(() => { clearTimeout(t); res(true) }, () => { clearTimeout(t); res(false) })
   })
+  const swap = (from, to, log) => {
+    let n = 0
+    document.querySelectorAll(`a[href^="${from}"]`).forEach((a) => {
+      a.setAttribute('href', a.getAttribute('href').replace(from, to))
+      n++
+    })
+    if (n) console.log(log + n + ' 个链接')
+  }
+  const G = 'https://gitee.com/rick-works/dbmind'
+  const H = 'https://github.com/rick-works/dbmind'
   window.addEventListener('load', () => {
     Promise.all([probe('https://gitee.com/robots.txt', 2500), probe('https://github.com/robots.txt', 2500)])
       .then(([gitee, github]) => {
-        if (!(github && !gitee)) return
-        let n = 0
-        document.querySelectorAll('a[href^="https://gitee.com/rick-works/dbmind"]').forEach((a) => {
-          a.setAttribute('href', a.getAttribute('href').replace(
-            'https://gitee.com/rick-works/dbmind',
-            'https://github.com/rick-works/dbmind'))
-          n++
-        })
-        if (n) console.log('[dbmind] 已切换海外下载源（GitHub）：' + n + ' 个链接')
+        if (github && !gitee) swap(G, H, '[dbmind] 海外网络，已切换到 GitHub：')
+        else if (gitee && !github) swap(H, G, '[dbmind] 国内网络，GitHub 链接已改走 Gitee：')
       })
   })
 })()
