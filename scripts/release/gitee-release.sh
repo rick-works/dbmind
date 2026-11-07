@@ -121,53 +121,52 @@ else
 fi
 [ -n "$RID" ] || { echo "错误：拿不到 Gitee Release id"; exit 1; }
 
-echo "==> 清理旧附件（只删与本次资产对不上的）"
+echo "==> 同步附件（每轮实时对账：缺的上传、大小不符的先删后传）"
 # 所有 curl 都带超时：CI 实测过上传大文件时连接挂死、job 悬 2h44m 无输出 ——
 # 连接 20s 超时、单请求最多 30 分钟、速度低于 1KB/s 持续 90s 判定断流退出。
 CURL_TO=(--connect-timeout 20 --max-time 1800 --speed-limit 1024 --speed-time 90)
-
-# 本次 Release 的资产清单：名字 -> 字节数（用于「同名同大小就保留」的增量判断）
-declare -A WANT=()
-for f in "$WORK"/assets/*; do
-  [ -e "$f" ] || continue
-  WANT["$(basename "$f")"]=$(stat -c%s "$f" 2>/dev/null || wc -c < "$f")
-done
-
-EXIST=$(curl -sf "${CURL_TO[@]}" "${GITEE_API}/releases/${RID}/attach_files?per_page=100" \
-  -H "Authorization: Bearer ${GITEE_TOKEN}" \
-  | jq -r '.[] | [.id, .name, (.size // 0)] | @tsv' || true)
-while IFS=$'\t' read -r aid aname asize; do
-  [ -n "${aid:-}" ] || continue
-  if [ "${WANT[$aname]:-x}" = "$asize" ]; then
-    echo "    保留 ${aname}（同名同大小，不重传）"
-  else
-    curl -sf "${CURL_TO[@]}" -X DELETE "${GITEE_API}/releases/${RID}/attach_files/${aid}" \
-      -H "Authorization: Bearer ${GITEE_TOKEN}" >/dev/null \
-      && echo "    已删旧附件 id=${aid} ${aname}" || echo "    删旧附件失败 id=${aid}（继续）"
-  fi
-done <<<"$EXIST"
-
-echo "==> 上传附件（3 路并发：CI 到 Gitee 单连接仅 ~430KB/s，串行 330MB 要 13 分钟）"
-FAILED=0
-SKIPPED=0
 GITEE_MAX=104857600   # Gitee 单附件上限 100MB（服务端明确返回超限拒绝，提前跳过不白传）
 PAR=3
 RES="$WORK/results"
 mkdir -p "$RES"
+
+# 实时拉附件清单（id/name/size）。
+# 血泪：旧实现「清理前抓一次快照」同时服务删除与判重，两件事互相打架 ——
+# 清理阶段删掉的附件，上传阶段被同一份快照当成「已存在」跳过，结果每次运行
+# 各丢 2 个附件（v2.0.14 补传实测连丢两轮）。现在每轮现查现用，删除与判重
+# 用同一份数据，且判重拿的是删除之后的状态。
+attach_list() {
+  curl -sf "${CURL_TO[@]}" "${GITEE_API}/releases/${RID}/attach_files?per_page=100" \
+    -H "Authorization: Bearer ${GITEE_TOKEN}" \
+    | jq -r '.[] | [.id, .name, (.size // 0)] | @tsv' || true
+}
+
+FAILED=0
+SKIPPED=0
 i=0
 for f in "$WORK"/assets/*; do
   [ -e "$f" ] || continue
   fname=$(basename "$f")
   size=$(du -h "$f" | cut -f1)
-  fsize="${WANT[$fname]:-0}"
+  fsize=$(stat -c%s "$f" 2>/dev/null || wc -c < "$f")
   if [ "${fsize:-0}" -gt "$GITEE_MAX" ]; then
     echo "    ${fname} (${size}) 跳过（超过 Gitee 单附件 100MB 上限，只能从 GitHub Release 下载）"
     SKIPPED=$((SKIPPED + 1))
     continue
   fi
-  if grep -Fq "$(printf '%s\t%s' "$fname" "$fsize")" <<<"$EXIST"; then
-    echo "    ${fname} (${size}) 已存在（同名同大小，跳过）"
+  row=$(attach_list | awk -F'\t' -v n="$fname" '$2 == n { print; exit }')
+  aid=$(printf '%s' "$row" | cut -f1)
+  asize=$(printf '%s' "$row" | cut -f3)
+  if [ -n "${aid:-}" ] && [ "${asize:-x}" = "${fsize:-y}" ]; then
+    echo "    ${fname} (${size}) 已存在且大小一致，跳过"
     continue
+  fi
+  if [ -n "${aid:-}" ]; then
+    # 大小不符（多半是早前传坏的半截文件）：先删旧的，本轮立刻重传
+    curl -sf "${CURL_TO[@]}" -X DELETE "${GITEE_API}/releases/${RID}/attach_files/${aid}" \
+      -H "Authorization: Bearer ${GITEE_TOKEN}" >/dev/null \
+      && echo "    已删大小不符的旧附件 ${fname}（Gitee 记录 ${asize:-?} != 本地 ${fsize}）" \
+      || echo "    删旧附件 ${fname} 失败（仍尝试重传）"
   fi
   echo "    ${fname} (${size}) 上传中 ..."
   (
@@ -184,14 +183,27 @@ for f in "$WORK"/assets/*; do
   if [ $((i % PAR)) -eq 0 ]; then wait; fi
 done
 wait
+
+# 收尾：把 Gitee 上的最终清单打出来（眼见为实，别只看上传响应）
+echo "==> Gitee 最终附件清单"
+FINAL=$(attach_list)
+if [ -n "$FINAL" ]; then
+  printf '%s\n' "$FINAL" | while IFS=$'\t' read -r _aid _aname _asize; do
+    [ -n "${_aid:-}" ] || continue
+    echo "    ${_aname}  ${_asize} bytes"
+  done
+else
+  echo "    （清单为空）"
+fi
+
 for r in "$RES"/*; do
   [ -e "$r" ] || continue
   rname=$(basename "$r")
   first=$(head -n1 "$r")
   if [ "$first" = "OK" ]; then
-    echo "    ${rname} ... OK"
+    echo "    上传 ${rname} ... OK"
   else
-    echo "    ${rname} ... $first"
+    echo "    上传 ${rname} ... $first"
     tail -n +2 "$r" | sed 's/^/      /'
     FAILED=$((FAILED + 1))
   fi
