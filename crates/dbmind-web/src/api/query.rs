@@ -359,9 +359,9 @@ pub async fn tx(
 /// `POST /api/{m}/query/{id}/count` —— 只算总数，不取数。
 ///
 /// 给前端的**异步计数**用：主执行接口不再同步 COUNT（见 `execute` 里的注释），
-/// 数据回显后前端拿原句来这里补总数。带 **10s 总预算**：`count_rows` 三层兜底
-/// 是串行的（派生表 COUNT → CTE COUNT → 二分探测），放任不管的话一条大 JOIN
-/// 能把三层都拖满 —— 反正 10 秒算不出的总数，用户多半也不愿意等。
+/// 数据回显后前端拿原句来这里补总数。原带 10s 总预算，**已放开**（用户要求）：
+/// 大 JOIN 的 COUNT 想等多久等多久 —— 数据早已回显，计数在后台慢慢跑；
+/// 内部失败仍返回 -1，前端安静不显示。
 pub async fn count(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -385,14 +385,12 @@ pub async fn count(
     }
     // 与主执行同一纪律：统计也要「去掉末尾分号」的原句（带分号进派生表是语法错误）
     let bare = sql.trim().trim_end_matches(';').trim().to_string();
-    let total = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        crate::api::export::count_rows(&state, &id, &database, &bare, ncols),
-    )
-    .await
-    .ok() // 超时 → None
-    .flatten() // 内部失败 → None
-    .unwrap_or(-1);
+    // 不限时（原 10s 预算已放开，用户要求）：数据早已回显，计数想跑多久跑多久。
+    // 会话池的全局配额与前端 seq 守卫兜底：长跑的计数最多占住一条空闲会话，
+    // 过期计数结果会被前端直接丢弃，不会串到新查询上。
+    let total = crate::api::export::count_rows(&state, &id, &database, &bare, ncols)
+        .await
+        .unwrap_or(-1); // 内部失败 → -1
     Ok(Json(json!({ "success": true, "totalCount": total })))
 }
 

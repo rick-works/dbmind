@@ -418,7 +418,8 @@ export const executeSql = async (id, sql, database, executionId, signal, page, s
   })
 }
 // 只算总数，不取数（异步补分页器用）：主执行接口已把 COUNT 移出主链路 ——
-// 大 JOIN 的计数能拖百秒级，不该卡住数据回显。后端带 10s 总预算，算不出返回 -1。
+// 大 JOIN 的计数能拖百秒级，不该卡住数据回显。后端不限时（原 10s 预算已放开），
+// 内部失败返回 -1，前端安静不显示总数。
 // ncols 传结果集列数，省掉后端探测列数的一次往返。
 export const executeSqlCount = async (id, sql, database, ncols, signal) => {
   const b = await baseOf(id)
