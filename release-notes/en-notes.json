@@ -1,5 +1,8 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.0.15": [
+    "The row-count summary of SQL query results no longer has a 10-second budget: the COUNT behind big JOINs and complex SQL now takes as long as it takes and the total still fills in (it used to silently disappear when it ran over 10 seconds, leaving nothing but page numbers in the pager)"
+  ],
   "v2.0.11": [
     "Variables no longer disappear: template variables (name / default / note) and the values you enter at run time are now stored in the local database (dbmind.db), so they survive port changes, restarts and reinstalls. They used to live in browser storage, where a different window port meant an empty library; existing variables are migrated automatically on first launch after the upgrade",
     "Saving in the variable manager now reports failures instead of failing silently (it used to look saved when it was not)"
