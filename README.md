@@ -2,7 +2,9 @@
 
 **[简体中文](README.zh-CN.md) | English**
 
-🌐 **Official website**: <https://www.dbmind.top/>
+🌐 **Website**: <https://www.dbmind.top/> · 🏠 **Repository**: <https://gitee.com/rick-works/dbmind> (GitHub mirror: <https://github.com/rick-works/dbmind>)
+
+[![release](https://img.shields.io/badge/release-v2.0.14-0a7cff)](https://gitee.com/rick-works/dbmind/releases)
 
 **Give your database a brain** — DBmind (Database + Mind) is an AI-native workbench for unified database management & development: one client for every database in your stack, with AI that explains, optimizes and fixes your SQL.
 
@@ -285,7 +287,9 @@ and Gatekeeper has nothing to check:
 
 ```bash
 # (1) curl never sets that flag. Replace <version> with the latest from the releases page, e.g. 1.2.7
-curl -LO https://github.com/rick-works/dbmind/releases/download/v<version>/DBmind_<version>_aarch64.dmg
+#     Gitee is faster in China; it caps attachments at 100 MB — if a file is missing there,
+#     swap the host back to github.com
+curl -LO https://gitee.com/rick-works/dbmind/releases/download/v<version>/DBmind_<version>_aarch64.dmg
 open DBmind_<version>_aarch64.dmg     # mount, drag to Applications, double-click — no prompt
 #     (on Intel, swap aarch64 for x64)
 

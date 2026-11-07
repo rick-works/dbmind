@@ -2,7 +2,9 @@
 
 [English](README.md) | 简体中文
 
-🌐 **官网**：<https://www.dbmind.top/>
+🌐 **官网**：<https://www.dbmind.top/> · 🏠 **仓库**：<https://gitee.com/rick-works/dbmind>（GitHub 镜像：<https://github.com/rick-works/dbmind>）
+
+[![release](https://img.shields.io/badge/release-v2.0.14-0a7cff)](https://gitee.com/rick-works/dbmind/releases)
 
 **给数据库装上「大脑」** —— DBmind（Database + Mind）是 AI 原生的多数据库管理与开发平台：
 一个客户端管好你的每一个数据库，AI 帮你解释、优化、修好每一条 SQL。
@@ -292,7 +294,8 @@ macOS 对「从网上下载、且没有经过 Apple 公证」的 App 一定会�
 
 ```bash
 # ① curl（curl 不打这个标记）。把 <版本> 换成发布页上的最新版本号，例如 1.2.7
-curl -LO https://github.com/rick-works/dbmind/releases/download/v<版本>/DBmind_<版本>_aarch64.dmg
+#    国内走 Gitee（快）；Gitee 单附件上限 100MB，若该文件没同步到，把域名换回 github.com
+curl -LO https://gitee.com/rick-works/dbmind/releases/download/v<版本>/DBmind_<版本>_aarch64.dmg
 open DBmind_<版本>_aarch64.dmg     # 挂载 → 拖进「应用程序」→ 双击，全程不弹
 #    （Intel 机器把文件名里的 aarch64 换成 x64）
 

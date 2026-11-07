@@ -71,6 +71,12 @@ write('crates/dbmind-desktop/tauri.conf.json', (s) => s.replace(/("version": ")[
 write('Cargo.lock', (s) => s.replace(/(\[\[package\]\]\nname = "dbmind-[^"]*"\nversion = ")[^"]+(")/g, `$1${version}$2`))
 write('resources/mac/首次打开请看这里.txt', (s) => s.replace(/\d+\.\d+\.\d+/g, version))
 
+// 1c) README 顶部的 release 徽章：shields.io 是静态徽章，版本号写死在 URL 里，漏改就会
+//     一直显示上一版（用户会以为没发版）。中英两份都要同步。
+for (const f of ['README.md', 'README.zh-CN.md']) {
+  write(f, (s) => s.replace(/(img\.shields\.io\/badge\/release-v)\d+\.\d+\.\d+(-)/g, `$1${version}$2`))
+}
+
 // 2) locales：新版本插到 rel1，旧版本顺延
 const NOTE_SLOTS = 3
 const notes = {
