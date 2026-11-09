@@ -465,4 +465,6 @@ If DBmind saves you time, buying the author a coffee is always appreciated ☕ (
 
 ## License
 
-Free for individuals and teams: use, copy, modify and redistribute freely (keep this notice). **You may NOT sell this software or modified versions on their own, or bundle them as the paid core of a commercial product, without written permission from the author.** Full terms in [LICENSE](LICENSE).
+Released under the **GNU GPL-3.0** ([LICENSE](LICENSE)). You are free to use, study, modify and redistribute DBMind — including for commercial purposes — under the same license. Derivative works must be released as open source with the full corresponding source code.
+
+**Trademark notice:** the name "DBMind" and its branding remain the property of the author. Forks and derivatives are welcome, but they must not be published under the DBMind name or icon.
