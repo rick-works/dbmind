@@ -6,7 +6,7 @@
 // 而端口每次启动都可能是另一个（默认端口被占就用下一个），localStorage 又按 origin
 // （含端口）隔离 —— 换个端口打开，用户存的变量就「凭空消失」（2026-11-06 用户实测反馈）。
 // 现在两个键都走通用设置接口：
-//   sql.tplvars   → [{ name, value, note }]   预定义变量库（管理弹窗编辑的那份）
+//   sql.tplvars   → [{ name, value, note, type }]  预定义变量库（管理弹窗编辑的那份；type 是字面量类型声明，auto=按列推断）
 //   sql.varvalues → { 变量名: 上次填的值 }     执行弹窗里记住的值
 // localStorage 里那两个旧键只在启动时当**迁移来源**读一次，搬成功就删掉。
 import { getSettings, putAppSetting } from '../api'
@@ -104,7 +104,7 @@ export function findTplVar (name) {
 export async function saveTplVars (list) {
   const out = (Array.isArray(list) ? list : [])
     .filter((v) => v && v.name)
-    .map((v) => ({ name: String(v.name), value: String(v.value || ''), note: String(v.note || '') }))
+    .map((v) => ({ name: String(v.name), value: String(v.value || ''), note: String(v.note || ''), type: String(v.type || 'auto') }))
   await putAppSetting(KEY_TPL, JSON.stringify(out))
   tplVars = out
   loaded = true

@@ -1,5 +1,5 @@
 <template>
-  <el-dialog v-model="visible" width="min(680px, 94vw)" append-to-body align-center
+  <el-dialog v-model="visible" width="min(800px, 94vw)" append-to-body align-center
              :close-on-click-modal="false" class="tplvar-dialog">
     <template #header>
       <div class="tv-title">
@@ -15,6 +15,7 @@
       <div class="tv-head" v-if="rows.length">
         <span class="tv-col tv-c-name">{{ $t('sqlq.tplVarName') }}</span>
         <span class="tv-col tv-c-value">{{ $t('sqlq.tplVarValue') }}</span>
+        <span class="tv-col tv-c-type">{{ $t('sqlq.tplVarType') }}</span>
         <span class="tv-col tv-c-note">{{ $t('sqlq.tplVarNote') }}</span>
         <span class="tv-col tv-c-op"></span>
       </div>
@@ -27,6 +28,15 @@
           </span>
           <span class="tv-col tv-c-value">
             <el-input v-model="r.value" :placeholder="$t('sqlq.tplVarValuePh')" clearable />
+          </span>
+          <span class="tv-col tv-c-type">
+            <!-- auto：按 :var 前面的列元数据推断；显式声明优先于推断 -->
+            <el-select v-model="r.type" size="small" class="tv-type">
+              <el-option value="auto" :label="$t('sqlq.tplVarTypeAuto')" />
+              <el-option value="string" :label="$t('sqlq.tplVarTypeString')" />
+              <el-option value="number" :label="$t('sqlq.tplVarTypeNumber')" />
+              <el-option value="bool" :label="$t('sqlq.tplVarTypeBool')" />
+            </el-select>
           </span>
           <span class="tv-col tv-c-note">
             <el-input v-model="r.note" :placeholder="$t('sqlq.tplVarNotePh')" clearable />
@@ -67,10 +77,10 @@ watch(visible, async (v) => {
   // 变量库在 dbmind.db 里（不是 localStorage）：打开时先确保拉过一次，再拷一份现库，
   // 编辑期间不动真身（取消不产生副作用）
   await ensureSqlVarStore()
-  rows.value = readTplVars().map((r) => ({ name: r.name || '', value: r.value || '', note: r.note || '' }))
+  rows.value = readTplVars().map((r) => ({ name: r.name || '', value: r.value || '', note: r.note || '', type: r.type || 'auto' }))
 })
 
-const addRow = () => { rows.value.push({ name: '', value: '', note: '' }) }
+const addRow = () => { rows.value.push({ name: '', value: '', note: '', type: 'auto' }) }
 
 const save = async () => {
   const seen = new Set()
@@ -82,7 +92,7 @@ const save = async () => {
     const key = name.toLowerCase()
     if (seen.has(key)) { ElMessage.warning(t('sqlq.tplVarDup', { name })); return }
     seen.add(key)
-    out.push({ name, value: String(r.value || '').trim(), note: String(r.note || '').trim() })
+    out.push({ name, value: String(r.value || '').trim(), note: String(r.note || '').trim(), type: r.type || 'auto' })
   }
   if (saving.value) return
   saving.value = true
@@ -126,8 +136,10 @@ const save = async () => {
 .tv-rows::-webkit-scrollbar { display: none; }
 .tv-row { padding: 6px 0; border-bottom: 1px dashed var(--dc-border, rgba(255,255,255,.06)); }
 .tv-row:last-child { border-bottom: none; }
-.tv-c-name { width: 190px; flex: 0 0 auto; }
-.tv-c-value { width: 180px; flex: 0 0 auto; }
+.tv-c-name { width: 160px; flex: 0 0 auto; }
+.tv-c-value { width: 150px; flex: 0 0 auto; }
+.tv-c-type { width: 128px; flex: 0 0 auto; }
+.tv-type { width: 100%; }
 .tv-c-note { flex: 1; min-width: 0; }
 .tv-c-op { width: 32px; flex: 0 0 auto; text-align: right; }
 .tv-empty { color: var(--dc-text-dim); font-size: 12px; padding: 20px 0; text-align: center; line-height: 1.7; }

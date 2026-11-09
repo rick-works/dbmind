@@ -617,6 +617,8 @@
     <div class="var-row" v-for="v in varDialog.vars" :key="v">
       <span class="var-name" :title="':' + v">:{{ v }}</span>
       <el-input v-model="varDialog.values[v]" :placeholder="$t('sqlq.varValuePh')" clearable />
+      <!-- 该变量最终按什么类型生成字面量（列推断/变量库显式声明）：值与类型不匹配一眼能看到 -->
+      <span class="var-kind" v-if="varDialog.hints && varDialog.hints[v]">{{ $t(varKindHintKey(varDialog.hints[v])) }}</span>
     </div>
     <template #footer>
       <el-button @click="onVarCancel">{{ $t('common.cancel') }}</el-button>
@@ -675,6 +677,7 @@ import {
 } from '@element-plus/icons-vue'
 import TplVarDialog from './TplVarDialog.vue'
 import { findTplVar, readTplVars, saveTplVars, ensureSqlVarStore, readVarValues, saveVarValues, isRawSqlValue } from '../../utils/sqlTplVars'
+import { replaceVars, classifyColType, varContextOf } from '../../utils/sqlLiteral'
 import { executeSql, executeSqlCount, executeSqlBatch, executeNoSql, cancelSql, aiExplain, aiOptimize, aiFix, aiDiagnose, aiChat, listDatabases, listCatalogs, noSqlDatabases, listSchemas, listTables, listProcedures, listTriggers, listConnections, listColumns, getColumnComments, getAiConfig, txControl } from '../../api'
 import { isNoSql as isNoSqlType, schemaLevelOf, hideDbLevelOf, byType, dbDisplayOf, quoteStyleOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
@@ -4961,7 +4964,7 @@ const confirmWriteBeforeRun = async (execSql, connId, db) => {
 let varValuesOnce = null
 let pendingRunParams = null
 let pendingDefaults = null
-const varDialog = ref({ visible: false, vars: [], values: {}, defs: {} })
+const varDialog = ref({ visible: false, vars: [], values: {}, defs: {}, hints: {} })
 // 变量管理弹窗（预定义变量库：变量名/默认值/备注；存 dbmind.db，见 utils/sqlTplVars）
 const tplVarOpen = ref(false)
 const extractSqlVars = (text) => {
@@ -4977,17 +4980,69 @@ const extractSqlVars = (text) => {
   })
   return found
 }
-const substituteVars = (text, values) => mapOutsideQuotes(text, (seg) =>
-  seg.replace(/(?<![:@\w]):([a-z_][\w$]*)/gi, (whole, name) => {
-    const v = values[name]
-    if (v === undefined || String(v).trim() === '') return whole
-    const s = String(v).trim()
-    // 函数（NOW()…）、CURRENT_* 类关键字、数字、NULL 原样写入（isRawSqlValue 与变量库同口径）
-    if (isRawSqlValue(s)) return /^null$/i.test(s) ? 'NULL' : s
-    return `'${s.replace(/'/g, "''")}'`
+// 类型感知替换：字面量形态由「变量库显式类型 > :var 前面的列类型 > 输入推断」决定。
+// 纯函数实现在 utils/sqlLiteral.js（56 组直测用例）；opts 见 buildVarSubOpts。
+const substituteVars = (text, values, opts) => replaceVars(text, values, opts)
+
+// —— 执行前的类型上下文 ——
+// `:var` 关联到的列（col = :v / col in (:v)）按列元数据分类；变量库显式类型优先。
+// 列查询失败（无权限/连接抖动）静默退回输入推断，不挡执行。
+let varSubOpts = { dialect: '', colTypes: {}, varTypes: {}, hints: {}, warnings: [] }
+const varKindHintKey = (k) => ({ string: 'sqlq.varKindString', number: 'sqlq.varKindNumber', bool: 'sqlq.varKindBool' }[k] || '')
+const flushVarWarns = () => {
+  const ws = [...new Set(varSubOpts.warnings || [])]
+  varSubOpts = { ...varSubOpts, warnings: [] }
+  if (ws.length) ElMessage.warning(t('sqlq.varKindFallback', { names: ws.join(', ') }))
+}
+const buildVarSubOpts = async (sql, vars) => {
+  const connId = selectedConnId.value || props.conn?.id
+  const conn = connForGuard.value || props.conn
+  const opts = { dialect: connDialectOf(conn?.type), colTypes: {}, varTypes: {}, hints: {}, warnings: [] }
+  // 变量库显式类型（用户意志最高）
+  vars.forEach((v) => {
+    const ty = String(findTplVar(v)?.type || '').toLowerCase()
+    if (ty === 'string' || ty === 'number' || ty === 'bool') {
+      opts.varTypes[v.toLowerCase()] = ty
+      opts.hints[v] = ty
+    }
   })
-)
-const openVarDialog = (vars, known = {}) => {
+  // `:var` 前面的列 → FROM/JOIN 表 → 列元数据
+  const colByVar = {}
+  const tables = new Set()
+  mapOutsideQuotes(sql, (seg) => {
+    const tre = /\b(?:from|join)\s+([`"\[]?[\w$]+[`"\]]?(?:\s*[.:]\s*[`"\[]?[\w$]+)*)/gi
+    let m
+    while ((m = tre.exec(seg))) {
+      const last = m[1].replace(/[`"\[\]]/g, '').split(/[.:]/).pop()
+      if (last && !/^(select|dual)$/i.test(last)) tables.add(last)
+    }
+    const vre = /(?<![:@\w]):([a-z_][\w$]*)/gi
+    let vm
+    while ((vm = vre.exec(seg))) {
+      const ctx = varContextOf(seg.slice(0, vm.index))
+      if (ctx?.col) colByVar[vm[1].toLowerCase()] = ctx.col
+    }
+    return seg
+  })
+  const need = [...new Set(Object.values(colByVar))].filter((c) => !opts.colTypes[c])
+  if (need.length && tables.size) {
+    const lists = await Promise.all([...tables].map((t) =>
+      listColumns(connId, dbScope.value, t).catch(() => [])))
+    const colKind = {}
+    lists.forEach((list) => (Array.isArray(list) ? list : []).forEach((c) => {
+      if (!c || typeof c === 'string' || !c.name || !c.type) return
+      colKind[String(c.name).toLowerCase()] = classifyColType(c.type)
+    }))
+    vars.forEach((v) => {
+      // colTypes 以**列名**为键（replaceVars 的 kindOf 用 :var 左侧列名查表），不是变量名
+      const col = colByVar[v.toLowerCase()]
+      const k = col && colKind[col]
+      if (k && !opts.varTypes[v.toLowerCase()]) { opts.colTypes[col] = k; opts.hints[v] = k }
+    })
+  }
+  return opts
+}
+const openVarDialog = (vars, known = {}, hints = {}) => {
   // known = 变量库里已有默认值的那些变量（本轮执行直接用，不进弹窗）；弹窗只收缺失的
   pendingDefaults = known || {}
   const remembered = readVarValues()
@@ -4997,7 +5052,8 @@ const openVarDialog = (vars, known = {}) => {
     values[v] = remembered[v] || ''
     defs[v] = ''
   })
-  varDialog.value = { visible: true, vars, values, defs }
+  // hints：每个变量最终按什么类型生成字面量（列推断/变量库显式），填错类型一眼能看到
+  varDialog.value = { visible: true, vars, values, defs, hints }
 }
 const onVarConfirm = () => {
   const d = varDialog.value
@@ -5055,11 +5111,14 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true, overrid
   // 模板变量：一次性值已在手（确认弹窗后重入）就替换；否则变量库有默认值的直接套用，
   // 缺的才弹窗收参（确认后自动存入变量库，下次同变量不再弹）
   if (varValuesOnce) {
-    execSql = substituteVars(execSql, varValuesOnce)
+    execSql = substituteVars(execSql, varValuesOnce, varSubOpts)
     varValuesOnce = null
+    flushVarWarns()
   } else {
     const vars = extractSqlVars(execSql)
     if (vars.length) {
+      // 类型上下文：`:var` 关联列 → 列元数据分类（失败静默退输入推断）
+      varSubOpts = await buildVarSubOpts(execSql, vars)
       const defs = {}
       const missing = []
       vars.forEach((v) => {
@@ -5070,10 +5129,11 @@ const runSql = async (page = 1, size = pageSize.value, batchable = true, overrid
       })
       if (missing.length) {
         pendingRunParams = { page, size, batchable }
-        openVarDialog(missing, defs)
+        openVarDialog(missing, defs, varSubOpts.hints)
         return
       }
-      execSql = substituteVars(execSql, defs)
+      execSql = substituteVars(execSql, defs, varSubOpts)
+      flushVarWarns()
     }
   }
   lastExecSql = execSql
@@ -6661,6 +6721,12 @@ onBeforeUnmount(() => {
 .var-lead { font-size: 12.5px; color: var(--dc-text-dim); margin: -2px 0 12px; }
 .var-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .var-row:last-of-type { margin-bottom: 0; }
+/* 类型提示：该变量将按什么形态写入 SQL（列推断/显式声明），浅底小字不抢焦点 */
+.var-kind {
+  flex-shrink: 0; padding: 2px 8px; border-radius: 6px; font-size: 12px;
+  color: var(--dc-text-dim); background: var(--dc-bg-soft, rgba(127,127,127,.08));
+  border: 1px solid var(--dc-border, rgba(127,127,127,.15));
+}
 .var-name {
   flex-shrink: 0; min-width: 76px; max-width: 42%; padding: 3px 9px; border-radius: 6px;
   text-align: center; font-family: 'SF Mono', ui-monospace, Consolas, monospace; font-size: 12.5px;
