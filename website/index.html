@@ -503,6 +503,23 @@
     .docs-layout { grid-template-columns: 1fr; }
     .dtoc { position: static; max-height: none; }
   }
+  /* ===== 应用截图轮播 ===== */
+  .shots { position: relative; margin-top: 34px; }
+  .shots-viewport { overflow: hidden; border-radius: var(--radius); border: 1px solid var(--border); background: var(--card); box-shadow: 0 24px 60px rgba(0,0,0,.35); }
+  .shots-track { display: flex; transition: transform .55s cubic-bezier(.22,.61,.36,1); }
+  .shot { flex: 0 0 100%; min-width: 0; margin: 0; cursor: zoom-in; }
+  .shot img { display: block; width: 100%; height: auto; }
+  .shot figcaption { padding: 12px 18px; font-size: 14px; color: var(--dim); border-top: 1px solid var(--border); text-align: center; }
+  .shot-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border); background: rgba(11,15,23,.72); color: var(--text); font-size: 22px; line-height: 1; cursor: pointer; z-index: 2; transition: background .2s, border-color .2s; backdrop-filter: blur(4px); padding: 0; }
+  .shot-nav:hover { background: rgba(79,140,255,.28); border-color: var(--primary); }
+  .shot-nav.prev { left: 14px; }
+  .shot-nav.next { right: 14px; }
+  .shot-dots { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
+  .shot-dots button { width: 8px; height: 8px; padding: 0; border-radius: 4px; border: none; background: var(--dim); opacity: .35; cursor: pointer; transition: all .25s; }
+  .shot-dots button.on { opacity: 1; background: var(--primary); width: 22px; }
+  .shot-viewer { position: fixed; inset: 0; z-index: 90; display: none; align-items: center; justify-content: center; background: rgba(4,7,12,.9); backdrop-filter: blur(6px); padding: 4vh 4vw; cursor: zoom-out; }
+  .shot-viewer.open { display: flex; }
+  .shot-viewer img { max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
 </style>
 </head>
 <body>
@@ -687,6 +704,76 @@
     </div>
   </div>
 </section>
+
+<section id="shots" style="background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+  <div class="wrap">
+    <h2 class="sec-title reveal">应用截图</h2>
+    <p class="sec-sub reveal">深色 / 浅色主题任你选 —— 点击截图可查看大图</p>
+    <div class="shots reveal" id="shotsBox">
+      <div class="shots-viewport">
+        <div class="shots-track" id="shotsTrack">
+          <figure class="shot"><img src="images/shot-sql-dark.png" alt="智能 SQL 编辑器（深色主题）" loading="lazy"><figcaption>智能 SQL 编辑器 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-sql-light.png" alt="智能 SQL 编辑器（浅色主题）" loading="lazy"><figcaption>智能 SQL 编辑器 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-ai-dark.png" alt="AI 助手（深色主题）" loading="lazy"><figcaption>AI 助手 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-ai-light.png" alt="AI 助手（浅色主题）" loading="lazy"><figcaption>AI 助手 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-drivers-light.png" alt="驱动管理（浅色主题）" loading="lazy"><figcaption>驱动管理 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-drivers-dark.png" alt="驱动管理（深色主题）" loading="lazy"><figcaption>驱动管理 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-sync-dark.png" alt="数据传输（深色主题）" loading="lazy"><figcaption>数据传输 · 深色主题</figcaption></figure>
+        </div>
+      </div>
+      <button class="shot-nav prev" id="shotPrev" aria-label="上一张">&#8249;</button>
+      <button class="shot-nav next" id="shotNext" aria-label="下一张">&#8250;</button>
+      <div class="shot-dots" id="shotDots"></div>
+    </div>
+  </div>
+</section>
+<script>
+(function () {
+  var track = document.getElementById('shotsTrack');
+  if (!track) return;
+  var dots = document.getElementById('shotDots');
+  var box = document.getElementById('shotsBox');
+  var n = track.children.length, cur = 0, timer = null;
+  for (var i = 0; i < n; i++) {
+    var b = document.createElement('button');
+    b.setAttribute('aria-label', '第' + (i + 1) + '张');
+    (function (idx) { b.onclick = function () { go(idx); restart(); }; })(i);
+    dots.appendChild(b);
+  }
+  function go (i) { cur = (i + n) % n; track.style.transform = 'translateX(-' + cur * 100 + '%)'; [].forEach.call(dots.children, function (d, k) { d.classList.toggle('on', k === cur); }); }
+  function next () { go(cur + 1); }
+  function restart () { if (timer) clearInterval(timer); timer = setInterval(next, 4500); }
+  document.getElementById('shotPrev').onclick = function () { go(cur - 1); restart(); };
+  document.getElementById('shotNext').onclick = function () { go(cur + 1); restart(); };
+  box.addEventListener('mouseenter', function () { if (timer) { clearInterval(timer); timer = null; } });
+  box.addEventListener('mouseleave', restart);
+  var sx = null;
+  box.addEventListener('touchstart', function (e) { sx = e.touches[0].clientX; }, { passive: true });
+  box.addEventListener('touchend', function (e) {
+    if (sx == null) return;
+    var dx = e.changedTouches[0].clientX - sx;
+    if (Math.abs(dx) > 40) go(cur + (dx < 0 ? 1 : -1));
+    sx = null; restart();
+  }, { passive: true });
+  // 点击看大图：全屏遮罩，Esc / 点击任意处关闭
+  var viewer = document.createElement('div');
+  viewer.className = 'shot-viewer';
+  viewer.innerHTML = '<img alt="截图大图">';
+  document.body.appendChild(viewer);
+  var vimg = viewer.querySelector('img');
+  track.addEventListener('click', function (e) {
+    var img = e.target.closest('.shot img');
+    if (!img) return;
+    vimg.src = img.src;
+    viewer.classList.add('open');
+  });
+  viewer.onclick = function () { viewer.classList.remove('open'); };
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && viewer.classList.contains('open')) viewer.classList.remove('open');
+  });
+  go(0); restart();
+})();
+</script>
 
 <section id="workflow" style="background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
   <div class="wrap">
