@@ -1485,6 +1485,32 @@ pub async fn columns(
     // 不拆出来会怎样（用户反馈）：这些库取列走 JDBC `getColumns`，而它只认连接默认 schema
     // （PG=public、SQLServer=dbo）—— 别的 schema 下的表就"能列出表、字段却是空的"。
     let (_, schema) = split_db_schema(&database, &dialect);
+    // 外部 catalog（`catalog.库`，Doris 系）：scope::resolve 对它明确拒绝（JDBC 连接
+    // 无法指定 catalog），而内核的列元数据（JDBC getColumns）也表达不了三段名 ——
+    // 走 `desc \`c\`.\`d\`.\`t\``。高级搜索的条件列、表格列头都靠这个接口。
+    if let Some((catalog, db)) = external_catalog_of(&dialect, &database) {
+        let cols = external_table_columns(&state, &id, &dialect, &catalog, &db, &table).await?;
+        let payload: Vec<Value> = cols
+            .iter()
+            .enumerate()
+            .map(|(i, (name, type_name, nullable))| {
+                json!({
+                    "name": name,
+                    "type": type_name,
+                    "nullable": nullable,
+                    "key": "",
+                    "defaultValue": Value::Null,
+                    "comment": Value::Null,
+                    "extra": "",
+                    "autoIncrement": false,
+                    "primaryKey": false,
+                    "sortKey": false,
+                    "ordinal": i,
+                })
+            })
+            .collect();
+        return Ok(Json(Value::Array(payload)));
+    }
     let target = crate::api::scope::resolve(&state, &id, &database).await?;
     let engine = state.engine();
     // 表名要进闭包（移动），而下面补类型时还要再用一次，所以先复制一份
@@ -2061,6 +2087,110 @@ fn parse_order_specs(params: &Params) -> Vec<(String, String)> {
     out
 }
 
+/// 外部 catalog 专用执行：不切库（JDBC 表达不了 `catalog.db`，`scope::resolve` 对它明确拒绝），
+/// 直接在**主连接**上跑调用方拼好的全限定 SQL（如 `catalog.db.table`，ClickHouse 支持三段名）。
+/// 除「连接解析」外与 [`run_sql_in`] 同一套纪律（internal、只读、120s 超时）。
+async fn run_sql_external(
+    state: &AppState,
+    conn: &str,
+    sql: String,
+    max_rows: usize,
+) -> XResult<QueryResult> {
+    crate::api::driver::ensure_for_connection(state, conn).await?;
+    let engine = state.engine();
+    let request = QueryRequest {
+        schema: None,
+        connection: conn.to_string(),
+        sql,
+        options: QueryOptions {
+            max_rows,
+            timeout_ms: 120_000,
+        },
+        execution_id: None,
+        session: None,
+        read_only: Some(true),
+        internal: true,
+    };
+    blocking(move || engine.execute(request, AccessContext::Web)).await
+}
+
+/// 外部 catalog 的表引用形态无法从库名区分：DataLake catalog 的子库（`catalog.db`）
+/// 走**三段名** `catalog.db.table`；字面带点库名（如 MySQL 引擎库 `fakecat.demo`）
+/// 只认**两段名**整体引用（三段名在 CH 24.8 实测直接 SYNTAX_ERROR）。
+/// 依候选顺序逐个尝试，全部失败报最后一个错误。
+async fn run_external(
+    state: &AppState,
+    conn: &str,
+    variants: &[String],
+    build_sql: impl Fn(&str) -> String,
+    max_rows: usize,
+) -> XResult<QueryResult> {
+    let mut last_err: Option<XError> = None;
+    for quoted in variants {
+        let sql = build_sql(quoted);
+        match run_sql_external(state, conn, sql, max_rows).await {
+            Ok(result) => return Ok(result),
+            Err(err) => last_err = Some(err),
+        }
+    }
+    Err(last_err.expect("variants is non-empty"))
+}
+
+/// `database` 是否是外部 catalog 的全限定名（`catalog.库`，catalog_level 方言，
+/// 如 Doris 的 `mysql_216.test` / 指向 ClickHouse 的 `clickhouse_catalog.oish_dws`）。
+/// `internal` 是默认 catalog，树上虽然也带前缀，但走的仍是普通切库路径。
+fn external_catalog_of(dialect: &Dialect, database: &str) -> Option<(String, String)> {
+    if !dialect.catalog_level() {
+        return None;
+    }
+    database
+        .split_once('.')
+        .filter(|(c, d)| !c.is_empty() && !d.is_empty() && !c.eq_ignore_ascii_case("internal"))
+        .map(|(c, d)| (c.to_string(), d.to_string()))
+}
+
+/// 模糊搜索可用的文本列类型（CHAR 会命中 VARCHAR/NCHAR/CHAR…，TEXT 命中 LONGTEXT…）。
+fn is_textual_col_type(type_name: &str) -> bool {
+    let t = type_name.to_ascii_uppercase();
+    ["CHAR", "TEXT", "CLOB", "STRING", "JSON", "UUID", "ENUM", "XML", "NCHAR"]
+        .iter()
+        .any(|probe| t.contains(probe))
+}
+
+/// 外部 catalog 表的列元数据：`desc \`catalog\`.\`db\`.\`table\``。
+///
+/// 为什么不用 `<catalog>.information_schema.columns`：JDBC catalog 上它会报
+/// 「Internal error processing describeTables」（实验室 Doris 2.1.8 实测）；
+/// 而 `desc` 三段名可用，返回 Field/Type/Null/Key/Default/Extra。
+async fn external_table_columns(
+    state: &AppState,
+    id: &str,
+    dialect: &Dialect,
+    catalog: &str,
+    db: &str,
+    table: &str,
+) -> XResult<Vec<(String, String, bool)>> {
+    let sql = format!(
+        "desc {}.{}.{}",
+        dialect.quote(catalog),
+        dialect.quote(db),
+        dialect.quote(table)
+    );
+    let result = run_sql_external(state, id, sql, 10_000).await?;
+    Ok(rows_of(&result)
+        .iter()
+        .filter_map(|row| {
+            let name = text_ci(row, "Field");
+            if name.is_empty() {
+                return None;
+            }
+            let type_name = text_ci(row, "Type");
+            let nullable = text_ci(row, "Null").eq_ignore_ascii_case("yes");
+            Some((name, type_name, nullable))
+        })
+        .collect())
+}
+
 /// 分页浏览表数据（`/data`）。
 ///
 /// 界面语义（分页 / 关键字模糊 / 排序）在这里翻成 SQL —— 内核只认「一条语句」。
@@ -2098,30 +2228,50 @@ pub async fn data(
         .unwrap_or_default();
 
     let (_, dialect) = ctx_of(&state, &id).await?;
-    let quoted = dialect.quote(&table);
+    // 外部 catalog（catalog_level 方言，如 CH 的 unified catalog）：`database` 是
+    // `catalog.db` 全限定名。JDBC 连接无法指定外部 catalog（切库那条路在 scope 里被
+    // 明确拒绝），但 ClickHouse 支持**三段名** —— 不切库，直接在主连接上查全限定表。
+    let external = external_catalog_of(&dialect, &database);
+    // 引用候选：先试三段名（DataLake catalog 子库），失败换两段名（字面带点库名），见 run_external。
+    let external_quoted: Vec<String> = match &external {
+        Some((catalog, db)) => vec![
+            format!(
+                "{}.{}.{}",
+                dialect.quote(catalog),
+                dialect.quote(db),
+                dialect.quote(&table)
+            ),
+            format!("{}.{}", dialect.quote(&database), dialect.quote(&table)),
+        ],
+        None => vec![dialect.quote(&table)],
+    };
     // 所有筛选条件（关键字模糊 + 高级搜索）都汇到这里，统一用 AND 串起来；
     // 同一份 where 既给数据查询、也给总条数统计 —— 否则会出现"筛出 1 行、总数说 10000"。
     let mut where_groups: Vec<String> = Vec::new();
 
     if !keyword.trim().is_empty() {
-        let engine = state.engine();
-        let name = table.clone();
-        let connection = id.clone();
-        let columns = blocking(move || engine.list_columns_fresh(&connection, &name)).await?;
-        let text_columns: Vec<String> = columns
-            .iter()
-            .filter(|c| {
-                let t = c
-                    .type_name
-                    .clone()
-                    .unwrap_or_default()
-                    .to_ascii_uppercase();
-                ["CHAR", "TEXT", "CLOB", "STRING", "JSON", "UUID", "ENUM", "XML", "NCHAR"]
-                    .iter()
-                    .any(|probe| t.contains(probe))
-            })
-            .map(|c| c.name.clone())
-            .collect();
+        // 外部 catalog 的列元数据走 desc 三段名（内核的列缓存里没有它）；普通表照旧走内核。
+        let text_columns: Vec<String> = if let Some((catalog, db)) = &external {
+            external_table_columns(&state, &id, &dialect, catalog, db, &table)
+                .await?
+                .into_iter()
+                .filter(|(_, type_name, _)| is_textual_col_type(type_name))
+                .map(|(name, _, _)| name)                .collect()
+        } else {
+            let engine = state.engine();
+            let name = table.clone();
+            let connection = id.clone();
+            let columns = blocking(move || engine.list_columns_fresh(&connection, &name)).await?;
+            columns
+                .iter()
+                .filter(|c| {
+                    is_textual_col_type(
+                        c.type_name.clone().unwrap_or_default().to_ascii_uppercase().as_str(),
+                    )
+                })
+                .map(|c| c.name.clone())
+                .collect()
+        };
         if text_columns.is_empty() {
             return Err(XError::bad_request(format!(
                 "表「{table}」没有可作为模糊匹配的文本列，无法按关键字筛选"
@@ -2145,7 +2295,8 @@ pub async fn data(
     } else {
         format!(" where {}", where_groups.join(" and "))
     };
-    let mut sql = format!("select * from {quoted}{where_suffix}");
+    // where + 排序 + 分页 = 数据查询的公共尾巴；count 不带排序/分页，只用 where。
+    let mut tail = where_suffix.clone();
 
     if !order_specs.is_empty() {
         // 多列：`order by "age" asc, "name" desc` —— 顺序即优先级，列名走方言 quote，方向已白名单
@@ -2153,17 +2304,35 @@ pub async fn data(
             .iter()
             .map(|(col, dir)| format!("{} {dir}", dialect.quote(col)))
             .collect();
-        sql.push_str(&format!(" order by {}", parts.join(", ")));
+        tail.push_str(&format!(" order by {}", parts.join(", ")));
     } else if dialect.needs_order_by_for_paging() {
         // SQL Server 的 OFFSET/FETCH 必须有 ORDER BY
-        sql.push_str(" order by (select null)");
+        tail.push_str(" order by (select null)");
     }
-    sql.push_str(&format!(
+    tail.push_str(&format!(
         " {}",
         dialect.limit_clause(page.saturating_sub(1).saturating_mul(size), size)
     ));
 
-    let result = match run_sql_in(&state, &id, &database, sql, size as usize).await {
+    let result = match &external {
+        Some(_) => {
+            run_external(&state, &id, &external_quoted, |q| {
+                format!("select * from {q}{tail}")
+            }, size as usize)
+            .await
+        }
+        None => {
+            run_sql_in(
+                &state,
+                &id,
+                &database,
+                format!("select * from {}{tail}", dialect.quote(&table)),
+                size as usize,
+            )
+            .await
+        }
+    };
+    let result = match result {
         Ok(result) => result,
         Err(err) => return Ok(Json(shape::query_failure_json(&err.message, 0))),
     };
@@ -2171,8 +2340,23 @@ pub async fn data(
 
     // 真实总条数：分页控件要用它。统计失败就当「未知」（-1），不假装是当前页的行数。
     // 必须带上与数据查询**同一份 where** —— 否则筛出 1 行而总数显示 10000。
-    let count_sql = format!("{}{where_suffix}", dialect.count_sql(&table));
-    let total = match run_sql_in(&state, &id, &database, count_sql, 1).await {
+    // 外部 catalog：count_sql(&table) 会把三段名整体 quote 成单段标识符，这里直接用
+    // 候选引用；执行同样在主连接上（不切库）。
+    let total = match if external.is_some() {
+        run_external(&state, &id, &external_quoted, |q| {
+            format!("select count(*) as cnt from {q}{where_suffix}")
+        }, 1)
+        .await
+    } else {
+        run_sql_in(
+            &state,
+            &id,
+            &database,
+            format!("{}{where_suffix}", dialect.count_sql(&table)),
+            1,
+        )
+        .await
+    } {
         Ok(count_result) => rows_of(&count_result)
             .first()
 
