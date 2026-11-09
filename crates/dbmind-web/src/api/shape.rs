@@ -783,6 +783,47 @@ pub fn columns_json(columns: &[ColumnDetail]) -> Value {
     Value::Array(columns.iter().map(column_json).collect())
 }
 
+/// 把 ROWNUM 分页包装（`Dialect::wrap_paging`，Oracle 11g 分页）带来的**辅助列**
+/// `rn__` 从结果 JSON 里剥掉 —— 不剥的话数据网格会多出一列行号。
+///
+/// 列名匹配大小写不敏感（Oracle 会折成 `RN__`）。若用户语句本身就有叫 `rn__` 的列
+/// 会被误剥 —— 这个概率远小于「每一条分页结果都多一列」，接受。
+pub fn strip_paging_aux(json: &mut Value) {
+    let Some(object) = json.as_object_mut() else {
+        return;
+    };
+    // columns 是字符串数组：找到辅助列并移除
+    let present = object.get_mut("columns").and_then(Value::as_array_mut).is_some_and(|cols| {
+        let idx = cols
+            .iter()
+            .position(|c| c.as_str().map(|n| n.eq_ignore_ascii_case("rn__")).unwrap_or(false));
+        match idx {
+            Some(i) => {
+                cols.remove(i);
+                true
+            }
+            None => false,
+        }
+    });
+    if !present {
+        return;
+    }
+    // rows 是「列名 → 值」的对象数组：按 key（大小写不敏感）移除
+    if let Some(rows) = object.get_mut("rows").and_then(Value::as_array_mut) {
+        for row in rows.iter_mut() {
+            if let Some(map) = row.as_object_mut() {
+                let key = map
+                    .keys()
+                    .find(|k| k.eq_ignore_ascii_case("rn__"))
+                    .cloned();
+                if let Some(key) = key {
+                    map.remove(&key);
+                }
+            }
+        }
+    }
+}
+
 /// 把方言查出来的**表选项**并入 `/tables` 的每个表对象。
 ///
 /// 为什么抽成纯函数：`meta::tables` 产出表清单有**三条**路径（catalog 层级 / schema 层级 /

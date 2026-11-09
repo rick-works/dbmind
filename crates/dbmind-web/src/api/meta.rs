@@ -2295,7 +2295,8 @@ pub async fn data(
     } else {
         format!(" where {}", where_groups.join(" and "))
     };
-    // where + 排序 + 分页 = 数据查询的公共尾巴；count 不带排序/分页，只用 where。
+    // where + 排序 = 数据查询的公共尾巴；分页子句在 build_paged 里按方言补；
+    // count 不带排序/分页，只用 where。
     let mut tail = where_suffix.clone();
 
     if !order_specs.is_empty() {
@@ -2309,24 +2310,26 @@ pub async fn data(
         // SQL Server 的 OFFSET/FETCH 必须有 ORDER BY
         tail.push_str(" order by (select null)");
     }
-    tail.push_str(&format!(
-        " {}",
-        dialect.limit_clause(page.saturating_sub(1).saturating_mul(size), size)
-    ));
+    // Oracle 11g 不认 `offset … fetch …`（12c 语法 → ORA-00933，豫园实测），走 ROWNUM
+    // 包装（wrap_paging）；其余方言照旧追加 limit_clause。
+    let paging_offset = page.saturating_sub(1).saturating_mul(size);
+    let build_paged = |q: &str| {
+        let base = format!("select * from {q}{tail}");
+        dialect
+            .wrap_paging(&base, paging_offset, size)
+            .unwrap_or_else(|| format!("{base} {}", dialect.limit_clause(paging_offset, size)))
+    };
 
     let result = match &external {
         Some(_) => {
-            run_external(&state, &id, &external_quoted, |q| {
-                format!("select * from {q}{tail}")
-            }, size as usize)
-            .await
+            run_external(&state, &id, &external_quoted, build_paged, size as usize).await
         }
         None => {
             run_sql_in(
                 &state,
                 &id,
                 &database,
-                format!("select * from {}{tail}", dialect.quote(&table)),
+                build_paged(&dialect.quote(&table)),
                 size as usize,
             )
             .await
@@ -2337,6 +2340,8 @@ pub async fn data(
         Err(err) => return Ok(Json(shape::query_failure_json(&err.message, 0))),
     };
     let mut payload = shape::query_result_json(&result);
+    // ROWNUM 包装（Oracle 11g 分页）会在结果里多一列辅助列 rn__，剥掉不展示。
+    shape::strip_paging_aux(&mut payload);
 
     // 真实总条数：分页控件要用它。统计失败就当「未知」（-1），不假装是当前页的行数。
     // 必须带上与数据查询**同一份 where** —— 否则筛出 1 行而总数显示 10000。

@@ -261,7 +261,10 @@ pub async fn execute(
     let effective = if can_append_paging(&bare, page, dialect) {
         crate::api::export::paging_sql(&bare, offset, size as u64 + 1, dialect)
     } else {
-        base_sql.clone()
+        // 第 1 页（Oracle/DM/SQL Server）与其它不加分页的场景：以前**原句**执行，
+        // 尾部的 `;` 在 Oracle 上直接 ORA-00911 无效字符（11g 实测，`select 1;` 就炸）。
+        // 剥掉它；PL/SQL 块 / 例程 DDL / T-SQL MERGE 的尾分号是语法的一部分，保留。
+        crate::api::export::strip_stmt_semicolon(&base_sql).to_string()
     };
 
     let engine = state.engine();
@@ -289,6 +292,8 @@ pub async fn execute(
     Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
         Ok(result) => {
             let mut json = shape::query_result_json(&result);
+            // Oracle 11g 走 ROWNUM 包装分页（paging_sql），辅助列 rn__ 不进结果网格
+            shape::strip_paging_aux(&mut json);
             // 总数统计**已移出主链路**：以前这里被截断/翻页时会同步跑 `count_rows`
             //（三层兜底串行，每层最多 120s）—— 大 JOIN 的 COUNT 能把整个查询响应
             // 卡到百秒级（真机：数据 1s 就绪，却等 COUNT 等了 163s+），其他工具
@@ -533,7 +538,9 @@ pub async fn execute_batch(
             break;
         }
         let exec = execution_id.clone();
-        let statement = statement.clone();
+        // 每段剥掉尾部 `;`（Oracle/DB2/Derby 不吃语句尾分号；PL/SQL 块等例外见函数注释）。
+        // 切句器给出的段文本以分号收尾（`SELECT 1;` 整段带分号）。
+        let statement = crate::api::export::strip_stmt_semicolon(&statement).to_string();
         let schema = schema.clone();
         // 每段都要一把钥匙（闭包 move 走，循环下一轮还得用）
         let session = Some(session_key.clone());

@@ -721,19 +721,26 @@ impl Dialect {
             let plain = s
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+            // 未加引号的标识符必须**字母开头**（Oracle/DB2/Derby 直接拒绝 `_`/数字开头
+            // 的裸名 —— ORA-00911 无效字符；MySQL 数字开头同样不合法），这样的名字
+            // 一律走引号分支。
+            let starts_alpha = s.starts_with(|c: char| c.is_ascii_alphabetic());
             // **下折方言**（PG / Kingbase / SQLite）里未加引号的名字会被折成小写：
             // 目标表上叫 `Name` 的列，裸写 `Name` 会被解析成 `name` —— 真机报
             // `column "name" of relation "t" does not exist`，而表结构明明是好的。
             // 这类「含大写字母」的普通名必须逐字加引号；全小写的普通名照旧裸写（行为不变）。
             let needs_case_quote =
                 plain && self.folds_ident_lower() && s.chars().any(|c| c.is_ascii_uppercase());
-            if plain && !is_reserved(s) && !needs_case_quote {
+            if plain && starts_alpha && !is_reserved(s) && !needs_case_quote {
                 return s.to_string();
             }
             // 上折方言（Oracle / DM / DB2 / H2 / Derby）里，未加引号的名字会被折成大写；
             // 一旦加引号就等于固定大小写。所以要加引号的**普通名**先折一次，
             // 让 `rename to user` 仍然建出 `USER`，而不是悄悄造一个小写对象。
-            let text = if plain && self.folds_ident_upper() {
+            // 但**字母开头之外**的 plain 名（`_report_xingwei` 这种 `_` 开头的表）
+            // 不折：它进引号分支恰恰因为它裸写不合法 —— 而字典里是小写就说明当初
+            // 是带引号建的小写对象，折成大写反而指向一个不存在的表（豫园 11g 实测）。
+            let text = if plain && starts_alpha && self.folds_ident_upper() {
                 s.to_ascii_uppercase()
             } else {
                 s.to_string()
@@ -3650,11 +3657,27 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         }
     }
 
+    /// Oracle（含 11g）的**包装式**分页：`offset … rows fetch next … rows only` 是
+    /// 12c 语法，11g（如豫园 11.2.0.4）直接 ORA-00933「SQL 命令未正确结束」。
+    /// ROWNUM 包装 9i 起可用，对 12c+ 也完全合法，所以 Oracle 一律走这条路，
+    /// 不必探测版本。代价是结果里多一列辅助列 `rn__`，调用方负责用
+    /// `shape::strip_paging_aux` 从结果里剥掉。
+    ///
+    /// 返回 `None` = 该方言没有包装式分页，调用方退回 [`limit_clause`] 后缀。
+    pub fn wrap_paging(&self, base: &str, offset: u64, size: u64) -> Option<String> {
+        if !matches!(self.key(), "oracle") {
+            return None;
+        }
+        let end = offset.saturating_add(size);
+        Some(format!(
+            "select * from (select a__.*, rownum rn__ from (\n{base}\n) a__ where rownum <= {end}) where rn__ > {offset}"
+        ))
+    }
+
     /// 分页子句（`offset` 从 0 开始）。
     pub fn limit_clause(&self, offset: u64, size: u64) -> String {
         match self.key() {
-            "sqlserver" => format!("offset {offset} rows fetch next {size} rows only"),
-            // Derby 没有 LIMIT 语法（真机：Encountered "limit"），用 SQL 标准的 OFFSET/FETCH。
+            "sqlserver" => format!("offset {offset} rows fetch next {size} rows only"),            // Derby 没有 LIMIT 语法（真机：Encountered "limit"），用 SQL 标准的 OFFSET/FETCH。
             // DB2 同样不吃 `limit`（SQLCODE=-104 / SQLSTATE=42601，expected "IMMEDIATE" 或
             // 语句结束）—— 之前漏在这里，表现是"第 1 页正常、点下一页就报语法错"：第 1 页
             // 不拼分页子句，正好把这个错误藏住了。DB2 11.1 起支持标准 OFFSET/FETCH。
@@ -6190,6 +6213,41 @@ mod tests {
         assert_eq!(Dialect::new(ConnectionKind::Dm).upsert_row_limit(), 500);
         assert_eq!(Dialect::new(ConnectionKind::Sqlserver).upsert_row_limit(), 1000);
         assert_eq!(Dialect::new(ConnectionKind::Postgresql).upsert_row_limit(), usize::MAX);
+    }
+
+    /// `_` 开头的表名不能裸写（Oracle 未引号标识符必须字母开头 → ORA-00911），
+    /// 必须加引号，且**不能折大写** —— 字典里是小写就说明当初是带引号建的小写对象
+    /// （豫园 11g：`"_REPORT_XINGWEI"` 找不到表，`"_report_xingwei"` 才对）。
+    #[test]
+    fn 下划线开头的名字必须加引号且不折大小写() {
+        let oracle = Dialect::new(ConnectionKind::Oracle);
+        assert_eq!(oracle.quote("_report_xingwei"), "\"_report_xingwei\"");
+        assert_eq!(oracle.quote("_REPORT_XINGWEI"), "\"_REPORT_XINGWEI\"");
+        // 普通名行为不变：全小写裸写（折大写命中常规大写对象）、保留字加引号折大写
+        assert_eq!(oracle.quote("report_xingwei"), "report_xingwei");
+        assert_eq!(oracle.quote("user"), "\"USER\"");
+        // 数字开头同理
+        assert_eq!(oracle.quote("1t"), "\"1t\"");
+    }
+
+    /// Oracle 分页走 ROWNUM 包装（11g 不认 `offset … fetch …`，12c 语法 ORA-00933），
+    /// 其余方言返回 None 退回 limit_clause 后缀。
+    #[test]
+    fn oracle分页用rownum包装_其余方言返回none() {
+        let oracle = Dialect::new(ConnectionKind::Oracle);
+        let wrapped = oracle
+            .wrap_paging("select * from t", 0, 200)
+            .expect("oracle 必须有包装式分页");
+        assert!(wrapped.contains("rownum rn__"), "{wrapped}");
+        assert!(wrapped.contains("rownum <= 200"), "{wrapped}");
+        assert!(wrapped.contains("rn__ > 0"), "{wrapped}");
+        let paged = oracle
+            .wrap_paging("select * from t", 400, 200)
+            .expect("oracle 必须有包装式分页");
+        assert!(paged.contains("rownum <= 600"), "{paged}");
+        assert!(paged.contains("rn__ > 400"), "{paged}");
+        assert!(Dialect::new(ConnectionKind::Mysql).wrap_paging("select 1", 0, 10).is_none());
+        assert!(Dialect::new(ConnectionKind::Db2).wrap_paging("select 1", 0, 10).is_none());
     }
 
     #[test]

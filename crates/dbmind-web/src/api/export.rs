@@ -732,6 +732,11 @@ pub(crate) fn paging_sql(base: &str, offset: u64, size: u64, dialect: Dialect) -
     // 先剥掉顶层尾部注释，之后一律换行追加 —— 换行也是行注释的天然终点。
     let stripped = strip_trailing_comment(base);
     let base = stripped.trim_end();
+    // Oracle（含 11g）走 ROWNUM 包装：`offset … fetch …` 是 12c 语法，11g 报
+    // ORA-00933（豫园 11.2.0.4 实测）。包装带来的辅助列 rn__ 由调用方剥掉。
+    if let Some(wrapped) = dialect.wrap_paging(base, offset, size) {
+        return wrapped;
+    }
     let page = dialect.limit_clause(offset, size);
     if dialect.needs_order_by_for_paging() {
         // SQL Server：OFFSET/FETCH 必须紧跟 ORDER BY，而子查询里又不许 ORDER BY
@@ -745,6 +750,38 @@ pub(crate) fn paging_sql(base: &str, offset: u64, size: u64, dialect: Dialect) -
     } else {
         format!("{base}\n{page}")
     }
+}
+
+/// 剥掉单条语句尾部的 `;`（含多个分号与尾随空白）。
+///
+/// Oracle / DB2 / Derby 的 JDBC 不接受语句尾分号（ORA-00911 / SQLCODE=-104，
+/// 豫园 11g 实测：`select 1 from dual;` 直接报无效字符）；MySQL/PG 宽容，剥了也无害。
+///
+/// 例外（尾分号是**语法的一部分**，不能剥）：PL/SQL 匿名块（`BEGIN`/`DECLARE` 开头）、
+/// 例程 DDL（`CREATE PROCEDURE/FUNCTION/TRIGGER/PACKAGE` —— 体内 `END;` 是块语法）、
+/// T-SQL 的 `MERGE`（解析器硬要求分号收尾，见 dialect.rs upsert 的注释）。
+pub(crate) fn strip_stmt_semicolon(sql: &str) -> &str {
+    let t = sql.trim();
+    let head: Vec<String> = t
+        .split_whitespace()
+        .take(5)
+        .map(|w| w.to_ascii_lowercase())
+        .collect();
+    // `create [or replace] procedure|function|trigger|package [body]` —— 前 5 个词里
+    // 出现对象类型即可（or replace 占两个词）。
+    let is_routine = head.first().map(|w| w == "create").unwrap_or(false)
+        && head.iter().any(|w| {
+            matches!(
+                w.as_str(),
+                "procedure" | "function" | "trigger" | "package"
+            )
+        });
+    let is_plsql = matches!(head.first().map(|w| w.as_str()).unwrap_or(""), "begin" | "declare" | "merge")
+        || is_routine;
+    if is_plsql {
+        return t;
+    }
+    t.trim_end_matches(|c: char| c.is_whitespace() || c == ';')
 }
 
 /// 去掉语句**末尾**的注释（`-- …` 行注释 / `/* … */` 块注释），只认字符串/标识符字面量之外的。
@@ -1971,6 +2008,44 @@ pub async fn download(
             )
                 .into_response()
         }
+    }
+}
+
+#[cfg(test)]
+mod strip_stmt_semicolon_tests {
+    use super::strip_stmt_semicolon;
+
+    #[test]
+    fn 普通语句剥尾分号() {
+        assert_eq!(strip_stmt_semicolon("select 1 from dual;"), "select 1 from dual");
+        assert_eq!(strip_stmt_semicolon("select 1;;  "), "select 1");
+        assert_eq!(strip_stmt_semicolon("update t set a=1 ;"), "update t set a=1");
+    }
+
+    #[test]
+    fn plsql块与例程和merge保留尾分号() {
+        assert_eq!(
+            strip_stmt_semicolon("begin dbms_output.put_line('x'); end;"),
+            "begin dbms_output.put_line('x'); end;"
+        );
+        assert_eq!(
+            strip_stmt_semicolon("declare v int; begin null; end;"),
+            "declare v int; begin null; end;"
+        );
+        // 例程 DDL：体内 END; 是块语法
+        assert_eq!(
+            strip_stmt_semicolon("create or replace procedure p is begin null; end;"),
+            "create or replace procedure p is begin null; end;"
+        );
+        assert_eq!(
+            strip_stmt_semicolon("create procedure p as begin null; end;"),
+            "create procedure p as begin null; end;"
+        );
+        // T-SQL 的 MERGE 语法硬要求分号收尾
+        assert_eq!(
+            strip_stmt_semicolon("merge into t using s on 1=1 when matched then update set a=1;"),
+            "merge into t using s on 1=1 when matched then update set a=1;"
+        );
     }
 }
 
