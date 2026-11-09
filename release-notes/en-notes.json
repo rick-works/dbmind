@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.0.17": [
+    "Template variables are now type-aware: literals match the target column - numbers against string columns get quoted automatically (no more NO_COMMON_TYPE on ClickHouse); the variable manager gains a Type column (auto/string/number/bool) for explicit override, and the fill-in dialog shows which type each variable will produce",
+    "Update check now falls back between sources: when GitHub is unreachable (common on domestic networks) it retries via Gitee automatically, and only errors if both fail",
+    "License changed from the custom non-commercial terms to GPL-3.0"
+  ],
   "v2.0.16": [
     "Tables behind external catalogs (e.g. a JDBC catalog in Doris pointing at ClickHouse) now open in data browse: column list, advanced search, keyword filter and paging all work (previously rejected with 'external catalog not supported')",
     "Oracle 11g compatibility: data browse and paging no longer fail with ORA-00933, paging now uses syntax supported by all versions",
