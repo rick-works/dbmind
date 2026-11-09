@@ -46,6 +46,15 @@ fn notify_install_hook() {
 
 const RELEASE_LATEST: &str = "https://api.github.com/repos/rick-works/dbmind/releases/latest";
 
+/// Gitee 兜底源：`releases/latest`（Gitee API v5 原生端点，实测返回 tag 最新的正式版）。
+/// JSON 形状与 GitHub **天然兼容**（tag_name / name / body / published_at / html_url /
+/// assets[].{name, browser_download_url}），解析侧不用改；差别只在 assets 里**没有
+/// digest** —— sha256 校验走「没有校验值就如实提示」的既有降级路径（unverified）。
+///
+/// 不要用 `releases` 列表端点：它**升序**排列（v0.1.0 在前，2026-11-09 实测），
+/// 截前几页只会拿到最老的版本。
+const GITEE_RELEASES: &str = "https://gitee.com/api/v5/repos/rick-works/dbmind/releases/latest";
+
 // ---------- 下载进度（进程内共享：后台任务写、HTTP 读） ----------
 
 #[derive(Default)]
@@ -173,15 +182,67 @@ fn request_release(auth: Option<&str>) -> dbmind_core::Result<Value> {
         .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("解析发行版信息失败：{e}")))
 }
 
-/// 阻塞版拉取最新发行版（供后台下载任务在 blocking 线程里直接调用）
+/// 从 Gitee 拉最新发行版（匿名；检查更新是低频请求，够用）。
+///
+/// **直连（不走代理）**：Gitee 国内畅通，套上系统代理反而可能被代理程序挡掉 ——
+/// 与 `host_reachable_no_proxy` 的口径一致。
+fn request_gitee_release() -> dbmind_core::Result<Value> {
+    let resp = agent(false)
+        .get(GITEE_RELEASES)
+        .set("User-Agent", "dbmind-updater")
+        .timeout(Duration::from_secs(10))
+        .call()
+        .map_err(|e| {
+            DbMindError::new(ErrorCode::Internal, format!("连接 Gitee 失败：{e}"))
+        })?;
+    let mut bytes: Vec<u8> = Vec::new();
+    resp.into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("读取 Gitee 发行版失败：{e}")))?;
+    let v: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("解析 Gitee 发行版失败：{e}")))?;
+    // latest 端点在没有发行版时返回 null / message 而非数组
+    if v.get("tag_name").and_then(Value::as_str).is_some() {
+        Ok(v)
+    } else {
+        Err(DbMindError::new(ErrorCode::Internal, "Gitee 上没有发行版"))
+    }
+}
+
+/// 阻塞版拉取最新发行版（供后台下载任务在 blocking 线程里直接调用）。
+///
+/// **双源策略**：GitHub 主源（带令牌，失败匿名重试）→ Gitee 兜底；国内网络
+/// （`domestic_network()`，Gitee 通而 GitHub API 不通，带 10 分钟缓存）反过来
+/// Gitee 优先，省一次注定失败的 10 秒等待。两源都失败才报错。
 fn fetch_latest_blocking() -> dbmind_core::Result<Value> {
-    match github_token() {
-        // 带令牌被拒（401/403：过期/被撤销/权限不足）-> 丢掉令牌匿名再来一次
-        Some(tk) => match request_release(Some(&tk)) {
-            Ok(v) => Ok(v),
-            Err(_) => request_release(None),
-        },
-        None => request_release(None),
+    let try_github = || -> dbmind_core::Result<Value> {
+        match github_token() {
+            // 带令牌被拒（401/403：过期/被撤销/权限不足）-> 丢掉令牌匿名再来一次
+            Some(tk) => match request_release(Some(&tk)) {
+                Ok(v) => Ok(v),
+                Err(_) => request_release(None),
+            },
+            None => request_release(None),
+        }
+    };
+    if domestic_network() {
+        if let Ok(v) = request_gitee_release() {
+            return Ok(v);
+        }
+        // Gitee 也挂了：回落 GitHub 拿一个明确的错误（总得给用户个交代）
+        return try_github();
+    }
+    match try_github() {
+        Ok(v) => Ok(v),
+        Err(e) => request_gitee_release().map_err(|ge| {
+            DbMindError::new(
+                ErrorCode::Internal,
+                format!(
+                    "{}。Gitee 兜底也失败（{}）——两个更新源都连不上，请检查网络后重试",
+                    e.message, ge.message
+                ),
+            )
+        }),
     }
 }
 
@@ -1733,6 +1794,38 @@ pub async fn dismiss() -> Json<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Gitee 兜底源（`releases/latest` 端点）的 JSON 与 GitHub 形状兼容：tag_name /
+    /// assets[].{name, browser_download_url} 都能被既有解析消费；差别只是没有
+    /// digest —— sha256 应为 None（走 unverified 降级）。
+    #[test]
+    fn gitee_release_json_is_shape_compatible() {
+        let rel = serde_json::json!({
+            "tag_name": "v2.0.16",
+            "name": "v2.0.16",
+            "html_url": "https://gitee.com/rick-works/dbmind/releases/tag/v2.0.16",
+            "assets": [
+                { "name": "DBmind_2.0.16_x64-setup.exe", "browser_download_url": "https://gitee.com/x/2.0.16.exe" },
+                { "name": "DBmind_2.0.16_amd64.deb", "browser_download_url": "https://gitee.com/x/2.0.16.deb" }
+            ]
+        });
+        assert_eq!(rel["tag_name"], "v2.0.16");
+        // Windows 安装包能被挑中，且没有 digest → sha256 为 None（如实提示不校验）
+        let inst = pick_installer(&rel).expect("Gitee 形状也该挑得出安装包");
+        assert_eq!(inst.name, "DBmind_2.0.16_x64-setup.exe");
+        assert!(inst.url.contains("2.0.16.exe"));
+        assert!(inst.sha256.is_none());
+    }
+
+    /// 实网冒烟（默认忽略，本地验证用）：`cargo test -p dbmind-web gitee_latest_live -- --ignored`
+    #[test]
+    #[ignore]
+    fn gitee_latest_live() {
+        let v = request_gitee_release().expect("Gitee latest 应可达");
+        let tag = v["tag_name"].as_str().expect("tag_name 缺失");
+        assert!(tag.starts_with('v'), "tag_name = {tag}");
+        assert!(pick_installer(&v).is_some(), "Gitee 发行版里应挑得出安装包");
+    }
 
     /// 安装前的**宿主钩子**：注册之后，`notify_install_hook()` 要把它叫起来。
     ///
