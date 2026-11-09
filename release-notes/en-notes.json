@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.0.16": [
+    "Tables behind external catalogs (e.g. a JDBC catalog in Doris pointing at ClickHouse) now open in data browse: column list, advanced search, keyword filter and paging all work (previously rejected with 'external catalog not supported')",
+    "Oracle 11g compatibility: data browse and paging no longer fail with ORA-00933, paging now uses syntax supported by all versions",
+    "Fixed ORA-00911 caused by trailing semicolons and tables whose names start with an underscore (e.g. _report_xxx) failing to open"
+  ],
   "v2.0.15": [
     "The row-count summary of SQL query results no longer has a 10-second budget: the COUNT behind big JOINs and complex SQL now takes as long as it takes and the total still fills in (it used to silently disappear when it ran over 10 seconds, leaving nothing but page numbers in the pager)"
   ],
