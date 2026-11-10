@@ -702,8 +702,21 @@ const colLead = ref(0)
 const colEnd = ref(0)
 const colsSlice = computed(() => visibleColumns.value.slice(colLead.value, colEnd.value))
 const colWidthOf = (name) => colWidths.value[name] || defaultColWidth(name)
+// 横向滚动的宿主和纵向**不一定**是同一个容器：内层 .data-table-wrap 横向溢出（表比它宽），
+// 外层 .table-scroll 的 scrollWidth 却等于 clientWidth。而 scrollHost() 是按**纵向**溢出判断的，
+// 横向滚动时它返回外层（scrollLeft 恒 0）—— 列窗口于是永远停在最左边：横向滚进来的列只剩表头、
+// 单元格全空。与 TableDataView 同一处缺陷，横向单独判：谁真的滚过 / 谁真的横向溢出，就用谁。
+const colScrollHost = () => {
+  const w = tableWrapRef.value
+  const s = gridRef.value
+  if (w && w.scrollLeft > 0) return w
+  if (s && s.scrollLeft > 0) return s
+  if (w && w.scrollWidth > w.clientWidth) return w
+  if (s && s.scrollWidth > s.clientWidth) return s
+  return w || s
+}
 const syncColWindow = () => {
-  const host = scrollHost()
+  const host = colScrollHost()
   const total = visibleColumns.value.length
   if (!host || !total) { colLead.value = 0; colEnd.value = total; return }
   const vw = host.clientWidth || 0

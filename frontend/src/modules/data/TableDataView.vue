@@ -2374,13 +2374,29 @@ const COL_BUFFER_PX = 600   // 左右各留的缓冲（像素）
 const colLead = ref(0)
 const colEnd = ref(0)
 const visibleColsSlice = computed(() => visibleColumns.value.slice(colLead.value, colEnd.value))
+// 横向滚动的宿主和纵向**不一定**是同一个容器：内层 .data-table-wrap 横向溢出（table 比它宽），
+// 外层 .table-scroll 的 scrollWidth 却等于 clientWidth。而 scrollHost() 是按**纵向**溢出判断的，
+// 横向滚动时它返回外层（scrollLeft 恒 0）—— 列窗口于是永远停在最左边：横向滚进来的列只剩表头、
+// 单元格全空（用户报的「小屏最右列不显示、大屏正常」正是这个）。所以横向单独判：
+// 谁真的滚过 / 谁真的横向溢出，就用谁。
+const colScrollHost = () => {
+  const w = gridWrap.value
+  const s = gridRef.value
+  if (w && w.scrollLeft > 0) return w
+  if (s && s.scrollLeft > 0) return s
+  if (w && w.scrollWidth > w.clientWidth) return w
+  if (s && s.scrollWidth > s.clientWidth) return s
+  return w || s
+}
 const syncColWindow = () => {
   const cols = visibleColumns.value
   const total = cols.length
   if (!total) { colLead.value = 0; colEnd.value = total; return }
-  const host = scrollHost()
+  const host = colScrollHost()
   const sl = host ? host.scrollLeft : 0
   const vw = (host && host.clientWidth) || 0
+  // 页签在 display:none 期间量到 0：照 0 算会把窗口压成最左边几列，切回来若没有 resize 就一直窄
+  if (!vw) return
   const left = sl - COL_BUFFER_PX
   const right = sl + vw + COL_BUFFER_PX
   let x = 0
@@ -2416,7 +2432,7 @@ watch(gridWrap, (el) => {
 // 都是按 0 尺寸算的（甚至可能缓存成外层容器），切回来若不重来一遍，就可能一直读错容器的
 // scrollTop，窗口永不更新，表现就是「表格像卡死了」。MainView 在切换后立即广播一次、
 // 80ms 后再补一次（应付布局尚未稳定），这里跟着重解析一次即可。
-const onTabChangeResync = () => { forgetScrollHost(); syncViewport() }
+const onTabChangeResync = () => { forgetScrollHost(); syncViewport(); syncColWindow() }
 onMounted(() => window.addEventListener('dc-tab-change', onTabChangeResync))
 let resizeState = null
 let lastResizeAt = 0
