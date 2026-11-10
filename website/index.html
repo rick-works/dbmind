@@ -105,9 +105,13 @@
   nav {
     position: fixed; top: 0; left: 0; right: 0; z-index: 100;
     backdrop-filter: blur(14px);
-    background: var(--glass);
-    border-bottom: 1px solid var(--border);
+    /* 顶部与 Hero 同底色：不铺一条比下面更深的横带（浅色主题同理） */
+    background: transparent;
+    border-bottom: 1px solid transparent;
+    transition: background .25s ease, border-color .25s ease;
   }
+  /* 滚起来才补回玻璃底与分隔线：文字压在内容上仍看得清 */
+  nav.is-stuck { background: var(--glass); border-bottom-color: var(--border); }
   .nav-inner { display: flex; align-items: center; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
   .logo-mark { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: block; }
@@ -119,12 +123,13 @@
     background: linear-gradient(135deg, var(--primary), var(--primary-2));
     color: #fff !important; padding: 7px 18px; border-radius: 8px; font-weight: 600;
   }
-  /* 导航底部的渐变流光线（科技感细节） */
+  /* 导航底部的渐变流光线（科技感细节）：只在滚动后出现，顶部不画线 */
   nav::after {
     content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; pointer-events: none;
     background: linear-gradient(90deg, transparent 5%, rgba(79,140,255,.55) 35%, rgba(124,92,255,.55) 65%, transparent 95%);
-    opacity: .5;
+    opacity: 0; transition: opacity .25s ease;
   }
+  nav.is-stuck::after { opacity: .5; }
 
   /* ===== Hero ===== */
   header {
@@ -4497,6 +4502,14 @@ WHERE dt = :dt AND org = :org;</code></pre>
   const navItems = [...document.querySelectorAll('.nav-links a:not(.nav-cta)')]
   const setActive = (i) => navItems.forEach((a, j) => a.classList.toggle('active', j === i))
   setActive(0)
+  // 顶栏底色：页面顶部与 Hero 同底色（透明），滚出一点再补玻璃底；
+  // 文档独占视图的内部滚动容器不是 window，进视图就恒定为玻璃底。
+  const navEl = document.querySelector('nav')
+  const syncNavBg = () => {
+    const stuck = document.body.classList.contains('doc-only') || window.scrollY > 8
+    navEl.classList.toggle('is-stuck', stuck)
+  }
+  syncNavBg()
   const secIo = new IntersectionObserver((es) => {
     es.forEach(e => {
       if (!e.isIntersecting) return
@@ -4522,6 +4535,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
   const enterDocMode = () => {
     leaveVersionMode(true)
     document.body.classList.add('doc-only')
+    syncNavBg()
     setActive(6)
     // instant：平滑滚动在内容高度骤减时会停留在中途，面板顶部被顶栏盖住
     window.scrollTo({ top: 0, behavior: 'instant' })
@@ -4532,6 +4546,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
   }
   const exitDocMode = () => {
     document.body.classList.remove('doc-only')
+    syncNavBg()
     setActive(0)
   }
   // 版本模式：只显示版本区（导航「版本」进入，「首页」/logo 退出）
@@ -4577,6 +4592,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
   // 刷新一律回首页：不按 hash 直开文档/版本视图（进入视图时会清掉 URL hash）
   // 回到顶部时点亮「首页」（独占视图下保持各自点亮）
   window.addEventListener('scroll', () => {
+    syncNavBg()
     if (window.scrollY < 300) {
       if (document.body.classList.contains('doc-only')) setActive(6)
       else if (document.body.classList.contains('version-only')) setActive(5)
