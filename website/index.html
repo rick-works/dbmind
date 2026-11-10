@@ -226,6 +226,18 @@
   /* 紧贴上一区块的续篇区块：去掉上方留白，靠组内 48~64px 与上文连成一组 */
   .stats-sec { padding: 0 0 var(--sec-y); }
   .demo-sec { padding: 0 0 64px; }
+  /* 带底色的区块不再通栏：收成与内容同宽的一条圆角带子，星空留在它两侧 */
+  #workflow {
+    /* 小屏时两边留 16px，否则圆角会贴着屏幕边 */
+    max-width: min(var(--content), calc(100% - 32px)); margin: 0 auto;
+    background: rgba(15, 22, 38, .55);
+    /* 边框用 inset 阴影画：border 会占 1px 布局，把里面的内容挤得跟全站差 1px */
+    border-radius: 20px; box-shadow: inset 0 0 0 1px var(--border);
+  }
+  /* 卡片两侧让出 16px 时，内部缩进相应减到 8 —— 内容边线仍是 16 + 8 = 24，与全站一致 */
+  @media (max-width: 1168px) {
+    #workflow .wrap, .final .wrap { padding: 0 8px; }
+  }
 
   /* ===== 特性网格 ===== */
   /* 特性网格与下方编辑器演示是一组：底部只留 48，让「说的」和「看的」挨在一起 */
@@ -380,10 +392,13 @@
   /* ===== CTA ===== */
   .final {
     text-align: center; padding: calc(var(--sec-y) * 1.1) 0;
+    /* 与 #workflow 同一体型：内容同宽的圆角带子，背景半透明让星空透出来 */
+    max-width: min(var(--content), calc(100% - 32px)); margin: 0 auto;
     background:
       radial-gradient(500px 260px at 50% 0%, rgba(79, 140, 255, .16), transparent 70%),
-      rgba(10, 15, 26, .55);   /* 半透明：让星空从这一层底下透出来 */
-    border-top: 1px solid var(--border);
+      rgba(10, 15, 26, .55);
+    /* 同 #workflow：边框走 inset 阴影，不占布局 */
+    border-radius: 20px; box-shadow: inset 0 0 0 1px var(--border);
   }
   .final h2 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 14px; }
   .final p { color: var(--dim); margin-bottom: 34px; }
@@ -960,7 +975,7 @@
   </div>
 </section>
 
-<section id="workflow" style="background: rgba(15, 22, 38, .55); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+<section id="workflow">
   <div class="wrap">
     <h2 class="sec-title reveal" data-eyebrow="WORKFLOW">改数据的安全闭环</h2>
     <p class="sec-sub reveal">四个动作，把「手抖删库」挡在门外</p>
@@ -1005,19 +1020,6 @@
         </div>
       </div>
       <p class="sponsor-note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
-    </div>
-
-    <!-- 赞助者名单：数据在 website/sponsors.js（只改那个文件即可，本页不用动） -->
-    <div class="thanks reveal" id="thanks">
-      <div class="thanks-head">
-        <h3><span class="thanks-emoji">🙏</span>感谢这些朋友</h3>
-        <p class="thanks-sub">按最近一次支持排序。扫码时备注昵称就会出现在这里；不想具名，写「匿名」也一样记着。</p>
-      </div>
-      <!-- 名单由脚本填进来：没有数据时不摆一排假名字，只留一句实话 -->
-      <div id="thanksBody"></div>
-      <p class="thanks-howto">
-        想上榜？上面扫码时备注一句「DBmind」+ 你的昵称即可。也欢迎提 issue / PR —— 同样是支持。
-      </p>
     </div>
   </div>
 </section>

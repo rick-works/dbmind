@@ -6,7 +6,7 @@ const URL = 'file:///d:/develop/workspace/product/DBMind/website/index.html'
 const BLOCKS = [
   '.nav-inner', 'header .wrap', '.hero-shots .shots', '.marquee',
   '#features .sec-title', '#features .grid', '.more-strip',
-  '.demo', '.stats', '.flow', '.safe', '.final .wrap',
+  '.demo', '.stats', '.flow', '.safe', '#workflow .flow', '.final .wrap',
 ]
 
 // 量「内容边线」而不是 border-box：容器自带 24px padding，按内容框算才能和内部块直接比
