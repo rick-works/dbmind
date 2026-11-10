@@ -412,7 +412,9 @@
   .final {
     text-align: center; padding: calc(var(--sec-y) * 1.1) 24px;
     /* 与 #workflow 同一体型：宽 1072 的圆角带子，背景半透明让星空透出来 */
-    max-width: min(calc(var(--content) - 48px), calc(100% - 48px)); margin: 0 auto;
+    max-width: min(calc(var(--content) - 48px), calc(100% - 48px));
+    /* 与页脚之间留出呼吸空间：圆角带子的下沿不要贴着版权行，也别贴在分隔线上 */
+    margin: 0 auto clamp(44px, 5vw, 68px);
     background:
       radial-gradient(500px 260px at 50% 0%, var(--band-glow), transparent 70%),
       var(--band);
