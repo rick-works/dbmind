@@ -922,7 +922,7 @@
           <figure class="shot"><img src="images/shot-drivers-dark.png" alt="驱动管理：按连接类型自动下载 JDBC 驱动，可上传自有版本（深色主题）" loading="lazy"><figcaption data-i18n="shot.16">驱动管理 · 深色主题</figcaption></figure>
           <figure class="shot"><img src="images/shot-drivers-light.png" alt="驱动管理：按连接类型自动下载 JDBC 驱动，可上传自有版本（浅色主题）" loading="lazy"><figcaption data-i18n="shot.17">驱动管理 · 浅色主题</figcaption></figure>
           <figure class="shot"><img src="images/shot-models-dark.png" alt="AI 模型配置：多套服务并存，接口地址、模型名与温度随场景切换（深色主题）" loading="lazy"><figcaption data-i18n="shot.18">AI 模型配置 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-scripts-light.png" alt="脚本管理：常用 SQL 存成脚本，按库归类随时调出（浅色主题）" loading="lazy"><figcaption data-i18n="shot.19">脚本管理 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-scripts-dark.png" alt="脚本管理：常用 SQL 存成脚本，按库归类随时调出（深色主题）" loading="lazy"><figcaption data-i18n="shot.19">脚本管理 · 深色主题</figcaption></figure>
           <figure class="shot"><img src="images/shot-menu-conn-dark.png" alt="连接右键：新建查询、备份 / 还原、发送到 AI 等操作就地可达（深色主题）" loading="lazy"><figcaption data-i18n="shot.20">连接右键菜单 · 深色主题</figcaption></figure>
           <figure class="shot"><img src="images/shot-menu-table-dark.png" alt="表右键：查看数据、编辑结构、生成 SQL、导入导出与统计（深色主题）" loading="lazy"><figcaption data-i18n="shot.21">表右键菜单 · 深色主题</figcaption></figure>
           <figure class="shot"><img src="images/shot-menu-ai-dark.png" alt="右键把表发给 AI 助手，结合上下文继续提问（深色主题）" loading="lazy"><figcaption data-i18n="shot.22">表右键菜单 · 交给 AI 助手 · 深色主题</figcaption></figure>
@@ -3991,7 +3991,7 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-browser">对象浏览器</h2>
-        <figure class="doc-shot"><a href="images/shot-menu-conn-dark.png" target="_blank" rel="noopener"><img src="images/shot-menu-conn-dark.png" alt="连接右键：新建查询、备份还原、发送到 AI 等入口" loading="lazy" decoding="async"></a><figcaption>连接右键：常用动作就地可达</figcaption></figure>
+        <figure class="doc-shot"><a href="images/shot-browser-dark.png" target="_blank" rel="noopener"><img src="images/shot-browser-dark.png" alt="对象浏览器：连接 → 数据库 → 表 / 视图 / 存储过程 / 函数 / 触发器 / 事件，按引擎层级展开" loading="lazy" decoding="async"></a><figcaption>对象树：连接 → 数据库 → 表 / 视图 / 存储过程 / 函数 / 触发器 / 事件</figcaption></figure>
         <ul>
           <li><b>层级按引擎来</b>：连接 → 数据库 → Schema → 表 / 视图 / 存储过程 / 函数 / 触发器 / 事件；有 Schema 层的引擎（PostgreSQL、SQL Server、Oracle、Db2）多展开一层，没有的不会凭空造一层</li>
           <li><b>懒加载 + 悬停预取</b>：鼠标在某条连接上停一下，后台先把下次要用的库清单取好并缓存，点箭头时立刻出库名 —— 展开不再是「转圈等握手」</li>
@@ -4001,7 +4001,7 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-designer">表结构与对象</h2>
-<figure class="doc-shot"><a href="images/shot-menu-table-dark.png" target="_blank" rel="noopener"><img src="images/shot-menu-table-dark.png" alt="表右键：查看数据、编辑表结构、生成 SQL、导入导出与统计" loading="lazy" decoding="async"></a><figcaption>表右键：编辑表结构等操作就地可达</figcaption></figure>
+<figure class="doc-shot"><a href="images/shot-designer-dark.png" target="_blank" rel="noopener"><img src="images/shot-designer-dark.png" alt="编辑表结构：字段定义逐列可改，改动实时生成 ALTER 预览" loading="lazy" decoding="async"></a><figcaption>编辑表结构：字段定义逐列可改，下方实时生成 ALTER</figcaption></figure>
         <ul>
           <li><b>字段表直接改</b>：字段名、类型、长度 / 精度、可空、默认值、注释、索引，改完在下方实时生成 <code>ALTER</code> 语句</li>
           <li><b>先预览再执行</b>：生成的是完整脚本（改类型 / 加列 / 删列 / 改默认值 / 改注释 / 重建索引），确认无误才落库</li>
@@ -4075,7 +4075,6 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-snippets">SQL 片段库</h2>
-<figure class="doc-shot"><a href="images/shot-scripts-light.png" target="_blank" rel="noopener"><img src="images/shot-scripts-light.png" alt="脚本管理：常用 SQL 存成脚本，按库归类随时调出" loading="lazy" decoding="async"></a><figcaption>脚本管理：脚本与模板变量</figcaption></figure>
         <ul>
           <li>选中 SQL → 右键「保存片段」，命名保存（没选中就存全文）；不给名字时默认取首行前 30 字 —— 下拉里的「存为片段」按钮已去掉，同一个动作不留两个入口</li>
           <li>跨会话保留，最多 100 条；点顶部「片段」看列表，或右键「插入片段 »」挑一条：有选区就替换选区，否则插到光标处；「清空片段」在同个子菜单里</li>
@@ -4397,7 +4396,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
   "shot.16": "Drivers · dark",
   "shot.17": "Drivers · light",
   "shot.18": "AI models · dark",
-  "shot.19": "Scripts · light",
+  "shot.19": "Scripts · dark",
   "shot.20": "Connection menu · dark",
   "shot.21": "Table menu · dark",
   "shot.22": "Table menu · send to AI · dark"

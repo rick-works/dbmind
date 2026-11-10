@@ -71,7 +71,7 @@ Light and dark themes, switchable at any time.
 | **Task center**<br>history and timings | <img src="docs/images/tasks-light.png" width="330" alt="Task center (light)"> | <img src="docs/images/tasks-dark.png" width="330" alt="Task center (dark)"> |
 | **Drivers**<br>download or upload | <img src="docs/images/drivers-light.png" width="330" alt="Drivers (light)"> | <img src="docs/images/drivers-dark.png" width="330" alt="Drivers (dark)"> |
 | **AI models**<br>multi-model, temperature | — | <img src="docs/images/models-dark.png" width="330" alt="AI models (dark)"> |
-| **Scripts**<br>scripts and variables | <img src="docs/images/scripts-light.png" width="330" alt="Scripts (light)"> | — |
+| **Scripts**<br>scripts and variables | — | <img src="docs/images/scripts-dark.png" width="330" alt="Scripts (dark)"> |
 | **Table context menu**<br>common actions in place | — | <img src="docs/images/menu-table-dark.png" width="330" alt="Table context menu (dark)"> |
 
 ## AI, more than a chat box

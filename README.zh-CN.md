@@ -72,7 +72,7 @@
 | **任务中心**<br>历史任务与耗时 | <img src="docs/images/tasks-light.png" width="330" alt="任务中心（浅色）"> | <img src="docs/images/tasks-dark.png" width="330" alt="任务中心（深色）"> |
 | **驱动管理**<br>按需下载与上传 | <img src="docs/images/drivers-light.png" width="330" alt="驱动管理（浅色）"> | <img src="docs/images/drivers-dark.png" width="330" alt="驱动管理（深色）"> |
 | **AI 模型配置**<br>多模型、温度与用量 | — | <img src="docs/images/models-dark.png" width="330" alt="AI 模型配置（深色）"> |
-| **脚本管理**<br>脚本与模板变量 | <img src="docs/images/scripts-light.png" width="330" alt="脚本管理（浅色）"> | — |
+| **脚本管理**<br>脚本与模板变量 | — | <img src="docs/images/scripts-dark.png" width="330" alt="脚本管理（深色）"> |
 | **表右键菜单**<br>常用动作就地可达 | — | <img src="docs/images/menu-table-dark.png" width="330" alt="表右键菜单（深色）"> |
 
 ## AI，不只是聊天
