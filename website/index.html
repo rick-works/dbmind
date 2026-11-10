@@ -850,13 +850,16 @@
   html[data-theme="light"] .rel-tag.tag-major { color: #b45309; }
   html[data-theme="light"] .prod-badge { color: #b45309; }
 
-  /* 语言切换：与主题按钮同尺寸 */
+  /* 语言切换：一个图标按钮（与主题按钮同尺寸），图标跟着当前语言走 */
   .lang-toggle {
-    height: 34px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--border);
-    background: transparent; color: var(--dim); font-size: 12.5px; font-weight: 700;
-    letter-spacing: .4px; cursor: pointer; flex: none; font-family: inherit;
+    width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+    padding: 0; border-radius: 9px; border: 1px solid var(--border);
+    background: transparent; color: var(--dim); cursor: pointer; font-family: inherit;
     transition: color .2s, border-color .2s, background .2s;
   }
+  /* 中：一个「中」字；英：EN。两种字形大小分别调，视觉上才等重 */
+  .lang-toggle .lang-ic { font-size: 15px; font-weight: 700; line-height: 1; }
+  .lang-toggle .lang-ic.lat { font-size: 12px; font-weight: 700; letter-spacing: .3px; }
   .lang-toggle:hover { color: var(--text); border-color: var(--primary); background: rgba(148, 163, 184, .10); }
   html[data-lang="en"] .lang-toggle { color: var(--text); border-color: var(--primary); }
   /* 文档区目前只有中文，英文模式给一条明示 */
@@ -894,7 +897,7 @@
       <a href="#sponsor" data-i18n="nav.sponsor">赞助</a>
       <a href="#releases" data-i18n="nav.releases">版本</a>
       <a href="#docs" data-i18n="nav.docs">文档</a>
-      <button class="lang-toggle" id="langToggle" type="button" aria-label="切换到英文" title="中文 / English">中 / EN</button>
+      <button class="lang-toggle" id="langToggle" type="button" aria-label="切换到英文" title="Switch to English"><span class="lang-ic">中</span></button>
       <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换到浅色模式" title="切换深色 / 浅色">
         <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M4.4 4.4l1.6 1.6M18 18l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.4 19.6l1.6-1.6M18 6l1.6-1.6"/></svg>
         <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.3A8.6 8.6 0 1 1 9.7 3.5a6.9 6.9 0 0 0 10.8 10.8z"/></svg>
@@ -4444,8 +4447,13 @@ WHERE dt = :dt AND org = :org;</code></pre>
     }
     if (note) note.hidden = lang !== 'en';
     if (btn) {
-      btn.textContent = lang === 'en' ? 'EN / 中' : '中 / EN';
+      var ic = btn.querySelector('.lang-ic');
+      if (ic) {
+        ic.textContent = lang === 'en' ? 'EN' : '中';
+        ic.classList.toggle('lat', lang === 'en');
+      }
       btn.setAttribute('aria-label', lang === 'en' ? '切换到中文' : '切换到英文');
+      btn.setAttribute('title', lang === 'en' ? 'Switch to Chinese' : 'Switch to English');
     }
   }
 
