@@ -257,7 +257,7 @@
   }
   .sec-sub { text-align: center; color: var(--dim); margin: 16px 0 44px; font-size: 16px; }
   /* 紧贴上一区块的续篇区块：去掉上方留白，靠组内 48~64px 与上文连成一组 */
-  .stats-sec { padding: 0 0 var(--sec-y); }
+  .stats-sec { padding: 0 0 52px; }
   .demo-sec { padding: 0 0 64px; }
   /* 带底色的区块不再通栏：收成与内容同宽的一条圆角带子，星空留在它两侧 */
   #workflow {
@@ -273,8 +273,9 @@
   #workflow .wrap { max-width: none; padding: 0; }
 
   /* ===== 特性网格 ===== */
-  /* 特性网格与下方编辑器演示是一组：底部只留 48，让「说的」和「看的」挨在一起 */
-  #features { padding-bottom: 48px; }
+  /* 特性网格与下方编辑器演示是一组：底部只留 48，让「说的」和「看的」挨在一起；
+     上方留白由 .stats-sec 的下内边距提供，这里不再叠加一整个 --sec-y */
+  #features { padding-top: 0; padding-bottom: 48px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
   .feature {
     position: relative; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
