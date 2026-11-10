@@ -1,5 +1,9 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.0.18": [
+    "Wide tables no longer lose content on horizontal scroll: in a narrow window, scrolling to the right-hand columns used to show headers with blank cells underneath - the data now follows the column you scroll to (both data browse and the NoSQL data view)",
+    "The website has a new look: the app screenshot carousel now sits right in the hero, and the whole site is cleaner and lighter to load and scroll"
+  ],
   "v2.0.17": [
     "Template variables are now type-aware: literals match the target column - numbers against string columns get quoted automatically (no more NO_COMMON_TYPE on ClickHouse); the variable manager gains a Type column (auto/string/number/bool) for explicit override, and the fill-in dialog shows which type each variable will produce",
     "Update check now falls back between sources: when GitHub is unreachable (common on domestic networks) it retries via Gitee automatically, and only errors if both fail",
