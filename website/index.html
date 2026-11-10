@@ -105,9 +105,12 @@
     line-height: 1.25; font-weight: 800; letter-spacing: 1px;
   }
   h1 .grad {
-    background: linear-gradient(100deg, var(--primary) 10%, var(--primary-2) 55%, var(--accent) 95%);
+    background: linear-gradient(100deg, var(--primary) 10%, var(--primary-2) 40%, var(--accent) 70%, var(--primary) 100%);
+    background-size: 220% auto;
     -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: grad-shift 7s linear infinite;
   }
+  @keyframes grad-shift { to { background-position: 220% center; } }
   .cta-row { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
   .btn {
     display: inline-flex; align-items: center; gap: 8px;
@@ -127,16 +130,26 @@
   .btn-ghost { border: 1px solid var(--border); color: var(--text); background: rgba(255,255,255,.03); }
   .btn-ghost:hover { border-color: var(--primary); }
 
-  /* ===== 数据源跑马灯 ===== */
+  /* ===== 数据源无限跑马灯 ===== */
   .sources { padding: 0 0 48px; text-align: center; }
   .sources-label { font-size: 13px; color: var(--dim); letter-spacing: 2px; margin-bottom: 14px; }
-  .source-chips { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; max-width: 780px; margin: 0 auto; }
+  .marquee {
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+  }
+  .marquee-track { display: flex; width: max-content; animation: marquee 38s linear infinite; }
+  .marquee:hover .marquee-track { animation-play-state: paused; }
+  @keyframes marquee { to { transform: translateX(-50%); } }
+  .m-group { display: flex; gap: 10px; padding-right: 10px; }
   .chip {
     border: 1px solid var(--border); border-radius: 999px;
     padding: 5px 14px; font-size: 13.5px; color: var(--dim);
-    background: var(--card);
+    background: var(--card); white-space: nowrap;
+    transition: color .2s, border-color .2s, transform .2s;
   }
   .chip:nth-child(odd) { color: var(--text); }
+  .chip:hover { color: #fff; border-color: rgba(79, 140, 255, .55); transform: translateY(-2px); }
 
   /* ===== 区块通用 ===== */
   section { padding: 80px 0; }
@@ -146,10 +159,19 @@
   /* ===== 特性网格 ===== */
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
   .feature {
-    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    position: relative; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 28px 26px; transition: transform .2s, border-color .2s;
   }
-  .feature:hover { transform: translateY(-4px); border-color: rgba(79, 140, 255, .45); }
+  /* 悬停时 1px 渐变描边亮起（mask 技巧：只留边框环） */
+  .feature::before {
+    content: ""; position: absolute; inset: -1px; border-radius: var(--radius); padding: 1px;
+    background: linear-gradient(135deg, rgba(79,140,255,.8), rgba(124,92,255,.75) 50%, rgba(45,212,191,.6));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    opacity: 0; transition: opacity .25s; pointer-events: none;
+  }
+  .feature:hover { transform: translateY(-4px); border-color: rgba(79, 140, 255, .45); box-shadow: 0 14px 42px rgba(79, 140, 255, .13); }
+  .feature:hover::before { opacity: 1; }
   .feature .icon {
     width: 44px; height: 44px; border-radius: 11px; display: grid; place-items: center;
     margin-bottom: 16px; font-size: 21px;
@@ -692,15 +714,19 @@
 </script>
 
 <div class="sources reveal">
-  <div class="sources-label">— 开箱即用的数据源 —</div>
-  <div class="source-chips">
-    <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">PostgreSQL</span>
-    <span class="chip">人大金仓</span><span class="chip">Oracle</span><span class="chip">SQL Server</span>
-    <span class="chip">DB2</span><span class="chip">Derby</span><span class="chip">H2</span>
-    <span class="chip">达梦 DM</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
-    <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">Redis</span>
-    <span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
-    <span class="chip">更多接入中…</span>
+  <div class="sources-label">— 开箱即用的数据源 · 持续增加 —</div>
+  <div class="marquee">
+    <div class="marquee-track" id="marqueeTrack">
+      <div class="m-group">
+        <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">PostgreSQL</span>
+        <span class="chip">人大金仓</span><span class="chip">Oracle</span><span class="chip">SQL Server</span>
+        <span class="chip">DB2</span><span class="chip">Derby</span><span class="chip">H2</span>
+        <span class="chip">达梦 DM</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
+        <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">Redis</span>
+        <span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
+        <span class="chip">更多接入中…</span>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -3943,6 +3969,40 @@ WHERE dt = :dt AND org = :org;</code></pre>
     es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('on'); io.unobserve(e.target) } })
   }, { threshold: .12 })
   document.querySelectorAll('.reveal').forEach(el => io.observe(el))
+
+  // 数据源跑马灯：克隆一份 chips 拼在后面，translateX(-50%) 无缝循环
+  ;(() => {
+    const track = document.getElementById('marqueeTrack')
+    if (!track) return
+    track.appendChild(track.firstElementChild.cloneNode(true))
+  })()
+
+  // 数据卡数字滚动：进入视口后从 0 数到目标值（保留前后缀，如 <1s / 100万+ / 17+）
+  ;(() => {
+    const ease = t => 1 - Math.pow(1 - t, 3)
+    const animate = el => {
+      const m = el.textContent.trim().match(/^([^\d]*)([\d.]+)(.*)$/)
+      if (!m) return
+      const target = parseFloat(m[2])
+      const t0 = performance.now(), dur = 1400
+      const step = now => {
+        const p = Math.min(1, (now - t0) / dur)
+        el.textContent = m[1] + Math.round(target * ease(p)) + m[3]
+        if (p < 1) requestAnimationFrame(step)
+      }
+      requestAnimationFrame(step)
+    }
+    const stats = document.querySelector('.stats')
+    if (!stats) return
+    const so = new IntersectionObserver(es => {
+      es.forEach(e => {
+        if (!e.isIntersecting) return
+        e.target.querySelectorAll('.stat .n').forEach(animate)
+        so.unobserve(e.target)
+      })
+    }, { threshold: .4 })
+    so.observe(stats)
+  })()
 
   // 导航高亮：滚动到哪个区块，对应导航项点亮（顶部时点亮「首页」）
   // 值 = 导航项下标（首页0 功能1 工作流2 安全3 赞助4 版本5 文档6）
