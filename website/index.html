@@ -4,21 +4,42 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>DBmind — 给数据库装上「大脑」的 AI 数据库工作台</title>
+<script>
+/* 主题：在样式表生效前先落 data-theme，避免刷新时闪一下深色 */
+(function () {
+  try {
+    var saved = localStorage.getItem('dbmind-site-theme');
+    if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  } catch (e) {}
+})();
+</script>
 <link rel="icon" type="image/png" href="favicon.png">
 <meta name="description" content="DBmind：给数据库装上「大脑」—— AI 原生的多数据库管理平台。一个客户端管理所有数据库，AI 解释/优化/修错每一条 SQL，事务级数据编辑、千万级结果集秒开，本地运行，数据不出内网。" />
 <style>
   :root {
-    --bg: #070a13;
-    --bg-soft: #111827;
-    --card: #141c2b;
-    --border: rgba(148, 163, 184, .14);
-    --text: #e5eaf3;
-    --dim: #94a3b8;
-    --primary: #4f8cff;
-    --primary-2: #7c5cff;
+    --bg: #16171b;
+    --bg-soft: #1e1f24;
+    --card: #232429;
+    --border: rgba(255, 255, 255, .09);
+    --text: #eaebee;
+    --dim: #a3a7b0;
+    --primary: #5b8def;
+    --primary-2: #7c6bf0;
     --accent: #2dd4bf;
     --warn: #f59e0b;
     --danger: #f87171;
+    /* 玻璃层与遮罩：导航条、截图箭头、看大图。浅色主题下翻成白玻璃与浅遮罩 */
+    --glass: rgba(13, 13, 15, .74);
+    --veil: rgba(6, 6, 8, .92);
+    /* 半透明「带子」底色：数据带 / 赞助 / 底部 CTA —— 深色下让底纹透出来，浅色下是白玻璃 */
+    --band: rgba(20, 21, 25, .55);
+    --band-glow: rgba(255, 255, 255, .045);
+    --grid: rgba(255, 255, 255, .05);
+    --foot: rgba(18, 19, 23, .72);
+    --panel: rgba(255, 255, 255, .022);
+    --doc-p: #c3cbdb;
+    --doc-code: #a8c7ff;
+    --doc-tip: #b7e8e0;
     --radius: 14px;
     /* ===== 宽度体系：全站**只有一个**内容宽度 =====
        导航、hero、截图轮播、数字区、演示卡、特性网格、工作流、安全、赞助、版本、文档、页脚
@@ -32,9 +53,9 @@
     scroll-behavior: smooth;
     /* 深空底：三层极淡星云叠在近黑蓝上；body 透明，好让下面的星空层透出来 */
     background:
-      radial-gradient(1200px 820px at 12% -8%, rgba(79, 140, 255, .10), transparent 62%),
-      radial-gradient(1000px 720px at 88% -4%, rgba(124, 92, 255, .09), transparent 62%),
-      radial-gradient(900px 760px at 50% 108%, rgba(45, 212, 191, .055), transparent 68%),
+      radial-gradient(1200px 820px at 12% -8%, rgba(255, 255, 255, .045), transparent 62%),
+      radial-gradient(1000px 720px at 88% -4%, rgba(150, 160, 180, .035), transparent 62%),
+      radial-gradient(900px 760px at 50% 108%, rgba(115, 125, 145, .03), transparent 68%),
       var(--bg);
     background-attachment: fixed;
   }
@@ -84,15 +105,15 @@
   nav {
     position: fixed; top: 0; left: 0; right: 0; z-index: 100;
     backdrop-filter: blur(14px);
-    background: rgba(11, 15, 23, .72);
+    background: var(--glass);
     border-bottom: 1px solid var(--border);
   }
   .nav-inner { display: flex; align-items: center; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
   .logo-mark { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: block; }
   .nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14px; height: 60px; }
-  .nav-links a { color: #b9c3d6; font-weight: 500; transition: color .15s; }
-  .nav-links a:hover { color: #fff; }
+  .nav-links a { color: var(--dim); font-weight: 500; transition: color .15s; }
+  .nav-links a:hover { color: var(--text); }
   .nav-links a.active { color: var(--primary); font-weight: 700; }
   .nav-cta {
     background: linear-gradient(135deg, var(--primary), var(--primary-2));
@@ -112,12 +133,10 @@
   header::before {
     content: ""; position: absolute; inset: 0; pointer-events: none;
     background:
-      radial-gradient(600px 300px at 20% 0%, rgba(79, 140, 255, .16), transparent 70%),
-      radial-gradient(600px 300px at 80% 10%, rgba(124, 92, 255, .14), transparent 70%),
-      radial-gradient(500px 260px at 50% 100%, rgba(45, 212, 191, .08), transparent 70%),
-      linear-gradient(rgba(148, 163, 184, .055) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(148, 163, 184, .055) 1px, transparent 1px);
-    background-size: auto, auto, auto, 46px 46px, 46px 46px;
+      radial-gradient(600px 300px at 20% 0%, rgba(255, 255, 255, .05), transparent 70%),
+      radial-gradient(600px 300px at 80% 10%, rgba(150, 160, 180, .04), transparent 70%),
+      radial-gradient(500px 260px at 50% 100%, rgba(115, 125, 145, .03), transparent 70%);
+    background-size: auto, auto, auto;
     -webkit-mask-image: linear-gradient(#000 55%, transparent 98%);
     mask-image: linear-gradient(#000 55%, transparent 98%);
   }
@@ -125,12 +144,12 @@
   .orb { position: absolute; border-radius: 50%; filter: blur(72px); pointer-events: none; }
   .orb.a {
     width: 420px; height: 420px; top: -140px; left: 6%;
-    background: radial-gradient(circle, rgba(79, 140, 255, .32), transparent 70%);
+    background: radial-gradient(circle, rgba(255, 255, 255, .085), transparent 70%);
     animation: orb-drift-a 16s ease-in-out infinite alternate;
   }
   .orb.b {
     width: 460px; height: 460px; top: -60px; right: 4%;
-    background: radial-gradient(circle, rgba(124, 92, 255, .3), transparent 70%);
+    background: radial-gradient(circle, rgba(150, 160, 180, .075), transparent 70%);
     animation: orb-drift-b 20s ease-in-out infinite alternate;
   }
   @keyframes orb-drift-a { to { transform: translate(70px, 50px) scale(1.1); } }
@@ -210,7 +229,7 @@
     transition: color .2s, border-color .2s, transform .2s;
   }
   .chip:nth-child(odd) { color: var(--text); }
-  .chip:hover { color: #fff; border-color: rgba(79, 140, 255, .55); transform: translateY(-2px); }
+  .chip:hover { color: var(--text); border-color: rgba(91, 141, 239, .55); transform: translateY(-2px); }
 
   /* ===== 区块通用 ===== */
   section { padding: var(--sec-y) 0; }
@@ -232,7 +251,7 @@
        小屏时也留 24 边距，边线才跟其它块重合 */
     max-width: min(calc(var(--content) - 48px), calc(100% - 48px)); margin: 0 auto;
     padding-left: 24px; padding-right: 24px;
-    background: rgba(15, 22, 38, .55);
+    background: var(--band);
     /* 边框用 inset 阴影画：border 会占 1px 布局，把里面的内容挤得跟全站差 1px */
     border-radius: 20px; box-shadow: inset 0 0 0 1px var(--border);
   }
@@ -291,7 +310,7 @@
     overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
     max-width: var(--content); margin: 0 auto;   /* 与全站同宽（1120），不再单独收窄 */
   }
-  .demo-bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); background: #0d1420; }
+  .demo-bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); background: var(--bg-soft); }
   .dot { width: 11px; height: 11px; border-radius: 50%; }
   .demo-title { margin-left: 10px; font-size: 13px; color: var(--dim); }
   .prod-badge {
@@ -364,7 +383,7 @@
     display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0;
     text-align: center; max-width: var(--content); margin: 0 auto;
     border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
-    background: linear-gradient(180deg, rgba(79, 140, 255, .07), rgba(124, 92, 255, .03) 55%, transparent);
+    background: linear-gradient(180deg, var(--band-glow), transparent 78%);
   }
   /* 顶部一道渐增高光，让数据带在暗底上「浮」起来（与导航底部流光线同一语言） */
   .stats::before {
@@ -395,8 +414,8 @@
     /* 与 #workflow 同一体型：宽 1072 的圆角带子，背景半透明让星空透出来 */
     max-width: min(calc(var(--content) - 48px), calc(100% - 48px)); margin: 0 auto;
     background:
-      radial-gradient(500px 260px at 50% 0%, rgba(79, 140, 255, .16), transparent 70%),
-      rgba(10, 15, 26, .55);
+      radial-gradient(500px 260px at 50% 0%, var(--band-glow), transparent 70%),
+      var(--band);
     /* 同 #workflow：边框走 inset 阴影，不占布局 */
     border-radius: 20px; box-shadow: inset 0 0 0 1px var(--border);
   }
@@ -405,7 +424,7 @@
   .final p { color: var(--dim); margin-bottom: 34px; }
 
   footer { border-top: 1px solid var(--border); padding: 34px 0; color: var(--dim); font-size: 13.5px; }
-  .foot-inner { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+  .foot-inner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 
   /* ===== 版本时间线 ===== */
   #releases { padding: 88px 0; }
@@ -488,8 +507,8 @@
     /* 底色不再用实心 --card：这么大的面积用实色会显得沉，
        改成淡蓝渐变 + 半透明，星空从底下虚化透出来（与 workflow / 底部 CTA 同一套语言） */
     background:
-      radial-gradient(700px 220px at 50% -12%, rgba(79, 140, 255, .18), transparent 68%),
-      rgba(26, 36, 55, .42);
+      radial-gradient(700px 220px at 50% -12%, var(--band-glow), transparent 68%),
+      var(--band);
     border: 1px solid rgba(148, 163, 184, .18); border-radius: 18px;
     backdrop-filter: blur(3px);
     padding: 44px 48px 48px;
@@ -630,8 +649,8 @@
   }
   .doc-main h2:first-of-type { margin-top: 0; }
   .doc-main h2:first-of-type { margin-top: 0; }
-  .doc-main p { color: #c3cbdb; margin-bottom: 14px; font-size: 14px; line-height: 1.85; }
-  .doc-main ul { margin: 8px 0 18px; padding-left: 20px; color: #c3cbdb; font-size: 14px; line-height: 1.85; }
+  .doc-main p { color: var(--doc-p); margin-bottom: 14px; font-size: 14px; line-height: 1.85; }
+  .doc-main ul { margin: 8px 0 18px; padding-left: 20px; color: var(--doc-p); font-size: 14px; line-height: 1.85; }
   .doc-main li { margin-bottom: 9px; }
   .doc-main li::marker { color: var(--primary); }
   .doc-main li b { color: var(--text); font-weight: 600; }
@@ -652,7 +671,7 @@
     box-shadow: 0 16px 36px -20px rgba(0, 0, 0, .95);
   }
   .doc-shot a { display: block; line-height: 0; }
-  .doc-shot img { width: 100%; height: auto; display: block; }
+  .doc-shot img { width: 100%; height: auto; display: block; aspect-ratio: 1080 / 675; }
   .doc-shot figcaption {
     padding: 9px 14px; font-size: 12.5px; line-height: 1.6; color: var(--dim);
     border-top: 1px solid var(--border); background: rgba(148, 163, 184, .04);
@@ -661,10 +680,10 @@
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
     padding: 16px 20px; overflow-x: auto; margin: 14px 0 18px; font-size: 13.5px; line-height: 1.8;
   }
-  .doc-main pre code { background: none; border: none; padding: 0; color: #a8c7ff; }
+  .doc-main pre code { background: none; border: none; padding: 0; color: var(--doc-code); }
   .doc-main .tip {
     background: rgba(45, 212, 191, .07); border: 1px solid rgba(45, 212, 191, .25);
-    border-radius: var(--radius); padding: 13px 18px; margin: 14px 0 20px; font-size: 14px; color: #b7e8e0;
+    border-radius: var(--radius); padding: 13px 18px; margin: 14px 0 20px; font-size: 14px; color: var(--doc-tip);
   }
   .doc-main .tip b { color: var(--accent); }
   .doc-main .dlink { color: var(--primary); }
@@ -718,16 +737,17 @@
   .shots-viewport { overflow: hidden; border-radius: var(--radius); border: 1px solid var(--border); background: var(--card); box-shadow: 0 24px 60px rgba(0,0,0,.35); }
   .shots-track { display: flex; transition: transform .55s cubic-bezier(.22,.61,.36,1); }
   .shot { flex: 0 0 100%; min-width: 0; margin: 0; cursor: zoom-in; }
-  .shot img { display: block; width: 100%; height: auto; }
+  /* 固定 16:10 占位：懒加载的图没到之前高度不塌陷，切图与滚动都不跳 */
+  .shot img { display: block; width: 100%; height: auto; aspect-ratio: 1080 / 675; }
   .shot figcaption { padding: 12px 18px; font-size: 14px; color: var(--dim); border-top: 1px solid var(--border); text-align: center; }
-  .shot-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border); background: rgba(11,15,23,.72); color: var(--text); font-size: 22px; line-height: 1; cursor: pointer; z-index: 2; transition: background .2s, border-color .2s; backdrop-filter: blur(4px); padding: 0; }
+  .shot-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border); background: var(--glass); color: var(--text); font-size: 22px; line-height: 1; cursor: pointer; z-index: 2; transition: background .2s, border-color .2s; backdrop-filter: blur(4px); padding: 0; }
   .shot-nav:hover { background: rgba(79,140,255,.28); border-color: var(--primary); }
   .shot-nav.prev { left: 14px; }
   .shot-nav.next { right: 14px; }
   .shot-dots { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; padding: 0 12px; }
   .shot-dots button { width: 8px; height: 8px; padding: 0; border-radius: 4px; border: none; background: var(--dim); opacity: .35; cursor: pointer; transition: all .25s; }
   .shot-dots button.on { opacity: 1; background: var(--primary); width: 22px; }
-  .shot-viewer { position: fixed; inset: 0; z-index: 90; display: none; align-items: center; justify-content: center; background: rgba(4,7,12,.9); backdrop-filter: blur(6px); padding: 4vh 4vw; cursor: zoom-out; }
+  .shot-viewer { position: fixed; inset: 0; z-index: 90; display: none; align-items: center; justify-content: center; background: var(--veil); backdrop-filter: blur(6px); padding: 4vh 4vw; cursor: zoom-out; }
   .shot-viewer.open { display: flex; }
   .shot-viewer img { max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
 
@@ -750,7 +770,7 @@
   ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, .22); border-radius: 999px; border: 2px solid var(--bg); }
   ::-webkit-scrollbar-thumb:hover { background: rgba(79, 140, 255, .45); }
   /* 页脚 */
-  footer { background: linear-gradient(180deg, transparent, rgba(17, 24, 39, .85)); }
+  footer { background: linear-gradient(180deg, transparent, var(--foot) 42%); }
   .foot-left { display: flex; flex-direction: column; gap: 2px; }
   .foot-sub { font-size: 12.5px; color: rgba(148, 163, 184, .65); }
   .foot-links { display: flex; gap: 10px; align-items: center; }
@@ -761,8 +781,88 @@
     background: rgba(255, 255, 255, .03);
     transition: color .15s, border-color .15s, box-shadow .15s;
   }
-  .foot-links a:hover { color: #fff; border-color: rgba(79, 140, 255, .55); box-shadow: 0 4px 18px rgba(79, 140, 255, .18); }
+  .foot-links a:hover { color: var(--text); border-color: rgba(91, 141, 239, .55); box-shadow: 0 4px 18px rgba(91, 141, 239, .18); }
   .foot-links svg { width: 15px; height: 15px; fill: currentColor; flex-shrink: 0; }
+
+  /* ===== 浅色模式 =====
+     深色底：近黑中性（不再是深蓝）；浅色底：白玻璃 + 极淡蓝。
+     切换按钮在导航最右，选择记在 localStorage，首屏由 <head> 里的内联脚本先落 data-theme，避免闪白/闪黑。 */
+  html[data-theme="light"] {
+    --bg: #f4f5f7;
+    --bg-soft: #eceef1;
+    --card: #ffffff;
+    --border: rgba(17, 21, 28, .10);
+    --text: #14161b;
+    --dim: #5c6270;
+    --primary: #2f6bdc;
+    --primary-2: #6b4be0;
+    --accent: #0f9488;
+    --glass: rgba(255, 255, 255, .80);
+    --veil: rgba(18, 20, 26, .72);
+    --band: rgba(255, 255, 255, .72);
+    --band-glow: rgba(47, 107, 220, .06);
+    --grid: rgba(17, 21, 28, .05);
+  }
+  html[data-theme="light"] {
+    background:
+      radial-gradient(1200px 820px at 12% -8%, rgba(47, 107, 220, .06), transparent 62%),
+      radial-gradient(1000px 720px at 88% -4%, rgba(120, 130, 150, .05), transparent 62%),
+      var(--bg);
+    background-attachment: fixed;
+  }
+  html[data-theme="light"] {
+    --foot: rgba(255, 255, 255, .78);
+    --panel: #ffffff;
+    --doc-p: #3b414d;
+    --doc-code: #1d4ed8;
+    --doc-tip: #0f766e;
+  }
+  /* 星点只在深色下成立，浅色关掉 */
+  html[data-theme="light"] body::before,
+  html[data-theme="light"] body::after { display: none; }
+  /* 深色下用黑投影，浅色下换成灰投影，卡片才不至于「糊在白纸上」 */
+  html[data-theme="light"] .demo,
+  html[data-theme="light"] .shots-viewport { box-shadow: 0 18px 44px rgba(17, 21, 28, .10); }
+  html[data-theme="light"] .stats { background: linear-gradient(180deg, var(--band-glow), transparent 78%); }
+  /* 演示区语法高亮：深色那套在白底上偏亮，浅色给一组深一点的 */
+  html[data-theme="light"] .kw { color: #2f6bdc; }
+  html[data-theme="light"] .str { color: #0b8a52; }
+  html[data-theme="light"] .cm { color: #7b8496; }
+  html[data-theme="light"] .num { color: #b26a10; }
+  html[data-theme="light"] .rel-tag.tag-patch { color: #15803d; }
+  html[data-theme="light"] .rel-tag.tag-minor { color: #1d4ed8; }
+  html[data-theme="light"] .rel-tag.tag-major { color: #b45309; }
+  html[data-theme="light"] .prod-badge { color: #b45309; }
+
+  /* 语言切换：与主题按钮同尺寸 */
+  .lang-toggle {
+    height: 34px; padding: 0 10px; border-radius: 9px; border: 1px solid var(--border);
+    background: transparent; color: var(--dim); font-size: 12.5px; font-weight: 700;
+    letter-spacing: .4px; cursor: pointer; flex: none; font-family: inherit;
+    transition: color .2s, border-color .2s, background .2s;
+  }
+  .lang-toggle:hover { color: var(--text); border-color: var(--primary); background: rgba(148, 163, 184, .10); }
+  html[data-lang="en"] .lang-toggle { color: var(--text); border-color: var(--primary); }
+  /* 文档区目前只有中文，英文模式给一条明示 */
+  .docs-lang-note {
+    margin: 0 0 20px; padding: 10px 14px; border-radius: 10px;
+    border: 1px dashed var(--border); background: var(--bg-soft);
+    color: var(--dim); font-size: 13px;
+  }
+
+  /* ===== 主题切换按钮 ===== */
+  .theme-toggle {
+    width: 34px; height: 34px; flex: none; display: grid; place-items: center;
+    border-radius: 9px; border: 1px solid var(--border); background: transparent;
+    color: var(--dim); cursor: pointer; padding: 0;
+    transition: color .2s, border-color .2s, background .2s;
+  }
+  .theme-toggle:hover { color: var(--text); border-color: var(--primary); background: rgba(148, 163, 184, .10); }
+  .theme-toggle svg { width: 17px; height: 17px; display: block; }
+  /* 深色显示太阳（点了变浅色），浅色显示月亮（点了变深色） */
+  .theme-toggle .i-moon { display: none; }
+  html[data-theme="light"] .theme-toggle .i-sun { display: none; }
+  html[data-theme="light"] .theme-toggle .i-moon { display: block; }
 </style>
 </head>
 <body>
@@ -771,14 +871,18 @@
   <div class="wrap nav-inner">
     <a class="logo" href="#"><img class="logo-mark" src="logo.png" alt="DBmind" />DBmind</a>
     <div class="nav-links">
-      <a href="#">首页</a>
-      <a href="#features">功能</a>
-      <a href="#workflow">工作流</a>
-      <a href="#security">安全</a>
-      <a href="#sponsor">赞助</a>
-      <a href="#releases">版本</a>
-      <a href="#docs">文档</a>
-      <a href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener" class="nav-cta">立即下载</a>
+      <a href="#" data-i18n="nav.home">首页</a>
+      <a href="#features" data-i18n="nav.features">功能</a>
+      <a href="#workflow" data-i18n="nav.workflow">工作流</a>
+      <a href="#security" data-i18n="nav.security">安全</a>
+      <a href="#sponsor" data-i18n="nav.sponsor">赞助</a>
+      <a href="#releases" data-i18n="nav.releases">版本</a>
+      <a href="#docs" data-i18n="nav.docs">文档</a>
+      <button class="lang-toggle" id="langToggle" type="button" aria-label="切换到英文" title="中文 / English">中 / EN</button>
+      <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换到浅色模式" title="切换深色 / 浅色">
+        <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M4.4 4.4l1.6 1.6M18 18l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.4 19.6l1.6-1.6M18 6l1.6-1.6"/></svg>
+        <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.3A8.6 8.6 0 1 1 9.7 3.5a6.9 6.9 0 0 0 10.8 10.8z"/></svg>
+      </button>
     </div>
   </div>
 </nav>
@@ -787,10 +891,10 @@
   <div class="orb a"></div>
   <div class="orb b"></div>
   <div class="wrap">
-    <h1>给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的<br class="m-br" />每一个数据库</h1>
+    <h1 data-i18n-html="hero.title">给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的<br class="m-br" />每一个数据库</h1>
     <div class="cta-row">
-      <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener">免费下载</a>
-      <a class="btn btn-ghost" href="#features">看看能做什么 ↓</a>
+      <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener" data-i18n="hero.download">免费下载</a>
+      <a class="btn btn-ghost" href="#features" data-i18n="hero.more">看看能做什么 ↓</a>
     </div>
   </div>
 </header>
@@ -800,28 +904,28 @@
     <div class="shots reveal" id="shotsBox">
       <div class="shots-viewport">
         <div class="shots-track" id="shotsTrack">
-          <figure class="shot"><img src="images/shot-home-dark.png" alt="工作台：连接树、最近查询、查询趋势与数据工具一屏尽览（深色主题）"><figcaption>工作台 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-home-light.png" alt="工作台：连接树、最近查询、查询趋势与数据工具一屏尽览（浅色主题）" loading="lazy"><figcaption>工作台 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-sql-dark.png" alt="SQL 编辑器：补全、格式化、分块执行，结果与行数耗时并列（深色主题）" loading="lazy"><figcaption>SQL 编辑器与结果 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-table-dark.png" alt="表数据浏览：高级搜索、列类型提示、分页与导出（深色主题）" loading="lazy"><figcaption>表数据浏览 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-ai-dark.png" alt="AI 助手问数：自然语言出图，附数据概况、结论与追问建议（深色主题）" loading="lazy"><figcaption>AI 助手问数 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-sync-dark.png" alt="数据传输：源与目标配对，四步走完选对象、选项与替换（深色主题）" loading="lazy"><figcaption>数据传输 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-sync-light.png" alt="数据传输：源与目标配对，四步走完选对象、选项与替换（浅色主题）" loading="lazy"><figcaption>数据传输 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-compare-dark.png" alt="结构与数据对比：源目标并排选库，差异逐项列出（深色主题）" loading="lazy"><figcaption>结构与数据对比 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-compare-light.png" alt="结构与数据对比：源目标并排选库，差异逐项列出（浅色主题）" loading="lazy"><figcaption>结构与数据对比 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-monitor-dark.png" alt="服务监控：连接数、QPS、命中率与会话清单，可疑会话就地终止（深色主题）" loading="lazy"><figcaption>服务监控 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-monitor-light.png" alt="服务监控：连接数、QPS、命中率与会话清单，可疑会话就地终止（浅色主题）" loading="lazy"><figcaption>服务监控 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-users-dark.png" alt="用户与权限：用户清单、超级用户标记，编辑 / 授权 / 删除就地操作（深色主题）" loading="lazy"><figcaption>用户与权限 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-users-light.png" alt="用户与权限：用户清单、超级用户标记，编辑 / 授权 / 删除就地操作（浅色主题）" loading="lazy"><figcaption>用户与权限 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-tasks-dark.png" alt="任务中心：数据传输与对比的历史任务、耗时与状态一目了然（深色主题）" loading="lazy"><figcaption>任务中心 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-tasks-light.png" alt="任务中心：数据传输与对比的历史任务、耗时与状态一目了然（浅色主题）" loading="lazy"><figcaption>任务中心 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-drivers-dark.png" alt="驱动管理：按连接类型自动下载 JDBC 驱动，可上传自有版本（深色主题）" loading="lazy"><figcaption>驱动管理 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-drivers-light.png" alt="驱动管理：按连接类型自动下载 JDBC 驱动，可上传自有版本（浅色主题）" loading="lazy"><figcaption>驱动管理 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-models-dark.png" alt="AI 模型配置：多套服务并存，接口地址、模型名与温度随场景切换（深色主题）" loading="lazy"><figcaption>AI 模型配置 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-scripts-light.png" alt="脚本管理：常用 SQL 存成脚本，按库归类随时调出（浅色主题）" loading="lazy"><figcaption>脚本管理 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-menu-conn-dark.png" alt="连接右键：新建查询、备份 / 还原、发送到 AI 等操作就地可达（深色主题）" loading="lazy"><figcaption>连接右键菜单 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-menu-table-dark.png" alt="表右键：查看数据、编辑结构、生成 SQL、导入导出与统计（深色主题）" loading="lazy"><figcaption>表右键菜单 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-menu-ai-dark.png" alt="右键把表发给 AI 助手，结合上下文继续提问（深色主题）" loading="lazy"><figcaption>表右键菜单 · 交给 AI 助手 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-home-dark.png" alt="工作台：连接树、最近查询、查询趋势与数据工具一屏尽览（深色主题）"><figcaption data-i18n="shot.1">工作台 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-home-light.png" alt="工作台：连接树、最近查询、查询趋势与数据工具一屏尽览（浅色主题）" loading="lazy"><figcaption data-i18n="shot.2">工作台 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-sql-dark.png" alt="SQL 编辑器：补全、格式化、分块执行，结果与行数耗时并列（深色主题）" loading="lazy"><figcaption data-i18n="shot.3">SQL 编辑器与结果 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-table-dark.png" alt="表数据浏览：高级搜索、列类型提示、分页与导出（深色主题）" loading="lazy"><figcaption data-i18n="shot.4">表数据浏览 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-ai-dark.png" alt="AI 助手问数：自然语言出图，附数据概况、结论与追问建议（深色主题）" loading="lazy"><figcaption data-i18n="shot.5">AI 助手问数 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-sync-dark.png" alt="数据传输：源与目标配对，四步走完选对象、选项与替换（深色主题）" loading="lazy"><figcaption data-i18n="shot.6">数据传输 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-sync-light.png" alt="数据传输：源与目标配对，四步走完选对象、选项与替换（浅色主题）" loading="lazy"><figcaption data-i18n="shot.7">数据传输 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-compare-dark.png" alt="结构与数据对比：源目标并排选库，差异逐项列出（深色主题）" loading="lazy"><figcaption data-i18n="shot.8">结构与数据对比 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-compare-light.png" alt="结构与数据对比：源目标并排选库，差异逐项列出（浅色主题）" loading="lazy"><figcaption data-i18n="shot.9">结构与数据对比 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-monitor-dark.png" alt="服务监控：连接数、QPS、命中率与会话清单，可疑会话就地终止（深色主题）" loading="lazy"><figcaption data-i18n="shot.10">服务监控 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-monitor-light.png" alt="服务监控：连接数、QPS、命中率与会话清单，可疑会话就地终止（浅色主题）" loading="lazy"><figcaption data-i18n="shot.11">服务监控 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-users-dark.png" alt="用户与权限：用户清单、超级用户标记，编辑 / 授权 / 删除就地操作（深色主题）" loading="lazy"><figcaption data-i18n="shot.12">用户与权限 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-users-light.png" alt="用户与权限：用户清单、超级用户标记，编辑 / 授权 / 删除就地操作（浅色主题）" loading="lazy"><figcaption data-i18n="shot.13">用户与权限 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-tasks-dark.png" alt="任务中心：数据传输与对比的历史任务、耗时与状态一目了然（深色主题）" loading="lazy"><figcaption data-i18n="shot.14">任务中心 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-tasks-light.png" alt="任务中心：数据传输与对比的历史任务、耗时与状态一目了然（浅色主题）" loading="lazy"><figcaption data-i18n="shot.15">任务中心 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-drivers-dark.png" alt="驱动管理：按连接类型自动下载 JDBC 驱动，可上传自有版本（深色主题）" loading="lazy"><figcaption data-i18n="shot.16">驱动管理 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-drivers-light.png" alt="驱动管理：按连接类型自动下载 JDBC 驱动，可上传自有版本（浅色主题）" loading="lazy"><figcaption data-i18n="shot.17">驱动管理 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-models-dark.png" alt="AI 模型配置：多套服务并存，接口地址、模型名与温度随场景切换（深色主题）" loading="lazy"><figcaption data-i18n="shot.18">AI 模型配置 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-scripts-light.png" alt="脚本管理：常用 SQL 存成脚本，按库归类随时调出（浅色主题）" loading="lazy"><figcaption data-i18n="shot.19">脚本管理 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-menu-conn-dark.png" alt="连接右键：新建查询、备份 / 还原、发送到 AI 等操作就地可达（深色主题）" loading="lazy"><figcaption data-i18n="shot.20">连接右键菜单 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-menu-table-dark.png" alt="表右键：查看数据、编辑结构、生成 SQL、导入导出与统计（深色主题）" loading="lazy"><figcaption data-i18n="shot.21">表右键菜单 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-menu-ai-dark.png" alt="右键把表发给 AI 助手，结合上下文继续提问（深色主题）" loading="lazy"><figcaption data-i18n="shot.22">表右键菜单 · 交给 AI 助手 · 深色主题</figcaption></figure>
         </div>
       </div>
       <button class="shot-nav prev" id="shotPrev" aria-label="上一张">&#8249;</button>
@@ -876,20 +980,38 @@
   });
   go(0); restart();
 })();
+
+/* 深色 / 浅色切换：只改 html[data-theme]，样式全在 CSS 里；选择记在 localStorage */
+(function () {
+  var root = document.documentElement;
+  var btn = document.getElementById('themeToggle');
+  if (!btn) return;
+  function label () {
+    btn.setAttribute('aria-label', root.getAttribute('data-theme') === 'light' ? '切换到深色模式' : '切换到浅色模式');
+  }
+  label();
+  btn.addEventListener('click', function () {
+    var next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    if (next === 'light') root.setAttribute('data-theme', 'light');
+    else root.removeAttribute('data-theme');
+    try { localStorage.setItem('dbmind-site-theme', next); } catch (e) {}
+    label();
+  });
+})();
 </script>
 
 <div class="sources reveal">
-  <div class="sources-label">— 开箱即用的数据源 · 持续增加 —</div>
+  <div class="sources-label" data-i18n="sources.label">— 开箱即用的数据源 · 持续增加 —</div>
   <div class="marquee">
     <div class="marquee-track" id="marqueeTrack">
       <div class="m-group">
         <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">PostgreSQL</span>
-        <span class="chip">人大金仓</span><span class="chip">Oracle</span><span class="chip">SQL Server</span>
+        <span class="chip" data-i18n="chip.kingbase">人大金仓</span><span class="chip">Oracle</span><span class="chip">SQL Server</span>
         <span class="chip">DB2</span><span class="chip">Derby</span><span class="chip">H2</span>
-        <span class="chip">达梦 DM</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
+        <span class="chip" data-i18n="chip.dm">达梦 DM</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
         <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">Redis</span>
         <span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
-        <span class="chip">更多接入中…</span>
+        <span class="chip" data-i18n="chip.more">更多接入中…</span>
       </div>
     </div>
   </div>
@@ -898,65 +1020,66 @@
 <section class="stats-sec">
   <div class="wrap">
     <div class="stats reveal">
-      <div class="stat"><div class="n">17+</div><div class="t">数据源驱动开箱即用</div></div>
-      <div class="stat"><div class="n">18×</div><div class="t">结果集传输压缩比</div></div>
-      <div class="stat"><div class="n">100万+</div><div class="t">行 / 分钟 · 大表实测</div></div>
-      <div class="stat"><div class="n">&lt;1s</div><div class="t">千万级表首屏响应</div></div>
+      <div class="stat"><div class="n">17+</div><div class="t" data-i18n="stat.1">数据源驱动开箱即用</div></div>
+      <div class="stat"><div class="n">18×</div><div class="t" data-i18n="stat.2">结果集传输压缩比</div></div>
+      <div class="stat"><div class="n">100万+</div><div class="t" data-i18n="stat.3">行 / 分钟 · 大表实测</div></div>
+      <div class="stat"><div class="n">&lt;1s</div><div class="t" data-i18n="stat.4">千万级表首屏响应</div></div>
     </div>
   </div>
 </section>
 
 <section id="features">
   <div class="wrap">
-    <h2 class="sec-title reveal" data-eyebrow="FEATURES">为「每天写 SQL 的人」打造</h2>
-    <p class="sec-sub reveal">每个功能都冲着你每天真会做的事来 —— 用法细节，文档里逐条说清</p>
+    <h2 class="sec-title reveal" data-eyebrow="FEATURES" data-i18n="feat.title">为「每天写 SQL 的人」打造</h2>
+    <p class="sec-sub reveal" data-i18n="feat.sub">每个功能都冲着你每天真会做的事来 —— 用法细节，文档里逐条说清</p>
     <div class="grid">
       <div class="feature reveal">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8l-4 4 4 4"/><path d="M15 8l4 4-4 4"/><path d="M13.5 5.5l-3 13"/></svg></div>
-        <h3>智能 SQL 编辑器</h3>
-        <p>VS Code 同款内核：补全、格式化、分块执行、执行历史、模板变量 —— 大脚本也能条理清楚地跑。</p>
-        <a class="doc-link" href="#d-editor">查看文档 →</a>
+        <h3 data-i18n="feat.editor.t">智能 SQL 编辑器</h3>
+        <p data-i18n="feat.editor.d">VS Code 同款内核：补全、格式化、分块执行、执行历史、模板变量 —— 大脚本也能条理清楚地跑。</p>
+        <a class="doc-link" href="#d-editor" data-i18n="common.seeDocs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4l1.7 4.3L17 10l-4.3 1.7L11 16l-1.7-4.3L5 10l4.3-1.7z"/><path d="M17.5 15l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9z"/></svg></div>
-        <h3>AI 全程加持</h3>
-        <p>解释、优化、修错、自主排查；AI 写的 SQL 先看执行计划、试跑一次再落地，数据不出你的网络。</p>
-        <a class="doc-link" href="#d-ai-data">查看文档 →</a>
+        <h3 data-i18n="feat.ai.t">AI 全程加持</h3>
+        <p data-i18n="feat.ai.d">解释、优化、修错、自主排查；AI 写的 SQL 先看执行计划、试跑一次再落地，数据不出你的网络。</p>
+        <a class="doc-link" href="#d-ai-data" data-i18n="common.seeDocs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5c0 3.3-3.6 6-8 6-.9 0-1.8-.1-2.6-.3L5 19.5l1.3-3C4.9 15.4 4 13.6 4 11.5 4 8.2 7.6 5.5 12 5.5s8 2.7 8 6z"/><path d="M9.5 11.5v2M12 9.8v3.7M14.5 11v2.5"/></svg></div>
-        <h3>智能问数</h3>
-        <p>一句中文直接问数：AI 挑表、写 SQL、真跑一遍，给出数字、图表与结论，追问延续上下文。</p>
-        <a class="doc-link" href="#d-ask">查看文档 →</a>
+        <h3 data-i18n="feat.ask.t">智能问数</h3>
+        <p data-i18n="feat.ask.d">一句中文直接问数：AI 挑表、写 SQL、真跑一遍，给出数字、图表与结论，追问延续上下文。</p>
+        <a class="doc-link" href="#d-ask" data-i18n="common.seeDocs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4.5V9h-4.5"/></svg></div>
-        <h3>事务模式</h3>
-        <p>一键开启，写语句不再自动提交：改完自查、随时回滚、确认后才对其他会话可见。</p>
-        <a class="doc-link" href="#d-tx">查看文档 →</a>
+        <h3 data-i18n="feat.tx.t">事务模式</h3>
+        <p data-i18n="feat.tx.d">一键开启，写语句不再自动提交：改完自查、随时回滚、确认后才对其他会话可见。</p>
+        <a class="doc-link" href="#d-tx" data-i18n="common.seeDocs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4.5" width="12" height="12" rx="2"/><path d="M3.5 9h12M8.5 4.5v12"/><path d="M17.5 18.5l3.2-3.2 1.8 1.8-3.2 3.2-2.4.6z"/></svg></div>
-        <h3>结果集直接编辑</h3>
-        <p>双击单元格改值、一次提交，WHERE 自动生成；过期缓冲自动作废，绝不改错行。</p>
-        <a class="doc-link" href="#d-grid">查看文档 →</a>
+        <h3 data-i18n="feat.edit.t">结果集直接编辑</h3>
+        <p data-i18n="feat.edit.d">双击单元格改值、一次提交，WHERE 自动生成；过期缓冲自动作废，绝不改错行。</p>
+        <a class="doc-link" href="#d-grid" data-i18n="common.seeDocs">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13.5 3.5L6.5 13.5h4l-1 7 7-10h-4l1-7z"/></svg></div>
-        <h3>千万级结果集秒开</h3>
-        <p>虚拟滚动 + 服务端分页 + 压缩传输（4.2MB → 233KB），大 JOIN 也是 1 秒见数。</p>
-        <a class="doc-link" href="#d-grid">查看文档 →</a>
+        <h3 data-i18n="feat.million.t">千万级结果集秒开</h3>
+        <p data-i18n="feat.million.d">虚拟滚动 + 服务端分页 + 压缩传输（4.2MB → 233KB），大 JOIN 也是 1 秒见数。</p>
+        <a class="doc-link" href="#d-grid" data-i18n="common.seeDocs">查看文档 →</a>
       </div>
     </div>
-    <div class="more-label reveal">还有这些能力，都在文档里</div>
+    <div class="more-label reveal" data-i18n="feat.moreLabel">还有这些能力，都在文档里</div>
     <div class="more-strip reveal">
-      <a class="more-item" href="#d-designer"><span class="mi">🧱</span><b>表结构编辑</b>执行前预览完整 ALTER</a>
-      <a class="more-item" href="#d-users"><span class="mi">🧑‍💼</span><b>用户与权限</b>精确预览 GRANT 差量</a>
-      <a class="more-item" href="#d-monitor"><span class="mi">📈</span><b>服务监控</b>可疑会话就地终止</a>
-      <a class="more-item" href="#d-er"><span class="mi">🗺️</span><b>ER 关系图</b>自动推断一键导出</a>
-      <a class="more-item" href="#d-compare"><span class="mi">🔀</span><b>对比与传输</b>跨环境搬数据不拼脚本</a>
-      <a class="more-item" href="#d-pivot"><span class="mi">📊</span><b>透视与导出</b>CSV / Excel / JSON</a>
-      <a class="more-item" href="#d-drivers"><span class="mi">🔌</span><b>驱动与运维</b>备份还原 · 测试数据</a>
+      <a class="more-item" href="#d-designer"><span class="mi">🧱</span><b data-i18n="more.designer">表结构编辑</b><span data-i18n="more.designer.d">执行前预览完整 ALTER</span></a>
+      <a class="more-item" href="#d-users"><span class="mi">🧑‍💼</span><b data-i18n="more.users">用户与权限</b><span data-i18n="more.users.d">精确预览 GRANT 差量</span></a>
+      <a class="more-item" href="#d-monitor"><span class="mi">📈</span><b data-i18n="more.monitor">服务监控</b><span data-i18n="more.monitor.d">可疑会话就地终止</span></a>
+      <a class="more-item" href="#d-er"><span class="mi">🗺️</span><b data-i18n="more.er">ER 关系图</b><span data-i18n="more.er.d">自动推断一键导出</span></a>
+      <a class="more-item" href="#d-compare"><span class="mi">🔀</span><b data-i18n="more.compare">对比与传输</b><span data-i18n="more.compare.d">跨环境搬数据不拼脚本</span></a>
+      <a class="more-item" href="#d-pivot"><span class="mi">📊</span><b data-i18n="more.pivot">透视与导出</b><span data-i18n="more.pivot.d">CSV / Excel / JSON</span></a>
+      <a class="more-item" href="#d-drivers"><span class="mi">🔌</span><b data-i18n="more.drivers">驱动与运维</b><span data-i18n="more.drivers.d">备份还原 · 测试数据</span></a>
+      <a class="more-item" href="#d-quality"><span class="mi">✅</span><b data-i18n="more.quality">数据质量</b><span data-i18n="more.quality.d">规则扫描 · 报告导出</span></a>
     </div>
   </div>
 </section>
@@ -1004,49 +1127,49 @@
 
 <section id="workflow">
   <div class="wrap">
-    <h2 class="sec-title reveal" data-eyebrow="WORKFLOW">改数据的安全闭环</h2>
-    <p class="sec-sub reveal">四个动作，把「手抖删库」挡在门外</p>
+    <h2 class="sec-title reveal" data-eyebrow="WORKFLOW" data-i18n="flow.title">改数据的安全闭环</h2>
+    <p class="sec-sub reveal" data-i18n="flow.sub">四个动作，把「手抖删库」挡在门外</p>
     <div class="flow">
-      <div class="step reveal"><h3>开启事务</h3><p>写语句不再自动提交，编辑器独占这条会话，改了随时反悔。</p></div>
-      <div class="step reveal"><h3>改 &amp; 自查</h3><p>双击单元格直接改，或跑 UPDATE；同一会话立即能看到结果。</p></div>
-      <div class="step reveal"><h3>回滚 或 提交</h3><p>不满意一键回滚，什么都没发生；确认后提交，其他会话才可见。</p></div>
-      <div class="step reveal"><h3>全程留痕</h3><p>每个事务动作进审计历史；关闭页签前还会提醒未提交的事务。</p></div>
+      <div class="step reveal"><h3 data-i18n="flow.1t">开启事务</h3><p data-i18n="flow.1d">写语句不再自动提交，编辑器独占这条会话，改了随时反悔。</p></div>
+      <div class="step reveal"><h3 data-i18n="flow.2t">改 &amp; 自查</h3><p data-i18n="flow.2d">双击单元格直接改，或跑 UPDATE；同一会话立即能看到结果。</p></div>
+      <div class="step reveal"><h3 data-i18n="flow.3t">回滚 或 提交</h3><p data-i18n="flow.3d">不满意一键回滚，什么都没发生；确认后提交，其他会话才可见。</p></div>
+      <div class="step reveal"><h3 data-i18n="flow.4t">全程留痕</h3><p data-i18n="flow.4d">每个事务动作进审计历史；关闭页签前还会提醒未提交的事务。</p></div>
     </div>
   </div>
 </section>
 
 <section id="security">
   <div class="wrap">
-    <h2 class="sec-title reveal" data-eyebrow="SECURITY">生产库保护，默认就位</h2>
-    <p class="sec-sub reveal">连接标记为生产环境的那一刻，防线自动升起</p>
+    <h2 class="sec-title reveal" data-eyebrow="SECURITY" data-i18n="sec.title">生产库保护，默认就位</h2>
+    <p class="sec-sub reveal" data-i18n="sec.sub">连接标记为生产环境的那一刻，防线自动升起</p>
     <div class="safe">
-      <div class="safe-item reveal"><span class="si">🔒</span><div><h4>生产保护默认开启</h4><p>标注为生产的库，所有改动数据的操作（执行脚本、改表结构、编辑数据、导入/同步/还原）默认一律拦下，查询不受影响；开发 / 测试 / 未标注的库照常。确需临时改生产数据时可一键关闭。</p></div></div>
-      <div class="safe-item reveal"><span class="si">🏷️</span><div><h4>PROD 标记外显</h4><p>页签、下拉、树全程可见，连错库这件事从源头消失。</p></div></div>
-      <div class="safe-item reveal"><span class="si">✋</span><div><h4>写操作二次确认</h4><p>PROD 连接上的 INSERT / UPDATE / DROP 先预览影响，确认才执行。</p></div></div>
-      <div class="safe-item reveal"><span class="si">⏱️</span><div><h4>超时与行数预算</h4><p>单语句超时、返回行数上限，误点 SELECT * 也不会拖死客户端。</p></div></div>
-      <div class="safe-item reveal"><span class="si">📜</span><div><h4>执行审计</h4><p>执行历史带耗时与状态，事务动作全留痕，事后可追溯。</p></div></div>
-      <div class="safe-item reveal"><span class="si">🧾</span><div><h4>AI 发了什么，写在明面上</h4><p>只发你的问题、用到的那几张表的表结构，以及每张表 <b>1 行</b>样例值（截到 24 字符）；整表数据、结果集、连接密码与 API Key 都不发。没有中转服务器，请求从本机直连你配的模型端点。<a href="#d-ai-data" style="color: var(--primary)">逐项看清单 →</a></p></div></div>
+      <div class="safe-item reveal"><span class="si">🔒</span><div><h4 data-i18n="sec.1t">生产保护默认开启</h4><p data-i18n="sec.1d">标注为生产的库，所有改动数据的操作（执行脚本、改表结构、编辑数据、导入/同步/还原）默认一律拦下，查询不受影响；开发 / 测试 / 未标注的库照常。确需临时改生产数据时可一键关闭。</p></div></div>
+      <div class="safe-item reveal"><span class="si">🏷️</span><div><h4 data-i18n="sec.2t">PROD 标记外显</h4><p data-i18n="sec.2d">页签、下拉、树全程可见，连错库这件事从源头消失。</p></div></div>
+      <div class="safe-item reveal"><span class="si">✋</span><div><h4 data-i18n="sec.3t">写操作二次确认</h4><p data-i18n="sec.3d">PROD 连接上的 INSERT / UPDATE / DROP 先预览影响，确认才执行。</p></div></div>
+      <div class="safe-item reveal"><span class="si">⏱️</span><div><h4 data-i18n="sec.4t">超时与行数预算</h4><p data-i18n="sec.4d">单语句超时、返回行数上限，误点 SELECT * 也不会拖死客户端。</p></div></div>
+      <div class="safe-item reveal"><span class="si">📜</span><div><h4 data-i18n="sec.5t">执行审计</h4><p data-i18n="sec.5d">执行历史带耗时与状态，事务动作全留痕，事后可追溯。</p></div></div>
+      <div class="safe-item reveal"><span class="si">🧾</span><div><h4 data-i18n="sec.6t">AI 发了什么，写在明面上</h4><p data-i18n-html="sec.6d">只发你的问题、用到的那几张表的表结构，以及每张表 <b>1 行</b>样例值（截到 24 字符）；整表数据、结果集、连接密码与 API Key 都不发。没有中转服务器，请求从本机直连你配的模型端点。<a href="#d-ai-data" style="color: var(--primary)">逐项看清单 →</a></p></div></div>
     </div>
   </div>
 </section>
 
 <section id="sponsor">
   <div class="wrap sponsor-wrap">
-    <h2 class="sec-title reveal" data-eyebrow="SPONSOR">请作者喝杯咖啡</h2>
-    <p class="sec-sub reveal">DBmind 完全免费、开源，不联网收集任何数据 —— 用着顺手的话，可以请作者喝一杯</p>
+    <h2 class="sec-title reveal" data-eyebrow="SPONSOR" data-i18n="sponsor.title">请作者喝杯咖啡</h2>
+    <p class="sec-sub reveal" data-i18n="sponsor.sub">DBmind 完全免费、开源，不联网收集任何数据 —— 用着顺手的话，可以请作者喝一杯</p>
     <div class="sponsor-card reveal">
       <div class="sponsor-emoji">☕</div>
       <div class="qr-row">
         <div class="qr-card">
           <img src="sponsor-wechat.png" alt="微信赞赏码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
-          <span class="qr-label">微信</span>
+          <span class="qr-label" data-i18n="sponsor.wechat">微信</span>
         </div>
         <div class="qr-card">
           <img src="sponsor-alipay.png" alt="支付宝收款码" onerror="this.parentNode.classList.add('noimg'); this.remove()">
-          <span class="qr-label">支付宝</span>
+          <span class="qr-label" data-i18n="sponsor.alipay">支付宝</span>
         </div>
       </div>
-      <p class="sponsor-note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
+      <p class="sponsor-note" data-i18n="sponsor.note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
     </div>
   </div>
 </section>
@@ -3574,6 +3697,7 @@
           <a href="#d-conn">创建第一个连接</a>
           <a href="#d-sql">执行第一条 SQL</a>
           <a href="#d-clients">四种用法：桌面 / Web / CLI / MCP</a>
+          <a href="#d-mcp">MCP 服务（给 AI 客户端用）</a>
         </div>
         <div class="group">
           <div class="gt">核心工作流</div>
@@ -3598,6 +3722,7 @@
           <a href="#d-vars">模板变量</a>
           <a href="#d-snippets">SQL 片段库</a>
           <a href="#d-pivot">数据透视</a>
+          <a href="#d-quality">数据质量</a>
           <a href="#d-export">导出与传输</a>
           <a href="#d-compare">数据对比与传输</a>
           <a href="#d-backup">备份与还原</a>
@@ -3606,6 +3731,8 @@
         <div class="group">
           <div class="gt">安全与运维</div>
           <a href="#d-security">安全护栏</a>
+          <a href="#d-mask">数据脱敏</a>
+          <a href="#d-settings">设置中心</a>
           <a href="#d-drivers">驱动管理</a>
           <a href="#d-audit">执行审计</a>
         </div>
@@ -3622,8 +3749,9 @@
       </nav>
 
       <main class="doc-main">
+        <div class="docs-lang-note" id="docsLangNote" hidden>The documentation is currently available in Chinese only.</div>
         <h2 id="d-what">什么是 DBmind？</h2>
-        <figure class="doc-shot"><a href="images/home-dark.png" target="_blank" rel="noopener"><img src="images/home-dark.png" alt="首页：左侧连接树、右侧脚本页签，一个窗口管完所有库" loading="lazy" decoding="async"></a><figcaption>首页：左侧连接树、右侧脚本页签，一个窗口管完所有库</figcaption></figure>
+<figure class="doc-shot"><a href="images/shot-home-dark.png" target="_blank" rel="noopener"><img src="images/shot-home-dark.png" alt="工作台：左侧连接树，右侧最近查询、查询趋势与数据工具" loading="lazy" decoding="async"></a><figcaption>工作台：左侧连接树，右侧最近查询、查询趋势与数据工具</figcaption></figure>
         <p><b>DBmind = Database + Mind</b>：给数据库装上「大脑」的统一管理工作台。它把连接管理、SQL 编辑、数据表格、AI 助手、事务与安全护栏放进同一个客户端，开箱即用。</p>
         <p>DBmind 不绑定某一种数据库：MySQL、PostgreSQL、Oracle、SQL Server、ClickHouse、Redis、MongoDB、达梦、人大金仓等 17+ 种数据源共用一套操作习惯 —— 学一次，到处用。</p>
         <div class="tip"><b>数据边界</b>：本地运行、默认不联网；AI 默认关闭，只在你配好模型之后才工作 —— 它到底带走了什么，逐项写在 <a class="dlink" href="#d-ai-data">AI 会把什么发给模型</a>，不是一句「我们重视隐私」。</div>
@@ -3738,8 +3866,31 @@ dbmind setting list           # 读写设置</code></pre>
 
         <div class="tip"><b>不用装 JDK</b>：自带的 <code>jre/</code> 会被四个端自动采用（版本 ≥17 才用）；只有把 exe 挪出安装目录、或想指定别的运行时，才需要设 <code>DBMIND_JAVA</code>。</div>
 
+        <h2 id="d-mcp">MCP 服务（给 AI 客户端用）</h2>
+        <p>DBmind 除了自带 AI 助手，还能把「连接 + 查库」这两件事以 <b>MCP（Model Context Protocol）</b>工具的形式交给外部 AI 客户端：Claude Desktop、Cursor、Codex 都能直接查你本地的库。走的是 stdio，不监听端口，也不需要联网中转。</p>
+        <p>在客户端的 MCP 配置里加一段即可（<code>command</code> 换成你自己的安装路径，客户端内可一键复制）：</p>
+<pre><code>{ "mcpServers": { "dbmind": { "command": "&lt;DBmind 安装目录&gt;/dbmind-mcp.exe" } } }</code></pre>
+        <p>Codex 写在 <code>~/.codex/config.toml</code>：<code>[mcp_servers.dbmind]</code> + <code>command = '...'</code>。重启客户端后，AI 就能看到下面这 10 个工具：</p>
+        <ul>
+          <li><code>dbmind_list_connections</code> 列出已配置的连接（不含口令），拿到 id 给其它工具用</li>
+          <li><code>dbmind_list_types</code> 列出支持的数据源类型与运行时能力</li>
+          <li><code>dbmind_list_databases</code> 列出连接上的库；连接已绑库时附带模式清单</li>
+          <li><code>dbmind_list_tables</code> 列出某个库下的表与视图（未绑库时必须带上库名）</li>
+          <li><code>dbmind_search_tables</code> 按关键字模糊搜表 / 视图，最多 50 条</li>
+          <li><code>dbmind_describe_table</code> 看表结构：列名、类型、可空、主键、默认值</li>
+          <li><code>dbmind_execute_query</code> 执行 SQL；默认只读，行数与超时受设置页限制</li>
+          <li><code>dbmind_cancel_query</code> 用 executionId 取消正在跑的查询</li>
+          <li><code>dbmind_list_history</code> 看近期查询历史（含失败与取消）</li>
+          <li><code>dbmind_server_info</code> 看服务版本、AI 写入 / 生产保护等开关状态</li>
+        </ul>
+        <ul>
+          <li><b>默认只读</b>：要写数据得给进程加 <code>--allow-write</code>，加上之后仍然受「只读连接 / 生产保护 / 危险语句拦截」三道闸门约束，开关在 <a class="dlink" href="#d-settings">设置 → 安全与会话</a></li>
+          <li><b>命中脱敏规则的列</b>返回摘要或密文，并标出 <code>maskedColumns</code>，见 <a class="dlink" href="#d-mask">数据脱敏</a></li>
+          <li><b>改完立即生效</b>：设置页的「默认连接 / 默认库 / 单次最大行数（默认 2000）/ 默认超时（默认 30 秒）/ 三类工具开关」存在后端，MCP 壳每次调用现读，不用重启客户端</li>
+        </ul>
+
         <h2 id="d-editor">SQL 编辑器</h2>
-        <figure class="doc-shot"><a href="images/sql-editor-dark.png" target="_blank" rel="noopener"><img src="images/sql-editor-dark.png" alt="SQL 编辑器：补全、格式化、分块执行，结果与消息分栏" loading="lazy" decoding="async"></a><figcaption>SQL 编辑器：补全、格式化、分块执行，结果与消息分栏</figcaption></figure>
+<figure class="doc-shot"><a href="images/shot-sql-dark.png" target="_blank" rel="noopener"><img src="images/shot-sql-dark.png" alt="SQL 编辑器：补全、格式化、分块执行，结果与行数耗时并列" loading="lazy" decoding="async"></a><figcaption>SQL 编辑器：补全、格式化、分块执行，结果与行数耗时并列</figcaption></figure>
         <ul>
           <li><b>上下文补全</b>：按光标位置提示表 / 列 / 关键字，库结构变更后实时刷新；补全只在需要时弹，不打断输入</li>
           <li><b>分块执行</b>：光标停在哪条语句就只跑哪条；有选区跑选区；「执行全部」按分号切块依次跑，<b>每段独立计时</b>，慢在哪一段一眼看出</li>
@@ -3770,7 +3921,7 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-ai">AI 助手</h2>
-        <figure class="doc-shot"><a href="images/ai-assistant-dark.png" target="_blank" rel="noopener"><img src="images/ai-assistant-dark.png" alt="AI 助手：解释 / 优化 / 修错 / 诊断，给出的 SQL 可先看执行计划" loading="lazy" decoding="async"></a><figcaption>AI 助手：解释 / 优化 / 修错 / 诊断，给出的 SQL 可先看执行计划</figcaption></figure>
+<figure class="doc-shot"><a href="images/shot-ai-dark.png" target="_blank" rel="noopener"><img src="images/shot-ai-dark.png" alt="AI 助手的对话与产物：结论、数据概况、建议追问" loading="lazy" decoding="async"></a><figcaption>AI 助手：结论、数据概况与建议追问</figcaption></figure>
         <ul>
           <li><b>六大动作</b>：解释、优化、改写、修错、诊断、自由对话 —— 选中 SQL 就能一键让它动手，修错会自动带上完整错误上下文，结果直接回填编辑器</li>
           <li><b>自主排查</b>：打开开关，它自己调工具查库 —— 巡检表结构、给出该加的索引、看同步与备份状态、只读试跑一遍；多轮能接着上一轮的结论往下做，问两张表就展开两张</li>
@@ -3817,6 +3968,7 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-grid">结果表格与数据编辑</h2>
+        <figure class="doc-shot"><a href="images/shot-table-dark.png" target="_blank" rel="noopener"><img src="images/shot-table-dark.png" alt="表数据浏览：高级搜索、列类型提示、分页与导出" loading="lazy" decoding="async"></a><figcaption>表数据浏览：搜索、分页与导出</figcaption></figure>
         <ul>
           <li><b>虚拟滚动</b>：百万行丝滑滚动不卡顿，单元格完整内容悬浮查看；列宽可一键自适应（<code>Alt+Shift+A</code>）</li>
           <li><b>双击改值</b>：改动先进缓冲、不立刻发请求；底栏汇总「改了几行」，确认后一次批量提交，<code>Ctrl+Z</code> 可逐步回退</li>
@@ -3839,6 +3991,7 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-browser">对象浏览器</h2>
+        <figure class="doc-shot"><a href="images/shot-menu-conn-dark.png" target="_blank" rel="noopener"><img src="images/shot-menu-conn-dark.png" alt="连接右键：新建查询、备份还原、发送到 AI 等入口" loading="lazy" decoding="async"></a><figcaption>连接右键：常用动作就地可达</figcaption></figure>
         <ul>
           <li><b>层级按引擎来</b>：连接 → 数据库 → Schema → 表 / 视图 / 存储过程 / 函数 / 触发器 / 事件；有 Schema 层的引擎（PostgreSQL、SQL Server、Oracle、Db2）多展开一层，没有的不会凭空造一层</li>
           <li><b>懒加载 + 悬停预取</b>：鼠标在某条连接上停一下，后台先把下次要用的库清单取好并缓存，点箭头时立刻出库名 —— 展开不再是「转圈等握手」</li>
@@ -3848,7 +4001,7 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-designer">表结构与对象</h2>
-        <figure class="doc-shot"><a href="images/table-designer-dark.png" target="_blank" rel="noopener"><img src="images/table-designer-dark.png" alt="表结构编辑：字段、索引、注释在表格里改，下方实时生成 ALTER" loading="lazy" decoding="async"></a><figcaption>表结构编辑：字段、索引、注释在表格里改，下方实时生成 ALTER</figcaption></figure>
+<figure class="doc-shot"><a href="images/shot-menu-table-dark.png" target="_blank" rel="noopener"><img src="images/shot-menu-table-dark.png" alt="表右键：查看数据、编辑表结构、生成 SQL、导入导出与统计" loading="lazy" decoding="async"></a><figcaption>表右键：编辑表结构等操作就地可达</figcaption></figure>
         <ul>
           <li><b>字段表直接改</b>：字段名、类型、长度 / 精度、可空、默认值、注释、索引，改完在下方实时生成 <code>ALTER</code> 语句</li>
           <li><b>先预览再执行</b>：生成的是完整脚本（改类型 / 加列 / 删列 / 改默认值 / 改注释 / 重建索引），确认无误才落库</li>
@@ -3860,7 +4013,7 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-users">用户与权限</h2>
-        <figure class="doc-shot"><a href="images/users-dark.png" target="_blank" rel="noopener"><img src="images/users-dark.png" alt="用户管理：用户 / 角色清单与分层权限矩阵，勾选即预览 GRANT / REVOKE" loading="lazy" decoding="async"></a><figcaption>用户管理：用户 / 角色清单与分层权限矩阵，勾选即预览 GRANT / REVOKE</figcaption></figure>
+<figure class="doc-shot"><a href="images/shot-users-dark.png" target="_blank" rel="noopener"><img src="images/shot-users-dark.png" alt="用户与权限：用户清单、超级用户标记，编辑 / 授权 / 删除就地操作" loading="lazy" decoding="async"></a><figcaption>用户与权限：清单与就地操作</figcaption></figure>
         <ul>
           <li><b>按引擎适配</b>：MySQL / PostgreSQL / SQL Server / Oracle / ClickHouse / Doris / H2 等给出各自的用户与角色清单；外部认证的引擎（Db2、Derby）如实提示不可在这里管理，而不是给一张空表</li>
           <li><b>增删改都在界面上</b>：新建用户 / 角色、改密码、删除，语句由方言生成；删除前提示会影响哪些对象</li>
@@ -3871,7 +4024,7 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-monitor">监控与运维</h2>
-        <figure class="doc-shot"><a href="images/monitor-dark.png" target="_blank" rel="noopener"><img src="images/monitor-dark.png" alt="服务监控：会话、锁与库级指标，可疑会话就地终止" loading="lazy" decoding="async"></a><figcaption>服务监控：会话、锁与库级指标，可疑会话就地终止</figcaption></figure>
+<figure class="doc-shot"><a href="images/shot-monitor-dark.png" target="_blank" rel="noopener"><img src="images/shot-monitor-dark.png" alt="服务监控：连接数、QPS、命中率与会话清单" loading="lazy" decoding="async"></a><figcaption>服务监控：会话与实时指标</figcaption></figure>
         <ul>
           <li><b>服务监控</b>：当前会话、锁等待与库级指标集中显示，可疑会话可就地终止；覆盖 MySQL / MariaDB / PostgreSQL / 金仓 / SQL Server / ClickHouse / Doris，其余引擎如实返回「不支持 + 原因」</li>
           <li><b>备份 / 还原</b>：按引擎原生工具导出与恢复（默认值、字符集、对象范围可配），进度与逐行日志在任务中心；失败时日志里能直接看到是哪一句报的错</li>
@@ -3881,6 +4034,7 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-tasks">任务中心</h2>
+        <figure class="doc-shot"><a href="images/shot-tasks-dark.png" target="_blank" rel="noopener"><img src="images/shot-tasks-dark.png" alt="任务中心：数据传输与对比的历史任务、耗时与状态" loading="lazy" decoding="async"></a><figcaption>任务中心：历史任务与耗时</figcaption></figure>
         <p>凡是「跑起来要等」的活都进任务中心：导出、导入、整库转储、数据对比、数据传输、备份 / 还原、生成测试数据。</p>
         <ul>
           <li><b>后台执行</b>：关掉弹窗、切到别的页签都不会中断；完成后系统通知，失败给原因</li>
@@ -3901,7 +4055,6 @@ dbmind setting list           # 读写设置</code></pre>
         </ul>
 
         <h2 id="d-er">ER 关系图</h2>
-        <figure class="doc-shot"><a href="images/er-diagram-dark.png" target="_blank" rel="noopener"><img src="images/er-diagram-dark.png" alt="ER 关系图：命名约定 + 外键推断，可拖拽布局并导出 PNG / SVG" loading="lazy" decoding="async"></a><figcaption>ER 关系图：命名约定 + 外键推断，可拖拽布局并导出 PNG / SVG</figcaption></figure>
         <ul>
           <li>库节点右键「查看 ER 图」：按命名约定（<code>_id</code> / <code>_no</code> / <code>_code</code> 等）与真实外键推断表间关系，没有外键的库也能画出骨架</li>
           <li><b>两种来源分开标</b>：真实外键优先，命名推断的连线标明置信度 —— 图好看不等于关系成立，哪条是猜的写清楚</li>
@@ -3922,7 +4075,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-snippets">SQL 片段库</h2>
-        <figure class="doc-shot"><a href="images/scripts-dark.png" target="_blank" rel="noopener"><img src="images/scripts-dark.png" alt="脚本管理：常用 SQL 存成片段，随时调出" loading="lazy" decoding="async"></a><figcaption>脚本管理：常用 SQL 存成片段，随时调出</figcaption></figure>
+<figure class="doc-shot"><a href="images/shot-scripts-light.png" target="_blank" rel="noopener"><img src="images/shot-scripts-light.png" alt="脚本管理：常用 SQL 存成脚本，按库归类随时调出" loading="lazy" decoding="async"></a><figcaption>脚本管理：脚本与模板变量</figcaption></figure>
         <ul>
           <li>选中 SQL → 右键「保存片段」，命名保存（没选中就存全文）；不给名字时默认取首行前 30 字 —— 下拉里的「存为片段」按钮已去掉，同一个动作不留两个入口</li>
           <li>跨会话保留，最多 100 条；点顶部「片段」看列表，或右键「插入片段 »」挑一条：有选区就替换选区，否则插到光标处；「清空片段」在同个子菜单里</li>
@@ -3937,8 +4090,17 @@ WHERE dt = :dt AND org = :org;</code></pre>
           <li>分组结果最多保留 2000 组、下钻明细取前 10 列：超过就明确告诉你被截断，而不是悄悄少显示几行</li>
         </ul>
 
+        <h2 id="d-quality">数据质量</h2>
+        <p>在首页「数据工具」点「质量规则 / 质量分析」，或从顶栏「数据治理」进同一个弹窗（页签：敏感数据 / 数据容量 / 质量规则 / 质量分析 / 巡检），顶部统一选「数据源 → 库 → 模式」。</p>
+        <ul>
+          <li><b>16 种内置规则</b>：非空、非空白、唯一、枚举、最大长度、最小长度、数值范围、格式、正则、空值率、常量列、空列、邮箱、手机号（11 位）、身份证（18 位）、银行卡（16~19 位数字）</li>
+          <li><b>质量规则</b>：先选表（自动载入已存规则）→「生成建议」让 AI 按列类型与字段名产出草稿，或手动「添加规则」；每条可设启用开关、字段、规则类型与参数、等级（高 / 中 / 低）、业务说明</li>
+          <li><b>质量分析</b>：范围可选全部已配置规则的表或单表；「开始分析」逐表扫描并显示 <code>[i/n] 正在分析 …</code>，可取消（当前表跑完就停）；结果给综合得分、通过 / 失败 / 异常 / 跳过的统计，以及每张表一行状态（存在问题 / 全部通过 / 已跳过 / 不支持 / 异常 / 未配置规则）</li>
+          <li><b>能导出</b>：「数据质量报告」导出 Excel 或 CSV（逐表逐规则明细，含违规行数）；「错误数据明细」按表看违规行，当前页或全部都能导，文件名带表名</li>
+        </ul>
+
         <h2 id="d-export">导出与传输</h2>
-        <figure class="doc-shot"><a href="images/data-transfer-dark.png" target="_blank" rel="noopener"><img src="images/data-transfer-dark.png" alt="导出与传输：格式和目标一次配好，长任务转后台" loading="lazy" decoding="async"></a><figcaption>导出与传输：格式和目标一次配好，长任务转后台</figcaption></figure>
+<figure class="doc-shot"><a href="images/shot-sync-dark.png" target="_blank" rel="noopener"><img src="images/shot-sync-dark.png" alt="数据传输：源与目标配对，四步选对象、选项与替换" loading="lazy" decoding="async"></a><figcaption>数据传输：源目标配对与四步向导</figcaption></figure>
         <ul>
           <li><b>导出格式</b>：CSV / Excel / JSON；整库转储与脚本导出还提供 <b>INSERT / UPDATE / DELETE 语句</b>与纯 <b>DDL</b>，直接把数据变成可回放的 SQL</li>
           <li><b>导出没有行数上限</b>：后端自己分页（每批 5 万行）往外写，几十万行的表也是后台稳稳跑完，不会因为「一次查太多」被内存拖死</li>
@@ -3969,6 +4131,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-compare">数据对比与传输</h2>
+        <figure class="doc-shot"><a href="images/shot-compare-dark.png" target="_blank" rel="noopener"><img src="images/shot-compare-dark.png" alt="结构与数据对比：源目标并排选库，差异逐项列出" loading="lazy" decoding="async"></a><figcaption>结构与数据对比：差异逐项列出</figcaption></figure>
         <ul>
           <li><b>对比三种口径</b>：只比结构、只比数据，或两者一起比；结构差异细到类型 / 长度 / 可空 / 默认值 / 主键 / 索引 / 外键</li>
           <li><b>数据对比</b>：以主键 / 唯一键为基准逐行比，差异样本可调（10 ~ 500 行）；单侧最多约 200 万行参与，二进制列自动排除避免误判</li>
@@ -3981,7 +4144,6 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-security">安全护栏</h2>
-        <figure class="doc-shot"><a href="images/settings-dark.png" target="_blank" rel="noopener"><img src="images/settings-dark.png" alt="设置中心：生产库保护、返回行数上限、AI 与外观" loading="lazy" decoding="async"></a><figcaption>设置中心：生产库保护、返回行数上限、AI 与外观</figcaption></figure>
         <ul>
           <li><b>PROD 保护默认开启</b>：标注为生产的连接，<b>所有改动数据或结构的操作</b>（执行脚本、改表、编辑数据、导入 / 同步 / 还原）默认一律拦下，查询不受影响；开发 / 测试 / 未标注的库照常，确需临时改生产可一键关闭</li>
           <li><b>PROD 标记全程外显</b>：页签、连接下拉、对象树都带红色徽章，连错库这件事从源头消失</li>
@@ -3991,7 +4153,38 @@ WHERE dt = :dt AND org = :org;</code></pre>
           <li><b>全程审计</b>：执行过的语句、事务动作、AI 调用都留痕，可查可导出（见<a class="dlink" href="#d-audit">执行审计</a>）</li>
         </ul>
 
+        <h2 id="d-mask">数据脱敏</h2>
+        <p>同一个库，人要看得见原文，AI 和导出不该看见。脱敏在<b>出口</b>上做，不动库里的数据。</p>
+        <ul>
+          <li><b>四个出口各自开关</b>：AI 上下文与智能体（样例行 + 智能体查回的结果）、MCP 客户端（外部 AI 工具查到的数据）、结果表格（只影响显示，复制与编辑仍是原文）、数据导出（CSV / Excel / JSON / SQL）；默认全关</li>
+          <li><b>五种处理方式</b>：MD5（32 位）、SHA-256（64 位）、AES 加密、全遮 <code>***</code>、只留后 4 位；AES 密钥可改口令、可随机生成</li>
+          <li><b>规则按「连接 + 库」分组</b>：每条 = 模式（有 schema 层的引擎才有）/ 表 / 列（支持 <code>*</code> 通配，如 <code>*_phone</code>）/ 处理方式 / 备注</li>
+          <li><b>常见敏感列一键加入</b>：手机号、身份证、邮箱、密码、token、secret、银行卡号等预设</li>
+          <li><b>边界说清楚</b>：库里的数据一个字节都不改；表名、列名、注释和 SQL 里手写的字面量不脱敏 —— 脱的是「查出来的值」</li>
+        </ul>
+
+        <h2 id="d-settings">设置中心</h2>
+        <p>左侧 14 个页签，改完基本都立即生效，不用重启。下面按页签说清每一项是干什么的。</p>
+        <figure class="doc-shot"><a href="images/shot-models-dark.png" target="_blank" rel="noopener"><img src="images/shot-models-dark.png" alt="设置 → AI 服务：一台模型一张卡，接口地址、模型名、Token 与温度都在卡里" loading="lazy" decoding="async"></a><figcaption>设置 → AI 服务 → 模型服务：一台模型一张卡</figcaption></figure>
+        <ul>
+          <li><b>通用</b>：界面语言（简体中文 / English）、界面主题（跟随系统 / 浅色 / 深色）、顶栏菜单逐项显隐与上下排序、8 组界面尺寸（顶栏文字、顶栏图标、页签文字、首页卡片、弹窗、结果表格、消息提示、左侧树，各有区间与默认值）、消息提示开关；「恢复默认」只重置尺寸与提示，不动菜单顺序</li>
+          <li><b>编辑器</b>：编辑器字号 10–20、结果表格行高 20–48、Tab 宽度 2 / 4 空格、行号、自动换行、括号自动补齐、智能补全、脚本自动保存（停止输入 1.5 秒静默存，未命名脚本按时建档）</li>
+          <li><b>格式化</b>：方言不用选（按连接类型自动识别）。关键字 / 标识符 / 数据类型 / 函数名四类大小写、AND·OR 前换行或后换行、密集运算符、缩进宽度与风格（标准 / 表格左对齐 / 右对齐）、Tab 缩进、表达式换行宽度、逗号位置、查询间空行、分号前换行；下面还有一张<b>关键字排版规则表</b>，能逐个关键字指定大小写、换行与缩进，改完上方有实时预览</li>
+          <li><b>快捷键</b>：点一行开始录制、按下新组合即改（Esc 取消），单条可清除为未绑定，「恢复默认」整体重置</li>
+          <li><b>查询</b>：默认分页条数（20 ~ 100000，默认 200）、执行超时 1–600 秒（默认 300，超时即中断）、返回行数上限（0 = 不限）、结构缓存有效期（默认 300 秒）、NULL 显示样式；另有「清空查询历史」与「刷新结构缓存」（前后端一起清）</li>
+          <li><b>AI 服务</b>：三个子页签。<b>基础</b> —— 启用 AI、隐私模式（允许外部模型 / 仅本地·内网模型）、调用审计（记进本地库，不含提示词原文与密钥）；<b>模型服务</b> —— 一台模型一张卡：名称、模型名、接口地址、API Key（留空则不修改）、最大 Token（0 = 不限）、温度 0–2（0 = 跟随服务端）、支持向量化，另附 DeepSeek / 通义千问 / 智谱 / Kimi / 豆包 / 千帆 / 讯飞 / MiniMax / 硅基流动 / OpenAI / Gemini / xAI / Groq / OpenRouter / Ollama 等 15 个服务商一键填充，可测试连接；<b>用量统计</b> —— 近 N 天的调用次数、活跃天数、日均调用、输入 / 输出 / 合计 Token</li>
+          <li><b>数据脱敏</b>：见 <a class="dlink" href="#d-mask">数据脱敏</a></li>
+          <li><b>安全与会话</b>：生产保护（默认开）、允许 AI 写库（默认关）、AI 月度 Token 上限与超限策略（降级回答 / 直接拒绝）及降级模型、写语句执行前安全确认（显示语句类型、预估行数、是否缺条件，不含 SQL 原文）、最多同时连接数（默认 32）、连接空闲回收、跳板机连接空闲回收、危险操作拦截（无条件的改 / 删、清空表、删表）、单次改动行数上限、允许旧版加密连接（SQL Server 2008 / 2012 那代，改完需重启）</li>
+          <li><b>MCP 服务</b>：默认连接与默认库、单次最大行数（默认 2000）、默认超时（默认 30 秒）、三类工具开关，见 <a class="dlink" href="#d-mcp">MCP 服务</a></li>
+          <li><b>驱动管理</b>：镜像源（自动按网络挑最快 / Maven Central / 阿里云 / 华为云 / 腾讯云 / 自定义内网仓库）并显示「实际下载源」；按关系型 / 分析型 / 文件型 / NoSQL 分组列出每个数据源的状态（内置 / 已就绪 / 未安装）与 jar 名，逐行可下载（带百分比进度）、上传本地 jar（可多选，主驱动与依赖一次传完）、打开驱动目录</li>
+          <li><b>存储路径</b>：数据目录是唯一可改项（连接、AI 配置、查询历史、<code>drivers/</code> 都在里面），填新目录保存即执行迁移，原目录保持不动；驱动目录与日志目录在「关于 → 目录说明」里看</li>
+          <li><b>缓存</b>：列出结构缓存、查询历史、AI 调用审计、AI 用量（按天 / 按模型）、知识库文档与向量、备份文件、导出产物、日志文件，各自标注规模，勾选后「清理所选」需二次确认（知识库清掉要重新导入）</li>
+          <li><b>日志</b>：运行时日志级别 error / warn / info / debug / trace（写进数据目录的 <code>logs/server.err.log</code>，热切换）；审计日志按类别（查询 / 写入 / DDL / 事务 / 执行 / AI / 错误）筛选、关键字搜索、翻页、复制单条 SQL，「清空日志」不可恢复</li>
+          <li><b>关于</b>：版本号分三段（悬停看含义）、数据目录 / 驱动目录 / 日志目录、可折叠的版本说明、GPL-3.0 许可；检查更新在顶栏的下载图标，启动 3 秒后自动查一次</li>
+        </ul>
+
         <h2 id="d-drivers">驱动管理</h2>
+        <figure class="doc-shot"><a href="images/shot-drivers-dark.png" target="_blank" rel="noopener"><img src="images/shot-drivers-dark.png" alt="驱动管理：按连接类型下载 JDBC 驱动，可上传自有版本" loading="lazy" decoding="async"></a><figcaption>驱动管理：按需下载与上传</figcaption></figure>
         <ul>
           <li><b>按需下载</b>：首次连接某类型时自动从 Maven 取对应 JDBC 驱动并缓存到本地，不预装一堆用不到的 jar</li>
           <li><b>进度可见</b>：下载中在连接弹窗底部与设置页显示文件名、第几个、已下载多少，长驱动不会「卡住没反应」</li>
@@ -4000,7 +4193,6 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-audit">执行审计</h2>
-        <figure class="doc-shot"><a href="images/governance-dark.png" target="_blank" rel="noopener"><img src="images/governance-dark.png" alt="执行审计与数据治理：谁在什么时候执行了什么" loading="lazy" decoding="async"></a><figcaption>执行审计与数据治理：谁在什么时候执行了什么</figcaption></figure>
         <ul>
           <li><b>每条语句自动留痕</b>：语句、连接与库、返回行数、耗时、成功与否、错误码、执行时间、来源（界面 / 任务 / AI），都写进本地元数据库</li>
           <li><b>事务动作同样留痕</b>：开启 / 提交 / 回滚各一条记录，事后能查到「谁在什么时候开的、滚没滚」</li>
@@ -4073,10 +4265,10 @@ WHERE dt = :dt AND org = :org;</code></pre>
 
 <section id="download" class="final">
   <div class="wrap">
-    <h2>准备试试 DBmind？</h2>
-    <p>免费使用 · Windows / macOS / Linux · 无需注册，下载即用</p>
+    <h2 data-i18n="final.title">准备试试 DBmind？</h2>
+    <p data-i18n="final.sub">免费使用 · Windows / macOS / Linux · 无需注册，下载即用</p>
     <div class="cta-row">
-      <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener">前往 Gitee 下载</a>
+      <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener" data-i18n="final.cta">前往下载</a>
     </div>
   </div>
 </section>
@@ -4084,8 +4276,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
 <footer>
   <div class="wrap foot-inner">
     <div class="foot-left">
-      <span>© 2026 DBmind · 给数据库装上「大脑」的客户端</span>
-      <span class="foot-sub">本地运行 · 数据不出内网 · 以 GPL-3.0 开源</span>
+      <span data-i18n="foot.copyright">© 2026 DBmind · 给数据库装上「大脑」的客户端</span>
     </div>
     <div class="foot-links">
       <a href="https://gitee.com/rick-works/dbmind" target="_blank" rel="noopener">
@@ -4099,6 +4290,161 @@ WHERE dt = :dt AND org = :org;</code></pre>
     </div>
   </div>
 </footer>
+
+
+<script>
+/* 中英切换：英文词典 + 中文原文缓存（切回中文不依赖词典，直接还原 dataset.zh） */
+(function () {
+  var EN = {
+  "nav.home": "Home",
+  "nav.features": "Features",
+  "nav.workflow": "Workflow",
+  "nav.security": "Security",
+  "nav.sponsor": "Sponsor",
+  "nav.releases": "Releases",
+  "nav.docs": "Docs",
+  "hero.title": "Give your databases a <span class=\"grad\">mind</span><br/>One client for every database you own",
+  "hero.download": "Free download",
+  "hero.more": "See what it does ↓",
+  "sources.label": "— Built-in sources · growing —",
+  "chip.kingbase": "KingbaseES",
+  "chip.dm": "DM (Dameng)",
+  "chip.more": "More coming…",
+  "stat.1": "Data sources, ready out of the box",
+  "stat.2": "Result set compression ratio",
+  "stat.3": "rows / minute · measured on big tables",
+  "stat.4": "first page on a 10M-row table",
+  "feat.title": "Built for people who write SQL every day",
+  "feat.sub": "Every feature targets something you really do daily — the details are spelled out in the docs",
+  "feat.editor.t": "SQL editor",
+  "feat.editor.d": "VS Code kernel underneath: completion, formatting, per-statement execution, history, template variables — large scripts stay organised.",
+  "feat.ai.t": "AI all the way through",
+  "feat.ai.d": "Explain, optimise, fix, investigate on its own; AI-written SQL shows the plan and runs a dry pass first, and your data never leaves your network.",
+  "feat.ask.t": "Ask in plain words",
+  "feat.ask.d": "Ask a question in one sentence: AI picks the tables, writes the SQL, runs it, and answers with numbers, charts and conclusions — follow-ups keep the context.",
+  "feat.tx.t": "Transaction mode",
+  "feat.tx.d": "One switch and writes stop auto-committing: review your own changes, roll back any time, commit only when it is right.",
+  "feat.edit.t": "Edit results in place",
+  "feat.edit.d": "Double-click a cell and submit once, WHERE is generated for you; stale buffers are dropped so the wrong row is never touched.",
+  "feat.million.t": "Millions of rows, instantly",
+  "feat.million.d": "Virtual scrolling + server-side paging + compressed transfer (4.2MB to 233KB); even a big JOIN answers in a second.",
+  "common.seeDocs": "Read the docs →",
+  "feat.moreLabel": "And more, all documented",
+  "more.designer": "Table designer",
+  "more.designer.d": "preview the full ALTER",
+  "more.users": "Users & privileges",
+  "more.users.d": "exact GRANT diff preview",
+  "more.monitor": "Monitoring",
+  "more.monitor.d": "kill a suspicious session in place",
+  "more.er": "ER diagram",
+  "more.er.d": "inferred and exported in one click",
+  "more.compare": "Compare & transfer",
+  "more.compare.d": "move data across environments without scripts",
+  "more.pivot": "Pivot & export",
+  "more.pivot.d": "CSV / Excel / JSON",
+  "more.quality": "Data quality",
+  "more.quality.d": "rule scan and report export",
+  "more.drivers": "Drivers & ops",
+  "more.drivers.d": "backup, restore, test data",
+  "flow.title": "A safe loop for changing data",
+  "flow.sub": "Four moves that keep a stray DELETE out of production",
+  "flow.1t": "Start a transaction",
+  "flow.1d": "Writes stop auto-committing, the editor owns this session, and anything can be undone.",
+  "flow.2t": "Change & check",
+  "flow.2d": "Edit cells directly or run an UPDATE; the same session sees the result immediately.",
+  "flow.3t": "Roll back or commit",
+  "flow.3d": "Not happy? One click and nothing happened. Commit, and only then do other sessions see it.",
+  "flow.4t": "Every move logged",
+  "flow.4d": "Each transaction action lands in the audit history; closing a tab with an open transaction warns you first.",
+  "sec.title": "Production protection, on by default",
+  "sec.sub": "The moment a connection is marked production, the guard rails come up",
+  "sec.1t": "Prod protection is on",
+  "sec.1d": "On a connection marked production, everything that changes data (scripts, DDL, cell edits, import / sync / restore) is blocked by default; queries are unaffected, and dev / test / untagged databases work as usual. It can be switched off temporarily when you really mean it.",
+  "sec.2t": "PROD badge everywhere",
+  "sec.2d": "Tabs, dropdowns and the tree all show it — the wrong-database mistake disappears at the source.",
+  "sec.3t": "Writes need a second look",
+  "sec.3d": "On a PROD connection, INSERT / UPDATE / DROP show the impact first and run only after you confirm.",
+  "sec.4t": "Timeout and row budget",
+  "sec.4d": "Per-statement timeout and a row cap, so a stray SELECT * cannot drag the client down.",
+  "sec.5t": "Audit trail",
+  "sec.5d": "Execution history carries timings and status, every transaction action is recorded and traceable afterwards.",
+  "sec.6t": "What AI sends, in writing",
+  "sec.6d": "Only your question, the schema of the tables involved, and <b>one row</b> of sample values per table (cut to 24 characters). Whole tables, result sets, connection passwords and API keys are never sent. No relay server — requests go from your machine straight to the model endpoint you configured. <a href=\"#d-ai-data\" style=\"color: var(--primary)\">See the list →</a>",
+  "sponsor.title": "Buy the author a coffee",
+  "sponsor.sub": "DBmind is free and open source and collects nothing — if it saves you time, a coffee is welcome",
+  "sponsor.wechat": "WeChat",
+  "sponsor.alipay": "Alipay",
+  "sponsor.note": "Add the note \"DBmind\" when you scan — every bit of support is remembered ❤️",
+  "final.title": "Ready to try DBmind?",
+  "final.sub": "Free · Windows / macOS / Linux · no sign-up, download and go",
+  "final.cta": "Go to download",
+  "foot.copyright": "© 2026 DBmind · the database client with a mind",
+  "shot.1": "Workbench · dark",
+  "shot.2": "Workbench · light",
+  "shot.3": "SQL editor & results · dark",
+  "shot.4": "Table data · dark",
+  "shot.5": "AI answers · dark",
+  "shot.6": "Data transfer · dark",
+  "shot.7": "Data transfer · light",
+  "shot.8": "Schema & data compare · dark",
+  "shot.9": "Schema & data compare · light",
+  "shot.10": "Monitoring · dark",
+  "shot.11": "Monitoring · light",
+  "shot.12": "Users & privileges · dark",
+  "shot.13": "Users & privileges · light",
+  "shot.14": "Task center · dark",
+  "shot.15": "Task center · light",
+  "shot.16": "Drivers · dark",
+  "shot.17": "Drivers · light",
+  "shot.18": "AI models · dark",
+  "shot.19": "Scripts · light",
+  "shot.20": "Connection menu · dark",
+  "shot.21": "Table menu · dark",
+  "shot.22": "Table menu · send to AI · dark"
+};
+  var root = document.documentElement;
+  var btn = document.getElementById('langToggle');
+  var note = document.getElementById('docsLangNote');
+  // 每次切换都重新查询：跑马灯那组 chips 是页面底部脚本克隆出来的，
+  // 缓存节点列表会让克隆副本停在切换前的语言。
+  function each (sel, fn) { [].forEach.call(document.querySelectorAll(sel), fn); }
+
+  function apply (lang) {
+    each('[data-i18n]', function (n) {
+      if (n.dataset.zh == null) n.dataset.zh = n.textContent;
+      var v = lang === 'en' ? EN[n.getAttribute('data-i18n')] : null;
+      n.textContent = v != null ? v : n.dataset.zh;
+    });
+    each('[data-i18n-html]', function (n) {
+      if (n.dataset.zhHtml == null) n.dataset.zhHtml = n.innerHTML;
+      var v = lang === 'en' ? EN[n.getAttribute('data-i18n-html')] : null;
+      n.innerHTML = v != null ? v : n.dataset.zhHtml;
+    });
+    if (lang === 'en') {
+      root.setAttribute('lang', 'en');
+      root.setAttribute('data-lang', 'en');
+    } else {
+      root.setAttribute('lang', 'zh-CN');
+      root.removeAttribute('data-lang');
+    }
+    if (note) note.hidden = lang !== 'en';
+    if (btn) {
+      btn.textContent = lang === 'en' ? 'EN / 中' : '中 / EN';
+      btn.setAttribute('aria-label', lang === 'en' ? '切换到中文' : '切换到英文');
+    }
+  }
+
+  var saved = 'zh';
+  try { saved = localStorage.getItem('dbmind-site-lang') || 'zh'; } catch (e) {}
+  apply(saved);
+
+  if (btn) btn.addEventListener('click', function () {
+    var next = root.getAttribute('data-lang') === 'en' ? 'zh' : 'en';
+    apply(next);
+    try { localStorage.setItem('dbmind-site-lang', next); } catch (e) {}
+  });
+})();
+</script>
 
 <script src="sponsors.js"></script>
 <script>
