@@ -107,7 +107,7 @@
 
   /* ===== Hero ===== */
   header {
-    position: relative; padding: 112px 0 36px; text-align: center; overflow: hidden;
+    position: relative; padding: 96px 0 36px; text-align: center; overflow: hidden;
   }
   header::before {
     content: ""; position: absolute; inset: 0; pointer-events: none;
@@ -228,16 +228,16 @@
   .demo-sec { padding: 0 0 64px; }
   /* 带底色的区块不再通栏：收成与内容同宽的一条圆角带子，星空留在它两侧 */
   #workflow {
-    /* 小屏时两边留 16px，否则圆角会贴着屏幕边 */
-    max-width: min(var(--content), calc(100% - 32px)); margin: 0 auto;
+    /* 卡片边线与其它块**一样宽**：内容区 1072（= --content − 48），卡片内再缩进 24；
+       小屏时也留 24 边距，边线才跟其它块重合 */
+    max-width: min(calc(var(--content) - 48px), calc(100% - 48px)); margin: 0 auto;
+    padding-left: 24px; padding-right: 24px;
     background: rgba(15, 22, 38, .55);
     /* 边框用 inset 阴影画：border 会占 1px 布局，把里面的内容挤得跟全站差 1px */
     border-radius: 20px; box-shadow: inset 0 0 0 1px var(--border);
   }
-  /* 卡片两侧让出 16px 时，内部缩进相应减到 8 —— 内容边线仍是 16 + 8 = 24，与全站一致 */
-  @media (max-width: 1168px) {
-    #workflow .wrap, .final .wrap { padding: 0 8px; }
-  }
+  /* 卡片本身已经是 1072 了，里面的 .wrap 不再自己限宽/缩进 */
+  #workflow .wrap { max-width: none; padding: 0; }
 
   /* ===== 特性网格 ===== */
   /* 特性网格与下方编辑器演示是一组：底部只留 48，让「说的」和「看的」挨在一起 */
@@ -391,15 +391,16 @@
 
   /* ===== CTA ===== */
   .final {
-    text-align: center; padding: calc(var(--sec-y) * 1.1) 0;
-    /* 与 #workflow 同一体型：内容同宽的圆角带子，背景半透明让星空透出来 */
-    max-width: min(var(--content), calc(100% - 32px)); margin: 0 auto;
+    text-align: center; padding: calc(var(--sec-y) * 1.1) 24px;
+    /* 与 #workflow 同一体型：宽 1072 的圆角带子，背景半透明让星空透出来 */
+    max-width: min(calc(var(--content) - 48px), calc(100% - 48px)); margin: 0 auto;
     background:
       radial-gradient(500px 260px at 50% 0%, rgba(79, 140, 255, .16), transparent 70%),
       rgba(10, 15, 26, .55);
     /* 同 #workflow：边框走 inset 阴影，不占布局 */
     border-radius: 20px; box-shadow: inset 0 0 0 1px var(--border);
   }
+  .final .wrap { max-width: none; padding: 0; }
   .final h2 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 14px; }
   .final p { color: var(--dim); margin-bottom: 34px; }
 
@@ -482,20 +483,21 @@
   /* 赞助：普通区块嵌在安全区之后（不做独占视图），纵向呼吸跟全站一致，不再单开一档 */
   .sponsor-wrap { display: flex; flex-direction: column; align-items: center; }
   .sponsor-card {
-    max-width: 620px; width: 100%; text-align: center;
+    /* 与其它块的宽度一致（1072），不再是一张 620 的窄卡 */
+    max-width: calc(var(--content) - 48px); width: 100%; text-align: center;
     background: var(--card); border: 1px solid var(--border); border-radius: 18px;
-    padding: 36px 40px 40px;
+    padding: 44px 48px 48px;
   }
   .sponsor-emoji { font-size: 42px; margin-bottom: 18px; }
   .sponsor-card h2 { font-size: 24px; font-weight: 800; margin-bottom: 14px; }
   .sponsor-lead { color: var(--dim); font-size: 14.5px; line-height: 1.9; margin-bottom: 30px; }
-  .qr-row { display: flex; gap: 26px; justify-content: center; margin-bottom: 24px; }
+  .qr-row { display: flex; gap: 44px; justify-content: center; margin-bottom: 24px; }
   .qr-card {
-    width: 190px; padding: 16px; border-radius: 14px;
+    width: 230px; padding: 18px; border-radius: 14px;
     background: #fff; display: flex; flex-direction: column; align-items: center; gap: 10px;
   }
   .qr-card img { width: 100%; border-radius: 8px; display: block; }
-  .qr-card.noimg { min-height: 190px; justify-content: center; }
+  .qr-card.noimg { min-height: 230px; justify-content: center; }
   .qr-card.noimg::before {
     content: "收款码图片待放入";
     color: #94a3b8; font-size: 12px; text-align: center; line-height: 1.8;
@@ -773,9 +775,7 @@
   <div class="orb a"></div>
   <div class="orb b"></div>
   <div class="wrap">
-    <div class="badge reveal"><b>v2.0.17</b> · 17+ 数据源 · GPL-3.0 开源 · 数据不出内网</div>
     <h1>给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的<br class="m-br" />每一个数据库</h1>
-    <p class="hero-sub reveal">连库、写 SQL、看数据、改结构、搬数据 —— <b>17+ 数据源</b>在同一个窗口里干完，AI 在旁边解释与排错；纯本地运行，数据不出内网。</p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener">免费下载</a>
       <a class="btn btn-ghost" href="#features">看看能做什么 ↓</a>
@@ -4031,8 +4031,6 @@ WHERE dt = :dt AND org = :org;</code></pre>
     <p>免费使用 · Windows / macOS / Linux · 无需注册，下载即用</p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener">前往 Gitee 下载</a>
-      <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">GitHub ↗</a>
-      <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind" target="_blank" rel="noopener">Gitee ↗</a>
     </div>
   </div>
 </section>

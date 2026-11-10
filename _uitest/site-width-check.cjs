@@ -6,8 +6,10 @@ const URL = 'file:///d:/develop/workspace/product/DBMind/website/index.html'
 const BLOCKS = [
   '.nav-inner', 'header .wrap', '.hero-shots .shots', '.marquee',
   '#features .sec-title', '#features .grid', '.more-strip',
-  '.demo', '.stats', '.flow', '.safe', '#workflow .flow', '.final .wrap',
+  '.demo', '.stats', '.safe',
 ]
+// 带边框的区块：边线（border-box）必须与上面的内容边线重合
+const CARDS = ['#workflow', '.final', '.sponsor-card']
 
 // 量「内容边线」而不是 border-box：容器自带 24px padding，按内容框算才能和内部块直接比
 const rects = (p, sels) => p.evaluate((sels) => sels.map((sel) => {
@@ -48,6 +50,20 @@ const rects = (p, sels) => p.evaluate((sels) => sels.map((sel) => {
     L.length === 1 && R.length === 1
       ? console.log(`  全站内容边线唯一: PASS (${L[0]}..${R[0]}，宽 ${ok[0].w})`)
       : bad(`内容边线不一致 left=${L.join('/')} right=${R.join('/')}`)
+
+    // 带边框的卡片：外框边线要和上面的内容边线完全重合
+    const cards = await p.evaluate((sels) => sels.map((sel) => {
+      const el = document.querySelector(sel)
+      if (!el) return { sel, missing: true }
+      const r = el.getBoundingClientRect()
+      return { sel, left: Math.round(r.left + window.scrollX), right: Math.round(r.right + window.scrollX), w: Math.round(r.width) }
+    }), CARDS)
+    for (const c of cards) {
+      if (c.missing) { bad(`${c.sel} 不存在`); continue }
+      const same = c.left === L[0] && c.right === R[0]
+      console.log(`  ${c.sel.padEnd(22)} L=${String(c.left).padStart(4)} R=${String(c.right).padStart(4)} W=${String(c.w).padStart(4)}  ${same ? 'PASS' : 'FAIL'}`)
+      if (!same) bad(`${c.sel} 卡片边线与内容边线不一致（${c.left}..${c.right} vs ${L[0]}..${R[0]}）`)
+    }
     if (errs.length) bad('pageerror: ' + errs.join(' | '))
     await p.close()
   }
