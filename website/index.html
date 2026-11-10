@@ -789,8 +789,9 @@
   /* 页脚 */
   /* 页脚不再铺自己的渐变（原来比页面更亮/更暗），只靠上面那条分隔线与内容区分 */
   footer { background: none; }
-  .foot-left { display: flex; flex-direction: column; gap: 2px; }
-  .foot-sub { font-size: 12.5px; color: rgba(148, 163, 184, .65); }
+  .foot-left { display: flex; flex-direction: column; gap: 3px; }
+  /* 页脚第二行：把「一个客户端，管好你的每一个数据库」放在版权行下面，字号小一档、颜色淡一点 */
+  .foot-tag { font-size: 12.5px; color: var(--dim); opacity: .78; }
   .foot-links { display: flex; gap: 10px; align-items: center; }
   .foot-links a {
     display: inline-flex; align-items: center; gap: 7px;
@@ -4295,7 +4296,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
 <footer>
   <div class="wrap foot-inner">
     <div class="foot-left">
-      <span data-i18n="foot.copyright">© 2026 DBmind · 给数据库装上「大脑」的客户端</span>
+      <span data-i18n="foot.copyright">© 2026 DBmind · 给数据库装上「大脑」</span>
+      <span class="foot-tag" data-i18n="foot.tagline">一个客户端，管好你的每一个数据库</span>
     </div>
     <div class="foot-links">
       <a href="https://gitee.com/rick-works/dbmind" target="_blank" rel="noopener">
@@ -4397,7 +4399,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
   "final.title": "Ready to try DBmind?",
   "final.sub": "Free · Windows / macOS / Linux · no sign-up, download and go",
   "final.cta": "Go to download",
-  "foot.copyright": "© 2026 DBmind · the database client with a mind",
+  "foot.copyright": "© 2026 DBmind · a mind for your databases",
+  "foot.tagline": "One client to manage every database you have",
   "shot.1": "Workbench · dark",
   "shot.2": "Workbench · light",
   "shot.3": "SQL editor & results · dark",
