@@ -40,6 +40,14 @@
     --doc-p: #c3cbdb;
     --doc-code: #a8c7ff;
     --doc-tip: #b7e8e0;
+    /* 页面底色（含极淡星云）单独抽成一个变量：顶栏 / 页脚要用同一套，
+       不然会出现「顶栏比页面更黑、页脚比页面更亮」的色差。
+       注意：用它的元素必须一起写 background-attachment: fixed，渐变才和 html 对齐。 */
+    --page-bg:
+      radial-gradient(1200px 820px at 12% -8%, rgba(255, 255, 255, .045), transparent 62%),
+      radial-gradient(1000px 720px at 88% -4%, rgba(150, 160, 180, .035), transparent 62%),
+      radial-gradient(900px 760px at 50% 108%, rgba(115, 125, 145, .03), transparent 68%),
+      var(--bg);
     --radius: 14px;
     /* ===== 宽度体系：全站**只有一个**内容宽度 =====
        导航、hero、截图轮播、数字区、演示卡、特性网格、工作流、安全、赞助、版本、文档、页脚
@@ -52,11 +60,7 @@
   html {
     scroll-behavior: smooth;
     /* 深空底：三层极淡星云叠在近黑蓝上；body 透明，好让下面的星空层透出来 */
-    background:
-      radial-gradient(1200px 820px at 12% -8%, rgba(255, 255, 255, .045), transparent 62%),
-      radial-gradient(1000px 720px at 88% -4%, rgba(150, 160, 180, .035), transparent 62%),
-      radial-gradient(900px 760px at 50% 108%, rgba(115, 125, 145, .03), transparent 68%),
-      var(--bg);
+    background: var(--page-bg);
     background-attachment: fixed;
   }
   body {
@@ -110,8 +114,13 @@
     border-bottom: 1px solid transparent;
     transition: background .25s ease, border-color .25s ease;
   }
-  /* 滚起来只用「页面底色 + 一条分隔线」，不要更深的一层黑 */
-  nav.is-stuck { background: var(--bg); border-bottom-color: var(--border); backdrop-filter: none; }
+  /* 滚起来用「和页面同一套底色 + 一条分隔线」：渐变按视口固定，像素级对齐页面，不再出现色差 */
+  nav.is-stuck {
+    background: var(--page-bg);
+    background-attachment: fixed;
+    border-bottom-color: var(--border);
+    backdrop-filter: none;
+  }
   .nav-inner { display: flex; align-items: center; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
   .logo-mark { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: block; }
@@ -777,7 +786,8 @@
   ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, .22); border-radius: 999px; border: 2px solid var(--bg); }
   ::-webkit-scrollbar-thumb:hover { background: rgba(79, 140, 255, .45); }
   /* 页脚 */
-  footer { background: linear-gradient(180deg, transparent, var(--foot) 42%); }
+  /* 页脚不再铺自己的渐变（原来比页面更亮/更暗），只靠上面那条分隔线与内容区分 */
+  footer { background: none; }
   .foot-left { display: flex; flex-direction: column; gap: 2px; }
   .foot-sub { font-size: 12.5px; color: rgba(148, 163, 184, .65); }
   .foot-links { display: flex; gap: 10px; align-items: center; }
@@ -811,11 +821,10 @@
     --grid: rgba(17, 21, 28, .05);
   }
   html[data-theme="light"] {
-    background:
+    --page-bg:
       radial-gradient(1200px 820px at 12% -8%, rgba(47, 107, 220, .06), transparent 62%),
       radial-gradient(1000px 720px at 88% -4%, rgba(120, 130, 150, .05), transparent 62%),
       var(--bg);
-    background-attachment: fixed;
   }
   html[data-theme="light"] {
     --foot: rgba(255, 255, 255, .78);
