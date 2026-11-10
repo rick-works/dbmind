@@ -179,6 +179,22 @@
   }
   .feature h3 { font-size: 17px; margin-bottom: 8px; }
   .feature p { color: var(--dim); font-size: 14.5px; }
+  /* 次要能力胶囊带：一行收纳，点开直达对应文档 */
+  .more-label { text-align: center; color: var(--dim); font-size: 13px; letter-spacing: 2px; margin: 34px 0 14px; }
+  .more-strip { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .more-item {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 8px 16px; font-size: 13px; color: var(--dim);
+    background: var(--card); white-space: nowrap;
+    transition: color .2s, border-color .2s, transform .2s, box-shadow .2s;
+  }
+  .more-item b { color: var(--text); font-weight: 600; }
+  .more-item .mi { font-size: 14px; }
+  .more-item:hover {
+    color: var(--text); border-color: rgba(79, 140, 255, .5); transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(79, 140, 255, .12);
+  }
 
   /* ===== 编辑器演示 ===== */
   .demo {
@@ -638,8 +654,6 @@
     <h1>给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的每一个数据库</h1>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener">免费下载</a>
-      <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind" target="_blank" rel="noopener">Gitee ↗</a>
-      <a class="btn btn-ghost" href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">GitHub ↗</a>
       <a class="btn btn-ghost" href="#features">看看能做什么 ↓</a>
     </div>
   </div>
@@ -744,85 +758,54 @@
 <section id="features">
   <div class="wrap">
     <h2 class="sec-title reveal">为「每天写 SQL 的人」打造</h2>
-    <p class="sec-sub reveal">围绕真实任务组织，而不是堆功能清单 —— 每一项都有详细文档</p>
+    <p class="sec-sub reveal">每个功能都冲着你每天真会做的事来 —— 用法细节，文档里逐条说清</p>
     <div class="grid">
       <div class="feature reveal">
         <div class="icon">⌨️</div>
         <h3>智能 SQL 编辑器</h3>
-        <p>基于 Monaco（VS Code 同款内核）：补全、格式化、多语句分块执行、逐段计时条、执行历史、SQL 片段库、模板变量 —— 大脚本也能条理清楚地跑。</p>
+        <p>VS Code 同款内核：补全、格式化、分块执行、执行历史、模板变量 —— 大脚本也能条理清楚地跑。</p>
         <a class="doc-link" href="#d-editor">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🤖</div>
         <h3>AI 全程加持</h3>
-        <p>选段解释 / 优化 / 修错 / 诊断 / 自由对话，AI 给出的 SQL 先「看执行计划、试跑一次」再落地；「自主排查」还会自己巡检、给索引建议，把要改的东西做成变更单等你批准 —— 吃进去的数据不出你的网络。</p>
-        <a class="doc-link" href="#d-ai-data">AI 到底发了什么给模型 →</a>
+        <p>解释、优化、修错、自主排查；AI 写的 SQL 先看执行计划、试跑一次再落地，数据不出你的网络。</p>
+        <a class="doc-link" href="#d-ai-data">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🧠</div>
         <h3>智能问数</h3>
-        <p>一句中文直接问数：AI 挑表、写 SQL、真跑一遍，给出数字、图表与基于真实结果集的结论；图表本地切换不花 token，追问延续上下文。<a class="doc-link" href="#d-ask">怎么用 →</a></p>
+        <p>一句中文直接问数：AI 挑表、写 SQL、真跑一遍，给出数字、图表与结论，追问延续上下文。</p>
+        <a class="doc-link" href="#d-ask">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">🛡️</div>
         <h3>事务模式</h3>
-        <p>一键开启：所有写语句不再自动提交。改完自查、不满意回滚、确认后提交 —— 配合其他会话的可见性规则，改数据不再心惊胆战。</p>
+        <p>一键开启，写语句不再自动提交：改完自查、随时回滚、确认后才对其他会话可见。</p>
         <a class="doc-link" href="#d-tx">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">✏️</div>
         <h3>结果集直接编辑</h3>
-        <p>双击单元格改值、攒缓冲、一次提交。WHERE 条件自动生成（优先主键，否则全列定位）；翻页重跑后过期缓冲自动作废，绝不改错行。</p>
+        <p>双击单元格改值、一次提交，WHERE 自动生成；过期缓冲自动作废，绝不改错行。</p>
         <a class="doc-link" href="#d-grid">查看文档 →</a>
       </div>
       <div class="feature reveal">
         <div class="icon">⚡</div>
         <h3>千万级结果集秒开</h3>
-        <p>虚拟滚动 + 服务端分页 + 响应压缩（实测 4.2MB → 233KB）。总数异步统计不阻塞数据回显，大 JOIN 也能 1 秒见数。</p>
+        <p>虚拟滚动 + 服务端分页 + 压缩传输（4.2MB → 233KB），大 JOIN 也是 1 秒见数。</p>
         <a class="doc-link" href="#d-grid">查看文档 →</a>
       </div>
-      <div class="feature reveal">
-        <div class="icon">🧱</div>
-        <h3>表结构与对象编辑</h3>
-        <p>字段类型、默认值、注释、索引在表格里直接改，<b>执行前先看到完整的 ALTER</b>；视图、存储过程、函数、触发器、事件可查看 DDL 并转成 ALTER 继续编辑。</p>
-        <a class="doc-link" href="#d-designer">查看文档 →</a>
-      </div>
-      <div class="feature reveal">
-        <div class="icon">🧑‍💼</div>
-        <h3>用户与权限管理</h3>
-        <p>用户 / 角色清单按引擎适配，权限按「全局 / 服务器 / 库 / 模式 / 表 / 例程」分层勾选；每一次勾选都预览精确的 <code>GRANT</code> / <code>REVOKE</code> 差量，提交时只发变化的部分。</p>
-        <a class="doc-link" href="#d-users">查看文档 →</a>
-      </div>
-      <div class="feature reveal">
-        <div class="icon">📈</div>
-        <h3>服务监控</h3>
-        <p>会话、锁与库级指标集中看，可疑会话就地终止；不提供监控接口的引擎会如实说明，不给你画一张空图。</p>
-        <a class="doc-link" href="#d-monitor">查看文档 →</a>
-      </div>
-      <div class="feature reveal">
-        <div class="icon">🗺️</div>
-        <h3>ER 关系图</h3>
-        <p>用命名约定 + 真实外键推断表间关系，自动布局后可拖拽调整、滚轮缩放，一键导出 PNG / SVG 贴进设计文档。</p>
-        <a class="doc-link" href="#d-er">查看文档 →</a>
-      </div>
-      <div class="feature reveal">
-        <div class="icon">🔀</div>
-        <h3>数据对比与传输</h3>
-        <p>两个连接之间先比对结构与数据差异，再按向导把选中的表 / 对象传到目标库；跨环境搬数据不用再拼脚本。</p>
-        <a class="doc-link" href="#d-compare">查看文档 →</a>
-      </div>
-      <div class="feature reveal">
-        <div class="icon">📊</div>
-        <h3>数据透视与导出</h3>
-        <p>框选即汇总（计数/求和/均值/最值）、分组下钻透视；导出 CSV / Excel / JSON / INSERT，长任务后台跑、完成系统通知。</p>
-        <a class="doc-link" href="#d-pivot">查看文档 →</a>
-      </div>
-      <div class="feature reveal">
-        <div class="icon">🔌</div>
-        <h3>驱动与运维工具</h3>
-        <p>驱动按需从 Maven 下载并显示实时进度，内网可指向私有镜像；备份还原、生成测试数据、全局对象搜索都在同一个工作台里。</p>
-        <a class="doc-link" href="#d-drivers">查看文档 →</a>
-      </div>
+    </div>
+    <div class="more-label reveal">还有这些能力，都在文档里</div>
+    <div class="more-strip reveal">
+      <a class="more-item" href="#d-designer"><span class="mi">🧱</span><b>表结构编辑</b>执行前预览完整 ALTER</a>
+      <a class="more-item" href="#d-users"><span class="mi">🧑‍💼</span><b>用户与权限</b>精确预览 GRANT 差量</a>
+      <a class="more-item" href="#d-monitor"><span class="mi">📈</span><b>服务监控</b>可疑会话就地终止</a>
+      <a class="more-item" href="#d-er"><span class="mi">🗺️</span><b>ER 关系图</b>自动推断一键导出</a>
+      <a class="more-item" href="#d-compare"><span class="mi">🔀</span><b>对比与传输</b>跨环境搬数据不拼脚本</a>
+      <a class="more-item" href="#d-pivot"><span class="mi">📊</span><b>透视与导出</b>CSV / Excel / JSON</a>
+      <a class="more-item" href="#d-drivers"><span class="mi">🔌</span><b>驱动与运维</b>备份还原 · 测试数据</a>
     </div>
   </div>
 </section>
