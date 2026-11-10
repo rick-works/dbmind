@@ -48,6 +48,8 @@
       radial-gradient(1000px 720px at 88% -4%, rgba(150, 160, 180, .035), transparent 62%),
       radial-gradient(900px 760px at 50% 108%, rgba(115, 125, 145, .03), transparent 68%),
       var(--bg);
+    /* 文档模式三栏的纸面底色：深色下比页面亮一档（#1e1f24），浅色下纯白卡片 */
+    --doc-surface: #1e1f24;
     --radius: 14px;
     /* ===== 宽度体系：全站**只有一个**内容宽度 =====
        导航、hero、截图轮播、数字区、演示卡、特性网格、工作流、安全、赞助、版本、文档、页脚
@@ -623,12 +625,16 @@
     display: grid; grid-template-columns: 224px minmax(0, 1fr) 192px; gap: 34px;
     margin-top: 30px; align-items: start;
   }
-  /* 左右目录：轻面板化，sticky 跟随 */
+  /* 左右目录：轻面板化，sticky 跟随
+     底色统一走 --doc-surface（深色 #1e1f24 / 浅色 #ffffff）：比页面亮一档的"纸面"，
+     配柔和大投影浮在星空上，三栏不再是那种糊在近黑背景里的浅灰蒙层 */
   .dtoc, .pagenav {
     position: sticky; top: 84px; font-size: 14px;
     max-height: calc(100vh - 116px); overflow-y: auto;
-    background: var(--panel); border: 1px solid var(--border);
+    background: var(--doc-surface);
+    border: 1px solid var(--border);
     border-radius: var(--radius); padding: 16px 12px;
+    box-shadow: 0 22px 48px -36px rgba(0, 0, 0, .95);
   }
   .dtoc { scrollbar-width: thin; }
   .dtoc .group { margin-bottom: 22px; }
@@ -652,8 +658,10 @@
   .pagenav a.active { color: var(--primary); background: none; border-left-color: var(--primary); font-weight: 600; }
   /* 正文：面板化（与左右目录同边框风格）+ 限行宽 */
   .doc-main {
-    min-width: 0; background: var(--panel);
+    min-width: 0;
+    background: var(--doc-surface);
     border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: 0 26px 60px -40px rgba(0, 0, 0, .95);
     padding: 24px 30px 30px;
   }
   .doc-main h2 {
@@ -830,6 +838,7 @@
   }
   html[data-theme="light"] {
     --foot: rgba(255, 255, 255, .78);
+    --doc-surface: #ffffff;
     --panel: #ffffff;
     --doc-p: #3b414d;
     --doc-code: #1d4ed8;
@@ -841,6 +850,10 @@
   /* 深色下用黑投影，浅色下换成灰投影，卡片才不至于「糊在白纸上」 */
   html[data-theme="light"] .demo,
   html[data-theme="light"] .shots-viewport { box-shadow: 0 18px 44px rgba(17, 21, 28, .10); }
+  /* 文档三栏在浅色下是白卡片，投影要换成灰的，不然像糊了一层黑 */
+  html[data-theme="light"] .doc-main,
+  html[data-theme="light"] .dtoc,
+  html[data-theme="light"] .pagenav { box-shadow: 0 20px 46px -34px rgba(17, 21, 28, .16); }
   html[data-theme="light"] .stats { background: linear-gradient(180deg, var(--band-glow), transparent 78%); }
   /* 演示区语法高亮：深色那套在白底上偏亮，浅色给一组深一点的 */
   html[data-theme="light"] .kw { color: #2f6bdc; }
