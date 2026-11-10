@@ -478,6 +478,6 @@ Rust（axum / rusqlite / serde / tracing） · Vue 3 + Monaco + Element Plus（r
 
 ## License
 
-本项目基于 **Apache License 2.0** 开源（[LICENSE](LICENSE)）：可以自由使用、修改与再分发，商业使用、闭源集成均无需额外授权，只需保留版权与许可证声明；许可证同时包含明示的专利授权。
+本项目基于 **Apache License 2.0** 开源（[LICENSE](LICENSE)）：可以自由使用、修改与再分发，商业使用、闭源集成均无需额外授权，只需保留版权与许可证声明（见 [NOTICE](NOTICE)）；许可证同时包含明示的专利授权。
 
 **名称与商标**：「DBMind」名称与图标归作者所有——欢迎 fork 与二次开发，但发布时不得使用 DBMind 名称或图标冒名。软件内「设置 → 关于」亦有展示。

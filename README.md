@@ -466,6 +466,6 @@ If DBmind saves you time, buying the author a coffee is always appreciated ☕ (
 
 ## License
 
-Released under the **Apache License 2.0** ([LICENSE](LICENSE)). You are free to use, modify and redistribute DBMind — including in commercial and closed-source products — provided you keep the copyright and license notices; the license also grants an express patent license.
+Released under the **Apache License 2.0** ([LICENSE](LICENSE)). You are free to use, modify and redistribute DBMind — including in commercial and closed-source products — provided you keep the copyright and license notices ([NOTICE](NOTICE)); the license also grants an express patent license.
 
 **Trademark notice:** the name "DBMind" and its branding remain the property of the author. Forks and derivatives are welcome, but they must not be published under the DBMind name or icon.
