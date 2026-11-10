@@ -53,6 +53,12 @@
     background: linear-gradient(135deg, var(--primary), var(--primary-2));
     color: #fff !important; padding: 7px 18px; border-radius: 8px; font-weight: 600;
   }
+  /* 导航底部的渐变流光线（科技感细节） */
+  nav::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px; pointer-events: none;
+    background: linear-gradient(90deg, transparent 5%, rgba(79,140,255,.55) 35%, rgba(124,92,255,.55) 65%, transparent 95%);
+    opacity: .5;
+  }
 
   /* ===== Hero ===== */
   header {
@@ -63,7 +69,29 @@
     background:
       radial-gradient(600px 300px at 20% 0%, rgba(79, 140, 255, .16), transparent 70%),
       radial-gradient(600px 300px at 80% 10%, rgba(124, 92, 255, .14), transparent 70%),
-      radial-gradient(500px 260px at 50% 100%, rgba(45, 212, 191, .08), transparent 70%);
+      radial-gradient(500px 260px at 50% 100%, rgba(45, 212, 191, .08), transparent 70%),
+      linear-gradient(rgba(148, 163, 184, .055) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148, 163, 184, .055) 1px, transparent 1px);
+    background-size: auto, auto, auto, 46px 46px, 46px 46px;
+    -webkit-mask-image: linear-gradient(#000 55%, transparent 98%);
+    mask-image: linear-gradient(#000 55%, transparent 98%);
+  }
+  /* 漂浮光球：两个模糊圆缓慢漂移（GPU transform，不占重绘） */
+  .orb { position: absolute; border-radius: 50%; filter: blur(72px); pointer-events: none; }
+  .orb.a {
+    width: 420px; height: 420px; top: -140px; left: 6%;
+    background: radial-gradient(circle, rgba(79, 140, 255, .32), transparent 70%);
+    animation: orb-drift-a 16s ease-in-out infinite alternate;
+  }
+  .orb.b {
+    width: 460px; height: 460px; top: -60px; right: 4%;
+    background: radial-gradient(circle, rgba(124, 92, 255, .3), transparent 70%);
+    animation: orb-drift-b 20s ease-in-out infinite alternate;
+  }
+  @keyframes orb-drift-a { to { transform: translate(70px, 50px) scale(1.1); } }
+  @keyframes orb-drift-b { to { transform: translate(-80px, 60px) scale(.92); } }
+  @media (prefers-reduced-motion: reduce) {
+    .orb, .btn-primary { animation: none; }
   }
   .badge {
     display: inline-flex; align-items: center; gap: 8px;
@@ -90,6 +118,11 @@
   .btn-primary {
     background: linear-gradient(135deg, var(--primary), var(--primary-2));
     color: #fff; box-shadow: 0 8px 26px rgba(79, 140, 255, .35);
+    animation: btn-pulse 3.4s ease-in-out infinite;
+  }
+  @keyframes btn-pulse {
+    0%, 100% { box-shadow: 0 8px 26px rgba(79, 140, 255, .35); }
+    50% { box-shadow: 0 10px 38px rgba(124, 92, 255, .55); }
   }
   .btn-ghost { border: 1px solid var(--border); color: var(--text); background: rgba(255,255,255,.03); }
   .btn-ghost:hover { border-color: var(--primary); }
@@ -522,6 +555,39 @@
   .shot-viewer { position: fixed; inset: 0; z-index: 90; display: none; align-items: center; justify-content: center; background: rgba(4,7,12,.9); backdrop-filter: blur(6px); padding: 4vh 4vw; cursor: zoom-out; }
   .shot-viewer.open { display: flex; }
   .shot-viewer img { max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+
+  /* ===== 科技风增强 ===== */
+  /* 章节标题下的渐变短横线 */
+  .sec-title::after {
+    content: ""; display: block; width: 58px; height: 3px; margin: 14px auto 0;
+    border-radius: 2px;
+    background: linear-gradient(90deg, var(--primary), var(--primary-2), var(--accent));
+  }
+  /* 特性卡片：悬停辉光 + 图标描边 */
+  .feature:hover { box-shadow: 0 14px 42px rgba(79, 140, 255, .13); }
+  .feature .icon { box-shadow: inset 0 0 0 1px rgba(79, 140, 255, .22); }
+  /* 数据卡片：悬停浮起 + 辉光 */
+  .stat { transition: transform .2s, box-shadow .2s, border-color .2s; }
+  .stat:hover { transform: translateY(-3px); border-color: rgba(79, 140, 255, .4); box-shadow: 0 12px 34px rgba(79, 140, 255, .12); }
+  /* 全局滚动条（科技感细条） */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, .22); border-radius: 999px; border: 2px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(79, 140, 255, .45); }
+  /* 页脚 */
+  footer { background: linear-gradient(180deg, transparent, rgba(17, 24, 39, .85)); }
+  .foot-left { display: flex; flex-direction: column; gap: 2px; }
+  .foot-sub { font-size: 12.5px; color: rgba(148, 163, 184, .65); }
+  .foot-links { display: flex; gap: 10px; align-items: center; }
+  .foot-links a {
+    display: inline-flex; align-items: center; gap: 7px;
+    border: 1px solid var(--border); border-radius: 9px;
+    padding: 7px 16px; font-size: 13.5px; font-weight: 600; color: #b9c3d6;
+    background: rgba(255, 255, 255, .03);
+    transition: color .15s, border-color .15s, box-shadow .15s;
+  }
+  .foot-links a:hover { color: #fff; border-color: rgba(79, 140, 255, .55); box-shadow: 0 4px 18px rgba(79, 140, 255, .18); }
+  .foot-links svg { width: 15px; height: 15px; fill: currentColor; flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -537,15 +603,16 @@
       <a href="#sponsor">赞助</a>
       <a href="#releases">版本</a>
       <a href="#docs">文档</a>
-      <a href="https://gitee.com/rick-works/dbmind" target="_blank" rel="noopener">Gitee</a>
-      <a href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">GitHub</a>
       <a href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener" class="nav-cta">立即下载</a>
     </div>
   </div>
 </nav>
 
 <header>
+  <div class="orb a"></div>
+  <div class="orb b"></div>
   <div class="wrap">
+    <div class="badge reveal"><b>v2.0.17</b> · 17+ 数据源 · GPL-3.0 开源 · 数据不出内网</div>
     <h1>给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的每一个数据库</h1>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener">免费下载</a>
@@ -3852,7 +3919,20 @@ WHERE dt = :dt AND org = :org;</code></pre>
 
 <footer>
   <div class="wrap foot-inner">
-    <span>© 2026 DBmind · 给数据库装上「大脑」的客户端</span>
+    <div class="foot-left">
+      <span>© 2026 DBmind · 给数据库装上「大脑」的客户端</span>
+      <span class="foot-sub">本地运行 · 数据不出内网 · 以 GPL-3.0 开源</span>
+    </div>
+    <div class="foot-links">
+      <a href="https://gitee.com/rick-works/dbmind" target="_blank" rel="noopener">
+        <svg viewBox="0 0 1024 1024" aria-hidden="true"><path d="M512 1024C229.2 1024 0 794.8 0 512S229.2 0 512 0s512 229.2 512 512-229.2 512-512 512z m258.7-566.5H466.9c-14.1 0-25.6 11.5-25.6 25.6v64.3c0 14.1 11.5 25.6 25.6 25.6h194.3c12.7 0 23 10.3 23 23v13.5c0 41.8-33.9 75.8-75.8 75.8H390.6c-12.7 0-23-10.3-23-23V423.7c0-47 38.1-85.1 85.1-85.1h317.7c12.7 0 23-10.3 23-23v-64.3c0-14.1-11.5-25.6-25.6-25.6H452.7c-110 0-199.2 89.2-199.2 199.2v336.5c0 22.5 18.2 40.7 40.7 40.7h329.9c93.5 0 169.2-75.8 169.2-169.2v-78.8c0-70.4-57.1-127.6-127.6-127.6z"/></svg>
+        Gitee
+      </a>
+      <a href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>
+        GitHub
+      </a>
+    </div>
   </div>
 </footer>
 
