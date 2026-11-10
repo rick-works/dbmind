@@ -724,7 +724,7 @@
   .shot-nav:hover { background: rgba(79,140,255,.28); border-color: var(--primary); }
   .shot-nav.prev { left: 14px; }
   .shot-nav.next { right: 14px; }
-  .shot-dots { display: flex; gap: 8px; justify-content: center; margin-top: 14px; }
+  .shot-dots { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; padding: 0 12px; }
   .shot-dots button { width: 8px; height: 8px; padding: 0; border-radius: 4px; border: none; background: var(--dim); opacity: .35; cursor: pointer; transition: all .25s; }
   .shot-dots button.on { opacity: 1; background: var(--primary); width: 22px; }
   .shot-viewer { position: fixed; inset: 0; z-index: 90; display: none; align-items: center; justify-content: center; background: rgba(4,7,12,.9); backdrop-filter: blur(6px); padding: 4vh 4vw; cursor: zoom-out; }
@@ -800,13 +800,28 @@
     <div class="shots reveal" id="shotsBox">
       <div class="shots-viewport">
         <div class="shots-track" id="shotsTrack">
-          <figure class="shot"><img src="images/shot-sql-dark.png" alt="智能 SQL 编辑器（深色主题）"><figcaption>智能 SQL 编辑器 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-sql-light.png" alt="智能 SQL 编辑器（浅色主题）" loading="lazy"><figcaption>智能 SQL 编辑器 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-ai-dark.png" alt="AI 助手（深色主题）" loading="lazy"><figcaption>AI 助手 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-ai-light.png" alt="AI 助手（浅色主题）" loading="lazy"><figcaption>AI 助手 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-drivers-light.png" alt="驱动管理（浅色主题）" loading="lazy"><figcaption>驱动管理 · 浅色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-drivers-dark.png" alt="驱动管理（深色主题）" loading="lazy"><figcaption>驱动管理 · 深色主题</figcaption></figure>
-          <figure class="shot"><img src="images/shot-sync-dark.png" alt="数据传输（深色主题）" loading="lazy"><figcaption>数据传输 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-home-dark.png" alt="工作台：连接树、最近查询、查询趋势与数据工具一屏尽览（深色主题）"><figcaption>工作台 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-home-light.png" alt="工作台：连接树、最近查询、查询趋势与数据工具一屏尽览（浅色主题）" loading="lazy"><figcaption>工作台 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-sql-dark.png" alt="SQL 编辑器：补全、格式化、分块执行，结果与行数耗时并列（深色主题）" loading="lazy"><figcaption>SQL 编辑器与结果 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-table-dark.png" alt="表数据浏览：高级搜索、列类型提示、分页与导出（深色主题）" loading="lazy"><figcaption>表数据浏览 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-ai-dark.png" alt="AI 助手问数：自然语言出图，附数据概况、结论与追问建议（深色主题）" loading="lazy"><figcaption>AI 助手问数 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-sync-dark.png" alt="数据传输：源与目标配对，四步走完选对象、选项与替换（深色主题）" loading="lazy"><figcaption>数据传输 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-sync-light.png" alt="数据传输：源与目标配对，四步走完选对象、选项与替换（浅色主题）" loading="lazy"><figcaption>数据传输 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-compare-dark.png" alt="结构与数据对比：源目标并排选库，差异逐项列出（深色主题）" loading="lazy"><figcaption>结构与数据对比 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-compare-light.png" alt="结构与数据对比：源目标并排选库，差异逐项列出（浅色主题）" loading="lazy"><figcaption>结构与数据对比 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-monitor-dark.png" alt="服务监控：连接数、QPS、命中率与会话清单，可疑会话就地终止（深色主题）" loading="lazy"><figcaption>服务监控 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-monitor-light.png" alt="服务监控：连接数、QPS、命中率与会话清单，可疑会话就地终止（浅色主题）" loading="lazy"><figcaption>服务监控 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-users-dark.png" alt="用户与权限：用户清单、超级用户标记，编辑 / 授权 / 删除就地操作（深色主题）" loading="lazy"><figcaption>用户与权限 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-users-light.png" alt="用户与权限：用户清单、超级用户标记，编辑 / 授权 / 删除就地操作（浅色主题）" loading="lazy"><figcaption>用户与权限 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-tasks-dark.png" alt="任务中心：数据传输与对比的历史任务、耗时与状态一目了然（深色主题）" loading="lazy"><figcaption>任务中心 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-tasks-light.png" alt="任务中心：数据传输与对比的历史任务、耗时与状态一目了然（浅色主题）" loading="lazy"><figcaption>任务中心 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-drivers-dark.png" alt="驱动管理：按连接类型自动下载 JDBC 驱动，可上传自有版本（深色主题）" loading="lazy"><figcaption>驱动管理 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-drivers-light.png" alt="驱动管理：按连接类型自动下载 JDBC 驱动，可上传自有版本（浅色主题）" loading="lazy"><figcaption>驱动管理 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-models-dark.png" alt="AI 模型配置：多套服务并存，接口地址、模型名与温度随场景切换（深色主题）" loading="lazy"><figcaption>AI 模型配置 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-scripts-light.png" alt="脚本管理：常用 SQL 存成脚本，按库归类随时调出（浅色主题）" loading="lazy"><figcaption>脚本管理 · 浅色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-menu-conn-dark.png" alt="连接右键：新建查询、备份 / 还原、发送到 AI 等操作就地可达（深色主题）" loading="lazy"><figcaption>连接右键菜单 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-menu-table-dark.png" alt="表右键：查看数据、编辑结构、生成 SQL、导入导出与统计（深色主题）" loading="lazy"><figcaption>表右键菜单 · 深色主题</figcaption></figure>
+          <figure class="shot"><img src="images/shot-menu-ai-dark.png" alt="右键把表发给 AI 助手，结合上下文继续提问（深色主题）" loading="lazy"><figcaption>表右键菜单 · 交给 AI 助手 · 深色主题</figcaption></figure>
         </div>
       </div>
       <button class="shot-nav prev" id="shotPrev" aria-label="上一张">&#8249;</button>
@@ -830,7 +845,7 @@
   }
   function go (i) { cur = (i + n) % n; track.style.transform = 'translateX(-' + cur * 100 + '%)'; [].forEach.call(dots.children, function (d, k) { d.classList.toggle('on', k === cur); }); }
   function next () { go(cur + 1); }
-  function restart () { if (timer) clearInterval(timer); timer = setInterval(next, 4500); }
+  function restart () { if (timer) clearInterval(timer); timer = setInterval(next, 3800); }
   document.getElementById('shotPrev').onclick = function () { go(cur - 1); restart(); };
   document.getElementById('shotNext').onclick = function () { go(cur + 1); restart(); };
   box.addEventListener('mouseenter', function () { if (timer) { clearInterval(timer); timer = null; } });
