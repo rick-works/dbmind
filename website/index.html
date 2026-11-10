@@ -20,6 +20,14 @@
     --warn: #f59e0b;
     --danger: #f87171;
     --radius: 14px;
+    /* ===== 宽度体系：全站只有两档内容宽度 =====
+       --content        主栅格：导航、hero、多列区块、文档、页脚（左右边线唯一）
+       --content-narrow 单件展示区：编辑器演示卡、数字统计、版本时间线，居中收窄
+       唯一例外：数据源跑马灯，全屏出血（氛围元素，不参与栅格） */
+    --content: 1120px;
+    --content-narrow: 880px;
+    /* 纵向节奏：区块之间的标准呼吸。组内间距一律收紧（见 .demo-sec / #features） */
+    --sec-y: clamp(64px, 7.5vw, 92px);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -33,7 +41,7 @@
   a { color: inherit; text-decoration: none; }
   ::selection { background: rgba(79, 140, 255, .35); }
 
-  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+  .wrap { max-width: var(--content); margin: 0 auto; padding: 0 24px; }
 
   /* ===== 导航 ===== */
   nav {
@@ -62,7 +70,7 @@
 
   /* ===== Hero ===== */
   header {
-    position: relative; padding: 110px 0 40px; text-align: center; overflow: hidden;
+    position: relative; padding: 112px 0 36px; text-align: center; overflow: hidden;
   }
   header::before {
     content: ""; position: absolute; inset: 0; pointer-events: none;
@@ -101,9 +109,23 @@
   }
   .badge b { color: var(--accent); font-weight: 600; }
   h1 {
-    margin: 26px 0 18px; font-size: clamp(34px, 6vw, 58px);
+    margin: 24px 0 18px; font-size: clamp(34px, 6vw, 58px);
     line-height: 1.25; font-weight: 800; letter-spacing: 1px;
+    text-wrap: balance;
   }
+  /* 390 宽下 34px 会把「大脑」拆成「大 / 脑」两行，小屏单独降一档并收掉字距；
+     .m-br 是小屏专用的断行点，桌面宽度够用不着 */
+  .m-br { display: none; }
+  @media (max-width: 520px) {
+    h1 { font-size: clamp(26px, 7.7vw, 30px); letter-spacing: .5px; line-height: 1.32; }
+    .m-br { display: inline; }
+  }
+  /* 首屏副标题：一句说清「这是什么 + 给谁用」，行宽按中文可读性单独限死，不跟栅格 */
+  .hero-sub {
+    max-width: 680px; margin: 0 auto 30px;
+    font-size: clamp(15px, 1.7vw, 17px); line-height: 1.85; color: var(--dim);
+  }
+  .hero-sub b { color: var(--text); font-weight: 600; }
   h1 .grad {
     background: linear-gradient(100deg, var(--primary) 10%, var(--primary-2) 40%, var(--accent) 70%, var(--primary) 100%);
     background-size: 220% auto;
@@ -152,15 +174,20 @@
   .chip:hover { color: #fff; border-color: rgba(79, 140, 255, .55); transform: translateY(-2px); }
 
   /* ===== 区块通用 ===== */
-  section { padding: 80px 0; }
-  .sec-title { text-align: center; font-size: clamp(26px, 4vw, 36px); font-weight: 800; margin-bottom: 12px; }
-  .sec-sub { text-align: center; color: var(--dim); margin-bottom: 52px; font-size: 16px; }
+  section { padding: var(--sec-y) 0; }
+  .sec-title { text-align: center; font-size: clamp(26px, 4vw, 36px); font-weight: 800; margin-bottom: 0; }
+  .sec-sub { text-align: center; color: var(--dim); margin: 16px 0 44px; font-size: 16px; }
+  /* 紧贴上一区块的续篇区块：去掉上方留白，靠组内 48~64px 与上文连成一组 */
+  .stats-sec { padding: 0 0 var(--sec-y); }
+  .demo-sec { padding: 0 0 64px; }
 
   /* ===== 特性网格 ===== */
+  /* 特性网格与下方编辑器演示是一组：底部只留 48，让「说的」和「看的」挨在一起 */
+  #features { padding-bottom: 48px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
   .feature {
     position: relative; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 28px 26px; transition: transform .2s, border-color .2s;
+    padding: 26px; transition: transform .2s, border-color .2s;
   }
   /* 悬停时 1px 渐变描边亮起（mask 技巧：只留边框环） */
   .feature::before {
@@ -200,7 +227,7 @@
   .demo {
     background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
-    max-width: 880px; margin: 0 auto;   /* 不再整屏拉满，居中更像一张应用截图 */
+    max-width: var(--content-narrow); margin: 0 auto;   /* 单件展示区：与数字统计/时间线同宽，居中更像一张应用截图 */
   }
   .demo-bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); background: #0d1420; }
   .dot { width: 11px; height: 11px; border-radius: 50%; }
@@ -231,10 +258,19 @@
   .demo-foot b { color: var(--accent); font-weight: 600; }
 
   /* ===== 工作流 ===== */
-  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 18px; counter-reset: step; }
-  .step {
-    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 26px; position: relative;
+  /* 这一区自己带背景色，里面再套 4 张卡片就是「卡中卡」，画面发闷。
+     改成一条流程：序号 + 标题 + 说明，细竖线分隔，比四张同构卡片轻得多。 */
+  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0; counter-reset: step; }
+  .step { position: relative; padding: 4px 30px; }
+  .step:first-child { padding-left: 0; }
+  .step:last-child { padding-right: 0; }
+  .step + .step { border-left: 1px solid rgba(148, 163, 184, .18); }
+  @media (max-width: 760px) {
+    .flow { grid-template-columns: 1fr; }
+    .step { padding: 22px 0; }
+    .step:first-child { padding-top: 0; }
+    .step:last-child { padding-bottom: 0; }
+    .step + .step { border-left: none; border-top: 1px solid rgba(148, 163, 184, .18); }
   }
   .step::before {
     counter-increment: step; content: counter(step, decimal-leading-zero);
@@ -252,15 +288,35 @@
   }
   .safe-item {
     display: flex; gap: 14px; align-items: flex-start;
-    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 22px;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px;
   }
   .safe-item .si { font-size: 22px; flex-shrink: 0; margin-top: 2px; }
   .safe-item h4 { font-size: 15px; margin-bottom: 4px; }
   .safe-item p { color: var(--dim); font-size: 13.5px; }
 
   /* ===== 数字 ===== */
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; text-align: center; max-width: 980px; margin: 0 auto; }
-  .stat { padding: 22px 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); }
+  /* 不做成「又一排四张卡片」：合成一条整体数据带，用细竖线分隔。
+     页面里 feature / step / safe / doc 全是 14px 圆角卡片，数字区再长得一样就彻底没层次了。 */
+  .stats {
+    position: relative;
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0;
+    text-align: center; max-width: var(--content-narrow); margin: 0 auto;
+    border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
+    background: linear-gradient(180deg, rgba(79, 140, 255, .07), rgba(124, 92, 255, .03) 55%, transparent);
+  }
+  /* 顶部一道渐增高光，让数据带在暗底上「浮」起来（与导航底部流光线同一语言） */
+  .stats::before {
+    content: ""; position: absolute; top: 0; left: 6%; right: 6%; height: 1px; pointer-events: none;
+    background: linear-gradient(90deg, transparent, rgba(79,140,255,.55) 30%, rgba(124,92,255,.5) 70%, transparent);
+  }
+  .stat { padding: 26px 16px; min-width: 0; }
+  .stat + .stat { border-left: 1px solid var(--border); }
+  /* 820 以下四列会挤成「3+1」的残行，直接锁两列 */
+  @media (max-width: 820px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .stat:nth-child(odd) { border-left: none; }
+    .stat:nth-child(n+3) { border-top: 1px solid var(--border); }
+  }
   .stat .n {
     font-size: 36px; font-weight: 800;
     background: linear-gradient(135deg, var(--primary), var(--accent));
@@ -270,7 +326,7 @@
 
   /* ===== CTA ===== */
   .final {
-    text-align: center; padding: 90px 0;
+    text-align: center; padding: calc(var(--sec-y) * 1.1) 0;
     background:
       radial-gradient(500px 260px at 50% 0%, rgba(79, 140, 255, .14), transparent 70%),
       var(--bg-soft);
@@ -284,7 +340,7 @@
 
   /* ===== 版本时间线 ===== */
   #releases { padding: 88px 0; }
-  .rel-timeline { max-width: 860px; margin: 34px auto 0; }
+  .rel-timeline { max-width: var(--content-narrow); margin: 34px auto 0; }
   .rel-item { display: flex; gap: 18px; }
   .rel-rail { position: relative; width: 11px; flex-shrink: 0; display: flex; justify-content: center; }
   /* 竖线贯穿各版本，最后一条收住 */
@@ -355,8 +411,7 @@
   }
   /* 文档模式：点导航「文档」后只显示文档区，其余区块隐藏；导航「首页」/logo 退出 */
   body.doc-only > *:not(nav):not(#docs) { display: none !important; }
-  /* 赞助：普通区块嵌在安全区之后（不做独占视图） */
-  #sponsor { padding-top: 76px; padding-bottom: 76px; }
+  /* 赞助：普通区块嵌在安全区之后（不做独占视图），纵向呼吸跟全站一致，不再单开一档 */
   .sponsor-wrap { display: flex; flex-direction: column; align-items: center; }
   .sponsor-card {
     max-width: 620px; width: 100%; text-align: center;
@@ -547,7 +602,7 @@
     height: 100%; box-sizing: border-box;
   }
   /* 文档模式下顶栏与内容区同宽（1120 容器），logo 左缘与左目录面板对齐 */
-  body.doc-only .top-inner { max-width: 1120px; }
+  body.doc-only .top-inner { max-width: var(--content); }
   body.doc-only .dtoc { position: static; top: auto; flex: 0 0 224px; height: auto; max-height: none; min-height: 0; }
   body.doc-only .pagenav { position: static; top: auto; flex: 0 0 192px; height: auto; max-height: none; min-height: 0; }
   body.doc-only .doc-main { flex: 1 1 0; min-width: 0; height: auto; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.22) transparent; }
@@ -604,9 +659,9 @@
   /* 特性卡片：悬停辉光 + 图标描边 */
   .feature:hover { box-shadow: 0 14px 42px rgba(79, 140, 255, .13); }
   .feature .icon { box-shadow: inset 0 0 0 1px rgba(79, 140, 255, .22); }
-  /* 数据卡片：悬停浮起 + 辉光 */
-  .stat { transition: transform .2s, box-shadow .2s, border-color .2s; }
-  .stat:hover { transform: translateY(-3px); border-color: rgba(79, 140, 255, .4); box-shadow: 0 12px 34px rgba(79, 140, 255, .12); }
+  /* 数据带：整条不能拆开浮起，只在悬停的那一格上点亮底色 */
+  .stat { transition: background .2s; }
+  .stat:hover { background: rgba(79, 140, 255, .07); }
   /* 全局滚动条（科技感细条） */
   ::-webkit-scrollbar { width: 10px; height: 10px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -651,7 +706,8 @@
   <div class="orb b"></div>
   <div class="wrap">
     <div class="badge reveal"><b>v2.0.17</b> · 17+ 数据源 · GPL-3.0 开源 · 数据不出内网</div>
-    <h1>给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的每一个数据库</h1>
+    <h1>给数据库装上<span class="grad">「大脑」</span><br/>一个客户端，管好你的<br class="m-br" />每一个数据库</h1>
+    <p class="hero-sub reveal">连库、写 SQL、看数据、改结构、搬数据 —— <b>17+ 数据源</b>在同一个窗口里干完，AI 在旁边解释与排错；纯本地运行，数据不出内网。</p>
     <div class="cta-row">
       <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases" target="_blank" rel="noopener">免费下载</a>
       <a class="btn btn-ghost" href="#features">看看能做什么 ↓</a>
@@ -744,12 +800,12 @@
   </div>
 </div>
 
-<section style="padding-top: 0;">
+<section class="stats-sec">
   <div class="wrap">
     <div class="stats reveal">
       <div class="stat"><div class="n">17+</div><div class="t">数据源驱动开箱即用</div></div>
       <div class="stat"><div class="n">18×</div><div class="t">结果集传输压缩比</div></div>
-      <div class="stat"><div class="n">100万+</div><div class="t">行 / 分钟 · 大表传输实测</div></div>
+      <div class="stat"><div class="n">100万+</div><div class="t">行 / 分钟 · 大表实测</div></div>
       <div class="stat"><div class="n">&lt;1s</div><div class="t">千万级表首屏响应</div></div>
     </div>
   </div>
@@ -810,7 +866,7 @@
   </div>
 </section>
 
-<section style="padding-top: 0;">
+<section class="demo-sec">
   <div class="wrap">
     <div class="demo reveal">
       <div class="demo-bar">
