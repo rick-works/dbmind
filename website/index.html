@@ -110,8 +110,8 @@
     border-bottom: 1px solid transparent;
     transition: background .25s ease, border-color .25s ease;
   }
-  /* 滚起来才补回玻璃底与分隔线：文字压在内容上仍看得清 */
-  nav.is-stuck { background: var(--glass); border-bottom-color: var(--border); }
+  /* 滚起来只用「页面底色 + 一条分隔线」，不要更深的一层黑 */
+  nav.is-stuck { background: var(--bg); border-bottom-color: var(--border); backdrop-filter: none; }
   .nav-inner { display: flex; align-items: center; height: 60px; }
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
   .logo-mark { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: block; }
