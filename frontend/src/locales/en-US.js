@@ -2906,7 +2906,7 @@ export default {
   'settings.about.rel119.note3': 'Settings UI fixes (dialog height, inner scrolling, always-visible pager)',
   'settings.about.rel119.note4': 'The About page now lists directories',
   'settings.about.licenseTitle': 'License',
-  'settings.about.licenseBody': 'This software is released under the GNU GPL-3.0.\nYou may freely use, study, modify and redistribute it, including for commercial purposes,\nprovided derivative works are open-sourced under the same license with full source code.\nThe name "DBMind" and its branding remain the property of the author.\nSource & updates:',
+  'settings.about.licenseBody': 'This software is released under the Apache License 2.0.\nYou may freely use, modify and redistribute it, including in commercial and closed-source products,\nprovided you keep the copyright and license notices; the license also grants an express patent license.\nThe name "DBMind" and its branding remain the property of the author.\nSource & updates:',
 
   // ---------- Settings · Shortcuts ----------
   // Keys are derived from the ids in utils/shortcuts.js: 'shortcut.' + id + '.label' / '.desc',

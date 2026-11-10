@@ -2919,7 +2919,7 @@ export default {
   'settings.about.rel119.note3': '设置界面细节修复（弹窗高度、列表内滚动、分页常驻）',
   'settings.about.rel119.note4': '「关于」页新增目录说明',
   'settings.about.licenseTitle': '开源许可',
-  'settings.about.licenseBody': '本软件基于 GNU GPL-3.0 开源。\n可以自由使用、学习、修改与再分发，也可以商用；\n但衍生作品必须以同一许可证开源，并附完整源代码。\n「DBMind」名称与图标归作者所有，发布衍生版本时不得冒用。\n源码与更新：',
+  'settings.about.licenseBody': '本软件基于 Apache License 2.0 开源。\n可以自由使用、修改与再分发，商业使用与闭源集成均无需额外授权；\n只需保留版权与许可证声明，许可证同时含明示的专利授权。\n「DBMind」名称与图标归作者所有，发布衍生版本时不得冒用。\n源码与更新：',
 
   // ---------- 设置 · 快捷键 ----------
   // 键名由 utils/shortcuts.js 的 id 派生：'shortcut.' + id + '.label' / '.desc'，
