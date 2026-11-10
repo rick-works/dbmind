@@ -8,7 +8,7 @@
 <meta name="description" content="DBmind：给数据库装上「大脑」—— AI 原生的多数据库管理平台。一个客户端管理所有数据库，AI 解释/优化/修错每一条 SQL，事务级数据编辑、千万级结果集秒开，本地运行，数据不出内网。" />
 <style>
   :root {
-    --bg: #0b0f17;
+    --bg: #070a13;
     --bg-soft: #111827;
     --card: #141c2b;
     --border: rgba(148, 163, 184, .14);
@@ -20,24 +20,61 @@
     --warn: #f59e0b;
     --danger: #f87171;
     --radius: 14px;
-    /* ===== 宽度体系：全站只有两档内容宽度 =====
-       --content        主栅格：导航、hero、多列区块、文档、页脚（左右边线唯一）
-       --content-narrow 单件展示区：编辑器演示卡、数字统计、版本时间线，居中收窄
-       唯一例外：数据源跑马灯，全屏出血（氛围元素，不参与栅格） */
+    /* ===== 宽度体系：全站**只有一个**内容宽度 =====
+       导航、hero、截图轮播、数字区、演示卡、特性网格、工作流、安全、赞助、版本、文档、页脚
+       全部对齐到同一条左右边线（1120 - 24 padding）。只有区块的**背景色**通栏。 */
     --content: 1120px;
-    --content-narrow: 880px;
     /* 纵向节奏：区块之间的标准呼吸。组内间距一律收紧（见 .demo-sec / #features） */
     --sec-y: clamp(64px, 7.5vw, 92px);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
+  html {
+    scroll-behavior: smooth;
+    /* 深空底：三层极淡星云叠在近黑蓝上；body 透明，好让下面的星空层透出来 */
+    background:
+      radial-gradient(1200px 820px at 12% -8%, rgba(79, 140, 255, .10), transparent 62%),
+      radial-gradient(1000px 720px at 88% -4%, rgba(124, 92, 255, .09), transparent 62%),
+      radial-gradient(900px 760px at 50% 108%, rgba(45, 212, 191, .055), transparent 68%),
+      var(--bg);
+    background-attachment: fixed;
+  }
   body {
-    background: var(--bg);
+    background: transparent;
     color: var(--text);
     font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
     line-height: 1.7;
     overflow-x: hidden;
   }
+  /* ===== 星空 =====
+     两层星点（密度/大小/色温都不同）各自平铺并错开闪烁 —— 固定定位，滚动时不重绘。
+     body 背景透明 + z-index:-1，所以星星落在 html 星云底之上、所有内容之下。 */
+  body::before, body::after {
+    content: ""; position: fixed; inset: 0; z-index: -1;
+    pointer-events: none; background-repeat: repeat;
+  }
+  body::before {
+    opacity: .85;
+    background-size: 300px 300px;
+    background-image:
+      radial-gradient(1.2px 1.2px at 26px 34px, rgba(255,255,255,.95), transparent),
+      radial-gradient(1px 1px at 132px 94px, rgba(206,226,255,.8), transparent),
+      radial-gradient(1.6px 1.6px at 218px 168px, rgba(255,255,255,.9), transparent),
+      radial-gradient(1px 1px at 72px 216px, rgba(186,212,255,.65), transparent),
+      radial-gradient(1.5px 1.5px at 268px 56px, rgba(255,255,255,.75), transparent),
+      radial-gradient(1px 1px at 176px 248px, rgba(255,255,255,.6), transparent);
+  }
+  body::after {
+    opacity: .45;
+    background-size: 340px 340px;
+    animation: twinkle 7s ease-in-out infinite alternate;
+    background-image:
+      radial-gradient(1px 1px at 44px 126px, rgba(255,255,255,.85), transparent),
+      radial-gradient(1.4px 1.4px at 196px 22px, rgba(180,212,255,.95), transparent),
+      radial-gradient(1px 1px at 288px 206px, rgba(255,255,255,.65), transparent),
+      radial-gradient(1.2px 1.2px at 106px 266px, rgba(255,255,255,.75), transparent),
+      radial-gradient(1px 1px at 240px 132px, rgba(210,230,255,.7), transparent);
+  }
+  @keyframes twinkle { from { opacity: .22 } to { opacity: .72 } }
   a { color: inherit; text-decoration: none; }
   ::selection { background: rgba(79, 140, 255, .35); }
 
@@ -99,7 +136,7 @@
   @keyframes orb-drift-a { to { transform: translate(70px, 50px) scale(1.1); } }
   @keyframes orb-drift-b { to { transform: translate(-80px, 60px) scale(.92); } }
   @media (prefers-reduced-motion: reduce) {
-    .orb, .btn-primary { animation: none; }
+    .orb, .btn-primary, body::after { animation: none; }
   }
   .badge {
     display: inline-flex; align-items: center; gap: 8px;
@@ -157,8 +194,10 @@
   .sources-label { font-size: 13px; color: var(--dim); letter-spacing: 2px; margin-bottom: 14px; }
   .marquee {
     overflow: hidden;
-    -webkit-mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
-    mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+    /* 不再整屏出血：与 .wrap 同宽同缩进（padding 24 让芯片边线与其它内容边线对齐），两端渐隐保留 */
+    width: 100%; max-width: var(--content); margin: 0 auto; padding: 0 24px;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent);
   }
   .marquee-track { display: flex; width: max-content; animation: marquee 38s linear infinite; }
   .marquee:hover .marquee-track { animation-play-state: paused; }
@@ -238,7 +277,7 @@
   .demo {
     background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
     overflow: hidden; box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
-    max-width: var(--content-narrow); margin: 0 auto;   /* 单件展示区：与数字统计/时间线同宽，居中更像一张应用截图 */
+    max-width: var(--content); margin: 0 auto;   /* 与全站同宽（1120），不再单独收窄 */
   }
   .demo-bar { display: flex; align-items: center; gap: 8px; padding: 11px 16px; border-bottom: 1px solid var(--border); background: #0d1420; }
   .dot { width: 11px; height: 11px; border-radius: 50%; }
@@ -311,7 +350,7 @@
   .stats {
     position: relative;
     display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 0;
-    text-align: center; max-width: var(--content-narrow); margin: 0 auto;
+    text-align: center; max-width: var(--content); margin: 0 auto;
     border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden;
     background: linear-gradient(180deg, rgba(79, 140, 255, .07), rgba(124, 92, 255, .03) 55%, transparent);
   }
@@ -342,8 +381,8 @@
   .final {
     text-align: center; padding: calc(var(--sec-y) * 1.1) 0;
     background:
-      radial-gradient(500px 260px at 50% 0%, rgba(79, 140, 255, .14), transparent 70%),
-      var(--bg-soft);
+      radial-gradient(500px 260px at 50% 0%, rgba(79, 140, 255, .16), transparent 70%),
+      rgba(10, 15, 26, .55);   /* 半透明：让星空从这一层底下透出来 */
     border-top: 1px solid var(--border);
   }
   .final h2 { font-size: clamp(26px, 4vw, 38px); margin-bottom: 14px; }
@@ -354,7 +393,7 @@
 
   /* ===== 版本时间线 ===== */
   #releases { padding: 88px 0; }
-  .rel-timeline { max-width: var(--content-narrow); margin: 34px auto 0; }
+  .rel-timeline { max-width: var(--content); margin: 34px auto 0; }
   .rel-item { display: flex; gap: 18px; }
   .rel-rail { position: relative; width: 11px; flex-shrink: 0; display: flex; justify-content: center; }
   /* 竖线贯穿各版本，最后一条收住 */
@@ -921,7 +960,7 @@
   </div>
 </section>
 
-<section id="workflow" style="background: var(--bg-soft); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+<section id="workflow" style="background: rgba(15, 22, 38, .55); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);">
   <div class="wrap">
     <h2 class="sec-title reveal" data-eyebrow="WORKFLOW">改数据的安全闭环</h2>
     <p class="sec-sub reveal">四个动作，把「手抖删库」挡在门外</p>
