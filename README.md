@@ -56,22 +56,23 @@ Not every engine does everything, and the UI says so instead of pretending:
 
 ## Screenshots
 
-Every screen ships in both themes. Captured at 2880 px wide (Retina) and downscaled — click any image to open it full size.
+Light and dark themes, switchable at any time.
 
 | Screen | Light | Dark |
 |:--|:-:|:-:|
-| **Home**<br>all connections | <img src="docs/images/home-light.png" width="330" alt="DBmind home screen (light)"> | <img src="docs/images/home-dark.png" width="330" alt="DBmind home screen (dark)"> |
-| **SQL editor**<br>completion, timings | <img src="docs/images/sql-editor-light.png" width="330" alt="SQL editor and results grid (light)"> | <img src="docs/images/sql-editor-dark.png" width="330" alt="SQL editor and results grid (dark)"> |
-| **Table designer**<br>preview ALTER | <img src="docs/images/table-designer-light.png" width="330" alt="Table structure editor (light)"> | <img src="docs/images/table-designer-dark.png" width="330" alt="Table structure editor (dark)"> |
-| **AI assistant**<br>plan, dry run | <img src="docs/images/ai-assistant-light.png" width="330" alt="AI assistant panel (light)"> | <img src="docs/images/ai-assistant-dark.png" width="330" alt="AI assistant panel (dark)"> |
-| **Governance**<br>inferred relations | <img src="docs/images/governance-light.png" width="330" alt="Data governance view (light)"> | <img src="docs/images/governance-dark.png" width="330" alt="Data governance view (dark)"> |
-| **Data transfer**<br>CSV / XLSX / JSON | <img src="docs/images/data-transfer-light.png" width="330" alt="Data transfer (light)"> | <img src="docs/images/data-transfer-dark.png" width="330" alt="Data transfer (dark)"> |
-| **Scripts**<br>snippets, variables | <img src="docs/images/scripts-light.png" width="330" alt="Script library (light)"> | <img src="docs/images/scripts-dark.png" width="330" alt="Script library (dark)"> |
-| **Tasks**<br>progress, logs | <img src="docs/images/tasks-light.png" width="330" alt="Task center (light)"> | <img src="docs/images/tasks-dark.png" width="330" alt="Task center (dark)"> |
-| **Users**<br>roles, privileges | <img src="docs/images/users-light.png" width="330" alt="User management (light)"> | <img src="docs/images/users-dark.png" width="330" alt="User management (dark)"> |
-| **Monitoring**<br>sessions, locks | <img src="docs/images/monitor-light.png" width="330" alt="Monitoring (light)"> | <img src="docs/images/monitor-dark.png" width="330" alt="Monitoring (dark)"> |
-| **ER diagram**<br>drag, export | <img src="docs/images/er-diagram-light.png" width="330" alt="ER diagram (light)"> | <img src="docs/images/er-diagram-dark.png" width="330" alt="ER diagram (dark)"> |
-| **Settings**<br>drivers, themes | <img src="docs/images/settings-light.png" width="330" alt="Settings (light)"> | <img src="docs/images/settings-dark.png" width="330" alt="Settings (dark)"> |
+| **Workspace**<br>tree, recent queries | <img src="docs/images/home-light.png" width="330" alt="Workspace (light)"> | <img src="docs/images/home-dark.png" width="330" alt="Workspace (dark)"> |
+| **SQL editor**<br>completion, timings | — | <img src="docs/images/sql-editor-dark.png" width="330" alt="SQL editor (dark)"> |
+| **Table data**<br>advanced search, paging | — | <img src="docs/images/table-data-dark.png" width="330" alt="Table data (dark)"> |
+| **AI assistant**<br>ask in words, get a chart | — | <img src="docs/images/ai-assistant-dark.png" width="330" alt="AI assistant (dark)"> |
+| **Data transfer**<br>source to target | <img src="docs/images/data-transfer-light.png" width="330" alt="Data transfer (light)"> | <img src="docs/images/data-transfer-dark.png" width="330" alt="Data transfer (dark)"> |
+| **Schema / data compare**<br>diff one by one | <img src="docs/images/compare-light.png" width="330" alt="Compare (light)"> | <img src="docs/images/compare-dark.png" width="330" alt="Compare (dark)"> |
+| **Monitoring**<br>sessions, QPS, locks | <img src="docs/images/monitor-light.png" width="330" alt="Monitoring (light)"> | <img src="docs/images/monitor-dark.png" width="330" alt="Monitoring (dark)"> |
+| **Users & privileges**<br>grant and revoke | <img src="docs/images/users-light.png" width="330" alt="Users (light)"> | <img src="docs/images/users-dark.png" width="330" alt="Users (dark)"> |
+| **Task center**<br>history and timings | <img src="docs/images/tasks-light.png" width="330" alt="Task center (light)"> | <img src="docs/images/tasks-dark.png" width="330" alt="Task center (dark)"> |
+| **Drivers**<br>download or upload | <img src="docs/images/drivers-light.png" width="330" alt="Drivers (light)"> | <img src="docs/images/drivers-dark.png" width="330" alt="Drivers (dark)"> |
+| **AI models**<br>multi-model, temperature | — | <img src="docs/images/models-dark.png" width="330" alt="AI models (dark)"> |
+| **Scripts**<br>scripts and variables | <img src="docs/images/scripts-light.png" width="330" alt="Scripts (light)"> | — |
+| **Table context menu**<br>common actions in place | — | <img src="docs/images/menu-table-dark.png" width="330" alt="Table context menu (dark)"> |
 
 ## AI, more than a chat box
 

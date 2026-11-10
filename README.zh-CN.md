@@ -57,22 +57,23 @@
 
 ## 界面截图
 
-每个页面都有浅色 / 深色两套主题。截图为 2880 px 宽（Retina）原片等比缩小，点击任意图片可看原尺寸。
+浅色 / 深色两套主题，每个页面都能随时切换。
 
 | 界面 | 浅色 | 深色 |
 |:--|:-:|:-:|
-| **首页**<br>所有连接 | <img src="docs/images/home-light.png" width="330" alt="首页（浅色）"> | <img src="docs/images/home-dark.png" width="330" alt="首页（深色）"> |
-| **数据查询**<br>补全与逐段计时 | <img src="docs/images/sql-editor-light.png" width="330" alt="数据查询（浅色）"> | <img src="docs/images/sql-editor-dark.png" width="330" alt="数据查询（深色）"> |
-| **表结构编辑**<br>先预览 ALTER | <img src="docs/images/table-designer-light.png" width="330" alt="表结构编辑（浅色）"> | <img src="docs/images/table-designer-dark.png" width="330" alt="表结构编辑（深色）"> |
-| **AI 助手**<br>计划与试跑 | <img src="docs/images/ai-assistant-light.png" width="330" alt="AI 助手（浅色）"> | <img src="docs/images/ai-assistant-dark.png" width="330" alt="AI 助手（深色）"> |
-| **数据治理**<br>推断表间关系 | <img src="docs/images/governance-light.png" width="330" alt="数据治理（浅色）"> | <img src="docs/images/governance-dark.png" width="330" alt="数据治理（深色）"> |
-| **数据传输**<br>导出与导入 | <img src="docs/images/data-transfer-light.png" width="330" alt="数据传输（浅色）"> | <img src="docs/images/data-transfer-dark.png" width="330" alt="数据传输（深色）"> |
-| **脚本管理**<br>片段与变量 | <img src="docs/images/scripts-light.png" width="330" alt="脚本管理（浅色）"> | <img src="docs/images/scripts-dark.png" width="330" alt="脚本管理（深色）"> |
-| **任务中心**<br>进度与日志 | <img src="docs/images/tasks-light.png" width="330" alt="任务中心（浅色）"> | <img src="docs/images/tasks-dark.png" width="330" alt="任务中心（深色）"> |
-| **用户管理**<br>角色与权限 | <img src="docs/images/users-light.png" width="330" alt="用户管理（浅色）"> | <img src="docs/images/users-dark.png" width="330" alt="用户管理（深色）"> |
-| **服务监控**<br>会话与锁 | <img src="docs/images/monitor-light.png" width="330" alt="服务监控（浅色）"> | <img src="docs/images/monitor-dark.png" width="330" alt="服务监控（深色）"> |
-| **ER 关系图**<br>拖拽与导出 | <img src="docs/images/er-diagram-light.png" width="330" alt="ER 关系图（浅色）"> | <img src="docs/images/er-diagram-dark.png" width="330" alt="ER 关系图（深色）"> |
-| **设置**<br>驱动与主题 | <img src="docs/images/settings-light.png" width="330" alt="设置（浅色）"> | <img src="docs/images/settings-dark.png" width="330" alt="设置（深色）"> |
+| **工作台**<br>连接树、最近查询与趋势 | <img src="docs/images/home-light.png" width="330" alt="工作台（浅色）"> | <img src="docs/images/home-dark.png" width="330" alt="工作台（深色）"> |
+| **SQL 编辑器**<br>补全与逐段计时 | — | <img src="docs/images/sql-editor-dark.png" width="330" alt="SQL 编辑器（深色）"> |
+| **表数据浏览**<br>高级搜索与分页 | — | <img src="docs/images/table-data-dark.png" width="330" alt="表数据浏览（深色）"> |
+| **AI 助手**<br>问数出图与结论 | — | <img src="docs/images/ai-assistant-dark.png" width="330" alt="AI 助手（深色）"> |
+| **数据传输**<br>源目标配对与替换 | <img src="docs/images/data-transfer-light.png" width="330" alt="数据传输（浅色）"> | <img src="docs/images/data-transfer-dark.png" width="330" alt="数据传输（深色）"> |
+| **结构与数据对比**<br>差异逐项列出 | <img src="docs/images/compare-light.png" width="330" alt="结构与数据对比（浅色）"> | <img src="docs/images/compare-dark.png" width="330" alt="结构与数据对比（深色）"> |
+| **服务监控**<br>会话、QPS 与锁 | <img src="docs/images/monitor-light.png" width="330" alt="服务监控（浅色）"> | <img src="docs/images/monitor-dark.png" width="330" alt="服务监控（深色）"> |
+| **用户与权限**<br>授权与回收 | <img src="docs/images/users-light.png" width="330" alt="用户与权限（浅色）"> | <img src="docs/images/users-dark.png" width="330" alt="用户与权限（深色）"> |
+| **任务中心**<br>历史任务与耗时 | <img src="docs/images/tasks-light.png" width="330" alt="任务中心（浅色）"> | <img src="docs/images/tasks-dark.png" width="330" alt="任务中心（深色）"> |
+| **驱动管理**<br>按需下载与上传 | <img src="docs/images/drivers-light.png" width="330" alt="驱动管理（浅色）"> | <img src="docs/images/drivers-dark.png" width="330" alt="驱动管理（深色）"> |
+| **AI 模型配置**<br>多模型、温度与用量 | — | <img src="docs/images/models-dark.png" width="330" alt="AI 模型配置（深色）"> |
+| **脚本管理**<br>脚本与模板变量 | <img src="docs/images/scripts-light.png" width="330" alt="脚本管理（浅色）"> | — |
+| **表右键菜单**<br>常用动作就地可达 | — | <img src="docs/images/menu-table-dark.png" width="330" alt="表右键菜单（深色）"> |
 
 ## AI，不只是聊天
 
