@@ -972,6 +972,11 @@ impl Dialect {
             // 不按权限收窄的话，树上会列出一堆点进去空、连建表都不允许的模式（实测：
             // 给低权限账号建一个无 USAGE 的 schema，改造前它就出现在清单里）。
             // 判据用 `USAGE`：没有它连按名字定位对象都不行，等价于「这个模式对它不可用」。
+            //
+            // 曾经为了与 Navicat 对齐（它不过滤，Supabase 库里 30 个模式全列）改成过
+            // 「全部列出、有权限的排前面」，但那样点进去全是空 —— 用户 2026-11-11 明确
+            // 选择**不显示没权限的**，于是回到这条。要与 Navicat 对齐时别再改这里，
+            // 先问清楚「列出来但打不开」是不是想要的。
             "postgresql" | "kingbase" => Meta::Sql(
                 "select nspname as name from pg_namespace \
                  where nspname not like 'pg\\_%' and nspname <> 'information_schema' \

@@ -369,7 +369,12 @@ pub fn resolve_agent_jar(spec: &AgentHostSpec) -> Option<PathBuf> {
 /// 宿主是独立 JVM ⇒ 用 `-Djdk.net.hosts.file` 指到这里生成的文件即可，
 /// **不需要管理员权限，也不改系统配置**。
 ///
-/// 生成内容 = 系统 hosts 的全部内容（否则 `localhost` 之类的解析会丢）+ 每个连接主机一行。
+/// **但这条属性是独占的**：指定了文件，JVM 就**只**在这份文件里查名字，DNS 完全不参与，
+/// 文件里没有的名字一律 `UnknownHostException: Unable to resolve host … in hosts file …`。
+/// 所以它现在**默认不启用**（要 `DBMIND_AGENT_HOSTS=1` 才传给宿主，见 `agent.rs` 的 spawn 处），
+/// 否则「导入一条用域名的连接」（云 RDS / 域名转发 / K8s Service）必然报解析失败。
+///
+/// 生成内容 = 系统 hosts 的全部内容（否则 `localhost` 之类的解析会丢）+ 每个**IP 主机**一行。
 pub fn prepare_agent_hosts(hosts: &[String]) -> Option<PathBuf> {
     let target = paths::agent_hosts_path();
     // 注释一律用 ASCII：hosts 文件由系统解析器读取，编码不由我们决定，
@@ -406,10 +411,12 @@ pub fn prepare_agent_hosts(hosts: &[String]) -> Option<PathBuf> {
     text.push_str("127.0.0.1 localhost\n::1 localhost\n");
     // 占位名带序号：反解只需要「有个名字」，具体叫什么无所谓。
     // 去重后排序，保证同一批连接生成出来的文件是稳定的。
+    // **只收 IP 字面量**：hosts 每行的第一列必须是 IP，把域名当第一列写进去是非法行，
+    // 那份文件一旦被当成唯一解析源，域名连接反而更容易出问题（这也是它默认不启用的原因）。
     let mut unique: Vec<String> = hosts
         .iter()
         .map(|host| host.trim().to_string())
-        .filter(|host| !host.is_empty() && host != "localhost" && host != "127.0.0.1")
+        .filter(|host| !host.is_empty() && host != "localhost" && host.parse::<std::net::IpAddr>().is_ok())
         .collect();
     unique.sort();
     unique.dedup();
@@ -426,6 +433,21 @@ pub fn prepare_agent_hosts(hosts: &[String]) -> Option<PathBuf> {
         return None;
     }
     Some(target)
+}
+
+/// 宿主 JVM 的 `-Djdk.net.hosts.file` 参数：**默认不给**（`opt_in` 为假一律返回 `None`）。
+///
+/// 这条属性在 JDK 里是**独占式**解析 —— 指定了文件，JVM 就只在这份文件里查名字、
+/// **完全不查 DNS**，文件里没有的名字直接
+/// `UnknownHostException: Unable to resolve host X in hosts file …`。
+/// 而文件只在「启动/保存连接」时按当时的连接列表生成，用户**导入/新建**一条域名连接时
+/// 那个域名必然还不在里面 ⇒ 一点「测试连接」就报解析失败（2026-11-11 PostgreSQL 实测）。
+/// 所以默认关掉：域名连接正确性 > 省会那 4.6 秒反解。
+fn agent_hosts_file_arg(opt_in: bool, path: &Path) -> Option<String> {
+    if !opt_in || !path.is_file() {
+        return None;
+    }
+    Some(format!("-Djdk.net.hosts.file={}", path.display()))
 }
 
 /// java 主版本的缓存。
@@ -1272,12 +1294,20 @@ impl AgentHost {
         // 宿主是长驻 JVM：不藏窗口的话，桌面版里从连上那一刻起就一直挂着一个黑窗
         hide_console(&mut command);
         command.arg("-Dfile.encoding=UTF-8");
-        // 让宿主用一个**自有 hosts 文件**（内容见 prepare_agent_hosts）：
-        // 否则 MySQL 驱动每次建连接反解服务端 IP 都要白等约 4.6 秒。
-        // 文件不存在就不加这个参数 —— 行为与加之前完全一样，纯回退。
-        let agent_hosts = paths::agent_hosts_path();
-        if agent_hosts.is_file() {
-            command.arg(format!("-Djdk.net.hosts.file={}", agent_hosts.display()));
+        // 自有 hosts 文件**默认不用**（`DBMIND_AGENT_HOSTS=1` 才开）：
+        // `jdk.net.hosts.file` 是**独占式**的 —— 一旦指定，JVM 只在这份文件里查名字，
+        // **不再查 DNS**，文件里没有的名字直接报
+        //   java.net.UnknownHostException: Unable to resolve host X in hosts file …
+        // （实测：同一域名不加参数 OK 10.1.14.179，加了参数必抛）。
+        // 于是「连 IP 少等 4.6 秒反解」的收益，换来的是**所有用域名连的库全废**：
+        // 阿里云/AWS 的 RDS、代理转发、K8s Service 全是域名，导入/新建连接时域名还不在文件里，
+        // 一点「测试连接」就是 UnknownHostException（2026-11-11 用户实测 PostgreSQL 中招）。
+        // 逃生阀留给「全部用 IP 直连、且确认不需要域名解析」的场景（见 prepare_agent_hosts）。
+        if let Some(arg) = agent_hosts_file_arg(
+            std::env::var("DBMIND_AGENT_HOSTS").map(|v| v == "1").unwrap_or(false),
+            &paths::agent_hosts_path(),
+        ) {
+            command.arg(arg);
         }
         // SQL Server 的「Windows 验证」在 Windows 上走原生 SSPI，需要那份原生认证库，
         // 而 `java.library.path` **只在 JVM 启动这一刻**生效（宿主是长驻 JVM，启动后再补文件
@@ -1819,6 +1849,25 @@ pub fn is_windows_auth(config: &ConnectionConfig) -> bool {
 mod tests {
     use super::*;
     use crate::ConnectionKind;
+
+    /// `jdk.net.hosts.file` 默认**不下发**：它是独占式解析，会让所有域名连接
+    /// `UnknownHostException`（详见 [`agent_hosts_file_arg`]）。只有显式 opt-in 才给。
+    #[test]
+    fn 宿主默认不下发独占式_hosts_文件参数() {
+        let dir = std::env::temp_dir().join("dbmind-agent-hosts-unit");
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        let file = dir.join("agent-hosts");
+        std::fs::write(&file, "127.0.0.1 localhost\n").expect("写临时 hosts");
+
+        assert_eq!(agent_hosts_file_arg(false, &file), None, "默认必须是系统解析");
+        assert!(agent_hosts_file_arg(true, &file).is_some(), "opt-in 才带参数");
+        assert_eq!(
+            agent_hosts_file_arg(true, &dir.join("missing")),
+            None,
+            "文件不存在时不给（行为与优化前一致）"
+        );
+        let _ = std::fs::remove_file(&file);
+    }
 
     /// 拉起宿主的**过程中**问一句「支持 mysql 吗」，必须按静态声明回答 true。
     ///

@@ -720,5 +720,8 @@
   ],
   "v2.0.22": [
     "The \"Website / GitHub\" icons in the top bar are now the same kind of icon as the other eight - a solid house with an arched doorway (Element's HomeFilled) for the website, the GitHub mark wrapped in el-icon - so their size comes from font-size, like everything else; no more \"looks smaller than its neighbours on macOS\" (Windows is untouched)"
+  ],
+  "v2.0.23": [
+    "Fixed connections that use a host name (cloud RDS and similar) always failing the connection test with UnknownHostException: the database host no longer forces its own hosts file, so imported or newly added host-name connections connect normally"
   ]
 }
