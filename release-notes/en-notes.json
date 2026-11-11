@@ -10,7 +10,8 @@
     "Editing a date or time cell on Oracle no longer fails with ORA-01861: values are converted to explicit date/time literals based on the column type, independent of the session date format",
     "Exported SQL files no longer contain the extra ROWNUM paging helper column (which made them fail with 'column not found' when replayed against a target database)",
     "Dialog headers no longer overlap the close and fullscreen buttons: right-aligned info such as the row detail's 'N chars / M lines' or the index advisor's count stays clear of them",
-    "The top bar icons are consistent now: the website entry is a line-art house matching the GitHub mark and the AI entry is a hand-drawn little robot (top-bar toggle and tab both use it); both follow 'Settings - Interface - Top bar icons'"
+    "The top bar icons are consistent now: the website entry is a line-art house matching the GitHub mark and the AI entry is a hand-drawn little robot (top-bar toggle and tab both use it); both follow 'Settings - Interface - Top bar icons'",
+    "The licence moved from GPL-3.0 to Apache License 2.0 - commercial use, redistribution and private forks no longer carry copyleft obligations"
   ],
   "v2.0.18": [
     "Wide tables no longer lose content on horizontal scroll: in a narrow window, scrolling to the right-hand columns used to show headers with blank cells underneath - the data now follows the column you scroll to (both data browse and the NoSQL data view)",

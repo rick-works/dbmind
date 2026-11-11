@@ -15,6 +15,15 @@
 </script>
 <link rel="icon" type="image/png" href="favicon.png">
 <meta name="description" content="DBmind：给数据库装上「大脑」—— AI 原生的多数据库管理平台。一个客户端管理所有数据库，AI 解释/优化/修错每一条 SQL，事务级数据编辑、千万级结果集秒开，本地运行，数据不出内网。" />
+<!-- 分享预览：之前只有 description，贴到微信 / Slack / X 上都只有一行文字没有配图 -->
+<meta property="og:type" content="website" />
+<meta property="og:site_name" content="DBmind" />
+<meta property="og:url" content="https://www.dbmind.top/" />
+<meta property="og:title" content="DBmind — 给数据库装上「大脑」的 AI 数据库工作台" />
+<meta property="og:description" content="一个客户端管好每一个数据库：AI 解释 / 优化 / 修错 SQL，事务级数据编辑，千万级结果集秒开。17+ 数据源，本地运行，数据不出内网。" />
+<meta property="og:image" content="https://www.dbmind.top/images/shot-home-dark.png" />
+<meta name="twitter:card" content="summary_large_image" />
+<meta name="theme-color" content="#16171b" />
 <style>
   :root {
     --bg: #16171b;
@@ -127,6 +136,23 @@
   .logo { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; letter-spacing: .5px; }
   .logo-mark { width: 30px; height: 30px; border-radius: 8px; flex-shrink: 0; display: block; }
   .nav-links { display: flex; align-items: center; gap: 22px; margin-left: auto; font-size: 14px; height: 60px; }
+  /* 链接组单占一层：桌面是横排，窄屏整组变成汉堡下拉面板（见 max-width:760 那段） */
+  .nav-menu { display: flex; align-items: center; gap: 22px; }
+  /* 汉堡按钮：桌面不显示，窄屏顶到最右 */
+  .nav-toggle {
+    display: none; width: 34px; height: 34px; flex-shrink: 0; padding: 0;
+    align-items: center; justify-content: center; flex-direction: column; gap: 4px;
+    border: 1px solid var(--border); border-radius: 9px; background: var(--panel);
+    color: var(--text); cursor: pointer;
+  }
+  .nav-toggle .nav-bar {
+    display: block; width: 15px; height: 1.6px; border-radius: 2px;
+    background: currentColor; transition: transform .2s ease, opacity .2s ease;
+  }
+  /* 展开时三横变叉，给一个「已打开」的反馈 */
+  nav.nav-open .nav-toggle .nav-bar:nth-child(1) { transform: translateY(5.6px) rotate(45deg); }
+  nav.nav-open .nav-toggle .nav-bar:nth-child(2) { opacity: 0; }
+  nav.nav-open .nav-toggle .nav-bar:nth-child(3) { transform: translateY(-5.6px) rotate(-45deg); }
   .nav-links a { color: var(--dim); font-weight: 500; transition: color .15s; }
   .nav-links a:hover { color: var(--text); }
   .nav-links a.active { color: var(--primary); font-weight: 700; }
@@ -231,8 +257,11 @@
     overflow: hidden;
     /* 不再整屏出血：与 .wrap 同宽同缩进（padding 24 让芯片边线与其它内容边线对齐），两端渐隐保留 */
     width: 100%; max-width: var(--content); margin: 0 auto; padding: 0 24px;
-    -webkit-mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent);
-    mask-image: linear-gradient(90deg, transparent, #000 7%, #000 93%, transparent);
+    /* 两端要「先全透明、再渐入」：单纯线性渐隐时，被边界裁掉一半的芯片仍看得见半个词
+       （表现就是 MySQL 变成 SQL）。这里前 5%（约 55px）完全透明、18%（约 200px）才完全不透明，
+       任何半个芯片都落在透明区里。 */
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, transparent 5%, #000 18%, #000 82%, transparent 95%, transparent);
+    mask-image: linear-gradient(90deg, transparent 0, transparent 5%, #000 18%, #000 82%, transparent 95%, transparent);
   }
   .marquee-track { display: flex; width: max-content; animation: marquee 38s linear infinite; }
   .marquee:hover .marquee-track { animation-play-state: paused; }
@@ -484,6 +513,19 @@
   .rel-notes li b { color: var(--text); font-weight: 600; }
   .rel-links { display: flex; gap: 10px; flex-wrap: wrap; }
   .rel-links .btn { padding: 8px 16px; font-size: 13px; }
+  /* 版本记录已有 120 条，全展开整页三万多像素：默认只显示最近 12 条，其余交给下面的按钮。
+     rel-hidden / is-cut 由页面脚本添加（HTML 里不写死），sync-release-notes 往顶部插新版本时不受影响。 */
+  .rel-item.rel-hidden { display: none; }
+  /* 折叠后「最后一条可见」不再是 :last-child，那条竖线会多拖一截 —— 用它收住 */
+  .rel-item.is-cut .rel-rail::before { bottom: auto; height: 0; }
+  .rel-more { display: flex; justify-content: center; margin-top: 4px; }
+  .rel-more-btn {
+    padding: 9px 20px; border-radius: 9px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    font-size: 13.5px; font-weight: 600; font-family: inherit;
+    transition: border-color .15s, color .15s, box-shadow .15s;
+  }
+  .rel-more-btn:hover { border-color: rgba(91, 141, 239, .55); color: var(--primary); box-shadow: 0 4px 18px rgba(91, 141, 239, .18); }
   body.version-only > *:not(nav):not(#releases) { display: none !important; }
   /* 版本区默认不参与滚动流：只有点导航「版本」进入独占视图才出现（与「文档」同一套路）。
      漏掉这条的话，一路下滑就会在赞助区后面撞见整版版本说明，跟「独占视图」的定位自相矛盾。 */
@@ -564,7 +606,9 @@
     content: "website/sponsor-alipay.png";
     color: #94a3b8; font-size: 11px;
   }
-  .qr-label { color: #1e293b; font-weight: 700; font-size: 14px; }
+  /* 两张收款码图比例不同（微信那张矮 28px），label 若紧跟图片就会一高一低；
+     用 margin-top:auto 把它压到卡片底部，两卡等高 ⇒ 两行标签自然对齐 */
+  .qr-label { color: #1e293b; font-weight: 700; font-size: 14px; margin-top: auto; }
   .sponsor-note { color: var(--dim); font-size: 13px; }
   /* 赞助者名单（放在收款码下面）—— 同色系、弱一档：
      不跟收款码抢注意力，但让人一眼看到"确实有具体的人在支持"。
@@ -752,7 +796,22 @@
     .pagenav { display: none; }
   }
   @media (max-width: 760px) {
-    .nav-links a:not(.nav-cta) { display: none; }
+    /* 导航：链接不再直接 display:none（那样手机上根本没法跳转），改成汉堡下拉面板 */
+    .nav-toggle { display: inline-flex; }
+    .nav-links { gap: 8px; }
+    .nav-menu {
+      position: fixed; top: 66px; left: 12px; right: 12px; z-index: 101;
+      display: none; flex-direction: column; align-items: stretch; gap: 2px;
+      padding: 8px; border: 1px solid var(--border); border-radius: 12px;
+      /* 用实色 --bg 打底：拿 --page-bg（带 fixed 渐变）当面板底色会透出下面的截图 */
+      background-color: var(--bg);
+      background-image: linear-gradient(180deg, rgba(255, 255, 255, .05), transparent 65%);
+      box-shadow: 0 18px 44px rgba(0, 0, 0, .45);
+    }
+    nav.nav-open .nav-menu { display: flex; }
+    .nav-menu a { padding: 10px 12px; border-radius: 8px; font-size: 14.5px; }
+    .nav-menu a:hover { background: var(--panel); color: var(--text); }
+    .nav-menu a.active { background: var(--panel); }
     .demo-body { grid-template-columns: 1fr; }
     .demo-pane + .demo-pane { border-left: none; border-top: 1px solid var(--border); }
     .doc-grid { grid-template-columns: 1fr; }
@@ -776,6 +835,12 @@
   .shot-dots { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 14px; padding: 0 12px; }
   .shot-dots button { width: 8px; height: 8px; padding: 0; border-radius: 4px; border: none; background: var(--dim); opacity: .35; cursor: pointer; transition: all .25s; }
   .shot-dots button.on { opacity: 1; background: var(--primary); width: 22px; }
+  /* 20 张截图就是 20 个点：窄屏原来会折成两行（9 + 5）高低不齐，改成小一号硬挤在一排 */
+  @media (max-width: 760px) {
+    .shot-dots { flex-wrap: nowrap; gap: 5px; }
+    .shot-dots button { width: 6px; height: 6px; border-radius: 3px; }
+    .shot-dots button.on { width: 16px; }
+  }
   .shot-viewer { position: fixed; inset: 0; z-index: 90; display: none; align-items: center; justify-content: center; background: var(--veil); backdrop-filter: blur(6px); padding: 4vh 4vw; cursor: zoom-out; }
   .shot-viewer.open { display: flex; }
   .shot-viewer img { max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
@@ -909,17 +974,25 @@
   <div class="wrap nav-inner">
     <a class="logo" href="#"><img class="logo-mark" src="logo.png" alt="DBmind" />DBmind</a>
     <div class="nav-links">
-      <a href="#" data-i18n="nav.home">首页</a>
-      <a href="#features" data-i18n="nav.features">功能</a>
-      <a href="#workflow" data-i18n="nav.workflow">工作流</a>
-      <a href="#security" data-i18n="nav.security">安全</a>
-      <a href="#sponsor" data-i18n="nav.sponsor">赞助</a>
-      <a href="#releases" data-i18n="nav.releases">版本</a>
-      <a href="#docs" data-i18n="nav.docs">文档</a>
+      <!-- 链接收进 .nav-menu：窄屏时整组变成下拉面板（汉堡），语言 / 主题 / 汉堡常驻导航条右侧。
+           以前窄屏直接 display:none 掉链接、又没有替代入口，手机上根本没法跳到任何区块。 -->
+      <div class="nav-menu" id="navMenu">
+        <a href="#" data-i18n="nav.home">首页</a>
+        <a href="#features" data-i18n="nav.features">功能</a>
+        <a href="#workflow" data-i18n="nav.workflow">工作流</a>
+        <a href="#security" data-i18n="nav.security">安全</a>
+        <a href="#sponsor" data-i18n="nav.sponsor">赞助</a>
+        <a href="#releases" data-i18n="nav.releases">版本</a>
+        <a href="#docs" data-i18n="nav.docs">文档</a>
+      </div>
       <button class="lang-toggle" id="langToggle" type="button" aria-label="切换到英文" title="Switch to English"><span class="lang-ic">中</span></button>
       <button class="theme-toggle" id="themeToggle" type="button" aria-label="切换到浅色模式" title="切换深色 / 浅色">
         <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.2M12 19.2v2.2M4.4 4.4l1.6 1.6M18 18l1.6 1.6M2.6 12h2.2M19.2 12h2.2M4.4 19.6l1.6-1.6M18 6l1.6-1.6"/></svg>
         <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 14.3A8.6 8.6 0 1 1 9.7 3.5a6.9 6.9 0 0 0 10.8 10.8z"/></svg>
+      </button>
+      <!-- 窄屏汉堡：只在 max-width:760 出现，点开把 .nav-menu 摊成下拉面板 -->
+      <button class="nav-toggle" id="navToggle" type="button" aria-label="导航菜单" aria-controls="navMenu" aria-expanded="false">
+        <span class="nav-bar"></span><span class="nav-bar"></span><span class="nav-bar"></span>
       </button>
     </div>
   </div>
@@ -1271,7 +1344,7 @@
           <ul class="rel-notes">
             <li><b>模板变量类型感知</b>：字面量按目标列的类型生成 —— 字符串列填数字自动加引号，ClickHouse 等不再报 NO_COMMON_TYPE；变量管理新增「类型」列（自动/字符串/数字/布尔）可显式指定，填参弹窗实时显示该变量将按什么类型生成</li>
             <li><b>检查更新双源兜底</b>：检测到 GitHub 不可达（国内网络）时自动改走 Gitee，两个源都失败才报错</li>
-            <li><b>开源许可证由自定义非商业协议更换为 GPL-3.0</b></li>
+            <li><b>开源许可证由自定义非商业协议更换为 GPL-3.0</b>（v2.0.19 起已改为 Apache-2.0）</li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.17" target="_blank" rel="noopener">发布说明</a>
@@ -4460,7 +4533,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
   "shot.19": "Scripts · dark",
   "shot.20": "Connection menu · dark",
   "shot.21": "Table menu · dark",
-  "shot.22": "Table menu · send to AI · dark"
+  "shot.22": "Table menu · send to AI · dark",
+  "rel.more": "Show earlier versions"
 };
   var root = document.documentElement;
   var btn = document.getElementById('langToggle');
@@ -4569,6 +4643,27 @@ WHERE dt = :dt AND org = :org;</code></pre>
     navEl.classList.toggle('is-stuck', stuck)
   }
   syncNavBg()
+
+  // 窄屏汉堡菜单：点开 / 选完一项自动收起 / 点空白或按 Esc 收起。
+  // 链接本身仍留在 .nav-menu 里，'#features' 这类锚点与「文档 / 版本」独占视图的逻辑都不用改。
+  const navToggle = document.getElementById('navToggle')
+  const closeNavMenu = () => {
+    navEl.classList.remove('nav-open')
+    if (navToggle) navToggle.setAttribute('aria-expanded', 'false')
+  }
+  if (navToggle) {
+    navToggle.addEventListener('click', (e) => {
+      e.stopPropagation()
+      const open = navEl.classList.toggle('nav-open')
+      navToggle.setAttribute('aria-expanded', open ? 'true' : 'false')
+    })
+    document.querySelectorAll('#navMenu a').forEach((a) => a.addEventListener('click', closeNavMenu))
+    document.addEventListener('click', (e) => {
+      if (navEl.classList.contains('nav-open') && !e.target.closest('nav')) closeNavMenu()
+    })
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeNavMenu() })
+  }
+
   const secIo = new IntersectionObserver((es) => {
     es.forEach(e => {
       if (!e.isIntersecting) return
@@ -4658,6 +4753,35 @@ WHERE dt = :dt AND org = :org;</code></pre>
       else setActive(0)
     }
   }, { passive: true })
+
+  // ---------- 版本记录折叠 ----------
+  // 已有 120 个版本，一次全铺出来整页三万多像素（用户根本翻不到底）。
+  // 默认只留最近 12 条，「展开更早的 N 个版本」按需放出。
+  // 折叠是**脚本加类**、HTML 保持原样：sync-release-notes 往顶部插新版本时不需要照顾这里。
+  ;(() => {
+    const list = document.querySelector('.rel-timeline')
+    if (!list) return
+    const items = [...list.querySelectorAll('.rel-item')]
+    const LIMIT = 12
+    if (items.length <= LIMIT) return
+    const rest = items.slice(LIMIT)
+    rest.forEach((el) => el.classList.add('rel-hidden'))
+    items[LIMIT - 1].classList.add('is-cut')
+    const bar = document.createElement('div')
+    bar.className = 'rel-more'
+    const btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'rel-more-btn'
+    btn.setAttribute('data-i18n', 'rel.more')
+    btn.textContent = '展开更早的 ' + rest.length + ' 个版本'
+    btn.addEventListener('click', () => {
+      rest.forEach((el) => el.classList.remove('rel-hidden'))
+      items[LIMIT - 1].classList.remove('is-cut')
+      bar.remove()
+    })
+    bar.appendChild(btn)
+    list.parentNode.insertBefore(bar, list.nextSibling)
+  })()
 
   // ---------- 赞助者名单（数据在 sponsors.js） ----------
   // 三条规矩：
