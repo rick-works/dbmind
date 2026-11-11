@@ -278,6 +278,11 @@
 
   /* ===== 区块通用 ===== */
   section { padding: var(--sec-y) 0; }
+  /* 顶栏是 fixed 的 60px：锚点跳转不补这段留白，区块标题就正好被压在导航底下，
+     看着像「点了但没跳准」。72 = 60 + 12 呼吸。 */
+  section[id] { scroll-margin-top: 72px; }
+  /* 文档视图是 .doc-main 自己的滚动容器，不经过 fixed 顶栏，给小一点的内边距即可 */
+  .doc-main h2[id], .doc-main h3[id] { scroll-margin-top: 16px; }
   .sec-title { text-align: center; font-size: clamp(26px, 4vw, 36px); font-weight: 800; margin-bottom: 0; }
   /* 章节英文小标：中文大标题上方一行、字距拉开（text-indent 把字距造成的右偏补回来，保持居中） */
   .sec-title[data-eyebrow]::before {
@@ -4743,8 +4748,19 @@ WHERE dt = :dt AND org = :org;</code></pre>
       h.scrollIntoView({ behavior: 'instant', block: 'start' })
     })
   })
-  navItems[0].addEventListener('click', () => { exitDocMode(); leaveVersionMode() })
-  document.querySelector('.logo').addEventListener('click', () => { exitDocMode(); leaveVersionMode() })
+  // 「首页」/ logo：退出独占视图并回顶端。
+  // 顺手 preventDefault：href="#" 的默认动作会在地址栏留下一个孤零零的 #，
+  // 刷新时又按 hash 判断一次，容易和「独占视图」的状态打架。
+  const goHome = (ev) => {
+    ev.preventDefault()
+    exitDocMode()
+    leaveVersionMode()
+    setActive(0)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+    history.replaceState(null, '', location.pathname + location.search)
+  }
+  navItems[0].addEventListener('click', goHome)
+  document.querySelector('.logo').addEventListener('click', goHome)
   // 独占视图下点「功能 / 工作流 / 安全 / 赞助」：先退出独占视图，让默认锚点跳转滚到对应区块
   ;[1, 2, 3, 4].forEach(i => navItems[i].addEventListener('click', () => {
     document.body.classList.remove('doc-only')
