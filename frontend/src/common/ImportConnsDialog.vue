@@ -80,7 +80,7 @@
       </el-button>
     </template>
 
-    <input ref="fileRef" type="file" accept=".json,.ncx,.xml,application/json,text/xml" style="display:none" @change="onFile" />
+    <input ref="fileRef" type="file" accept=".json,.ncx,.dbp,.xml,application/json,text/xml,application/zip" style="display:none" @change="onFile" />
   </el-dialog>
 </template>
 
@@ -93,7 +93,7 @@ import { saveConnection, listConnections } from '../api'
 import { sanitizeConnection } from '../utils/connTransfer'
 import DbLogo from './DbLogo.vue'
 import {
-  IMPORT_SOURCES, sourceLabel, parseImportFile,
+  IMPORT_SOURCES, sourceLabel, parseImportFileAny,
   PWD_INCLUDED, PWD_ENCRYPTED
 } from '../utils/connImporters'
 
@@ -197,14 +197,14 @@ watch(() => props.modelValue, (v) => { if (v) { reset(); loadExisting() } })
 const onFile = async (e) => {
   const file = e.target.files && e.target.files[0]
   if (!file) return
-  let text = ''
+  // .dbp 是 zip，走 parseImportFileAny（内部按魔数判断要不要解包），纯文本文件行为不变
+  let res = null
   try {
-    text = await file.text()
+    res = await parseImportFileAny(file)
   } catch (err) {
     ElMessage.error(t('ci.readFailed'))
     return
   }
-  const res = parseImportFile(text, file.name)
   if (res.error) {
     ElMessage.error(res.error)
     return

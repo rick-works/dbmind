@@ -1,7 +1,7 @@
 import { t } from './i18n'
 import { CONN_FILE_FORMAT } from './connTransfer'
 /**
- * 连接文件的**多来源**解析：DBMind / Navicat (.ncx) / DBeaver (.json)。
+ * 连接文件的**多来源**解析：DBMind (.json) / Navicat (.ncx) / DBeaver (.dbp，zip)。
  *
  * 三个来源的共同目标只有一个：产出 DBMind 自己那套字段（`{ name, type, host, port, … }`），
  * 交给现有的 `saveConnection` 逐条落库。差异全部收敛在本文件里，UI 只认 `parseImportFile()`。
@@ -10,8 +10,8 @@ import { CONN_FILE_FORMAT } from './connTransfer'
  * 1. **类型映射表只认认识的**：认不出来不猜（猜错会生成一条连不上的连接，比"导入失败"更难查），
  *    直接把 `type` 留空，由导入预览标出来让用户自己选。
  * 2. **口令能拿就拿，拿不到就标记**：Navicat 的 `Password` 是加密串（AES/Blowfish，各家版本还不同），
- *    DBeaver 的口令存在 `credentials-config.json` 里且默认不导出，所以这两种来源基本都会落到
- *    「需补填」。硬解一个可能的乱码比"空着"更糟。
+ *    DBeaver 的 `.dbp` 里 `credentials-config.json` 同样加密，所以这两种来源基本都会落到
+ *    「密码已加密」。硬解一个可能的乱码比"空着"更糟。
  * 3. **不认识的元素忽略而不报错**：Navicat/DBeaver 的 XML/JSON 版本差异很大，字段名大小写、
  *    嵌套层级都变过，所以按属性名**大小写不敏感**地在整棵子树里找，找不到就用默认值。
  */
@@ -277,13 +277,124 @@ export function parseImportFile(text, filename = '') {
   }
   if (!list.length) return { error: t('ci.noConnInFile') }
 
+  return { source, list, warnings: buildWarnings(list), name: filename }
+}
+
+/** 三种口令状态分开报：加密串是「有但解不开」，与「压根没带」是两回事，混成一条会误导 */
+function buildWarnings(list, pwdWarnKey = 'ci.warnNavicatPwd') {
   const warnings = []
   const unknownType = list.filter((x) => !x.type).length
   if (unknownType) warnings.push(t('ci.warnUnknownType', { n: unknownType }))
-  // 三种口令状态分开报：加密串是"有但解不开"，与"压根没带"是两回事，混成一条会误导
   const encrypted = list.filter((x) => x.pwd === PWD_ENCRYPTED).length
-  if (encrypted) warnings.push(t('ci.warnNavicatPwd', { n: encrypted }))
+  if (encrypted) warnings.push(t(pwdWarnKey, { n: encrypted }))
   const missing = list.filter((x) => x.pwd === PWD_MISSING).length
   if (missing) warnings.push(t('ci.warnNoPwd', { n: missing }))
-  return { source, list, warnings, name: filename }
+  return warnings
+}
+
+/* ============================ DBeaver 的 .dbp（其实是 zip） ============================ */
+
+/**
+ * DBeaver「导出连接」给的是 **.dbp**，本质是个 zip：
+ *   projects/<项目名>/.dbeaver/data-sources.json      ← 连接清单（JSON）
+ *   projects/<项目名>/.dbeaver/credentials-config.json ← 口令（AES 加密，解不开）
+ *   meta.xml
+ * 之前只按 .json 读，用户拿 .dbp 过来会直接报「无法识别」。
+ *
+ * 这里手写一个最小 zip 读取（只看中央目录 + 本地头），解压用浏览器自带的
+ * `DecompressionStream('deflate-raw')`，不引第三方库（包里只有几十 KB 的 json/xml）。
+ */
+
+const u16 = (dv, off) => dv.getUint16(off, true)
+const u32 = (dv, off) => dv.getUint32(off, true)
+
+/** 从尾部找 EOCD（0x06054b50）；注释最长 65535 字节 */
+function findEocd(dv) {
+  const min = Math.max(0, dv.byteLength - 22 - 0xffff)
+  for (let i = dv.byteLength - 22; i >= min; i--) {
+    if (u32(dv, i) === 0x06054b50) return i
+  }
+  return -1
+}
+
+/** @returns {Map<string, {method:number, raw:Uint8Array}>|null} */
+function readZipEntries(buffer) {
+  const dv = new DataView(buffer)
+  const eocd = findEocd(dv)
+  if (eocd < 0) return null
+  const count = u16(dv, eocd + 10)
+  let off = u32(dv, eocd + 16)
+  const out = new Map()
+  const dec = new TextDecoder()
+  for (let i = 0; i < count; i++) {
+    if (off + 46 > buffer.byteLength || u32(dv, off) !== 0x02014b50) break
+    const method = u16(dv, off + 10)
+    const csize = u32(dv, off + 20)
+    const nameLen = u16(dv, off + 28)
+    const extraLen = u16(dv, off + 30)
+    const commentLen = u16(dv, off + 32)
+    const localOff = u32(dv, off + 42)
+    const name = dec.decode(new Uint8Array(buffer, off + 46, nameLen))
+    if (localOff + 30 <= buffer.byteLength && u32(dv, localOff) === 0x04034b50) {
+      const dataStart = localOff + 30 + u16(dv, localOff + 26) + u16(dv, localOff + 28)
+      const len = Math.min(csize, buffer.byteLength - dataStart)
+      if (len > 0) out.set(name, { method, raw: new Uint8Array(buffer, dataStart, len) })
+    }
+    off += 46 + nameLen + extraLen + commentLen
+  }
+  return out
+}
+
+async function entryText(entry) {
+  if (!entry) return ''
+  if (entry.method === 0) return new TextDecoder().decode(entry.raw)
+  if (typeof DecompressionStream === 'undefined') return ''
+  const stream = new Blob([entry.raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+  return await new Response(stream).text()
+}
+
+/**
+ * 读一个用户选中的文件（文本或 .dbp 压缩包），返回与 parseImportFile 相同的结构。
+ * UI 只调这个，省得每个调用方自己判断魔数。
+ */
+export async function parseImportFileAny(file) {
+  let buffer = null
+  try {
+    buffer = await file.arrayBuffer()
+  } catch (e) {
+    return { error: t('ci.readFailed') }
+  }
+  const head = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength))
+  const isZip = head[0] === 0x50 && head[1] === 0x4b
+  if (!isZip) {
+    let text = ''
+    try {
+      text = new TextDecoder('utf-8').decode(buffer)
+    } catch (e) {
+      return { error: t('ci.readFailed') }
+    }
+    return parseImportFile(text, file.name)
+  }
+  const entries = readZipEntries(buffer)
+  if (!entries) return { error: t('ci.badZip') }
+  const list = []
+  let hasCreds = false
+  for (const [name, entry] of entries) {
+    if (/data-sources\.json$/i.test(name)) {
+      const one = parseImportFile(await entryText(entry), file.name)
+      if (one.list) list.push(...one.list)
+    } else if (/credentials-config\.json$/i.test(name)) {
+      const text = await entryText(entry)
+      if (text && text.trim() && text.trim() !== '{}') hasCreds = true
+    }
+  }
+  if (!list.length) return { error: t('ci.noConnInFile') }
+  // DBeaver 的口令是 AES 加密后存在 credentials-config.json 里的，解不开；
+  // 但「带了口令但解不开」和「压根没导出」要分开说，否则用户会以为导出漏了
+  let warnKey = 'ci.warnNavicatPwd'
+  if (hasCreds) {
+    list.forEach((x) => { if (x.pwd === PWD_MISSING) x.pwd = PWD_ENCRYPTED })
+    warnKey = 'ci.warnDbeaverPwd'
+  }
+  return { source: 'dbeaver', list, warnings: buildWarnings(list, warnKey), name: file.name }
 }
