@@ -2165,7 +2165,7 @@ export default {
   'settings.about.rel1.version': 'v2.0.22',
   'settings.about.rel1.level': 'patch',
   'settings.about.rel1.date': '2026-11-11',
-  'settings.about.rel1.note1': 'macOS: the "Website / GitHub" icons in the top bar are scaled up another notch - the previous compensation was still visibly smaller on a real machine, so each icon is now sized against the whitespace its own artwork carries (Windows is completely untouched, same pixels as before)',
+  'settings.about.rel1.note1': 'The "Website / GitHub" icons in the top bar are now the same kind of icon as the other eight - a filled home glyph for the website and the GitHub mark wrapped in el-icon - so their size and stroke both come from one shared rule; no more "looks smaller than its neighbours on macOS" (Windows is untouched)',
   'settings.about.rel2.version': 'v2.0.21',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-11-11',

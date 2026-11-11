@@ -719,6 +719,6 @@
     "On macOS the \"Website / GitHub\" icons in the top bar no longer look smaller than their neighbours (Windows is untouched)"
   ],
   "v2.0.22": [
-    "macOS: the \"Website / GitHub\" icons in the top bar are scaled up another notch - the previous compensation was still visibly smaller on a real machine, so each icon is now sized against the whitespace its own artwork carries (Windows is completely untouched, same pixels as before)"
+    "The \"Website / GitHub\" icons in the top bar are now the same kind of icon as the other eight - a filled home glyph for the website and the GitHub mark wrapped in el-icon - so their size and stroke both come from one shared rule; no more \"looks smaller than its neighbours on macOS\" (Windows is untouched)"
   ]
 }

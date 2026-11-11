@@ -2179,7 +2179,7 @@ export default {
   'settings.about.rel1.version': 'v2.0.22',
   'settings.about.rel1.level': 'patch',
   'settings.about.rel1.date': '2026-11-11',
-  'settings.about.rel1.note1': 'mac 上顶栏「官网 / GitHub」两个图标再放大一档：上一版只补偿了一点，真机上看仍然比同排小一圈，这次按各自图形的留白重新算过（Windows 完全不受影响，尺寸和之前一模一样）',
+  'settings.about.rel1.note1': 'mac 上顶栏「官网 / GitHub」两个图标改成和另外 8 个同一套图标：官网换成实心房子（Element 的 HomeFilled）、GitHub 标志放进 el-icon，尺寸和描边都由同一条规则决定，不再出现「mac 上比同排小一圈」的问题（Windows 完全不受影响）',
   'settings.about.rel2.version': 'v2.0.21',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-11-11',
