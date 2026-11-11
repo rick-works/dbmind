@@ -1,9 +1,9 @@
-# 临时探针：找出在 GitHub 托管 runner 上**可达**的 Ubuntu 镜像。
+# 临时探针：找出在 GitHub 托管 runner 上**真的能装包**的 Ubuntu 镜像。
 #
-# 由来（2026-11-11）：v2.0.22 / v2.0.23 的 Linux job 连续卡死在 `apt-get update`，
-# 日志里 azure.archive.ubuntu.com 与 archive.ubuntu.com 全在 `Ign:` 重试（完全不可达），
-# 而 packages.microsoft.com 正常。为了不再「盲改 → 整包重打 → 又失败」，用这个探针
-# 一次性验证候选镜像，结果看 job 摘要即可。用完即删。
+# 由来（2026-11-11）：v2.0.22 / v2.0.23 的 Linux job 连续卡死在 `apt-get update`。
+# 日志里真正的报错是 `Temporary failure resolving 'azure.archive.ubuntu.com'`（runner 侧 DNS），
+# 而 `apt-get update` **即使所有索引都失败也返回 0** —— 所以判据必须是「真的装上一个包」。
+# 结果看 job 日志里的 PASS / FAIL 行。用完即删。
 name: apt-probe
 
 on:
@@ -14,29 +14,30 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 12
     steps:
-      - name: 逐个镜像探测
+      - name: 逐个镜像真装一个包
         run: |
           set -uo pipefail
           CODENAME="$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")"
           echo "codename=$CODENAME"
-          echo "=== 镜像自带索引能否直接装（不 update）==="
-          if sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=0 \
-              install -y --no-install-recommends libxdo-dev > /tmp/cache-install.log 2>&1; then
-            echo "自带索引安装：OK"
-          else
-            echo "自带索引安装：FAIL（tail 见下）"; tail -3 /tmp/cache-install.log
-          fi
-          for M in https://mirrors.edge.kernel.org/ubuntu http://mirrors.aliyun.com/ubuntu \
-                   https://mirrors.tuna.tsinghua.edu.cn/ubuntu http://archive.ubuntu.com/ubuntu \
-                   http://azure.archive.ubuntu.com/ubuntu; do
-            echo "::group:: $M"
-            printf 'deb %s %s main universe\ndeb %s %s-updates main universe\n' "$M" "$CODENAME" "$M" "$CODENAME" \
-              | sudo tee /etc/apt/sources.list > /dev/null
-            if sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::http::Timeout=10 \
-                 -o Acquire::https::Timeout=10 -o Acquire::Retries=0 update > /tmp/upd.log 2>&1; then
-              echo "RESULT: OK"
+          echo "== DNS 检查 =="
+          for H in azure.archive.ubuntu.com archive.ubuntu.com mirrors.aliyun.com mirrors.edge.kernel.org mirrors.tuna.tsinghua.edu.cn; do
+            printf '%-32s ' "$H"; getent hosts "$H" | head -1 || echo "DNS-FAIL"
+          done
+
+          for M in http://azure.archive.ubuntu.com/ubuntu http://archive.ubuntu.com/ubuntu \
+                   https://mirrors.edge.kernel.org/ubuntu http://mirrors.aliyun.com/ubuntu \
+                   https://mirrors.tuna.tsinghua.edu.cn/ubuntu; do
+            echo "== 试 $M =="
+            sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+            printf 'deb %s %s main universe\ndeb %s %s-updates main universe\ndeb %s %s-security main universe\n' \
+              "$M" "$CODENAME" "$M" "$CODENAME" "$M" "$CODENAME" | sudo tee /etc/apt/sources.list > /dev/null
+            sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::http::Timeout=12 \
+              -o Acquire::https::Timeout=12 -o Acquire::Retries=1 update > /tmp/upd.log 2>&1
+            if sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::http::Timeout=12 \
+                 -o Acquire::Retries=1 install -y --no-install-recommends libxdo-dev > /tmp/ins.log 2>&1; then
+              echo "PASS $M"
             else
-              echo "RESULT: FAIL"; tail -5 /tmp/upd.log
+              echo "FAIL $M"
+              grep -Ei 'temporary failure|unable to fetch|could not resolve|failed to fetch' /tmp/ins.log /tmp/upd.log | head -3
             fi
-            echo "::endgroup::"
           done
