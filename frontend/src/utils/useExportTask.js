@@ -2,10 +2,50 @@ import { ref, reactive } from 'vue'
 
 import { t, locale } from './i18n'
 import { ElMessage } from 'element-plus'
-import { exportStart, exportTask, exportCancel, exportDownload } from '../api'
+import { exportStart, exportTask, exportCancel, exportDownload, exportSaveTo } from '../api'
 import { errMsg } from './errMsg'
+import { desktopShell } from './desktopShell'
+
+/** 只为了提示里显示文件名（不引 node:path，浏览器里没有） */
+const baseName = (p) => String(p || '').split(/[\\/]/).pop() || ''
+
+/**
+ * 桌面壳里让用户自己选「存到哪」，返回绝对路径。
+ *
+ * 只在**没有** File System Access API 的壳里用（macOS WKWebView / Linux WebKitGTK）：
+ * 那边点导出只能走 `<a download>`，文件静默落进下载目录，用户根本没得选（用户实测反馈）。
+ * 返回：{ path } / { canceled: true } / null（不是桌面壳 → 调用方退回浏览器下载）
+ */
+async function pickNativeSavePath(filename, title = '') {
+  const picked = await desktopShell.pickPath({ title, save: true, defaultName: filename })
+  if (!picked) return null
+  if (picked.canceled) return { canceled: true }
+  return { path: picked.path }
+}
+
+/** 让内核把字节写到指定绝对路径（桌面板壳与内核同机，走本机回环最省事） */
+async function writeBytesToPath(blob, filePath) {
+  const res = await fetch(`/api/files/write?path=${encodeURIComponent(filePath)}`, { method: 'POST', body: blob })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok || data.success === false) {
+    throw new Error(data.message || `HTTP ${res.status}`)
+  }
+  return data
+}
 
 const fmtTime = () => new Date().toLocaleTimeString(locale.value, { hour12: false })
+
+/**
+ * 保存失败的统一出口。
+ *
+ * 为什么在这里报而不交给调用方：全项目十几处导出都调 saveBlobAs，而绝大多数调用方
+ * 只判 `canceled`（拿到 `{ ok:false }` 也照样弹「导出成功」）。保存这事失败必须让人看见，
+ * 所以在这里一次性提示，调用方只要 `if (!saved.ok) return` 就不会再报成功。
+ */
+function failSave (err) {
+  ElMessage.error(t('mv.saveFailed', { detail: errMsg(err) }))
+  return { ok: false, error: err, notified: true }
+}
 const extMap = { csv: 'csv', excel: 'xlsx', json: 'json', 'sql-insert': 'sql', 'sql-update': 'sql', 'sql-delete': 'sql', ddl: 'sql' }
 
 /** 后端已按行上报进度，采样间隔给到 300ms 就足够跟手（以前 500ms 且后端 5000 行才动一次） */
@@ -42,7 +82,7 @@ function pickerTypes(format) {
  * 这里只负责弹系统另存为 + 写盘；拿不到原生另存为（非 Chrome 内核 / 没有用户手势）
  * 就退回普通浏览器下载，至少能落盘。
  */
-export async function saveBlobAs(blob, filename, types) {
+export async function saveBlobAs(blob, filename, types, opts = {}) {
   if (typeof window.showSaveFilePicker === 'function') {
     try {
       const handle = await window.showSaveFilePicker({ suggestedName: filename, types })
@@ -56,6 +96,21 @@ export async function saveBlobAs(blob, filename, types) {
       // SecurityError 等（没有用户手势）：退回普通下载，别让整个导出白跑
     }
   }
+  // 桌面壳但没有原生另存为 API（macOS / Linux）：弹系统保存面板，再让内核落盘
+  const native = await pickNativeSavePath(filename, opts.title)
+  if (native && native.canceled) return { ok: false, canceled: true }
+  if (native && native.path) {
+    try {
+      await writeBytesToPath(blob, native.path)
+      return { ok: true, name: baseName(native.path) }
+    } catch (err) {
+      return failSave(err)
+    }
+  }
+  // 在桌面壳里却连对话框都没弹出来（IPC 被拒 / 壳命令缺失）：**不要**静默落到
+  // 「下载」目录 —— 那样用户只看到一句「导出成功」，根本不知道文件去哪了
+  // （这正是 mac 上"没让我选位置"的观感）。宁可明确报错。
+  if (desktopShell.available) return failSave(new Error(t('mv.saveDialogFailed')))
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -82,7 +137,7 @@ export async function saveExportBlob(blob, name, format, handle = null) {
       await w.close()
       return { ok: true, name: handle.name || filename }
     } catch (err) {
-      return { ok: false, error: err }
+      return failSave(err)
     }
   }
   return saveBlobAs(blob, filename, pickerTypes(format))
@@ -96,13 +151,22 @@ export async function saveExportBlob(blob, name, format, handle = null) {
  * 返回：FileSystemFileHandle / { canceled: true }（用户取消）/ null（不支持，走退回路径）
  */
 export async function pickExportTarget(name, format) {
-  if (typeof window.showSaveFilePicker !== 'function') return null
-  try {
-    return await window.showSaveFilePicker({ suggestedName: exportFileName(name, format), types: pickerTypes(format) })
-  } catch (err) {
-    if (err && err.name === 'AbortError') return { canceled: true }
-    return null
+  const filename = exportFileName(name, format)
+  if (typeof window.showSaveFilePicker === 'function') {
+    try {
+      return await window.showSaveFilePicker({ suggestedName: filename, types: pickerTypes(format) })
+    } catch (err) {
+      if (err && err.name === 'AbortError') return { canceled: true }
+      return null
+    }
   }
+  // 桌面壳的 WebKit（macOS / Linux）：没有上面的 API，改用系统保存面板，
+  // 拿到的绝对路径交给内核直接落盘（见 finishExport 的 nativePath 分支）
+  const native = await pickNativeSavePath(filename)
+  // 壳在、面板没弹出来：返回 failed，让调用方明确报错 —— 不能"悄悄导出到下载目录"
+  if (!native) return desktopShell.available ? { failed: true } : null
+  if (native.canceled) return { canceled: true }
+  return { nativePath: native.path, nativeName: baseName(native.path) }
 }
 
 /**
@@ -160,14 +224,25 @@ export function applyTaskSnapshot(state, r) {
  * 以前是固定写到后端那个目录、再弹一句"已保存到 <后端路径>"+"打开目录" ——
  * 那个路径不是用户要的，用户要的是自己决定存哪儿。
  */
-export async function finishExport(state, connId, taskId, name, format, handle = null) {
+export async function finishExport(state, connId, taskId, name, format, target = null) {
   if (state.status.value === 'success') {
     try {
+      // 原生另存为（桌面壳 WebKit）：位置开跑前就选好了，直接让内核把产物拷过去，
+      // 不必再把几十 MB 拉进前端内存
+      if (target && target.nativePath) {
+        const r = await exportSaveTo(connId, taskId, target.nativePath)
+        if (!r || r.success === false) {
+          throw new Error((r && r.message) || t('common.unknownError'))
+        }
+        ElMessage.success(t('mv.exportSavedAs', { name: target.nativeName || r.fileName || baseName(target.nativePath) }))
+        return
+      }
       const blob = await exportDownload(connId, taskId)
-      const res = await saveExportBlob(blob, name, format, handle)
+      const res = await saveExportBlob(blob, name, format, target)
       if (res.canceled) return
       if (!res.ok) {
-        ElMessage.error(t('mv.downloadFailed', { detail: errMsg(res.error) }))
+        // saveBlobAs 已经提示过一次（res.notified），别叠加第二条
+        if (!res.notified) ElMessage.error(t('mv.downloadFailed', { detail: errMsg(res.error) }))
         return
       }
       ElMessage.success(t('mv.exportSavedAs', { name: res.name }))
@@ -251,6 +326,10 @@ export function useExportTask() {
     // 先挑保存位置，再开始导出（异步导出跑完时已经没有用户手势，那时弹不出来）
     const target = await pickExportTarget(name, format)
     if (target && target.canceled) return
+    if (target && target.failed) {
+      ElMessage.error(t('mv.saveDialogFailed'))
+      return
+    }
     const handle = target && !target.canceled ? target : null
     reset(t('et.exporting', { name: (name || t('et.data')) }))
     visible.value = true

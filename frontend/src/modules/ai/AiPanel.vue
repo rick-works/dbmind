@@ -2409,12 +2409,15 @@ const exportDoc = async (markdown, format, nameHint) => {
     const base = [title, ctxDatabase.value || ctxConnName.value].filter(Boolean).join('_')
     const blob = await aiExportDoc({ title, markdown, format, fileName: base })
     const saved = await saveBlobAs(blob, base + '.' + format)
-    if (saved.canceled) return
+    // 取消 / 保存失败都不该说「已导出」；失败提示由 saveBlobAs 统一给过。
+    // 注意以前 return 写在 try 里而重置写在 try 外，取消一次按钮就一直转圈
+    if (saved.canceled || saved.ok === false) return
     ElMessage.success(t('ai.exportedFmt', { fmt: format.toUpperCase() }))
   } catch (e) {
     ElMessage.error(await blobErrMsg(e) || t('qa.exportFailed'))
+  } finally {
+    exporting.value = ''
   }
-  exporting.value = ''
 }
 
 // ===== 统一执行入口与状态（按当前 Skill 分派） =====

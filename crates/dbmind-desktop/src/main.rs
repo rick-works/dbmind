@@ -481,6 +481,7 @@ async fn pick_path(
     title: Option<String>,
     default_path: Option<String>,
     filters: Option<Vec<String>>,
+    default_name: Option<String>,
 ) -> Option<String> {
     let mut dlg = app.dialog().file();
     if let Some(t) = title.as_deref().filter(|s| !s.is_empty()) {
@@ -520,11 +521,17 @@ async fn pick_path(
             dlg = dlg.add_filter(name, &exts);
         }
     }
+    // 另存为（kind = "save"）：把建议文件名填进对话框，用户能改；同名文件由系统问「是否替换」
+    if kind.as_deref() == Some("save") {
+        if let Some(n) = default_name.as_deref().filter(|s| !s.is_empty()) {
+            dlg = dlg.set_file_name(n);
+        }
+    }
     // blocking_pick_* 不能在主线程调用：async 命令跑在 tokio 线程池里，正好可用
-    let picked = if kind.as_deref() == Some("directory") {
-        dlg.blocking_pick_folder()
-    } else {
-        dlg.blocking_pick_file()
+    let picked = match kind.as_deref() {
+        Some("directory") => dlg.blocking_pick_folder(),
+        Some("save") => dlg.blocking_save_file(),
+        _ => dlg.blocking_pick_file(),
     };
     picked.map(|p| p.to_string())
 }

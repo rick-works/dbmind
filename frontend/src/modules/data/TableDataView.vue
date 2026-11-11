@@ -3307,6 +3307,8 @@ const onExport = async (cmd) => {
     const blob = await exportData(props.conn.id, payload)
     const saved = await saveExportBlob(blob, props.table, format)
     if (saved.canceled) return
+    // 失败提示由 saveBlobAs 统一给过了，这里别再说「已保存」（用户最怕假成功）
+    if (saved.ok === false) return
     ElMessage.success(t('mv.exportSavedAs', { name: saved.name }))
   } catch (e) {
     ElMessage.error(t('tdv.msgExportFailed') + (e?.message || e))

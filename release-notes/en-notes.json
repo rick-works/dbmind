@@ -711,5 +711,11 @@
     "DBeaver imports keep their folder tree: the folders in the file become real DBMind groups, nested the way you had them",
     "DBeaver usernames and passwords come along too: for connections saved with a password, the encrypted credentials file is decrypted and imported (files protected by a master password still cannot be read - fill those in after importing)",
     "Deleting a group no longer re-expands the tree: folders you collapsed by hand stay collapsed"
+  ],
+  "v2.0.21": [
+    "Saving a file on macOS / Linux now opens the real system \"Save As\" panel: table exports, query results, pivot tables, ER diagrams, AI reports and connection bundles all let you pick the folder and the file name, instead of silently dropping into Downloads (the old build only said \"exported\" and you had no idea where the file went)",
+    "Large table / whole-database exports no longer pull tens of MB back through the page: once you pick a location the kernel writes straight to it",
+    "Saving can no longer report a fake success: if the Save As panel cannot open you get an error instead of a quiet fallback to Downloads - and the AI panel's export button no longer spins forever after a cancel",
+    "On macOS the \"Website / GitHub\" icons in the top bar no longer look smaller than their neighbours (Windows is untouched)"
   ]
 }

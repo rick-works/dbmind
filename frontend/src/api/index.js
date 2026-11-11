@@ -475,6 +475,8 @@ export const exportStart = async (id, payload) => { const b = await baseOf(id); 
 export const exportTask = async (id, taskId) => { const b = await baseOf(id); return http.get(`${b}/export/task/${taskId}`).then(r => r.data) }
 export const exportCancel = async (id, taskId) => { const b = await baseOf(id); return http.post(`${b}/export/cancel/${taskId}`).then(r => r.data) }
 export const exportDownload = async (id, taskId) => { const b = await baseOf(id); return http.get(`${b}/export/download/${taskId}`, { responseType: 'blob' }).then(r => r.data) }
+// 把产物直接存到用户选的绝对路径（桌面壳的非 Chromium 内核没有另存为 API 时用）
+export const exportSaveTo = async (id, taskId, filePath) => { const b = await baseOf(id); return http.post(`${b}/export/save/${taskId}`, { path: filePath }).then(r => r.data) }
 
 // 数据库整体转储（异步任务模式）：提交返回 taskId，轮询进度，成功后下载。
 // 复用 /export/task、/export/download、/export/cancel 这三个通用端点（dump 任务也存入同一 task 存储）。

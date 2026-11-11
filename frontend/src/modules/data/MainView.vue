@@ -40,7 +40,9 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <span class="top-nav-right">
+        <!-- is-mac 用 platform 判而不是 isMacShell：后者带 isDesktop 条件（管窗口按钮用），
+             而这里的补偿是**渲染层**差异，mac 上的浏览器版同样需要 -->
+        <span class="top-nav-right" :class="{ 'is-mac': winApi.platform === 'darwin' }">
           <!-- 产品官网（www.dbmind.top）：Cloudflare Pages 托管，点击交系统浏览器打开
                （壳里 window.open/_blank 都无效，统一走 utils/externalLinks）。
                用小房子图标（单色线性、currentColor、尺寸跟 --dc-nav-icon），跟旁边图标同一套；
@@ -9134,6 +9136,20 @@ const connTypeSummary = computed(() =>
    （双类名权重更高，这里再写一条也不会生效，只会造成"两处真相"），故此处不重复声明。 */
 /* GitHub 标志不是 el-icon，尺寸/颜色手动对齐同排：跟 --dc-nav-icon 走，颜色继承按钮前景（悬浮变色一起变）。 */
 .gh-mark { width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); display: block; }
+/* 只有 mac 上这两个内联 SVG 显得比同排 Element 图标小一圈（Windows 上正好，用户实测
+   对比确认）。原因在渲染层：Element 那排是 font-size 驱动的字形，这两个是 SVG 盒子，
+   WKWebView 下同样的 px 给出来的墨迹更轻。**只在 mac 壳里补偿**，Windows 一个像素都不动
+   —— 上一版没分成因直接在公共规则里放大，把 Windows 也带大了（用户反馈）。
+   两个系数不一样是有意的：小房子的 viewBox 四周有留白（可见只有盒子的 72%），
+   章鱼猫是满幅实心圆，同系数放大会让后者比同排大出一截。 */
+.top-nav-right.is-mac .site-mark {
+  width: calc(var(--dc-nav-icon, 16px) * 1.22);
+  height: calc(var(--dc-nav-icon, 16px) * 1.22);
+}
+.top-nav-right.is-mac .gh-mark {
+  width: calc(var(--dc-nav-icon, 16px) * 1.08);
+  height: calc(var(--dc-nav-icon, 16px) * 1.08);
+}
 .conn-label { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--dc-tree-fs, 14px); color: var(--dc-text); }
 .conn-label.t-mysql { }
 .conn-label.t-doris { }

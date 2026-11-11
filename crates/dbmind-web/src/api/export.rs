@@ -13,6 +13,10 @@
 //! 前端的导出菜单只给 CSV / Excel / JSON 三项，而 Excel 是主路径 ——
 //! 少了它，「导出」在界面上是一半死的（能点，但是 501）。
 //!
+//! 另外还有一条 `POST {m}/export/save/{taskId}`：把已生成的产物**直接写到用户选的绝对路径**。
+//! 这是给「桌面壳的非 Chromium 内核」（macOS / Linux 的 WebKit）用的 —— 那边没有
+//! `showSaveFilePicker`，`<a download>` 只会静默落到「下载」目录，用户根本没机会选文件夹。
+//!
 //! ## 四个必须说清的决定
 //!
 //! 1. **全部导出走「包一层子查询再分页」**，不往用户 SQL 后面直接拼 `limit`：
@@ -31,7 +35,8 @@ use std::fs::File;
 use std::io::{BufWriter, Cursor, Write};
 use std::path::{Path as FsPath, PathBuf};
 
-use axum::extract::{Path, State};
+use axum::body::Bytes;
+use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -2041,6 +2046,101 @@ pub async fn download(
                 .into_response()
         }
     }
+}
+
+/// `POST /api/{m}/export/save/{taskId}` —— 把产物直接另存到用户选的绝对路径。
+///
+/// 为什么不走「前端取 blob 再写盘」：
+/// ① macOS / Linux 桌面壳是 WKWebView / WebKitGTK，`showSaveFilePicker` 不存在，
+///    `<a download>` 又只会静默落到默认下载目录（用户报「mac 上没让我选文件夹」）；
+/// ② 几十 MB 的产物经 IPC 来回搬一遍没有任何收益 —— 桌面版的壳与内核在同一台机器上，
+///    服务端自己 `copy` 一下就完事。
+///
+/// 路径由前端调用**系统原生另存为**得到（见 crates/dbmind-desktop 的 `pick_path`）。
+pub async fn save(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Json(body): Json<Value>,
+) -> XResult<Json<Value>> {
+    let dest = body
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if dest.is_empty() {
+        return Err(XError::bad_request("缺少保存路径"));
+    }
+    let target = PathBuf::from(&dest);
+    if !target.is_absolute() {
+        return Err(XError::bad_request(format!("保存路径必须是绝对路径：{dest}")));
+    }
+    let Some(task) = state.tasks.get(&task_id) else {
+        return Err(XError::bad_request("任务不存在或已过期"));
+    };
+    let Some(artifact) = task.artifact() else {
+        return Err(XError::bad_request("任务尚未完成，没有可保存的文件"));
+    };
+    // 目录必须已经存在：另存为对话框给的位置一定存在，这里只是兜住手改路径/目录被删的情况
+    if let Some(dir) = target.parent() {
+        if !dir.as_os_str().is_empty() && !dir.is_dir() {
+            return Err(XError::bad_request(format!(
+                "目标目录不存在：{}",
+                dir.display()
+            )));
+        }
+    }
+    // 产物是一次性中转（download / save 拿完就删）：重复点「保存」时文件已经没了，
+    // 直接照抄 copy 的系统报错是「系统找不到指定的文件」，用户完全看不出发生了什么
+    if !artifact.path.exists() {
+        return Err(XError::bad_request(
+            "导出产物已被取走或已清理，请重新导出后再保存",
+        ));
+    }
+    std::fs::copy(&artifact.path, &target)
+        .map_err(|e| XError::internal(format!("无法写入 {}：{e}", target.display())))?;
+    // 与 download 同口径：服务端这份只是中转，拷完就删
+    let _ = std::fs::remove_file(&artifact.path);
+    Ok(Json(json!({
+        "success": true,
+        "path": target.display().to_string(),
+        "fileName": artifact.filename,
+    })))
+}
+
+/// `POST /api/files/write?path=<绝对路径>` —— 把请求体原样写成文件。
+///
+/// 只服务一个场景：桌面壳里**前端已经拿到字节**的保存（结果集导出、单页导出）。
+/// 那些调用没有后端任务产物可拷，而 macOS / Linux 的 WebKit 又没有 `showSaveFilePicker`，
+/// 于是用户连「存到哪」都选不了。字节走一次本机回环比塞进 Tauri IPC 便宜得多
+/// （IPC 是 JSON，几十 MB 的数组会被逐字节展开）。
+pub async fn write_file(
+    Query(q): Query<std::collections::HashMap<String, String>>,
+    body: Bytes,
+) -> XResult<Json<Value>> {
+    let dest = q.get("path").map(|s| s.as_str()).unwrap_or("").trim().to_string();
+    if dest.is_empty() {
+        return Err(XError::bad_request("缺少保存路径"));
+    }
+    let target = PathBuf::from(&dest);
+    if !target.is_absolute() {
+        return Err(XError::bad_request(format!("保存路径必须是绝对路径：{dest}")));
+    }
+    if let Some(dir) = target.parent() {
+        if !dir.as_os_str().is_empty() && !dir.is_dir() {
+            return Err(XError::bad_request(format!(
+                "目标目录不存在：{}",
+                dir.display()
+            )));
+        }
+    }
+    std::fs::write(&target, &body)
+        .map_err(|e| XError::internal(format!("无法写入 {}：{e}", target.display())))?;
+    Ok(Json(json!({
+        "success": true,
+        "path": target.display().to_string(),
+        "size": body.len(),
+    })))
 }
 
 #[cfg(test)]

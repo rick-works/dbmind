@@ -186,7 +186,13 @@ const doExport = async () => {
     const name = 'dbmind-connections-' + new Date().toISOString().slice(0, 10) + '.' + CONN_FILE_EXT
     const res = await downloadJson(name, bundle)
     if (res && res.canceled) return
-    ElMessage.success(t('ce.done', { n: list.length }))
+    // 保存失败已经由 saveBlobAs 统一提示过了，这里别再报「已导出」
+    if (res && res.ok === false) return
+    // 保存到哪由用户自己选（mac / Linux 桌面壳弹的是系统「另存为」面板），
+    // 所以提示里带文件名为好 —— 只说「已导出 N 条」的话，用户不知道东西存哪去了
+    ElMessage.success(
+      res && res.name ? t('mv.exportSavedAs', { name: res.name }) : t('ce.done', { n: list.length })
+    )
     emit('update:modelValue', false)
   } catch (e) {
     ElMessage.error(t('ce.failed', { detail: (e && e.message) || t('common.unknownError') }))

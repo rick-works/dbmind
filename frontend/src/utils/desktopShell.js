@@ -227,18 +227,23 @@ export const desktopShell = {
    *   null                      这个环境没有原生对话框（浏览器版 / 壳被 ACL 拒）——
    *                             调用方回退到「后端列目录 + 自绘浏览」那条老路
    *
+   * `save: true` 走系统的「另存为」面板（defaultName 预填文件名，用户可改）。
+   * 这是 macOS / Linux 桌面版唯一能让用户自己选文件夹的办法：那边的 WKWebView /
+   * WebKitGTK 没有 `showSaveFilePicker`，`<a download>` 只会静默落到下载目录。
+   *
    * 浏览器版为什么必须留着老路：`<input type=file>` 只给文件名（还带 fake path），
    * 而连库 / 还原要的是后端能直接打开的**绝对路径**，只有让后端列目录才拿得到。
    */
-  async pickPath({ title = '', filters = [], defaultPath = '', directory = false } = {}) {
+  async pickPath({ title = '', filters = [], defaultPath = '', directory = false, save = false, defaultName = '' } = {}) {
     if (!hasTauri) return null
     try {
       const { invoke } = await import('@tauri-apps/api/core')
       const picked = await invoke('pick_path', {
-        kind: directory ? 'directory' : 'file',
+        kind: save ? 'save' : directory ? 'directory' : 'file',
         title: String(title || ''),
         defaultPath: String(defaultPath || ''),
-        filters: Array.isArray(filters) ? filters.map(String) : []
+        filters: Array.isArray(filters) ? filters.map(String) : [],
+        defaultName: String(defaultName || '')
       })
       if (!picked) return { canceled: true }
       return { path: String(picked) }

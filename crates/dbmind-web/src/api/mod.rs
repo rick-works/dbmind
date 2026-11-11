@@ -269,6 +269,8 @@ fn relational_module(module: &str) -> Router<AppState> {
         .route(&p("/export/dump-task/{id}"), post(export::dump_task))
         .route(&p("/export/cancel/{taskId}"), post(export::cancel))
         .route(&p("/export/download/{taskId}"), get(export::download))
+        // 桌面壳（macOS / Linux 的 WebKit 没有另存为 API）：产物直接写到用户选的绝对路径
+        .route(&p("/export/save/{taskId}"), post(export::save))
         // 导入：multipart 上传 → 异步写入 → 进度 / 取消
         // 上传体积单独放宽（默认 2 MB 连一个几十兆的 CSV 都收不下）
         .route(
@@ -309,6 +311,12 @@ pub fn routes() -> Router<AppState> {
         .route("/api/connections/{id}/copy", post(conn::copy))
         // 导出连接（导出弹窗用）：唯一会按需带出明文口令的接口，见 conn::export 的说明
         .route("/api/connections/export", post(conn::export))
+        // 桌面壳（macOS / Linux 的 WebKit 没有另存为 API）：前端已拿到字节时，让内核写到用户选的路径。
+        // 体积按导出量放宽（默认 2 MB 连一页 Excel 都不够）
+        .route(
+            "/api/files/write",
+            post(export::write_file).layer(DefaultBodyLimit::max(256 * 1024 * 1024)),
+        )
         .route("/api/drivers/types", get(sys::driver_types))
         .route("/api/drivers/status", get(sys::driver_status))
         // 强制重新下载驱动（清掉失败缓存，用于重试；设置页「驱动下载」的「下载」按钮就用它）
