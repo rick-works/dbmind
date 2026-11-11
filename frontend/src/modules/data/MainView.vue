@@ -4664,6 +4664,20 @@ const onTopCmd = (cmd) => {
   }
 }
 
+/**
+ * 节点的**所有祖先**是否都处于展开态。
+ * el-tree 的 `node.expanded` 只记自己：分组被收起时，里面的连接节点仍然是 expanded=true，
+ * 只有沿 parent 往上逐级确认，才知道它此刻**看得见**。
+ */
+const ancestorsAllExpanded = (node) => {
+  let p = node && node.parent
+  while (p) {
+    if (p.level > 0 && !p.expanded) return false
+    p = p.parent
+  }
+  return true
+}
+
 // 构建完整树：环境分组 → 数据源（连接节点的库/表在展开时懒加载）
 // 重建前后记录并恢复展开状态，保证复制/删除/刷新等操作不改变树的展开与收起
 const buildTree = async () => {
@@ -4675,6 +4689,11 @@ const buildTree = async () => {
     for (const key of Object.keys(store.nodesMap)) {
       const n = store.nodesMap[key]
       if (!n || !n.expanded) continue
+      // **祖先收起的节点不算"展开"** —— el-tree 的 node.expanded 只记自己，
+      // 挂在收起的分组下面的连接仍然是 expanded=true。这样的 key 一旦进 expandedKeys，
+      // 下面的 restore 循环就会因为"取不到节点"去展开它的父节点（expandNode 里的兜底），
+      // 把用户亲手收起来的分组重新拉开 —— 用户报的「删个分组，左边树自己展开了」就是它。
+      if (!ancestorsAllExpanded(n)) continue
       // **已关闭的连接不恢复展开** —— 否则新建/重命名分组等任何树重建都会把它
       // 重新展开并加载库列表，图标跟着变亮：连接被「自动打开」（用户踩过）。
       // 关闭态的口径与 isConnOpen 一致：库缓存没了、也没有页签占用它。
