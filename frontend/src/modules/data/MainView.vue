@@ -40,28 +40,23 @@
             </el-dropdown-menu>
           </template>
         </el-dropdown>
-        <!-- is-mac 用 platform 判而不是 isMacShell：后者带 isDesktop 条件（管窗口按钮用），
-             而这里的补偿是**渲染层**差异，mac 上的浏览器版同样需要 -->
-        <span class="top-nav-right" :class="{ 'is-mac': winApi.platform === 'darwin' }">
+        <span class="top-nav-right">
           <!-- 产品官网（www.dbmind.top）：Cloudflare Pages 托管，点击交系统浏览器打开
                （壳里 window.open/_blank 都无效，统一走 utils/externalLinks）。
-               用小房子图标（单色线性、currentColor、尺寸跟 --dc-nav-icon），跟旁边图标同一套；
-               自绘彩色 logo 在这排 monochrome 图标里总是多出一个色块，已弃用。 -->
+               图标用 Element 的**实心** HomeFilled，和旁边 8 个图标同一套（font-size 驱动的字形、
+               满幅填充）。以前是手写的线框 SVG，盒子里有留白、墨迹只有实心图标的三分之一，
+               mac 的 Retina 把细线渲染得更细，看起来就比同排小一圈（Windows 上差异不明显）。 -->
           <el-tooltip :content="$t('nav.officialSite')" placement="bottom">
             <span class="top-nav-item top-icon-btn" @click="openExternal('https://www.dbmind.top/')">
-              <svg class="site-mark" viewBox="0 0 24 24" aria-hidden="true" fill="none"
-                   stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3.4 10.6 12 3.6l8.6 7" />
-                <path d="M5.6 9.7V19a1 1 0 0 0 1 1h10.8a1 1 0 0 0 1-1V9.7" />
-                <path d="M10 20v-4.6h4V20" />
-              </svg>
+              <el-icon><HomeFilled /></el-icon>
             </span>
           </el-tooltip>
-          <!-- GitHub 仓库主页：element-plus 没有 octocat 标志，用官方 octicon mark 内联 SVG，
-               尺寸跟随「顶栏右侧图标」设置（--dc-nav-icon）。 -->
+          <!-- GitHub 仓库主页：element-plus 没有 octocat 标志，仍用官方 octicon mark，
+               但**放进 el-icon 里**——尺寸由 `.el-icon svg { width/height: 1em }` 接管，
+               与其它图标完全同源，不再需要任何按平台的尺寸补偿。 -->
           <el-tooltip :content="$t('nav.githubSite')" placement="bottom">
             <span class="top-nav-item top-icon-btn" @click="openExternal('https://github.com/rick-works/dbmind')">
-              <svg class="gh-mark" viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+              <el-icon><svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg></el-icon>
             </span>
           </el-tooltip>
           <el-tooltip :content="$t('nav.knowledge')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': knowledgeOpen }" @click="openKnowledge"><el-icon><Reading /></el-icon></span></el-tooltip>
@@ -1325,7 +1320,7 @@ onBeforeUnmount(() => {
 })
 // 菜单配置 / 语言切换会改条目数量与文字宽度，重新量一次
 watch([topMenuPrimary, () => locale.value], () => nextTick(fitTopNav))
-import { Sunny, Moon, Clock, Reading, Delete as ElDelete } from '@element-plus/icons-vue'
+import { Sunny, Moon, Clock, Reading, HomeFilled, Delete as ElDelete } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
 import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 import { locale, setLocale } from '../../utils/i18n'
@@ -9081,11 +9076,10 @@ const connTypeSummary = computed(() =>
 .win-act svg { width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); fill: none; stroke: currentColor; stroke-width: 1.4; }
 .win-act:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
 .win-act.is-close:hover { background: #e81123; color: #fff; }
-/* 顶栏右侧「产品官网」小房子：与 GitHub octicon 同一套（内联单色 SVG、currentColor、
-   尺寸跟 --dc-nav-icon），悬浮时和其它图标一起变色。 */
-.site-mark {
-  width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); display: block;
-}
+/* 顶栏右侧那两个图标现在都走 el-icon（官网=HomeFilled 实心字形、GitHub=el-icon 包一个
+   octicon），尺寸由 index.css 的 `.top-icon-btn.top-icon-btn .el-icon { font-size: --dc-nav-icon }`
+   统一决定 —— 以前它们各自是裸 SVG、要单独写 width/height 并额外按平台补偿，
+   现在不需要了，别在这里再加尺寸规则。 */
 .top-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .top-nav-item {
   display: inline-flex; align-items: center; gap: 5px;
@@ -9133,25 +9127,8 @@ const connTypeSummary = computed(() =>
   line-height: 1; flex: 0 0 auto;
 }
 /* 右侧那组图标的尺寸由 index.css 的 `.top-icon-btn.top-icon-btn .el-icon` 决定
-   （双类名权重更高，这里再写一条也不会生效，只会造成"两处真相"），故此处不重复声明。 */
-/* GitHub 标志不是 el-icon，尺寸/颜色手动对齐同排：跟 --dc-nav-icon 走，颜色继承按钮前景（悬浮变色一起变）。 */
-.gh-mark { width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); display: block; }
-/* 只有 mac 上这两个内联 SVG 显得比同排 Element 图标小一圈（Windows 上正好，用户实测
-   对比确认）。原因在渲染层：Element 那排是 font-size 驱动的字形，这两个是 SVG 盒子，
-   WKWebView 下同样的 px 给出来的墨迹更轻。**只在 mac 壳里补偿**，Windows 一个像素都不动
-   —— 之前没分成因直接在公共规则里放大，把 Windows 也带大了（用户反馈）。
-   两个系数不一样是有意的：小房子的 viewBox 四周有留白（可见只有盒子的 72%），
-   章鱼猫是满幅实心圆，同系数放大会让后者比同排大出一截。
-   1.22 / 1.08 在真机上仍然"看得出小"，所以再加一档：房子 1.45（可见 ≈16.7，
-   比同排 Element 的 ~14 明显一档），章鱼猫 1.15（≈18.4）。 */
-.top-nav-right.is-mac .site-mark {
-  width: min(calc(var(--dc-nav-icon, 16px) * 1.45), 24px);
-  height: min(calc(var(--dc-nav-icon, 16px) * 1.45), 24px);
-}
-.top-nav-right.is-mac .gh-mark {
-  width: min(calc(var(--dc-nav-icon, 16px) * 1.15), 21px);
-  height: min(calc(var(--dc-nav-icon, 16px) * 1.15), 21px);
-}
+   （双类名权重更高，这里再写一条也不会生效，只会造成"两处真相"），故此处不重复声明。
+   GitHub 的 octicon 现在也包在 el-icon 里，同样吃这条规则，所以不再需要 .gh-mark 的尺寸。 */
 .conn-label { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--dc-tree-fs, 14px); color: var(--dc-text); }
 .conn-label.t-mysql { }
 .conn-label.t-doris { }
