@@ -147,7 +147,8 @@ jobs:
           APT="-o Acquire::ForceIPv4=true -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=1"
 
           echo "== ① 用镜像自带索引直接安装（不 update）=="
-          if sudo apt-get $APT install -y --no-install-recommends $PKGS; then
+          # 每级都套 coreutils 的 timeout：预算必须花在**能通的镜像**上，不能被坏镜像耗光
+          if timeout 150 sudo apt-get $APT install -y --no-install-recommends $PKGS; then
             echo "依赖已在镜像索引中，安装完成"; exit 0
           fi
 
@@ -161,7 +162,7 @@ jobs:
             sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
             printf 'deb %s %s main restricted universe multiverse\ndeb %s %s-updates main restricted universe multiverse\ndeb %s %s-security main restricted universe multiverse\n' \
               "$M" "$CODENAME" "$M" "$CODENAME" "$M" "$CODENAME" | sudo tee /etc/apt/sources.list > /dev/null
-            if sudo apt-get $APT update && sudo apt-get $APT install -y --no-install-recommends $PKGS; then
+            if timeout 180 sudo apt-get $APT update && timeout 300 sudo apt-get $APT install -y --no-install-recommends $PKGS; then
               echo "镜像 $M 安装成功"; exit 0
             fi
           done
