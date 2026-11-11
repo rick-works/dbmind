@@ -1296,6 +1296,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v2.0.20（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.20</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>导入 DBeaver 连接时保留分组：文件里的目录层级会变成 DBMind 的分组，导入后在树里直接是嵌套节点</b></li>
+            <li><b>DBeaver 的用户名和密码也能导入了：勾了「保存密码」的连接，账号口令被加密存在凭据文件里，现在自动解开一并导入（设了主密码的仍读不出，导入后补填）</b></li>
+            <li><b>删掉分组后左侧树不再自己展开</b>：之前会把你手动收起的分组重新拉开</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.20" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.20" target="_blank" rel="noopener">下载 v2.0.20</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.19（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1303,7 +1324,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.19</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-11</span>
           </div>
           <ul class="rel-notes">
@@ -1356,7 +1376,7 @@
           <ul class="rel-notes">
             <li><b>模板变量类型感知</b>：字面量按目标列的类型生成 —— 字符串列填数字自动加引号，ClickHouse 等不再报 NO_COMMON_TYPE；变量管理新增「类型」列（自动/字符串/数字/布尔）可显式指定，填参弹窗实时显示该变量将按什么类型生成</li>
             <li><b>检查更新双源兜底</b>：检测到 GitHub 不可达（国内网络）时自动改走 Gitee，两个源都失败才报错</li>
-            <li><b>开源许可证由自定义非商业协议更换为 GPL-3.0</b>（v2.0.19 起已改为 Apache-2.0）</li>
+            <li><b>开源许可证由自定义非商业协议更换为 GPL-3.0</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.17" target="_blank" rel="noopener">发布说明</a>

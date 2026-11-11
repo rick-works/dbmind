@@ -706,5 +706,10 @@
     "Header sort on results is now a true whole-table sort: the ORDER BY goes to the database in a fresh query instead of reordering only the loaded page - on a multi-million row table you finally see the newest / oldest rows; ORDER BY / LIMIT / UNION already in your SQL, trailing semicolons and inline comments all still work",
     "Multi-statement scripts line up too: sorting re-runs only the result set you are looking at, the other result sets stay untouched and write statements are never executed twice",
     "Fixed a sort-direction bug where the header showed a descending arrow but the query still ran ascending"
+  ],
+  "v2.0.20": [
+    "DBeaver imports keep their folder tree: the folders in the file become real DBMind groups, nested the way you had them",
+    "DBeaver usernames and passwords come along too: for connections saved with a password, the encrypted credentials file is decrypted and imported (files protected by a master password still cannot be read - fill those in after importing)",
+    "Deleting a group no longer re-expands the tree: folders you collapsed by hand stay collapsed"
   ]
 }
