@@ -1302,10 +1302,17 @@
             <span class="rel-date">2026-11-11</span>
           </div>
           <ul class="rel-notes">
+            <li><b>连接树右键新增「管理连接」</b>：按目录列出全部连接，勾选后可批量测试、批量导出、批量删除，支持按名称 / 主机 / 类型 / 目录搜索</li>
+            <li><b>「导入连接」一次就收三种文件</b>：DBMind、Navicat（.ncx）、DBeaver（.json）。解析完先给预览再落库，同名连接可选跳过 / 覆盖 / 重命名，也能直接导入到指定目录；Navicat、DBeaver 里的密码是加密的，读不出来时会标出来让你补填</li>
+            <li><b>「导出连接」可自行决定要不要带密码（数据库密码、SSH 密码），默认不带；勾上时文件里是明文，界面会提醒你保管好</b></li>
+            <li><b>没归组的连接统一叫「未分组」（以前叫「数据源」）：打开连接看一眼再保存，不会再被自动塞进某个自建目录里悄悄换位置</b></li>
+            <li><b>连接失败终于说人话了</b>：PostgreSQL 的「尝试连线已失败。」、MySQL 的「Communications link failure」后面会接上真正的原因（Connection refused / UnknownHostException / 认证失败 / 超时），不用再靠猜</li>
             <li><b>Oracle 等大写折叠的数据库里，用小写带引号建的表和字段不再报「标识符无效」：点表头排序、关键字搜索、高级搜索、改单元格、导出、数据传输都按库里的真实大小写去引用了</b></li>
             <li><b>Oracle 上直接改日期 / 时间列不再报 ORA-01861：值按列类型自动转成日期时间字面量，不受会话日期格式影响</b></li>
             <li><b>导出的 SQL 文件里不再多出一个分页用的辅助列（以前拿去目标库执行会报列不存在）</b></li>
             <li><b>弹窗右上角不再重叠</b>：行详情「N 字符 · M 行」、索引建议「共 N 条」这些右对齐信息不会再压在关闭和全屏按钮上</li>
+            <li><b>顶栏图标统一了</b>：官网换成与 GitHub 同款的线性小房子，AI 助手换成自绘的小机器人（顶栏开关和页签都是它），尺寸跟着「设置 → 界面 → 顶栏右侧图标」一起变</li>
+            <li><b>开源协议由 GPL-3.0 改为 Apache License 2.0：商用、二次分发、私有化改造都不再有传染性约束</b></li>
           </ul>
           <div class="rel-links">
             <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.19" target="_blank" rel="noopener">发布说明</a>
