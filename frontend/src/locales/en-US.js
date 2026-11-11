@@ -518,6 +518,7 @@ export default {
   'ci.readFailed': 'Failed to read the file',
   'ci.unknownFormat': 'Unrecognised connection file: DBMind (.dbmind), Navicat (.ncx) and DBeaver (.dbp) are supported',
   'ci.badJson': 'The file is not valid JSON',
+  'ci.badZip': 'Could not read the archive - it may not be a .dbp file exported by DBeaver',
   'ci.noConnInFile': 'No importable connection was found in the file',
   'ci.warnUnknownType': '{n} connection(s) have an unrecognised type and cannot be ticked',
   'ci.warnNoPwd': '{n} connection(s) carry no password and must be filled in after importing',
