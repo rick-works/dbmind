@@ -136,7 +136,9 @@ jobs:
       # 每级都带短超时（15s）与单次重试，避免再次「无声卡住一小时」。
       - name: 安装 Linux 系统依赖
         if: runner.os == 'Linux'
-        timeout-minutes: 20
+        # 40 分钟：`libwebkit2gtk-4.1-dev` 连带推荐依赖有几百 MB，海外镜像上装 5~15 分钟正常；
+        # 真正的兜底是每个尝试都套了 `timeout`（见下），这个上限只是防「无声挂死」。
+        timeout-minutes: 40
         run: |
           set -uo pipefail
           export DEBIAN_FRONTEND=noninteractive
@@ -162,7 +164,7 @@ jobs:
             sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
             printf 'deb %s %s main restricted universe multiverse\ndeb %s %s-updates main restricted universe multiverse\ndeb %s %s-security main restricted universe multiverse\n' \
               "$M" "$CODENAME" "$M" "$CODENAME" "$M" "$CODENAME" | sudo tee /etc/apt/sources.list > /dev/null
-            if timeout 180 sudo apt-get $APT update && timeout 300 sudo apt-get $APT install -y --no-install-recommends $PKGS; then
+            if timeout 180 sudo apt-get $APT update && timeout 900 sudo apt-get $APT install -y --no-install-recommends $PKGS; then
               echo "镜像 $M 安装成功"; exit 0
             fi
           done
