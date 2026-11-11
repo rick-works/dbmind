@@ -46,6 +46,16 @@
         <span v-if="dupCount" class="ic-dup-hit">{{ $t('ci.dupHit', { n: dupCount }) }}</span>
       </div>
 
+      <!-- 缺用户名：DBeaver 的 .dbp 把用户名和口令一起加密了，data-sources.json 里没有 user。
+           给一个统一填写入口，省得导进来一条条补（导入后连接直接连不上）。 -->
+      <div v-if="hasMissingUser" class="ic-bulk">
+        <span class="ic-dup-t">{{ $t('ci.bulkUser') }}</span>
+        <el-input v-model="bulkUser" size="small" clearable class="ic-bulk-input"
+                  :placeholder="$t('ci.bulkUserHint')" />
+        <span v-if="noUserCount" class="ic-bulk-hit">{{ $t('ci.noUserCount', { n: noUserCount }) }}</span>
+        <span v-else class="ic-bulk-ok">{{ $t('ci.bulkUserApplied', { name: bulkUser.trim() }) }}</span>
+      </div>
+
       <div class="ic-list">
         <el-checkbox v-for="c in visibleRows" :key="c._uid"
                      :model-value="checkedIds.includes(c._uid)"
@@ -57,6 +67,7 @@
           <span v-if="!c.type" class="ic-type">{{ $t('ci.typeUnknown') }}</span>
           <span class="ic-meta" v-if="c.host">{{ c.host }}<template v-if="c.port">:{{ c.port }}</template></span>
           <span class="ic-meta" v-else-if="c.filePath">{{ c.filePath }}</span>
+          <span v-if="!c.username" class="ic-nouser">{{ $t('ci.noUser') }}</span>
           <el-tag v-if="isDup(c.name)" size="small" type="warning" effect="plain" class="ic-dup-tag">{{ $t('ci.dupTag') }}</el-tag>
           <el-tag size="small" :type="c.pwd === PWD_INCLUDED ? 'success' : 'info'" effect="plain" class="ic-pwd">
             {{ c.pwd === PWD_INCLUDED ? $t('ci.pwdYes') : (c.pwd === PWD_ENCRYPTED ? $t('ci.pwdEnc') : $t('ci.pwdNo')) }}
@@ -67,7 +78,7 @@
 
       <!-- 文件级提示放列表下方（原来这里写死一句「口令需补填」，正常导入时是噪声，已删）；
            真正需要当心的提醒（如 Navicat 口令读不出来）占用这一行 -->
-      <div v-for="w in warnings" :key="w" class="ic-warn">
+      <div v-for="w in allWarnings" :key="w" class="ic-warn">
         <el-icon :size="13"><InfoFilled /></el-icon><span>{{ w }}</span>
       </div>
     </template>
@@ -116,6 +127,12 @@ const raw = ref([])
 const source = ref('')
 const fileName = ref('')
 const warnings = ref([])
+/**
+ * 统一用户名：DBeaver 的 .dbp 常常**不带 user** —— 它把用户名和口令一起加密存进
+ * credentials-config.json（二进制，解不开），data-sources.json 里只剩 host/port/database。
+ * 一条条补太烦，这里给一个「统一填」的入口，导入时套到所有缺用户名的条目上。
+ */
+const bulkUser = ref('')
 const keyword = ref('')
 const checkedIds = ref([])
 const importing = ref(false)
@@ -145,11 +162,28 @@ const isDup = (name) => existingByName.value.has(String(name || '').trim())
 const dupCount = computed(() => raw.value.filter(
   (c) => c.type && checkedIds.value.includes(c._uid) && isDup(c.name)
 ).length)
+/** 勾选中、且类型识别得出来的条目 */
+const picked = computed(() => raw.value.filter((c) => c.type && checkedIds.value.includes(c._uid)))
+
 /** 按当前同名策略，实际会落库的条数（跳过模式下要扣掉同名的） */
 const willImport = computed(() => {
-  const list = raw.value.filter((c) => c.type && checkedIds.value.includes(c._uid))
-  if (dupMode.value !== 'skip') return list.length
-  return list.filter((c) => !isDup(c.name)).length
+  if (dupMode.value !== 'skip') return picked.value.length
+  return picked.value.filter((c) => !isDup(c.name)).length
+})
+
+/** 勾选里是否还有条目没带用户名（决定要不要显示「统一用户名」那一行，不随输入框内容变） */
+const hasMissingUser = computed(() => picked.value.some((c) => !String(c.username || '').trim()))
+
+/** 还会缺用户名的条数（已经填了统一用户名就不算） */
+const noUserCount = computed(() => (
+  bulkUser.value.trim() ? 0 : picked.value.filter((c) => !String(c.username || '').trim()).length
+))
+
+/** 解析警告 +「缺用户名」提示。后者是随勾选/统一用户名实时变的，不能塞进解析结果里 */
+const allWarnings = computed(() => {
+  const list = [...warnings.value]
+  if (noUserCount.value) list.unshift(t('ci.warnNoUser', { n: noUserCount.value }))
+  return list
 })
 
 /** 后缀输入框跟着内容走：默认一个字就是个窄框（写死 96px 时旁边空一大片，看着怪） */
@@ -181,6 +215,7 @@ const reset = () => {
   warnings.value = []
   keyword.value = ''
   checkedIds.value = []
+  bulkUser.value = ''
   dupMode.value = 'skip'
   dupSuffix.value = t('ci.dupSuffixDefault')
 }
@@ -239,6 +274,8 @@ const payloadOf = (item, targetName = '', targetId = '') => {
   delete payload._uid
   payload.id = targetId || ''
   if (targetName) payload.name = targetName
+  // 文件里没带用户名（DBeaver 的 .dbp 基本都不带）时，用「统一用户名」补上
+  if (!String(payload.username || '').trim() && bulkUser.value.trim()) payload.username = bulkUser.value.trim()
   payload.password = item.pwd === PWD_INCLUDED ? (item.password || '') : ''
   if (!payload.sshPassword) payload.sshPassword = ''
   // 后端只认数字端口（`as_u64`），字符串会被静默丢掉退回默认端口
@@ -353,6 +390,19 @@ const doImport = async () => {
 .ic-dup-suffix :deep(.el-input__inner) { text-align: center; }
 .ic-dup-hit { min-width: 0; margin-left: auto; color: var(--dc-warning); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ic-dup-tag { flex: none; }
+/* 缺用户名：一行输入框统一补齐（.dbp 里本来就没有 user） */
+.ic-bulk {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px;
+  padding-top: 6px; font-size: 12px; color: var(--dc-text-dim);
+}
+.ic-bulk-input { width: 180px; flex: none; }
+.ic-bulk-hit { min-width: 0; color: var(--dc-warning); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ic-bulk-ok { min-width: 0; color: var(--dc-ok, #3fa86b); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 行内「缺用户名」标记：光看 host:port 看不出来它连不上 */
+.ic-nouser {
+  flex: none; padding: 0 6px; border-radius: 4px; font-size: 11px;
+  color: var(--dc-warning); border: 1px solid color-mix(in srgb, var(--dc-warning) 45%, transparent);
+}
 .ic-warn {
   display: flex; align-items: flex-start; gap: 6px; margin-top: 8px;
   font-size: 12px; line-height: 1.6; color: var(--dc-warning);

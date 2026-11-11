@@ -66,7 +66,7 @@ function typeCodeOfUrl(url) {
  *  **必须带 `//`**：`jdbc:sqlite:D:\data\demo.db` 这种没有 authority，把它当 host 会解析出
  *  host="D"、port="\data\demo.db"，界面上就变成主机只有一个字母。 */
 function splitJdbcUrl(url) {
-  const out = { host: '', port: '', database: '' }
+  const out = { host: '', port: '', database: '', user: '' }
   const text = String(url || '')
   const m = text.match(/^jdbc:[a-z0-9]+:\/\/([^/?#]*)(?:\/([^?#]*))?/i)
   if (!m) return out
@@ -75,6 +75,12 @@ function splitJdbcUrl(url) {
   out.host = host || ''
   out.port = /^\d+$/.test(port || '') ? port : ''
   out.database = (m[2] || '').split(';')[0]
+  // 有些连接把用户名塞在 url 的查询串里（?user=xxx），也是一条兜底线索
+  const q = text.split('?')[1] || ''
+  const um = q.match(/(?:^|[;&])user=([^;&#]*)/i)
+  if (um) {
+    try { out.user = decodeURIComponent(um[1]) } catch (e) { out.user = um[1] }
+  }
   return out
 }
 
@@ -220,13 +226,21 @@ function mapDbeaverOne(raw) {
   let type = typeCodeOf(provider) || typeCodeOf(driver) || typeCodeOfUrl(url)
   const isSqlite = type === 'SQLITE'
   const password = cfg.password || ''
+  // 用户名位置随 DBeaver 版本变过：configuration.user 最常见，也有塞进 properties / auth-properties 的；
+  // 都没有时（很常见 —— 勾了「保存密码」就会把用户名和口令一起加密进 credentials-config.json，解不开）
+  // 留空，由导入弹窗提示补填 / 统一填写
+  const props = (cfg.properties && typeof cfg.properties === 'object') ? cfg.properties : {}
+  const authProps = (cfg['auth-properties'] && typeof cfg['auth-properties'] === 'object') ? cfg['auth-properties'] : {}
+  const userRaw = cfg.user || cfg.username || props.user || authProps.user || fromUrl.user || ''
+  // data-sources.json 里不少字符串值带前后换行/空白（DBeaver 自己写进去的），统一 trim 掉
+  const str = (v) => String(v == null ? '' : v).trim()
   return {
     name: String(raw.name || provider || driver || '').trim(),
     type,
-    host: cfg.host || fromUrl.host || '',
+    host: str(cfg.host || fromUrl.host || ''),
     port: toPort(cfg.port || fromUrl.port),
-    username: cfg.user || cfg.username || '',
-    database: cfg.database || fromUrl.database || '',
+    username: str(userRaw),
+    database: str(cfg.database || fromUrl.database || ''),
     // 文件型库的"DBeaver 数据库"就是文件路径；优先 configuration.database，再从 url 里取
     filePath: isSqlite || type === 'H2' ? (cfg.database || filePathOfUrl(url)) : '',
     group: '',
