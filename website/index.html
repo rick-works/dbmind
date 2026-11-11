@@ -1296,6 +1296,28 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v2.0.21（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.21</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>mac / Linux 上保存文件现在会弹系统的「另存为」面板：导出表数据、查询结果、透视表、ER 图、AI 报告、连接配置……都能自己选目录、自己改文件名，不再静默落进「下载」目录（以前只提示一句「已导出」，根本不知道文件去哪了）</b></li>
+            <li><b>大表 / 整库导出不再把几十 MB 的产物拉回前端内存：选完位置后由内核直接写到你选的路径</b></li>
+            <li><b>保存失败不再「假成功」</b>：桌面壳里打不开另存为会明确报错，而不是悄悄退回下载目录还说导出成功；顺带修掉 AI 面板取消导出后导出按钮一直转圈</li>
+            <li><b>mac 上顶栏「官网 / GitHub」两个图标比同排小一圈的问题修掉（Windows 不受影响）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.21" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.21" target="_blank" rel="noopener">下载 v2.0.21</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.20（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1303,7 +1325,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.20</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-11</span>
           </div>
           <ul class="rel-notes">
