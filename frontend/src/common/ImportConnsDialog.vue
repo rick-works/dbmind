@@ -57,6 +57,9 @@
           <span v-if="!c.type" class="ic-type">{{ $t('ci.typeUnknown') }}</span>
           <span class="ic-meta" v-if="c.host">{{ c.host }}<template v-if="c.port">:{{ c.port }}</template></span>
           <span class="ic-meta" v-else-if="c.filePath">{{ c.filePath }}</span>
+          <!-- DBeaver 文件里带目录结构的，这里显示会落到的路径（导入后树上按 `父/子` 自动嵌套）。
+               从某个分组右键进来时（props.group），所有条目都会被塞进那个分组，文件里的目录失效，就不再显示 -->
+          <span v-if="c.group && !group" class="ic-folder" :title="$t('ci.folderTip', { path: c.group })">{{ c.group }}</span>
           <!-- 缺用户名只做标记，不给编辑入口：导入后到连接详情里补。
                与「同名」同一套 el-tag（同样的尺寸/边框/圆角），之前那个自绘小方块和它不搭。 -->
           <el-tag v-if="!c.username" size="small" type="info" effect="plain" class="ic-nouser">{{ $t('ci.noUser') }}</el-tag>
@@ -164,11 +167,15 @@ const willImport = computed(() => {
   return picked.value.filter((c) => !isDup(c.name)).length
 })
 
-/** 解析警告 +「缺用户名」提示（后者跟着勾选实时变，不能只在解析那一刻算一次） */
+/**
+ * 解析警告 +「缺用户名」提示（后者跟着勾选实时变，不能只在解析那一刻算一次）。
+ * DBeaver 直接说明原因（用户名是加密存的），跟「缺密码（DBeaver 密码加密）」同款句式；
+ * 其它来源（Navicat / DBMind 文件）就是单纯缺字段，用短句。
+ */
 const allWarnings = computed(() => {
   const list = [...warnings.value]
   const n = picked.value.filter((c) => !String(c.username || '').trim()).length
-  if (n) list.unshift(t('ci.warnNoUser', { n }))
+  if (n) list.unshift(t(source.value === 'dbeaver' ? 'ci.warnNoUserDbeaver' : 'ci.warnNoUser', { n }))
   return list
 })
 
@@ -375,6 +382,11 @@ const doImport = async () => {
 .ic-dup-tag { flex: none; }
 /* 「缺用户名」用 el-tag（和「同名」同一套尺寸/边框），这里只需要别被挤扁 */
 .ic-nouser { flex: none; }
+/* 来源文件里的目录路径：比 host:port 更弱一档，太长就省略 */
+.ic-folder {
+  flex: none; max-width: 180px; font-size: 12px; color: var(--dc-text-mid);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .ic-warn {
   display: flex; align-items: flex-start; gap: 6px; margin-top: 8px;
   font-size: 12px; line-height: 1.6; color: var(--dc-warning);

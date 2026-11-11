@@ -250,7 +250,42 @@ function mapDbeaverOne(raw) {
   }
 }
 
-function parseDbeaver(data) {
+/**
+ * DBeaver 的 `folders` 是一张扁平表（`{ id: { name, parentId } }`），连接用 `folder: <id>` 指向某一层。
+ * DBMind 的分组字段 `group` 存的就是**路径**（`父/子`，`/` 分隔，树会按段拆开嵌套渲染），
+ * 所以这里把 id 还原成路径字符串，导入后目录结构就原样出现了 —— 不需要额外"建目录"接口。
+ */
+function dbeaverFolderPathOf(folders) {
+  const byId = {}
+  if (folders && typeof folders === 'object' && !Array.isArray(folders)) {
+    for (const [id, f] of Object.entries(folders)) {
+      if (f && typeof f === 'object') {
+        byId[id] = { name: String(f.name || '').trim(), parent: String(f.parentId || '').trim() }
+      }
+    }
+  }
+  // 目录名里万一带 `/` 会被当成层级分隔符，**必须在拼接之前**换成全角斜杠，
+  // 否则 `a/b` 这种名字会被拆成两层（拼完再换已经晚了）
+  const seg = (name) => String(name || '').trim().replace(/[\\/]/g, '／')
+  const memo = new Map()
+  const pathOf = (id, depth = 0) => {
+    const key = String(id || '')
+    if (!key || depth > 16) return ''
+    if (memo.has(key)) return memo.get(key)
+    const f = byId[key]
+    if (!f || !f.name) return ''
+    memo.set(key, '') // 先占位：父链出现环时不至于无限递归
+    const parent = pathOf(f.parent, depth + 1)
+    const name = seg(f.name)
+    const path = parent ? parent + '/' + name : name
+    memo.set(key, path)
+    return path
+  }
+  return pathOf
+}
+
+function parseDbeaver(data, creds) {
+  const folderPathOf = dbeaverFolderPathOf(data && data.folders)
   const items = []
   if (data.connections && typeof data.connections === 'object' && !Array.isArray(data.connections)) {
     for (const value of Object.values(data.connections)) {
@@ -264,17 +299,42 @@ function parseDbeaver(data) {
   } else {
     items.push(data)
   }
-  return items.filter((x) => x && typeof x === 'object').map(mapDbeaverOne).filter((x) => x.name)
+  return items
+    .filter((x) => x && typeof x === 'object')
+    .map((raw) => {
+      const one = mapDbeaverOne(raw)
+      // 目录：顶层 `folder` 是 id；个别版本塞在 configuration.folder 里
+      const folderId = raw.folder || (raw.configuration && raw.configuration.folder) || ''
+      if (folderId) one.group = folderPathOf(folderId)
+      // 用户名 / 口令：勾了「保存密码」的连接，data-sources.json 里是没有这两项的，
+      // 得去 credentials-config.json（已解密）里按连接 id 取
+      if (creds) {
+        const id = String(raw.id || '').trim()
+        const cred = id ? (creds[id] || creds[credKeyOf(id)]) : null
+        if (cred) {
+          const user = cred.user || cred.username
+          if (!one.username && user) one.username = String(user).trim()
+          // 解出来的口令直接带上（标记「含密码」），导入后不用再逐条补填
+          if (!one.password && cred.password) {
+            one.password = String(cred.password)
+            one.pwd = PWD_INCLUDED
+          }
+        }
+      }
+      return one
+    })
+    .filter((x) => x.name)
 }
 
 /* ============================ 统一入口 ============================ */
 
 /**
  * 解析一份连接文件。
+ * @param {object} [opts] `{ creds }`：.dbp 里解出来的 DBeaver 凭据表（用来补用户名）
  * @returns {{source: string, list: object[], warnings: string[]}|{error: string}}
  *   list 里每条都是 DBMind 的连接字段 + `pwd`（口令来源标记）
  */
-export function parseImportFile(text, filename = '') {
+export function parseImportFile(text, filename = '', opts = {}) {
   const source = detectSource(text)
   if (!source) return { error: t('ci.unknownFormat') }
   let data = null
@@ -287,7 +347,8 @@ export function parseImportFile(text, filename = '') {
     } catch (e) {
       return { error: t('ci.badJson') }
     }
-    list = source === 'dbmind' ? parseDbmind(data) : parseDbeaver(data)
+    // opts.creds：.dbp 里 credentials-config.json 解出来的凭据表（用户名从这里补）
+    list = source === 'dbmind' ? parseDbmind(data) : parseDbeaver(data, opts.creds)
   }
   if (!list.length) return { error: t('ci.noConnInFile') }
 
@@ -367,6 +428,91 @@ async function entryText(entry) {
   return await new Response(stream).text()
 }
 
+/** 同 entryText，但要二进制（credentials-config.json 是加密后的字节流，按文本解码就毁了） */
+async function entryBytes(entry) {
+  if (!entry) return null
+  if (entry.method === 0) return entry.raw
+  if (typeof DecompressionStream === 'undefined') return null
+  const stream = new Blob([entry.raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
+/* ==================== DBeaver 的凭据文件（用户名在这里） ==================== */
+
+/**
+ * 勾了「保存密码」的 DBeaver 会把**用户名和口令一起**搬进 `.dbp` 里的 credentials-config.json，
+ * 明文 data-sources.json 里只剩 host/port/库名 —— 这就是「导入后用户名一片空白」的原因。
+ *
+ * 那坨字节是 AES-128-CBC + PKCS#7，密钥**硬编码在 DBeaver 源码里**（开源，不是用户密钥），
+ * 所以能解开；用户设了「主密码」（master password）时换成了另一套，解不开就照旧当「读不到」。
+ *
+ * 解出来的是 `{ user, password }`：两个都带上（口令会被标成「含密码」，导入后不必再逐条补填）。
+ * 解不开时退回原样 —— 用户名标「缺用户名」、口令标「密码已加密」。
+ */
+const DBEAVER_CRED_KEY = new Uint8Array([186, 187, 74, 159, 119, 74, 184, 83, 201, 108, 45, 101, 61, 254, 84, 74])
+
+/** base64 → 字节（DBeaver 部分版本把每条凭据单独 base64 后放 JSON 里） */
+function bytesOfBase64(text) {
+  const bin = atob(String(text || '').replace(/[\s=]+$/, ''))
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
+/** AES-128-CBC 解密（WebCrypto 自己会去 PKCS#7 填充），失败返回空串 */
+async function aesCbcDecrypt(iv, data) {
+  if (typeof crypto === 'undefined' || !crypto.subtle || !iv || !data) return ''
+  if (iv.length !== 16 || !data.length || data.length % 16 !== 0) return ''
+  try {
+    const key = await crypto.subtle.importKey('raw', DBEAVER_CRED_KEY, { name: 'AES-CBC' }, false, ['decrypt'])
+    const plain = await crypto.subtle.decrypt({ name: 'AES-CBC', iv }, key, data)
+    return new TextDecoder().decode(plain).replace(/\0+$/, '')
+  } catch (e) {
+    return ''
+  }
+}
+
+/** 凭据表里的 key 是连接 id，个别版本会带 `#` 前缀 */
+const credKeyOf = (key) => String(key || '').trim().replace(/^#/, '')
+
+/**
+ * 读 DBeaver 的 credentials-config.json，返回 `{ 连接id: {user, password} }`。
+ * 两种落盘形态都认：整文件「前 16 字节 IV + 密文」，或 JSON 里每条一个 base64 的 IV+密文。
+ * 解不开（主密码 / 格式没见过）返回 null —— 调用方据此退回「缺用户名」的原样。
+ */
+async function readDbeaverCreds(bytes) {
+  if (!bytes || !bytes.length) return null
+  const out = {}
+  const merge = (id, obj) => {
+    if (!obj || typeof obj !== 'object') return
+    const key = credKeyOf(id)
+    if (key) out[key] = obj
+  }
+  try {
+    // 形态一：整个文件是一坨密文（当前主流版本）
+    if (bytes[0] !== 0x7b /* '{' */) {
+      if (bytes.length <= 16) return null
+      const text = await aesCbcDecrypt(bytes.slice(0, 16), bytes.slice(16))
+      if (!text) return null
+      for (const [id, obj] of Object.entries(JSON.parse(text) || {})) merge(id, obj)
+      return Object.keys(out).length ? out : null
+    }
+    // 形态二：JSON，值是 base64（老版本 / 部分第三方导出）
+    const data = JSON.parse(new TextDecoder().decode(bytes))
+    for (const [id, val] of Object.entries(data || {})) {
+      if (typeof val !== 'string') { merge(id, val); continue }
+      const blob = bytesOfBase64(val)
+      if (blob.length <= 16) continue
+      const text = await aesCbcDecrypt(blob.slice(0, 16), blob.slice(16))
+      if (!text) continue
+      merge(id, JSON.parse(text))
+    }
+    return Object.keys(out).length ? out : null
+  } catch (e) {
+    return null
+  }
+}
+
 /**
  * 读一个用户选中的文件（文本或 .dbp 压缩包），返回与 parseImportFile 相同的结构。
  * UI 只调这个，省得每个调用方自己判断魔数。
@@ -391,16 +537,28 @@ export async function parseImportFileAny(file) {
   }
   const entries = readZipEntries(buffer)
   if (!entries) return { error: t('ci.badZip') }
-  const list = []
+  /** data-sources.json 可能不止一份（一个 .dbp 里有多个项目），先全部读出来 */
+  const sources = []
+  let creds = null
   let hasCreds = false
   for (const [name, entry] of entries) {
     if (/data-sources\.json$/i.test(name)) {
-      const one = parseImportFile(await entryText(entry), file.name)
-      if (one.list) list.push(...one.list)
+      sources.push(await entryText(entry))
     } else if (/credentials-config\.json$/i.test(name)) {
-      const text = await entryText(entry)
-      if (text && text.trim() && text.trim() !== '{}') hasCreds = true
+      const bytes = await entryBytes(entry)
+      if (!bytes || !bytes.length) continue
+      // 空文件 / 只有 `{}` = 没有任何凭据，不算「有但解不开」
+      const headText = new TextDecoder().decode(bytes.slice(0, Math.min(64, bytes.length))).trim()
+      if (!headText || headText === '{}') continue
+      hasCreds = true
+      // 解不开（用户设了主密码）返回 null，后面照旧按「读不到」处理
+      if (!creds) creds = await readDbeaverCreds(bytes)
     }
+  }
+  const list = []
+  for (const text of sources) {
+    const one = parseImportFile(text, file.name, { creds })
+    if (one.list) list.push(...one.list)
   }
   if (!list.length) return { error: t('ci.noConnInFile') }
   // DBeaver 的口令是 AES 加密后存在 credentials-config.json 里的，解不开；
