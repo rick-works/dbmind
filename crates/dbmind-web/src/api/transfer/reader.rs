@@ -219,10 +219,14 @@ fn paging_positions(columns: &[String], paging_keys: &[String]) -> Option<Vec<us
 
 impl SqlReader {
     pub fn new(plan: &TablePlan) -> Box<dyn Reader> {
+        // 源端列名逐字加引号（见 `Dialect::quote_exact`）：源表是既存对象，名字就是
+        // 库里的真实大小写。用 `quote()` 会在上折方言上把 `id` 折成 `ID` ⇒
+        // DB2 报 `"ID" is not valid in the context where it is used`（SQLCODE=-206），
+        // 带引号建的小写表一个字段都读不出来。Oracle 同理（ORA-00904）。
         let columns = plan
             .columns
             .iter()
-            .map(|name| plan.source_kind.quote(name))
+            .map(|name| plan.source_kind.quote_exact(name))
             .collect::<Vec<_>>()
             .join(", ");
         // 页大小不再按「写并发」一刀切：那个做法（1 路写就给 2 万行）在快表上把
@@ -350,7 +354,8 @@ impl SqlReader {
 
     /// `min/max` 一次拿到范围：整数/浮点键按值域等分，最省（不用数行、不用扫表）。
     async fn numeric_ranges(&self, want: usize) -> Option<Vec<RowRange>> {
-        let key = self.dialect.quote(&self.paging_keys[0]);
+        // 分片键也是源端列名（目录元数据）→ 逐字加引号，别让上折方言把它折成大写
+        let key = self.dialect.quote_exact(&self.paging_keys[0]);
         let probe = format!(
             "select min({key}) as mn, max({key}) as mx from {}{}",
             self.from,
@@ -378,7 +383,8 @@ impl SqlReader {
     /// 采样代价是 `want-1` 次带索引的 `offset` 定位（不是全表扫），对几十万行以上的表
     /// 完全可以接受；行数少（< want*2）时直接不分片。
     async fn sampled_ranges(&self, want: usize) -> Option<Vec<RowRange>> {
-        let key = self.dialect.quote(&self.paging_keys[0]);
+        // 分片键也是源端列名（目录元数据）→ 逐字加引号，别让上折方言把它折成大写
+        let key = self.dialect.quote_exact(&self.paging_keys[0]);
         let count_sql = format!("select count(*) as n from {}{}", self.from, self.filter_sql());
         let result = run_sql_in(&self.state, &self.conn, &self.scope, count_sql, 1).await.ok()?;
         let total = match result.rows.first()?.first()? {
@@ -540,7 +546,7 @@ impl Reader for SqlReader {
             //（真机：`index out of bounds: the len is 0 but the index is 0`，
             // 协程整个死掉，任务报「传输协程异常终止」）。没有键就没有列区间条件，跳过即可。
             if !range.is_whole() && !self.paging_keys.is_empty() {
-                let column = self.dialect.quote(&self.paging_keys[0]);
+                let column = self.dialect.quote_exact(&self.paging_keys[0]);
                 if let Some(low) = range.low.as_ref() {
                     parts.push(format!("{column} >= {}", literal_for(low, self.dialect, None)));
                 }

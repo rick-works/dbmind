@@ -756,6 +756,32 @@ impl Dialect {
         name.split('.').map(wrap).collect::<Vec<_>>().join(".")
     }
 
+    /// 逐字加引号：**不动大小写**，简单名也加引号。
+    ///
+    /// 与 [`Self::quote`] 分工不同 —— `quote()` 翻译的是「用户想写的名字」：上折方言
+    /// （Oracle / DB2 / H2 / Derby）里未加引号的名字会被服务端折成大写，所以建对象时
+    /// 必须跟着折；而这里的名字来自**目录元数据**（`list_columns` / `list_tables` 的
+    /// 返回值），那就是库里真实存在的大小写，加引号锁死才指得准。
+    ///
+    /// 反例（豫园 Oracle 11g 实测）：列是小写带引号建的 `"day"`，结果集表头点排序 →
+    /// 旧实现走 `quote()` → 拼出 `order by day` → 服务端折成 `DAY` →
+    /// `ORA-00904: "DAY": 标识符无效`。关键字搜索、高级搜索、就地编辑、导出同理。
+    pub fn quote_exact(&self, name: &str) -> String {
+        let wrap = |s: &str| -> String {
+            if s.is_empty() {
+                return String::new();
+            }
+            match self.key() {
+                "mysql" | "mariadb" | "doris" | "clickhouse" => {
+                    format!("`{}`", s.replace('`', "``"))
+                }
+                "sqlserver" => format!("[{}]", s.replace(']', "]]")),
+                _ => format!("\"{}\"", s.replace('"', "\"\"")),
+            }
+        };
+        name.split('.').map(wrap).collect::<Vec<_>>().join(".")
+    }
+
     /// 未加引号的标识符是否会被折成**小写**（PG 系）。
     ///
     /// 与 [`Self::folds_ident_upper`] 相对：这些库里含大写字母的名字必须加引号，
@@ -3794,8 +3820,10 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         }
     }
 
+    /// 统计行数。表引用走 [`Self::quote_exact`] —— 调用方传的都来自目录元数据
+    /// （树里的表名），用 `quote()` 会把 Oracle 上带引号建的小写表折成大写、报 ORA-00942。
     pub fn count_sql(&self, table: &str) -> String {
-        format!("select count(*) as cnt from {}", self.quote(table))
+        format!("select count(*) as cnt from {}", self.quote_exact(table))
     }
 
     /// 按列元数据拼 `CREATE TABLE`。
@@ -5442,6 +5470,40 @@ mod tests {
 
     fn q(kind: ConnectionKind, name: &str) -> String {
         Dialect::new(kind).quote(name)
+    }
+
+    fn qx(kind: ConnectionKind, name: &str) -> String {
+        Dialect::new(kind).quote_exact(name)
+    }
+
+    /// `quote_exact` 只加引号、**不动大小写**：它服务的是目录元数据里的真实名字。
+    ///
+    /// 守着豫园 Oracle 11g 的一次真机故障：列是小写带引号建的 `"day"`，表头点排序后
+    /// 后端用 `quote()` 拼出 `order by day`，服务端折成 `DAY` ⇒
+    /// `ORA-00904: "DAY": 标识符无效`。同样的坑在关键字搜索、高级搜索、
+    /// 就地编辑、导出的列清单里都存在。
+    #[test]
+    fn quote_exact_保留大小写与加引号() {
+        // 上折方言：小写必须留在引号里，大写同样逐字加引号
+        assert_eq!(qx(ConnectionKind::Oracle, "day"), "\"day\"");
+        assert_eq!(qx(ConnectionKind::Oracle, "DAY"), "\"DAY\"");
+        assert_eq!(qx(ConnectionKind::Oracle, "Name"), "\"Name\"");
+        // quote() 的既有行为不变（简单名裸写，交给服务端折叠）
+        assert_eq!(q(ConnectionKind::Oracle, "day"), "day");
+        assert_eq!(q(ConnectionKind::Oracle, "DAY"), "DAY");
+
+        // 各家的引号形态
+        assert_eq!(qx(ConnectionKind::Mysql, "day"), "`day`");
+        assert_eq!(qx(ConnectionKind::Sqlserver, "day"), "[day]");
+        assert_eq!(qx(ConnectionKind::Postgresql, "Name"), "\"Name\"");
+
+        // 模式限定的名字逐段加引号（schema.table）
+        assert_eq!(qx(ConnectionKind::Postgresql, "s.T"), "\"s\".\"T\"");
+
+        // 名字里自带引号要翻倍，别把语句截断
+        assert_eq!(qx(ConnectionKind::Oracle, "a\"b"), "\"a\"\"b\"");
+        assert_eq!(qx(ConnectionKind::Mysql, "a`b"), "`a``b`");
+        assert_eq!(qx(ConnectionKind::Sqlserver, "a]b"), "[a]]b]");
     }
 
     fn col(name: &str, ty: &str, default: Option<&str>) -> ColumnDetail {

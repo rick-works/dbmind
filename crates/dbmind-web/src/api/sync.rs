@@ -579,6 +579,32 @@ impl Side {
             dialect.quote(&format!("{prefix}.{table}"))
         }
     }
+
+    /// **源端**专用：表名逐字加引号（见 [`Dialect::quote_exact`]）。
+    ///
+    /// 源端的表一定是**已经存在**的，表名来自目录元数据（树里显示什么就是什么）。
+    /// 用 `quote()` 会在 Oracle/DB2/H2/Derby 上把带引号建的小写表折成大写，
+    /// 同步一开始就 ORA-00942 / SQLCODE=-204。
+    ///
+    /// 目标端**不能**跟着改：目标表是我们按 `quote()` 建出来的（名字已被折过），
+    /// 引用必须与建表口径一致，否则又会指到另一个对象。
+    fn scoped_exact(&self, table: &str, dialect: Dialect) -> String {
+        let prefix = if self.catalog {
+            self.scope.trim().to_string()
+        } else {
+            self.schema
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_default()
+        };
+        if prefix.is_empty() || table.contains('.') {
+            dialect.quote_exact(table)
+        } else {
+            dialect.quote_exact(&format!("{prefix}.{table}"))
+        }
+    }
 }
 
 fn scope_of(database: &Option<String>, schema: &Option<String>) -> String {
@@ -1088,7 +1114,7 @@ fn page_sql(
         Some((keys, last)) if !keys.is_empty() && last.len() == keys.len() => {
             let order = keys
                 .iter()
-                .map(|key| dialect.quote(key))
+                .map(|key| dialect.quote_exact(key))
                 .collect::<Vec<_>>()
                 .join(", ");
             // 多列键优先用行值比较 `(a,b,c) > (x,y,z)`：语义与逐列 or 链相同，但优化器
@@ -1099,7 +1125,7 @@ fn page_sql(
             let keyset = if keys.len() > 1 && dialect.supports_row_value_compare() {
                 let left = keys
                     .iter()
-                    .map(|key| dialect.quote(key))
+                    .map(|key| dialect.quote_exact(key))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({left}) > ({})", last.join(", "))
@@ -1108,7 +1134,7 @@ fn page_sql(
                 for depth in 0..keys.len() {
                     let mut parts: Vec<String> = Vec::new();
                     for (position, key) in keys.iter().enumerate() {
-                        let quoted = dialect.quote(key);
+                        let quoted = dialect.quote_exact(key);
                         let value = &last[position];
                         if position < depth {
                             parts.push(format!("{quoted} = {value}"));
@@ -1141,7 +1167,7 @@ fn page_sql(
             //   `select * from (select …) dbmind_page limit 10000 offset 0`
             let order = order_keys
                 .iter()
-                .map(|key| dialect.quote(key))
+                .map(|key| dialect.quote_exact(key))
                 .collect::<Vec<_>>()
                 .join(", ");
             if !order.is_empty() {
@@ -1304,7 +1330,7 @@ async fn source_index_list(
         }
     };
     if matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris") {
-        let sql = format!("show index from {}", src.scoped(table, source_kind));
+        let sql = format!("show index from {}", src.scoped_exact(table, source_kind));
         let Ok(result) = run_sql_in(state, &src.conn, &src.scope, sql, 5000).await else {
             return out;
         };
@@ -1421,7 +1447,7 @@ async fn sync_indexes(
     let mut indexes: Vec<(String, bool, Vec<String>)> = Vec::new();
     let mysql_family = matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris");
     if mysql_family {
-        let show_sql = format!("show index from {}", src.scoped(table, Dialect::new(source_kind.kind.clone())));
+        let show_sql = format!("show index from {}", src.scoped_exact(table, Dialect::new(source_kind.kind.clone())));
         if let Ok(result) = run_sql_in(state, &src.conn, &src.scope, show_sql, 5000).await {
             // 大小写不敏感取列（有的驱动把列名折成大写）。
             // **不能只认 `as_str`**：Non_unique / Seq_in_index 是数字列，宿主把结果集回成
@@ -2260,9 +2286,14 @@ mod paging_tests {
     #[test]
     fn 无用户过滤时第二页仍带游标条件() {
         let sql = cursor_page(ConnectionKind::Mysql, &["id"], &["50000"], "");
-        assert!(sql.contains("id > 50000"), "第二页丢了游标条件：{sql}");
+        // 分页键现在逐字加引号（quote_exact）—— 源端列名是库里真实名字
+        assert!(sql.contains("`id` > 50000"), "第二页丢了游标条件：{sql}");
         assert_eq!(sql.matches(" where ").count(), 1, "where 只该有一个：{sql}");
-        assert!(sql.contains("order by id"), "缺 order by：{sql}");
+        assert!(sql.contains("order by `id`"), "缺 order by：{sql}");
+        // Oracle（上折方言）上带引号建的小写列：分页键必须保持小写并被引号锁死，
+        // 裸写 `day` 会被服务端折成 `DAY` ⇒ ORA-00904。
+        let sql = cursor_page(ConnectionKind::Oracle, &["day"], &["1"], "");
+        assert!(sql.contains("\"day\" > 1"), "Oracle 小写列被折成大写：{sql}");
     }
 
     /// 用户过滤条件与游标条件要**同时**在，用 and 相连（顺序无关）。
@@ -2270,7 +2301,7 @@ mod paging_tests {
     fn 用户过滤与游标条件并存() {
         let sql = cursor_page(ConnectionKind::Mysql, &["id"], &["100"], "id <= 100000");
         assert!(sql.contains("id <= 100000"), "丢了用户条件：{sql}");
-        assert!(sql.contains("id > 100"), "丢了游标条件：{sql}");
+        assert!(sql.contains("`id` > 100"), "丢了游标条件：{sql}");
         assert!(sql.contains(" and "), "两个条件应当 and 组合：{sql}");
     }
 
@@ -2278,7 +2309,10 @@ mod paging_tests {
     #[test]
     fn 多列键展开成or链() {
         let sql = cursor_page(ConnectionKind::Sqlserver, &["a", "b"], &["1", "2"], "");
-        assert!(sql.contains("(a > 1) or (a = 1 and b > 2)"), "多列游标展开不对：{sql}");
+        assert!(
+            sql.contains("([a] > 1) or ([a] = 1 and [b] > 2)"),
+            "多列游标展开不对：{sql}"
+        );
         assert!(!sql.contains(") > ("), "不能出现行值比较：{sql}");
     }
 
@@ -2296,7 +2330,10 @@ mod paging_tests {
             "",
             PAGE,
         );
-        assert!(sql.contains("order by XF_MALLORGID, XF_TXDATE"), "首页丢了 order by：{sql}");
+        assert!(
+            sql.contains("order by `XF_MALLORGID`, `XF_TXDATE`"),
+            "首页丢了 order by：{sql}"
+        );
         assert!(sql.contains(&format!("limit {PAGE}")), "缺 limit：{sql}");
         // 用户过滤条件与排序要同时在
         let sql = page_sql(
@@ -2360,11 +2397,14 @@ mod paging_tests {
     #[test]
     fn 多列键在支持的方言用行值比较() {
         let sql = cursor_page(ConnectionKind::Mysql, &["a", "b"], &["1", "2"], "");
-        assert!(sql.contains("(a, b) > (1, 2)"), "MySQL 该用行值比较：{sql}");
+        assert!(sql.contains("(`a`, `b`) > (1, 2)"), "MySQL 该用行值比较：{sql}");
         assert!(!sql.contains(" or "), "行值比较不该再展开 or 链：{sql}");
         // 方言不认时（SQL Server）同一条游标必须退回 or 链，见 `多列键展开成or链`。
         let sql = cursor_page(ConnectionKind::Postgresql, &["a", "b"], &["1", "2"], "");
-        assert!(sql.contains("(a, b) > (1, 2)"), "PG 该用行值比较：{sql}");
+        assert!(
+            sql.contains("(\"a\", \"b\") > (1, 2)"),
+            "PG 该用行值比较：{sql}"
+        );
     }
 }
 
@@ -4638,7 +4678,7 @@ async fn direct_source_ref(
     }
     // 用户已经把全限定名写进表名（`库.模式.表`）时不再拼前缀
     if table.contains('.') {
-        return Some(source_kind.quote(table));
+        return Some(source_kind.quote_exact(table));
     }
     let scope = src.scope.trim();
     let explicit_schema = src.schema.as_deref().map(str::trim).unwrap_or("");
@@ -4685,7 +4725,7 @@ async fn direct_source_ref(
         DirectRefDepth::None => {}
     }
     parts.push(table);
-    let reference = source_kind.quote(&parts.join("."));
+    let reference = source_kind.quote_exact(&parts.join("."));
     tracing::debug!(table, %reference, "同实例，走 insert … select 直拷");
     Some(reference)
 }
@@ -5382,9 +5422,11 @@ async fn sync_table_inner(
             };
             tracing::debug!(table, %src_qualified, "同实例直拷：源表引用");
             tracing::debug!(table, "同实例，走 insert … select 直拷");
+            // 源列名逐字加引号（源表是既存对象，名字来自源库元数据）；
+            // 目标列名保持 quote() —— 与「目标表由我们按 quote() 建出来」的口径一致。
             let col_list_src = columns
                 .iter()
-                .map(|name| source_kind.quote(name))
+                .map(|name| source_kind.quote_exact(name))
                 .collect::<Vec<_>>()
                 .join(", ");
             let col_list_tgt = target_column_names
@@ -5554,7 +5596,7 @@ async fn sync_table_inner(
         src_conn: src.conn.clone(),
         src_scope: src.scope.clone(),
         source_kind,
-        src_from: src.scoped(table, source_kind),
+        src_from: src.scoped_exact(table, source_kind),
         table: table.to_string(),
         columns: columns.clone(),
         tgt_conn: tgt.conn.clone(),
@@ -7240,7 +7282,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     if !full_copy {
                         continue;
                     }
-                    let src_table = src.scoped(name, source_kind);
+                    let src_table = src.scoped_exact(name, source_kind);
                     let tgt_table = tgt.scoped(&target_name, target_kind);
                     let (want, got) = (
                         count_table(
@@ -7355,7 +7397,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         task.log(format!("表 {name}：重传失败：{}", outcome.message));
                     }
                     // 复检：重传后再数一遍，「补上了没有」也写进日志
-                    let src_table = src.scoped(name, source_kind);
+                    let src_table = src.scoped_exact(name, source_kind);
                     let want = count_table(
                         &state,
                         &src.conn,

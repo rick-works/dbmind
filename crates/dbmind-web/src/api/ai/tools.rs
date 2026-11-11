@@ -483,8 +483,8 @@ pub async fn index_suggestions(
                     "reason": "该表没有主键：没有主键的表无法可靠地定位/同步单行数据",
                     "ddl": format!(
                         "alter table {} add primary key ({});",
-                        dialect.quote(&table.name),
-                        dialect.quote(&column.name)
+                        dialect.quote_exact(&table.name),
+                        dialect.quote_exact(&column.name)
                     ),
                 }));
             } else {
@@ -515,8 +515,8 @@ pub async fn index_suggestions(
                     "create index idx_{}_{} on {} ({});",
                     table.name.chars().filter(|c| c.is_alphanumeric()).take(20).collect::<String>(),
                     column.name.chars().filter(|c| c.is_alphanumeric()).take(20).collect::<String>(),
-                    dialect.quote(&table.name),
-                    dialect.quote(&column.name)
+                    dialect.quote_exact(&table.name),
+                    dialect.quote_exact(&column.name)
                 ),
             }));
             if items.len() >= 100 {
@@ -591,11 +591,11 @@ pub async fn insight(
     let mut stats = format!("表 {table}：{total} 行，{} 列\n", columns.len());
     // 逐列做 null / distinct / 极值画像（列多的时候只看前 20 列，避免几十次往返）
     for column in columns.iter().take(20) {
-        let quoted = dialect.quote(&column.name);
+        let quoted = dialect.quote_exact(&column.name);
         let sql = format!(
             "select count(*) as total, count({quoted}) as non_null, count(distinct {quoted}) as distinct_count, \
              min({quoted}) as min_value, max({quoted}) as max_value from {}",
-            dialect.quote(&table)
+            dialect.quote_exact(&table)
         );
         if let Ok(result) = run_sql_in(&state, &conn, &database, sql, 1).await {
             if let Some(row) = rows_of(&result).first() {

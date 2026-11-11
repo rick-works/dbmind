@@ -354,7 +354,7 @@ pub async fn build(
         }
         let sample_sql = format!(
             "select * from {} {}",
-            dialect.quote(table),
+            dialect.quote_exact(table),
             dialect.limit_clause(0, SAMPLE_ROWS)
         );
         if let Ok(result) =

@@ -380,7 +380,12 @@ struct SqlInsertSink<W: Write> {
 impl<W: Write + Send> RowSink for SqlInsertSink<W> {
     fn begin(&mut self, columns: &[String]) -> Result<(), String> {
         self.columns = columns.to_vec();
-        let list: Vec<String> = self.columns.iter().map(|name| self.dialect.quote(name)).collect();
+        // 列名来自结果集元数据（真实大小写）→ quote_exact，见 Dialect::quote_exact
+        let list: Vec<String> = self
+            .columns
+            .iter()
+            .map(|name| self.dialect.quote_exact(name))
+            .collect();
         writeln!(
             self.out,
             "-- 由 DBmind 导出于 {}\n-- 目标表 {}\n",
@@ -396,7 +401,11 @@ impl<W: Write + Send> RowSink for SqlInsertSink<W> {
 
     fn row(&mut self, cells: &[CellValue]) -> Result<(), String> {
         let values: Vec<String> = cells.iter().map(|cell| sql_literal(cell, self.dialect)).collect();
-        let columns: Vec<String> = self.columns.iter().map(|name| self.dialect.quote(name)).collect();
+        let columns: Vec<String> = self
+            .columns
+            .iter()
+            .map(|name| self.dialect.quote_exact(name))
+            .collect();
         writeln!(
             self.out,
             "insert into {} ({}) values ({});",
@@ -438,7 +447,7 @@ impl<W: Write + Send> RowSink for SqlUpdateSink<W> {
                 continue;
             }
             let value = cells.get(index).map(|cell| sql_literal(cell, self.dialect)).unwrap_or_else(|| "NULL".to_string());
-            assignments.push(format!("{} = {value}", self.dialect.quote(name)));
+            assignments.push(format!("{} = {value}", self.dialect.quote_exact(name)));
         }
         writeln!(
             self.out,
@@ -544,13 +553,13 @@ fn make_text_sink<'a, W: Write + Send + 'a>(
         Format::SqlInsert => Box::new(SqlInsertSink {
             out,
             dialect,
-            table: dialect.quote(table),
+            table: dialect.quote_exact(table),
             columns: Vec::new(),
         }),
         Format::SqlUpdate => Box::new(SqlUpdateSink {
             out,
             dialect,
-            table: dialect.quote(table),
+            table: dialect.quote_exact(table),
             columns: Vec::new(),
             pk: pk.to_vec(),
             pk_index: Vec::new(),
@@ -558,7 +567,7 @@ fn make_text_sink<'a, W: Write + Send + 'a>(
         Format::SqlDelete => Box::new(SqlDeleteSink {
             out,
             dialect,
-            table: dialect.quote(table),
+            table: dialect.quote_exact(table),
             pk: pk.to_vec(),
             pk_index: Vec::new(),
         }),
@@ -604,7 +613,7 @@ fn where_clause(cells: &[CellValue], pk_index: &[(usize, String)], dialect: Dial
                 .get(*index)
                 .map(|cell| sql_literal(cell, dialect))
                 .unwrap_or_else(|| "NULL".to_string());
-            format!("{} = {value}", dialect.quote(name))
+            format!("{} = {value}", dialect.quote_exact(name))
         })
         .collect::<Vec<_>>()
         .join(" and ")
@@ -689,17 +698,19 @@ pub(crate) fn binary_literal(data: &dbmind_core::BlobBytes, dialect: Dialect) ->
 /// 而模式这一层必须体现在表名里，否则 SQL Server 会按**登录名的默认模式**去找表。
 pub(crate) fn qualified(table: &str, database: &str, dialect: Dialect) -> String {
     let table = table.trim();
+    // 表名/模式名都来自目录元数据（树里的真实名字）→ quote_exact 逐字加引号，
+    // 否则 Oracle 上带引号建的小写表会被折成大写（ORA-00942）。
     if table.is_empty() || table.contains('.') {
-        return dialect.quote(table);
+        return dialect.quote_exact(table);
     }
     if dialect.is_schema_aware() {
         if let Some((_, schema)) = database.split_once('.') {
             if !schema.is_empty() {
-                return dialect.quote(&format!("{schema}.{table}"));
+                return dialect.quote_exact(&format!("{schema}.{table}"));
             }
         }
     }
-    dialect.quote(table)
+    dialect.quote_exact(table)
 }
 
 /// 由请求推导出要执行的查询。
@@ -1245,6 +1256,8 @@ async fn export_query(
     let mask_table = if req.table.trim().is_empty() { "" } else { req.table.trim() };
     let mut mask = ExportMask::prepare(state, id, req, mask_table).await;
     let mut columns: Vec<String> = Vec::new();
+    // ROWNUM 包装带来的辅助列在结果里的下标（Oracle 11g 分页才可能有）
+    let mut paging_aux: Option<usize> = None;
 
     // 首页用小页：整页取数要 1 秒以上（宿主→内核的逐行管线 ≈0.23ms/行），第一屏就等一整页
     // 会让"开始导出"看起来没反应；前三页各给 1/5 页先把进度推起来，之后回到整页满速跑。
@@ -1277,18 +1290,37 @@ async fn export_query(
         let t_fetch = std::time::Instant::now();
         // 导出是**长任务**（一页一页拉到完）：走独立会话键，不占元数据那条连接 ——
         // 否则导出大表期间「编辑表结构 / 树展开」的取列请求全部排在后面（30 秒超时）。
-        let result = run_sql_in_background(state, id, &req.database, sql, page_size as usize).await?;
+        let mut result =
+            run_sql_in_background(state, id, &req.database, sql, page_size as usize).await?;
         if profile {
             fetch_ms += t_fetch.elapsed().as_secs_f64() * 1000.0;
         }
         let got = result.rows.len() as u64;
         if page == 0 {
             columns = result.columns.iter().map(|c| c.name.clone()).collect();
+            // ROWNUM 分页包装（Oracle 11g）会多带一个辅助列 `rn__`（服务端折成 `RN__`）——
+            // 数据网格那边由 `shape::strip_paging_aux` 剥掉，导出这条路以前**没剥**：
+            // 导出的 SQL 文件里会出现 `insert into t ("day", "RN__") values …`，
+            // 拿去目标库执行必然报「列不存在」。这里按列名（大小写不敏感）定位后，
+            // 列清单与每行都同步删掉它。
+            if let Some(index) = columns
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case("rn__"))
+            {
+                columns.remove(index);
+                paging_aux = Some(index);
+            }
             sink.begin(&columns)?;
         }
         // 逐行写盘，并且**页内也上报**：以前只在整页写完后更新一次，界面上只能 5000 一跳。
         let t_write = std::time::Instant::now();
-        for row in &result.rows {
+        let mut rows = std::mem::take(&mut result.rows);
+        for row in rows.iter_mut() {
+            if let Some(index) = paging_aux {
+                if index < row.len() {
+                    row.remove(index);
+                }
+            }
             match mask.as_mut().and_then(|mask| mask.apply(&columns, row)) {
                 Some(masked) => sink.row(&masked)?,
                 None => sink.row(row)?,

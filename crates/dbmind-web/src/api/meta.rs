@@ -1927,7 +1927,10 @@ fn filter_condition(dialect: &Dialect, item: &Value) -> Option<String> {
     }
     let op = item.get("op").and_then(Value::as_str).unwrap_or("eq");
     let kind = item.get("colType").and_then(Value::as_str).unwrap_or("string");
-    let column = dialect.quote(column_name);
+    // 列名来自**目录元数据**（前端拿 /columns 的返回值填的），必须逐字加引号：
+    // quote() 会在 Oracle/DB2/H2/Derby 上把 `day` 折成 `DAY`，小写引号列直接
+    // `ORA-00904: "DAY": 标识符无效`（豫园 11g 实测）。
+    let column = dialect.quote_exact(column_name);
 
     // 空值判断不需要值
     match op {
@@ -1939,8 +1942,12 @@ fn filter_condition(dialect: &Dialect, item: &Value) -> Option<String> {
     let text = item.get("value").and_then(Value::as_str).unwrap_or_default();
     match op {
         "between" => {
-            let low = scalar_of(dialect, kind, text)?;
-            let high = scalar_of(dialect, kind, item.get("value2").and_then(Value::as_str).unwrap_or_default())?;
+            let low = scalar_for(dialect, kind, text)?;
+            let high = scalar_for(
+                dialect,
+                kind,
+                item.get("value2").and_then(Value::as_str).unwrap_or_default(),
+            )?;
             Some(format!("{column} between {low} and {high}"))
         }
         "contains" | "not_contains" | "starts_with" | "ends_with" => {
@@ -1957,7 +1964,7 @@ fn filter_condition(dialect: &Dialect, item: &Value) -> Option<String> {
             ))
         }
         _ => {
-            let value = scalar_of(dialect, kind, text)?;
+            let value = scalar_for(dialect, kind, text)?;
             let operator = match op {
                 "ne" => "<>",
                 "gt" => ">",
@@ -1969,6 +1976,15 @@ fn filter_condition(dialect: &Dialect, item: &Value) -> Option<String> {
             Some(format!("{column} {operator} {value}"))
         }
     }
+}
+
+/// 条件里的一个值 → SQL 标量：日期列先试显式转换（Oracle 族，见 [`temporal_literal`]），
+/// 其余按数值 / 字符串处理。
+fn scalar_for(dialect: &Dialect, kind: &str, raw: &str) -> Option<String> {
+    if let Some(literal) = temporal_literal(dialect, kind, raw) {
+        return Some(literal);
+    }
+    scalar_of(dialect, kind, raw)
 }
 
 /// 一个值 → SQL 标量：数值列直接写数字（且必须真是数字），其余转义加引号。
@@ -2281,7 +2297,8 @@ pub async fn data(
         let esc = like_escape(&dialect);
         let conditions: Vec<String> = text_columns
             .iter()
-            .map(|c| format!("{} like {pattern}{esc}", dialect.quote(c)))
+            // 列名同样是目录元数据（含外部 catalog 的 desc 结果）→ 逐字加引号
+            .map(|c| format!("{} like {pattern}{esc}", dialect.quote_exact(c)))
             .collect();
         where_groups.push(format!("({})", conditions.join(" or ")));
     }
@@ -2300,10 +2317,12 @@ pub async fn data(
     let mut tail = where_suffix.clone();
 
     if !order_specs.is_empty() {
-        // 多列：`order by "age" asc, "name" desc` —— 顺序即优先级，列名走方言 quote，方向已白名单
+        // 多列：`order by "age" asc, "name" desc` —— 顺序即优先级，方向已白名单。
+        // 列名走 **quote_exact**：表头点排序传过来的是库里真实列名（/columns 的返回值），
+        // 用 quote() 会在上折方言里把 `day` 折成 `DAY`，小写引号列必然 ORA-00904。
         let parts: Vec<String> = order_specs
             .iter()
-            .map(|(col, dir)| format!("{} {dir}", dialect.quote(col)))
+            .map(|(col, dir)| format!("{} {dir}", dialect.quote_exact(col)))
             .collect();
         tail.push_str(&format!(" order by {}", parts.join(", ")));
     } else if dialect.needs_order_by_for_paging() {
@@ -2329,7 +2348,9 @@ pub async fn data(
                 &state,
                 &id,
                 &database,
-                build_paged(&dialect.quote(&table)),
+                // 表名同样来自树（目录元数据）→ 逐字加引号，
+                // 否则带引号建的小写表在 Oracle 上被折成大写、报 ORA-00942
+                build_paged(&dialect.quote_exact(&table)),
                 size as usize,
             )
             .await
@@ -2382,7 +2403,11 @@ pub async fn data(
 /// 字符串必须走 [`Dialect::literal`]：MySQL/MariaDB/Doris/ClickHouse 默认把 `\` 当转义符，
 /// 这里若只做 `'` 翻倍，值 `C:\temp\` 会拼成 `'C:\temp\'` —— 收尾引号被吃掉，语句截断，
 /// 后面的 `where` 条件被并进字符串（轻则报错，重则改错行）。以前就地编辑走的就是那条路。
-fn sql_value(value: Option<&Value>, dialect: &crate::api::dialect::Dialect) -> String {
+fn sql_value(
+    value: Option<&Value>,
+    dialect: &crate::api::dialect::Dialect,
+    type_hint: &str,
+) -> String {
     match value {
         None | Some(Value::Null) => "NULL".to_string(),
         Some(Value::Bool(b)) => {
@@ -2397,7 +2422,8 @@ fn sql_value(value: Option<&Value>, dialect: &crate::api::dialect::Dialect) -> S
             }
         }
         Some(Value::Number(n)) => n.to_string(),
-        Some(Value::String(s)) => dialect.literal(s),
+        Some(Value::String(s)) => temporal_literal(dialect, type_hint, s)
+            .unwrap_or_else(|| dialect.literal(s)),
         Some(other) => dialect.literal(&other.to_string()),
     }
 }
@@ -2406,15 +2432,108 @@ fn sql_value(value: Option<&Value>, dialect: &crate::api::dialect::Dialect) -> S
 ///
 /// `col = NULL` 在 SQL 里永远不成立 ⇒ 无主键表（用整行当定位条件）里只要有一列是 NULL，
 /// 更新/删除就影响 0 行，而接口照样回「已提交 N 条语句」—— 用户以为存上了，刷新后改动没了。
-fn match_condition(col: &str, value: Option<&Value>, dialect: &crate::api::dialect::Dialect) -> String {
+fn match_condition(
+    col: &str,
+    value: Option<&Value>,
+    dialect: &crate::api::dialect::Dialect,
+    type_hint: &str,
+) -> String {
     match value {
-        None | Some(Value::Null) => format!("{} is null", dialect.quote(col)),
-        _ => format!("{} = {}", dialect.quote(col), sql_value(value, dialect)),
+        // 定位条件里的列名来自行数据（= 结果集列名 = 目录元数据）→ 逐字加引号
+        None | Some(Value::Null) => format!("{} is null", dialect.quote_exact(col)),
+        _ => format!(
+            "{} = {}",
+            dialect.quote_exact(col),
+            sql_value(value, dialect, type_hint)
+        ),
     }
 }
 
 fn keys_of(row: &Map<String, Value>) -> Vec<String> {
     row.keys().cloned().collect()
+}
+
+/// 日期时间字符串 → 会话语义无关的字面量（只对 Oracle / 达梦）。
+///
+/// 为什么需要：`insert … values ('2026-02-01T00:00')` 里 Oracle 会拿**会话的
+/// `NLS_DATE_FORMAT`**（默认 `DD-MON-RR`）去解析这个字符串 ⇒
+/// `ORA-01861: 文字与格式字符串不匹配`。表格里改一行（哪怕改的不是日期列，
+/// 整行原值也会原样回传）就整条失败，用户看到的是「保存不了」。
+/// 豫园 Oracle 11g 实测复现，改成 `to_date/to_timestamp` 并显式给格式串即可，
+/// 格式串与会话设置无关。
+///
+/// `hint` 既接受列的**真实类型名**（`date` / `timestamp(6)` / `datetime`），
+/// 也接受前端高级搜索送的分类值（`date` / `datetime`）。
+/// 认不出（非日期类型 / 值不是日期形状 / 其它方言）就返回 `None`，
+/// 调用方退回原来的 `dialect.literal` —— 行为与改动前完全一致。
+fn temporal_literal(
+    dialect: &crate::api::dialect::Dialect,
+    hint: &str,
+    value: &str,
+) -> Option<String> {
+    if !matches!(dialect.key(), "oracle" | "dm") {
+        return None;
+    }
+    let hint = hint.to_ascii_uppercase();
+    if !hint.contains("DATE") && !hint.contains("TIME") {
+        return None;
+    }
+    // `timestamp` / `datetime` 走 to_timestamp（保留小数秒）；纯 `date` 走 to_date
+    let is_timestamp = hint.contains("TIMESTAMP") || hint.starts_with("DATETIME");
+
+    let text = value.trim();
+    let (date_part, time_part) = match text.find(|c: char| c == ' ' || c == 'T') {
+        Some(index) => (&text[..index], text[index + 1..].trim()),
+        None => (text, ""),
+    };
+    // 只认 `YYYY-MM-DD`：别的写法（`02-01-2026`、带时区、自然语言）不猜
+    let date_ok = date_part.len() == 10
+        && date_part.as_bytes()[4] == b'-'
+        && date_part.as_bytes()[7] == b'-'
+        && date_part.chars().filter(char::is_ascii_digit).count() == 8;
+    if !date_ok {
+        return None;
+    }
+    if !time_part.is_empty()
+        && !time_part
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, ':' | '.'))
+    {
+        return None;
+    }
+
+    let mut normalized = date_part.to_string();
+    let mut format = String::from("YYYY-MM-DD");
+    if !time_part.is_empty() {
+        let (clock, fraction) = match time_part.split_once('.') {
+            Some((clock, fraction)) => (clock, Some(fraction)),
+            None => (time_part, None),
+        };
+        if clock.is_empty() || clock.matches(':').count() > 2 {
+            return None;
+        }
+        let with_seconds = clock.matches(':').count() == 2;
+        normalized.push(' ');
+        normalized.push_str(clock);
+        format.push_str(" HH24:MI");
+        if with_seconds {
+            format.push_str(":SS");
+        }
+        // 小数秒只有 TIMESTAMP 有；DATE 列丢掉（Oracle 的 DATE 只到秒）
+        if is_timestamp {
+            if let Some(fraction) = fraction {
+                if !fraction.is_empty() {
+                    normalized.push('.');
+                    normalized.push_str(fraction);
+                    format.push_str(".FF");
+                }
+            }
+        }
+    }
+
+    let literal = dialect.literal(&normalized);
+    let func = if is_timestamp { "to_timestamp" } else { "to_date" };
+    Some(format!("{func}({literal}, '{format}')"))
 }
 
 fn same_value(a: Option<&Value>, b: Option<&Value>) -> bool {
@@ -2444,7 +2563,6 @@ pub async fn data_save(
         return Err(XError::bad_request("缺少 table"));
     }
     let (_, dialect) = ctx_of(&state, &id).await?;
-    let quoted = dialect.quote(&table);
     let pk_columns: Vec<String> = body
         .get("pkColumns")
         .and_then(Value::as_array)
@@ -2455,20 +2573,67 @@ pub async fn data_save(
                 .collect()
         })
         .unwrap_or_default();
+    let inserts = body.get("inserts").and_then(Value::as_array).cloned().unwrap_or_default();
+    let updates = body.get("updates").and_then(Value::as_array).cloned().unwrap_or_default();
+    let deletes = body.get("deletes").and_then(Value::as_array).cloned().unwrap_or_default();
+    // 什么都没改：直接回「没有需要提交的变更」，不必为此再拉一次列元数据
+    if inserts.is_empty() && updates.is_empty() && deletes.is_empty() {
+        return Ok(Json(json!({
+            "success": true,
+            "columns": [], "columnTypes": [], "rows": [],
+            "rowCount": 0, "totalCount": -1, "affectedRows": 0, "executeTime": 0,
+            "message": "没有需要提交的变更", "notices": [], "hasMore": false,
+        })));
+    }
+    // 就地编辑要落到目标库上（跨库时就是那条影子连接）
+    let database = body
+        .get("database")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let target = crate::api::scope::resolve(&state, &id, &database).await?;
+    // 列类型（小写列名 → 类型名）：Oracle / 达梦的日期列必须生成
+    // `to_date(...)` / `to_timestamp(...)`，否则 `'2026-02-01T00:00'` 这种 ISO 串
+    // 会被按**会话 NLS_DATE_FORMAT** 解析 ⇒ `ORA-01861: 文字与格式字符串不匹配`
+    //（豫园 Oracle 11g 实测：在表格里改一行日期列就报这个）。
+    // 取不到元数据就退回旧行为 —— 绝不因为「多知道一点」让保存失败。
+    let column_types: std::collections::HashMap<String, String> = {
+        let engine = state.engine();
+        let connection = target.clone();
+        let name = table.clone();
+        match blocking(move || engine.list_columns_fresh(&connection, &name)).await {
+            Ok(columns) => columns
+                .into_iter()
+                .filter_map(|column| {
+                    column
+                        .type_name
+                        .map(|type_name| (column.name.to_ascii_lowercase(), type_name))
+                })
+                .collect(),
+            Err(_) => std::collections::HashMap::new(),
+        }
+    };
+    let type_of = |column: &str| -> String {
+        column_types
+            .get(&column.to_ascii_lowercase())
+            .cloned()
+            .unwrap_or_default()
+    };
+    // 就地编辑的目标表来自树（目录元数据）→ 逐字加引号
+    let quoted = dialect.quote_exact(&table);
 
     let mut statements: Vec<String> = Vec::new();
 
-    let inserts = body.get("inserts").and_then(Value::as_array).cloned().unwrap_or_default();
     for row in &inserts {
         let Some(obj) = row.as_object() else { continue };
         let columns = keys_of(obj);
         if columns.is_empty() {
             continue;
         }
-        let names: Vec<String> = columns.iter().map(|c| dialect.quote(c)).collect();
+        let names: Vec<String> = columns.iter().map(|c| dialect.quote_exact(c)).collect();
         let values: Vec<String> = columns
             .iter()
-            .map(|c| sql_value(obj.get(c), &dialect))
+            .map(|c| sql_value(obj.get(c), &dialect, &type_of(c)))
             .collect();
         statements.push(format!(
             "insert into {quoted} ({}) values ({})",
@@ -2477,7 +2642,6 @@ pub async fn data_save(
         ));
     }
 
-    let updates = body.get("updates").and_then(Value::as_array).cloned().unwrap_or_default();
     for item in &updates {
         let original = item.get("original").and_then(Value::as_object);
         let row = item.get("row").and_then(Value::as_object);
@@ -2491,7 +2655,13 @@ pub async fn data_save(
         }
         let assignments: Vec<String> = changed
             .iter()
-            .map(|c| format!("{} = {}", dialect.quote(c), sql_value(row.get(c), &dialect)))
+            .map(|c| {
+                format!(
+                    "{} = {}",
+                    dialect.quote_exact(c),
+                    sql_value(row.get(c), &dialect, &type_of(c))
+                )
+            })
             .collect();
         let keys: Vec<String> = if pk_columns.is_empty() {
             keys_of(original)
@@ -2500,7 +2670,7 @@ pub async fn data_save(
         };
         let conditions: Vec<String> = keys
             .iter()
-            .map(|c| match_condition(c, original.get(c), &dialect))
+            .map(|c| match_condition(c, original.get(c), &dialect, &type_of(c)))
             .collect();
         statements.push(format!(
             "update {quoted} set {} where {}",
@@ -2509,7 +2679,6 @@ pub async fn data_save(
         ));
     }
 
-    let deletes = body.get("deletes").and_then(Value::as_array).cloned().unwrap_or_default();
     for row in &deletes {
         let Some(obj) = row.as_object() else { continue };
         let keys: Vec<String> = if pk_columns.is_empty() {
@@ -2519,7 +2688,7 @@ pub async fn data_save(
         };
         let conditions: Vec<String> = keys
             .iter()
-            .map(|c| match_condition(c, obj.get(c), &dialect))
+            .map(|c| match_condition(c, obj.get(c), &dialect, &type_of(c)))
             .collect();
         statements.push(format!(
             "delete from {quoted} where {}",
@@ -2529,14 +2698,6 @@ pub async fn data_save(
 
     // 有 update/delete 才有可能「语句执行成功但一行都没匹配上」
     let has_row_ops = !updates.is_empty() || !deletes.is_empty();
-
-    // 就地编辑要落到目标库上（跨库时就是那条影子连接）
-    let database = body
-        .get("database")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let target = crate::api::scope::resolve(&state, &id, &database).await?;
 
     if statements.is_empty() {
         return Ok(Json(json!({
@@ -4955,6 +5116,80 @@ fn mssql_object_grant_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dialect(key: &str) -> crate::api::dialect::Dialect {
+        let kind = dbmind_core::ConnectionKind::from_key(key).expect("未知的连接类型");
+        crate::api::dialect::Dialect::new(kind)
+    }
+
+    /// 日期列的字面量必须显式给格式串（Oracle 会话 NLS 默认 `DD-MON-RR`）。
+    ///
+    /// 守着豫园 Oracle 11g 的真机故障：表格里改一行，`day` 列原值
+    /// `2026-02-01T00:00` 原样回传 ⇒ `ORA-01861: 文字与格式字符串不匹配`。
+    #[test]
+    fn oracle_日期字面量走_to_date() {
+        let oracle = dialect("oracle");
+        assert_eq!(
+            temporal_literal(&oracle, "date", "2026-02-01T00:00").as_deref(),
+            Some("to_date('2026-02-01 00:00', 'YYYY-MM-DD HH24:MI')")
+        );
+        assert_eq!(
+            temporal_literal(&oracle, "DATE", "2026-02-01").as_deref(),
+            Some("to_date('2026-02-01', 'YYYY-MM-DD')")
+        );
+        // 带秒
+        assert_eq!(
+            temporal_literal(&oracle, "date", "2026-02-01 13:45:59").as_deref(),
+            Some("to_date('2026-02-01 13:45:59', 'YYYY-MM-DD HH24:MI:SS')")
+        );
+        // TIMESTAMP 保留小数秒：固定列宽（FF）不会被截断
+        assert_eq!(
+            temporal_literal(&oracle, "timestamp(6)", "2026-02-01T13:45:59.123456").as_deref(),
+            Some("to_timestamp('2026-02-01 13:45:59.123456', 'YYYY-MM-DD HH24:MI:SS.FF')")
+        );
+        // DATE 列丢掉小数秒（Oracle DATE 只到秒），但语句仍然合法
+        assert_eq!(
+            temporal_literal(&oracle, "date", "2026-02-01T13:45:59.123").as_deref(),
+            Some("to_date('2026-02-01 13:45:59', 'YYYY-MM-DD HH24:MI:SS')")
+        );
+        // 前端高级搜索送的分类值同样认
+        assert!(temporal_literal(&oracle, "datetime", "2026-02-01 10:00").is_some());
+    }
+
+    /// 认不出/不适用时必须返回 None（调用方退回普通字符串字面量，行为不变）。
+    #[test]
+    fn 日期字面量不误伤其它情况() {
+        let oracle = dialect("oracle");
+        // 非日期类型
+        assert!(temporal_literal(&oracle, "varchar2(20)", "2026-02-01").is_none());
+        assert!(temporal_literal(&oracle, "number(10,2)", "2026").is_none());
+        // 非 Oracle 族：MySQL/PG 都认 ISO 串，别多套一层函数
+        assert!(temporal_literal(&dialect("mysql"), "date", "2026-02-01").is_none());
+        assert!(temporal_literal(&dialect("postgresql"), "timestamp", "2026-02-01").is_none());
+        // 不是日期形状的值不猜
+        assert!(temporal_literal(&oracle, "date", "02-01-2026").is_none());
+        assert!(temporal_literal(&oracle, "date", "2026-02-01T10:00:00+08:00").is_none());
+        assert!(temporal_literal(&oracle, "date", "CURRENT_DATE").is_none());
+    }
+
+    /// 高级搜索按日期列筛选时也要走显式转换（同一类故障的另一条入口）。
+    #[test]
+    fn 高级搜索的日期条件走_to_date() {
+        let oracle = dialect("oracle");
+        let filters = vec![serde_json::json!({
+            "join": "AND", "col": "day", "op": "between",
+            "value": "2026-01-01", "value2": "2026-01-31", "colType": "date"
+        })];
+        let clause = filter_clause(&oracle, &filters).unwrap_or_default();
+        assert!(
+            clause.contains("to_date('2026-01-01', 'YYYY-MM-DD')"),
+            "日期条件没用 to_date：{clause}"
+        );
+        assert!(
+            clause.contains("to_date('2026-01-31', 'YYYY-MM-DD')"),
+            "上界也没用 to_date：{clause}"
+        );
+    }
 
     fn pick(names: &[&str], values: &[&str]) -> usize {
         let names: Vec<String> = names.iter().map(|name| name.to_string()).collect();

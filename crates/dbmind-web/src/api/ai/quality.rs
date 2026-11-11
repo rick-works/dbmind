@@ -412,13 +412,15 @@ fn build_rule(
     if column_name.is_empty() {
         return RuleKind::Unsupported("规则没有指定字段".to_string());
     }
-    if !columns
+    // 规则里写的是大小写不敏感的名字，但拼 SQL 必须用**元数据里的真实列名**：
+    // quote() 会在 Oracle/DB2/H2/Derby 上把 `day` 折成 `DAY`，小写引号列直接 ORA-00904。
+    let Some(actual) = columns
         .iter()
-        .any(|column| column.name.eq_ignore_ascii_case(&column_name))
-    {
+        .find(|column| column.name.eq_ignore_ascii_case(&column_name))
+    else {
         return RuleKind::Unsupported(format!("字段 {column_name} 在表 {table} 里不存在"));
-    }
-    let column = dialect.quote(&column_name);
+    };
+    let column = dialect.quote_exact(&actual.name);
     let params = rule.get("params").cloned().unwrap_or(json!({}));
     let rule_type = rule
         .get("type")
@@ -560,7 +562,8 @@ async fn eval_rules(
     columns: &[ColumnDetail],
 ) -> XResult<(Vec<Value>, i64, i64, i64, i64, i64)> {
     let dialect = Dialect::new(require_record(state, conn).await?.kind());
-    let table_quoted = dialect.quote(table);
+    // 表名来自目录元数据 → quote_exact（小写引号表在 Oracle 上不能被折成大写）
+    let table_quoted = dialect.quote_exact(table);
     let mut details: Vec<Value> = Vec::new();
     let (mut passed, mut failed, mut skipped, mut errors) = (0i64, 0i64, 0i64, 0i64);
 
@@ -866,7 +869,7 @@ fn union_sql(
     rules: &[Value],
 ) -> (Vec<String>, Vec<String>, Vec<String>) {
     let dialect = state_dialect;
-    let table_quoted = dialect.quote(table);
+    let table_quoted = dialect.quote_exact(table);
     let mut names: Vec<String> = Vec::new();
     let mut selects: Vec<String> = Vec::new();
     let mut labels: Vec<String> = Vec::new();
@@ -894,7 +897,7 @@ fn union_sql(
         };
         let projection: Vec<String> = columns
             .iter()
-            .map(|column| dialect.quote(&column.name))
+            .map(|column| dialect.quote_exact(&column.name))
             .collect();
         let literal = dialect.literal(&label);
         selects.push(format!(

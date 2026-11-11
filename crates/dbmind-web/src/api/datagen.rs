@@ -631,7 +631,7 @@ fn written_columns(planned: &[Planned], dialect: Dialect) -> Vec<String> {
     planned
         .iter()
         .filter(|column| !matches!(column.rule, PlanRule::Skip))
-        .map(|column| dialect.quote(&column.name))
+        .map(|column| dialect.quote_exact(&column.name))
         .collect()
 }
 
@@ -846,7 +846,7 @@ pub async fn start(
                     .map_err(|e| e.message)?
                     .kind(),
             );
-            let target_name = dialect.quote(&table);
+            let target_name = dialect.quote_exact(&table);
             let columns = written_columns(&planned, dialect);
             if columns.is_empty() {
                 return Err("所有字段都被设为「不写入」".to_string());
