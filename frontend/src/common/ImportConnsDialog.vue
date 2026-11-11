@@ -80,7 +80,7 @@
       </el-button>
     </template>
 
-    <input ref="fileRef" type="file" accept=".dbmind,.json,.ncx,.dbp,.xml,application/json,text/xml,application/zip" style="display:none" @change="onFile" />
+    <input ref="fileRef" type="file" accept=".dbm,.dbmind,.json,.ncx,.dbp,.xml,application/json,text/xml,application/zip" style="display:none" @change="onFile" />
   </el-dialog>
 </template>
 
