@@ -121,8 +121,12 @@ const checkedIds = ref([])
 const importing = ref(false)
 /** 已存连接（只用来判「同名」：名称 → 记录，重名以第一条为准） */
 const existing = ref([])
-/** 同名处理方式：skip 跳过 / overwrite 覆盖 / rename 重命名（加后缀） */
-const dupMode = ref('rename')
+/**
+ * 同名处理方式：skip 跳过 / overwrite 覆盖 / rename 重命名（加后缀）。
+ * **默认跳过**：导入这件事的语义是「把文件里缺的连接补上」，不该顺手覆盖用户现有的配置，
+ * 也不该默认造出一堆 `xxx-新` 的副本 —— 真要那两种效果，用户自己点一下就行。
+ */
+const dupMode = ref('skip')
 /** 重命名用的后缀，默认「新」，用户可以自己改 */
 const dupSuffix = ref('')
 let uid = 0
@@ -177,7 +181,7 @@ const reset = () => {
   warnings.value = []
   keyword.value = ''
   checkedIds.value = []
-  dupMode.value = 'rename'
+  dupMode.value = 'skip'
   dupSuffix.value = t('ci.dupSuffixDefault')
 }
 
