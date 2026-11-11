@@ -43,9 +43,10 @@
         <span class="top-nav-right">
           <!-- 产品官网（www.dbmind.top）：Cloudflare Pages 托管，点击交系统浏览器打开
                （壳里 window.open/_blank 都无效，统一走 utils/externalLinks）。
-               图标用 Element 的**实心** HomeFilled，和旁边 8 个图标同一套（font-size 驱动的字形、
-               满幅填充）。以前是手写的线框 SVG，盒子里有留白、墨迹只有实心图标的三分之一，
-               mac 的 Retina 把细线渲染得更细，看起来就比同排小一圈（Windows 上差异不明显）。 -->
+               图标只用 **Element 内置图标**（HomeFilled：实心房子、中间挖出拱形门洞）：
+               字体级字形，浏览器按 font-size 渲染，mac / Windows 同一套几何，尺寸不可能
+               有平台差异 —— 旁边那 8 个就是证明。手写 SVG 要靠 viewBox 和线宽去凑，
+               Windows 上算得再准也保证不了 Retina 上的观感（这条走过两次弯路）。 -->
           <el-tooltip :content="$t('nav.officialSite')" placement="bottom">
             <span class="top-nav-item top-icon-btn" @click="openExternal('https://www.dbmind.top/')">
               <el-icon><HomeFilled /></el-icon>

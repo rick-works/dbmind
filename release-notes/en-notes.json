@@ -719,6 +719,6 @@
     "On macOS the \"Website / GitHub\" icons in the top bar no longer look smaller than their neighbours (Windows is untouched)"
   ],
   "v2.0.22": [
-    "The \"Website / GitHub\" icons in the top bar are now the same kind of icon as the other eight - a filled home glyph for the website and the GitHub mark wrapped in el-icon - so their size and stroke both come from one shared rule; no more \"looks smaller than its neighbours on macOS\" (Windows is untouched)"
+    "The \"Website / GitHub\" icons in the top bar are now the same kind of icon as the other eight - a solid house with an arched doorway (Element's HomeFilled) for the website, the GitHub mark wrapped in el-icon - so their size comes from font-size, like everything else; no more \"looks smaller than its neighbours on macOS\" (Windows is untouched)"
   ]
 }

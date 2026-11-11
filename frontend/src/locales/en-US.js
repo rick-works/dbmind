@@ -2165,7 +2165,7 @@ export default {
   'settings.about.rel1.version': 'v2.0.22',
   'settings.about.rel1.level': 'patch',
   'settings.about.rel1.date': '2026-11-11',
-  'settings.about.rel1.note1': 'The "Website / GitHub" icons in the top bar are now the same kind of icon as the other eight - a filled home glyph for the website and the GitHub mark wrapped in el-icon - so their size and stroke both come from one shared rule; no more "looks smaller than its neighbours on macOS" (Windows is untouched)',
+  'settings.about.rel1.note1': 'The "Website / GitHub" icons in the top bar are now the same kind of icon as the other eight - a solid house with an arched doorway (Element\'s HomeFilled) for the website, the GitHub mark wrapped in el-icon - so their size comes from font-size, like everything else; no more "looks smaller than its neighbours on macOS" (Windows is untouched)',
   'settings.about.rel2.version': 'v2.0.21',
   'settings.about.rel2.level': 'patch',
   'settings.about.rel2.date': '2026-11-11',
