@@ -122,14 +122,25 @@ jobs:
       - uses: actions/checkout@v4
 
       # Linux 的 Tauri 依赖：缺 webkit2gtk / appindicator 的话 bundler 直接失败
+      #
+      # 这一步**必须带超时与 apt 的网络参数**：2026-11-11 的 v2.0.22 连续三次卡在
+      # `sudo apt-get update` 上毫无输出（一小时不动，job 也不会自己失败，白占 runner 6 小时）。
+      # 三条对策：
+      #   · `Acquire::ForceIPv4` —— 托管 runner 的 IPv6 出口不可用时，apt 会先试 IPv6、
+      #     卡在连接超时上；强制 IPv4 是最常见的解；
+      #   · `Acquire::http(s)::Timeout` + `Retries` —— 让它在几十秒内重试/失败，而不是干等；
+      #   · `timeout-minutes` —— 万一还是卡住，15 分钟就判失败，重跑一次比干等一小时便宜。
       - name: 安装 Linux 系统依赖
         if: runner.os == 'Linux'
+        timeout-minutes: 15
         run: |
-          sudo apt-get update
+          APT_OPTS="-o Acquire::ForceIPv4=true -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=3"
+          sudo apt-get $APT_OPTS update
           # libfuse2：AppImage 打包要跑 linuxdeploy（它本身就是个 AppImage），
           # 没有 FUSE 时会直接停在 `failed to run linuxdeploy`；
           # 再加 APPIMAGE_EXTRACT_AND_RUN=1（见下面的 Tauri 步骤）双保险。
-          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+          sudo apt-get $APT_OPTS install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
 
       # 缓存 npm 与 maven：前端的依赖与四个 Java 宿主的依赖在四台 runner 上是同一份，
