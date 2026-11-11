@@ -69,8 +69,19 @@ export function importPayloadOf(item, group) {
   return payload
 }
 
-/** 导出 JSON 文件（走统一的"用户选位置"），返回 `{ ok } | { canceled }` 便于调用方决定要不要报成功 */
+/**
+ * DBMind 连接文件的专属后缀。
+ * 内容仍然是 JSON（导入端按内容识别，改后缀不影响旧文件），但**不再挂在 .json 上**：
+ * 一是 .json 一对多（用户分不清这是连接还是别的什么东西），二是 DBeaver 给 .dbp、
+ * Navicat 给 .ncx，我们叫 .json 在"导入连接"里显得像没做完。
+ */
+export const CONN_FILE_EXT = 'dbmind'
+
+// 另存为对话框里的类型名不走 i18n（系统对话框里出现中英混杂更怪），统一用产品名
+export const CONN_FILE_TYPES = [{ description: 'DBMind', accept: { 'application/json': ['.' + CONN_FILE_EXT] } }]
+
+/** 导出连接文件（走统一的"用户选位置"），返回 `{ ok } | { canceled }` 便于调用方决定要不要报成功 */
 export function downloadJson(filename, data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' })
-  return saveBlobAs(blob, filename)
+  return saveBlobAs(blob, filename, CONN_FILE_TYPES)
 }

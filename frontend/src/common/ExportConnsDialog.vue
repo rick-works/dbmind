@@ -75,7 +75,7 @@ import { Search, Download, WarningFilled, ArrowRight, ArrowDown, Folder } from '
 import { ElMessage } from 'element-plus'
 import { t } from '../utils/i18n'
 import { listConnections, exportConnections } from '../api'
-import { sanitizeConnection, downloadJson, CONN_FILE_FORMAT } from '../utils/connTransfer'
+import { sanitizeConnection, downloadJson, CONN_FILE_FORMAT, CONN_FILE_EXT } from '../utils/connTransfer'
 import { buildConnTreeRows } from '../utils/connTree'
 import DbLogo from './DbLogo.vue'
 
@@ -183,7 +183,7 @@ const doExport = async () => {
       note: withPassword.value ? t('ce.notePwd') : t('ce.noteNoPwd'),
       connections: list
     }
-    const name = 'dbmind-connections-' + new Date().toISOString().slice(0, 10) + '.json'
+    const name = 'dbmind-connections-' + new Date().toISOString().slice(0, 10) + '.' + CONN_FILE_EXT
     const res = await downloadJson(name, bundle)
     if (res && res.canceled) return
     ElMessage.success(t('ce.done', { n: list.length }))

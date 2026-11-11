@@ -3408,7 +3408,7 @@ const exportConns = (env) => {
   }
   openExportConns(preset)
 }
-// 导入：DBMind(.json) / Navicat(.ncx) / DBeaver(.dbp，zip) 三种文件都能进，解析完先给预览再落库
+// 导入：DBMind(.dbmind) / Navicat(.ncx) / DBeaver(.dbp，zip) 三种文件都能进，解析完先给预览再落库
 const importConnsVisible = ref(false)
 const importConnsGroup = ref('')
 const importConns = (env) => {

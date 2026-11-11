@@ -1,7 +1,7 @@
 import { t } from './i18n'
 import { CONN_FILE_FORMAT } from './connTransfer'
 /**
- * 连接文件的**多来源**解析：DBMind (.json) / Navicat (.ncx) / DBeaver (.dbp，zip)。
+ * 连接文件的**多来源**解析：DBMind (.dbmind，内容是 JSON) / Navicat (.ncx) / DBeaver (.dbp，zip)。
  *
  * 三个来源的共同目标只有一个：产出 DBMind 自己那套字段（`{ name, type, host, port, … }`），
  * 交给现有的 `saveConnection` 逐条落库。差异全部收敛在本文件里，UI 只认 `parseImportFile()`。
