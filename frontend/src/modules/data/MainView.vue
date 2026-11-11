@@ -9139,16 +9139,18 @@ const connTypeSummary = computed(() =>
 /* 只有 mac 上这两个内联 SVG 显得比同排 Element 图标小一圈（Windows 上正好，用户实测
    对比确认）。原因在渲染层：Element 那排是 font-size 驱动的字形，这两个是 SVG 盒子，
    WKWebView 下同样的 px 给出来的墨迹更轻。**只在 mac 壳里补偿**，Windows 一个像素都不动
-   —— 上一版没分成因直接在公共规则里放大，把 Windows 也带大了（用户反馈）。
+   —— 之前没分成因直接在公共规则里放大，把 Windows 也带大了（用户反馈）。
    两个系数不一样是有意的：小房子的 viewBox 四周有留白（可见只有盒子的 72%），
-   章鱼猫是满幅实心圆，同系数放大会让后者比同排大出一截。 */
+   章鱼猫是满幅实心圆，同系数放大会让后者比同排大出一截。
+   1.22 / 1.08 在真机上仍然"看得出小"，所以再加一档：房子 1.45（可见 ≈16.7，
+   比同排 Element 的 ~14 明显一档），章鱼猫 1.15（≈18.4）。 */
 .top-nav-right.is-mac .site-mark {
-  width: calc(var(--dc-nav-icon, 16px) * 1.22);
-  height: calc(var(--dc-nav-icon, 16px) * 1.22);
+  width: min(calc(var(--dc-nav-icon, 16px) * 1.45), 24px);
+  height: min(calc(var(--dc-nav-icon, 16px) * 1.45), 24px);
 }
 .top-nav-right.is-mac .gh-mark {
-  width: calc(var(--dc-nav-icon, 16px) * 1.08);
-  height: calc(var(--dc-nav-icon, 16px) * 1.08);
+  width: min(calc(var(--dc-nav-icon, 16px) * 1.15), 21px);
+  height: min(calc(var(--dc-nav-icon, 16px) * 1.15), 21px);
 }
 .conn-label { display: flex; align-items: center; gap: 6px; font-weight: 500; font-size: var(--dc-tree-fs, 14px); color: var(--dc-text); }
 .conn-label.t-mysql { }
