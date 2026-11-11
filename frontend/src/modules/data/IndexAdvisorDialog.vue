@@ -160,9 +160,9 @@ watch(
 
 <style scoped>
 /* 标题：主标题正常字号，表名与条数降两档做对比（与其它弹窗的 .dlg-title-sub 同一口径）。
-   右侧 44px 是给 Element 自带的关闭 ×（.el-dialog__headerbtn，贴右边缘、宽约 48px）让位的：
-   标题容器铺满整个 header，不留这块空当，「共 N 条建议」就会压在 × 上（真机反馈）。 */
-.dlg-title { display: flex; align-items: center; gap: 8px; min-width: 0; padding-right: 44px; }
+   右上角 × / 全屏按钮的安全区由全局规则统一留（styles/index.css 的
+   `.el-dialog__header > :not(.el-dialog__headerbtn)`），这里不再各留一份。 */
+.dlg-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .dlg-title-ic {
   width: 26px; height: 26px; border-radius: 7px; display: inline-flex; flex: none;
   align-items: center; justify-content: center; color: var(--dc-on-primary);

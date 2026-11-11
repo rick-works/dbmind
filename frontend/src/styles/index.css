@@ -469,6 +469,17 @@ body.dc-resizing * { user-select: none !important; }
 }
 .dc-max-btn svg { width: 17px; height: 17px; display: block; }
 .dc-max-btn:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
+
+/* ---------- header 内容给右上角按钮让位 ----------
+   ✕ 和全屏按钮都是**绝对定位压着 header** 的（不占文档流），所以 header 里的长标题、
+   以及右对齐的计数/元信息（`.cd-meta`、`.dlg-title-count` …）会直接压到按钮下面 ——
+   真机截图：行详情弹窗的「N 字符 · M 行」整个糊在 ✕ 上。
+   这里统一在自定义 header 的内容上留出安全区（Element 的 header 内边距 20px 是不够的）：
+     · 只有 ✕：48 - 20 ≈ 28 → 留 32
+     · 还有全屏按钮（js 会加 has-dc-max）：48 + 28 + 4 - 20 ≈ 60 → 留 64
+   只作用于 header 的**直接子元素**，不碰按钮自己；弹窗内部其它布局不受影响。 */
+.el-dialog__header > :not(.el-dialog__headerbtn) { padding-right: 32px; }
+.el-dialog.has-dc-max > .el-dialog__header > :not(.el-dialog__headerbtn) { padding-right: 64px; }
 .el-dialog.dc-max {
   /* 宽高由 JS 写成内联样式（这样全屏态还能拖手柄、改窗口大小也跟着变），
      这里只做三件事：四周留 12px、放开各弹窗自己的宽高上限、别让内容溢出圆角 */

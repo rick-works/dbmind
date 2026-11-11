@@ -122,6 +122,9 @@ function enhance(dialog) {
   if (width && width < MIN_WIDTH_TO_ENHANCE) return
 
   done.add(dialog)
+  // 给 header 内容留出按钮的安全区（styles/index.css 里有对应规则）：
+  // 打了这个标，header 右边多让 32px，长标题/右对齐的计数就不会压在「全屏」上
+  dialog.classList.add('has-dc-max')
   const btn = document.createElement('button')
   btn.type = 'button'
   btn.className = 'dc-max-btn'
