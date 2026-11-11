@@ -123,25 +123,49 @@ jobs:
 
       # Linux 的 Tauri 依赖：缺 webkit2gtk / appindicator 的话 bundler 直接失败
       #
-      # 这一步**必须带超时与 apt 的网络参数**：2026-11-11 的 v2.0.22 连续三次卡在
-      # `sudo apt-get update` 上毫无输出（一小时不动，job 也不会自己失败，白占 runner 6 小时）。
-      # 三条对策：
-      #   · `Acquire::ForceIPv4` —— 托管 runner 的 IPv6 出口不可用时，apt 会先试 IPv6、
-      #     卡在连接超时上；强制 IPv4 是最常见的解；
-      #   · `Acquire::http(s)::Timeout` + `Retries` —— 让它在几十秒内重试/失败，而不是干等；
-      #   · `timeout-minutes` —— 万一还是卡住，15 分钟就判失败，重跑一次比干等一小时便宜。
+      # 这一步必须**容错**，原因（2026-11-11 实测，v2.0.22 / v2.0.23 各挂过一次）：
+      # runner 到 Ubuntu 官方镜像（azure.archive.ubuntu.com、archive.ubuntu.com）**完全不可达**，
+      # `apt-get update` 会对着四个仓库一路 `Ign:` 重试到十几分钟，job 也不报错 —— 之前三次
+      # 发布都卡死在这里（最后一次是加了 15 分钟超时才判失败的，日志里能看到满屏 Ign）。
+      # 与此同时 packages.microsoft.com 是通的，说明只是镜像站这一路不通。
+      #
+      # 所以按「由近到远」三级降级：
+      #   ① 先用镜像自带的 /var/lib/apt/lists 直接装（不 update，根本不需要外网 mirror）；
+      #   ② 不行就换镜像重写 sources.list 再试（kernel.org / aliyun / 清华 / 官方）；
+      #   ③ 全都失败才判失败 —— 那是真缺依赖，后面的 tauri build 也必然报错。
+      # 每级都带短超时（15s）与单次重试，避免再次「无声卡住一小时」。
       - name: 安装 Linux 系统依赖
         if: runner.os == 'Linux'
-        timeout-minutes: 15
+        timeout-minutes: 20
         run: |
-          APT_OPTS="-o Acquire::ForceIPv4=true -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=3"
-          sudo apt-get $APT_OPTS update
+          set -uo pipefail
+          export DEBIAN_FRONTEND=noninteractive
           # libfuse2：AppImage 打包要跑 linuxdeploy（它本身就是个 AppImage），
           # 没有 FUSE 时会直接停在 `failed to run linuxdeploy`；
           # 再加 APPIMAGE_EXTRACT_AND_RUN=1（见下面的 Tauri 步骤）双保险。
-          sudo apt-get $APT_OPTS install -y --no-install-recommends \
-            libwebkit2gtk-4.1-dev build-essential curl wget file \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2
+          PKGS="libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libfuse2"
+          APT="-o Acquire::ForceIPv4=true -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=1"
+
+          echo "== ① 用镜像自带索引直接安装（不 update）=="
+          if sudo apt-get $APT install -y --no-install-recommends $PKGS; then
+            echo "依赖已在镜像索引中，安装完成"; exit 0
+          fi
+
+          CODENAME="$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")"
+          echo "Ubuntu 代号：$CODENAME"
+          for M in https://mirrors.edge.kernel.org/ubuntu http://mirrors.aliyun.com/ubuntu \
+                   https://mirrors.tuna.tsinghua.edu.cn/ubuntu http://archive.ubuntu.com/ubuntu; do
+            echo "== ② 换镜像重试：$M =="
+            # 覆盖而不是 sed：镜像站点清单在 /etc/apt/apt-mirrors.txt（mirror+file: 协议），
+            # 只改 sources.list 里的域名不会生效（踩过）。
+            sudo rm -f /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources
+            printf 'deb %s %s main restricted universe multiverse\ndeb %s %s-updates main restricted universe multiverse\ndeb %s %s-security main restricted universe multiverse\n' \
+              "$M" "$CODENAME" "$M" "$CODENAME" "$M" "$CODENAME" | sudo tee /etc/apt/sources.list > /dev/null
+            if sudo apt-get $APT update && sudo apt-get $APT install -y --no-install-recommends $PKGS; then
+              echo "镜像 $M 安装成功"; exit 0
+            fi
+          done
+          echo "所有镜像均失败：Linux 依赖装不上，后面的打包必然失败"; exit 1
 
       # 缓存 npm 与 maven：前端的依赖与四个 Java 宿主的依赖在四台 runner 上是同一份，
       # 不缓存的话每个 job 都要重新下载（实测前端 ~65s、Java 宿主 ~40-50s）。

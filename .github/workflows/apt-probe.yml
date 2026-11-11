@@ -1,0 +1,42 @@
+# 临时探针：找出在 GitHub 托管 runner 上**可达**的 Ubuntu 镜像。
+#
+# 由来（2026-11-11）：v2.0.22 / v2.0.23 的 Linux job 连续卡死在 `apt-get update`，
+# 日志里 azure.archive.ubuntu.com 与 archive.ubuntu.com 全在 `Ign:` 重试（完全不可达），
+# 而 packages.microsoft.com 正常。为了不再「盲改 → 整包重打 → 又失败」，用这个探针
+# 一次性验证候选镜像，结果看 job 摘要即可。用完即删。
+name: apt-probe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 12
+    steps:
+      - name: 逐个镜像探测
+        run: |
+          set -uo pipefail
+          CODENAME="$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")"
+          echo "codename=$CODENAME"
+          echo "=== 镜像自带索引能否直接装（不 update）==="
+          if sudo apt-get -o Acquire::http::Timeout=10 -o Acquire::Retries=0 \
+              install -y --no-install-recommends libxdo-dev > /tmp/cache-install.log 2>&1; then
+            echo "自带索引安装：OK"
+          else
+            echo "自带索引安装：FAIL（tail 见下）"; tail -3 /tmp/cache-install.log
+          fi
+          for M in https://mirrors.edge.kernel.org/ubuntu http://mirrors.aliyun.com/ubuntu \
+                   https://mirrors.tuna.tsinghua.edu.cn/ubuntu http://archive.ubuntu.com/ubuntu \
+                   http://azure.archive.ubuntu.com/ubuntu; do
+            echo "::group:: $M"
+            printf 'deb %s %s main universe\ndeb %s %s-updates main universe\n' "$M" "$CODENAME" "$M" "$CODENAME" \
+              | sudo tee /etc/apt/sources.list > /dev/null
+            if sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::http::Timeout=10 \
+                 -o Acquire::https::Timeout=10 -o Acquire::Retries=0 update > /tmp/upd.log 2>&1; then
+              echo "RESULT: OK"
+            else
+              echo "RESULT: FAIL"; tail -5 /tmp/upd.log
+            fi
+            echo "::endgroup::"
+          done
