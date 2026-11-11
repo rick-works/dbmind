@@ -503,7 +503,7 @@ export default {
   'ci.src.dbeaver': 'DBeaver',
   'ci.src.unknown': '未知来源',
   'ci.pick': '选择文件',
-  'ci.pickHint': '支持 DBMind（.dbmind）、Navicat（.ncx）、DBeaver（.dbp / .json）导出的连接文件，自动识别来源',
+  'ci.pickHint': '支持 DBMind（.dbm）、Navicat（.ncx）、DBeaver（.dbp / .json）导出的连接文件，自动识别来源',
   'ci.search': '搜索连接',
   'ci.intoGroup': '导入到分组「{group}」',
   'ci.pwdYes': '含密码',

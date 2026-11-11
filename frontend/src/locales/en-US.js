@@ -494,7 +494,7 @@ export default {
   'ci.src.dbeaver': 'DBeaver',
   'ci.src.unknown': 'Unknown source',
   'ci.pick': 'Choose a file',
-  'ci.pickHint': 'Files exported by DBMind (.dbmind), Navicat (.ncx) and DBeaver (.dbp / .json) are recognised automatically',
+  'ci.pickHint': 'Files exported by DBMind (.dbm), Navicat (.ncx) and DBeaver (.dbp / .json) are recognised automatically',
   'ci.search': 'Search connections',
   'ci.intoGroup': 'Import into group "{group}"',
   'ci.pwdYes': 'With password',
