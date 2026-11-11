@@ -43,10 +43,16 @@
         <span class="top-nav-right">
           <!-- 产品官网（www.dbmind.top）：Cloudflare Pages 托管，点击交系统浏览器打开
                （壳里 window.open/_blank 都无效，统一走 utils/externalLinks）。
-               图标按主题取 logo-light/logo-dark（深色界面用深底版本），尺寸与旁边 GitHub 图标一致。 -->
+               用小房子图标（单色线性、currentColor、尺寸跟 --dc-nav-icon），跟旁边图标同一套；
+               自绘彩色 logo 在这排 monochrome 图标里总是多出一个色块，已弃用。 -->
           <el-tooltip :content="$t('nav.officialSite')" placement="bottom">
             <span class="top-nav-item top-icon-btn" @click="openExternal('https://www.dbmind.top/')">
-              <img class="site-mark" :src="siteMarkUrl" alt="" draggable="false" />
+              <svg class="site-mark" viewBox="0 0 24 24" aria-hidden="true" fill="none"
+                   stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3.4 10.6 12 3.6l8.6 7" />
+                <path d="M5.6 9.7V19a1 1 0 0 0 1 1h10.8a1 1 0 0 0 1-1V9.7" />
+                <path d="M10 20v-4.6h4V20" />
+              </svg>
             </span>
           </el-tooltip>
           <!-- GitHub 仓库主页：element-plus 没有 octocat 标志，用官方 octicon mark 内联 SVG，
@@ -57,7 +63,9 @@
             </span>
           </el-tooltip>
           <el-tooltip :content="$t('nav.knowledge')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': knowledgeOpen }" @click="openKnowledge"><el-icon><Reading /></el-icon></span></el-tooltip>
-          <el-tooltip :content="$t('nav.ai')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': aiOpen }" @click="toggleAi"><el-icon><MagicStick /></el-icon></span></el-tooltip>
+          <!-- AI 助手：自绘机器人（AiMark）。尺寸跟「顶栏右侧图标」设置走（--dc-nav-icon），
+               与旁边的官网小房子 / GitHub / 时钟同一档；写死像素会在用户调大图标后掉队。 -->
+          <el-tooltip :content="$t('nav.ai')" placement="bottom"><span class="top-nav-item top-icon-btn" :class="{ 'dc-top-active': aiOpen }" @click="toggleAi"><AiMark :size="'var(--dc-nav-icon, 16px)'" /></span></el-tooltip>
           <!-- 右侧时钟图标：**正在执行**的任务 —— 鼠标悬浮直接下拉展示（纯 CSS hover，
                不用 popover/弹窗 —— 定位受顶栏布局影响会飘）。点任务项回到进度窗。 -->
           <span class="bg-hover" @mouseenter="refreshBgStatus()">
@@ -372,7 +380,7 @@
                   <el-icon><Document /></el-icon><span>{{ $t('empty.newQuery') }}</span>
                 </button>
                 <button class="empty-act" @click="toggleAi">
-                  <el-icon><MagicStick /></el-icon><span>{{ $t('empty.aiAssistant') }}</span>
+                  <AiMark /><span>{{ $t('empty.aiAssistant') }}</span>
                 </button>
               </div>
             </div>
@@ -629,7 +637,7 @@
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDdl')" @click="ctxShowDdl"><el-icon><DocumentCopy /></el-icon><span>{{ $t('menu.viewDdl') }}</span></li>
         <li @click="ctxShowIndexes"><el-icon><Coin /></el-icon><span>{{ $t('menu.viewIndexes') }}</span></li>
         <!-- 索引建议：看这张表缺什么索引，并能「试建 → 撤销」一条龙（规则式，不调模型） -->
-        <li @click="ctxShowIndexAdvice"><el-icon><MagicStick /></el-icon><span>{{ $t('menu.indexAdvice') }}</span></li>
+        <li @click="ctxShowIndexAdvice"><AiMark /><span>{{ $t('menu.indexAdvice') }}</span></li>
         <li class="divider" />
         <li @click="ctxCopyName"><el-icon><CopyDocument /></el-icon><span>{{ $t('menu.copyTableName') }}</span></li>
         <li class="divider" />
@@ -651,14 +659,14 @@
           </ul>
         </li>
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsImport')" @click="ctxOpenImport"><el-icon><Upload /></el-icon><span>{{ $t('menu.importData') }}</span></li>
-        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsTableData')" @click="ctxOpenDataGen"><el-icon><MagicStick /></el-icon><span>{{ $t('menu.dataGen') }}</span></li>
+        <li v-if="featureOf(ctxMenu.data?.connId, 'supportsTableData')" @click="ctxOpenDataGen"><AiMark /><span>{{ $t('menu.dataGen') }}</span></li>
         <!-- 「发送到 AI」放**一级菜单**：放在 AI 助手子菜单里的话，右键后要悬停才展开，
              第一眼会以为"表上根本没有这个入口"（用户实测反馈）。子菜单里只留
              「数据洞察 / 把表结构存入知识库」这两个更重的动作。 -->
         <li @click="sendNodeToAi(ctxMenu.data)"><el-icon><Cpu /></el-icon><span>{{ $t('menu.sendToAi') }}</span></li>
         <!-- AI 入口铺到工作流里：不用先打开 AI 面板再复述一遍表名 -->
         <li class="has-sub" @mouseenter="ctxSub('ai')" @mouseleave="ctxSub(null)">
-          <el-icon class="ai-ic"><MagicStick /></el-icon><span>{{ $t('menu.aiAssistant') }}</span><el-icon class="arrow"><ArrowRight /></el-icon>
+          <AiMark class="ai-ic" /><span>{{ $t('menu.aiAssistant') }}</span><el-icon class="arrow"><ArrowRight /></el-icon>
           <ul v-show="ctxMenu.subKey === 'ai'" class="ctx-submenu">
             <!-- 带上下文提问：把这张表（含连接 / 库）写进问题并开中央 AI 页签 -->
             <li @click.stop="ctxAiInsightTable">{{ $t('menu.aiInsight') }}</li>
@@ -679,7 +687,7 @@
         <li @click="ctxCopyObjName"><el-icon><CopyDocument /></el-icon><span>{{ $t('common.copy') }}</span></li>
         <li v-if="objectDdlAllowed(ctxMenu.data?.connId, ctxMenu.data?.objectKind)" @click="ctxRenameObject"><el-icon><Edit /></el-icon><span>{{ $t('common.rename') }}</span></li>
         <li class="divider" />
-        <li @click="ctxAiExplainView" class="ai-item"><el-icon><MagicStick /></el-icon><span>{{ $t('menu.explainView') }}</span></li>
+        <li @click="ctxAiExplainView" class="ai-item"><AiMark /><span>{{ $t('menu.explainView') }}</span></li>
         <li class="divider" />
         <li v-if="featureOf(ctxMenu.data?.connId, 'supportsDDLExec')" class="danger" @click="objDrop"><el-icon><Delete /></el-icon><span>{{ $t('common.delete') }}</span></li>
         <li @click="objRefresh"><el-icon><Refresh /></el-icon><span>{{ $t('common.refresh') }}</span></li>
@@ -785,16 +793,20 @@
     <el-dialog v-model="aiExplainVisible" width="640px" :close-on-click-modal="true" append-to-body class="main-dialog ai-explain-dialog">
       <template #header>
         <div class="dlg-title">
-          <el-icon><MagicStick /></el-icon>
+          <AiMark />
           <span>{{ aiExplainTitle }}</span>
         </div>
       </template>
       <div class="ai-explain-body" v-html="aiExplainContent"></div>
     </el-dialog>
 
-    <!-- 新建数据源：类型选择器（顶部还有「导入/导出连接配置」入口；
-         导入完成后走 onConnSaved 同一条刷新链路：重载连接 + 重建左侧树） -->
-    <DataSourcePicker v-model="dsPickerVisible" @selected="onDsSelected" @imported="onConnSaved" />
+    <!-- 新建数据源：只挑类型（导入 / 导出 / 批量管理已移到左侧树右键） -->
+    <DataSourcePicker v-model="dsPickerVisible" @selected="onDsSelected" />
+
+    <!-- 连接配置的导入 / 导出 / 批量管理 -->
+    <ExportConnsDialog v-model="exportConnsVisible" :preset-ids="exportConnsPreset" />
+    <ImportConnsDialog v-model="importConnsVisible" :group="importConnsGroup" @imported="onConnsImported" />
+    <ConnManagerDialog v-model="connManagerVisible" @changed="onConnsImported" />
 
     <!-- 新建/编辑连接 -->
     <ConnectionDialog v-model="connDialogVisible" :conn="editingConn" :custom-folders="customFolders" :initial-group="connDialogInitialEnv" :focus="connDialogFocus" :initial-type="connDialogInitialType" @saved="onConnSaved" @folder-added="refreshFolders" />
@@ -915,6 +927,9 @@
           <el-icon><Plus /></el-icon>{{ $t('tree.menu.newConnection') }}
         </li>
         <li class="divider" />
+        <li class="ctx-item" @click="openConnManager">
+          <el-icon><Connection /></el-icon>{{ $t('tree.menu.manageConn') }}
+        </li>
         <li class="ctx-item" @click="importConns('')">
           <el-icon><Upload /></el-icon>{{ $t('tree.menu.importConn') }}
         </li>
@@ -1309,6 +1324,7 @@ onBeforeUnmount(() => {
 // 菜单配置 / 语言切换会改条目数量与文字宽度，重新量一次
 watch([topMenuPrimary, () => locale.value], () => nextTick(fitTopNav))
 import { Sunny, Moon, Clock, Reading, Delete as ElDelete } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 import { getThemeSettings, saveThemeSettings, applyTheme, getResolvedTheme, onResolvedThemeChange } from '../../utils/theme'
 import { locale, setLocale } from '../../utils/i18n'
 import fastTip from '../../utils/fastTip'
@@ -1322,7 +1338,7 @@ import { loadShortcuts, matchesShortcut, isShortcutSuppressed } from '../../util
 import { hasVisibleOverlay } from '../../utils/useShortcuts'
 import { openExternal } from '../../utils/externalLinks'
 import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
-import { Coin, Refresh, Setting, SetUp, MagicStick, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch, VideoPlay } from '@element-plus/icons-vue'
+import { Coin, Refresh, Setting, SetUp, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch, VideoPlay } from '@element-plus/icons-vue'
 import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { compareTaskStatus, compareCancel, syncCancel, getSettings,
@@ -1338,14 +1354,10 @@ import { recordRecentConnection, rankRecentConnections } from '../../utils/recen
 import { readUnreachableIds, markUnreachable, clearUnreachable } from '../../utils/connHealth'
 import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
 import { pinnedFolders, loadPinnedFolders, pinFolder, unpinFolder } from '../../utils/folders'
-import { buildConnectionBundle, parseConnectionBundle, importPayloadOf, downloadJson } from '../../utils/connTransfer'
 import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType, hideDbLevelOf, dbDisplayOf, hasCatalogsOf } from '../../types'
 // 占位库 `(default)` 的显示名：只在界面上换成「默认」，node.db 与请求参数仍用原值
 import { dbLabelOf } from '../../utils/dbLabel'
 import AiPanel from '../ai/AiPanel.vue'
-import logoSmUrl from '../../assets/logo-sm.png'
-import logoDarkUrl from '../../assets/logo-dark.svg'
-import logoLightUrl from '../../assets/logo-light.svg'
 import SaveToKbDialog from '../knowledge/SaveToKbDialog.vue'
 import DbLogo from '../../common/DbLogo.vue'
 import ConnInfoCard from './ConnInfoCard.vue'
@@ -1384,6 +1396,9 @@ const CompareDialog = defineAsyncComponent(() => import('../compare/CompareDialo
 const SyncDialog = defineAsyncComponent(() => import('../sync/SyncDialog.vue'))
 const ConnectionDialog = defineAsyncComponent(() => import('../connection/ConnectionDialog.vue'))
 const DataSourcePicker = defineAsyncComponent(() => import('../../common/DataSourcePicker.vue'))
+const ExportConnsDialog = defineAsyncComponent(() => import('../../common/ExportConnsDialog.vue'))
+const ImportConnsDialog = defineAsyncComponent(() => import('../../common/ImportConnsDialog.vue'))
+const ConnManagerDialog = defineAsyncComponent(() => import('../../common/ConnManagerDialog.vue'))
 const ScriptManagerDialog = defineAsyncComponent(() => import('./ScriptManagerDialog.vue'))
 const SettingsView = defineAsyncComponent(() => import('../settings/SettingsView.vue'))
 import {
@@ -2536,8 +2551,6 @@ const themeMode = ref(getThemeSettings().mode)
 const resolvedTheme = ref(getResolvedTheme())
 onResolvedThemeChange((v) => { resolvedTheme.value = v })
 const themeIcon = computed(() => (resolvedTheme.value === 'dark' ? Moon : Sunny))
-/** 顶栏官网小 logo：随实际生效主题换图（深色主题用深底 logo-dark，浅色用 logo-light） */
-const siteMarkUrl = computed(() => (resolvedTheme.value === 'dark' ? logoDarkUrl : logoLightUrl))
 const themeTip = computed(() => t(themeMode.value === 'dark' ? 'nav.themeDark' : themeMode.value === 'light' ? 'nav.themeLight' : 'nav.themeSystem'))
 const cycleTheme = () => {
   const order = ['system', 'light', 'dark']
@@ -2962,6 +2975,17 @@ const onObjLeave = (e, data) => {
   if (objCardRef.value) objCardRef.value.close(data && data.id)
 }
 
+/**
+ * 内置分组名：**未分组连接的落点**。
+ *
+ * 这个名字不是用户建的目录，而是后端读连接时补上的（没存 group 就给这个默认值），
+ * 所以只要还有一条连接没归组，树上就必然有这个节点 —— 它删不掉，改名也只是把这批
+ * 连接一起换个组名（之后新来的未分组连接会重新把它带出来）。
+ * ⚠️ 必须与 `crates/dbmind-web/src/api/shape.rs::DEFAULT_ENVIRONMENT` 保持一致。
+ */
+const DEFAULT_GROUP = '未分组'
+const isDefaultGroup = (env) => String(env || '') === DEFAULT_GROUP
+
 const customFolders = computed(() => {
   // eslint-disable-next-line no-unused-expressions
   folderRefresh.value
@@ -2971,7 +2995,10 @@ const customFolders = computed(() => {
     if (env && !PREDEF_ENVS.includes(env)) set.add(env)
   }
   for (const f of pureFolders.value) if (f && !PREDEF_ENVS.includes(f)) set.add(f)
-  const arr = Array.from(set)
+  // 「未分组」永远垫底：它是没归组连接的落点，不是普通目录 —— 按名字排它可能跑到中间，
+  // 而且新建连接默认取 customFolders[0]，垫底才不会把新连接默认塞进未分组。
+  const arr = Array.from(set).filter(f => f !== DEFAULT_GROUP)
+  if (set.has(DEFAULT_GROUP)) arr.push(DEFAULT_GROUP)
   // 置顶分组：pinnedFolders 里记的路径（按记录顺序）提到最前，其余保持原相对顺序不变。
   // 顺序完全由这个数组下标决定（buildTree 的 envOrder 就是它打头），所以只改这里即可。
   const pins = pinnedFolders.value.filter(p => arr.includes(p))
@@ -2980,17 +3007,6 @@ const customFolders = computed(() => {
 })
 
 const refreshFolders = () => folderRefresh.value++
-
-/**
- * 内置分组名：**未分组连接的落点**。
- *
- * 这个名字不是用户建的目录，而是后端读连接时补上的（没存 group 就给这个默认值），
- * 所以只要还有一条连接没归组，树上就必然有这个节点 —— 它删不掉，改名也只是把这批
- * 连接一起换个组名（之后新来的未分组连接会重新把它带出来）。
- * ⚠️ 必须与 `crates/dbmind-web/src/api/shape.rs::DEFAULT_ENVIRONMENT` 保持一致。
- */
-const DEFAULT_GROUP = '数据源'
-const isDefaultGroup = (env) => String(env || '') === DEFAULT_GROUP
 
 let tabSeq = 0
 
@@ -3372,72 +3388,43 @@ const onDsSelected = (type) => {
 // ====== 树右键菜单操作 ======
 const treeCtxNewConn = (env) => { closeTreeCtxMenu(); openNewConn(env || customFolders.value[0] || '') }
 
-// ====== 连接配置导入 / 导出（与「新建数据源」弹窗底部那组按钮同一套口径，共用 utils/connTransfer）======
-const exportConns = async (env) => {
-  closeTreeCtxMenu()
-  try {
-    const all = await listConnections()
-    const picked = env ? all.filter(c => (c.env || c.group) === env) : all
-    if (!picked.length) {
-      ElMessage.warning(env ? t('mv.groupNoConns', { env }) : t('mv.nothingToExport'))
-      return
-    }
-    downloadJson('dbmind-connections-' + new Date().toISOString().slice(0, 10) + '.json',
-      buildConnectionBundle(picked))
-    ElMessage.success(t('mv.exportedConns', { n: picked.length }))
-  } catch (e) {
-    ElMessage.error(t('mv.exportFailed', { detail: errMsg(e, t('common.unknownError')) }))
-  }
+// ====== 连接配置导入 / 导出 / 批量管理（三个弹窗，见 common/ 下同名组件）======
+// 导出：选哪些连接、要不要连口令一起导出，都在弹窗里定（口令只有内核有，前端从来拿不到）
+const exportConnsVisible = ref(false)
+const exportConnsPreset = ref([])
+/** 打开导出弹窗；`presetIds` 为空 = 全选（多选浮条/管理弹窗会带上各自的勾选） */
+const openExportConns = (presetIds) => {
+  exportConnsPreset.value = (presetIds || []).filter(Boolean)
+  exportConnsVisible.value = true
 }
+const exportConns = (env) => {
+  closeTreeCtxMenu()
+  const preset = env
+    ? allConnections.value.filter(c => (c.env || c.group) === env).map(c => c.id)
+    : []
+  if (env && !preset.length) {
+    ElMessage.warning(t('mv.groupNoConns', { env }))
+    return
+  }
+  openExportConns(preset)
+}
+// 导入：DBMind / Navicat(.ncx) / DBeaver(.json) 三种文件都能进，解析完先给预览再落库
+const importConnsVisible = ref(false)
+const importConnsGroup = ref('')
 const importConns = (env) => {
   closeTreeCtxMenu()
-  // 动态建 input：比在模板里挂一个隐藏 input 更省事，也不会在多处复用时打架
-  const input = document.createElement('input')
-  input.type = 'file'
-  input.accept = '.json,application/json'
-  input.onchange = async () => {
-    const file = input.files && input.files[0]
-    if (!file) return
-    const parsed = parseConnectionBundle(await file.text())
-    if (parsed.error) {
-      ElMessage.error(parsed.error)
-      return
-    }
-    const list = parsed.list
-    try {
-      // 名单与分隔符都随语言：中文用顿号、英文用逗号，句末标点也各按各的
-      const names = list.slice(0, 5).map(c => c.name).join(t('common.listSep'))
-      const more = list.length > 5 ? t('mv.importMore') : ''
-      await ElMessageBox.confirm(
-        t('mv.importConfirm', { n: list.length, names, more })
-          + (env ? t('mv.importIntoGroup', { env }) : '')
-          + t('mv.importPasswordNote'),
-        t('mv.importTitle'),
-        { type: 'warning', confirmButtonText: t('mv.importStart'), cancelButtonText: t('common.cancel') }
-      )
-    } catch (e) {
-      return
-    }
-    let ok = 0
-    const failed = []
-    for (const item of list) {
-      try {
-        await saveConnection(importPayloadOf(item, env))
-        ok++
-      } catch (e) {
-        failed.push(t('mv.failItem', { name: item.name, detail: errMsg(e, t('mv.failed')) }))
-      }
-    }
-    await loadAllConnections()
-    await buildTree()
-    if (failed.length) {
-      ElMessage.warning(t('mv.importDone', { ok, failed: failed.length }))
-      console.warn('导入失败的连接：', failed)
-    } else {
-      ElMessage.success(t('mv.importedConns', { n: ok }))
-    }
-  }
-  input.click()
+  importConnsGroup.value = env || ''
+  importConnsVisible.value = true
+}
+const connManagerVisible = ref(false)
+const openConnManager = () => {
+  closeTreeCtxMenu()
+  connManagerVisible.value = true
+}
+/** 导入 / 批量删除之后：重载连接 + 重建树（与 onConnSaved 同一条刷新链路） */
+const onConnsImported = async () => {
+  await loadAllConnections()
+  await buildTree()
 }
 // ====== 树内直接重命名分组（就地改，不弹窗）======
 // 有两处存储要一起改：
@@ -3619,9 +3606,9 @@ const settleCurrentConn = () => {
  *   1. 组内**所有数据源**（含子分组里的）—— 真删连接，不是把它们的 group 清空
  *   2. 该分组 + 它的所有子分组（纯目录）
  *
- * 为什么不能只清 group：没有分组的连接会被后端补上默认分组名「数据源」（shape.rs 的
- * DEFAULT_ENVIRONMENT），而默认分组名恰好还是「数据源」—— 于是"清空分组"等于把这些连接
- * 原样塞回一个同名的分组节点里，看着就是"删了没用、还在"。只有把连接删掉节点才会消失。
+ * 为什么不能只清 group：没有分组的连接会被后端补上默认分组名「未分组」（shape.rs 的
+ * DEFAULT_ENVIRONMENT，这里同名常量 DEFAULT_GROUP）—— 于是"清空分组"等于把这些连接
+ * 原样塞回那个分组节点里，看着就是"删了没用、还在"。只有把连接删掉节点才会消失。
  */
 const treeCtxDeleteFolder = async (env) => {
   closeTreeCtxMenu()
@@ -3923,10 +3910,10 @@ const batchExport = () => {
     ElMessage.warning(t('mv.exportOnlyConns'))
     return
   }
-  downloadJson('dbmind-connections-' + new Date().toISOString().slice(0, 10) + '.json',
-    buildConnectionBundle(connsPicked))
+  // 交给导出弹窗：勾选已经在手，剩下的只有"要不要带口令"这一件事
   const skipped = multiSel.value.length - connsPicked.length
-  ElMessage.success(t('mv.exportedConns', { n: connsPicked.length }) + (skipped ? t('mv.exportSkipped', { n: skipped }) : ''))
+  openExportConns(connsPicked.map(c => c.id))
+  if (skipped) ElMessage.info(t('mv.exportOnlyConns') + t('mv.exportSkipped', { n: skipped }))
   clearMultiSelect()
 }
 
@@ -7796,7 +7783,7 @@ const tabIcon = (tab) => {
       if (tab.cat === 'triggers') return Stopwatch
       if (tab.cat === 'events') return Timer
       return Document
-    case 'ai': return MagicStick                       // AI 助手
+    case 'ai': return AiMark                       // AI 助手
     case 'knowledge': return Reading                   // 知识库
     default: return Document
   }
@@ -9073,13 +9060,10 @@ const connTypeSummary = computed(() =>
 .win-act svg { width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); fill: none; stroke: currentColor; stroke-width: 1.4; }
 .win-act:hover { background: var(--dc-bg-hover); color: var(--dc-text); }
 .win-act.is-close:hover { background: #e81123; color: #fff; }
-/* 顶栏右侧「产品官网」logo：18px 圆角小图，与旁边 GitHub octicon 同排同高。
-   深浅主题各一张（logo-dark/logo-light，随 resolvedTheme 切换）；点击进 www.dbmind.top。
-   灰度方案试过被否（用户：更难看），保持彩色。 */
+/* 顶栏右侧「产品官网」小房子：与 GitHub octicon 同一套（内联单色 SVG、currentColor、
+   尺寸跟 --dc-nav-icon），悬浮时和其它图标一起变色。 */
 .site-mark {
-  width: 18px; height: 18px; display: block;
-  border-radius: 4px;
-  object-fit: contain; user-select: none; -webkit-user-drag: none;
+  width: var(--dc-nav-icon, 16px); height: var(--dc-nav-icon, 16px); display: block;
 }
 .top-nav { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .top-nav-item {

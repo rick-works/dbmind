@@ -69,8 +69,8 @@ export function importPayloadOf(item, group) {
   return payload
 }
 
-/** 导出 JSON 文件（走统一的"用户选位置"） */
+/** 导出 JSON 文件（走统一的"用户选位置"），返回 `{ ok } | { canceled }` 便于调用方决定要不要报成功 */
 export function downloadJson(filename, data) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' })
-  saveBlobAs(blob, filename)
+  return saveBlobAs(blob, filename)
 }

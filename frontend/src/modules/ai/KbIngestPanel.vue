@@ -15,9 +15,10 @@ import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { t, te, locale } from '../../utils/i18n'
 import {
-  UploadFilled, Document, Loading, MagicStick, CircleCheckFilled, CircleCloseFilled,
+  UploadFilled, Document, Loading, CircleCheckFilled, CircleCloseFilled,
   WarningFilled, InfoFilled, Plus, FolderAdd, RefreshLeft, Check
 } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 import {
   aiKbInspect, aiKbPolish, aiKbAutoPlan, kbList, kbCreate, kbSaveConfig, kbImportDoc
 } from '../../api'
@@ -700,7 +701,7 @@ const toggle = (d) => { d.open = !d.open }
 
         <div v-if="plan" class="kbx-plan">
           <div class="kbx-plan-head">
-            <el-icon><MagicStick /></el-icon>
+            <AiMark />
             <span>{{ $t('kbx.planTitle') }}</span>
             <span v-if="plan.aiUsed" class="kbx-ai">{{ $t('kbx.planAi') }}</span>
           </div>
@@ -854,7 +855,7 @@ const toggle = (d) => { d.open = !d.open }
           {{ $t('kbx.again') }}
         </el-button>
         <el-button v-if="activeStep === 1 && okCount && !working" type="primary" @click="startProcess">
-          <el-icon><MagicStick /></el-icon>{{ $t('kbx.polishAndPlan', { n: okCount }) }}
+          <AiMark />{{ $t('kbx.polishAndPlan', { n: okCount }) }}
         </el-button>
         <el-button v-else-if="activeStep === 3" type="primary" @click="startCreate">
           {{ targetMode === 'append'

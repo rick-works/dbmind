@@ -8,7 +8,8 @@
  */
 import { ref, computed, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { MagicStick, Plus, FolderAdd, DocumentAdd } from '@element-plus/icons-vue'
+import { Plus, FolderAdd, DocumentAdd } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 import { aiKbPolish, aiKbAutoPlan, kbList, kbCreate, kbImportDoc } from '../../api'
 import { t } from '../../utils/i18n'
 
@@ -193,7 +194,7 @@ const submit = async () => {
             <label>
               {{ $t('kbx.kbName') }}
               <a class="s2k-ai" @click="runNaming">
-                <el-icon :class="{ 'is-loading': naming }"><MagicStick /></el-icon>
+                <AiMark :class="{ 'is-loading': naming }" />
                 {{ naming ? $t('s2k.naming') : $t('s2k.aiName') }}
               </a>
             </label>

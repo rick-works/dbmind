@@ -1214,6 +1214,28 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v2.0.19（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.19</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-11</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>Oracle 等大写折叠的数据库里，用小写带引号建的表和字段不再报「标识符无效」：点表头排序、关键字搜索、高级搜索、改单元格、导出、数据传输都按库里的真实大小写去引用了</b></li>
+            <li><b>Oracle 上直接改日期 / 时间列不再报 ORA-01861：值按列类型自动转成日期时间字面量，不受会话日期格式影响</b></li>
+            <li><b>导出的 SQL 文件里不再多出一个分页用的辅助列（以前拿去目标库执行会报列不存在）</b></li>
+            <li><b>弹窗右上角不再重叠</b>：行详情「N 字符 · M 行」、索引建议「共 N 条」这些右对齐信息不会再压在关闭和全屏按钮上</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.19" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.19" target="_blank" rel="noopener">下载 v2.0.19</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.18（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1221,7 +1243,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.18</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-10</span>
           </div>
           <ul class="rel-notes">

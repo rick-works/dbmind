@@ -20,7 +20,7 @@
       <span class="qr-divider"></span>
 
       <el-button size="small" :disabled="!usable || !table || isNoSql" :loading="generating" @click="generate">
-        <el-icon class="qr-btn-ic"><MagicStick /></el-icon>{{ $t('qa.aiSuggest') }}
+        <AiMark class="qr-btn-ic" />{{ $t('qa.aiSuggest') }}
       </el-button>
       <el-button size="small" :disabled="!usable || !table" @click="addRule">
         <el-icon class="qr-btn-ic"><Plus /></el-icon>{{ $t('qa.addRule') }}
@@ -133,7 +133,8 @@
 <script setup>
 import { ref, computed, watch, onMounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
-import { MagicStick, Plus } from '@element-plus/icons-vue'
+import { Plus } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 import { listColumns, aiQualityRules, aiQualityTypes, aiQualitySaved, aiQualitySave } from '../../api'
 import { t, te } from '../../utils/i18n'
 import { fitSelectWidth } from '../../utils/selectAutoWidth'

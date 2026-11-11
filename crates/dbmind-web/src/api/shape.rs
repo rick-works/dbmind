@@ -31,10 +31,11 @@ pub const EXTRA_AUTH_TYPE: &str = "authType";
 
 /// 未分组时的默认目录名。
 ///
-/// **不能给空串**：上游的树只渲染 `envOrder = [自定义目录..., DEV, TEST, PROD]` 里存在的分组，
-/// 而自定义目录来自「所有连接的分组（group）中非空、非预置的值」。
-/// 给空串 ⇒ 该分组不在 envOrder 里 ⇒ **连接在树上根本不显示**（接口却全是 200）。
-pub const DEFAULT_ENVIRONMENT: &str = "数据源";
+/// **不能给空串**：没归组的连接在树上必须有个落点。给空串时前端虽然也有一个「未分组」
+/// 节点，但连接编辑弹窗的分组是必填项（空值既不能保存、又会被自动塞进第一个自建目录），
+/// 于是「打开看一眼再保存」就会把这些连接悄悄挪走。所以这里给一个**真实的名字**：
+/// 叫「未分组」，与导出 / 管理 / 导入三个弹窗里对空分组的叫法（`cm.ungrouped`）一致。
+pub const DEFAULT_ENVIRONMENT: &str = "未分组";
 
 pub fn extra_str(record: &ConnectionRecord, key: &str) -> Option<String> {
     record

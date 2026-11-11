@@ -393,14 +393,14 @@
               </div>
             </div>
             <div v-if="!maskForm.groups.length" class="mask-empty">
-              <el-icon class="mask-empty-icon"><MagicStick /></el-icon>
+              <AiMark class="mask-empty-icon" />
               <span>{{ $t('settings.mask.empty') }}</span>
             </div>
           </div>
 
           <div class="actions mask-actions">
             <el-button :icon="Plus" @click="addMaskGroup">{{ $t('settings.mask.addGroup') }}</el-button>
-            <el-button :icon="MagicStick" @click="autoDetectMask">{{ $t('settings.mask.auto') }}</el-button>
+            <el-button :icon="AiMark" @click="autoDetectMask">{{ $t('settings.mask.auto') }}</el-button>
             <el-button :icon="Refresh" @click="loadMaskRules">{{ $t('settings.mask.reload') }}</el-button>
           </div>
 
@@ -1349,11 +1349,12 @@
 import { ref, computed, watch, reactive, onMounted, onBeforeUnmount, nextTick, h } from 'vue'
 import { ElMessage, ElMessageBox, ElTooltip, ElIcon } from 'element-plus'
 import {
-  MagicStick, Connection, Brush, Box,
+  Connection, Brush, Box,
   FolderOpened, EditPen, DataLine, Download, Operation, Monitor, Plus, Delete,
   CircleCheck, Timer, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
   ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder, QuestionFilled
 } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 
 /** 表单标签旁的问号提示：hover 出说明。界面不再平铺大段小字（看着乱），细节收进气泡里 */
 const QHint = (props) => h(ElTooltip, { content: props.text, placement: 'top', showAfter: 120 },
@@ -1428,7 +1429,7 @@ const tabs = [
   { key: 'format', i18nKey: 'settings.tab.format', icon: Brush },
   { key: 'shortcut', i18nKey: 'settings.tab.shortcut', icon: Pointer },
   { key: 'query', i18nKey: 'settings.tab.query', icon: DataLine },
-  { key: 'ai', i18nKey: 'settings.tab.ai', icon: MagicStick },
+  { key: 'ai', i18nKey: 'settings.tab.ai', icon: AiMark },
   // 数据脱敏紧挨着 AI：它管的就是「AI 能看见什么」，翻两页才找到会很反直觉
   { key: 'mask', i18nKey: 'settings.tab.mask', icon: Key },
   { key: 'safety', i18nKey: 'settings.tab.safety', icon: Lock },

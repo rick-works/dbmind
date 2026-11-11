@@ -301,6 +301,76 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> XR
     Ok(Json(json!({ "success": true, "removed": removed, "shadowsRemoved": shadows })))
 }
 
+/// 导出连接：`{ ids?: [..], includePassword?: bool }` → 裸数组（与 `GET /api/connections` 同形）。
+///
+/// 这是**唯一**会把明文口令带出去的接口，成立的理由只有一条：导出弹窗里用户显式勾了
+/// 「导出密码」。常规读接口仍然「口令只写不读」（`ConnectionConfig::password` 标了
+/// `skip_serializing`），所以这里不是改那条规矩，而是在 `shape::connection_json` 的副本上
+/// **按需补两个键** —— 没勾的时候返回的东西与前端的本地组装完全一样。
+///
+/// `ids` 为空 = 导出全部；影子连接照旧不导出（它们是实现细节，出去只会变成垃圾连接）。
+pub async fn export(State(state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
+    let include_password = body
+        .get("includePassword")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let ids: Vec<String> = body
+        .get("ids")
+        .and_then(Value::as_array)
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let engine = state.engine();
+    let records = blocking(move || engine.list_connections()).await?;
+    let picked = records
+        .iter()
+        .filter(|record| !crate::api::scope::is_shadow(record))
+        .filter(|record| ids.is_empty() || ids.iter().any(|id| id == &record.id))
+        .map(|record| {
+            let mut value = shape::connection_json(record);
+            if let Some(obj) = value.as_object_mut() {
+                // 服务端生成 / 只读回显的字段，导入端会自己再生成一遍，带出去只会造成困惑
+                for key in [
+                    "id",
+                    "createTime",
+                    "updateTime",
+                    "hasPassword",
+                    "hasSshPassword",
+                    "readOnly",
+                ] {
+                    obj.remove(key);
+                }
+                if include_password {
+                    obj.insert(
+                        "password".to_string(),
+                        Value::String(record.config.password.clone().unwrap_or_default()),
+                    );
+                    let ssh = record
+                        .config
+                        .extra
+                        .as_ref()
+                        .and_then(|extra| extra.get(dbmind_core::tunnel::EXTRA_SSH));
+                    for (from, to) in [
+                        ("password", "sshPassword"),
+                        ("keyPassphrase", "sshKeyPassphrase"),
+                    ] {
+                        let secret = ssh
+                            .and_then(|value| value.get(from))
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        obj.insert(to.to_string(), Value::String(secret.to_string()));
+                    }
+                }
+            }
+            value
+        })
+        .collect();
+    Ok(Json(Value::Array(picked)))
+}
+
 /// 复制连接。
 ///
 /// 与「前端读出来再 Post 一遍」相比，这里**服务端直接复制**，因此**口令也一起带过去**

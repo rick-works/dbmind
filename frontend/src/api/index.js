@@ -250,6 +250,11 @@ export const getConnectionById = (id) => http.get(`/api/connections/${id}`).then
 // 复制连接（口令由服务端一并复制，前端拿不到明文）
 export const copyConnection = (id, name) =>
   http.post(`/api/connections/${id}/copy`, null, { params: name ? { name } : {} }).then(r => r.data)
+// 导出连接：`includePassword` 为真时返回体里带**明文**口令（唯一会带出口令的接口，
+// 只有导出弹窗里用户显式勾了「导出密码」才会走这里）。不带口令的导出仍由前端本地组装，
+// 这样旧内核（没有这条路由）也能照常导出。
+export const exportConnections = (ids, includePassword) =>
+  http.post('/api/connections/export', { ids: ids || [], includePassword: !!includePassword }).then(r => r.data)
 
 // 数据库类型与驱动
 // 类型清单是静态的、状态是全局的：启动时多处会同时要一份 → 本层合并（见 once 的说明）

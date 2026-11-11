@@ -9,7 +9,7 @@
          中央工作区形态由外层承载标题，这里不再重复一行，内容直接从顶部铺满。 -->
     <div v-if="!isStudio" class="ai-head">
       <div class="ai-brand">
-        <span class="ai-brand-ic"><el-icon :size="15"><MagicStick /></el-icon></span>
+        <span class="ai-brand-ic"><AiMark :size="15" /></span>
         <span class="ai-brand-tx">
           <span class="ai-brand-name">{{ $t('empty.aiAssistant') }}</span>
           <span class="ai-brand-sub">{{ $t('ai.brandSub') }}</span>
@@ -88,7 +88,7 @@
           <div v-if="showWelcome" class="ai-welcome">
             <div class="welcome-panel">
               <div class="welcome-hero">
-                <span class="welcome-logo"><el-icon :size="18"><MagicStick /></el-icon></span>
+                <span class="welcome-logo"><AiMark :size="18" /></span>
                 <div class="welcome-hero-tx">
                   <div class="welcome-title">{{ $t('ai.welcomeTitle') }}</div>
                   <div class="welcome-sub">{{ $t('ai.welcomeSub') }}</div>
@@ -97,7 +97,7 @@
 
               <!-- 功能介绍：替代原来的数据源状态条（数据源在下方工具条上已经能看到） -->
               <div class="welcome-block is-intro">
-                <div class="welcome-section-title"><el-icon><MagicStick /></el-icon>{{ $t('ai.whatCanDo') }}</div>
+                <div class="welcome-section-title"><AiMark />{{ $t('ai.whatCanDo') }}</div>
                 <div class="welcome-intro">
                   <div v-for="(f, i) in WELCOME_FEATURES" :key="i" class="intro-item">
                     <el-icon class="intro-ic"><component :is="f.icon" /></el-icon>
@@ -138,7 +138,11 @@
           <!-- 对话 / 智能分析：消息流 -->
           <template v-if="isChatSkill">
             <div v-for="(m, i) in messages" :key="i" class="msg" :class="m.role">
-              <div class="msg-avatar">{{ m.role === 'user' ? $t('ai.me') : 'AI' }}</div>
+              <!-- 助手头像用机器人标记（原来是「AI」两个字） -->
+              <div class="msg-avatar">
+                <AiMark v-if="m.role !== 'user'" :size="19" />
+                <template v-else>{{ $t('ai.me') }}</template>
+              </div>
               <div class="msg-bubble" :class="{ typing: m.role !== 'user' && !m.content && m.streaming }">
                 <template v-if="m.role === 'user'"><div class="msg-text">{{ m.content }}</div></template>
                 <!-- 流式回复尚未产出内容：显示动态三点，而不是一个空气泡 -->
@@ -263,7 +267,7 @@
               </div>
             </div>
             <div v-if="showTyping" class="msg assistant">
-              <div class="msg-avatar">AI</div>
+              <div class="msg-avatar"><AiMark :size="19" /></div>
               <div class="msg-bubble typing">
                 <span class="dot"></span><span class="dot"></span><span class="dot"></span>
                 <span v-if="waitingSec >= 3" class="wait">{{ $t('ai.waited', { s: waitingSec }) }}</span>
@@ -598,7 +602,8 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent, toRef } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MagicStick, ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
+import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
   aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
@@ -2847,8 +2852,11 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .msg-bubble {
   position: relative; min-width: 0;
   max-width: min(820px, calc(100% - 40px));
-  padding: 11px 14px; border-radius: 12px;
-  font-size: 14px; line-height: 1.8;
+  /* 单行消息的高度一路收：11px 内边距 + 1.8 行高 = 47px → 8px/1.7 = 40px（还是显高）
+     → 6px 内边距 + 1.55 行高 ≈ 34px，刚好跟 28px 的头像对得上，也不至于挤到文字。
+     四个角统一 12px 圆角（原来贴着头像那一角是 4px 直角）。 */
+  padding: 6px 12px; border-radius: 12px;
+  font-size: 14px; line-height: 1.55;
   transition: box-shadow .18s ease, border-color .18s ease;
 }
 /* 用户气泡：主色与面板底按比例混合出的柔和蓝（不透明，保证箭头同色无缝），
@@ -2857,7 +2865,7 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 @supports (background: color-mix(in srgb, #fff, #000)) {
   .msg.user { --user-bubble-bg: color-mix(in srgb, var(--dc-primary) 26%, var(--dc-bg-card)); }
 }
-.msg.user .msg-bubble { background: var(--user-bubble-bg); border: none; border-top-right-radius: 4px; color: var(--dc-text); }
+.msg.user .msg-bubble { background: var(--user-bubble-bg); border: none; color: var(--dc-text); }
 .msg.user .msg-text { color: var(--dc-text); }
 /* 助手气泡：底色由「主题文字色」按低比例混入卡片底得到，深色下变亮、浅色下变淡。
    关键是要跟内嵌块（代码块 / 表格 / 轨迹）拉开两级层次，避免灰糊成一片：
@@ -2883,24 +2891,23 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .msg.assistant .msg-bubble {
   background: var(--ai-bubble-bg);
   border: 1px solid var(--dc-border);
-  border-top-left-radius: 4px;
   box-shadow: var(--ai-bubble-shadow, none);
 }
 /* ---- 微信风格小箭头 ---- */
 .msg.assistant .msg-bubble::before {
-  content: ''; position: absolute; top: 12px; left: -8px;
+  content: ''; position: absolute; top: 9px; left: -8px;
   width: 0; height: 0; border-style: solid;
   border-width: 7px 8px 7px 0;
   border-color: transparent var(--dc-border) transparent transparent;
 }
 .msg.assistant .msg-bubble::after {
-  content: ''; position: absolute; top: 13px; left: -6px;
+  content: ''; position: absolute; top: 10px; left: -6px;
   width: 0; height: 0; border-style: solid;
   border-width: 6px 7px 6px 0;
   border-color: transparent var(--ai-bubble-bg) transparent transparent;
 }
 .msg.user .msg-bubble::before {
-  content: ''; position: absolute; top: 13px; right: -6px;
+  content: ''; position: absolute; top: 10px; right: -6px;
   width: 0; height: 0; border-style: solid;
   border-width: 6px 0 6px 7px;
   border-color: transparent transparent transparent var(--user-bubble-bg);

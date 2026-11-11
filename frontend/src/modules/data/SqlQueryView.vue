@@ -150,7 +150,7 @@
           <el-dropdown trigger="click" placement="bottom-end" popper-class="ai-model-dropdown" data-g="2"
                        @command="onAiAction">
             <button class="ai-act-btn" type="button" v-fast-tip="() => $t('nav.ai')">
-              <el-icon class="ai-act-btn-ic"><MagicStick /></el-icon>
+              <AiMark class="ai-act-btn-ic" />
               <span class="bt-tx">{{ $t('nav.ai') }}</span>
               <el-icon class="ai-act-btn-caret"><ArrowDown /></el-icon>
             </button>
@@ -158,7 +158,7 @@
               <div class="ai-dd-head">{{ $t('nav.ai') }}</div>
               <el-dropdown-menu>
                 <el-dropdown-item command="explain">
-                  <el-icon class="skills-ic"><MagicStick /></el-icon>
+                  <AiMark class="skills-ic" />
                   <span class="skills-name">{{ $t('sqlq.aiExplain') }}</span>
                 </el-dropdown-item>
                 <el-dropdown-item command="optimize">
@@ -400,7 +400,7 @@
               <span class="error-title">{{ isNoSql ? $t('sqlq.cmdFailed') : $t('sqlq.sqlFailed') }}</span>
               <span class="error-time" v-if="Math.max(elapsedTime || 0, result.executeTime || 0)">耗时 {{ Math.max(elapsedTime || 0, result.executeTime || 0) }}ms</span>
             </div>
-            <el-button v-if="!isNoSql" size="small" type="primary" :icon="MagicStick" :loading="aiFixLoading" @click="askAiFix">{{ $t('sqlq.aiFix') }}</el-button>
+            <el-button v-if="!isNoSql" size="small" type="primary" :icon="AiMark" :loading="aiFixLoading" @click="askAiFix">{{ $t('sqlq.aiFix') }}</el-button>
           </div>
           <div class="error-message">{{ result.message || $t('common.unknownError') }}</div>
         </div>
@@ -475,7 +475,7 @@
     <el-dialog v-model="aiDialogVisible" width="640px" top="8vh" class="sqlq-dialog sqlq-ai-dialog">
       <template #header>
         <div class="dlg-title">
-          <span class="dlg-title-ic"><el-icon :size="16"><MagicStick /></el-icon></span>
+          <span class="dlg-title-ic"><AiMark :size="16" /></span>
           <span>{{ aiDialogTitle }}</span>
         </div>
       </template>
@@ -669,12 +669,13 @@ import { sortDirOf, sortIndexOf, toggleSortKey, normalizeSortKeys, makeRowCompar
 import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
-  CaretRight, CaretLeft, Download, MagicStick, TrendCharts, Loading,
+  CaretRight, CaretLeft, Download, TrendCharts, Loading,
   Close, CircleCloseFilled, CircleCheckFilled, Coin, Brush, Clock, Files,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
   Collection, RefreshLeft, DArrowRight, Key
 } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 import TplVarDialog from './TplVarDialog.vue'
 import { findTplVar, readTplVars, saveTplVars, ensureSqlVarStore, readVarValues, saveVarValues, isRawSqlValue } from '../../utils/sqlTplVars'
 import { replaceVars, classifyColType, varContextOf } from '../../utils/sqlLiteral'

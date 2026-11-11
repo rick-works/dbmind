@@ -254,6 +254,44 @@ public final class Main {
         return "agent 内部错误：" + cause;
     }
 
+    /**
+     * 连接失败时给人看的那句话。
+     *
+     * <p>驱动抛出的顶层消息常常是**一句没有任何信息量的本地化文案** —— PostgreSQL 的
+     * 「尝试连线已失败。」、MySQL 的「Communications link failure」—— 真正的错因
+     * （ConnectException: Connection refused / UnknownHostException / 认证失败 / 超时）
+     * 只挂在 **cause 链** 上。以前这里只取 {@code e.getMessage()}，界面上就只剩那一句，
+     * 用户看到的是「尝试连接失败，没有具体错误信息」（真机反馈）。
+     *
+     * <p>做法：沿 cause 链（SQLException 还串了 {@code getNextException()}）收集去重后的
+     * 非空消息，用 ` → ` 连起来。顶层消息永远排第一 —— 「数据库原话在前」的既有口径不变；
+     * 更深的非 SQLException（JDK 的 IO 异常）带上**简单类名**，否则
+     * {@code UnknownHostException} 只剩一个主机名，读起来像莫名其妙的乱码。
+     */
+    private static String connectionFailureText(Throwable e) {
+        List<String> parts = new ArrayList<>();
+        Throwable current = e;
+        for (int depth = 0; current != null && depth < 6; depth++) {
+            String message = current.getMessage();
+            if (message != null && !message.trim().isEmpty()) {
+                String text = message.trim();
+                // 顶层就是「人话」本身；更深层只有 JDK 异常需要类名来说明这是什么错
+                if (current != e && !(current instanceof SQLException)) {
+                    text = current.getClass().getSimpleName() + ": " + text;
+                }
+                if (!parts.contains(text)) {
+                    parts.add(text);
+                }
+            }
+            Throwable next = current.getCause();
+            if (next == null && current instanceof SQLException) {
+                next = ((SQLException) current).getNextException();
+            }
+            current = next;
+        }
+        return parts.isEmpty() ? String.valueOf(e) : String.join(" → ", parts);
+    }
+
     /** 异常链最深处那一层（最多 5 跳），带类名与消息。 */
     private static String deepestCause(Throwable e) {
         Throwable current = e;
@@ -347,7 +385,11 @@ public final class Main {
         try {
             connection = driver.connect(url, properties);
         } catch (SQLException e) {
-            throw new Protocol.AgentException("DBMIND-CONN-0003", "连接失败：" + e.getMessage(), describe(e));
+            throw new Protocol.AgentException("DBMIND-CONN-0003", "连接失败：" + connectionFailureText(e), describe(e));
+        } catch (RuntimeException e) {
+            // 少数驱动（自签证书、畸形参数、类装载失败）在建连阶段抛的是运行时异常，
+            // 原样冒出去会变成「agent 内部错误」，用户完全不知道是配置问题。
+            throw new Protocol.AgentException("DBMIND-CONN-0003", "连接失败：" + connectionFailureText(e), stackTrace(e));
         }
         if (connection == null) {
             throw new Protocol.AgentException("DBMIND-CONN-0003", "驱动不接受该 URL", url);

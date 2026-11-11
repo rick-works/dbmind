@@ -1,5 +1,17 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.0.19": [
+    "Right-click the connection tree for the new 'Manage connections' dialog: every connection listed by folder, with checkboxes to test, export or delete in bulk and a search across name / host / type / folder",
+    "'Import connections' reads three formats at once: DBMind, Navicat (.ncx) and DBeaver (.json). You get a preview before anything is written; name clashes can be skipped, overwritten or renamed, and the batch can land in a folder of your choice. Passwords from Navicat and DBeaver are encrypted and unreadable, so those rows are flagged for you to fill in",
+    "'Export connections' now lets you decide whether passwords travel with the file (database and SSH); the default is no. When you do include them the file holds plain text and the dialog reminds you to look after it",
+    "Ungrouped connections are now called 'Ungrouped' instead of 'Data sources': opening one just to look at it and pressing save no longer drops it into some self-made folder behind your back",
+    "Connection failures finally say what went wrong: PostgreSQL's 'connection attempt failed' and MySQL's 'Communications link failure' are now followed by the real cause (connection refused, unknown host, authentication failure, timeout) instead of leaving you to guess",
+    "On Oracle and other upper-folding databases, tables and columns created with quoted lowercase names no longer fail with 'invalid identifier': column sorting, keyword search, advanced filters, cell editing, export and data transfer all reference names exactly as they are stored",
+    "Editing a date or time cell on Oracle no longer fails with ORA-01861: values are converted to explicit date/time literals based on the column type, independent of the session date format",
+    "Exported SQL files no longer contain the extra ROWNUM paging helper column (which made them fail with 'column not found' when replayed against a target database)",
+    "Dialog headers no longer overlap the close and fullscreen buttons: right-aligned info such as the row detail's 'N chars / M lines' or the index advisor's count stays clear of them",
+    "The top bar icons are consistent now: the website entry is a line-art house matching the GitHub mark and the AI entry is a hand-drawn little robot (top-bar toggle and tab both use it); both follow 'Settings - Interface - Top bar icons'"
+  ],
   "v2.0.18": [
     "Wide tables no longer lose content on horizontal scroll: in a narrow window, scrolling to the right-hand columns used to show headers with blank cells underneath - the data now follows the column you scroll to (both data browse and the NoSQL data view)",
     "The website has a new look: the app screenshot carousel now sits right in the hero, and the whole site is cleaner and lighter to load and scroll"

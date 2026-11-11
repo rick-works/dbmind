@@ -49,7 +49,7 @@
               <div v-if="stepDetail(s)" class="exec-detail">{{ stepDetail(s) }}</div>
               <!-- 分析过程：模型怎么想到这一步的（原样展示，不做二次加工） -->
               <div v-if="s.thinking" class="exec-block">
-                <div class="blk-label"><el-icon><MagicStick /></el-icon>分析过程</div>
+                <div class="blk-label"><AiMark />分析过程</div>
                 <div class="blk-text blk-think">{{ s.thinking }}</div>
               </div>
               <!-- 这一步产出的 SQL：与 AI 对话里的代码块同一套外观，操作按钮悬浮在块右上角 -->
@@ -136,7 +136,7 @@
 
       <!-- 结论与洞察：放在图表/数据之后 —— 先看结果，再看解读 -->
       <div class="answer-conclusion">
-        <div class="concl-head"><el-icon class="concl-icon"><MagicStick /></el-icon><span class="concl-title">结论</span></div>
+        <div class="concl-head"><AiMark class="concl-icon" /><span class="concl-title">结论</span></div>
         <div class="summary" v-html="md(answer.summary || '（模型没有给出结论）')"></div>
         <ul v-if="hasRows && answer.insights?.length" class="insights">
           <li v-for="(ins, i) in answer.insights" :key="i" v-html="md(ins)"></li>
@@ -185,8 +185,9 @@ import { ElMessage } from 'element-plus'
 import AiUsageNote from '../../common/AiUsageNote.vue'
 import {
   Download, Switch, CaretRight, CircleCheck, CircleCheckFilled, CopyDocument, DataAnalysis, EditPen,
-  InfoFilled, Loading, MagicStick, QuestionFilled,
+  InfoFilled, Loading, QuestionFilled,
 } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 import ChartCanvas from './ChartCanvas.vue'
 import DataTable from './DataTable.vue'
 import { CHART_TYPES, chartTypeLabel } from './chartSpec'

@@ -783,7 +783,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-cli"
-version = "2.0.18"
+version = "2.0.19"
 dependencies = [
  "clap",
  "dbmind-core",
@@ -794,7 +794,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-core"
-version = "2.0.18"
+version = "2.0.19"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -813,7 +813,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-desktop"
-version = "2.0.18"
+version = "2.0.19"
 dependencies = [
  "dbmind-core",
  "dbmind-web",
@@ -825,7 +825,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-mcp"
-version = "2.0.18"
+version = "2.0.19"
 dependencies = [
  "dbmind-core",
  "serde_json",
@@ -833,7 +833,7 @@ dependencies = [
 
 [[package]]
 name = "dbmind-web"
-version = "2.0.18"
+version = "2.0.19"
 dependencies = [
  "axum",
  "base64 0.22.1",

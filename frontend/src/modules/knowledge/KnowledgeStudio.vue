@@ -27,7 +27,7 @@
 
       <div class="kbs-side-foot">
         <el-tooltip placement="top" :content="$t('ks.injectTip')">
-          <span class="kbs-foot-label"><el-icon><MagicStick /></el-icon>{{ $t('ks.inject') }}</span>
+          <span class="kbs-foot-label"><AiMark />{{ $t('ks.inject') }}</span>
         </el-tooltip>
         <el-switch v-model="cfg.enabled" size="small" @change="saveCfg" />
       </div>
@@ -269,7 +269,7 @@
             <el-tooltip placement="top"
                         :content="$t('ks.tryAnswerTip')">
               <el-button :loading="aiAnswering" :disabled="!query.trim()" @click="runAiAnswer">
-                <el-icon><MagicStick /></el-icon>{{ $t('ks.tryAnswer') }}
+                <AiMark />{{ $t('ks.tryAnswer') }}
               </el-button>
             </el-tooltip>
           </div>
@@ -279,7 +279,7 @@
       <div class="rc-outline">
         <div v-if="!outline && !outlining" class="rc-outline-cta">
           <a class="rc-outline-go" @click="runOutline">
-            <el-icon><MagicStick /></el-icon>{{ $t('ks.outline') }}
+            <AiMark />{{ $t('ks.outline') }}
           </a>
         </div>
         <div v-else-if="outlining" class="rc-outline-loading">
@@ -303,7 +303,7 @@
       <!-- AI 试答：片段沾边但答不到点上的情况很常见，光看命中判断不了「好不好用」 -->
           <div v-if="aiAnswering || aiAnswer" class="rc-answer">
           <div class="rc-answer-head">
-            <el-icon><MagicStick /></el-icon>
+            <AiMark />
             <span>{{ $t('ks.answerTitle') }}</span>
             <span class="rc-answer-scope">{{ $t('ks.answerScope', { name: (active?.name || $t('ks.currentKb')) }) }}</span>
           </div>
@@ -390,7 +390,8 @@
 import { ref, computed, watch, nextTick, onMounted } from 'vue'
 import { t, locale } from '../../utils/i18n'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Plus, Search, EditPen, Delete, UploadFilled, Document, MagicStick, Setting, Refresh, Collection, QuestionFilled, Loading , Reading } from '@element-plus/icons-vue'
+import { Plus, Search, EditPen, Delete, UploadFilled, Document, Setting, Refresh, Collection, QuestionFilled, Loading , Reading } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 import KbSettingsForm from './KbSettingsForm.vue'
 
 const props = defineProps({

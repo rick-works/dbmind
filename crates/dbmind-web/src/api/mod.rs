@@ -307,6 +307,8 @@ pub fn routes() -> Router<AppState> {
             get(conn::get).put(conn::update).delete(conn::delete),
         )
         .route("/api/connections/{id}/copy", post(conn::copy))
+        // 导出连接（导出弹窗用）：唯一会按需带出明文口令的接口，见 conn::export 的说明
+        .route("/api/connections/export", post(conn::export))
         .route("/api/drivers/types", get(sys::driver_types))
         .route("/api/drivers/status", get(sys::driver_status))
         // 强制重新下载驱动（清掉失败缓存，用于重试；设置页「驱动下载」的「下载」按钮就用它）

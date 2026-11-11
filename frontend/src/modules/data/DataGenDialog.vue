@@ -5,7 +5,7 @@
              append-to-body class="main-dialog datagen-dialog">
     <template #header>
       <div class="dlg-title">
-        <span class="dlg-title-ic"><el-icon :size="16"><MagicStick /></el-icon></span>
+        <span class="dlg-title-ic"><AiMark :size="16" /></span>
         <span>{{ $t('dgen.title') }}</span>
         <span v-if="target" class="dlg-target">{{ target.db }}<span class="dot">.</span>{{ target.table }}</span>
       </div>
@@ -225,7 +225,7 @@
             <el-button v-if="running" size="small" type="danger" :icon="CircleClose" :loading="canceling" @click="doCancel">{{ $t('dgen.cancelGen') }}</el-button>
             <template v-else>
               <el-button size="small" @click="backToRules">{{ $t('dgen.backToEdit') }}</el-button>
-              <el-button v-if="!job" size="small" type="primary" :icon="MagicStick" @click="doGenerate">{{ $t('dgen.startGen') }}</el-button>
+              <el-button v-if="!job" size="small" type="primary" :icon="AiMark" @click="doGenerate">{{ $t('dgen.startGen') }}</el-button>
               <el-button v-else size="small" type="primary" @click="visible = false">{{ $t('dgen.done') }}</el-button>
             </template>
           </template>
@@ -240,7 +240,8 @@
 // 写入走后台任务（可查进度、可取消），取消会在数据库端回滚本次未提交的数据；预览不写库。
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { MagicStick, Refresh, CircleClose } from '@element-plus/icons-vue'
+import { Refresh, CircleClose } from '@element-plus/icons-vue'
+import AiMark from '../../common/AiMark.vue'
 import { listColumns, dataGenPreview, dataGenStart, dataGenTask, dataGenCancel } from '../../api'
 import { errMsg } from '../../utils/errMsg'
 import { t, tMsg } from '../../utils/i18n'
