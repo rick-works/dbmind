@@ -27,8 +27,16 @@ GITHUB_REPO="${GITHUB_REPOSITORY:-rick-works/dbmind}"
 GITEE_REPO="${GITEE_REPO:-rick-works/dbmind}"
 GITEE_API="https://gitee.com/api/v5/repos/${GITEE_REPO}"
 gh_() { gh --repo "$GITHUB_REPO" "$@"; }
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+# 指定 GITEE_WORK_DIR 时复用该目录做下载缓存（重跑只补缺的包，不再整轮重下 500MB+）；
+# 不指定就每次新建临时目录、退出即删。
+if [ -n "${GITEE_WORK_DIR:-}" ]; then
+  WORK="$GITEE_WORK_DIR"
+  mkdir -p "$WORK"
+  echo "==> 下载缓存目录（复用）：$WORK"
+else
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+fi
 
 echo "==> 读取 GitHub Release ${TAG}"
 gh_ release view "$TAG" --json name,body,isPrerelease > "$WORK/release.json" \
@@ -57,15 +65,25 @@ if gh api "repos/${GITHUB_REPO}/releases/tags/${TAG}" \
   cat > "$WORK/dl.sh" <<'EOS'
 #!/usr/bin/env bash
 set -u
-id="$1"; name="$2"
+id="$1"; name="$2"; want="${3:-}"
+# 复用缓存：已存在且大小相符就不再下（--retry 只救瞬时抖动，断在半截重跑最费时间）
+if [ -n "$want" ] && [ -f "${DL_DIR}/${name}" ] && [ "$(stat -c%s "${DL_DIR}/${name}")" = "$want" ]; then
+  exit 0
+fi
+# --retry：走系统代理（加速器）时经常随机断在某个包上（每次断的还不是同一个），
+# 以前一次失败就整轮 exit 1，白等几分钟重下全部；给单文件 3 次重试能少踩一大半。
 curl -sSL --connect-timeout 20 --max-time 1800 --speed-limit 1024 --speed-time 120 \
+  --retry 3 --retry-delay 3 \
   -H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/octet-stream" \
   -o "${DL_DIR}/${name}" "${DL_BASE}/${id}" \
   || echo "${name}" >> "${DL_ERR}"
 EOS
   chmod +x "$WORK/dl.sh"
-  # 3 路并发：单连接实测只有 ~170KB/s，390MB 串行要半小时以上
-  awk -F'\t' '{print $1" "$2}' "$API_TSV" | xargs -P 3 -n 2 "$WORK/dl.sh"
+  # 并发数：原来 3 路 —— 直连时代单连接只有 ~170KB/s，串行要半小时；
+  # 2026-11-13 实测走系统代理时 3 路**每次都有 2~3 个包断流**（每次断的还不是同一个，
+  # 加 --retry 也救不回来），而单连接能跑满 ~1.3MB/s、73MB 一分钟内下完。
+  # 所以默认串行；想并行可外部设 GITEE_DL_PAR（代理换成能扛并发的再说）。
+  awk -F'\t' '{print $1" "$2" "$3}' "$API_TSV" | xargs -P "${GITEE_DL_PAR:-1}" -n 3 "$WORK/dl.sh"
   if [ -s "$DL_ERR" ]; then
     echo "错误：以下资产下载失败"
     sed 's/^/      /' "$DL_ERR"
