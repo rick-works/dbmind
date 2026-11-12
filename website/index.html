@@ -57,7 +57,7 @@
       radial-gradient(1000px 720px at 88% -4%, rgba(150, 160, 180, .035), transparent 62%),
       radial-gradient(900px 760px at 50% 108%, rgba(115, 125, 145, .03), transparent 68%),
       var(--bg);
-    /* 文档模式三栏的纸面底色：深色下比页面亮一档（#1e1f24），浅色下纯白卡片 */
+    /* 文档模式两栏的纸面底色：深色下比页面亮一档（#1e1f24），浅色下纯白卡片 */
     --doc-surface: #1e1f24;
     --radius: 14px;
     /* ===== 宽度体系：全站**只有一个**内容宽度 =====
@@ -558,7 +558,7 @@
     border-radius: 5px; padding: 1px 6px; font-size: 12.5px; color: var(--accent);
   }
 
-  /* ===== 功能文档（页内三栏：左目录 / 中正文 / 右本页导航） ===== */
+  /* ===== 功能文档（页内两栏：左目录 / 正文） ===== */
   /* 默认不出现在滚动流里 —— 只有点导航「文档」进入文档模式才显示 */
   #docs { display: none; text-align: left; }
   body.doc-only #docs {
@@ -672,27 +672,27 @@
   ::-webkit-scrollbar-thumb:hover { background: rgba(79, 140, 255, .55); }
   html { scrollbar-color: rgba(148, 163, 184, .35) transparent; scrollbar-width: thin; }
   /* 目录面板滚动条更纤细 */
-  .dtoc::-webkit-scrollbar, .pagenav::-webkit-scrollbar, .doc-main::-webkit-scrollbar { width: 5px; }
-  .dtoc { scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, .3) transparent; }
+  .dtoc::-webkit-scrollbar, .doc-main::-webkit-scrollbar { width: 5px; }
   .docs-layout {
-    display: grid; grid-template-columns: 224px minmax(0, 1fr) 192px; gap: 34px;
+    /* 两栏：左目录 + 正文。右侧「本页目录」与左栏是同一批 h2 的副本，已移除 */
+    display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 34px;
     margin-top: 30px; align-items: start;
   }
-  /* 左右目录：轻面板化，sticky 跟随
+  /* 左目录：轻面板化，sticky 跟随
      底色统一走 --doc-surface（深色 #1e1f24 / 浅色 #ffffff）：比页面亮一档的"纸面"，
-     配柔和大投影浮在星空上，三栏不再是那种糊在近黑背景里的浅灰蒙层 */
-  .dtoc, .pagenav {
+     配柔和大投影浮在星空上，两栏不再是那种糊在近黑背景里的浅灰蒙层 */
+  .dtoc {
     position: sticky; top: 84px; font-size: 14px;
     max-height: calc(100vh - 116px); overflow-y: auto;
     background: var(--doc-surface);
     border: 1px solid var(--border);
     border-radius: var(--radius); padding: 16px 12px;
     box-shadow: 0 22px 48px -36px rgba(0, 0, 0, .95);
+    scrollbar-width: thin; scrollbar-color: rgba(148, 163, 184, .3) transparent;
   }
-  .dtoc { scrollbar-width: thin; }
   .dtoc .group { margin-bottom: 22px; }
   .dtoc .group:last-child { margin-bottom: 0; }
-  .dtoc .gt, .pagenav .pt {
+  .dtoc .gt {
     font-size: 13.5px; color: var(--text); letter-spacing: 1px;
     margin: 4px 0 8px; padding-left: 10px; font-weight: 700;
   }
@@ -701,15 +701,9 @@
   .dtoc-note { padding: 4px 10px; font-size: 13.5px; color: var(--dim); line-height: 1.9; }
   .dtoc-note a { display: inline; padding: 0; color: var(--primary); }
   .dtoc-note a:hover { color: var(--accent); background: none; }
-  .pagenav a {
-    display: block; padding: 4px 0 4px 12px; color: var(--dim);
-    border-left: 2px solid var(--border); transition: color .12s, border-color .12s;
-  }
-  .dtoc a:hover, .pagenav a:hover { color: var(--text); background: rgba(148, 163, 184, .08); }
-  .pagenav a:hover { background: none; }
+  .dtoc a:hover { color: var(--text); background: rgba(148, 163, 184, .08); }
   .dtoc a.active { color: var(--primary); background: rgba(79, 140, 255, .12); font-weight: 600; }
-  .pagenav a.active { color: var(--primary); background: none; border-left-color: var(--primary); font-weight: 600; }
-  /* 正文：面板化（与左右目录同边框风格）+ 限行宽 */
+  /* 正文：面板化（与左目录同边框风格）+ 限行宽 */
   .doc-main {
     min-width: 0;
     background: var(--doc-surface);
@@ -785,7 +779,7 @@
   .doc-main .fcard:hover { border-color: rgba(79, 140, 255, .45); transform: translateY(-2px); }
   .doc-main .fcard b { display: block; margin-bottom: 5px; font-size: 13.5px; color: var(--text); }
   .doc-main .fcard span { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
-  /* 文档模式：flex 等高三栏（stretch 保证顶底严格对齐），中间正文内部滚动。
+  /* 文档模式：flex 等高二栏（stretch 保证顶底严格对齐），中间正文内部滚动。
      容器已固定定位：.wrap 与 .docs-layout 都限高 100%，底部 10px 边距才不会被长内容撑破 */
   body.doc-only #docs .wrap { height: 100%; }
   body.doc-only .docs-layout {
@@ -797,7 +791,6 @@
   /* 文档模式下顶栏与内容区同宽（1120 容器），logo 左缘与左目录面板对齐 */
   body.doc-only .top-inner { max-width: var(--content); }
   body.doc-only .dtoc { position: static; top: auto; flex: 0 0 224px; height: auto; max-height: none; min-height: 0; }
-  body.doc-only .pagenav { position: static; top: auto; flex: 0 0 192px; height: auto; max-height: none; min-height: 0; }
   body.doc-only .doc-main { flex: 1 1 0; min-width: 0; height: auto; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(148,163,184,.22) transparent; }
   /* 正文面板滚动条：细而淡，不抢视觉 */
   .doc-main::-webkit-scrollbar { width: 6px; }
@@ -812,7 +805,6 @@
 
   @media (max-width: 1100px) {
     .docs-layout { grid-template-columns: 200px minmax(0, 1fr); }
-    .pagenav { display: none; }
   }
   @media (max-width: 760px) {
     /* 导航：链接不再直接 display:none（那样手机上根本没法跳转），改成汉堡下拉面板 */
@@ -938,10 +930,9 @@
   /* 深色下用黑投影，浅色下换成灰投影，卡片才不至于「糊在白纸上」 */
   html[data-theme="light"] .demo,
   html[data-theme="light"] .shots-viewport { box-shadow: 0 18px 44px rgba(17, 21, 28, .10); }
-  /* 文档三栏在浅色下是白卡片，投影要换成灰的，不然像糊了一层黑 */
+  /* 文档两栏在浅色下是白卡片，投影要换成灰的，不然像糊了一层黑 */
   html[data-theme="light"] .doc-main,
-  html[data-theme="light"] .dtoc,
-  html[data-theme="light"] .pagenav { box-shadow: 0 20px 46px -34px rgba(17, 21, 28, .16); }
+  html[data-theme="light"] .dtoc { box-shadow: 0 20px 46px -34px rgba(17, 21, 28, .16); }
   html[data-theme="light"] .stats { background: linear-gradient(180deg, var(--band-glow), transparent 78%); }
   /* 演示区语法高亮：深色那套在白底上偏亮，浅色给一组深一点的 */
   html[data-theme="light"] .kw { color: #2f6bdc; }
@@ -4468,40 +4459,6 @@ WHERE dt = :dt AND org = :org;</code></pre>
           </div>
         </div>
       </main>
-
-      <aside class="pagenav">
-        <div class="pt">本页目录</div>
-        <a href="#d-what">什么是 DBmind？</a>
-        <a href="#d-overview">核心特性一览</a>
-        <a href="#d-sources">支持的数据源</a>
-        <a href="#d-install">下载与安装</a>
-        <a href="#d-conn">创建第一个连接</a>
-        <a href="#d-sql">执行第一条 SQL</a>
-        <a href="#d-clients">四种用法</a>
-        <a href="#d-editor">SQL 编辑器</a>
-        <a href="#d-shortcuts">快捷键</a>
-        <a href="#d-ai">AI 助手</a>
-        <a href="#d-ai-data">AI 会把什么发给模型</a>
-        <a href="#d-grid">结果表格与数据编辑</a>
-        <a href="#d-tx">事务模式</a>
-        <a href="#d-browser">对象浏览器</a>
-        <a href="#d-designer">表结构与对象</a>
-        <a href="#d-users">用户与权限</a>
-        <a href="#d-monitor">监控与运维</a>
-        <a href="#d-tasks">任务中心</a>
-        <a href="#d-maintenance">数据目录与自愈</a>
-        <a href="#d-er">ER 关系图</a>
-        <a href="#d-vars">模板变量</a>
-        <a href="#d-snippets">SQL 片段库</a>
-        <a href="#d-pivot">数据透视</a>
-        <a href="#d-export">导出与传输</a>
-        <a href="#d-compare">数据对比与传输</a>
-        <a href="#d-security">安全护栏</a>
-        <a href="#d-drivers">驱动管理</a>
-        <a href="#d-audit">执行审计</a>
-        <a href="#d-faq">常见问题</a>
-        <a href="#d-community">社区</a>
-      </aside>
     </div>
   </div>
 </section>
@@ -4786,8 +4743,8 @@ WHERE dt = :dt AND org = :org;</code></pre>
   }, { rootMargin: '-45% 0px -50% 0px' })
   Object.keys(navMap).forEach(id => { const el = document.getElementById(id); if (el) secIo.observe(el) })
 
-  // 文档区内小节高亮：滚动到哪节，左目录与右「本页目录」同步点亮
-  const docLinks = [...document.querySelectorAll('.dtoc a, .pagenav a')]
+  // 文档区内小节高亮：滚动到哪节，左目录对应项点亮
+  const docLinks = [...document.querySelectorAll('.dtoc a')]
   const hlById = (id) => docLinks.filter(a => a.getAttribute('href') === '#' + id)
   const docIo = new IntersectionObserver((es) => {
     es.forEach(e => {
