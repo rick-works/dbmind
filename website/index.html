@@ -852,9 +852,45 @@
     .shot-dots button { width: 6px; height: 6px; border-radius: 3px; }
     .shot-dots button.on { width: 16px; }
   }
-  .shot-viewer { position: fixed; inset: 0; z-index: 90; display: none; align-items: center; justify-content: center; background: var(--veil); backdrop-filter: blur(6px); padding: 4vh 4vw; cursor: zoom-out; }
+  /* z-index 必须高于顶栏（nav 是 100）：90/95 时遮罩被压在顶栏下面，
+     右上角的关闭按钮正好落在顶栏那条里，既看不见也点不到 */
+  .shot-viewer { position: fixed; inset: 0; z-index: 110; display: none; align-items: center; justify-content: center; background: var(--veil); backdrop-filter: blur(6px); padding: 4vh 4vw; cursor: zoom-out; }
   .shot-viewer.open { display: flex; }
   .shot-viewer img { max-width: 100%; max-height: 100%; border-radius: 8px; box-shadow: 0 30px 80px rgba(0,0,0,.6); }
+  /* 宣传片：轮播第一屏。视频 15 MB，页面首屏只加载封面，点了才取流 */
+  .shot-video { position: relative; }
+  .shot-video img { aspect-ratio: 16 / 9; object-fit: cover; }
+  .shot-play {
+    position: absolute; inset: 0; z-index: 1; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 16px; padding: 0; border: 0; cursor: pointer;
+    color: #fff; background: linear-gradient(180deg, rgba(5,7,12,.10), rgba(5,7,12,.52));
+  }
+  .shot-play-ic {
+    position: relative; width: 86px; height: 86px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--primary), #8b6cff);
+    box-shadow: 0 14px 44px rgba(79,140,255,.55); transition: transform .2s;
+  }
+  .shot-play-ic::after {
+    content: ""; position: absolute; left: 50%; top: 50%; transform: translate(-36%, -50%);
+    border-style: solid; border-width: 17px 0 17px 29px;
+    border-color: transparent transparent transparent #fff;
+  }
+  .shot-video:hover .shot-play-ic { transform: scale(1.07); }
+  .shot-play-tx { font-size: 15px; font-weight: 700; letter-spacing: .5px; text-shadow: 0 2px 12px rgba(0,0,0,.65); }
+  .shot-play-tx em { font-style: normal; font-weight: 500; opacity: .72; margin-left: 8px; }
+  .video-viewer {
+    position: fixed; inset: 0; z-index: 120; display: none; align-items: center; justify-content: center;
+    background: var(--veil); backdrop-filter: blur(6px); padding: 4vh 4vw;
+  }
+  .video-viewer.open { display: flex; }
+  .video-viewer video { width: min(1280px, 100%); max-height: 88vh; border-radius: 12px; background: #000; box-shadow: 0 30px 80px rgba(0,0,0,.65); }
+  .vv-close {
+    position: absolute; top: 18px; right: 22px; z-index: 1; width: 42px; height: 42px; border-radius: 50%;
+    border: 1px solid rgba(255,255,255,.25); background: rgba(0,0,0,.45); color: #fff;
+    font-size: 17px; line-height: 1; cursor: pointer;
+  }
+  .vv-close:hover { background: rgba(79,140,255,.45); border-color: var(--primary); }
+  @media (max-width: 760px) { .shot-play-ic { width: 62px; height: 62px; } }
 
   /* ===== 科技风增强 ===== */
   /* 章节标题下的渐变短横线 */
@@ -1025,6 +1061,14 @@
     <div class="shots reveal" id="shotsBox">
       <div class="shots-viewport">
         <div class="shots-track" id="shotsTrack">
+          <figure class="shot shot-video" id="shotVideo">
+            <img src="images/promo-poster.jpg" alt="DBmind 产品宣传片：17 种数据库引擎，一个客户端">
+            <button class="shot-play" type="button" aria-label="播放 DBmind 产品宣传片，2 分 03 秒">
+              <span class="shot-play-ic" aria-hidden="true"></span>
+              <span class="shot-play-tx">产品宣传片<em>2 分 03 秒</em></span>
+            </button>
+            <figcaption>产品宣传片 · 2 分 03 秒 · 点击播放</figcaption>
+          </figure>
           <figure class="shot"><img src="images/shot-home-dark.png" alt="工作台：连接树、最近查询、查询趋势与数据工具一屏尽览（深色主题）"><figcaption data-i18n="shot.1">工作台 · 深色主题</figcaption></figure>
           <figure class="shot"><img src="images/shot-home-light.png" alt="工作台：连接树、最近查询、查询趋势与数据工具一屏尽览（浅色主题）" loading="lazy"><figcaption data-i18n="shot.2">工作台 · 浅色主题</figcaption></figure>
           <figure class="shot"><img src="images/shot-sql-dark.png" alt="SQL 编辑器：补全、格式化、分块执行，结果与行数耗时并列（深色主题）" loading="lazy"><figcaption data-i18n="shot.3">SQL 编辑器与结果 · 深色主题</figcaption></figure>
@@ -1089,7 +1133,31 @@
   viewer.innerHTML = '<img alt="截图大图">';
   document.body.appendChild(viewer);
   var vimg = viewer.querySelector('img');
+  // 宣传片：封面那一屏点开全屏播放。video 用 preload="none"，首屏不背 15 MB，
+  // 点了才取流；关掉就 pause（不 reset src，第二次点不用重新下载）
+  var vv = document.createElement('div');
+  vv.className = 'video-viewer';
+  vv.innerHTML = '<button class="vv-close" type="button" aria-label="关闭">✕</button>'
+    + '<video controls playsinline preload="none" poster="images/promo-poster.jpg">'
+    + '<source src="video/dbmind-promo-1080p.mp4" type="video/mp4"></video>';
+  document.body.appendChild(vv);
+  var vEl = vv.querySelector('video');
+  function closeVideo () {
+    vv.classList.remove('open');
+    vEl.pause();
+    restart();
+  }
+  vv.addEventListener('click', function (e) {
+    if (e.target === vv || (e.target.classList && e.target.classList.contains('vv-close'))) closeVideo();
+  });
   track.addEventListener('click', function (e) {
+    if (e.target.closest('.shot-video')) {
+      if (timer) { clearInterval(timer); timer = null; }
+      vv.classList.add('open');
+      var p = vEl.play();
+      if (p && p.catch) p.catch(function () {});
+      return;
+    }
     var img = e.target.closest('.shot img');
     if (!img) return;
     vimg.src = img.src;
@@ -1097,7 +1165,9 @@
   });
   viewer.onclick = function () { viewer.classList.remove('open'); };
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && viewer.classList.contains('open')) viewer.classList.remove('open');
+    if (e.key !== 'Escape') return;
+    if (vv.classList.contains('open')) closeVideo();
+    else if (viewer.classList.contains('open')) viewer.classList.remove('open');
   });
   go(0); restart();
 })();

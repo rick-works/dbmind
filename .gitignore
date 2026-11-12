@@ -51,6 +51,8 @@ Thumbs.db
 !/website/sponsor-alipay.png
 !/website/sponsors.js
 !/website/.nojekyll
+# 首页轮播里的产品宣传片（1080p / 14.8 MB，CRF24 重编码；CF Pages 单文件上限 25 MiB）
+!/website/video/
 
 # 本机构建加速配置：.cargo/config.toml 里的 rust-lld 链接器路径是**每台机器各不相同**的
 # 绝对路径（写死的本机路径会让 CI / 别人机器直接构建失败：linker not found）。
