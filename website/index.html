@@ -766,6 +766,20 @@
   .doc-main .tip b { color: var(--accent); }
   .doc-main .dlink { color: var(--primary); }
   .doc-main .dlink:hover { color: var(--accent); }
+  /* 社区：微信群二维码卡片。
+     两个必须注意的点：① 二维码底色必须是白的（深色主题下用 --card 会扫不出来）；
+     ② 图是竖长条（含群名与有效期说明），给固定宽度并居中，别让它在窄文档栏里挤着左飘。 */
+  .doc-main .wq-wrap { margin: 16px 0 20px; }
+  .doc-main .wq-card {
+    width: 268px; max-width: 100%; margin: 0 auto 20px;
+    background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px; text-align: center; transition: border-color .15s, transform .15s;
+  }
+  .doc-main .wq-card:hover { border-color: rgba(79, 140, 255, .45); transform: translateY(-2px); }
+  .doc-main .wq-card img { display: block; width: 100%; max-width: 244px; height: auto; margin: 0 auto; border-radius: 8px; background: #fff; }
+  .doc-main .wq-card .wq-cap { margin-top: 9px; font-size: 13px; color: var(--text); }
+  .doc-main .wq-card .wq-sub { margin-top: 3px; font-size: 12px; color: var(--dim); }
+  .doc-main .wq-side p { margin: 10px 0 0; }
   .doc-main .feature-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
   .doc-main .fcard { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 15px 17px; transition: border-color .15s, transform .15s; }
   .doc-main .fcard:hover { border-color: rgba(79, 140, 255, .45); transform: translateY(-2px); }
@@ -4436,13 +4450,23 @@ WHERE dt = :dt AND org = :org;</code></pre>
         </ul>
 
         <h2 id="d-community">社区</h2>
-        <p>社区暂未建立。使用中遇到问题、有功能建议，欢迎通过以下方式联系我们：</p>
-        <ul>
-          <li><b>Gitee Issues</b>：<a class="dlink" href="https://gitee.com/rick-works/dbmind/issues" target="_blank" rel="noopener">https://gitee.com/rick-works/dbmind/issues</a></li>
-          <li><b>GitHub Issues</b>：<a class="dlink" href="https://github.com/rick-works/dbmind/issues" target="_blank" rel="noopener">https://github.com/rick-works/dbmind/issues</a></li>
-          <li><b>邮件</b>：<a class="dlink" href="mailto:13604181707@163.com">13604181707@163.com</a></li>
-        </ul>
-        <p>也欢迎加入我们一起建设 DBmind —— 文档、翻译、驱动适配、功能开发，每一份贡献都算数。</p>
+        <p>用微信群交流最直接：装包报错、驱动连不上、想提需求，都可以在群里问。也欢迎把日志贴到 Issues，方便后来的人搜到同样的答案。</p>
+
+        <div class="wq-wrap">
+          <div class="wq-card">
+            <img src="images/wechat-group.jpg" alt="DBmind 微信交流群二维码" width="216" height="330" loading="lazy">
+            <div class="wq-cap">扫码加入「DBmind 微信交流群 1」</div>
+            <div class="wq-sub">群二维码 7 天有效，过期请提 Issue</div>
+          </div>
+          <div class="wq-side">
+            <ul>
+              <li><b>Gitee Issues</b>：<a class="dlink" href="https://gitee.com/rick-works/dbmind/issues" target="_blank" rel="noopener">https://gitee.com/rick-works/dbmind/issues</a></li>
+              <li><b>GitHub Issues</b>：<a class="dlink" href="https://github.com/rick-works/dbmind/issues" target="_blank" rel="noopener">https://github.com/rick-works/dbmind/issues</a></li>
+              <li><b>邮件</b>：<a class="dlink" href="mailto:13604181707@163.com">13604181707@163.com</a></li>
+            </ul>
+            <p>也欢迎加入我们一起建设 DBmind —— 文档、翻译、驱动适配、功能开发，每一份贡献都算数。</p>
+          </div>
+        </div>
       </main>
 
       <aside class="pagenav">
