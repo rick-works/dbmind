@@ -1371,6 +1371,27 @@
     <p class="sec-sub reveal">版本号从 1.0.0 起 —— 修 bug 与优化只加修订号，新增功能加小版本，不兼容的重大变更才加大版本</p>
 
     <div class="rel-timeline">
+      <!-- v2.0.24（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.24</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-13</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>「每页条数」上限从 10 万放宽到 100 万：以前选 20 万 / 50 万 / 100 万只会悄悄给 10 万行，现在选多少拿多少；默认每页 200 → 1000</b></li>
+            <li><b>日期时间统一成 2022-08-05 03:00:00 的写法：修掉「秒为 0 时秒被吞掉」和「中间带 T」，结果网格与导出的 CSV / Excel 一致</b></li>
+            <li><b>设置页改读共享配置</b>：默认分页的一次性迁移（200 → 1000）不会再被旧缓存盖回去</li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.24" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.24" target="_blank" rel="noopener">下载 v2.0.24</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.23（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1378,7 +1399,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.23</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-11</span>
           </div>
           <ul class="rel-notes">
