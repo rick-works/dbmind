@@ -2226,10 +2226,13 @@ pub async fn data(
         .and_then(|p| p.parse().ok())
         .filter(|p| *p > 0)
         .unwrap_or(1);
+    // 页大小上限与界面下拉同步（末尾三档 20 万 / 50 万 / 100 万）：
+    // 这里原来卡 100_000，超了直接**静默**退回 50 行 —— 用户选「50万条/页」却只看到 50 行，
+    // 还以为是表里只有数据。上限放到 100 万后，实际返回量仍由「返回行数上限」设置兜底。
     let size: u64 = params
         .get("size")
         .and_then(|s| s.parse().ok())
-        .filter(|s| *s > 0 && *s <= 100_000)
+        .filter(|s| *s > 0 && *s <= 1_000_000)
         .unwrap_or(50);
     let keyword = params.get("keyword").unwrap_or_default();
     // 排序键（多列，按优先级）；空表示不排序

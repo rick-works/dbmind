@@ -13,6 +13,8 @@ import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 
 /**
@@ -263,8 +265,13 @@ public final class ResultMapper {
             appendEscaped(buf, clob.getSubString(1, take));
             return;
         }
+        if (value instanceof LocalDateTime dateTime) {
+            // 直接返回 java.time 的驱动（ClickHouse 等）也走统一写法，免得它自己 toString 出 `T`
+            appendEscaped(buf, dateTimeText(dateTime));
+            return;
+        }
         if (value instanceof Timestamp timestamp) {
-            appendEscaped(buf, timestamp.toLocalDateTime().toString());
+            appendEscaped(buf, timestampText(timestamp));
             return;
         }
         if (value instanceof java.sql.Time) {
@@ -284,6 +291,28 @@ public final class ResultMapper {
      * 但 {@code Writer} 接口声明了它，不接就得让整条调用链都带上 throws（不值得）。
      * 兜底只做最基本的引号/反斜杠转义，保证出去的东西仍是合法 JSON。
      */
+    /** 日期时间统一成 `yyyy-MM-dd HH:mm:ss[.fraction]`。
+     *
+     * <p>**不能直接用 `LocalDateTime.toString()`**：它走 ISO 的**最短**表示 —— 秒为 0 时把
+     * 「:00」整个省掉（`2022-08-05T03:00:00` → `2022-08-05T03:00`），界面里看着就像「秒丢了」；
+     * 而且分隔符是 `T`，导出的 CSV / Excel 里也是 `T`，跟库里 `datetime` 的写法对不上。
+     * 小数秒为 0 时不补（对得上 `datetime`），非 0 时按实际精度保留并去掉尾随 0。 */
+    private static final DateTimeFormatter TS_FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    private static String timestampText(Timestamp timestamp) {
+        return dateTimeText(timestamp.toLocalDateTime());
+    }
+
+    private static String dateTimeText(LocalDateTime dt) {
+        String base = dt.format(TS_FMT);
+        int nanos = dt.getNano();
+        if (nanos == 0) {
+            return base;
+        }
+        String frac = String.format("%09d", nanos).replaceAll("0+$", "");
+        return base + "." + frac;
+    }
+
     private static void appendEscaped(StringBuilder buf, String text) {
         buf.append('"');
         for (int i = 0; i < text.length(); i++) {
@@ -395,8 +424,11 @@ public final class ResultMapper {
             int take = (int) Math.min(length, CLOB_PREVIEW_LIMIT);
             return new com.google.gson.JsonPrimitive(clob.getSubString(1, take));
         }
+        if (value instanceof LocalDateTime dateTime) {
+            return new com.google.gson.JsonPrimitive(dateTimeText(dateTime));
+        }
         if (value instanceof Timestamp timestamp) {
-            return new com.google.gson.JsonPrimitive(timestamp.toLocalDateTime().toString());
+            return new com.google.gson.JsonPrimitive(timestampText(timestamp));
         }
         if (value instanceof java.sql.Time) {
             // 同 appendBare：原始文本才保得住小数秒（以及 >24h 的 TIME）
@@ -445,8 +477,11 @@ public final class ResultMapper {
             int take = (int) Math.min(length, CLOB_PREVIEW_LIMIT);
             return text(clob.getSubString(1, take));
         }
+        if (value instanceof LocalDateTime dateTime) {
+            return text(dateTimeText(dateTime));
+        }
         if (value instanceof Timestamp timestamp) {
-            return text(timestamp.toLocalDateTime().toString());
+            return text(timestampText(timestamp));
         }
         if (value instanceof java.sql.Time) {
             // 同 appendBare：原始文本才保得住小数秒（以及 >24h 的 TIME）

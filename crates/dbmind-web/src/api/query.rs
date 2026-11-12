@@ -44,7 +44,7 @@ async fn editor_timeout_ms(state: &AppState) -> u64 {
     secs * 1000
 }
 
-/// 全局默认返回行数上限。**0 = 不限制**（缺省 0），非 0 按 100..=100000 收敛。
+/// 全局默认返回行数上限。**0 = 不限制**（缺省 0），非 0 按 100..=1000000 收敛。
 ///
 /// 语义与界面一致（用户要求）：设置里填 0 表示「不限制」，填 N 表示最多 N 行。
 /// 「不限制」返回一个**大而安全**的数而不是 `usize::MAX`：内核取数里有
@@ -70,7 +70,9 @@ async fn query_limits(state: &AppState) -> (usize, u64) {
     let cap = if cap == 0 {
         UNLIMITED
     } else {
-        cap.clamp(100, 100_000)
+        // 上限与内核硬顶一致（100 万）：界面「每页条数」最大就是 100 万，
+        // 这里再夹到 10 万会把用户显式选择的大页悄悄砍掉
+        cap.clamp(100, 1_000_000)
     };
     let secs = get(dbmind_core::Store::KEY_QUERY_TIMEOUT)
         .and_then(|value| value.trim().parse::<u64>().ok())
@@ -92,7 +94,7 @@ pub(crate) async fn max_rows_cap(state: &AppState) -> usize {
     if n == 0 {
         UNLIMITED
     } else {
-        n.clamp(100, 100_000)
+        n.clamp(100, 1_000_000)
     }
 }
 
@@ -215,11 +217,12 @@ pub async fn execute(
         .get("executionId")
         .and_then(Value::as_str)
         .map(str::to_string);
+    // 页大小上限与界面下拉同步（末尾三档 20 万 / 50 万 / 100 万）；超限只是夹住、不报错
     let size = body
         .get("size")
         .and_then(Value::as_u64)
         .unwrap_or(2000)
-        .clamp(1, 100_000) as usize;
+        .clamp(1, 1_000_000) as usize;
     // 页码（从 1 起）。以前只读 size、完全没用 page —— 于是「第 2 页」拿到的还是前 size 行，
     // 界面看着有分页器，点下一页却一直是同一批数据。
     let page = body.get("page").and_then(Value::as_u64).unwrap_or(1).max(1);
@@ -473,11 +476,12 @@ pub async fn execute_batch(
     // 结果集逐行 JSON 编码 + 内核解析）。单段执行快的原因正是它按 `size` 取数。
     // 多段的结果本来就按「每段一页」呈现（前端每个结果 tab 各记 page，翻页只重跑
     // 这一段），所以按 size 取数与既有交互一致：截断 → totalCount=-1 → 前端异步补总数。
+    // 页大小上限与界面下拉同步（末尾三档 20 万 / 50 万 / 100 万）
     let size = body
         .get("size")
         .and_then(Value::as_u64)
         .unwrap_or(2000)
-        .clamp(1, 100_000) as usize;
+        .clamp(1, 1_000_000) as usize;
 
     // 切句用内核的实现（按协议分派：SQL 引号/注释内的分号不切，Redis 一行一条，ES 一行一请求）
     let record = require_record(&state, &id).await?;

@@ -3920,24 +3920,27 @@ mod tests {
 
     /// 请求超过**硬上限**时按上限截断 —— **端到端**，不只是类型层。
     ///
-    /// `QueryOptions::HARD_MAX_ROWS = 100_000` 且内核每请求都 `clamp()`（`engine::execute`）：
+    /// `QueryOptions::HARD_MAX_ROWS`（当前 100 万）且内核每请求都 `clamp()`（`engine::execute`）：
     /// 壳层可以传任意大，真正生效的是内核这一关。类型层已有单测（`QueryOptions::clamp`），
-    /// 这里补的是**真的走到驱动**那一段：请求 `usize::MAX` ⇒ 实际只取 10 万行，
+    /// 这里补的是**真的走到驱动**那一段：请求 `usize::MAX` ⇒ 实际只取上限那么多行，
     /// 而且截断提示里说的是**生效的上限**（不是用户传的那个数）。
+    ///
+    /// 造数据量跟着常量走（上限 + 1000 行），放宽上限时不用再改测试里的魔法数字。
     #[test]
     fn 请求超过硬上限时按上限截断() {
         let (_dir, engine, conn) = fixture("hard-max-rows");
-        let mut request = QueryRequest::new(
-            conn.as_str(),
-            "with recursive c(x) as (select 1 union all select x+1 from c where x < 200000) \
+        let sql = format!(
+            "with recursive c(x) as (select 1 union all select x+1 from c where x < {}) \
              select x from c",
+            QueryOptions::HARD_MAX_ROWS + 1000
         );
+        let mut request = QueryRequest::new(conn.as_str(), sql);
         request.options.max_rows = usize::MAX; // 壳层能传多大就传多大
         let result = engine
             .execute(request, AccessContext::Desktop)
             .expect("查询应当成功");
 
-        assert_eq!(QueryOptions::HARD_MAX_ROWS, 100_000, "这条测试的前提");
+        assert!(QueryOptions::HARD_MAX_ROWS >= 100_000, "硬上限不该比十万还小");
         assert!(result.truncated, "超过上限应当置截断标记");
         assert_eq!(
             result.row_count,

@@ -723,5 +723,10 @@
   ],
   "v2.0.23": [
     "Fixed connections that use a host name (cloud RDS and similar) always failing the connection test with UnknownHostException: the database host no longer forces its own hosts file, so imported or newly added host-name connections connect normally"
+  ],
+  "v2.0.24": [
+    "Page size can now go up to 1,000,000 rows: picking 200k / 500k / 1M used to silently return only 100k rows, now you get what you pick; default page size 200 -> 1000",
+    "Date and time values are formatted as 2022-08-05 03:00:00 - no more dropped seconds when they are zero, no T separator; the result grid and CSV / Excel exports now agree",
+    "The settings page reads the shared config, so the one-off default page-size migration (200 -> 1000) is no longer reverted by stale cache"
   ]
 }

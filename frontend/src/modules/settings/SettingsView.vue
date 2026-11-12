@@ -948,10 +948,11 @@
               <!-- 页大小是**纯数字**：不放进字典。放进字典就要为每种语言各维护 9 条，
                    而它们在任何语言下都是同一个数字 —— 徒增错漏面。 -->
               <el-select v-model="queryForm.pageSize" style="width:160px">
-                <!-- 用户要求补三档：20000 / 50000 / 100000（大表整页看数时用；实际取数仍受
-                     下面「最大行数」限制，所以调大这里不会把查询拖垮） -->
+                <!-- 大表整页看数用（末尾 20 万 / 50 万 / 100 万）；实际取数仍受下面
+                     「最大行数」限制，所以调大这里不会把查询拖垮。千分位分隔，100 万档才不至于
+                     看成 1000000 一坨 -->
                 <el-option v-for="n in PAGE_SIZE_OPTIONS" :key="n"
-                           :value="n" :label="$t('settings.query.perPage', { n })" />
+                           :value="n" :label="$t('settings.query.perPage', { n: n.toLocaleString('en-US') })" />
               </el-select>
               <div class="form-tip">{{ $t('settings.query.pageSizeTip') }}</div>
             </el-form-item>
@@ -1373,7 +1374,7 @@ import { setMaskConfig as applyMaskRules } from '../../utils/masking'
 import { PAGE_SIZE_OPTIONS } from '../../utils/settings'
 // 下拉宽度自适应（与 ConnectionSelect 内部同一套量法）
 import { fitSelectWidth } from '../../utils/selectAutoWidth'
-import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI } from '../../utils/settings'
+import { editorDefaults, queryDefaults, notifyDefaults, migrateEditor, reloadEditorSettings, reloadQuerySettings, persistUI, getQuerySettings } from '../../utils/settings'
 // 界面尺寸：当前值由 utils/appearance.js 从 localStorage 读；改动即写 :root 的 CSS 变量并落盘，
 // 所以顶栏/左侧树当场变化，不需要「保存」也不需要重启
 const appearance = ref(getAppearance())
@@ -2251,10 +2252,10 @@ const previewSql = computed(() => {
 
 const queryForm = ref({ ...queryDefaults })
 const loadQuery = async () => {
-  try {
-    const raw = JSON.parse(localStorage.getItem('dbmind_query') || '{}')
-    queryForm.value = { ...queryDefaults, ...raw }
-  } catch { queryForm.value = { ...queryDefaults } }
+  // 走共享读取口而**不是**直接读 localStorage：默认值迁移（分页 200 → 1000）在
+  // getQuerySettings 里做一次性处理，绕过它的话「启动水合把 200 写回本地缓存」
+  // 之后设置页又显示回 200
+  try { queryForm.value = { ...getQuerySettings() } } catch { queryForm.value = { ...queryDefaults } }
   // 超时/上限/历史保留与缓存 TTL 存**后端**：以服务端为准盖掉占位默认值（拿不到就维持默认）
   try {
     const s = await getSettings()

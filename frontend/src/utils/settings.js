@@ -37,7 +37,7 @@ export const editorDefaults = {
 // timeoutSecs / cacheTtlSecs / maxRows / historyMax / historyDays 存**后端**（app_settings），
 // 默认值与后端种子一致 —— 界面在拿到后端值之前先用它们占位，避免表单闪一下空值
 export const queryDefaults = {
-  pageSize: 200, confirmDanger: true,
+  pageSize: 1000, confirmDanger: true,
   timeoutSecs: 300, cacheTtlSecs: 300,   // 超时默认 5 分钟
   maxRows: 0, historyMax: 1000, historyDays: 30,   // 0 = 不限制返回行数
   nullStyle: 'null'  // NULL 单元格显示：'null'=NULL | 'paren'=(NULL) | 'blank'=空白
@@ -159,7 +159,17 @@ const refreshLive = (live, next) => {
   })
 }
 
-export const getQuerySettings = () => ({ ...queryDefaults, ...readJSON('dbmind_query') })
+// 默认分页 200 → 1000（**一次性**迁移，与 migrateEditor 里那几条默认值迁移同一个道理）：
+// 整份查询设置会在用户改任意一项时一起写盘 —— 从没动过分页的人也会把 200 冻在缓存里，
+// 只改默认值根本到不了他们那儿。门槛标志落盘后，用户自己选的档位（哪怕恰好 200）不再被碰。
+const migrateQuery = (raw) => {
+  if (!raw || typeof raw !== 'object' || raw._pageSize1000Migrated) return raw
+  if (raw.pageSize === 200) raw.pageSize = 1000
+  raw._pageSize1000Migrated = true
+  try { localStorage.setItem('dbmind_query', JSON.stringify(raw)) } catch { /* 忽略写失败 */ }
+  return raw
+}
+export const getQuerySettings = () => ({ ...queryDefaults, ...migrateQuery(readJSON('dbmind_query')) })
 export const getNotifySettings = () => ({ ...notifyDefaults, ...readJSON('dbmind_notify') })
 
 // ---------- UI 设置持久化（真身在 dbmind.db 的 app_settings 表） ----------
@@ -173,8 +183,10 @@ export const getNotifySettings = () => ({ ...notifyDefaults, ...readJSON('dbmind
 // 静态引 api 会形成 i18n → settings → api → i18n 循环。
 /** 「每页条数」的候选值 —— 设置页（查询）那个下拉与三个数据表格底部的分页**共用这一份**。
     以前四处各写一套（设置页 12 档、表数据 4 档、NoSQL 5 档），用户看到的"能选多少"不一致；
-    现在统一，最大 100000（实际取数仍受「最大行数」限制，调大这里不会把查询拖垮）。 */
-export const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000]
+    现在统一，最大 1000000（实际取数仍受「最大行数」限制，调大这里不会把查询拖垮）。
+    末尾三档（20 万 / 50 万 / 100 万）是「整表一眼看完」的场景：后端 `/data` 与查询入口的
+    页大小上限已同步放宽到 100 万，否则会被静默夹回小页。 */
+export const PAGE_SIZE_OPTIONS = [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000, 1000000]
 const UI_BACKEND_KEYS = {
   'ui.editor': 'dbmind_editor',
   'ui.query': 'dbmind_query',
