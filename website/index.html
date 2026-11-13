@@ -1179,7 +1179,10 @@
     if (vv.classList.contains('open')) closeVideo();
     else if (viewer.classList.contains('open')) viewer.classList.remove('open');
   });
-  go(0); restart();
+  // 等资源就绪再开始计时：网络慢时首屏「宣传片封面」不能在用户看到之前就被切走
+  function boot () { go(0); restart(); }
+  if (document.readyState === 'complete') boot();
+  else window.addEventListener('load', boot);
 })();
 
 /* 深色 / 浅色切换：只改 html[data-theme]，样式全在 CSS 里；选择记在 localStorage */
