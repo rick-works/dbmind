@@ -1114,10 +1114,20 @@
   }
   function go (i) { cur = (i + n) % n; track.style.transform = 'translateX(-' + cur * 100 + '%)'; [].forEach.call(dots.children, function (d, k) { d.classList.toggle('on', k === cur); }); }
   function next () { go(cur + 1); }
-  function restart () { if (timer) clearInterval(timer); timer = setInterval(next, 3800); }
+  // 每屏停留时长按内容给：宣传片封面要看清「17 种引擎」与播放按钮，给足 10 秒；
+  // 其余截图维持 3.8 秒的轻快节奏。用 setTimeout 链替代固定 interval，才能逐屏不同。
+  var DWELL_VIDEO = 10000, DWELL_SHOT = 3800;
+  function dwellOf (i) {
+    var el = track.children[i];
+    return el && el.classList.contains('shot-video') ? DWELL_VIDEO : DWELL_SHOT;
+  }
+  function restart () {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function () { next(); restart(); }, dwellOf(cur));
+  }
   document.getElementById('shotPrev').onclick = function () { go(cur - 1); restart(); };
   document.getElementById('shotNext').onclick = function () { go(cur + 1); restart(); };
-  box.addEventListener('mouseenter', function () { if (timer) { clearInterval(timer); timer = null; } });
+  box.addEventListener('mouseenter', function () { if (timer) { clearTimeout(timer); timer = null; } });
   box.addEventListener('mouseleave', restart);
   var sx = null;
   box.addEventListener('touchstart', function (e) { sx = e.touches[0].clientX; }, { passive: true });
@@ -1152,7 +1162,7 @@
   });
   track.addEventListener('click', function (e) {
     if (e.target.closest('.shot-video')) {
-      if (timer) { clearInterval(timer); timer = null; }
+      if (timer) { clearTimeout(timer); timer = null; }
       vv.classList.add('open');
       var p = vEl.play();
       if (p && p.catch) p.catch(function () {});
