@@ -54,6 +54,10 @@ Thumbs.db
 # 首页轮播里的产品宣传片（1080p / 14.8 MB，CRF24 重编码；CF Pages 单文件上限 25 MiB）
 !/website/video/
 
+# 软著申报材料（用户手册 / 源程序 PDF、配图与生成脚本）：这是提交给版权中心的材料，
+# 体积大、含截图，不进版本库；需要时用 materials/soft-copyright/make_*.py 重新生成。
+/materials/
+
 # 本机构建加速配置：.cargo/config.toml 里的 rust-lld 链接器路径是**每台机器各不相同**的
 # 绝对路径（写死的本机路径会让 CI / 别人机器直接构建失败：linker not found）。
 # 保留在各人本机即可，不入库；需要的人照 .cargo/config.toml.example 自己建一份。
