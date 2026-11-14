@@ -4,7 +4,7 @@
 
 🌐 **官网**：<https://www.dbmind.top/> · 🏠 **仓库**：<https://gitee.com/rick-works/dbmind>（GitHub 镜像：<https://github.com/rick-works/dbmind>）
 
-[![release](https://img.shields.io/badge/release-v2.0.24-0a7cff)](https://gitee.com/rick-works/dbmind/releases)
+[![release](https://img.shields.io/badge/release-v2.0.25-0a7cff)](https://gitee.com/rick-works/dbmind/releases)
 
 **给数据库装上「大脑」** —— DBmind（Database + Mind）是 AI 原生的多数据库管理与开发平台：
 一个客户端管好你的每一个数据库，AI 帮你解释、优化、修好每一条 SQL。

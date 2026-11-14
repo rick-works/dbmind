@@ -728,5 +728,10 @@
     "Page size can now go up to 1,000,000 rows: picking 200k / 500k / 1M used to silently return only 100k rows, now you get what you pick; default page size 200 -> 1000",
     "Date and time values are formatted as 2022-08-05 03:00:00 - no more dropped seconds when they are zero, no T separator; the result grid and CSV / Excel exports now agree",
     "The settings page reads the shared config, so the one-off default page-size migration (200 -> 1000) is no longer reverted by stale cache"
+  ],
+  "v2.0.25": [
+    "The About page was reworked: the license is now one line on what you may do, with separate links to the full license, third-party notices and source; a new Contact section carries the WeChat QR code and an email address, so feedback no longer means digging through the README",
+    "Installers now ship LICENSE, NOTICE and THIRD-PARTY-NOTICES.md - 534 Rust crates, 142 front-end packages and 14 bundled Java components listed with version and license, readable straight from the portable ZIP or the install directory",
+    "The bundled trimmed JRE is now cut from Eclipse Temurin 21 with the jlink flags kept in a script (jdk.charsets, jdk.unsupported included), making the license terms of the runtime we redistribute unambiguous"
   ]
 }

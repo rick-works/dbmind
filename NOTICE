@@ -14,3 +14,41 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 The name "DBMind" and its branding remain the property of the copyright owner.
+
+----------------------------------------------------------------------------
+Third-party components
+
+The full list, with exact versions, is generated into THIRD-PARTY-NOTICES.md
+and shipped next to this file. Summary:
+
+This product includes the third-party software listed below. All of it is
+used unmodified; the exact versions are pinned in Cargo.lock / package.json.
+
+1. MPL-2.0 components (file-level copyleft)
+
+   cssparser, cssparser-macros, selectors, dtoa-short, option-ext
+
+   Sources: https://crates.io/crates/cssparser , /selectors , /dtoa-short ,
+   /option-ext (and their -macros packages). MPL-2.0 requires the source of
+   MPL-covered files to remain available; none of these files has been
+   modified by this project.
+
+2. Java agents bundled as agents/*.jar (Apache-2.0 / MIT)
+
+   MongoDB Java Driver (Apache-2.0), Jedis (MIT), Elasticsearch Java Client
+   and Low Level REST Client (Apache-2.0), plus their transitive
+   dependencies.
+
+3. Bundled Java runtime (jre/)
+
+   A jlink-generated runtime image; the license notice of every bundled file
+   is preserved under jre/legal/.
+
+4. Front-end libraries (MIT / Apache-2.0)
+
+   Vue, Element Plus, Monaco Editor, ECharts, Axios, dagre, sql-formatter and
+   others; see frontend/package.json for the full list and versions.
+
+Database drivers are not distributed with this product: they are downloaded
+at runtime from their vendors into the user's own profile, and remain subject
+to the vendor's own license terms.

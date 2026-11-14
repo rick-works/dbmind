@@ -50,10 +50,18 @@ powershell -File scripts\build\package.ps1 -SkipCargo -SkipAgents -SkipFrontend
 
 | 文件 | 作用 |
 |---|---|
-| `scripts\build\package.ps1` | 组装发行目录（exe ×4 + `agents/` + `web/` + `start.bat` + README），CI 也用它 |
+| `scripts\build\package.ps1` | 组装发行目录（exe ×4 + `agents/` + `web/` + `start.bat` + README + LICENSE + NOTICE），CI 也用它 |
+| `scripts\build\jre.ps1` | 用 jlink 生成随包分发的精简运行时 `dist\jre`（参数与 CI 完全一致） |
+| `scripts\build\third-party-notices.ps1` | 生成 `THIRD-PARTY-NOTICES.md`（Rust + 前端 + 4 个 agent jar 的全量清单），依赖升级后重跑一次 |
 | `scripts\build\dmg-settings.py` | macOS DMG 外观配置，CI 里作为 `dmgbuild -s` 的配置文件 |
 
-CI 里的精简 JRE 用 jlink 生成，模块集必须含 `jdk.charsets`（少了 Doris 连不上，见 troubleshooting）。
+精简 JRE 用 jlink 生成，**源 JDK 必须是 Eclipse Temurin（21）**：CI 里 `actions/setup-java`
+用的就是 `distribution: temurin`，本地也用 `scripts\build\jre.ps1` 走同一套模块集与参数，
+打包结果才和发布包一致。别用 Oracle JDK —— 它走 NFTC 条款，随商业软件再分发的解释空间较大
+（Temurin 是 GPLv2 + Classpath Exception，分发无争议）。
+
+模块集必须含 `jdk.charsets`（少了 Doris 连不上，见 troubleshooting）与 `jdk.unsupported`
+（少了 DB2 报 `jdk.net.ExtendedSocketOptions`），两者都已在脚本里固定，不要手改。
 
 
 ## 环境变量
@@ -225,5 +233,12 @@ cd crates\dbmind-desktop; npx --yes '@tauri-apps/cli@^2' build --bundles msi,nsi
 ```
 
 产物：`dist\dbmind-<版本>\` 与 `crates\dbmind-desktop\target\release\bundle\`。
-精简 JRE 自己 jlink：`--add-modules java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets`（少 `jdk.charsets` 会让 Doris 连不上），或直接取 Release 里的现成包。
+精简 JRE 用脚本生成（内部就是 jlink，参数与 CI 一致）：
+
+```powershell
+powershell -File scripts\build\jre.ps1
+# 默认取 D:\develop\tools\temurin21\jdk-21.0.13+9；换机器用 -JdkHome 指定 Temurin 21+
+```
+
+或直接取 Release 里的现成包（那里面同样是 Temurin 21 裁出来的）。
 挂 Release、回填正文与官网、同步 cask 照上面第 4、5 步手工做（CI 那条路是自动的）。

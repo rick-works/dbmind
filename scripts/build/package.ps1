@@ -112,7 +112,8 @@ if (Test-Path $webSource) {
 $launcher = Join-Path $PSScriptRoot '..\start.bat'
 if (Test-Path $launcher) { Copy-Item $launcher $outDir }
 
-foreach ($extra in @('README.md', 'LICENSE')) {
+# LICENSE 与 NOTICE 是 Apache-2.0 §4(a)/§4(d) 的分发义务，便携包必须一起给出去
+foreach ($extra in @('README.md', 'LICENSE', 'NOTICE', 'THIRD-PARTY-NOTICES.md')) {
     $source = Join-Path $root $extra
     if (Test-Path $source) { Copy-Item $source $outDir }
 }

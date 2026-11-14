@@ -4,7 +4,7 @@
 
 🌐 **Website**: <https://www.dbmind.top/> · 🏠 **Repository**: <https://gitee.com/rick-works/dbmind> (GitHub mirror: <https://github.com/rick-works/dbmind>)
 
-[![release](https://img.shields.io/badge/release-v2.0.24-0a7cff)](https://gitee.com/rick-works/dbmind/releases)
+[![release](https://img.shields.io/badge/release-v2.0.25-0a7cff)](https://gitee.com/rick-works/dbmind/releases)
 
 **Give your database a brain** — DBmind (Database + Mind) is an AI-native workbench for unified database management & development: one client for every database in your stack, with AI that explains, optimizes and fixes your SQL.
 

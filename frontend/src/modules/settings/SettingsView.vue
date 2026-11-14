@@ -1305,7 +1305,6 @@
           <!-- 版本说明：标题外置（与其他板块同规格）；版本号做卡片式下拉头，点击展开说明 -->
           <div class="about-block">
             <div class="about-dbs-title">{{ $t('settings.about.releaseTitle') }}</div>
-            <div class="about-ver-rule">{{ $t('settings.about.verRule') }}</div>
             <div class="about-fold" :class="{ open: releaseOpen }">
               <button type="button" class="about-fold-head" @click="releaseOpen = !releaseOpen">
                 <span>{{ $t('settings.about.releaseVersion') }}</span>
@@ -1330,13 +1329,39 @@
             </div>
           </div>
 
-          <!-- 开源说明：免费使用，禁止售卖 -->
+          <!-- 开源许可：两行说清「能做什么」，细节留在仓库里，界面不铺大段法律文字 -->
           <div class="about-block">
             <div class="about-dbs-title">{{ $t('settings.about.licenseTitle') }}</div>
             <div class="about-block-body">
               <div class="about-license">{{ $t('settings.about.licenseBody') }}</div>
-              <!-- 显示文本也写全 https:// —— 只写 github.com/… 时用户没法直接复制当链接用 -->
-              <a class="about-link" href="https://github.com/rick-works/dbmind" target="_blank" rel="noopener">https://github.com/rick-works/dbmind</a>
+              <div class="about-links">
+                <a class="about-link" :href="LICENSE_URL" target="_blank" rel="noopener">{{ $t('settings.about.licenseFull') }}</a>
+                <span class="about-sep">·</span>
+                <a class="about-link" :href="THIRD_PARTY_URL" target="_blank" rel="noopener">{{ $t('settings.about.licenseThird') }}</a>
+                <span class="about-sep">·</span>
+                <a class="about-link" :href="REPO_URL" target="_blank" rel="noopener">{{ $t('settings.about.licenseSource') }}</a>
+              </div>
+            </div>
+          </div>
+
+          <!-- 联系信息：微信名片码（含头像与昵称，整图展示），左边码、右边说明（微信 + 邮箱） -->
+          <div class="about-block">
+            <div class="about-dbs-title">{{ $t('settings.about.contactTitle') }}</div>
+            <div class="about-contact">
+              <img class="about-qr" src="/wechat-qr.jpg" :alt="$t('settings.about.contactWechat')">
+              <div class="about-contact-txt">
+                <div class="about-contact-item">
+                  <div class="about-contact-k">{{ $t('settings.about.contactWechat') }}</div>
+                  <div class="about-contact-d">{{ $t('settings.about.contactWechatHint') }}</div>
+                </div>
+                <div class="about-contact-item">
+                  <div class="about-contact-k">{{ $t('settings.about.contactEmail') }}</div>
+                  <div class="about-contact-d">
+                    <a class="about-link about-mail" :href="'mailto:' + CONTACT_EMAIL" rel="noopener">{{ CONTACT_EMAIL }}</a>
+                    <span class="about-mail-hint">{{ $t('settings.about.contactEmailHint') }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -1356,6 +1381,14 @@ import {
   ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder, QuestionFilled
 } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
+
+// 关于页的链接：许可全文与第三方声明都在主仓库里（与安装目录随包的 LICENSE /
+// THIRD-PARTY-NOTICES.md 是同一份内容）；离线时点开会失败，属预期行为。
+const REPO_URL = 'https://github.com/rick-works/dbmind'
+const LICENSE_URL = REPO_URL + '/blob/master/LICENSE'
+// 联系邮箱：写死在模板外层，中英文界面共用同一个地址
+const CONTACT_EMAIL = '13604181707@163.com'
+const THIRD_PARTY_URL = REPO_URL + '/blob/master/THIRD-PARTY-NOTICES.md'
 
 /** 表单标签旁的问号提示：hover 出说明。界面不再平铺大段小字（看着乱），细节收进气泡里 */
 const QHint = (props) => h(ElTooltip, { content: props.text, placement: 'top', showAfter: 120 },
@@ -3715,8 +3748,6 @@ watch(visible, (v) => {
 .about-rel-tag.tag-major { color: #d97706; background: rgba(245, 158, 11, .16); }
 .about-rel-tag.tag-first { color: var(--dc-text-dim); background: rgba(148, 163, 184, .16); }
 .about-rel-tag.tag-latest { color: var(--dc-primary, #4f8cff); background: var(--dc-primary-wash, rgba(79,140,255,.12)); }
-/* 规则说明按其他页签 .panel-desc 的字号（13px） */
-.about-ver-rule { margin: 0 0 18px; font-size: 13px; color: var(--dc-text-dim); line-height: 1.7; }
 .about-block-body { font-size: 13px; color: var(--dc-text-mid); line-height: 1.8; }
 /* 说明行：浅底条目，比裸文字更整齐；左边缘与版本号列对齐（缩进 = 圆点+版本号列宽） */
 .about-release-line {
@@ -3728,6 +3759,19 @@ watch(visible, (v) => {
 .about-license { white-space: pre-line; margin-bottom: 8px; }
 .about-link { color: var(--dc-primary); text-decoration: none; font-size: 13px; }
 .about-link:hover { text-decoration: underline; }
+/* 链接组：许可全文 / 第三方声明 / 源码，一行摆下，窄窗口自动折行 */
+.about-links { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.about-sep { color: var(--dc-text-dim); font-size: 13px; }
+/* 联系信息：二维码是竖图（头像 + 昵称 + 码），给固定宽度、白底圆角，深色主题下也不花 */
+.about-contact { display: flex; align-items: flex-start; gap: 18px; }
+.about-qr { width: 150px; height: auto; flex: none; border-radius: 10px; background: #fff;
+            border: 1px solid var(--dc-border, #e5e7eb); }
+.about-contact-txt { display: flex; flex-direction: column; gap: 14px; font-size: 13px;
+                     line-height: 1.8; color: var(--dc-text-mid); }
+.about-contact-item { display: flex; flex-direction: column; gap: 6px; }
+.about-contact-k { font-weight: 600; color: var(--dc-text); }
+.about-mail { font-size: 13px; }
+.about-mail-hint { margin-left: 8px; color: var(--dc-text-dim); }
 /* 数据脱敏：说明沿用全站统一的 .panel-desc 样式，不另做花样 */
 /* 四个出口竖排：一行一个开关，名称与作用范围说明跟在后面 —— 竖排比横排更好扫，
    说明也不会被挤到第二行去（横排时四个挤在一行，最后一个的说明常常折行） */
