@@ -51,13 +51,10 @@
       <el-empty v-if="!treeRows.length" :image-size="70" :description="keyword ? $t('common.noMatch') : $t('ce.empty')" />
     </div>
 
-    <!-- 口令开关：默认不勾（与历史行为一致），勾了才会向内核要明文 -->
+    <!-- 口令开关：默认不勾；勾了带出去的是**密文**（后端只回库里那份 `enc:v2:…` 值）。
+         以前这里挂着一句「会以明文写进文件」的警告，用户要求删掉 —— 现在也不明文了。 -->
     <div class="ec-pwd">
       <el-checkbox v-model="withPassword">{{ $t('ce.pwd') }}</el-checkbox>
-      <span v-if="withPassword" class="ec-warn">
-        <el-icon :size="13"><WarningFilled /></el-icon>{{ $t('ce.pwdWarn') }}
-      </span>
-      <span v-else class="ec-dim">{{ $t('ce.pwdOff') }}</span>
     </div>
 
     <template #footer>
@@ -71,7 +68,7 @@
 
 <script setup>
 import { ref, computed, watch } from 'vue'
-import { Search, Download, WarningFilled, ArrowRight, ArrowDown, Folder } from '@element-plus/icons-vue'
+import { Search, Download, ArrowRight, ArrowDown, Folder } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { t } from '../utils/i18n'
 import { listConnections, exportConnections } from '../api'
@@ -83,8 +80,8 @@ import DbLogo from './DbLogo.vue'
  * 导出连接配置。
  *
  * 两个入口共用：左侧树右键「导出连接」、连接管理弹窗「导出选中」（后者把 presetIds 传进来）。
- * 口令是**可选项**：默认不导出（历史上一直如此）；勾了才走后端的导出接口拿明文口令 ——
- * 前端从来拿不到口令（`ConnectionConfig::password` 标了 skip_serializing），所以这一步必须有后端配合。
+ * 口令是**可选项**：默认不导出（历史上一直如此）；勾了才走后端的导出接口拿**密文**口令 ——
+ * 前端从来拿不到明文口令（`ConnectionConfig::password` 标了 skip_serializing），所以这一步必须有后端配合。
  */
 const props = defineProps({
   modelValue: Boolean,
@@ -261,6 +258,5 @@ const doExport = async () => {
   margin-top: 12px; padding: 10px 12px; border-radius: 8px;
   background: var(--dc-bg-soft); border: 1px solid var(--dc-bg-hover);
 }
-.ec-warn { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px; font-size: 12px; color: var(--dc-warning); }
-.ec-dim { margin-left: 10px; font-size: 12px; color: var(--dc-text-dim); }
+
 </style>

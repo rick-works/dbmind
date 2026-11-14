@@ -72,7 +72,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 构建参数（与 CI 一致）：
 
 ```
-jlink --add-modules java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets \
+jlink --add-modules java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets,jdk.net \
       --strip-debug --no-header-files --no-man-pages --compress=zip-6 --output jre
 ```
 

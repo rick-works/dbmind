@@ -8,7 +8,12 @@
 # 模块集不能动：
 #   少 jdk.charsets   -> Doris 连不上（MySQL Connector/J 要把 collation 映射成
 #                        Java 字符集，报 Unknown character set: 'eucjpms'）
-#   少 jdk.unsupported-> DB2 报 ClassNotFoundException: jdk.net.ExtendedSocketOptions
+#   少 jdk.net        -> DB2 直接连不上：DB2 驱动（com.ibm.db2.jcc）静态初始化就摸
+#                        jdk.net.ExtendedSocketOptions，报
+#                        NoClassDefFoundError: jdk/net/ExtendedSocketOptions
+#                        （2026-11-15 实测：同一份后端 exe，只换 JRE ——
+#                         无 jdk.net 必失败，补上后 /api/db2/test 748ms 连上）
+#   jdk.unsupported   -> 不少驱动用 sun.misc.Unsafe，留着
 #
 # 用法：
 #   powershell -File scripts\build\jre.ps1
@@ -27,7 +32,7 @@ if (-not (Test-Path $jlink)) {
     throw "没找到 jlink：$jlink。用 -JdkHome 指定一个 JDK 21+（推荐 Eclipse Temurin）"
 }
 
-$modules = 'java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets'
+$modules = 'java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets,jdk.net'
 $new = $Out + '.new'
 
 if (Test-Path $new) { Remove-Item $new -Recurse -Force }

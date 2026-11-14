@@ -303,10 +303,9 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> XR
 
 /// 导出连接：`{ ids?: [..], includePassword?: bool }` → 裸数组（与 `GET /api/connections` 同形）。
 ///
-/// 这是**唯一**会把明文口令带出去的接口，成立的理由只有一条：导出弹窗里用户显式勾了
-/// 「导出密码」。常规读接口仍然「口令只写不读」（`ConnectionConfig::password` 标了
-/// `skip_serializing`），所以这里不是改那条规矩，而是在 `shape::connection_json` 的副本上
-/// **按需补两个键** —— 没勾的时候返回的东西与前端的本地组装完全一样。
+/// `includePassword` 为真时补一个 `password` 键，值是**库里存的密文**（`enc:v2:…`）：
+/// 导出的文件可能被转发、被丢进网盘，明文口令不该出现在里面。常规读接口仍然「口令只写
+/// 不读」（`ConnectionConfig::password` 标了 `skip_serializing`）。
 ///
 /// `ids` 为空 = 导出全部；影子连接照旧不导出（它们是实现细节，出去只会变成垃圾连接）。
 pub async fn export(State(state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
@@ -323,6 +322,7 @@ pub async fn export(State(state): State<AppState>, Json(body): Json<Value>) -> X
                 .collect()
         })
         .unwrap_or_default();
+    let store = state.engine().store().clone();
     let engine = state.engine();
     let records = blocking(move || engine.list_connections()).await?;
     let picked = records
@@ -344,25 +344,18 @@ pub async fn export(State(state): State<AppState>, Json(body): Json<Value>) -> X
                     obj.remove(key);
                 }
                 if include_password {
-                    obj.insert(
-                        "password".to_string(),
-                        Value::String(record.config.password.clone().unwrap_or_default()),
-                    );
-                    let ssh = record
-                        .config
-                        .extra
-                        .as_ref()
-                        .and_then(|extra| extra.get(dbmind_core::tunnel::EXTRA_SSH));
-                    for (from, to) in [
-                        ("password", "sshPassword"),
-                        ("keyPassphrase", "sshKeyPassphrase"),
-                    ] {
-                        let secret = ssh
-                            .and_then(|value| value.get(from))
-                            .and_then(Value::as_str)
-                            .unwrap_or_default();
-                        obj.insert(to.to_string(), Value::String(secret.to_string()));
-                    }
+                    // **带出去的是库里那份密文**（`enc:v2:…`），不是明文：文件被转发、被
+                    // 丢进网盘都不至于把口令白送。本机导入后照样能用（同一把密钥），
+                    // 换台机器则等于没填口令 —— 这正是"不再导出明文"的应有之义。
+                    let sealed = store
+                        .stored_password(&record.id)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default();
+                    obj.insert("password".to_string(), Value::String(sealed));
+                    // SSH 口令（extra.ssh）是**按明文消费**的（见 tunnel.rs 的认证代码），
+                    // 给它加密文导出等于让目标环境必然连不上；所以这里直接不带出去 ——
+                    // 宁可让用户重填，也不把别人跳板机的口令写进文件。
                 }
             }
             value

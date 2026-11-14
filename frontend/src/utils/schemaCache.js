@@ -96,6 +96,28 @@ export function removeSchemaCache(key) {
   } catch { /* ignore */ }
 }
 
+/**
+ * 删掉某个库（含它的各个模式）的表/视图清单缓存。
+ *
+ * 键的形状是 `tables:<连接>:<库>` 与 `tables:<连接>:<库>.<模式>`（SQL Server / PG 的模式层
+ * 用「库.模式」当 db）。「刷新库 / 刷新模式」的语义就是「这一层我要重看」，只清 `dbs:`
+ * 那份不够 —— 分类清单会被原样画回来，看起来像刷新没生效。
+ */
+export function removeSchemaCachesOfDb(connId, db) {
+  const base = 'tables:' + connId + ':' + String(db || '')
+  try {
+    const keys = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (!k || !k.startsWith(PREFIX)) continue
+      const short = k.slice(PREFIX.length)
+      // 精确匹配这个库，或它的模式（`库.模式`）；别误伤 `demo2` 这种同前缀的库
+      if (short === base || short.startsWith(base + '.')) keys.push(k)
+    }
+    keys.forEach(k => localStorage.removeItem(k))
+  } catch { /* ignore */ }
+}
+
 /** 清掉本模块写的全部缓存（不影响其它 localStorage 内容）。 */
 export function clearSchemaCache() {
   try {

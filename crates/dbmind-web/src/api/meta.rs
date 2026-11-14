@@ -135,16 +135,19 @@ async fn run_sql_in_inner(
     // SQL 层切库兜底（SQL Server）：与 run_meta_sql 同一套双保险 —— 影子连接负责把执行
     // 落到目标库，这里再用 `use [库];` 兜一层，行数/索引/DDL/用户操作驱动的语句同理
     // 不会因为落回主连接而打错库（用户实测过表清单串台）。
-    let sql = {
-        let base = require_record(state, conn).await?;
-        let dialect = Dialect::new(base.kind());
-        if dialect.wants_use_switch() {
-            let (db, _) = split_db_schema(database, &dialect);
-            if db.is_empty() { sql } else { format!("use {}; {}", dialect.quote(&db), sql) }
-        } else {
-            sql
-        }
+    let base = require_record(state, conn).await?;
+    let dialect = Dialect::new(base.kind());
+    let sql = if dialect.wants_use_switch() {
+        let (db, _) = split_db_schema(database, &dialect);
+        if db.is_empty() { sql } else { format!("use {}; {}", dialect.quote(&db), sql) }
+    } else {
+        sql
     };
+    // SQL Server：这条入口（表数据 / 行数 / 导出 / 行编辑…）拼出来的 SQL 里表名都不带模式，
+    // 而它没有会话级「默认模式」开关 —— 不补前缀就一律按 dbo 解析，`test` 模式下的表直接
+    // 报 `Invalid object name`（用户实测：双击 test 模式里的表加载失败）。
+    // 与编辑器同一条改写规则（见 `mssql_scope`），其它方言、没选模式时原样返回。
+    let sql = crate::api::mssql_scope::apply(state, conn, database, dialect, sql).await;
     let engine = state.engine();
     let schema = meta_schema_of(state, conn, database).await;
     let request = QueryRequest {
@@ -241,8 +244,14 @@ pub async fn run_write_sql_in(
 ) -> XResult<QueryResult> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
+    // 「库.模式」里的模式层要跟着一起下到驱动：SQL Server 改表/建表不写模式会落到默认模式
+    // （dbo），PG 同理（写路径不是编辑器那条会话，search_path 未必在目标模式上）。
+    let schema = {
+        let (_, dialect) = ctx_of(state, conn).await?;
+        split_db_schema(database, &dialect).1
+    };
     let started = std::time::Instant::now();
-    let outcome = run_write_sql_target(state, &target, sql.clone(), max_rows).await;
+    let outcome = run_write_sql_target(state, &target, sql.clone(), max_rows, schema).await;
     // 界面功能驱动的写库动作补记审计（internal 不进执行历史，但改库必须留痕）
     if audit {
         let engine = state.engine();
@@ -269,10 +278,11 @@ pub(crate) async fn run_write_sql_target(
     target: &str,
     sql: String,
     max_rows: usize,
+    schema: Option<String>,
 ) -> XResult<QueryResult> {
     let engine = state.engine();
     let request = QueryRequest {
-        schema: None,
+        schema,
         connection: target.to_string(),
         sql,
         options: QueryOptions {
@@ -986,9 +996,10 @@ pub async fn test(State(state): State<AppState>, Json(mut body): Json<Value>) ->
         Ok(Err(err)) => json!({
             "success": false,
             "code": err.code.as_str(),
-            // 配置类错误（缺 {database} 之类的占位符）仍补一句「去填哪个框」
+            // 配置类错误（缺 {database} 之类的占位符）仍补一句「去填哪个框」；
+            // 驱动原话里的 `ClientConnectionId: <guid>` 之类的内部标识一并剪掉
             "message": crate::api::error::with_hint(&err.message),
-            "detail": err.detail,
+            "detail": err.detail.as_deref().map(crate::api::error::scrub_noise),
         }),
         Err(join) => json!({
             "success": false,

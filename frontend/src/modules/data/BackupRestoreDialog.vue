@@ -27,6 +27,9 @@
               <span class="target-label">{{ $t('bkp.targetDatabase') }}</span>
               <span class="target-value">
                 <el-select v-if="showDbSelect" v-model="targetDatabase" :placeholder="$t('bkp.selectDatabase')" style="width: 100%" :loading="dbLoading" filterable>
+                  <template #prefix>
+                    <ScopeIcon kind="db" :conn-type="connType" />
+                  </template>
                   <el-option v-for="db in databases" :key="db" :label="db" :value="db" />
                 </el-select>
                 <!-- 没有「库」这一层的类型（Oracle / DM）：这一行只剩模式，服务名不上界面 -->
@@ -333,6 +336,7 @@ import { t, locale as uiLocale } from '../../utils/i18n'
 // 「库」这一层要不要画 / 显示什么（Oracle、DM 没有库层：它就是连接里填的服务名）
 import { hideDbLevelOf, dbDisplayOf } from '../../types'
 import { Download, FolderOpened, Folder, ArrowUp, Document, CircleClose, CircleCheck, Clock, Loading } from '@element-plus/icons-vue'
+import ScopeIcon from '../../common/ScopeIcon.vue'
 import {
   listDatabases,
   startBackup, backupTaskStatus, cancelBackup,
@@ -352,6 +356,8 @@ const props = defineProps({
   modelValue: Boolean,
   mode: { type: String, default: 'backup' }, // 'backup' | 'restore'
   connectionId: String,
+  // 连接类型（只用于「库」下拉的图标：有模式层=Folder、没有=Coin，与左侧树一致）
+  connType: { type: String, default: '' },
   database: { type: String, default: '' },
   // 任务中心「查看」带过来的任务 id：跳过向导，直接接回那条任务的进度与日志
   resumeTaskId: { type: String, default: '' }

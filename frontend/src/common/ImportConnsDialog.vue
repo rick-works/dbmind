@@ -266,7 +266,12 @@ const payloadOf = (item, targetName = '', targetId = '') => {
   delete payload._uid
   payload.id = targetId || ''
   if (targetName) payload.name = targetName
-  payload.password = item.pwd === PWD_INCLUDED ? (item.password || '') : ''
+  // PWD_ENCRYPTED 也要带过去：DBMind 自己导出的口令是**密文**（enc:v2:…），
+  // 同机导入后端能解开、直接可用；解不开时后端按"空口令"处理，不会写坏什么。
+  // Navicat/DBeaver 那种第三方加密串则不带（那是真的解不开，带过去只会变成乱码口令）。
+  payload.password = (item.pwd === PWD_INCLUDED || (item.pwd === PWD_ENCRYPTED && item.password && /^enc:v\d+:/.test(item.password)))
+    ? (item.password || '')
+    : ''
   if (!payload.sshPassword) payload.sshPassword = ''
   // 后端只认数字端口（`as_u64`），字符串会被静默丢掉退回默认端口
   for (const key of ['port', 'sshPort']) {

@@ -20,8 +20,13 @@ export const bareTable = (s) => String(s || '').replace(/[`"[\]]/g, '')
    · 早先写"精确前缀"（`startsWith('ALTER TABLE ' + qt(表) + ' ')`），表名写法差一点就整段匹配不上；
    · 后来改成 `[\w.$]+` 这类字符类，**JS 的 \w 不含中文**，于是 `` `订单` ``、`my table`、`a-b`
      这类表名**又是静默不合并**（用户在中文库上必踩），退回"先删后建"= 丢索引。
-   用 `[^\s]+` 就不会再有第三个坑。 */
-const ALTER_TABLE_RE = /^ALTER\s+TABLE\s+(`[^`]*`|"[^"]*"|\[[^\]]*\]|[^\s]+)\s+([\s\S]+)$/i
+   用 `[^\s]+` 就不会再有第三个坑。
+   再补一条：SQL Server 的表引用是**两段带引号**（`[test].[D_DATE]`），单个 `\[[^\]]*\]` 只能吃到
+   第一段，合并判断会一直不成立 —— 所以允许「按点拼接的多段标识符」。 */
+const IDENT_PART = '(`[^`]*`|"[^"]*"|\\[[^\\]]*\\]|[^\\s.`"\\[]+)'
+const ALTER_TABLE_RE = new RegExp(
+  `^ALTER\\s+TABLE\\s+(${IDENT_PART}(?:\\.${IDENT_PART})*)\\s+([\\s\\S]+)$`, 'i'
+)
 
 /**
  * @param {string}   table  本表名（已带方言引号，例如 `` `test` ``）

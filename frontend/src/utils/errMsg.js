@@ -36,8 +36,16 @@ export const cleanErrText = (raw) => {
     .join('\n')
     // 错误码前缀（`[DBMIND-CONN-0003] `）留给日志；界面上只留正文
     .replace(/\[DBMIND-[A-Z]+-\d+\]\s*/g, '')
+    // 内部标识跟正文挤在同一行，按行过滤挡不住：`用户 'x' 登录失败。ClientConnectionId:30dd…`
+    // —— 用户要的是「登录失败」，不是一串看不懂的 ID（后端也会剪，这里是兜底）
+    .replace(/\s*ClientConnectionId\s*[:=]\s*[0-9A-Za-z-]{8,}/gi, '')
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi, '')
     .replace(/。\s*,\s*/g, '。')      // Oracle 中文原话后面接了英文后缀（"…尝试失败。, Authentication…"）
     .replace(/[ \t]{2,}/g, ' ')
+    // 剪完标识常见的残渣：`。。`、`，。`、行尾多余的逗号/句号重复
+    .replace(/[，,]\s*。/g, '。')
+    .replace(/。{2,}/g, '。')
+    .replace(/[ \t]+$/gm, '')
     .trim()
   return out
 }

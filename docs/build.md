@@ -60,8 +60,10 @@ powershell -File scripts\build\package.ps1 -SkipCargo -SkipAgents -SkipFrontend
 打包结果才和发布包一致。别用 Oracle JDK —— 它走 NFTC 条款，随商业软件再分发的解释空间较大
 （Temurin 是 GPLv2 + Classpath Exception，分发无争议）。
 
-模块集必须含 `jdk.charsets`（少了 Doris 连不上，见 troubleshooting）与 `jdk.unsupported`
-（少了 DB2 报 `jdk.net.ExtendedSocketOptions`），两者都已在脚本里固定，不要手改。
+模块集必须含 `jdk.charsets`（少了 Doris 连不上，见 troubleshooting）与 `jdk.net`
+（少了 DB2 连不上：驱动初始化就摸 `jdk.net.ExtendedSocketOptions`，报
+`NoClassDefFoundError: jdk/net/ExtendedSocketOptions`），都已在脚本里固定，不要手改。
+`jdk.net` 只多出几 KB（实测 51.5 MB → 51.5 MB），没有裁剪掉的理由。
 
 
 ## 环境变量

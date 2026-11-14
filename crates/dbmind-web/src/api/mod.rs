@@ -37,6 +37,7 @@ pub mod export;
 pub mod import;
 pub mod meta;
 pub mod monitor;
+pub mod mssql_scope;
 pub mod nosql;
 pub mod query;
 pub mod scope;
@@ -309,7 +310,7 @@ pub fn routes() -> Router<AppState> {
             get(conn::get).put(conn::update).delete(conn::delete),
         )
         .route("/api/connections/{id}/copy", post(conn::copy))
-        // 导出连接（导出弹窗用）：唯一会按需带出明文口令的接口，见 conn::export 的说明
+        // 导出连接（导出弹窗用）：唯一会带出口令的接口，带的是**库里那份密文**，见 conn::export 的说明
         .route("/api/connections/export", post(conn::export))
         // 桌面壳（macOS / Linux 的 WebKit 没有另存为 API）：前端已拿到字节时，让内核写到用户选的路径。
         // 体积按导出量放宽（默认 2 MB 连一页 Excel 都不够）

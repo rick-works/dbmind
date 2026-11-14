@@ -590,6 +590,10 @@ fn message_of(result: &QueryResult, affected_rows: i64) -> String {
 
 /// 失败时的上游`QueryResult`（前端会把它当结果渲染并显示红色错误块）。
 pub fn query_failure_json(message: &str, execute_time: u64) -> Value {
+    // 结果网格里显示的是「数据库原话」——原话里的 `ClientConnectionId: <guid>` 这类
+    // 内部标识对用户没有任何意义，统一在这一层剪掉（连接测试弹窗走 error::scrub_noise）
+    let message = crate::api::error::scrub_noise(message);
+    let message = message.as_str();
     json!({
         "columns": [],
         "columnTypes": [],

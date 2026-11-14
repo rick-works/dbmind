@@ -126,6 +126,8 @@ impl DbStats {
 pub struct Store {
     conn: Mutex<Connection>,
     path: PathBuf,
+    /// 口令加解密用的密钥（懒加载，见 [`Store::secret_key`]）
+    secret: std::sync::OnceLock<crate::mask::MaskKey>,
 }
 
 impl Store {
@@ -171,10 +173,106 @@ impl Store {
         let store = Self {
             conn: Mutex::new(conn),
             path,
+            secret: std::sync::OnceLock::new(),
         };
         store.seed_settings()?;
         store.migrate_settings()?;
+        // 历史明文口令一次性迁移成密文（幂等：已有 `enc:v1:` 前缀的行不动）
+        store.migrate_secrets()?;
         Ok(store)
+    }
+
+    /// 口令加解密密钥：首次使用时从设置里取，没有就生成一把存进去。
+    ///
+    /// 单独一把键（不是脱敏的 `ai.maskKey`）：那个键在界面上可改，改一次就会把所有
+    /// 连接口令解不开。
+    fn secret_key(&self) -> crate::mask::MaskKey {
+        if let Some(key) = self.secret.get() {
+            return *key;
+        }
+        let text = {
+            let conn = self.lock();
+            let existing = conn
+                .query_row(
+                    "SELECT value FROM app_settings WHERE key = ?1",
+                    params![crate::secret::KEY_SETTING],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .ok()
+                .flatten()
+                .filter(|v| !v.trim().is_empty());
+            match existing {
+                Some(value) => value,
+                None => {
+                    let value = crate::mask::random_key_text();
+                    let _ = conn.execute(
+                        "INSERT INTO app_settings (key, value, updated_at) VALUES (?1, ?2, ?3) \
+                         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                        params![crate::secret::KEY_SETTING, value, now_iso()],
+                    );
+                    value
+                }
+            }
+        };
+        let key = crate::mask::key_from_text(&text);
+        let _ = self.secret.set(key);
+        key
+    }
+
+    /// 把历史明文口令就地加密。只跑一次，之后每行都带 `enc:v1:` 前缀，UPDATE 命中 0 行。
+    fn migrate_secrets(&self) -> Result<()> {
+        let key = self.secret_key();
+        let rows: Vec<(String, String)> = {
+            let conn = self.lock();
+            let mut stmt = conn.prepare(
+                "SELECT id, password FROM connections \
+                 WHERE password IS NOT NULL AND password <> '' AND password NOT LIKE 'enc:v2:%'",
+            )?;
+            let iter = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+            iter.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let conn = self.lock();
+        let mut changed = 0usize;
+        for (id, stored) in rows {
+            // 明文 → 直接加密；enc:v1:（确定性 nonce）→ 先解再按 v2 重封一遍
+            let plain = if crate::secret::is_encrypted(&stored) {
+                match crate::secret::decode(&stored, &key) {
+                    Some(value) => value,
+                    // 换机器带来的密文解不开：原样留着，别把它糟蹋成"空口令"
+                    None => continue,
+                }
+            } else {
+                stored
+            };
+            conn.execute(
+                "UPDATE connections SET password = ?2 WHERE id = ?1",
+                params![id, crate::secret::encode(&plain, &key)],
+            )?;
+            changed += 1;
+        }
+        if changed > 0 {
+            tracing::info!(changed, "连接口令已加密落盘（明文/v1 迁移完成）");
+        }
+        Ok(())
+    }
+
+    /// 库里存的那个原值（密文）。导出「带口令」时用它 —— 导出不再出现明文。
+    pub fn stored_password(&self, id_or_name: &str) -> Result<Option<String>> {
+        let record = self.require_connection(id_or_name)?;
+        let conn = self.lock();
+        let value = conn
+            .query_row(
+                "SELECT password FROM connections WHERE id = ?1",
+                params![record.id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        Ok(value)
     }
 
     pub fn path(&self) -> &Path {
@@ -188,22 +286,25 @@ impl Store {
     // ------------------------------------------------------------ 连接
 
     pub fn list_connections(&self) -> Result<Vec<ConnectionRecord>> {
+        // 密钥要在拿锁之前取：secret_key 内部自己也会拿同一把锁（Mutex 不可重入）
+        let key = self.secret_key();
         let conn = self.lock();
         let mut stmt = conn.prepare(&format!("{SELECT_CONNECTION} ORDER BY name COLLATE NOCASE"))?;
         let mut out = Vec::new();
         for row in stmt.query_map([], raw_connection)? {
-            out.push(row?.into_record()?);
+            out.push(row?.into_record(&key)?);
         }
         Ok(out)
     }
 
     /// 按 id 或名称查找（UI 两种都传，这里统一兜住）。
     pub fn find_connection(&self, id_or_name: &str) -> Result<Option<ConnectionRecord>> {
+        let key = self.secret_key();
         let conn = self.lock();
         let mut stmt = conn.prepare(&format!("{SELECT_CONNECTION} WHERE id = ?1 OR name = ?2 LIMIT 1"))?;
         let mut rows = stmt.query(params![id_or_name, id_or_name])?;
         match rows.next()? {
-            Some(row) => Ok(Some(raw_connection(row)?.into_record()?)),
+            Some(row) => Ok(Some(raw_connection(row)?.into_record(&key)?)),
             None => Ok(None),
         }
     }
@@ -223,6 +324,12 @@ impl Store {
         }
         let id = new_id("conn");
         let now = now_iso();
+        // 口令加密落盘（内存里始终是明文，见 crate::secret 的说明）
+        let key = self.secret_key();
+        let sealed = config
+            .password
+            .as_deref()
+            .map(|p| crate::secret::encode_if_plain(p, &key));
         let conn = self.lock();
         conn.execute(
             "INSERT INTO connections (id, name, kind, host, port, database_name, username, password, \
@@ -236,7 +343,7 @@ impl Store {
                 config.resolved_port(),
                 config.database,
                 config.username,
-                config.password,
+                sealed,
                 config.file_path,
                 config.color,
                 config.extra.as_ref().map(|v| v.to_string()),
@@ -258,6 +365,11 @@ impl Store {
                 ));
             }
         }
+        let key = self.secret_key();
+        let sealed = config
+            .password
+            .as_deref()
+            .map(|p| crate::secret::encode_if_plain(p, &key));
         let conn = self.lock();
         conn.execute(
             "UPDATE connections SET name = ?2, kind = ?3, host = ?4, port = ?5, database_name = ?6, \
@@ -271,7 +383,7 @@ impl Store {
                 config.resolved_port(),
                 config.database,
                 config.username,
-                config.password,
+                sealed,
                 config.file_path,
                 config.color,
                 config.extra.as_ref().map(|v| v.to_string()),
@@ -1032,7 +1144,8 @@ struct RawConnection {
 }
 
 impl RawConnection {
-    fn into_record(self) -> Result<ConnectionRecord> {
+    /// `key` = 口令密钥：落盘的是密文，这里解回明文（历史明文原样透传）
+    fn into_record(self, key: &crate::mask::MaskKey) -> Result<ConnectionRecord> {
         let kind = ConnectionKind::from_key(&self.kind).ok_or_else(|| {
             DbMindError::new(
                 ErrorCode::ConnTypeUnknown,
@@ -1056,7 +1169,9 @@ impl RawConnection {
                 port: self.port.and_then(|p| u16::try_from(p).ok()),
                 database: self.database_name,
                 username: self.username,
-                password: self.password,
+                password: self
+                    .password
+                    .map(|p| crate::secret::decode_or_plain(&p, key)),
                 file_path: self.file_path,
                 color: self.color,
                 extra,

@@ -1095,6 +1095,7 @@
     v-model="backupRestore.visible"
     :mode="backupRestore.mode"
     :connection-id="backupRestore.connectionId"
+    :conn-type="connFor(backupRestore.connectionId)?.type || ''"
     :database="backupRestore.database"
     :resume-task-id="backupRestore.resumeTaskId"
   />
@@ -1261,7 +1262,7 @@ import { renderMarkdown } from '../../utils/markdown'
 import { errMsg } from '../../utils/errMsg'
 import { PREDEF_ENVS, ENV_ORDER_BASE, envLabel, envColor, envShort, envTitle } from '../../utils/envs'
 import { desktopShell } from '../../utils/desktopShell'
-import { readSchemaCache, writeSchemaCache, removeSchemaCache, invalidateSchemaCache } from '../../utils/schemaCache'
+import { readSchemaCache, writeSchemaCache, removeSchemaCache, removeSchemaCachesOfDb, invalidateSchemaCache } from '../../utils/schemaCache'
 import { rememberConnNames, connNameOf } from '../../utils/connNames'
 import { connErrorRaw } from '../../utils/connErrors'
 // 脚本存储的读写口径（改名/删除与「脚本管理」弹窗共用，见 utils/sqlScripts.js）
@@ -7597,6 +7598,10 @@ const refreshDbNode = (db, connId) => {
   // 整库重载等同于「库列表要重新看」：连库列表的持久缓存一起丢，
   // 否则重载出来的还是那份旧库列表（新建的库要等 15 分钟 TTL 才出现）
   removeSchemaCache('dbs:' + cid)
+  // 这一库（以及它的各个模式）的表/视图清单也要丢：只重置节点的 loaded 状态的话，
+  // 重新展开时会先渲染 localStorage 里那份旧清单（15 分钟 TTL），
+  // 用户看到的就是「点了刷新，表还是之前那几张」
+  removeSchemaCachesOfDb(cid, String(db).split('.')[0])
   // 树里的库节点只有「库」这一层（模式是它的子节点），而调用方给的 db 可能是「库.模式」
   // （脚本的存储键就是这种形状，见 refreshScriptsNode）—— 直接用 `demo.dbo` 拼 key 会
   // 找不到节点，表现就是「改了名树上一动不动」。找不到就退回到库名再试一次。
@@ -7607,19 +7612,50 @@ const refreshDbNode = (db, connId) => {
     if (node2) { node = node2; break }
   }
   if (!node || !node.loaded) return
-  // 递归重置所有子节点的 loaded 状态，确保 Tables / Views / Procedures 等分类重新拉取
-  const resetLoaded = (n) => {
-    if (n.childNodes) {
-      for (const child of n.childNodes) {
-        child.loaded = false
-        child.isLeaf = false
-        resetLoaded(child)
-      }
+  resetSubtreeLoaded(node)
+  // 重载完再过滤一次：新拉出来的分类/表节点同样要服从顶部的搜索词
+  node.loadData(() => { reapplyTreeFilter() })
+}
+
+/**
+ * 递归重置某个节点整棵子树的懒加载状态（库 / 模式两级的「刷新」共用）。
+ *
+ * 只把顶层节点置 `loaded = false` 是不够的：el-tree 的懒加载是按节点记的，
+ * 子节点仍带着 `loaded = true`，重新展开时**不会再发请求**，看到的就是刷新前那份
+ * —— 「刷新表没用」正是这么来的。
+ */
+const resetSubtreeLoaded = (node) => {
+  const walk = (n) => {
+    if (!n.childNodes) return
+    for (const child of n.childNodes) {
+      child.loaded = false
+      child.isLeaf = false
+      walk(child)
     }
   }
-  resetLoaded(node)
+  walk(node)
   node.loaded = false
-  // 重载完再过滤一次：新拉出来的分类/表节点同样要服从顶部的搜索词
+}
+
+/**
+ * 刷新某个模式节点：只重载这一层。
+ *
+ * 库级刷新会把同库下所有模式一起收起来（用户正看着的模式也会消失），
+ * 而「刷新这一层的表」本来只需要动这一个模式。
+ */
+const refreshSchemaNode = (dbFull, connId) => {
+  const tree = treeRef.value
+  const cid = connId || currentConnId.value
+  if (!tree || !cid || !dbFull) return
+  const [realDb, schema] = String(dbFull).split('.')
+  if (!schema) { refreshDbNode(realDb, cid); return }
+  // 这条缓存键就是「库.模式」这一份清单
+  removeSchemaCachesOfDb(cid, realDb + '.' + schema)
+  const node = tree.store?.nodesMap?.['schema:' + cid + ':' + realDb + ':' + schema]
+  // 模式节点还没建出来（没展开过库）：退回整库刷新，别让「刷新」变成无声无息
+  if (!node) { refreshDbNode(realDb, cid); return }
+  if (!node.loaded) return
+  resetSubtreeLoaded(node)
   node.loadData(() => { reapplyTreeFilter() })
 }
 
@@ -7658,17 +7694,34 @@ const refreshCatNode = async (db, cat, connId) => {
     else if (cat === 'users') items = await listUsers(cid, db).catch(() => [])
     else if (cat === 'scripts') items = getDbScripts(cid, db)
     else return
+    // 原始清单按分类收敛：表与视图同源（`/tables` 一次返回两类）、过程与函数同源，
+    // 不收敛的话「视图」的计数会等于「表+视图」，列表也会混进另一类
+    let mine = Array.isArray(items) ? items : []
+    if (cat === 'tables' || cat === 'views') {
+      const want = cat === 'tables' ? 'TABLE' : 'VIEW'
+      mine = mine.filter(t => (t.type || 'TABLE') === want)
+    } else if (cat === 'procs' || cat === 'functions') {
+      mine = mine.filter(o => (cat === 'functions' ? isFunctionRoutine(o) : !isFunctionRoutine(o)))
+    }
     if (cat === 'tables' && db === currentDb.value) {
       // 同步「表名下拉」数据源（与 refreshAllTables 同构：仅表、不含视图）
-      allTables.value = (Array.isArray(items) ? items : []).filter(t => (t.type || 'TABLE') === 'TABLE')
+      allTables.value = mine
     }
     // 「刷新」拿到的就是最新清单，顺手把精确行数也回填。
     // 不回填的后果：刚建的表刷新后仍然没有数字（回填只发生在"第一次取到列表"那几条路上，
     // 而刷新走的是这里）。与上面 loadCategoryItems 的口径一致。
-    if (cat === 'tables') fillRealRowCounts(cid, db, items)
+    if (cat === 'tables') fillRealRowCounts(cid, db, mine)
     // 把刚拿到的清单写回持久缓存：刷新之后这次的结果就是「已知的最新」，
-    // 下次展开直接用它渲染，不必再打一次库
+    // 下次展开直接用它渲染，不必再打一次库（缓存里存的是**原始清单**，与 loadCategoryItems 一致）
     if (catKey && Array.isArray(items)) writeSchemaCache(catKey, items)
+    // 计数与「这一类的清单」必须一起更新：
+    // 树上的数字读的是响应式表 catCounts（见 catCountText），展开时读的是节点上的 catItems。
+    // 以前这里只换了子节点，两处都没动 —— 用户点「刷新」后数字依旧是旧的 0，
+    // 收起再展开还会被 catItems 里的旧清单盖回去，体感就是「刷新没用」。
+    node.data.catItems = mine
+    node.data.catCount = mine.length
+    node.data.catLoaded = true
+    catCounts.value[node.id] = mine.length
     const children = buildCatChildren({ cat, connId: cid, db, items })
     // 作废可能还在跑的"后台补页"链：它的清单是刷新**之前**的，继续补就会把这份新清单覆盖回去
     bumpGrowGen(key)
@@ -8850,6 +8903,12 @@ const dbCtxRefresh = () => {
   const d = treeCtxMenu.value.data
   if (!d) return
   closeTreeCtxMenu()
+  // 模式节点的右键菜单复用的是「库」那一套，但动作必须只作用在这个模式上：
+  // 菜单里的 d.db 已经被换成 realDb（库名），完整的「库.模式」要从 realDb + schema 拼回来
+  if (d.kind === 'schema' && d.schema) {
+    refreshSchemaNode((d.realDb || d.db) + '.' + d.schema, d.connId)
+    return
+  }
   refreshDbNode(d.db, d.connId)
 }
 

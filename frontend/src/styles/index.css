@@ -981,6 +981,10 @@ html[data-theme="dark"] .el-popper__arrow::before { background: var(--dc-bg-pop)
 /* 选择框前缀的连接图标（组件默认前缀槽） */
 .sel-logo { margin-right: 4px; }
 
+/* 「范围」类下拉的前缀图标 —— **与左侧对象树同一个节点同色同形**（组件见 common/ScopeIcon.vue，
+   颜色由组件按 kind 给：库/模式/目录=琥珀、表=蓝、视图=绿）。这里只管尺寸与间距。 */
+.scope-ic { font-size: 13px; margin-right: 4px; flex: none; }
+
 /* ==================== 结果表格：类 Excel 框选 ==================== */
 .data-table { user-select: none; -webkit-user-select: none; }
 .data-table .cell-input, .data-table input, .data-table .editing-input { user-select: text; -webkit-user-select: text; }

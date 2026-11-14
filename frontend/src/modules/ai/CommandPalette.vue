@@ -50,6 +50,9 @@
             :loading="loadingDbs"
             :disabled="!activeConn"
           >
+            <template #prefix>
+              <ScopeIcon kind="db" :conn-type="activeConn?.type" />
+            </template>
             <el-option v-for="d in dbs" :key="d" :label="d" :value="d" />
           </el-select>
           <el-select
@@ -63,6 +66,9 @@
             :loading="loadingSchemas"
             :disabled="!database"
           >
+            <template #prefix>
+              <ScopeIcon kind="schema" />
+            </template>
             <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
           </el-select>
           <!-- 状态收成行尾一个小图标：详情走悬浮提示，不再另起一行悬挂在下拉下方 -->
@@ -137,6 +143,8 @@ import { aiPlan } from '../../api'
 import { useAiContext, truncateError } from './useAiContext'
 // 连接下拉（分组 → 连接 两级，组头可展开/收起）全项目共用一个组件
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
+// 「范围」图标（与左侧对象树同色同形）
+import ScopeIcon from '../../common/ScopeIcon.vue'
 
 const props = defineProps({ modelValue: Boolean, conn: Object, database: String })
 const emit = defineEmits(['update:modelValue', 'run-plan'])

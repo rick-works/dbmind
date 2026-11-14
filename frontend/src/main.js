@@ -1,4 +1,4 @@
-import { createApp } from 'vue'
+import { createApp, nextTick } from 'vue'
 // 安全拦截（只读 / 生产保护）统一走右上角通知：中间的 ElMessage 出口处过滤掉重复那条
 import { consumeSafetyMessage } from './utils/safetyNotice'
 // ==================== Element Plus 按需引入 ====================

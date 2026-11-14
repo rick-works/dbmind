@@ -12,6 +12,9 @@
              请求仍然带完整串（`服务名.模式`），只是不再把服务名摆到界面上。 -->
         <span v-if="hideDbLevel" class="ols-db-text" :title="dbShown">{{ dbShown || $t('upv.phPickDb') }}</span>
         <el-select v-else ref="dbSelRef" v-model="curDb" size="small" class="ols-db" filterable :placeholder="$t('upv.phPickDb')" @change="load">
+          <template #prefix>
+            <ScopeIcon kind="db" :conn-type="connType" />
+          </template>
           <el-option v-for="d in dbOptions" :key="d" :label="d" :value="d" />
         </el-select>
         <el-input v-model="keyword" size="small" clearable :placeholder="$t('ols.search')"
@@ -134,6 +137,7 @@
 import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Search, Refresh, Document, Calendar, Histogram, Delete, EditPen } from '@element-plus/icons-vue'
+import ScopeIcon from '../../common/ScopeIcon.vue'
 import { t } from '../../utils/i18n'
 import { editorSettingsLive } from '../../utils/settings'
 import { formatDbValue } from '../../utils/cellValue'

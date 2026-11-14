@@ -185,7 +185,7 @@ dbmind.db-shm     共享内存索引
 
 ## 6. 运维注意点
 
-1. **明文凭据**：`dbmind.db` 里 `connections.password` 与 `ai_settings` / `ai_models` 的 `api_key` **都是明文**（设计如此，未加密）。整个 `~/.dbmind` 目录不要随意外发；"导出连接"生成的包是**不含口令**的，那个可以直接分享。
+1. **凭据形态**：`connections.password` 现在是**密文**（`enc:v2:` + AES-256-GCM + 每次随机 nonce，密钥在 `app_settings.app.secretKey`，跟机器/用户绑定），历史明文与早期的 `enc:v1:`（确定性 nonce）在启动时自动迁移；`ai_settings` / `ai_models` 的 `api_key` 仍是明文（未纳入这一轮）。整个 `~/.dbmind` 目录依然不要随意外发。"导出连接"生成的包默认**不含口令**；勾了「导出密码」带出去的是**密文**，只能在同一台机器上解回来（换机器导入等于没填口令），所以那个包也不再是"拿到就能连"的东西。
 2. **备份**：先停服，再整体拷贝 `~/.dbmind`；至少要连 `dbmind.db-wal` / `-shm` 一起拷。
 3. **清理磁盘**：占用大头通常是 `dbmind.db`、`exports/`、`backups/`、`work/`、`drivers/`、`logs/`。审计记录现在在 `ai_audit` 表里（以前是只增不减的 `ai-audit.log`），长期使用可以直接删旧行：`DELETE FROM ai_audit WHERE time < '2026-01-01'`。
 4. **迁移**：设 `DBMIND_HOME` 指向新目录即可，所有文件跟着走。

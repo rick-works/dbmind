@@ -37,6 +37,10 @@
         :loading="loadingDbs"
         :disabled="!activeConn"
       >
+        <!-- 图标口径与左侧对象树一致（逐级同色同形，见 common/ScopeIcon.vue） -->
+        <template #prefix>
+          <ScopeIcon kind="db" :conn-type="activeConn?.type" />
+        </template>
         <el-option v-for="d in dbs" :key="d" :label="d" :value="d" />
       </el-select>
       <el-select
@@ -49,6 +53,9 @@
         :loading="loadingSchemas"
         :disabled="!database"
       >
+        <template #prefix>
+          <ScopeIcon kind="schema" />
+        </template>
         <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
       </el-select>
       <!-- 操作按钮统一放在弹窗底部 -->
@@ -260,6 +267,8 @@ import { t, te, locale } from '../../utils/i18n'
 import QualityRulePanel from './QualityRulePanel.vue'
 // 连接下拉（分组 → 连接 两级，组头可展开/收起）全项目共用一个组件
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
+// 「范围」图标（与左侧对象树同色同形）
+import ScopeIcon from '../../common/ScopeIcon.vue'
 import QualityAnalysisPanel from './QualityAnalysisPanel.vue'
 
 const props = defineProps({

@@ -368,6 +368,10 @@ import { CH_ENGINES } from './chEngines'
 
 const props = defineProps({
   features: { type: Object, default: () => ({}) },
+  // 「库」或「库.模式」（schema 型库在树上就是这么拼的）。SQL Server 必须用它：
+  // 建表语句不写模式 ⇒ 落到登录名的默认模式（dbo），用户在 test 模式下建表会撞上
+  // 「对象已存在」——dbo 里那张同名表。见 schemaOf / qn。
+  database: { type: String, default: '' },
   editMode: { type: Boolean, default: false }
 })
 const emit = defineEmits(['sql'])
@@ -375,6 +379,12 @@ const emit = defineEmits(['sql'])
 const activeTab = ref('basic')
 
 const isClickHouse = computed(() => ddlStyleOf(props.features) === 'clickhouse')
+/** `props.database` 里的模式层（「库.模式」按第一个点拆，与后端 split_db_schema 同口径） */
+const schemaOf = () => {
+  const raw = String(props.database || '')
+  const i = raw.indexOf('.')
+  return i >= 0 ? raw.slice(i + 1).trim() : ''
+}
 const isDoris = computed(() => has(props.features, 'doris') || ddlStyleOf(props.features) === 'doris')
 // 各列是否显示由后端 features（数据源能力）决定 —— 与「编辑表结构」逐条对齐：
 // 主键列在 Doris / ClickHouse 下整列不显示（这两边没有"每列主键"概念，摆一列「—」不如不显示）
@@ -883,7 +893,11 @@ const genSql = () => {
   const f = props.features
   const tName = form.name.trim()
   if (!tName) return ''
-  const qn = qt(f, tName)
+  // SQL Server 的表引用**必须带模式**：不写就按登录名的默认模式（通常 dbo）解析，
+  // 于是在 test 模式下建表会报「对象已存在」（dbo 里那张同名表），改表更会改错对象。
+  const mssqlSchema = style === 'mssql' ? (schemaOf() || 'dbo') : ''
+  const bare = qt(f, tName)
+  const qn = mssqlSchema ? qt(f, mssqlSchema) + '.' + bare : bare
   const validCols = cols.filter(c => c.name.trim())
   if (!validCols.length) return ''
 
@@ -967,7 +981,8 @@ const genSql = () => {
 
   // 表注释（PG / Oracle / MSSQL）
   if (form.comment && style !== 'mysql' && has(f, 'supportsComment')) {
-    if (style === 'mssql') parts.push(`EXEC sp_addextendedproperty 'MS_Description', '${sq(form.comment)}', 'SCHEMA', dbo, 'TABLE', ${qn}`)
+    // 模式名以前写死 `dbo`：在别的模式下建表，注释会被挂到 dbo 上（找不到对象直接报错）
+    if (style === 'mssql') parts.push(`EXEC sp_addextendedproperty 'MS_Description', '${sq(form.comment)}', 'SCHEMA', N'${sq(mssqlSchema || 'dbo')}', 'TABLE', N'${sq(tName)}'`)
     else parts.push(`COMMENT ON TABLE ${qn} IS '${sq(form.comment)}'`)
   }
 

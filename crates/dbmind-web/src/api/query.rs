@@ -270,6 +270,10 @@ pub async fn execute(
         crate::api::export::strip_stmt_semicolon(&base_sql).to_string()
     };
 
+    // SQL Server 没有会话级「默认模式」开关（JDBC 的 setSchema 在 mssql-jdbc 上无效），
+    // 选了模式就必须把未限定表名按它改写，否则永远按 dbo 解析。其它方言原样返回。
+    let effective = crate::api::mssql_scope::apply(&state, &id, &database, dialect, effective).await;
+
     let engine = state.engine();
     // 两个设置一次读回来（见 query_limits）：原来这里要两次线程切换 + 两次库读
     let (cap, timeout_ms) = query_limits(&state).await;
@@ -393,6 +397,14 @@ pub async fn count(
     }
     // 与主执行同一纪律：统计也要「去掉末尾分号」的原句（带分号进派生表是语法错误）
     let bare = sql.trim().trim_end_matches(';').trim().to_string();
+    // 与主执行同一个口径（SQL Server 的模式改写）：否则数据是 test 模式、总数却按 dbo 数，
+    // 两个数对不上比不显示更糟
+    let bare = match crate::api::meta::ctx_of(&state, &id).await {
+        Ok((_, dialect)) => {
+            crate::api::mssql_scope::apply(&state, &id, &database, dialect, bare).await
+        }
+        Err(_) => return Ok(Json(json!({ "success": false, "totalCount": -1 }))),
+    };
     // 不限时（原 10s 预算已放开，用户要求）：数据早已回显，计数想跑多久跑多久。
     // 会话池的全局配额与前端 seq 守卫兜底：长跑的计数最多占住一条空闲会话，
     // 过期计数结果会被前端直接丢弃，不会串到新查询上。

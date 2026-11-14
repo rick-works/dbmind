@@ -6,8 +6,10 @@ import { saveBlobAs } from './useExportTask'
  * 三条口径：
  * 1. 文件格式 `{ format:'dbmind-connections', version:1, exportedAt, note, connections:[…] }`，
  *    导入端**也认裸数组**（别的工具/手写的 JSON 都能进）。
- * 2. **口令一律不导出**：内核的连接详情从来不下发口令（`ConnectionConfig::password` 标了
- *    skip_serializing），所以不做"加密导出"这种办不到的承诺 —— 文件里写明 note，导入后补填。
+ * 2. **口令默认不导出，勾了也只给密文**：内核的连接详情从来不下发口令
+ *    （`ConnectionConfig::password` 标了 skip_serializing）。勾了「导出密码（密文）」时走
+ *    `/api/connections/export`，拿回的是**库里那份密文**（`enc:v2:`），导入端原样写回即可
+ *    （同机可解，换机器等于没填口令）。**明文永远不出库**。
  * 3. 导出时剔除**服务端生成 / 只读**的字段（id、时间戳、hasPassword…），导入端再清空口令，
  *    这样导出的文件可以直接再导入回去。
  */
@@ -57,16 +59,6 @@ export function parseConnectionBundle(rawText) {
     && String(c.name || '').trim() && String(c.type || '').trim())
   if (!valid.length) return { error: t('dsp.noValidConn') }
   return { list: valid }
-}
-
-/** 导入用的一条 payload：清掉 id 与口令（空口令 = 没设置，不会覆盖已存的） */
-export function importPayloadOf(item, group) {
-  const payload = sanitizeConnection(item)
-  payload.id = ''
-  payload.password = ''
-  payload.sshPassword = ''
-  if (group) payload.group = group
-  return payload
 }
 
 /**

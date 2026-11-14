@@ -29,6 +29,9 @@
           :loading="dbLoading"
           @change="onDbChange"
         >
+          <template #prefix>
+            <ScopeIcon kind="db" :conn-type="activeConn?.type" />
+          </template>
           <el-option v-for="db in dbOptions" :key="db" :label="db" :value="db" />
         </el-select>
         <el-tooltip content="只执行只读查询（SELECT），不会改动任何数据" placement="bottom">
@@ -147,6 +150,8 @@ import {
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
+// 「范围」图标（与左侧对象树同色同形）
+import ScopeIcon from '../../common/ScopeIcon.vue'
 import AskAnswer from './AskAnswer.vue'
 import { mergeStep } from './askSteps.js'
 import { listConnections, listDatabases, aiAskStream, aiAskExamples } from '../../api/index.js'
@@ -164,6 +169,8 @@ const SRC_KEY = 'dbmind.chatbi.source'
 const connOptions = ref([])
 const connId = ref('')
 const database = ref('')
+// 当前连接（拿 type 决定「库」这一级的图标：有模式层=Folder、没有=Coin，与左侧树一致）
+const activeConn = computed(() => connOptions.value.find((c) => String(c.id) === String(connId.value)) || null)
 const dbOptions = ref([])
 const dbLoading = ref(false)
 const examples = ref([])

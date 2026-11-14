@@ -552,10 +552,32 @@ const ddlText = ref('')
 
 // ==================== SQL Server 专属辅助 ====================
 
+/** 「库.模式」里的模式层（与后端 split_db_schema 同口径）；取不到就当 dbo */
+const mssqlSchemaOf = () => {
+  const raw = String(props.database || '')
+  const i = raw.indexOf('.')
+  const s = i >= 0 ? raw.slice(i + 1).trim() : ''
+  return s || 'dbo'
+}
 const mssqlParts = () => {
   const t = String(props.table || '')
   if (t.includes('.')) { const i = t.indexOf('.'); return { schema: t.slice(0, i), table: t.slice(i + 1) } }
-  return { schema: 'dbo', table: t }
+  // 以前这里写死 'dbo'：在 test 模式下编辑表，注释 / 默认值 / 改名全打到 dbo 上，
+  // 轻则没效果、重则改错对象。模式就从页签的 database（「库.模式」）取。
+  return { schema: mssqlSchemaOf(), table: t }
+}
+/** 拼进 SQL 的表引用：SQL Server 必须带模式（否则按登录名默认模式 dbo 解析），
+ *  PG 系同理（改表走的是 kernel 写路径，会话不一定切到目标 search_path），
+ *  其余方言（MySQL / Oracle / H2 / 文件型）维持裸表名。 */
+const qTable = () => {
+  const t = String(props.table || '').trim()
+  if (!t || t.includes('.')) return qt(t)
+  if (ddlStyle.value === 'mssql') return qt(mssqlSchemaOf()) + '.' + qt(t)
+  if (ddlStyle.value === 'pg') {
+    const schema = pgSchemaOf()
+    if (schema) return qt(schema) + '.' + qt(t)
+  }
+  return qt(t)
 }
 const mssqlCommentSql = (kind, comment, columnName) => {
   const { schema, table } = mssqlParts()
@@ -1460,7 +1482,7 @@ const buildColumnSql = (f, isEdit) => {
   // 但 **3.25+ 支持 RENAME COLUMN** —— 字段名放开，只生成改名这一条。
   if (ddlStyle.value === 'sqlite' && isEdit) {
     if (f.name.trim() !== String(f.oldName || '').trim()) {
-      return `ALTER TABLE ${qt(props.table)} RENAME COLUMN ${qt(f.oldName)} TO ${qt(f.name.trim())}`
+      return `ALTER TABLE ${qTable()} RENAME COLUMN ${qt(f.oldName)} TO ${qt(f.name.trim())}`
     }
     return null
   }
@@ -1469,11 +1491,11 @@ const buildColumnSql = (f, isEdit) => {
   // （RENAME COLUMN 旧 TO 新 是 ANSI 形式）；其它属性按 supportsColumnModify=false 保持只读。
   if (ddlStyle.value === 'generic' && isEdit) {
     if (f.name.trim() !== String(f.oldName || '').trim()) {
-      return `ALTER TABLE ${qt(props.table)} RENAME COLUMN ${qt(f.oldName)} TO ${qt(f.name.trim())}`
+      return `ALTER TABLE ${qTable()} RENAME COLUMN ${qt(f.oldName)} TO ${qt(f.name.trim())}`
     }
     return null
   }
-  const t = qt(props.table)
+  const t = qTable()
   const dv = String(f.defaultValue ?? '').trim()
   // 默认值统一走 defaultLiteral（见上方注释：各家读回来的原生表达式已由 unwrapDefault 剥壳）
   // Doris：`MODIFY COLUMN` **必须**带上列的聚合类型 —— key 列写 `KEY`，value 列写它自己的
@@ -1987,7 +2009,7 @@ const colParts = () => {
   const pkDirty = ['mysql', 'doris', 'mssql', 'pg'].includes(ddlStyle.value) && pkDiff.value
   if (!removed.length && !added.length && !modified.length && !pkDirty) return []
   const parts = []
-  const t = qt(props.table)
+  const t = qTable()
   // Doris 与 MySQL 同一套：它走 MySQL 协议，DROP/ADD/MODIFY COLUMN 都一致。
   // （分支里的自增相关处理对 Doris 是空转 —— Doris 没有 auto_increment，能力位也是 false。）
   if (ddlStyle.value === 'mysql' || ddlStyle.value === 'doris') {
@@ -2135,7 +2157,7 @@ const optParts = () => {
   // **表注释除外**：实测 `ALTER TABLE t MODIFY COMMENT '…'` 可用（与 ClickHouse 同语法）
   if (!optsChanged.value) return []
   const f = tableForm.value
-  const t = qt(props.table)
+  const t = qTable()
   if (isDoris.value) {
     // 同 optsChanged：与**权威基线**（表清单现状）比较，不用可能被踩脏的快照
     const base = tablesRef.value.find(x => x.name === props.table)?.comment ?? (optsBase.comment || '')
@@ -2212,7 +2234,7 @@ const mergeableIndexDialect = computed(() => ['mysql', 'doris'].includes(ddlStyl
 const scriptParts = computed(() => {
   const parts = [...idxDropParts(), ...colParts(), ...idxCreateParts(), ...optParts()]
   return canMergeAlter.value
-    ? mergeAlterRuns({ table: qt(props.table), kind: ddlStyle.value, parts })
+    ? mergeAlterRuns({ table: qTable(), kind: ddlStyle.value, parts })
     : parts
 })
 /** SQL 预览是否收起（预览已移到编辑区下方，可折叠；默认展开） */
@@ -2416,7 +2438,7 @@ const indexAddStatement = (f) => {
   // PRIMARY 不是普通索引：MySQL 里 `ADD INDEX \`PRIMARY\` (…)` 会被拒（"Duplicate key name" 之类），
   // 必须写成 `ADD PRIMARY KEY (…)`。改主键行（换列）时走这里。
   if (ddlStyle.value === 'mysql' && String(f.name || '').toUpperCase() === 'PRIMARY') {
-    return `ALTER TABLE ${qt(props.table)} ADD PRIMARY KEY (${cols})`
+    return `ALTER TABLE ${qTable()} ADD PRIMARY KEY (${cols})`
   }
   const unique = f.unique ? 'UNIQUE ' : ''
   const ft = f.indexType === 'FULLTEXT' ? 'FULLTEXT ' : (f.indexType === 'SPATIAL' ? 'SPATIAL ' : '')
@@ -2424,7 +2446,7 @@ const indexAddStatement = (f) => {
   // 列清单在前、USING 在后：这是 **Doris** 的写法（`ADD INDEX name (cols) USING BTREE`），
   // 实测 MySQL 也接受（`ADD [UNIQUE|FULLTEXT] INDEX name (cols) [USING X]` 都通过）——
   // 一份语句同时喂两家，不必按方言分叉。
-  return `ALTER TABLE ${qt(props.table)} ADD ${unique}${ft}INDEX ${qt(f.name)} (${cols})${using}`
+  return `ALTER TABLE ${qTable()} ADD ${unique}${ft}INDEX ${qt(f.name)} (${cols})${using}`
 }
 
 const createIndexSql = (f) => {
@@ -2435,19 +2457,19 @@ const createIndexSql = (f) => {
   if (ddlStyle.value === 'mysql') {
     const ft = f.indexType === 'FULLTEXT' ? 'FULLTEXT ' : (f.indexType === 'SPATIAL' ? 'SPATIAL ' : '')
     const using = (f.indexType === 'BTREE' || f.indexType === 'HASH') ? ` USING ${f.indexType}` : ''
-    return `CREATE ${unique}${ft}INDEX ${qt(f.name)}${using} ON ${qt(props.table)} (${cols})`
+    return `CREATE ${unique}${ft}INDEX ${qt(f.name)}${using} ON ${qTable()} (${cols})`
   }
   if (ddlStyle.value === 'pg') {
-    return `CREATE ${unique}INDEX ${qt(f.name)} ON ${qt(props.table)} USING ${f.indexType || 'btree'} (${cols})`
+    return `CREATE ${unique}INDEX ${qt(f.name)} ON ${qTable()} USING ${f.indexType || 'btree'} (${cols})`
   }
   // Doris：类型是 USING 后缀（INVERTED / BITMAP / BLOOMFILTER）
   if (isDoris.value) {
-    return `CREATE ${unique}INDEX ${qt(f.name)} ON ${qt(props.table)} (${cols})${it ? ' USING ' + it : ''}`
+    return `CREATE ${unique}INDEX ${qt(f.name)} ON ${qTable()} (${cols})${it ? ' USING ' + it : ''}`
   }
   // Oracle：BITMAP / UNIQUE 是 CREATE 与 INDEX 之间的修饰词（NORMAL 就是普通索引）
   if (ddlStyle.value === 'oracle') {
     const pre = (up === 'BITMAP' ? 'BITMAP ' : '') + (f.unique || up === 'UNIQUE' ? 'UNIQUE ' : '')
-    return `CREATE ${pre}INDEX ${qt(f.name)} ON ${qt(props.table)} (${cols})`
+    return `CREATE ${pre}INDEX ${qt(f.name)} ON ${qTable()} (${cols})`
   }
   // SQL Server：CLUSTERED / NONCLUSTERED / COLUMNSTORE / UNIQUE 也是前置修饰词
   if (ddlStyle.value === 'mssql') {
@@ -2456,9 +2478,9 @@ const createIndexSql = (f) => {
     if (up.includes('NONCLUSTERED')) pre += 'NONCLUSTERED '
     else if (up.includes('CLUSTERED')) pre += 'CLUSTERED '
     if (f.unique || up === 'UNIQUE') pre += 'UNIQUE '
-    return `CREATE ${pre}INDEX ${qt(f.name)} ON ${qt(props.table)} (${cols})`
+    return `CREATE ${pre}INDEX ${qt(f.name)} ON ${qTable()} (${cols})`
   }
-  return `CREATE ${unique}INDEX ${qt(f.name)} ON ${qt(props.table)} (${cols})`
+  return `CREATE ${unique}INDEX ${qt(f.name)} ON ${qTable()} (${cols})`
 }
 
 /**
@@ -2489,7 +2511,7 @@ const idxPureRename = (r) => {
 
 /** 改索引名的原生语句（调用前先用 canRenameIndex 判断方言） */
 const renameIndexSql = (from, to) => {
-  const t = qt(props.table)
+  const t = qTable()
   if (ddlStyle.value === 'mysql') return `ALTER TABLE ${t} RENAME INDEX ${qt(from)} TO ${qt(to)}`
   return `ALTER INDEX ${qt(from)} RENAME TO ${qt(to)}`
 }
@@ -2498,7 +2520,7 @@ const autoIncrementCol = () => (columns.value || []).find(c => /auto_increment/i
 // MySQL 删除包含自增列的主键时，需先给自增列补一个索引，否则 DROP PRIMARY KEY 会报 1075
 const mySqlDropPrimaryKeySql = () => {
   const autoCol = autoIncrementCol()
-  if (!autoCol) return `ALTER TABLE ${qt(props.table)} DROP PRIMARY KEY`
+  if (!autoCol) return `ALTER TABLE ${qTable()} DROP PRIMARY KEY`
 
   // 若已有其他索引包含该自增列，可直接删主键
   const hasOtherIdx = idxRows.value.some(r =>
@@ -2506,7 +2528,7 @@ const mySqlDropPrimaryKeySql = () => {
     String(r.name).toUpperCase() !== 'PRIMARY' &&
     (r.columns || []).some(c => String(c).trim().toLowerCase() === String(autoCol.name).trim().toLowerCase())
   )
-  if (hasOtherIdx) return `ALTER TABLE ${qt(props.table)} DROP PRIMARY KEY`
+  if (hasOtherIdx) return `ALTER TABLE ${qTable()} DROP PRIMARY KEY`
 
   // 兜底索引名走全库统一约定 <表名>_<字段名>_idx（见 utils/indexName.js）；
   // 万一这个名字已经被占用（同表里已有同名索引），依次加 _2/_3 后缀 —— 重名会让整条语句失败
@@ -2518,8 +2540,8 @@ const mySqlDropPrimaryKeySql = () => {
   for (let i = 2; used.has(fallbackName.toLowerCase()) && i < 100; i++) fallbackName = `${base}_${i}`
   const fallback = qt(fallbackName)
   const colName = qt(autoCol.name)
-  return `ALTER TABLE ${qt(props.table)} ADD INDEX ${fallback} (${colName});\n` +
-    `ALTER TABLE ${qt(props.table)} DROP PRIMARY KEY`
+  return `ALTER TABLE ${qTable()} ADD INDEX ${fallback} (${colName});\n` +
+    `ALTER TABLE ${qTable()} DROP PRIMARY KEY`
 }
 
 const dropIndexSql = (name) => {
@@ -2531,9 +2553,9 @@ const dropIndexSql = (name) => {
     if (ddlStyle.value === 'mysql' && String(name).toUpperCase() === 'PRIMARY') {
       return mySqlDropPrimaryKeySql()
     }
-    return `ALTER TABLE ${qt(props.table)} DROP INDEX ${qt(name)}`
+    return `ALTER TABLE ${qTable()} DROP INDEX ${qt(name)}`
   }
-  if (ddlStyle.value === 'mssql') return `DROP INDEX ${qt(name)} ON ${qt(props.table)}`
+  if (ddlStyle.value === 'mssql') return `DROP INDEX ${qt(name)} ON ${qTable()}`
   return `DROP INDEX ${qt(name)}`
 }
 
@@ -2574,7 +2596,7 @@ const rebuildIndex = async (row) => {
         // 而分开执行又意味着**逐条隐式提交** —— 第二句失败就把主键弄没了（用户要求：
         // 失败不破坏原结构）。一条语句没有中间态。
         // `includesAuto` 只影响提示文案，语句形态与是否自增无关。
-        sql = `ALTER TABLE ${qt(props.table)} DROP PRIMARY KEY, ADD PRIMARY KEY (${cols})`
+        sql = `ALTER TABLE ${qTable()} DROP PRIMARY KEY, ADD PRIMARY KEY (${cols})`
       } else {
         const unique = row.unique ? 'UNIQUE ' : ''
         const ft = row.indexType === 'FULLTEXT' ? 'FULLTEXT ' : (row.indexType === 'SPATIAL' ? 'SPATIAL ' : '')
@@ -2582,7 +2604,7 @@ const rebuildIndex = async (row) => {
         // 同样并成一条：`DROP INDEX` + `ADD INDEX` 同句是原子的（实测：任一句非法则整条不生效，
         // 索引与列都保持原样）。原先写成 `DROP INDEX …; CREATE INDEX … ON …` 两条，
         // 第二条失败就丢索引 —— 而"重建索引"本来就是来修索引的，不能再把索引弄没。
-        sql = `ALTER TABLE ${qt(props.table)} DROP INDEX ${qt(row.name)}, ` +
+        sql = `ALTER TABLE ${qTable()} DROP INDEX ${qt(row.name)}, ` +
           `ADD ${unique}${ft}INDEX ${qt(row.name)} (${cols})${using}`
       }
     } else {

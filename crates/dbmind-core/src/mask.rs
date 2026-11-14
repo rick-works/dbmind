@@ -315,7 +315,7 @@ fn derived_nonce(key: &MaskKey, text: &str) -> [u8; 12] {
 }
 
 /// AES-256-GCM 加密，输出 `base64(nonce || 密文+tag)`。
-fn aes_encrypt(key: &MaskKey, text: &str) -> String {
+pub fn aes_encrypt(key: &MaskKey, text: &str) -> String {
     use base64::Engine as _;
     use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, AES_256_GCM};
     let nonce = derived_nonce(key, text);

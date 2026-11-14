@@ -85,7 +85,7 @@ impl From<DbMindError> for XError {
             .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut message = with_hint(&err.message);
         if let Some(detail) = &err.detail {
-            let kept = human_detail(detail);
+            let kept = human_detail(&scrub_noise(detail));
             // 剔掉的部分只进日志：排查时那条 `SQLRecoverableException, SQLState=08006…`
             // 仍然是唯一的线索，只是它不该出现在用户面前。
             if kept.trim() != detail.trim() {
@@ -162,12 +162,72 @@ fn is_technical_line(line: &str) -> bool {
     has_state && head.ends_with("Exception")
 }
 
+/// 数据库 / 驱动原话里混着的「机器标识」要剪掉。
+///
+/// 用户反馈的原话：连接失败弹窗里写着
+/// `用户 'demo' 登录失败。ClientConnectionId:30ddcd6e-a29b-4977-bcb7-cb720fa6f153`
+/// —— 后半截是一串没人看得懂的 ID，弹窗看着像报错日志，而不是在告诉他「口令错了」。
+///
+/// 只剪两类**纯标识**，一行业务信息都不动：
+/// 1. `ClientConnectionId: <guid>`（SQL Server 驱动每次报错都挂一段）；
+/// 2. 孤零零的 UUID（`8-4-4-4-12`）—— 数据库报错里出现它只能是内部标识。
+///
+/// 剪完再收一下标点（`。。` / `，。` / 行尾多余的逗号），免得留下一个诡异的残渣。
+pub fn scrub_noise(text: &str) -> String {
+    use regex::Regex;
+    use std::sync::OnceLock;
+
+    static CLIENT_ID: OnceLock<Regex> = OnceLock::new();
+    static UUID: OnceLock<Regex> = OnceLock::new();
+
+    let client_id = CLIENT_ID.get_or_init(|| {
+        // `ClientConnectionId:` / `ClientConnectionId =`，后面跟一串十六进制与连字符
+        Regex::new(r"(?i)\s*ClientConnectionId\s*[:=]\s*[0-9A-Za-z-]{8,}").expect("常量正则不会失败")
+    });
+    let uuid = UUID.get_or_init(|| {
+        Regex::new(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+        )
+        .expect("常量正则不会失败")
+    });
+
+    let once = client_id.replace_all(text, "");
+    let twice = uuid.replace_all(&once, "");
+    if twice == text {
+        return text.to_string(); // 没有标识：原样返回，连空白都别碰
+    }
+
+    let mut out = twice.to_string();
+    // 残渣收尾：`。。`→`。`、`，。`→`。`、多个空格合一、行尾重复的分隔符去掉
+    while out.contains("。。") || out.contains("，。") || out.contains(",.") || out.contains("  ") {
+        out = out
+            .replace("。。", "。")
+            .replace("，。", "。")
+            .replace(",.", ".")
+            .replace("  ", " ");
+    }
+    let trimmed = out.trim_end_matches([' ', '\t', '，', ',', '、', '；', ';', '。', '.']);
+    if trimmed.is_empty() {
+        return out.trim().to_string();
+    }
+    // 结尾原本有句号就保留一个，没有就别加
+    let had_stop = out.trim_end().ends_with(['。', '.']);
+    let mut done = trimmed.to_string();
+    if had_stop {
+        done.push('。');
+    }
+    done
+}
+
 /// 给内核里几条「字面上正确、但用户不知道该做什么」的错误补一句可操作的提示。
 ///
 /// 典型例子：`连接「x」缺少 {database} 对应的字段` —— 这句话把 JDBC URL 模板里的占位符
 /// 原样甩给了用户。他刚在界面上填过数据库名（甚至能看到右边就写着名字），却被告知缺字段，
 /// 第一反应一定是「我填错了？」。补一句「填哪个框」能省掉一整轮排查。
 pub fn with_hint(message: &str) -> String {
+    // 先剪掉机器标识（`ClientConnectionId: <guid>` 之类），再看要不要补操作提示
+    let message = scrub_noise(message);
+    let message = message.as_str();
     let hint = if message.contains("{database}") {
         Some("请在连接里填写「数据库名称」（SQL Server / PostgreSQL / KingbaseES 的 JDBC URL 里需要它；SQL Server 可先填 master）")
     } else if message.contains("{filePath}") {
@@ -239,3 +299,54 @@ impl IntoResponse for XError {
 }
 
 pub type XResult<T> = Result<T, XError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 剪掉_client_connection_id() {
+        // 用户截图里的原话：剪完只该剩「登录失败」这件事本身
+        let raw = "用户 'demo' 登录失败。ClientConnectionId:30ddcd6e-a29b-4977-bcb7-cb720fa6f153";
+        assert_eq!(scrub_noise(raw), "用户 'demo' 登录失败。");
+
+        // 冒号两侧带空格、等号写法、全小写 guid 都要认
+        assert_eq!(
+            scrub_noise("连接已关闭 ClientConnectionId : 30DDCD6E-A29B-4977-BCB7-CB720FA6F153"),
+            "连接已关闭"
+        );
+        assert_eq!(
+            scrub_noise("连接失败 ClientConnectionId=30ddcd6e-a29b-4977-bcb7-cb720fa6f153"),
+            "连接失败"
+        );
+    }
+
+    #[test]
+    fn 剪掉裸_uuid_但不动普通文本() {
+        let raw = "执行失败（会话 11111111-2222-3333-4444-555555555555 已断开）";
+        assert_eq!(scrub_noise(raw), "执行失败（会话 已断开）");
+        // 没有标识时一个字符都不改（连空白也别动）
+        let plain = "Incorrect syntax near 'selct'.";
+        assert_eq!(scrub_noise(plain), plain);
+        assert_eq!(scrub_noise(""), "");
+    }
+
+    #[test]
+    fn 幂等且不误伤_length_8_以下的短串() {
+        let once = scrub_noise("失败 ClientConnectionId:abcd1234");
+        assert_eq!(once, "失败");
+        assert_eq!(scrub_noise(&once), once);
+        // 8 位以下、不带 guid 形状的十六进制不该被当成标识
+        assert_eq!(scrub_noise("表 demo_1234 不存在"), "表 demo_1234 不存在");
+    }
+
+    #[test]
+    fn 提示句照旧拼得上() {
+        let msg = with_hint("连接「x」缺少 {database} 对应的字段");
+        assert!(msg.contains("→ 请在连接里填写「数据库名称」"));
+        // 剪噪之后仍能找到占位符 → 提示照旧
+        let noisy = with_hint("缺少 {host} 对应字段 ClientConnectionId:30ddcd6e-a29b-4977-bcb7-cb720fa6f153");
+        assert!(noisy.contains("→ 请填写「主机」与「端口」"), "{noisy}");
+        assert!(!noisy.contains("ClientConnectionId"), "{noisy}");
+    }
+}

@@ -34,12 +34,18 @@
           <div class="pair">
             <el-select v-if="!srcHideDb" v-model="src.database" size="small" :disabled="taskRunning"
                        :placeholder="$t('common.pleaseSelect')" @change="onSrcDbChange">
+              <template #prefix>
+                <ScopeIcon kind="db" :conn-type="srcInfo?.type" />
+              </template>
               <el-option v-for="d in srcDbs" :key="d" :label="d" :value="d" />
             </el-select>
             <!-- 模式下拉要等库选完才画：库还停在「请选择」时先摆一个模式框，等于让人在
                  一个还不知道属于哪个库的清单里挑模式（真机反馈：库没选，模式里却列着 dbo） -->
             <el-select v-if="srcNeedSchema && src.database" v-model="src.schema" size="small" :disabled="taskRunning"
                        :placeholder="$t('common.pleaseSelect')" @change="loadSrcObjects">
+              <template #prefix>
+                <ScopeIcon kind="schema" />
+              </template>
               <el-option v-for="s in srcSchemas" :key="s" :label="s" :value="s" />
             </el-select>
           </div>
@@ -56,10 +62,16 @@
           <div class="pair">
             <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small" :disabled="taskRunning"
                        :placeholder="$t('common.pleaseSelect')" @change="onTgtDbChange">
+              <template #prefix>
+                <ScopeIcon kind="db" :conn-type="tgtInfo?.type" />
+              </template>
               <el-option v-for="d in tgtDbs" :key="d" :label="d" :value="d" />
             </el-select>
             <el-select v-if="tgtNeedSchema && tgt.database" v-model="tgt.schema" size="small" :disabled="taskRunning"
                        :placeholder="$t('common.pleaseSelect')">
+              <template #prefix>
+                <ScopeIcon kind="schema" />
+              </template>
               <el-option v-for="s in tgtSchemas" :key="s" :label="s" :value="s" />
             </el-select>
           </div>
@@ -590,6 +602,8 @@ import { guardConnWrite, loadProtectProd } from '../../utils/connGuard'
 import { createPollGuard } from '../../utils/pollGuard'
 // 连接下拉（分组 → 连接 两级）全项目共用一个组件
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
+// 「范围」图标（与左侧对象树同色同形）
+import ScopeIcon from '../../common/ScopeIcon.vue'
 import { addBgTask, bgTasks } from './backgroundTasks'
 
 const props = defineProps({ modelValue: Boolean, conn: Object, database: String, resumeTaskId: String })

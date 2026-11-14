@@ -127,6 +127,9 @@ export function detectSource(text) {
 
 /* ============================ DBMind ============================ */
 
+/** DBMind 自己导出的口令是密文：`enc:v2:<base64>`（早期 `enc:v1:` 也认） */
+const isSealedPwd = (value) => /^enc:v\d+:/.test(String(value || ''))
+
 function parseDbmind(data) {
   const list = Array.isArray(data) ? data : (data && data.connections) || []
   const out = []
@@ -138,8 +141,12 @@ function parseDbmind(data) {
     out.push({
       ...item,
       name,
+      // 密文照样**带过去**：同一台机器（同一个 dbmind.db 的密钥）导入后能直接连；
+      // 换台机器解不开，所以标成 PWD_ENCRYPTED 让预览里提醒一句，而不是假装"有口令"。
       type,
-      pwd: item.password ? PWD_INCLUDED : PWD_MISSING
+      pwd: isSealedPwd(item.password)
+        ? PWD_ENCRYPTED
+        : (item.password ? PWD_INCLUDED : PWD_MISSING)
     })
   }
   return out
@@ -352,7 +359,14 @@ export function parseImportFile(text, filename = '', opts = {}) {
   }
   if (!list.length) return { error: t('ci.noConnInFile') }
 
-  return { source, list, warnings: buildWarnings(list), name: filename }
+  // 口令「解不开」的提示文案按来源分：DBMind 自己的密文是同机可解的（换机器才解不开），
+  // 用 Navicat 那句「导出时加密了、无法解密」会误导
+  return {
+    source,
+    list,
+    warnings: buildWarnings(list, source === 'dbmind' ? 'ci.warnDbmindPwd' : 'ci.warnNavicatPwd'),
+    name: filename
+  }
 }
 
 /** 三种口令状态分开报：加密串是「有但解不开」，与「压根没带」是两回事，混成一条会误导 */

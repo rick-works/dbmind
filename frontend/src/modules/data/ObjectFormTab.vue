@@ -21,7 +21,7 @@
             <template #title>{{ $t('oft.eventUnsupported') }}</template>
           </el-alert>
 
-          <TableForm v-if="cat === 'tables'" ref="formRef" :features="features" :edit-mode="mode === 'edit'" @sql="onSqlChange" />
+          <TableForm v-if="cat === 'tables'" ref="formRef" :features="features" :database="database" :edit-mode="mode === 'edit'" @sql="onSqlChange" />
           <ViewForm v-else-if="cat === 'views'" ref="formRef" :features="features" :conn="conn" :database="database" :edit-mode="mode === 'edit'" :edit-data="editData" @sql="onSqlChange" />
           <IndexForm v-else-if="cat === 'indexes'" ref="formRef" :features="features" :conn="conn" :database="database" :edit-mode="mode === 'edit'" :edit-data="editData" @sql="onSqlChange" />
           <ProcForm v-else-if="cat === 'procs'" ref="formRef" :features="features" :conn="conn" :edit-mode="mode === 'edit'" :edit-data="editData" @sql="onSqlChange" @kind="onFormKind" />

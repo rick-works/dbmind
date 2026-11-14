@@ -20,7 +20,7 @@
           <el-select v-if="dbCatalogs.length" ref="catalogSelRef" v-model="selectedCatalog" size="small"
                      class="db-catalog-select" @change="onCatalogChange">
             <template #prefix>
-              <el-icon class="sel-icon"><Files /></el-icon>
+              <ScopeIcon kind="catalog" />
             </template>
             <el-option v-for="c in dbCatalogs" :key="c" :label="c" :value="c" />
           </el-select>
@@ -29,7 +29,7 @@
           <el-select v-if="!hideDbSelect" ref="dbSelRef" v-model="selectedDbShort" size="small" class="db-select"
                      :loading="loadingDbs" @change="onDbShortChange">
             <template #prefix>
-              <el-icon class="sel-icon"><Coin /></el-icon>
+              <ScopeIcon kind="db" :conn-type="connType" />
             </template>
             <!-- 显示名走 dbLabelOf：NoSQL 的占位库 `(default)` 显示成「默认」，值仍是原值 -->
             <el-option v-for="db in dbOptions" :key="db" :label="dbLabelOf(db)" :value="db" />
@@ -40,7 +40,7 @@
                      class="schema-select" :loading="loadingSchemas" :placeholder="$t('sqlq.schemaDefault')"
                      @change="onSchemaChange">
             <template #prefix>
-              <el-icon class="sel-icon"><Folder /></el-icon>
+              <ScopeIcon kind="schema" />
             </template>
             <el-option v-for="s in schemas" :key="s" :label="s" :value="s" />
           </el-select>
@@ -670,7 +670,7 @@ import { rowWindow } from '../../utils/rowWindow'
 import { readSchemaCache, writeSchemaCache } from '../../utils/schemaCache'
 import {
   CaretRight, CaretLeft, Download, TrendCharts, Loading,
-  Close, CircleCloseFilled, CircleCheckFilled, Coin, Brush, Clock, Files,
+  Close, CircleCloseFilled, CircleCheckFilled, Coin, Brush, Clock,
   Document, VideoPause, Connection, Folder, DataAnalysis, EditPen,
   Cpu, ArrowDown, Select, Histogram, Calendar, Switch as SwitchIcon, Tickets, Grid, Operation,
   Collection, RefreshLeft, DArrowRight, Key
@@ -686,6 +686,8 @@ import DbLogo from '../../common/DbLogo.vue'
 import AiUsageNote from '../../common/AiUsageNote.vue'
 // 连接下拉（分组 → 连接 两级，组头可展开/收起）：全项目共用这一个组件
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
+// 「范围」图标：与左侧树同色同形（库=Folder/Coin、模式=Coin、目录=Collection）
+import ScopeIcon from '../../common/ScopeIcon.vue'
 // 占位库 `(default)` 的显示名（值仍是原值，见 utils/dbLabel）
 import { dbLabelOf } from '../../utils/dbLabel'
 import { fitSelectWidth } from '../../utils/selectAutoWidth'
@@ -5766,10 +5768,13 @@ const loadSchemas = async () => {
   try {
     const list = await listSchemas(cid, db)
     schemas.value = list || []
-    // 有默认 schema（如 SQL Server 的 dbo）则优先选中，否则选第一个
+    // 有默认 schema（SQL Server 的 dbo / PG 的 public）就**恒定选中它**：模式选择器不允许
+    // 为空，而执行语义必须明确 —— 「空」在 SQL Server 上等于"按登录名的默认模式"，用户
+    // 看到的却是 dbo 的数据，等于把选择器当摆设。列表里暂时没有它也照样用（同名模式可能
+    // 还没建，选着它才能把表建进去）。
     const defSch = byType(connType.value).defaultSchema
     if (defSch) {
-      selectedSchema.value = schemas.value.includes(defSch) ? defSch : (schemas.value[0] || '')
+      selectedSchema.value = defSch
     } else if (hideDbSelect.value) {
       // 没有库层的类型（Oracle / DM）：**不替用户选**。
       // 只带服务名（不带模式）表示"按登录用户的默认模式执行"，这是既有口径；

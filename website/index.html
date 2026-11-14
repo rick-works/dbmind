@@ -1383,6 +1383,30 @@
     <h2 class="sec-title reveal" data-eyebrow="RELEASES">版本</h2>
 
     <div class="rel-timeline">
+      <!-- v2.0.26（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.26</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-15</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>连接口令不再明文落盘</b>：dbmind.db 里的密码改为 AES-256-GCM 密文（enc:v2:，密钥随库保存），老用户升级后首次启动自动迁移、连接照常可用；「导出连接」勾选密码时带出的也是密文，不再是明文</li>
+            <li><b>对象树每一级「刷新」都真的重新拉：分类计数、表/视图清单、库与模式级刷新一起更新，不再出现「点了刷新还是旧数据」</b></li>
+            <li><b>SQL Server 选中的模式真正生效：双击 test 模式里的表能正常加载，表总数与数据同一口径，建表 / 改表 / 建索引 / 表注释都会带上模式名（以前一律落到 dbo）</b></li>
+            <li><b>连接报错不再夹带机器标识</b>：ClientConnectionId: <guid>、裸 UUID 这类内部 ID 从弹窗和结果网格里剪掉，只留「登录失败」这种能看懂的话</li>
+            <li><b>连接 / 库 / 模式下拉的图标改成跟左侧对象树同一套（颜色与形状一致：库=文件夹、模式=硬币、表=网格）</b></li>
+            <li><b>修复自带精简 JRE 缺 jdk.net 导致 DB2 连不上（NoClassDefFoundError: jdk/net/ExtendedSocketOptions）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.26" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.26" target="_blank" rel="noopener">下载 v2.0.26</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.25（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1390,7 +1414,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.25</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-14</span>
           </div>
           <ul class="rel-notes">

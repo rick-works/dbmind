@@ -239,13 +239,15 @@ jobs:
           done
 
       # [3] 自带 JRE（jlink 精简运行时）—— 目标机器不装 Java 也能连库。
-      #     模块集必须含 jdk.charsets：少了会让 Doris 连不上
-      #     （MySQL Connector/J 要把 collation 映射成 Java 字符集）。
+      #     模块集必须与 scripts/build/jre.ps1 一致，少一个就有用户能连不上：
+      #       jdk.charsets -> Doris 连不上（MySQL Connector/J 要把 collation 映射成 Java 字符集）
+      #       jdk.net      -> DB2 连不上（驱动静态初始化就摸 jdk.net.ExtendedSocketOptions，
+      #                       报 NoClassDefFoundError: jdk/net/ExtendedSocketOptions）
       - name: 生成自带 JRE
         shell: bash
         run: |
           rm -rf dist/jre
-          jlink --add-modules java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets \
+          jlink --add-modules java.se,jdk.unsupported,jdk.crypto.ec,jdk.zipfs,jdk.charsets,jdk.net \
             --strip-debug --no-header-files --no-man-pages --compress=zip-6 --output dist/jre
           du -sh dist/jre
 

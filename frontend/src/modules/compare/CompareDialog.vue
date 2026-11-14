@@ -31,14 +31,23 @@
         <div class="cmp-pair">
           <el-select v-if="!srcHideDb" v-model="src.database" size="small"
                      :placeholder="$t('common.pleaseSelect')" @change="onSrcDbChange">
+            <template #prefix>
+              <ScopeIcon kind="db" :conn-type="connOf(src.connectionId)?.type" />
+            </template>
             <el-option v-for="d in srcDbs" :key="d" :label="d" :value="d" />
           </el-select>
           <el-select v-if="srcNeedSchema" v-model="src.schema" size="small"
                      :placeholder="$t('common.pleaseSelect')" @change="loadSrcTables">
+            <template #prefix>
+              <ScopeIcon kind="schema" />
+            </template>
             <el-option v-for="s in srcSchemas" :key="s" :label="s" :value="s" />
           </el-select>
         </div>
         <el-select v-model="src.table" size="small" filterable :placeholder="$t('common.pleaseSelect')">
+          <template #prefix>
+            <ScopeIcon kind="table" />
+          </template>
           <el-option v-for="t in srcTables" :key="t.name" :label="t.name + (t.type === 'VIEW' ? $t('cmp.viewSuffix') : '')" :value="t.name" />
         </el-select>
       </div>
@@ -54,14 +63,23 @@
         <div class="cmp-pair">
           <el-select v-if="!tgtHideDb" v-model="tgt.database" size="small"
                      :placeholder="$t('common.pleaseSelect')" @change="onTgtDbChange">
+            <template #prefix>
+              <ScopeIcon kind="db" :conn-type="connOf(tgt.connectionId)?.type" />
+            </template>
             <el-option v-for="d in tgtDbs" :key="d" :label="d" :value="d" />
           </el-select>
           <el-select v-if="tgtNeedSchema" v-model="tgt.schema" size="small"
                      :placeholder="$t('common.pleaseSelect')" @change="loadTgtTables">
+            <template #prefix>
+              <ScopeIcon kind="schema" />
+            </template>
             <el-option v-for="s in tgtSchemas" :key="s" :label="s" :value="s" />
           </el-select>
         </div>
         <el-select v-model="tgt.table" size="small" filterable :placeholder="$t('common.pleaseSelect')">
+          <template #prefix>
+            <ScopeIcon kind="table" />
+          </template>
           <el-option v-for="t in tgtTables" :key="t.name" :label="t.name + (t.type === 'VIEW' ? $t('cmp.viewSuffix') : '')" :value="t.name" />
         </el-select>
       </div>
@@ -388,6 +406,8 @@ import ConditionBuilder from '../../common/ConditionBuilder.vue'
 import { buildConditionSql } from '../../utils/cond'
 // 连接下拉（分组 → 连接 两级）全项目共用一个组件
 import ConnectionSelect from '../../common/ConnectionSelect.vue'
+// 「范围」图标（与左侧对象树同色同形）
+import ScopeIcon from '../../common/ScopeIcon.vue'
 import { t } from '../../utils/i18n'
 import { createPollGuard } from '../../utils/pollGuard'
 

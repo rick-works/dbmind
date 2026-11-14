@@ -1,5 +1,13 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.0.26": [
+    "Saved passwords are no longer plaintext: dbmind.db stores them as AES-256-GCM ciphertext (enc:v2:, key kept alongside the database). Existing plaintext passwords migrate automatically on first start and connections keep working; \"Export connections\" writes ciphertext as well",
+    "\"Refresh\" at every level of the object tree now really re-reads: category counts, table/view lists and both the database and schema levels update together - no more \"I refreshed and it still shows the old rows\"",
+    "The schema picked in SQL Server now takes effect: tables under a custom schema open on double-click, the total row count uses the same scope as the data, and CREATE / ALTER / INDEX / table comments all carry the schema name instead of landing in dbo",
+    "Connection errors no longer carry machine identifiers: ClientConnectionId GUIDs and bare UUIDs are stripped from dialogs and the result grid, leaving just the sentence a human can act on",
+    "The connection / database / schema dropdowns now use the same icons as the object tree (folder for databases, coin for schemas, grid for tables)",
+    "Fixed DB2 being unable to connect with the bundled trimmed JRE: it was missing the jdk.net module (NoClassDefFoundError: jdk/net/ExtendedSocketOptions)"
+  ],
   "v2.0.19": [
     "Right-click the connection tree for the new 'Manage connections' dialog: every connection listed by folder, with checkboxes to test, export or delete in bulk and a search across name / host / type / folder",
     "'Import connections' reads three formats at once: DBMind, Navicat (.ncx) and DBeaver (.json). You get a preview before anything is written; name clashes can be skipped, overwritten or renamed, and the batch can land in a folder of your choice. Passwords from Navicat and DBeaver are encrypted and unreadable, so those rows are flagged for you to fill in",
