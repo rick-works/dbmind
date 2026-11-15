@@ -637,14 +637,49 @@ async fn columns_of(
 ) -> XResult<Vec<ColumnDetail>> {
     let target = crate::api::scope::resolve(state, &side.conn, &side.scope).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
-    let names = {
-        let qualified = side.scoped_meta(table);
-        if qualified == table {
-            vec![table.to_string()]
-        } else {
-            vec![qualified, table.to_string()]
+    // 用户**显式选了模式**时只查那一个模式，绝不退回裸表名。
+    //
+    // 退回裸名在 SQL Server / PG 上会串到别的模式：目标库 `demo` 里 dbo 有同名表、用户
+    // 选的是 `test` 模式，`getColumns("PROBE_X")` 会命中 dbo 那张 ⇒ 上层以为「目标表已
+    // 存在」⇒ 走「删除重建」分支 ⇒ `drop table test.PROBE_X` 报
+    // `Cannot drop the table 'test.PROBE_X', because it does not exist`，
+    // 整库同步 47 张表全红（真机 2026-11-15 反馈）。元数据 API 有专门的 schema 参数，
+    // 用它就不会跨模式命中。
+    let explicit_schema = side
+        .schema
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let names = match &explicit_schema {
+        Some(_) => Vec::new(),
+        None => {
+            let qualified = side.scoped_meta(table);
+            if qualified == table {
+                vec![table.to_string()]
+            } else {
+                vec![qualified, table.to_string()]
+            }
         }
     };
+    if let Some(schema) = explicit_schema {
+        let engine = state.engine();
+        let t = target.clone();
+        let tbl = table.to_string();
+        let mut columns =
+            blocking(move || engine.list_columns_fresh_in(&t, &tbl, Some(&schema))).await?;
+        if !columns.is_empty() {
+            crate::api::meta::enrich_column_types(
+                state,
+                &side.conn,
+                &side.scope,
+                table,
+                &mut columns,
+            )
+            .await;
+        }
+        return Ok(columns);
+    }
     let mut first_err: Option<XError> = None;
     for name in names {
         let engine = state.engine();
@@ -4908,10 +4943,18 @@ async fn sync_table_inner(
         // 目标库已有视图引用该表 ⇒ `cannot drop table … because other objects depend on it`），
         // 于是重建被降级成"保留旧结构"，列定义根本没更新。PG 支持 `cascade`，依赖的视图
         // 会在后面的视图阶段重建成新版，正是「以源为准」想要的结果。
-        let drop_sql = if target_kind.kind.key() == "postgresql" {
-            format!("drop table if exists {target_name} cascade")
-        } else {
-            format!("drop table {target_name}")
+        // 「目标表不存在」不该是失败：元数据判断与真正 drop 之间有窗口（别处刚删、
+        // 另一张同名表在别的模式……），裸 `drop table` 会把这种正常情况报成红字
+        // （真机：目标 dbo 里有同名表、用户选的是 test 模式，47 张表全报
+        // `Cannot drop the table 'test.X', because it does not exist`）。
+        // 支持 `if exists` 的方言一律带上；Oracle / DM / DB2 / Derby 没有这个写法，
+        // 只能保持裸 drop（它们的元数据也不再跨模式回退，见 columns_of）。
+        let drop_sql = match target_kind.kind.key() {
+            // PG 额外要 cascade：目标库里已有视图引用这张表时，裸 drop 直接失败
+            "postgresql" => format!("drop table if exists {target_name} cascade"),
+            "mysql" | "mariadb" | "doris" | "sqlserver" | "clickhouse" | "sqlite" | "h2"
+            | "kingbase" => format!("drop table if exists {target_name}"),
+            _ => format!("drop table {target_name}"),
         };
         if let Err(err) = run_target(state, &tgt_target, &drop_sql).await {
             if !forced {
