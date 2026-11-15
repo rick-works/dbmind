@@ -1383,26 +1383,6 @@
     <h2 class="sec-title reveal" data-eyebrow="RELEASES">版本</h2>
 
     <div class="rel-timeline">
-      <!-- v2.0.27（最新） -->
-      <article class="rel-item reveal">
-        <div class="rel-rail"><span class="rel-dot"></span></div>
-        <div class="rel-body">
-          <div class="rel-head">
-            <span class="rel-ver">v2.0.27</span>
-            <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
-            <span class="rel-date">2026-11-15</span>
-          </div>
-          <ul class="rel-notes">
-            <li><b>修复在 SQL Server / PostgreSQL 上「选定了模式」的整库同步整批失败：目标库的其它模式（如 dbo）里存在同名表时，会把每张表都判成「删除目标表失败」（Cannot drop the table 'test.X', because it does not exist）。现在目标侧的表结构只按你选中的模式去查，删除语句也统一带上 if exists</b></li>
-            <li><b>随之修好的还有「目标表是否存在」的判断：不再被其它模式的同名表干扰，自动建表会正常落在选中的模式里，数据也跟着写进去</b></li>
-          </ul>
-          <div class="rel-links">
-            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.27" target="_blank" rel="noopener">发布说明</a>
-            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.27" target="_blank" rel="noopener">下载 v2.0.27</a>
-          </div>
-        </div>
-      </article>
       <!-- v2.0.26（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1410,6 +1390,7 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.26</span>
             <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-15</span>
           </div>
           <ul class="rel-notes">

@@ -1,9 +1,5 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
-  "v2.0.27": [
-    "Fixed whole-database sync failing on every table when a schema is selected on SQL Server / PostgreSQL: if another schema in the target database (dbo, for instance) held a table with the same name, each table was reported as \"Cannot drop the table 'test.X', because it does not exist\". Target-side structure is now looked up only in the schema you picked, and the drop carries IF EXISTS",
-    "The same fix makes the \"does the target table exist\" check immune to same-named tables in other schemas, so automatic table creation lands in the selected schema and the data follows it"
-  ],
   "v2.0.26": [
     "Saved passwords are no longer plaintext: dbmind.db stores them as AES-256-GCM ciphertext (enc:v2:, key kept alongside the database). Existing plaintext passwords migrate automatically on first start and connections keep working; \"Export connections\" writes ciphertext as well",
     "\"Refresh\" at every level of the object tree now really re-reads: category counts, table/view lists and both the database and schema levels update together - no more \"I refreshed and it still shows the old rows\"",
