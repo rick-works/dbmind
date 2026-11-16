@@ -81,7 +81,8 @@ pub fn supported(key: &str) -> bool {
 /// 按方言取监控计划。`None` = 这个类型还没有监控实现。
 fn plan(key: &str) -> Option<Plan> {
     match key {
-        "mysql" | "mariadb" => Some(mysql_plan()),
+        // TiDB 兼容 show global status / @@max_connections / information_schema.tables
+        "mysql" | "mariadb" | "tidb" => Some(mysql_plan()),
         // Doris 看着像 MySQL，实测四处不同（详见 doris_plan 的表格）—— 不能共用
         "doris" => Some(doris_plan()),
         "sqlserver" => Some(sqlserver_plan()),
@@ -1046,7 +1047,7 @@ pub async fn monitor_kill(
     }
     let (_, dialect) = ctx_of(&state, &id).await?;
     let sql = match dialect.kind.key() {
-        "mysql" | "mariadb" | "doris" => format!("kill {}", session_id.trim()),
+        "mysql" | "mariadb" | "doris" | "tidb" => format!("kill {}", session_id.trim()),
         "sqlserver" => format!("kill {}", session_id.trim()),
         "postgresql" | "kingbase" => {
             format!("select pg_terminate_backend({})", session_id.trim())

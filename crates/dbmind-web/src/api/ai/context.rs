@@ -299,7 +299,7 @@ pub async fn build(
         kind.key().to_ascii_uppercase(),
         version_part,
         match kind.key() {
-            "mysql" | "mariadb" | "doris" | "clickhouse" => "反引号",
+            "mysql" | "mariadb" | "doris" | "tidb" | "clickhouse" => "反引号",
             "sqlserver" => "方括号",
             _ => "双引号",
         },

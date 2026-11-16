@@ -688,6 +688,7 @@ fn supports_multi_row(dialect: Dialect) -> bool {
         "mysql"
             | "mariadb"
             | "doris"
+            | "tidb"
             | "postgresql"
             | "kingbase"
             | "sqlite"

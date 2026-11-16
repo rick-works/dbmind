@@ -342,7 +342,7 @@ async fn table_comments(
 /// 各方言的「每张表多少行、占多少字节、注释是什么」。
 fn capacity_sql(kind: &str) -> Option<&'static str> {
     match kind {
-        "mysql" | "mariadb" | "doris" => Some(
+        "mysql" | "mariadb" | "doris" | "tidb" => Some(
             "select table_name as t, table_rows as num_rows, \
              (coalesce(data_length, 0) + coalesce(index_length, 0)) as bytes, \
              coalesce(table_comment, '') as comment \

@@ -825,9 +825,12 @@ const assertRequired = () => {
     }
     return true
   }
-  // 自定义 JDBC URL 时主机/端口可以留空（连接串里已含地址）
-  if (!form.value.host && !form.value.jdbcUrl) { ElMessage.warning(t('cd.needHost')); return false }
-  if (!form.value.port && !form.value.jdbcUrl) { ElMessage.warning(t('cd.needPort')); return false }
+  // 自定义 JDBC URL 时主机/端口可以留空（连接串里已含地址）。
+  // 判据必须是 urlCustom（用户是否手改过 URL），不能是 form.jdbcUrl ——
+  // 后者由模板自动生成、恒非空，拿它判「有没有自定义」会让这两条
+  // 校验永不触发（不填主机照样发请求，后端回「缺少 (host) 对应的字段」）。
+  if (!form.value.host && !urlCustom.value) { ElMessage.warning(t('cd.needHost')); return false }
+  if (!form.value.port && !urlCustom.value) { ElMessage.warning(t('cd.needPort')); return false }
   return true
 }
 

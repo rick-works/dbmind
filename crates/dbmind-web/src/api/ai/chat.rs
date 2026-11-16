@@ -453,7 +453,7 @@ pub async fn explain_sql(
     let kind = record.kind().key();
     let statement = match kind {
         "sqlite" => format!("explain query plan {sql}"),
-        "mysql" | "mariadb" | "doris" | "postgresql" | "kingbase" | "h2" | "clickhouse" => {
+        "mysql" | "mariadb" | "doris" | "tidb" | "postgresql" | "kingbase" | "h2" | "clickhouse" => {
             format!("explain {sql}")
         }
         // SQL Server 用 SET SHOWPLAN_*（有副作用、要成对执行），Oracle/DB2/Derby 是 PLAN_TABLE，

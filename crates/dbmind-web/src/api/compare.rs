@@ -693,7 +693,7 @@ async fn table_foreign_key_signatures(
                 true,
             )
         }
-        "mysql" | "mariadb" => {
+        "mysql" | "mariadb" | "tidb" => {
             let schema_lit = dialect.literal(
                 schema_name
                     .as_deref()
