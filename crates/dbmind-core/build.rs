@@ -52,6 +52,14 @@ struct TypeYaml {
     skip_tcp_probe: bool,
     #[serde(rename = "localFile", default)]
     local_file: bool,
+    /// 是否对前端「新建数据源」暴露。缺省 **true** —— 新增 YAML 即自动出现在前端；
+    /// 内核支持但前端还没有类型卡片（没有 `types/<key>.js`）的显式写 `false`。
+    ///
+    /// 之前这份名单手写在 `dialect.rs::exposed_type_codes`，前端另有一份
+    /// `TYPE_TO_MODULE` —— 两处漏改就会出现「新建看不到」或「所有操作 404」。
+    /// 现在唯一真源在这里，两侧都从生成物派生。
+    #[serde(default = "default_true")]
+    exposed: bool,
     #[serde(rename = "defaultPort", default)]
     default_port: Option<u16>,
     /// agent 运行时的 JDBC 元数据。放在 YAML 而不是写进 Java 宿主，
@@ -72,6 +80,40 @@ fn default_dialect() -> String {
 
 fn default_support() -> String {
     "operate".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// YAML 的 `dialect` → 上游兼容接口的**模块路径段**（`/api/{module}/{id}/…`）。
+///
+/// 一个模块服务多种类型（`mysql` 服务 MYSQL/MARIADB/DORIS）。以前这张表手写在
+/// `dbmind-web/src/api/dialect.rs::module_of_type_code`，前端 `api/index.js` 的
+/// `TYPE_TO_MODULE` 再抄一遍，两处必须逐条一致 —— 漏一条就是该类型所有操作 404。
+/// 现在由本函数在构建期生成，写错的 dialect 会直接编译失败。
+fn module_name(dialect: &str) -> Result<&'static str, String> {
+    Ok(match dialect {
+        "MySQL" => "mysql",
+        "PostgreSQL" => "postgresql",
+        "Oracle" => "oracle",
+        "SqlServer" => "sqlserver",
+        "Db2" => "db2",
+        "H2" => "h2",
+        "Derby" => "derby",
+        "ClickHouse" => "clickhouse",
+        "SQLite" => "sqlite",
+        "MongoShell" => "mongodb",
+        "Redis" => "redis",
+        "Elasticsearch" => "elasticsearch",
+        "DuckDB" => "duckdb",
+        "Generic" => "generic",
+        other => {
+            return Err(format!(
+                "未知 dialect: {other}（请先在 build.rs 的 module_name 里给出模块路径段）"
+            ))
+        }
+    })
 }
 
 /// 非单连接类型的并发会话默认上限（YAML 省略 `maxConnections` 时用它）。
@@ -330,6 +372,7 @@ fn validate(types: &[TypeYaml]) -> Result<(), String> {
             return Err(format!("rustVariant 重复：{}", t.rust_variant));
         }
         // 运行时一致性约束：这些能挡住最容易犯的配置错误
+        module_name(&t.dialect).map_err(|e| format!("{}: {e}", t.db_type))?;
         runtime_variant(&t.runtime_mode).map_err(|e| format!("{}: {e}", t.db_type))?;
         protocol_variant(t.protocol.as_deref()).map_err(|e| format!("{}: {e}", t.db_type))?;
         mcp_variant(t.mcp_mode.as_deref()).map_err(|e| format!("{}: {e}", t.db_type))?;
@@ -618,6 +661,61 @@ fn generate_rust(types: &[TypeYaml]) -> String {
     }
     writeln!(c, "        }}\n    }}\n").unwrap();
 
+    // 上游类型码（大写）与模块路径段：两份以前手写在 dialect.rs / 前端 api/index.js
+    // 的清单，现在都由 YAML 的 dbType / dialect 派生。
+    writeln!(
+        c,
+        "    /// 上游前端的类型码（`dbType` 的大写形式，如 MYSQL / POSTGRESQL / DM）。"
+    )
+    .unwrap();
+    writeln!(c, "    pub fn type_code(self) -> &'static str {{").unwrap();
+    writeln!(c, "        match self {{").unwrap();
+    for t in types {
+        writeln!(
+            c,
+            "            ConnectionKind::{} => {:?},",
+            t.rust_variant,
+            t.db_type.to_uppercase()
+        )
+        .unwrap();
+    }
+    writeln!(c, "        }}\n    }}\n").unwrap();
+
+    writeln!(
+        c,
+        "    /// 上游兼容接口的模块路径段（`/api/{{module}}/{{id}}/…`，由 `dialect` 派生）。"
+    )
+    .unwrap();
+    writeln!(c, "    pub fn module(self) -> &'static str {{").unwrap();
+    writeln!(c, "        match self {{").unwrap();
+    for t in types {
+        let module = module_name(&t.dialect).expect("validated");
+        writeln!(
+            c,
+            "            ConnectionKind::{} => {:?},",
+            t.rust_variant, module
+        )
+        .unwrap();
+    }
+    writeln!(c, "        }}\n    }}\n").unwrap();
+
+    writeln!(
+        c,
+        "    /// 是否对前端「新建数据源」暴露（YAML 的 `exposed`，缺省 true）。"
+    )
+    .unwrap();
+    writeln!(c, "    pub fn exposed(self) -> bool {{").unwrap();
+    writeln!(c, "        match self {{").unwrap();
+    for t in types {
+        writeln!(
+            c,
+            "            ConnectionKind::{} => {},",
+            t.rust_variant, t.exposed
+        )
+        .unwrap();
+    }
+    writeln!(c, "        }}\n    }}\n").unwrap();
+
     // JDBC 元数据（agent 运行时用；非 JDBC 类型为 None）
     for (name, pick) in [
         ("jdbc_driver_class", "driver"),
@@ -742,6 +840,89 @@ fn generate_rust(types: &[TypeYaml]) -> String {
     .unwrap();
     writeln!(c, "}}\n").unwrap();
 
+    // ---- 清单常量（取代 dialect.rs / 前端 api/index.js 里的手写表）----
+    let exposed: Vec<(String, &str)> = types
+        .iter()
+        .filter(|t| t.exposed)
+        .map(|t| {
+            (
+                t.db_type.to_uppercase(),
+                module_name(&t.dialect).expect("validated"),
+            )
+        })
+        .collect();
+    writeln!(
+        c,
+        "/// 对前端暴露的类型：上游类型码（大写）→ 模块路径段。顺序即 YAML 的 `order`。"
+    )
+    .unwrap();
+    writeln!(
+        c,
+        "///"
+    )
+    .unwrap();
+    writeln!(
+        c,
+        "/// 之前这份名单手写在 `dbmind-web/src/api/dialect.rs::exposed_type_codes` 与"
+    )
+    .unwrap();
+    writeln!(
+        c,
+        "/// `module_of_type_code`，前端 `api/index.js` 的 `TYPE_TO_MODULE` 再抄一遍。"
+    )
+    .unwrap();
+    writeln!(
+        c,
+        "/// 现在唯一真源是 `plugins/connection-types/*.yaml` 的 `dbType` / `dialect` / `exposed`。"
+    )
+    .unwrap();
+    writeln!(
+        c,
+        "pub const EXPOSED_TYPE_CODES: &[(&str, &str)] = &[{}];\n",
+        exposed
+            .iter()
+            .map(|(code, module)| format!("({code:?}, {module:?})"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+    .unwrap();
+
+    let mut relational: Vec<&str> = Vec::new();
+    let mut nosql: Vec<&str> = Vec::new();
+    for t in types {
+        let module = module_name(&t.dialect).expect("validated");
+        let is_sql = t.protocol.as_deref().unwrap_or("sql") == "sql";
+        let bucket = if is_sql {
+            &mut relational
+        } else {
+            &mut nosql
+        };
+        if !bucket.contains(&module) {
+            bucket.push(module);
+        }
+    }
+    for (name, bucket, what) in [
+        ("RELATIONAL_MODULES", &relational, "SQL"),
+        ("NOSQL_MODULES", &nosql, "非 SQL"),
+    ] {
+        writeln!(
+            c,
+            "/// {} 模块路径段（由 YAML 的 `protocol` + `dialect` 去重派生，按 `order`）。",
+            what
+        )
+        .unwrap();
+        writeln!(
+            c,
+            "pub const {name}: &[&str] = &[{}];\n",
+            bucket
+                .iter()
+                .map(|m| format!("{m:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+        .unwrap();
+    }
+
     // 序列化按 key 字符串（对外契约稳定，不随 Rust 变体名变化）
     // 注意：这里必须写全 `std::result::Result`——生成代码落在 crate 根，
     // 而根上有一个 `pub type Result<T> = ...`，写裸 `Result` 会被解析成它。
@@ -793,6 +974,9 @@ fn generate_manifest(types: &[TypeYaml]) -> serde_json::Value {
                 "rustVariant": t.rust_variant,
                 "label": t.label,
                 "dialect": t.dialect,
+                "module": module_name(&t.dialect).expect("validated"),
+                "typeCode": t.db_type.to_uppercase(),
+                "exposed": t.exposed,
                 "order": t.order,
                 "runtimeMode": t.runtime_mode,
                 "protocol": t.protocol.clone().unwrap_or_else(|| "sql".to_string()),

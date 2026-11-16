@@ -10,6 +10,8 @@ import { clickhouseOptions } from './presets.js'
  */
 export default {
   code: 'CLICKHOUSE',
+  // 上游兼容接口的模块路径段：与 plugins/connection-types/clickhouse.yaml 的 dialect 派生值一致（guard 校验）
+  module: 'clickhouse',
   label: 'ClickHouse',
   // 列存分析引擎：不是关系型库（无事务 / 外键 / 二级索引），单列 OLAP 分类
   category: 'OLAP',

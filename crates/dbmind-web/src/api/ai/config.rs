@@ -269,7 +269,11 @@ pub fn apply(body: &Value) -> XResult<Value> {
                     .trim()
                     .to_string(),
                 api_key,
-                model: item.get("model").and_then(Value::as_str).unwrap_or("").to_string(),
+                model: item
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
                 max_tokens: item.get("maxTokens").and_then(Value::as_u64).unwrap_or(0),
                 embedding: item
                     .get("embedding")
@@ -500,8 +504,7 @@ fn post_chat(url: &str, model: &ModelEntry, body: &mut Value, accept: &str) -> X
             Err(err) => return Err(describe(err)),
         }
     }
-    Err(last_error
-        .unwrap_or_else(|| XError::internal("模型服务请求失败（重试后仍无响应）")))
+    Err(last_error.unwrap_or_else(|| XError::internal("模型服务请求失败（重试后仍无响应）")))
 }
 
 /// 读响应体（`into_string` 给的是 `io::Error`，与 ureq 的错误不是一回事）。
@@ -597,7 +600,10 @@ pub fn chat_with_usage(
     let response = post_chat(&url, model, &mut body, "application/json")?;
     let text = read_body(response)?;
     let value: Value = serde_json::from_str(&text).map_err(|e| {
-        XError::internal(format!("模型返回的不是 JSON：{e}（前 200 字：{}）", text.chars().take(200).collect::<String>()))
+        XError::internal(format!(
+            "模型返回的不是 JSON：{e}（前 200 字：{}）",
+            text.chars().take(200).collect::<String>()
+        ))
     })?;
     let content = value
         .get("choices")
@@ -626,12 +632,7 @@ pub fn chat_with_usage(
 ///    和 `role:"tool"` 的回执，`Msg { role, content }` 装不下。
 /// 2. **不因为 `content` 为空就报错** —— 「这一轮只调用工具、不说话」是完全合法的回复。
 /// 3. 返回原始 message 而不是字符串 —— 调用方要自己判断是「继续调工具」还是「给最终答案」。
-pub fn chat_tools(
-    model: &ModelEntry,
-    system: &str,
-    messages: &[Value],
-    tools: &Value,
-) -> XResult<Value> {
+pub fn chat_tools(model: &ModelEntry, system: &str, messages: &[Value], tools: &Value) -> XResult<Value> {
     let url = endpoint(&model.base_url, "/chat/completions");
     let mut all: Vec<Value> = Vec::new();
     let system = system.trim();
@@ -771,18 +772,14 @@ pub fn embed(model: &ModelEntry, texts: &[String]) -> XResult<Vec<Vec<f32>>> {
             .send_string(&body.to_string())
             .map_err(describe)?;
         let text = read_body(response)?;
-        let value: Value = serde_json::from_str(&text).map_err(|e| {
-            XError::internal(format!("向量服务返回的不是 JSON：{e}"))
+        let value: Value = serde_json::from_str(&text)
+            .map_err(|e| XError::internal(format!("向量服务返回的不是 JSON：{e}")))?;
+        let data = value.get("data").and_then(Value::as_array).ok_or_else(|| {
+            XError::internal(format!(
+                "向量服务返回里没有 data 字段（原始响应前 300 字：{}）",
+                text.chars().take(300).collect::<String>()
+            ))
         })?;
-        let data = value
-            .get("data")
-            .and_then(Value::as_array)
-            .ok_or_else(|| {
-                XError::internal(format!(
-                    "向量服务返回里没有 data 字段（原始响应前 300 字：{}）",
-                    text.chars().take(300).collect::<String>()
-                ))
-            })?;
         for item in data {
             let vector = item
                 .get("embedding")
@@ -853,11 +850,7 @@ fn record_usage(model: &ModelEntry, usage: Option<TokenUsage>) {
         return;
     };
     let (prompt_tokens, completion_tokens, total_tokens) = match usage {
-        Some(usage) => (
-            usage.prompt_tokens,
-            usage.completion_tokens,
-            usage.total_tokens,
-        ),
+        Some(usage) => (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens),
         None => (0, 0, 0),
     };
     let _ = store.bump_ai_usage(
@@ -947,9 +940,15 @@ fn empty_usage(limit: u64) -> Value {
 pub enum BudgetGate {
     Ok,
     /// 超了但允许降级：不注入上下文（可选换便宜模型）继续回答
-    Downgrade { used: u64, limit: u64 },
+    Downgrade {
+        used: u64,
+        limit: u64,
+    },
     /// 超了且不允许降级：直接报错，把选择权交回用户
-    Blocked { used: u64, limit: u64 },
+    Blocked {
+        used: u64,
+        limit: u64,
+    },
 }
 
 #[derive(Clone, Default)]
@@ -989,9 +988,15 @@ pub fn budget_gate() -> BudgetGate {
         return BudgetGate::Ok;
     }
     if info.downgrade {
-        BudgetGate::Downgrade { used: info.used, limit: info.limit }
+        BudgetGate::Downgrade {
+            used: info.used,
+            limit: info.limit,
+        }
     } else {
-        BudgetGate::Blocked { used: info.used, limit: info.limit }
+        BudgetGate::Blocked {
+            used: info.used,
+            limit: info.limit,
+        }
     }
 }
 
@@ -1067,7 +1072,10 @@ mod tests {
 
     #[test]
     fn host_is_parsed_not_substring_matched() {
-        assert_eq!(host_of("http://user:pass@10.0.0.2:8080/v1").as_deref(), Some("10.0.0.2"));
+        assert_eq!(
+            host_of("http://user:pass@10.0.0.2:8080/v1").as_deref(),
+            Some("10.0.0.2")
+        );
         assert_eq!(host_of("http://[::1]:9000").as_deref(), Some("::1"));
         // 端口不能混进 host，否则 "127.0.0.1:80" 会解析失败
         assert_eq!(host_of("127.0.0.1:8080").as_deref(), Some("127.0.0.1"));

@@ -133,7 +133,10 @@ pub async fn verify(state: &AppState, conn: &str, database: &str, sql: &str) -> 
         }
         // 取不到计划 ≠ 语句有问题：这类库（SQL Server / Oracle / DB2 需要专有语法）我们
         // 本来就不做一条 EXPLAIN，明确说"没验"比假装通过好。
-        Ok(None) => Evidence::skipped(sql, "含写操作，未执行；该数据库类型不支持一条 EXPLAIN 校验，本次未验证"),
+        Ok(None) => Evidence::skipped(
+            sql,
+            "含写操作，未执行；该数据库类型不支持一条 EXPLAIN 校验，本次未验证",
+        ),
         Err(err) => Evidence {
             kind: "plan",
             sql,

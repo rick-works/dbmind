@@ -6,6 +6,8 @@
  */
 export default {
   code: 'DM',
+  // 上游兼容接口的模块路径段：与 plugins/connection-types/dm.yaml 的 dialect 派生值一致（guard 校验）
+  module: 'oracle',
   label: 'DM', labelKey: 'tdef.dm',
   category: 'RELATIONAL',
   noSql: false,

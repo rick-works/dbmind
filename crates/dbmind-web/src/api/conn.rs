@@ -117,9 +117,7 @@ pub fn config_from_body(body: &Value, existing: Option<&Value>) -> XResult<Conne
             // （VPN/NAT 空闲回收、半开连接）后永远发现不了，只能等写批的 300 秒兜底 ——
             // 真机表现是「一张表卡五分钟才报错，然后整表重跑」。这里把它当成「没填」，
             // 让 URL 模板里的 socketTimeout（10 分钟）生效。
-            if key.eq_ignore_ascii_case("socketTimeout")
-                && value.trim().parse::<u64>().unwrap_or(1) == 0
-            {
+            if key.eq_ignore_ascii_case("socketTimeout") && value.trim().parse::<u64>().unwrap_or(1) == 0 {
                 continue;
             }
             params.insert(key, Value::String(value.to_string()));
@@ -274,11 +272,7 @@ pub async fn update(
 ///
 /// **缺省即保留**：只有请求里**带了** `readOnly` 才动它。导入的连接、老版本前端都不传这个字段，
 /// 不这样写会把它们静默改成可写 —— 那正好是最危险的方向。
-async fn apply_read_only(
-    state: &AppState,
-    record: &dbmind_core::ConnectionRecord,
-    body: &Value,
-) {
+async fn apply_read_only(state: &AppState, record: &dbmind_core::ConnectionRecord, body: &Value) {
     let Some(flag) = body.get("readOnly").and_then(Value::as_bool) else {
         return;
     };
@@ -298,7 +292,9 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> XR
     let removed = blocking(move || engine.remove_connection(&target)).await?;
     // 级联删掉这条连接的影子，否则它们会变成树上看不见、却一直占着会话的垃圾
     let shadows = crate::api::scope::delete_shadows(&state, &id).await.unwrap_or(0);
-    Ok(Json(json!({ "success": true, "removed": removed, "shadowsRemoved": shadows })))
+    Ok(Json(
+        json!({ "success": true, "removed": removed, "shadowsRemoved": shadows }),
+    ))
 }
 
 /// 导出连接：`{ ids?: [..], includePassword?: bool }` → 裸数组（与 `GET /api/connections` 同形）。

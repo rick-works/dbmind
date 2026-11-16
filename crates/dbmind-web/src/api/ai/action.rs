@@ -276,7 +276,12 @@ pub fn undo_for(kind: &str, sql: &str) -> Option<String> {
         // `add constraint/primary key/foreign key/index` 不是加列，别硬套
         if matches!(
             lower.get(at).map(String::as_str),
-            Some("constraint") | Some("primary") | Some("foreign") | Some("index") | Some("unique") | Some("key")
+            Some("constraint")
+                | Some("primary")
+                | Some("foreign")
+                | Some("index")
+                | Some("unique")
+                | Some("key")
         ) {
             return None;
         }
@@ -338,7 +343,13 @@ mod tests {
         assert_eq!(undo_for("mysql", "alter table t drop column c"), None);
         assert_eq!(undo_for("mysql", "alter table t modify column c bigint"), None);
         // 加约束不是加列，不能生成 drop column
-        assert_eq!(undo_for("mysql", "alter table t add constraint fk foreign key (a) references b(id)"), None);
+        assert_eq!(
+            undo_for(
+                "mysql",
+                "alter table t add constraint fk foreign key (a) references b(id)"
+            ),
+            None
+        );
     }
 
     #[test]

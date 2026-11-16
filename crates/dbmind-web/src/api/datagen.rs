@@ -26,7 +26,9 @@
 use axum::extract::{Path, RawQuery, State};
 use axum::Json;
 use chrono::{Duration as ChronoDuration, Local, NaiveDate, NaiveDateTime};
-use dbmind_core::{AccessContext, CellValue, ColumnMeta, QueryOptions, QueryRequest, QueryResult, StatementKind};
+use dbmind_core::{
+    AccessContext, CellValue, ColumnMeta, QueryOptions, QueryRequest, QueryResult, StatementKind,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -43,7 +45,11 @@ const DEFAULT_BATCH: u64 = 500;
 /// SQL Server 一条多行 INSERT 最多 1000 行（错误 10738：行值表达式的数目超出了允许的最大值）。
 /// 其它方言没有这个数，给 u64::MAX（实际仍受 batch 约束）。
 fn max_tuples_per_insert(dialect: Dialect) -> u64 {
-    if dialect.kind.key() == "sqlserver" { 1000 } else { u64::MAX }
+    if dialect.kind.key() == "sqlserver" {
+        1000
+    } else {
+        u64::MAX
+    }
 }
 
 // ------------------------------------------------------------------ 请求
@@ -156,9 +162,8 @@ impl Rng {
 
 /// 由 `(seed, 列, 行)` 派生该格子的随机源 —— 与生成顺序无关，故可复现。
 fn cell_rng(seed: u64, column: usize, row: u64) -> Rng {
-    let mut x = seed
-        ^ (column as u64).wrapping_mul(0x9E3779B97F4A7C15)
-        ^ row.wrapping_mul(0xBF58476D1CE4E5B9);
+    let mut x =
+        seed ^ (column as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ row.wrapping_mul(0xBF58476D1CE4E5B9);
     x ^= x >> 30;
     x = x.wrapping_mul(0xBF58476D1CE4E5B9);
     x ^= x >> 27;
@@ -169,41 +174,79 @@ fn cell_rng(seed: u64, column: usize, row: u64) -> Rng {
 // ------------------------------------------------------------------ 值域池
 
 const SURNAMES: &[&str] = &[
-    "张", "王", "李", "赵", "刘", "陈", "杨", "黄", "周", "吴", "徐", "孙", "马", "朱", "胡",
-    "郭", "何", "林", "罗", "高",
+    "张", "王", "李", "赵", "刘", "陈", "杨", "黄", "周", "吴", "徐", "孙", "马", "朱", "胡", "郭", "何",
+    "林", "罗", "高",
 ];
 const GIVEN: &[&str] = &[
-    "伟", "芳", "娜", "敏", "静", "强", "磊", "洋", "勇", "艳", "杰", "娟", "涛", "明", "超",
-    "秀英", "霞", "平", "刚", "桂英", "文", "辉", "玲", "鹏", "华",
+    "伟", "芳", "娜", "敏", "静", "强", "磊", "洋", "勇", "艳", "杰", "娟", "涛", "明", "超", "秀英", "霞",
+    "平", "刚", "桂英", "文", "辉", "玲", "鹏", "华",
 ];
 const CITIES: &[&str] = &[
-    "北京", "上海", "广州", "深圳", "杭州", "南京", "成都", "重庆", "武汉", "西安", "苏州",
-    "天津", "长沙", "郑州", "青岛", "宁波", "厦门", "福州", "合肥", "济南",
+    "北京", "上海", "广州", "深圳", "杭州", "南京", "成都", "重庆", "武汉", "西安", "苏州", "天津", "长沙",
+    "郑州", "青岛", "宁波", "厦门", "福州", "合肥", "济南",
 ];
 const DISTRICTS: &[&str] = &[
-    "高新区", "经济技术开发区", "新区", "老城区", "工业园区", "滨江区", "海淀区", "朝阳区",
+    "高新区",
+    "经济技术开发区",
+    "新区",
+    "老城区",
+    "工业园区",
+    "滨江区",
+    "海淀区",
+    "朝阳区",
 ];
 const ROADS: &[&str] = &[
-    "中山路", "人民路", "解放路", "建设大道", "科技路", "长江路", "和平街", "文化路", "创业路",
+    "中山路",
+    "人民路",
+    "解放路",
+    "建设大道",
+    "科技路",
+    "长江路",
+    "和平街",
+    "文化路",
+    "创业路",
 ];
 const INDUSTRIES: &[&str] = &[
-    "科技", "信息", "网络", "数据", "智能", "软件", "电子", "医药", "物流", "贸易", "环保",
-    "新材", "新能源", "传媒", "教育",
+    "科技",
+    "信息",
+    "网络",
+    "数据",
+    "智能",
+    "软件",
+    "电子",
+    "医药",
+    "物流",
+    "贸易",
+    "环保",
+    "新材",
+    "新能源",
+    "传媒",
+    "教育",
 ];
 const COMPANY_SUFFIX: &[&str] = &["有限公司", "股份有限公司", "集团有限公司", "科技有限公司"];
 const WORDS: &[&str] = &[
-    "高效", "稳定", "灵活", "可靠", "轻量", "智能", "安全", "敏捷", "清晰", "简洁", "完整",
-    "流畅", "统一", "开放", "紧凑",
+    "高效", "稳定", "灵活", "可靠", "轻量", "智能", "安全", "敏捷", "清晰", "简洁", "完整", "流畅", "统一",
+    "开放", "紧凑",
 ];
 const NOUNS: &[&str] = &[
-    "系统", "平台", "引擎", "方案", "服务", "模块", "框架", "工具", "中心", "网关", "数据集",
+    "系统",
+    "平台",
+    "引擎",
+    "方案",
+    "服务",
+    "模块",
+    "框架",
+    "工具",
+    "中心",
+    "网关",
+    "数据集",
 ];
 const TITLE_PREFIX: &[&str] = &["关于", "基于", "面向", "深入", "浅析", "重读", "重构"];
 const DOMAINS: &[&str] = &["example.com", "test.com", "demo.cn", "corp.com", "mail.cn"];
 const URL_PATHS: &[&str] = &["docs", "api/v1", "blog/post", "user/profile", "help", "pricing"];
 const USERNAME_WORDS: &[&str] = &[
-    "sky", "river", "stone", "cloud", "forest", "bright", "swift", "quiet", "green", "north",
-    "ocean", "field", "light", "sharp", "happy",
+    "sky", "river", "stone", "cloud", "forest", "bright", "swift", "quiet", "green", "north", "ocean",
+    "field", "light", "sharp", "happy",
 ];
 
 // ------------------------------------------------------------------ 计划
@@ -319,30 +362,29 @@ fn plan(rules: &[ColumnRule], types: &[(String, Option<String>)]) -> XResult<(Ve
             "sequence" => (PlanRule::Gen(GenSpec::Sequence(rule.start.unwrap_or(1))), false),
             "random_int" => {
                 let min = rule.min.as_deref().unwrap_or("").trim().parse().unwrap_or(1);
-                let max = rule
-                    .max
-                    .as_deref()
-                    .unwrap_or("")
-                    .trim()
-                    .parse()
-                    .unwrap_or(10_000);
+                let max = rule.max.as_deref().unwrap_or("").trim().parse().unwrap_or(10_000);
                 // 区间写反了就换过来，而不是生成一堆空的/越界的值
-                (PlanRule::Gen(GenSpec::RandomInt(min.min(max), max.max(min))), false)
+                (
+                    PlanRule::Gen(GenSpec::RandomInt(min.min(max), max.max(min))),
+                    false,
+                )
             }
             "random_decimal" => {
                 let min: f64 = rule.min.as_deref().unwrap_or("").trim().parse().unwrap_or(0.0);
                 let max: f64 = rule.max.as_deref().unwrap_or("").trim().parse().unwrap_or(1000.0);
-                (PlanRule::Gen(GenSpec::RandomDecimal(min.min(max), max.max(min))), false)
+                (
+                    PlanRule::Gen(GenSpec::RandomDecimal(min.min(max), max.max(min))),
+                    false,
+                )
             }
             "bool" => (PlanRule::Gen(GenSpec::Bool), false),
             "random_string" => (
-                PlanRule::Gen(GenSpec::RandomString(rule.length.unwrap_or(8).clamp(1, 255) as usize)),
+                PlanRule::Gen(GenSpec::RandomString(
+                    rule.length.unwrap_or(8).clamp(1, 255) as usize
+                )),
                 false,
             ),
-            "fixed" => (
-                PlanRule::Fixed(coerce(&rule.text(), kind)),
-                false,
-            ),
+            "fixed" => (PlanRule::Fixed(coerce(&rule.text(), kind)), false),
             "list" | "cycle" => {
                 let values: Vec<String> = rule
                     .values
@@ -351,7 +393,10 @@ fn plan(rules: &[ColumnRule], types: &[(String, Option<String>)]) -> XResult<(Ve
                     .filter(|value| !value.is_empty())
                     .collect();
                 if values.is_empty() {
-                    notices.push(format!("字段 {} 选了「列表」但没填可选值，已按自动规则生成", rule.name));
+                    notices.push(format!(
+                        "字段 {} 选了「列表」但没填可选值，已按自动规则生成",
+                        rule.name
+                    ));
                     (PlanRule::Gen(auto_spec(kind)), false)
                 } else if raw_rule == "list" {
                     (PlanRule::Gen(GenSpec::List(values)), false)
@@ -409,7 +454,10 @@ fn plan(rules: &[ColumnRule], types: &[(String, Option<String>)]) -> XResult<(Ve
                 (PlanRule::Raw(expression), true)
             }
             other => {
-                notices.push(format!("字段 {} 的规则「{other}」未识别，已按自动规则生成", rule.name));
+                notices.push(format!(
+                    "字段 {} 的规则「{other}」未识别，已按自动规则生成",
+                    rule.name
+                ));
                 (PlanRule::Gen(auto_spec(kind)), false)
             }
         };
@@ -422,7 +470,9 @@ fn plan(rules: &[ColumnRule], types: &[(String, Option<String>)]) -> XResult<(Ve
         let _ = index;
     }
     if planned.iter().all(|column| matches!(column.rule, PlanRule::Skip)) {
-        return Err(XError::bad_request("所有字段都被设为「不写入」，没有可生成的内容"));
+        return Err(XError::bad_request(
+            "所有字段都被设为「不写入」，没有可生成的内容",
+        ));
     }
     Ok((planned, notices))
 }
@@ -470,8 +520,14 @@ fn parse_date(text: &str) -> Option<NaiveDateTime> {
 /// 固定值按目标类型落到合适的 CellValue（省得让数据库去做隐式转换）。
 fn coerce(text: &str, kind: Kind) -> CellValue {
     match kind {
-        Kind::Int => text.parse::<i64>().map(CellValue::Integer).unwrap_or_else(|_| CellValue::Text(text.to_string())),
-        Kind::Decimal => text.parse::<f64>().map(CellValue::Real).unwrap_or_else(|_| CellValue::Text(text.to_string())),
+        Kind::Int => text
+            .parse::<i64>()
+            .map(CellValue::Integer)
+            .unwrap_or_else(|_| CellValue::Text(text.to_string())),
+        Kind::Decimal => text
+            .parse::<f64>()
+            .map(CellValue::Real)
+            .unwrap_or_else(|_| CellValue::Text(text.to_string())),
         _ => CellValue::Text(text.to_string()),
     }
 }
@@ -508,9 +564,10 @@ fn gen_value(spec: &GenSpec, row: u64, column: usize, seed: u64) -> CellValue {
         }
         GenSpec::Bool => CellValue::Integer(rng.below(2) as i64),
         GenSpec::RandomString(length) => CellValue::Text(rng.alpha_num(*length)),
-        GenSpec::List(values) => CellValue::Text(rng.pick(
-            &values.iter().map(String::as_str).collect::<Vec<_>>(),
-        ).to_string()),
+        GenSpec::List(values) => CellValue::Text(
+            rng.pick(&values.iter().map(String::as_str).collect::<Vec<_>>())
+                .to_string(),
+        ),
         GenSpec::Cycle(values) => CellValue::Text(values[(row as usize) % values.len()].clone()),
         GenSpec::Code(prefix) => CellValue::Text(format!("{prefix}{:05}", row + 1)),
         GenSpec::Uuid => {
@@ -529,11 +586,7 @@ fn gen_value(spec: &GenSpec, row: u64, column: usize, seed: u64) -> CellValue {
             CellValue::Text(raw)
         }
         GenSpec::ChineseName => CellValue::Text(format!("{}{}", rng.pick(SURNAMES), rng.pick(GIVEN))),
-        GenSpec::Username => CellValue::Text(format!(
-            "{}{:04}",
-            rng.pick(USERNAME_WORDS),
-            rng.below(10_000)
-        )),
+        GenSpec::Username => CellValue::Text(format!("{}{:04}", rng.pick(USERNAME_WORDS), rng.below(10_000))),
         GenSpec::Email => CellValue::Text(format!(
             "{}{}@{}",
             rng.pick(USERNAME_WORDS),
@@ -542,11 +595,7 @@ fn gen_value(spec: &GenSpec, row: u64, column: usize, seed: u64) -> CellValue {
         )),
         GenSpec::Phone => {
             let prefix = ["13", "15", "17", "18", "19"];
-            CellValue::Text(format!(
-                "{}{:08}",
-                rng.pick(&prefix),
-                rng.below(100_000_000)
-            ))
+            CellValue::Text(format!("{}{:08}", rng.pick(&prefix), rng.below(100_000_000)))
         }
         GenSpec::Company => CellValue::Text(format!(
             "{}{}{}",
@@ -571,7 +620,9 @@ fn gen_value(spec: &GenSpec, row: u64, column: usize, seed: u64) -> CellValue {
         )),
         GenSpec::Ip => {
             // 只取公网常见的段，避开 10/127/192.168/172.16-31 这些一看就是内网的
-            let first = [58u64, 60, 101, 106, 114, 119, 121, 122, 175, 180, 182, 203, 210, 218, 221];
+            let first = [
+                58u64, 60, 101, 106, 114, 119, 121, 122, 175, 180, 182, 203, 210, 218, 221,
+            ];
             CellValue::Text(format!(
                 "{}.{}.{}.{}",
                 first[rng.below(first.len() as u64) as usize],
@@ -590,12 +641,7 @@ fn gen_value(spec: &GenSpec, row: u64, column: usize, seed: u64) -> CellValue {
             let stamp = rng.range(*from, *to);
             CellValue::Text(format_timestamp(stamp))
         }
-        GenSpec::Now => CellValue::Text(
-            Local::now()
-                .naive_local()
-                .format("%Y-%m-%d %H:%M:%S")
-                .to_string(),
-        ),
+        GenSpec::Now => CellValue::Text(Local::now().naive_local().format("%Y-%m-%d %H:%M:%S").to_string()),
     }
 }
 
@@ -639,8 +685,15 @@ fn written_columns(planned: &[Planned], dialect: Dialect) -> Vec<String> {
 fn supports_multi_row(dialect: Dialect) -> bool {
     matches!(
         dialect.kind.key(),
-        "mysql" | "mariadb" | "doris" | "postgresql" | "kingbase" | "sqlite" | "sqlserver"
-            | "h2" | "clickhouse"
+        "mysql"
+            | "mariadb"
+            | "doris"
+            | "postgresql"
+            | "kingbase"
+            | "sqlite"
+            | "sqlserver"
+            | "h2"
+            | "clickhouse"
     )
 }
 
@@ -729,7 +782,10 @@ pub async fn preview(
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(42)
     });
-    if planned.iter().any(|column| matches!(column.rule, PlanRule::Gen(GenSpec::Nullish))) {
+    if planned
+        .iter()
+        .any(|column| matches!(column.rule, PlanRule::Gen(GenSpec::Nullish)))
+    {
         notices.push("有 blob/二进制字段被置空：随机二进制没有「合理内容」，硬造只会污染数据".to_string());
     }
 
@@ -748,9 +804,7 @@ pub async fn preview(
             planned
                 .iter()
                 .enumerate()
-                .map(|(index, column)| {
-                    value_of(column, row, index, seed).unwrap_or(CellValue::Null)
-                })
+                .map(|(index, column)| value_of(column, row, index, seed).unwrap_or(CellValue::Null))
                 .collect()
         })
         .collect();
@@ -840,12 +894,7 @@ pub async fn start(
             for notice in &notices {
                 task.log(notice.clone());
             }
-            let dialect = Dialect::new(
-                require_record(&state, &conn)
-                    .await
-                    .map_err(|e| e.message)?
-                    .kind(),
-            );
+            let dialect = Dialect::new(require_record(&state, &conn).await.map_err(|e| e.message)?.kind());
             let target_name = dialect.quote_exact(&table);
             let columns = written_columns(&planned, dialect);
             if columns.is_empty() {
@@ -862,7 +911,11 @@ pub async fn start(
             let multi = supports_multi_row(dialect);
             // 每条语句的行数 = 用户批大小，但**必须再被方言硬限制夹住**：
             // SQL Server 一条 INSERT 超过 1000 行值直接报 10738（真机踩过：批 5000 全炸）。
-            let step = if multi { batch.min(max_tuples_per_insert(dialect)) } else { 1 };
+            let step = if multi {
+                batch.min(max_tuples_per_insert(dialect))
+            } else {
+                1
+            };
             let started = std::time::Instant::now();
             let mut written = 0u64;
             while written < rows {
@@ -956,10 +1009,7 @@ fn datagen_view(task: &crate::api::tasks::Task) -> Value {
 }
 
 /// `GET /api/datagen/task/{taskId}` —— 进度。
-pub async fn status(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn status(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     let Some(task) = state.tasks.get(&task_id) else {
         return Ok(Json(json!({
             "success": false,
@@ -973,10 +1023,7 @@ pub async fn status(
 }
 
 /// `POST /api/datagen/cancel/{taskId}` —— 请求取消。
-pub async fn cancel(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn cancel(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     let Some(task) = state.tasks.get(&task_id) else {
         return Ok(Json(json!({
             "success": false,

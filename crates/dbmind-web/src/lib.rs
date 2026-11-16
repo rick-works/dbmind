@@ -37,10 +37,8 @@ pub mod housekeeping;
 // 「日志级别」是设置页里的一项，但 tracing 的过滤器长在**壳层** —— 内核只负责存储设置值。
 // 过滤器包在 reload 层里，改设置不用重启进程：排查问题时切 debug、切回 info，当场生效。
 
-type LogReload = tracing_subscriber::reload::Handle<
-    tracing_subscriber::EnvFilter,
-    tracing_subscriber::Registry,
->;
+type LogReload =
+    tracing_subscriber::reload::Handle<tracing_subscriber::EnvFilter, tracing_subscriber::Registry>;
 static LOG_RELOAD: std::sync::OnceLock<LogReload> = std::sync::OnceLock::new();
 
 /// 初始化日志（main 调用）：`RUST_LOG` 优先（沿用老行为），否则 info、写 stderr。
@@ -106,10 +104,7 @@ impl AppState {
 
     /// 当前引擎的 `Arc` 克隆：每个请求拿住自己那份，切换后旧请求不受影响。
     pub fn engine(&self) -> Arc<DbMindEngine> {
-        self.engine_cell
-            .read()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
+        self.engine_cell.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// 热切换引擎（数据目录迁移的落点）。
@@ -118,10 +113,7 @@ impl AppState {
     /// 新引擎的宿主在下次连库时按**新**驱动目录按需拉起。
     pub fn swap_engine(&self, new_engine: DbMindEngine) {
         dbmind_core::install_global_store(new_engine.store().clone());
-        *self
-            .engine_cell
-            .write()
-            .unwrap_or_else(|e| e.into_inner()) = Arc::new(new_engine);
+        *self.engine_cell.write().unwrap_or_else(|e| e.into_inner()) = Arc::new(new_engine);
         tracing::info!("已热切换到新数据目录的引擎");
     }
 }
@@ -746,9 +738,7 @@ pub fn build_router(state: AppState, dist: Option<PathBuf>) -> Router {
 
     //上游兼容层独占 /api（原版前端一行不改地打过来）；
     // 内核原生契约挪到 /api/dbmind，避免同一个 URL 有两个实现。
-    let router = Router::new()
-        .merge(api::routes())
-        .nest("/api/dbmind", api);
+    let router = Router::new().merge(api::routes()).nest("/api/dbmind", api);
 
     if let Some(dir) = &dist {
         if dir.is_dir() {
@@ -796,7 +786,10 @@ mod origin_tests {
     #[test]
     fn external_origins_are_rejected() {
         assert!(!origin_allowed("https://evil.example", Some("127.0.0.1:20361")));
-        assert!(!origin_allowed("http://127.0.0.1.evil.example", Some("127.0.0.1:20361")));
+        assert!(!origin_allowed(
+            "http://127.0.0.1.evil.example",
+            Some("127.0.0.1:20361")
+        ));
         assert!(!origin_allowed("null", Some("127.0.0.1:20361")));
         assert!(origin_allowed("tauri://localhost", Some("127.0.0.1:20361")));
     }
@@ -821,11 +814,17 @@ fn origin_allowed(origin: &str, host: Option<&str>) -> bool {
         }
     }
     let host_only = if let Some(rest) = authority.strip_prefix('[') {
-        rest.split(']').next().map(|v| format!("[{v}]")).unwrap_or_default()
+        rest.split(']')
+            .next()
+            .map(|v| format!("[{v}]"))
+            .unwrap_or_default()
     } else {
         authority.split(':').next().unwrap_or("").to_string()
     };
-    matches!(host_only.as_str(), "localhost" | "127.0.0.1" | "[::1]" | "tauri.localhost")
+    matches!(
+        host_only.as_str(),
+        "localhost" | "127.0.0.1" | "[::1]" | "tauri.localhost"
+    )
 }
 
 /// 拒绝浏览器跨源请求。无 `Origin` 的请求（CLI、同源 GET、测试）照常放行。
@@ -926,11 +925,7 @@ async fn spa_fallback(dist: Option<PathBuf>, uri: axum::http::Uri) -> Response {
         // 各种莫名的运行时错误 + 新旧版本混着跑（真机踩过：`hasError is not a function` 白屏）。
         // 让它 404，浏览器才会彻底走重新加载的路。
         if relative.starts_with("assets/") {
-            return (
-                StatusCode::NOT_FOUND,
-                "asset 不存在（前端已改版，请刷新页面）",
-            )
-                .into_response();
+            return (StatusCode::NOT_FOUND, "asset 不存在（前端已改版，请刷新页面）").into_response();
         }
     }
 

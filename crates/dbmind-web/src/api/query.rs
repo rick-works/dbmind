@@ -284,10 +284,7 @@ pub async fn execute(
         read_only: None,
         connection: target,
         sql: effective,
-        options: QueryOptions {
-            max_rows,
-            timeout_ms,
-        },
+        options: QueryOptions { max_rows, timeout_ms },
         execution_id,
         // 每个编辑器标签页一条会话（见 `ui_session_key`）：共用一条会话会让一个页面的
         // 慢语句把别的页面全堵住
@@ -296,29 +293,31 @@ pub async fn execute(
         // 界面功能驱动的执行（建库/删目录/表属性探测等）带 internal=true，不混进用户的账本
         internal: body.get("internal").and_then(Value::as_bool).unwrap_or(false),
     };
-    Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
-        Ok(result) => {
-            let mut json = shape::query_result_json(&result);
-            // Oracle 11g 走 ROWNUM 包装分页（paging_sql），辅助列 rn__ 不进结果网格
-            shape::strip_paging_aux(&mut json);
-            // 总数统计**已移出主链路**：以前这里被截断/翻页时会同步跑 `count_rows`
-            //（三层兜底串行，每层最多 120s）—— 大 JOIN 的 COUNT 能把整个查询响应
-            // 卡到百秒级（真机：数据 1s 就绪，却等 COUNT 等了 163s+），其他工具
-            // 只发 LIMIT 当然快。现在数据先回，前端拿到 totalCount=-1 后再异步调
-            // `/query/{id}/count` 补总数（那边有 10s 总预算，算不出就放弃）。
-            //
-            // 这里只剩一处口径修正：第 2 页起 shape 会把「本页行数」当 totalCount
-            //（!truncated 时 rowCount 即 totalCount），末页不足一页时是错的 —— 置 -1
-            // 表示未知，等异步计数回填。
-            if page > 1 {
-                if let Some(object) = json.as_object_mut() {
-                    object.insert("totalCount".to_string(), Value::from(-1));
+    Ok(Json(
+        match blocking(move || engine.execute(request, AccessContext::Web)).await {
+            Ok(result) => {
+                let mut json = shape::query_result_json(&result);
+                // Oracle 11g 走 ROWNUM 包装分页（paging_sql），辅助列 rn__ 不进结果网格
+                shape::strip_paging_aux(&mut json);
+                // 总数统计**已移出主链路**：以前这里被截断/翻页时会同步跑 `count_rows`
+                //（三层兜底串行，每层最多 120s）—— 大 JOIN 的 COUNT 能把整个查询响应
+                // 卡到百秒级（真机：数据 1s 就绪，却等 COUNT 等了 163s+），其他工具
+                // 只发 LIMIT 当然快。现在数据先回，前端拿到 totalCount=-1 后再异步调
+                // `/query/{id}/count` 补总数（那边有 10s 总预算，算不出就放弃）。
+                //
+                // 这里只剩一处口径修正：第 2 页起 shape 会把「本页行数」当 totalCount
+                //（!truncated 时 rowCount 即 totalCount），末页不足一页时是错的 —— 置 -1
+                // 表示未知，等异步计数回填。
+                if page > 1 {
+                    if let Some(object) = json.as_object_mut() {
+                        object.insert("totalCount".to_string(), Value::from(-1));
+                    }
                 }
+                json
             }
-            json
-        }
-        Err(err) => shape::query_failure_json(&err.message, 0),
-    }))
+            Err(err) => shape::query_failure_json(&err.message, 0),
+        },
+    ))
 }
 
 /// `POST /api/{m}/query/{id}/tx` —— 会话级事务控制（事务模式）。
@@ -400,9 +399,7 @@ pub async fn count(
     // 与主执行同一个口径（SQL Server 的模式改写）：否则数据是 test 模式、总数却按 dbo 数，
     // 两个数对不上比不显示更糟
     let bare = match crate::api::meta::ctx_of(&state, &id).await {
-        Ok((_, dialect)) => {
-            crate::api::mssql_scope::apply(&state, &id, &database, dialect, bare).await
-        }
+        Ok((_, dialect)) => crate::api::mssql_scope::apply(&state, &id, &database, dialect, bare).await,
         Err(_) => return Ok(Json(json!({ "success": false, "totalCount": -1 }))),
     };
     // 不限时（原 10s 预算已放开，用户要求）：数据早已回显，计数想跑多久跑多久。
@@ -497,10 +494,7 @@ pub async fn execute_batch(
 
     // 切句用内核的实现（按协议分派：SQL 引号/注释内的分号不切，Redis 一行一条，ES 一行一请求）
     let record = require_record(&state, &id).await?;
-    let database = body
-        .get("database")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let database = body.get("database").and_then(Value::as_str).unwrap_or_default();
     let dialect = crate::api::dialect::Dialect::new(record.kind());
     let (_, schema) = crate::api::meta::split_db_schema(database, &dialect);
     let target = match crate::api::scope::resolve(&state, &id, database).await {
@@ -568,10 +562,7 @@ pub async fn execute_batch(
                     read_only: None,
                     connection: target,
                     sql: statement,
-                    options: QueryOptions {
-                        max_rows,
-                        timeout_ms,
-                    },
+                    options: QueryOptions { max_rows, timeout_ms },
                     execution_id: exec,
                     session,
                     // 编辑器里的多段执行：要进历史
@@ -615,10 +606,7 @@ pub async fn execute_batch(
 }
 
 /// `POST /api/{m}/query/cancel/{executionId}` —— 取消在途语句（硬中断，不是「标记一下」）。
-pub async fn cancel(
-    State(state): State<AppState>,
-    Path(execution_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn cancel(State(state): State<AppState>, Path(execution_id): Path<String>) -> XResult<Json<Value>> {
     let is_batch = active_batches()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -654,10 +642,7 @@ pub async fn run_file_start(
     if sql.trim().is_empty() {
         return Err(XError::bad_request("没有收到 SQL 内容"));
     }
-    let stop_on_error = body
-        .get("stopOnError")
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
+    let stop_on_error = body.get("stopOnError").and_then(Value::as_bool).unwrap_or(true);
     let record = require_record(&state, &id).await?;
     crate::api::driver::ensure_installed(&state, record.kind()).await?;
     // 文件里的语句也按用户选中的库执行
@@ -670,11 +655,7 @@ pub async fn run_file_start(
     let dialect = crate::api::dialect::Dialect::new(record.kind());
     let (_, schema) = crate::api::meta::split_db_schema(&database, &dialect);
     let statements = dbmind_core::split_statements(record.kind().protocol(), &sql);
-    let task_id = format!(
-        "sqlfile_{}_{}",
-        chrono_like_timestamp(),
-        statements.len()
-    );
+    let task_id = format!("sqlfile_{}_{}", chrono_like_timestamp(), statements.len());
 
     {
         let mut guard = tasks().lock().unwrap_or_else(|e| e.into_inner());
@@ -840,7 +821,12 @@ pub async fn run_file_cancel(
                 task.message = "正在取消…".to_string();
                 task.current_execution.clone()
             }
-            None => return Err(XError::new(axum::http::StatusCode::NOT_FOUND, "任务不存在或已过期")),
+            None => {
+                return Err(XError::new(
+                    axum::http::StatusCode::NOT_FOUND,
+                    "任务不存在或已过期",
+                ))
+            }
         }
     };
     // 在途语句要硬中断，否则「取消」要等它自己跑完
@@ -875,7 +861,11 @@ mod paging_tests {
         assert!(!can_append_paging("show tables", 1, m));
         assert!(!can_append_paging("describe t", 1, m));
         assert!(!can_append_paging("explain select * from t", 1, m));
-        assert!(!can_append_paging("with x as (select 1) insert into t select * from x", 1, m));
+        assert!(!can_append_paging(
+            "with x as (select 1) insert into t select * from x",
+            1,
+            m
+        ));
         // 正常的取数语句照样加
         assert!(can_append_paging("select * from t", 1, m));
         assert!(can_append_paging("with x as (select 1) select * from x", 1, m));
@@ -897,13 +887,21 @@ mod paging_tests {
         assert!(!can_append_paging("select * from t for share", 1, m));
         assert!(!can_append_paging("select * into outfile '/tmp/x' from t", 1, m));
         // 字符串字面量里的同名词不算（顶层短语检测会跳过引号内内容）
-        assert!(can_append_paging("select * from t where note = 'for update'", 1, m));
+        assert!(can_append_paging(
+            "select * from t where note = 'for update'",
+            1,
+            m
+        ));
     }
 
     /// 第 1 页跳过 Oracle / DM / SQL Server：11g 没有 OFFSET/FETCH，SQL Server 会引入排序。
     #[test]
     fn 第1页跳过oracle_dm_sqlserver() {
-        for kind in [ConnectionKind::Oracle, ConnectionKind::Dm, ConnectionKind::Sqlserver] {
+        for kind in [
+            ConnectionKind::Oracle,
+            ConnectionKind::Dm,
+            ConnectionKind::Sqlserver,
+        ] {
             assert!(!can_append_paging("select * from t", 1, d(kind)), "{kind:?}");
             // 第 2 页起是既有行为，保持不变
             assert!(can_append_paging("select * from t", 2, d(kind)), "{kind:?}");

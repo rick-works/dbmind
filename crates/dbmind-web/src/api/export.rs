@@ -451,7 +451,10 @@ impl<W: Write + Send> RowSink for SqlUpdateSink<W> {
             if self.pk_index.iter().any(|(pk_index, _)| *pk_index == index) {
                 continue;
             }
-            let value = cells.get(index).map(|cell| sql_literal(cell, self.dialect)).unwrap_or_else(|| "NULL".to_string());
+            let value = cells
+                .get(index)
+                .map(|cell| sql_literal(cell, self.dialect))
+                .unwrap_or_else(|| "NULL".to_string());
             assignments.push(format!("{} = {value}", self.dialect.quote_exact(name)));
         }
         writeln!(
@@ -583,10 +586,7 @@ fn make_text_sink<'a, W: Write + Send + 'a>(
     Ok(sink)
 }
 
-fn make_xlsx_sink<'a, W: Write + std::io::Seek + Send + 'a>(
-    out: W,
-    sheet: &str,
-) -> Box<dyn RowSink + 'a> {
+fn make_xlsx_sink<'a, W: Write + std::io::Seek + Send + 'a>(out: W, sheet: &str) -> Box<dyn RowSink + 'a> {
     Box::new(XlsxSink {
         book: Some(Workbook::new(out)),
         name: sheet.to_string(),
@@ -786,14 +786,13 @@ pub(crate) fn strip_stmt_semicolon(sql: &str) -> &str {
     // `create [or replace] procedure|function|trigger|package [body]` —— 前 5 个词里
     // 出现对象类型即可（or replace 占两个词）。
     let is_routine = head.first().map(|w| w == "create").unwrap_or(false)
-        && head.iter().any(|w| {
-            matches!(
-                w.as_str(),
-                "procedure" | "function" | "trigger" | "package"
-            )
-        });
-    let is_plsql = matches!(head.first().map(|w| w.as_str()).unwrap_or(""), "begin" | "declare" | "merge")
-        || is_routine;
+        && head
+            .iter()
+            .any(|w| matches!(w.as_str(), "procedure" | "function" | "trigger" | "package"));
+    let is_plsql = matches!(
+        head.first().map(|w| w.as_str()).unwrap_or(""),
+        "begin" | "declare" | "merge"
+    ) || is_routine;
     if is_plsql {
         return t;
     }
@@ -859,15 +858,29 @@ pub(crate) fn has_top_level_phrase(sql: &str, phrases: &[&str]) -> bool {
     while i < b.len() {
         let c = b[i];
         if let Some(q) = quote {
-            if c == b'\\' { i += 2; continue; }
-            if c == q { quote = None; }
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
             i += 1;
             continue;
         }
         match c {
-            b'\'' | b'"' | b'`' => { quote = Some(c); i += 1; }
-            b'(' => { depth += 1; i += 1; }
-            b')' => { depth -= 1; i += 1; }
+            b'\'' | b'"' | b'`' => {
+                quote = Some(c);
+                i += 1;
+            }
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+            }
             _ => {
                 let word_start = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
                 if depth == 0 && word_start {
@@ -922,15 +935,29 @@ fn strip_top_level_order_by(base: &str) -> Option<String> {
     while i < b.len() {
         let c = b[i];
         if let Some(q) = quote {
-            if c == b'\\' { i += 2; continue; }
-            if c == q { quote = None; }
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == q {
+                quote = None;
+            }
             i += 1;
             continue;
         }
         match c {
-            b'\'' | b'"' | b'`' => { quote = Some(c); i += 1; }
-            b'(' => { depth += 1; i += 1; }
-            b')' => { depth -= 1; i += 1; }
+            b'\'' | b'"' | b'`' => {
+                quote = Some(c);
+                i += 1;
+            }
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth -= 1;
+                i += 1;
+            }
             _ => {
                 let word_start = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
                 if depth == 0 && word_start {
@@ -939,7 +966,9 @@ fn strip_top_level_order_by(base: &str) -> Option<String> {
                         j >= b.len() || !(b[j].is_ascii_alphanumeric() || b[j] == b'_')
                     };
                     if lb[i..].starts_with(b"order by") && after(8) {
-                        if cut.is_none() { cut = Some(i); }
+                        if cut.is_none() {
+                            cut = Some(i);
+                        }
                     } else if lb[i..].starts_with(b"union") && after(5) {
                         has_top_union = true;
                     }
@@ -1004,8 +1033,7 @@ fn extract_countable_from(base: &str) -> Option<String> {
                 i += 1;
             }
             _ => {
-                let word_start =
-                    i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
+                let word_start = i == 0 || !(b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_');
                 let after = |n: usize| {
                     let j = i + n;
                     j >= b.len() || !(b[j].is_ascii_alphanumeric() || b[j] == b'_')
@@ -1108,12 +1136,7 @@ pub(crate) async fn count_rows(
 /// 探测用 [`paging_sql`]（offset, 1）—— 分页子句追加在语句尾部，不经过派生表，
 /// 对重名列免疫。语义：probe(offset)=true ⇔ 总行数 > offset。指数阶段找上界
 /// （最多到 2⁴⁰ 行，再大不奉陪），二分阶段收口到精确值。
-async fn count_by_probe(
-    state: &AppState,
-    id: &str,
-    database: &str,
-    base: &str,
-) -> Option<i64> {
+async fn count_by_probe(state: &AppState, id: &str, database: &str, base: &str) -> Option<i64> {
     let dialect = {
         let record = crate::api::require_record(state, id).await.ok()?;
         crate::api::dialect::Dialect::new(record.kind())
@@ -1234,9 +1257,7 @@ async fn export_query(
     }
     let total = if req.all {
         // 列数未知（还没取数）：传 0，count_rows 内部会先用 max_rows=1 探一次
-        count_rows(state, id, &req.database, &base, 0)
-            .await
-            .unwrap_or(-1)
+        count_rows(state, id, &req.database, &base, 0).await.unwrap_or(-1)
     } else {
         -1
     };
@@ -1250,7 +1271,11 @@ async fn export_query(
     }
 
     let file = File::create(path).map_err(|e| XError::internal(format!("无法创建导出文件：{e}")))?;
-    let sink_name = if req.table.trim().is_empty() { "export" } else { &req.table };
+    let sink_name = if req.table.trim().is_empty() {
+        "export"
+    } else {
+        &req.table
+    };
     let mut sink: Box<dyn RowSink> = match req.format {
         Format::Xlsx => make_xlsx_sink(file, sink_name),
         other => make_text_sink(other, BufWriter::new(file), sink_name, &req.pk, dialect)?,
@@ -1258,7 +1283,11 @@ async fn export_query(
     // 字段脱敏（导出出口）：命中列在写进文件之前换成摘要/密文。
     // 表名未知（导出的是用户自己写的 SQL）时传空串 —— 这样只有「表留空」的规则参与，
     // 不会因为拿 `export` 这个占位名去碰巧命中某条钉表规则。
-    let mask_table = if req.table.trim().is_empty() { "" } else { req.table.trim() };
+    let mask_table = if req.table.trim().is_empty() {
+        ""
+    } else {
+        req.table.trim()
+    };
     let mut mask = ExportMask::prepare(state, id, req, mask_table).await;
     let mut columns: Vec<String> = Vec::new();
     // ROWNUM 包装带来的辅助列在结果里的下标（Oracle 11g 分页才可能有）
@@ -1295,8 +1324,7 @@ async fn export_query(
         let t_fetch = std::time::Instant::now();
         // 导出是**长任务**（一页一页拉到完）：走独立会话键，不占元数据那条连接 ——
         // 否则导出大表期间「编辑表结构 / 树展开」的取列请求全部排在后面（30 秒超时）。
-        let mut result =
-            run_sql_in_background(state, id, &req.database, sql, page_size as usize).await?;
+        let mut result = run_sql_in_background(state, id, &req.database, sql, page_size as usize).await?;
         if profile {
             fetch_ms += t_fetch.elapsed().as_secs_f64() * 1000.0;
         }
@@ -1308,10 +1336,7 @@ async fn export_query(
             // 导出的 SQL 文件里会出现 `insert into t ("day", "RN__") values …`，
             // 拿去目标库执行必然报「列不存在」。这里按列名（大小写不敏感）定位后，
             // 列清单与每行都同步删掉它。
-            if let Some(index) = columns
-                .iter()
-                .position(|name| name.eq_ignore_ascii_case("rn__"))
-            {
+            if let Some(index) = columns.iter().position(|name| name.eq_ignore_ascii_case("rn__")) {
                 columns.remove(index);
                 paging_aux = Some(index);
             }
@@ -1373,8 +1398,16 @@ async fn export_query(
     if profile {
         let busy = fetch_ms + write_ms;
         let finish_ms = t_finish.elapsed().as_secs_f64() * 1000.0;
-        let rate = if busy > 0.0 { written as f64 / (busy / 1000.0) } else { 0.0 };
-        let share = if busy + finish_ms > 0.0 { fetch_ms / (busy + finish_ms) * 100.0 } else { 0.0 };
+        let rate = if busy > 0.0 {
+            written as f64 / (busy / 1000.0)
+        } else {
+            0.0
+        };
+        let share = if busy + finish_ms > 0.0 {
+            fetch_ms / (busy + finish_ms) * 100.0
+        } else {
+            0.0
+        };
         eprintln!(
             "[export-profile] 行={written} 页={page} 取数={fetch_ms:.0}ms 写盘={write_ms:.0}ms 收尾={finish_ms:.0}ms 取数占比={share:.0}% 净速={rate:.0} 行/秒"
         );
@@ -1383,9 +1416,7 @@ async fn export_query(
     // 自检：统计与实际导出的行数对不上就如实写进日志（以前会静默少行，用户无从察觉）
     if let Some(task) = task {
         if total >= 0 && written != total as u64 {
-            task.log(format!(
-                "统计 {total} 行，实际导出 {written} 行"
-            ));
+            task.log(format!("统计 {total} 行，实际导出 {written} 行"));
         }
     }
 
@@ -1477,7 +1508,8 @@ async fn export_dump(
                 let mut cursor = Cursor::new(Vec::new());
                 {
                     let mut sink = make_xlsx_sink(&mut cursor, table);
-                    let rows = pump_rows(state, id, req, table, dialect, &mut sink, task, &mut notices).await?;
+                    let rows =
+                        pump_rows(state, id, req, table, dialect, &mut sink, task, &mut notices).await?;
                     written += rows;
                     // 必须收尾：xlsx 的容器部件（[Content_Types].xml / workbook / 关系 / 样式）
                     // 是在 finish() 里补写的。漏掉它，包内就只剩一个孤零零的 worksheet 流，
@@ -1495,7 +1527,8 @@ async fn export_dump(
                 task.set_done(index as u64 + 1);
             }
         }
-        zip.finish().map_err(|e| XError::internal(format!("打包失败：{e}")))?;
+        zip.finish()
+            .map_err(|e| XError::internal(format!("打包失败：{e}")))?;
     } else {
         // sql / ddl ⇒ 单一 .sql 文件：DDL（可选 DROP）+ 数据
         let file = File::create(path).map_err(|e| XError::internal(format!("无法创建导出文件：{e}")))?;
@@ -1504,7 +1537,11 @@ async fn export_dump(
             out,
             "-- DBmind 整库转储\n-- 连接 {} ｜ 库 {} ｜ 时间 {}\n",
             record.config.name,
-            if req.database.is_empty() { "(连接默认)" } else { &req.database },
+            if req.database.is_empty() {
+                "(连接默认)"
+            } else {
+                &req.database
+            },
             tasks::stamp()
         )
         .map_err(io_error)?;
@@ -1571,8 +1608,12 @@ async fn export_dump(
                 }
             }
             if req.include_drop {
-                writeln!(out, "drop table if exists {};", qualified(table, &req.database, dialect))
-                    .map_err(io_error)?;
+                writeln!(
+                    out,
+                    "drop table if exists {};",
+                    qualified(table, &req.database, dialect)
+                )
+                .map_err(io_error)?;
             }
             writeln!(out, "{};\n", ddl.trim().trim_end_matches(';')).map_err(io_error)?;
 
@@ -1654,11 +1695,10 @@ impl ExportMask {
             return *hit;
         }
         let hit = {
-            let (conns, config, database, table) =
-                (&self.conns, &self.config, &self.database, &self.table);
-            conns.iter().find_map(|conn| {
-                config.method_for(MaskChannel::Export, conn, database, Some(table), column)
-            })
+            let (conns, config, database, table) = (&self.conns, &self.config, &self.database, &self.table);
+            conns
+                .iter()
+                .find_map(|conn| config.method_for(MaskChannel::Export, conn, database, Some(table), column))
         };
         self.cache.insert(column.to_string(), hit);
         hit
@@ -1706,16 +1746,17 @@ async fn pump_rows<S>(
 where
     S: RowSink + ?Sized,
 {
-    let base = format!(
-        "select * from {}",
-        qualified(table, &req.database, dialect)
-    );
+    let base = format!("select * from {}", qualified(table, &req.database, dialect));
     // 字段脱敏（导出出口）：整条链路只在这里改写值，库里的数据一个字节都不动
     let mut mask = ExportMask::prepare(state, id, req, table).await;
     let page_size = req.size.unwrap_or(PAGE_ROWS).max(1);
     // 与 export_query 同策略：每张表前三页用小页，快速把进度推起来
     let full_page = page_size;
-    let mut page_size = if req.size.is_some() { full_page } else { (full_page / 10).max(1) };
+    let mut page_size = if req.size.is_some() {
+        full_page
+    } else {
+        (full_page / 10).max(1)
+    };
     let mut offset = 0u64;
     let mut written = 0u64;
     let mut pages = 0u64;
@@ -1859,7 +1900,11 @@ pub async fn db(
 ) -> XResult<Response> {
     let req = ExportReq::parse(&body, false)?;
     req.validate()?;
-    let ext = if req.format.packed() { "zip" } else { req.format.ext() };
+    let ext = if req.format.packed() {
+        "zip"
+    } else {
+        req.format.ext()
+    };
     let path = temp_path(ext)?;
     let outcome = export_dump(&state, &id, &req, &path, None).await;
     // 与同步导出同一处纪律：先读、再删、最后传播导出错误；
@@ -1897,8 +1942,7 @@ pub async fn task(
         let req = req.clone();
         let label = record.config.name.clone();
         async move {
-            let path = tasks::artifact_path(&task.id, req.format.ext())
-                .map_err(|e| e)?;
+            let path = tasks::artifact_path(&task.id, req.format.ext()).map_err(|e| e)?;
             let outcome = export_query(&state, &id, &req, &path, Some(&task))
                 .await
                 .map_err(|err| err.message)?;
@@ -1942,7 +1986,11 @@ pub async fn dump_task(
         let req = req.clone();
         let label = record.config.name.clone();
         async move {
-            let ext = if req.format.packed() { "zip" } else { req.format.ext() };
+            let ext = if req.format.packed() {
+                "zip"
+            } else {
+                req.format.ext()
+            };
             let path = tasks::artifact_path(&task.id, ext).map_err(|e| e)?;
             let outcome = export_dump(&state, &id, &req, &path, Some(&task))
                 .await
@@ -1981,10 +2029,7 @@ pub async fn dump_task(
 ///
 /// 「任务不存在」按约定回 **HTTP 200 + `{success:false,status:"notfound"}`**：
 /// 前端的轮询器就是按 `success` 分支的，回 404 会让它把「任务过期」当成「网络故障」。
-pub async fn status(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn status(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     let Some(task) = state.tasks.get(&task_id) else {
         return Ok(Json(json!({
             "success": false,
@@ -2006,24 +2051,20 @@ pub async fn status(
 }
 
 /// `POST /api/{m}/export/cancel/{taskId}` —— 请求取消。
-pub async fn cancel(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn cancel(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     match state.tasks.get(&task_id) {
         Some(task) => {
             task.cancel();
-            Ok(Json(json!({ "success": true, "message": "已请求取消，任务会在当前批次结束后停止" })))
+            Ok(Json(
+                json!({ "success": true, "message": "已请求取消，任务会在当前批次结束后停止" }),
+            ))
         }
         None => Ok(Json(json!({ "success": false, "message": "任务不存在或已过期" }))),
     }
 }
 
 /// `GET /api/{m}/export/download/{taskId}` —— 取回产物。
-pub async fn download(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> Response {
+pub async fn download(State(state): State<AppState>, Path(task_id): Path<String>) -> Response {
     let Some(task) = state.tasks.get(&task_id) else {
         return (StatusCode::NOT_FOUND, "任务不存在或已过期").into_response();
     };
@@ -2084,10 +2125,7 @@ pub async fn save(
     // 目录必须已经存在：另存为对话框给的位置一定存在，这里只是兜住手改路径/目录被删的情况
     if let Some(dir) = target.parent() {
         if !dir.as_os_str().is_empty() && !dir.is_dir() {
-            return Err(XError::bad_request(format!(
-                "目标目录不存在：{}",
-                dir.display()
-            )));
+            return Err(XError::bad_request(format!("目标目录不存在：{}", dir.display())));
         }
     }
     // 产物是一次性中转（download / save 拿完就删）：重复点「保存」时文件已经没了，
@@ -2128,10 +2166,7 @@ pub async fn write_file(
     }
     if let Some(dir) = target.parent() {
         if !dir.as_os_str().is_empty() && !dir.is_dir() {
-            return Err(XError::bad_request(format!(
-                "目标目录不存在：{}",
-                dir.display()
-            )));
+            return Err(XError::bad_request(format!("目标目录不存在：{}", dir.display())));
         }
     }
     std::fs::write(&target, &body)
@@ -2222,10 +2257,7 @@ mod extract_from_tests {
     #[test]
     fn 常规取数语句() {
         // 单表
-        assert_eq!(
-            extract_countable_from("SELECT * FROM t").as_deref(),
-            Some("t")
-        );
+        assert_eq!(extract_countable_from("SELECT * FROM t").as_deref(), Some("t"));
         // 关联（真机主案例：location 视图 left join 合同表）—— 片段整体借出
         assert_eq!(
             extract_countable_from(
@@ -2273,9 +2305,15 @@ mod extract_from_tests {
     #[test]
     fn 会变语义的结构直接放弃() {
         // GROUP BY：count(*) 数的是分组数不是行数
-        assert_eq!(extract_countable_from("SELECT a, count(*) FROM t GROUP BY a"), None);
+        assert_eq!(
+            extract_countable_from("SELECT a, count(*) FROM t GROUP BY a"),
+            None
+        );
         // HAVING 同理（必然伴随分组）
-        assert_eq!(extract_countable_from("SELECT a FROM t GROUP BY a HAVING count(*) > 1"), None);
+        assert_eq!(
+            extract_countable_from("SELECT a FROM t GROUP BY a HAVING count(*) > 1"),
+            None
+        );
         // DISTINCT：去重后行数 ≠ 关联后的行数
         assert_eq!(extract_countable_from("SELECT DISTINCT a FROM t"), None);
         // count(distinct x) 里的 distinct 在括号里，深度 > 0，不该误杀

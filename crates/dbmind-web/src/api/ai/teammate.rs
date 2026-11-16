@@ -66,10 +66,7 @@ fn now() -> String {
 /// 本地 id（`thr_20261031T101502123`）。会话只需要"同一台机器上唯一"，
 /// 用时间戳+毫秒足够，不必引入 uuid 依赖。
 fn new_id(prefix: &str) -> String {
-    format!(
-        "{prefix}_{}",
-        Local::now().format("%Y%m%dT%H%M%S%3f")
-    )
+    format!("{prefix}_{}", Local::now().format("%Y%m%dT%H%M%S%3f"))
 }
 
 /// 下次该跑的时间（`every_minutes` 之后）。时间串统一由这里和 `now_iso` 生成，
@@ -107,7 +104,11 @@ pub async fn thread_create(State(_state): State<AppState>, Json(body): Json<Valu
     let title = text(&body, "title");
     let row = AiThreadRow {
         id: if id.is_empty() { new_id("thr") } else { id },
-        title: if title.is_empty() { "新的对话".to_string() } else { title },
+        title: if title.is_empty() {
+            "新的对话".to_string()
+        } else {
+            title
+        },
         connection_id: text(&body, "connectionId"),
         database_name: text(&body, "database"),
         created_at: String::new(),
@@ -250,16 +251,17 @@ fn memory_json(row: &AiMemoryRow) -> Value {
 }
 
 /// `GET /api/ai/memory?connectionId=&limit=` —— 记忆列表。
-pub async fn memory_list(State(_state): State<AppState>, axum::extract::Query(query): axum::extract::Query<Value>) -> XResult<Json<Value>> {
+pub async fn memory_list(
+    State(_state): State<AppState>,
+    axum::extract::Query(query): axum::extract::Query<Value>,
+) -> XResult<Json<Value>> {
     let conn = query.get("connectionId").and_then(Value::as_str).unwrap_or("");
     let limit = query
         .get("limit")
         .and_then(Value::as_u64)
         .unwrap_or(200)
         .clamp(1, 500) as usize;
-    let rows = store()?
-        .ai_memory_list(Some(conn), limit)
-        .unwrap_or_default();
+    let rows = store()?.ai_memory_list(Some(conn), limit).unwrap_or_default();
     Ok(Json(json!({
         "success": true,
         "memories": rows.iter().map(memory_json).collect::<Vec<_>>(),
@@ -274,7 +276,11 @@ pub async fn memory_add(State(_state): State<AppState>, Json(body): Json<Value>)
     let fact = need(&body, "fact")?;
     let scope = {
         let scope = text(&body, "scope");
-        if scope.is_empty() { "connection".to_string() } else { scope }
+        if scope.is_empty() {
+            "connection".to_string()
+        } else {
+            scope
+        }
     };
     let row = AiMemoryRow {
         id: String::new(),
@@ -351,10 +357,8 @@ pub async fn memory_extract(state: &AppState, req: &crate::api::ai::AiRequest, u
         content: prompt,
     }];
     // 提炼这一次不需要用量（不进界面统计），所以走不带 usage 的 `chat`
-    let Ok(raw) = crate::api::ai::run_blocking(move || {
-        crate::api::ai::config::chat(&model, system, &messages)
-    })
-    .await
+    let Ok(raw) =
+        crate::api::ai::run_blocking(move || crate::api::ai::config::chat(&model, system, &messages)).await
     else {
         return;
     };
@@ -545,7 +549,10 @@ pub async fn change_approve(
         return Err(XError::bad_request("变更单不存在"));
     };
     if change.status != "pending" {
-        return Err(XError::bad_request(format!("这张单子当前是 {}，只能批准 pending 的", change.status)));
+        return Err(XError::bad_request(format!(
+            "这张单子当前是 {}，只能批准 pending 的",
+            change.status
+        )));
     }
     let who = approver_of(&query);
     store.ai_change_set_status(&id, "approved", &chain_push(&change.approved_by, &who), "")?;
@@ -591,7 +598,9 @@ pub async fn change_confirm(
     }
     store.ai_change_set_status(&id, "confirmed", &chain_push(&change.approved_by, &who), "")?;
     let _ = store.ai_event_add(&change.thread_id, &id, &who, "confirm", &change.title);
-    Ok(Json(json!({ "success": true, "status": "confirmed", "approvers": chain_push(&change.approved_by, &who) })))
+    Ok(Json(
+        json!({ "success": true, "status": "confirmed", "approvers": chain_push(&change.approved_by, &who) }),
+    ))
 }
 
 /// `POST /api/ai/changes/{id}/reject` —— 人工拒绝。
@@ -652,7 +661,15 @@ pub async fn change_apply(
     }
     let who = approver_of(&query);
     let started = std::time::Instant::now();
-    match run_sql_in_write(&state, &change.connection_id, &change.database_name, change.sql.clone(), 0).await {
+    match run_sql_in_write(
+        &state,
+        &change.connection_id,
+        &change.database_name,
+        change.sql.clone(),
+        0,
+    )
+    .await
+    {
         Ok(result) => {
             let elapsed = started.elapsed().as_millis() as u64;
             let affected = result.affected_rows.map(|rows| rows as i64).unwrap_or(-1);
@@ -688,19 +705,34 @@ pub async fn change_undo(State(state): State<AppState>, Path(id): Path<String>) 
         return Err(XError::bad_request("变更单不存在"));
     };
     if change.status != "applied" {
-        return Err(XError::bad_request(format!("这张单子当前是 {}，只有已执行的才能撤销", change.status)));
+        return Err(XError::bad_request(format!(
+            "这张单子当前是 {}，只有已执行的才能撤销",
+            change.status
+        )));
     }
     if change.undo_sql.trim().is_empty() {
-        return Err(XError::bad_request("这个动作没有可靠的反向语句，无法撤销 —— 请从备份恢复"));
+        return Err(XError::bad_request(
+            "这个动作没有可靠的反向语句，无法撤销 —— 请从备份恢复",
+        ));
     }
     if !store.ai_write_allowed() {
         return Err(XError::bad_request("总开关 safety.aiWriteEnabled 未开启"));
     }
-    match run_sql_in_write(&state, &change.connection_id, &change.database_name, change.undo_sql.clone(), 0).await {
+    match run_sql_in_write(
+        &state,
+        &change.connection_id,
+        &change.database_name,
+        change.undo_sql.clone(),
+        0,
+    )
+    .await
+    {
         Ok(_) => {
             store.ai_change_set_status(&id, "undone", "user", "")?;
             let _ = store.ai_event_add(&change.thread_id, &id, "user", "undo", &change.undo_sql);
-            Ok(Json(json!({ "success": true, "status": "undone", "undoSql": change.undo_sql })))
+            Ok(Json(
+                json!({ "success": true, "status": "undone", "undoSql": change.undo_sql }),
+            ))
         }
         Err(err) => {
             let _ = store.ai_event_add(&change.thread_id, &id, "user", "undo-failed", &err.message);
@@ -749,7 +781,11 @@ pub async fn task_save(State(_state): State<AppState>, Json(body): Json<Value>) 
         id: text(&body, "id"),
         title: {
             let title = text(&body, "title");
-            if title.is_empty() { "每日结构巡检".to_string() } else { title }
+            if title.is_empty() {
+                "每日结构巡检".to_string()
+            } else {
+                title
+            }
         },
         prompt: text(&body, "prompt"),
         connection_id: need(&body, "connectionId")?,
@@ -757,7 +793,11 @@ pub async fn task_save(State(_state): State<AppState>, Json(body): Json<Value>) 
         every_minutes: every,
         enabled: body.get("enabled").and_then(Value::as_bool).unwrap_or(true),
         last_run_at: None,
-        next_run_at: next_run(if text(&body, "runNow").is_empty() { every } else { 0 }),
+        next_run_at: next_run(if text(&body, "runNow").is_empty() {
+            every
+        } else {
+            0
+        }),
         last_status: String::new(),
         created_at: String::new(),
     };
@@ -939,7 +979,8 @@ async fn ask_task(state: &AppState, task: &AiTaskRow) -> XResult<(String, Value)
         role: "user".to_string(),
         content: task.prompt.clone(),
     }];
-    let (answer, usage) = crate::api::ai::run_blocking(move || chat_with_usage(&model, &system, &messages)).await?;
+    let (answer, usage) =
+        crate::api::ai::run_blocking(move || chat_with_usage(&model, &system, &messages)).await?;
     Ok((answer, usage.map(|one| json!(one)).unwrap_or(Value::Null)))
 }
 
@@ -966,7 +1007,11 @@ pub async fn job_list(
     State(_state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<Value>,
 ) -> XResult<Json<Value>> {
-    let limit = query.get("limit").and_then(Value::as_u64).unwrap_or(50).clamp(1, 200) as usize;
+    let limit = query
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(50)
+        .clamp(1, 200) as usize;
     let rows = store()?.ai_job_list(limit).unwrap_or_default();
     Ok(Json(json!({
         "success": true,
@@ -1001,7 +1046,11 @@ pub async fn event_list(
     State(_state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<Value>,
 ) -> XResult<Json<Value>> {
-    let limit = query.get("limit").and_then(Value::as_u64).unwrap_or(100).clamp(1, 500) as usize;
+    let limit = query
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(100)
+        .clamp(1, 500) as usize;
     let rows = store()?.ai_event_list(limit).unwrap_or_default();
     Ok(Json(json!({
         "success": true,
@@ -1125,7 +1174,11 @@ pub async fn feedback(State(_state): State<AppState>, Json(body): Json<Value>) -
         &text(&body, "threadId"),
         "",
         "user",
-        if verdict == "down" { "feedback-down" } else { "feedback-up" },
+        if verdict == "down" {
+            "feedback-down"
+        } else {
+            "feedback-up"
+        },
         &note,
     );
     Ok(Json(json!({ "success": true, "memoryId": saved })))

@@ -39,9 +39,9 @@ use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
 use crate::api::dialect::{Dialect, Meta};
-use crate::api::meta::pick_ddl;
 use crate::api::error::{XError, XResult};
 use crate::api::export::{ddl_of, sql_literal};
+use crate::api::meta::pick_ddl;
 use crate::api::meta::{rows_of, run_sql_in, run_sql_in_background};
 use crate::api::tasks::{self, Artifact, Task};
 use crate::api::{blocking, require_record, Params};
@@ -197,7 +197,11 @@ fn install_command(spec: CliSpec, restore: bool) -> Option<String> {
         }
         return None;
     }
-    for (manager, flag) in [("apt-get", "install -y"), ("dnf", "install -y"), ("yum", "install -y")] {
+    for (manager, flag) in [
+        ("apt-get", "install -y"),
+        ("dnf", "install -y"),
+        ("yum", "install -y"),
+    ] {
         if find_tool(&[manager]).is_some() {
             return Some(format!("sudo -n {manager} {flag} {}", spec.package));
         }
@@ -333,7 +337,11 @@ fn task_view(task: &Task, restore: bool) -> Value {
     view.insert("message".to_string(), message.clone());
     view.insert(
         "error".to_string(),
-        if status == json!("error") { message } else { Value::Null },
+        if status == json!("error") {
+            message
+        } else {
+            Value::Null
+        },
     );
     let artifact = task.artifact();
     view.insert(
@@ -447,7 +455,11 @@ async fn browse(raw: Option<String>, file_mode: bool) -> XResult<Json<Value>> {
     let home = std::env::var("USERPROFILE")
         .ok()
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| std::env::var("HOME").ok().filter(|value| !value.trim().is_empty()))
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
         .unwrap_or_default();
 
     if path.trim().is_empty() {
@@ -530,10 +542,7 @@ async fn browse(raw: Option<String>, file_mode: bool) -> XResult<Json<Value>> {
 // ------------------------------------------------------------------ CLI 能力
 
 /// `GET /api/backup/cli-guide` —— 命令行能力与命令参考。
-pub async fn cli_guide(
-    State(state): State<AppState>,
-    RawQuery(raw): RawQuery,
-) -> XResult<Json<Value>> {
+pub async fn cli_guide(State(state): State<AppState>, RawQuery(raw): RawQuery) -> XResult<Json<Value>> {
     let conn = Params::parse(raw.as_deref())
         .get("connectionId")
         .ok_or_else(|| XError::bad_request("缺少 connectionId 参数"))?;
@@ -579,10 +588,7 @@ pub async fn cli_guide(
 }
 
 /// `GET /api/backup/cli-tool-status` —— 工具是否可用（向导第 2 步的预检）。
-pub async fn cli_tool_status(
-    State(state): State<AppState>,
-    RawQuery(raw): RawQuery,
-) -> XResult<Json<Value>> {
+pub async fn cli_tool_status(State(state): State<AppState>, RawQuery(raw): RawQuery) -> XResult<Json<Value>> {
     let params = Params::parse(raw.as_deref());
     let conn = params
         .get("connectionId")
@@ -699,10 +705,7 @@ fn run_shell(command: &str) -> XResult<(i32, String)> {
 // ------------------------------------------------------------------ 备份
 
 /// `POST /api/backup/start` —— 备份（异步任务）。
-pub async fn start(
-    State(state): State<AppState>,
-    Json(body): Json<BackupRequest>,
-) -> XResult<Json<Value>> {
+pub async fn start(State(state): State<AppState>, Json(body): Json<BackupRequest>) -> XResult<Json<Value>> {
     if body.connection_id.trim().is_empty() {
         return Err(XError::bad_request("缺少 connectionId 参数"));
     }
@@ -715,9 +718,7 @@ pub async fn start(
         .or_else(|| record.config.database.clone())
         .unwrap_or_default();
     if database.trim().is_empty() && kind.key() != "sqlite" {
-        return Err(XError::bad_request(
-            "缺少 database 参数：备份需要明确备份哪个库",
-        ));
+        return Err(XError::bad_request("缺少 database 参数：备份需要明确备份哪个库"));
     }
     let target_dir = match body.target_dir.clone().filter(|value| !value.trim().is_empty()) {
         Some(dir) => PathBuf::from(dir),
@@ -762,15 +763,16 @@ pub async fn start(
             if use_cli {
                 if let Some(spec) = spec {
                     match run_cli_backup(
-                                    &state,
-                                    task.clone(),
-                                    &record.id,
-                                    &spec,
-                                    &path,
-                                    &database,
-                                    cli_override.as_ref(),
-                                )
-                                .await {
+                        &state,
+                        task.clone(),
+                        &record.id,
+                        &spec,
+                        &path,
+                        &database,
+                        cli_override.as_ref(),
+                    )
+                    .await
+                    {
                         Ok(log) => {
                             task.step(log);
                             task.set_done(100);
@@ -833,7 +835,8 @@ pub async fn start(
                                     &database,
                                     cli_override.as_ref(),
                                 )
-                                .await {
+                                .await
+                                {
                                     Ok(log) => {
                                         task.step(log);
                                         task.set_done(100);
@@ -867,7 +870,8 @@ pub async fn start(
                                     &database,
                                     cli_override.as_ref(),
                                 )
-                                .await {
+                                .await
+                                {
                                     Ok(log) => {
                                         task.step(log);
                                         task.set_done(100);
@@ -881,7 +885,9 @@ pub async fn start(
                                         });
                                         return Ok(Some(json!({ "detail": detail })));
                                     }
-                                    Err(err) => task.log(format!("命令行备份失败：{}，回退内置引擎", err.message)),
+                                    Err(err) => {
+                                        task.log(format!("命令行备份失败：{}，回退内置引擎", err.message))
+                                    }
                                 }
                             } else {
                                 task.log("仍未检测到工具，回退内置引擎");
@@ -953,7 +959,11 @@ fn cli_command(
 ) -> XResult<Command> {
     if kind.key() == "sqlite" {
         // SQLite 的备份/还原就是「整个文件 ↔ SQL 文本」，shell 重定向最直接
-        let template = if restore { spec.restore_hint } else { spec.dump_hint };
+        let template = if restore {
+            spec.restore_hint
+        } else {
+            spec.dump_hint
+        };
         let line = template
             .replace("{sqliteFile}", sqlite_file)
             .replace("{filePath}", file_path);
@@ -962,8 +972,8 @@ fn cli_command(
         return Ok(command);
     }
     let tool_name = if restore { spec.restore_tool } else { spec.tool };
-    let tool = find_tool(&[tool_name])
-        .ok_or_else(|| XError::internal(format!("未找到命令行工具 {tool_name}")))?;
+    let tool =
+        find_tool(&[tool_name]).ok_or_else(|| XError::internal(format!("未找到命令行工具 {tool_name}")))?;
     let mut command = Command::new(tool);
     match kind.key() {
         "mysql" | "mariadb" | "doris" => {
@@ -976,9 +986,10 @@ fn cli_command(
             }
             if restore {
                 command.arg(database);
-                command.stdin(std::fs::File::open(file_path).map_err(|err| {
-                    XError::internal(format!("打开备份文件失败：{err}"))
-                })?);
+                command.stdin(
+                    std::fs::File::open(file_path)
+                        .map_err(|err| XError::internal(format!("打开备份文件失败：{err}")))?,
+                );
             } else {
                 command.arg("--databases").arg(database);
                 command.stdout(
@@ -1051,12 +1062,12 @@ async fn run_cli_backup(
     let kind = record.kind();
     let host = resolve_cli(over.and_then(|o| o.host.clone()), record.config.host.clone())
         .unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = over
-        .and_then(|o| o.port)
-        .or(record.config.port)
-        .unwrap_or(0);
-    let user = resolve_cli(over.and_then(|o| o.username.clone()), record.config.username.clone())
-        .unwrap_or_default();
+    let port = over.and_then(|o| o.port).or(record.config.port).unwrap_or(0);
+    let user = resolve_cli(
+        over.and_then(|o| o.username.clone()),
+        record.config.username.clone(),
+    )
+    .unwrap_or_default();
     let password = resolve_cli(
         over.and_then(|o| o.password.clone()),
         record.config.password.clone(),
@@ -1077,7 +1088,11 @@ async fn run_cli_backup(
         &file_path,
         &sqlite_file,
     )?;
-    let tool = if kind.key() == "sqlite" { "sqlite3" } else { spec.tool };
+    let tool = if kind.key() == "sqlite" {
+        "sqlite3"
+    } else {
+        spec.tool
+    };
     task.step(format!("执行 {tool}（备份到 {}）", path.display()));
     // 自己 spawn 再等：**光落取消标志位不够** —— .output().await 期间打断不了，
     // 用户点了取消、界面写着"已取消"，mysqldump 其实还在后台跑完并写文件。
@@ -1130,8 +1145,11 @@ async fn run_cli_restore(
     let host = resolve_cli(over.and_then(|o| o.host.clone()), record.config.host.clone())
         .unwrap_or_else(|| "127.0.0.1".to_string());
     let port = over.and_then(|o| o.port).or(record.config.port).unwrap_or(0);
-    let user = resolve_cli(over.and_then(|o| o.username.clone()), record.config.username.clone())
-        .unwrap_or_default();
+    let user = resolve_cli(
+        over.and_then(|o| o.username.clone()),
+        record.config.username.clone(),
+    )
+    .unwrap_or_default();
     let password = resolve_cli(
         over.and_then(|o| o.password.clone()),
         record.config.password.clone(),
@@ -1151,7 +1169,11 @@ async fn run_cli_restore(
         &file_path,
         &sqlite_file,
     )?;
-    let tool = if kind.key() == "sqlite" { "sqlite3" } else { spec.restore_tool };
+    let tool = if kind.key() == "sqlite" {
+        "sqlite3"
+    } else {
+        spec.restore_tool
+    };
     task.step(format!("执行 {tool} 还原 {}", path.display()));
     // 还原（psql/mysql/sqlcmd）同样能跑几分钟：用 tokio 的异步子进程，别占着 tokio worker。
     // 自己 spawn 再等：**光落取消标志位不够** —— .output().await 期间打断不了，
@@ -1279,11 +1301,7 @@ fn write_insert_rows<W: Write>(
     let multi = supports_multi_row_insert(dialect.kind.key());
     // 不支持多值的方言每行一条；支持的按 batch 行合并（再受硬上限约束）
     let per_stmt = if multi { batch.clamp(1, INSERT_ROWS_CAP) } else { 1 };
-    let prefix = format!(
-        "insert into {} ({}) values ",
-        dialect.quote(table),
-        column_list
-    );
+    let prefix = format!("insert into {} ({}) values ", dialect.quote(table), column_list);
     let mut tuples: Vec<String> = Vec::new();
     let mut bytes = 0usize;
     for row in rows {
@@ -1493,7 +1511,15 @@ fn merge_single_row_inserts(statements: Vec<String>, kind_key: &str) -> (Vec<Str
                 let too_many = rows + count > INSERT_ROWS_CAP;
                 let too_big = !tuples.is_empty() && bytes + size + 2 > INSERT_BYTES_CAP;
                 if !same || too_many || too_big {
-                    flush(&mut out, &mut flags, &mut prefix, &mut tuples, &mut rows, &mut bytes, &mut parts);
+                    flush(
+                        &mut out,
+                        &mut flags,
+                        &mut prefix,
+                        &mut tuples,
+                        &mut rows,
+                        &mut bytes,
+                        &mut parts,
+                    );
                     prefix = Some(head);
                 }
                 rows += count;
@@ -1502,13 +1528,29 @@ fn merge_single_row_inserts(statements: Vec<String>, kind_key: &str) -> (Vec<Str
                 tuples.push(list);
             }
             None => {
-                flush(&mut out, &mut flags, &mut prefix, &mut tuples, &mut rows, &mut bytes, &mut parts);
+                flush(
+                    &mut out,
+                    &mut flags,
+                    &mut prefix,
+                    &mut tuples,
+                    &mut rows,
+                    &mut bytes,
+                    &mut parts,
+                );
                 out.push(sql);
                 flags.push(false);
             }
         }
     }
-    flush(&mut out, &mut flags, &mut prefix, &mut tuples, &mut rows, &mut bytes, &mut parts);
+    flush(
+        &mut out,
+        &mut flags,
+        &mut prefix,
+        &mut tuples,
+        &mut rows,
+        &mut bytes,
+        &mut parts,
+    );
     (out, flags)
 }
 
@@ -1554,8 +1596,16 @@ async fn builtin_backup(
         let mut dropped = 0usize;
         // 别名加双引号：Oracle 默认把列名报成大写 TABLE_NAME，用小写键取会拿不到 ⇒ 过滤失效
         for (sql, key, list) in [
-            ("select table_name as \"table_name\" from user_tables", "table_name", &mut all_tables),
-            ("select view_name as \"view_name\" from user_views", "view_name", &mut all_views),
+            (
+                "select table_name as \"table_name\" from user_tables",
+                "table_name",
+                &mut all_tables,
+            ),
+            (
+                "select view_name as \"view_name\" from user_views",
+                "view_name",
+                &mut all_views,
+            ),
         ] {
             if let Ok(result) = run_sql_in(state, conn, database, sql.to_string(), 100_000).await {
                 // 注意：**空清单也要照样过滤**（当前用户一个视图都没有是正常的，
@@ -1575,8 +1625,16 @@ async fn builtin_backup(
             ));
         }
     }
-    let tables: Vec<String> = if body.tables.is_empty() { all_tables } else { body.tables.clone() };
-    let views: Vec<String> = if body.views.is_empty() { all_views } else { body.views.clone() };
+    let tables: Vec<String> = if body.tables.is_empty() {
+        all_tables
+    } else {
+        body.tables.clone()
+    };
+    let views: Vec<String> = if body.views.is_empty() {
+        all_views
+    } else {
+        body.views.clone()
+    };
 
     if tables.is_empty() {
         return Err(XError::bad_request("这个库里没有表可备份"));
@@ -1611,7 +1669,11 @@ async fn builtin_backup(
         out,
         "-- DBmind 数据库备份\n-- 连接 {} ｜ 库 {} ｜ 时间 {}\n",
         record.config.name,
-        if database.is_empty() { "(连接默认)" } else { database },
+        if database.is_empty() {
+            "(连接默认)"
+        } else {
+            database
+        },
         tasks::stamp()
     )
     .map_err(|e| XError::internal(format!("写入备份文件失败：{e}")))?;
@@ -1625,12 +1687,8 @@ async fn builtin_backup(
             notices.push(format!("表 {table} 的建表语句按列元数据拼出（可能少索引/外键）"));
         }
         if options.include_drop {
-            writeln!(
-                out,
-                "drop table if exists {};",
-                dialect.quote(table)
-            )
-            .map_err(|e| XError::internal(e.to_string()))?;
+            writeln!(out, "drop table if exists {};", dialect.quote(table))
+                .map_err(|e| XError::internal(e.to_string()))?;
         }
         writeln!(out, "{};\n", ddl.trim().trim_end_matches(';'))
             .map_err(|e| XError::internal(e.to_string()))?;
@@ -1688,28 +1746,78 @@ async fn builtin_backup(
     // 定义来自 `dialect.object_source`（与「查看定义」同一条查询），因此内置引擎
     // 也能备份例程与触发器；方言拿不到的（`Absent` / `Unwritten`）如实记进日志。
     let views_done = export_objects(
-        state, &task, conn, database, &dialect, "view", "视图", &views,
-        options.include_views, options.include_drop, &mut out, &mut notices,
+        state,
+        &task,
+        conn,
+        database,
+        &dialect,
+        "view",
+        "视图",
+        &views,
+        options.include_views,
+        options.include_drop,
+        &mut out,
+        &mut notices,
     )
     .await?;
     let functions = export_objects(
-        state, &task, conn, database, &dialect, "function", "函数", &body.functions,
-        options.include_procedures, options.include_drop, &mut out, &mut notices,
+        state,
+        &task,
+        conn,
+        database,
+        &dialect,
+        "function",
+        "函数",
+        &body.functions,
+        options.include_procedures,
+        options.include_drop,
+        &mut out,
+        &mut notices,
     )
     .await?;
     let procedures = export_objects(
-        state, &task, conn, database, &dialect, "procedure", "存储过程", &body.procedures,
-        options.include_procedures, options.include_drop, &mut out, &mut notices,
+        state,
+        &task,
+        conn,
+        database,
+        &dialect,
+        "procedure",
+        "存储过程",
+        &body.procedures,
+        options.include_procedures,
+        options.include_drop,
+        &mut out,
+        &mut notices,
     )
     .await?;
     let triggers = export_objects(
-        state, &task, conn, database, &dialect, "trigger", "触发器", &body.triggers,
-        options.include_triggers, options.include_drop, &mut out, &mut notices,
+        state,
+        &task,
+        conn,
+        database,
+        &dialect,
+        "trigger",
+        "触发器",
+        &body.triggers,
+        options.include_triggers,
+        options.include_drop,
+        &mut out,
+        &mut notices,
     )
     .await?;
     let events = export_objects(
-        state, &task, conn, database, &dialect, "event", "事件", &body.events,
-        options.include_events, options.include_drop, &mut out, &mut notices,
+        state,
+        &task,
+        conn,
+        database,
+        &dialect,
+        "event",
+        "事件",
+        &body.events,
+        options.include_events,
+        options.include_drop,
+        &mut out,
+        &mut notices,
     )
     .await?;
 
@@ -1944,10 +2052,7 @@ pub async fn restore_start_local(
 }
 
 /// `POST /api/backup/restore/start` —— multipart 上传备份文件后还原。
-pub async fn restore_start(
-    State(state): State<AppState>,
-    mut multipart: Multipart,
-) -> XResult<Json<Value>> {
+pub async fn restore_start(State(state): State<AppState>, mut multipart: Multipart) -> XResult<Json<Value>> {
     let mut connection_id = String::new();
     let mut database = String::new();
     // **边收边写**：上传的备份动辄几个 GB，先在内存里攒齐再落盘会把内存吃光、
@@ -1986,7 +2091,11 @@ pub async fn restore_start(
             let path = dir.join(format!(
                 "{}_{}",
                 tasks::stamp(),
-                safe_name(if file_name.is_empty() { "upload.sql" } else { &file_name })
+                safe_name(if file_name.is_empty() {
+                    "upload.sql"
+                } else {
+                    &file_name
+                })
             ));
             let mut file = match tokio::fs::File::create(&path).await {
                 Ok(file) => file,
@@ -2034,8 +2143,8 @@ pub async fn restore_start(
             }
         }
     }
-    let (path, total) = saved
-        .ok_or_else(|| XError::bad_request("没有收到上传的备份文件（字段名应为 file）"))?;
+    let (path, total) =
+        saved.ok_or_else(|| XError::bad_request("没有收到上传的备份文件（字段名应为 file）"))?;
     if total == 0 {
         drop_file(&path);
         return Err(XError::bad_request("上传的备份文件是空的"));
@@ -2088,10 +2197,7 @@ async fn spawn_restore(
         )));
     }
     if !path.is_file() {
-        return Err(XError::bad_request(format!(
-            "备份文件不存在：{}",
-            path.display()
-        )));
+        return Err(XError::bad_request(format!("备份文件不存在：{}", path.display())));
     }
     let file_name = path
         .file_name()
@@ -2155,8 +2261,7 @@ async fn spawn_restore(
                 .await
                 .map_err(|e| format!("读取备份文件失败：{e}"))?;
             // 按 SQL 协议切句：备份文件里就是一堆以 `;` 分隔的语句
-            let statements =
-                dbmind_core::split_statements(dbmind_core::RuntimeProtocol::Sql, &text);
+            let statements = dbmind_core::split_statements(dbmind_core::RuntimeProtocol::Sql, &text);
             let usable: Vec<String> = statements
                 .into_iter()
                 .filter(|sql| !sql.trim().is_empty())
@@ -2239,10 +2344,7 @@ async fn spawn_restore(
                 started.elapsed().as_millis() as u64,
                 None,
             );
-            let detail = format!(
-                "还原完成：执行 {executed} 条语句（{}）",
-                path.display()
-            );
+            let detail = format!("还原完成：执行 {executed} 条语句（{}）", path.display());
             task.set_message(detail.clone());
             task.set_result(json!({ "detail": detail }));
             Ok(Some(json!({ "detail": detail })))
@@ -2255,10 +2357,7 @@ async fn spawn_restore(
 // ------------------------------------------------------------------ 任务端点
 
 /// `GET /api/backup/task/{taskId}` —— 备份进度。
-pub async fn task_status(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn task_status(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     let Some(task) = state.tasks.get(&task_id) else {
         return Ok(Json(json!({
             "success": false,
@@ -2289,10 +2388,7 @@ pub async fn restore_status(
 }
 
 /// `POST /api/backup/cancel/{taskId}` / `restore/cancel/{taskId}` —— 取消。
-pub async fn cancel(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn cancel(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     match state.tasks.get(&task_id) {
         Some(task) => {
             task.cancel();
@@ -2369,7 +2465,11 @@ pub async fn download(State(state): State<AppState>, Path(task_id): Path<String>
             match file.read(&mut buf).await {
                 Ok(0) => break,
                 Ok(n) => {
-                    if tx.send(Ok(axum::body::Bytes::copy_from_slice(&buf[..n]))).await.is_err() {
+                    if tx
+                        .send(Ok(axum::body::Bytes::copy_from_slice(&buf[..n])))
+                        .await
+                        .is_err()
+                    {
                         break; // 客户端断开：停止读盘
                     }
                 }
@@ -2479,10 +2579,7 @@ mod tests {
     fn oracle与达梦不合并() {
         for kind in ["oracle", "dm"] {
             let out = merge(
-                &[
-                    "insert into t (a) values (1)",
-                    "insert into t (a) values (2)",
-                ],
+                &["insert into t (a) values (1)", "insert into t (a) values (2)"],
                 kind,
             );
             assert_eq!(out.len(), 2, "{kind} 不支持多行 values");

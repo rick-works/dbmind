@@ -4,6 +4,7 @@ import { locale, t } from '../utils/i18n'
 // 见 utils/errMsg.js。改写 error.message 时顺带清一遍，所有直接读 e.message 的旧调用点
 // 也一并受益（不必逐个改成 errMsg）。
 import { cleanErrText } from '../utils/errMsg'
+import { moduleOfCode } from '../types'
 
 const http = axios.create({ baseURL: '', timeout: 300000 })
 
@@ -143,23 +144,10 @@ http.interceptors.response.use(
 // 一个模块可服务多种类型（mysql 模块服务 MYSQL/MARIADB/DORIS，oracle 模块服务 ORACLE/DM）。
 // 因此带连接 id 的请求统一解析为 /api/{module}/{id}/…，不再走宿主旧聚合路由。
 //
-// KINGBASE 归 `postgresql` 模块：它与 PG 共用同一套方言分支（内核侧 module_of_type_code
-// 也是这么映的）。之前这里写成 oracle，前后端对同一个类型给出两套模块归属 ——
-// 当前只因「9 个前缀共用同一批 handler」才没出错，语义上却是拧着的。
-const TYPE_TO_MODULE = {
-  MYSQL: 'mysql', MARIADB: 'mysql', DORIS: 'mysql',
-  POSTGRESQL: 'postgresql', KINGBASE: 'postgresql',
-  SQLSERVER: 'sqlserver',
-  ORACLE: 'oracle', DM: 'oracle',
-  DB2: 'db2',
-  H2: 'h2',
-  DERBY: 'derby',
-  CLICKHOUSE: 'clickhouse',
-  SQLITE: 'sqlite',
-  MONGODB: 'mongodb',
-  REDIS: 'redis',
-  ELASTICSEARCH: 'elasticsearch'
-}
+// 映射**不再手写**：每个类型定义（frontend/src/types/*.js）自带 `module` 字段，
+// 由 types/index.js 汇总导出（moduleOfCode）；内核侧同一份归属由 build.rs 从
+// plugins/connection-types/*.yaml 的 `dialect` 派生。`npm run guard` 会核对两边一致，
+// 不会再出现「前后端对同一个类型给出两套模块归属」。
 
 // 连接 id -> type 缓存：请求先 listConnections 填充，TTL 3 秒内复用，避免高频请求反复拉取
 let connMap = new Map()
@@ -180,7 +168,7 @@ function refreshConnMap() {
   return connFetch
 }
 function moduleOfType(type) {
-  const m = TYPE_TO_MODULE[String(type || '').toUpperCase()]
+  const m = moduleOfCode(String(type || '').toUpperCase())
   if (!m) throw new Error(t('api.unsupportedType', { type }))
   return m
 }

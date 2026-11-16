@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="16" height="16" role="img" aria-label="TiDB">
+  <rect width="32" height="32" rx="7" fill="#E8432F"/>
+  <path d="M6.5 10.6 16 5.3l9.5 5.3-9.5 5.3-9.5-5.3Z" fill="#FFFFFF" opacity="0.95"/>
+  <path d="M6.5 15.4 16 20.7l9.5-5.3v2.9L16 23.6l-9.5-5.3v-2.9Z" fill="#FFFFFF" opacity="0.62"/>
+  <path d="M6.5 20.2 16 25.5l9.5-5.3v2.4L16 27.9l-9.5-5.3v-2.4Z" fill="#FFFFFF" opacity="0.38"/>
+</svg>

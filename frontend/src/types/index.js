@@ -43,6 +43,18 @@ export const labelOf = (code) => { const d = byType(code); return d.labelKey ? t
 /** 标识符引号风格：BACKTICK / BRACKET / DOUBLE_QUOTE */
 export const quoteStyleOf = (code) => byType(code).quoteStyle
 
+/**
+ * 上游兼容接口的模块路径段（`/api/{module}/{id}/…`）。
+ *
+ * 以前这张表手写在 `api/index.js` 的 `TYPE_TO_MODULE`，与后端
+ * `dialect.rs::module_of_type_code` 必须逐条一致，漏一条就是该类型所有操作 404。
+ * 现在两侧都由清单派生：后端读 `plugins/connection-types/*.yaml`（build.rs 生成），
+ * 前端读各类型定义里的 `module` 字段（`npm run guard` 会比对两边是否一致）。
+ *
+ * @returns {string|null} 未知类型返回 null（调用方据此报「不支持的类型」）
+ */
+export const moduleOfCode = (code) => byType(code).module || null
+
 /** 是否需要 schema 层级导航：'none' | 'schema' */
 export const schemaLevelOf = (code) => byType(code).schemaLevel
 

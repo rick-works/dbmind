@@ -32,7 +32,6 @@
 //! SQL Server 与 SQLite 没有内置正则，这两类库上会给出 `unsupported` 状态并说明原因 ——
 //! 而不是悄悄放行（那会让「全部通过」变成假象）。
 
-
 use axum::Json;
 use dbmind_core::ColumnDetail;
 use serde::Deserialize;
@@ -213,7 +212,9 @@ pub fn saved_rules(conn: &str, database: &str, table: &str) -> Vec<Value> {
 pub async fn rules_saved(Json(req): Json<QualityReq>) -> XResult<Json<Value>> {
     let conn = req.conn()?;
     let rules = saved_rules(&conn, &req.db(), &req.table()?);
-    Ok(Json(json!({ "success": true, "rules": rules, "count": rules.len() })))
+    Ok(Json(
+        json!({ "success": true, "rules": rules, "count": rules.len() }),
+    ))
 }
 
 /// `POST /api/ai/quality/rules/save` —— 整表覆盖保存。
@@ -392,7 +393,11 @@ enum RuleKind {
     /// 逐行判定：`where <condition>` 的行就是违规行
     Rows(String),
     /// 表级指标：先算指标，超阈值则**把所有行**列为违规（附指标说明）
-    Metric { probe: String, violated: Box<dyn Fn(f64) -> bool + Send>, label: String },
+    Metric {
+        probe: String,
+        violated: Box<dyn Fn(f64) -> bool + Send>,
+        label: String,
+    },
     /// 方言不支持
     Unsupported(String),
 }
@@ -462,9 +467,7 @@ fn build_rule(
             if list.is_empty() {
                 return RuleKind::Unsupported("枚举规则的取值列表是空的".to_string());
             }
-            RuleKind::Rows(format!(
-                "{column} is not null and {column} not in ({list})"
-            ))
+            RuleKind::Rows(format!("{column} is not null and {column} not in ({list})"))
         }
         "max_length" | "min_length" => {
             let Some(bound) = param_num(&params, &["max", "min", "length", "value"]) else {
@@ -490,10 +493,7 @@ fn build_rule(
             if let Some(max) = max {
                 parts.push(format!("{column} > {max}"));
             }
-            RuleKind::Rows(format!(
-                "{column} is not null and ({})",
-                parts.join(" or ")
-            ))
+            RuleKind::Rows(format!("{column} is not null and ({})", parts.join(" or ")))
         }
         "pattern" | "regex" => {
             let pattern = param_str(&params, &["regex", "pattern", "value"]);
@@ -513,9 +513,7 @@ fn build_rule(
             let function = length_fn(kind);
             let _ = function;
             RuleKind::Metric {
-                probe: format!(
-                    "select count(*) as total, count({column}) as present from {table_quoted}"
-                ),
+                probe: format!("select count(*) as total, count({column}) as present from {table_quoted}"),
                 violated: Box::new(move |ratio| ratio > threshold),
                 label: format!("空值率超过 {threshold}%"),
             }
@@ -650,10 +648,7 @@ async fn eval_rules(
                     let row = rows_of(&result).into_iter().next().unwrap_or_default();
                     let total = row.get("total").and_then(Value::as_f64).unwrap_or(0.0);
                     let present = row.get("present").and_then(Value::as_f64).unwrap_or(0.0);
-                    let distinct = row
-                        .get("distinct_count")
-                        .and_then(Value::as_f64)
-                        .unwrap_or(0.0);
+                    let distinct = row.get("distinct_count").and_then(Value::as_f64).unwrap_or(0.0);
                     let value = if rule_type == "null_ratio" {
                         if total > 0.0 {
                             (total - present) * 100.0 / total
@@ -671,10 +666,7 @@ async fn eval_rules(
                         status: if bad { "failed" } else { "passed" },
                         violations: if bad { total as i64 } else { 0 },
                         message: if bad {
-                            format!(
-                                "{label}（实测值 {:.2}）",
-                                value
-                            )
+                            format!("{label}（实测值 {:.2}）", value)
                         } else {
                             String::new()
                         },
@@ -890,9 +882,7 @@ fn union_sql(
             continue;
         }
         let label = format!("{}·{}", column_name, rule_label(&rule_type));
-        let RuleKind::Rows(condition) =
-            build_rule(rule, table, &table_quoted, columns, dialect)
-        else {
+        let RuleKind::Rows(condition) = build_rule(rule, table, &table_quoted, columns, dialect) else {
             continue;
         };
         let projection: Vec<String> = columns
@@ -992,11 +982,15 @@ fn escape_xml(text: &str) -> String {
         .replace('>', "&gt;")
         .replace('"', "&quot;")
         .chars()
-        .map(|c| if (c as u32) < 0x20 && c != '\t' && c != '\n' { ' ' } else { c })
+        .map(|c| {
+            if (c as u32) < 0x20 && c != '\t' && c != '\n' {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
 }
-
-
 
 /// `POST /api/ai/quality/violations` —— 违规行明细（表格 / 本页文本 / 全量 SQL 三合一）。
 pub async fn violations(
@@ -1149,7 +1143,10 @@ pub async fn report(Json(req): Json<QualityReq>) -> XResult<Json<Value>> {
                 json!("—"),
                 json!("—"),
                 json!("—"),
-                json!(table.get("message").and_then(Value::as_str).unwrap_or("未配置规则")),
+                json!(table
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("未配置规则")),
                 json!(0),
                 json!(""),
             ]);
@@ -1166,14 +1163,12 @@ pub async fn report(Json(req): Json<QualityReq>) -> XResult<Json<Value>> {
                     detail.get("status").and_then(Value::as_str).unwrap_or("")
                 )),
                 detail.get("violations").cloned().unwrap_or(json!(0)),
-                json!(
-                    detail
-                        .get("ruleMessage")
-                        .and_then(Value::as_str)
-                        .filter(|text| !text.is_empty())
-                        .or_else(|| detail.get("message").and_then(Value::as_str))
-                        .unwrap_or("")
-                ),
+                json!(detail
+                    .get("ruleMessage")
+                    .and_then(Value::as_str)
+                    .filter(|text| !text.is_empty())
+                    .or_else(|| detail.get("message").and_then(Value::as_str))
+                    .unwrap_or("")),
             ]);
         }
     }

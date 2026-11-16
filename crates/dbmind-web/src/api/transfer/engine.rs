@@ -90,9 +90,7 @@ fn prefetch_enabled() -> bool {
 fn carry_enabled() -> bool {
     std::env::var("DBMIND_SYNC_CARRY")
         .map(|value| {
-            !(value.trim() == "0"
-                || value.eq_ignore_ascii_case("false")
-                || value.eq_ignore_ascii_case("off"))
+            !(value.trim() == "0" || value.eq_ignore_ascii_case("false") || value.eq_ignore_ascii_case("off"))
         })
         .unwrap_or(true)
 }
@@ -307,12 +305,7 @@ impl Slots {
     /// 等一个令牌；返回 `None` = 用户点了停止（每 [`CANCEL_POLL`] 回来看一次取消）。
     async fn acquire(&self, plan: &TablePlan) -> Option<usize> {
         loop {
-            if plan
-                .task
-                .as_ref()
-                .map(|task| task.is_canceled())
-                .unwrap_or(false)
-            {
+            if plan.task.as_ref().map(|task| task.is_canceled()).unwrap_or(false) {
                 return None;
             }
             if let Some(id) = self.try_acquire() {
@@ -361,10 +354,11 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
         // `plan.columns` 只有列名（没有 primary_key 标记）⇒ 判断「按主键切的」要拿
         // `src_primary` 比：paging_keys 全部落在源主键列里才是主键分片。
         let from_primary = !plan.paging_keys.is_empty()
-            && plan
-                .paging_keys
-                .iter()
-                .all(|key| plan.src_primary.iter().any(|primary| primary.eq_ignore_ascii_case(key)));
+            && plan.paging_keys.iter().all(|key| {
+                plan.src_primary
+                    .iter()
+                    .any(|primary| primary.eq_ignore_ascii_case(key))
+            });
         let missing_primary = !plan.src_primary.is_empty()
             && plan
                 .src_primary
@@ -485,12 +479,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
             let mut current = start_parallel;
             loop {
                 tick.tick().await;
-                if plan
-                    .task
-                    .as_ref()
-                    .map(|task| task.is_canceled())
-                    .unwrap_or(false)
-                {
+                if plan.task.as_ref().map(|task| task.is_canceled()).unwrap_or(false) {
                     continue;
                 }
                 // 读片与写路必须同时够：片数 = min(两边)，否则多给的片子只能排队等写连接
@@ -574,9 +563,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
             }
             Some(Err(_)) => {
                 if failure.is_none() {
-                    failure = Some(
-                        "传输协程异常终止（驱动异常或内存不足），本次同步数据不完整".to_string(),
-                    );
+                    failure = Some("传输协程异常终止（驱动异常或内存不足），本次同步数据不完整".to_string());
                 }
             }
         }
@@ -588,11 +575,7 @@ pub async fn run(plan: TablePlan) -> Result<Stats, String> {
     }
 
     // 取消状态以收尾这一刻为准：片任务看到「停止」会先撤离，此时它刚写完的页已经计数
-    let canceled = plan
-        .task
-        .as_ref()
-        .map(|t| t.is_canceled())
-        .unwrap_or(false);
+    let canceled = plan.task.as_ref().map(|t| t.is_canceled()).unwrap_or(false);
 
     let mut note = String::new();
     let inserted_rows = inserted.load(Ordering::SeqCst);
@@ -808,7 +791,10 @@ async fn run_slice(ctx: Arc<SliceCtx>, worker: usize, range: RowRange) -> Result
                 });
                 carried = next_page;
             }
-            SegmentOutcome::PausedAt { next_offset, next_page } => {
+            SegmentOutcome::PausedAt {
+                next_offset,
+                next_page,
+            } => {
                 // 无键表：`low` 一直是 None（没有键可以抬左界），位置全交给 OFFSET。
                 // 段的行号上界仍由 `range.window` 管着，续跑不会越界读到下一段。
                 pauses += 1;
@@ -869,22 +855,13 @@ async fn run_segment(
         //
         // 判据用「在跑的表数」（调度侧每 500ms 刷进 `GrowCaps::active`）而不是「本次任务只
         // 有一张表」：整库同步跑到尾部只剩一张大表时，那正好是它独占链路的时候，预取该开。
-        let use_prefetch = prefetch_enabled()
-            && plan
-                .grow
-                .as_ref()
-                .map(|caps| caps.active() <= 1)
-                .unwrap_or(true);
+        let use_prefetch =
+            prefetch_enabled() && plan.grow.as_ref().map(|caps| caps.active() <= 1).unwrap_or(true);
         // 首屏：上一段交接过来的预取页（`start_page` 只在第一次尝试有值）。
         // 它和本段的「下一页预取」是同一种东西 —— 首轮直接 await，不必再发一次读。
         let mut prefetch: CarriedPage = start_page.take();
         loop {
-            if plan
-                .task
-                .as_ref()
-                .map(|t| t.is_canceled())
-                .unwrap_or(false)
-            {
+            if plan.task.as_ref().map(|t| t.is_canceled()).unwrap_or(false) {
                 break;
             }
             let read_started = std::time::Instant::now();
@@ -1346,11 +1323,7 @@ where
 }
 
 /// 写一批（探活式等待 + 写速诊断）。
-async fn write_rows(
-    ctx: &SliceCtx,
-    worker: usize,
-    rows: &[Vec<CellValue>],
-) -> Result<u64, String> {
+async fn write_rows(ctx: &SliceCtx, worker: usize, rows: &[Vec<CellValue>]) -> Result<u64, String> {
     // 任务里刚有别的表探活失败（链路整体不可用）⇒ 先按暂停窗口让一让。
     // 不这么做的话，几百张表会在同一秒各自换连接、各自回滚一段再各自报错。
     if let Some(grow) = &ctx.plan.grow {
@@ -1518,12 +1491,7 @@ fn take_quota(consumed: &AtomicU64, limit: u64, want: u64) -> u64 {
         if take == 0 {
             return 0;
         }
-        match consumed.compare_exchange(
-            current,
-            current + take,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        ) {
+        match consumed.compare_exchange(current, current + take, Ordering::SeqCst, Ordering::SeqCst) {
             Ok(_) => return take,
             Err(now) => current = now,
         }
@@ -1594,7 +1562,10 @@ mod timeout_message_tests {
     #[test]
     fn 超时原因不能是空串() {
         for text in all_messages() {
-            assert!(!text.trim().is_empty(), "超时原因不能为空，否则界面只剩「未返回原因」");
+            assert!(
+                !text.trim().is_empty(),
+                "超时原因不能为空，否则界面只剩「未返回原因」"
+            );
         }
     }
 

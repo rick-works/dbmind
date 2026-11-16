@@ -206,11 +206,7 @@ impl Spec {
         commit: &'static str,
         end: &'static str,
     ) -> Self {
-        self.txn = Some(Txn {
-            begin,
-            commit,
-            end,
-        });
+        self.txn = Some(Txn { begin, commit, end });
         self
     }
 

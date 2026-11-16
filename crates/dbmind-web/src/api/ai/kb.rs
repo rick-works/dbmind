@@ -517,7 +517,11 @@ fn strip_emails(line: &str) -> String {
             && !trimmed.contains('/')
             && trimmed.split('@').count() == 2;
         if looks_like_email {
-            out.push_str(if token.ends_with(char::is_whitespace) { " " } else { "" });
+            out.push_str(if token.ends_with(char::is_whitespace) {
+                " "
+            } else {
+                ""
+            });
             out.push(' ');
         } else {
             out.push_str(token);
@@ -851,13 +855,7 @@ fn search(kb_ids: &[String], query: &str, config: &KbConfig, model_id: Option<&s
                 texts.push(chunk.text.clone());
                 meta.push((doc_index, chunk_index));
                 if let Some(stored) = &stored {
-                    vectors.push(
-                        stored
-                            .vectors
-                            .get(chunk_index)
-                            .cloned()
-                            .unwrap_or_default(),
-                    );
+                    vectors.push(stored.vectors.get(chunk_index).cloned().unwrap_or_default());
                 } else {
                     vectors.push(Vec::new());
                 }
@@ -1142,9 +1140,11 @@ pub async fn docs(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
     let kb_id = safe_id(&req.kb()?)?;
     let config = load_config(&kb_id);
     let list = docs_of(&kb_id);
-    let vectors_ready = list
-        .iter()
-        .all(|doc| load_vectors(&kb_id, &doc.id).map(|v| !v.vectors.is_empty()).unwrap_or(false));
+    let vectors_ready = list.iter().all(|doc| {
+        load_vectors(&kb_id, &doc.id)
+            .map(|v| !v.vectors.is_empty())
+            .unwrap_or(false)
+    });
     let items: Vec<Value> = list
         .iter()
         .map(|doc| {
@@ -1233,9 +1233,8 @@ pub async fn import_doc(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
                 }
             }
             None => {
-                warning = Some(
-                    "没有可用的向量模型：本次只建了关键词索引（检索模式仍是「关键词」）".to_string(),
-                )
+                warning =
+                    Some("没有可用的向量模型：本次只建了关键词索引（检索模式仍是「关键词」）".to_string())
             }
         }
     }
@@ -1444,10 +1443,7 @@ pub async fn inspect(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
     } else {
         "未发现致命问题，可以入库".to_string()
     };
-    let mut problems: Vec<Value> = stats["problems"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
+    let mut problems: Vec<Value> = stats["problems"].as_array().cloned().unwrap_or_default();
     let mut ai_used = false;
     let mut ai_error: Option<String> = None;
 
@@ -1458,7 +1454,17 @@ pub async fn inspect(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
             let system = prompts::text_of("kb.inspect.system").unwrap_or_default();
             let user = prompts::render(
                 "kb.inspect.user",
-                &[("source", if source.is_empty() { "（未命名）" } else { &source }), ("text", &sample)],
+                &[
+                    (
+                        "source",
+                        if source.is_empty() {
+                            "（未命名）"
+                        } else {
+                            &source
+                        },
+                    ),
+                    ("text", &sample),
+                ],
             );
             match user {
                 Ok(user) => {
@@ -1466,13 +1472,22 @@ pub async fn inspect(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
                         role: "user".to_string(),
                         content: user,
                     }];
-                    match run_blocking(move || crate::api::ai::config::chat(&model, &system, &messages)).await {
+                    match run_blocking(move || crate::api::ai::config::chat(&model, &system, &messages)).await
+                    {
                         Ok(raw) => {
                             ai_used = true;
                             if let Ok(value) = serde_json::from_str::<Value>(&extract_json(&raw)) {
                                 suitable = value.get("suitable").and_then(Value::as_bool).unwrap_or(suitable);
-                                kind = value.get("kind").and_then(Value::as_str).unwrap_or(&kind).to_string();
-                                verdict = value.get("verdict").and_then(Value::as_str).unwrap_or(&verdict).to_string();
+                                kind = value
+                                    .get("kind")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or(&kind)
+                                    .to_string();
+                                verdict = value
+                                    .get("verdict")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or(&verdict)
+                                    .to_string();
                                 if let Some(reason) = value.get("rejectReason").and_then(Value::as_str) {
                                     if !reason.trim().is_empty() {
                                         reject_reason = reason.to_string();
@@ -1710,7 +1725,17 @@ pub async fn auto_plan(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
         let system = prompts::text_of("kb.plan.system").unwrap_or_default();
         if let Ok(user) = prompts::render(
             "kb.plan.user",
-            &[("source", if source.is_empty() { "（未命名）" } else { &source }), ("text", &sample)],
+            &[
+                (
+                    "source",
+                    if source.is_empty() {
+                        "（未命名）"
+                    } else {
+                        &source
+                    },
+                ),
+                ("text", &sample),
+            ],
         ) {
             let messages = vec![crate::api::ai::config::Msg {
                 role: "user".to_string(),
@@ -1791,9 +1816,9 @@ pub async fn outline(Json(req): Json<KbReq>) -> XResult<Json<Value>> {
         content: user,
     }];
     let raw = run_blocking(move || crate::api::ai::config::chat(&model, &system, &messages)).await?;
-    let value: Value = serde_json::from_str(&extract_json(&raw)).unwrap_or_else(|_| {
-        json!({ "summary": raw.chars().take(200).collect::<String>(), "questions": [], "terms": [] })
-    });
+    let value: Value = serde_json::from_str(&extract_json(&raw)).unwrap_or_else(
+        |_| json!({ "summary": raw.chars().take(200).collect::<String>(), "questions": [], "terms": [] }),
+    );
     Ok(Json(json!({
         "summary": value.get("summary").cloned().unwrap_or(Value::Null),
         "questions": value.get("questions").cloned().unwrap_or(json!([])),

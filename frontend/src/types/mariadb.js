@@ -8,6 +8,8 @@ import { mysqlFamilyOptions } from './presets.js'
  */
 export default {
   code: 'MARIADB',
+  // 上游兼容接口的模块路径段：与 plugins/connection-types/mariadb.yaml 的 dialect 派生值一致（guard 校验）
+  module: 'mysql',
   label: 'MariaDB',
   category: 'RELATIONAL',
   noSql: false,

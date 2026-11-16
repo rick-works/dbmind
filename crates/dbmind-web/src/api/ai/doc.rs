@@ -87,10 +87,7 @@ fn binary(bytes: Vec<u8>, media: &str, filename: &str) -> Response {
     (
         [
             (header::CONTENT_TYPE, media.to_string()),
-            (
-                header::CONTENT_DISPOSITION,
-                tasks::content_disposition(filename),
-            ),
+            (header::CONTENT_DISPOSITION, tasks::content_disposition(filename)),
         ],
         bytes,
     )
@@ -101,7 +98,10 @@ fn safe_name(name: &str) -> String {
     let cleaned: String = name
         .chars()
         .map(|c| {
-            if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\n' | '\r') {
+            if matches!(
+                c,
+                '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\n' | '\r'
+            ) {
                 '_'
             } else {
                 c
@@ -282,4 +282,3 @@ fn escape_xml(text: &str) -> String {
     }
     out
 }
-

@@ -30,10 +30,7 @@ pub use crate::api::meta::test;
 /// 这里只补两个**确定的结论**：有「库」这一层、没有 schema 层；
 /// 其余字段一律不给 —— 前端 `featureOf` 对缺失字段按「支持」处理，
 /// 与补路由之前的行为完全一致，不会误藏已有功能。
-pub async fn features(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn features(State(state): State<AppState>, Path(id): Path<String>) -> XResult<Json<Value>> {
     let record = require_record(&state, &id).await?;
     Ok(Json(json!({
         "type": record.kind().key().to_ascii_uppercase(),
@@ -45,10 +42,7 @@ pub async fn features(
 const DEFAULT_PAGE_SIZE: usize = 100;
 
 /// 「库」清单。
-pub async fn databases(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn databases(State(state): State<AppState>, Path(id): Path<String>) -> XResult<Json<Value>> {
     let record = require_record(&state, &id).await?;
     if record.kind() == ConnectionKind::Redis {
         // Redis 的「库」就是 dbN：宿主把 INFO keyspace 的每个 dbN 当作一张「表」报上来。
@@ -166,10 +160,7 @@ pub async fn collections(
     RawQuery(raw): RawQuery,
 ) -> XResult<Json<Value>> {
     let params = Params::parse(raw.as_deref());
-    let database = params
-        .get("database")
-        .unwrap_or_default()
-        .to_string();
+    let database = params.get("database").unwrap_or_default().to_string();
     let record = require_record(&state, &id).await?;
     let engine = state.engine();
 
@@ -240,11 +231,7 @@ pub async fn documents(
             .filter(|(key, _)| pattern.is_empty() || redis_glob_match(&pattern, key))
             .collect();
         let total = items.len();
-        let page_items: Vec<(String, String)> = items
-            .drain(..)
-            .skip((page - 1) * size)
-            .take(size)
-            .collect();
+        let page_items: Vec<(String, String)> = items.drain(..).skip((page - 1) * size).take(size).collect();
         // 值：字符串键一条 `MGET` 全取回，非字符串键按键类型补读（有上限）
         let values = redis_page_values(&state, &id, &database, &page_items).await;
         let rows: Vec<Value> = page_items
@@ -331,10 +318,12 @@ pub async fn documents(
         // 集合内容的浏览语句（展开集合时自动发的）—— 不进查询历史
         internal: true,
     };
-    Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
-        Ok(result) => shape::query_result_json(&result),
-        Err(err) => shape::query_failure_json(&err.message, 0),
-    }))
+    Ok(Json(
+        match blocking(move || engine.execute(request, AccessContext::Web)).await {
+            Ok(result) => shape::query_result_json(&result),
+            Err(err) => shape::query_failure_json(&err.message, 0),
+        },
+    ))
 }
 
 /// Redis 的 `MATCH` 通配：只认 `*`（任意串）与 `?`（单字符），与 `SCAN ... MATCH` 同一套语义。
@@ -574,7 +563,9 @@ pub async fn delete_collection(
         _ => return Err(XError::not_implemented("删除集合（SQL 协议走表删除）")),
     };
     meta::run_sql(&state, &id, command, 1).await?;
-    Ok(Json(json!({ "success": true, "message": format!("已删除 {collection}") })))
+    Ok(Json(
+        json!({ "success": true, "message": format!("已删除 {collection}") }),
+    ))
 }
 
 /// 浏览类请求共用的会话键：同一个键的语句落在**同一条物理会话**上
@@ -641,10 +632,12 @@ pub async fn execute(
         // 但**要进查询历史**：这是用户在 NoSQL 控制台里自己敲的命令（与 SQL 编辑器同性质）
         internal: false,
     };
-    Ok(Json(match blocking(move || engine.execute(request, AccessContext::Web)).await {
-        Ok(result) => shape::query_result_json(&result),
-        Err(err) => shape::query_failure_json(&err.message, 0),
-    }))
+    Ok(Json(
+        match blocking(move || engine.execute(request, AccessContext::Web)).await {
+            Ok(result) => shape::query_result_json(&result),
+            Err(err) => shape::query_failure_json(&err.message, 0),
+        },
+    ))
 }
 
 /// 命令该落在哪个库：请求里给了就用它，没给就回落到**连接自己绑定的库**。
@@ -694,10 +687,7 @@ async fn redis_select_db(state: &AppState, id: &str, database: &str) -> Result<(
 }
 
 /// 取消在途命令（Mongo/ES 宿主是「标志位」语义，Redis 基本是毫秒级）。
-pub async fn cancel(
-    State(state): State<AppState>,
-    Path(execution_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn cancel(State(state): State<AppState>, Path(execution_id): Path<String>) -> XResult<Json<Value>> {
     let cancelled = state.engine().cancel(&execution_id);
     Ok(Json(json!({
         "success": true,
@@ -707,10 +697,7 @@ pub async fn cancel(
 }
 
 /// 监控：内核没有（Phase 3），给 `supported:false` 让界面隐藏该页。
-pub async fn monitor(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn monitor(State(state): State<AppState>, Path(id): Path<String>) -> XResult<Json<Value>> {
     require_record(&state, &id).await?;
     Ok(Json(json!({
         "supported": false,

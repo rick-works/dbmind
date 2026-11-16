@@ -47,11 +47,7 @@ fn need_conn(req: &AiRequest) -> XResult<String> {
 }
 
 /// 元数据助手：治理 / 质量两块都要用（`pub(crate)` 供 `governance`/`quality` 复用）。
-pub(crate) async fn tables_of(
-    state: &AppState,
-    conn: &str,
-    database: &str,
-) -> XResult<Vec<TableInfo>> {
+pub(crate) async fn tables_of(state: &AppState, conn: &str, database: &str) -> XResult<Vec<TableInfo>> {
     let target = crate::api::scope::resolve(state, conn, database).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
     let engine = state.engine();
@@ -104,10 +100,12 @@ pub async fn sql_plan(
             "rows": explain.rows,
             "insights": plan_insights(&explain.columns, &explain.rows),
         }))),
-        None => Err(XError::bad_request(format!(
+        None => {
+            Err(XError::bad_request(format!(
             "{} 不支持用一条 EXPLAIN 取执行计划（SQL Server 需要 SET SHOWPLAN，Oracle/DB2 需要 PLAN_TABLE）",
             require_record(&state, &conn).await?.kind().key().to_ascii_uppercase()
-        ))),
+        )))
+        }
     }
 }
 
@@ -243,10 +241,7 @@ pub async fn ddl_estimate(
     ) {
         let database = req.database.clone().unwrap_or_default();
         if let Ok(tables) = tables_of(&state, &conn, &database).await {
-            if let Some(found) = tables
-                .iter()
-                .find(|item| item.name.eq_ignore_ascii_case(&table))
-            {
+            if let Some(found) = tables.iter().find(|item| item.name.eq_ignore_ascii_case(&table)) {
                 if let Some(rows) = found.row_estimate {
                     if rows > 1_000_000 {
                         items.push(json!({
@@ -301,16 +296,15 @@ fn extract_table_name(sql: &str) -> Option<String> {
         if let Some(position) = lower.find(keyword) {
             let rest = &sql[position + keyword.len()..];
             let rest = rest.trim_start();
-            let rest = rest
-                .strip_prefix("if not exists")
-                .unwrap_or(rest)
-                .trim_start();
+            let rest = rest.strip_prefix("if not exists").unwrap_or(rest).trim_start();
             let rest = rest.strip_prefix("if exists").unwrap_or(rest).trim_start();
             let name: String = rest
                 .chars()
                 .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | '.' | '"' | '`' | '[' | ']'))
                 .collect();
-            let name = name.trim_matches(|c| matches!(c, '"' | '`' | '[' | ']')).to_string();
+            let name = name
+                .trim_matches(|c| matches!(c, '"' | '`' | '[' | ']'))
+                .to_string();
             if !name.is_empty() {
                 return Some(name);
             }
@@ -379,8 +373,18 @@ pub async fn patrol_scan(state: &AppState, conn: &str, database: &str) -> XResul
             ));
         }
         if columns.iter().any(|column| {
-            column.type_name.as_deref().unwrap_or("").to_ascii_lowercase().contains("char")
-                && column.type_name.as_deref().unwrap_or("").to_ascii_lowercase().contains("max")
+            column
+                .type_name
+                .as_deref()
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .contains("char")
+                && column
+                    .type_name
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_ascii_lowercase()
+                    .contains("max")
         }) {
             issues.push("存在超长文本类型（max/longtext）：检索与索引代价高".to_string());
         }
@@ -472,7 +476,8 @@ pub async fn index_suggestions(
                 .or_else(|| {
                     columns.iter().find(|column| {
                         let name = column.name.to_ascii_lowercase();
-                        !column.nullable && (name.ends_with("id") || name.ends_with("_no") || name.ends_with("_key"))
+                        !column.nullable
+                            && (name.ends_with("id") || name.ends_with("_no") || name.ends_with("_key"))
                     })
                 });
             if let Some(column) = candidate {
@@ -500,9 +505,7 @@ pub async fn index_suggestions(
         // 规则二：外键风格命名但（很可能）没索引的列
         for column in &columns {
             let name = column.name.to_ascii_lowercase();
-            let looks_like_fk = name.ends_with("_id")
-                || name.ends_with("_code")
-                || name.ends_with("_no");
+            let looks_like_fk = name.ends_with("_id") || name.ends_with("_code") || name.ends_with("_no");
             if !looks_like_fk || column.primary_key {
                 continue;
             }
@@ -600,7 +603,10 @@ pub async fn insight(
         if let Ok(result) = run_sql_in(&state, &conn, &database, sql, 1).await {
             if let Some(row) = rows_of(&result).first() {
                 let non_null = row.get("non_null").and_then(shape::value_to_i64).unwrap_or(0);
-                let distinct = row.get("distinct_count").and_then(shape::value_to_i64).unwrap_or(0);
+                let distinct = row
+                    .get("distinct_count")
+                    .and_then(shape::value_to_i64)
+                    .unwrap_or(0);
                 let null_ratio = if total > 0 {
                     format!("{:.1}%", (total - non_null) as f64 * 100.0 / total as f64)
                 } else {
@@ -627,7 +633,11 @@ pub async fn insight(
                       质量问题（空值/重复/异常极值）、值得进一步排查的点。不要编造画像里没有的信息。";
         let user = format!(
             "### 画像\n{stats}\n\n### 关注的问题\n{}",
-            if question.is_empty() { "（未指定）" } else { &question }
+            if question.is_empty() {
+                "（未指定）"
+            } else {
+                &question
+            }
         );
         let messages = vec![crate::api::ai::config::Msg {
             role: "user".to_string(),

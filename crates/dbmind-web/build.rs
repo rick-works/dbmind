@@ -25,8 +25,7 @@ fn main() {
 
     let mut readers: Vec<String> = Vec::new();
     let mut writers: Vec<String> = Vec::new();
-    let entries = fs::read_dir(&dir)
-        .unwrap_or_else(|err| panic!("读不到插件目录 {}：{err}", dir.display()));
+    let entries = fs::read_dir(&dir).unwrap_or_else(|err| panic!("读不到插件目录 {}：{err}", dir.display()));
     for entry in entries {
         let path = entry.expect("读取目录项失败").path();
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -94,7 +93,9 @@ fn main() {
     }
     code.push_str("        _ => return None,\n    })\n}\n\n");
 
-    code.push_str("/// 已登记的类型清单（测试与排障用）。\n#[allow(dead_code)]\npub(crate) const KINDS: &[&str] = &[\n");
+    code.push_str(
+        "/// 已登记的类型清单（测试与排障用）。\n#[allow(dead_code)]\npub(crate) const KINDS: &[&str] = &[\n",
+    );
     for kind in &kinds {
         code.push_str(&format!("    \"{kind}\",\n"));
     }
@@ -105,12 +106,6 @@ fn main() {
 }
 
 fn assert_single_token(kind: &str, file: &str) {
-    let ok = !kind.is_empty()
-        && kind
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-    assert!(
-        ok,
-        "插件文件名里的类型必须是小写单段标识符（不含下划线）：{file}"
-    );
+    let ok = !kind.is_empty() && kind.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+    assert!(ok, "插件文件名里的类型必须是小写单段标识符（不含下划线）：{file}");
 }

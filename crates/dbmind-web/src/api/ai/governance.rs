@@ -106,8 +106,7 @@ async fn scan_tables(
     if dialect.is_schema_aware() {
         if let Some(scope) = schema.as_deref() {
             if let crate::api::dialect::Meta::Sql(sql) = dialect.tables_in_schema(scope) {
-                if let Ok(result) =
-                    run_sql_in_background(state, &conn, &database, sql, MAX_TABLES_HARD).await
+                if let Ok(result) = run_sql_in_background(state, &conn, &database, sql, MAX_TABLES_HARD).await
                 {
                     for row in rows_of(&result) {
                         // Oracle 的方言清单把视图也算进来（type='VIEW'）；ER 只画表
@@ -169,13 +168,28 @@ const SENSITIVE: &[SensitiveRule] = &[
         label: "银行卡号",
         level: "high",
         hint: "只展示后 4 位（如 **** **** 1234）",
-        keys: &["bank_card", "card_no", "cardno", "bank_account", "银行卡", "开户账号"],
+        keys: &[
+            "bank_card",
+            "card_no",
+            "cardno",
+            "bank_account",
+            "银行卡",
+            "开户账号",
+        ],
     },
     SensitiveRule {
         label: "密码 / 密钥",
         level: "high",
         hint: "禁止明文存储与展示，只存加盐哈希",
-        keys: &["password", "passwd", "pwd", "secret", "access_key", "密码", "密钥"],
+        keys: &[
+            "password",
+            "passwd",
+            "pwd",
+            "secret",
+            "access_key",
+            "密码",
+            "密钥",
+        ],
     },
     SensitiveRule {
         label: "手机号",
@@ -205,7 +219,14 @@ const SENSITIVE: &[SensitiveRule] = &[
         label: "姓名",
         level: "info",
         hint: "姓氏保留、名字以 * 代替（张*）",
-        keys: &["real_name", "true_name", "customer_name", "contact_name", "姓名", "联系人"],
+        keys: &[
+            "real_name",
+            "true_name",
+            "customer_name",
+            "contact_name",
+            "姓名",
+            "联系人",
+        ],
     },
 ];
 
@@ -237,11 +258,7 @@ pub async fn scan_sensitive(
                     .iter()
                     .any(|key| name.contains(key) || comment_lower.contains(key))
             }) {
-                let evidence = if rule
-                    .keys
-                    .iter()
-                    .any(|key| name.contains(key))
-                {
+                let evidence = if rule.keys.iter().any(|key| name.contains(key)) {
                     format!("字段名包含「{}」", column.name)
                 } else {
                     format!("字段注释包含「{}」", comment.trim())
@@ -266,9 +283,7 @@ pub async fn scan_sensitive(
         "low" => 2,
         _ => 3,
     };
-    findings.sort_by_key(|item| {
-        rank(item["level"].as_str().unwrap_or(""))
-    });
+    findings.sort_by_key(|item| rank(item["level"].as_str().unwrap_or("")));
     let high = findings
         .iter()
         .filter(|item| item["level"] == json!("high"))
@@ -439,9 +454,7 @@ pub async fn capacity(
                     .iter()
                     .enumerate()
                     .filter(|(_, item)| item["rows"].as_i64().unwrap_or(0) == 0)
-                    .map(|(index, item)| {
-                        (index, item["table"].as_str().unwrap_or("").to_string())
-                    })
+                    .map(|(index, item)| (index, item["table"].as_str().unwrap_or("").to_string()))
                     .collect();
                 let mut recounted = 0usize;
                 let mut skipped = 0usize;
@@ -452,9 +465,7 @@ pub async fn capacity(
                     }
                     recounted += 1;
                     let count_sql = dialect.count_sql(&table);
-                    if let Ok(result) =
-                        run_sql_in_background(&state, &conn, &database, count_sql, 1).await
-                    {
+                    if let Ok(result) = run_sql_in_background(&state, &conn, &database, count_sql, 1).await {
                         if let Some(value) = rows_of(&result)
                             .first()
                             .and_then(|row| row.values().next())
@@ -537,7 +548,10 @@ pub async fn capacity(
         });
     }
     let total_rows: i64 = stats.iter().map(|item| item["rows"].as_i64().unwrap_or(0)).sum();
-    let total_size: i64 = stats.iter().map(|item| item["sizeBytes"].as_i64().unwrap_or(0)).sum();
+    let total_size: i64 = stats
+        .iter()
+        .map(|item| item["sizeBytes"].as_i64().unwrap_or(0))
+        .sum();
     Ok(Json(json!({
         "success": true,
         "scanned": stats.len(),
@@ -606,9 +620,10 @@ fn infer_relations(tables: &[String], columns: &[(String, Vec<ColumnDetail>)]) -
                     .map(|(_, cols)| cols);
                 let to_column = target_cols
                     .and_then(|cols| {
-                        cols.iter()
-                            .find(|col| col.primary_key)
-                            .or_else(|| cols.iter().find(|col| col.name.eq_ignore_ascii_case(&column.name)))
+                        cols.iter().find(|col| col.primary_key).or_else(|| {
+                            cols.iter()
+                                .find(|col| col.name.eq_ignore_ascii_case(&column.name))
+                        })
                     })
                     .map(|col| col.name.clone())
                     .unwrap_or_else(|| column.name.clone());
@@ -641,10 +656,9 @@ async fn columns_batch(
         let scope = schema.map(str::to_string);
         let engine = state.engine();
         // 单张表拉列失败（权限 / 视图 / 已删）不能让整张 ER 图崩掉
-        let Ok(columns) = crate::api::blocking(move || {
-            engine.list_columns_fresh_in(&connection, &table, scope.as_deref())
-        })
-        .await
+        let Ok(columns) =
+            crate::api::blocking(move || engine.list_columns_fresh_in(&connection, &table, scope.as_deref()))
+                .await
         else {
             continue;
         };
@@ -713,14 +727,16 @@ pub async fn er_graph(
         .collect();
     let relations: Vec<Value> = list
         .iter()
-        .map(|rel| json!({
-            "fromTable": rel.from_table,
-            "fromColumn": rel.from_column,
-            "toTable": rel.to_table,
-            "toColumn": rel.to_column,
-            "confidence": rel.confidence,
-            "kind": "inferred",
-        }))
+        .map(|rel| {
+            json!({
+                "fromTable": rel.from_table,
+                "fromColumn": rel.from_column,
+                "toTable": rel.to_table,
+                "toColumn": rel.to_column,
+                "confidence": rel.confidence,
+                "kind": "inferred",
+            })
+        })
         .collect();
     Ok(Json(json!({
         "success": true,
@@ -748,12 +764,14 @@ pub async fn impact(
     let direct: Vec<Value> = list
         .iter()
         .filter(|rel| rel.to_table.eq_ignore_ascii_case(&table))
-        .map(|rel| json!({
-            "table": rel.from_table,
-            "column": rel.from_column,
-            "via": format!("{}.{} → {}.{}", rel.from_table, rel.from_column, rel.to_table, rel.to_column),
-            "confidence": rel.confidence,
-        }))
+        .map(|rel| {
+            json!({
+                "table": rel.from_table,
+                "column": rel.from_column,
+                "via": format!("{}.{} → {}.{}", rel.from_table, rel.from_column, rel.to_table, rel.to_column),
+                "confidence": rel.confidence,
+            })
+        })
         .collect();
     // 间接依赖：直接依赖者的上游（只走一层 —— 再深就变成「整库都相关」，没有指导意义）
     let direct_names: Vec<String> = direct
@@ -762,13 +780,19 @@ pub async fn impact(
         .collect();
     let indirect: Vec<Value> = list
         .iter()
-        .filter(|rel| direct_names.iter().any(|name| name.eq_ignore_ascii_case(&rel.to_table)))
+        .filter(|rel| {
+            direct_names
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(&rel.to_table))
+        })
         .filter(|rel| !rel.to_table.eq_ignore_ascii_case(&table))
-        .map(|rel| json!({
-            "table": rel.from_table,
-            "column": rel.from_column,
-            "layer": 2,
-        }))
+        .map(|rel| {
+            json!({
+                "table": rel.from_table,
+                "column": rel.from_column,
+                "layer": 2,
+            })
+        })
         .collect();
 
     // 视图依赖：取定义文本，看有没有提到这张表
@@ -788,18 +812,12 @@ pub async fn impact(
         };
         views_checked += 1;
         if let Ok(result) = run_sql_in_background(&state, &conn, &database, sql, 20).await {
-            let mentions = rows_of(&result)
-                .iter()
-                .flat_map(|row| row.values())
-                .any(|value| {
-                    value
-                        .as_str()
-                        .map(|text| {
-                            text.to_ascii_lowercase()
-                                .contains(&table.to_ascii_lowercase())
-                        })
-                        .unwrap_or(false)
-                });
+            let mentions = rows_of(&result).iter().flat_map(|row| row.values()).any(|value| {
+                value
+                    .as_str()
+                    .map(|text| text.to_ascii_lowercase().contains(&table.to_ascii_lowercase()))
+                    .unwrap_or(false)
+            });
             if mentions {
                 views.push(json!({ "name": view.name }));
             }
@@ -950,10 +968,8 @@ pub async fn quality_rules(
             role: "user".to_string(),
             content: user,
         }];
-        match crate::api::ai::run_blocking(move || {
-            crate::api::ai::config::chat(&model, system, &messages)
-        })
-        .await
+        match crate::api::ai::run_blocking(move || crate::api::ai::config::chat(&model, system, &messages))
+            .await
         {
             Ok(raw) => {
                 ai_used = true;
@@ -989,10 +1005,7 @@ pub async fn quality_rules(
                                 column,
                                 &rule_type,
                                 item.get("level").and_then(Value::as_str).unwrap_or("中"),
-                                item
-                                    .get("message")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("模型建议"),
+                                item.get("message").and_then(Value::as_str).unwrap_or("模型建议"),
                                 item.get("params").cloned().unwrap_or(json!({})),
                             ));
                         }

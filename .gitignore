@@ -19,6 +19,9 @@ go.txt
 /dbmind.db-shm
 /dbmind.db-wal
 *.yaml
+# 例外：连接类型清单是**源码**（新增一种数据库 = 加一个 YAML），
+# 被上面的 *.yaml 连带忽略会让新类型进不了版本库、CI 构建时静默缺类型。
+!plugins/connection-types/*.yaml
 
 # 一次性工具与现场留存（排查用，不该进历史）
 .export-broken.bak
@@ -76,3 +79,7 @@ Thumbs.db
 
 # Screenshots: only web-sized versions are committed; originals (Retina 2x) stay local
 docs/images/originals/
+
+# 本机工作目录产物（编排会话状态等）
+.workbuddy/
+

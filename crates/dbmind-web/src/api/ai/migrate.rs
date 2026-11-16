@@ -173,7 +173,10 @@ fn import_usage(store: &Store, home: &Path) -> usize {
     let mut days: Vec<(String, u64)> = Vec::new();
     if let Some(map) = doc.get("days").and_then(Value::as_object) {
         for (day, entry) in map {
-            days.push((day.clone(), entry.get("calls").and_then(Value::as_u64).unwrap_or(0)));
+            days.push((
+                day.clone(),
+                entry.get("calls").and_then(Value::as_u64).unwrap_or(0),
+            ));
         }
     }
 
@@ -206,7 +209,11 @@ fn import_usage(store: &Store, home: &Path) -> usize {
         return 0;
     }
     if archive(&path) {
-        tracing::info!(days = days.len(), models = models.len(), "用量账本已从 ai-usage.json 迁入主库");
+        tracing::info!(
+            days = days.len(),
+            models = models.len(),
+            "用量账本已从 ai-usage.json 迁入主库"
+        );
     }
     1
 }

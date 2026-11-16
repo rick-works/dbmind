@@ -202,10 +202,7 @@ pub(crate) fn gate_budget() -> XResult<bool> {
 // ------------------------------------------------------------------ 对话
 
 /// `POST /api/ai/chat` —— 普通对话（多轮历史由**前端**带上，服务端不存会话）。
-pub async fn chat(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn chat(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let question = req.ask_text();
     if question.is_empty() {
         return Err(XError::bad_request("请输入内容"));
@@ -242,8 +239,7 @@ pub async fn chat(
         content: question.clone(),
     });
     config::audit("chat", &question);
-    let (content, usage) =
-        run_blocking(move || config::chat_with_usage(&model, &system, &messages)).await?;
+    let (content, usage) = run_blocking(move || config::chat_with_usage(&model, &system, &messages)).await?;
     if let Some(thread) = &thread {
         teammate::append_message(thread, "assistant", &content, usage.as_ref());
     }
@@ -259,10 +255,7 @@ pub async fn chat(
 }
 
 /// `POST /api/ai/chat/stream` —— 流式对话（SSE，见文件头的帧格式）。
-pub async fn chat_stream(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Response> {
+pub async fn chat_stream(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Response> {
     let question = req.ask_text();
     if question.is_empty() {
         return Err(XError::bad_request("请输入内容"));
@@ -377,17 +370,15 @@ pub async fn chat_stream(
 ///
 /// 只做「读结构 + 拼上下文」这一步（这确实是首次提问里最慢的那一段），
 /// **不真的调模型**：用户还在犹豫问什么的时候就把 token 花掉，不是好买卖。
-pub async fn warmup(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn warmup(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let Some(conn) = req.connection_id.clone().filter(|value| !value.trim().is_empty()) else {
-        return Ok(Json(json!({ "success": true, "warmed": false, "reason": "未指定连接" })));
+        return Ok(Json(
+            json!({ "success": true, "warmed": false, "reason": "未指定连接" }),
+        ));
     };
     let database = req.database.clone().unwrap_or_default();
     let context =
-        crate::api::ai::schema_context(&state, &conn, &database, &req.tables, !req.tables.is_empty())
-            .await?;
+        crate::api::ai::schema_context(&state, &conn, &database, &req.tables, !req.tables.is_empty()).await?;
     Ok(Json(json!({
         "success": true,
         "warmed": true,
@@ -400,10 +391,7 @@ pub async fn warmup(
 // ------------------------------------------------------------------ SQL 生成与解释
 
 /// `POST /api/ai/nl2sql` —— 自然语言 → SQL（**带自校验**）。
-pub async fn nl2sql(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn nl2sql(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let question = req.ask_text();
     if question.is_empty() {
         return Err(XError::bad_request("请输入要用自然语言描述的需求"));
@@ -427,9 +415,7 @@ pub async fn nl2sql(
         } else {
             match explain_sql(&state, &conn, &database, &sql).await {
                 Ok(Some(_)) => verified = true,
-                Ok(None) => {
-                    warning = Some("当前数据库类型不支持用 EXPLAIN 做自校验，请人工确认".to_string())
-                }
+                Ok(None) => warning = Some("当前数据库类型不支持用 EXPLAIN 做自校验，请人工确认".to_string()),
                 Err(err) => warning = Some(format!("执行计划校验未通过：{}", err.message)),
             }
         }
@@ -510,18 +496,11 @@ pub async fn explain_sql(
         })
         .collect::<Vec<_>>()
         .join("\n");
-    Ok(Some(Explain {
-        text,
-        columns,
-        rows,
-    }))
+    Ok(Some(Explain { text, columns, rows }))
 }
 
 /// `POST /api/ai/explain` —— 解释 SQL。
-pub async fn explain(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn explain(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let sql = need_sql(&req)?;
     let context = context_text(&state, &req, false).await;
     let (content, usage) = ask_with_usage(
@@ -533,14 +512,13 @@ pub async fn explain(
         true,
     )
     .await?;
-    Ok(Json(json!({ "success": true, "content": content, "usage": usage })))
+    Ok(Json(
+        json!({ "success": true, "content": content, "usage": usage }),
+    ))
 }
 
 /// `POST /api/ai/optimize` —— 优化建议。
-pub async fn optimize(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn optimize(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let sql = need_sql(&req)?;
     let context = context_text(&state, &req, false).await;
     let (content, usage) = ask_with_usage(
@@ -552,7 +530,9 @@ pub async fn optimize(
         true,
     )
     .await?;
-    Ok(Json(json!({ "success": true, "content": content, "usage": usage })))
+    Ok(Json(
+        json!({ "success": true, "content": content, "usage": usage }),
+    ))
 }
 
 /// `POST /api/ai/fix` —— 按约定的两行格式解析出「原因 + 修复 SQL」。
@@ -565,11 +545,7 @@ pub async fn fix(State(state): State<AppState>, Json(req): Json<AiRequest>) -> X
         &req,
         "sql.fix.system",
         "sql.fix.user",
-        &[
-            ("schemaContext", &context),
-            ("sql", &sql),
-            ("error", &error),
-        ],
+        &[("schemaContext", &context), ("sql", &sql), ("error", &error)],
         true,
     )
     .await?;
@@ -621,10 +597,7 @@ fn parse_fix(text: &str) -> (String, String) {
 }
 
 /// `POST /api/ai/rewrite` —— 语义等价改写。
-pub async fn rewrite(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn rewrite(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let sql = need_sql(&req)?;
     let goal = req
         .ask_text()
@@ -661,11 +634,7 @@ pub async fn plan(State(state): State<AppState>, Json(req): Json<AiRequest>) -> 
         &req,
         "command.parse.system",
         "command.parse.user",
-        &[
-            ("context", &context),
-            ("tables", &tables),
-            ("command", &command),
-        ],
+        &[("context", &context), ("tables", &tables), ("command", &command)],
         true,
     )
     .await?;
@@ -717,10 +686,7 @@ async fn context_text(state: &AppState, req: &AiRequest, expand_default: bool) -
 // ------------------------------------------------------------------ 其它生成类
 
 /// `POST /api/ai/diagnose` —— 慢查询诊断（无独立提示词模板，用硬编码的）。
-pub async fn diagnose(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn diagnose(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let sql = need_sql(&req)?;
     let plan = match req.connection_id.clone().filter(|value| !value.trim().is_empty()) {
         Some(conn) => {
@@ -739,22 +705,15 @@ pub async fn diagnose(
          ### SQL\n```sql\n{sql}\n```\n\
          ### 执行计划（可能为空）\n{plan}"
     );
-    let (content, usage) = ask_inline_with_usage(
-        &state,
-        &req,
-        "你是一名资深数据库性能诊断专家。",
-        user,
-        true,
-    )
-    .await?;
-    Ok(Json(json!({ "success": true, "content": content, "usage": usage })))
+    let (content, usage) =
+        ask_inline_with_usage(&state, &req, "你是一名资深数据库性能诊断专家。", user, true).await?;
+    Ok(Json(
+        json!({ "success": true, "content": content, "usage": usage }),
+    ))
 }
 
 /// `POST /api/ai/translate` —— 跨方言翻译。
-pub async fn translate(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn translate(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let sql = need_sql(&req)?;
     let target = req
         .target_dialect
@@ -764,14 +723,7 @@ pub async fn translate(
     let user = format!(
         "把下面 SQL 翻译成 {target} 方言，语义保持完全一致。只输出 SQL，不解释。\n```sql\n{sql}\n```"
     );
-    let content = ask_inline(
-        &state,
-        &req,
-        "你是跨数据库方言 SQL 翻译专家。",
-        user,
-        false,
-    )
-    .await?;
+    let content = ask_inline(&state, &req, "你是跨数据库方言 SQL 翻译专家。", user, false).await?;
     Ok(Json(json!({
         "success": true,
         "content": extract_sql(&content),
@@ -780,10 +732,7 @@ pub async fn translate(
 }
 
 /// `POST /api/ai/datadict` —— 数据字典（把结构写成业务可读的说明）。
-pub async fn datadict(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn datadict(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     // 字典是唯一需要兜底展开的场景：它就是要「一批表的列结构」，一张都认不出来时取前几张
     let context = context_text(&state, &req, true).await;
     if context.trim().is_empty() {
@@ -811,10 +760,7 @@ pub async fn datadict(
 }
 
 /// `POST /api/ai/ddl` —— 按描述生成建表 DDL。
-pub async fn generate_ddl(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn generate_ddl(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let description = req.ask_text();
     if description.is_empty() {
         return Err(XError::bad_request("请描述要建的表"));
@@ -835,10 +781,7 @@ pub async fn generate_ddl(
 }
 
 /// `POST /api/ai/filter` —— 自然语言 → WHERE 条件。
-pub async fn filter(
-    State(state): State<AppState>,
-    Json(req): Json<AiRequest>,
-) -> XResult<Json<Value>> {
+pub async fn filter(State(state): State<AppState>, Json(req): Json<AiRequest>) -> XResult<Json<Value>> {
     let description = req.ask_text();
     if description.is_empty() {
         return Err(XError::bad_request("请描述筛选条件"));

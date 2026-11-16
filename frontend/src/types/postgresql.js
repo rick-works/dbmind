@@ -3,6 +3,8 @@ import { pgFamilyOptions } from './presets.js'
 /** PostgreSQL 类型定义（schema 层级） */
 export default {
   code: 'POSTGRESQL',
+  // 上游兼容接口的模块路径段：与 plugins/connection-types/postgresql.yaml 的 dialect 派生值一致（guard 校验）
+  module: 'postgresql',
   label: 'PostgreSQL',
   category: 'RELATIONAL',
   noSql: false,

@@ -16,8 +16,8 @@ use axum::extract::{Path, RawQuery, State};
 use axum::http::StatusCode;
 use axum::Json;
 use dbmind_core::{
-    AccessContext, CellValue, ColumnDetail, ConnectionKind, ConnectionRecord, DbMindError,
-    ErrorCode, QueryOptions, QueryRequest, QueryResult,
+    AccessContext, CellValue, ColumnDetail, ConnectionKind, ConnectionRecord, DbMindError, ErrorCode,
+    QueryOptions, QueryRequest, QueryResult,
 };
 use serde_json::{json, Map, Value};
 
@@ -57,12 +57,7 @@ pub(crate) async fn ctx_of(state: &AppState, id: &str) -> XResult<(ConnectionRec
 }
 
 /// 执行一条语句（内部用）。默认行数给足，免得「看一张大表」被截断。
-pub async fn run_sql(
-    state: &AppState,
-    conn: &str,
-    sql: String,
-    max_rows: usize,
-) -> XResult<QueryResult> {
+pub async fn run_sql(state: &AppState, conn: &str, sql: String, max_rows: usize) -> XResult<QueryResult> {
     run_sql_in(state, conn, "", sql, max_rows).await
 }
 
@@ -139,7 +134,11 @@ async fn run_sql_in_inner(
     let dialect = Dialect::new(base.kind());
     let sql = if dialect.wants_use_switch() {
         let (db, _) = split_db_schema(database, &dialect);
-        if db.is_empty() { sql } else { format!("use {}; {}", dialect.quote(&db), sql) }
+        if db.is_empty() {
+            sql
+        } else {
+            format!("use {}; {}", dialect.quote(&db), sql)
+        }
     } else {
         sql
     };
@@ -205,7 +204,16 @@ pub(crate) async fn run_sql_in_background(
     sql: String,
     max_rows: usize,
 ) -> XResult<QueryResult> {
-    run_sql_in_inner(state, conn, database, sql, max_rows, Some("internal:rowcount"), false).await
+    run_sql_in_inner(
+        state,
+        conn,
+        database,
+        sql,
+        max_rows,
+        Some("internal:rowcount"),
+        false,
+    )
+    .await
 }
 
 /// 同 [`run_sql_in`]，但会话亲和键由调用方给 —— 用于「一个任务并发开几条读连接」的场景
@@ -222,7 +230,6 @@ pub(crate) async fn run_sql_in_keyed(
 ) -> XResult<QueryResult> {
     run_sql_in_inner(state, conn, database, sql, max_rows, Some(session), false).await
 }
-
 
 /// 同 [`run_sql_in`]，但**跟随连接的读写策略**（`read_only: None`）——
 /// 给界面功能里那些**会写库**的语句用：还原、表结构编辑、清空/删除表、终止会话、建用户。
@@ -347,7 +354,11 @@ pub(crate) async fn run_meta_sql(
         let dialect = Dialect::new(base.kind());
         if dialect.wants_use_switch() {
             let (db, _) = split_db_schema(database, &dialect);
-            if db.is_empty() { sql } else { format!("use {}; {}", dialect.quote(&db), sql) }
+            if db.is_empty() {
+                sql
+            } else {
+                format!("use {}; {}", dialect.quote(&db), sql)
+            }
         } else {
             sql
         }
@@ -590,53 +601,183 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         // 回显出来是 VARCHAR」，同一个类型两种写法（用户反馈）。
         // PG 系的元数据本来就回小写（`varchar`/`timestamptz`），那里保持小写才是一致的。
         "mysql" | "mariadb" => vec![
-            "INT", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "FLOAT", "DOUBLE",
-            "VARCHAR", "CHAR", "TEXT", "LONGTEXT", "DATE", "DATETIME", "TIMESTAMP",
-            "TIME", "JSON", "BLOB",
+            "INT",
+            "BIGINT",
+            "SMALLINT",
+            "TINYINT",
+            "DECIMAL",
+            "FLOAT",
+            "DOUBLE",
+            "VARCHAR",
+            "CHAR",
+            "TEXT",
+            "LONGTEXT",
+            "DATE",
+            "DATETIME",
+            "TIMESTAMP",
+            "TIME",
+            "JSON",
+            "BLOB",
         ],
         // Doris 与 MySQL 同一套类型，但它自己的元数据报 `string`（它的 VARCHAR 别名）——
         // 清单里带上 STRING，前端的"回显向清单对齐"才能把它收进同一种写法（见 typeName.js）。
         "doris" => vec![
-            "INT", "BIGINT", "SMALLINT", "TINYINT", "DECIMAL", "FLOAT", "DOUBLE",
-            "VARCHAR", "STRING", "CHAR", "TEXT", "LONGTEXT", "DATE", "DATETIME", "TIMESTAMP",
-            "TIME", "JSON", "BLOB",
+            "INT",
+            "BIGINT",
+            "SMALLINT",
+            "TINYINT",
+            "DECIMAL",
+            "FLOAT",
+            "DOUBLE",
+            "VARCHAR",
+            "STRING",
+            "CHAR",
+            "TEXT",
+            "LONGTEXT",
+            "DATE",
+            "DATETIME",
+            "TIMESTAMP",
+            "TIME",
+            "JSON",
+            "BLOB",
         ],
         // PG 系：前面的标准写法给人看，后面这几个是 **PG 自己 `udt_name` 报出来的写法**
         // （int2/int4/int8/float4/float8/varchar/bool）—— 少一个，回显就会是清单外的名字，
         // "下拉 = 回显"就断了（见 typeName.js）。
         "postgresql" | "kingbase" => vec![
-            "integer", "bigint", "smallint", "numeric", "real", "double precision",
-            "character varying", "text", "boolean", "date", "timestamp", "timestamptz",
-            "time", "jsonb", "uuid", "bytea",
-            "int2", "int4", "int8", "float4", "float8", "varchar", "bool",
+            "integer",
+            "bigint",
+            "smallint",
+            "numeric",
+            "real",
+            "double precision",
+            "character varying",
+            "text",
+            "boolean",
+            "date",
+            "timestamp",
+            "timestamptz",
+            "time",
+            "jsonb",
+            "uuid",
+            "bytea",
+            "int2",
+            "int4",
+            "int8",
+            "float4",
+            "float8",
+            "varchar",
+            "bool",
         ],
         // 这份清单既是「类型下拉」的可选项，也是**回显写法的标准**（`canonTypeBase` 按它
         // 归一大小写，见 typeName.js）。以前只列了 16 项，库里的 `text` / `datetime` /
         // `char` 全部落在清单外 ⇒ 同一张表的字段表里出现「varchar 小写、TEXT / DATETIME
         // 大写」的混排（真机截图）。把 SQL Server 常用的旧类型补齐，回显就统一成小写。
         "sqlserver" => vec![
-            "int", "bigint", "smallint", "tinyint", "decimal", "numeric", "float", "real",
-            "money", "smallmoney",
-            "nvarchar", "varchar", "char", "nchar", "nvarchar(max)", "varchar(max)",
-            "text", "ntext", "bit", "date", "time", "datetime", "datetime2",
-            "smalldatetime", "datetimeoffset", "uniqueidentifier",
-            "binary", "varbinary", "varbinary(max)", "image", "xml",
+            "int",
+            "bigint",
+            "smallint",
+            "tinyint",
+            "decimal",
+            "numeric",
+            "float",
+            "real",
+            "money",
+            "smallmoney",
+            "nvarchar",
+            "varchar",
+            "char",
+            "nchar",
+            "nvarchar(max)",
+            "varchar(max)",
+            "text",
+            "ntext",
+            "bit",
+            "date",
+            "time",
+            "datetime",
+            "datetime2",
+            "smalldatetime",
+            "datetimeoffset",
+            "uniqueidentifier",
+            "binary",
+            "varbinary",
+            "varbinary(max)",
+            "image",
+            "xml",
         ],
         "oracle" | "dm" => vec![
-            "NUMBER", "FLOAT", "BINARY_FLOAT", "VARCHAR2",
-            "NVARCHAR2", "CHAR", "CLOB", "BLOB", "DATE", "TIMESTAMP", "RAW",
+            "NUMBER",
+            "FLOAT",
+            "BINARY_FLOAT",
+            "VARCHAR2",
+            "NVARCHAR2",
+            "CHAR",
+            "CLOB",
+            "BLOB",
+            "DATE",
+            "TIMESTAMP",
+            "RAW",
         ],
         "clickhouse" => vec![
             // Decimal / FixedString / DateTime64 的参数由「长度 / 精度」列给
             //（重建时 Decimal 缺省 38,6、FixedString 缺省 16、DateTime64 缺省 3，见前端 clickhouseType）
-            "UInt8", "UInt16", "UInt32", "UInt64", "Int8", "Int16", "Int32", "Int64",
-            "Float32", "Float64", "Decimal", "String", "FixedString",
-            "Date", "DateTime", "DateTime64", "UUID", "Array(String)",
+            "UInt8",
+            "UInt16",
+            "UInt32",
+            "UInt64",
+            "Int8",
+            "Int16",
+            "Int32",
+            "Int64",
+            "Float32",
+            "Float64",
+            "Decimal",
+            "String",
+            "FixedString",
+            "Date",
+            "DateTime",
+            "DateTime64",
+            "UUID",
+            "Array(String)",
         ],
-        "sqlite" => vec!["INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC", "VARCHAR", "DATETIME"],
-        "h2" => vec!["INT", "BIGINT", "DECIMAL", "DOUBLE", "VARCHAR", "CLOB", "BLOB", "DATE", "TIMESTAMP", "BOOLEAN"],
-        "db2" => vec!["INTEGER", "BIGINT", "DECIMAL", "DOUBLE", "VARCHAR", "CLOB", "BLOB", "DATE", "TIMESTAMP"],
-        "derby" => vec!["INTEGER", "BIGINT", "DECIMAL", "DOUBLE", "VARCHAR", "CLOB", "BLOB", "DATE", "TIMESTAMP"],
+        "sqlite" => vec![
+            "INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC", "VARCHAR", "DATETIME",
+        ],
+        "h2" => vec![
+            "INT",
+            "BIGINT",
+            "DECIMAL",
+            "DOUBLE",
+            "VARCHAR",
+            "CLOB",
+            "BLOB",
+            "DATE",
+            "TIMESTAMP",
+            "BOOLEAN",
+        ],
+        "db2" => vec![
+            "INTEGER",
+            "BIGINT",
+            "DECIMAL",
+            "DOUBLE",
+            "VARCHAR",
+            "CLOB",
+            "BLOB",
+            "DATE",
+            "TIMESTAMP",
+        ],
+        "derby" => vec![
+            "INTEGER",
+            "BIGINT",
+            "DECIMAL",
+            "DOUBLE",
+            "VARCHAR",
+            "CLOB",
+            "BLOB",
+            "DATE",
+            "TIMESTAMP",
+        ],
         _ => vec![],
     }
 }
@@ -662,12 +803,12 @@ fn edit_capabilities(kind: &str) -> Value {
         "doris" => ("doris", "BACKTICK", true, true, true, true, true),
         "postgresql" | "kingbase" => ("pg", "DOUBLE", true, true, false, false, true),
         // Oracle 12c+ 的标识列能查到（user_tab_identity_cols），自增如实给 true。
-      // DM 单独拆出来给 false：达梦的标识列记在哪张系统视图上、没有实例可验证（见 dialect.rs 里
-      // column_types 的 dm 分支注释）。原先跟着 Oracle 一起 true，结果界面上给了个**永远勾不上**的
-      // 自增勾选框 —— 列已有 IDENTITY 也显示成没自增，等于骗人（用户反馈排查出来的同类问题）。
-      // 与其留一个查不出来的勾选框，不如如实不显示这一列。
-      "oracle" => ("oracle", "DOUBLE", true, true, false, true, true),
-      "dm" => ("oracle", "DOUBLE", true, true, false, false, true),
+        // DM 单独拆出来给 false：达梦的标识列记在哪张系统视图上、没有实例可验证（见 dialect.rs 里
+        // column_types 的 dm 分支注释）。原先跟着 Oracle 一起 true，结果界面上给了个**永远勾不上**的
+        // 自增勾选框 —— 列已有 IDENTITY 也显示成没自增，等于骗人（用户反馈排查出来的同类问题）。
+        // 与其留一个查不出来的勾选框，不如如实不显示这一列。
+        "oracle" => ("oracle", "DOUBLE", true, true, false, true, true),
+        "dm" => ("oracle", "DOUBLE", true, true, false, false, true),
         "sqlserver" => ("mssql", "BRACKET", true, true, false, true, true),
         // SQLite 没有 ALTER COLUMN：只能加列或重建表，如实说不能改
         "sqlite" => ("sqlite", "DOUBLE", false, false, false, false, false),
@@ -698,9 +839,9 @@ fn edit_capabilities(kind: &str) -> Value {
             vec![
                 // 常用字符集（MySQL/MariaDB 的服务端标准集合在版本间很稳定）
                 "utf8mb4", "utf8mb3", "utf8", "latin1", "latin2", "latin5", "latin7", "gbk", "gb18030",
-                "big5", "ascii", "binary", "ucs2", "utf16", "utf16le", "utf32", "cp1250", "cp1251",
-                "cp1256", "cp1257", "euckr", "sjis", "cp932", "greek", "hebrew", "koi8r", "koi8u",
-                "tis620", "macroman", "armscii8", "geostd8", "keybcs2", "swe7",
+                "big5", "ascii", "binary", "ucs2", "utf16", "utf16le", "utf32", "cp1250", "cp1251", "cp1256",
+                "cp1257", "euckr", "sjis", "cp932", "greek", "hebrew", "koi8r", "koi8u", "tis620",
+                "macroman", "armscii8", "geostd8", "keybcs2", "swe7",
             ],
             json!({
                 // 排序规则**逐字符集写全**：这里只列真实存在的名字 —— 生成或臆造的名字会让建表直接失败。
@@ -1008,10 +1149,7 @@ pub async fn test(State(state): State<AppState>, Json(mut body): Json<Value>) ->
     }))
 }
 
-pub async fn features(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn features(State(state): State<AppState>, Path(id): Path<String>) -> XResult<Json<Value>> {
     Ok(Json(features_json(&state, &id).await?))
 }
 
@@ -1023,10 +1161,7 @@ pub async fn features(
 ///
 /// **其余类型一律返回空数组** —— 前端见空就不画 catalog 这一层，树的形状与现在完全一样。
 /// 用「返回空」而不是「不提供接口」，是为了让前端只有一条判断：有没有 catalog。
-pub async fn catalogs(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn catalogs(State(state): State<AppState>, Path(id): Path<String>) -> XResult<Json<Value>> {
     let (_, dialect) = ctx_of(&state, &id).await?;
     if let Meta::Sql(sql) = dialect.catalogs() {
         if let Ok(result) = run_meta_sql(&state, &id, "", sql, META_MAX_ROWS).await {
@@ -1182,9 +1317,7 @@ async fn visible_table_set(
     let Meta::Sql(sql) = dialect.visible_tables() else {
         return None;
     };
-    let result = run_sql_in(state, id, database, sql, META_MAX_ROWS)
-        .await
-        .ok()?;
+    let result = run_sql_in(state, id, database, sql, META_MAX_ROWS).await.ok()?;
     let set: std::collections::HashSet<String> = rows_of(&result)
         .iter()
         .map(|row| text_ci(row, "name").to_ascii_lowercase())
@@ -1446,9 +1579,7 @@ fn count_value_of_row(row: &Map<String, Value>) -> Option<i64> {
 
 /// 单条 COUNT 的结果集 → 行数（取第一行）。
 fn count_value_of(result: &QueryResult) -> Option<i64> {
-    rows_of(result)
-        .first()
-        .and_then(|row| count_value_of_row(row))
+    rows_of(result).first().and_then(|row| count_value_of_row(row))
 }
 
 /// `GET /api/{m}/{id}/stats` —— 库级统计（表数 + 占用空间）。
@@ -1486,7 +1617,8 @@ pub async fn columns(
     State(state): State<AppState>,
     Path(id): Path<String>,
     RawQuery(raw): RawQuery,
-) -> XResult<Json<Value>> {    let params = Params::parse(raw.as_deref());
+) -> XResult<Json<Value>> {
+    let params = Params::parse(raw.as_deref());
     let table = params
         .get("table")
         .ok_or_else(|| XError::bad_request("缺少 table 参数"))?;
@@ -1527,10 +1659,8 @@ pub async fn columns(
     // 表名要进闭包（移动），而下面补类型时还要再用一次，所以先复制一份
     let queried = table.clone();
     let schema_for_call = schema.clone();
-    let mut columns = blocking(move || {
-        engine.list_columns_fresh_in(&target, &queried, schema_for_call.as_deref())
-    })
-    .await?;
+    let mut columns =
+        blocking(move || engine.list_columns_fresh_in(&target, &queried, schema_for_call.as_deref())).await?;
     // 「补类型 / 注释 / 自增」这条也走「库.模式」：它的方言 SQL 用的是 `current_schema()` /
     // `::regclass` / `object_id()`（只看连接自己的 schema），所以 run_sql_in 会把 schema 交给
     // 代理"临时切过去再切回"（见 QueryRequest::schema 的说明）—— 这正是"指定 schema 时一次全对"的关键。
@@ -1668,12 +1798,7 @@ pub async fn table_comment_map(
 }
 
 /// 一张表的**表注释**（取不到给 `None`）。同 `table_comments_map`，供同步建表复用。
-pub async fn table_comment_of(
-    state: &AppState,
-    conn: &str,
-    database: &str,
-    table: &str,
-) -> Option<String> {
+pub async fn table_comment_of(state: &AppState, conn: &str, database: &str, table: &str) -> Option<String> {
     let record = require_record(state, conn).await.ok()?;
     let dialect = Dialect::new(record.kind());
     let Meta::Sql(sql) = dialect.table_options(database) else {
@@ -1748,10 +1873,7 @@ pub(crate) async fn enrich_column_types(
         if !text.is_empty() {
             by_name.entry(name.clone()).or_insert(text);
         }
-        let comment = row
-            .get("comment")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let comment = row.get("comment").and_then(Value::as_str).map(str::to_string);
         // `is_auto` 各家给的是 0/1（布尔在某些方言上会被当成数字），两种都认
         let is_auto = row
             .get("is_auto")
@@ -2048,7 +2170,11 @@ fn filter_clause(dialect: &Dialect, filters: &[Value]) -> Option<String> {
         let slot = match accs.iter().position(|a| a.idx == idx) {
             Some(pos) => &mut accs[pos],
             None => {
-                accs.push(Acc { idx, between, joined: None });
+                accs.push(Acc {
+                    idx,
+                    between,
+                    joined: None,
+                });
                 accs.last_mut().expect("刚 push 过")
             }
         };
@@ -2179,9 +2305,11 @@ fn external_catalog_of(dialect: &Dialect, database: &str) -> Option<(String, Str
 /// 模糊搜索可用的文本列类型（CHAR 会命中 VARCHAR/NCHAR/CHAR…，TEXT 命中 LONGTEXT…）。
 fn is_textual_col_type(type_name: &str) -> bool {
     let t = type_name.to_ascii_uppercase();
-    ["CHAR", "TEXT", "CLOB", "STRING", "JSON", "UUID", "ENUM", "XML", "NCHAR"]
-        .iter()
-        .any(|probe| t.contains(probe))
+    [
+        "CHAR", "TEXT", "CLOB", "STRING", "JSON", "UUID", "ENUM", "XML", "NCHAR",
+    ]
+    .iter()
+    .any(|probe| t.contains(probe))
 }
 
 /// 外部 catalog 表的列元数据：`desc \`catalog\`.\`db\`.\`table\``。
@@ -2286,7 +2414,8 @@ pub async fn data(
                 .await?
                 .into_iter()
                 .filter(|(_, type_name, _)| is_textual_col_type(type_name))
-                .map(|(name, _, _)| name)                .collect()
+                .map(|(name, _, _)| name)
+                .collect()
         } else {
             let engine = state.engine();
             let name = table.clone();
@@ -2296,7 +2425,11 @@ pub async fn data(
                 .iter()
                 .filter(|c| {
                     is_textual_col_type(
-                        c.type_name.clone().unwrap_or_default().to_ascii_uppercase().as_str(),
+                        c.type_name
+                            .clone()
+                            .unwrap_or_default()
+                            .to_ascii_uppercase()
+                            .as_str(),
                     )
                 })
                 .map(|c| c.name.clone())
@@ -2354,9 +2487,7 @@ pub async fn data(
     };
 
     let result = match &external {
-        Some(_) => {
-            run_external(&state, &id, &external_quoted, build_paged, size as usize).await
-        }
+        Some(_) => run_external(&state, &id, &external_quoted, build_paged, size as usize).await,
         None => {
             run_sql_in(
                 &state,
@@ -2383,9 +2514,13 @@ pub async fn data(
     // 外部 catalog：count_sql(&table) 会把三段名整体 quote 成单段标识符，这里直接用
     // 候选引用；执行同样在主连接上（不切库）。
     let total = match if external.is_some() {
-        run_external(&state, &id, &external_quoted, |q| {
-            format!("select count(*) as cnt from {q}{where_suffix}")
-        }, 1)
+        run_external(
+            &state,
+            &id,
+            &external_quoted,
+            |q| format!("select count(*) as cnt from {q}{where_suffix}"),
+            1,
+        )
         .await
     } else {
         run_sql_in(
@@ -2399,8 +2534,11 @@ pub async fn data(
     } {
         Ok(count_result) => rows_of(&count_result)
             .first()
-
-            .map(|row| cell_int(row, "cnt").or_else(|| row.values().find_map(shape::value_to_i64)).unwrap_or(-1))
+            .map(|row| {
+                cell_int(row, "cnt")
+                    .or_else(|| row.values().find_map(shape::value_to_i64))
+                    .unwrap_or(-1)
+            })
             .unwrap_or(-1),
         Err(_) => -1,
     };
@@ -2417,11 +2555,7 @@ pub async fn data(
 /// 字符串必须走 [`Dialect::literal`]：MySQL/MariaDB/Doris/ClickHouse 默认把 `\` 当转义符，
 /// 这里若只做 `'` 翻倍，值 `C:\temp\` 会拼成 `'C:\temp\'` —— 收尾引号被吃掉，语句截断，
 /// 后面的 `where` 条件被并进字符串（轻则报错，重则改错行）。以前就地编辑走的就是那条路。
-fn sql_value(
-    value: Option<&Value>,
-    dialect: &crate::api::dialect::Dialect,
-    type_hint: &str,
-) -> String {
+fn sql_value(value: Option<&Value>, dialect: &crate::api::dialect::Dialect, type_hint: &str) -> String {
     match value {
         None | Some(Value::Null) => "NULL".to_string(),
         Some(Value::Bool(b)) => {
@@ -2436,8 +2570,9 @@ fn sql_value(
             }
         }
         Some(Value::Number(n)) => n.to_string(),
-        Some(Value::String(s)) => temporal_literal(dialect, type_hint, s)
-            .unwrap_or_else(|| dialect.literal(s)),
+        Some(Value::String(s)) => {
+            temporal_literal(dialect, type_hint, s).unwrap_or_else(|| dialect.literal(s))
+        }
         Some(other) => dialect.literal(&other.to_string()),
     }
 }
@@ -2480,11 +2615,7 @@ fn keys_of(row: &Map<String, Value>) -> Vec<String> {
 /// 也接受前端高级搜索送的分类值（`date` / `datetime`）。
 /// 认不出（非日期类型 / 值不是日期形状 / 其它方言）就返回 `None`，
 /// 调用方退回原来的 `dialect.literal` —— 行为与改动前完全一致。
-fn temporal_literal(
-    dialect: &crate::api::dialect::Dialect,
-    hint: &str,
-    value: &str,
-) -> Option<String> {
+fn temporal_literal(dialect: &crate::api::dialect::Dialect, hint: &str, value: &str) -> Option<String> {
     if !matches!(dialect.key(), "oracle" | "dm") {
         return None;
     }
@@ -2580,16 +2711,23 @@ pub async fn data_save(
     let pk_columns: Vec<String> = body
         .get("pkColumns")
         .and_then(Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(Value::as_str).map(str::to_string).collect())
         .unwrap_or_default();
-    let inserts = body.get("inserts").and_then(Value::as_array).cloned().unwrap_or_default();
-    let updates = body.get("updates").and_then(Value::as_array).cloned().unwrap_or_default();
-    let deletes = body.get("deletes").and_then(Value::as_array).cloned().unwrap_or_default();
+    let inserts = body
+        .get("inserts")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let updates = body
+        .get("updates")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let deletes = body
+        .get("deletes")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
     // 什么都没改：直接回「没有需要提交的变更」，不必为此再拉一次列元数据
     if inserts.is_empty() && updates.is_empty() && deletes.is_empty() {
         return Ok(Json(json!({
@@ -2659,7 +2797,9 @@ pub async fn data_save(
     for item in &updates {
         let original = item.get("original").and_then(Value::as_object);
         let row = item.get("row").and_then(Value::as_object);
-        let (Some(original), Some(row)) = (original, row) else { continue };
+        let (Some(original), Some(row)) = (original, row) else {
+            continue;
+        };
         let changed: Vec<String> = keys_of(row)
             .into_iter()
             .filter(|c| !same_value(original.get(c), row.get(c)))
@@ -2704,10 +2844,7 @@ pub async fn data_save(
             .iter()
             .map(|c| match_condition(c, obj.get(c), &dialect, &type_of(c)))
             .collect();
-        statements.push(format!(
-            "delete from {quoted} where {}",
-            conditions.join(" and ")
-        ));
+        statements.push(format!("delete from {quoted} where {}", conditions.join(" and ")));
     }
 
     // 有 update/delete 才有可能「语句执行成功但一行都没匹配上」
@@ -2849,10 +2986,16 @@ pub(crate) async fn build_table_ddl(
         Ok(result) => result,
         // Oracle 内置视图会以「未找到」的姿势失败，见 oracle_builtin_view_error
         Err(err) => {
-            return Err(
-                oracle_builtin_view_error(state, id, database, table, schema.as_deref(), dialect, err)
-                    .await,
+            return Err(oracle_builtin_view_error(
+                state,
+                id,
+                database,
+                table,
+                schema.as_deref(),
+                dialect,
+                err,
             )
+            .await)
         }
     };
     let mut ddl_text = if dialect.kind.key() == "h2" {
@@ -3058,11 +3201,7 @@ pub(crate) fn pick_ddl(result: &QueryResult) -> String {
     if values.is_empty() {
         return String::new();
     }
-    let names: Vec<String> = result
-        .columns
-        .iter()
-        .map(|column| column.name.clone())
-        .collect();
+    let names: Vec<String> = result.columns.iter().map(|column| column.name.clone()).collect();
     let index = ddl_column_index(&names, &values);
     values
         .get(index)
@@ -3170,10 +3309,16 @@ pub async fn object_info(
     let result = match run_sql_in(&state, &id, &database, sql, 10).await {
         Ok(result) => result,
         Err(err) => {
-            return Err(
-                oracle_builtin_view_error(&state, &id, &database, &name, schema.as_deref(), dialect, err)
-                    .await,
+            return Err(oracle_builtin_view_error(
+                &state,
+                &id,
+                &database,
+                &name,
+                schema.as_deref(),
+                dialect,
+                err,
             )
+            .await)
         }
     };
     // 必须按**列名**取，不能按位置取：`serde_json` 的 Map 默认按键名排序，
@@ -3241,9 +3386,7 @@ pub async fn indexes(
                                     .unwrap_or("")
                                     .split(',')
                                     .map(|c| {
-                                        Value::String(
-                                            c.trim().trim_matches(['"', '`', '[', ']']).to_string(),
-                                        )
+                                        Value::String(c.trim().trim_matches(['"', '`', '[', ']']).to_string())
                                     })
                                     .filter(|v| v.as_str().map(|s| !s.is_empty()).unwrap_or(false))
                                     .collect(),
@@ -3373,8 +3516,13 @@ pub async fn users(
                     // 字符串 "0" 在前端又是真值）
                     let is_super = out.get("isSuper").map(is_true_flag).unwrap_or(false);
                     out.insert("isSuper".to_string(), Value::Bool(is_super));
-                    out.entry("comment".to_string())
-                        .or_insert_with(|| Value::String(if is_super { "超级用户".into() } else { String::new() }));
+                    out.entry("comment".to_string()).or_insert_with(|| {
+                        Value::String(if is_super {
+                            "超级用户".into()
+                        } else {
+                            String::new()
+                        })
+                    });
                     Value::Object(out)
                 })
                 .collect(),
@@ -3418,9 +3566,8 @@ fn permission_hint(err: XError, feature: &str) -> XError {
     if !DENIED.iter().any(|needle| lower.contains(needle)) {
         return err;
     }
-    let hint = format!(
-        "当前连接账号没有查看「{feature}」的权限。请改用有该目录读权限的账号，或让 DBA 授权后重连。"
-    );
+    let hint =
+        format!("当前连接账号没有查看「{feature}」的权限。请改用有该目录读权限的账号，或让 DBA 授权后重连。");
     XError::with_detail(
         StatusCode::FORBIDDEN,
         format!("{hint}原始提示：{}", err.message),
@@ -3438,10 +3585,7 @@ fn permission_hint(err: XError, feature: &str) -> XError {
 ///   `role_inventory()` 的 SQL 一查就报「表不存在」—— 那不是错误，是这个版本真没有角色。
 /// · `roles`：角色清单本身（MySQL 的角色是 `名字@主机`，其余方言只有名字）。
 /// · `message`：拿不到清单时的**原始原因**（只在 `supported=false` 时有值，界面按需展示）。
-pub async fn roles(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn roles(State(state): State<AppState>, Path(id): Path<String>) -> XResult<Json<Value>> {
     let (_, dialect) = ctx_of(&state, &id).await?;
     let sql = match dialect.role_inventory() {
         Meta::Sql(sql) => sql,
@@ -3498,10 +3642,7 @@ pub async fn alter(
     if sql.trim().is_empty() {
         return Err(XError::bad_request("缺少 sql"));
     }
-    let database = body
-        .get("database")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let database = body.get("database").and_then(Value::as_str).unwrap_or_default();
 
     // **必须按语句拆分后逐条执行**。
     //
@@ -3560,8 +3701,7 @@ pub async fn alter(
                 // 包了事务的先整体回滚：库就跟没执行过一样（这才叫"失败不破坏原结构"）。
                 // 没包事务的（MySQL/Oracle/Doris/CH）往下如实说明"前 N 条已生效"。
                 if in_tx {
-                    let _ = run_write_sql_in(&state, &id, &database, "ROLLBACK".to_string(), 1, true)
-                        .await;
+                    let _ = run_write_sql_in(&state, &id, &database, "ROLLBACK".to_string(), 1, true).await;
                 }
                 let mut payload = shape::query_failure_json(&err.message, 0);
                 if let Some(object) = payload.as_object_mut() {
@@ -3652,10 +3792,7 @@ pub async fn table_action(
     if table.is_empty() || action.is_empty() {
         return Err(XError::bad_request("缺少 table 或 action"));
     }
-    let new_name = body
-        .get("newName")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let new_name = body.get("newName").and_then(Value::as_str).map(str::to_string);
     let (_, dialect) = ctx_of(&state, &id).await?;
     let sql = match dialect.table_action(&table, &action, new_name.as_deref()) {
         Meta::Sql(sql) => sql,
@@ -3665,10 +3802,7 @@ pub async fn table_action(
             )))
         }
     };
-    let database = body
-        .get("database")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let database = body.get("database").and_then(Value::as_str).unwrap_or_default();
     // 这里的 `1` 只限制**结果集行数**：这几条语句（delete / truncate / drop / rename）
     // 都不返回结果集，所以给多少都无所谓。
     //
@@ -3677,10 +3811,12 @@ pub async fn table_action(
     // 只删掉 maxRows+1 行、接口照样回 success —— 静默少删。已在宿主侧修正：
     // 只有判定会返回结果集的语句才设上限（见 agents/dbmind-agent-jdbc 的 mayReturnRows）。
     // 清空 / 截断 / 删除 / 重命名表都是写库：走跟随连接策略的入口
-    Ok(Json(match run_write_sql_in(&state, &id, database, sql, 1, true).await {
-        Ok(result) => shape::query_result_json(&result),
-        Err(err) => shape::query_failure_json(&err.message, 0),
-    }))
+    Ok(Json(
+        match run_write_sql_in(&state, &id, database, sql, 1, true).await {
+            Ok(result) => shape::query_result_json(&result),
+            Err(err) => shape::query_failure_json(&err.message, 0),
+        },
+    ))
 }
 
 /// 对象重命名（视图 / 索引 / 表 …）。`previewOnly=true` 时只回要执行的语句，不执行。
@@ -3706,10 +3842,7 @@ pub async fn rename_object(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_lowercase();
-    let preview_only = body
-        .get("previewOnly")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let preview_only = body.get("previewOnly").and_then(Value::as_bool).unwrap_or(false);
     if name.is_empty() || new_name.is_empty() {
         return Err(XError::bad_request("重命名需要原名与新名"));
     }
@@ -3833,22 +3966,19 @@ pub async fn rename_object(
                 "事件没有重命名语法：请在查询页 DROP EVENT 后用新名字重建（SHOW CREATE EVENT 可取原文）",
             ))
         }
-        other => {
-            return Err(XError::bad_request(format!(
-                "不支持重命名「{other}」这种对象"
-            )))
-        }
+        other => return Err(XError::bad_request(format!("不支持重命名「{other}」这种对象"))),
     };
     if preview_only {
         return Ok(Json(json!({ "sql": sql, "native": true })));
     }
-    let database = body
-        .get("database")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let database = body.get("database").and_then(Value::as_str).unwrap_or_default();
     match run_write_sql_in(&state, &id, database, sql.clone(), 1, true).await {
-        Ok(_) => Ok(Json(json!({ "success": true, "message": format!("已重命名为「{new_name}」"), "sql": sql }))),
-        Err(err) => Ok(Json(json!({ "success": false, "message": err.message, "sql": sql }))),
+        Ok(_) => Ok(Json(
+            json!({ "success": true, "message": format!("已重命名为「{new_name}」"), "sql": sql }),
+        )),
+        Err(err) => Ok(Json(
+            json!({ "success": false, "message": err.message, "sql": sql }),
+        )),
     }
 }
 
@@ -3931,39 +4061,39 @@ pub async fn user_info(
         dialect.user_grants(&account_user, &account_host)
     };
     let (mut grants, grant_rows): (Vec<Value>, Vec<Value>) = match grant_meta {
-            Meta::Sql(query) => {
-                let detail = expand_grant_rows(
-                    run_sql_in(&state, &id, &database, query, 10_000)
-                        .await
-                        .map(|result| rows_of(&result))
-                        .unwrap_or_default(),
-                );
-                let lines = detail
-                    .iter()
-                    .filter_map(|item| grant_line(item, &dialect, &account_user, &account_host))
-                    .map(|line| json!(line))
-                    .collect();
-                // 结构化的一份（`scope / privilege / owner / object`）：界面要按层级回填成
-                // 可编辑的表单，再据此算"哪些被取消了"（撤销清单）。只有拼好的
-                // `GRANT ...` 文本没法可靠反解 —— 权限名里就带空格（`CREATE ANY TABLE`）。
-                // 只有 4 列形状的方言（MySQL 的三张视图 / Oracle 的三本字典）才给，其余空数组。
-                (lines, grant_rows_of(&detail))
-            }
-            // `grants_text` 是换行分隔的文本，界面会对它 `.map()` —— 必须转成数组，
-            // 给字符串会在前端直接抛异常
-            _ => (
-                // 列名大小写各家不同（H2 未加引号时会把别名全大写成 GRANTS_TEXT）：
-                // 按名字忽略大小写取，别再写死小写 —— 否则权限整段被当成普通字段丢掉，
-                // 界面上就是"这个用户没有权限"。
-                pick_field(&row, &["grants_text"])
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                    .map(|line| json!(line))
-                    .collect(),
-                Vec::new(),
-            ),
-        };
+        Meta::Sql(query) => {
+            let detail = expand_grant_rows(
+                run_sql_in(&state, &id, &database, query, 10_000)
+                    .await
+                    .map(|result| rows_of(&result))
+                    .unwrap_or_default(),
+            );
+            let lines = detail
+                .iter()
+                .filter_map(|item| grant_line(item, &dialect, &account_user, &account_host))
+                .map(|line| json!(line))
+                .collect();
+            // 结构化的一份（`scope / privilege / owner / object`）：界面要按层级回填成
+            // 可编辑的表单，再据此算"哪些被取消了"（撤销清单）。只有拼好的
+            // `GRANT ...` 文本没法可靠反解 —— 权限名里就带空格（`CREATE ANY TABLE`）。
+            // 只有 4 列形状的方言（MySQL 的三张视图 / Oracle 的三本字典）才给，其余空数组。
+            (lines, grant_rows_of(&detail))
+        }
+        // `grants_text` 是换行分隔的文本，界面会对它 `.map()` —— 必须转成数组，
+        // 给字符串会在前端直接抛异常
+        _ => (
+            // 列名大小写各家不同（H2 未加引号时会把别名全大写成 GRANTS_TEXT）：
+            // 按名字忽略大小写取，别再写死小写 —— 否则权限整段被当成普通字段丢掉，
+            // 界面上就是"这个用户没有权限"。
+            pick_field(&row, &["grants_text"])
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(|line| json!(line))
+                .collect(),
+            Vec::new(),
+        ),
+    };
     // **角色**这一层：它不在 information_schema 的三张权限视图里
     // （见 dialect.user_roles 的说明），单独查一次补进结构化行 —— 否则「角色」在界面上
     // 彻底隐身，用户授过的角色既看不见也撤不掉。
@@ -3990,7 +4120,11 @@ pub async fn user_info(
                     // MySQL 的角色是账号形状（`名字@host`）；MariaDB 的角色**没有 host**，
                     // 拼成 `名字@` 会在界面上多出一列对不上的假角色（真机回归发现）。
                     let mysql_style = dialect.kind.key() == "mysql";
-                    let label = if mysql_style && !rh.is_empty() { format!("{rn}@{rh}") } else { rn.clone() };
+                    let label = if mysql_style && !rh.is_empty() {
+                        format!("{rn}@{rh}")
+                    } else {
+                        rn.clone()
+                    };
                     grant_rows.push(json!({
                         "scope": "role",
                         "privilege": label,
@@ -4005,7 +4139,11 @@ pub async fn user_info(
                     let (role_ref, grantee) = if mysql_style {
                         (
                             format!("{}@{}", dialect.literal(&rn), dialect.literal(&rh)),
-                            format!("{}@{}", dialect.literal(&account_user), dialect.literal(&account_host)),
+                            format!(
+                                "{}@{}",
+                                dialect.literal(&account_user),
+                                dialect.literal(&account_host)
+                            ),
                         )
                     } else if pg_style {
                         // PG/KB 的角色是**标识符**（`grant "r" to "u"`），单引号在这里不合法
@@ -4071,7 +4209,11 @@ pub async fn user_info(
                 let rest = &line[start..];
                 let end = rest.to_ascii_lowercase().find(" add member")?;
                 let name = rest[..end].trim().trim_matches(|c| c == '[' || c == ']');
-                if name.is_empty() { None } else { Some(json!(name)) }
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(json!(name))
+                }
             })
             .collect()
     } else {
@@ -4206,10 +4348,7 @@ pub async fn user_action(
     let password = body.get("password").and_then(Value::as_str).unwrap_or("");
     let host = body.get("host").and_then(Value::as_str).unwrap_or("");
     let database = body.get("database").and_then(Value::as_str).unwrap_or("");
-    let preview_only = body
-        .get("previewOnly")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let preview_only = body.get("previewOnly").and_then(Value::as_bool).unwrap_or(false);
     let options = body.get("options").cloned().unwrap_or_else(|| json!({}));
     // 可改的用户属性（配额 / 账户锁定 / 表空间 / 开关）—— 只带改动过的项。
     // 这个文件统一是"现场取字段"的写法（没有专门的请求体结构体），这里跟着来：
@@ -4373,7 +4512,12 @@ pub async fn user_action(
         } else if oracle_family {
             // Oracle 没有"库级授权"这一层（库就是实例）：给了就明确拒绝，
             // 不默默忽略 —— 界面会照实说明，不会让人以为授上了。
-            if options.get("dbPrivileges").and_then(Value::as_array).map(|a| !a.is_empty()).unwrap_or(false) {
+            if options
+                .get("dbPrivileges")
+                .and_then(Value::as_array)
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
+            {
                 return Err(XError::bad_request(
                     "Oracle 没有「数据库级」授权这一层：对象权限请写在「对象权限」里（模式.对象）",
                 ));
@@ -4381,14 +4525,20 @@ pub async fn user_action(
             Vec::new()
         } else if pg_family {
             // PG 的「库级」= 模式级（USAGE / CREATE），database 字段就是模式名
-            privilege_db_rows(options.get("dbPrivileges"), crate::api::dialect::is_pg_schema_priv)?
+            privilege_db_rows(
+                options.get("dbPrivileges"),
+                crate::api::dialect::is_pg_schema_priv,
+            )?
         } else {
             privilege_db_rows(options.get("dbPrivileges"), global_valid)?
         },
         // PG 的**库级**（CONNECT / CREATE / TEMPORARY ON DATABASE）：与上面被借用来
         // 装模式级的 `databases` 分开，界面也是两页 —— 库是集群里的库，模式是库里的一层。
         pg_databases: if pg_family {
-            privilege_db_rows(options.get("pgDbPrivileges"), crate::api::dialect::is_pg_database_priv)?
+            privilege_db_rows(
+                options.get("pgDbPrivileges"),
+                crate::api::dialect::is_pg_database_priv,
+            )?
         } else {
             Vec::new()
         },
@@ -4396,24 +4546,36 @@ pub async fn user_action(
             // mssql 的对象级不再走 MySQL 的表级形状（见下方 object_grants）
             Vec::new()
         } else if pg_family {
-            privilege_table_rows(options.get("tablePrivileges"), crate::api::dialect::is_pg_table_priv)?
+            privilege_table_rows(
+                options.get("tablePrivileges"),
+                crate::api::dialect::is_pg_table_priv,
+            )?
         } else {
             privilege_table_rows(options.get("tablePrivileges"), object_valid)?
         },
         schema_grants: if mssql_family {
-            mssql_schema_grant_rows(options.get("schemaPrivileges"), crate::api::dialect::is_mssql_privilege)?
+            mssql_schema_grant_rows(
+                options.get("schemaPrivileges"),
+                crate::api::dialect::is_mssql_privilege,
+            )?
         } else {
             Vec::new()
         },
         object_grants: if mssql_family {
-            mssql_object_grant_rows(options.get("objectPrivileges"), crate::api::dialect::is_mssql_privilege)?
+            mssql_object_grant_rows(
+                options.get("objectPrivileges"),
+                crate::api::dialect::is_mssql_privilege,
+            )?
         } else {
             Vec::new()
         },
         routines: if mysql_family {
             privilege_routine_rows(options.get("routinePrivileges"), global_valid)?
         } else if pg_family {
-            privilege_routine_rows(options.get("routinePrivileges"), crate::api::dialect::is_pg_routine_priv)?
+            privilege_routine_rows(
+                options.get("routinePrivileges"),
+                crate::api::dialect::is_pg_routine_priv,
+            )?
         } else {
             Vec::new()
         },
@@ -4427,20 +4589,52 @@ pub async fn user_action(
         // MySQL：scope = global（全局，`on *.*`）/ db（库级，owner=库）/ table（表级，owner=库 + object=表）
         // 名字一样要过白名单 —— 会被拼进 SQL（与授予同一个理由）。
         let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
-        for item in options.get("revoke").and_then(Value::as_array).cloned().unwrap_or_default() {
-            let scope = item.get("scope").and_then(Value::as_str).unwrap_or("global").trim().to_lowercase();
-            let privilege = item.get("privilege").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        for item in options
+            .get("revoke")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let scope = item
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("global")
+                .trim()
+                .to_lowercase();
+            let privilege = item
+                .get("privilege")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if privilege.is_empty() {
                 continue;
             }
-            let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let owner = item
+                .get("owner")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let object = item
+                .get("object")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             // 例程级撤销：kind = PROCEDURE / FUNCTION（要拼进 `on procedure ...`，必须校验）
-            let kind = item.get("kind").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+            let kind = item
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_ascii_uppercase();
             let ok = match scope.as_str() {
                 // 库级 / 表级走的都是对象权限白名单（与 dbPrivileges / tablePrivileges 同一个校验器）
                 "db" => object_valid(&privilege) && !owner.is_empty(),
-                "table" | "object" | "schema" => object_valid(&privilege) && !owner.is_empty() && !object.is_empty(),
+                "table" | "object" | "schema" => {
+                    object_valid(&privilege) && !owner.is_empty() && !object.is_empty()
+                }
                 "routine" => {
                     object_valid(&privilege)
                         && !owner.is_empty()
@@ -4458,23 +4652,60 @@ pub async fn user_action(
                     "「{privilege}」不在可撤销的白名单里（或缺少库/表名）：已拒绝执行"
                 )));
             }
-            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object, db: String::new(), kind });
+            out.push(crate::api::dialect::GrantRevoke {
+                scope,
+                privilege,
+                owner,
+                object,
+                db: String::new(),
+                kind,
+            });
         }
         out
     } else if mssql_family {
         // SQL Server：scope = serverrole（服务器角色，privilege=角色名）/ role（数据库角色，同上）
         // / schema（架构级，owner=架构）/ object（对象级，owner=架构 + object=对象）
         let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
-        for item in options.get("revoke").and_then(Value::as_array).cloned().unwrap_or_default() {
-            let scope = item.get("scope").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
-            let privilege = item.get("privilege").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        for item in options
+            .get("revoke")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let scope = item
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            let privilege = item
+                .get("privilege")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if privilege.is_empty() {
                 continue;
             }
-            let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let owner = item
+                .get("owner")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let object = item
+                .get("object")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             // 行级选库：schema/object 级撤销可带目标库（空 = 连接当前目录，旧行为）
-            let db = item.get("database").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let db = item
+                .get("database")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             let ok = match scope.as_str() {
                 // 角色名是标识符、不是权限名 —— 两者都会拼进 SQL，都不许乱来。
                 // 'server-role'（带连字符）是 revokePayload 里的形状，兼容一下，
@@ -4494,27 +4725,68 @@ pub async fn user_action(
                 )));
             }
             // 兼容 revokePayload 的 'server-role' 写法：统一成 SQL 构造器认的 'serverrole'
-            let scope = if scope == "server-role" { "serverrole".to_string() } else { scope };
-            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object, db, kind: String::new() });
+            let scope = if scope == "server-role" {
+                "serverrole".to_string()
+            } else {
+                scope
+            };
+            out.push(crate::api::dialect::GrantRevoke {
+                scope,
+                privilege,
+                owner,
+                object,
+                db,
+                kind: String::new(),
+            });
         }
         out
     } else if oracle_family {
         let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
-        for item in options.get("revoke").and_then(Value::as_array).cloned().unwrap_or_default() {
-            let scope = item.get("scope").and_then(Value::as_str).unwrap_or("global").trim().to_lowercase();
-            let privilege = item.get("privilege").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        for item in options
+            .get("revoke")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let scope = item
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("global")
+                .trim()
+                .to_lowercase();
+            let privilege = item
+                .get("privilege")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if privilege.is_empty() {
                 continue;
             }
-            let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            let owner = item
+                .get("owner")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let object = item
+                .get("object")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             let ok = match scope.as_str() {
-                "object" => crate::api::dialect::is_oracle_object_priv(&privilege)
-                    && !owner.is_empty() && !object.is_empty(),
+                "object" => {
+                    crate::api::dialect::is_oracle_object_priv(&privilege)
+                        && !owner.is_empty()
+                        && !object.is_empty()
+                }
                 // 预置角色之外还允许**自定义角色**（「新建角色」建出来的那些）：
                 // 名字同样只放行常规字符（会拼进 `revoke <角色> from …`）。
-                "role" => crate::api::dialect::is_oracle_role(&privilege)
-                    || crate::api::dialect::is_plain_ident(&privilege),
+                "role" => {
+                    crate::api::dialect::is_oracle_role(&privilege)
+                        || crate::api::dialect::is_plain_ident(&privilege)
+                }
                 "global" => crate::api::dialect::is_oracle_system_priv(&privilege),
                 _ => false,
             };
@@ -4523,22 +4795,59 @@ pub async fn user_action(
                     "「{privilege}」不在可撤销的白名单里（或缺少模式/对象名）：已拒绝执行"
                 )));
             }
-            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object, db: String::new(), kind: String::new() });
+            out.push(crate::api::dialect::GrantRevoke {
+                scope,
+                privilege,
+                owner,
+                object,
+                db: String::new(),
+                kind: String::new(),
+            });
         }
         out
     } else if pg_family {
         // PostgreSQL/KingbaseES：scope = schema（owner=模式）/ table（owner=模式 + object=表）
         // / routine|function（owner=模式 + object=例程 + kind=PROCEDURE|FUNCTION）
         let mut out: Vec<crate::api::dialect::GrantRevoke> = Vec::new();
-        for item in options.get("revoke").and_then(Value::as_array).cloned().unwrap_or_default() {
-            let scope = item.get("scope").and_then(Value::as_str).unwrap_or("").trim().to_lowercase();
-            let privilege = item.get("privilege").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        for item in options
+            .get("revoke")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            let scope = item
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_lowercase();
+            let privilege = item
+                .get("privilege")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
             if privilege.is_empty() {
                 continue;
             }
-            let owner = item.get("owner").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            let object = item.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
-            let kind = item.get("kind").and_then(Value::as_str).unwrap_or("").trim().to_ascii_uppercase();
+            let owner = item
+                .get("owner")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let object = item
+                .get("object")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            let kind = item
+                .get("kind")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim()
+                .to_ascii_uppercase();
             let ok = match scope.as_str() {
                 "schema" => crate::api::dialect::is_pg_schema_priv(&privilege) && !owner.is_empty(),
                 // PG 库级：撤销 `revoke connect on database "db" from "u"`（owner = 库名）
@@ -4564,7 +4873,14 @@ pub async fn user_action(
                     "「{privilege}」不在可撤销的白名单里（或缺少模式/对象名）：已拒绝执行"
                 )));
             }
-            out.push(crate::api::dialect::GrantRevoke { scope, privilege, owner, object, db: String::new(), kind });
+            out.push(crate::api::dialect::GrantRevoke {
+                scope,
+                privilege,
+                owner,
+                object,
+                db: String::new(),
+                kind,
+            });
         }
         out
     } else {
@@ -4585,9 +4901,9 @@ pub async fn user_action(
     if matches!(dialect.kind.key(), "mysql" | "mariadb") {
         for r in &roles {
             let ok = !r.trim().is_empty()
-                && r.trim().chars().all(|c| {
-                    c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '%' | '@' | '$')
-                });
+                && r.trim()
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '%' | '@' | '$'));
             if !ok {
                 return Err(XError::bad_request(format!(
                     "角色引用「{r}」里有不认识的字符：已拒绝执行（角色会拼进授权语句）"
@@ -4626,7 +4942,7 @@ pub async fn user_action(
             return Err(XError::bad_request(format!(
                 "{} 不支持「{action}」这个用户操作（也可能是缺参数，例如改密需要 password）",
                 dialect.kind.key().to_ascii_uppercase()
-            )))
+            )));
         }
     };
     if preview_only {
@@ -4646,7 +4962,11 @@ pub async fn user_action(
             // 「第 1/1 条执行失败」这种零信息前缀不再出现（前端自己会加"保存失败"这类动作前缀）。
             let reason = grant_error_hint(err.message.strip_prefix("SQL 执行失败：").unwrap_or(&err.message));
             let reason = reason.as_str();
-            let tip = if done == 0 { String::new() } else { format!("（前 {done} 条已生效）") };
+            let tip = if done == 0 {
+                String::new()
+            } else {
+                format!("（前 {done} 条已生效）")
+            };
             return Ok(Json(json!({
                 "success": false,
                 "message": format!("{reason}{tip}"),
@@ -4843,9 +5163,7 @@ fn grant_line(
     //     同样是单列 —— 少了这条分支，角色权限会整段消失（界面显示成"没有权限"）。
     // 判据用「有没有 scope 列」而不是写死方言：结构化那条路（MySQL 角色 / MariaDB 账号）
     // 的行都带 scope，不会被误判成文本。
-    if dialect.kind.key() == "clickhouse"
-        || !row.keys().any(|k| k.eq_ignore_ascii_case("scope"))
-    {
+    if dialect.kind.key() == "clickhouse" || !row.keys().any(|k| k.eq_ignore_ascii_case("scope")) {
         return row.values().find_map(Value::as_str).map(str::to_string);
     }
     // 列名一律**按名字取、忽略大小写**：MySQL 回来的是小写，Oracle 是 `PRIVILEGE` /
@@ -4879,16 +5197,21 @@ fn grant_line(
                 "GRANT {privilege} ON DATABASE {} TO {who};",
                 dialect.quote(&owner)
             )),
-            "schema" if !owner.is_empty() => {
-                Some(format!("GRANT {privilege} ON SCHEMA {} TO {who};", dialect.quote(&owner)))
-            }
+            "schema" if !owner.is_empty() => Some(format!(
+                "GRANT {privilege} ON SCHEMA {} TO {who};",
+                dialect.quote(&owner)
+            )),
             "table" if !owner.is_empty() && !object.is_empty() => Some(format!(
                 "GRANT {privilege} ON TABLE {}.{} TO {who};",
                 dialect.quote(&owner),
                 dialect.quote(&object)
             )),
             "function" | "procedure" if !owner.is_empty() && !object.is_empty() => {
-                let object_type = if scope == "procedure" { "PROCEDURE" } else { "FUNCTION" };
+                let object_type = if scope == "procedure" {
+                    "PROCEDURE"
+                } else {
+                    "FUNCTION"
+                };
                 Some(format!(
                     "GRANT {privilege} ON {object_type} {}.{} TO {who};",
                     dialect.quote(&owner),
@@ -4928,8 +5251,16 @@ fn grant_line(
         // `ON PROCEDURE `db`.`p`` —— 类型字是 MySQL 语法的一部分，必须带上
         "routine" if !owner.is_empty() && !object.is_empty() => {
             let (kind, routine) = object.split_once(':').unwrap_or(("PROCEDURE", &object));
-            let routine_type = if kind.eq_ignore_ascii_case("function") { "function" } else { "procedure" };
-            format!("{routine_type} {}.{}", dialect.quote(&owner), dialect.quote(routine))
+            let routine_type = if kind.eq_ignore_ascii_case("function") {
+                "function"
+            } else {
+                "procedure"
+            };
+            format!(
+                "{routine_type} {}.{}",
+                dialect.quote(&owner),
+                dialect.quote(routine)
+            )
         }
         // 角色（MySQL 8 / MariaDB）：角色本身就是账号形状，语句里没有 ON 子句
         "role" if !owner.is_empty() => {
@@ -5010,7 +5341,10 @@ fn privilege_db_rows(value: Option<&Value>, valid: fn(&str) -> bool) -> XResult<
 }
 
 /// 表级权限行：`[{database, table, privileges}]`。
-fn privilege_table_rows(value: Option<&Value>, valid: fn(&str) -> bool) -> XResult<Vec<(String, String, Vec<String>)>> {
+fn privilege_table_rows(
+    value: Option<&Value>,
+    valid: fn(&str) -> bool,
+) -> XResult<Vec<(String, String, Vec<String>)>> {
     let mut out: Vec<(String, String, Vec<String>)> = Vec::new();
     for row in value.and_then(Value::as_array).cloned().unwrap_or_default() {
         let database = row
@@ -5042,9 +5376,24 @@ fn privilege_routine_rows(
 ) -> XResult<Vec<(String, String, String, Vec<String>)>> {
     let mut out: Vec<(String, String, String, Vec<String>)> = Vec::new();
     for row in value.and_then(Value::as_array).cloned().unwrap_or_default() {
-        let database = row.get("database").and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let routine = row.get("routine").and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let kind = row.get("kind").and_then(Value::as_str).unwrap_or("PROCEDURE").trim().to_ascii_uppercase();
+        let database = row
+            .get("database")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let routine = row
+            .get("routine")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let kind = row
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or("PROCEDURE")
+            .trim()
+            .to_ascii_uppercase();
         if database.is_empty() || routine.is_empty() {
             continue;
         }
@@ -5081,8 +5430,18 @@ fn mssql_schema_grant_rows(
 ) -> XResult<Vec<(String, String, Vec<String>)>> {
     let mut out: Vec<(String, String, Vec<String>)> = Vec::new();
     for row in value.and_then(Value::as_array).cloned().unwrap_or_default() {
-        let db = row.get("database").and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let schema = row.get("schema").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let db = row
+            .get("database")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let schema = row
+            .get("schema")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if schema.is_empty() {
             continue;
         }
@@ -5108,9 +5467,24 @@ fn mssql_object_grant_rows(
 ) -> XResult<Vec<(String, String, String, Vec<String>)>> {
     let mut out: Vec<(String, String, String, Vec<String>)> = Vec::new();
     for row in value.and_then(Value::as_array).cloned().unwrap_or_default() {
-        let db = row.get("database").and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let schema = row.get("schema").and_then(Value::as_str).unwrap_or("").trim().to_string();
-        let object = row.get("object").and_then(Value::as_str).unwrap_or("").trim().to_string();
+        let db = row
+            .get("database")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let schema = row
+            .get("schema")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let object = row
+            .get("object")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if schema.is_empty() || object.is_empty() {
             continue;
         }
@@ -5121,11 +5495,15 @@ fn mssql_object_grant_rows(
                 )));
             }
         }
-        out.push((db, schema, object, checked_privileges(row.get("privileges"), valid)?));
+        out.push((
+            db,
+            schema,
+            object,
+            checked_privileges(row.get("privileges"), valid)?,
+        ));
     }
     Ok(out)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -5292,7 +5670,10 @@ mod tests {
         assert!(out.contains("系统库"), "{out}");
         assert!(out.contains("只能转授"), "{out}");
         // 无关错误原样透传
-        assert_eq!(grant_error_hint("Table 'x' doesn't exist"), "Table 'x' doesn't exist");
+        assert_eq!(
+            grant_error_hint("Table 'x' doesn't exist"),
+            "Table 'x' doesn't exist"
+        );
     }
 
     /// 测试用的白名单：涵盖 SELECT/INSERT/UPDATE/DELETE/ALL PRIVILEGES。

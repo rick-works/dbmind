@@ -151,7 +151,11 @@ mod tests {
         std::fs::write(dir.join("keep.log"), b"x").unwrap();
         assert_eq!(trim_dir(&dir, 4, ".json"), 6);
         assert_eq!(
-            std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.path().is_file()).count(),
+            std::fs::read_dir(&dir)
+                .unwrap()
+                .flatten()
+                .filter(|e| e.path().is_file())
+                .count(),
             5,
             "4 个快照 + 那个不是 .json 的文件"
         );

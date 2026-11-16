@@ -26,10 +26,10 @@
 //! SQL 只读判定、语句切分，全部复用内核（`dbmind_core::is_read_only` / `split_statements`）——
 //! 规则类的「护栏」如果自己再实现一遍，迟早会出现「AI 说只读、内核说不是」这种自相矛盾。
 
+pub mod action;
 pub mod agent;
 pub mod ask;
 pub mod chat;
-pub mod action;
 pub mod config;
 pub mod context;
 pub mod doc;
@@ -220,10 +220,7 @@ fn truncate_middle(text: &str, limit: usize) -> String {
     let head_len = limit * 2 / 5;
     let tail_len = limit * 3 / 10;
     let head: String = text.chars().take(head_len).collect();
-    let tail: String = text
-        .chars()
-        .skip(total.saturating_sub(tail_len))
-        .collect();
+    let tail: String = text.chars().skip(total.saturating_sub(tail_len)).collect();
     format!(
         "{head}\n…（中间省略 {} 字）…\n{tail}",
         total.saturating_sub(head_len + tail_len)
@@ -316,7 +313,10 @@ pub async fn schema_context(
                 .join(", "),
         );
         if names.len() > MAX_TABLE_NAMES {
-            text.push_str(&format!("（共 {} 张，此处列出前 {MAX_TABLE_NAMES} 张）", names.len()));
+            text.push_str(&format!(
+                "（共 {} 张，此处列出前 {MAX_TABLE_NAMES} 张）",
+                names.len()
+            ));
         }
         text.push('\n');
     }
@@ -561,12 +561,7 @@ pub async fn system_build(
         // 认表名的素材：本次提问 + 本次 SQL + **历史对话**。
         // 少了历史那一份，「这条 SQL 报错了帮我改」这种没有表名的追问就只能展开
         // 默认前几张无关表，模型于是照着上一轮的错列名继续编。
-        let hint = format!(
-            "{} {} {}",
-            req.ask_text(),
-            req.sql_text(),
-            req.history_text()
-        );
+        let hint = format!("{} {} {}", req.ask_text(), req.sql_text(), req.history_text());
         // 已经递了 SQL 的请求（修复/解释/优化/改写）：表名清单是纯噪声，只留总数
         let with_names = req.sql_text().is_empty();
         let mut options = if with_names {
@@ -609,14 +604,13 @@ pub async fn system_build(
         let model_id = req.model_id.clone();
         // 召回会读文件、（向量模式下）还会打一次 embeddings 接口 —— 都是阻塞操作，
         // 直接在当前 async 上下文里调会卡住整个运行时
-        let recalled = match tokio::task::spawn_blocking(move || {
-            kb::recall(&question, &kb_ids, model_id.as_deref())
-        })
-        .await
-        {
-            Ok(value) => value,
-            Err(_) => None,
-        };
+        let recalled =
+            match tokio::task::spawn_blocking(move || kb::recall(&question, &kb_ids, model_id.as_deref()))
+                .await
+            {
+                Ok(value) => value,
+                Err(_) => None,
+            };
         if let Some(docs) = recalled {
             build.add("kb", &docs);
         }
@@ -819,9 +813,7 @@ pub async fn embed_capability() -> XResult<axum::Json<Value>> {
 }
 
 /// `GET /api/ai/usage`。
-pub async fn usage(
-    axum::extract::RawQuery(raw): axum::extract::RawQuery,
-) -> XResult<axum::Json<Value>> {
+pub async fn usage(axum::extract::RawQuery(raw): axum::extract::RawQuery) -> XResult<axum::Json<Value>> {
     let params = crate::api::Params::parse(raw.as_deref());
     let days = params
         .get("days")

@@ -31,11 +31,11 @@ use serde_json::{json, Value};
 
 use crate::api::ai::config::{self, Msg};
 use crate::api::ai::tools::tables_of;
-use dbmind_core::TableInfo;
 use crate::api::ai::{bound_history, read_only, schema_context, with_language};
 use crate::api::error::{XError, XResult};
 use crate::api::require_record;
 use crate::AppState;
+use dbmind_core::TableInfo;
 
 /// 结果行数上限：图表最多也就几百个点，明细表再多也看不完。
 const ASK_MAX_ROWS: usize = 2000;
@@ -444,8 +444,23 @@ fn question_signals(question: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     // 时间范围：先认中文时间词，再退到显式日期/月份
     const TIME_WORDS: &[&str] = &[
-        "最近7天", "最近30天", "最近一周", "最近一月", "近7天", "近30天", "近一周", "近一月",
-        "近一年", "本周", "上周", "本月", "上月", "今年", "去年", "昨天", "今天",
+        "最近7天",
+        "最近30天",
+        "最近一周",
+        "最近一月",
+        "近7天",
+        "近30天",
+        "近一周",
+        "近一月",
+        "近一年",
+        "本周",
+        "上周",
+        "本月",
+        "上月",
+        "今年",
+        "去年",
+        "昨天",
+        "今天",
     ];
     if let Some(word) = TIME_WORDS.iter().find(|w| question.contains(*w)) {
         out.push(format!("时间范围：{word}"));
@@ -465,19 +480,46 @@ fn question_signals(question: &str) -> Vec<String> {
     }
     // 图表要求：用户点名了形态，方案阶段就该照做
     const CHART_WORDS: &[(&str, &str)] = &[
-        ("柱状图", "柱状图"), ("条形图", "条形图"), ("折线图", "折线图"), ("曲线图", "折线图"),
-        ("趋势图", "趋势折线图"), ("饼图", "饼图"), ("环形图", "环形图"), ("散点图", "散点图"),
-        ("漏斗图", "漏斗图"), ("仪表盘", "仪表盘"), ("数据表", "数据表"), ("表格", "数据表"),
+        ("柱状图", "柱状图"),
+        ("条形图", "条形图"),
+        ("折线图", "折线图"),
+        ("曲线图", "折线图"),
+        ("趋势图", "趋势折线图"),
+        ("饼图", "饼图"),
+        ("环形图", "环形图"),
+        ("散点图", "散点图"),
+        ("漏斗图", "漏斗图"),
+        ("仪表盘", "仪表盘"),
+        ("数据表", "数据表"),
+        ("表格", "数据表"),
     ];
     if let Some((_, label)) = CHART_WORDS.iter().find(|(w, _)| question.contains(w)) {
         out.push(format!("图表要求：{label}"));
     }
     // 指标词：命中的直接列出，帮用户核对「它理解的指标是不是我要的」
     const METRIC_WORDS: &[&str] = &[
-        "销售额", "销量", "订单数", "数量", "金额", "占比", "环比", "同比", "总数", "总计",
-        "平均", "增长率", "客流", "转化率", "毛利", "利润",
+        "销售额",
+        "销量",
+        "订单数",
+        "数量",
+        "金额",
+        "占比",
+        "环比",
+        "同比",
+        "总数",
+        "总计",
+        "平均",
+        "增长率",
+        "客流",
+        "转化率",
+        "毛利",
+        "利润",
     ];
-    let hits: Vec<&str> = METRIC_WORDS.iter().filter(|w| question.contains(*w)).copied().collect();
+    let hits: Vec<&str> = METRIC_WORDS
+        .iter()
+        .filter(|w| question.contains(*w))
+        .copied()
+        .collect();
     if !hits.is_empty() {
         out.push(format!("指标：{}", hits.join("、")));
     }
@@ -510,18 +552,21 @@ fn chart_summary(charts: &[ChartSpec]) -> String {
             if !c.x.trim().is_empty() {
                 parts.push(format!("x={}", c.x.trim()));
             }
-            let ys: Vec<String> = c
-                .y
-                .iter()
-                .filter_map(|s| {
-                    let name = s
-                        .label
-                        .as_deref()
-                        .filter(|l| !l.trim().is_empty())
-                        .unwrap_or(s.field.trim());
-                    if name.is_empty() { None } else { Some(name.to_string()) }
-                })
-                .collect();
+            let ys: Vec<String> =
+                c.y.iter()
+                    .filter_map(|s| {
+                        let name = s
+                            .label
+                            .as_deref()
+                            .filter(|l| !l.trim().is_empty())
+                            .unwrap_or(s.field.trim());
+                        if name.is_empty() {
+                            None
+                        } else {
+                            Some(name.to_string())
+                        }
+                    })
+                    .collect();
             if !ys.is_empty() {
                 parts.push(format!("y={}", ys.join("/")));
             }
@@ -549,11 +594,19 @@ fn short_value(value: &Value) -> String {
         Value::Null => "NULL".to_string(),
         Value::String(s) => {
             let t = s.trim();
-            if t.len() > 24 { format!("{}…", &t[..24]) } else { t.to_string() }
+            if t.len() > 24 {
+                format!("{}…", &t[..24])
+            } else {
+                t.to_string()
+            }
         }
         other => {
             let t = other.to_string();
-            if t.len() > 24 { format!("{}…", &t[..24]) } else { t }
+            if t.len() > 24 {
+                format!("{}…", &t[..24])
+            } else {
+                t
+            }
         }
     }
 }
@@ -585,7 +638,11 @@ fn chart_is_valid(spec: &ChartSpec, columns: &[String]) -> bool {
     let needs_x = !matches!(spec.kind.as_str(), "pie" | "donut" | "funnel" | "gauge");
     (spec.x.is_empty() || !needs_x || has(&spec.x))
         && spec.y.iter().all(|y| has(&y.field))
-        && spec.series.as_deref().map(|s| s.is_empty() || has(s)).unwrap_or(true)
+        && spec
+            .series
+            .as_deref()
+            .map(|s| s.is_empty() || has(s))
+            .unwrap_or(true)
 }
 
 /// 把模型给的规格规范化：白名单类型、字段名对齐真实列名（大小写）、补默认值。
@@ -682,9 +739,7 @@ async fn narrate(
         content: prompt,
     }];
     // 模型调用是阻塞的，与计划阶段一样挪到 blocking 线程池
-    match crate::api::ai::run_blocking(move || config::chat_with_usage(&model, &system, &messages))
-        .await
-    {
+    match crate::api::ai::run_blocking(move || config::chat_with_usage(&model, &system, &messages)).await {
         Ok((reply, usage)) => (parse_narrated(&reply).unwrap_or_default(), usage),
         Err(err) => {
             tracing::warn!(error = %err.message, "问数结论生成失败，退回计划/本地结论");
@@ -727,10 +782,12 @@ fn narrate_prompt(question: &str, sql: &str, payload: &Value) -> String {
     let labels: Vec<String> = columns
         .iter()
         .enumerate()
-        .map(|(i, name)| match types.get(i).map(|t| t.trim()).filter(|t| !t.is_empty()) {
-            Some(tpe) => format!("{name}({tpe})"),
-            None => (*name).to_string(),
-        })
+        .map(
+            |(i, name)| match types.get(i).map(|t| t.trim()).filter(|t| !t.is_empty()) {
+                Some(tpe) => format!("{name}({tpe})"),
+                None => (*name).to_string(),
+            },
+        )
         .collect();
     let rows = payload
         .get("rows")
@@ -1028,20 +1085,29 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
             &format!("把问题拆成指标 / 维度 / 时间 / 图表四要素，先抽出：{signals_text}"),
             None,
         );
-        push_step(&mut steps, &tracer, json!({
-            "key": "parse",
-            "label": "理解问题",
-            "detail": signals_text.clone(),
-            "input": format!("原始问题：{}", question),
-            "output": signals_text,
-            "thinking": "先不碰数据库，把问题拆成四个要素：看什么指标（求和 / 计数 / 占比）、按什么维度分组（时间 / 类别）、什么时间范围（决定 WHERE 的边界）、想要什么形态的图。时间范围决定过滤条件，维度决定 GROUP BY，图表要求决定可视化形态；缺了哪一项，下一步要么按默认口径补齐，要么向用户反问，绝不瞎猜。",
-            "ms": t_parse.elapsed().as_millis() as u64,
-        }));
+        push_step(
+            &mut steps,
+            &tracer,
+            json!({
+                "key": "parse",
+                "label": "理解问题",
+                "detail": signals_text.clone(),
+                "input": format!("原始问题：{}", question),
+                "output": signals_text,
+                "thinking": "先不碰数据库，把问题拆成四个要素：看什么指标（求和 / 计数 / 占比）、按什么维度分组（时间 / 类别）、什么时间范围（决定 WHERE 的边界）、想要什么形态的图。时间范围决定过滤条件，维度决定 GROUP BY，图表要求决定可视化形态；缺了哪一项，下一步要么按默认口径补齐，要么向用户反问，绝不瞎猜。",
+                "ms": t_parse.elapsed().as_millis() as u64,
+            }),
+        );
     }
 
     // 选表：连表清单都拿不到就不必问模型了（报错比"模型说没表"清楚）
     let t0 = std::time::Instant::now();
-    tracer.begin_with("schema", "读取表结构", "正在列出这个库的表，按问题挑候选表…", None);
+    tracer.begin_with(
+        "schema",
+        "读取表结构",
+        "正在列出这个库的表，按问题挑候选表…",
+        None,
+    );
     let tables = tables_of(&state, &conn, &database).await?;
     let names: Vec<String> = tables.iter().map(|t| t.name.clone()).collect();
     if names.is_empty() {
@@ -1054,7 +1120,11 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
     tracer.begin_with(
         "schema",
         "读取表结构",
-        &format!("已挑出 {} 张候选（{}），正在读取字段、类型与样例行…", focus.len(), focus.join("、")),
+        &format!(
+            "已挑出 {} 张候选（{}），正在读取字段、类型与样例行…",
+            focus.len(),
+            focus.join("、")
+        ),
         None,
     );
     // 用户勾了聚焦表 = 限定候选：表清单只列点名的表、明确其余不猜（省 token 且防跑偏）
@@ -1104,21 +1174,25 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
             focus.join("、")
         )
     };
-    push_step(&mut steps, &tracer, json!({
-        "key": "schema",
-        "label": format!("读取表结构（{} 张候选表，共 {} 张）", focus.len(), names.len()),
-        // 展开「执行过程」时给用户看的明细：到底读了哪些表，而不是一句笼统的"读取表结构"
-        "detail": format!(
-            "按问题相关度从 {} 张表里挑出 {} 张候选，并读取字段与样例（共 {} 个字段）",
-            names.len(), focus.len(), schema.columns
-        ),
-        // 这一步的「输入/输出」：让用户看清「喂了什么、拿到了什么」
-        "input": format!("问题：{}\n数据库：{}\n可查阅表：{} 张", question, database, names.len()),
-        "output": format!("候选表：{}", focus.join("、")),
-        // 分析思路（本地、可复现）：说清楚"凭什么挑这几张表"，而不是只给结果
-        "thinking": schema_thinking,
-        "ms": t0.elapsed().as_millis() as u64,
-    }));
+    push_step(
+        &mut steps,
+        &tracer,
+        json!({
+            "key": "schema",
+            "label": format!("读取表结构（{} 张候选表，共 {} 张）", focus.len(), names.len()),
+            // 展开「执行过程」时给用户看的明细：到底读了哪些表，而不是一句笼统的"读取表结构"
+            "detail": format!(
+                "按问题相关度从 {} 张表里挑出 {} 张候选，并读取字段与样例（共 {} 个字段）",
+                names.len(), focus.len(), schema.columns
+            ),
+            // 这一步的「输入/输出」：让用户看清「喂了什么、拿到了什么」
+            "input": format!("问题：{}\n数据库：{}\n可查阅表：{} 张", question, database, names.len()),
+            "output": format!("候选表：{}", focus.join("、")),
+            // 分析思路（本地、可复现）：说清楚"凭什么挑这几张表"，而不是只给结果
+            "thinking": schema_thinking,
+            "ms": t0.elapsed().as_millis() as u64,
+        }),
+    );
 
     // 计划：模型调用是阻塞的，必须挪到 blocking 线程池（见 ai 模块文件头决定 1）
     let t1 = std::time::Instant::now();
@@ -1140,8 +1214,7 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
     let system = with_language(SYSTEM.to_string(), req.lang.as_deref());
     config::audit("ask", &question);
     let (reply, usage) =
-        crate::api::ai::run_blocking(move || config::chat_with_usage(&model, &system, &messages))
-            .await?;
+        crate::api::ai::run_blocking(move || config::chat_with_usage(&model, &system, &messages)).await?;
 
     let plan = parse_plan(&reply).ok_or_else(|| {
         XError::internal(format!(
@@ -1169,38 +1242,42 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
     };
     // 图表方案说成人话：什么图、什么标题、x/y 是哪列 —— 「1 个图表方案」等于什么都没说
     let charts_text = chart_summary(&plan.charts);
-    push_step(&mut steps, &tracer, json!({
-        "key": "plan",
-        "label": "生成查询与图表方案",
-        "detail": if clarify {
-            "判定问题缺少必要信息，改为向用户反问".to_string()
-        } else {
-            // 命中了哪几张候选表：比"SQL 多少个字符"更接近用户想看的「结果」
-            let hit: Vec<&str> = focus
-                .iter()
-                .filter(|t| plan.sql.contains(t.as_str()))
-                .map(String::as_str)
-                .collect();
-            let kinds: Vec<&str> = plan.charts.iter().map(|c| chart_kind_label(&c.kind)).collect();
-            format!(
-                "命中表 {} · SQL {} 个字符 · 图表 {} 张（{}）",
-                if hit.is_empty() { "（未识别）".to_string() } else { hit.join("、") },
-                plan.sql.trim().chars().count(),
-                plan.charts.len(),
-                kinds.join("、")
-            )
-        },
-        // 这一步最该让人看见「模型怎么分析的」：它到底写出了什么 SQL
-        "input": format!("候选表（已展开字段结构）：{}\n任务：写一条只读 SQL 与图表方案", focus.join("、")),
-        "output": if clarify {
-            "模型判定缺少关键信息，转而向用户反问".to_string()
-        } else {
-            format!("只读 SQL 已生成（{} 个字符）\n图表方案：{}", plan.sql.trim().chars().count(), charts_text)
-        },
-        "code": if clarify { Value::Null } else { json!(plan.sql) },
-        "thinking": plan_thinking,
-        "ms": t1.elapsed().as_millis() as u64,
-    }));
+    push_step(
+        &mut steps,
+        &tracer,
+        json!({
+            "key": "plan",
+            "label": "生成查询与图表方案",
+            "detail": if clarify {
+                "判定问题缺少必要信息，改为向用户反问".to_string()
+            } else {
+                // 命中了哪几张候选表：比"SQL 多少个字符"更接近用户想看的「结果」
+                let hit: Vec<&str> = focus
+                    .iter()
+                    .filter(|t| plan.sql.contains(t.as_str()))
+                    .map(String::as_str)
+                    .collect();
+                let kinds: Vec<&str> = plan.charts.iter().map(|c| chart_kind_label(&c.kind)).collect();
+                format!(
+                    "命中表 {} · SQL {} 个字符 · 图表 {} 张（{}）",
+                    if hit.is_empty() { "（未识别）".to_string() } else { hit.join("、") },
+                    plan.sql.trim().chars().count(),
+                    plan.charts.len(),
+                    kinds.join("、")
+                )
+            },
+            // 这一步最该让人看见「模型怎么分析的」：它到底写出了什么 SQL
+            "input": format!("候选表（已展开字段结构）：{}\n任务：写一条只读 SQL 与图表方案", focus.join("、")),
+            "output": if clarify {
+                "模型判定缺少关键信息，转而向用户反问".to_string()
+            } else {
+                format!("只读 SQL 已生成（{} 个字符）\n图表方案：{}", plan.sql.trim().chars().count(), charts_text)
+            },
+            "code": if clarify { Value::Null } else { json!(plan.sql) },
+            "thinking": plan_thinking,
+            "ms": t1.elapsed().as_millis() as u64,
+        }),
+    );
 
     // 澄清类：不执行，直接把反问交给界面
     if plan.intent.eq_ignore_ascii_case("clarify") || plan.sql.trim().is_empty() {
@@ -1278,47 +1355,51 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
                 .join("，")
         })
         .unwrap_or_default();
-    push_step(&mut steps, &tracer, json!({
-        "key": "exec",
-        "label": format!("执行查询（{row_count} 行）"),
-        // 这一步的「结果」必须写清楚：返回了什么列、多少行，0 行时说清是"查成功但没数据"
-        // 而不是"出错" —— 两者在界面上长得一样，用户会误以为查询挂了
-        "detail": if row_count == 0 {
-            format!(
-                "查询执行成功，0 行匹配{}（共 {} 列：{}）",
-                if result.truncated { "（已截断）" } else { "" },
-                columns.len(),
-                column_sample(&columns)
-            )
-        } else {
-            format!(
-                "返回 {row_count} 行 × {} 列：{}{}",
-                columns.len(),
-                column_sample(&columns),
-                if result.truncated { "（已按行数上限截断）" } else { "" }
-            )
-        },
-        // 输入就是发给数据库的 SQL；输出是实打实的结果（行数、列、首行）
-        "input": sql.clone(),
-        "output": if row_count == 0 {
-            "查询成功，但没有匹配的数据".to_string()
-        } else {
-            format!(
-                "返回 {} 行 × {} 列：{}\n首行：{}",
-                row_count, columns.len(), column_sample(&columns), first_sample
-            )
-        },
-        "thinking": format!(
-            "SQL 先过只读校验（只允许 SELECT，拒绝写语句和多语句），再在库 {} 上执行、最多取 {} 行；{}",
-            database, max_rows,
-            if row_count == 0 {
-                "结果为空，说明当前筛选条件下确实没有匹配数据，不是查询出错。".to_string()
+    push_step(
+        &mut steps,
+        &tracer,
+        json!({
+            "key": "exec",
+            "label": format!("执行查询（{row_count} 行）"),
+            // 这一步的「结果」必须写清楚：返回了什么列、多少行，0 行时说清是"查成功但没数据"
+            // 而不是"出错" —— 两者在界面上长得一样，用户会误以为查询挂了
+            "detail": if row_count == 0 {
+                format!(
+                    "查询执行成功，0 行匹配{}（共 {} 列：{}）",
+                    if result.truncated { "（已截断）" } else { "" },
+                    columns.len(),
+                    column_sample(&columns)
+                )
             } else {
-                format!("返回 {} 行，下一段据此核对数字再写结论。", row_count)
-            }
-        ),
-        "ms": t2.elapsed().as_millis() as u64,
-    }));
+                format!(
+                    "返回 {row_count} 行 × {} 列：{}{}",
+                    columns.len(),
+                    column_sample(&columns),
+                    if result.truncated { "（已按行数上限截断）" } else { "" }
+                )
+            },
+            // 输入就是发给数据库的 SQL；输出是实打实的结果（行数、列、首行）
+            "input": sql.clone(),
+            "output": if row_count == 0 {
+                "查询成功，但没有匹配的数据".to_string()
+            } else {
+                format!(
+                    "返回 {} 行 × {} 列：{}\n首行：{}",
+                    row_count, columns.len(), column_sample(&columns), first_sample
+                )
+            },
+            "thinking": format!(
+                "SQL 先过只读校验（只允许 SELECT，拒绝写语句和多语句），再在库 {} 上执行、最多取 {} 行；{}",
+                database, max_rows,
+                if row_count == 0 {
+                    "结果为空，说明当前筛选条件下确实没有匹配数据，不是查询出错。".to_string()
+                } else {
+                    format!("返回 {} 行，下一段据此核对数字再写结论。", row_count)
+                }
+            ),
+            "ms": t2.elapsed().as_millis() as u64,
+        }),
+    );
 
     // 结论：**拿到结果之后**再让模型看前 30 行写（见 NARRATE 的注释）。
     // 失败/超时都不影响主流程：退回一段由结果集算出来的本地结论。
@@ -1336,14 +1417,8 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
         },
         None,
     );
-    let (narrated, narrate_usage) = narrate(
-        narrate_model,
-        req.lang.as_deref(),
-        &question,
-        &sql,
-        &payload,
-    )
-    .await;
+    let (narrated, narrate_usage) =
+        narrate(narrate_model, req.lang.as_deref(), &question, &sql, &payload).await;
     let usage = merge_usage(usage, narrate_usage);
     // 「结论是谁写的」也是准确性的一部分：模型没答上就只能退回本地汇总，界面上要说清楚
     let narrate_detail = if row_count == 0 {
@@ -1380,19 +1455,23 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
             )
         }
     };
-    push_step(&mut steps, &tracer, json!({
-        "key": "narrate",
-        "label": "阅读结果并写结论",
-        "detail": narrate_detail,
-        "input": if row_count == 0 {
-            "结果集为空".to_string()
-        } else {
-            format!("结果集前 30 行（{} 行 × {} 列）", row_count, columns.len())
-        },
-        "output": narrate_output,
-        "thinking": narrate_thinking,
-        "ms": t3.elapsed().as_millis() as u64,
-    }));
+    push_step(
+        &mut steps,
+        &tracer,
+        json!({
+            "key": "narrate",
+            "label": "阅读结果并写结论",
+            "detail": narrate_detail,
+            "input": if row_count == 0 {
+                "结果集为空".to_string()
+            } else {
+                format!("结果集前 30 行（{} 行 × {} 列）", row_count, columns.len())
+            },
+            "output": narrate_output,
+            "thinking": narrate_thinking,
+            "ms": t3.elapsed().as_millis() as u64,
+        }),
+    );
     let summary = if narrated.summary.trim().is_empty() {
         let plan_text = plan.summary.trim();
         if plan_text.is_empty() {
@@ -1448,10 +1527,7 @@ async fn run_ask(state: AppState, req: AskReq, tracer: Tracer) -> XResult<Value>
         if charts.is_empty() {
             fallback = true;
             if let Some(first) = columns.iter().find(|c| *c != &"__row") {
-                let numeric = columns
-                    .iter()
-                    .find(|c| is_numeric_column(&payload, c))
-                    .cloned();
+                let numeric = columns.iter().find(|c| is_numeric_column(&payload, c)).cloned();
                 charts.push(json!({
                     "type": if numeric.is_some() { "bar" } else { "table" },
                     "title": "查询结果",
@@ -1532,10 +1608,7 @@ fn is_numeric_column(payload: &Value, column: &str) -> bool {
 /// 为什么要它：空白输入框是问数产品的第一道门槛 —— 用户不知道该问什么，也就永远不会知道
 /// 这个功能能干什么。示例从真实表结构里按列类型推（时间列 → 趋势；类别列 → 分布；
 /// 数值列 → 汇总），点一下就能问，比任何 onboarding 文案都有效。
-pub async fn examples(
-    State(state): State<AppState>,
-    RawQuery(raw): RawQuery,
-) -> XResult<Json<Value>> {
+pub async fn examples(State(state): State<AppState>, RawQuery(raw): RawQuery) -> XResult<Json<Value>> {
     let params = crate::api::Params::parse(raw.as_deref());
     let conn = params.get("connectionId").unwrap_or_default().trim().to_string();
     let database = params.get("database").unwrap_or_default().trim().to_string();
@@ -1555,16 +1628,11 @@ pub async fn examples(
     let mut items: Vec<Value> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
     for table in ranked.iter().take(4) {
-        let columns = match crate::api::ai::tools::columns_of(&state, &conn, &database, &table.name)
-            .await
-        {
+        let columns = match crate::api::ai::tools::columns_of(&state, &conn, &database, &table.name).await {
             Ok(list) if !list.is_empty() => list,
             _ => continue,
         };
-        let date_col = columns
-            .iter()
-            .find(|c| is_time_column(c))
-            .map(|c| c.name.clone());
+        let date_col = columns.iter().find(|c| is_time_column(c)).map(|c| c.name.clone());
         // 指标与维度都按"像不像业务字段"打分后再挑：不筛的话会给出
         // 「按月统计 dingtalk_config 的 enabled 趋势」这种没人想问的示例（真机踩过）
         let metric = columns
@@ -1620,15 +1688,21 @@ pub async fn examples(
         };
         push(recent, table.name.clone());
     }
-    Ok(Json(json!({ "success": true, "examples": items, "tables": tables.len() })))
+    Ok(Json(
+        json!({ "success": true, "examples": items, "tables": tables.len() }),
+    ))
 }
 
 fn is_time_column(column: &dbmind_core::ColumnDetail) -> bool {
     let name = column.name.to_ascii_lowercase();
     let tpe = column.type_name.clone().unwrap_or_default().to_ascii_lowercase();
-    tpe.contains("date") || tpe.contains("time")
-        || name.contains("date") || name.contains("time") || name.ends_with("_at")
-        || name.contains("日期") || name.contains("时间")
+    tpe.contains("date")
+        || tpe.contains("time")
+        || name.contains("date")
+        || name.contains("time")
+        || name.ends_with("_at")
+        || name.contains("日期")
+        || name.contains("时间")
 }
 
 /// 「像度量吗」：业务指标（金额/数量/金额类）加分，标志位/排序号/端口这类数字降权。
@@ -1639,8 +1713,24 @@ fn metric_score(column: &dbmind_core::ColumnDetail) -> i32 {
     let name = column.name.to_ascii_lowercase();
     // 这些名字本身就是"枚举/标志/编号"，哪怕列类型是 int 也不能当度量
     let reserved = [
-        "id", "status", "type", "level", "kind", "state", "sort", "order", "priority", "port",
-        "seq", "version", "enabled", "disabled", "deleted", "flag", "code", "sort_order",
+        "id",
+        "status",
+        "type",
+        "level",
+        "kind",
+        "state",
+        "sort",
+        "order",
+        "priority",
+        "port",
+        "seq",
+        "version",
+        "enabled",
+        "disabled",
+        "deleted",
+        "flag",
+        "code",
+        "sort_order",
     ];
     let flag_like = reserved.contains(&name.as_str())
         || name.ends_with("_id")
@@ -1660,9 +1750,9 @@ fn metric_score(column: &dbmind_core::ColumnDetail) -> i32 {
         return 0;
     }
     let metric_like = [
-        "amount", "amt", "price", "total", "sum", "count", "cnt", "qty", "quantity", "num",
-        "score", "rate", "ratio", "fee", "tax", "cost", "revenue", "salary", "duration", "size",
-        "sales", "profit", "balance", "weight",
+        "amount", "amt", "price", "total", "sum", "count", "cnt", "qty", "quantity", "num", "score", "rate",
+        "ratio", "fee", "tax", "cost", "revenue", "salary", "duration", "size", "sales", "profit", "balance",
+        "weight",
     ];
     let hits = metric_like.iter().filter(|token| name.contains(*token)).count();
     if hits > 0 {
@@ -1676,16 +1766,52 @@ fn metric_score(column: &dbmind_core::ColumnDetail) -> i32 {
 fn dim_score(column: &dbmind_core::ColumnDetail) -> i32 {
     let name = column.name.to_ascii_lowercase();
     let identifier_like = [
-        "username", "password", "email", "token", "url", "host", "phone", "mobile", "path",
-        "file", "remark", "comment", "note", "description", "content", "json", "uuid",
+        "username",
+        "password",
+        "email",
+        "token",
+        "url",
+        "host",
+        "phone",
+        "mobile",
+        "path",
+        "file",
+        "remark",
+        "comment",
+        "note",
+        "description",
+        "content",
+        "json",
+        "uuid",
     ];
     if identifier_like.iter().any(|token| name.contains(token)) {
         return 0;
     }
     let dim_like = [
-        "type", "status", "category", "channel", "region", "province", "city", "area", "store",
-        "shop", "level", "group", "kind", "brand", "product", "dept", "department", "team",
-        "owner", "source", "platform", "tag", "gender", "state",
+        "type",
+        "status",
+        "category",
+        "channel",
+        "region",
+        "province",
+        "city",
+        "area",
+        "store",
+        "shop",
+        "level",
+        "group",
+        "kind",
+        "brand",
+        "product",
+        "dept",
+        "department",
+        "team",
+        "owner",
+        "source",
+        "platform",
+        "tag",
+        "gender",
+        "state",
     ];
     let hits = dim_like.iter().filter(|token| name.contains(*token)).count();
     if hits > 0 {
@@ -1710,9 +1836,11 @@ fn is_category_column(column: &dbmind_core::ColumnDetail) -> bool {
     let tpe = column.type_name.clone().unwrap_or_default().to_ascii_lowercase();
     let textual = tpe.contains("char") || tpe.contains("text") || tpe.contains("string");
     textual
-        && ["type", "status", "category", "channel", "region", "level", "group", "kind", "name"]
-            .iter()
-            .any(|token| name.contains(token))
+        && [
+            "type", "status", "category", "channel", "region", "level", "group", "kind", "name",
+        ]
+        .iter()
+        .any(|token| name.contains(token))
 }
 
 #[cfg(test)]
@@ -1799,7 +1927,10 @@ mod tests {
             "销售表应进候选，实际：{picked:?}"
         );
         // 「商场」→ shop/mall：bi_shop_sale 的分应高于纯 passenger 表
-        assert!(picked.first().map(|t| t.contains("shop") || t.contains("sale")).unwrap_or(false));
+        assert!(picked
+            .first()
+            .map(|t| t.contains("shop") || t.contains("sale"))
+            .unwrap_or(false));
     }
 
     /// 全部 0 分（问题与表名完全沾不上边）时按前缀轮转兜底：同一前缀的家族给满上限，
@@ -1825,7 +1956,10 @@ mod tests {
         assert_eq!(how, "fallback");
         let prefixes: Vec<&str> = picked.iter().map(|t| t.split('_').next().unwrap()).collect();
         for p in ["aaa", "bbb", "ccc", "ddd"] {
-            assert!(prefixes.contains(&p), "前缀 {p} 应出现在横切面里，实际：{picked:?}");
+            assert!(
+                prefixes.contains(&p),
+                "前缀 {p} 应出现在横切面里，实际：{picked:?}"
+            );
         }
     }
 
@@ -1917,7 +2051,9 @@ mod tests {
     #[test]
     fn narrate_prompt_marks_small_result_as_complete() {
         // 32 行的小结果要全给，否则模型只能说「已展示的 N 种」（真机踩过）
-        let rows: Vec<Value> = (0..32).map(|i| json!({"类型": format!("t{i}"), "记录数": 1})).collect();
+        let rows: Vec<Value> = (0..32)
+            .map(|i| json!({"类型": format!("t{i}"), "记录数": 1}))
+            .collect();
         let payload = json!({
             "columns": ["类型", "记录数"],
             "columnTypes": ["varchar", "bigint"],

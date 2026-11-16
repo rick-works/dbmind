@@ -187,7 +187,11 @@ impl WriteDiag {
         let ms = elapsed.as_millis().max(1) as u64;
         let sample = (rows as u64).saturating_mul(1_000) / ms;
         let old = self.write_rows_per_sec.load(Ordering::Relaxed);
-        let next = if old == 0 || sample < old { sample } else { (old * 3 + sample) / 4 };
+        let next = if old == 0 || sample < old {
+            sample
+        } else {
+            (old * 3 + sample) / 4
+        };
         self.write_rows_per_sec.store(next, Ordering::Relaxed);
     }
 
@@ -331,12 +335,10 @@ impl GrowCaps {
             if current != 0 && current <= bytes {
                 return (current, current);
             }
-            match self.stmt_cap_hint.compare_exchange(
-                current,
-                bytes,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            match self
+                .stmt_cap_hint
+                .compare_exchange(current, bytes, Ordering::SeqCst, Ordering::SeqCst)
+            {
                 Ok(_) => return (current, bytes),
                 Err(seen) => current = seen,
             }
@@ -358,12 +360,10 @@ impl GrowCaps {
             if current != 0 && current <= rows {
                 return (current, current);
             }
-            match self.page_cap_hint.compare_exchange(
-                current,
-                rows,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
+            match self
+                .page_cap_hint
+                .compare_exchange(current, rows, Ordering::SeqCst, Ordering::SeqCst)
+            {
                 Ok(_) => return (current, rows),
                 Err(seen) => current = seen,
             }
@@ -661,15 +661,9 @@ mod watchdog_tests {
         let caps = GrowCaps::default();
         assert_eq!(caps.stmt_cap_hint(), 0);
         assert_eq!(caps.note_stmt_cap(3 * 1024 * 1024), (0, 3 * 1024 * 1024));
-        assert_eq!(
-            caps.note_stmt_cap(1024 * 1024),
-            (3 * 1024 * 1024, 1024 * 1024)
-        );
+        assert_eq!(caps.note_stmt_cap(1024 * 1024), (3 * 1024 * 1024, 1024 * 1024));
         // 更大的值不能覆盖已有结论
-        assert_eq!(
-            caps.note_stmt_cap(4 * 1024 * 1024),
-            (1024 * 1024, 1024 * 1024)
-        );
+        assert_eq!(caps.note_stmt_cap(4 * 1024 * 1024), (1024 * 1024, 1024 * 1024));
         assert_eq!(caps.stmt_cap_hint(), 1024 * 1024);
     }
 

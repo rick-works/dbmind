@@ -35,7 +35,10 @@ const BUILTIN: &[(&str, &str)] = &[
         "common.default-system",
         include_str!("../../../prompts/common.default-system.md"),
     ),
-    ("common.brevity", include_str!("../../../prompts/common.brevity.md")),
+    (
+        "common.brevity",
+        include_str!("../../../prompts/common.brevity.md"),
+    ),
     (
         "sql.explain.system",
         include_str!("../../../prompts/sql.explain.system.md"),
@@ -52,7 +55,10 @@ const BUILTIN: &[(&str, &str)] = &[
         "sql.optimize.user",
         include_str!("../../../prompts/sql.optimize.user.md"),
     ),
-    ("sql.fix.system", include_str!("../../../prompts/sql.fix.system.md")),
+    (
+        "sql.fix.system",
+        include_str!("../../../prompts/sql.fix.system.md"),
+    ),
     ("sql.fix.user", include_str!("../../../prompts/sql.fix.user.md")),
     (
         "sql.rewrite.system",
@@ -70,14 +76,35 @@ const BUILTIN: &[(&str, &str)] = &[
         "command.parse.user",
         include_str!("../../../prompts/command.parse.user.md"),
     ),
-    ("kb.inspect.system", include_str!("../../../prompts/kb.inspect.system.md")),
-    ("kb.inspect.user", include_str!("../../../prompts/kb.inspect.user.md")),
-    ("kb.polish.system", include_str!("../../../prompts/kb.polish.system.md")),
-    ("kb.polish.user", include_str!("../../../prompts/kb.polish.user.md")),
-    ("kb.plan.system", include_str!("../../../prompts/kb.plan.system.md")),
+    (
+        "kb.inspect.system",
+        include_str!("../../../prompts/kb.inspect.system.md"),
+    ),
+    (
+        "kb.inspect.user",
+        include_str!("../../../prompts/kb.inspect.user.md"),
+    ),
+    (
+        "kb.polish.system",
+        include_str!("../../../prompts/kb.polish.system.md"),
+    ),
+    (
+        "kb.polish.user",
+        include_str!("../../../prompts/kb.polish.user.md"),
+    ),
+    (
+        "kb.plan.system",
+        include_str!("../../../prompts/kb.plan.system.md"),
+    ),
     ("kb.plan.user", include_str!("../../../prompts/kb.plan.user.md")),
-    ("kb.outline.system", include_str!("../../../prompts/kb.outline.system.md")),
-    ("kb.outline.user", include_str!("../../../prompts/kb.outline.user.md")),
+    (
+        "kb.outline.system",
+        include_str!("../../../prompts/kb.outline.system.md"),
+    ),
+    (
+        "kb.outline.user",
+        include_str!("../../../prompts/kb.outline.user.md"),
+    ),
 ];
 
 fn user_dir() -> PathBuf {
@@ -121,9 +148,8 @@ fn release_into(dir: &std::path::Path) -> XResult<usize> {
             }
         };
         if write {
-            std::fs::write(&file, text).map_err(|e| {
-                XError::internal(format!("写入默认提示词 {} 失败：{e}", file.display()))
-            })?;
+            std::fs::write(&file, text)
+                .map_err(|e| XError::internal(format!("写入默认提示词 {} 失败：{e}", file.display())))?;
             manifest.insert((*id).to_string(), shipped);
             if existing.is_some() {
                 upgraded += 1;
@@ -212,8 +238,7 @@ pub fn text_of(id: &str) -> Option<String> {
 ///
 /// 缺变量、模板里残留占位符都是**错误**（见文件头第 2 条）。
 pub fn render(id: &str, vars: &[(&str, &str)]) -> XResult<String> {
-    let template = text_of(id)
-        .ok_or_else(|| XError::internal(format!("提示词模板 {id} 不存在")))?;
+    let template = text_of(id).ok_or_else(|| XError::internal(format!("提示词模板 {id} 不存在")))?;
     let mut out = template;
     for (name, value) in vars {
         out = out.replace(&format!("{{{{{name}}}}}"), value);

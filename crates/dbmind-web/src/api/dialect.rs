@@ -138,7 +138,7 @@ pub fn is_h2_table_priv(name: &str) -> bool {
 /// 空白，又是能直接贴进 SQL 的真写法（`alter user "" set password …`）。用户要求名字
 /// 显示必须带引号，不要显示成 `(default)` 那种"没括号"的假名字。
 /// 查详情 / 改密 / 删除时再还原成空串（旧的 `(default)` 仍认，兼容老前端缓存的清单）。
-fn h2_user(name: &str) -> String {
+pub(crate) fn h2_user(name: &str) -> String {
     let name = name.trim();
     if name == "\"\"" || name == "(default)" {
         String::new()
@@ -237,33 +237,84 @@ pub fn is_mysql_auth_plugin(name: &str) -> bool {
 /// Oracle 系统权限白名单（`grant <这些> to u`）。权限名会被**拼进 SQL**，
 /// 所以只放行清单里的 —— 界面传别的名字一律拒绝，不拼进语句。
 pub const ORACLE_SYSTEM_PRIVS: [&str; 30] = [
-    "CREATE SESSION", "CREATE TABLE", "CREATE ANY TABLE", "ALTER ANY TABLE", "DROP ANY TABLE",
-    "SELECT ANY TABLE", "INSERT ANY TABLE", "UPDATE ANY TABLE", "DELETE ANY TABLE",
-    "CREATE VIEW", "CREATE ANY VIEW", "CREATE SEQUENCE", "CREATE PROCEDURE", "CREATE ANY PROCEDURE",
-    "CREATE TRIGGER", "CREATE ANY TRIGGER", "CREATE TYPE", "CREATE SYNONYM", "CREATE ANY SYNONYM",
-    "CREATE DATABASE LINK", "CREATE JOB", "CREATE MATERIALIZED VIEW", "CREATE ROLE", "CREATE USER",
-    "ALTER USER", "DROP USER", "ALTER SESSION", "UNLIMITED TABLESPACE", "DEBUG CONNECT SESSION",
-    "QUERY REWRITE"
+    "CREATE SESSION",
+    "CREATE TABLE",
+    "CREATE ANY TABLE",
+    "ALTER ANY TABLE",
+    "DROP ANY TABLE",
+    "SELECT ANY TABLE",
+    "INSERT ANY TABLE",
+    "UPDATE ANY TABLE",
+    "DELETE ANY TABLE",
+    "CREATE VIEW",
+    "CREATE ANY VIEW",
+    "CREATE SEQUENCE",
+    "CREATE PROCEDURE",
+    "CREATE ANY PROCEDURE",
+    "CREATE TRIGGER",
+    "CREATE ANY TRIGGER",
+    "CREATE TYPE",
+    "CREATE SYNONYM",
+    "CREATE ANY SYNONYM",
+    "CREATE DATABASE LINK",
+    "CREATE JOB",
+    "CREATE MATERIALIZED VIEW",
+    "CREATE ROLE",
+    "CREATE USER",
+    "ALTER USER",
+    "DROP USER",
+    "ALTER SESSION",
+    "UNLIMITED TABLESPACE",
+    "DEBUG CONNECT SESSION",
+    "QUERY REWRITE",
 ];
 
 /// Oracle 角色白名单（角色名同样是拼进 SQL 的，必须过白名单）。
 pub const ORACLE_ROLES: [&str; 12] = [
-    "CONNECT", "RESOURCE", "DBA", "EXP_FULL_DATABASE", "IMP_FULL_DATABASE",
-    "SELECT_CATALOG_ROLE", "EXECUTE_CATALOG_ROLE", "DELETE_CATALOG_ROLE", "RECOVERY_CATALOG_OWNER",
-    "SCHEDULER_ADMIN", "OEM_MONITOR", "AQ_ADMINISTRATOR_ROLE"
+    "CONNECT",
+    "RESOURCE",
+    "DBA",
+    "EXP_FULL_DATABASE",
+    "IMP_FULL_DATABASE",
+    "SELECT_CATALOG_ROLE",
+    "EXECUTE_CATALOG_ROLE",
+    "DELETE_CATALOG_ROLE",
+    "RECOVERY_CATALOG_OWNER",
+    "SCHEDULER_ADMIN",
+    "OEM_MONITOR",
+    "AQ_ADMINISTRATOR_ROLE",
 ];
 
 /// Oracle 对象权限白名单（`grant <这些> on <owner>.<object> to u`）。
 pub const ORACLE_OBJECT_PRIVS: [&str; 13] = [
-    "SELECT", "INSERT", "UPDATE", "DELETE", "ALTER", "INDEX", "REFERENCES", "READ",
-    "EXECUTE", "DEBUG", "FLASHBACK", "ON COMMIT REFRESH", "QUERY REWRITE"
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "ALTER",
+    "INDEX",
+    "REFERENCES",
+    "READ",
+    "EXECUTE",
+    "DEBUG",
+    "FLASHBACK",
+    "ON COMMIT REFRESH",
+    "QUERY REWRITE",
 ];
 
 /// SQL Server 数据库级 / 对象级权限白名单（`grant <这些> on …`）。
 /// 权限名会**原样拼进 SQL**，所以只放行清单里的。
 pub const MSSQL_PRIVILEGES: [&str; 10] = [
-    "SELECT", "INSERT", "UPDATE", "DELETE", "EXECUTE", "REFERENCES",
-    "CONTROL", "ALTER", "VIEW DEFINITION", "TAKE OWNERSHIP"
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "EXECUTE",
+    "REFERENCES",
+    "CONTROL",
+    "ALTER",
+    "VIEW DEFINITION",
+    "TAKE OWNERSHIP",
 ];
 
 pub fn is_mssql_privilege(name: &str) -> bool {
@@ -275,7 +326,13 @@ pub fn is_mssql_privilege(name: &str) -> bool {
 /// （PG 的 `WITH GRANT OPTION` 是子句不是权限名，界面不给这个勾，名单里就不收）。
 pub const PG_SCHEMA_PRIVS: [&str; 2] = ["USAGE", "CREATE"];
 pub const PG_TABLE_PRIVS: [&str; 7] = [
-    "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER",
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "TRUNCATE",
+    "REFERENCES",
+    "TRIGGER",
 ];
 
 /// PG 的**库级**权限（`grant connect on database db to u`）。
@@ -306,9 +363,7 @@ pub fn is_pg_routine_priv(name: &str) -> bool {
 /// 这些名字同样会被拼进语句。
 pub fn is_plain_ident(name: &str) -> bool {
     let n = name.trim();
-    !n.is_empty()
-        && n.len() <= 128
-        && n.chars().all(|c| c.is_alphanumeric() || "_$#@.- ".contains(c))
+    !n.is_empty() && n.len() <= 128 && n.chars().all(|c| c.is_alphanumeric() || "_$#@.- ".contains(c))
 }
 
 fn in_list(list: &[&str], name: &str) -> bool {
@@ -330,14 +385,19 @@ fn in_list(list: &[&str], name: &str) -> bool {
 pub fn is_safe_name(name: &str) -> bool {
     let s = name.trim();
     !s.is_empty()
-        && s.split(' ').all(|w| {
-            !w.is_empty() && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        })
+        && s.split(' ')
+            .all(|w| !w.is_empty() && w.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'))
 }
 
-pub fn is_oracle_system_priv(name: &str) -> bool { in_list(&ORACLE_SYSTEM_PRIVS, name) || is_safe_name(name) }
-pub fn is_oracle_role(name: &str) -> bool { in_list(&ORACLE_ROLES, name) || is_safe_name(name) }
-pub fn is_oracle_object_priv(name: &str) -> bool { in_list(&ORACLE_OBJECT_PRIVS, name) || is_safe_name(name) }
+pub fn is_oracle_system_priv(name: &str) -> bool {
+    in_list(&ORACLE_SYSTEM_PRIVS, name) || is_safe_name(name)
+}
+pub fn is_oracle_role(name: &str) -> bool {
+    in_list(&ORACLE_ROLES, name) || is_safe_name(name)
+}
+pub fn is_oracle_object_priv(name: &str) -> bool {
+    in_list(&ORACLE_OBJECT_PRIVS, name) || is_safe_name(name)
+}
 
 /// 界面在「系统权限」页签里既能勾系统权限、也能勾角色（Oracle 的授权实际就这两类），
 /// 所以这一层的校验器是两者的并集。
@@ -461,33 +521,200 @@ pub fn is_clickhouse_privilege(name: &str) -> bool {
 /// 请求参数。SQL 里表名的位置**没法用字符串字面量**（`'internal'.xxx` 是语法错），
 /// 所以这里用白名单挡一道：不认识的一律当"这条路走不了"，交给调用方回退到通用路径。
 fn is_plain_identifier(name: &str) -> bool {
-    !name.is_empty()
-        && name.len() <= 64
-        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    !name.is_empty() && name.len() <= 64 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 const RESERVED_WORDS: &[&str] = &[
-    "ADD", "ALL", "ALTER", "ANALYZE", "AND", "ANY", "ARRAY", "AS", "ASC", "ASYMMETRIC",
-    "AUTHORIZATION", "BEGIN", "BETWEEN", "BINARY", "BOTH", "BY", "CALL", "CASCADE", "CASE",
-    "CAST", "CHECK", "COLLATE", "COLUMN", "COMMENT", "COMMIT", "CONNECT", "CONSTRAINT", "CREATE",
-    "CROSS", "CUBE", "CURRENT", "CURRENT_DATE", "CURRENT_TIME", "CURRENT_TIMESTAMP",
-    "CURRENT_USER", "CURSOR", "DATABASE", "DATABASES", "DEALLOCATE", "DEC", "DECIMAL", "DECLARE",
-    "DEFAULT", "DELETE", "DESC", "DESCRIBE", "DISTINCT", "DIV", "DO", "DOUBLE", "DROP", "DUAL",
-    "ELSE", "ELSEIF", "END", "ESCAPE", "EXCEPT", "EXEC", "EXECUTE", "EXISTS", "EXPLAIN",
-    "EXTERNAL", "FALSE", "FETCH", "FILE", "FLOAT", "FOR", "FORCE", "FOREIGN", "FROM", "FULL",
-    "FULLTEXT", "FUNCTION", "GRANT", "GROUP", "GROUPING", "HAVING", "HIGH_PRIORITY", "IF",
-    "IGNORE", "IN", "INDEX", "INNER", "INOUT", "INSERT", "INT", "INTEGER", "INTERSECT",
-    "INTERVAL", "INTO", "IS", "JOIN", "KEY", "KEYS", "KILL", "LEADING", "LEAVE", "LEFT", "LEVEL",
-    "LIKE", "LIMIT", "LOCK", "LONG", "LOOP", "MATCH", "MERGE", "MOD", "MODIFY", "NATURAL", "NOT",
-    "NULL", "OFFSET", "ON", "OPTION", "OR", "ORDER", "OUT", "OUTER", "OVER", "PARTITION",
-    "PRECISION", "PRIMARY", "PROCEDURE", "PUBLIC", "PURGE", "RANGE", "READ", "REAL", "RECURSIVE",
-    "REFERENCES", "REGEXP", "RELEASE", "RENAME", "REPEAT", "REPLACE", "REQUIRE", "RESTRICT",
-    "RETURN", "RETURNS", "REVOKE", "RIGHT", "ROLLBACK", "ROW", "ROWNUM", "ROWS", "SCHEMA",
-    "SELECT", "SESSION_USER", "SET", "SHOW", "SIGNED", "SOME", "SPATIAL", "SQL", "START",
-    "STRAIGHT_JOIN", "SYMMETRIC", "SYSTEM_USER", "TABLE", "TERMINATED", "THEN", "TO", "TRAILING",
-    "TRANSACTION", "TRIGGER", "TRUE", "TRUNCATE", "UNDO", "UNION", "UNIQUE", "UNLOCK", "UNSIGNED",
-    "UPDATE", "USAGE", "USE", "USER", "USING", "VALUES", "VARBINARY", "VARCHAR", "VARYING",
-    "VIEW", "WHEN", "WHERE", "WHILE", "WINDOW", "WITH", "WRITE", "XOR", "ZEROFILL",
+    "ADD",
+    "ALL",
+    "ALTER",
+    "ANALYZE",
+    "AND",
+    "ANY",
+    "ARRAY",
+    "AS",
+    "ASC",
+    "ASYMMETRIC",
+    "AUTHORIZATION",
+    "BEGIN",
+    "BETWEEN",
+    "BINARY",
+    "BOTH",
+    "BY",
+    "CALL",
+    "CASCADE",
+    "CASE",
+    "CAST",
+    "CHECK",
+    "COLLATE",
+    "COLUMN",
+    "COMMENT",
+    "COMMIT",
+    "CONNECT",
+    "CONSTRAINT",
+    "CREATE",
+    "CROSS",
+    "CUBE",
+    "CURRENT",
+    "CURRENT_DATE",
+    "CURRENT_TIME",
+    "CURRENT_TIMESTAMP",
+    "CURRENT_USER",
+    "CURSOR",
+    "DATABASE",
+    "DATABASES",
+    "DEALLOCATE",
+    "DEC",
+    "DECIMAL",
+    "DECLARE",
+    "DEFAULT",
+    "DELETE",
+    "DESC",
+    "DESCRIBE",
+    "DISTINCT",
+    "DIV",
+    "DO",
+    "DOUBLE",
+    "DROP",
+    "DUAL",
+    "ELSE",
+    "ELSEIF",
+    "END",
+    "ESCAPE",
+    "EXCEPT",
+    "EXEC",
+    "EXECUTE",
+    "EXISTS",
+    "EXPLAIN",
+    "EXTERNAL",
+    "FALSE",
+    "FETCH",
+    "FILE",
+    "FLOAT",
+    "FOR",
+    "FORCE",
+    "FOREIGN",
+    "FROM",
+    "FULL",
+    "FULLTEXT",
+    "FUNCTION",
+    "GRANT",
+    "GROUP",
+    "GROUPING",
+    "HAVING",
+    "HIGH_PRIORITY",
+    "IF",
+    "IGNORE",
+    "IN",
+    "INDEX",
+    "INNER",
+    "INOUT",
+    "INSERT",
+    "INT",
+    "INTEGER",
+    "INTERSECT",
+    "INTERVAL",
+    "INTO",
+    "IS",
+    "JOIN",
+    "KEY",
+    "KEYS",
+    "KILL",
+    "LEADING",
+    "LEAVE",
+    "LEFT",
+    "LEVEL",
+    "LIKE",
+    "LIMIT",
+    "LOCK",
+    "LONG",
+    "LOOP",
+    "MATCH",
+    "MERGE",
+    "MOD",
+    "MODIFY",
+    "NATURAL",
+    "NOT",
+    "NULL",
+    "OFFSET",
+    "ON",
+    "OPTION",
+    "OR",
+    "ORDER",
+    "OUT",
+    "OUTER",
+    "OVER",
+    "PARTITION",
+    "PRECISION",
+    "PRIMARY",
+    "PROCEDURE",
+    "PUBLIC",
+    "PURGE",
+    "RANGE",
+    "READ",
+    "REAL",
+    "RECURSIVE",
+    "REFERENCES",
+    "REGEXP",
+    "RELEASE",
+    "RENAME",
+    "REPEAT",
+    "REPLACE",
+    "REQUIRE",
+    "RESTRICT",
+    "RETURN",
+    "RETURNS",
+    "REVOKE",
+    "RIGHT",
+    "ROLLBACK",
+    "ROW",
+    "ROWNUM",
+    "ROWS",
+    "SCHEMA",
+    "SELECT",
+    "SESSION_USER",
+    "SET",
+    "SHOW",
+    "SIGNED",
+    "SOME",
+    "SPATIAL",
+    "SQL",
+    "START",
+    "STRAIGHT_JOIN",
+    "SYMMETRIC",
+    "SYSTEM_USER",
+    "TABLE",
+    "TERMINATED",
+    "THEN",
+    "TO",
+    "TRAILING",
+    "TRANSACTION",
+    "TRIGGER",
+    "TRUE",
+    "TRUNCATE",
+    "UNDO",
+    "UNION",
+    "UNIQUE",
+    "UNLOCK",
+    "UNSIGNED",
+    "UPDATE",
+    "USAGE",
+    "USE",
+    "USER",
+    "USING",
+    "VALUES",
+    "VARBINARY",
+    "VARCHAR",
+    "VARYING",
+    "VIEW",
+    "WHEN",
+    "WHERE",
+    "WHILE",
+    "WINDOW",
+    "WITH",
+    "WRITE",
+    "XOR",
+    "ZEROFILL",
 ];
 
 /// 是否是（任一受支持方言的）保留字 —— 决定 `quote` 能不能裸写这个名字。
@@ -499,6 +726,16 @@ pub fn is_reserved(name: &str) -> bool {
 impl Dialect {
     pub fn new(kind: ConnectionKind) -> Self {
         Self { kind }
+    }
+
+    /// 这个类型属于哪个**语法族**（见 `dialect_ops`）。
+    ///
+    /// 从这一层开始，「按库分支」的判断都收敛到 `DialectOps` 的 impl 里：
+    /// 门面方法保持签名不变（调用方零改动），内部委托给族实现。
+    /// 新增同源类型（dialect 相同）不需要动任何分支。
+    #[inline]
+    pub(crate) fn ops(&self) -> &'static dyn crate::api::dialect_ops::DialectOps {
+        crate::api::dialect_ops::of(self.kind)
     }
 
     /// 方言键（`mysql` / `postgresql` / …）。`pub(crate)`：同 crate 的 meta.rs 要据此判断
@@ -520,27 +757,12 @@ impl Dialect {
     /// 能的话就不必「先把目标全部主键读进内存 → 命中的逐行 UPDATE」——那是 upsert 最贵的
     /// 两步；不能的方言（ClickHouse / Doris / Derby）继续走两阶段，行为不变。
     pub fn supports_native_upsert(&self) -> bool {
-        matches!(
-            self.key(),
-            "mysql" | "mariadb" | "postgresql" | "kingbase" | "sqlite" | "h2" | "oracle" | "dm"
-                | "db2" | "sqlserver" | "derby"
-        )
+        self.ops().supports_native_upsert()
     }
 
     /// 原生 upsert 单条语句最多带多少行（调用方按它拆分）。
     pub fn upsert_row_limit(&self) -> usize {
-        match self.key() {
-            // T-SQL 的行值构造器单语句上限 1000 行（解析器硬限制，与 INSERT 同一条规矩）
-            "sqlserver" => 1000,
-            // Oracle/DM 的 MERGE 源会把每一行展开成 `select … from dual`，再拼成
-            // UNION ALL。页大小（5 万）直接作为分支数会让解析器/表达式上限先于
-            // 数据量爆炸；500 行与旧 INSERT 路径的保守批大小一致。
-            "oracle" | "dm" => 500,
-            // Derby 的 `values` 表构造器行数一多，解析与优化都比别的库贵；1000 行一条
-            // 与它自己的 `insert ... values` 批大小一致，不额外引入风险。
-            "derby" => 1000,
-            _ => usize::MAX,
-        }
+        self.ops().upsert_row_limit()
     }
 
     /// 生成一条原生 upsert 语句。
@@ -565,145 +787,8 @@ impl Dialect {
         key_indexes: &[usize],
         rows: &[Vec<String>],
     ) -> Option<String> {
-        if rows.is_empty() || columns.is_empty() || key_indexes.is_empty() {
-            return None;
-        }
-        let q = |name: &str| self.quote(name);
-        let col_list = columns.iter().map(|c| q(c)).collect::<Vec<_>>().join(", ");
-        let keys = key_indexes.iter().map(|i| q(&columns[*i])).collect::<Vec<_>>();
-        let key_set: std::collections::HashSet<usize> = key_indexes.iter().copied().collect();
-        // 需要被更新的列 = 除键以外的列（全是键时语句退化成「插入或忽略」）
-        let payload: Vec<usize> = (0..columns.len()).filter(|i| !key_set.contains(i)).collect();
-        let tuples = rows
-            .iter()
-            .map(|row| format!("({})", row.join(", ")))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let insert_from_src = |sql: &mut String| {
-            let src_cols = (0..columns.len())
-                .map(|i| format!("src.{}", q(&columns[i])))
-                .collect::<Vec<_>>()
-                .join(", ");
-            sql.push_str(&format!(
-                " when not matched then insert ({col_list}) values ({src_cols})"
-            ));
-        };
-        match self.key() {
-            "mysql" | "mariadb" => {
-                if payload.is_empty() {
-                    let first = keys.first()?;
-                    return Some(format!(
-                        "insert into {table} ({col_list}) values {tuples} on duplicate key update {first} = {first}"
-                    ));
-                }
-                let sets = payload
-                    .iter()
-                    .map(|i| {
-                        let c = q(&columns[*i]);
-                        format!("{c} = values({c})")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                Some(format!(
-                    "insert into {table} ({col_list}) values {tuples} on duplicate key update {sets}"
-                ))
-            }
-            "postgresql" | "kingbase" | "sqlite" => {
-                let target = keys.join(", ");
-                if payload.is_empty() {
-                    return Some(format!(
-                        "insert into {table} ({col_list}) values {tuples} on conflict ({target}) do nothing"
-                    ));
-                }
-                let sets = payload
-                    .iter()
-                    .map(|i| {
-                        let c = q(&columns[*i]);
-                        format!("{c} = excluded.{c}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                Some(format!(
-                    "insert into {table} ({col_list}) values {tuples} on conflict ({target}) do update set {sets}"
-                ))
-            }
-            "h2" => Some(format!(
-                "merge into {table} ({col_list}) key ({}) values {tuples}",
-                keys.join(", ")
-            )),
-            "oracle" | "dm" => {
-                // Oracle 的 MERGE 源用 `select … from dual union all`；表别名不能带 AS
-                let branches = rows
-                    .iter()
-                    .map(|row| {
-                        let exprs = columns
-                            .iter()
-                            .enumerate()
-                            .map(|(i, c)| format!("{} as {}", row[i], q(c)))
-                            .collect::<Vec<_>>()
-                            .join(", ");
-                        format!("select {exprs} from dual")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" union all ");
-                let on = key_indexes
-                    .iter()
-                    .map(|i| {
-                        let c = q(&columns[*i]);
-                        format!("tgt.{c} = src.{c}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" and ");
-                let mut sql = format!("merge into {table} tgt using ({branches}) src on ({on})");
-                if !payload.is_empty() {
-                    let sets = payload
-                        .iter()
-                        .map(|i| {
-                            let c = q(&columns[*i]);
-                            format!("{c} = src.{c}")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    sql.push_str(&format!(" when matched then update set {sets}"));
-                }
-                insert_from_src(&mut sql);
-                Some(sql)
-            }
-            // Derby 的 MERGE 与 DB2 同形（`using (values …) as src (列清单)`），
-            // 10.11 起支持 —— 以前这里没有它，Derby 目标只能纯 insert，
-            // 重跑撞主键就把行判成脏数据（唯一没有幂等的 JDBC 关系型库）。
-            "db2" | "sqlserver" | "derby" => {
-                let on = key_indexes
-                    .iter()
-                    .map(|i| {
-                        let c = q(&columns[*i]);
-                        format!("tgt.{c} = src.{c}")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" and ");
-                let mut sql = format!(
-                    "merge into {table} as tgt using (values {tuples}) as src ({col_list}) on ({on})"
-                );
-                if !payload.is_empty() {
-                    let sets = payload
-                        .iter()
-                        .map(|i| {
-                            let c = q(&columns[*i]);
-                            format!("{c} = src.{c}")
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    sql.push_str(&format!(" when matched then update set {sets}"));
-                }
-                insert_from_src(&mut sql);
-                // T-SQL 要求 MERGE 语句以分号结束（老版本解析器硬要求）
-                if self.key() == "sqlserver" {
-                    sql.push(';');
-                }
-                Some(sql)
-            }
-            _ => None,
-        }
+        // 语句形态与列引用都在族实现里，门面只转发
+        self.ops().upsert_sql(table, columns, key_indexes, rows)
     }
 
     /// 标识符加引号：简单名不加，避免把 MySQL 的大小写敏感表名改写掉。
@@ -714,46 +799,7 @@ impl Dialect {
     /// 同理）。实测：库里那张 `user` 表，菜单「清空表」必然失败，而同名手写
     /// `select * from [user]` 完全正常 —— 坏的只是应用自己拼的 SQL。
     pub fn quote(&self, name: &str) -> String {
-        let wrap = |s: &str| -> String {
-            if s.is_empty() {
-                return String::new();
-            }
-            let plain = s
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
-            // 未加引号的标识符必须**字母开头**（Oracle/DB2/Derby 直接拒绝 `_`/数字开头
-            // 的裸名 —— ORA-00911 无效字符；MySQL 数字开头同样不合法），这样的名字
-            // 一律走引号分支。
-            let starts_alpha = s.starts_with(|c: char| c.is_ascii_alphabetic());
-            // **下折方言**（PG / Kingbase / SQLite）里未加引号的名字会被折成小写：
-            // 目标表上叫 `Name` 的列，裸写 `Name` 会被解析成 `name` —— 真机报
-            // `column "name" of relation "t" does not exist`，而表结构明明是好的。
-            // 这类「含大写字母」的普通名必须逐字加引号；全小写的普通名照旧裸写（行为不变）。
-            let needs_case_quote =
-                plain && self.folds_ident_lower() && s.chars().any(|c| c.is_ascii_uppercase());
-            if plain && starts_alpha && !is_reserved(s) && !needs_case_quote {
-                return s.to_string();
-            }
-            // 上折方言（Oracle / DM / DB2 / H2 / Derby）里，未加引号的名字会被折成大写；
-            // 一旦加引号就等于固定大小写。所以要加引号的**普通名**先折一次，
-            // 让 `rename to user` 仍然建出 `USER`，而不是悄悄造一个小写对象。
-            // 但**字母开头之外**的 plain 名（`_report_xingwei` 这种 `_` 开头的表）
-            // 不折：它进引号分支恰恰因为它裸写不合法 —— 而字典里是小写就说明当初
-            // 是带引号建的小写对象，折成大写反而指向一个不存在的表（豫园 11g 实测）。
-            let text = if plain && starts_alpha && self.folds_ident_upper() {
-                s.to_ascii_uppercase()
-            } else {
-                s.to_string()
-            };
-            match self.key() {
-                "mysql" | "mariadb" | "doris" | "clickhouse" => {
-                    format!("`{}`", text.replace('`', "``"))
-                }
-                "sqlserver" => format!("[{}]", text.replace(']', "]]")),
-                _ => format!("\"{}\"", text.replace('"', "\"\"")),
-            }
-        };
-        name.split('.').map(wrap).collect::<Vec<_>>().join(".")
+        self.ops().quote(name)
     }
 
     /// 逐字加引号：**不动大小写**，简单名也加引号。
@@ -767,32 +813,7 @@ impl Dialect {
     /// 旧实现走 `quote()` → 拼出 `order by day` → 服务端折成 `DAY` →
     /// `ORA-00904: "DAY": 标识符无效`。关键字搜索、高级搜索、就地编辑、导出同理。
     pub fn quote_exact(&self, name: &str) -> String {
-        let wrap = |s: &str| -> String {
-            if s.is_empty() {
-                return String::new();
-            }
-            match self.key() {
-                "mysql" | "mariadb" | "doris" | "clickhouse" => {
-                    format!("`{}`", s.replace('`', "``"))
-                }
-                "sqlserver" => format!("[{}]", s.replace(']', "]]")),
-                _ => format!("\"{}\"", s.replace('"', "\"\"")),
-            }
-        };
-        name.split('.').map(wrap).collect::<Vec<_>>().join(".")
-    }
-
-    /// 未加引号的标识符是否会被折成**小写**（PG 系）。
-    ///
-    /// 与 [`Self::folds_ident_upper`] 相对：这些库里含大写字母的名字必须加引号，
-    /// 否则会被悄悄折成小写、指向另一个（或不存在的）列。
-    fn folds_ident_lower(&self) -> bool {
-        matches!(self.key(), "postgresql" | "kingbase" | "sqlite")
-    }
-
-    /// 未加引号的标识符是否会被折成大写（决定加引号前要不要先上折）。
-    fn folds_ident_upper(&self) -> bool {
-        matches!(self.key(), "oracle" | "dm" | "db2" | "h2" | "derby")
+        self.ops().quote_exact(name)
     }
 
     /// 字符串字面量（按方言转义）。
@@ -803,20 +824,12 @@ impl Dialect {
     /// （`\'` 提前闭合字符串）。其余方言（PG/SQLServer/Oracle/SQLite/H2…）里 `\`
     /// 就是普通字符，动了反而改值，不动。
     pub fn literal(&self, value: &str) -> String {
-        let body = if matches!(self.key(), "mysql" | "clickhouse") {
-            value.replace('\\', "\\\\")
-        } else {
-            value.to_string()
-        };
-        format!("'{}'", body.replace('\'', "''"))
+        self.ops().literal(value)
     }
 
     pub fn is_schema_aware(&self) -> bool {
-        // 这里的名单必须与 YAML 的 `traits.schemaAware` 对齐 —— 以前它写死三个类型，
-        // 于是 oracle 明明在 YAML 里写着 schemaAware: true，行为却和 false 一样：
-        // 「库.模式」不拆、表/列都按会话默认 schema 取，用户在 system 会话里看不到
-        // DBMIND 的表（连表清单都会串成 SYS 的）。
-        matches!(self.key(), "postgresql" | "kingbase" | "sqlserver" | "oracle")
+        // 名单在 `DialectOps` 的族实现里（以前写死在这里，连 YAML 的 traits 都没用上）。
+        self.ops().is_schema_aware()
     }
 
     /// 树里「库」这一层装的其实就是**模式**（Oracle / DM：连接下直接列模式，没有服务名层）。
@@ -825,14 +838,14 @@ impl Dialect {
     /// 否则搜索 / ER 图会退化成「枚举当前账号能看到的**所有**模式」，一行输入等 60 秒，
     /// 结果还会混进别的模式的表（真机：Oracle SYSTEM 下搜一个表名要 63 秒）。
     pub fn db_is_schema(&self) -> bool {
-        matches!(self.key(), "oracle")
+        self.ops().db_is_schema()
     }
 
     /// 这个类型的元数据 SQL 是「库内限定」的，执行前要补一句 `use [库];` 兜底
     /// （SQL Server 专属：影子连接负责落库，USE 是第二道保险 —— 防止执行落回主连接
     /// 时把默认库的表当成目标库的，两个库节点显示同一份清单，用户实测过）。
     pub fn wants_use_switch(&self) -> bool {
-        matches!(self.key(), "sqlserver")
+        self.ops().wants_use_switch()
     }
 
     /// 这个类型的 `database` 是「服务器上的一个库」（服务器管着很多个、可以切换），
@@ -845,10 +858,7 @@ impl Dialect {
     ///
     /// 对 Oracle / DB2 / 文件型硬切 `database` 会把 JDBC URL 改坏，所以不在名单里。
     pub fn switchable_database(&self) -> bool {
-        matches!(
-            self.key(),
-            "mysql" | "mariadb" | "doris" | "postgresql" | "kingbase" | "sqlserver" | "clickhouse"
-        )
+        self.ops().switchable_database()
     }
 
     /// 是否为「catalog → 库 → 表」三层结构。
@@ -857,7 +867,7 @@ impl Dialect {
     /// `catalog.库.表`，而 `information_schema` 只反映**当前 catalog**。
     /// 目前只有 Doris；其余类型返回 false，走原来的两层结构，行为完全不变。
     pub fn catalog_level(&self) -> bool {
-        matches!(self.key(), "doris")
+        self.ops().catalog_level()
     }
 
     /// catalog 清单。
@@ -873,9 +883,9 @@ impl Dialect {
     /// `show` 包成子查询去挑列（实测语法错误）；所以取名字那一步改成**按列名**选，
     /// 见 `meta.rs` 的 `catalog_column_text`。
     pub fn catalogs(&self) -> Meta {
-        match self.key() {
-            "doris" => Meta::Sql("show catalogs".to_string()),
-            _ => Meta::Absent,
+        match self.ops().catalogs_sql() {
+            Some(sql) => Meta::Sql(sql.to_string()),
+            None => Meta::Absent,
         }
     }
 
@@ -897,22 +907,9 @@ impl Dialect {
     /// 权限过滤交给数据库自己：SQL Server 用 `has_dbaccess`，PostgreSQL 用
     /// `has_database_privilege`，MySQL 的 `show databases` 本身就只返回有权限的。
     pub fn databases(&self) -> Meta {
-        match self.key() {
-            "sqlserver" => Meta::Sql(
-                "select name from sys.databases where state = 0 and has_dbaccess(name) = 1 order by name"
-                    .to_string(),
-            ),
-            "mysql" | "mariadb" | "doris" => Meta::Sql("show databases".to_string()),
-            "postgresql" | "kingbase" => Meta::Sql(
-                "select datname as name from pg_database where datistemplate = false \
-                 and has_database_privilege(datname, 'CONNECT') order by datname"
-                    .to_string(),
-            ),
-            "clickhouse" => {
-                Meta::Sql("select name from system.databases order by name".to_string())
-            }
-            // 文件型（一个文件就是一个库）与尚未覆盖的类型：交给调用方退回单库
-            _ => Meta::Unwritten,
+        match self.ops().databases_sql() {
+            Some(sql) => Meta::Sql(sql.to_string()),
+            None => Meta::Unwritten,
         }
     }
 
@@ -967,126 +964,17 @@ impl Dialect {
 
     /// schema 清单（只有 schema 层级的类型需要）。
     pub fn schemas(&self) -> Meta {
-        match self.key() {
-            // PG：`pg_namespace` 是**公开目录**，所有角色都能看到全部 schema 名 ——
-            // 不按权限收窄的话，树上会列出一堆点进去空、连建表都不允许的模式（实测：
-            // 给低权限账号建一个无 USAGE 的 schema，改造前它就出现在清单里）。
-            // 判据用 `USAGE`：没有它连按名字定位对象都不行，等价于「这个模式对它不可用」。
-            //
-            // 曾经为了与 Navicat 对齐（它不过滤，Supabase 库里 30 个模式全列）改成过
-            // 「全部列出、有权限的排前面」，但那样点进去全是空 —— 用户 2026-11-11 明确
-            // 选择**不显示没权限的**，于是回到这条。要与 Navicat 对齐时别再改这里，
-            // 先问清楚「列出来但打不开」是不是想要的。
-            "postgresql" | "kingbase" => Meta::Sql(
-                "select nspname as name from pg_namespace \
-                 where nspname not like 'pg\\_%' and nspname <> 'information_schema' \
-                   and has_schema_privilege(oid, 'USAGE') order by nspname"
-                    .to_string(),
-            ),
-            // SQL Server：除了 guest / sys / INFORMATION_SCHEMA，还要滤掉**九个固定数据库角色的同名
-            // schema**（db_owner、db_accessadmin、db_backupoperator、db_datareader、db_datawriter、
-            // db_ddladmin、db_denydatareader、db_denydatawriter、db_securityadmin）。
-            // 每个固定角色在库里都对应一个空 schema，SQL Server 建库时自动带上 —— 它们不是给用户
-            // 建表用的，列在树里就是九行永远空的噪音（实测用户截图里正是这九个）。
-            // `dbo` 要留着：它是正常的默认 schema（用户建的表大多在它下面）。
-            "sqlserver" => Meta::Sql(
-                "select name from sys.schemas \
-                 where name not in ('guest','sys','INFORMATION_SCHEMA', \
-                   'db_owner','db_accessadmin','db_backupoperator','db_datareader','db_datawriter', \
-                   'db_ddladmin','db_denydatareader','db_denydatawriter','db_securityadmin') \
-                 order by name"
-                    .to_string(),
-            ),
-            // 其余类型的 schemaLevel 在前端就是 'none'，树不会请求它；返回空数组是事实。
-            // Oracle：「库」那一层是服务名 / PDB，表实际挂在**用户（schema）**下面 ——
-            // 树里列 all_users，就是 Navicat 左侧那一列（SYS / SYSTEM / OUTLN / … 都在）。
-            // 不开这层的话，表清单只能看到当前会话 schema 自己的表：连 system 时看不到
-            // DBMIND.T_TEST 的字段。
-            // Oracle：`all_users` 也是**所有**用户（含 SYS / OUTLN 这些与当前账号毫无关系的），
-            // 逐个点进去恒空。收窄成「当前用户 + 至少有一个我能看见的对象」——
-            // `all_objects` 的语义正好是「当前账号有权限访问的对象」，所以这就是"有权限的 schema"。
-            // 当前用户必须无条件保留：刚建好、还没建对象的空 schema 也得能导航过去。
-            "oracle" => Meta::Sql(
-                "select username as name from all_users u \
-                 where username = sys_context('USERENV','CURRENT_SCHEMA') \
-                    or exists (select 1 from all_objects o \
-                               where o.owner = u.username and rownum = 1) \
-                 order by username"
-                    .to_string(),
-            ),
-            // H2：`INFORMATION_SCHEMA.SCHEMATA`（2.x）。H2 的「库」是 catalog（一个实例一个，
-            // 名字就是连接里的 database，如 MAIN），表和授权都挂在 schema 上 ——
-            // 用户管理的表级授权要选的就是这一层（PUBLIC / 业务 schema）。
-            "h2" => Meta::Sql(
-                "select schema_name as \"name\" from information_schema.schemata \
-                 where schema_name <> 'INFORMATION_SCHEMA' order by schema_name"
-                    .to_string(),
-            ),
-            _ => Meta::Absent,
+        match self.ops().schemas_sql() {
+            Some(sql) => Meta::Sql(sql.to_string()),
+            None => Meta::Absent,
         }
     }
 
     /// 某个 schema 下的表/视图（schema 层级专用；非 schema 类型走内核的 DatabaseMetaData）。
     pub fn tables_in_schema(&self, schema: &str) -> Meta {
-        match self.key() {
-            // PostgreSQL / KingbaseES：`reltuples` 是**估算值**（未 ANALYZE 时是 -1），
-            // 拿不到就给 null —— 界面上留空，不要用 0 冒充「空表」。
-            // 精确行数由前端展开后的批量 COUNT(*) 回填（见 `/table-count`）。
-            // PG：`pg_class` 同样是公开目录 —— 不加权限判断就会把「这个账号一张都读不了」
-            // 的表/视图列出来（实测低权限账号看到了没授过任何权限的表与视图）。
-            // 判据是「七种表级权限里**任意一种**」：只授了 INSERT 的表也应当能看到，
-            // 只看 SELECT 会把它藏起来（那样更糟：用户明明能写，却在树里找不到）。
-            // 逗号列表是 `has_table_privilege` 支持的写法（实测），不必写七个 or。
-            "postgresql" | "kingbase" => Meta::Sql(format!(
-                "select c.relname as name, \
-                 case when c.relkind = 'v' then 'VIEW' else 'BASE TABLE' end as type, \
-                 case when c.reltuples < 0 then null else c.reltuples::bigint end as rows \
-                 from pg_class c join pg_namespace n on n.oid = c.relnamespace \
-                 where n.nspname = {} and c.relkind in ('r','p','v','f') \
-                   and has_table_privilege(c.oid, \
-                     'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') \
-                 order by c.relname",
-                self.literal(schema)
-            )),
-            // SQL Server：`sys.partitions.rows` 是**实时维护的真实行数**（不是统计估算），
-            // 一次 join 就能拿到全 schema，不必每张表去 COUNT(*)。
-            // 视图没有自己的行数 → null（留给前端留空，而不是显示 0）。
-            //
-            // 表注释必须自己 join：**mssql-jdbc 不填 `REMARKS`**（SQL Server 的表注释存在
-            // `sys.extended_properties` 里，不是数据库自带的元数据），所以走 JDBC 的
-            // getTables 永远拿不到注释 —— 而前端「编辑表结构」的表注释框正是从这个清单里读的
-            // （`comment: t?.comment || ''`）。缺这一列的后果实测是：注释改完保存**确实成功**
-            // （`/alter` 里那条 sp_updateextendedproperty 真执行了，库里值也变了），
-            // 但重新打开表时注释框又是空的 —— 用户看到的就是"修改表注释没用"。
-            // `minor_id = 0` 才是表级注释（列级注释的 minor_id 是列号）；`class = 1` 是对象级。
-            "sqlserver" => Meta::Sql(format!(
-                "select o.name as name, \
-                 case when o.type = 'V' then 'VIEW' else 'BASE TABLE' end as type, \
-                 case when o.type = 'V' then null else isnull(p.rows, 0) end as rows, \
-                 cast(ep.value as nvarchar(4000)) as comment \
-                 from sys.objects o \
-                 outer apply (select sum(rows) as rows from sys.partitions \
-                              where object_id = o.object_id and index_id in (0,1)) p \
-                 left join sys.extended_properties ep \
-                        on ep.class = 1 and ep.major_id = o.object_id and ep.minor_id = 0 \
-                       and ep.name = 'MS_Description' \
-                 where o.schema_id = schema_id({}) and o.type in ('U','V') order by o.name",
-                self.literal(schema)
-            )),
-            // Oracle：表与视图一起列（union all 两段），并且**必须带上 `type` 列** ——
-            // 前端就是按 `type === 'VIEW'` 把视图分到「视图」分类的：少了这一列，
-            // 视图会被当成表混进「表」里，「视图」节点永远是空的。
-            // （真机踩过：SYSTEM 下 41 个对象、视图 0 —— 就是这个原因。）
-            // `rows` / `comment` / `type` 都加双引号：前两个在 Oracle 里是关键字，
-            // 不加会直接 ORA-00923。num_rows 是**统计估算**（没 ANALYZE 过就是 null），
-            // 精确行数由前端 COUNT(*) 回填；注释取自 all_tab_comments（表和视图都在里面），
-            // 结构编辑器的「表注释」框就是从这个清单里读的。
-            // SQL 写成**一整行**：续行拼接被搅坏过一次（报 ORA-03405），别再拆。
-            "oracle" => Meta::Sql(format!(
-                "select t.table_name as name, t.num_rows as \"rows\", cc.comments as \"comment\", 'TABLE' as \"type\" from all_tables t left join all_tab_comments cc on cc.owner = t.owner and cc.table_name = t.table_name where t.owner = {owner} union all select v.view_name as name, null as \"rows\", cc.comments as \"comment\", 'VIEW' as \"type\" from all_views v left join all_tab_comments cc on cc.owner = v.owner and cc.table_name = v.view_name where v.owner = {owner} order by name",
-                owner = self.literal(&schema.to_uppercase())
-            )),
-_ => Meta::Unwritten,
+        match self.ops().tables_in_schema_sql(schema) {
+            Some(sql) => Meta::Sql(sql),
+            None => Meta::Unwritten,
         }
     }
 
@@ -1099,137 +987,7 @@ _ => Meta::Unwritten,
     /// 各家系统表差别很大，**只写有把握的**：SQL Server / MySQL / PostgreSQL。
     /// 其余返回 `Unwritten` —— 用户管理涉及权限，猜错的代价比不显示大得多。
     pub fn user_info(&self, name: &str) -> Meta {
-        let n = self.literal(name);
-        match self.key() {
-            // SQL Server：**服务器登录名**（sys.server_principals）+ 服务器角色 + 服务器级权限。
-            // 与 users() 同一口径（连接级、不跟库）—— 见那边的注释。
-            // 别名必须是 `type_desc`（不是 `type`）：前端标签表按 `type_desc` 认「类型」。
-            "sqlserver" => Meta::Sql(format!(
-                "select sp.name as name, sp.type_desc as type_desc, \
-                 convert(varchar(30), sp.create_date, 120) as create_date, \
-                 isnull(sp.default_database_name, '') as default_database, \
-                 cast(sp.is_disabled as int) as disabled, \
-                 'create login ' + quotename(sp.name) + ' with password = ''<password>''' as create_user_sql, \
-                 isnull(stuff(( \
-                   select char(10) + 'alter server role ' + quotename(r.name) + ' add member ' + quotename(sp2.name) + ';' \
-                   from sys.server_role_members m \
-                   join sys.server_principals r on r.principal_id = m.role_principal_id \
-                   join sys.server_principals sp2 on sp2.principal_id = m.member_principal_id \
-                   where m.member_principal_id = sp.principal_id \
-                   for xml path(''), type).value('.', 'nvarchar(max)'), 1, 1, ''), '') + \
-                 isnull(( \
-                   select char(10) + 'grant ' + p.permission_name + ' to ' + quotename(sp2.name) + ';' \
-                   from sys.server_permissions p \
-                   join sys.server_principals sp2 on sp2.principal_id = p.grantee_principal_id \
-                   where p.grantee_principal_id = sp.principal_id and p.class = 100 \
-                   for xml path(''), type).value('.', 'nvarchar(max)'), '') as grants_text \
-                 from sys.server_principals sp \
-                 where sp.name = {n} and sp.type in ('S','U','G')"
-            )),
-            // H2：`INFORMATION_SCHEMA.USERS` + `TABLE_PRIVILEGES`（实测 2.3.232）。
-            // H2 没有"全局权限"这一层，只有 ADMIN 标志；细粒度授权就是表级 GRANT。
-            // 标识符一律双引号（H2 的标准引用符），内部 `"` 转义成 `""`。
-            "h2" => {
-                let who = self.literal(&h2_user(name));
-                Meta::Sql(format!(
-                    "select case when coalesce(user_name,'') = '' then '\"\"' else user_name end as \"name\", \
-                     case when is_admin then 'true' else 'false' end as \"is_admin\", \
-                     'create user \"' || replace(case when coalesce(user_name,'') = '' then 'new_user' else user_name end, '\"', '\"\"') || '\" password ''<password>''' as \"create_user_sql\", \
-                     coalesce((select listagg('grant ' || privilege_type || ' on \"' || replace(table_schema, '\"', '\"\"') || '\".\"' || replace(table_name, '\"', '\"\"') || '\" to \"' || replace(grantee, '\"', '\"\"') || '\"', char(10)) within group (order by table_schema, table_name, privilege_type) \
-                       from information_schema.table_privileges where grantee = user_name), '') as \"grants_text\" \
-                     from information_schema.users where user_name = {who}"
-                ))
-            }
-            // Derby / DB2：用户来自外部认证，只能看（清单见 users()），没有可执行的建/删语句
-            "derby" => Meta::Sql(format!(
-                "select username as \"name\" from sys.sysusers where username = {n}"
-            )),
-            "db2" => Meta::Sql(format!(
-                "select grantee as \"name\" from syscat.dbauth where grantee = {n}"
-            )),
-            // MySQL 的账号是**两列**（user + host），而树里显示与传进来的是拼好的
-            // `user@host`（列表就是这么给的）—— 老写法拿 `demo1@%` 去比 `user` 列，
-            // 于是点开任何一个用户都是「没有找到用户」。按**最后一个** `@` 切开再比两列：
-            // host 部分不含 `@`，而用户名部分可以（`'a@b'@'%'`）。
-            "mysql" | "mariadb" | "doris" => {
-                let (user, host) = match name.rsplit_once('@') {
-                    Some((user, host)) => (user, host),
-                    // 只给了用户名（没有 @）时不限制 host，否则会与 `'x'@'localhost'` 擦肩而过
-                    None => (name, ""),
-                };
-                let filter = if host.is_empty() {
-                    format!("user = {}", self.literal(user))
-                } else {
-                    format!(
-                        "user = {} and host = {}",
-                        self.literal(user),
-                        self.literal(host)
-                    )
-                };
-                Meta::Sql(format!(
-                    // 权限明细**不在这里聚合**：`group_concat` 受 `group_concat_max_len`
-                    // 限制（服务端默认 1024）会静默截断，见 `user_grants`。
-                    // 拼接用 concat：MySQL 里 `'a' + 'b'` 是**加法**（结果是 0），
-                    // 老写法直接抄了 SQL Server 的 `+`，创建语句会显示成一串数字
-                    "select t.user as name, t.host as host, \
-                     concat('create user ', quote(t.user), '@', quote(t.host)) as create_user_sql, \
-                     t.* \
-                     from mysql.user t where {filter} limit 1"
-                ))
-            }
-            // PG / Kingbase：这一条原来是从 SQL Server 那份**抄过来的**，两处语法在 PG 上都不成立：
-            //   · `'a' + 'b'`：PG 的字符串拼接是 `||`，`+` 只有数值有 —— 直接报
-            //     `operator does not exist: unknown + text`（42883），整条详情查询失败；
-            //   · `isnull(x, '')`：那是 SQL Server 的函数，PG 只有 `coalesce`（42883 同名错误）。
-            // 结果是「PG 连用户清单都看得到、点进去却是没有找到用户」。这里的 `||` 与 `coalesce`
-            // 两家（PG / KingbaseES 的 PG 兼容模式）都认。
-            "postgresql" | "kingbase" => Meta::Sql(format!(
-                "select r.rolname as name, \
-                 cast(r.rolsuper as int) as is_superuser, \
-                 cast(r.rolcanlogin as int) as can_login, \
-                 cast(r.rolcreatedb as int) as can_create_db, \
-                 'create role ' || quote_ident(r.rolname) || ' login' as create_user_sql, \
-                 coalesce(string_agg(case when a.privilege_type is not null then \
-                   'grant ' || a.privilege_type || ' on ' || quote_ident(a.table_schema) || '.' || \
-                   quote_ident(a.table_name) || ' to ' || quote_ident(r.rolname) || ';' end, chr(10)), '') as grants_text \
-                 from pg_roles r \
-                 left join information_schema.table_privileges a on a.grantee = r.rolname \
-                 where r.rolname = {n} \
-                 group by r.rolname, r.rolsuper, r.rolcanlogin, r.rolcreatedb"
-            )),
-            // ClickHouse：system.users 一行就是全部属性；授权清单是 `show grants for`
-            //（见 user_grants 的 clickhouse 分支）。认证串（auth_string）不进详情 ——
-            // 与 MySQL 的 authentication_string 同一个理由：展示出来只会被复制、截图。
-            // 只挑**版本稳定**的列：default_roles_* / grantees_* 在新版本改过名
-            // （实测 26.8 报 Unknown identifier: grantees_all），别把它们摊进详情。
-            "clickhouse" => Meta::Sql(format!(
-                // `auth_type` 是 **Enum8**（不是数组）：24.8 实测 arrayStringConcat 会抛
-                // Code 43 ILLEGAL_TYPE_OF_ARGUMENT。转成字符串即可；host_ip/host_names
-                // 才是 Array(String)，继续用 arrayStringConcat 拼成一行。
-                "select name, storage, \
-                 toString(auth_type) as auth_type, \
-                 arrayStringConcat(host_ip, ', ') as host_ip, \
-                 arrayStringConcat(host_names, ', ') as host_names \
-                 from system.users where name = {n}"
-            )),
-            // Oracle / DM：dba_users 一行含状态与表空间；授权拼成 grants_text 文本
-            //（系统权限 + 角色，与 PG 的 grants_text 同一交付形态）。
-            // 用 dba_* 而不是 all_users：后者没有状态/表空间字段，详情页会没内容可看。
-            // `upper()` 兜住大小写 —— Oracle 里用户名按大写存。
-            "oracle" | "dm" => Meta::Sql(format!(
-                "select username as name, account_status, \
-                 to_char(created, 'YYYY-MM-DD HH24:MI:SS') as created, \
-                 nvl(default_tablespace, '') as default_tablespace, \
-                 nvl(temporary_tablespace, '') as temporary_tablespace, \
-                 nvl(profile, '') as profile, \
-                 nvl((select listagg('grant ' || privilege || ' to ' || grantee || ';', chr(10)) \
-                   within group (order by privilege) from dba_sys_privs s where s.grantee = u.username), '') || \
-                 nvl((select chr(10) || listagg('grant ' || granted_role || ' to ' || grantee || ';', chr(10)) \
-                   within group (order by granted_role) from dba_role_privs r where r.grantee = u.username), '') as grants_text \
-                 from dba_users u where username = upper({n})"
-            )),
-            _ => Meta::Unwritten,
-        }
+        self.ops().user_info(name)
     }
 
     /// 用户权限明细：**逐行**返回（全局 / 库级 / 表级各一档），由调用方拼成 `GRANT ...` 文本。
@@ -1246,72 +1004,7 @@ _ => Meta::Unwritten,
     /// 已知覆盖：**静态**权限。8.0 的动态权限（`mysql.global_grants`）与角色授予
     /// 不在这三张视图里，需要时按 `role_edges` 另补（5.7 没有那张表，先不引用）。
     pub fn user_grants(&self, user: &str, host: &str) -> Meta {
-        // grantee 在 information_schema 视图里是**带引号的字符串** `'user'@'host'`：
-        // 在 Rust 侧拼好整个串再走 literal() 转义 —— 比 `concat(quote(…))` 短得多。
-        // **长度就是正确性**：实测（公司 VPN，路由被隧道接管且上行丢弃满 MSS 的包），
-        // 整句超过一个 TCP 段（≈1.4KB）时第一个满尺寸段被丢，重传退避 ~19 秒后连接
-        // 被重置，界面表现就是「点编辑/授权没反应」。所以列名/字面量一律从短。
-        let grantee = self.literal(&format!("'{}'@'{}'", user, host));
-        match self.key() {
-            "mysql" | "mariadb" | "doris" => {
-                // 例程级授权不在 information_schema 里，只在 mysql.procs_priv：一行多权限、
-                // 空格分隔（`Execute Alter Routine Grant`）。**不在 SQL 里按 LIKE 拆成三段** ——
-                // 那会把整句顶过一个 TCP 段（见上），拆分挪到 Rust 侧做（expand_grant_rows）。
-                // 一行带回原始 Proc_priv + `类型:名字`（PROCEDURE:p / FUNCTION:f）。
-                // 第 5 列 is_grantable 直接随行带回（替代「GRANT OPTION 单独三段 UNION」）。
-                // Doris 是 MySQL 协议但没有 mysql.procs_priv 这张表，查了必炸 —— 排除。
-                let routine_sql = if self.key() == "doris" {
-                    String::new()
-                } else {
-                    format!(
-                        " union all select 'routine', Proc_priv, Db, concat(Routine_type, ':', Routine_name), '' from mysql.procs_priv where User = {} and Host = {}",
-                        self.literal(user),
-                        self.literal(host)
-                    )
-                };
-                Meta::Sql(format!(
-                    "select 'global' as scope, privilege_type as privilege, '' as db_name, '' as table_name, is_grantable as grant_option from information_schema.user_privileges where grantee = {grantee} \
-                 union all select 'schema', privilege_type, table_schema, '', is_grantable from information_schema.schema_privileges where grantee = {grantee} \
-                 union all select 'table', privilege_type, table_schema, table_name, is_grantable from information_schema.table_privileges where grantee = {grantee}{routine_sql}"
-                ))
-            }
-            // PostgreSQL/KingbaseES：模式（USAGE/CREATE）/ 表 / 例程（EXECUTE）三层，
-            // 各来自一张 information_schema 视图。grantee 是**裸角色名**（没有 MySQL 的
-            // 'u'@'h' 形状）。information_schema 只列「显式授给这个角色」的权限：
-            // 通过角色继承来的不在内 —— 与 SUPERUSER 全能也不在内，如实展示。
-            // 整句同样要压在一个 TCP 段以内（见上方 mysql 分支的 VPN 实测注释）。
-            "postgresql" | "kingbase" => {
-                let who = self.literal(user);
-                Meta::Sql(format!(
-                    "select 'schema' as scope, privilege_type as privilege, object_name as db_name, '' as table_name from information_schema.usage_privileges where grantee = {who} and object_type = 'SCHEMA' and object_name not in ('information_schema','pg_catalog') \
-                 union all select 'table', privilege_type, table_schema, table_name from information_schema.role_table_grants where grantee = {who} and table_schema not in ('information_schema','pg_catalog') \
-                 union all select case when p.prokind = 'p' then 'procedure' else 'function' end as scope, g.privilege_type as privilege, g.specific_schema as db_name, g.routine_name as table_name from information_schema.role_routine_grants g join pg_proc p on p.proname = g.routine_name join pg_namespace pn on pn.oid = p.pronamespace and pn.nspname = g.specific_schema where g.grantee = {who} and g.specific_schema not in ('information_schema','pg_catalog') \
-                 union all select 'database' as scope, a.privilege_type as privilege, d.datname as db_name, '' as table_name from pg_database d cross join lateral aclexplode(coalesce(d.datacl, acldefault('d', d.datdba))) a join pg_roles r on r.oid = a.grantee where r.rolname = {who} and not d.datistemplate"
-                ))
-            }
-            // ClickHouse：`show grants for` 每行就是一条可执行的 GRANT 语句，
-            // 由 grant_line 的 clickhouse 分支**原样**带回 —— 不做任何解析重组。
-            "clickhouse" => {
-                Meta::Sql(format!("show grants for {}", self.quote(user)))
-            }
-            // Oracle：三张字典视图正好对应三层 —— 系统权限 / 角色 / 对象权限。
-            // 列形状与 MySQL 那三张视图**保持一致**（scope, privilege, owner, object），
-            // 前端一套解析器就能吃两家，不再各写一份（那条老教训）。
-            // 视图用 `dba_*`：它们要 SELECT_CATALOG_ROLE —— 没有权限时这句会失败，
-            // 界面会**如实报"读不到现有权限"**（而不是显示成"什么都没有"，那会让人
-            // 误以为可以放心保存）。SQL 一律写成**单行**：续行的反斜杠拼接被搅坏过。
-            // 注：权限名用 `PRIVILEGE` 而不是 `PRIVILEGE_CN`，避免用到只有中文环境才有的列。
-            "oracle" => Meta::Sql(format!(
-                "select 'global' as scope, privilege as privilege, '' as owner, '' as object_name from dba_sys_privs where grantee = upper({}) union all select 'role', granted_role, '', '' from dba_role_privs where grantee = upper({}) union all select 'object', privilege, owner, table_name from dba_tab_privs where grantee = upper({})",
-                self.literal(user), self.literal(user), self.literal(user)
-            )),
-            // H2：细粒度授权只有表级一层（H2 没有全局权限，只有 ADMIN 标志）
-            "h2" => Meta::Sql(format!(
-                "select 'table' as scope, privilege_type as privilege, table_schema as db_name, table_name as table_name from information_schema.table_privileges where grantee = {}",
-                self.literal(&h2_user(user))
-            )),
-            _ => Meta::Unwritten,
-        }
+        self.ops().user_grants(user, host)
     }
 
     /// 已授予该账号的**角色**（MySQL 8 / MariaDB 的 RBAC）。
@@ -1324,38 +1017,7 @@ _ => Meta::Unwritten,
     /// 所以 role_host 一律回空串，界面按裸名字显示。
     /// Doris 的 RBAC 没有这两张表（返回 Unwritten，界面就不出角色这一页）。
     pub fn user_roles(&self, user: &str, host: &str) -> Meta {
-        match self.key() {
-            "mysql" => Meta::Sql(format!(
-                "select from_user as role_name, from_host as role_host from mysql.role_edges \
-                 where to_user = {} and to_host = {}",
-                self.literal(user),
-                self.literal(host)
-            )),
-            "mariadb" => Meta::Sql(format!(
-                "select Role as role_name, '' as role_host from mysql.roles_mapping \
-                 where User = {} and Host = {}",
-                self.literal(user),
-                self.literal(host)
-            )),
-            // ClickHouse：授权关系在 `system.role_grants`（granted_role_name 才是"被授角色"）
-            "clickhouse" => Meta::Sql(format!(
-                "select granted_role_name as role_name, '' as role_host from system.role_grants \
-                 where user_name = {}",
-                self.literal(user)
-            )),
-            // PostgreSQL/KingbaseES：成员关系在 `pg_auth_members`（member = 被授主体，
-            // roleid = 被授的角色）。**information_schema 里查不到这一层** ——
-            // `role_usage_grants` 只讲 USAGE 权限、`enabled_roles` 只看当前会话，
-            // 所以 PG 的「角色」页签原来一个勾都没有（授过的角色既看不见也撤不掉）。
-            // 与 MySQL 一样单独一条短查询：不塞进 user_grants 那条已经贴着 TCP 段上限的 UNION。
-            "postgresql" | "kingbase" => Meta::Sql(format!(
-                "select r.rolname as role_name, '' as role_host from pg_auth_members m \
-                 join pg_roles r on r.oid = m.roleid \
-                 join pg_roles u on u.oid = m.member where u.rolname = {} order by 1",
-                self.literal(user)
-            )),
-            _ => Meta::Unwritten,
-        }
+        self.ops().user_roles(user, host)
     }
 
     /// 这台服务器上**出现过**的角色（界面要能列出「还没授的」，否则看不见也就授不了）。
@@ -1372,183 +1034,21 @@ _ => Meta::Unwritten,
     /// ClickHouse 的 `system.roles`、Doris 的 `SHOW ROLES`），所以不能拿
     /// `user_info` 硬查 —— 查不到就是"没有找到用户"，角色页永远打不开。
     pub fn role_info(&self, name: &str) -> Meta {
-        match self.key() {
-            // MySQL 的角色就是账号（host 维度存在）；MariaDB 的角色 Host 恒为空串
-            "mysql" | "mariadb" => Meta::Sql(format!(
-                "select user as `name`, host as `host` from mysql.user where user = {} order by host limit 1",
-                self.literal(name)
-            )),
-            "postgresql" | "kingbase" => Meta::Sql(format!(
-                "select rolname as name, '' as host from pg_roles where rolname = {}",
-                self.literal(name)
-            )),
-            "oracle" => Meta::Sql(format!(
-                "select role as name, '' as host from dba_roles where role = upper({})",
-                self.literal(name)
-            )),
-            "clickhouse" => Meta::Sql(format!(
-                "select name, '' as host from system.roles where name = {}",
-                self.literal(name)
-            )),
-            // Doris 这版不支持编辑角色权限（权限名是 SELECT_PRIV 那套，与 MySQL 不同名），
-            // 这里仍给一行，至少不会把表单卡在"没有找到"
-            "doris" => Meta::Sql(format!(
-                "select {} as name, '' as host",
-                self.literal(name)
-            )),
-            _ => Meta::Unwritten,
-        }
+        self.ops().role_info(name)
     }
 
     /// 角色**自身拥有**的权限（与 `user_grants` 同形状：scope/privilege/owner/db_name/table_name/grant_option）。
     pub fn role_grants(&self, name: &str, host: &str) -> Meta {
-        match self.key() {
-            // MySQL：角色就是账号，权限视图里按 grantee 能查到，直接复用
-            "mysql" => self.user_grants(name, host),
-            // MariaDB：information_schema **不列角色**（实测 user_privileges 里查不到），
-            // 只能读 `show grants for '<role>'`。返回的是**单列文本**（每行一条 GRANT），
-            // 由 `grant_line` 原样带回 `grants`，界面（parseMySqlGrants）再分层回填 ——
-            // 与 ClickHouse 同一种交付形态（grantRows 为空，结构化列只给"有 4 列形状"的方言）。
-            "mariadb" => Meta::Sql(format!("show grants for {}", self.literal(name))),
-            // PG：information_schema 只显示「当前用户是授予者/被授予者」的那部分，
-            // 读别的角色的权限永远是空 —— 必须直接解 ACL 数组（aclexplode）。
-            // `coalesce(acl, acldefault(...))`：ACL 为 NULL = 从没单独授过，
-            // 此时按"只有属主有权限"的默认 ACL 展开（角色是属主时才会命中）。
-            // 注意：模式/表两级用的是**当前库**的目录（pg_namespace / pg_class），
-            // 其它库里的对象要在那个库上打开才看得到；库级（pg_database）是全局的。
-            "postgresql" | "kingbase" => Meta::Sql(format!(
-                "select 'schema' as scope, a.privilege_type as privilege, n.nspname as db_name, '' as table_name \
-                   from pg_namespace n cross join lateral aclexplode(coalesce(n.nspacl, acldefault('n', n.nspowner))) a \
-                   join pg_roles r on r.oid = a.grantee \
-                  where r.rolname = {who} and n.nspname not in ('information_schema','pg_catalog') \
-                 union all \
-                 select 'table' as scope, a.privilege_type, n.nspname, c.relname \
-                   from pg_class c join pg_namespace n on n.oid = c.relnamespace \
-                   cross join lateral aclexplode(coalesce(c.relacl, acldefault('r', c.relowner))) a \
-                   join pg_roles r on r.oid = a.grantee \
-                  where r.rolname = {who} and c.relkind in ('r','v','m','p','f') and n.nspname not in ('information_schema','pg_catalog') \
-                 union all \
-                 select 'database' as scope, a.privilege_type, d.datname, '' \
-                   from pg_database d cross join lateral aclexplode(coalesce(d.datacl, acldefault('d', d.datdba))) a \
-                   join pg_roles r on r.oid = a.grantee \
-                  where r.rolname = {who} and not d.datistemplate",
-                who = self.literal(name)
-            )),
-            // Oracle 有两本角色字典：系统权限与对象权限（角色套角色不在权限矩阵里）
-            "oracle" => Meta::Sql(format!(
-                "select 'global' as scope, '' as owner, '' as object, p.privilege as privilege, p.admin_option as grant_option \
-                   from role_sys_privs p where p.role = upper({lit}) \
-                 union all \
-                 select 'object' as scope, t.owner as owner, t.table_name as object, t.privilege as privilege, t.grantable as grant_option \
-                   from role_tab_privs t where t.role = upper({lit})",
-                lit = self.literal(name)
-            )),
-            // ClickHouse：system.grants 里 role_name 非空的就是"授给角色"的行
-            "clickhouse" => Meta::Sql(format!(
-                "select case when database = '' and table = '' then 'global' when table = '' then 'db' else 'table' end as scope, \
-                        access_type as privilege, database as db_name, table as table_name, \
-                        if(grant_option, 'YES', 'NO') as grant_option \
-                   from system.grants where role_name = {lit} and is_partial_revoke = 0",
-                lit = self.literal(name)
-            )),
-            // Doris 的权限名（SELECT_PRIV …）与界面这套列不同名，本版不给回显
-            _ => Meta::Unwritten,
-        }
+        self.ops().role_grants(name, host)
     }
 
     pub fn role_inventory(&self) -> Meta {
-        match self.key() {
-            "mysql" => Meta::Sql(
-                "select role_name, role_host from ( \
-                   select from_user as role_name, from_host as role_host from mysql.role_edges \
-                   union \
-                   select user, host from mysql.user \
-                   where account_locked = 'Y' and coalesce(authentication_string, '') = '' \
-                 ) t"
-                .to_string(),
-            ),
-            "mariadb" => Meta::Sql(
-                "select distinct Role as role_name, '' as role_host from mysql.roles_mapping"
-                    .to_string(),
-            ),
-            // Oracle：`DBA_ROLES` 里有 100+ 个 Oracle 自带角色（DBA / CONNECT / DV_* …），
-            // 全灌进用户清单既吵又危险（删掉 DBA 是真事故）。`ORACLE_MAINTAINED='N'`
-            // 正好筛出**用户自己建的**角色（12c+ 才有这一列；11g 上这句会失败，
-            // 调用方按"拿不到就不补"处理，清单照常）。
-            "oracle" => Meta::Sql(
-                "select role as role_name, '' as role_host from dba_roles where oracle_maintained = 'N'"
-                    .to_string(),
-            ),
-            "clickhouse" => Meta::Sql(
-                "select name as role_name, '' as role_host from system.roles".to_string(),
-            ),
-            "doris" => Meta::Sql("show roles".to_string()),
-            // PG：纯角色 = 不能登录的那些；`pg_*` 是系统预置角色（pg_monitor / pg_read_all_data…），
-            // 它们在上面的「角色」页有专门一栏（pgRoles），不该混进"可删除的角色"清单。
-            "postgresql" | "kingbase" => Meta::Sql(
-                "select rolname as role_name, '' as role_host from pg_roles \
-                 where not rolcanlogin and left(rolname, 3) <> 'pg_'"
-                    .to_string(),
-            ),
-            _ => Meta::Unwritten,
-        }
+        self.ops().role_inventory()
     }
 
-/// 用户新建 / 改密 / 删除（**多条语句用 `;\n` 连接**，由调用方拆分逐条执行）。
-    ///
-    /// 只生成有把握的那几件事。**细粒度权限（库/表/模式/对象级 GRANT）不在这里做**：
-    /// 那是一片权限矩阵，拼错就是「授多了」或「授错了」——调用方会在收到这类入参时明确拒绝，
-    /// 而不是默默建好用户却什么都没授（界面成功提示会把"什么都没做"说成成功）。
-    /// MySQL 的属性子句串：认证（identified …）/ 配额（with max_*）/ 密码过期 / 账户锁定。
-    ///
-    /// `CREATE USER` 与 `ALTER USER` **共用这一份** —— 两处的子句顺序完全一样
-    /// （auth_option → WITH 资源项 → PASSWORD EXPIRE → ACCOUNT LOCK），顺序错了直接报语法错；
-    /// 分开写迟早会漂成"新建能带上、改的时候带不上"。
-    ///
-    /// 返回 `None` = 这个组合不能用：插件不在白名单，或**改**插件却没给口令
-    /// （`identified with x` 不带 BY 会把口令置空，用户当场登不进去）。
-    fn mysql_attr_clause(&self, password: &str, attrs: &UserAttrs, pwd: &str, is_create: bool) -> Option<String> {
-        let mut clause = String::new();
-        if let Some(plugin) = attrs.auth_plugin.as_deref() {
-            if !is_mysql_auth_plugin(plugin) {
-                return None;
-            }
-            if !is_create && password.is_empty() {
-                return None;
-            }
-            clause.push_str(&format!(" identified with {plugin}"));
-            if !password.is_empty() {
-                clause.push_str(&format!(" by {pwd}"));
-            }
-        } else if !password.is_empty() {
-            clause.push_str(&format!(" identified by {pwd}"));
-        }
-        // 配额（0 = 不限制）
-        let mut quota: Vec<String> = Vec::new();
-        if let Some(v) = attrs.max_queries_per_hour {
-            quota.push(format!("max_queries_per_hour {v}"));
-        }
-        if let Some(v) = attrs.max_updates_per_hour {
-            quota.push(format!("max_updates_per_hour {v}"));
-        }
-        if let Some(v) = attrs.max_connections_per_hour {
-            quota.push(format!("max_connections_per_hour {v}"));
-        }
-        if let Some(v) = attrs.max_user_connections {
-            quota.push(format!("max_user_connections {v}"));
-        }
-        if !quota.is_empty() {
-            clause.push_str(&format!(" with {}", quota.join(" ")));
-        }
-        if let Some(v) = attrs.password_expired {
-            clause.push_str(if v { " password expire" } else { " password expire never" });
-        }
-        if let Some(v) = attrs.account_locked {
-            clause.push_str(if v { " account lock" } else { " account unlock" });
-        }
-        Some(clause)
-    }
-
+    /// 用户新建 / 改密 / 属性 / 授权 / 撤销 / 删除（**多条语句用 `;\n` 连接**，
+    /// 由调用方拆分逐条执行）。这里只做一件事：把 `alter-role` 归一成 `alter` +
+    /// 「这次保存的是角色」，SQL 的拼法全在各族实现里（见 `DialectOps::user_action_sql`）。
     pub fn user_action_sql(
         &self,
         action: &str,
@@ -1561,732 +1061,24 @@ _ => Meta::Unwritten,
         reset_privileges: bool,
         attrs: &UserAttrs,
     ) -> Meta {
-        let u = self.quote(user);
-        let pwd = self.literal(password);
-        let host = if host.trim().is_empty() { "%" } else { host };
-        let h = self.literal(host);
-        let role_parts: Vec<String> = roles.iter().map(|role| self.quote(role)).collect();
         // **角色**的保存（`alter-role`）：只出差量授权，不出 `alter user`。
         // 角色没有口令 / 锁定 / 配额这些属性，前端在角色模式也不会交它们，
         // 所以把 action 归一成 alter 即可 —— 属性为空时各分支不会拼 alter 语句。
+        // 归一**只在这一层做**：各实现只认 create / alter / drop，不重复判断。
         let as_role = action == "alter-role";
         let action = if as_role { "alter" } else { action };
-        match self.key() {
-            "sqlserver" => Meta::Sql(match action {
-                // 登录名是**服务器级**主体：`create login` 必须带口令（SQL 登录）。
-                // 不带口令建不出来 —— Windows 登录（`from windows`）界面不提供，
-                // 与其悄悄建成一个空口令登录，不如明确拒绝（调用方会报"不支持"）。
-                "create" => {
-                    if password.is_empty() {
-                        return Meta::Unwritten;
-                    }
-                    let mut sql = format!("create login {u} with password = {pwd}");
-                    if let Some(db) = attrs
-                        .default_database
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                    {
-                        sql.push_str(&format!(", default_database = {}", self.quote(db)));
-                    }
-                    if attrs.disabled == Some(true) {
-                        sql.push_str(&format!(";\nalter login {u} disable"));
-                    }
-                    // 「全局」在 SQL Server 就是服务器角色（与 alter 分支同一口径）
-                    for role in &privileges.global {
-                        sql.push_str(&format!(
-                            ";\nalter server role {} add member {u}",
-                            self.quote(role)
-                        ));
-                    }
-                    // 数据库角色仍按原样追加（对已在该库映射过用户的登录名有效）
-                    for role in &role_parts {
-                        sql.push_str(&format!(";\nalter role {role} add member {u}"));
-                    }
-                    sql
-                }
-                "alter" => {
-                    let mut parts: Vec<String> = Vec::new();
-                    if !password.is_empty() {
-                        parts.push(format!("alter login {u} with password = {pwd}"));
-                    }
-                    // 禁用 / 启用是登录名属性（库用户没有这个开关）
-                    if let Some(v) = attrs.disabled {
-                        parts.push(format!(
-                            "alter login {u} {}",
-                            if v { "disable" } else { "enable" }
-                        ));
-                    }
-                    // 默认数据库同样是登录名属性（不是库里的 default_schema）
-                    if let Some(db) = attrs
-                        .default_database
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                    {
-                        parts.push(format!(
-                            "alter login {u} with default_database = {}",
-                            self.quote(db)
-                        ));
-                    }
-                    // 授权（SQL Server 的四层，与界面上的四张表一一对应）：
-                    //   privileges.global   = **服务器角色**（服务器级就是它的"全局"）
-                    //   roles               = 数据库角色
-                    //   privileges.databases= **Schema 级**（(架构, 权限清单)）
-                    //   privileges.tables   = **对象级**（(架构, 对象, 权限清单)）
-                    for role in &role_parts {
-                        parts.push(format!("alter role {role} add member {u}"));
-                    }
-                    for role in &privileges.global {
-                        parts.push(format!("alter server role {} add member {u}", self.quote(role)));
-                    }
-                    // Schema 级 / 对象级：**行级选库** —— 界面每行自带「数据库」，
-                    // 授权在哪个库执行就先 `use [库];` 切过去（连默认目录常是 master，
-                    // 不切库会把授权打到错的地方）。库为空 = 旧行为（当前目录执行）。
-                    let use_prefix = |db: &str| -> String {
-                        if db.is_empty() { String::new() } else { format!("use {}; ", self.quote(db)) }
-                    };
-                    for (db, schema, privs) in &privileges.schema_grants {
-                        if privs.is_empty() {
-                            continue;
-                        }
-                        parts.push(format!(
-                            "{}grant {} on schema::{} to {u}",
-                            use_prefix(db),
-                            privs.join(", "),
-                            self.quote(schema)
-                        ));
-                    }
-                    for (db, schema, object, privs) in &privileges.object_grants {
-                        if privs.is_empty() {
-                            continue;
-                        }
-                        parts.push(format!(
-                            "{}grant {} on {}.{} to {u}",
-                            use_prefix(db),
-                            privs.join(", "),
-                            self.quote(schema),
-                            self.quote(object)
-                        ));
-                    }
-                    // 撤销：界面按"原来有、现在没有了"算好传进来（逐条点名，不全删重授）
-                    for r in revokes {
-                        let pre = use_prefix(&r.db);
-                        let sql = match r.scope.as_str() {
-                            "serverrole" => format!("alter server role {} drop member {u}", self.quote(&r.privilege)),
-                            "role" => format!("alter role {} drop member {u}", self.quote(&r.privilege)),
-                            "schema" => format!("{}revoke {} on schema::{} from {u}", pre, r.privilege, self.quote(&r.owner)),
-                            "object" => format!("{}revoke {} on {}.{} from {u}", pre, r.privilege, self.quote(&r.owner), self.quote(&r.object)),
-                            _ => return Meta::Unwritten,
-                        };
-                        parts.push(sql);
-                    }
-                    if parts.is_empty() {
-                        return Meta::Unwritten;
-                    }
-                    parts.join(";\n")
-                }
-                // 登录名口径：删的是服务器登录名（库用户删不掉这个账号）
-                "drop" => format!("drop login {u}"),
-                _ => return Meta::Unwritten,
-            }),
-            // H2：`create user` 必须带口令；改密是 `alter user … set password`。
-            // 权限矩阵（表级 GRANT）还没接进来 —— 调用方收到权限入参会先明确拒绝。
-            "h2" => {
-                let name = h2_user(user);
-                // 空用户名（H2 的默认用户）必须写成空标识符 `""`：`quote("")` 返回空串，
-                // 拼出来是 `grant … to `（实测 42001 SyntaxError，缺 identifier），
-                // 连改密/删除也一样会拼坏。
-                let u = if name.is_empty() { "\"\"".to_string() } else { self.quote(&name) };
-                let pwd = self.literal(password);
-                let mut parts: Vec<String> = Vec::new();
-                match action {
-                    "create" => {
-                        if password.is_empty() {
-                            return Meta::Unwritten;
-                        }
-                        parts.push(format!("create user {u} password {pwd}"));
-                    }
-                    "alter" => {
-                        // 只改口令；其余属性（is_admin 等）不走这里
-                        if !password.is_empty() {
-                            parts.push(format!("alter user {u} set password {pwd}"));
-                        }
-                    }
-                    "drop" => return Meta::Sql(format!("drop user {u}")),
-                    _ => return Meta::Unwritten,
-                }
-                // 表级授权（H2 唯一的一层权限）：`grant select, update on "S"."T" to "u"`。
-                // 目标用 schema + 表名（前端的 database 字段在 H2 里就是 schema）。
-                for (schema, table, privs) in &privileges.tables {
-                    let (schema, table) = (schema.trim(), table.trim());
-                    if schema.is_empty() || table.is_empty() {
-                        continue;
-                    }
-                    let items: Vec<String> = privs
-                        .iter()
-                        .map(|p| p.trim().to_ascii_uppercase())
-                        .filter(|p| is_h2_table_priv(p))
-                        .collect();
-                    if items.is_empty() {
-                        continue;
-                    }
-                    parts.push(format!(
-                        "grant {} on {}.{} to {u}",
-                        items.join(", "),
-                        self.quote(schema),
-                        self.quote(table)
-                    ));
-                }
-                // 撤销：界面按"原来有、现在没有了"点名（scope=table）
-                for row in revokes {
-                    let priv_name = row.privilege.trim().to_ascii_uppercase();
-                    if !is_h2_table_priv(&priv_name) {
-                        continue;
-                    }
-                    let (schema, table) = (row.owner.trim(), row.object.trim());
-                    if schema.is_empty() || table.is_empty() {
-                        continue;
-                    }
-                    parts.push(format!(
-                        "revoke {priv_name} on {}.{} from {u}",
-                        self.quote(schema),
-                        self.quote(table)
-                    ));
-                }
-                if parts.is_empty() {
-                    return Meta::Unwritten;
-                }
-                Meta::Sql(parts.join(";\n"))
-            }
-            // MySQL 的用户是 (user, host) 二元组 —— 少了 host 就会建错主体
-            "mysql" | "mariadb" | "doris" => {
-                let full = format!("{u}@{h}");
-                // 授权语句（grant / revoke）的目标账号一律用**单引号字符串**写法
-                // `'user'@'host'`：`quote()` 对普通名字不加任何引号（`dbmind_probe_u@'%'`），
-                // 名字里带 `-` 之类的还会变成反引号 —— 那在账号位置是错的。
-                let full_lit = format!("{}@{}", self.literal(user), self.literal(host));
-                // 授权目标：编辑**角色**的权限时，主体是角色本身 —— MySQL 的角色与账号同形
-                // （`'r'@'%'`），MariaDB 的角色没有 host（`'r'`），Doris 必须写
-                // `TO ROLE 'r'`（它这版也不提供角色权限编辑，见 role_info 注释）。
-                let grantee = if as_role {
-                    match self.key() {
-                        "mysql" => full_lit.clone(),
-                        "doris" => format!("role {}", self.literal(user)),
-                        _ => self.literal(user),
-                    }
-                } else {
-                    full_lit.clone()
-                };
-                let mut parts: Vec<String> = Vec::new();
-                match action {
-                    "create" => {
-                        match self.mysql_attr_clause(password, attrs, &pwd, true) {
-                            Some(clause) => parts.push(format!("create user {full}{clause}")),
-                            None => return Meta::Unwritten,
-                        }
-                    }
-                    "alter" => {
-                        // 与 create 同一份子句（见 mysql_attr_clause），只是多一条：
-                        // 「改插件必须连口令一起给」在那里判掉了。
-                        match self.mysql_attr_clause(password, attrs, &pwd, false) {
-                            Some(clause) => {
-                                if !clause.is_empty() {
-                                    parts.push(format!("alter user {full}{clause}"));
-                                }
-                            }
-                            None => return Meta::Unwritten,
-                        }
-                    }
-                    "drop" => return Meta::Sql(format!("drop user {full}")),
-                    // 新建 / 删除**角色**（MySQL 8 / MariaDB 10.0.5+ 的 RBAC）。
-                    // MySQL 的角色是账号形状（`'r'@'h'`）；MariaDB 的角色**没有 host**
-                    // （`create role 'r'@'%'` 是 1064 语法错，真机验证过）——
-                    // 所以按方言分开拼，不能共用 `full_lit`。
-                    // Doris 的角色也没有 host，且名字是字符串（`create role 'r'`）。
-                    "create-role" => {
-                        // Doris 的角色名是**标识符**（`create role 'r'` 直接 1064 语法错，
-                        // 实测它连 STRING 都不收），所以 Doris 走 quote()，MariaDB 走字符串。
-                        let who = match self.key() {
-                            "mysql" => full_lit.clone(),
-                            "doris" => self.quote(user),
-                            _ => self.literal(user),
-                        };
-                        return Meta::Sql(if password.is_empty() {
-                            format!("create role {who}")
-                        } else {
-                            // 带口令建角色只有 MySQL/MariaDB 支持（角色可登录，一般不需要）
-                            format!("create role {who} identified by {pwd}")
-                        });
-                    }
-                    "drop-role" => {
-                        let who = match self.key() {
-                            "mysql" => full_lit.clone(),
-                            "doris" => self.quote(user),
-                            _ => self.literal(user),
-                        };
-                        return Meta::Sql(format!("drop role {who}"));
-                    }
-                    _ => return Meta::Unwritten,
-                }
-                // 授权**只出差量**：界面把"原来有、现在没有了"的算好传进来，逐条点名撤销；
-                // 勾选的再由下面的循环逐条授予。
-                //
-                // 从前用的是 `revoke all privileges, grant option from <用户>` + 全量重授：
-                // 那样确实省事（连库级/表级一并清干净），但会把用户**别处**拿到的授权也抹掉再重建。
-                // 逐目标 revoke 以前不敢用，是因为它会在"该目标本来就没授权"时报 1141
-                // （`There is no such grant defined`）—— 而现在点名撤的都是**真差量**
-                // （只撤"原来确实有、现在取消了"的），撤不到没有的东西上，这个坑自然绕开了。
-                // `reset_privileges` 只在客户端没交差量清单（老调用方）时才为真。
-                if reset_privileges {
-                    parts.push(format!("revoke all privileges, grant option from {grantee}"));
-                } else {
-                    parts.extend(self.mysql_revoke_parts(&grantee, revokes));
-                }
-                // 角色（MySQL 8 / MariaDB 的 RBAC）：MySQL 是 `grant 'r'@'h' to 'u'@'%'`
-                // （角色本身也是账号形状，名字与 host 分别转义再加 @ 拼起来）；
-                // MariaDB / Doris 的角色**没有 host** —— 多写 `@'%'` 在 MariaDB 上是
-                // 1064 语法错（真机验证过），只能 `grant 'r' to 'u'@'%'`。
-                for r in roles {
-                    let (rn, rh) = Self::split_role_ref(r);
-                    if rn.is_empty() {
-                        continue;
-                    }
-                    parts.push(if self.key() == "mysql" {
-                        format!(
-                            "grant {}@{} to {full_lit}",
-                            self.literal(&rn),
-                            self.literal(&rh)
-                        )
-                    } else {
-                        format!("grant {} to {full_lit}", self.literal(&rn))
-                    });
-                }
-                // `GRANT OPTION` 不是普通权限项，而是 `WITH GRANT OPTION` 子句 ——
-                // 拼成 `grant GRANT OPTION on ...` 是错的（MySQL 的 priv_type 里没有它）。
-                // 它也是**能被撤销**的：保存时的 `revoke all privileges, grant option from`
-                // 会连授权能力一起收回，所以界面必须能看见、能回授。
-                let split_grant_option = |privs: &[String]| -> (Vec<String>, bool) {
-                    let with_option = privs.iter().any(|name| name == "GRANT OPTION");
-                    let items: Vec<String> = privs
-                        .iter()
-                        .filter(|name| name.as_str() != "GRANT OPTION")
-                        .cloned()
-                        .collect();
-                    (items, with_option)
-                };
-                let tail = |with_option: bool| if with_option { " with grant option" } else { "" };
-                for (database, privs) in &privileges.databases {
-                    let (items, with_option) = split_grant_option(privs);
-                    if items.is_empty() {
-                        continue;
-                    }
-                    parts.push(format!(
-                        "grant {} on {}.* to {grantee}{}",
-                        items.join(", "),
-                        self.quote(database),
-                        tail(with_option)
-                    ));
-                }
-                for (database, table, privs) in &privileges.tables {
-                    let (items, with_option) = split_grant_option(privs);
-                    if items.is_empty() {
-                        continue;
-                    }
-                    parts.push(format!(
-                        "grant {} on {}.{} to {grantee}{}",
-                        items.join(", "),
-                        self.quote(database),
-                        self.quote(table),
-                        tail(with_option)
-                    ));
-                }
-                // 例程级：对**单个**存储过程/函数授 EXECUTE —— MySQL 语法里
-                // `on procedure `db`.`p`` 的类型字是语法的一部分，不能省。
-                for (database, routine, kind, privs) in &privileges.routines {
-                    let (items, with_option) = split_grant_option(privs);
-                    if items.is_empty() {
-                        continue;
-                    }
-                    let routine_type = if kind.eq_ignore_ascii_case("function") { "function" } else { "procedure" };
-                    parts.push(format!(
-                        "grant {} on {} {}.{} to {grantee}{}",
-                        items.join(", "),
-                        routine_type,
-                        self.quote(database),
-                        self.quote(routine),
-                        tail(with_option)
-                    ));
-                }
-                let (global_items, global_option) = split_grant_option(&privileges.global);
-                if !global_items.is_empty() {
-                    parts.push(format!(
-                        "grant {} on *.* to {grantee}{}",
-                        global_items.join(", "),
-                        tail(global_option)
-                    ));
-                }
-                Meta::Sql(parts.join(";\n"))
-            }
-            // PG 的「用户」就是带 login 的角色（MySQL 语境的 host 在这里没有意义，忽略）。
-            // 细粒度授权（模式 / 表 / 例程）与撤销：create 与 alter 共用一套拼法 ——
-            // 模式 `grant usage on schema "s" to "u"`；表 `on table "s"."t"`；
-            // 例程 `on function|procedure "s"."r"`（PG 11+ 签名可省略，同名歧义由数据库报错）。
-            // 权限名已在 meta.rs 过白名单（is_pg_schema_priv / is_pg_table_priv / EXECUTE）。
-            "postgresql" | "kingbase" => {
-                let mut pg_parts: Vec<String> = Vec::new();
-                if action == "create" || action == "alter" {
-                    // 库级：`grant connect on database "db" to "u"`（PG 真正的那一层，
-                    // 与下面被借用来装模式的 `databases` 不是一回事）
-                    for (db, items) in &privileges.pg_databases {
-                        if db.trim().is_empty() || items.is_empty() {
-                            continue;
-                        }
-                        pg_parts.push(format!(
-                            "grant {} on database {} to {u}",
-                            items.join(", ").to_lowercase(),
-                            self.quote(db)
-                        ));
-                    }
-                    for (schema, items) in &privileges.databases {
-                        if schema.trim().is_empty() || items.is_empty() {
-                            continue;
-                        }
-                        pg_parts.push(format!(
-                            "grant {} on schema {} to {u}",
-                            items.join(", ").to_lowercase(),
-                            self.quote(schema)
-                        ));
-                    }
-                    for (schema, table, items) in &privileges.tables {
-                        if schema.trim().is_empty() || table.trim().is_empty() || items.is_empty() {
-                            continue;
-                        }
-                        pg_parts.push(format!(
-                            "grant {} on table {}.{} to {u}",
-                            items.join(", ").to_lowercase(),
-                            self.quote(schema),
-                            self.quote(table)
-                        ));
-                    }
-                    for (schema, routine, kind, items) in &privileges.routines {
-                        if schema.trim().is_empty() || routine.trim().is_empty() || items.is_empty() {
-                            continue;
-                        }
-                        let object_type = if kind.eq_ignore_ascii_case("procedure") { "procedure" } else { "function" };
-                        pg_parts.push(format!(
-                            "grant {} on {object_type} {}.{} to {u}",
-                            items.join(", ").to_lowercase(),
-                            self.quote(schema),
-                            self.quote(routine)
-                        ));
-                    }
-                    for r in revokes {
-                        match r.scope.as_str() {
-                            "schema" if !r.owner.trim().is_empty() => {
-                                pg_parts.push(format!(
-                                    "revoke {} on schema {} from {u}",
-                                    r.privilege.to_lowercase(),
-                                    self.quote(&r.owner)
-                                ));
-                            }
-                            // 库级撤销：`revoke connect on database "db" from "u"`
-                            "database" if !r.owner.trim().is_empty() => {
-                                pg_parts.push(format!(
-                                    "revoke {} on database {} from {u}",
-                                    r.privilege.to_lowercase(),
-                                    self.quote(&r.owner)
-                                ));
-                            }
-                            "table" if !r.owner.trim().is_empty() && !r.object.trim().is_empty() => {
-                                pg_parts.push(format!(
-                                    "revoke {} on table {}.{} from {u}",
-                                    r.privilege.to_lowercase(),
-                                    self.quote(&r.owner),
-                                    self.quote(&r.object)
-                                ));
-                            }
-                            // 角色成员关系（「服务器权限」页里那些角色项）：`revoke "r" from "u"`。
-                            // 少了这条，取消勾选一个角色会**静默无效** —— 界面显示已取消、
-                            // 服务器上还在（角色那一层就永远撤不掉）。
-                            "role" if !r.privilege.trim().is_empty() => {
-                                pg_parts.push(format!(
-                                    "revoke {} from {u}",
-                                    self.quote(&r.privilege)
-                                ));
-                            }
-                            "routine" | "function"
-                                if !r.owner.trim().is_empty() && !r.object.trim().is_empty() =>
-                            {
-                                let object_type = if r.kind.eq_ignore_ascii_case("procedure") { "procedure" } else { "function" };
-                                pg_parts.push(format!(
-                                    "revoke {} on {object_type} {}.{} from {u}",
-                                    r.privilege.to_lowercase(),
-                                    self.quote(&r.owner),
-                                    self.quote(&r.object)
-                                ));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Meta::Sql(match action {
-                "create" => {
-                    // 属性：三个开关（与 alter 同一套字面量）；没给就沿用"可登录"
-                    let mut flags: Vec<&str> = Vec::new();
-                    flags.push(if attrs.can_login.unwrap_or(true) { "login" } else { "nologin" });
-                    if let Some(v) = attrs.is_superuser {
-                        flags.push(if v { "superuser" } else { "nosuperuser" });
-                    }
-                    if let Some(v) = attrs.can_create_db {
-                        flags.push(if v { "createdb" } else { "nocreatedb" });
-                    }
-                    let mut sql = format!("create role {u} {}", flags.join(" "));
-                    if !password.is_empty() {
-                        sql.push_str(&format!(" password {pwd}"));
-                    }
-                    for role in &role_parts {
-                        sql.push_str(&format!(";\ngrant {role} to {u}"));
-                    }
-                    for part in &pg_parts {
-                        sql.push_str(";\n");
-                        sql.push_str(part);
-                    }
-                    sql
-                }
-                "alter" => {
-                    let mut parts: Vec<String> = Vec::new();
-                    if !password.is_empty() {
-                        parts.push(format!("alter role {u} password {pwd}"));
-                    }
-                    // 属性：三个开关合成一条 alter role（PG 的 role 属性就是这些字面开关）
-                    let mut flags: Vec<&str> = Vec::new();
-                    if let Some(v) = attrs.can_login {
-                        flags.push(if v { "login" } else { "nologin" });
-                    }
-                    if let Some(v) = attrs.is_superuser {
-                        flags.push(if v { "superuser" } else { "nosuperuser" });
-                    }
-                    if let Some(v) = attrs.can_create_db {
-                        flags.push(if v { "createdb" } else { "nocreatedb" });
-                    }
-                    if !flags.is_empty() {
-                        parts.push(format!("alter role {u} {}", flags.join(" ")));
-                    }
-                    for role in &role_parts {
-                        parts.push(format!("grant {role} to {u}"));
-                    }
-                    parts.extend(pg_parts.iter().cloned());
-                    if parts.is_empty() {
-                        return Meta::Unwritten;
-                    }
-                    parts.join(";\n")
-                }
-                // 新建**角色**（不可登录的主体）。PG 里角色与用户是同一张表，
-                // `create role` 默认 nologin —— 与"新建用户再取消可登录"等价，但一步到位。
-                "create-role" => format!("create role {u}"),
-                "drop" => format!("drop role {u}"),
-                "drop-role" => format!("drop role {u}"),
-                _ => return Meta::Unwritten,
-            })
-            }
-            // ClickHouse：用户没有 (user, host) 二元组，host 参数没有意义（忽略）。
-            // 授权与 MySQL 系同构：全局 `ON *.*` / 库 `ON db.*` / 表 `ON db.table`，
-            // 权限名过 CLICKHOUSE_PRIVILEGES 白名单（原样拼 SQL，名单外直接跳过）。
-            // 撤销按调用方算好的**差量**逐条点名 —— 与 MySQL「不全删重授」同一取舍。
-            "clickhouse" => {
-                let ch_target = |scope: &str, owner: &str, object: &str| -> Option<String> {
-                    match scope {
-                        "global" => Some("*.*".to_string()),
-                        "db" if !owner.trim().is_empty() => Some(format!("{}.*", self.quote(owner))),
-                        "table" if !owner.trim().is_empty() && !object.trim().is_empty() => {
-                            Some(format!("{}.{}", self.quote(owner), self.quote(object)))
-                        }
-                        _ => None,
-                    }
-                };
-                let mut parts: Vec<String> = Vec::new();
-                match action {
-                    "create" => {
-                        let mut sql = format!("create user {u}");
-                        if !password.is_empty() {
-                            sql.push_str(&format!(" identified by {pwd}"));
-                        }
-                        parts.push(sql);
-                    }
-                    "alter" => {
-                        if !password.is_empty() {
-                            parts.push(format!("alter user {u} identified by {pwd}"));
-                        }
-                    }
-                    "drop" => return Meta::Sql(format!("drop user {u}")),
-                    // CH 的角色是独立主体（`system.roles`）：`create role r` / `drop role r`。
-                    // 名字走 quote()（必要时反引号），与其它 CH 语句同一套转义。
-                    "create-role" => return Meta::Sql(format!("create role {u}")),
-                    "drop-role" => return Meta::Sql(format!("drop role {u}")),
-                    _ => return Meta::Unwritten,
-                }
-                for role in &role_parts {
-                    parts.push(format!("grant {role} to {u}"));
-                }
-                for r in revokes {
-                    // 角色是独立一层（`revoke role from user`，没有 `on …`）：
-                    // 别把它丢进下面按 scope 拼 target 的逻辑里（那里会返回 None 直接跳过）
-                    if r.scope.eq_ignore_ascii_case("role") {
-                        let role = r.privilege.trim();
-                        if !role.is_empty() && is_safe_name(role) {
-                            parts.push(format!("revoke {} from {u}", self.quote(role)));
-                        }
-                        continue;
-                    }
-                    if !is_clickhouse_privilege(&r.privilege) {
-                        continue;
-                    }
-                    if let Some(target) = ch_target(&r.scope, &r.owner, &r.object) {
-                        parts.push(format!("revoke {} on {} from {u}", r.privilege.trim().to_ascii_uppercase(), target));
-                    }
-                }
-                // CH 这层不提供 WITH GRANT OPTION（界面没给这个开关），不需要拆 grant option
-                for p in &privileges.global {
-                    if !is_clickhouse_privilege(p) {
-                        continue;
-                    }
-                    parts.push(format!("grant {} on *.* to {u}", p.trim().to_ascii_uppercase()));
-                }
-                for (database, privs) in &privileges.databases {
-                    if database.trim().is_empty() {
-                        continue;
-                    }
-                    let names: Vec<String> = privs
-                        .iter()
-                        .filter(|p| is_clickhouse_privilege(p))
-                        .map(|p| p.trim().to_ascii_uppercase())
-                        .collect();
-                    if names.is_empty() {
-                        continue;
-                    }
-                    parts.push(format!("grant {} on {}.* to {u}", names.join(", "), self.quote(database)));
-                }
-                for (database, table, privs) in &privileges.tables {
-                    if database.trim().is_empty() || table.trim().is_empty() {
-                        continue;
-                    }
-                    let names: Vec<String> = privs
-                        .iter()
-                        .filter(|p| is_clickhouse_privilege(p))
-                        .map(|p| p.trim().to_ascii_uppercase())
-                        .collect();
-                    if names.is_empty() {
-                        continue;
-                    }
-                    parts.push(format!(
-                        "grant {} on {}.{} to {u}",
-                        names.join(", "),
-                        self.quote(database),
-                        self.quote(table)
-                    ));
-                }
-                if parts.is_empty() {
-                    return Meta::Unwritten;
-                }
-                Meta::Sql(parts.join(";\n"))
-            }
-            // Oracle：`create user / alter user ... identified by / drop user`。
-            // 与 PG、ClickHouse 一样忽略 host（Oracle 没有 (user, host) 二元组）。
-            //
-            // 两条刻意的取舍：
-            // · 建完顺手 `grant create session` —— 不然新建的用户**连不上去**，等于没建好；
-            //   这不是"多授了权限"，是建一个有登录能力的用户的最小集合。
-            // · 删除用**不带 cascade** 的 `drop user` —— 带 cascade 会把该用户 schema 下的
-            //   所有对象一起删掉，那是不可逆的破坏；他自己的对象就该由 ORA-01922 拦下来、
-            //   让管理员显式去执行 `drop user ... cascade`，而不是我们替他决定。
-            "oracle" => Meta::Sql(match action {
-                "create" => {
-                    let mut parts: Vec<String> = Vec::new();
-                    if password.is_empty() {
-                        // 没有口令就建不了 Oracle 用户（它必须带 identified by）
-                        return Meta::Unwritten;
-                    }
-                    // ⚠️ 口令要用**双引号标识符**，不能用 `pwd`（单引号字符串字面量）：
-                    // Oracle 的 `identified by` 收的是标识符，给字面量会报
-                    // `ORA-00988: 密码缺失或无效`（真机上就是这么报的）。
-                    // 引号里的内容原样保留 —— 大小写与 @ 这类特殊字符都不会被改写。
-                    let pwd_id = self.quote(password);
-                    // 属性：表空间 / 概要文件 / 账户锁定（与 alter 同一套写法）
-                    let mut create = format!("create user {u} identified by {pwd_id}");
-                    if let Some(v) = attrs.default_tablespace.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                        create.push_str(&format!(" default tablespace {}", self.quote(v)));
-                    }
-                    if let Some(v) = attrs.temporary_tablespace.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                        create.push_str(&format!(" temporary tablespace {}", self.quote(v)));
-                    }
-                    if let Some(v) = attrs.profile.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                        create.push_str(&format!(" profile {}", self.quote(v)));
-                    }
-                    if let Some(v) = attrs.account_locked {
-                        create.push_str(if v { " account lock" } else { " account unlock" });
-                    }
-                    parts.push(create);
-                    // 建号时就把"能登录 + 界面勾的角色/系统权限/对象权限"一起授了 ——
-                    // 建完还得再点一次保存才生效，是让人白跑一趟（用户反馈过）。
-                    parts.push(format!("grant create session to {u}"));
-                    parts.extend(Self::oracle_grant_parts(&u, roles, privileges));
-                    parts.join(";\n")
-                }
-                "alter" => {
-                    // 先撤后授：撤销由界面按"原来有、现在没有了"算好传进来
-                    // （Oracle 没有 `revoke all privileges from u` 这种一把全撤）。
-                    let mut parts: Vec<String> = Vec::new();
-                    if !password.is_empty() {
-                        let pwd_id = self.quote(password);
-                        parts.push(format!("alter user {u} identified by {pwd_id}"));
-                    }
-                    // 属性（一次一项最稳）：账户锁定 / 默认表空间 / 临时表空间 / 概要文件。
-                    // 表空间与概要文件收的是**标识符**（不是字符串），用 quote 而不是 literal；
-                    // 空串当"没填"忽略 —— 否则会拼出 `default tablespace ""` 这种错语句。
-                    if let Some(v) = attrs.account_locked {
-                        parts.push(format!(
-                            "alter user {u} {}",
-                            if v { "account lock" } else { "account unlock" }
-                        ));
-                    }
-                    if let Some(v) = attrs
-                        .default_tablespace
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                    {
-                        parts.push(format!("alter user {u} default tablespace {}", self.quote(v)));
-                    }
-                    if let Some(v) = attrs
-                        .temporary_tablespace
-                        .as_deref()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                    {
-                        parts.push(format!("alter user {u} temporary tablespace {}", self.quote(v)));
-                    }
-                    if let Some(v) = attrs.profile.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                        parts.push(format!("alter user {u} profile {}", self.quote(v)));
-                    }
-                    parts.extend(Self::oracle_revoke_parts(&u, revokes));
-                    parts.extend(Self::oracle_grant_parts(&u, roles, privileges));
-                    if parts.is_empty() {
-                        return Meta::Unwritten;
-                    }
-                    parts.join(";\n")
-                }
-                "drop" => format!("drop user {u}"),
-                // Oracle 的角色是独立主体（`dba_roles`）：`create role "R"` / `drop role "R"`。
-                // `u` 走 quote()，与上面 create/alter/drop user 同一套标识符转义。
-                "create-role" => format!("create role {u}"),
-                "drop-role" => format!("drop role {u}"),
-                _ => return Meta::Unwritten,
-            }),
-            // DM（达梦）：语法与 Oracle 相近，但没真机验证过，先保持 Unwritten ——
-            // 与别处"没验证就不动"同一个原则。
-            _ => Meta::Unwritten,
-        }
+        self.ops().user_action_sql(
+            action,
+            as_role,
+            user,
+            password,
+            host,
+            roles,
+            privileges,
+            revokes,
+            reset_privileges,
+            attrs,
+        )
     }
 
     /// 表/视图的建表语句。
@@ -2297,152 +1089,7 @@ _ => Meta::Unwritten,
     /// 在 SYS 下点一张表、会话默认模式却是 SYSTEM 时，Oracle 会报 ORA-31603
     /// 「对象在方案 SYSTEM 中未找到」—— 这就是真机上报的那个错。
     pub fn ddl(&self, table: &str, schema: Option<&str>) -> Meta {
-        let t = self.quote(table);
-        let lit = self.literal(table);
-        // 模式名做**字符串字面量**（有才用）；PG 侧还要它替掉 current_schema()
-        let schema_lit = schema
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| self.literal(s));
-        let ns = match &schema_lit {
-            Some(s) => s.clone(),
-            None => "current_schema()".to_string(),
-        };
-        match self.key() {
-            "sqlite" => Meta::Sql(format!(
-                "select sql from sqlite_master where type in ('table','view') and name = {}",
-                self.literal(table)
-            )),
-            "mysql" | "mariadb" | "doris" => Meta::Sql(format!("show create table {t}")),
-            "clickhouse" => Meta::Sql(format!("show create table {t}")),
-            // H2 2.x **没有** `information_schema.tables.sql`（那是 1.x 的字段），
-            // 老写法在 2.3 上直接报 `Column "SQL" not found`（实测）。
-            // `SCRIPT NODATA` 是 H2 官方的导出入口：它是一条**命令**而非常量表
-            // （`select script from script nodata` 报 Table "SCRIPT" not found），
-            // 而且 `table <名>` 这个过滤实测被忽略（照样返回整库语句）。
-            // 所以这里只发命令，**按表名筛选放在 Rust 侧**（见 `build_table_ddl`）。
-            "h2" => Meta::Sql("script nodata".to_string()),
-            // SQL Server：没有内置函数，自己拼。两条关键约定：
-            // - **视图走 `object_definition`**（它就是原始 create view 文本），表才需要拼列
-            // - 用 `for xml path('')` 而不是 `string_agg`：后者要 SQL Server 2017+，
-            //   而这里拼的是要贴给用户直接执行的 DDL，不该带一个「你的版本太老」的隐性前提
-            // - 分隔符用 `case ... < max(column_id)`：**不能**每列后都加逗号，
-            //   否则没有主键的表会以 `,)` 结尾，那在 SQL Server 上是语法错误
-            "sqlserver" => Meta::Sql(format!(
-                "select object_definition(object_id({lit})) as ddl from sys.views where name = {lit} \
-                 union all \
-                 select \
-                 'create table ' + quotename(schema_name(t.schema_id)) + '.' + quotename(t.name) + ' (' + char(10) + \
-                 stuff(( \
-                   select char(9) + quotename(c.name) + \
-                     case when c.is_computed = 1 \
-                          then ' as ' + cc.definition \
-                          else ' ' + ty.name + \
-                     case \
-                       when ty.name in ('varchar','char','varbinary','binary') \
-                         then '(' + case when c.max_length = -1 then 'max' else cast(c.max_length as varchar(10)) end + ')' \
-                       when ty.name in ('nvarchar','nchar') \
-                         then '(' + case when c.max_length = -1 then 'max' else cast(c.max_length / 2 as varchar(10)) end + ')' \
-                       when ty.name in ('decimal','numeric') \
-                         then '(' + cast(c.precision as varchar(10)) + ',' + cast(c.scale as varchar(10)) + ')' \
-                       when ty.name in ('datetime2','datetimeoffset','time') and c.scale <> 7 \
-                         then '(' + cast(c.scale as varchar(10)) + ')' \
-                       else '' \
-                     end + \
-                     case when c.is_identity = 1 \
-                          then ' identity(' + cast(coalesce(ic.seed_value, 1) as varchar(20)) + ',' \
-                               + cast(coalesce(ic.increment_value, 1) as varchar(20)) + ')' else '' end + \
-                     case when c.is_nullable = 0 then ' not null' else ' null' end + \
-                     case when dc.definition is not null then ' default ' + dc.definition else '' end \
-                     end + \
-                     case when c.column_id < (select max(column_id) from sys.columns where object_id = t.object_id) \
-                          then ',' else '' end + char(10) \
-                     from sys.columns c \
-                   join sys.types ty on ty.user_type_id = c.user_type_id \
-                   left join sys.identity_columns ic on ic.object_id = c.object_id and ic.column_id = c.column_id \
-                   left join sys.default_constraints dc on dc.parent_object_id = c.object_id and dc.parent_column_id = c.column_id \
-                   left join sys.computed_columns cc on cc.object_id = c.object_id and cc.column_id = c.column_id \
-                   where c.object_id = t.object_id \
-                   order by c.column_id \
-                   for xml path(''), type).value('.', 'nvarchar(max)'), 1, 0, '') + \
-                 case when pk.name is null then '' else \
-                   char(9) + 'constraint ' + quotename(pk.name) + ' primary key (' + \
-                   stuff(( \
-                     select quotename(pc.name) + \
-                       case when ic2.key_ordinal < (select max(key_ordinal) from sys.index_columns \
-                                                    where object_id = t.object_id and index_id = pk.unique_index_id) \
-                            then ', ' else '' end \
-                     from sys.index_columns ic2 \
-                     join sys.columns pc on pc.object_id = ic2.object_id and pc.column_id = ic2.column_id \
-                     where ic2.object_id = t.object_id and ic2.index_id = pk.unique_index_id \
-                     order by ic2.key_ordinal \
-                     for xml path(''), type).value('.', 'nvarchar(max)'), 1, 0, '') + ')' + char(10) end + \
-                 ');' as ddl \
-                 from sys.tables t \
-                 left join sys.key_constraints pk on pk.parent_object_id = t.object_id and pk.type = 'PK' \
-                 where t.name = {lit}"
-            )),
-            // PostgreSQL：`format_type` 直接给出带长度/精度的完整类型、`pg_get_expr` 还原默认值；
-            // 视图用 `pg_get_viewdef`
-            "postgresql" | "kingbase" => Meta::Sql(format!(
-                "select 'create view ' || quote_ident(relname) || ' as' || chr(10) || pg_get_viewdef(oid) as ddl \
-                 from pg_class where relname = {lit} and relkind = 'v' \
-                   and relnamespace = (select oid from pg_namespace where nspname = current_schema()) \
-                 union all \
-                 select 'create table ' || quote_ident(c.relname) || ' (' || chr(10) || \
-                 string_agg( \
-                   '  ' || quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod) || \
-                   case when a.attnotnull then ' not null' else '' end || \
-                   coalesce(' default ' || pg_get_expr(d.adbin, d.adrelid), ''), \
-                   ',' || chr(10) order by a.attnum) || chr(10) || ');' as ddl \
-                 from pg_class c \
-                 join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped \
-                 left join pg_attrdef d on d.adrelid = c.oid and d.adnum = a.attnum \
-                 where c.relname = {lit} and c.relkind = 'r' \
-                   and c.relnamespace = (select oid from pg_namespace where nspname = {ns}) \
-                 group by c.relname"
-            )),
-            // Oracle：`dbms_metadata.get_ddl` 就是官方给完整 DDL 的入口（含存储属性），
-            // 比手拼可靠；按存在性自动选 TABLE / VIEW。DM 走手工拼列（它的 dbms_metadata 支持面不确定）
-            "oracle" => match &schema_lit {
-                // 带 owner 的正版：类型判断也换成 all_views（user_views 只看会话自己模式，
-                // 在 SYS 下点一张视图而会话是 SYSTEM 时会判成 TABLE，取到的 DDL 还是别人的）
-                Some(owner) => Meta::Sql(format!(
-                    "select dbms_metadata.get_ddl( \
-                       case when exists (select 1 from all_views where view_name = upper({lit}) \
-                                          and owner = upper({owner})) \
-                            then 'VIEW' else 'TABLE' end, \
-                       upper({lit}), upper({owner})) as ddl from dual"
-                )),
-                None => Meta::Sql(format!(
-                    "select dbms_metadata.get_ddl( \
-                       case when exists (select 1 from user_views where view_name = upper({lit})) \
-                            then 'VIEW' else 'TABLE' end, \
-                       upper({lit})) as ddl from dual"
-                )),
-            },
-            // Oracle/DM 通用兜底：手工拼列（listagg）+ 视图原文（user_views.text 两家都有）
-            "dm" => Meta::Sql(format!(
-                "select 'create or replace view ' || lower(view_name) || ' as' || chr(10) || text as ddl \
-                 from user_views where view_name = upper({lit}) \
-                 union all \
-                 select 'create table ' || lower(table_name) || ' (' || chr(10) || \
-                 listagg('  ' || lower(column_name) || ' ' || \
-                   case \
-                     when data_type = 'NUMBER' and data_precision is not null \
-                       then 'number(' || data_precision || coalesce(',' || data_scale, '') || ')' \
-                     when data_type in ('VARCHAR2','NVARCHAR2','CHAR','NCHAR') \
-                       then lower(data_type) || '(' || data_length || ')' \
-                     else lower(data_type) \
-                   end || \
-                   case when nullable = 'N' then ' not null' else '' end, ',' || chr(10)) \
-                   within group (order by column_id) || chr(10) || ');' as ddl \
-                 from user_tab_columns where table_name = upper({lit}) \
-                 group by table_name"
-            )),
-            // DB2 / Derby：没有实例可验证，不猜（界面会如实说这个类型还没写）
-            _ => Meta::Unwritten,
-        }
+        self.ops().ddl(table, schema)
     }
 
     /// DDL 的「附加语句」：注释 / 索引与唯一约束 / 外键。
@@ -2458,115 +1105,7 @@ _ => Meta::Unwritten,
     /// MySQL / SQLite 返回空：它们的 `show create table` / `sqlite_master.sql`
     /// 本来就把注释、索引、外键带在一条语句里了。
     pub fn ddl_extras(&self, table: &str) -> Vec<(&'static str, String)> {
-        if self.key() != "sqlserver" {
-            return Vec::new();
-        }
-        let lit = self.literal(table);
-        // 注释：`MS_Description` 是 SQL Server 里「注释」的通用约定（SSMS 就用它）。
-        // `minor_id = 0` 表示挂在**表**上，否则是某一列。
-        //
-        // **只处理表（sys.tables）**：视图那边还有一条「从 DDL 转 ALTER」的编辑链路，
-        // 往视图定义后面追加 exec 语句会污染那条链路；而表这条链路只把 DDL 拿去显示/复制，
-        // 追加是安全的。宁可少给视图的注释，也不动一条已经验过的链路。
-        let comments = format!(
-            "select stuff(( \
-               select char(10) + 'exec sp_addextendedproperty ''MS_Description'', N''' + \
-                 replace(cast(ep.value as nvarchar(max)), '''', '''''') + \
-                 ''', ''SCHEMA'', N''' + replace(schema_name(t.schema_id), '''', '''''') + \
-                 ''', ''TABLE'', N''' + replace(t.name, '''', '''''') + '''' + \
-                 case when ep.minor_id = 0 then '' \
-                      else ', ''COLUMN'', N''' + replace(c.name, '''', '''''') + '''' end + ';' \
-               from sys.extended_properties ep \
-               join sys.tables t on t.object_id = ep.major_id \
-               left join sys.columns c on c.object_id = ep.major_id and c.column_id = ep.minor_id \
-               where ep.class = 1 and ep.name = 'MS_Description' and t.name = {lit} \
-               order by ep.minor_id \
-               for xml path(''), type).value('.', 'nvarchar(max)'), 1, 1, '') as ddl"
-        );
-        // 索引与唯一约束：主键已在基础 DDL 里，这里排除掉，免得重复。
-        // `desc` 方向、`include (...)` 列、筛选条件（filtered index）都要带上 ——
-        // 少了任何一样，重建出来的索引都和原库的不一样，而这种差别很难被发现。
-        let indexes = format!(
-            "select stuff(( \
-               select char(10) + \
-                 case when i.is_unique_constraint = 1 then \
-                   'alter table ' + quotename(schema_name(t.schema_id)) + '.' + quotename(t.name) + \
-                   ' add constraint ' + quotename(i.name) + ' unique (' + \
-                   stuff((select quotename(c.name) + \
-                            case when ic.is_descending_key = 1 then ' desc' else '' end + \
-                            case when ic.key_ordinal < (select max(key_ordinal) from sys.index_columns \
-                                                         where object_id = i.object_id and index_id = i.index_id) \
-                                 then ', ' else '' end \
-                          from sys.index_columns ic \
-                          join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id \
-                          where ic.object_id = i.object_id and ic.index_id = i.index_id and ic.is_included_column = 0 \
-                          order by ic.key_ordinal for xml path(''), type).value('.', 'nvarchar(max)'), 1, 0, '') + ')' \
-                 else \
-                   'create ' + case when i.is_unique = 1 then 'unique ' else '' end + 'index ' + quotename(i.name) + \
-                   ' on ' + quotename(schema_name(t.schema_id)) + '.' + quotename(t.name) + ' (' + \
-                   stuff((select quotename(c.name) + \
-                            case when ic.is_descending_key = 1 then ' desc' else '' end + \
-                            case when ic.key_ordinal < (select max(key_ordinal) from sys.index_columns \
-                                                         where object_id = i.object_id and index_id = i.index_id) \
-                                 then ', ' else '' end \
-                          from sys.index_columns ic \
-                          join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id \
-                          where ic.object_id = i.object_id and ic.index_id = i.index_id and ic.is_included_column = 0 \
-                          order by ic.key_ordinal for xml path(''), type).value('.', 'nvarchar(max)'), 1, 0, '') + ')' + \
-                   isnull((select ' include (' + \
-                     stuff((select quotename(c2.name) + \
-                              case when ic2.index_column_id < (select max(index_column_id) from sys.index_columns \
-                                     where object_id = i.object_id and index_id = i.index_id and is_included_column = 1) \
-                                   then ', ' else '' end \
-                            from sys.index_columns ic2 \
-                            join sys.columns c2 on c2.object_id = ic2.object_id and c2.column_id = ic2.column_id \
-                            where ic2.object_id = i.object_id and ic2.index_id = i.index_id and ic2.is_included_column = 1 \
-                            for xml path(''), type).value('.', 'nvarchar(max)'), 1, 0, '') + ')'), '') + \
-                   case when i.has_filter = 1 then ' where ' + i.filter_definition else '' end \
-                 end + ';' \
-               from sys.indexes i \
-               join sys.tables t on t.object_id = i.object_id \
-               where t.name = {lit} and i.is_primary_key = 0 and i.type > 0 and i.name is not null \
-               order by i.is_unique_constraint, i.name \
-               for xml path(''), type).value('.', 'nvarchar(max)'), 1, 1, '') as ddl"
-        );
-        // 外键：含删除/更新动作。`for xml path('')` 而不是 `string_agg`：后者要 2017+，
-        // 而这些都是要贴给用户直接执行的语句，不该带「你的版本太老」的隐性前提。
-        let fkeys = format!(
-            "select stuff(( \
-               select char(10) + 'alter table ' + quotename(schema_name(t.schema_id)) + '.' + quotename(t.name) + \
-                 ' add constraint ' + quotename(fk.name) + ' foreign key (' + \
-                 stuff((select quotename(pc.name) + \
-                          case when fkc.constraint_column_id < (select max(constraint_column_id) from sys.foreign_key_columns \
-                                                                 where constraint_object_id = fk.object_id) \
-                               then ', ' else '' end \
-                        from sys.foreign_key_columns fkc \
-                        join sys.columns pc on pc.object_id = fkc.parent_object_id and pc.column_id = fkc.parent_column_id \
-                        where fkc.constraint_object_id = fk.object_id \
-                        order by fkc.constraint_column_id for xml path(''), type).value('.', 'nvarchar(max)'), 1, 0, '') + \
-                 ') references ' + quotename(schema_name(rt.schema_id)) + '.' + quotename(rt.name) + ' (' + \
-                 stuff((select quotename(rc.name) + \
-                          case when fkc2.constraint_column_id < (select max(constraint_column_id) from sys.foreign_key_columns \
-                                                                  where constraint_object_id = fk.object_id) \
-                               then ', ' else '' end \
-                        from sys.foreign_key_columns fkc2 \
-                        join sys.columns rc on rc.object_id = fkc2.referenced_object_id and rc.column_id = fkc2.referenced_column_id \
-                        where fkc2.constraint_object_id = fk.object_id \
-                        order by fkc2.constraint_column_id for xml path(''), type).value('.', 'nvarchar(max)'), 1, 0, '') + ')' + \
-                 case fk.delete_referential_action when 1 then ' on delete cascade' \
-                      when 2 then ' on delete set null' when 3 then ' on delete set default' else '' end + ';' \
-               from sys.foreign_keys fk \
-               join sys.tables t on t.object_id = fk.parent_object_id \
-               join sys.tables rt on rt.object_id = fk.referenced_object_id \
-               where t.name = {lit} \
-               order by fk.name \
-               for xml path(''), type).value('.', 'nvarchar(max)'), 1, 1, '') as ddl"
-        );
-        vec![
-            ("注释（扩展属性 MS_Description）", comments),
-            ("索引与唯一约束", indexes),
-            ("外键", fkeys),
-        ]
+        self.ops().ddl_extras(table)
     }
 
     /// 「当前账号能用的表」清单 —— 给**表清单走 JDBC `getTables`、而目录本身不按权限收窄**
@@ -2579,52 +1118,11 @@ _ => Meta::Unwritten,
     ///
     /// `Meta::Absent` = **不需要过滤**：MySQL/Oracle/PG/CH 的清单查询本身已经按权限收窄。
     pub fn visible_tables(&self) -> Meta {
-        match self.key() {
-            // H2 2.x：`information_schema.tables` **没有属主列**，属主要从 `schemata.schema_owner`
-            // 取；`table_privileges` 只记显式授权（属主不会在里面出现，所以必须并上属主/管理员）。
-            // `is_admin` 在 2.3 是 BOOLEAN（写成 `= 1` 会报「BOOLEAN 与 INTEGER 不可比」——实测）。
-            "h2" => Meta::Sql(
-                "select t.table_name as name from information_schema.tables t \
-                 where t.table_schema = current_schema and ( \
-                   exists (select 1 from information_schema.users u \
-                           where u.user_name = current_user and u.is_admin) \
-                   or exists (select 1 from information_schema.schemata s \
-                              where s.schema_name = t.table_schema \
-                                and s.schema_owner = current_user) \
-                   or exists (select 1 from information_schema.table_privileges p \
-                              where p.table_catalog = t.table_catalog \
-                                and p.table_schema = t.table_schema \
-                                and p.table_name = t.table_name \
-                                and p.grantee in ('PUBLIC', current_user)) )"
-                    .to_string(),
-            ),
-            // DB2：`SYSCAT.TABAUTH` 只有显式授权；属主在 `SYSCAT.TABLES.OWNER`。
-            // 已知缺口：**组与角色的授权**不一定落在这张目录里（要枚举 `AUTH_LIST_GROUPS_FOR_AUTHID`），
-            // 所以调用方把「过滤结果为空」当作"目录没覆盖"、保持原样 —— 详见 meta 里的求交逻辑。
-            "db2" => Meta::Sql(
-                "select t.tabname as name from syscat.tables t \
-                 where t.tabschema = current schema and ( \
-                   t.owner = current user \
-                   or exists (select 1 from syscat.tabauth a \
-                              where a.tabschema = t.tabschema and a.tabname = t.tabname \
-                                and a.grantee in ('PUBLIC', current user)) )"
-                    .to_string(),
-            ),
-            // Derby：`sys.systableperms` 只在打开 `derby.database.sqlAuthorization` 后才有行，
-            // 属性为 NULL/FALSE 时**人人都有权**（默认安装就是这种），此时不能过滤。
-            // 属主是「模式属主」`sys.sysschemas.authorizationid`（Derby 的 schema 与用户绑定）。
-            "derby" => Meta::Sql(
-                "select t.tablename as name from sys.systables t \
-                 join sys.sysschemas s on s.schemaid = t.schemaid \
-                 where s.schemaname = current schema and ( \
-                   coalesce(syscs_util.syscs_get_database_property('derby.database.sqlAuthorization'), 'FALSE') <> 'TRUE' \
-                   or s.authorizationid = current_user \
-                   or exists (select 1 from sys.systableperms p \
-                              where p.tableid = t.tableid \
-                                and p.grantee in ('PUBLIC', current_user)) )"
-                    .to_string(),
-            ),
-            _ => Meta::Absent,
+        // H2 / DB2 / Derby 的目录不按权限收窄，要把「属主 + 显式授权」拼出来求交；
+        // 其余方言的清单查询本身已按权限收窄，Absent 表示「不用过滤」
+        match self.ops().visible_tables() {
+            Some(sql) => Meta::Sql(sql.to_string()),
+            None => Meta::Absent,
         }
     }
 
@@ -2639,14 +1137,9 @@ _ => Meta::Unwritten,
     /// 2. **估算为 0 时返回 null**，不显示数字 —— 「统计说 0」与「这张表真的是空的」
     ///    在界面上长得一模一样，宁可先留空，等精确回填补上真实的 0。
     pub fn table_rows(&self, database: &str) -> Meta {
-        match self.key() {
-            "mysql" | "mariadb" | "doris" => Meta::Sql(format!(
-                "select table_name as table_name, \
-                 case when table_rows is null or table_rows = 0 then null else table_rows end as rows \
-                 from information_schema.tables where table_schema = {}",
-                self.literal(database)
-            )),
-            _ => Meta::Unwritten,
+        match self.ops().table_rows_sql(database) {
+            Some(sql) => Meta::Sql(sql),
+            None => Meta::Unwritten,
         }
     }
 
@@ -2674,237 +1167,18 @@ _ => Meta::Unwritten,
     /// `charset` 这一列给的是**排序规则的完整名**（如 `utf8mb4_general_ci`）：
     /// 与 `shape::tables_json` 里该字段的历史含义一致，前端据此拆出字符集与排序规则。
     pub fn table_options(&self, database: &str) -> Meta {
-        // Doris 的 database 参数是 `catalog.库` 全限定名（树/页签的叫法），而
-        // information_schema.tables 的 table_schema 是**裸库名** —— 原样传全限定名
-        // 一行都匹配不上，表注释静默丢失（真机踩过：同步建表注释全空）。
-        // MySQL 系同名同义（树里就是裸名），不受影响。
-        let db_value = if self.key() == "doris" {
-            database.rsplit('.').next().unwrap_or(database)
-        } else {
-            database
-        };
-        let db = self.literal(db_value);
-        match self.key() {
-            "mysql" | "mariadb" | "doris" => Meta::Sql(format!(
-                // 视图的 `table_comment` 是 MySQL 自己填的**字面量 'VIEW'**（视图没注释时），
-                // 原样带出去就是「每个视图的注释都写着 VIEW」——语义上它不是注释而是类型噪音，
-                // 这里按「视图 + 值恰为 VIEW」判掉；真表的同名注释不受影响。
-                "select table_name as table_name, engine as engine, \
-                 table_collation as charset, \
-                 case when table_type = 'VIEW' and table_comment = 'VIEW' then '' \
-                      else coalesce(table_comment, '') end as comment, \
-                 create_time as createTime \
-                 from information_schema.tables where table_schema = {db}"
-            )),
-            // ClickHouse：`system.tables` 一次把引擎、排序键、分区键、注释都给全
-            // —— 这三项正是它「建表时确定、之后改不了」的部分，所以界面只读展示。
-            //
-            // **不要**在这里查 `create_time`：CH 的 `system.tables` 没有这一列
-            // （26.8 实测，只有 `metadata_modification_time`，含义是元数据最后修改时间，
-            // 拿来冒充建表时间就是撒谎）。写了它的后果不是「少一列」而是**整条 SQL 报
-            // Code 47 Unknown expression identifier** ⇒ 引擎/排序键/分区键/注释**一起变空**，
-            // 界面上就是「CH 的表除了名字啥都没有」。CH 的建表时间本来就取不到，如实不提供。
-            "clickhouse" => Meta::Sql(format!(
-                // 排序键去掉最外层括号：CH 存的是 DDL 里的字面量，`order by (id)` 回的就是
-                // `(id)`，而界面要的是列/表达式本身（`id`）—— 括号是 DDL 语法不是名字的一部分。
-                // 用户反馈：清单与「编辑表结构 → 基本信息」都显示成 `(id)`。
-                // 只剥一层：`(a, b)` → `a, b`；本来就是 `id` 的（`order by id`）原样返回。
-                "select name as table_name, engine as engine, \
-                 replaceRegexpAll(sorting_key, '^\\((.*)\\)$', '\\1') as sortingKey, \
-                 partition_key as partitionKey, coalesce(comment, '') as comment \
-                 from system.tables where database = {db}"
-            )),
-            // PG / Kingbase：估算行数（reltuples，未 ANALYZE 时是 -1，压成 0）、属主、
-            // 总占用（表+索引+toast）、表注释 —— 对象清单页一屏能看到表有多大、归谁
-            "postgresql" | "kingbase" => Meta::Sql(format!(
-                "select c.relname as table_name, \
-                 greatest(c.reltuples, 0)::bigint::text as rows, \
-                 pg_get_userbyid(c.relowner) as owner, \
-                 pg_size_pretty(pg_total_relation_size(c.oid)) as size, \
-                 coalesce(obj_description(c.oid, 'pg_class'), '') as comment \
-                 from pg_class c join pg_namespace n on n.oid = c.relnamespace \
-                 where n.nspname = {db} and c.relkind in ('r','p')"
-            )),
-            // Oracle：估算行数（num_rows，统计信息）、表空间、最近 ANALYZE 时间、注释。
-            //
-            // **别名 `rows` / `comment` 必须带双引号**：Oracle 里两者都是关键字，写 `as rows`
-            // 直接报 ORA-00923（未找到要求的 FROM 关键字）—— 整条查询失败，上层是
-            // `if let Ok(result)`，于是错误被静默吞掉，症状就是「表注释改完保存成功、重开还是空」
-            // （真机 SYSTEM 实测：`select 1 as rows from dual` 都过不去）。旁边的
-            // `tables_in_schema` 早就给 `"rows"` / `"comment"` 加了引号，这条漏了。
-            //
-            // 另外把 owner 从「当前用户」改成**调用方给的模式名**：这层是模式级清单，
-            // 用 user_tables 只看得见连接账号自己的表 —— 浏览别人的模式时注释永远空。
-            // 给的值在 all_users 里查不到（例如传的是服务名 FREEPDB1）时退回当前模式。
-            "oracle" => Meta::Sql(format!(
-                "select t.table_name as table_name, to_char(t.num_rows) as \"rows\", \
-                 t.tablespace_name as tablespace, \
-                 to_char(t.last_analyzed, 'yyyy-mm-dd hh24:mi:ss') as lastAnalyzed, \
-                 coalesce(c.comments, '') as \"comment\" \
-                 from all_tables t \
-                 left join all_tab_comments c on c.owner = t.owner and c.table_name = t.table_name \
-                 where t.owner = coalesce((select username from all_users where username = {db}), \
-                   sys_context('USERENV', 'CURRENT_SCHEMA'))"
-            )),
-            // DM：同一套数据字典（user_tables / user_tab_comments），别名同样加引号，
-            // 但 owner 维持「当前用户」—— 达梦没有可验证的实例，不动它的语义。
-            "dm" => Meta::Sql(
-                "select t.table_name as table_name, to_char(t.num_rows) as \"rows\", \
-                 t.tablespace_name as tablespace, \
-                 to_char(t.last_analyzed, 'yyyy-mm-dd hh24:mi:ss') as lastAnalyzed, \
-                 coalesce(c.comments, '') as \"comment\" \
-                 from user_tables t \
-                 left join user_tab_comments c on c.table_name = t.table_name"
-                    .to_string(),
-            ),
-            // SQL Server：真实行数（sys.partitions 的 heap/聚簇索引行）、建表时间、
-            // 表注释仍在扩展属性 `MS_Description`（与列注释同一处）
-            "sqlserver" => Meta::Sql(
-                "select t.name as table_name, cast(p.rows as varchar(20)) as rows, \
-                 convert(varchar(19), t.create_date, 120) as createTime, \
-                 cast(ep.value as nvarchar(4000)) as comment \
-                 from sys.tables t \
-                 join sys.partitions p on p.object_id = t.object_id and p.index_id in (0, 1) \
-                 left join sys.extended_properties ep \
-                   on ep.major_id = t.object_id and ep.minor_id = 0 and ep.name = 'MS_Description'"
-                    .to_string(),
-            ),
-            // H2 / DB2 的 information_schema 都带 remarks（就是表注释）
-            "h2" => Meta::Sql(
-                "select table_name as table_name, coalesce(remarks, '') as comment \
-                 from information_schema.tables where table_schema = current_schema"
-                    .to_string(),
-            ),
-            "db2" => Meta::Sql(
-                "select tabname as table_name, coalesce(remarks, '') as comment \
-                 from syscat.tables where tabschema = current schema and type = 'T'"
-                    .to_string(),
-            ),
-            // SQLite / Derby 没有表注释这个概念，如实不给（界面就不会摆这一行）
-            _ => Meta::Unwritten,
+        // `catalog.库` 这类多段库名的拆解在 Doris 的族实现里（只有它有多段库名）
+        match self.ops().table_options_sql(database) {
+            Some(sql) => Meta::Sql(sql),
+            None => Meta::Unwritten,
         }
     }
 
     /// 索引清单（全库返回，每条带 `table`，结构页自己按表名过滤）。
     pub fn indexes(&self) -> Meta {
-        match self.key() {
-            "sqlite" => Meta::Sql(
-                "select name, tbl_name as \"table\", sql from sqlite_master \
-                 where type = 'index' and name not like 'sqlite_autoindex%' order by name"
-                    .to_string(),
-            ),
-            "mysql" | "mariadb" => Meta::Sql(
-                "select index_name as `name`, table_name as `table`, non_unique as nonUnique, \
-                 index_type as `type`, \
-                 group_concat(column_name order by seq_in_index separator ',') as `columns` \
-                 from information_schema.statistics where table_schema = database() \
-                 group by table_name, index_name, non_unique, index_type order by table_name, index_name"
-                    .to_string(),
-            ),
-            // Doris：**不能**用 MySQL 那种 `group_concat(x order by y separator ',')` 写法 ——
-            // 实测报 `Syntax error ... near 'order by seq_in_index separator ',' as columns'`，
-            // 整次索引查询 500，界面上「索引」页签于是永远是空的（看着像这张表没索引）。
-            // Doris 只认 `group_concat(x, ',')`；代价是列顺序不再由 seq_in_index 保证 ——
-            // 它的二级索引本来就少，复合索引列序偶尔不同，也好过整条查询挂掉。
-            "doris" => Meta::Sql(
-                "select index_name as `name`, table_name as `table`, non_unique as nonUnique, \
-                 group_concat(column_name, ',') as `columns` \
-                 from information_schema.statistics where table_schema = database() \
-                 group by table_name, index_name, non_unique order by table_name, index_name"
-                    .to_string(),
-            ),
-            "postgresql" | "kingbase" => Meta::Sql(
-                "select schemaname as schema, indexname as name, tablename as \"table\", indexdef \
-                 from pg_indexes where schemaname not in ('pg_catalog','information_schema') \
-                 order by tablename, indexname"
-                    .to_string(),
-            ),
-            // 别名 `schema` 必须加双引号：SCHEMA 是 T-SQL 的保留字，写 `as schema` 直接
-            // `Incorrect syntax near the keyword 'schema'` —— 整条索引查询 500，
-            // 「索引」页签永远是空的（巡检实测）。
-            "sqlserver" => Meta::Sql(
-                "select schema_name(o.schema_id) as \"schema\", i.name as name, o.name as \"table\", i.is_unique as isUnique, \
-                 stuff((select ',' + c.name from sys.index_columns ic \
-                  join sys.columns c on c.object_id = ic.object_id and c.column_id = ic.column_id \
-                  where ic.object_id = i.object_id and ic.index_id = i.index_id and ic.key_ordinal > 0 \
-                  order by ic.key_ordinal for xml path('')), 1, 1, '') as \"columns\" \
-                 from sys.indexes i join sys.objects o on o.object_id = i.object_id \
-                 where o.type = 'U' and i.name is not null order by o.name, i.name"
-                    .to_string(),
-            ),
-            // Oracle / DM：原来只查 user_indexes 的 name/table，**不查列** —— 所以
-            // 「包含字段」恒为空。列与列序在 user_ind_columns 里；顺带把 uniqueness 归一成
-            // `isUnique`（0/1，前端归一化认这个键）、index_type 作为「类型」列。
-            "oracle" | "dm" => Meta::Sql(
-                "select i.index_name as \"name\", i.table_name as \"table\", \
-                 case when i.uniqueness = 'UNIQUE' then 1 else 0 end as \"isUnique\", \
-                 i.index_type as \"type\", \
-                 listagg(c.column_name, ',') within group (order by c.column_position) as \"columns\" \
-                 from user_indexes i \
-                 join user_ind_columns c on c.index_name = i.index_name and c.table_name = i.table_name \
-                 group by i.index_name, i.table_name, i.uniqueness, i.index_type \
-                 order by i.table_name, i.index_name"
-                    .to_string(),
-            ),
-            // DB2：同理，列在 syscat.indexcoluse（colseq 是列序）。
-            // **索引名这列在 SYSCAT.INDEXES 里叫 INDNAME，不是 INDEXNAME** ——
-            // 写成 INDEXNAME 会整条查询 500（SQLCODE=-206 SQLSTATE=42703），
-            // 编辑表结构时「索引」页签跟着一片空白。
-            "db2" => Meta::Sql(
-                "select i.indname as \"name\", i.tabname as \"table\", \
-                 case when i.uniquerule = 'U' then 1 else 0 end as \"isUnique\", \
-                 listagg(c.colname, ',') within group (order by c.colseq) as \"columns\" \
-                 from syscat.indexes i \
-                 join syscat.indexcoluse c on c.indschema = i.indschema and c.indname = i.indname \
-                 where i.tabschema = current schema \
-                 group by i.indname, i.tabname, i.uniquerule \
-                 order by i.tabname, i.indname"
-                    .to_string(),
-            ),
-            // Derby **没有 syscat schema**（那是 DB2 的）：老写法在这里报
-            // `Table/View 'SYSCAT.INDEXES' does not exist`（实测）。
-            // 索引在 sys.sysconglomerates（isindex 标记），表名要连 sys.systables，
-            // 且必须按 schema 过滤 —— 不然会把系统索引（SYSCONGLOMERATES_INDEX1 之类）全列出来。
-            // 列：「包含字段」在 Derby 上**取不到** —— sys 目录里索引列只在
-            // SYS.SYSCONGLOMERATES.descriptor 这个二进制描述符里，没有可查询的列。
-            // 如实空着，别为了"看着有东西"去猜一个必然报错的查询（一旦报错，整个索引页签
-            // 会 500，反而比空更难解释）。界面上那一列会是"请选择"，不会再假装有值。
-            "derby" => Meta::Sql(
-                "select c.conglomeratename as \"name\", t.tablename as \"table\" \
-                 from sys.sysconglomerates c \
-                 join sys.systables t on t.tableid = c.tableid \
-                 join sys.sysschemas s on s.schemaid = t.schemaid \
-                 where c.isindex = true and s.schemaname = current schema \
-                 order by t.tablename, c.conglomeratename"
-                    .to_string(),
-            ),
-            // H2：列在 information_schema.index_columns；H2 的 GROUP_CONCAT 默认分隔符就是逗号。
-            // isUnique 只能从索引类型名上认（H2 的 information_schema.indexes 没有唯一性列）——
-            // 尽力而为，认不出就当非唯一，不猜别的。
-            "h2" => Meta::Sql(
-                "select i.index_name as \"name\", i.table_name as \"table\", \
-                 case when i.index_type_name like '%UNIQUE%' then 1 else 0 end as \"isUnique\", \
-                 group_concat(c.column_name order by c.ordinal_position separator ',') as \"columns\" \
-                 from information_schema.indexes i \
-                 left join information_schema.index_columns c \
-                   on c.index_name = i.index_name and c.table_name = i.table_name \
-                 group by i.index_name, i.table_name, i.index_type_name \
-                 order by i.table_name, i.index_name"
-                    .to_string(),
-            ),
-            // ClickHouse：原来只取 name/table/type，**不取列** —— 于是「编辑表结构 → 索引」
-            // 里的「包含字段」永远是空的（用户反馈"字段没显示出来"）。`expr` 就是跳数索引的
-            // 列/表达式，接上 `columns` 就行（实测 `expr as "columns"` 返回 `event_time`）。
-            //
-            // **不要**加 `where database = currentDatabase()`：原句不带 WHERE，一次列出所有库
-            // （界面自己按表名过滤）；加了之后，当前会话库不是 system 时就一行都查不到
-            //（实测在 default 库下返回 0 行，等于把功能弄丢）。
-            "clickhouse" => Meta::Sql(
-                "select name, table, type, expr as \"columns\" from system.data_skipping_indices \
-                 order by table, name"
-                    .to_string(),
-            ),
-            _ => Meta::Unwritten,
+        match self.ops().indexes_sql() {
+            Some(sql) => Meta::Sql(sql.to_string()),
+            None => Meta::Unwritten,
         }
     }
 
@@ -2917,700 +1191,36 @@ _ => Meta::Unwritten,
     /// `owner` 明确过滤：判据来自请求本身，不赌「代理有没有真的切 schema」。
     /// 两边都 upper()：未加引号的标识符在字典里是大写，但用户也可能建了带引号的小写模式。
     pub fn procedures(&self, schema: Option<&str>) -> Meta {
-        match self.key() {
-            // SQLite 没有存储过程这个概念 —— 空数组是事实。
-            "sqlite" => Meta::Absent,
-            // Doris 也没有存储过程（它只有 catalog 级的 UDF，不在库的 routines 里）。
-            // 之前跟着 MySQL 一起来了，于是树上画出「存储过程 / 函数」两个分类、点进去恒为空。
-            "doris" => Meta::Absent,
-            "mysql" | "mariadb" => Meta::Sql(
-                "select routine_name as `name`, routine_type as routineType, \
-                 created, last_altered as lastAltered, \
-                 sql_data_access as dataAccess, security_type as securityType \
-                 from information_schema.routines where routine_schema = database() \
-                 order by routine_name"
-                    .to_string(),
-            ),
-            "postgresql" | "kingbase" => {
-                // 带了 schema（树的「库.模式」或用户表单传的模式名）就只列该模式的例程；
-                // 没带才回退到「全库非系统模式」。与 MySQL 的 `routine_schema = database()`
-                // 同一语义：下拉里列的就是当前模式自己的过程/函数。
-                let filter = match schema {
-                    Some(s) if !s.trim().is_empty() => {
-                        format!("and n.nspname = '{}'", s.trim().replace('\'', "''"))
-                    }
-                    _ => String::from("and n.nspname not in ('pg_catalog','information_schema')"),
-                };
-                // 权限：`pg_proc` 也是公开目录，`secret_fn` 这种把 EXECUTE 从 PUBLIC 收回的
-                // 例程照样会被列出来（实测低权限账号看到了它）。PG 默认把 EXECUTE 授给
-                // PUBLIC，所以这条过滤通常"不改变结果"，只在真收权时生效 —— 正是要的效果。
-                Meta::Sql(format!(
-                    "select p.proname as name, \
-                     case when p.prokind = 'f' then 'FUNCTION' else 'PROCEDURE' end as routineType \
-                     from pg_proc p join pg_namespace n on n.oid = p.pronamespace \
-                     where true {filter} \
-                       and has_function_privilege(p.oid, 'EXECUTE') \
-                       and has_schema_privilege(n.oid, 'USAGE') \
-                     order by p.proname"
-                ))
-            }
-            "sqlserver" => Meta::Sql(
-                "select name, 'PROCEDURE' as routineType from sys.procedures \
-                 union all select name, 'FUNCTION' as routineType from sys.objects \
-                 where type in ('FN','IF','TF') order by name"
-                    .to_string(),
-            ),
-            "oracle" => match schema {
-                Some(schema) if !schema.trim().is_empty() => Meta::Sql(format!(
-                    // PACKAGE 不带 BODY：EXECUTE 只授予说明（spec），对 BODY 授权是语法错
-                    "select object_name as \"name\", object_type as \"routineType\" from all_objects where object_type in ('PROCEDURE','FUNCTION','PACKAGE') and upper(owner) = upper('{}') order by object_name",
-                    schema.trim().replace('\'', "''")
-                )),
-                _ => Meta::Sql(
-                    "select object_name as \"name\", object_type as \"routineType\" from user_objects where object_type in ('PROCEDURE','FUNCTION','PACKAGE') order by object_name"
-                        .to_string(),
-                ),
-            },
-            // DM（达梦）这里**不动**：它的数据字典大小写跟 Oracle 不完全一致，
-            // 没在真机上验证过 owner 过滤，宁可不改，也不要造一个「看着像修好了」的改动。
-            "dm" => Meta::Sql(
-                "select object_name as \"name\", object_type as \"routineType\" from user_objects where object_type in ('PROCEDURE','FUNCTION') order by object_name"
-                    .to_string(),
-            ),
-            "db2" => Meta::Sql(
-                "select routinename as \"name\", routinetype as \"routineType\" from syscat.routines \
-                 where routineschema = current schema order by routinename"
-                    .to_string(),
-            ),
-            // Derby：例程在 sys.sysaliases（P=过程 / F=函数）。同样要按 schema 过滤，
-            // 否则会把 SYS 里的系统过程（SQLCAMESSAGE 等）当成用户的例程列出来（实测）。
-            "derby" => Meta::Sql(
-                "select a.alias as \"name\", a.aliastype as \"routineType\" \
-                 from sys.sysaliases a \
-                 join sys.sysschemas s on s.schemaid = a.schemaid \
-                 where a.aliastype in ('P','F') and s.schemaname = current schema \
-                 order by a.alias"
-                    .to_string(),
-            ),
-            "h2" => Meta::Sql(
-                "select routine_name as \"name\", routine_type as \"routineType\" \
-                 from information_schema.routines order by routine_name"
-                    .to_string(),
-            ),
-            // ClickHouse 没有存储过程这一概念，不是"没实现"—— 返回 Absent（空数组），
-            // 别让界面把「本来没有」显示成 501 报错
-            "clickhouse" => Meta::Absent,
-            _ => Meta::Unwritten,
-        }
+        self.ops().procedures(schema)
     }
 
     /// 触发器清单。`schema` 含义同 `procedures`（Oracle 同样是
     /// `user_triggers` → `all_triggers` + `owner` 过滤）。
     pub fn triggers(&self, schema: Option<&str>) -> Meta {
-        match self.key() {
-            "sqlite" => Meta::Sql(
-                "select name, tbl_name as \"table\" from sqlite_master where type = 'trigger' order by name"
-                    .to_string(),
-            ),
-            // Doris 没有触发器（information_schema.triggers 表本身都不存在）
-            "doris" => Meta::Absent,
-            "mysql" | "mariadb" => Meta::Sql(
-                "select trigger_name as `name`, event_object_table as `table`, action_timing as timing, \
-                 event_manipulation as event from information_schema.triggers \
-                 where trigger_schema = database() order by trigger_name"
-                    .to_string(),
-            ),
-            // PG 的触发器清单原先**既不看模式也不看权限**：`pg_trigger` 是全库公开目录，
-            // 一句话就把所有 schema（含别的库对象可见的部分）的触发器全列出来 —— 树上
-            // 「触发器」节点混着 pg_catalog 与别人 schema 的东西，而且包含当前账号
-            // 根本读不了的表的触发器。改成与 procedures 同口径：带 schema 就只看它，
-            // 不带就排除系统模式；再用「表级任意权限」把读不到的表上的触发器滤掉。
-            "postgresql" | "kingbase" => {
-                let filter = match schema {
-                    Some(s) if !s.trim().is_empty() => {
-                        format!("and n.nspname = '{}'", s.trim().replace('\'', "''"))
-                    }
-                    _ => String::from(
-                        "and n.nspname not in ('pg_catalog','information_schema') \
-                         and n.nspname not like 'pg\\_%'",
-                    ),
-                };
-                Meta::Sql(format!(
-                    "select t.tgname as name, c.relname as \"table\" from pg_trigger t \
-                     join pg_class c on c.oid = t.tgrelid \
-                     join pg_namespace n on n.oid = c.relnamespace \
-                     where not t.tgisinternal {filter} \
-                       and has_table_privilege(c.oid, \
-                         'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') \
-                     order by t.tgname"
-                ))
-            }
-            "sqlserver" => Meta::Sql(
-                "select t.name as name, o.name as \"table\" from sys.triggers t \
-                 left join sys.objects o on o.object_id = t.parent_id order by t.name"
-                    .to_string(),
-            ),
-            "oracle" => match schema {
-                Some(schema) if !schema.trim().is_empty() => Meta::Sql(format!(
-                    "select trigger_name as \"name\", table_name as \"table\" from all_triggers where upper(owner) = upper('{}') order by trigger_name",
-                    schema.trim().replace('\'', "''")
-                )),
-                _ => Meta::Sql(
-                    "select trigger_name as \"name\", table_name as \"table\" from user_triggers order by trigger_name"
-                        .to_string(),
-                ),
-            },
-            // DM 同上：先不动。
-            "dm" => Meta::Sql(
-                "select trigger_name as \"name\", table_name as \"table\" from user_triggers order by trigger_name"
-                    .to_string(),
-            ),
-            "db2" => Meta::Sql(
-                "select trigname as \"name\", tabname as \"table\" from syscat.triggers \
-                 where tabschema = current schema order by trigname"
-                    .to_string(),
-            ),
-            // Derby 没有 syscat（DB2 的 schema）：触发器的系统表是 sys.systriggers。
-            // 列名 `TRIGGERNAME` 实测存在；表名不在该表里（定义文本里才有所属表），
-            // 所以这里只给名字 —— 少一列好过报 42X05 让整个清单打不开。
-            // Derby：与 procedures 同一口径 —— 不加 schema 过滤会把内核自带的触发器
-            // （SYS 下的那些）也列出来，而当前账号对它们没有任何权限。
-            // 列名仍是 TRIGGERNAME，只是多了到 sys.sysschemas 的一跳。
-            "derby" => Meta::Sql(
-                "select t.triggername as \"name\" from sys.systriggers t \
-                 join sys.sysschemas s on s.schemaid = t.schemaid \
-                 where s.schemaname = current schema order by t.triggername"
-                    .to_string(),
-            ),
-            // ClickHouse / H2 没有触发器
-            _ => Meta::Absent,
-        }
+        self.ops().triggers(schema)
     }
 
     pub fn events(&self) -> Meta {
-        match self.key() {
-            // Doris 没有事件调度器
-            "doris" => Meta::Absent,
-            "mysql" | "mariadb" => Meta::Sql(
-                "select event_name as `name`, status, interval_value, interval_field, \
-                 last_executed as lastExecuted, execute_at as executeAt, ends \
-                 from information_schema.events where event_schema = database() order by event_name"
-                    .to_string(),
-            ),
-            // 其余类型确实没有 MySQL 那种「事件」
-            _ => Meta::Absent,
-        }
+        self.ops().events()
     }
 
     pub fn users(&self) -> Meta {
-        match self.key() {
-            // Doris 也走 MySQL 协议，`mysql.user` 可读；这里原先漏了它 ——
-            // 同文件的 user_info / user_grants / user_action_sql 都已包含 doris，
-            // 只有用户清单少一个分支，于是「树的用户节点是空的、详情却能用」。
-            //
-            // MySQL 8 把**角色**也放在 `mysql.user` 里（角色就是 locked account），
-            // 所以清单天然混着两者。区分靠「锁定 + 空认证串」：真被 ACCOUNT LOCK 的用户
-            // 仍有认证串（实测 mysql.sys/session/infoschema 都是 70 字节），角色则为空。
-            // MariaDB 有现成的 `is_role` 列（10.0.5+）；它的 collation 与字面量不一致，
-            // `is_role = 'Y'` 会报 1267，必须转 binary 再比。
-            // ⚠️ host 必须**显式起别名**：MariaDB 的驱动按底层列名回 `Host`（大写），
-            // 而前端读的是 `row.host` —— 不写别名时 MariaDB 的用户清单里「主机」一列
-            // 是空的（真机回归发现）。MySQL 与 MariaDB 在这一处行为不一致，别赌。
-            //
-            // **角色不进用户清单**（用户要求）：角色在「编辑 / 授权」的「角色」页签里管。
-            // MySQL 8 的角色就是 `account_locked='Y'` 且认证串为空的账号，这里排除掉
-            // （真被锁的用户仍有认证串，不会被误排除）；MariaDB 直接用 `is_role` 列
-            // （collation 与字面量不一致，必须转 binary 再比，否则 1267）。
-            // 「超级用户」标记：MySQL / MariaDB 直接取 `Super_priv`，**不要写成
-            // `super_priv = 'Y'`** —— MariaDB 的该列是 collation 不同的 CHAR，
-            // 与字面量比较会报 1267（实测 `Illegal mix of collations …
-            // utf8mb4_general_ci / utf8mb4_uca1400_ai_ci`），整张清单直接 500。
-            // 取原值（Y/N）出门，由 Rust 侧的 `is_true_flag` 折成布尔。
-            // Doris 没有 Super_priv，管理员是 `Admin_priv`（实测 root/admin 都是 Y）。
-            "mysql" => Meta::Sql(
-                "select user as `name`, host as `host`, super_priv as `isSuper` from mysql.user \
-                 where not (account_locked = 'Y' and coalesce(authentication_string, '') = '') \
-                 order by user, host"
-                    .to_string(),
-            ),
-            "mariadb" => Meta::Sql(
-                "select user as `name`, host as `host`, super_priv as `isSuper` from mysql.user \
-                 where coalesce(cast(is_role as binary), 'N') <> 'Y' \
-                 order by user, host"
-                    .to_string(),
-            ),
-            "doris" => Meta::Sql(
-                "select user as `name`, host as `host`, admin_priv as `isSuper` from mysql.user \
-                 order by user, host"
-                    .to_string(),
-            ),
-            // PG 的角色与用户是同一张表：**不能登录**的就是纯角色（rolcanlogin = false），
-            // 它们同样只出现在「角色」页签里，不进用户清单。
-            // `isSuper` 必须加双引号：PG 会把未加引号的别名折成 `issuper`，
-            // 前端读 `row.isSuper` 就永远拿不到（超级用户标签不显示）。
-            "postgresql" | "kingbase" => Meta::Sql(
-                "select rolname as name, rolsuper as \"isSuper\" from pg_roles \
-                 where rolcanlogin order by rolname"
-                    .to_string(),
-            ),
-            // SQL Server：**服务器登录名**（不是库用户）。
-            //
-            // 账号体系是「服务器登录名 + 每个库里的映射用户」，而这页是**连接级**（不跟库）。
-            // 原来列的是库用户（sys.database_principals），于是打开 demo 这种只有
-            // dbo/guest 的库永远是一片空白 —— 用户的原话是「SQL Server 的用户也显示出来吧」。
-            // 登录名才是用户眼里的"用户"，也与增删改（create/alter/drop login）同一口径。
-            //
-            // 只过滤系统内置：`##…` 是证书/策略签名登录，`NT …` / `BUILTIN…` 是机器账号。
-            // `sa` 必须保留 —— 那正是用户要找的那个。
-            //
-            // `isSuper` 用 `is_srvrolemember('sysadmin', name)` 现场算（实测 sa → 1），
-            // 这样「超级用户」标签在这一页才有意义；非 sysadmin 账号调用得到 NULL，
-            // 折成 false，不会把所有人都标成超级用户。
-            "sqlserver" => Meta::Sql(
-                "select name, is_srvrolemember('sysadmin', name) as \"isSuper\" \
-                 from sys.server_principals \
-                 where type in ('S','U','G') \
-                   and name not like '##%' \
-                   and name not like 'NT %' \
-                   and name not like 'BUILTIN%' \
-                 order by name"
-                    .to_string(),
-            ),
-            "oracle" | "dm" => {
-                Meta::Sql("select username as \"name\" from all_users order by username".to_string())
-            }
-            "clickhouse" => {
-                Meta::Sql("select name from system.users order by name".to_string())
-            }
-            // H2：`INFORMATION_SCHEMA.USERS`（2.x，实测 2.3.232）。默认用户的用户名是
-            // **空串**，直接显示会是一行点不动的空白 —— 显示成 H2 的空标识符 `""`
-            // （带引号，且能直接贴进 SQL），查详情 / 改 / 删时再还原（见 `h2_user`）。
-            "h2" => Meta::Sql(
-                "select case when coalesce(user_name,'') = '' then '\"\"' else user_name end as \"name\" \
-                 from information_schema.users order by 1"
-                    .to_string(),
-            ),
-            // Derby / DB2：用户由**外部认证**（操作系统 / LDAP）提供，这里只能看不能建 ——
-            // `user_action_sql` 保持 Absent，界面上的「新增用户」会自动置灰。
-            "derby" => Meta::Sql("select username as \"name\" from sys.sysusers order by username".to_string()),
-            // DB2 LUW 的用户/组授权目录是 SYSCAT.DBAUTH（SYSIBM.SYSUSERAUTH 是 z/OS 的）
-            "db2" => Meta::Sql(
-                "select grantee as \"name\" from syscat.dbauth \
-                 where grantee <> 'PUBLIC' and grantee not like 'SYS%' order by grantee"
-                    .to_string(),
-            ),
-            _ => Meta::Absent,
-        }
+        self.ops().users()
     }
 
-/// Oracle 的**授予**部分：角色 + 系统权限 + 对象权限。
-///
-/// 三类分别对应字典里的三层（角色 / 系统权限 / 对象权限），语句形态也各不同：
-/// `grant <角色> to u`、`grant <系统权限> to u`、`grant <权限> on <模式>.<对象> to u`。
-/// 角色与权限名都来自白名单（调用方已校验过），标识符一律 `quote()`，不留手工拼接的口子。
-fn oracle_grant_parts(u: &str, roles: &[String], privileges: &UserPrivileges) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // 角色（`roles` 与 `privileges.global` 都可能带角色名，去重后再发，免得同句两遍）
-    for name in roles.iter().chain(privileges.global.iter()) {
-        let raw = name.trim();
-        let name = raw.to_ascii_uppercase();
-        if name.is_empty() || !seen.insert("r:".to_string() + &name) {
-            continue;
-        }
-        if crate::api::dialect::is_oracle_role(&name) || crate::api::dialect::is_oracle_system_priv(&name) {
-            parts.push(format!("grant {name} to {u}"));
-        } else if crate::api::dialect::is_plain_ident(raw) {
-            // **自定义角色**（用户在「新建角色」里建的那些）：预置名单里当然没有。
-            // 写法要与建角色时一致 —— 普通名不加引号（Oracle 会折成大写），
-            // 带特殊字符的必须原样加双引号，折大写后找不到对象（ORA-01919）。
-            parts.push(format!("grant {} to {u}", Self::oracle_role_ident(raw)));
-        }
-    }
-    // 对象权限：`database` 字段对 Oracle 就是**模式名**（树上的「库.模式」拆出来的那半）
-    for (owner, object, privs) in &privileges.tables {
-        let owner = owner.trim();
-        let object = object.trim();
-        if owner.is_empty() || object.is_empty() {
-            continue;
-        }
-        let items: Vec<String> = privs
-            .iter()
-            .map(|p| p.trim().to_ascii_uppercase())
-            .filter(|p| crate::api::dialect::is_oracle_object_priv(p))
-            .collect();
-        if items.is_empty() {
-            continue;
-        }
-        parts.push(format!(
-            "grant {} on {}.{} to {u}",
-            items.join(", "),
-            Self::quote_oracle(owner),
-            Self::quote_oracle(object)
-        ));
-    }
-    parts
-}
-
-/// 把界面传回来的角色引用拆成 (名字, host)。
-///
-/// 前端统一传 `名字@host`（来自 `mysql.role_edges` 的 from_user/from_host）；
-/// 只有裸名字时按 `%`（与 `grant 'r' to …` 的默认 host 一致）。
-fn split_role_ref(raw: &str) -> (String, String) {
-    let s = raw.trim();
-    match s.rsplit_once('@') {
-        Some((n, h)) if !n.trim().is_empty() && !h.trim().is_empty() => {
-            (n.trim().to_string(), h.trim().to_string())
-        }
-        _ => (s.to_string(), "%".to_string()),
-    }
-}
-
-/// MySQL 的**撤销**部分：界面按"原来有、现在没有了"算好传进来，这里只负责成句。
-/// 与 Oracle 那套同一机制，只是作用目标写法不同：
-///   scope=global        → `revoke <priv> on *.* from <u>`
-///   scope=db            → `revoke <priv> on \`<库>\`.* from <u>`
-///   scope=table         → `revoke <priv> on \`<库>\`.\`<表>\` from <u>`
-/// `GRANT OPTION` 也走这一层（它是 `revoke ... grant option` 子句的一部分，MySQL 里合法）。
-/// `grantee` 是**已转义好的单引号账号**形如 `'u'@'%'`（见上面的 `full_lit`），不是裸名。
-fn mysql_revoke_parts(&self, grantee: &str, revokes: &[GrantRevoke]) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    for row in revokes {
-        let name = row.privilege.trim().to_ascii_uppercase();
-        if name.is_empty() {
-            continue;
-        }
-        let owner = row.owner.trim();
-        let object = row.object.trim();
-        match row.scope.trim().to_ascii_lowercase().as_str() {
-            "db" | "table" | "object" | "schema" => {
-                if owner.is_empty() {
-                    continue;
-                }
-                let target = if object.is_empty() {
-                    format!("{}.*", self.quote(owner))
-                } else {
-                    format!("{}.{}", self.quote(owner), self.quote(object))
-                };
-                parts.push(format!("revoke {name} on {target} from {grantee}"));
-            }
-            // 例程级：`revoke execute on procedure `db`.`p` from u` —— 类型字是语法的一部分
-            "routine" => {
-                if owner.is_empty() || object.is_empty() {
-                    continue;
-                }
-                let routine_type = if row.kind.eq_ignore_ascii_case("function") { "function" } else { "procedure" };
-                parts.push(format!(
-                    "revoke {name} on {routine_type} {}.{} from {grantee}",
-                    self.quote(owner),
-                    self.quote(object)
-                ));
-            }
-            // 角色：MySQL 是 `revoke 'role'@'host' from 'u'@'%'`（owner = 角色名，
-            // object = 角色 host）；MariaDB / Doris 的角色没有 host，只能 `revoke 'r' from …`。
-            "role" => {
-                if owner.is_empty() {
-                    continue;
-                }
-                if self.key() == "mysql" {
-                    let role_host = if object.is_empty() { "%" } else { object };
-                    parts.push(format!(
-                        "revoke {}@{} from {grantee}",
-                        self.literal(owner),
-                        self.literal(role_host)
-                    ));
-                } else {
-                    parts.push(format!("revoke {} from {grantee}", self.literal(owner)));
-                }
-            }
-            // 全局（含 GRANT OPTION）
-            _ => parts.push(format!("revoke {name} on *.* from {grantee}")),
-        }
-    }
-    parts
-}
-
-/// Oracle 的**撤销**部分：界面按"原来有、现在没有了"算好传进来，这里只负责成句。
-fn oracle_revoke_parts(u: &str, revokes: &[GrantRevoke]) -> Vec<String> {
-    let mut parts: Vec<String> = Vec::new();
-    for row in revokes {
-        let name = row.privilege.trim().to_ascii_uppercase();
-        if name.is_empty() {
-            continue;
-        }
-        match row.scope.trim().to_ascii_lowercase().as_str() {
-            "object" => {
-                let owner = row.owner.trim();
-                let object = row.object.trim();
-                if owner.is_empty() || object.is_empty() || !crate::api::dialect::is_oracle_object_priv(&name) {
-                    continue;
-                }
-                parts.push(format!(
-                    "revoke {name} on {}.{} from {u}",
-                    Self::quote_oracle(owner),
-                    Self::quote_oracle(object)
-                ));
-            }
-            "role" => {
-                let raw = row.privilege.trim();
-                // 预置角色 + 用户自定义角色（后端建的那些），同一套写法见 oracle_grant_parts
-                if crate::api::dialect::is_oracle_role(&name) || crate::api::dialect::is_plain_ident(raw) {
-                    parts.push(format!("revoke {} from {u}", Self::oracle_role_ident(raw)));
-                }
-            }
-            // 系统权限
-            _ => {
-                if crate::api::dialect::is_oracle_system_priv(&name) {
-                    parts.push(format!("revoke {name} from {u}"));
-                }
-            }
-        }
-    }
-    parts
-}
-
-/// Oracle 的双引号标识符（这里不能借 `Dialect::quote`：那两个函数在 impl 之外使用）。
-fn quote_oracle(name: &str) -> String {
-    format!("\"{}\"", name.replace('"', "\"\""))
-}
-
-
-/// Oracle 主体的写法：**普通名不加引号**（Oracle 自动折成大写，与字典里的
-/// `DBA_ROLES.ROLE` 对得上），带特殊字符的才加双引号并原样保留大小写。
-///
-/// 为什么必须与建角色时同一套：`create role "my-role"` 建出来是小写带连字符，
-/// 后面 `grant MY-ROLE to …` 会被折成 `MY_ROLE`（不存在的对象，ORA-01919）。
-fn oracle_role_ident(raw: &str) -> String {
-    let s = raw.trim();
-    let plain = !s.is_empty()
-        && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
-    if plain {
-        s.to_ascii_uppercase()
-    } else {
-        Self::quote_oracle(s)
-    }
-}
-
-/// Oracle 的 `dbms_metadata.get_ddl(...)`：有 owner 就把 owner 也带上。
-///
-/// 为什么非带不可：`get_ddl` 不带 owner 时按**会话默认模式**解析，而 DBMind 的查询会话
-/// 刻意不按"树上选中的模式"切换（不赌代理有没有真的切 schema）。于是"在 SYS 下点一个过程"
-/// 会去 SYSTEM 里找，报 ORA-31603 —— 真机上报的就是这个。
-/// owner 也 `upper()`：未加引号的标识符在字典里是大写，但用户可能建了带引号的小写模式。
-fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -> String {
-    match schema_lit {
-        Some(owner) => format!(
-            "select dbms_metadata.get_ddl('{kind}', upper({name_literal}), upper({owner})) as definition from dual"
-        ),
-        None => format!(
-            "select dbms_metadata.get_ddl('{kind}', upper({name_literal})) as definition from dual"
-        ),
-    }
-}
-
-/// 对象定义（右键「编辑」用它取到 SQL 再转 ALTER）。
+    /// 对象定义（右键「编辑」用它取到 SQL 再转 ALTER）。
     ///
     /// `schema` 含义同 [`Self::ddl`]：Oracle 要靠它做 `owner`，PG 要靠它筛 `pg_namespace`。
     /// 不带时：Oracle 的 `get_ddl` 按会话默认模式找（真机就是这么报 ORA-31603 的），
     /// PG 会在所有非系统模式里取第一个同名对象。
     pub fn object_source(&self, object_type: &str, name: &str, schema: Option<&str>) -> Meta {
-        let name_literal = self.literal(name);
-        let schema_lit = schema
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(|s| self.literal(s));
-        // PG：追加命名空间条件（空串 = 保持原行为，不动没给模式的调用方）
-        let ns_filter = match &schema_lit {
-            Some(s) => format!(" and n.nspname = {s}"),
-            None => String::new(),
-        };
-        // pg_proc 那条没有 n 别名，单独一个（按 pronamespace 比）
-        let proc_ns_filter = match &schema_lit {
-            Some(s) => format!(
-                " and p.pronamespace = (select oid from pg_namespace where nspname = {s})"
-            ),
-            None => String::new(),
-        };
-        match (self.key(), object_type) {
-            ("sqlite", _) => Meta::Sql(format!(
-                "select sql from sqlite_master where name = {name_literal}"
-            )),
-            ("mysql" | "mariadb" | "doris", "view") => {
-                Meta::Sql(format!("show create view {}", self.quote(name)))
-            }
-            ("mysql" | "mariadb", "procedure") => {
-                Meta::Sql(format!("show create procedure {}", self.quote(name)))
-            }
-            ("mysql" | "mariadb", "function") => {
-                Meta::Sql(format!("show create function {}", self.quote(name)))
-            }
-            ("mysql" | "mariadb", "trigger") => {
-                Meta::Sql(format!("show create trigger {}", self.quote(name)))
-            }
-            // 事件调度器：MySQL 有 `show create event`，之前整块漏了 —— 树上有「事件」分类，
-            // 点进去却是 501，纯粹是分支没写
-            ("mysql" | "mariadb", "event") => {
-                Meta::Sql(format!("show create event {}", self.quote(name)))
-            }
-            ("postgresql" | "kingbase", "view") => Meta::Sql(format!(
-                "select pg_get_viewdef(c.oid) as definition from pg_class c \
-                 join pg_namespace n on n.oid = c.relnamespace \
-                 where c.relname = {name_literal} and n.nspname not in ('pg_catalog','information_schema'){ns_filter}"
-            )),
-            ("postgresql" | "kingbase", "procedure" | "function") => Meta::Sql(format!(
-                "select pg_get_functiondef(p.oid) as definition from pg_proc p \
-                 where p.proname = {name_literal}{proc_ns_filter} limit 1"
-            )),
-            // PG 的触发器定义（含 `ON <表>` 与 WHEN 条件），`pg_get_triggerdef` 就是官方入口
-            ("postgresql" | "kingbase", "trigger") => Meta::Sql(format!(
-                "select pg_get_triggerdef(t.oid) as definition from pg_trigger t \
-                 join pg_class c on c.oid = t.tgrelid \
-                 join pg_namespace n on n.oid = c.relnamespace \
-                 where t.tgname = {name_literal} and not t.tgisinternal \
-                   and n.nspname not in ('pg_catalog','information_schema'){ns_filter}"
-            )),
-            // Oracle：`dbms_metadata.get_ddl` 给的是 `CREATE OR REPLACE ...` 全文，比逐行拼
-            // `user_source` 可靠。**必须带 owner**（第三个参数）—— 不带就按会话默认模式找，
-            // 在 SYS 下双击一个过程而会话是 SYSTEM 时会报 ORA-31603「对象在方案 SYSTEM 中未找到」。
-            ("oracle", "view") => Meta::Sql(Self::oracle_get_ddl("VIEW", &name_literal, &schema_lit)),
-            ("oracle", "procedure") => {
-                Meta::Sql(Self::oracle_get_ddl("PROCEDURE", &name_literal, &schema_lit))
-            }
-            ("oracle", "function") => Meta::Sql(Self::oracle_get_ddl("FUNCTION", &name_literal, &schema_lit)),
-            ("oracle", "trigger") => Meta::Sql(Self::oracle_get_ddl("TRIGGER", &name_literal, &schema_lit)),
-            // DM（达梦）：三参 `get_ddl` 没真机验证过（它的 dbms_metadata 支持面不确定），
-            // 先保持两句 —— 与「达梦的例程清单先不动」同一个原则。
-            ("dm", "view") => Meta::Sql(format!(
-                "select dbms_metadata.get_ddl('VIEW', upper({name_literal})) as definition from dual"
-            )),
-            ("dm", "procedure") => Meta::Sql(format!(
-                "select dbms_metadata.get_ddl('PROCEDURE', upper({name_literal})) as definition from dual"
-            )),
-            ("dm", "function") => Meta::Sql(format!(
-                "select dbms_metadata.get_ddl('FUNCTION', upper({name_literal})) as definition from dual"
-            )),
-            ("dm", "trigger") => Meta::Sql(format!(
-                "select dbms_metadata.get_ddl('TRIGGER', upper({name_literal})) as definition from dual"
-            )),
-            // 以下三组是**该方言根本没有这类对象**，不是"没实现"：如实返回 `Absent`。
-            // 这个区别很重要（见 export.rs 导出循环里的注释）：
-            //   `Absent`    → 该方言没有这种东西，界面不摆"查看定义/编辑"，导出**静默跳过**；
-            //   `Unwritten` → 功能还没写，导出会逐个对象提示"定义查询尚未实现，未导出"。
-            // PG / Kingbase / Oracle / DM / DB2 / H2 / Derby 都没有 MySQL 那种事件调度器；
-            // ClickHouse / Doris 没有存储过程/函数/触发器/事件；
-            // Derby 的例程没有可查目录（下面 Derby 分支的注释里也说了）。
-            ("postgresql" | "kingbase" | "oracle" | "dm" | "db2" | "h2" | "derby", "event") => {
-                Meta::Absent
-            }
-            ("clickhouse" | "doris", "procedure" | "function" | "trigger" | "event") => Meta::Absent,
-            ("derby", "procedure" | "function") => Meta::Absent,
-            ("sqlserver", "event") => Meta::Absent,
-            ("sqlserver", _) => Meta::Sql(format!(
-                "select object_definition(object_id({name_literal})) as definition"
-            )),
-            // ClickHouse：视图/表都有 `show create`，与 `ddl()` 里那条同源
-            ("clickhouse", "view") => Meta::Sql(format!("show create view {}", self.quote(name))),
-            ("clickhouse", "table") => Meta::Sql(format!("show create table {}", self.quote(name))),
-            // H2：定义都在 information_schema 里（比较用**字符串字面量**，
-            // 不能用标识符 —— `where table_name = upper(<标识符>)` 是把列引用当值用了）
-            ("h2", "view") => Meta::Sql(format!(
-                "select view_definition as definition from information_schema.views \
-                 where table_name = upper({name_literal})"
-            )),
-            ("h2", "procedure") | ("h2", "function") => Meta::Sql(format!(
-                "select routine_definition as definition from information_schema.routines \
-                 where routine_name = upper({name_literal})"
-            )),
-            // DB2：syscat 里的 TEXT 列就是定义原文（视图/例程/触发器都有）
-            ("db2", "view") => Meta::Sql(format!(
-                "select text as definition from syscat.views \
-                 where viewschema = current schema and viewname = upper({name_literal})"
-            )),
-            ("db2", "procedure") | ("db2", "function") => Meta::Sql(format!(
-                "select text as definition from syscat.routines \
-                 where routineschema = current schema and routinename = upper({name_literal})"
-            )),
-            ("db2", "trigger") => Meta::Sql(format!(
-                "select text as definition from syscat.triggers \
-                 where trigschema = current schema and trigname = upper({name_literal})"
-            )),
-            // Derby：`sys.sysviews` / `sys.systriggers` 存着定义原文
-            // （例程在 Derby 里没有目录可查，只能保持"取不到"，如实返回 Absent）
-            // Derby 10.15 起 `sys.sysviews` 只有 `tableid` + `viewdefinition`
-            // （`viewname` 已不在该表里，按它查会报「Column 'VIEWNAME' ...」——实测），
-            // 视图名要连 `sys.systables` 取
-            ("derby", "view") => Meta::Sql(format!(
-                "select v.viewdefinition as definition from sys.sysviews v \
-                 join sys.systables t on t.tableid = v.tableid \
-                 where t.tablename = upper({name_literal})"
-            )),
-            ("derby", "trigger") => Meta::Sql(format!(
-                "select triggerdefinition as definition from sys.systriggers \
-                 where triggername = upper({name_literal})"
-            )),
-            _ => Meta::Unwritten,
-        }
+        self.ops().object_source(object_type, name, schema)
     }
 
-    /// 表级危险操作（清空 / 截断 / 删除 / 重命名）。
+    /// 表级危险操作（清空 / 截断 / 删除 / 重命名）：方言差异（CH 的 TRUNCATE、
+    /// DB2 的 IMMEDIATE、SQLite 的退化 DELETE、各家 RENAME 的写法）都在族实现里。
     pub fn table_action(&self, table: &str, action: &str, new_name: Option<&str>) -> Meta {
-        let t = self.quote(table);
-        match action {
-            // ClickHouse 的 `DELETE FROM` 是「轻量删除」，老版本/未开启时直接报错；
-            // 而「清空整表」本来就有 TRUNCATE 这条正路 —— 按语义选语句，别让用户先撞一次错
-            "clear" => {
-                if self.key() == "clickhouse" {
-                    Meta::Sql(format!("truncate table {t}"))
-                } else {
-                    Meta::Sql(format!("delete from {t}"))
-                }
-            }
-            // SQLite 没有 TRUNCATE，截断退化成 DELETE（一样会清空数据，这点必须说清）
-            "truncate" => match self.key() {
-                "sqlite" => Meta::Sql(format!("delete from {t}")),
-                // DB2 的 TRUNCATE 必须显式写 IMMEDIATE：`truncate table t` 直接
-                // SQLCODE=-104 SQLSTATE=42601（真机实测，报错信息里就提示 END-OF-STATEMENT ...;IMMEDIATE）
-                "db2" => Meta::Sql(format!("truncate table {t} immediate")),
-                _ => Meta::Sql(format!("truncate table {t}")),
-            },
-            "drop" => Meta::Sql(format!("drop table {t}")),
-            "rename" => match new_name {
-                Some(new_name) => {
-                    let n = self.quote(new_name);
-                    match self.key() {
-                        // MySQL 系与 DB2 有各自的 RENAME TABLE
-                        "mysql" | "mariadb" | "db2" => Meta::Sql(format!("rename table {t} to {n}")),
-                        // Derby **没有** `ALTER TABLE … RENAME TO`（真机：`Syntax error:
-                        // Encountered "rename" at line 1, column 26`），路由与 MySQL 一样是
-                        // 独立的 `RENAME TABLE old TO new`（真机验过：改名后新表可查、旧表消失）
-                        "derby" => Meta::Sql(format!("rename table {t} to {n}")),
-                        // ClickHouse **没有** `ALTER TABLE … RENAME TO`：它会报
-                        // `Code: 62 … Syntax error: failed at position N (to): to xxx. Expected COLUMN`
-                        // （它的 ALTER TABLE RENAME 只认 `RENAME COLUMN old TO new`）。
-                        // 改表名要用独立的 `RENAME TABLE a TO b` —— 真机上两种形式都对过：
-                        // 前者 Code 62，后者 OK。
-                        "clickhouse" => Meta::Sql(format!("rename table {t} to {n}")),
-                        // SQL Server **没有** `ALTER TABLE … RENAME TO` —— 改表名只有 `sp_rename`。
-                        // 之前它落进下面的通用分支，用户点「重命名表」只会拿到一句语法错。
-                        // 两个细节：sp_rename 收的是**裸名**（它自己解析，不要带标识符引号）；
-                        // 并且**不会更新引用该表的视图/存储过程**（前端会给这句提醒）。
-                        "sqlserver" => Meta::Sql(format!(
-                            "exec sp_rename {}, {}",
-                            self.literal(table),
-                            self.literal(new_name)
-                        )),
-                        // Doris 的 `ALTER TABLE … RENAME` **不带 TO**：
-                        // 写成 `rename to` 直接 `Syntax error in line 1`（真机实测）。
-                        "doris" => Meta::Sql(format!("alter table {t} rename {n}")),
-                        // PostgreSQL / SQLite / Oracle / H2 / Derby
-                        // 都是 `ALTER TABLE … RENAME TO`（ClickHouse 见上面单独一支）
-                        _ => Meta::Sql(format!("alter table {t} rename to {n}")),
-                    }
-                }
-                None => Meta::Unwritten,
-            },
-            _ => Meta::Unwritten,
-        }
+        self.ops().table_action(table, action, new_name)
     }
 
     /// 删除视图 / 例程 / 触发器 / 事件（同步的「删除重建」策略要用）。
@@ -3619,18 +1229,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// SQL Server 2016+ 都支持；Oracle / DM / DB2 / Derby 没有这个写法。
     /// 与其拼一句"看着像、执行就报错"的语句，不如返回 `None`，由调用方跳过并说明白。
     pub fn drop_object_sql(&self, kind: &str, name: &str) -> Option<String> {
-        let supported = match self.key() {
-            "clickhouse" => matches!(kind, "view"),
-            "sqlite" => matches!(kind, "view" | "trigger"),
-            "mysql" | "mariadb" | "doris" => {
-                matches!(kind, "view" | "procedure" | "function" | "trigger" | "event")
-            }
-            "postgresql" | "kingbase" => matches!(kind, "view" | "function" | "trigger"),
-            "sqlserver" => matches!(kind, "view" | "procedure" | "function" | "trigger"),
-            "h2" => matches!(kind, "view"),
-            _ => false,
-        };
-        if !supported {
+        if !self.ops().supports_drop_object(kind) {
             return None;
         }
         Some(format!("drop {kind} if exists {}", self.quote(name)))
@@ -3655,37 +1254,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         to: &str,
         schema: Option<&str>,
     ) -> Option<String> {
-        match self.key() {
-            "sqlserver" => {
-                if !matches!(kind, "view" | "procedure" | "function" | "trigger") {
-                    return None;
-                }
-                let schema = schema.map(str::trim).filter(|s| !s.is_empty());
-                let old = match schema {
-                    Some(schema) => format!("{schema}.{from}"),
-                    None => from.to_string(),
-                };
-                Some(format!(
-                    "exec sp_rename N'{}', N'{}'",
-                    old.replace('\'', "''"),
-                    to.replace('\'', "''")
-                ))
-            }
-            "postgresql" | "kingbase" => {
-                if !matches!(kind, "view" | "procedure" | "function") {
-                    return None;
-                }
-                let qualified = match schema.map(str::trim).filter(|s| !s.is_empty()) {
-                    Some(schema) => format!("{}.{}", self.quote(schema), self.quote(from)),
-                    None => self.quote(from),
-                };
-                Some(format!(
-                    "alter {kind} {qualified} rename to {}",
-                    self.quote(to)
-                ))
-            }
-            _ => None,
-        }
+        self.ops().rename_object_sql(kind, from, to, schema)
     }
 
     /// Oracle（含 11g）的**包装式**分页：`offset … rows fetch next … rows only` 是
@@ -3696,27 +1265,12 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     ///
     /// 返回 `None` = 该方言没有包装式分页，调用方退回 [`limit_clause`] 后缀。
     pub fn wrap_paging(&self, base: &str, offset: u64, size: u64) -> Option<String> {
-        if !matches!(self.key(), "oracle") {
-            return None;
-        }
-        let end = offset.saturating_add(size);
-        Some(format!(
-            "select * from (select a__.*, rownum rn__ from (\n{base}\n) a__ where rownum <= {end}) where rn__ > {offset}"
-        ))
+        self.ops().wrap_paging(base, offset, size)
     }
 
     /// 分页子句（`offset` 从 0 开始）。
     pub fn limit_clause(&self, offset: u64, size: u64) -> String {
-        match self.key() {
-            "sqlserver" => format!("offset {offset} rows fetch next {size} rows only"),            // Derby 没有 LIMIT 语法（真机：Encountered "limit"），用 SQL 标准的 OFFSET/FETCH。
-            // DB2 同样不吃 `limit`（SQLCODE=-104 / SQLSTATE=42601，expected "IMMEDIATE" 或
-            // 语句结束）—— 之前漏在这里，表现是"第 1 页正常、点下一页就报语法错"：第 1 页
-            // 不拼分页子句，正好把这个错误藏住了。DB2 11.1 起支持标准 OFFSET/FETCH。
-            "oracle" | "dm" | "derby" | "db2" => {
-                format!("offset {offset} rows fetch next {size} rows only")
-            }
-            _ => format!("limit {size} offset {offset}"),
-        }
+        self.ops().limit_clause(offset, size)
     }
 
     /// 取服务器版本的一行 SQL（列别名 `v`）。该方言没有统一写法就返回 None。
@@ -3726,23 +1280,12 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// SQL Server 2012 之前没有 `OFFSET FETCH`，MySQL 8 才支持 `CHECK` 约束。
     /// 模型不知道版本时只会按"最新版"写，在 5.7 上必然报错 —— 这个坑真机踩过。
     pub fn version_sql(&self) -> Option<&'static str> {
-        match self.key() {
-            "mysql" | "mariadb" | "doris" | "clickhouse" | "postgresql" | "kingbase" => {
-                Some("select version() as v")
-            }
-            "sqlserver" => Some("select @@version as v"),
-            "oracle" | "dm" => Some("select banner as v from v$version where rownum = 1"),
-            "db2" => Some("select service_level as v from sysibm.sysversions fetch first 1 rows only"),
-            "sqlite" => Some("select sqlite_version() as v"),
-            "h2" => Some("select h2version() as v"),
-            "derby" => Some("values syscs_util.syscs_get_database_property('derby.version')"),
-            _ => None,
-        }
+        self.ops().version_sql()
     }
 
     /// SQL Server 的 `OFFSET` 必须跟 `ORDER BY` 才能用。
     pub fn needs_order_by_for_paging(&self) -> bool {
-        self.key() == "sqlserver"
+        self.ops().needs_order_by_for_paging()
     }
 
     /// 是否支持**行值比较** `(a, b, c) > (x, y, z)`（keyset 分页靠它才能走索引 range）。
@@ -3762,19 +1305,12 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// 只对确定支持且能走索引的方言开启：SQL Server / Oracle / Doris / Derby 不认这个
     /// 语法，ClickHouse 的 tuple 比较语义与 keyset 不是一回事，都继续用 or 链。
     pub fn supports_row_value_compare(&self) -> bool {
-        matches!(self.key(), "mysql" | "mariadb" | "postgresql")
+        self.ops().supports_row_value_compare()
     }
 
     /// 同实例直拷：源表在**目标会话**上的限定层级（见 [`DirectRefDepth`]）。
     pub fn direct_ref_depth(&self) -> DirectRefDepth {
-        match self.key() {
-            // 三段名。注意 SQL Server 的两段名是「模式.表」，不是「库.表」——
-            // 少了库名就等于在目标库里找源表，跨库同步会读到空表。
-            "sqlserver" => DirectRefDepth::DatabaseSchema,
-            "mysql" | "mariadb" | "clickhouse" | "doris" => DirectRefDepth::Database,
-            "postgresql" | "kingbase" | "oracle" | "dm" | "db2" => DirectRefDepth::Schema,
-            _ => DirectRefDepth::None,
-        }
+        self.ops().direct_ref_depth()
     }
 
     /// 「两个连接是不是同一个实例」的指纹 SQL：只有指纹真的唯一的方言才给。
@@ -3784,14 +1320,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// 拿不准的方言（Doris / Oracle / DB2 / 嵌入式）一律返回 `None`：宁可走管道，
     /// 也不要把数据插到另一个实例的同名表里。
     pub fn instance_fingerprint_sql(&self) -> Option<&'static str> {
-        match self.key() {
-            "mysql" | "mariadb" => Some("select @@server_uuid as v"),
-            "sqlserver" => Some("select convert(nvarchar(256), serverproperty('ServerName')) as v"),
-            "postgresql" | "kingbase" => {
-                Some("select system_identifier::text as v from pg_control_system()")
-            }
-            _ => None,
-        }
+        self.ops().instance_fingerprint_sql()
     }
 
     /// 清空一张表的语句（"清空后导入"模式用）。
@@ -3802,16 +1331,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// 反过来 SQLite / Derby 没有 `TRUNCATE`，只能 `delete from`。
     /// 其余方言两者都认，选 `truncate`（快得多）。
     pub fn clear_table_sql(&self, table: &str) -> String {
-        match self.key() {
-            // 没有 TRUNCATE 的方言
-            "sqlite" | "derby" => format!("delete from {table}"),
-            // DB2 的 TRUNCATE 要求显式写 IMMEDIATE：真空机实测裸 `truncate table x`
-            // 报 SQLCODE=-104 / SQLSTATE=42601「unexpected token END-OF-STATEMENT ...
-            // expected tokens may include: IMMEDIATE」—— 「清空后导入」在 DB2 上
-            // 之前是直接失败的。
-            "db2" => format!("truncate table {table} immediate"),
-            _ => format!("truncate table {table}"),
-        }
+        self.ops().clear_table_sql(table)
     }
 
     /// 更新一行的语句（upsert 的更新分支用）。
@@ -3819,10 +1339,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// **ClickHouse 没有标准 `UPDATE ... SET ...`**：它只接受
     /// `ALTER TABLE ... UPDATE ... WHERE ...`（异步 mutation）。写标准 UPDATE 会被它拒掉。
     pub fn update_sql(&self, table: &str, assignments: &str, condition: &str) -> String {
-        match self.key() {
-            "clickhouse" => format!("alter table {table} update {assignments} where {condition}"),
-            _ => format!("update {table} set {assignments} where {condition}"),
-        }
+        self.ops().update_sql(table, assignments, condition)
     }
 
     /// 统计行数。表引用走 [`Self::quote_exact`] —— 调用方传的都来自目录元数据
@@ -3846,13 +1363,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         columns: &[ColumnDetail],
         source: Option<ConnectionKind>,
     ) -> String {
-        self.create_table_with_comments(
-            table,
-            columns,
-            source,
-            &std::collections::HashMap::new(),
-            None,
-        )
+        self.create_table_with_comments(table, columns, source, &std::collections::HashMap::new(), None)
     }
 
     /// 同 `create_table_from_columns`，另把**表注释 + 字段注释**写进建表语句。
@@ -3893,11 +1404,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                 .unwrap_or_else(|| "text".to_string());
             let family = TypeFamily::parse(&raw_type);
             // 只有跨类型才翻译；同类型原样照抄
-            let mut type_name = if cross {
-                family.render(self.kind)
-            } else {
-                raw_type
-            };
+            let mut type_name = if cross { family.render(self.kind) } else { raw_type };
             // 长度是「无界哨兵」（2147483647 / 4294967295）时**绝不能原样拼进 DDL**：
             // 那是 JDBC / information_schema 对无界大文本的占位值，不是真实长度。
             // 原样拼出去的后果按方言不同：SQL Server 2715（exceeds the maximum allowed
@@ -3911,8 +1418,8 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             // 「String Type should not be used in key column」（真机：ClickHouse 的 String
             // 主键/排序键同步到 Doris 必炸）。键列统一落成有长度的 VARCHAR(65533)
             //（实测 Doris 接受它做键列；无键列长度上限之忧，只是普通列保持 STRING 不动）。
-            let is_doris_key = self.kind.key() == "doris"
-                && (column.primary_key || (!has_pk && col_index == 0));
+            let is_doris_key =
+                self.kind.key() == "doris" && (column.primary_key || (!has_pk && col_index == 0));
             if is_doris_key && is_unbounded_text_type(&type_name) {
                 type_name = "varchar(65533)".to_string();
             }
@@ -3921,7 +1428,9 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             // 整数与浮点类剥掉括号；`character varying(50)` 的括号是合法长度，保留。
             if self.kind.key() == "h2" {
                 let lower = type_name.to_ascii_lowercase();
-                for base in ["integer", "bigint", "smallint", "tinyint", "double", "real", "float"] {
+                for base in [
+                    "integer", "bigint", "smallint", "tinyint", "double", "real", "float",
+                ] {
                     if lower.starts_with(base) && type_name.contains('(') {
                         type_name = base.to_string();
                         break;
@@ -3932,10 +1441,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             // 可空列必须显式 `Nullable(T)`，否则源全是可空列、建出来全不可空（真机踩过）。
             // 例外：主键/排序键不允许 Nullable（保持原样，源主键本来就不是可空列）；
             // Array/Map/Tuple 这类复合类型也不能包 Nullable。
-            if self.kind.key() == "clickhouse"
-                && column.nullable
-                && !column.primary_key
-            {
+            if self.kind.key() == "clickhouse" && column.nullable && !column.primary_key {
                 let t = type_name.trim();
                 let wrapper_ok = !t.starts_with("Array(")
                     && !t.starts_with("Map(")
@@ -3992,9 +1498,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             // timestamp 列，元数据回的默认值是 NULL（等于没有），我们什么都没写 ⇒ 目标端隐式
             // 零日期 ⇒ 整张表建不出来。
             // 显式写 `null`（可空列，与源表语义一致）或 `current_timestamp`（非空列总得有个值）。
-            if matches!(self.kind.key(), "mysql" | "mariadb")
-                && !has_default
-                && is_timestamp_type(&type_name)
+            if matches!(self.kind.key(), "mysql" | "mariadb") && !has_default && is_timestamp_type(&type_name)
             {
                 line.push_str(if column.nullable {
                     " null"
@@ -4050,7 +1554,14 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
                 let first = self.quote(&columns.first().map(|c| c.name.clone()).unwrap_or_default());
                 ("DUPLICATE KEY", vec![first])
             } else {
-                ("UNIQUE KEY", primaries.iter().filter(|name| !name.is_empty()).cloned().collect())
+                (
+                    "UNIQUE KEY",
+                    primaries
+                        .iter()
+                        .filter(|name| !name.is_empty())
+                        .cloned()
+                        .collect(),
+                )
             };
             let buckets = format!("DISTRIBUTED BY HASH({}) BUCKETS 1", keys[0]);
             // Doris 的表注释是 **COMMENT "…" 子句**（KEY 与 DISTRIBUTED 之间）——
@@ -4134,61 +1645,8 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         table_comment: Option<&str>,
         schema: &str,
     ) -> Vec<String> {
-        if self.key() != "sqlserver" {
-            // PG / Oracle / DM / DB2 / H2 的注释必须是**独立语句**（`comment on …`），
-            // 不能像 MySQL 那样内联进列定义 —— 建表段也只对内联方言写注释，所以跨库同步
-            // 到这些库时表注释、列注释会**全丢**（真机缺口）。这里补上这一档。
-            //
-            // 不支持的如实给空：SQLite / Derby 压根没有注释概念；ClickHouse 的注释走
-            // `ALTER TABLE … COMMENT COLUMN` 且建表本来就内联写了；MySQL 系已在建表段内联。
-            if !matches!(
-                self.key(),
-                "postgresql" | "kingbase" | "oracle" | "dm" | "db2" | "h2"
-            ) {
-                return Vec::new();
-            }
-            let full = if schema.trim().is_empty() {
-                self.quote(table)
-            } else {
-                format!("{}.{}", self.quote(schema), self.quote(table))
-            };
-            let mut out = Vec::new();
-            if let Some(tc) = table_comment.map(str::trim).filter(|c| !c.is_empty()) {
-                out.push(format!("comment on table {full} is {}", self.literal(tc)));
-            }
-            for (name, comment) in column_comments {
-                if comment.trim().is_empty() {
-                    continue;
-                }
-                out.push(format!(
-                    "comment on column {full}.{} is {}",
-                    self.quote(name),
-                    self.literal(comment)
-                ));
-            }
-            return out;
-        }
-        let sq_schema = format!("N{}", self.literal(schema));
-        let sq_table = format!("N{}", self.literal(table));
-        let mut out = Vec::new();
-        let render = |level2: &str, text: &str| -> String {
-            let value = format!("N{}", self.literal(text));
-            if level2.is_empty() {
-                format!("exec sp_addextendedproperty @name=N'MS_Description', @value={}, @level0type=N'SCHEMA', @level0name={}, @level1type=N'TABLE', @level1name={}", value, sq_schema, sq_table)
-            } else {
-                let col = format!("N{}", self.literal(level2));
-                format!("exec sp_addextendedproperty @name=N'MS_Description', @value={}, @level0type=N'SCHEMA', @level0name={}, @level1type=N'TABLE', @level1name={}, @level2type=N'COLUMN', @level2name={}", value, sq_schema, sq_table, col)
-            }
-        };
-        if let Some(tc) = table_comment.map(str::trim).filter(|c| !c.is_empty()) {
-            out.push(render("", tc));
-        }
-        for (name, comment) in column_comments {
-            if comment.trim().is_empty() { continue; }
-            out.push(render(name, comment));
-        }
-        let _ = table;
-        out
+        self.ops()
+            .post_create_comments(table, column_comments, table_comment, schema)
     }
 
     pub fn map_type(&self, source: Option<ConnectionKind>, source_type: &str) -> String {
@@ -4228,22 +1686,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
 
     /// 布尔值在本方言里该写成什么。
     pub fn bool_literal(&self, truth: bool) -> &'static str {
-        match self.key() {
-            "mysql" | "mariadb" | "doris" | "sqlserver" | "clickhouse" | "sqlite" => {
-                if truth {
-                    "1"
-                } else {
-                    "0"
-                }
-            }
-            _ => {
-                if truth {
-                    "true"
-                } else {
-                    "false"
-                }
-            }
-        }
+        self.ops().bool_literal(truth)
     }
 
     /// 这个类型名是不是「文本类」（默认值要当字符串处理）。
@@ -4309,13 +1752,12 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
         // column type are incompatible`，整张表建不出来（真机：源表
         // `createtime datetime DEFAULT CURRENT_TIMESTAMP` 同步到 CH 必挂）。
         // CH 的写法是 now() / today()，所以跨类型翻译出来的标准写法要在这里再翻一手。
-        if self.key() == "clickhouse" && !Self::is_textual_type(type_name) {
-            if upper.contains("CURRENT_TIMESTAMP") || upper.starts_with("NOW(") {
-                return Some("now()".to_string());
-            }
-            if upper.contains("CURRENT_DATE") || upper.starts_with("TODAY(") {
-                return Some("today()".to_string());
-            }
+        // 目标方言特定的「当前时间」改写（默认无；CH 没有这两个函数，见族实现）
+        if let Some(rewritten) = self
+            .ops()
+            .rewrite_time_default(&upper, Self::is_textual_type(type_name))
+        {
+            return Some(rewritten);
         }
         if cross {
             // 先看**类型**：文本列的默认值是"内容"，可能恰好是叫 `now()` 的字符串 —— 那种要加引号，
@@ -4352,9 +1794,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             return Some(self.literal(trimmed));
         }
         // 非文本列：裸 NULL / 括号表达式 / 纯数字原样放行
-        let expression = upper == "NULL"
-            || upper.starts_with('(')
-            || trimmed.parse::<f64>().is_ok();
+        let expression = upper == "NULL" || upper.starts_with('(') || trimmed.parse::<f64>().is_ok();
         if expression {
             Some(trimmed.to_string())
         } else {
@@ -4376,14 +1816,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// 注意 Oracle 的布尔列落成 `number(1)`、ClickHouse 落成 `UInt8`、SQLite 落成 `integer`，
     /// 都不会走到这里（`is_boolean_type` 判不出来，按数字原样放行本来就是对的）。
     fn boolean_literal(&self, value: bool) -> String {
-        match self.key() {
-            "doris" | "sqlserver" => {
-                if value { "1" } else { "0" }.to_string()
-            }
-            _ => {
-                if value { "true" } else { "false" }.to_string()
-            }
-        }
+        self.ops().boolean_literal(value)
     }
 
     /// 把「当前时间 / 当前日期」的标准写法翻成**目标方言真能接受的默认值表达式**。
@@ -4399,12 +1832,7 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     ///   CURRENT_TIMESTAMP，表达式默认值要 8.0.13 起且得写成 `(curdate())`，老库没有），
     ///   **SQL Server 不认**（T-SQL 没有 CURRENT_DATE），ClickHouse 用 `today()`。
     fn portable_time_literal(&self, portable: &'static str) -> Option<&'static str> {
-        match (self.key(), portable) {
-            ("sqlserver", "current_date") => Some("cast(getdate() as date)"),
-            // 省略而不是硬塞一个不合法写法：否则整张表建不出来（真机实测语法错）
-            ("mysql", "current_date") => None,
-            (_, other) => Some(other),
-        }
+        self.ops().portable_time_literal(portable)
     }
 
     /// 一张表的列注释：返回 `column_name` / `comment` 两列。
@@ -4412,58 +1840,8 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// 内置的列元数据不带注释（不是所有方言都能便宜拿到），所以治理扫描按需取一次。
     /// 拿不到就返回 `Unwritten` —— 上层会退化成「只看字段名」，而不是编一个空注释。
     pub fn table_comments(&self, table: &str) -> Meta {
-        let quoted = self.literal(table);
-        match self.key() {
-            "mysql" | "mariadb" | "doris" => Meta::Sql(format!(
-                "select column_name as column_name, coalesce(column_comment, '') as comment \
-                 from information_schema.columns \
-                 where table_schema = database() and table_name = {quoted}"
-            )),
-            "postgresql" | "kingbase" => Meta::Sql(format!(
-                "select a.attname as column_name, coalesce(col_description(a.attrelid, a.attnum), '') as comment \
-                 from pg_attribute a \
-                 where a.attrelid = {quoted}::regclass and a.attnum > 0 and not a.attisdropped"
-            )),
-            // 这里**故意**用 `isnull` 而不是 `coalesce`：`sys.extended_properties.value` 是
-            // `sql_variant`，`coalesce` 要求两侧类型可统一而直接报错；
-            // `isnull` 返回第一个参数的类型，正好能接后面的 cast。别顺手统一掉。
-            "sqlserver" => Meta::Sql(format!(
-                "select c.name as column_name, cast(isnull(ep.value, '') as nvarchar(400)) as comment \
-                 from sys.columns c \
-                 left join sys.extended_properties ep on ep.major_id = c.object_id and ep.minor_id = c.column_id \
-                 where c.object_id = object_id({quoted})"
-            )),
-            // `as comment` 在 Oracle 里是**关键字**，不加双引号直接 ORA-00923
-            // （整条查询失败 ⇒ 列注释永远为空，看着就是「改完注释没回显」）
-            "oracle" | "dm" => Meta::Sql(format!(
-                "select column_name as column_name, coalesce(comments, '') as \"comment\" \
-                 from user_col_comments where table_name = upper({quoted})"
-            )),
-            // 表名**双向折大写**再比：H2 把未加引号的标识符存成大写，而带引号建的表
-            // （`"my_table"`）就是小写 —— 只写 `table_name = upper(...)` 时后者一行都匹配不上。
-            "h2" => Meta::Sql(format!(
-                "select column_name as column_name, coalesce(remarks, '') as comment \
-                 from information_schema.columns \
-                 where upper(table_name) = upper({quoted})"
-            )),
-            "clickhouse" => Meta::Sql(format!(
-                "select name as column_name, coalesce(comment, '') as comment \
-                 from system.columns where database = currentDatabase() and table = {quoted}"
-            )),
-            // 列注释在 **`syscat.columns.remarks`** 里，不是 `syscat.colcomments`
-            // —— 后者在本机 DB2 11.5 上直接 `SQLCODE=-204（未定义的对象名）`，
-            // 整条查询失败 ⇒ 列注释永远为空（真机实测）。
-            // 表名双向折大写：带引号建的小写表名也要能对上。
-            "db2" => Meta::Sql(format!(
-                "select colname as column_name, coalesce(remarks, '') as comment \
-                 from syscat.columns \
-                 where tabschema = current schema and upper(tabname) = upper({quoted})"
-            )),
-            // SQLite / Derby 没有列注释这个概念：给 Absent（空数组）而不是报"未实现"，
-            // 语句治理那边会退化成按字段名判断，这是事实，不是缺陷
-            "sqlite" | "derby" => Meta::Absent,
-            _ => Meta::Unwritten,
-        }
+        // 转义留在门面：族实现只拼 SQL，不复制一套 literal 规则
+        self.ops().table_comments_sql(&self.literal(table))
     }
 
     /// 一张表的**完整类型文本**：返回 `column_name` / `type_text` 两列。
@@ -4478,201 +1856,8 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// 各家写法不同（`column_type` / `udt_name` / `data_type` + 长度列），所以按方言拼。
     /// 拿不到就返回 `Unwritten`：上层保留内核给的类型名，**不编**一个长度出来。
     pub fn column_types(&self, table: &str) -> Meta {
-        let quoted = self.literal(table);
-        match self.key() {
-            // ClickHouse 没有 information_schema.columns，列类型/注释在 system.columns：
-            // type 列是 CH 原生写法（Int32 / Nullable(String) …），parse 侧已能剥 Nullable 壳
-            "clickhouse" => Meta::Sql(format!(
-                "select name as column_name, type as type_text, \
-                 coalesce(comment, '') as comment, \
-                 0 as is_auto, \
-                 position as ordinal \
-                 from system.columns where database = currentDatabase() and table = {quoted}"
-            )),
-            // MySQL 系直接有完整类型文本（含 enum、unsigned 等），不用自己拼
-            "mysql" | "mariadb" | "doris" => Meta::Sql(format!(
-                "select column_name as column_name, column_type as type_text, \
-                 coalesce(column_comment, '') as comment, \
-                 case when extra like '%auto_increment%' then 1 else 0 end as is_auto, \
-                 ordinal_position as ordinal \
-                 from information_schema.columns \
-                 where table_schema = database() and table_name = {quoted}"
-            )),
-            // PG 用 udt_name（`varchar` / `int4` / `numeric`），比 data_type 的
-            // `character varying` 更贴近界面要的短名；长度按「字符」给。
-            //
-            // 自增有两种写法，都要认：`GENERATED AS IDENTITY`（标准 SQL，PG 10+，
-            // information_schema 的 is_identity 直接给）与 `serial`（等价于
-            // 默认值取 `nextval('...'::regclass)`）。少认一种，界面就会把自增列显示成普通列。
-            "postgresql" | "kingbase" => Meta::Sql(format!(
-                "select column_name as column_name, \
-                 case \
-                   when character_maximum_length is not null \
-                     then udt_name || '(' || character_maximum_length || ')' \
-                   when data_type = 'numeric' and numeric_precision is not null \
-                     then udt_name || '(' || numeric_precision || ',' || coalesce(numeric_scale, 0) || ')' \
-                   else udt_name \
-                 end as type_text, \
-                 coalesce((select col_description(c.oid, a.attnum) \
-                           from pg_class c join pg_attribute a on a.attrelid = c.oid \
-                           where c.relname = table_name and a.attname = column_name limit 1), '') as comment, \
-                 case when is_identity = 'YES' or column_default like 'nextval%' then 1 else 0 end as is_auto, \
-                 ordinal_position as ordinal \
-                 from information_schema.columns \
-                 where table_name = {quoted} and table_schema = current_schema()"
-            )),
-            // SQL Server：character_maximum_length 按**字符**给（nvarchar(50) → 50），
-            // `-1` 是 `max`；decimal 走 numeric_precision/scale。
-            // 默认 schema 优先排序：同名表出现在多个 schema 时，取当前 schema 那条
-            // **`text` / `ntext` / `image` 的 `character_maximum_length` 是 2147483647，不是 -1**。
-            // 只按 -1 判「无界」时，这三个旧大对象类型会被拼成 `text(2147483647)`，
-            // SQL Server 建表直接报 2715「The size (2147483647) given to the column 'X'
-            // exceeds the maximum allowed for any data type (8000)」——真机整库同步里
-            // 3 张带 `text` 列的表因此整表漏搬，而界面「失败 0」（建表失败只在日志里）。
-            // 这几类本身就是无界的，正确写法就是裸类型名。
-            "sqlserver" => Meta::Sql(format!(
-                "select column_name as column_name, \
-                 case \
-                   when character_maximum_length = -1 then data_type + '(max)' \
-                   when data_type in ('text', 'ntext', 'image') then data_type \
-                   when character_maximum_length is not null \
-                     then data_type + '(' + cast(character_maximum_length as varchar(10)) + ')' \
-                   when data_type in ('decimal', 'numeric') and numeric_precision is not null \
-                     then data_type + '(' + cast(numeric_precision as varchar(10)) + ',' \
-                          + cast(coalesce(numeric_scale, 0) as varchar(10)) + ')' \
-                   else data_type \
-                 end as type_text, \
-                 cast(coalesce((select cast(ep.value as nvarchar(400)) from sys.extended_properties ep \
-                                where ep.major_id = object_id(table_name) \
-                                  and ep.minor_id = columnproperty(object_id(table_name), column_name, 'ColumnId') \
-                                  and ep.name = 'MS_Description'), '') as nvarchar(400)) as comment, \
-                 cast(coalesce(columnproperty(object_id(table_name), column_name, 'IsIdentity'), 0) as int) as is_auto, \
-                 ordinal_position as ordinal, \
-                 case when table_schema = schema_name() then 0 else 1 end as schema_rank \
-                 from information_schema.columns \
-                 where table_name = {quoted} \
-                 order by schema_rank, ordinal_position"
-            )),
-            // Oracle：NUMBER 用 precision/scale，字符类型用 data_length（**字节**，
-            // 字节语义下 VARCHAR2(50 CHAR) 会显示成 200 —— 如实反映存储宽度，不做猜测换算）。
-            //
-            // 自增只看 12c+ 的标识列（`user_tab_identity_cols`）。**不能**用
-            // `c.data_default like '%.nextval%'` 认「序列 + 默认值」的老写法：
-            // `data_default` 是 LONG，Oracle 对 LONG 做 LIKE 直接
-            // `ORA-00932（数据类型为 LONG，与预期 CHAR 不兼容）`，整条查询连同
-            // 类型/注释一起失败 —— 症状就是「列注释改完保存成功、界面还是空」
-            // （真机 SYSTEM 实测）。少数用序列默认值的老库因此不显示自增，如实接受。
-            "oracle" => Meta::Sql(format!(
-                "select c.column_name as column_name, \
-                 case \
-                   when c.data_type = 'NUMBER' and c.data_precision is not null \
-                     then 'number(' || c.data_precision || coalesce(',' || c.data_scale, '') || ')' \
-                   when c.data_type in ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR') \
-                     then lower(c.data_type) || '(' || c.data_length || ')' \
-                   else lower(c.data_type) \
-                 end as type_text, \
-                 coalesce((select cc.comments from user_col_comments cc \
-                           where cc.table_name = c.table_name and cc.column_name = c.column_name), '') as \"comment\", \
-                 case when exists (select 1 from user_tab_identity_cols i \
-                                   where i.table_name = c.table_name and i.column_name = c.column_name) then 1 \
-                      else 0 end as is_auto, \
-                 c.column_id as ordinal \
-                 from user_tab_columns c where c.table_name = upper({quoted})"
-            )),
-            // DM（达梦）：类型 + 注释（与 Oracle 同一套写法 —— 达梦是 Oracle 兼容的，
-            // 连表注释那边用的也是 `user_col_comments`，见本文件上方 table_comments）。
-            // 注释这一项**曾经漏了**：select 里根本没取 comment，界面上「注释」列却有
-            // （supportsComment 为真），于是那一格永远是空的（用户反馈排查出来的同类问题）。
-            //
-            // **不自增检测**：达梦的标识列（`IDENTITY(1,1)`）记在哪张系统视图上，我没有实例可验证；
-            // 而 `user_tab_identity_cols` 在达梦上是否存在同样未验证 —— 一旦那句 SQL 报错，
-            // 整张表的类型/注释补全都会一起丢掉（比少一个自增标记更糟）。所以这里留白，
-            // 而不是拿一个没验证过的视图去赌。
-            "dm" => Meta::Sql(format!(
-                "select c.column_name as column_name, \
-                 case \
-                   when c.data_type = 'NUMBER' and c.data_precision is not null \
-                     then 'number(' || c.data_precision || coalesce(',' || c.data_scale, '') || ')' \
-                   when c.data_type in ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR') \
-                     then lower(c.data_type) || '(' || c.data_length || ')' \
-                   else lower(c.data_type) \
-                 end as type_text, \
-                 coalesce((select cc.comments from user_col_comments cc \
-                           where cc.table_name = c.table_name \
-                             and cc.column_name = c.column_name), '') as \"comment\" \
-                 from user_tab_columns c where c.table_name = upper({quoted})"
-            )),
-            // SQLite：声明类型原样读回（`varchar(50)` 就在表结构里）。
-            //
-            // 自增的判定标准是「**单列** INTEGER PRIMARY KEY」—— 那是 rowid 的别名，
-            // 插入时留空即自动赋值。复合主键里的 INTEGER 不是别名，不能算自增。
-            // （`AUTOINCREMENT` 只影响 rowid 复用，不改变「是不是自增」这件事。）
-            "sqlite" => Meta::Sql(format!(
-                "select name as column_name, type as type_text, '' as comment, \
-                 case when upper(trim(coalesce(type, ''))) = 'INTEGER' and pk = 1 \
-                       and (select count(*) from pragma_table_info({quoted}) where pk > 0) = 1 \
-                      then 1 else 0 end as is_auto, \
-                 cid as ordinal \
-                 from pragma_table_info({quoted})"
-            )),
-            // H2：information_schema.columns 有长度/精度，自己拼回 `varchar(50)`。
-            // 长度大于 100 万的不当"长度"用（CLOB 一类会报 2^31-1，拼进类型文本没意义）
-            // 列注释在 H2 的 information_schema.columns 里叫 `remarks`（老的 1.4 与 2.x 都有），
-            // 同样**曾经漏取**：界面「注释」列可见却永远空着。
-            //
-            // **精度只对 numeric / decimal 拼**：H2 给**所有**数值类型都填了
-            // numeric_precision/numeric_scale（INTEGER=32,0、BIGINT=64,0、BOOLEAN=1,0…），
-            // 早先不看类型就拼，得到 `integer(32,0)` 这种根本执行不了的"类型"。
-            // 更麻烦的是它和界面的「现状基线」对不上：编辑器拆出 `INTEGER` + 长度 32，
-            // 再拼回去是 `integer(32)` ≠ `integer(32,0)` ⇒ **一打开表就被判成"改 3"**
-            // （用户反馈：什么都没改，预览里却有 3 条 ALTER）。
-            "h2" => Meta::Sql(format!(
-                "select column_name as column_name, \
-                 case \
-                   when character_maximum_length is not null and character_maximum_length <= 1000000 \
-                     then lower(data_type) || '(' || character_maximum_length || ')' \
-                   when lower(data_type) in ('numeric','decimal','dec','number') \
-                        and numeric_precision is not null \
-                     then lower(data_type) || '(' || numeric_precision || ',' \
-                          || coalesce(numeric_scale, 0) || ')' \
-                   else lower(data_type) \
-                 end as type_text, \
-                 coalesce(remarks, '') as comment \
-                 from information_schema.columns where upper(table_name) = upper({quoted})"
-            )),
-            // DB2：syscat.columns 的 typename/length/scale
-            // 列注释也要在这里带出来（`remarks`）：表结构页的「注释」列读的是 `/columns`，
-            // 只靠 `table_comments`（SQL 结果表头那条）补不上 —— 编辑表结构时注释格永远是空的。
-            "db2" => Meta::Sql(format!(
-                "select colname as column_name, \
-                 case \
-                   when rtrim(typename) in ('VARCHAR','CHARACTER','CHAR','VARGRAPHIC','GRAPHIC','BINARY','VARBINARY') \
-                     then lower(rtrim(typename)) || '(' || length || ')' \
-                   when rtrim(typename) = 'DECIMAL' \
-                     then lower(rtrim(typename)) || '(' || length || ',' || scale || ')' \
-                   else lower(rtrim(typename)) \
-                 end as type_text, \
-                 coalesce(remarks, '') as comment \
-                 from syscat.columns \
-                 where tabschema = current schema and upper(tabname) = upper({quoted})"
-            )),
-            // Derby：遗留目录 sys.syscolumns 里 COLUMNDATATYPE 本来就是完整类型文本。
-            // （现代 Derby 更推荐 SYSCS_UTIL，但那条要存储过程，读元数据不值当。）
-            // Derby：`sys.syscolumns` 的 COLUMNDATATYPE 是完整类型文本，但**带着可空性**
-            // （实测出来是 `INTEGER NOT NULL`）—— 直接当类型名用会让结构编辑器把它
-            // 当成一个类型（改任何属性都会生成 `... c integer not null not null`）。
-            // 这里把结尾的 ` NOT NULL` 去掉，只留类型本身。
-            "derby" => Meta::Sql(format!(
-                "select columnname as column_name, \
-                 case when cast(columndatatype as varchar(256)) like '% NOT NULL' \
-                   then substr(cast(columndatatype as varchar(256)), 1, \
-                               length(cast(columndatatype as varchar(256))) - 9) \
-                   else cast(columndatatype as varchar(256)) end as type_text \
-                 from sys.syscolumns where referenceid = \
-                 (select tableid from sys.systables where tablename = upper({quoted}))"
-            )),
-            _ => Meta::Unwritten,
-        }
+        // 转义留在门面：族实现只拼 SQL，不复制一套 literal 规则
+        self.ops().column_types_sql(&self.literal(table))
     }
 
     /// 库级统计（表数 + 占用空间）。键名统一成 `tables` / `sizeText`：
@@ -4683,68 +1868,9 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
     /// （SQL Server、Oracle、DM 上会直接报「无法识别的函数名」），
     /// `isnull` 是 SQL Server 的私有写法。`coalesce` 是 ANSI 标准，各家都认 —— 少一个方言假设。
     pub fn database_stats(&self) -> Meta {
-        match self.key() {
-            "mysql" | "mariadb" | "doris" => Meta::Sql(
-                "select count(*) as tables, \
-                 concat(round(coalesce(sum(data_length + index_length), 0) / 1024 / 1024, 2), ' MB') as sizeText \
-                 from information_schema.tables where table_schema = database()"
-                    .to_string(),
-            ),
-            "postgresql" | "kingbase" => Meta::Sql(
-                "select (select count(*) from information_schema.tables \
-                 where table_schema not in ('pg_catalog','information_schema')) as tables, \
-                 pg_size_pretty(pg_database_size(current_database())) as sizeText"
-                    .to_string(),
-            ),
-            "sqlserver" => Meta::Sql(
-                "select (select count(*) from sys.tables) as tables, \
-                 cast(cast(coalesce(sum(size), 0) * 8.0 / 1024 as decimal(10, 1)) as varchar(20)) + ' MB' as sizeText \
-                 from sys.database_files"
-                    .to_string(),
-            ),
-            "sqlite" => Meta::Sql(
-                "select (select count(*) from sqlite_master \
-                 where type = 'table' and name not like 'sqlite_%') as tables, '—' as sizeText"
-                    .to_string(),
-            ),
-            "clickhouse" => Meta::Sql(
-                "select count(*) as tables, formatReadableSize(sum(total_bytes)) as sizeText \
-                 from system.tables where database = currentDatabase()"
-                    .to_string(),
-            ),
-            // Oracle / DM：`sum(bytes)` 是聚合，而 `(select count(*) ...)` 是标量子查询，
-            // 混在同一个 select 列表里又没 group by ⇒ ORA-00937「不是单组分组函数」（真机实测）。
-            // 改成两个互相独立的标量子查询 + from dual。
-            "oracle" | "dm" => Meta::Sql(
-                "select (select count(*) from user_tables) as tables, \
-                 (select to_char(round(coalesce(sum(bytes), 0) / 1024 / 1024, 2)) || ' MB' \
-                  from user_segments) as sizeText \
-                 from dual"
-                    .to_string(),
-            ),
-            // H2：表数能拿到；占用空间不在 information_schema 里，如实给「—」
-            "h2" => Meta::Sql(
-                "select count(*) as tables, '—' as sizeText \
-                 from information_schema.tables where table_schema = current_schema"
-                    .to_string(),
-            ),
-            // DB2：syscat.tables 只有 NPAGES（数据页）/ FPAGES（总页数，含索引与溢出）/
-            // CARD（行数）。原句用的 data_object_pages / index_object_pages 是 Oracle
-            // 或其它库的列名，DB2 上直接 SQLCODE=-206 SQLSTATE=42703（真机实测）。
-            // 4KB 页 ⇒ 页数 * 4 / 1024 = MB。
-            "db2" => Meta::Sql(
-                "select count(*) as tables, \
-                 cast(coalesce(sum(fpages), 0) * 4 / 1024 as decimal(12,1)) || ' MB' as sizeText \
-                 from syscat.tables where tabschema = current schema and type = 'T'"
-                    .to_string(),
-            ),
-            // Derby：能拿到的是表数；占用空间不在系统表里（和 SQLite 一样如实给「—」，
-            // 而不是编一个看起来像 0 的数字）
-            "derby" => Meta::Sql(
-                "select count(*) as tables, '—' as sizeText from sys.systables where tabletype = 'T'"
-                    .to_string(),
-            ),
-            _ => Meta::Unwritten,
+        match self.ops().database_stats_sql() {
+            Some(sql) => Meta::Sql(sql.to_string()),
+            None => Meta::Unwritten,
         }
     }
 
@@ -4766,24 +1892,38 @@ enum TypeFamily {
     /// `unsigned` 只影响**上界**：MySQL 的 `bigint unsigned` 能到 2^64-1，i64 装不下。
     /// 跨类型到不支持 unsigned 的方言时必须**按上界升档**（bigint unsigned → 16 字节档，
     /// 落到 `numeric(20,0)` / `LARGEINT`），否则用户看到的是「Out of range value」。
-    Int { bytes: u8, unsigned: bool },
+    Int {
+        bytes: u8,
+        unsigned: bool,
+    },
     /// 定点小数（precision/scale）
-    Decimal { precision: u8, scale: u8 },
+    Decimal {
+        precision: u8,
+        scale: u8,
+    },
     /// 浮点
     Real,
     Bool,
     /// 文本：长度可选，`long` 表示"大文本"（text / clob / longtext 这类）
-    Text { len: Option<u32>, long: bool },
+    Text {
+        len: Option<u32>,
+        long: bool,
+    },
     Binary,
     Date,
     /// 纯时间。`fsp` = 小数秒位数：`time(6)` 的 6。
-    Time { fsp: Option<u8> },
+    Time {
+        fsp: Option<u8>,
+    },
     /// 日期时间。`tz` = 带时区，`fsp` = 小数秒位数：`datetime(6)` / `timestamp(3)` 的 6/3。
     ///
     /// 为什么非要把 `fsp` 带上：跨类型同步会走「解析成族 → 按目标渲染」，早先族里只有
     /// `tz` 一个参数，于是 MariaDB `datetime(6)` → MySQL 被渲染成 `datetime`，
     /// **微秒在建表那一刻就没了**（数据写得再准也存不下，用户看到的是「同步完时间少了微秒」）。
-    DateTime { tz: bool, fsp: Option<u8> },
+    DateTime {
+        tz: bool,
+        fsp: Option<u8>,
+    },
     Json,
     Uuid,
     /// 认不出来的：跨类型时**降级为文本** —— 宁可能存下，也不要建表就语法错
@@ -4796,12 +1936,14 @@ impl TypeFamily {
         // 剥掉 ClickHouse 的 `Nullable(T)` 壳：可空性在 ColumnDetail.nullable 里已有，
         // 类型解析只看内层（`Nullable(String)` 直接 parse 会落 Unknown → 目标列成 CLOB）
         let raw = match raw.trim().to_ascii_lowercase().strip_prefix("nullable(") {
-            Some(_inner) if raw.trim().ends_with(')') => {
-                raw.trim().split_once('(').map(|(_, rest)| rest).unwrap_or(raw)
-                    .trim_end_matches(')')
-                    .trim()
-                    .to_string()
-            }
+            Some(_inner) if raw.trim().ends_with(')') => raw
+                .trim()
+                .split_once('(')
+                .map(|(_, rest)| rest)
+                .unwrap_or(raw)
+                .trim_end_matches(')')
+                .trim()
+                .to_string(),
             _ => raw.to_string(),
         };
         let lower = raw.trim().to_ascii_lowercase();
@@ -4862,27 +2004,37 @@ impl TypeFamily {
                 }
             }
             "char" | "nchar" | "varchar" | "varchar2" | "nvarchar" | "nvarchar2" | "character" => {
-                Self::Text { len: first, long: false }
+                Self::Text {
+                    len: first,
+                    long: false,
+                }
             }
             "text" | "tinytext" | "mediumtext" | "longtext" | "clob" | "nclob" | "longvarchar" => {
-                Self::Text { len: None, long: true }
+                Self::Text {
+                    len: None,
+                    long: true,
+                }
             }
-            "binary" | "varbinary" | "blob" | "tinyblob" | "mediumblob" | "longblob" | "bytea"
-            | "image" | "raw" => Self::Binary,
+            "binary" | "varbinary" | "blob" | "tinyblob" | "mediumblob" | "longblob" | "bytea" | "image"
+            | "raw" => Self::Binary,
             "date" => Self::Date,
             "time" | "timetz" => Self::Time { fsp },
             "datetime" | "datetime2" | "smalldatetime" => Self::DateTime { tz: false, fsp },
             "timestamp" | "timestamptz" | "datetimeoffset" => Self::DateTime {
-                tz: lower.contains("tz")
-                    || lower.contains("offset")
-                    || lower.contains("with time zone"),
+                tz: lower.contains("tz") || lower.contains("offset") || lower.contains("with time zone"),
                 fsp,
             },
             "json" | "jsonb" => Self::Json,
             "uuid" | "uniqueidentifier" => Self::Uuid,
             // ClickHouse 的大写族（`UInt64` / `String` / `DateTime64` / `FixedString(n)` / `Decimal64(s)`）
-            "string" => Self::Text { len: None, long: true },
-            "fixedstring" => Self::Text { len: first, long: false },
+            "string" => Self::Text {
+                len: None,
+                long: true,
+            },
+            "fixedstring" => Self::Text {
+                len: first,
+                long: false,
+            },
             // ClickHouse 的 `DateTime64(3)` / `DateTime64(3, 'UTC')`：括号里第一个数是小数秒位数
             "datetime64" => Self::DateTime { tz: false, fsp },
             // ClickHouse 的 `Decimal32(S)` / `Decimal64(S)` / `Decimal128(S)` / `Decimal256(S)`：
@@ -4907,15 +2059,36 @@ impl TypeFamily {
                 scale: first.unwrap_or(0).min(76) as u8,
             },
             // ClickHouse 的无符号整型：带上 unsigned 位，渲染时才有 UInt64 / numeric(20,0) 之分
-            "uint8" => Self::Int { bytes: 1, unsigned: true },
-            "uint16" => Self::Int { bytes: 2, unsigned: true },
-            "uint32" => Self::Int { bytes: 4, unsigned: true },
-            "uint64" => Self::Int { bytes: 8, unsigned: true },
+            "uint8" => Self::Int {
+                bytes: 1,
+                unsigned: true,
+            },
+            "uint16" => Self::Int {
+                bytes: 2,
+                unsigned: true,
+            },
+            "uint32" => Self::Int {
+                bytes: 4,
+                unsigned: true,
+            },
+            "uint64" => Self::Int {
+                bytes: 8,
+                unsigned: true,
+            },
             // ClickHouse 的整型/浮点族（Int32 / Float64 …）：之前没认，落到 Unknown，
             // 目标 Derby/H2 这类按 Unknown→CLOB 渲染的方言，整列全成 CLOB（真机踩过）
-            "int16" => Self::Int { bytes: 2, unsigned: false },
-            "int32" => Self::Int { bytes: 4, unsigned: false },
-            "int64" => Self::Int { bytes: 8, unsigned: false },
+            "int16" => Self::Int {
+                bytes: 2,
+                unsigned: false,
+            },
+            "int32" => Self::Int {
+                bytes: 4,
+                unsigned: false,
+            },
+            "int64" => Self::Int {
+                bytes: 8,
+                unsigned: false,
+            },
             "float32" => Self::Real,
             "float64" => Self::Real,
             _ => Self::Unknown,
@@ -5062,9 +2235,7 @@ impl TypeFamily {
                         base
                     }
                 }
-                "sqlserver" => {
-                    Self::with_fsp(if tz { "datetimeoffset" } else { "datetime2" }, fsp, key)
-                }
+                "sqlserver" => Self::with_fsp(if tz { "datetimeoffset" } else { "datetime2" }, fsp, key),
                 // ClickHouse 的小数秒是另一个类型名；0 位（或没写）就是普通 DateTime
                 "clickhouse" => match fsp {
                     Some(n) => format!("DateTime64({})", n.min(9)),
@@ -5217,8 +2388,8 @@ impl TypeFamily {
 /// （宁可不自增，也不要造出一句语法错）。
 fn auto_increment_clause(kind: ConnectionKind, family: TypeFamily) -> Option<&'static str> {
     // 只有整数（或 scale=0 的定点）才谈得上自增
-    let integer = matches!(family, TypeFamily::Int { .. })
-        || matches!(family, TypeFamily::Decimal { scale: 0, .. });
+    let integer =
+        matches!(family, TypeFamily::Int { .. }) || matches!(family, TypeFamily::Decimal { scale: 0, .. });
     if !integer {
         return None;
     }
@@ -5439,12 +2610,7 @@ fn mysql_charset_for_key(primary_types: &[String]) -> &'static str {
 fn index_bytes(type_name: &str, per_char: usize) -> usize {
     let lower = type_name.trim().to_ascii_lowercase();
     // `character varying(64)` 这种带空格的类型名取到 `character` 就够（文本族判据靠 contains）
-    let base = lower
-        .split(['(', ' '])
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let base = lower.split(['(', ' ']).next().unwrap_or("").trim().to_string();
     let len = lower
         .split_once('(')
         .and_then(|(_, rest)| rest.split([')', ',']).next())
@@ -5618,52 +2784,46 @@ mod tests {
     fn 无符号整型跨方言按上界升档() {
         let one = |ty: &str| vec![col("v", ty, None)];
         // 同是 MySQL 系：照写 unsigned
-        let ddl = Dialect::new(ConnectionKind::Mysql)
-            .create_table_from_columns("t", &one("bigint(20) unsigned"), Some(ConnectionKind::Mariadb));
+        let ddl = Dialect::new(ConnectionKind::Mysql).create_table_from_columns(
+            "t",
+            &one("bigint(20) unsigned"),
+            Some(ConnectionKind::Mariadb),
+        );
         assert!(ddl.contains("bigint unsigned"), "实际：{ddl}");
 
         let pg = Dialect::new(ConnectionKind::Postgresql);
         // 8 字节无符号 → 16 字节档
-        assert!(
-            pg.create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
-                .contains("numeric(20,0)")
-        );
+        assert!(pg
+            .create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
+            .contains("numeric(20,0)"));
         // 4 字节无符号 → bigint（PG 的 integer 只到 2^31-1）
-        assert!(
-            pg.create_table_from_columns("t", &one("int unsigned"), Some(ConnectionKind::Mysql))
-                .contains("bigint")
-        );
+        assert!(pg
+            .create_table_from_columns("t", &one("int unsigned"), Some(ConnectionKind::Mysql))
+            .contains("bigint"));
         // 2 字节无符号 → integer
-        assert!(
-            pg.create_table_from_columns("t", &one("smallint unsigned"), Some(ConnectionKind::Mysql))
-                .contains("integer")
-        );
+        assert!(pg
+            .create_table_from_columns("t", &one("smallint unsigned"), Some(ConnectionKind::Mysql))
+            .contains("integer"));
         // 1 字节无符号 → smallint
-        assert!(
-            pg.create_table_from_columns("t", &one("tinyint unsigned"), Some(ConnectionKind::Mysql))
-                .contains("smallint")
-        );
+        assert!(pg
+            .create_table_from_columns("t", &one("tinyint unsigned"), Some(ConnectionKind::Mysql))
+            .contains("smallint"));
 
         // ClickHouse 原生 UIntN，不用升档
         let ch = Dialect::new(ConnectionKind::Clickhouse);
-        assert!(
-            ch.create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
-                .contains("UInt64")
-        );
+        assert!(ch
+            .create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
+            .contains("UInt64"));
         // Doris 没有 unsigned，用 128 位的 LARGEINT 接住
         let doris = Dialect::new(ConnectionKind::Doris);
-        assert!(
-            doris
-                .create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
-                .contains("largeint")
-        );
+        assert!(doris
+            .create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
+            .contains("largeint"));
         // SQL Server 的 8 字节无符号 → decimal(20,0)
         let mssql = Dialect::new(ConnectionKind::Sqlserver);
-        assert!(
-            mssql
-                .create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
-                .contains("decimal(20,0)")
-        );
+        assert!(mssql
+            .create_table_from_columns("t", &one("bigint unsigned"), Some(ConnectionKind::Mysql))
+            .contains("decimal(20,0)"));
     }
 
     /// 同类型同步**照抄原文**：`datetime(6)` 进来还是 `datetime(6)`，一个字符都不动。
@@ -5762,10 +2922,7 @@ mod tests {
     /// 主键装得下时**不能**动字符集（99% 的表走这条，必须与以前完全一致）。
     #[test]
     fn 主键不长时仍是utf8mb4() {
-        let mut cols = vec![
-            col("id", "varchar(64)", None),
-            col("name", "varchar(255)", None),
-        ];
+        let mut cols = vec![col("id", "varchar(64)", None), col("name", "varchar(255)", None)];
         cols[0].primary_key = true;
         let ddl = Dialect::new(ConnectionKind::Mysql).create_table_from_columns("t", &cols, None);
         assert!(ddl.contains("default charset=utf8mb4"), "实际：{ddl}");
@@ -5820,8 +2977,14 @@ mod tests {
         let pg = Dialect::new(ConnectionKind::Postgresql);
         assert_eq!(pg.default_literal("0", "boolean", true).as_deref(), Some("false"));
         assert_eq!(pg.default_literal("1", "boolean", true).as_deref(), Some("true"));
-        assert_eq!(pg.default_literal("b'0'", "boolean", true).as_deref(), Some("false"));
-        assert_eq!(pg.default_literal("'1'", "boolean", true).as_deref(), Some("true"));
+        assert_eq!(
+            pg.default_literal("b'0'", "boolean", true).as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            pg.default_literal("'1'", "boolean", true).as_deref(),
+            Some("true")
+        );
         // 同类型保持原样（MySQL 的 tinyint 语义，不能被翻成 false/true）
         assert_eq!(pg.default_literal("0", "boolean", false).as_deref(), Some("0"));
         // 非布尔列不受影响
@@ -5829,7 +2992,10 @@ mod tests {
         // Doris / SQL Server 反过来**不认 false/true**（真机实测：`boolean default false`
         // 在 Doris 上是语法错、`bit default false` 在 SQL Server 上被拒），只收 0/1
         let doris = Dialect::new(ConnectionKind::Doris);
-        assert_eq!(doris.default_literal("false", "BOOLEAN", true).as_deref(), Some("0"));
+        assert_eq!(
+            doris.default_literal("false", "BOOLEAN", true).as_deref(),
+            Some("0")
+        );
         assert_eq!(doris.default_literal("1", "BOOLEAN", true).as_deref(), Some("1"));
         let mssql = Dialect::new(ConnectionKind::Sqlserver);
         assert_eq!(mssql.default_literal("true", "bit", true).as_deref(), Some("1"));
@@ -5853,8 +3019,14 @@ mod tests {
             ],
             Some(ConnectionKind::Mysql),
         );
-        assert!(ddl.contains("createtime Nullable(DateTime) default now()"), "实际：{ddl}");
-        assert!(ddl.contains("updatetime Nullable(DateTime) default now()"), "实际：{ddl}");
+        assert!(
+            ddl.contains("createtime Nullable(DateTime) default now()"),
+            "实际：{ddl}"
+        );
+        assert!(
+            ddl.contains("updatetime Nullable(DateTime) default now()"),
+            "实际：{ddl}"
+        );
         assert!(ddl.contains("default today()"), "实际：{ddl}");
         assert!(!ddl.to_ascii_lowercase().contains("current_"), "实际：{ddl}");
     }
@@ -5870,7 +3042,10 @@ mod tests {
             &cols,
             Some(ConnectionKind::Postgresql),
         );
-        assert!(sqlserver.contains("default cast(getdate() as date)"), "实际：{sqlserver}");
+        assert!(
+            sqlserver.contains("default cast(getdate() as date)"),
+            "实际：{sqlserver}"
+        );
 
         // MySQL：列默认值只支持字面量与 CURRENT_TIMESTAMP，DATE 列的 current_date 表达不了
         let mysql = Dialect::new(ConnectionKind::Mysql).create_table_from_columns(
@@ -5878,7 +3053,10 @@ mod tests {
             &cols,
             Some(ConnectionKind::Postgresql),
         );
-        assert!(!mysql.to_ascii_lowercase().contains("current_date"), "实际：{mysql}");
+        assert!(
+            !mysql.to_ascii_lowercase().contains("current_date"),
+            "实际：{mysql}"
+        );
         // 列定义里不再有默认值（表尾的 `default charset=…` 不算）
         assert!(!mysql.contains("d date default"), "实际：{mysql}");
 
@@ -5898,34 +3076,82 @@ mod tests {
         let oracle = Dialect::new(ConnectionKind::Oracle);
         let pg = Dialect::new(ConnectionKind::Postgresql);
         // 同类型 / 不给来源 ⇒ 不翻译
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Mysql), "datetime"), "datetime");
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Mysql), "datetime"),
+            "datetime"
+        );
         assert_eq!(mysql.map_type(None, "tinyint(1)"), "tinyint(1)");
         // MySQL → Oracle：下面这些类型 Oracle 一个都不认
-        assert_eq!(oracle.map_type(Some(ConnectionKind::Mysql), "datetime"), "timestamp");
+        assert_eq!(
+            oracle.map_type(Some(ConnectionKind::Mysql), "datetime"),
+            "timestamp"
+        );
         assert_eq!(oracle.map_type(Some(ConnectionKind::Mysql), "text"), "clob");
-        assert_eq!(oracle.map_type(Some(ConnectionKind::Mysql), "varchar(100)"), "varchar2(100)");
-        assert_eq!(oracle.map_type(Some(ConnectionKind::Mysql), "bigint"), "number(19)");
-        assert_eq!(oracle.map_type(Some(ConnectionKind::Mysql), "tinyint(1)"), "number(1)");
+        assert_eq!(
+            oracle.map_type(Some(ConnectionKind::Mysql), "varchar(100)"),
+            "varchar2(100)"
+        );
+        assert_eq!(
+            oracle.map_type(Some(ConnectionKind::Mysql), "bigint"),
+            "number(19)"
+        );
+        assert_eq!(
+            oracle.map_type(Some(ConnectionKind::Mysql), "tinyint(1)"),
+            "number(1)"
+        );
         assert_eq!(oracle.map_type(Some(ConnectionKind::Mysql), "longblob"), "blob");
         // PG → MySQL：`character varying` / `int4` / `timestamptz` / `bytea` 都不是 MySQL 类型
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Postgresql), "character varying(50)"), "varchar(50)");
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Postgresql), "character varying(50)"),
+            "varchar(50)"
+        );
         assert_eq!(mysql.map_type(Some(ConnectionKind::Postgresql), "int4"), "int");
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Postgresql), "timestamptz"), "datetime");
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Postgresql), "bytea"), "longblob");
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Postgresql), "boolean"), "tinyint(1)");
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Postgresql), "timestamptz"),
+            "datetime"
+        );
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Postgresql), "bytea"),
+            "longblob"
+        );
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Postgresql), "boolean"),
+            "tinyint(1)"
+        );
         // ClickHouse → PG
-        assert_eq!(pg.map_type(Some(ConnectionKind::Clickhouse), "UInt64"), "numeric(20,0)");
+        assert_eq!(
+            pg.map_type(Some(ConnectionKind::Clickhouse), "UInt64"),
+            "numeric(20,0)"
+        );
         assert_eq!(pg.map_type(Some(ConnectionKind::Clickhouse), "String"), "text");
         // ClickHouse → MySQL：String 该落 longtext（不是大 varchar）；`DecimalNN(s)` 括号里是 scale、
         // 精度由位数定 —— 曾经一律按 38 位算，`Decimal64(2)` 被写成 `decimal(38,2)`，每列内联从
         // 9 字节涨到 17 字节，宽表同步时就是「Row size too large (> 8126)」的帮凶（真机踩过）
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "String"), "longtext");
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Nullable(String)"), "longtext");
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal32(2)"), "decimal(9,2)");
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal64(2)"), "decimal(18,2)");
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal128(4)"), "decimal(38,4)");
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Clickhouse), "String"),
+            "longtext"
+        );
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Clickhouse), "Nullable(String)"),
+            "longtext"
+        );
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal32(2)"),
+            "decimal(9,2)"
+        );
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal64(2)"),
+            "decimal(18,2)"
+        );
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal128(4)"),
+            "decimal(38,4)"
+        );
         // 76 位超出 MySQL 的上限 65：必须夹住，否则建表直接报「Too big precision」
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal256(4)"), "decimal(65,4)");
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Clickhouse), "Decimal256(4)"),
+            "decimal(65,4)"
+        );
         // 建表必须显式 row_format=dynamic：老服务器默认 COMPACT，长文本列每列内联 768 字节前缀，
         // 十几个 TEXT 列就撞上 8126 行上限
         let mysql_ddl = mysql.create_table_from_columns("t", &[col("a", "String", None)], None);
@@ -5934,7 +3160,10 @@ mod tests {
             "实际：{mysql_ddl}"
         );
         // 认不出的族降级为文本：宁可能存下，也不要建表就语法错
-        assert_eq!(mysql.map_type(Some(ConnectionKind::Postgresql), "geometry"), "longtext");
+        assert_eq!(
+            mysql.map_type(Some(ConnectionKind::Postgresql), "geometry"),
+            "longtext"
+        );
     }
 
     /// 跨类型建表：类型被翻译、自增跟着走、不可移植的默认值被省略。
@@ -5960,11 +3189,15 @@ mod tests {
         // 文本列的默认值是"内容"，`now()` 这种要加引号、不能当时间函数翻译掉
         assert!(ddl.contains("NAME varchar2(60) default 'now()'"), "实际：{ddl}");
         // 时间默认值翻译成各家都认的标准写法
-        assert!(ddl.contains("CREATED timestamp default current_timestamp"), "实际：{ddl}");
+        assert!(
+            ddl.contains("CREATED timestamp default current_timestamp"),
+            "实际：{ddl}"
+        );
         // 认不出的函数默认值跨类型时**省略**（`nextval` 各家写法完全不同，带过去就是语法错）
         assert!(!ddl.contains("nextval"), "不可移植的默认值应被省略：{ddl}");
         assert!(
-            ddl.lines().any(|line| line.contains("SEQ") && !line.contains("default")),
+            ddl.lines()
+                .any(|line| line.contains("SEQ") && !line.contains("default")),
             "SEQ 这一行不该带 default：{ddl}"
         );
         assert!(!ddl.contains("datetime"), "源类型不能照抄过去：{ddl}");
@@ -6012,7 +3245,13 @@ mod tests {
         // —— 键列要落成有长度的 VARCHAR(65533)，普通列不受影响
         let str_pk = doris.create_table_from_columns(
             "`s`",
-            &[ColumnDetail { primary_key: true, ..col("MAILID", "string", None) }, col("V", "int", None)],
+            &[
+                ColumnDetail {
+                    primary_key: true,
+                    ..col("MAILID", "string", None)
+                },
+                col("V", "int", None),
+            ],
             Some(ConnectionKind::Clickhouse),
         );
         assert!(str_pk.contains("MAILID varchar(65533)"), "实际：{str_pk}");
@@ -6043,8 +3282,19 @@ mod tests {
         ];
         let mut checked = 0;
         for key in [
-            "mysql", "mariadb", "doris", "postgresql", "kingbase", "sqlserver", "oracle", "dm",
-            "db2", "h2", "derby", "clickhouse", "sqlite",
+            "mysql",
+            "mariadb",
+            "doris",
+            "postgresql",
+            "kingbase",
+            "sqlserver",
+            "oracle",
+            "dm",
+            "db2",
+            "h2",
+            "derby",
+            "clickhouse",
+            "sqlite",
         ] {
             let Some(kind) = ConnectionKind::from_key(key) else {
                 continue;
@@ -6061,15 +3311,24 @@ mod tests {
             match key {
                 "doris" => {
                     assert!(ddl.contains("UNIQUE KEY("), "{key}: 缺 UNIQUE KEY：{ddl}");
-                    assert!(ddl.contains("DISTRIBUTED BY HASH("), "{key}: 缺 DISTRIBUTED：{ddl}");
-                    assert!(ddl.contains("replication_num"), "{key}: 缺 replication_num：{ddl}");
+                    assert!(
+                        ddl.contains("DISTRIBUTED BY HASH("),
+                        "{key}: 缺 DISTRIBUTED：{ddl}"
+                    );
+                    assert!(
+                        ddl.contains("replication_num"),
+                        "{key}: 缺 replication_num：{ddl}"
+                    );
                     assert!(!lower.contains("primary key"), "{key}: 不该有表级主键：{ddl}");
                     assert!(!lower.contains("auto_increment"), "{key}: 不写自增：{ddl}");
                 }
                 "clickhouse" => {
                     assert!(ddl.contains("ENGINE = MergeTree()"), "{key}: 缺引擎：{ddl}");
                     assert!(ddl.contains("ORDER BY"), "{key}: 缺 ORDER BY：{ddl}");
-                    assert!(!lower.contains("primary key"), "{key}: primary key 不能在列清单里：{ddl}");
+                    assert!(
+                        !lower.contains("primary key"),
+                        "{key}: primary key 不能在列清单里：{ddl}"
+                    );
                     assert!(!lower.contains("auto_increment"), "{key}: 没有自增：{ddl}");
                 }
                 "postgresql" | "kingbase" | "oracle" | "dm" | "h2" | "db2" | "derby" => {
@@ -6097,7 +3356,10 @@ mod tests {
             // ④ 更新语句：ClickHouse 没有标准 UPDATE，必须 ALTER TABLE ... UPDATE
             let update = dialect.update_sql("t", "a = 1", "k = 2");
             if key == "clickhouse" {
-                assert!(update.starts_with("alter table"), "{key}: 要走 ALTER UPDATE：{update}");
+                assert!(
+                    update.starts_with("alter table"),
+                    "{key}: 要走 ALTER UPDATE：{update}"
+                );
             } else {
                 assert!(update.starts_with("update "), "{key}: 标准 UPDATE：{update}");
             }
@@ -6111,7 +3373,11 @@ mod tests {
         let mysql = Dialect::new(ConnectionKind::Mysql);
         let ddl = mysql.create_table_from_columns(
             "`t`",
-            &[col("UPDATED", "datetime", Some("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"))],
+            &[col(
+                "UPDATED",
+                "datetime",
+                Some("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"),
+            )],
             Some(ConnectionKind::Mysql),
         );
         assert!(
@@ -6168,7 +3434,10 @@ mod tests {
         assert_eq!(q(ConnectionKind::Mysql, "test.order"), "test.`order`");
         // `public` 本身是保留字（PG 的公共 schema 名），所以它也被加引号 ——
         // 这里是对的：PG 里 schema 就是小写 public，加引号后依然指向它
-        assert_eq!(q(ConnectionKind::Postgresql, "public.user"), "\"public\".\"user\"");
+        assert_eq!(
+            q(ConnectionKind::Postgresql, "public.user"),
+            "\"public\".\"user\""
+        );
         assert_eq!(q(ConnectionKind::Postgresql, "public.sales"), "\"public\".sales");
     }
 
@@ -6230,10 +3499,14 @@ mod tests {
     #[test]
     fn oracle_用_merge_union_all_源() {
         let sql = upsert(ConnectionKind::Oracle).expect("oracle 必须支持原生 upsert");
-        assert!(sql.starts_with("merge into t tgt using (select 1 as id, 'a' as name, 10 as amount from dual union all "));
+        assert!(sql.starts_with(
+            "merge into t tgt using (select 1 as id, 'a' as name, 10 as amount from dual union all "
+        ));
         assert!(sql.contains("on (tgt.id = src.id)"));
         assert!(sql.contains("when matched then update set name = src.name, amount = src.amount"));
-        assert!(sql.ends_with("when not matched then insert (id, name, amount) values (src.id, src.name, src.amount)"));
+        assert!(sql.ends_with(
+            "when not matched then insert (id, name, amount) values (src.id, src.name, src.amount)"
+        ));
     }
 
     #[test]
@@ -6279,7 +3552,10 @@ mod tests {
         assert_eq!(Dialect::new(ConnectionKind::Oracle).upsert_row_limit(), 500);
         assert_eq!(Dialect::new(ConnectionKind::Dm).upsert_row_limit(), 500);
         assert_eq!(Dialect::new(ConnectionKind::Sqlserver).upsert_row_limit(), 1000);
-        assert_eq!(Dialect::new(ConnectionKind::Postgresql).upsert_row_limit(), usize::MAX);
+        assert_eq!(
+            Dialect::new(ConnectionKind::Postgresql).upsert_row_limit(),
+            usize::MAX
+        );
     }
 
     /// `_` 开头的表名不能裸写（Oracle 未引号标识符必须字母开头 → ORA-00911），
@@ -6313,8 +3589,12 @@ mod tests {
             .expect("oracle 必须有包装式分页");
         assert!(paged.contains("rownum <= 600"), "{paged}");
         assert!(paged.contains("rn__ > 400"), "{paged}");
-        assert!(Dialect::new(ConnectionKind::Mysql).wrap_paging("select 1", 0, 10).is_none());
-        assert!(Dialect::new(ConnectionKind::Db2).wrap_paging("select 1", 0, 10).is_none());
+        assert!(Dialect::new(ConnectionKind::Mysql)
+            .wrap_paging("select 1", 0, 10)
+            .is_none());
+        assert!(Dialect::new(ConnectionKind::Db2)
+            .wrap_paging("select 1", 0, 10)
+            .is_none());
     }
 
     #[test]
@@ -6331,7 +3611,10 @@ mod tests {
     #[test]
     fn derby走_merge形式的原生_upsert() {
         let sql = upsert(ConnectionKind::Derby).expect("derby 必须支持原生 upsert");
-        assert!(sql.starts_with("merge into t as tgt using (values "), "实际：{sql}");
+        assert!(
+            sql.starts_with("merge into t as tgt using (values "),
+            "实际：{sql}"
+        );
         assert!(sql.contains("when matched then update set"), "实际：{sql}");
         assert!(sql.contains("when not matched then insert"), "实际：{sql}");
         assert!(!sql.ends_with(';'), "Derby 不该拼分号");
@@ -6349,7 +3632,10 @@ mod tests {
                 &[vec!["1".to_string(), "'x'".to_string()]],
             )
             .expect("pg 必须支持");
-        assert_eq!(sql, "insert into t (id, code) values (1, 'x') on conflict (id, code) do nothing");
+        assert_eq!(
+            sql,
+            "insert into t (id, code) values (1, 'x') on conflict (id, code) do nothing"
+        );
         // Oracle 全键时没有 when matched 子句，但插入分支仍然在
         let ora = Dialect::new(ConnectionKind::Oracle)
             .upsert_sql("t", &["id".to_string()], &[0], &[vec!["1".to_string()]])

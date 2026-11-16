@@ -1,4 +1,4 @@
-﻿//! Writer 插件：吃行批次、批量落库、脏行降级、事务提交。
+//! Writer 插件：吃行批次、批量落库、脏行降级、事务提交。
 //!
 //! `SqlWriter` 覆盖所有走 JDBC 的目标（批量 INSERT），并且把 Doris 的
 //! **Stream Load** 快通道收进同一个插件：`stream` 有配置时优先 HTTP 直推 BE，
@@ -19,12 +19,12 @@ use std::sync::Arc;
 
 use dbmind_core::CellValue;
 
-use super::{BF, GrowCaps, StreamCfg, TablePlan, UpsertMode, WriteDiag};
+use super::{GrowCaps, StreamCfg, TablePlan, UpsertMode, WriteDiag, BF};
 use crate::api::dialect::Dialect;
 use crate::api::sync::{
     build_update, doris_stream_load, estimate_row_bytes, json_row_bytes, rows_need_json_fallback,
-    run_target_in, supports_multi_statement, txn_batch, write_insert_rows, write_update_batch,
-    write_upsert_rows, write_parallelism, STREAM_LOAD_MAX_BYTES, UPDATE_BATCH,
+    run_target_in, supports_multi_statement, txn_batch, write_insert_rows, write_parallelism,
+    write_update_batch, write_upsert_rows, STREAM_LOAD_MAX_BYTES, UPDATE_BATCH,
 };
 use crate::api::tasks::Task;
 use crate::AppState;
@@ -194,7 +194,11 @@ impl SqlWriter {
         };
         // 任务级会话预算（见 `TablePlan::workers_cap`）：并发多表时每张表少开几路，
         // 整次任务的目标连接数不超过方言声明的并发数。
-        let workers = if plan.workers_cap > 0 { base.min(plan.workers_cap) } else { base };
+        let workers = if plan.workers_cap > 0 {
+            base.min(plan.workers_cap)
+        } else {
+            base
+        };
         // 调优/排查逃生阀：坏链路（丢包、PMTU 黑洞）单条流吞吐有上限，多开几路能堆总吞吐。
         let workers = std::env::var("DBMIND_SYNC_WRITERS")
             .ok()
@@ -211,10 +215,7 @@ impl SqlWriter {
         // 先用小报文探路，实测快了 `adapt_stmt_cap` 自己会翻倍上去（用户口径：不要中断）。
         let stmt_cap = crate::api::sync::effective_stmt_cap(
             kind_key,
-            plan.grow
-                .as_ref()
-                .map(|grow| grow.stmt_cap_hint())
-                .unwrap_or(0),
+            plan.grow.as_ref().map(|grow| grow.stmt_cap_hint()).unwrap_or(0),
         )
         .min(crate::api::sync::STMT_CAP_START);
         // 每批条数（一条 INSERT 里放多少条）：界面填了就用界面的，否则按**目标方言**默认
@@ -250,9 +251,7 @@ impl SqlWriter {
             load_data: super::plugins::spec_data_for(kind_key).load_data(),
             load_binary: super::loaddata::binary_columns(&plan.target_types),
             load_data_failed: AtomicBool::new(false),
-            stmt_caps: (0..workers_ceiling)
-                .map(|_| AtomicUsize::new(stmt_cap))
-                .collect(),
+            stmt_caps: (0..workers_ceiling).map(|_| AtomicUsize::new(stmt_cap)).collect(),
             rows_cap,
             op_timeout_secs,
             skip_binlog: plan.skip_binlog,
@@ -260,8 +259,10 @@ impl SqlWriter {
             workers: workers.max(1),
             workers_ceiling,
             diag: plan.diag.clone(),
-        generation: AtomicU64::new(0),
-            conn_ids: (0..workers_ceiling).map(|_| tokio::sync::Mutex::new(None)).collect(),
+            generation: AtomicU64::new(0),
+            conn_ids: (0..workers_ceiling)
+                .map(|_| tokio::sync::Mutex::new(None))
+                .collect(),
         }
     }
 
@@ -349,11 +350,7 @@ impl SqlWriter {
     /// 按 [`super::loaddata::LOAD_DATA_CHUNK_BYTES`] / `LOAD_DATA_CHUNK_ROWS` 切块：
     /// 一块一条语句，已上成功的块不重发。失败时把「已装载行数 + 剩余起点」一起带回去，
     /// 让调用方只把剩下的行走 INSERT —— 快通道半路不可用不该把已写的数据再写一遍。
-    async fn try_load_data(
-        &self,
-        worker: usize,
-        rows: &[Vec<CellValue>],
-    ) -> Result<u64, LoadDataFailure> {
+    async fn try_load_data(&self, worker: usize, rows: &[Vec<CellValue>]) -> Result<u64, LoadDataFailure> {
         let sql = super::loaddata::build_sql(
             &self.target_name,
             &self.target_columns,
@@ -469,9 +466,8 @@ impl Writer for SqlWriter {
             //
             // 上限**用界面「超时时间」**（0 = 继承连接 600 秒 / <0 = 不限制 / >0 = 用户填的），
             // 不再自己写死 30 秒：界面上只配了一个超时，日志里就不该出现第二个数字。
-            let begin_limit = std::time::Duration::from_millis(
-                crate::api::sync::op_timeout_ms(self.op_timeout_secs),
-            );
+            let begin_limit =
+                std::time::Duration::from_millis(crate::api::sync::op_timeout_ms(self.op_timeout_secs));
             let opened: Result<(), String> = match tokio::time::timeout(
                 begin_limit,
                 run_target_in(&self.state, &self.tgt_target, begin, &session),
@@ -482,10 +478,7 @@ impl Writer for SqlWriter {
                 Ok(Err(err)) => Err(err.message),
                 // 只说事实：本地等满了、库没回话。不写「连接不可用」这种自造结论 ——
                 // 真因可能是建连慢、目标端 accept 排队、或链路在重传，日志里让人自己去判断。
-                Err(_) => Err(format!(
-                    "开启事务超过 {} 秒未返回",
-                    begin_limit.as_secs()
-                )),
+                Err(_) => Err(format!("开启事务超过 {} 秒未返回", begin_limit.as_secs())),
             };
             match opened {
                 Ok(()) => {
@@ -766,7 +759,10 @@ impl Writer for SqlWriter {
             let usid = self.update_session();
             if let Some((begin, _, _)) = self.txn {
                 if !self.update_txn_open.load(Ordering::SeqCst) {
-                    if run_target_in(&self.state, &self.tgt_target, begin, &usid).await.is_ok() {
+                    if run_target_in(&self.state, &self.tgt_target, begin, &usid)
+                        .await
+                        .is_ok()
+                    {
                         self.update_txn_open.store(true, Ordering::SeqCst);
                         // 更新会话也开着自己的事务（攒 500 条一提交），同样不许被回收
                         self.hold_tx(&usid, true);
@@ -899,7 +895,12 @@ impl Writer for SqlWriter {
             let Some((_, end, restore)) = self.txn else {
                 return Ok(());
             };
-            if !self.txn_open.get(worker).map(|open| open.load(Ordering::SeqCst)).unwrap_or(false) {
+            if !self
+                .txn_open
+                .get(worker)
+                .map(|open| open.load(Ordering::SeqCst))
+                .unwrap_or(false)
+            {
                 return Ok(());
             }
             let session = self.session(worker);
@@ -947,9 +948,7 @@ impl Writer for SqlWriter {
             let session = self.session(worker);
             // `rollback` 对这里列出的方言（MySQL / MariaDB / PG / Kingbase / SQLite /
             // SQL Server）都是合法语句；不支持的方言 `txn` 本来就是 None，走不到这。
-            if let Err(err) =
-                run_target_in(&self.state, &self.tgt_target, "rollback", &session).await
-            {
+            if let Err(err) = run_target_in(&self.state, &self.tgt_target, "rollback", &session).await {
                 // 连接已经断了的话回滚必然失败 —— 服务端会自行回滚未提交事务，
                 // 这不是错误，记一条 debug 就够
                 tracing::debug!(

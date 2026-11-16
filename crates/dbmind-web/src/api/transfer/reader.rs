@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use dbmind_core::CellValue;
 
-use super::{BF, TablePlan};
+use super::{TablePlan, BF};
 use crate::api::dialect::Dialect;
 use crate::api::meta::run_sql_in;
 use crate::api::sync::{estimate_row_bytes, fetch_page, literal_for, write_parallelism};
@@ -362,7 +362,9 @@ impl SqlReader {
             self.filter_sql()
         );
         // 极值查询很轻（有索引直接走两端），失败就退回单流
-        let result = run_sql_in(&self.state, &self.conn, &self.scope, probe, 1).await.ok()?;
+        let result = run_sql_in(&self.state, &self.conn, &self.scope, probe, 1)
+            .await
+            .ok()?;
         let row = result.rows.first()?;
         if row.len() < 2 {
             return None;
@@ -386,7 +388,9 @@ impl SqlReader {
         // 分片键也是源端列名（目录元数据）→ 逐字加引号，别让上折方言把它折成大写
         let key = self.dialect.quote_exact(&self.paging_keys[0]);
         let count_sql = format!("select count(*) as n from {}{}", self.from, self.filter_sql());
-        let result = run_sql_in(&self.state, &self.conn, &self.scope, count_sql, 1).await.ok()?;
+        let result = run_sql_in(&self.state, &self.conn, &self.scope, count_sql, 1)
+            .await
+            .ok()?;
         let total = match result.rows.first()?.first()? {
             CellValue::Integer(n) => *n,
             CellValue::Real(n) => *n as i64,
@@ -405,7 +409,9 @@ impl SqlReader {
                 self.filter_sql(),
                 self.dialect.limit_clause(offset as u64, 1)
             );
-            let probe = run_sql_in(&self.state, &self.conn, &self.scope, sql, 1).await.ok()?;
+            let probe = run_sql_in(&self.state, &self.conn, &self.scope, sql, 1)
+                .await
+                .ok()?;
             let value = probe.rows.first()?.first()?.clone();
             if matches!(value, CellValue::Null) {
                 return None;
@@ -414,13 +420,22 @@ impl SqlReader {
         }
         let mut out = Vec::with_capacity(want);
         for index in 0..want {
-            let low = if index == 0 { None } else { Some(bounds[index - 1].clone()) };
+            let low = if index == 0 {
+                None
+            } else {
+                Some(bounds[index - 1].clone())
+            };
             let high = if index + 1 == want {
                 None
             } else {
                 Some(bounds[index].clone())
             };
-            out.push(RowRange { index, low, high, window: None });
+            out.push(RowRange {
+                index,
+                low,
+                high,
+                window: None,
+            });
         }
         Some(out)
     }
@@ -454,7 +469,11 @@ impl Reader for SqlReader {
             .and_then(|text| text.trim().parse::<usize>().ok())
             .filter(|n| *n >= 1)
         {
-            return if self.slices_cap > 0 { n.min(self.slices_cap).max(1) } else { n };
+            return if self.slices_cap > 0 {
+                n.min(self.slices_cap).max(1)
+            } else {
+                n
+            };
         }
         // 源端能不能并行取数，取决于**源库**声明的连接数：单连接池的库（SQLite/H2/
         // Derby/SQL Server）多开只会在池子里排队，反而多一层上下文切换。
@@ -608,9 +627,7 @@ impl Reader for SqlReader {
             // 小变化不折腾分页；只有明显更宽/更窄/写速换档时才动。
             // 固定页模式（`DBMIND_SYNC_PAGE_ROWS`）下不动：用户给的值就是最终值
             //（否则逃生阀会被自适应悄悄改回去，等于没设）。
-            if self.fixed_page.is_none()
-                && (target_rows * 2 < page_rows || target_rows > page_rows * 2)
-            {
+            if self.fixed_page.is_none() && (target_rows * 2 < page_rows || target_rows > page_rows * 2) {
                 self.page_rows.store(target_rows, Ordering::SeqCst);
             }
             // 固定页模式（`DBMIND_SYNC_PAGE_ROWS`）：用户给的值既是目标也是**恢复上限**。
@@ -721,9 +738,7 @@ impl Reader for SqlReader {
 fn window_split_enabled() -> bool {
     std::env::var("DBMIND_SYNC_WINDOW")
         .map(|value| {
-            !(value.trim() == "0"
-                || value.eq_ignore_ascii_case("false")
-                || value.eq_ignore_ascii_case("off"))
+            !(value.trim() == "0" || value.eq_ignore_ascii_case("false") || value.eq_ignore_ascii_case("off"))
         })
         .unwrap_or(true)
 }
@@ -866,7 +881,9 @@ fn split_integer(lo: i64, hi: i64, want: usize, min_rows: i64) -> Option<Vec<Row
         let low = if index == 0 {
             None
         } else {
-            Some(CellValue::Integer((lo as i128 + span * index as i128 / want as i128) as i64))
+            Some(CellValue::Integer(
+                (lo as i128 + span * index as i128 / want as i128) as i64,
+            ))
         };
         let high = if index + 1 == want {
             None
@@ -875,7 +892,12 @@ fn split_integer(lo: i64, hi: i64, want: usize, min_rows: i64) -> Option<Vec<Row
                 (lo as i128 + span * (index + 1) as i128 / want as i128) as i64,
             ))
         };
-        out.push(RowRange { index, low, high, window: None });
+        out.push(RowRange {
+            index,
+            low,
+            high,
+            window: None,
+        });
     }
     Some(out)
 }
@@ -901,7 +923,12 @@ fn split_real(lo: f64, hi: f64, want: usize, min_rows: i64) -> Option<Vec<RowRan
         } else {
             Some(CellValue::Real(lo + span * (index + 1) as f64 / want as f64))
         };
-        out.push(RowRange { index, low, high, window: None });
+        out.push(RowRange {
+            index,
+            low,
+            high,
+            window: None,
+        });
     }
     Some(out)
 }
@@ -913,8 +940,16 @@ pub fn describe(range: &RowRange, table: &str) -> String {
     } else {
         format!(
             "{table}：区间 [{}, {})",
-            range.low.as_ref().map(|v| format!("{v:?}")).unwrap_or_else(|| "-∞".to_string()),
-            range.high.as_ref().map(|v| format!("{v:?}")).unwrap_or_else(|| "+∞".to_string())
+            range
+                .low
+                .as_ref()
+                .map(|v| format!("{v:?}"))
+                .unwrap_or_else(|| "-∞".to_string()),
+            range
+                .high
+                .as_ref()
+                .map(|v| format!("{v:?}"))
+                .unwrap_or_else(|| "+∞".to_string())
         )
     }
 }
@@ -927,8 +962,7 @@ mod tests {
     /// 首片下界开放、末片上界开放。任何一处不接，就意味着一整段数据漏搬或重复搬。
     #[test]
     fn 整数分片连续且不重不漏() {
-        let ranges =
-            split_integer(1, 1_000_000, 4, MIN_ROWS_PER_SLICE).expect("100 万行应能切 4 片");
+        let ranges = split_integer(1, 1_000_000, 4, MIN_ROWS_PER_SLICE).expect("100 万行应能切 4 片");
         assert_eq!(ranges.len(), 4);
         assert!(ranges[0].low.is_none(), "首片应取下界开放");
         assert!(ranges[3].high.is_none(), "末片应取上界开放");
@@ -948,8 +982,14 @@ mod tests {
     fn 行数太少或只有一片时不切() {
         // 1000 行切 4 片，每片 250 行 —— 建连成本比省下的时间还多
         assert!(split_integer(1, 1_000, 4, MIN_ROWS_PER_SLICE).is_none());
-        assert!(split_integer(1, 1, 4, MIN_ROWS_PER_SLICE).is_none(), "单行表不能切");
-        assert!(split_integer(1, 1_000_000, 1, MIN_ROWS_PER_SLICE).is_none(), "want=1 就是不切");
+        assert!(
+            split_integer(1, 1, 4, MIN_ROWS_PER_SLICE).is_none(),
+            "单行表不能切"
+        );
+        assert!(
+            split_integer(1, 1_000_000, 1, MIN_ROWS_PER_SLICE).is_none(),
+            "want=1 就是不切"
+        );
     }
 
     /// 低速链路上的真实教训：20 万行按 6 片切，每片 3.3 万行 —— 旧的 5 万行门槛
@@ -965,8 +1005,7 @@ mod tests {
 
     #[test]
     fn 浮点分片同样首尾开放() {
-        let ranges =
-            split_real(0.0, 1_000_000.0, 3, MIN_ROWS_PER_SLICE).expect("应能切 3 片");
+        let ranges = split_real(0.0, 1_000_000.0, 3, MIN_ROWS_PER_SLICE).expect("应能切 3 片");
         assert_eq!(ranges.len(), 3);
         assert!(ranges[0].low.is_none());
         assert!(ranges[2].high.is_none());
@@ -1036,11 +1075,17 @@ mod tests {
     fn 页大小按写速换算成二十秒的量() {
         let cap = PAGE_ROWS_MAX;
         // 1 000 行/秒 ⇒ 一页约 2 万行
-        assert_eq!(page_target_rows(20_000, 20_000 * 40, 200, 1_000, cap, true), 20_000);
+        assert_eq!(
+            page_target_rows(20_000, 20_000 * 40, 200, 1_000, cap, true),
+            20_000
+        );
         // 200 行/秒 ⇒ 4 千行（慢目标别囤页）
         assert_eq!(page_target_rows(20_000, 20_000 * 40, 200, 200, cap, true), 4_000);
         // 极慢也不低于下限，极快也不超过上限
-        assert_eq!(page_target_rows(20_000, 20_000 * 40, 200, 1, cap, true), PAGE_ROWS_MIN);
+        assert_eq!(
+            page_target_rows(20_000, 20_000 * 40, 200, 1, cap, true),
+            PAGE_ROWS_MIN
+        );
         assert_eq!(
             page_target_rows(20_000, 20_000 * 40, 200, 10_000_000, cap, true),
             cap

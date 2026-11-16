@@ -93,8 +93,22 @@ foreach ($bin in @('dbmind.exe', 'dbmind-web.exe', 'dbmind-mcp.exe', 'dbmind-des
     }
 }
 
-foreach ($jar in @('dbmind-agent-jdbc.jar', 'dbmind-agent-mongodb.jar', 'dbmind-agent-redis.jar', 'dbmind-agent-elasticsearch.jar')) {
-    $source = Join-Path $root ('agents\' + [System.IO.Path]::GetFileNameWithoutExtension($jar) + '\target\' + $jar)
+# 宿主 jar 清单由连接类型清单派生（不再手写）：每套语句协议一个宿主 jar，
+#   protocol=sql -> jdbc，mongodb/redis/elasticsearch 各自同名。
+# 新增协议（YAML 里 protocol: xxx + 新宿主模块）后这里会自动带上，不会再出现
+# 「记得改 package.ps1」这种漏项。
+$manifestPath = Join-Path $root 'crates\dbmind-core\assets\database-drivers.manifest.json'
+if (-not (Test-Path $manifestPath)) {
+    throw "缺少连接类型清单 $manifestPath —— 先构建一次内核（cargo build）生成它"
+}
+$manifest = Get-Content $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$hostKeys = $manifest.types |
+    Where-Object { $_.runtimeMode -in @('agent', 'external', 'file') } |
+    ForEach-Object { if ($_.protocol -eq 'sql') { 'jdbc' } else { $_.protocol } } |
+    Select-Object -Unique
+foreach ($hostKey in $hostKeys) {
+    $jar = 'dbmind-agent-' + $hostKey + '.jar'
+    $source = Join-Path $root ('agents\dbmind-agent-' + $hostKey + '\target\' + $jar)
     if (Test-Path $source) {
         Copy-Item $source (Join-Path $outDir 'agents')
     }

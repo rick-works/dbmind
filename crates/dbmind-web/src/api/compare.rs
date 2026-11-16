@@ -101,7 +101,10 @@ impl CompareRequest {
     }
 
     fn wants_structure(&self) -> bool {
-        matches!(self.compare_mode.as_deref().unwrap_or("both"), "both" | "structure")
+        matches!(
+            self.compare_mode.as_deref().unwrap_or("both"),
+            "both" | "structure"
+        )
     }
 
     fn wants_data(&self) -> bool {
@@ -245,7 +248,9 @@ async fn columns_facts(
         columns = blocking(move || engine.list_columns_fresh(&target, &name)).await?;
     }
     if columns.is_empty() {
-        return Err(XError::bad_request(format!("表 {qualified_name} 不存在或没有列信息")));
+        return Err(XError::bad_request(format!(
+            "表 {qualified_name} 不存在或没有列信息"
+        )));
     }
     // MySQL 的元数据类型名常不带长度，结构对比前必须补全，否则 varchar(50)
     // 与 varchar(255) 会被判成相同。
@@ -288,9 +293,22 @@ fn compare_sort_family(base: &str) -> Option<&'static str> {
     // 用前缀而不是 contains：`point` 也包含 "int"，把几何类型当成数值键
     // 会让双指针用错比较规则。
     const NUMBER_PREFIXES: [&str; 16] = [
-        "tinyint", "smallint", "mediumint", "bigint", "integer", "int", "serial",
-        "bigserial", "numeric", "decimal", "dec", "number", "real", "double",
-        "float", "money",
+        "tinyint",
+        "smallint",
+        "mediumint",
+        "bigint",
+        "integer",
+        "int",
+        "serial",
+        "bigserial",
+        "numeric",
+        "decimal",
+        "dec",
+        "number",
+        "real",
+        "double",
+        "float",
+        "money",
     ];
     if NUMBER_PREFIXES.iter().any(|part| base.starts_with(part))
         || base.starts_with("smallmoney")
@@ -546,7 +564,11 @@ async fn table_index_signatures(
         let row_table = row_text(&row, "table")
             .or_else(|| row_text(&row, "table_name"))
             .unwrap_or_default();
-        if row_table.rsplit('.').next().unwrap_or(&row_table).to_ascii_lowercase()
+        if row_table
+            .rsplit('.')
+            .next()
+            .unwrap_or(&row_table)
+            .to_ascii_lowercase()
             != table_name
         {
             continue;
@@ -563,9 +585,7 @@ async fn table_index_signatures(
             .or_else(|| row_text(&row, "definition"))
             .unwrap_or_default();
         if let Some(schema_name) = schema_name.as_deref() {
-            if !definition.is_empty()
-                && !definition.to_ascii_lowercase().contains(schema_name)
-            {
+            if !definition.is_empty() && !definition.to_ascii_lowercase().contains(schema_name) {
                 continue;
             }
         }
@@ -585,11 +605,9 @@ async fn table_index_signatures(
         if columns.is_empty() {
             continue;
         }
-        let unique = row_text(&row, "isUnique").is_some_and(|value| {
-            value == "1" || value.eq_ignore_ascii_case("true")
-        })
-            || row_text(&row, "nonUnique").and_then(|value| value.parse::<i64>().ok())
-                == Some(0)
+        let unique = row_text(&row, "isUnique")
+            .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            || row_text(&row, "nonUnique").and_then(|value| value.parse::<i64>().ok()) == Some(0)
             || definition.to_ascii_lowercase().contains("unique");
         let column_set: BTreeSet<String> = columns.drain(..).collect();
         if unique && column_set == *primary_key {
@@ -604,10 +622,7 @@ async fn table_index_signatures(
     Ok(Some(signatures))
 }
 
-fn compare_index_signatures(
-    source: &BTreeSet<String>,
-    target: &BTreeSet<String>,
-) -> Value {
+fn compare_index_signatures(source: &BTreeSet<String>, target: &BTreeSet<String>) -> Value {
     json!({
         "onlyInSource": source.difference(target).cloned().collect::<Vec<_>>(),
         "onlyInTarget": target.difference(source).cloned().collect::<Vec<_>>(),
@@ -628,10 +643,8 @@ fn normalize_index_identifier(identifier: &str) -> String {
 fn foreign_key_signatures(ddl: &str) -> BTreeSet<String> {
     static FK_RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
     let re = FK_RE.get_or_init(|| {
-        regex::Regex::new(
-            r"(?is)foreign\s+key\s*\(([^)]*)\)\s*references\s+([^\s(]+)\s*\(([^)]*)\)",
-        )
-        .expect("外键正则必须可编译")
+        regex::Regex::new(r"(?is)foreign\s+key\s*\(([^)]*)\)\s*references\s+([^\s(]+)\s*\(([^)]*)\)")
+            .expect("外键正则必须可编译")
     });
     let columns = |text: &str| {
         text.split(',')
@@ -645,9 +658,8 @@ fn foreign_key_signatures(ddl: &str) -> BTreeSet<String> {
             let local = columns(capture.get(1)?.as_str());
             let referenced_table = normalize_index_identifier(capture.get(2)?.as_str());
             let referenced = columns(capture.get(3)?.as_str());
-            (!local.is_empty() && !referenced_table.is_empty() && !referenced.is_empty()).then(|| {
-                format!("{local}->{referenced_table}:{referenced}")
-            })
+            (!local.is_empty() && !referenced_table.is_empty() && !referenced.is_empty())
+                .then(|| format!("{local}->{referenced_table}:{referenced}"))
         })
         .collect()
 }
@@ -747,7 +759,6 @@ async fn table_foreign_key_signatures(
 
 // ------------------------------------------------------------------ 数据对比
 
-
 /// 单侧数据流：协程按 keyset 分页拉取（每页 5 万），页经 channel 交给对比循环。
 /// **内存只驻留当前页** —— 行数无上限、不会 OOM（流式边拉边比）。
 struct SideStream {
@@ -844,7 +855,10 @@ async fn count_rows(
         .map(|c| format!(" where ({c})"))
         .unwrap_or_default();
     let schema_owned = schema.map(|s| s.to_string());
-    let sql = format!("select count(*) from {}{where_part}", qualified(table, &schema_owned, dialect));
+    let sql = format!(
+        "select count(*) from {}{where_part}",
+        qualified(table, &schema_owned, dialect)
+    );
     // 超时即放弃（见 COUNT_WAIT）：等不到分母就按流动条走，不能把「开始对比」卡在计数上
     let Ok(Ok(result)) = tokio::time::timeout(COUNT_WAIT, run_sql_in(state, conn, scope, sql, 1)).await
     else {
@@ -858,7 +872,6 @@ async fn count_rows(
         _ => None,
     }
 }
-
 
 /// keyset 分页的字面量：按排序键类型生成（数值不带引号、文本转义引号），
 /// 让数据库按与内存 `SortKey` 一致的序比较（数值序/文本序）。
@@ -939,10 +952,7 @@ fn spawn_side_stream(
         let mut sql = format!("select {list} from {}", qualified(&table, &schema, dialect));
         // 条件整体加括号（见 count_rows 的注释），并且记住「有没有条件」——
         // 不要再靠 `sql.contains(" where ")` 猜：条件里出现字符串 ' where ' 就猜错了
-        let condition = condition
-            .as_deref()
-            .map(str::trim)
-            .filter(|c| !c.is_empty());
+        let condition = condition.as_deref().map(str::trim).filter(|c| !c.is_empty());
         if let Some(condition) = condition {
             sql.push_str(&format!(" where ({condition})"));
         }
@@ -970,7 +980,10 @@ fn spawn_side_stream(
                 // 分页语法按**方言**：Oracle/DB2 不认 `limit`，SQL Server 要 `offset … fetch`，
                 // 硬写 `limit` 的结果是「5 万行以内（首页）看着都对，一翻页就报错」，
                 // 更糟的是首页直接语法错（Oracle 上整表对比根本跑不起来）。
-                None => format!("{sql} order by {order_cols} {}", dialect.limit_clause(0, page_size as u64)),
+                None => format!(
+                    "{sql} order by {order_cols} {}",
+                    dialect.limit_clause(0, page_size as u64)
+                ),
                 Some(key) => {
                     let lits: Vec<String> = key
                         .iter()
@@ -1012,9 +1025,10 @@ fn spawn_side_stream(
                         columns_out = Some(result.columns.iter().map(|c| c.name.clone()).collect());
                     }
                     let got = result.rows.len();
-                    let last = result.rows.last().map(|row| {
-                        shape::row_sort_key(row, &sort_positions(&key_cols, &columns))
-                    });
+                    let last = result
+                        .rows
+                        .last()
+                        .map(|row| shape::row_sort_key(row, &sort_positions(&key_cols, &columns)));
                     // **发送失败 = 下游已经走了**（主循环提前返回/取消收摊）：立刻停。
                     // 原来把结果丢掉继续翻页，于是一次参数类失败（「目标表结果里没有关键列」）
                     // 之后，两侧协程还会把整张表一页页读到底，白烧几分钟连接与带宽。
@@ -1083,7 +1097,6 @@ fn sort_positions(key_cols: &[String], columns: &[String]) -> Vec<usize> {
         .filter_map(|key| columns.iter().position(|c| c.eq_ignore_ascii_case(key)))
         .collect()
 }
-
 
 fn row_object(columns: &[String], row: &[CellValue], only: Option<&BTreeSet<usize>>) -> Value {
     let mut object = Map::new();
@@ -1218,8 +1231,7 @@ fn decode_spooled_row(bytes: &[u8]) -> Result<Vec<CellValue>, String> {
                 take(&mut pos, 8)?.try_into().unwrap(),
             )))),
             3 => {
-                let len =
-                    u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;
+                let len = u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;
                 let text = std::str::from_utf8(take(&mut pos, len)?)
                     .map_err(|e| format!("对比文本不是有效 UTF-8：{e}"))?;
                 row.push(CellValue::Text(text.to_string()));
@@ -1229,13 +1241,10 @@ fn decode_spooled_row(bytes: &[u8]) -> Result<Vec<CellValue>, String> {
             }),
             6 => {
                 let len = u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;
-                row.push(CellValue::Bytes(
-                    take(&mut pos, len)?.to_vec().into(),
-                ));
+                row.push(CellValue::Bytes(take(&mut pos, len)?.to_vec().into()));
             }
             5 => {
-                let len =
-                    u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;
+                let len = u32::from_le_bytes(take(&mut pos, 4)?.try_into().unwrap()) as usize;
                 let text = std::str::from_utf8(take(&mut pos, len)?)
                     .map_err(|e| format!("对比小数不是有效 UTF-8：{e}"))?;
                 row.push(CellValue::Decimal(text.to_string()));
@@ -1278,10 +1287,7 @@ async fn read_spooled_row<R: tokio::io::AsyncRead + Unpin>(
         .await
         .map_err(|e| format!("读取对比临时行分隔符失败：{e}"))?;
     if sep[0] != b'\n' {
-        return Err(format!(
-            "对比临时文件行分隔符异常（期望换行，实际 {}）",
-            sep[0]
-        ));
+        return Err(format!("对比临时文件行分隔符异常（期望换行，实际 {}）", sep[0]));
     }
     decode_spooled_row(&bytes).map(Some)
 }
@@ -1289,10 +1295,7 @@ async fn read_spooled_row<R: tokio::io::AsyncRead + Unpin>(
 /// 单行落盘：**只给单测用** —— 主路径走 [`encode_spooled_record`] + 128KB 缓冲，
 /// 那里每行不再产生 await。
 #[cfg(test)]
-async fn spool_row(
-    writer: &mut BufWriter<tokio::fs::File>,
-    row: &[CellValue],
-) -> Result<(), String> {
+async fn spool_row(writer: &mut BufWriter<tokio::fs::File>, row: &[CellValue]) -> Result<(), String> {
     let bytes = encode_spooled_row(row);
     writer
         .write_all(&(bytes.len() as u32).to_le_bytes())
@@ -1355,13 +1358,10 @@ async fn compare_hashed_memory(
     task: &std::sync::Arc<crate::api::tasks::Task>,
 ) -> XResult<(Value, u64, u64)> {
     task.step("内存哈希对比");
-    let find = |cols: &[String], name: &str| {
-        cols.iter().position(|column| column.eq_ignore_ascii_case(name))
-    };
+    let find = |cols: &[String], name: &str| cols.iter().position(|column| column.eq_ignore_ascii_case(name));
     let mut compare_pairs: Vec<(usize, usize, String)> = Vec::new();
     let mut excluded_columns: Vec<String> = excluded.to_vec();
-    let mut excluded_set: BTreeSet<String> =
-        excluded.iter().map(|name| name.to_ascii_lowercase()).collect();
+    let mut excluded_set: BTreeSet<String> = excluded.iter().map(|name| name.to_ascii_lowercase()).collect();
     for (index, name) in src_cols.iter().enumerate() {
         if src_key_idx.contains(&index) {
             continue;
@@ -1439,9 +1439,7 @@ async fn compare_hashed_memory(
                 for index in &src_key_idx {
                     object.insert(
                         src_cols[*index].clone(),
-                        row.get(*index)
-                            .map(shape::cell_to_value)
-                            .unwrap_or(Value::Null),
+                        row.get(*index).map(shape::cell_to_value).unwrap_or(Value::Null),
                     );
                 }
                 for (s_index, t_index, name) in &compare_pairs {
@@ -1450,9 +1448,7 @@ async fn compare_hashed_memory(
                     }
                     object.insert(
                         format!("{name}（源）"),
-                        row.get(*s_index)
-                            .map(shape::cell_to_value)
-                            .unwrap_or(Value::Null),
+                        row.get(*s_index).map(shape::cell_to_value).unwrap_or(Value::Null),
                     );
                     object.insert(
                         format!("{name}（目标）"),
@@ -1573,21 +1569,17 @@ async fn compare_hashed(
     }
     let src_cols = source.columns.clone();
     let tgt_cols = target.columns.clone();
-    let find = |cols: &[String], name: &str| {
-        cols.iter().position(|column| column.eq_ignore_ascii_case(name))
-    };
+    let find = |cols: &[String], name: &str| cols.iter().position(|column| column.eq_ignore_ascii_case(name));
     let src_key_idx: Vec<usize> = source_keys
         .iter()
         .map(|key| {
-            find(&src_cols, key)
-                .ok_or_else(|| XError::bad_request(format!("源表结果里没有关键列 {key}")))
+            find(&src_cols, key).ok_or_else(|| XError::bad_request(format!("源表结果里没有关键列 {key}")))
         })
         .collect::<XResult<_>>()?;
     let tgt_key_idx: Vec<usize> = target_keys
         .iter()
         .map(|key| {
-            find(&tgt_cols, key)
-                .ok_or_else(|| XError::bad_request(format!("目标表结果里没有关键列 {key}")))
+            find(&tgt_cols, key).ok_or_else(|| XError::bad_request(format!("目标表结果里没有关键列 {key}")))
         })
         .collect::<XResult<_>>()?;
     // **只有两侧 count 都成功**才敢按「小表」走内存哈希（判据见 prefer_memory_hash）：
@@ -1615,8 +1607,12 @@ async fn compare_hashed(
         .await
         .map_err(|e| format!("创建对比临时目录失败：{e}"))?;
     let _guard = CompareTempDir(root.clone());
-    let mut source_writers = open_compare_buckets(&root, "source").await.map_err(XError::bad_request)?;
-    let mut target_writers = open_compare_buckets(&root, "target").await.map_err(XError::bad_request)?;
+    let mut source_writers = open_compare_buckets(&root, "source")
+        .await
+        .map_err(XError::bad_request)?;
+    let mut target_writers = open_compare_buckets(&root, "target")
+        .await
+        .map_err(XError::bad_request)?;
     // 每个分片一个内存缓冲：百万行时把「每行 3 次 await」压成「每 128KB 一次」（见 SPOOL_FLUSH_BYTES）
     let mut source_bufs: Vec<Vec<u8>> = vec![Vec::new(); COMPARE_HASH_BUCKETS];
     let mut target_bufs: Vec<Vec<u8>> = vec![Vec::new(); COMPARE_HASH_BUCKETS];
@@ -1677,8 +1673,7 @@ async fn compare_hashed(
 
     let mut compare_pairs: Vec<(usize, usize, String)> = Vec::new();
     let mut excluded_columns: Vec<String> = excluded.to_vec();
-    let mut excluded_set: BTreeSet<String> =
-        excluded.iter().map(|name| name.to_ascii_lowercase()).collect();
+    let mut excluded_set: BTreeSet<String> = excluded.iter().map(|name| name.to_ascii_lowercase()).collect();
     for (index, name) in src_cols.iter().enumerate() {
         if src_key_idx.contains(&index) {
             continue;
@@ -1769,9 +1764,7 @@ async fn compare_hashed(
                     for index in &src_key_idx {
                         object.insert(
                             src_cols[*index].clone(),
-                            row.get(*index)
-                                .map(shape::cell_to_value)
-                                .unwrap_or(Value::Null),
+                            row.get(*index).map(shape::cell_to_value).unwrap_or(Value::Null),
                         );
                     }
                     for (s_index, t_index, name) in &compare_pairs {
@@ -1780,9 +1773,7 @@ async fn compare_hashed(
                         }
                         object.insert(
                             format!("{name}（源）"),
-                            row.get(*s_index)
-                                .map(shape::cell_to_value)
-                                .unwrap_or(Value::Null),
+                            row.get(*s_index).map(shape::cell_to_value).unwrap_or(Value::Null),
                         );
                         object.insert(
                             format!("{name}（目标）"),
@@ -1869,21 +1860,41 @@ async fn compare_streamed(
     }
     for key in target_keys {
         if !target_columns.iter().any(|c| c.eq_ignore_ascii_case(key)) {
-            return Err(XError::bad_request(format!("目标比对键 {key} 不在参与对比的列里")));
+            return Err(XError::bad_request(format!(
+                "目标比对键 {key} 不在参与对比的列里"
+            )));
         }
     }
 
     let (src_tx, src_rx) = tokio::sync::mpsc::channel::<Result<SidePage, String>>(2);
     spawn_side_stream(
-        state.clone(), source_conn, source_scope, source_table, source_schema,
-        source_condition, source_columns.to_vec(), source_dialect, source_keys.to_vec(),
-        source_time_keys.to_vec(), task.clone(), src_tx,
+        state.clone(),
+        source_conn,
+        source_scope,
+        source_table,
+        source_schema,
+        source_condition,
+        source_columns.to_vec(),
+        source_dialect,
+        source_keys.to_vec(),
+        source_time_keys.to_vec(),
+        task.clone(),
+        src_tx,
     );
     let (tgt_tx, tgt_rx) = tokio::sync::mpsc::channel::<Result<SidePage, String>>(2);
     spawn_side_stream(
-        state.clone(), target_conn, target_scope, target_table, target_schema,
-        target_condition, target_columns.to_vec(), target_dialect, target_keys.to_vec(),
-        target_time_keys.to_vec(), task.clone(), tgt_tx,
+        state.clone(),
+        target_conn,
+        target_scope,
+        target_table,
+        target_schema,
+        target_condition,
+        target_columns.to_vec(),
+        target_dialect,
+        target_keys.to_vec(),
+        target_time_keys.to_vec(),
+        task.clone(),
+        tgt_tx,
     );
     let mut source = SideStream::new(src_rx);
     let mut target = SideStream::new(tgt_rx);
@@ -1900,13 +1911,11 @@ async fn compare_streamed(
     // 列序初始化（首页列即全列序）
     let src_cols = source.columns.clone();
     let tgt_cols = target.columns.clone();
-    let find = |cols: &[String], name: &str| {
-        cols.iter().position(|c| c.eq_ignore_ascii_case(name))
-    };
+    let find = |cols: &[String], name: &str| cols.iter().position(|c| c.eq_ignore_ascii_case(name));
     let mut src_key_idx = Vec::new();
     for key in source_keys {
-        let idx = find(&src_cols, key)
-            .ok_or_else(|| XError::bad_request(format!("源表结果里没有关键列 {key}")))?;
+        let idx =
+            find(&src_cols, key).ok_or_else(|| XError::bad_request(format!("源表结果里没有关键列 {key}")))?;
         src_key_idx.push(idx);
     }
     let mut tgt_key_idx = Vec::new();
@@ -2090,10 +2099,7 @@ async fn compare_streamed(
 // ------------------------------------------------------------------ 处理器
 
 /// `POST /api/compare` —— 提交对比任务。
-pub async fn start(
-    State(state): State<AppState>,
-    Json(body): Json<CompareRequest>,
-) -> XResult<Json<Value>> {
+pub async fn start(State(state): State<AppState>, Json(body): Json<CompareRequest>) -> XResult<Json<Value>> {
     if body.source_table.trim().is_empty() {
         return Err(XError::bad_request("缺少 sourceTable 参数"));
     }
@@ -2163,8 +2169,10 @@ pub async fn start(
 
             task.log(format!(
                 "对比开始：{} . {} → {} . {}",
-                body.source_database.as_deref().unwrap_or("-"), body.source_table,
-                body.target_database.as_deref().unwrap_or("-"), body.target_table
+                body.source_database.as_deref().unwrap_or("-"),
+                body.source_table,
+                body.target_database.as_deref().unwrap_or("-"),
+                body.target_table
             ));
             if body.wants_structure() {
                 // 结构对比是"一次性算完"的，没有逐表进度可分；但**分母必须给**、结束要补分子，
@@ -2209,22 +2217,13 @@ pub async fn start(
                     (&source_indexes, &target_indexes)
                 {
                     let index_diff = compare_index_signatures(source_indexes, target_indexes);
-                    let index_count = index_diff["onlyInSource"]
-                        .as_array()
-                        .map(Vec::len)
-                        .unwrap_or(0)
-                        + index_diff["onlyInTarget"]
-                            .as_array()
-                            .map(Vec::len)
-                            .unwrap_or(0);
+                    let index_count = index_diff["onlyInSource"].as_array().map(Vec::len).unwrap_or(0)
+                        + index_diff["onlyInTarget"].as_array().map(Vec::len).unwrap_or(0);
                     if let Some(obj) = structure.as_object_mut() {
                         obj.insert("indexesCompared".to_string(), json!(true));
                         obj.insert("indexDifferences".to_string(), index_diff);
-                        let count = obj
-                            .get("diffCount")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0)
-                            + index_count as u64;
+                        let count =
+                            obj.get("diffCount").and_then(Value::as_u64).unwrap_or(0) + index_count as u64;
                         obj.insert("diffCount".to_string(), json!(count));
                     }
                 } else if let Some(obj) = structure.as_object_mut() {
@@ -2248,26 +2247,15 @@ pub async fn start(
                         target_dialect,
                     )
                 );
-                if let (Ok(Some(source_fks)), Ok(Some(target_fks))) =
-                    (&source_fks, &target_fks)
-                {
+                if let (Ok(Some(source_fks)), Ok(Some(target_fks))) = (&source_fks, &target_fks) {
                     let fk_diff = compare_index_signatures(source_fks, target_fks);
-                    let fk_count = fk_diff["onlyInSource"]
-                        .as_array()
-                        .map(Vec::len)
-                        .unwrap_or(0)
-                        + fk_diff["onlyInTarget"]
-                            .as_array()
-                            .map(Vec::len)
-                            .unwrap_or(0);
+                    let fk_count = fk_diff["onlyInSource"].as_array().map(Vec::len).unwrap_or(0)
+                        + fk_diff["onlyInTarget"].as_array().map(Vec::len).unwrap_or(0);
                     if let Some(obj) = structure.as_object_mut() {
                         obj.insert("foreignKeysCompared".to_string(), json!(true));
                         obj.insert("foreignKeyDifferences".to_string(), fk_diff);
-                        let count = obj
-                            .get("diffCount")
-                            .and_then(Value::as_u64)
-                            .unwrap_or(0)
-                            + fk_count as u64;
+                        let count =
+                            obj.get("diffCount").and_then(Value::as_u64).unwrap_or(0) + fk_count as u64;
                         obj.insert("diffCount".to_string(), json!(count));
                     }
                 } else if let Some(obj) = structure.as_object_mut() {
@@ -2302,8 +2290,8 @@ pub async fn start(
                     columns.push(column.name.clone());
                     target_columns.push(target_column.name.clone());
                 }
-                let key_plan = validate_compare_keys(&source_facts, &target_facts, &keys)
-                    .map_err(|e| e.message)?;
+                let key_plan =
+                    validate_compare_keys(&source_facts, &target_facts, &keys).map_err(|e| e.message)?;
                 task.step(format!("读取源表 {}", body.source_table));
                 // **先 count 两侧行数做分母**：进度条按真实百分比增长（与数据传输一致）。
                 // count 失败/为 0 → 分母未知，保持流动动画兜底。
@@ -2311,13 +2299,21 @@ pub async fn start(
                 // 一个 RTT × 2（跨网时每个 count 可能就是几百毫秒）。
                 let (src_count, tgt_count) = tokio::join!(
                     count_rows(
-                        &state, &source_conn, &source_scope, &body.source_table,
-                        body.source_schema.as_deref(), body.source_condition.as_deref(),
+                        &state,
+                        &source_conn,
+                        &source_scope,
+                        &body.source_table,
+                        body.source_schema.as_deref(),
+                        body.source_condition.as_deref(),
                         source_dialect,
                     ),
                     count_rows(
-                        &state, &target_conn, &target_scope, &target_table,
-                        body.target_schema.as_deref(), body.target_condition.as_deref(),
+                        &state,
+                        &target_conn,
+                        &target_scope,
+                        &target_table,
+                        body.target_schema.as_deref(),
+                        body.target_condition.as_deref(),
                         target_dialect,
                     )
                 );
@@ -2338,8 +2334,12 @@ pub async fn start(
                     None => task.log(format!(
                         "行数统计失败（超时/无权限/方言不支持）：源 {} / 目标 {}。\
                          进度改按已读取行数显示，对比结果不受影响",
-                        src_count.map(|n| format!("{n} 行")).unwrap_or_else(|| "未知".to_string()),
-                        tgt_count.map(|n| format!("{n} 行")).unwrap_or_else(|| "未知".to_string()),
+                        src_count
+                            .map(|n| format!("{n} 行"))
+                            .unwrap_or_else(|| "未知".to_string()),
+                        tgt_count
+                            .map(|n| format!("{n} 行"))
+                            .unwrap_or_else(|| "未知".to_string()),
                     )),
                 }
                 // 读取与对比**流式融合**：两侧各自分页拉取（协程），主循环双指针边收边比 ——
@@ -2439,7 +2439,7 @@ pub async fn start(
                     task.set_message("已停止（以下为已读取部分的对比结果）".to_string());
                     return Ok(None);
                 }
-                }
+            }
 
             task.set_message("对比完成".to_string());
             Ok(Some(Value::Object(result)))
@@ -2450,10 +2450,7 @@ pub async fn start(
 }
 
 /// `GET /api/compare/task/{taskId}` —— 进度。
-pub async fn status(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn status(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     let Some(task) = state.tasks.get(&task_id) else {
         return Ok(Json(json!({
             "success": false,
@@ -2472,10 +2469,7 @@ pub async fn status(
 }
 
 /// `POST /api/compare/cancel/{taskId}` —— 请求取消。
-pub async fn cancel(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn cancel(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     match state.tasks.get(&task_id) {
         Some(task) => {
             task.cancel();
@@ -2506,8 +2500,7 @@ mod key_validation_tests {
     fn 非空数值主键可用于严格对比并映射目标列名() {
         let source = vec![column("Id", "bigint", false, true)];
         let target = vec![column("ID", "numeric", false, true)];
-        let plan = validate_compare_keys(&source, &target, &["Id".to_string()])
-            .expect("非空数值主键应可用");
+        let plan = validate_compare_keys(&source, &target, &["Id".to_string()]).expect("非空数值主键应可用");
         assert_eq!(plan.target_keys, vec!["ID".to_string()]);
         assert_eq!(plan.mode, CompareKeyMode::Ordered);
     }
@@ -2515,8 +2508,8 @@ mod key_validation_tests {
     #[test]
     fn 文本主键走哈希但可空和非主键仍拒绝() {
         let text = vec![column("code", "varchar", false, true)];
-        let plan = validate_compare_keys(&text, &text, &["code".to_string()])
-            .expect("完整非空文本主键应该可用");
+        let plan =
+            validate_compare_keys(&text, &text, &["code".to_string()]).expect("完整非空文本主键应该可用");
         assert_eq!(plan.mode, CompareKeyMode::Hashed);
 
         let nullable = vec![column("seq", "bigint", true, true)];
@@ -2535,12 +2528,8 @@ mod key_validation_tests {
         let err = validate_compare_keys(&source, &target, &["id".to_string()])
             .expect_err("复合主键只选一部分必须拒绝");
         assert!(err.message.contains("完整等于"));
-        let plan = validate_compare_keys(
-            &source,
-            &target,
-            &["tenant_id".to_string(), "id".to_string()],
-        )
-        .expect("完整复合主键应可用");
+        let plan = validate_compare_keys(&source, &target, &["tenant_id".to_string(), "id".to_string()])
+            .expect("完整复合主键应可用");
         assert_eq!(plan.target_keys.len(), 2);
         assert_eq!(plan.mode, CompareKeyMode::Ordered);
     }
@@ -2558,7 +2547,10 @@ mod key_validation_tests {
         let dm = Dialect::new(ConnectionKind::Dm);
         let my = Dialect::new(ConnectionKind::Mysql);
         // 真的是时间列：ANSI 字面量，会话 NLS 设置影响不到
-        assert_eq!(keyset_literal(&time, ora, true), "timestamp '2024-01-01 10:00:00'");
+        assert_eq!(
+            keyset_literal(&time, ora, true),
+            "timestamp '2024-01-01 10:00:00'"
+        );
         assert_eq!(keyset_literal(&time, dm, true), "timestamp '2024-01-01 10:00:00'");
         // 文本列里存 ISO 时间：保持字符串比较
         assert_eq!(keyset_literal(&time, ora, false), "'2024-01-01 10:00:00'");

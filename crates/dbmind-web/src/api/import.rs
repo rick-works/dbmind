@@ -89,9 +89,8 @@ pub async fn start(
         }
     }
 
-    let bytes = bytes.ok_or_else(|| {
-        XError::bad_request("没有收到上传文件（multipart 的文件字段名应为 file）")
-    })?;
+    let bytes =
+        bytes.ok_or_else(|| XError::bad_request("没有收到上传文件（multipart 的文件字段名应为 file）"))?;
     if bytes.is_empty() {
         return Err(XError::bad_request("上传的文件是空的"));
     }
@@ -211,10 +210,7 @@ pub async fn start(
 }
 
 /// `GET /api/{m}/import/task/{taskId}` —— 进度。
-pub async fn status(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn status(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     let Some(task) = state.tasks.get(&task_id) else {
         return Ok(Json(json!({
             "success": false,
@@ -238,14 +234,13 @@ pub async fn status(
 }
 
 /// `POST /api/{m}/import/cancel/{taskId}` —— 请求取消。
-pub async fn cancel(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn cancel(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     match state.tasks.get(&task_id) {
         Some(task) => {
             task.cancel();
-            Ok(Json(json!({ "success": true, "message": "已请求取消，当前批次写完后停止" })))
+            Ok(Json(
+                json!({ "success": true, "message": "已请求取消，当前批次写完后停止" }),
+            ))
         }
         None => Ok(Json(json!({ "success": false, "message": "任务不存在或已过期" }))),
     }
@@ -280,8 +275,15 @@ async fn run_sql(state: &AppState, conn: &str, database: &str, sql: &str) -> Res
 fn supports_multi_row(dialect: Dialect) -> bool {
     matches!(
         dialect.kind.key(),
-        "mysql" | "mariadb" | "doris" | "postgresql" | "kingbase" | "sqlite" | "sqlserver"
-            | "h2" | "clickhouse"
+        "mysql"
+            | "mariadb"
+            | "doris"
+            | "postgresql"
+            | "kingbase"
+            | "sqlite"
+            | "sqlserver"
+            | "h2"
+            | "clickhouse"
     )
 }
 
@@ -316,10 +318,7 @@ fn build_insert(
         let tuples: Vec<String> = rows.iter().map(tuple).collect();
         format!("{head}{}", tuples.join(", "))
     } else {
-        let first = rows
-            .first()
-            .map(tuple)
-            .unwrap_or_else(|| "(null)".to_string());
+        let first = rows.first().map(tuple).unwrap_or_else(|| "(null)".to_string());
         format!("{head}{first}")
     }
 }
@@ -346,16 +345,11 @@ async fn target_column_types(
     let engine = state.engine();
     let table_owned = table.to_string();
     let columns =
-        blocking(move || engine.list_columns_fresh_in(&target, &table_owned, schema.as_deref()))
-            .await;
+        blocking(move || engine.list_columns_fresh_in(&target, &table_owned, schema.as_deref())).await;
     match columns {
         Ok(list) => list
             .into_iter()
-            .filter_map(|column| {
-                column
-                    .type_name
-                    .map(|ty| (column.name.to_ascii_lowercase(), ty))
-            })
+            .filter_map(|column| column.type_name.map(|ty| (column.name.to_ascii_lowercase(), ty)))
             .collect(),
         // 元数据拿不到不该让导入直接失败（有的类型对当前账号隐藏系统视图）——
         // 退回文本字面量，让数据库自己判断能不能转换
@@ -391,7 +385,9 @@ fn is_numeric_literal(text: &str) -> bool {
     if text.is_empty() {
         return false;
     }
-    text.parse::<f64>().map(|value| value.is_finite()).unwrap_or(false)
+    text.parse::<f64>()
+        .map(|value| value.is_finite())
+        .unwrap_or(false)
 }
 
 fn truncate(text: &str, limit: usize) -> String {
@@ -411,8 +407,7 @@ fn explain_failure(db_message: &str) -> Option<&'static str> {
     // MySQL 1442：触发器改了「触发它的那张表」。典型写法是 BEFORE INSERT 里
     // 又 `insert into 同一张表 select ...`（建触发器时不报错），此后**任何**
     // INSERT 都会被数据库拒掉 —— 与导入的文件、列、行数都无关。
-    if db_message.contains("errorCode:1442")
-        || db_message.contains("already used by statement which invoked")
+    if db_message.contains("errorCode:1442") || db_message.contains("already used by statement which invoked")
     {
         return Some(
             "目标表上有触发器会写回它自己（例如 BEFORE INSERT 里又 insert 同一张表），\
@@ -462,10 +457,7 @@ fn looks_like_json(bytes: &[u8]) -> bool {
 
 fn first_meaningful_byte(bytes: &[u8]) -> Option<u8> {
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
-    bytes
-        .iter()
-        .copied()
-        .find(|byte| !byte.is_ascii_whitespace())
+    bytes.iter().copied().find(|byte| !byte.is_ascii_whitespace())
 }
 
 /// 从文件名推断表名（`orders_2026.csv` → `orders_2026`）。

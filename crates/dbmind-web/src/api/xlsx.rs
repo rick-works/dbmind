@@ -134,8 +134,7 @@ impl<W: Write + Seek> Workbook<W> {
             self.close_open_sheet()?;
         }
         for (name, body) in self.parts() {
-            let options =
-                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
             self.zip.start_file(name, options).map_err(io_message)?;
             self.write_raw(&body)?;
         }
@@ -150,9 +149,8 @@ impl<W: Write + Seek> Workbook<W> {
     fn parts(&self) -> Vec<(String, String)> {
         let count = self.names.len();
         let mut content_types = String::from(XML_HEADER);
-        content_types.push_str(
-            "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">",
-        );
+        content_types
+            .push_str("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
         content_types.push_str(
             "<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>",
         );
@@ -447,12 +445,7 @@ fn relationship_target(rels: &str, id: &str) -> Option<String> {
 }
 
 /// 一个工作表的全部行（外层按行、内层按列，空单元格是 `None`）。
-fn sheet_rows(
-    xml: &str,
-    shared: &[String],
-    date_xf: &[bool],
-    date1904: bool,
-) -> Vec<Vec<Option<String>>> {
+fn sheet_rows(xml: &str, shared: &[String], date_xf: &[bool], date1904: bool) -> Vec<Vec<Option<String>>> {
     let mut rows: Vec<Vec<Option<String>>> = Vec::new();
     let mut row: Vec<Option<String>> = Vec::new();
     let mut next_index = 0usize;
@@ -485,10 +478,7 @@ fn sheet_rows(
                 "v" => in_value = false,
                 "t" => in_text = false,
                 "c" => {
-                    let index = cell_ref
-                        .as_deref()
-                        .and_then(column_index)
-                        .unwrap_or(next_index);
+                    let index = cell_ref.as_deref().and_then(column_index).unwrap_or(next_index);
                     let value = cell_text(
                         cell_type.as_deref(),
                         &cell_value,
@@ -535,10 +525,7 @@ fn sheet_rows(
                 cell_inline.clear();
                 if self_closing {
                     // 自闭合的 `<c/>` 也是空单元格：**要占住列位置**，否则后面所有列都会左移
-                    let index = cell_ref
-                        .as_deref()
-                        .and_then(column_index)
-                        .unwrap_or(next_index);
+                    let index = cell_ref.as_deref().and_then(column_index).unwrap_or(next_index);
                     put(&mut row, index, None);
                     next_index = index + 1;
                 }
@@ -746,7 +733,9 @@ fn date_styles(xml: &str) -> Vec<bool> {
             .and_then(|value| value.parse::<u32>().ok())
             .unwrap_or(0);
         out.push(builtin_date_format(id) || custom.get(&id).copied().unwrap_or(false));
-        let Some(at) = block[search..].find(&tag) else { break };
+        let Some(at) = block[search..].find(&tag) else {
+            break;
+        };
         search += at + tag.len();
     }
     out

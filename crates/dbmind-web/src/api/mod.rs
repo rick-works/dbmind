@@ -25,12 +25,10 @@
 pub mod ai;
 pub mod backup;
 pub mod compare;
-/// 数据传输引擎（DataX 风格的 Reader/Writer 插件 + 多通道流水线）。
-/// 目录放在 `sync.rs` 旁边：它只负责「搬行」，建表/索引/注释这些 DDL 编排还在 sync 层。
-pub mod transfer;
 pub mod conn;
 pub mod datagen;
 pub mod dialect;
+pub mod dialect_ops;
 pub mod driver;
 pub mod error;
 pub mod export;
@@ -45,16 +43,19 @@ pub mod shape;
 pub mod sync;
 pub mod sys;
 pub mod sysproxy;
-pub mod update;
 pub mod tasks;
+/// 数据传输引擎（DataX 风格的 Reader/Writer 插件 + 多通道流水线）。
+/// 目录放在 `sync.rs` 旁边：它只负责「搬行」，建表/索引/注释这些 DDL 编排还在 sync 层。
+pub mod transfer;
+pub mod update;
 pub mod xlsx;
 
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, post};
 use axum::Json;
-use serde_json::json;
 use axum::Router;
 use dbmind_core::ConnectionRecord;
+use serde_json::json;
 
 use crate::AppState;
 use error::{XError, XResult};

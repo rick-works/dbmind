@@ -381,14 +381,14 @@ async fn ensure_native_auth_dll(state: &AppState, kind: ConnectionKind) -> XResu
         ]
         .into_iter()
         .filter_map(|d| std::fs::read_dir(d).ok())
-            .flatten()
-            .flatten()
-            .any(|e| {
-                e.file_name()
-                    .to_str()
-                    .map(|n| n.starts_with("mssql-jdbc_auth-") && n.ends_with(&suffix))
-                    .unwrap_or(false)
-            });
+        .flatten()
+        .flatten()
+        .any(|e| {
+            e.file_name()
+                .to_str()
+                .map(|n| n.starts_with("mssql-jdbc_auth-") && n.ends_with(&suffix))
+                .unwrap_or(false)
+        });
         if have_dll {
             return Ok(());
         }
@@ -422,9 +422,8 @@ async fn ensure_native_auth_dll(state: &AppState, kind: ConnectionKind) -> XResu
         let tag = version.split(".jre").next().unwrap_or(&version).to_string();
         // 微软把所有架构/版本的认证库打成一个 `mssql-jdbc_auth.zip` 挂在 release 上
         // （发布清单里另有各平台 jar，唯独没有「分版本的原生库 zip」—— 实测 404 过）
-        let url = format!(
-            "https://github.com/microsoft/mssql-jdbc/releases/download/v{tag}/mssql-jdbc_auth.zip"
-        );
+        let url =
+            format!("https://github.com/microsoft/mssql-jdbc/releases/download/v{tag}/mssql-jdbc_auth.zip");
         let download_url = url.clone();
         let bytes = blocking(move || -> dbmind_core::Result<Vec<u8>> {
             let response = ureq::get(&download_url).call().map_err(|err| {
@@ -460,17 +459,18 @@ async fn ensure_native_auth_dll(state: &AppState, kind: ConnectionKind) -> XResu
         let arch_for_zip = arch.clone();
         let tag_for_zip = tag.clone();
         let dll_bytes = blocking(move || -> dbmind_core::Result<Vec<u8>> {
-            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))
-                .map_err(|e| DbMindError::new(ErrorCode::DriverNotReady, format!("认证库 zip 解包失败：{e}")))?;
+            let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| {
+                DbMindError::new(ErrorCode::DriverNotReady, format!("认证库 zip 解包失败：{e}"))
+            })?;
             let exact = format!("mssql-jdbc_auth-{tag_for_zip}.{arch_for_zip}.dll");
             let suffix = format!(".{arch_for_zip}.dll");
             // 优先精确匹配「版本+架构」，退化到「任意该架构的认证库」——
             // 内核按文件名里的版本号 loadLibrary，拿到后还会按驱动版本改名，所以差版本也能用
             let mut fallback: Option<String> = None;
             for i in 0..archive.len() {
-                let mut entry = archive
-                    .by_index(i)
-                    .map_err(|e| DbMindError::new(ErrorCode::DriverNotReady, format!("认证库 zip 读取失败：{e}")))?;
+                let mut entry = archive.by_index(i).map_err(|e| {
+                    DbMindError::new(ErrorCode::DriverNotReady, format!("认证库 zip 读取失败：{e}"))
+                })?;
                 let name = entry.name().to_string();
                 let file_name = name.rsplit('/').next().unwrap_or(&name).to_string();
                 if !file_name.starts_with("mssql-jdbc_auth-") || !file_name.ends_with(&suffix) {
@@ -516,14 +516,20 @@ async fn ensure_native_auth_dll(state: &AppState, kind: ConnectionKind) -> XResu
                 return Err(XError::new(StatusCode::SERVICE_UNAVAILABLE, message));
             }
         };
-        std::fs::create_dir_all(&auth_dir)
-            .map_err(|e| XError::new(StatusCode::SERVICE_UNAVAILABLE, format!("创建认证库目录失败：{e}")))?;
+        std::fs::create_dir_all(&auth_dir).map_err(|e| {
+            XError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("创建认证库目录失败：{e}"),
+            )
+        })?;
         // 文件名用「去掉 .jreNN 的版本」—— 内核探测的目标名之一，放进去即被认领
         let target = auth_dir.join(format!("mssql-jdbc_auth-{tag}.{arch}.dll"));
         // 目标可能刚被内核 spawn 宿主时拷贝过去并被 JVM 加载锁定（并发竞态）：
         // 内容已经在位就视为成功，别为一个「写不进去」把整条连接拦下
         let already_there = target.is_file()
-            && std::fs::metadata(&target).map(|m| m.len() == dll_bytes.len() as u64).unwrap_or(false);
+            && std::fs::metadata(&target)
+                .map(|m| m.len() == dll_bytes.len() as u64)
+                .unwrap_or(false);
         if !already_there {
             std::fs::write(&target, &dll_bytes).map_err(|e| {
                 XError::new(
@@ -564,7 +570,9 @@ mod tests {
         let names = expected_jars(ConnectionKind::Clickhouse);
         assert_eq!(names.len(), 2, "实际：{names:?}");
         assert!(
-            names.iter().any(|name| name.contains("clickhouse-jdbc-0.7.2-all")),
+            names
+                .iter()
+                .any(|name| name.contains("clickhouse-jdbc-0.7.2-all")),
             "主驱动必须是 all 分类器包（默认瘦包缺依赖）：{names:?}"
         );
         assert!(
@@ -595,13 +603,21 @@ pub async fn progress(Path(code): Path<String>) -> XResult<Json<Value>> {
         return Err(XError::bad_request(format!("不支持的数据库类型：{code}")));
     };
     let snap = dl_get(kind.key()).unwrap_or_default();
-    let status = if snap.status.is_empty() { "idle" } else { snap.status.as_str() };
+    let status = if snap.status.is_empty() {
+        "idle"
+    } else {
+        snap.status.as_str()
+    };
     let percent = if snap.total > 0 {
         ((snap.received.min(snap.total)) as f64 * 100.0 / snap.total as f64).round() as u64
     } else {
         0
     };
-    let label = if snap.label.is_empty() { kind.label().to_string() } else { snap.label.clone() };
+    let label = if snap.label.is_empty() {
+        kind.label().to_string()
+    } else {
+        snap.label.clone()
+    };
     Ok(Json(json!({
         "success": true,
         "status": status,
@@ -617,10 +633,7 @@ pub async fn progress(Path(code): Path<String>) -> XResult<Json<Value>> {
 }
 
 /// `POST /api/drivers/{code}/install` —— 强制重新下载（清掉失败缓存，用于重试）。
-pub async fn install(
-    State(state): State<AppState>,
-    Path(code): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn install(State(state): State<AppState>, Path(code): Path<String>) -> XResult<Json<Value>> {
     let kind = ConnectionKind::from_key(&code.to_ascii_lowercase())
         .ok_or_else(|| XError::bad_request(format!("不支持的数据库类型：{code}")))?;
     clear_failure(kind);

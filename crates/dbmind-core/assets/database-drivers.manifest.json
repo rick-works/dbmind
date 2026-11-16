@@ -27,6 +27,7 @@
       "dialect": "SQLite",
       "driverStoreOrder": 1,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": null,
       "key": "sqlite",
       "label": "SQLite",
@@ -34,6 +35,7 @@
       "maxConnections": 1,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "sqlite",
       "order": 100,
       "protocol": "sql",
       "runtimeMode": "native",
@@ -44,7 +46,8 @@
       "traits": {
         "schemaAware": false,
         "singleDatabase": true
-      }
+      },
+      "typeCode": "SQLITE"
     },
     {
       "agentKey": "duckdb",
@@ -70,6 +73,7 @@
       "dialect": "DuckDB",
       "driverStoreOrder": 2,
       "driverStoreVisible": true,
+      "exposed": false,
       "jdbc": {
         "artifact": "org.duckdb:duckdb_jdbc:1.1.3",
         "artifacts": [
@@ -84,6 +88,7 @@
       "maxConnections": 1,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "duckdb",
       "order": 200,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -94,7 +99,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": true
-      }
+      },
+      "typeCode": "DUCKDB"
     },
     {
       "agentKey": "postgresql",
@@ -120,6 +126,7 @@
       "dialect": "PostgreSQL",
       "driverStoreOrder": 3,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "org.postgresql:postgresql:42.7.4",
         "artifacts": [
@@ -134,6 +141,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "postgresql",
       "order": 300,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -144,7 +152,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "POSTGRESQL"
     },
     {
       "agentKey": "mysql",
@@ -170,6 +179,7 @@
       "dialect": "MySQL",
       "driverStoreOrder": 4,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "com.mysql:mysql-connector-j:9.1.0",
         "artifacts": [
@@ -184,6 +194,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "mysql",
       "order": 400,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -194,7 +205,8 @@
       "traits": {
         "schemaAware": false,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "MYSQL"
     },
     {
       "agentKey": "mysql",
@@ -220,6 +232,7 @@
       "dialect": "MySQL",
       "driverStoreOrder": 5,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "org.mariadb.jdbc:mariadb-java-client:3.5.1",
         "artifacts": [
@@ -234,6 +247,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "mysql",
       "order": 500,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -244,7 +258,8 @@
       "traits": {
         "schemaAware": false,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "MARIADB"
     },
     {
       "agentKey": "sqlserver",
@@ -270,6 +285,7 @@
       "dialect": "SqlServer",
       "driverStoreOrder": 6,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "com.microsoft.sqlserver:mssql-jdbc:12.8.1.jre11",
         "artifacts": [
@@ -284,6 +300,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": true,
+      "module": "sqlserver",
       "order": 600,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -294,7 +311,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "SQLSERVER"
     },
     {
       "agentKey": "oracle",
@@ -320,6 +338,7 @@
       "dialect": "Oracle",
       "driverStoreOrder": 7,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "com.oracle.database.jdbc:ojdbc11:23.6.0.24.10",
         "artifacts": [
@@ -334,6 +353,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "oracle",
       "order": 700,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -344,7 +364,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "ORACLE"
     },
     {
       "agentKey": "clickhouse",
@@ -370,6 +391,7 @@
       "dialect": "ClickHouse",
       "driverStoreOrder": 8,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "com.clickhouse:clickhouse-jdbc:0.7.2:all",
         "artifacts": [
@@ -385,6 +407,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "clickhouse",
       "order": 800,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -395,7 +418,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "CLICKHOUSE"
     },
     {
       "agentKey": "db2",
@@ -421,6 +445,7 @@
       "dialect": "Db2",
       "driverStoreOrder": 9,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "com.ibm.db2:jcc:12.1.2.0",
         "artifacts": [
@@ -435,6 +460,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "db2",
       "order": 900,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -445,7 +471,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "DB2"
     },
     {
       "agentKey": "dm",
@@ -471,6 +498,7 @@
       "dialect": "Oracle",
       "driverStoreOrder": 10,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "com.dameng:DmJdbcDriver18:8.1.3.140",
         "artifacts": [
@@ -485,6 +513,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "oracle",
       "order": 1000,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -495,7 +524,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "DM"
     },
     {
       "agentKey": "kingbase",
@@ -521,6 +551,7 @@
       "dialect": "PostgreSQL",
       "driverStoreOrder": 11,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "cn.com.kingbase:kingbase8:9.0.0",
         "artifacts": [
@@ -535,6 +566,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "postgresql",
       "order": 1100,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -545,7 +577,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "KINGBASE"
     },
     {
       "agentKey": "doris",
@@ -571,6 +604,7 @@
       "dialect": "MySQL",
       "driverStoreOrder": 12,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "mysql:mysql-connector-java:8.0.28",
         "artifacts": [
@@ -585,6 +619,7 @@
       "maxConnections": 8,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "mysql",
       "order": 1200,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -595,7 +630,61 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "DORIS"
+    },
+    {
+      "agentKey": "mysql",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 4000,
+      "dialect": "MySQL",
+      "driverStoreOrder": 13,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "com.mysql:mysql-connector-j:9.1.0",
+        "artifacts": [
+          "com.mysql:mysql-connector-j:9.1.0"
+        ],
+        "driverClass": "com.mysql.cj.jdbc.Driver",
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+      },
+      "key": "tidb",
+      "label": "TiDB",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "mysql",
+      "order": 1250,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Tidb",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "operate",
+      "traits": {
+        "schemaAware": false,
+        "singleDatabase": false
+      },
+      "typeCode": "TIDB"
     },
     {
       "agentKey": "h2",
@@ -621,6 +710,7 @@
       "dialect": "H2",
       "driverStoreOrder": 13,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "com.h2database:h2:2.3.232",
         "artifacts": [
@@ -635,6 +725,7 @@
       "maxConnections": 1,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "h2",
       "order": 1300,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -645,7 +736,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": true
-      }
+      },
+      "typeCode": "H2"
     },
     {
       "agentKey": "derby",
@@ -671,6 +763,7 @@
       "dialect": "Derby",
       "driverStoreOrder": 14,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": {
         "artifact": "org.apache.derby:derby:10.16.1.1",
         "artifacts": [
@@ -686,6 +779,7 @@
       "maxConnections": 1,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "derby",
       "order": 1400,
       "protocol": "sql",
       "runtimeMode": "agent",
@@ -696,7 +790,8 @@
       "traits": {
         "schemaAware": true,
         "singleDatabase": true
-      }
+      },
+      "typeCode": "DERBY"
     },
     {
       "agentKey": "mongodb",
@@ -722,6 +817,7 @@
       "dialect": "MongoShell",
       "driverStoreOrder": 15,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": null,
       "key": "mongodb",
       "label": "MongoDB",
@@ -729,6 +825,7 @@
       "maxConnections": 4,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "mongodb",
       "order": 1500,
       "protocol": "mongodb",
       "runtimeMode": "agent",
@@ -739,7 +836,8 @@
       "traits": {
         "schemaAware": false,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "MONGODB"
     },
     {
       "agentKey": "redis",
@@ -765,6 +863,7 @@
       "dialect": "Redis",
       "driverStoreOrder": 16,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": null,
       "key": "redis",
       "label": "Redis",
@@ -772,6 +871,7 @@
       "maxConnections": 1,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "redis",
       "order": 1600,
       "protocol": "redis",
       "runtimeMode": "agent",
@@ -782,7 +882,8 @@
       "traits": {
         "schemaAware": false,
         "singleDatabase": true
-      }
+      },
+      "typeCode": "REDIS"
     },
     {
       "agentKey": "elasticsearch",
@@ -808,6 +909,7 @@
       "dialect": "Elasticsearch",
       "driverStoreOrder": 17,
       "driverStoreVisible": true,
+      "exposed": true,
       "jdbc": null,
       "key": "elasticsearch",
       "label": "Elasticsearch",
@@ -815,6 +917,7 @@
       "maxConnections": 4,
       "mcpMode": "bridge",
       "metadataConnectionScoped": false,
+      "module": "elasticsearch",
       "order": 1700,
       "protocol": "elasticsearch",
       "runtimeMode": "agent",
@@ -825,7 +928,8 @@
       "traits": {
         "schemaAware": false,
         "singleDatabase": false
-      }
+      },
+      "typeCode": "ELASTICSEARCH"
     }
   ]
 }

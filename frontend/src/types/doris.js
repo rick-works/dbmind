@@ -8,6 +8,8 @@ import { mysqlFamilyOptions } from './presets.js'
  */
 export default {
   code: 'DORIS',
+  // 上游兼容接口的模块路径段：与 plugins/connection-types/doris.yaml 的 dialect 派生值一致（guard 校验）
+  module: 'mysql',
   label: 'Apache Doris',
   // 列存分析引擎（MySQL 协议只是兼容层）：归 OLAP，不跟 MySQL 一起算关系型
   category: 'OLAP',

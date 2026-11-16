@@ -360,7 +360,13 @@ fn mysql_plan() -> Plan {
             kpi("threads_running", "运行中线程", "cpu", "amber", ""),
             json!({ "metric": "liveQps", "label": "实时 QPS", "icon": "dataline", "color": "indigo", "unit": "次/秒", "kind": "liveQps" }),
             kpi("slow_queries", "慢查询累计", "timer", "rose", ""),
-            kpi("buffer_pool_hit_pct", "缓冲池命中率", "trendCharts", "emerald", "%"),
+            kpi(
+                "buffer_pool_hit_pct",
+                "缓冲池命中率",
+                "trendCharts",
+                "emerald",
+                "%",
+            ),
             json!({ "metric": "uptime", "label": "运行时长", "icon": "clock", "color": "violet", "unit": "", "format": "duration" }),
         ],
         metrics: vec![
@@ -383,14 +389,18 @@ fn mysql_plan() -> Plan {
         ],
         derived: &[
             // 命中率 = 1 - 物理读/逻辑读。分母为 0 时不给值（不编 100%）
-            ("buffer_pool_hit_pct", &["Innodb_buffer_pool_reads", "Innodb_buffer_pool_read_requests"], |m| {
-                let reads = m.get("Innodb_buffer_pool_read_requests")?;
-                let physical = m.get("Innodb_buffer_pool_reads")?;
-                if *reads <= 0.0 {
-                    return None;
-                }
-                Some(((1.0 - physical / reads) * 10000.0).round() / 100.0)
-            }),
+            (
+                "buffer_pool_hit_pct",
+                &["Innodb_buffer_pool_reads", "Innodb_buffer_pool_read_requests"],
+                |m| {
+                    let reads = m.get("Innodb_buffer_pool_read_requests")?;
+                    let physical = m.get("Innodb_buffer_pool_reads")?;
+                    if *reads <= 0.0 {
+                        return None;
+                    }
+                    Some(((1.0 - physical / reads) * 10000.0).round() / 100.0)
+                },
+            ),
         ],
         panels: vec![
             Panel {
@@ -659,25 +669,41 @@ fn postgres_plan() -> Plan {
         ],
         metrics: vec![
             ("connections", "select count(*) as value from pg_stat_activity"),
-            ("active", "select count(*) as value from pg_stat_activity where state = 'active'"),
-            ("blocked", "select count(*) as value from pg_stat_activity where wait_event_type = 'Lock'"),
-            ("uptime", "select extract(epoch from (now() - pg_postmaster_start_time()))::bigint as value"),
+            (
+                "active",
+                "select count(*) as value from pg_stat_activity where state = 'active'",
+            ),
+            (
+                "blocked",
+                "select count(*) as value from pg_stat_activity where wait_event_type = 'Lock'",
+            ),
+            (
+                "uptime",
+                "select extract(epoch from (now() - pg_postmaster_start_time()))::bigint as value",
+            ),
             ("db_size", "select pg_database_size(current_database()) as value"),
-            ("blks_hit", "select sum(blks_hit) as value from pg_stat_database where datname = current_database()"),
-            ("blks_read", "select sum(blks_read) as value from pg_stat_database where datname = current_database()"),
-            ("xact_commit", "select sum(xact_commit) as value from pg_stat_database where datname = current_database()"),
+            (
+                "blks_hit",
+                "select sum(blks_hit) as value from pg_stat_database where datname = current_database()",
+            ),
+            (
+                "blks_read",
+                "select sum(blks_read) as value from pg_stat_database where datname = current_database()",
+            ),
+            (
+                "xact_commit",
+                "select sum(xact_commit) as value from pg_stat_database where datname = current_database()",
+            ),
         ],
-        derived: &[
-            ("cache_hit_pct", &["blks_hit", "blks_read"], |m| {
-                let hit = m.get("blks_hit")?;
-                let read = m.get("blks_read")?;
-                let total = hit + read;
-                if total <= 0.0 {
-                    return None;
-                }
-                Some((hit / total * 10000.0).round() / 100.0)
-            }),
-        ],
+        derived: &[("cache_hit_pct", &["blks_hit", "blks_read"], |m| {
+            let hit = m.get("blks_hit")?;
+            let read = m.get("blks_read")?;
+            let total = hit + read;
+            if total <= 0.0 {
+                return None;
+            }
+            Some((hit / total * 10000.0).round() / 100.0)
+        })],
         panels: vec![
             Panel {
                 key: "sessions",
@@ -805,14 +831,8 @@ fn normalize_name_value(rows: &[Map<String, Value>]) -> Vec<Value> {
     const VALUE_KEYS: [&str; 5] = ["Value", "variable_value", "value", "VALUE", "Setting"];
     let mut out = Vec::new();
     for row in rows {
-        let name = NAME_KEYS
-            .iter()
-            .find_map(|key| row.get(*key))
-            .map(text_of_value);
-        let value = VALUE_KEYS
-            .iter()
-            .find_map(|key| row.get(*key))
-            .map(text_of_value);
+        let name = NAME_KEYS.iter().find_map(|key| row.get(*key)).map(text_of_value);
+        let value = VALUE_KEYS.iter().find_map(|key| row.get(*key)).map(text_of_value);
         if let (Some(name), Some(value)) = (name, value) {
             out.push(json!({ "name": name, "value": value }));
         }
@@ -915,15 +935,12 @@ pub async fn overview(state: &AppState, id: &str, database: &str, key: &str) -> 
             continue;
         }
         let lowered = metric.to_ascii_lowercase();
-        let found = raw
-            .get(metric)
-            .or_else(|| raw.get(&lowered))
-            .or_else(|| {
-                // `show global status` 的键是首字母大写的驼峰（Threads_connected）
-                raw.iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case(metric))
-                    .map(|(_, value)| value)
-            });
+        let found = raw.get(metric).or_else(|| raw.get(&lowered)).or_else(|| {
+            // `show global status` 的键是首字母大写的驼峰（Threads_connected）
+            raw.iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(metric))
+                .map(|(_, value)| value)
+        });
         if let Some(value) = found {
             metrics.insert(lowered, json!(value));
         }
@@ -1034,15 +1051,19 @@ pub async fn monitor_kill(
         "postgresql" | "kingbase" => {
             format!("select pg_terminate_backend({})", session_id.trim())
         }
-        "sqlite" => return Ok(Json(json!({
-            "success": false,
-            "message": "SQLite 是文件数据库，没有会话可终止",
-        }))),
-        "clickhouse" => return Ok(Json(json!({
-            "success": false,
-            "message": "ClickHouse 终止查询需要 query_id（字符串），而这里只接受数字会话号。\
-                        请在查询页执行 `KILL QUERY WHERE query_id = '...'`",
-        }))),
+        "sqlite" => {
+            return Ok(Json(json!({
+                "success": false,
+                "message": "SQLite 是文件数据库，没有会话可终止",
+            })))
+        }
+        "clickhouse" => {
+            return Ok(Json(json!({
+                "success": false,
+                "message": "ClickHouse 终止查询需要 query_id（字符串），而这里只接受数字会话号。\
+                            请在查询页执行 `KILL QUERY WHERE query_id = '...'`",
+            })))
+        }
         key => {
             return Ok(Json(json!({
                 "success": false,
@@ -1103,16 +1124,15 @@ mod tests {
             let mut provided: Vec<String> = plan.metrics.iter().map(|(n, _)| n.to_string()).collect();
             // `show global status` 一次给出一批（名称首字母大写）
             provided.push("Status".to_string());
-            provided.extend(
-                plan.derived
-                    .iter()
-                    .map(|(name, _, _)| (*name).to_string()),
-            );
+            provided.extend(plan.derived.iter().map(|(name, _, _)| (*name).to_string()));
             for kpi in &plan.kpis {
                 let metric = kpi["metric"].as_str().unwrap();
                 if metric == "liveQps" {
                     // 由 `status` 里的 Questions 算，见 overview
-                    assert!(provided.iter().any(|n| n == "status" || n == "Status"), "{key} 缺 status 查询");
+                    assert!(
+                        provided.iter().any(|n| n == "status" || n == "Status"),
+                        "{key} 缺 status 查询"
+                    );
                     continue;
                 }
                 if metric.starts_with("buffer_pool_hit_pct")
@@ -1120,7 +1140,10 @@ mod tests {
                     || metric == "db_size"
                 {
                     // 派生指标
-                    assert!(provided.contains(&metric.to_string()), "{key} 的派生指标 {metric} 没声明");
+                    assert!(
+                        provided.contains(&metric.to_string()),
+                        "{key} 的派生指标 {metric} 没声明"
+                    );
                     continue;
                 }
                 assert!(

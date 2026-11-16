@@ -459,6 +459,67 @@ function checkVersions() {
   if (ws && pkg && ws !== pkg) warn('package.json', 0, `版本号不一致：Cargo.toml=${ws}  frontend/package.json=${pkg}`)
   return { ws, conf, pkg }
 }
+
+// ---------------------------------------------------------------- 类型清单一致性
+
+/**
+ * 前端类型定义 vs 内核清单（`crates/dbmind-core/assets/database-drivers.manifest.json`，
+ * 由 `build.rs` 从 `plugins/connection-types/*.yaml` 生成）。
+ *
+ * 检查两个方向：
+ *  - 清单里 `exposed: true` 的类型，前端必须有 `types/<key>.js` 且 `module` 一致
+ *    （缺了 = 「新建数据源」看不到，或后端通告了但前端拼不出请求路径 → 全 404）；
+ *  - 前端有的类型必须在清单里且 exposed（否则用户能建出一种后端不认识的连接）。
+ *
+ * 这条检查是「新增数据库类型 = 加一个 YAML + 一个 types js」这套约定的守门人：
+ * 以前两份清单手写在对角线两端，漏改只会在用户点开时报错。
+ */
+function checkTypeManifest() {
+  const manifestPath = join(ROOT, '..', 'crates', 'dbmind-core', 'assets', 'database-drivers.manifest.json')
+  if (!existsSync(manifestPath)) {
+    warn('crates/dbmind-core/assets/database-drivers.manifest.json', 0, '缺少类型清单（先 cargo build 生成它）')
+    return { total: 0, exposed: 0 }
+  }
+  let manifest
+  try {
+    manifest = JSON.parse(read(manifestPath))
+  } catch (e) {
+    warn(manifestPath, 0, `类型清单不是合法 JSON：${e.message}`)
+    return { total: 0, exposed: 0 }
+  }
+  const types = manifest.types || []
+  const backend = new Map(types.filter((t) => t.exposed).map((t) => [String(t.typeCode || '').toUpperCase(), t]))
+
+  // 前端：扫 types/*.js 的 code / module 字段（不 import，避免拉起 Vite 依赖）
+  const front = new Map()
+  for (const f of readdirSync(join(SRC, 'types'))) {
+    if (!f.endsWith('.js') || ['index.js', 'base.js', 'presets.js'].includes(f)) continue
+    const text = read(join(SRC, 'types', f))
+    const code = (text.match(/\bcode:\s*'([A-Z0-9_]+)'/) || [])[1]
+    const mod = (text.match(/^\s*module:\s*'([a-z0-9_-]+)'/m) || [])[1]
+    if (!code) continue
+    if (!mod) warn(`frontend/src/types/${f}`, 0, `类型 ${code} 没有 module 字段（无法拼 /api/{module}/… 请求）`)
+    front.set(code, { file: `frontend/src/types/${f}`, module: mod })
+  }
+
+  for (const [code, t] of backend) {
+    const f = front.get(code)
+    if (!f) {
+      warn('frontend/src/types', 0, `内核通告了 ${code}（exposed），前端没有对应类型文件 —— 新建数据源会缺卡片`)
+    } else if (f.module && t.module && f.module !== t.module) {
+      warn(f.file, 0, `模块归属不一致：前端 ${code} -> ${f.module}，内核 -> ${t.module}（该类型所有操作会 404）`)
+    }
+  }
+  for (const [code, f] of front) {
+    if (!backend.has(code)) {
+      const hidden = types.some((t) => String(t.typeCode || '').toUpperCase() === code)
+      warn(f.file, 0, hidden
+        ? `前端有 ${code} 的卡片，但 YAML 里 ${code.toLowerCase()} 标记了 exposed: false —— 用户建了也连不上`
+        : `前端有 ${code} 的卡片，但内核清单里没有这个类型`)
+    }
+  }
+  return { total: types.length, exposed: backend.size }
+}
 // ---------------------------------------------------------------- 5. 无头浏览器打点
 
 function findBrowser() {
@@ -741,6 +802,7 @@ const tpd = checkProgressDialog(files)
 const dcol = checkDoubleColon(files)
 const bundle = checkBundle()
 const ver = checkVersions()
+const kinds = checkTypeManifest()
 const dom = wantDom ? checkDom() : { skipped: '未开启（用 npm run guard:dom）' }
 
 const green = (s) => `\x1b[32m${s}\x1b[0m`
@@ -751,6 +813,7 @@ console.log(`  词典      zh ${dict.zh} / en ${dict.en}   ·   代码引用 ${d
 console.log(`  翻译函数  在 ${tChecked} 个有 t() 调用的文件里检查了导入与遮蔽`)
 console.log(bundle.skipped ? '  产物      未构建，跳过（先 npm run build）' : `  产物      ${bundle.chunks} 个 chunk，断链 ${bundle.missing} 处`)
 console.log(`  版本      Cargo.toml ${ver.ws} / tauri.conf.json ${ver.conf} / package.json ${ver.pkg}`)
+console.log(`  类型清单  ${kinds.total} 种（暴露 ${kinds.exposed}）· 前端卡片与 module 归属已比对`)
 console.log(dom.skipped ? `  首屏      跳过：${dom.skipped}` : `  首屏      渲染出 ${dom.textLen} 字：${dom.sample}…`)
 console.log('')
 

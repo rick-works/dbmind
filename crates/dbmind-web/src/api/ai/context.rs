@@ -155,16 +155,38 @@ const CATALOG_CHARS: usize = 9_000;
 pub fn wants_catalog(question: &str) -> bool {
     let q = question.to_ascii_lowercase();
     const LISTING: &[&str] = &[
-        "有哪些表", "什么表", "表清单", "表列表", "多少张表", "几张表", "所有表", "全部表",
-        "list tables", "all tables", "how many tables",
+        "有哪些表",
+        "什么表",
+        "表清单",
+        "表列表",
+        "多少张表",
+        "几张表",
+        "所有表",
+        "全部表",
+        "list tables",
+        "all tables",
+        "how many tables",
     ];
     if LISTING.iter().any(|word| q.contains(word)) {
         return true;
     }
     const OBJECT: &[&str] = &["库", "database", "schema"];
     const INTENT: &[&str] = &[
-        "干嘛", "干什么", "做什么", "什么业务", "业务", "用途", "概览", "总览", "架构", "梳理",
-        "什么系统", "什么项目", "overview", "purpose", "what is",
+        "干嘛",
+        "干什么",
+        "做什么",
+        "什么业务",
+        "业务",
+        "用途",
+        "概览",
+        "总览",
+        "架构",
+        "梳理",
+        "什么系统",
+        "什么项目",
+        "overview",
+        "purpose",
+        "what is",
     ];
     OBJECT.iter().any(|word| q.contains(word)) && INTENT.iter().any(|word| q.contains(word))
 }
@@ -253,8 +275,7 @@ pub async fn build(
     //
     // 只在 `names` 开着时兜底：`omit_names` 服务的是「已经递了 SQL」的修复/解释流程，
     // 那种请求要的是**精简**（少 1 万字符的表清单就少一份干扰），表名清单本来就是噪声。
-    let catalog =
-        options.catalog || (with_names && expanded.is_empty() && !small_db && !names.is_empty());
+    let catalog = options.catalog || (with_names && expanded.is_empty() && !small_db && !names.is_empty());
 
     // 字段脱敏规则：读一次，后面每张表的样例行都用它判定。
     // 读失败按「未启用」处理 —— 一条坏配置不该让整段上下文构建不出来（宁可少脱敏一次，
@@ -263,8 +284,7 @@ pub async fn build(
     // AES 密钥：规则里没有 AES 时是零值，不会平白生成一把
     let mask_key = crate::api::ai::mask::load_key(state, &masks).await;
     // 按 (表, 列) 去重：同一列被多条规则命中只算一次，界面上的数字才对得上人话
-    let mut masked_columns: std::collections::HashSet<(String, String)> =
-        std::collections::HashSet::new();
+    let mut masked_columns: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
 
     let mut text = String::new();
     // 版本一定要写进来：模型靠它决定能不能用窗口函数 / CTE / JSON 函数 / OFFSET FETCH。
@@ -340,8 +360,7 @@ pub async fn build(
         let columns_target = target.clone();
         let name = table.clone();
         let engine = state.engine();
-        let Ok(columns) = blocking(move || engine.list_columns_fresh(&columns_target, &name)).await
-        else {
+        let Ok(columns) = blocking(move || engine.list_columns_fresh(&columns_target, &name)).await else {
             continue;
         };
         if columns.is_empty() {
@@ -358,8 +377,7 @@ pub async fn build(
             dialect.limit_clause(0, SAMPLE_ROWS)
         );
         if let Ok(result) =
-            crate::api::meta::run_sql_in(state, conn, database, sample_sql, SAMPLE_ROWS as usize)
-                .await
+            crate::api::meta::run_sql_in(state, conn, database, sample_sql, SAMPLE_ROWS as usize).await
         {
             for row in crate::api::meta::rows_of(&result) {
                 let mut pairs: Vec<String> = row
@@ -434,8 +452,7 @@ async fn server_version(
     let Some(sql) = dialect.version_sql() else {
         return String::new();
     };
-    let Ok(result) = crate::api::meta::run_meta_sql(state, conn, database, sql.to_string(), 1).await
-    else {
+    let Ok(result) = crate::api::meta::run_meta_sql(state, conn, database, sql.to_string(), 1).await else {
         return String::new();
     };
     let raw = crate::api::meta::rows_of(&result)
@@ -583,11 +600,7 @@ mod tests {
 
     #[test]
     fn mentioned_respects_identifier_boundary() {
-        let names = vec![
-            "order".to_string(),
-            "orders".to_string(),
-            "user".to_string(),
-        ];
+        let names = vec!["order".to_string(), "orders".to_string(), "user".to_string()];
         // "orders" 里含 "order"，但边界不对，不该被当成 order
         let hit = mentioned("select * from orders where id = 1", &names, 8);
         assert_eq!(hit, vec!["orders".to_string()]);

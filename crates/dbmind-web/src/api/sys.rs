@@ -15,10 +15,10 @@ use axum::Json;
 use dbmind_core::{DbMindEngine, DbMindError};
 use serde_json::{json, Value};
 
-use crate::api::dialect;
-use crate::api::error::{XError, XResult};
-use crate::api::driver::{expected_jars, jar_names};
 use crate::api::blocking;
+use crate::api::dialect;
+use crate::api::driver::{expected_jars, jar_names};
+use crate::api::error::{XError, XResult};
 use crate::AppState;
 
 /// 驱动下载镜像（`api::driver` 下载时要读它换仓库根，故为 pub）。
@@ -201,9 +201,7 @@ fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result
 fn prepare_and_open(engine: &DbMindEngine, requested: &str) -> dbmind_core::Result<DbMindEngine> {
     use dbmind_core::paths;
     // 输入不合法用 `QueryInvalid`（通用 400 桶）；操作失败用 `StorageFailed`/`Internal`（500）
-    let invalid = |msg: String| {
-        DbMindError::new(dbmind_core::ErrorCode::QueryInvalid, msg)
-    };
+    let invalid = |msg: String| DbMindError::new(dbmind_core::ErrorCode::QueryInvalid, msg);
     let failed = |msg: String| DbMindError::new(dbmind_core::ErrorCode::StorageFailed, msg);
     let target = std::path::PathBuf::from(requested.trim());
     if !target.is_absolute() {
@@ -213,13 +211,11 @@ fn prepare_and_open(engine: &DbMindEngine, requested: &str) -> dbmind_core::Resu
     if same_dir(&current, &target) {
         return Err(invalid("新目录与当前数据目录相同".to_string()));
     }
-    std::fs::create_dir_all(&target).map_err(|e| {
-        invalid(format!("无法创建目标目录 {}: {e}", target.display()))
-    })?;
+    std::fs::create_dir_all(&target)
+        .map_err(|e| invalid(format!("无法创建目标目录 {}: {e}", target.display())))?;
     // 可写探测：等迁完才发现只读就白忙了
     let probe = target.join(".dbmind-write-probe");
-    std::fs::write(&probe, b"ok")
-        .map_err(|e| invalid(format!("目标目录不可写: {e}")))?;
+    std::fs::write(&probe, b"ok").map_err(|e| invalid(format!("目标目录不可写: {e}")))?;
     let _ = std::fs::remove_file(&probe);
     // 目标已有数据：**改名保留**（时间戳 .bak）而不是拒绝，也不是悄悄覆盖 ——
     // 最常见的撞车场景恰恰是「迁回原来的目录」，直接拒绝会把这条最自然的路堵死；
@@ -259,11 +255,8 @@ fn prepare_and_open(engine: &DbMindEngine, requested: &str) -> dbmind_core::Resu
     let new_db = target.join("dbmind.db");
     engine.backup_store_into(&new_db)?;
     // ④ 写指针 —— 这一步成功迁移才算数；此前失败只是白拷一份，现状不受影响
-    std::fs::write(
-        paths::home_pointer_path(),
-        target.to_string_lossy().as_bytes(),
-    )
-    .map_err(|e| failed(format!("写入数据目录指针失败: {e}")))?;
+    std::fs::write(paths::home_pointer_path(), target.to_string_lossy().as_bytes())
+        .map_err(|e| failed(format!("写入数据目录指针失败: {e}")))?;
     // ⑤ 打开新引擎交还给调用方热切换（快照里的库 + 新目录下的驱动）
     let new_engine = DbMindEngine::open(&new_db).map_err(|e| {
         // 开不起来就回滚指针：本次进程继续用旧目录，别留下「指了个坏库」的指针
@@ -274,10 +267,7 @@ fn prepare_and_open(engine: &DbMindEngine, requested: &str) -> dbmind_core::Resu
     Ok(new_engine)
 }
 
-pub async fn paths_put(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> XResult<Json<Value>> {
+pub async fn paths_put(State(state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
     // 导出目录不是可配置项：导出由用户自己选保存位置，服务端只用临时目录中转，取回即删。
     // driverDir 也不单独迁：驱动跟着数据目录走（见 `prepare_and_open`）。
     let requested = body
@@ -304,10 +294,7 @@ pub async fn paths_put(
 /// 在系统文件管理器里打开目录（设置页的「打开目录」）。
 ///
 /// 注意参数顺序：`Json` 会消费请求体，必须是最后一个提取器（axum 的硬性要求）。
-pub async fn open_dir(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> XResult<Json<Value>> {
+pub async fn open_dir(State(state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
     let requested = body
         .get("path")
         .and_then(Value::as_str)
@@ -401,7 +388,11 @@ pub async fn open_url(Json(body): Json<Value>) -> XResult<Json<Value>> {
     }
     #[cfg(not(windows))]
     {
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else {
+            "xdg-open"
+        };
         std::process::Command::new(opener)
             .arg(&url)
             .spawn()
@@ -416,10 +407,7 @@ pub async fn mirror_get(State(state): State<AppState>) -> XResult<Json<Value>> {
     Ok(Json(json!({ "mirror": value.unwrap_or_default() })))
 }
 
-pub async fn mirror_put(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> XResult<Json<Value>> {
+pub async fn mirror_put(State(state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
     let mirror = body
         .get("mirror")
         .and_then(Value::as_str)
@@ -452,20 +440,21 @@ pub async fn legacy_tls_get(State(state): State<AppState>) -> XResult<Json<Value
     Ok(Json(json!({ "allowLegacyTls": allow, "relaxed": false })))
 }
 
-pub async fn legacy_tls_put(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> XResult<Json<Value>> {
+pub async fn legacy_tls_put(State(state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
     let allow = body
         .get("allowLegacyTls")
         .and_then(Value::as_bool)
         .unwrap_or(false);
     let engine = state.engine();
-    blocking(move || engine.set_setting(dbmind_core::Store::KEY_ALLOW_LEGACY_TLS, if allow { "true" } else { "false" }))
-        .await?;
+    blocking(move || {
+        engine.set_setting(
+            dbmind_core::Store::KEY_ALLOW_LEGACY_TLS,
+            if allow { "true" } else { "false" },
+        )
+    })
+    .await?;
     // `set_setting` 会把开关同步给内核的宿主 spawn 层（`agent::set_legacy_tls_enabled`），
     // 下次拉起宿主 JVM 时带上 `java.security.properties` 覆盖文件放行 TLSv1/TLSv1.1
     // —— 宿主是长驻进程，所以仍要**重启应用**才对已存在的宿主生效。
     Ok(Json(json!({ "allowLegacyTls": allow, "relaxed": false })))
 }
-

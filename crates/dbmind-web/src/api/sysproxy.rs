@@ -44,20 +44,25 @@ fn normalize(raw: &str) -> Option<String> {
         return None;
     }
     // WinINET 多协议写法 `http=host:port;https=host:port`：优先 https，其次 http
-    let picked: Option<String> = if trimmed.contains('=') && (trimmed.contains("https=") || trimmed.contains("http=")) {
-        let pick = |scheme: &str| -> Option<String> {
-            trimmed.split(';').find_map(|kv| {
-                kv.trim()
-                    .strip_prefix(&format!("{scheme}="))
-                    .map(|v| v.trim().trim_start_matches("http://").trim_start_matches("https://").to_string())
-            })
+    let picked: Option<String> =
+        if trimmed.contains('=') && (trimmed.contains("https=") || trimmed.contains("http=")) {
+            let pick = |scheme: &str| -> Option<String> {
+                trimmed.split(';').find_map(|kv| {
+                    kv.trim().strip_prefix(&format!("{scheme}=")).map(|v| {
+                        v.trim()
+                            .trim_start_matches("http://")
+                            .trim_start_matches("https://")
+                            .to_string()
+                    })
+                })
+            };
+            pick("https").or_else(|| pick("http"))
+        } else {
+            None
         };
-        pick("https").or_else(|| pick("http"))
-    } else {
-        None
-    };
     let mut s: &str = picked.as_deref().unwrap_or(trimmed);
-    s = s.trim_start_matches("http://")
+    s = s
+        .trim_start_matches("http://")
         .trim_start_matches("https://")
         .trim_start_matches("socks5://")
         .trim_start_matches("socks5h://")
@@ -100,10 +105,7 @@ fn platform_proxy() -> Option<String> {
     const KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
     let mut q_enable = std::process::Command::new("reg");
     dbmind_core::hide_console(&mut q_enable);
-    let out = q_enable
-        .args(["query", KEY, "/v", "ProxyEnable"])
-        .output()
-        .ok()?;
+    let out = q_enable.args(["query", KEY, "/v", "ProxyEnable"]).output().ok()?;
     if !out.status.success() {
         return None;
     }
@@ -119,10 +121,7 @@ fn platform_proxy() -> Option<String> {
     }
     let mut q_server = std::process::Command::new("reg");
     dbmind_core::hide_console(&mut q_server);
-    let out = q_server
-        .args(["query", KEY, "/v", "ProxyServer"])
-        .output()
-        .ok()?;
+    let out = q_server.args(["query", KEY, "/v", "ProxyServer"]).output().ok()?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let raw = text
         .lines()
@@ -136,7 +135,10 @@ fn platform_proxy() -> Option<String> {
 fn platform_proxy() -> Option<String> {
     // scutil --proxy 输出示例：
     //   <dictionary> { HTTPSEnable : 1  HTTPSProxy : 127.0.0.1  HTTPSPort : 7890 ... }
-    let out = std::process::Command::new("scutil").arg("--proxy").output().ok()?;
+    let out = std::process::Command::new("scutil")
+        .arg("--proxy")
+        .output()
+        .ok()?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
     let grab = |key: &str| -> Option<String> {
         let re = format!("{} : ", key);

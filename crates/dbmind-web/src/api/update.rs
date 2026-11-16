@@ -192,9 +192,7 @@ fn request_gitee_release() -> dbmind_core::Result<Value> {
         .set("User-Agent", "dbmind-updater")
         .timeout(Duration::from_secs(10))
         .call()
-        .map_err(|e| {
-            DbMindError::new(ErrorCode::Internal, format!("连接 Gitee 失败：{e}"))
-        })?;
+        .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("连接 Gitee 失败：{e}")))?;
     let mut bytes: Vec<u8> = Vec::new();
     resp.into_reader()
         .read_to_end(&mut bytes)
@@ -455,7 +453,9 @@ fn prune_old_installers(current: &str) {
     let mut found: Vec<(String, String)> = Vec::new();
     for entry in rd.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
-        let Some(ver) = installer_version_of(&name) else { continue };
+        let Some(ver) = installer_version_of(&name) else {
+            continue;
+        };
         found.push((name, ver));
     }
     for name in pick_installers_to_prune(&found, current) {
@@ -855,7 +855,10 @@ fn build_sources(inst: &Installer, tag: &str) -> Vec<Source> {
         } else {
             format!("{prefix}{}", inst.url)
         };
-        out.push(Source { url: u, use_proxy: true });
+        out.push(Source {
+            url: u,
+            use_proxy: true,
+        });
     }
     out.push(Source {
         url: inst.url.clone(),
@@ -915,13 +918,15 @@ fn sha256_file(path: &std::path::Path) -> dbmind_core::Result<String> {
         .output()
         .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("调用系统校验工具失败：{e}")))?;
     let text = String::from_utf8_lossy(&out.stdout).to_string();
-    parse_sha256(&text)
-        .ok_or_else(|| {
-            DbMindError::new(
-                ErrorCode::Internal,
-                format!("无法解析校验结果：{}", text.trim().chars().take(160).collect::<String>()),
-            )
-        })
+    parse_sha256(&text).ok_or_else(|| {
+        DbMindError::new(
+            ErrorCode::Internal,
+            format!(
+                "无法解析校验结果：{}",
+                text.trim().chars().take(160).collect::<String>()
+            ),
+        )
+    })
 }
 
 /// 断点续传用的临时文件（下完才改名成最终安装包）。
@@ -1027,10 +1032,8 @@ fn rank_sources(sources: &[Source]) -> Vec<Source> {
         .enumerate()
         .map(|(i, s)| std::thread::spawn(move || (i, probe_source(&s), s)))
         .collect();
-    let mut probed: Vec<(usize, Option<u64>, Source)> = handles
-        .into_iter()
-        .filter_map(|h| h.join().ok())
-        .collect();
+    let mut probed: Vec<(usize, Option<u64>, Source)> =
+        handles.into_iter().filter_map(|h| h.join().ok()).collect();
     // 探通的在前（按速度降序），没探通的在后（保持原顺序，便于排查时看"原定优先级"）
     probed.sort_by(|a, b| match (a.1, b.1) {
         (Some(x), Some(y)) => y.cmp(&x).then(a.0.cmp(&b.0)),
@@ -1087,9 +1090,8 @@ fn download_with_progress(
                     None => meta.len() == inst.size,
                 };
                 if ok {
-                    std::fs::rename(&part, dest).map_err(|e| {
-                        DbMindError::new(ErrorCode::Internal, format!("保存安装包失败：{e}"))
-                    })?;
+                    std::fs::rename(&part, dest)
+                        .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("保存安装包失败：{e}")))?;
                     if inst.sha256.is_some() {
                         lock(&cell).verified = true;
                     }
@@ -1106,7 +1108,10 @@ fn download_with_progress(
     loop {
         // 取消要**立刻**停：否则每个源还要再试两次、各等几秒，用户会以为"点了取消没反应"
         if lock(&cell).cancel {
-            return Err(DbMindError::new(ErrorCode::Internal, "已取消当前下载（已下载的部分保留）".to_string()));
+            return Err(DbMindError::new(
+                ErrorCode::Internal,
+                "已取消当前下载（已下载的部分保留）".to_string(),
+            ));
         }
         // **每次换源都重新测速排源**：镜像的快慢在几分钟内就能翻转（同一条网络上实测同一个镜像
         // 163 KB/s ↔ 4 KB/s），只在开头排一次会让用户卡在"当时最快、现在最慢"的源上干等
@@ -1159,9 +1164,8 @@ fn download_with_progress(
                         // 注意判据是**实际地址**：自动选源之后，第一个用的可能就是镜像。
                         lock(&cell).unverified = true;
                     }
-                    std::fs::rename(&part, dest).map_err(|e| {
-                        DbMindError::new(ErrorCode::Internal, format!("保存安装包失败：{e}"))
-                    })?;
+                    std::fs::rename(&part, dest)
+                        .map_err(|e| DbMindError::new(ErrorCode::Internal, format!("保存安装包失败：{e}")))?;
                     return Ok(());
                 }
                 Err(e) => {
@@ -1176,7 +1180,10 @@ fn download_with_progress(
                     errs.push(e.message);
                     // 取消：整个任务到此为止，不必再换源重试
                     if canceled {
-                        return Err(DbMindError::new(ErrorCode::Internal, "已取消当前下载（已下载的部分保留）".to_string()));
+                        return Err(DbMindError::new(
+                            ErrorCode::Internal,
+                            "已取消当前下载（已下载的部分保留）".to_string(),
+                        ));
                     }
                     // 一个字节都没拿到 ⇒ 这个源根本连不上（被墙 / 黑洞），同源重试纯属浪费时间，
                     // 直接换下一个源；只有"下着下着断了"才值得同源重试。
@@ -1298,7 +1305,9 @@ fn download_once(
             .and_then(|v| v.trim().parse::<u64>().ok())
             .unwrap_or(0)
     } else {
-        resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0)
+        resp.header("Content-Length")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0)
     };
     let base = if resuming { offset } else { 0 };
     {
@@ -1353,7 +1362,11 @@ fn download_once(
             }
             let (t0, b0) = window[0];
             let dt = now.duration_since(t0).as_secs_f64();
-            let speed = if dt >= 0.5 { ((total_now - b0) as f64 / dt) as u64 } else { 0 };
+            let speed = if dt >= 0.5 {
+                ((total_now - b0) as f64 / dt) as u64
+            } else {
+                0
+            };
             {
                 let mut p = lock(&cell);
                 p.received = total_now;
@@ -1379,7 +1392,10 @@ fn download_once(
         if lock(&cell).cancel {
             return Err(DbMindError::new(
                 ErrorCode::Internal,
-                format!("已取消当前下载（已下载的 {} 保留，换源后会接着下）", human_bytes(base + got)),
+                format!(
+                    "已取消当前下载（已下载的 {} 保留，换源后会接着下）",
+                    human_bytes(base + got)
+                ),
             ));
         }
     }
@@ -1668,7 +1684,10 @@ fn pick_dir_native(title: &str) -> Option<String> {
 fn pick_dir_native(title: &str) -> Option<String> {
     let t = title.replace('"', "");
     let out = std::process::Command::new("osascript")
-        .args(["-e", &format!("POSIX path of (choose folder with prompt \"{t}\")")])
+        .args([
+            "-e",
+            &format!("POSIX path of (choose folder with prompt \"{t}\")"),
+        ])
         .output()
         .ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -1701,7 +1720,10 @@ pub async fn pick_dir(
     axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Json<Value> {
     // 标题转成 owned：blocking 闭包要 'static 生命周期
-    let title = q.get("title").cloned().unwrap_or_else(|| "Choose a folder".into());
+    let title = q
+        .get("title")
+        .cloned()
+        .unwrap_or_else(|| "Choose a folder".into());
     let picked = crate::api::blocking(move || Ok(pick_dir_native(&title))).await;
     match picked {
         Ok(Some(dir)) => Json(json!({ "success": true, "dir": dir })),
@@ -1880,8 +1902,7 @@ mod tests {
     fn mac_never_competes_for_windows_installer() {
         for t in [PkgTarget::MacArm, PkgTarget::MacX64] {
             for name in ASSETS {
-                let win =
-                    name.ends_with(".exe") || name.ends_with(".msi") || name.ends_with(".zip");
+                let win = name.ends_with(".exe") || name.ends_with(".msi") || name.ends_with(".zip");
                 if win {
                     assert_eq!(asset_score_for(t, name), 0, "{name} 不该在 macOS 上参与竞争");
                 }
@@ -1904,7 +1925,11 @@ mod tests {
     fn installer_goes_to_downloads_by_default() {
         let dir = resolve_dir(None);
         assert_eq!(dir, downloads_dir(), "没指定目录时应落在系统的下载目录");
-        assert!(dir.is_dir(), "下载目录要真实存在（不存在就建出来）：{}", dir.display());
+        assert!(
+            dir.is_dir(),
+            "下载目录要真实存在（不存在就建出来）：{}",
+            dir.display()
+        );
         assert_ne!(
             dir,
             std::env::temp_dir().join("dbmind-update"),

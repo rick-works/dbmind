@@ -215,7 +215,9 @@ pub struct SyncRequest {
 fn flag(value: &Option<Value>, fallback: bool) -> bool {
     match value {
         Some(Value::Bool(flag)) => *flag,
-        Some(Value::String(text)) => matches!(text.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes"),
+        Some(Value::String(text)) => {
+            matches!(text.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes")
+        }
         Some(Value::Null) | None => fallback,
         Some(other) => other.as_bool().unwrap_or(fallback),
     }
@@ -315,9 +317,8 @@ impl Opts {
     /// 显式传入的目标表名）；都没有 = 同名。改名在这里一次性定死，后面建表、建索引、
     /// 写库、日志全部用新名 —— 否则会出现「结构建在新名下、数据写进旧表」这种半拉子结果。
     fn target_table_for(&self, table: &str, fallback: &str) -> String {
-        let pick = |name: &str| -> Option<String> {
-            self.table_renames.get(name).map(|to| to.trim().to_string())
-        };
+        let pick =
+            |name: &str| -> Option<String> { self.table_renames.get(name).map(|to| to.trim().to_string()) };
         // 先按完整表名，再按末段（表名可能带 `库.` 前缀）
         if let Some(to) = pick(table).filter(|to| !to.is_empty()) {
             return to;
@@ -478,16 +479,9 @@ impl SyncRequest {
             grow: None,
             // 0 = 让每张表按**目标方言**的默认值来（界面填了就以此为准）；
             // 夹到 1..=100_000：太小只剩往返开销，太大等于把报文重新放大。
-            insert_rows: self
-                .insert_rows
-                .or(self.batch_size)
-                .unwrap_or(0)
-                .min(100_000),
+            insert_rows: self.insert_rows.or(self.batch_size).unwrap_or(0).min(100_000),
             // 夹到 [-1, 86400]：负数是「不限制」，0 是「继承连接」，正数最多一天
-            op_timeout_secs: self
-                .timeout_seconds
-                .unwrap_or(0)
-                .clamp(-1, 86_400),
+            op_timeout_secs: self.timeout_seconds.unwrap_or(0).clamp(-1, 86_400),
             // 界面勾选优先；环境变量是排查/批处理用的逃生阀（两者任一为真即开）
             skip_binlog: self.skip_binlog.unwrap_or(false)
                 || std::env::var_os("DBMIND_SYNC_SKIP_BINLOG").is_some(),
@@ -619,7 +613,6 @@ fn scope_of(database: &Option<String>, schema: &Option<String>) -> String {
     format!("{database}.{schema}")
 }
 
-
 // ------------------------------------------------------------------ 元数据
 
 /// 取表的列（先试「模式.表」，失败退回「表」；表真的不存在时返回空而不是报错 ——
@@ -630,11 +623,7 @@ fn scope_of(database: &Option<String>, schema: &Option<String>) -> String {
 /// 结论，用户看到的是一整屏「表不存在」，而真实报错（Communications link failure /
 /// 会话不存在）一行都没有，既没法排查也没法自动重试（链路级错误才允许整表重跑）。
 /// 现在：所有候选名都查失败 ⇒ 原样上抛第一条真实错误；只有**查询成功且确实是空**才返回空。
-async fn columns_of(
-    state: &AppState,
-    side: &Side,
-    table: &str,
-) -> XResult<Vec<ColumnDetail>> {
+async fn columns_of(state: &AppState, side: &Side, table: &str) -> XResult<Vec<ColumnDetail>> {
     let target = crate::api::scope::resolve(state, &side.conn, &side.scope).await?;
     crate::api::driver::ensure_for_connection(state, &target).await?;
     // 用户**显式选了模式**时只查那一个模式，绝不退回裸表名。
@@ -666,17 +655,9 @@ async fn columns_of(
         let engine = state.engine();
         let t = target.clone();
         let tbl = table.to_string();
-        let mut columns =
-            blocking(move || engine.list_columns_fresh_in(&t, &tbl, Some(&schema))).await?;
+        let mut columns = blocking(move || engine.list_columns_fresh_in(&t, &tbl, Some(&schema))).await?;
         if !columns.is_empty() {
-            crate::api::meta::enrich_column_types(
-                state,
-                &side.conn,
-                &side.scope,
-                table,
-                &mut columns,
-            )
-            .await;
+            crate::api::meta::enrich_column_types(state, &side.conn, &side.scope, table, &mut columns).await;
         }
         return Ok(columns);
     }
@@ -700,14 +681,7 @@ async fn columns_of(
             // `\`name\` varchar not null` —— MySQL 直接报语法错（实测：跨库同步
             // 建表失败「You have an error in your SQL syntax」，而例程/视图那两条路是好的）。
             // 与 `/columns` 接口共用同一套补全，口径一致。
-            crate::api::meta::enrich_column_types(
-                state,
-                &side.conn,
-                &side.scope,
-                table,
-                &mut columns,
-            )
-            .await;
+            crate::api::meta::enrich_column_types(state, &side.conn, &side.scope, table, &mut columns).await;
             return Ok(columns);
         }
     }
@@ -730,11 +704,7 @@ async fn columns_of(
 /// 占位者通常只持续几秒，所以这里只对**这一种**错误重试（间隔 1s / 3s，共 3 轮）；
 /// 表不存在、没权限、链路断这些错误立刻原样上抛 —— 对它们重试只会拖慢任务、
 /// 还会把「真实报错」淹掉（那正是上一版要修的东西）。
-async fn columns_of_retry(
-    state: &AppState,
-    side: &Side,
-    table: &str,
-) -> XResult<Vec<ColumnDetail>> {
+async fn columns_of_retry(state: &AppState, side: &Side, table: &str) -> XResult<Vec<ColumnDetail>> {
     /// 每一轮重试前的等待（第一轮不等待）。最后一次失败就当真空闲不下来，如实报错。
     const RETRY_WAIT_MS: [u64; 3] = [0, 1_000, 3_000];
     let mut last: Option<XError> = None;
@@ -804,13 +774,11 @@ async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<S
             run_sql_in(state, &tgt.conn, "", sql, 5000)
                 .await
                 .map(|r| {
-                    crate::api::meta::rows_of(&r)
-                        .iter()
-                        .any(|row| {
-                            row.values()
-                                .filter_map(Value::as_str)
-                                .any(|v| v.eq_ignore_ascii_case(&db_name))
-                        })
+                    crate::api::meta::rows_of(&r).iter().any(|row| {
+                        row.values()
+                            .filter_map(Value::as_str)
+                            .any(|v| v.eq_ignore_ascii_case(&db_name))
+                    })
                 })
                 .unwrap_or(true) // 查不到清单就当存在，别误建
         }
@@ -858,7 +826,11 @@ async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<S
 /// 直接对**已解析**的目标执行。`sync_table` 在开头解析一次，循环里的每条语句
 /// 复用结果 —— 原来每条 `run_sql` 都重新 `require_record`，单表几百条语句
 /// 就是几百次白查（每条语句固定链路开销里它占一份）。
-pub(crate) async fn run_target(state: &AppState, target: &str, sql: &str) -> XResult<dbmind_core::QueryResult> {
+pub(crate) async fn run_target(
+    state: &AppState,
+    target: &str,
+    sql: &str,
+) -> XResult<dbmind_core::QueryResult> {
     run_target_in(state, target, sql, SESSION_SYNC).await
 }
 
@@ -1004,10 +976,7 @@ async fn run_target_in_rows_timeout(
         read_only: None,
         connection: target.to_string(),
         sql: sql.to_string(),
-        options: dbmind_core::QueryOptions {
-            max_rows,
-            timeout_ms,
-        },
+        options: dbmind_core::QueryOptions { max_rows, timeout_ms },
         execution_id: None,
         session: Some(session.to_string()),
         // 数据同步是界面功能驱动的批量读写：不进查询历史（一次同步会下发几百条语句）
@@ -1051,8 +1020,7 @@ async fn run_target_prepared_insert(
     // 方言保存点语句：SQL Server 用 `save transaction` / `rollback transaction`，
     // 因为写入插件是用 SQL 文本开的 `begin transaction`，驱动侧 autocommit 仍是 true，
     // 宿主的 `connection.setSavepoint()` 必然抛错（见 `Spec::savepoint_sql`）。
-    let savepoint_sql = crate::api::transfer::plugins::spec_data_for(target_kind.kind.key())
-        .savepoint_sql();
+    let savepoint_sql = crate::api::transfer::plugins::spec_data_for(target_kind.kind.key()).savepoint_sql();
     let result = blocking(move || {
         // `in_transaction`：写入插件已经在目标会话上发过 `begin transaction`，
         // 宿主不能替它 commit（否则收尾的 commit 会报「没有对应的 BEGIN」）。
@@ -1093,9 +1061,10 @@ pub(crate) async fn fetch_page(
 ) -> XResult<Vec<Vec<CellValue>>> {
     // 游标值先渲染成 SQL 字面量（`page_sql` 只拼字符串，便于单测）
     let cursor_lits: Option<(&[String], Vec<String>)> = match cursor {
-        Some((keys, last)) if !keys.is_empty() && last.len() == keys.len() => {
-            Some((keys, last.iter().map(|cell| literal_for(cell, dialect, None)).collect()))
-        }
+        Some((keys, last)) if !keys.is_empty() && last.len() == keys.len() => Some((
+            keys,
+            last.iter().map(|cell| literal_for(cell, dialect, None)).collect(),
+        )),
         _ => None,
     };
     let sql = page_sql(
@@ -1334,7 +1303,10 @@ async fn source_table_rows(
         if name.is_empty() {
             continue;
         }
-        out.insert(name.to_lowercase(), crate::api::shape::value_to_i64(count).unwrap_or(0));
+        out.insert(
+            name.to_lowercase(),
+            crate::api::shape::value_to_i64(count).unwrap_or(0),
+        );
     }
     out
 }
@@ -1353,9 +1325,11 @@ async fn source_index_list(
 ) -> Vec<(String, bool, Vec<String>)> {
     let mut out: Vec<(String, bool, Vec<String>)> = Vec::new();
     let cell = |row: &serde_json::Map<String, Value>, key: &str| -> Option<String> {
-        let value = row
-            .get(key)
-            .or_else(|| row.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, v)| v))?;
+        let value = row.get(key).or_else(|| {
+            row.iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                .map(|(_, v)| v)
+        })?;
         match value {
             Value::String(text) => Some(text.clone()),
             Value::Number(number) => Some(number.to_string()),
@@ -1378,8 +1352,12 @@ async fn source_index_list(
             let Some(column) = cell(&row, "Column_name").filter(|c| !c.is_empty()) else {
                 continue;
             };
-            let seq = cell(&row, "Seq_in_index").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1);
-            let non_unique = cell(&row, "Non_unique").and_then(|s| s.parse::<i64>().ok()).unwrap_or(1);
+            let seq = cell(&row, "Seq_in_index")
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(1);
+            let non_unique = cell(&row, "Non_unique")
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(1);
             match agg.iter_mut().find(|(n, _, _)| *n == name) {
                 Some((_, _, cols)) => cols.push((seq, column)),
                 None => agg.push((name, non_unique, vec![(seq, column)])),
@@ -1443,10 +1421,16 @@ async fn unique_paging_key(
         if !unique || cols.is_empty() {
             continue;
         }
-        if cols.iter().any(|c| nullable.iter().any(|n| n.eq_ignore_ascii_case(c))) {
+        if cols
+            .iter()
+            .any(|c| nullable.iter().any(|n| n.eq_ignore_ascii_case(c)))
+        {
             continue;
         }
-        if cols.iter().any(|c| !columns.iter().any(|s| s.eq_ignore_ascii_case(c))) {
+        if cols
+            .iter()
+            .any(|c| !columns.iter().any(|s| s.eq_ignore_ascii_case(c)))
+        {
             continue;
         }
         candidates.push(cols);
@@ -1482,7 +1466,10 @@ async fn sync_indexes(
     let mut indexes: Vec<(String, bool, Vec<String>)> = Vec::new();
     let mysql_family = matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris");
     if mysql_family {
-        let show_sql = format!("show index from {}", src.scoped_exact(table, Dialect::new(source_kind.kind.clone())));
+        let show_sql = format!(
+            "show index from {}",
+            src.scoped_exact(table, Dialect::new(source_kind.kind.clone()))
+        );
         if let Ok(result) = run_sql_in(state, &src.conn, &src.scope, show_sql, 5000).await {
             // 大小写不敏感取列（有的驱动把列名折成大写）。
             // **不能只认 `as_str`**：Non_unique / Seq_in_index 是数字列，宿主把结果集回成
@@ -1668,9 +1655,7 @@ async fn sync_indexes(
             let unique_kw = if unique { "unique " } else { "" };
             // ClickHouse 的 ORDER BY 就是源表主键 —— 与它完全重复的索引建了也用不上
             //（CH 不会拿它剪枝），直接跳过并说明原因。
-            if target_kind.kind.key() == "clickhouse"
-                && same_key_columns(&columns, declared_primary)
-            {
+            if target_kind.kind.key() == "clickhouse" && same_key_columns(&columns, declared_primary) {
                 tracing::debug!(table, index = %name, "跳过：与 ClickHouse 排序键（ORDER BY）完全重复");
                 skipped.push(name.clone());
                 continue;
@@ -1678,11 +1663,19 @@ async fn sync_indexes(
             // **索引名保持源名**（用户口径：源叫什么目标就叫什么；重名/不支持时静默跳过）
             let idx_sql = match target_kind.kind.key() {
                 // Doris：二级索引用 BITMAP 写法（普通 create index 不带 USING 会失败）
-                "doris" => Some(format!("create index {} on {} ({}) using bitmap", idx_name, target_name, col_list)),
+                "doris" => Some(format!(
+                    "create index {} on {} ({}) using bitmap",
+                    idx_name, target_name, col_list
+                )),
                 // ClickHouse：没有 btree 索引，只有**跳数索引**（data skipping index），
                 // 必须带 TYPE 与 GRANULARITY —— 建法见 `clickhouse_skip_index`
-                "clickhouse" => clickhouse_skip_index(target_kind, target_name, &name, &columns, source_columns),
-                _ => Some(format!("create {}index {} on {} ({})", unique_kw, idx_name, target_name, col_list)),
+                "clickhouse" => {
+                    clickhouse_skip_index(target_kind, target_name, &name, &columns, source_columns)
+                }
+                _ => Some(format!(
+                    "create {}index {} on {} ({})",
+                    unique_kw, idx_name, target_name, col_list
+                )),
             };
             let Some(idx_sql) = idx_sql else {
                 tracing::debug!(table, index = %name, "跳过：ClickHouse 跳数索引推不出可用表达式");
@@ -1696,10 +1689,7 @@ async fn sync_indexes(
                     // MATERIALIZE（按索引表达式扫一遍）才吃得到。回填失败不算索引建失败：
                     // 索引已经挂上，只是历史数据没覆盖，日志里说清楚就行。
                     if target_kind.kind.key() == "clickhouse" {
-                        let sql = format!(
-                            "alter table {} materialize index {}",
-                            target_name, idx_name
-                        );
+                        let sql = format!("alter table {} materialize index {}", target_name, idx_name);
                         if let Err(err) = run_target_ddl(state, tgt_target, &sql).await {
                             tracing::warn!(table, index = %name, error = %err.message, "MATERIALIZE INDEX 失败");
                             if let Some(task) = task {
@@ -1732,7 +1722,11 @@ async fn sync_indexes(
     if !failed.is_empty() {
         if let Some(task) = task {
             let shown = failed.iter().take(5).cloned().collect::<Vec<_>>().join("、");
-            let more = if failed.len() > 5 { format!(" 等 {} 个", failed.len()) } else { String::new() };
+            let more = if failed.len() > 5 {
+                format!(" 等 {} 个", failed.len())
+            } else {
+                String::new()
+            };
             task.log(format!(
                 "表 {table}：{} 个索引未能创建（{shown}{more}）",
                 failed.len()
@@ -1851,20 +1845,18 @@ async fn create_deferred_indexes(
 /// MySQL 的 `ON DUPLICATE KEY UPDATE` 会命中**任意**唯一索引，而不是只命中
 /// 用户选中的主键。目标表若还有其它唯一索引，源行可能因为另一个唯一键冲突
 /// 而更新到另一行。探测失败同样保守回退：不能拿"不知道"换"可能更新错行"。
-async fn mysql_has_secondary_unique(
-    state: &AppState,
-    conn: &str,
-    scope: &str,
-    target_name: &str,
-) -> bool {
+async fn mysql_has_secondary_unique(state: &AppState, conn: &str, scope: &str, target_name: &str) -> bool {
     let sql = format!("show index from {target_name}");
     let Ok(result) = run_sql_in(state, conn, scope, sql, 5000).await else {
         return true;
     };
     for row in crate::api::meta::rows_of(&result) {
         let cell = |key: &str| {
-            row.get(key)
-                .or_else(|| row.iter().find(|(name, _)| name.eq_ignore_ascii_case(key)).map(|(_, v)| v))
+            row.get(key).or_else(|| {
+                row.iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(key))
+                    .map(|(_, v)| v)
+            })
         };
         let key_name = cell("Key_name").and_then(Value::as_str).unwrap_or("");
         let non_unique = cell("Non_unique")
@@ -1897,8 +1889,16 @@ fn basic_auth(user: &str, pass: &str) -> String {
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         out.push(TABLE[(n >> 18) as usize & 63] as char);
         out.push(TABLE[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { TABLE[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { TABLE[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     format!("Basic {}", out)
 }
@@ -1920,7 +1920,10 @@ fn resolve_stream_redirect(fe_url: &str, location: &str) -> String {
         ("https://", r)
     } else {
         // 相对路径：拼到 FE 的 scheme://authority 后
-        return match fe_url.find("://").and_then(|p| fe_url[p + 3..].find('/').map(|q| p + 3 + q)) {
+        return match fe_url
+            .find("://")
+            .and_then(|p| fe_url[p + 3..].find('/').map(|q| p + 3 + q))
+        {
             Some(slash) => format!("{}{}", &fe_url[..slash], loc),
             None => format!("{fe_url}{loc}"),
         };
@@ -1940,7 +1943,10 @@ fn resolve_stream_redirect(fe_url: &str, location: &str) -> String {
         "127.0.0.1" | "localhost" | "::1" | "[::1]" => {
             // 环回主机 → 换成 FE 的主机（FE URL 是我们自己拼的，绝无 userinfo）
             let r = &fe_url[fe_url.find("://").map(|p| p + 3).unwrap_or(0)..];
-            let fe_authority = match r.find('/') { Some(i) => &r[..i], None => r };
+            let fe_authority = match r.find('/') {
+                Some(i) => &r[..i],
+                None => r,
+            };
             fe_authority.split(':').next().unwrap_or(fe_authority)
         }
         other => other,
@@ -1990,16 +1996,14 @@ fn encode_stream_csv(rows: &[Vec<dbmind_core::CellValue>]) -> Vec<u8> {
                 dbmind_core::CellValue::Null => out.extend_from_slice(b"\\N"),
                 dbmind_core::CellValue::Integer(n) => out.extend_from_slice(n.to_string().as_bytes()),
                 dbmind_core::CellValue::Real(x) => out.extend_from_slice(x.to_string().as_bytes()),
-            dbmind_core::CellValue::Decimal(s) => out.extend_from_slice(s.as_bytes()),
+                dbmind_core::CellValue::Decimal(s) => out.extend_from_slice(s.as_bytes()),
                 dbmind_core::CellValue::Text(s) => out.extend_from_slice(s.as_bytes()),
                 // 含二进制列的表**不会**走 Stream Load（见 use_stream 的判定），
                 // 这里只是兜底：真走到就是提示语，绝不是"把 b:len 当数据写进去"。
                 dbmind_core::CellValue::Bytes(data) => {
                     out.extend_from_slice(format!("b:{}", data.len()).as_bytes())
                 }
-                dbmind_core::CellValue::Blob { len } => {
-                    out.extend_from_slice(format!("b:{len}").as_bytes())
-                }
+                dbmind_core::CellValue::Blob { len } => out.extend_from_slice(format!("b:{len}").as_bytes()),
             }
         }
         out.push(CSV_ROW_SEP_BYTE);
@@ -2008,10 +2012,7 @@ fn encode_stream_csv(rows: &[Vec<dbmind_core::CellValue>]) -> Vec<u8> {
 }
 
 /// 一批行编码成 Stream Load 的 **JSON 体**（CSV 的回退路径，见 rows_need_json_fallback）。
-fn encode_stream_json(
-    columns: &[String],
-    rows: &[Vec<dbmind_core::CellValue>],
-) -> Result<Vec<u8>, String> {
+fn encode_stream_json(columns: &[String], rows: &[Vec<dbmind_core::CellValue>]) -> Result<Vec<u8>, String> {
     use serde_json::Value;
     let mut arr: Vec<Value> = Vec::with_capacity(rows.len());
     for row in rows {
@@ -2023,9 +2024,7 @@ fn encode_stream_json(
                 Some(dbmind_core::CellValue::Real(x)) => Value::from(*x),
                 Some(dbmind_core::CellValue::Decimal(s)) => Value::from(s.as_str()),
                 Some(dbmind_core::CellValue::Text(s)) => Value::from(s.as_str()),
-                Some(dbmind_core::CellValue::Bytes(data)) => {
-                    Value::from(format!("b:{}", data.len()))
-                }
+                Some(dbmind_core::CellValue::Bytes(data)) => Value::from(format!("b:{}", data.len())),
                 Some(dbmind_core::CellValue::Blob { len }) => Value::from(format!("b:{len}")),
             };
             obj.insert(col.clone(), v);
@@ -2038,7 +2037,9 @@ fn encode_stream_json(
 /// Doris 返回的数字字段可能是 JSON number 也可能是字符串（版本差异），两种都认。
 fn doris_number(v: Option<&serde_json::Value>) -> u64 {
     match v {
-        Some(serde_json::Value::Number(n)) => n.as_u64().or_else(|| n.as_f64().map(|v| v as u64)).unwrap_or(0),
+        Some(serde_json::Value::Number(n)) => {
+            n.as_u64().or_else(|| n.as_f64().map(|v| v as u64)).unwrap_or(0)
+        }
         Some(serde_json::Value::String(s)) => s.trim().parse().unwrap_or(0),
         _ => 0,
     }
@@ -2106,8 +2107,16 @@ pub(crate) async fn doris_stream_load(
     } else {
         encode_stream_csv(rows)
     };
-    tracing::info!(rows = rows.len(), bytes = body.len(), csv = !use_json, "Stream Load 编码完成");
-    let fe_url = format!("http://{}:{}/api/{}/{}/_stream_load", host, http_port, database, table);
+    tracing::info!(
+        rows = rows.len(),
+        bytes = body.len(),
+        csv = !use_json,
+        "Stream Load 编码完成"
+    );
+    let fe_url = format!(
+        "http://{}:{}/api/{}/{}/_stream_load",
+        host, http_port, database, table
+    );
     let label = format!(
         "dbmind_{}",
         std::time::SystemTime::now()
@@ -2423,7 +2432,10 @@ mod paging_tests {
             "",
             PAGE,
         );
-        assert!(sql.contains("order by (select null)"), "SQL Server 缺占位 order by：{sql}");
+        assert!(
+            sql.contains("order by (select null)"),
+            "SQL Server 缺占位 order by：{sql}"
+        );
         assert!(!sql.contains("dbmind_page"), "SQL Server 不该包派生表：{sql}");
     }
 
@@ -2436,10 +2448,7 @@ mod paging_tests {
         assert!(!sql.contains(" or "), "行值比较不该再展开 or 链：{sql}");
         // 方言不认时（SQL Server）同一条游标必须退回 or 链，见 `多列键展开成or链`。
         let sql = cursor_page(ConnectionKind::Postgresql, &["a", "b"], &["1", "2"], "");
-        assert!(
-            sql.contains("(\"a\", \"b\") > (1, 2)"),
-            "PG 该用行值比较：{sql}"
-        );
+        assert!(sql.contains("(\"a\", \"b\") > (1, 2)"), "PG 该用行值比较：{sql}");
     }
 }
 
@@ -2486,8 +2495,16 @@ mod stream_load_tests {
     #[test]
     fn csv_编码_空值与各类型() {
         let rows = vec![
-            vec![CellValue::Integer(1), CellValue::Text("张三,说\"你好\"".into()), CellValue::Null],
-            vec![CellValue::Real(1.5), CellValue::Text("多行\n文本".into()), CellValue::Blob { len: 7 }],
+            vec![
+                CellValue::Integer(1),
+                CellValue::Text("张三,说\"你好\"".into()),
+                CellValue::Null,
+            ],
+            vec![
+                CellValue::Real(1.5),
+                CellValue::Text("多行\n文本".into()),
+                CellValue::Blob { len: 7 },
+            ],
             vec![CellValue::Decimal("12345678901234567890.1234567890".into())],
         ];
         let out = encode_stream_csv(&rows);
@@ -2502,11 +2519,19 @@ mod stream_load_tests {
 
     #[test]
     fn 含分隔符字符的行要退回json() {
-        assert!(!rows_need_json_fallback(&[vec![CellValue::Text("普通文本".into())]]));
-        assert!(rows_need_json_fallback(&[vec![CellValue::Text("坏\u{1}文本".into())]]));
-        assert!(rows_need_json_fallback(&[vec![CellValue::Text("坏\u{2}文本".into())]]));
+        assert!(!rows_need_json_fallback(&[vec![CellValue::Text(
+            "普通文本".into()
+        )]]));
+        assert!(rows_need_json_fallback(&[vec![CellValue::Text(
+            "坏\u{1}文本".into()
+        )]]));
+        assert!(rows_need_json_fallback(&[vec![CellValue::Text(
+            "坏\u{2}文本".into()
+        )]]));
         assert!(rows_need_json_fallback(&[vec![CellValue::Text("\\N".into())]]));
-        assert!(rows_need_json_fallback(&[vec![CellValue::Text("C:\\temp".into())]]));
+        assert!(rows_need_json_fallback(&[vec![CellValue::Text(
+            "C:\\temp".into()
+        )]]));
         assert!(columns_need_json_fallback(&["a,b".to_string()]));
         assert!(!columns_need_json_fallback(&["normal_name".to_string()]));
     }
@@ -2538,10 +2563,7 @@ mod stream_load_tests {
         );
         // 截小数不能吞掉尾随时区
         assert_eq!(
-            normalize_datetime_text(
-                "2024-06-15T12:30:45.123456789+08:00",
-                "datetimeoffset"
-            ),
+            normalize_datetime_text("2024-06-15T12:30:45.123456789+08:00", "datetimeoffset"),
             Some("2024-06-15 12:30:45.123456+08:00".to_string())
         );
         // 纯 DATE 目标只留日期段
@@ -2720,13 +2742,7 @@ impl ObjResult {
     /// 过去失败行的「新增/更新」恒为 +0（构造函数写死 0），用户分不清「压根没开始写」
     /// 和「写到一半断了」—— 真机 2026-10-27 那 15 张失败表全是 +0。
     /// 口径见 `transfer::WriteDiag::rows_written`：已发出且写成功的行，断连时可能随事务回滚。
-    fn failed_with(
-        ty: &str,
-        name: &str,
-        message: impl Into<String>,
-        inserted: u64,
-        updated: u64,
-    ) -> Self {
+    fn failed_with(ty: &str, name: &str, message: impl Into<String>, inserted: u64, updated: u64) -> Self {
         let message = message.into();
         // 失败却给不出原因 = 界面上只剩「未返回原因（详见同步日志）」，等于什么都没说
         //（真机 2026-10-27：整库同步 15 张表全红，说明列一模一样，日志里也查不到）。
@@ -2873,8 +2889,8 @@ fn normalize_datetime_text(text: &str, target_type: &str) -> Option<String> {
     let family = match base.as_str() {
         "date" => "date",
         "time" => "time",
-        "datetime" | "datetime2" | "smalldatetime" | "timestamp" | "timestamptz"
-        | "datetimeoffset" | "datetime64" => "datetime",
+        "datetime" | "datetime2" | "smalldatetime" | "timestamp" | "timestamptz" | "datetimeoffset"
+        | "datetime64" => "datetime",
         _ => return None,
     };
     let t = text.trim();
@@ -2952,9 +2968,7 @@ fn pad_time(time_part: &str) -> String {
 /// 开、写、关必然同一个会话，稳定生效。多语句分号批对 JDBC 是单次提交。
 fn with_identity(sql: String, identity_on: bool, target_name: &str) -> String {
     if identity_on {
-        format!(
-            "set identity_insert {target_name} on; {sql}; set identity_insert {target_name} off"
-        )
+        format!("set identity_insert {target_name} on; {sql}; set identity_insert {target_name} off")
     } else {
         sql
     }
@@ -3106,10 +3120,7 @@ pub(crate) fn json_row_bytes(row: &[CellValue]) -> usize {
 /// 写路径实际调用的是 [`insert_batch_ranges_with_cap`]（字节上限按实测耗时自适应），
 /// 这个包装只剩测试在用，故按测试构建裁剪，免得常驻 `never used` 警告。
 #[cfg(test)]
-fn insert_batch_ranges(
-    rows: &[Vec<CellValue>],
-    kind_key: &str,
-) -> Vec<(usize, usize)> {
+fn insert_batch_ranges(rows: &[Vec<CellValue>], kind_key: &str) -> Vec<(usize, usize)> {
     insert_batch_ranges_with_cap(
         rows,
         kind_key,
@@ -3504,8 +3515,7 @@ pub(crate) async fn write_insert_rows(
     let mut failed_rows = 0u64;
     let mut sample_err: Option<String> = None;
     let mut savepoint_seq = 0u64;
-    let mut use_prepared =
-        !identity_on && prepared_insert_candidate(target_kind.kind.key());
+    let mut use_prepared = !identity_on && prepared_insert_candidate(target_kind.kind.key());
     for (start_row, n_rows) in ranges {
         let chunk = &rows[start_row..start_row + n_rows];
         if use_prepared {
@@ -3538,7 +3548,10 @@ pub(crate) async fn write_insert_rows(
                 Err(err) if err.message.contains(PREPARED_BATCH_ROLLED_BACK) => {
                     // 宿主确认整批已回滚，才允许走原来的字面量/逐行降级；否则
                     // 部分成功后再重试会产生重复数据。
-                    tracing::warn!(table, "预编译子批失败（已回滚），本批改用 SQL 批量并逐批拆分定位坏行");
+                    tracing::warn!(
+                        table,
+                        "预编译子批失败（已回滚），本批改用 SQL 批量并逐批拆分定位坏行"
+                    );
                 }
                 Err(err) => {
                     return Err(err.message);
@@ -3546,13 +3559,7 @@ pub(crate) async fn write_insert_rows(
             }
         }
 
-        let stmt = build_insert(
-            target_name,
-            columns,
-            target_types,
-            chunk,
-            target_kind,
-        );
+        let stmt = build_insert(target_name, columns, target_types, chunk, target_kind);
         let sp = if in_transaction {
             let name = format!("dbmind_insert_{savepoint_seq}");
             savepoint_seq += 1;
@@ -3566,8 +3573,15 @@ pub(crate) async fn write_insert_rows(
             }
         }
         let insert_sql = with_identity(stmt, identity_on, target_name);
-        match run_write_stmt(state, tgt_target, &insert_sql, session, stmt_hard_limit, stmt_timeout_ms)
-            .await
+        match run_write_stmt(
+            state,
+            tgt_target,
+            &insert_sql,
+            session,
+            stmt_hard_limit,
+            stmt_timeout_ms,
+        )
+        .await
         {
             Ok(_) => {
                 ok_rows += n_rows as u64;
@@ -3691,8 +3705,7 @@ pub(crate) async fn write_insert_rows(
                                 // 留**完整**的数据库原文：MySQL 的 `Duplicate entry '…' for
                                 // key '表.索引'` 带上长主键值就两百多字符，截在 200 恰好把
                                 // 索引名/后半截键值切掉，用户拿不到能对号的错误（真机反馈）。
-                                let text: String =
-                                    error_text(&sub_err.message).chars().take(500).collect();
+                                let text: String = error_text(&sub_err.message).chars().take(500).collect();
                                 if sample_err.is_none() {
                                     sample_err = Some(text.clone());
                                     // 同时喂给写池诊断：卡顿日志里能直接看到「坏在哪」
@@ -3730,10 +3743,7 @@ pub(crate) async fn write_insert_rows(
                         // `Incorrect string value …` 各自对应完全不同的处理动作。
                         // 只有统计（多少行没写进去）+ 数据库原话；原话过一遍 brief_error，
                         // 免得又冒出「SQL 执行失败：」「(conn=…)」这类套壳
-                        let why = sample_err
-                            .as_deref()
-                            .map(brief_error)
-                            .unwrap_or_default();
+                        let why = sample_err.as_deref().map(brief_error).unwrap_or_default();
                         if why.is_empty() {
                             task.log(format!(
                                 "表 {table}：本批 {n_rows} 行里有 {chunk_failed} 行写入失败"
@@ -3813,9 +3823,7 @@ fn build_upsert_batch(
             .map(|row| {
                 row.iter()
                     .enumerate()
-                    .map(|(i, cell)| {
-                        literal_for(cell, dialect, types.get(i).and_then(|t| t.as_deref()))
-                    })
+                    .map(|(i, cell)| literal_for(cell, dialect, types.get(i).and_then(|t| t.as_deref())))
                     .collect()
             })
             .collect();
@@ -3903,7 +3911,14 @@ pub(crate) async fn write_upsert_rows(
                 return Err(err.message);
             }
         }
-        match run_target_in(state, tgt_target, &with_identity(stmt.clone(), identity_on, target_name), session).await {
+        match run_target_in(
+            state,
+            tgt_target,
+            &with_identity(stmt.clone(), identity_on, target_name),
+            session,
+        )
+        .await
+        {
             Ok(_) => {
                 ok_rows += *n_rows as u64;
                 if let Some((_, _, Some(release))) = sp.as_ref() {
@@ -3968,7 +3983,14 @@ pub(crate) async fn write_upsert_rows(
                             continue;
                         }
                     };
-                    match run_target_in(state, tgt_target, &with_identity(sql, identity_on, target_name), session).await {
+                    match run_target_in(
+                        state,
+                        tgt_target,
+                        &with_identity(sql, identity_on, target_name),
+                        session,
+                    )
+                    .await
+                    {
                         Ok(_) => {
                             ok_rows += 1;
                             if let Some((_, _, Some(release))) = row_sp.as_ref() {
@@ -4001,8 +4023,7 @@ pub(crate) async fn write_upsert_rows(
                             }
                             chunk_failed += 1;
                             if sample_err.is_none() {
-                                sample_err =
-                                    Some(error_text(&row_err.message).chars().take(500).collect());
+                                sample_err = Some(error_text(&row_err.message).chars().take(500).collect());
                             }
                         }
                     }
@@ -4316,7 +4337,10 @@ pub(crate) async fn lookup_existing_keys(
             format!(
                 "{} in ({})",
                 key_columns[0],
-                lits.iter().map(|vals| vals[0].clone()).collect::<Vec<_>>().join(", ")
+                lits.iter()
+                    .map(|vals| vals[0].clone())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         } else {
             lits.iter()
@@ -4339,15 +4363,9 @@ pub(crate) async fn lookup_existing_keys(
             predicate,
             key_columns.join(", ")
         );
-        let result = run_target_in_rows(
-            &plan.state,
-            &plan.tgt_target,
-            &sql,
-            &session,
-            chunk.len(),
-        )
-        .await
-        .map_err(|e| e.message)?;
+        let result = run_target_in_rows(&plan.state, &plan.tgt_target, &sql, &session, chunk.len())
+            .await
+            .map_err(|e| e.message)?;
         for row in &result.rows {
             let key = key_of(row, &key_positions);
             let count = row
@@ -4399,8 +4417,7 @@ async fn sync_table(
     // **别的**会话写 —— 那层外层事务根本管不到，等于没开（真机踩过）。
     // 结构操作（建表/索引）也不该和数据写挤在一个事务里：DDL 会隐式提交。
     let sid = sync_slot_sid(slot);
-    let mut result =
-        sync_table_inner(state, task, src, tgt, table, target_table, opts, &sid, progress).await;
+    let mut result = sync_table_inner(state, task, src, tgt, table, target_table, opts, &sid, progress).await;
     // 后置 SQL（DataX 的 postSql）：本对象**数据搬完后**在目标连接上执行。
     //
     // 放在这个收口函数而不是 `sync_table_inner` 的每个 return 里：直拷 / 引擎 / 只同步
@@ -4414,21 +4431,13 @@ async fn sync_table(
                 if let Err(msg) = run_user_sql(state, &target, &opts.post_sql, "后置 SQL").await {
                     // 数据其实已经搬完了，只是后置 SQL 失败 —— 行数照实带出去，
                     // 别让「表写完了但后置 SQL 出错」显示成一行都没过去
-                    result = ObjResult::failed_with(
-                        "table", table, msg, result.inserted, result.updated,
-                    );
+                    result = ObjResult::failed_with("table", table, msg, result.inserted, result.updated);
                 } else if let Some(task) = task {
                     task.log(format!("表 {target_table}：执行后置 SQL"));
                 }
             }
             Err(err) => {
-                result = ObjResult::failed_with(
-                    "table",
-                    table,
-                    err.message,
-                    result.inserted,
-                    result.updated,
-                );
+                result = ObjResult::failed_with("table", table, err.message, result.inserted, result.updated);
             }
         }
     }
@@ -4466,8 +4475,7 @@ fn sync_slot_sid(slot: usize) -> String {
 async fn warn_target_write_limits(state: &AppState, target: &str) {
     let sql = "show variables where variable_name in \
                ('innodb_buffer_pool_size','innodb_io_capacity','innodb_flush_log_at_trx_commit')";
-    let Ok(result) = run_target_in_rows(state, target, sql, "internal:sync-preflight", 16).await
-    else {
+    let Ok(result) = run_target_in_rows(state, target, sql, "internal:sync-preflight", 16).await else {
         return;
     };
     let mut buffer_pool_mb = 0u64;
@@ -4499,9 +4507,7 @@ async fn warn_target_write_limits(state: &AppState, target: &str) {
         ));
     }
     if trx_flush_one {
-        hints.push(
-            "innodb_flush_log_at_trx_commit=1（每次提交都 fsync；导入期间可临时设 2）".to_string(),
-        );
+        hints.push("innodb_flush_log_at_trx_commit=1（每次提交都 fsync；导入期间可临时设 2）".to_string());
     }
     if !hints.is_empty() {
         // 这是**优化建议**，不是本次同步的结果 —— 只进文件日志，界面日志只留结果
@@ -4639,9 +4645,7 @@ fn direct_copy_disabled() -> bool {
     std::env::var("DBMIND_SYNC_NO_DIRECT_COPY")
         .map(|value| {
             let value = value.trim();
-            !(value == "0"
-                || value.eq_ignore_ascii_case("false")
-                || value.eq_ignore_ascii_case("off"))
+            !(value == "0" || value.eq_ignore_ascii_case("false") || value.eq_ignore_ascii_case("off"))
         })
         .unwrap_or(false)
 }
@@ -4726,7 +4730,11 @@ async fn direct_source_ref(
         DirectRefDepth::DatabaseSchema => {
             if first.is_empty() {
                 // 没选库 ⇒ 目标会话的当前库就是源库，只剩模式这一层
-                let schema = if explicit_schema.is_empty() { second } else { explicit_schema };
+                let schema = if explicit_schema.is_empty() {
+                    second
+                } else {
+                    explicit_schema
+                };
                 if !schema.is_empty() {
                     parts.push(schema);
                 }
@@ -4734,7 +4742,11 @@ async fn direct_source_ref(
                 parts.push(first);
                 // 两段名在 T-SQL 里是「模式.表」：跨库必须给模式，缺省按 dbo
                 let schema = if explicit_schema.is_empty() {
-                    if second.is_empty() { "dbo" } else { second }
+                    if second.is_empty() {
+                        "dbo"
+                    } else {
+                        second
+                    }
                 } else {
                     explicit_schema
                 };
@@ -4752,7 +4764,11 @@ async fn direct_source_ref(
             //（schema 是另选的），拿它当模式会拼出 `"demo"."orders"` 这种不存在的
             // 引用 —— 真机就因此白退了一次管道。不知道模式时写裸名：目标会话与源
             // 同库同 search_path，解析结果和读元数据时完全一致。
-            let schema = if explicit_schema.is_empty() { second } else { explicit_schema };
+            let schema = if explicit_schema.is_empty() {
+                second
+            } else {
+                explicit_schema
+            };
             if !schema.is_empty() {
                 parts.push(schema);
             }
@@ -4840,24 +4856,19 @@ async fn sync_table_inner(
             Err(err) => ObjResult::failed(ty, table, err.message),
         };
     }
-    let target_columns = columns_of(state, tgt, target_table)
-        .await
-        .unwrap_or_default();
+    let target_columns = columns_of(state, tgt, target_table).await.unwrap_or_default();
     // record 保存下来：Doris Stream Load 需要 host / 端口 / 凭据（见 doris_stream_load）
     let tgt_record = match require_record(state, &tgt.conn).await {
         Ok(record) => Some(record),
         Err(err) => return ObjResult::failed(ty, table, err.message),
     };
-    let target_kind = crate::api::dialect::Dialect::new(
-        tgt_record.as_ref().expect("上一行已保证 Some").kind(),
-    );
+    let target_kind =
+        crate::api::dialect::Dialect::new(tgt_record.as_ref().expect("上一行已保证 Some").kind());
     // 源的方言在建表时就要用（跨类型要把列类型翻译到目标），所以提前到这里取
-    let source_kind = Dialect::new(
-        match require_record(state, &src.conn).await {
-            Ok(record) => record.kind(),
-            Err(err) => return ObjResult::failed(ty, table, err.message),
-        },
-    );
+    let source_kind = Dialect::new(match require_record(state, &src.conn).await {
+        Ok(record) => record.kind(),
+        Err(err) => return ObjResult::failed(ty, table, err.message),
+    });
     // `None` = 同类型（照抄）；`Some(别的类型)` = 跨类型，类型与默认值都要翻译
     let cross_kind = if source_kind.kind == target_kind.kind {
         None
@@ -4881,10 +4892,8 @@ async fn sync_table_inner(
     // 注释（表 + 字段）从**源表**取一次，供下面的「自动建表 / 删除重建」写进建表语句。
     // 内核的列元数据不带注释（`ColumnDetail` 没有 comment 字段），只有方言的元数据查询
     // 取得到 —— 取不到就是空表/None，**不编造**：注释拿不到时建表语句与以前完全一样。
-    let src_column_comments =
-        crate::api::meta::table_comments_map(state, &src.conn, &src.scope, table).await;
-    let src_table_comment =
-        crate::api::meta::table_comment_of(state, &src.conn, &src.scope, table).await;
+    let src_column_comments = crate::api::meta::table_comments_map(state, &src.conn, &src.scope, table).await;
+    let src_table_comment = crate::api::meta::table_comment_of(state, &src.conn, &src.scope, table).await;
 
     if target_columns.is_empty() {
         if !opts.sync_structure {
@@ -4952,8 +4961,9 @@ async fn sync_table_inner(
         let drop_sql = match target_kind.kind.key() {
             // PG 额外要 cascade：目标库里已有视图引用这张表时，裸 drop 直接失败
             "postgresql" => format!("drop table if exists {target_name} cascade"),
-            "mysql" | "mariadb" | "doris" | "sqlserver" | "clickhouse" | "sqlite" | "h2"
-            | "kingbase" => format!("drop table if exists {target_name}"),
+            "mysql" | "mariadb" | "doris" | "sqlserver" | "clickhouse" | "sqlite" | "h2" | "kingbase" => {
+                format!("drop table if exists {target_name}")
+            }
             _ => format!("drop table {target_name}"),
         };
         if let Err(err) = run_target(state, &tgt_target, &drop_sql).await {
@@ -4989,32 +4999,36 @@ async fn sync_table_inner(
             }
         }
     }
-        // 建表后才能补的注释（SQL Server 的扩展属性等）：create_table_with_comments
-        // 写不进去的方言在这里逐条执行 —— 之前 SQL Server 目标的注释全空（真机反馈）。
-        // 失败静默：注释是有价值的补充，不该让它挡住数据同步。
-        // schema 只有 SQL Server 那条路要用（扩展属性必须点名 schema）；PG / Oracle / DM / DB2
-        // 的 `comment on table <名>` 不带 schema 也会落到当前 search_path 的表上 ——
-        // 之前这里硬写 "dbo"，那些库拼出来的语句必然报错，而失败是静默的（注释全丢）。
-        // 表名一律传**未加引号的裸名 + 模式**：`post_create_comments` 内部按方言自己加引号
-        // （传 `"sales"."tbl"` 进去会被当成一个完整的标识符再用尖引号包一遍）。
-        let comment_schema = tgt
-            .schema
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(if target_kind.kind.key() == "sqlserver" { "dbo" } else { "" });
-        let post_comments = target_kind.post_create_comments(
-            target_table,
-            &src_column_comments,
-            src_table_comment.as_deref(),
-            comment_schema,
-        );
-        for sql in &post_comments {
-            let _ = run_target(state, &tgt_target, sql).await;
-        }
-        if !post_comments.is_empty() {
-            tracing::debug!(table, count = post_comments.len(), "已补充注释");
-        }
+    // 建表后才能补的注释（SQL Server 的扩展属性等）：create_table_with_comments
+    // 写不进去的方言在这里逐条执行 —— 之前 SQL Server 目标的注释全空（真机反馈）。
+    // 失败静默：注释是有价值的补充，不该让它挡住数据同步。
+    // schema 只有 SQL Server 那条路要用（扩展属性必须点名 schema）；PG / Oracle / DM / DB2
+    // 的 `comment on table <名>` 不带 schema 也会落到当前 search_path 的表上 ——
+    // 之前这里硬写 "dbo"，那些库拼出来的语句必然报错，而失败是静默的（注释全丢）。
+    // 表名一律传**未加引号的裸名 + 模式**：`post_create_comments` 内部按方言自己加引号
+    // （传 `"sales"."tbl"` 进去会被当成一个完整的标识符再用尖引号包一遍）。
+    let comment_schema = tgt
+        .schema
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(if target_kind.kind.key() == "sqlserver" {
+            "dbo"
+        } else {
+            ""
+        });
+    let post_comments = target_kind.post_create_comments(
+        target_table,
+        &src_column_comments,
+        src_table_comment.as_deref(),
+        comment_schema,
+    );
+    for sql in &post_comments {
+        let _ = run_target(state, &tgt_target, sql).await;
+    }
+    if !post_comments.is_empty() {
+        tracing::debug!(table, count = post_comments.len(), "已补充注释");
+    }
     // 建表（含删除重建）成功后：把源表的非主键索引搬过来（「建表包含索引」选项）
     //
     // **索引后置**：要灌数据时只先建唯一索引 —— `replace` / `on duplicate key update`
@@ -5057,14 +5071,25 @@ async fn sync_table_inner(
     // 差异补过去 —— 源有注释而目标没有/不一致的，逐条 ALTER 补齐。
     if !created && opts.sync_structure {
         update_comments(
-            state, src, source_kind, tgt, target_kind, &tgt_target, &target_name, table,
+            state,
+            src,
+            source_kind,
+            tgt,
+            target_kind,
+            &tgt_target,
+            &target_name,
+            table,
             &source_columns,
         )
         .await;
     }
 
     if !opts.sync_data {
-        let message = if created { "已按源结构建表（未同步数据）" } else { "已跳过（未勾选同步数据）" };
+        let message = if created {
+            "已按源结构建表（未同步数据）"
+        } else {
+            "已跳过（未勾选同步数据）"
+        };
         return ObjResult::ok(ty, table, message, 0, 0);
     }
     // 前置 SQL（DataX 的 preSql）：**结构已就绪、数据还没搬** —— 清空目标表、禁用触发器、
@@ -5105,8 +5130,17 @@ async fn sync_table_inner(
     if columns.is_empty() {
         // 一行都不会搬：索引后置的那一半照样补齐，否则这张新表比「正常建表」少了二级索引
         create_deferred_indexes(
-            state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
-            deferred_indexes, &declared_primary, &source_columns,
+            state,
+            src,
+            source_kind,
+            &tgt_target,
+            target_kind,
+            &target_name,
+            table,
+            task,
+            deferred_indexes,
+            &declared_primary,
+            &source_columns,
         )
         .await;
         return ObjResult::skipped(ty, table, "源表与目标表没有同名列，无法同步数据");
@@ -5213,7 +5247,6 @@ async fn sync_table_inner(
     if !missing.is_empty() {
         note.push_str(&format!("（目标缺少 {} 列，未同步）", missing.join("/")));
     }
-
 
     // 本表的会话后缀由 `sync_table` 生成并传进来（它还要按这个串做收尾释放）。
 
@@ -5389,7 +5422,12 @@ async fn sync_table_inner(
             let cfg = &r.config;
             let port = cfg.port.unwrap_or(9030);
             let http_port = if port > 1000 { port - 1000 } else { 8030 };
-            (cfg.host.clone().unwrap_or_default(), http_port, cfg.username.clone().unwrap_or_default(), cfg.password.clone().unwrap_or_default())
+            (
+                cfg.host.clone().unwrap_or_default(),
+                http_port,
+                cfg.username.clone().unwrap_or_default(),
+                cfg.password.clone().unwrap_or_default(),
+            )
         })
         .unwrap_or_default();
     // **BE 的真实 http 端口**（SHOW BACKENDS 的 HttpPort，真机 8040）：拿到后 Stream Load
@@ -5400,7 +5438,10 @@ async fn sync_table_inner(
         match run_target(state, &tgt_target, "show backends").await {
             Ok(result) => {
                 let idx_of = |name: &str| {
-                    result.columns.iter().position(|c| c.name.eq_ignore_ascii_case(name))
+                    result
+                        .columns
+                        .iter()
+                        .position(|c| c.name.eq_ignore_ascii_case(name))
                 };
                 match (idx_of("HttpPort"), idx_of("Alive")) {
                     (Some(http_idx), Some(alive_idx)) => result
@@ -5485,9 +5526,8 @@ async fn sync_table_inner(
             } else {
                 format!("{} where {}", src_qualified, table_where)
             };
-            let insert_sql = format!(
-                "insert into {target_name} ({col_list_tgt}) select {col_list_src} from {where_sql}"
-            );
+            let insert_sql =
+                format!("insert into {target_name} ({col_list_tgt}) select {col_list_src} from {where_sql}");
             tracing::info!(sql = %insert_sql, "同实例直拷 SQL");
             // 直拷同样要过 identity：同批 SET 开/关（会话级开关必须与写入同一批）。
             // 用前面探出来的 `identity_on` 而不是「目标是 SQL Server」—— 目标表**没有**
@@ -5538,9 +5578,12 @@ async fn sync_table_inner(
                 // 个别驱动把 INSERT…SELECT 的 affectedRows 回成 0（MySQL 真机偶发），
                 // 这时补一条源侧 count 兜底 —— 数的是源表（同一 where），不是目标表，
                 // 所以不会把历史行算进来。
-                if let Ok(result) =
-                    run_target(state, &tgt_target, &format!("select count(*) as n from {where_sql}"))
-                        .await
+                if let Ok(result) = run_target(
+                    state,
+                    &tgt_target,
+                    &format!("select count(*) as n from {where_sql}"),
+                )
+                .await
                 {
                     copied = result
                         .rows
@@ -5563,16 +5606,21 @@ async fn sync_table_inner(
             }
             // 索引后置的收尾：行已经落到目标，这时补建非唯一二级索引最省
             create_deferred_indexes(
-                state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
-                deferred_indexes, &declared_primary, &source_columns,
+                state,
+                src,
+                source_kind,
+                &tgt_target,
+                target_kind,
+                &target_name,
+                table,
+                task,
+                deferred_indexes,
+                &declared_primary,
+                &source_columns,
             )
             .await;
             // 日志只报「执行到哪一步」—— 行数在进度卡上（rowsWritten 平滑递增），不进日志刷屏
-            let message = format!(
-                "直拷完成{}{}",
-                if created { "（已建表）" } else { "" },
-                note
-            );
+            let message = format!("直拷完成{}{}", if created { "（已建表）" } else { "" }, note);
             return ObjResult::ok(ty, table, message, copied, 0);
         }
     }
@@ -5618,7 +5666,10 @@ async fn sync_table_inner(
         // 这句**不再进界面日志**：紧接着 transfer 引擎会按实际分片方式打一句
         // 「…按行号范围切成 N 段（每段 OFFSET 定位…）」，两条并列时用户看到的是
         // 自相矛盾（先说不按主键、又说按主键切块）。细节留在文件日志里，够排障用。
-        tracing::debug!(table, "无主键且没有可用的唯一索引（列需全部纳入同步且非空），退回 OFFSET 分页");
+        tracing::debug!(
+            table,
+            "无主键且没有可用的唯一索引（列需全部纳入同步且非空），退回 OFFSET 分页"
+        );
     }
 
     // 写池诊断（在途批数 / 最近批耗时 / 失败样例 / 是否退回过逐条提交）：
@@ -5720,8 +5771,7 @@ async fn sync_table_inner(
                 let can_retry = can_retry_after_link_break(
                     link_retries,
                     txn_batch(target_kind.kind.key()).is_some(),
-                    diag.begin_failed
-                        .load(std::sync::atomic::Ordering::SeqCst),
+                    diag.begin_failed.load(std::sync::atomic::Ordering::SeqCst),
                     diag.committed.load(std::sync::atomic::Ordering::SeqCst),
                     task.map(|t| t.is_canceled()).unwrap_or(false),
                     &msg,
@@ -5777,7 +5827,8 @@ async fn sync_table_inner(
                                 // 表已清空 ⇒ 上一轮「已提交过 N 路 / 退回逐条提交」的重复
                                 // 风险一并消失，标记归零（否则判定会拿历史值误杀后续轮次）。
                                 diag.committed.store(0, std::sync::atomic::Ordering::SeqCst);
-                                diag.begin_failed.store(false, std::sync::atomic::Ordering::SeqCst);
+                                diag.begin_failed
+                                    .store(false, std::sync::atomic::Ordering::SeqCst);
                                 break;
                             }
                             Err(err) => {
@@ -5787,7 +5838,11 @@ async fn sync_table_inner(
                                 if !may_wait {
                                     // 清表这一步就失败：前几轮可能已经写进去过行，照实带出
                                     return ObjResult::failed_with(
-                                        ty, table, err.message, diag.rows_written(), 0,
+                                        ty,
+                                        table,
+                                        err.message,
+                                        diag.rows_written(),
+                                        0,
                                     );
                                 }
                                 link_retries += 1;
@@ -5838,18 +5893,23 @@ async fn sync_table_inner(
 
     // 索引后置的收尾：数据全部落库后，再补建非唯一二级索引（见上面建表后那一段）
     create_deferred_indexes(
-        state, src, source_kind, &tgt_target, target_kind, &target_name, table, task,
-        deferred_indexes, &declared_primary, &source_columns,
+        state,
+        src,
+        source_kind,
+        &tgt_target,
+        target_kind,
+        &target_name,
+        table,
+        task,
+        deferred_indexes,
+        &declared_primary,
+        &source_columns,
     )
     .await;
 
     // 日志只报步骤；行数走 rowsWritten/rowsRead 计数（进度卡平滑递增），不进文本
     let _ = started;
-    let message = format!(
-        "传输完成{}{}",
-        if created { "（已建表）" } else { "" },
-        note
-    );
+    let message = format!("传输完成{}{}", if created { "（已建表）" } else { "" }, note);
     ObjResult::ok(ty, table, message, inserted, updated)
 }
 
@@ -5979,7 +6039,10 @@ fn rewrite_definition(
     .unwrap();
     let bare_to = format!("${{1}}{}.", to);
     map_sql_code(&text, |code| {
-        let code = code.replace(&from_q, &to_q).replace(&from_dq, &to_dq).replace(&from_br, &to_br);
+        let code = code
+            .replace(&from_q, &to_q)
+            .replace(&from_dq, &to_dq)
+            .replace(&from_br, &to_br);
         bare.replace_all(&code, bare_to.as_str()).into_owned()
     })
 }
@@ -6070,19 +6133,20 @@ async fn sync_view(
     opts: &Opts,
     task: Option<&std::sync::Arc<crate::api::tasks::Task>>,
 ) -> ObjResult {
-    let source_kind = Dialect::new(
-        match require_record(state, &src.conn).await {
-            Ok(record) => record.kind(),
-            Err(err) => return ObjResult::failed("view", name, err.message),
-        },
-    );
+    let source_kind = Dialect::new(match require_record(state, &src.conn).await {
+        Ok(record) => record.kind(),
+        Err(err) => return ObjResult::failed("view", name, err.message),
+    });
     // 源侧的模式也带上（Oracle 的 get_ddl 不带 owner 会去会话默认模式里找，跨模式必失败）
     let src_schema = crate::api::meta::split_db_schema(&src.scope, &source_kind).1;
     let Some(ddl_sql) = source_kind.ddl(name, src_schema.as_deref()).sql() else {
         return ObjResult::skipped(
             "view",
             name,
-            format!("{} 拿不到完整的视图定义，未同步", source_kind.kind.key().to_ascii_uppercase()),
+            format!(
+                "{} 拿不到完整的视图定义，未同步",
+                source_kind.kind.key().to_ascii_uppercase()
+            ),
         );
     };
     let result = match run_sql_in(state, &src.conn, &src.scope, ddl_sql, 5).await {
@@ -6104,12 +6168,10 @@ async fn sync_view(
     let Some(definition) = definition else {
         return ObjResult::skipped("view", name, "源库里没有取到该视图的建视图语句");
     };
-    let target_kind = Dialect::new(
-        match require_record(state, &tgt.conn).await {
-            Ok(record) => record.kind(),
-            Err(err) => return ObjResult::failed("view", name, err.message),
-        },
-    );
+    let target_kind = Dialect::new(match require_record(state, &tgt.conn).await {
+        Ok(record) => record.kind(),
+        Err(err) => return ObjResult::failed("view", name, err.message),
+    });
     // 定义里带源库名 / DEFINER，原样拿到目标执行会失败（见 rewrite_definition 的注释）
     let src_db = side_schema_name(&source_kind, &src.scope, &src.schema);
     let tgt_db = side_schema_name(&target_kind, &tgt.scope, &tgt.schema);
@@ -6127,7 +6189,10 @@ async fn sync_view(
         Ok(target) => target,
         Err(err) => return ObjResult::failed("view", name, err.message),
     };
-    if columns_of(state, tgt, name).await.map(|c| !c.is_empty()).unwrap_or(false)
+    if columns_of(state, tgt, name)
+        .await
+        .map(|c| !c.is_empty())
+        .unwrap_or(false)
         && opts.policy != Policy::Drop
     {
         return ObjResult::skipped("view", name, "目标已存在同名视图（保留结构策略下不动它）");
@@ -6299,9 +6364,7 @@ async fn sync_object_source(
     };
     let result = match run_sql_in(state, &src.conn, &src.scope, sql, 5).await {
         Ok(result) => result,
-        Err(err) => {
-            return ObjResult::failed(kind, name, err.message)
-        }
+        Err(err) => return ObjResult::failed(kind, name, err.message),
     };
     // 取"像 DDL"的那个值：各家的定义列名不一样（definition / sql / Create View …），
     // 按内容判断比按列名稳（与导出、查看定义同一套判据）
@@ -6375,9 +6438,9 @@ async fn sync_object_source(
     // 「改写正文里的名字」，名字优先，正文措辞只能让步（见 `Dialect::rename_object_sql`）。
     let defined = defined_object_name(&definition, kind)
         .filter(|found| !found.name.is_empty() && !found.name.eq_ignore_ascii_case(name));
-    let rename_sql = defined.as_ref().and_then(|found| {
-        target_kind.rename_object_sql(kind, &found.name, name, tgt_mode.as_deref())
-    });
+    let rename_sql = defined
+        .as_ref()
+        .and_then(|found| target_kind.rename_object_sql(kind, &found.name, name, tgt_mode.as_deref()));
     let definition = match (defined.as_ref(), rename_sql.is_none()) {
         (Some(found), true) => format!(
             "{}{}{}",
@@ -6398,7 +6461,11 @@ async fn sync_object_source(
             match target_kind.drop_object_sql(kind, victim) {
                 Some(drop_sql) => {
                     if let Some(task) = task {
-                        task.log(format!("{} {name}：删除目标{}", kind_label(kind), kind_label(kind)));
+                        task.log(format!(
+                            "{} {name}：删除目标{}",
+                            kind_label(kind),
+                            kind_label(kind)
+                        ));
                     }
                     // 目标没有这个对象时 `if exists` 不会报错，所以不看结果
                     let _ = run_target(state, &tgt_target, &drop_sql).await;
@@ -6424,8 +6491,7 @@ async fn sync_object_source(
     // 再改名时才发现目标早就有了，平白在目标端留个垃圾。
     if defined.is_some()
         && opts.policy != Policy::Drop
-        && object_defined_in(state, &tgt_target, &target_kind, kind, name, tgt_mode.as_deref())
-            .await
+        && object_defined_in(state, &tgt_target, &target_kind, kind, name, tgt_mode.as_deref()).await
     {
         return ObjResult::skipped(kind, name, "目标已存在同名对象（保留结构策略下不动它）");
     }
@@ -6485,10 +6551,7 @@ async fn sync_object_source(
 // ------------------------------------------------------------------ 处理器
 
 /// `POST /api/sync` —— 单表同步（同步返回结果）。
-pub async fn table(
-    State(state): State<AppState>,
-    Json(body): Json<SyncRequest>,
-) -> XResult<Json<Value>> {
+pub async fn table(State(state): State<AppState>, Json(body): Json<SyncRequest>) -> XResult<Json<Value>> {
     let source_table = body
         .source_table
         .clone()
@@ -6540,7 +6603,16 @@ pub async fn table(
     // 单表接口没有外层收尾监控，进度计数器只是满足 `TablePlan` 的字段
     let single_progress = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
     let outcome = sync_table(
-        &state, None, &src, &tgt, &source_table, &target_table, &opts, 0, false, &single_progress,
+        &state,
+        None,
+        &src,
+        &tgt,
+        &source_table,
+        &target_table,
+        &opts,
+        0,
+        false,
+        &single_progress,
     )
     .await;
     let success = outcome.status == "ok";
@@ -6596,10 +6668,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         crate::api::driver::ensure_for_connection(&state, &target).await?;
         let engine = state.engine();
         let tables = blocking(move || engine.list_tables_fresh(&target)).await?;
-        for table in tables
-            .into_iter()
-            .filter(|table| table.kind == TableKind::Table)
-        {
+        for table in tables.into_iter().filter(|table| table.kind == TableKind::Table) {
             objects.push(("table".to_string(), table.name));
         }
     }
@@ -6786,9 +6855,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         async move {
             // 目标端写入参数体检（只有 MySQL 系有这几项）：只提示，不改用户库配置
             if matches!(target_kind.kind.key(), "mysql" | "mariadb") {
-                if let Ok(preflight) =
-                    crate::api::scope::resolve(&state, &tgt.conn, &tgt.scope).await
-                {
+                if let Ok(preflight) = crate::api::scope::resolve(&state, &tgt.conn, &tgt.scope).await {
                     warn_target_write_limits(&state, &preflight).await;
                 }
             }
@@ -6863,18 +6930,15 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 .iter()
                 .map(|_| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
                 .collect();
-            let counters = std::sync::Arc::new(std::sync::Mutex::new((
-                0u64, 0u64, 0u64, 0u64, 0u64,
-            )));
+            let counters = std::sync::Arc::new(std::sync::Mutex::new((0u64, 0u64, 0u64, 0u64, 0u64)));
             let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(sync_concurrency));
             // 并发**槽位**池：槽位号决定会话键（`sync_slot_sid`），表跑完把号还回去，
             // 同一槽位的下一张表就**复用同一组物理连接**（省掉每表 1~3 次建连；
             // 隧道下一次 1.5~6.4 秒，几百张表就是几十分钟）。数量 = 并发上限，
             // 所以连接总数恒为「并发 × 每表会话数」，与表的总数无关。
-            let slots_free: std::sync::Arc<std::sync::Mutex<Vec<usize>>> =
-                std::sync::Arc::new(std::sync::Mutex::new(
-                    (0..sync_concurrency.max(1)).collect::<Vec<usize>>(),
-                ));
+            let slots_free: std::sync::Arc<std::sync::Mutex<Vec<usize>>> = std::sync::Arc::new(
+                std::sync::Mutex::new((0..sync_concurrency.max(1)).collect::<Vec<usize>>()),
+            );
             // 在跑的表数：弹性会话预算的分母。整库同步的**尾部**常常只剩一两张大表，
             // 固定切分（并发 8 张时各 1 路写）会让它们单路爬完最后一大段 ——
             // 每退一张表，省下的写路数就分给还在跑的（见下面 sync_table 调用处）。
@@ -6923,13 +6987,17 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         .await;
                     }
                     // 表跑完了（含失败/跳过）就给闸门放行 —— 两个出口都要记
-                    let release_gate = |left: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
-                                        tx: &tokio::sync::watch::Sender<bool>| {
-                        if left.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
-                            let _ = tx.send(true);
-                        }
-                    };
-                    let permit = tokio::time::timeout(PIPE_WAIT, sem.acquire_owned()).await.ok().and_then(|r| r.ok());
+                    let release_gate =
+                        |left: &std::sync::Arc<std::sync::atomic::AtomicUsize>,
+                         tx: &tokio::sync::watch::Sender<bool>| {
+                            if left.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+                                let _ = tx.send(true);
+                            }
+                        };
+                    let permit = tokio::time::timeout(PIPE_WAIT, sem.acquire_owned())
+                        .await
+                        .ok()
+                        .and_then(|r| r.ok());
                     // 拿到许可 ⇒ 池里一定有空号；租约在本次对象结束（含 panic）时归还
                     let lease = {
                         let mut free = slots_free.lock().unwrap_or_else(|e| e.into_inner());
@@ -6971,50 +7039,46 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                             //（SSH 跳板机对瞬时连接数有限流，真机踩过整批卡死）；
                             // 到尾部只剩一两张大表时，才把省下的写路数让给在跑的表。
                             let (guard, active) = ActiveGuard::enter(&active_tables);
-                            let winding_down = tables_left
-                                .load(std::sync::atomic::Ordering::SeqCst)
-                                <= sync_concurrency;
-                            let workers =
-                                (target_declared / active).saturating_sub(reserved_sessions).max(1);
+                            let winding_down =
+                                tables_left.load(std::sync::atomic::Ordering::SeqCst) <= sync_concurrency;
+                            let workers = (target_declared / active)
+                                .saturating_sub(reserved_sessions)
+                                .max(1);
                             let slices = (source_declared / active).max(1);
-                            let table_opts = if winding_down
-                                && (workers > opts.tgt_workers || slices > opts.src_slices)
-                            {
-                                tracing::debug!(
-                                    target: "dbmind::sync",
-                                    table = %name,
-                                    active,
-                                    workers,
-                                    slices,
-                                    "尾部放宽会话预算"
-                                );
-                                opts.clone().with_session_caps(workers, slices)
-                            } else {
-                                opts.clone()
-                            };
+                            let table_opts =
+                                if winding_down && (workers > opts.tgt_workers || slices > opts.src_slices) {
+                                    tracing::debug!(
+                                        target: "dbmind::sync",
+                                        table = %name,
+                                        active,
+                                        workers,
+                                        slices,
+                                        "尾部放宽会话预算"
+                                    );
+                                    opts.clone().with_session_caps(workers, slices)
+                                } else {
+                                    opts.clone()
+                                };
                             let outcome = sync_table(
-                                &state, Some(&task), &src, &tgt, &name, &name, &table_opts,
-                                lease.id, true, &progress,
+                                &state,
+                                Some(&task),
+                                &src,
+                                &tgt,
+                                &name,
+                                &name,
+                                &table_opts,
+                                lease.id,
+                                true,
+                                &progress,
                             )
                             .await;
                             drop(guard);
                             outcome
                         }
-                        "view" => {
-                            sync_view(&state, &src, &tgt, &name, &opts, Some(&task)).await
-                        }
+                        "view" => sync_view(&state, &src, &tgt, &name, &opts, Some(&task)).await,
                         // 例程 / 触发器 / 事件：与视图同一条路（见 sync_object_source）
                         "procedure" | "function" | "trigger" | "event" => {
-                            sync_object_source(
-                                &state,
-                                &src,
-                                &tgt,
-                                &kind,
-                                &name,
-                                &opts,
-                                Some(&task),
-                            )
-                            .await
+                            sync_object_source(&state, &src, &tgt, &kind, &name, &opts, Some(&task)).await
                         }
                         other => ObjResult::skipped(other, &name, "该对象类型不支持同步（结构、数据都没动）"),
                     };
@@ -7037,8 +7101,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     // 表的数据搬运结果已经由 transfer 引擎打过一行（含行数/耗时/速率），
                     // 这里再打「传输完成（已建表）」就是纯重复 —— 400 张表就是 800 条。
                     // 跳过 / 失败 / 只建表没搬数据 仍要打：那是用户真正要看的结果。
-                    let already_reported =
-                        outcome.ty == "table" && outcome.message.starts_with("传输完成");
+                    let already_reported = outcome.ty == "table" && outcome.message.starts_with("传输完成");
                     if !outcome.message.is_empty() && !already_reported {
                         // 日志带对象类型前缀（表/视图/存储过程…），与「表 xxx：开始」一致；
                         // 原因本身过 brief_error：只留数据库/驱动原话（剥「SQL 执行失败：」、
@@ -7093,8 +7156,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
             };
             // 对象级「无进展」判死前先探活：链路还通就说明只是这一页/这一批慢
             //（真机 400 对象的后段宽表，一页十几分钟 —— 按时间判死会把它们全报成中断）。
-            let probe_target_str = match crate::api::scope::resolve(&state, &tgt.conn, &tgt.scope).await
-            {
+            let probe_target_str = match crate::api::scope::resolve(&state, &tgt.conn, &tgt.scope).await {
                 Ok(target) => target,
                 Err(err) => {
                     tracing::warn!(error = %err.message, "解析目标连接失败，无进展判定不做探活");
@@ -7113,8 +7175,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 let mut seen = progress.load(std::sync::atomic::Ordering::SeqCst);
                 let mut idle_since = std::time::Instant::now();
                 let joined = loop {
-                    match tokio::time::timeout(std::time::Duration::from_secs(30), &mut handle).await
-                    {
+                    match tokio::time::timeout(std::time::Duration::from_secs(30), &mut handle).await {
                         Ok(result) => break Some(result),
                         Err(_) => {
                             let now = progress.load(std::sync::atomic::Ordering::SeqCst);
@@ -7129,10 +7190,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                                     && probe_target_link_confirmed(&state, &probe_target_str).await
                                 {
                                     idle_since = std::time::Instant::now();
-                                    let (kind, name) = (
-                                        objects[index].0.clone(),
-                                        objects[index].1.clone(),
-                                    );
+                                    let (kind, name) = (objects[index].0.clone(), objects[index].1.clone());
                                     task.log(format!(
                                         "{} {name}：{} 分钟没有进度，目标端探活正常，继续等待",
                                         kind_label(&kind),
@@ -7155,22 +7213,15 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                         PIPE_WAIT.as_secs() / 60
                     )),
                     Some(Ok(())) => None,
-                    Some(Err(_)) => {
-                        Some("对象任务异常终止（驱动异常或内存不足）".to_string())
-                    }
+                    Some(Err(_)) => Some("对象任务异常终止（驱动异常或内存不足）".to_string()),
                 };
                 if let Some(reason) = bad {
-                    let (kind, name) = (
-                        objects[index].0.clone(),
-                        objects[index].1.clone(),
-                    );
+                    let (kind, name) = (objects[index].0.clone(), objects[index].1.clone());
                     // 失败的表协程已经死掉，走不到 release_gate —— 计数得在这里替它扣掉，
                     // 否则闸门永远开不了：等表的视图/存储过程会一直干等到 6 小时上限，
                     // 最后全体报超时（比原本少一行结果还难看）。
                     // 只扣自己这一次，所以不会重复扣；扣到 1 说明它是最后一张表，放行闸门。
-                    if kind == "table"
-                        && tables_left.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1
-                    {
+                    if kind == "table" && tables_left.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
                         let _ = tables_done_tx.send(true);
                     }
                     *slots[index].lock().unwrap() = Some(json!({
@@ -7217,8 +7268,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     );
                     for index in failed_views {
                         let name = objects[index].1.clone();
-                        let outcome =
-                            sync_view(&state, &src, &tgt, &name, &opts, Some(&task)).await;
+                        let outcome = sync_view(&state, &src, &tgt, &name, &opts, Some(&task)).await;
                         if outcome.status == "error" {
                             // 重试也失败：**必须把原因打出来**。否则日志最后停在
                             // 「创建视图」一行，收尾却是「失败 1」，中间的原因全丢了。
@@ -7258,8 +7308,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 //     而"不一致"的动作是 truncate + 重传 —— 那是**删用户数据**，绝不能做；
                 //   · 设了「每表行数上限」时引擎只搬前 N 行，源端 count 是全表，同样不可比。
                 // 不可比时只核对「对象建出来没有」，不做行数判定。
-                let full_copy = (opts.policy == Policy::Drop
-                    || opts.data_mode == DataMode::TruncateInsert)
+                let full_copy = (opts.policy == Policy::Drop || opts.data_mode == DataMode::TruncateInsert)
                     && opts.row_limit == 0;
                 if !full_copy {
                     task.log("校验：本次是增量/合并模式或设了行数上限，只核对对象是否建出来（不比较行数）");
@@ -7328,14 +7377,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     let src_table = src.scoped_exact(name, source_kind);
                     let tgt_table = tgt.scoped(&target_name, target_kind);
                     let (want, got) = (
-                        count_table(
-                            &state,
-                            &src.conn,
-                            &src.scope,
-                            &src_table,
-                            &opts.where_for(name),
-                        )
-                        .await,
+                        count_table(&state, &src.conn, &src.scope, &src_table, &opts.where_for(name)).await,
                         count_table(&state, &tgt.conn, &tgt.scope, &tgt_table, "").await,
                     );
                     match (want, got) {
@@ -7374,8 +7416,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     let kind = objects[*index].0.clone();
                     let target_name = opts.target_table_for(name, name);
                     if kind == "view" {
-                        let outcome =
-                            sync_view(&state, &src, &tgt, name, &opts, Some(&task)).await;
+                        let outcome = sync_view(&state, &src, &tgt, name, &opts, Some(&task)).await;
                         let rebuilt = outcome.status != "error";
                         if rebuilt {
                             fixed += 1;
@@ -7441,14 +7482,8 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                     }
                     // 复检：重传后再数一遍，「补上了没有」也写进日志
                     let src_table = src.scoped_exact(name, source_kind);
-                    let want = count_table(
-                        &state,
-                        &src.conn,
-                        &src.scope,
-                        &src_table,
-                        &opts.where_for(name),
-                    )
-                    .await;
+                    let want =
+                        count_table(&state, &src.conn, &src.scope, &src_table, &opts.where_for(name)).await;
                     let got = count_table(&state, &tgt.conn, &tgt.scope, &tgt_table, "").await;
                     match (want, got) {
                         (Some(want), Some(got)) if want == got => {
@@ -7468,9 +7503,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
                 if checked == 0 {
                     task.log("校验：没有需要核对的对象");
                 } else if mismatched == 0 {
-                    task.log(format!(
-                        "校验完成：{checked} 个对象全部一致（都存在，行数相等）"
-                    ));
+                    task.log(format!("校验完成：{checked} 个对象全部一致（都存在，行数相等）"));
                 } else {
                     task.log(format!(
                         "校验完成：{checked} 个对象中 {mismatched} 个不一致，重传后 {fixed} 个已对齐"
@@ -7536,10 +7569,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
 }
 
 /// `GET /api/sync/task/{taskId}` —— 进度 + 逐对象结果。
-pub async fn status(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn status(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     let Some(task) = state.tasks.get(&task_id) else {
         return Ok(Json(json!({
             "success": false,
@@ -7557,14 +7587,13 @@ pub async fn status(
 }
 
 /// `POST /api/sync/cancel/{taskId}` —— 请求取消。
-pub async fn cancel(
-    State(state): State<AppState>,
-    Path(task_id): Path<String>,
-) -> XResult<Json<Value>> {
+pub async fn cancel(State(state): State<AppState>, Path(task_id): Path<String>) -> XResult<Json<Value>> {
     match state.tasks.get(&task_id) {
         Some(task) => {
             task.cancel();
-            Ok(Json(json!({ "success": true, "message": "已请求取消，当前对象处理完后停止" })))
+            Ok(Json(
+                json!({ "success": true, "message": "已请求取消，当前对象处理完后停止" }),
+            ))
         }
         None => Ok(Json(json!({ "success": false, "message": "任务不存在或已过期" }))),
     }
@@ -7599,9 +7628,7 @@ mod retry_tests {
     #[test]
     fn 断连整表重跑的前提() {
         let link = "写入连接已断：连接失败：Communications link failure";
-        assert!(can_retry_after_link_break(
-            0, true, false, 0, false, link, false
-        ));
+        assert!(can_retry_after_link_break(0, true, false, 0, false, link, false));
         // 尾部偶尔连断两次是常态：前 LINK_RETRY_MAX 次都要给重跑机会
         assert!(can_retry_after_link_break(
             LINK_RETRY_MAX - 1,
@@ -7628,17 +7655,11 @@ mod retry_tests {
             0, false, false, 0, false, link, false
         ));
         // ③ 退回过逐条提交：行已 commit，重跑就是重复
-        assert!(!can_retry_after_link_break(
-            0, true, true, 0, false, link, false
-        ));
+        assert!(!can_retry_after_link_break(0, true, true, 0, false, link, false));
         // ④ 已经有一路提交成功（提交阶段断连）：目标表已有本次数据，重跑就是重复
-        assert!(!can_retry_after_link_break(
-            0, true, false, 1, false, link, false
-        ));
+        assert!(!can_retry_after_link_break(0, true, false, 1, false, link, false));
         // ⑤ 用户点了停止
-        assert!(!can_retry_after_link_break(
-            0, true, false, 0, true, link, false
-        ));
+        assert!(!can_retry_after_link_break(0, true, false, 0, true, link, false));
         // ⑥ 脏数据 / 类型不匹配：重跑必然再失败
         assert!(!can_retry_after_link_break(
             0,
@@ -7682,9 +7703,7 @@ mod retry_tests {
             link,
             true
         ));
-        assert!(!can_retry_after_link_break(
-            0, true, false, 0, true, link, true
-        ));
+        assert!(!can_retry_after_link_break(0, true, false, 0, true, link, true));
         // 脏数据重跑必然再失败：清空模式也不许无限重来
         assert!(!can_retry_after_link_break(
             0,
@@ -7719,11 +7738,7 @@ mod retry_tests {
             Policy::Merge,
             false
         ));
-        assert!(can_clear_before_retry(
-            DataMode::Upsert,
-            Policy::Drop,
-            false
-        ));
+        assert!(can_clear_before_retry(DataMode::Upsert, Policy::Drop, false));
         // 源与目标是同一张表：清空会把待读的数据删掉
         assert!(!can_clear_before_retry(
             DataMode::TruncateInsert,
@@ -7731,16 +7746,8 @@ mod retry_tests {
             true
         ));
         // 合并 / 追加：不能清目标表现有数据
-        assert!(!can_clear_before_retry(
-            DataMode::Upsert,
-            Policy::Merge,
-            false
-        ));
-        assert!(!can_clear_before_retry(
-            DataMode::Insert,
-            Policy::Merge,
-            false
-        ));
+        assert!(!can_clear_before_retry(DataMode::Upsert, Policy::Merge, false));
+        assert!(!can_clear_before_retry(DataMode::Insert, Policy::Merge, false));
     }
 
     /// 界面只留宿主的事实原话，内部会话键（含主机名 / 库名 / SSH 账号）必须剥掉。
@@ -7767,20 +7774,12 @@ mod retry_tests {
         let msg = "写入连接已断：会话不存在（agent 可能已重启）：\
                    mysql|demo|127.0.0.1|3306|u|demo|false|-|s=internal:sync-wslot00-0#0";
         assert!(is_link_level_message(msg));
-        assert!(can_retry_after_link_break(
-            0, true, false, 0, false, msg, false
-        ));
+        assert!(can_retry_after_link_break(0, true, false, 0, false, msg, false));
         // 没有事务批的方言照旧不许重跑（已写的行还留在目标表里）
-        assert!(!can_retry_after_link_break(
-            0, false, false, 0, false, msg, false
-        ));
+        assert!(!can_retry_after_link_break(0, false, false, 0, false, msg, false));
         // 已经提交过一路 / 用户取消，同样不许
-        assert!(!can_retry_after_link_break(
-            0, true, false, 1, false, msg, false
-        ));
-        assert!(!can_retry_after_link_break(
-            0, true, false, 0, true, msg, false
-        ));
+        assert!(!can_retry_after_link_break(0, true, false, 1, false, msg, false));
+        assert!(!can_retry_after_link_break(0, true, false, 0, true, msg, false));
     }
 }
 
@@ -7796,8 +7795,19 @@ mod prepared_batch_tests {
         }
         // db2 的 executeBatch 大批量会让连接被掐断（实测 08001，回滚也失败），
         // 保持字面量路径 —— 见 `prepared_insert_candidate` 的注释。
-        for kind in ["mysql", "mariadb", "postgresql", "clickhouse", "doris", "sqlite", "db2"] {
-            assert!(!prepared_insert_candidate(kind), "{kind} 应继续走已验证的批量路径");
+        for kind in [
+            "mysql",
+            "mariadb",
+            "postgresql",
+            "clickhouse",
+            "doris",
+            "sqlite",
+            "db2",
+        ] {
+            assert!(
+                !prepared_insert_candidate(kind),
+                "{kind} 应继续走已验证的批量路径"
+            );
         }
     }
 
@@ -7854,15 +7864,8 @@ mod prepared_batch_tests {
     #[test]
     fn 预编译_insert_使用目标方言列名和占位符() {
         let columns = vec!["id".to_string(), "select".to_string()];
-        let sql = build_prepared_insert(
-            "[dbo].[t]",
-            &columns,
-            Dialect::new(ConnectionKind::Sqlserver),
-        );
-        assert_eq!(
-            sql,
-            "insert into [dbo].[t] (id, [select]) values (?, ?)"
-        );
+        let sql = build_prepared_insert("[dbo].[t]", &columns, Dialect::new(ConnectionKind::Sqlserver));
+        assert_eq!(sql, "insert into [dbo].[t] (id, [select]) values (?, ?)");
     }
 
     #[test]
@@ -7903,7 +7906,10 @@ mod definition_tests {
         let out = rewrite_definition(src, None, None, true);
         assert!(!out.contains("DEFINER="), "DEFINER 子句没抹掉: {out}");
         assert!(!out.contains("@`%`"), "host 没被一起抹掉: {out}");
-        assert!(out.starts_with("CREATE ALGORITHM=UNDEFINED SQL SECURITY"), "{out}");
+        assert!(
+            out.starts_with("CREATE ALGORITHM=UNDEFINED SQL SECURITY"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -7977,7 +7983,6 @@ mod definition_tests {
         assert_eq!(adapt_object_definition(raw, &mysql, &doris), raw);
     }
 }
-
 
 #[cfg(test)]
 mod 用户脚本与映射测试 {

@@ -241,8 +241,10 @@ impl Task {
             install_decision: Mutex::new(None),
             created: Instant::now(),
             finished_elapsed: Mutex::new(None),
-            started_wall: SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_millis() as u64).unwrap_or(0),
+            started_wall: SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0),
             finished_wall: Mutex::new(None),
             stream_unavailable: AtomicBool::new(false),
             load_data_unavailable: AtomicBool::new(false),
@@ -266,9 +268,7 @@ impl Task {
             _ => return None,
         };
         let num = |key: &str| snap.get(key).and_then(Value::as_u64).unwrap_or(0);
-        let text = |key: &str| {
-            snap.get(key).and_then(Value::as_str).unwrap_or("").to_string()
-        };
+        let text = |key: &str| snap.get(key).and_then(Value::as_str).unwrap_or("").to_string();
         let logs: Vec<String> = snap
             .get("logs")
             .and_then(Value::as_array)
@@ -368,15 +368,22 @@ impl Task {
         // 进入终态时**冻结运行时长**：elapsedMs 的口径是"任务跑了多久"，
         // 若一直用 created.elapsed()，任务结束后数字还会跟着时钟涨
         //（前端统计卡/任务中心就出现"都成功了耗时还在加"——真机踩过）
-        if matches!(status, TaskStatus::Success | TaskStatus::Error | TaskStatus::Canceled) {
+        if matches!(
+            status,
+            TaskStatus::Success | TaskStatus::Error | TaskStatus::Canceled
+        ) {
             let mut fin = lock(&self.finished_elapsed);
             if fin.is_none() {
                 *fin = Some(self.created.elapsed().as_millis() as u64);
             }
             let mut wall = lock(&self.finished_wall);
             if wall.is_none() {
-                *wall = Some(SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as u64).unwrap_or(0));
+                *wall = Some(
+                    SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0),
+                );
             }
         }
         *lock(&self.status) = status;
@@ -402,7 +409,9 @@ impl Task {
         *lock(&self.done) = done;
     }
     /// 行级实时计数（读取/写入/失败行数），同步等按行推进的任务用。
-    pub fn add_rows_read(&self, n: u64) { *lock(&self.rows_read) += n; }
+    pub fn add_rows_read(&self, n: u64) {
+        *lock(&self.rows_read) += n;
+    }
 
     /// 扣回已读行数（历史接口，现在**不再使用**）。
     ///
@@ -414,10 +423,16 @@ impl Task {
         let mut guard = lock(&self.rows_read);
         *guard = guard.saturating_sub(n);
     }
-    pub fn add_rows_written(&self, n: u64) { *lock(&self.rows_written) += n; }
+    pub fn add_rows_written(&self, n: u64) {
+        *lock(&self.rows_written) += n;
+    }
     /// 读侧累计字节数（估算值，供进度卡的 MB/s）。
-    pub fn add_bytes_read(&self, n: u64) { *lock(&self.bytes_read) += n; }
-    pub fn bytes_read(&self) -> u64 { *lock(&self.bytes_read) }
+    pub fn add_bytes_read(&self, n: u64) {
+        *lock(&self.bytes_read) += n;
+    }
+    pub fn bytes_read(&self) -> u64 {
+        *lock(&self.bytes_read)
+    }
     /// 任务已运行毫秒数（终态后取冻结值，与快照的 elapsedMs 一致）。
     ///
     /// 收尾汇总日志要写「耗时多久」，取的就是它 —— 不能自己算墙钟差，
@@ -425,7 +440,9 @@ impl Task {
     pub fn elapsed_ms(&self) -> u64 {
         lock(&self.finished_elapsed).unwrap_or_else(|| self.created.elapsed().as_millis() as u64)
     }
-    pub fn add_rows_failed(&self, n: u64) { *lock(&self.rows_failed) += n; }
+    pub fn add_rows_failed(&self, n: u64) {
+        *lock(&self.rows_failed) += n;
+    }
 
     /// 整表断连重跑时的计数处理。
     ///
@@ -445,7 +462,9 @@ impl Task {
         *lock(&self.rows_failed) = failed;
     }
 
-    pub fn rows_failed(&self) -> u64 { *lock(&self.rows_failed) }
+    pub fn rows_failed(&self) -> u64 {
+        *lock(&self.rows_failed)
+    }
 
     /// 对象级失败 +1（建表失败 / 视图建不出来 / 取不到列信息…）：**运行中就上报**，
     /// 别等结果表。前端「失败」卡取 `max(行失败, 对象失败)`。
@@ -459,7 +478,9 @@ impl Task {
         *guard = guard.saturating_sub(n);
     }
 
-    pub fn objects_failed(&self) -> u64 { *lock(&self.objects_failed) }
+    pub fn objects_failed(&self) -> u64 {
+        *lock(&self.objects_failed)
+    }
 
     /// Stream Load 快通道在这条任务里已经判定不可用（见字段注释）。
     pub fn stream_unavailable(&self) -> bool {
@@ -503,9 +524,13 @@ impl Task {
             *value = n;
         }
     }
-    pub fn rows_read(&self) -> u64 { *lock(&self.rows_read) }
+    pub fn rows_read(&self) -> u64 {
+        *lock(&self.rows_read)
+    }
     /// 已写入行数（看门狗判「还有没有进展」用）。
-    pub fn rows_written(&self) -> u64 { *lock(&self.rows_written) }
+    pub fn rows_written(&self) -> u64 {
+        *lock(&self.rows_written)
+    }
 
     pub fn add_done(&self, delta: u64) {
         let mut done = lock(&self.done);
@@ -597,9 +622,7 @@ impl Task {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         match *lock(&self.finished_wall) {
-            Some(finished) if finished > 0 => {
-                now.saturating_sub(finished) > TASK_TTL.as_millis() as u64
-            }
+            Some(finished) if finished > 0 => now.saturating_sub(finished) > TASK_TTL.as_millis() as u64,
             // 没记下结束时刻（极少数崩溃路径）：退回创建时刻，别让它永久驻留内存
             _ => self.created.elapsed() > TASK_TTL,
         }
@@ -922,20 +945,28 @@ pub fn content_disposition(filename: &str) -> String {
     let encoded: String = filename
         .bytes()
         .map(|byte| match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                (byte as char).to_string()
-            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (byte as char).to_string(),
             other => format!("%{other:02X}"),
         })
         .collect();
-    format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", ascii_fallback(filename), encoded)
+    format!(
+        "attachment; filename=\"{}\"; filename*=UTF-8''{}",
+        ascii_fallback(filename),
+        encoded
+    )
 }
 
 /// 给不支持 `filename*` 的老客户端的纯 ASCII 回退名。
 fn ascii_fallback(filename: &str) -> String {
     let cleaned: String = filename
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if cleaned.trim_matches('_').is_empty() {
         "download".to_string()

@@ -29,10 +29,10 @@
 //! 这样二进制列与非二进制列只有一处差异（`unhex(@cn)`），也就不必为「有没有 BLOB」
 //! 维护两套语句模板。
 
+use crate::api::dialect::Dialect;
 use crate::api::error::{XError, XResult};
 use crate::api::AppState;
 use dbmind_core::CellValue;
-use crate::api::dialect::Dialect;
 
 /// 单个请求（一次 `LOAD DATA`）的数据量上限。
 ///
@@ -48,22 +48,12 @@ pub(crate) const LOAD_DATA_CHUNK_ROWS: usize = 20_000;
 pub(crate) fn binary_columns(types: &[Option<String>]) -> Vec<bool> {
     types
         .iter()
-        .map(|type_name| {
-            type_name
-                .as_deref()
-                .map(Dialect::is_binary_type)
-                .unwrap_or(false)
-        })
+        .map(|type_name| type_name.as_deref().map(Dialect::is_binary_type).unwrap_or(false))
         .collect()
 }
 
 /// 拼 `LOAD DATA` 语句：`{file}` 由宿主替换成真实的临时文件路径。
-pub(crate) fn build_sql(
-    target_name: &str,
-    columns: &[String],
-    binary: &[bool],
-    kind: Dialect,
-) -> String {
+pub(crate) fn build_sql(target_name: &str, columns: &[String], binary: &[bool], kind: Dialect) -> String {
     let vars = (0..columns.len())
         .map(|index| format!("@c{index}"))
         .collect::<Vec<_>>()
@@ -120,9 +110,7 @@ fn encode_cell(out: &mut String, cell: &CellValue, binary: bool) -> Result<(), S
             ))
         }
         CellValue::Bytes(bytes) if binary => push_hex(out, bytes.as_slice()),
-        CellValue::Bytes(_) => {
-            return Err("文本列里出现了二进制值，无法走快速装载".to_string())
-        }
+        CellValue::Bytes(_) => return Err("文本列里出现了二进制值，无法走快速装载".to_string()),
         CellValue::Integer(value) => out.push_str(&value.to_string()),
         CellValue::Real(value) => out.push_str(&value.to_string()),
         CellValue::Decimal(text) | CellValue::Text(text) => push_escaped(out, text),
@@ -215,9 +203,7 @@ pub(crate) fn user_message(message: &str) -> String {
         || lower.contains("local_infile")
         || lower.contains("disabled the local infile capability")
     {
-        return format!(
-            "{body}（目标库需开启 local_infile：SET GLOBAL local_infile = 1 后重跑即可提速）"
-        );
+        return format!("{body}（目标库需开启 local_infile：SET GLOBAL local_infile = 1 后重跑即可提速）");
     }
     body.to_string()
 }
@@ -266,7 +252,10 @@ mod tests {
         let text = user_message(
             "LOAD_DATA_ROLLED_BACK：Loading local data is disabled; this must be enabled on both the client and server sides",
         );
-        assert!(!text.contains(LOAD_DATA_ROLLED_BACK), "内部标记不该出现在日志里：{text}");
+        assert!(
+            !text.contains(LOAD_DATA_ROLLED_BACK),
+            "内部标记不该出现在日志里：{text}"
+        );
         assert!(text.starts_with("Loading local data is disabled"));
         assert!(text.contains("SET GLOBAL local_infile = 1"));
         // 其它错误原样返回，不硬塞无关建议

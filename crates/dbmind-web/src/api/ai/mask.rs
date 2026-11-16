@@ -24,8 +24,8 @@ use crate::AppState;
 
 // 判定与算法都在 core：MCP 服务与前端表格要用同一套，复制两份迟早漂移
 pub use dbmind_core::mask::{
-    aes_decrypt, key_from_text, mask_value, random_key_text, MaskChannel, MaskConfig, MaskKey,
-    MaskMethod, MaskRule, KEY, KEY_AES,
+    aes_decrypt, key_from_text, mask_value, random_key_text, MaskChannel, MaskConfig, MaskKey, MaskMethod,
+    MaskRule, KEY, KEY_AES,
 };
 
 /// 读配置。解析失败按「未启用」处理 —— 一条坏规则不该让整个 AI 面板报错。
@@ -55,7 +55,10 @@ pub async fn save(state: &AppState, config: &MaskConfig) -> XResult<()> {
 /// 设置里原样的密钥文本（用户改过就是他自己写的那串）。
 async fn key_setting(state: &AppState) -> Option<String> {
     let engine = state.engine();
-    let raw = blocking(move || engine.get_setting(KEY_AES)).await.ok().flatten()?;
+    let raw = blocking(move || engine.get_setting(KEY_AES))
+        .await
+        .ok()
+        .flatten()?;
     let text = raw.trim().to_string();
     if text.is_empty() {
         None
@@ -142,10 +145,7 @@ pub struct RulesBody {
 }
 
 /// `PUT /api/ai/mask-rules` —— 整份覆盖（规则条数不多，前端一次全量提交最不容易出错）。
-pub async fn put_rules(
-    State(state): State<AppState>,
-    Json(body): Json<RulesBody>,
-) -> XResult<Json<Value>> {
+pub async fn put_rules(State(state): State<AppState>, Json(body): Json<RulesBody>) -> XResult<Json<Value>> {
     let rules: Vec<MaskRule> = body
         .rules
         .into_iter()

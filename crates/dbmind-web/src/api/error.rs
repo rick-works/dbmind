@@ -81,8 +81,8 @@ impl XError {
 
 impl From<DbMindError> for XError {
     fn from(err: DbMindError) -> Self {
-        let status = StatusCode::from_u16(err.code.http_status())
-            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+        let status =
+            StatusCode::from_u16(err.code.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
         let mut message = with_hint(&err.message);
         if let Some(detail) = &err.detail {
             let kept = human_detail(&scrub_noise(detail));
@@ -185,10 +185,8 @@ pub fn scrub_noise(text: &str) -> String {
         Regex::new(r"(?i)\s*ClientConnectionId\s*[:=]\s*[0-9A-Za-z-]{8,}").expect("常量正则不会失败")
     });
     let uuid = UUID.get_or_init(|| {
-        Regex::new(
-            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
-        )
-        .expect("常量正则不会失败")
+        Regex::new(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+            .expect("常量正则不会失败")
     });
 
     let once = client_id.replace_all(text, "");
@@ -258,10 +256,7 @@ impl From<String> for XError {
 
 impl From<serde_json::Error> for XError {
     fn from(err: serde_json::Error) -> Self {
-        Self::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("序列化失败：{err}"),
-        )
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, format!("序列化失败：{err}"))
     }
 }
 
@@ -282,7 +277,13 @@ impl From<ErrorCode> for XError {
 
 impl IntoResponse for XError {
     fn into_response(self) -> Response {
-        let XError { status, message, hint, detail, code: _ } = self;
+        let XError {
+            status,
+            message,
+            hint,
+            detail,
+            code: _,
+        } = self;
         if status.is_server_error() {
             tracing::error!(status = %status, message = %message, "上游兼容层请求失败");
         }

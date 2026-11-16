@@ -78,8 +78,7 @@ macro_rules! plugin_reader {
             fn split<'a>(
                 &'a mut self,
                 want: usize,
-            ) -> crate::api::transfer::BF<'a, Result<Vec<crate::api::transfer::RowRange>, String>>
-            {
+            ) -> crate::api::transfer::BF<'a, Result<Vec<crate::api::transfer::RowRange>, String>> {
                 self.inner.split(want)
             }
 
@@ -156,10 +155,7 @@ macro_rules! plugin_writer {
                 self.inner.flush()
             }
 
-            fn finish<'a>(
-                &'a self,
-                worker: usize,
-            ) -> crate::api::transfer::BF<'a, Result<(), String>> {
+            fn finish<'a>(&'a self, worker: usize) -> crate::api::transfer::BF<'a, Result<(), String>> {
                 self.inner.finish(worker)
             }
 
@@ -322,7 +318,14 @@ mod tests {
         assert_eq!(cap("oracle"), 4 * 1024 * 1024);
 
         // 事务语句
-        for kind in ["mysql", "mariadb", "postgresql", "kingbase", "sqlite", "sqlserver"] {
+        for kind in [
+            "mysql",
+            "mariadb",
+            "postgresql",
+            "kingbase",
+            "sqlite",
+            "sqlserver",
+        ] {
             assert!(spec_data_for(kind).txn().is_some(), "{kind} 应开事务");
         }
         for kind in ["oracle", "dm", "db2", "h2", "derby", "clickhouse", "doris"] {
@@ -336,7 +339,10 @@ mod tests {
         for kind in ["sqlserver", "oracle", "dm", "h2"] {
             assert!(spec_data_for(kind).prepared_batch(), "{kind} 应启用预编译批");
         }
-        assert!(!spec_data_for("db2").prepared_batch(), "DB2 的 executeBatch 会整批断连");
+        assert!(
+            !spec_data_for("db2").prepared_batch(),
+            "DB2 的 executeBatch 会整批断连"
+        );
 
         // 多语句批 / 表达式上限
         for kind in ["mysql", "mariadb", "doris", "sqlserver", "postgresql", "kingbase"] {

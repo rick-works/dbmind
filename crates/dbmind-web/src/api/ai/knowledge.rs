@@ -277,10 +277,7 @@ pub fn context_for(connection_id: Option<&str>) -> String {
         }
     };
     let mut text = String::new();
-    let glossary: Vec<Value> = array_of(&doc, "glossary")
-        .into_iter()
-        .filter(&filter)
-        .collect();
+    let glossary: Vec<Value> = array_of(&doc, "glossary").into_iter().filter(&filter).collect();
     if !glossary.is_empty() {
         text.push_str("【团队术语（用户提问时用的内部叫法）】\n");
         for item in glossary.iter().take(40) {
@@ -288,8 +285,7 @@ pub fn context_for(connection_id: Option<&str>) -> String {
                 "- {}：{}{}\n",
                 item.get("term").and_then(Value::as_str).unwrap_or(""),
                 item.get("definition").and_then(Value::as_str).unwrap_or(""),
-                item
-                    .get("mapping")
+                item.get("mapping")
                     .and_then(Value::as_str)
                     .filter(|value| !value.is_empty())
                     .map(|value| format!("（对应 {value}）"))
@@ -297,13 +293,8 @@ pub fn context_for(connection_id: Option<&str>) -> String {
             ));
         }
     }
-    let mut examples: Vec<Value> = array_of(&doc, "examples")
-        .into_iter()
-        .filter(&filter)
-        .collect();
-    examples.sort_by_key(|item| {
-        std::cmp::Reverse(item.get("hits").and_then(Value::as_i64).unwrap_or(0))
-    });
+    let mut examples: Vec<Value> = array_of(&doc, "examples").into_iter().filter(&filter).collect();
+    examples.sort_by_key(|item| std::cmp::Reverse(item.get("hits").and_then(Value::as_i64).unwrap_or(0)));
     if !examples.is_empty() {
         text.push_str("【团队采纳过的写法（优先沿用）】\n");
         for item in examples.iter().take(10) {

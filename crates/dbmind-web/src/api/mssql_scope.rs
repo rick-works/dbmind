@@ -88,13 +88,14 @@ async fn objects_of(
         }
     }
     let lit = format!("N'{}'", schema.replace('\'', "''"));
-    let sql = format!(
-        "select name from sys.objects where schema_id = schema_id({lit}) and type in ('U','V','SN')"
-    );
+    let sql =
+        format!("select name from sys.objects where schema_id = schema_id({lit}) and type in ('U','V','SN')");
     // **必须走 run_meta_sql**（而不是 run_sql_in）：后者自己也会调用本模块的 `apply`，
     // 形成「改写 → 查元数据 → 改写」的递归，async fn 会被编译器拒（E0733）。这条查询是
     // 方言无关的 sys.objects，正好属于 run_meta_sql 的用途。
-    let result = super::meta::run_meta_sql(state, conn, db, sql, 20000).await.ok()?;
+    let result = super::meta::run_meta_sql(state, conn, db, sql, 20000)
+        .await
+        .ok()?;
     let mut set = HashSet::new();
     for row in result.rows {
         if let Some(dbmind_core::CellValue::Text(name)) = row.first() {
@@ -114,8 +115,24 @@ async fn objects_of(
 const TABLE_INTRO: &[&str] = &["from", "join", "apply", "update", "into"];
 /// 出现这些关键字 ⇒ FROM 列表结束（逗号后面不再是表）
 const FROM_TERMINATORS: &[&str] = &[
-    "where", "group", "order", "having", "union", "except", "intersect", "set", "values",
-    "select", "on", "using", "limit", "offset", "fetch", "option", "for", "window",
+    "where",
+    "group",
+    "order",
+    "having",
+    "union",
+    "except",
+    "intersect",
+    "set",
+    "values",
+    "select",
+    "on",
+    "using",
+    "limit",
+    "offset",
+    "fetch",
+    "option",
+    "for",
+    "window",
 ];
 /// DDL 前缀词：后面跟 `table` 时，那个表名是"落点"
 const DDL_LEAD: &[&str] = &["create", "alter", "drop", "truncate"];
@@ -220,9 +237,7 @@ pub(crate) fn rewrite(sql: &str, schema: &str, known: &HashSet<String>) -> Strin
                     } else {
                         POS_FROM
                     };
-                } else if name == "table"
-                    && prev_kw.as_deref().is_some_and(|k| DDL_LEAD.contains(&k))
-                {
+                } else if name == "table" && prev_kw.as_deref().is_some_and(|k| DDL_LEAD.contains(&k)) {
                     expect_table = true;
                     in_from = false;
                     expect_kind = POS_DDL;
@@ -302,7 +317,12 @@ fn read_ident(chars: &[char], i: usize) -> Option<Ident> {
             name.push(chars[j]);
             j += 1;
         }
-        return Some(Ident { start: i, end: j, name, quoted: Some('[') });
+        return Some(Ident {
+            start: i,
+            end: j,
+            name,
+            quoted: Some('['),
+        });
     }
     if c == '"' {
         let mut j = i + 1;
@@ -320,7 +340,12 @@ fn read_ident(chars: &[char], i: usize) -> Option<Ident> {
             name.push(chars[j]);
             j += 1;
         }
-        return Some(Ident { start: i, end: j, name, quoted: Some('"') });
+        return Some(Ident {
+            start: i,
+            end: j,
+            name,
+            quoted: Some('"'),
+        });
     }
     if !(c.is_alphanumeric() || matches!(c, '_' | '#' | '@' | '$')) {
         return None;
@@ -339,7 +364,12 @@ fn read_ident(chars: &[char], i: usize) -> Option<Ident> {
     if j == i {
         return None;
     }
-    Some(Ident { start: i, end: j, name, quoted: None })
+    Some(Ident {
+        start: i,
+        end: j,
+        name,
+        quoted: None,
+    })
 }
 
 fn skip_blanks(chars: &[char], mut i: usize) -> usize {
@@ -372,10 +402,7 @@ fn collect_ctes(chars: &[char]) -> HashSet<String> {
             }
             j = skip_blanks(chars, (j + 1).min(n));
         }
-        if j + 1 < n
-            && (chars[j] == 'a' || chars[j] == 'A')
-            && (chars[j + 1] == 's' || chars[j + 1] == 'S')
-        {
+        if j + 1 < n && (chars[j] == 'a' || chars[j] == 'A') && (chars[j + 1] == 's' || chars[j + 1] == 'S') {
             let k = skip_blanks(chars, j + 2);
             if chars.get(k) == Some(&'(') {
                 out.insert(ident.name.to_ascii_lowercase());

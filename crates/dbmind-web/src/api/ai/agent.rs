@@ -222,11 +222,7 @@ fn render_rows(
     conn: &str,
     database: &str,
 ) -> String {
-    let names: Vec<String> = result
-        .columns
-        .iter()
-        .map(|column| column.name.clone())
-        .collect();
+    let names: Vec<String> = result.columns.iter().map(|column| column.name.clone()).collect();
     let mut out = names.join("\t");
     for row in &result.rows {
         out.push('\n');
@@ -240,13 +236,7 @@ fn render_rows(
                         other => other.to_string(),
                     };
                     match names.get(index).and_then(|name| {
-                        masks.method_for(
-                            crate::api::ai::mask::MaskChannel::Llm,
-                            conn,
-                            database,
-                            None,
-                            name,
-                        )
+                        masks.method_for(crate::api::ai::mask::MaskChannel::Llm, conn, database, None, name)
                     }) {
                         Some(method) => crate::api::ai::mask::mask_value(&text, method, mask_key),
                         None => text,
@@ -347,10 +337,7 @@ async fn execute_tool(
                     if lines.is_empty() {
                         (true, "（没有匹配的表）".to_string())
                     } else {
-                        (
-                            true,
-                            format!("表名\t类型\t行数估算\n{}", lines.join("\n")),
-                        )
+                        (true, format!("表名\t类型\t行数估算\n{}", lines.join("\n")))
                     }
                 }
                 Err(err) => (false, err.message),
@@ -378,10 +365,7 @@ async fn execute_tool(
                             )
                         })
                         .collect();
-                    (
-                        true,
-                        format!("字段\t类型\t可空\t标记\n{}", lines.join("\n")),
-                    )
+                    (true, format!("字段\t类型\t可空\t标记\n{}", lines.join("\n")))
                 }
                 Err(err) => (false, err.message),
             }
@@ -601,17 +585,8 @@ async fn run_loop(
                 .unwrap_or("call")
                 .to_string();
             let started = Instant::now();
-            let (ok, result) = execute_tool(
-                state,
-                conn,
-                database,
-                protocol,
-                thread_id,
-                &name,
-                &args,
-                changes,
-            )
-            .await;
+            let (ok, result) =
+                execute_tool(state, conn, database, protocol, thread_id, &name, &args, changes).await;
             let duration_ms = started.elapsed().as_millis() as u64;
             steps.push(json!({
                 "round": round,
@@ -662,10 +637,7 @@ fn unfinished_note(steps: &[Value], max_rounds: u32) -> String {
 }
 
 /// `POST /api/ai/agent`。
-pub async fn run(
-    State(state): State<AppState>,
-    Json(req): Json<AgentReq>,
-) -> XResult<Json<Value>> {
+pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XResult<Json<Value>> {
     let conn = req
         .connection_id
         .clone()
@@ -681,10 +653,7 @@ pub async fn run(
     // 而超预算时最该省的就是上下文
     let downgraded = crate::api::ai::chat::gate_budget()?;
     let model = config::resolve_with_budget(req.model_id.as_deref(), downgraded)?;
-    let max_rounds = req
-        .max_rounds
-        .unwrap_or(DEFAULT_ROUNDS)
-        .clamp(1, MAX_ROUNDS);
+    let max_rounds = req.max_rounds.unwrap_or(DEFAULT_ROUNDS).clamp(1, MAX_ROUNDS);
 
     // 表清单先探一次当「开场提示」：能省掉一整轮工具往返，
     // 而且模型知道表名后，第一句 SQL 就不容易写错
@@ -815,8 +784,7 @@ pub async fn resume(
     axum::extract::Path(id): axum::extract::Path<String>,
     Json(req): Json<ResumeReq>,
 ) -> XResult<Json<Value>> {
-    let store =
-        dbmind_core::global_store().ok_or_else(|| XError::bad_request("数据库未就绪"))?;
+    let store = dbmind_core::global_store().ok_or_else(|| XError::bad_request("数据库未就绪"))?;
     let job = store
         .ai_job_get(&id)?
         .ok_or_else(|| XError::bad_request("待办不存在（可能已被清理）"))?;
@@ -831,10 +799,7 @@ pub async fn resume(
     let kind = record.kind();
     let dialect = Dialect::new(kind);
     let protocol = kind.protocol();
-    let max_rounds = req
-        .max_rounds
-        .unwrap_or(DEFAULT_ROUNDS)
-        .clamp(1, MAX_ROUNDS);
+    let max_rounds = req.max_rounds.unwrap_or(DEFAULT_ROUNDS).clamp(1, MAX_ROUNDS);
     let model = config::resolve_with_budget(req.model_id.as_deref(), false)?;
 
     // 重放已走步骤。工具结果在落库时截到 600 字，重放时按同一口径告知模型
@@ -924,7 +889,11 @@ pub async fn resume(
         .iter()
         .filter(|change| change.job_id == id)
         .count();
-    let status = if changes.is_empty() && pending == 0 { "done" } else { "waiting" };
+    let status = if changes.is_empty() && pending == 0 {
+        "done"
+    } else {
+        "waiting"
+    };
     checkpoint_job(&id, status, &steps, &answer);
 
     Ok(Json(json!({

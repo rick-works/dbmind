@@ -1,6 +1,9 @@
 schemaVersion: 1
 order: 200
 dbType: duckdb
+# 内核支持 DuckDB，但前端还没有 types/duckdb.js（没有 Logo / 默认端口 / 引用符），
+# 暴露出去只会让「新建数据源」弹出张错卡片。等前端补齐再删掉这行即可。
+exposed: false
 rustVariant: Duckdb
 label: DuckDB
 dialect: DuckDB

@@ -207,7 +207,10 @@ pub async fn delete_shadows(state: &AppState, base_id: &str) -> XResult<usize> {
         }
         let engine = state.engine();
         let id = record.id.clone();
-        if blocking(move || engine.remove_connection(&id)).await.unwrap_or(false) {
+        if blocking(move || engine.remove_connection(&id))
+            .await
+            .unwrap_or(false)
+        {
             removed += 1;
         }
     }

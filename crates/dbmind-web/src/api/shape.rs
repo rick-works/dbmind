@@ -155,7 +155,10 @@ fn canonical_decimal(input: &str) -> Option<String> {
     let fraction = parts.next().unwrap_or("");
     if parts.next().is_some()
         || whole.is_empty() && fraction.is_empty()
-        || !whole.bytes().chain(fraction.bytes()).all(|byte| byte.is_ascii_digit())
+        || !whole
+            .bytes()
+            .chain(fraction.bytes())
+            .all(|byte| byte.is_ascii_digit())
     {
         return None;
     }
@@ -231,8 +234,14 @@ impl DecimalKey {
         match self_order.cmp(&other_order) {
             std::cmp::Ordering::Equal => {
                 let width = self.digits.len().max(other.digits.len());
-                let left = self.digits.bytes().chain(std::iter::repeat_n(b'0', width - self.digits.len()));
-                let right = other.digits.bytes().chain(std::iter::repeat_n(b'0', width - other.digits.len()));
+                let left = self
+                    .digits
+                    .bytes()
+                    .chain(std::iter::repeat_n(b'0', width - self.digits.len()));
+                let right = other
+                    .digits
+                    .bytes()
+                    .chain(std::iter::repeat_n(b'0', width - other.digits.len()));
                 left.cmp(right)
             }
             order => order,
@@ -344,8 +353,16 @@ pub fn normalize_datetime(text: &str) -> Option<String> {
     }
     let digit = |index: usize| bytes.get(index).is_some_and(u8::is_ascii_digit);
     // 日期部分必须严格是 yyyy-MM-dd
-    if !(digit(0) && digit(1) && digit(2) && digit(3) && bytes[4] == b'-'
-        && digit(5) && digit(6) && bytes[7] == b'-' && digit(8) && digit(9))
+    if !(digit(0)
+        && digit(1)
+        && digit(2)
+        && digit(3)
+        && bytes[4] == b'-'
+        && digit(5)
+        && digit(6)
+        && bytes[7] == b'-'
+        && digit(8)
+        && digit(9))
     {
         return None;
     }
@@ -435,11 +452,7 @@ pub fn cells_equal(left: Option<&CellValue>, right: Option<&CellValue>) -> bool 
 pub fn row_key(row: &[CellValue], indexes: &[usize]) -> String {
     indexes
         .iter()
-        .map(|index| {
-            row.get(*index)
-                .map(cell_key)
-                .unwrap_or_else(|| "n:".to_string())
-        })
+        .map(|index| row.get(*index).map(cell_key).unwrap_or_else(|| "n:".to_string()))
         .collect::<Vec<_>>()
         .join("\u{1f}")
 }
@@ -479,9 +492,7 @@ mod value_tests {
         assert!(!cells_equal(Some(&exact), Some(&changed)));
         assert!(!cells_equal(
             Some(&exact),
-            Some(&CellValue::Real(
-                "12345678901234567000".parse().unwrap()
-            ))
+            Some(&CellValue::Real("12345678901234567000".parse().unwrap()))
         ));
         assert_ne!(
             cell_key(&exact),
@@ -512,7 +523,10 @@ mod value_tests {
             cell_key(&CellValue::Text("2024-01-01T10:20:30.5".to_string()))
         );
         // 真的不同时刻仍然不等
-        assert!(!cells_equal(Some(&a), Some(&CellValue::Text("2024-01-02T00:00:00".to_string()))));
+        assert!(!cells_equal(
+            Some(&a),
+            Some(&CellValue::Text("2024-01-02T00:00:00".to_string()))
+        ));
         // 普通文本不受影响（不会被误当日期）
         assert_ne!(cell_key(&CellValue::Text("abc".to_string())), cell_key(&a));
         assert_eq!(normalize_datetime("abc"), None);
@@ -688,9 +702,7 @@ pub fn connection_json(record: &ConnectionRecord) -> Value {
         (Value::Object(map), url)
     };
     // 分组：新键 `group`，旧数据回落到 `environment`（对上游只暴露 `group` 一个名字）
-    let group = record
-        .group()
-        .unwrap_or_else(|| DEFAULT_ENVIRONMENT.to_string());
+    let group = record.group().unwrap_or_else(|| DEFAULT_ENVIRONMENT.to_string());
     let env = extra_str(record, EXTRA_ENV).unwrap_or_default();
     // SSH 隧道：地址 / 端口 / 用户 / 认证方式 / 私钥路径都回显（编辑页要能改），
     // 但**口令与私钥口令短语一个都不外发** —— 与主口令同一条规矩（只写不读）。
@@ -798,18 +810,23 @@ pub fn strip_paging_aux(json: &mut Value) {
         return;
     };
     // columns 是字符串数组：找到辅助列并移除
-    let present = object.get_mut("columns").and_then(Value::as_array_mut).is_some_and(|cols| {
-        let idx = cols
-            .iter()
-            .position(|c| c.as_str().map(|n| n.eq_ignore_ascii_case("rn__")).unwrap_or(false));
-        match idx {
-            Some(i) => {
-                cols.remove(i);
-                true
+    let present = object
+        .get_mut("columns")
+        .and_then(Value::as_array_mut)
+        .is_some_and(|cols| {
+            let idx = cols.iter().position(|c| {
+                c.as_str()
+                    .map(|n| n.eq_ignore_ascii_case("rn__"))
+                    .unwrap_or(false)
+            });
+            match idx {
+                Some(i) => {
+                    cols.remove(i);
+                    true
+                }
+                None => false,
             }
-            None => false,
-        }
-    });
+        });
     if !present {
         return;
     }
@@ -817,10 +834,7 @@ pub fn strip_paging_aux(json: &mut Value) {
     if let Some(rows) = object.get_mut("rows").and_then(Value::as_array_mut) {
         for row in rows.iter_mut() {
             if let Some(map) = row.as_object_mut() {
-                let key = map
-                    .keys()
-                    .find(|k| k.eq_ignore_ascii_case("rn__"))
-                    .cloned();
+                let key = map.keys().find(|k| k.eq_ignore_ascii_case("rn__")).cloned();
                 if let Some(key) = key {
                     map.remove(&key);
                 }
@@ -924,7 +938,11 @@ mod table_option_tests {
     fn 表选项按表名并入() {
         let mut payload = json!([{ "name": "Orders", "comment": null }, { "name": "users" }]);
         let rows = vec![
-            row(&[("table_name", "orders"), ("comment", "订单表"), ("table_type", "BASE TABLE")]),
+            row(&[
+                ("table_name", "orders"),
+                ("comment", "订单表"),
+                ("table_type", "BASE TABLE"),
+            ]),
             row(&[("table_name", "USERS"), ("comment", ""), ("engine", "InnoDB")]),
         ];
         merge_table_options(&mut payload, &rows);
@@ -956,7 +974,10 @@ mod table_option_tests {
     #[test]
     fn 表选项并入的兜底() {
         let mut payload = json!({ "name": "orders" });
-        merge_table_options(&mut payload, &[row(&[("table_name", "orders"), ("comment", "x")])]);
+        merge_table_options(
+            &mut payload,
+            &[row(&[("table_name", "orders"), ("comment", "x")])],
+        );
         assert_eq!(payload, json!({ "name": "orders" }));
 
         let mut payload = json!([{ "name": "orders" }]);

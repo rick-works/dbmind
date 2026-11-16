@@ -6,6 +6,8 @@
  */
 export default {
   code: 'SQLITE',
+  // 上游兼容接口的模块路径段：与 plugins/connection-types/sqlite.yaml 的 dialect 派生值一致（guard 校验）
+  module: 'sqlite',
   label: 'SQLite',
   category: 'RELATIONAL_FILE',
   noSql: false,
