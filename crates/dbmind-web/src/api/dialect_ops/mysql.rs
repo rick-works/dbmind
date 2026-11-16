@@ -8,6 +8,71 @@ use super::*;
 use crate::api::dialect::{is_clickhouse_privilege, is_mysql_auth_plugin, is_safe_name};
 
 impl DialectOps for MySqlOps {
+    fn revoke_missing_hint(&self) -> &'static str {
+        "库/表名"
+    }
+
+    fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        // MySQL/Oracle 的撤销行缺 scope 时当 global（界面老调用方的形状）
+        let scope = if scope.is_empty() { "global" } else { scope };
+        match scope {
+            // 库级 / 表级走的都是对象权限白名单（与 dbPrivileges / tablePrivileges 同一个校验器）
+            "db" => crate::api::dialect::is_mysql_privilege(privilege) && !owner.is_empty(),
+            "table" | "object" | "schema" => {
+                crate::api::dialect::is_mysql_privilege(privilege) && !owner.is_empty() && !object.is_empty()
+            }
+            "routine" => {
+                crate::api::dialect::is_mysql_privilege(privilege)
+                    && !owner.is_empty()
+                    && !object.is_empty()
+                    && matches!(kind, "PROCEDURE" | "FUNCTION")
+            }
+            // 角色（MySQL 8 / MariaDB）是 `名字@host` 的账号形状，不是权限名
+            "role" => crate::api::dialect::is_role_ref(privilege),
+            "global" | "server-role" => crate::api::dialect::is_mysql_privilege(privilege),
+            _ => false,
+        }
+    }
+
+    fn grant_input_scopes(&self) -> &'static [&'static str] {
+        &[
+            "privileges",
+            "dbPrivileges",
+            "tablePrivileges",
+            "routinePrivileges",
+            "revoke",
+        ]
+    }
+
+    // MySQL 的角色是账号形状（`'r'@'h'`）；MariaDB 的角色没有 host（真机回归发现：
+    // 拼成 `名字@` 会在界面上多出一列对不上的假角色），走默认的字面量档。
+    fn role_grant_text(
+        &self,
+        role_name: &str,
+        role_host: &str,
+        account_user: &str,
+        account_host: &str,
+    ) -> String {
+        if self.mariadb || role_host.is_empty() {
+            return format!(
+                "GRANT {} TO {};",
+                self.literal(role_name),
+                self.literal(account_user)
+            );
+        }
+        format!(
+            "GRANT {}@{} TO {}@{};",
+            self.literal(role_name),
+            self.literal(role_host),
+            self.literal(account_user),
+            self.literal(account_host)
+        )
+    }
+
+    // 默认转义符就是 `\`，显式 escape 反而可能被判重复声明
+    fn like_escape_suffix(&self) -> &'static str {
+        ""
+    }
     fn object_source(&self, object_type: &str, name: &str, _schema: Option<&str>) -> Meta {
         // 视图/例程/触发器/事件：MySQL 与 MariaDB 的 `show create <类型>` 写法一致
         match object_type {
@@ -202,6 +267,43 @@ impl DialectOps for MySqlOps {
 }
 
 impl DialectOps for DorisOps {
+    fn revoke_missing_hint(&self) -> &'static str {
+        "库/表名"
+    }
+
+    fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        // MySQL/Oracle 的撤销行缺 scope 时当 global（界面老调用方的形状）
+        let scope = if scope.is_empty() { "global" } else { scope };
+        match scope {
+            // 库级 / 表级走的都是对象权限白名单（与 dbPrivileges / tablePrivileges 同一个校验器）
+            "db" => crate::api::dialect::is_mysql_privilege(privilege) && !owner.is_empty(),
+            "table" | "object" | "schema" => {
+                crate::api::dialect::is_mysql_privilege(privilege) && !owner.is_empty() && !object.is_empty()
+            }
+            "routine" => {
+                crate::api::dialect::is_mysql_privilege(privilege)
+                    && !owner.is_empty()
+                    && !object.is_empty()
+                    && matches!(kind, "PROCEDURE" | "FUNCTION")
+            }
+            // 角色（MySQL 8 / MariaDB）是 `名字@host` 的账号形状，不是权限名
+            "role" => crate::api::dialect::is_role_ref(privilege),
+            "global" | "server-role" => crate::api::dialect::is_mysql_privilege(privilege),
+            _ => false,
+        }
+    }
+
+    fn grant_input_scopes(&self) -> &'static [&'static str] {
+        // Doris 没有例程（连 mysql.procs_priv 这张表都没有），
+        // routinePrivileges 不放行 —— 拼出 MySQL 的 `grant execute on procedure …` 必炸。
+        &["privileges", "dbPrivileges", "tablePrivileges", "revoke"]
+    }
+
+    // 默认转义符就是 `\`，显式 escape 反而可能被判重复声明
+    fn like_escape_suffix(&self) -> &'static str {
+        ""
+    }
+
     fn object_source(&self, object_type: &str, name: &str, _schema: Option<&str>) -> Meta {
         match object_type {
             // 视图同 MySQL（show create）
@@ -347,6 +449,41 @@ impl DialectOps for DorisOps {
 }
 
 impl DialectOps for ClickHouseOps {
+    fn revoke_missing_hint(&self) -> &'static str {
+        "库/表名"
+    }
+
+    fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        let scope = if scope.is_empty() { "global" } else { scope };
+        match scope {
+            "db" => crate::api::dialect::is_clickhouse_privilege(privilege) && !owner.is_empty(),
+            "table" | "object" | "schema" => {
+                crate::api::dialect::is_clickhouse_privilege(privilege)
+                    && !owner.is_empty()
+                    && !object.is_empty()
+            }
+            "routine" => {
+                crate::api::dialect::is_clickhouse_privilege(privilege)
+                    && !owner.is_empty()
+                    && !object.is_empty()
+                    && matches!(kind, "PROCEDURE" | "FUNCTION")
+            }
+            "role" => crate::api::dialect::is_role_ref(privilege),
+            "global" | "server-role" => crate::api::dialect::is_clickhouse_privilege(privilege),
+            _ => false,
+        }
+    }
+
+    fn grant_input_scopes(&self) -> &'static [&'static str] {
+        // 与 MySQL 系同构的三层（全局 ON *.* / 库 ON db.* / 表 ON db.table）+ 撤销差量
+        &["privileges", "dbPrivileges", "tablePrivileges", "revoke"]
+    }
+
+    // 默认转义符就是 `\`，显式 escape 反而可能被判重复声明
+    fn like_escape_suffix(&self) -> &'static str {
+        ""
+    }
+
     fn object_source(&self, object_type: &str, name: &str, _schema: Option<&str>) -> Meta {
         match object_type {
             // 视图/表都有 show create，与 ddl() 里那条同源

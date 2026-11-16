@@ -3,6 +3,63 @@
 use super::*;
 
 impl DialectOps for OracleOps {
+    fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        let _ = kind;
+        let scope = if scope.is_empty() { "global" } else { scope };
+        match scope {
+            "object" => {
+                crate::api::dialect::is_oracle_object_priv(privilege)
+                    && !owner.is_empty()
+                    && !object.is_empty()
+            }
+            // 预置角色之外还允许**自定义角色**（「新建角色」建出来的那些）
+            "role" => {
+                crate::api::dialect::is_oracle_role(privilege)
+                    || crate::api::dialect::is_plain_ident(privilege)
+            }
+            "global" => crate::api::dialect::is_oracle_system_priv(privilege),
+            _ => false,
+        }
+    }
+
+    fn grantable_privilege_check(&self) -> fn(&str) -> bool {
+        crate::api::dialect::is_oracle_grantable
+    }
+
+    fn object_privilege_check(&self) -> fn(&str) -> bool {
+        crate::api::dialect::is_oracle_object_priv
+    }
+
+    fn grant_input_scopes(&self) -> &'static [&'static str] {
+        // 系统权限（privileges）/ 对象权限（tablePrivileges，database 字段就是模式名）
+        // + 撤销清单（Oracle 没有「一把全撤」，只能逐条点名）。
+        // 没有「库级授权」这一层（库就是实例），dbPrivileges 由调用方明确拒绝。
+        &["privileges", "tablePrivileges", "revoke"]
+    }
+
+    fn grant_line_text(
+        &self,
+        scope: &str,
+        privilege: &str,
+        owner: &str,
+        object: &str,
+        account_user: &str,
+        _account_host: &str,
+    ) -> Option<String> {
+        // Oracle 的三层：系统权限 / 角色都不带 ON，对象权限带 `ON "模式"."对象"`，
+        // 账号也不写成 `'u'@'h'`（Oracle 没有 host 这一维）。
+        match scope {
+            "object" if !owner.is_empty() && !object.is_empty() => Some(format!(
+                "GRANT {privilege} ON \"{owner}\".\"{object}\" TO \"{account_user}\";"
+            )),
+            "role" | "global" => Some(format!("GRANT {privilege} TO \"{account_user}\";")),
+            _ => None,
+        }
+    }
+
+    fn temporal_row_literal(&self, hint: &str, value: &str) -> Option<String> {
+        oracle_style_temporal_literal(self, hint, value)
+    }
     fn object_source(&self, object_type: &str, name: &str, schema: Option<&str>) -> Meta {
         let name_literal = self.literal(name);
         let schema_lit = schema
@@ -308,6 +365,18 @@ impl DialectOps for OracleOps {
 }
 
 impl DialectOps for DmOps {
+    fn grantable_privilege_check(&self) -> fn(&str) -> bool {
+        crate::api::dialect::is_oracle_grantable
+    }
+
+    fn object_privilege_check(&self) -> fn(&str) -> bool {
+        crate::api::dialect::is_oracle_object_priv
+    }
+
+    fn temporal_row_literal(&self, hint: &str, value: &str) -> Option<String> {
+        oracle_style_temporal_literal(self, hint, value)
+    }
+
     fn object_source(&self, object_type: &str, name: &str, _schema: Option<&str>) -> Meta {
         let name_literal = self.literal(name);
         match object_type {
@@ -841,4 +910,75 @@ fn oracle_get_ddl(kind: &str, name_literal: &str, schema_lit: &Option<String>) -
             "select dbms_metadata.get_ddl('{kind}', upper({name_literal})) as definition from dual"
         ),
     }
+}
+
+/// Oracle/DM 行编辑取值的日期字面量：`to_date`/`to_timestamp` 显式格式串。
+///
+/// 豫园 Oracle 11g 的真机故障：表格里改一行，`day` 列原值 `2026-02-01T00:00` 原样
+/// 回传 ⇒ `ORA-01861: 文字与格式字符串不匹配`（会话 NLS 默认 `DD-MON-RR`）。
+pub(crate) fn oracle_style_temporal_literal<T: DialectOps>(
+    ops: &T,
+    hint: &str,
+    value: &str,
+) -> Option<String> {
+    let hint = hint.to_ascii_uppercase();
+    if !hint.contains("DATE") && !hint.contains("TIME") {
+        return None;
+    }
+    // `timestamp` / `datetime` 走 to_timestamp（保留小数秒）；纯 `date` 走 to_date
+    let is_timestamp = hint.contains("TIMESTAMP") || hint.starts_with("DATETIME");
+
+    let text = value.trim();
+    let (date_part, time_part) = match text.find(|c: char| c == ' ' || c == 'T') {
+        Some(index) => (&text[..index], text[index + 1..].trim()),
+        None => (text, ""),
+    };
+    // 只认 `YYYY-MM-DD`：别的写法（`02-01-2026`、带时区、自然语言）不猜
+    let date_ok = date_part.len() == 10
+        && date_part.as_bytes()[4] == b'-'
+        && date_part.as_bytes()[7] == b'-'
+        && date_part.chars().filter(char::is_ascii_digit).count() == 8;
+    if !date_ok {
+        return None;
+    }
+    if !time_part.is_empty()
+        && !time_part
+            .chars()
+            .all(|c| c.is_ascii_digit() || matches!(c, ':' | '.'))
+    {
+        return None;
+    }
+
+    let mut normalized = date_part.to_string();
+    let mut format = String::from("YYYY-MM-DD");
+    if !time_part.is_empty() {
+        let (clock, fraction) = match time_part.split_once('.') {
+            Some((clock, fraction)) => (clock, Some(fraction)),
+            None => (time_part, None),
+        };
+        if clock.is_empty() || clock.matches(':').count() > 2 {
+            return None;
+        }
+        let with_seconds = clock.matches(':').count() == 2;
+        normalized.push(' ');
+        normalized.push_str(clock);
+        format.push_str(" HH24:MI");
+        if with_seconds {
+            format.push_str(":SS");
+        }
+        // 小数秒只有 TIMESTAMP 有；DATE 列丢掉（Oracle 的 DATE 只到秒）
+        if is_timestamp {
+            if let Some(fraction) = fraction {
+                if !fraction.is_empty() {
+                    normalized.push('.');
+                    normalized.push_str(fraction);
+                    format.push_str(".FF");
+                }
+            }
+        }
+    }
+
+    let literal = ops.literal(&normalized);
+    let func = if is_timestamp { "to_timestamp" } else { "to_date" };
+    Some(format!("{func}({literal}, '{format}')"))
 }

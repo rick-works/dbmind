@@ -366,6 +366,14 @@ pub fn is_plain_ident(name: &str) -> bool {
     !n.is_empty() && n.len() <= 128 && n.chars().all(|c| c.is_alphanumeric() || "_$#@.- ".contains(c))
 }
 
+/// MySQL 的角色引用（`名字@host`）：只放行常规字符，`%` 与 `.` 是 host 的通配/域名写法。
+pub fn is_role_ref(s: &str) -> bool {
+    let s = s.trim();
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '%' | '@' | '$'))
+}
+
 fn in_list(list: &[&str], name: &str) -> bool {
     let upper = name.trim().to_ascii_uppercase();
     !upper.is_empty() && list.iter().any(|item| item.eq_ignore_ascii_case(&upper))
@@ -1687,6 +1695,68 @@ impl Dialect {
     /// 布尔值在本方言里该写成什么。
     pub fn bool_literal(&self, truth: bool) -> &'static str {
         self.ops().bool_literal(truth)
+    }
+
+    /// 高级搜索关键字里 `_`/`%` 的 LIKE 转义尾巴（方言默认转义符差异）。
+    pub fn like_escape_suffix(&self) -> &'static str {
+        self.ops().like_escape_suffix()
+    }
+
+    /// 行编辑取值的日期/时间字面量翻译（Oracle/DM 的 to_date 显式格式串）。
+    pub fn temporal_row_literal(&self, hint: &str, value: &str) -> Option<String> {
+        self.ops().temporal_row_literal(hint, value)
+    }
+
+    /// 「授予角色」语句的形状（user-info 的角色层补行）。
+    pub fn role_grant_text(
+        &self,
+        role_name: &str,
+        role_host: &str,
+        account_user: &str,
+        account_host: &str,
+    ) -> String {
+        self.ops()
+            .role_grant_text(role_name, role_host, account_user, account_host)
+    }
+
+    /// user-action 支持的授权入参 key（不在清单里的入参在动数据库之前明确拒绝）。
+    pub fn grant_input_scopes(&self) -> &'static [&'static str] {
+        self.ops().grant_input_scopes()
+    }
+
+    /// 全局/系统层权限名白名单（返回函数指针，喂给通用的 checked_privileges）。
+    pub fn grantable_privilege_check(&self) -> fn(&str) -> bool {
+        self.ops().grantable_privilege_check()
+    }
+
+    /// 对象/表层权限名白名单（与上面分开：Oracle 两本、H2 只有表级）。
+    pub fn object_privilege_check(&self) -> fn(&str) -> bool {
+        self.ops().object_privilege_check()
+    }
+
+    /// 撤销行的 scope 校验（privilege/owner/object/kind 都会拼进 SQL）。
+    pub fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        self.ops().is_revocable(scope, privilege, owner, object, kind)
+    }
+
+    /// 撤销校验失败提示里「缺少什么」的措辞（只影响文案）。
+    pub fn revoke_missing_hint(&self) -> &'static str {
+        self.ops().revoke_missing_hint()
+    }
+
+    /// 授权回显行 → 一条 `GRANT ...;` 文本（user-info 的「原始授权」列表）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn grant_line_text(
+        &self,
+        scope: &str,
+        privilege: &str,
+        owner: &str,
+        object: &str,
+        account_user: &str,
+        account_host: &str,
+    ) -> Option<String> {
+        self.ops()
+            .grant_line_text(scope, privilege, owner, object, account_user, account_host)
     }
 
     /// 这个类型名是不是「文本类」（默认值要当字符串处理）。

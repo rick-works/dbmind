@@ -161,6 +161,130 @@ pub trait DialectOps: Sync + Send {
         }
     }
 
+    /// 高级搜索关键字里 `_`/`%` 的 LIKE 转义尾巴。
+    ///
+    /// `escape_like()` 产出的是 `\%`/`\_`，但**只有部分方言默认把 `\` 当 LIKE 转义符**
+    /// （MySQL 系 / ClickHouse / PG 系）。没有默认转义符的方言（SQLite / SQL Server /
+    /// Oracle / DM / DB2 / H2 / Derby）里 `\_` 会被理解成「反斜杠 + 任意一个字符」，
+    /// 关键字带 `_`/`%` 时一条都搜不到 —— 必须显式 `escape '\'`。
+    /// 默认 = 要显式转义；默认转义符就是 `\` 的方言覆盖成空串（多写一句反而可能
+    /// 被某些版本判成重复声明）。
+    fn like_escape_suffix(&self) -> &'static str {
+        " escape '\\'"
+    }
+
+    /// 行编辑取值时日期/时间字符串的字面量翻译（`to_date`/`to_timestamp` 显式格式串）。
+    ///
+    /// Oracle 会话 NLS 默认 `DD-MON-RR`，ISO 串直接写会 `ORA-01861`，必须显式给格式串；
+    /// DM 同语法。其它方言的 ISO 串会话都认 → 默认 `None`（调用方退回普通字符串字面量）。
+    /// 与 [`DialectOps::portable_time_literal`]（表**默认值**的翻译）是两条独立入口，别混。
+    fn temporal_row_literal(&self, _hint: &str, _value: &str) -> Option<String> {
+        None
+    }
+
+    /// 授权回显行 → 一条 `GRANT ...;` 文本（user-info 的「原始授权」列表）。
+    ///
+    /// 入参是**按名字抽好**的字段（调用方负责 pick_field 与「单列文本直通」判定）。
+    /// 默认 = MySQL 系通用形状（`ON \`库\`.\`表\` TO 'u'@'h'`）；
+    /// Oracle / PG 系 / H2 的 grantee 与 ON 子句形状不同，各自覆盖。
+    fn grant_line_text(
+        &self,
+        scope: &str,
+        privilege: &str,
+        owner: &str,
+        object: &str,
+        account_user: &str,
+        account_host: &str,
+    ) -> Option<String> {
+        let target = match scope {
+            "global" => "*.*".to_string(),
+            "schema" if !owner.is_empty() => format!("{}.*", self.quote(owner)),
+            "table" if !owner.is_empty() && !object.is_empty() => {
+                format!("{}.{}", self.quote(owner), self.quote(object))
+            }
+            // 例程级：object 列是 `类型:名字`（user_grants 里 concat 出来的），还原成
+            // `ON PROCEDURE \`db\`.\`p\`` —— 类型字是 MySQL 语法的一部分，必须带上
+            "routine" if !owner.is_empty() && !object.is_empty() => {
+                let (kind, routine) = object.split_once(':').unwrap_or(("PROCEDURE", object));
+                let routine_type = if kind.eq_ignore_ascii_case("function") {
+                    "function"
+                } else {
+                    "procedure"
+                };
+                format!("{routine_type} {}.{}", self.quote(owner), self.quote(routine))
+            }
+            // 角色（MySQL 8 / MariaDB）：角色本身就是账号形状，语句里没有 ON 子句
+            "role" if !owner.is_empty() => {
+                let role_host = if object.is_empty() { "%" } else { object };
+                return Some(format!(
+                    "GRANT {}@{} TO {}@{};",
+                    self.literal(owner),
+                    self.literal(role_host),
+                    self.literal(account_user),
+                    self.literal(account_host)
+                ));
+            }
+            _ => return None,
+        };
+        Some(format!(
+            "GRANT {privilege} ON {target} TO {}@{};",
+            self.literal(account_user),
+            self.literal(account_host)
+        ))
+    }
+
+    /// 「授予角色」语句的形状（user-info 的角色层补行）。
+    ///
+    /// 三档：MySQL 的角色是账号形状（`'r'@'h'`，接受者也是 `'u'@'h'`）；
+    /// PG 系的角色是**标识符**（`"r"`，单引号不合法）；其余（MariaDB/CH/Oracle/Doris）
+    /// 角色没有 host，账号用字面量。
+    fn role_grant_text(
+        &self,
+        role_name: &str,
+        _role_host: &str,
+        account_user: &str,
+        _account_host: &str,
+    ) -> String {
+        format!(
+            "GRANT {} TO {};",
+            self.literal(role_name),
+            self.literal(account_user)
+        )
+    }
+
+    /// user-action 支持的授权入参 key（`privileges`/`dbPrivileges`/... 的白名单）。
+    ///
+    /// 不在清单里的入参**在动数据库之前**明确拒绝 —— 界面会以为权限也授好了
+    /// 而实际上什么都没发生，那比报错糟得多。默认空 = 全拒。
+    /// Doris 不含 `routinePrivileges`（连 mysql.procs_priv 都没有）。
+    fn grant_input_scopes(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// 全局/系统层权限名白名单（会被**拼进 SQL**，逐个过）。
+    /// 返回函数指针：调用方把它喂给通用的 `checked_privileges`。
+    fn grantable_privilege_check(&self) -> fn(&str) -> bool {
+        crate::api::dialect::is_mysql_privilege
+    }
+
+    /// 对象/表层权限名白名单（与上面分开：Oracle 两本白名单、H2 只有表级）。
+    fn object_privilege_check(&self) -> fn(&str) -> bool {
+        crate::api::dialect::is_mysql_privilege
+    }
+
+    /// 撤销行的 scope 校验。privilege/owner/object/kind 都会拼进 `revoke ...`，
+    /// 逐项过白名单；返回 false = 整行拒绝。
+    /// 空 scope 的缺省语义由各族自己定（MySQL/Oracle 缺省当 global）。
+    fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        let _ = (scope, privilege, owner, object, kind);
+        false
+    }
+
+    /// 撤销校验失败时提示里「缺少什么」的措辞（只影响文案）。
+    fn revoke_missing_hint(&self) -> &'static str {
+        "模式/对象名"
+    }
+
     /// 布尔**默认值**在 DDL 里的写法。
     ///
     /// 真机实测：Doris 的 `boolean default false` 是语法错（只收 `default 0`），
@@ -2440,5 +2564,176 @@ mod tests {
             Some("today()")
         );
         assert_eq!(ch.rewrite_time_default("CURRENT_TIMESTAMP", true), None);
+    }
+
+    /// LIKE 转义尾巴按语法族分：默认转义符就是 `\` 的方言给空串，其余显式 escape。
+    #[test]
+    fn like_escape_suffix_splits_by_family() {
+        for key in [
+            "mysql",
+            "mariadb",
+            "doris",
+            "clickhouse",
+            "postgresql",
+            "kingbase",
+        ] {
+            let kind = ConnectionKind::from_key(key).unwrap();
+            assert_eq!(of(kind).like_escape_suffix(), "", "{key}");
+        }
+        for key in ["sqlite", "sqlserver", "oracle", "dm", "db2", "h2", "derby"] {
+            let kind = ConnectionKind::from_key(key).unwrap();
+            assert_eq!(of(kind).like_escape_suffix(), " escape '\\'", "{key}");
+        }
+    }
+
+    /// 行编辑的时间字面量：Oracle/DM 才做 to_date/to_timestamp 翻译，其余退回普通字面量。
+    #[test]
+    fn temporal_row_literal_splits_by_family() {
+        let oracle = of(ConnectionKind::Oracle);
+        assert_eq!(
+            oracle.temporal_row_literal("date", "2026-02-01").as_deref(),
+            Some("to_date('2026-02-01', 'YYYY-MM-DD')")
+        );
+        assert_eq!(
+            oracle
+                .temporal_row_literal("timestamp(6)", "2026-02-01T13:45:59.123456")
+                .as_deref(),
+            Some("to_timestamp('2026-02-01 13:45:59.123456', 'YYYY-MM-DD HH24:MI:SS.FF')")
+        );
+        // 非日期类型 / 不认识的形状不猜
+        assert_eq!(oracle.temporal_row_literal("varchar2(20)", "2026-02-01"), None);
+        assert_eq!(oracle.temporal_row_literal("date", "02-01-2026"), None);
+        // DM 与 Oracle 同语法
+        assert_eq!(
+            of(ConnectionKind::Dm)
+                .temporal_row_literal("date", "2026-02-01")
+                .as_deref(),
+            Some("to_date('2026-02-01', 'YYYY-MM-DD')")
+        );
+        // 其它方言一律 None（ISO 串会话都认）
+        for key in ["mysql", "postgresql", "sqlserver", "sqlite"] {
+            let kind = ConnectionKind::from_key(key).unwrap();
+            assert_eq!(of(kind).temporal_row_literal("date", "2026-02-01"), None, "{key}");
+        }
+    }
+    /// 授权回显行 → GRANT 文本，按方言四档（MySQL 通用 / Oracle / PG 系 / H2）。
+    #[test]
+    fn grant_line_texts_by_family() {
+        // MySQL 通用：全局 / 表级 / 例程（object 是 `类型:名字`） / 角色（账号形状）
+        let my = of(ConnectionKind::Mysql);
+        assert_eq!(
+            my.grant_line_text("global", "SELECT", "", "", "u", "%")
+                .as_deref(),
+            Some("GRANT SELECT ON *.* TO 'u'@'%';")
+        );
+        // 全小写 plain 名裸写不加反引号（quote 的既有语义）；保留字才引起来
+        assert_eq!(
+            my.grant_line_text("table", "SELECT", "db", "t", "u", "%")
+                .as_deref(),
+            Some("GRANT SELECT ON db.t TO 'u'@'%';")
+        );
+        assert_eq!(
+            my.grant_line_text("table", "SELECT", "my-db", "order", "u", "%")
+                .as_deref(),
+            Some("GRANT SELECT ON `my-db`.`order` TO 'u'@'%';")
+        );
+        assert_eq!(
+            my.grant_line_text("routine", "EXECUTE", "db", "PROCEDURE:p", "u", "%")
+                .as_deref(),
+            Some("GRANT EXECUTE ON procedure db.p TO 'u'@'%';")
+        );
+        assert_eq!(
+            my.grant_line_text("role", "r", "r", "%", "u", "%").as_deref(),
+            Some("GRANT 'r'@'%' TO 'u'@'%';")
+        );
+        // Oracle：对象带 ON "模式"."对象"，账号没有 host
+        let ora = of(ConnectionKind::Oracle);
+        assert_eq!(
+            ora.grant_line_text("object", "SELECT", "SCOTT", "EMP", "U", "")
+                .as_deref(),
+            Some("GRANT SELECT ON \"SCOTT\".\"EMP\" TO \"U\";")
+        );
+        assert_eq!(
+            ora.grant_line_text("global", "CREATE SESSION", "", "", "U", "")
+                .as_deref(),
+            Some("GRANT CREATE SESSION TO \"U\";")
+        );
+        // PG 系：模式 / 表 / 例程都带 ON 子句，grantee 是标识符
+        let pg = of(ConnectionKind::Postgresql);
+        // `public` 是 PG 保留字被引起来；普通名裸写（quote 的既有语义）
+        assert_eq!(
+            pg.grant_line_text("schema", "USAGE", "public", "", "u", "")
+                .as_deref(),
+            Some("GRANT USAGE ON SCHEMA \"public\" TO u;")
+        );
+        assert_eq!(
+            pg.grant_line_text("function", "EXECUTE", "public", "f", "u", "")
+                .as_deref(),
+            Some("GRANT EXECUTE ON FUNCTION \"public\".f TO u;")
+        );
+        // H2：表级一层，空用户名统一写成空标识符 `""`；普通名裸写（默认 quote）
+        let h2 = of(ConnectionKind::H2);
+        assert_eq!(
+            h2.grant_line_text("table", "SELECT", "S", "T", "", "").as_deref(),
+            Some("GRANT SELECT ON S.T TO \"\";")
+        );
+        // 认不出的 scope 一律 None（不硬拼）
+        assert_eq!(my.grant_line_text("weird", "X", "a", "b", "u", "%"), None);
+    }
+
+    /// 授权入参矩阵 + 撤销校验按方言分：能力差异是方言的事，不在 handler 里列名单。
+    #[test]
+    fn grant_scopes_and_revocable_by_family() {
+        let scopes = |k: ConnectionKind| of(k).grant_input_scopes();
+        assert!(scopes(ConnectionKind::Mysql).contains(&"routinePrivileges"));
+        // Doris 没有例程：不放行 routinePrivileges（拼 MySQL 语法必炸）
+        assert!(!scopes(ConnectionKind::Doris).contains(&"routinePrivileges"));
+        assert!(scopes(ConnectionKind::Doris).contains(&"tablePrivileges"));
+        assert!(scopes(ConnectionKind::Oracle).contains(&"privileges"));
+        assert!(!scopes(ConnectionKind::Oracle).contains(&"dbPrivileges"));
+        assert!(scopes(ConnectionKind::Sqlserver).contains(&"serverRoles"));
+        assert!(scopes(ConnectionKind::Postgresql).contains(&"dbPrivileges"));
+        assert_eq!(scopes(ConnectionKind::H2), ["tablePrivileges", "revoke"]);
+        // DB2/SQLite 等：没有已实现的授权层，全拒（动数据库前明确拒绝）
+        assert!(scopes(ConnectionKind::Db2).is_empty());
+
+        // 撤销校验：MySQL 的 db/table 要 owner，routine 还要 kind
+        let my = of(ConnectionKind::Mysql);
+        assert!(my.is_revocable("db", "SELECT", "db", "", ""));
+        assert!(!my.is_revocable("db", "SELECT", "", "", ""));
+        assert!(my.is_revocable("routine", "EXECUTE", "db", "PROCEDURE:p", "PROCEDURE"));
+        assert!(!my.is_revocable("routine", "EXECUTE", "db", "PROCEDURE:p", "TRIGGER"));
+        // 空 scope 缺省当 global（老调用方形状）
+        assert!(my.is_revocable("", "SELECT", "", "", ""));
+        // SQL Server 的 server-role 兼容带连字符写法；schema/object 要 owner
+        let ms = of(ConnectionKind::Sqlserver);
+        assert!(ms.is_revocable("server-role", "sysadmin", "", "", ""));
+        assert!(!ms.is_revocable("schema", "SELECT", "", "", ""));
+        assert!(ms.is_revocable("schema", "SELECT", "dbo", "", ""));
+        // Oracle：role 允许自定义角色；PG 的 routine 要 kind
+        let ora = of(ConnectionKind::Oracle);
+        assert!(ora.is_revocable("role", "MY_ROLE", "", "", ""));
+        // 兜底白名单（is_safe_name）放行「字母单词+空格」形状；注入形状必须拒
+        assert!(ora.is_revocable("global", "ADMINISTER KEY MANAGEMENT", "", "", ""));
+        assert!(!ora.is_revocable("global", "not;a' priv", "", "", ""));
+        let pg = of(ConnectionKind::Postgresql);
+        assert!(pg.is_revocable("database", "CONNECT", "db", "", ""));
+        assert!(!pg.is_revocable("database", "CONNECT", "", "", ""));
+        // 校验器选择：Oracle 两本白名单分开，H2 只有表级
+        assert!(of(ConnectionKind::Oracle).grantable_privilege_check()(
+            "CREATE SESSION"
+        ));
+        // 对象白名单不含系统权限（is_safe_name 兜底只放行安全形状，注入形状必须拒）
+        assert!(!of(ConnectionKind::Oracle).object_privilege_check()(
+            "CREATE;SESSION"
+        ));
+        assert!(of(ConnectionKind::H2).object_privilege_check()("SELECT"));
+        // 文案：缺的名字类别按方言措辞
+        assert_eq!(of(ConnectionKind::Mysql).revoke_missing_hint(), "库/表名");
+        assert_eq!(of(ConnectionKind::Sqlserver).revoke_missing_hint(), "架构/对象名");
+        assert_eq!(
+            of(ConnectionKind::Postgresql).revoke_missing_hint(),
+            "模式/对象名"
+        );
     }
 }

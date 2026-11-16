@@ -266,6 +266,61 @@ impl DialectOps for SqliteOps {
 }
 
 impl DialectOps for H2Ops {
+    // 只有表级授权这一层（没有全局/库级）
+    fn grant_input_scopes(&self) -> &'static [&'static str] {
+        &["tablePrivileges", "revoke"]
+    }
+
+    fn object_privilege_check(&self) -> fn(&str) -> bool {
+        crate::api::dialect::is_h2_table_priv
+    }
+
+    fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        let _ = (kind, object);
+        let scope = if scope.is_empty() { "global" } else { scope };
+        match scope {
+            "table" | "object" | "schema" => {
+                crate::api::dialect::is_h2_table_priv(privilege) && !owner.is_empty()
+            }
+            "role" => crate::api::dialect::is_role_ref(privilege),
+            "global" | "server-role" => crate::api::dialect::is_mysql_privilege(privilege),
+            _ => false,
+        }
+    }
+
+    fn revoke_missing_hint(&self) -> &'static str {
+        "库/表名"
+    }
+
+    // H2 只有表级一层（schema.table），账号也没有 host —— 落到 MySQL 通用分支会
+    // 拼成 `TO '""'@''`（实测），既不是合法 H2 语法，也没法照着执行。
+    // 空用户名（H2 默认用户）统一写成空标识符 `""`。
+    fn grant_line_text(
+        &self,
+        scope: &str,
+        privilege: &str,
+        owner: &str,
+        object: &str,
+        account_user: &str,
+        _account_host: &str,
+    ) -> Option<String> {
+        let raw = account_user.trim();
+        let who = if raw.is_empty() || raw == "\"\"" || raw == "(default)" {
+            "\"\"".to_string()
+        } else {
+            self.quote(raw)
+        };
+        match scope {
+            "table" if !owner.is_empty() && !object.is_empty() => Some(format!(
+                "GRANT {privilege} ON {}.{} TO {who};",
+                self.quote(owner),
+                self.quote(object)
+            )),
+            "global" => Some(format!("GRANT {privilege} TO {who};")),
+            _ => None,
+        }
+    }
+
     fn object_source(&self, object_type: &str, name: &str, _schema: Option<&str>) -> Meta {
         // 定义都在 information_schema 里（比较用**字符串字面量**，
         // 不能用标识符 —— `where table_name = upper(<标识符>)` 是把列引用当值用了）
@@ -843,6 +898,8 @@ fn h2_users() -> Meta {
 /// H2 没有"全局权限"这一层，只有 ADMIN 标志；细粒度授权就是表级 GRANT。
 /// 标识符一律双引号（H2 的标准引用符），内部 `"` 转义成 `""`。
 fn h2_user_info(ops: &dyn DialectOps, name: &str) -> Meta {
+    // user_name 匹配必须大小写不敏感：裸写建的用户会被 H2 折叠成大写存储（实测），
+    // 界面回显传的是小写原样 —— 字面量精确匹配 0 行，详情页直接报「没有找到用户」。
     let who = ops.literal(&h2_user(name));
     Meta::Sql(format!(
         "select case when coalesce(user_name,'') = '' then '\"\"' else user_name end as \"name\", \
@@ -850,7 +907,7 @@ fn h2_user_info(ops: &dyn DialectOps, name: &str) -> Meta {
          'create user \"' || replace(case when coalesce(user_name,'') = '' then 'new_user' else user_name end, '\"', '\"\"') || '\" password ''<password>''' as \"create_user_sql\", \
          coalesce((select listagg('grant ' || privilege_type || ' on \"' || replace(table_schema, '\"', '\"\"') || '\".\"' || replace(table_name, '\"', '\"\"') || '\" to \"' || replace(grantee, '\"', '\"\"') || '\"', char(10)) within group (order by table_schema, table_name, privilege_type) \
            from information_schema.table_privileges where grantee = user_name), '') as \"grants_text\" \
-         from information_schema.users where user_name = {who}"
+         from information_schema.users where upper(user_name) = upper({who})"
     ))
 }
 
@@ -858,7 +915,8 @@ fn h2_user_info(ops: &dyn DialectOps, name: &str) -> Meta {
 fn h2_user_grants(ops: &dyn DialectOps, user: &str) -> Meta {
     Meta::Sql(format!(
         "select 'table' as scope, privilege_type as privilege, table_schema as db_name, \
-         table_name as table_name from information_schema.table_privileges where grantee = {}",
+         table_name as table_name from information_schema.table_privileges \
+         where upper(grantee) = upper({})",
         ops.literal(&h2_user(user))
     ))
 }

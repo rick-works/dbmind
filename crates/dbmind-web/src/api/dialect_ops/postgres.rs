@@ -3,6 +3,48 @@
 use super::*;
 
 impl DialectOps for PostgresOps {
+    fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        match scope {
+            "schema" => crate::api::dialect::is_pg_schema_priv(privilege) && !owner.is_empty(),
+            // 库级：撤销 `revoke connect on database "db" from "u"`（owner = 库名）
+            "database" => crate::api::dialect::is_pg_database_priv(privilege) && !owner.is_empty(),
+            "table" => {
+                crate::api::dialect::is_pg_table_priv(privilege) && !owner.is_empty() && !object.is_empty()
+            }
+            // 角色成员关系：这里是**角色名**不是权限名，只放行常规字符
+            "role" => crate::api::dialect::is_plain_ident(privilege),
+            "routine" | "function" => {
+                crate::api::dialect::is_pg_routine_priv(privilege)
+                    && !owner.is_empty()
+                    && !object.is_empty()
+                    && matches!(kind, "PROCEDURE" | "FUNCTION")
+            }
+            _ => false,
+        }
+    }
+
+    fn grant_input_scopes(&self) -> &'static [&'static str] {
+        // 模式（USAGE/CREATE）/ 表（七项）/ 例程（EXECUTE）+ 撤销差量。
+        // 「数据库权限」tab 对 PG 交的是**模式级**授权（dbPrivileges 的 database 字段就是模式名）。
+        &["dbPrivileges", "tablePrivileges", "routinePrivileges", "revoke"]
+    }
+
+    fn grant_line_text(
+        &self,
+        scope: &str,
+        privilege: &str,
+        owner: &str,
+        object: &str,
+        account_user: &str,
+        _account_host: &str,
+    ) -> Option<String> {
+        pg_grant_line_text(self, scope, privilege, owner, object, account_user)
+    }
+
+    // 默认转义符就是 `\`，显式 escape 反而可能被判重复声明
+    fn like_escape_suffix(&self) -> &'static str {
+        ""
+    }
     fn object_source(&self, object_type: &str, name: &str, schema: Option<&str>) -> Meta {
         pg_object_source(self, object_type, name, schema)
     }
@@ -150,6 +192,49 @@ impl DialectOps for PostgresOps {
 }
 
 impl DialectOps for KingbaseOps {
+    fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        match scope {
+            "schema" => crate::api::dialect::is_pg_schema_priv(privilege) && !owner.is_empty(),
+            // 库级：撤销 `revoke connect on database "db" from "u"`（owner = 库名）
+            "database" => crate::api::dialect::is_pg_database_priv(privilege) && !owner.is_empty(),
+            "table" => {
+                crate::api::dialect::is_pg_table_priv(privilege) && !owner.is_empty() && !object.is_empty()
+            }
+            // 角色成员关系：这里是**角色名**不是权限名，只放行常规字符
+            "role" => crate::api::dialect::is_plain_ident(privilege),
+            "routine" | "function" => {
+                crate::api::dialect::is_pg_routine_priv(privilege)
+                    && !owner.is_empty()
+                    && !object.is_empty()
+                    && matches!(kind, "PROCEDURE" | "FUNCTION")
+            }
+            _ => false,
+        }
+    }
+
+    fn grant_input_scopes(&self) -> &'static [&'static str] {
+        // 模式（USAGE/CREATE）/ 表（七项）/ 例程（EXECUTE）+ 撤销差量。
+        // 「数据库权限」tab 对 PG 交的是**模式级**授权（dbPrivileges 的 database 字段就是模式名）。
+        &["dbPrivileges", "tablePrivileges", "routinePrivileges", "revoke"]
+    }
+
+    fn grant_line_text(
+        &self,
+        scope: &str,
+        privilege: &str,
+        owner: &str,
+        object: &str,
+        account_user: &str,
+        _account_host: &str,
+    ) -> Option<String> {
+        pg_grant_line_text(self, scope, privilege, owner, object, account_user)
+    }
+
+    // 默认转义符就是 `\`，显式 escape 反而可能被判重复声明
+    fn like_escape_suffix(&self) -> &'static str {
+        ""
+    }
+
     fn object_source(&self, object_type: &str, name: &str, schema: Option<&str>) -> Meta {
         pg_object_source(self, object_type, name, schema)
     }
@@ -856,5 +941,46 @@ fn pg_object_source(ops: &dyn DialectOps, object_type: &str, name: &str, schema:
         // PG 没有 MySQL 那种事件调度器
         "event" => Meta::Absent,
         _ => Meta::Unwritten,
+    }
+}
+
+/// PG 系授权回显行 → GRANT 文本（PostgresOps / KingbaseOps 共用）。
+fn pg_grant_line_text<T: DialectOps>(
+    ops: &T,
+    scope: &str,
+    privilege: &str,
+    owner: &str,
+    object: &str,
+    account_user: &str,
+) -> Option<String> {
+    let who = ops.quote(account_user);
+    match scope {
+        // 库级（CONNECT / CREATE / TEMPORARY ON DATABASE）：owner 列是库名
+        "database" if !owner.is_empty() => Some(format!(
+            "GRANT {privilege} ON DATABASE {} TO {who};",
+            ops.quote(owner)
+        )),
+        "schema" if !owner.is_empty() => Some(format!(
+            "GRANT {privilege} ON SCHEMA {} TO {who};",
+            ops.quote(owner)
+        )),
+        "table" if !owner.is_empty() && !object.is_empty() => Some(format!(
+            "GRANT {privilege} ON TABLE {}.{} TO {who};",
+            ops.quote(owner),
+            ops.quote(object)
+        )),
+        "function" | "procedure" if !owner.is_empty() && !object.is_empty() => {
+            let object_type = if scope == "procedure" {
+                "PROCEDURE"
+            } else {
+                "FUNCTION"
+            };
+            Some(format!(
+                "GRANT {privilege} ON {object_type} {}.{} TO {who};",
+                ops.quote(owner),
+                ops.quote(object)
+            ))
+        }
+        _ => None,
     }
 }

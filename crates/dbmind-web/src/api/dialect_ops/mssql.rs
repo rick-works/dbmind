@@ -3,6 +3,30 @@
 use super::*;
 
 impl DialectOps for SqlServerOps {
+    fn revoke_missing_hint(&self) -> &'static str {
+        "架构/对象名"
+    }
+
+    fn is_revocable(&self, scope: &str, privilege: &str, owner: &str, object: &str, kind: &str) -> bool {
+        let _ = kind;
+        match scope {
+            // 角色名是标识符、不是权限名 —— 两者都会拼进 SQL，都不许乱来。
+            // 'server-role'（带连字符）是 revokePayload 里的形状，兼容一下
+            "serverrole" | "server-role" | "role" => crate::api::dialect::is_plain_ident(privilege),
+            "schema" => crate::api::dialect::is_mssql_privilege(privilege) && !owner.is_empty(),
+            "object" => {
+                crate::api::dialect::is_mssql_privilege(privilege) && !owner.is_empty() && !object.is_empty()
+            }
+            _ => false,
+        }
+    }
+
+    fn grant_input_scopes(&self) -> &'static [&'static str] {
+        // 四层（服务器角色 / 数据库角色 / Schema 级 / 对象级）+ 撤销差量。
+        // `roles`（数据库角色）不在 UNSUPPORTED 表里，一直可以用（真机验证过）。
+        &["serverRoles", "schemaPrivileges", "objectPrivileges", "revoke"]
+    }
+
     fn object_source(&self, object_type: &str, name: &str, _schema: Option<&str>) -> Meta {
         let name_literal = self.literal(name);
         match object_type {
