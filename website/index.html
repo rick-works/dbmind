@@ -1383,6 +1383,27 @@
     <h2 class="sec-title reveal" data-eyebrow="RELEASES">版本</h2>
 
     <div class="rel-timeline">
+      <!-- v2.0.28（最新） -->
+      <article class="rel-item reveal">
+        <div class="rel-rail"><span class="rel-dot"></span></div>
+        <div class="rel-body">
+          <div class="rel-head">
+            <span class="rel-ver">v2.0.28</span>
+            <span class="rel-tag tag-patch">修订版</span>
+            <span class="rel-tag tag-latest">最新</span>
+            <span class="rel-date">2026-11-16</span>
+          </div>
+          <ul class="rel-notes">
+            <li><b>大幅缩短「第一次连接 / 第一次查询」的等待（约 5 秒 → 亚秒）：MySQL 等驱动在建立连接时会把服务端 IP 反解成主机名，企业 DNS 没有 PTR 记录时每新建一条会话白等约 4.6 秒；左侧树第一次展开连接、SQL 编辑器第一次执行查询都要付这笔等待。现在 JVM 在连接前先查一份本地 IP 映射（随连接清单自动维护），未命中再走正常 DNS —— 树展开实测从约 5 秒降到 1 秒内，再次展开约 0.1 秒</b></li>
+            <li><b>域名连接完全不受影响</b>：云 RDS / K8s Service / 代理转发等「用域名连」的库照常解析，IP 映射只是解析的第一层、DNS 仍是兜底（此前独占式的 hosts 方案会让域名连接直接报解析失败，本版彻底替换掉它）</li>
+            <li><b>安装包 / 免安装版自带运行时无需任何配置即可受益；自备 JDK 17 的环境下行为与以前一致（只是拿不到这层加速）</b></li>
+          </ul>
+          <div class="rel-links">
+            <a class="btn btn-primary" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.28" target="_blank" rel="noopener">发布说明</a>
+            <a class="btn btn-ghost" href="https://gitee.com/rick-works/dbmind/releases/tag/v2.0.28" target="_blank" rel="noopener">下载 v2.0.28</a>
+          </div>
+        </div>
+      </article>
       <!-- v2.0.27（最新） -->
       <article class="rel-item reveal">
         <div class="rel-rail"><span class="rel-dot"></span></div>
@@ -1390,7 +1411,6 @@
           <div class="rel-head">
             <span class="rel-ver">v2.0.27</span>
             <span class="rel-tag tag-patch">修订版</span>
-            <span class="rel-tag tag-latest">最新</span>
             <span class="rel-date">2026-11-16</span>
           </div>
           <ul class="rel-notes">
