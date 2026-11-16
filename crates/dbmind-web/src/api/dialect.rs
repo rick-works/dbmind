@@ -75,26 +75,18 @@ pub fn module_of_type_code(code: &str) -> Option<&'static str> {
         .map(|(_, m)| *m)
 }
 
-/// 关系型模块路径段（9 个），路由按它们注册。
-pub const RELATIONAL_MODULES: &[&str] = &[
-    "mysql",
-    "postgresql",
-    "sqlserver",
-    "oracle",
-    "db2",
-    "h2",
-    "derby",
-    "clickhouse",
-    "sqlite",
-];
+/// 关系型 / NoSQL 模块路径段，路由按它们注册 —— **从 build.rs 生成物派生**
+/// （plugins YAML 的 dialect/protocol 去重），不再手写。
+/// 教训：手写 9 项在 DuckDB 暴露后没跟着加，`/api/duckdb/*` 整条 404
+///（exe 里模块字符串都在，就路由清单缺一个 —— 真机接入时实测踩到）。
+pub const RELATIONAL_MODULES: &[&str] = dbmind_core::RELATIONAL_MODULES;
 
-/// NoSQL 模块路径段（3 个）。
-pub const NOSQL_MODULES: &[&str] = &["mongodb", "redis", "elasticsearch"];
+pub const NOSQL_MODULES: &[&str] = dbmind_core::NOSQL_MODULES;
 
 /// 前端类型注册表里存在的类型码。
 ///
-/// **从生成表派生**（EXPOSED_TYPE_CODES 由 build.rs 按 YAML 的 exposed 过滤生成，
-/// duckdb=false 已被排除）。不再手写 —— 手写 16 项漏掉 TIDB 导致
+/// **从生成表派生**（EXPOSED_TYPE_CODES 由 build.rs 按 YAML 的 exposed 过滤生成）。
+/// 不再手写 —— 手写 16 项漏掉 TIDB 导致
 /// 「新建数据源」里 TiDB 整个消失（实测）。前端没有的类型，后端就不该通告 ——
 /// 这是「单一真源」该有的样子。
 pub fn exposed_type_codes() -> Vec<&'static str> {

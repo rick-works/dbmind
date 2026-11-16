@@ -11,6 +11,12 @@
       <rect width="32" height="32" rx="5" fill="#094a87"/>
       <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="14" font-weight="bold" font-family="Arial">H2</text>
     </svg>
+    <svg v-else-if="fallbackLogo === 'duckdb'" viewBox="0 0 32 32" :width="size" :height="size">
+      <!-- DuckDB 品牌黄 + 黑色鸭形剪影（圆头 + 尖尾的极简折线） -->
+      <rect width="32" height="32" rx="5" fill="#fff45b"/>
+      <path d="M8 22c0-6 3-10 7-10s6 3 6 6l3 1-3 2c-1 3-3 5-7 5h-6z" fill="#1a1a1a"/>
+      <circle cx="17.5" cy="15.5" r="1.2" fill="#fff45b"/>
+    </svg>
     <svg v-else viewBox="0 0 32 32" :width="size" :height="size">
       <rect width="32" height="32" rx="5" fill="#6b7280"/>
       <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold" font-family="Arial">DB</text>

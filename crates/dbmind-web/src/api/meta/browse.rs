@@ -192,9 +192,31 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
             "DATE",
             "TIMESTAMP",
         ],
+        // DuckDB（generic ANSI）：1.1 全部认的常用集合；STRUCT/LIST/MAP 等复合类型
+        // 不进下拉（带参数的写法由「长度/精度」给不了，宁缺勿错，手写 SQL 可用）。
+        "duckdb" => vec![
+            "TINYINT",
+            "SMALLINT",
+            "INTEGER",
+            "BIGINT",
+            "HUGEINT",
+            "FLOAT",
+            "DOUBLE",
+            "DECIMAL",
+            "VARCHAR",
+            "BLOB",
+            "BOOLEAN",
+            "DATE",
+            "TIME",
+            "TIMESTAMP",
+            "TIMESTAMPTZ",
+            "UUID",
+            "JSON",
+        ],
         _ => vec![],
     }
 }
+
 
 /// 索引类型清单（`features.indexTypes`）：前端「索引 → 类型」下拉读的就是它。
 /// 下拉带 allow-create，名单外的值照样能手输；SQLite/H2/Derby/DB2 没有索引类型概念，
@@ -295,6 +317,11 @@ fn edit_capabilities(kind: &str) -> Value {
         //（用户看到的就是「DB2 的表结构什么都点不动」）。
         // 表选项 / 自增列 / 索引重建：DB2 没有引擎字符集这套，IDENTITY 的在线增删也没实测，如实 false。
         "db2" => ("db2", "DOUBLE", true, true, false, false, false),
+        // DuckDB：**没实测过 ALTER 就不声明** —— 列注释/表选项/自增/索引重建
+        // 都没有对应语法，列修改的 pg 风格语法没在 1.1 上逐条验过，先照 SQLite
+        // 的保守档给（可建表，结构编辑等真机逐条验过再放开）。建表语法与 pg
+        // 同族（标准 ANSI 列定义），ddlStyle 借 pg 的生成器。
+        "duckdb" => ("pg", "DOUBLE", false, false, false, false, false),
         // 非关系型：界面按「不支持在线改结构」处理（没实测过就不声明 ——
         // 声明得比实现靠前，等于让用户去撞数据库的报错）
         _ => ("generic", "DOUBLE", false, false, false, false, false),
