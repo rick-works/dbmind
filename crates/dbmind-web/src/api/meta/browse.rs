@@ -196,6 +196,55 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
     }
 }
 
+/// 索引类型清单（`features.indexTypes`）：前端「索引 → 类型」下拉读的就是它。
+/// 下拉带 allow-create，名单外的值照样能手输；SQLite/H2/Derby/DB2 没有索引类型概念，
+/// 如实给空（前端 `v-if="indexTypes.length"` 不显示这一列）。
+fn index_types_of(kind: ConnectionKind) -> Vec<&'static str> {
+    match kind.key() {
+        "mysql" | "mariadb" => vec!["BTREE", "HASH", "FULLTEXT", "SPATIAL"],
+        "doris" => vec!["BTREE", "INVERTED", "BITMAP", "BLOOMFILTER"],
+        // TiDB 官方只认 BTREE/HASH（FULLTEXT/SPATIAL 写了是语法错）
+        "tidb" => vec!["BTREE", "HASH"],
+        "postgresql" | "kingbase" => vec!["btree", "hash", "gist", "gin", "spgist", "brin"],
+        "oracle" | "dm" => vec!["NORMAL", "UNIQUE", "BITMAP", "FUNCTION-BASED NORMAL"],
+        "sqlserver" => vec!["CLUSTERED", "NONCLUSTERED", "UNIQUE", "COLUMNSTORE"],
+        "clickhouse" => vec!["minmax", "set", "bloom_filter", "ngrambf_v1", "tokenbf_v1"],
+        // SQLite 的 CREATE INDEX **没有**类型子句（只有 UNIQUE 前缀，而那是独立开关），
+        // 原先给了 ["INDEX","UNIQUE"] ⇒ 下拉里两个选项选了都不进 SQL，纯误导。如实给空，
+        // 前端 `v-if="indexTypes.length"` 就不会显示这一列。
+        // H2 / Derby / DB2 同理（没有索引类型概念），一并落到下面的空分支。
+        _ => Vec::new(),
+    }
+}
+
+/// 存储引擎清单（`features.engines`）：MySQL 系是服务端常量；ClickHouse 给
+/// 能直接落 SQL 的完整写法；其它方言没有这个概念，如实给空。
+fn engines_of(kind: ConnectionKind) -> Vec<&'static str> {
+    match kind.key() {
+        "mysql" | "mariadb" | "doris" => vec![
+            "InnoDB", "MyISAM", "MEMORY", "CSV", "ARCHIVE", "BLACKHOLE", "MRG_MYISAM", "FEDERATED",
+        ],
+        // TiDB 只有一个真正生效的引擎（MyISAM/MEMORY 语法兼容但被静默忽略，
+        // 给出去只会让用户选了个假选项）。
+        "tidb" => vec!["TiDB"],
+        // ClickHouse：清单给的是**能直接落进 SQL 的完整写法** —— MergeTree 族（含 Replicated*
+        // 副本版）必须带 `()`，Log/TinyLog/Memory/Null 这些无参引擎不能带。前端选中后原样拼
+        // `ENGINE = <值>`，不再按引擎名猜着补括号（那份猜测遇上带参引擎就会补错）。
+        // **Replicated 系列必须列全**：漏了的后果是编辑表结构里 `ReplicatedMergeTree` 在清单里
+        // 找不到同名项，原样显示成不带括号的样子（用户实测踩到过）。
+        // 这份清单与前端 `frontend/src/common/objectforms/chEngines.js` 保持一致。
+        "clickhouse" => vec![
+            "MergeTree()", "ReplacingMergeTree()", "SummingMergeTree()", "AggregatingMergeTree()",
+            "CollapsingMergeTree()", "VersionedCollapsingMergeTree()", "GraphiteMergeTree()",
+            "ReplicatedMergeTree()", "ReplicatedReplacingMergeTree()", "ReplicatedSummingMergeTree()",
+            "ReplicatedAggregatingMergeTree()", "ReplicatedCollapsingMergeTree()",
+            "ReplicatedVersionedCollapsingMergeTree()", "ReplicatedGraphiteMergeTree()",
+            "Log", "TinyLog", "StripeLog", "Set", "Join", "Memory", "Null",
+        ],
+        _ => Vec::new(),
+    }
+}
+
 /// 方言能力表：界面据此决定显示哪些操作入口。
 ///
 /// `supportsExport` / `supportsImport` 刻意给 **true**：导出导入还没落地（Phase 2），
@@ -214,8 +263,8 @@ fn edit_capabilities(kind: &str) -> Value {
     // (ddlStyle, quoteStyle, 可改已有列, 列注释, 表选项, 自增, 索引重建)
     let (style, quote, modify, comment, table_options, auto_inc, rebuild) = match kind {
         "mysql" | "mariadb" => ("mysql", "BACKTICK", true, true, true, true, true),
-        // TiDB syntax-level compatible with the MySQL ALTER generator (ddlStyle mysql);
-        // no `ALTER INDEX ... REBUILD` equivalent exists, so rebuild stays false.
+        // TiDB 语法层兼容 MySQL 的 ALTER 生成器（ddlStyle 沿用 mysql）；没有
+        // `ALTER INDEX … REBUILD` 这类索引重建语法，如实 false。
         "tidb" => ("mysql", "BACKTICK", true, true, true, true, false),
         "doris" => ("doris", "BACKTICK", true, true, true, true, true),
         "postgresql" | "kingbase" => ("pg", "DOUBLE", true, true, false, false, true),
@@ -324,8 +373,8 @@ fn edit_capabilities(kind: &str) -> Value {
                 "swe7": ["swe7_swedish_ci", "swe7_bin"],
             }),
         ),
-        // TiDB supports far fewer charsets/collations than MySQL; only names that
-        // really exist go in (an invented collation name breaks CREATE TABLE).
+        // TiDB 支持的字符集/排序规则比 MySQL 少一大截，清单照实给小的 ——
+        // 排序规则名臆造一个建表就直接失败，宁缺勿错。
         "tidb" => (
             vec!["utf8mb4", "utf8", "latin1", "ascii", "binary", "gbk"],
             json!({
@@ -413,48 +462,12 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
         // 索引类型清单：前端「索引 → 类型」那两处下拉读的就是它（`features.indexTypes`）。
         // 原先恒为空数组 ⇒ 下拉无项、`v-if="indexTypes.length"` 的那一列**整列不显示**（白写了）。
         // 这里按方言给一份可用的小名单；下拉带 allow-create 的话，名单外的值照样能手输。
-        "indexTypes": match kind.key() {
-            "mysql" | "mariadb" => vec!["BTREE", "HASH", "FULLTEXT", "SPATIAL"],
-            "doris" => vec!["BTREE", "INVERTED", "BITMAP", "BLOOMFILTER"],
-            // TiDB officially supports BTREE/HASH only (FULLTEXT/SPATIAL are syntax errors)
-            "tidb" => vec!["BTREE", "HASH"],
-            "postgresql" | "kingbase" => vec!["btree", "hash", "gist", "gin", "spgist", "brin"],
-            "oracle" | "dm" => vec!["NORMAL", "UNIQUE", "BITMAP", "FUNCTION-BASED NORMAL"],
-            "sqlserver" => vec!["CLUSTERED", "NONCLUSTERED", "UNIQUE", "COLUMNSTORE"],
-            "clickhouse" => vec!["minmax", "set", "bloom_filter", "ngrambf_v1", "tokenbf_v1"],
-            // SQLite 的 CREATE INDEX **没有**类型子句（只有 UNIQUE 前缀，而那是独立开关），
-            // 原先给了 ["INDEX","UNIQUE"] ⇒ 下拉里两个选项选了都不进 SQL，纯误导。如实给空，
-            // 前端 `v-if="indexTypes.length"` 就不会显示这一列。
-            // H2 / Derby / DB2 同理（没有索引类型概念），一并落到下面的空分支。
-            _ => Vec::new(),
-        },
+        "indexTypes": index_types_of(kind),
         // 存储引擎：MySQL 系的标准引擎是服务端常量清单（InnoDB 等一直是这些名字）；
         // 其它方言没有这个概念，如实给空数组。前端下拉带 `allow-create`，
         // 清单外的值照样能手输 —— 所以宁可给一份有用的小名单，也不给空数组
         // （空数组会让「存储引擎」整行退化成纯手输）。
-        "engines": match kind.key() {
-            "mysql" | "mariadb" | "doris" => vec![
-                "InnoDB", "MyISAM", "MEMORY", "CSV", "ARCHIVE", "BLACKHOLE", "MRG_MYISAM", "FEDERATED",
-            ],
-            // TiDB has exactly one effective engine (MyISAM/MEMORY are parsed but silently
-            // ignored; listing them would offer fake choices).
-            "tidb" => vec!["TiDB"],
-            // ClickHouse：清单给的是**能直接落进 SQL 的完整写法** —— MergeTree 族（含 Replicated*
-            // 副本版）必须带 `()`，Log/TinyLog/Memory/Null 这些无参引擎不能带。前端选中后原样拼
-            // `ENGINE = <值>`，不再按引擎名猜着补括号（那份猜测遇上带参引擎就会补错）。
-            // **Replicated 系列必须列全**：漏了的后果是编辑表结构里 `ReplicatedMergeTree` 在清单里
-            // 找不到同名项，原样显示成不带括号的样子（用户实测踩到过）。
-            // 这份清单与前端 `frontend/src/common/objectforms/chEngines.js` 保持一致。
-            "clickhouse" => vec![
-                "MergeTree()", "ReplacingMergeTree()", "SummingMergeTree()", "AggregatingMergeTree()",
-                "CollapsingMergeTree()", "VersionedCollapsingMergeTree()", "GraphiteMergeTree()",
-                "ReplicatedMergeTree()", "ReplicatedReplacingMergeTree()", "ReplicatedSummingMergeTree()",
-                "ReplicatedAggregatingMergeTree()", "ReplicatedCollapsingMergeTree()",
-                "ReplicatedVersionedCollapsingMergeTree()", "ReplicatedGraphiteMergeTree()",
-                "Log", "TinyLog", "StripeLog", "Set", "Join", "Memory", "Null",
-            ],
-            _ => Vec::new(),
-        },
+        "engines": engines_of(kind),
         "supportsDatabases": true,
         "supportsSchemas": dialect.is_schema_aware(),
         "supportsIndexes": index_ok,
@@ -1731,6 +1744,18 @@ mod tests {
                 edit["ddlStyle"], "generic",
                 "{key} 的结构编辑能力落进了 generic 兜底 —— edit_capabilities 的 match 漏了这个 key"
             );
+            // MySQL 族的索引类型/存储引擎清单必须显式表态（TiDB 当年全漏，下拉整列消失）：
+            // 族内新类型与 MySQL 行为一致，漏配只会静默给空 —— 这里强制非空。
+            if d.dialect == "MySQL" {
+                assert!(
+                    !index_types_of(kind).is_empty(),
+                    "{key} 的索引类型清单为空 —— index_types_of 的 match 漏了这个 key"
+                );
+                assert!(
+                    !engines_of(kind).is_empty(),
+                    "{key} 的存储引擎清单为空 —— engines_of 的 match 漏了这个 key"
+                );
+            }
         }
         assert!(
             checked >= 10,

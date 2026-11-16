@@ -66,8 +66,8 @@ impl Meta {
 /// 与 `frontend/src/api/index.js` 里的 `TYPE_TO_MODULE` 必须**逐条一致**：
 /// 前端就是拿它拼 `/api/{module}/{id}/…` 的，少一条那个类型的所有操作都会 404。
 pub fn module_of_type_code(code: &str) -> Option<&'static str> {
-    // BUILT-IN: no handwritten table (a 16-item vec missed TIDB and the type
-    // vanished from the picker; YAML/manifest/generated table all had it).
+    // 不再手写：EXPOSED_TYPE_CODES 由 build.rs 从 YAML 生成。手写 16 项漏掉 TIDB
+    // 曾让「新建数据源」里 TiDB 整个消失（YAML/manifest/生成物三处都有它）。
     let up = code.to_ascii_uppercase();
     dbmind_core::EXPOSED_TYPE_CODES
         .iter()
@@ -91,15 +91,12 @@ pub const RELATIONAL_MODULES: &[&str] = &[
 /// NoSQL 模块路径段（3 个）。
 pub const NOSQL_MODULES: &[&str] = &["mongodb", "redis", "elasticsearch"];
 
-/// 前端类型注册表里存在的类型码（16 个）。
+/// 前端类型注册表里存在的类型码。
 ///
-/// 故意**不含 DUCKDB**：内核支持它，但 `frontend/src/types/` 里没有 `duckdb.js`，
-/// 暴露出去只会让「新建数据源」弹出没有 Logo、没有默认端口、引用符也不对的卡片。
-/// 前端没有的类型，后端就不该通告 —— 这是「单一真源」该有的样子。
-/// Exposed type codes for the UI, derived from the generated
-/// EXPOSED_TYPE_CODES table (build.rs filters by YAML `exposed`; duckdb=false
-/// already excluded). Never hand-write this list again: the handwritten 16-item
-/// vec missed TIDB and TiDB vanished from the picker (verified live).
+/// **从生成表派生**（EXPOSED_TYPE_CODES 由 build.rs 按 YAML 的 exposed 过滤生成，
+/// duckdb=false 已被排除）。不再手写 —— 手写 16 项漏掉 TIDB 导致
+/// 「新建数据源」里 TiDB 整个消失（实测）。前端没有的类型，后端就不该通告 ——
+/// 这是「单一真源」该有的样子。
 pub fn exposed_type_codes() -> Vec<&'static str> {
     dbmind_core::EXPOSED_TYPE_CODES
         .iter()

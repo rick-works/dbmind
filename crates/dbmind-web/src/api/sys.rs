@@ -4,7 +4,7 @@
 //!
 //! 1. **驱动状态按大写类型码作键**。`ConnectionDialog` 读的是 `driverStatus[form.type]`，
 //!    而 `form.type` 是 `MYSQL` 这种大写码；给内核的小写 key 会让「驱动已就绪」角标永远不亮。
-//! 2. **只通告前端类型注册表里存在的类型**（16 个，见 `dialect::exposed_type_codes`）。
+//! 2. **只通告前端类型注册表里存在的类型**（清单见 `dialect::exposed_type_codes`）。
 //!    内核还支持 DuckDB，但前端没有 `types/duckdb.js`，通告出去只会多出一张没有 Logo、
 //!    没有默认端口、引用符也不对的卡片。
 //! 3. **授权状态恒为「已授权」**。本项目是完整版，没有试用期与激活码这一层；
