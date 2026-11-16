@@ -2446,7 +2446,7 @@ fn auto_increment_clause(kind: ConnectionKind, family: TypeFamily) -> Option<&'s
         return None;
     }
     match kind.key() {
-        "mysql" | "mariadb" => Some("auto_increment"),
+        "mysql" | "mariadb" | "tidb" => Some("auto_increment"),
         // Doris 是 2.1 才支持 AUTO_INCREMENT，还有"必须是键列 + 开关"等前置条件 ——
         // 写上去风险大于收益（老版本直接语法错），不写。
         "sqlserver" => Some("identity(1,1)"),

@@ -14,7 +14,7 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         // information_schema 一律回大写（`VARCHAR`），列表就写大写 —— 否则「下拉里是 varchar、
         // 回显出来是 VARCHAR」，同一个类型两种写法（用户反馈）。
         // PG 系的元数据本来就回小写（`varchar`/`timestamptz`），那里保持小写才是一致的。
-        "mysql" | "mariadb" => vec![
+        "mysql" | "mariadb" | "tidb" => vec![
             "INT",
             "BIGINT",
             "SMALLINT",
@@ -214,6 +214,9 @@ fn edit_capabilities(kind: &str) -> Value {
     // (ddlStyle, quoteStyle, 可改已有列, 列注释, 表选项, 自增, 索引重建)
     let (style, quote, modify, comment, table_options, auto_inc, rebuild) = match kind {
         "mysql" | "mariadb" => ("mysql", "BACKTICK", true, true, true, true, true),
+        // TiDB syntax-level compatible with the MySQL ALTER generator (ddlStyle mysql);
+        // no `ALTER INDEX ... REBUILD` equivalent exists, so rebuild stays false.
+        "tidb" => ("mysql", "BACKTICK", true, true, true, true, false),
         "doris" => ("doris", "BACKTICK", true, true, true, true, true),
         "postgresql" | "kingbase" => ("pg", "DOUBLE", true, true, false, false, true),
         // Oracle 12c+ 的标识列能查到（user_tab_identity_cols），自增如实给 true。
@@ -321,6 +324,19 @@ fn edit_capabilities(kind: &str) -> Value {
                 "swe7": ["swe7_swedish_ci", "swe7_bin"],
             }),
         ),
+        // TiDB supports far fewer charsets/collations than MySQL; only names that
+        // really exist go in (an invented collation name breaks CREATE TABLE).
+        "tidb" => (
+            vec!["utf8mb4", "utf8", "latin1", "ascii", "binary", "gbk"],
+            json!({
+                "utf8mb4": ["utf8mb4_bin", "utf8mb4_general_ci"],
+                "utf8": ["utf8_bin", "utf8_general_ci"],
+                "latin1": ["latin1_bin"],
+                "ascii": ["ascii_bin"],
+                "binary": ["binary"],
+                "gbk": ["gbk_bin", "gbk_chinese_ci"],
+            }),
+        ),
         _ => (Vec::new(), json!({})),
     };
     json!({
@@ -400,6 +416,8 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
         "indexTypes": match kind.key() {
             "mysql" | "mariadb" => vec!["BTREE", "HASH", "FULLTEXT", "SPATIAL"],
             "doris" => vec!["BTREE", "INVERTED", "BITMAP", "BLOOMFILTER"],
+            // TiDB officially supports BTREE/HASH only (FULLTEXT/SPATIAL are syntax errors)
+            "tidb" => vec!["BTREE", "HASH"],
             "postgresql" | "kingbase" => vec!["btree", "hash", "gist", "gin", "spgist", "brin"],
             "oracle" | "dm" => vec!["NORMAL", "UNIQUE", "BITMAP", "FUNCTION-BASED NORMAL"],
             "sqlserver" => vec!["CLUSTERED", "NONCLUSTERED", "UNIQUE", "COLUMNSTORE"],
@@ -418,6 +436,9 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
             "mysql" | "mariadb" | "doris" => vec![
                 "InnoDB", "MyISAM", "MEMORY", "CSV", "ARCHIVE", "BLACKHOLE", "MRG_MYISAM", "FEDERATED",
             ],
+            // TiDB has exactly one effective engine (MyISAM/MEMORY are parsed but silently
+            // ignored; listing them would offer fake choices).
+            "tidb" => vec!["TiDB"],
             // ClickHouse：清单给的是**能直接落进 SQL 的完整写法** —— MergeTree 族（含 Replicated*
             // 副本版）必须带 `()`，Log/TinyLog/Memory/Null 这些无参引擎不能带。前端选中后原样拼
             // `ENGINE = <值>`，不再按引擎名猜着补括号（那份猜测遇上带参引擎就会补错）。
@@ -1676,6 +1697,44 @@ mod tests {
         assert!(
             clause.contains("to_date('2026-01-31', 'YYYY-MM-DD')"),
             "上界也没用 to_date：{clause}"
+        );
+    }
+
+    /// 守门：每个已实现的关系型（protocol=sql）类型都必须在 per-key 能力清单里**显式表态**。
+    ///
+    /// `column_types` / `edit_capabilities` 这批清单按 `kind.key()` 分派，新类型漏配的
+    /// 后果是**静默降级**：表结构编辑器整页只读、列类型下拉为空 —— 路由照常走（它按
+    /// module 分派），表面一切正常，用户进来才发现什么都点不动。TiDB 加回来时就这么
+    /// 漏过一次（YAML/manifest/路由三处都对，就是这批清单没人记得补）。
+    #[test]
+    fn 已实现的关系型类型不得落进能力清单的_generic_兜底() {
+        let mut checked = 0;
+        for d in dbmind_core::all_descriptors() {
+            // 只守「界面可见」的类型：EXPOSED_TYPE_CODES 是 YAML 的 exposed 过滤结果，
+            // 内核实现了但没暴露的（duckdb）不在界面上，漏配无碍 —— 等哪天它
+            // exposed=true 暴露进「新建数据源」，这条守门自然把它罩住。
+            let exposed = dbmind_core::EXPOSED_TYPE_CODES
+                .iter()
+                .any(|(c, _)| *c == d.key.to_ascii_uppercase());
+            if d.protocol.as_str() != "sql" || !exposed {
+                continue;
+            }
+            checked += 1;
+            let key = d.key;
+            let kind = dbmind_core::ConnectionKind::from_key(key).expect("类型 key 必须能还原枚举");
+            assert!(
+                !column_types(kind).is_empty(),
+                "{key} 的列类型清单为空 —— column_types 的 match 漏了这个 key"
+            );
+            let edit = edit_capabilities(key);
+            assert_ne!(
+                edit["ddlStyle"], "generic",
+                "{key} 的结构编辑能力落进了 generic 兜底 —— edit_capabilities 的 match 漏了这个 key"
+            );
+        }
+        assert!(
+            checked >= 10,
+            "遍历到的关系型类型只有 {checked} 个，清单或过滤条件可能坏了"
         );
     }
 }

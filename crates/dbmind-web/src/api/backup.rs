@@ -72,7 +72,8 @@ struct CliSpec {
 
 fn cli_spec(kind: ConnectionKind) -> Option<CliSpec> {
     Some(match kind.key() {
-        "mysql" | "mariadb" | "doris" => CliSpec {
+        // TiDB 兼容 MySQL 协议，官方文档明确支持 mysqldump 导出
+        "mysql" | "mariadb" | "doris" | "tidb" => CliSpec {
             engine: "MySQL",
             tool: "mysqldump",
             aliases: &["mariadb-dump"],
@@ -976,7 +977,7 @@ fn cli_command(
         find_tool(&[tool_name]).ok_or_else(|| XError::internal(format!("未找到命令行工具 {tool_name}")))?;
     let mut command = Command::new(tool);
     match kind.key() {
-        "mysql" | "mariadb" | "doris" => {
+        "mysql" | "mariadb" | "doris" | "tidb" => {
             command
                 .arg(format!("-h{host}"))
                 .arg(format!("-P{port}"))
