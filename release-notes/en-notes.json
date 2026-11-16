@@ -1,5 +1,10 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.0.28": [
+    "First connection / first query is no longer slow (about 5 seconds down to under a second): when opening a connection the MySQL driver resolves the server's IP back to a host name, and without a PTR record every new session waited about 4.6 seconds for DNS; the first time you expanded a connection in the tree or ran a query paid that cost. The JVM now consults a local IP map (kept in sync with your connection list) before DNS, so the tree opens in about a second the first time and 0.1 seconds afterwards",
+    "Domain-name connections are completely unaffected: cloud RDS, Kubernetes services and proxies still resolve normally - the IP map is only the first layer and DNS stays as the fallback (the earlier hosts-file approach was exclusive and broke domain connections; it is fully replaced by this one)",
+    "Works out of the box with the bundled runtime; with a self-provided JDK 17 behavior is unchanged (only the speedup is missing)"
+  ],
   "v2.0.27": [
     "Fixed whole-database sync failing entirely on SQL Server / PostgreSQL when a schema is selected: a same-named table in another schema (e.g. dbo) made every table report \"failed to drop the target table\" (Cannot drop the table 'test.X', because it does not exist). Target metadata is now read only from the selected schema, and drop statements carry if exists",
     "Fixed garbled comparison results on large tables: once a comparison spilled to disk (more than 100k rows), every row from the second one on was misaligned and the run failed with \"unknown comparison cell type 10\". Large tables now agree with small ones",

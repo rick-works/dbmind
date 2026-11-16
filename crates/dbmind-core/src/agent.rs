@@ -366,15 +366,17 @@ pub fn resolve_agent_jar(spec: &AgentHostSpec) -> Option<PathBuf> {
 /// | 同上，但给 JVM 一份自有 hosts | **16 ms** |
 ///
 /// 于是「展开连接要等 5 秒、点开列表要等 10 秒（两条会话）」与数据库、网络都无关。
-/// 宿主是独立 JVM ⇒ 用 `-Djdk.net.hosts.file` 指到这里生成的文件即可，
-/// **不需要管理员权限，也不改系统配置**。
+/// 宿主是独立 JVM ⇒ 注册一份自有解析器（`java.net.spi.InetAddressResolverProvider`，
+/// 见 [`prepare_resolver_services`] 与 `agents/dbmind-host-resolver`），让 JVM 在这份
+/// 文件里反解 IP 即可，**不需要管理员权限，也不改系统配置**。
 ///
-/// **但这条属性是独占的**：指定了文件，JVM 就**只**在这份文件里查名字，DNS 完全不参与，
-/// 文件里没有的名字一律 `UnknownHostException: Unable to resolve host … in hosts file …`。
-/// 所以它现在**默认不启用**（要 `DBMIND_AGENT_HOSTS=1` 才传给宿主，见 `agent.rs` 的 spawn 处），
-/// 否则「导入一条用域名的连接」（云 RDS / 域名转发 / K8s Service）必然报解析失败。
+/// 解析顺序：自有映射命中 → 立即返回；未命中 → 平台内置解析（系统 hosts + DNS）。
+/// 与 2026-11 之前用过的 `-Djdk.net.hosts.file` 不同（那条是**独占式**的，文件里没有的
+/// 名字一律 `UnknownHostException`，域名连接全废，只能 opt-in），SPI 方案对域名零影响，
+/// 因此**默认开启**（`DBMIND_AGENT_HOSTS=0` 关闭）。
 ///
-/// 生成内容 = 系统 hosts 的全部内容（否则 `localhost` 之类的解析会丢）+ 每个**IP 主机**一行。
+/// 生成内容 = 系统 hosts 的全部内容（内置解析之外多一层兜底，`localhost` 等直接命中）
+/// + 每个**IP 主机**一行。
 pub fn prepare_agent_hosts(hosts: &[String]) -> Option<PathBuf> {
     let target = paths::agent_hosts_path();
     // 注释一律用 ASCII：hosts 文件由系统解析器读取，编码不由我们决定，
@@ -435,19 +437,63 @@ pub fn prepare_agent_hosts(hosts: &[String]) -> Option<PathBuf> {
     Some(target)
 }
 
-/// 宿主 JVM 的 `-Djdk.net.hosts.file` 参数：**默认不给**（`opt_in` 为假一律返回 `None`）。
+/// 给宿主注册「自有 hosts 解析器」的 SPI 服务声明（JDK 18+ 的
+/// `java.net.spi.InetAddressResolverProvider`，provider 类由
+/// `agents/dbmind-host-resolver` 编译、shade 合并进宿主 jar）。
 ///
-/// 这条属性在 JDK 里是**独占式**解析 —— 指定了文件，JVM 就只在这份文件里查名字、
-/// **完全不查 DNS**，文件里没有的名字直接
-/// `UnknownHostException: Unable to resolve host X in hosts file …`。
-/// 而文件只在「启动/保存连接」时按当时的连接列表生成，用户**导入/新建**一条域名连接时
-/// 那个域名必然还不在里面 ⇒ 一点「测试连接」就报解析失败（2026-11-11 PostgreSQL 实测）。
-/// 所以默认关掉：域名连接正确性 > 省会那 4.6 秒反解。
-fn agent_hosts_file_arg(opt_in: bool, path: &Path) -> Option<String> {
-    if !opt_in || !path.is_file() {
-        return None;
+/// JDK 的 ServiceLoader 从**系统 classpath** 找 provider；`-jar` 模式的系统 classpath
+/// = 主 jar + manifest 里的 `Class-Path` —— 宿主 manifest 已带 `resolver-svc/`，
+/// 所以只要把服务声明文件写到 jar 旁的 `resolver-svc/` 目录即可启用（幂等，每次
+/// spawn 都重写）。JDK 17 加载这条 SPI 会因为 provider 类是 version 62 而崩掉，
+/// 所以 `enabled=false`（JDK < 18、版本读不出、或 `DBMIND_AGENT_HOSTS=0`）时
+/// **删掉整个目录** —— 声明文件不存在时 ServiceLoader 不去碰 provider 类，行为
+/// 与没有这个功能完全一致。
+///
+/// 为什么不用 `-Djdk.net.hosts.file`：那条属性是**独占式**解析（文件里没有的名字
+/// 一律 `UnknownHostException`，域名连接全废，2026-11-11 实测）；SPI 方案未命中
+/// 回退平台内置解析，域名零影响，因此**默认开启**。
+///
+/// 加固：声明文件指向的 provider 类必须**真的在宿主 jar 里**（由 shade 从
+/// `dbmind-host-resolver` 合并）。jar 陈旧（升级没跟齐 / 手动换 jar / dev 目录
+/// 没同步）时绝不写声明 —— 否则 ServiceLoader 一碰到它，宿主 JVM 的
+/// InetAddress 初始化直接 `ServiceConfigurationError`（2026-11-16 dev 实测：
+/// 旧 jar + 新声明，只要解析任何非字面量主机名就炸）。宁可白等 4.6 秒反解。
+fn prepare_resolver_services(jar: &Path, enabled: bool) {
+    let enabled = enabled && jar_contains_resolver_provider(jar);
+    let Some(dir) = jar.parent() else { return };
+    let svc_dir = dir.join("resolver-svc");
+    let svc_file = svc_dir
+        .join("META-INF")
+        .join("services")
+        .join("java.net.spi.InetAddressResolverProvider");
+    if !enabled {
+        // 逃生阀 / JDK 降级：清理残留，绝不让 JDK 17 撞上声明文件
+        if svc_dir.is_dir() {
+            if let Err(err) = std::fs::remove_dir_all(&svc_dir) {
+                eprintln!("[dbmind] 清理 resolver 服务声明失败（宿主可能加载失败）: {err}");
+            }
+        }
+        return;
     }
-    Some(format!("-Djdk.net.hosts.file={}", path.display()))
+    if let Err(err) = std::fs::create_dir_all(svc_file.parent().unwrap_or(&svc_dir)) {
+        eprintln!("[dbmind] 准备 resolver 服务声明失败（反解优化不生效）: {err}");
+        return;
+    }
+    let content = "com.dbmind.agent.HostsResolverProvider\n";
+    if let Err(err) = std::fs::write(&svc_file, content) {
+        eprintln!("[dbmind] 写入 resolver 服务声明失败（反解优化不生效）: {err}");
+    }
+}
+
+/// 宿主 jar 里是否真的打进了 provider 类。
+/// zip 的 central directory 里 entry 文件名是**明文**存储，直接字节搜即可，不必引 zip 依赖。
+fn jar_contains_resolver_provider(jar: &Path) -> bool {
+    match std::fs::read(jar) {
+        Ok(bytes) => bytes
+            .windows(b"com/dbmind/agent/HostsResolverProvider.class".len())
+            .any(|w| w == b"com/dbmind/agent/HostsResolverProvider.class"),
+        Err(_) => false,
+    }
 }
 
 /// java 主版本的缓存。
@@ -1294,21 +1340,22 @@ impl AgentHost {
         // 宿主是长驻 JVM：不藏窗口的话，桌面版里从连上那一刻起就一直挂着一个黑窗
         hide_console(&mut command);
         command.arg("-Dfile.encoding=UTF-8");
-        // 自有 hosts 文件**默认不用**（`DBMIND_AGENT_HOSTS=1` 才开）：
-        // `jdk.net.hosts.file` 是**独占式**的 —— 一旦指定，JVM 只在这份文件里查名字，
-        // **不再查 DNS**，文件里没有的名字直接报
-        //   java.net.UnknownHostException: Unable to resolve host X in hosts file …
-        // （实测：同一域名不加参数 OK 10.1.14.179，加了参数必抛）。
-        // 于是「连 IP 少等 4.6 秒反解」的收益，换来的是**所有用域名连的库全废**：
-        // 阿里云/AWS 的 RDS、代理转发、K8s Service 全是域名，导入/新建连接时域名还不在文件里，
-        // 一点「测试连接」就是 UnknownHostException（2026-11-11 用户实测 PostgreSQL 中招）。
-        // 逃生阀留给「全部用 IP 直连、且确认不需要域名解析」的场景（见 prepare_agent_hosts）。
-        if let Some(arg) = agent_hosts_file_arg(
-            std::env::var("DBMIND_AGENT_HOSTS").map(|v| v == "1").unwrap_or(false),
-            &paths::agent_hosts_path(),
-        ) {
-            command.arg(arg);
+        // 自有 hosts 解析器（JDK 18+ 的 SPI，非独占）：JVM 先查内核写好的 IP→占位名映射，
+        // 未命中回退平台内置解析（系统 hosts + DNS）—— 消除 MySQL 驱动建连时 ~4.6s 的
+        // IP 反解等待，域名连接零影响。取代 2026-11 之前用过的 `-Djdk.net.hosts.file`：
+        // 那条是**独占式**的（文件里没有的名字一律 UnknownHostException，域名连接全废，
+        // 只能 opt-in）。`DBMIND_AGENT_HOSTS=0` 一键关闭，回到完全的系统解析。
+        let hosts_enabled = std::env::var("DBMIND_AGENT_HOSTS").map(|v| v != "0").unwrap_or(true);
+        let runtime_major = java_major_version(Path::new(&java));
+        if !jar.is_empty() {
+            let major = runtime_major.unwrap_or(0);
+            // JDK 版本读不出时保守禁用（major=0 < 18）：宁少这 4.6 秒收益，不冒加载失败的风险
+            prepare_resolver_services(Path::new(&jar), hosts_enabled && major >= 18);
         }
+        command.arg(format!(
+            "-Ddbmind.agent.hosts={}",
+            paths::agent_hosts_path().display()
+        ));
         // SQL Server 的「Windows 验证」在 Windows 上走原生 SSPI，需要那份原生认证库，
         // 而 `java.library.path` **只在 JVM 启动这一刻**生效（宿主是长驻 JVM，启动后再补文件
         // 也加载不到）—— 所以在这里、spawn 之前把目录备好。
@@ -1850,23 +1897,102 @@ mod tests {
     use super::*;
     use crate::ConnectionKind;
 
-    /// `jdk.net.hosts.file` 默认**不下发**：它是独占式解析，会让所有域名连接
-    /// `UnknownHostException`（详见 [`agent_hosts_file_arg`]）。只有显式 opt-in 才给。
+    /// 自有解析器的 SPI 服务声明：enabled 时写到 jar 旁 `resolver-svc/`，
+    /// 关闭时**连目录一起清掉** —— JDK 17 撞上声明文件会因为 provider 类是
+    /// version 62 直接崩（详见 [`prepare_resolver_services`]）。
     #[test]
-    fn 宿主默认不下发独占式_hosts_文件参数() {
-        let dir = std::env::temp_dir().join("dbmind-agent-hosts-unit");
-        std::fs::create_dir_all(&dir).expect("建临时目录");
-        let file = dir.join("agent-hosts");
-        std::fs::write(&file, "127.0.0.1 localhost\n").expect("写临时 hosts");
+    fn resolver_服务声明随开关写入与清理() {
+        let dir = std::env::temp_dir().join("dbmind-resolver-svc-unit");
+        let _ = std::fs::remove_dir_all(&dir);
+        let jar = dir.join("agents").join("dbmind-agent-jdbc.jar");
+        std::fs::create_dir_all(&jar.parent().unwrap()).expect("建临时目录");
+        // 加固要求 jar 里真的有 provider entry 名，伪装一份最小 zip
+        std::fs::write(
+            &jar,
+            b"PK\x01\x02 com/dbmind/agent/HostsResolverProvider.class PK\x05\x06",
+        )
+        .expect("写假 jar");
 
-        assert_eq!(agent_hosts_file_arg(false, &file), None, "默认必须是系统解析");
-        assert!(agent_hosts_file_arg(true, &file).is_some(), "opt-in 才带参数");
+        prepare_resolver_services(&jar, true);
+        let svc = jar
+            .parent()
+            .unwrap()
+            .join("resolver-svc")
+            .join("META-INF")
+            .join("services")
+            .join("java.net.spi.InetAddressResolverProvider");
+        let text = std::fs::read_to_string(&svc).expect("声明文件应已写入");
         assert_eq!(
-            agent_hosts_file_arg(true, &dir.join("missing")),
-            None,
-            "文件不存在时不给（行为与优化前一致）"
+            text, "com.dbmind.agent.HostsResolverProvider\n",
+            "声明内容必须指向 provider 类"
         );
-        let _ = std::fs::remove_file(&file);
+
+        // 关闭：目录整体消失（而不是只删文件），JDK 17 上不可能再撞到它
+        prepare_resolver_services(&jar, false);
+        assert!(
+            !jar.parent().unwrap().join("resolver-svc").exists(),
+            "关闭时必须清掉整个 resolver-svc 目录"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 重复注册要幂等：宿主每次 spawn 都会调用，第二次写入不应出错或留下脏状态。
+    #[test]
+    fn resolver_服务声明重复写入幂等() {
+        let dir = std::env::temp_dir().join("dbmind-resolver-svc-unit2");
+        let _ = std::fs::remove_dir_all(&dir);
+        let jar = dir.join("dbmind-agent-jdbc.jar");
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        std::fs::write(
+            &jar,
+            b"PK\x01\x02 com/dbmind/agent/HostsResolverProvider.class PK\x05\x06",
+        )
+        .expect("写假 jar");
+        prepare_resolver_services(&jar, true);
+        prepare_resolver_services(&jar, true);
+        prepare_resolver_services(&jar, true);
+        let svc = dir
+            .join("resolver-svc")
+            .join("META-INF")
+            .join("services")
+            .join("java.net.spi.InetAddressResolverProvider");
+        assert_eq!(
+            std::fs::read_to_string(&svc).expect("应可读"),
+            "com.dbmind.agent.HostsResolverProvider\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **加固回归**：宿主 jar 里没有 provider 类（jar 陈旧 / dev 目录没同步新 jar）
+    /// 时必须拒绝注册并清掉声明 —— 否则 ServiceLoader 一碰它，宿主 JVM 的
+    /// InetAddress 初始化直接 ServiceConfigurationError（2026-11-16 dev 实测炸过）。
+    #[test]
+    fn resolver_陈旧jar不注册声明() {
+        let dir = std::env::temp_dir().join("dbmind-resolver-svc-unit3");
+        let _ = std::fs::remove_dir_all(&dir);
+        let jar = dir.join("dbmind-agent-jdbc.jar");
+        std::fs::create_dir_all(&dir).expect("建临时目录");
+        // 伪装成旧版 fat jar：有文件、里面没有 provider 的 entry 名
+        std::fs::write(
+            &jar,
+            b"PK\x03\x04 dummy old jar without the provider entry \x00",
+        )
+        .expect("写假 jar");
+        assert!(!jar_contains_resolver_provider(&jar), "旧 jar 应判不含 provider");
+
+        prepare_resolver_services(&jar, true);
+        assert!(
+            !dir.join("resolver-svc").exists(),
+            "陈旧 jar 时绝不能写服务声明"
+        );
+
+        // jar 读不到（路径不存在）同样拒绝
+        prepare_resolver_services(&dir.join("missing.jar"), true);
+        assert!(
+            !dir.join("resolver-svc").exists(),
+            "jar 缺失时也绝不能写服务声明"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 拉起宿主的**过程中**问一句「支持 mysql 吗」，必须按静态声明回答 true。

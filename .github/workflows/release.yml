@@ -230,9 +230,13 @@ jobs:
           npm run build
 
       # [2] 四个 Java 宿主 jar —— 缺了它们，装完只有 SQLite 能用（其它类型全报「驱动未就绪」）
+      #     dbmind-host-resolver 必须先 install：dbmind-agent-jdbc 依赖它（自有 hosts 解析器，
+      #     消除 MySQL 驱动建连时 ~4.6s 的 IP 反解等待），shade 会把它的类合并进 fat jar
       - name: 构建 Java 宿主
         shell: bash
         run: |
+          echo "== dbmind-host-resolver"
+          mvn -B -q -DskipTests install -f "agents/dbmind-host-resolver/pom.xml"
           for m in jdbc mongodb redis elasticsearch; do
             echo "== dbmind-agent-$m"
             mvn -B -q -DskipTests package -f "agents/dbmind-agent-$m/pom.xml"

@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>com.dbmind</groupId>
+  <artifactId>dbmind-host-resolver</artifactId>
+  <version>0.1.0</version>
+  <packaging>jar</packaging>
+  <name>DBmind Host Resolver Provider</name>
+  <description>
+    JVM 自定义解析器（java.net.spi.InetAddressResolverProvider，JDK 18+）：
+    先查内核写好的 IP→占位名映射，未命中回退平台内置解析（系统 hosts + DNS）。
+    消除 MySQL 驱动建连时对服务端 IP 做反向解析的 ~4.6s 等待，且对域名连接零影响。
+    取代此前独占式的 -Djdk.net.hosts.file（文件里没有的名字一律 UnknownHostException）。
+    注意：这个模块必须编译到 18（SPI 是 @since 18 的 API），宿主 jar 的其余类仍是 17；
+    内核只在运行时 ≥ 18 时才注册（写 SPI 服务声明文件），JDK 17 上该类永远不被加载。
+  </description>
+
+  <properties>
+    <maven.compiler.release>18</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+
+  <build>
+    <finalName>dbmind-host-resolver</finalName>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>

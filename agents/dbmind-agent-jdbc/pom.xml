@@ -34,6 +34,19 @@
       <artifactId>gson</artifactId>
       <version>2.11.0</version>
     </dependency>
+    <!--
+      JVM 自定义解析器（消除 MySQL 驱动建连时 ~4.6s 的 IP 反解等待）。
+      这个模块编译到 18（SPI 是 @since 18），shade 只把它的 **class** 合并进本 fat jar
+      （不含 SPI 服务声明文件 —— 那份文件由内核在运行时按 JDK 版本写到
+      jar 旁的 resolver-svc/ 目录，JDK 17 上不写、provider 类永远不被加载）。
+      构建前必须先 mvn install agents/dbmind-host-resolver。
+    -->
+    <dependency>
+      <groupId>com.dbmind</groupId>
+      <artifactId>dbmind-host-resolver</artifactId>
+      <version>0.1.0</version>
+      <scope>runtime</scope>
+    </dependency>
   </dependencies>
 
   <build>
@@ -61,6 +74,16 @@
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>com.dbmind.agent.Main</mainClass>
+                  <!--
+                    SPI 服务声明目录（-jar 模式系统 classpath = 主 jar + manifest Class-Path）：
+                    内核在宿主 JDK ≥ 18 时往 `<jar 所在目录>/resolver-svc/` 写
+                    META-INF/services/java.net.spi.InetAddressResolverProvider，
+                    ServiceLoader 才会加载 HostsResolverProvider；目录不存在 = 不启用，
+                    行为与以前完全一致。相对路径相对 jar 所在目录解析。
+                  -->
+                  <manifestEntries>
+                    <Class-Path>resolver-svc/</Class-Path>
+                  </manifestEntries>
                 </transformer>
               </transformers>
               <createDependencyReducedPom>false</createDependencyReducedPom>
