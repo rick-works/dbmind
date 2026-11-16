@@ -1,5 +1,16 @@
 {
   "_readme": "应用「关于」页的英文要点，与 release-notes/<版本>.md 里的中文逐条对应（条数应一致）。由 scripts/release/sync-release-notes.mjs 同步进 en-US.js；新增版本时在这里补一段即可。",
+  "v2.0.27": [
+    "Fixed whole-database sync failing entirely on SQL Server / PostgreSQL when a schema is selected: a same-named table in another schema (e.g. dbo) made every table report \"failed to drop the target table\" (Cannot drop the table 'test.X', because it does not exist). Target metadata is now read only from the selected schema, and drop statements carry if exists",
+    "Fixed garbled comparison results on large tables: once a comparison spilled to disk (more than 100k rows), every row from the second one on was misaligned and the run failed with \"unknown comparison cell type 10\". Large tables now agree with small ones",
+    "Fixed Oracle / DM comparisons keyed on a date-time column failing on page 2 (after 50k rows) with ORA-01861 / ORA-01843: the string was implicitly converted using the session NLS format. The keyset cursor now uses ANSI timestamp literals, so session settings no longer matter - while ISO strings stored in VARCHAR columns are still compared as strings",
+    "Fixed ORA-00904 when comparing quoted lowercase column names on Oracle / DM: column names are now quoted exactly as they are stored",
+    "\"Start comparison\" no longer waits for count(*): counting a large table takes tens of seconds to minutes and only feeds the progress bar, so DBMind now waits at most 10 seconds and then starts with an indeterminate bar",
+    "Fixed a crash-inducing guess: a failed row count on the target side (timeout / no permission) was treated as 0, so a table with tens of millions of rows could be loaded into memory as a \"small\" one. An unknown denominator now always spills to disk",
+    "Stopping a comparison keeps what was already compared: the rows read so far stay in the result with a \"partial comparison result\" note, and the stop is immediate instead of waiting for the current chunk to finish",
+    "The reason a comparison failed or was interrupted is now shown in the progress window (it used to be a 3-second toast you could miss), and comparisons resumed from the task center keep their full log",
+    "Faster disk spooling for million-row comparisons: three async writes per row became a single 128 KB batch buffer"
+  ],
   "v2.0.26": [
     "Saved passwords are no longer plaintext: dbmind.db stores them as AES-256-GCM ciphertext (enc:v2:, key kept alongside the database). Existing plaintext passwords migrate automatically on first start and connections keep working; \"Export connections\" writes ciphertext as well",
     "\"Refresh\" at every level of the object tree now really re-reads: category counts, table/view lists and both the database and schema levels update together - no more \"I refreshed and it still shows the old rows\"",

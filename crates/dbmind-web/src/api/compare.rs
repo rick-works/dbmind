@@ -311,6 +311,17 @@ enum CompareKeyMode {
 struct CompareKeyPlan {
     target_keys: Vec<String>,
     mode: CompareKeyMode,
+    /// 每个比对键（同序）在**源侧**是不是日期时间列。
+    ///
+    /// keyset 游标要不要写成 ANSI `timestamp '…'` 全靠它：Oracle/达梦把字符串转成
+    /// DATE/TIMESTAMP 用的是**会话 NLS 格式**（服务端默认 `DD-MON-RR` /
+    /// `DD-MON-RR HH.MI.SSXFF AM`），`'2024-01-01 10:00:00'` 分别报 ORA-01861 / ORA-01843
+    /// —— 真机实测，而且只在第 2 页（5 万行之后）才出现。
+    /// 但反过来，**VARCHAR2 列里存 ISO 时间**时必须保持字符串字面量（字符串比较才对），
+    /// 所以判据是「列的真实类型」，不是「值长得像时间」。
+    source_time_keys: Vec<bool>,
+    /// 同上，目标侧（列名可能与源侧不同）。
+    target_time_keys: Vec<bool>,
 }
 
 fn validate_compare_keys(
@@ -341,6 +352,8 @@ fn validate_compare_keys(
         )));
     }
     let mut target_keys = Vec::with_capacity(keys.len());
+    let mut source_time_keys = Vec::with_capacity(keys.len());
+    let mut target_time_keys = Vec::with_capacity(keys.len());
     let mut mode = CompareKeyMode::Ordered;
     for key in keys {
         let source_col = source
@@ -364,10 +377,14 @@ fn validate_compare_keys(
             mode = CompareKeyMode::Hashed;
         }
         target_keys.push(target_col.name.clone());
+        source_time_keys.push(source_family == Some("time"));
+        target_time_keys.push(target_family == Some("time"));
     }
     Ok(CompareKeyPlan {
         target_keys,
         mode,
+        source_time_keys,
+        target_time_keys,
     })
 }
 
@@ -794,9 +811,22 @@ struct SidePage {
     rows: Vec<Vec<CellValue>>,
 }
 
+/// 「开始对比」前等 count(*) 的上限。
+///
+/// 大表上 `count(*)` 就是一次全表扫（几十秒到几分钟），而它**只用来画进度条**。
+/// 超过这个时间就放弃：分母未知 ⇒ 进度走流动条，比对立刻开始 —— 用户要的是结果，
+/// 不是先等两分钟看分母。（放弃后那条查询会在引擎侧继续跑到自己的超时，
+/// 它只是一条只读会话，不阻塞比对用的另外两条。）
+const COUNT_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// 表行数（count(*)）：给流式对比提供**真实分母** —— 进度条按具体百分比增长
 /// （用户口径：与数据传输一致，而不是一直流动动画）。带过滤条件时 count 同样带上，
-/// 分母与参与对比的行集一致。count 失败返回 0 = 分母未知 → 前端流动条兜底。
+/// 分母与参与对比的行集一致。
+///
+/// 返回 `None` = **分母未知**（超时 / 无权限 / 计数结果不是数字），调用方据此：
+/// ① 进度退回流动条；② **不允许**据此判定「小表走内存哈希」—— 曾经这里把失败吞成 0，
+/// 于是「目标侧 count 失败 + 源侧 5 万行」被当成 10 万以内的小表，把目标全部行装进
+/// HashMap（实际千万行）直接把进程打挂。分母不可信就不能拿它做内存决策。
 async fn count_rows(
     state: &AppState,
     conn: &str,
@@ -805,7 +835,7 @@ async fn count_rows(
     schema: Option<&str>,
     condition: Option<&str>,
     dialect: Dialect,
-) -> u64 {
+) -> Option<u64> {
     // 用户条件**必须整体加括号**：`where a = 1 or b = 2` 再跟 `and` 条件时，
     // and 的优先级高于 or，语义会被悄悄改掉（对比结果对不上，却查不出原因）。
     let where_part = condition
@@ -815,25 +845,47 @@ async fn count_rows(
         .unwrap_or_default();
     let schema_owned = schema.map(|s| s.to_string());
     let sql = format!("select count(*) from {}{where_part}", qualified(table, &schema_owned, dialect));
-    match run_sql_in(state, conn, scope, sql, 1).await {
-        Ok(result) => match result.rows.first().and_then(|r| r.first()) {
-            Some(CellValue::Integer(v)) => (*v).max(0) as u64,
-            Some(CellValue::Real(v)) => (*v).max(0.0) as u64,
-            Some(CellValue::Text(txt)) => txt.trim().parse::<u64>().unwrap_or(0),
-            _ => 0,
-        },
-        Err(_) => 0,
+    // 超时即放弃（见 COUNT_WAIT）：等不到分母就按流动条走，不能把「开始对比」卡在计数上
+    let Ok(Ok(result)) = tokio::time::timeout(COUNT_WAIT, run_sql_in(state, conn, scope, sql, 1)).await
+    else {
+        return None;
+    };
+    match result.rows.first().and_then(|r| r.first()) {
+        Some(CellValue::Integer(v)) => Some((*v).max(0) as u64),
+        Some(CellValue::Real(v)) => Some((*v).max(0.0) as u64),
+        // 有些库把计数回成字符串：解析不了同样是「未知」，不能当 0
+        Some(CellValue::Text(txt)) => txt.trim().parse::<u64>().ok(),
+        _ => None,
     }
 }
 
 
 /// keyset 分页的字面量：按排序键类型生成（数值不带引号、文本转义引号），
 /// 让数据库按与内存 `SortKey` 一致的序比较（数值序/文本序）。
-fn keyset_literal(part: &shape::SortPart) -> String {
+///
+/// `column_is_time`：该键列在**库里**是不是 DATE/TIMESTAMP。
+/// Oracle / 达梦必须区分这两种情形（见下），其它方言两种写法等价。
+fn keyset_literal(part: &shape::SortPart, dialect: Dialect, column_is_time: bool) -> String {
     match part {
         shape::SortPart::Null => "null".to_string(),
         shape::SortPart::Num(v) => v.to_sql_literal(),
-        shape::SortPart::Time(t) => format!("'{}'", keyset_time_literal(t)),
+        shape::SortPart::Time(t) => {
+            let text = keyset_time_literal(t);
+            // Oracle / 达梦：字符串 → 日期时间走**会话 NLS 格式**隐式转换
+            // （服务端默认 NLS_DATE_FORMAT=DD-MON-RR、NLS_TIMESTAMP_FORMAT=DD-MON-RR HH.MI.SSXFF AM），
+            // `id > '2024-01-01 10:00:00'` 实测直接 ORA-01861 / ORA-01843 ——
+            // 而且只在**第 2 页**才炸（首页不带游标，5 万行以内永远看不出问题）。
+            // ANSI 字面量 `timestamp '…'` 的格式由标准定死，与会话设置无关；
+            // 与 DATE 列比较时 Oracle 会把 DATE 提升成 TIMESTAMP，语义不变（同一路径实测通过）。
+            //
+            // **只对真的是时间类型的列这么写**：VARCHAR2 列里存 ISO 时间当主键时，
+            // 字符串比较才是对的（原文写法），换成 timestamp 字面量会反过来出问题。
+            if column_is_time && matches!(dialect.kind.key(), "oracle" | "dm") {
+                format!("timestamp '{text}'")
+            } else {
+                format!("'{text}'")
+            }
+        }
         shape::SortPart::Text(t) => format!("'{}'", t.replace('\'', "''")),
     }
 }
@@ -868,15 +920,20 @@ fn spawn_side_stream(
     columns: Vec<String>,
     dialect: Dialect,
     key_cols: Vec<String>,
+    // 与 `key_cols` 同序：该键列是不是 DATE/TIMESTAMP（决定 keyset 游标用哪种字面量）
+    key_time: Vec<bool>,
     task: std::sync::Arc<crate::api::tasks::Task>,
     tx: tokio::sync::mpsc::Sender<Result<SidePage, String>>,
 ) {
     tokio::spawn(async move {
         // 异常展开时补发失败信号（见 SideGuard 的注释）。正常路径在末尾 disarm()。
         let guard = SideGuard::new(tx.clone());
+        // 列名来自 `list_columns` 的**元数据**（库里真实大小写），必须 `quote_exact`：
+        // `quote` 是为「用户想写的名字」准备的，上折方言（Oracle/DB2/H2/Derby）会把
+        // 裸名折成大写 —— 带引号建的小写列 `"day"` 于是变成 `DAY`，ORA-00904。
         let list = columns
             .iter()
-            .map(|name| dialect.quote(name))
+            .map(|name| dialect.quote_exact(name))
             .collect::<Vec<_>>()
             .join(", ");
         let mut sql = format!("select {list} from {}", qualified(&table, &schema, dialect));
@@ -891,10 +948,11 @@ fn spawn_side_stream(
         }
         let has_condition = condition.is_some();
         // 排序列（同时也是 keyset 游标的列），**保留成 Vec** 供下面展开成逐列条件
+        // 同 `list`：这些名字来自元数据/列清单，逐字加引号才指得准（见上）
         let order_list: Vec<String> = if key_cols.is_empty() {
-            columns.iter().map(|name| dialect.quote(name)).collect()
+            columns.iter().map(|name| dialect.quote_exact(name)).collect()
         } else {
-            key_cols.iter().map(|name| dialect.quote(name)).collect()
+            key_cols.iter().map(|name| dialect.quote_exact(name)).collect()
         };
         let order_cols = order_list.join(", ");
         // **sql 只拼到 where 为止（不含 order by）** —— keyset 分页条件必须插在
@@ -914,7 +972,13 @@ fn spawn_side_stream(
                 // 更糟的是首页直接语法错（Oracle 上整表对比根本跑不起来）。
                 None => format!("{sql} order by {order_cols} {}", dialect.limit_clause(0, page_size as u64)),
                 Some(key) => {
-                    let lits: Vec<String> = key.iter().map(keyset_literal).collect();
+                    let lits: Vec<String> = key
+                        .iter()
+                        .enumerate()
+                        .map(|(index, part)| {
+                            keyset_literal(part, dialect, key_time.get(index).copied().unwrap_or(false))
+                        })
+                        .collect();
                     // **必须展开成逐列 or 链，不能写 SQL 行值比较 `(a,b) > (x,y)`**：
                     // 行值比较只有 MySQL/PG/SQLite 这类认；SQL Server / Oracle / DB2 /
                     // 达梦 / Doris / ClickHouse 都会直接语法错 —— 那些库上超过 5 万行的
@@ -951,12 +1015,18 @@ fn spawn_side_stream(
                     let last = result.rows.last().map(|row| {
                         shape::row_sort_key(row, &sort_positions(&key_cols, &columns))
                     });
-                    let _ = tx
+                    // **发送失败 = 下游已经走了**（主循环提前返回/取消收摊）：立刻停。
+                    // 原来把结果丢掉继续翻页，于是一次参数类失败（「目标表结果里没有关键列」）
+                    // 之后，两侧协程还会把整张表一页页读到底，白烧几分钟连接与带宽。
+                    let sent = tx
                         .send(Ok(SidePage {
                             columns: columns_out.clone().unwrap_or_default(),
                             rows: result.rows,
                         }))
                         .await;
+                    if sent.is_err() {
+                        break;
+                    }
                     // 不足一页 = 读完
                     if got < page_size {
                         break;
@@ -1043,6 +1113,15 @@ fn cell_equal(left: Option<&CellValue>, right: Option<&CellValue>) -> bool {
 const COMPARE_HASH_BUCKETS: usize = 64;
 /// 两侧合计不超过该行数时直接用内存 HashMap，省掉 JSONL 写盘与重读。
 const COMPARE_HASH_MEMORY_ROWS: u64 = 100_000;
+
+/// 「小表走内存哈希」的判据：**只有两侧 count 都成功**（`Some`）且合计不超过阈值才敢。
+///
+/// 分母未知（`None`：count 超时/无权限）时一律落盘 —— 目标侧可能是千万行，
+/// 装进 HashMap 就是 OOM。曾经这里用「`est_total > 0`」，而 count 失败被吞成 0，
+/// 于是「目标 count 失败 + 源 5 万行」被当成小表，把目标全表装进内存。
+fn prefer_memory_hash(est_total: Option<u64>) -> bool {
+    matches!(est_total, Some(total) if total > 0 && total <= COMPARE_HASH_MEMORY_ROWS)
+}
 
 struct CompareTempDir(PathBuf);
 
@@ -1189,9 +1268,27 @@ async fn read_spooled_row<R: tokio::io::AsyncRead + Unpin>(
         .read_exact(&mut bytes)
         .await
         .map_err(|e| format!("读取对比临时行失败：{e}"))?;
+    // 行尾分隔符**必须消费掉**：写入端每行末尾写了 '\n'，这里不读的话下一行会把
+    // 0x0A 当成长度前缀的第一个字节，从第 2 行起长度/内容全错位 ——
+    // 表现是「未知的对比单元格类型 10」（10 = '\n'）。
+    // 之前只在内存路径（<10 万行，不落盘）跑得通，所以一直没人发现。
+    let mut sep = [0u8; 1];
+    reader
+        .read_exact(&mut sep)
+        .await
+        .map_err(|e| format!("读取对比临时行分隔符失败：{e}"))?;
+    if sep[0] != b'\n' {
+        return Err(format!(
+            "对比临时文件行分隔符异常（期望换行，实际 {}）",
+            sep[0]
+        ));
+    }
     decode_spooled_row(&bytes).map(Some)
 }
 
+/// 单行落盘：**只给单测用** —— 主路径走 [`encode_spooled_record`] + 128KB 缓冲，
+/// 那里每行不再产生 await。
+#[cfg(test)]
 async fn spool_row(
     writer: &mut BufWriter<tokio::fs::File>,
     row: &[CellValue],
@@ -1209,6 +1306,37 @@ async fn spool_row(
         .write_all(b"\n")
         .await
         .map_err(|e| format!("写入对比临时文件失败：{e}"))
+}
+
+/// 分片写入的**内存缓冲**阈值。
+///
+/// `spool_row` 每行要做 3 次 `write_all().await`（长度 / 内容 / 换行）。百万行级对比里
+/// 那就是 300 万次 await + BufWriter 的 syscall push —— 哈希落盘路径的瓶颈就在这里。
+/// 攒够 128KB 再一次性落盘，每行的开销降到一次 `extend_from_slice`。
+const SPOOL_FLUSH_BYTES: usize = 128 * 1024;
+
+/// 把一行按「长度 + 内容 + 换行」的线上格式追加到缓冲（纯内存，无 await）。
+fn encode_spooled_record(out: &mut Vec<u8>, row: &[CellValue]) {
+    let bytes = encode_spooled_row(row);
+    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+    out.extend_from_slice(&bytes);
+    out.push(b'\n');
+}
+
+/// 缓冲攒够阈值就落盘（没攒够就什么都不做）。
+async fn flush_spool_if_full(
+    writer: &mut BufWriter<tokio::fs::File>,
+    buf: &mut Vec<u8>,
+) -> Result<(), String> {
+    if buf.len() < SPOOL_FLUSH_BYTES {
+        return Ok(());
+    }
+    writer
+        .write_all(buf)
+        .await
+        .map_err(|e| format!("写入对比临时文件失败：{e}"))?;
+    buf.clear();
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1396,10 +1524,12 @@ async fn compare_hashed(
     target_columns: &[String],
     source_keys: &[String],
     target_keys: &[String],
+    source_time_keys: &[bool],
+    target_time_keys: &[bool],
     excluded: &[String],
     limit: usize,
     task: &std::sync::Arc<crate::api::tasks::Task>,
-    est_total: u64,
+    est_total: Option<u64>,
 ) -> XResult<(Value, u64, u64)> {
     let (src_tx, src_rx) = tokio::sync::mpsc::channel::<Result<SidePage, String>>(2);
     spawn_side_stream(
@@ -1412,6 +1542,7 @@ async fn compare_hashed(
         source_columns.to_vec(),
         source_dialect,
         source_keys.to_vec(),
+        source_time_keys.to_vec(),
         task.clone(),
         src_tx,
     );
@@ -1426,6 +1557,7 @@ async fn compare_hashed(
         target_columns.to_vec(),
         target_dialect,
         target_keys.to_vec(),
+        target_time_keys.to_vec(),
         task.clone(),
         tgt_tx,
     );
@@ -1458,7 +1590,9 @@ async fn compare_hashed(
                 .ok_or_else(|| XError::bad_request(format!("目标表结果里没有关键列 {key}")))
         })
         .collect::<XResult<_>>()?;
-    if est_total > 0 && est_total <= COMPARE_HASH_MEMORY_ROWS {
+    // **只有两侧 count 都成功**才敢按「小表」走内存哈希（判据见 prefer_memory_hash）：
+    // 分母未知时目标侧可能是千万行，装进 HashMap 就是 OOM。
+    if prefer_memory_hash(est_total) {
         return compare_hashed_memory(
             source,
             target,
@@ -1483,20 +1617,25 @@ async fn compare_hashed(
     let _guard = CompareTempDir(root.clone());
     let mut source_writers = open_compare_buckets(&root, "source").await.map_err(XError::bad_request)?;
     let mut target_writers = open_compare_buckets(&root, "target").await.map_err(XError::bad_request)?;
+    // 每个分片一个内存缓冲：百万行时把「每行 3 次 await」压成「每 128KB 一次」（见 SPOOL_FLUSH_BYTES）
+    let mut source_bufs: Vec<Vec<u8>> = vec![Vec::new(); COMPARE_HASH_BUCKETS];
+    let mut target_bufs: Vec<Vec<u8>> = vec![Vec::new(); COMPARE_HASH_BUCKETS];
 
     let mut reported = 0u64;
     loop {
         task.check_canceled()?;
         if let Some(row) = s_row.take() {
-            let key = shape::row_key(&row, &src_key_idx);
-            spool_row(&mut source_writers[compare_bucket(&key)], &row)
+            let bucket = compare_bucket(&shape::row_key(&row, &src_key_idx));
+            encode_spooled_record(&mut source_bufs[bucket], &row);
+            flush_spool_if_full(&mut source_writers[bucket], &mut source_bufs[bucket])
                 .await
                 .map_err(XError::bad_request)?;
             s_row = source.next_row().await;
         }
         if let Some(row) = t_row.take() {
-            let key = shape::row_key(&row, &tgt_key_idx);
-            spool_row(&mut target_writers[compare_bucket(&key)], &row)
+            let bucket = compare_bucket(&shape::row_key(&row, &tgt_key_idx));
+            encode_spooled_record(&mut target_bufs[bucket], &row);
+            flush_spool_if_full(&mut target_writers[bucket], &mut target_bufs[bucket])
                 .await
                 .map_err(XError::bad_request)?;
             t_row = target.next_row().await;
@@ -1516,7 +1655,18 @@ async fn compare_hashed(
     if let Some(err) = target.error.clone() {
         return Err(XError::bad_request(format!("读取目标数据失败：{err}")));
     }
-    for writer in source_writers.iter_mut().chain(target_writers.iter_mut()) {
+    for (writer, buf) in source_writers
+        .iter_mut()
+        .zip(source_bufs.iter_mut())
+        .chain(target_writers.iter_mut().zip(target_bufs.iter_mut()))
+    {
+        if !buf.is_empty() {
+            writer
+                .write_all(buf)
+                .await
+                .map_err(|e| format!("写入对比临时文件失败：{e}"))?;
+            buf.clear();
+        }
         writer
             .flush()
             .await
@@ -1562,7 +1712,14 @@ async fn compare_hashed(
             .map_err(|e| format!("打开目标对比分片失败：{e}"))?;
         let mut target_reader = BufReader::new(target_file);
         let mut target_map: HashMap<String, Vec<CellValue>> = HashMap::new();
+        // 分片内也要能被「停止」打断：一个分片在千万行表上可能有十几万行，
+        // 只在分片之间查一次取消标志，用户点停止后要干等十几秒才有反应。
+        let mut scanned = 0usize;
         while let Some(row) = read_spooled_row(&mut target_reader).await? {
+            scanned += 1;
+            if scanned % 8192 == 0 {
+                task.check_canceled()?;
+            }
             let key = shape::row_key(&row, &tgt_key_idx);
             if target_map.insert(key.clone(), row).is_some() {
                 return Err(XError::bad_request(format!(
@@ -1577,7 +1734,12 @@ async fn compare_hashed(
             .map_err(|e| format!("打开源对比分片失败：{e}"))?;
         let mut source_reader = BufReader::new(source_file);
         let mut source_seen: HashSet<String> = HashSet::new();
+        let mut scanned = 0usize;
         while let Some(row) = read_spooled_row(&mut source_reader).await? {
+            scanned += 1;
+            if scanned % 8192 == 0 {
+                task.check_canceled()?;
+            }
             let key = shape::row_key(&row, &src_key_idx);
             if !source_seen.insert(key.clone()) {
                 return Err(XError::bad_request(format!(
@@ -1661,7 +1823,6 @@ async fn compare_hashed(
         "onlyInTargetTruncated": only_in_target > limit as u64,
         "diffTruncated": different > limit as u64,
     });
-    let _ = est_total;
     Ok((data, source.rows_seen, target.rows_seen))
 }
 
@@ -1690,11 +1851,13 @@ async fn compare_streamed(
     target_columns: &[String],
     source_keys: &[String],
     target_keys: &[String],
+    source_time_keys: &[bool],
+    target_time_keys: &[bool],
     excluded: &[String],
     limit: usize,
     task: &std::sync::Arc<crate::api::tasks::Task>,
-    est_total: u64,
-) -> XResult<(Value, u64, u64)> {
+    est_total: Option<u64>,
+) -> XResult<(Value, u64, u64, bool)> {
     if source_columns.is_empty() || target_columns.is_empty() {
         return Err(XError::bad_request("没有可对比的列"));
     }
@@ -1714,13 +1877,13 @@ async fn compare_streamed(
     spawn_side_stream(
         state.clone(), source_conn, source_scope, source_table, source_schema,
         source_condition, source_columns.to_vec(), source_dialect, source_keys.to_vec(),
-        task.clone(), src_tx,
+        source_time_keys.to_vec(), task.clone(), src_tx,
     );
     let (tgt_tx, tgt_rx) = tokio::sync::mpsc::channel::<Result<SidePage, String>>(2);
     spawn_side_stream(
         state.clone(), target_conn, target_scope, target_table, target_schema,
         target_condition, target_columns.to_vec(), target_dialect, target_keys.to_vec(),
-        task.clone(), tgt_tx,
+        target_time_keys.to_vec(), task.clone(), tgt_tx,
     );
     let mut source = SideStream::new(src_rx);
     let mut target = SideStream::new(tgt_rx);
@@ -1782,8 +1945,15 @@ async fn compare_streamed(
 
     let mut last_pct: u64 = 0;
     let mut reported_seen: u64 = 0;
+    // 取消不是失败：双指针已经消费的前缀结论是**对的**，直接抛错会把它全丢掉
+    // （前端注释写着「取消也把已经算出来的结果留下」，后端却一直是空的）。
+    // 这里记下取消标志，带着已算出的统计正常返回，由调用方落进 result 并标 partial。
+    let mut canceled = false;
     loop {
-        task.check_canceled()?;
+        if task.check_canceled().is_err() {
+            canceled = true;
+            break;
+        }
         let seen = source.rows_seen + target.rows_seen;
         // 按实际消费行数推进；每 256 行更新一次，减少大表上的互斥锁开销。
         if seen.saturating_sub(reported_seen) >= 256 {
@@ -1792,8 +1962,8 @@ async fn compare_streamed(
         }
         // **按百分比台阶记进度日志**（每跨过 10% 一条）：两侧行数不同时，
         // 「已比对 5 万行」这种绝对数会与单侧行数对不上（真机反馈），百分比才有意义
-        if est_total > 0 {
-            let pct = (seen * 100 / est_total) as u64;
+        if let Some(total) = est_total.filter(|total| *total > 0) {
+            let pct = seen * 100 / total;
             if pct >= last_pct + 10 {
                 task.log(format!("进度 {}%（两侧累计 {} 行）", pct, seen));
                 last_pct = pct;
@@ -1883,13 +2053,19 @@ async fn compare_streamed(
         task.add_done(source.rows_seen + target.rows_seen - reported_seen);
     }
 
-    if let Some(err) = source.error.clone() {
-        return Err(XError::bad_request(format!("读取源数据失败：{err}")));
+    // 读协程若是「下游走了」而停，不会写 error；真查询错才在这里报。
+    // **取消时即使有 error 也优先把已算出的部分给出去** —— 用户是主动停的，
+    // 不是数据坏了，把统计整份丢掉等于让他白跑。
+    if !canceled {
+        if let Some(err) = source.error.clone() {
+            return Err(XError::bad_request(format!("读取源数据失败：{err}")));
+        }
+        if let Some(err) = target.error.clone() {
+            return Err(XError::bad_request(format!("读取目标数据失败：{err}")));
+        }
     }
-    if let Some(err) = target.error.clone() {
-        return Err(XError::bad_request(format!("读取目标数据失败：{err}")));
-    }
-
+    // 读协程先看到取消标志（它自己 break）时，主循环可能正常走到收尾 —— 以标志为准
+    let canceled = canceled || task.is_canceled();
     let data = json!({
         "keyColumns": source_keys,
         "sourceRows": source.rows_seen,
@@ -1906,8 +2082,10 @@ async fn compare_streamed(
         "onlyInSourceTruncated": only_in_source > limit as u64,
         "onlyInTargetTruncated": only_in_target > limit as u64,
         "diffTruncated": different > limit as u64,
+        // 已取消 ⇒ 统计只覆盖「已读到的前缀」，界面据此提示结果不完整
+        "partial": canceled,
     });
-    Ok((data, source.rows_seen, target.rows_seen))
+    Ok((data, source.rows_seen, target.rows_seen, canceled))
 }
 // ------------------------------------------------------------------ 处理器
 
@@ -2143,12 +2321,27 @@ pub async fn start(
                         target_dialect,
                     )
                 );
-                let mut est_total = src_count + tgt_count;
-                task.set_total(if est_total > 0 { est_total as i64 } else { -1 });
-                task.log(format!(
-                    "行数统计：源 {} 行 / 目标 {} 行",
-                    src_count, tgt_count
-                ));
+                // **两侧都成功才有可信分母**：任一侧失败（超时/无权限/方言不支持）就是
+                // `None` —— 进度退回流动条，并且禁止据此判「小表走内存哈希」。
+                let est_total = match (src_count, tgt_count) {
+                    (Some(source), Some(target)) => Some(source + target),
+                    _ => None,
+                };
+                task.set_total(est_total.map(|total| total as i64).unwrap_or(-1));
+                match est_total {
+                    Some(_) => task.log(format!(
+                        "行数统计：源 {} 行 / 目标 {} 行",
+                        src_count.unwrap_or(0),
+                        tgt_count.unwrap_or(0)
+                    )),
+                    // 原来这里会打「源 0 行 / 目标 0 行」，把失败伪装成空表 —— 必须说清楚
+                    None => task.log(format!(
+                        "行数统计失败（超时/无权限/方言不支持）：源 {} / 目标 {}。\
+                         进度改按已读取行数显示，对比结果不受影响",
+                        src_count.map(|n| format!("{n} 行")).unwrap_or_else(|| "未知".to_string()),
+                        tgt_count.map(|n| format!("{n} 行")).unwrap_or_else(|| "未知".to_string()),
+                    )),
+                }
                 // 读取与对比**流式融合**：两侧各自分页拉取（协程），主循环双指针边收边比 ——
                 // 内存只驻留当前页，行数无上限（进度 done 逐行累计，total 总量未知时条为流动动画）
                 // 读取与对比**流式融合**：两侧各自分页拉取（协程），主循环双指针边收边比 ——
@@ -2173,6 +2366,8 @@ pub async fn start(
                             &target_columns,
                             &keys,
                             &key_plan.target_keys,
+                            &key_plan.source_time_keys,
+                            &key_plan.target_time_keys,
                             &excluded,
                             body.sample_limit(),
                             &task,
@@ -2199,24 +2394,51 @@ pub async fn start(
                             &target_columns,
                             &keys,
                             &key_plan.target_keys,
+                            &key_plan.source_time_keys,
+                            &key_plan.target_time_keys,
                             &excluded,
                             body.sample_limit(),
                             &task,
                             est_total,
                         )
                         .await
+                        // 落盘/内存哈希路径中途取消仍是 Err（分片只写了一半，硬给差异会误导），
+                        // 这里补一个 canceled 标志只为统一返回形状
+                        .map(|(data, source_rows, target_rows)| {
+                            (data, source_rows, target_rows, task.is_canceled())
+                        })
                     }
                 };
-                let (data, source_rows, target_rows) = compared.map_err(|e| e.message)?;
+                let (data, source_rows, target_rows, canceled) = compared.map_err(|e| e.message)?;
                 // 校正分母/分子为**实际读取行数**（count 估算与真实可能有并发差）
-                est_total = source_rows + target_rows;
-                task.set_total(est_total as i64);
-                task.set_done(source_rows + target_rows);
-                task.set_phase(format!(
-                    "数据对比完成：{} 行不同 / {} 行相同 / 仅源 {} / 仅目标 {}",
-                    data["different"], data["same"], data["onlyInSource"], data["onlyInTarget"]
-                ));
+                let actual_total = source_rows + target_rows;
+                task.set_total(actual_total as i64);
+                task.set_done(actual_total);
+                let partial = canceled || data["partial"].as_bool().unwrap_or(false);
+                if partial {
+                    task.set_phase(format!(
+                        "已停止：已比对部分 {} 行不同 / {} 行相同 / 仅源 {} / 仅目标 {}",
+                        data["different"], data["same"], data["onlyInSource"], data["onlyInTarget"]
+                    ));
+                } else {
+                    task.set_phase(format!(
+                        "数据对比完成：{} 行不同 / {} 行相同 / 仅源 {} / 仅目标 {}",
+                        data["different"], data["same"], data["onlyInSource"], data["onlyInTarget"]
+                    ));
+                }
                 result.insert("data".to_string(), data);
+                if partial {
+                    // **取消也把已算出的结果留下**：FinishGuard 只在「工作体没设过结果」时
+                    // 用返回值兜底，这里主动写一份（带 success:true），前端才会既显示
+                    // 「已停止」又渲染部分统计 —— 否则用户点了停止只剩一个空结果区。
+                    if task.result().is_none() {
+                        let mut snapshot = result.clone();
+                        snapshot.insert("success".to_string(), json!(true));
+                        task.set_result(Value::Object(snapshot));
+                    }
+                    task.set_message("已停止（以下为已读取部分的对比结果）".to_string());
+                    return Ok(None);
+                }
                 }
 
             task.set_message("对比完成".to_string());
@@ -2266,6 +2488,7 @@ pub async fn cancel(
 #[cfg(test)]
 mod key_validation_tests {
     use super::*;
+    use dbmind_core::ConnectionKind;
 
     fn column(name: &str, base_type: &str, nullable: bool, primary_key: bool) -> ColumnFacts {
         ColumnFacts {
@@ -2322,6 +2545,42 @@ mod key_validation_tests {
         assert_eq!(plan.mode, CompareKeyMode::Ordered);
     }
 
+    /// keyset 游标的**时间**字面量必须按方言 + 列的真实类型区分。
+    ///
+    /// 真机（实验室 Oracle 11g，6 万行表）实测：第 2 页 `id > '2024-01-01 00:08:20'` 在
+    /// TIMESTAMP 主键上 ORA-01843、DATE 主键上 ORA-01861（会话 NLS 是 DD-MON-RR），
+    /// 而 `id > timestamp '…'` 两种列都通过。反过来，VARCHAR2 列里存 ISO 时间当主键时
+    /// 必须是字符串字面量 —— 所以判据是「列的类型」，不是「值长得像时间」。
+    #[test]
+    fn 时间键的游标字面量按方言与列类型区分() {
+        let time = shape::SortPart::Time("2024-01-01T10:00:00".to_string());
+        let ora = Dialect::new(ConnectionKind::Oracle);
+        let dm = Dialect::new(ConnectionKind::Dm);
+        let my = Dialect::new(ConnectionKind::Mysql);
+        // 真的是时间列：ANSI 字面量，会话 NLS 设置影响不到
+        assert_eq!(keyset_literal(&time, ora, true), "timestamp '2024-01-01 10:00:00'");
+        assert_eq!(keyset_literal(&time, dm, true), "timestamp '2024-01-01 10:00:00'");
+        // 文本列里存 ISO 时间：保持字符串比较
+        assert_eq!(keyset_literal(&time, ora, false), "'2024-01-01 10:00:00'");
+        // 其它方言两种写法等价，行为不变
+        assert_eq!(keyset_literal(&time, my, true), "'2024-01-01 10:00:00'");
+        // 文本键照旧转义单引号
+        assert_eq!(
+            keyset_literal(&shape::SortPart::Text("a'b".to_string()), ora, false),
+            "'a''b'"
+        );
+    }
+
+    #[test]
+    fn 分母未知时不允许走内存哈希() {
+        // count 失败（None）⇒ 只能落盘：否则目标侧千万行会被整表装进 HashMap
+        assert!(!prefer_memory_hash(None));
+        // 0 行同样不可信（可能正是失败时的兜底值）
+        assert!(!prefer_memory_hash(Some(0)));
+        assert!(prefer_memory_hash(Some(1_000)));
+        assert!(!prefer_memory_hash(Some(COMPARE_HASH_MEMORY_ROWS + 1)));
+    }
+
     #[test]
     fn 类型族用前缀判断避免_point_被当成_int() {
         assert_eq!(compare_sort_family("bigint"), Some("number"));
@@ -2357,8 +2616,12 @@ mod key_validation_tests {
         assert_eq!(diff["diffCount"].as_u64(), Some(2));
     }
 
+    /// **必须写多行**：行尾分隔符 `\n` 若不消费，从第 2 行起长度前缀就错位，
+    /// 表现为「未知的对比单元格类型 10」（10 正好是 `'\n'`）。
+    /// 这个 bug 只在大表（>10 万行 ⇒ 走落盘哈希）+ 文本/复合键时出现，
+    /// 之前只写一行的单测永远抓不到 —— 用它回归。
     #[tokio::test]
-    async fn 哈希对比临时分片可无损往返特殊文本() {
+    async fn 哈希对比临时分片多行可无损往返特殊文本() {
         let dir = std::env::temp_dir().join(format!(
             "dbmind-compare-test-{}-{}",
             std::process::id(),
@@ -2369,14 +2632,28 @@ mod key_validation_tests {
         ));
         tokio::fs::create_dir_all(&dir).await.expect("创建临时目录");
         let _guard = CompareTempDir(dir.clone());
-        let row = vec![
-            CellValue::Text("用户\\N\n第二行".to_string()),
-            CellValue::Integer(7),
-            CellValue::Decimal("12345678901234567890.1234567890".to_string()),
+        let rows = vec![
+            vec![
+                CellValue::Text("用户\\N\n第二行".to_string()),
+                CellValue::Integer(7),
+                CellValue::Decimal("12345678901234567890.1234567890".to_string()),
+            ],
+            vec![
+                CellValue::Text("a'b\t\"c\"".to_string()),
+                CellValue::Null,
+                CellValue::Blob { len: 4096 },
+            ],
+            vec![
+                CellValue::Text(String::new()),
+                CellValue::Real(1.5),
+                CellValue::Bytes(b"\x00\x01\x02".to_vec().into()),
+            ],
         ];
         let bucket = compare_bucket("text-key");
         let mut writers = open_compare_buckets(&dir, "source").await.expect("创建分片");
-        spool_row(&mut writers[bucket], &row).await.expect("写入分片");
+        for row in &rows {
+            spool_row(&mut writers[bucket], row).await.expect("写入分片");
+        }
         writers[bucket].flush().await.expect("刷新分片");
         drop(writers);
 
@@ -2384,11 +2661,17 @@ mod key_validation_tests {
             .await
             .expect("打开分片");
         let mut reader = BufReader::new(file);
-        let restored = read_spooled_row(&mut reader)
-            .await
-            .expect("读取行")
-            .expect("非空行");
-        assert_eq!(restored, row);
+        for (index, expected) in rows.iter().enumerate() {
+            let restored = read_spooled_row(&mut reader)
+                .await
+                .expect("读取行")
+                .unwrap_or_else(|| panic!("第 {} 行读不到", index + 1));
+            assert_eq!(&restored, expected, "第 {} 行往返不一致", index + 1);
+        }
+        assert!(
+            read_spooled_row(&mut reader).await.expect("读末尾").is_none(),
+            "行数多了"
+        );
     }
 
     #[tokio::test]

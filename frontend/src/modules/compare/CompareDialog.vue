@@ -191,6 +191,9 @@
                      :status="taskStatus === 'error' ? 'exception'
                               : (isTaskDone ? 'success' : (taskStatus === 'canceled' ? 'warning' : ''))" />
         <div v-if="progressText" class="pg-text">{{ progressText }}</div>
+        <!-- 失败/中断的**具体原因**（超时、权限、取消…）：只靠 3 秒的 toast 会看不到，
+             以前 taskMessage 只在 script 里赋值、模板从没渲染过 -->
+        <div v-if="taskMessage && taskMessage !== progressText" class="pg-text pg-msg">{{ taskMessage }}</div>
       </div>
 
       <div class="log-card pg-log">
@@ -219,6 +222,10 @@
       <div v-if="result" class="pg-result">
         <el-alert v-if="!result.success" :title="result.message" type="error" show-icon :closable="false" />
         <template v-else>
+          <!-- 中途停止时后端仍会给出「已读取前缀」的统计（partial）：
+               数字是真的，但覆盖面不完整，必须写在数字上面，否则会被当成全量结论 -->
+          <el-alert v-if="result.data?.partial" type="warning" show-icon :closable="false"
+                    class="pg-partial" :title="$t('cmp.partialTitle')" :description="$t('cmp.partialDesc')" />
           <!-- 统计卡即「导航」：点哪张就翻到对应的明细页签，不用自己去找 -->
           <div class="stat-grid">
             <div class="stat" :class="{ clickable: detailTab === 'struct' }" @click="goDetail('struct')">
@@ -531,7 +538,9 @@ const progressPct = computed(() => {
 // 不是真实进度 —— 真实进度在 total 确定后（两侧行数已知）才出现
 if (isTaskDone.value) return 100
 if (!taskTotal.value) return 60
-return Math.min(100, Math.round(taskDone.value / taskTotal.value * 100))
+// done 可能大于 total（count 偏小：统计期间有人并发写入）：先夹住，否则会长时间停在 100%
+const done = Math.min(taskDone.value, taskTotal.value)
+return Math.min(100, Math.round(done / taskTotal.value * 100))
 })
 
 /** 进度文案：完成后说「对比完成」，而不是继续写「正在对比：…（0/1）」 */
@@ -566,17 +575,44 @@ const nowTime = () => {
   return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${hm}`
 }
 
-const mergeLogs = (serverLogs) => {
+/**
+ * 已消费到哪一条服务端日志。
+ *
+ * 后端给的是**累计行数** `logsSeq`（logs 数组会被 MAX_LOGS 裁掉最旧的），按序号算差量
+ * 才不会错位。以前按「文本去重」：两条一模一样的日志只会显示一条，而且每轮都要重建
+ * 一个 Set（日志上千行时是纯浪费）。
+ */
+let seenLogsSeq = 0
+/** 清空日志 + 复位日志游标（换任务/重新开跑时必须调，否则第一条新日志会被吞掉） */
+const resetLogs = () => {
+  compareLogs.value = []
+  seenLogsSeq = 0
+}
+const mergeLogs = (serverLogs, seqRaw) => {
   if (!Array.isArray(serverLogs)) return
-  const existing = new Set(compareLogs.value.map(l => l.text))
-  let added = 0
-  for (const text of serverLogs) {
-    if (!existing.has(text)) {
-      compareLogs.value.push({ time: nowTime(), text })
-      added++
-    }
+  const seq = typeof seqRaw === 'number' ? seqRaw : null
+  let fresh = []
+  if (seq === null) {
+    // 旧后端（没有 logsSeq）：退回按文本去重，至少不重复渲染
+    const existing = new Set(compareLogs.value.map(l => l.text))
+    fresh = serverLogs.filter(text => !existing.has(text))
+  } else {
+    if (seq <= seenLogsSeq) return
+    // 差量大于数组长度时以数组为准（中间被 MAX_LOGS 裁掉的部分拿不回来）
+    const take = Math.min(seq - seenLogsSeq, serverLogs.length)
+    seenLogsSeq = seq
+    if (take <= 0) return
+    fresh = serverLogs.slice(serverLogs.length - take)
   }
-  if (added && logScroll.value) {
+  if (!fresh.length) return
+  for (const text of fresh) {
+    compareLogs.value.push({ time: nowTime(), text })
+  }
+  // 只留最近 2000 行：长任务上日志无限增长会把弹窗拖慢
+  if (compareLogs.value.length > 2000) {
+    compareLogs.value = compareLogs.value.slice(-2000)
+  }
+  if (logScroll.value) {
     setTimeout(() => { logScroll.value.scrollTop = logScroll.value.scrollHeight }, 50)
   }
 }
@@ -596,7 +632,7 @@ const onProgressBeforeClose = (done) => {
 const onProgressClosed = () => {
   detailTab.value = 'struct'   // 下次打开回到「结构差异」，避免停在上次的页签上让人以为没数据
   if (!loading.value) {
-    compareLogs.value = []
+    resetLogs()
     result.value = null
   }
   // **X 关闭也要复位「查看」场景的隐藏态**：右上角 X 不走 closeProgress 按钮 ——
@@ -817,7 +853,7 @@ const run = async () => {
   if (!tgt.value.connectionId || !tgt.value.database || !tgt.value.table) return ElMessage.warning(t('cmp.pickTarget'))
   loading.value = true
   result.value = null
-  compareLogs.value = []
+  resetLogs()
   taskStatus.value = ''
   taskDone.value = 0
   taskTotal.value = 0
@@ -865,17 +901,36 @@ const run = async () => {
 
 /** 轮询失败计数：对比任务在后端独立跑，前端掉线不该把界面判死（同 SyncDialog 口径） */
 const pollFails = createPollGuard(3)
+/**
+ * **轮询必须串行，且要丢弃过期响应。**
+ *
+ * 间隔只有 800ms，而 `/api/compare/task/{id}` 会把日志一并带回 —— 任务跑久了日志上千行，
+ * 弱链路上单个请求几百毫秒到数秒都有。`setInterval` 不管上一个回来没有，于是同时挂着
+ * 好几个，而它们**返回顺序无法保证**：先发出的旧快照后到，就会把已经涨上去的
+ * done/total 写回旧值（数字越蹦越小），甚至把上一条任务的终态写到当前任务上、顺手
+ * `stopPolling()` 把新任务的轮询一起停掉。这里同一时刻只允许一个请求在途
+ * （与 SyncDialog 同一口径，那边踩过同一个坑）。
+ */
+let polling = false
+let pollingTask = ''
 const pollTask = async () => {
+  const myTask = taskId.value
+  if (!myTask) return
+  if (polling && pollingTask === myTask) return
+  polling = true
+  pollingTask = myTask
   try {
     // 局部变量改名：本函数后面要用 t() 翻译，同名会把它遮蔽掉
-    const st = await compareTaskStatus(taskId.value)
+    const st = await compareTaskStatus(myTask)
+    // 请求在途期间任务已经换了（旧任务的迟到响应）：状态/结果一概不能回写
+    if (myTask !== taskId.value) return
     pollFails.ok()
     taskStatus.value = st.status
     taskDone.value = st.done || 0
     // total=-1 = 分母未知（count 失败兜底）：不覆盖成 -1 —— 否则进度百分比算出负数
     taskTotal.value = st.total > 0 ? st.total : taskTotal.value
     taskCurrent.value = st.current || ''
-    mergeLogs(st.logs)
+    mergeLogs(st.logs, st.logsSeq)
     // 只有**终态**才收摊。必须包含 canceled：取消后后端给的就是 canceled，
     // 漏掉它界面就永远停在"对比中"，对话框再也关不掉（见 TERMINAL_STATUS 的说明）。
     if (isTaskSettled.value) {
@@ -913,6 +968,8 @@ const pollTask = async () => {
       }
     }
   } catch (e) {
+    // 旧任务的请求失败：界面已经切到别的任务了，不能拿它去停轮询/弹错
+    if (myTask !== taskId.value) return
     // 还没到上限：保留「对比中」继续下一轮（后端重启/链路抖动常常几秒就恢复）
     if (!pollFails.fail()) return
     stopPolling()
@@ -922,6 +979,9 @@ const pollTask = async () => {
     ElMessage.error(t('cmp.statusFailed', { detail: e.message }))
     // 与数据传输同一口径：任务在后端跑，前端掉线≠任务失败
     ElMessage.warning(t('common.pollFailedStillRunning'))
+  } finally {
+    // 只清自己那一份：换任务后新请求可能已经把标志指向新的 taskId
+    if (pollingTask === myTask) { polling = false; pollingTask = '' }
   }
 }
 
@@ -957,6 +1017,10 @@ const stopPolling = () => {
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
   // 停轮询即清零：换任务 / 后台运行后再接回来，不该继承上一轮的失败计数
   pollFails.reset()
+  // 在途请求的标志也放掉：万一那条请求再也回不来（链路断），同一个任务从任务中心
+  // 恢复时不该被这个残留标志永久挡住（迟到的响应回来时 finally 不会误清别人的标志）
+  polling = false
+  pollingTask = ''
 }
 
 // ===== 后台运行 / 恢复（与数据传输同一套机制）=====
@@ -1029,7 +1093,7 @@ watch(() => props.resumeId, async (id) => {
       if (st?.result) result.value = st.result
       if (st?.status && st.status !== 'notfound') taskStatus.value = st.status
       // 历史日志也从后端带回来（本地快照留底可能没有）—— 结果窗日志区有内容可看
-      mergeLogs(st?.logs)
+      mergeLogs(st?.logs, st?.logsSeq)
     }).catch((e) => {
       // 结果/日志补全失败：本地快照还在（只是可能被截过、或缺历史日志），
       // 界面不必再弹一次错，但排障时要能看到原因
@@ -1039,7 +1103,7 @@ watch(() => props.resumeId, async (id) => {
   }
   loading.value = true
   result.value = null
-  compareLogs.value = []
+  resetLogs()
   taskStatus.value = ''
   taskDone.value = 0
   taskTotal.value = 0
@@ -1075,7 +1139,7 @@ watch(() => props.modelValue, v => {
   taskId.value = ''
   loading.value = false
   result.value = null
-  compareLogs.value = []
+  resetLogs()
   taskStatus.value = ''
   taskDone.value = 0
   taskTotal.value = 0
@@ -1243,6 +1307,9 @@ onMounted(() => { if (props.modelValue) loadConnections() })
 :global(.el-dialog.progress-dialog .el-dialog__body) { padding: 16px 20px 10px; overflow: auto; }
 .pg-summary { margin-bottom: 14px; }
 .pg-text { font-size: 13px; color: var(--dc-text-dim); margin-top: 8px; text-align: center; }
+/* 失败原因可能是多行长文本（驱动栈/超时说明）：左对齐 + 保留换行，居中会很难读 */
+.pg-text.pg-msg { white-space: pre-wrap; word-break: break-word; text-align: left; max-height: 96px; overflow: auto; }
+.pg-partial { margin-bottom: 12px; }
 .pg-log { margin-bottom: 0; }
 /* 日志原来占 420px，明细加进来后要给它让位：日志是过程记录，明细才是用户要看的结论 */
 .pg-log .log-body { max-height: clamp(120px, 18vh, 240px); }
