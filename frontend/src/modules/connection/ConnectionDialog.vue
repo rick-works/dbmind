@@ -767,6 +767,9 @@ const hasSavedPassword = computed(() => !!props.conn?.hasPassword)
 const hasSavedSshPassword = computed(() => !!props.conn?.hasSshPassword)
 
 const doTest = async () => {
+  // 必填守卫与保存共用：不填主机就点测试，后端只会回一句
+  // 「缺少 (host) 对应的字段」——这种错该在前端就地拦住，字段标红星就是说话算数的意思。
+  if (!assertRequired()) return
   testing.value = true
   // 首次连新类型：后端会先去 Maven 拉驱动，这里把进度显示出来
   startDlPoll(form.value.type)
@@ -802,17 +805,34 @@ const showTestFailure = (message, detail) => {
 const addParam = () => form.value.params.push({ name: '', value: '' })
 const removeParam = (i) => form.value.params.splice(i, 1)
 
-const doSave = async () => {
-  if (!form.value.name) return ElMessage.warning(t('cd.needName'))
-  if (!form.value.env) return ElMessage.warning(t('cd.needEnv'))
-  if (!form.value.group) return ElMessage.warning(t('cd.needGroup'))
-  if (!isFileType.value && !form.value.host && !form.value.jdbcUrl) return ElMessage.warning(t('cd.needHost'))
-  if (!isFileType.value && !form.value.port && !form.value.jdbcUrl) return ElMessage.warning(t('cd.needPort'))
-  // 文件型没有主机/端口，但**必须有文件路径**：以前这里漏了，于是能保存出一个没有文件路径的连接，
-  // 点连接才报错 —— 报错点离出错点越远越难查。
-  if (isFileType.value && !String(form.value.filePath || '').trim()) {
-    return ElMessage.warning(t('cd.needFilePath'))
+/**
+ * 必填项守卫（测试与保存共用）。
+ *
+ * 以前只有保存会检查，点「测试连接」照样能发出一个缺主机的请求，
+ * 然后收到后端兜底的「连接「x」缺少 (host) 对应的字段」弹窗 ——
+ * 提示文案再友好，也不如一开始就不让提交。
+ */
+const assertRequired = () => {
+  if (!form.value.name) { ElMessage.warning(t('cd.needName')); return false }
+  if (!form.value.env) { ElMessage.warning(t('cd.needEnv')); return false }
+  if (!form.value.group) { ElMessage.warning(t('cd.needGroup')); return false }
+  if (isFileType.value) {
+    // 文件型没有主机/端口，但**必须有文件路径**：以前这里漏了，于是能保存出一个没有文件路径的连接，
+    // 点连接才报错 —— 报错点离出错点越远越难查。
+    if (!String(form.value.filePath || '').trim()) {
+      ElMessage.warning(t('cd.needFilePath'))
+      return false
+    }
+    return true
   }
+  // 自定义 JDBC URL 时主机/端口可以留空（连接串里已含地址）
+  if (!form.value.host && !form.value.jdbcUrl) { ElMessage.warning(t('cd.needHost')); return false }
+  if (!form.value.port && !form.value.jdbcUrl) { ElMessage.warning(t('cd.needPort')); return false }
+  return true
+}
+
+const doSave = async () => {
+  if (!assertRequired()) return
   // JDBC URL 打了必填星号：空着就不能存（存进去也是一条连不上的连接）。
   // 正常情况下它由模板自动生成，只有用户手改清空后才会为空。
   if (!String(form.value.jdbcUrl || '').trim()) {
