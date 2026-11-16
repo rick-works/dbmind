@@ -659,7 +659,7 @@ pub async fn rename_object(
             // MySQL 系：视图与表一样走 `RENAME TABLE`。
             // ClickHouse：视图在它这里**就是一个表**（引擎不同而已），同样只认 `RENAME TABLE` ——
             // `ALTER VIEW … RENAME TO` 它没有（与表改名同一个坑，真机对着两种形式验过）。
-            "mysql" | "mariadb" | "doris" | "clickhouse" => {
+            "mysql" | "mariadb" | "doris" | "tidb" | "clickhouse" => {
                 format!("rename table {from} to {to}")
             }
             // Oracle：**没有** `ALTER VIEW … RENAME TO` —— 真机报 `ORA-00922: 选项缺失或无效`；
@@ -694,7 +694,7 @@ pub async fn rename_object(
             _ => format!("alter view {from} rename to {to}"),
         },
         "index" => match dialect.kind.key() {
-            "mysql" | "mariadb" | "doris" => {
+            "mysql" | "mariadb" | "doris" | "tidb" => {
                 return Err(XError::bad_request(
                     "MySQL 重命名索引要写在 ALTER TABLE 里，请在查询页执行",
                 ))
@@ -712,7 +712,7 @@ pub async fn rename_object(
                 dialect.literal(&name),
                 dialect.literal(&new_name)
             ),
-            "mysql" | "mariadb" | "doris" => {
+            "mysql" | "mariadb" | "doris" | "tidb" => {
                 return Err(XError::bad_request(
                     "MySQL 没有重命名存储过程/函数的语法：请用 SHOW CREATE PROCEDURE 取到原文，\
                      DROP 之后用新名字重建",

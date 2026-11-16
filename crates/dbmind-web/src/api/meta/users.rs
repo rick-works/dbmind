@@ -534,13 +534,11 @@ pub async fn user_action(
     } else {
         String::new()
     };
-    let mysql_family = matches!(dialect.kind.key(), "mysql" | "mariadb" | "doris");
+    // TiDB 兼容 MySQL 的用户体系与 GRANT 语法（mysql.user / db / tables_priv 同形）
+    let mysql_family = matches!(dialect.kind.key(), "mysql" | "mariadb" | "doris" | "tidb");
     let mssql_family = dialect.kind.key() == "sqlserver";
     let oracle_family = matches!(dialect.kind.key(), "oracle");
-    let clickhouse_family = dialect.kind.key() == "clickhouse";
     let pg_family = matches!(dialect.kind.key(), "postgresql" | "kingbase");
-    // H2：只有表级授权这一层（没有全局/库级）
-    let h2_family = dialect.kind.key() == "h2";
 
     // 哪些权限入参已经真正实现：MySQL 系连接的三层（全局/库级/表级）—— 由
     // `user_action_sql` 拼出 `grant`/`revoke`；其余（模式级、对象级、服务器角色、
@@ -549,16 +547,21 @@ pub async fn user_action(
     // Doris 没有例程（连 mysql.procs_priv 这张表都没有，dialect.rs 的 user_grants
     // 也排除了它）。它在 mysql_family 白名单里，若不放行这里会被照单全收、拼出
     // MySQL 的 `grant execute on procedure …` —— 在 Doris 上执行必炸。明确拒绝。
-    if dialect.kind.key() == "doris"
+    if matches!(dialect.kind.key(), "doris" | "tidb")
         && options
             .get("routinePrivileges")
             .and_then(Value::as_array)
             .map(|a| !a.is_empty())
             .unwrap_or(false)
     {
-        return Err(XError::bad_request(
-            "Doris 没有存储过程/函数，不支持例程级授权（本次没有对数据库做任何改动）",
-        ));
+        let why = if dialect.kind.key() == "tidb" {
+            "TiDB 的例程级授权（grant execute on procedure）未验证过，不支持"
+        } else {
+            "Doris 没有存储过程/函数，不支持"
+        };
+        return Err(XError::bad_request(format!(
+            "{why}例程级授权（本次没有对数据库做任何改动）"
+        )));
     }
     const UNSUPPORTED: [(&str, &str); 8] = [
         ("privileges", "全局权限"),
