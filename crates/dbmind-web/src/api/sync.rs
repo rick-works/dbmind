@@ -791,7 +791,7 @@ async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<S
         // MySQL 系建库**必须显式 utf8mb4**：服务器默认库字符集常是 latin1，之后中文
         // INSERT 直接报 Incorrect string value 1366（真机踩过）—— 库里先别埋雷。
         // Doris 的字符集由表级控制，无此问题。
-        "mysql" | "mariadb" => {
+        "mysql" | "mariadb" | "tidb" => {
             format!(
                 "create database if not exists {} default charset utf8mb4",
                 target_kind.quote(&db_name)
@@ -1246,7 +1246,7 @@ async fn source_table_rows(
     };
     let quote = |text: &str| text.replace('\'', "''");
     let sql = match kind.kind.key() {
-        "mysql" | "mariadb" | "doris" => format!(
+        "mysql" | "mariadb" | "doris" | "tidb" => format!(
             "select table_name as t, table_rows as n from information_schema.tables \
              where table_schema = '{}'",
             quote(&database)
@@ -1338,7 +1338,7 @@ async fn source_index_list(
             other => Some(other.to_string()),
         }
     };
-    if matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris") {
+    if matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris" | "tidb") {
         let sql = format!("show index from {}", src.scoped_exact(table, source_kind));
         let Ok(result) = run_sql_in(state, &src.conn, &src.scope, sql, 5000).await else {
             return out;
@@ -1464,7 +1464,7 @@ async fn sync_indexes(
     //   SHOW INDEX 才看得到；同名索引多行（一列一行），按 Seq_in_index 聚合成列序；
     // - 其它方言：走 dialect.indexes() 的整库元数据查询（原逻辑）。
     let mut indexes: Vec<(String, bool, Vec<String>)> = Vec::new();
-    let mysql_family = matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris");
+    let mysql_family = matches!(source_kind.kind.key(), "mysql" | "mariadb" | "doris" | "tidb");
     if mysql_family {
         let show_sql = format!(
             "show index from {}",
@@ -1618,7 +1618,8 @@ async fn sync_indexes(
     // 为什么：逐条 `create index` 每条都要扫一遍全表（真机：1 亿行的表 6 个索引，
     // 光建索引就多花好几倍时间，用户看到的是「跑到后面越来越慢」而不是数据量大）；
     // 合并成一条 ALTER 只扫一次。失败再退回逐条建（隔离重名/不支持的索引）。
-    if total > 1 && matches!(target_kind.kind.key(), "mysql" | "mariadb") {
+    // TiDB 同 MySQL：支持单条 ALTER 带多个 add index 子句
+    if total > 1 && matches!(target_kind.kind.key(), "mysql" | "mariadb" | "tidb") {
         let mut parts: Vec<String> = Vec::with_capacity(total);
         for (name, unique, columns) in &indexes {
             let col_list = columns
@@ -2623,7 +2624,8 @@ async fn update_comments(
             let sql = match key {
                 "doris" => format!("alter table {target_name} modify comment {lit}"),
                 "clickhouse" => format!("alter table {target_name} modify comment {lit}"),
-                "mysql" | "mariadb" => format!("alter table {target_name} comment={lit}"),
+                // TiDB 同 MySQL：alter table ... comment=
+                "mysql" | "mariadb" | "tidb" => format!("alter table {target_name} comment={lit}"),
                 "postgresql" | "kingbase" | "oracle" | "dm" => {
                     format!("comment on table {target_name} is {lit}")
                 }
@@ -2670,7 +2672,8 @@ async fn update_comments(
             "postgresql" | "kingbase" | "oracle" | "dm" => {
                 format!("comment on column {target_name}.{qcol} is {lit}")
             }
-            "doris" | "mysql" | "mariadb" => match &full_def {
+            // TiDB 同 MySQL：改注释必须整列重写（MODIFY COLUMN <完整定义> COMMENT）
+            "doris" | "mysql" | "mariadb" | "tidb" => match &full_def {
                 Some(def) => format!("alter table {target_name} modify column {def} comment {lit}"),
                 None => continue,
             },
@@ -4303,7 +4306,7 @@ pub(crate) async fn lookup_existing_keys(
     let lookup_rows = if plan.key_indexes.len() == 1 {
         match plan.target_kind.kind.key() {
             "clickhouse" => 2_000,
-            "mysql" | "mariadb" | "doris" => 1_000,
+            "mysql" | "mariadb" | "doris" | "tidb" => 1_000,
             _ => 500,
         }
     } else {
@@ -4698,7 +4701,12 @@ async fn direct_source_ref(
     let same_family = source_kind.kind == target_kind.kind
         || matches!(
             (source_kind.kind.key(), target_kind.kind.key()),
-            ("mysql", "mariadb") | ("mariadb", "mysql")
+            ("mysql", "mariadb")
+                | ("mariadb", "mysql")
+                // TiDB 与 MySQL 互为同族：类型免翻译、同实例判定等优化照走
+                | ("mysql", "tidb")
+                | ("tidb", "mysql")
+                | ("tidb", "tidb")
         );
     if !same_family {
         return None;
@@ -4961,7 +4969,7 @@ async fn sync_table_inner(
         let drop_sql = match target_kind.kind.key() {
             // PG 额外要 cascade：目标库里已有视图引用这张表时，裸 drop 直接失败
             "postgresql" => format!("drop table if exists {target_name} cascade"),
-            "mysql" | "mariadb" | "doris" | "sqlserver" | "clickhouse" | "sqlite" | "h2" | "kingbase" => {
+            "mysql" | "mariadb" | "tidb" | "doris" | "sqlserver" | "clickhouse" | "sqlite" | "h2" | "kingbase" => {
                 format!("drop table if exists {target_name}")
             }
             _ => format!("drop table {target_name}"),
@@ -5314,7 +5322,7 @@ async fn sync_table_inner(
     // 可用、且没有额外唯一索引时才走它。
     let mysql_secondary_unique = if effective_mode == DataMode::Upsert
         && target_key_ready
-        && matches!(target_kind.kind.key(), "mysql" | "mariadb")
+        && matches!(target_kind.kind.key(), "mysql" | "mariadb" | "tidb")
     {
         mysql_has_secondary_unique(state, &tgt.conn, &tgt.scope, &target_name).await
     } else {
@@ -6065,7 +6073,7 @@ fn adapt_object_definition(definition: &str, source: &Dialect, target: &Dialect)
 
 /// ① 摘掉 MySQL 视图头部专有的 `ALGORITHM=` / `SQL SECURITY …`（见 [`adapt_object_definition`]）。
 fn strip_mysql_view_options(definition: &str, source: &Dialect, target: &Dialect) -> String {
-    let mysql_like = |dialect: &Dialect| matches!(dialect.kind.key(), "mysql" | "mariadb");
+    let mysql_like = |dialect: &Dialect| matches!(dialect.kind.key(), "mysql" | "mariadb" | "tidb");
     if !mysql_like(source) || mysql_like(target) {
         return definition.to_string();
     }
@@ -6096,7 +6104,7 @@ fn strip_mysql_view_options(definition: &str, source: &Dialect, target: &Dialect
 /// 首字符会取成 `_` 本身。
 fn quote_mark(dialect: &Dialect) -> char {
     match dialect.kind.key() {
-        "mysql" | "mariadb" | "doris" | "clickhouse" => '`',
+        "mysql" | "mariadb" | "doris" | "tidb" | "clickhouse" => '`',
         "sqlserver" => '[',
         _ => '"',
     }
@@ -6179,7 +6187,7 @@ async fn sync_view(
         &definition,
         src_db.as_deref(),
         tgt_db.as_deref(),
-        matches!(source_kind.kind.key(), "mysql" | "mariadb"),
+        matches!(source_kind.kind.key(), "mysql" | "mariadb" | "tidb"),
     );
     // 跨类型：MySQL 专有的 `ALGORITHM=` / `SQL SECURITY …` 目标端不认。
     // 真机：MySQL → ClickHouse 报 `Code: 62. Syntax error: failed at position 8 ('ALGORITHM')`。
@@ -6392,7 +6400,7 @@ async fn sync_object_source(
     //（真机：MySQL → PG 整库同步，8 个函数、4 个存储过程全失败，日志只有一句 syntax error）。
     // 这类对象跨类型只能跳过并说明原因，硬试只会留一堆看不懂的报错。
     fn family(key: &str) -> &str {
-        if matches!(key, "mysql" | "mariadb") {
+        if matches!(key, "mysql" | "mariadb" | "tidb") {
             "mysql"
         } else {
             key
@@ -6415,7 +6423,7 @@ async fn sync_object_source(
         &definition,
         side_schema_name(&source_kind, &src.scope, &src.schema).as_deref(),
         side_schema_name(&target_kind, &tgt.scope, &tgt.schema).as_deref(),
-        matches!(source_kind.kind.key(), "mysql" | "mariadb"),
+        matches!(source_kind.kind.key(), "mysql" | "mariadb" | "tidb"),
     );
     // 跨类型：MySQL 专有的 `ALGORITHM=` / `SQL SECURITY …` 目标端不认（真机 ClickHouse 语法错）
     let definition = adapt_object_definition(&definition, &source_kind, &target_kind);
@@ -6854,7 +6862,7 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         let opts = opts.clone();
         async move {
             // 目标端写入参数体检（只有 MySQL 系有这几项）：只提示，不改用户库配置
-            if matches!(target_kind.kind.key(), "mysql" | "mariadb") {
+            if matches!(target_kind.kind.key(), "mysql" | "mariadb" | "tidb") {
                 if let Ok(preflight) = crate::api::scope::resolve(&state, &tgt.conn, &tgt.scope).await {
                     warn_target_write_limits(&state, &preflight).await;
                 }

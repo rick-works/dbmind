@@ -1398,7 +1398,11 @@ impl Dialect {
             // for any data type (8000)）、MySQL「Display width out of range」、
             // Oracle ORA-00907。真机上整库同步因此漏掉 3 张表（建表失败只在日志里）。
             // 同类型照抄（cross=false）时走的就是这里，所以收敛必须放在类型名定稿之后。
-            if let Some(fixed) = unbounded_type_of(&type_name, self.kind.key()) {
+            // tidb 的类型长度语义与 mysql 一致（无界哨兵的收敛按同一套做）
+            if let Some(fixed) = unbounded_type_of(
+                &type_name,
+                if self.kind.key() == "tidb" { "mysql" } else { self.kind.key() },
+            ) {
                 type_name = fixed;
             }
             // **Doris 键列不能是无界文本**：STRING/TEXT 做 UNIQUE/DUPLICATE KEY 建表直接报
@@ -1485,7 +1489,9 @@ impl Dialect {
             // timestamp 列，元数据回的默认值是 NULL（等于没有），我们什么都没写 ⇒ 目标端隐式
             // 零日期 ⇒ 整张表建不出来。
             // 显式写 `null`（可空列，与源表语义一致）或 `current_timestamp`（非空列总得有个值）。
-            if matches!(self.kind.key(), "mysql" | "mariadb") && !has_default && is_timestamp_type(&type_name)
+            if matches!(self.kind.key(), "mysql" | "mariadb" | "tidb")
+                && !has_default
+                && is_timestamp_type(&type_name)
             {
                 line.push_str(if column.nullable {
                     " null"
@@ -1508,7 +1514,7 @@ impl Dialect {
             // 字段注释：**内联**进列定义（只有这几个方言收这种写法）。
             // PG / Oracle / SQL Server 由 `post_create_comments` 另发 `comment on column …`；
             // SQLite / Derby 没有注释概念 —— 都留空，宁可没注释也不生成语法错的语句。
-            if matches!(self.kind.key(), "mysql" | "mariadb" | "doris" | "clickhouse") {
+            if matches!(self.kind.key(), "mysql" | "mariadb" | "tidb" | "doris" | "clickhouse") {
                 if let Some(comment) = column_comments.get(&column.name.to_ascii_lowercase()) {
                     if !comment.trim().is_empty() {
                         line.push_str(" comment ");
@@ -1594,7 +1600,7 @@ impl Dialect {
         let tail = match self.kind.key() {
             // MySQL 系：显式给 utf8mb4 —— 不写的话新表继承**库默认字符集**，实测继承出
             // latin1 后中文数据直接插不进去（Incorrect string value 1366），而源表明明是 utf8
-            "mysql" | "mariadb" => {
+            "mysql" | "mariadb" | "tidb" => {
                 let comment = match table_comment.map(str::trim).filter(|text| !text.is_empty()) {
                     Some(comment) => format!(" comment={}", self.literal(comment)),
                     None => String::new(),
@@ -2170,6 +2176,12 @@ impl TypeFamily {
                 other => other.render(ConnectionKind::Mysql),
             };
         }
+        // TiDB 的类型系统在语法层与 MySQL 完全一致（json / longtext / longblob /
+        // decimal(65) / time(n) / datetime(n) 全部认）。render 的各分支按目标 key
+        // 手写、漏 tidb 会落进 generic 兜底 —— json 被渲染成 clob，TiDB 建表
+        // 直接语法错（真机同步踩过）。归一成 mysql 一并覆盖全部分支；
+        // Doris 的特判在上面已 return，不受影响。
+        let key = if key == "tidb" { "mysql" } else { key };
         match self {
             Self::Int { bytes, unsigned } => Self::int_type(bytes, unsigned, key),
             Self::Decimal { precision, scale } => {
