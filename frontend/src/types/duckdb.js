@@ -17,7 +17,8 @@ export default {
   schemaLevel: 'none',
   defaultSchema: 'main',
   quoteStyle: 'DOUBLE_QUOTE',
-  logo: '',
+  // 官方品牌 SVG（assets/duckdb.svg）；内联鸭形只作文件缺失时的兜底
+  logo: 'duckdb.svg',
   fileType: true,
   fallbackLogo: 'duckdb',
   urlTemplate: 'jdbc:duckdb:{filePath}',

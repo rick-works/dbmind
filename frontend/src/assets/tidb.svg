@@ -1,6 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="16" height="16" role="img" aria-label="TiDB">
-  <rect width="32" height="32" rx="7" fill="#E8432F"/>
-  <path d="M6.5 10.6 16 5.3l9.5 5.3-9.5 5.3-9.5-5.3Z" fill="#FFFFFF" opacity="0.95"/>
-  <path d="M6.5 15.4 16 20.7l9.5-5.3v2.9L16 23.6l-9.5-5.3v-2.9Z" fill="#FFFFFF" opacity="0.62"/>
-  <path d="M6.5 20.2 16 25.5l9.5-5.3v2.4L16 27.9l-9.5-5.3v-2.4Z" fill="#FFFFFF" opacity="0.38"/>
-</svg>
+<?xml version="1.0" standalone="no"?><!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd"><svg t="1794846583308" class="icon" viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" p-id="4201" xmlns:xlink="http://www.w3.org/1999/xlink" width="200" height="200"><path d="M489.408 6.464a45.44 45.44 0 0 1 43.712-1.152l403.392 232.832a47.744 47.744 0 0 1 23.04 38.016v465.6a45.632 45.632 0 0 1-21.888 38.08l-403.392 232.768a42.624 42.624 0 0 1-43.84 0L85.952 779.84C73.28 770.56 64 756.8 64 741.76v-465.6a42.24 42.24 0 0 1 21.952-36.864z m20.48 175.232L224 339.584v126.72L376.128 377.6l-8.064 380.352 115.2 62.208 2.368-494.4 144.064-78.4-119.872-65.664zM790.72 349.248L672 412.608v333.056l118.72-56.512V349.248z" fill="#D81E06" p-id="4202"></path></svg>
