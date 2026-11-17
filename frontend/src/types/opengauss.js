@@ -17,7 +17,7 @@ export default {
   schemaLevel: 'schema',
   defaultSchema: 'public',
   quoteStyle: 'DOUBLE_QUOTE',
-  logo: '',
+  logo: 'opengauss.svg',
   fileType: false,
   fallbackLogo: 'opengauss',
   defaultPort: 5432,

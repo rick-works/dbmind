@@ -20,6 +20,10 @@
 | 9 | DB2 | `lab-db2` | 50000 | `db2inst1` | `Dbmind@123` | **`DEMO`**（大写） | 首次启动约 10 分钟 |
 | 10 | ClickHouse | `ch1` / `ch2` / `ch3` | 8123 / 8124 / 8125（HTTP）<br>9001 / 9002 / 9003（原生 TCP） | `default` | `Dbmind@123` | `demo` | 3 分片集群 `dbmind_cluster`，任选一节点连 |
 | 11 | Doris | `doris-fe1` / `fe2` / `fe3` | 9030 / 9031 / 9032（MySQL 协议）<br>8030 / 8031 / 8032（Web UI） | `root` | `Dbmind@123` | `demo` | 3 FE + 3 BE，任选一个 FE 连 |
+| 12 | TiDB | `lab-tidb` | **4000** | `root` | `Dbmind@123` | 库名可留空 | v8.5.1 单机（TiKV 内置），演示表 `demo.products`(5 行) |
+| 13 | openGauss | `lab-opengauss` | **5433** | `gaussdb` 或 `opengauss` | `Dbmind@123` | `postgres` / `demo` | 5.0.0，**5432 被 lab-postgresql 占用，故映射到 5433**；演示表 `demo.accounts`(4 行) |
+| 14 | StarRocks | `lab-starrocks`（**待装**） | 计划 **9034**（MySQL 协议，9030 已被 Doris 占用） | `root` | 留空 | `demo` | `starrocks/allin1-ubuntu` 镜像体积大、拉取受限，尚未部署 |
+| 15 | OceanBase | `lab-oceanbase`（**待装**） | 计划 **3881**（MySQL 协议） | `root` | `Dbmind@123` | `demo` | `oceanbase/oceanbase-ce` 拉取受限，尚未部署；需 ≥8G 内存 |
 
 补充说明：
 
@@ -28,6 +32,15 @@
 - **Oracle**：口令含 `@`，在 shell 里用 sqlplus 时连接串要整体加引号（DBMind 界面不受影响）。
 - **SQL Server**：sa 口令是 `Dbmind@12345`（带 5 位数字尾），别和别的库混了。
 - **文件型库（SQLite / DuckDB / H2 / Derby）**：DBMind 连的是本机文件路径，**不在服务器上**，用跑 DBMind 的 Windows 机器任意 `.db` / `.duckdb` 文件即可。
+- **TiDB**：类型选 **TiDB**（不是 MySQL）；端口 **4000**；`root` / `Dbmind@123`。首次连接库名可留空，进去再选 `demo`。
+- **openGauss**：类型选 **openGauss**；端口 **5433**（**不是 5432**，5432 是实验室里的 PostgreSQL）。
+  驱动必须用 `org.opengauss:opengauss-jdbc:5.0.0-og`（**带 `-og` 后缀**，Maven 上同号无后缀的是误传的 PG 副本）；
+  URL 用 `jdbc:opengauss://host:port/db?sslmode=disable`，别带 `reWriteBatchedInserts` 这类 PG 参数（fork 不认）。
+- **StarRocks / OceanBase（待装）**：镜像拉取受限，暂未部署。装好后按计划端口接入：
+  StarRocks 用 **9034**（9030 是 Doris）、账号 `root`、口令留空；
+  OceanBase 用 **3881**、`root` / `Dbmind@123`（MySQL 模式）。
+  装之前先 `ss -tlnp | grep 9030` 确认端口没被占。
+- **KingbaseES**：实验室**暂未部署**（DBMind 已支持，接入方式同 PostgreSQL，驱动用官方 `kingbase8`）。
 
 ## 二、数据目录 · 日志 · 重启
 
@@ -48,6 +61,10 @@
 | `ch-keeper1..3` | `…/clickhouse/data/keeper1..3` | `docker logs ch-keeper1` | `docker restart ch-keeper1` |
 | `doris-fe1..3` | `…/doris/data/fe1..3` | `docker logs doris-fe1`；容器内 `/opt/apache-doris/fe/log/fe.log`（`fe.audit.log` 审计） | `docker restart doris-fe1` |
 | `doris-be1..3` | `…/doris/data/be1..3` | `docker logs doris-be1`；容器内 `/opt/apache-doris/be/log/be.INFO` | `docker restart doris-be1` |
+| `lab-tidb` | 无 bind mount（数据在容器层） | `docker logs lab-tidb` | `docker restart lab-tidb` |
+| `lab-opengauss` | 无 bind mount（数据在容器层，`/var/lib/opengauss/data`） | `docker logs lab-opengauss`；PG 日志在容器内 `/var/lib/opengauss/data/pg_log/` | `docker restart lab-opengauss` |
+| `lab-starrocks`（**待装**） | 装好后无 bind mount（数据在容器层） | `docker logs lab-starrocks`；FE/BE 日志在容器内 `/opt/starrocks/*/log/` | `docker restart lab-starrocks` |
+| `lab-oceanbase`（**待装**） | 装好后无 bind mount（数据在容器层） | `docker logs lab-oceanbase` | `docker restart lab-oceanbase` |
 
 `…` = `/opt/dbmind-labs`。三套 compose 项目：
 
@@ -115,3 +132,42 @@ cd /opt/dbmind-labs/doris && docker compose down && rm -rf data && docker compos
 | ES 连不上 | 用 9200 HTTP，不是 9300；无账号口令 |
 | MongoDB 认证失败 | 本实例**没开认证**，用户名口令留空 |
 | DB2 连不上 / 库不存在 | 库名 `DEMO`；首次启动要等 10 分钟左右才建好 |
+| openGauss 报 `08P01 通讯协定错误 / Session 初始化失败` | **端口连错了**（连到 5432 的 PostgreSQL 了）；openGauss 在 **5433**。另外驱动必须是 `…-og` 版本 |
+| openGauss 密码认证失败 | 用 `gaussdb` / `Dbmind@123`；服务端 `password_encryption_type=2`（sha256）时 `-og` 驱动才能过，**PG 官方驱动连不上** |
+| TiDB 连接被拒（Access denied） | 口令是 `Dbmind@123`（不是空）；端口 4000 |
+| StarRocks 报表不存在 | 端口 **9034**（9030 是 Doris）；先 `create database demo`；建表要带 `DISTRIBUTED BY HASH(...)` |
+| 端口冲突 | 5432 = PostgreSQL、9030 = Doris，所以 openGauss/StarRocks/OceanBase 分别映射到 **5433 / 9034 / 3881**；新容器映射前先 `ss -tlnp \| grep <port>` |
+
+## 六、新增库的装法与验证（2026-11-17）
+
+### TiDB（`lab-tidb`，4000）
+
+```bash
+docker run -d --name lab-tidb --restart unless-stopped -p 4000:4000 pingcap/tidb:v8.5.1
+# 容器里只有 tidb-server，没有 mysql 客户端；用 DBMind 或任意 MySQL 客户端连 4000
+```
+
+- 账号 `root` / `Dbmind@123`（首次启动后通过 `ALTER USER` 设的；**空口令连不上**）。
+- 演示数据：`demo.products` 5 行。
+- DBMind 里类型选 **TiDB**（不是 MySQL），库名可留空。
+
+### openGauss（`lab-opengauss`，5433）
+
+```bash
+docker run -d --name lab-opengauss --restart unless-stopped \
+  -e GS_PASSWORD=Dbmind@123 -p 5433:5432 opengauss/opengauss:5.0.0
+```
+
+- 容器内用户是 `opengauss`（超级用户）与业务用户 `gaussdb`；`gsql` 在 `/usr/local/opengauss/bin/gsql`，
+  要先 `export LD_LIBRARY_PATH=/usr/local/opengauss/lib`。
+- 端口 **5433**：5432 已被 `lab-postgresql` 占用；**连错端口会报 `08P01 通讯协定错误`**。
+- DBMind 侧驱动 `org.opengauss:opengauss-jdbc:5.0.0-og`（带 `-og`），URL `jdbc:opengauss://…?sslmode=disable`。
+- 演示数据：`demo.accounts` 4 行。
+
+### 已验证的闭环（2026-11-17）
+
+| 库 | 建源 | SQL 执行 | 元数据/浏览 | 备注 |
+|---|---|---|---|---|
+| TiDB | ✅ | ✅ 建库建表插 5 行 | ✅ | 22 条用户管理探针此前已过 |
+| openGauss | ✅ | ✅ 建库建表插 4 行 | ✅ 列清单正常 | 首次把驱动/端口两个坑都踩了，见第五章 |
+| StarRocks / OceanBase | — | — | — | 镜像体积大、当前网络拉取受限，待装 |

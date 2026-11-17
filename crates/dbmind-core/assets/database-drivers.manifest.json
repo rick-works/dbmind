@@ -925,12 +925,12 @@
       "driverStoreVisible": true,
       "exposed": true,
       "jdbc": {
-        "artifact": "org.opengauss:opengauss-jdbc:5.0.0",
+        "artifact": "org.opengauss:opengauss-jdbc:5.0.0-og",
         "artifacts": [
-          "org.opengauss:opengauss-jdbc:5.0.0"
+          "org.opengauss:opengauss-jdbc:5.0.0-og"
         ],
         "driverClass": "org.opengauss.Driver",
-        "urlTemplate": "jdbc:opengauss://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+        "urlTemplate": "jdbc:opengauss://{host}:{port}/{database}?sslmode=disable"
       },
       "key": "opengauss",
       "label": "openGauss",

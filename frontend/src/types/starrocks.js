@@ -19,7 +19,7 @@ export default {
   schemaLevel: 'none',
   defaultSchema: '',
   quoteStyle: 'BACKTICK',
-  logo: '',
+  logo: 'starrocks.svg',
   fileType: false,
   fallbackLogo: 'starrocks',
   defaultPort: 9030,

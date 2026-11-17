@@ -17,7 +17,7 @@ export default {
   schemaLevel: 'none',
   defaultSchema: '',
   quoteStyle: 'BACKTICK',
-  logo: '',
+  logo: 'oceanbase.svg',
   fileType: false,
   fallbackLogo: 'oceanbase',
   defaultPort: 2881,
