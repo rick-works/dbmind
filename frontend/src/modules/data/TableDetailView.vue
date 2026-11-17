@@ -889,6 +889,22 @@ const colRows = ref([])
  */
 const dorisColAttrs = new Map()
 
+/**
+ * Doris / StarRocks 的「聚合类型」白名单（写进 `MODIFY COLUMN` 的那一段）。
+ *
+ * `EXTRA` 这一列里不只放聚合类型：StarRocks 的 `desc … all` 对带默认值的列给的是
+ * `NONE,DEFAULT_GENERATED`（实测 5.1），`DEFAULT_GENERATED` 是 MySQL 系的遗留标记。
+ * 原样拼进去就成了
+ *   `MODIFY COLUMN created_at DATETIME NONE,DEFAULT_GENERATED NULL DEFAULT …`
+ * 服务端报 `Unexpected input 'NONE'`（用户就是这么撞上的）。
+ * 所以只认白名单里的词；`NONE` 视同「没有聚合类型」——不写才是对的（写了是语法错）。
+ */
+const DORIS_AGGS = ['SUM', 'MIN', 'MAX', 'REPLACE_IF_NOT_NULL', 'REPLACE', 'HLL_UNION', 'BITMAP_UNION', 'QUANTILE_UNION']
+const dorisAggOf = (...raw) => {
+  const tokens = raw.join(',').toUpperCase().split(/[\s,]+/).filter(Boolean)
+  return DORIS_AGGS.find(a => tokens.includes(a)) || ''
+}
+
 /** 把 Doris 列属性补到当前字段行上（重建后要再调一次，见下面的 watch） */
 const applyDorisColAttrs = () => {
   if (!dorisColAttrs.size) return
@@ -1445,6 +1461,11 @@ const posPart = (f) => {
 const dorisDefault = (v) => {
   const s = String(v ?? '').trim()
   if (/^null$/i.test(s)) return ' NULL'
+  // 时间函数类默认值**不能加引号**：StarRocks（实测 5.1）对
+  // `MODIFY COLUMN ts DATETIME NULL DEFAULT 'CURRENT_TIMESTAMP'` 直接报 analyzing error
+  //（加引号就成了字符串字面量，类型也对不上）；`DEFAULT CURRENT_TIMESTAMP` 才过。
+  // 这里只是「顺带带上原默认值」，判错的代价是整条 ALTER 被拒，所以放宽到常见写法。
+  if (/^(current_timestamp|current_date|current_time|now)\s*(\(\s*\))?$/i.test(s)) return ' ' + s
   return ` '${sq(s)}'`
 }
 
@@ -1998,6 +2019,36 @@ const idxCreateParts = () => {
   return parts
 }
 
+/**
+ * Doris 族（Doris / StarRocks）：同一张表的 schema change 是**异步、一次一个**的。
+ *
+ * 上一条还没跑完就发下一条，服务端直接报
+ * `A schema change operation is in progress on the table "x"`（StarRocks 5.1 / Doris 2.x 实测）。
+ * 界面上「改两列注释」就会生成两条 `ALTER … MODIFY COLUMN`，第二条必挂 —— 用户看到的是
+ * 「保存了但只有一列生效」。列级子句能合并成一条（实测 `MODIFY …, MODIFY …` 与
+ * `MODIFY …, ADD COLUMN …` 都能过），所以这里合并；`RENAME COLUMN` 不能混在同一条里
+ * （实测报 `Unexpected exception: null`），保持独立语句。
+ */
+const mergeDorisColumnAlters = (parts, table) => {
+  const stmts = parts
+    .flatMap(p => String(p).split(/;\s*\n/).map(s => s.trim()).filter(Boolean))
+  const out = []
+  let merged = null
+  for (const s of stmts) {
+    const m = s.match(/^ALTER\s+TABLE\s+(.+?)\s+((?:MODIFY|ADD|DROP)\s+COLUMN\s+[\s\S]+)$/i)
+    if (m && m[1].trim() === table) {
+      if (!merged) {
+        merged = { head: `ALTER TABLE ${m[1].trim()}`, clauses: [] }
+        out.push(merged)
+      }
+      merged.clauses.push(m[2].trim())
+      continue
+    }
+    out.push(s)
+  }
+  return out.map(x => (typeof x === 'string' ? x : `${x.head} ${x.clauses.join(', ')}`))
+}
+
 // 字段变更：按方言生成完整 ALTER（与旧的逐条保存顺序一致）
 const colParts = () => {
   const removed = colRows.value.filter(r => r._state === 'deleted')
@@ -2078,7 +2129,8 @@ const colParts = () => {
       if (remainPk.length) parts.push(`ALTER TABLE ${t} DROP PRIMARY KEY`)
       if (newPk.length) parts.push(`ALTER TABLE ${t} ADD PRIMARY KEY (${newPk.map(qt).join(', ')})`)
     }
-    return parts
+    // Doris 族：列级子句合并成一条（异步 schema change，一次只能跑一个）
+    return ddlStyle.value === 'doris' ? mergeDorisColumnAlters(parts, t) : parts
   }
   // 非 MySQL：删除 → 修改 → 新增（主键约束的增删排在两侧，见下面说明）
   const oldPk = origPkCols.value
@@ -2779,8 +2831,11 @@ const load = async () => {
               // IndexName / IndexKeyType / Field / Type / InternalType / Null / Key / Default /
               // Extra / Visible / … —— **没有** AggregationType，聚合类型在 `Extra` 里
               // （NONE / SUM / REPLACE / MAX…）；是不是 key 列看 `Key` = true/false。
-              agg: pick(row, 'Extra') || pick(row, 'AggregationType'),
-              key: pick(row, 'Key').toLowerCase() === 'true',
+              // StarRocks 的同名列会把默认值标记也塞进 Extra（`NONE,DEFAULT_GENERATED`），
+              // 所以这里过一遍白名单，只留真正的聚合类型（见 dorisAggOf）。
+              agg: dorisAggOf(pick(row, 'AggregationType'), pick(row, 'Extra')),
+              // `desc … all` 给 true/false，`show full columns` 给 YES/NO —— 两种都认
+              key: ['true', 'yes'].includes(pick(row, 'Key').toLowerCase()),
             })
           }
         }
