@@ -1,5 +1,5 @@
 <template>
-  <el-dialog :model-value="modelValue" width="760px" append-to-body
+  <el-dialog :model-value="modelValue" width="min(1040px, 94vw)" append-to-body
              :close-on-click-modal="true" :show-close="true"
              @update:model-value="$emit('update:modelValue', $event)"
              class="dsp-dialog">
@@ -21,7 +21,7 @@
         </div>
         <div class="ds-grid">
           <div v-for="t in group.items" :key="t.code" class="ds-card" @click="pick(t.code)">
-            <DbLogo :type="t.code" :size="42" />
+            <DbLogo :type="t.code" :size="46" />
             <div class="ds-card-info">
               <div class="ds-card-name">{{ t.label }}</div>
               <div class="ds-card-meta">
@@ -115,7 +115,8 @@ const pick = (code) => {
 }
 
 /* 深色主题覆盖 */
-.ds-picker { max-height: 62vh; overflow-y: auto; padding-right: 4px; }
+/* 21 种类型分 5 组，弹窗加宽后固定 4 列；高度放到 74vh，减少滚动 */
+.ds-picker { max-height: 74vh; overflow-y: auto; padding-right: 4px; }
 .ds-picker :deep(.el-input__wrapper) {
   background: var(--dc-bg-input); box-shadow: 0 0 0 1px var(--dc-bg-hover) inset;
 }
@@ -137,12 +138,12 @@ const pick = (code) => {
 
 .ds-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 12px;
 }
 .ds-card {
-  display: flex; align-items: center; gap: 10px;
-  padding: 12px; border: 1px solid var(--dc-bg-hover);
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; border: 1px solid var(--dc-bg-hover);
   border-radius: 10px; cursor: pointer; position: relative;
   transition: all .18s ease;
   background: var(--dc-bg-soft);
@@ -158,8 +159,8 @@ const pick = (code) => {
   box-shadow: none;
 }
 .ds-card-info { min-width: 0; overflow: hidden; }
-.ds-card-name { font-size: 14px; font-weight: 600; color: var(--dc-text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ds-card-meta { font-size: 12px; color: var(--dc-text-dim); margin-top: 2px; }
+.ds-card-name { font-size: 15px; font-weight: 600; color: var(--dc-text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ds-card-meta { font-size: 12.5px; color: var(--dc-text-dim); margin-top: 3px; }
 .ds-card-badge {
   position: absolute; right: 8px; top: 8px;
   font-size: 11px; color: var(--dc-warning); background: var(--dc-warning-wash);
