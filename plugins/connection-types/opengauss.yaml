@@ -20,10 +20,20 @@ localFile: false
 # openGauss 默认监听 5432（与 PG 相同）
 defaultPort: 5432
 jdbc:
+  # openGauss JDBC 是 PG 驱动的 fork：类名改成了 org.opengauss.Driver、URL 前缀
+  # jdbc:opengauss:（不是 jdbc:postgresql:）。**不能用 PG 官方驱动替代**：
+  # openGauss 默认口令加密是 sha256，PG 驱动不会算 —— 会登录拒绝。
+  # Maven 上的 5.0.0 版本是误传的 PG 副本（Driver.class 里连 opengauss 字符串都没有），
+  # 实测只有 3.x 是真 fork —— 锁 3.0.0。
   driverClass: org.opengauss.Driver
-  # openGauss 官方 JDBC（PG 驱动分叉），参数与 PG 同款
-  urlTemplate: "jdbc:opengauss://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
-  artifact: org.opengauss:opengauss-jdbc:5.0.0
+  # openGauss 官方 JDBC（PG 驱动分叉），参数与 PG 同款。
+  # Maven 上同号「裸版本」（如 5.0.0）是误传的 PG 副本，**必须用带 -og 后缀的版本**
+  # （org.opengauss.Driver / jdbc:opengauss: 前缀只在 -og 里）。
+  # openGauss 的 fork 对 PG 驱动的部分参数不认，URL 保持最小集；
+  # sslmode=disable：容器/远程直连时 SSL 协商会卡死握手（08P01 Session 初始化失败），
+  # 生产建议走服务端侧的 SSL 配置后再打开。
+  urlTemplate: "jdbc:opengauss://{host}:{port}/{database}?sslmode=disable"
+  artifact: org.opengauss:opengauss-jdbc:5.0.0-og
 traits:
   singleDatabase: false
   schemaAware: true
