@@ -2040,6 +2040,7 @@ export default {
   'settings.driver.tipMissing': '缺少 {jars}',
   'settings.driver.tipNotDownloaded': '驱动未下载',
   'settings.driver.catRelational': '关系型数据库',
+  'settings.driver.catAll': '全部',
   // ClickHouse / Doris：列存分析引擎，不是 MySQL 那类关系型库
   'settings.driver.catOlap': '分析型数据库 (OLAP)',
   'settings.driver.catFile': '文件型数据库',

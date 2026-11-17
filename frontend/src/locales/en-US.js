@@ -2028,6 +2028,7 @@ export default {
   'settings.driver.tipMissing': 'Missing {jars}',
   'settings.driver.tipNotDownloaded': 'The driver has not been downloaded',
   'settings.driver.catRelational': 'Relational databases',
+  'settings.driver.catAll': 'All',
   // ClickHouse / Doris: column-store analytical engines, not relational databases
   'settings.driver.catOlap': 'Analytical databases (OLAP)',
   'settings.driver.catFile': 'File-based databases',

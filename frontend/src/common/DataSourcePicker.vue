@@ -13,25 +13,29 @@
       <el-input v-model="keyword" clearable
                 :prefix-icon="Search" class="ds-search" />
 
-      <div v-for="group in filteredGroups" :key="group.name" class="ds-group">
-        <div class="ds-group-title">
-          <el-icon :size="15"><component :is="group.icon" /></el-icon>
-          {{ group.name }}
-          <span class="ds-group-count">{{ group.items.length }}</span>
-        </div>
-        <div class="ds-grid">
-          <div v-for="t in group.items" :key="t.code" class="ds-card" @click="pick(t.code)">
-            <DbLogo :type="t.code" :size="46" />
-            <div class="ds-card-info">
-              <div class="ds-card-name">{{ t.label }}</div>
-              <div class="ds-card-meta">
-                <template v-if="t.defaultPort">{{ $t('cd.port') }} {{ t.defaultPort }}</template>
-                <template v-else>{{ $t('dsp.localFile') }}</template>
-              </div>
+      <!-- 分类用 tab 栏切换（21 种类型 5 个分组，堆成多段太长） -->
+      <div class="ds-tabs" role="tablist">
+        <button v-for="tb in tabs" :key="tb.key" type="button" role="tab"
+                class="ds-tab" :class="{ 'is-active': activeTab === tb.key }"
+                :aria-selected="activeTab === tb.key" @click="activeTab = tb.key">
+          <el-icon v-if="tb.icon" :size="15"><component :is="tb.icon" /></el-icon>
+          <span class="ds-tab-name">{{ tb.name }}</span>
+          <span class="ds-tab-count">{{ tb.count }}</span>
+        </button>
+      </div>
+
+      <div class="ds-grid">
+        <div v-for="t in visibleItems" :key="t.code" class="ds-card" @click="pick(t.code)">
+          <DbLogo :type="t.code" :size="46" />
+          <div class="ds-card-info">
+            <div class="ds-card-name">{{ t.label }}</div>
+            <div class="ds-card-meta">
+              <template v-if="t.defaultPort">{{ $t('cd.port') }} {{ t.defaultPort }}</template>
+              <template v-else>{{ $t('dsp.localFile') }}</template>
             </div>
-            <div v-if="!t.builtin && !isReady(t.code)" class="ds-card-badge" :title="$t('dsp.driverTip')">{{ $t('dsp.downloadDriver') }}</div>
-            <div v-else-if="!t.builtin && isReady(t.code)" class="ds-card-badge ds-card-ready" :title="$t('dsp.driverDownloaded')">{{ $t('settings.driver.tagReady') }}</div>
           </div>
+          <div v-if="!t.builtin && !isReady(t.code)" class="ds-card-badge" :title="$t('dsp.driverTip')">{{ $t('dsp.downloadDriver') }}</div>
+          <div v-else-if="!t.builtin && isReady(t.code)" class="ds-card-badge ds-card-ready" :title="$t('dsp.driverDownloaded')">{{ $t('settings.driver.tagReady') }}</div>
         </div>
       </div>
 
@@ -41,7 +45,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { Search, Coin, Document, Box, CirclePlus, DataAnalysis } from '@element-plus/icons-vue'
 import { getDriverTypes, getDriverStatus } from '../api'
 import DbLogo from './DbLogo.vue'
@@ -99,6 +103,30 @@ const filteredGroups = computed(() => {
   })).filter(g => g.items.length)
 })
 
+// 分类 tab：全部 + 各分组。分组名即 key（同一次渲染内稳定，搜索改的是数量不是名字）
+const activeTab = ref('all')
+const tabs = computed(() => {
+  const list = filteredGroups.value
+  const total = list.reduce((n, g) => n + g.items.length, 0)
+  return [
+    { key: 'all', name: t('settings.driver.catAll'), icon: null, count: total },
+    ...list.map(g => ({ key: g.name, name: g.name, icon: g.icon, count: g.items.length }))
+  ]
+})
+
+// 搜索把当前 tab 的组滤没了就自动回「全部」，不然会停在空白页
+watch([tabs, keyword], () => {
+  if (activeTab.value !== 'all' && !tabs.value.some(tb => tb.key === activeTab.value)) {
+    activeTab.value = 'all'
+  }
+})
+
+const visibleItems = computed(() => {
+  if (activeTab.value === 'all') return filteredGroups.value.flatMap(g => g.items)
+  const g = filteredGroups.value.find(x => x.name === activeTab.value)
+  return g ? g.items : filteredGroups.value.flatMap(x => x.items)
+})
+
 const pick = (code) => {
   emit('selected', code)
   emit('update:modelValue', false)
@@ -125,15 +153,37 @@ const pick = (code) => {
 
 .ds-search { margin-bottom: 14px; }
 
-.ds-group { margin-bottom: 18px; }
-.ds-group-title {
-  display: flex; align-items: center; gap: 6px;
-  font-size: 14px; font-weight: 600; color: var(--dc-text-dim);
-  margin-bottom: 10px;
+/* 分类 tab 栏：胶囊式分段控件，激活态用主色底 */
+.ds-tabs {
+  display: flex; flex-wrap: wrap; gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--dc-bg-hover);
 }
-.ds-group-count {
-  font-size: 12px; font-weight: 400; color: var(--dc-text-dim);
-  background: var(--dc-bg-hover); border-radius: 8px; padding: 0 7px; line-height: 16px;
+.ds-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: 999px;
+  border: 1px solid var(--dc-bg-hover);
+  background: var(--dc-bg-soft);
+  color: var(--dc-text-dim);
+  font: inherit; font-size: 13.5px; font-weight: 600;
+  cursor: pointer; transition: all .16s ease;
+}
+.ds-tab:hover { color: var(--dc-text-strong); border-color: var(--el-color-primary-light-5); }
+.ds-tab.is-active {
+  color: var(--dc-on-primary);
+  background: linear-gradient(135deg, var(--dc-primary), var(--dc-primary-deep));
+  border-color: transparent;
+  box-shadow: 0 2px 10px var(--dc-primary-glow);
+}
+.ds-tab-name { white-space: nowrap; }
+.ds-tab-count {
+  font-size: 12px; font-weight: 400;
+  background: rgba(255, 255, 255, .16);
+  border-radius: 8px; padding: 0 6px; line-height: 17px;
+}
+.ds-tab:not(.is-active) .ds-tab-count {
+  background: var(--dc-bg-hover); color: var(--dc-text-dim);
 }
 
 .ds-grid {
