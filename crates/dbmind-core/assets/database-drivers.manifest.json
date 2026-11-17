@@ -794,6 +794,165 @@
       "typeCode": "DERBY"
     },
     {
+      "agentKey": "doris",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 9030,
+      "dialect": "MySQL",
+      "driverStoreOrder": 15,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "com.mysql:mysql-connector-j:9.1.0",
+        "artifacts": [
+          "com.mysql:mysql-connector-j:9.1.0"
+        ],
+        "driverClass": "com.mysql.cj.jdbc.Driver",
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+      },
+      "key": "starrocks",
+      "label": "StarRocks",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "mysql",
+      "order": 1450,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Starrocks",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "operate",
+      "traits": {
+        "schemaAware": false,
+        "singleDatabase": false
+      },
+      "typeCode": "STARROCKS"
+    },
+    {
+      "agentKey": "mysql",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 2881,
+      "dialect": "MySQL",
+      "driverStoreOrder": 16,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "com.mysql:mysql-connector-j:9.1.0",
+        "artifacts": [
+          "com.mysql:mysql-connector-j:9.1.0"
+        ],
+        "driverClass": "com.mysql.cj.jdbc.Driver",
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+      },
+      "key": "oceanbase",
+      "label": "OceanBase",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "mysql",
+      "order": 1460,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Oceanbase",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "operate",
+      "traits": {
+        "schemaAware": false,
+        "singleDatabase": false
+      },
+      "typeCode": "OCEANBASE"
+    },
+    {
+      "agentKey": "opengauss",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 5432,
+      "dialect": "PostgreSQL",
+      "driverStoreOrder": 17,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "org.opengauss:opengauss-jdbc:5.0.0",
+        "artifacts": [
+          "org.opengauss:opengauss-jdbc:5.0.0"
+        ],
+        "driverClass": "org.opengauss.Driver",
+        "urlTemplate": "jdbc:opengauss://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+      },
+      "key": "opengauss",
+      "label": "openGauss",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "postgresql",
+      "order": 1470,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Opengauss",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "operate",
+      "traits": {
+        "schemaAware": true,
+        "singleDatabase": false
+      },
+      "typeCode": "OPENGAUSS"
+    },
+    {
       "agentKey": "mongodb",
       "capabilities": {
         "dataTransfer": false,

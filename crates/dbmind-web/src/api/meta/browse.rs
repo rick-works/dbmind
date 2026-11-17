@@ -14,7 +14,7 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         // information_schema 一律回大写（`VARCHAR`），列表就写大写 —— 否则「下拉里是 varchar、
         // 回显出来是 VARCHAR」，同一个类型两种写法（用户反馈）。
         // PG 系的元数据本来就回小写（`varchar`/`timestamptz`），那里保持小写才是一致的。
-        "mysql" | "mariadb" | "tidb" => vec![
+        "mysql" | "mariadb" | "tidb" | "oceanbase" => vec![
             "INT",
             "BIGINT",
             "SMALLINT",
@@ -35,7 +35,7 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         ],
         // Doris 与 MySQL 同一套类型，但它自己的元数据报 `string`（它的 VARCHAR 别名）——
         // 清单里带上 STRING，前端的"回显向清单对齐"才能把它收进同一种写法（见 typeName.js）。
-        "doris" => vec![
+        "doris" | "starrocks" => vec![
             "INT",
             "BIGINT",
             "SMALLINT",
@@ -58,7 +58,7 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
         // PG 系：前面的标准写法给人看，后面这几个是 **PG 自己 `udt_name` 报出来的写法**
         // （int2/int4/int8/float4/float8/varchar/bool）—— 少一个，回显就会是清单外的名字，
         // "下拉 = 回显"就断了（见 typeName.js）。
-        "postgresql" | "kingbase" => vec![
+        "postgresql" | "kingbase" | "opengauss" => vec![
             "integer",
             "bigint",
             "smallint",
@@ -224,10 +224,10 @@ fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
 fn index_types_of(kind: ConnectionKind) -> Vec<&'static str> {
     match kind.key() {
         "mysql" | "mariadb" => vec!["BTREE", "HASH", "FULLTEXT", "SPATIAL"],
-        "doris" => vec!["BTREE", "INVERTED", "BITMAP", "BLOOMFILTER"],
+        "doris" | "starrocks" => vec!["BTREE", "INVERTED", "BITMAP", "BLOOMFILTER"],
         // TiDB 官方只认 BTREE/HASH（FULLTEXT/SPATIAL 写了是语法错）
-        "tidb" => vec!["BTREE", "HASH"],
-        "postgresql" | "kingbase" => vec!["btree", "hash", "gist", "gin", "spgist", "brin"],
+        "tidb" | "oceanbase" => vec!["BTREE", "HASH"],
+        "postgresql" | "kingbase" | "opengauss" => vec!["btree", "hash", "gist", "gin", "spgist", "brin"],
         "oracle" | "dm" => vec!["NORMAL", "UNIQUE", "BITMAP", "FUNCTION-BASED NORMAL"],
         "sqlserver" => vec!["CLUSTERED", "NONCLUSTERED", "UNIQUE", "COLUMNSTORE"],
         "clickhouse" => vec!["minmax", "set", "bloom_filter", "ngrambf_v1", "tokenbf_v1"],
@@ -243,7 +243,8 @@ fn index_types_of(kind: ConnectionKind) -> Vec<&'static str> {
 /// 能直接落 SQL 的完整写法；其它方言没有这个概念，如实给空。
 fn engines_of(kind: ConnectionKind) -> Vec<&'static str> {
     match kind.key() {
-        "mysql" | "mariadb" | "doris" => vec![
+        // OB 语法层接受 ENGINE=（解析后忽略）；StarRocks 与 Doris 同源
+        "mysql" | "mariadb" | "oceanbase" | "doris" | "starrocks" => vec![
             "InnoDB", "MyISAM", "MEMORY", "CSV", "ARCHIVE", "BLACKHOLE", "MRG_MYISAM", "FEDERATED",
         ],
         // TiDB 只有一个真正生效的引擎（MyISAM/MEMORY 语法兼容但被静默忽略，
@@ -284,12 +285,13 @@ fn engines_of(kind: ConnectionKind) -> Vec<&'static str> {
 fn edit_capabilities(kind: &str) -> Value {
     // (ddlStyle, quoteStyle, 可改已有列, 列注释, 表选项, 自增, 索引重建)
     let (style, quote, modify, comment, table_options, auto_inc, rebuild) = match kind {
-        "mysql" | "mariadb" => ("mysql", "BACKTICK", true, true, true, true, true),
+        "mysql" | "mariadb" | "oceanbase" => ("mysql", "BACKTICK", true, true, true, true, true),
         // TiDB 语法层兼容 MySQL 的 ALTER 生成器（ddlStyle 沿用 mysql）；没有
         // `ALTER INDEX … REBUILD` 这类索引重建语法，如实 false。
         "tidb" => ("mysql", "BACKTICK", true, true, true, true, false),
-        "doris" => ("doris", "BACKTICK", true, true, true, true, true),
-        "postgresql" | "kingbase" => ("pg", "DOUBLE", true, true, false, false, true),
+        // StarRocks 与 Doris 同源：ALTER 生成器、字符集清单都照 Doris 走
+        "doris" | "starrocks" => ("doris", "BACKTICK", true, true, true, true, true),
+        "postgresql" | "kingbase" | "opengauss" => ("pg", "DOUBLE", true, true, false, false, true),
         // Oracle 12c+ 的标识列能查到（user_tab_identity_cols），自增如实给 true。
         // DM 单独拆出来给 false：达梦的标识列记在哪张系统视图上、没有实例可验证（见 dialect.rs 里
         // column_types 的 dm 分支注释）。原先跟着 Oracle 一起 true，结果界面上给了个**永远勾不上**的
@@ -328,7 +330,7 @@ fn edit_capabilities(kind: &str) -> Value {
     };
     // (字符集清单, 字符集 → 排序规则映射)
     let (charsets, collations): (Vec<&str>, Value) = match kind {
-        "mysql" | "mariadb" | "doris" => (
+        "mysql" | "mariadb" | "doris" | "starrocks" => (
             vec![
                 // 常用字符集（MySQL/MariaDB 的服务端标准集合在版本间很稳定）
                 "utf8mb4", "utf8mb3", "utf8", "latin1", "latin2", "latin5", "latin7", "gbk", "gb18030",

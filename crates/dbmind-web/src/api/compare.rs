@@ -677,7 +677,7 @@ async fn table_foreign_key_signatures(
         .map(str::to_string)
         .or_else(|| scope.split_once('.').map(|(_, schema)| schema.to_string()));
     let (sql, metadata_mode) = match dialect.kind.key() {
-        "postgresql" | "kingbase" => {
+        "postgresql" | "kingbase" | "opengauss" => {
             let schema_filter = schema_name
                 .as_deref()
                 .filter(|name| !name.is_empty())
@@ -693,7 +693,7 @@ async fn table_foreign_key_signatures(
                 true,
             )
         }
-        "mysql" | "mariadb" | "tidb" => {
+        "mysql" | "mariadb" | "tidb" | "oceanbase" => {
             let schema_lit = dialect.literal(
                 schema_name
                     .as_deref()

@@ -535,10 +535,10 @@ pub async fn user_action(
         String::new()
     };
     // TiDB 兼容 MySQL 的用户体系与 GRANT 语法（mysql.user / db / tables_priv 同形）
-    let mysql_family = matches!(dialect.kind.key(), "mysql" | "mariadb" | "doris" | "tidb");
+    let mysql_family = matches!(dialect.kind.key(), "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase");
     let mssql_family = dialect.kind.key() == "sqlserver";
     let oracle_family = matches!(dialect.kind.key(), "oracle");
-    let pg_family = matches!(dialect.kind.key(), "postgresql" | "kingbase");
+    let pg_family = matches!(dialect.kind.key(), "postgresql" | "kingbase" | "opengauss");
 
     // 哪些权限入参已经真正实现：MySQL 系连接的三层（全局/库级/表级）—— 由
     // `user_action_sql` 拼出 `grant`/`revoke`；其余（模式级、对象级、服务器角色、
@@ -547,7 +547,7 @@ pub async fn user_action(
     // Doris 没有例程（连 mysql.procs_priv 这张表都没有，dialect.rs 的 user_grants
     // 也排除了它）。它在 mysql_family 白名单里，若不放行这里会被照单全收、拼出
     // MySQL 的 `grant execute on procedure …` —— 在 Doris 上执行必炸。明确拒绝。
-    if matches!(dialect.kind.key(), "doris" | "tidb")
+    if matches!(dialect.kind.key(), "doris" | "tidb" | "oceanbase")
         && options
             .get("routinePrivileges")
             .and_then(Value::as_array)
@@ -785,7 +785,7 @@ pub async fn user_action(
         .unwrap_or_default();
     // MySQL 系的角色是「账号形状」（`名字@host`），会拼进 `grant 'r'@'h' to …`。
     // 名字与 host 都只放行常规字符（`%` 与 `.` 是 host 的通配/域名写法）。
-    if matches!(dialect.kind.key(), "mysql" | "mariadb") {
+    if matches!(dialect.kind.key(), "mysql" | "mariadb" | "oceanbase") {
         for r in &roles {
             let ok = !r.trim().is_empty()
                 && r.trim()

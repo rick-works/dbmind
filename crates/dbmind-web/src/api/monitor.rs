@@ -82,12 +82,12 @@ pub fn supported(key: &str) -> bool {
 fn plan(key: &str) -> Option<Plan> {
     match key {
         // TiDB 兼容 show global status / @@max_connections / information_schema.tables
-        "mysql" | "mariadb" | "tidb" => Some(mysql_plan()),
+        "mysql" | "mariadb" | "tidb" | "oceanbase" => Some(mysql_plan()),
         // Doris 看着像 MySQL，实测四处不同（详见 doris_plan 的表格）—— 不能共用
         "doris" => Some(doris_plan()),
         "sqlserver" => Some(sqlserver_plan()),
         "sqlite" => Some(sqlite_plan()),
-        "postgresql" | "kingbase" => Some(postgres_plan()),
+        "postgresql" | "kingbase" | "opengauss" => Some(postgres_plan()),
         "clickhouse" => Some(clickhouse_plan()),
         _ => None,
     }
@@ -1047,9 +1047,9 @@ pub async fn monitor_kill(
     }
     let (_, dialect) = ctx_of(&state, &id).await?;
     let sql = match dialect.kind.key() {
-        "mysql" | "mariadb" | "doris" | "tidb" => format!("kill {}", session_id.trim()),
+        "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => format!("kill {}", session_id.trim()),
         "sqlserver" => format!("kill {}", session_id.trim()),
-        "postgresql" | "kingbase" => {
+        "postgresql" | "kingbase" | "opengauss" => {
             format!("select pg_terminate_backend({})", session_id.trim())
         }
         "sqlite" => {

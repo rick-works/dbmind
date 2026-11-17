@@ -1,0 +1,47 @@
+schemaVersion: 1
+order: 1470
+dbType: opengauss
+rustVariant: Opengauss
+label: openGauss
+# openGauss 是华为从 PostgreSQL 9.2 内核衍生的开源库（GaussDB 的开源版），
+# 语法层 PG 兼容：方言分支、模块路由复用 PostgreSQL 那一套（KingbaseES 同款套路）。
+# 差异点主要在系统视图与 MVCC 实现，SQL 生成器层面照 PG 走。
+dialect: PostgreSQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: opengauss
+driverStoreVisible: true
+driverStoreOrder: 17
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+# openGauss 默认监听 5432（与 PG 相同）
+defaultPort: 5432
+jdbc:
+  driverClass: org.opengauss.Driver
+  # openGauss 官方 JDBC（PG 驱动分叉），参数与 PG 同款
+  urlTemplate: "jdbc:opengauss://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+  artifact: org.opengauss:opengauss-jdbc:5.0.0
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: operate
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

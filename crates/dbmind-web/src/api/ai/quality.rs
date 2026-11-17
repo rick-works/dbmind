@@ -341,8 +341,8 @@ fn length_fn(kind: &str) -> &'static str {
 fn regex_condition(kind: &str, column: &str, pattern: &str, dialect: Dialect) -> Option<String> {
     let pattern = dialect.literal(pattern);
     Some(match kind {
-        "mysql" | "mariadb" | "doris" | "tidb" => format!("{column} not regexp {pattern}"),
-        "postgresql" | "kingbase" => format!("{column} !~ {pattern}"),
+        "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => format!("{column} not regexp {pattern}"),
+        "postgresql" | "kingbase" | "opengauss" => format!("{column} !~ {pattern}"),
         "oracle" | "dm" => format!("not regexp_like({column}, {pattern})"),
         "h2" => format!("not regexp_like({column}, {pattern})"),
         "clickhouse" => format!("not match({column}, {pattern})"),

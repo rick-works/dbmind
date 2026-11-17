@@ -245,7 +245,7 @@ pub fn undo_for(kind: &str, sql: &str) -> Option<String> {
             }
             return Some(match kind {
                 // MySQL 系：DROP INDEX 要带表
-                "mysql" | "mariadb" | "doris" | "tidb" => format!("drop index {name} on {table}"),
+                "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => format!("drop index {name} on {table}"),
                 // ClickHouse 的索引是表内对象
                 "clickhouse" => format!("alter table {table} drop index {name}"),
                 _ => format!("drop index {name}"),

@@ -287,7 +287,7 @@ pub async fn schema_context(
         "【目标数据库】类型 {} ｜ 标识符引用风格 {} ｜ 分页写法 `{}`\n",
         kind.key().to_ascii_uppercase(),
         match kind.key() {
-            "mysql" | "mariadb" | "doris" | "clickhouse" => "反引号",
+            "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" | "doris" | "clickhouse" => "反引号",
             "sqlserver" => "方括号",
             _ => "双引号",
         },

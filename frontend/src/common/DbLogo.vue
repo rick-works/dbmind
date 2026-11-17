@@ -17,6 +17,22 @@
       <path d="M8 22c0-6 3-10 7-10s6 3 6 6l3 1-3 2c-1 3-3 5-7 5h-6z" fill="#1a1a1a"/>
       <circle cx="17.5" cy="15.5" r="1.2" fill="#fff45b"/>
     </svg>
+    <svg v-else-if="fallbackLogo === 'starrocks'" viewBox="0 0 32 32" :width="size" :height="size">
+      <!-- StarRocks 品牌深蓝 + 白色星形 -->
+      <rect width="32" height="32" rx="5" fill="#0b2b5b"/>
+      <path d="M16 7l2.3 5.5 5.7.5-4.3 3.9 1.3 5.6L16 19.6l-5 2.9 1.3-5.6L8 13l5.7-.5L16 7z" fill="#fff"/>
+    </svg>
+    <svg v-else-if="fallbackLogo === 'oceanbase'" viewBox="0 0 32 32" :width="size" :height="size">
+      <!-- OceanBase 品牌蓝 + 白色浪线 -->
+      <rect width="32" height="32" rx="5" fill="#0f6cbd"/>
+      <path d="M6 20c3-6 6-6 9 0s6 6 9 0" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>
+    <svg v-else-if="fallbackLogo === 'opengauss'" viewBox="0 0 32 32" :width="size" :height="size">
+      <!-- openGauss 品牌红橙渐变 + 白色圆点环 -->
+      <rect width="32" height="32" rx="5" fill="#c4262e"/>
+      <circle cx="16" cy="16" r="7" fill="none" stroke="#fff" stroke-width="2"/>
+      <circle cx="16" cy="9" r="2" fill="#fff"/>
+    </svg>
     <svg v-else viewBox="0 0 32 32" :width="size" :height="size">
       <rect width="32" height="32" rx="5" fill="#6b7280"/>
       <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold" font-family="Arial">DB</text>

@@ -922,7 +922,7 @@ static GENERIC: GenericOps = GenericOps;
 pub fn of(kind: ConnectionKind) -> &'static dyn DialectOps {
     match kind.dialect() {
         "MySQL" => match kind {
-            ConnectionKind::Doris => &DORIS,
+            ConnectionKind::Doris | ConnectionKind::Starrocks => &DORIS,
             ConnectionKind::Mariadb => &MARIADB,
             _ => &MYSQL,
         },

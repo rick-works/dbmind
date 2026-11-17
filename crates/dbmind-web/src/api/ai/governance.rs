@@ -342,14 +342,14 @@ async fn table_comments(
 /// 各方言的「每张表多少行、占多少字节、注释是什么」。
 fn capacity_sql(kind: &str) -> Option<&'static str> {
     match kind {
-        "mysql" | "mariadb" | "doris" | "tidb" => Some(
+        "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => Some(
             "select table_name as t, table_rows as num_rows, \
              (coalesce(data_length, 0) + coalesce(index_length, 0)) as bytes, \
              coalesce(table_comment, '') as comment \
              from information_schema.tables \
              where table_schema = database() and table_type = 'BASE TABLE'",
         ),
-        "postgresql" | "kingbase" => Some(
+        "postgresql" | "kingbase" | "opengauss" => Some(
             "select c.relname as t, coalesce(s.n_live_tup, 0) as num_rows, \
              pg_total_relation_size(c.oid) as bytes, \
              coalesce(obj_description(c.oid, 'pg_class'), '') as comment \

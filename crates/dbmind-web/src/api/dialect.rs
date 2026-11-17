@@ -34,7 +34,7 @@ pub fn ddl_transactional(key: &str) -> bool {
     // autoCommit 开关），原来放在这里等于"发了句没人认的 BEGIN"⇒ autoCommit 仍是开着的、
     // 每条 DDL 自己提交 ⇒ 我们却对外宣称"失败整体回滚"——比不做更坏。要做对得走内核那套
     // 事务入口（Driver::tx_control / `setautocommit=false`），那是独立一件事，先如实摘掉。
-    matches!(key, "postgresql" | "kingbase" | "sqlite" | "sqlserver")
+    matches!(key, "postgresql" | "kingbase" | "opengauss" | "sqlite" | "sqlserver")
 }
 
 /// 开事务的语句。T-SQL 里单独的 `BEGIN` 是语句块开始（不是开事务），必须写全。
@@ -1393,7 +1393,11 @@ impl Dialect {
             // tidb 的类型长度语义与 mysql 一致（无界哨兵的收敛按同一套做）
             if let Some(fixed) = unbounded_type_of(
                 &type_name,
-                if self.kind.key() == "tidb" { "mysql" } else { self.kind.key() },
+                if matches!(self.kind.key(), "tidb" | "oceanbase") {
+                    "mysql"
+                } else {
+                    self.kind.key()
+                },
             ) {
                 type_name = fixed;
             }
@@ -1402,7 +1406,8 @@ impl Dialect {
             // 主键/排序键同步到 Doris 必炸）。键列统一落成有长度的 VARCHAR(65533)
             //（实测 Doris 接受它做键列；无键列长度上限之忧，只是普通列保持 STRING 不动）。
             let is_doris_key =
-                self.kind.key() == "doris" && (column.primary_key || (!has_pk && col_index == 0));
+                matches!(self.kind.key(), "doris" | "starrocks")
+                    && (column.primary_key || (!has_pk && col_index == 0));
             if is_doris_key && is_unbounded_text_type(&type_name) {
                 type_name = "varchar(65533)".to_string();
             }
@@ -1481,7 +1486,7 @@ impl Dialect {
             // timestamp 列，元数据回的默认值是 NULL（等于没有），我们什么都没写 ⇒ 目标端隐式
             // 零日期 ⇒ 整张表建不出来。
             // 显式写 `null`（可空列，与源表语义一致）或 `current_timestamp`（非空列总得有个值）。
-            if matches!(self.kind.key(), "mysql" | "mariadb" | "tidb")
+            if matches!(self.kind.key(), "mysql" | "mariadb" | "tidb" | "oceanbase")
                 && !has_default
                 && is_timestamp_type(&type_name)
             {
@@ -1506,7 +1511,10 @@ impl Dialect {
             // 字段注释：**内联**进列定义（只有这几个方言收这种写法）。
             // PG / Oracle / SQL Server 由 `post_create_comments` 另发 `comment on column …`；
             // SQLite / Derby 没有注释概念 —— 都留空，宁可没注释也不生成语法错的语句。
-            if matches!(self.kind.key(), "mysql" | "mariadb" | "tidb" | "doris" | "clickhouse") {
+            if matches!(
+                self.kind.key(),
+                "mysql" | "mariadb" | "tidb" | "oceanbase" | "doris" | "starrocks" | "clickhouse"
+            ) {
                 if let Some(comment) = column_comments.get(&column.name.to_ascii_lowercase()) {
                     if !comment.trim().is_empty() {
                         line.push_str(" comment ");
@@ -1592,7 +1600,7 @@ impl Dialect {
         let tail = match self.kind.key() {
             // MySQL 系：显式给 utf8mb4 —— 不写的话新表继承**库默认字符集**，实测继承出
             // latin1 后中文数据直接插不进去（Incorrect string value 1366），而源表明明是 utf8
-            "mysql" | "mariadb" | "tidb" => {
+            "mysql" | "mariadb" | "tidb" | "oceanbase" => {
                 let comment = match table_comment.map(str::trim).filter(|text| !text.is_empty()) {
                     Some(comment) => format!(" comment={}", self.literal(comment)),
                     None => String::new(),
@@ -2148,7 +2156,9 @@ impl TypeFamily {
         // Doris 与 MySQL 共用 JDBC 协议，**但类型系统是另一套**：没有 longtext / blob / time / json，
         // 大文本与二进制一律 STRING。这几个特例单独处理，其余（整型/定点/浮点/日期时间）两边一致，
         // 直接借用 MySQL 的渲染，避免维护两份。
-        if key == "doris" {
+        if key == "doris" || key == "starrocks" {
+            // StarRocks 与 Doris 的引擎行为同源：块内 helper（int_type 等）按 doris key 走
+            let key = if key == "starrocks" { "doris" } else { key };
             return match self {
                 Self::Bool => "BOOLEAN".to_string(),
                 Self::Uuid => "VARCHAR(36)".to_string(),
@@ -2173,7 +2183,14 @@ impl TypeFamily {
         // 手写、漏 tidb 会落进 generic 兜底 —— json 被渲染成 clob，TiDB 建表
         // 直接语法错（真机同步踩过）。归一成 mysql 一并覆盖全部分支；
         // Doris 的特判在上面已 return，不受影响。
-        let key = if key == "tidb" { "mysql" } else { key };
+        // 语法层兼容族归一（协议兼容库的 kind key 回退到宿主方言 key）：
+        // MySQL 系（mariadb / tidb / oceanbase）与 PG 系（kingbase / opengauss）。
+        // 新加一种兼容库在这里加一行即可，下面所有分支按宿主 key 命中。
+        let key = match key {
+            "tidb" | "mariadb" | "oceanbase" => "mysql",
+            "kingbase" | "opengauss" => "postgresql",
+            _ => key,
+        };
         match self {
             Self::Int { bytes, unsigned } => Self::int_type(bytes, unsigned, key),
             Self::Decimal { precision, scale } => {
@@ -2447,11 +2464,11 @@ fn auto_increment_clause(kind: ConnectionKind, family: TypeFamily) -> Option<&'s
         return None;
     }
     match kind.key() {
-        "mysql" | "mariadb" | "tidb" => Some("auto_increment"),
+        "mysql" | "mariadb" | "tidb" | "oceanbase" => Some("auto_increment"),
         // Doris 是 2.1 才支持 AUTO_INCREMENT，还有"必须是键列 + 开关"等前置条件 ——
         // 写上去风险大于收益（老版本直接语法错），不写。
         "sqlserver" => Some("identity(1,1)"),
-        "postgresql" | "kingbase" | "oracle" | "dm" | "h2" | "db2" | "derby" => {
+        "postgresql" | "kingbase" | "opengauss" | "oracle" | "dm" | "h2" | "db2" | "derby" => {
             Some("generated by default as identity")
         }
         // SQLite 只认 `integer primary key autoincrement`（表级主键写法不同）、
@@ -3357,7 +3374,7 @@ mod tests {
             let ddl = dialect.create_table_from_columns("t", &columns, Some(ConnectionKind::Mysql));
             let lower = ddl.to_lowercase();
             // ① 源方言的类型名不能漏出去（漏了就说明翻译没生效）；MySQL 家族除外
-            if !matches!(key, "mysql" | "mariadb") {
+            if !matches!(key, "mysql" | "mariadb" | "oceanbase") {
                 assert!(!lower.contains("longtext"), "{key}: 类型没翻译：{ddl}");
             }
             // ② 各家的硬性约束
@@ -3384,14 +3401,14 @@ mod tests {
                     );
                     assert!(!lower.contains("auto_increment"), "{key}: 没有自增：{ddl}");
                 }
-                "postgresql" | "kingbase" | "oracle" | "dm" | "h2" | "db2" | "derby" => {
+                "postgresql" | "kingbase" | "opengauss" | "oracle" | "dm" | "h2" | "db2" | "derby" => {
                     assert!(
                         ddl.contains("generated by default as identity"),
                         "{key}: 自增没跟上：{ddl}"
                     );
                 }
                 "sqlserver" => assert!(ddl.contains("identity(1,1)"), "{key}: 自增没跟上：{ddl}"),
-                "mysql" | "mariadb" => {
+                "mysql" | "mariadb" | "oceanbase" => {
                     assert!(ddl.contains("auto_increment"), "{key}: 自增没跟上：{ddl}");
                 }
                 _ => {}

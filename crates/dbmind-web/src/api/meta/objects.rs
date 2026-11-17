@@ -659,7 +659,7 @@ pub async fn rename_object(
             // MySQL 系：视图与表一样走 `RENAME TABLE`。
             // ClickHouse：视图在它这里**就是一个表**（引擎不同而已），同样只认 `RENAME TABLE` ——
             // `ALTER VIEW … RENAME TO` 它没有（与表改名同一个坑，真机对着两种形式验过）。
-            "mysql" | "mariadb" | "doris" | "tidb" | "clickhouse" => {
+            "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" | "clickhouse" => {
                 format!("rename table {from} to {to}")
             }
             // Oracle：**没有** `ALTER VIEW … RENAME TO` —— 真机报 `ORA-00922: 选项缺失或无效`；
@@ -694,7 +694,7 @@ pub async fn rename_object(
             _ => format!("alter view {from} rename to {to}"),
         },
         "index" => match dialect.kind.key() {
-            "mysql" | "mariadb" | "doris" | "tidb" => {
+            "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => {
                 return Err(XError::bad_request(
                     "MySQL 重命名索引要写在 ALTER TABLE 里，请在查询页执行",
                 ))
@@ -704,7 +704,7 @@ pub async fn rename_object(
         // 存储过程 / 函数：只有 PG 与 SQL Server 真有「重命名」语法
         "procedure" | "function" => match dialect.kind.key() {
             // PG：签名可省略（同名函数唯一时），有歧义会由数据库明确报错
-            "postgresql" | "kingbase" => format!("alter {object_type} {from} rename to {to}"),
+            "postgresql" | "kingbase" | "opengauss" => format!("alter {object_type} {from} rename to {to}"),
             // SQL Server：`sp_rename` 是唯一入口。它**不会更新依赖对象**（视图/存储过程里
             // 引用的旧名字会失效），这句提醒由界面/SQL 预览负责展示，这里只保证语句本身正确
             "sqlserver" => format!(
@@ -712,7 +712,7 @@ pub async fn rename_object(
                 dialect.literal(&name),
                 dialect.literal(&new_name)
             ),
-            "mysql" | "mariadb" | "doris" | "tidb" => {
+            "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => {
                 return Err(XError::bad_request(
                     "MySQL 没有重命名存储过程/函数的语法：请用 SHOW CREATE PROCEDURE 取到原文，\
                      DROP 之后用新名字重建",
@@ -733,7 +733,7 @@ pub async fn rename_object(
                 dialect.literal(&name),
                 dialect.literal(&new_name)
             ),
-            "postgresql" | "kingbase" => {
+            "postgresql" | "kingbase" | "opengauss" => {
                 return Err(XError::bad_request(
                     "PostgreSQL 重命名触发器需要表名（alter trigger 名 on 表 rename to 新名）——\
                      树节点只带了触发器名，请到查询页执行",
