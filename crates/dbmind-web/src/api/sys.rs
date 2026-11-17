@@ -33,7 +33,13 @@ fn category_of(descriptor: &dbmind_core::TypeDescriptor) -> &'static str {
         _ if descriptor.local_file => "RELATIONAL_FILE",
         // ClickHouse / Doris：也走 JDBC、也用 SQL，但它们是列存分析引擎 ——
         // 没有事务、没有外键和二级索引，混在「关系型数据库」里会让人当成 MySQL 那样用。
-        _ if matches!(descriptor.key, "clickhouse" | "doris" | "starrocks") => "OLAP",
+        _ if matches!(
+            descriptor.key,
+            "clickhouse" | "doris" | "starrocks" | "selectdb"
+        ) =>
+        {
+            "OLAP"
+        }
         _ => "RELATIONAL",
     }
 }
@@ -61,6 +67,10 @@ pub async fn driver_types(State(state): State<AppState>) -> XResult<Json<Value>>
                 "protocol": t.protocol.as_str(),
                 "agentKey": t.agent_key,
                 "implemented": t.kind.implemented(),
+                // 支持等级（full / operate / browse / experimental）：界面据此给
+                // 「实验 / 只读浏览」徽章与说明。取值只来自 YAML，build.rs 已在
+                // 编译期校验过白名单，这里原样透出即可。
+                "supportLevel": t.support_level,
             })
         })
         .collect();

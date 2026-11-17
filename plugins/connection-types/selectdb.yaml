@@ -1,0 +1,48 @@
+schemaVersion: 1
+order: 1210
+dbType: selectdb
+rustVariant: Selectdb
+label: SelectDB
+# SelectDB 是 Apache Doris 的商业发行版（云原生 MPP 分析库），MySQL 协议与
+# Doris 一致：方言、模块路由、驱动全部复用 Doris 那一套（agentKey 也指向 doris）。
+# ⚠️ 驱动沿用 Doris 的 8.0.28 老坐标，理由见 doris.yaml：新版 Connector/J
+# 会把 Doris 系的字符集编号读错，握手直接报 Unknown character set: 'eucjpms'。
+dialect: MySQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: doris
+driverStoreVisible: true
+driverStoreOrder: 20
+singleConnectionPool: false
+metadataConnectionScoped: false
+# 分析型 MPP 库，连接开销低（同 Doris / StarRocks）
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+# FE 查询端口与 Doris 相同
+defaultPort: 9030
+jdbc:
+  driverClass: com.mysql.cj.jdbc.Driver
+  urlTemplate: "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+  artifact: mysql:mysql-connector-java:8.0.28
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: experimental
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: false
+  driverManagement: true

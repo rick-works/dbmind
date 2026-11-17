@@ -1,0 +1,46 @@
+schemaVersion: 1
+order: 320
+dbType: vastbase
+rustVariant: Vastbase
+label: 海量 Vastbase
+# Vastbase（海量数据 Vastbase G100）基于 PostgreSQL 内核：方言、模块路由复用
+# PostgreSQL 那一套，驱动用 PG 官方 JDBC。
+# ⚠️ Vastbase 也有自己的原生 JDBC（cn.com.vastbase:...），本类型刻意用 PG 驱动：
+# 复用已下载的驱动、零额外依赖；若现场要求原生驱动，可在设置页手动上传覆盖。
+dialect: PostgreSQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: postgresql
+driverStoreVisible: true
+driverStoreOrder: 22
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+defaultPort: 5432
+jdbc:
+  driverClass: org.postgresql.Driver
+  urlTemplate: "jdbc:postgresql://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+  artifact: org.postgresql:postgresql:42.7.4
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: experimental
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

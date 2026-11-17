@@ -156,6 +156,165 @@
       "typeCode": "POSTGRESQL"
     },
     {
+      "agentKey": "postgresql",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 5866,
+      "dialect": "PostgreSQL",
+      "driverStoreOrder": 21,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "org.postgresql:postgresql:42.7.4",
+        "artifacts": [
+          "org.postgresql:postgresql:42.7.4"
+        ],
+        "driverClass": "org.postgresql.Driver",
+        "urlTemplate": "jdbc:postgresql://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+      },
+      "key": "highgo",
+      "label": "瀚高 HighGo",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "postgresql",
+      "order": 310,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Highgo",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "experimental",
+      "traits": {
+        "schemaAware": true,
+        "singleDatabase": false
+      },
+      "typeCode": "HIGHGO"
+    },
+    {
+      "agentKey": "postgresql",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 5432,
+      "dialect": "PostgreSQL",
+      "driverStoreOrder": 22,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "org.postgresql:postgresql:42.7.4",
+        "artifacts": [
+          "org.postgresql:postgresql:42.7.4"
+        ],
+        "driverClass": "org.postgresql.Driver",
+        "urlTemplate": "jdbc:postgresql://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+      },
+      "key": "vastbase",
+      "label": "海量 Vastbase",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "postgresql",
+      "order": 320,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Vastbase",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "experimental",
+      "traits": {
+        "schemaAware": true,
+        "singleDatabase": false
+      },
+      "typeCode": "VASTBASE"
+    },
+    {
+      "agentKey": "postgresql",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 5432,
+      "dialect": "PostgreSQL",
+      "driverStoreOrder": 23,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "org.postgresql:postgresql:42.7.4",
+        "artifacts": [
+          "org.postgresql:postgresql:42.7.4"
+        ],
+        "driverClass": "org.postgresql.Driver",
+        "urlTemplate": "jdbc:postgresql://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+      },
+      "key": "uxdb",
+      "label": "优炫 UXDB",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "postgresql",
+      "order": 330,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Uxdb",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "experimental",
+      "traits": {
+        "schemaAware": true,
+        "singleDatabase": false
+      },
+      "typeCode": "UXDB"
+    },
+    {
       "agentKey": "mysql",
       "capabilities": {
         "dataTransfer": true,
@@ -207,6 +366,112 @@
         "singleDatabase": false
       },
       "typeCode": "MYSQL"
+    },
+    {
+      "agentKey": "mysql",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 3306,
+      "dialect": "MySQL",
+      "driverStoreOrder": 18,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "com.mysql:mysql-connector-j:9.1.0",
+        "artifacts": [
+          "com.mysql:mysql-connector-j:9.1.0"
+        ],
+        "driverClass": "com.mysql.cj.jdbc.Driver",
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+      },
+      "key": "greatsql",
+      "label": "GreatSQL",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "mysql",
+      "order": 410,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Greatsql",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "experimental",
+      "traits": {
+        "schemaAware": false,
+        "singleDatabase": false
+      },
+      "typeCode": "GREATSQL"
+    },
+    {
+      "agentKey": "mysql",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 3306,
+      "dialect": "MySQL",
+      "driverStoreOrder": 19,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "com.mysql:mysql-connector-j:9.1.0",
+        "artifacts": [
+          "com.mysql:mysql-connector-j:9.1.0"
+        ],
+        "driverClass": "com.mysql.cj.jdbc.Driver",
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+      },
+      "key": "goldendb",
+      "label": "GoldenDB",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "mysql",
+      "order": 420,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Goldendb",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "experimental",
+      "traits": {
+        "schemaAware": false,
+        "singleDatabase": false
+      },
+      "typeCode": "GOLDENDB"
     },
     {
       "agentKey": "mysql",
@@ -634,6 +899,59 @@
       "typeCode": "DORIS"
     },
     {
+      "agentKey": "doris",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": false
+      },
+      "defaultPort": 9030,
+      "dialect": "MySQL",
+      "driverStoreOrder": 20,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "mysql:mysql-connector-java:8.0.28",
+        "artifacts": [
+          "mysql:mysql-connector-java:8.0.28"
+        ],
+        "driverClass": "com.mysql.cj.jdbc.Driver",
+        "urlTemplate": "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+      },
+      "key": "selectdb",
+      "label": "SelectDB",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "mysql",
+      "order": 1210,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Selectdb",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "experimental",
+      "traits": {
+        "schemaAware": true,
+        "singleDatabase": false
+      },
+      "typeCode": "SELECTDB"
+    },
+    {
       "agentKey": "mysql",
       "capabilities": {
         "dataTransfer": true,
@@ -951,6 +1269,59 @@
         "singleDatabase": false
       },
       "typeCode": "OPENGAUSS"
+    },
+    {
+      "agentKey": "opengauss",
+      "capabilities": {
+        "dataTransfer": true,
+        "databaseCreate": true,
+        "diagram": true,
+        "driverManagement": true,
+        "fieldLineage": false,
+        "metadataBrowse": true,
+        "objectBrowser": true,
+        "objectSource": true,
+        "queryExecution": true,
+        "schemaSearch": true,
+        "sqlExplain": true,
+        "sqlFileExecution": true,
+        "tableDataEdit": true,
+        "tableImport": true,
+        "tableStructureEdit": true,
+        "userAdmin": true
+      },
+      "defaultPort": 8000,
+      "dialect": "PostgreSQL",
+      "driverStoreOrder": 24,
+      "driverStoreVisible": true,
+      "exposed": true,
+      "jdbc": {
+        "artifact": "org.opengauss:opengauss-jdbc:5.0.0-og",
+        "artifacts": [
+          "org.opengauss:opengauss-jdbc:5.0.0-og"
+        ],
+        "driverClass": "org.opengauss.Driver",
+        "urlTemplate": "jdbc:opengauss://{host}:{port}/{database}?sslmode=disable"
+      },
+      "key": "gaussdb",
+      "label": "华为 GaussDB",
+      "localFile": false,
+      "maxConnections": 8,
+      "mcpMode": "bridge",
+      "metadataConnectionScoped": false,
+      "module": "postgresql",
+      "order": 1480,
+      "protocol": "sql",
+      "runtimeMode": "agent",
+      "rustVariant": "Gaussdb",
+      "singleConnectionPool": false,
+      "skipTcpProbe": false,
+      "supportLevel": "experimental",
+      "traits": {
+        "schemaAware": true,
+        "singleDatabase": false
+      },
+      "typeCode": "GAUSSDB"
     },
     {
       "agentKey": "mongodb",

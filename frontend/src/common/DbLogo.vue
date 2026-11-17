@@ -33,6 +33,35 @@
       <circle cx="16" cy="16" r="7" fill="none" stroke="#fff" stroke-width="2"/>
       <circle cx="16" cy="9" r="2" fill="#fff"/>
     </svg>
+    <!-- 同族批量注册的国产/云上库：没有官方矢量图，用「缩写 + 品牌色」的小方块区分 -->
+    <svg v-else-if="fallbackLogo === 'greatsql'" viewBox="0 0 32 32" :width="size" :height="size">
+      <rect width="32" height="32" rx="5" fill="#1f7a4d"/>
+      <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" font-family="Arial">GR</text>
+    </svg>
+    <svg v-else-if="fallbackLogo === 'goldendb'" viewBox="0 0 32 32" :width="size" :height="size">
+      <rect width="32" height="32" rx="5" fill="#1d4ed8"/>
+      <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="Arial">GDB</text>
+    </svg>
+    <svg v-else-if="fallbackLogo === 'selectdb'" viewBox="0 0 32 32" :width="size" :height="size">
+      <rect width="32" height="32" rx="5" fill="#6d28d9"/>
+      <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="10" font-weight="bold" font-family="Arial">SDB</text>
+    </svg>
+    <svg v-else-if="fallbackLogo === 'highgo'" viewBox="0 0 32 32" :width="size" :height="size">
+      <rect width="32" height="32" rx="5" fill="#0f766e"/>
+      <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold" font-family="Arial">HG</text>
+    </svg>
+    <svg v-else-if="fallbackLogo === 'vastbase'" viewBox="0 0 32 32" :width="size" :height="size">
+      <rect width="32" height="32" rx="5" fill="#0369a1"/>
+      <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" font-family="Arial">VB</text>
+    </svg>
+    <svg v-else-if="fallbackLogo === 'uxdb'" viewBox="0 0 32 32" :width="size" :height="size">
+      <rect width="32" height="32" rx="5" fill="#c2410c"/>
+      <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="12" font-weight="bold" font-family="Arial">UX</text>
+    </svg>
+    <svg v-else-if="fallbackLogo === 'gaussdb'" viewBox="0 0 32 32" :width="size" :height="size">
+      <rect width="32" height="32" rx="5" fill="#b91c1c"/>
+      <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold" font-family="Arial">GS</text>
+    </svg>
     <svg v-else viewBox="0 0 32 32" :width="size" :height="size">
       <rect width="32" height="32" rx="5" fill="#6b7280"/>
       <text x="16" y="21" text-anchor="middle" fill="#fff" font-size="11" font-weight="bold" font-family="Arial">DB</text>

@@ -1,0 +1,46 @@
+schemaVersion: 1
+order: 310
+dbType: highgo
+rustVariant: Highgo
+label: 瀚高 HighGo
+# HighGo Database 基于 PostgreSQL 内核（国产化发行版）：方言分支、模块路由
+# 全部复用 PostgreSQL 那一套，驱动直接用 PG 官方 JDBC（HighGo 官方也兼容）。
+dialect: PostgreSQL
+runtimeMode: agent
+mcpMode: bridge
+# 复用 PG 驱动目录与宿主：装了 PostgreSQL 驱动就能直接连，不用再下一份
+agentKey: postgresql
+driverStoreVisible: true
+driverStoreOrder: 21
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+# 瀚高官方默认端口是 5866（不是 PG 的 5432）
+defaultPort: 5866
+jdbc:
+  driverClass: org.postgresql.Driver
+  urlTemplate: "jdbc:postgresql://{host}:{port}/{database}?sslmode=prefer&reWriteBatchedInserts=true&stringtype=unspecified&tcpKeepAlive=true"
+  artifact: org.postgresql:postgresql:42.7.4
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: experimental
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

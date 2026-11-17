@@ -1,0 +1,49 @@
+schemaVersion: 1
+# 同族批量注册：这一批类型的共同点是**协议与语法层兼容已有族**，
+# 所以方言分支、模块路由、驱动目录全部复用同族那一套，内核与前端都没有为它们加代码。
+# 代价是「没在真机上逐项验证」——因此 supportLevel 统一标 experimental，
+# 界面会显示「实验」徽章并在连接框里说明，避免被当成已完整支持。
+order: 410
+dbType: greatsql
+rustVariant: Greatsql
+label: GreatSQL
+# GreatSQL 是万里开源维护的 MySQL 分支（面向金融/国产化场景），
+# MySQL 8.0 协议与语法兼容：方言、模块路由、驱动全部复用 MySQL 那一套。
+dialect: MySQL
+runtimeMode: agent
+mcpMode: bridge
+# 与 TiDB / OceanBase 同理：复用 MySQL 的驱动目录与宿主，装了 MySQL 驱动就能直接连
+agentKey: mysql
+driverStoreVisible: true
+driverStoreOrder: 18
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+defaultPort: 3306
+jdbc:
+  driverClass: com.mysql.cj.jdbc.Driver
+  urlTemplate: "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+  artifact: com.mysql:mysql-connector-j:9.1.0
+traits:
+  singleDatabase: false
+  schemaAware: false
+supportLevel: experimental
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

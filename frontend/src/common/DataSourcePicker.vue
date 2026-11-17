@@ -28,7 +28,13 @@
         <div v-for="t in visibleItems" :key="t.code" class="ds-card" @click="pick(t.code)">
           <DbLogo :type="t.code" :size="46" />
           <div class="ds-card-info">
-            <div class="ds-card-name">{{ t.label }}</div>
+            <div class="ds-card-name">
+              {{ t.label }}
+              <!-- 支持等级：只给「需要提醒」的两档加标（full / operate 是常态，标了反而噪音） -->
+              <span v-if="showLevel(t)" class="ds-lvl" :class="'is-' + levelOf(t)" :title="levelTip(t)">
+                {{ levelLabel(t) }}
+              </span>
+            </div>
             <div class="ds-card-meta">
               <template v-if="t.defaultPort">{{ $t('cd.port') }} {{ t.defaultPort }}</template>
               <template v-else>{{ $t('dsp.localFile') }}</template>
@@ -79,6 +85,18 @@ onMounted(async () => {
 })
 
 const isReady = (code) => status.value[code]?.ready === true
+
+/**
+ * 支持等级（后端 `/api/drivers/types` 的 `supportLevel`，唯一真源是 YAML）。
+ *
+ * 全功能 / 可运维是常态，不打扰；只读浏览 / 实验必须让用户在**选之前**就知道，
+ * 否则装完发现「不能改结构」「某个功能没验证过」就成了欺骗。
+ * 未知取值按 operate 处理（老内核不返回该字段）。
+ */
+const levelOf = (x) => String(x?.supportLevel || 'operate')
+const showLevel = (x) => ['browse', 'experimental'].includes(levelOf(x))
+const levelLabel = (x) => t(levelOf(x) === 'browse' ? 'dsp.lvlBrowse' : 'dsp.lvlExperimental')
+const levelTip = (x) => t(levelOf(x) === 'browse' ? 'dsp.lvlBrowseTip' : 'dsp.lvlExpTip')
 
 // OLAP（ClickHouse / Doris）单独成组：它们也走 JDBC、也用 SQL，但是列存分析引擎
 // （无事务、无外键、无二级索引），跟 MySQL 那类关系型库不是一回事。
@@ -211,6 +229,14 @@ const pick = (code) => {
 .ds-card-info { min-width: 0; overflow: hidden; }
 .ds-card-name { font-size: 15px; font-weight: 600; color: var(--dc-text-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ds-card-meta { font-size: 12.5px; color: var(--dc-text-dim); margin-top: 3px; }
+/* 支持等级小标：只读浏览（中性）/ 实验（警示色） */
+.ds-lvl {
+  display: inline-block; margin-left: 6px; vertical-align: 1px;
+  font-size: 11px; font-weight: 600; line-height: 16px; padding: 0 5px;
+  border-radius: 5px; cursor: help;
+}
+.ds-lvl.is-browse { color: var(--dc-text-dim); background: var(--dc-bg-hover); }
+.ds-lvl.is-experimental { color: var(--dc-warning); background: var(--dc-warning-wash); }
 .ds-card-badge {
   position: absolute; right: 8px; top: 8px;
   font-size: 11px; color: var(--dc-warning); background: var(--dc-warning-wash);

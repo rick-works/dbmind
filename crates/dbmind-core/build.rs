@@ -379,6 +379,22 @@ fn validate(types: &[TypeYaml]) -> Result<(), String> {
         if t.runtime_mode == "agent" && t.agent_key.is_none() {
             return Err(format!("{}: runtimeMode=agent 必须给 agentKey", t.db_type));
         }
+        // 支持等级：**只为这四个值出界面文案**（见前端 `dsp.lvl*` 词典与
+        // DataSourcePicker 的徽章）。写别的值不会报错，只会显示空白 —— 那种
+        // 「声明了但界面上看不出来」的问题最难查，所以在编译期就拦住。
+        //   full         全功能（含本地文件型）
+        //   operate      可运维：浏览 + 编辑 + 迁移全通，个别管理项缺失
+        //   browse       只读浏览：NoSQL 等仅浏览/查询
+        //   experimental 按同族协议接入、纵深功能未逐一验证
+        if !matches!(
+            t.support_level.as_str(),
+            "full" | "operate" | "browse" | "experimental"
+        ) {
+            return Err(format!(
+                "{}: supportLevel 只能是 full / operate / browse / experimental（当前 {}）",
+                t.db_type, t.support_level
+            ));
+        }
         if t.local_file && t.default_port.is_some() && !t.skip_tcp_probe {
             return Err(format!(
                 "{}: 本地文件型不应做 TCP 探测（skipTcpProbe 应为 true）",

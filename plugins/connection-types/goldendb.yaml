@@ -1,0 +1,47 @@
+schemaVersion: 1
+order: 420
+dbType: goldendb
+rustVariant: Goldendb
+label: GoldenDB
+# GoldenDB 是中兴通讯的分布式数据库，计算节点对外提供 **MySQL 协议**：
+# 方言分支、模块路由、驱动全部复用 MySQL 那一套。
+# 已知差异（未逐一验证，标注为 experimental）：分布式执行计划、全局自增、
+# 部分 SHOW 语句的返回列与单机 MySQL 不同，元数据可能与预期有出入。
+dialect: MySQL
+runtimeMode: agent
+mcpMode: bridge
+agentKey: mysql
+driverStoreVisible: true
+driverStoreOrder: 19
+singleConnectionPool: false
+metadataConnectionScoped: false
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+# GoldenDB 的计算节点端口由部署决定，默认按 MySQL 惯例 3306；连不上时按现场改
+defaultPort: 3306
+jdbc:
+  driverClass: com.mysql.cj.jdbc.Driver
+  urlTemplate: "jdbc:mysql://{host}:{port}/{database}?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&connectTimeout=10000&socketTimeout=600000&rewriteBatchedStatements=true&useCursorFetch=true&zeroDateTimeBehavior=CONVERT_TO_NULL&allowMultiQueries=true"
+  artifact: com.mysql:mysql-connector-j:9.1.0
+traits:
+  singleDatabase: false
+  schemaAware: false
+supportLevel: experimental
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

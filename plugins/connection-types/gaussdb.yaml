@@ -1,0 +1,50 @@
+schemaVersion: 1
+order: 1480
+dbType: gaussdb
+rustVariant: Gaussdb
+label: 华为 GaussDB
+# GaussDB 与 openGauss 同源（openGauss 是它的开源版），对外是 **openGauss/PG 协议**：
+# 方言、模块路由复用 PostgreSQL，驱动复用 openGauss 的 JDBC fork。
+# ⚠️ **不能换成 PG 官方驱动**：GaussDB/openGauss 默认口令加密是 sha256，
+# PG 驱动不会算，会直接登录被拒（openGauss 真机踩过）。
+dialect: PostgreSQL
+runtimeMode: agent
+mcpMode: bridge
+# 与 openGauss 共用驱动目录与宿主（同一个 artifact，装一次两边都能用）
+agentKey: opengauss
+driverStoreVisible: true
+driverStoreOrder: 24
+singleConnectionPool: false
+metadataConnectionScoped: false
+# 分布式版并发高；单机版给 8 也够（判断，非实测）
+maxConnections: 8
+skipTcpProbe: false
+localFile: false
+# GaussDB 分布式版默认 8000，单机/主备版常见 5432 —— 以现场部署为准
+defaultPort: 8000
+jdbc:
+  driverClass: org.opengauss.Driver
+  # sslmode=disable：容器/远程直连时 SSL 协商容易卡死握手（openGauss 实测 08P01）
+  urlTemplate: "jdbc:opengauss://{host}:{port}/{database}?sslmode=disable"
+  artifact: org.opengauss:opengauss-jdbc:5.0.0-og
+traits:
+  singleDatabase: false
+  schemaAware: true
+supportLevel: experimental
+capabilities:
+  queryExecution: true
+  metadataBrowse: true
+  objectBrowser: true
+  objectSource: true
+  schemaSearch: true
+  diagram: true
+  tableDataEdit: true
+  tableStructureEdit: true
+  tableImport: true
+  dataTransfer: true
+  sqlFileExecution: true
+  databaseCreate: true
+  fieldLineage: false
+  sqlExplain: true
+  userAdmin: true
+  driverManagement: true

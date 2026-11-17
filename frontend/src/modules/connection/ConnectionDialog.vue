@@ -14,12 +14,20 @@
       <DbLogo :type="form.type || 'MYSQL'" :size="36" />
       <div class="type-bar-info">
         <div class="type-bar-name">{{ currentType ? labelOf(currentType.code) : $t('cd.pickType') }}</div>
-        <div class="type-bar-cat">{{ categoryLabel }}</div>
+        <div class="type-bar-cat">
+          {{ categoryLabel }}
+          <span v-if="supportLevel !== 'operate'" class="type-lvl" :class="'is-' + supportLevel"
+                :title="supportLevelTip">{{ supportLevelLabel }}</span>
+        </div>
       </div>
       <el-button size="small" type="primary" plain class="type-bar-btn">
         <el-icon style="margin-right:4px"><Refresh /></el-icon>{{ $t('cd.change') }}
       </el-button>
     </div>
+
+    <!-- 实验类型：连得上、能浏览，但纵深功能没逐一验证 —— 说在前面，别让用户拿它当"已完整支持" -->
+    <el-alert v-if="supportLevel === 'experimental'" type="warning" :closable="false" show-icon
+              :title="$t('cd.supportExpTitle')" :description="$t('cd.supportExpDesc')" class="lvl-alert" />
 
     <el-tabs v-model="activeTab" class="conn-tabs">
       <!-- ============ 基本配置 ============ -->
@@ -491,8 +499,8 @@ const isWindowsClient = /windows/i.test(navigator.userAgent || '')
 const nativeWindowsAuth = computed(() => isWindowsAuth.value && isWindowsClient)
 const windowsAuthHint = computed(() => t('cd.windowsAuthHint'))
 
-/* OLAP（ClickHouse / Doris）在旧内核里仍报 category=RELATIONAL，按 code 兜底 */
-const OLAP_CODES = ['CLICKHOUSE', 'DORIS']
+/* OLAP（ClickHouse / Doris / StarRocks / SelectDB）在旧内核里仍报 category=RELATIONAL，按 code 兜底 */
+const OLAP_CODES = ['CLICKHOUSE', 'DORIS', 'STARROCKS', 'SELECTDB']
 const categoryLabel = computed(() => {
   const cur = currentType.value
   if (!cur) return ''
@@ -503,6 +511,24 @@ const categoryLabel = computed(() => {
   if (c === 'NOSQL') return t('cd.catNosql')
   return ''
 })
+
+/**
+ * 支持等级（唯一真源 = `plugins/connection-types/*.yaml` 的 supportLevel，
+ * 经 `/api/drivers/types` 透出）。
+ *
+ * 「实验」这一档必须显式提示：同族批量注册的类型只验证了「协议能连」，
+ * 纵深功能（结构编辑、用户管理、迁移…）没有逐一跑过。用户看到徽章才不会
+ * 把「某处不支持」当成 bug 来报。取不到就按 operate（老内核）处理。
+ */
+const supportLevel = computed(() => String(currentType.value?.supportLevel || 'operate'))
+const supportLevelLabel = computed(() => t(
+  supportLevel.value === 'experimental' ? 'dsp.lvlExperimental'
+    : supportLevel.value === 'browse' ? 'dsp.lvlBrowse'
+      : supportLevel.value === 'full' ? 'dsp.lvlFull' : 'dsp.lvlOperate'))
+const supportLevelTip = computed(() => t(
+  supportLevel.value === 'experimental' ? 'dsp.lvlExpTip'
+    : supportLevel.value === 'browse' ? 'dsp.lvlBrowseTip'
+      : supportLevel.value === 'full' ? 'dsp.lvlFullTip' : 'dsp.lvlOperateTip'))
 
 // ---------- 类型专属连接选项（src/types/<type>.js 的 options） ----------
 // 值存在 form.opts 里，与「手填附加参数」（form.params）分开：
@@ -1051,6 +1077,18 @@ const importPastedParams = () => {
 .type-bar-info { flex: 1; min-width: 0; }
 .type-bar-name { font-size: 15px; font-weight: 600; color: var(--dc-text-strong); }
 .type-bar-cat { font-size: 13px; color: var(--dc-text-dim); margin-top: 1px; }
+/* 支持等级小标（只读浏览 / 实验 / 全功能） */
+.type-lvl {
+  display: inline-block; margin-left: 6px; vertical-align: 1px;
+  font-size: 11px; font-weight: 600; line-height: 16px; padding: 0 5px;
+  border-radius: 5px; cursor: help;
+}
+.type-lvl.is-browse { color: var(--dc-text-dim); background: var(--dc-bg-hover); }
+.type-lvl.is-experimental { color: var(--dc-warning); background: var(--dc-warning-wash); }
+.type-lvl.is-full { color: var(--dc-accent); background: var(--dc-success-wash); }
+/* 提示条是 flex 子项：不写 flex:none 会被下压，描述第二行会被裁掉（实测） */
+.lvl-alert { flex: 0 0 auto; margin-bottom: 12px; }
+.lvl-alert :deep(.el-alert__description) { margin: 2px 0 0; line-height: 1.5; }
 /* 顶部类型条里的 logo：透明背景，跟数据源选择器卡片里的一致 */
 .type-bar :deep(.db-logo img) {
   background: transparent !important;
