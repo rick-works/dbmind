@@ -1936,30 +1936,34 @@ public final class Main {
         long startedAt = System.currentTimeMillis();
         try {
             JsonArray columns = new JsonArray();
-            try (PreparedStatement ps = session.connection().prepareStatement(
+            // **必须是普通 Statement，不能是 PreparedStatement**：
+            // StarRocks（实测 5.1.0，走 MySQL 协议）不实现预处理语句的关闭帧，
+            // 服务端回 `Unsupported command(COM_STMT_CLOSE)` 把整条快路径打挂；
+            // 回退到 JDBC getColumns 后它和 Doris 一样返回空 ⇒ 接口报「列元数据取不到」，
+            // 界面上就是「这张表没有字段」。表名按字符串字面量转义即可（这里只是等值匹配）。
+            String literal = "'" + table.replace("'", "''") + "'";
+            try (Statement statement = session.connection().createStatement();
+                 ResultSet rs = statement.executeQuery(
                     "select COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT, COLUMN_KEY"
                             + " from information_schema.COLUMNS"
-                            + " where TABLE_SCHEMA = database() and TABLE_NAME = ?"
+                            + " where TABLE_SCHEMA = database() and TABLE_NAME = " + literal
                             + " order by ORDINAL_POSITION")) {
-                ps.setString(1, table);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        JsonObject column = new JsonObject();
-                        String name = rs.getString("COLUMN_NAME");
-                        column.addProperty("name", name);
-                        column.addProperty("typeName", rs.getString("DATA_TYPE"));
-                        String nullable = rs.getString("IS_NULLABLE");
-                        column.addProperty("nullable", nullable == null || !nullable.equalsIgnoreCase("NO"));
-                        // COLUMN_KEY = 'PRI' 即主键（MySQL 系的惯例位）
-                        column.addProperty("primaryKey", "PRI".equalsIgnoreCase(rs.getString("COLUMN_KEY")));
-                        String defaultValue = rs.getString("COLUMN_DEFAULT");
-                        if (defaultValue == null) {
-                            column.add("defaultValue", null);
-                        } else {
-                            column.addProperty("defaultValue", defaultValue);
-                        }
-                        columns.add(column);
+                while (rs.next()) {
+                    JsonObject column = new JsonObject();
+                    String name = rs.getString("COLUMN_NAME");
+                    column.addProperty("name", name);
+                    column.addProperty("typeName", rs.getString("DATA_TYPE"));
+                    String nullable = rs.getString("IS_NULLABLE");
+                    column.addProperty("nullable", nullable == null || !nullable.equalsIgnoreCase("NO"));
+                    // COLUMN_KEY = 'PRI' 即主键（MySQL 系的惯例位）
+                    column.addProperty("primaryKey", "PRI".equalsIgnoreCase(rs.getString("COLUMN_KEY")));
+                    String defaultValue = rs.getString("COLUMN_DEFAULT");
+                    if (defaultValue == null) {
+                        column.add("defaultValue", null);
+                    } else {
+                        column.addProperty("defaultValue", defaultValue);
                     }
+                    columns.add(column);
                 }
             }
             trace("columns 快路径命中 列数=" + columns.size()
