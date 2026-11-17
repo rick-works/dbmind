@@ -1053,7 +1053,8 @@ const detailItems = computed(() => userDetailItems(props.editData?.fields, {
 const isMysql = computed(() => {
   // 局部名不叫 t：本文件已 import { t } 做翻译，叫 t 会在本作用域遮蔽它
   const type = props.conn?.type
-  return type === 'MYSQL' || type === 'MARIADB' || type === 'DORIS'
+  // TiDB / OceanBase 也是 MySQL 协议的用户模型（mysql.user / mysql.db）
+  return ['MYSQL', 'MARIADB', 'DORIS', 'TIDB', 'OCEANBASE'].includes(type)
 })
 // Doris 会对新建用户自动授予系统库（information_schema/mysql）的只读权限
 const isDoris = computed(() => props.conn?.type === 'DORIS')
@@ -1073,7 +1074,7 @@ const isMssql = computed(() => props.conn?.type === 'SQLSERVER')
 // KingbaseES 与 PostgreSQL **共用同一套分支**：后端 `user_action_sql` / `users` / `user_info`
 // 的分支都是 `postgresql | kingbase`，这里只认 POSTGRESQL 的话，KingbaseES 连"角色"这一页
 // 都出不来（界面上还写着"该类型还没实现自动授权"）—— 前后端对同一个类型给出两套结论。
-const isPgsql = computed(() => props.conn?.type === 'POSTGRESQL' || props.conn?.type === 'KINGBASE')
+const isPgsql = computed(() => ['POSTGRESQL', 'KINGBASE', 'OPENGAUSS'].includes(props.conn?.type))
 // Oracle：系统权限 / 角色 / 对象权限三层。
 // ⚠️ 下面三张清单与后端 `dialect.rs` 的 ORACLE_SYSTEM_PRIVS / ORACLE_ROLES /
 // ORACLE_OBJECT_PRIVS **必须一致**：后端会再校验一遍并拒绝清单外的名字，

@@ -7046,7 +7046,7 @@ const dropContainer = (db, connType) => {
   if (!raw) return ''
   const ct = String(connType || '').toUpperCase()
   if (['SQLITE', 'H2'].includes(ct)) return ''
-  const schemaAware = ['ORACLE', 'DM', 'POSTGRESQL', 'KINGBASE', 'SQLSERVER'].includes(ct)
+  const schemaAware = ['ORACLE', 'DM', 'POSTGRESQL', 'KINGBASE', 'OPENGAUSS', 'SQLSERVER'].includes(ct)
   if (!schemaAware) return raw
   const i = raw.lastIndexOf('.')
   return i >= 0 ? raw.slice(i + 1) : raw
@@ -7880,11 +7880,11 @@ const onObjFormSaved = (db, cat) => {
 // 可能不存在的账号，所以统一剔除。
 const DDL_DROP_KW = { view: 'VIEW', procedure: 'PROCEDURE', function: 'FUNCTION', trigger: 'TRIGGER', event: 'EVENT' }
 const QUOTE_CHAR = { BACKTICK: '`', DOUBLE_QUOTE: '"' }
-const isPgFamily = (t) => t === 'POSTGRESQL' || t === 'KINGBASE'
+const isPgFamily = (t) => ['POSTGRESQL', 'KINGBASE', 'OPENGAUSS'].includes(t)
 // 返回该连接类型下「必须 DROP + CREATE」的对象 kind；空数组表示可用 ALTER / CREATE OR REPLACE
 const dropCreateKindsOf = (connType) => {
   const t = String(connType || '').toUpperCase()
-  if (t === 'MYSQL' || t === 'MARIADB' || t === 'DORIS') return ['procedure', 'function', 'trigger', 'event']
+  if (['MYSQL', 'MARIADB', 'TIDB', 'OCEANBASE', 'STARROCKS', 'DORIS'].includes(t)) return ['procedure', 'function', 'trigger', 'event']
   if (t === 'SQLITE') return ['view', 'trigger']
   if (t === 'CLICKHOUSE') return ['view', 'procedure', 'function', 'event']
   // PG 的 ALTER TRIGGER 只能改名 / 改依赖，不能改触发定义体 → 必须 DROP + CREATE

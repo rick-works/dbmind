@@ -497,7 +497,7 @@ const guideError = ref('')
 // 支持“事件”对象的数据库类型（MySQL/MariaDB/Doris）；其余类型隐藏或禁用
 const hasEvents = computed(() => {
   const t = guide.value && guide.value.connectionType
-  return t === 'MYSQL' || t === 'MARIADB' || t === 'DORIS'
+  return ['MYSQL', 'MARIADB', 'DORIS', 'TIDB', 'OCEANBASE', 'STARROCKS'].includes(t)
 })
 
 const file = ref('')
@@ -552,7 +552,12 @@ const pollFails = createPollGuard(3)
 const defaultPort = computed(() => {
   const t = guide.value && guide.value.connectionType
   if (t === 'MYSQL' || t === 'MARIADB') return 3306
-  if (t === 'POSTGRESQL') return 5432
+  if (t === 'TIDB') return 4000
+  if (t === 'OCEANBASE') return 2881
+  if (t === 'STARROCKS') return 9030
+  if (t === 'DORIS') return 9030
+  if (t === 'POSTGRESQL' || t === 'OPENGAUSS') return 5432
+  if (t === 'KINGBASE') return 54321
   if (t === 'SQLSERVER') return 1433
   if (t === 'ORACLE') return 1521
   if (t === 'DB2') return 50000

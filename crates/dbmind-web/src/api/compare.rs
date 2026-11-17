@@ -550,7 +550,8 @@ async fn table_index_signatures(
 ) -> XResult<Option<BTreeSet<String>>> {
     // Doris 的索引查询拿不到稳定的列序，比较结果会造成假差异；索引页签本身
     // 也只做展示。这里如实标记“未比较”，不猜列序。
-    if dialect.kind.key() == "doris" {
+    // StarRocks 与 Doris 同源，索引列序同样拿不稳，一并如实跳过
+    if matches!(dialect.kind.key(), "doris" | "starrocks") {
         return Ok(None);
     }
     let Meta::Sql(sql) = dialect.indexes() else {

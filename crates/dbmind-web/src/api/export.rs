@@ -680,7 +680,7 @@ pub(crate) fn binary_literal(data: &dbmind_core::BlobBytes, dialect: Dialect) ->
     let hex = data.to_hex();
     match dialect.engine_key() {
         // PG 的 bytea 输入格式：`'\xDEADBEEF'`（standard_conforming_strings=on 时不转义反斜杠）
-        "postgresql" | "kingbase" => format!("'\\x{hex}'::bytea"),
+        "postgresql" | "kingbase" | "opengauss" => format!("'\\x{hex}'::bytea"),
         // SQL Server 的二进制字面量就是 0x 前缀
         "sqlserver" => format!("0x{hex}"),
         // Oracle / DM 用 hextoraw()

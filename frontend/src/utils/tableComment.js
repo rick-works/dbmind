@@ -16,6 +16,9 @@ const QUOTE_BY_TYPE = {
   MYSQL: 'BACKTICK',
   MARIADB: 'BACKTICK',
   DORIS: 'BACKTICK',
+  TIDB: 'BACKTICK',
+  OCEANBASE: 'BACKTICK',
+  STARROCKS: 'BACKTICK',
   CLICKHOUSE: 'BACKTICK',
   SQLSERVER: 'BRACKET'
 }
@@ -69,10 +72,12 @@ export const buildTableCommentSql = ({ type, database = '', table = '', comment 
 
   const t = quoteIdent(bare, style)
 
-  if (T === 'DORIS' || T === 'CLICKHOUSE') {
+  // StarRocks 与 Doris 同源，表注释也是 MODIFY COMMENT
+  if (T === 'DORIS' || T === 'CLICKHOUSE' || T === 'STARROCKS') {
     return `ALTER TABLE ${t} MODIFY COMMENT '${val}'`
   }
-  if (T === 'MYSQL' || T === 'MARIADB') {
+  // TiDB / OceanBase 是 MySQL 协议：`ALTER TABLE t COMMENT='…'`（写 COMMENT ON 会语法错）
+  if (T === 'MYSQL' || T === 'MARIADB' || T === 'TIDB' || T === 'OCEANBASE') {
     return `ALTER TABLE ${t} COMMENT='${val}'`
   }
   // 其余关系型（PG / Oracle / DB2 / H2 / Kingbase / DM）

@@ -1136,11 +1136,13 @@ fn is_system_database(name: &str) -> bool {
 fn databases_sql(kind: &str) -> Option<&'static str> {
     match kind {
         // show databases 不需要先选库，正好能在「未绑库」的连接上跑
-        "mysql" | "mariadb" | "doris" | "clickhouse" => Some("show databases"),
+        "mysql" | "mariadb" | "tidb" | "oceanbase" | "doris" | "starrocks" | "clickhouse" => {
+            Some("show databases")
+        }
         "sqlserver" => Some(
             "select name from sys.databases where state = 0 and has_dbaccess(name) = 1 order by name",
         ),
-        "postgresql" | "kingbase" => Some(
+        "postgresql" | "kingbase" | "opengauss" => Some(
             "select datname as name from pg_database where datistemplate = false order by datname",
         ),
         // DB2 没有「库」这一层：schema 就是它的库
@@ -1159,7 +1161,7 @@ fn databases_sql(kind: &str) -> Option<&'static str> {
 fn schemas_sql(kind: &str) -> Option<&'static str> {
     match kind {
         "sqlserver" => Some("select name from sys.schemas order by name"),
-        "postgresql" | "kingbase" => Some(
+        "postgresql" | "kingbase" | "opengauss" => Some(
             "select nspname as name from pg_namespace where nspname not like 'pg\\_%' order by nspname",
         ),
         "db2" => Some("select schemaname as name from syscat.schemata order by schemaname"),

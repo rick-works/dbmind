@@ -10,7 +10,8 @@
       <el-form-item :label="$t('ndb.name')" required>
         <el-input v-model="form.name" />
       </el-form-item>
-      <template v-if="connType === 'MYSQL' || connType === 'MARIADB'">
+      <!-- MySQL 语法族（含 TiDB / OceanBase / StarRocks）都有字符集与排序规则 -->
+      <template v-if="['MYSQL', 'MARIADB', 'TIDB', 'OCEANBASE', 'STARROCKS'].includes(connType)">
         <el-form-item :label="$t('ndb.charset')">
           <el-select v-model="form.charset" style="width: 100%" clearable filterable :placeholder="$t('ndb.followServer')">
             <el-option v-for="c in charsets" :key="c" :label="c" :value="c" />

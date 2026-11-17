@@ -652,7 +652,7 @@ const srcKindCode = computed(() => String(srcInfo.value?.type || '').toUpperCase
 const batchRowsDefault = computed(() => BATCH_ROWS_DEFAULT[tgtKindCode.value] || 1000)
 // 只有 MySQL / MariaDB 目标才有 binlog 可跳过（Doris / ClickHouse 的写入插件
 // 没有 `binlog_off`，勾了也不会执行 —— 所以干脆不显示这个选项）
-const binlogSkippable = computed(() => ['MYSQL', 'MARIADB'].includes(tgtKindCode.value))
+const binlogSkippable = computed(() => ['MYSQL', 'MARIADB', 'TIDB', 'OCEANBASE', 'STARROCKS'].includes(tgtKindCode.value))
 
 // 并发三项（表数 / 每表读 / 每表写）的可选值：0 = 自动。
 // 用下拉而不是数字框：数字框的 min=1 会把「清空」夹回 1，用户改不回「自动」（真机反馈）；

@@ -829,6 +829,13 @@ if (suspects.length) {
   console.log('')
 }
 
+// 纯模块断言（alterMerge）：生成的 ALTER 静默变错属于运行期问题，Rust 单测盖不住
+const am = spawnSync(process.execPath, [fileURLToPath(new URL('./assert-alter-merge.mjs', import.meta.url))], { encoding: 'utf8' })
+if (am.status !== 0) {
+  console.log(am.stdout || am.stderr || '')
+  problems.push({ file: 'frontend/src/modules/data/alterMerge.js', line: 0, msg: 'alterMerge 断言失败：生成的 ALTER 会变成错 SQL' })
+}
+
 if (!problems.length) {
   console.log(green(suspects.length ? '  ✓ guard 通过（另有待确认项，见上）' : '  ✓ guard 通过'))
   process.exit(0)

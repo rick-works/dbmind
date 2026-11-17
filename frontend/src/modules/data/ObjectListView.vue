@@ -239,6 +239,9 @@ const TABLE_COL_SETS = {
     { prop: 'comment', label: 'ols.comment', align: 'left', min: 200 }
   ],
   MARIADB: 'MYSQL',
+  TIDB: 'MYSQL',
+  OCEANBASE: 'MYSQL',
+  STARROCKS: 'DORIS',
   // Doris **不能**照抄 MySQL 的列集：它的 information_schema.tables 里
   // `ENGINE` 对 OLAP 表一律是占位值 `Doris`（真模型 DUPLICATE/UNIQUE/AGGREGATE KEY
   // 只在 `SHOW CREATE TABLE` 里，逐表查代价太大），也没有「字符集」这个概念
@@ -268,6 +271,7 @@ const TABLE_COL_SETS = {
     { prop: 'comment', label: 'ols.comment', align: 'left', min: 220 }
   ],
   KINGBASE: 'POSTGRESQL',
+  OPENGAUSS: 'POSTGRESQL',
   ORACLE: [
     NAME_COL,
     { prop: 'rows', label: 'ols.rows' },
@@ -335,7 +339,7 @@ const CAT_COLS = {
 }
 const cols = computed(() => {
   const t = connType.value
-  const mysqlLike = t === 'MYSQL' || t === 'MARIADB'
+  const mysqlLike = ['MYSQL', 'MARIADB', 'TIDB', 'OCEANBASE', 'STARROCKS'].includes(t)
   if (props.cat === 'tables') {
     // 同构类型用别名指向（MARIADB→MYSQL 等），解到数组为止
     let set = TABLE_COL_SETS[t]

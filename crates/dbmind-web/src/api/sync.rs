@@ -797,7 +797,7 @@ async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<S
                 target_kind.quote(&db_name)
             )
         }
-        "doris" => {
+        "doris" | "starrocks" => {
             format!("create database if not exists {}", target_kind.quote(&db_name))
         }
         "sqlserver" => {
@@ -1664,7 +1664,7 @@ async fn sync_indexes(
             // **索引名保持源名**（用户口径：源叫什么目标就叫什么；重名/不支持时静默跳过）
             let idx_sql = match target_kind.kind.key() {
                 // Doris：二级索引用 BITMAP 写法（普通 create index 不带 USING 会失败）
-                "doris" => Some(format!(
+                "doris" | "starrocks" => Some(format!(
                     "create index {} on {} ({}) using bitmap",
                     idx_name, target_name, col_list
                 )),
@@ -2622,7 +2622,7 @@ async fn update_comments(
         if tgt_table.trim() != src_table.trim() {
             let lit = target_kind.literal(&src_table);
             let sql = match key {
-                "doris" => format!("alter table {target_name} modify comment {lit}"),
+                "doris" | "starrocks" => format!("alter table {target_name} modify comment {lit}"),
                 "clickhouse" => format!("alter table {target_name} modify comment {lit}"),
                 // TiDB 同 MySQL：alter table ... comment=
                 "mysql" | "mariadb" | "tidb" | "oceanbase" => format!("alter table {target_name} comment={lit}"),
