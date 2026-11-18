@@ -110,10 +110,8 @@ fn kb_meta(meta: Meta) -> Meta {
 
 /// 金仓的模式清单：系统模式名是 `sys_*`，且 `information_schema` 是**小写**的
 /// （金仓是 case-insensitive 模式，未加引号的标识符折成大写），所以过滤条件两条都要写。
-const KB_SCHEMAS: &str = "select nspname as name from sys_catalog.sys_namespace \
-     where nspname not like 'pg\\_%' and nspname not like 'sys\\_%' \
-       and nspname <> 'information_schema' \
-       and has_schema_privilege(oid, 'USAGE') order by nspname";
+/// 金仓模式清单。文本来自 `dbmind_core::scope_sql`（MCP 用的是同一份）。
+const KB_SCHEMAS: &str = dbmind_core::scope_sql::KB_SCHEMAS;
 
 /// 金仓的索引清单：`sys_indexes` 视图自身引用了不存在的 `pg_class`，只能自己拼。
 const KB_INDEXES: &str = "select n.nspname as schema, ic.relname as name, tc.relname as \"table\", \
@@ -125,8 +123,7 @@ const KB_INDEXES: &str = "select n.nspname as schema, ic.relname as name, tc.rel
      where n.nspname not in ('sys_catalog','information_schema') \
      order by tc.relname, ic.relname";
 
-const KB_DATABASES: &str = "select datname as name from sys_catalog.sys_database \
-     where datistemplate = false and has_database_privilege(datname, 'CONNECT') order by datname";
+const KB_DATABASES: &str = dbmind_core::scope_sql::KB_DATABASES;
 
 const KB_DATABASE_STATS: &str = "select (select count(*) from information_schema.tables \
      where table_schema not in ('sys_catalog','information_schema')) as tables, \
@@ -289,10 +286,7 @@ impl DialectOps for PostgresOps {
         pg_table_comments(quoted)
     }
     fn databases_sql(&self) -> Option<&'static str> {
-        Some(
-            "select datname as name from pg_database where datistemplate = false \
-             and has_database_privilege(datname, 'CONNECT') order by datname",
-        )
+        Some(dbmind_core::scope_sql::PG_DATABASES)
     }
     fn folds_ident_lower(&self) -> bool {
         true
@@ -305,6 +299,34 @@ impl DialectOps for PostgresOps {
     }
     fn family(&self) -> &'static str {
         "postgresql"
+    }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::POSTGRES
+    }
+
+    fn drop_table_sql(&self, quoted_table: &str) -> String {
+        // 目标库里已有视图引用这张表时，裸 drop 直接失败 ⇒ 重同步整张表红灯。
+        // `cascade` 连依赖视图一起清掉 —— 表都要重建了，视图本来就该失效。
+        format!("drop table if exists {quoted_table} cascade")
+    }
+
+    fn table_rows_estimate_sql(&self, _database: &str, schema: &str) -> Option<String> {
+        // `reltuples` 未 ANALYZE 时是 -1，按 0 处理；openGauss 目录同名，直接共用
+        let schema = schema.replace('\'', "''");
+        Some(format!(
+            "select c.relname as t, coalesce(c.reltuples, 0)::bigint as n from pg_class c \
+             join pg_namespace ns on ns.oid = c.relnamespace \
+             where ns.nspname = '{schema}' and c.relkind = 'r'"
+        ))
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::POSTGRES_COLUMN_TYPES
+    }
+
+    fn index_type_names(&self) -> &'static [&'static str] {
+        editor::POSTGRES_INDEX_TYPES
     }
     fn supports_native_upsert(&self) -> bool {
         true
@@ -495,6 +517,36 @@ impl DialectOps for KingbaseOps {
     fn family(&self) -> &'static str {
         "kingbase"
     }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::POSTGRES
+    }
+
+    fn drop_table_sql(&self, quoted_table: &str) -> String {
+        // 金仓与 PG 的 `cascade` 行为一致，但原实现只给 PG 加了 —— 保持一致不动，
+        // 免得「清场」顺手删掉用户手工建的视图
+        format!("drop table if exists {quoted_table}")
+    }
+
+    fn table_rows_estimate_sql(&self, _database: &str, schema: &str) -> Option<String> {
+        // 金仓把系统目录整套改名成 `sys_*`（没有 pg_catalog 兼容层），
+        // 同一条语句必须过一遍词法改名，否则整库同步拿不到行数估算
+        let schema = schema.replace('\'', "''");
+        let sql = format!(
+            "select c.relname as t, coalesce(c.reltuples, 0)::bigint as n from pg_class c \
+             join pg_namespace ns on ns.oid = c.relnamespace \
+             where ns.nspname = '{schema}' and c.relkind = 'r'"
+        );
+        Some(kb_catalog_sql(&sql))
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::POSTGRES_COLUMN_TYPES
+    }
+
+    fn index_type_names(&self) -> &'static [&'static str] {
+        editor::POSTGRES_INDEX_TYPES
+    }
     fn supports_native_upsert(&self) -> bool {
         true
     }
@@ -608,9 +660,8 @@ const PG_INDEXES: &str = "select schemaname as schema, indexname as name, tablen
 /// 曾经为了与 Navicat 对齐（它不过滤，Supabase 库里 30 个模式全列）改成过「全部列出、
 /// 有权限的排前面」，但那样点进去全是空 —— 用户 2026-11-11 明确选择**不显示没权限的**。
 /// 要与 Navicat 对齐时别再改这里，先问清楚「列出来但打不开」是不是想要的。
-const PG_SCHEMAS: &str = "select nspname as name from pg_namespace \
-     where nspname not like 'pg\\_%' and nspname <> 'information_schema' \
-       and has_schema_privilege(oid, 'USAGE') order by nspname";
+/// PG 族模式清单。口径「不显示没权限的」+ 文本真源都收在 `dbmind_core::scope_sql`。
+const PG_SCHEMAS: &str = dbmind_core::scope_sql::PG_SCHEMAS;
 
 /// 带 schema 就只看它，不带就排除系统模式 —— 例程与触发器同一口径。
 fn pg_schema_filter(ops: &dyn DialectOps, schema: Option<&str>, fallback: &str) -> String {

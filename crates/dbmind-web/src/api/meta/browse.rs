@@ -5,495 +5,7 @@
 
 use super::*;
 
-/// 统一口径：**不带死参数** —— 长度 / 精度由编辑器的「长度 / 精度」列给
-///（回显已有列时按真实类型拆进两列；新增行对 char 系预填 255）。
-/// 特例保留参数：`(max)` 这类编辑器表达不了的形态（SQL Server 的 NVARCHAR(max)）。
-fn column_types(kind: ConnectionKind) -> Vec<&'static str> {
-    match kind.key() {
-        // 类型清单的**大小写跟该库自身元数据的报法一致**：MySQL 系（含 Doris）的
-        // information_schema 一律回大写（`VARCHAR`），列表就写大写 —— 否则「下拉里是 varchar、
-        // 回显出来是 VARCHAR」，同一个类型两种写法（用户反馈）。
-        // PG 系的元数据本来就回小写（`varchar`/`timestamptz`），那里保持小写才是一致的。
-        "mysql" | "mariadb" | "tidb" | "oceanbase" | "greatsql" | "goldendb" => vec![
-            "INT",
-            "BIGINT",
-            "SMALLINT",
-            "TINYINT",
-            "DECIMAL",
-            "FLOAT",
-            "DOUBLE",
-            "VARCHAR",
-            "CHAR",
-            "TEXT",
-            "LONGTEXT",
-            "DATE",
-            "DATETIME",
-            "TIMESTAMP",
-            "TIME",
-            "JSON",
-            "BLOB",
-        ],
-        // Doris 与 MySQL 同一套类型，但它自己的元数据报 `string`（它的 VARCHAR 别名）——
-        // 清单里带上 STRING，前端的"回显向清单对齐"才能把它收进同一种写法（见 typeName.js）。
-        "doris" | "starrocks" | "selectdb" => vec![
-            "INT",
-            "BIGINT",
-            "SMALLINT",
-            "TINYINT",
-            "DECIMAL",
-            "FLOAT",
-            "DOUBLE",
-            "VARCHAR",
-            "STRING",
-            "CHAR",
-            "TEXT",
-            "LONGTEXT",
-            "DATE",
-            "DATETIME",
-            "TIMESTAMP",
-            "TIME",
-            "JSON",
-            "BLOB",
-        ],
-        // PG 系：前面的标准写法给人看，后面这几个是 **PG 自己 `udt_name` 报出来的写法**
-        // （int2/int4/int8/float4/float8/varchar/bool）—— 少一个，回显就会是清单外的名字，
-        // "下拉 = 回显"就断了（见 typeName.js）。
-        "postgresql" | "kingbase" | "opengauss" | "highgo" | "vastbase" | "uxdb" | "gaussdb" | "risingwave" => vec![
-            "integer",
-            "bigint",
-            "smallint",
-            "numeric",
-            "real",
-            "double precision",
-            "character varying",
-            "text",
-            "boolean",
-            "date",
-            "timestamp",
-            "timestamptz",
-            "time",
-            "jsonb",
-            "uuid",
-            "bytea",
-            "int2",
-            "int4",
-            "int8",
-            "float4",
-            "float8",
-            "varchar",
-            "bool",
-        ],
-        // 这份清单既是「类型下拉」的可选项，也是**回显写法的标准**（`canonTypeBase` 按它
-        // 归一大小写，见 typeName.js）。以前只列了 16 项，库里的 `text` / `datetime` /
-        // `char` 全部落在清单外 ⇒ 同一张表的字段表里出现「varchar 小写、TEXT / DATETIME
-        // 大写」的混排（真机截图）。把 SQL Server 常用的旧类型补齐，回显就统一成小写。
-        // Databend 走 MySQL 协议，但 `desc` 里的类型名是**小写**（int / varchar / decimal），
-        // 所以单独一支小写清单 —— 塞进 MySQL 的大写列表会让下拉与回显两种写法。
-        "databend" => vec![
-            "boolean",
-            "tinyint",
-            "smallint",
-            "int",
-            "bigint",
-            "float",
-            "double",
-            "decimal",
-            "varchar",
-            "string",
-            "date",
-            "timestamp",
-            "variant",
-            "binary",
-        ],
-        "sqlserver" => vec![
-            "int",
-            "bigint",
-            "smallint",
-            "tinyint",
-            "decimal",
-            "numeric",
-            "float",
-            "real",
-            "money",
-            "smallmoney",
-            "nvarchar",
-            "varchar",
-            "char",
-            "nchar",
-            "nvarchar(max)",
-            "varchar(max)",
-            "text",
-            "ntext",
-            "bit",
-            "date",
-            "time",
-            "datetime",
-            "datetime2",
-            "smalldatetime",
-            "datetimeoffset",
-            "uniqueidentifier",
-            "binary",
-            "varbinary",
-            "varbinary(max)",
-            "image",
-            "xml",
-        ],
-        "oracle" | "dm" => vec![
-            "NUMBER",
-            "FLOAT",
-            "BINARY_FLOAT",
-            "VARCHAR2",
-            "NVARCHAR2",
-            "CHAR",
-            "CLOB",
-            "BLOB",
-            "DATE",
-            "TIMESTAMP",
-            "RAW",
-        ],
-        "clickhouse" => vec![
-            // Decimal / FixedString / DateTime64 的参数由「长度 / 精度」列给
-            //（重建时 Decimal 缺省 38,6、FixedString 缺省 16、DateTime64 缺省 3，见前端 clickhouseType）
-            "UInt8",
-            "UInt16",
-            "UInt32",
-            "UInt64",
-            "Int8",
-            "Int16",
-            "Int32",
-            "Int64",
-            "Float32",
-            "Float64",
-            "Decimal",
-            "String",
-            "FixedString",
-            "Date",
-            "DateTime",
-            "DateTime64",
-            "UUID",
-            "Array(String)",
-        ],
-        "sqlite" => vec![
-            "INTEGER", "REAL", "TEXT", "BLOB", "NUMERIC", "VARCHAR", "DATETIME",
-        ],
-        "h2" => vec![
-            "INT",
-            "BIGINT",
-            "DECIMAL",
-            "DOUBLE",
-            "VARCHAR",
-            "CLOB",
-            "BLOB",
-            "DATE",
-            "TIMESTAMP",
-            "BOOLEAN",
-        ],
-        "db2" => vec![
-            "INTEGER",
-            "BIGINT",
-            "DECIMAL",
-            "DOUBLE",
-            "VARCHAR",
-            "CLOB",
-            "BLOB",
-            "DATE",
-            "TIMESTAMP",
-        ],
-        "derby" => vec![
-            "INTEGER",
-            "BIGINT",
-            "DECIMAL",
-            "DOUBLE",
-            "VARCHAR",
-            "CLOB",
-            "BLOB",
-            "DATE",
-            "TIMESTAMP",
-        ],
-        // DuckDB（generic ANSI）：1.1 全部认的常用集合；STRUCT/LIST/MAP 等复合类型
-        // 不进下拉（带参数的写法由「长度/精度」给不了，宁缺勿错，手写 SQL 可用）。
-        "duckdb" => vec![
-            "TINYINT",
-            "SMALLINT",
-            "INTEGER",
-            "BIGINT",
-            "HUGEINT",
-            "FLOAT",
-            "DOUBLE",
-            "DECIMAL",
-            "VARCHAR",
-            "BLOB",
-            "BOOLEAN",
-            "DATE",
-            "TIME",
-            "TIMESTAMP",
-            "TIMESTAMPTZ",
-            "UUID",
-            "JSON",
-        ],
-        _ => vec![],
-    }
-}
-
-
-/// 索引类型清单（`features.indexTypes`）：前端「索引 → 类型」下拉读的就是它。
-/// 下拉带 allow-create，名单外的值照样能手输；SQLite/H2/Derby/DB2 没有索引类型概念，
-/// 如实给空（前端 `v-if="indexTypes.length"` 不显示这一列）。
-fn index_types_of(kind: ConnectionKind) -> Vec<&'static str> {
-    // Databend 的索引不是 MySQL 的 `show index` 那套（bloom / inverted / vector 都挂在
-    // `ALTER TABLE` 上），`indexes()` 已对它是 Absent —— 这里只要给个非空表态，
-    // 别让「能力清单守门」单测因为空清单变红。
-    if kind.key() == "databend" {
-        return vec!["BLOOM"];
-    }
-    // RisingWave 没有索引概念（`indexes()` 对它同样是 Absent）。
-    if kind.key() == "risingwave" {
-        return vec!["BTREE"];
-    }
-    match kind.key() {
-        "mysql" | "mariadb" | "greatsql" | "goldendb" => vec!["BTREE", "HASH", "FULLTEXT", "SPATIAL"],
-        "doris" | "starrocks" | "selectdb" => vec!["BTREE", "INVERTED", "BITMAP", "BLOOMFILTER"],
-        // TiDB 官方只认 BTREE/HASH（FULLTEXT/SPATIAL 写了是语法错）
-        "tidb" | "oceanbase" => vec!["BTREE", "HASH"],
-        "postgresql" | "kingbase" | "opengauss" | "highgo" | "vastbase" | "uxdb" | "gaussdb" => vec!["btree", "hash", "gist", "gin", "spgist", "brin"],
-        "oracle" | "dm" => vec!["NORMAL", "UNIQUE", "BITMAP", "FUNCTION-BASED NORMAL"],
-        "sqlserver" => vec!["CLUSTERED", "NONCLUSTERED", "UNIQUE", "COLUMNSTORE"],
-        "clickhouse" => vec!["minmax", "set", "bloom_filter", "ngrambf_v1", "tokenbf_v1"],
-        // SQLite 的 CREATE INDEX **没有**类型子句（只有 UNIQUE 前缀，而那是独立开关），
-        // 原先给了 ["INDEX","UNIQUE"] ⇒ 下拉里两个选项选了都不进 SQL，纯误导。如实给空，
-        // 前端 `v-if="indexTypes.length"` 就不会显示这一列。
-        // H2 / Derby / DB2 同理（没有索引类型概念），一并落到下面的空分支。
-        _ => Vec::new(),
-    }
-}
-
-/// 存储引擎清单（`features.engines`）：MySQL 系是服务端常量；ClickHouse 给
-/// 能直接落 SQL 的完整写法；其它方言没有这个概念，如实给空。
-fn engines_of(kind: ConnectionKind) -> Vec<&'static str> {
-    // Databend 只有一种存储引擎（FUSE，天然列存 + 对象存储），界面上的「存储引擎」
-    // 下拉实际用不到 —— 但清单不能空，否则守门单测变红。
-    if kind.key() == "databend" {
-        return vec!["FUSE"];
-    }
-    // RisingWave 没有存储引擎概念。
-    if kind.key() == "risingwave" {
-        return vec!["HUMAN_READABLE"];
-    }
-    match kind.key() {
-        // OB 语法层接受 ENGINE=（解析后忽略）；GreatSQL / GoldenDB 是 MySQL 协议族
-        //（计算节点对外就是 MySQL 语法），引擎清单照 MySQL 给。
-        "mysql" | "mariadb" | "greatsql" | "goldendb" | "oceanbase" => vec![
-            "InnoDB", "MyISAM", "MEMORY", "CSV", "ARCHIVE", "BLACKHOLE", "MRG_MYISAM", "FEDERATED",
-        ],
-        // Doris / StarRocks / SelectDB 只有 **OLAP** 一个引擎：给 InnoDB/MyISAM 那套是**假选项**
-        //（2026-11-17 真机实测：`ENGINE=InnoDB` ⇒ Doris `Unknown engine name: innodb`、
-        // StarRocks `Unknown engine name: InnoDB`，建表直接失败）。它们默认就是 OLAP，
-        // 这一项只为把「引擎」那行显示成可选而不是纯手输。
-        "doris" | "starrocks" | "selectdb" => vec!["OLAP"],
-        // TiDB 只有一个真正生效的引擎（MyISAM/MEMORY 语法兼容但被静默忽略，
-        // 给出去只会让用户选了个假选项）。
-        "tidb" => vec!["TiDB"],
-        // ClickHouse：清单给的是**能直接落进 SQL 的完整写法** —— MergeTree 族（含 Replicated*
-        // 副本版）必须带 `()`，Log/TinyLog/Memory/Null 这些无参引擎不能带。前端选中后原样拼
-        // `ENGINE = <值>`，不再按引擎名猜着补括号（那份猜测遇上带参引擎就会补错）。
-        // **Replicated 系列必须列全**：漏了的后果是编辑表结构里 `ReplicatedMergeTree` 在清单里
-        // 找不到同名项，原样显示成不带括号的样子（用户实测踩到过）。
-        // 这份清单与前端 `frontend/src/common/objectforms/chEngines.js` 保持一致。
-        "clickhouse" => vec![
-            "MergeTree()", "ReplacingMergeTree()", "SummingMergeTree()", "AggregatingMergeTree()",
-            "CollapsingMergeTree()", "VersionedCollapsingMergeTree()", "GraphiteMergeTree()",
-            "ReplicatedMergeTree()", "ReplicatedReplacingMergeTree()", "ReplicatedSummingMergeTree()",
-            "ReplicatedAggregatingMergeTree()", "ReplicatedCollapsingMergeTree()",
-            "ReplicatedVersionedCollapsingMergeTree()", "ReplicatedGraphiteMergeTree()",
-            "Log", "TinyLog", "StripeLog", "Set", "Join", "Memory", "Null",
-        ],
-        _ => Vec::new(),
-    }
-}
-
-/// 方言能力表：界面据此决定显示哪些操作入口。
-///
-/// `supportsExport` / `supportsImport` 刻意给 **true**：导出导入还没落地（Phase 2），
-/// 但**菜单必须照上游的样子在**（界面不变），点下去会拿到一条明确的
-/// 「尚未接入」而不是一个不存在的入口 —— 藏在 features 里假装不支持才是更坏的做法。
-/// **结构编辑器**需要的方言能力。
-///
-/// 这几个键不是"锦上添花"，少一个的后果是**整行变只读**：界面拿 `ddlStyle` 决定用哪套
-/// ALTER 生成器、拿 `supportsColumnModify` 决定已加载行能不能改。落到 `generic` 分支时，
-/// 类型/长度/可空/主键/默认值**全部点不动，而且不给任何解释** ——
-/// 用户看到的就是「主键和可空为什么不能选」。
-///
-/// 诚实性要求：只声明**真的能生成正确 SQL** 的能力。界面会用这些开关直接产出 DDL，
-/// 声明得比实现靠前，等于让用户去撞数据库的报错。
-fn edit_capabilities(kind: &str) -> Value {
-    // (ddlStyle, quoteStyle, 可改已有列, 列注释, 表选项, 自增, 索引重建)
-    let (style, quote, modify, comment, table_options, auto_inc, rebuild) = match kind {
-        "mysql" | "mariadb" | "oceanbase" | "greatsql" | "goldendb" => ("mysql", "BACKTICK", true, true, true, true, true),
-        // TiDB 语法层兼容 MySQL 的 ALTER 生成器（ddlStyle 沿用 mysql）；没有
-        // `ALTER INDEX … REBUILD` 这类索引重建语法，如实 false。
-        "tidb" => ("mysql", "BACKTICK", true, true, true, true, false),
-        // StarRocks 与 Doris 同源：ALTER 生成器、字符集清单都照 Doris 走
-        "doris" | "starrocks" | "selectdb" => ("doris", "BACKTICK", true, true, true, true, true),
-        "postgresql" | "kingbase" | "opengauss" | "highgo" | "vastbase" | "uxdb" | "gaussdb" => ("pg", "DOUBLE", true, true, false, false, true),
-        // Oracle 12c+ 的标识列能查到（user_tab_identity_cols），自增如实给 true。
-        // DM 单独拆出来给 false：达梦的标识列记在哪张系统视图上、没有实例可验证（见 dialect.rs 里
-        // column_types 的 dm 分支注释）。原先跟着 Oracle 一起 true，结果界面上给了个**永远勾不上**的
-        // 自增勾选框 —— 列已有 IDENTITY 也显示成没自增，等于骗人（用户反馈排查出来的同类问题）。
-        // 与其留一个查不出来的勾选框，不如如实不显示这一列。
-        "oracle" => ("oracle", "DOUBLE", true, true, false, true, true),
-        "dm" => ("oracle", "DOUBLE", true, true, false, false, true),
-        "sqlserver" => ("mssql", "BRACKET", true, true, false, true, true),
-        // SQLite 没有 ALTER COLUMN：只能加列或重建表，如实说不能改
-        "sqlite" => ("sqlite", "DOUBLE", false, false, false, false, false),
-        "clickhouse" => ("clickhouse", "DOUBLE", true, true, false, false, false),
-        // H2：**实测过**才敢开。在 H2 2.3 上逐条验过 pg 风格的
-        // `alter table t alter column c type varchar(100)`、`numeric(12,3)`、
-        // `set default`、`rename column` 全部可用，列注释 `comment on column` 也可用。
-        // 索引重建 / 表选项 H2 没有对应语法，如实给 false。
-        "h2" => ("pg", "DOUBLE", true, true, false, false, false),
-        // Derby：**实测过**（Derby 10.16）才开。`ALTER COLUMN c SET DATA TYPE …`、
-        // `SET DEFAULT …` / `DROP DEFAULT`、`NULL` / `NOT NULL`、`RENAME COLUMN a TO b`、
-        // `ADD COLUMN`、`DROP COLUMN` 逐条验过可用（前端 `derby` 这一套生成器就是照它写的）。
-        // 列注释 Derby 没有（comment=false）；表选项/自增/索引重建也没对应语法，如实给 false。
-        "derby" => ("derby", "DOUBLE", true, false, false, false, false),
-        // DB2 LUW：列属性可以改 —— `ALTER COLUMN … SET DATA TYPE` / `SET|DROP NOT NULL` /
-        // `SET|DROP DEFAULT`、`RENAME COLUMN`、`ADD|DROP COLUMN`、`COMMENT ON COLUMN` 都有。
-        // 原先 DB2 落到 generic、supportsColumnModify=false，整个字段表灰成只读
-        //（用户看到的就是「DB2 的表结构什么都点不动」）。
-        // 表选项 / 自增列 / 索引重建：DB2 没有引擎字符集这套，IDENTITY 的在线增删也没实测，如实 false。
-        "db2" => ("db2", "DOUBLE", true, true, false, false, false),
-        // DuckDB：**没实测过 ALTER 就不声明** —— 列注释/表选项/自增/索引重建
-        // 都没有对应语法，列修改的 pg 风格语法没在 1.1 上逐条验过，先照 SQLite
-        // 的保守档给（可建表，结构编辑等真机逐条验过再放开）。建表语法与 pg
-        // 同族（标准 ANSI 列定义），ddlStyle 借 pg 的生成器。
-        "duckdb" => ("pg", "DOUBLE", false, false, false, false, false),
-        // Databend（**实测**，见 _uitest/ddl-cap-probe2.py 与 _db2-databend-notnull.py）：
-        // `ALTER TABLE … MODIFY COLUMN c <type>` 改类型可用、`RENAME COLUMN a TO b` 可用、
-        // 加列/删列可用、列注释可用（两种写法都生效）。
-        // 但不能做的比能做的多，而且**失败也不报错**：Databend 的 ALTER 是异步任务，
-        // NOT NULL / DEFAULT / PRIMARY KEY / 自增 一律"提交成功、刷新后没变化"；
-        // VARCHAR 的长度被服务端归一成 16382（改长度看不出任何变化）。
-        // 所以可空/默认值/长度这三格锁死、生成器不发它们 —— 让用户改完看不到效果才是骗人。
-        "databend" => ("databend", "DOUBLE", true, true, false, false, false),
-        // RisingWave（**实测**）：`ALTER COLUMN c TYPE <type>`（**不能带长度**，`varchar(50)` 直接
-        // 语法错）、加列、删列可用；改名 / SET NOT NULL / SET DEFAULT / 加主键 / 自增
-        // 全是 `Feature is not yet implemented`；`comment on column` 能执行但 col_description
-        // 读回来是空 —— 注释如实 false，否则用户写了注释刷新就没了。
-        "risingwave" => ("risingwave", "DOUBLE", true, false, false, false, false),
-        // 非关系型：界面按「不支持在线改结构」处理（没实测过就不声明 ——
-        // 声明得比实现靠前，等于让用户去撞数据库的报错）
-        _ => ("generic", "DOUBLE", false, false, false, false, false),
-    };
-    // (字符集清单, 字符集 → 排序规则映射)
-    let (charsets, collations): (Vec<&str>, Value) = match kind {
-        // GreatSQL 是 MySQL 8.0 的分支，字符集/排序规则集合与 MySQL 完全一致；
-        // GoldenDB 计算节点对外是 MySQL 协议（见 plugins/connection-types/goldendb.yaml），
-        // 同一份清单；SelectDB 与 Doris 同源。名单外的值下拉仍可手输。
-        "mysql" | "mariadb" | "greatsql" | "goldendb" | "doris" | "starrocks" | "selectdb" => (
-            vec![
-                // 常用字符集（MySQL/MariaDB 的服务端标准集合在版本间很稳定）
-                "utf8mb4", "utf8mb3", "utf8", "latin1", "latin2", "latin5", "latin7", "gbk", "gb18030",
-                "big5", "ascii", "binary", "ucs2", "utf16", "utf16le", "utf32", "cp1250", "cp1251", "cp1256",
-                "cp1257", "euckr", "sjis", "cp932", "greek", "hebrew", "koi8r", "koi8u", "tis620",
-                "macroman", "armscii8", "geostd8", "keybcs2", "swe7",
-            ],
-            json!({
-                // 排序规则**逐字符集写全**：这里只列真实存在的名字 —— 生成或臆造的名字会让建表直接失败。
-                // 覆盖 utf8mb4 / utf8mb3 / utf8 / latin1 的完整常用集合，其余给该字符集的关键几条。
-                "utf8mb4": [
-                    "utf8mb4_0900_ai_ci", "utf8mb4_0900_as_ci", "utf8mb4_0900_as_cs", "utf8mb4_0900_bin",
-                    "utf8mb4_general_ci", "utf8mb4_bin", "utf8mb4_unicode_ci", "utf8mb4_unicode_520_ci",
-                    "utf8mb4_croatian_ci", "utf8mb4_czech_ci", "utf8mb4_danish_ci", "utf8mb4_esperanto_ci",
-                    "utf8mb4_estonian_ci", "utf8mb4_hungarian_ci", "utf8mb4_icelandic_ci",
-                    "utf8mb4_latvian_ci", "utf8mb4_lithuanian_ci", "utf8mb4_persian_ci", "utf8mb4_polish_ci",
-                    "utf8mb4_romanian_ci", "utf8mb4_sinhala_ci", "utf8mb4_slovak_ci", "utf8mb4_slovenian_ci",
-                    "utf8mb4_spanish_ci", "utf8mb4_spanish2_ci", "utf8mb4_swedish_ci", "utf8mb4_turkish_ci",
-                    "utf8mb4_vietnamese_ci",
-                ],
-                "utf8mb3": [
-                    "utf8mb3_general_ci", "utf8mb3_bin", "utf8mb3_unicode_ci", "utf8mb3_unicode_520_ci",
-                    "utf8mb3_croatian_ci", "utf8mb3_czech_ci", "utf8mb3_danish_ci", "utf8mb3_esperanto_ci",
-                    "utf8mb3_estonian_ci", "utf8mb3_general_mysql500_ci", "utf8mb3_hungarian_ci",
-                    "utf8mb3_icelandic_ci", "utf8mb3_latvian_ci", "utf8mb3_lithuanian_ci",
-                    "utf8mb3_persian_ci", "utf8mb3_polish_ci", "utf8mb3_romanian_ci", "utf8mb3_sinhala_ci",
-                    "utf8mb3_slovak_ci", "utf8mb3_slovenian_ci", "utf8mb3_spanish_ci", "utf8mb3_spanish2_ci",
-                    "utf8mb3_swedish_ci", "utf8mb3_turkish_ci", "utf8mb3_vietnamese_ci",
-                ],
-                "utf8": [
-                    "utf8_general_ci", "utf8_bin", "utf8_unicode_ci", "utf8_unicode_520_ci",
-                    "utf8_general_mysql500_ci", "utf8_czech_ci", "utf8_danish_ci", "utf8_icelandic_ci",
-                    "utf8_latvian_ci", "utf8_lithuanian_ci", "utf8_polish_ci", "utf8_romanian_ci",
-                    "utf8_slovak_ci", "utf8_slovenian_ci", "utf8_spanish_ci", "utf8_spanish2_ci",
-                    "utf8_swedish_ci", "utf8_turkish_ci", "utf8_vietnamese_ci",
-                ],
-                "latin1": [
-                    "latin1_swedish_ci", "latin1_german1_ci", "latin1_german2_ci", "latin1_danish_ci",
-                    "latin1_bin", "latin1_general_ci", "latin1_general_cs", "latin1_spanish_ci",
-                ],
-                "latin2": ["latin2_general_ci", "latin2_czech_cs", "latin2_hungarian_ci", "latin2_croatian_ci", "latin2_bin"],
-                "latin5": ["latin5_turkish_ci", "latin5_bin"],
-                "latin7": ["latin7_general_ci", "latin7_general_cs", "latin7_estonian_cs", "latin7_bin"],
-                "gbk": ["gbk_chinese_ci", "gbk_bin", "gbk_unicode_520_ci"],
-                "gb18030": ["gb18030_chinese_ci", "gb18030_bin", "gb18030_unicode_520_ci"],
-                "big5": ["big5_chinese_ci", "big5_bin"],
-                "ascii": ["ascii_general_ci", "ascii_bin"],
-                "binary": ["binary"],
-                "ucs2": ["ucs2_general_ci", "ucs2_bin", "ucs2_unicode_ci", "ucs2_unicode_520_ci", "ucs2_general_mysql500_ci"],
-                "utf16": ["utf16_general_ci", "utf16_bin", "utf16_unicode_ci", "utf16_unicode_520_ci"],
-                "utf16le": ["utf16le_general_ci", "utf16le_bin"],
-                "utf32": ["utf32_general_ci", "utf32_bin", "utf32_unicode_ci", "utf32_unicode_520_ci"],
-                "cp1250": ["cp1250_general_ci", "cp1250_czech_cs", "cp1250_croatian_ci", "cp1250_polish_ci", "cp1250_bin"],
-                "cp1251": ["cp1251_general_ci", "cp1251_general_cs", "cp1251_bulgarian_ci", "cp1251_ukrainian_ci", "cp1251_bin"],
-                "cp1256": ["cp1256_general_ci", "cp1256_bin"],
-                "cp1257": ["cp1257_general_ci", "cp1257_lithuanian_ci", "cp1257_bin"],
-                "euckr": ["euckr_korean_ci", "euckr_bin"],
-                "sjis": ["sjis_japanese_ci", "sjis_bin"],
-                "cp932": ["cp932_japanese_ci", "cp932_bin"],
-                "greek": ["greek_general_ci", "greek_bin"],
-                "hebrew": ["hebrew_general_ci", "hebrew_bin"],
-                "koi8r": ["koi8r_general_ci", "koi8r_bin"],
-                "koi8u": ["koi8u_general_ci", "koi8u_bin"],
-                "tis620": ["tis620_thai_ci", "tis620_bin"],
-                "macroman": ["macroman_general_ci", "macroman_bin"],
-                "armscii8": ["armscii8_general_ci", "armscii8_bin"],
-                "geostd8": ["geostd8_general_ci", "geostd8_bin"],
-                "keybcs2": ["keybcs2_general_ci", "keybcs2_bin"],
-                "swe7": ["swe7_swedish_ci", "swe7_bin"],
-            }),
-        ),
-        // TiDB 支持的字符集/排序规则比 MySQL 少一大截，清单照实给小的 ——
-        // 排序规则名臆造一个建表就直接失败，宁缺勿错。
-        "tidb" => (
-            vec!["utf8mb4", "utf8", "latin1", "ascii", "binary", "gbk"],
-            json!({
-                "utf8mb4": ["utf8mb4_bin", "utf8mb4_general_ci"],
-                "utf8": ["utf8_bin", "utf8_general_ci"],
-                "latin1": ["latin1_bin"],
-                "ascii": ["ascii_bin"],
-                "binary": ["binary"],
-                "gbk": ["gbk_bin", "gbk_chinese_ci"],
-            }),
-        ),
-        _ => (Vec::new(), json!({})),
-    };
-    json!({
-        "ddlStyle": style,
-        "quoteStyle": quote,
-        "supportsColumnModify": modify,
-        "supportsComment": comment,
-        "supportsTableOptions": table_options,
-        "supportsAutoIncrement": auto_inc,
-        "supportsIndexRebuild": rebuild,
-        "doris": kind == "doris",
-        // 字符集 / 排序规则：MySQL 系的取值是服务端标准集合（utf8mb4 这些版本间很稳定），
-        // 这里给常青名单；其它方言（没有「表级字符集」这个概念）如实给空。
-        // 前端下拉带 `allow-create`：名单外的值照样能手输，
-        // 所以给一份有用的名单比给空数组好 —— 空数组会让整行变成纯手输。
-        // （`collations` 只需覆盖常见字符集：查不到对应项的字符集在前端会退化成输入框。）
-        "charsets": charsets,
-        "collations": collations,
-    })
-}
+use crate::api::dialect_ops::editor;
 
 async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
     let (record, dialect) = ctx_of(state, id).await?;
@@ -542,20 +54,25 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
         .into_iter()
         .filter(|object_kind| has(dialect.object_source(object_kind, "__probe__", None)))
         .collect();
-    // 结构编辑相关的能力挂在同一份 payload 上（界面一次性取，避免多一次往返）
-    let edit = edit_capabilities(kind.key());
+    // 结构编辑相关的能力挂在同一份 payload 上（界面一次性取，避免多一次往返）。
+    // 全部来自 `dialect_ops::editor`：按方言族归属，新增同族品牌不用改这里。
+    let edit = editor::for_kind(kind);
+    let collations: Value = if edit.collations_json.is_empty() {
+        json!({})
+    } else {
+        // 静态数据写成 JSON 文本，解析失败也不该让整个 /features 挂掉（前端拿到空对象会
+        // 把排序规则退化成输入框，比整页报错好）
+        serde_json::from_str(edit.collations_json).unwrap_or_else(|_| json!({}))
+    };
     Ok(json!({
         "type": kind.key().to_ascii_uppercase(),
-        "columnTypes": column_types(kind),
+        "columnTypes": editor::column_types(kind),
         // 索引类型清单：前端「索引 → 类型」那两处下拉读的就是它（`features.indexTypes`）。
-        // 原先恒为空数组 ⇒ 下拉无项、`v-if="indexTypes.length"` 的那一列**整列不显示**（白写了）。
-        // 这里按方言给一份可用的小名单；下拉带 allow-create 的话，名单外的值照样能手输。
-        "indexTypes": index_types_of(kind),
-        // 存储引擎：MySQL 系的标准引擎是服务端常量清单（InnoDB 等一直是这些名字）；
-        // 其它方言没有这个概念，如实给空数组。前端下拉带 `allow-create`，
-        // 清单外的值照样能手输 —— 所以宁可给一份有用的小名单，也不给空数组
+        // 空清单 ⇒ 下拉无项、`v-if="indexTypes.length"` 那一列不显示。
+        "indexTypes": editor::index_types(kind),
+        // 存储引擎：清单外的值前端照样能手输，所以宁可给一份有用的小名单也不给空数组
         // （空数组会让「存储引擎」整行退化成纯手输）。
-        "engines": engines_of(kind),
+        "engines": editor::storage_engines(kind),
         "supportsDatabases": true,
         "supportsSchemas": dialect.is_schema_aware(),
         "supportsIndexes": index_ok,
@@ -583,16 +100,16 @@ async fn features_json(state: &AppState, id: &str) -> XResult<Value> {
         "supported": kind.implemented(),
         // 结构编辑器要的键（ddlStyle / quoteStyle / supportsColumnModify / ...）——
         // 展开在顶层，界面按扁平键读取
-        "ddlStyle": edit["ddlStyle"],
-        "quoteStyle": edit["quoteStyle"],
-        "supportsColumnModify": edit["supportsColumnModify"],
-        "supportsComment": edit["supportsComment"],
-        "supportsTableOptions": edit["supportsTableOptions"],
-        "supportsAutoIncrement": edit["supportsAutoIncrement"],
-        "supportsIndexRebuild": edit["supportsIndexRebuild"],
-        "doris": edit["doris"],
-        "charsets": edit["charsets"],
-        "collations": edit["collations"],
+        "ddlStyle": edit.ddl_style,
+        "quoteStyle": edit.quote_style,
+        "supportsColumnModify": edit.supports_column_modify,
+        "supportsComment": edit.supports_comment,
+        "supportsTableOptions": edit.supports_table_options,
+        "supportsAutoIncrement": edit.supports_auto_increment,
+        "supportsIndexRebuild": edit.supports_index_rebuild,
+        "doris": edit.doris,
+        "charsets": edit.charsets,
+        "collations": collations,
     }))
 }
 
@@ -1958,24 +1475,24 @@ mod tests {
             let key = d.key;
             let kind = dbmind_core::ConnectionKind::from_key(key).expect("类型 key 必须能还原枚举");
             assert!(
-                !column_types(kind).is_empty(),
-                "{key} 的列类型清单为空 —— column_types 的 match 漏了这个 key"
+                !editor::column_types(kind).is_empty(),
+                "{key} 的列类型清单为空 —— 方言族的 column_type_names 漏了这条"
             );
-            let edit = edit_capabilities(key);
+            let edit = editor::for_kind(kind);
             assert_ne!(
-                edit["ddlStyle"], "generic",
-                "{key} 的结构编辑能力落进了 generic 兜底 —— edit_capabilities 的 match 漏了这个 key"
+                edit.ddl_style, "generic",
+                "{key} 的结构编辑能力落进了 generic 兜底 —— 方言族没有 edit_capabilities 实现"
             );
             // MySQL 族的索引类型/存储引擎清单必须显式表态（TiDB 当年全漏，下拉整列消失）：
             // 族内新类型与 MySQL 行为一致，漏配只会静默给空 —— 这里强制非空。
             if d.dialect == "MySQL" {
                 assert!(
-                    !index_types_of(kind).is_empty(),
-                    "{key} 的索引类型清单为空 —— index_types_of 的 match 漏了这个 key"
+                    !editor::index_types(kind).is_empty(),
+                    "{key} 的索引类型清单为空 —— 方言族没有 index_type_names"
                 );
                 assert!(
-                    !engines_of(kind).is_empty(),
-                    "{key} 的存储引擎清单为空 —— engines_of 的 match 漏了这个 key"
+                    !editor::storage_engines(kind).is_empty(),
+                    "{key} 的存储引擎清单为空 —— 方言族没有 storage_engines"
                 );
             }
         }

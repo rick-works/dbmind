@@ -16,8 +16,8 @@ pub(crate) use axum::extract::{Path, RawQuery, State};
 pub(crate) use axum::http::StatusCode;
 pub(crate) use axum::Json;
 pub(crate) use dbmind_core::{
-    AccessContext, CellValue, ColumnDetail, ConnectionKind, ConnectionRecord, DbMindError, ErrorCode,
-    QueryOptions, QueryRequest, QueryResult,
+    AccessContext, CellValue, ColumnDetail, ConnectionRecord, DbMindError, ErrorCode, QueryOptions,
+    QueryRequest, QueryResult,
 };
 pub(crate) use serde_json::{json, Map, Value};
 
@@ -788,6 +788,7 @@ pub async fn alter(
 #[cfg(test)]
 mod scope_tests {
     use super::*;
+    use dbmind_core::ConnectionKind;
 
     // 达梦真机（2026-11-18）踩出来的两类问题，各留两条断言防回归：
     // ① 树上「库」就是模式，裸模式名（`DEMO`）必须能当模式用；

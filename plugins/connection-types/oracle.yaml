@@ -40,3 +40,11 @@ capabilities:
   sqlExplain: true
   userAdmin: true
   driverManagement: true
+# 命令行备份走数据泵（expdp/impdp）。DM 同为 Oracle 方言但工具不同，在 dm.yaml 里单独声明。
+backup:
+  engine: Oracle
+  tool: expdp
+  restoreTool: impdp
+  package: oracle-instantclient
+  dumpHint: 'expdp {user}/******@{host}:{port}/{database} DIRECTORY=DATA_PUMP_DIR DUMPFILE={filePath} FULL=Y'
+  restoreHint: 'impdp {user}/******@{host}:{port}/{database} DIRECTORY=DATA_PUMP_DIR DUMPFILE={filePath} FULL=Y'

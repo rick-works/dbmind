@@ -200,3 +200,27 @@ pub struct TypeDescriptor {
     /// 当前内核是否已实现该类型的执行路径（声明了就位 ≠ 驱动已就绪）。
     pub implemented: bool,
 }
+
+/// 命令行备份/还原工具的规格（YAML 的 `backup:` 段）。
+///
+/// 放在 core 而不是 `dbmind-web`：这是「这种库用什么工具备份」的事实，与
+/// `defaultPort` / `jdbc.driverClass` 同一档 —— 属于类型清单，不属于某个接口实现。
+/// 放在 Rust 里的旧做法导致「新增同族品牌要想起来改 backup.rs 的 match」，漏了的表现是
+/// 「这个类型只能走内置引擎」，界面上完全看不出是漏配。
+#[derive(Debug, Clone, Copy)]
+pub struct BackupCli {
+    /// 展示用引擎名（`MySQL` / `PostgreSQL` …）。
+    pub engine: &'static str,
+    /// 备份工具名。
+    pub tool: &'static str,
+    /// 同一工具在别的发行版里的叫法（如 MariaDB 的 `mariadb-dump`）。
+    pub aliases: &'static [&'static str],
+    /// 还原工具名。
+    pub restore_tool: &'static str,
+    /// 包名（brew / apt 用）。
+    pub package: &'static str,
+    /// 备份命令模板（`{host}` / `{port}` / `{user}` / `{database}` / `{filePath}` / `{charset}`）。
+    pub dump_hint: &'static str,
+    /// 还原命令模板。
+    pub restore_hint: &'static str,
+}

@@ -1130,48 +1130,24 @@ fn is_system_database(name: &str) -> bool {
 
 /// 「库」这一层的清单 SQL。
 ///
-/// 与 web 的 `api::dialect.rs`（`Dialect::databases`）是**同一份口径** —— 那边给界面
-/// 的树用，这边给模型用。MCP 是独立 crate、不依赖 web，所以只能各存一份：改口径时
-/// 两边一起改。这里额外要求「没选库也能跑通」，因为它的使命正是帮模型挑一个库。
+/// **与界面树共用同一份文本**（`dbmind_core::scope_sql`）。此前这里另存了一份，
+/// 于是口径漂开：金仓还在用 `pg_database`（它没有 `pg_catalog` 兼容层，真机直接报
+/// 「关系不存在」）、PG 少了 `has_database_privilege` 过滤（模型会挑到连不上的库）。
+///
+/// 这里额外要求「没选库也能跑通」，因为它的使命正是帮模型挑一个库 ——
+/// `show databases` 与各家的系统目录查询都满足这一点。
 fn databases_sql(kind: &str) -> Option<&'static str> {
-    match kind {
-        // show databases 不需要先选库，正好能在「未绑库」的连接上跑
-        "mysql" | "mariadb" | "tidb" | "oceanbase" | "doris" | "starrocks" | "clickhouse" => {
-            Some("show databases")
-        }
-        "sqlserver" => Some(
-            "select name from sys.databases where state = 0 and has_dbaccess(name) = 1 order by name",
-        ),
-        "postgresql" | "kingbase" | "opengauss" => Some(
-            "select datname as name from pg_database where datistemplate = false order by datname",
-        ),
-        // DB2 没有「库」这一层：schema 就是它的库
-        "db2" => Some("select schemaname as name from syscat.schemata order by schemaname"),
-        "oracle" | "dm" => Some("select username as name from all_users order by username"),
-        "h2" => Some("select schema_name as name from information_schema.schemata order by schema_name"),
-        "derby" => Some("select schemaname as name from sys.sysschemas order by schemaname"),
-        // SQLite / 非 SQL 类型没有「库清单」这回事
-        _ => None,
-    }
+    let kind = dbmind_core::ConnectionKind::from_key(kind)?;
+    dbmind_core::scope_sql::databases_sql(kind)
 }
 
 /// 「模式」这一层的清单 SQL（只有 schema 层级的类型有）。
 ///
-/// 模式是**库内**的一层，所以这些语句只能在连接已绑定库时执行。
+/// 模式是**库内**的一层，所以这些语句只能在连接已绑定库时执行。同样来自
+/// `dbmind_core::scope_sql` —— 与界面树一个口径（含「没权限的不显示」）。
 fn schemas_sql(kind: &str) -> Option<&'static str> {
-    match kind {
-        "sqlserver" => Some("select name from sys.schemas order by name"),
-        "postgresql" | "kingbase" | "opengauss" => Some(
-            "select nspname as name from pg_namespace where nspname not like 'pg\\_%' order by nspname",
-        ),
-        "db2" => Some("select schemaname as name from syscat.schemata order by schemaname"),
-        "oracle" | "dm" => Some("select username as name from all_users order by username"),
-        "h2" => Some(
-            "select schema_name as name from information_schema.schemata order by schema_name",
-        ),
-        "derby" => Some("select schemaname as name from sys.sysschemas order by schemaname"),
-        _ => None,
-    }
+    let kind = dbmind_core::ConnectionKind::from_key(kind)?;
+    dbmind_core::scope_sql::schemas_sql(kind)
 }
 
 /// `database` / `schema` 两个参数（MCP 侧新增的定位能力）。
@@ -1401,9 +1377,16 @@ mod tests {
     fn databases_sql_covers_the_unbound_case() {
         // 这些类型「没选库」也能跑，正是 require_database 报错时要用的那一步
         assert_eq!(databases_sql("mysql"), Some("show databases"));
-        assert_eq!(databases_sql("clickhouse"), Some("show databases"));
+        // CH 与界面树共用一份：`system.databases`（列名同样是 name）
+        assert!(databases_sql("clickhouse")
+            .unwrap()
+            .contains("system.databases"));
         assert!(databases_sql("sqlserver").unwrap().contains("sys.databases"));
         assert!(databases_sql("postgresql").unwrap().contains("pg_database"));
+        // 金仓没有 pg_catalog 兼容层：跟着 PG 用 pg_database 会直接「关系不存在」
+        let kb = databases_sql("kingbase").unwrap();
+        assert!(kb.contains("sys_catalog"), "{kb}");
+        assert!(!kb.contains("pg_database"), "{kb}");
         // SQLite 一个文件一个库：没有库清单，也就不会被「未指定库」拦住
         assert_eq!(databases_sql("sqlite"), None);
         // 模式的语句只在 schema 层级存在

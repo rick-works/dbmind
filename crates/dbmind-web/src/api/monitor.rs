@@ -1284,4 +1284,34 @@ mod tests {
             }
         }
     }
+
+    /// 守门：每个**界面可见**的 SQL 类型都必须明确表态 —— 要么有监控计划，
+    /// 要么在下面这份「已知没有监控」名单里。
+    ///
+    /// 漏配的表现不是报错，而是监控页一片空白、也不给原因（GreatSQL 有实例却一直
+    /// 空白页，2026-11-17 真机巡检才发现）。
+    ///
+    /// 监控计划**没有**做「按方言族自动继承」：看着像 MySQL 的 TiDB / OceanBase /
+    /// Doris / StarRocks 系统表各不相同，自动继承会把一条注定 500 的语句发给新库 ——
+    /// 那比空白页更糟（用户以为在跑，其实每次刷新都失败）。
+    #[test]
+    fn 每种可见类型都明确表态监控() {
+        const NO_MONITOR: &[&str] = &[
+            // 嵌入式 / 文件引擎：没有系统视图可查
+            "h2", "derby", "duckdb",
+            // 系统表还没接入（不是漏配，是明确没做）
+            "oracle", "dm", "db2", "databend", "risingwave",
+        ];
+        for kind in dbmind_core::ConnectionKind::ALL {
+            // NoSQL 走各自的监控接口，不进这张表
+            if !kind.is_jdbc() && kind.key() != "sqlite" {
+                continue;
+            }
+            let key = kind.key();
+            assert!(
+                plan(key).is_some() || NO_MONITOR.contains(&key),
+                "{key} 既没有监控计划、也不在「没有监控」名单里 —— 监控页会空白且不给原因"
+            );
+        }
+    }
 }

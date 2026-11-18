@@ -54,3 +54,11 @@ capabilities:
   sqlExplain: true
   userAdmin: true
   driverManagement: true
+# 命令行备份用 sqlcmd 发 BACKUP/RESTORE DATABASE（没有独立的 dump 工具）。
+backup:
+  engine: SQL Server
+  tool: sqlcmd
+  restoreTool: sqlcmd
+  package: mssql-tools18
+  dumpHint: "sqlcmd -S {host},{port} -U {user} -Q \"BACKUP DATABASE [{database}] TO DISK = N'{filePath}' WITH FORMAT\""
+  restoreHint: "sqlcmd -S {host},{port} -U {user} -Q \"RESTORE DATABASE [{database}] FROM DISK = N'{filePath}' WITH REPLACE\""

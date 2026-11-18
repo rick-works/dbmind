@@ -787,31 +787,9 @@ async fn ensure_target_db(state: &AppState, tgt: &Side, opts: &Opts) -> Option<S
     if exists {
         return None;
     }
-    let create_db = match target_kind.kind.key() {
-        // MySQL 系建库**必须显式 utf8mb4**：服务器默认库字符集常是 latin1，之后中文
-        // INSERT 直接报 Incorrect string value 1366（真机踩过）—— 库里先别埋雷。
-        // Doris 的字符集由表级控制，无此问题。
-        "mysql" | "mariadb" | "tidb" | "oceanbase" => {
-            format!(
-                "create database if not exists {} default charset utf8mb4",
-                target_kind.quote(&db_name)
-            )
-        }
-        "doris" | "starrocks" => {
-            format!("create database if not exists {}", target_kind.quote(&db_name))
-        }
-        "sqlserver" => {
-            // db_id 的参数是**字符串字面量**（N'..'）—— 用方括号会被当成列引用
-            //（真机：「列名 'sync_audit' 无效」），只有 CREATE DATABASE 用方括号
-            format!(
-                "if db_id(N'{}') is null create database {}",
-                // 字面量里的单引号要写成两个；标识符走方言引号（库名可能带引号/方括号）
-                db_name.replace("'", "''"),
-                target_kind.quote(&db_name)
-            )
-        }
-        _ => format!("create database {}", target_kind.quote(&db_name)),
-    };
+    // 建库语句收在 `DialectOps::create_database_sql()` 里（MySQL 系强制 utf8mb4、
+    // SQL Server 走 `db_id` 判存在、Doris 不带 charset）。同族新品牌自动继承。
+    let create_db = target_kind.create_database_sql(&db_name);
     // ⚠ 两个坑都在这条建库语句上：
     // 1. 必须走**主连接**（scope 空）—— 影子连接的 URL 就指向这个还不存在的库，
     //    走它发 CREATE DATABASE 是「用连不上的连接去修连不上的原因」（真机踩过）；
@@ -1244,53 +1222,11 @@ async fn source_table_rows(
         Some((db, schema)) => (db.to_string(), schema.to_string()),
         None => (src.scope.clone(), "public".to_string()),
     };
-    let quote = |text: &str| text.replace('\'', "''");
-    let sql = match kind.kind.key() {
-        "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => format!(
-            "select table_name as t, table_rows as n from information_schema.tables \
-             where table_schema = '{}'",
-            quote(&database)
-        ),
-        "clickhouse" => format!(
-            "select name as t, total_rows as n from system.tables where database = '{}'",
-            quote(&database)
-        ),
-        // openGauss 与 PG 的目录同名；金仓的系统目录是 sys_*（**没有** pg_catalog 兼容层），
-        // 同一条语句要过一遍改名，否则金仓整库同步拿不到行数估算（排序退化成清单原序）
-        "postgresql" | "kingbase" | "opengauss" => {
-            let sql = format!(
-                "select c.relname as t, coalesce(c.reltuples, 0)::bigint as n from pg_class c \
-                 join pg_namespace ns on ns.oid = c.relnamespace \
-                 where ns.nspname = '{}' and c.relkind = 'r'",
-                quote(&schema)
-            );
-            if kind.kind.key() == "kingbase" {
-                crate::api::dialect_ops::kb_catalog_sql(&sql)
-            } else {
-                sql
-            }
-        }
-        // Oracle / DM：`num_rows` 是统计信息里的估算（可能为 NULL，按 0 处理）
-        "oracle" | "dm" => {
-            let owner = schema.to_uppercase();
-            format!(
-                "select table_name as t, num_rows as n from all_tables where owner = '{}'",
-                quote(&owner)
-            )
-        }
-        // DB2：`CARD` 是统计信息里的行数估算
-        "db2" => format!(
-            "select tabname as t, card as n from syscat.tables where tabschema = '{}'",
-            quote(&schema.to_uppercase())
-        ),
-        // SQL Server：分区统计里 index_id 0/1 分别是堆和聚集索引，加起来就是表行数
-        "sqlserver" => format!(
-            "select t.name as t, sum(p.rows) as n from sys.dm_db_partition_stats p \
-             join sys.tables t on t.object_id = p.object_id \
-             where p.index_id in (0, 1) and schema_name(t.schema_id) = '{}' group by t.name",
-            quote(&schema)
-        ),
-        _ => return out,
+    // 各方言的估算语句收在 `DialectOps::table_rows_estimate_sql()` 里
+    // （金仓的 `pg_*` → `sys_*` 改名也归它自己处理）。
+    // 没有现成统计视图的类型如实返回 None —— 排序退化成清单原序，绝不为此去 count(*) 全表扫。
+    let Some(sql) = kind.table_rows_estimate_sql(&database, &schema) else {
+        return out;
     };
     let Ok(result) = run_sql_in(state, &src.conn, &src.scope, sql, 5000).await else {
         return out;
@@ -2494,6 +2430,201 @@ mod obj_result_tests {
         assert_eq!(result.inserted, 1_234, "已写入的行数要显示出来");
         // 完全没写过（建表/取列就失败）仍然是 0，不能凭空编
         assert_eq!(ObjResult::failed("table", "t", "boom").inserted, 0);
+    }
+}
+
+#[cfg(test)]
+mod scheduler_tests {
+    use dbmind_core::ConnectionKind;
+
+    use crate::api::dialect::Dialect;
+
+    /// 行数估算语句搬进 `DialectOps` 后，**每个方言的语句必须与改造前逐字等价** ——
+    /// 这条 SQL 决定整库同步的建表顺序（小表先跑，大表垫后），改错一个字通常是
+    /// 「整库同步安静地按清单原序跑」，没有任何报错。
+    #[test]
+    fn 行数估算语句保持不变() {
+        let sql = |kind: ConnectionKind, db: &str, schema: &str| {
+            Dialect::new(kind)
+                .table_rows_estimate_sql(db, schema)
+                .unwrap_or_else(|| panic!("{} 不该缺行数估算", kind.key()))
+        };
+
+        let mysql = sql(ConnectionKind::Mysql, "demo", "p");
+        assert!(mysql.contains("information_schema.tables"), "{mysql}");
+        assert!(mysql.contains("table_schema = 'demo'"), "{mysql}");
+
+        // Doris 与 MySQL 同一套 information_schema
+        assert!(sql(ConnectionKind::Doris, "demo", "p").contains("information_schema.tables"));
+        // ClickHouse 没有 information_schema，走 system.tables
+        let ch = sql(ConnectionKind::Clickhouse, "demo", "p");
+        assert!(ch.contains("system.tables") && ch.contains("total_rows"), "{ch}");
+
+        let pg = sql(ConnectionKind::Postgresql, "demo", "public");
+        assert!(pg.contains("pg_class") && pg.contains("reltuples"), "{pg}");
+        assert!(pg.contains("ns.nspname = 'public'"), "{pg}");
+
+        // 金仓没有 pg_catalog 兼容层：目录名必须换成 sys_*
+        let kb = sql(ConnectionKind::Kingbase, "demo", "public");
+        assert!(!kb.contains("pg_class") && !kb.contains("pg_namespace"), "{kb}");
+        assert!(kb.contains("sys_class"), "{kb}");
+
+        let ora = sql(ConnectionKind::Oracle, "demo", "scott");
+        assert!(ora.contains("all_tables") && ora.contains("num_rows"), "{ora}");
+        assert!(ora.contains("owner = 'SCOTT'"), "owner 必须折大写：{ora}");
+
+        let db2 = sql(ConnectionKind::Db2, "demo", "scott");
+        assert!(db2.contains("syscat.tables") && db2.contains("tabschema = 'SCOTT'"), "{db2}");
+
+        let mssql = sql(ConnectionKind::Sqlserver, "demo", "dbo");
+        assert!(mssql.contains("dm_db_partition_stats") && mssql.contains("index_id in (0, 1)"), "{mssql}");
+
+        // 没有统计视图的类型如实 None（不能为此去 count(*) 全表扫）
+        for kind in [ConnectionKind::Sqlite, ConnectionKind::H2, ConnectionKind::Derby, ConnectionKind::Duckdb] {
+            assert!(
+                Dialect::new(kind).table_rows_estimate_sql("demo", "p").is_none(),
+                "{} 不该有行数估算",
+                kind.key()
+            );
+        }
+    }
+
+    /// 标识符引号字符：同族品牌必须继承族代表（TiDB/OceanBase 当年各漏一次）。
+    #[test]
+    fn 引号字符按方言族() {
+        for kind in [
+            ConnectionKind::Mysql,
+            ConnectionKind::Mariadb,
+            ConnectionKind::Tidb,
+            ConnectionKind::Oceanbase,
+            ConnectionKind::Doris,
+            ConnectionKind::Starrocks,
+            ConnectionKind::Selectdb,
+            ConnectionKind::Clickhouse,
+        ] {
+            assert_eq!(Dialect::new(kind).quote_mark(), '`', "{}", kind.key());
+        }
+        assert_eq!(Dialect::new(ConnectionKind::Sqlserver).quote_mark(), '[');
+        for kind in [
+            ConnectionKind::Postgresql,
+            ConnectionKind::Kingbase,
+            ConnectionKind::Oracle,
+            ConnectionKind::Dm,
+            ConnectionKind::Db2,
+            ConnectionKind::Risingwave,
+        ] {
+            assert_eq!(Dialect::new(kind).quote_mark(), '"', "{}", kind.key());
+        }
+    }
+
+    /// 整库同步的对象并发：嵌入式/文件引擎必须 1（会话池只有一条连接），
+    /// 网络型库 8、Doris/Oracle/DM/DB2 3。
+    #[test]
+    fn 对象并发按方言族() {
+        for kind in [
+            ConnectionKind::Sqlite,
+            ConnectionKind::H2,
+            ConnectionKind::Derby,
+            ConnectionKind::Duckdb,
+        ] {
+            assert_eq!(Dialect::new(kind).sync_object_concurrency(), 1, "{}", kind.key());
+        }
+        for kind in [
+            ConnectionKind::Doris,
+            ConnectionKind::Oracle,
+            ConnectionKind::Dm,
+            ConnectionKind::Db2,
+        ] {
+            assert_eq!(Dialect::new(kind).sync_object_concurrency(), 3, "{}", kind.key());
+        }
+        for kind in [
+            ConnectionKind::Mysql,
+            ConnectionKind::Tidb,
+            ConnectionKind::Postgresql,
+            ConnectionKind::Sqlserver,
+            ConnectionKind::Clickhouse,
+            ConnectionKind::Risingwave,
+        ] {
+            assert_eq!(Dialect::new(kind).sync_object_concurrency(), 8, "{}", kind.key());
+        }
+    }
+
+    /// 建库语句：MySQL 系**必须**带 utf8mb4（服务器默认库字符集常是 latin1，
+    /// 之后中文 INSERT 直接 1366）；Doris 不带；SQL Server 走 `db_id` 判存在。
+    #[test]
+    fn 建库语句按方言族() {
+        let sql = |kind: ConnectionKind| Dialect::new(kind).create_database_sql("sync_audit");
+
+        assert!(
+            sql(ConnectionKind::Mysql).contains("default charset utf8mb4"),
+            "{}",
+            sql(ConnectionKind::Mysql)
+        );
+        // 同族品牌必须继承（GreatSQL / OceanBase / GoldenDB 当年全靠人记得加一行）
+        for kind in [
+            ConnectionKind::Mariadb,
+            ConnectionKind::Tidb,
+            ConnectionKind::Oceanbase,
+            ConnectionKind::Greatsql,
+            ConnectionKind::Goldendb,
+        ] {
+            assert!(
+                sql(kind).contains("utf8mb4"),
+                "{} 没继承 utf8mb4：{}",
+                kind.key(),
+                sql(kind)
+            );
+        }
+        // Doris 的字符集由表级控制，建库不该带
+        assert!(!sql(ConnectionKind::Doris).contains("utf8mb4"));
+        // SQL Server 的存在性判断用字符串字面量（方括号会被当成列引用）
+        let mssql = sql(ConnectionKind::Sqlserver);
+        assert!(mssql.contains("db_id(N'sync_audit')"), "{mssql}");
+        assert!(mssql.contains("create database sync_audit"), "{mssql}");
+    }
+
+    /// 删表语句：只有支持 `if exists` 的方言才带（Oracle / DM / DB2 / Derby 上多这个
+    /// 子句是语法错，「清场」失败会把整张表带成红灯）；PG 额外带 cascade。
+    #[test]
+    fn 删表语句按方言族() {
+        let sql = |kind: ConnectionKind| Dialect::new(kind).drop_table_sql("t");
+
+        assert_eq!(sql(ConnectionKind::Mysql), "drop table if exists t");
+        assert_eq!(sql(ConnectionKind::Tidb), "drop table if exists t");
+        assert_eq!(sql(ConnectionKind::Doris), "drop table if exists t");
+        assert_eq!(sql(ConnectionKind::Sqlserver), "drop table if exists t");
+        assert_eq!(sql(ConnectionKind::Clickhouse), "drop table if exists t");
+        assert_eq!(sql(ConnectionKind::Sqlite), "drop table if exists t");
+        assert_eq!(sql(ConnectionKind::H2), "drop table if exists t");
+        assert_eq!(sql(ConnectionKind::Kingbase), "drop table if exists t");
+        // 有视图依赖时裸 drop 会失败 ⇒ 重建被降级成「保留旧结构」，列定义不再更新
+        assert_eq!(sql(ConnectionKind::Postgresql), "drop table if exists t cascade");
+        for kind in [
+            ConnectionKind::Oracle,
+            ConnectionKind::Dm,
+            ConnectionKind::Db2,
+            ConnectionKind::Derby,
+            ConnectionKind::Duckdb,
+        ] {
+            assert_eq!(sql(kind), "drop table t", "{} 不该带 if exists", kind.key());
+        }
+    }
+
+    /// Databend 走 MySQL 协议，但有两件事不能跟着走：
+    /// `create database` 不吃 `charset` 子句、`information_schema.tables` 没有行数列。
+    /// 跟随族的后果分别是「建库直接语法错」和「每次同步多一次注定失败查询」。
+    #[test]
+    fn databend_不跟随_mysql_的两个例外() {
+        let db = Dialect::new(ConnectionKind::Databend);
+        let sql = db.create_database_sql("demo");
+        assert!(sql.contains("create database if not exists"), "{sql}");
+        assert!(!sql.contains("utf8mb4"), "Databend 建库不能带 charset：{sql}");
+        assert!(
+            db.table_rows_estimate_sql("demo", "p").is_none(),
+            "Databend 没有 table_rows 统计列"
+        );
+        // 引号仍然按 MySQL 协议走反引号
+        assert_eq!(db.quote_mark(), '`');
     }
 }
 
@@ -4974,14 +5105,9 @@ async fn sync_table_inner(
         // `Cannot drop the table 'test.X', because it does not exist`）。
         // 支持 `if exists` 的方言一律带上；Oracle / DM / DB2 / Derby 没有这个写法，
         // 只能保持裸 drop（它们的元数据也不再跨模式回退，见 columns_of）。
-        let drop_sql = match target_kind.kind.key() {
-            // PG 额外要 cascade：目标库里已有视图引用这张表时，裸 drop 直接失败
-            "postgresql" => format!("drop table if exists {target_name} cascade"),
-            "mysql" | "mariadb" | "tidb" | "oceanbase" | "doris" | "sqlserver" | "clickhouse" | "sqlite" | "h2" | "kingbase" | "opengauss" => {
-                format!("drop table if exists {target_name}")
-            }
-            _ => format!("drop table {target_name}"),
-        };
+        // 具体写法收在 `DialectOps::drop_table_sql()` 里：默认裸 drop（Oracle / DM /
+        // DB2 / Derby 没有 `if exists`），支持 `if exists` 的方言自己覆盖，PG 额外带 cascade。
+        let drop_sql = target_kind.drop_table_sql(&target_name);
         if let Err(err) = run_target(state, &tgt_target, &drop_sql).await {
             if !forced {
                 return ObjResult::failed(ty, table, err.message);
@@ -6108,22 +6234,14 @@ fn strip_mysql_view_options(definition: &str, source: &Dialect, target: &Dialect
 
 /// 方言的标识符引号字符：MySQL 家族用反引号，SQL Server 用方括号，其余用双引号。
 ///
-/// 不能拿 `Dialect::quote("_")` 反推 —— 它对"朴素名字"是不加引号的（`_` 正好是朴素名字），
-/// 首字符会取成 `_` 本身。
-fn quote_mark(dialect: &Dialect) -> char {
-    match dialect.kind.key() {
-        "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" | "clickhouse" => '`',
-        "sqlserver" => '[',
-        _ => '"',
-    }
-}
-
+/// 实现收在 `DialectOps::quote_mark()` 里 —— 同族品牌（TiDB / OceanBase / StarRocks…）
+/// 自动继承，不再需要在这张名单上新加一行。
 /// ② 把源端的反引号标识符换成目标方言的引号（只改**代码段**，字符串字面量与注释原样保留）。
 ///
 /// MySQL 用反引号，PG / Oracle / H2 / Derby / DB2 用双引号，SQL Server 习惯方括号。
 /// 同类型或目标本来就用反引号（MySQL / MariaDB / Doris / ClickHouse）时原样返回。
 fn adapt_identifier_quoting(definition: &str, source: &Dialect, target: &Dialect) -> String {
-    let (src_mark, tgt_mark) = (quote_mark(source), quote_mark(target));
+    let (src_mark, tgt_mark) = (source.quote_mark(), target.quote_mark());
     if src_mark != '`' || tgt_mark == '`' {
         return definition.to_string();
     }
@@ -6741,25 +6859,13 @@ pub async fn db(State(state): State<AppState>, Json(body): Json<SyncRequest>) ->
         if objects <= 1 {
             return 1;
         }
-        let target_kind_key = target_kind.key();
-        // 嵌入式/文件引擎：会话池只有一条连接，并行只会互相排队。
+        // 默认并发收在 `DialectOps::sync_object_concurrency()` 里：
+        // 嵌入式/文件引擎 1、Doris / Oracle / DM / DB2 3、其余网络型库 8。
         // **不能拿 single_connection_pool() 判这件事** —— 它标的是连接级语义，
         // SQL Server 在 plugins/connection-types/sqlserver.yaml 里也标了 true，
         // 照它早退会把网络型库的整库同步退化成一张一张跑（实测 4 表严格串行、
         // 日志「并发 1 张表」，与上面注释里「SQL Server 属网络型库、跑 4 路」自相矛盾）。
-        if matches!(target_kind_key, "sqlite" | "h2" | "derby" | "duckdb") {
-            return 1;
-        }
-        let by_kind = match target_kind_key {
-            "doris" => 3,
-            "oracle" | "dm" | "db2" => 3,
-            // 网络型库（MySQL/PG/SQL Server/ClickHouse…）：**对象级**并发拉到 8。
-            // 这里管的是「同时同步几张表」，不是「一张表开几条写连接」—— 跟表数据量无关。
-            // 真实场景几乎都是「几十张小表」（均值一两万行），4 张表串成 12 轮，
-            // 每轮都要重付建表/探测/建连的固定开销，吞吐被固定成本吃掉（真机：48 张表
-            // 80 万行 4 分钟 ≈ 3.2k 行/秒）。8 张同时跑，固定成本摊掉一半。
-            _ => 8,
-        };
+        let by_kind = crate::api::dialect_ops::of(target_kind).sync_object_concurrency();
         // 逃生阀 / 调优开关：DBMIND_SYNC_OBJECTS=n 直接压过上面的自适应值。
         // 大机器想再压一压、或者库里连接数吃紧想退回去，都不用改代码重编。
         let wanted = std::env::var("DBMIND_SYNC_OBJECTS")

@@ -43,3 +43,11 @@ capabilities:
   sqlExplain: true
   userAdmin: true
   driverManagement: true
+# 命令行备份/还原；RisingWave 等同族（`dialect: PostgreSQL`）自动继承。
+backup:
+  engine: PostgreSQL
+  tool: pg_dump
+  restoreTool: psql
+  package: postgresql-client
+  dumpHint: 'pg_dump -h {host} -p {port} -U {user} -d {database} -f "{filePath}"'
+  restoreHint: 'psql -h {host} -p {port} -U {user} -d {database} -f "{filePath}"'

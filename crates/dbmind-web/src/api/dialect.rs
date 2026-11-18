@@ -1276,6 +1276,44 @@ impl Dialect {
         self.ops().rename_object_sql(kind, from, to, schema)
     }
 
+    /// 标识符引号字符：反引号 / 方括号 / 双引号。
+    ///
+    /// 给「把源端定义里的引号换成目标方言」这类字面替换用 —— 不能拿 `quote("_")`
+    /// 反推（它对朴素名字不加引号，首字符会取成 `_` 本身）。
+    pub fn quote_mark(&self) -> char {
+        self.ops().quote_mark()
+    }
+
+    /// 建库语句（目标库不存在时的自动建库）。
+    pub fn create_database_sql(&self, name: &str) -> String {
+        // Databend 走 MySQL 协议，但 `create database` **不支持 charset 子句**
+        //（语法只有 `[IF NOT EXISTS] <name> [COMMENT = '…']`）—— 跟着 MySQL 族走会建库失败。
+        if self.kind.key() == "databend" {
+            return format!("create database if not exists {}", self.quote(name));
+        }
+        self.ops().create_database_sql(name)
+    }
+
+    /// 删表语句（整库重同步前的清场）。`quoted_table` 是已按方言加过引号的表名。
+    pub fn drop_table_sql(&self, quoted_table: &str) -> String {
+        self.ops().drop_table_sql(quoted_table)
+    }
+
+    /// 整库同步时「同时搬几张表」的默认并发（对象级，不是单表写连接数）。
+    pub fn sync_object_concurrency(&self) -> usize {
+        self.ops().sync_object_concurrency()
+    }
+
+    /// 表行数估算 SQL（整库同步的调度排序用）。`None` = 没有现成统计视图。
+    pub fn table_rows_estimate_sql(&self, database: &str, schema: &str) -> Option<String> {
+        // Databend 的 information_schema.tables 没有 `table_rows` 列，跟着 MySQL 族查
+        // 只会每次多一次失败往返（排序退回原序）—— 如实说没有。
+        if self.kind.key() == "databend" {
+            return None;
+        }
+        self.ops().table_rows_estimate_sql(database, schema)
+    }
+
     /// Oracle（含 11g）的**包装式**分页：`offset … rows fetch next … rows only` 是
     /// 12c 语法，11g（如豫园 11.2.0.4）直接 ORA-00933「SQL 命令未正确结束」。
     /// ROWNUM 包装 9i 起可用，对 12c+ 也完全合法，所以 Oracle 一律走这条路，

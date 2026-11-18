@@ -41,3 +41,11 @@ capabilities:
   sqlExplain: true
   userAdmin: true
   driverManagement: true
+# 金仓自带一套 `sys_*` 客户端（不吃 pg_dump 的目录差异），所以单独声明，不继承 PG。
+backup:
+  engine: KingbaseES
+  tool: sys_dump
+  restoreTool: ksql
+  package: kingbase-client
+  dumpHint: 'sys_dump -h {host} -p {port} -U {user} -f "{filePath}" {database}'
+  restoreHint: 'ksql -h {host} -p {port} -U {user} -d {database} -f "{filePath}"'

@@ -235,7 +235,7 @@ impl DialectOps for MySqlOps {
         }
     }
     fn databases_sql(&self) -> Option<&'static str> {
-        Some("show databases")
+        Some(dbmind_core::scope_sql::MYSQL_DATABASES)
     }
     fn wrap_ident(&self, text: &str) -> String {
         format!("`{}`", text.replace('`', "``"))
@@ -248,6 +248,48 @@ impl DialectOps for MySqlOps {
     }
     fn family(&self) -> &'static str {
         "mysql"
+    }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::MYSQL
+    }
+
+    fn quote_mark(&self) -> char {
+        '`'
+    }
+
+    fn create_database_sql(&self, name: &str) -> String {
+        // MySQL 系建库**必须显式 utf8mb4**：服务器默认库字符集常是 latin1，之后中文
+        // INSERT 直接报 `Incorrect string value` 1366（真机踩过）—— 库里先别埋雷。
+        format!(
+            "create database if not exists {} default charset utf8mb4",
+            self.quote(name)
+        )
+    }
+
+    fn drop_table_sql(&self, quoted_table: &str) -> String {
+        format!("drop table if exists {quoted_table}")
+    }
+
+    fn table_rows_estimate_sql(&self, database: &str, _schema: &str) -> Option<String> {
+        // `table_rows` 是统计估算（InnoDB 可能偏差 40%），但只用于排序，够用。
+        let db = database.replace('\'', "''");
+        Some(format!(
+            "select table_name as t, table_rows as n from information_schema.tables \
+             where table_schema = '{db}'"
+        ))
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::MYSQL_COLUMN_TYPES
+    }
+
+    fn index_type_names(&self) -> &'static [&'static str] {
+        editor::MYSQL_INDEX_TYPES
+    }
+
+    fn storage_engines(&self) -> &'static [&'static str] {
+        editor::MYSQL_ENGINES
     }
     fn supports_native_upsert(&self) -> bool {
         true
@@ -448,7 +490,7 @@ impl DialectOps for DorisOps {
         if value { "1" } else { "0" }.to_string()
     }
     fn databases_sql(&self) -> Option<&'static str> {
-        Some("show databases")
+        Some(dbmind_core::scope_sql::MYSQL_DATABASES)
     }
     fn catalogs_sql(&self) -> Option<&'static str> {
         Some("show catalogs")
@@ -464,6 +506,49 @@ impl DialectOps for DorisOps {
     }
     fn family(&self) -> &'static str {
         "doris"
+    }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::DORIS
+    }
+
+    fn quote_mark(&self) -> char {
+        '`'
+    }
+
+    fn create_database_sql(&self, name: &str) -> String {
+        // Doris 的字符集由表级控制，建库带 charset 是多余的（且部分版本不认）
+        format!("create database if not exists {}", self.quote(name))
+    }
+
+    fn drop_table_sql(&self, quoted_table: &str) -> String {
+        format!("drop table if exists {quoted_table}")
+    }
+
+    fn sync_object_concurrency(&self) -> usize {
+        // 每次导入落一个 part，并发太高会压小 part 合并
+        3
+    }
+
+    fn table_rows_estimate_sql(&self, database: &str, _schema: &str) -> Option<String> {
+        // Doris 的 `information_schema.tables` 与 MySQL 同名同列，直接共用口径
+        let db = database.replace('\'', "''");
+        Some(format!(
+            "select table_name as t, table_rows as n from information_schema.tables \
+             where table_schema = '{db}'"
+        ))
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::DORIS_COLUMN_TYPES
+    }
+
+    fn index_type_names(&self) -> &'static [&'static str] {
+        editor::DORIS_INDEX_TYPES
+    }
+
+    fn storage_engines(&self) -> &'static [&'static str] {
+        editor::DORIS_ENGINES
     }
     fn version_sql(&self) -> Option<&'static str> {
         Some("select version() as v")
@@ -759,7 +844,7 @@ impl DialectOps for ClickHouseOps {
         }
     }
     fn databases_sql(&self) -> Option<&'static str> {
-        Some("select name from system.databases order by name")
+        Some(dbmind_core::scope_sql::CLICKHOUSE_DATABASES)
     }
     fn wrap_ident(&self, text: &str) -> String {
         format!("`{}`", text.replace('`', "``"))
@@ -772,6 +857,39 @@ impl DialectOps for ClickHouseOps {
     }
     fn family(&self) -> &'static str {
         "clickhouse"
+    }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::CLICKHOUSE
+    }
+
+    fn quote_mark(&self) -> char {
+        '`'
+    }
+
+    fn drop_table_sql(&self, quoted_table: &str) -> String {
+        // CH 支持 `IF EXISTS`；不带的话「重同步前清场」在空库上必失败
+        format!("drop table if exists {quoted_table}")
+    }
+
+    fn table_rows_estimate_sql(&self, database: &str, _schema: &str) -> Option<String> {
+        // CH 没有 information_schema，行数在 system.tables（`total_rows` 是实时值）
+        let db = database.replace('\'', "''");
+        Some(format!(
+            "select name as t, total_rows as n from system.tables where database = '{db}'"
+        ))
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::CLICKHOUSE_COLUMN_TYPES
+    }
+
+    fn index_type_names(&self) -> &'static [&'static str] {
+        editor::CLICKHOUSE_INDEX_TYPES
+    }
+
+    fn storage_engines(&self) -> &'static [&'static str] {
+        editor::CLICKHOUSE_ENGINES
     }
     fn version_sql(&self) -> Option<&'static str> {
         Some("select version() as v")

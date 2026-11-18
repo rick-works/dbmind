@@ -54,99 +54,20 @@ const TOOL_DIR_ENVS: &[&str] = &["DBMIND_TOOL_DIR"];
 
 // ------------------------------------------------------------------ 命令行引擎表
 
-#[derive(Clone, Copy)]
-struct CliSpec {
-    /// 展示用引擎名
-    engine: &'static str,
-    /// 备份工具
-    tool: &'static str,
-    /// 备份工具的其它叫法（MariaDB 与 MySQL 就是一对）
-    aliases: &'static [&'static str],
-    /// 还原工具
-    restore_tool: &'static str,
-    /// 包名（brew / apt 用）
-    package: &'static str,
-    dump_hint: &'static str,
-    restore_hint: &'static str,
-}
+/// 命令行备份/还原规格：来自 `plugins/connection-types/*.yaml` 的 `backup:` 段，
+/// 由 `dbmind-core/build.rs` 生成；同族品牌按 `dialect` 自动继承族代表那一段。
+///
+/// 这里留一层别名只是为了让下面几个函数（`cli_command` / `install_command` /
+/// `install_guidance`）不用关心来源 —— 字段与原来自带的结构完全一致。
+type CliSpec = dbmind_core::BackupCli;
 
 fn cli_spec(kind: ConnectionKind) -> Option<CliSpec> {
-    Some(match kind.key() {
-        // TiDB 兼容 MySQL 协议，官方文档明确支持 mysqldump 导出
-        "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => CliSpec {
-            engine: "MySQL",
-            tool: "mysqldump",
-            aliases: &["mariadb-dump"],
-            restore_tool: "mysql",
-            package: "mysql-client",
-            dump_hint: "mysqldump -h {host} -P {port} -u {user} --default-character-set={charset} \
-                        --databases {database} > \"{filePath}\"",
-            restore_hint: "mysql -h {host} -P {port} -u {user} --default-character-set={charset} \
-                           {database} < \"{filePath}\"",
-        },
-        "postgresql" => CliSpec {
-            engine: "PostgreSQL",
-            tool: "pg_dump",
-            aliases: &[],
-            restore_tool: "psql",
-            package: "postgresql-client",
-            dump_hint: "pg_dump -h {host} -p {port} -U {user} -d {database} -f \"{filePath}\"",
-            restore_hint: "psql -h {host} -p {port} -U {user} -d {database} -f \"{filePath}\"",
-        },
-        "kingbase" => CliSpec {
-            engine: "KingbaseES",
-            tool: "sys_dump",
-            aliases: &[],
-            restore_tool: "ksql",
-            package: "kingbase-client",
-            dump_hint: "sys_dump -h {host} -p {port} -U {user} -f \"{filePath}\" {database}",
-            restore_hint: "ksql -h {host} -p {port} -U {user} -d {database} -f \"{filePath}\"",
-        },
-        "oracle" => CliSpec {
-            engine: "Oracle",
-            tool: "expdp",
-            aliases: &[],
-            restore_tool: "impdp",
-            package: "oracle-instantclient",
-            dump_hint: "expdp {user}/******@{host}:{port}/{database} \
-                        DIRECTORY=DATA_PUMP_DIR DUMPFILE={filePath} FULL=Y",
-            restore_hint: "impdp {user}/******@{host}:{port}/{database} \
-                           DIRECTORY=DATA_PUMP_DIR DUMPFILE={filePath} FULL=Y",
-        },
-        "dm" => CliSpec {
-            engine: "达梦 DM",
-            tool: "dexp",
-            aliases: &[],
-            restore_tool: "dimp",
-            package: "dm-client",
-            dump_hint: "dexp USERID={user}/******@{host}:{port} FILE=\"{filePath}\" DIRECTORY=. FULL=Y",
-            restore_hint: "dimp USERID={user}/******@{host}:{port} FILE=\"{filePath}\" DIRECTORY=. FULL=Y",
-        },
-        "sqlserver" => CliSpec {
-            engine: "SQL Server",
-            tool: "sqlcmd",
-            aliases: &[],
-            restore_tool: "sqlcmd",
-            package: "mssql-tools18",
-            dump_hint: "sqlcmd -S {host},{port} -U {user} \
-                        -Q \"BACKUP DATABASE [{database}] TO DISK = N'{filePath}' WITH FORMAT\"",
-            restore_hint: "sqlcmd -S {host},{port} -U {user} \
-                           -Q \"RESTORE DATABASE [{database}] FROM DISK = N'{filePath}' WITH REPLACE\"",
-        },
-        "sqlite" => CliSpec {
-            engine: "SQLite",
-            tool: "sqlite3",
-            aliases: &[],
-            restore_tool: "sqlite3",
-            package: "sqlite",
-            dump_hint: "sqlite3 \"{sqliteFile}\" .dump > \"{filePath}\"",
-            restore_hint: "sqlite3 \"{sqliteFile}\" < \"{filePath}\"",
-        },
-        // H2 / Derby / DB2 / ClickHouse 没有「可直接调用的本机客户端」共识，
-        // 内置引擎就是它们的正路（这也是上游的做法）
-        _ => return None,
-    })
+    // 没有 `backup:` 段的类型（H2 / Derby / DB2 / ClickHouse …）如实返回 None：
+    // 它们的正路是内置引擎，界面显示「请改用内置引擎」——
+    // 原先这张表手写在 Rust 里，漏一个类型的表现就是这句话，界面上看不出是漏配。
+    kind.backup_cli()
 }
+
 
 /// 在 PATH（以及 `DBMIND_TOOL_DIR`）里找一个可执行文件。
 fn find_tool(names: &[&str]) -> Option<PathBuf> {

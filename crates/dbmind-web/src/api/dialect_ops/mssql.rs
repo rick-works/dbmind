@@ -559,7 +559,7 @@ impl DialectOps for SqlServerOps {
         if value { "1" } else { "0" }.to_string()
     }
     fn databases_sql(&self) -> Option<&'static str> {
-        Some("select name from sys.databases where state = 0 and has_dbaccess(name) = 1 order by name")
+        Some(dbmind_core::scope_sql::SQLSERVER_DATABASES)
     }
     fn wrap_ident(&self, text: &str) -> String {
         format!("[{}]", text.replace(']', "]]"))
@@ -575,6 +575,46 @@ impl DialectOps for SqlServerOps {
     }
     fn family(&self) -> &'static str {
         "sqlserver"
+    }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::SQLSERVER
+    }
+
+    fn quote_mark(&self) -> char {
+        '['
+    }
+
+    fn create_database_sql(&self, name: &str) -> String {
+        // `db_id` 的参数是**字符串字面量**（`N'..'`）—— 用方括号会被当成列引用
+        //（真机：「列名 'sync_audit' 无效」）。只有 `create database` 用方括号。
+        format!(
+            "if db_id(N'{}') is null create database {}",
+            name.replace('\'', "''"),
+            self.quote(name)
+        )
+    }
+
+    fn drop_table_sql(&self, quoted_table: &str) -> String {
+        format!("drop table if exists {quoted_table}")
+    }
+
+    fn table_rows_estimate_sql(&self, _database: &str, schema: &str) -> Option<String> {
+        // 分区统计里 index_id 0/1 分别是堆与聚集索引，加起来就是表行数（实时维护）
+        let schema = schema.replace('\'', "''");
+        Some(format!(
+            "select t.name as t, sum(p.rows) as n from sys.dm_db_partition_stats p \
+             join sys.tables t on t.object_id = p.object_id \
+             where p.index_id in (0, 1) and schema_name(t.schema_id) = '{schema}' group by t.name"
+        ))
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::SQLSERVER_COLUMN_TYPES
+    }
+
+    fn index_type_names(&self) -> &'static [&'static str] {
+        editor::SQLSERVER_INDEX_TYPES
     }
     fn supports_native_upsert(&self) -> bool {
         true
@@ -634,11 +674,8 @@ const SQLSERVER_INDEXES: &str = "select schema_name(o.schema_id) as \"schema\", 
 /// 每个固定角色在库里都对应一个空 schema，SQL Server 建库时自动带上 —— 它们不是给用户
 /// 建表用的，列在树里就是九行永远空的噪音（实测用户截图里正是这九个）。
 /// `dbo` 要留着：它是正常的默认 schema（用户建的表大多在它下面）。
-const SQLSERVER_SCHEMAS: &str = "select name from sys.schemas \
-     where name not in ('guest','sys','INFORMATION_SCHEMA', \
-       'db_owner','db_accessadmin','db_backupoperator','db_datareader','db_datawriter', \
-       'db_ddladmin','db_denydatareader','db_denydatawriter','db_securityadmin') \
-     order by name";
+/// 文本来自 `dbmind_core::scope_sql`（MCP 用的是同一份）。
+const SQLSERVER_SCHEMAS: &str = dbmind_core::scope_sql::SQLSERVER_SCHEMAS;
 
 /// `sys.partitions.rows` 是**实时维护的真实行数**（不是统计估算），一次 join 就能拿到
 /// 全 schema，不必每张表去 COUNT(*)。视图没有自己的行数 → null（留空，而不是显示 0）。

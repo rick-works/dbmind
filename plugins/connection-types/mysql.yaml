@@ -44,3 +44,14 @@ capabilities:
   sqlExplain: true
   userAdmin: true
   driverManagement: true
+# 命令行备份/还原。**同族品牌自动继承这一段**（TiDB / OceanBase / GreatSQL / GoldenDB /
+# Doris / StarRocks / SelectDB / Databend 都是 `dialect: MySQL`，客户端也是同一套），
+# 所以新增同族品牌不用再回来加一遍。
+backup:
+  engine: MySQL
+  tool: mysqldump
+  aliases: ["mariadb-dump"]
+  restoreTool: mysql
+  package: mysql-client
+  dumpHint: 'mysqldump -h {host} -P {port} -u {user} --default-character-set={charset} --databases {database} > "{filePath}"'
+  restoreHint: 'mysql -h {host} -P {port} -u {user} --default-character-set={charset} {database} < "{filePath}"'

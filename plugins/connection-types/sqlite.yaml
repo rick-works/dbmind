@@ -33,3 +33,11 @@ capabilities:
   sqlExplain: true
   userAdmin: false
   driverManagement: false
+# SQLite 的「备份」就是 `.dump` 成 SQL 脚本。
+backup:
+  engine: SQLite
+  tool: sqlite3
+  restoreTool: sqlite3
+  package: sqlite
+  dumpHint: 'sqlite3 "{sqliteFile}" .dump > "{filePath}"'
+  restoreHint: 'sqlite3 "{sqliteFile}" < "{filePath}"'

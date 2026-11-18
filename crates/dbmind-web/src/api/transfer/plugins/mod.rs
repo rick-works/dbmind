@@ -202,27 +202,57 @@ static GENERIC_SPEC: Spec = Spec::new("generic");
 // 三张注册表由 build.rs 按目录里的文件生成 —— 加插件不用改这个文件。
 include!(concat!(env!("OUT_DIR"), "/transfer_plugins.rs"));
 
-/// 按**源**类型取读插件工厂。
+/// 未登记插件的类型 → 它所属方言族的**代表 kind**。
+///
+/// `DialectOps::family()` 返回的名字本身就是族代表的 key（`postgresql` / `doris` /
+/// `sqlserver` / `kingbase` …），所以不用再维护一张映射表。族内差异（Doris 没有原生
+/// upsert、StarRocks 没有 `mysql` 库）在 `dialect_ops::of()` 里已经处理过，这里拿到的
+/// 就是那个已经分好类的族。
+///
+/// 为什么要这层：同族品牌（`databend` / `risingwave` / `starrocks` / `tidb` /
+/// `oceanbase` / `greatsql` …）的取数与批量参数跟族代表完全一致，此前因为「按 kind
+/// 精确查表」直接落到 generic（1000 行 / 4MB 的保守参数），同步能跑但慢一截，
+/// 而且界面上完全看不出来 —— 正是「插件化只做了一半」的那种静默降级。
+fn family_key(kind: &str) -> Option<&'static str> {
+    let typed = dbmind_core::ConnectionKind::from_key(kind)?;
+    let family = crate::api::dialect_ops::of(typed).family();
+    // generic / nosql 没有对应插件；族名与自身同名说明已经是代表，交给下层走 generic。
+    if matches!(family, "generic" | "nosql") || family == kind {
+        return None;
+    }
+    Some(family)
+}
+
+/// 按**源**类型取读插件工厂：精确登记优先，其次同族代表，最后通用实现。
 pub(crate) fn reader_factory(kind: &str) -> ReaderFactory {
-    reader_plugin(kind).unwrap_or(generic_reader)
+    reader_plugin(kind)
+        .or_else(|| family_key(kind).and_then(reader_plugin))
+        .unwrap_or(generic_reader)
 }
 
-/// 按**目标**类型取写插件工厂。
+/// 按**目标**类型取写插件工厂：精确登记优先，其次同族代表，最后通用实现。
 pub(crate) fn writer_factory(kind: &str) -> WriterFactory {
-    writer_plugin(kind).unwrap_or(generic_writer)
+    writer_plugin(kind)
+        .or_else(|| family_key(kind).and_then(writer_plugin))
+        .unwrap_or(generic_writer)
 }
 
-/// 按类型取搬运规格（没登记的类型用保守默认值）。
+/// 按类型取搬运规格：精确登记优先，其次同族代表，最后保守默认值。
 pub(crate) fn spec_data_for(kind: &str) -> &'static Spec {
-    let spec = spec_plugin(kind).unwrap_or(&GENERIC_SPEC);
-    // 规格必须与取它的类型一致：复制粘贴写插件时最容易漏改 `Spec::new("…")`，
-    // 那会变成「查 MySQL 却拿到 Oracle 的批量参数」这种只在真机上体现的静默错。
-    debug_assert!(
-        spec.key() == kind || spec.key() == "generic",
-        "plugins/{kind}_writer.rs 的 SPEC.key 是 {}，与文件名不一致",
-        spec.key()
-    );
-    spec
+    if let Some(spec) = spec_plugin(kind) {
+        // 规格必须与文件名一致：复制粘贴写插件时最容易漏改 `Spec::new("…")`，
+        // 那会变成「查 MySQL 却拿到 Oracle 的批量参数」这种只在真机上体现的静默错。
+        debug_assert!(
+            spec.key() == kind,
+            "plugins/{kind}_writer.rs 的 SPEC.key 是 {}，与文件名不一致",
+            spec.key()
+        );
+        return spec;
+    }
+    if let Some(spec) = family_key(kind).and_then(spec_plugin) {
+        return spec;
+    }
+    &GENERIC_SPEC
 }
 
 #[cfg(test)]
@@ -283,6 +313,56 @@ mod tests {
         assert!(reader_plugin("not-a-db").is_none());
         assert!(writer_plugin("not-a-db").is_none());
         assert_eq!(spec_data_for("not-a-db").key(), "generic");
+    }
+
+    /// 同族品牌不写插件文件也要拿到**族代表**的搬运参数，不能退回 generic。
+    ///
+    /// 退回 generic 不会报错，只是每批 1000 行、4MB —— 同步能跑完，慢一截，
+    /// 界面上完全看不出来。所以这条按「拿到的 SPEC 是谁」钉死。
+    #[test]
+    fn 同族品牌继承族代表参数() {
+        use dbmind_core::ConnectionKind;
+
+        let of = |kind: ConnectionKind| spec_data_for(kind.key()).key();
+        // PostgreSQL 族
+        assert_eq!(of(ConnectionKind::Risingwave), "postgresql");
+        assert_eq!(of(ConnectionKind::Opengauss), "postgresql");
+        assert_eq!(of(ConnectionKind::Highgo), "postgresql");
+        // Databend 走 MySQL 协议（yaml `dialect: MySQL`，JDBC 也是 mysql-connector）
+        assert_eq!(of(ConnectionKind::Databend), "mysql");
+        // MySQL 族
+        assert_eq!(of(ConnectionKind::Tidb), "mysql");
+        assert_eq!(of(ConnectionKind::Oceanbase), "mysql");
+        assert_eq!(of(ConnectionKind::Greatsql), "mysql");
+        assert_eq!(of(ConnectionKind::Goldendb), "mysql");
+        // Doris 族：DialectOps 里 StarRocks / SelectDB 与 Doris 同源
+        assert_eq!(of(ConnectionKind::Starrocks), "doris");
+        assert_eq!(of(ConnectionKind::Selectdb), "doris");
+
+        // 已登记的类型**必须**用自己那份规格，不能被族兜底顶掉。
+        assert_eq!(of(ConnectionKind::Mysql), "mysql");
+        assert_eq!(of(ConnectionKind::Doris), "doris");
+        assert_eq!(of(ConnectionKind::Kingbase), "kingbase");
+        assert_eq!(of(ConnectionKind::Oracle), "oracle");
+        assert_eq!(of(ConnectionKind::Dm), "dm");
+    }
+
+    /// 归族表本身：族代表必须能查到插件，否则「兜底」等于兜到 generic。
+    #[test]
+    fn 同族品牌归到族代表() {
+        assert_eq!(family_key("databend"), Some("mysql"));
+        assert_eq!(family_key("risingwave"), Some("postgresql"));
+        assert_eq!(family_key("starrocks"), Some("doris"));
+        assert_eq!(family_key("selectdb"), Some("doris"));
+        assert_eq!(family_key("tidb"), Some("mysql"));
+        assert_eq!(family_key("greatsql"), Some("mysql"));
+        // 自己就是族代表 → 不进兜底（精确查表已经命中）
+        assert_eq!(family_key("mysql"), None);
+        assert_eq!(family_key("doris"), None);
+        assert_eq!(family_key("kingbase"), None);
+        // NoSQL / 未知类型没有插件
+        assert_eq!(family_key("mongodb"), None);
+        assert_eq!(family_key("not-a-db"), None);
     }
 
     /// 迁移不能改行为：这些数值/能力位全部对应改造前 `sync.rs` 里的 match 分支。

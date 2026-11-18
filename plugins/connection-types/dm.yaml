@@ -40,3 +40,11 @@ capabilities:
   sqlExplain: true
   userAdmin: true
   driverManagement: true
+# 达梦用自家的 dexp/dimp（不是 Oracle 的 expdp），所以不继承 Oracle 那一段。
+backup:
+  engine: 达梦 DM
+  tool: dexp
+  restoreTool: dimp
+  package: dm-client
+  dumpHint: 'dexp USERID={user}/******@{host}:{port} FILE="{filePath}" DIRECTORY=. FULL=Y'
+  restoreHint: 'dimp USERID={user}/******@{host}:{port} FILE="{filePath}" DIRECTORY=. FULL=Y'

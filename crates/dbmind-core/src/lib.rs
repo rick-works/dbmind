@@ -51,7 +51,10 @@ pub use drivers::{
 };
 pub use engine::{DriverEntry, DriverReport, DbMindEngine, RuntimeSummary};
 pub use error::{query_error, DbMindError, ErrorCode, ErrorPayload, Result};
-pub use kind::{Capabilities, McpMode, RuntimeMode, RuntimeProtocol, TypeDescriptor, TypeTraits};
+pub use kind::{
+    BackupCli, Capabilities, McpMode, RuntimeMode, RuntimeProtocol, TypeDescriptor, TypeTraits,
+};
+pub mod scope_sql;
 pub use safety::SafetyPolicy;
 pub use sql::StatementKind;
 // 语句判定按协议分派：壳层拿到的 statementKind 也是由这里判出来的
@@ -81,3 +84,56 @@ pub fn new_execution_id() -> String {
 
 /// 内核版本（与 Cargo 包版本一致，供壳层显示）。
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(test)]
+mod backup_cli_tests {
+    use super::*;
+
+    /// 命令行备份规格**按方言族继承**：同族品牌不该各自手写一张表。
+    #[test]
+    fn 命令行备份按方言族继承() {
+        assert_eq!(ConnectionKind::Mysql.backup_cli().unwrap().tool, "mysqldump");
+        assert_eq!(ConnectionKind::Tidb.backup_cli().unwrap().tool, "mysqldump");
+        assert_eq!(ConnectionKind::Databend.backup_cli().unwrap().tool, "mysqldump");
+        assert_eq!(ConnectionKind::Risingwave.backup_cli().unwrap().tool, "pg_dump");
+        // 金仓 / 达梦用自家客户端，**不**跟随族代表（PG / Oracle）
+        assert_eq!(ConnectionKind::Kingbase.backup_cli().unwrap().tool, "sys_dump");
+        assert_eq!(ConnectionKind::Dm.backup_cli().unwrap().tool, "dexp");
+        // 没有共识本机客户端的类型如实 None —— 界面据此建议「改用内置引擎」
+        assert!(ConnectionKind::H2.backup_cli().is_none());
+        assert!(ConnectionKind::Db2.backup_cli().is_none());
+        assert!(ConnectionKind::Clickhouse.backup_cli().is_none());
+        assert!(ConnectionKind::Duckdb.backup_cli().is_none());
+        // NoSQL 不走命令行备份
+        for kind in ConnectionKind::ALL {
+            if !kind.is_jdbc() && kind.key() != "sqlite" {
+                assert!(
+                    kind.backup_cli().is_none(),
+                    "{} 不该有命令行备份规格",
+                    kind.key()
+                );
+            }
+        }
+    }
+
+    /// 命令模板必须带 `{filePath}` —— 少了它备份会写进标准输出，
+    /// 结果就是「命令成功、日志漂亮、备份文件永远是空的」。
+    #[test]
+    fn 备份命令模板带文件占位符() {
+        for kind in ConnectionKind::ALL {
+            let Some(cli) = kind.backup_cli() else { continue };
+            assert!(
+                cli.dump_hint.contains("{filePath}"),
+                "{} 的备份命令没有 {{filePath}}：{}",
+                kind.key(),
+                cli.dump_hint
+            );
+            assert!(
+                cli.restore_hint.contains("{filePath}"),
+                "{} 的还原命令没有 {{filePath}}：{}",
+                kind.key(),
+                cli.restore_hint
+            );
+        }
+    }
+}

@@ -16,6 +16,7 @@ use dbmind_core::ConnectionKind;
 
 use crate::api::dialect::{is_reserved, DirectRefDepth, GrantRevoke, Meta, UserAttrs, UserPrivileges};
 
+pub mod editor;
 mod mssql;
 mod mysql;
 mod oracle;
@@ -151,6 +152,47 @@ pub trait DialectOps: Sync + Send {
     /// 服务器库清单 SQL。`None` = 还没写（`Meta::Unwritten`，调用方退回单库）。
     fn databases_sql(&self) -> Option<&'static str> {
         None
+    }
+
+    /// 标识符引号字符：反引号 / 方括号 / 双引号。
+    ///
+    /// 用于「把源端定义里的引号换成目标方言」这类**字面替换** ——
+    /// 不能拿 `quote("_")` 反推（它对朴素名字不加引号，首字符会取成 `_` 本身）。
+    fn quote_mark(&self) -> char {
+        '"'
+    }
+
+    /// 整库同步时「同时搬几张表」的默认并发数。
+    ///
+    /// 管的是对象级并行（同时同步几张表），不是单表开几条写连接：
+    /// - 嵌入式/文件引擎只有一条物理连接，并行只会互相排队 → 1；
+    /// - Doris 每个导入落一个 part，并发高会压小 part 合并 → 3；
+    /// - Oracle / DM / DB2 会话开销大、锁行为保守 → 3；
+    /// - 其余网络型库 → 8（固定成本被摊薄，实测 48 张小表快一倍）。
+    fn sync_object_concurrency(&self) -> usize {
+        8
+    }
+
+    /// 表行数**估算** SQL（整库同步的调度排序用）。
+    ///
+    /// 只取统计视图，绝不 `count(*)` 全表扫 —— 那是把「为了快」变成「先慢一次」。
+    /// `None` = 这类型没有现成的统计视图（排序退化成清单原序）。
+    fn table_rows_estimate_sql(&self, database: &str, schema: &str) -> Option<String> {
+        let _ = (database, schema);
+        None
+    }
+
+    /// 建库语句（目标库不存在时的自动建库）。默认是通用 ANSI 写法。
+    fn create_database_sql(&self, name: &str) -> String {
+        format!("create database {}", self.quote(name))
+    }
+
+    /// 删表语句（整库重同步前的清场）。
+    ///
+    /// 默认**不带** `if exists`：Oracle / DB2 / Derby / DuckDB 上多出来的子句是语法错，
+    /// 「清场」失败会把整张表的同步带成红灯。支持 `if exists` 的方言自己覆盖。
+    fn drop_table_sql(&self, quoted_table: &str) -> String {
+        format!("drop table {quoted_table}")
     }
 
     // ---- 字面量 ----
@@ -332,6 +374,29 @@ pub trait DialectOps: Sync + Send {
     fn column_types_sql(&self, quoted: &str) -> Meta {
         let _ = quoted;
         Meta::Unwritten
+    }
+
+    /// 结构编辑器的能力（`ddlStyle` / 列可改 / 字符集 …）。
+    ///
+    /// 默认是最保守的「只能看」：新方言不覆盖就等于**界面如实告诉用户这里改不了**，
+    /// 而不是误开一堆点了会报错的开关。
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::EditCapabilities::generic()
+    }
+
+    /// 列类型下拉清单。空 = 前端下拉没有选项（只能手打）。
+    fn column_type_names(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// 索引类型下拉清单。空 = 前端不显示「类型」那一列。
+    fn index_type_names(&self) -> &'static [&'static str] {
+        &[]
+    }
+
+    /// 存储引擎下拉清单。空 = 该行退化成纯手输。
+    fn storage_engines(&self) -> &'static [&'static str] {
+        &[]
     }
 
     // ---- 标识符 ----

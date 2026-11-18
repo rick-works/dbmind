@@ -339,6 +339,31 @@ impl DialectOps for OracleOps {
     fn family(&self) -> &'static str {
         "oracle"
     }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::ORACLE
+    }
+
+    fn sync_object_concurrency(&self) -> usize {
+        // 会话开销大、锁行为保守
+        3
+    }
+
+    fn table_rows_estimate_sql(&self, _database: &str, schema: &str) -> Option<String> {
+        // `num_rows` 是统计信息里的估算（可能为 NULL，调用方按 0 处理）
+        let owner = schema.to_uppercase().replace('\'', "''");
+        Some(format!(
+            "select table_name as t, num_rows as n from all_tables where owner = '{owner}'"
+        ))
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::ORACLE_COLUMN_TYPES
+    }
+
+    fn index_type_names(&self) -> &'static [&'static str] {
+        editor::ORACLE_INDEX_TYPES
+    }
     fn supports_native_upsert(&self) -> bool {
         true
     }
@@ -571,6 +596,30 @@ impl DialectOps for DmOps {
     fn family(&self) -> &'static str {
         "dm"
     }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::DM
+    }
+
+    fn sync_object_concurrency(&self) -> usize {
+        3
+    }
+
+    fn table_rows_estimate_sql(&self, _database: &str, schema: &str) -> Option<String> {
+        // 与 Oracle 同一套数据字典（`all_tables.num_rows`）
+        let owner = schema.to_uppercase().replace('\'', "''");
+        Some(format!(
+            "select table_name as t, num_rows as n from all_tables where owner = '{owner}'"
+        ))
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::ORACLE_COLUMN_TYPES
+    }
+
+    fn index_type_names(&self) -> &'static [&'static str] {
+        editor::ORACLE_INDEX_TYPES
+    }
     fn supports_native_upsert(&self) -> bool {
         true
     }
@@ -737,11 +786,7 @@ fn dm_owner_probe(quoted: &str) -> String {
 /// 逐个点进去恒空。收窄成「当前用户 + 至少有一个我能看见的对象」——
 /// `all_objects` 的语义正好是「当前账号有权限访问的对象」。当前用户必须无条件保留：
 /// 刚建好、还没建对象的空 schema 也得能导航过去。
-const ORACLE_SCHEMAS: &str = "select username as name from all_users u \
-     where username = sys_context('USERENV','CURRENT_SCHEMA') \
-        or exists (select 1 from all_objects o \
-                   where o.owner = u.username and rownum = 1) \
-     order by username";
+const ORACLE_SCHEMAS: &str = dbmind_core::scope_sql::ORACLE_SCHEMAS;
 
 /// 表与视图一起列（union all 两段），并且**必须带上 `type` 列** —— 前端就是按
 /// `type === 'VIEW'` 把视图分到「视图」分类的：少了这一列，视图会被当成表混进「表」里，

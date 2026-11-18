@@ -137,6 +137,26 @@ impl DialectOps for Db2Ops {
     fn family(&self) -> &'static str {
         "db2"
     }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::DB2
+    }
+
+    fn sync_object_concurrency(&self) -> usize {
+        3
+    }
+
+    fn table_rows_estimate_sql(&self, _database: &str, schema: &str) -> Option<String> {
+        // `CARD` 是统计信息里的行数估算
+        let schema = schema.to_uppercase().replace('\'', "''");
+        Some(format!(
+            "select tabname as t, card as n from syscat.tables where tabschema = '{schema}'"
+        ))
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::DB2_COLUMN_TYPES
+    }
     fn supports_native_upsert(&self) -> bool {
         true
     }
@@ -253,6 +273,23 @@ impl DialectOps for SqliteOps {
     }
     fn family(&self) -> &'static str {
         "sqlite"
+    }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::SQLITE
+    }
+
+    fn sync_object_concurrency(&self) -> usize {
+        // 会话池只有一条连接，并行只会互相排队
+        1
+    }
+
+    fn drop_table_sql(&self, quoted_table: &str) -> String {
+        format!("drop table if exists {quoted_table}")
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::SQLITE_COLUMN_TYPES
     }
     fn supports_native_upsert(&self) -> bool {
         true
@@ -544,6 +581,22 @@ impl DialectOps for H2Ops {
     fn family(&self) -> &'static str {
         "h2"
     }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::H2
+    }
+
+    fn sync_object_concurrency(&self) -> usize {
+        1
+    }
+
+    fn drop_table_sql(&self, quoted_table: &str) -> String {
+        format!("drop table if exists {quoted_table}")
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::H2_COLUMN_TYPES
+    }
     fn supports_native_upsert(&self) -> bool {
         true
     }
@@ -662,6 +715,18 @@ impl DialectOps for DerbyOps {
     fn family(&self) -> &'static str {
         "derby"
     }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::DERBY
+    }
+
+    fn sync_object_concurrency(&self) -> usize {
+        1
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::DERBY_COLUMN_TYPES
+    }
     fn supports_native_upsert(&self) -> bool {
         true
     }
@@ -682,6 +747,18 @@ impl DialectOps for DerbyOps {
 impl DialectOps for DuckDbOps {
     fn family(&self) -> &'static str {
         "duckdb"
+    }
+
+    fn edit_capabilities(&self) -> editor::EditCapabilities {
+        editor::DUCKDB
+    }
+
+    fn sync_object_concurrency(&self) -> usize {
+        1
+    }
+
+    fn column_type_names(&self) -> &'static [&'static str] {
+        editor::DUCKDB_COLUMN_TYPES
     }
 }
 
@@ -791,8 +868,7 @@ const DERBY_VISIBLE_TABLES: &str = "select t.tablename as name from sys.systable
 /// H2：`INFORMATION_SCHEMA.SCHEMATA`（2.x）。H2 的「库」是 catalog（一个实例一个，
 /// 名字就是连接里的 database，如 MAIN），表和授权都挂在 schema 上 ——
 /// 用户管理的表级授权要选的就是这一层（PUBLIC / 业务 schema）。
-const H2_SCHEMAS: &str = "select schema_name as \"name\" from information_schema.schemata \
-     where schema_name <> 'INFORMATION_SCHEMA' order by schema_name";
+const H2_SCHEMAS: &str = dbmind_core::scope_sql::H2_SCHEMAS;
 
 fn h2_procedures() -> Meta {
     Meta::Sql(
