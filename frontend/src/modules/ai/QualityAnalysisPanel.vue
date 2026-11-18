@@ -228,6 +228,7 @@
       :message="exportTask.message"
       :logs="exportTask.logs"
       :canceling="exportTask.canceling"
+      :backgroundable="true"
       @cancel="exportTask.cancel(props.conn?.id)"
       @close="exportTask.close"
     />
@@ -692,7 +693,12 @@ const exportViolationsFile = async (cmd) => {
         conn.id,
         { sql: r.exportSql, format, database: props.database },
         t('qa.violationsExportName', { table: tb }),
-        format
+        format,
+        null,
+        {
+          title: `${conn.name || ''} / ${tb} · ${String(format).toUpperCase()}`,
+          database: props.database
+        }
       )
     } catch (e) {
       ElMessage.error(e?.message || t('qa.exportFailed'))

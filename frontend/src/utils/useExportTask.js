@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { exportStart, exportTask, exportCancel, exportDownload, exportSaveTo } from '../api'
 import { errMsg } from './errMsg'
 import { desktopShell } from './desktopShell'
+import { addBgTask, setBgTaskStatus } from '../modules/sync/backgroundTasks'
 
 /** 只为了提示里显示文件名（不引 node:path，浏览器里没有） */
 const baseName = (p) => String(p || '').split(/[\\/]/).pop() || ''
@@ -304,6 +305,16 @@ export function useExportTask() {
         if (finished) {
           clearInterval(timer)
           timer = null
+          // 终态写回任务中心记录（导出 / SQL 转存都在这里收尾）：
+          // 关掉进度窗之后，任务中心那条记录也能立刻显示成功/失败与产物文件名
+          setBgTaskStatus(taskId.value, status.value, {
+            status: status.value,
+            message: message.value,
+            phase: phase.value,
+            fileName: r.fileName,
+            logs: logs.value.map(l => l.text),
+            elapsedMs: r.elapsedMs
+          })
           await finishExport(state, connId, taskId.value, name, format, handle)
         }
       } catch (e) {
@@ -322,7 +333,16 @@ export function useExportTask() {
     }, POLL_MS)
   }
 
-  const start = async (connId, payload, name, format, submitFn) => {
+  /**
+   * 提交导出任务。
+   *
+   * opts（可选）：{ kind, title, database }
+   *  - kind：'export'（表/查询结果导出，默认）或 'dump'（整库 SQL 转存）—— 任务中心据此分类
+   *  - title：任务中心里显示的名字（一般带连接与库表名）
+   * 提交成功后**立刻登记到任务中心**：进度窗被关掉、甚至切走页签，任务仍在后端跑，
+   * 顶栏任务中心能看到它、能停止、结束后能下载产物。
+   */
+  const start = async (connId, payload, name, format, submitFn, opts = {}) => {
     // 先挑保存位置，再开始导出（异步导出跑完时已经没有用户手势，那时弹不出来）
     const target = await pickExportTarget(name, format)
     if (target && target.canceled) return
@@ -339,6 +359,16 @@ export function useExportTask() {
         throw new Error(res.message || t('mv.exportSubmitFailed'))
       }
       taskId.value = res.taskId
+      addBgTask({
+        id: res.taskId,
+        kind: opts.kind || 'export',
+        title: opts.title || `${name || t('et.data')} · ${String(format || '').toUpperCase()}`,
+        connId,
+        database: opts.database || payload?.database || '',
+        // name / format 给「任务中心 → 查看 → 下载」用：那个场景里保存句柄早没了，
+        // 产物只能结束之后按原始表名重新拼文件名再下载
+        extra: { name, format }
+      })
       startPolling(connId, name, format, handle)
     } catch (e) {
       status.value = 'error'

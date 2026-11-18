@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus'
 import { runSqlFileStart, runSqlFileStatus, runSqlFileCancel } from '../api'
 import { errMsg } from './errMsg'
 import { createPollGuard } from './pollGuard'
+import { addBgTask, setBgTaskStatus } from '../modules/sync/backgroundTasks'
 
 const fmtTime = () => new Date().toLocaleTimeString('zh-CN', { hour12: false })
 
@@ -61,6 +62,13 @@ export function useSqlFileTask() {
         if (status.value !== 'running') {
           clearInterval(timer)
           timer = null
+          // 终态写回任务中心记录：关掉弹窗后那条记录立刻显示成功/失败与日志
+          setBgTaskStatus(taskId.value, status.value, {
+            status: status.value,
+            message: message.value,
+            logs: logs.value.map(l => l.text),
+            elapsedMs: r.elapsedMs
+          })
           if (status.value === 'success') {
             ElMessage.success(message.value || t('usf.done'))
           } else if (status.value === 'canceled') {
@@ -85,7 +93,11 @@ export function useSqlFileTask() {
     }, 500)
   }
 
-  const start = async (id, payload) => {
+  /**
+   * 提交「执行 SQL 文件」任务。opts.title：任务中心里显示的名字（一般带连接/库/文件名）。
+   * 提交成功即登记到任务中心 —— 几百 MB 的脚本要跑很久，关掉弹窗不该等于放弃它。
+   */
+  const start = async (id, payload, opts = {}) => {
     connId.value = id
     reset()
     visible.value = true
@@ -95,6 +107,13 @@ export function useSqlFileTask() {
         throw new Error(res.message || t('usf.submitFailed'))
       }
       taskId.value = res.taskId
+      addBgTask({
+        id: res.taskId,
+        kind: 'runFile',
+        title: opts.title || t('sync.kindRunFile'),
+        connId: id,
+        database: payload?.database || ''
+      })
       startPolling()
     } catch (e) {
       status.value = 'error'

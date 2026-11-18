@@ -56,7 +56,7 @@
   <TaskProgressDialog v-model:visible="progressVisible" task-kind="import" :target-name="file ? file.name : $t('imp.data')"
                       :status="taskStatus" :done="taskDone" :total="taskTotal"
                       :phase="taskPhase" :message="taskMessage" :logs="taskLogs"
-                      :canceling="canceling"
+                      :canceling="canceling" :backgroundable="true"
                       @cancel="cancelImport" @close="onProgressClose" />
 </template>
 
@@ -73,6 +73,7 @@ import { importStart, importTask, importCancel } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
 import { errMsg } from '../../utils/errMsg'
 import { createPollGuard } from '../../utils/pollGuard'
+import { addBgTask, setBgTaskStatus } from '../sync/backgroundTasks'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -161,6 +162,17 @@ const doImport = async () => {
       throw new Error(res.message || t('imp.submitFailed'))
     }
     taskId.value = res.taskId
+    // 登记到任务中心：几十万行、几百 MB 的导入要跑很久，关掉弹窗后仍要能看进度 / 停止
+    addBgTask({
+      id: res.taskId,
+      kind: 'import',
+      title: `${props.conn?.name || ''} / ${tgt.db} · ${file.value?.name || ''}`,
+      connId: props.conn?.id,
+      database: tgt.db,
+      // 文件名要留底：任务中心「查看」靠它把标题组回「导入中「x.xlsx」」，
+      // 与第一次运行时的进度窗一致（任务中心侧见 MainView 的 bgDetailTargetName）
+      extra: { name: file.value?.name || '' }
+    })
     progressVisible.value = true
     startPolling()
   } catch (e) {
@@ -194,6 +206,13 @@ const startPolling = () => {
         clearInterval(pollTimer)
         pollTimer = null
         importing.value = false
+        // 终态写回任务中心记录（关掉弹窗后那条记录也要立刻正确）
+        setBgTaskStatus(taskId.value, taskStatus.value, {
+          status: taskStatus.value,
+          message: taskMessage.value,
+          logs: taskLogs.value.map(l => l.text),
+          elapsedMs: r.elapsedMs
+        })
         if (taskStatus.value === 'success') {
           ElMessage.success(taskMessage.value || t('imp.done'))
           file.value = null

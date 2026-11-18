@@ -49,13 +49,14 @@ const persist = () => {
   try { localStorage.setItem(KEY, JSON.stringify(bgTasks)) } catch { /* 隐私模式忽略 */ }
 }
 
-export const addBgTask = ({ id, title, kind, mode, connId, database }) => {
+export const addBgTask = ({ id, title, kind, mode, connId, database, extra }) => {
   if (!id) return
   const i = bgTasks.findIndex(x => x.id === id)
   const prev = i >= 0 ? bgTasks[i] : null
-  // kind：任务属于哪个功能（sync=数据传输 / compare=数据对比 /
-  // backup=数据库备份 / restore=数据库还原）—— 任务中心点「查看」时按它路由回对应对话框的进度窗，
-  // 状态查询与「停止」也要按它选接口
+  // kind：任务属于哪个功能（sync=数据传输 / compare=数据对比 / backup=数据库备份 /
+  // restore=数据库还原 / export=数据导出 / dump=SQL 转存 / import=数据导入 /
+  // datagen=测试数据 / runFile=执行 SQL 文件）—— 任务中心点「查看」时按它决定怎么还原，
+  // 状态查询与「停止」也按它选接口（见 modules/sync/bgTaskApi.js）
   //
   // **标题保底**：同 id 重复登记（从任务中心恢复进度窗后又点了一次「后台运行」）
   // 时，此时对话框里的源/目标可能已被清空，生成出来的是「. → .」这种空标题 ——
@@ -63,12 +64,19 @@ export const addBgTask = ({ id, title, kind, mode, connId, database }) => {
   const valid = (s) => s && /[\u4e00-\u9fa5A-Za-z0-9]/.test(s)
   const nextTitle = valid(title) ? title : (valid(prev?.title) ? prev.title : (title || id))
   const item = { id, title: nextTitle, kind: kind || prev?.kind || 'sync', addedAt: prev?.addedAt || Date.now() }
-  // 备份/还原要能「再次唤起」：重新打开对话框必须知道是备份还是还原、连的哪个连接哪个库。
-  // 这些字段只对本类任务有意义，**有值才写**（老记录没有它们，恢复时按缺失处理）。
-  const extra = { mode, connId, database }
-  for (const [k, v] of Object.entries(extra)) {
-    const value = v || prev?.[k]
-    if (value) item[k] = value
+  // 这些字段只对部分任务有意义，**有值才写**（老记录没有它们，恢复时按缺失处理）：
+  //  - mode / connId / database：备份还原重新唤起对话框要用，导出/导入/执行文件回查状态也要 connId
+  //  - extra：各功能自己的小字段（name/format 供导出任务结束后重新拼文件名、fileName 等），
+  //    只收原始类型，免得把对象/句柄塞进 localStorage
+  const extraFields = extra && typeof extra === 'object' ? extra : {}
+  const fields = { mode, connId, database, ...extraFields }
+  for (const [k, v] of Object.entries(fields)) {
+    if (!v || !['string', 'number', 'boolean'].includes(typeof v)) continue
+    item[k] = v
+  }
+  for (const [k, v] of Object.entries(fields)) {
+    if (item[k] || !prev?.[k]) continue
+    item[k] = prev[k]
   }
   if (i >= 0) bgTasks.splice(i, 1, item)
   else bgTasks.unshift(item)
@@ -115,7 +123,9 @@ export const setBgTaskStatus = (id, status, snapshot) => {
         // 是登记时刻，晚于任务真正开始，用它会算出虚高的耗时）
         // **status 必须留在快照里**：「查看」判断记录是否已终态就靠它 ——
         // 曾经漏存，导致已完成的任务点查看判断不出终态、又落回进度视图（真机踩过）
-        const keep = { status, message: snapshot.message || '', rowsRead: snapshot.rowsRead || 0, rowsWritten: snapshot.rowsWritten || 0, rowsFailed: snapshot.rowsFailed || 0, elapsedMs: snapshot.elapsedMs || 0 }
+        // fileName / phase 也留底：导出类任务结束后，任务中心要靠它重新拼出下载文件名、
+        // 并告诉用户「当时走到哪一步」（后端任务 30 分钟就过期，本地记录得能自解释）
+        const keep = { status, message: snapshot.message || '', phase: snapshot.phase || '', fileName: snapshot.fileName || '', rowsRead: snapshot.rowsRead || 0, rowsWritten: snapshot.rowsWritten || 0, rowsFailed: snapshot.rowsFailed || 0, elapsedMs: snapshot.elapsedMs || 0 }
         // 日志也留底（查看历史任务时日志区有内容）：总量控制 < 40KB，防撑爆 localStorage
         if (Array.isArray(snapshot.logs) && snapshot.logs.length) {
           try {

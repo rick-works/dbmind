@@ -172,7 +172,7 @@
           </div>
           <div class="summary-row">
             <span class="summary-label">{{ $t('dgen.fieldRules') }}</span>
-            <span class="summary-value">{{ $t('dgen.fieldRulesSummary', { n: colRules.length, adjusted: adjustCount }) }}</span>
+            <span class="summary-value">{{ $t('dgen.fieldRulesSummary', { n: fieldCountShown, adjusted: adjustCountShown }) }}</span>
           </div>
         </div>
 
@@ -223,8 +223,11 @@
           <!-- 第 3 步：执行 -->
           <template v-else>
             <el-button v-if="running" size="small" type="danger" :icon="CircleClose" :loading="canceling" @click="doCancel">{{ $t('dgen.cancelGen') }}</el-button>
+            <!-- 生成中「转入后台」：关掉向导，任务在后端继续，任务中心里能看进度、能停止 -->
+            <el-button v-if="running" size="small" @click="sendToBackground">{{ $t('sync.runBg') }}</el-button>
             <template v-else>
-              <el-button size="small" @click="backToRules">{{ $t('dgen.backToEdit') }}</el-button>
+              <!-- 接回旧任务时没有字段清单，改不了规则 —— 「返回修改」只会把人带进空表格 -->
+              <el-button v-if="colRules.length" size="small" @click="backToRules">{{ $t('dgen.backToEdit') }}</el-button>
               <el-button v-if="!job" size="small" type="primary" :icon="AiMark" @click="doGenerate">{{ $t('dgen.startGen') }}</el-button>
               <el-button v-else size="small" type="primary" @click="visible = false">{{ $t('dgen.done') }}</el-button>
             </template>
@@ -246,11 +249,17 @@ import { listColumns, dataGenRules, dataGenPreview, dataGenStart, dataGenTask, d
 import { errMsg } from '../../utils/errMsg'
 import { t, tMsg } from '../../utils/i18n'
 import { createPollGuard } from '../../utils/pollGuard'
+import { addBgTask, setBgTaskStatus } from '../sync/backgroundTasks'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
   conn: { type: Object, default: null },
-  target: { type: Object, default: null }
+  target: { type: Object, default: null },
+  /**
+   * 任务中心「查看」接回一个正在跑/已结束的造数任务（见 MainView 的 resumeDataGen）。
+   * 有值 = 直接落到执行页、按后端 taskId 接着轮询；null = 正常新建流程。
+   */
+  resume: { type: Object, default: null }
 })
 const emit = defineEmits(['update:modelValue', 'done'])
 
@@ -338,6 +347,12 @@ const adjustCount = computed(() => colRules.value.filter(c => {
   if (c.autoIncrement) return c.rule !== 'skip'
   return c.rule !== 'auto' || c.value || c.valuesText || c.min || c.max || c.length !== null || c.start !== null || c.nullRatio
 }).length)
+// 「接回旧任务」时没有字段清单（不必为了看一眼进度再拉一次表结构），
+// 摘要里的字段数/手调数用提交时留在任务记录里的快照顶上
+const resumeFieldCount = ref(0)
+const resumeAdjustCount = ref(0)
+const fieldCountShown = computed(() => colRules.value.length || resumeFieldCount.value)
+const adjustCountShown = computed(() => (colRules.value.length ? adjustCount.value : resumeAdjustCount.value))
 
 const jobPercent = computed(() => {
   const j = job.value
@@ -387,6 +402,46 @@ const resetState = () => {
   previewRows.value = []
   notes.value = []
   notices.value = []
+  resumeFieldCount.value = 0
+  resumeAdjustCount.value = 0
+}
+
+/**
+ * 接回任务中心里的造数任务（见 MainView 的 resumeDataGen）：
+ * 直接落在「写入执行」页，摘要用提交时留下的参数，进度/日志按 taskId 继续轮询。
+ *
+ * ⚠ 这里**故意不再拉字段/预览**：只是看一眼已经跑起来的任务，多两次元数据往返既慢，
+ * 而且表结构中途被改过时还会和当时的规则对不上 —— 摘要以提交那一刻为准。
+ */
+const resumeFromRecord = (r) => {
+  stopPoll()
+  step.value = 'run'
+  rows.value = Number(r.rows) || 0
+  batchSize.value = Number(r.batchSize) || 500
+  seed.value = r.seed || ''
+  writeMode.value = r.mode === 'clear' ? 'clear' : 'append'
+  resumeFieldCount.value = Number(r.fieldCount) || 0
+  resumeAdjustCount.value = Number(r.adjustCount) || 0
+  colRules.value = []
+  canceling.value = false
+  error.value = ''
+  notices.value = []
+  previewColumns.value = []
+  previewRows.value = []
+  notes.value = []
+  lastLogStage = ''
+  lastLogBucket = -1
+  logs.value = (Array.isArray(r.logs) ? r.logs : []).map((text) => ({ time: '', text: String(text), level: 'info' }))
+  const status = r.status || 'running'
+  job.value = {
+    taskId: r.taskId,
+    status,
+    done: status === 'success' ? rows.value : 0,
+    total: rows.value,
+    stage: ''
+  }
+  if (status === 'running') startPoll()
+  else if (status === 'notfound') ElMessage.warning(t('dgen.taskGone'))
 }
 
 // ==================== 实时日志 ====================
@@ -466,6 +521,14 @@ const pollJob = async () => {
       }
     } else {
       stopPoll()
+      // 终态写回任务中心记录（日志按后端数组顺序留底）
+      setBgTaskStatus(id, res.status, {
+        status: res.status,
+        message: res.message || res.error || '',
+        phase: res.stage || '',
+        logs: Array.isArray(res.logs) ? res.logs.slice() : logs.value.map(l => l.text),
+        elapsedMs: res.elapsedMs
+      })
       finishJob(res)
     }
   } catch (e) {
@@ -509,13 +572,23 @@ const doCancel = async () => {
   }
 }
 
-// 生成中禁止关闭弹窗（先取消或等待完成），避免用户误以为任务已停止
+/**
+ * 生成中关窗 = 转入后台（任务已登记进任务中心，关掉向导不会失去它）。
+ * 以前是直接拦住并提示「正在生成」，用户只能干等或点取消 —— 几十万行的造数就是这么被放弃的。
+ */
 const onBeforeClose = (done) => {
   if (running.value) {
-    ElMessage.warning(t('dgen.busy'))
+    ElMessage.success(t('sync.bgAdded'))
+    done()
     return
   }
   done()
+}
+
+/** 「转入后台」按钮：关向导，轮询由 modelValue 的 watch 停掉，任务中心接着跟 */
+const sendToBackground = () => {
+  ElMessage.success(t('sync.bgAdded'))
+  visible.value = false
 }
 
 onBeforeUnmount(() => {
@@ -685,6 +758,25 @@ const doGenerate = async () => {
     }
     canceling.value = false
     job.value = res
+    // 登记到任务中心：造数往往几十万行，关掉弹窗后仍要能看进度、能停止
+    // 参数一并写进任务记录：任务中心「查看」靠它把执行确认摘要原样还原
+    // （只留 taskId 的话第二次点开就只有一根进度条和一份日志）
+    addBgTask({
+      id: res.taskId,
+      kind: 'datagen',
+      title: `${props.conn?.name || ''} / ${props.target?.db || ''}.${props.target?.table || ''} · ×${rows.value}`,
+      connId: props.conn?.id,
+      database: props.target?.db || '',
+      extra: {
+        genTable: props.target?.table || '',
+        genRows: rows.value,
+        genBatch: batchSize.value,
+        genSeed: seed.value.trim(),
+        genMode: writeMode.value,
+        genFields: colRules.value.length,
+        genAdjusted: adjustCount.value
+      }
+    })
     pushLog(t('dgen.logStart', {
       rows: rows.value,
       target: `${props.target?.db}.${props.target?.table}`,
@@ -703,6 +795,12 @@ const doGenerate = async () => {
 watch(() => props.modelValue, async (open) => {
   if (!open) {
     stopPoll()
+    return
+  }
+  // 任务中心「查看」接回一个已有的造数任务：不重置、不重新拉字段，直接还原执行页 ——
+  // 同一个任务每次点开都必须长得一样（用户实测反馈「再次唤起任务内容不要变」）
+  if (props.resume && props.resume.taskId) {
+    resumeFromRecord(props.resume)
     return
   }
   resetState()

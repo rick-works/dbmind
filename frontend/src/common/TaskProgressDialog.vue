@@ -45,14 +45,29 @@
     <template #footer>
       <div class="tp-footer">
         <span class="tp-tip">{{ footerTip }}</span>
-        <!-- cancellable=false 的场景：语句已经交给数据库执行，客户端**中断不了** ——
-             与其放一个按不动的"取消"，不如不给（危险操作里的单个 DDL 就是这种）。 -->
-        <el-button v-if="isRunning && cancellable" type="danger" size="small" :loading="canceling" @click="$emit('cancel')">
-          {{ canceling ? $t('tpd.canceling') : $t('common.cancel') }}
-        </el-button>
-        <el-button v-else type="primary" size="small" @click="$emit('close')">
-          {{ isSuccess ? $t('kbx.stepDone') : $t('common.close') }}
-        </el-button>
+        <!-- 按钮必须**成组贴右**：footer 是 space-between，三个平级子元素时
+             「取消」会被摆到正中间（用户截图反馈「取消怎么跑中间去了」）。 -->
+        <div class="tp-actions">
+          <!-- cancellable=false 的场景：语句已经交给数据库执行，客户端**中断不了** ——
+               与其放一个按不动的"取消"，不如不给（危险操作里的单个 DDL 就是这种）。 -->
+          <!-- 导出/转存这类有产物的任务：从任务中心「查看」打开时（原对话框早已关闭、
+               保存句柄也没了），产物只能在这里下载；产物只保留 30 分钟，按钮点了才知道有没有 -->
+          <el-button v-if="!isRunning && downloadable" size="small" :loading="downloading" @click="$emit('download')">
+            {{ $t('tpd.download') }}
+          </el-button>
+          <el-button v-if="isRunning && cancellable" type="danger" size="small" :loading="canceling" @click="$emit('cancel')">
+            {{ canceling ? $t('tpd.canceling') : $t('common.cancel') }}
+          </el-button>
+          <!-- 运行中的「后台运行」：任务已登记进任务中心，收起窗口后它继续跑。
+               从任务中心「查看」再次点开时也必须有这一颗 —— 否则窗口收起后再打开就退不回去
+               （用户实测：「再次点开就关不掉了」）。 -->
+          <el-button v-if="isRunning && backgroundable" size="small" @click="goBackground">
+            {{ $t('sync.runBg') }}
+          </el-button>
+          <el-button v-if="!isRunning" type="primary" size="small" @click="$emit('close')">
+            {{ isSuccess ? $t('kbx.stepDone') : $t('common.close') }}
+          </el-button>
+        </div>
       </div>
     </template>
   </el-dialog>
@@ -84,28 +99,61 @@ const props = defineProps({
   showLogs: { type: Boolean, default: false },
   canceling: { type: Boolean, default: false },
   /** 该任务能否取消：false = 不给取消按钮（后端已经在执行、停不下来） */
-  cancellable: { type: Boolean, default: true }
+  cancellable: { type: Boolean, default: true },
+  /** 结束后是否提供「下载文件」（导出 / SQL 转存；任务中心重新打开时用） */
+  downloadable: { type: Boolean, default: false },
+  downloading: { type: Boolean, default: false },
+  /**
+   * 运行中允许「转入后台」：点 ✕ 不再拦截，而是提示「已转入后台」并关窗 ——
+   * 任务在后端继续跑，任务中心里能找回进度、能停止。
+   * 只有**登记进任务中心**的调用方才该打开它（危险操作那种关掉就没人管了，保持默认 false）。
+   */
+  /**
+   * 运行中允许「再次转入后台」：底部给一颗「后台运行」按钮，点 ✕ 也按同样处理 ——
+   * 提示一句「已转入后台，可从顶栏任务中心查看」，窗口收起，任务在后端继续跑。
+   * 只有**登记进任务中心**的调用方才该打开它（危险操作那种关掉就没人管了，保持默认 false）。
+   */
+  backgroundable: { type: Boolean, default: false }
 })
 
-defineEmits(['update:visible', 'cancel', 'close'])
+const emit = defineEmits(['update:visible', 'cancel', 'close', 'download', 'background'])
 
 const logRef = ref(null)
 
 const isRunning = computed(() => props.status === 'running')
 
 /**
- * 右上角 X 常驻显示，但任务运行中不直接关：关掉只是「看不见」，任务仍在跑，
- * 用户会以为任务被取消了。这里提示一句，让他走「取消」按钮。
+ * 右上角 X：运行中分两种处理。
+ * - 默认不直接关（关掉只是「看不见」，任务仍在跑，用户会以为被取消了）→ 提示一句；
+ * - `backgroundable`（登记进任务中心的长任务）→ 当作「转入后台」：提示去任务中心看，
+ *   关窗后进度由任务中心的 5 秒心跳继续跟。
  */
+/**
+ * 运行中「再次转入后台」：提示后收起窗口。
+ * 底部按钮与右上角 ✕ 走同一条路 —— 任务在后端继续，任务中心里点「查看」随时再接回来。
+ */
+const goBackground = () => {
+  ElMessage.success(t('sync.bgAdded'))
+  emit('background')
+  emit('update:visible', false)
+}
+
 const onBeforeClose = (done) => {
   if (isRunning.value) {
+    if (props.backgroundable) {
+      goBackground()
+      done()
+      return
+    }
     ElMessage.warning(t('tpd.closeWhileRunning'))
     return
   }
   done()
 }
 const isSuccess = computed(() => props.status === 'success')
-const isError = computed(() => props.status === 'error' || props.status === 'canceled' || (!isRunning.value && !isSuccess.value))
+/** 主动取消是"正常终止"，不是失败：红叉 + 「失败 N%」会让用户以为任务炸了 */
+const isCanceled = computed(() => props.status === 'canceled')
+const isError = computed(() => props.status === 'error' || (!isRunning.value && !isSuccess.value && !isCanceled.value))
 
 const displayTitle = computed(() => {
   if (props.taskKind) {
@@ -113,6 +161,8 @@ const displayTitle = computed(() => {
     const k = props.taskKind
     if (isRunning.value) return t(`task.${k}Running`, { name })
     if (isSuccess.value) return t(`task.${k}Done`, { name })
+    // 取消有自己的措辞：套「失败」会误导，只写「已结束」又看不出是自己点停的
+    if (isCanceled.value) return t(`task.${k}Canceled`, { name })
     if (isError.value) return t(`task.${k}Failed`, { name })
     return t(`task.${k}Ended`, { name })
   }
@@ -136,12 +186,14 @@ const indeterminate = computed(() => !isSuccess.value && !isError.value && (!pro
 const progressStatus = computed(() => {
   if (isError.value) return 'exception'
   if (isSuccess.value) return 'success'
+  if (isCanceled.value) return 'warning'
   return ''
 })
 
 const progressClass = computed(() => {
   if (isSuccess.value) return 'is-success'
   if (isError.value) return 'is-exception'
+  if (isCanceled.value) return 'is-canceled'
   return 'is-running'
 })
 
@@ -190,6 +242,8 @@ const phaseClass = computed(() => {
 const phaseText = computed(() => {
   const pct = percentage.value
   if (isSuccess.value) return t('tpd.donePct', { n: pct })
+  // 取消：如实说「已取消」（后端也会给 cancelled 的说明，优先用它）
+  if (isCanceled.value) return props.message || (pct > 0 ? t('tpd.canceledPct', { n: pct }) : t('tpd.canceled'))
   if (isError.value) return pct > 0 ? t('tpd.failedPct', { n: pct }) : t('kbx.phase.failed')
   if (props.phase) return pct > 0 ? `${props.phase} ${pct}%` : props.phase
   return pct > 0 ? t('tpd.runningPct', { n: pct }) : t('tpd.running')
@@ -198,6 +252,7 @@ const phaseText = computed(() => {
 const footerTip = computed(() => {
   if (isRunning.value) return props.canceling ? t('tpd.waitingStop') : t('tpd.inProgress')
   if (isSuccess.value) return t('tpd.completed')
+  if (isCanceled.value) return t('tpd.canceled')
   return t('tpd.ended')
 })
 
@@ -210,6 +265,7 @@ const footerTip = computed(() => {
  */
 const emptyHint = computed(() => {
   if (isRunning.value) return props.phase ? `${props.phase}…` : t('tpd.started')
+  if (isCanceled.value) return props.message || t('tpd.canceled')
   return props.message || t('tpd.ended')
 })
 
@@ -239,6 +295,8 @@ watch(() => (props.showLogs ? props.logs.length : 0), () => {
 }
 .tp-progress.is-success :deep(.el-progress-bar__inner) { background-image: none; background-color: #67c23a; }
 .tp-progress.is-exception :deep(.el-progress-bar__inner) { background-image: none; background-color: #f56c6c; }
+/* 取消：琥珀色（不是错误红）——「我按了取消」不能渲染成「跑失败」 */
+.tp-progress.is-canceled :deep(.el-progress-bar__inner) { background-image: none; background-color: #e6a23c; }
 .tp-progress :deep(.el-progress-bar__innerText) { font-weight: 600; }
 .tp-phase { margin-top: 10px; font-size: 14px; color: var(--dc-text-strong); font-weight: 500; }
 .tp-phase.is-success { color: #67c23a; }
@@ -281,6 +339,9 @@ watch(() => (props.showLogs ? props.logs.length : 0), () => {
 .tp-log-line { display: flex; gap: 10px; color: var(--dc-text); }
 .tp-log-time { color: var(--dc-text-weak); flex-shrink: 0; }
 .tp-log-text { word-break: break-all; }
-.tp-footer { display: flex; align-items: center; justify-content: space-between; width: 100%; }
-.tp-tip { font-size: 13px; color: var(--dc-text-weak); }
+.tp-footer { display: flex; align-items: center; justify-content: space-between; width: 100%; gap: 12px; }
+.tp-tip { font-size: 13px; color: var(--dc-text-weak); min-width: 0; }
+/* 按钮成组贴右：不加这一层时三个按钮会被 space-between 摊开，中间那个（取消）飘在正中间 */
+.tp-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
+.tp-actions :deep(.el-button + .el-button) { margin-left: 0; }
 </style>

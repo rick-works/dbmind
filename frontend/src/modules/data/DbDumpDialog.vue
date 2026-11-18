@@ -135,6 +135,7 @@
       :message="exportTask.message"
       :logs="exportTask.logs"
       :canceling="exportTask.canceling"
+      :backgroundable="true"
       @cancel="exportTask.cancel(props.conn.id)"
       @close="onTaskClose"
     />
@@ -318,7 +319,13 @@ const doDump = async () => {
   }
   // zip 类（csv/json/excel）下载文件扩展名为 .zip，sql 类为 .sql
   const dlFormat = (fmt === 'csv' || fmt === 'json' || fmt === 'excel') ? 'zip' : 'sql'
-  await exportTask.start(props.conn.id, payload, db, dlFormat, exportDbStart)
+  // kind='dump'：任务中心把「整库 SQL 转存」与「表/查询结果导出」分开列；
+  // title 带连接名与库名 —— 关掉弹窗之后，任务中心里这是唯一能认出它的信息
+  await exportTask.start(props.conn.id, payload, db, dlFormat, exportDbStart, {
+    kind: 'dump',
+    title: `${props.conn.name || ''} / ${db} · ${t('sync.kindDump')}`,
+    database: db
+  })
 }
 
 // 任务结束（完成/失败/取消）：关闭进度弹窗并关闭本弹窗

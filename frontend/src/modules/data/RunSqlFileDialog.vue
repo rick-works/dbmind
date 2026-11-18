@@ -31,6 +31,7 @@
     :message="sqlFileTask.message"
     :logs="sqlFileTask.logs"
     :canceling="sqlFileTask.canceling"
+    :backgroundable="true"
     @cancel="sqlFileTask.cancel()"
     @close="onClose"
   />
@@ -75,7 +76,9 @@ const run = async () => {
   if (!file.value || !db) return
   try {
     const text = await file.value.text()
-    await sqlFileTask.start(props.conn?.id, { sql: text, database: db })
+    await sqlFileTask.start(props.conn?.id, { sql: text, database: db }, {
+      title: `${props.conn?.name || ''} / ${db} · ${file.value?.name || ''}`
+    })
   } catch (e) {
     ElMessage.error(t('rsf.submitFailed', { detail: (e?.message || e) }))
   }

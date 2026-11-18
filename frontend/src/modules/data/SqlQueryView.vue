@@ -602,6 +602,7 @@
     :message="exportTask.message"
     :logs="exportTask.logs"
     :canceling="exportTask.canceling"
+    :backgroundable="true"
     @cancel="exportTask.cancel(selectedConnId || props.conn.id)"
     @close="exportTask.close"
   />
@@ -5513,7 +5514,11 @@ const onExport = async (cmd) => {
   if (scope === 'all') {
     // 导出全部走异步任务，后端流式分页导出，前端实时显示进度与日志
     const payload = { sql: sql.value, format, database }
-    await exportTask.start(connId, payload, props.scriptName || t('sqlq.queryResult'), format)
+    // 登记到任务中心：长查询结果导出常常要跑几分钟，关掉进度窗不该等于放弃它
+    await exportTask.start(connId, payload, props.scriptName || t('sqlq.queryResult'), format, null, {
+      title: `${props.scriptName || t('sqlq.queryResult')} · ${String(format).toUpperCase()}`,
+      database
+    })
     return
   }
   // 当前页：走**同步单页接口**（后端只查这一页就回字节）。

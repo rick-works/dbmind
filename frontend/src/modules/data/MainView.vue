@@ -80,7 +80,7 @@
                 <!-- 浮层窄：任务名必然被截断，完整标题挂到 title 上（悬停可看全 ——
                      只看被截断的前缀，两个不同任务会显得一模一样） -->
                 <span class="bg-title" :title="t.title">{{ t.title }}</span>
-                <span class="bg-state">{{ bgStateText(t.id) }}</span>
+                <span class="bg-state">{{ bgStateText(t.id, t.kind) }}</span>
                 <el-button size="small" text type="danger" @click.stop="stopBgTask(t)">{{ $t('common.stop') }}</el-button>
               </div>
             </div>
@@ -572,19 +572,23 @@
     <!-- 任务中心两个视图共用一个弹窗：history = 全部执行记录（**表格 + 分页**，字段：
          类型/任务/状态/开始/结束/耗时/操作）；running = 正在执行（右侧时钟悬浮的轻列表）。
          状态在打开时实时刷新，终态写回记录（持久化），刷新页面后历史仍显示完成/失败。 -->
-    <el-dialog v-model="bgCenterOpen" :title="bgCenterMode === 'running' ? $t('sync.bgRunningTitle') : $t('sync.bgCenter')" width="1000px" append-to-body class="bg-center-dialog">
+    <!-- 宽度跟着列走：类型列加宽后 1000px 装不下，最右边的「操作」列会被挤出可视区（要横向滚动） -->
+    <el-dialog v-model="bgCenterOpen" :title="bgCenterMode === 'running' ? $t('sync.bgRunningTitle') : $t('sync.bgCenter')" width="min(1180px, 96vw)" append-to-body class="bg-center-dialog">
     <template v-if="bgCenterMode === 'history'">
     <div v-if="bgTasks.length" class="bg-toolbar">
       <el-button size="small" type="danger" plain :icon="ElDelete" @click="confirmClearBg">{{ $t('sync.bgClear') }}</el-button>
     </div>
     <el-table :data="bgPageRows" size="small" border class="data-table" height="100%" @row-click="resumeBgTask" :row-class-name="() => 'bg-row-click'">
-    <el-table-column :label="$t('ts.kind')" width="80" align="center" header-align="center">
+    <!-- 类型列要装得下最长的徽章「生成测试数据」「执行 SQL 文件」（5 个汉字 / 含空格），
+         80px 时会被挤成四行竖排（用户截图反馈「类型列太窄了吧」） -->
+    <el-table-column :label="$t('ts.kind')" width="124" show-overflow-tooltip align="center" header-align="center">
       <template #default="{ row }"><span class="bg-kind" :class="bgKindClass(row.kind)">{{ bgKindLabel(row.kind) }}</span></template>
     </el-table-column>
     <!-- 「任务」列带连接名（`源连接 / 库 → 目标连接 / 库`）：只写库名时同名库分不清是哪两个实例 -->
-    <el-table-column prop="title" :label="$t('ts.task')" min-width="330" show-overflow-tooltip align="center" header-align="center" />
-    <el-table-column :label="$t('ts.status')" width="90" show-overflow-tooltip align="center" header-align="center">
-      <template #default="{ row }"><span class="bg-dot bg-dot-inline" :class="bgStatusOf(row.id)"></span>{{ bgStateShort(row.id) }}</template>
+    <el-table-column prop="title" :label="$t('ts.task')" min-width="300" show-overflow-tooltip align="center" header-align="center" />
+    <!-- 状态列要装下最长的「执行 SQL 文件中...」，太窄会被截成「执行 SQL 文件…」 -->
+    <el-table-column :label="$t('ts.status')" width="140" show-overflow-tooltip align="center" header-align="center">
+      <template #default="{ row }"><span class="bg-dot bg-dot-inline" :class="bgStatusOf(row.id)"></span>{{ bgStateShort(row.id, row.kind) }}</template>
     </el-table-column>
     <el-table-column :label="$t('ts.start')" align="center" header-align="center" width="150">
       <template #default="{ row }">{{ bgTimeText(row, 'start') }}</template>
@@ -614,7 +618,7 @@
     <span class="bg-kind" :class="bgKindClass(t.kind)">{{ bgKindLabel(t.kind) }}</span>
     <!-- 同上：完整标题挂 title，悬停能看全 -->
     <span class="bg-title" :title="t.title">{{ t.title }}</span>
-    <span class="bg-state">{{ bgStateText(t.id) }}</span>
+    <span class="bg-state">{{ bgStateText(t.id, t.kind) }}</span>
     <el-button size="small" text type="danger" @click.stop="stopBgTask(t)">{{ $t('common.stop') }}</el-button>
     </div>
     </div>
@@ -785,7 +789,8 @@
     <ImportDataDialog v-model="ctxImportVisible" :conn="conn" :target="ctxImportTarget" @done="onImportDone" />
 
     <!-- 数据生成弹窗（逻辑在 DataGenDialog.vue，按真实字段结构推导规则，可预览后批量写入） -->
-    <DataGenDialog v-model="ctxDataGenVisible" :conn="connFor(ctxDataGenTarget?.connId)" :target="ctxDataGenTarget" @done="onDataGenDone" />
+    <DataGenDialog v-model="ctxDataGenVisible" :conn="connFor(ctxDataGenTarget?.connId)" :target="ctxDataGenTarget"
+                   :resume="bgGenResume" @done="onDataGenDone" />
 
     <!-- AI 解释视图弹窗 -->
     <el-dialog v-model="aiExplainVisible" width="640px" :close-on-click-modal="true" append-to-body class="main-dialog ai-explain-dialog">
@@ -1247,8 +1252,33 @@
     :message="exportMessage"
     :logs="exportLogs"
     :canceling="exportCanceling"
+    :backgroundable="true"
     @cancel="cancelExportTask"
     @close="onExportProgressClose"
+  />
+
+  <!-- 任务中心「查看」的通用进度窗：导出 / 转存 / 导入 / 造数 / 执行 SQL 文件
+       这些任务提交时只留了 taskId（源文件与保存句柄都没了），重新打开原对话框没有意义，
+       这里按 taskId 实时查询，等于「回到它当时的运行状态」；结束后可下载产物。 -->
+  <TaskProgressDialog
+    v-model:visible="bgDetailVisible"
+    :title="bgDetailTask?.title || $t('sync.bgCenter')"
+    :task-kind="bgDetailKind"
+    :target-name="bgDetailTargetName"
+    :status="bgDetailStatus"
+    :done="bgDetailDone"
+    :total="bgDetailTotal"
+    :phase="bgDetailPhase"
+    :message="bgDetailMessage"
+    :logs="bgDetailLogs"
+    :show-logs="true"
+    :canceling="bgDetailCanceling"
+    :downloadable="bgDetailStatus === 'success' && bgHasArtifact(bgDetailTask?.kind)"
+    :downloading="bgDetailDownloading"
+    :backgroundable="true"
+    @cancel="cancelBgDetail"
+    @download="downloadBgDetail"
+    @close="closeBgDetail"
   />
 </template>
 
@@ -1336,13 +1366,14 @@ import { t, tMsg } from '../../utils/i18n'
 import { loadShortcuts, matchesShortcut, isShortcutSuppressed } from '../../utils/shortcuts'
 import { hasVisibleOverlay } from '../../utils/useShortcuts'
 import { openExternal } from '../../utils/externalLinks'
-import { bgTasks, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
+import { bgTasks, addBgTask, removeBgTask, clearBgTasks, setBgTaskStatus } from '../sync/backgroundTasks'
+// 后台任务的类型分派（状态 / 取消 / 文案 / 能否就地还原）：一处 switch，别再在界面里写第二份
+import { bgKindKey, bgKindClassOf, bgKindStopMsg, bgKindRunningKey, bgTaskStatus, bgTaskCancel, bgIsTerminal, bgInlineResumable, bgHasArtifact } from '../sync/bgTaskApi'
 import { Coin, Refresh, Setting, SetUp, Plus, Folder, FolderAdd, Grid, View, Mouse, Switch, Promotion, Search, Operation, BellFilled, Timer, DocumentRemove, Document, DocumentCopy, Download, Upload, ArrowRight, ArrowLeft, ArrowUp, Expand, Fold, Edit, Delete, Connection, FolderOpened, CopyDocument, EditPen, Cpu, CircleClose, Close, SwitchButton, Loading, User, UserFilled, CollectionTag, Collection, ArrowDown, DataAnalysis, Monitor, Stopwatch, VideoPlay } from '@element-plus/icons-vue'
-import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, syncTaskStatus, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
+import { listConnections, listCatalogs, listDatabases, listSchemas, listTables, listColumns, listIndexes, getTableCounts, disconnectSessions, disconnectDatabase, noSqlDatabases, noSqlCollections, noSqlDeleteCollection, listProcedures, listTriggers, listEvents, listUsers, getUserInfo, userAction, getTableDdl, getObjectInfo, exportData, exportStart, exportTask, exportCancel, exportDownload, testConnectionById, deleteConnection, tableAction, getFeatures, alterTable, executeSql, copyConnection, saveConnection, aiNl2sql, aiExplain, aiInsight, aiDataDict, listHistory, clearHistory } from '../../api'
 import TaskProgressDialog from '../../common/TaskProgressDialog.vue'
-import { compareTaskStatus, compareCancel, syncCancel, getSettings,
-  // 备份/还原也在任务中心里（与数据传输同一套记录），状态查询与「停止」各走自己的接口
-  backupTaskStatus, cancelBackup, restoreTaskStatus, cancelRestore } from '../../api'
+// 任务状态查询/取消已全部按 kind 分派到 modules/sync/bgTaskApi.js，这里只留设置读取
+import { getSettings } from '../../api'
 import { showSafetyNotice, setSafetyConnResolver } from '../../utils/safetyNotice'
 // 生产判定（角标 / 分组 / 旧分组键，与后端 is_prod_environment 同一口径）——
 // 与用户管理页 / 用户表单共用同一个判定，避免"这里认、那里不认"
@@ -2321,26 +2352,13 @@ const onSyncDialogVisible = (v) => {
 }
 /** 备份 / 还原在任务中心各算一类：状态查询、停止、恢复用的接口都不一样 */
 const isBackupKind = (kind) => kind === 'backup' || kind === 'restore'
-/** 任务类型 → 文案（任务中心类型列、顶栏悬浮列表共用） */
-const bgKindLabel = (kind) => {
-  if (kind === 'compare') return t('nav.compare')
-  if (kind === 'backup') return t('ts.kindBackup')
-  if (kind === 'restore') return t('ts.kindRestore')
-  return t('nav.sync')
-}
-/** 类型徽章配色：对比=橙、备份/还原=绿、数据传输=蓝 */
-const bgKindClass = (kind) => (kind === 'compare' ? 'is-cmp' : isBackupKind(kind) ? 'is-bkp' : '')
-/** 按任务类型查状态（四类接口形状一致：status / message / logs / logsSeq / elapsedMs …） */
-const bgTaskStatusOf = (task) => {
-  if (task.kind === 'compare') return compareTaskStatus(task.id)
-  if (task.kind === 'backup') return backupTaskStatus(task.id)
-  if (task.kind === 'restore') return restoreTaskStatus(task.id)
-  return syncTaskStatus(task.id)
-}
+/** 任务类型 → 文案（任务中心类型列、顶栏悬浮列表、通用详情窗共用同一份注册表） */
+const bgKindLabel = (kind) => t(bgKindKey(kind))
+/** 类型徽章配色：对比=橙、备份/还原=绿、导出/转存=青、导入=紫，其余=蓝 */
+const bgKindClass = (kind) => bgKindClassOf(kind)
+/** 按任务类型查状态（9 类接口形状一致：status / phase / done / total / logs / logsSeq …） */
+const bgTaskStatusOf = (task) => bgTaskStatus(task)
 const bgStatusMap = ref({})
-/** 终态：这些状态不会再变，没有必要每 5 秒再问一次后端 */
-const BG_TERMINAL = ['success', 'canceled', 'error', 'notfound']
-const bgIsTerminal = (s) => BG_TERMINAL.includes(s)
 /** 这条记录还需要问后端吗（终态的不问） */
 const bgNeedsRefresh = (t) => !bgIsTerminal(bgStatusMap.value[t.id] || t.status)
 
@@ -2416,15 +2434,12 @@ const refreshBgStatus = async ({ force = false } = {}) => {
  */
 const stopBgTask = async (task) => {
   try {
-    if (task.kind === 'compare') await compareCancel(task.id)
-    else if (task.kind === 'backup') await cancelBackup(task.id)
-    else if (task.kind === 'restore') await cancelRestore(task.id)
-    else await syncCancel(task.id)
+    // 取消接口按类型分派（modules/sync/bgTaskApi.js）：导出 / 转存 / 导入 / 造数 / 执行 SQL 文件
+    // 以前在任务中心里根本没有停止入口 —— 关掉原对话框后它们就成了「停不掉的孤儿任务」
+    await bgTaskCancel(task)
     bgStatusMap.value[task.id] = 'stopping'
     // 文案按任务类型分开：同步任务上弹一句「正在中断数据库查询」（对比的文案）会让人以为点错了功能
-    ElMessage.success(t(task.kind === 'compare'
-      ? 'cmp.stopRequested'
-      : isBackupKind(task.kind) ? 'bkp.stopRequested' : 'sync.stopRequested'))
+    ElMessage.success(t(bgKindStopMsg(task.kind)))
   } catch (e) {
     ElMessage.error(e?.message || t('common.unknownError'))
   }
@@ -2469,47 +2484,219 @@ const bgRunningCount = computed(() =>
   // 运行中，时钟图标挂着「50」的假角标（真机踩过）
   bgTasks.filter(t => ['running', 'stopping'].includes(bgStatusMap.value[t.id] || t.status)).length
 )
-const bgStateText = (id) => {
-// **notfound = 任务已不存在**（服务重启后内存任务丢了/超过保留期）——
-// 必须显示「已中断」而不是落进 else 的「运行中」（真机踩过：重启后任务中心全是假"运行中"）
-const s = bgStatusMap.value[id] || 'running'
-return s === 'success' ? t('sync.statOk') : s === 'canceled' ? t('sync.statSkipped')
-: s === 'error' ? t('sync.statFailed') : s === 'notfound' ? t('sync.bgInterrupted')
-: s === 'stopping' ? t('cmp.stopping') : t('sync.running')
+/**
+ * 运行中的状态文案：**按任务类型给**（同步中 / 对比中 / 备份中 / 生成数据中…）。
+ * 以前这里固定取 'sync.running'，于是「生成测试数据」在任务中心也显示「同步中」。
+ * kind 缺省时仍回落到同步文案，兼容旧调用。
+ */
+const bgStateText = (id, kind) => {
+  // **notfound = 任务已不存在**（服务重启后内存任务丢了/超过保留期）——
+  // 必须显示「已中断」而不是落进 else 的「运行中」（真机踩过：重启后任务中心全是假"运行中"）
+  const s = bgStatusMap.value[id] || 'running'
+  // 取消 ≠ 跳过：用户点了「取消」却在任务中心看到「跳过」，会以为任务没停（实测反馈）
+  return s === 'success' ? t('sync.statOk') : s === 'canceled' ? t('sync.statCanceled')
+    : s === 'error' ? t('sync.statFailed') : s === 'notfound' ? t('sync.bgInterrupted')
+    : s === 'stopping' ? t('cmp.stopping') : t(bgKindRunningKey(kind))
 }
 /** 表格里的**短**状态文案：中断原因放悬浮（列窄，长文案会挤爆布局） */
-const bgStateShort = (id) => {
+const bgStateShort = (id, kind) => {
   const s = bgStatusMap.value[id] || 'running'
-  return s === 'notfound' ? t('sync.bgInterruptedShort') : bgStateText(id)
+  return s === 'notfound' ? t('sync.bgInterruptedShort') : bgStateText(id, kind)
 }
 const bgStatusOf = (id) => (bgStatusMap.value[id] || 'running')
-const resumeBgTask = (t) => {
+
+// ===== 任务中心「查看」：通用进度窗 =====
+// 导出 / SQL 转存 / 导入 / 造数 / 执行 SQL 文件 只留了一个 taskId，源文件与保存句柄都没了，
+// 重建原对话框没有意义。这里按 taskId 实时查询，把「当时的样子」还回来：
+// 进度、阶段、日志、停止、结束后的产物下载。
+// 状态字段做成 ref 袋，直接交给 useExportTask 的 applyTaskSnapshot（日志按 logsSeq 增量追加）。
+const bgDetailVisible = ref(false)
+const bgDetailTask = ref(null)
+/**
+ * 再次唤起时**标题要和当时一模一样**：原始对话框用 task-kind 组句
+ * （「导出中「sales」」「转储中「整库」」），而「查看」这条链路以前只传 title，
+ * 于是同一个任务第一次叫「导出中「x」」、第二次变成记录标题 —— 用户会说「内容变了」。
+ * 只给有对应词条的类型（task.<kind>Running/Done/Failed）传，datagen 等走 title。
+ */
+const bgDetailKind = computed(() => {
+  const k = bgDetailTask.value?.kind
+  return ['export', 'dump', 'import', 'runFile'].includes(k) ? k : ''
+})
+/** 与原始对话框的 target-name 对齐（导出/导入用名字，转存固定「整库」，执行文件本来就不带） */
+const bgDetailTargetName = computed(() => {
+  const task = bgDetailTask.value
+  if (!task) return ''
+  // 转存固定叫「整库」（DbDumpDialog 里就是这么传的），记录里的 name 是库名，不能拿来用
+  if (task.kind === 'dump') return t('dump.dbTarget')
+  return task.name || ''
+})
+const bgDetailStatus = ref('running')
+const bgDetailDone = ref(0)
+const bgDetailTotal = ref(-1)
+const bgDetailPhase = ref('')
+const bgDetailMessage = ref('')
+const bgDetailLogs = ref([])
+const bgDetailCanceling = ref(false)
+const bgDetailDownloading = ref(false)
+const bgDetailState = {
+  status: bgDetailStatus, done: bgDetailDone, total: bgDetailTotal,
+  phase: bgDetailPhase, message: bgDetailMessage, logs: bgDetailLogs,
+  seenLogs: 0
+}
+let bgDetailTimer = null
+const stopBgDetailPoll = () => {
+  if (bgDetailTimer) { clearInterval(bgDetailTimer); bgDetailTimer = null }
+}
+const pollBgDetail = async () => {
+  const task = bgDetailTask.value
+  if (!task) return
+  try {
+    const r = await bgTaskStatusOf(task)
+    const finished = applyTaskSnapshot(bgDetailState, r)
+    if (r.status) {
+      bgStatusMap.value[task.id] = r.status
+      setBgTaskStatus(task.id, r.status, r)
+    }
+    if (finished) {
+      stopBgDetailPoll()
+      // 让任务中心列表、徽标立刻跟上，不必等 5 秒那一轮
+      refreshBgStatus()
+    }
+  } catch {
+    // 后端重启/任务过期（404）：如实说「已中断」，别一直转圈
+    stopBgDetailPoll()
+    bgDetailStatus.value = 'notfound'
+    bgDetailMessage.value = t('sync.bgInterrupted')
+    setBgTaskStatus(task.id, 'notfound')
+  }
+}
+const openBgDetail = (task) => {
+  stopBgDetailPoll()
+  bgDetailTask.value = task
+  bgDetailState.seenLogs = 0
+  bgDetailLogs.value = []
+  bgDetailCanceling.value = false
+  // 先用**本地留底**还原（后端任务可能早就过期了），再看要不要实时轮询
+  const snap = task.snapshot || {}
+  const status = bgStatusMap.value[task.id] || task.status || 'running'
+  bgDetailStatus.value = status
+  bgDetailDone.value = snap.rowsWritten || snap.rowsRead || 0
+  bgDetailTotal.value = -1
+  bgDetailPhase.value = snap.phase || ''
+  bgDetailMessage.value = snap.message || ''
+  if (Array.isArray(snap.logs)) bgDetailLogs.value = snap.logs.map(text => ({ time: '', text }))
+  bgDetailVisible.value = true
+  if (!bgIsTerminal(status)) {
+    pollBgDetail()
+    bgDetailTimer = setInterval(pollBgDetail, 500)
+  }
+}
+const cancelBgDetail = async () => {
+  const task = bgDetailTask.value
+  if (!task) return
+  bgDetailCanceling.value = true
+  try {
+    await bgTaskCancel(task)
+    ElMessage.success(t(bgKindStopMsg(task.kind)))
+    // 不改本地状态：取消是协作式的，等轮询收到 canceled 才是真的停了
+  } catch (e) {
+    ElMessage.error(e?.message || t('common.unknownError'))
+  } finally {
+    setTimeout(() => { bgDetailCanceling.value = false }, 2000)
+  }
+}
+const downloadBgDetail = async () => {
+  const task = bgDetailTask.value
+  if (!task) return
+  bgDetailDownloading.value = true
+  try {
+    // 复用导出的收尾（桌面壳弹系统另存为 / 浏览器走下载）——产物只保留 30 分钟，
+    // 过期或已在原对话框下过，这里会明确报错而不是静默
+    await finishExport(bgDetailState, task.connId, task.id, task.name || task.title, task.format || '')
+  } finally {
+    bgDetailDownloading.value = false
+  }
+}
+/**
+ * 关掉「查看」窗口：必须同时停掉 500ms 轮询。
+ * 这个窗口只是**看**，任务本身在任务中心里，随时能再点开 —— 所以运行中也允许关
+ * （用户实测：从任务中心点开一个跑着的任务，窗口关不掉）。
+ */
+const closeBgDetail = () => {
+  bgDetailVisible.value = false
+  stopBgDetailPoll()
+}
+
+/**
+ * 任务中心 / 悬浮列表点一条任务 → 尽量还原它当时的样子。
+ *
+ * 两类还原：
+ * - 只留了 taskId 的（导出/转存/导入/造数/执行 SQL 文件）→ 通用进度窗（openBgDetail）；
+ * - 能重建向导的（同步/对比/备份还原）→ 回到各自对话框的进度窗，带恢复标记接着轮询。
+ *
+ * ⚠ 形参不能叫 `t`（i18n 的 t() 会被遮蔽，`ElMessage.warning(t('…'))` 会抛
+ * "t is not a function"）—— 这里原来就踩过，别改回去。
+ */
+const resumeBgTask = (task) => {
   bgCenterOpen.value = false
-  // 按**任务类型**路由回对应对话框的进度窗：数据传输 → SyncDialog；
-  // 数据对比 → CompareDialog；备份/还原 → BackupRestoreDialog（各自带恢复标记，进度窗直接接着轮询）
-  if (isBackupKind(t.kind)) {
+  // 造数：回到造数对话框的执行页（目标表/行数/写入方式/种子/字段规则 + 进度 + 日志都在）。
+  // 老记录没存过参数 → 返回 false，退回通用进度窗，别显示一个「0 行 / .」的空摘要。
+  if (task.kind === 'datagen' && resumeDataGen(task)) return
+  if (bgInlineResumable(task.kind)) { openBgDetail(task); return }
+  if (isBackupKind(task.kind)) {
     // 老记录（加入任务中心之前登记的备份任务）没有连接 id —— 重新打开对话框必须有它，
     // 否则只能空着；直接说明情况，别打开一个连不上的向导
-    if (!t.connId) {
+    if (!task.connId) {
       ElMessage.warning(t('bkp.cannotResume'))
       return
     }
     backupRestore.value = {
       visible: true,
-      mode: t.mode || t.kind,
-      connectionId: String(t.connId),
-      database: t.database || '',
-      resumeTaskId: t.id
+      mode: task.mode || task.kind,
+      connectionId: String(task.connId),
+      database: task.database || '',
+      resumeTaskId: task.id
     }
     return
   }
-  if (t.kind === 'compare') {
-    compareResumeId.value = t.id
+  if (task.kind === 'compare') {
+    compareResumeId.value = task.id
     compareDialogOpen.value = true
     return
   }
-  bgResumeId.value = t.id
+  bgResumeId.value = task.id
   syncDialogOpen.value = true
+}
+/**
+ * 造数任务「查看」→ 回到造数对话框的执行页。
+ *
+ * 这里踩过一个「内容会变」的坑（用户截图反馈：「再次唤起任务内容不要变啊」）：
+ * 第一次是在造数对话框里看着它跑的（带执行确认摘要 + 实时日志），
+ * 转入后台后再从任务中心点开，却落到通用进度窗 —— 只剩一根进度条和日志。
+ * 同一件事两次长得不一样，用户自然会怀疑「这不是我刚才那个任务」。
+ * 现在参数在提交时一并写进任务记录（genRows/genTable…），按它把执行页原样还原。
+ */
+const resumeDataGen = (task) => {
+  const rows = Number(task.genRows) || 0
+  const fields = Number(task.genFields) || 0
+  const table = task.genTable || ''
+  // 老记录（参数是后加的，历史记录里没有）：还原不出摘要，老老实实退回通用进度窗
+  if (!rows || !fields || !table) return false
+  ctxDataGenTarget.value = { connId: task.connId, db: task.database || '', table }
+  bgGenResume.value = {
+    taskId: task.id,
+    rows,
+    batchSize: Number(task.genBatch) || 500,
+    seed: task.genSeed || '',
+    mode: task.genMode || 'append',
+    fieldCount: fields,
+    adjustCount: Number(task.genAdjusted) || 0,
+    status: bgStatusMap.value[task.id] || task.status || 'running',
+    // 本地留底的日志先顶上，轮询回来后按后端增量补齐
+    logs: Array.isArray(task.snapshot?.logs) ? task.snapshot.logs.slice() : []
+  }
+  ctxDataGenVisible.value = true
+  return true
 }
 const settingsOpen = ref(false)
 
@@ -2542,6 +2729,8 @@ window.addEventListener('dc-open-settings', onOpenSettingsEvent)
 window.addEventListener('dc-open-conn', onOpenConnEvent)
 onBeforeUnmount(() => window.removeEventListener('dc-open-settings', onOpenSettingsEvent))
 onBeforeUnmount(() => window.removeEventListener('dc-open-conn', onOpenConnEvent))
+// 通用任务详情窗的 500ms 轮询：组件没了必须停，否则定时器会一直打后端
+onBeforeUnmount(stopBgDetailPoll)
 
 // ===== 顶栏右侧：主题 / 语言 快速切换（原来只有知识库 / AI / 设置三枚）=====
 /** 主题模式：system / light / dark，点一次按这个顺序循环 */
@@ -2870,6 +3059,12 @@ const ctxImportTarget = ref(null)
 // 数据生成弹窗（按字段结构造数写入目标表）
 const ctxDataGenVisible = ref(false)
 const ctxDataGenTarget = ref(null)
+/**
+ * 从任务中心「查看」接回造数任务时传进去的还原数据（见 resumeDataGen）。
+ * 只在**这次打开**有效：关窗即清空，否则下次正常打开造数会莫名其妙跳到执行页。
+ */
+const bgGenResume = ref(null)
+watch(ctxDataGenVisible, (open) => { if (!open) bgGenResume.value = null })
 // 导出任务进度弹窗状态
 const exportProgressVisible = ref(false)
 const exportTaskId = ref('')
@@ -8535,6 +8730,15 @@ const ctxExport = async (format) => {
       throw new Error(res.message || t('mv.exportSubmitFailed'))
     }
     exportTaskId.value = res.taskId
+    // 登记到任务中心：进度窗被关掉（或切到别的页签）之后，这条导出还能从顶栏找回来接着看
+    addBgTask({
+      id: res.taskId,
+      kind: 'export',
+      title: `${connFor(cid)?.name || labelOf(String(connFor(cid)?.type || ''))} / ${db ? db + '.' : ''}${name} · ${String(format || '').toUpperCase()}`,
+      connId: cid,
+      database: db,
+      extra: { name, format }
+    })
     exportProgressVisible.value = true
     startExportPolling(name, format)
   } catch (e) {
@@ -8562,6 +8766,15 @@ const startExportPolling = (name, format) => {
       if (exportStatus.value !== 'running') {
         clearInterval(exportPollTimer)
         exportPollTimer = null
+        // 终态立刻写回任务记录（别等 5 秒那一轮）：任务中心里这条导出马上变「成功/失败」
+        setBgTaskStatus(exportTaskId.value, exportStatus.value, {
+          status: exportStatus.value,
+          message: exportMessage.value,
+          phase: exportPhase.value,
+          fileName: r.fileName,
+          logs: exportLogs.value.map(l => l.text),
+          elapsedMs: r.elapsedMs
+        })
         // 与 useExportTask 共用同一套收尾：下载 / 落盘提示 / 打开文件夹
         await finishExport(exportState, cid, exportTaskId.value, name, format)
       }
@@ -10141,7 +10354,8 @@ const connTypeSummary = computed(() =>
 /* 停止中：琥珀色呼吸 —— 请求已发出、后端还在收尾 */
 .bg-dot.stopping { background: var(--dc-warning); animation: bg-stop-pulse 1.1s ease-in-out infinite; }
 @keyframes bg-stop-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .28; } }
-.bg-kind { font-size: 11px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; background: rgba(59, 130, 246, 0.14); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.4); }
+/* nowrap 不能省：徽章是行内元素，中文/空格都能断行，表格列一窄就竖排成四行 */
+.bg-kind { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; font-size: 11px; line-height: 16px; padding: 1px 6px; border-radius: 4px; flex-shrink: 0; white-space: nowrap; background: rgba(59, 130, 246, 0.14); color: #3b82f6; border: 1px solid rgba(59, 130, 246, 0.4); }
 .bg-kind.is-cmp { color: #f59e0b; border-color: rgba(245, 158, 11, 0.45); }
 /* 备份 / 还原：绿色，与「对比」的橙色、「数据传输」的蓝色区分开 */
 .bg-kind.is-bkp { color: #10b981; border-color: rgba(16, 185, 129, 0.45); }

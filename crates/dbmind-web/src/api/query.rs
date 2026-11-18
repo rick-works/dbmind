@@ -764,13 +764,20 @@ fn run_statements(
                         task.logs
                             .push(format!("[{}/{total}] 失败：{}", index + 1, err.message));
                         task.done = index;
-                        Some(err.message.clone())
+                        // 带着「是否用户点了停止」一起走：取消打断在途语句时 JDBC 会抛
+                        // 「查询已取消」，那不是执行出错 —— 收尾要落 canceled 而不是 error
+                        //（否则用户在任务中心点「停止」，这条记录却红着写「失败」，真机踩过）
+                        Some((err.message.clone(), task.canceled))
                     }
                 },
             }
         };
 
-        if let Some(message) = failure {
+        if let Some((message, canceled)) = failure {
+            if canceled {
+                finish_task(&task_id, "canceled", "已取消");
+                return;
+            }
             if stop_on_error {
                 finish_task(&task_id, "error", &message);
                 return;

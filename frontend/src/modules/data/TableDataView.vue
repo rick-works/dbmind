@@ -346,6 +346,7 @@
     :message="exportTask.message"
     :logs="exportTask.logs"
     :canceling="exportTask.canceling"
+    :backgroundable="true"
     @cancel="exportTask.cancel(props.conn.id)"
     @close="exportTask.close" />
 
@@ -3288,7 +3289,11 @@ const onExport = async (cmd) => {
   if (scope === 'all') {
     // 导出全部走异步任务，后端流式分页导出，前端实时显示进度与日志
     const payload = { format, sql: buildExportSql(), database: props.database, table: props.table }
-    await exportTask.start(props.conn.id, payload, props.table, format)
+    // 登记到任务中心（关掉进度窗后还能找回、能停止、结束后能下载）
+    await exportTask.start(props.conn.id, payload, props.table, format, null, {
+      title: `${props.conn?.name || ''} / ${props.table} · ${String(format).toUpperCase()}`,
+      database: props.database
+    })
     return
   }
   // current：走**同步单页接口**（后端只查这一页就回字节）。
