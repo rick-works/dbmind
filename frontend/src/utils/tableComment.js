@@ -12,16 +12,10 @@
  *   SQL Server        sp_updateextendedproperty / sp_addextendedproperty（MS_Description）
  *   PG / Oracle / DB2 / H2 / Kingbase / DM   COMMENT ON TABLE "t" IS '…'
  */
-const QUOTE_BY_TYPE = {
-  MYSQL: 'BACKTICK',
-  MARIADB: 'BACKTICK',
-  DORIS: 'BACKTICK',
-  TIDB: 'BACKTICK',
-  OCEANBASE: 'BACKTICK',
-  STARROCKS: 'BACKTICK',
-  CLICKHOUSE: 'BACKTICK',
-  SQLSERVER: 'BRACKET'
-}
+// 引号风格统一从类型定义读（`types/*.js` 的 quoteStyle）——
+// 这里原来另存了一张 8 项的表，新增同族类型（StarRocks / SelectDB / GreatSQL…）
+// 忘了加就会退回双引号，生成一条该库不认的语句。
+import { quoteStyleOf } from '../types'
 
 const quoteIdent = (name, style) => {
   const s = String(name ?? '')
@@ -52,7 +46,7 @@ export const splitDbSchema = (database) => {
  */
 export const buildTableCommentSql = ({ type, database = '', table = '', comment = '' }) => {
   const T = String(type || '').toUpperCase()
-  const style = QUOTE_BY_TYPE[T] || 'DOUBLE'
+  const style = quoteStyleOf(T)
   const raw = String(table || '')
   const dot = raw.indexOf('.')
   const nameHasSchema = dot > 0

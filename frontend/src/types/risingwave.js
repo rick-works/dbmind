@@ -11,6 +11,11 @@ import { pgFamilyOptions } from './presets.js'
  */
 export default {
   code: 'RISINGWAVE',
+  webScheme: 'postgres',
+  formatDialect: 'postgresql',
+  canDropDatabase: true,
+  // RisingWave **没有** pg_terminate_backend（实测 pg_proc 里 count=0），删库前不能踢会话
+  dropDbKickSessions: false,
   // 上游兼容接口的模块路径段：与 plugins/connection-types/risingwave.yaml 的 dialect 派生值一致（guard 校验）
   module: 'postgresql',
   label: 'RisingWave',

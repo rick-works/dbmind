@@ -8,6 +8,11 @@ import { mysqlFamilyOptions } from './presets.js'
  */
 export default {
   code: 'DORIS',
+  webScheme: 'mysql',
+  formatDialect: 'mysql',
+  canDropDatabase: true,
+  // 只有视图能 ALTER；没有存储过程/函数/触发器，事件按 MySQL 协议也不支持 ALTER
+  dropCreateKinds: ['procedure', 'function', 'trigger', 'event'],
   // 上游兼容接口的模块路径段：与 plugins/connection-types/doris.yaml 的 dialect 派生值一致（guard 校验）
   module: 'mysql',
   label: 'Apache Doris',

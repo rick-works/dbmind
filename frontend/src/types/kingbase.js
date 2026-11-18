@@ -3,6 +3,11 @@ import { pgFamilyOptions } from './presets.js'
 /** 人大金仓 KingbaseES 类型定义（PostgreSQL 兼容，schema 层级） */
 export default {
   code: 'KINGBASE',
+  webScheme: 'postgres',
+  canCreateSchema: true,
+  canDropDatabase: true,
+  dropDbKickSessions: true,
+  formatDialect: 'postgresql',
   // 上游兼容接口的模块路径段：与 plugins/connection-types/kingbase.yaml 的 dialect 派生值一致（guard 校验）
   module: 'postgresql',
   label: 'KingbaseES', labelKey: 'tdef.kingbase',

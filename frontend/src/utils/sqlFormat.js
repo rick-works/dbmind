@@ -7,6 +7,7 @@ import {
   singlestoredb, snowflake
 } from 'sql-formatter'
 import { splitSqlStatementRanges } from './sqlSplit.js'
+import { formatDialectOf } from '../types'
 
 // 方言名 → sql-formatter 方言对象（与设置面板下拉保持一致）
 const dialectMap = {
@@ -18,12 +19,12 @@ const dialectMap = {
 // 主方言解析失败时按此顺序尝试其余方言（如标准 SQL 不识别 [表名] 方括号，改用 T-SQL 可成功）。
 const DIALECT_FALLBACKS = ['transactsql', 'postgresql', 'mysql', 'mariadb', 'plsql', 'sqlite', 'db2', 'clickhouse']
 
-// 数据库连接类型码 → sql-formatter 方言（用于查询编辑器按连接自动识别；未列出的类型返回 '' → 使用标准 SQL）
-export const connDialectOf = (typeCode) => ({
-  MYSQL: 'mysql', MARIADB: 'mariadb', POSTGRESQL: 'postgresql', SQLSERVER: 'transactsql',
-  ORACLE: 'plsql', SQLITE: 'sqlite', DB2: 'db2', CLICKHOUSE: 'clickhouse',
-  DORIS: 'mysql', KINGBASE: 'postgresql', DM: 'plsql'
-})[String(typeCode || '').toUpperCase()] || ''
+// 数据库连接类型码 → sql-formatter 方言。
+//
+// 映射本身在各类型定义里（`types/*.js` 的 `formatDialect` 字段），这里只保留旧名字转发 ——
+// 原来这张手写表只有 11 个类型，新增同族品牌（GreatSQL / StarRocks / HighGo…）忘了补
+// 就会退回标准 SQL：格式化照常「成功」，只是换行与大小写不跟随该库习惯，没人会发现。
+export const connDialectOf = (typeCode) => formatDialectOf(String(typeCode || '').toUpperCase())
 
 const norm = (v, fallback) => (v === undefined || v === null || v === '' ? fallback : v)
 

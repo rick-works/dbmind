@@ -8,6 +8,10 @@ import { pgFamilyOptions } from './presets.js'
  */
 export default {
   code: 'VASTBASE',
+  webScheme: 'postgres',
+  formatDialect: 'postgresql',
+  canDropDatabase: true,
+  dropDbKickSessions: true,
   // 与 plugins/connection-types/vastbase.yaml 的 dialect 派生值一致（guard 校验）
   module: 'postgresql',
   label: 'Vastbase',

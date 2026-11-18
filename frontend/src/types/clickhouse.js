@@ -10,6 +10,12 @@ import { clickhouseOptions } from './presets.js'
  */
 export default {
   code: 'CLICKHOUSE',
+  webScheme: 'clickhouse',
+  formatDialect: 'clickhouse',
+  canDropDatabase: true,
+  // 视图 / 函数 / 事件都没有 ALTER（改定义只能 DROP + CREATE）；
+  // DROP 时函数名不接受库前缀（见 MainView 的 toEditableSql）
+  dropCreateKinds: ['view', 'procedure', 'function', 'event'],
   // 上游兼容接口的模块路径段：与 plugins/connection-types/clickhouse.yaml 的 dialect 派生值一致（guard 校验）
   module: 'clickhouse',
   label: 'ClickHouse',

@@ -8,6 +8,14 @@ import { db2Options } from './presets.js'
  */
 export default {
   code: 'DB2',
+  webScheme: 'db2',
+  formatDialect: 'db2',
+  // ⚠️ 不能让「删除数据库」亮起来：DB2 的 CREATE/DROP DATABASE 是**实例命令**
+  // （db2 create db / db2 drop db，CLP 里敲），SQL 层根本没有这条语句 ——
+  // 实测 `drop database x` 报 SQLCODE=-104 / SQLSTATE=42601（unexpected token "database"）。
+  canDropDatabase: false,
+  // DB2 的 DROP 里没有 IF EXISTS（同一条 -104/42601）
+  dropIfExists: false,
   // 上游兼容接口的模块路径段：与 plugins/connection-types/db2.yaml 的 dialect 派生值一致（guard 校验）
   module: 'db2',
   label: 'DB2',

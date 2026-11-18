@@ -9,6 +9,10 @@ import { pgFamilyOptions } from './presets.js'
  */
 export default {
   code: 'HIGHGO',
+  webScheme: 'postgres',
+  formatDialect: 'postgresql',
+  canDropDatabase: true,
+  dropDbKickSessions: true,
   // 与 plugins/connection-types/highgo.yaml 的 dialect 派生值一致（guard 校验）
   module: 'postgresql',
   label: 'HighGo',

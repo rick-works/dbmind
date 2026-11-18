@@ -442,6 +442,7 @@ export default {
   'mv.dropDbOracle': 'Oracle / DM 里一个实例就是一个库，没有 DROP DATABASE：请删除对应的表空间或用户',
   'mv.dropDbH2': 'H2 / Derby 没有独立的 DROP DATABASE（连接即建库）',
   'mv.dropDbNone': '该类型没有 DROP DATABASE 语句',
+  'mv.dropDbDb2': 'DB2 的建库 / 删库是实例命令（db2 create db / db2 drop db），SQL 层没有这条语句',
   'mv.dbDeleted': '已删除数据库「{name}」',
   'mv.newSchemaBody': '在数据库「{db}」下新建一个模式（SCHEMA）：',
   'mv.newSchemaOk': '创建',

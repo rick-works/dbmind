@@ -1353,7 +1353,7 @@ import { recordRecentConnection, rankRecentConnections } from '../../utils/recen
 import { readUnreachableIds, markUnreachable, clearUnreachable } from '../../utils/connHealth'
 import { pureFolders, loadPureFolders, addPureFolder, renamePureFolder, removePureFolder, savePureFolders } from '../../utils/folders'
 import { pinnedFolders, loadPinnedFolders, pinFolder, unpinFolder } from '../../utils/folders'
-import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType, hideDbLevelOf, dbDisplayOf, hasCatalogsOf } from '../../types'
+import { isNoSql as isNoSqlType, labelOf, quoteStyleOf, schemaLevelOf, byType, hideDbLevelOf, dbDisplayOf, hasCatalogsOf, webSchemeOf, formatDialectOf, canCreateSchemaOf, canDropDatabaseOf, dropIfExistsOf, dropCreateKindsOf, dropDbKickSessionsOf } from '../../types'
 // 占位库 `(default)` 的显示名：只在界面上换成「默认」，node.db 与请求参数仍用原值
 import { dbLabelOf } from '../../utils/dbLabel'
 import AiPanel from '../ai/AiPanel.vue'
@@ -2923,17 +2923,11 @@ window.addEventListener('scroll', closeTreeCtxMenu, true)
 // （还没有任何连接的分组，唯一真相源在后端 app_settings 的 ui.folders，见 utils/folders.js）
 const folderRefresh = ref(0)
         // 文件型连接没有 host/port，返回空串，卡片里显示「—」。
-        const CONN_SCHEME = {
-        MYSQL: 'mysql', MARIADB: 'mysql', DORIS: 'mysql',
-        POSTGRESQL: 'postgres', KINGBASE: 'postgres',
-        CLICKHOUSE: 'clickhouse', SQLSERVER: 'sqlserver', ORACLE: 'oracle',
-        REDIS: 'redis', MONGODB: 'mongodb', DB2: 'db2', DM: 'dm',
-        ELASTICSEARCH: 'http'
-        }
-        const FILE_TYPES = ['SQLITE', 'H2', 'DERBY']
+        // scheme 与「是否文件型」都从类型定义读（`types/*.js` 的 webScheme / fileType）：
+        // 这里原来另存了一张 12 项的 CONN_SCHEME 表 + 一份 FILE_TYPES 名单。
         const connUrl = (c) => {
-        if (!c || FILE_TYPES.includes(c.type) || !c.host) return ''
-        const scheme = CONN_SCHEME[c.type] || String(c.type || '').toLowerCase()
+        if (!c || byType(c.type).fileType || !c.host) return ''
+        const scheme = webSchemeOf(c.type) || String(c.type || '').toLowerCase()
         const auth = c.username ? c.username + '@' : ''
         const port = c.port ? ':' + c.port : ''
         return scheme + '://' + auth + c.host + port
@@ -7061,8 +7055,11 @@ const dropContainer = (db, connType) => {
   if (!raw) return ''
   const ct = String(connType || '').toUpperCase()
   if (['SQLITE', 'H2'].includes(ct)) return ''
-  const schemaAware = ['ORACLE', 'DM', 'POSTGRESQL', 'KINGBASE', 'OPENGAUSS', 'SQLSERVER'].includes(ct)
-  if (!schemaAware) return raw
+  // 容器是「模式」的两类：① types/*.js 里 schemaLevel === 'schema'；
+  // ② 没有「库」这一层的类型（Oracle / DM 的 hideDbLevel）—— 它们的模式节点同样把
+  //    `库.模式` 拼在 `db` 上（见 schemaNodesOf），容器只能取模式那段。
+  // 原来这张 6 项名单与上面的 schemaLevel 是同一件事，只是漏了 hideDbLevel 这一支。
+  if (schemaLevelOf(ct) !== 'schema' && !hideDbLevelOf(ct)) return raw
   const i = raw.lastIndexOf('.')
   return i >= 0 ? raw.slice(i + 1) : raw
 }
@@ -7897,17 +7894,14 @@ const onObjFormSaved = (db, cat) => {
 // 可能不存在的账号，所以统一剔除。
 const DDL_DROP_KW = { view: 'VIEW', procedure: 'PROCEDURE', function: 'FUNCTION', trigger: 'TRIGGER', event: 'EVENT' }
 const QUOTE_CHAR = { BACKTICK: '`', DOUBLE_QUOTE: '"' }
-const isPgFamily = (t) => ['POSTGRESQL', 'KINGBASE', 'OPENGAUSS'].includes(t)
-// 返回该连接类型下「必须 DROP + CREATE」的对象 kind；空数组表示可用 ALTER / CREATE OR REPLACE
-const dropCreateKindsOf = (connType) => {
-  const t = String(connType || '').toUpperCase()
-  if (['MYSQL', 'MARIADB', 'TIDB', 'OCEANBASE', 'STARROCKS', 'DORIS'].includes(t)) return ['procedure', 'function', 'trigger', 'event']
-  if (t === 'SQLITE') return ['view', 'trigger']
-  if (t === 'CLICKHOUSE') return ['view', 'procedure', 'function', 'event']
-  // PG 的 ALTER TRIGGER 只能改名 / 改依赖，不能改触发定义体 → 必须 DROP + CREATE
-  if (isPgFamily(t)) return ['trigger']
-  return []
-}
+// PG 语法族：直接用「格式化方言是 postgresql」判定（类型定义里的 formatDialect），
+// 原来是一张 3 项名单 —— 新增 PG 分支品牌（HighGo / Vastbase / RisingWave）时漏改，
+// 它们的触发器就会被当成「能用 ALTER 改定义」而生成一条必然失败的语句。
+const isPgFamily = (t) => formatDialectOf(t) === 'postgresql'
+// 「必须 DROP + CREATE 的对象 kind」在类型定义里（`dropCreateKinds`，PG 语法族的 trigger
+// 由 types/index.js 的 dropCreateKindsOf 自动补上）—— 这里原来是一张 6 项 + SQLite +
+// ClickHouse 的三段名单，新增 MySQL 分支品牌（GreatSQL / StarRocks…）时漏改，
+// 例程就会被当成"能用 ALTER 改定义"而生成一条必然失败的语句。
 // PG 的 DROP TRIGGER 必须带所属表：从 CREATE TRIGGER ... ON <表> FOR EACH ROW 里取表名（保留原引号写法）
 const pgTriggerTable = (s) => {
   const m = /\bON\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)(?:\s*\.\s*(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*))?)\s+FOR\s+EACH\s+ROW/i.exec(String(s))
@@ -8455,9 +8449,9 @@ const doDropObject = async (d, db, label, opts = {}) => {
   const q = (str) => quoteIdent(str, ct)
   const cont = dropContainer(db, ct)
   const target = cont ? `${q(cont)}.${q(name)}` : q(name)
-  // `IF EXISTS` 不是所有家都认：Oracle / DM / DB2 / Derby 的 DROP 里**没有**这个子句
-  // （Oracle 报 ORA-00933），MySQL / PG / SQLite / ClickHouse / SQL Server 2016+ / H2 认
-  const ie = ['ORACLE', 'DM', 'DB2', 'DERBY'].includes(ct) ? '' : ' IF EXISTS'
+  // `IF EXISTS` 是不是认，由各类型定义的 `dropIfExists` 声明（Oracle / DM / DB2 / Derby
+  // 的 DROP 里没有这个子句，写了报 ORA-00933 / SQLCODE=-104）
+  const ie = dropIfExistsOf(ct) ? ' IF EXISTS' : ''
   let sql
   if (d.objectKind === 'view') sql = `DROP VIEW${ie} ${target}`
   else if (d.objectKind === 'function') sql = `DROP FUNCTION${ie} ${target}`
@@ -8714,11 +8708,11 @@ const dbCtxNewQuery = () => {
  * Oracle / DM 的"模式"就是用户（先建用户才有模式，见 hideDbLevelOf），
  * MySQL 系 / SQLite / H2 的库本身就是命名空间 —— 都没有独立的 CREATE SCHEMA。
  */
-const SCHEMA_CREATE_TYPES = ['POSTGRESQL', 'SQLSERVER', 'KINGBASE']
 const canNewSchema = computed(() => {
   const d = treeCtxMenu.value.data
   if (treeCtxMenu.value.kind !== 'db' || !d) return false
-  return SCHEMA_CREATE_TYPES.includes(String(d.connType || '').toUpperCase())
+  // 能力声明在各类型定义里（`canCreateSchema`），不再维护第三份名单
+  return canCreateSchemaOf(String(d.connType || '').toUpperCase())
 })
 
 /** 库节点右键「新建模式」：输入名字 → `CREATE SCHEMA` → 重拉这个库的模式清单。 */
@@ -8860,25 +8854,42 @@ const dbCtxDrop = () => {
 }
 
 /**
- * 哪些类型真有 `DROP DATABASE` 语法。
+ * 哪些类型真有 `DROP DATABASE` 语法 —— 声明在各类型定义的 `canDropDatabase` 上
+ * （见 types/index.js 的 canDropDatabaseOf）。
  *
  * 之前这里对所有类型都拼 `DROP DATABASE`，于是 Oracle / DM / H2 / Derby / SQLite 上
  * 用户点了「删除数据库」只会拿到一句数据库语法错误 —— 那既不是用户的问题，也帮不上他。
  * 现在这些类型直接说清「为什么没有这条语句、该怎么做」。
  */
-const DROP_DB_TYPES = ['MYSQL', 'MARIADB', 'POSTGRESQL', 'KINGBASE', 'SQLSERVER', 'CLICKHOUSE', 'DORIS', 'DB2']
 const dropDbHint = (type) => {
   const ty = String(type || '').toUpperCase()
   if (ty === 'SQLITE') return t('mv.dropDbSqlite')
   if (ty === 'ORACLE' || ty === 'DM') return t('mv.dropDbOracle')
   if (ty === 'H2' || ty === 'DERBY') return t('mv.dropDbH2')
+  if (ty === 'DB2') return t('mv.dropDbDb2')
   return t('mv.dropDbNone')
+}
+
+/**
+ * 执行一条**库级 DDL**（CREATE / DROP DATABASE 这类）。
+ *
+ * 为什么走 `/query`（executeSql）而不是 `/alter`：
+ *  - `alter` 会把整批语句包进事务（PG / Kingbase / openGauss / DB2 这些「DDL 可回滚」的方言），
+ *    而 PG 系在事务块里**直接拒绝** `CREATE/DROP DATABASE`
+ *    （"CREATE DATABASE cannot run inside a transaction block"，实验室 PG / Kingbase / openGauss 实测）；
+ *  - `alter` 失败时返回 HTTP 200 + `success:false`，不检查就会「删库失败却提示已删除」。
+ * 「新建数据库」走的就是 executeSql（见 NewDbDialog），两边口径一致。
+ */
+const execDbDdl = async (cid, sql) => {
+  const res = await executeSql(cid, sql, null, null, null, 1, 2000, true)
+  if (res && res.success === false) throw new Error(res.message || t('common.unknownError'))
+  return res
 }
 
 const doDbDrop = async (d) => {
   const cid = ctxConnId(d)
   const type = String(connFor(cid)?.type || '').toUpperCase()
-  if (!DROP_DB_TYPES.includes(type)) {
+  if (!canDropDatabaseOf(type)) {
     ElMessage.warning(`${labelOf(type)}：${dropDbHint(type)}`)
     return
   }
@@ -8891,24 +8902,21 @@ const doDbDrop = async (d) => {
       ? `DROP DATABASE ${d.db.split('.').map(p => quoteIdent(p)).join('.')}`
       : `DROP DATABASE ${quoteIdent(d.db)}`
     const bare = qualified ? d.db.split('.').pop() : d.db
-    // **先清占用连接**：SQL Server / PG 在库被占用时会拒绝删除（3702 / "being accessed"）——
+    // **先清占用会话**：库被占用时 SQL Server / PG 会拒绝删除（3702 / "being accessed"）——
     // 我们自己的浏览/同步会话就占着，必须先踢掉：
-    // - SQL Server：踢成单用户（ROLLBACK IMMEDIATE 回滚未提交事务）→ 同批 DROP
-    //   （SINGLE_USER 只放行一个会话，SET 和 DROP 必须同一批才进得去）
-    // - PG / KingBase：terminate 该库上除自身外的所有后端 → 再 DROP
-    // 均为内核内部链路（internal），多语句批已放行
+    // - SQL Server：踢成单用户（ROLLBACK IMMEDIATE 回滚未提交事务）→ 再 DROP。
+    //   `/query` 的默认会话是稳定的一条（ui_session_key 的兜底），两次请求仍在同一会话上，
+    //   实测 SET SINGLE_USER 之后单独发 DROP 能进得去。
+    // - PG 系（`pg_terminate_backend`，见类型定义的 dropDbKickSessions）：terminate 该库上
+    //   除自身外的所有后端 → 再 DROP。RisingWave 没有这个函数，声明为 false。
     if (type === 'SQLSERVER') {
-      await alterTable(cid, '',
-        `ALTER DATABASE ${quoteIdent(bare)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE; ${dropSql}`)
-    } else if (type === 'POSTGRESQL' || type === 'KINGBASE') {
-      await alterTable(cid, '',
+      await execDbDdl(cid, `ALTER DATABASE ${quoteIdent(bare)} SET SINGLE_USER WITH ROLLBACK IMMEDIATE`)
+    } else if (dropDbKickSessionsOf(type)) {
+      await execDbDdl(cid,
         `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${bare.replace(/'/g, "''")}' AND pid <> pg_backend_pid()`)
-      await alterTable(cid, '', dropSql)
-    } else {
-      // MySQL 系 / ClickHouse / Doris / DB2：删库不受连接占用限制，直接删
-      await alterTable(cid, '', dropSql)
     }
-    const res = { success: true }
+    // MySQL 系 / ClickHouse / Doris / PG 系：删库不受连接占用限制（SINGLE_USER 已在上面处理）
+    await execDbDdl(cid, dropSql)
     ElMessage.success(t('mv.dbDeleted', { name: d.db }))
     refreshTree()
   } catch (e) {

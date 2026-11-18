@@ -9,6 +9,13 @@ import { pgFamilyOptions } from './presets.js'
  */
 export default {
   code: 'OPENGAUSS',
+  // 驱动真的是 `jdbc:opengauss://`（见 plugins/connection-types/opengauss.yaml），
+  // 悬浮卡沿用这个 scheme，别写成 postgres —— 那是另一个驱动。
+  webScheme: 'opengauss',
+  formatDialect: 'postgresql',
+  canDropDatabase: true,
+  // 有 pg_terminate_backend（实测），删库前可以先踢掉占着该库的会话
+  dropDbKickSessions: true,
   // 上游兼容接口的模块路径段：与 plugins/connection-types/opengauss.yaml 的 dialect 派生值一致（guard 校验）
   module: 'postgresql',
   label: 'openGauss',

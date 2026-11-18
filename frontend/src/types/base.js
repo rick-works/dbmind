@@ -46,6 +46,31 @@ export default {
   catalogs: false,
   defaultSchema: '',
   quoteStyle: 'DOUBLE_QUOTE',
+  // sql-formatter 的方言名（mysql / postgresql / transactsql / plsql / sqlite / db2 /
+  // clickhouse…）。空串 = 用标准 SQL。以前这张「类型码 → 方言」映射写在
+  // utils/sqlFormat.js 里，新增同族类型忘了补就退回标准 SQL（格式化结果看不出错，
+  // 只是换行和大小写不跟随该库习惯）。
+  formatDialect: '',
+  // 连接悬浮卡里显示成 `scheme://user@host:port` 的 scheme（纯展示，不参与连接）。
+  // 空串 = 用类型码小写。文件型数据库没有 host，这里留空。
+  webScheme: '',
+  // 库节点右键是否给「新建模式」：只有「模式独立于用户」的类型才成立
+  // （PG / Kingbase / SQL Server）。Oracle / DM 的模式就是用户，得先建用户。
+  canCreateSchema: false,
+  // 库节点右键是否给「删除数据库」：菜单拼的是 `DROP DATABASE`，只有真有这条语法的
+  // 类型才为 true。Oracle / DM 的「库」是连接里的服务名（不是 SQL 层对象），
+  // H2 / Derby / SQLite 也没有这条语句 —— 与其让用户拿到一句语法错误，不如直接说清。
+  canDropDatabase: false,
+  // 删库前是否先踢掉占着该库的其它会话（PG 系的 `pg_terminate_backend`）。
+  // PG / Kingbase / openGauss / HighGo / Vastbase 有；RisingWave 没有这个函数（实测）。
+  dropDbKickSessions: false,
+  // `DROP <对象>` 是否认 `IF EXISTS`：Oracle / DM / DB2 / Derby 没有这个子句
+  //（Oracle 报 ORA-00933），其余（含 H2、SQL Server 2016+）都认。
+  dropIfExists: true,
+  // 「改对象定义」时必须 DROP + CREATE 的 kind（空数组 = 能用 ALTER / CREATE OR REPLACE）。
+  // MySQL 系没有 ALTER PROCEDURE/FUNCTION/TRIGGER/EVENT；SQLite / ClickHouse 的视图同理。
+  // PG 语法族的 trigger 不在这里声明（那是方言事实，见 types/index.js 的 dropCreateKindsOf）。
+  dropCreateKinds: [],
   logo: '',
   fileType: false,
   defaultPort: 0,

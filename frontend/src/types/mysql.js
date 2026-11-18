@@ -17,6 +17,11 @@ import { mysqlFamilyOptions } from './presets.js'
  */
 export default {
   code: 'MYSQL',
+  webScheme: 'mysql',
+  formatDialect: 'mysql',
+  canDropDatabase: true,
+  // MySQL 没有 ALTER PROCEDURE / FUNCTION / TRIGGER / EVENT，改定义只能 DROP + CREATE
+  dropCreateKinds: ['procedure', 'function', 'trigger', 'event'],
   // 上游兼容接口的模块路径段：与 plugins/connection-types/mysql.yaml 的 dialect 派生值一致（guard 校验）
   module: 'mysql',
   label: 'MySQL',

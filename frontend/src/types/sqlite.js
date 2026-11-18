@@ -6,6 +6,9 @@
  */
 export default {
   code: 'SQLITE',
+  formatDialect: 'sqlite',
+  // 视图与触发器都没有 ALTER → 改定义只能 DROP + CREATE
+  dropCreateKinds: ['view', 'trigger'],
   // 上游兼容接口的模块路径段：与 plugins/connection-types/sqlite.yaml 的 dialect 派生值一致（guard 校验）
   module: 'sqlite',
   label: 'SQLite',

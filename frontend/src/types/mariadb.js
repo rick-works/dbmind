@@ -8,6 +8,12 @@ import { mysqlFamilyOptions } from './presets.js'
  */
 export default {
   code: 'MARIADB',
+  webScheme: 'mysql',
+  formatDialect: 'mysql',
+  canDropDatabase: true,
+  // 与 MySQL 同：例程 / 触发器 / 事件都没有 ALTER，改定义只能 DROP + CREATE
+  //（CREATE OR REPLACE 只在 MariaDB 10.1+ 的视图上有，例程上没有）
+  dropCreateKinds: ['procedure', 'function', 'trigger', 'event'],
   // 上游兼容接口的模块路径段：与 plugins/connection-types/mariadb.yaml 的 dialect 派生值一致（guard 校验）
   module: 'mysql',
   label: 'MariaDB',

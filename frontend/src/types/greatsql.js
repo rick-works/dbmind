@@ -9,6 +9,9 @@ import { mysqlFamilyOptions } from './presets.js'
  */
 export default {
   code: 'GREATSQL',
+  webScheme: 'mysql',
+  formatDialect: 'mysql',
+  canDropDatabase: true,
   // 上游兼容接口的模块路径段：与 plugins/connection-types/greatsql.yaml 的 dialect 派生值一致（guard 校验）
   module: 'mysql',
   label: 'GreatSQL',

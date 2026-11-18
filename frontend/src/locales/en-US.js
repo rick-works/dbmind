@@ -431,6 +431,7 @@ export default {
   'mv.dropDbOracle': 'In Oracle / DM one instance is one database and there is no DROP DATABASE: drop the tablespace or the user instead',
   'mv.dropDbH2': 'H2 / Derby have no separate DROP DATABASE (the connection creates the database)',
   'mv.dropDbNone': 'This database type has no DROP DATABASE statement',
+  'mv.dropDbDb2': 'In DB2 creating/dropping a database is an instance command (db2 create db / db2 drop db), not SQL',
   'mv.dbDeleted': 'Deleted the database "{name}"',
   'mv.newSchemaBody': 'Create a schema in the database "{db}":',
   'mv.newSchemaOk': 'Create',
