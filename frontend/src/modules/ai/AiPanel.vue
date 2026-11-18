@@ -306,26 +306,19 @@
 
           <!-- 输入域 + 工具条同属一个「框」，工具条贴在框内底部 -->
           <div class="composer-box">
-            <!-- 技能选择器：内置能力与插件技能**全部平铺在输入框上方**，没有下拉。
-                 内置 = 单选（点一次进那个页、再点一次回自由对话）；
-                 插件 = 多选（可叠加，选中后在对话里持续生效，点 × 摘掉） -->
-            <div class="skill-picker">
-              <span class="skill-pick-label">{{ $t('ai.builtinSkills') }}</span>
-              <button v-for="s in tabs" :key="s.key" class="skill-chip" :class="{ on: tab === s.key }"
-                      type="button" :title="s.desc" @click="pickBuiltin(s.key)">
-                <el-icon :size="12"><component :is="s.icon" /></el-icon>
-                <span class="skill-chip-tx">{{ s.label }}</span>
-              </button>
-              <template v-if="pluginSkills.length">
-                <span class="skill-pick-label is-plugin">{{ $t('ai.pluginSkills') }}</span>
-                <button v-for="p in pluginSkills" :key="p.id" class="skill-chip" :class="{ on: isPicked(p.id) }"
-                        type="button" :title="p.description" @click="togglePickedSkill(p.id)">
-                  <el-icon :size="12"><MagicStick /></el-icon>
-                  <span class="skill-chip-tx">{{ p.name }}</span>
-                  <el-icon v-if="isPicked(p.id)" class="skill-chip-x" :title="$t('ai.skillRemove')"
-                           @click.stop="unpickSkill(p.id)"><Close /></el-icon>
-                </button>
-              </template>
+            <!-- 选中的技能：**只有选了才出现**（默认什么都没选 = 自由对话）。
+                 内置能力选中时显示当前那一个（× 回到自由对话）；插件技能可多个叠加 -->
+            <div v-if="activeSkill || pickedSkills.length" class="picked-skills">
+              <span v-if="activeSkill" class="picked-skill" :title="activeSkill.desc">
+                <el-icon :size="11"><component :is="activeSkill.icon" /></el-icon>
+                <span class="picked-skill-tx">{{ activeSkill.label }}</span>
+                <el-icon class="picked-skill-x" :title="$t('ai.skillRemove')" @click="backToFreeChat"><Close /></el-icon>
+              </span>
+              <span v-for="s in pickedSkills" :key="s.id" class="picked-skill" :title="s.description">
+                <el-icon :size="11"><MagicStick /></el-icon>
+                <span class="picked-skill-tx">{{ s.name }}</span>
+                <el-icon class="picked-skill-x" :title="$t('ai.skillRemove')" @click="unpickSkill(s.id)"><Close /></el-icon>
+              </span>
             </div>
             <el-input ref="inputRef" v-model="aiInput" type="textarea" :rows="3" resize="none" class="composer-textarea"
                       :placeholder="composePlaceholder"
@@ -347,35 +340,37 @@
                 <span class="composer-ctx-tx">{{ $t('ai.mate') }}</span>
                 <span v-if="alertCount" class="mate-badge">{{ alertCount }}</span>
               </button>
-              <!-- Skills：按钮文案恒定「Skills」（不随当前页变化），点开是一排开关 ——
-                   内置能力单选（打开一个就切到那页、关掉回自由对话）、插件技能多选。
-                   与输入框内的 chip 是同一份状态，两边点都同步 -->
+              <!-- Skills：按钮文案恒定「Skills」，点开是普通条目列表（没有开关）。
+                   点某个技能 = 选中它：该技能随后显示在输入框里，之后提问就按它作答；
+                   再点同一个技能 = 取消，输入框回到什么都没选的自由对话 -->
               <el-dropdown ref="skillDropRef" data-g="5" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
-                           :hide-on-click="false" @visible-change="onSkillVisible">
+                           @command="pickSkill" @visible-change="onSkillVisible">
                 <button class="skill-btn" :class="{ open: skillsOpen }" type="button" :title="$t('ai.pickSkill')">
                   <el-icon class="skill-btn-ic"><MagicStick /></el-icon>
                   <span class="skill-btn-tx">{{ $t('ai.skills') }}</span>
                   <el-icon class="skill-btn-caret"><ArrowDown /></el-icon>
                 </button>
                 <template #dropdown>
-                  <!-- 不用 el-dropdown-item：那套点一下就收起，多选开关需要面板常开 -->
-                  <div class="skill-switch-panel">
-                    <div class="ai-dd-head">{{ $t('ai.builtinSkills') }}</div>
-                    <div v-for="s in tabs" :key="s.key" class="skill-switch-row" @click="pickBuiltin(s.key)">
-                      <el-icon class="skill-switch-ic"><component :is="s.icon" /></el-icon>
-                      <span class="skill-switch-tx">{{ s.label }}</span>
-                      <el-switch :model-value="tab === s.key" size="small"
-                                 @update:model-value="pickBuiltin(s.key)" @click.stop />
-                    </div>
-                    <div class="ai-dd-head is-plugin">{{ $t('ai.pluginSkills') }}</div>
-                    <div v-for="p in pluginSkills" :key="p.id" class="skill-switch-row" @click="togglePickedSkill(p.id)">
-                      <el-icon class="skill-switch-ic"><MagicStick /></el-icon>
-                      <span class="skill-switch-tx" :title="p.description">{{ p.name }}</span>
-                      <el-switch :model-value="isPicked(p.id)" size="small"
-                                 @update:model-value="togglePickedSkill(p.id)" @click.stop />
-                    </div>
-                    <div v-if="!pluginSkills.length" class="skill-switch-empty">{{ $t('ai.pluginSkillsEmpty') }}</div>
-                  </div>
+                  <div class="ai-dd-head">{{ $t('ai.pickSkill') }}</div>
+                  <el-dropdown-menu class="ai-model-menu">
+                    <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.builtinSkills') }}</el-dropdown-item>
+                    <el-dropdown-item v-for="s in tabs" :key="s.key" :command="s.key"
+                                      :class="{ active: tab === s.key }" :title="s.desc">
+                      <el-icon class="skills-ic"><component :is="s.icon" /></el-icon>
+                      <span class="skills-name">{{ s.label }}</span>
+                      <el-icon v-if="tab === s.key" class="skills-check"><Select /></el-icon>
+                    </el-dropdown-item>
+                    <template v-if="pluginSkills.length">
+                      <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.pluginSkills') }}</el-dropdown-item>
+                      <el-dropdown-item v-for="p in pluginSkills" :key="'plugin:' + p.id" :command="'plugin:' + p.id"
+                                        :class="{ active: isPicked(p.id) }" :title="p.description">
+                        <el-icon class="skills-ic"><MagicStick /></el-icon>
+                        <span class="skills-name">{{ p.name }}</span>
+                        <el-icon v-if="isPicked(p.id)" class="skills-check"><Select /></el-icon>
+                      </el-dropdown-item>
+                    </template>
+                    <el-dropdown-item v-else disabled class="ai-dd-group">{{ $t('ai.pluginSkillsEmpty') }}</el-dropdown-item>
+                  </el-dropdown-menu>
                 </template>
               </el-dropdown>
 
@@ -763,14 +758,10 @@ const togglePickedSkill = (id) => {
   return true
 }
 const unpickSkill = (id) => { togglePickedSkill(id) }
-/** 内置能力也是 chip：点一下进那个页，再点一次回到自由对话（默认态） */
-const pickBuiltin = (key) => {
-  if (tab.value === key) {
-    tab.value = 'chat'
-    return
-  }
-  pickSkill(key)
-}
+/** 已选中的内置能力（chat 是默认态，不算「选中了技能」）—— 输入框里只显示它一个 */
+const activeSkill = computed(() => (tab.value === 'chat' ? null : currentSkill.value))
+/** 摘掉内置技能 = 回到自由对话 */
+const backToFreeChat = () => { tab.value = 'chat' }
 
 const skillsOpen = ref(false)
 /** 几个下拉互斥：每个都持有 ref，打开一个就收起其它 */
@@ -842,12 +833,13 @@ const toggleCtxTable = (name) => {
 }
 /** 选择 Skill：切换能力。返回是否真的切了（斜杠命令用它决定要不要提示） */
 const pickSkill = (key) => {
-  // 插件技能：勾选/取消（可多选），不切页 —— 它在对话里叠加生效
+  // 插件技能：选中/取消（可多选），不切页 —— 它在对话里叠加生效
   if (typeof key === 'string' && key.startsWith('plugin:')) {
     return togglePickedSkill(key.slice('plugin:'.length))
   }
   if (!tabs.value.some((x) => x.key === key)) return false
-  tab.value = key
+  // 再点一次已选中的那个 = 取消，回到自由对话（输入框里那个 chip 也会消失）
+  tab.value = tab.value === key ? 'chat' : key
   return true
 }
 
@@ -2747,33 +2739,18 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .skill-btn-caret { font-size: 13px; color: var(--dc-text-weak); transition: transform .18s ease; }
 .skill-btn.open .skill-btn-caret { transform: rotate(180deg); }
 
-/* 技能 chip：内置能力 + 插件技能平铺在输入框上方，与下拉里的开关共用同一份状态
-   一行放不下就换行；chip 高 23px 是压过很多轮的高度，再高输入区就被挤扁了 */
-.skill-picker {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
-  padding: 9px 12px 2px;
+/* 选中的技能 chip：**只有选了技能才渲染这一行**（默认自由对话时输入框上方是空的）。
+   内置能力占一个，插件技能可叠加多个；点 × 摘掉（内置那个 × 就是回自由对话） */
+.picked-skills { display: flex; flex-wrap: wrap; gap: 6px; padding: 9px 12px 0; }
+.picked-skill {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
+  padding: 2px 6px 2px 8px; border-radius: 999px;
+  background: var(--dc-primary-wash); border: 1px solid var(--dc-primary-glow);
+  color: var(--dc-primary); font-size: 11.5px; line-height: 1.7;
 }
-.skill-pick-label {
-  font-size: 11px; line-height: 1; color: var(--dc-text-weak);
-  padding-right: 1px; flex-shrink: 0;
-}
-.skill-pick-label.is-plugin { margin-left: 4px; padding-left: 9px; border-left: 1px solid var(--dc-border); }
-.skill-chip {
-  display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
-  height: 23px; padding: 0 9px; border-radius: 999px; cursor: pointer;
-  border: 1px solid var(--dc-border); background: transparent;
-  color: var(--dc-text-dim); font-size: 12px; font-family: inherit;
-  transition: background .15s ease, color .15s ease, border-color .15s ease;
-}
-.skill-chip:hover { border-color: var(--dc-primary); color: var(--dc-primary); }
-.skill-chip.on {
-  border-color: var(--dc-primary); background: var(--dc-primary-wash); color: var(--dc-primary);
-}
-.skill-chip-x {
-  margin-left: 2px; border-radius: 50%;
-  transition: background .15s ease, color .15s ease;
-}
-.skill-chip-x:hover { background: var(--dc-primary); color: #fff; }
+.picked-skill-tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picked-skill-x { border-radius: 50%; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.picked-skill-x:hover { background: var(--dc-primary); color: #fff; }
 
 /* 下拉弹层样式（小标题 / 条目 / 选中态 / 数据源层级的图标与引导线）统一放在
    src/styles/index.css：弹层被 teleport 到 body，写在本组件的 scoped 块里根本命不中。 */
