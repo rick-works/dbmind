@@ -257,15 +257,16 @@
   .sources { padding: 0 0 48px; text-align: center; }
   .sources-label { font-size: 13px; color: var(--dim); letter-spacing: 2px; margin-bottom: 14px; }
   .sources-rows {
-    /* 通栏：跑马灯比下面的内容区更宽（贴着视口左右边），像一条一直往里流的带子；
-       文字标签与卡片仍按 --content 对齐，所以只放宽滚动带本身，不改整段版心 */
-    display: grid; gap: 10px; width: 100%; margin: 0 auto; padding: 0;
+    /* 与下面的数据卡、其它内容区同宽同缩进（.wrap 的口径：--content + 24px 内缩） */
+    display: grid; gap: 10px;
+    width: 100%; max-width: var(--content); margin: 0 auto; padding: 0 24px;
   }
   .marquee-row { overflow: hidden;
     /* 两端先全透明再渐入：单纯线性渐隐时边界上的芯片会剩半个词（MySQL 变 SQL）。
-       用 px 而不是百分比：通栏后百分比会跟着视口变，宽屏上渐变带会长得离谱 */
-    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 72px, #000 calc(100% - 72px), transparent 100%);
-    mask-image: linear-gradient(90deg, transparent 0, #000 72px, #000 calc(100% - 72px), transparent 100%);
+       渐隐带用固定 56px —— 百分比会随视口放大（宽屏上吃掉一两百像素），
+       看起来就像滚动带比卡片窄了一圈。 */
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 56px, #000 calc(100% - 56px), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 56px, #000 calc(100% - 56px), transparent 100%);
   }
   .marquee-track { display: flex; width: max-content; animation: marquee 46s linear infinite; }
   /* 第二行反向、稍慢：两行同向会显得像一条横幅在抽动 */
@@ -1444,15 +1445,12 @@
 <section id="plugins">
   <div class="wrap">
     <div class="plg-head">
+      <!-- 这一页只做「列出来 + 下载」：安装步骤、包结构、安全边界都写在文档的「插件与技能」里，
+           页面上再讲一遍只会把卡片挤到下面去 -->
       <h2 class="sec-title reveal" data-eyebrow="PLUGINS" data-i18n="plg.title">插件中心</h2>
-      <p data-i18n="plg.sub">插件是纯声明式扩展包（清单 + 提示词），不携带任何可执行文件。在客户端「更多 → 插件中心」一键安装、单独启停、就地升级；装好的技能在 AI 助手的 Skills 里选中，之后每一轮提问都按它来。也可以下载 zip 用「从文件安装」导入。</p>
     </div>
     <div class="plg-list" id="plgGrid">
       <div class="plg-empty" data-i18n="plg.loading">正在加载插件索引…</div>
-    </div>
-    <div class="plg-note" id="plgNote">
-      <div data-i18n-html="plg.howto"><b>怎么装</b>：打开 DBMind → 设置 → 插件中心 → 「可安装」里点<b>安装</b>（客户端会从本站拉这份索引与插件包）；离线或内网环境用<b>从文件安装</b>导入下面下载到的 zip。</div>
-      <div data-i18n-html="plg.devnote" style="margin-top:8px">做插件：一个目录 = <code>manifest.json</code> + 提示词 <code>.md</code>，用 <code>node scripts/plugins/pack.mjs</code> 打包并更新索引，提交到仓库后本站自动发布。</div>
     </div>
   </div>
 </section>
@@ -4442,6 +4440,7 @@ dbmind setting list           # 读写设置</code></pre>
           <li><b>技能活在对话里</b>：AI 助手输入框的 Skills 里选中技能，气泡上会标出「谁在答」，之后每一轮都按它的人格与清单来；内置能力（解释 / 优化 / 问数…）和插件技能在同一个列表里，摘掉即回到自由对话</li>
           <li><b>安全边界</b>：包里出现 <code>.exe</code> / <code>.dll</code> / <code>.js</code> / <code>.jar</code> 等可执行文件，整包拒绝；单文件 ≤2 MB、整包 ≤8 MB；安装前校验清单 id 与目标目录一致，解压拒绝路径穿越</li>
           <li><b>自己写一个</b>：一个目录就够 —— <code>manifest.json</code>（id / 版本 / 中英双语名称与简介 / emoji 图标 / 是否需要表结构）+ <code>prompt.md</code>（任务模板）+ <code>chat.md</code>（对话人格与检查清单）；打包脚本会校验字段，缺一项不允许发</li>
+          <li><b>打包与发布</b>：<code>node scripts/plugins/pack.mjs</code> 生成 zip 并刷新 <code>plugins/index.json</code>（<code>--check</code> 只校验索引是否过期）；把包与索引一起提交，官网插件页与客户端「可安装」看到的都是同一份索引，推上去就生效</li>
         </ul>
         <div class="tip"><b>改完就生效</b>：插件目录就是普通文件，提示词改完下一轮提问就用新的，不用重启；分享给同事只发那个 zip。</div>
 
@@ -4791,10 +4790,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
   "nav.releases": "Releases",
   "nav.docs": "Docs",
   "plg.title": "Plugins",
-  "plg.sub": "Plugins are purely declarative packages (manifest + prompts) installed into the client's plugin folder — they never carry executable files. Install or run them in Settings → Plugins, or download a zip and use \"Install from file\".",
   "plg.loading": "Loading the plugin index…",
-  "plg.howto": "<b>How to install</b>: open DBMind → Settings → Plugins, then hit <b>Install</b> in the Available list (the client fetches this index and the package here). Offline? Use <b>Install from file</b> with the zip downloaded below.",
-  "plg.devnote": "Build one: a folder with <code>manifest.json</code> plus a prompt <code>.md</code>, packaged by <code>node scripts/plugins/pack.mjs</code>, which also refreshes the index — commit and the site publishes it.",
   "hero.title": "Give your databases a <span class=\"grad\">mind</span><br/>One client for every database you own",
   "hero.download": "Free download",
   "hero.more": "See what it does ↓",
