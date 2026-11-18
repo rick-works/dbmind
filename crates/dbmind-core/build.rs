@@ -83,6 +83,10 @@ struct TypeYaml {
 struct BackupYaml {
     engine: String,
     tool: String,
+    /// 参数形状：`mysql` / `postgres` / `sqlcmd` / `sqliteFile`。
+    /// 不写 = 内核还没实现这种工具的 argv 拼装（如 `expdp`），调用方提示改用内置引擎。
+    #[serde(default, rename = "argStyle")]
+    arg_style: Option<String>,
     #[serde(default)]
     aliases: Vec<String>,
     #[serde(rename = "restoreTool")]
@@ -486,6 +490,24 @@ fn validate(types: &[TypeYaml]) -> Result<(), String> {
     Ok(())
 }
 
+/// YAML 的 `argStyle` → `ArgStyle::` 变体名。
+///
+/// 写错值直接 `panic`（构建期就报错），**不能静默落 `None`** —— 静默的后果是
+/// 「明明配了工具却提示改用内置引擎」，线上没人会想到是拼写问题。
+fn arg_style_variant(b: &BackupYaml, t: &TypeYaml) -> &'static str {
+    match b.arg_style.as_deref() {
+        None | Some("none") => "None",
+        Some("mysql") => "Mysql",
+        Some("postgres") => "Postgres",
+        Some("sqlcmd") => "Sqlcmd",
+        Some("sqliteFile") => "SqliteFile",
+        Some(other) => panic!(
+            "{} 的 backup.argStyle 不认识：{other}（可选 mysql / postgres / sqlcmd / sqliteFile / none）",
+            t.rust_variant
+        ),
+    }
+}
+
 fn generate_rust(
     types: &[TypeYaml],
     family_backup: &std::collections::HashMap<&str, &BackupYaml>,
@@ -729,6 +751,7 @@ fn generate_rust(
         writeln!(c, "                package: {:?},", b.package).unwrap();
         writeln!(c, "                dump_hint: {:?},", b.dump_hint).unwrap();
         writeln!(c, "                restore_hint: {:?},", b.restore_hint).unwrap();
+        writeln!(c, "                arg_style: ArgStyle::{},", arg_style_variant(b, t)).unwrap();
         writeln!(c, "            }},").unwrap();
     }
     writeln!(c, "            _ => return None,\n        }})\n    }}\n").unwrap();

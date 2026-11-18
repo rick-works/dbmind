@@ -1284,6 +1284,11 @@ impl Dialect {
         self.ops().quote_mark()
     }
 
+    /// 一条 `INSERT` 能不能带多组 `VALUES (…), (…)`。
+    pub fn supports_multi_row_insert(&self) -> bool {
+        self.ops().supports_multi_row_insert()
+    }
+
     /// 建库语句（目标库不存在时的自动建库）。
     pub fn create_database_sql(&self, name: &str) -> String {
         // Databend 走 MySQL 协议，但 `create database` **不支持 charset 子句**

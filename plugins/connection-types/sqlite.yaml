@@ -39,5 +39,7 @@ backup:
   tool: sqlite3
   restoreTool: sqlite3
   package: sqlite
+  # sqlite3 靠 shell 重定向读写单文件，不走参数拼装
+  argStyle: sqliteFile
   dumpHint: 'sqlite3 "{sqliteFile}" .dump > "{filePath}"'
   restoreHint: 'sqlite3 "{sqliteFile}" < "{filePath}"'

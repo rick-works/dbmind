@@ -182,6 +182,18 @@ pub trait DialectOps: Sync + Send {
         None
     }
 
+    /// 一条 `INSERT` 能不能带多组 `VALUES (…), (…)`。
+    ///
+    /// 只有 Oracle / DM 不支持（它们的标准写法是 `INSERT ALL` 或 `UNION ALL`），
+    /// 其余方言（含 DB2 / Derby / DuckDB）都支持。
+    ///
+    /// 三处调用点（导入 / 造数 / 备份的 DDL 导出）历史上各存了一份名单，
+    /// 而且口径互不相同 —— 导入侧是 20 个品牌的白名单、造数侧是 13 个、
+    /// 备份侧是「非 oracle/dm」的黑名单，同一个类型在三处可能得到相反结论。
+    fn supports_multi_row_insert(&self) -> bool {
+        true
+    }
+
     /// 建库语句（目标库不存在时的自动建库）。默认是通用 ANSI 写法。
     fn create_database_sql(&self, name: &str) -> String {
         format!("create database {}", self.quote(name))

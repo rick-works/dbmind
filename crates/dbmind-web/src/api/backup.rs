@@ -34,7 +34,7 @@ use axum::extract::{Multipart, Path, RawQuery, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use dbmind_core::{CellValue, ConnectionKind, TableKind};
+use dbmind_core::{ArgStyle, CellValue, ConnectionKind, TableKind};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -897,8 +897,10 @@ fn cli_command(
     let tool =
         find_tool(&[tool_name]).ok_or_else(|| XError::internal(format!("未找到命令行工具 {tool_name}")))?;
     let mut command = Command::new(tool);
-    match kind.key() {
-        "mysql" | "mariadb" | "doris" | "tidb" | "oceanbase" => {
+    // 按**参数形状**分派，不认品牌名 —— 形状写在 YAML 的 `backup.argStyle` 里，
+    // 同族新品牌（GreatSQL / StarRocks / HighGo …）自动继承，不再需要改这里。
+    match spec.arg_style {
+        ArgStyle::Mysql => {
             command
                 .arg(format!("-h{host}"))
                 .arg(format!("-P{port}"))
@@ -920,7 +922,7 @@ fn cli_command(
                 );
             }
         }
-        "postgresql" | "kingbase" | "opengauss" => {
+        ArgStyle::Postgres => {
             command
                 .arg("-h")
                 .arg(host)
@@ -935,7 +937,7 @@ fn cli_command(
                 command.env("PGPASSWORD", password);
             }
         }
-        "sqlserver" => {
+        ArgStyle::Sqlcmd => {
             let statement = if restore {
                 format!("RESTORE DATABASE [{database}] FROM DISK = N'{file_path}' WITH REPLACE")
             } else {
@@ -952,9 +954,12 @@ fn cli_command(
                 command.env("SQLCMDPASSWORD", password);
             }
         }
-        other => {
+        // sqliteFile 走的是上面那段 shell 重定向，走不到这里；
+        // None = YAML 登记了工具名（用于「是否就绪」探测），但内核还没实现这种形状的拼装。
+        ArgStyle::SqliteFile | ArgStyle::None => {
             return Err(XError::internal(format!(
-                "命令行拼接还不支持 {other}（请改用内置引擎）"
+                "命令行拼接还不支持 {}（请改用内置引擎）",
+                kind.key()
             )))
         }
     }
@@ -1202,8 +1207,13 @@ const INSERT_BYTES_CAP: usize = 1024 * 1024;
 /// 该方言是否支持多行 `VALUES`（`insert into t values (..),(..)`）。
 ///
 /// Oracle / 达梦不认这个形状（要 `insert all`），只能逐行写一条。
+/// 判断收在 `DialectOps::supports_multi_row_insert()` —— 这里原来是「非 oracle/dm」
+/// 的黑名单，而导入侧是 20 个品牌的白名单、造数侧是 13 个，三份口径互不相同。
 fn supports_multi_row_insert(kind_key: &str) -> bool {
-    !matches!(kind_key, "oracle" | "dm")
+    dbmind_core::ConnectionKind::from_key(kind_key)
+        .map(|kind| Dialect::new(kind).supports_multi_row_insert())
+        // 认不出的 key 走保守路径：逐行一条 INSERT，只影响文件大小，不会写错
+        .unwrap_or(false)
 }
 
 /// 把一批行写成 INSERT 语句。

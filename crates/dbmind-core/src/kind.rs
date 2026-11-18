@@ -207,6 +207,25 @@ pub struct TypeDescriptor {
 /// `defaultPort` / `jdbc.driverClass` 同一档 —— 属于类型清单，不属于某个接口实现。
 /// 放在 Rust 里的旧做法导致「新增同族品牌要想起来改 backup.rs 的 match」，漏了的表现是
 /// 「这个类型只能走内置引擎」，界面上完全看不出是漏配。
+/// 命令行备份工具的**参数形状**（YAML `backup.argStyle`）。
+///
+/// 同一个工具族里 argv 的顺序、连写方式、密码注入方式是一致的，所以只需要描述
+/// 「属于哪种形状」，不需要按品牌名分支。原来 `backup.rs` 里是按 `kind.key()`
+/// 分三族 + `other => 报错`，漏配的表现是「这个类型明明配了工具，却提示改用内置引擎」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgStyle {
+    /// `mysqldump` 系：`-h{host} -P{port} -u{user}` **连写**，密码走环境变量 `MYSQL_PWD`。
+    Mysql,
+    /// `pg_dump` / `sys_dump` 系：`-h {host} -p {port} -U {user} -f {file} {db}`，密码走 `PGPASSWORD`。
+    Postgres,
+    /// `sqlcmd`：`-S {host},{port} -U {user} -Q "<BACKUP/RESTORE 语句>"`，密码走 `SQLCMDPASSWORD`。
+    Sqlcmd,
+    /// 单文件工具（`sqlite3`）：靠 shell 重定向读写，不走参数拼装这条路。
+    SqliteFile,
+    /// 配了工具但内核还没有对应的拼装逻辑（如 `expdp`，需要目录对象与服务端配合）。
+    None,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct BackupCli {
     /// 展示用引擎名（`MySQL` / `PostgreSQL` …）。
@@ -223,4 +242,60 @@ pub struct BackupCli {
     pub dump_hint: &'static str,
     /// 还原命令模板。
     pub restore_hint: &'static str,
+    /// 参数形状（决定 argv 怎么拼）。`None` = 内核还没实现拼装，调用方应提示改用内置引擎。
+    pub arg_style: ArgStyle,
+}
+
+#[cfg(test)]
+mod backup_cli_tests {
+    use super::*;
+
+    use crate::ConnectionKind;
+
+    /// `backup.argStyle` 决定 argv 怎么拼。写错的表现是「明明配了工具却提示改用内置引擎」，
+    /// 界面上完全看不出是配置问题，所以逐个类型钉死（同族品牌必须继承族代表的形状）。
+    #[test]
+    fn 参数形状按类型清单() {
+        let style = |kind: ConnectionKind| kind.backup_cli().map(|cli| cli.arg_style);
+
+        for kind in [
+            ConnectionKind::Mysql,
+            ConnectionKind::Mariadb,
+            ConnectionKind::Tidb,
+            ConnectionKind::Oceanbase,
+            ConnectionKind::Doris,
+            ConnectionKind::Starrocks,
+            ConnectionKind::Selectdb,
+            ConnectionKind::Greatsql,
+            ConnectionKind::Goldendb,
+        ] {
+            assert_eq!(style(kind), Some(ArgStyle::Mysql), "{}", kind.key());
+        }
+        for kind in [
+            ConnectionKind::Postgresql,
+            ConnectionKind::Kingbase,
+            ConnectionKind::Opengauss,
+            ConnectionKind::Highgo,
+            ConnectionKind::Vastbase,
+            ConnectionKind::Risingwave,
+        ] {
+            assert_eq!(style(kind), Some(ArgStyle::Postgres), "{}", kind.key());
+        }
+        assert_eq!(style(ConnectionKind::Sqlserver), Some(ArgStyle::Sqlcmd));
+        assert_eq!(style(ConnectionKind::Sqlite), Some(ArgStyle::SqliteFile));
+        // expdp / dexp 需要服务端目录对象与凭据配合，内核还没实现拼装 ——
+        // 必须如实是 `None`，否则会拼出一条注定失败的命令行
+        for kind in [ConnectionKind::Oracle, ConnectionKind::Dm] {
+            assert_eq!(style(kind), Some(ArgStyle::None), "{}", kind.key());
+        }
+        // 没有「本机命令行客户端」共识的类型：连 backup 段都没有
+        for kind in [
+            ConnectionKind::Clickhouse,
+            ConnectionKind::Db2,
+            ConnectionKind::Derby,
+            ConnectionKind::H2,
+        ] {
+            assert_eq!(style(kind), None, "{}", kind.key());
+        }
+    }
 }

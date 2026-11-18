@@ -47,5 +47,7 @@ backup:
   tool: sys_dump
   restoreTool: ksql
   package: kingbase-client
+  # sys_dump / sys_restore 的参数与 pg_dump 一致
+  argStyle: postgres
   dumpHint: 'sys_dump -h {host} -p {port} -U {user} -f "{filePath}" {database}'
   restoreHint: 'ksql -h {host} -p {port} -U {user} -d {database} -f "{filePath}"'

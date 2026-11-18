@@ -46,5 +46,8 @@ backup:
   tool: expdp
   restoreTool: impdp
   package: oracle-instantclient
+  # expdp / impdp 需要服务端目录对象与凭据配合，内核还没实现 argv 拼装：
+  # 这里只登记工具名用于「是否就绪」探测，实际备份走内置引擎
+  argStyle: none
   dumpHint: 'expdp {user}/******@{host}:{port}/{database} DIRECTORY=DATA_PUMP_DIR DUMPFILE={filePath} FULL=Y'
   restoreHint: 'impdp {user}/******@{host}:{port}/{database} DIRECTORY=DATA_PUMP_DIR DUMPFILE={filePath} FULL=Y'

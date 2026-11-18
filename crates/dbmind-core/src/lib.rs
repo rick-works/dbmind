@@ -52,7 +52,8 @@ pub use drivers::{
 pub use engine::{DriverEntry, DriverReport, DbMindEngine, RuntimeSummary};
 pub use error::{query_error, DbMindError, ErrorCode, ErrorPayload, Result};
 pub use kind::{
-    BackupCli, Capabilities, McpMode, RuntimeMode, RuntimeProtocol, TypeDescriptor, TypeTraits,
+    ArgStyle, BackupCli, Capabilities, McpMode, RuntimeMode, RuntimeProtocol, TypeDescriptor,
+    TypeTraits,
 };
 pub mod scope_sql;
 pub use safety::SafetyPolicy;

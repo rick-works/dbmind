@@ -263,6 +263,76 @@ enum PlanRule {
     Gen(GenSpec),
 }
 
+/// 一条生成规则的声明（前端下拉与参数控件的唯一来源）。
+///
+/// 前后端原来各存一份 —— 前端 `RULE_GROUPS` 表 + `paramKind()` 判定，注释里写着
+/// 「与后端 TestDataGenerator.Rule 一一对应」。新增一条规则要同时改后端 match、
+/// 前端分组表、前端参数形态、两份 i18n，**漏改任何一处都不会报错**（下拉里少一项而已）。
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleSpec {
+    /// 写进 `rules[].rule` 的值。
+    pub id: &'static str,
+    /// 前端 i18n 键；空串 = 直接用 id 大写展示（如 `uuid` 是产品名，不进字典）。
+    pub label_key: &'static str,
+    /// 参数列渲染哪种控件：none / value / prefix / values / range / dateRange / length / start。
+    pub param: &'static str,
+    /// 下拉分组（i18n 键）。
+    pub group: &'static str,
+}
+
+/// 全部规则，**顺序即下拉顺序**。
+pub const RULES: &[RuleSpec] = &[
+    RuleSpec { id: "auto", label_key: "dgen.rAuto", param: "none", group: "dgen.grpAuto" },
+    RuleSpec { id: "skip", label_key: "dgen.rSkip", param: "none", group: "dgen.grpAuto" },
+    RuleSpec { id: "null", label_key: "dgen.rNull", param: "none", group: "dgen.grpAuto" },
+    RuleSpec { id: "sequence", label_key: "dgen.rSequence", param: "start", group: "dgen.grpNumber" },
+    RuleSpec { id: "random_int", label_key: "dgen.rRandomInt", param: "range", group: "dgen.grpNumber" },
+    RuleSpec { id: "random_decimal", label_key: "dgen.rRandomDecimal", param: "range", group: "dgen.grpNumber" },
+    RuleSpec { id: "bool", label_key: "dgen.rBool", param: "none", group: "dgen.grpNumber" },
+    RuleSpec { id: "random_string", label_key: "dgen.rRandomString", param: "length", group: "dgen.grpText" },
+    RuleSpec { id: "fixed", label_key: "dgen.rFixed", param: "value", group: "dgen.grpText" },
+    RuleSpec { id: "list", label_key: "dgen.rList", param: "values", group: "dgen.grpText" },
+    RuleSpec { id: "cycle", label_key: "dgen.rCycle", param: "values", group: "dgen.grpText" },
+    RuleSpec { id: "code", label_key: "dgen.rCode", param: "prefix", group: "dgen.grpText" },
+    RuleSpec { id: "uuid", label_key: "", param: "none", group: "dgen.grpText" },
+    RuleSpec { id: "chinese_name", label_key: "dgen.rChineseName", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "username", label_key: "dgen.rUsername", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "email", label_key: "dgen.rEmail", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "phone", label_key: "dgen.rPhone", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "company", label_key: "dgen.rCompany", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "city", label_key: "dgen.rCity", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "address", label_key: "dgen.rAddress", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "word", label_key: "dgen.rWord", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "title", label_key: "dgen.rTitle", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "ip", label_key: "dgen.rIp", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "url", label_key: "dgen.rUrl", param: "none", group: "dgen.grpSemantic" },
+    RuleSpec { id: "random_date", label_key: "dgen.rRandomDate", param: "dateRange", group: "dgen.grpTime" },
+    RuleSpec { id: "now", label_key: "dgen.rNow", param: "none", group: "dgen.grpTime" },
+    RuleSpec { id: "sql", label_key: "dgen.rSql", param: "value", group: "dgen.grpAdvanced" },
+];
+
+/// `GET /api/datagen/rules` —— 前端下拉直接渲染这个（按 `group` 保序分组）。
+pub async fn rules() -> Json<Value> {
+    let mut groups: Vec<Value> = Vec::new();
+    for spec in RULES {
+        let rule = json!({
+            "id": spec.id,
+            "labelKey": spec.label_key,
+            "param": spec.param,
+        });
+        match groups.iter_mut().find(|group| group["group"] == json!(spec.group)) {
+            Some(group) => {
+                if let Some(list) = group["rules"].as_array_mut() {
+                    list.push(rule);
+                }
+            }
+            None => groups.push(json!({ "group": spec.group, "rules": [rule] })),
+        }
+    }
+    Json(json!(groups))
+}
+
 #[derive(Clone)]
 enum GenSpec {
     /// 没有合理内容的列（blob）→ 置空
@@ -682,22 +752,12 @@ fn written_columns(planned: &[Planned], dialect: Dialect) -> Vec<String> {
 }
 
 /// 多行插入是否安全（与导入同一套判断）。
+///
+/// 判断收在 `DialectOps::supports_multi_row_insert()`：这里原来的 13 个品牌白名单
+/// 漏了 GreatSQL / GoldenDB / StarRocks / SelectDB / HighGo / Vastbase / UXDB / GaussDB，
+/// 那些库造数时一直在走「一行一条 INSERT」。
 fn supports_multi_row(dialect: Dialect) -> bool {
-    matches!(
-        dialect.kind.key(),
-        "mysql"
-            | "mariadb"
-            | "doris"
-            | "tidb"
-            | "oceanbase"
-            | "postgresql"
-            | "kingbase"
-            | "opengauss"
-            | "sqlite"
-            | "sqlserver"
-            | "h2"
-            | "clickhouse"
-    )
+    dialect.supports_multi_row_insert()
 }
 
 fn build_insert(
@@ -1042,4 +1102,99 @@ pub async fn cancel(State(state): State<AppState>, Path(task_id): Path<String>) 
     view["success"] = json!(true);
     view["message"] = json!("已请求取消，当前批次结束后停止");
     Ok(Json(view))
+}
+
+#[cfg(test)]
+mod rule_catalog_tests {
+    use super::*;
+
+    fn sample(spec: &RuleSpec) -> ColumnRule {
+        ColumnRule {
+            name: "c".into(),
+            rule: spec.id.to_string(),
+            value: Some("x".into()),
+            values: vec!["a".into(), "b".into()],
+            min: Some("1".into()),
+            max: Some("10".into()),
+            length: Some(8),
+            start: Some(1),
+            null_ratio: None,
+        }
+    }
+
+    /// 清单里给出的每条规则，后端都必须**真的认识**。
+    ///
+    /// 不认识的表现不是报错，而是静默退回「自动规则」，只在 notes 里留一句
+    /// 「未识别」—— 前端下拉里那一项等于假的。
+    #[test]
+    fn 清单里的规则都被识别() {
+        for spec in RULES {
+            // `skip` 的作用是「这一列不写」—— 只有一列时会被「没有可生成的内容」挡住，
+            // 那是业务校验而不是规则不认识，所以补一列 auto 陪跑
+            let mut input = vec![sample(spec)];
+            if spec.id == "skip" {
+                let mut other = sample(spec);
+                other.name = "second".into();
+                other.rule = "auto".into();
+                input.push(other);
+            }
+            let types: Vec<(String, Option<String>)> = input
+                .iter()
+                .map(|rule| (rule.name.clone(), Some("int".to_string())))
+                .collect();
+            let (_, notices) = plan(&input, &types)
+                .unwrap_or_else(|err| panic!("{} 解析失败：{err:?}", spec.id));
+            assert!(
+                !notices.iter().any(|note| note.contains("未识别")),
+                "{} 没被识别：{notices:?}",
+                spec.id
+            );
+        }
+    }
+
+    /// 参数形态必须是前端认识的那几种 —— 写错的表现是「参数列什么都不显示」。
+    #[test]
+    fn 参数形态在白名单内() {
+        const KINDS: &[&str] = &[
+            "none", "value", "prefix", "values", "range", "dateRange", "length", "start",
+        ];
+        for spec in RULES {
+            assert!(
+                KINDS.contains(&spec.param),
+                "{} 的参数形态 {} 不认识",
+                spec.id,
+                spec.param
+            );
+        }
+    }
+
+    /// 分组必须是已知的六组之一：新组要同时补两份字典，否则分组标题会显示成 key 本身。
+    #[test]
+    fn 分组在白名单内() {
+        const GROUPS: &[&str] = &[
+            "dgen.grpAuto",
+            "dgen.grpNumber",
+            "dgen.grpText",
+            "dgen.grpSemantic",
+            "dgen.grpTime",
+            "dgen.grpAdvanced",
+        ];
+        for spec in RULES {
+            assert!(
+                GROUPS.contains(&spec.group),
+                "{} 的分组 {} 不认识",
+                spec.id,
+                spec.group
+            );
+        }
+    }
+
+    /// `id` 不能重复（重复会让前端下拉出现两个同值项，选中状态跟着错）。
+    #[test]
+    fn 规则_id_不重复() {
+        let mut seen = std::collections::HashSet::new();
+        for spec in RULES {
+            assert!(seen.insert(spec.id), "规则 id 重复：{}", spec.id);
+        }
+    }
 }

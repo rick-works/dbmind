@@ -53,5 +53,6 @@ backup:
   aliases: ["mariadb-dump"]
   restoreTool: mysql
   package: mysql-client
+  argStyle: mysql
   dumpHint: 'mysqldump -h {host} -P {port} -u {user} --default-character-set={charset} --databases {database} > "{filePath}"'
   restoreHint: 'mysql -h {host} -P {port} -u {user} --default-character-set={charset} {database} < "{filePath}"'

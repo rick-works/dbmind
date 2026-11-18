@@ -349,6 +349,12 @@ impl DialectOps for OracleOps {
         3
     }
 
+    fn supports_multi_row_insert(&self) -> bool {
+        // Oracle 没有 `VALUES (…), (…)`，只有 `INSERT ALL` / `INSERT … SELECT … UNION ALL`
+        //（DM 与 Oracle 同源，沿用同一 impl）
+        false
+    }
+
     fn table_rows_estimate_sql(&self, _database: &str, schema: &str) -> Option<String> {
         // `num_rows` 是统计信息里的估算（可能为 NULL，调用方按 0 处理）
         let owner = schema.to_uppercase().replace('\'', "''");
@@ -603,6 +609,11 @@ impl DialectOps for DmOps {
 
     fn sync_object_concurrency(&self) -> usize {
         3
+    }
+
+    fn supports_multi_row_insert(&self) -> bool {
+        // 与 Oracle 同源语法：没有 `VALUES (…), (…)`
+        false
     }
 
     fn table_rows_estimate_sql(&self, _database: &str, schema: &str) -> Option<String> {

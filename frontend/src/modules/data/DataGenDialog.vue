@@ -242,7 +242,7 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, CircleClose } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
-import { listColumns, dataGenPreview, dataGenStart, dataGenTask, dataGenCancel } from '../../api'
+import { listColumns, dataGenRules, dataGenPreview, dataGenStart, dataGenTask, dataGenCancel } from '../../api'
 import { errMsg } from '../../utils/errMsg'
 import { t, tMsg } from '../../utils/i18n'
 import { createPollGuard } from '../../utils/pollGuard'
@@ -273,56 +273,39 @@ const stepIndex = computed(() => {
   return idx
 })
 
-// 生成规则（与后端 TestDataGenerator.Rule 一一对应）
+// 规则清单来自后端（GET /api/datagen/rules）：顺序、文案键、参数控件形态都由后端给出。
 //
-// ⚠️ 表里只存 labelKey，文案由下面的 computed 现取：
-// 直接把 t(...) 写进这张模块级常量，语言会在**加载时**被定死 —— 切成英文后这个下拉仍是中文。
-// 另外 UUID 是产品名（哪种语言都这么写），保留字面量、不进字典。
-const RULE_GROUPS = [
-  { labelKey: 'dgen.grpAuto', options: [
-    { value: 'auto', labelKey: 'dgen.rAuto' },
-    { value: 'skip', labelKey: 'dgen.rSkip' },
-    { value: 'null', labelKey: 'dgen.rNull' }
-  ] },
-  { labelKey: 'dgen.grpNumber', options: [
-    { value: 'sequence', labelKey: 'dgen.rSequence' },
-    { value: 'random_int', labelKey: 'dgen.rRandomInt' },
-    { value: 'random_decimal', labelKey: 'dgen.rRandomDecimal' },
-    { value: 'bool', labelKey: 'dgen.rBool' }
-  ] },
-  { labelKey: 'dgen.grpText', options: [
-    { value: 'random_string', labelKey: 'dgen.rRandomString' },
-    { value: 'fixed', labelKey: 'dgen.rFixed' },
-    { value: 'list', labelKey: 'dgen.rList' },
-    { value: 'cycle', labelKey: 'dgen.rCycle' },
-    { value: 'code', labelKey: 'dgen.rCode' },
-    { value: 'uuid' }
-  ] },
-  { labelKey: 'dgen.grpSemantic', options: [
-    { value: 'chinese_name', labelKey: 'dgen.rChineseName' },
-    { value: 'username', labelKey: 'dgen.rUsername' },
-    { value: 'email', labelKey: 'dgen.rEmail' },
-    { value: 'phone', labelKey: 'dgen.rPhone' },
-    { value: 'company', labelKey: 'dgen.rCompany' },
-    { value: 'city', labelKey: 'dgen.rCity' },
-    { value: 'address', labelKey: 'dgen.rAddress' },
-    { value: 'word', labelKey: 'dgen.rWord' },
-    { value: 'title', labelKey: 'dgen.rTitle' },
-    { value: 'ip', labelKey: 'dgen.rIp' },
-    { value: 'url', labelKey: 'dgen.rUrl' }
-  ] },
-  { labelKey: 'dgen.grpTime', options: [
-    { value: 'random_date', labelKey: 'dgen.rRandomDate' },
-    { value: 'now', labelKey: 'dgen.rNow' }
-  ] },
-  { labelKey: 'dgen.grpAdvanced', options: [
-    { value: 'sql', labelKey: 'dgen.rSql' }
-  ] }
-]
-const ruleGroups = computed(() => RULE_GROUPS.map(g => ({
-  label: t(g.labelKey),
-  options: g.options.map(o => (o.labelKey ? { value: o.value, label: t(o.labelKey) } : { value: o.value, label: o.value.toUpperCase() }))
-})))
+// 这里原来是一张 24 项的平行表 + 一份 paramKind 判定，注释自认「与后端
+// TestDataGenerator.Rule 一一对应」—— 新增一条规则要同时改后端 match、分组表、
+// 参数形态、两份 i18n，漏改不会报错（下拉里少一项而已）。
+const ruleCatalog = ref([])
+const ruleById = computed(() => {
+  const map = {}
+  for (const group of ruleCatalog.value) for (const rule of group.rules) map[rule.id] = rule
+  return map
+})
+const ruleGroups = computed(() => {
+  // 接口还没回来（或同源后端是旧版本）时给最小可用集：至少能选「自动」
+  const groups = ruleCatalog.value.length
+    ? ruleCatalog.value
+    : [{ group: 'dgen.grpAuto', rules: [{ id: 'auto', labelKey: 'dgen.rAuto', param: 'none' }] }]
+  return groups.map(group => ({
+    label: t(group.group),
+    options: group.rules.map(rule => ({
+      value: rule.id,
+      // 空 labelKey = 直接用 id 大写（UUID 是产品名，不进字典）
+      label: rule.labelKey ? t(rule.labelKey) : rule.id.toUpperCase()
+    }))
+  }))
+})
+const loadRuleCatalog = async () => {
+  try {
+    const data = await dataGenRules()
+    if (Array.isArray(data) && data.length) ruleCatalog.value = data
+  } catch {
+    // 拿不到就用上面的最小集，生成本身不依赖这张表（规则 id 仍由后端校验）
+  }
+}
 
 const rows = ref(100)
 const writeMode = ref('append')
@@ -383,17 +366,8 @@ const footerTip = computed(() => {
   return writeMode.value === 'clear' ? t('dgen.tipClear') : t('dgen.tipStart')
 })
 
-// 每种规则需要填的参数类型（决定「参数」列渲染哪个控件）
-const paramKind = (rule) => {
-  if (rule === 'fixed' || rule === 'sql') return 'value'
-  if (rule === 'code') return 'prefix'
-  if (rule === 'list' || rule === 'cycle') return 'values'
-  if (rule === 'random_int' || rule === 'random_decimal') return 'range'
-  if (rule === 'random_date') return 'dateRange'
-  if (rule === 'random_string') return 'length'
-  if (rule === 'sequence') return 'start'
-  return 'none'
-}
+// 每种规则需要填的参数类型（决定「参数」列渲染哪个控件）：由后端清单的 `param` 给出
+const paramKind = (rule) => ruleById.value[rule]?.param || 'none'
 
 const resetState = () => {
   stopPoll()
@@ -732,7 +706,8 @@ watch(() => props.modelValue, async (open) => {
     return
   }
   resetState()
-  await loadColumns()
+  // 规则清单与字段一起加载：清单拿不到时下拉退化成最小集，不影响生成
+  await Promise.all([loadRuleCatalog(), loadColumns()])
 })
 </script>
 

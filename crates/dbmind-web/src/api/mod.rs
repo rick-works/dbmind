@@ -364,7 +364,8 @@ pub fn routes() -> Router<AppState> {
         // 注意 `{*rest}` 至少要有一段子路径：`/api/compare` 这种**没有子路径**的也要单独注册，
         // 否则它会落到 404（上游的 `POST /api/compare` 正是无子路径的那个）。
         .merge(ai::routes())
-        // 造数：预览（同步，不写库）+ 生成（异步任务，可取消）
+        // 造数：规则清单（前端下拉的唯一来源）+ 预览（同步，不写库）+ 生成（异步任务，可取消）
+        .route("/api/datagen/rules", get(datagen::rules))
         .route("/api/datagen/preview", post(datagen::preview))
         .route("/api/datagen/start", post(datagen::start))
         .route("/api/datagen/task/{id}", get(datagen::status))

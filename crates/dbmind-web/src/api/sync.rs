@@ -2610,6 +2610,37 @@ mod scheduler_tests {
         }
     }
 
+    /// 一条 `INSERT` 能不能带多组 `VALUES`：只有 Oracle / 达梦不行。
+    ///
+    /// 判断原来散在三处（导入 20 个品牌白名单 / 造数 13 个 / 备份「非 oracle,dm」黑名单），
+    /// 同一个类型在三处会得到相反结论。
+    #[test]
+    fn oracle_族不支持多行插入() {
+        for kind in [ConnectionKind::Oracle, ConnectionKind::Dm] {
+            assert!(
+                !Dialect::new(kind).supports_multi_row_insert(),
+                "{} 不该带多行 values",
+                kind.key()
+            );
+        }
+        for kind in [
+            ConnectionKind::Mysql,
+            ConnectionKind::Postgresql,
+            ConnectionKind::Sqlserver,
+            ConnectionKind::Db2,
+            ConnectionKind::Derby,
+            ConnectionKind::Duckdb,
+            ConnectionKind::Sqlite,
+            ConnectionKind::Clickhouse,
+        ] {
+            assert!(
+                Dialect::new(kind).supports_multi_row_insert(),
+                "{} 应该支持多行 values",
+                kind.key()
+            );
+        }
+    }
+
     /// Databend 走 MySQL 协议，但有两件事不能跟着走：
     /// `create database` 不吃 `charset` 子句、`information_schema.tables` 没有行数列。
     /// 跟随族的后果分别是「建库直接语法错」和「每次同步多一次注定失败查询」。

@@ -49,5 +49,6 @@ backup:
   tool: pg_dump
   restoreTool: psql
   package: postgresql-client
+  argStyle: postgres
   dumpHint: 'pg_dump -h {host} -p {port} -U {user} -d {database} -f "{filePath}"'
   restoreHint: 'psql -h {host} -p {port} -U {user} -d {database} -f "{filePath}"'

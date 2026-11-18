@@ -265,30 +265,11 @@ async fn run_sql(state: &AppState, conn: &str, database: &str, sql: &str) -> Res
 }
 
 /// 这个方言支持 `values (...),(...)` 多行插入吗？
+///
+/// 判断收在 `DialectOps::supports_multi_row_insert()`：这里原来是一份 20 个品牌的
+/// 白名单，与造数侧（13 个）和备份侧（「非 oracle/dm」黑名单）三份口径互不相同。
 fn supports_multi_row(dialect: Dialect) -> bool {
-    matches!(
-        dialect.kind.key(),
-        "mysql"
-            | "mariadb"
-            | "greatsql"
-            | "goldendb"
-            | "doris"
-            | "starrocks"
-            | "selectdb"
-            | "tidb"
-            | "oceanbase"
-            | "postgresql"
-            | "kingbase"
-            | "opengauss"
-            | "highgo"
-            | "vastbase"
-            | "uxdb"
-            | "gaussdb"
-            | "sqlite"
-            | "sqlserver"
-            | "h2"
-            | "clickhouse"
-    )
+    dialect.supports_multi_row_insert()
 }
 
 /// 「导入时自动建表」的 DDL。

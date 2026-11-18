@@ -385,6 +385,8 @@ export const tableAction = async (id, database, table, action, newName) => { con
 export const renameObject = async (id, payload) => { const b = await baseOf(id); return http.post(`${b}/${id}/rename-object`, payload).then(r => r.data) }
 // 生成测试数据（统一端点 /api/datagen，按连接 ID 自动识别数据库类型）：
 // 预览同步返回若干行；写入为异步任务，可轮询进度、可取消（取消会在数据库端回滚未提交的数据）
+// 生成规则清单：前端下拉与参数控件的唯一来源（新增规则只改后端一处）
+export const dataGenRules = async () => http.get('/api/datagen/rules').then(r => r.data)
 export const dataGenPreview = async (connectionId, payload) => http.post('/api/datagen/preview', payload, { params: { connectionId } }).then(r => r.data)
 export const dataGenStart = async (connectionId, payload) => http.post('/api/datagen/start', payload, { params: { connectionId } }).then(r => r.data)
 export const dataGenTask = async (taskId) => http.get(`/api/datagen/task/${taskId}`).then(r => r.data)

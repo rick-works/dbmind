@@ -60,5 +60,6 @@ backup:
   tool: sqlcmd
   restoreTool: sqlcmd
   package: mssql-tools18
+  argStyle: sqlcmd
   dumpHint: "sqlcmd -S {host},{port} -U {user} -Q \"BACKUP DATABASE [{database}] TO DISK = N'{filePath}' WITH FORMAT\""
   restoreHint: "sqlcmd -S {host},{port} -U {user} -Q \"RESTORE DATABASE [{database}] FROM DISK = N'{filePath}' WITH REPLACE\""
