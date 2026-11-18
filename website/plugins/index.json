@@ -9,17 +9,18 @@
         "zh": "报错诊断",
         "en": "Error Diagnosis"
       },
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "DBMind",
       "description": {
         "zh": "贴上报错与 SQL，判断是语法、权限、连接、类型还是超时；给出按概率排序的排查步骤与改法。",
         "en": "Paste the error and the SQL: tell syntax from permissions, connectivity, types or timeouts, with ranked checks and a fix."
       },
+      "icon": "🩺",
       "homepage": "https://www.dbmind.top/#plugins",
       "needsContext": true,
-      "sha256": "85102947e52e44846c55d42f79a514d5f3489a1830249dc6c269098c216bdd8d",
-      "size": 4445,
-      "download": "https://www.dbmind.top/plugins/packages/err-diagnose-1.0.0.zip"
+      "sha256": "9da0987cf582914ab9ae0a02487c269ead627fb28ac1a996d75a830af1c35e21",
+      "size": 4463,
+      "download": "https://www.dbmind.top/plugins/packages/err-diagnose-1.0.1.zip"
     },
     {
       "id": "sql-explain",
@@ -28,17 +29,18 @@
         "zh": "SQL 讲解",
         "en": "Explain SQL"
       },
-      "version": "1.0.0",
+      "version": "1.0.1",
       "author": "DBMind",
       "description": {
         "zh": "把一条 SQL 讲清楚：整体意图、逐句子句、隐含假设与坑（NULL / 隐式转换 / 分页 / 时区），最后给可读性改写。",
         "en": "Explain a query: intent, clause by clause, hidden assumptions and traps (NULLs, implicit casts, paging, time zones), plus a readability rewrite."
       },
+      "icon": "📖",
       "homepage": "https://www.dbmind.top/#plugins",
       "needsContext": true,
-      "sha256": "f73dff024bfa8c82c83b7b43e7ba0bbf5027670cc8f71cc75f189f47ae09babc",
-      "size": 4407,
-      "download": "https://www.dbmind.top/plugins/packages/sql-explain-1.0.0.zip"
+      "sha256": "3990a56d92524f4423f9424005cd1805c4effbb55f9578bf9463ae96a300bd59",
+      "size": 4425,
+      "download": "https://www.dbmind.top/plugins/packages/sql-explain-1.0.1.zip"
     },
     {
       "id": "sql-review",
@@ -47,17 +49,18 @@
         "zh": "SQL 审查",
         "en": "SQL Review"
       },
-      "version": "1.0.2",
+      "version": "1.0.3",
       "author": "DBMind",
       "description": {
         "zh": "按性能、正确性、可维护性三档逐条审查 SQL，给出风险等级与可直接替换的改写版本。",
         "en": "Review a SQL statement for performance, correctness and maintainability, with risk levels and a rewritten version."
       },
+      "icon": "🔍",
       "homepage": "https://www.dbmind.top/#plugins",
       "needsContext": true,
-      "sha256": "8cb4cf9bf7b604e2034cac44cc2fb7ecb4adf443772d43faf82ba0cde62a767c",
-      "size": 3556,
-      "download": "https://www.dbmind.top/plugins/packages/sql-review-1.0.2.zip"
+      "sha256": "8ed56756dd0eeb5665f1d859d73fe6022680256af78d6180f0d1147148ab2b0a",
+      "size": 3574,
+      "download": "https://www.dbmind.top/plugins/packages/sql-review-1.0.3.zip"
     },
     {
       "id": "table-design-check",
@@ -66,17 +69,18 @@
         "zh": "表设计体检",
         "en": "Table Design Check"
       },
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "DBMind",
       "description": {
         "zh": "针对一张表的真实结构，检查主键/索引/字段类型/空值/命名，给出改造 SQL 与风险提示。",
         "en": "Check one table's real structure — keys, indexes, types, nullability, naming — and propose DDL with risks."
       },
+      "icon": "🧱",
       "homepage": "https://www.dbmind.top/#plugins",
       "needsContext": true,
-      "sha256": "4e0ad673f3fcfcc67ffa1942996bc44a53d43d5f99242b17120be00097c64099",
-      "size": 3834,
-      "download": "https://www.dbmind.top/plugins/packages/table-design-check-1.0.1.zip"
+      "sha256": "82d2e5af84c6a306f1dd6d884cf3c7022be19d5d4b814fd8b28cf604e18aa6d6",
+      "size": 3852,
+      "download": "https://www.dbmind.top/plugins/packages/table-design-check-1.0.2.zip"
     }
   ]
 }

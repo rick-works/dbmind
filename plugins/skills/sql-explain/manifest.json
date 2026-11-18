@@ -3,14 +3,15 @@
   "id": "sql-explain",
   "type": "skill",
   "name": { "zh": "SQL 讲解", "en": "Explain SQL" },
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
     "zh": "把一条 SQL 讲清楚：整体意图、逐句子句、隐含假设与坑（NULL / 隐式转换 / 分页 / 时区），最后给可读性改写。",
     "en": "Explain a query: intent, clause by clause, hidden assumptions and traps (NULLs, implicit casts, paging, time zones), plus a readability rewrite."
   },
-  "minAppVersion": "2.0.28",
+  "icon": "📖",
+  "minAppVersion": "3.0.0",
   "needsContext": true,
   "prompt": "prompt.md",
   "chatPrompt": "chat.md",

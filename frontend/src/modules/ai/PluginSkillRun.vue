@@ -8,7 +8,7 @@
   结果用等宽 + 保留换行展示：技能输出是给数据库人看的清单与 SQL，渲染成 HTML 反而更难读。
 -->
 <template>
-  <el-dialog v-model="open" :title="item?.name || ''" width="min(760px, 94vw)" append-to-body class="plg-run-dialog">
+  <el-dialog v-model="open" :title="(item?.icon ? item.icon + ' ' : '') + (item?.name || '')" width="min(760px, 94vw)" append-to-body class="plg-run-dialog">
     <div class="plg-run-form">
       <div class="plg-row">
         <label>{{ $t('plg.conn') }}</label>

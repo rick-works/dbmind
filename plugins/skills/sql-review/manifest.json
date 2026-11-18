@@ -3,14 +3,15 @@
   "id": "sql-review",
   "type": "skill",
   "name": { "zh": "SQL 审查", "en": "SQL Review" },
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
     "zh": "按性能、正确性、可维护性三档逐条审查 SQL，给出风险等级与可直接替换的改写版本。",
     "en": "Review a SQL statement for performance, correctness and maintainability, with risk levels and a rewritten version."
   },
-  "minAppVersion": "2.0.28",
+  "icon": "🔍",
+  "minAppVersion": "3.0.0",
   "needsContext": true,
   "prompt": "prompt.md",
   "chatPrompt": "chat.md",

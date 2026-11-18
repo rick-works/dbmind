@@ -3,14 +3,15 @@
   "id": "table-design-check",
   "type": "skill",
   "name": { "zh": "表设计体检", "en": "Table Design Check" },
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
     "zh": "针对一张表的真实结构，检查主键/索引/字段类型/空值/命名，给出改造 SQL 与风险提示。",
     "en": "Check one table's real structure — keys, indexes, types, nullability, naming — and propose DDL with risks."
   },
-  "minAppVersion": "2.0.28",
+  "icon": "🧱",
+  "minAppVersion": "3.0.0",
   "needsContext": true,
   "prompt": "prompt.md",
   "chatPrompt": "chat.md",

@@ -37,6 +37,7 @@
     <div v-else class="plg-grid">
       <div v-for="p in installed" :key="p.id" class="plg-card" :class="{ off: p.state === 'disabled' }">
         <div class="plg-card-head">
+          <span v-if="p.icon" class="plg-ic">{{ p.icon }}</span>
           <span class="plg-name" :title="p.id">{{ p.name }}</span>
           <span class="plg-ver">v{{ p.version }}</span>
         </div>
@@ -63,15 +64,17 @@
     <div v-else class="plg-grid">
       <div v-for="c in available" :key="c.id" class="plg-card">
         <div class="plg-card-head">
-          <span class="plg-name" :title="c.id">{{ c.name }}</span>
+          <span v-if="c.icon" class="plg-ic">{{ c.icon }}</span>
+          <span class="plg-name" :title="c.id">{{ loName(c.name) }}</span>
           <span class="plg-ver">v{{ c.version }}</span>
         </div>
         <div class="plg-meta">{{ c.author || $t('plg.unknownAuthor') }} · {{ $t('plg.typeSkill') }}</div>
-        <div class="plg-desc">{{ c.description }}</div>
+        <div class="plg-desc">{{ loName(c.description) }}</div>
         <div class="plg-card-foot">
           <span class="plg-gap" />
           <button class="plg-btn sm primary" type="button" :disabled="!!installingId" @click="install(c)">
-            {{ installingId === c.id ? $t('plg.installing') : $t('plg.install') }}
+            {{ installingId === c.id ? $t('plg.installing')
+              : (isUpgrade(c) ? $t('plg.upgrade', { ver: c.version }) : $t('plg.install')) }}
           </button>
         </div>
       </div>
@@ -86,7 +89,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Upload } from '@element-plus/icons-vue'
-import { t } from '../../utils/i18n'
+import { t, locale } from '../../utils/i18n'
 import { listPlugins, getPluginCatalog, installPlugin, installPluginFile, setPluginEnabled, uninstallPlugin } from '../../api'
 import PluginSkillRun from '../ai/PluginSkillRun.vue'
 
@@ -99,9 +102,28 @@ const catalog = ref([])
 const catalogError = ref('')
 const fileRef = ref(null)
 
+/**
+ * 官网索引里的 name / description 是 `{ zh, en }` 双语对象，已装插件的清单由后端本地化过、是字符串。
+ * 两种形态都从这一处取，模板里直接 `{{ c.name }}` 会把对象原样打印出来。
+ */
+const loName = (v) => {
+  if (!v || typeof v !== 'object') return v || ''
+  const cur = locale.value === 'en-US' ? v.en : v.zh
+  return cur || v.zh || v.en || ''
+}
+
 /** 已装的 id：商店列表里要标成「已安装」而不是再给一次安装按钮 */
 const installedIds = computed(() => new Set(installed.value.map((p) => p.id)))
-const available = computed(() => catalog.value.filter((c) => !installedIds.value.has(c.id)))
+/** 已装版本：索引里更高的版本要能「升级」——只按 id 过滤掉会把用户永久钉在旧版 */
+const installedVer = computed(() => new Map(installed.value.map((p) => [p.id, p.version || '0'])))
+/** x.y.z 比大小：逐段按数字比，非法段按 0（插件版本都是纯数字三段） */
+const verNum = (v) => String(v || '').split('.').slice(0, 4)
+  .reduce((acc, n) => acc * 1000 + (parseInt(n, 10) || 0), 0)
+const isUpgrade = (c) => installedIds.value.has(c.id)
+const available = computed(() => catalog.value.filter((c) => {
+  const cur = installedVer.value.get(c.id)
+  return !cur || verNum(c.version) > verNum(cur)
+}))
 
 const reload = async () => {
   loading.value = true
@@ -150,10 +172,11 @@ const onFile = async (ev) => {
 }
 
 const install = async (item) => {
+  const upgrading = isUpgrade(item)
   installingId.value = item.id
   try {
     await installPlugin({ id: item.id, url: item.download, sha256: item.sha256 })
-    ElMessage.success(t('plg.installedOk', { name: item.name }))
+    ElMessage.success(t(upgrading ? 'plg.upgraded' : 'plg.installedOk', { name: loName(item.name) }))
     await reload()
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || String(e))
@@ -220,7 +243,9 @@ onMounted(reload)
 .plg-card { border: 1px solid var(--dc-border); border-radius: 8px; padding: 10px 12px; background: var(--dc-surface);
   display: flex; flex-direction: column; gap: 6px; }
 .plg-card.off { opacity: .6; }
-.plg-card-head { display: flex; align-items: baseline; gap: 8px; }
+.plg-card-head { display: flex; align-items: center; gap: 8px; }
+/* 插件清单里的 emoji 图标：与标题同排，占位固定避免有无图标时标题跳动 */
+.plg-ic { font-size: 15px; line-height: 1; flex-shrink: 0; }
 .plg-name { font-size: 13px; font-weight: 600; }
 .plg-ver { font-size: 11px; color: var(--dc-text-weak); }
 .plg-meta { font-size: 11px; color: var(--dc-text-weak); }

@@ -149,7 +149,8 @@
                 <template v-if="m.role === 'user'">
                   <div class="msg-text">
                     <span v-for="sk in (m.skills || [])" :key="sk.id || sk.name" class="msg-skill-tag">
-                      <el-icon :size="11"><MagicStick /></el-icon>{{ sk.name }}
+                      <span v-if="sk.icon || iconOfSkill(sk.name)" class="msg-skill-ic">{{ sk.icon || iconOfSkill(sk.name) }}</span>
+                      <el-icon v-else :size="11"><MagicStick /></el-icon>{{ sk.name }}
                     </span>
                     <span class="msg-body">{{ m.content }}</span>
                   </div>
@@ -323,7 +324,8 @@
                 <el-icon class="picked-skill-x" :title="$t('ai.skillRemove')" @click="backToFreeChat"><Close /></el-icon>
               </span>
               <span v-for="s in pickedSkills" :key="s.id" class="picked-skill" :title="s.description">
-                <el-icon :size="11"><MagicStick /></el-icon>
+                <span v-if="s.icon || iconOfSkill(s.name)" class="picked-skill-ic">{{ s.icon || iconOfSkill(s.name) }}</span>
+                <el-icon v-else :size="11"><MagicStick /></el-icon>
                 <span class="picked-skill-tx">{{ s.name }}</span>
                 <el-icon class="picked-skill-x" :title="$t('ai.skillRemove')" @click="unpickSkill(s.id)"><Close /></el-icon>
               </span>
@@ -372,7 +374,8 @@
                       <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.pluginSkills') }}</el-dropdown-item>
                       <el-dropdown-item v-for="p in pluginSkills" :key="'plugin:' + p.id" :command="'plugin:' + p.id"
                                         :class="{ active: isPicked(p.id) }" :title="p.description">
-                        <el-icon class="skills-ic"><MagicStick /></el-icon>
+                        <span v-if="p.icon" class="skills-ic skill-emoji">{{ p.icon }}</span>
+                        <el-icon v-else class="skills-ic"><MagicStick /></el-icon>
                         <span class="skills-name">{{ p.name }}</span>
                         <el-icon v-if="isPicked(p.id)" class="skills-check"><Select /></el-icon>
                       </el-dropdown-item>
@@ -755,7 +758,7 @@ const togglePickedSkill = (id) => {
   }
   const item = pluginSkills.value.find((p) => p.id === id)
   if (!item) return false
-  pickedSkills.value.push({ id: item.id, name: item.name, description: item.description || '' })
+  pickedSkills.value.push({ id: item.id, name: item.name, icon: item.icon || '', description: item.description || '' })
   // 技能靠对话生效：在问数/字典这些页里选中的，直接切回自由对话，否则选了也看不到效果
   if (tab.value !== 'chat') {
     tab.value = 'chat'
@@ -781,9 +784,12 @@ const backToFreeChat = () => { tab.value = 'chat' }
 const currentSkills = () => {
   const out = []
   if (activeSkill.value) out.push({ id: activeSkill.value.key, name: activeSkill.value.label })
-  for (const s of pickedSkills.value) out.push({ id: s.id, name: s.name })
+  for (const s of pickedSkills.value) out.push({ id: s.id, name: s.name, icon: s.icon || '' })
   return out
 }
+
+/** 按技能名找图标：历史会话只存了名字，靠插件清单补回来（找不到就不显示） */
+const iconOfSkill = (name) => pluginSkills.value.find((p) => p.name === name)?.icon || ''
 
 const skillsOpen = ref(false)
 /** 几个下拉互斥：每个都持有 ref，打开一个就收起其它 */
@@ -2604,6 +2610,8 @@ onMounted(() => {
   scrollBottom()
   loadConnList()
   warmCtx()
+  // 插件清单要先拉到：历史消息只存技能名，气泡上的 emoji 图标靠清单按名反查
+  loadPluginSkills()
   // 接上次会话**必须首屏就跑**：用户可能先点「发送到 AI」，那一刻对话得已经恢复在，
   // 否则这条新消息会插进空对话里，历史看起来"被清空了"。
   restoreThread()
@@ -2775,6 +2783,8 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   color: var(--dc-primary); font-size: 11.5px; line-height: 1.7;
 }
 .picked-skill-tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 插件技能自带的 emoji 图标：当字形用，别让它被行高撑开 chip */
+.picked-skill-ic { font-size: 12px; line-height: 1; }
 .picked-skill-x { border-radius: 50%; cursor: pointer; transition: background .15s ease, color .15s ease; }
 .picked-skill-x:hover { background: var(--dc-primary); color: #fff; }
 
@@ -3068,6 +3078,8 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   font-size: 11.5px; line-height: 1.7; vertical-align: 1px;
   white-space: nowrap;
 }
+/* 插件技能自带的 emoji 图标（清单里的 icon 字段）：当字形用，不参与行高 */
+.msg-skill-ic { font-size: 12px; line-height: 1; }
 .msg-body { white-space: pre-wrap; }
 /* 消息内代码块：底色比气泡深一档（--ai-inset-bg），靠底色而不是边框拉开层次，
    去掉描边后块内更干净、也不与气泡边框「线条打架」。

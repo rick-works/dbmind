@@ -3,14 +3,15 @@
   "id": "err-diagnose",
   "type": "skill",
   "name": { "zh": "报错诊断", "en": "Error Diagnosis" },
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
     "zh": "贴上报错与 SQL，判断是语法、权限、连接、类型还是超时；给出按概率排序的排查步骤与改法。",
     "en": "Paste the error and the SQL: tell syntax from permissions, connectivity, types or timeouts, with ranked checks and a fix."
   },
-  "minAppVersion": "2.0.28",
+  "icon": "🩺",
+  "minAppVersion": "3.0.0",
   "needsContext": true,
   "prompt": "prompt.md",
   "chatPrompt": "chat.md",

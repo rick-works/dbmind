@@ -160,6 +160,7 @@ for (const id of fs.readdirSync(SRC).sort()) {
     version: manifest.version,
     author: manifest.author || '',
     description: manifest.description || '',
+    icon: manifest.icon || '',
     homepage: manifest.homepage || '',
     needsContext: !!manifest.needsContext,
     sha256: crypto.createHash('sha256').update(buf).digest('hex'),
