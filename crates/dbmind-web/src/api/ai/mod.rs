@@ -115,6 +115,10 @@ pub struct AiRequest {
     /// 并持续生效，之后每一轮提问都带着它，直到用户把技能从输入框上摘掉。
     #[serde(default)]
     pub plugin_skills: Vec<String>,
+    /// 这一问生效的技能名（界面语言下的显示名，含内置技能），**只用于落库回显**：
+    /// 存进消息 meta，重开记录时气泡上还能显示「按哪个技能问的」。
+    #[serde(default)]
+    pub skill_labels: Vec<String>,
     /// 目标方言（跨方言翻译用）
     #[serde(default)]
     pub target_dialect: Option<String>,

@@ -631,6 +631,10 @@ impl Store {
         if !has_col("ai_models", "temperature")? {
             conn.execute_batch("ALTER TABLE ai_models ADD COLUMN temperature REAL NOT NULL DEFAULT 0.2;")?;
         }
+        // ai_messages 加 meta：存「这条消息按哪个技能问的」（老库补空串，历史消息照旧无标签）
+        if !has_col("ai_messages", "meta")? {
+            conn.execute_batch("ALTER TABLE ai_messages ADD COLUMN meta TEXT NOT NULL DEFAULT '';")?;
+        }
         Ok(())
     }
 
@@ -1958,6 +1962,9 @@ pub struct AiMessageRow {
     pub content: String,
     /// 上游返回的 usage（JSON 原文，没有就是空串）
     pub usage: String,
+    /// 附加信息（JSON 原文，没有就是空串）：目前只放 `{"skills":["SQL 审查"]}`，
+    /// 让气泡在重开记录后仍能显示「这条是按哪个技能问的」。
+    pub meta: String,
     pub created_at: String,
 }
 
@@ -2120,12 +2127,19 @@ impl Store {
         Ok(())
     }
 
-    pub fn ai_message_add(&self, thread_id: &str, role: &str, content: &str, usage: &str) -> Result<i64> {
+    pub fn ai_message_add(
+        &self,
+        thread_id: &str,
+        role: &str,
+        content: &str,
+        usage: &str,
+        meta: &str,
+    ) -> Result<i64> {
         let conn = self.lock();
         conn.execute(
-            "INSERT INTO ai_messages (thread_id, role, content, usage, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![thread_id, role, content, usage, now_iso()],
+            "INSERT INTO ai_messages (thread_id, role, content, usage, meta, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![thread_id, role, content, usage, meta, now_iso()],
         )?;
         Ok(conn.last_insert_rowid())
     }
@@ -2134,8 +2148,8 @@ impl Store {
         let conn = self.lock();
         // 取**最近** N 条再翻回正序：一条长会话里用户更关心末尾在聊什么
         let mut stmt = conn.prepare(
-            "SELECT id, role, content, usage, created_at FROM \
-             (SELECT id, role, content, usage, created_at FROM ai_messages \
+            "SELECT id, role, content, usage, meta, created_at FROM \
+             (SELECT id, role, content, usage, meta, created_at FROM ai_messages \
               WHERE thread_id = ?1 ORDER BY id DESC LIMIT ?2) ORDER BY id ASC",
         )?;
         let rows = stmt.query_map(params![thread_id, limit as i64], |row| {
@@ -2144,7 +2158,8 @@ impl Store {
                 role: row.get(1)?,
                 content: row.get(2)?,
                 usage: row.get(3)?,
-                created_at: row.get(4)?,
+                meta: row.get(4)?,
+                created_at: row.get(5)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -2775,6 +2790,7 @@ CREATE TABLE IF NOT EXISTS ai_messages (
     role       TEXT NOT NULL,
     content    TEXT NOT NULL,
     usage      TEXT NOT NULL DEFAULT '',
+    meta       TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ai_messages_thread ON ai_messages(thread_id, id);

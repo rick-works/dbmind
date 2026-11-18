@@ -135,6 +135,10 @@ pub async fn thread_get(State(_state): State<AppState>, Path(id): Path<String>) 
                 "usage": if row.usage.is_empty() { Value::Null } else {
                     serde_json::from_str::<Value>(&row.usage).unwrap_or(Value::Null)
                 },
+                // 老消息没有 meta（空串）→ 给 null，前端按「无技能」处理
+                "meta": if row.meta.is_empty() { Value::Null } else {
+                    serde_json::from_str::<Value>(&row.meta).unwrap_or(Value::Null)
+                },
                 "createdAt": row.created_at,
             })
         })
@@ -213,12 +217,16 @@ pub fn begin_turn(
     }
 }
 
-/// 往会话里追加一条消息。`usage` 只在 assistant 那一侧有值（前端要显示 token 消耗）。
+/// 往会话里追加一条消息。
+///
+/// `usage` 只在 assistant 那一侧有值（前端要显示 token 消耗）；
+/// `meta` 是给界面用的附加信息（目前只有 `{"skills":[…]}`，让气泡记住「按哪个技能问的」）。
 pub fn append_message(
     thread_id: &str,
     role: &str,
     content: &str,
     usage: Option<&crate::api::ai::config::TokenUsage>,
+    meta: Option<&Value>,
 ) {
     let Some(store) = dbmind_core::global_store() else {
         return;
@@ -230,7 +238,11 @@ pub fn append_message(
     let usage = usage
         .map(|one| serde_json::to_string(one).unwrap_or_default())
         .unwrap_or_default();
-    if let Err(err) = store.ai_message_add(thread_id, role, content, &usage) {
+    // meta 不许让写入失败：序列化出问题就当没有
+    let meta = meta
+        .and_then(|one| serde_json::to_string(one).ok())
+        .unwrap_or_default();
+    if let Err(err) = store.ai_message_add(thread_id, role, content, &usage, &meta) {
         tracing::warn!("写入 AI 会话消息失败（不影响回答）：{}", err);
     }
 }

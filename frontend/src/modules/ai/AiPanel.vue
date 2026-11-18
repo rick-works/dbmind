@@ -145,7 +145,15 @@
                 <template v-else>{{ $t('ai.me') }}</template>
               </div>
               <div class="msg-bubble" :class="{ typing: m.role !== 'user' && !m.content && m.streaming }">
-                <template v-if="m.role === 'user'"><div class="msg-text">{{ m.content }}</div></template>
+                <!-- 用户气泡：**技能标签跟着消息走** —— 这条是按哪个技能问的，一眼看见 -->
+                <template v-if="m.role === 'user'">
+                  <div class="msg-text">
+                    <span v-for="sk in (m.skills || [])" :key="sk.id || sk.name" class="msg-skill-tag">
+                      <el-icon :size="11"><MagicStick /></el-icon>{{ sk.name }}
+                    </span>
+                    <span class="msg-body">{{ m.content }}</span>
+                  </div>
+                </template>
                 <!-- 流式回复尚未产出内容：显示动态三点，而不是一个空气泡 -->
                 <template v-else-if="!m.content && m.streaming">
                   <span class="dot"></span><span class="dot"></span><span class="dot"></span>
@@ -763,6 +771,20 @@ const activeSkill = computed(() => (tab.value === 'chat' ? null : currentSkill.v
 /** 摘掉内置技能 = 回到自由对话 */
 const backToFreeChat = () => { tab.value = 'chat' }
 
+/**
+ * 这一问生效的技能快照：内置技能（切页的那个）算一个 + 已选插件技能若干。
+ *
+ * <p>发消息时写进消息对象 → 气泡里显示成「[技能] 内容」；同时把名字发给后端落库
+ * （meta.skills），这样重开历史记录时标签还在。只存名字不存提示词：插件升级后
+ * 提示词会变，把旧提示词快照进库反而误导。
+ */
+const currentSkills = () => {
+  const out = []
+  if (activeSkill.value) out.push({ id: activeSkill.value.key, name: activeSkill.value.label })
+  for (const s of pickedSkills.value) out.push({ id: s.id, name: s.name })
+  return out
+}
+
 const skillsOpen = ref(false)
 /** 几个下拉互斥：每个都持有 ref，打开一个就收起其它 */
 const skillDropRef = ref(null)
@@ -873,7 +895,14 @@ const PLACEHOLDERS = computed(() => ({
   insight: t('ai.phInsight'),
   ask: t('ai.phAsk')
 }))
-const composePlaceholder = computed(() => PLACEHOLDERS.value[tab.value] || t('ai.inputPlaceholder'))
+const composePlaceholder = computed(() => {
+  // 选中技能后，提示语换成该技能的一句话说明 —— 用户不必去猜「这个技能是干嘛的」。
+  // 插件（对话人格）优先，其次内置能力，都没选才是各页的默认提示。
+  const picked = pickedSkills.value[pickedSkills.value.length - 1]
+  if (picked?.description) return picked.description
+  if (activeSkill.value?.desc) return activeSkill.value.desc
+  return PLACEHOLDERS.value[tab.value] || t('ai.inputPlaceholder')
+})
 
 /** 当前数据上下文（连接 · 数据库 · 模式），显示在输入框工具条，让「AI 基于哪个库回答」一目了然 */
 const contextLabel = computed(() => {
@@ -1125,34 +1154,22 @@ const TAB_DESC = computed(() => ({
 }))
 
 /**
- * 面板直达命令：本组件只负责发出意图，由外层 MainView 打开对应弹窗。
- * 注意这里**不列「命令面板」**——用户已经在 AI 助手内，
- * 再跳去命令面板是绕路（命令面板的价值在于「不打开助手也能全局唤起」）。
+ * `/` 唤起的列表 = Skills 下拉的**同一份内容**（内置能力 + 插件技能），不多放别的。
+ *
+ * <p>以前这里还混着一组「面板直达」（敏感数据 / 数据容量 / 质量规则 / 新建连接…）。
+ * 那些是「跳去别的页面」，不是技能 —— 混在技能列表里，用户按 / 想选技能却先看到
+ * 一堆跳转项。要跳页走命令面板（Ctrl/⌘+K）或左侧导航。
  */
-const PANEL_CMDS = computed(() => [
-  // 数据治理的四个页签直接点名，省掉「先打开治理再切页签」两步
-  { key: 'sensitive', label: t('ai.cmdSensitive'), desc: t('ai.cmdSensitiveDesc'), icon: Aim },
-  { key: 'capacity', label: t('ai.cmdCapacity'), desc: t('ai.cmdCapacityDesc'), icon: Grid },
-  { key: 'quality', label: t('qa.rulesTitle'), desc: t('ai.cmdQualityDesc'), icon: Edit },
-  { key: 'analysis', label: t('qa.title'), desc: t('ai.cmdAnalysisDesc'), icon: DataAnalysis },
-  { key: 'compare', label: t('ai.cmdCompare'), desc: t('ai.cmdCompareDesc'), icon: Switch },
-  { key: 'sync', label: t('ai.cmdSync'), desc: t('ai.cmdSyncDesc'), icon: Promotion },
-  { key: 'newConn', label: t('ai.cmdNewConn'), desc: t('ai.cmdNewConnDesc'), icon: Plus },
-  { key: 'editConn', label: t('ai.cmdEditConn'), desc: t('ai.cmdEditConnDesc'), icon: Edit }
-])
-
-/** 全部命令 = 技能切换（由 tabs 自动派生）+ 面板直达 + 插件技能，按分组顺序排列 */
 const slashCommands = computed(() => [
-  // 插件技能放最前面：用户按 / 多半就是想选技能，不该先滚过一串页签命令
+  // 顺序与下拉一致：先内置能力，再插件技能
+  ...tabs.value.map(sk => ({
+    key: 'tab:' + sk.key, label: sk.label, desc: TAB_DESC.value[sk.key] || '', icon: sk.icon,
+    group: t('ai.builtinSkills'), action: 'tab', target: sk.key
+  })),
   ...pluginSkills.value.map(p => ({
     key: 'plugin:' + p.id, label: p.name, desc: p.description || '', icon: MagicStick,
     group: t('ai.pluginSkills'), action: 'plugin', target: p.id
-  })),
-  ...tabs.value.filter(sk => sk.key !== 'chat').map(sk => ({
-    key: 'tab:' + sk.key, label: sk.label, desc: TAB_DESC.value[sk.key] || '', icon: sk.icon,
-    group: t('ai.cmdGroupSkills'), action: 'tab', target: sk.key
-  })),
-  ...PANEL_CMDS.value.map(c => ({ ...c, key: 'panel:' + c.key, group: t('ai.cmdGroupPanel'), action: 'panel', target: c.key }))
+  }))
 ])
 
 const slashOpen = ref(false)
@@ -1248,9 +1265,8 @@ const pickSlash = (cmd) => {
   if (cmd.action === 'tab') {
     // 统一走 pickSkill：技能斜杠命令是自动从 tabs 派生的，「智能问数」也在里面 ——
     // 这里直接赋 tab 会切到没有渲染分支的 key（空白页），必须由 pickSkill 拦下来开页签。
+    // 再选一次同一个 = 取消（与下拉的行为一致）
     if (pickSkill(cmd.target)) ElMessage.success(t('ai.switchedTo', { name: cmd.label }))
-  } else {
-    emit('panel', cmd.target)
   }
 }
 
@@ -1726,7 +1742,7 @@ const runInsightInChat = async (table) => {
   if (!table) { ElMessage.warning(t('ai.needTableName')); return }
   if (!ctxConnId.value) { ElMessage.warning(t('ai.needConn')); return }
   if (!ctxEffectiveDatabase.value) { ElMessage.warning(t('ai.needDatabase')); return }
-  messages.value.push({ role: 'user', content: table })
+  messages.value.push({ role: 'user', content: table, skills: currentSkills() })
   aiInput.value = ''
   chatLoading.value = true; startWait(); scrollBottom()
   stopCtrl = new AbortController()
@@ -1772,7 +1788,7 @@ const runAskInChat = async (text) => {
     if (m.role === 'user' && m.content) history.push({ role: 'user', content: m.content })
     else if (m.askAnswer?.sql) history.push({ role: 'assistant', content: `${m.askAnswer.summary || ''}\n${m.askAnswer.sql}` })
   }
-  messages.value.push({ role: 'user', content: q })
+  messages.value.push({ role: 'user', content: q, skills: currentSkills() })
   aiInput.value = ''
   chatLoading.value = true; startWait(); scrollBottom()
   // 流式占位：立刻进对话流，让「读表结构 → 写方案 → 执行 → 写结论」一步步点亮；
@@ -1840,7 +1856,7 @@ const runDictInChat = async (text) => {
   // 与巡检/洞察同一条规则：没选库会回落到连接默认库（SQL Server 是 master），
   // 生成的字典会全是系统表 —— 明确让用户先选库
   if (!ctxEffectiveDatabase.value) { ElMessage.warning(t('ai.needDatabase')); return }
-  messages.value.push({ role: 'user', content: text || t('ai.tabDictionary') })
+  messages.value.push({ role: 'user', content: text || t('ai.tabDictionary'), skills: currentSkills() })
   aiInput.value = ''
   chatLoading.value = true; startWait(); scrollBottom()
   stopCtrl = new AbortController()
@@ -1921,7 +1937,7 @@ const sendChat = async () => {
     .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
     .slice(-8)
     .map(m => ({ role: m.role, content: m.content }))
-  messages.value.push({ role: 'user', content: text })
+  messages.value.push({ role: 'user', content: text, skills: currentSkills() })
   aiInput.value = ''
   chatLoading.value = true
   startWait()
@@ -1943,6 +1959,8 @@ const sendChat = async () => {
     kbIds: kbIdsForQuery(),
     // 选中的插件技能：后端把它们的提示词拼进 system（这段对话持续生效，不是一次任务）
     pluginSkills: pickedSkills.value.map(s => s.id),
+    // 这一问生效的技能名（含内置技能）：后端只写进消息 meta，供气泡回显与历史恢复
+    skillLabels: currentSkills().map(s => s.name),
     // 落库与续聊：只有本面板带这两个字段（一次性接口不带，否则每点一次按钮
     // 就多一条空会话）。已有会话就续写，没有就让后端建一个并回传 id。
     persist: !chatThreadId.value,
@@ -2207,7 +2225,7 @@ const runAgentChat = async (text) => {
     .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
     .slice(-8)
     .map(m => ({ role: m.role, content: m.content }))
-  messages.value.push({ role: 'user', content: text })
+  messages.value.push({ role: 'user', content: text, skills: currentSkills() })
   aiInput.value = ''
   chatLoading.value = true
   startWait()
@@ -2349,13 +2367,21 @@ const applyThread = async (id) => {
   // 会话内容被对话线程整个换掉了：问数记录的「当前对话」也随之作废，
   // 之后的追问该另起一条记录，而不是并进一条八竿子打不着的旧记录
   askThreadId.value = ''
-  messages.value = rows.map(row => ({
-    role: row.role,
-    // 老会话里存着「（只基于表 … 回答…）」这段元指令：不剥掉的话，重开记录就看见
-    // 一行用户从没敲过的话（还会被当成历史再次发给模型，强化「不要扩散」）
-    content: stripScopeHint(row.content),
-    usage: row.usage ? safeParse(row.usage) : null
-  }))
+  messages.value = rows.map(row => {
+    // 落库时把技能名写进 meta.skills；老消息没有 meta（null）就没有标签
+    const meta = row.meta && typeof row.meta === 'object' ? row.meta : null
+    const skills = Array.isArray(meta?.skills)
+      ? meta.skills.map((name, i) => ({ id: `s${i}`, name: String(name) }))
+      : []
+    return {
+      role: row.role,
+      // 老会话里存着「（只基于表 … 回答…）」这段元指令：不剥掉的话，重开记录就看见
+      // 一行用户从没敲过的话（还会被当成历史再次发给模型，强化「不要扩散」）
+      content: stripScopeHint(row.content),
+      usage: row.usage ? safeParse(row.usage) : null,
+      skills
+    }
+  })
   scrollBottom()
 }
 
@@ -3033,6 +3059,16 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 }
 
 .msg-text { white-space: pre-wrap; word-break: break-word; }
+/* 用户气泡里的技能标签：像 @提及 一样嵌在正文前面（主色底上叠一层半透明白，
+   不用实心主色 —— 那会和气泡融成一块，看不清是个标签） */
+.msg-skill-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-right: 6px; padding: 1px 7px 1px 6px; border-radius: 6px;
+  background: rgba(255, 255, 255, .22); border: 1px solid rgba(255, 255, 255, .32);
+  font-size: 11.5px; line-height: 1.7; vertical-align: 1px;
+  white-space: nowrap;
+}
+.msg-body { white-space: pre-wrap; }
 /* 消息内代码块：底色比气泡深一档（--ai-inset-bg），靠底色而不是边框拉开层次，
    去掉描边后块内更干净、也不与气泡边框「线条打架」。
    注意 v-html 渲染出来的 <pre> 没有 scoped 属性，必须用 :deep() 才能命中 */

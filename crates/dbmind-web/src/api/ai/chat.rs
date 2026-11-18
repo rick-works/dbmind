@@ -215,6 +215,9 @@ pub async fn chat(State(state): State<AppState>, Json(req): Json<AiRequest>) -> 
     // 对话里选中的插件技能（设置 → 插件中心装的 skill）：提示词拼进 system，
     // 之后每一轮都持续生效 —— 所以技能不是「点一次跑一次」，而是这段对话的人格
     let base = crate::api::plugins::augment_system(base, &req.plugin_skills, req.lang.as_deref());
+    // 这一问带了哪些技能（气泡上要显示技能标签，重开记录也得看得见）。
+    // 只记名字，不记提示词 —— 提示词随时可能随插件升级变化，快照进库反而误导。
+    let skill_meta = (!req.skill_labels.is_empty()).then(|| json!({ "skills": req.skill_labels.clone() }));
     // 会话记账：先落用户这一句（这样即使模型调用失败，用户问过什么也留得住）
     let thread = teammate::begin_turn(
         req.thread_id.as_deref(),
@@ -224,7 +227,7 @@ pub async fn chat(State(state): State<AppState>, Json(req): Json<AiRequest>) -> 
         &question,
     );
     if let Some(thread) = &thread {
-        teammate::append_message(thread, "user", &question, None);
+        teammate::append_message(thread, "user", &question, None, skill_meta.as_ref());
     }
     // 预算闸门：超了要么降级（不注入上下文 + 可选便宜模型），要么直接拒绝
     let downgraded = gate_budget()?;
@@ -244,7 +247,7 @@ pub async fn chat(State(state): State<AppState>, Json(req): Json<AiRequest>) -> 
     config::audit("chat", &question);
     let (content, usage) = run_blocking(move || config::chat_with_usage(&model, &system, &messages)).await?;
     if let Some(thread) = &thread {
-        teammate::append_message(thread, "assistant", &content, usage.as_ref());
+        teammate::append_message(thread, "assistant", &content, usage.as_ref(), None);
     }
     spawn_memory_extract(&state, &req, &question);
     Ok(Json(json!({
@@ -281,6 +284,8 @@ pub async fn chat_stream(State(state): State<AppState>, Json(req): Json<AiReques
     };
     // 未配置模型等错误在这一步就以 JSON 返回（前端能显示出来），而不是开一个流再报错
     let model = config::resolve_with_budget(req.model_id.as_deref(), downgraded)?;
+    // 同 chat：把技能名随用户这一句落库（气泡标签）
+    let skill_meta = (!req.skill_labels.is_empty()).then(|| json!({ "skills": req.skill_labels.clone() }));
     // 会话记账放在 resolve 之后：模型没配好时直接报错，不该留下一条只有问题、
     // 永远等不到回答的会话（那种会话在列表里点开就是断片）
     let thread = teammate::begin_turn(
@@ -291,7 +296,7 @@ pub async fn chat_stream(State(state): State<AppState>, Json(req): Json<AiReques
         &question,
     );
     if let Some(thread) = &thread {
-        teammate::append_message(thread, "user", &question, None);
+        teammate::append_message(thread, "user", &question, None, skill_meta.as_ref());
     }
     // 同 chat：历史走双预算，流式接口一次都不该多付
     let mut messages = req.bounded_history();
@@ -333,7 +338,7 @@ pub async fn chat_stream(State(state): State<AppState>, Json(req): Json<AiReques
             //上游没给 usage 时**不发这一帧** —— 前端据此显示"未提供"，而不是显示 0。
             Ok(usage) => {
                 if let Some(thread) = &stream_thread {
-                    teammate::append_message(thread, "assistant", &answer, usage.as_ref());
+                    teammate::append_message(thread, "assistant", &answer, usage.as_ref(), None);
                 }
                 match usage {
                     Some(usage) => format!(
