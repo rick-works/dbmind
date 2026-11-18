@@ -1298,6 +1298,25 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
 .ai-model-dropdown .el-dropdown-menu__item.ai-dd-group:first-child {
   border-top: 0; margin-top: 0; padding-top: 2px;
 }
+
+/* Skills 下拉里的开关面板：不用 el-dropdown-item（那套点一次就收起），
+   自绘行 + el-switch —— 内置能力单选、插件技能多选，与输入框里的 chip 双向同步 */
+.ai-model-dropdown .skill-switch-panel { padding: 4px 6px 8px; min-width: 216px; }
+.ai-model-dropdown .skill-switch-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 8px; border-radius: 8px; cursor: pointer;
+  transition: background .15s ease;
+}
+.ai-model-dropdown .skill-switch-row:hover { background: var(--dc-primary-wash); }
+.ai-model-dropdown .skill-switch-ic { color: var(--dc-primary); font-size: 14px; }
+.ai-model-dropdown .skill-switch-tx {
+  flex: 1; min-width: 0; font-size: 13px; color: var(--dc-text);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-model-dropdown .skill-switch-empty { padding: 6px 8px 2px; font-size: 12px; color: var(--dc-text-weak); }
+.ai-model-dropdown .ai-dd-head.is-plugin {
+  margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--dc-border);
+}
 /* 条目内的图标 / 名称 / 勾 */
 .ai-model-dropdown .skills-ic { flex-shrink: 0; color: var(--dc-text-dim); font-size: 14px; }
 .ai-model-dropdown .el-dropdown-menu__item.active .skills-ic { color: var(--dc-primary); }

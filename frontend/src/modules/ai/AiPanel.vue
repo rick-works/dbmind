@@ -347,6 +347,38 @@
                 <span class="composer-ctx-tx">{{ $t('ai.mate') }}</span>
                 <span v-if="alertCount" class="mate-badge">{{ alertCount }}</span>
               </button>
+              <!-- Skills：按钮文案恒定「Skills」（不随当前页变化），点开是一排开关 ——
+                   内置能力单选（打开一个就切到那页、关掉回自由对话）、插件技能多选。
+                   与输入框内的 chip 是同一份状态，两边点都同步 -->
+              <el-dropdown ref="skillDropRef" data-g="5" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
+                           :hide-on-click="false" @visible-change="onSkillVisible">
+                <button class="skill-btn" :class="{ open: skillsOpen }" type="button" :title="$t('ai.pickSkill')">
+                  <el-icon class="skill-btn-ic"><MagicStick /></el-icon>
+                  <span class="skill-btn-tx">{{ $t('ai.skills') }}</span>
+                  <el-icon class="skill-btn-caret"><ArrowDown /></el-icon>
+                </button>
+                <template #dropdown>
+                  <!-- 不用 el-dropdown-item：那套点一下就收起，多选开关需要面板常开 -->
+                  <div class="skill-switch-panel">
+                    <div class="ai-dd-head">{{ $t('ai.builtinSkills') }}</div>
+                    <div v-for="s in tabs" :key="s.key" class="skill-switch-row" @click="pickBuiltin(s.key)">
+                      <el-icon class="skill-switch-ic"><component :is="s.icon" /></el-icon>
+                      <span class="skill-switch-tx">{{ s.label }}</span>
+                      <el-switch :model-value="tab === s.key" size="small"
+                                 @update:model-value="pickBuiltin(s.key)" @click.stop />
+                    </div>
+                    <div class="ai-dd-head is-plugin">{{ $t('ai.pluginSkills') }}</div>
+                    <div v-for="p in pluginSkills" :key="p.id" class="skill-switch-row" @click="togglePickedSkill(p.id)">
+                      <el-icon class="skill-switch-ic"><MagicStick /></el-icon>
+                      <span class="skill-switch-tx" :title="p.description">{{ p.name }}</span>
+                      <el-switch :model-value="isPicked(p.id)" size="small"
+                                 @update:model-value="togglePickedSkill(p.id)" @click.stop />
+                    </div>
+                    <div v-if="!pluginSkills.length" class="skill-switch-empty">{{ $t('ai.pluginSkillsEmpty') }}</div>
+                  </div>
+                </template>
+              </el-dropdown>
+
               <!-- 上下文：同样复用「模型」下拉的 el-dropdown；树形数据拍平成下拉项 -->
               <!-- placement 用 top-start，但**必须**让 popper 自己避让视口：
                    上下文列表带层级缩进、项多且库名一长整块就很宽，贴着窗口右边时会整块铺到屏幕外。
@@ -740,12 +772,26 @@ const pickBuiltin = (key) => {
   pickSkill(key)
 }
 
+const skillsOpen = ref(false)
+/** 几个下拉互斥：每个都持有 ref，打开一个就收起其它 */
+const skillDropRef = ref(null)
 const ctxDropRef = ref(null)
 const modelDropRef = ref(null)
+const closeSkillDrop = () => skillDropRef.value?.handleClose?.()
 const closeCtxDrop = () => ctxDropRef.value?.handleClose?.()
 const closeModelDrop = () => modelDropRef.value?.handleClose?.()
 const tbDropRef = ref(null)
 const closeTbDrop = () => tbDropRef.value?.handleClose?.()
+
+/** Skills 下拉展开：刷插件清单（刚在设置里装的要能立刻出现），并收起其它下拉 */
+const onSkillVisible = (visible) => {
+  skillsOpen.value = visible
+  if (!visible) return
+  closeCtxDrop()
+  closeModelDrop()
+  closeTbDrop()
+  loadPluginSkills()
+}
 
 // ===== 聚焦表（多选）：工具条上独立的表选择器 =====
 const tbOpen = ref(false)
@@ -781,6 +827,7 @@ const loadTbItems = async () => {
 const onTbVisible = (visible) => {
   tbOpen.value = visible
   if (!visible) return
+  closeSkillDrop()
   closeCtxDrop()
   closeModelDrop()
   kbDropRef.value?.handleClose?.()
@@ -1288,6 +1335,7 @@ const onPickModel = (cmd) => { if (cmd) selectedModelId.value = cmd }
 /** 模型下拉展开时收起另两个下拉（同一时刻只开一个） */
 const onModelVisible = (visible) => {
   if (!visible) return
+  closeSkillDrop()
   closeCtxDrop()
 }
 
@@ -1382,6 +1430,7 @@ onBeforeUnmount(() => clearTimeout(warmTimer))
 const onCtxVisible = async (visible) => {
   ctxOpen.value = visible
   if (!visible) return
+  closeSkillDrop()
   closeModelDrop()
   closeTbDrop()
   if (ctxFlatItems.value.length === 0) await loadCtxConnections()
@@ -2684,7 +2733,21 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .hist-del:hover { background: rgba(220, 60, 60, .14); }
 .hist-empty { padding: 22px 8px; text-align: center; font-size: 11.5px; line-height: 1.7; color: var(--dc-text-weak); }
 
-/* 技能选择器：内置能力 + 插件技能全部平铺在输入框上方（没有任何下拉）
+/* Skills 按钮：文案恒定「Skills」，不随当前页变化（当前在哪由输入框里的 chip 表达） */
+.skill-btn {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  height: 28px; padding: 0 10px; border: 1px solid var(--dc-border); border-radius: 8px; cursor: pointer;
+  background: transparent; color: var(--dc-text); font-size: 13px; font-family: inherit;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+.skill-btn:hover { border-color: var(--dc-primary); color: var(--dc-primary); }
+.skill-btn.open { border-color: var(--dc-primary); color: var(--dc-primary); background: var(--dc-primary-wash); }
+.skill-btn-ic { color: var(--dc-primary); }
+.skill-btn-tx { font-weight: 400; }
+.skill-btn-caret { font-size: 13px; color: var(--dc-text-weak); transition: transform .18s ease; }
+.skill-btn.open .skill-btn-caret { transform: rotate(180deg); }
+
+/* 技能 chip：内置能力 + 插件技能平铺在输入框上方，与下拉里的开关共用同一份状态
    一行放不下就换行；chip 高 23px 是压过很多轮的高度，再高输入区就被挤扁了 */
 .skill-picker {
   display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
@@ -2762,9 +2825,11 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
    对称 padding 让图标居中；悬浮 v-fast-tip 快速提示。条目本身不可收缩，溢出才触发。 */
 .composer-bar > * { flex-shrink: 0; }
 .composer-bar .icon-only .composer-ctx-tx,
-.composer-bar .icon-only .composer-pick-tx { display: none; }
+.composer-bar .icon-only .composer-pick-tx,
+.composer-bar .icon-only .skill-btn-tx { display: none; }
 .composer-bar .icon-only .composer-ctx,
-.composer-bar .icon-only .composer-pick { padding: 0 8px; max-width: none; }
+.composer-bar .icon-only .composer-pick,
+.composer-bar .icon-only .skill-btn { padding: 0 8px; max-width: none; }
 .composer-bar .icon-only .composer-ctx :deep(span),
 .composer-bar .icon-only .composer-pick :deep(span) { display: none; }
 .composer-bar .icon-only .composer-ctx :deep(.el-icon:first-child),
