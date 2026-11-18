@@ -123,22 +123,6 @@
                 </div>
               </div>
 
-              <!-- 插件技能（设置 → 插件中心装好的）：点一下勾上，之后提问就按它的要求作答 -->
-              <div v-if="pluginSkills.length" class="welcome-block">
-                <div class="welcome-section-title"><el-icon><MagicStick /></el-icon>{{ $t('ai.pluginSkills') }}</div>
-                <div class="welcome-grid">
-                  <button v-for="p in pluginSkills" :key="p.id" class="welcome-card" type="button"
-                          :class="{ 'is-on': isPicked(p.id) }" :title="p.description"
-                          @click="togglePickedSkill(p.id)">
-                    <el-icon class="welcome-card-ic"><MagicStick /></el-icon>
-                    <span class="welcome-card-tx">
-                      <span class="welcome-card-name">{{ p.name }}</span>
-                      <span class="welcome-card-desc">{{ p.description }}</span>
-                    </span>
-                    <el-icon v-if="isPicked(p.id)" class="welcome-card-check"><Select /></el-icon>
-                  </button>
-                </div>
-              </div>
 
               <div class="welcome-block">
                 <div class="welcome-section-title"><el-icon><ChatDotRound /></el-icon>{{ $t('ai.tryAsk') }}</div>
@@ -322,16 +306,26 @@
 
           <!-- 输入域 + 工具条同属一个「框」，工具条贴在框内底部 -->
           <div class="composer-box">
-            <!-- 已选插件技能：摆在输入框正上方 —— 「选了哪个技能」要一眼看见，
-                 点 × 取消（技能在这段对话里持续生效，所以必须随手可摘） -->
-            <div v-if="pickedSkills.length" class="picked-skills">
-              <span v-for="s in pickedSkills" :key="s.id" class="picked-skill" :title="s.description">
-                <el-icon :size="11"><MagicStick /></el-icon>
-                <span class="picked-skill-tx">{{ s.name }}</span>
-                <button class="picked-skill-x" type="button" :title="$t('ai.skillRemove')" @click="unpickSkill(s.id)">
-                  <el-icon :size="10"><Close /></el-icon>
+            <!-- 技能选择器：内置能力与插件技能**全部平铺在输入框上方**，没有下拉。
+                 内置 = 单选（点一次进那个页、再点一次回自由对话）；
+                 插件 = 多选（可叠加，选中后在对话里持续生效，点 × 摘掉） -->
+            <div class="skill-picker">
+              <span class="skill-pick-label">{{ $t('ai.builtinSkills') }}</span>
+              <button v-for="s in tabs" :key="s.key" class="skill-chip" :class="{ on: tab === s.key }"
+                      type="button" :title="s.desc" @click="pickBuiltin(s.key)">
+                <el-icon :size="12"><component :is="s.icon" /></el-icon>
+                <span class="skill-chip-tx">{{ s.label }}</span>
+              </button>
+              <template v-if="pluginSkills.length">
+                <span class="skill-pick-label is-plugin">{{ $t('ai.pluginSkills') }}</span>
+                <button v-for="p in pluginSkills" :key="p.id" class="skill-chip" :class="{ on: isPicked(p.id) }"
+                        type="button" :title="p.description" @click="togglePickedSkill(p.id)">
+                  <el-icon :size="12"><MagicStick /></el-icon>
+                  <span class="skill-chip-tx">{{ p.name }}</span>
+                  <el-icon v-if="isPicked(p.id)" class="skill-chip-x" :title="$t('ai.skillRemove')"
+                           @click.stop="unpickSkill(p.id)"><Close /></el-icon>
                 </button>
-              </span>
+              </template>
             </div>
             <el-input ref="inputRef" v-model="aiInput" type="textarea" :rows="3" resize="none" class="composer-textarea"
                       :placeholder="composePlaceholder"
@@ -353,51 +347,6 @@
                 <span class="composer-ctx-tx">{{ $t('ai.mate') }}</span>
                 <span v-if="alertCount" class="mate-badge">{{ alertCount }}</span>
               </button>
-              <!-- Skills：完全复用「模型」下拉的 el-dropdown，样式天然一致。
-                   插件技能在这里是**勾选式多选**（hide-on-click=false），选中后在对话里持续生效 -->
-              <el-dropdown ref="skillDropRef" data-g="5" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
-                           :hide-on-click="false" @command="pickSkill" @visible-change="onSkillVisible">
-                <button class="skill-btn" :class="{ open: skillsOpen, 'has-pick': pickedSkills.length }" type="button"
-                        :title="skillBtnLabel">
-                  <el-icon class="skill-btn-ic"><MagicStick /></el-icon>
-                  <span class="skill-btn-tx">{{ skillBtnLabel }}</span>
-                  <span v-if="pickedSkills.length" class="skill-btn-badge">{{ pickedSkills.length }}</span>
-                  <el-icon class="skill-btn-caret"><ArrowDown /></el-icon>
-                </button>
-                <template #dropdown>
-                  <div class="ai-dd-head">{{ $t('ai.pickSkill') }}</div>
-                  <el-dropdown-menu class="ai-model-menu">
-                    <!-- 自由对话是默认态，不在列表里（见 tabs 上的注释） -->
-                    <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.builtinSkills') }}</el-dropdown-item>
-                    <el-dropdown-item
-                      v-for="t in tabs"
-                      :key="t.key"
-                      :command="t.key"
-                      :class="{ active: tab === t.key }"
-                      :title="t.desc"
-                    >
-                      <el-icon class="skills-ic"><component :is="t.icon" /></el-icon>
-                      <span class="skills-name">{{ t.label }}</span>
-                      <el-icon v-if="tab === t.key" class="skills-check"><Select /></el-icon>
-                    </el-dropdown-item>
-                    <!-- 插件技能：装了几个就列几个；点一下勾上（再点取消），不切页、不弹窗 -->
-                    <template v-if="pluginSkills.length">
-                      <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.pluginSkills') }}</el-dropdown-item>
-                      <el-dropdown-item v-for="p in pluginSkills" :key="'plugin:' + p.id"
-                                        :command="'plugin:' + p.id" :class="{ active: isPicked(p.id) }"
-                                        :title="p.description">
-                        <el-icon class="skills-ic"><MagicStick /></el-icon>
-                        <span class="skills-name">{{ p.name }}</span>
-                        <el-icon v-if="isPicked(p.id)" class="skills-check"><Select /></el-icon>
-                      </el-dropdown-item>
-                    </template>
-                    <el-dropdown-item v-if="!pluginSkills.length" disabled class="ai-dd-group">
-                      {{ $t('ai.pluginSkillsEmpty') }}
-                    </el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
-
               <!-- 上下文：同样复用「模型」下拉的 el-dropdown；树形数据拍平成下拉项 -->
               <!-- placement 用 top-start，但**必须**让 popper 自己避让视口：
                    上下文列表带层级缩进、项多且库名一长整块就很宽，贴着窗口右边时会整块铺到屏幕外。
@@ -782,18 +731,17 @@ const togglePickedSkill = (id) => {
   return true
 }
 const unpickSkill = (id) => { togglePickedSkill(id) }
-/** 工具条按钮：固定显示 Skills（用户要的是「技能入口」而不是「当前页名」），
- *  只有切到内置专用页时才在后面补一句它叫什么，避免用户不知道自己在哪 */
-const skillBtnLabel = computed(() => tab.value === 'chat'
-  ? t('ai.skills')
-  : `${t('ai.skills')} · ${currentSkill.value.label}`)
+/** 内置能力也是 chip：点一下进那个页，再点一次回到自由对话（默认态） */
+const pickBuiltin = (key) => {
+  if (tab.value === key) {
+    tab.value = 'chat'
+    return
+  }
+  pickSkill(key)
+}
 
-const skillsOpen = ref(false)
-/** 三个下拉互斥：每个下拉都持有 ref，以便其它下拉把它收起 */
-const skillDropRef = ref(null)
 const ctxDropRef = ref(null)
 const modelDropRef = ref(null)
-const closeSkillDrop = () => skillDropRef.value?.handleClose?.()
 const closeCtxDrop = () => ctxDropRef.value?.handleClose?.()
 const closeModelDrop = () => modelDropRef.value?.handleClose?.()
 const tbDropRef = ref(null)
@@ -833,7 +781,6 @@ const loadTbItems = async () => {
 const onTbVisible = (visible) => {
   tbOpen.value = visible
   if (!visible) return
-  closeSkillDrop()
   closeCtxDrop()
   closeModelDrop()
   kbDropRef.value?.handleClose?.()
@@ -846,26 +793,14 @@ const toggleCtxTable = (name) => {
   if (i >= 0) ctxTables.value.splice(i, 1)
   else ctxTables.value.push(name)
 }
-/** Skills 下拉展开/收起：同步状态并关闭其它下拉 */
-const onSkillVisible = (visible) => {
-  skillsOpen.value = visible
-  if (!visible) return
-  ctxDropRef.value?.handleClose?.()
-  closeModelDrop()
-  closeTbDrop()
-  // 顺带刷新插件技能：用户可能刚在设置里装了新的
-  loadPluginSkills()
-}
-/** 选择 Skill：切换能力（下拉自动收起）。返回是否真的切了（斜杠命令用它决定要不要提示） */
+/** 选择 Skill：切换能力。返回是否真的切了（斜杠命令用它决定要不要提示） */
 const pickSkill = (key) => {
-  // 插件技能：command 形如 `plugin:<id>` —— 勾选/取消（可多选），不切页也不关下拉，
-  // 用户能在一次展开里连点几个
+  // 插件技能：勾选/取消（可多选），不切页 —— 它在对话里叠加生效
   if (typeof key === 'string' && key.startsWith('plugin:')) {
     return togglePickedSkill(key.slice('plugin:'.length))
   }
   if (!tabs.value.some((x) => x.key === key)) return false
   tab.value = key
-  closeSkillDrop()
   return true
 }
 
@@ -1187,7 +1122,10 @@ const slashIndex = ref(0)
 /** 仅当输入以 / 开头、且后面还没敲空格时进入命令模式（避免正常句子里带 / 时误触发） */
 const onComposeInput = () => {
   slashOpen.value = /^\/\S*$/.test(aiInput.value)
-  if (slashOpen.value) slashIndex.value = 0
+  if (!slashOpen.value) return
+  slashIndex.value = 0
+  // 命令列表里含插件技能：刚在设置里装了新的，这里要能立刻看到（内部有 5s 节流）
+  loadPluginSkills()
 }
 
 // ===== 语音输入：浏览器 Web Speech API（Chrome / Edge 内置语音识别，零依赖、无需后端与密钥） =====
@@ -1350,7 +1288,6 @@ const onPickModel = (cmd) => { if (cmd) selectedModelId.value = cmd }
 /** 模型下拉展开时收起另两个下拉（同一时刻只开一个） */
 const onModelVisible = (visible) => {
   if (!visible) return
-  closeSkillDrop()
   closeCtxDrop()
 }
 
@@ -1445,7 +1382,6 @@ onBeforeUnmount(() => clearTimeout(warmTimer))
 const onCtxVisible = async (visible) => {
   ctxOpen.value = visible
   if (!visible) return
-  closeSkillDrop()
   closeModelDrop()
   closeTbDrop()
   if (ctxFlatItems.value.length === 0) await loadCtxConnections()
@@ -2748,42 +2684,33 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .hist-del:hover { background: rgba(220, 60, 60, .14); }
 .hist-empty { padding: 22px 8px; text-align: center; font-size: 11.5px; line-height: 1.7; color: var(--dc-text-weak); }
 
-/* 当前 Skill 按钮：工具条内统一样式（描边框 + 无底，悬浮/展开时主色高亮） */
-.skill-btn {
-  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
-  height: 28px; padding: 0 10px; border: 1px solid var(--dc-border); border-radius: 8px; cursor: pointer;
-  background: transparent;
-  color: var(--dc-text); font-size: 13px; font-family: inherit;
+/* 技能选择器：内置能力 + 插件技能全部平铺在输入框上方（没有任何下拉）
+   一行放不下就换行；chip 高 23px 是压过很多轮的高度，再高输入区就被挤扁了 */
+.skill-picker {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  padding: 9px 12px 2px;
+}
+.skill-pick-label {
+  font-size: 11px; line-height: 1; color: var(--dc-text-weak);
+  padding-right: 1px; flex-shrink: 0;
+}
+.skill-pick-label.is-plugin { margin-left: 4px; padding-left: 9px; border-left: 1px solid var(--dc-border); }
+.skill-chip {
+  display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+  height: 23px; padding: 0 9px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--dc-border); background: transparent;
+  color: var(--dc-text-dim); font-size: 12px; font-family: inherit;
   transition: background .15s ease, color .15s ease, border-color .15s ease;
 }
-.skill-btn:hover { border-color: var(--dc-primary); color: var(--dc-primary); }
-.skill-btn.open { border-color: var(--dc-primary); color: var(--dc-primary); background: var(--dc-primary-wash); }
-.skill-btn-ic { color: var(--dc-primary); }
-/* 与其它控件（上下文 / 模型下拉）保持一致：常规字重，不要加粗 */
-.skill-btn-tx { font-weight: 400; }
-/* 有选中插件技能时按钮本身就是「已启用」的状态指示 */
-.skill-btn.has-pick { border-color: var(--dc-primary); color: var(--dc-primary); }
-.skill-btn-badge {
-  min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
-  background: var(--dc-primary); color: #fff; font-size: 10.5px; line-height: 15px; text-align: center;
+.skill-chip:hover { border-color: var(--dc-primary); color: var(--dc-primary); }
+.skill-chip.on {
+  border-color: var(--dc-primary); background: var(--dc-primary-wash); color: var(--dc-primary);
 }
-.skill-btn-caret { font-size: 13px; color: var(--dc-text-weak); transition: transform .18s ease; }
-.skill-btn.open .skill-btn-caret { transform: rotate(180deg); }
-
-/* 已选插件技能：输入框正上方的一排 chip（点 × 摘掉，技能在这段对话里持续生效） */
-.picked-skills { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 0; }
-.picked-skill {
-  display: inline-flex; align-items: center; gap: 4px; max-width: 100%;
-  padding: 2px 5px 2px 8px; border-radius: 999px;
-  background: var(--dc-primary-wash); border: 1px solid var(--dc-primary-glow);
-  color: var(--dc-primary); font-size: 11.5px; line-height: 1.7;
+.skill-chip-x {
+  margin-left: 2px; border-radius: 50%;
+  transition: background .15s ease, color .15s ease;
 }
-.picked-skill-tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.picked-skill-x {
-  display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px;
-  padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--dc-primary); cursor: pointer;
-}
-.picked-skill-x:hover { background: var(--dc-primary); color: #fff; }
+.skill-chip-x:hover { background: var(--dc-primary); color: #fff; }
 
 /* 下拉弹层样式（小标题 / 条目 / 选中态 / 数据源层级的图标与引导线）统一放在
    src/styles/index.css：弹层被 teleport 到 body，写在本组件的 scoped 块里根本命不中。 */
@@ -2835,11 +2762,9 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
    对称 padding 让图标居中；悬浮 v-fast-tip 快速提示。条目本身不可收缩，溢出才触发。 */
 .composer-bar > * { flex-shrink: 0; }
 .composer-bar .icon-only .composer-ctx-tx,
-.composer-bar .icon-only .composer-pick-tx,
-.composer-bar .icon-only .skill-btn-tx { display: none; }
+.composer-bar .icon-only .composer-pick-tx { display: none; }
 .composer-bar .icon-only .composer-ctx,
-.composer-bar .icon-only .composer-pick,
-.composer-bar .icon-only .skill-btn { padding: 0 8px; max-width: none; }
+.composer-bar .icon-only .composer-pick { padding: 0 8px; max-width: none; }
 .composer-bar .icon-only .composer-ctx :deep(span),
 .composer-bar .icon-only .composer-pick :deep(span) { display: none; }
 .composer-bar .icon-only .composer-ctx :deep(.el-icon:first-child),
@@ -2934,9 +2859,6 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .welcome-card:hover .welcome-card-ic { background: var(--dc-bg-card); }
 .welcome-card-tx { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .welcome-card-name { font-size: 13px; font-weight: 600; }
-/* 插件技能卡片：勾上后整卡描主色（与下拉里的勾选状态一致） */
-.welcome-card.is-on { border-color: var(--dc-primary); background: var(--dc-primary-wash); }
-.welcome-card-check { align-self: center; margin-left: auto; flex-shrink: 0; color: var(--dc-primary); }
 /* 描述最多两行：卡片更饱满，也避免长描述把列宽撑歪 */
 .welcome-card-desc {
   font-size: 12px; line-height: 1.5; color: var(--dc-text-weak);

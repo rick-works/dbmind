@@ -47,7 +47,7 @@
         "zh": "SQL 审查",
         "en": "SQL Review"
       },
-      "version": "1.0.1",
+      "version": "1.0.2",
       "author": "DBMind",
       "description": {
         "zh": "按性能、正确性、可维护性三档逐条审查 SQL，给出风险等级与可直接替换的改写版本。",
@@ -55,9 +55,9 @@
       },
       "homepage": "https://www.dbmind.top/#plugins",
       "needsContext": true,
-      "sha256": "5248d8eb12220a6d9d01e32030128eb6deeac1e6ba11f0c8a87ba5281535e8d1",
-      "size": 3453,
-      "download": "https://www.dbmind.top/plugins/packages/sql-review-1.0.1.zip"
+      "sha256": "8cb4cf9bf7b604e2034cac44cc2fb7ecb4adf443772d43faf82ba0cde62a767c",
+      "size": 3556,
+      "download": "https://www.dbmind.top/plugins/packages/sql-review-1.0.2.zip"
     },
     {
       "id": "table-design-check",
