@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "sql-review",
+  "type": "skill",
+  "name": { "zh": "SQL 审查", "en": "SQL Review" },
+  "version": "1.0.0",
+  "author": "DBMind",
+  "homepage": "https://www.dbmind.top/#plugins",
+  "description": {
+    "zh": "按性能、正确性、可维护性三档逐条审查 SQL，给出风险等级与可直接替换的改写版本。",
+    "en": "Review a SQL statement for performance, correctness and maintainability, with risk levels and a rewritten version."
+  },
+  "minAppVersion": "2.0.28",
+  "needsContext": true,
+  "prompt": "prompt.md",
+  "inputs": [
+    {
+      "key": "sql",
+      "type": "text",
+      "label": { "zh": "待审查的 SQL", "en": "SQL to review" },
+      "placeholder": { "zh": "粘贴一条查询或 DML", "en": "Paste a query or DML" },
+      "required": true,
+      "rows": 8
+    },
+    {
+      "key": "focus",
+      "type": "text",
+      "label": { "zh": "关注点（可选）", "en": "Focus (optional)" },
+      "placeholder": { "zh": "例如：只看索引使用 / 只看是否有全表扫描", "en": "e.g. index usage only" },
+      "required": false,
+      "rows": 2
+    }
+  ]
+}

@@ -303,6 +303,26 @@ export const clearSchemaCache = () => http.delete('/api/dbmind/schema-cache').th
 export const getCacheItems = () => http.get('/api/dbmind/cache').then(r => r.data)
 export const clearCaches = (keys) => http.post('/api/dbmind/cache', { keys }).then(r => r.data)
 
+// ------------------------------------------------------------------ 插件中心
+// 插件是**声明式扩展包**（manifest + 提示词），装在 ~/.dbmind/plugins/<id>/，
+// 不带任何可执行文件 —— 后端解压时按后缀拦截（见 api/plugins.rs）。
+// 安装是同步长请求（下载 + 解压，单包限 8 MB），超时给足。
+export const listPlugins = () => http.get('/api/plugins', { timeout: 15000 }).then(r => r.data)
+// 官网索引：拉不到返回 { ok: false, error }（不是 HTTP 错误，界面显示「离线」而不是弹报错）
+export const getPluginCatalog = () => http.get('/api/plugins/catalog', { timeout: 30000 }).then(r => r.data)
+export const installPlugin = (body) => http.post('/api/plugins/install', body, { timeout: 120000 }).then(r => r.data)
+export const installPluginFile = (file) => {
+  const fd = new FormData()
+  fd.append('file', file)
+  return http.post('/api/plugins/install-file', fd, { timeout: 120000 }).then(r => r.data)
+}
+export const setPluginEnabled = (id, on) =>
+  http.post(`/api/plugins/${encodeURIComponent(id)}/${on ? 'enable' : 'disable'}`).then(r => r.data)
+export const uninstallPlugin = (id) => http.delete(`/api/plugins/${encodeURIComponent(id)}`).then(r => r.data)
+// 运行技能：一次模型调用（带表结构时可到十几秒）
+export const runPluginSkill = (id, body) =>
+  http.post(`/api/plugins/${encodeURIComponent(id)}/run`, body, { timeout: 180000 }).then(r => r.data)
+
 // 数据库元数据（关系型）——按连接类型路由到数据源模块 /api/{module}
 export const getFeatures = async (id) => { const b = await baseOf(id); return http.get(`${b}/${id}/features`).then(r => r.data) }
 // catalog 清单：只有 catalog 层级的类型（目前 Doris）会返回非空，其余类型返回 `[]`

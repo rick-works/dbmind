@@ -538,6 +538,28 @@
   body.version-only #releases { padding: 96px 0 60px; }
   body.version-only .rel-timeline { margin-top: 0; }
   body.version-only #releases .reveal { opacity: 1; transform: none; }
+  /* 插件中心：与「版本」「文档」同一套独占视图（只留导航 + 该区块）。
+     内容由 plugins/index.json 动态渲染 —— 插件包在 website/plugins/packages/ 下，
+     产品里的「插件中心」拉的也是同一份索引，所以这里列的就是能一键装的那些。 */
+  body.plugin-only > *:not(nav):not(#plugins) { display: none !important; }
+  body:not(.plugin-only) #plugins { display: none !important; }
+  body.plugin-only #plugins { padding: 96px 0 60px; }
+  body.plugin-only #plugins .reveal { opacity: 1; transform: none; }
+  .plg-head { text-align: center; max-width: 720px; margin: 0 auto 26px; }
+  .plg-head h2 { margin: 0 0 10px; }
+  .plg-head p { margin: 0; color: var(--muted); line-height: 1.75; font-size: 14.5px; }
+  .plg-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+  .plg-item { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card);
+    padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+  .plg-item h3 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+  .plg-ver { font-size: 11.5px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+  .plg-item p { margin: 0; color: var(--muted); font-size: 13.5px; line-height: 1.65; }
+  .plg-meta { font-size: 12px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; }
+  .plg-acts { display: flex; align-items: center; gap: 10px; margin-top: auto; padding-top: 4px; }
+  .plg-note { margin-top: 22px; font-size: 13px; color: var(--muted); line-height: 1.9; }
+  .plg-note b { color: var(--text); font-weight: 600; }
+  .plg-note code { background: var(--panel); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; font-size: 12.5px; }
+  .plg-empty { text-align: center; color: var(--muted); font-size: 14px; padding: 24px 0; }
 
   /* ===== 滚动显现 ===== */
   .reveal { opacity: 0; transform: translateY(24px); transition: opacity .6s, transform .6s; }
@@ -1028,6 +1050,7 @@
         <a href="#workflow" data-i18n="nav.workflow">工作流</a>
         <a href="#security" data-i18n="nav.security">安全</a>
         <a href="#sponsor" data-i18n="nav.sponsor">赞助</a>
+        <a href="#plugins" data-i18n="nav.plugins">插件</a>
         <a href="#releases" data-i18n="nav.releases">版本</a>
         <a href="#docs" data-i18n="nav.docs">文档</a>
       </div>
@@ -1374,6 +1397,22 @@
         </div>
       </div>
       <p class="sponsor-note" data-i18n="sponsor.note">扫码时备注一句「DBmind」，会一一记下每一份心意 ❤️</p>
+    </div>
+  </div>
+</section>
+
+<section id="plugins">
+  <div class="wrap">
+    <div class="plg-head">
+      <h2 class="sec-title reveal" data-eyebrow="PLUGINS" data-i18n="plg.title">插件中心</h2>
+      <p data-i18n="plg.sub">插件是纯声明式扩展包（清单 + 提示词），装进客户端的插件目录即可用，不携带任何可执行文件。装好后在「设置 → 插件中心」一键安装或运行；也可以下载 zip 用「从文件安装」导入。</p>
+    </div>
+    <div class="plg-list" id="plgGrid">
+      <div class="plg-empty" data-i18n="plg.loading">正在加载插件索引…</div>
+    </div>
+    <div class="plg-note" id="plgNote">
+      <div data-i18n-html="plg.howto"><b>怎么装</b>：打开 DBMind → 设置 → 插件中心 → 「可安装」里点<b>安装</b>（客户端会从本站拉这份索引与插件包）；离线或内网环境用<b>从文件安装</b>导入下面下载到的 zip。</div>
+      <div data-i18n-html="plg.devnote" style="margin-top:8px">做插件：一个目录 = <code>manifest.json</code> + 提示词 <code>.md</code>，用 <code>node scripts/plugins/pack.mjs</code> 打包并更新索引，提交到仓库后本站自动发布。</div>
     </div>
   </div>
 </section>
@@ -4690,8 +4729,14 @@ WHERE dt = :dt AND org = :org;</code></pre>
   "nav.workflow": "Workflow",
   "nav.security": "Security",
   "nav.sponsor": "Sponsor",
+  "nav.plugins": "Plugins",
   "nav.releases": "Releases",
   "nav.docs": "Docs",
+  "plg.title": "Plugins",
+  "plg.sub": "Plugins are purely declarative packages (manifest + prompts) installed into the client's plugin folder — they never carry executable files. Install or run them in Settings → Plugins, or download a zip and use \"Install from file\".",
+  "plg.loading": "Loading the plugin index…",
+  "plg.howto": "<b>How to install</b>: open DBMind → Settings → Plugins, then hit <b>Install</b> in the Available list (the client fetches this index and the package here). Offline? Use <b>Install from file</b> with the zip downloaded below.",
+  "plg.devnote": "Build one: a folder with <code>manifest.json</code> plus a prompt <code>.md</code>, packaged by <code>node scripts/plugins/pack.mjs</code>, which also refreshes the index — commit and the site publishes it.",
   "hero.title": "Give your databases a <span class=\"grad\">mind</span><br/>One client for every database you own",
   "hero.download": "Free download",
   "hero.more": "See what it does ↓",
@@ -4888,7 +4933,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
   // 值 = 导航项下标（首页0 功能1 工作流2 安全3 赞助4 版本5 文档6）
   // 每个区块都要登记：漏登记的区块滚到它时不会点亮自己，而是**继续显示上一个区块的高亮** ——
   // 表现就是"点赞助、亮的却是安全"（此前 #sponsor 与 #releases 都漏了）。
-  const navMap = { features: 1, workflow: 2, security: 3, sponsor: 4, releases: 5, docs: 6 }
+  const navMap = { features: 1, workflow: 2, security: 3, sponsor: 4, plugins: 5, releases: 6, docs: 7 }
   const navItems = [...document.querySelectorAll('.nav-links a:not(.nav-cta)')]
   const setActive = (i) => navItems.forEach((a, j) => a.classList.toggle('active', j === i))
   setActive(0)
@@ -4945,9 +4990,10 @@ WHERE dt = :dt AND org = :org;</code></pre>
   // 文档模式：只显示文档区（导航「文档」/功能卡「查看文档」进入，「首页」/logo 退出）
   const enterDocMode = () => {
     leaveVersionMode(true)
+    document.body.classList.remove('plugin-only')
     document.body.classList.add('doc-only')
     syncNavBg()
-    setActive(6)
+    setActive(7)
     // instant：平滑滚动在内容高度骤减时会停留在中途，面板顶部被顶栏盖住
     window.scrollTo({ top: 0, behavior: 'instant' })
     // 清掉 URL 里的 hash：刷新一律回首页，不留文档视图状态
@@ -4963,8 +5009,9 @@ WHERE dt = :dt AND org = :org;</code></pre>
   // 版本模式：只显示版本区（导航「版本」进入，「首页」/logo 退出）
   const enterVersionMode = () => {
     document.body.classList.remove('doc-only')
+    document.body.classList.remove('plugin-only')
     document.body.classList.add('version-only')
-    setActive(5)
+    setActive(6)
     window.scrollTo({ top: 0, behavior: 'instant' })
     history.replaceState(null, '', location.pathname + location.search)
     document.querySelectorAll('#releases .reveal').forEach(el => el.classList.add('on'))
@@ -4974,12 +5021,70 @@ WHERE dt = :dt AND org = :org;</code></pre>
     document.body.classList.remove('version-only')
     if (!silent) setActive(0)
   }
+
+  // 插件模式：只显示插件区（导航「插件」进入）。
+  // 卡片来自 plugins/index.json —— 与产品里「插件中心」拉的是同一份索引，
+  // 所以这里看到的就是客户端能一键装的（包也在本站）。
+  let plgLoaded = false
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+  const plgLang = () => (document.documentElement.lang || 'zh').toLowerCase().startsWith('en') ? 'en' : 'zh'
+  const pickText = (v) => {
+    if (!v) return ''
+    if (typeof v === 'string') return v
+    const lang = plgLang()
+    return v[lang] || v.zh || v.en || ''
+  }
+  const loadPlugins = async () => {
+    if (plgLoaded) return
+    const grid = document.getElementById('plgGrid')
+    if (!grid) return
+    try {
+      const res = await fetch('plugins/index.json', { cache: 'no-cache' })
+      if (!res.ok) throw new Error('HTTP ' + res.status)
+      const data = await res.json()
+      const items = Array.isArray(data.plugins) ? data.plugins : []
+      if (!items.length) {
+        grid.innerHTML = '<div class="plg-empty">' + esc('还没有发布的插件') + '</div>'
+      } else {
+        grid.innerHTML = items.map((p) => {
+          const size = p.size ? (p.size / 1024).toFixed(1) + ' KB' : ''
+          return '<div class="plg-item">'
+            + '<h3>' + esc(pickText(p.name)) + '<span class="plg-ver">v' + esc(p.version) + '</span></h3>'
+            + '<p>' + esc(pickText(p.description)) + '</p>'
+            + '<div class="plg-meta"><span>' + esc(p.author || 'DBMind') + '</span><span>' + esc((p.type === 'skill' ? 'AI skill · ' : '') + size) + '</span></div>'
+            + '<div class="plg-acts"><a class="btn btn-ghost" href="' + esc(p.download) + '" download>下载 zip</a></div>'
+            + '</div>'
+        }).join('')
+      }
+      plgLoaded = true
+    } catch (e) {
+      grid.innerHTML = '<div class="plg-empty">插件索引暂时拉不到（' + esc(e.message) + '），可以直接在客户端「设置 → 插件中心」里重试。</div>'
+    }
+  }
+  const enterPluginMode = () => {
+    leaveVersionMode(true)
+    document.body.classList.remove('doc-only')
+    document.body.classList.add('plugin-only')
+    syncNavBg()
+    setActive(5)
+    window.scrollTo({ top: 0, behavior: 'instant' })
+    history.replaceState(null, '', location.pathname + location.search)
+    document.querySelectorAll('#plugins .reveal').forEach(el => el.classList.add('on'))
+    loadPlugins()
+  }
+  const leavePluginMode = () => {
+    if (!document.body.classList.contains('plugin-only')) return
+    document.body.classList.remove('plugin-only')
+  }
   // 赞助不再使用独占视图：作为普通区块嵌在安全区之后（导航锚点直接滚动过去）
   document.querySelectorAll('a[href="#docs"]').forEach(a => {
     a.addEventListener('click', (ev) => { ev.preventDefault(); enterDocMode() })
   })
   document.querySelectorAll('a[href="#releases"]').forEach(a => {
     a.addEventListener('click', (ev) => { ev.preventDefault(); enterVersionMode() })
+  })
+  document.querySelectorAll('a[href="#plugins"]').forEach(a => {
+    a.addEventListener('click', (ev) => { ev.preventDefault(); enterPluginMode() })
   })
   // 功能卡「查看文档 →」：目标小节在 #docs 里，而 #docs 平时 display:none ——
   // 纯锚点只会改 URL 不滚动（真机踩过）。先进文档模式，再把正文面板滚到对应 h2。
@@ -5000,6 +5105,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
     ev.preventDefault()
     exitDocMode()
     leaveVersionMode()
+    leavePluginMode()
     setActive(0)
     window.scrollTo({ top: 0, behavior: 'smooth' })
     history.replaceState(null, '', location.pathname + location.search)
@@ -5009,6 +5115,7 @@ WHERE dt = :dt AND org = :org;</code></pre>
   // 独占视图下点「功能 / 工作流 / 安全 / 赞助」：先退出独占视图，让默认锚点跳转滚到对应区块
   ;[1, 2, 3, 4].forEach(i => navItems[i].addEventListener('click', () => {
     document.body.classList.remove('doc-only')
+    document.body.classList.remove('plugin-only')
     leaveVersionMode(true)
   }))
   // 刷新一律回首页：不按 hash 直开文档/版本视图（进入视图时会清掉 URL hash）
@@ -5016,8 +5123,9 @@ WHERE dt = :dt AND org = :org;</code></pre>
   window.addEventListener('scroll', () => {
     syncNavBg()
     if (window.scrollY < 300) {
-      if (document.body.classList.contains('doc-only')) setActive(6)
-      else if (document.body.classList.contains('version-only')) setActive(5)
+      if (document.body.classList.contains('doc-only')) setActive(7)
+      else if (document.body.classList.contains('version-only')) setActive(6)
+      else if (document.body.classList.contains('plugin-only')) setActive(5)
       else setActive(0)
     }
   }, { passive: true })

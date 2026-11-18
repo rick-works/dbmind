@@ -1284,6 +1284,16 @@ html .el-button.is-text.dc-del.is-disabled { color: var(--dc-text-dim); opacity:
   font-size: 12px; font-weight: 600; letter-spacing: .3px;
   color: var(--dc-text-weak);
 }
+/* 菜单内的分组标题（如「插件技能」）：用 disabled 项当分隔，别让它看起来像点不动的坏条目 */
+.ai-model-dropdown .el-dropdown-menu__item.ai-dd-group {
+  padding: 6px 10px 2px;
+  font-size: 12px; font-weight: 600; letter-spacing: .3px;
+  color: var(--dc-text-weak);
+  background: transparent;
+  cursor: default;
+  border-top: 1px solid var(--dc-border);
+  margin-top: 4px;
+}
 /* 条目内的图标 / 名称 / 勾 */
 .ai-model-dropdown .skills-ic { flex-shrink: 0; color: var(--dc-text-dim); font-size: 14px; }
 .ai-model-dropdown .el-dropdown-menu__item.active .skills-ic { color: var(--dc-primary); }

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "table-design-check",
+  "type": "skill",
+  "name": { "zh": "表设计体检", "en": "Table Design Check" },
+  "version": "1.0.0",
+  "author": "DBMind",
+  "homepage": "https://www.dbmind.top/#plugins",
+  "description": {
+    "zh": "针对一张表的真实结构，检查主键/索引/字段类型/空值/命名，给出改造 SQL 与风险提示。",
+    "en": "Check one table's real structure — keys, indexes, types, nullability, naming — and propose DDL with risks."
+  },
+  "minAppVersion": "2.0.28",
+  "needsContext": true,
+  "prompt": "prompt.md",
+  "inputs": [
+    {
+      "key": "table",
+      "type": "text",
+      "label": { "zh": "表名", "en": "Table" },
+      "placeholder": { "zh": "例如 orders", "en": "e.g. orders" },
+      "required": true,
+      "rows": 1
+    },
+    {
+      "key": "workload",
+      "type": "text",
+      "label": { "zh": "主要读写方式（可选）", "en": "Main workload (optional)" },
+      "placeholder": { "zh": "例如：按 user_id 查最近 30 天；每天批量写 10 万行", "en": "e.g. query by user_id, 30 days; 100k daily inserts" },
+      "required": false,
+      "rows": 3
+    }
+  ]
+}

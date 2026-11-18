@@ -123,6 +123,21 @@
                 </div>
               </div>
 
+              <!-- 插件技能（设置 → 插件中心装好的）：与内置技能同一种卡片，点了弹运行窗 -->
+              <div v-if="pluginSkills.length" class="welcome-block">
+                <div class="welcome-section-title"><el-icon><MagicStick /></el-icon>{{ $t('ai.pluginSkills') }}</div>
+                <div class="welcome-grid">
+                  <button v-for="p in pluginSkills" :key="p.id" class="welcome-card" type="button"
+                          :title="p.description" @click="openPluginSkill(p)">
+                    <el-icon class="welcome-card-ic"><MagicStick /></el-icon>
+                    <span class="welcome-card-tx">
+                      <span class="welcome-card-name">{{ p.name }}</span>
+                      <span class="welcome-card-desc">{{ p.description }}</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+
               <div class="welcome-block">
                 <div class="welcome-section-title"><el-icon><ChatDotRound /></el-icon>{{ $t('ai.tryAsk') }}</div>
                 <div class="welcome-examples">
@@ -347,6 +362,15 @@
                       <span class="skills-name">{{ t.label }}</span>
                       <el-icon v-if="tab === t.key" class="skills-check"><Select /></el-icon>
                     </el-dropdown-item>
+                    <!-- 插件技能：装了几个就列几个，点了直接开运行窗（不占 tab） -->
+                    <template v-if="pluginSkills.length">
+                      <el-dropdown-item disabled class="ai-dd-group">{{ $t('ai.pluginSkills') }}</el-dropdown-item>
+                      <el-dropdown-item v-for="p in pluginSkills" :key="'plugin:' + p.id"
+                                        :command="'plugin:' + p.id" :title="p.description">
+                        <el-icon class="skills-ic"><MagicStick /></el-icon>
+                        <span class="skills-name">{{ p.name }}</span>
+                      </el-dropdown-item>
+                    </template>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -595,6 +619,10 @@
     <!-- SQL 快捷验证：AI 给的 SQL 先看执行计划 / 试跑一次（不消耗 AI 调用） -->
     <SqlProbeDialog v-model="probeVisible" :sql="probeSql" :conn-id="ctxConnId"
                     :database="ctxEffectiveDatabase" :mode="probeMode" @insert="onProbeInsert" />
+
+    <!-- 插件技能运行窗：连接/库默认继承面板当前上下文（用户不用再选一遍） -->
+    <PluginSkillRun v-model="pluginRunOpen" :item="pluginRunItem"
+                    :conn-id="ctxConnId || ''" :database="ctxEffectiveDatabase" />
   </div>
 </template>
 
@@ -602,13 +630,15 @@
 import { ref, reactive, computed, nextTick, onMounted, onBeforeUnmount, watch, defineAsyncComponent, toRef } from 'vue'
 import { saveBlobAs } from '../../utils/useExportTask'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete } from '@element-plus/icons-vue'
+import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Search, Star, Aim, DataAnalysis, Folder, Loading, ArrowDown, ArrowLeft, ArrowRight, Select, Coin, Connection, Promotion, Switch, Plus, Edit, Collection, Microphone, Bell, Tickets, Delete, MagicStick } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
   aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
   aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
-  aiJobList, aiJobDismiss, aiJobResume } from '../../api'
+  aiJobList, aiJobDismiss, aiJobResume, listPlugins } from '../../api'
 import KbIngestPanel from './KbIngestPanel.vue'
+// 插件技能运行窗：与「设置 → 插件中心」共用同一个组件，表单/调用逻辑只有一份
+import PluginSkillRun from './PluginSkillRun.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
 import { t, te, locale } from '../../utils/i18n'
 import { schemaLevelOf, hideDbLevelOf } from '../../types'
@@ -687,6 +717,29 @@ const tabs = computed(() => [
 /** 当前选中的 Skill */
 const currentSkill = computed(() => tabs.value.find(t => t.key === tab.value) || tabs.value[0])
 
+// ===== 插件技能（设置 → 插件中心安装的声明式扩展包）=====
+// 它们**不是**内置 tab：数量和名字都由安装的插件决定，装完即出现、卸载即消失。
+// 所以走「弹出运行窗」这条路 —— 运行表单与插件中心共用 PluginSkillRun，
+// 上下文直接继承面板当前选中的连接/库，用户不用再选第二遍。
+const pluginSkills = ref([])
+const pluginRunOpen = ref(false)
+const pluginRunItem = ref(null)
+/** 上次拉清单的时刻：打开下拉会顺带刷新（刚装的插件要能马上看到），5 秒内不重复请求 */
+let pluginLoadedAt = 0
+const loadPluginSkills = async (force = false) => {
+  if (!force && Date.now() - pluginLoadedAt < 5000) return
+  pluginLoadedAt = Date.now()
+  try {
+    const data = await listPlugins()
+    pluginSkills.value = (data?.items || []).filter((p) => p.type === 'skill' && p.state === 'enabled')
+  } catch { /* 插件清单拉不到不影响内置技能 */ }
+}
+const openPluginSkill = (item) => {
+  if (!item) return
+  pluginRunItem.value = item
+  pluginRunOpen.value = true
+}
+
 const skillsOpen = ref(false)
 /** 三个下拉互斥：每个下拉都持有 ref，以便其它下拉把它收起 */
 const skillDropRef = ref(null)
@@ -752,9 +805,16 @@ const onSkillVisible = (visible) => {
   ctxDropRef.value?.handleClose?.()
   closeModelDrop()
   closeTbDrop()
+  // 顺带刷新插件技能：用户可能刚在设置里装了新的
+  loadPluginSkills()
 }
 /** 选择 Skill：切换能力（下拉自动收起）。返回是否真的切了（斜杠命令用它决定要不要提示） */
 const pickSkill = (key) => {
+  // 插件技能：command 形如 `plugin:<id>` —— 开运行窗，不切 tab
+  if (typeof key === 'string' && key.startsWith('plugin:')) {
+    openPluginSkill(pluginSkills.value.find((p) => `plugin:${p.id}` === key))
+    return true
+  }
   if (!tabs.value.some((x) => x.key === key)) return false
   tab.value = key
   return true
@@ -1580,9 +1640,13 @@ const loadAiModels = async () => {
 // 面板是常驻组件，只在挂载时读过一次配置 —— 不重读的话「刚配好却仍提示未配置、
 // 新建的模型也不在下拉里」，用户得关掉面板再打开才行。
 const onAiChanged = () => { loadAiModels() }
+// 插件中心装/卸/停用后广播：面板里的技能卡片与下拉要立刻跟着变，不用等下次开下拉
+const onPluginsChanged = () => loadPluginSkills(true)
 onMounted(() => {
   loadAiModels()
+  loadPluginSkills(true)
   window.addEventListener('dbmind-ai-changed', onAiChanged)
+  window.addEventListener('dbmind-plugins-changed', onPluginsChanged)
 })
 
 // ===== 面板宽度拖拽 =====
@@ -1613,6 +1677,7 @@ const startResize = (e) => {
 onBeforeUnmount(() => {
   if (resizeCleanup) resizeCleanup()
   window.removeEventListener('dbmind-ai-changed', onAiChanged)
+  window.removeEventListener('dbmind-plugins-changed', onPluginsChanged)
   stopStream() // 卸载时中断进行中的流式请求，别让它在后台继续读
 })
 

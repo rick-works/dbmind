@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-11-18",
+  "plugins": [
+    {
+      "id": "sql-review",
+      "type": "skill",
+      "name": {
+        "zh": "SQL 审查",
+        "en": "SQL Review"
+      },
+      "version": "1.0.0",
+      "author": "DBMind",
+      "description": {
+        "zh": "按性能、正确性、可维护性三档逐条审查 SQL，给出风险等级与可直接替换的改写版本。",
+        "en": "Review a SQL statement for performance, correctness and maintainability, with risk levels and a rewritten version."
+      },
+      "homepage": "https://www.dbmind.top/#plugins",
+      "needsContext": true,
+      "sha256": "e36eccee069545c48bedf80c14ba2c9f4e7b05fe422b2e150e59075409f33399",
+      "size": 2166,
+      "download": "https://www.dbmind.top/plugins/packages/sql-review-1.0.0.zip"
+    },
+    {
+      "id": "table-design-check",
+      "type": "skill",
+      "name": {
+        "zh": "表设计体检",
+        "en": "Table Design Check"
+      },
+      "version": "1.0.0",
+      "author": "DBMind",
+      "description": {
+        "zh": "针对一张表的真实结构，检查主键/索引/字段类型/空值/命名，给出改造 SQL 与风险提示。",
+        "en": "Check one table's real structure — keys, indexes, types, nullability, naming — and propose DDL with risks."
+      },
+      "homepage": "https://www.dbmind.top/#plugins",
+      "needsContext": true,
+      "sha256": "bae88c729b6fccdc631ab2e3f4726c229a0ce994ef216c622675b2aa42a3f587",
+      "size": 2508,
+      "download": "https://www.dbmind.top/plugins/packages/table-design-check-1.0.0.zip"
+    }
+  ]
+}
