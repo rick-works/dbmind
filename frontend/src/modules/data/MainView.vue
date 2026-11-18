@@ -1082,6 +1082,12 @@
 
   <!-- 树 CRUD 弹窗：新建库 / 新建分组 / 重命名分组 / 重命名表（逻辑在各子组件中，父只保留开关 / 上下文 / 刷新回调） -->
   <NewDbDialog v-model="newDbVisible" :conn-id="newDbCtx.connId" :conn-type="newDbCtx.connType" @created="onNewDbCreated" />
+  <!-- 插件中心：装 / 卸 / 启停 / 升级声明式插件包。做成弹窗而不是页签 ——
+       装完就关，不需要长期占着一块工作区；技能本身在 AI 对话里生效。 -->
+  <el-dialog v-model="pluginsOpen" :title="$t('plg.title')" width="min(1040px, 94vw)"
+             append-to-body class="plg-dialog">
+    <PluginCenter />
+  </el-dialog>
   <!-- 脚本管理：跨连接/跨库列表 + 搜索 + 增删改查（增/改回 SQL 编辑器） -->
   <ScriptManagerDialog
     v-model="scriptsOpen"
@@ -1870,6 +1876,7 @@ const MonitorPanel = defineAsyncComponent(() => import('./MonitorStudio.vue'))  
 const KnowledgeStudio = defineAsyncComponent(() => import('../knowledge/KnowledgeStudio.vue'))
 const CommandPalette = defineAsyncComponent(() => import('../ai/CommandPalette.vue'))
 const ObjectListView = defineAsyncComponent(() => import('./ObjectListView.vue'))  // 对象清单（双击类别节点）
+const PluginCenter = defineAsyncComponent(() => import('../settings/PluginCenter.vue'))  // 插件中心（顶栏「更多」→ 弹窗）
 
 const route = useRoute()
 const router = useRouter()
@@ -2011,6 +2018,10 @@ const openKnowledge = (kbId) => {
   }
   openTab({ id: KNOWLEDGE_TAB_ID, type: 'knowledge', label: t('mv.knowledge') })
 }
+// ===== 插件中心（顶栏「更多」菜单里的入口 → 弹窗）=====
+// 只装/卸/启停/升级插件，技能本身在 AI 对话里生效；装完就关，不占工作区。
+const pluginsOpen = ref(false)
+const openPlugins = () => { pluginsOpen.value = true }
 // ===== 桌面壳：系统标题栏已由壳关闭，顶部这条顶栏同时充当标题栏 =====
 // 桥的具体形态在 utils/desktopShell.js：它同时认 Tauri（现在的壳）与上游 Electron（历史壳）。
 // 浏览器里两者都不存在 → available=false：不渲染窗口按钮，也不做任何拖动处理。
@@ -2241,6 +2252,7 @@ const topMenuRun = (id) => {
   else if (id === 'bgCenter') { bgCenterMode.value = 'history'; bgCenterOpen.value = true; refreshBgStatus() }
   else if (id === 'users') openUserManage()
   else if (id === 'scripts') scriptsOpen.value = true
+  else if (id === 'plugins') openPlugins()
   else if (id === 'newScript') newQueryTab()
 }
 // ===== 脚本管理（跨连接/跨库，增/改在 SQL 编辑器里进行）=====

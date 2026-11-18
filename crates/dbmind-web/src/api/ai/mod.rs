@@ -918,10 +918,21 @@ pub fn routes() -> Router<AppState> {
             get(teammate::memory_list).post(teammate::memory_add),
         )
         .route("/api/ai/memory/{id}", delete(teammate::memory_delete))
+        // 连接没了的老记忆：改成「全部连接」，否则它永远不会被注入
+        .route(
+            "/api/ai/memory/{id}/detach",
+            post(teammate::memory_detach),
+        )
         .route(
             "/api/ai/changes",
-            get(teammate::change_list).post(teammate::change_create),
+            get(teammate::change_list)
+                .post(teammate::change_create)
+                .delete(teammate::change_clear),
         )
+        // 删单条记录 / 清空全部记录：只删记录，不撤销已执行的修改
+        .route("/api/ai/changes/{id}", delete(teammate::change_delete))
+        // 「允许」：一步批准 + 执行（前端只给用户一个按钮，闸门收在 handler 里）
+        .route("/api/ai/changes/{id}/allow", post(teammate::change_allow))
         .route("/api/ai/changes/{id}/approve", post(teammate::change_approve))
         .route("/api/ai/changes/{id}/confirm", post(teammate::change_confirm))
         .route("/api/ai/changes/{id}/reject", post(teammate::change_reject))

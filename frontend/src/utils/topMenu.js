@@ -3,7 +3,7 @@
 // 启动水合完成后 settings 会广播 dbmind-ui-hydrated，这里重读一次。
 // 消费方：MainView（渲染顶栏）、SettingsView 通用页签（配置界面）。
 import { ref, computed } from 'vue'
-import { Switch, Promotion, DataAnalysis, Box, Monitor, Clock, Plus, User, Tickets } from '@element-plus/icons-vue'
+import { Switch, Promotion, DataAnalysis, Box, Monitor, Clock, Plus, User, Tickets, MagicStick } from '@element-plus/icons-vue'
 import { persistUI } from './settings'
 import { t } from './i18n'
 
@@ -21,7 +21,10 @@ export const TOP_MENU_ITEMS = [
   { id: 'drivers', icon: Box, label: () => t('nav.drivers') },
   { id: 'bgCenter', icon: Clock, label: () => t('sync.bgCenter') },
   { id: 'monitor', icon: Monitor, label: () => t('nav.monitor') },
-  { id: 'governance', icon: DataAnalysis, label: () => t('nav.governance') }
+  { id: 'governance', icon: DataAnalysis, label: () => t('nav.governance') },
+  // 插件中心：装 / 卸 / 启停 / 升级插件包。默认排在最后 → 落在「更多」下拉里
+  // （它不是每次开软件都要点的东西）；用户想扶正可以在「设置 → 通用 → 顶栏菜单」里往前挪。
+  { id: 'plugins', icon: MagicStick, label: () => t('plg.title') }
 ]
 
 const TOPMENU_LS = 'dbmind_topmenu'

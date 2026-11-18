@@ -3,7 +3,7 @@
   "id": "sql-explain",
   "type": "skill",
   "name": { "zh": "SQL 讲解", "en": "Explain SQL" },
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
@@ -14,23 +14,5 @@
   "minAppVersion": "3.0.0",
   "needsContext": true,
   "prompt": "prompt.md",
-  "chatPrompt": "chat.md",
-  "inputs": [
-    {
-      "key": "sql",
-      "type": "text",
-      "label": { "zh": "要讲解的 SQL", "en": "SQL to explain" },
-      "placeholder": { "zh": "粘贴一条查询或 DML", "en": "Paste a query or DML" },
-      "required": true,
-      "rows": 10
-    },
-    {
-      "key": "focus",
-      "type": "text",
-      "label": { "zh": "想重点讲什么（可选）", "en": "Focus (optional)" },
-      "placeholder": { "zh": "例如：只看 JOIN 逻辑 / 只看 NULL 语义", "en": "e.g. only the JOIN logic / only NULL semantics" },
-      "required": false,
-      "rows": 2
-    }
-  ]
+  "chatPrompt": "chat.md"
 }

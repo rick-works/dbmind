@@ -17,8 +17,9 @@
 |---|---|
 | **🤖 AI 深度集成** | 解释 / 优化 / 改写 / 修错 / 诊断 / 对话六大动作；AI 的 SQL 先看执行计划、试跑验证；MCP 服务器把整个工作台接进任意 AI 客户端（详见 [AI 能力](#ai不只是聊天)） |
 | **🧠 AI 同事** | 「自主排查」自己查库：巡检表结构、给索引建议、看同步与备份状态、只读试跑，把要改的动作做成**变更单**等你批准（高危二次确认、执行完可撤销）；长期记忆记住业务口径，对话记录可续可翻，每条回答脚注 token 消耗 |
+| **🧩 插件技能** | 用**声明式插件包**给 AI 加技能 —— 一份清单 + 提示词，**不含任何可执行文件**（包里出现 `.exe` / `.js` / `.jar` 直接拒绝安装）。从官网插件市场一键装、也能装本地 zip，逐个启停、就地升级；技能装好就**活在对话里**：在 Skills 里选中后，气泡标注是谁在答，后续每一轮都按它的人格与清单来 |
 | 字段脱敏 | 按「表 + 列」把敏感字段换成 **MD5 / SHA-256 摘要**或 **AES-256 密文**（`f3a9c2…`），一份规则四个出口各自开关：**发给 AI 的内容**（上下文样例行 + 智能体只读结果）、**MCP 客户端拿到的数据**、**结果表格的显示**（只影响显示）、**导出的文件**（CSV / Excel / JSON / SQL 里落盘的就是打码值）；支持 `*_phone` 通配与「加入常见敏感列」，库里的数据一个字节都不动 |
-| 多数据源 | **17 种引擎，一个客户端** —— 关系型（MySQL、MariaDB、PostgreSQL、人大金仓、Oracle、SQL Server、DB2、Derby、H2、达梦）、分析型（ClickHouse、Doris）、嵌入式 / 文件（SQLite、DuckDB）与 NoSQL（Redis、MongoDB、Elasticsearch）；驱动按需下载，各引擎的能力差异见 [支持的数据源](#支持的数据源) |
+| 多数据源 | **26 种引擎，一个客户端** —— 关系型（MySQL、MariaDB、GreatSQL、TiDB、OceanBase、PostgreSQL、人大金仓、瀚高 HighGo、openGauss、海量 Vastbase、Oracle、SQL Server、DB2、达梦）、分析型 / OLAP（ClickHouse、Doris、StarRocks、Databend、RisingWave）、嵌入式 / 文件（SQLite、DuckDB、H2、Derby）与 NoSQL（Redis、MongoDB、Elasticsearch）；驱动按需下载，各引擎的能力差异见 [支持的数据源](#支持的数据源) |
 | SQL 编辑器 | Monaco 内核：补全、格式化、多语句分块执行、逐段计时、执行历史、SQL 片段库（右键「保存片段 / 插入片段」，存本机跨会话保留）、模板变量（`:name` 执行时填参）、执行中随时停止；13 组命令快捷键（执行 `Ctrl+Enter`、格式化 `Shift+Alt+F`、注释 `Ctrl+/`、复制为 `IN` 列表 `Ctrl+Shift+X`…），全部可改键，见 [快捷键](#快捷键) |
 | 事务模式 | 写语句不自动提交：改完自查 → 回滚或提交；事务精确绑定编辑器会话，全 JDBC 引擎通用；关闭事务模式会先回滚，SQLite 没有会话级事务则直接隐藏按钮 |
 | 结果集直接编辑 | 双击单元格改值 → 缓冲 → 批量 UPDATE（可落在事务里）；快照守卫在翻页后作废旧缓冲，宁可让你重改也不改错行。行数上限默认不限（可设 100 ~ 100000），语句超时 300 秒（可调 1 ~ 600） |
@@ -41,10 +42,12 @@
 
 | 分组 | 引擎 |
 |---|---|
-| 关系型 · 10 | MySQL、MariaDB、PostgreSQL、人大金仓 KingbaseES、Oracle、SQL Server、IBM Db2、达梦 DM、Apache Derby、H2 |
-| 分析型 · 2 | ClickHouse、Doris —— 在连接列表里单独归为 OLAP |
-| 嵌入式 / 文件 · 2 | SQLite、DuckDB —— 直接打开本地文件，不需要服务端与 Java 宿主 |
+| 关系型 · 14 | MySQL、MariaDB、GreatSQL、TiDB、OceanBase、PostgreSQL、人大金仓 KingbaseES、瀚高 HighGo、openGauss、海量 Vastbase、Oracle、SQL Server、IBM Db2、达梦 DM |
+| 分析型 · 5 | ClickHouse、Doris、StarRocks、Databend、RisingWave —— 在连接列表里单独归为 OLAP |
+| 嵌入式 / 文件 · 4 | SQLite、DuckDB、H2、Derby —— 打开本地文件或进程内运行，不需要服务端 |
 | NoSQL · 3 | Redis、MongoDB、Elasticsearch |
+
+另有 4 种（GaussDB、GoldenDB、SelectDB、UXDB）已实现但**暂不露出** —— 没跑通真机验证之前不放进新建数据源列表。
 
 不是每个引擎都「样样齐全」，做不到的会明说，不装作支持：
 
@@ -80,6 +83,7 @@
 大多数工具的「AI 助手」是个聊天框；DBmind 把 AI 做进了**每一步数据库操作**：
 
 - **六大即用动作** —— 选中 SQL 一键「解释 / 优化 / 改写」；执行报错一键「AI 修错」（自动带上完整错误上下文）；排查性能问题用「诊断」；复杂任务直接对话
+- **技能：内置的 + 装的** —— 在 Skills 里选中一个技能，它就跟着这段对话走：气泡上标出是谁在答，后续每一轮都照它来。**插件技能**把你们团队的检查清单（SQL 审查、报错诊断、表设计体检…）做成包，一个清单 + 两份 Markdown 就能写
 - **AI 是个同事，不是问答框** —— 打开「自主排查」，它自己调工具：巡检表结构、找该加的索引、查同步与备份状态、只读试跑一遍；要动的数据统一生成**变更单**，批准才执行（高危再确认一次），执行完还能撤销。多轮能接着上一轮结论往下做，问两张表就展开两张
 - **它会记住你的口径** —— 说一句「记住：本库金额单位是分」，下次在同一个库提问自动带上；记忆分「你说过 / AI 推断」，随时可删。对话有记录，能续上一轮接着说
 - **上下文按预算取，不是把整个库塞进去** —— 大库不再塞几百个表名；问「这个库是干嘛的」这类库级问题，改成给全库清单（表名 + 表注释，395 张表约 2.7k tokens，而整库列结构要几十万）。实测同一条修复从 2345 降到 956 prompt tokens、对话从 2404 降到 1030；每条回答脚注花了多少 token，还有一份零成本账本告诉你「这次请求花在哪」
@@ -107,6 +111,7 @@
 | 长期记忆 | 你说过的口径（如「金额单位是分」） | 该连接 / 库下有记忆时 |
 | 知识库片段 | 命中的文档片段，每段 ≤900 字符并标注来源 | 配了知识库且命中时 |
 | 内置提示词 | 人格与方言规则模板（纯文本，不含你的任何数据） | 每次 |
+| 插件技能提示词 | 你在 Skills 里选中的技能内容（插件清单 / 提示词，不含你的数据） | 选中该技能期间 |
 
 **不会发出去的**
 
@@ -205,7 +210,7 @@
 │   └── dbmind-mcp       MCP 服务器（stdio，接 AI 客户端）
 ├── agents/              Java 宿主（jdbc / mongodb / redis / elasticsearch）
 ├── frontend/            Vue 3 前端
-├── plugins/             数据库类型声明（JDBC URL 模板、驱动清单）
+├── plugins/             声明式插件：connection-types（JDBC URL 模板 + 驱动清单）与 skills（清单 + 提示词）
 ├── resources/           原生依赖（SQL Server 集成认证 dll）
 ├── scripts/             日常入口（start/stop）+ build / release / test / tools 四类脚本
 ├── deploy/              集成测试用真实服务端（redis / es / mongo）

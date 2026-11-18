@@ -109,6 +109,15 @@ const checkOnly = process.argv.includes('--check')
 const plugins = []
 const packages = []
 
+// ---- 清单规范（标准化）----
+// 官网分发的每个包都必须满足这些约束：少一项就直接拒绝打包，而不是等用户装上去才发现
+// 界面缺图标 / 名称只有一种语言 / 版本号没法比较大小。
+const REQUIRED_FIELDS = ['id', 'type', 'name', 'version', 'description', 'icon', 'prompt', 'chatPrompt']
+const fail = (id, msg) => {
+  console.error(`✗ ${id}: ${msg}`)
+  process.exit(1)
+}
+
 for (const id of fs.readdirSync(SRC).sort()) {
   const dir = path.join(SRC, id)
   if (!fs.statSync(dir).isDirectory()) continue
@@ -117,6 +126,20 @@ for (const id of fs.readdirSync(SRC).sort()) {
     console.error(`✗ ${id}: 目录名与 manifest.id「${manifest.id}」不一致`)
     process.exit(1)
   }
+  for (const key of REQUIRED_FIELDS) {
+    if (!manifest[key]) fail(id, `manifest 缺少必填字段 ${key}`)
+  }
+  if (manifest.schemaVersion !== 1) fail(id, `schemaVersion 必须是 1（当前 ${manifest.schemaVersion}）`)
+  if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) {
+    fail(id, `version 必须是 x.y.z（当前「${manifest.version}」），否则前端没法比较新旧`)
+  }
+  for (const key of ['name', 'description']) {
+    const v = manifest[key]
+    if (!v || typeof v !== 'object' || !v.zh || !v.en) fail(id, `${key} 必须是 { zh, en } 双语对象`)
+  }
+  // emoji 在 JS 里按码点算：单个图标 1~2 个码点（带变体选择符/零宽连接符的会更多一点）
+  if ([...String(manifest.icon)].length > 4) fail(id, `icon 应是 1~2 个 emoji（当前「${manifest.icon}」）`)
+  if (manifest.inputs) fail(id, 'inputs 已废弃：技能只在 AI 对话里运行，请从 manifest 里删掉')
   if (manifest.type !== 'skill' || !manifest.prompt) {
     console.error(`✗ ${id}: 只支持 skill 类型且必须声明 prompt`)
     process.exit(1)

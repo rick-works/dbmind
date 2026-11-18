@@ -319,9 +319,7 @@ export const installPluginFile = (file) => {
 export const setPluginEnabled = (id, on) =>
   http.post(`/api/plugins/${encodeURIComponent(id)}/${on ? 'enable' : 'disable'}`).then(r => r.data)
 export const uninstallPlugin = (id) => http.delete(`/api/plugins/${encodeURIComponent(id)}`).then(r => r.data)
-// 运行技能：一次模型调用（带表结构时可到十几秒）
-export const runPluginSkill = (id, body) =>
-  http.post(`/api/plugins/${encodeURIComponent(id)}/run`, body, { timeout: 180000 }).then(r => r.data)
+// 技能没有独立的运行接口：它在 AI 对话里跟着选中项生效（后端 augment_system）
 
 // 数据库元数据（关系型）——按连接类型路由到数据源模块 /api/{module}
 export const getFeatures = async (id) => { const b = await baseOf(id); return http.get(`${b}/${id}/features`).then(r => r.data) }
@@ -821,17 +819,24 @@ export const aiThreadRename = (id, title) => http.post('/api/ai/threads', { id, 
 export const aiMemoryList = (params) => http.get('/api/ai/memory', { params }).then(r => r.data)
 export const aiMemoryAdd = (payload) => http.post('/api/ai/memory', payload).then(r => r.data)
 export const aiMemoryDelete = (id) => http.delete('/api/ai/memory/' + encodeURIComponent(id)).then(r => r.data)
+// 连接已删的老记忆：改成「全部连接」，否则它永远不会再被注入
+export const aiMemoryDetach = (id) => http.post('/api/ai/memory/' + encodeURIComponent(id) + '/detach').then(r => r.data)
 
 // 变更单：AI 只出单，执行必须人点（approver 用于审计流水里的「谁批的」）
 const changeAct = (id, act, approver) =>
   http.post('/api/ai/changes/' + encodeURIComponent(id) + '/' + act, null, { params: { approver } }).then(r => r.data)
 export const aiChangeList = (params) => http.get('/api/ai/changes', { params }).then(r => r.data)
 export const aiChangeCreate = (payload) => http.post('/api/ai/changes', payload).then(r => r.data)
+// 「允许」= 一步批准 + 执行（后端把闸门收在一起，失败时什么都不改，不会留下「已批准未执行」）
+export const aiChangeAllow = (id, approver) => changeAct(id, 'allow', approver)
 export const aiChangeApprove = (id, approver) => changeAct(id, 'approve', approver)
 export const aiChangeConfirm = (id, approver) => changeAct(id, 'confirm', approver)
 export const aiChangeApply = (id, approver) => changeAct(id, 'apply', approver)
 export const aiChangeUndo = (id, approver) => changeAct(id, 'undo', approver)
 export const aiChangeReject = (id, approver) => changeAct(id, 'reject', approver)
+// 记录清理：只删列表里的记录，不撤销已执行的修改
+export const aiChangeDelete = (id) => http.delete(`/api/ai/changes/${encodeURIComponent(id)}`).then(r => r.data)
+export const aiChangeClear = () => http.delete('/api/ai/changes').then(r => r.data)
 
 // 待办：值班任务跑出来的产物（alert 才算「有事」）
 export const aiJobList = (params) => http.get('/api/ai/jobs', { params }).then(r => r.data)

@@ -154,6 +154,8 @@ fn paths_json(store_path: &str) -> Value {
     // 驱动固定在数据目录下（join 用平台分隔符，避免正反斜杠混排的展示）
     let driver_dir = std::path::Path::new(&data_dir).join("drivers");
     let log_dir = std::path::Path::new(&data_dir).join("logs");
+    // 插件与驱动/日志同一套规则：固定在数据目录下，跟着迁移（后端 plugins.rs 的 root() 同源）
+    let plugin_dir = std::path::Path::new(&data_dir).join("plugins");
     json!({
         "os": if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "macos" } else { "linux" },
         "osLabel": if cfg!(windows) { "Windows" } else if cfg!(target_os = "macos") { "macOS" } else { "Linux" },
@@ -163,6 +165,7 @@ fn paths_json(store_path: &str) -> Value {
         "driverDir": driver_dir.display().to_string(),
         "defaultDriverDir": driver_dir.display().to_string(),
         "logDir": log_dir.display().to_string(),
+        "pluginDir": plugin_dir.display().to_string(),
     })
 }
 

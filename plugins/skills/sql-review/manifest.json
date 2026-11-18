@@ -3,7 +3,7 @@
   "id": "sql-review",
   "type": "skill",
   "name": { "zh": "SQL 审查", "en": "SQL Review" },
-  "version": "1.0.3",
+  "version": "1.0.4",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
@@ -14,23 +14,5 @@
   "minAppVersion": "3.0.0",
   "needsContext": true,
   "prompt": "prompt.md",
-  "chatPrompt": "chat.md",
-  "inputs": [
-    {
-      "key": "sql",
-      "type": "text",
-      "label": { "zh": "待审查的 SQL", "en": "SQL to review" },
-      "placeholder": { "zh": "粘贴一条查询或 DML", "en": "Paste a query or DML" },
-      "required": true,
-      "rows": 8
-    },
-    {
-      "key": "focus",
-      "type": "text",
-      "label": { "zh": "关注点（可选）", "en": "Focus (optional)" },
-      "placeholder": { "zh": "例如：只看索引使用 / 只看是否有全表扫描", "en": "e.g. index usage only" },
-      "required": false,
-      "rows": 2
-    }
-  ]
+  "chatPrompt": "chat.md"
 }

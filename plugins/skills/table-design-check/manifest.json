@@ -3,7 +3,7 @@
   "id": "table-design-check",
   "type": "skill",
   "name": { "zh": "表设计体检", "en": "Table Design Check" },
-  "version": "1.0.2",
+  "version": "1.0.3",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
@@ -14,23 +14,5 @@
   "minAppVersion": "3.0.0",
   "needsContext": true,
   "prompt": "prompt.md",
-  "chatPrompt": "chat.md",
-  "inputs": [
-    {
-      "key": "table",
-      "type": "text",
-      "label": { "zh": "表名", "en": "Table" },
-      "placeholder": { "zh": "例如 orders", "en": "e.g. orders" },
-      "required": true,
-      "rows": 1
-    },
-    {
-      "key": "workload",
-      "type": "text",
-      "label": { "zh": "主要读写方式（可选）", "en": "Main workload (optional)" },
-      "placeholder": { "zh": "例如：按 user_id 查最近 30 天；每天批量写 10 万行", "en": "e.g. query by user_id, 30 days; 100k daily inserts" },
-      "required": false,
-      "rows": 3
-    }
-  ]
+  "chatPrompt": "chat.md"
 }

@@ -303,7 +303,7 @@ body {
   max-width: 320px; padding: 5px 9px;
   background: var(--dc-bg-soft, #22262e); color: var(--dc-text-strong, #e8ecf2);
   border: 1px solid var(--dc-border, #3a4150); border-radius: 6px;
-  font-size: 12px; line-height: 1.5; white-space: nowrap;
+  font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere;
   pointer-events: none; opacity: 0; transition: opacity .12s ease;
 }
 .fast-tip.on { opacity: 1; }
@@ -362,6 +362,8 @@ body {
    标题在基准上 +4px，与原来的 18px 一致；正文等于基准。 */
 .el-dialog__title { color: var(--dc-text-strong); font-weight: 600; font-size: calc(var(--dc-dlg-fs, 14px) + 4px); }
 .el-dialog__body { font-size: var(--dc-dlg-fs, 14px); }
+/* 插件中心弹窗：卡片区自己滚，标题与说明固定在上方 */
+.plg-dialog .el-dialog__body { max-height: min(64vh, 620px); }
 
 /* ==================== 弹窗内的字号层级（全局统一） ====================
    由基准 --dc-dlg-fs 派生出五级：

@@ -213,36 +213,34 @@
                     <span class="step-args">{{ s.args }}</span>
                   </div>
                 </div>
-                <!-- 变更单：AI 能做的最后一件事是「出单」，执行必须人点。
+                <!-- 变更单：AI 对数据库的任何增删改都出一张单，**就在这段对话里**给三个动作：
+                     允许（一步执行）/ 拒绝（这张不要）/ 跳过（这次不执行，留着以后在「记录」里再定）。
                      风险、SQL、撤销语句一次摆在卡片上 —— 看不清就不该点。 -->
                 <div v-if="m.changes && m.changes.length" class="msg-changes">
-                  <div v-for="c in m.changes" :key="c.id" class="chg-card" :class="'is-' + c.risk">
+                  <div v-for="c in m.changes" :key="c.id" class="chg-card"
+                       :class="['is-' + c.risk, { 'is-skipped': c.skipped }]">
                     <div class="chg-head">
                       <span class="chg-risk">{{ riskLabel(c.risk) }}</span>
-                      <span class="chg-title">{{ c.title }}</span>
-                      <span class="chg-state">{{ c.status }}</span>
+                      <span class="chg-title" :title="c.title">{{ c.title }}</span>
+                      <span class="chg-state">{{ c.skipped ? $t('ai.skipped') : chgStatusLabel(c.status) }}</span>
                     </div>
+                    <div class="chg-path" :title="changePathOf(c, connNameOf(c))">{{ changePathOf(c, connNameOf(c)) }}</div>
                     <pre class="chg-sql">{{ c.sql }}</pre>
                     <div v-if="c.undoSql" class="chg-undo">↩ {{ c.undoSql }}</div>
-                    <div class="chg-acts">
+                    <div v-if="!c.skipped" class="chg-acts">
                       <el-button v-if="c.status === 'pending'" size="small" type="primary"
-                                 :loading="changeBusy === c.id" @click="runChange(c, 'approve')">
-                        {{ $t('ai.chgApprove') }}
+                                 :loading="changeBusy === c.id" @click="runChange(c, 'allow')">
+                        {{ $t('ai.allow') }}
                       </el-button>
-                      <el-button v-if="c.status === 'approved' && c.risk === 'high'" size="small" type="warning"
-                                 :loading="changeBusy === c.id" @click="runChange(c, 'confirm')">
-                        {{ $t('ai.chgConfirm') }}
+                      <el-button v-if="c.status === 'pending'" size="small" text @click="runChange(c, 'reject')">
+                        {{ $t('ai.chgReject') }}
                       </el-button>
-                      <el-button v-if="(c.status === 'approved' && c.risk !== 'high') || c.status === 'confirmed'"
-                                 size="small" type="primary" :loading="changeBusy === c.id" @click="runChange(c, 'apply')">
-                        {{ $t('ai.chgApply') }}
+                      <el-button v-if="c.status === 'pending'" size="small" text @click="skipChange(c)">
+                        {{ $t('ai.skip') }}
                       </el-button>
                       <el-button v-if="c.status === 'applied'" size="small" :loading="changeBusy === c.id"
                                  @click="runChange(c, 'undo')">
                         {{ $t('ai.chgUndo') }}
-                      </el-button>
-                      <el-button v-if="c.status === 'pending'" size="small" text @click="runChange(c, 'reject')">
-                        {{ $t('ai.chgReject') }}
                       </el-button>
                     </div>
                   </div>
@@ -336,16 +334,18 @@
 
             <div class="composer-bar" ref="composerBarEl">
               <!-- 左侧：Skills / 专属参数 / 上下文 / 模型（除发送外全部靠左排布） -->
-              <!-- 自主排查（原「深挖」）：交给智能体自己查库、出变更单。
-                   title 里写清「会自己查」，否则用户看不出这跟普通问答差在哪 -->
+              <!-- 深度思考（原「自主排查 / 深挖」）：交给智能体自己查库、出变更单。
+                   它是模式入口、永远不收成图标，所以提示用 .always：光看「深度思考」四个字
+                   看不出它跟普通问答差在哪 -->
               <button class="composer-ctx mate-btn" :class="{ open: agentMode }" type="button" data-g="7"
-                      v-fast-tip="() => $t('ai.agentModeTip')" @click="agentMode = !agentMode">
+                      v-fast-tip.always="() => $t('ai.agentModeTip')" @click="agentMode = !agentMode">
                 <el-icon :size="12"><Aim /></el-icon>
                 <span class="composer-ctx-tx">{{ $t('ai.agentMode') }}</span>
               </button>
-              <!-- 记事（原「同事」）：待办 + 记忆。角标只统计 alert（值班真发现问题），
+              <!-- 记事（原「同事」）：记录 + 记忆。角标只统计 alert（值班真发现问题），
                    不把「等你确认变更单」也标红 —— 那会变成天天有红点 -->
-              <button class="composer-ctx mate-btn" type="button" data-g="6" v-fast-tip="() => $t('ai.mateTip')" @click="openMate('todo')">
+              <button class="composer-ctx mate-btn" type="button" data-g="6"
+                      v-fast-tip.always="() => $t('ai.mateTip')" @click="openMate('records')">
                 <el-icon :size="12"><Bell /></el-icon>
                 <span class="composer-ctx-tx">{{ $t('ai.mate') }}</span>
                 <span v-if="alertCount" class="mate-badge">{{ alertCount }}</span>
@@ -355,7 +355,8 @@
                    再点同一个技能 = 取消，输入框回到什么都没选的自由对话 -->
               <el-dropdown ref="skillDropRef" data-g="5" trigger="click" placement="top-start" popper-class="ai-model-dropdown"
                            @command="pickSkill" @visible-change="onSkillVisible">
-                <button class="skill-btn" :class="{ open: skillsOpen }" type="button" :title="$t('ai.pickSkill')">
+                <button class="skill-btn" :class="{ open: skillsOpen }" type="button"
+                        v-fast-tip.always="() => $t('ai.pickSkill')">
                   <el-icon class="skill-btn-ic"><MagicStick /></el-icon>
                   <span class="skill-btn-tx">{{ $t('ai.skills') }}</span>
                   <el-icon class="skill-btn-caret"><ArrowDown /></el-icon>
@@ -563,9 +564,9 @@
       </div>
     </div>
 
-    <!-- 记事抽屉：待办（值班产物）+ 记忆（长期事实）。
+    <!-- 记事抽屉：记录（AI 对库做过的增删改）+ 记忆（长期事实）。
          两件事放一起是有意的 —— 它们都是「它替你记着的东西」。 -->
-    <el-drawer v-model="mateOpen" size="460px" append-to-body class="mate-drawer">
+    <el-drawer v-model="mateOpen" size="600px" append-to-body class="mate-drawer">
       <template #header>
         <!-- 只留标题：开新对话已经收进左栏「记录」的 + 里，
              抽屉里再放一个同名按钮，两处入口做同一件事 -->
@@ -580,42 +581,127 @@
           <el-button size="small" text type="primary" @click="refreshMate">{{ $t('common.retry') }}</el-button>
         </div>
         <el-tabs v-model="mateTab">
-          <el-tab-pane :label="$t('ai.todo')" name="todo">
-            <div v-if="!todos.length && !mateFailed.includes('todo')" class="mate-empty">{{ $t('ai.todoEmpty') }}</div>
-            <div v-for="job in todos" :key="job.id" class="todo-card" :class="'is-' + job.status">
-              <div class="todo-head">
-                <span class="todo-status">{{ todoStatusLabel(job.status) }}</span>
-                <span class="todo-title">{{ job.title }}</span>
+          <el-tab-pane :label="$t('ai.records')" name="records">
+            <!-- 工具条：条数 + 清空（清空只是删记录，不动库里的数据） -->
+            <div v-if="changes.length" class="rec-bar">
+              <span class="rec-count">{{ $t('ai.recordsCount', { n: changes.length }) }}</span>
+              <el-button size="small" text type="danger" class="rec-clear" @click="clearChanges">
+                {{ $t('ai.recordsClear') }}
+              </el-button>
+            </div>
+            <div v-if="!changes.length && !unfinishedJobs.length && !mateFailed.includes('changes')"
+                 class="mate-empty">{{ $t('ai.recordsEmpty') }}</div>
+            <!-- 变更记录：AI 对数据库的每一次增删改都在这里留痕，执行过的还能撤销 -->
+            <div v-for="c in changes" :key="c.id" class="rec-card" :class="'is-' + c.risk">
+              <div class="rec-head">
+                <span class="rec-risk">{{ riskLabel(c.risk) }}</span>
+                <span class="rec-title" :title="c.title">{{ c.title }}</span>
+                <span class="rec-state" :class="'st-' + c.status">{{ chgStatusLabel(c.status) }}</span>
               </div>
-              <div class="todo-result">{{ job.result }}</div>
-              <div class="todo-acts">
-                <!-- 中断的智能体任务可以接着跑：步骤已落库，续跑只补几轮模型调用 -->
-                <el-button v-if="job.kind === 'agent' && ['failed', 'running'].includes(job.status)"
-                           size="small" text type="primary" :loading="jobBusy === job.id" @click="resumeJob(job)">
-                  {{ $t('ai.todoResume') }}
+              <pre class="rec-sql">{{ c.sql }}</pre>
+              <div class="rec-meta">
+                <!-- 定位到表：连接.库.模式.表；SQL 认不出表就退到库、再退到连接名 -->
+                <span class="rec-path" :title="changePathOf(c, connNameOf(c))">{{ changePathOf(c, connNameOf(c)) }}</span>
+                <span class="rec-time">{{ fmtWhen(c.appliedAt || c.createdAt) }}</span>
+              </div>
+              <div v-if="c.error" class="rec-err">{{ c.error }}</div>
+              <div class="rec-acts">
+                <el-button v-if="c.status === 'pending'" size="small" type="primary"
+                           :loading="changeBusy === c.id" @click="runChange(c, 'allow')">
+                  {{ $t('ai.allow') }}
                 </el-button>
-                <el-button v-if="job.status !== 'dismissed'" size="small" text @click="dismissJob(job)">
-                  {{ $t('ai.todoDismiss') }}
+                <el-button v-if="c.status === 'pending'" size="small" text @click="runChange(c, 'reject')">
+                  {{ $t('ai.chgReject') }}
                 </el-button>
+                <el-button v-if="c.status === 'applied' && c.undoSql" size="small"
+                           :loading="changeBusy === c.id" @click="runChange(c, 'undo')">
+                  {{ $t('ai.chgUndo') }}
+                </el-button>
+                <span v-else-if="c.status === 'applied'" class="rec-note">{{ $t('ai.recordNoUndo') }}</span>
+                <!-- 删记录：只把这条从列表里去掉，不会撤销已执行的修改（撤销是上面那个按钮） -->
+                <el-button size="small" text type="danger" class="rec-del"
+                           :loading="changeBusy === c.id" @click="removeChange(c)">
+                  {{ $t('ai.recordDelete') }}
+                </el-button>
+              </div>
+            </div>
+            <!-- 后台任务：中断的智能体任务可以续跑（原「待办」页签里唯一有动作的部分，保留在这里） -->
+            <div v-if="unfinishedJobs.length" class="rec-jobs">
+              <div class="rec-jobs-title">{{ $t('ai.recordJobs') }}</div>
+              <div v-for="job in unfinishedJobs" :key="job.id" class="todo-card" :class="'is-' + job.status">
+                <div class="todo-head">
+                  <span class="todo-status">{{ todoStatusLabel(job.status) }}</span>
+                  <span class="todo-title">{{ job.title }}</span>
+                </div>
+                <div class="todo-result">{{ job.result }}</div>
+                <div class="todo-acts">
+                  <el-button v-if="job.kind === 'agent'" size="small" text type="primary"
+                             :loading="jobBusy === job.id" @click="resumeJob(job)">
+                    {{ $t('ai.todoResume') }}
+                  </el-button>
+                  <el-button size="small" text @click="dismissJob(job)">{{ $t('ai.todoDismiss') }}</el-button>
+                </div>
               </div>
             </div>
           </el-tab-pane>
           <el-tab-pane :label="$t('ai.memory')" name="memory">
             <div class="mem-add">
+              <el-select v-model="memScope" size="small" class="mem-scope-sel" :title="$t('ai.memScope')"
+                         filterable :fit-input-width="false" popper-class="mem-scope-popper"
+                         :filter-method="onMemScopeFilter" @change="memScopeTouched = true"
+                         @visible-change="(v) => { if (!v) memScopeQuery = '' }">
+                <!-- 选中项也带类型 logo（与左侧树同一套图标），一眼认出是哪类库 -->
+                <template #prefix>
+                  <DbLogo v-if="memScopeType" :type="memScopeType" :size="14" />
+                  <el-icon v-else :size="13"><Connection /></el-icon>
+                </template>
+                <el-option value="global" :label="$t('ai.memScopeAll')">
+                  <span class="mem-opt">
+                    <el-icon :size="13" class="mem-opt-ic"><Connection /></el-icon>
+                    <span class="mem-opt-tx">{{ $t('ai.memScopeAll') }}</span>
+                  </span>
+                </el-option>
+                <!-- 与左侧树同一套分组口径：预置环境 → 自定义目录 → 未分组。
+                     组名不是 el-option-group（那个不能点），而是一个禁用项 + 自己的点击拦截：
+                     点它只切折叠，不会把选中值改掉。 -->
+                <template v-for="g in memScopeRender" :key="g.key">
+                  <el-option :value="'hd:' + g.key" :label="g.label" disabled class="mem-grp-hd">
+                    <span class="mem-opt mem-grp" :data-grp="g.key">
+                      <el-icon :size="11" class="mem-grp-caret" :class="{ 'is-open': !g.collapsed }">
+                        <ArrowRight />
+                      </el-icon>
+                      <span class="mem-opt-tx">{{ g.label }}</span>
+                      <span class="mem-grp-n">{{ g.conns.length }}</span>
+                    </span>
+                  </el-option>
+                  <template v-if="!g.collapsed">
+                    <el-option v-for="o in g.conns" :key="o.value" :value="o.value" :label="o.label">
+                      <span class="mem-opt">
+                        <DbLogo :type="o.type" :size="14" />
+                        <span class="mem-opt-tx">{{ o.label }}</span>
+                      </span>
+                    </el-option>
+                  </template>
+                </template>
+              </el-select>
               <el-input v-model="memDraft" size="small" :placeholder="$t('ai.memoryPlaceholder')"
                         @keyup.enter="addMemory" />
               <el-button size="small" type="primary" @click="addMemory">{{ $t('ai.memoryAdd') }}</el-button>
             </div>
             <div v-if="!memories.length && !mateFailed.includes('memory')" class="mate-empty">{{ $t('ai.memoryEmpty') }}</div>
             <div v-for="row in memories" :key="row.id" class="mem-card">
-              <div class="mem-fact">{{ row.fact }}</div>
+              <!-- 一句话事实 + 范围 + 日期 + 删除压缩成**一行**：显示不下就省略号，悬浮给全文。
+                   记忆通常就一句短话，竖着堆两行纯属浪费抽屉宽度。 -->
+              <div class="mem-fact" :title="row.fact">{{ row.fact }}</div>
               <div class="mem-meta">
-                <!-- 只显示连接**名字**：库里存的是 conn_18e0… 这种内部 id，
-                     对用户是纯噪声（找不着、也点不动）。
-                     来源（你说过 / AI 推断）不再单独占字：一眼扫过反而更乱，
-                     真要分辨时看文案口气就够了 -->
-                <span v-if="connNameOf(row)" class="mem-conn" :title="connNameOf(row)">{{ connNameOf(row) }}</span>
+                <!-- 范围只显示**名字**（库里存的是 conn_18e0… 这种内部 id，对用户是纯噪声）。
+                     连接已被删掉时明确写「（已删除）」并给「改为全部」的出口 ——
+                     否则它会静默失效：注入是按连接 id 匹配的，挂在不存在的 id 上永远不会生效。 -->
+                <span class="mem-scope" :class="{ 'is-gone': row.connMissing }"
+                      :title="memScopeText(row)">{{ memScopeText(row) }}</span>
                 <span v-if="row.createdAt" class="mem-date">{{ String(row.createdAt).slice(0, 10) }}</span>
+                <button v-if="row.connMissing" class="mem-fix" type="button"
+                        :title="$t('ai.memDetachTip')" @click="detachMemory(row)">{{ $t('ai.memDetach') }}</button>
                 <button class="mem-del" type="button" :title="$t('ai.memoryDelete')" @click="removeMemory(row)">
                   <el-icon :size="13"><Delete /></el-icon>
                 </button>
@@ -640,7 +726,9 @@ import { ChatDotRound, DocumentCopy, Close, Cpu, Notebook, Download, Grid, Searc
 import AiMark from '../../common/AiMark.vue'
 import { aiChat, aiChatStream, aiDataDict, aiInsight, aiAskStream, aiWarmup, aiExportDoc, getAiConfig, listConnections, listDatabases, listSchemas, listTables, kbList, kbSearch,
   aiAgentRun, aiThreadList, aiThreadGet, aiThreadDelete, aiThreadRename, aiMemoryList, aiMemoryAdd, aiMemoryDelete,
-  aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
+  aiMemoryDetach,
+  aiChangeList, aiChangeAllow, aiChangeApprove, aiChangeConfirm, aiChangeApply, aiChangeUndo, aiChangeReject,
+  aiChangeDelete, aiChangeClear,
   aiJobList, aiJobDismiss, aiJobResume, listPlugins } from '../../api'
 import KbIngestPanel from './KbIngestPanel.vue'
 import { renderMarkdown, extractCodeBlocks } from '../../utils/markdown'
@@ -649,6 +737,12 @@ import { schemaLevelOf, hideDbLevelOf } from '../../types'
 import DbLogo from '../../common/DbLogo.vue'
 import { envLabel, PREDEF_ENVS } from '../../utils/envs.js'
 import SqlProbeDialog from '../../common/SqlProbeDialog.vue'
+// 变更单执行被「AI 写库总开关」拦下时，弹带「去设置」的通知（与其他安全拦截同一套出口）
+import { showSafetyNotice, openSafetySettings } from '../../utils/safetyNotice'
+// 记录/变更单卡片上的定位路径（连接.库.模式.表，认不出表就退到上一级）
+import { changePathOf } from '../../utils/sqlTarget'
+// 连接 id → 名字的本地记忆：连接被删掉后（记录里只剩 id）靠它把名字补回来
+import { connNameOf as connNameById } from '../../utils/connNames'
 // 问数的流式步骤合并（running → done 原地升级）：与独立问数工作区共用同一份实现
 import { mergeStep } from '../chatbi/askSteps.js'
 import { listAskHistory, saveAskHistory, removeAskHistory } from '../chatbi/askHistory.js'
@@ -1059,17 +1153,19 @@ const messages = toRef(_ps, 'messages')
 const chatThreadId = toRef(_ps, 'chatThreadId')
 /** 当前问数对话的本地记录 id：追问并进同一条「记录」，新对话才另起一条 */
 const askThreadId = toRef(_ps, 'askThreadId')
-/** 深挖模式：走 /api/ai/agent，让它自己查库、出变更单 */
+/** 深度思考模式：走 /api/ai/agent，让它自己查库、出变更单 */
 const agentMode = ref(false)
-/** 同事抽屉：待办 + 记忆 */
+/** 记事抽屉：记录（变更历史）+ 记忆 */
 const mateOpen = ref(false)
-const mateTab = ref('todo')
+const mateTab = ref('records')
 const todos = ref([])
+/** 变更记录：AI 对数据库的每次增删改都会落一行（含待执行的单子） */
+const changes = ref([])
 const memories = ref([])
 const mateLoading = ref(false)
-/** 记事抽屉的加载错误：失败不能显示成「暂无待办 / 暂无记忆」 */
+/** 记事抽屉的加载错误：失败不能显示成「暂无记录 / 暂无记忆」 */
 const mateError = ref('')
-/** 加载失败的部分：'todo' / 'memory'（空态只在对应部分**真的**拉下来后才显示） */
+/** 加载失败的部分：'changes' / 'memory'（空态只在对应部分**真的**拉下来后才显示） */
 const mateFailed = ref([])
 /** 审批流水里记的名字：桌面端没有登录，名字让用户自己填 */
 const approverName = ref(localStorage.getItem('dbmind.ai.approver') || 'user')
@@ -2068,28 +2164,31 @@ const safeParse = (text) => { try { return JSON.parse(text) } catch { return nul
  * （既认不出是哪条库，也点不动）；连接已被删掉时返回空串，这一格就不渲染。
  */
 const connNameOf = (row) => {
+  const stored = String(row?.connectionName || '')
   const id = String(row?.connectionId || row?.connection_id || '')
-  if (!id) return ''
+  if (!id) return stored
   const hit = (connList.value || []).find(c => String(c.id) === id)
-  return hit?.name || hit?.type || ''
+  // 三层：现存连接的名字 → 记录里存的快照（连接已删也认得出）→ 本地见过的名字（id 换过）
+  return hit?.name || hit?.type || stored || connNameById(id)
 }
 
-/** 记事抽屉：待办（值班产物）+ 记忆（长期事实）一起拉 */
+/** 记事抽屉：记录（变更历史）+ 记忆（长期事实），后台任务只用来提示「有没跑完的排查」 */
 const refreshMate = async () => {
   mateLoading.value = true
   mateError.value = ''
   mateFailed.value = []
   try {
-    // allSettled：两边互不拖累，但要能分辨「真的空」和「没拉下来」
-    const [jobsRes, memRes] = await Promise.allSettled([
+    // allSettled：三边互不拖累，但要能分辨「真的空」和「没拉下来」
+    const [jobsRes, memRes, chgRes] = await Promise.allSettled([
       aiJobList(),
-      aiMemoryList({ limit: 200 })
+      aiMemoryList({ limit: 200 }),
+      aiChangeList({})
     ])
     if (jobsRes.status === 'fulfilled') {
       todos.value = jobsRes.value?.jobs || []
     } else {
-      mateFailed.value.push('todo')
-      console.warn('[ai] 待办加载失败：', jobsRes.reason?.message || jobsRes.reason)
+      mateFailed.value.push('jobs')
+      console.warn('[ai] 后台任务加载失败：', jobsRes.reason?.message || jobsRes.reason)
     }
     if (memRes.status === 'fulfilled') {
       memories.value = memRes.value?.memories || []
@@ -2097,8 +2196,15 @@ const refreshMate = async () => {
       mateFailed.value.push('memory')
       console.warn('[ai] 记忆加载失败：', memRes.reason?.message || memRes.reason)
     }
+    if (chgRes.status === 'fulfilled') {
+      changes.value = chgRes.value?.changes || []
+    } else {
+      mateFailed.value.push('changes')
+      console.warn('[ai] 变更记录加载失败：', chgRes.reason?.message || chgRes.reason)
+    }
     if (mateFailed.value.length) {
-      const parts = mateFailed.value.map((k) => t(k === 'todo' ? 'ai.todo' : 'ai.memory'))
+      const labelOf = (k) => t(k === 'changes' ? 'ai.records' : k === 'jobs' ? 'ai.recordJobs' : 'ai.memory')
+      const parts = mateFailed.value.map(labelOf)
       // 顿号只适合中文；英文用逗号分隔，别混进中文标点
       const sep = String(locale.value || '').startsWith('en') ? ', ' : '、'
       mateError.value = t('ai.mateLoadFailed', { parts: parts.join(sep) })
@@ -2109,15 +2215,27 @@ const refreshMate = async () => {
 }
 
 const openMate = async (tabKey) => {
-  mateTab.value = tabKey || 'todo'
+  mateTab.value = tabKey || 'records'
   mateOpen.value = true
+  // 「记忆 → 作用范围」下拉要列出**全部连接**：连接清单没拿到就补一次（面板常驻时也要保证）
+  if (!connList.value.length) await loadConnList()
   await refreshMate()
 }
 
 /** alert = 值班发现问题；waiting = 有变更单等人确认；done = 没事（不打扰） */
 const todoStatusLabel = (status) => (te('ai.jobStatus.' + status) ? t('ai.jobStatus.' + status) : status)
 const riskLabel = (risk) => (te('ai.risk.' + risk) ? t('ai.risk.' + risk) : risk)
+/** 变更单状态（pending / applied / undone / rejected / failed）—— 记录页里要中文化 */
+const chgStatusLabel = (status) => (te('ai.chgStatus.' + status) ? t('ai.chgStatus.' + status) : status)
 const alertCount = computed(() => todos.value.filter(job => job.status === 'alert').length)
+/** 记录页签底部只列「还没结束」的后台任务：跑完的没有动作可做，不占地方 */
+const unfinishedJobs = computed(() => todos.value.filter(job => ['alert', 'failed', 'running'].includes(job.status)))
+/** 记录里的时间：只到分钟（`2026-11-19T09:12:33Z` → `2026-11-19 09:12`） */
+const fmtWhen = (value) => {
+  if (!value) return ''
+  const text = String(value).replace('T', ' ')
+  return text.length >= 16 ? text.slice(0, 16) : text
+}
 
 /**
  * 继续跑一张中断的待办。
@@ -2141,7 +2259,12 @@ const resumeJob = async (job) => {
         role: 'assistant',
         content: res.content || '',
         steps: res.steps || [],
-        changes: res.changes || [],
+        // 与首跑一致：路径要用这张待办自己的连接与库（续跑不挂在当前上下文上）
+        changes: (res.changes || []).map((c) => ({
+          ...c,
+          connectionId: job.connectionId,
+          database: job.database
+        })),
         usage: null
       }))
       scrollBottom()
@@ -2165,13 +2288,139 @@ const dismissJob = async (job) => {
 }
 
 const memDraft = ref('')
+/**
+ * 记忆的「作用范围」：全部连接 / 任意一条连接（列表里直接选，不要求先在工具条选上下文 ——
+ * 之前只列「当前连接」，没选上下文时下拉里就只剩一项，等于选不到连接）。
+ *
+ * 表级刻意不做：每轮对话都已经把表结构（列/类型/注释）注入上下文，记忆再挂表只会在
+ * 表改名/删除之后变成一条错误的口径，而且没有任何机制能让它自动失效。
+ */
+const memScope = ref('global')
+/** 用户手动选过就不再跟着上下文跑（否则每次切连接都把人家选的范围改掉） */
+const memScopeTouched = ref(false)
+/**
+ * 下拉里的连接按**分组**摆（与左侧树同一套口径：预置环境 → 自定义目录 → 未分组，
+ * 组名后面带条数）。一条平铺的长列表找起来太费劲 —— 54 条连接时纯靠滚动。
+ */
+const memScopeGroups = computed(() => {
+  const groups = new Map() // 路径 -> 连接[]
+  for (const c of connList.value || []) {
+    const p = String(c.group || '').trim()
+    if (!groups.has(p)) groups.set(p, [])
+    groups.get(p).push(c)
+  }
+  const custom = [...groups.keys()].filter(p => p && !PREDEF_ENVS.includes(p))
+  const order = [...PREDEF_ENVS.filter(p => groups.has(p)), ...custom]
+  if (groups.has('')) order.push('')
+  return order.map(p => ({
+    key: p || '__none',
+    // 预置环境显示成开发/测试/生产（与树、上下文下拉一致），其余按分组路径原名
+    label: p === '' ? t('aictx.ungrouped') : (PREDEF_ENVS.includes(p) ? envLabel(p) : p),
+    conns: (groups.get(p) || []).map(c => ({
+      value: 'conn:' + c.id,
+      label: c.name || c.type || String(c.id),
+      type: c.type || ''
+    }))
+  }))
+})
+/** 扁平值清单：只用来判断「当前选中项还在不在选项里」 */
+const memScopeOptions = computed(() => [
+  { value: 'global', label: t('ai.memScopeAll') },
+  ...memScopeGroups.value.flatMap(g => g.conns)
+])
+/**
+ * 分组折叠：点组名展开/合并（默认全部展开）。只记在本次面板生命周期里 ——
+ * 这是「找起来方便」的操作，不值得写进 localStorage 变成又一个要解释的偏好。
+ */
+const memScopeCollapsed = reactive(new Set())
+const toggleMemScopeGroup = (key) => {
+  if (memScopeCollapsed.has(key)) memScopeCollapsed.delete(key)
+  else memScopeCollapsed.add(key)
+}
+/**
+ * 下拉里的搜索词（`filter-method` 自己接管过滤）：
+ * 这样「搜索」与「折叠」不打架 —— 有关键字时一律按名字过滤、忽略折叠状态，
+ * 否则用户搜一条被折叠起来的连接会得到「没有数据」。
+ */
+const memScopeQuery = ref('')
+const onMemScopeFilter = (q) => {
+  memScopeQuery.value = String(q || '').trim().toLowerCase()
+}
+/** 实际渲染用的分组（含折叠态与搜索结果） */
+const memScopeRender = computed(() => {
+  const q = memScopeQuery.value
+  return memScopeGroups.value
+    .map(g => {
+      const conns = q ? g.conns.filter(c => String(c.label).toLowerCase().includes(q)) : g.conns
+      return { ...g, conns, collapsed: !q && memScopeCollapsed.has(g.key) }
+    })
+    .filter(g => g.conns.length > 0 || !q)
+})
+/**
+ * 组名是「禁用的 el-option」：Element 自己的点击处理会把禁用项拦掉，
+ * 所以在 document 捕获阶段先截住，只做折叠切换，绝不改动选中值。
+ */
+const onMemScopeDocClick = (ev) => {
+  const el = ev.target?.closest?.('.mem-grp')
+  if (!el) return
+  ev.preventDefault()
+  ev.stopPropagation()
+  toggleMemScopeGroup(String(el.dataset.grp || ''))
+}
+onMounted(() => document.addEventListener('click', onMemScopeDocClick, true))
+onBeforeUnmount(() => document.removeEventListener('click', onMemScopeDocClick, true))
+/** 选中项的数据库类型（下拉触发器上的 logo）；「全部连接」时为空 */
+const memScopeType = computed(() => {
+  const hit = memScopeOptions.value.find(o => o.value === memScope.value)
+  return hit?.type || ''
+})
+// 没手选过就默认跟着当前上下文连接；手选过则只在选项失效时回落到「全部连接」
+watch([ctxConnId, () => memScopeOptions.value.map(o => o.value).join(',')], () => {
+  if (memScopeTouched.value) {
+    if (!memScopeOptions.value.some(o => o.value === memScope.value)) memScope.value = 'global'
+    return
+  }
+  memScope.value = ctxConnId.value ? 'conn:' + ctxConnId.value : 'global'
+}, { immediate: true })
+
+/** 卡片上的范围文字：全部连接 / 连接名 · 库 / 连接名（已删除） */
+const memScopeText = (row) => {
+  if (row.scope === 'global' || !row.connectionId) return t('ai.memScopeAll')
+  const name = String(row.connectionName || '') || connNameById(row.connectionId)
+  const db = String(row.database || '')
+  const label = name ? (db ? `${name} · ${db}` : name) : (db || String(row.connectionId))
+  return row.connMissing ? t('ai.memGoneName', { name: label }) : label
+}
+
 const addMemory = async () => {
   const fact = String(memDraft.value || '').trim()
   if (!fact) return
+  const scope = memScope.value === 'global' ? 'global' : 'connection'
+  const payload = { fact, scope, source: 'user' }
+  if (scope === 'connection') {
+    const connId = String(memScope.value).replace(/^conn:/, '')
+    payload.connectionId = connId
+    // 选中的正是当前上下文的那条连接时，顺手带上当前库（「本库金额单位是分」这类口径）
+    if (ctxConnId.value && connId === String(ctxConnId.value) && ctxEffectiveDatabase.value) {
+      payload.database = ctxEffectiveDatabase.value
+    }
+  }
   try {
-    const res = await aiMemoryAdd({ fact, connectionId: ctxConnId.value || '', source: 'user' })
+    const res = await aiMemoryAdd(payload)
     if (!res?.success) throw new Error(res?.message || t('ai.requestFailed'))
     memDraft.value = ''
+    await refreshMate()
+  } catch (e) {
+    ElMessage.error(e?.message || t('ai.requestFailed'))
+  }
+}
+
+/** 连接已删的老记忆：改成「全部连接」（否则它永远不会被注入） */
+const detachMemory = async (row) => {
+  try {
+    const res = await aiMemoryDetach(row.id)
+    if (!res?.success) throw new Error(res?.message || t('ai.requestFailed'))
+    ElMessage.success(t('ai.memDetached'))
     await refreshMate()
   } catch (e) {
     ElMessage.error(e?.message || t('ai.requestFailed'))
@@ -2194,8 +2443,19 @@ const removeMemory = async (row) => {
 const runChange = async (change, act) => {
   if (changeBusy.value) return
   changeBusy.value = change.id
+  const who = approverName.value || 'user'
   try {
-    localStorage.setItem('dbmind.ai.approver', approverName.value || 'user')
+    localStorage.setItem('dbmind.ai.approver', who)
+    // 「允许」= 一步执行（批准 + 执行都在后端一个请求里完成）。
+    // 不在前端连点 approve/apply：中途失败会留下「已批准但其实没执行」的半截状态。
+    if (act === 'allow') {
+      const res = await aiChangeAllow(change.id, who)
+      if (!res || !res.success) throw new Error(res?.message || t('ai.requestFailed'))
+      change.status = res.status || 'applied'
+      ElMessage.success(t('ai.chgApplied', { n: res.affectedRows ?? -1 }))
+      refreshMate()
+      return
+    }
     const call = {
       approve: aiChangeApprove,
       confirm: aiChangeConfirm,
@@ -2203,17 +2463,88 @@ const runChange = async (change, act) => {
       undo: aiChangeUndo,
       reject: aiChangeReject
     }[act]
-    const res = await call(change.id, approverName.value || 'user')
+    const res = await call(change.id, who)
     if (!res || !res.success) throw new Error(res?.message || t('ai.requestFailed'))
     change.status = res.status || change.status
     if (act === 'apply') ElMessage.success(t('ai.chgApplied', { n: res.affectedRows ?? -1 }))
     else ElMessage.success(t('ai.chgDone'))
     refreshMate()
   } catch (e) {
-    // 后端会说明「为什么现在不能执行」（比如高危还差一次确认），原样展示
+    const msg = e?.message || t('ai.requestFailed')
+    // 总开关没开（默认关，安全红线）：给一条带「去设置」按钮的通知，
+    // 光弹一句红字用户不知道去哪放开，会以为「允许」坏了
+    if (/aiWriteEnabled/.test(msg)) {
+      showSafetyNotice(msg, {
+        title: t('ai.writeOffTitle'),
+        hints: [t('ai.writeOffHint')],
+        onAction: openSafetySettings,
+        actionText: t('tdet.prodBlockedGo')
+      })
+      return
+    }
+    // 其余情况后端会说明「为什么现在不能执行」（比如高危还差一次确认），原样展示
+    ElMessage.error(msg)
+  } finally {
+    changeBusy.value = ''
+  }
+}
+
+/**
+ * 跳过：这次不执行，但**不**拒绝 —— 单子仍是 pending，留在「记录」里，
+ * 想清楚了下一次还能点允许。只在当前气泡里收起，免得一直占着视线。
+ */
+const skipChange = (change) => { change.skipped = true }
+
+/**
+ * 删一条记录。**只删记录**，不撤销已执行的修改 —— 确认框里必须写清楚，
+ * 否则用户会把它当成「撤销」来点。
+ */
+const removeChange = async (change) => {
+  if (changeBusy.value) return
+  try {
+    await ElMessageBox.confirm(
+      t('ai.recordDeleteConfirm', { title: change.title }),
+      t('ai.recordDelete'),
+      { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
+    )
+  } catch {
+    return // 用户取消
+  }
+  changeBusy.value = change.id
+  try {
+    const res = await aiChangeDelete(change.id)
+    if (!res || !res.success) throw new Error(res?.message || t('ai.requestFailed'))
+    changes.value = changes.value.filter((row) => row.id !== change.id)
+    ElMessage.success(t('ai.recordDeleted'))
+  } catch (e) {
     ElMessage.error(e?.message || t('ai.requestFailed'))
   } finally {
     changeBusy.value = ''
+  }
+}
+
+/** 清空记录（同样只删记录，不撤销任何已执行的修改） */
+const clearChanges = async () => {
+  if (!changes.value.length) return
+  try {
+    await ElMessageBox.confirm(
+      t('ai.recordsClearConfirm', { n: changes.value.length }),
+      t('ai.recordsClear'),
+      { type: 'warning', confirmButtonText: t('common.confirm'), cancelButtonText: t('common.cancel') }
+    )
+  } catch {
+    return
+  }
+  mateLoading.value = true
+  try {
+    const res = await aiChangeClear()
+    if (!res || !res.success) throw new Error(res?.message || t('ai.requestFailed'))
+    changes.value = []
+    ElMessage.success(t('ai.recordsCleared', { n: res.deleted ?? 0 }))
+  } catch (e) {
+    ElMessage.error(e?.message || t('ai.requestFailed'))
+  } finally {
+    mateLoading.value = false
   }
 }
 
@@ -2256,7 +2587,12 @@ const runAgentChat = async (text) => {
       role: 'assistant',
       content: res.content || '',
       steps: res.steps || [],
-      changes: res.changes || [],
+      // 变更单只带 id/sql/risk，卡片上的「连接.库.模式.表」还要知道是哪条连接、哪个库 —— 用本次提问的上下文补上
+      changes: (res.changes || []).map((c) => ({
+        ...c,
+        connectionId: ctxConnId.value,
+        database: ctxEffectiveDatabase.value
+      })),
       usage: null
     }))
     if ((res.changes || []).length) refreshMate()
@@ -2276,12 +2612,13 @@ const runAgentChat = async (text) => {
 
 // ---------------------------------------------------------------- 记录（会话列表）
 /**
- * 左栏展开 / 收起。默认展开，选择记在 localStorage ——
- * 收起来对话区会宽 216px（看长 SQL 时有用），但下次打开还要保持上次的样子，
- * 否则每次进来都得重新收一次。
+ * 左栏展开 / 收起。**默认收起**（用户反馈：一进来先看见一列历史，对话区被挤窄）——
+ * 收起态只留一条竖窄条（展开键 + 新建 + 竖排「记录」），想翻历史再点开。
+ * 选择记在 localStorage；键名带 v2 是因为旧键里存的是「默认展开」时代的选择，
+ * 沿用会让老用户升级后仍然是展开的。
  */
-const HIST_OPEN_KEY = 'dbmind_ai_hist_open'
-const histOpen = ref(localStorage.getItem(HIST_OPEN_KEY) !== '0')
+const HIST_OPEN_KEY = 'dbmind_ai_hist_open.v2'
+const histOpen = ref(localStorage.getItem(HIST_OPEN_KEY) === '1')
 const toggleHist = () => {
   histOpen.value = !histOpen.value
   try { localStorage.setItem(HIST_OPEN_KEY, histOpen.value ? '1' : '0') } catch { /* 隐私模式写不了，忽略 */ }
@@ -2621,7 +2958,7 @@ watch(() => props.active, (v) => { if (v) loadInboxData() })
 
 // ===== 底栏上下文 chips 小屏压缩：永远单行，放不下按级收成纯图标（v-fast-tip 快速提示） =====
 // 收级次序（data-g 越小越先收）：1 模型 → 2 知识库 → 3 聚焦表 → 4 数据源；
-// 自主排查/记事/自由对话是模式入口，不收。与 SQL 工具条同一套交互口径。
+// 深度思考/记事/自由对话是模式入口，不收。与 SQL 工具条同一套交互口径。
 const composerBarEl = ref(null)
 const COMPOSER_MAX_G = 7
 const applyComposerLv = (lv) => {
@@ -2840,9 +3177,14 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .composer-bar .icon-only .composer-ctx-tx,
 .composer-bar .icon-only .composer-pick-tx,
 .composer-bar .icon-only .skill-btn-tx { display: none; }
+/* 收窄 padding：.icon-only 可能在外层 el-dropdown 根 div 上（四个下拉），
+   也可能直接加在按钮自身（深度思考 / 记事，它们的 data-g 就在 button 上），两种都要盖住 */
 .composer-bar .icon-only .composer-ctx,
 .composer-bar .icon-only .composer-pick,
-.composer-bar .icon-only .skill-btn { padding: 0 8px; max-width: none; }
+.composer-bar .icon-only .skill-btn,
+.composer-bar .composer-ctx.icon-only,
+.composer-bar .composer-pick.icon-only,
+.composer-bar .skill-btn.icon-only { padding: 0 8px; max-width: none; }
 .composer-bar .icon-only .composer-ctx :deep(span),
 .composer-bar .icon-only .composer-pick :deep(span) { display: none; }
 .composer-bar .icon-only .composer-ctx :deep(.el-icon:first-child),
@@ -3406,8 +3748,19 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   white-space: pre-wrap;
   word-break: break-all;
 }
+/* 定位路径 chip：与聚焦表 tag 同一副长相（描边小圆角），能一眼看出改的是哪张表 */
+.chg-path, .rec-path {
+  display: inline-flex; align-items: center; max-width: 100%;
+  margin-top: 6px; padding: 0 6px; height: 19px; border-radius: 5px;
+  border: 1px solid var(--dc-border); background: var(--dc-bg-soft);
+  font-size: 11px; line-height: 19px; color: var(--dc-text-mid);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rec-path { margin-top: 0; }
 .chg-undo { margin-top: 6px; font-size: 11px; color: var(--dc-text-dim); word-break: break-all; }
 .chg-acts { margin-top: 8px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 跳过 = 这次不执行（单子仍留在「记录」里可再执行），整卡压暗一档，别和待处理混在一起 */
+.chg-card.is-skipped { opacity: .55; }
 
 /* 服务端提示条（预算降级等）：比正文弱一档，但必须看得见 */
 .msg-notice {
@@ -3423,6 +3776,9 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 /* 抽屉内部（记事：待办 + 记忆）
    两栏统一一套卡片观感：8px 圆角、hover 提亮、右侧动作只在悬浮时变清晰 ——
    原来只有 1px 描边且卡片间距 8px，一堆待办堆起来边界发糊。 */
+/* 记事抽屉：默认 600px（460 太窄 —— 「连接.库.模式.表」和一行 SQL 全在折行），
+   窄窗口下按视口收，别整屏铺满 */
+.mate-drawer { max-width: 92vw; }
 .mate-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mate-body { height: 100%; }
 .mate-empty { padding: 24px 4px; text-align: center; font-size: 12px; color: var(--dc-text-weak); }
@@ -3441,6 +3797,49 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
   color: var(--dc-danger, #d64545);
 }
 .mate-error-txt { flex: 1; min-width: 0; }
+/* 记录页签：AI 对库的每次增删改一条，等宽 SQL 折行显示，动作在卡片底部 */
+.rec-card {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--dc-border-soft);
+  border-left: 3px solid var(--dc-primary);
+  border-radius: 8px;
+  background: var(--dc-bg-card);
+  transition: background .15s ease, border-color .15s ease;
+}
+.rec-card:hover { background: var(--dc-bg-soft); }
+.rec-card.is-medium { border-left-color: #d19a00; }
+.rec-card.is-high { border-left-color: var(--dc-danger); }
+.rec-head { display: flex; align-items: center; gap: 8px; }
+.rec-risk {
+  flex: none; padding: 0 6px; border-radius: 4px;
+  font-size: 11px; line-height: 18px;
+  background: var(--dc-primary-soft); color: var(--dc-primary);
+}
+.rec-card.is-medium .rec-risk { background: rgba(209, 154, 0, .14); color: #a87900; }
+.rec-card.is-high .rec-risk { background: rgba(220, 60, 60, .14); color: var(--dc-danger); }
+.rec-title { flex: 1; min-width: 0; font-size: 12.5px; color: var(--dc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rec-state { flex: none; font-size: 11px; color: var(--dc-text-weak); }
+.rec-state.st-applied { color: var(--dc-success, #67c23a); }
+.rec-state.st-failed { color: var(--dc-danger); }
+.rec-state.st-undone { color: var(--dc-text-dim); }
+.rec-sql {
+  margin: 6px 0 0; padding: 6px 8px; border-radius: 4px;
+  background: var(--dc-bg-deep); color: var(--dc-text-mid);
+  font-size: 12px; white-space: pre-wrap; word-break: break-all;
+  max-height: 132px; overflow: auto;
+}
+.rec-meta { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 11px; color: var(--dc-text-dim); }
+.rec-time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.rec-err { margin-top: 6px; font-size: 11px; line-height: 1.6; color: var(--dc-danger); word-break: break-all; }
+.rec-acts { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.rec-note { font-size: 11px; color: var(--dc-text-dim); }
+/* 记录工具条：条数左、清空右；删除按钮在每条卡片右侧，别和「允许」挨在一起误点 */
+.rec-bar { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+.rec-count { font-size: 12px; color: var(--dc-text-weak); }
+.rec-clear, .rec-del { margin-left: auto; }
+.rec-jobs { margin-top: 14px; }
+.rec-jobs-title { margin-bottom: 8px; font-size: 12px; font-weight: 600; color: var(--dc-text-mid); }
 .todo-card {
   margin-bottom: 10px;
   padding: 10px 12px;
@@ -3483,22 +3882,45 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 .todo-acts :deep(.el-button) { margin-left: 0; }
 .mem-add { display: flex; gap: 8px; margin-bottom: 12px; }
 .mem-add :deep(.el-input) { flex: 1; min-width: 0; }
+/* 作用范围：最多显示「连接名 · 库名」，太长就靠省略号（全文在 title 上） */
+.mem-scope-sel { flex: none; width: 164px; }
+.mem-scope-sel :deep(.el-select__selected-item) { overflow: hidden; text-overflow: ellipsis; }
+/* 下拉项：类型 logo + 名字，名字过长走省略号（悬浮有原生 title 兜底） */
+.mem-opt { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.mem-opt-ic { color: var(--dc-text-mid); }
+.mem-opt-tx { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 分组头：视觉上是分组标题，行为上是「展开/合并」开关（禁用项 + 捕获阶段点击）。
+   height/line-height 必须一起改：Element 的选项是固定 34px 行高，只改 height 会留下
+   一段空白（内层仍按 34px 撑开），看起来就像每个组头下面挖了个坑。 */
+.mem-scope-popper .el-select-dropdown__item.mem-grp-hd,
+.mem-scope-popper .el-select-dropdown__item.mem-grp-hd.is-disabled {
+  height: 28px; min-height: 28px; line-height: 20px; padding: 4px 12px; cursor: pointer;
+  color: var(--dc-text-dim); background: transparent; opacity: 1;
+}
+.mem-scope-popper .el-select-dropdown__item.mem-grp-hd:hover { background: var(--dc-bg-soft); }
+.mem-grp { width: 100%; height: 20px; line-height: 20px; }
+.mem-grp-caret { flex: none; color: var(--dc-text-weak); transition: transform .15s ease; }
+.mem-grp-caret.is-open { transform: rotate(90deg); }
+.mem-grp-n { margin-left: auto; font-size: 11px; color: var(--dc-text-weak); }
+/* 一行卡：事实（可省略）+ 连接 + 日期 + 删除，全部垂直居中对齐 */
 .mem-card {
-  margin-bottom: 10px; padding: 12px 14px 10px;
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 8px; padding: 6px 8px 6px 14px;
   border: 1px solid var(--dc-border-soft); border-radius: 10px; background: var(--dc-bg-card);
   transition: background .15s ease, border-color .15s ease;
 }
 .mem-card:hover { border-color: var(--dc-border); background: var(--dc-bg-soft); }
-.mem-fact { font-size: 13px; color: var(--dc-text); line-height: 1.7; word-break: break-word; }
-/* 元信息做成卡片的「页脚」：一条细线分开，连接名在左、日期在右、删除贴最右。
-   原来三者挤在一行 11px 灰字里，扫起来像一句跑马灯。 */
-.mem-meta {
-  margin-top: 10px; padding-top: 8px;
-  border-top: 1px solid var(--dc-border-soft);
-  display: flex; align-items: center; gap: 10px;
-  font-size: 11px; color: var(--dc-text-weak); min-height: 24px;
+/* 事实正文：占满剩余宽度，超长走省略号（全文在 title 悬浮里） */
+.mem-fact {
+  flex: 1 1 auto; min-width: 0;
+  font-size: 13px; color: var(--dc-text); line-height: 1.6;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.mem-conn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 元信息：不再另起一行（原来还带一条分割线，一行卡里全去掉） */
+.mem-meta {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  font-size: 11px; color: var(--dc-text-weak);
+}
 .mem-date { flex: none; font-variant-numeric: tabular-nums; letter-spacing: .2px; }
 /* 删除：红色垃圾桶。平时半透明，悬浮卡片才全亮 —— 记忆是「长期保留」的东西，
    不该有个随时抢注意力的按钮；但危险语义必须一眼看出来，所以用红不用灰 */
@@ -3511,5 +3933,16 @@ watch([currentModelLabel, kbScopeLabel, () => ctxTables.value.length, () => loca
 }
 .mem-card:hover .mem-del { opacity: 1; }
 .mem-del:hover { background: rgba(220, 60, 60, .14); }
-.mem-conn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 作用范围：一行卡里它不该抢正文的宽度，给个上限再省略（全文在 title 上） */
+.mem-scope {
+  flex: none; max-width: 170px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 连接已被删：红字说清楚，别让用户以为这条还在生效 */
+.mem-scope.is-gone { color: var(--dc-danger); }
+.mem-fix {
+  flex: none; padding: 0 2px; border: none; background: transparent;
+  font-size: 11px; color: var(--dc-primary); cursor: pointer;
+}
+.mem-fix:hover { text-decoration: underline; }
 </style>

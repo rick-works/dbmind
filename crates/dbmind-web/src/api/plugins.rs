@@ -15,10 +15,15 @@
 //!
 //! ```text
 //! ~/.dbmind/plugins/<id>/
-//!     manifest.json     必需：id / type / name / version / prompt
-//!     prompt.md         技能提示词（{{变量}} 由输入项填充，与内置模板同语法）
-//!     icon.svg          可选
+//!     manifest.json     必需：id / type / name / version / icon / prompt
+//!     chat.md           对话形态的提示词（推荐；缺省退回 prompt.md）
+//!     prompt.md         任务模板（兼容老包，占位符在对话形态下会被清掉）
 //! ```
+//!
+//! 技能**没有独立界面**：装好后在 AI 助手的 Skills 里选中，提示词拼进 system，
+//! 之后的每一轮提问都由它生效（见 [`augment_system`]）。所以 manifest 里不再有
+//! `inputs`（那是「表单 → 一次生成」时代的字段，已废弃：带 inputs 的旧包照常能装，
+//! 只是这些字段不再被读取）。
 //!
 //! 磁盘是**唯一真相**（装没装、什么版本），只有「启用/禁用」存在 `app_settings`
 //! 的 `plugins.disabled` 里 —— 那点状态不值得单独建表，也不会因为目录被手工删掉而错乱。
@@ -35,14 +40,13 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use axum::extract::{Multipart, Path as AxPath, State};
+use axum::extract::{Multipart, Path as AxPath};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use crate::api::ai::{self, run_blocking, AiRequest};
+use crate::api::ai::run_blocking;
 use crate::api::error::{XError, XResult};
-use crate::AppState;
 
 /// 当前能认的 manifest 版本。老版本产品读到更高版本应当**拒绝**而不是硬着头皮装
 /// （字段语义可能已经变了，硬装出来的是个行为不可预期的插件）。
@@ -102,23 +106,6 @@ impl Localized {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SkillInput {
-    pub key: String,
-    #[serde(default)]
-    pub label: Option<Localized>,
-    /// `text`（默认，多行文本）。以后要加 `sql` / `select` 之类，前端按它换控件。
-    #[serde(default, rename = "type")]
-    pub input_type: Option<String>,
-    #[serde(default)]
-    pub placeholder: Option<Localized>,
-    #[serde(default)]
-    pub required: bool,
-    #[serde(default)]
-    pub rows: Option<u32>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct Manifest {
     #[serde(default)]
     pub schema_version: u32,
@@ -149,8 +136,6 @@ pub struct Manifest {
     /// 没给就退回 `prompt` 并清洗掉变量占位符（见 [`strip_placeholders`]）。
     #[serde(default)]
     pub chat_prompt: Option<String>,
-    #[serde(default)]
-    pub inputs: Vec<SkillInput>,
 }
 
 // ------------------------------------------------------------------ 目录与状态
@@ -235,9 +220,6 @@ fn validate(manifest: &Manifest, dir: &Path) -> XResult<()> {
             return Err(XError::bad_request(format!("插件包里缺少对话提示词文件 {chat}")));
         }
     }
-    if manifest.inputs.iter().any(|i| i.key.trim().is_empty()) {
-        return Err(XError::bad_request("inputs 里有空 key"));
-    }
     Ok(())
 }
 
@@ -284,7 +266,6 @@ fn item_json(manifest: &Manifest, dir: &Path, state: &str, lang: &str) -> Value 
         "needsContext": manifest.needs_context,
         "state": state,
         "dir": dir.display().to_string(),
-        "inputs": manifest.inputs,
         "icon": manifest.icon.clone().unwrap_or_default(),
     })
 }
@@ -668,101 +649,6 @@ pub async fn uninstall(AxPath(id): AxPath<String>) -> XResult<Json<Value>> {
     Ok(Json(json!({ "id": id, "removed": true })))
 }
 
-// ------------------------------------------------------------------ 接口：运行技能
-
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillRunReq {
-    #[serde(default)]
-    pub inputs: BTreeMap<String, String>,
-    #[serde(default)]
-    pub connection_id: Option<String>,
-    #[serde(default)]
-    pub database: Option<String>,
-    #[serde(default)]
-    pub model_id: Option<String>,
-    #[serde(default)]
-    pub lang: Option<String>,
-    /// 覆盖 manifest 的 needsContext（界面上「带上表结构」勾选框）。
-    #[serde(default)]
-    pub with_context: Option<bool>,
-}
-
-/// `POST /api/plugins/{id}/run` —— 执行一个 skill 插件。
-///
-/// 提示词仍走 `{{变量}}` 渲染（与内置模板同语法，同一个 render 实现），
-/// 缺必填项直接 400 并把缺哪个写清楚 —— 让模型对着 `{{sql}}` 占位符作答是最糟的体验。
-pub async fn run(
-    State(state): State<AppState>,
-    AxPath(id): AxPath<String>,
-    Json(req): Json<SkillRunReq>,
-) -> XResult<Json<Value>> {
-    let dir = root().join(&id);
-    if !dir.is_dir() {
-        return Err(XError::bad_request(format!("插件「{id}」未安装")));
-    }
-    if disabled_ids().contains(&id) {
-        return Err(XError::bad_request(format!("插件「{id}」已停用，请先在插件中心启用")));
-    }
-    let manifest = read_manifest(&dir)?;
-    let prompt_file = manifest.prompt.clone().unwrap_or_default();
-    let template = std::fs::read_to_string(dir.join(&prompt_file))
-        .map_err(|e| XError::internal(format!("读取提示词失败：{e}")))?;
-
-    let missing: Vec<&str> = manifest
-        .inputs
-        .iter()
-        .filter(|input| input.required && req.inputs.get(&input.key).map(|v| v.trim().is_empty()).unwrap_or(true))
-        .map(|input| input.key.as_str())
-        .collect();
-    if !missing.is_empty() {
-        return Err(XError::bad_request(format!(
-            "还缺少必填项：{}",
-            missing.join("、")
-        )));
-    }
-
-    let mut user = template;
-    for (key, value) in &req.inputs {
-        user = user.replace(&format!("{{{{{key}}}}}"), value);
-    }
-    // 可选输入没填时把占位符也清掉，别让模型看到 {{focus}}
-    while let Some(start) = user.find("{{") {
-        let rest = &user[start..];
-        let Some(end) = rest.find("}}") else { break };
-        user.replace_range(start..start + end + 2, "");
-    }
-
-    let base = crate::api::ai::prompts::render("common.default-system", &[])?;
-    let system = ai::with_language(base, req.lang.as_deref());
-    let ai_req = AiRequest {
-        connection_id: req.connection_id.clone(),
-        database: req.database.clone(),
-        model_id: req.model_id.clone(),
-        lang: req.lang.clone(),
-        ..Default::default()
-    };
-    let with_context = req.with_context.unwrap_or(manifest.needs_context);
-    let (text, usage) =
-        ai_chat_once(&state, &ai_req, &system, user, with_context).await?;
-    Ok(Json(json!({
-        "id": manifest.id,
-        "text": text,
-        "usage": usage,
-    })))
-}
-
-/// 薄封装：把 `chat` 模块里那个「system + user 一次调用」的私有实现暴露给插件域。
-async fn ai_chat_once(
-    state: &AppState,
-    req: &AiRequest,
-    system: &str,
-    user: String,
-    with_context: bool,
-) -> XResult<(String, Option<crate::api::ai::config::TokenUsage>)> {
-    crate::api::ai::chat::ask_inline_with_usage(state, req, system, user, with_context).await
-}
-
 // ------------------------------------------------------------------ 对话形态：技能拼进 system
 
 /// 单个技能最多贡献多少字符：提示词是插件作者写的，不能让它把上下文预算吃光。
@@ -823,8 +709,8 @@ fn skill_prompt_text(dir: &Path, manifest: &Manifest) -> Option<String> {
 
 /// 把对话里选中的插件技能拼进 system。
 ///
-/// 与 `/api/plugins/{id}/run`（一次表单、一次生成）不同：这里的提示词是**持续生效**的
-/// 人格与方法，之后每一轮提问都带着它，直到用户把技能从输入框上摘掉。
+/// 这是技能**唯一**的执行方式（没有独立运行界面）：提示词是持续生效的人格与方法，
+/// 之后每一轮提问都带着它，直到用户把技能从输入框上摘掉。
 ///
 /// 找不到 / 已停用 / 不是 skill 的 id 一律静默跳过 —— 插件被卸载了不该把整条对话打成 500。
 pub fn augment_system(base: String, ids: &[String], lang: Option<&str>) -> String {

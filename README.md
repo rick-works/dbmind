@@ -16,8 +16,9 @@ Runs locally, your data never leaves your network. Rust core + Vue 3 frontend + 
 |---|---|
 | **🤖 Deep AI integration** | Explain / optimize / rewrite / fix / diagnose / chat — six one-click actions. AI-generated SQL can be verified with EXPLAIN and a dry run. An MCP server exposes the whole workbench to any AI client (see [AI, more than a chat box](#ai-more-than-a-chat-box)) |
 | **🧠 AI teammate** | "Autonomous check" works the database itself: inspects table structures, suggests missing indexes, reads sync / backup status and dry-runs read-only queries — every change becomes a **change request** you approve (high-risk ones ask twice, and an applied one can be undone). Long-term memory keeps your conventions, conversations are saved and resumable, and each answer footnotes its token cost |
+| **🧩 Skill plugins** | Extend the AI with **declarative skill packages** — a manifest plus prompts, **never executables** (installing a bundle that contains `.exe` / `.js` / `.jar` is refused). Install from the official catalog in one click or from a local zip, enable / disable per plugin, upgrade in place. A skill lives **inside the conversation**: pick it in Skills and every following turn keeps its persona and checklist |
 | Field masking | Replace sensitive columns by table + column with an **MD5 / SHA-256 digest or an AES-256 ciphertext** (`f3a9c2…`) — one rule set, four switches: **what is sent to the model** (context sample rows and the agent's read-only results), **what the MCP server returns to external clients**, **how the result grid renders** (display only), and **exported files** (CSV / Excel / JSON / SQL carry the masked values); wildcards like `*_phone` and a one-click "common sensitive columns" seed are included, and your data is never modified |
-| Multi-datasource | **17 engines, one client** — relational (MySQL, MariaDB, PostgreSQL, KingbaseES, Oracle, SQL Server, DB2, Derby, H2, DM), analytical (ClickHouse, Doris), embedded / file (SQLite, DuckDB) and NoSQL (Redis, MongoDB, Elasticsearch). Drivers download on demand; the per-engine capability matrix is under [Supported engines](#supported-engines) |
+| Multi-datasource | **26 engines, one client** — relational (MySQL, MariaDB, GreatSQL, TiDB, OceanBase, PostgreSQL, KingbaseES, HighGo, openGauss, Vastbase, Oracle, SQL Server, IBM Db2, DM), analytical / OLAP (ClickHouse, Doris, StarRocks, Databend, RisingWave), embedded & file (SQLite, DuckDB, H2, Derby) and NoSQL (Redis, MongoDB, Elasticsearch). Drivers download on demand; the per-engine capability matrix is under [Supported engines](#supported-engines) |
 | SQL editor | Monaco-based: completion, formatting (named `:params` kept intact), multi-statement runs with per-statement timing, history, snippets (right-click → Save / Insert, stored locally and kept across sessions), template variables (a global `:name` library managed via a toolbar dialog — the editor completes on `:`, saved defaults apply without prompting, missing ones ask once and auto-save; function values like `NOW()` are written as-is), stop execution mid-flight. 13 command shortcuts (run `Ctrl+Enter`, format `Shift+Alt+F`, comment `Ctrl+/`, copy as `IN` list `Ctrl+Shift+X`…), all rebindable — see [Keyboard shortcuts](#keyboard-shortcuts) |
 | Transaction mode | Writes are not auto-committed: edit → verify → commit or roll back. Bound to the editor's session on every JDBC engine; switching the mode off rolls back first, and SQLite (no session transactions) hides the button instead of failing on click |
 | In-grid editing | Double-click a cell → buffered changes → batched UPDATE (inside the transaction if enabled); snapshot guards void stale buffers after re-paging rather than editing the wrong row. Row cap defaults to unlimited (settable 100–100000), statement timeout 300 s (1–600) |
@@ -40,10 +41,12 @@ Runs locally, your data never leaves your network. Rust core + Vue 3 frontend + 
 
 | Group | Engines |
 |---|---|
-| Relational · 10 | MySQL, MariaDB, PostgreSQL, KingbaseES, Oracle, SQL Server, IBM Db2, DM (Dameng), Derby, H2 |
-| Analytical · 2 | ClickHouse, Doris — grouped aside as OLAP in the connection picker |
-| Embedded / file · 2 | SQLite, DuckDB — local files; no server, no Java host |
+| Relational · 14 | MySQL, MariaDB, GreatSQL, TiDB, OceanBase, PostgreSQL, KingbaseES, HighGo, openGauss, Vastbase, Oracle, SQL Server, IBM Db2, DM (Dameng) |
+| Analytical · 5 | ClickHouse, Doris, StarRocks, Databend, RisingWave — grouped aside as OLAP in the connection picker |
+| Embedded / file · 4 | SQLite, DuckDB, H2, Derby — local files or in-process; no server |
 | NoSQL · 3 | Redis, MongoDB, Elasticsearch |
+
+Four more engines (GaussDB, GoldenDB, SelectDB, UXDB) are implemented but stay hidden until they pass a real-instance run — no half-tested logos in the picker.
 
 Not every engine does everything, and the UI says so instead of pretending:
 
@@ -79,6 +82,7 @@ Light and dark themes, switchable at any time.
 Most tools bolt on a chat window; DBmind bakes AI into **every step of database work**:
 
 - **Six ready-to-use actions** — select SQL and hit explain / optimize / rewrite; on execution errors hit "AI fix" (full error context attached); "diagnose" for performance issues; free-form chat for everything else
+- **Skills, built in or installed** — pick a skill in Skills and it rides along with the conversation: the message bubble shows which one spoke, and later turns keep following it. **Skill plugins** add your own checklist (SQL review, error triage, table design…) as a package; writing one is a manifest plus two Markdown files
 - **A teammate, not a chat box** — "Autonomous check" calls tools on its own: inspects table structures, suggests the indexes you are missing, reads sync / backup status, dry-runs read-only queries. Anything that touches data becomes a **change request** — approved by you, confirmed twice when high-risk, and undoable after it runs. Multi-turn picks up where the last answer ended, and naming two tables expands two tables
 - **It remembers your conventions** — say "remember: amounts in this database are stored in cents" once and it comes along next time; memories are tagged "you said" / "AI inferred" and can be deleted. Conversations are saved, so "continue" continues
 - **Context is budgeted, not the whole schema dumped in** — large databases no longer ship hundreds of table names; a library-level question ("what is this database for") now gets the full table list with comments (about 2.7k tokens for 395 tables, versus hundreds of thousands for every column). Measured on one fix: 2345 → 956 prompt tokens, chat 2404 → 1030. Every answer footnotes its token cost, and a zero-cost breakdown shows where the request went
@@ -106,6 +110,7 @@ Worry about data usually means "I don't know what leaves the machine". Instead o
 | Long-term memory | Conventions you stated ("amounts are in cents") | If that connection / database has memories |
 | Knowledge base | Matching document snippets, ≤900 characters each, labelled with the source | If a knowledge base is configured and hits |
 | Built-in prompts | Persona and dialect rules (plain text, none of your data) | Every request |
+| Skill plugin prompts | The text of each skill you picked in Skills (manifest / prompts, none of your data) | While that skill is selected |
 
 **What never goes out**
 
@@ -204,7 +209,7 @@ Every command is rebindable under Settings → Shortcuts (stored locally, not in
 │   └── dbmind-mcp       MCP server (stdio)
 ├── agents/              Java hosts (jdbc / mongodb / redis / elasticsearch)
 ├── frontend/            Vue 3 frontend
-├── plugins/             database type declarations (JDBC URL templates, driver manifest)
+├── plugins/             declarative plugins: connection-types (JDBC URL templates + driver manifest) and skills (manifest + prompts)
 ├── resources/           native deps (SQL Server auth dll)
 ├── scripts/             dev entries (start/stop) + build/ release/ test/ tools/
 ├── deploy/              real servers for integration tests (redis / es / mongo)

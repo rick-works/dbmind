@@ -636,6 +636,101 @@ fn unfinished_note(steps: &[Value], max_rounds: u32) -> String {
     )
 }
 
+// ------------------------------------------------------------------ 变更单兜底
+
+/// 从回答里的 ```sql 代码块捞出「写库语句」，补建变更单。
+///
+/// 工具协议要求改数据必须调 `propose_change`，但模型偶尔会把 SQL 直接贴在回答里。
+/// 用户的规则是「只要有对库的实际操作（增删改）都算」—— 这里按语句分类兜住：
+/// 已经出过单的同一句 SQL 不重复建，执行仍然要人点。
+async fn harvest_changes(
+    state: &AppState,
+    conn: &str,
+    database: &str,
+    thread_id: &str,
+    protocol: dbmind_core::RuntimeProtocol,
+    answer: &str,
+    changes: &mut Vec<Value>,
+) {
+    for block in sql_blocks(answer) {
+        for stmt in dbmind_core::split_statements(protocol, &block) {
+            let sql = stmt.trim();
+            if sql.is_empty() || dbmind_core::is_read_only(protocol, sql) {
+                continue;
+            }
+            // 同一条 SQL 已经在本次工具调用里出过单就不重复建（空白/大小写/末尾分号不影响判断）
+            let key = crate::api::ai::teammate::norm_sql(sql);
+            let seen = changes.iter().any(|change| {
+                change
+                    .get("sql")
+                    .and_then(Value::as_str)
+                    .is_some_and(|existing| crate::api::ai::teammate::norm_sql(existing) == key)
+            });
+            if seen {
+                continue;
+            }
+            let title: String = sql.chars().take(40).collect();
+            match crate::api::ai::teammate::create_change(
+                state,
+                conn,
+                database,
+                thread_id,
+                "",
+                &title,
+                "回答里给出的修改语句（自动转为待确认的变更单）",
+                sql,
+            )
+            .await
+            {
+                Ok((id, risk, undo)) => changes.push(json!({
+                    "id": id,
+                    "title": title,
+                    "sql": sql,
+                    "risk": risk,
+                    "undoSql": undo,
+                    "status": "pending",
+                })),
+                Err(err) => {
+                    // 建单失败不能把这一轮回答也弄失败：它只是补充
+                    tracing::warn!(error = %err.message, "为回答里的写 SQL 补建变更单失败");
+                }
+            }
+        }
+    }
+}
+
+/// 取出回答里的 ```sql 代码块（无语言标记的裸代码块也算 —— 模型常这么写）。
+fn sql_blocks(answer: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut in_fence = false;
+    let mut keep = false;
+    let mut buf = String::new();
+    for line in answer.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            if in_fence {
+                if keep && !buf.trim().is_empty() {
+                    blocks.push(buf.clone());
+                }
+                in_fence = false;
+                keep = false;
+                buf.clear();
+            } else {
+                let lang = trimmed.trim_start_matches('`').trim().to_ascii_lowercase();
+                keep = lang.is_empty() || lang.starts_with("sql") || lang.starts_with("mysql");
+                in_fence = true;
+                buf.clear();
+            }
+            continue;
+        }
+        if in_fence {
+            buf.push_str(line);
+            buf.push('\n');
+        }
+    }
+    blocks
+}
+
 /// `POST /api/ai/agent`。
 pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XResult<Json<Value>> {
     let conn = req
@@ -732,6 +827,10 @@ pub async fn run(State(state): State<AppState>, Json(req): Json<AgentReq>) -> XR
     if outcome.stopped == "maxRounds" && answer.trim().is_empty() {
         answer = unfinished_note(&steps, max_rounds);
     }
+    // 兜底：模型偶尔把「改数据的 SQL」直接贴在回答里而不调 propose_change。
+    // 口径是「只要有对库的实际操作（增删改）都算」—— 漏一张就等于这次改库没有风险分级、
+    // 撤销语句和审计记录，所以这里补成变更单（执行仍然要人点）。
+    harvest_changes(&state, &conn, &database, &thread_id, protocol, &answer, &mut changes).await;
 
     // 收尾：有待确认的变更单 ⇒ `waiting`（界面排在待办最上面）；纯查询 ⇒ `done`。
     // 顺手把变更单挂到这张 job 上，待办点进去才看得到它产出的单子。
@@ -875,6 +974,17 @@ pub async fn resume(
     if outcome.stopped == "maxRounds" && answer.trim().is_empty() {
         answer = unfinished_note(&steps, max_rounds);
     }
+    // 与首跑同一条兜底：回答里的写 SQL 也要变成变更单（续跑没有会话归属，传空 thread_id）
+    harvest_changes(
+        &state,
+        &job.connection_id,
+        &job.database_name,
+        "",
+        protocol,
+        &answer,
+        &mut changes,
+    )
+    .await;
     let ids: Vec<String> = changes
         .iter()
         .filter_map(|change| change.get("id").and_then(Value::as_str).map(str::to_string))

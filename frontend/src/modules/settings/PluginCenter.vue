@@ -1,33 +1,33 @@
 <!--
-  插件中心（设置 → 插件）。
+  插件中心（顶栏 → 插件中心，中央工作区页签）。
 
   ## 定位
   官网托管插件包，产品内一键安装。第一版只收**声明式**内容（manifest + 提示词），
   插件不带任何可执行文件 —— 后端解压时按后缀白名单拦截（见 api/plugins.rs 文件头）。
 
+  技能**没有独立运行界面**：装好、启用后去 AI 助手的 Skills 里选中它，
+  提示词拼进 system 后每一轮提问都由它生效。这里只管装 / 卸 / 启停 / 升级。
+
   ## 两条安装路径
   1. 「可安装」列表来自官网 plugins/index.json（拉不到不算错误，显示离线提示）；
   2. 「从文件安装」：开发者把 zip 发给用户，拖进来即可（本地开发/内网环境用）。
-
-  ## 为什么运行结果不用 markdown 渲染
-  技能输出是**给数据库人看的**（问题清单 / 改造 SQL / 风险），等宽字体 + 保留换行
-  比渲染成 HTML 更好读，也省掉一层 XSS 面。
 -->
 <template>
   <div class="plugin-center">
-    <div class="panel-title">{{ $t('plg.title') }}</div>
-    <div class="panel-desc">{{ $t('plg.desc') }}</div>
-
-    <div class="plg-bar">
-      <button class="plg-btn" type="button" :disabled="loading" @click="reload">
-        <el-icon><Refresh /></el-icon>{{ loading ? $t('plg.loading') : $t('plg.refresh') }}
-      </button>
-      <button class="plg-btn" type="button" :disabled="installing" @click="pickFile">
-        <el-icon><Upload /></el-icon>{{ $t('plg.fromFile') }}
-      </button>
-      <input ref="fileRef" type="file" accept=".zip" class="plg-file" @change="onFile" />
-      <span class="plg-dir" :title="dir">{{ $t('plg.dir') }}：{{ dir || '—' }}</span>
+    <!-- 说明 + 动作同一行：说明左对齐占满剩余宽度，按钮靠右（窄窗口自动换行） -->
+    <div class="plg-top">
+      <!-- 一行说完：是什么（声明式包）、怎么用（AI 助手的 Skills）、安全边界（不含可执行文件） -->
+      <div class="plg-lead">{{ $t('plg.desc') }}</div>
+      <div class="plg-bar">
+        <button class="plg-btn" type="button" :disabled="loading" @click="reload">
+          <el-icon><Refresh /></el-icon>{{ loading ? $t('plg.loading') : $t('plg.refresh') }}
+        </button>
+        <button class="plg-btn" type="button" :disabled="installing" @click="pickFile">
+          <el-icon><Upload /></el-icon>{{ $t('plg.fromFile') }}
+        </button>
+      </div>
     </div>
+    <input ref="fileRef" type="file" accept=".zip" class="plg-file" @change="onFile" />
 
     <!-- 已装 -->
     <div class="plg-section-title">
@@ -37,7 +37,7 @@
     <div v-else class="plg-grid">
       <div v-for="p in installed" :key="p.id" class="plg-card" :class="{ off: p.state === 'disabled' }">
         <div class="plg-card-head">
-          <span v-if="p.icon" class="plg-ic">{{ p.icon }}</span>
+          <span class="plg-ic">{{ p.icon || '🧩' }}</span>
           <span class="plg-name" :title="p.id">{{ p.name }}</span>
           <span class="plg-ver">v{{ p.version }}</span>
         </div>
@@ -47,9 +47,6 @@
           <el-switch :model-value="p.state === 'enabled'" size="small" @change="(v) => toggle(p, v)" />
           <span class="plg-state">{{ p.state === 'enabled' ? $t('plg.enabled') : $t('plg.disabled') }}</span>
           <span class="plg-gap" />
-          <button class="plg-btn sm" type="button" :disabled="p.state !== 'enabled'" @click="openRun(p)">
-            {{ $t('plg.run') }}
-          </button>
           <button class="plg-btn sm danger" type="button" @click="remove(p)">{{ $t('plg.uninstall') }}</button>
         </div>
       </div>
@@ -64,7 +61,7 @@
     <div v-else class="plg-grid">
       <div v-for="c in available" :key="c.id" class="plg-card">
         <div class="plg-card-head">
-          <span v-if="c.icon" class="plg-ic">{{ c.icon }}</span>
+          <span class="plg-ic">{{ c.icon || '🧩' }}</span>
           <span class="plg-name" :title="c.id">{{ loName(c.name) }}</span>
           <span class="plg-ver">v{{ c.version }}</span>
         </div>
@@ -80,8 +77,6 @@
       </div>
     </div>
 
-    <!-- 运行技能：表单与调用逻辑与 AI 面板共用同一个组件（PluginSkillRun） -->
-    <PluginSkillRun v-model="runOpen" :item="runItem" />
   </div>
 </template>
 
@@ -91,12 +86,10 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh, Upload } from '@element-plus/icons-vue'
 import { t, locale } from '../../utils/i18n'
 import { listPlugins, getPluginCatalog, installPlugin, installPluginFile, setPluginEnabled, uninstallPlugin } from '../../api'
-import PluginSkillRun from '../ai/PluginSkillRun.vue'
 
 const loading = ref(false)
 const installing = ref(false)
 const installingId = ref('')
-const dir = ref('')
 const installed = ref([])
 const catalog = ref([])
 const catalogError = ref('')
@@ -130,7 +123,6 @@ const reload = async () => {
   try {
     const data = await listPlugins()
     installed.value = data.items || []
-    dir.value = data.dir || ''
   } catch (e) {
     ElMessage.error(e?.response?.data?.message || String(e))
   } finally {
@@ -210,22 +202,15 @@ const remove = async (item) => {
   }
 }
 
-// ---------------------------------------------------------------- 运行
-
-/** 只负责「点哪个技能」—— 表单、填参、调用都在 PluginSkillRun 里（与 AI 面板共用） */
-const runOpen = ref(false)
-const runItem = ref(null)
-const openRun = (item) => {
-  runItem.value = item
-  runOpen.value = true
-}
-
 onMounted(reload)
 </script>
 
 <style scoped>
-.plugin-center { padding-bottom: 20px; }
-.plg-bar { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; flex-wrap: wrap; }
+.plugin-center { padding-bottom: 4px; }
+/* 弹窗里没有「面板标题」：说明与动作挤在同一行，纵向省一截，卡片能更快露出来 */
+.plg-top { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin: 0 0 8px; }
+.plg-lead { flex: 1 1 320px; min-width: 0; font-size: 12.5px; line-height: 1.7; color: var(--dc-text-dim); }
+.plg-bar { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .plg-file { display: none; }
 .plg-btn { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 10px; font-size: 12px;
   border: 1px solid var(--dc-border); border-radius: 6px; background: var(--dc-surface); color: var(--dc-text); cursor: pointer; }
@@ -234,8 +219,7 @@ onMounted(reload)
 .plg-btn.sm { height: 24px; padding: 0 8px; font-size: 12px; }
 .plg-btn.primary { border-color: var(--dc-primary); color: var(--dc-primary); }
 .plg-btn.danger:hover { border-color: #f56c6c; color: #f56c6c; }
-.plg-dir { font-size: 12px; color: var(--dc-text-weak); margin-left: auto; max-width: 46%; overflow: hidden;
-  text-overflow: ellipsis; white-space: nowrap; }
+
 .plg-section-title { display: flex; align-items: center; gap: 6px; margin: 18px 0 8px; font-size: 13px; font-weight: 600; }
 .plg-count { font-size: 11px; font-weight: 400; color: var(--dc-text-weak); background: var(--dc-primary-wash);
   border-radius: 8px; padding: 0 6px; }

@@ -116,7 +116,7 @@ async fn ask_inline(
 }
 
 /// 同 [`ask_inline`]，但带用量（数据字典等生成类接口要在界面上展示 token 消耗）。
-pub(crate) async fn ask_inline_with_usage(
+async fn ask_inline_with_usage(
     state: &AppState,
     req: &AiRequest,
     system: &str,

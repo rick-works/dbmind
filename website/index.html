@@ -20,7 +20,7 @@
 <meta property="og:site_name" content="DBmind" />
 <meta property="og:url" content="https://www.dbmind.top/" />
 <meta property="og:title" content="DBmind — 给数据库装上「大脑」的 AI 数据库工作台" />
-<meta property="og:description" content="一个客户端管好每一个数据库：AI 解释 / 优化 / 修错 SQL，事务级数据编辑，千万级结果集秒开。17+ 数据源，本地运行，数据不出内网。" />
+<meta property="og:description" content="一个客户端管好每一个数据库：AI 解释 / 优化 / 修错 SQL，技能插件随心扩展，事务级数据编辑，千万级结果集秒开。26 种数据源，本地运行，数据不出内网。" />
 <meta property="og:image" content="https://www.dbmind.top/images/shot-home-dark.png" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="theme-color" content="#16171b" />
@@ -1233,12 +1233,16 @@
   <div class="marquee">
     <div class="marquee-track" id="marqueeTrack">
       <div class="m-group">
-        <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">PostgreSQL</span>
-        <span class="chip" data-i18n="chip.kingbase">人大金仓</span><span class="chip">Oracle</span><span class="chip">SQL Server</span>
-        <span class="chip">DB2</span><span class="chip">Derby</span><span class="chip">H2</span>
-        <span class="chip" data-i18n="chip.dm">达梦 DM</span><span class="chip">ClickHouse</span><span class="chip">Apache Doris</span>
-        <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">Redis</span>
-        <span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
+        <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">GreatSQL</span>
+        <span class="chip">TiDB</span><span class="chip">OceanBase</span><span class="chip">PostgreSQL</span>
+        <span class="chip" data-i18n="chip.kingbase">人大金仓</span><span class="chip">openGauss</span>
+        <span class="chip">瀚高 HighGo</span><span class="chip">海量 Vastbase</span>
+        <span class="chip">Oracle</span><span class="chip">SQL Server</span><span class="chip">DB2</span>
+        <span class="chip" data-i18n="chip.dm">达梦 DM</span>
+        <span class="chip">ClickHouse</span><span class="chip">Apache Doris</span><span class="chip">StarRocks</span>
+        <span class="chip">Databend</span><span class="chip">RisingWave</span>
+        <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">H2</span><span class="chip">Derby</span>
+        <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
         <span class="chip" data-i18n="chip.more">更多接入中…</span>
       </div>
     </div>
@@ -1248,7 +1252,7 @@
 <section class="stats-sec">
   <div class="wrap">
     <div class="stats reveal">
-      <div class="stat"><div class="n">17+</div><div class="t" data-i18n="stat.1">数据源驱动开箱即用</div></div>
+      <div class="stat"><div class="n">26</div><div class="t" data-i18n="stat.1">数据源驱动开箱即用</div></div>
       <div class="stat"><div class="n">18×</div><div class="t" data-i18n="stat.2">结果集传输压缩比</div></div>
       <div class="stat"><div class="n">100万+</div><div class="t" data-i18n="stat.3">行 / 分钟 · 大表实测</div></div>
       <div class="stat"><div class="n">&lt;1s</div><div class="t" data-i18n="stat.4">千万级表首屏响应</div></div>
@@ -1296,6 +1300,24 @@
         <h3 data-i18n="feat.million.t">千万级结果集秒开</h3>
         <p data-i18n="feat.million.d">虚拟滚动 + 服务端分页 + 压缩传输（4.2MB → 233KB），大 JOIN 也是 1 秒见数。</p>
         <a class="doc-link" href="#d-grid" data-i18n="common.seeDocs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4h4v2.6a1.9 1.9 0 1 0 0 3.8V13h2.6a1.9 1.9 0 1 1 0 3.8H14V20h-4v-3.2H7.4a1.9 1.9 0 1 1 0-3.8H10v-2.6a1.9 1.9 0 1 0 0-3.8z"/></svg></div>
+        <h3 data-i18n="feat.plugin.t">插件中心 · 技能即对话</h3>
+        <p data-i18n="feat.plugin.d">官网插件一键装：SQL 审查、报错诊断、表设计体检…… 纯声明式（清单 + 提示词，不含可执行文件），装上就在 AI 对话里生效。</p>
+        <a class="doc-link" href="#d-plugins" data-i18n="common.seeDocs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg></div>
+        <h3 data-i18n="feat.sources.t">26 种数据源，一个客户端</h3>
+        <p data-i18n="feat.sources.d">关系型 14、OLAP 5、嵌入式 4、NoSQL 3 —— 含 TiDB / OceanBase / openGauss / StarRocks；做不到的能力按引擎置灰并说明原因。</p>
+        <a class="doc-link" href="#d-sources" data-i18n="common.seeDocs">查看文档 →</a>
+      </div>
+      <div class="feature reveal">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6"/><path d="M12 12l3.5-3.5"/><path d="M20.5 4.5V9h-4.5"/></svg></div>
+        <h3 data-i18n="feat.firstconn.t">首次连接也快</h3>
+        <p data-i18n="feat.firstconn.d">自带 JVM 名字解析器，免掉服务端 IP 反解的空等：4.5 秒 → 约 0.1 秒，域名连接不再卡在握手前。</p>
+        <a class="doc-link" href="#d-conn" data-i18n="common.seeDocs">查看文档 →</a>
       </div>
     </div>
     <div class="more-label reveal" data-i18n="feat.moreLabel">还有这些能力，都在文档里</div>
@@ -1406,7 +1428,7 @@
   <div class="wrap">
     <div class="plg-head">
       <h2 class="sec-title reveal" data-eyebrow="PLUGINS" data-i18n="plg.title">插件中心</h2>
-      <p data-i18n="plg.sub">插件是纯声明式扩展包（清单 + 提示词），装进客户端的插件目录即可用，不携带任何可执行文件。装好后在「设置 → 插件中心」一键安装或运行；也可以下载 zip 用「从文件安装」导入。</p>
+      <p data-i18n="plg.sub">插件是纯声明式扩展包（清单 + 提示词），不携带任何可执行文件。在客户端「更多 → 插件中心」一键安装、单独启停、就地升级；装好的技能在 AI 助手的 Skills 里选中，之后每一轮提问都按它来。也可以下载 zip 用「从文件安装」导入。</p>
     </div>
     <div class="plg-list" id="plgGrid">
       <div class="plg-empty" data-i18n="plg.loading">正在加载插件索引…</div>
@@ -4162,6 +4184,7 @@
           <a href="#d-scripts">脚本管理</a>
           <a href="#d-shortcuts">快捷键</a>
           <a href="#d-ai">AI 助手</a>
+          <a href="#d-plugins">插件与技能</a>
           <a href="#d-ai-data">AI 会把什么发给模型</a>
           <a href="#d-ask">智能问数</a>
           <a href="#d-grid">结果表格与数据编辑</a>
@@ -4210,7 +4233,7 @@
         <h2 id="d-what">什么是 DBmind？</h2>
 <figure class="doc-shot"><a href="images/shot-home-dark.png" target="_blank" rel="noopener"><img src="images/shot-home-dark.png" alt="工作台：左侧连接树，右侧最近查询、查询趋势与数据工具" loading="lazy" decoding="async"></a><figcaption>工作台：左侧连接树，右侧最近查询、查询趋势与数据工具</figcaption></figure>
         <p><b>DBmind = Database + Mind</b>：给数据库装上「大脑」的统一管理工作台。它把连接管理、SQL 编辑、数据表格、AI 助手、事务与安全护栏放进同一个客户端，开箱即用。</p>
-        <p>DBmind 不绑定某一种数据库：MySQL、PostgreSQL、Oracle、SQL Server、ClickHouse、Redis、MongoDB、达梦、人大金仓等 17+ 种数据源共用一套操作习惯 —— 学一次，到处用。</p>
+        <p>DBmind 不绑定某一种数据库：MySQL、PostgreSQL、Oracle、SQL Server、ClickHouse、Redis、MongoDB、达梦、人大金仓、TiDB、OceanBase、openGauss 等 26 种数据源共用一套操作习惯 —— 学一次，到处用。</p>
         <div class="tip"><b>数据边界</b>：本地运行、默认不联网；AI 默认关闭，只在你配好模型之后才工作 —— 它到底带走了什么，逐项写在 <a class="dlink" href="#d-ai-data">AI 会把什么发给模型</a>，不是一句「我们重视隐私」。</div>
 
         <h2 id="d-overview">核心特性一览</h2>
@@ -4225,16 +4248,19 @@
           <div class="fcard"><b>🧑‍💼 用户与权限</b><span>用户 / 角色按引擎适配，权限分层勾选，勾一次即预览 GRANT / REVOKE 差量。</span></div>
           <div class="fcard"><b>🗺️ ER 关系图</b><span>命名约定 + 真外键推断关系，拖拽缩放，导出 PNG / SVG。</span></div>
           <div class="fcard"><b>📈 监控与运维</b><span>会话 / 锁 / 指标，终止会话；备份还原、生成测试数据、全局对象搜索。</span></div>
+          <div class="fcard"><b>🧩 插件与技能</b><span>官网插件一键装：SQL 审查、报错诊断、表设计体检……纯声明式（清单 + 提示词），在 AI 对话里选中即生效。</span></div>
+          <div class="fcard"><b>🔌 26 种数据源</b><span>关系型 14、OLAP 5、嵌入式 4、NoSQL 3，含 TiDB / OceanBase / openGauss / StarRocks 等兼容库。</span></div>
         </div>
 
         <h2 id="d-sources">支持的数据源</h2>
-        <p>17 种数据源共用一套操作习惯：同一个编辑器、同一张结果表格、同一套事务按钮与对象树 —— 换库不用换脑子。JDBC 驱动按需下载，首次连接对应类型时自动取，内网可指向私有镜像。</p>
+        <p>26 种数据源共用一套操作习惯：同一个编辑器、同一张结果表格、同一套事务按钮与对象树 —— 换库不用换脑子。JDBC 驱动按需下载，首次连接对应类型时自动取，内网可指向私有镜像。</p>
         <div class="feature-grid">
-          <div class="fcard"><b>关系型 · 10 种</b><span>MySQL、MariaDB、PostgreSQL、人大金仓 KingbaseES、Oracle、SQL Server、IBM Db2、达梦 DM、Apache Derby、H2</span></div>
-          <div class="fcard"><b>分析型 · 2 种</b><span>ClickHouse、Apache Doris —— 连接分组里单独标为 OLAP，库 / 表 / 分区语义按各自引擎处理，不和关系型混在一起</span></div>
-          <div class="fcard"><b>嵌入式 / 文件 · 2 种</b><span>SQLite、DuckDB —— 直接打开本地文件，不需要服务端，也不需要 Java 宿主</span></div>
+          <div class="fcard"><b>关系型 · 14 种</b><span>MySQL、MariaDB、GreatSQL、TiDB、OceanBase、PostgreSQL、人大金仓 KingbaseES、瀚高 HighGo、openGauss、海量 Vastbase、Oracle、SQL Server、IBM Db2、达梦 DM</span></div>
+          <div class="fcard"><b>分析型 · 5 种</b><span>ClickHouse、Apache Doris、StarRocks、Databend、RisingWave —— 连接分组里单独标为 OLAP，库 / 表 / 分区语义按各自引擎处理，不和关系型混在一起</span></div>
+          <div class="fcard"><b>嵌入式 / 文件 · 4 种</b><span>SQLite、DuckDB、H2、Derby —— 打开本地文件或进程内运行，不需要服务端</span></div>
           <div class="fcard"><b>NoSQL · 3 种</b><span>Redis、MongoDB、Elasticsearch —— 连接、库 / 集合、文档浏览与监控按原生语义走</span></div>
         </div>
+        <p>另有 4 种（GaussDB、GoldenDB、SelectDB、UXDB）已实现但暂不露出 —— 没跑通真机验证之前，不放进「新建数据源」列表。</p>
         <p><b>做不到的会明说，不装作人人满分</b>：</p>
         <ul>
           <li><b>会话事务</b>：走 JDBC 宿主的引擎都支持（改完自查、回滚或提交）；SQLite 用内核原生驱动，没有会话级事务，事务按钮直接不渲染，不会点了没反应</li>
@@ -4269,6 +4295,7 @@
           <li><b>连接级超时</b>：默认连接 10s / 读 600s / 写 300s，字符集 UTF-8，都可按连接单独调；连接数上限也按连接配（默认由程序自适应）</li>
           <li><b>手改连接串</b>：需要塞特殊参数时可直接写完整 JDBC URL，覆盖默认拼接；驱动是否就绪、下载进度都显示在弹窗底部，缺驱动时先下完再测</li>
           <li><b>测试连接</b>：先测再存；打开连接时只用一次「列库」请求验证连通，失败才回头取具体原因（不再额外多打一次握手）</li>
+          <li><b>首次连接也快</b>：客户端自带 JVM 名字解析器，驱动不必再对服务端 IP 反解主机名 —— 这段空等实测从 4.5 秒降到约 0.1 秒；域名与 IP 连接走同一套，内网域名照常解析</li>
         </ul>
 
         <h2 id="d-sql">执行第一条 SQL</h2>
@@ -4381,12 +4408,25 @@ dbmind setting list           # 读写设置</code></pre>
 <figure class="doc-shot"><a href="images/shot-ai-dark.png" target="_blank" rel="noopener"><img src="images/shot-ai-dark.png" alt="AI 助手的对话与产物：结论、数据概况、建议追问" loading="lazy" decoding="async"></a><figcaption>AI 助手：结论、数据概况与建议追问</figcaption></figure>
         <ul>
           <li><b>六大动作</b>：解释、优化、改写、修错、诊断、自由对话 —— 选中 SQL 就能一键让它动手，修错会自动带上完整错误上下文，结果直接回填编辑器</li>
+          <li><b>技能</b>：输入框上的 Skills 里既有内置能力，也有你装的插件技能；选中一个就跟着这段对话走 —— 气泡上标出「谁在答」，后续每一轮都按它的人格与检查清单来，摘掉即恢复自由对话（详见<a class="dlink" href="#d-plugins">插件与技能</a>）</li>
           <li><b>自主排查</b>：打开开关，它自己调工具查库 —— 巡检表结构、给出该加的索引、看同步与备份状态、只读试跑一遍；多轮能接着上一轮的结论往下做，问两张表就展开两张</li>
           <li><b>变更单</b>：要动数据或结构的动作统一生成变更单，批准才执行、高危再确认一次、执行完还能撤销 —— 执行权始终在人手里</li>
           <li><b>记忆与记录</b>：说一句「记住：本库金额单位是分」，下次在同一个库提问自动带上（区分「你说过 / AI 推断」，随时可删）；对话有记录，能续上一轮接着说</li>
           <li><b>用量与预算</b>：每条回答脚注消耗的 token；大库上下文按预算裁剪，库级问题给全库清单（表名 + 注释）而不是整库列结构 —— 实测同一条修复从 2345 降到 956 prompt tokens</li>
         </ul>
         <div class="tip"><b>安全边界</b>：AI 给出的 SQL 会先「看执行计划、试跑一次」再由你决定是否执行；写操作默认阻断，结构 / 数据变更要批准变更单（高危二次确认），生产库连接还要再过一道写确认。</div>
+
+        <h2 id="d-plugins">插件与技能</h2>
+        <p>把团队反复讲的那套「审查清单」做成技能：装一次，之后在对话里选中就生效。插件是<b>声明式</b>的 —— 一份清单加提示词，<b>不含任何可执行文件</b>。</p>
+        <ul>
+          <li><b>入口与位置</b>：顶栏「更多 → 插件中心」打开弹窗；已装插件落在 <code>~/.dbmind/plugins/&lt;id&gt;/</code>，实际路径在「设置 → 关于 → 目录说明 → 插件目录」里能直接看到</li>
+          <li><b>三种来源</b>：官网插件市场一键安装、从本地 zip 安装（内网或自研插件发给同事）、或去官网插件页下载 zip 再装</li>
+          <li><b>启停与升级</b>：每个插件单独开关；市场里出现更高版本时，卡片上直接给「升级到 vX」，就地覆盖，不用先卸再装</li>
+          <li><b>技能活在对话里</b>：AI 助手输入框的 Skills 里选中技能，气泡上会标出「谁在答」，之后每一轮都按它的人格与清单来；内置能力（解释 / 优化 / 问数…）和插件技能在同一个列表里，摘掉即回到自由对话</li>
+          <li><b>安全边界</b>：包里出现 <code>.exe</code> / <code>.dll</code> / <code>.js</code> / <code>.jar</code> 等可执行文件，整包拒绝；单文件 ≤2 MB、整包 ≤8 MB；安装前校验清单 id 与目标目录一致，解压拒绝路径穿越</li>
+          <li><b>自己写一个</b>：一个目录就够 —— <code>manifest.json</code>（id / 版本 / 中英双语名称与简介 / emoji 图标 / 是否需要表结构）+ <code>prompt.md</code>（任务模板）+ <code>chat.md</code>（对话人格与检查清单）；打包脚本会校验字段，缺一项不允许发</li>
+        </ul>
+        <div class="tip"><b>改完就生效</b>：插件目录就是普通文件，提示词改完下一轮提问就用新的，不用重启；分享给同事只发那个 zip。</div>
 
         <h2 id="d-ai-data">AI 会把什么发给模型</h2>
         <p>担心数据，多半是「不知道到底发了什么」。这里不写「我们重视隐私」，直接把一次请求摊开 —— 你自己判断能不能接外部模型。<b>DBmind 没有任何中转服务器</b>：请求从本机直连你在设置里填的接口地址（OpenAI 兼容协议），AI 默认关闭，不配模型时一个字节都不会发。</p>
@@ -4396,7 +4436,7 @@ dbmind setting list           # 读写设置</code></pre>
           <li><b>会发 · 一行样例</b>：每张展开的表 <b>1 行真实数据</b>，最多前 20 列，每个值截到 24 字符 —— 模型靠它判断日期格式与状态枚举，才不会把 <code>PAID</code> 当成 <code>1</code></li>
           <li><b>可关闭 · 字段脱敏</b>：设置 →「数据脱敏」里给指定表的指定列配规则（支持 <code>*_phone</code> 这类通配），命中列换成 <b>MD5 / SHA-256 摘要</b>或 <b>AES-256 密文</b>（如 <code>f3a9c2…</code>）；一份规则、四个开关：发给 AI 的内容（样例行 + 智能体只读结果）、MCP 服务返回给外部客户端的数据、结果表格的显示（只影响显示）、导出的文件（CSV / Excel / JSON / SQL 里落盘的就是打码值）。<b>表名 / 列名 / 表注释不脱敏</b>（脱了模型就不知道该查哪张表），你在 SQL 里手写的字面量也不脱敏</li>
           <li><b>会发 · 全库清单</b>：只在你问「这个库是干嘛的」这类库级问题时，给表名 + 表注释，一行数据都不带</li>
-          <li><b>会发 · 你自己配过的</b>：团队术语与采纳示例、长期记忆（你说过的口径）、知识库命中片段（每段 ≤900 字符并标注来源）；没配就是空的</li>
+          <li><b>会发 · 你自己配过的</b>：团队术语与采纳示例、长期记忆（你说过的口径）、知识库命中片段（每段 ≤900 字符并标注来源）、以及你选中的插件技能提示词（清单与 Markdown，不含你的数据）；没配就是空的</li>
           <li><b>不发 · 整表数据与结果集</b>：只有上面那 1 行样例。唯一例外是「自主排查」——它执行的只读 SQL 最多返回 100 行、裁到 3200 字符进入对话，它要「自己看数据」就得付这个代价，这一点写在明面上</li>
           <li><b>不发 · 密码与密钥</b>：连接密码、SSH 口令、API Key 只存本机 <code>~/.dbmind/dbmind.db</code>，接口只回「已保存」、不回显</li>
           <li><b>不发 · 遥测</b>：没有使用统计、没有崩溃上报、不请求 DBmind 的任何服务器（「检查更新」只读版本号，与 AI 无关）</li>

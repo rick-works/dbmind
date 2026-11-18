@@ -366,15 +366,15 @@ pub fn routes() -> Router<AppState> {
         // 注意 `{*rest}` 至少要有一段子路径：`/api/compare` 这种**没有子路径**的也要单独注册，
         // 否则它会落到 404（上游的 `POST /api/compare` 正是无子路径的那个）。
         .merge(ai::routes())
-        // 插件中心：装/卸/启停 + 运行技能。安装是同步长请求（下载+解压），
-        // 单包限 8 MB，比驱动那种几十 MB 的体量小得多，不值得再做进度轮询。
+        // 插件中心：装 / 卸 / 启停。技能只在使用处（AI 对话）生效，没有独立的运行接口。
+        // 安装是同步长请求（下载+解压），单包限 8 MB，比驱动那种几十 MB 的体量小得多，
+        // 不值得再做进度轮询。
         .route("/api/plugins", get(plugins::list))
         .route("/api/plugins/catalog", get(plugins::catalog))
         .route("/api/plugins/install", post(plugins::install))
         .route("/api/plugins/install-file", post(plugins::install_file))
         .route("/api/plugins/{id}/enable", post(plugins::enable))
         .route("/api/plugins/{id}/disable", post(plugins::disable))
-        .route("/api/plugins/{id}/run", post(plugins::run))
         .route("/api/plugins/{id}", delete(plugins::uninstall))
         // 造数：规则清单（前端下拉的唯一来源）+ 预览（同步，不写库）+ 生成（异步任务，可取消）
         .route("/api/datagen/rules", get(datagen::rules))

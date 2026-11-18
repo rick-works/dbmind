@@ -249,11 +249,15 @@ pub fn append_message(
 
 // ------------------------------------------------------------------ 记忆
 
-fn memory_json(row: &AiMemoryRow) -> Value {
+fn memory_json(row: &AiMemoryRow, conn_missing: bool) -> Value {
     json!({
         "id": row.id,
         "scope": row.scope,
         "connectionId": row.connection_id,
+        // 连接名快照（连接被删也认得出）；`connMissing=true` 表示这条连接已经不在了 ——
+        // 界面据此显示「已失效」并给「改为全部连接」的出口，而不是留一格空白假装没事
+        "connectionName": row.connection_name,
+        "connMissing": conn_missing,
         "database": row.database_name,
         "fact": row.fact,
         "source": row.source,
@@ -262,9 +266,93 @@ fn memory_json(row: &AiMemoryRow) -> Value {
     })
 }
 
+/// 现存的连接（影子连接不算：它们是跨库浏览的实现细节，不是用户眼里的一条连接）。
+async fn live_connections(state: &AppState) -> Vec<dbmind_core::ConnectionRecord> {
+    let engine = state.engine();
+    crate::api::blocking(move || engine.list_connections())
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|record| !crate::api::scope::is_shadow(record))
+        .collect()
+}
+
+/// 连接名（查不到就空串）：记忆/变更单存「名字快照」都走这一处口径。
+async fn conn_name_of(state: &AppState, conn_id: &str) -> String {
+    if conn_id.is_empty() {
+        return String::new();
+    }
+    require_record(state, conn_id)
+        .await
+        .map(|record| record.config.name.clone())
+        .unwrap_or_default()
+}
+
+/// 把记忆的归属修一遍（列表接口顺带做，幂等）：
+///
+/// 1. 连接还在 → 补齐名字快照（改过名也能跟上）；
+/// 2. 连接没了 → 名字在现存连接里**唯一**时按名字重挂（删了重建会换 id，名字通常不变）；
+///    名字不唯一就不猜，只把名字带出去，让界面显示「已失效」；
+/// 3. 没有归属的连接级记忆（`connection_id` 为空）永远不会被注入 —— 直接降级为 `global`，
+///    否则它只是躺在列表里骗人（注入按当前连接 id 匹配）。
+fn heal_memories(store: &Store, live: &[dbmind_core::ConnectionRecord], rows: &mut [AiMemoryRow]) {
+    for row in rows.iter_mut() {
+        if row.scope == "global" {
+            // 全局记忆不挂连接/库：挂过就抹掉，避免注入时被库名过滤掉
+            if !row.connection_id.is_empty() || !row.database_name.is_empty() {
+                let _ = store.ai_memory_rebind(&row.id, "global", "", "", "");
+                row.connection_id.clear();
+                row.connection_name.clear();
+                row.database_name.clear();
+            }
+            continue;
+        }
+        if row.connection_id.is_empty() {
+            let _ = store.ai_memory_rebind(&row.id, "global", "", "", "");
+            row.scope = "global".to_string();
+            row.connection_name.clear();
+            row.database_name.clear();
+            continue;
+        }
+        if let Some(record) = live.iter().find(|c| c.id == row.connection_id) {
+            if row.connection_name != record.config.name {
+                let _ = store.ai_memory_set_conn_name(&row.id, &record.config.name);
+                row.connection_name = record.config.name.clone();
+            }
+            continue;
+        }
+        // 连接没了：先找回名字（快照 → 查询历史里这条连接当时用的名字）
+        let mut name = row.connection_name.clone();
+        if name.is_empty() {
+            name = store
+                .conn_name_from_history(&row.connection_id)
+                .unwrap_or_default();
+        }
+        if name.is_empty() {
+            continue;
+        }
+        let same: Vec<&dbmind_core::ConnectionRecord> =
+            live.iter().filter(|c| c.config.name == name).collect();
+        if same.len() == 1 {
+            let target = same[0];
+            let _ = store.ai_memory_rebind(
+                &row.id,
+                "connection",
+                &target.id,
+                &name,
+                &row.database_name,
+            );
+            row.connection_id = target.id.clone();
+            row.connection_name = name;
+        } else {
+            row.connection_name = name;
+        }
+    }
+}
+
 /// `GET /api/ai/memory?connectionId=&limit=` —— 记忆列表。
 pub async fn memory_list(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     axum::extract::Query(query): axum::extract::Query<Value>,
 ) -> XResult<Json<Value>> {
     let conn = query.get("connectionId").and_then(Value::as_str).unwrap_or("");
@@ -273,10 +361,20 @@ pub async fn memory_list(
         .and_then(Value::as_u64)
         .unwrap_or(200)
         .clamp(1, 500) as usize;
-    let rows = store()?.ai_memory_list(Some(conn), limit).unwrap_or_default();
+    let store = store()?;
+    let mut rows = store.ai_memory_list(Some(conn), limit).unwrap_or_default();
+    let live = live_connections(&state).await;
+    heal_memories(&store, &live, &mut rows);
     Ok(Json(json!({
         "success": true,
-        "memories": rows.iter().map(memory_json).collect::<Vec<_>>(),
+        "memories": rows
+            .iter()
+            .map(|row| {
+                let missing =
+                    !row.connection_id.is_empty() && !live.iter().any(|c| c.id == row.connection_id);
+                memory_json(row, missing)
+            })
+            .collect::<Vec<_>>(),
     })))
 }
 
@@ -284,21 +382,38 @@ pub async fn memory_list(
 ///
 /// 手工记的一律标 `source=user`：模型推断的那些是"它以为"，人工写的是"说好了"，
 /// 界面上要能分开 —— 用户可以一键清掉所有 AI 推断而不动自己写的。
-pub async fn memory_add(State(_state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
+pub async fn memory_add(State(state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
     let fact = need(&body, "fact")?;
-    let scope = {
-        let scope = text(&body, "scope");
-        if scope.is_empty() {
-            "connection".to_string()
-        } else {
-            scope
+    // 只有两档：`global`（所有连接都注入）与 `connection`（默认，挂当前连接，可再细到库）。
+    // 表级刻意不做：表结构每轮都由元数据注入，记忆再挂表只会在表改名/删除后变成错的口径。
+    let scope = if text(&body, "scope") == "global" {
+        "global".to_string()
+    } else {
+        "connection".to_string()
+    };
+    let conn_id = text(&body, "connectionId");
+    // 全局记忆不绑连接/库：绑了也永远不注入（注入按连接 id 匹配），只会变成孤儿
+    let (conn_id, conn_name, database) = if scope == "global" {
+        (String::new(), String::new(), String::new())
+    } else {
+        if conn_id.is_empty() {
+            return Err(XError::bad_request(
+                "记忆要挂在一条连接上；想让它对所有连接生效，请选择「全部连接」",
+            ));
         }
+        let name = conn_name_of(&state, &conn_id).await;
+        // 连接不存在就别建单：挂在一个假的 id 上，这条记忆永远不会生效
+        if name.is_empty() {
+            return Err(XError::bad_request("这条连接不存在，记忆无法挂到它上面"));
+        }
+        (conn_id, name, text(&body, "database"))
     };
     let row = AiMemoryRow {
         id: String::new(),
         scope,
-        connection_id: text(&body, "connectionId"),
-        database_name: text(&body, "database"),
+        connection_id: conn_id,
+        connection_name: conn_name,
+        database_name: database,
         fact,
         source: "user".to_string(),
         hits: 0,
@@ -306,6 +421,20 @@ pub async fn memory_add(State(_state): State<AppState>, Json(body): Json<Value>)
     };
     let id = store()?.ai_memory_add(&row)?;
     Ok(Json(json!({ "success": true, "id": id })))
+}
+
+/// `POST /api/ai/memory/{id}/detach` —— 把一条记忆改成「全部连接」。
+///
+/// 连接被删掉/重建换了 id 之后，旧记忆再也不会被注入（注入按连接 id 匹配）。
+/// 与其让用户手工再抄一遍，不如给它一个出口：要么按名字重挂（列表接口自动做），
+/// 要么干脆升级为全局约定。
+pub async fn memory_detach(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+) -> XResult<Json<Value>> {
+    let store = store()?;
+    store.ai_memory_rebind(&id, "global", "", "", "")?;
+    Ok(Json(json!({ "success": true })))
 }
 
 /// `DELETE /api/ai/memory/{id}`
@@ -399,10 +528,12 @@ pub async fn memory_extract(state: &AppState, req: &crate::api::ai::AiRequest, u
         if fact.chars().count() < 4 || fact.chars().count() > 120 {
             continue;
         }
+        let conn_id = req.connection_id.clone().unwrap_or_default();
         let _ = store.ai_memory_add(&AiMemoryRow {
             id: String::new(),
             scope: "connection".to_string(),
-            connection_id: req.connection_id.clone().unwrap_or_default(),
+            connection_id: conn_id.clone(),
+            connection_name: conn_name_of(state, &conn_id).await,
             database_name: req.database.clone().unwrap_or_default(),
             fact,
             source: "ai".to_string(),
@@ -410,7 +541,6 @@ pub async fn memory_extract(state: &AppState, req: &crate::api::ai::AiRequest, u
             created_at: String::new(),
         });
     }
-    let _ = state;
 }
 
 // ------------------------------------------------------------------ 变更单
@@ -421,6 +551,8 @@ fn change_json(row: &AiChangeRow) -> Value {
         "jobId": row.job_id,
         "threadId": row.thread_id,
         "connectionId": row.connection_id,
+        // 建单时的连接名快照：连接后来被删掉（或删了重建换了 id）也照样认得出是哪套库
+        "connectionName": row.connection_name,
         "database": row.database_name,
         "title": row.title,
         "reason": row.reason,
@@ -448,6 +580,29 @@ pub async fn change_list(
         "success": true,
         "changes": rows.iter().map(change_json).collect::<Vec<_>>(),
     })))
+}
+
+/// `DELETE /api/ai/changes/{id}` —— 删一条记录。
+///
+/// **只删记录，不撤销已执行的修改**（撤销走 `/undo`）。已拒绝/已执行的记录同样可删 ——
+/// 用户要的是「把不想看的从列表里去掉」，不是删掉数据库里的东西。
+pub async fn change_delete(
+    State(_state): State<AppState>,
+    Path(id): Path<String>,
+) -> XResult<Json<Value>> {
+    let store = store()?;
+    if store.ai_change_get(&id)?.is_none() {
+        return Err(XError::bad_request("变更单不存在"));
+    }
+    store.ai_change_delete(&id)?;
+    Ok(Json(json!({ "success": true, "deleted": id })))
+}
+
+/// `DELETE /api/ai/changes` —— 清空全部记录（返回删掉的条数，同样只删记录）。
+pub async fn change_clear(State(_state): State<AppState>) -> XResult<Json<Value>> {
+    let store = store()?;
+    let removed = store.ai_change_clear()?;
+    Ok(Json(json!({ "success": true, "deleted": removed })))
 }
 
 /// 双人复核开关（默认关）：打开后「批准」与「二次确认」必须是两个人。
@@ -482,6 +637,17 @@ fn chain_push(existing: &str, who: &str) -> String {
     parts.join(" → ")
 }
 
+/// SQL 规范化：**只**用于「这是不是同一句改动」的比较（压掉多余空白、末尾分号、大小写）。
+/// 执行/撤销用的始终是原始文本，绝不拿这个版本去跑。
+pub(crate) fn norm_sql(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim_end_matches(';')
+        .trim()
+        .to_lowercase()
+}
+
 /// 建一张待确认的变更单（**AI 能做的最后一件事**）。
 ///
 /// 撤销语句与风险等级在这里一次算好：用户点开单子要先看到「能撤回吗」「有多危险」，
@@ -499,7 +665,31 @@ pub async fn create_change(
     reason: &str,
     sql: &str,
 ) -> XResult<(String, String, Option<String>)> {
-    let kind = require_record(state, conn).await?.kind().key().to_string();
+    let record = require_record(state, conn).await?;
+    let kind = record.kind().key().to_string();
+    let conn_name = record.config.name.clone();
+    // 同一句 SQL 已经有一张待处理的单子就不再建第二张：模型偶尔会把同一条改动说两遍
+    // （工具出一次 + 回答里再贴一次），记录页会凭空多出一条一模一样的，用户分不清该点哪个。
+    if let Ok(store) = store() {
+        let key = norm_sql(sql);
+        let same = store
+            .ai_change_list(Some("pending"), 200)
+            .unwrap_or_default()
+            .into_iter()
+            .find(|row| {
+                row.connection_id == conn
+                    && row.database_name == database
+                    && norm_sql(&row.sql) == key
+            });
+        if let Some(existing) = same {
+            let undo = if existing.undo_sql.trim().is_empty() {
+                None
+            } else {
+                Some(existing.undo_sql.clone())
+            };
+            return Ok((existing.id, existing.risk, undo));
+        }
+    }
     let undo = crate::api::ai::action::undo_for(&kind, sql);
     let (risk, _items) = crate::api::ai::action::risk_of(sql);
     let title = if title.trim().is_empty() {
@@ -512,6 +702,7 @@ pub async fn create_change(
         job_id: job_id.to_string(),
         thread_id: thread_id.to_string(),
         connection_id: conn.to_string(),
+        connection_name: conn_name,
         database_name: database.to_string(),
         title: title.clone(),
         reason: reason.to_string(),
@@ -629,6 +820,90 @@ pub async fn change_reject(
     store.ai_change_set_status(&id, "rejected", &change.approved_by, "")?;
     let _ = store.ai_event_add(&change.thread_id, &id, &who, "reject", &change.title);
     Ok(Json(json!({ "success": true, "status": "rejected" })))
+}
+
+/// `POST /api/ai/changes/{id}/allow?approver=名字` —— 界面上的「允许」：**一步**批准 + 执行。
+///
+/// 为什么不让前端连点 approve → apply：连点会在中途失败时留下半截状态 ——
+/// 最常见的失败恰恰是总开关没开，用户会看到「已批准」但其实一行都没改，以为点过了。
+/// 这里把闸门收在一处，并且**先查开关、再落状态**：任何一层不过就什么都不改。
+pub async fn change_allow(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Query(query): axum::extract::Query<Value>,
+) -> XResult<Json<Value>> {
+    let store = store()?;
+    let Some(change) = store.ai_change_get(&id)? else {
+        return Err(XError::bad_request("变更单不存在"));
+    };
+    if change.status != "pending" {
+        return Err(XError::bad_request(format!(
+            "这张单子当前是 {}，只有「待处理」的才能允许",
+            change.status
+        )));
+    }
+    if change.sql.trim().is_empty() {
+        return Err(XError::bad_request("这张单子没有 SQL，无法执行"));
+    }
+    if !store.ai_write_allowed() {
+        return Err(XError::bad_request(
+            "总开关 safety.aiWriteEnabled 未开启：设置 → 安全里打开后才能执行变更单",
+        ));
+    }
+    let who = approver_of(&query);
+    let chain = chain_push(&change.approved_by, &who);
+    // 高危 + 双人复核：一个人点「允许」不能同时充当批准与确认（与 confirm 的规则同一套）
+    if change.risk.eq_ignore_ascii_case("high") {
+        let two_person = store
+            .get_setting(TWO_PERSON_KEY)
+            .ok()
+            .flatten()
+            .map(|value| value.trim() == "true")
+            .unwrap_or(false);
+        if two_person {
+            store.ai_change_set_status(&id, "approved", &chain, "")?;
+            let _ = store.ai_event_add(&change.thread_id, &id, &who, "approve", &change.title);
+            return Err(XError::bad_request(
+                "双人复核已开启：高危变更要另一个人确认 —— 你的批准已记录，请让另一位同事在工作台确认执行",
+            ));
+        }
+    }
+    let started = std::time::Instant::now();
+    match run_sql_in_write(
+        &state,
+        &change.connection_id,
+        &change.database_name,
+        change.sql.clone(),
+        0,
+    )
+    .await
+    {
+        Ok(result) => {
+            let elapsed = started.elapsed().as_millis() as u64;
+            let affected = result.affected_rows.map(|rows| rows as i64).unwrap_or(-1);
+            store.ai_change_set_status(&id, "applied", &chain, "")?;
+            let _ = store.ai_event_add(
+                &change.thread_id,
+                &id,
+                &who,
+                "allow",
+                &format!("{}（影响 {affected} 行，{elapsed}ms）", change.title),
+            );
+            Ok(Json(json!({
+                "success": true,
+                "status": "applied",
+                "affectedRows": affected,
+                "elapsedMs": elapsed,
+                "undoSql": change.undo_sql,
+            })))
+        }
+        Err(err) => {
+            // 失败也落状态：否则这张单子会永远停在 pending，用户以为还没跑过
+            store.ai_change_set_status(&id, "failed", &chain, &err.message)?;
+            let _ = store.ai_event_add(&change.thread_id, &id, &who, "allow-failed", &err.message);
+            Err(err)
+        }
+    }
 }
 
 /// `POST /api/ai/changes/{id}/apply` —— 执行。**三道闸门缺一不可**：
@@ -1164,16 +1439,18 @@ pub async fn budget_set(State(_state): State<AppState>, Json(body): Json<Value>)
 ///
 /// `down` 是"这条错了"：把用户给的纠正写进记忆（下次不再犯）；
 /// `up` 只是记一笔，不改任何状态 —— 免得模型把自己的猜测越记越牢。
-pub async fn feedback(State(_state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
+pub async fn feedback(State(state): State<AppState>, Json(body): Json<Value>) -> XResult<Json<Value>> {
     let verdict = text(&body, "verdict");
     let note = text(&body, "note");
     let store = store()?;
     let mut saved = Value::Null;
     if verdict == "down" && !note.is_empty() {
+        let conn_id = text(&body, "connectionId");
         let id = store.ai_memory_add(&AiMemoryRow {
             id: String::new(),
             scope: "connection".to_string(),
-            connection_id: text(&body, "connectionId"),
+            connection_id: conn_id.clone(),
+            connection_name: conn_name_of(&state, &conn_id).await,
             database_name: text(&body, "database"),
             fact: format!("纠正：{note}"),
             source: "user".to_string(),

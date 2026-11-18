@@ -3,7 +3,7 @@
   "id": "err-diagnose",
   "type": "skill",
   "name": { "zh": "报错诊断", "en": "Error Diagnosis" },
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "DBMind",
   "homepage": "https://www.dbmind.top/#plugins",
   "description": {
@@ -14,23 +14,5 @@
   "minAppVersion": "3.0.0",
   "needsContext": true,
   "prompt": "prompt.md",
-  "chatPrompt": "chat.md",
-  "inputs": [
-    {
-      "key": "error",
-      "type": "text",
-      "label": { "zh": "报错原文", "en": "Raw error" },
-      "placeholder": { "zh": "完整错误信息（含错误码 / SQLSTATE）", "en": "Full error text, including code / SQLSTATE" },
-      "required": true,
-      "rows": 4
-    },
-    {
-      "key": "sql",
-      "type": "text",
-      "label": { "zh": "相关 SQL（可选）", "en": "Related SQL (optional)" },
-      "placeholder": { "zh": "触发报错的那条语句", "en": "The statement that failed" },
-      "required": false,
-      "rows": 8
-    }
-  ]
+  "chatPrompt": "chat.md"
 }

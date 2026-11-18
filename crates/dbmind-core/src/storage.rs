@@ -635,6 +635,16 @@ impl Store {
         if !has_col("ai_messages", "meta")? {
             conn.execute_batch("ALTER TABLE ai_messages ADD COLUMN meta TEXT NOT NULL DEFAULT '';")?;
         }
+        // ai_changes 加 connection_name：变更记录要能显示连接名，而连接可能早被删掉了
+        // （表只存 id）。老库补空串，读取侧再从 query_history 里找回过一次。
+        if !has_col("ai_changes", "connection_name")? {
+            conn.execute_batch("ALTER TABLE ai_changes ADD COLUMN connection_name TEXT NOT NULL DEFAULT '';")?;
+        }
+        // ai_memories 同理：记忆只存 connection_id，连接删了/重建换 id 就再也显示不出名字，
+        // 而且会变成永不注入的孤儿。存一份名字，读取侧据此「按名字重挂」。
+        if !has_col("ai_memories", "connection_name")? {
+            conn.execute_batch("ALTER TABLE ai_memories ADD COLUMN connection_name TEXT NOT NULL DEFAULT '';")?;
+        }
         Ok(())
     }
 
@@ -1972,8 +1982,12 @@ pub struct AiMessageRow {
 #[derive(Debug, Clone, Default)]
 pub struct AiMemoryRow {
     pub id: String,
+    /// `connection` = 只在这条连接（某库）说话时注入；`global` = 所有连接都注入
     pub scope: String,
     pub connection_id: String,
+    /// 建记忆时的连接名快照：连接被删掉/重建换 id 后，卡片上还认得出是哪套库，
+    /// 也能按名字把它重新挂到新 id 上（见 web 层 `heal_memories`）。
+    pub connection_name: String,
     pub database_name: String,
     pub fact: String,
     /// `user` = 用户明确说过；`ai` = 从对话里推断的
@@ -1989,6 +2003,12 @@ pub struct AiChangeRow {
     pub job_id: String,
     pub thread_id: String,
     pub connection_id: String,
+    /// 建单时的连接名（快照）。
+    ///
+    /// 记录页/卡片上要写「连接.库.模式.表」，只存 id 是不够的：连接被删掉再导入会换
+    /// 一个全新 id，历史记录就只剩「库.表」，用户根本认不出改的是哪套库。
+    /// 名字存一份，连接没了也照样读得懂。
+    pub connection_name: String,
     pub database_name: String,
     pub title: String,
     pub reason: String,
@@ -2173,7 +2193,8 @@ impl Store {
         match connection_id {
             Some(id) if !id.is_empty() => {
                 let mut stmt = conn.prepare(
-                    "SELECT id, scope, connection_id, database_name, fact, source, hits, created_at \
+                    "SELECT id, scope, connection_id, database_name, fact, source, hits, created_at, \
+                            connection_name \
                      FROM ai_memories WHERE connection_id = ?1 OR scope = 'global' \
                      ORDER BY hits DESC, created_at DESC LIMIT ?2",
                 )?;
@@ -2182,7 +2203,8 @@ impl Store {
             }
             _ => {
                 let mut stmt = conn.prepare(
-                    "SELECT id, scope, connection_id, database_name, fact, source, hits, created_at \
+                    "SELECT id, scope, connection_id, database_name, fact, source, hits, created_at, \
+                            connection_name \
                      FROM ai_memories ORDER BY created_at DESC LIMIT ?1",
                 )?;
                 let rows = stmt.query_map(params![limit as i64], memory_of)?;
@@ -2202,13 +2224,16 @@ impl Store {
         };
         let conn = self.lock();
         conn.execute(
-            "INSERT INTO ai_memories (id, scope, connection_id, database_name, fact, source, hits, created_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7) \
-             ON CONFLICT(connection_id, fact) DO UPDATE SET hits = hits + 1",
+            "INSERT INTO ai_memories (id, scope, connection_id, connection_name, database_name, fact, source, \
+                 hits, created_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8) \
+             ON CONFLICT(connection_id, fact) DO UPDATE SET hits = hits + 1, \
+                 connection_name = excluded.connection_name",
             params![
                 id,
                 if row.scope.is_empty() { "connection" } else { &row.scope },
                 row.connection_id,
+                row.connection_name,
                 row.database_name,
                 row.fact,
                 if row.source.is_empty() { "ai" } else { &row.source },
@@ -2224,6 +2249,68 @@ impl Store {
         Ok(())
     }
 
+    /// 补/更新一条记忆的连接名快照（连接还在、只是名字改过时用）。
+    pub fn ai_memory_set_conn_name(&self, id: &str, name: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute(
+            "UPDATE ai_memories SET connection_name = ?2 WHERE id = ?1",
+            params![id, name],
+        )?;
+        Ok(())
+    }
+
+    /// 某个连接上次被使用时留下的名字。
+    ///
+    /// `query_history` 是唯一还留着**已删连接**名字的地方（连接记录删了就没了），
+    /// 变更记录与记忆都靠它把「只剩 id」的老数据认回来。
+    ///
+    /// 内部自己拿锁，**不能**在已持锁的代码里调用（Mutex 不可重入）。
+    pub fn conn_name_from_history(&self, connection_id: &str) -> Option<String> {
+        if connection_id.is_empty() {
+            return None;
+        }
+        let conn = self.lock();
+        conn.query_row(
+            "SELECT connection_name FROM query_history \
+             WHERE connection_id = ?1 AND connection_name <> '' \
+             ORDER BY created_at DESC LIMIT 1",
+            params![connection_id],
+            |row| row.get(0),
+        )
+        .ok()
+    }
+
+    /// 改一条记忆的归属：连接被删后**按名字重挂**到新 id，或降级为 `global`。
+    ///
+    /// 唯一索引是 `(connection_id, fact)`：目标位置若已有一条同样的事实，
+    /// 这条就是重复的 —— 直接删掉它（内容一模一样，留一条就够），
+    /// 否则 UPDATE 失败、界面上点了「改绑」像是没反应。
+    pub fn ai_memory_rebind(
+        &self,
+        id: &str,
+        scope: &str,
+        connection_id: &str,
+        connection_name: &str,
+        database_name: &str,
+    ) -> Result<()> {
+        let conn = self.lock();
+        let res = conn.execute(
+            "UPDATE ai_memories SET scope = ?2, connection_id = ?3, connection_name = ?4, \
+                 database_name = ?5 WHERE id = ?1",
+            params![id, scope, connection_id, connection_name, database_name],
+        );
+        match res {
+            Ok(_) => Ok(()),
+            Err(rusqlite::Error::SqliteFailure(err, _))
+                if err.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                conn.execute("DELETE FROM ai_memories WHERE id = ?1", params![id])?;
+                Ok(())
+            }
+            Err(err) => Err(err.into()),
+        }
+    }
+
     // ---- 变更单
 
     pub fn ai_change_add(&self, row: &AiChangeRow) -> Result<String> {
@@ -2235,14 +2322,15 @@ impl Store {
         let now = now_iso();
         let conn = self.lock();
         conn.execute(
-            "INSERT INTO ai_changes (id, job_id, thread_id, connection_id, database_name, title, reason, \
-                 sql, undo_sql, risk, status, approved_by, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, '', ?12, ?12)",
+            "INSERT INTO ai_changes (id, job_id, thread_id, connection_id, connection_name, database_name, \
+                 title, reason, sql, undo_sql, risk, status, approved_by, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, '', ?13, ?13)",
             params![
                 id,
                 row.job_id,
                 row.thread_id,
                 row.connection_id,
+                row.connection_name,
                 row.database_name,
                 row.title,
                 row.reason,
@@ -2258,13 +2346,38 @@ impl Store {
 
     pub fn ai_change_list(&self, status: Option<&str>, limit: usize) -> Result<Vec<AiChangeRow>> {
         let conn = self.lock();
-        let mut stmt = conn.prepare(
-            "SELECT id, job_id, thread_id, connection_id, database_name, title, reason, sql, undo_sql, \
-                 risk, status, approved_by, approved_at, applied_at, error, created_at, updated_at \
-             FROM ai_changes WHERE (?1 = '' OR status = ?1) ORDER BY created_at DESC LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![status.unwrap_or(""), limit as i64], change_of)?;
-        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+        let mut rows = {
+            let mut stmt = conn.prepare(
+                "SELECT id, job_id, thread_id, connection_id, database_name, title, reason, sql, undo_sql, \
+                     risk, status, approved_by, approved_at, applied_at, error, created_at, updated_at, \
+                     connection_name \
+                 FROM ai_changes WHERE (?1 = '' OR status = ?1) ORDER BY created_at DESC LIMIT ?2",
+            )?;
+            let out = stmt
+                .query_map(params![status.unwrap_or(""), limit as i64], change_of)?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            out
+        };
+        // 加列之前建的老记录没有名字：到查询历史里把这条连接当时用过的名字找回来 ——
+        // 连接被删掉之后，那是唯一还留着名字的地方（变更记录本身只有 id）。
+        for row in rows.iter_mut() {
+            if !row.connection_name.is_empty() || row.connection_id.is_empty() {
+                continue;
+            }
+            let name: Option<String> = conn
+                .query_row(
+                    "SELECT connection_name FROM query_history \
+                     WHERE connection_id = ?1 AND connection_name <> '' \
+                     ORDER BY created_at DESC LIMIT 1",
+                    params![row.connection_id],
+                    |r| r.get(0),
+                )
+                .ok();
+            if let Some(name) = name {
+                row.connection_name = name;
+            }
+        }
+        Ok(rows)
     }
 
     pub fn ai_change_get(&self, id: &str) -> Result<Option<AiChangeRow>> {
@@ -2284,6 +2397,23 @@ impl Store {
             params![id, status, now, error, actor],
         )?;
         Ok(())
+    }
+
+    /// 删一条变更记录：**只删记录**，不撤销已执行的修改（撤销是另一个动作）。
+    /// 指向它的审计事件一并删掉，否则流水里会留下指向不存在单子的行。
+    pub fn ai_change_delete(&self, id: &str) -> Result<()> {
+        let conn = self.lock();
+        conn.execute("DELETE FROM ai_events WHERE change_id = ?1", params![id])?;
+        conn.execute("DELETE FROM ai_changes WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// 清空变更记录，返回删掉的条数。同样**只删记录**，不动库里的数据。
+    pub fn ai_change_clear(&self) -> Result<usize> {
+        let conn = self.lock();
+        conn.execute("DELETE FROM ai_events WHERE change_id <> ''", [])?;
+        let removed = conn.execute("DELETE FROM ai_changes", [])?;
+        Ok(removed)
     }
 
     /// 把一批变更单挂到某个 job 上。
@@ -2505,6 +2635,7 @@ fn memory_of(row: &Row<'_>) -> rusqlite::Result<AiMemoryRow> {
         source: row.get(5)?,
         hits: row.get::<_, i64>(6)?.max(0) as u64,
         created_at: row.get(7)?,
+        connection_name: row.get(8)?,
     })
 }
 
@@ -2527,6 +2658,7 @@ fn change_of(row: &Row<'_>) -> rusqlite::Result<AiChangeRow> {
         error: row.get(14)?,
         created_at: row.get(15)?,
         updated_at: row.get(16)?,
+        connection_name: row.get(17)?,
     })
 }
 
@@ -2802,6 +2934,7 @@ CREATE TABLE IF NOT EXISTS ai_memories (
     id            TEXT PRIMARY KEY,
     scope         TEXT NOT NULL DEFAULT 'connection',
     connection_id TEXT NOT NULL DEFAULT '',
+    connection_name TEXT NOT NULL DEFAULT '',
     database_name TEXT NOT NULL DEFAULT '',
     fact          TEXT NOT NULL,
     source        TEXT NOT NULL DEFAULT 'ai',
@@ -2818,6 +2951,7 @@ CREATE TABLE IF NOT EXISTS ai_changes (
     job_id        TEXT NOT NULL DEFAULT '',
     thread_id     TEXT NOT NULL DEFAULT '',
     connection_id TEXT NOT NULL DEFAULT '',
+    connection_name TEXT NOT NULL DEFAULT '',
     database_name TEXT NOT NULL DEFAULT '',
     title         TEXT NOT NULL DEFAULT '',
     reason        TEXT NOT NULL DEFAULT '',
@@ -3168,6 +3302,7 @@ mod tests {
             job_id: String::new(),
             thread_id: String::new(),
             connection_id: "c1".into(),
+            connection_name: String::new(),
             database_name: String::new(),
             title: "t".into(),
             reason: String::new(),

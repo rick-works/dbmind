@@ -668,11 +668,6 @@
 
         </div>
 
-        <!-- 插件中心：官网托管、产品内一键安装的声明式扩展包（当前只有 AI 技能） -->
-        <div v-show="activeTab === 'plugins'" class="settings-panel">
-          <PluginCenter />
-        </div>
-
         <!-- 知识库已独立为顶部导航的「知识库」工作台（左栏库列表 + 文档 / 召回测试 / 分段设置），
              设置里不再重复放一份入口与实现 -->
 
@@ -1303,6 +1298,11 @@
                 <span class="about-k">{{ $t('settings.paths.logDir') }}</span>
                 <code class="about-v">{{ pathInfo.logDir || (pathInfo.dataDir + '/logs') }}</code>
               </div>
+              <!-- 插件目录跟着数据目录走（后端 paths_json 的 pluginDir），迁移后这一行自动变 -->
+              <div class="about-row">
+                <span class="about-k">{{ $t('settings.paths.pluginDir') }}</span>
+                <code class="about-v">{{ pathInfo.pluginDir || ((pathInfo.dataDir || '') + '/plugins') }}</code>
+              </div>
             </div>
           </div>
 
@@ -1378,13 +1378,12 @@
 
 <script setup>
 import { ref, computed, watch, reactive, onMounted, onBeforeUnmount, nextTick, h } from 'vue'
-import PluginCenter from './PluginCenter.vue'
 import { ElMessage, ElMessageBox, ElTooltip, ElIcon } from 'element-plus'
 import {
   Connection, Brush, Box,
   FolderOpened, EditPen, DataLine, Download, Operation, Monitor, Plus, Delete,
   CircleCheck, Timer, Pointer, Refresh, Search, Upload, Flag, InfoFilled, Lock, Check, Key,
-  ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder, QuestionFilled, MagicStick
+  ArrowUp, ArrowDown, Document, DocumentCopy, Coin, Folder, QuestionFilled
 } from '@element-plus/icons-vue'
 import AiMark from '../../common/AiMark.vue'
 
@@ -1472,8 +1471,7 @@ const tabs = [
   { key: 'ai', i18nKey: 'settings.tab.ai', icon: AiMark },
   // 数据脱敏紧挨着 AI：它管的就是「AI 能看见什么」，翻两页才找到会很反直觉
   { key: 'mask', i18nKey: 'settings.tab.mask', icon: Key },
-  // 插件紧挨 AI：第一版插件都是 AI 技能（提示词包），装完就在这一页能直接跑
-  { key: 'plugins', i18nKey: 'settings.tab.plugins', icon: MagicStick },
+  // 插件中心已独立为顶栏入口（/plugins 页签）：技能是日常会装/升级的东西，不该藏在设置里
   { key: 'safety', i18nKey: 'settings.tab.safety', icon: Lock },
   { key: 'mcp', i18nKey: 'settings.tab.mcp', icon: Connection },
   // 图标与顶栏「驱动管理」入口用同一个（utils/topMenu.js 里的 Box）——
@@ -2115,7 +2113,7 @@ const randomAesKey = () => {
 
 // ---------- 存储路径 ----------
 /** 数据目录迁移已接入（后端：快照 + 复制 + 指针文件，热切换立即生效）；驱动跟着数据目录走，不单独设置 */
-const pathInfo = ref({ os: '', osLabel: '', homeDir: '', defaultDataDir: '', defaultDriverDir: '', dataDir: '', driverDir: '', exportDir: '' })
+const pathInfo = ref({ os: '', osLabel: '', homeDir: '', defaultDataDir: '', defaultDriverDir: '', dataDir: '', driverDir: '', pluginDir: '', exportDir: '' })
 const pathForm = ref({ dataDir: '' })
 const savingPath = ref(false)
 const osTagText = computed(() => ({ windows: 'Windows', mac: 'macOS', linux: 'Linux', other: t('settings.paths.osOther') }[pathInfo.value.os] || t('settings.paths.osUnknown')))
