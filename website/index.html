@@ -250,15 +250,29 @@
   .btn-ghost { border: 1px solid var(--border); color: var(--text); background: rgba(255,255,255,.03); }
   .btn-ghost:hover { border-color: var(--primary); }
 
-  /* ===== 数据源清单 =====
-     原来是单行无限跑马灯：二十多个数据源只看得见九个，两头还被渐隐裁成半个词。
-     改成与 .wrap 同宽的多行流式排布（容器里自然折成 2~3 行、整行居中）——
-     一屏看全，不用等它滚，芯片边线也和下面的卡片对齐。 */
+  /* ===== 数据源跑马灯（两行） =====
+     单行那版二十多个数据源只看得见九个，两头还被渐隐裁成半个词；
+     但完全静态平铺又少了点「持续增加」的动感。折中：**两行**同时滚（第二行反向），
+     一屏看到两行、其余轮着过。容器与 .wrap 同宽同缩进，芯片边线与下方卡片对齐。 */
   .sources { padding: 0 0 48px; text-align: center; }
   .sources-label { font-size: 13px; color: var(--dim); letter-spacing: 2px; margin-bottom: 14px; }
-  .sources-list {
-    display: flex; flex-wrap: wrap; justify-content: center; gap: 10px;
+  .sources-rows {
+    display: grid; gap: 10px;
     width: 100%; max-width: var(--content); margin: 0 auto; padding: 0 24px;
+  }
+  .marquee-row { overflow: hidden;
+    /* 两端先全透明再渐入：单纯线性渐隐时边界上的芯片会剩半个词（MySQL 变 SQL） */
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, transparent 3%, #000 10%, #000 90%, transparent 97%, transparent);
+    mask-image: linear-gradient(90deg, transparent 0, transparent 3%, #000 10%, #000 90%, transparent 97%, transparent);
+  }
+  .marquee-track { display: flex; width: max-content; animation: marquee 46s linear infinite; }
+  /* 第二行反向、稍慢：两行同向会显得像一条横幅在抽动 */
+  .marquee-row.is-rev .marquee-track { animation-direction: reverse; animation-duration: 58s; }
+  .marquee-row:hover .marquee-track { animation-play-state: paused; }
+  @keyframes marquee { to { transform: translateX(-50%); } }
+  .m-group { display: flex; gap: 10px; padding-right: 10px; }
+  @media (prefers-reduced-motion: reduce) {
+    .marquee-track { animation: none; }
   }
   .chip {
     border: 1px solid var(--border); border-radius: 999px;
@@ -1223,18 +1237,30 @@
 
 <div class="sources reveal">
   <div class="sources-label" data-i18n="sources.label">— 开箱即用的数据源 · 持续增加 —</div>
-  <div class="sources-list">
-    <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">GreatSQL</span>
-    <span class="chip">TiDB</span><span class="chip">OceanBase</span><span class="chip">PostgreSQL</span>
-    <span class="chip" data-i18n="chip.kingbase">人大金仓</span><span class="chip">openGauss</span>
-    <span class="chip">瀚高 HighGo</span><span class="chip">海量 Vastbase</span>
-    <span class="chip">Oracle</span><span class="chip">SQL Server</span><span class="chip">DB2</span>
-    <span class="chip" data-i18n="chip.dm">达梦 DM</span>
-    <span class="chip">ClickHouse</span><span class="chip">Apache Doris</span><span class="chip">StarRocks</span>
-    <span class="chip">Databend</span><span class="chip">RisingWave</span>
-    <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">H2</span><span class="chip">Derby</span>
-    <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
-    <span class="chip" data-i18n="chip.more">更多接入中…</span>
+  <div class="sources-rows">
+    <div class="marquee-row">
+      <div class="marquee-track">
+        <div class="m-group">
+          <span class="chip">MySQL</span><span class="chip">MariaDB</span><span class="chip">GreatSQL</span>
+          <span class="chip">TiDB</span><span class="chip">OceanBase</span><span class="chip">PostgreSQL</span>
+          <span class="chip" data-i18n="chip.kingbase">人大金仓</span><span class="chip">openGauss</span>
+          <span class="chip">瀚高 HighGo</span><span class="chip">海量 Vastbase</span>
+          <span class="chip">Oracle</span><span class="chip">SQL Server</span><span class="chip">DB2</span>
+          <span class="chip" data-i18n="chip.dm">达梦 DM</span>
+        </div>
+      </div>
+    </div>
+    <div class="marquee-row is-rev">
+      <div class="marquee-track">
+        <div class="m-group">
+          <span class="chip">ClickHouse</span><span class="chip">Apache Doris</span><span class="chip">StarRocks</span>
+          <span class="chip">Databend</span><span class="chip">RisingWave</span>
+          <span class="chip">SQLite</span><span class="chip">DuckDB</span><span class="chip">H2</span><span class="chip">Derby</span>
+          <span class="chip">Redis</span><span class="chip">MongoDB</span><span class="chip">Elasticsearch</span>
+          <span class="chip" data-i18n="chip.more">更多接入中…</span>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -4923,6 +4949,13 @@ WHERE dt = :dt AND org = :org;</code></pre>
     es.forEach(e => { if (e.isIntersecting) { e.target.classList.add('on'); io.unobserve(e.target) } })
   }, { threshold: .12 })
   document.querySelectorAll('.reveal').forEach(el => io.observe(el))
+
+  // 数据源跑马灯：每行克隆一份 chips 拼在后面，translateX(-50%) 才无缝
+  ;(() => {
+    document.querySelectorAll('.marquee-track').forEach(track => {
+      if (track.firstElementChild) track.appendChild(track.firstElementChild.cloneNode(true))
+    })
+  })()
 
 
   // 数据卡数字滚动：进入视口后从 0 数到目标值（保留前后缀，如 <1s / 100万+ / 17+）
